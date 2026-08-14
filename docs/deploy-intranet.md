@@ -49,8 +49,12 @@ models.json 形状(key 只放服务器本地文件,权限 600,永不进仓):
 MAE_FLOW_HOME=/srv/mae-flow \
 npm run serve -- --models /etc/mae-flow-cloud/models.json \
   --provider <网关名> --model glm-5.1 \
-  --repo <内网仓地址> --data /var/lib/mae-flow-cloud --port 8787
+  --repo <内网仓地址> --platform <MR/流水线网关地址> \
+  --data /var/lib/mae-flow-cloud --port 8787
 ```
+
+(外部演练交付链:去掉 `--platform`,改用 `--fake-platform`——
+从 `--repo` 灌裸仓当远端,推送/MR/流水线全环回。)
 
 - **数据目录就是命根**:task.json / waiting.json / events.jsonl /
   transcript.jsonl / 仓库克隆(内核状态文件在里面)全在 `--data` 下。
