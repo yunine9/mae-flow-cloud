@@ -15,6 +15,7 @@ import { ScriptedModelServer, type Scene } from "./scriptedModel.ts";
 import { TaskService } from "./taskService.ts";
 import { createTaskServer } from "./server.ts";
 import { FakeLubanServer, Notifier } from "./notifier.ts";
+import { FakeGitPlatform } from "./gitPlatform.ts";
 import type { GateDecision } from "./gateService.ts";
 
 const REPO_ROOT = resolve(fileURLToPath(import.meta.url), "..", "..");
@@ -66,7 +67,7 @@ async function main(): Promise<void> {
 
   // --repo 开启内核纵向闭环:任务=克隆该仓+内核 bootstrap+深层门禁。
   const repoPath = flag("--repo");
-  const host = repoPath
+  let host = repoPath
     ? {
         kernelRoot: process.env.MAE_FLOW_HOME
           ?? resolve(REPO_ROOT, "..", "mae-flow"),
@@ -75,6 +76,23 @@ async function main(): Promise<void> {
       }
     : undefined;
   if (host) console.log(`[serve] 内核模式:试点仓 ${host.repoPath}`);
+
+  // Git 交付链:--platform <url> 接真件(内网 MR/流水线网关);
+  // --fake-platform 本地起假件——从 --repo 灌一个裸仓当远端,
+  // 推送/MR/流水线全环回,与 pilot 同款(部署手册的切换点在此落地)。
+  let delivery: { platformUrl: string } | undefined;
+  const platformUrl = flag("--platform");
+  if (platformUrl) {
+    delivery = { platformUrl };
+    console.log(`[serve] 交付平台: ${platformUrl}`);
+  } else if (host && process.argv.includes("--fake-platform")) {
+    const platform = new FakeGitPlatform();
+    platform.initBare(host.repoPath, dataDir);
+    await platform.start();
+    host = { ...host, repoPath: platform.barePath };
+    delivery = { platformUrl: platform.baseUrl };
+    console.log(`[serve] 假 Git 平台已就位(裸仓远端): ${platform.baseUrl}`);
+  }
 
   // 小鲁班用假件模拟(内网真件就绪时换 endpoint,其余零改动)。
   const luban = new FakeLubanServer();
@@ -85,6 +103,7 @@ async function main(): Promise<void> {
     dataDir, provider, model, modelsJson,
     contract: demoContract,
     host,
+    delivery,
     notifier: new Notifier({ endpoint: luban.endpoint }),
     linkBase: `http://127.0.0.1:${port}`,
     log: (message) => console.log(`  [task] ${message}`),
