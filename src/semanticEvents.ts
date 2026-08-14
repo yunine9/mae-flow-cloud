@@ -72,7 +72,13 @@ export class EventLogError extends Error {}
 export class EventLog {
   private last: number | null = null;
 
-  constructor(readonly path: string) {}
+  /** mirror:每条新写入事件的旁路投影(PostgreSQL 等)。只在真正
+   * 追加成功后调用;重放 no-op 不触发。旁路自己 fail-open,
+   * 这里不 await——投影永远不能拖慢或拖垮事件落盘。 */
+  constructor(
+    readonly path: string,
+    private mirror?: (event: SemanticEvent) => void,
+  ) {}
 
   lastEventId(): number {
     if (this.last === null) {
@@ -91,6 +97,11 @@ export class EventLog {
     mkdirSync(dirname(this.path), { recursive: true });
     appendFileSync(this.path, JSON.stringify(event) + "\n", "utf-8");
     this.last = event.eventId;
+    try {
+      this.mirror?.(event);
+    } catch {
+      // 旁路失败=没投影,由旁路自己记日志;事件已落盘,追加语义不受影响。
+    }
     return true;
   }
 

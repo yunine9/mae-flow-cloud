@@ -27,6 +27,7 @@ import { TranscriptStore } from "./transcriptStore.ts";
 import { GateService, type GateContract } from "./gateService.ts";
 import { HumanGate, type WaitingRecord } from "./humanGate.ts";
 import { CloudSession, type Outcome } from "./sessionDriver.ts";
+import type { ExternalAction, PgProjection } from "./projection.ts";
 
 export type TaskStatus =
   | "queued"
@@ -77,6 +78,9 @@ export interface TaskServiceOptions {
   delivery?: { platformUrl: string };
   /** 审批链接的前缀(通知里带的 URL),如 http://host:port。 */
   linkBase?: string;
+  /** PostgreSQL 投影(主 spec §11):看板/审计/恢复引导的读侧。
+   * 纯旁路——写失败不改流程,不配则一切照旧(文件即真相)。 */
+  projection?: PgProjection;
   log?: (message: string) => void;
 }
 
@@ -184,6 +188,8 @@ export class TaskService {
     } catch (error) {
       this.options.log?.(`任务 ${task.summary.id} 落盘失败: ${String(error)}`);
     }
+    // 文件先落袋(它才是真相),投影旁路跟进;失败由投影自己 fail-open。
+    void this.options.projection?.upsertTask(this.project(task));
   }
 
   /** 服务重启后恢复任务(服务启动时调用一次):
@@ -214,6 +220,7 @@ export class TaskService {
         this.counter = Math.max(
           this.counter, Number(name.slice("task-".length)) || 0);
         restored += 1;
+        this.replayProjection(task);
         if (summary.status === "running" || summary.status === "queued") {
           summary.status = "queued";
           summary.detail = "服务重启,等待续跑";
@@ -227,6 +234,25 @@ export class TaskService {
     }
     if (requeued) void this.pump();
     return { restored, requeued };
+  }
+
+  /** 恢复重放投影(§11):以现场文件为源补齐读侧——摘要整行覆盖,
+   * 事件副本重灌((taskId,eventId) 幂等锚把重复兜成 no-op)。
+   * 现场文件损坏只影响投影补齐,不影响任务恢复本身。 */
+  private replayProjection(task: TaskState): void {
+    const projection = this.options.projection;
+    if (!projection) return;
+    void projection.upsertTask(this.project(task));
+    try {
+      const log = new EventLog(
+        join(task.summary.workspace, "events.jsonl"));
+      for (const event of log.replay()) {
+        void projection.appendEvent(event);
+      }
+    } catch (error) {
+      this.options.log?.(
+        `任务 ${task.summary.id} 投影重放失败: ${String(error)}`);
+    }
   }
 
   /** Web 决定:先到生效;冲突抛 StateConflictError 由 API 层变 409。
@@ -352,7 +378,9 @@ export class TaskService {
         agentDir,
         provider: this.options.provider,
         model: this.options.model,
-        eventLog: new EventLog(join(workspace, "events.jsonl")),
+        eventLog: new EventLog(
+          join(workspace, "events.jsonl"),
+          (event) => void this.options.projection?.appendEvent(event)),
         transcript: new TranscriptStore(transcriptPath, "main"),
         gate: new GateService({
           contract: this.options.contract,
@@ -418,20 +446,40 @@ export class TaskService {
         return;
       }
       const sha = line.split(/\s+/)[0];
+      // 外部动作台账(§11):请求先落一行(带幂等键),结果回来再补
+      // 结果侧——恢复时"先查远端真实状态"就有底账可对。纯旁路。
+      const ledger = (action: Omit<ExternalAction, "taskId">) =>
+        void this.options.projection?.recordAction(
+          { taskId: task.summary.id, ...action });
+      const mrRequest = {
+        source_branch: branch,
+        target_branch: baseline,
+        title: `${state?.config?.["单号"] ?? branch}: ${task.summary.requirement.slice(0, 60)}`,
+      };
+      const mrKey = `mr:${branch}->${baseline}`;
+      const mrStarted = new Date().toISOString();
+      ledger({ idemKey: mrKey, kind: "mr_create", request: mrRequest,
+               sha, startedAt: mrStarted });
       const mr = await fetch(`${delivery.platformUrl}/mr`, {
         method: "POST",
-        body: JSON.stringify({
-          source_branch: branch,
-          target_branch: baseline,
-          title: `${state?.config?.["单号"] ?? branch}: ${task.summary.requirement.slice(0, 60)}`,
-        }),
+        body: JSON.stringify(mrRequest),
       }).then((r) => {
         if (!r.ok) throw new Error(`MR 创建失败 HTTP ${r.status}`);
         return r.json();
       });
+      ledger({ idemKey: mrKey, kind: "mr_create", request: mrRequest,
+               sha, startedAt: mrStarted, result: mr,
+               finishedAt: new Date().toISOString() });
+      const runKey = `pipeline:${sha}`;
+      const runStarted = new Date().toISOString();
+      ledger({ idemKey: runKey, kind: "pipeline_trigger",
+               request: { sha }, sha, startedAt: runStarted });
       const run = await fetch(`${delivery.platformUrl}/pipeline/trigger`, {
         method: "POST", body: JSON.stringify({ sha }),
       }).then((r) => r.json());
+      ledger({ idemKey: runKey, kind: "pipeline_trigger",
+               request: { sha }, sha, startedAt: runStarted, result: run,
+               finishedAt: new Date().toISOString() });
       task.summary.delivery = {
         mr_url: mr.url,
         mr_state: run.status === "success" ? "等待合入" : "验证中",

@@ -16,6 +16,7 @@ import { TaskService } from "./taskService.ts";
 import { createTaskServer } from "./server.ts";
 import { FakeLubanServer, Notifier } from "./notifier.ts";
 import { FakeGitPlatform } from "./gitPlatform.ts";
+import { PgProjection } from "./projection.ts";
 import type { GateDecision } from "./gateService.ts";
 
 const REPO_ROOT = resolve(fileURLToPath(import.meta.url), "..", "..");
@@ -94,6 +95,14 @@ async function main(): Promise<void> {
     console.log(`[serve] 假 Git 平台已就位(裸仓远端): ${platform.baseUrl}`);
   }
 
+  // --pg 开启 PostgreSQL 投影(主 spec §11):看板/审计/恢复引导的
+  // 读侧。纯旁路——没配一切照旧,配了写失败也不影响流程。
+  const pgUrl = flag("--pg");
+  const projection = pgUrl
+    ? new PgProjection(pgUrl, (message) => console.log(`  ${message}`))
+    : undefined;
+  if (projection) console.log(`[serve] PostgreSQL 投影已接线`);
+
   // 小鲁班用假件模拟(内网真件就绪时换 endpoint,其余零改动)。
   const luban = new FakeLubanServer();
   await luban.start();
@@ -105,6 +114,7 @@ async function main(): Promise<void> {
     host,
     delivery,
     notifier: new Notifier({ endpoint: luban.endpoint }),
+    projection,
     linkBase: `http://127.0.0.1:${port}`,
     log: (message) => console.log(`  [task] ${message}`),
   });
