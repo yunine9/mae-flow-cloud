@@ -45,6 +45,7 @@ export const WEB_PAGE = `<!doctype html>
 const STATUS_TEXT = {
   queued: "排队中", running: "进行中", waiting_for_human: "等你决定",
   completed: "已完成", failed: "出错了",
+  verifying: "代码已提交,流水线验证中", await_merge: "已提合入请求,等待合入",
 };
 
 async function refresh() {
@@ -62,6 +63,16 @@ async function refresh() {
       + '<div class="muted">' + escapeHtml(task.requirement) + '</div>';
     if (task.status === "failed" && task.detail) {
       html += '<div class="muted">原因:' + escapeHtml(task.detail) + '</div>';
+    }
+    if (task.delivery) {
+      if (task.delivery.mr_url) {
+        html += '<div>合入请求:<a href="' + escapeHtml(task.delivery.mr_url)
+          + '" target="_blank">' + escapeHtml(task.delivery.mr_url) + '</a>'
+          + '(' + escapeHtml(task.delivery.mr_state || "") + ')</div>';
+      } else if (task.delivery.skipped) {
+        html += '<div class="muted">交付情况:'
+          + escapeHtml(task.delivery.skipped) + '</div>';
+      }
     }
     if (task.notify && !task.notify.delivered && task.notify.attempts > 0) {
       html += '<div style="color:#dc2626">⚠ 小鲁班通知没送到'

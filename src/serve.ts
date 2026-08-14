@@ -46,7 +46,6 @@ function demoContract(
 async function main(): Promise<void> {
   const port = Number(flag("--port") ?? 8787);
   const dataDir = resolve(flag("--data") ?? join(REPO_ROOT, ".tasks"));
-  rmSync(dataDir, { recursive: true, force: true });
 
   let modelsJson: Record<string, unknown>;
   let provider = flag("--provider") ?? "maeflow";
@@ -56,6 +55,9 @@ async function main(): Promise<void> {
     modelsJson = JSON.parse(readFileSync(modelsPath, "utf-8"));
     console.log(`[serve] 使用真模型配置: ${modelsPath} (${provider}/${model})`);
   } else {
+    // 演示模式每次白纸起步(剧本假设新场);真模型模式保数据,
+    // 重启靠 recover() 续命——先 rm 再 recover 是自相矛盾。
+    rmSync(dataDir, { recursive: true, force: true });
     const scripted = new ScriptedModelServer(DEMO_SCRIPT);
     await scripted.start();
     modelsJson = scripted.modelsJson();
