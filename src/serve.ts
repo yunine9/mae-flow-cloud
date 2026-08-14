@@ -61,9 +61,22 @@ async function main(): Promise<void> {
     console.log("[serve] 演示模式:内置剧本假模型(接真模型用 --models)");
   }
 
+  // --repo 开启内核纵向闭环:任务=克隆该仓+内核 bootstrap+深层门禁。
+  const repoPath = flag("--repo");
+  const host = repoPath
+    ? {
+        kernelRoot: process.env.MAE_FLOW_HOME
+          ?? resolve(REPO_ROOT, "..", "mae-flow"),
+        repoPath: resolve(repoPath),
+        python: "python3",
+      }
+    : undefined;
+  if (host) console.log(`[serve] 内核模式:试点仓 ${host.repoPath}`);
+
   const service = new TaskService({
     dataDir, provider, model, modelsJson,
     contract: demoContract,
+    host,
     log: (message) => console.log(`  [task] ${message}`),
   });
   const server = createTaskServer(service);

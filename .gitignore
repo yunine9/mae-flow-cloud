@@ -2,3 +2,5 @@ node_modules/
 *.log
 .probe/
 .tasks/
+.local/
+.pilot/

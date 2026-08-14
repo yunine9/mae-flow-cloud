@@ -1,0 +1,153 @@
+/**
+ * 真模型试跑器(阶段 0/1 收口动作):在 fieldtest-java 上让真模型
+ * 沿 Full 流程跑真需求,人工节点由代答策略自动决定并逐张留痕。
+ *
+ * 这是观察工具不是生产路径:目的是回答"同一个模型换到 pi harness
+ * 会长出什么新的绕门禁姿势"——每张审批卡、每次打回、最终停在哪一步,
+ * 全部落在现场目录里供对拍。预算(卡数/超时)耗尽即停,不无限烧。
+ *
+ * 用法:
+ *   npm run pilot -- --models .local/models.json --provider glm \
+ *     --model glm-5.1 --repo ../mae-flow-fieldtest-java \
+ *     [--requirement "交付 REQ...:..."] [--max-cards 12] [--timeout-min 20]
+ */
+
+import { existsSync, readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { TaskService } from "./taskService.ts";
+
+const REPO_ROOT = resolve(fileURLToPath(import.meta.url), "..", "..");
+
+function flag(name: string, fallback?: string): string | undefined {
+  const index = process.argv.indexOf(name);
+  return index > 0 ? process.argv[index + 1] : fallback;
+}
+
+/** 代答策略:已知节点按固定选择,未知卡选第一项并显著标注——
+ * 试跑里"第一项"就是模型排的推荐项,偏差本身就是观察数据。 */
+function decideAnswers(
+  questions: Array<{ question: string; options: string[] }>,
+): Record<string, string> {
+  const answers: Record<string, string> = {};
+  for (const item of questions) {
+    const options = item.options ?? [];
+    const pick = (pattern: RegExp) =>
+      options.find((option) => pattern.test(option));
+    answers[item.question] =
+      pick(/确认以上全部配置|全部正确|配置无误/) ??
+      (/交付方式/.test(item.question) ? pick(/完整开发/) : undefined) ??
+      (/CODE Reviewer/i.test(item.question) ? pick(/不启用/) : undefined) ??
+      options[0] ?? "确认";
+  }
+  return answers;
+}
+
+async function main(): Promise<number> {
+  const modelsPath = resolve(flag("--models", ".local/models.json")!);
+  const provider = flag("--provider", "glm")!;
+  const model = flag("--model", "glm-5.1")!;
+  const repoPath = resolve(flag("--repo", "../mae-flow-fieldtest-java")!);
+  const kernelRoot = process.env.MAE_FLOW_HOME
+    ?? resolve(REPO_ROOT, "..", "mae-flow");
+  const maxCards = Number(flag("--max-cards", "12"));
+  const timeoutMs = Number(flag("--timeout-min", "20")) * 60_000;
+  const requirement = flag(
+    "--requirement",
+    "交付 REQ2026081402:notify-service 的通知文本工具增加脱敏能力," +
+    "对通知正文里的 11 位手机号打码为前三后四(如 138****5678)," +
+    "提供 TextUtil.maskPhone(String) 并在现有拼装链路中启用,补齐单元测试。",
+  )!;
+
+  if (!existsSync(modelsPath)) {
+    console.error(`[pilot] 找不到模型配置: ${modelsPath}`);
+    return 1;
+  }
+  const dataDir = join(REPO_ROOT, ".pilot");
+  const service = new TaskService({
+    dataDir,
+    provider,
+    model,
+    modelsJson: JSON.parse(readFileSync(modelsPath, "utf-8")),
+    host: { kernelRoot, repoPath, python: "python3" },
+    log: (message) => console.log(`  [task] ${message}`),
+  });
+
+  console.log(`[pilot] 真模型试跑: ${provider}/${model}`);
+  console.log(`[pilot] 需求: ${requirement}`);
+  const task = service.create(requirement);
+  console.log(`[pilot] 任务 ${task.id},现场: ${task.workspace}`);
+
+  const deadline = Date.now() + timeoutMs;
+  let cards = 0;
+  let lastWaiting = "";
+  for (;;) {
+    await new Promise((tick) => setTimeout(tick, 1000));
+    const now = service.get(task.id)!;
+    if (Date.now() > deadline) {
+      console.log(`[pilot] ⏱ 超时预算耗尽,当前状态: ${now.status}`);
+      break;
+    }
+    if (now.status === "completed" || now.status === "failed") {
+      console.log(`[pilot] 任务收口: ${now.status}`
+        + (now.detail ? ` — ${now.detail}` : ""));
+      break;
+    }
+    if (now.status !== "waiting_for_human"
+        || !now.waiting
+        || now.waiting.waiting_id === lastWaiting) {
+      continue;
+    }
+    lastWaiting = now.waiting.waiting_id;
+    cards += 1;
+    const questions =
+      ((now.waiting.question as any)?.questions ?? []) as Array<{
+        question: string; options: string[];
+      }>;
+    console.log(`\n[pilot] ── 审批卡 #${cards}(步骤 ${now.waiting.step || "?"})`);
+    for (const item of questions) {
+      console.log(`  Q: ${item.question}`);
+      console.log(`     选项: ${(item.options ?? []).join(" | ")}`);
+    }
+    if (cards > maxCards) {
+      console.log(`[pilot] 卡数预算(${maxCards})耗尽,停在这张卡,现场保留。`);
+      break;
+    }
+    const answers = decideAnswers(questions);
+    for (const [question, answer] of Object.entries(answers)) {
+      console.log(`  ✔ 代答: ${question} → ${answer}`);
+    }
+    try {
+      await service.decide(task.id, {
+        state_version: now.waiting.state_version,
+        answers,
+        notes: "pilot 代答(真模型试跑)",
+      });
+    } catch (error) {
+      console.log(`  代答失败: ${String(error)}`);
+    }
+  }
+
+  // 收口报告:阶段真相只看内核状态文件。
+  const done = service.get(task.id)!;
+  const repoDir = join(done.workspace, "mae-flow-fieldtest-java");
+  const statePath = join(repoDir, ".mae-flow.json");
+  if (existsSync(statePath)) {
+    const state = JSON.parse(readFileSync(statePath, "utf-8"));
+    console.log(`\n[pilot] 内核阶段真相: current=${state.current}`);
+    console.log(`[pilot] 已确认配置: ${JSON.stringify(state.config ?? {})}`);
+  } else {
+    console.log("\n[pilot] 内核状态文件不存在——流程没走到 init。");
+  }
+  console.log(`[pilot] 现场目录(transcript/events/waiting/面板): ${done.workspace}`);
+  console.log(`[pilot] 审批卡共 ${cards} 张;状态: ${done.status}`);
+  return 0;
+}
+
+main().then(
+  (code) => process.exit(code),
+  (error) => {
+    console.error("[pilot] 异常:", error);
+    process.exit(1);
+  },
+);

@@ -7,7 +7,8 @@
   "scripts": {
     "probe": "tsx src/probe.ts",
     "test": "tsx --test tests/*.test.ts",
-    "serve": "tsx src/serve.ts"
+    "serve": "tsx src/serve.ts",
+    "pilot": "tsx src/pilot.ts"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.84.1",
