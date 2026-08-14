@@ -34,6 +34,7 @@ src/
   taskService.ts      任务编排:工作区/受限并发队列/状态由 outcome 驱动;host 模式=克隆仓库+内核 bootstrap
   server.ts           任务 API:REST + SSE(决定冲突=409 任务状态已变化)
   webPage.ts          零构建演示页:列表/发起/审批卡直接点(说人话)
+  projection.ts       PostgreSQL 投影(§11):摘要/事件副本/外部动作台账,纯旁路 fail-open
   serve.ts            启动入口(演示=内置剧本假模型;--models 接真网关)
   scriptedModel.ts    剧本假模型(Anthropic Messages SSE)——无 LLM 对拍电源
   probe.ts            阶段 0 演练入口
@@ -102,10 +103,17 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
   pretooluse 随带 tool_use_id,见 tests/kernelHost.test.ts);
 - fieldtest-java 直接编译验证已过(2026-08-14 本机 macOS:干净副本
   mvn compile / mvn test / 双副本并发 clean compile 全部退出码 0,
-  仓库可标 direct);Linux 容器内同套验证仍待做(试点服务器形态);
+  仓库可标 direct);Linux 容器内同套验证已过(2026-08-14,Colima
+  arm64 Linux + maven:3.8-eclipse-temurin-8,compile/test 退出码 0、
+  4 UT 全过);x86_64 形态见下条;
 - 任务级恢复已实现(tests/recovery.test.ts):进程可死任务不死——
   重启后 recover() 重建索引,决定走重建会话续跑;pi 侧会话仍是
   inMemory,重建会话不带旧对话上下文,以内核 current 为锚(设计如此);
-- Linux 容器内编译验证未做(本机无 Docker,属内网侧动作);
-  部署准备件见 docs/deploy-intranet.md;
-- PostgreSQL 投影、正式 React 前端(阶段 1+)未动。
+- x86_64 Linux 容器验证同样已过(2026-08-14,Colima --arch x86_64
+  QEMU 模拟,同镜像 compile/test 退出码 0、4 UT 全过);内网目标
+  镜像里仍需按部署手册做最终重验;部署准备件见 docs/deploy-intranet.md;
+- PostgreSQL 投影已接线(projection.ts + serve --pg,主 spec §11):
+  摘要/事件副本/外部动作台账三张表,恢复时以现场文件为源重放;
+  纯旁路 fail-open——阶段真相仍只在工作区 .mae-flow.json,
+  语义测试 tests/projection.test.ts(临时真 PG 集群当裁判);
+- 正式 React 前端(阶段 1+)未动。

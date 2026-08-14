@@ -15,9 +15,11 @@
 | JDK + Maven | 试点仓(Java)编译验证用;版本按试点仓 `pom.xml` 要求 |
 | npm 依赖 | `npm ci`(pi 锁 0.84.1,升级必须重跑 probe+全套测试再拍板) |
 
-**Linux 容器编译验证(未做,内网侧动作)**:外部只在 macOS 验证过
-fieldtest-java 直接编译。上内网第一件事:在目标容器镜像里跑
-`mvn compile && mvn test`,退出码必须真实核验(不许管道吞码)。
+**Linux 容器编译验证(外部已模拟通过)**:2026-08-14 在 Colima
+arm64 Linux 容器(maven:3.8-eclipse-temurin-8)对 fieldtest-java
+干净副本验证 compile/test 退出码 0。上内网第一件事仍然是:在**目标
+容器镜像**里跑 `mvn compile && mvn test`,退出码必须真实核验
+(不许管道吞码)——外部模拟不替代目标镜像的最终裁决。
 
 ## 四个假件 → 真件切换表
 
@@ -50,12 +52,17 @@ MAE_FLOW_HOME=/srv/mae-flow \
 npm run serve -- --models /etc/mae-flow-cloud/models.json \
   --provider <网关名> --model glm-5.1 \
   --repo <内网仓地址> --platform <MR/流水线网关地址> \
+  --pg postgresql://<用户>@<PG地址>/<库名> \
   --data /var/lib/mae-flow-cloud --port 8787
 ```
 
 (外部演练交付链:去掉 `--platform`,改用 `--fake-platform`——
 从 `--repo` 灌裸仓当远端,推送/MR/流水线全环回。)
 
+- **`--pg` 是投影不是真相**:不配它一切照旧(文件即真相);配了它
+  写失败也不影响流程(fail-open,页面只多一条投影失败日志)。建表
+  自动幂等;重启后 recover() 会以现场文件为源把投影补齐,PG 里的
+  数据可整库重建——备份优先级远低于数据目录。
 - **数据目录就是命根**:task.json / waiting.json / events.jsonl /
   transcript.jsonl / 仓库克隆(内核状态文件在里面)全在 `--data` 下。
   备份它=备份一切;丢它=任务从头来。
