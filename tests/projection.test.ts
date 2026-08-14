@@ -143,6 +143,11 @@ test("外部动作台账:同幂等键请求侧保留首次,结果侧补写", { s
       assert.equal(rows.rows[0].result.url, "http://mr/1");
       assert.ok(rows.rows[0].finished_at);
       assert.equal(rows.rows[0].sha, "abc123");
+      // 审计读侧:同一份台账按开始时间可查回来。
+      const actions = await projection.listActions("task-1");
+      assert.equal(actions.length, 1);
+      assert.equal(actions[0].idemKey, "mr:feat->master");
+      assert.equal((actions[0].result as any)?.url, "http://mr/1");
     } finally {
       await judge.end();
       await projection.close();

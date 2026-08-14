@@ -155,6 +155,28 @@ export class PgProjection {
     }
   }
 
+  /** 审计读侧:某任务的外部动作台账(按开始时间正序)。
+   * 读失败抛给调用方——审计查询失败必须可见,不适用写侧的 fail-open
+   * (写丢一页可重放,读装没事就是骗人)。 */
+  async listActions(taskId: string): Promise<ExternalAction[]> {
+    await this.ensureSchema();
+    const rows = await this.pool.query(
+      `select idem_key, kind, request, result, sha,
+              started_at, finished_at
+         from external_actions where task_id = $1 order by started_at`,
+      [taskId]);
+    return rows.rows.map((row) => ({
+      taskId,
+      idemKey: row.idem_key,
+      kind: row.kind,
+      request: row.request,
+      result: row.result ?? undefined,
+      sha: row.sha ?? undefined,
+      startedAt: String(row.started_at),
+      finishedAt: row.finished_at ? String(row.finished_at) : undefined,
+    }));
+  }
+
   async close(): Promise<void> {
     await this.pool.end().catch(() => undefined);
   }

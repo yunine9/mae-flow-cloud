@@ -115,6 +115,16 @@ export function createTaskServer(
         if (request.method === "GET" && parts[2] === "events") {
           return streamEvents(service, id, response);
         }
+        // 审计读侧(§11):外部动作台账来自 PG 投影。没配投影时
+        // 明说,而不是空数组装作"没有动作"。
+        if (request.method === "GET" && parts[2] === "actions") {
+          const projection = service.options.projection;
+          if (!projection) {
+            return json(response, 404,
+              { error: "未配置 PostgreSQL 投影(--pg),没有台账可查" });
+          }
+          return json(response, 200, await projection.listActions(id));
+        }
         // 内核现场面板(铁原则:请用户检视的东西必须在面板可见)。
         // panel 是内核生成的单文件 HTML,pulse/stamp 是它的自动刷新
         // 探针(相对路径 script src),同前缀一起放行。

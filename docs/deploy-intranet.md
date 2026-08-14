@@ -92,6 +92,8 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
 
 - 页面 `GET /`:任务状态说人话;通知失败红条;MR 链接。
 - `GET /tasks/:id/events`(SSE):语义事件实时镜像。
+- `GET /tasks/:id/actions`:外部动作台账(MR/流水线,含幂等键与
+  绑定 SHA)——恢复时"先查远端真实状态"的对账入口;需配 `--pg`。
 - 任务 detail 字段:失败原因原文(含网关 429 的重置时间)。
 - 内核侧真相:任务克隆目录 `.mae-flow.json`(current/config)与
   `.mae-flow-work/panel.html`(现场面板)。

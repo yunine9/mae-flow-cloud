@@ -48,6 +48,8 @@ function demoContract(
 async function main(): Promise<void> {
   const port = Number(flag("--port") ?? 8787);
   const dataDir = resolve(flag("--data") ?? join(REPO_ROOT, ".tasks"));
+  // 管理旋钮(主 spec §4:最大并发由管理员配置,超出排队)。
+  const maxConcurrent = Number(flag("--max-concurrent") ?? 2);
 
   let modelsJson: Record<string, unknown>;
   let provider = flag("--provider") ?? "maeflow";
@@ -109,7 +111,7 @@ async function main(): Promise<void> {
   console.log(`[serve] 假小鲁班已就位,消息可查: ${luban.endpoint.replace("/notify", "")}`);
 
   const service = new TaskService({
-    dataDir, provider, model, modelsJson,
+    dataDir, provider, model, modelsJson, maxConcurrent,
     contract: demoContract,
     host,
     delivery,
