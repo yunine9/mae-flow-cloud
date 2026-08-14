@@ -7,7 +7,7 @@
  * models.json 形状见 README「接真模型」。数据目录默认 .tasks/。
  */
 
-import { readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AddressInfo } from "node:net";
@@ -124,7 +124,13 @@ async function main(): Promise<void> {
     console.log(`[serve] 恢复任务 ${recovered.restored} 个`
       + `(重新入队 ${recovered.requeued} 个)`);
   }
-  const server = createTaskServer(service);
+  // 正式前端:--web <dist> 显式指定;web/dist 存在时自动接上
+  // (构建过就用正式版,没构建就是零构建演示页,永远有页面可开)。
+  const webRoot = flag("--web")
+    ?? [join(REPO_ROOT, "web", "dist")].find((dir) =>
+         existsSync(join(dir, "index.html")));
+  if (webRoot) console.log(`[serve] 正式前端: ${webRoot}`);
+  const server = createTaskServer(service, { webRoot });
   server.listen(port, "127.0.0.1", () => {
     const actual = (server.address() as AddressInfo).port;
     console.log(`[serve] http://127.0.0.1:${actual}  (数据目录 ${dataDir})`);

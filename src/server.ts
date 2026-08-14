@@ -13,10 +13,20 @@
  */
 
 import { createServer, type Server } from "node:http";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { extname, join, resolve, sep } from "node:path";
 import { StateConflictError } from "./humanGate.ts";
 import { NotFoundError, type TaskService } from "./taskService.ts";
 import { WEB_PAGE } from "./webPage.ts";
+
+/** 正式前端静态文件的最小类型表:Vite 产物就这几种。 */
+const MIME: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".map": "application/json",
+};
 
 function readBody(request: import("node:http").IncomingMessage): Promise<any> {
   return new Promise((resolve, reject) => {
@@ -42,14 +52,33 @@ function json(
   response.end(text);
 }
 
-export function createTaskServer(service: TaskService): Server {
+export function createTaskServer(
+  service: TaskService,
+  options: { webRoot?: string } = {},
+): Server {
   return createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://localhost");
     const parts = url.pathname.split("/").filter(Boolean);
     try {
-      if (request.method === "GET" && url.pathname === "/") {
-        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-        return response.end(WEB_PAGE);
+      // 静态前端(webRoot=React 构建产物):/ 与非 API 路径出文件;
+      // 没配 webRoot 时零构建演示页兜底——两种形态永远有一个能用。
+      if (request.method === "GET"
+          && (url.pathname === "/" || parts[0] !== "tasks")) {
+        const file = options.webRoot
+          ? staticFile(options.webRoot, url.pathname)
+          : undefined;
+        if (file) {
+          response.writeHead(200, {
+            "content-type": MIME[extname(file)] ?? "application/octet-stream",
+          });
+          return response.end(readFileSync(file));
+        }
+        if (url.pathname === "/") {
+          response.writeHead(200,
+            { "content-type": "text/html; charset=utf-8" });
+          return response.end(WEB_PAGE);
+        }
+        return json(response, 404, { error: "未知路径" });
       }
       if (request.method === "POST" && url.pathname === "/tasks") {
         const body = await readBody(request);
@@ -119,6 +148,21 @@ export function createTaskServer(service: TaskService): Server {
       return json(response, 500, { error: String(error) });
     }
   });
+}
+
+/** webRoot 内定位静态文件:/ → index.html。resolve 后必须仍在
+ * webRoot 里——路径穿越不是 404 的一种,是攻击,直接不认。 */
+function staticFile(
+  webRoot: string,
+  pathname: string,
+): string | undefined {
+  const root = resolve(webRoot);
+  const target = resolve(
+    join(root, pathname === "/" ? "index.html" : pathname));
+  if (target !== root && !target.startsWith(root + sep)) return undefined;
+  return existsSync(target) && statSync(target).isFile()
+    ? target
+    : undefined;
 }
 
 /** SSE:先重放事件日志,再轮询追加行;客户端断开即停。 */
