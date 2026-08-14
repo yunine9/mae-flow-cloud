@@ -10,6 +10,11 @@
  *   npm run pilot -- --models .local/models.json --provider glm \
  *     --model glm-5.1 --repo ../mae-flow-fieldtest-java \
  *     [--requirement "交付 REQ...:..."] [--max-cards 12] [--timeout-min 20]
+ *
+ * 断点续跑(预算耗尽不等于从头再来——quota 和已走的流程都是钱):
+ *   npm run pilot -- --resume <label> [--timeout-min 30]
+ * 复用 .pilot/<label> 现场,走任务级恢复:重建会话以内核 current
+ * 为锚续跑,等人的卡由代答策略接着答。--requirement 在续跑时无效。
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -70,9 +75,15 @@ async function main(): Promise<number> {
   }
   // 每次试跑一个独立现场目录:不删现场是纪律,目录隔离让纪律免维护
   // (跑完即归档,无需手动搬走,也不可能互相覆盖)。
-  const label = flag("--label",
+  // --resume <label> 复用既有现场断点续跑。
+  const resumeLabel = flag("--resume");
+  const label = resumeLabel ?? flag("--label",
     "run-" + new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19))!;
   const dataDir = join(REPO_ROOT, ".pilot", label);
+  if (resumeLabel && !existsSync(dataDir)) {
+    console.error(`[pilot] 现场不存在,无从续跑: ${dataDir}`);
+    return 1;
+  }
   // 内网件全用假件:裸仓当 Git 服务端,MR/流水线走环回 API,小鲁班收消息。
   const platform = new FakeGitPlatform();
   platform.initBare(repoPath, dataDir);
@@ -92,8 +103,23 @@ async function main(): Promise<number> {
   });
 
   console.log(`[pilot] 真模型试跑: ${provider}/${model}`);
-  console.log(`[pilot] 需求: ${requirement}`);
-  const task = service.create(requirement, { account: "liaoxiang" });
+  let task;
+  if (resumeLabel) {
+    // 断点续跑 = 服务重启语义:崩溃时在跑的任务重新入队,以内核
+    // current 为锚重建会话;等人的卡恢复后由下面的代答循环接着答。
+    const recovered = service.recover();
+    task = service.list().at(-1);
+    if (!task) {
+      console.error(`[pilot] 现场 ${dataDir} 里没有可续跑的任务`);
+      return 1;
+    }
+    console.log(`[pilot] 断点续跑: 恢复 ${recovered.restored} 个任务`
+      + `(重新入队 ${recovered.requeued}),任务 ${task.id}`
+      + ` 状态 ${task.status}`);
+  } else {
+    console.log(`[pilot] 需求: ${requirement}`);
+    task = service.create(requirement, { account: "liaoxiang" });
+  }
   console.log(`[pilot] 任务 ${task.id},现场: ${task.workspace}`);
 
   const deadline = Date.now() + timeoutMs;
