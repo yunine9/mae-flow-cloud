@@ -51,6 +51,11 @@ export class TaskContainer {
       ...(this.limits.user ? ["--user", this.limits.user] : []),
       "-w", this.workspace,
       this.image, "sleep", "infinity");
+    // 挂载仓在容器视角属主"可疑",git 会拒绝操作(dubious ownership)。
+    // 预置 safe.directory 免得模型在真跑里烧一回合自救(push 排雷实测)。
+    await docker("exec", this.containerId,
+      "git", "config", "--global", "--add", "safe.directory", "*")
+      .catch(() => undefined);
     this.log?.(`容器就位: ${this.name} (${this.image})`);
   }
 

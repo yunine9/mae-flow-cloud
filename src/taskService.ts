@@ -91,6 +91,10 @@ export interface TaskServiceOptions {
   /** PostgreSQL 投影(主 spec §11):看板/审计/恢复引导的读侧。
    * 纯旁路——写失败不改流程,不配则一切照旧(文件即真相)。 */
   projection?: PgProjection;
+  /** 主动压缩节奏:事件量每涨这么多,在下一个回合间隙以内核锚点
+   * 压缩会话(0 = 关)。被动保底(pi 自动压缩)始终开着,这里是
+   * "注意力不许飘"的主动档。 */
+  compactEveryEvents?: number;
   /** 容器隔离(设计文档):bash 命令进任务专属容器执行,镜像按
    * 试点仓选。容器起不来任务如实 failed,不静默降级回宿主。
    * volumes = 额外挂载(构建缓存等),"宿主:容器" 形状;
@@ -120,6 +124,8 @@ interface TaskState {
   nudgeCount?: number;
   /** 任务专属容器(隔离模式):随任务起,随收口停。 */
   container?: TaskContainer;
+  /** 上次主动压缩时的事件水位(事件量是上下文增长的诚实代理)。 */
+  lastCompactAt?: number;
   /** 恢复标记:launch 走重建会话路径(不重克隆、内核 current 续跑)。 */
   resume?: boolean;
   /** 恢复期收到的人工决定:重建会话就绪后由 driver 补登记再续跑。 */
@@ -716,6 +722,41 @@ export class TaskService {
     });
   }
 
+  /** 主动压缩(用户关切:长编码阶段注意力漂移):事件量每涨
+   * compactEveryEvents,在回合间隙以内核锚点压缩会话。事件量是
+   * 上下文增长的诚实代理——不复刻 token 计数,也不猜阶段语义。 */
+  private async maybeCompact(task: TaskState): Promise<void> {
+    const every = this.options.compactEveryEvents ?? 0;
+    if (!every || !task.driver) return;
+    let level = 0;
+    try {
+      level = new EventLog(
+        join(task.summary.workspace, "events.jsonl")).lastEventId();
+    } catch {
+      return;
+    }
+    if (level - (task.lastCompactAt ?? 0) < every) return;
+    task.lastCompactAt = level;
+    await task.driver.compactAnchored(this.kernelAnchor(task));
+  }
+
+  /** 压缩锚点:内核状态文件的 current/config 原文;没有内核现场
+   * 就退到需求原话——锚永远来自权威,不由云端编造。 */
+  private kernelAnchor(task: TaskState): string {
+    try {
+      const statePath = join(task.cwd ?? "", ".mae-flow.json");
+      if (task.cwd && existsSync(statePath)) {
+        const state = JSON.parse(readFileSync(statePath, "utf-8"));
+        return `内核当前步骤: ${state.current}\n`
+          + `已确认配置: ${JSON.stringify(state.config ?? {})}\n`
+          + `需求: ${task.summary.requirement}`;
+      }
+    } catch {
+      // 读不到就用需求兜底,不为锚编内容。
+    }
+    return `需求: ${task.summary.requirement}`;
+  }
+
   /** 内核视角的"流程还没走完":current 不是 end;状态文件不存在=
    * 连 init 都没走(run4 实测:空转回合把未 init 的任务标成 completed),
    * 同样算卡壳。非内核模式(无 host)不判——演练剧本自己收口。 */
@@ -749,6 +790,9 @@ export class TaskService {
         this.notifyWaiting(task);
         break;
       case "turn_finished": {
+        // 主动压缩:回合间隙是唯一安全的压缩点(等待人工时压会
+        // 打断挂起的人工节点)。以内核锚点组织摘要,注意力不许飘。
+        await this.maybeCompact(task);
         // 回合结束≠流程走完:模型可能提前收嘴(run3 实测停在
         // delivery_review)。内核 current 不在终态且催办还有效时,
         // 同一会话催办续跑,而不是把半截流程标成 completed。

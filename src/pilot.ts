@@ -97,6 +97,7 @@ async function main(): Promise<number> {
     modelsJson: JSON.parse(readFileSync(modelsPath, "utf-8")),
     host: { kernelRoot, repoPath: platform.barePath, python: "python3" },
     delivery: { platformUrl: platform.baseUrl },
+    compactEveryEvents: Number(flag("--compact-every", "150")),
     isolation: flag("--isolate-image")
       ? {
           image: flag("--isolate-image")!,

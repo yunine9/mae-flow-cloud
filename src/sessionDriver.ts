@@ -99,6 +99,17 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve };
 }
 
+/** 主动压缩的指令模板:摘要以内核锚点为纲——注意力飘不飘,锚说了算。 */
+export function compactionInstructions(anchor: string): string {
+  return [
+    "以下是流程锚点,摘要必须围绕它组织:",
+    anchor,
+    "保留:当前步骤与其指引、已确认的配置与决策、未完成工作清单、",
+    "最近一次错误与修复结论、正在编辑文件的关键内容。",
+    "可丢弃:过程性探索、已解决问题的中间尝试、长命令输出原文(只留结论)。",
+  ].join("\n");
+}
+
 /** 环回流量强制直连:pi-ai 会跟随代理环境变量,内网 Clash 实测把
  * 127.0.0.1 的模型/桥请求劫走回 502。生产同样成立——网关走代理可以,
  * 环回不行。 */
@@ -282,6 +293,22 @@ export class CloudSession {
     return Promise.race([this.pendingTurn!, this.waitingSignal.promise]);
   }
 
+  /** 主动压缩(用户关切:长编码阶段注意力漂移)。只许在回合间隙
+   * 调用——pi 的 compact 会先中止进行中的 agent 运行,而"等待人工"
+   * 的挂起 Promise 也算进行中,在那儿压会把人工节点打断。
+   * 失败 fail-open:压不动就不压,流程照走(红线)。 */
+  async compactAnchored(anchor: string): Promise<boolean> {
+    try {
+      await (this.session as any).compact(compactionInstructions(anchor));
+      this.options.log?.(`任务 ${this.options.taskId} 会话主动压缩完成`);
+      return true;
+    } catch (error) {
+      this.options.log?.(
+        `任务 ${this.options.taskId} 主动压缩失败(不影响流程): ${String(error)}`);
+      return false;
+    }
+  }
+
   dispose(): void {
     this.session.dispose();
   }
@@ -331,6 +358,9 @@ export class CloudSession {
       ] as any,
       sessionManager: SessionManager.inMemory(),
     });
+    // 被动保底:接近上下文上限时 pi 自动压缩(主动压缩另有节奏,
+    // 见 compactAnchored/TaskService.maybeCompact)。
+    (session as any).setAutoCompactionEnabled?.(true);
     session.subscribe((event: any) => this.onSessionEvent(config.sessionId, event));
     return session;
   }

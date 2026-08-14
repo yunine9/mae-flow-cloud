@@ -61,6 +61,9 @@ async function main(): Promise<void> {
   const dataDir = resolve(flag("--data") ?? join(REPO_ROOT, ".tasks"));
   // 管理旋钮(主 spec §4:最大并发由管理员配置,超出排队)。
   const maxConcurrent = Number(flag("--max-concurrent") ?? 2);
+  // 主动压缩节奏(事件量为代理,回合间隙以内核锚点压缩;0=关,
+  // 被动保底 pi 自动压缩始终在)。
+  const compactEvery = Number(flag("--compact-every") ?? 150);
 
   let modelsJson: Record<string, unknown>;
   let provider = flag("--provider") ?? "maeflow";
@@ -128,6 +131,7 @@ async function main(): Promise<void> {
 
   const service = new TaskService({
     dataDir, provider, model, modelsJson, maxConcurrent,
+    compactEveryEvents: compactEvery,
     contract: demoContract,
     host,
     delivery,
