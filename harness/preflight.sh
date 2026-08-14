@@ -108,8 +108,8 @@ fi
 echo
 echo "人工项(脚本不假装能自动化):"
 echo "  5. 发一单真需求走到 await_merge,MR 出现在真平台上;"
-echo "  6. 杀进程重启,确认等待中的任务还在、决定后能续跑"
-echo "     (语义已有测试兜底:tests/recovery.test.ts,线上仍需演练一次)。"
+echo "  6. 杀进程重启恢复——已有可执行演练:harness/restart-drill.sh"
+echo "     (真 kill -9 真 HTTP;语义测试另见 tests/recovery.test.ts)。"
 echo
 echo "结果: ✅ $PASS  ❌ $FAIL  ⏭️ $SKIP"
 [ "$FAIL" -eq 0 ] || exit 1

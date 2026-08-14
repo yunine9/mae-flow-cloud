@@ -119,7 +119,9 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
 4. 网关连通:发一个最小任务,确认首回合不是空转
    (429/网关错误会如实落 failed + detail,不会假 completed);
 5. 一单真需求走到 `await_merge`,MR 出现在真平台上;
-6. 杀进程重启,确认等待中的任务还在、决定后能续跑。
+6. 杀进程重启,确认等待中的任务还在、决定后能续跑
+   (可执行演练:`harness/restart-drill.sh`——真 kill -9 真 HTTP,
+   全绿即过;上线机器上跑一遍)。
 
 ## 监控与排障
 
