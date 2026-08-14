@@ -92,8 +92,15 @@ export interface TaskServiceOptions {
   projection?: PgProjection;
   /** 容器隔离(设计文档):bash 命令进任务专属容器执行,镜像按
    * 试点仓选。容器起不来任务如实 failed,不静默降级回宿主。
-   * volumes = 额外挂载(构建缓存等),"宿主:容器" 形状。 */
-  isolation?: { image: string; volumes?: string[] };
+   * volumes = 额外挂载(构建缓存等),"宿主:容器" 形状;
+   * memory/cpus/user = 资源限额与身份映射,不配即不限。 */
+  isolation?: {
+    image: string;
+    volumes?: string[];
+    memory?: string;
+    cpus?: string;
+    user?: string;
+  };
   log?: (message: string) => void;
 }
 
@@ -396,10 +403,10 @@ export class TaskService {
       // 容器隔离:bash 进任务专属容器(工作区同路径挂载),
       // 起不来直接抛=任务 failed——静默降级回宿主是假隔离。
       if (this.options.isolation) {
+        const { image, volumes, memory, cpus, user } = this.options.isolation;
         task.container = new TaskContainer(
-          this.options.isolation.image, cwd,
-          `mfc-${task.summary.id}`, this.options.log,
-          this.options.isolation.volumes);
+          image, cwd, `mfc-${task.summary.id}`, this.options.log,
+          volumes, { memory, cpus, user });
         await task.container.start();
       }
       task.driver = await CloudSession.create({

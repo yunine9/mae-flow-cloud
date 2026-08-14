@@ -88,6 +88,28 @@ export async function decide(
   return {};
 }
 
+export interface ExternalAction {
+  idemKey: string;
+  kind: string;
+  request: Record<string, unknown>;
+  result?: Record<string, unknown>;
+  sha?: string;
+  startedAt: string;
+  finishedAt?: string;
+}
+
+/** 外部动作台账(需服务端配 --pg)。404 时把服务端的解释原样带回。 */
+export async function listActions(
+  taskId: string,
+): Promise<{ actions?: ExternalAction[]; unavailable?: string }> {
+  const response = await fetch(`/tasks/${taskId}/actions`);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    return { unavailable: String(body.error ?? `HTTP ${response.status}`) };
+  }
+  return { actions: await response.json() };
+}
+
 /** SSE 事件流:重放 + 跟进,组件卸载时调用返回的清理函数。 */
 export function tailEvents(
   taskId: string,

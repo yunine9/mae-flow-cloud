@@ -6,8 +6,10 @@
 import { useEffect, useRef, useState } from "react";
 import {
   decide,
+  listActions,
   STATUS_TEXT,
   tailEvents,
+  type ExternalAction,
   type SemanticEvent,
   type TaskSummary,
 } from "./api";
@@ -56,8 +58,42 @@ export function TaskCard({
       {task.status === "waiting_for_human" && task.waiting && (
         <WaitingCard task={task} onDecided={onChanged} />
       )}
+      {task.delivery && <ActionLedger taskId={task.id} />}
       <EventTail taskId={task.id} />
     </div>
+  );
+}
+
+/** 外部动作台账(审计读侧):展开才查;没配 --pg 时把服务端的
+ * 解释原样呈现,不装作"没有动作"。 */
+function ActionLedger({ taskId }: { taskId: string }) {
+  const [rows, setRows] = useState<ExternalAction[]>();
+  const [unavailable, setUnavailable] = useState("");
+
+  async function load() {
+    const result = await listActions(taskId);
+    if (result.unavailable) setUnavailable(result.unavailable);
+    else setRows(result.actions ?? []);
+  }
+
+  return (
+    <details onToggle={(toggle) => {
+      if ((toggle.target as HTMLDetailsElement).open) void load();
+    }}>
+      <summary className="muted">外部动作台账(MR/流水线)</summary>
+      {unavailable && <div className="muted">{unavailable}</div>}
+      {rows && rows.length === 0 && (
+        <div className="muted">还没有外部动作。</div>
+      )}
+      {rows && rows.length > 0 && (
+        <pre>{rows.map((row) =>
+          `${row.kind}  ${row.idemKey}  ` +
+          `${row.finishedAt ? "已完成" : "进行中"}` +
+          `${row.sha ? `  sha=${row.sha.slice(0, 8)}` : ""}\n` +
+          `  结果: ${JSON.stringify(row.result ?? "(未回填)")}`,
+        ).join("\n")}</pre>
+      )}
+    </details>
   );
 }
 

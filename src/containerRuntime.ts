@@ -32,6 +32,10 @@ export class TaskContainer {
     /** 额外挂载("宿主:容器"),如构建缓存 ~/.m2/repository——
      * 没有它每个任务都从零下依赖。 */
     private volumes: string[] = [],
+    /** 资源限额与身份映射(设计文档后续项):memory 如 "2g"、
+     * cpus 如 "2"、user 如 "1000:1000"(容器内以宿主 uid 写挂载卷,
+     * 文件属主不漂移)。不配即不限。 */
+    private limits: { memory?: string; cpus?: string; user?: string } = {},
   ) {}
 
   /** 长驻容器:工作区同路径挂载。起不来就抛——要隔离就真隔离,
@@ -42,6 +46,9 @@ export class TaskContainer {
       "run", "-d", "--rm", "--name", this.name,
       "-v", `${this.workspace}:${this.workspace}`,
       ...this.volumes.flatMap((volume) => ["-v", volume]),
+      ...(this.limits.memory ? ["--memory", this.limits.memory] : []),
+      ...(this.limits.cpus ? ["--cpus", this.limits.cpus] : []),
+      ...(this.limits.user ? ["--user", this.limits.user] : []),
       "-w", this.workspace,
       this.image, "sleep", "infinity");
     this.log?.(`容器就位: ${this.name} (${this.image})`);

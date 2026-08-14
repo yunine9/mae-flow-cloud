@@ -70,7 +70,40 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
   重建索引;崩溃时在跑的任务重新入队,以内核 current 为锚重建会话续跑;
   等人的任务原地挂起,决定到来走重建会话。演示模式(无 `--models`)
   每次清场,真模型模式永不自动清数据。
+- **容器隔离(强烈建议内网开启)**:`--isolate-image <构建镜像>`
+  后模型的 bash 命令进任务专属容器执行(会话/门禁/内核留宿主,
+  工作区同路径挂载)。镜像按试点仓选并需包含 python3 + git +
+  构建链(Java 例:maven + JDK + python3,参考 mfc-java-pilot 的
+  Dockerfile 形状);`--isolate-volume ~/.m2:/root/.m2` 挂构建缓存;
+  `--isolate-memory 4g --isolate-cpus 2` 限额;
+  `--isolate-user $(id -u):$(id -g)` 防挂载卷文件属主漂移。
+  教训(run7 实锤):宿主没有构建链时,模型会自己发明 docker 包裹
+  命令拿到真实绿灯,但内核台账铁面拒收(命令与任务卡不符)——
+  环境必须由部署侧给足,不能指望模型绕。
 - 守护用 systemd `Restart=on-failure` 即可,恢复逻辑在服务内部。
+  单元文件样例:
+
+  ```ini
+  [Unit]
+  Description=mae-flow-cloud
+  After=network.target docker.service
+
+  [Service]
+  WorkingDirectory=/srv/mae-flow-cloud
+  Environment=MAE_FLOW_HOME=/srv/mae-flow
+  ExecStart=/usr/bin/npm run serve -- \
+    --models /etc/mae-flow-cloud/models.json \
+    --provider <网关名> --model glm-5.1 \
+    --repo <内网仓地址> --platform <MR/流水线网关地址> \
+    --pg postgresql://<用户>@<PG地址>/<库名> \
+    --isolate-image <构建镜像> --isolate-volume /var/cache/m2:/root/.m2 \
+    --data /var/lib/mae-flow-cloud --port 8787
+  Restart=on-failure
+  RestartSec=3
+
+  [Install]
+  WantedBy=multi-user.target
+  ```
 - 环回代理教训(外部踩过三次):如果服务器有全局代理,
   确认 `NO_PROXY=127.0.0.1,localhost`(代码里 `ensureLoopbackDirect()`
   已兜底,但 curl 排障时记得 `--noproxy '*'`)。

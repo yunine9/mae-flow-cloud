@@ -132,7 +132,13 @@ async function main(): Promise<void> {
     host,
     delivery,
     isolation: isolateImage
-      ? { image: isolateImage, volumes: flags("--isolate-volume") }
+      ? {
+          image: isolateImage,
+          volumes: flags("--isolate-volume"),
+          memory: flag("--isolate-memory"),
+          cpus: flag("--isolate-cpus"),
+          user: flag("--isolate-user"),
+        }
       : undefined,
     notifier: new Notifier({ endpoint: luban.endpoint }),
     projection,
