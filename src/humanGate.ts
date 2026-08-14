@@ -25,6 +25,10 @@ export interface WaitingRecord {
   step: string;
   call_id: string;
   question: Record<string, unknown>;
+  /** 提问前模型的最后一段话:审批卡的上下文。"编译与 UT 命令如上表"
+   * 这类指代,表就在这里——不带上它,卡在页面上就是悬空的
+   * (真人实战第一单实测)。 */
+  context?: string;
   state_version: number;
   status: "waiting" | "resolved";
   decision: string;
@@ -65,6 +69,7 @@ export class HumanGate {
     step: string;
     callId: string;
     questionInput: Record<string, unknown>;
+    context?: string;
   }): WaitingRecord {
     const waitingId = `${options.taskId}:${options.callId}`;
     const store = this.load();
@@ -76,6 +81,7 @@ export class HumanGate {
       step: options.step,
       call_id: options.callId,
       question: options.questionInput,
+      context: options.context || undefined,
       state_version: 1,
       status: "waiting",
       decision: "",

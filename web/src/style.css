@@ -755,3 +755,21 @@ pre {
   .board-row-title { flex-basis: 100%; order: 3; white-space: normal; }
   .board-row-meta { margin-left: auto; }
 }
+
+/* 审批卡上下文:提问前模型的最后一段话("如上表"的表就在这)。
+   等宽保排版(配置表/命令原样),超长内滚不撑卡。 */
+.waiting-context {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: .78rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s, 6px);
+  padding: .6rem .75rem;
+  margin-bottom: .75rem;
+  max-height: 18rem;
+  overflow-y: auto;
+  color: var(--text);
+}

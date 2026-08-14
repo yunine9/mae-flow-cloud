@@ -485,6 +485,7 @@ export class CloudSession {
           step: driver.options.currentStep?.() ?? "",
           callId,
           questionInput: params ?? {},
+          context: driver.lastAssistantText.get(driver.sessionId),
         });
         driver.waitingRecord = record;
         const decision = new Promise<string>((resolve) =>

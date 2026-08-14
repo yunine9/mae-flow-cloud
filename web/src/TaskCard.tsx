@@ -148,6 +148,9 @@ function WaitingCard({
       <div className="waiting-title">
         等你决定{task.waiting?.step ? ` · ${task.waiting.step}` : ""}
       </div>
+      {task.waiting?.context && (
+        <div className="waiting-context">{task.waiting.context}</div>
+      )}
       {questions.map((item) => {
         const longform = (item.options ?? [])
           .some((option) => option.length > 24)

@@ -40,6 +40,8 @@ export interface TaskSummary {
     state_version: number;
     step?: string;
     question?: { questions?: WaitingQuestion[] };
+    /** 提问前模型的最后一段话:"如上表"这类指代的落点。 */
+    context?: string;
   };
   notify?: { delivered: boolean; attempts: number; last_error?: string };
   delivery?: {
