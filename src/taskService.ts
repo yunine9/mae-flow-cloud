@@ -374,13 +374,14 @@ export class TaskService {
     return target;
   }
 
-  /** 内核视角的"流程还没走完":状态文件存在且 current 不是 end。
-   * 非内核模式(无 host/状态文件)不判卡壳——演练剧本自己收口。 */
+  /** 内核视角的"流程还没走完":current 不是 end;状态文件不存在=
+   * 连 init 都没走(run4 实测:空转回合把未 init 的任务标成 completed),
+   * 同样算卡壳。非内核模式(无 host)不判——演练剧本自己收口。 */
   private stalledStep(task: TaskState): string | undefined {
     if (!this.options.host || !task.cwd) return undefined;
     try {
       const statePath = join(task.cwd, ".mae-flow.json");
-      if (!existsSync(statePath)) return undefined;
+      if (!existsSync(statePath)) return "init(尚未初始化)";
       const current = String(
         JSON.parse(readFileSync(statePath, "utf-8"))?.current ?? "");
       return current && current !== "end" ? current : undefined;
@@ -418,8 +419,9 @@ export class TaskService {
             `任务 ${task.summary.id} 催办续跑(流程停在 ${stalled})`);
           await this.settle(task, task.driver.continueWith(
             `流程尚未走完:内核当前步骤是 ${stalled},不是 end。` +
-            `请执行 current 查看本步指引并继续,直到流程 end。` +
-            `所有待确认项都已由用户在面板上答复,不要重复提问。`));
+            `尚未 init 就按开工引导先执行 init;否则执行 current ` +
+            `查看本步指引并继续,直到流程 end。` +
+            `已答复过的确认项不要重复提问。`));
           break;
         }
         task.driver?.dispose();

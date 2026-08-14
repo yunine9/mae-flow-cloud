@@ -117,6 +117,11 @@ export class CloudSession {
   private decisionResolvers = new Map<string, (text: string) => void>();
   private waitingRecord?: WaitingRecord;
   private hostAnswered = new Set<string>();
+  /** 主会话本轮活动量与模型层错误:pi 把 API 失败静默成
+   * stopReason="error" 的空 assistant 消息(run4 实测,回合零活动
+   * 直接 end_turn),宿主必须自己识别,否则空转被标成 completed。 */
+  private turnActivity = 0;
+  private turnError = "";
   private toolArgs = new Map<string, Record<string, unknown>>();
   private lastAssistantText = new Map<string, string>();
   private childCount = 0;
@@ -164,14 +169,18 @@ export class CloudSession {
 
   async start(userMessage: string): Promise<Outcome> {
     this.emit("session_started", this.sessionId, { resume: false });
+    return this.promptTurn(userMessage);
+  }
+
+  /** 发一条用户消息并跑完本轮,统一收口判定。 */
+  private promptTurn(userMessage: string): Promise<Outcome> {
     this.emit("user_message", this.sessionId, { text: userMessage });
+    this.turnActivity = 0;
+    this.turnError = "";
     this.waitingSignal = deferred<Outcome>();
     this.pendingTurn = this.session
       .prompt(userMessage)
-      .then((): Outcome => {
-        this.emit("turn_finished", this.sessionId, { reason: "end_turn" });
-        return { status: "turn_finished", reason: "end_turn" };
-      })
+      .then((): Outcome => this.turnOutcome())
       .catch((error): Outcome => {
         this.emit("session_ended", this.sessionId, {
           reason: "failed", detail: String(error),
@@ -181,25 +190,26 @@ export class CloudSession {
     return Promise.race([this.pendingTurn, this.waitingSignal.promise]);
   }
 
+  /** 回合收口:零活动+模型层错误 = 会话失败(把 pi 吞掉的 API 错误
+   * 亮出来);零活动无错误 = 空转回合(交上层催办);否则正常收轮。 */
+  private turnOutcome(): Outcome {
+    if (!this.turnActivity && this.turnError) {
+      const detail = `模型回合失败: ${this.turnError}`;
+      this.emit("session_ended", this.sessionId, {
+        reason: "failed", detail,
+      });
+      return { status: "session_ended", reason: "failed", detail };
+    }
+    const reason = this.turnActivity ? "end_turn" : "empty_turn";
+    this.emit("turn_finished", this.sessionId, { reason });
+    return { status: "turn_finished", reason };
+  }
+
   /** 回合结束但流程未到终态时的催办续跑:同一会话追加一条用户消息。
    * 模型提前收嘴(run3 实测:拿到 message-id 后直接 end_turn)不等于
    * 任务完成——阶段真相只看内核状态,宿主负责把会话推回流程。 */
   async continueWith(text: string): Promise<Outcome> {
-    this.emit("user_message", this.sessionId, { text });
-    this.waitingSignal = deferred<Outcome>();
-    this.pendingTurn = this.session
-      .prompt(text)
-      .then((): Outcome => {
-        this.emit("turn_finished", this.sessionId, { reason: "end_turn" });
-        return { status: "turn_finished", reason: "end_turn" };
-      })
-      .catch((error): Outcome => {
-        this.emit("session_ended", this.sessionId, {
-          reason: "failed", detail: String(error),
-        });
-        return { status: "session_ended", reason: "failed", detail: String(error) };
-      });
-    return Promise.race([this.pendingTurn, this.waitingSignal.promise]);
+    return this.promptTurn(text);
   }
 
   /** 把 Web 决定回注为 AskUserQuestion 的工具结果,继续本轮。 */
@@ -314,16 +324,23 @@ export class CloudSession {
     if (kind === "message_end") {
       const message = event.message ?? {};
       if (message.role !== "assistant") return;
+      // 模型层错误藏在 stopReason 里(消息往往无文本,不能只看 text)。
+      if (sessionId === this.sessionId
+          && String(message.stopReason ?? "") === "error") {
+        this.turnError = String(message.errorMessage ?? "未知模型错误");
+      }
       const text = (Array.isArray(message.content) ? message.content : [])
         .filter((block: any) => block?.type === "text")
         .map((block: any) => String(block.text ?? ""))
         .join("");
       if (!text) return;
+      if (sessionId === this.sessionId) this.turnActivity += 1;
       this.lastAssistantText.set(sessionId, text);
       this.emit("assistant_message", sessionId, { text });
       return;
     }
     if (kind === "tool_execution_start") {
+      if (sessionId === this.sessionId) this.turnActivity += 1;
       this.toolArgs.set(String(event.toolCallId ?? ""), event.args ?? {});
       return;
     }
