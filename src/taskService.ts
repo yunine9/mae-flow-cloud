@@ -13,7 +13,9 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
+  renameSync,
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -91,6 +93,10 @@ interface TaskState {
    * 对"推不动"无效);累计上限防对话式空转。 */
   nudgedStep?: string;
   nudgeCount?: number;
+  /** 恢复标记:launch 走重建会话路径(不重克隆、内核 current 续跑)。 */
+  resume?: boolean;
+  /** 恢复期收到的人工决定:重建会话就绪后由 driver 补登记再续跑。 */
+  pendingResume?: WaitingRecord;
 }
 
 export class TaskService {
@@ -146,13 +152,72 @@ export class TaskService {
       workspace,
       luban_account: options.account || undefined,
     };
-    this.tasks.set(id, {
+    const task: TaskState = {
       summary,
       humanGate: new HumanGate(join(workspace, "waiting.json")),
-    });
+    };
+    this.tasks.set(id, task);
+    this.persist(task);
     this.queue.push(id);
     void this.pump();
     return { ...summary };
+  }
+
+  /** 任务事实落盘(原子写):进程可死,任务不能死。
+   * summary+cwd 就是重启后重建 TaskState 需要的全部——待办在
+   * waiting.json、事件在 events.jsonl、流程真相在内核状态文件。 */
+  private persist(task: TaskState): void {
+    try {
+      const path = join(task.summary.workspace, "task.json");
+      writeFileSync(path + ".tmp", JSON.stringify(
+        { summary: task.summary, cwd: task.cwd }, null, 1));
+      renameSync(path + ".tmp", path);
+    } catch (error) {
+      this.options.log?.(`任务 ${task.summary.id} 落盘失败: ${String(error)}`);
+    }
+  }
+
+  /** 服务重启后恢复任务(服务启动时调用一次):
+   * - 终态任务(completed/failed/verifying/await_merge)只重建索引;
+   * - waiting_for_human 原地挂起,决定到来时走重建会话续跑;
+   * - 崩溃时在跑/在排队的任务重新入队,以内核 current 为锚续跑。 */
+  recover(): { restored: number; requeued: number } {
+    let restored = 0;
+    let requeued = 0;
+    if (!existsSync(this.options.dataDir)) return { restored, requeued };
+    for (const name of readdirSync(this.options.dataDir).sort()) {
+      const workspace = join(this.options.dataDir, name);
+      const path = join(workspace, "task.json");
+      if (!/^task-\d+$/.test(name) || !existsSync(path)
+          || this.tasks.has(name)) {
+        continue;
+      }
+      try {
+        const saved = JSON.parse(readFileSync(path, "utf-8"));
+        const summary = saved.summary as TaskSummary;
+        const task: TaskState = {
+          summary,
+          humanGate: new HumanGate(join(workspace, "waiting.json")),
+          cwd: typeof saved.cwd === "string" ? saved.cwd : undefined,
+          resume: true,
+        };
+        this.tasks.set(summary.id, task);
+        this.counter = Math.max(
+          this.counter, Number(name.slice("task-".length)) || 0);
+        restored += 1;
+        if (summary.status === "running" || summary.status === "queued") {
+          summary.status = "queued";
+          summary.detail = "服务重启,等待续跑";
+          this.persist(task);
+          this.queue.push(summary.id);
+          requeued += 1;
+        }
+      } catch (error) {
+        this.options.log?.(`恢复 ${name} 失败: ${String(error)}`);
+      }
+    }
+    if (requeued) void this.pump();
+    return { restored, requeued };
   }
 
   /** Web 决定:先到生效;冲突抛 StateConflictError 由 API 层变 409。
@@ -184,9 +249,22 @@ export class TaskService {
       answers: Object.keys(answers).length ? answers : undefined,
       notes: input.notes,
     });
-    task.summary.status = "running";
     task.summary.waiting = undefined;
-    void this.settle(task, task.driver!.resumeWithDecision(resolved));
+    if (task.driver) {
+      task.summary.status = "running";
+      this.persist(task);
+      void this.settle(task, task.driver.resumeWithDecision(resolved));
+    } else {
+      // 恢复场景:旧会话死于服务重启,决定先落袋(waiting.json 已
+      // resolved),任务入队走重建会话——launch 会补登记这份决定。
+      task.summary.status = "queued";
+      task.summary.detail = "决定已收到,等待重建会话续跑";
+      task.pendingResume = resolved;
+      task.resume = true;
+      this.persist(task);
+      this.queue.push(task.summary.id);
+      void this.pump();
+    }
     return { ...task.summary };
   }
 
@@ -197,6 +275,7 @@ export class TaskService {
       const task = this.tasks.get(id)!;
       this.runningCount += 1;
       task.summary.status = "running";
+      this.persist(task);
       void this.launch(task).finally(() => {
         this.runningCount -= 1;
         void this.pump();
@@ -213,12 +292,15 @@ export class TaskService {
         join(agentDir, "models.json"),
         JSON.stringify(this.options.modelsJson));
       const transcriptPath = join(workspace, "transcript.jsonl");
+      // 恢复=工作区(仓库克隆)还在;克隆丢了就只能从头来。
+      const resuming = task.resume === true
+        && !!task.cwd && task.cwd !== workspace && existsSync(task.cwd);
       let cwd = workspace;
       let prompt = task.summary.requirement;
       let hostHooks;
       task.cwd = cwd;
       if (this.options.host) {
-        cwd = this.cloneRepo(workspace);
+        cwd = resuming ? task.cwd! : this.cloneRepo(workspace);
         task.cwd = cwd;
         const kernel = new KernelHost({
           kernelRoot: this.options.host.kernelRoot,
@@ -229,15 +311,27 @@ export class TaskService {
           log: this.options.log,
         });
         // 首条 prompt = 需求 + 内核自己的开工引导(转发壳/init 指引),
-        // 不由云端复述内核该说的话。
+        // 不由云端复述内核该说的话。重启后的 sessionstart 对内核是
+        // 常态(老宿主重启会话同款),ACTIVE 状态下引导即当前步指引。
         const guidance = await kernel.bootstrap(task.summary.requirement);
         prompt = guidance
           ? `${task.summary.requirement}\n\n${guidance}`
           : task.summary.requirement;
+        if (resuming) {
+          prompt = [
+            guidance,
+            "云端服务重启,本会话为重建会话:此前对话不在上下文里," +
+            "流程真相以内核状态为准。执行 current 查看当前步骤;" +
+            "此前向用户的提问均已答复并录入台账(执行 messages 查看)," +
+            "不要重复提问;继续推进直到流程 end。",
+          ].filter(Boolean).join("\n\n");
+        }
         hostHooks = {
           preTool: kernel.preTool.bind(kernel),
           postTool: kernel.postTool.bind(kernel),
         };
+      } else if (resuming || task.resume) {
+        prompt = `服务重启,继续任务:${task.summary.requirement}`;
       }
       task.driver = await CloudSession.create({
         taskId: task.summary.id,
@@ -255,10 +349,27 @@ export class TaskService {
         hostHooks,
         log: this.options.log,
       });
-      await this.settle(task, task.driver.start(prompt));
+      // 重建会话:恢复期收到的决定先补登记(tool_result 与崩溃前的
+      // tool_use 行 join,答案进内核台账),再从内核 current 续跑。
+      // 内核模式下克隆丢失=现场没了,决定无处可注,只能从头来。
+      const rebuild = task.resume === true
+        && (resuming || !this.options.host);
+      const pending = task.pendingResume;
+      task.resume = false;
+      task.pendingResume = undefined;
+      if (rebuild && pending) {
+        task.driver.injectDecision(pending);
+      } else if (pending) {
+        this.options.log?.(
+          `任务 ${task.summary.id} 工作区丢失,决定无法回注,从头执行`);
+      }
+      await this.settle(task, rebuild
+        ? task.driver.startResume(prompt)
+        : task.driver.start(prompt));
     } catch (error) {
       task.summary.status = "failed";
       task.summary.detail = String(error);
+      this.persist(task);
       this.options.log?.(`任务 ${task.summary.id} 启动失败: ${String(error)}`);
     }
   }
@@ -403,6 +514,7 @@ export class TaskService {
         // 人工节点=流程真实活动,催办账本清零:答复之后若再停在
         // 同名步骤,那是新一次卡壳,应当再催。
         task.nudgedStep = undefined;
+        this.persist(task);
         this.notifyWaiting(task);
         break;
       case "turn_finished": {
@@ -432,12 +544,14 @@ export class TaskService {
         if (task.summary.status === "running") {
           task.summary.status = "completed";
         }
+        this.persist(task);
         break;
       }
       case "session_ended":
         task.summary.status = "failed";
         task.summary.detail = outcome.detail ?? outcome.reason;
         task.driver?.dispose();
+        this.persist(task);
         break;
     }
   }

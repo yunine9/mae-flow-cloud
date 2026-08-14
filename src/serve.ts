@@ -87,6 +87,12 @@ async function main(): Promise<void> {
     linkBase: `http://127.0.0.1:${port}`,
     log: (message) => console.log(`  [task] ${message}`),
   });
+  // 进程可死任务不死:重启后重建索引,在跑的任务续跑,等人的继续等。
+  const recovered = service.recover();
+  if (recovered.restored) {
+    console.log(`[serve] 恢复任务 ${recovered.restored} 个`
+      + `(重新入队 ${recovered.requeued} 个)`);
+  }
   const server = createTaskServer(service);
   server.listen(port, "127.0.0.1", () => {
     const actual = (server.address() as AddressInfo).port;

@@ -172,6 +172,37 @@ export class CloudSession {
     return this.promptTurn(userMessage);
   }
 
+  /** 服务重启后的重建会话:pi 侧上下文不可恢复(inMemory),
+   * 流程真相在内核状态文件与事件日志里——重建会话从内核 current
+   * 续跑,这正是"裁决源在工作区"的红利。 */
+  async startResume(userMessage: string): Promise<Outcome> {
+    this.emit("session_started", this.sessionId, { resume: true });
+    return this.promptTurn(userMessage);
+  }
+
+  /** 恢复场景的决定回注:旧会话已死,没有挂起的工具调用可 resolve,
+   * 但登记义务不变——宿主代演的工具结果由 driver 登记(tool_result
+   * 与崩溃前落盘的 tool_use 行按 call_id join),答案走 posttooluse
+   * 进内核台账,重建会话执行 messages 就能看到。 */
+  injectDecision(record: WaitingRecord): void {
+    this.emit("human_decision", this.sessionId, {
+      waiting_id: record.waiting_id,
+      state_version: record.state_version,
+      decision: record.decision,
+      notes: record.notes,
+    });
+    const finished = this.emit("tool_finished", this.sessionId, {
+      call_id: record.call_id,
+      name: "AskUserQuestion",
+      input: record.question,
+      is_error: false,
+      result: renderDecision(record),
+      answers: answersOf(record, record),
+    });
+    void this.options.hostHooks?.postTool?.(finished);
+    this.hostAnswered.add(record.call_id);
+  }
+
   /** 发一条用户消息并跑完本轮,统一收口判定。 */
   private promptTurn(userMessage: string): Promise<Outcome> {
     this.emit("user_message", this.sessionId, { text: userMessage });
