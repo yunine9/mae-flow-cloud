@@ -193,6 +193,16 @@ test("历史读侧:按最近更新倒序,jsonb 字段还原,覆盖后见最新",
       });
       assert.equal(await projection.countEvents("task-h1"), 2);
       assert.equal(await projection.countEvents("task-none"), 0);
+      // 历史条目随行带事件量(联查一次拿全,不 N+1):
+      // 有事件的计数正确,没事件的是 0 而不是缺字段。
+      history = await projection.listTaskHistory();
+      const counted = history.filter((task) =>
+        task.id === "task-h1" || task.id === "task-h2");
+      assert.equal(
+        counted.find((task) => task.id === "task-h1")!.event_count, 2);
+      assert.equal(
+        counted.find((task) => task.id === "task-h2")!.event_count, 0);
+      assert.match(counted[0].updated_at, /^\d{4}-\d{2}-\d{2}T/);
       assert.equal(projection.lastError, undefined);
     } finally {
       await projection.close();

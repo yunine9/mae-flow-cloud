@@ -19,6 +19,13 @@ import pg from "pg";
 import type { TaskSummary } from "./taskService.ts";
 import type { SemanticEvent } from "./semanticEvents.ts";
 
+/** 历史条目 = 任务摘要投影 + 只有历史侧才有的两个字段:
+ * 事件量(联查带出)与最近更新时间(排序依据,页面说人话用)。 */
+export type TaskHistoryEntry = TaskSummary & {
+  event_count: number;
+  updated_at: string;
+};
+
 export interface ExternalAction {
   taskId: string;
   /** 幂等键:同任务同键只落一行(如 mr:feat->master、pipeline:<sha>)。 */
@@ -157,13 +164,19 @@ export class PgProjection {
 
   /** 历史读侧:任务摘要投影(按最近更新倒序)。内存列表只有本进程
    * recover 到的任务;数据目录清理或换机后,历史只活在这里——
-   * 看板/审计的跨生命周期入口。读失败抛错,纪律同 listActions。 */
-  async listTaskHistory(limit = 100): Promise<TaskSummary[]> {
+   * 看板/审计的跨生命周期入口。读失败抛错,纪律同 listActions。
+   * 事件量随行带出:一条 left join 分组联查,不做 N+1。 */
+  async listTaskHistory(limit = 100): Promise<TaskHistoryEntry[]> {
     await this.ensureSchema();
     const rows = await this.pool.query(
-      `select task_id, requirement, status, detail, luban_account,
-              workspace, created_at, waiting, delivery
-         from tasks order by updated_at desc limit $1`,
+      `select t.task_id, t.requirement, t.status, t.detail,
+              t.luban_account, t.workspace, t.created_at, t.updated_at,
+              t.waiting, t.delivery, coalesce(e.n, 0) as event_count
+         from tasks t
+         left join (select task_id, count(*)::int as n
+                      from task_events group by task_id) e
+           on e.task_id = t.task_id
+        order by t.updated_at desc limit $1`,
       [limit]);
     return rows.rows.map((row) => ({
       id: row.task_id,
@@ -173,8 +186,10 @@ export class PgProjection {
       luban_account: row.luban_account ?? undefined,
       workspace: row.workspace,
       created_at: new Date(row.created_at).toISOString(),
+      updated_at: new Date(row.updated_at).toISOString(),
       waiting: row.waiting ?? undefined,
       delivery: row.delivery ?? undefined,
+      event_count: row.event_count,
     }));
   }
 

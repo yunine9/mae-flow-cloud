@@ -6,6 +6,7 @@
 import { useEffect, useState } from "react";
 import { createTask, listTasks, type TaskSummary } from "./api";
 import { TaskCard } from "./TaskCard";
+import { HistoryPanel } from "./HistoryPanel";
 
 export function App() {
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
@@ -68,6 +69,7 @@ export function App() {
         {tasks.map((task) => (
           <TaskCard key={task.id} task={task} onChanged={refresh} />
         ))}
+        <HistoryPanel />
       </main>
     </>
   );

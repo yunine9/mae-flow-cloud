@@ -414,3 +414,38 @@ pre {
   .options.compact { flex-direction: column; }
   .options.compact .option { width: 100%; }
 }
+
+/* ---- 历史(投影):只读回望区,与活任务视觉区分 ---- */
+.history {
+  margin-top: 2.5rem;
+  border-top: 1px dashed var(--border);
+  padding-top: 1rem;
+}
+.history-hint {
+  margin-left: .55rem;
+  font-size: .74rem;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  padding: .08rem .5rem;
+}
+.history-row {
+  display: flex;
+  align-items: baseline;
+  gap: .65rem;
+  padding: .5rem .25rem;
+  border-bottom: 1px solid var(--border);
+  font-size: .9rem;
+}
+.history-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.history-meta {
+  color: var(--text-muted);
+  font-size: .8rem;
+  white-space: nowrap;
+}

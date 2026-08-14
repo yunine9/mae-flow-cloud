@@ -50,6 +50,25 @@ export interface TaskSummary {
   };
 }
 
+/** 历史条目(服务端 projection.ts 的 TaskHistoryEntry 镜像)。 */
+export type TaskHistoryEntry = TaskSummary & {
+  event_count: number;
+  updated_at: string;
+};
+
+/** 历史任务投影(需服务端配 --pg)。404 时把服务端的解释原样带回。 */
+export async function listHistory(): Promise<{
+  entries?: TaskHistoryEntry[];
+  unavailable?: string;
+}> {
+  const response = await fetch("/history");
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    return { unavailable: String(body.error ?? `HTTP ${response.status}`) };
+  }
+  return { entries: await response.json() };
+}
+
 export interface SemanticEvent {
   eventId: number;
   kind: string;
