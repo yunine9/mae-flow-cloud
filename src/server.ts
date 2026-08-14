@@ -13,7 +13,14 @@
  */
 
 import { createServer, type Server } from "node:http";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  openSync,
+  readFileSync,
+  readSync,
+  statSync,
+} from "node:fs";
 import { extname, join, resolve, sep } from "node:path";
 import { StateConflictError } from "./humanGate.ts";
 import { NotFoundError, type TaskService } from "./taskService.ts";
@@ -190,7 +197,13 @@ function staticFile(
     : undefined;
 }
 
-/** SSE:先重放事件日志,再轮询追加行;客户端断开即停。 */
+/** SSE:先重放事件日志,再轮询追加行;客户端断开即停。
+ *
+ * 增量读:按字节偏移只取新增部分——整文件重读在长日志下是
+ * O(n²) 读放大(run7 现场几百 KB,每 300ms 全量读一遍)。
+ * 事件行必须完整推送:尾部没换行的半行(写入方还在写)连同
+ * 可能被读界切开的 UTF-8 多字节字符一起留在 carry(按字节存,
+ * 提前解码就是乱码),凑齐换行才出手。 */
 function streamEvents(
   service: TaskService,
   id: string,
@@ -205,14 +218,30 @@ function streamEvents(
     "cache-control": "no-cache",
   });
   let offset = 0;
+  let carry = Buffer.alloc(0);
   let closed = false;
   response.on("close", () => (closed = true));
   const push = () => {
     if (closed) return;
-    if (existsSync(path)) {
-      const lines = readFileSync(path, "utf-8").split("\n").filter(Boolean);
-      for (; offset < lines.length; offset += 1) {
-        response.write(`data: ${lines[offset]}\n\n`);
+    if (existsSync(path) && statSync(path).size > offset) {
+      const fd = openSync(path, "r");
+      let read = 0;
+      let chunk: Buffer;
+      try {
+        chunk = Buffer.alloc(statSync(path).size - offset);
+        read = readSync(fd, chunk, 0, chunk.length, offset);
+      } finally {
+        closeSync(fd);
+      }
+      offset += read;
+      carry = Buffer.concat([carry, chunk.subarray(0, read)]);
+      const cut = carry.lastIndexOf(0x0a);
+      if (cut >= 0) {
+        const complete = carry.subarray(0, cut).toString("utf-8");
+        carry = Buffer.from(carry.subarray(cut + 1));
+        for (const line of complete.split("\n")) {
+          if (line.trim()) response.write(`data: ${line}\n\n`);
+        }
       }
     }
     const status = service.get(id)?.status;

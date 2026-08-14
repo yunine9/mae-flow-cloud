@@ -7,7 +7,13 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { get } from "node:http";
@@ -132,6 +138,92 @@ test("任务 API 整链:等待人工/409 冲突/决定生效/SSE 镜像", async 
     const listed = await fetch(`${base}/tasks`).then((r) => r.json());
     assert.equal(listed.length, 1);
     assert.equal(listed[0].status, "completed");
+  } finally {
+    server.close();
+    await model.stop();
+  }
+});
+
+/** SSE 原始行收集器:跨 TCP 分片重组,流结束(end)才 resolve。 */
+function sseLines(url: string): Promise<string[]> {
+  return new Promise((resolve, reject) => {
+    const lines: string[] = [];
+    let buffer = "";
+    const request = get(url, (response) => {
+      response.setEncoding("utf-8");
+      response.on("data", (chunk: string) => {
+        buffer += chunk;
+        const parts = buffer.split("\n");
+        buffer = parts.pop()!;
+        for (const part of parts) {
+          if (part.startsWith("data: ")) lines.push(part.slice(6));
+        }
+      });
+      response.on("end", () => resolve(lines));
+    });
+    request.on("error", reject);
+  });
+}
+
+test("SSE 增量推送:只收新增、不重不丢、半行凑齐换行才出手", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-sse-"));
+  // 剧本停在 AskUserQuestion:任务挂起期间事件日志归测试手动追加。
+  const model = new ScriptedModelServer([
+    { tool: { name: "AskUserQuestion",
+              input: { questions: [{ question: "继续吗?",
+                                     options: ["继续"] }] } } },
+    { text: "收口。" },
+  ]);
+  await model.start();
+  const service = new TaskService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+  });
+  const server = createTaskServer(service);
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  try {
+    const created = service.create("演练:SSE 增量");
+    const waiting = await until(async () => {
+      const task = service.get(created.id)!;
+      return task.status === "waiting_for_human" ? task : undefined;
+    }, "任务挂起");
+    const stream = sseLines(`${base}/tasks/${created.id}/events`);
+
+    // 完整行 + 被写入方切成两半的行(含多字节汉字):半行阶段不许推,
+    // 凑齐换行后必须原样完整到达。
+    const path = service.eventLogPath(created.id);
+    const whole = JSON.stringify({
+      eventId: 9001, taskId: created.id, sessionId: "main",
+      ts: "t", kind: "assistant_message", payload: { text: "整行事件" },
+    });
+    const split = JSON.stringify({
+      eventId: 9002, taskId: created.id, sessionId: "main",
+      ts: "t", kind: "assistant_message", payload: { text: "半行的汉字事件" },
+    });
+    appendFileSync(path, whole + "\n");
+    const half = Buffer.from(split + "\n", "utf-8");
+    appendFileSync(path, half.subarray(0, half.length - 9)); // 切在汉字中间
+    await new Promise((r) => setTimeout(r, 700)); // 跨至少一拍轮询
+    appendFileSync(path, half.subarray(half.length - 9));
+
+    await service.decide(created.id, {
+      state_version: waiting.waiting!.state_version, decision: "继续",
+    });
+    await until(async () =>
+      service.get(created.id)!.status === "completed" ? true : undefined,
+    "任务完成");
+    const lines = await stream;
+
+    // 每条都是完整可解析 JSON;手动追加的两条恰好各到一次;整体无重复。
+    const ids = lines.map((line) => JSON.parse(line).eventId);
+    assert.equal(ids.filter((id) => id === 9001).length, 1);
+    assert.equal(ids.filter((id) => id === 9002).length, 1);
+    const parsed = lines.map((line) => JSON.parse(line));
+    assert.equal(
+      parsed.find((row) => row.eventId === 9002).payload.text,
+      "半行的汉字事件");
+    assert.equal(new Set(lines).size, lines.length, "SSE 推送了重复行");
   } finally {
     server.close();
     await model.stop();
