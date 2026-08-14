@@ -9,7 +9,13 @@
  * 决定消费走 HumanGate 的先到生效语义,冲突原样抛给 API 层变 409。
  */
 
-import { cpSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { spawnSync } from "node:child_process";
 import { basename, join } from "node:path";
 import { KernelHost } from "./kernelHost.ts";
@@ -25,6 +31,8 @@ export type TaskStatus =
   | "running"
   | "waiting_for_human"
   | "completed"
+  | "verifying"      // MR 已建,权威流水线未过(主 spec §10:不能标完成)
+  | "await_merge"    // 流水线通过,等待人工合入;系统不自动合并
   | "failed";
 
 export interface TaskSummary {
@@ -39,6 +47,13 @@ export interface TaskSummary {
   luban_account?: string;
   /** 最近一张待办的通知投递事实(失败标红的依据,不影响流程)。 */
   notify?: Pick<NotifyRecord, "delivered" | "attempts" | "last_error">;
+  /** Git 交付事实(§10):MR 链接/状态、流水线结果、或没交付的原因。 */
+  delivery?: {
+    mr_url?: string;
+    mr_state?: string;
+    pipeline?: string;
+    skipped?: string;
+  };
 }
 
 export interface TaskServiceOptions {
@@ -55,6 +70,9 @@ export interface TaskServiceOptions {
   host?: { kernelRoot: string; repoPath: string; python?: string };
   /** 小鲁班通知(内网能力,外部用 FakeLubanServer 模拟)。 */
   notifier?: Notifier;
+  /** Git 交付(§10):平台 API 地址(外部=FakeGitPlatform)。
+   * 配了它,任务收轮后由服务账号建 MR + 触发权威流水线。 */
+  delivery?: { platformUrl: string };
   /** 审批链接的前缀(通知里带的 URL),如 http://host:port。 */
   linkBase?: string;
   log?: (message: string) => void;
@@ -64,6 +82,8 @@ interface TaskState {
   summary: TaskSummary;
   driver?: CloudSession;
   humanGate: HumanGate;
+  /** 任务代码工作区(host 模式=仓库克隆目录),交付模块读内核状态用。 */
+  cwd?: string;
   /** 活的通知记录:后台退避重试会原地更新,查询时投影最新事实。 */
   notifyRecord?: NotifyRecord;
 }
@@ -191,8 +211,10 @@ export class TaskService {
       let cwd = workspace;
       let prompt = task.summary.requirement;
       let hostHooks;
+      task.cwd = cwd;
       if (this.options.host) {
         cwd = this.cloneRepo(workspace);
+        task.cwd = cwd;
         const kernel = new KernelHost({
           kernelRoot: this.options.host.kernelRoot,
           workspace: cwd,
@@ -236,6 +258,64 @@ export class TaskService {
     }
   }
 
+  /** Git 交付(§10):任务收轮后,分支已推到远端才建 MR——交付事实
+   * 全部来自远端真实状态(ls-remote),不信任务自己的说法。
+   * MR 成功≠完成:流水线过了才"等待合入",否则停在"验证中"。
+   * 交付失败不吞:原因写进 summary.delivery,任务保持 completed。 */
+  private async tryDeliver(task: TaskState): Promise<void> {
+    const delivery = this.options.delivery;
+    if (!delivery || !this.options.host || !task.cwd) return;
+    try {
+      const statePath = join(task.cwd, ".mae-flow.json");
+      if (!existsSync(statePath)) {
+        task.summary.delivery = { skipped: "流程未初始化,无可交付" };
+        return;
+      }
+      const state = JSON.parse(readFileSync(statePath, "utf-8"));
+      const branch = String(state?.config?.["分支名"] ?? "");
+      const baseline = String(state?.config?.["基线分支"] ?? "");
+      if (!branch || !baseline) {
+        task.summary.delivery = { skipped: "配置未确认,无分支可交付" };
+        return;
+      }
+      const remote = spawnSync(
+        "git", ["ls-remote", "--heads", "origin", branch],
+        { cwd: task.cwd, encoding: "utf-8" });
+      const line = (remote.stdout || "").trim();
+      if (!line) {
+        task.summary.delivery = {
+          skipped: `分支 ${branch} 未推送到远端,流程停在 ${state.current}`,
+        };
+        return;
+      }
+      const sha = line.split(/\s+/)[0];
+      const mr = await fetch(`${delivery.platformUrl}/mr`, {
+        method: "POST",
+        body: JSON.stringify({
+          source_branch: branch,
+          target_branch: baseline,
+          title: `${state?.config?.["单号"] ?? branch}: ${task.summary.requirement.slice(0, 60)}`,
+        }),
+      }).then((r) => {
+        if (!r.ok) throw new Error(`MR 创建失败 HTTP ${r.status}`);
+        return r.json();
+      });
+      const run = await fetch(`${delivery.platformUrl}/pipeline/trigger`, {
+        method: "POST", body: JSON.stringify({ sha }),
+      }).then((r) => r.json());
+      task.summary.delivery = {
+        mr_url: mr.url,
+        mr_state: run.status === "success" ? "等待合入" : "验证中",
+        pipeline: run.status,
+      };
+      task.summary.status =
+        run.status === "success" ? "await_merge" : "verifying";
+    } catch (error) {
+      task.summary.delivery = { skipped: `交付动作失败: ${String(error)}` };
+      this.options.log?.(`任务 ${task.summary.id} 交付失败: ${String(error)}`);
+    }
+  }
+
   /** 待办 → 小鲁班。投递失败不改流程状态;结果回填 summary.notify
    * 供页面标红。未配置通知器或未填账号时静默跳过(演示模式)。 */
   private notifyWaiting(task: TaskState): void {
@@ -265,8 +345,15 @@ export class TaskService {
    * 非 git 目录降级复制并剔除旧现场(.mae-flow-work 不跨任务串场)。 */
   private cloneRepo(workspace: string): string {
     const source = this.options.host!.repoPath;
-    const target = join(workspace, basename(source) || "repo");
-    if (existsSync(join(source, ".git"))) {
+    // 裸仓 origin.git → 工作区目录名去掉 .git 后缀,免得像个裸仓。
+    const target = join(
+      workspace, basename(source).replace(/\.git$/, "") || "repo");
+    // 普通仓有 .git 子目录;裸仓自己就是 git 目录(HEAD+objects)。
+    // 只认 .git 会把裸仓误判成普通目录,把仓库内脏拷贝成"工作区"(实测)。
+    const isGit = existsSync(join(source, ".git"))
+      || (existsSync(join(source, "HEAD"))
+          && existsSync(join(source, "objects")));
+    if (isGit) {
       const cloned = spawnSync(
         "git", ["clone", "--quiet", source, target], { encoding: "utf-8" });
       if (cloned.status !== 0) {
@@ -295,8 +382,14 @@ export class TaskService {
         this.notifyWaiting(task);
         break;
       case "turn_finished":
-        task.summary.status = "completed";
         task.driver?.dispose();
+        // 终态在交付判定之后才定:先标 completed 再改,轮询会撞见
+        // 中间态(实测竞态)。交付把状态升为 verifying/await_merge,
+        // 没交付动作时才落 completed。
+        await this.tryDeliver(task);
+        if (task.summary.status === "running") {
+          task.summary.status = "completed";
+        }
         break;
       case "session_ended":
         task.summary.status = "failed";

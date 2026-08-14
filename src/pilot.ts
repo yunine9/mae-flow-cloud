@@ -16,6 +16,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { TaskService } from "./taskService.ts";
+import { FakeGitPlatform } from "./gitPlatform.ts";
+import { FakeLubanServer, Notifier } from "./notifier.ts";
 
 const REPO_ROOT = resolve(fileURLToPath(import.meta.url), "..", "..");
 
@@ -64,18 +66,27 @@ async function main(): Promise<number> {
     return 1;
   }
   const dataDir = join(REPO_ROOT, ".pilot");
+  // 内网件全用假件:裸仓当 Git 服务端,MR/流水线走环回 API,小鲁班收消息。
+  const platform = new FakeGitPlatform();
+  platform.initBare(repoPath, dataDir);
+  await platform.start();
+  const luban = new FakeLubanServer();
+  await luban.start();
   const service = new TaskService({
     dataDir,
     provider,
     model,
     modelsJson: JSON.parse(readFileSync(modelsPath, "utf-8")),
-    host: { kernelRoot, repoPath, python: "python3" },
+    host: { kernelRoot, repoPath: platform.barePath, python: "python3" },
+    delivery: { platformUrl: platform.baseUrl },
+    notifier: new Notifier({ endpoint: luban.endpoint }),
+    linkBase: "http://127.0.0.1:8787",
     log: (message) => console.log(`  [task] ${message}`),
   });
 
   console.log(`[pilot] 真模型试跑: ${provider}/${model}`);
   console.log(`[pilot] 需求: ${requirement}`);
-  const task = service.create(requirement);
+  const task = service.create(requirement, { account: "liaoxiang" });
   console.log(`[pilot] 任务 ${task.id},现场: ${task.workspace}`);
 
   const deadline = Date.now() + timeoutMs;
@@ -88,7 +99,8 @@ async function main(): Promise<number> {
       console.log(`[pilot] ⏱ 超时预算耗尽,当前状态: ${now.status}`);
       break;
     }
-    if (now.status === "completed" || now.status === "failed") {
+    if (["completed", "failed", "verifying", "await_merge"]
+        .includes(now.status)) {
       console.log(`[pilot] 任务收口: ${now.status}`
         + (now.detail ? ` — ${now.detail}` : ""));
       break;
@@ -130,7 +142,7 @@ async function main(): Promise<number> {
 
   // 收口报告:阶段真相只看内核状态文件。
   const done = service.get(task.id)!;
-  const repoDir = join(done.workspace, "mae-flow-fieldtest-java");
+  const repoDir = join(done.workspace, "origin");
   const statePath = join(repoDir, ".mae-flow.json");
   if (existsSync(statePath)) {
     const state = JSON.parse(readFileSync(statePath, "utf-8"));
@@ -141,6 +153,13 @@ async function main(): Promise<number> {
   }
   console.log(`[pilot] 现场目录(transcript/events/waiting/面板): ${done.workspace}`);
   console.log(`[pilot] 审批卡共 ${cards} 张;状态: ${done.status}`);
+  if (done.delivery) {
+    console.log(`[pilot] 交付: ${JSON.stringify(done.delivery)}`);
+  }
+  console.log(`[pilot] 平台侧 MR: ${JSON.stringify(platform.mergeRequests)}`);
+  console.log(`[pilot] 小鲁班收到 ${luban.messages.length} 条通知`);
+  await platform.stop();
+  await luban.stop();
   return 0;
 }
 

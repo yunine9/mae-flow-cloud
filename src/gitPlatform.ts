@@ -56,6 +56,10 @@ export class FakeGitPlatform {
     execFileSync(
       "git", ["push", "--quiet", this.barePath, "--all"],
       { cwd: sourceRepo, encoding: "utf-8" });
+    // 裸仓 HEAD 默认指向 init.defaultBranch,与源仓分支名不符时
+    // clone 会得到空工作树(git 只警告不报错)。显式对齐源仓当前分支。
+    const head = git(sourceRepo, "branch", "--show-current") || "master";
+    git(this.barePath, "symbolic-ref", "HEAD", `refs/heads/${head}`);
     return this.barePath;
   }
 

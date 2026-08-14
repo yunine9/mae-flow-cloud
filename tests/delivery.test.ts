@@ -1,0 +1,131 @@
+/**
+ * Git 交付判定(§10):事实来自远端真实状态,不信任务自述。
+ * 三条路:分支已推 → MR+流水线 → 等待合入;流水线红 → 验证中;
+ * 分支未推 → 明说原因,不硬造 MR。不需要模型:预焙工作区直接测
+ * tryDeliver 的判定(经 TaskService 的私有路径,用最小任务壳驱动)。
+ */
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { FakeGitPlatform } from "../src/gitPlatform.ts";
+import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
+import { TaskService } from "../src/taskService.ts";
+
+function git(cwd: string, ...args: string[]): string {
+  return execFileSync("git", args, { cwd, encoding: "utf-8" }).trim();
+}
+
+function makeSourceRepo(): string {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-dsrc-"));
+  git(dir, "init", "--quiet", "-b", "master");
+  git(dir, "config", "user.email", "bot@test");
+  git(dir, "config", "user.name", "bot");
+  writeFileSync(join(dir, "README.md"), "# demo\n");
+  git(dir, "add", ".");
+  git(dir, "commit", "--quiet", "-m", "init");
+  return dir;
+}
+
+/** 剧本:在克隆里预焙一笔提交并推送,再伪造内核状态收轮——
+ * 交付判定只看远端与状态文件,这样测的就是判定本身。 */
+function walkScript(push: boolean): Scene[] {
+  const doPush = push
+    ? " && git push --quiet origin master_bot_REQ9"
+    : "";
+  return [
+    { tool: { name: "bash", input: { command:
+        "git config user.email bot@test && git config user.name bot && " +
+        "git checkout --quiet -b master_bot_REQ9 && " +
+        "echo change > a.txt && git add . && " +
+        'git commit --quiet -m "feat: REQ9"' + doPush + " && " +
+        `cat > .mae-flow.json <<'EOF'
+{"schema_version": 2, "current": "end", "revision": 1,
+ "config": {"分支名": "master_bot_REQ9", "基线分支": "master",
+            "单号": "REQ9"}, "choices": {}, "history": []}
+EOF` } } },
+    { text: "交付完成。" },
+  ];
+}
+
+async function runTask(platform: FakeGitPlatform, push: boolean) {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-deliver-"));
+  const model = new ScriptedModelServer(walkScript(push));
+  await model.start();
+  const service = new TaskService({
+    dataDir,
+    provider: "maeflow",
+    model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    // host 指向裸仓:克隆即从"服务端"取码。kernelRoot 不参与本测
+    // (bootstrap 会跑,INACTIVE 全放行;状态文件由剧本伪造)。
+    host: {
+      kernelRoot: process.env.MAE_FLOW_HOME
+        ?? join(process.cwd(), "..", "mae-flow"),
+      repoPath: platform.barePath,
+      python: "python3",
+    },
+    delivery: { platformUrl: platform.baseUrl },
+  });
+  const created = service.create("交付 REQ9:演练交付链");
+  const deadline = Date.now() + 60_000;
+  for (;;) {
+    const task = service.get(created.id)!;
+    if (["completed", "failed", "verifying", "await_merge"]
+        .includes(task.status)) {
+      await model.stop();
+      return task;
+    }
+    if (Date.now() > deadline) throw new Error("任务未收口");
+    await new Promise((tick) => setTimeout(tick, 100));
+  }
+}
+
+test("分支已推+流水线绿 → MR 等待合入", async () => {
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  await platform.start();
+  try {
+    const task = await runTask(platform, true);
+    assert.equal(task.status, "await_merge", JSON.stringify(task.delivery));
+    assert.equal(task.delivery?.mr_state, "等待合入");
+    assert.equal(task.delivery?.pipeline, "success");
+    assert.match(task.delivery?.mr_url ?? "", /\/mr\/\d+$/);
+    assert.equal(platform.mergeRequests.length, 1);
+    assert.equal(platform.mergeRequests[0].target_branch, "master");
+  } finally {
+    await platform.stop();
+  }
+});
+
+test("流水线红 → 验证中,不标完成", async () => {
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  platform.nextPipelineStatus = "failed";
+  await platform.start();
+  try {
+    const task = await runTask(platform, true);
+    assert.equal(task.status, "verifying");
+    assert.equal(task.delivery?.mr_state, "验证中");
+    assert.equal(task.delivery?.pipeline, "failed");
+  } finally {
+    await platform.stop();
+  }
+});
+
+test("分支没推 → 不硬造 MR,原因明说", async () => {
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  await platform.start();
+  try {
+    const task = await runTask(platform, false);
+    assert.equal(task.status, "completed");
+    assert.match(task.delivery?.skipped ?? "", /未推送/);
+    assert.equal(platform.mergeRequests.length, 0);
+  } finally {
+    await platform.stop();
+  }
+});
