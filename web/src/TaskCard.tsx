@@ -1,6 +1,9 @@
 /**
  * 单个任务卡:状态、交付事实、通知失败红条、审批卡、台账、过程记录。
  * 全部是服务端镜像的呈现,没有一处前端自己的状态推断。
+ *
+ * 折叠语义:列表里默认只露头两行(状态/标题/一条 meta),点头部
+ * 展开完整视图;"等你决定"的任务自动展开——需要人的时刻不许藏。
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -22,15 +25,28 @@ export function TaskCard({
   task: TaskSummary;
   onChanged: () => void;
 }) {
+  const [expanded, setExpanded] = useState(
+    task.status === "waiting_for_human");
+  // 轮询中途转入"等你决定"也要弹开:初始值只算一次,这里补上。
+  useEffect(() => {
+    if (task.status === "waiting_for_human") setExpanded(true);
+  }, [task.status]);
+
   return (
-    <div className="task">
-      <div className="task-head">
-        <span className="task-id">{task.id}</span>
-        <span className={`pill ${task.status}`}>
-          {STATUS_TEXT[task.status] ?? task.status}
-        </span>
+    <div className={"task" + (expanded ? " expanded" : "")}>
+      <div
+        className="task-toggle"
+        onClick={() => setExpanded((open) => !open)}
+      >
+        <div className="task-head">
+          <span className="task-id">{task.id}</span>
+          <span className={`pill ${task.status}`}>
+            {STATUS_TEXT[task.status] ?? task.status}
+          </span>
+          <span className="chevron">▸</span>
+        </div>
+        <div className="task-title">{task.requirement}</div>
       </div>
-      <div className="task-title">{task.requirement}</div>
       <div className="task-meta">
         {task.status !== "queued" && (
           <a href={`/tasks/${task.id}/panel`} target="_blank" rel="noreferrer">
@@ -50,28 +66,35 @@ export function TaskCard({
           <span>交付情况:{task.delivery.skipped}</span>
         )}
       </div>
-      {task.status === "failed" && task.detail && (
-        <div className="alert">出错原因:{task.detail}</div>
+      {expanded && (
+        <>
+          {task.status === "failed" && task.detail && (
+            <div className="alert">出错原因:{task.detail}</div>
+          )}
+          {task.notify && !task.notify.delivered
+            && task.notify.attempts > 0 && (
+            <div className="alert">
+              ⚠ 小鲁班通知没送到(已试 {task.notify.attempts} 次)
+              ——待办仍在,请在本页处理。
+            </div>
+          )}
+          {(task.status === "failed" || task.status === "completed") && (
+            <RetryButton taskId={task.id} onDone={onChanged} />
+          )}
+          {task.status === "waiting_for_human" && task.waiting && (
+            <WaitingCard task={task} onDecided={onChanged} />
+          )}
+          {task.delivery && <ActionLedger taskId={task.id} />}
+          <EventTail taskId={task.id} />
+        </>
       )}
-      {task.notify && !task.notify.delivered && task.notify.attempts > 0 && (
-        <div className="alert">
-          ⚠ 小鲁班通知没送到(已试 {task.notify.attempts} 次)
-          ——待办仍在,请在本页处理。
-        </div>
-      )}
-      {(task.status === "failed" || task.status === "completed") && (
-        <RetryButton taskId={task.id} onDone={onChanged} />
-      )}
-      {task.status === "waiting_for_human" && task.waiting && (
-        <WaitingCard task={task} onDecided={onChanged} />
-      )}
-      {task.delivery && <ActionLedger taskId={task.id} />}
-      <EventTail taskId={task.id} />
     </div>
   );
 }
 
-/** 审批卡:每题点选,答满才能提交;409 把服务端的话原样呈现。 */
+/** 审批卡:每题点选,答满才能提交;409 把服务端的话原样呈现。
+ * 选项两种排布:全短 → 行内紧凑;有长文案(run7 风险卡实测整段
+ * 长文)→ 通栏卡片式,整块可点、自然换行。 */
 function WaitingCard({
   task,
   onDecided,
@@ -96,22 +119,32 @@ function WaitingCard({
       <div className="waiting-title">
         等你决定{task.waiting?.step ? ` · ${task.waiting.step}` : ""}
       </div>
-      {questions.map((item) => (
-        <div className="question" key={item.question}>
-          <div className="question-text">{item.question || "需要你确认"}</div>
-          {(item.options ?? []).map((option) => (
-            <button
-              key={option}
-              className={
-                "option" + (picked[item.question] === option ? " picked" : "")}
-              onClick={() =>
-                setPicked({ ...picked, [item.question]: option })}
-            >
-              {option}
-            </button>
-          ))}
-        </div>
-      ))}
+      {questions.map((item) => {
+        const longform = (item.options ?? [])
+          .some((option) => option.length > 24)
+          || (item.question ?? "").length > 60;
+        return (
+          <div className="question" key={item.question}>
+            <div className="question-text">
+              {item.question || "需要你确认"}
+            </div>
+            <div className={"options " + (longform ? "longform" : "compact")}>
+              {(item.options ?? []).map((option) => (
+                <button
+                  key={option}
+                  className={
+                    "option"
+                    + (picked[item.question] === option ? " picked" : "")}
+                  onClick={() =>
+                    setPicked({ ...picked, [item.question]: option })}
+                >
+                  {option}
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+      })}
       <button className="submit" disabled={!ready} onClick={submit}>
         提交决定
       </button>

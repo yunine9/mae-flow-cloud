@@ -1,5 +1,7 @@
 /* Mae-Flow 云端——正式前端视觉层。
-   自适应深浅色;语义色按状态;无外部依赖(系统字体,零 CDN)。 */
+   自适应深浅色;语义色按状态;无外部依赖(系统字体,零 CDN)。
+   主题解析:默认跟随系统(media query);URL ?theme=light|dark 落到
+   :root[data-theme] 上强制指定——截图核查与用户手动切换共用这条路。 */
 
 :root {
   color-scheme: light dark;
@@ -42,6 +44,46 @@
     --info-weak: #0f2733;
     --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 6px 24px rgba(0, 0, 0, .35);
   }
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #f1f3f6;
+  --border: #e3e6ea;
+  --text: #1a1d21;
+  --text-muted: #6b7280;
+  --accent: #4f6ef7;
+  --accent-weak: #eef1fe;
+  --ok: #16a34a;
+  --ok-weak: #e9f9ef;
+  --warn: #d97706;
+  --warn-weak: #fdf3e3;
+  --danger: #dc2626;
+  --danger-weak: #fdecec;
+  --info: #0e7490;
+  --info-weak: #e6f6fa;
+  --shadow: 0 1px 2px rgba(16, 24, 40, .06), 0 4px 16px rgba(16, 24, 40, .05);
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0e1116;
+  --surface: #161a22;
+  --surface-2: #1d2330;
+  --border: #262d3a;
+  --text: #e7eaf0;
+  --text-muted: #8b93a3;
+  --accent: #7b93ff;
+  --accent-weak: #202744;
+  --ok: #4ade80;
+  --ok-weak: #12271b;
+  --warn: #fbbf24;
+  --warn-weak: #2b2212;
+  --danger: #f87171;
+  --danger-weak: #2d1717;
+  --info: #67e8f9;
+  --info-weak: #0f2733;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 6px 24px rgba(0, 0, 0, .35);
 }
 
 * { box-sizing: border-box; }
@@ -145,6 +187,8 @@ main {
   padding: 1rem 1.25rem;
   margin-bottom: 1rem;
 }
+/* 折叠态只留头两行:整个头部可点,展开/收起由卡片右上角箭头示意。 */
+.task-toggle { cursor: pointer; }
 .task-head {
   display: flex;
   align-items: center;
@@ -156,10 +200,24 @@ main {
   font-size: .82rem;
   color: var(--text-muted);
 }
+.chevron {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: .8rem;
+  transition: transform .15s;
+}
+.task.expanded .chevron { transform: rotate(90deg); }
 .task-title {
   font-size: 1.02rem;
   font-weight: 650;
   margin: 0 0 .35rem;
+  overflow-wrap: anywhere;
+}
+.task:not(.expanded) .task-title {
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 .task-meta {
   display: flex;
@@ -168,9 +226,16 @@ main {
   align-items: center;
   font-size: .85rem;
   color: var(--text-muted);
+  overflow-wrap: anywhere;
 }
 .task-meta a { color: var(--accent); text-decoration: none; }
 .task-meta a:hover { text-decoration: underline; }
+.task:not(.expanded) .task-meta {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+}
 
 /* 状态徽章:语义色 */
 .pill {
@@ -215,8 +280,29 @@ main {
   color: var(--warn);
   margin-bottom: .5rem;
 }
-.question { margin-bottom: .75rem; }
-.question-text { font-weight: 600; margin-bottom: .45rem; }
+.question { margin-bottom: .85rem; }
+.question-text {
+  font-weight: 600;
+  margin-bottom: .5rem;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  line-height: 1.7;
+}
+
+/* 选项两种形态(run7 风险卡实测:整段长文案挤在按钮里没法读):
+   - compact:全部选项都短 → 行内小按钮;
+   - longform:任一选项偏长 → 通栏卡片式选项,整块可点、可换行,
+     选中态用主色描边 + 对勾。 */
+.options.compact {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .45rem;
+}
+.options.longform {
+  display: flex;
+  flex-direction: column;
+  gap: .5rem;
+}
 .option {
   border: 1px solid var(--border);
   background: var(--surface);
@@ -224,9 +310,13 @@ main {
   font-size: .86rem;
   padding: .42rem .85rem;
   border-radius: 8px;
-  margin: 0 .45rem .45rem 0;
   cursor: pointer;
   transition: border-color .15s, background .15s;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+  font-family: inherit;
 }
 .option:hover { border-color: var(--accent); }
 .option.picked {
@@ -234,6 +324,14 @@ main {
   background: var(--accent-weak);
   color: var(--accent);
   font-weight: 650;
+}
+.options.longform .option {
+  width: 100%;
+  padding: .6rem .9rem;
+}
+.options.longform .option.picked::before {
+  content: "✓ ";
+  font-weight: 700;
 }
 .submit {
   display: block;
@@ -260,6 +358,7 @@ main {
   padding: .45rem .7rem;
   font-size: .86rem;
   margin-top: .55rem;
+  overflow-wrap: anywhere;
 }
 .note { color: var(--text-muted); font-size: .86rem; margin-top: .35rem; }
 .retry {
@@ -293,4 +392,25 @@ pre {
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   line-height: 1.6;
   margin: .5rem 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ---- 移动端 ---- */
+@media (max-width: 640px) {
+  body { font-size: 14px; }
+  .topbar-inner { padding: .7rem .8rem; flex-wrap: wrap; gap: .35rem .6rem; }
+  main { padding: 1rem .75rem 3rem; }
+  .composer { flex-direction: column; gap: 0; padding: .35rem; }
+  .composer input { width: 100%; padding: .6rem .55rem; }
+  .composer input.account {
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid var(--border);
+  }
+  .composer button { width: 100%; margin-top: .45rem; padding: .6rem; }
+  .task { padding: .8rem .85rem; }
+  .waiting { padding: .7rem .75rem; }
+  .options.compact { flex-direction: column; }
+  .options.compact .option { width: 100%; }
 }
