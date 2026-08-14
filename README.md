@@ -82,7 +82,10 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
 
 - 完整需求路径(Grill/Spec/Story/编码/质量链)未在真模型上走过——
   剧本假模型只能验证管道,阶段 1 收口要接 GLM-5.1 在 fieldtest-java
-  跑一单真需求;
+  跑一单真需求;流程实际只推进到 config_confirm,后续步骤云端没跑过;
+- fieldtest-java 直接编译验证已过(2026-08-14 本机 macOS:干净副本
+  mvn compile / mvn test / 双副本并发 clean compile 全部退出码 0,
+  仓库可标 direct);Linux 容器内同套验证仍待做(试点服务器形态);
 - pi 会话恢复走 `SessionManager.inMemory()`,任务级恢复(§11)靠
   事件日志与 Git 锚点,pi 侧持久化会话未启用;
 - Web/API/编排/PostgreSQL 投影(阶段 1+)未动。

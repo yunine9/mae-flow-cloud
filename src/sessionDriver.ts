@@ -31,11 +31,9 @@ const TOOL_NAME_MAP: Record<string, string> = {
   read: "Read",
   write: "Write",
   edit: "Edit",
-  ask_user_question: "AskUserQuestion",
-  dispatch_agent: "Task",
-};
+  };
 
-const HOST_TOOLS = new Set(["ask_user_question", "dispatch_agent"]);
+const HOST_TOOLS = new Set(["AskUserQuestion", "Task"]);
 
 export interface Outcome {
   status: "turn_finished" | "waiting_for_human" | "session_ended";
@@ -324,7 +322,7 @@ export class CloudSession {
   private askTool() {
     const driver = this;
     return defineTool({
-      name: "ask_user_question",
+      name: "AskUserQuestion",
       label: "Ask User Question",
       description:
         "向用户提出结构化问题并等待决定。需要用户确认或选择时必须调用本工具," +
@@ -361,7 +359,7 @@ export class CloudSession {
   private dispatchTool() {
     const driver = this;
     return defineTool({
-      name: "dispatch_agent",
+      name: "Task",
       label: "Dispatch Agent",
       description:
         "派发一个子 Agent 完成任务卡并返回其最终报告(等价旧插件的 Task 工具)。" +
@@ -435,9 +433,9 @@ export class CloudSession {
     const child = await this.openSession({
       sessionId: childId,
       customTools: [
-        this.refusalTool(childId, "ask_user_question",
+        this.refusalTool(childId, "AskUserQuestion",
           "AskUserQuestion", "Ask User Question", refusal),
-        this.refusalTool(childId, "dispatch_agent",
+        this.refusalTool(childId, "Task",
           "Task", "Dispatch Agent", refusal),
       ],
     });

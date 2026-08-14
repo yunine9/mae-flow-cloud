@@ -19,7 +19,7 @@ import { createTaskServer } from "../src/server.ts";
 const SCRIPT: Scene[] = [
   { text: "先编译",
     tool: { name: "bash", input: { command: "echo BUILD SUCCESS" } } },
-  { tool: { name: "ask_user_question",
+  { tool: { name: "AskUserQuestion",
             input: { question: "Diff 通过吗?", options: ["通过", "打回"] } } },
   { text: "COMPILE_RESULT: PASS 收口" },
 ];
