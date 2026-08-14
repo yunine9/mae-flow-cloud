@@ -50,11 +50,13 @@ export interface TaskSummary {
   luban_account?: string;
   /** 最近一张待办的通知投递事实(失败标红的依据,不影响流程)。 */
   notify?: Pick<NotifyRecord, "delivered" | "attempts" | "last_error">;
-  /** Git 交付事实(§10):MR 链接/状态、流水线结果、或没交付的原因。 */
+  /** Git 交付事实(§10):MR 链接/状态、流水线结果、或没交付的原因。
+   * sha = 流水线绑定的代码版本,也是重启后续轮的锚。 */
   delivery?: {
     mr_url?: string;
     mr_state?: string;
     pipeline?: string;
+    sha?: string;
     skipped?: string;
   };
 }
@@ -74,8 +76,14 @@ export interface TaskServiceOptions {
   /** 小鲁班通知(内网能力,外部用 FakeLubanServer 模拟)。 */
   notifier?: Notifier;
   /** Git 交付(§10):平台 API 地址(外部=FakeGitPlatform)。
-   * 配了它,任务收轮后由服务账号建 MR + 触发权威流水线。 */
-  delivery?: { platformUrl: string };
+   * 配了它,任务收轮后由服务账号建 MR + 触发权威流水线。
+   * 真实流水线是异步的:触发后 running,由带预算的轮询收敛
+   * (poll* 两个旋钮给测试和内网调参;预算耗尽留痕请人工,不卡死)。 */
+  delivery?: {
+    platformUrl: string;
+    pollIntervalMs?: number;
+    pollTimeoutMs?: number;
+  };
   /** 审批链接的前缀(通知里带的 URL),如 http://host:port。 */
   linkBase?: string;
   /** PostgreSQL 投影(主 spec §11):看板/审计/恢复引导的读侧。
@@ -221,6 +229,12 @@ export class TaskService {
           this.counter, Number(name.slice("task-".length)) || 0);
         restored += 1;
         this.replayProjection(task);
+        // 进程可死,轮询不死:重启前在等流水线的任务续轮
+        // (锚是 delivery.sha,结果仍只认绑定版本)。
+        if (summary.status === "verifying"
+            && summary.delivery?.pipeline === "running") {
+          void this.pollPipeline(task);
+        }
         if (summary.status === "running" || summary.status === "queued") {
           summary.status = "queued";
           summary.detail = "服务重启,等待续跑";
@@ -484,13 +498,77 @@ export class TaskService {
         mr_url: mr.url,
         mr_state: run.status === "success" ? "等待合入" : "验证中",
         pipeline: run.status,
+        sha,
       };
       task.summary.status =
         run.status === "success" ? "await_merge" : "verifying";
+      // 真实平台的流水线是异步的:running 不是结局,由带预算的
+      // 轮询收敛到 绿→等待合入 / 红→验证中留痕。
+      if (run.status === "running") void this.pollPipeline(task);
     } catch (error) {
       task.summary.delivery = { skipped: `交付动作失败: ${String(error)}` };
       this.options.log?.(`任务 ${task.summary.id} 交付失败: ${String(error)}`);
     }
+  }
+
+  /** 流水线异步收敛:轮询 status?sha= 直到终态或预算耗尽。
+   * - 结果只认绑定 SHA 的运行(旧绿灯不背书新代码);
+   * - 查询失败 fail-open 继续轮,预算兜底——绝不无限等(红线);
+   * - 预算耗尽留痕请人工,任务停在 verifying,不假装有结论;
+   * - 终态落袋:状态/台账/通知一次收口,幂等锚是任务当前状态。 */
+  private async pollPipeline(task: TaskState): Promise<void> {
+    const delivery = this.options.delivery;
+    const sha = task.summary.delivery?.sha;
+    if (!delivery || !sha) return;
+    const interval = delivery.pollIntervalMs ?? 10_000;
+    const deadline = Date.now() + (delivery.pollTimeoutMs ?? 30 * 60_000);
+    while (Date.now() < deadline) {
+      // unref:轮询是旁路,不许它吊着进程不退(进程要退就让它退,
+      // 重启后 recover 会以 delivery.sha 为锚续轮)。
+      await new Promise((tick) => setTimeout(tick, interval).unref());
+      if (task.summary.status !== "verifying") return; // 已被别处推进
+      let terminal;
+      try {
+        const status = await fetch(
+          `${delivery.platformUrl}/pipeline/status?sha=${sha}`)
+          .then((r) => r.json());
+        terminal = (status.runs ?? []).findLast(
+          (run: { status?: string }) =>
+            run.status === "success" || run.status === "failed");
+      } catch (error) {
+        this.options.log?.(
+          `任务 ${task.summary.id} 流水线查询失败(继续轮): ${String(error)}`);
+        continue;
+      }
+      if (!terminal) continue;
+      task.summary.delivery = {
+        ...task.summary.delivery,
+        pipeline: terminal.status,
+        mr_state: terminal.status === "success" ? "等待合入" : "验证中",
+      };
+      if (terminal.status === "success") {
+        task.summary.status = "await_merge";
+      }
+      this.persist(task);
+      this.notifyOutcome(task);
+      void this.options.projection?.recordAction({
+        taskId: task.summary.id,
+        idemKey: `pipeline:${sha}`,
+        kind: "pipeline_trigger",
+        request: { sha },
+        result: terminal,
+        sha,
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+      });
+      return;
+    }
+    if (task.summary.status !== "verifying") return;
+    task.summary.delivery = {
+      ...task.summary.delivery,
+      pipeline: "running(轮询预算耗尽,请人工查看流水线)",
+    };
+    this.persist(task);
   }
 
   /** 待办 → 小鲁班。投递失败不改流程状态;结果回填 summary.notify

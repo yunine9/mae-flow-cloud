@@ -42,8 +42,10 @@ function git(cwd: string, ...args: string[]): string {
 export class FakeGitPlatform {
   readonly mergeRequests: MergeRequest[] = [];
   readonly pipelines: PipelineRun[] = [];
-  /** 测试注入:下一次流水线的结局(默认 success)。 */
-  nextPipelineStatus: "success" | "failed" = "success";
+  /** 测试注入:下一次流水线的结局(默认 success)。
+   * "running" = 模拟真实平台的异步流水线:触发后先跑着,
+   * 结局由 finishPipeline 事后裁定。 */
+  nextPipelineStatus: "success" | "failed" | "running" = "success";
   barePath = "";
   private server?: Server;
   private counter = 0;
@@ -165,5 +167,18 @@ export class FakeGitPlatform {
   /** SHA 精确匹配才算数:旧绿灯不背书新代码(§14.5)。 */
   private pipelineStatus(sha: string): { sha: string; runs: PipelineRun[] } {
     return { sha, runs: this.pipelines.filter((run) => run.sha === sha) };
+  }
+
+  /** 异步流水线的事后裁定(模拟真实平台跑完):running → 终态,
+   * 绿灯连带把同 SHA 的 MR 升为等待合入——与同步路径同一语义。 */
+  finishPipeline(sha: string, status: "success" | "failed"): void {
+    for (const run of this.pipelines) {
+      if (run.sha === sha && run.status === "running") run.status = status;
+    }
+    if (status === "success") {
+      for (const mr of this.mergeRequests) {
+        if (mr.sha === sha) mr.state = "等待合入";
+      }
+    }
   }
 }

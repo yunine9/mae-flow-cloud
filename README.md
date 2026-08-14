@@ -96,8 +96,10 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
 - 完整需求路径已在真模型上走通(2026-08-14 run3,GLM@bigmodel,
   fieldtest-java):startup→Grill→Spec→Story→编码→质量链→领域归档,
   12 张审批卡全程代答,收口于 delivery_review(模型提前收嘴,催办
-  机制由此加入);push→MR→流水线段真模型未走过,交付判定三条路
-  (已推+绿/红/未推)由 delivery.test.ts 假件覆盖;
+  机制由此加入);push→MR→流水线段真模型未走过(run6/run7 在更长
+  预算下推进中),交付判定由 delivery.test.ts 假件覆盖:三条路
+  (已推+绿/红/未推)+ 异步流水线收敛(running→轮询带预算收敛,
+  重启续轮,预算耗尽留痕请人工不卡死);
 - 现场归档在 .pilot/archive/run3-REQ2026081402-glm-delivery
   (含两张"证据缺口风险卡"——并行派发丢返回登记的实锤,已修:
   pretooluse 随带 tool_use_id,见 tests/kernelHost.test.ts);
