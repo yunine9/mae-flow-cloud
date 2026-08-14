@@ -57,6 +57,8 @@ npm run serve     # http://127.0.0.1:8787 浏览器走完 发任务→看进度�
 
 probe 现场留档在 `.probe/`,serve 的任务现场在 `.tasks/<task-id>/`
 (transcript/events/waiting/子 Agent transcript),每个文件都能直接打开看。
+试跑现场一键对拍:`python3 harness/run-report.py .pilot/<label>`
+(审批卡/子 Agent 配对/质量台账/阶段轨迹读成 markdown,只读)。
 
 本机挂了代理(Clash 等)时,curl 环回接口记得 `--noproxy '*'`;
 服务进程自身已强制环回直连,浏览器访问不受影响。
