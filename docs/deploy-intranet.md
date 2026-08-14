@@ -77,6 +77,9 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
 
 ## 上线自查清单(按序)
 
+可执行版:`harness/preflight.sh --java-repo <试点仓> --models <models.json> --provider <网关名>`
+——1~4 项自动核验真实退出码,5/6 两项人工,脚本会原样提醒。
+
 1. 容器内 `mvn compile && mvn test` 真实退出码 0;
 2. `npm test` 全绿(17 项,含恢复/并发/交付三条路);
 3. `npm run probe` 九项事实全绿(内核裁判在场);
