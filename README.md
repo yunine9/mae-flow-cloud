@@ -30,24 +30,33 @@ src/
   gateService.ts      同步裁决点:路由 + 深层契约端口(=内核 CLI)+ fail-open
   humanGate.ts        WAITING_FOR_HUMAN:同 call_id 幂等、先到决定生效
   sessionDriver.ts    进程内会话驱动(拦截/挂起/子会话/登记归属规则)
+  taskService.ts      任务编排:工作区/受限并发队列/状态由 outcome 驱动
+  server.ts           任务 API:REST + SSE(决定冲突=409 任务状态已变化)
+  webPage.ts          零构建演示页:列表/发起/审批卡直接点(说人话)
+  serve.ts            启动入口(演示=内置剧本假模型;--models 接真网关)
   scriptedModel.ts    剧本假模型(Anthropic Messages SSE)——无 LLM 对拍电源
   probe.ts            阶段 0 演练入口
 harness/
   verify_transcript.py  内核裁判:唯一权威的证据判定
 tests/
-  core.test.ts        不变式单测(整链行为由 probe + 裁判验收)
+  core.test.ts        不变式单测
+  server.test.ts      任务 API 端到端(等待人工/409 冲突/决定生效/SSE 镜像)
 ```
 
 ## 跑起来
 
 ```bash
 npm install
-npm test          # 不变式单测
+npm test          # 不变式单测 + 任务 API 端到端(真 pi 会话)
 npm run probe     # 整链演练:进程内 pi + 剧本假模型,内核裁判验收九项事实
+npm run serve     # http://127.0.0.1:8787 浏览器走完 发任务→看进度→点审批
 ```
 
-probe 现场留档在 `.probe/`(transcript/events/waiting/子 Agent transcript),
-每个文件都能直接打开看。
+probe 现场留档在 `.probe/`,serve 的任务现场在 `.tasks/<task-id>/`
+(transcript/events/waiting/子 Agent transcript),每个文件都能直接打开看。
+
+本机挂了代理(Clash 等)时,curl 环回接口记得 `--noproxy '*'`;
+服务进程自身已强制环回直连,浏览器访问不受影响。
 
 ## 接真模型(GLM-5.1)
 

@@ -3,10 +3,11 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Mae-Flow 云端服务:Pi(pi-mono)进程内集成 + Mae-Flow 内核宿主适配",
+  "description": "Mae-Flow \u4e91\u7aef\u670d\u52a1:Pi(pi-mono)\u8fdb\u7a0b\u5185\u96c6\u6210 + Mae-Flow \u5185\u6838\u5bbf\u4e3b\u9002\u914d",
   "scripts": {
     "probe": "tsx src/probe.ts",
-    "test": "tsx --test tests/*.test.ts"
+    "test": "tsx --test tests/*.test.ts",
+    "serve": "tsx src/serve.ts"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.84.1",
