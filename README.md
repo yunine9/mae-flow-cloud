@@ -78,6 +78,18 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
 所有 dispatch 调用串行化(posttool 写状态,与下一条 pretool 交错
 就是并发写状态——旧世界由宿主天然串行,这里用 promise 链保住)。
 
+## 内网能力模拟件(用户原则:外部完全就绪才碰内网)
+
+| 内网能力 | 模拟件 | 真件就绪时 |
+|---|---|---|
+| GLM-5.1 网关 | scriptedModel(剧本)/ bigmodel 浅探 | 换 models.json baseUrl |
+| 小鲁班通知 | notifier.FakeLubanServer | 换 endpoint 与鉴权 |
+| Git 服务端(MR) | gitPlatform.FakeGitPlatform(裸仓+HTTP) | 换 baseUrl 与鉴权 |
+| 权威流水线 | 同上(trigger/status,结果绑 SHA) | 换 baseUrl 与 Job 配置 |
+
+语义(投递失败不改流程、MR 幂等、旧绿灯不背书新代码、验证中→等待合入)
+是真假件共同的契约,写在各自测试里。
+
 ## 已知边界(诚实清单)
 
 - 完整需求路径(Grill/Spec/Story/编码/质量链)未在真模型上走过——
