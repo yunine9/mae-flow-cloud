@@ -5,3 +5,4 @@ node_modules/
 .local/
 .pilot/
 web/dist/
+web/*.tsbuildinfo
