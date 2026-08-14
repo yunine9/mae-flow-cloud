@@ -7,10 +7,11 @@
 
 import type { ReactNode } from "react";
 
-/** 行内:**加粗** 与 `代码`。 */
+/** 行内:**加粗**、`代码` 与 [文字](链接)。链接只认站内路径与
+ * http(s)——其余原样当文本,渲染器不背安全锅。 */
 function inline(text: string): ReactNode[] {
   return text
-    .split(/(\*\*[^*]+\*\*|`[^`]+`)/g)
+    .split(/(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\))/g)
     .filter(Boolean)
     .map((piece, index) => {
       if (piece.startsWith("**") && piece.endsWith("**")) {
@@ -18,6 +19,14 @@ function inline(text: string): ReactNode[] {
       }
       if (piece.startsWith("`") && piece.endsWith("`")) {
         return <code key={index} className="md-code">{piece.slice(1, -1)}</code>;
+      }
+      const link = piece.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+      if (link && (/^\//.test(link[2]) || /^https?:\/\//.test(link[2]))) {
+        return (
+          <a key={index} href={link[2]} target="_blank" rel="noreferrer">
+            {link[1]}
+          </a>
+        );
       }
       return piece;
     });
@@ -75,6 +84,19 @@ export function Markdown({ text }: { text: string }) {
         <ul key={key++} className="md-list">
           {items.map((item, i) => <li key={i}>{inline(item)}</li>)}
         </ul>);
+      continue;
+    }
+    // 引用块:连续 > 行
+    if (/^\s*>\s?/.test(line)) {
+      const quoted: string[] = [];
+      while (index < lines.length && /^\s*>\s?/.test(lines[index])) {
+        quoted.push(lines[index].replace(/^\s*>\s?/, ""));
+        index += 1;
+      }
+      blocks.push(
+        <blockquote key={key++} className="md-quote">
+          {quoted.map((row, i) => <p key={i} className="md-p">{inline(row)}</p>)}
+        </blockquote>);
       continue;
     }
     if (/^#{1,4}\s+/.test(line)) {

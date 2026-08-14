@@ -151,7 +151,7 @@ function WaitingCard({
       </div>
       {task.waiting?.context && (
         <div className="waiting-context">
-          <Markdown text={task.waiting.context} />
+          <Markdown text={rewritePanelPath(task.waiting.context, task.id)} />
         </div>
       )}
       {questions.map((item) => {
@@ -224,6 +224,14 @@ function WaitingCard({
       {conflict && <div className="alert">{conflict}</div>}
     </div>
   );
+}
+
+/** 内核消息里的现场面板是宿主文件路径,浏览器点不开——改写成
+ * 本页路由 /tasks/:id/panel(服务端本来就托管它)。 */
+function rewritePanelPath(context: string, taskId: string): string {
+  return context.replace(
+    /`?\/[^\s`]*\.mae-flow-work\/panel\.html`?/g,
+    `[在本页打开现场面板](/tasks/${taskId}/panel)`);
 }
 
 /** 重跑续推:环境故障被迫收口后,修好环境点一下,任务续接内核

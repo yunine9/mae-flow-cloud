@@ -803,3 +803,11 @@ pre {
 .md-table th { background: var(--surface-2); font-weight: 600; }
 .md-list { margin: .3rem 0; padding-left: 1.2rem; }
 .md-list li { margin: .15rem 0; }
+.md-quote {
+  border-left: 3px solid var(--accent);
+  background: var(--surface-2);
+  margin: .4rem 0;
+  padding: .35rem .75rem;
+  border-radius: 0 6px 6px 0;
+}
+.md a { color: var(--accent); }
