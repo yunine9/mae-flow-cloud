@@ -14,6 +14,7 @@ import type { AddressInfo } from "node:net";
 import { ScriptedModelServer, type Scene } from "./scriptedModel.ts";
 import { TaskService } from "./taskService.ts";
 import { createTaskServer } from "./server.ts";
+import { FakeLubanServer, Notifier } from "./notifier.ts";
 import type { GateDecision } from "./gateService.ts";
 
 const REPO_ROOT = resolve(fileURLToPath(import.meta.url), "..", "..");
@@ -73,10 +74,17 @@ async function main(): Promise<void> {
     : undefined;
   if (host) console.log(`[serve] 内核模式:试点仓 ${host.repoPath}`);
 
+  // 小鲁班用假件模拟(内网真件就绪时换 endpoint,其余零改动)。
+  const luban = new FakeLubanServer();
+  await luban.start();
+  console.log(`[serve] 假小鲁班已就位,消息可查: ${luban.endpoint.replace("/notify", "")}`);
+
   const service = new TaskService({
     dataDir, provider, model, modelsJson,
     contract: demoContract,
     host,
+    notifier: new Notifier({ endpoint: luban.endpoint }),
+    linkBase: `http://127.0.0.1:${port}`,
     log: (message) => console.log(`  [task] ${message}`),
   });
   const server = createTaskServer(service);

@@ -57,7 +57,9 @@ export function createTaskServer(service: TaskService): Server {
         if (!requirement) {
           return json(response, 400, { error: "requirement 不能为空" });
         }
-        return json(response, 201, service.create(requirement));
+        return json(response, 201, service.create(requirement, {
+          account: body.account ? String(body.account) : undefined,
+        }));
       }
       if (request.method === "GET" && url.pathname === "/tasks") {
         return json(response, 200, service.list());

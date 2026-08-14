@@ -13,6 +13,7 @@ import { cpSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { basename, join } from "node:path";
 import { KernelHost } from "./kernelHost.ts";
+import type { Notifier, NotifyRecord } from "./notifier.ts";
 import { EventLog } from "./semanticEvents.ts";
 import { TranscriptStore } from "./transcriptStore.ts";
 import { GateService, type GateContract } from "./gateService.ts";
@@ -34,6 +35,10 @@ export interface TaskSummary {
   detail?: string;
   created_at: string;
   workspace: string;
+  /** 小鲁班通知账号(任务创建时填写,主 spec §5.1)。 */
+  luban_account?: string;
+  /** 最近一张待办的通知投递事实(失败标红的依据,不影响流程)。 */
+  notify?: Pick<NotifyRecord, "delivered" | "attempts" | "last_error">;
 }
 
 export interface TaskServiceOptions {
@@ -48,6 +53,10 @@ export interface TaskServiceOptions {
    * (sessionstart+userprompt 捕获需求、铺转发壳)→ 深层门禁与证据
    * 全部经 kernelHost 走内核 dispatch。不配则为纯会话模式(演练)。 */
   host?: { kernelRoot: string; repoPath: string; python?: string };
+  /** 小鲁班通知(内网能力,外部用 FakeLubanServer 模拟)。 */
+  notifier?: Notifier;
+  /** 审批链接的前缀(通知里带的 URL),如 http://host:port。 */
+  linkBase?: string;
   log?: (message: string) => void;
 }
 
@@ -55,6 +64,8 @@ interface TaskState {
   summary: TaskSummary;
   driver?: CloudSession;
   humanGate: HumanGate;
+  /** 活的通知记录:后台退避重试会原地更新,查询时投影最新事实。 */
+  notifyRecord?: NotifyRecord;
 }
 
 export class TaskService {
@@ -67,20 +78,37 @@ export class TaskService {
 
   list(): TaskSummary[] {
     return [...this.tasks.values()]
-      .map((task) => ({ ...task.summary }))
+      .map((task) => this.project(task))
       .sort((a, b) => b.created_at.localeCompare(a.created_at));
   }
 
   get(id: string): TaskSummary | undefined {
     const task = this.tasks.get(id);
-    return task ? { ...task.summary } : undefined;
+    return task ? this.project(task) : undefined;
+  }
+
+  private project(task: TaskState): TaskSummary {
+    const record = task.notifyRecord;
+    return {
+      ...task.summary,
+      notify: record
+        ? {
+            delivered: record.delivered,
+            attempts: record.attempts,
+            last_error: record.last_error,
+          }
+        : undefined,
+    };
   }
 
   eventLogPath(id: string): string {
     return join(this.tasks.get(id)!.summary.workspace, "events.jsonl");
   }
 
-  create(requirement: string): TaskSummary {
+  create(
+    requirement: string,
+    options: { account?: string } = {},
+  ): TaskSummary {
     this.counter += 1;
     const id = `task-${this.counter}`;
     const workspace = join(this.options.dataDir, id);
@@ -91,6 +119,7 @@ export class TaskService {
       status: "queued",
       created_at: new Date().toISOString(),
       workspace,
+      luban_account: options.account || undefined,
     };
     this.tasks.set(id, {
       summary,
@@ -207,6 +236,31 @@ export class TaskService {
     }
   }
 
+  /** 待办 → 小鲁班。投递失败不改流程状态;结果回填 summary.notify
+   * 供页面标红。未配置通知器或未填账号时静默跳过(演示模式)。 */
+  private notifyWaiting(task: TaskState): void {
+    const { notifier } = this.options;
+    const waiting = task.summary.waiting;
+    const account = task.summary.luban_account;
+    if (!notifier || !waiting || !account) return;
+    const questions =
+      ((waiting.question as any)?.questions ?? []) as Array<{
+        question?: string;
+      }>;
+    void notifier
+      .notifyWaiting({
+        waitingId: waiting.waiting_id,
+        taskId: task.summary.id,
+        account,
+        step: waiting.step,
+        summary: String(questions[0]?.question ?? "需要你确认"),
+        link: `${this.options.linkBase ?? ""}/tasks/${task.summary.id}`,
+      })
+      .then((record) => {
+        task.notifyRecord = record;
+      });
+  }
+
   /** 仓库进工作区:git 仓走 clone(历史/分支语义齐全),
    * 非 git 目录降级复制并剔除旧现场(.mae-flow-work 不跨任务串场)。 */
   private cloneRepo(workspace: string): string {
@@ -238,6 +292,7 @@ export class TaskService {
       case "waiting_for_human":
         task.summary.status = "waiting_for_human";
         task.summary.waiting = outcome.waiting;
+        this.notifyWaiting(task);
         break;
       case "turn_finished":
         task.summary.status = "completed";
