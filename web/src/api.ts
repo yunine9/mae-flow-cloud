@@ -98,6 +98,19 @@ export interface ExternalAction {
   finishedAt?: string;
 }
 
+/** 重跑一单:终态任务续接内核当前步骤。非终态时服务端会拒绝,
+ * 把它的解释原样带回。 */
+export async function retryTask(
+  taskId: string,
+): Promise<{ error?: string }> {
+  const response = await fetch(`/tasks/${taskId}/retry`, { method: "POST" });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    return { error: String(body.error ?? `HTTP ${response.status}`) };
+  }
+  return {};
+}
+
 /** 外部动作台账(需服务端配 --pg)。404 时把服务端的解释原样带回。 */
 export async function listActions(
   taskId: string,

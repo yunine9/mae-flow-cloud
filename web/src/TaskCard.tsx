@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   decide,
   listActions,
+  retryTask,
   STATUS_TEXT,
   tailEvents,
   type ExternalAction,
@@ -28,6 +29,9 @@ export function TaskCard({
       <div className="muted">{task.requirement}</div>
       {task.status === "failed" && task.detail && (
         <div className="muted">原因:{task.detail}</div>
+      )}
+      {(task.status === "failed" || task.status === "completed") && (
+        <RetryButton taskId={task.id} onDone={onChanged} />
       )}
       {task.delivery?.mr_url && (
         <div>
@@ -61,6 +65,28 @@ export function TaskCard({
       {task.delivery && <ActionLedger taskId={task.id} />}
       <EventTail taskId={task.id} />
     </div>
+  );
+}
+
+/** 重跑续推:环境故障被迫收口后,修好环境点一下,任务续接内核
+ * 当前步骤。服务端拒绝时把解释原样呈现。 */
+function RetryButton({
+  taskId,
+  onDone,
+}: {
+  taskId: string;
+  onDone: () => void;
+}) {
+  const [error, setError] = useState("");
+  return (
+    <span>
+      <button onClick={async () => {
+        const result = await retryTask(taskId);
+        setError(result.error ?? "");
+        onDone();
+      }}>重跑续推</button>
+      {error && <span className="alert">{error}</span>}
+    </span>
   );
 }
 

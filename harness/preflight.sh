@@ -21,12 +21,13 @@ ok()   { echo "✅ $1"; PASS=$((PASS+1)); }
 bad()  { echo "❌ $1"; FAIL=$((FAIL+1)); }
 skip() { echo "⏭️  $1"; SKIP=$((SKIP+1)); }
 
-JAVA_REPO=""; MODELS=""; PROVIDER=""
+JAVA_REPO=""; MODELS=""; PROVIDER=""; ISOLATE_IMAGE=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --java-repo) JAVA_REPO=$2; shift 2 ;;
-    --models)    MODELS=$2;    shift 2 ;;
-    --provider)  PROVIDER=$2;  shift 2 ;;
+    --java-repo)     JAVA_REPO=$2;     shift 2 ;;
+    --models)        MODELS=$2;        shift 2 ;;
+    --provider)      PROVIDER=$2;      shift 2 ;;
+    --isolate-image) ISOLATE_IMAGE=$2; shift 2 ;;
     *) echo "未知参数: $1"; exit 2 ;;
   esac
 done
@@ -45,6 +46,21 @@ if [ -n "$JAVA_REPO" ] && command -v docker >/dev/null; then
   fi
 else
   skip "1. 容器内编译验证:给 --java-repo 且装 docker 后执行;内网在目标镜像里做最终裁决"
+fi
+
+# 1.5 隔离镜像体检(run7 教训:python3/git 是转发壳与提交链的硬
+# 依赖,构建链按试点仓;镜像缺件要在上线前炸出来,不能等模型发现)
+if [ -n "$ISOLATE_IMAGE" ] && command -v docker >/dev/null; then
+  if docker run --rm "$ISOLATE_IMAGE" sh -lc \
+       'command -v python3 && command -v git' > /tmp/preflight-image.log 2>&1; then
+    ok "1.5 隔离镜像含 python3+git($ISOLATE_IMAGE)"
+  else
+    bad "1.5 隔离镜像缺 python3/git(转发壳跑不了;日志 /tmp/preflight-image.log)"
+  fi
+elif [ -n "$ISOLATE_IMAGE" ]; then
+  bad "1.5 给了 --isolate-image 但本机没有 docker"
+else
+  skip "1.5 隔离镜像体检:给 --isolate-image 后执行"
 fi
 
 # 2. 全量测试

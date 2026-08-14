@@ -115,6 +115,11 @@ export function createTaskServer(
         if (request.method === "GET" && parts[2] === "events") {
           return streamEvents(service, id, response);
         }
+        // 重跑一单(run7 实测的运维刚需):环境故障被迫收口的任务,
+        // 修好环境后续接内核当前步骤,不从头再来。终态校验在服务层。
+        if (request.method === "POST" && parts[2] === "retry") {
+          return json(response, 200, service.retry(id));
+        }
         // 审计读侧(§11):外部动作台账来自 PG 投影。没配投影时
         // 明说,而不是空数组装作"没有动作"。
         if (request.method === "GET" && parts[2] === "actions") {
