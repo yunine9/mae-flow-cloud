@@ -110,11 +110,17 @@ async function main(): Promise<void> {
   await luban.start();
   console.log(`[serve] 假小鲁班已就位,消息可查: ${luban.endpoint.replace("/notify", "")}`);
 
+  // 容器隔离:--isolate-image <镜像> 让 bash 命令进任务专属容器
+  // (镜像按试点仓选,Java 仓即 maven:3.8-eclipse-temurin-8)。
+  const isolateImage = flag("--isolate-image");
+  if (isolateImage) console.log(`[serve] 容器隔离: ${isolateImage}`);
+
   const service = new TaskService({
     dataDir, provider, model, modelsJson, maxConcurrent,
     contract: demoContract,
     host,
     delivery,
+    isolation: isolateImage ? { image: isolateImage } : undefined,
     notifier: new Notifier({ endpoint: luban.endpoint }),
     projection,
     linkBase: `http://127.0.0.1:${port}`,

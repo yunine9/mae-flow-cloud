@@ -14,10 +14,12 @@
 import { Type } from "typebox";
 import {
   createAgentSession,
+  createBashToolDefinition,
   DefaultResourceLoader,
   defineTool,
   ModelRuntime,
   SessionManager,
+  type BashOperations,
 } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
 import { EventLog, type SemanticEvent, type SemanticEventKind, validateEvent } from "./semanticEvents.ts";
@@ -79,6 +81,10 @@ export interface CloudSessionOptions {
   humanGate: HumanGate;
   hostHooks?: HostHooks;
   currentStep?: () => string;
+  /** 容器隔离(设计文档):换掉内建 bash 的执行后端,命令进任务
+   * 容器跑;工具仍叫 bash,门禁与 transcript 看到的世界不变。
+   * 子会话经同一 openSession 装配,天然同套隔离。 */
+  bashOperations?: BashOperations;
   log?: (message: string) => void;
 }
 
@@ -305,13 +311,24 @@ export class CloudSession {
     if (!resolved) {
       throw new Error(`models.json 里找不到模型 ${provider}/${model}`);
     }
+    // 容器隔离:注册执行后端进容器的同名 bash——SDK 的工具注册表
+    // 同名 customTool 后写覆盖内建(agent-session._refreshToolRegistry),
+    // 不能用 excludeTools(denylist 按名字生效,会连替换品一起杀,实测)。
+    const isolatedTools = this.options.bashOperations
+      ? [createBashToolDefinition(workspace, {
+          operations: this.options.bashOperations,
+        })]
+      : [];
     const { session } = await createAgentSession({
       cwd: workspace,
       agentDir,
       model: resolved,
       modelRuntime: this.modelRuntime,
       resourceLoader: loader,
-      customTools: config.customTools as any,
+      customTools: [
+        ...(config.customTools as any[]),
+        ...isolatedTools,
+      ] as any,
       sessionManager: SessionManager.inMemory(),
     });
     session.subscribe((event: any) => this.onSessionEvent(config.sessionId, event));

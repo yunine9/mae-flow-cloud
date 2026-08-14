@@ -35,6 +35,7 @@ src/
   server.ts           任务 API:REST + SSE(决定冲突=409 任务状态已变化)
   webPage.ts          零构建演示页:列表/发起/审批卡直接点(说人话)
   projection.ts       PostgreSQL 投影(§11):摘要/事件副本/外部动作台账,纯旁路 fail-open
+  containerRuntime.ts 任务容器(隔离设计):bash 进容器执行,工作区同路径挂载
   serve.ts            启动入口(演示=内置剧本假模型;--models 接真网关)
   scriptedModel.ts    剧本假模型(Anthropic Messages SSE)——无 LLM 对拍电源
   probe.ts            阶段 0 演练入口
@@ -118,6 +119,11 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
   摘要/事件副本/外部动作台账三张表,恢复时以现场文件为源重放;
   纯旁路 fail-open——阶段真相仍只在工作区 .mae-flow.json,
   语义测试 tests/projection.test.ts(临时真 PG 集群当裁判);
+- 任务容器隔离已落地(docs/container-isolation-design.md):
+  `--isolate-image <镜像>` 后 bash 命令进任务专属容器执行,
+  文件工具/门禁/内核 dispatch 留宿主,工作区同路径挂载三方同视;
+  容器起不来任务如实 failed 不静默降级;隔离证据有测试
+  (宿主 Darwin、容器内 uname=Linux);资源限额/uid 映射待做;
 - 正式 React 前端已起头并接上部署形态(web/:Vite+React+TS,
   类型化 API 层,功能与演示页对齐——列表/发起/审批卡/SSE 过程
   记录/现场面板链接;`web/dist` 存在时 serve 自动托管,--web 可

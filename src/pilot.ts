@@ -97,6 +97,9 @@ async function main(): Promise<number> {
     modelsJson: JSON.parse(readFileSync(modelsPath, "utf-8")),
     host: { kernelRoot, repoPath: platform.barePath, python: "python3" },
     delivery: { platformUrl: platform.baseUrl },
+    isolation: flag("--isolate-image")
+      ? { image: flag("--isolate-image")! }
+      : undefined,
     notifier: new Notifier({ endpoint: luban.endpoint }),
     linkBase: "http://127.0.0.1:8787",
     log: (message) => console.log(`  [task] ${message}`),

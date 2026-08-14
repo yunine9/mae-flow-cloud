@@ -27,6 +27,7 @@ import { TranscriptStore } from "./transcriptStore.ts";
 import { GateService, type GateContract } from "./gateService.ts";
 import { HumanGate, type WaitingRecord } from "./humanGate.ts";
 import { CloudSession, type Outcome } from "./sessionDriver.ts";
+import { TaskContainer } from "./containerRuntime.ts";
 import type { ExternalAction, PgProjection } from "./projection.ts";
 
 export type TaskStatus =
@@ -89,6 +90,9 @@ export interface TaskServiceOptions {
   /** PostgreSQL 投影(主 spec §11):看板/审计/恢复引导的读侧。
    * 纯旁路——写失败不改流程,不配则一切照旧(文件即真相)。 */
   projection?: PgProjection;
+  /** 容器隔离(设计文档):bash 命令进任务专属容器执行,镜像按
+   * 试点仓选。容器起不来任务如实 failed,不静默降级回宿主。 */
+  isolation?: { image: string };
   log?: (message: string) => void;
 }
 
@@ -105,6 +109,8 @@ interface TaskState {
    * 对"推不动"无效);累计上限防对话式空转。 */
   nudgedStep?: string;
   nudgeCount?: number;
+  /** 任务专属容器(隔离模式):随任务起,随收口停。 */
+  container?: TaskContainer;
   /** 恢复标记:launch 走重建会话路径(不重克隆、内核 current 续跑)。 */
   resume?: boolean;
   /** 恢复期收到的人工决定:重建会话就绪后由 driver 补登记再续跑。 */
@@ -386,6 +392,14 @@ export class TaskService {
       } else if (resuming || task.resume) {
         prompt = `服务重启,继续任务:${task.summary.requirement}`;
       }
+      // 容器隔离:bash 进任务专属容器(工作区同路径挂载),
+      // 起不来直接抛=任务 failed——静默降级回宿主是假隔离。
+      if (this.options.isolation) {
+        task.container = new TaskContainer(
+          this.options.isolation.image, cwd,
+          `mfc-${task.summary.id}`, this.options.log);
+        await task.container.start();
+      }
       task.driver = await CloudSession.create({
         taskId: task.summary.id,
         workspace: cwd,
@@ -402,6 +416,12 @@ export class TaskService {
         }),
         humanGate: task.humanGate,
         hostHooks,
+        bashOperations: task.container
+          ? {
+              exec: (command, dir, execOptions) =>
+                task.container!.exec(command, dir, execOptions),
+            }
+          : undefined,
         log: this.options.log,
       });
       // 重建会话:恢复期收到的决定先补登记(tool_result 与崩溃前的
@@ -424,6 +444,7 @@ export class TaskService {
     } catch (error) {
       task.summary.status = "failed";
       task.summary.detail = String(error);
+      void task.container?.stop();
       this.persist(task);
       this.options.log?.(`任务 ${task.summary.id} 启动失败: ${String(error)}`);
     }
@@ -701,6 +722,7 @@ export class TaskService {
           break;
         }
         task.driver?.dispose();
+        void task.container?.stop();
         // 终态在交付判定之后才定:先标 completed 再改,轮询会撞见
         // 中间态(实测竞态)。交付把状态升为 verifying/await_merge,
         // 没交付动作时才落 completed。
@@ -716,6 +738,7 @@ export class TaskService {
         task.summary.status = "failed";
         task.summary.detail = outcome.detail ?? outcome.reason;
         task.driver?.dispose();
+        void task.container?.stop();
         this.persist(task);
         this.notifyOutcome(task);
         break;
