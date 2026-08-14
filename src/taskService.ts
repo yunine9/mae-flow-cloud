@@ -18,6 +18,7 @@ import {
   renameSync,
   writeFileSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { basename, join } from "node:path";
 import { KernelHost } from "./kernelHost.ts";
@@ -283,6 +284,26 @@ export class TaskService {
     }
   }
 
+  /** 重跑一单:completed/failed 的任务重新入队,host 模式以内核
+   * current 为锚续跑。用于环境修复后续推(run7-resume 实测:容器
+   * 被并行实例误杀,整单被迫收口,内核还停在 verify_ut——环境
+   * 修好后流程应当接着推,而不是从头再来)。 */
+  retry(id: string): TaskSummary {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    if (!["completed", "failed"].includes(task.summary.status)) {
+      throw new NotFoundError(
+        `任务 ${id} 状态是 ${task.summary.status},只有 completed/failed 可重跑`);
+    }
+    task.summary.status = "queued";
+    task.summary.detail = "人工重跑,续接内核当前步骤";
+    task.resume = true;
+    this.persist(task);
+    this.queue.push(id);
+    void this.pump();
+    return { ...task.summary };
+  }
+
   /** Web 决定:先到生效;冲突抛 StateConflictError 由 API 层变 409。
    * 多问题卡必须给 answers(问题→选项);单问题卡给 decision 即可。 */
   async decide(
@@ -404,9 +425,25 @@ export class TaskService {
       // 起不来直接抛=任务 failed——静默降级回宿主是假隔离。
       if (this.options.isolation) {
         const { image, volumes, memory, cpus, user } = this.options.isolation;
+        // 容器名带数据目录指纹:同 dataDir 重启后同名(孤儿可清扫),
+        // 不同实例(测试与试跑并行)绝不同名——只按任务 id 命名时,
+        // 另一实例的 rm -f 会把这边活着的容器当孤儿误杀(实测:
+        // run7 续跑期间并行跑隔离测试,容器被杀,模型如实报告
+        // "执行容器丢失",整单被迫收口)。
+        const instance = createHash("sha256")
+          .update(this.options.dataDir).digest("hex").slice(0, 6);
+        // host 模式的两条硬依赖也要进容器:内核插件根(转发壳硬编码
+        // 其绝对路径,只读)与 Git 远端(裸仓是文件路径,push 要写)。
+        const hostMounts = this.options.host
+          ? [
+              `${this.options.host.kernelRoot}:${this.options.host.kernelRoot}:ro`,
+              `${this.options.host.repoPath}:${this.options.host.repoPath}`,
+            ]
+          : [];
         task.container = new TaskContainer(
-          image, cwd, `mfc-${task.summary.id}`, this.options.log,
-          volumes, { memory, cpus, user });
+          image, cwd, `mfc-${instance}-${task.summary.id}`,
+          this.options.log,
+          [...hostMounts, ...(volumes ?? [])], { memory, cpus, user });
         await task.container.start();
       }
       task.driver = await CloudSession.create({

@@ -125,6 +125,17 @@ async function main(): Promise<number> {
     console.log(`[pilot] 断点续跑: 恢复 ${recovered.restored} 个任务`
       + `(重新入队 ${recovered.requeued}),任务 ${task.id}`
       + ` 状态 ${task.status}`);
+    // 终态但内核没走到 end(环境故障被迫收口的形状)→ 重跑续推。
+    if (["completed", "failed"].includes(task.status)) {
+      const statePath = join(task.workspace, "origin", ".mae-flow.json");
+      const current = existsSync(statePath)
+        ? String(JSON.parse(readFileSync(statePath, "utf-8"))?.current ?? "")
+        : "";
+      if (current && current !== "end") {
+        task = service.retry(task.id);
+        console.log(`[pilot] 流程停在 ${current} 未到 end,重跑续推`);
+      }
+    }
   } else {
     console.log(`[pilot] 需求: ${requirement}`);
     task = service.create(requirement, { account: "liaoxiang" });

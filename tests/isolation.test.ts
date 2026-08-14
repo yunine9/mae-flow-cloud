@@ -12,6 +12,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
 import { dockerAvailable } from "../src/containerRuntime.ts";
@@ -71,10 +72,13 @@ test("bash 进容器执行;产物宿主可见;收口后容器销毁", { skip: SK
       assert.ok(existsSync(artifact), "容器产物在宿主不可见");
       assert.match(readFileSync(artifact, "utf-8"), /Linux/);
       // 收口后容器销毁。清理是异步旁路(不许卡收口),等它一拍。
+      // 容器名带 dataDir 指纹(防跨实例误杀),按同一规则拼出来查。
+      const instance = createHash("sha256")
+        .update(dataDir).digest("hex").slice(0, 6);
       const gone = Date.now() + 15_000;
       for (;;) {
         const leftovers = execFileSync("docker",
-          ["ps", "-q", "--filter", `name=mfc-${created.id}`],
+          ["ps", "-q", "--filter", `name=mfc-${instance}-${created.id}`],
           { encoding: "utf-8" }).trim();
         if (!leftovers) break;
         if (Date.now() > gone) {
