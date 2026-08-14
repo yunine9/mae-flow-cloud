@@ -91,8 +91,9 @@ export interface TaskServiceOptions {
    * 纯旁路——写失败不改流程,不配则一切照旧(文件即真相)。 */
   projection?: PgProjection;
   /** 容器隔离(设计文档):bash 命令进任务专属容器执行,镜像按
-   * 试点仓选。容器起不来任务如实 failed,不静默降级回宿主。 */
-  isolation?: { image: string };
+   * 试点仓选。容器起不来任务如实 failed,不静默降级回宿主。
+   * volumes = 额外挂载(构建缓存等),"宿主:容器" 形状。 */
+  isolation?: { image: string; volumes?: string[] };
   log?: (message: string) => void;
 }
 
@@ -397,7 +398,8 @@ export class TaskService {
       if (this.options.isolation) {
         task.container = new TaskContainer(
           this.options.isolation.image, cwd,
-          `mfc-${task.summary.id}`, this.options.log);
+          `mfc-${task.summary.id}`, this.options.log,
+          this.options.isolation.volumes);
         await task.container.start();
       }
       task.driver = await CloudSession.create({

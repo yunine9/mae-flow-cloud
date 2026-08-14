@@ -35,6 +35,17 @@ function flag(name: string): string | undefined {
   return index > 0 ? process.argv[index + 1] : undefined;
 }
 
+/** 可重复参数(如 --isolate-volume a:b --isolate-volume c:d)。 */
+function flags(name: string): string[] {
+  const values: string[] = [];
+  process.argv.forEach((argument, index) => {
+    if (argument === name && process.argv[index + 1]) {
+      values.push(process.argv[index + 1]);
+    }
+  });
+  return values;
+}
+
 function demoContract(
   _tool: string,
   value: string,
@@ -120,7 +131,9 @@ async function main(): Promise<void> {
     contract: demoContract,
     host,
     delivery,
-    isolation: isolateImage ? { image: isolateImage } : undefined,
+    isolation: isolateImage
+      ? { image: isolateImage, volumes: flags("--isolate-volume") }
+      : undefined,
     notifier: new Notifier({ endpoint: luban.endpoint }),
     projection,
     linkBase: `http://127.0.0.1:${port}`,

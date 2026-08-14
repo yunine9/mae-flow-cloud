@@ -104,11 +104,11 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
 - 现场归档在 .pilot/archive/run3-REQ2026081402-glm-delivery
   (含两张"证据缺口风险卡"——并行派发丢返回登记的实锤,已修:
   pretooluse 随带 tool_use_id,见 tests/kernelHost.test.ts);
-- fieldtest-java 直接编译验证已过(2026-08-14 本机 macOS:干净副本
-  mvn compile / mvn test / 双副本并发 clean compile 全部退出码 0,
-  仓库可标 direct);Linux 容器内同套验证已过(2026-08-14,Colima
-  arm64 Linux + maven:3.8-eclipse-temurin-8,compile/test 退出码 0、
-  4 UT 全过);x86_64 形态见下条;
+- **本机已无 JDK/mvn(2026-08-14 run7 实测:which mvn 不存在,
+  java 仅剩 macOS 空壳 stub)——早前"本机直接编译已过"的记录失效**,
+  宿主直接编译不可用,编译一律走容器;Linux 容器内验证已过
+  (2026-08-14,Colima arm64 + maven:3.8-eclipse-temurin-8,
+  compile/test 退出码 0、4 UT 全过);x86_64 形态见下条;
 - 任务级恢复已实现(tests/recovery.test.ts):进程可死任务不死——
   重启后 recover() 重建索引,决定走重建会话续跑;pi 侧会话仍是
   inMemory,重建会话不带旧对话上下文,以内核 current 为锚(设计如此);

@@ -98,7 +98,13 @@ async function main(): Promise<number> {
     host: { kernelRoot, repoPath: platform.barePath, python: "python3" },
     delivery: { platformUrl: platform.baseUrl },
     isolation: flag("--isolate-image")
-      ? { image: flag("--isolate-image")! }
+      ? {
+          image: flag("--isolate-image")!,
+          volumes: process.argv.flatMap((argument, index) =>
+            argument === "--isolate-volume" && process.argv[index + 1]
+              ? [process.argv[index + 1]]
+              : []),
+        }
       : undefined,
     notifier: new Notifier({ endpoint: luban.endpoint }),
     linkBase: "http://127.0.0.1:8787",

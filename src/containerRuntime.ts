@@ -29,6 +29,9 @@ export class TaskContainer {
      * 崩溃留下的孤儿不累积。 */
     readonly name: string,
     private log?: (message: string) => void,
+    /** 额外挂载("宿主:容器"),如构建缓存 ~/.m2/repository——
+     * 没有它每个任务都从零下依赖。 */
+    private volumes: string[] = [],
   ) {}
 
   /** 长驻容器:工作区同路径挂载。起不来就抛——要隔离就真隔离,
@@ -38,6 +41,7 @@ export class TaskContainer {
     this.containerId = await docker(
       "run", "-d", "--rm", "--name", this.name,
       "-v", `${this.workspace}:${this.workspace}`,
+      ...this.volumes.flatMap((volume) => ["-v", volume]),
       "-w", this.workspace,
       this.image, "sleep", "infinity");
     this.log?.(`容器就位: ${this.name} (${this.image})`);
