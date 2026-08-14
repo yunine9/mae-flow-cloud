@@ -293,14 +293,18 @@ export class TaskService {
         JSON.stringify(this.options.modelsJson));
       const transcriptPath = join(workspace, "transcript.jsonl");
       // 恢复=工作区(仓库克隆)还在;克隆丢了就只能从头来。
+      // savedCwd 必须先落袋:下面 task.cwd 会被暂写成 workspace,
+      // 晚一步读就是把重建会话跑进任务根目录(实测:内核找不到
+      // 状态文件,messages 报"未初始化")。
+      const savedCwd = task.cwd;
       const resuming = task.resume === true
-        && !!task.cwd && task.cwd !== workspace && existsSync(task.cwd);
+        && !!savedCwd && savedCwd !== workspace && existsSync(savedCwd);
       let cwd = workspace;
       let prompt = task.summary.requirement;
       let hostHooks;
       task.cwd = cwd;
       if (this.options.host) {
-        cwd = resuming ? task.cwd! : this.cloneRepo(workspace);
+        cwd = resuming ? savedCwd! : this.cloneRepo(workspace);
         task.cwd = cwd;
         const kernel = new KernelHost({
           kernelRoot: this.options.host.kernelRoot,
