@@ -73,7 +73,10 @@ export function createTaskServer(service: TaskService): Server {
           const body = await readBody(request);
           const task = await service.decide(id, {
             state_version: Number(body.state_version),
-            decision: String(body.decision ?? ""),
+            decision: body.decision !== undefined
+              ? String(body.decision) : undefined,
+            answers: body.answers && typeof body.answers === "object"
+              ? body.answers : undefined,
             notes: body.notes ? String(body.notes) : undefined,
           });
           return json(response, 200, task);

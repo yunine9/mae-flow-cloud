@@ -33,6 +33,24 @@ const TOOL_NAME_MAP: Record<string, string> = {
   edit: "Edit",
   };
 
+/** 决定 → 结构化回答。显式 answers 优先;单问题卡由 decision 兜底
+ * (问题文本作键,老宿主回传就是这个形状)。 */
+export function answersOf(
+  record: { decision: string; answers?: Record<string, string> },
+  waiting: { question: Record<string, any> },
+): Record<string, string> {
+  if (record.answers && Object.keys(record.answers).length) {
+    return record.answers;
+  }
+  const questions = Array.isArray(waiting.question?.questions)
+    ? waiting.question.questions
+    : [];
+  if (questions.length === 1) {
+    return { [String(questions[0]?.question ?? "问题")]: record.decision };
+  }
+  return { 最终确认: record.decision };
+}
+
 const HOST_TOOLS = new Set(["AskUserQuestion", "Task"]);
 
 export interface Outcome {
@@ -176,12 +194,15 @@ export class CloudSession {
       notes: record.notes,
     });
     // 宿主代演的工具结果由 driver 登记;pi 的回声按 hostAnswered 丢弃。
+    // answers 是结构化回答(问题→选项):内核 ack 的"整份背书"判定看的是
+    // 结构不是措辞——键是配置项名的只代表单项,独立确认题才能替整份背书。
     const finished = this.emit("tool_finished", this.sessionId, {
       call_id: waiting.call_id,
       name: "AskUserQuestion",
       input: waiting.question,
       is_error: false,
       result: renderDecision(record),
+      answers: answersOf(record, waiting),
     });
     // 决定进内核:旧插件 posttooluse 捕获 AskUserQuestion 答案的同一路径。
     void this.options.hostHooks?.postTool?.(finished);
@@ -326,10 +347,17 @@ export class CloudSession {
       label: "Ask User Question",
       description:
         "向用户提出结构化问题并等待决定。需要用户确认或选择时必须调用本工具," +
-        "不要在正文里描述问题然后自行假设答案。",
+        "不要在正文里描述问题然后自行假设答案。一张卡可含多个问题" +
+        "(如配置确认 + 交付方式合并成一次提问)。",
+      // 形状对齐旧宿主(步骤文档假设的就是它):questions 数组,每项
+      // question + options。回答按问题分开记录——内核"整份背书"判定
+      // 依赖这个结构。
       parameters: Type.Object({
-        question: Type.String({ description: "问题正文" }),
-        options: Type.Array(Type.String(), { description: "可选决定,至少一项" }),
+        questions: Type.Array(Type.Object({
+          question: Type.String({ description: "问题正文" }),
+          options: Type.Array(Type.String(),
+            { description: "可选决定,至少一项" }),
+        }), { description: "一张卡里的问题,通常 1-2 个" }),
       }),
       async execute(toolCallId: string, params: any) {
         const callId = String(toolCallId);

@@ -28,6 +28,8 @@ export interface WaitingRecord {
   state_version: number;
   status: "waiting" | "resolved";
   decision: string;
+  /** 结构化回答(问题→选项)。多问题卡必填;单问题卡可由 decision 派生。 */
+  answers?: Record<string, string>;
   notes: string;
   created_at: string;
   resolved_at: string;
@@ -96,7 +98,12 @@ export class HumanGate {
   /** 消费决定;版本不匹配或已被抢先,抛 StateConflictError。 */
   resolve(
     waitingId: string,
-    options: { stateVersion: number; decision: string; notes?: string },
+    options: {
+      stateVersion: number;
+      decision: string;
+      answers?: Record<string, string>;
+      notes?: string;
+    },
   ): WaitingRecord {
     const store = this.load();
     const record = store.records[waitingId];
@@ -111,6 +118,9 @@ export class HumanGate {
     }
     record.status = "resolved";
     record.decision = String(options.decision);
+    if (options.answers && Object.keys(options.answers).length) {
+      record.answers = { ...options.answers };
+    }
     record.notes = String(options.notes ?? "");
     record.state_version += 1;
     record.resolved_at = now();
@@ -125,9 +135,13 @@ export class HumanGate {
  */
 export function renderDecision(record: {
   decision: string;
+  answers?: Record<string, string>;
   notes?: string;
 }): string {
-  const decision = String(record.decision ?? "");
+  const answers = record.answers ?? {};
+  const decision = Object.keys(answers).length
+    ? Object.values(answers).join("\n")
+    : String(record.decision ?? "");
   const notes = String(record.notes ?? "");
   return notes ? `${decision}\n${notes}` : decision;
 }

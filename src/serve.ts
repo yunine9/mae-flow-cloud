@@ -22,8 +22,8 @@ const DEMO_SCRIPT: Scene[] = [
   { text: "先跑专项编译",
     tool: { name: "bash", input: { command: "echo BUILD SUCCESS" } } },
   { tool: { name: "AskUserQuestion",
-            input: { question: "未提交 Diff 通过吗?",
-                     options: ["通过", "打回"] } } },
+            input: { questions: [{ question: "未提交 Diff 通过吗?",
+                                   options: ["通过", "打回"] }] } } },
   { text: "COMPILE_RESULT: PASS 按决定继续交付" },
 ];
 

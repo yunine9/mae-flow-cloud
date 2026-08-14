@@ -79,26 +79,47 @@ async function refresh() {
 function waitingCard(task) {
   const card = document.createElement("div");
   card.className = "waiting";
-  const question = task.waiting.question || {};
-  card.innerHTML = "<div><b>" + escapeHtml(question.question || "需要你确认")
-    + "</b></div>";
-  for (const option of question.options || []) {
-    const button = document.createElement("button");
-    button.textContent = option;
-    button.style.marginRight = ".5rem";
-    button.onclick = async () => {
-      const response = await fetch("/tasks/" + task.id + "/decision", {
-        method: "POST",
-        body: JSON.stringify({
-          state_version: task.waiting.state_version,
-          decision: option,
-        }),
-      });
-      if (response.status === 409) alert("任务状态已变化:别人已经先做了决定。");
-      refresh();
-    };
-    card.appendChild(button);
+  const questions = (task.waiting.question || {}).questions || [];
+  const picked = {};
+  for (const item of questions) {
+    const block = document.createElement("div");
+    block.innerHTML = "<div><b>" + escapeHtml(item.question || "需要你确认")
+      + "</b></div>";
+    for (const option of item.options || []) {
+      const button = document.createElement("button");
+      button.textContent = option;
+      button.style.margin = "0 .5rem .4rem 0";
+      button.onclick = () => {
+        picked[item.question] = option;
+        for (const sibling of block.querySelectorAll("button")) {
+          sibling.style.fontWeight =
+            sibling.textContent === option ? "bold" : "normal";
+        }
+        maybeEnable();
+      };
+      block.appendChild(button);
+    }
+    card.appendChild(block);
   }
+  const submit = document.createElement("button");
+  submit.textContent = "提交决定";
+  submit.disabled = true;
+  submit.onclick = async () => {
+    const response = await fetch("/tasks/" + task.id + "/decision", {
+      method: "POST",
+      body: JSON.stringify({
+        state_version: task.waiting.state_version,
+        answers: picked,
+      }),
+    });
+    if (response.status === 409) alert("任务状态已变化:别人已经先做了决定。");
+    refresh();
+  };
+  function maybeEnable() {
+    submit.disabled =
+      Object.keys(picked).length < questions.length;
+  }
+  card.appendChild(submit);
   return card;
 }
 

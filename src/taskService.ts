@@ -101,10 +101,16 @@ export class TaskService {
     return { ...summary };
   }
 
-  /** Web 决定:先到生效;冲突抛 StateConflictError 由 API 层变 409。 */
+  /** Web 决定:先到生效;冲突抛 StateConflictError 由 API 层变 409。
+   * 多问题卡必须给 answers(问题→选项);单问题卡给 decision 即可。 */
   async decide(
     id: string,
-    input: { state_version: number; decision: string; notes?: string },
+    input: {
+      state_version: number;
+      decision?: string;
+      answers?: Record<string, string>;
+      notes?: string;
+    },
   ): Promise<TaskSummary> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
@@ -112,9 +118,16 @@ export class TaskService {
     if (task.summary.status !== "waiting_for_human" || !waiting) {
       throw new NotFoundError(`任务 ${id} 当前没有待人工决定`);
     }
+    const answers = input.answers ?? {};
+    const decision = String(
+      input.decision ?? Object.values(answers).join("\n"));
+    if (!decision.trim()) {
+      throw new NotFoundError("决定不能为空:给 decision 或 answers");
+    }
     const resolved = task.humanGate.resolve(waiting.waiting_id, {
       stateVersion: input.state_version,
-      decision: input.decision,
+      decision,
+      answers: Object.keys(answers).length ? answers : undefined,
       notes: input.notes,
     });
     task.summary.status = "running";

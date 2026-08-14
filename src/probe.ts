@@ -32,8 +32,8 @@ const SCRIPT: Scene[] = [
                      description: "专项编译验证",
                      prompt: "按契约执行编译并报告" } } },
   { tool: { name: "AskUserQuestion",
-            input: { question: "未提交 Diff 通过吗?",
-                     options: ["通过", "打回"] } } },
+            input: { questions: [{ question: "未提交 Diff 通过吗?",
+                                   options: ["通过", "打回"] }] } } },
   { text: "COMPILE_RESULT: PASS 按决定继续交付" },
 ];
 

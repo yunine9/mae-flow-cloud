@@ -45,6 +45,7 @@ export class KernelHost {
   /** 任务开工:sessionstart + userprompt(捕获需求原话、铺转发壳),
    * 返回内核自己的开工引导文本——首条 prompt 的组成部分,不由云端复述。 */
   async bootstrap(requirement: string): Promise<string> {
+    this.requirement = requirement;
     const started = await this.dispatch("sessionstart", {});
     const prompted = await this.dispatch("userprompt", {
       prompt: requirement,
@@ -73,16 +74,43 @@ export class KernelHost {
   /** posttooluse:证据登记、契约校验、Task 完成对账都走这条。 */
   async postTool(event: SemanticEvent): Promise<void> {
     const payload = event.payload as Record<string, any>;
+    // AskUserQuestion 的回传形状是结构化 answers(问题→选项):
+    // 内核 ack 的"整份背书"判定按结构而非措辞——键是配置项名的只代表
+    // 单项,独立确认题才能替整份配置背书。包一层 content 会让 ack 只
+    // 看到一坨 JSON 原文,永远判不出肯定回答(实测踩过)。
+    const response =
+      payload.name === "AskUserQuestion" && payload.answers
+        ? { answers: payload.answers }
+        : {
+            content: [{ type: "text", text: String(payload.result ?? "") }],
+            is_error: Boolean(payload.is_error),
+          };
     await this.dispatch("posttooluse", {
       tool_name: payload.name,
       tool_input: payload.input,
       tool_use_id: payload.call_id,
-      tool_response: {
-        content: [{ type: "text", text: String(payload.result ?? "") }],
-        is_error: Boolean(payload.is_error),
-      },
+      tool_response: response,
       ...this.common(),
     });
+    await this.captureRequirementAfterInit(payload);
+  }
+
+  /** 需求原话是 init 前发的,进不了 ACTIVE 台账(老宿主同样如此,
+   * 靠用户重发恢复)。云端不折腾用户:观察到 init 成功后补发一次
+   * userprompt 载荷,需求进台账,requirement-record --message-id 可用。 */
+  private requirement = "";
+  private requirementCaptured = false;
+
+  private async captureRequirementAfterInit(
+    payload: Record<string, any>,
+  ): Promise<void> {
+    if (this.requirementCaptured || !this.requirement) return;
+    if (payload.name !== "Bash") return;
+    const command = String(payload.input?.command ?? "");
+    if (!/mae-flow\.py"?\s+init\b/.test(command)) return;
+    if (!String(payload.result ?? "").includes("流程已初始化")) return;
+    this.requirementCaptured = true;
+    await this.dispatch("userprompt", { prompt: this.requirement });
   }
 
   private common(): Record<string, unknown> {

@@ -20,7 +20,8 @@ const SCRIPT: Scene[] = [
   { text: "先编译",
     tool: { name: "bash", input: { command: "echo BUILD SUCCESS" } } },
   { tool: { name: "AskUserQuestion",
-            input: { question: "Diff 通过吗?", options: ["通过", "打回"] } } },
+            input: { questions: [{ question: "Diff 通过吗?",
+                                   options: ["通过", "打回"] }] } } },
   { text: "COMPILE_RESULT: PASS 收口" },
 ];
 
@@ -86,7 +87,8 @@ test("任务 API 整链:等待人工/409 冲突/决定生效/SSE 镜像", async 
         .then((r) => r.json());
       return task.status === "waiting_for_human" ? task : undefined;
     }, "任务进入等待人工");
-    assert.equal(waiting.waiting.question.question, "Diff 通过吗?");
+    assert.equal(
+      waiting.waiting.question.questions[0].question, "Diff 通过吗?");
 
     // 后到决定(错误版本)必须 409,不覆盖先到。
     const conflict = await fetch(`${base}/tasks/${created.id}/decision`, {
