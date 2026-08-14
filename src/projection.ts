@@ -155,6 +155,38 @@ export class PgProjection {
     }
   }
 
+  /** 历史读侧:任务摘要投影(按最近更新倒序)。内存列表只有本进程
+   * recover 到的任务;数据目录清理或换机后,历史只活在这里——
+   * 看板/审计的跨生命周期入口。读失败抛错,纪律同 listActions。 */
+  async listTaskHistory(limit = 100): Promise<TaskSummary[]> {
+    await this.ensureSchema();
+    const rows = await this.pool.query(
+      `select task_id, requirement, status, detail, luban_account,
+              workspace, created_at, waiting, delivery
+         from tasks order by updated_at desc limit $1`,
+      [limit]);
+    return rows.rows.map((row) => ({
+      id: row.task_id,
+      requirement: row.requirement,
+      status: row.status,
+      detail: row.detail ?? undefined,
+      luban_account: row.luban_account ?? undefined,
+      workspace: row.workspace,
+      created_at: new Date(row.created_at).toISOString(),
+      waiting: row.waiting ?? undefined,
+      delivery: row.delivery ?? undefined,
+    }));
+  }
+
+  /** 历史条目的事件量指标:该任务的事件副本行数。读失败抛错。 */
+  async countEvents(taskId: string): Promise<number> {
+    await this.ensureSchema();
+    const rows = await this.pool.query(
+      "select count(*)::int as n from task_events where task_id = $1",
+      [taskId]);
+    return rows.rows[0].n;
+  }
+
   /** 审计读侧:某任务的外部动作台账(按开始时间正序)。
    * 读失败抛给调用方——审计查询失败必须可见,不适用写侧的 fail-open
    * (写丢一页可重放,读装没事就是骗人)。 */

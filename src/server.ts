@@ -60,6 +60,16 @@ export function createTaskServer(
     const url = new URL(request.url ?? "/", "http://localhost");
     const parts = url.pathname.split("/").filter(Boolean);
     try {
+      // 历史读侧(§11):任务摘要投影来自 PG,跨进程生命周期。
+      // 必须先于静态托管兜底判定——非 /tasks 前缀的 GET 会被它接管。
+      if (request.method === "GET" && url.pathname === "/history") {
+        const projection = service.options.projection;
+        if (!projection) {
+          return json(response, 404,
+            { error: "未配置 PostgreSQL 投影(--pg),没有历史可查" });
+        }
+        return json(response, 200, await projection.listTaskHistory());
+      }
       // 静态前端(webRoot=React 构建产物):/ 与非 API 路径出文件;
       // 没配 webRoot 时零构建演示页兜底——两种形态永远有一个能用。
       if (request.method === "GET"

@@ -127,6 +127,8 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
 - `GET /tasks/:id/events`(SSE):语义事件实时镜像。
 - `GET /tasks/:id/actions`:外部动作台账(MR/流水线,含幂等键与
   绑定 SHA)——恢复时"先查远端真实状态"的对账入口;需配 `--pg`。
+- `GET /history`:任务摘要投影的历史列表(按最近更新倒序)——
+  数据目录清理或换机后,历史看板/审计从这里查;需配 `--pg`。
 - 任务 detail 字段:失败原因原文(含网关 429 的重置时间)。
 - 内核侧真相:任务克隆目录 `.mae-flow.json`(current/config)与
   `.mae-flow-work/panel.html`(现场面板)。

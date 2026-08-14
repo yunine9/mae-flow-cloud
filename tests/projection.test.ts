@@ -154,6 +154,51 @@ test("外部动作台账:同幂等键请求侧保留首次,结果侧补写", { s
     }
   });
 
+test("历史读侧:按最近更新倒序,jsonb 字段还原,覆盖后见最新", { skip: SKIP },
+  async () => {
+    const projection = new PgProjection(conn);
+    try {
+      await projection.upsertTask({
+        ...summaryOf("task-h1", "verifying"),
+        delivery: { mr_url: "http://mr/9", mr_state: "验证中", sha: "beef01" },
+      } as never);
+      await projection.upsertTask(summaryOf("task-h2", "running"));
+      let history = await projection.listTaskHistory();
+      const mine = history.filter((task) =>
+        task.id === "task-h1" || task.id === "task-h2");
+      // task-h2 后写,updated_at 更新,排最前。
+      assert.deepEqual(mine.map((task) => task.id), ["task-h2", "task-h1"]);
+      const h1 = mine.find((task) => task.id === "task-h1")!;
+      assert.equal(h1.status, "verifying");
+      assert.equal(h1.delivery?.mr_url, "http://mr/9");
+      assert.equal(h1.requirement, "需求原话");
+      assert.match(h1.created_at, /^\d{4}-\d{2}-\d{2}T/);
+
+      // 覆盖后历史反映最新状态,且 task-h1 变为最近更新。
+      await projection.upsertTask(summaryOf("task-h1", "completed"));
+      history = await projection.listTaskHistory();
+      const again = history.filter((task) =>
+        task.id === "task-h1" || task.id === "task-h2");
+      assert.deepEqual(again.map((task) => task.id), ["task-h1", "task-h2"]);
+      assert.equal(again[0].status, "completed");
+
+      // 事件量指标:两条事件 → 2;没写过的任务 → 0。
+      await projection.appendEvent({
+        eventId: 1, taskId: "task-h1", sessionId: "main",
+        ts: "t1", kind: "session_started", payload: { resume: false },
+      });
+      await projection.appendEvent({
+        eventId: 2, taskId: "task-h1", sessionId: "main",
+        ts: "t2", kind: "turn_finished", payload: { reason: "end_turn" },
+      });
+      assert.equal(await projection.countEvents("task-h1"), 2);
+      assert.equal(await projection.countEvents("task-none"), 0);
+      assert.equal(projection.lastError, undefined);
+    } finally {
+      await projection.close();
+    }
+  });
+
 test("fail-open:数据库不可达,写入不抛错,失败可观测", async () => {
   // 端口 1 永远连不上;这条不依赖临时集群,无 PG 二进制也要跑。
   const logs: string[] = [];
