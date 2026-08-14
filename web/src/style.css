@@ -1,0 +1,42 @@
+/* 与零构建演示页同一视觉语言:说人话、浅深色都能看。 */
+:root { color-scheme: light dark; }
+body {
+  font-family: system-ui, sans-serif;
+  max-width: 860px;
+  margin: 2rem auto;
+  padding: 0 1rem;
+  line-height: 1.6;
+}
+h1 { font-size: 1.3rem; }
+form { display: flex; gap: .5rem; margin: 1rem 0; }
+input[type=text] { flex: 1; padding: .5rem; }
+input.account { max-width: 11rem; }
+button { padding: .45rem .9rem; cursor: pointer; margin: 0 .5rem .4rem 0; }
+button.picked { font-weight: bold; }
+.task {
+  border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-radius: 8px;
+  padding: .8rem 1rem;
+  margin: .8rem 0;
+}
+.status {
+  font-size: .85rem;
+  padding: .1rem .5rem;
+  border-radius: 99px;
+  border: 1px solid currentColor;
+}
+.waiting {
+  border-left: 4px solid #d97706;
+  padding-left: .8rem;
+  margin-top: .6rem;
+}
+.muted { opacity: .7; font-size: .9rem; }
+.alert { color: #dc2626; }
+pre {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  padding: .6rem;
+  border-radius: 6px;
+  overflow-x: auto;
+  max-height: 16rem;
+  font-size: .8rem;
+}

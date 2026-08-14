@@ -1,0 +1,23 @@
+{
+  "name": "mae-flow-cloud-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Mae-Flow 云端正式前端(主 spec §4:React+TS+Vite)",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "typescript": "^5.6.0",
+    "vite": "^7.0.0"
+  }
+}

@@ -116,4 +116,7 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
   摘要/事件副本/外部动作台账三张表,恢复时以现场文件为源重放;
   纯旁路 fail-open——阶段真相仍只在工作区 .mae-flow.json,
   语义测试 tests/projection.test.ts(临时真 PG 集群当裁判);
-- 正式 React 前端(阶段 1+)未动。
+- 正式 React 前端已起头(web/:Vite+React+TS,类型化 API 层,
+  功能与演示页对齐——列表/发起/审批卡/SSE 过程记录/现场面板链接;
+  开发态 vite proxy 到 8787,构建产物由 serve 静态托管**未接**,
+  正式部署形态待定)。
