@@ -92,9 +92,14 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
 
 ## 已知边界(诚实清单)
 
-- 完整需求路径(Grill/Spec/Story/编码/质量链)未在真模型上走过——
-  剧本假模型只能验证管道,阶段 1 收口要接 GLM-5.1 在 fieldtest-java
-  跑一单真需求;流程实际只推进到 config_confirm,后续步骤云端没跑过;
+- 完整需求路径已在真模型上走通(2026-08-14 run3,GLM@bigmodel,
+  fieldtest-java):startup→Grill→Spec→Story→编码→质量链→领域归档,
+  12 张审批卡全程代答,收口于 delivery_review(模型提前收嘴,催办
+  机制由此加入);push→MR→流水线段真模型未走过,交付判定三条路
+  (已推+绿/红/未推)由 delivery.test.ts 假件覆盖;
+- 现场归档在 .pilot/archive/run3-REQ2026081402-glm-delivery
+  (含两张"证据缺口风险卡"——并行派发丢返回登记的实锤,已修:
+  pretooluse 随带 tool_use_id,见 tests/kernelHost.test.ts);
 - fieldtest-java 直接编译验证已过(2026-08-14 本机 macOS:干净副本
   mvn compile / mvn test / 双副本并发 clean compile 全部退出码 0,
   仓库可标 direct);Linux 容器内同套验证仍待做(试点服务器形态);

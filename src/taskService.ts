@@ -86,6 +86,11 @@ interface TaskState {
   cwd?: string;
   /** 活的通知记录:后台退避重试会原地更新,查询时投影最新事实。 */
   notifyRecord?: NotifyRecord;
+  /** 催办账本:上次催办时内核停在哪一步 + 累计次数。
+   * 同一步催过没动弹就不再催(催办只对"忘了继续"有效,
+   * 对"推不动"无效);累计上限防对话式空转。 */
+  nudgedStep?: string;
+  nudgeCount?: number;
 }
 
 export class TaskService {
@@ -369,6 +374,21 @@ export class TaskService {
     return target;
   }
 
+  /** 内核视角的"流程还没走完":状态文件存在且 current 不是 end。
+   * 非内核模式(无 host/状态文件)不判卡壳——演练剧本自己收口。 */
+  private stalledStep(task: TaskState): string | undefined {
+    if (!this.options.host || !task.cwd) return undefined;
+    try {
+      const statePath = join(task.cwd, ".mae-flow.json");
+      if (!existsSync(statePath)) return undefined;
+      const current = String(
+        JSON.parse(readFileSync(statePath, "utf-8"))?.current ?? "");
+      return current && current !== "end" ? current : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   /** outcome → 任务状态。等待人工不占并发额度之外的资源,会话原地挂起。 */
   private async settle(
     task: TaskState,
@@ -379,9 +399,29 @@ export class TaskService {
       case "waiting_for_human":
         task.summary.status = "waiting_for_human";
         task.summary.waiting = outcome.waiting;
+        // 人工节点=流程真实活动,催办账本清零:答复之后若再停在
+        // 同名步骤,那是新一次卡壳,应当再催。
+        task.nudgedStep = undefined;
         this.notifyWaiting(task);
         break;
-      case "turn_finished":
+      case "turn_finished": {
+        // 回合结束≠流程走完:模型可能提前收嘴(run3 实测停在
+        // delivery_review)。内核 current 不在终态且催办还有效时,
+        // 同一会话催办续跑,而不是把半截流程标成 completed。
+        const stalled = this.stalledStep(task);
+        if (stalled && task.driver
+            && task.nudgedStep !== stalled
+            && (task.nudgeCount ?? 0) < 5) {
+          task.nudgedStep = stalled;
+          task.nudgeCount = (task.nudgeCount ?? 0) + 1;
+          this.options.log?.(
+            `任务 ${task.summary.id} 催办续跑(流程停在 ${stalled})`);
+          await this.settle(task, task.driver.continueWith(
+            `流程尚未走完:内核当前步骤是 ${stalled},不是 end。` +
+            `请执行 current 查看本步指引并继续,直到流程 end。` +
+            `所有待确认项都已由用户在面板上答复,不要重复提问。`));
+          break;
+        }
         task.driver?.dispose();
         // 终态在交付判定之后才定:先标 completed 再改,轮询会撞见
         // 中间态(实测竞态)。交付把状态升为 verifying/await_merge,
@@ -391,6 +431,7 @@ export class TaskService {
           task.summary.status = "completed";
         }
         break;
+      }
       case "session_ended":
         task.summary.status = "failed";
         task.summary.detail = outcome.detail ?? outcome.reason;

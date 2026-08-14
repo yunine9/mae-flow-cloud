@@ -181,6 +181,27 @@ export class CloudSession {
     return Promise.race([this.pendingTurn, this.waitingSignal.promise]);
   }
 
+  /** 回合结束但流程未到终态时的催办续跑:同一会话追加一条用户消息。
+   * 模型提前收嘴(run3 实测:拿到 message-id 后直接 end_turn)不等于
+   * 任务完成——阶段真相只看内核状态,宿主负责把会话推回流程。 */
+  async continueWith(text: string): Promise<Outcome> {
+    this.emit("user_message", this.sessionId, { text });
+    this.waitingSignal = deferred<Outcome>();
+    this.pendingTurn = this.session
+      .prompt(text)
+      .then((): Outcome => {
+        this.emit("turn_finished", this.sessionId, { reason: "end_turn" });
+        return { status: "turn_finished", reason: "end_turn" };
+      })
+      .catch((error): Outcome => {
+        this.emit("session_ended", this.sessionId, {
+          reason: "failed", detail: String(error),
+        });
+        return { status: "session_ended", reason: "failed", detail: String(error) };
+      });
+    return Promise.race([this.pendingTurn, this.waitingSignal.promise]);
+  }
+
   /** 把 Web 决定回注为 AskUserQuestion 的工具结果,继续本轮。 */
   async resumeWithDecision(record: WaitingRecord): Promise<Outcome> {
     const waiting = this.waitingRecord;

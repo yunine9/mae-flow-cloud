@@ -59,9 +59,14 @@ export class KernelHost {
   /** pretooluse:exit 2 → deny,打回文案原样给模型(exit 2+stderr 同构)。 */
   async preTool(event: SemanticEvent): Promise<GateDecision | undefined> {
     const payload = event.payload as Record<string, any>;
+    // tool_use_id 必须随 pretooluse 进内核:Agent 生命周期观察以它为
+    // invocation_id,posttooluse 按同一 id 精确对账。缺了它内核只能
+    // 自造 id + 按"当前步同类开放启动恰一条"兜底——同类子 Agent 并行
+    // 派发时兜底判 ambiguous,两个返回全部丢失(run3 实测)。
     const result = await this.dispatch("pretooluse", {
       tool_name: payload.name,
       tool_input: payload.input,
+      tool_use_id: payload.call_id,
       ...this.common(),
     });
     if (result.code === 2) {
