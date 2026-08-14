@@ -103,6 +103,9 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
 - fieldtest-java 直接编译验证已过(2026-08-14 本机 macOS:干净副本
   mvn compile / mvn test / 双副本并发 clean compile 全部退出码 0,
   仓库可标 direct);Linux 容器内同套验证仍待做(试点服务器形态);
-- pi 会话恢复走 `SessionManager.inMemory()`,任务级恢复(§11)靠
-  事件日志与 Git 锚点,pi 侧持久化会话未启用;
-- Web/API/编排/PostgreSQL 投影(阶段 1+)未动。
+- 任务级恢复已实现(tests/recovery.test.ts):进程可死任务不死——
+  重启后 recover() 重建索引,决定走重建会话续跑;pi 侧会话仍是
+  inMemory,重建会话不带旧对话上下文,以内核 current 为锚(设计如此);
+- Linux 容器内编译验证未做(本机无 Docker,属内网侧动作);
+  部署准备件见 docs/deploy-intranet.md;
+- PostgreSQL 投影、正式 React 前端(阶段 1+)未动。
