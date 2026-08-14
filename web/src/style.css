@@ -773,3 +773,33 @@ pre {
   overflow-y: auto;
   color: var(--text);
 }
+
+/* 上下文里的 markdown:表格/代码/列表可读化(渲染器零依赖)。 */
+.waiting-context { font-family: inherit; font-size: .84rem; }
+.md-p { margin: .3rem 0; overflow-wrap: anywhere; }
+.md-heading { font-weight: 650; margin: .5rem 0 .3rem; }
+.md-code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: .92em;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 .3em;
+  overflow-wrap: anywhere;
+}
+.md-table {
+  border-collapse: collapse;
+  margin: .5rem 0;
+  font-size: .82rem;
+  width: 100%;
+}
+.md-table th, .md-table td {
+  border: 1px solid var(--border);
+  padding: .3rem .6rem;
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+.md-table th { background: var(--surface-2); font-weight: 600; }
+.md-list { margin: .3rem 0; padding-left: 1.2rem; }
+.md-list li { margin: .15rem 0; }

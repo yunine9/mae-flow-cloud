@@ -7,6 +7,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import { Markdown } from "./markdown";
 import {
   decide,
   listActions,
@@ -149,7 +150,9 @@ function WaitingCard({
         等你决定{task.waiting?.step ? ` · ${task.waiting.step}` : ""}
       </div>
       {task.waiting?.context && (
-        <div className="waiting-context">{task.waiting.context}</div>
+        <div className="waiting-context">
+          <Markdown text={task.waiting.context} />
+        </div>
       )}
       {questions.map((item) => {
         const longform = (item.options ?? [])
