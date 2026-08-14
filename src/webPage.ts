@@ -78,6 +78,10 @@ async function refresh() {
       html += '<div style="color:#dc2626">⚠ 小鲁班通知没送到'
         + '(已试 ' + task.notify.attempts + ' 次)——待办仍在,请在本页处理。</div>';
     }
+    if (task.status !== "queued") {
+      html += '<div><a href="/tasks/' + task.id + '/panel" target="_blank">'
+        + '打开现场面板</a><span class="muted">(检视材料都在里面)</span></div>';
+    }
     el.innerHTML = html;
     if (task.status === "waiting_for_human" && task.waiting) {
       el.appendChild(waitingCard(task));

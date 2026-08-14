@@ -7,7 +7,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { get } from "node:http";
@@ -132,6 +132,40 @@ test("任务 API 整链:等待人工/409 冲突/决定生效/SSE 镜像", async 
     const listed = await fetch(`${base}/tasks`).then((r) => r.json());
     assert.equal(listed.length, 1);
     assert.equal(listed[0].status, "completed");
+  } finally {
+    server.close();
+    await model.stop();
+  }
+});
+
+test("现场面板路由:没有面板时说人话,有面板时原样呈现", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-panel-"));
+  const model = new ScriptedModelServer([{ text: "开工即收工" }]);
+  await model.start();
+  const service = new TaskService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+  });
+  const server = createTaskServer(service);
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  try {
+    const created = service.create("演练:面板路由");
+    await new Promise((r) => setTimeout(r, 500));
+    const missing = await fetch(`${base}/tasks/${created.id}/panel`);
+    assert.equal(missing.status, 404);
+    assert.match((await missing.json()).error, /还没有现场面板/);
+
+    // 内核会在任务工作区生成单文件面板;这里替它放一份。
+    const workDir = join(created.workspace, ".mae-flow-work");
+    mkdirSync(workDir, { recursive: true });
+    writeFileSync(join(workDir, "panel.html"), "<h1>现场面板</h1>");
+    const page = await fetch(`${base}/tasks/${created.id}/panel`);
+    assert.equal(page.status, 200);
+    assert.match(await page.text(), /现场面板/);
+    // 路由白名单:面板目录里的其他文件不放行。
+    const sneak = await fetch(`${base}/tasks/${created.id}/secrets.txt`);
+    assert.equal(sneak.status, 404);
   } finally {
     server.close();
     await model.stop();

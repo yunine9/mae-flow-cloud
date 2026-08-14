@@ -15,12 +15,15 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
 export interface NotifyRecord {
+  /** 幂等键:待办通知=waiting_id;收口通知=taskId:outcome:状态。 */
   waiting_id: string;
   task_id: string;
   account: string;
   step: string;
   summary: string;
   link: string;
+  /** 投递正文(说人话,构造时定稿;重试只重发不重写)。 */
+  text: string;
   attempts: number;
   delivered: boolean;
   last_error: string;
@@ -61,12 +64,44 @@ export class Notifier {
       step: input.step,
       summary: input.summary,
       link: input.link,
+      text:
+        `【Mae-Flow】任务 ${input.taskId} 等你决定` +
+        `(${input.step || "当前步骤"}):${input.summary}`,
       attempts: 0,
       delivered: false,
       last_error: "",
     };
     this.records.set(input.waitingId, record);
     // 投递在后台走,不阻塞流程:通知只是提醒,待办本体在 Web。
+    void this.deliver(record);
+    return record;
+  }
+
+  /** 任务收口通知(完成/交付/失败)。同任务同状态幂等——
+   * 恢复重放或催办多次收轮,用户只收一条。 */
+  async notifyOutcome(input: {
+    taskId: string;
+    account: string;
+    status: string;
+    summary: string;
+    link: string;
+  }): Promise<NotifyRecord> {
+    const key = `${input.taskId}:outcome:${input.status}`;
+    const existing = this.records.get(key);
+    if (existing) return existing;
+    const record: NotifyRecord = {
+      waiting_id: key,
+      task_id: input.taskId,
+      account: input.account,
+      step: input.status,
+      summary: input.summary,
+      link: input.link,
+      text: `【Mae-Flow】任务 ${input.taskId} ${input.summary}`,
+      attempts: 0,
+      delivered: false,
+      last_error: "",
+    };
+    this.records.set(key, record);
     void this.deliver(record);
     return record;
   }
@@ -82,9 +117,7 @@ export class Notifier {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             account: record.account,
-            text:
-              `【Mae-Flow】任务 ${record.task_id} 等你决定` +
-              `(${record.step || "当前步骤"}):${record.summary}`,
+            text: record.text,
             link: record.link,
           }),
         });

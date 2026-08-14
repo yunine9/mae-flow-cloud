@@ -136,6 +136,15 @@ export class TaskService {
     return join(this.tasks.get(id)!.summary.workspace, "events.jsonl");
   }
 
+  /** 内核现场面板文件(panel.html / panel-pulse.js / panel-stamp.js)。
+   * 名字白名单由路由把守,这里只按任务工作区定位;不存在返回 undefined。 */
+  panelFile(id: string, name: string): string | undefined {
+    const task = this.tasks.get(id);
+    if (!task?.cwd) return undefined;
+    const file = join(task.cwd, ".mae-flow-work", name);
+    return existsSync(file) ? file : undefined;
+  }
+
   create(
     requirement: string,
     options: { account?: string } = {},
@@ -489,6 +498,31 @@ export class TaskService {
     return target;
   }
 
+  /** 任务收口 → 小鲁班(说人话)。语义同待办通知:失败不改流程,
+   * 同任务同状态幂等。没配通知器或没填账号静默跳过。 */
+  private notifyOutcome(task: TaskState): void {
+    const { notifier } = this.options;
+    const account = task.summary.luban_account;
+    if (!notifier || !account) return;
+    const { status, delivery, detail, id } = task.summary;
+    const text: Record<string, string> = {
+      await_merge: `已提合入请求,流水线通过,等待合入`
+        + (delivery?.mr_url ? `:${delivery.mr_url}` : ""),
+      verifying: "代码已提交,流水线验证中",
+      completed: "已完成"
+        + (delivery?.skipped ? `(${delivery.skipped})` : ""),
+      failed: `出错了:${detail || "原因见任务页"}`,
+    };
+    if (!text[status]) return;
+    void notifier.notifyOutcome({
+      taskId: id,
+      account,
+      status,
+      summary: text[status],
+      link: `${this.options.linkBase ?? ""}/tasks/${id}`,
+    });
+  }
+
   /** 内核视角的"流程还没走完":current 不是 end;状态文件不存在=
    * 连 init 都没走(run4 实测:空转回合把未 init 的任务标成 completed),
    * 同样算卡壳。非内核模式(无 host)不判——演练剧本自己收口。 */
@@ -549,6 +583,7 @@ export class TaskService {
           task.summary.status = "completed";
         }
         this.persist(task);
+        this.notifyOutcome(task);
         break;
       }
       case "session_ended":
@@ -556,6 +591,7 @@ export class TaskService {
         task.summary.detail = outcome.detail ?? outcome.reason;
         task.driver?.dispose();
         this.persist(task);
+        this.notifyOutcome(task);
         break;
     }
   }

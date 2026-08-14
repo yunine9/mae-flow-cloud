@@ -124,3 +124,30 @@ test("端到端:任务进入等待即通知;通知死透不改流程,页面可�
     await luban.stop();
   }
 });
+
+test("收口通知:完成/交付说人话送达;同任务同状态幂等", async () => {
+  const luban = new FakeLubanServer();
+  await luban.start();
+  try {
+    const notifier = new Notifier({ endpoint: luban.endpoint });
+    const first = await notifier.notifyOutcome({
+      taskId: "T-2", account: "liaoxiang", status: "await_merge",
+      summary: "已提合入请求,流水线通过,等待合入:http://git/mr/1",
+      link: "http://x/tasks/T-2",
+    });
+    await until(() => (first.delivered ? true : undefined), "投递完成");
+    const again = await notifier.notifyOutcome({
+      taskId: "T-2", account: "liaoxiang", status: "await_merge",
+      summary: "重复收轮不应重复通知",
+      link: "http://x/tasks/T-2",
+    });
+    assert.equal(again, first);
+    assert.equal(luban.messages.length, 1);
+    const message = luban.messages[0] as Record<string, string>;
+    assert.match(message.text, /任务 T-2/);
+    assert.match(message.text, /等待合入/);
+    assert.match(message.text, /http:\/\/git\/mr\/1/);
+  } finally {
+    await luban.stop();
+  }
+});

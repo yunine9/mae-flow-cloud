@@ -86,6 +86,26 @@ export function createTaskServer(service: TaskService): Server {
         if (request.method === "GET" && parts[2] === "events") {
           return streamEvents(service, id, response);
         }
+        // 内核现场面板(铁原则:请用户检视的东西必须在面板可见)。
+        // panel 是内核生成的单文件 HTML,pulse/stamp 是它的自动刷新
+        // 探针(相对路径 script src),同前缀一起放行。
+        if (request.method === "GET" && parts.length === 3
+            && ["panel", "panel-pulse.js", "panel-stamp.js"]
+              .includes(parts[2])) {
+          const name = parts[2] === "panel" ? "panel.html" : parts[2];
+          const file = service.panelFile(id, name);
+          if (!file) {
+            return json(response, 404, {
+              error: "这个任务还没有现场面板(流程未初始化或演练模式)",
+            });
+          }
+          response.writeHead(200, {
+            "content-type": name.endsWith(".js")
+              ? "text/javascript; charset=utf-8"
+              : "text/html; charset=utf-8",
+          });
+          return response.end(readFileSync(file));
+        }
       }
       return json(response, 404, { error: "未知路径" });
     } catch (error) {
