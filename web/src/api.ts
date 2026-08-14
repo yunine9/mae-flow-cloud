@@ -90,15 +90,22 @@ export async function createTask(
   });
 }
 
-/** 提交决定。409 = 先到决定已生效,把服务端的话原样带给调用方。 */
+/** 提交决定。409 = 先到决定已生效,把服务端的话原样带给调用方。
+ * answers 的值是自由字符串——点选项和自定义答复走同一条通路;
+ * notes 是整卡备注,非空才随身。 */
 export async function decide(
   taskId: string,
   stateVersion: number,
   answers: Record<string, string>,
+  notes?: string,
 ): Promise<{ conflict?: string }> {
   const response = await fetch(`/tasks/${taskId}/decision`, {
     method: "POST",
-    body: JSON.stringify({ state_version: stateVersion, answers }),
+    body: JSON.stringify({
+      state_version: stateVersion,
+      answers,
+      notes: notes?.trim() || undefined,
+    }),
   });
   if (response.status === 409) {
     const body = await response.json().catch(() => ({}));

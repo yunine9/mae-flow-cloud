@@ -92,9 +92,12 @@ export function TaskCard({
   );
 }
 
-/** 审批卡:每题点选,答满才能提交;409 把服务端的话原样呈现。
+/** 审批卡:每题点选或"✎ 其他"自定义答复(与点选互斥),答满才能
+ * 提交;整卡可附备注(notes);409 把服务端的话原样呈现。
  * 选项两种排布:全短 → 行内紧凑;有长文案(run7 风险卡实测整段
- * 长文)→ 通栏卡片式,整块可点、自然换行。 */
+ * 长文)→ 通栏卡片式,整块可点、自然换行。
+ * 内核有的卡明说"请在 Other 中说明修改点"——answers 的值本来就是
+ * 自由字符串,这里只是把通路的前端入口补上。 */
 function WaitingCard({
   task,
   onDecided,
@@ -103,13 +106,39 @@ function WaitingCard({
   onDecided: () => void;
 }) {
   const [picked, setPicked] = useState<Record<string, string>>({});
+  const [custom, setCustom] = useState<Record<string, string>>({});
+  const [customOpen, setCustomOpen] = useState<Record<string, boolean>>({});
+  const [notes, setNotes] = useState("");
+  const [notesOpen, setNotesOpen] = useState(false);
   const [conflict, setConflict] = useState("");
   const questions = task.waiting?.question?.questions ?? [];
-  const ready = questions.every((item) => picked[item.question]);
+
+  /** 该题的生效答案:自定义框开着且非空 → 自定义文本;否则点选项。 */
+  const answerOf = (question: string) =>
+    customOpen[question] && custom[question]?.trim()
+      ? custom[question].trim()
+      : picked[question];
+  const ready = questions.every((item) => answerOf(item.question));
+
+  function pickOption(question: string, option: string) {
+    setPicked({ ...picked, [question]: option });
+    // 点选即放弃自定义:互斥语义,免得提交的不是屏幕上高亮的。
+    setCustomOpen({ ...customOpen, [question]: false });
+    setCustom({ ...custom, [question]: "" });
+  }
+
+  function openCustom(question: string) {
+    setCustomOpen({ ...customOpen, [question]: true });
+    setPicked({ ...picked, [question]: "" });
+  }
 
   async function submit() {
+    const answers: Record<string, string> = {};
+    for (const item of questions) {
+      answers[item.question] = answerOf(item.question)!;
+    }
     const result = await decide(
-      task.id, task.waiting!.state_version, picked);
+      task.id, task.waiting!.state_version, answers, notes);
     if (result.conflict) setConflict(result.conflict);
     onDecided();
   }
@@ -123,6 +152,8 @@ function WaitingCard({
         const longform = (item.options ?? [])
           .some((option) => option.length > 24)
           || (item.question ?? "").length > 60;
+        const customActive =
+          !!customOpen[item.question] && !!custom[item.question]?.trim();
         return (
           <div className="question" key={item.question}>
             <div className="question-text">
@@ -135,16 +166,52 @@ function WaitingCard({
                   className={
                     "option"
                     + (picked[item.question] === option ? " picked" : "")}
-                  onClick={() =>
-                    setPicked({ ...picked, [item.question]: option })}
+                  onClick={() => pickOption(item.question, option)}
                 >
                   {option}
                 </button>
               ))}
+              {!customOpen[item.question] && (
+                <button
+                  className="option custom-entry"
+                  onClick={() => openCustom(item.question)}
+                >
+                  ✎ 其他
+                </button>
+              )}
             </div>
+            {customOpen[item.question] && (
+              <div className="custom-answer">
+                <textarea
+                  className={"custom-input" + (customActive ? " picked" : "")}
+                  placeholder="自定义答复,例如需要修改的点…"
+                  value={custom[item.question] ?? ""}
+                  autoFocus
+                  onChange={(change) => setCustom(
+                    { ...custom, [item.question]: change.target.value })}
+                />
+                {customActive && (
+                  <div className="note">将以上面的自定义答复提交本题。</div>
+                )}
+              </div>
+            )}
           </div>
         );
       })}
+      {!notesOpen ? (
+        <button className="notes-entry" onClick={() => setNotesOpen(true)}>
+          + 备注
+        </button>
+      ) : (
+        <input
+          type="text"
+          className="notes-input"
+          placeholder="备注(随决定一起记录,可留空)"
+          value={notes}
+          autoFocus
+          onChange={(change) => setNotes(change.target.value)}
+        />
+      )}
       <button className="submit" disabled={!ready} onClick={submit}>
         提交决定
       </button>

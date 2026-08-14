@@ -449,3 +449,55 @@ pre {
   font-size: .8rem;
   white-space: nowrap;
 }
+
+/* ---- 审批卡:自定义答复与备注 ---- */
+.custom-entry {
+  color: var(--text-muted);
+  border-style: dashed;
+}
+.custom-entry:hover { color: var(--accent); }
+.custom-answer { margin-top: .15rem; }
+.custom-input {
+  width: 100%;
+  min-height: 4.5rem;
+  resize: vertical;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: 8px;
+  padding: .5rem .7rem;
+  font: inherit;
+  font-size: .86rem;
+  line-height: 1.6;
+  outline: none;
+}
+.custom-input:focus { border-color: var(--accent); }
+.custom-input.picked {
+  border-color: var(--accent);
+  background: var(--accent-weak);
+}
+.notes-entry {
+  display: block;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  font-size: .84rem;
+  cursor: pointer;
+  padding: .2rem 0;
+  margin: .1rem 0 .4rem;
+}
+.notes-entry:hover { color: var(--accent); }
+.notes-input {
+  display: block;
+  width: 100%;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: 8px;
+  padding: .45rem .7rem;
+  font: inherit;
+  font-size: .86rem;
+  margin: .1rem 0 .55rem;
+  outline: none;
+}
+.notes-input:focus { border-color: var(--accent); }
