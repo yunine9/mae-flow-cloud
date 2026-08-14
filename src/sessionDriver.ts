@@ -44,6 +44,13 @@ export interface Outcome {
   detail?: string;
 }
 
+/** 深层宿主钩子(=内核 dispatch 合成,见 kernelHost.ts)。全部可选:
+ * 不接时行为与演练模式一致,接上时内核契约成为真正的门禁与证据引擎。 */
+export interface HostHooks {
+  preTool?(event: SemanticEvent): Promise<{ action: string; reason?: string } | undefined>;
+  postTool?(event: SemanticEvent): Promise<void>;
+}
+
 export interface CloudSessionOptions {
   taskId: string;
   workspace: string;
@@ -54,6 +61,7 @@ export interface CloudSessionOptions {
   transcript: TranscriptStore;
   gate: GateService;
   humanGate: HumanGate;
+  hostHooks?: HostHooks;
   currentStep?: () => string;
   log?: (message: string) => void;
 }
@@ -120,7 +128,7 @@ export class CloudSession {
     kind: SemanticEventKind,
     sessionId: string,
     payload: Record<string, unknown>,
-  ): void {
+  ): SemanticEvent {
     const event: SemanticEvent = {
       eventId: this.options.eventLog.lastEventId() + 1,
       taskId: this.options.taskId,
@@ -133,6 +141,7 @@ export class CloudSession {
     if (error) throw new Error(error);
     this.options.eventLog.append(event);
     this.options.transcript.record(event);
+    return event;
   }
 
   // ---- 生命周期 ----
@@ -169,13 +178,15 @@ export class CloudSession {
       notes: record.notes,
     });
     // 宿主代演的工具结果由 driver 登记;pi 的回声按 hostAnswered 丢弃。
-    this.emit("tool_finished", this.sessionId, {
+    const finished = this.emit("tool_finished", this.sessionId, {
       call_id: waiting.call_id,
       name: "AskUserQuestion",
       input: waiting.question,
       is_error: false,
       result: renderDecision(record),
     });
+    // 决定进内核:旧插件 posttooluse 捕获 AskUserQuestion 答案的同一路径。
+    void this.options.hostHooks?.postTool?.(finished);
     this.hostAnswered.add(waiting.call_id);
     this.decisionResolvers.delete(waiting.call_id);
     this.waitingRecord = undefined;
@@ -243,6 +254,12 @@ export class CloudSession {
     };
     this.options.eventLog.append(semantic);
     this.options.transcript.record(semantic);
+    // 深层契约(内核 dispatch)先裁——它拦的是谎言与授权;
+    // GateService 的注入契约(演练/附加规则)随后。任一 deny 即打回。
+    const host = await this.options.hostHooks?.preTool?.(semantic);
+    if (host?.action === "deny") {
+      return { block: true, reason: host.reason ?? "被 mae-flow 门禁打回" };
+    }
     const decision = this.options.gate.decide(semantic);
     if (decision.action === "deny") {
       return { block: true, reason: decision.reason ?? "被 mae-flow 门禁打回" };
@@ -281,13 +298,24 @@ export class CloudSession {
         .filter((block: any) => block?.type === "text")
         .map((block: any) => String(block.text ?? ""))
         .join("\n");
-      this.emit("tool_finished", sessionId, {
-        call_id: callId,
-        name: TOOL_NAME_MAP[rawName] ?? rawName,
-        input,
-        is_error: Boolean(event.isError),
-        result,
-      });
+      const semantic: SemanticEvent = {
+        eventId: this.options.eventLog.lastEventId() + 1,
+        taskId: this.options.taskId,
+        sessionId,
+        ts: new Date().toISOString().replace("T", " ").slice(0, 19),
+        kind: "tool_finished",
+        payload: {
+          call_id: callId,
+          name: TOOL_NAME_MAP[rawName] ?? rawName,
+          input,
+          is_error: Boolean(event.isError),
+          result,
+        },
+      };
+      this.options.eventLog.append(semantic);
+      this.options.transcript.record(semantic);
+      // 证据登记交内核(fire 进 KernelHost 的串行链,顺序由它保证)。
+      void this.options.hostHooks?.postTool?.(semantic);
     }
   }
 
@@ -381,6 +409,19 @@ export class CloudSession {
   ): Promise<string> {
     this.childCount += 1;
     const childId = `child-${this.childCount}`;
+    // 派发意图先过内核 pretooluse:记 started 观察、验任务卡契约;
+    // 内核打回即不派(打回文案原样返回给主 Agent)。
+    const hostVerdict = await this.options.hostHooks?.preTool?.({
+      eventId: this.options.eventLog.lastEventId(),
+      taskId: this.options.taskId,
+      sessionId: this.sessionId,
+      ts: "",
+      kind: "tool_requested",
+      payload: { call_id: callId, name: "Task", input: params },
+    });
+    if (hostVerdict?.action === "deny") {
+      throw new Error(hostVerdict.reason ?? "派发被 mae-flow 门禁打回");
+    }
     this.emit("agent_spawned", this.sessionId, {
       call_id: callId,
       agent_type: String(params.subagent_type ?? ""),
@@ -417,6 +458,19 @@ export class CloudSession {
       final_text: finalText,
     });
     this.hostAnswered.add(callId); // pi 对 dispatch_agent 的回声丢弃
+    // 完成对账进内核:posttooluse(Task) 走 hook_agent_lifecycle 的
+    // tool_use_id 绑定,子 transcript 布局与旧确定性解析一致。
+    void this.options.hostHooks?.postTool?.({
+      eventId: this.options.eventLog.lastEventId(),
+      taskId: this.options.taskId,
+      sessionId: this.sessionId,
+      ts: "",
+      kind: "tool_finished",
+      payload: {
+        call_id: callId, name: "Task", input: params,
+        is_error: lifecycle !== "returned", result: finalText,
+      },
+    });
     if (lifecycle !== "returned") {
       throw new Error(finalText || "子 Agent 中断,无最终报告");
     }

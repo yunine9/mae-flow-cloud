@@ -30,7 +30,8 @@ src/
   gateService.ts      同步裁决点:路由 + 深层契约端口(=内核 CLI)+ fail-open
   humanGate.ts        WAITING_FOR_HUMAN:同 call_id 幂等、先到决定生效
   sessionDriver.ts    进程内会话驱动(拦截/挂起/子会话/登记归属规则)
-  taskService.ts      任务编排:工作区/受限并发队列/状态由 outcome 驱动
+  kernelHost.ts       内核宿主:合成 Hook 载荷喂 dispatch.py,深层门禁/证据全走内核
+  taskService.ts      任务编排:工作区/受限并发队列/状态由 outcome 驱动;host 模式=克隆仓库+内核 bootstrap
   server.ts           任务 API:REST + SSE(决定冲突=409 任务状态已变化)
   webPage.ts          零构建演示页:列表/发起/审批卡直接点(说人话)
   serve.ts            启动入口(演示=内置剧本假模型;--models 接真网关)
@@ -65,10 +66,23 @@ probe 现场留档在 `.probe/`,serve 的任务现场在 `.tasks/<task-id>/`
 注意:环回地址永远直连(`sessionDriver.ensureLoopbackDirect`),
 内网代理会把 127.0.0.1 的请求劫走(实测 502)。
 
+## 内核纵向闭环(阶段 1,已通)
+
+深层门禁与证据登记**直接复用旧插件适配器**:云端把语义事件合成为
+Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
+`hooks/dispatch.py`——exit 2 = 打回,文案原样进模型视野;内核零改动。
+任务创建 = 克隆仓库 → 内核 bootstrap(捕获需求原话、铺转发壳)→
+首条 prompt 带内核自己的开工引导 → Agent 跑 `init/current` 推进流程。
+集成测试(tests/kernel.test.ts)在 fieldtest-java 上验证:init 真实
+初始化、current 出步骤指令、伪造 `.mae-flow.json` 被内核当场打回。
+所有 dispatch 调用串行化(posttool 写状态,与下一条 pretool 交错
+就是并发写状态——旧世界由宿主天然串行,这里用 promise 链保住)。
+
 ## 已知边界(诚实清单)
 
-- gate 深层契约(gate-edit/gate-bash 证据链)只留了端口,接线形态是
-  调用容器内内核 CLI,未实现;
+- 完整需求路径(Grill/Spec/Story/编码/质量链)未在真模型上走过——
+  剧本假模型只能验证管道,阶段 1 收口要接 GLM-5.1 在 fieldtest-java
+  跑一单真需求;
 - pi 会话恢复走 `SessionManager.inMemory()`,任务级恢复(§11)靠
   事件日志与 Git 锚点,pi 侧持久化会话未启用;
 - Web/API/编排/PostgreSQL 投影(阶段 1+)未动。

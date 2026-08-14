@@ -9,8 +9,10 @@
  * 决定消费走 HumanGate 的先到生效语义,冲突原样抛给 API 层变 409。
  */
 
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { cpSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { basename, join } from "node:path";
+import { KernelHost } from "./kernelHost.ts";
 import { EventLog } from "./semanticEvents.ts";
 import { TranscriptStore } from "./transcriptStore.ts";
 import { GateService, type GateContract } from "./gateService.ts";
@@ -42,6 +44,10 @@ export interface TaskServiceOptions {
   modelsJson: Record<string, unknown>;
   maxConcurrent?: number;
   contract?: GateContract;
+  /** 内核模式(阶段 1 纵向闭环):任务=克隆 repoPath → 内核 bootstrap
+   * (sessionstart+userprompt 捕获需求、铺转发壳)→ 深层门禁与证据
+   * 全部经 kernelHost 走内核 dispatch。不配则为纯会话模式(演练)。 */
+  host?: { kernelRoot: string; repoPath: string; python?: string };
   log?: (message: string) => void;
 }
 
@@ -139,28 +145,74 @@ export class TaskService {
       writeFileSync(
         join(agentDir, "models.json"),
         JSON.stringify(this.options.modelsJson));
+      const transcriptPath = join(workspace, "transcript.jsonl");
+      let cwd = workspace;
+      let prompt = task.summary.requirement;
+      let hostHooks;
+      if (this.options.host) {
+        cwd = this.cloneRepo(workspace);
+        const kernel = new KernelHost({
+          kernelRoot: this.options.host.kernelRoot,
+          workspace: cwd,
+          transcriptPath,
+          taskId: task.summary.id,
+          python: this.options.host.python,
+          log: this.options.log,
+        });
+        // 首条 prompt = 需求 + 内核自己的开工引导(转发壳/init 指引),
+        // 不由云端复述内核该说的话。
+        const guidance = await kernel.bootstrap(task.summary.requirement);
+        prompt = guidance
+          ? `${task.summary.requirement}\n\n${guidance}`
+          : task.summary.requirement;
+        hostHooks = {
+          preTool: kernel.preTool.bind(kernel),
+          postTool: kernel.postTool.bind(kernel),
+        };
+      }
       task.driver = await CloudSession.create({
         taskId: task.summary.id,
-        workspace,
+        workspace: cwd,
         agentDir,
         provider: this.options.provider,
         model: this.options.model,
         eventLog: new EventLog(join(workspace, "events.jsonl")),
-        transcript: new TranscriptStore(
-          join(workspace, "transcript.jsonl"), "main"),
+        transcript: new TranscriptStore(transcriptPath, "main"),
         gate: new GateService({
           contract: this.options.contract,
           log: this.options.log,
         }),
         humanGate: task.humanGate,
+        hostHooks,
         log: this.options.log,
       });
-      await this.settle(task, task.driver.start(task.summary.requirement));
+      await this.settle(task, task.driver.start(prompt));
     } catch (error) {
       task.summary.status = "failed";
       task.summary.detail = String(error);
       this.options.log?.(`任务 ${task.summary.id} 启动失败: ${String(error)}`);
     }
+  }
+
+  /** 仓库进工作区:git 仓走 clone(历史/分支语义齐全),
+   * 非 git 目录降级复制并剔除旧现场(.mae-flow-work 不跨任务串场)。 */
+  private cloneRepo(workspace: string): string {
+    const source = this.options.host!.repoPath;
+    const target = join(workspace, basename(source) || "repo");
+    if (existsSync(join(source, ".git"))) {
+      const cloned = spawnSync(
+        "git", ["clone", "--quiet", source, target], { encoding: "utf-8" });
+      if (cloned.status !== 0) {
+        throw new Error(`仓库克隆失败: ${cloned.stderr}`);
+      }
+    } else {
+      cpSync(source, target, {
+        recursive: true,
+        filter: (path) => !path.includes(".mae-flow-work")
+          && !path.endsWith(".mae-flow.json"),
+      });
+    }
+    return target;
   }
 
   /** outcome → 任务状态。等待人工不占并发额度之外的资源,会话原地挂起。 */
