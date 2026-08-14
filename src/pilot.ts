@@ -65,7 +65,11 @@ async function main(): Promise<number> {
     console.error(`[pilot] 找不到模型配置: ${modelsPath}`);
     return 1;
   }
-  const dataDir = join(REPO_ROOT, ".pilot");
+  // 每次试跑一个独立现场目录:不删现场是纪律,目录隔离让纪律免维护
+  // (跑完即归档,无需手动搬走,也不可能互相覆盖)。
+  const label = flag("--label",
+    "run-" + new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19))!;
+  const dataDir = join(REPO_ROOT, ".pilot", label);
   // 内网件全用假件:裸仓当 Git 服务端,MR/流水线走环回 API,小鲁班收消息。
   const platform = new FakeGitPlatform();
   platform.initBare(repoPath, dataDir);
