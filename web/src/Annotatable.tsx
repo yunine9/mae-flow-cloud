@@ -25,8 +25,16 @@ interface Draft {
   host: HTMLElement;
 }
 
+/** 原文快照只取"内容"那一段。
+ *
+ * 渲染出来的一行里还夹着行号和 diff 的 +/− 标记;整行 textContent 抓下来
+ * 就是 `28+ ? "push 已发送"` 这种脏原文——送给模型是噪声,回头重锚定更是
+ * 一比一个不中,于是"这处已被改动"整片误报(实测:代码一字没动,三条
+ * 全被标成已改)。带 data-code 的子节点就是内容本身,有它就只认它。
+ */
 function anchorOf(node: HTMLElement): string {
-  const text = (node.textContent ?? "").replace(/\s+/g, " ").trim();
+  const content = node.querySelector<HTMLElement>("[data-code]") ?? node;
+  const text = (content.textContent ?? "").replace(/\s+/g, " ").trim();
   return text.length > ANCHOR_MAX ? text.slice(0, ANCHOR_MAX) : text;
 }
 
@@ -54,6 +62,7 @@ export function Annotatable({
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [hovered, setHovered] = useState<HTMLElement>();
 
   // 已圈过的行留一道竖杠:人扫一眼就知道自己圈到哪儿了。
   // 每次 items/内容变化都重刷——渲染器可能整块换掉。
@@ -73,14 +82,9 @@ export function Annotatable({
     }
   }, [items, artifact, children]);
 
-  function open(event: React.MouseEvent) {
-    const target = event.target as HTMLElement | null;
-    if (!target?.closest) return;
+  function openRow(row: HTMLElement) {
     // 划词是在读,不是要批注——有选区就别弹编辑框(内核那条经验)。
     if (String(window.getSelection() ?? "").trim()) return;
-    if (target.closest("button, a, textarea, input, .annot-editor")) return;
-    const row = target.closest<HTMLElement>("[data-l]");
-    if (!row) return;
     const line = Number(row.dataset.l);
     if (!Number.isFinite(line) || line <= 0) return;
     const anchor = anchorOf(row);
@@ -95,6 +99,23 @@ export function Annotatable({
       kind,
       host: row,
     });
+    setHovered(undefined);
+  }
+
+  function open(event: React.MouseEvent) {
+    const target = event.target as HTMLElement | null;
+    if (!target?.closest) return;
+    if (target.closest("button, a, textarea, input, .annot-editor")) return;
+    const row = target.closest<HTMLElement>("[data-l]");
+    if (row) openRow(row);
+  }
+
+  function track(event: React.MouseEvent) {
+    if (draft) return;
+    const target = event.target as HTMLElement | null;
+    if (!target?.closest || target.closest(".annot-fab, .annot-editor")) return;
+    const row = target.closest<HTMLElement>("[data-l]");
+    setHovered((current) => current === row ? current : row ?? undefined);
   }
 
   async function save() {
@@ -121,8 +142,31 @@ export function Annotatable({
   }
 
   return (
-    <div className="annotatable" ref={host} onClick={open}>
+    <div
+      className="annotatable"
+      ref={host}
+      onClick={open}
+      onMouseMove={track}
+      onMouseLeave={() => setHovered(undefined)}
+    >
       {children}
+      {hovered && !draft && (
+        <button
+          type="button"
+          className="annot-fab"
+          aria-label={`给第 ${hovered.dataset.l} 行添加批注`}
+          style={fabPosition(hovered, host.current)}
+          onClick={(event) => {
+            event.stopPropagation();
+            openRow(hovered);
+          }}
+        >
+          <svg viewBox="0 0 20 20" aria-hidden>
+            <path d="M4.25 5.25A2.25 2.25 0 0 1 6.5 3h7A2.25 2.25 0 0 1 15.75 5.25v5.5A2.25 2.25 0 0 1 13.5 13h-4l-3.25 2.5V13A2.25 2.25 0 0 1 4 10.75v-5.5Z" />
+            <path d="M10 6v4M8 8h4" />
+          </svg>
+        </button>
+      )}
       {draft && (
         <div
           className="annot-editor"
@@ -164,6 +208,34 @@ export function Annotatable({
   );
 }
 
+/** 图标跟着行尾,但永远夹在可视内容宽度内；长 diff 不会把按钮甩到横向
+ * 滚动区之外。 */
+function fabPosition(
+  row: HTMLElement,
+  root: HTMLElement | null,
+): React.CSSProperties {
+  if (!root) return {};
+  const rowBox = row.getBoundingClientRect();
+  // 专注审阅器是 fixed 全屏层,脱离了外层材料区的排版流。此时按钮也
+  // 必须按视口定位并抬到审阅器上方,否则会算到原来那块 639px 容器里。
+  if (row.closest(".git-change-view.is-focused")) {
+    const size = 32;
+    return {
+      position: "fixed",
+      zIndex: 260,
+      top: rowBox.top + Math.max(2, (rowBox.height - size) / 2),
+      left: Math.min(window.innerWidth - size - 7, rowBox.right - size - 6),
+    };
+  }
+  const rootBox = root.getBoundingClientRect();
+  const size = 32;
+  const rowRight = rowBox.right - rootBox.left + root.scrollLeft;
+  const left = Math.max(4, Math.min(root.clientWidth - size - 6, rowRight - size - 5));
+  const top = rowBox.top - rootBox.top + root.scrollTop
+    + Math.max(2, Math.min(8, (rowBox.height - size) / 2));
+  return { top, left };
+}
+
 /** 编辑框贴在被圈那一行下面。用绝对定位而不是插进 DOM:插进去会打乱
  * 渲染器的结构(列表里塞进两个 li 之间就是坏结构),而且 React 下次
  * 重渲染会把它抹掉。 */
@@ -173,6 +245,16 @@ function editorPosition(
 ): React.CSSProperties {
   if (!root) return {};
   const rowBox = row.getBoundingClientRect();
+  if (row.closest(".git-change-view.is-focused")) {
+    const width = Math.min(540, window.innerWidth - 32);
+    return {
+      position: "fixed",
+      zIndex: 270,
+      width,
+      top: Math.min(rowBox.bottom + 5, window.innerHeight - 190),
+      left: Math.max(16, Math.min(rowBox.left, window.innerWidth - width - 16)),
+    };
+  }
   const rootBox = root.getBoundingClientRect();
   return {
     top: rowBox.bottom - rootBox.top + root.scrollTop + 4,

@@ -45,14 +45,18 @@ export function SteerBox({
 
   return (
     <div className="steer">
-      <label className="steer-label" htmlFor={`steer-${taskId}`}>
-        它正在跑，有话现在就说
-      </label>
+      <div className="steer-head">
+        <label className="steer-label" htmlFor={`steer-${taskId}`}>
+          补充任务说明
+        </label>
+        <span>执行中可发送</span>
+      </div>
+      <p className="steer-copy">补充约束或修正方向，任务会在当前操作结束后读取。</p>
       <textarea
         id={`steer-${taskId}`}
         className="steer-input"
         value={text}
-        placeholder="比如：掩码要保留后四位，别把区号也盖了"
+        placeholder="例如：掩码保留后四位，不要处理区号"
         rows={3}
         onChange={(event) => {
           setText(event.target.value);
@@ -69,7 +73,7 @@ export function SteerBox({
       <div className="steer-actions">
         <span className="steer-hint">
           {sent && !text
-            ? "已发出——它做完手头这件事就会收到"
+            ? "已发送，等待任务读取"
             : "⌘/Ctrl + Enter 发送"}
         </span>
         <button
@@ -78,7 +82,7 @@ export function SteerBox({
           disabled={busy || !text.trim()}
           onClick={() => void send()}
         >
-          {busy ? "发送中…" : "发给它"}
+          {busy ? "发送中…" : "发送补充说明"}
         </button>
       </div>
       {error && <div className="alert">{error}</div>}

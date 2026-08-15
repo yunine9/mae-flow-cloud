@@ -2,20 +2,44 @@
    插话是自成一块的东西,分开放谁都不踩谁。色板复用同一套变量。 */
 
 .steer {
-  margin-top: 14px;
-  padding: 14px;
+  margin-top: 2px;
+  padding: 15px 16px;
   border: 1px solid var(--line);
   border-radius: 12px;
-  background: var(--surface-soft);
+  background: var(--surface);
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
+.steer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .steer-label {
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 14px;
+  font-weight: 650;
   color: var(--text-strong);
+}
+
+.steer-head > span {
+  padding: 3px 8px;
+  color: var(--active);
+  background: var(--active-soft);
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.steer-copy {
+  margin: -2px 0 2px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .steer-input {
@@ -25,7 +49,7 @@
   font: inherit;
   font-size: 13px;
   line-height: 1.6;
-  padding: 9px 11px;
+  padding: 11px 12px;
   color: var(--text);
   background: var(--surface);
   border: 1px solid var(--line-strong);
@@ -54,7 +78,7 @@
   font: inherit;
   font-size: 13px;
   font-weight: 600;
-  padding: 7px 16px;
+  padding: 8px 14px;
   color: #fff;
   background: var(--accent);
   border: 1px solid var(--accent);

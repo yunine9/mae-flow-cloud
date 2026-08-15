@@ -147,13 +147,15 @@ export class AnnotationStore {
     return record;
   }
 
-  /** 软删:多人环境里硬删等于替别人做主,留痕才查得清。 */
+  /** 软删:多人环境里硬删等于替别人做主,留痕才查得清。
+   *
+   * 已送出的也允许移除。原来禁止,理由是"送出去撤不回来"——话没错,
+   * 但清单是人自己的看板:提过二十条之后满屏都是已完成的旧条目,
+   * 反而看不见当前要紧的那几条。移除只是从看板上拿掉,jsonl 里留痕
+   * 照查;界面上因此把措辞分开说,别让人误以为能撤回。 */
   drop(id: string, by: string): Annotation {
     const found = this.list().find((item) => item.id === id);
     if (!found) throw new AnnotationError(`批注不存在: ${id}`);
-    if (found.status === "sent") {
-      throw new AnnotationError("这条已经送出去了,撤不回来");
-    }
     if (found.author !== by) {
       throw new AnnotationError(`这条是 ${found.author} 写的,不能替他删`);
     }
@@ -233,6 +235,14 @@ export function renderAnnotations(
  *
  * 这里只报告事实,不替人决定撤不撤:判定权是人的。
  */
+/** 比对前的归一化:锚点是渲染时抓的(空白已折叠),文件里是原始缩进。
+ * 两边不按同一把尺子量,一条带缩进的代码永远"找不到"——实测三条批注
+ * 全被误报成"这处已被改动",而代码一个字都没动。误报比不报更坏:人会
+ * 以为提过的都落实了。 */
+function normalize(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
 export function reanchor(
   items: Annotation[],
   read: (artifact: string) => string | undefined,
@@ -250,10 +260,10 @@ export function reanchor(
     // 读不到产物不等于靶子没了(可能是权限/路径问题),按 hit 放行——
     // 旁路一律 fail-open,重锚定绝不能挡住人送出意见。
     if (!lines) return { id: item.id, state: "hit", line: item.line };
-    const needle = item.anchor.trim();
+    const needle = normalize(item.anchor);
     const hits: number[] = [];
     lines.forEach((line, at) => {
-      if (line.includes(needle)) hits.push(at + 1);
+      if (normalize(line).includes(needle)) hits.push(at + 1);
     });
     if (!hits.length) {
       const now = lines[item.line - 1];

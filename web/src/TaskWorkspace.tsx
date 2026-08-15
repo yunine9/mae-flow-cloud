@@ -16,6 +16,7 @@ import { GitDiff } from "./GitDiff";
 import { SteerBox } from "./SteerBox";
 import { Annotatable } from "./Annotatable";
 import { AnnotationPanel } from "./AnnotationPanel";
+import { AttachedNotes } from "./AttachedNotes";
 import {
   listAnnotations,
   listArtifacts,
@@ -60,6 +61,20 @@ export function TaskWorkspace({
   const [notes, setNotes] = useState<Annotation[]>([]);
   const [checks, setChecks] = useState<AnchorCheck[]>([]);
   const [notesPulse, setNotesPulse] = useState(0);
+  const [attachNotes, setAttachNotes] = useState(true);
+  const [livePulse, setLivePulse] = useState(0);
+
+  // 它在跑的时候材料是活的:界面上写着"材料会随进展刷新",那就得真刷。
+  // 原来只在 task.id/status 变化时取一次,于是整段编码期页面一动不动,
+  // 批注的"这处已被改动"也永远停在旧结论上。
+  // 只在 running 时轮询,5 秒一次;拿到一样的内容就不 setState,免得
+  // 正在写批注时被重渲染打断。
+  useEffect(() => {
+    if (task.status !== "running") return;
+    const timer = window.setInterval(
+      () => setLivePulse((tick) => tick + 1), 5000);
+    return () => window.clearInterval(timer);
+  }, [task.status]);
 
   useEffect(() => {
     const escape = (event: KeyboardEvent) => {
@@ -85,19 +100,21 @@ export function TaskWorkspace({
       if (result.items?.length) setActive(result.items[0].name);
     });
     return () => { alive = false; };
-  }, [task.id]);
+  }, [task.id, livePulse]);
 
   useEffect(() => {
     if (!active) return;
     let alive = true;
-    setLoading(true);
+    setLoading((was) => was || !content);
     void readArtifact(task.id, active).then((result) => {
       if (!alive) return;
-      setContent(result.content ?? result.unavailable ?? "");
+      const next = result.content ?? result.unavailable ?? "";
+      // 内容没变就别 setState:轮询期间无谓重渲染会把正在写的批注打断。
+      setContent((current) => current === next ? current : next);
       setLoading(false);
     });
     return () => { alive = false; };
-  }, [task.id, active]);
+  }, [task.id, active, livePulse]);
 
   // 批注随任务加载,也随"圈了一条/送出一批/任务状态变了"重取——
   // 进展(那处动没动)是服务端现算的,前端不自己推断。
@@ -109,10 +126,30 @@ export function TaskWorkspace({
       setChecks(result.checks);
     });
     return () => { alive = false; };
-  }, [task.id, task.status, notesPulse]);
+  }, [task.id, task.status, notesPulse, livePulse]);
 
-  const draftIds = notes
-    .filter((item) => item.status === "draft").map((item) => item.id);
+  const drafts = notes.filter((item) => item.status === "draft");
+  const draftIds = drafts.map((item) => item.id);
+
+  /** 回到被圈的那一行:换页签→等它渲染出来→滚过去并闪一下。
+   * 改批注前人几乎总要再看一眼上下文,只报"第 23 行"等于让他自己找。
+   * 等待有预算(2 秒封顶),找不到就算了——旁路不许把界面卡住。 */
+  function locate(item: Annotation) {
+    if (item.artifact !== active) setActive(item.artifact);
+    let tries = 0;
+    const seek = () => {
+      const node = document.querySelector<HTMLElement>(
+        `.ws-doc [data-l="${item.line}"]`);
+      if (!node) {
+        if (tries++ < 20) window.setTimeout(seek, 100);
+        return;
+      }
+      node.scrollIntoView({ block: "center", behavior: "smooth" });
+      node.classList.add("annot-flash");
+      window.setTimeout(() => node.classList.remove("annot-flash"), 1700);
+    };
+    window.setTimeout(seek, item.artifact === active ? 0 : 120);
+  }
   const activeMeta = items?.find((item) => item.name === active);
   const documents = items?.filter((item) => item.kind === "doc") ?? [];
   const changes = items?.filter((item) => item.kind === "diff") ?? [];
@@ -208,20 +245,19 @@ export function TaskWorkspace({
             <small>{waiting ? "完成后流程继续" : "实时更新"}</small>
           </div>
           {waiting && canOperate && (
-            <>
-              {/* 圈过几处就在决定卡上说一句:提交时自动带上,不用人
-                  再把意见复述一遍——这正是批注省下的那道功夫。 */}
-              {draftIds.length > 0 && (
-                <div className="annot-attached">
-                  已圈注 {draftIds.length} 处，提交「需要修改」时一并作为理由带上
-                </div>
-              )}
-              <WaitingCard
-                task={task}
-                onDecided={() => { setNotesPulse((tick) => tick + 1); onChanged(); }}
-                annotationIds={draftIds}
-              />
-            </>
+            /* 批注挂在提交按钮正上方(WaitingCard 内部),不放卡片外面:
+               选项标签是内核的——它按标签给这次选择记账,前端改写会让
+               记下的选择对不上用户点的(2026-08-09 实战事故)。所以
+               "这次会带上哪几处"只能摆进人按下提交的那一眼里。 */
+            <WaitingCard
+              task={task}
+              onDecided={() => { setNotesPulse((tick) => tick + 1); onChanged(); }}
+              annotationIds={attachNotes ? draftIds : undefined}
+              attachment={
+                <AttachedNotes items={drafts} attached={attachNotes}
+                               onToggle={setAttachNotes} onLocate={locate} />
+              }
+            />
           )}
           {waiting && !canOperate && (
             <div className="read-only-notice">
@@ -258,6 +294,7 @@ export function TaskWorkspace({
             checks={checks}
             canOperate={canOperate}
             running={task.status === "running"}
+            onLocate={locate}
             onChanged={() => { setNotesPulse((tick) => tick + 1); onChanged(); }}
           />
           <div className="task-utilities">

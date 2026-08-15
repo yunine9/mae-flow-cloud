@@ -292,7 +292,7 @@ export async function dropAnnotation(
   return {};
 }
 
-/** 走插话通道当场送给模型。ids 省略=全部待送出的。 */
+/** 通过执行中补充通道发送给模型。ids 省略=全部待提交批注。 */
 export async function sendAnnotations(
   taskId: string,
   ids?: string[],

@@ -1,5 +1,5 @@
 /**
- * 批注清单:我圈了哪些、送出去没有、它动了没有。
+ * 批注清单:记录批注内容、提交状态和原位置变化。
  *
  * 进展这一栏只报**事实**,不下"已采纳"这种结论:
  * - 原文还在原处 → 它还没碰这里
@@ -10,20 +10,21 @@
  * 没有"批注管理页":这块面板就长在工作台里,跟材料和决定同屏。
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   dropAnnotation,
   sendAnnotations,
   type Annotation,
   type AnchorCheck,
 } from "./api";
+import { shortPath } from "./paths";
 import "./annotate.css";
 
 const ANCHOR_TEXT: Record<AnchorCheck["state"], string> = {
-  hit: "原文还在原处",
-  moved: "原文已挪位",
-  gone: "原文已不在",
-  ambiguous: "原文有多处同样内容",
+  hit: "定位正常",
+  moved: "位置已变化",
+  gone: "原位置内容已删除",
+  ambiguous: "存在多个匹配位置",
 };
 
 function relative(iso: string): string {
@@ -39,15 +40,19 @@ function relative(iso: string): string {
 
 /** 一条批注此刻处在哪:草稿 / 已送出待回应 / 已送出且那处已变。 */
 function progressOf(item: Annotation, check?: AnchorCheck): {
-  tone: "draft" | "waiting" | "touched";
+  tone: "draft" | "waiting" | "review";
   text: string;
 } {
-  if (item.status !== "sent") return { tone: "draft", text: "待送出" };
+  if (item.status !== "sent") return { tone: "draft", text: "待提交" };
   const changed = check && (check.state === "gone" || check.state === "moved");
-  const how = item.sent_via === "decision" ? "随决定提交" : "已插话送出";
   return changed
-    ? { tone: "touched", text: `${how} · 这处已被改动` }
-    : { tone: "waiting", text: `${how} · 那处还没动` };
+    ? { tone: "review", text: "待复核" }
+    : { tone: "waiting", text: "已提交" };
+}
+
+function deliveryText(item: Annotation): string {
+  if (item.status !== "sent") return "尚未提交";
+  return item.sent_via === "decision" ? "通过审批提交" : "执行中发送";
 }
 
 export function AnnotationPanel({
@@ -57,20 +62,28 @@ export function AnnotationPanel({
   canOperate,
   running,
   onChanged,
+  onLocate,
 }: {
   taskId: string;
   items: Annotation[];
   checks: AnchorCheck[];
   canOperate: boolean;
+  /** 点一条回到材料里那一行——改批注前人几乎总要再看一眼上下文。 */
+  onLocate?: (item: Annotation) => void;
   /** 只有在跑的时候才能插话送出;等人决定时批注走决定卡。 */
   running: boolean;
   onChanged: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const drafts = items.filter((item) => item.status === "draft");
+  const [open, setOpen] = useState(drafts.length > 0);
+
+  useEffect(() => {
+    if (drafts.length > 0) setOpen(true);
+  }, [drafts.length]);
 
   if (!items.length) return null;
-  const drafts = items.filter((item) => item.status === "draft");
   const checkOf = (id: string) => checks.find((check) => check.id === id);
 
   async function send() {
@@ -84,27 +97,33 @@ export function AnnotationPanel({
   }
 
   return (
-    <section className="annot-panel" aria-label="我的批注">
-      <header className="annot-panel-head">
+    <details className="annot-panel" aria-label="批注" open={open}
+             onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary className="annot-panel-head">
         <div>
-          <span>MY NOTES</span>
-          <strong>
-            我圈了 {items.length} 处
-            {drafts.length > 0 && ` · ${drafts.length} 处还没送出`}
-          </strong>
+          <span>REVIEW NOTES</span>
+          <strong>批注</strong>
         </div>
-        {canOperate && drafts.length > 0 && running && (
+        <div className="annot-panel-summary-side">
+          <div className="annot-panel-counts">
+            <span>{items.length} 条</span>
+            {drafts.length > 0 && <em>{drafts.length} 条待提交</em>}
+          </div>
+          <i className="annot-panel-chevron" aria-hidden />
+        </div>
+      </summary>
+      {canOperate && drafts.length > 0 && running && (
+        <div className="annot-panel-actions">
           <button type="button" className="primary" disabled={busy}
                   onClick={() => void send()}>
-            {busy ? "发送中…" : `发给它（${drafts.length} 处）`}
+            {busy ? "提交中…" : `提交 ${drafts.length} 条批注`}
           </button>
-        )}
-      </header>
+        </div>
+      )}
 
       {canOperate && drafts.length > 0 && !running && (
         <p className="annot-panel-note">
-          它这会儿没在跑。等它问你时，这 {drafts.length} 处会作为「需要修改」
-          的理由一起提交，不用你再复述一遍。
+          有 {drafts.length} 条批注待提交。完成当前审批时，可选择将它们作为修改说明一并提交。
         </p>
       )}
       {error && <div className="alert">{error}</div>}
@@ -116,18 +135,20 @@ export function AnnotationPanel({
           return (
             <li key={item.id} className={`annot-item ${progress.tone}`}>
               <div className="annot-item-head">
-                <code className="annot-where">
-                  {item.file}:{check?.line ?? item.line}
-                </code>
+                <button type="button" className="annot-where"
+                        onClick={() => onLocate?.(item)}
+                        title={`回到 ${item.file}:${check?.line ?? item.line}`}>
+                  <code>{shortPath(item.file)}:{check?.line ?? item.line}</code>
+                </button>
                 <span className={`annot-progress ${progress.tone}`}>
                   {progress.text}
                 </span>
               </div>
-              <blockquote className="annot-anchor">{item.anchor}</blockquote>
               <p className="annot-note">{item.note}</p>
+              <blockquote className="annot-anchor"><span>针对</span>{item.anchor}</blockquote>
               <div className="annot-item-foot">
                 <small>
-                  {item.author} · {relative(item.created_at)}
+                  {deliveryText(item)} · {item.author} · {relative(item.created_at)}
                   {check && check.state !== "hit"
                     && ` · ${ANCHOR_TEXT[check.state]}`}
                 </small>
@@ -136,21 +157,21 @@ export function AnnotationPanel({
                     const result = await dropAnnotation(taskId, item.id);
                     if (result.error) setError(result.error);
                     onChanged();
-                  }}>删掉</button>
+                  }}>删除</button>
                 )}
               </div>
               {/* 靶子变了要说清:意见可能已经过期,送过去轻则白烧一轮,
                   重则让它改回去。撤不撤是人的判断,这里只把事实摊开。 */}
               {item.status === "draft" && check?.state === "gone" && (
                 <div className="annot-stale">
-                  这处原文已经不在了{check.now ? `，现在是「${check.now}」` : ""}。
-                  它可能已经自己改过了——确认还要送吗？
+                  原位置内容已经删除{check.now ? `，当前位置内容为「${check.now}」` : ""}。
+                  请确认这条批注是否仍然有效。
                 </div>
               )}
             </li>
           );
         })}
       </ol>
-    </section>
+    </details>
   );
 }

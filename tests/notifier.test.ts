@@ -102,6 +102,15 @@ test("端到端:任务进入等待即通知;通知死透不改流程,页面可�
       const task = service.get(created.id)!;
       return task.status === "waiting_for_human" ? task : undefined;
     }, "进入等待");
+    const waitingNotice = await until(
+      () => notifier.list()[0],
+      "待办通知入账",
+    );
+    assert.equal(
+      waitingNotice.link,
+      `http://127.0.0.1:8787/?account=liaoxiang&task=${created.id}`,
+      "通知应直达个人工作台并定位目标任务",
+    );
     // 通知死透:流程仍在等待,决定照常可提交,页面拿得到失败事实。
     const failed = await until(() => {
       const task = service.get(created.id)!;

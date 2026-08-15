@@ -4,31 +4,89 @@
   position: relative;
 }
 
-/* 悬停出 ✎,压在行尾而不是行首——行首那点空间是行号和代码的。
-   提示本身 pointer-events:none,免得挡住点击。 */
+/* 行本身只给很轻的可批注提示；操作入口是下面真正的图标按钮。 */
 .annotatable [data-l] {
   position: relative;
   cursor: text;
+  transition: background-color 120ms ease, box-shadow 120ms ease;
 }
 
 .annotatable [data-l]:hover {
-  background: var(--accent-soft);
-  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent-soft) 62%, transparent);
+  box-shadow: inset -2px 0 color-mix(in srgb, var(--accent) 48%, transparent);
+  border-radius: 5px;
 }
 
-.annotatable [data-l]:hover::after {
-  content: "✎ 批注";
+.annot-fab {
   position: absolute;
-  right: 6px;
-  top: 2px;
-  font: 600 11px/1.5 inherit;
-  color: var(--accent);
+  z-index: 4;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
   background: var(--surface);
-  border: 1px solid var(--accent);
-  border-radius: 5px;
-  padding: 0 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  box-shadow: 0 5px 16px rgba(20, 29, 48, .14);
+  cursor: pointer;
+  animation: annotFabIn 120ms ease-out;
+  transition: color 120ms ease, border-color 120ms ease,
+    background-color 120ms ease, transform 120ms ease;
+}
+
+.annot-fab:hover, .annot-fab:focus-visible {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+  background: color-mix(in srgb, var(--accent-soft) 54%, var(--surface));
+  transform: translateY(-1px);
+}
+
+.annot-fab svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.45;
+}
+
+.annot-fab::after {
+  content: "添加批注";
+  position: absolute;
+  right: calc(100% + 7px);
+  top: 50%;
+  padding: 4px 7px;
+  opacity: 0;
+  transform: translate(3px, -50%);
   pointer-events: none;
-  box-shadow: 0 1px 6px rgba(0, 0, 0, .12);
+  color: var(--surface);
+  background: var(--text-strong);
+  border: 1px solid color-mix(in srgb, var(--text-strong) 82%, transparent);
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  box-shadow: var(--shadow-xs);
+  transition: opacity 100ms ease, transform 100ms ease;
+}
+
+.annot-fab:hover::after, .annot-fab:focus-visible::after {
+  opacity: 1;
+  transform: translate(0, -50%);
+}
+
+@keyframes annotFabIn {
+  from { opacity: 0; transform: scale(.92); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+/* 深色 diff 里保持局部高亮,不灌入浅紫色块。 */
+.ws-diff .annotatable [data-l]:hover,
+.annotatable .ws-diff [data-l]:hover {
+  background: rgba(99, 102, 241, .14);
+  box-shadow: inset -2px 0 rgba(165, 180, 252, .72);
 }
 
 /* 圈过的行留一道竖杠:人扫一眼就知道自己圈到哪儿了。
@@ -138,6 +196,7 @@
 /* ---------------- 清单 ---------------- */
 
 .annot-panel {
+  flex: none;
   margin-top: 14px;
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -146,14 +205,19 @@
 }
 
 .annot-panel-head {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px 14px;
-  background: var(--surface-soft);
+  gap: 8px 12px;
+  padding: 13px 14px;
+  background: var(--surface);
   border-bottom: 1px solid var(--line);
+  list-style: none;
+  cursor: pointer;
 }
+
+.annot-panel-head::-webkit-details-marker { display: none; }
+.annot-panel:not([open]) .annot-panel-head { border-bottom-color: transparent; }
 
 .annot-panel-head span {
   display: block;
@@ -163,9 +227,41 @@
 }
 
 .annot-panel-head strong {
-  font-size: 13.5px;
+  font-size: 15px;
   color: var(--text-strong);
 }
+
+.annot-panel-summary-side, .annot-panel-counts {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.annot-panel-counts span,
+.annot-panel-counts em {
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.annot-panel-counts span { color: var(--muted); background: var(--surface-muted); }
+.annot-panel-counts em { color: var(--accent); background: var(--accent-soft); }
+.annot-panel-chevron {
+  width: 7px;
+  height: 7px;
+  margin-left: 3px;
+  border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
+  transform: rotate(45deg);
+  transition: transform 140ms ease;
+}
+.annot-panel[open] .annot-panel-chevron { transform: rotate(225deg); }
+.annot-panel-actions { padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.annot-panel-actions button { width: 100%; min-height: 36px; }
 
 .annot-panel-note {
   margin: 0;
@@ -192,7 +288,7 @@
 .annot-item:last-child { border-bottom: 0; }
 .annot-item.draft { border-left-color: var(--accent); }
 .annot-item.waiting { border-left-color: var(--attention); }
-.annot-item.touched { border-left-color: var(--success); }
+.annot-item.review { border-left-color: var(--attention); }
 
 .annot-item-head {
   display: flex;
@@ -228,25 +324,34 @@
   background: var(--attention-soft);
 }
 
-.annot-progress.touched {
-  color: var(--success);
-  background: #e6f5ef;
+.annot-progress.review {
+  color: var(--attention);
+  background: var(--attention-soft);
 }
 
 .annot-anchor {
-  margin: 0 0 6px;
-  padding: 5px 9px;
-  font-size: 12px;
+  margin: 7px 0 6px;
+  padding: 7px 9px;
+  font-size: 11.5px;
   line-height: 1.55;
   color: var(--muted);
   background: var(--surface-muted);
+  border-left: 0;
   border-radius: 6px;
   overflow-wrap: anywhere;
 }
 
+.annot-anchor span {
+  margin-right: 7px;
+  color: var(--faint);
+  font-size: 9.5px;
+  font-weight: 650;
+}
+
 .annot-note {
-  margin: 0 0 6px;
-  font-size: 13px;
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 550;
   line-height: 1.65;
   color: var(--text-strong);
 }
@@ -276,9 +381,204 @@
 /* 决定卡上的那一行提示:圈过的会自动作为理由带上。 */
 .annot-attached {
   margin-bottom: 10px;
-  padding: 9px 12px;
+  padding: 11px 13px;
   font-size: 12.5px;
-  color: var(--accent);
-  background: var(--accent-soft);
-  border-radius: 9px;
+  color: var(--text);
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-radius: 10px;
 }
+
+.annot-attached-head {
+  font-weight: 600;
+}
+
+/* 只报一个数字等于没说:人要按下提交,他得看见自己提交的是哪几条。 */
+.annot-attached-list {
+  margin: 7px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.annot-attached-list button {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  padding: 6px 9px;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  color: var(--text-strong);
+  background: var(--surface);
+  border: 1px solid transparent;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.annot-attached-list button:hover {
+  border-color: var(--accent);
+}
+
+.annot-attached-list code {
+  font-size: 11.5px;
+  color: var(--accent);
+  overflow-wrap: anywhere;
+}
+
+/* 意见最多两行,再长就截——但截的是意见不是坐标,坐标必须完整可读。 */
+.annot-attached-list span {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.annot-attached-rest {
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+/* 清单里的坐标也是回原处的入口。 */
+.annot-where {
+  min-width: 0;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.annot-where code {
+  font-size: 12px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  border-bottom: 1px dashed var(--line-strong);
+}
+
+.annot-where:hover code {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+/* 跳回来时闪一下:滚到位了还得让眼睛找得到。 */
+.annot-flash {
+  animation: annotFlash 1.6s ease-out;
+}
+
+@keyframes annotFlash {
+  0%, 55% { background: var(--attention-soft); box-shadow: inset 3px 0 var(--attention); }
+  100% { background: transparent; }
+}
+
+/* 勾选决定这几条随不随本次决定走:哪个选项算"打回"是内核的判定,
+   前端不猜,交给人。 */
+.annot-attached-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.annot-attached-head input {
+  margin: 2px 0 0;
+  flex: none;
+  accent-color: var(--accent);
+}
+
+/* ---------------- 类图(内置渲染) ---------------- */
+
+.cd-scroll {
+  overflow-x: auto;
+  padding: 4px 0 8px;
+}
+
+.cd-svg {
+  max-width: none;
+  font: 11px/1.3 var(--font-sans, inherit);
+}
+
+.cd-node rect {
+  fill: var(--surface);
+  stroke: var(--line-strong);
+  stroke-width: 1;
+}
+
+.cd-node.cd-interface rect { stroke: var(--accent); stroke-dasharray: 5 3; }
+.cd-node.cd-enum rect { stroke: var(--attention); }
+.cd-node.cd-abstract rect { stroke: var(--active); stroke-dasharray: 2 3; }
+
+.cd-tag {
+  font-size: 9.5px;
+  font-weight: 700;
+  fill: var(--faint);
+}
+
+.cd-name {
+  font-size: 12px;
+  font-weight: 650;
+  fill: var(--text-strong);
+}
+
+.cd-pkg {
+  font-size: 9.5px;
+  fill: var(--faint);
+}
+
+.cd-rule {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.cd-member {
+  font-size: 10.5px;
+  fill: var(--muted);
+}
+
+.cd-edge {
+  fill: none;
+  stroke: var(--line-strong);
+  stroke-width: 1.2;
+}
+
+.cd-edge-implements { stroke-dasharray: 6 4; stroke: var(--accent); }
+.cd-edge-extends { stroke: var(--accent); }
+.cd-edge-uses { stroke-dasharray: 2 3; stroke: var(--faint); }
+.cd-edge-composes { stroke: var(--success); }
+
+.cd-marker-open { fill: var(--surface); stroke: var(--accent); stroke-width: 1.2; }
+.cd-marker-dot { fill: none; stroke: var(--faint); stroke-width: 1.4; }
+.cd-marker-diamond { fill: var(--success); }
+
+.cd-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  padding: 6px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.cd-legend-item::before {
+  content: "";
+  display: inline-block;
+  width: 16px;
+  height: 0;
+  margin-right: 5px;
+  vertical-align: middle;
+  border-top: 1.6px solid var(--line-strong);
+}
+
+.cd-legend-item.implements::before { border-top-style: dashed; border-color: var(--accent); }
+.cd-legend-item.extends::before { border-color: var(--accent); }
+.cd-legend-item.uses::before { border-top-style: dotted; border-color: var(--faint); }
+.cd-legend-item.composes::before { border-color: var(--success); }

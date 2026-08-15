@@ -120,7 +120,7 @@ test("重锚定读不到材料时按「还在」放行——旁路绝不挡住�
   assert.equal(checks[0].id, only.id);
 });
 
-test("append-only:软删留痕、送出后不可撤、半行 JSON 只丢它自己", () => {
+test("append-only:软删留痕、已送出可移出看板、半行 JSON 只丢它自己", () => {
   const target = store();
   const mine = seed(target, "我写的");
   const yours = seed(target, "别人写的", { author: "wangwu" });
@@ -138,7 +138,10 @@ test("append-only:软删留痕、送出后不可撤、半行 JSON 只丢它自�
   const sent = target.list().find((item) => item.id === yours.id)!;
   assert.equal(sent.status, "sent");
   assert.equal(sent.sent_via, "interrupt");
-  assert.throws(() => target.drop(yours.id, "wangwu"), AnnotationError);
+  // 已送出的可以从看板移除(话收不回,但清单是人自己的):记录留痕
+  target.drop(yours.id, "wangwu");
+  assert.deepEqual(target.visible(), []);
+  assert.equal(target.list().length, 2, "移出看板不等于抹掉记录");
 
   // 崩在写一半留下的半行,只能丢它自己
   appendFileSync(target.path, '{"op":"add","record":{"id":"an-x"', "utf-8");
@@ -274,4 +277,23 @@ test("批注 HTTP 面:圈注→清单带进展→送出走插话通道", async (
     server.close();
     await model.stop();
   }
+});
+
+test("重锚定:缩进不同也算命中——两边必须一把尺子量", () => {
+  // 实测事故:锚点是渲染时抓的(空白已折叠),文件里是原始缩进,
+  // 直接 includes 一条带缩进的代码永远找不到,于是三条批注全被误报成
+  // "这处已被改动",而代码一个字都没动。误报比不报更坏——人会以为
+  // 提过的都落实了。
+  const target = store();
+  const one = seed(target, "这里用英文",
+    { kind: "code", anchor: "? \"push 已发送\" + NotifyRenderer.SUFFIX" });
+  const file = [
+    "class PushChannelHandler {",
+    "        return SendResult.ok(rendered.isDegraded()",
+    "                ? \"push 已发送\" + NotifyRenderer.SUFFIX",
+    "                : \"push 已发送\");",
+  ].join("\n");
+  const checks = reanchor(target.drafts(), () => file);
+  assert.equal(checks[0].id, one.id);
+  assert.notEqual(checks[0].state, "gone", "缩进差异不该被判成原文消失");
 });

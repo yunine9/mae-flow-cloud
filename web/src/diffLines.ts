@@ -34,3 +34,85 @@ export function newFileLines(lines: string[]): number[] {
   }
   return numbers;
 }
+
+export type DiffCellKind = "context" | "added" | "removed";
+
+export interface DiffCell {
+  number: number;
+  text: string;
+  kind: DiffCellKind;
+}
+
+export type DiffReviewRow =
+  | { type: "line"; old?: DiffCell; next?: DiffCell }
+  | { type: "hunk" | "meta"; text: string };
+
+/**
+ * 统一 diff → 双栏审阅行。删除块与紧随其后的新增块按位置配对，
+ * 这样修改前/修改后能横向比较；行号始终来自 hunk 头而不是数组下标。
+ */
+export function diffReviewRows(lines: string[]): DiffReviewRow[] {
+  const rows: DiffReviewRow[] = [];
+  let oldCursor = 0;
+  let newCursor = 0;
+  let removed: DiffCell[] = [];
+  let added: DiffCell[] = [];
+
+  const flushChanges = () => {
+    const count = Math.max(removed.length, added.length);
+    for (let index = 0; index < count; index += 1) {
+      const row: Extract<DiffReviewRow, { type: "line" }> = { type: "line" };
+      if (removed[index]) row.old = removed[index];
+      if (added[index]) row.next = added[index];
+      rows.push(row);
+    }
+    removed = [];
+    added = [];
+  };
+
+  for (const line of lines) {
+    const hunk = line.match(
+      /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$/,
+    );
+    if (hunk) {
+      flushChanges();
+      oldCursor = Number(hunk[1]);
+      newCursor = Number(hunk[2]);
+      rows.push({ type: "hunk", text: line });
+      continue;
+    }
+    if (/^(?:diff --git |index |--- |\+\+\+ |new file mode |deleted file mode )/.test(line)) {
+      continue;
+    }
+    if (/^\\ No newline at end of file/.test(line)) {
+      flushChanges();
+      rows.push({ type: "meta", text: "文件末尾没有换行符" });
+      continue;
+    }
+    if (!oldCursor && !newCursor) {
+      if (line.trim()) rows.push({ type: "meta", text: line });
+      continue;
+    }
+    if (line.startsWith("-")) {
+      removed.push({ number: oldCursor, text: line.slice(1), kind: "removed" });
+      oldCursor += 1;
+      continue;
+    }
+    if (line.startsWith("+")) {
+      added.push({ number: newCursor, text: line.slice(1), kind: "added" });
+      newCursor += 1;
+      continue;
+    }
+    flushChanges();
+    const text = line.startsWith(" ") ? line.slice(1) : line;
+    rows.push({
+      type: "line",
+      old: { number: oldCursor, text, kind: "context" },
+      next: { number: newCursor, text, kind: "context" },
+    });
+    oldCursor += 1;
+    newCursor += 1;
+  }
+  flushChanges();
+  return rows;
+}

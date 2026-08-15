@@ -31,7 +31,7 @@ const WORK_DIR = ".mae-flow-work";
 const MAX_BYTES = 512 * 1024;
 const TRUNCATED_NOTE =
   "\n\n…(内容超过 512 KB,只回传前 512 KB;完整内容见工作区文件)";
-/** 未提交改动的固定标识:它是"虚拟产物",不对应磁盘上某个文件。 */
+/** Git 工作区差异的固定标识:它是"虚拟产物",不对应磁盘上某个文件。 */
 export const DIFF_NAME = "未提交改动";
 
 export interface ArtifactMeta {
@@ -141,6 +141,27 @@ function git(cwd: string, args: string[]): string | undefined {
   }
 }
 
+/** 未跟踪文件相对于 /dev/null 的统一 diff。
+ * `git diff --no-index` 发现差异时按约定返回 1,这里的 1 是成功结果,
+ * 不是执行失败。二进制文件也会由 git 给出如实提示。 */
+function untrackedDiff(cwd: string, path: string): string | undefined {
+  try {
+    const run = spawnSync(
+      "git",
+      ["-C", cwd, "diff", "--no-index", "--", "/dev/null", path],
+      {
+        encoding: "utf-8",
+        timeout: 10_000,
+        maxBuffer: 16 * 1024 * 1024,
+      },
+    );
+    if (run.error || (run.status !== 0 && run.status !== 1)) return undefined;
+    return (run.stdout ?? "").trim();
+  } catch {
+    return undefined;
+  }
+}
+
 /** porcelain 行 → 改动路径(重命名行取箭头右边的新名字)。 */
 function changedPaths(status: string): string[] {
   return status.split("\n")
@@ -157,11 +178,15 @@ function changedPaths(status: string): string[] {
 function collectDiff(
   cwd: string,
 ): { text: string; changed: string[] } | undefined {
-  const status = git(cwd, ["status", "--porcelain"]);
+  // 展开未跟踪目录到文件级,前端才能把其中的文档/测试/配置正确分类。
+  const status = git(cwd, ["status", "--porcelain", "--untracked-files=all"]);
   if (status === undefined) return undefined;
   const changed = changedPaths(status);
-  const staged = (git(cwd, ["diff", "--cached"]) ?? "").trim();
-  const unstaged = (git(cwd, ["diff"]) ?? "").trim();
+  // 把完整上下文带回前端，再由审阅器默认折叠未改动区。只取 Git 默认
+  // 的三行上下文会让“展开全文”永远缺材料，也无法复现内核看板的能力。
+  const fullContext = "--unified=999999";
+  const staged = (git(cwd, ["diff", "--cached", fullContext]) ?? "").trim();
+  const unstaged = (git(cwd, ["diff", fullContext]) ?? "").trim();
   const untracked = status.split("\n")
     .filter((line) => line.startsWith("??"))
     .map((line) => line.slice(3).trim())
@@ -173,8 +198,9 @@ function collectDiff(
   if (staged) sections.push(`## 已暂存(staged)\n\n${staged}`);
   if (unstaged) sections.push(`## 未暂存(unstaged)\n\n${unstaged}`);
   if (untracked.length) {
-    sections.push(`## 未跟踪(untracked)\n\n`
-      + untracked.map((path) => `?? ${path}`).join("\n"));
+    const snapshots = untracked.map((path) =>
+      untrackedDiff(cwd, path) || `?? ${path}`);
+    sections.push(`## 未跟踪(untracked)\n\n${snapshots.join("\n\n")}`);
   }
   return { text: sections.join("\n\n"), changed };
 }
@@ -201,7 +227,7 @@ function diffMeta(cwd: string): ArtifactMeta | undefined {
   }
   return {
     name: DIFF_NAME,
-    label: DIFF_NAME,
+    label: "工作区变更",
     kind: "diff",
     bytes: Buffer.byteLength(diff.text, "utf-8"),
     modified_at: new Date(newest).toISOString(),

@@ -8,7 +8,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { newFileLines } from "../web/src/diffLines.ts";
+import {
+  diffReviewRows,
+  newFileLines,
+} from "../web/src/diffLines.ts";
 
 test("行号从 @@ 的新文件起点递推,删除行不占号", () => {
   const diff = [
@@ -47,4 +50,47 @@ test("没有 hunk 头就不给行号——宁可不可圈注,也不给错坐标"
 
 test("@@ 头省略行数(单行 hunk)照样认", () => {
   assert.deepEqual(newFileLines(["@@ -7 +9 @@", "+只有一行"]), [0, 9]);
+});
+
+test("双栏审阅把删除与新增横向配对,两侧行号各自递推", () => {
+  const rows = diffReviewRows([
+    "diff --git a/a.ts b/a.ts",
+    "--- a/a.ts",
+    "+++ b/a.ts",
+    "@@ -8,3 +10,4 @@",
+    " before",
+    "-old one",
+    "-old two",
+    "+new one",
+    "+new two",
+    "+new three",
+    " after",
+  ]);
+  assert.deepEqual(rows, [
+    { type: "hunk", text: "@@ -8,3 +10,4 @@" },
+    {
+      type: "line",
+      old: { number: 8, text: "before", kind: "context" },
+      next: { number: 10, text: "before", kind: "context" },
+    },
+    {
+      type: "line",
+      old: { number: 9, text: "old one", kind: "removed" },
+      next: { number: 11, text: "new one", kind: "added" },
+    },
+    {
+      type: "line",
+      old: { number: 10, text: "old two", kind: "removed" },
+      next: { number: 12, text: "new two", kind: "added" },
+    },
+    {
+      type: "line",
+      next: { number: 13, text: "new three", kind: "added" },
+    },
+    {
+      type: "line",
+      old: { number: 11, text: "after", kind: "context" },
+      next: { number: 14, text: "after", kind: "context" },
+    },
+  ]);
 });

@@ -1,0 +1,125 @@
+/**
+ * 类图解析。这块是"用户以为模型没干活"的直接成因:内置渲染器只认时序图,
+ * 模型按批注画了类图,页面上落到"暂时无法安全绘制"——渲染缺口冒充成模型
+ * 失职,是最坏的一种误导。
+ *
+ * 认不出的语法一律忽略,绝不猜:画错的图比不画更害人。
+ */
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { layerClasses, parseClassDiagram } from "../web/src/classModel.ts";
+
+const REAL = `@startuml
+skinparam packageStyle rectangle
+
+package "notify-model" {
+  enum ChannelType {
+    EMAIL
+    PUSH
+  }
+  class Notification
+  class SendResult {
+    +ok(detail): SendResult
+    +isOk(): boolean
+  }
+}
+
+package "notify-service" {
+  interface ChannelHandler {
+    +handle(notification, auditLog): SendResult
+  }
+  package "handler" {
+    class PushChannelHandler {
+      -MAX_BODY_LENGTH = 500
+    }
+    class NotifyRenderer {
+      ~render(n, maxBodyLength): Rendered
+    }
+  }
+}
+
+PushChannelHandler ..|> ChannelHandler
+PushChannelHandler ..> NotifyRenderer : render / allVariablesMissing
+NotifyRenderer *-- Rendered : 渲染文本 + 降级标志
+Notification --> ChannelType
+
+note right of NotifyRenderer
+  唯一实现的具体 final 类
+end note
+@enduml`;
+
+test("类图:类/接口/枚举、成员、嵌套包全部认出来", () => {
+  const model = parseClassDiagram(REAL)!;
+  const find = (name: string) => model.nodes.find((n) => n.name === name)!;
+
+  assert.equal(find("ChannelType").kind, "enum");
+  assert.equal(find("ChannelHandler").kind, "interface");
+  assert.equal(find("PushChannelHandler").kind, "class");
+
+  // 嵌套包用 / 连接:handler 在 notify-service 里面
+  assert.equal(find("PushChannelHandler").pkg, "notify-service/handler");
+  assert.equal(find("SendResult").pkg, "notify-model");
+
+  assert.deepEqual(find("ChannelType").members, ["EMAIL", "PUSH"]);
+  assert.deepEqual(find("SendResult").members,
+    ["+ok(detail): SendResult", "+isOk(): boolean"]);
+  // 无花括号的类照样是节点,只是没成员
+  assert.deepEqual(find("Notification").members, []);
+});
+
+test("类图:四种关系分得清,标签留住", () => {
+  const model = parseClassDiagram(REAL)!;
+  const edge = (from: string, to: string) =>
+    model.edges.find((e) => e.from === from && e.to === to)!;
+
+  // ..|> 同时含 `..` 和 `|>`,判断顺序错了就会被当成普通依赖
+  assert.equal(edge("PushChannelHandler", "ChannelHandler").kind, "implements");
+  assert.equal(edge("PushChannelHandler", "NotifyRenderer").kind, "uses");
+  assert.equal(edge("NotifyRenderer", "Rendered").kind, "composes");
+  assert.equal(edge("Notification", "ChannelType").kind, "uses");
+  assert.equal(edge("PushChannelHandler", "NotifyRenderer").label,
+    "render / allVariablesMissing");
+});
+
+test("类图:只在关系里出现的类型补成节点——漏一个整张图就断", () => {
+  const model = parseClassDiagram(REAL)!;
+  const rendered = model.nodes.find((n) => n.name === "Rendered");
+  assert.ok(rendered, "Rendered 只在关系里出现过,也必须是节点");
+});
+
+test("类图:note 块与 skinparam 一律跳过,不当成成员吞进来", () => {
+  const model = parseClassDiagram(REAL)!;
+  const renderer = model.nodes.find((n) => n.name === "NotifyRenderer")!;
+  assert.ok(!renderer.members.some((line) => line.includes("唯一实现")),
+    "note 正文不许混进类成员");
+  assert.ok(!model.nodes.some((n) => n.name.includes("skinparam")));
+});
+
+test("类图:不是类图的源码返回 undefined,交给上层兜底", () => {
+  assert.equal(parseClassDiagram("@startuml\nAlice -> Bob: hi\n@enduml"),
+               undefined);
+});
+
+test("分层:被依赖的在上,依赖别人的在下;成环也不许转死", () => {
+  const model = parseClassDiagram(`@startuml
+class A
+class B
+class C
+A --> B
+B --> C
+@enduml`)!;
+  const laid = layerClasses(model);
+  const layer = (name: string) => laid.find((n) => n.name === name)!.layer;
+  assert.ok(layer("A") < layer("B"), "A 依赖 B,A 该在上面");
+  assert.ok(layer("B") < layer("C"));
+
+  const cyclic = parseClassDiagram(`@startuml
+class X
+class Y
+X --> Y
+Y --> X
+@enduml`)!;
+  const done = layerClasses(cyclic);      // 不抛错、不无限递归就算过
+  assert.equal(done.length, 2);
+});

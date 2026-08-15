@@ -3,7 +3,7 @@
  * 外部动作与事件现场。服务端镜像是唯一事实来源。
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Markdown } from "./markdown";
 import {
   decide,
@@ -221,11 +221,16 @@ export function WaitingCard({
   task,
   onDecided,
   annotationIds,
+  attachment,
 }: {
   task: TaskSummary;
   onDecided: () => void;
-  /** 待送出的批注:提交时自动作为理由带上,不用人再复述一遍。 */
+  /** 待提交批注:提交审批时可作为修改说明一并带上。 */
   annotationIds?: string[];
+  /** 批注块。挂在提交按钮正上方而不是卡片外面:选项标签是内核的
+   * (它按标签给这次选择记账,前端改写会让记下的选择对不上用户点的),
+   * 所以"这次会带上哪几处"只能摆在人按下提交的那一眼里。 */
+  attachment?: ReactNode;
 }) {
   const [picked, setPicked] = useState<Record<string, string>>({});
   const [custom, setCustom] = useState<Record<string, string>>({});
@@ -367,6 +372,8 @@ export function WaitingCard({
           );
         })}
       </div>
+
+      {attachment}
 
       <footer className="decision-footer">
         <div className="decision-notes">

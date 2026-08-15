@@ -251,10 +251,22 @@ test("现场面板路由:没有面板时说人话,有面板时原样呈现", asy
     // 内核会在任务工作区生成单文件面板;这里替它放一份。
     const workDir = join(created.workspace, ".mae-flow-work");
     mkdirSync(workDir, { recursive: true });
-    writeFileSync(join(workDir, "panel.html"), "<h1>现场面板</h1>");
+    writeFileSync(join(workDir, "panel.html"), [
+      "<h1>现场面板</h1>",
+      '<span class="phase-node past">启动</span>',
+      '<span class="phase-node current">澄清需求</span>',
+      '<span class="phase-node future">定规格</span>',
+    ].join(""));
+    writeFileSync(join(workDir, "panel-pulse.js"),
+      'window.__panelPulse={"phase":"澄清需求",'
+      + '"step_title":"需求澄清(逐题拍板)","revision":8};');
     const page = await fetch(`${base}/tasks/${created.id}/panel`);
     assert.equal(page.status, 200);
     assert.match(await page.text(), /现场面板/);
+    const progress = service.get(created.id)!.progress!;
+    assert.deepEqual(progress.phases, ["启动", "澄清需求", "定规格"]);
+    assert.equal(progress.current_index, 1);
+    assert.equal(progress.step, "需求澄清(逐题拍板)");
     // 路由白名单:面板目录里的其他文件不放行。
     const sneak = await fetch(`${base}/tasks/${created.id}/secrets.txt`);
     assert.equal(sneak.status, 404);

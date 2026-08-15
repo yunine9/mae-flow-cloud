@@ -109,6 +109,7 @@ test("未提交改动:已暂存/未暂存/未跟踪都在快照里", () => {
   const diff = items.find((item) => item.name === DIFF_NAME);
   assert.ok(diff, `未提交改动没出现: ${names(items).join(" | ")}`);
   assert.equal(diff!.kind, "diff");
+  assert.equal(diff!.label, "工作区变更");
   assert.ok(diff!.bytes > 0);
 
   const snapshot = readArtifact(cwd, DIFF_NAME);
@@ -118,6 +119,22 @@ test("未提交改动:已暂存/未暂存/未跟踪都在快照里", () => {
   assert.match(String(snapshot?.content), /第二版/);
   assert.match(String(snapshot?.content), /未跟踪/);
   assert.match(String(snapshot?.content), /untracked\.txt/);
+  assert.match(String(snapshot?.content), /没跟踪的新文件/);
+});
+
+test("变更快照包含完整文件上下文,前端才能默认折叠后按需展开", () => {
+  const cwd = makeSite({ git: true });
+  const original = Array.from({ length: 30 }, (_, index) => `第 ${index + 1} 行`);
+  writeFileSync(join(cwd, "full.txt"), `${original.join("\n")}\n`);
+  execFileSync("git", ["-C", cwd, "add", "full.txt"]);
+  execFileSync("git", ["-C", cwd, "commit", "--quiet", "-m", "add full"]);
+  original[14] = "第 15 行（已修改）";
+  writeFileSync(join(cwd, "full.txt"), `${original.join("\n")}\n`);
+
+  const snapshot = readArtifact(cwd, DIFF_NAME);
+  assert.match(String(snapshot?.content), /第 1 行/);
+  assert.match(String(snapshot?.content), /第 15 行（已修改）/);
+  assert.match(String(snapshot?.content), /第 30 行/);
 });
 
 test("工作区干净时如实说干净,而不是假装没这项", () => {

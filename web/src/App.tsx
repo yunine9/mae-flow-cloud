@@ -4,11 +4,12 @@
  */
 import { useEffect, useState } from "react";
 import {
-  createTask, createUser, getSession, listTasks, listUsers, login, logout,
+  createUser, getSession, listTasks, listUsers, login, logout,
   type AuthUser, type TaskStatus, type TaskSummary, type UserRole,
 } from "./api";
 import { TaskCard } from "./TaskCard";
 import { HistoryBoard } from "./HistoryBoard";
+import { LaunchWorkspace } from "./LaunchWorkspace";
 import { TaskWorkspace } from "./TaskWorkspace";
 import { byUrgency } from "./taskTime";
 
@@ -40,17 +41,14 @@ export function App() {
   const [session, setSession] = useState<AuthUser | null>();
   const [view, setView] = useState<View>("team");
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
-  const [requirement, setRequirement] = useState("");
-  const [account, setAccount] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState("");
   const [artifactTaskId, setArtifactTaskId] = useState("");
+  const [launchOpen, setLaunchOpen] = useState(false);
   const [targetTaskId] = useState(() => new URLSearchParams(location.search).get("task")?.trim() ?? "");
 
   useEffect(() => {
     void getSession().then((user) => {
       setSession(user);
-      if (user) { setView(initialView(user)); setAccount(user.username); }
+      if (user) setView(initialView(user));
     }).catch(() => setSession(null));
   }, []);
 
@@ -85,20 +83,8 @@ export function App() {
 
   if (session === undefined) return <LoadingScreen />;
   if (session === null) return <LoginScreen onAuthenticated={(user) => {
-    setSession(user); setView(initialView(user)); setAccount(user.username);
+    setSession(user); setView(initialView(user));
   }} />;
-
-  async function submit(event: React.FormEvent) {
-    event.preventDefault();
-    if (!requirement.trim() || submitting || !session) return;
-    setSubmitting(true); setSubmitError("");
-    try {
-      await createTask(requirement.trim(), session.role === "admin" ? account.trim() || undefined : session.username);
-      setRequirement(""); await refresh();
-    } catch (error) {
-      setSubmitError(error instanceof Error ? error.message : "任务没有发起成功，请检查服务后重试。");
-    } finally { setSubmitting(false); }
-  }
 
   async function signOut() {
     await logout().catch(() => undefined); setTasks([]); setSession(null);
@@ -121,18 +107,6 @@ export function App() {
     users: { title: "账号管理", description: "创建本地账号并分配管理员或开发权限。" },
   }[view];
   const relevantWaiting = view === "mine" ? myWaiting.length : waitingCount;
-  const launchPanel = <section className="launch-panel" aria-labelledby="launch-title">
-    <div className="launch-copy"><span className="section-kicker">QUICK START</span><h2 id="launch-title">发起一项工作</h2><p>{session.role === "admin" ? "管理员可以为任意成员创建任务并指定待办接收人。" : "任务会自动归入你的工作台，需要核对时直接在这里处理。"}</p></div>
-    <form className="composer" onSubmit={submit}>
-      <label className="requirement-field"><span>任务需求</span><textarea value={requirement} onChange={(event) => setRequirement(event.target.value)} placeholder="例如：交付 REQ2026xxxx，修复通知模板变量缺失问题并补齐单元测试" rows={2} required /></label>
-      <div className="composer-actions">
-        <label className="account-field"><span>{session.role === "admin" ? "任务分配给" : "任务归属"}</span><input type="text" value={session.role === "admin" ? account : session.username} onChange={(event) => setAccount(event.target.value)} placeholder="本地账号" readOnly={session.role !== "admin"} /></label>
-        <button type="submit" disabled={submitting}><span>{submitting ? "正在发起" : "发起任务"}</span><svg viewBox="0 0 20 20" aria-hidden><path d="M4 10h11M11 6l4 4-4 4" /></svg></button>
-      </div>
-      {submitError && <div className="composer-error">{submitError}</div>}
-    </form>
-  </section>;
-
   return <div className="app-shell">
     <aside className="sidebar">
       <div className="brand-lockup"><span className="brand-symbol" aria-hidden><svg viewBox="0 0 28 28"><path d="M5.5 20.5 10.7 7l3.3 7.15L17.3 7l5.2 13.5" /><path d="M8.1 16.1h11.8" /></svg></span><span className="brand-copy"><strong>Mae-Flow</strong><small>{session.role === "admin" ? "Management Console" : "Developer Workspace"}</small></span></div>
@@ -156,7 +130,7 @@ export function App() {
     </aside>
 
     <div className="workspace">
-      <header className="workspace-header"><div><div className="eyebrow">MAE-FLOW CLOUD</div><h1>{header.title}</h1><p>{header.description}</p></div>{relevantWaiting > 0 && view !== "history" && view !== "users" && <div className="header-attention"><span className="attention-pulse" aria-hidden /><span><strong>{relevantWaiting}</strong>{view === "mine" ? " 项需要我核对" : " 项工作等待决策"}</span></div>}</header>
+      <header className="workspace-header"><div><div className="eyebrow">MAE-FLOW CLOUD</div><h1>{header.title}</h1><p>{header.description}</p></div><div className="workspace-header-actions">{relevantWaiting > 0 && view !== "history" && view !== "users" && <div className="header-attention"><span className="attention-pulse" aria-hidden /><span><strong>{relevantWaiting}</strong>{view === "mine" ? " 项需要我核对" : " 项工作等待决策"}</span></div>}{view === "mine" && <button type="button" className="header-launch" onClick={() => setLaunchOpen(true)}><svg viewBox="0 0 20 20" aria-hidden><path d="M10 4v12M4 10h12" /></svg><span>发起新任务</span></button>}</div></header>
       <main className="workspace-main">
         {view === "team" && <>
           <section className="team-pulse" aria-labelledby="pulse-title"><div className="section-head pulse-head"><div><span className="section-kicker">TEAM PULSE</span><h2 id="pulse-title">团队任务态势</h2></div><span className="live-label"><i aria-hidden /> 实时更新</span></div><div className="pulse-grid">{PULSE_GROUPS.map((group) => { const count = group.statuses ? tasks.filter((task) => group.statuses!.includes(task.status)).length : tasks.length; return <div className={`pulse-card ${group.tone}`} key={group.label}><span className="pulse-card-label"><i aria-hidden />{group.label}</span><strong>{count}</strong></div>; })}</div></section>
@@ -168,13 +142,13 @@ export function App() {
           <section className="identity-bar session-bar"><div className="identity-copy"><span className="section-kicker">PERSONAL INBOX</span><strong>{session.username} 的专属工作台</strong><small>{session.role === "admin" ? "显示分配给你的工作，并兜底承接尚未分配负责人的待确认事项。" : "登录身份已和任务归属绑定；这里始终只显示分配给你的工作。"}</small></div><span className={`role-chip ${session.role}`}>{session.role === "admin" ? "管理员身份" : "开发身份"}</span></section>
           <section className="personal-pulse" aria-label="我的任务摘要"><div className="personal-stat attention"><span>待我核对</span><strong>{myWaiting.length}</strong></div><div className="personal-stat active"><span>执行中</span><strong>{myTasks.filter((task) => ACTIVE_STATUSES.includes(task.status)).length}</strong></div><div className="personal-stat success"><span>待合入 / 完成</span><strong>{myTasks.filter((task) => DELIVERED_STATUSES.includes(task.status)).length}</strong></div></section>
           <section className="review-inbox" aria-labelledby="review-title"><div className="section-head"><div><span className="section-kicker">REVIEW INBOX</span><h2 id="review-title">待我核对</h2></div><span className="section-count attention">{myWaiting.length} 项</span></div>{myWaiting.length === 0 ? <div className="review-clear"><span aria-hidden>✓</span><div><strong>当前没有需要你核对的事项</strong><p>新的人工节点会通过小鲁班提醒，并自动出现在这里。</p></div></div> : <div className="task-list review-list">{myWaiting.map((task) => <TaskCard key={task.id} task={task} onChanged={refresh} focused={task.id === targetTaskId} canOperate onOpenArtifacts={() => setArtifactTaskId(task.id)} />)}</div>}</section>
-          {launchPanel}
           <section className="task-section" aria-labelledby="my-queue-title"><div className="section-head"><div><span className="section-kicker">MY TASKS</span><h2 id="my-queue-title">我的其他任务</h2></div><span className="section-count">{myOtherTasks.length} 项</span></div>{myOtherTasks.length === 0 && <TaskEmpty personal />}<div className="task-list">{myOtherTasks.map((task) => <TaskCard key={task.id} task={task} onChanged={refresh} focused={task.id === targetTaskId} canOperate onOpenArtifacts={() => setArtifactTaskId(task.id)} />)}</div></section>
         </>}
         {view === "history" && <HistoryBoard />}
         {view === "users" && session.role === "admin" && <UsersBoard />}
       </main>
     </div>
+    {launchOpen && <LaunchWorkspace session={session} onCreated={refresh} onClose={() => setLaunchOpen(false)} />}
     {artifactTask && <TaskWorkspace task={artifactTask} canOperate={canOperate(artifactTask)} onChanged={refresh} onClose={() => setArtifactTaskId("")} />}
   </div>;
 }
@@ -260,4 +234,3 @@ function PhaseFunnel({ tasks }: { tasks: TaskSummary[] }) {
 function TaskEmpty({ personal }: { personal: boolean }) {
   return <div className="empty-state"><span className="empty-visual" aria-hidden><i /><i /><i /></span><strong>{personal ? "还没有分配给你的其他任务" : "还没有当前任务"}</strong><p>{personal ? "你发起的任务会自动归入这里，管理员也可以直接分配给你。" : "任务发起后，团队整体进展会出现在这里。"}</p></div>;
 }
-
