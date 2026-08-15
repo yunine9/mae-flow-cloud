@@ -25,6 +25,7 @@ Mae-Flow 云端服务:Pi(pi-mono coding agent)**进程内**集成 + Mae-Flow 内
 
 ```
 src/
+  auth.ts             本地账号:scrypt 加盐哈希 + HttpOnly 会话 + 角色权限
   semanticEvents.ts   十种语义事件 + 追加式事件日志(eventId 幂等锚)
   transcriptStore.ts  语义事件 → transcript 同形 JSONL(含子 Agent 布局)
   gateService.ts      同步裁决点:路由 + 深层契约端口(=内核 CLI)+ fail-open
@@ -54,6 +55,21 @@ npm test          # 不变式单测 + 任务 API 端到端(真 pi 会话)
 npm run probe     # 整链演练:进程内 pi + 剧本假模型,内核裁判验收九项事实
 npm run serve     # http://127.0.0.1:8787 浏览器走完 发任务→看进度→点审批
 ```
+
+演示模式默认登录为 `admin / mae-flow-demo`。管理员登录后可在“账号管理”
+创建开发账号；开发账号默认进入“我的工作”，仍可查看团队全部任务，但只能
+审批或重跑分配给自己的任务。管理员默认进入“团队总览”，可操作所有任务。
+
+正式模式首次启动必须用环境变量引导管理员，密码不会以明文落盘：
+
+```bash
+MAE_FLOW_ADMIN_USER=admin \
+MAE_FLOW_ADMIN_PASSWORD='<至少 10 个字符的初始密码>' \
+npm run serve -- --models /etc/mae-flow-cloud/models.json
+```
+
+账号保存在数据目录的 `auth.json`（scrypt 加盐哈希、文件权限 `0600`）；
+登录会话保存在进程内、有效期 8 小时，服务重启后需重新登录。
 
 probe 现场留档在 `.probe/`,serve 的任务现场在 `.tasks/<task-id>/`
 (transcript/events/waiting/子 Agent transcript),每个文件都能直接打开看。
@@ -96,6 +112,15 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
 
 ## 已知边界(诚实清单)
 
+- **云端放开了子 Agent 台账门禁(2026-08-15,用户拍板)**:pi 宿主取不到
+  内核格式的子会话执行台账,UT/COMPILE/REVIEWER/STORY/GRILL 的生命周期
+  证据在 `MAE_FLOW_HOST=cloud` 下不再拦 done,CodeCheck 修复轮的"合法
+  令牌"同族放开(内核 `host_env.worker_agent_ledger_gates`,测试
+  `test_cloud_worker_ledger.py`)。**这意味着"某个子 Agent 真跑过"在云端
+  没有机器证明**;机器把关依赖的是:UTRUN 一类命令令牌(Bash 钩子仍在)、
+  CodeCheck 重扫零信任自述、以及交付点流水线结果绑 SHA。ASKUSER 人工闸
+  不放开;本地 CLI 行为一字不变。流水线证据口(内核读平台 API)尚未建成,
+  建成前 verify_ut 的"真跑过"只有工作区实物(surefire 报告)可查;
 - **完整交付链已在真模型上全程走通(2026-08-14 run7,GLM@bigmodel,
   fieldtest-java,容器隔离)**:需求→Grill→Spec→Story→编码→质量链→
   交付检视→push→MR→流水线,内核 current=end,任务收口 await_merge,

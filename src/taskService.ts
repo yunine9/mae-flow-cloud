@@ -204,7 +204,15 @@ export class TaskService {
   private queue: string[] = [];
   private counter = 0;
 
-  constructor(readonly options: TaskServiceOptions) {}
+  constructor(readonly options: TaskServiceOptions) {
+    // 桌面通知只有 serve --desktop-notify 显式要了才开(它会设
+    // MAE_FLOW_DESKTOP_NOTIFY);其余一切宿主进程——测试、probe、pilot——
+    // 一律静音。少了这道闸,npm test 拉起真内核当裁判时会把用户的 mac
+    // 弹一串"需要你确认"(实锤弹过);环境变量随子进程继承,一处设置全链生效。
+    if (!process.env.MAE_FLOW_DESKTOP_NOTIFY) {
+      process.env.MAE_FLOW_NO_NOTIFY ??= "1";
+    }
+  }
 
   list(): TaskSummary[] {
     return [...this.tasks.values()]

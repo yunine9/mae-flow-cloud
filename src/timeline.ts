@@ -93,13 +93,19 @@ function fromEvents(workspace: string): TimelineEntry[] {
 
   // 先扫一遍收口事件的位置:判断"没返回登记"是真丢了,还是还在跑。
   const closingIds: number[] = [];
+  const rebuildIds: number[] = [];
   for (const event of events) {
     if (event.kind === "turn_finished" || event.kind === "session_ended") {
       closingIds.push(Number(event.eventId ?? 0));
     }
+    if (event.kind === "session_started") {
+      rebuildIds.push(Number(event.eventId ?? 0));
+    }
   }
   const hasClosingAfter = (eventId: number) =>
     closingIds.some((id) => id > eventId);
+  const rebuiltAfter = (eventId: number) =>
+    rebuildIds.some((id) => id > eventId);
 
   for (const event of events) {
     const ts = String(event.ts ?? "");
@@ -182,13 +188,19 @@ function fromEvents(workspace: string): TimelineEntry[] {
   for (const [callId, payload] of spawned) {
     const returned = finished.has(callId);
     const stale = !returned && hasClosingAfter(Number(payload.eventId ?? 0));
+    // "没有返回登记"要说清成因,不能只吓人:实测三条全是会话重建
+    // (限流/重启)把在途子 Agent 带走——孩子随父会话一起没了,返回
+    // 无处落地。这不是 agent 失职,别让人往那个方向猜。
+    const takenByRebuild = stale && rebuiltAfter(Number(payload.eventId ?? 0));
     entries.push({
       ts: String(payload.ts ?? ""),
       kind: "agent",
       title: stale
         ? `子 Agent 没有返回登记:${clip(payload.agent_type, 24)}`
         : `派出子 Agent:${clip(payload.agent_type, 24)}`,
-      detail: clip(payload.description, 80) || undefined,
+      detail: takenByRebuild
+        ? "会话重建把在途子 Agent 带走了,返回不会再登记;已完成的工作仍在现场"
+        : clip(payload.description, 80) || undefined,
       tone: stale ? "danger" : returned ? "info" : "attention",
     });
   }
