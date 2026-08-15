@@ -207,6 +207,25 @@ export async function retryTask(
   return {};
 }
 
+/** 跑动中插话:发送即打断,模型把手头这一轮做完就收到。
+ * 服务端拒绝的理由(正等你决定 / 没有在跑的会话)原样带回,前端不改写
+ * ——它比我们更清楚这一单此刻处在什么状态。 */
+export async function interruptTask(
+  taskId: string,
+  text: string,
+): Promise<{ error?: string }> {
+  const response = await fetch(`/tasks/${taskId}/interrupt`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    return { error: String(body.error ?? `HTTP ${response.status}`) };
+  }
+  return {};
+}
+
 /** 外部动作台账(需服务端配 --pg)。404 时把服务端的解释原样带回。 */
 export async function listActions(
   taskId: string,

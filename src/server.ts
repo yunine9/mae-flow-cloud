@@ -6,6 +6,7 @@
  *   GET  /tasks/:id                                     → 详情(含待办)
  *   POST /tasks/:id/decision   {state_version,decision,notes?}
  *        → 200;版本冲突/已被抢先 → 409 "任务状态已变化"(先到决定生效)
+ *   POST /tasks/:id/interrupt  {text}                   → 200;跑动中插话(发送即打断)
  *   GET  /tasks/:id/events                              → SSE:重放事件日志后持续跟进
  *   GET  /tasks/:id/timeline                            → 人话交付时间线(只读现场)
  *   GET  /tasks/:id/artifacts[/:name]                   → 检视产物清单/内容(只读现场)
@@ -226,6 +227,18 @@ export function createTaskServer(
         }
         if (request.method === "GET" && parts[2] === "events") {
           return streamEvents(service, id, response);
+        }
+        // 跑动中插话(本地 CLI 的 ESC 等价物):发送即打断,模型把手头
+        // 这一轮做完就收到。权限同决定——插话也是在指挥这一单,不是围观。
+        if (request.method === "POST" && parts[2] === "interrupt") {
+          const target = service.get(id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          if (!canOperate(viewer, target.luban_account, !!options.auth)) {
+            return json(response, 403, { error: "只能给分配给自己的任务插话" });
+          }
+          const body = await readBody(request);
+          const task = await service.interrupt(id, String(body.text ?? ""));
+          return json(response, 200, task);
         }
         // 重跑一单(run7 实测的运维刚需):环境故障被迫收口的任务,
         // 修好环境后续接内核当前步骤,不从头再来。终态校验在服务层。

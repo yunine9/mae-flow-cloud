@@ -40,6 +40,15 @@ export type TaskStatus =
   | "await_merge"    // 流水线通过,等待人工合入;系统不自动合并
   | "failed";
 
+export interface TaskProgress {
+  /** 与内核现场看板同源的展示阶段；这里只镜像，不参与流程判定。 */
+  phases: string[];
+  current_index: number;
+  current_phase: string;
+  step?: string;
+  revision?: number;
+}
+
 export interface TaskSummary {
   id: string;
   requirement: string;
@@ -61,6 +70,8 @@ export interface TaskSummary {
     sha?: string;
     skipped?: string;
   };
+  /** 从现场看板的 panel-pulse.js/panel.html 读取的进度摘要。 */
+  progress?: TaskProgress;
 }
 
 export interface TaskServiceOptions {
@@ -109,6 +120,19 @@ export interface TaskServiceOptions {
   log?: (message: string) => void;
 }
 
+/** 小鲁班链接必须落到个人处置台，而不是 /tasks/:id 的 JSON API。
+ * account 让无登录态的内网 MVP 也能直接筛出本人任务，task 用于
+ * 自动定位并展开目标卡；二者只承载展示定位，不参与任务判定。 */
+function personalTaskLink(
+  linkBase: string | undefined,
+  account: string,
+  taskId: string,
+): string {
+  const root = (linkBase ?? "").replace(/\/+$/, "");
+  return `${root}/?account=${encodeURIComponent(account)}`
+    + `&task=${encodeURIComponent(taskId)}`;
+}
+
 interface TaskState {
   summary: TaskSummary;
   driver?: CloudSession;
@@ -130,6 +154,9 @@ interface TaskState {
   resume?: boolean;
   /** 恢复期收到的人工决定:重建会话就绪后由 driver 补登记再续跑。 */
   pendingResume?: WaitingRecord;
+  /** 避免列表轮询反复解析未变化的现场面板。 */
+  progressPulse?: string;
+  progressCache?: TaskProgress;
 }
 
 export class TaskService {
@@ -162,7 +189,50 @@ export class TaskService {
             last_error: record.last_error,
           }
         : undefined,
+      progress: this.readProgress(task),
     };
+  }
+
+  /** 列表里的阶段轨道必须与现场看板同源，不能在 Web 复刻状态机。
+   * pulse 给当前阶段/步骤，panel.html 给阶段顺序；pulse 未变化就复用缓存。 */
+  private readProgress(task: TaskState): TaskProgress | undefined {
+    if (!task.cwd) return undefined;
+    const pulsePath = join(task.cwd, ".mae-flow-work", "panel-pulse.js");
+    const panelPath = join(task.cwd, ".mae-flow-work", "panel.html");
+    if (!existsSync(pulsePath) || !existsSync(panelPath)) return undefined;
+    try {
+      const pulseText = readFileSync(pulsePath, "utf-8");
+      if (pulseText === task.progressPulse) return task.progressCache;
+      const first = pulseText.indexOf("{");
+      const last = pulseText.lastIndexOf("}");
+      if (first < 0 || last <= first) return undefined;
+      const pulse = JSON.parse(pulseText.slice(first, last + 1));
+      const html = readFileSync(panelPath, "utf-8");
+      const nodes = [...html.matchAll(
+        /<span class="phase-node\s+(past|current|future)">([^<]+)<\/span>/g,
+      )];
+      const phases = nodes.map((match) => match[2].trim());
+      const currentByClass = nodes.findIndex((match) => match[1] === "current");
+      const currentPhase = String(pulse.phase ?? "").trim();
+      const currentIndex = currentByClass >= 0
+        ? currentByClass : phases.indexOf(currentPhase);
+      if (phases.length === 0 || currentIndex < 0) return undefined;
+      const progress: TaskProgress = {
+        phases,
+        current_index: currentIndex,
+        current_phase: currentPhase || phases[currentIndex],
+        step: pulse.step_title ? String(pulse.step_title) : undefined,
+        revision: Number.isFinite(Number(pulse.revision))
+          ? Number(pulse.revision) : undefined,
+      };
+      task.progressPulse = pulseText;
+      task.progressCache = progress;
+      return progress;
+    } catch (error) {
+      this.options.log?.(
+        `任务 ${task.summary.id} 进度摘要读取失败: ${String(error)}`);
+      return undefined;
+    }
   }
 
   eventLogPath(id: string): string {
@@ -355,6 +425,33 @@ export class TaskService {
       this.queue.push(task.summary.id);
       void this.pump();
     }
+    return { ...task.summary };
+  }
+
+  /** 跑动中插话:发送即打断。模型把手头这一轮的工具调用做完就收到,
+   * 不会在半截处被掐断。
+   *
+   * 两条边界:
+   * - 等人决定时不许走这条路——那时该说的话就是决定本身,从决定卡走,
+   *   否则同一件事有两个入口,内核台账上却只认一个。
+   * - 正好撞在回合间隙的插话 pi 收下却永远不送(它的队列没人取),
+   *   由 settle 在回合收口时取回来补发。人说过的话被系统吞掉,比慢
+   *   一拍严重得多。
+   */
+  async interrupt(id: string, text: string): Promise<TaskSummary> {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    const message = text.trim();
+    if (!message) throw new NotFoundError("插话内容不能为空");
+    if (task.summary.status === "waiting_for_human") {
+      throw new NotFoundError("这一单正等你的决定,请在决定卡里回答");
+    }
+    if (task.summary.status !== "running" || !task.driver) {
+      throw new NotFoundError(
+        `任务 ${id} 当前是 ${task.summary.status},没有在跑的会话可插话`);
+    }
+    await task.driver.steer(message);
+    this.options.log?.(`任务 ${id} 已插话(本轮工具调用结束后送达)`);
     return { ...task.summary };
   }
 
@@ -662,7 +759,11 @@ export class TaskService {
         account,
         step: waiting.step,
         summary: String(questions[0]?.question ?? "需要你确认"),
-        link: `${this.options.linkBase ?? ""}/tasks/${task.summary.id}`,
+        link: personalTaskLink(
+          this.options.linkBase,
+          account,
+          task.summary.id,
+        ),
       })
       .then((record) => {
         task.notifyRecord = record;
@@ -718,7 +819,7 @@ export class TaskService {
       account,
       status,
       summary: text[status],
-      link: `${this.options.linkBase ?? ""}/tasks/${id}`,
+      link: personalTaskLink(this.options.linkBase, account, id),
     });
   }
 
@@ -793,6 +894,16 @@ export class TaskService {
         // 主动压缩:回合间隙是唯一安全的压缩点(等待人工时压会
         // 打断挂起的人工节点)。以内核锚点组织摘要,注意力不许飘。
         await this.maybeCompact(task);
+        // 回合收口时 steer 队列还压着货 = 那条插话从没送到(撞在回合
+        // 间隙,pi 收下却不会自己送)。取回来补发,而且排在催办和收工
+        // 之前:人说的话优先于系统催办,更不能因为"流程刚好走完了"被吞掉。
+        const late = task.driver?.takeUndeliveredSteers() ?? [];
+        if (late.length && task.driver) {
+          this.options.log?.(
+            `任务 ${task.summary.id} 补发 ${late.length} 条未送达的插话`);
+          await this.settle(task, task.driver.continueWith(late.join("\n\n")));
+          break;
+        }
         // 回合结束≠流程走完:模型可能提前收嘴(run3 实测停在
         // delivery_review)。内核 current 不在终态且催办还有效时,
         // 同一会话催办续跑,而不是把半截流程标成 completed。

@@ -253,6 +253,40 @@ export class CloudSession {
     return { status: "turn_finished", reason };
   }
 
+  /** 中途插话(本地 CLI 的 ESC 在云端的等价物)。
+   *
+   * 用 pi 的 steer 而不是 abort:steer 的语义是"当前这一轮的工具调用做完
+   * 就送达",所以模型不会在文件写一半、构建杀一半的地方被掐断——那种半截
+   * 现场比慢几秒麻烦得多。真要掐死一条卡住的长命令是另一回事(abortBash),
+   * 不在这条路上。
+   *
+   * 这不绕过任何门禁:插话只改变模型下一步干什么,该过的证据一样得过。
+   * 登记在 steer 成功之后——先记后发,发失败就会留下一条从未送达的假账。
+   */
+  async steer(text: string): Promise<void> {
+    await (this.session as any).steer(text);
+    this.emit("user_message", this.sessionId, { text });
+  }
+
+  /** 取走"发出去却没送到"的插话。
+   *
+   * 坑(读 pi 源码才发现):steer 从不抛错,它只是把消息压进内部队列。
+   * 正好撞在回合间隙发出的插话,会静静躺在那儿永远没人送——靠 try/catch
+   * 兜底是空想。真正可靠的判定是"回合都收口了队列还有货",那就是没送到。
+   *
+   * 用 clearQueue 而不是只读的 getSteeringMessages:它同时清掉 agent 侧
+   * 队列,取走即归我,不会出现我补发一遍、pi 事后又送一遍。它连 followUp
+   * 队列一并清空——我们从不用 followUp,清了无妨。
+   */
+  takeUndeliveredSteers(): string[] {
+    try {
+      const queue = (this.session as any).clearQueue?.();
+      return Array.isArray(queue?.steering) ? queue.steering : [];
+    } catch {
+      return [];      // 旁路一律 fail-open:取不回来也不许挡住收口
+    }
+  }
+
   /** 回合结束但流程未到终态时的催办续跑:同一会话追加一条用户消息。
    * 模型提前收嘴(run3 实测:拿到 message-id 后直接 end_turn)不等于
    * 任务完成——阶段真相只看内核状态,宿主负责把会话推回流程。 */
