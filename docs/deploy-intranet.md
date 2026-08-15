@@ -12,7 +12,7 @@
 | Python 3 | ≥ 3.10,mae-flow 内核的运行时 |
 | mae-flow 内核 | checkout 到服务器,`MAE_FLOW_HOME` 指向仓根(缺省找 `../mae-flow`) |
 | Git | 任务克隆/推分支/ls-remote 都用它 |
-| JDK + Maven | 试点仓(Java)编译验证用;版本按试点仓 `pom.xml` 要求 |
+| JDK + Maven | 试点仓(Java)编译验证用;版本按试点仓 `pom.xml` 要求。**--verify-via-pipeline 形态不需要**(docker 同) |
 | npm 依赖 | `npm ci`(pi 锁 0.84.1,升级必须重跑 probe+全套测试再拍板) |
 
 **Linux 容器编译验证(外部已模拟通过)**:2026-08-14 在 Colima
@@ -30,19 +30,53 @@ arm64 Linux 容器(maven:3.8-eclipse-temurin-8)对 fieldtest-java
 | Git 服务端 | FakeGitPlatform 裸仓 | `--repo` 指向内网仓地址(克隆凭证走 git credential) | 服务端仓是唯一远端真相 |
 | MR + 流水线 | FakeGitPlatform HTTP | `delivery.platformUrl` + 鉴权 | MR 按(源→目标)幂等;流水线结果绑 SHA;验证中→等待合入 |
 
-内网真件的接线形状(用户确认内部已有 CLI:提交 MR、查 MR 状态、拉
-流水线日志):真件切换点做成**薄适配层**——把内部 CLI 的输出映射成与
-FakeGitPlatform 相同的 JSON 形状(`/mr`、`/pipeline/status?sha=`,失败
-run 带 `log` 字段),状态机与修复环一行不改。适配层进内网后按实际 CLI
-形状填,不在外部瞎猜命令语法。
+## 内网依赖就两个 CLI(强度刻意不同)
 
-通知的内网形态,除小鲁班 HTTP 外还有两条候选(均为 Notifier 端口的
-新实现,语义契约不变:投递失败不改流程、幂等、有限退避):
+除标准件(git / python3 / node;`--verify-via-pipeline` 形态下
+**docker 也不需要**)外,内网新增的外部依赖只有两个内部 CLI:
+
+| | 干什么 | 强度 | 挂了会怎样 |
+|---|---|---|---|
+| MR/流水线 CLI | 交 MR、按 SHA 查状态、拉失败日志 | **硬依赖**(交付链的裁判入口) | 交付动作失败如实落账(`summary.delivery` 带原因原文),任务停在 completed/verifying 留痕,不假装交付 |
+| 通知 CLI(拉群艾特;或小鲁班 HTTP/MCP,三选一) | 事实 → 一条消息@到人 | 软依赖(旁路 fail-open) | 只把 `summary.notify` 标红,流程一步不停 |
+
+### MR/流水线 CLI:严格说是三个能力,第 3 个最要命
+
+1. **交 MR**(源分支→目标分支,幂等);
+2. **按 SHA 查流水线状态**(结果必须绑提交,旧绿灯不背书新代码);
+3. **拉失败日志** ← **进内网第一件要核实的能力**。它是修复 agent 的
+   口粮:没有失败日志,修复环退化成瞎修。若内部 CLI 拉不到日志,
+   退路是修复 agent 只拿到"哪个 job 红了"、在本地复现——那就又绕回
+   编译环境,免编译形态的意义损失大半。**先验这一条,再谈部署形态。**
+
+### 适配层契约(照抄即可实现,字段是代码真实消费的全集)
+
+适配层 = 一个把内部 CLI 输出翻译成下列 JSON 的小 HTTP 服务
+(或直接改造 `delivery.platformUrl` 的指向)。宿主只读这些字段,
+多余字段一律忽略;状态机、修复环、轮询一行不改:
+
+| 端点 | 请求 | 宿主消费的响应字段 |
+|---|---|---|
+| `POST /mr` | `{source_branch, target_branch, title}` | `{url}`(MR 链接,展示用) |
+| `POST /pipeline/trigger` | `{sha}` | `{status: "success"\|"failed"\|"running", log?}` |
+| `GET /pipeline/status?sha=<sha>` | — | `{runs: [{status, log?}]}`(取最后一个终态 run) |
+
+- `log` = 失败详情原文(修复 agent 只看前 2000 字,适配层自行截断);
+- 平台若只有"触发后异步跑",trigger 返回 `running` 即可,宿主轮询收敛;
+- 轮询旋钮:`pollIntervalMs` 默认 10 秒(内网建议 30~60 秒,看 CLI 开销),
+  `pollTimeoutMs` 默认 30 分钟,耗尽如实留痕请人工——绝不无限等。
+- 没选 webhook 的原因:要求平台能回调进来(防火墙/注册都是部署项),
+  假件难模拟,重启后回调丢了仍要轮询兜底——等于养两套。真有需要时
+  webhook 可后加,轮询留作兜底,语义不变。
+
+### 通知 CLI 的两条候选(Notifier 端口的新实现,语义契约不变)
+
+契约:投递失败不改流程状态、按 waiting_id 幂等、有限退避。
+- **拉群 + CLI 艾特**(用户提议):建群、用内部 CLI 在群里 @ 相关人;
+  适配层只做"事实→一条消息",失败落 `summary.notify` 标红;
 - **小鲁班 MCP**:若内网提供 MCP 服务端,需引入 MCP 客户端
   (`@modelcontextprotocol/sdk`,本仓当前未装,纯 JS 无构建);
   传输方式/工具名/鉴权进内网确认,不预写。
-- **拉群 + CLI 艾特**(用户提议):建群、用内部 CLI 在群里 @ 相关人;
-  适配层同样只做"事实→一条消息",失败落 summary.notify 标红。
 
 ## 流水线修复环(全绿是最终目标)
 
@@ -166,12 +200,21 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
 可执行版:`harness/preflight.sh --java-repo <试点仓> --models <models.json> --provider <网关名>`
 ——1~4 项自动核验真实退出码,5/6 两项人工,脚本会原样提醒。
 
-1. 容器内 `mvn compile && mvn test` 真实退出码 0;
+0. **先验两个 CLI**(部署形态由此定,顺序不能换):
+   - MR/流水线 CLI 三能力逐一实测:交 MR、按 SHA 查状态、**拉失败日志**
+     ——第 3 项拉不到,免编译形态(--verify-via-pipeline)不成立,
+     回容器编译形态;
+   - 通知 CLI 发一条真消息@到人(失败只标红不阻流程,但要验真投得到);
+1. 容器内 `mvn compile && mvn test` 真实退出码 0
+   (--verify-via-pipeline 形态跳过本项,以第 5 项流水线真实跑过
+   compile+test 且结果绑 SHA 代替);
 2. `npm test` 全绿(17 项,含恢复/并发/交付三条路);
 3. `npm run probe` 九项事实全绿(内核裁判在场);
 4. 网关连通:发一个最小任务,确认首回合不是空转
    (429/网关错误会如实落 failed + detail,不会假 completed);
 5. 一单真需求走到 `await_merge`,MR 出现在真平台上;
+   顺带演练修复环:故意让流水线红一次,确认修复会话拿到失败日志、
+   推新提交、新流水线绑新 SHA(而不是旧 SHA 的旧绿灯);
 6. 杀进程重启,确认等待中的任务还在、决定后能续跑
    (可执行演练:`harness/restart-drill.sh`——真 kill -9 真 HTTP,
    全绿即过;上线机器上跑一遍)。
