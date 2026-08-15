@@ -75,6 +75,7 @@ export function AnnotationPanel({
   taskId,
   items,
   checks,
+  reply,
   canOperate,
   running,
   onChanged,
@@ -83,6 +84,8 @@ export function AnnotationPanel({
   taskId: string;
   items: Annotation[];
   checks: AnchorCheck[];
+  /** 最后一批送出后 AI 的原话。不做逐条对应——配错了比不显示更害人。 */
+  reply?: { texts: string[]; truncated: boolean };
   canOperate: boolean;
   /** 点一条回到材料里那一行——改批注前人几乎总要再看一眼上下文。 */
   onLocate?: (item: Annotation) => void;
@@ -205,6 +208,23 @@ export function AnnotationPanel({
           );
         })}
       </ol>
+
+      {/* AI 收到批注后的原话。护栏要求它逐条回复"改了什么/为什么不改",
+          那段话原来只躺在会话流里——不同意的批注在面板上就永远停在
+          "已提交",人干等一个不会来的改动。这里原样摆出来,对应关系
+          人自己看:从自由文本里猜"第几段对第几条",配错了更害人。 */}
+      {reply && reply.texts.length > 0 && (
+        <details className="annot-reply">
+          <summary>送出之后 AI 说了什么({reply.texts.length} 段)</summary>
+          <p className="annot-reply-note">
+            原话未做逐条对应,请对照各条自行核对;不服就点那条的「返工」。
+          </p>
+          {reply.texts.map((text, at) => (
+            <blockquote key={at}>{text}</blockquote>
+          ))}
+          {reply.truncated && <p className="annot-reply-note">(太长截断,完整内容见执行动态)</p>}
+        </details>
+      )}
     </details>
   );
 }

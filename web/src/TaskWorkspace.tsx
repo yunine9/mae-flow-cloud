@@ -60,6 +60,8 @@ export function TaskWorkspace({
   const [loading, setLoading] = useState(false);
   const [notes, setNotes] = useState<Annotation[]>([]);
   const [checks, setChecks] = useState<AnchorCheck[]>([]);
+  const [reply, setReply] =
+    useState<{ texts: string[]; truncated: boolean } | undefined>();
   const [notesPulse, setNotesPulse] = useState(0);
   const [attachNotes, setAttachNotes] = useState(true);
   const [livePulse, setLivePulse] = useState(0);
@@ -128,6 +130,7 @@ export function TaskWorkspace({
       if (!alive) return;
       setNotes(result.items);
       setChecks(result.checks);
+      setReply(result.reply);
     });
     return () => { alive = false; };
   }, [task.id, task.status, notesPulse, livePulse]);
@@ -297,6 +300,7 @@ export function TaskWorkspace({
             taskId={task.id}
             items={notes}
             checks={checks}
+            reply={reply}
             canOperate={canOperate}
             running={task.status === "running"}
             onLocate={locate}

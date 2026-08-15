@@ -275,7 +275,12 @@ export interface AnchorCheck {
 
 export async function listAnnotations(
   taskId: string,
-): Promise<{ items: Annotation[]; checks: AnchorCheck[] }> {
+): Promise<{
+  items: Annotation[];
+  checks: AnchorCheck[];
+  /** 最后一批批注送出后,AI 在主会话说的原话(未做逐条对应)。 */
+  reply?: { texts: string[]; truncated: boolean };
+}> {
   const response = await fetch(`/tasks/${taskId}/annotations`);
   if (!response.ok) return { items: [], checks: [] };
   return response.json();

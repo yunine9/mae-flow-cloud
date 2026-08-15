@@ -310,6 +310,13 @@ test("批注 HTTP 面:圈注→清单带进展→送出走插话通道", async (
       .flatMap((request) => (request as any).messages ?? [])
       .map((message: any) => JSON.stringify(message.content ?? "")).join("\n");
     assert.match(seen, /重试只该对网关失败生效/);
+
+    // AI 收到之后说的话要能在清单里看到(原话,不做逐条对应)——
+    // 不然"不同意+理由"永远躺在会话流里,面板上像什么都没发生。
+    const replied = await fetch(`${base}/tasks/${id}/annotations`)
+      .then((response) => response.json());
+    assert.ok(replied.reply, "送出之后必须带回 AI 的回话");
+    assert.match(replied.reply.texts.join("\n"), /按你圈的改完了/);
   } finally {
     server.close();
     await model.stop();

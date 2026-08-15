@@ -336,14 +336,59 @@ export class TaskService {
    *
    * 锚点检查是旁路:读不到材料按"还在"放行,绝不因为它挡住人送意见。
    */
-  listAnnotations(id: string): { items: Annotation[]; checks: AnchorCheck[] } {
+  listAnnotations(id: string): {
+    items: Annotation[];
+    checks: AnchorCheck[];
+    reply?: { texts: string[]; truncated: boolean };
+  } {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     const items = this.annotations(task).visible();
     const root = this.artifactRoot(id);
     const checks = reanchor(items, (artifact) =>
       root ? readArtifact(root, artifact)?.content : undefined);
-    return { items, checks };
+    return { items, checks, reply: this.annotationReply(task, items) };
+  }
+
+  /** 最后一批批注送出之后,主会话 AI 说过的话——原样带给面板。
+   *
+   * 刻意不做逐条对应:从自由文本里猜"第几段对应第几条",配错了就把
+   * "AI 不同意"错挂到别的批注上,比不显示更害人(与"不推断已采纳"同根)。
+   * 用户拍板走轻的:"就把 ai 的话展示出来就行",对不对应人自己看。 */
+  private annotationReply(
+    task: TaskState,
+    items: Annotation[],
+  ): { texts: string[]; truncated: boolean } | undefined {
+    const sentTimes = items
+      .map((item) => item.sent_at ? +new Date(item.sent_at) : NaN)
+      .filter((at) => Number.isFinite(at));
+    if (!sentTimes.length) return undefined;
+    const lastSent = Math.max(...sentTimes);
+    try {
+      // 事件 ts 是去掉 T/Z 的 UTC 裸串(sessionDriver 的 toISOString 截断),
+      // 直接 new Date() 会按本地时区解析——差 8 小时,所有回话都被误判成
+      // 发生在送出之前。补回 Z 按 UTC 读。
+      const utc = (ts: unknown) =>
+        +new Date(String(ts ?? "").replace(" ", "T") + "Z");
+      const texts = new EventLog(join(task.summary.workspace, "events.jsonl"))
+        .replay()
+        .filter((event) => event.kind === "assistant_message"
+          && String(event.sessionId ?? "main") === "main"
+          && utc(event.ts) > lastSent)
+        .map((event) => String(event.payload?.text ?? "").trim())
+        .filter(Boolean);
+      if (!texts.length) return undefined;
+      // 面板不是会话流,给个够看的量就好;截了要说,别装完整。
+      const kept = texts.slice(0, 8)
+        .map((text) => text.length > 1500 ? text.slice(0, 1500) + "…" : text);
+      return {
+        texts: kept,
+        truncated: texts.length > 8
+          || texts.slice(0, 8).some((text) => text.length > 1500),
+      };
+    } catch {
+      return undefined;   // 读不动就不带:旁路绝不挡住清单本身
+    }
   }
 
   /** 发过的插话 + 送达与否。
