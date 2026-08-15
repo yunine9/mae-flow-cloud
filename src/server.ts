@@ -181,6 +181,12 @@ export function createTaskServer(
         if (file) {
           response.writeHead(200, {
             "content-type": MIME[extname(file)] ?? "application/octet-stream",
+            // index.html 一个缓存头都不带时,浏览器可以按启发式规则自行
+            // 缓存——包名带 hash 也救不了:入口页是旧的,它引的就永远是
+            // 旧包。修了三轮图,人看到的可能一直是修之前那版。
+            // 入口页每次回源,带 hash 的资产则可以长期缓存。
+            "cache-control": file.endsWith(".html")
+              ? "no-cache" : "public, max-age=31536000, immutable",
           });
           return response.end(readFileSync(file));
         }

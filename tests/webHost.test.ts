@@ -59,10 +59,18 @@ test("配 webRoot:index 与资产按类型出文件,API 与穿越各归各位", 
       "text/html; charset=utf-8");
     assert.match(await index.text(), /正式前端/);
 
+    // 入口页必须每次回源。它一个缓存头都不带的时候,浏览器可以按启发式
+    // 规则自己缓存;资产名带 hash 也没用——入口页是旧的,它引的就永远是
+    // 旧包。前端修了三轮,人看到的可能一直是修之前那版,而且这种"没生效"
+    // 完全无声。
+    assert.match(index.headers.get("cache-control") ?? "", /no-cache/);
+
     const asset = await fetch(base + "/assets/app.js");
     assert.equal(asset.status, 200);
     assert.equal(asset.headers.get("content-type"),
       "text/javascript; charset=utf-8");
+    // 带 hash 的资产反过来可以长期缓存:改了内容就是新文件名。
+    assert.match(asset.headers.get("cache-control") ?? "", /immutable/);
 
     // API 路由优先于静态文件,不被前端接管。
     const api = await fetch(base + "/tasks");
