@@ -49,6 +49,8 @@ models.json 形状(key 只放服务器本地文件,权限 600,永不进仓):
 
 ```bash
 MAE_FLOW_HOME=/srv/mae-flow \
+MAE_FLOW_ADMIN_USER=admin \
+MAE_FLOW_ADMIN_PASSWORD='<从凭证系统注入的初始密码>' \
 npm run serve -- --models /etc/mae-flow-cloud/models.json \
   --provider <网关名> --model glm-5.1 \
   --repo <内网仓地址> --platform <MR/流水线网关地址> \
@@ -64,8 +66,22 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
   自动幂等;重启后 recover() 会以现场文件为源把投影补齐,PG 里的
   数据可整库重建——备份优先级远低于数据目录。
 - **数据目录就是命根**:task.json / waiting.json / events.jsonl /
-  transcript.jsonl / 仓库克隆(内核状态文件在里面)全在 `--data` 下。
+  transcript.jsonl / auth.json / 仓库克隆(内核状态文件在里面)全在 `--data` 下。
   备份它=备份一切;丢它=任务从头来。
+- **本地登录**:正式模式首次启动必须提供 `MAE_FLOW_ADMIN_PASSWORD`
+  (至少 10 个字符),可用 `MAE_FLOW_ADMIN_USER` 指定初始管理员账号。
+  之后由管理员在页面创建成员。`auth.json` 只保存 scrypt 加盐哈希且权限
+  为 `0600`;会话只驻进程内,8 小时过期,重启后全部重新登录。开发成员可
+  查看全团队任务,但只能创建到自己名下并处理自己的审批/重跑;管理员可
+  操作全部任务。对外提供页面时必须由反向代理终止 HTTPS,并传递
+  `X-Forwarded-Proto: https`,服务会据此给会话 Cookie 加 `Secure`。
+- **桌面通知默认关**:内核默认会在"需要裁决/进入新阶段"时弹系统通知,
+  那是为"人坐在终端旁"的单机场景设计的;服务里同时跑几单就弹几倍,而且
+  弹在服务器上没人看——真正的送达通道是待办页与小鲁班。serve 启动即
+  置 `MAE_FLOW_NO_NOTIFY=1`,要单机手感就加 `--desktop-notify`。
+  (已在跑的任务想立刻静音,不必重启:在该任务的仓库克隆里写
+  `.mae-flow-defaults.json` → `{"桌面通知": false}`,内核每次调用现读现判;
+  记得同时写进 `.git/info/exclude`,别让它混进未提交改动。)
 - **重启语义(已实现并有测试)**:进程可死任务不死。启动时 `recover()`
   重建索引;崩溃时在跑的任务重新入队,以内核 current 为锚重建会话续跑;
   等人的任务原地挂起,决定到来走重建会话。演示模式(无 `--models`)
@@ -91,6 +107,8 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
   [Service]
   WorkingDirectory=/srv/mae-flow-cloud
   Environment=MAE_FLOW_HOME=/srv/mae-flow
+  Environment=MAE_FLOW_ADMIN_USER=admin
+  EnvironmentFile=/etc/mae-flow-cloud/secrets.env
   ExecStart=/usr/bin/npm run serve -- \
     --models /etc/mae-flow-cloud/models.json \
     --provider <网关名> --model glm-5.1 \
@@ -104,6 +122,8 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
   [Install]
   WantedBy=multi-user.target
   ```
+  `secrets.env` 至少包含 `MAE_FLOW_ADMIN_PASSWORD=...`,权限设为 `0600`,
+  不要把密码直接写进单元文件或仓库。账号库已存在后不会重复创建管理员。
 - 环回代理教训(外部踩过三次):如果服务器有全局代理,
   确认 `NO_PROXY=127.0.0.1,localhost`(代码里 `ensureLoopbackDirect()`
   已兜底,但 curl 排障时记得 `--noproxy '*'`)。

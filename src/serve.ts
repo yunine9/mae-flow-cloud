@@ -18,6 +18,7 @@ import { FakeLubanServer, Notifier } from "./notifier.ts";
 import { FakeGitPlatform } from "./gitPlatform.ts";
 import { PgProjection } from "./projection.ts";
 import type { GateDecision } from "./gateService.ts";
+import { LocalAuth } from "./auth.ts";
 
 const REPO_ROOT = resolve(fileURLToPath(import.meta.url), "..", "..");
 
@@ -33,6 +34,11 @@ const DEMO_SCRIPT: Scene[] = [
 function flag(name: string): string | undefined {
   const index = process.argv.indexOf(name);
   return index > 0 ? process.argv[index + 1] : undefined;
+}
+
+/** 开关参数(无值)。 */
+function has(name: string): boolean {
+  return process.argv.includes(name);
 }
 
 /** 可重复参数(如 --isolate-volume a:b --isolate-volume c:d)。 */
@@ -57,6 +63,11 @@ function demoContract(
 }
 
 async function main(): Promise<void> {
+  // 云端服务默认静音内核桌面弹窗:该被叫的是控制台前的人,不是跑服务的
+  // 那台机器。内核默认开弹窗,是为"人坐在终端旁"的单机场景设计的;放到
+  // 服务里,同一台机器上跑几单就弹几倍的通知,而真正的送达通道是待办与
+  // 小鲁班。要恢复单机手感就加 --desktop-notify。
+  if (!has("--desktop-notify")) process.env.MAE_FLOW_NO_NOTIFY = "1";
   const port = Number(flag("--port") ?? 8787);
   const dataDir = resolve(flag("--data") ?? join(REPO_ROOT, ".tasks"));
   // 管理旋钮(主 spec §4:最大并发由管理员配置,超出排队)。
@@ -80,6 +91,26 @@ async function main(): Promise<void> {
     await scripted.start();
     modelsJson = scripted.modelsJson();
     console.log("[serve] 演示模式:内置剧本假模型(接真模型用 --models)");
+  }
+
+  // 本地账号是控制台身份源。生产首次启动必须从环境变量注入管理员
+  // 密码；演示模式给固定演示密码并醒目标注，避免把随机密码藏在日志里。
+  const auth = new LocalAuth(join(dataDir, "auth.json"));
+  if (!auth.hasUsers()) {
+    const adminUser = process.env.MAE_FLOW_ADMIN_USER ?? "admin";
+    const adminPassword = process.env.MAE_FLOW_ADMIN_PASSWORD
+      ?? (modelsPath ? "" : "mae-flow-demo");
+    if (!adminPassword) {
+      throw new Error(
+        "首次启动需设置 MAE_FLOW_ADMIN_PASSWORD(至少 10 个字符)",
+      );
+    }
+    auth.bootstrapAdmin(adminUser, adminPassword);
+    if (!modelsPath) {
+      console.log("[serve] 演示登录: admin / mae-flow-demo");
+    } else {
+      console.log(`[serve] 已创建管理员账号: ${adminUser}`);
+    }
   }
 
   // --repo 开启内核纵向闭环:任务=克隆该仓+内核 bootstrap+深层门禁。
@@ -161,7 +192,7 @@ async function main(): Promise<void> {
     ?? [join(REPO_ROOT, "web", "dist")].find((dir) =>
          existsSync(join(dir, "index.html")));
   if (webRoot) console.log(`[serve] 正式前端: ${webRoot}`);
-  const server = createTaskServer(service, { webRoot });
+  const server = createTaskServer(service, { webRoot, auth });
   server.listen(port, "127.0.0.1", () => {
     const actual = (server.address() as AddressInfo).port;
     console.log(`[serve] http://127.0.0.1:${actual}  (数据目录 ${dataDir})`);
