@@ -68,6 +68,12 @@ async function main(): Promise<void> {
   // 服务里,同一台机器上跑几单就弹几倍的通知,而真正的送达通道是待办与
   // 小鲁班。要恢复单机手感就加 --desktop-notify。
   if (!has("--desktop-notify")) process.env.MAE_FLOW_NO_NOTIFY = "1";
+  // 告诉内核:用户不在这台机器上。内核的提示词默认"用户就坐在这里"——
+  // 会让他去 IDE 里检视代码、把现场面板的本机绝对路径念给他听。这些话
+  // 是被模型原样转述给用户的(内核为面板路径专门加过转述义务),而在
+  // 控制台里那个路径他打不开、IDE 也不存在,材料本来就在页面上。
+  // 用户实测撞到这个:"还让去 ide 检视代码,明显不对了"。
+  process.env.MAE_FLOW_HOST = "cloud";
   const port = Number(flag("--port") ?? 8787);
   const dataDir = resolve(flag("--data") ?? join(REPO_ROOT, ".tasks"));
   // 管理旋钮(主 spec §4:最大并发由管理员配置,超出排队)。

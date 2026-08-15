@@ -54,6 +54,8 @@ async function main(): Promise<number> {
   // 试跑全程代答,没有真人在等裁决:静掉内核的桌面弹窗
   // (dispatch.py 与转发壳都是本进程子进程,继承这里的环境)。
   process.env.MAE_FLOW_NO_NOTIFY = "1";
+  // 试跑走的是同一套宿主:没有真人坐在这台机器前等着开 IDE 或点面板路径。
+  process.env.MAE_FLOW_HOST = "cloud";
   const modelsPath = resolve(flag("--models", ".local/models.json")!);
   const provider = flag("--provider", "glm")!;
   const model = flag("--model", "glm-5.1")!;
