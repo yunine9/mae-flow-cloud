@@ -1,13 +1,15 @@
 /**
- * 插话框:任务在跑的时候,人随时能说话。
+ * 顺便说一句(btw)框:任务在跑的时候,人随时能捎句话。
  *
- * 本地 CLI 里这件事是 ESC + 打字。网页上没有"要抢回输入行"这回事,
- * 所以没有"打断"这个单独动作——**发送本身就是打断**。文案也照这个说,
- * 别让人先想"我要不要先按个什么"。
+ * 定位是用户定的:"随时打断的功能其实定位应该有点像 btw"。这比早先的
+ * "发送即打断"更诚实——机制上它从来就不是 ESC:pi 把话压进队列,模型
+ * **忙完手头那步才读到**,当前命令不会被掐掉。像对旁边干活的同事说
+ * "对了,掩码要留后四位",他手上的活不停,抬头时听见了。文案照这个口吻,
+ * 别摆出"提交一份补充说明"的架势。
  *
  * 一条纪律:发出去之后不假装它已生效。模型是把手头这一轮的工具调用做完
- * 才收到,可能是几秒也可能是一条长命令的几分钟;这里如实说"做完手头这件
- * 事就会收到",不写"已送达"。
+ * 才收到,可能是几秒也可能是一条长命令的几分钟;这里如实说"忙完这步就会
+ * 看到",不写"已送达"。
  */
 
 import { useEffect, useState } from "react";
@@ -60,11 +62,11 @@ export function SteerBox({
     <div className="steer">
       <div className="steer-head">
         <label className="steer-label" htmlFor={`steer-${taskId}`}>
-          补充任务说明
+          顺便说一句
         </label>
-        <span>执行中可发送</span>
+        <span>它在跑也能说</span>
       </div>
-      <p className="steer-copy">补充约束或修正方向，任务会在当前操作结束后读取。</p>
+      <p className="steer-copy">想到什么随时捎给它——不打断手头的操作，忙完这一步就会看到。</p>
       <textarea
         id={`steer-${taskId}`}
         className="steer-input"
@@ -86,7 +88,7 @@ export function SteerBox({
       <div className="steer-actions">
         <span className="steer-hint">
           {sent && !text
-            ? "已发送，等待任务读取"
+            ? "已捎过去，它忙完这步就会看到"
             : "⌘/Ctrl + Enter 发送"}
         </span>
         <button
@@ -95,12 +97,12 @@ export function SteerBox({
           disabled={busy || !text.trim()}
           onClick={() => void send()}
         >
-          {busy ? "发送中…" : "发送补充说明"}
+          {busy ? "发送中…" : "发送"}
         </button>
       </div>
       {error && <div className="alert">{error}</div>}
       {history.length > 0 && (
-        <ol className="steer-log" aria-label="已发送的补充说明">
+        <ol className="steer-log" aria-label="捎过去的话">
           {history.slice(-4).reverse().map((item, at) => (
             <li key={`${item.at}-${at}`}
                 className={item.delivered ? "done" : "waiting"}>

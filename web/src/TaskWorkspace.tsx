@@ -97,7 +97,11 @@ export function TaskWorkspace({
       if (!alive) return;
       setUnavailable(result.unavailable ?? "");
       setItems(result.items);
-      if (result.items?.length) setActive(result.items[0].name);
+      // 列表可能随任务轮询/状态切换重新读取。默认项只用于首次进入；
+      // 用户已经切到工作区变更时绝不能被后台刷新拽回最近文档。
+      setActive((current) => result.items?.some((item) => item.name === current)
+        ? current
+        : result.items?.[0]?.name ?? "");
     });
     return () => { alive = false; };
   }, [task.id, livePulse]);
@@ -278,7 +282,8 @@ export function TaskWorkspace({
               )}
             </div>
           )}
-          {/* 它在跑的时候人也能说话——不用干等到它来问你。发送即打断。 */}
+          {/* 它在跑的时候人也能捎话——btw 定位:不打断手头操作,
+              忙完这步就会看到。不用干等到它来问你。 */}
           {!waiting && canOperate && task.status === "running" && (
             <SteerBox taskId={task.id} onSent={onChanged} />
           )}
