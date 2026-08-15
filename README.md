@@ -112,6 +112,10 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
 
 ## 已知边界(诚实清单)
 
+- **免编译形态可选(2026-08-15,用户拍板"先不编译了,直接上流水线")**:
+  serve 加 `--verify-via-pipeline` 后本机不做编译/UT,每次会话开场注入
+  环境事实,流水线是唯一裁判,红灯走修复环;慢的代价由机器扛,不占人的
+  时间。代价要如实:错误发现得更晚,一轮往返=一次流水线+一次修复会话;
 - **云端放开了子 Agent 台账门禁(2026-08-15,用户拍板)**:pi 宿主取不到
   内核格式的子会话执行台账,UT/COMPILE/REVIEWER/STORY/GRILL 的生命周期
   证据在 `MAE_FLOW_HOST=cloud` 下不再拦 done,CodeCheck 修复轮的"合法

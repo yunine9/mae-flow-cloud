@@ -305,6 +305,47 @@ test("修复环:轮数预算耗尽 → 如实停下请人工", async () => {
   }
 });
 
+test("流水线代行验证:环境事实进每次会话的开场,修复会话也不例外", async () => {
+  // "先不编译了,直接上流水线"(用户拍板)。旗子只做一件事:把环境事实
+  // 告诉模型,别让它在没有构建链的机器上白撞。重建/修复会话没有旧上下文,
+  // 漏带一次它就会再去撞一遍编译——所以断言两个会话都看到了。
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  platform.statusQueue.push("failed");
+  await platform.start();
+  const model = new ScriptedModelServer(
+    [...walkScript(true), ...repairScenes(true)],
+    "scripted-v1", { linear: true });
+  await model.start();
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-deliver-"));
+  const service = new TaskService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    host: {
+      kernelRoot: process.env.MAE_FLOW_HOME
+        ?? join(process.cwd(), "..", "mae-flow"),
+      repoPath: platform.barePath,
+      python: "python3",
+    },
+    delivery: { platformUrl: platform.baseUrl, repairRounds: 2 },
+    verifyViaPipeline: true,
+  });
+  try {
+    const id = service.create("交付 REQ9:流水线代行").id;
+    await until(() => service.get(id)!.status === "await_merge", "修复后全绿");
+    const firstUser = (at: number) => JSON.stringify(
+      ((model.requests[at] as any).messages ?? [])
+        .filter((m: any) => m.role === "user")[0]?.content ?? "");
+    // 首跑会话(请求 0)与修复会话(请求 2)的开场都带环境事实
+    assert.match(firstUser(0), /由流水线代行/);
+    assert.match(firstUser(2), /由流水线代行/);
+    assert.match(firstUser(2), /唯一的使命/, "修复使命也在场");
+  } finally {
+    await model.stop();
+    await platform.stop();
+  }
+});
+
 test("分支没推 → 不硬造 MR,原因明说", async () => {
   const platform = new FakeGitPlatform();
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));

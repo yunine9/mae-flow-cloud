@@ -140,6 +140,12 @@ export interface TaskServiceOptions {
     cpus?: string;
     user?: string;
   };
+  /** 本地不做编译/UT,流水线是唯一裁判(用户拍板:"先不编译了,直接上
+   * 流水线";"慢点就慢点,反正人也不需要介入")。宿主没有构建链时,
+   * 让 agent 在本机撞编译只会烧轮次;云端台账门禁已放开,done 不拦。
+   * 这个旗子做的唯一一件事:把环境事实写进每次会话的开场,别让模型猜。
+   * 慢的代价由修复环扛(红灯自动派修复会话),不占人的时间。 */
+  verifyViaPipeline?: boolean;
   log?: (message: string) => void;
 }
 
@@ -835,6 +841,15 @@ export class TaskService {
                + undeliveredInterrupts(workspace).join("\n\n")]
             : []),
         ].filter(Boolean).join("\n\n");
+      }
+      // 流水线代行验证:环境事实进开场白。每次会话(首跑/重建/修复)都
+      // 要带——重建会话没有旧上下文,不带它就会再去撞一遍编译。
+      if (this.options.verifyViaPipeline) {
+        prompt = `${prompt}\n\n环境事实(宿主声明):本机没有编译/测试工具链,`
+          + `也不提供容器构建,不要在本机尝试编译或运行 UT——只会浪费轮次。`
+          + `凡流程要求本地编译/UT 的环节,如实注明「本地验证由流水线代行」`
+          + `并继续推进(云端已放行对应机器证据)。编码完成后按流程提交并`
+          + `推送,权威流水线是唯一裁判;红灯会由专职修复会话跟进。`;
       }
       // 专项使命(修复环)压轴:模型最后读到的最要紧。这里只用不清——
       // 修复会话跑一半被重启,使命要跟着 task.json 回来再喂一遍;

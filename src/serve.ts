@@ -172,12 +172,26 @@ async function main(): Promise<void> {
   const isolateImage = flag("--isolate-image");
   if (isolateImage) console.log(`[serve] 容器隔离: ${isolateImage}`);
 
+  // --verify-via-pipeline:本地不做编译/UT,流水线是唯一裁判。
+  // 适用于宿主没有构建链、也不想供养容器镜像的部署形态——慢的代价
+  // 由修复环扛(红灯自动派修复会话),不占人的时间。
+  const verifyViaPipeline = has("--verify-via-pipeline");
+  if (verifyViaPipeline) {
+    if (!delivery) {
+      console.error("[serve] --verify-via-pipeline 需要流水线在场:"
+        + "请同时配 --platform 或 --fake-platform,否则没人裁判。");
+      process.exit(2);
+    }
+    console.log("[serve] 本地验证关闭:编译/UT 交由流水线,红灯走修复环");
+  }
+
   const service = new TaskService({
     dataDir, provider, model, modelsJson, maxConcurrent,
     compactEveryEvents: compactEvery,
     contract: demoContract,
     host,
     delivery,
+    verifyViaPipeline,
     isolation: isolateImage
       ? {
           image: isolateImage,
