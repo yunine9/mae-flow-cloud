@@ -23,6 +23,60 @@ export const STATUS_TEXT: Record<TaskStatus, string> = {
   await_merge: "已提合入请求,等待合入",
 };
 
+export type UserRole = "admin" | "developer";
+
+export interface AuthUser {
+  username: string;
+  role: UserRole;
+}
+
+async function errorText(response: Response): Promise<string> {
+  const body = await response.json().catch(() => ({}));
+  return String(body.error ?? `HTTP ${response.status}`);
+}
+
+export async function getSession(): Promise<AuthUser | null> {
+  const response = await fetch("/auth/me");
+  if (response.status === 401) return null;
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function login(
+  username: string,
+  password: string,
+): Promise<AuthUser> {
+  const response = await fetch("/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ username, password }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function logout(): Promise<void> {
+  await fetch("/auth/logout", { method: "POST" });
+}
+
+export async function listUsers(): Promise<AuthUser[]> {
+  const response = await fetch("/auth/users");
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function createUser(
+  username: string,
+  password: string,
+  role: UserRole,
+): Promise<AuthUser> {
+  const response = await fetch("/auth/users", {
+    method: "POST",
+    body: JSON.stringify({ username, password, role }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
 export interface WaitingQuestion {
   question: string;
   options?: string[];
@@ -38,6 +92,8 @@ export interface TaskSummary {
   waiting?: {
     waiting_id: string;
     state_version: number;
+    /** 待办生成时刻:等待时长的唯一来源(服务端本来就发)。 */
+    created_at?: string;
     step?: string;
     question?: { questions?: WaitingQuestion[] };
     /** 提问前模型的最后一段话:"如上表"这类指代的落点。 */
@@ -49,6 +105,13 @@ export interface TaskSummary {
     mr_state?: string;
     pipeline?: string;
     skipped?: string;
+  };
+  progress?: {
+    phases: string[];
+    current_index: number;
+    current_phase: string;
+    step?: string;
+    revision?: number;
   };
 }
 
@@ -64,6 +127,7 @@ export async function listHistory(): Promise<{
   unavailable?: string;
 }> {
   const response = await fetch("/history");
+  if (response.status === 401) throw new Error(await errorText(response));
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     return { unavailable: String(body.error ?? `HTTP ${response.status}`) };
@@ -79,17 +143,20 @@ export interface SemanticEvent {
 }
 
 export async function listTasks(): Promise<TaskSummary[]> {
-  return fetch("/tasks").then((r) => r.json());
+  const response = await fetch("/tasks");
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
 }
 
 export async function createTask(
   requirement: string,
   account?: string,
 ): Promise<void> {
-  await fetch("/tasks", {
+  const response = await fetch("/tasks", {
     method: "POST",
     body: JSON.stringify({ requirement, account: account || undefined }),
   });
+  if (!response.ok) throw new Error(await errorText(response));
 }
 
 /** 提交决定。409 = 先到决定已生效,把服务端的话原样带给调用方。
@@ -113,6 +180,7 @@ export async function decide(
     const body = await response.json().catch(() => ({}));
     return { conflict: String(body.error ?? "任务状态已变化") };
   }
+  if (!response.ok) return { conflict: await errorText(response) };
   return {};
 }
 

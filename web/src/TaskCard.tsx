@@ -1,9 +1,6 @@
 /**
- * 单个任务卡:状态、交付事实、通知失败红条、审批卡、台账、过程记录。
- * 全部是服务端镜像的呈现,没有一处前端自己的状态推断。
- *
- * 折叠语义:列表里默认只露头两行(状态/标题/一条 meta),点头部
- * 展开完整视图;"等你决定"的任务自动展开——需要人的时刻不许藏。
+ * 单任务处置台：摘要适合扫读，展开后集中承载审批、交付事实、
+ * 外部动作与事件现场。服务端镜像是唯一事实来源。
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -18,87 +15,171 @@ import {
   type SemanticEvent,
   type TaskSummary,
 } from "./api";
+import { formatWait, URGENT_MINUTES, waitedMs } from "./taskTime";
+
+function formatTime(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  return date.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
 
 export function TaskCard({
   task,
   onChanged,
+  focused = false,
+  canOperate = true,
+  onOpenArtifacts,
 }: {
   task: TaskSummary;
   onChanged: () => void;
+  focused?: boolean;
+  canOperate?: boolean;
+  onOpenArtifacts?: () => void;
 }) {
   const [expanded, setExpanded] = useState(
-    task.status === "waiting_for_human");
-  // 轮询中途转入"等你决定"也要弹开:初始值只算一次,这里补上。
+    task.status === "waiting_for_human" || focused,
+  );
+
   useEffect(() => {
-    if (task.status === "waiting_for_human") setExpanded(true);
-  }, [task.status]);
+    if (task.status === "waiting_for_human" || focused) setExpanded(true);
+  }, [task.status, focused]);
 
   return (
-    <div className={"task" + (expanded ? " expanded" : "")}>
-      <div
-        className="task-toggle"
+    <article
+      id={`task-${task.id}`}
+      className={`task-card status-${task.status}${expanded ? " expanded" : ""}${focused ? " focused" : ""}`}
+    >
+      <button
+        type="button"
+        className="task-summary"
         onClick={() => setExpanded((open) => !open)}
+        aria-expanded={expanded}
       >
-        <div className="task-head">
-          <span className="task-id">{task.id}</span>
-          <span className={`pill ${task.status}`}>
-            {STATUS_TEXT[task.status] ?? task.status}
+        <span className="task-status-rail" aria-hidden />
+        <span className="task-summary-body">
+          <span className="task-overline">
+            <span className="task-id">{task.id}</span>
+            <span className={`pill ${task.status}`}>
+              <i aria-hidden />
+              {STATUS_TEXT[task.status] ?? task.status}
+            </span>
+            <WaitBadge task={task} />
+            <span className="task-created">{formatTime(task.created_at)}</span>
           </span>
-          <span className="chevron">▸</span>
-        </div>
-        <div className="task-title">{task.requirement}</div>
-      </div>
+          <strong className="task-title">{task.requirement}</strong>
+          {task.progress && <TaskProgress progress={task.progress} />}
+        </span>
+        <span className="task-chevron" aria-hidden>
+          <svg viewBox="0 0 20 20">
+            <path d="m7.5 5 5 5-5 5" />
+          </svg>
+        </span>
+      </button>
+
       <div className="task-meta">
         {task.status !== "queued" && (
-          <a href={`/tasks/${task.id}/panel`} target="_blank" rel="noreferrer">
-            现场面板 ↗
-          </a>
+          <button type="button" className="panel-link" onClick={onOpenArtifacts}>
+            <span>进入过程工作台</span>
+            <svg viewBox="0 0 16 16" aria-hidden>
+              <path d="M6 3.5h6.5V10M12.25 3.75 5 11" />
+            </svg>
+          </button>
         )}
         {task.delivery?.mr_url && (
-          <span>
-            合入请求:
-            <a href={task.delivery.mr_url} target="_blank" rel="noreferrer">
-              {task.delivery.mr_url}
-            </a>
-            ({task.delivery.mr_state})
-          </span>
+          <a href={task.delivery.mr_url} target="_blank" rel="noreferrer">
+            <span>合入请求 · {task.delivery.mr_state}</span>
+            <svg viewBox="0 0 16 16" aria-hidden>
+              <path d="M6 3.5h6.5V10M12.25 3.75 5 11" />
+            </svg>
+          </a>
+        )}
+        {task.delivery?.pipeline && (
+          <span className="meta-fact">流水线 · {task.delivery.pipeline}</span>
         )}
         {task.delivery?.skipped && (
-          <span>交付情况:{task.delivery.skipped}</span>
+          <span className="meta-fact">交付 · {task.delivery.skipped}</span>
+        )}
+        {task.luban_account && (
+          <span className="meta-fact">通知 · {task.luban_account}</span>
         )}
       </div>
+
       {expanded && (
-        <>
+        <div className="task-detail-body">
           {task.status === "failed" && task.detail && (
-            <div className="alert">出错原因:{task.detail}</div>
-          )}
-          {task.notify && !task.notify.delivered
-            && task.notify.attempts > 0 && (
             <div className="alert">
-              ⚠ 小鲁班通知没送到(已试 {task.notify.attempts} 次)
-              ——待办仍在,请在本页处理。
+              <strong>任务执行失败</strong>
+              <span>{task.detail}</span>
             </div>
           )}
-          {(task.status === "failed" || task.status === "completed") && (
+          {task.notify && !task.notify.delivered && task.notify.attempts > 0 && (
+            <div className="alert">
+              <strong>小鲁班通知未送达</strong>
+              <span>
+                已尝试 {task.notify.attempts} 次，待办仍然有效，请在本页处理。
+              </span>
+            </div>
+          )}
+          {canOperate && (task.status === "failed" || task.status === "completed") && (
             <RetryButton taskId={task.id} onDone={onChanged} />
           )}
-          {task.status === "waiting_for_human" && task.waiting && (
+          {canOperate && task.status === "waiting_for_human" && task.waiting && (
             <WaitingCard task={task} onDecided={onChanged} />
           )}
-          {task.delivery && <ActionLedger taskId={task.id} />}
-          <EventTail taskId={task.id} />
-        </>
+          {!canOperate && task.status === "waiting_for_human" && (
+            <div className="read-only-notice">
+              该事项由 {task.luban_account ?? "其他成员"} 核对；你可以查看进展，但不能代为提交决定。
+            </div>
+          )}
+          <div className="task-utilities">
+            {task.delivery && <ActionLedger taskId={task.id} />}
+            <EventTail taskId={task.id} />
+          </div>
+        </div>
       )}
-    </div>
+    </article>
   );
 }
 
-/** 审批卡:每题点选或"✎ 其他"自定义答复(与点选互斥),答满才能
- * 提交;整卡可附备注(notes);409 把服务端的话原样呈现。
- * 选项两种排布:全短 → 行内紧凑;有长文案(run7 风险卡实测整段
- * 长文)→ 通栏卡片式,整块可点、自然换行。
- * 内核有的卡明说"请在 Other 中说明修改点"——answers 的值本来就是
- * 自由字符串,这里只是把通路的前端入口补上。 */
+/** 等待时长:久等升红。父层每 1.5 秒刷新任务列表,这里跟着重算,
+ * 不用自己挂计时器。 */
+function WaitBadge({ task }: { task: TaskSummary }) {
+  const waited = waitedMs(task);
+  if (waited < 0) return null;
+  const urgent = waited >= URGENT_MINUTES * 60_000;
+  return (
+    <span className={"wait-badge" + (urgent ? " urgent" : "")}>
+      <i aria-hidden />
+      等你 {formatWait(waited)}
+    </span>
+  );
+}
+
+function TaskProgress({ progress }: { progress: NonNullable<TaskSummary["progress"]> }) {
+  return <span className="task-progress" aria-label={`当前阶段：${progress.current_phase}${progress.step ? `，${progress.step}` : ""}`}>
+    <span className="task-progress-caption">
+      <span>当前进度</span>
+      <strong>{progress.step ?? progress.current_phase}</strong>
+    </span>
+    <span className="task-phase-track">
+      {progress.phases.map((phase, index) => {
+        const state = index < progress.current_index
+          ? "past" : index === progress.current_index ? "current" : "future";
+        return <span className={`task-phase ${state}`} key={phase}>
+          <i aria-hidden />
+          <span>{phase}</span>
+        </span>;
+      })}
+    </span>
+  </span>;
+}
+
 function WaitingCard({
   task,
   onDecided,
@@ -114,21 +195,18 @@ function WaitingCard({
   const [conflict, setConflict] = useState("");
   const questions = task.waiting?.question?.questions ?? [];
 
-  /** 该题的生效答案:自定义框开着且非空 → 自定义文本;否则点选项。 */
   const answerOf = (question: string) =>
     customOpen[question] && custom[question]?.trim()
       ? custom[question].trim()
       : picked[question];
-  /** 可跳过的题:模型自己写了"可忽略/若上题…"(实战实测:备选方案
-   * 题只给一个选项还逼人勾)。这类题不阻塞提交,不答就不进答案。 */
   const optional = (question: string) =>
     /可忽略|若上题|如无|可跳过|可不填/.test(question);
   const ready = questions.every(
-    (item) => optional(item.question) || answerOf(item.question));
+    (item) => optional(item.question) || answerOf(item.question),
+  );
 
   function pickOption(question: string, option: string) {
     setPicked({ ...picked, [question]: option });
-    // 点选即放弃自定义:互斥语义,免得提交的不是屏幕上高亮的。
     setCustomOpen({ ...customOpen, [question]: false });
     setCustom({ ...custom, [question]: "" });
   }
@@ -142,128 +220,156 @@ function WaitingCard({
     const answers: Record<string, string> = {};
     for (const item of questions) {
       const answer = answerOf(item.question);
-      // 可跳过的题没答就不进答案:替用户编一个回答是伪造背书。
       if (answer) answers[item.question] = answer;
     }
     const result = await decide(
-      task.id, task.waiting!.state_version, answers, notes);
+      task.id,
+      task.waiting!.state_version,
+      answers,
+      notes,
+    );
     if (result.conflict) setConflict(result.conflict);
     onDecided();
   }
 
   return (
-    <div className="waiting">
-      <div className="waiting-title">
-        等你决定{task.waiting?.step ? ` · ${task.waiting.step}` : ""}
-      </div>
+    <section className="decision-card" aria-labelledby={`decision-${task.id}`}>
+      <header className="decision-head">
+        <div>
+          <span className="decision-kicker">ACTION REQUIRED</span>
+          <h3 id={`decision-${task.id}`}>需要你的决策</h3>
+          {task.waiting?.step && <p>{task.waiting.step}</p>}
+        </div>
+        <span className="decision-count">{questions.length} 个问题</span>
+      </header>
+
       {task.waiting?.context && (
         <div className="waiting-context">
+          <div className="context-label">决策背景</div>
           <Markdown text={rewritePanelPath(task.waiting.context, task.id)} />
         </div>
       )}
-      {questions.map((item) => {
-        const options = item.options ?? [];
-        // 短选项(全部 ≤14 字且不超过 4 个)走紧凑行内;其余走单选卡片。
-        const compact = options.length <= 4
-          && options.every((option) => option.length <= 14);
-        const customActive =
-          !!customOpen[item.question] && !!custom[item.question]?.trim();
-        const skippable = optional(item.question);
-        return (
-          <div className="question" key={item.question}>
-            <div className="question-text">
-              {item.question || "需要你确认"}
-              {skippable && <span className="q-optional">可跳过</span>}
-            </div>
-            <div className={"options " + (compact ? "compact" : "cards")}>
-              {options.map((option) => {
-                const chosen = picked[item.question] === option;
-                // 模型把推荐理由写在括号里:主行只留结论,理由降级为说明。
-                const split = option.match(/^([^（(]+)[（(](.+)[）)]\s*$/);
-                const [title, hint] = split
-                  ? [split[1].trim(), split[2].trim()]
-                  : [option, ""];
-                return (
+
+      <div className="question-list">
+        {questions.map((item, index) => {
+          const options = item.options ?? [];
+          const compact = options.length <= 4
+            && options.every((option) => option.length <= 14);
+          const customActive =
+            !!customOpen[item.question] && !!custom[item.question]?.trim();
+          const skippable = optional(item.question);
+          return (
+            <fieldset className="question" key={item.question}>
+              <legend>
+                <span className="question-number">
+                  {String(index + 1).padStart(2, "0")}
+                </span>
+                <span className="question-text">
+                  {item.question || "需要你确认"}
+                </span>
+                {skippable && <span className="q-optional">可跳过</span>}
+              </legend>
+              <div className={`options ${compact ? "compact" : "cards"}`}>
+                {options.map((option) => {
+                  const chosen = picked[item.question] === option;
+                  const split = option.match(/^([^（(]+)[（(](.+)[）)]\s*$/);
+                  const [title, hint] = split
+                    ? [split[1].trim(), split[2].trim()]
+                    : [option, ""];
+                  return (
+                    <button
+                      type="button"
+                      key={option}
+                      className={`option${chosen ? " picked" : ""}`}
+                      role="radio"
+                      aria-checked={chosen}
+                      onClick={() => pickOption(item.question, option)}
+                    >
+                      <span className={`radio${chosen ? " on" : ""}`} />
+                      <span className="option-body">
+                        <span className="option-title">{title}</span>
+                        {hint && <span className="option-hint">{hint}</span>}
+                      </span>
+                    </button>
+                  );
+                })}
+                {!customOpen[item.question] && (
                   <button
-                    key={option}
-                    className={"option" + (chosen ? " picked" : "")}
-                    role="radio"
-                    aria-checked={chosen}
-                    onClick={() => pickOption(item.question, option)}
+                    type="button"
+                    className="option custom-entry"
+                    onClick={() => openCustom(item.question)}
                   >
-                    {!compact && (
-                      <span className={"radio" + (chosen ? " on" : "")} />
-                    )}
+                    <span className="radio" />
                     <span className="option-body">
-                      <span className="option-title">{title}</span>
-                      {hint && <span className="option-hint">{hint}</span>}
+                      <span className="option-title">自定义答复</span>
+                      <span className="option-hint">输入精确的修改点或决策内容</span>
                     </span>
                   </button>
-                );
-              })}
-              {!customOpen[item.question] && (
-                <button
-                  className={"option custom-entry"
-                    + (compact ? "" : " cards-entry")}
-                  onClick={() => openCustom(item.question)}
-                >
-                  {!compact && <span className="radio" />}
-                  <span className="option-body">
-                    <span className="option-title">✎ 其他(自己写)</span>
-                  </span>
-                </button>
-              )}
-            </div>
-            {customOpen[item.question] && (
-              <div className="custom-answer">
-                <textarea
-                  className={"custom-input" + (customActive ? " picked" : "")}
-                  placeholder="自定义答复,例如需要修改的点…"
-                  value={custom[item.question] ?? ""}
-                  autoFocus
-                  onChange={(change) => setCustom(
-                    { ...custom, [item.question]: change.target.value })}
-                />
-                {customActive && (
-                  <div className="note">将以上面的自定义答复提交本题。</div>
                 )}
               </div>
-            )}
-          </div>
-        );
-      })}
-      {!notesOpen ? (
-        <button className="notes-entry" onClick={() => setNotesOpen(true)}>
-          + 备注
+              {customOpen[item.question] && (
+                <div className="custom-answer">
+                  <textarea
+                    className={`custom-input${customActive ? " picked" : ""}`}
+                    placeholder="写下你的自定义答复…"
+                    value={custom[item.question] ?? ""}
+                    autoFocus
+                    onChange={(change) => setCustom({
+                      ...custom,
+                      [item.question]: change.target.value,
+                    })}
+                  />
+                  <span>这段文字将作为本题的最终答案提交。</span>
+                </div>
+              )}
+            </fieldset>
+          );
+        })}
+      </div>
+
+      <footer className="decision-footer">
+        <div className="decision-notes">
+          {!notesOpen ? (
+            <button type="button" onClick={() => setNotesOpen(true)}>
+              + 添加整卡备注
+            </button>
+          ) : (
+            <label>
+              <span>决策备注（可选）</span>
+              <input
+                type="text"
+                placeholder="随本次决定一起记录"
+                value={notes}
+                autoFocus
+                onChange={(change) => setNotes(change.target.value)}
+              />
+            </label>
+          )}
+        </div>
+        <button
+          type="button"
+          className="submit-decision"
+          disabled={!ready}
+          onClick={submit}
+        >
+          提交决定
+          <svg viewBox="0 0 20 20" aria-hidden>
+            <path d="m4 10 3.2 3.2L16 5.5" />
+          </svg>
         </button>
-      ) : (
-        <input
-          type="text"
-          className="notes-input"
-          placeholder="备注(随决定一起记录,可留空)"
-          value={notes}
-          autoFocus
-          onChange={(change) => setNotes(change.target.value)}
-        />
-      )}
-      <button className="submit" disabled={!ready} onClick={submit}>
-        提交决定
-      </button>
+      </footer>
       {conflict && <div className="alert">{conflict}</div>}
-    </div>
+    </section>
   );
 }
 
-/** 内核消息里的现场面板是宿主文件路径,浏览器点不开——改写成
- * 本页路由 /tasks/:id/panel(服务端本来就托管它)。 */
 function rewritePanelPath(context: string, taskId: string): string {
   return context.replace(
     /`?\/[^\s`]*\.mae-flow-work\/panel\.html`?/g,
-    `[在本页打开现场面板](/tasks/${taskId}/panel)`);
+    `[在本页打开现场面板](/tasks/${taskId}/panel)`,
+  );
 }
 
-/** 重跑续推:环境故障被迫收口后,修好环境点一下,任务续接内核
- * 当前步骤。服务端拒绝时把解释原样呈现。 */
 function RetryButton({
   taskId,
   onDone,
@@ -273,19 +379,22 @@ function RetryButton({
 }) {
   const [error, setError] = useState("");
   return (
-    <div>
-      <button className="retry" onClick={async () => {
+    <div className="retry-row">
+      <button type="button" onClick={async () => {
         const result = await retryTask(taskId);
         setError(result.error ?? "");
         onDone();
-      }}>↻ 重跑续推</button>
+      }}>
+        <svg viewBox="0 0 20 20" aria-hidden>
+          <path d="M15.5 7A6 6 0 1 0 16 12M15.5 3v4h-4" />
+        </svg>
+        重跑续推
+      </button>
       {error && <div className="alert">{error}</div>}
     </div>
   );
 }
 
-/** 外部动作台账(审计读侧):展开才查;没配 --pg 时把服务端的
- * 解释原样呈现,不装作"没有动作"。 */
 function ActionLedger({ taskId }: { taskId: string }) {
   const [rows, setRows] = useState<ExternalAction[]>();
   const [unavailable, setUnavailable] = useState("");
@@ -297,27 +406,41 @@ function ActionLedger({ taskId }: { taskId: string }) {
   }
 
   return (
-    <details onToggle={(toggle) => {
+    <details className="utility-panel" onToggle={(toggle) => {
       if ((toggle.target as HTMLDetailsElement).open) void load();
     }}>
-      <summary>外部动作台账(MR / 流水线)</summary>
-      {unavailable && <div className="note">{unavailable}</div>}
+      <summary>
+        <span>
+          <strong>外部动作台账</strong>
+          <small>MR、流水线与幂等记录</small>
+        </span>
+        <i aria-hidden />
+      </summary>
+      {unavailable && <div className="utility-note">{unavailable}</div>}
       {rows && rows.length === 0 && (
-        <div className="note">还没有外部动作。</div>
+        <div className="utility-note">还没有外部动作。</div>
       )}
       {rows && rows.length > 0 && (
-        <pre>{rows.map((row) =>
-          `${row.kind}  ${row.idemKey}  ` +
-          `${row.finishedAt ? "已完成" : "进行中"}` +
-          `${row.sha ? `  sha=${row.sha.slice(0, 8)}` : ""}\n` +
-          `  结果: ${JSON.stringify(row.result ?? "(未回填)")}`,
-        ).join("\n")}</pre>
+        <div className="ledger-list">
+          {rows.map((row) => (
+            <div className="ledger-row" key={row.idemKey}>
+              <div className="ledger-head">
+                <strong>{row.kind}</strong>
+                <span className={row.finishedAt ? "done" : "running"}>
+                  {row.finishedAt ? "已完成" : "进行中"}
+                </span>
+              </div>
+              <code>{row.idemKey}</code>
+              {row.sha && <small>SHA · {row.sha.slice(0, 8)}</small>}
+              <pre>{JSON.stringify(row.result ?? "(未回填)", null, 2)}</pre>
+            </div>
+          ))}
+        </div>
       )}
     </details>
   );
 }
 
-/** 过程记录:展开才建 SSE 连接,收起后保留已收内容。 */
 function EventTail({ taskId }: { taskId: string }) {
   const [open, setOpen] = useState(false);
   const [lines, setLines] = useState<string[]>([]);
@@ -339,10 +462,22 @@ function EventTail({ taskId }: { taskId: string }) {
   }, [lines]);
 
   return (
-    <details onToggle={(toggle) =>
-      setOpen((toggle.target as HTMLDetailsElement).open)}>
-      <summary>过程记录</summary>
-      <pre ref={pre}>{lines.join("\n")}</pre>
+    <details
+      className="utility-panel"
+      onToggle={(toggle) => setOpen(
+        (toggle.target as HTMLDetailsElement).open,
+      )}
+    >
+      <summary>
+        <span>
+          <strong>过程记录</strong>
+          <small>SSE 实时事件流</small>
+        </span>
+        <i aria-hidden />
+      </summary>
+      <pre ref={pre} className="event-log">
+        {lines.length > 0 ? lines.join("\n") : "等待新的过程事件…"}
+      </pre>
     </details>
   );
 }
