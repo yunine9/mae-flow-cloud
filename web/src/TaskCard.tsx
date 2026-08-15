@@ -220,9 +220,12 @@ export function TaskProgress({
 export function WaitingCard({
   task,
   onDecided,
+  annotationIds,
 }: {
   task: TaskSummary;
   onDecided: () => void;
+  /** 待送出的批注:提交时自动作为理由带上,不用人再复述一遍。 */
+  annotationIds?: string[];
 }) {
   const [picked, setPicked] = useState<Record<string, string>>({});
   const [custom, setCustom] = useState<Record<string, string>>({});
@@ -264,6 +267,7 @@ export function WaitingCard({
       task.waiting!.state_version,
       answers,
       notes,
+      annotationIds,
     );
     if (result.conflict) setConflict(result.conflict);
     onDecided();
@@ -545,38 +549,78 @@ function CostBreakdown({ entries }: { entries: TimelineEntry[] }) {
   const share = total > 0 ? Math.round((waitedTotal / total) * 100) : 0;
   const rebuilds = entries.filter((it) => it.title.includes("重建会话")).length;
   const problems = entries.filter((it) => it.tone === "danger");
-  const longest = [...waits].sort((a, b) => b.ms - a.ms).slice(0, 3);
+  const longest = [...waits].sort((a, b) => b.ms - a.ms).slice(0, 2);
+  const pending = [...waits].reverse().find((item) => !item.answer);
+  const latest = entries.at(-1)!;
 
   return (
     <div className="cost">
-      <div className="cost-stats">
-        <div className="cost-stat"><span>任务总时长</span><strong>{formatWait(total)}</strong></div>
-        <div className="cost-stat attention"><span>其中等人决定</span><strong>{formatWait(waitedTotal)}</strong><i>{share}%</i></div>
-        <div className="cost-stat"><span>机器执行</span><strong>{formatWait(machine)}</strong></div>
-        <div className="cost-stat"><span>决策 / 重建</span><strong>{waits.length} / {rebuilds}</strong></div>
+      <section className={`cost-focus ${pending ? "blocked" : "clear"}`}>
+        <div className="cost-focus-copy">
+          <span>{pending ? "CURRENT BLOCKER" : "CURRENT STATUS"}</span>
+          <strong>{pending
+            ? pending.ask.title.replace(/^请你决定[:：]/, "")
+            : "当前没有人工卡点"}</strong>
+          <p>{pending
+            ? "流程正在等待负责人完成决策"
+            : `最近进展 · ${latest.title}`}</p>
+        </div>
+        <div className="cost-focus-number">
+          <strong>{pending ? formatWait(pending.ms) : `${share}%`}</strong>
+          <span>{pending ? "已等待" : "时间用于等决策"}</span>
+        </div>
+      </section>
+
+      <section className="cost-composition">
+        <header><strong>时间构成</strong><span>总历时 {formatWait(total)}</span></header>
+        <div className="cost-bar" aria-label={`人工等待 ${share}%，机器执行 ${100 - share}%`}>
+          <span className="human" style={{ width: `${share}%` }} />
+          <span className="machine" style={{ width: `${100 - share}%` }} />
+        </div>
+        <div className="cost-legend">
+          <span><i className="human" />人工等待 <strong>{formatWait(waitedTotal)}</strong></span>
+          <span><i className="machine" />机器执行 <strong>{formatWait(machine)}</strong></span>
+        </div>
+      </section>
+
+      <div className="cost-metrics">
+        <div><span>决策次数</span><strong>{waits.length}</strong></div>
+        <div><span>会话重建</span><strong>{rebuilds}</strong></div>
       </div>
+
       {problems.length > 0 && (
         <div className="cost-problems">
+          <strong className="cost-section-title">异常记录</strong>
           {problems.map((item, index) => (
             <div key={index}><strong>{item.title}</strong>{item.detail && <span>{item.detail}</span>}</div>
           ))}
         </div>
       )}
-      <div className="cost-list-label">等得最久的决策</div>
-      <ol className="cost-list">
-        {longest.map((item, index) => (
-          <li key={index} className={item.answer ? "" : "pending"}>
-            <span className="cost-wait">{formatWait(item.ms)}</span>
-            <span className="cost-body">
-              <strong>{item.ask.title.replace(/^请你决定[:：]/, "")}</strong>
-              <span>{item.answer ? `→ ${item.answer}` : "→ 仍在等你"}</span>
-            </span>
-          </li>
-        ))}
-      </ol>
-      <button type="button" className="cost-toggle" onClick={() => setShowAll((open) => !open)}>
-        {showAll ? "收起全部记录" : `展开全部 ${entries.length} 条记录`}
-      </button>
+
+      {longest.length > 0 && (
+        <section className="cost-history">
+          <header><strong>历史等待</strong><span>耗时最长的 {longest.length} 次</span></header>
+          <ol className="cost-list">
+            {longest.map((item, index) => (
+              <li key={index} className={item.answer ? "" : "pending"}>
+                <span className="cost-rank">{String(index + 1).padStart(2, "0")}</span>
+                <span className="cost-body">
+                  <strong>{item.ask.title.replace(/^请你决定[:：]/, "")}</strong>
+                  <span>{item.answer ? item.answer : "仍在等待负责人决定"}</span>
+                </span>
+                <span className="cost-wait">{formatWait(item.ms)}</span>
+              </li>
+            ))}
+          </ol>
+        </section>
+      )}
+
+      <div className="cost-footer">
+        <span>{entries.length} 个关键节点</span>
+        <button type="button" className="cost-toggle" onClick={() => setShowAll((open) => !open)}>
+          {showAll ? "收起明细" : "查看完整时间线"}
+        </button>
+      </div>
       {showAll && (
         <ol className="timeline">
           {entries.map((entry, index) => (

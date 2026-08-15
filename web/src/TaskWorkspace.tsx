@@ -12,10 +12,17 @@
 
 import { useEffect, useState } from "react";
 import { Markdown } from "./markdown";
+import { GitDiff } from "./GitDiff";
+import { SteerBox } from "./SteerBox";
+import { Annotatable } from "./Annotatable";
+import { AnnotationPanel } from "./AnnotationPanel";
 import {
+  listAnnotations,
   listArtifacts,
   readArtifact,
   STATUS_TEXT,
+  type AnchorCheck,
+  type Annotation,
   type ArtifactMeta,
   type TaskSummary,
 } from "./api";
@@ -50,6 +57,9 @@ export function TaskWorkspace({
   const [active, setActive] = useState("");
   const [content, setContent] = useState("");
   const [loading, setLoading] = useState(false);
+  const [notes, setNotes] = useState<Annotation[]>([]);
+  const [checks, setChecks] = useState<AnchorCheck[]>([]);
+  const [notesPulse, setNotesPulse] = useState(0);
 
   useEffect(() => {
     const escape = (event: KeyboardEvent) => {
@@ -89,11 +99,32 @@ export function TaskWorkspace({
     return () => { alive = false; };
   }, [task.id, active]);
 
+  // 批注随任务加载,也随"圈了一条/送出一批/任务状态变了"重取——
+  // 进展(那处动没动)是服务端现算的,前端不自己推断。
+  useEffect(() => {
+    let alive = true;
+    void listAnnotations(task.id).then((result) => {
+      if (!alive) return;
+      setNotes(result.items);
+      setChecks(result.checks);
+    });
+    return () => { alive = false; };
+  }, [task.id, task.status, notesPulse]);
+
+  const draftIds = notes
+    .filter((item) => item.status === "draft").map((item) => item.id);
   const activeMeta = items?.find((item) => item.name === active);
+  const documents = items?.filter((item) => item.kind === "doc") ?? [];
+  const changes = items?.filter((item) => item.kind === "diff") ?? [];
   const waiting = task.status === "waiting_for_human" && task.waiting;
 
   return (
-    <section className="workspace-overlay" role="dialog" aria-modal="true">
+    <section
+      className="workspace-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="task-workspace-title"
+    >
       <header className="ws-head">
         <button type="button" className="ws-back" onClick={onClose} autoFocus>
           <svg viewBox="0 0 20 20" aria-hidden><path d="m12.5 5-5 5 5 5" /></svg>
@@ -107,7 +138,7 @@ export function TaskWorkspace({
             </span>
             <WaitBadge task={task} personal={canOperate} />
           </div>
-          <strong>{task.requirement}</strong>
+          <strong id="task-workspace-title">{task.requirement}</strong>
         </div>
         <a className="ws-native" href={`/tasks/${task.id}/panel`} target="_blank" rel="noreferrer">
           内核原生视图
@@ -121,20 +152,32 @@ export function TaskWorkspace({
         </div>
       )}
 
-      <div className="ws-body">
+      <div className={`ws-body${waiting ? " has-decision" : ""}`}>
         <section className="ws-evidence" aria-label="待检视材料">
-          <div className="ws-tabs">
-            {items?.map((item) => (
-              <button
-                key={item.name}
-                className={"ws-tab" + (item.name === active ? " on" : "")}
-                onClick={() => setActive(item.name)}
-              >
-                <span>{item.label}</span>
-                <i>{sizeText(item.bytes)}</i>
-              </button>
-            ))}
+          <div className="ws-pane-head">
+            <div>
+              <span>{activeMeta?.kind === "diff" ? "WORKTREE CHANGES" : "WORK DOCUMENTS"}</span>
+              <strong>{activeMeta?.kind === "diff" ? "工作区变更" : "过程文档"}</strong>
+            </div>
+            <small>{items ? `${documents.length} 份文档 · ${changes.length} 组变更` : "读取中"}</small>
           </div>
+          <div className="ws-source-switch" aria-label="材料类型">
+            <button className={activeMeta?.kind !== "diff" ? "on" : ""} onClick={() => documents[0] && setActive(documents[0].name)}>
+              <span>过程文档</span><i>{documents.length}</i>
+            </button>
+            <button className={activeMeta?.kind === "diff" ? "on" : ""} onClick={() => changes[0] && setActive(changes[0].name)} disabled={!changes.length}>
+              <span>工作区变更</span><i>{changes.length}</i>
+            </button>
+          </div>
+          {activeMeta?.kind !== "diff" && (
+            <div className="ws-tabs">
+              {documents.map((item) => (
+                <button key={item.name} className={"ws-tab" + (item.name === active ? " on" : "")} onClick={() => setActive(item.name)}>
+                  <span>{item.label}</span><i>{sizeText(item.bytes)}</i>
+                </button>
+              ))}
+            </div>
+          )}
           <div className="ws-doc">
             {unavailable && <div className="utility-note">{unavailable}</div>}
             {!unavailable && !items && <div className="utility-note">正在读取现场…</div>}
@@ -143,16 +186,42 @@ export function TaskWorkspace({
             )}
             {loading && <div className="utility-note">正在打开 {activeMeta?.label}…</div>}
             {!loading && content && (
-              activeMeta?.kind === "diff"
-                ? <pre className="ws-diff">{content}</pre>
-                : <Markdown text={content} />
+              <Annotatable
+                taskId={task.id}
+                artifact={active}
+                fallbackFile={activeMeta?.label ?? active}
+                kind={activeMeta?.kind === "diff" ? "code" : "doc"}
+                items={notes}
+                onAdded={() => setNotesPulse((tick) => tick + 1)}
+              >
+                {activeMeta?.kind === "diff"
+                  ? <GitDiff text={content} />
+                  : <Markdown text={content} />}
+              </Annotatable>
             )}
           </div>
         </section>
 
         <aside className="ws-decision" aria-label="决策与账目">
+          <div className="ws-pane-head ws-pane-head-side">
+            <div><span>NEXT ACTION</span><strong>{waiting ? "当前需要处理" : "任务现场"}</strong></div>
+            <small>{waiting ? "完成后流程继续" : "实时更新"}</small>
+          </div>
           {waiting && canOperate && (
-            <WaitingCard task={task} onDecided={onChanged} />
+            <>
+              {/* 圈过几处就在决定卡上说一句:提交时自动带上,不用人
+                  再把意见复述一遍——这正是批注省下的那道功夫。 */}
+              {draftIds.length > 0 && (
+                <div className="annot-attached">
+                  已圈注 {draftIds.length} 处，提交「需要修改」时一并作为理由带上
+                </div>
+              )}
+              <WaitingCard
+                task={task}
+                onDecided={() => { setNotesPulse((tick) => tick + 1); onChanged(); }}
+                annotationIds={draftIds}
+              />
+            </>
           )}
           {waiting && !canOperate && (
             <div className="read-only-notice">
@@ -173,12 +242,24 @@ export function TaskWorkspace({
               )}
             </div>
           )}
+          {/* 它在跑的时候人也能说话——不用干等到它来问你。发送即打断。 */}
+          {!waiting && canOperate && task.status === "running" && (
+            <SteerBox taskId={task.id} onSent={onChanged} />
+          )}
           {task.status === "failed" && task.detail && (
             <div className="alert">
               <strong>任务执行失败</strong>
               <span>{task.detail}</span>
             </div>
           )}
+          <AnnotationPanel
+            taskId={task.id}
+            items={notes}
+            checks={checks}
+            canOperate={canOperate}
+            running={task.status === "running"}
+            onChanged={() => { setNotesPulse((tick) => tick + 1); onChanged(); }}
+          />
           <div className="task-utilities">
             <TaskTimeline taskId={task.id} />
             {task.delivery && <ActionLedger taskId={task.id} />}

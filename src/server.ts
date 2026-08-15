@@ -7,6 +7,10 @@
  *   POST /tasks/:id/decision   {state_version,decision,notes?}
  *        → 200;版本冲突/已被抢先 → 409 "任务状态已变化"(先到决定生效)
  *   POST /tasks/:id/interrupt  {text}                   → 200;跑动中插话(发送即打断)
+ *   GET  /tasks/:id/annotations                         → 待送出批注 + 锚点现状
+ *   POST /tasks/:id/annotations {artifact,file,line,anchor,note,kind} → 201
+ *   DELETE /tasks/:id/annotations/:annId                → 软删(只能删自己的)
+ *   POST /tasks/:id/annotations/send {ids?}             → 走插话通道当场送给模型
  *   GET  /tasks/:id/events                              → SSE:重放事件日志后持续跟进
  *   GET  /tasks/:id/timeline                            → 人话交付时间线(只读现场)
  *   GET  /tasks/:id/artifacts[/:name]                   → 检视产物清单/内容(只读现场)
@@ -222,11 +226,54 @@ export function createTaskServer(
             answers: body.answers && typeof body.answers === "object"
               ? body.answers : undefined,
             notes: body.notes ? String(body.notes) : undefined,
+            annotation_ids: Array.isArray(body.annotation_ids)
+              ? body.annotation_ids.map(String) : undefined,
           });
           return json(response, 200, task);
         }
         if (request.method === "GET" && parts[2] === "events") {
           return streamEvents(service, id, response);
+        }
+        // 检视批注:圈注权和送达权分开——谁都能圈(领导路过提一句是
+        // 真实场景),送达只有该单负责人。这一刀下去,"多人并发提交"
+        // 根本不会发生:提交的永远只有一个人。
+        if (parts[2] === "annotations") {
+          const target = service.get(id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          const author = viewer?.username ?? "本地用户";
+          if (request.method === "GET" && parts.length === 3) {
+            return json(response, 200, service.listAnnotations(id));
+          }
+          if (request.method === "POST" && parts.length === 3) {
+            const body = await readBody(request);
+            return json(response, 201, service.addAnnotation(id, {
+              author,
+              artifact: String(body.artifact ?? ""),
+              file: String(body.file ?? ""),
+              line: Number(body.line ?? 0),
+              anchor: String(body.anchor ?? ""),
+              note: String(body.note ?? ""),
+              kind: body.kind === "code" ? "code" : "doc",
+            }));
+          }
+          // 送达 = 在指挥这一单,权限同决定;圈注不需要这个门槛。
+          if (request.method === "POST" && parts[3] === "send") {
+            if (!canOperate(viewer, target.luban_account, !!options.auth)) {
+              return json(response, 403, { error: "只能给分配给自己的任务送批注" });
+            }
+            const body = await readBody(request);
+            const ids = Array.isArray(body.ids) ? body.ids.map(String) : undefined;
+            return json(response, 200, await service.sendAnnotations(id, ids));
+          }
+          if (request.method === "GET" && parts[3] === "preview") {
+            return json(response, 200,
+              { text: service.previewAnnotations(id) });
+          }
+          // 只能删自己写的:多人环境里替别人删等于替他改主意。
+          if (request.method === "DELETE" && parts.length === 4) {
+            return json(response, 200,
+              service.dropAnnotation(id, decodeURIComponent(parts[3]), author));
+          }
         }
         // 跑动中插话(本地 CLI 的 ESC 等价物):发送即打断,模型把手头
         // 这一轮做完就收到。权限同决定——插话也是在指挥这一单,不是围观。

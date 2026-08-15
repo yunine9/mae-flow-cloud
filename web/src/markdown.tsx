@@ -6,6 +6,7 @@
  */
 
 import type { ReactNode } from "react";
+import { PlantUml } from "./PlantUml";
 
 /** 行内:**加粗**、`代码` 与 [文字](链接)。链接只认站内路径与
  * http(s)——其余原样当文本,渲染器不背安全锅。 */
@@ -48,6 +49,30 @@ export function Markdown({ text }: { text: string }) {
   while (index < lines.length) {
     const line = lines[index];
     if (!line.trim()) { index += 1; continue; }
+    // 每个块带上源文件行号(data-l,1 起)。批注要落成 `story.md:42`
+    // 而不是"第三段那里"——没有这个锚,文档批注就只能让模型猜。
+    // 内核面板用的是同一个属性名,两边的批注语义因此对得上。
+    const at = index + 1;
+    // fenced code:PlantUML 直接画图,其余语言至少按代码块如实呈现。
+    const fence = line.match(/^\s*```([^`]*)\s*$/);
+    if (fence) {
+      const language = fence[1].trim().toLowerCase();
+      const source: string[] = [];
+      index += 1;
+      while (index < lines.length && !/^\s*```\s*$/.test(lines[index])) {
+        source.push(lines[index]);
+        index += 1;
+      }
+      if (index < lines.length) index += 1;
+      blocks.push(language === "plantuml"
+        ? <div key={key++} className="md-uml" data-l={at}>
+            <PlantUml source={source.join("\n")} />
+          </div>
+        : <pre key={key++} className="md-block-code" data-l={at}>
+            <code>{source.join("\n")}</code>
+          </pre>);
+      continue;
+    }
     // 表格:连续 | 行,第二行是分隔线则去掉它
     if (isTableRow(line)) {
       const rows: string[] = [];
@@ -57,7 +82,7 @@ export function Markdown({ text }: { text: string }) {
       }
       const [head, ...body] = rows.map(tableCells);
       blocks.push(
-        <table key={key++} className="md-table">
+        <table key={key++} className="md-table" data-l={at}>
           {head && (
             <thead><tr>
               {head.map((cell, i) => <th key={i}>{inline(cell)}</th>)}
@@ -75,14 +100,21 @@ export function Markdown({ text }: { text: string }) {
     }
     // 列表:连续 -/* 行
     if (/^\s*[-*]\s+/.test(line)) {
-      const items: string[] = [];
+      // 列表的锚点落在每个 li 上,不是整个 ul:清单里人要指的是某一条,
+      // "这个列表有问题"对模型等于没说。
+      const items: Array<{ text: string; at: number }> = [];
       while (index < lines.length && /^\s*[-*]\s+/.test(lines[index])) {
-        items.push(lines[index].replace(/^\s*[-*]\s+/, ""));
+        items.push({
+          text: lines[index].replace(/^\s*[-*]\s+/, ""),
+          at: index + 1,
+        });
         index += 1;
       }
       blocks.push(
         <ul key={key++} className="md-list">
-          {items.map((item, i) => <li key={i}>{inline(item)}</li>)}
+          {items.map((item, i) => (
+            <li key={i} data-l={item.at}>{inline(item.text)}</li>
+          ))}
         </ul>);
       continue;
     }
@@ -94,20 +126,20 @@ export function Markdown({ text }: { text: string }) {
         index += 1;
       }
       blocks.push(
-        <blockquote key={key++} className="md-quote">
+        <blockquote key={key++} className="md-quote" data-l={at}>
           {quoted.map((row, i) => <p key={i} className="md-p">{inline(row)}</p>)}
         </blockquote>);
       continue;
     }
     if (/^#{1,4}\s+/.test(line)) {
       blocks.push(
-        <div key={key++} className="md-heading">
+        <div key={key++} className="md-heading" data-l={at}>
           {inline(line.replace(/^#{1,4}\s+/, ""))}
         </div>);
       index += 1;
       continue;
     }
-    blocks.push(<p key={key++} className="md-p">{inline(line)}</p>);
+    blocks.push(<p key={key++} className="md-p" data-l={at}>{inline(line)}</p>);
     index += 1;
   }
   return <div className="md">{blocks}</div>;

@@ -167,6 +167,9 @@ export async function decide(
   stateVersion: number,
   answers: Record<string, string>,
   notes?: string,
+  /** 随这次决定一起提交的批注:圈过的几处就是"需要修改"的理由。
+   * 渲染由服务端做——清单格式和那四条护栏只该有一份。 */
+  annotationIds?: string[],
 ): Promise<{ conflict?: string }> {
   const response = await fetch(`/tasks/${taskId}/decision`, {
     method: "POST",
@@ -174,6 +177,7 @@ export async function decide(
       state_version: stateVersion,
       answers,
       notes: notes?.trim() || undefined,
+      annotation_ids: annotationIds?.length ? annotationIds : undefined,
     }),
   });
   if (response.status === 409) {
@@ -224,6 +228,85 @@ export async function interruptTask(
     return { error: String(body.error ?? `HTTP ${response.status}`) };
   }
   return {};
+}
+
+/* ---------------- 检视批注 ---------------- */
+
+export interface Annotation {
+  id: string;
+  author: string;
+  created_at: string;
+  artifact: string;
+  file: string;
+  line: number;
+  anchor: string;
+  note: string;
+  kind: "doc" | "code";
+  status: "draft" | "sent" | "dropped";
+  sent_at?: string;
+  sent_via?: "interrupt" | "decision";
+}
+
+export interface AnchorCheck {
+  id: string;
+  state: "hit" | "moved" | "gone" | "ambiguous";
+  line?: number;
+  now?: string;
+}
+
+export async function listAnnotations(
+  taskId: string,
+): Promise<{ items: Annotation[]; checks: AnchorCheck[] }> {
+  const response = await fetch(`/tasks/${taskId}/annotations`);
+  if (!response.ok) return { items: [], checks: [] };
+  return response.json();
+}
+
+export async function addAnnotation(
+  taskId: string,
+  input: Omit<Annotation, "id" | "author" | "created_at" | "status">,
+): Promise<{ annotation?: Annotation; error?: string }> {
+  const response = await fetch(`/tasks/${taskId}/annotations`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    return { error: String(body.error ?? `HTTP ${response.status}`) };
+  }
+  return { annotation: await response.json() };
+}
+
+export async function dropAnnotation(
+  taskId: string,
+  annotationId: string,
+): Promise<{ error?: string }> {
+  const response = await fetch(
+    `/tasks/${taskId}/annotations/${encodeURIComponent(annotationId)}`,
+    { method: "DELETE" });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    return { error: String(body.error ?? `HTTP ${response.status}`) };
+  }
+  return {};
+}
+
+/** 走插话通道当场送给模型。ids 省略=全部待送出的。 */
+export async function sendAnnotations(
+  taskId: string,
+  ids?: string[],
+): Promise<{ sent?: string[]; error?: string }> {
+  const response = await fetch(`/tasks/${taskId}/annotations/send`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(ids ? { ids } : {}),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    return { error: String(body.error ?? `HTTP ${response.status}`) };
+  }
+  return await response.json();
 }
 
 /** 外部动作台账(需服务端配 --pg)。404 时把服务端的解释原样带回。 */

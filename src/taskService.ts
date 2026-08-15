@@ -20,7 +20,17 @@ import {
 } from "node:fs";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import {
+  AnnotationStore,
+  reanchor,
+  renderAnnotations,
+  type Annotation,
+  type AnchorCheck,
+  type AnnotationInput,
+  type SentVia,
+} from "./annotations.ts";
+import { readArtifact, resolveArtifactRoot } from "./artifacts.ts";
 import { KernelHost } from "./kernelHost.ts";
 import type { Notifier, NotifyRecord } from "./notifier.ts";
 import { EventLog } from "./semanticEvents.ts";
@@ -248,6 +258,107 @@ export class TaskService {
     return existsSync(file) ? file : undefined;
   }
 
+  /** 检视产物的根:与 /artifacts 路由同一口径——批注重锚定回头读的
+   * 必须是人当初圈的那份材料,两处口径分家就会出现"页面上有、重锚定
+   * 说没有"。 */
+  artifactRoot(id: string): string | undefined {
+    const task = this.tasks.get(id);
+    if (!task) return undefined;
+    const panel = this.panelFile(id, "panel.html")
+      ?? this.panelFile(id, "panel-pulse.js");
+    return resolveArtifactRoot(
+      task.summary.workspace, panel ? dirname(dirname(panel)) : undefined);
+  }
+
+  private annotations(task: TaskState): AnnotationStore {
+    return new AnnotationStore(
+      join(task.summary.workspace, "annotations.jsonl"));
+  }
+
+  /** 单号来自内核状态文件;拿不到就退回任务号——不为抬头编内容。 */
+  private ticketOf(task: TaskState): string {
+    try {
+      const statePath = join(task.cwd ?? "", ".mae-flow.json");
+      if (task.cwd && existsSync(statePath)) {
+        const state = JSON.parse(readFileSync(statePath, "utf-8"));
+        const ticket = String(state?.config?.["单号"] ?? "").trim();
+        if (ticket) return ticket;
+      }
+    } catch {
+      // 读不到就用任务号,批注照样送得出去。
+    }
+    return task.summary.id;
+  }
+
+  /** 批注清单(草稿 + 已送出)+ 每条的锚点现状。
+   *
+   * 已送出的不下架:人得看得见"这条提过没有、它动了没有"。而"动了没有"
+   * 我们只报事实不下结论——锚点原文还在原处,就是它还没碰这里;原文不见
+   * 了,就是这处已经被改动。是不是**照你说的**改的,由你看了再说,系统
+   * 不替你判断"已采纳"(那是推断,不是事实)。
+   *
+   * 锚点检查是旁路:读不到材料按"还在"放行,绝不因为它挡住人送意见。
+   */
+  listAnnotations(id: string): { items: Annotation[]; checks: AnchorCheck[] } {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    const items = this.annotations(task).visible();
+    const root = this.artifactRoot(id);
+    const checks = reanchor(items, (artifact) =>
+      root ? readArtifact(root, artifact)?.content : undefined);
+    return { items, checks };
+  }
+
+  addAnnotation(id: string, input: AnnotationInput): Annotation {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    return this.annotations(task).add(input);
+  }
+
+  dropAnnotation(id: string, annotationId: string, by: string): Annotation {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    return this.annotations(task).drop(annotationId, by);
+  }
+
+  /** 把批注渲染成模型清单。ids 省略=全部待送出的。
+   * 只渲染不落状态——决定卡要先给人看一眼再决定送不送。 */
+  previewAnnotations(id: string, ids?: string[]): string {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    const picked = this.pickDrafts(task, ids);
+    return renderAnnotations(picked, this.ticketOf(task));
+  }
+
+  /** 送批注:走插话通道,当场发给正在跑的模型。
+   * 送达之后才标 sent——先标后发会留下"提过了"的假账,而人会据此
+   * 以为说过了。 */
+  async sendAnnotations(id: string, ids?: string[]): Promise<{
+    sent: string[]; text: string;
+  }> {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    const picked = this.pickDrafts(task, ids);
+    const text = renderAnnotations(picked, this.ticketOf(task));
+    await this.interrupt(id, text);
+    this.annotations(task).markSent(picked.map((item) => item.id), "interrupt");
+    return { sent: picked.map((item) => item.id), text };
+  }
+
+  private pickDrafts(task: TaskState, ids?: string[]): Annotation[] {
+    const drafts = this.annotations(task).drafts();
+    if (!ids?.length) {
+      if (!drafts.length) throw new NotFoundError("没有待送出的批注");
+      return drafts;
+    }
+    const wanted = new Set(ids);
+    const picked = drafts.filter((item) => wanted.has(item.id));
+    if (picked.length !== wanted.size) {
+      throw new NotFoundError("有批注不存在或已经送出去了");
+    }
+    return picked;
+  }
+
   create(
     requirement: string,
     options: { account?: string } = {},
@@ -389,6 +500,9 @@ export class TaskService {
       decision?: string;
       answers?: Record<string, string>;
       notes?: string;
+      /** 随这次决定一起提交的批注:圈过的几处就是"需要修改"的理由,
+       * 不用人再复述一遍。 */
+      annotation_ids?: string[];
     },
   ): Promise<TaskSummary> {
     const task = this.tasks.get(id);
@@ -403,12 +517,25 @@ export class TaskService {
     if (!decision.trim()) {
       throw new NotFoundError("决定不能为空:给 decision 或 answers");
     }
+    // 批注进 notes 而不是 decision:内核按选项标签给这次选择记账
+    // (choice receipts),往 decision 里塞正文会让它对不上原选项。
+    // notes 是自由正文,本来就是给"为什么打回"用的。
+    const picked = input.annotation_ids?.length
+      ? this.pickDrafts(task, input.annotation_ids) : [];
+    const notes = picked.length
+      ? [input.notes, renderAnnotations(picked, this.ticketOf(task))]
+        .filter(Boolean).join("\n\n")
+      : input.notes;
     const resolved = task.humanGate.resolve(waiting.waiting_id, {
       stateVersion: input.state_version,
       decision,
       answers: Object.keys(answers).length ? answers : undefined,
-      notes: input.notes,
+      notes,
     });
+    // 决定已经落袋(waiting.json 写完),批注才算送出去。
+    if (picked.length) {
+      this.annotations(task).markSent(picked.map((item) => item.id), "decision");
+    }
     task.summary.waiting = undefined;
     if (task.driver) {
       task.summary.status = "running";
