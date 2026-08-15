@@ -255,3 +255,41 @@ export async function listTimeline(
   }
   return { entries: await response.json() };
 }
+
+/** 检视产物(服务端 src/artifacts.ts 的镜像):决策处要看的材料。 */
+export interface ArtifactMeta {
+  name: string;
+  label: string;
+  kind: "doc" | "diff";
+  bytes: number;
+  modified_at: string;
+}
+
+export async function listArtifacts(
+  taskId: string,
+): Promise<{ items?: ArtifactMeta[]; unavailable?: string }> {
+  const response = await fetch(`/tasks/${taskId}/artifacts`);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    return {
+      unavailable: response.status === 404
+        ? "产物接口尚未就绪(服务重启后可用)。"
+        : String(body.error ?? `HTTP ${response.status}`),
+    };
+  }
+  return { items: await response.json() };
+}
+
+export async function readArtifact(
+  taskId: string,
+  name: string,
+): Promise<{ content?: string; kind?: string; unavailable?: string }> {
+  const response = await fetch(
+    `/tasks/${taskId}/artifacts/${encodeURIComponent(name)}`);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    return { unavailable: String(body.error ?? `HTTP ${response.status}`) };
+  }
+  const body = await response.json();
+  return { content: String(body.content ?? ""), kind: String(body.kind ?? "doc") };
+}

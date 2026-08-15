@@ -5,10 +5,11 @@
 import { useEffect, useState } from "react";
 import {
   createTask, createUser, getSession, listTasks, listUsers, login, logout,
-  STATUS_TEXT, type AuthUser, type TaskStatus, type TaskSummary, type UserRole,
+  type AuthUser, type TaskStatus, type TaskSummary, type UserRole,
 } from "./api";
 import { TaskCard } from "./TaskCard";
 import { HistoryBoard } from "./HistoryBoard";
+import { TaskWorkspace } from "./TaskWorkspace";
 import { byUrgency } from "./taskTime";
 
 type View = "team" | "mine" | "history" | "users";
@@ -75,8 +76,11 @@ export function App() {
     return () => clearTimeout(timer);
   }, [view, targetTaskId, tasks.length]);
 
-  const personalTaskCandidates = session
+  const assignedToMe = session
     ? tasks.filter((task) => task.luban_account === session.username)
+    : [];
+  const adminFallbackWaiting = session?.role === "admin"
+    ? tasks.filter((task) => !task.luban_account && task.status === "waiting_for_human")
     : [];
 
   if (session === undefined) return <LoadingScreen />;
@@ -101,19 +105,22 @@ export function App() {
   }
 
   const waitingCount = tasks.filter((task) => task.status === "waiting_for_human").length;
-  const myTasks = personalTaskCandidates;
+  const myTasks = [...assignedToMe, ...adminFallbackWaiting];
   const myWaiting = myTasks.filter((task) => task.status === "waiting_for_human");
   const myOtherTasks = myTasks.filter((task) => task.status !== "waiting_for_human");
   const artifactTask = tasks.find((task) => task.id === artifactTaskId);
+  // 谁能提交决定:管理员或任务归属人。工作台与列表共用这一个口径。
+  const canOperate = (task: TaskSummary) =>
+    session.role === "admin" || task.luban_account === session.username;
   const header = {
-    team: { title: "团队总览", description: "掌握团队整体推进、决策阻塞与交付状态，并可下钻查看每项工作。" },
-    mine: { title: "我的工作", description: "只收拢分配给我的需求，优先处理需要本人核对的节点。" },
+    team: session.role === "admin"
+      ? { title: "团队总览", description: "只看团队推进、负责人和阻塞风险；具体操作统一回到个人工作台。" }
+      : { title: "团队动态", description: "只读了解团队正在推进什么；你的待办与操作始终留在个人工作台。" },
+    mine: { title: "我的工作", description: "集中处理分配给我的需求、待确认事项和后续交付动作。" },
     history: { title: "交付历史", description: "从投影读侧回看跨生命周期的任务与交付记录。" },
     users: { title: "账号管理", description: "创建本地账号并分配管理员或开发权限。" },
   }[view];
   const relevantWaiting = view === "mine" ? myWaiting.length : waitingCount;
-  const canOperate = (task: TaskSummary) => session.role === "admin" || task.luban_account === session.username;
-
   const launchPanel = <section className="launch-panel" aria-labelledby="launch-title">
     <div className="launch-copy"><span className="section-kicker">QUICK START</span><h2 id="launch-title">发起一项工作</h2><p>{session.role === "admin" ? "管理员可以为任意成员创建任务并指定待办接收人。" : "任务会自动归入你的工作台，需要核对时直接在这里处理。"}</p></div>
     <form className="composer" onSubmit={submit}>
@@ -128,12 +135,22 @@ export function App() {
 
   return <div className="app-shell">
     <aside className="sidebar">
-      <div className="brand-lockup"><span className="brand-symbol" aria-hidden><svg viewBox="0 0 28 28"><path d="M5.5 20.5 10.7 7l3.3 7.15L17.3 7l5.2 13.5" /><path d="M8.1 16.1h11.8" /></svg></span><span className="brand-copy"><strong>Mae-Flow</strong><small>Cloud Console</small></span></div>
+      <div className="brand-lockup"><span className="brand-symbol" aria-hidden><svg viewBox="0 0 28 28"><path d="M5.5 20.5 10.7 7l3.3 7.15L17.3 7l5.2 13.5" /><path d="M8.1 16.1h11.8" /></svg></span><span className="brand-copy"><strong>Mae-Flow</strong><small>{session.role === "admin" ? "Management Console" : "Developer Workspace"}</small></span></div>
       <nav className="sidebar-nav" aria-label="视图切换">
-        <NavButton view="team" current={view} onSelect={setView} label="团队总览" badge={waitingCount} />
-        <NavButton view="mine" current={view} onSelect={setView} label="我的工作" badge={myWaiting.length} personal />
-        <NavButton view="history" current={view} onSelect={setView} label="历史看板" />
-        {session.role === "admin" && <NavButton view="users" current={view} onSelect={setView} label="账号管理" />}
+        {session.role === "admin" ? <>
+          <span className="nav-section-label">管理视角</span>
+          <NavButton view="team" current={view} onSelect={setView} label="团队总览" badge={waitingCount} />
+          <NavButton view="mine" current={view} onSelect={setView} label="我的待办" badge={myWaiting.length} personal />
+          <NavButton view="history" current={view} onSelect={setView} label="交付历史" />
+          <span className="nav-section-label admin-tools">系统管理</span>
+          <NavButton view="users" current={view} onSelect={setView} label="账号管理" />
+        </> : <>
+          <span className="nav-section-label">个人工作台</span>
+          <NavButton view="mine" current={view} onSelect={setView} label="我的工作" badge={myWaiting.length} personal />
+          <span className="nav-section-label team-context">团队信息</span>
+          <NavButton view="team" current={view} onSelect={setView} label="团队动态" badge={waitingCount} />
+          <NavButton view="history" current={view} onSelect={setView} label="交付历史" />
+        </>}
       </nav>
       <div className="sidebar-foot session-foot"><span className="account-avatar" aria-hidden>{session.username.slice(0, 1).toUpperCase()}</span><span className="sidebar-account"><strong>{session.username}</strong><small>{session.role === "admin" ? "管理员" : "开发成员"}</small></span><button type="button" className="logout-button" onClick={signOut} title="退出登录" aria-label="退出登录"><svg viewBox="0 0 20 20"><path d="M8 4H4.75A1.25 1.25 0 0 0 3.5 5.25v9.5A1.25 1.25 0 0 0 4.75 16H8M12.5 6.5 16 10l-3.5 3.5M7 10h9" /></svg></button></div>
     </aside>
@@ -144,11 +161,11 @@ export function App() {
         {view === "team" && <>
           <section className="team-pulse" aria-labelledby="pulse-title"><div className="section-head pulse-head"><div><span className="section-kicker">TEAM PULSE</span><h2 id="pulse-title">团队任务态势</h2></div><span className="live-label"><i aria-hidden /> 实时更新</span></div><div className="pulse-grid">{PULSE_GROUPS.map((group) => { const count = group.statuses ? tasks.filter((task) => group.statuses!.includes(task.status)).length : tasks.length; return <div className={`pulse-card ${group.tone}`} key={group.label}><span className="pulse-card-label"><i aria-hidden />{group.label}</span><strong>{count}</strong></div>; })}</div></section>
           <PhaseFunnel tasks={tasks} />
-          <section className="task-section" aria-labelledby="team-queue-title"><div className="section-head"><div><span className="section-kicker">TEAM QUEUE</span><h2 id="team-queue-title">团队任务明细</h2></div><span className="section-count">{tasks.length} 项</span></div>{tasks.length === 0 && <TaskEmpty personal={false} />}<div className="task-list">{tasks.map((task) => <TaskCard key={task.id} task={task} onChanged={refresh} canOperate={canOperate(task)} onOpenArtifacts={() => setArtifactTaskId(task.id)} />)}</div></section>
+          <section className="task-section" aria-labelledby="team-queue-title"><div className="section-head"><div><span className="section-kicker">TEAM QUEUE</span><h2 id="team-queue-title">团队任务明细</h2></div><span className="section-count">{tasks.length} 项</span></div>{tasks.length === 0 && <TaskEmpty personal={false} />}<div className="task-list">{tasks.map((task) => <TaskCard key={task.id} task={task} onChanged={refresh} canOperate={false} decisionMode="signal" onOpenArtifacts={() => setArtifactTaskId(task.id)} />)}</div></section>
         </>}
 
         {view === "mine" && <>
-          <section className="identity-bar session-bar"><div className="identity-copy"><span className="section-kicker">PERSONAL INBOX</span><strong>{session.username} 的专属工作台</strong><small>登录身份已和任务归属绑定；这里始终只显示分配给你的工作。</small></div><span className={`role-chip ${session.role}`}>{session.role === "admin" ? "管理员身份" : "开发身份"}</span></section>
+          <section className="identity-bar session-bar"><div className="identity-copy"><span className="section-kicker">PERSONAL INBOX</span><strong>{session.username} 的专属工作台</strong><small>{session.role === "admin" ? "显示分配给你的工作，并兜底承接尚未分配负责人的待确认事项。" : "登录身份已和任务归属绑定；这里始终只显示分配给你的工作。"}</small></div><span className={`role-chip ${session.role}`}>{session.role === "admin" ? "管理员身份" : "开发身份"}</span></section>
           <section className="personal-pulse" aria-label="我的任务摘要"><div className="personal-stat attention"><span>待我核对</span><strong>{myWaiting.length}</strong></div><div className="personal-stat active"><span>执行中</span><strong>{myTasks.filter((task) => ACTIVE_STATUSES.includes(task.status)).length}</strong></div><div className="personal-stat success"><span>待合入 / 完成</span><strong>{myTasks.filter((task) => DELIVERED_STATUSES.includes(task.status)).length}</strong></div></section>
           <section className="review-inbox" aria-labelledby="review-title"><div className="section-head"><div><span className="section-kicker">REVIEW INBOX</span><h2 id="review-title">待我核对</h2></div><span className="section-count attention">{myWaiting.length} 项</span></div>{myWaiting.length === 0 ? <div className="review-clear"><span aria-hidden>✓</span><div><strong>当前没有需要你核对的事项</strong><p>新的人工节点会通过小鲁班提醒，并自动出现在这里。</p></div></div> : <div className="task-list review-list">{myWaiting.map((task) => <TaskCard key={task.id} task={task} onChanged={refresh} focused={task.id === targetTaskId} canOperate onOpenArtifacts={() => setArtifactTaskId(task.id)} />)}</div>}</section>
           {launchPanel}
@@ -158,7 +175,7 @@ export function App() {
         {view === "users" && session.role === "admin" && <UsersBoard />}
       </main>
     </div>
-    {artifactTask && <ArtifactWorkspace task={artifactTask} onClose={() => setArtifactTaskId("")} />}
+    {artifactTask && <TaskWorkspace task={artifactTask} canOperate={canOperate(artifactTask)} onChanged={refresh} onClose={() => setArtifactTaskId("")} />}
   </div>;
 }
 
@@ -244,20 +261,3 @@ function TaskEmpty({ personal }: { personal: boolean }) {
   return <div className="empty-state"><span className="empty-visual" aria-hidden><i /><i /><i /></span><strong>{personal ? "还没有分配给你的其他任务" : "还没有当前任务"}</strong><p>{personal ? "你发起的任务会自动归入这里，管理员也可以直接分配给你。" : "任务发起后，团队整体进展会出现在这里。"}</p></div>;
 }
 
-function ArtifactWorkspace({ task, onClose }: { task: TaskSummary; onClose: () => void }) {
-  useEffect(() => {
-    const previous = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => { document.body.style.overflow = previous; window.removeEventListener("keydown", closeOnEscape); };
-  }, [onClose]);
-  return <section className="artifact-workspace" role="dialog" aria-modal="true" aria-labelledby="artifact-workspace-title">
-    <header className="artifact-workspace-head">
-      <button type="button" className="artifact-back" onClick={onClose} autoFocus><svg viewBox="0 0 20 20" aria-hidden><path d="m12.5 5-5 5 5 5" /></svg><span>返回任务</span></button>
-      <div className="artifact-workspace-title"><div><code>{task.id}</code><span className={`pill ${task.status}`}><i aria-hidden />{STATUS_TEXT[task.status]}</span></div><strong id="artifact-workspace-title">{task.requirement}</strong></div>
-      <a className="artifact-external" href={`/tasks/${task.id}/panel`} target="_blank" rel="noreferrer">新窗口打开 <svg viewBox="0 0 16 16" aria-hidden><path d="M6 3.5h6.5V10M12.25 3.75 5 11" /></svg></a>
-    </header>
-    <iframe className="artifact-workspace-frame" src={`/tasks/${task.id}/panel`} title={`${task.id} 过程工作台`} />
-  </section>;
-}

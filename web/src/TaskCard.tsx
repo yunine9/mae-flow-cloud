@@ -37,7 +37,6 @@ export function TaskCard({
   focused = false,
   canOperate = true,
   decisionMode = "form",
-  onOpenDecision,
   onOpenArtifacts,
 }: {
   task: TaskSummary;
@@ -45,7 +44,6 @@ export function TaskCard({
   focused?: boolean;
   canOperate?: boolean;
   decisionMode?: "form" | "signal";
-  onOpenDecision?: () => void;
   onOpenArtifacts?: () => void;
 }) {
   const showDecisionForm = decisionMode === "form";
@@ -108,14 +106,6 @@ export function TaskCard({
             {task.luban_account ?? "未分配负责人"}
             {waitingQuestions > 0 ? ` · ${waitingQuestions} 个决策项` : ""}
           </span>
-          {onOpenDecision && (
-            <button type="button" onClick={onOpenDecision}>
-              {canOperate ? "去审批" : "查看待确认"}
-              <svg viewBox="0 0 16 16" aria-hidden>
-                <path d="m6 3.5 4.5 4.5L6 12.5" />
-              </svg>
-            </button>
-          )}
         </div>
       )}
 
@@ -187,7 +177,7 @@ export function TaskCard({
 
 /** 等待时长:久等升红。父层每 1.5 秒刷新任务列表,这里跟着重算,
  * 不用自己挂计时器。 */
-function WaitBadge({ task, personal }: { task: TaskSummary; personal: boolean }) {
+export function WaitBadge({ task, personal }: { task: TaskSummary; personal: boolean }) {
   const waited = waitedMs(task);
   if (waited < 0) return null;
   const urgent = waited >= URGENT_MINUTES * 60_000;
@@ -199,7 +189,7 @@ function WaitBadge({ task, personal }: { task: TaskSummary; personal: boolean })
   );
 }
 
-function TaskProgress({
+export function TaskProgress({
   progress,
   showDetailedStep,
 }: {
@@ -227,7 +217,7 @@ function TaskProgress({
   </span>;
 }
 
-function WaitingCard({
+export function WaitingCard({
   task,
   onDecided,
 }: {
@@ -417,7 +407,7 @@ function rewritePanelPath(context: string, taskId: string): string {
   );
 }
 
-function RetryButton({
+export function RetryButton({
   taskId,
   onDone,
 }: {
@@ -442,7 +432,7 @@ function RetryButton({
   );
 }
 
-function ActionLedger({ taskId }: { taskId: string }) {
+export function ActionLedger({ taskId }: { taskId: string }) {
   const [rows, setRows] = useState<ExternalAction[]>();
   const [unavailable, setUnavailable] = useState("");
 
@@ -490,7 +480,7 @@ function ActionLedger({ taskId }: { taskId: string }) {
 
 /** 交付时间线:这单经历了什么(人话)。展开才查——原始事件流留给
  * EventTail,这里只呈现服务端归纳好的条目,前端不二次解读。 */
-function TaskTimeline({ taskId }: { taskId: string }) {
+export function TaskTimeline({ taskId }: { taskId: string }) {
   const [entries, setEntries] = useState<TimelineEntry[]>();
   const [unavailable, setUnavailable] = useState("");
   const [loading, setLoading] = useState(false);
