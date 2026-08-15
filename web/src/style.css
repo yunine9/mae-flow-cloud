@@ -2145,6 +2145,18 @@ pre {
   border-bottom: 1px solid var(--border);
   background: var(--surface);
 }
+/* 工作台顶部的进度条是"现在到哪了"的唯一总览,原来沿用列表卡片的迷你
+   尺寸(8.5~10px、720px 封顶),用户实评"很不显眼"。这里按工作台放大;
+   列表卡片里的迷你版不受影响。 */
+.ws-progress .task-progress { max-width: none; margin-top: 2px; }
+.ws-progress .task-progress-caption { font-size: 12px; margin-bottom: 10px; }
+.ws-progress .task-progress-caption > strong { font-size: 14px; }
+.ws-progress .task-phase { font-size: 11px; gap: 7px; }
+.ws-progress .task-phase > i { width: 10px; height: 10px; border-width: 2px; }
+.ws-progress .task-phase:not(:last-child)::before { top: 4.5px; height: 2px; }
+.ws-progress .task-phase.current > i {
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent);
+}
 .ws-body {
   flex: 1;
   display: grid;

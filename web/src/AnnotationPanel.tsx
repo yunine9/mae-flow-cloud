@@ -42,11 +42,16 @@ function relative(iso: string): string {
 function progressOf(item: Annotation, check?: AnchorCheck): {
   tone: "draft" | "waiting" | "review";
   text: string;
+  hint?: string;
 } {
   if (item.status !== "sent") return { tone: "draft", text: "待提交" };
   const changed = check && (check.state === "gone" || check.state === "moved");
+  // 原来这里写"待复核"——用户第一反应是"啥意思"。这是我们造的黑话:
+  // 它想说的其实是"你批过的那处已经被改动了,改得对不对得你看一眼"。
+  // 标签直接说事实,悬停解释为什么要你看。
   return changed
-    ? { tone: "review", text: "待复核" }
+    ? { tone: "review", text: "已被改动·请你确认",
+        hint: "你批注的位置已经被改动。是不是照你说的改的,系统不替你判断,请回到原位看一眼。" }
     : { tone: "waiting", text: "已提交" };
 }
 
@@ -140,7 +145,8 @@ export function AnnotationPanel({
                         title={`回到 ${item.file}:${check?.line ?? item.line}`}>
                   <code>{shortPath(item.file)}:{check?.line ?? item.line}</code>
                 </button>
-                <span className={`annot-progress ${progress.tone}`}>
+                <span className={`annot-progress ${progress.tone}`}
+                      title={progress.hint}>
                   {progress.text}
                 </span>
               </div>
