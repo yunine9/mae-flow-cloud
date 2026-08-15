@@ -82,6 +82,26 @@ test("类图:四种关系分得清,标签留住", () => {
     "render / allVariablesMissing");
 });
 
+test("类图:内部类 `+--` 认得出,且不当成组合", () => {
+  // `+` 不在箭头字符集里时,`ConnPool +-- Connection` 整行不匹配、静静丢掉:
+  // 源里 21 条关系图上只画 20 条,少一条没有任何提示,比画错还难发现。
+  // 认出来之后也不能并进组合:内部类是"语法上嵌在里面",组合是"生命周期
+  // 归它管",同一种线型会把两件事说成一件。
+  const model = parseClassDiagram(`@startuml
+class ConnPool
+class Connection
+class Holder
+class Part
+ConnPool +-- Connection : 内嵌占位连接
+Holder *-- Part
+@enduml`)!;
+  assert.equal(model.edges.length, 2, "两条关系一条都不许丢");
+  const nested = model.edges.find((e) => e.to === "Connection")!;
+  assert.equal(nested.kind, "nests");
+  assert.equal(nested.label, "内嵌占位连接");
+  assert.equal(model.edges.find((e) => e.to === "Part")!.kind, "composes");
+});
+
 test("类图:只在关系里出现的类型补成节点——漏一个整张图就断", () => {
   const model = parseClassDiagram(REAL)!;
   const rendered = model.nodes.find((n) => n.name === "Rendered");

@@ -17,7 +17,7 @@ import {
   type LaidOutNode,
 } from "./classModel";
 
-const BOX_WIDTH = 186;
+const BOX_WIDTH = 252;
 const LINE_HEIGHT = 15;
 const HEAD_HEIGHT = 34;
 const GAP_X = 26;
@@ -25,9 +25,13 @@ const GAP_Y = 60;
 const PAD = 18;
 /** 一行最多几个盒子:同层十个并排会把画布拉成 2000px 的横条,
  * 得横向滚动才看得全,等于没画。超了就折行,层内关系不变。 */
-const ROW_MAX = 5;
-/** 成员太多会把一张图撑成长条,截断并注明——省略比挤爆可读。 */
-const MEMBER_MAX = 6;
+const ROW_MAX = 4;
+/** 成员截断线。定在 6 的时候 NotifyService 的 send() 被折叠进"…还有 2 项"
+ * ——读图的人看到的是一个没有入口方法的服务类,这不叫省略,叫误导。
+ * 类图的第一价值就是成员;宁可图长一点。 */
+const MEMBER_MAX = 16;
+/** 单行字符上限。盒子 252px、成员 10.5px,留 12px 左边距,约放得下 40 个字。 */
+const MEMBER_CHARS = 40;
 
 const KIND_TAG: Record<LaidOutNode["kind"], string> = {
   class: "C",
@@ -108,6 +112,7 @@ const EDGE_CLASS: Record<ClassEdge["kind"], string> = {
   extends: "cd-edge-extends",
   uses: "cd-edge-uses",
   composes: "cd-edge-composes",
+  nests: "cd-edge-nests",
 };
 
 export function ClassDiagram({ model }: { model: ClassModel }) {
@@ -147,19 +152,24 @@ export function ClassDiagram({ model }: { model: ClassModel }) {
           // 组合的实心菱形画在"整体"那一端(A *-- B 里的 A),不是被包含
           // 的那端——画反了就把包含关系说反了。
           const composes = edge.kind === "composes";
+          const nests = edge.kind === "nests";
           const marker = edge.kind === "uses" ? "dot" : "open";
+          // 内嵌关系没有方向,不画箭头;PlantUML 那个 ⊕ 端这里用线型区分。
+          const end = composes || nests
+            ? undefined : `url(#${arrow}-${marker})`;
+          // <title> 只收单个字符串:给它数组 React 直接不渲染,每条边的
+          // 悬停说明就这么静静地全都没了。
+          const tip = `${edge.from} ${EDGE_WORD[edge.kind]} ${edge.to}`
+            + (edge.label ? ` — ${edge.label}` : "");
           return (
             <path
               key={at}
               className={`cd-edge ${EDGE_CLASS[edge.kind]}`}
               d={edgePath(from, to)}
               markerStart={composes ? `url(#${arrow}-diamond)` : undefined}
-              markerEnd={composes ? undefined : `url(#${arrow}-${marker})`}
+              markerEnd={end}
             >
-              <title>
-                {`${edge.from} ${EDGE_WORD[edge.kind]} ${edge.to}`}
-                {edge.label ? ` — ${edge.label}` : ""}
-              </title>
+              <title>{tip}</title>
             </path>
           );
         })}
@@ -187,7 +197,8 @@ export function ClassDiagram({ model }: { model: ClassModel }) {
               <text key={at} className="cd-member" x={node.x + 12}
                     y={node.y + HEAD_HEIGHT + (node.pkg ? LINE_HEIGHT : 0)
                        + at * LINE_HEIGHT + 6}>
-                {member.length > 26 ? member.slice(0, 26) + "…" : member}
+                {member.length > MEMBER_CHARS
+                  ? member.slice(0, MEMBER_CHARS) + "…" : member}
               </text>
             ))}
           </g>
@@ -202,6 +213,7 @@ const EDGE_WORD: Record<ClassEdge["kind"], string> = {
   extends: "继承",
   uses: "依赖",
   composes: "组合",
+  nests: "内嵌",
 };
 
 /** 图例:线型的含义得写出来,不然读图的人得猜。 */
@@ -212,6 +224,7 @@ export function ClassDiagramLegend() {
       <span className="cd-legend-item extends">实线空心箭头 · 继承</span>
       <span className="cd-legend-item uses">点线 · 依赖</span>
       <span className="cd-legend-item composes">实心菱形 · 组合</span>
+      <span className="cd-legend-item nests">双线 · 内嵌(内部类)</span>
     </div>
   );
 }

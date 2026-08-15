@@ -19,8 +19,9 @@ export interface ClassNode {
   members: string[];
 }
 
-/** 关系语义只认这四类,其余按 uses 兜底——线型是给人看的,不能瞎标。 */
-export type EdgeKind = "implements" | "extends" | "uses" | "composes";
+/** 关系语义只认这五类,其余按 uses 兜底——线型是给人看的,不能瞎标。 */
+export type EdgeKind =
+  | "implements" | "extends" | "uses" | "composes" | "nests";
 
 export interface ClassEdge {
   from: string;
@@ -39,8 +40,10 @@ const NODE_HEAD =
 const PACKAGE_HEAD = /^package\s+("([^"]+)"|[^\s{]+)\s*(?:<<[^>]*>>\s*)?\{\s*$/i;
 const NOTE_HEAD = /^note\s+/i;
 
-/** `A ..|> B : 标签` / `A --> B` / `A *-- B` / `A ..> B`。 */
-const EDGE = /^([\w.$"]+)\s+([.\-|<>*o]{2,})\s+([\w.$"]+)\s*(?::\s*(.*))?$/;
+/** `A ..|> B : 标签` / `A --> B` / `A *-- B` / `A ..> B` / `A +-- B`(内部类)。
+ * `+` 一开始没进箭头字符集,`ConnPool +-- Connection` 这行就被整条丢掉了
+ * ——图上少一条关系没有任何提示,比画错更难发现。 */
+const EDGE = /^([\w.$"]+)\s+([.\-|<>*o+]{2,})\s+([\w.$"]+)\s*(?::\s*(.*))?$/;
 
 function unquote(value: string): string {
   return value.trim().replace(/^"|"$/g, "");
@@ -49,6 +52,9 @@ function unquote(value: string): string {
 function edgeKind(arrow: string): EdgeKind {
   // 顺序要紧:`..|>` 同时含 `..` 和 `|>`,实现关系必须先判。
   if (arrow.includes("|>")) return arrow.includes("..") ? "implements" : "extends";
+  // `+--` 是内部类,不是组合:画成实心菱形会把"语法上嵌在里面"说成
+  // "生命周期归它管",两回事。
+  if (arrow.includes("+")) return "nests";
   if (arrow.includes("*")) return "composes";
   if (arrow.startsWith("..")) return "uses";
   return "uses";
