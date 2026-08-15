@@ -8,12 +8,14 @@ import { Markdown } from "./markdown";
 import {
   decide,
   listActions,
+  listTimeline,
   retryTask,
   STATUS_TEXT,
   tailEvents,
   type ExternalAction,
   type SemanticEvent,
   type TaskSummary,
+  type TimelineEntry,
 } from "./api";
 import { formatWait, URGENT_MINUTES, waitedMs } from "./taskTime";
 
@@ -138,6 +140,7 @@ export function TaskCard({
             </div>
           )}
           <div className="task-utilities">
+            <TaskTimeline taskId={task.id} />
             {task.delivery && <ActionLedger taskId={task.id} />}
             <EventTail taskId={task.id} />
           </div>
@@ -436,6 +439,55 @@ function ActionLedger({ taskId }: { taskId: string }) {
             </div>
           ))}
         </div>
+      )}
+    </details>
+  );
+}
+
+/** 交付时间线:这单经历了什么(人话)。展开才查——原始事件流留给
+ * EventTail,这里只呈现服务端归纳好的条目,前端不二次解读。 */
+function TaskTimeline({ taskId }: { taskId: string }) {
+  const [entries, setEntries] = useState<TimelineEntry[]>();
+  const [unavailable, setUnavailable] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function load() {
+    setLoading(true);
+    const result = await listTimeline(taskId);
+    setUnavailable(result.unavailable ?? "");
+    setEntries(result.entries);
+    setLoading(false);
+  }
+
+  return (
+    <details
+      className="utility-block"
+      onToggle={(toggle) => {
+        if ((toggle.target as HTMLDetailsElement).open) void load();
+      }}
+    >
+      <summary>
+        <strong>交付时间线</strong>
+        <span>阶段推进 · 审批 · 子 Agent · 质量台账</span>
+      </summary>
+      {loading && <div className="utility-note">正在读取现场…</div>}
+      {unavailable && <div className="utility-note">{unavailable}</div>}
+      {entries && entries.length === 0 && (
+        <div className="utility-note">现场还没有可归纳的记录。</div>
+      )}
+      {entries && entries.length > 0 && (
+        <ol className="timeline">
+          {entries.map((entry, index) => (
+            <li className={`timeline-item ${entry.tone}`} key={index}>
+              <span className="timeline-dot" aria-hidden />
+              <span className="timeline-time">{entry.ts.slice(-8, -3)}</span>
+              <span className="timeline-body">
+                <strong>{entry.title}</strong>
+                {entry.detail && <span>{entry.detail}</span>}
+              </span>
+            </li>
+          ))}
+        </ol>
       )}
     </details>
   );

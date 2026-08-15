@@ -229,3 +229,29 @@ export function tailEvents(
   source.onerror = () => source.close();
   return () => source.close();
 }
+
+/** 交付时间线条目(服务端 src/timeline.ts 的镜像)。 */
+export interface TimelineEntry {
+  ts: string;
+  kind: "session" | "phase" | "ask" | "decision" | "agent" | "quality";
+  title: string;
+  detail?: string;
+  tone: "info" | "attention" | "success" | "danger";
+}
+
+/** 任务的人话时间线。服务端未提供该路由(旧进程)时把解释带回,
+ * 不假装"这单什么都没发生"。 */
+export async function listTimeline(
+  taskId: string,
+): Promise<{ entries?: TimelineEntry[]; unavailable?: string }> {
+  const response = await fetch(`/tasks/${taskId}/timeline`);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    return {
+      unavailable: response.status === 404
+        ? "时间线接口尚未就绪(服务重启后可用)。"
+        : String(body.error ?? `HTTP ${response.status}`),
+    };
+  }
+  return { entries: await response.json() };
+}
