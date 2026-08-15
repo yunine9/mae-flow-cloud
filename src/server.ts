@@ -7,6 +7,7 @@
  *   POST /tasks/:id/decision   {state_version,decision,notes?}
  *        → 200;版本冲突/已被抢先 → 409 "任务状态已变化"(先到决定生效)
  *   GET  /tasks/:id/events                              → SSE:重放事件日志后持续跟进
+ *   GET  /tasks/:id/timeline                            → 人话交付时间线(只读现场)
  *
  * Web 不自行推断状态:详情与列表只是 TaskService 状态的镜像,
  * 事件流只是 events.jsonl 的镜像——真相都在文件与状态机里。
@@ -21,10 +22,16 @@ import {
   readSync,
   statSync,
 } from "node:fs";
-import { extname, join, resolve, sep } from "node:path";
+import { dirname, extname, join, resolve, sep } from "node:path";
 import { StateConflictError } from "./humanGate.ts";
 import { NotFoundError, type TaskService } from "./taskService.ts";
+import { buildTimeline } from "./timeline.ts";
 import { WEB_PAGE } from "./webPage.ts";
+import {
+  cookieValue,
+  type AuthUser,
+  type LocalAuth,
+} from "./auth.ts";
 
 /** 正式前端静态文件的最小类型表:Vite 产物就这几种。 */
 const MIME: Record<string, string> = {
@@ -61,12 +68,87 @@ function json(
 
 export function createTaskServer(
   service: TaskService,
-  options: { webRoot?: string } = {},
+  options: { webRoot?: string; auth?: LocalAuth } = {},
 ): Server {
   return createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://localhost");
     const parts = url.pathname.split("/").filter(Boolean);
     try {
+      const sessionToken = cookieValue(
+        request.headers.cookie,
+        "mae_flow_session",
+      );
+      const viewer = options.auth?.sessionUser(sessionToken);
+
+      // 登录页资产公开，身份 API 自己决定是否需要会话。
+      if (parts[0] === "auth") {
+        if (request.method === "POST" && parts[1] === "login") {
+          if (!options.auth) {
+            return json(response, 404, { error: "未启用本地登录" });
+          }
+          const body = await readBody(request);
+          const result = options.auth.authenticate(
+            String(body.username ?? ""),
+            String(body.password ?? ""),
+            request.socket.remoteAddress ?? "unknown",
+          );
+          if (result.blockedForMs) {
+            response.setHeader(
+              "retry-after",
+              String(Math.ceil(result.blockedForMs / 1000)),
+            );
+            return json(response, 429, {
+              error: "登录失败次数过多，请稍后再试",
+            });
+          }
+          if (!result.user) {
+            return json(response, 401, { error: "账号或密码错误" });
+          }
+          const token = options.auth.createSession(result.user);
+          response.setHeader("set-cookie", sessionCookie(token, request));
+          return json(response, 200, result.user);
+        }
+        if (request.method === "GET" && parts[1] === "me") {
+          return viewer
+            ? json(response, 200, viewer)
+            : json(response, 401, { error: "尚未登录" });
+        }
+        if (request.method === "POST" && parts[1] === "logout") {
+          options.auth?.endSession(sessionToken);
+          response.setHeader("set-cookie", sessionCookie("", request, true));
+          return json(response, 200, { ok: true });
+        }
+        if (parts[1] === "users") {
+          if (!viewer) return json(response, 401, { error: "尚未登录" });
+          if (viewer.role !== "admin") {
+            return json(response, 403, { error: "只有管理员可以管理账号" });
+          }
+          if (request.method === "GET" && parts.length === 2) {
+            return json(response, 200, options.auth?.listUsers() ?? []);
+          }
+          if (request.method === "POST" && parts.length === 2) {
+            const body = await readBody(request);
+            try {
+              const user = options.auth!.createUser(
+                String(body.username ?? ""),
+                String(body.password ?? ""),
+                String(body.role ?? "developer") as "admin" | "developer",
+              );
+              return json(response, 201, user);
+            } catch (error) {
+              return json(response, 400, { error: String(error) });
+            }
+          }
+        }
+        return json(response, 404, { error: "未知身份接口" });
+      }
+
+      const protectedRoute =
+        url.pathname === "/history" || parts[0] === "tasks";
+      if (options.auth && protectedRoute && !viewer) {
+        return json(response, 401, { error: "请先登录" });
+      }
+
       // 历史读侧(§11):任务摘要投影来自 PG,跨进程生命周期。
       // 必须先于静态托管兜底判定——非 /tasks 前缀的 GET 会被它接管。
       if (request.method === "GET" && url.pathname === "/history") {
@@ -103,9 +185,11 @@ export function createTaskServer(
         if (!requirement) {
           return json(response, 400, { error: "requirement 不能为空" });
         }
-        return json(response, 201, service.create(requirement, {
-          account: body.account ? String(body.account) : undefined,
-        }));
+        const requested = body.account ? String(body.account) : undefined;
+        const account = viewer?.role === "developer"
+          ? viewer.username
+          : requested;
+        return json(response, 201, service.create(requirement, { account }));
       }
       if (request.method === "GET" && url.pathname === "/tasks") {
         return json(response, 200, service.list());
@@ -118,6 +202,11 @@ export function createTaskServer(
           return json(response, 200, task);
         }
         if (request.method === "POST" && parts[2] === "decision") {
+          const target = service.get(id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          if (!canOperate(viewer, target.luban_account, !!options.auth)) {
+            return json(response, 403, { error: "只能处理分配给自己的任务" });
+          }
           const body = await readBody(request);
           const task = await service.decide(id, {
             state_version: Number(body.state_version),
@@ -135,7 +224,25 @@ export function createTaskServer(
         // 重跑一单(run7 实测的运维刚需):环境故障被迫收口的任务,
         // 修好环境后续接内核当前步骤,不从头再来。终态校验在服务层。
         if (request.method === "POST" && parts[2] === "retry") {
+          const target = service.get(id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          if (!canOperate(viewer, target.luban_account, !!options.auth)) {
+            return json(response, 403, { error: "只能重跑分配给自己的任务" });
+          }
           return json(response, 200, service.retry(id));
+        }
+        // 交付时间线(只读):现场文件读成人话,权限口径同任务详情
+        // ——能看任务就能看它经历了什么。纯展示,不参与判定。
+        if (request.method === "GET" && parts[2] === "timeline") {
+          const target = service.get(id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          // 代码工作区经现成的公开方法反推:面板在 <cwd>/.mae-flow-work/
+          // 之下,拿不到就交给 buildTimeline 自己在工作区里找。
+          const panel = service.panelFile(id, "panel.html")
+            ?? service.panelFile(id, "panel-pulse.js");
+          const cwd = panel ? dirname(dirname(panel)) : undefined;
+          return json(response, 200,
+            buildTimeline(target.workspace, cwd));
         }
         // 审计读侧(§11):外部动作台账来自 PG 投影。没配投影时
         // 明说,而不是空数组装作"没有动作"。
@@ -180,6 +287,29 @@ export function createTaskServer(
       return json(response, 500, { error: String(error) });
     }
   });
+}
+
+function canOperate(
+  viewer: AuthUser | undefined,
+  taskAccount: string | undefined,
+  authEnabled: boolean,
+): boolean {
+  if (!authEnabled) return true;
+  return viewer?.role === "admin"
+    || (!!viewer && !!taskAccount && viewer.username === taskAccount);
+}
+
+function sessionCookie(
+  token: string,
+  request: import("node:http").IncomingMessage,
+  expired = false,
+): string {
+  const secure = request.headers["x-forwarded-proto"] === "https"
+    ? "; Secure"
+    : "";
+  const age = expired ? 0 : 8 * 60 * 60;
+  return `mae_flow_session=${encodeURIComponent(token)}; Path=/; HttpOnly; `
+    + `SameSite=Strict; Max-Age=${age}${secure}`;
 }
 
 /** webRoot 内定位静态文件:/ → index.html。resolve 后必须仍在
