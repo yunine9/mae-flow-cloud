@@ -8,7 +8,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { layerClasses, parseClassDiagram } from "../web/src/classModel.ts";
+import {
+  layerClasses, looksLikeClassDiagram, parseClassDiagram,
+} from "../web/src/classModel.ts";
+import { parseSequence } from "../web/src/PlantUml.tsx";
 
 const REAL = `@startuml
 skinparam packageStyle rectangle
@@ -114,6 +117,36 @@ test("类图:note 块与 skinparam 一律跳过,不当成成员吞进来", () =>
   assert.ok(!renderer.members.some((line) => line.includes("唯一实现")),
     "note 正文不许混进类成员");
   assert.ok(!model.nodes.some((n) => n.name.includes("skinparam")));
+});
+
+const SEQUENCE = `@startuml
+autonumber
+participant "接入方" as Caller
+participant "NotifyService" as Svc
+Caller -> Svc: send(notification)
+activate Svc
+alt 标题与正文均空白
+  Svc --> Caller: failed
+else
+  Svc --> Caller: SendResult
+end
+deactivate Svc
+@enduml`;
+
+test("谁来画由证据定:类图不许被时序解析器抢走", () => {
+  // 真事故。渲染器原来是"先试时序图,认不出再试类图",而类图里
+  // `NotifyService --> HandlerRegistry` 这种关系,时序解析器会当成消息、
+  // 两端当成参与者——**照单全收**。于是整张类图被画成时序图,页面上还
+  // 落款"时序图 · 内置渲染";类图那边怎么修都不会上屏,人只看到一张
+  // 读不通的图,以为是模型画错了。
+  //
+  // 两个解析器都"认得出"同一段源码时,先后顺序不是判定,证据才是。
+  assert.ok(parseSequence(REAL), "时序解析器确实会照单全收——坑还在,别以为它自己会拒");
+  assert.ok(looksLikeClassDiagram(REAL), "有 class/..|>/*-- 就是类图,不该再问时序图");
+
+  // 反向也得钉住:真时序图不许被判成类图,否则这次修复会把另一头打坏。
+  assert.ok(!looksLikeClassDiagram(SEQUENCE));
+  assert.ok(parseSequence(SEQUENCE));
 });
 
 test("类图:不是类图的源码返回 undefined,交给上层兜底", () => {

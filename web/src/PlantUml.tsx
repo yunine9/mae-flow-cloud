@@ -1,6 +1,6 @@
 import { useId, type ReactNode } from "react";
 import { ClassDiagram, ClassDiagramLegend } from "./ClassDiagram";
-import { parseClassDiagram } from "./classModel";
+import { looksLikeClassDiagram, parseClassDiagram } from "./classModel";
 
 interface Participant {
   alias: string;
@@ -292,11 +292,12 @@ function SequenceDiagram({ model }: { model: SequenceModel }) {
 }
 
 export function PlantUml({ source }: { source: string }) {
-  const model = parseSequence(source);
-  // 时序图认不出再试类图。原来只有时序图一条路,模型按批注画的类图落到
-  // "无法安全绘制"——用户以为它没画,其实源码好好躺在文档里。渲染缺口
-  // 冒充成模型失职,是最坏的一种误导。
-  const classes = model ? undefined : parseClassDiagram(source);
+  // 谁来画由证据定,不由先后定。原来是"先试时序图,认不出再试类图",
+  // 结果类图里的 `A --> B` 被时序解析器当成消息全盘收下,整张类图被画成
+  // 时序图还落款"时序图 · 内置渲染"——类图那边怎么修都不会上屏。
+  const classes = looksLikeClassDiagram(source)
+    ? parseClassDiagram(source) : undefined;
+  const model = classes ? undefined : parseSequence(source);
   return (
     <figure className="plantuml-figure">
       {model ? (

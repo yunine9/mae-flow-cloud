@@ -60,6 +60,31 @@ function edgeKind(arrow: string): EdgeKind {
   return "uses";
 }
 
+/** 只可能出现在类图里的记号。`-->` 两边都用,不算数;这几个不同:
+ * 时序图里没有 `class X`,也没有实现/组合/内部类的箭头。 */
+const CLASS_ONLY = [
+  /^\s*(?:abstract\s+class|class|interface|enum)\s+["\w.$]/im,
+  /\.\.\|>|--\|>/,          // 实现 / 继承
+  /\s\*--|--\*\s/,          // 组合
+  /\so--|--o\s/,            // 聚合
+  /\s\+--|--\+\s/,          // 内部类
+];
+
+/**
+ * 这段源码是不是类图。
+ *
+ * 存在的理由是一个真事故:渲染器原来"先试时序图,认不出再试类图",而类图
+ * 里 `NotifyService --> HandlerRegistry` 这种关系,时序解析器会当成"消息",
+ * 两端当成"参与者"——照单全收。于是整张类图被画成一张时序图,页面上还
+ * 落款"时序图 · 内置渲染"。用户看到的图从头到尾都不是类图,而类图那边
+ * 怎么修都不会上屏。
+ *
+ * 教训:两个解析器都可能"认得出"同一段源码时,先后顺序不是判定,证据才是。
+ */
+export function looksLikeClassDiagram(source: string): boolean {
+  return CLASS_ONLY.some((mark) => mark.test(source));
+}
+
 export function parseClassDiagram(source: string): ClassModel | undefined {
   const lines = source.replace(/\r\n/g, "\n").split("\n");
   const nodes: ClassNode[] = [];
