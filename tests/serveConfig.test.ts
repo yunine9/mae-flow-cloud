@@ -1,0 +1,94 @@
+/**
+ * 配置文件契约(--config):
+ * - 文件坏了拒绝启动,不静默忽略——带着一半配置起服比不起服更害人
+ *   (你以为切了真件,其实还在假件上);
+ * - 文件供值、命令行压过文件——排障时临时改参数不必动文件。
+ *
+ * 走真子进程:CONFIG 在模块加载期读 argv,单测里改 argv 测不到真路径。
+ */
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+const TSX = join(process.cwd(), "node_modules", ".bin", "tsx");
+const SERVE = join(process.cwd(), "src", "serve.ts");
+
+function run(
+  args: string[],
+  probe: (line: string) => boolean,
+  timeoutMs = 30_000,
+): Promise<{ code: number | null; output: string; matched: boolean }> {
+  return new Promise((resolve) => {
+    const child = spawn(TSX, [SERVE, ...args], {
+      env: { ...process.env, MAE_FLOW_NO_NOTIFY: "1" },
+    });
+    let output = "";
+    let matched = false;
+    const finish = (code: number | null) =>
+      resolve({ code, output, matched });
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+    }, timeoutMs);
+    const watch = (chunk: Buffer) => {
+      output += chunk.toString();
+      if (!matched && output.split("\n").some(probe)) {
+        matched = true;
+        clearTimeout(timer);
+        child.kill("SIGTERM");
+        // 命中即收:等子进程退出由 close 收口
+      }
+    };
+    child.stdout.on("data", watch);
+    child.stderr.on("data", watch);
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      finish(code);
+    });
+  });
+}
+
+test("配置文件坏了拒绝启动,不静默忽略", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-cfg-"));
+  const bad = join(dir, "bad.json");
+  writeFileSync(bad, "{ 这不是 JSON");
+  const { code, output } = await run([
+    "--config", bad, "--data", join(dir, "tasks"),
+  ], () => false, 15_000);
+  assert.notEqual(code, 0, "坏配置必须非零退出");
+  assert.match(output, /配置文件读取失败,拒绝启动/);
+
+  const missing = await run([
+    "--config", join(dir, "no-such.json"), "--data", join(dir, "tasks"),
+  ], () => false, 15_000);
+  assert.notEqual(missing.code, 0);
+});
+
+test("配置文件供值,命令行压过文件", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-cfg-"));
+  const filePort = 18000 + Math.floor(Math.random() * 500);
+  const cliPort = filePort + 500;
+  const config = join(dir, "serve.json");
+  writeFileSync(config, JSON.stringify({
+    port: filePort,
+    "max-concurrent": 1,
+  }));
+
+  // 只用文件:应当听在文件配的端口上
+  const fromFile = await run(
+    ["--config", config, "--data", join(dir, "t1")],
+    (line) => line.includes(`http://127.0.0.1:${filePort}`));
+  assert.ok(fromFile.matched,
+    `文件端口未生效,输出:\n${fromFile.output.slice(0, 800)}`);
+
+  // 文件 + 命令行:命令行赢
+  const fromCli = await run(
+    ["--config", config, "--port", String(cliPort),
+     "--data", join(dir, "t2")],
+    (line) => line.includes(`http://127.0.0.1:${cliPort}`));
+  assert.ok(fromCli.matched,
+    `命令行未压过文件,输出:\n${fromCli.output.slice(0, 800)}`);
+});

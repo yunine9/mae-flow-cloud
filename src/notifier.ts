@@ -32,6 +32,9 @@ export interface NotifyRecord {
 export interface NotifierOptions {
   /** 小鲁班投递端点(真件=内网地址,演示=FakeLubanServer)。 */
   endpoint: string;
+  /** 真件鉴权头(如 Authorization)。假件不需要;值是密钥,来自
+   * 权限 600 的配置文件,不落日志。 */
+  headers?: Record<string, string>;
   /** 有限退避重试的间隔(毫秒);长度即最大重试次数。 */
   backoffMs?: number[];
   log?: (message: string) => void;
@@ -114,7 +117,10 @@ export class Notifier {
       try {
         const response = await fetch(this.options.endpoint, {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: {
+            "content-type": "application/json",
+            ...this.options.headers,
+          },
           body: JSON.stringify({
             account: record.account,
             text: record.text,

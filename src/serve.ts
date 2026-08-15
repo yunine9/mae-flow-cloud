@@ -31,17 +31,55 @@ const DEMO_SCRIPT: Scene[] = [
   { text: "COMPILE_RESULT: PASS 按决定继续交付" },
 ];
 
+/**
+ * 配置文件(--config <file.json>):键 = 去掉 "--" 的 flag 名,
+ * 值 = 字符串/数字/布尔/数组。命令行永远压过文件——排障时临时改一个
+ * 参数不必动文件。文件坏了直接拒启,不静默忽略:带着一半配置起服,
+ * 比不起服更害人(你以为切了真件,其实还在假件上)。
+ *
+ * 为什么不用环境变量堆:十几个 MAE_FLOW_* 散在 systemd 单元里没法
+ * review;一个 JSON 文件即配置面清单,git 里能 diff(密钥除外——
+ * apiKey 类仍走 secrets.env / models.json,权限 600,永不进仓)。
+ */
+const CONFIG: Record<string, unknown> = (() => {
+  const index = process.argv.indexOf("--config");
+  if (index < 0) return {};
+  const path = process.argv[index + 1];
+  if (!path) {
+    console.error("[serve] --config 需要文件路径");
+    process.exit(2);
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf-8"));
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new Error("顶层必须是对象");
+    }
+    console.log(`[serve] 配置文件: ${resolve(path)}`);
+    return parsed as Record<string, unknown>;
+  } catch (error) {
+    console.error(`[serve] 配置文件读取失败,拒绝启动: ${String(error)}`);
+    process.exit(2);
+  }
+})();
+
 function flag(name: string): string | undefined {
   const index = process.argv.indexOf(name);
-  return index > 0 ? process.argv[index + 1] : undefined;
+  if (index > 0 && process.argv[index + 1] !== undefined) {
+    return process.argv[index + 1];
+  }
+  const fromFile = CONFIG[name.replace(/^--/, "")];
+  return fromFile === undefined ? undefined : String(fromFile);
 }
 
-/** 开关参数(无值)。 */
+/** 开关参数(无值);配置文件里写布尔 true。 */
 function has(name: string): boolean {
-  return process.argv.includes(name);
+  return process.argv.includes(name)
+    || CONFIG[name.replace(/^--/, "")] === true;
 }
 
-/** 可重复参数(如 --isolate-volume a:b --isolate-volume c:d)。 */
+/** 可重复参数(如 --isolate-volume a:b --isolate-volume c:d);
+ * 配置文件里写数组。命令行给了就整组压过文件,不做合并——半边文件
+ * 半边命令行的挂载列表没人能排障。 */
 function flags(name: string): string[] {
   const values: string[] = [];
   process.argv.forEach((argument, index) => {
@@ -49,7 +87,9 @@ function flags(name: string): string[] {
       values.push(process.argv[index + 1]);
     }
   });
-  return values;
+  if (values.length) return values;
+  const fromFile = CONFIG[name.replace(/^--/, "")];
+  return Array.isArray(fromFile) ? fromFile.map(String) : [];
 }
 
 function demoContract(
@@ -142,15 +182,32 @@ async function main(): Promise<void> {
   // 推送/MR/流水线全环回,与 pilot 同款(部署手册的切换点在此落地)。
   let delivery: { platformUrl: string } | undefined;
   const platformUrl = flag("--platform");
+  // 交付链的三个预算旋钮:修复轮(默认 2,0=关)、轮询间隔(默认 10s,
+  // 内网按 CLI 开销放宽)、轮询预算(默认 30 分钟)。只暴露数值,
+  // "无限等待"这种取值不存在——预算的存在性不是配置项。
+  const pace = {
+    repairRounds: flag("--repair-rounds") !== undefined
+      ? Number(flag("--repair-rounds")) : undefined,
+    pollIntervalMs: flag("--poll-interval") !== undefined
+      ? Number(flag("--poll-interval")) * 1000 : undefined,
+    pollTimeoutMs: flag("--poll-timeout") !== undefined
+      ? Number(flag("--poll-timeout")) * 1000 : undefined,
+  };
+  for (const [key, value] of Object.entries(pace)) {
+    if (value !== undefined && (!Number.isFinite(value) || value < 0)) {
+      console.error(`[serve] ${key} 必须是非负数字,拒绝启动`);
+      process.exit(2);
+    }
+  }
   if (platformUrl) {
-    delivery = { platformUrl };
+    delivery = { platformUrl, ...pace };
     console.log(`[serve] 交付平台: ${platformUrl}`);
-  } else if (host && process.argv.includes("--fake-platform")) {
+  } else if (host && has("--fake-platform")) {
     const platform = new FakeGitPlatform();
     platform.initBare(host.repoPath, dataDir);
     await platform.start();
     host = { ...host, repoPath: platform.barePath };
-    delivery = { platformUrl: platform.baseUrl };
+    delivery = { platformUrl: platform.baseUrl, ...pace };
     console.log(`[serve] 假 Git 平台已就位(裸仓远端): ${platform.baseUrl}`);
   }
 
@@ -162,10 +219,29 @@ async function main(): Promise<void> {
     : undefined;
   if (projection) console.log(`[serve] PostgreSQL 投影已接线`);
 
-  // 小鲁班用假件模拟(内网真件就绪时换 endpoint,其余零改动)。
-  const luban = new FakeLubanServer();
-  await luban.start();
-  console.log(`[serve] 假小鲁班已就位,消息可查: ${luban.endpoint.replace("/notify", "")}`);
+  // 通知端点:--luban <endpoint> 接真件;不配则起假小鲁班。原来这里
+  // 永远起假件——部署手册写着"换 endpoint 零改动",代码里却没有那个
+  // 口子,真件根本切不过去(盘配置面时逮住的缺口)。
+  // --luban-header "Name: value"(可重复)带鉴权头;头的值是密钥,
+  // 建议放配置文件并把文件权限设 600,别写进 systemd 单元。
+  let lubanEndpoint = flag("--luban");
+  if (lubanEndpoint) {
+    console.log(`[serve] 小鲁班真件: ${lubanEndpoint}`);
+  } else {
+    const luban = new FakeLubanServer();
+    await luban.start();
+    lubanEndpoint = luban.endpoint;
+    console.log(`[serve] 假小鲁班已就位,消息可查: ${luban.endpoint.replace("/notify", "")}`);
+  }
+  const lubanHeaders: Record<string, string> = {};
+  for (const header of flags("--luban-header")) {
+    const at = header.indexOf(":");
+    if (at <= 0) {
+      console.error(`[serve] --luban-header 需要 "名字: 值" 形状,拿到: ${header}`);
+      process.exit(2);
+    }
+    lubanHeaders[header.slice(0, at).trim()] = header.slice(at + 1).trim();
+  }
 
   // 容器隔离:--isolate-image <镜像> 让 bash 命令进任务专属容器
   // (镜像按试点仓选,Java 仓即 maven:3.8-eclipse-temurin-8)。
@@ -201,7 +277,7 @@ async function main(): Promise<void> {
           user: flag("--isolate-user"),
         }
       : undefined,
-    notifier: new Notifier({ endpoint: luban.endpoint }),
+    notifier: new Notifier({ endpoint: lubanEndpoint, headers: lubanHeaders }),
     projection,
     linkBase: `http://127.0.0.1:${port}`,
     log: (message) => console.log(`  [task] ${message}`),

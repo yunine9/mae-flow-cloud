@@ -112,6 +112,51 @@ models.json 形状(key 只放服务器本地文件,权限 600,永不进仓):
 }
 ```
 
+## 配置面全集(--config 一个文件收口)
+
+`npm run serve -- --config /etc/mae-flow-cloud/serve.json`。文件键 =
+去掉 `--` 的 flag 名;命令行永远压过文件(排障临时改参数不必动文件);
+**文件坏了拒绝启动**,不静默忽略——带着一半配置起服,比不起服更害人。
+密钥(模型 apiKey、通知鉴权头)所在文件一律权限 600,永不进仓。
+
+```json
+{
+  "models": "/etc/mae-flow-cloud/models.json",
+  "provider": "内网网关名", "model": "glm-5.1",
+  "repo": "<内网仓地址>",
+  "platform": "<MR/流水线适配层地址>",
+  "luban": "<通知端点>",
+  "luban-header": ["Authorization: Bearer <密钥>"],
+  "pg": "postgresql://...",
+  "data": "/var/lib/mae-flow-cloud", "port": 8787,
+  "verify-via-pipeline": true,
+  "repair-rounds": 2, "poll-interval": 30, "poll-timeout": 1800,
+  "max-concurrent": 2
+}
+```
+
+| 键(=flag 去 `--`) | 默认 | 说明 |
+| --- | --- | --- |
+| models / provider / model | 演示剧本 | 模型网关三件套 |
+| repo | 无(纯会话演练) | 内核模式的目标仓 |
+| platform / fake-platform | 无 | 交付平台地址 / 本地假件 |
+| luban / luban-header | 假小鲁班 | 通知端点与鉴权头(可重复) |
+| pg | 无 | 投影(纯旁路) |
+| data / port / web | .tasks / 8787 / web-dist | 现场目录、端口、前端 |
+| isolate-image/-volume/-memory/-cpus/-user | 无 | 容器隔离 |
+| verify-via-pipeline | false | 免编译形态(需 platform 在场) |
+| repair-rounds | 2 | 修复环预算;0=关(红灯留痕请人工) |
+| poll-interval / poll-timeout | 10 / 1800(秒) | 流水线轮询节奏与预算 |
+| max-concurrent | 2 | 并发任务数 |
+| compact-every | 150 | 主动压缩节奏(事件数;0=关) |
+| desktop-notify | false | 单机手感的桌面弹窗 |
+
+**刻意不可配的**(这些不是缺口,是立场):判定逻辑与证据标准(内核
+唯一权威);fail-open 与预算上限的**存在性**(数值可调,"无限等待"这个
+取值不存在);ASKUSER 人工闸;`MAE_FLOW_HOST`(宿主自动设,不给人配错
+的机会)。任务级可配的只有两个:工作流车道(内核 Q2 强制选)与通知
+账号——任务表单刻意不膨胀。
+
 ## 启动与守护
 
 ```bash
