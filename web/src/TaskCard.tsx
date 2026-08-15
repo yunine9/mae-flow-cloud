@@ -36,21 +36,30 @@ export function TaskCard({
   onChanged,
   focused = false,
   canOperate = true,
+  decisionMode = "form",
+  onOpenDecision,
   onOpenArtifacts,
 }: {
   task: TaskSummary;
   onChanged: () => void;
   focused?: boolean;
   canOperate?: boolean;
+  decisionMode?: "form" | "signal";
+  onOpenDecision?: () => void;
   onOpenArtifacts?: () => void;
 }) {
+  const showDecisionForm = decisionMode === "form";
   const [expanded, setExpanded] = useState(
-    task.status === "waiting_for_human" || focused,
+    (showDecisionForm && task.status === "waiting_for_human") || focused,
   );
 
   useEffect(() => {
-    if (task.status === "waiting_for_human" || focused) setExpanded(true);
-  }, [task.status, focused]);
+    if ((showDecisionForm && task.status === "waiting_for_human") || focused) {
+      setExpanded(true);
+    }
+  }, [task.status, focused, showDecisionForm]);
+
+  const waitingQuestions = task.waiting?.question?.questions?.length ?? 0;
 
   return (
     <article
@@ -67,15 +76,22 @@ export function TaskCard({
         <span className="task-summary-body">
           <span className="task-overline">
             <span className="task-id">{task.id}</span>
-            <span className={`pill ${task.status}`}>
+            <span className={`pill ${task.status}${decisionMode === "signal" && task.status === "waiting_for_human" ? " team-signal" : ""}`}>
               <i aria-hidden />
-              {STATUS_TEXT[task.status] ?? task.status}
+              {decisionMode === "signal" && task.status === "waiting_for_human"
+                ? "待拍板"
+                : STATUS_TEXT[task.status] ?? task.status}
             </span>
-            <WaitBadge task={task} />
+            <WaitBadge task={task} personal={showDecisionForm} />
             <span className="task-created">{formatTime(task.created_at)}</span>
           </span>
           <strong className="task-title">{task.requirement}</strong>
-          {task.progress && <TaskProgress progress={task.progress} />}
+          {task.progress && (
+            <TaskProgress
+              progress={task.progress}
+              showDetailedStep={decisionMode === "form"}
+            />
+          )}
         </span>
         <span className="task-chevron" aria-hidden>
           <svg viewBox="0 0 20 20">
@@ -83,6 +99,25 @@ export function TaskCard({
           </svg>
         </span>
       </button>
+
+      {decisionMode === "signal" && task.status === "waiting_for_human" && (
+        <div className="team-decision-signal">
+          <i aria-hidden />
+          <strong>等待负责人拍板</strong>
+          <span>
+            {task.luban_account ?? "未分配负责人"}
+            {waitingQuestions > 0 ? ` · ${waitingQuestions} 个决策项` : ""}
+          </span>
+          {onOpenDecision && (
+            <button type="button" onClick={onOpenDecision}>
+              {canOperate ? "去审批" : "查看待确认"}
+              <svg viewBox="0 0 16 16" aria-hidden>
+                <path d="m6 3.5 4.5 4.5L6 12.5" />
+              </svg>
+            </button>
+          )}
+        </div>
+      )}
 
       <div className="task-meta">
         {task.status !== "queued" && (
@@ -131,10 +166,10 @@ export function TaskCard({
           {canOperate && (task.status === "failed" || task.status === "completed") && (
             <RetryButton taskId={task.id} onDone={onChanged} />
           )}
-          {canOperate && task.status === "waiting_for_human" && task.waiting && (
+          {showDecisionForm && canOperate && task.status === "waiting_for_human" && task.waiting && (
             <WaitingCard task={task} onDecided={onChanged} />
           )}
-          {!canOperate && task.status === "waiting_for_human" && (
+          {showDecisionForm && !canOperate && task.status === "waiting_for_human" && (
             <div className="read-only-notice">
               该事项由 {task.luban_account ?? "其他成员"} 核对；你可以查看进展，但不能代为提交决定。
             </div>
@@ -152,23 +187,32 @@ export function TaskCard({
 
 /** 等待时长:久等升红。父层每 1.5 秒刷新任务列表,这里跟着重算,
  * 不用自己挂计时器。 */
-function WaitBadge({ task }: { task: TaskSummary }) {
+function WaitBadge({ task, personal }: { task: TaskSummary; personal: boolean }) {
   const waited = waitedMs(task);
   if (waited < 0) return null;
   const urgent = waited >= URGENT_MINUTES * 60_000;
   return (
     <span className={"wait-badge" + (urgent ? " urgent" : "")}>
       <i aria-hidden />
-      等你 {formatWait(waited)}
+      {personal ? "等你" : "已等待"} {formatWait(waited)}
     </span>
   );
 }
 
-function TaskProgress({ progress }: { progress: NonNullable<TaskSummary["progress"]> }) {
-  return <span className="task-progress" aria-label={`当前阶段：${progress.current_phase}${progress.step ? `，${progress.step}` : ""}`}>
+function TaskProgress({
+  progress,
+  showDetailedStep,
+}: {
+  progress: NonNullable<TaskSummary["progress"]>;
+  showDetailedStep: boolean;
+}) {
+  const currentLabel = showDetailedStep
+    ? progress.step ?? progress.current_phase
+    : progress.current_phase;
+  return <span className="task-progress" aria-label={`当前阶段：${currentLabel}`}>
     <span className="task-progress-caption">
       <span>当前进度</span>
-      <strong>{progress.step ?? progress.current_phase}</strong>
+      <strong>{currentLabel}</strong>
     </span>
     <span className="task-phase-track">
       {progress.phases.map((phase, index) => {
@@ -467,15 +511,83 @@ function TaskTimeline({ taskId }: { taskId: string }) {
       }}
     >
       <summary>
-        <strong>交付时间线</strong>
-        <span>阶段推进 · 审批 · 子 Agent · 质量台账</span>
+        <strong>耗时与卡点</strong>
+        <span>时间去哪了 · 卡在谁身上</span>
       </summary>
       {loading && <div className="utility-note">正在读取现场…</div>}
       {unavailable && <div className="utility-note">{unavailable}</div>}
       {entries && entries.length === 0 && (
         <div className="utility-note">现场还没有可归纳的记录。</div>
       )}
-      {entries && entries.length > 0 && (
+      {entries && entries.length > 0 && <CostBreakdown entries={entries} />}
+    </details>
+  );
+}
+
+/** 现场时间戳是 "YYYY-MM-DD HH:mm:ss"(内核格式,不是 ISO):
+ * Safari 对非 ISO 串解析不保证,补上 T 再交给 Date。 */
+function stamp(ts: string): number {
+  const value = new Date(ts.replace(" ", "T")).getTime();
+  return Number.isNaN(value) ? 0 : value;
+}
+
+/** 耗时与卡点:同一份现场,回答"时间去哪了、卡在谁身上"。
+ * 倒放流水账没有信息量(用户实测原话),这里只留结论与关键节点。 */
+function CostBreakdown({ entries }: { entries: TimelineEntry[] }) {
+  const [showAll, setShowAll] = useState(false);
+  const first = stamp(entries[0].ts);
+  const last = Math.max(stamp(entries[entries.length - 1].ts), first);
+  // 审批卡 → 下一条决定 = 一段人工等待;没等到决定的就是此刻还在等。
+  const waits: Array<{ ask: TimelineEntry; ms: number; answer?: string }> = [];
+  entries.forEach((entry, index) => {
+    if (entry.kind !== "ask") return;
+    const answered = entries.slice(index + 1).find((it) => it.kind === "decision");
+    const until = answered ? stamp(answered.ts) : Date.now();
+    waits.push({
+      ask: entry,
+      ms: Math.max(0, until - stamp(entry.ts)),
+      answer: answered?.title.replace(/^你的决定[:：]/, ""),
+    });
+  });
+  const waitedTotal = waits.reduce((sum, item) => sum + item.ms, 0);
+  const total = Math.max(last - first, waitedTotal);
+  const machine = Math.max(0, total - waitedTotal);
+  const share = total > 0 ? Math.round((waitedTotal / total) * 100) : 0;
+  const rebuilds = entries.filter((it) => it.title.includes("重建会话")).length;
+  const problems = entries.filter((it) => it.tone === "danger");
+  const longest = [...waits].sort((a, b) => b.ms - a.ms).slice(0, 3);
+
+  return (
+    <div className="cost">
+      <div className="cost-stats">
+        <div className="cost-stat"><span>任务总时长</span><strong>{formatWait(total)}</strong></div>
+        <div className="cost-stat attention"><span>其中等人决定</span><strong>{formatWait(waitedTotal)}</strong><i>{share}%</i></div>
+        <div className="cost-stat"><span>机器执行</span><strong>{formatWait(machine)}</strong></div>
+        <div className="cost-stat"><span>决策 / 重建</span><strong>{waits.length} / {rebuilds}</strong></div>
+      </div>
+      {problems.length > 0 && (
+        <div className="cost-problems">
+          {problems.map((item, index) => (
+            <div key={index}><strong>{item.title}</strong>{item.detail && <span>{item.detail}</span>}</div>
+          ))}
+        </div>
+      )}
+      <div className="cost-list-label">等得最久的决策</div>
+      <ol className="cost-list">
+        {longest.map((item, index) => (
+          <li key={index} className={item.answer ? "" : "pending"}>
+            <span className="cost-wait">{formatWait(item.ms)}</span>
+            <span className="cost-body">
+              <strong>{item.ask.title.replace(/^请你决定[:：]/, "")}</strong>
+              <span>{item.answer ? `→ ${item.answer}` : "→ 仍在等你"}</span>
+            </span>
+          </li>
+        ))}
+      </ol>
+      <button type="button" className="cost-toggle" onClick={() => setShowAll((open) => !open)}>
+        {showAll ? "收起全部记录" : `展开全部 ${entries.length} 条记录`}
+      </button>
+      {showAll && (
         <ol className="timeline">
           {entries.map((entry, index) => (
             <li className={`timeline-item ${entry.tone}`} key={index}>
@@ -489,7 +601,7 @@ function TaskTimeline({ taskId }: { taskId: string }) {
           ))}
         </ol>
       )}
-    </details>
+    </div>
   );
 }
 
