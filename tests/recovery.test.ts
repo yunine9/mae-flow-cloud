@@ -111,3 +111,106 @@ test("恢复:等待人工的任务跨进程存活,决定走重建会话续跑", 
     "人工决定进事件日志");
   await modelB.stop();
 });
+
+/**
+ * 用户实测撞到的丢话事故:批注随决定提交后,重建会话里的模型回来说
+ * "你上次点了需要调整代码,但具体意见没有落盘",然后原地再问一遍。
+ *
+ * 查下来是真的:injectDecision 只把答复写进事件日志/transcript(我们的
+ * 账)并经 posttooluse 交给内核,而内核那条通道只认结构化选项;
+ * `messages` 看的是 UserPromptSubmit 捕获的普通用户消息,工具答复的
+ * 正文不在里面。重建会话又没有挂起的工具调用可 resolve——于是选项到了、
+ * 理由丢了。用户的话必须由我们自己送到模型眼前。
+ */
+test("恢复:决定的正文(批注/备注)必须随重建会话送到模型", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-recover-notes-"));
+  const modelA = new ScriptedModelServer(LIFE_A);
+  await modelA.start();
+  const serviceA = new TaskService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: modelA.modelsJson(),
+  });
+  const created = serviceA.create("演练:决定正文不许丢");
+  const waiting = await until(
+    () => {
+      const task = serviceA.get(created.id);
+      return task?.status === "waiting_for_human" ? task.waiting : undefined;
+    }, "任务进入等待人工");
+  await modelA.stop();
+
+  const modelB = new ScriptedModelServer(LIFE_B);
+  await modelB.start();
+  const serviceB = new TaskService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: modelB.modelsJson(),
+  });
+  serviceB.recover();
+
+  // 圈一条批注,随决定一起提交——正是用户实测的那条路径
+  const note = serviceB.addAnnotation(created.id, {
+    author: "liaoxiang", artifact: "未提交改动",
+    file: "WebhookChannelHandler.java", line: 28,
+    anchor: "\"webhook 已发送\"", note: "这里用英文,不要中文", kind: "code",
+  });
+  await serviceB.decide(created.id, {
+    state_version: waiting!.state_version,
+    decision: "打回",
+    annotation_ids: [note.id],
+  });
+  await until(
+    () => serviceB.get(created.id)?.status === "completed" || undefined,
+    "重建会话续跑到完成");
+
+  const seen = modelB.requests
+    .flatMap((request) => (request as any).messages ?? [])
+    .map((message: any) => JSON.stringify(message.content ?? ""))
+    .join("\n");
+  assert.match(seen, /这里用英文/, "批注正文必须出现在重建会话的上下文里");
+  assert.match(seen, /以原文为准定位/, "那四条护栏也得跟着一起到");
+  await modelB.stop();
+});
+
+/**
+ * 插话有没有同样的洞?有,窗口小得多但性质一样:steer 把消息压在 pi 的
+ * **进程内存**队列里,进程一死队列就没了。事件日志是唯一跨进程活下来的
+ * 账,重建会话必须从它把没送到的话捞回来。
+ *
+ * 判据:最后一次 turn_finished 之后出现的插话,没有任何回合消化过它。
+ * 回合跑到一半被杀时会把已送进上下文的那条也算成"没送到"——宁可重复
+ * 也不能吞掉,重复顶多让模型多确认一句。
+ */
+test("恢复:重启前没送到的插话,重建会话要捞回来", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-recover-steer-"));
+  const modelA = new ScriptedModelServer([
+    { text: "先看看", tool: { name: "bash", input: { command: "sleep 5" } } },
+    { text: "不该走到这里" },
+  ]);
+  await modelA.start();
+  const serviceA = new TaskService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: modelA.modelsJson(),
+  });
+  const created = serviceA.create("演练:插话不许丢");
+  await until(
+    () => modelA.requests.length >= 1 ? true : undefined, "模型开跑");
+  await serviceA.interrupt(created.id, "掩码要保留后四位");
+  await modelA.stop();       // 崩溃:回合没跑完,内存队列随进程消失
+
+  const modelB = new ScriptedModelServer(LIFE_B);
+  await modelB.start();
+  const serviceB = new TaskService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: modelB.modelsJson(),
+  });
+  serviceB.recover();
+  await until(
+    () => serviceB.get(created.id)?.status === "completed" || undefined,
+    "重建会话续跑到完成");
+
+  const seen = modelB.requests
+    .flatMap((request) => (request as any).messages ?? [])
+    .map((message: any) => JSON.stringify(message.content ?? ""))
+    .join("\n");
+  assert.match(seen, /掩码要保留后四位/, "没送到的插话必须随重建会话补上");
+  await modelB.stop();
+});

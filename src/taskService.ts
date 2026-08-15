@@ -36,7 +36,7 @@ import type { Notifier, NotifyRecord } from "./notifier.ts";
 import { EventLog } from "./semanticEvents.ts";
 import { TranscriptStore } from "./transcriptStore.ts";
 import { GateService, type GateContract } from "./gateService.ts";
-import { HumanGate, type WaitingRecord } from "./humanGate.ts";
+import { HumanGate, renderDecision, type WaitingRecord } from "./humanGate.ts";
 import { CloudSession, type Outcome } from "./sessionDriver.ts";
 import { TaskContainer } from "./containerRuntime.ts";
 import type { ExternalAction, PgProjection } from "./projection.ts";
@@ -141,6 +141,35 @@ function personalTaskLink(
   const root = (linkBase ?? "").replace(/\/+$/, "");
   return `${root}/?account=${encodeURIComponent(account)}`
     + `&task=${encodeURIComponent(taskId)}`;
+}
+
+/** 重启前发出、但很可能没送到模型的插话。
+ *
+ * 插话走 pi 的 steer,消息压在**进程内存**队列里,进程一死就没了;事件
+ * 日志是唯一跨进程活下来的账。判据很朴素:最后一次 turn_finished 之后
+ * 出现的插话,还没有任何一个回合消化过它。
+ *
+ * 取舍写在明处:回合跑到一半被杀时,已经送进上下文的那条也会被算成
+ * "没送到",于是重建会话里出现两遍。**宁可重复也不能吞掉**——重复顶多
+ * 让模型多确认一句,吞掉则是人说过的话凭空消失。
+ *
+ * 读不动就当没有(旁路一律 fail-open,绝不能挡住任务重建)。
+ */
+function undeliveredInterrupts(workspace: string): string[] {
+  try {
+    const events = new EventLog(join(workspace, "events.jsonl")).replay();
+    let since = -1;
+    events.forEach((event, at) => {
+      if (event.kind === "turn_finished") since = at;
+    });
+    return events.slice(since + 1)
+      .filter((event) => event.kind === "user_message"
+        && event.payload?.via === "interrupt")
+      .map((event) => String(event.payload?.text ?? ""))
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
 }
 
 interface TaskState {
@@ -636,12 +665,32 @@ export class TaskService {
           ? `${task.summary.requirement}\n\n${guidance}`
           : task.summary.requirement;
         if (resuming) {
+          // 重启期间收到的决定,正文必须随重建会话一起给模型。
+          //
+          // 踩过的坑(用户实测):批注随决定提交后,模型回来说"你上次点了
+          // 需要调整代码,但具体意见没有落盘"。查下来是真的:injectDecision
+          // 只把答复写进事件日志/transcript(我们的账)并经 posttooluse 交给
+          // 内核,而内核那条通道只认结构化选项;`messages` 看的是
+          // UserPromptSubmit 捕获的普通用户消息,工具答复的正文不在里面。
+          // 重建会话又没有挂起的工具调用可 resolve——于是选项到了、理由丢了,
+          // 模型只能空手回来再问一遍。用户的话必须由我们自己送到。
+          const answered = task.pendingResume
+            ? renderDecision(task.pendingResume) : "";
+          const unsaid = undeliveredInterrupts(workspace);
           prompt = [
             guidance,
             "云端服务重启,本会话为重建会话:此前对话不在上下文里," +
             "流程真相以内核状态为准。执行 current 查看当前步骤;" +
             "此前向用户的提问均已答复并录入台账(执行 messages 查看)," +
             "不要重复提问;继续推进直到流程 end。",
+            answered
+              ? "用户对上一个问题的答复原文如下,按它继续,不要再问一遍:\n\n"
+                + answered
+              : "",
+            unsaid.length
+              ? "重启前用户还插话说了下面这些,一并按它办:\n\n"
+                + unsaid.join("\n\n")
+              : "",
           ].filter(Boolean).join("\n\n");
         }
         hostHooks = {
@@ -649,7 +698,19 @@ export class TaskService {
           postTool: kernel.postTool.bind(kernel),
         };
       } else if (resuming || task.resume) {
-        prompt = `服务重启,继续任务:${task.summary.requirement}`;
+        // 非内核模式(演练/测试)同样不许丢话:重建会话没有挂起的工具
+        // 调用可 resolve,决定正文只能由这条 prompt 送到模型眼前。
+        prompt = [
+          `服务重启,继续任务:${task.summary.requirement}`,
+          task.pendingResume
+            ? "用户对上一个问题的答复原文如下,按它继续,不要再问一遍:\n\n"
+              + renderDecision(task.pendingResume)
+            : "",
+          ...(undeliveredInterrupts(workspace).length
+            ? ["重启前用户还插话说了下面这些,一并按它办:\n\n"
+               + undeliveredInterrupts(workspace).join("\n\n")]
+            : []),
+        ].filter(Boolean).join("\n\n");
       }
       // 容器隔离:bash 进任务专属容器(工作区同路径挂载),
       // 起不来直接抛=任务 failed——静默降级回宿主是假隔离。

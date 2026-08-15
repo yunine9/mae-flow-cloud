@@ -265,7 +265,9 @@ export class CloudSession {
    */
   async steer(text: string): Promise<void> {
     await (this.session as any).steer(text);
-    this.emit("user_message", this.sessionId, { text });
+    // via 标记让重启后认得出"这条是插话":它可能还压在 pi 的内存队列里
+    // 没送到,而队列随进程一起死。事件日志是唯一跨进程活下来的账。
+    this.emit("user_message", this.sessionId, { text, via: "interrupt" });
   }
 
   /** 取走"发出去却没送到"的插话。
