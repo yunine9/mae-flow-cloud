@@ -119,7 +119,12 @@ function WaitingCard({
     customOpen[question] && custom[question]?.trim()
       ? custom[question].trim()
       : picked[question];
-  const ready = questions.every((item) => answerOf(item.question));
+  /** 可跳过的题:模型自己写了"可忽略/若上题…"(实战实测:备选方案
+   * 题只给一个选项还逼人勾)。这类题不阻塞提交,不答就不进答案。 */
+  const optional = (question: string) =>
+    /可忽略|若上题|如无|可跳过|可不填/.test(question);
+  const ready = questions.every(
+    (item) => optional(item.question) || answerOf(item.question));
 
   function pickOption(question: string, option: string) {
     setPicked({ ...picked, [question]: option });
@@ -136,7 +141,9 @@ function WaitingCard({
   async function submit() {
     const answers: Record<string, string> = {};
     for (const item of questions) {
-      answers[item.question] = answerOf(item.question)!;
+      const answer = answerOf(item.question);
+      // 可跳过的题没答就不进答案:替用户编一个回答是伪造背书。
+      if (answer) answers[item.question] = answer;
     }
     const result = await decide(
       task.id, task.waiting!.state_version, answers, notes);
@@ -155,34 +162,55 @@ function WaitingCard({
         </div>
       )}
       {questions.map((item) => {
-        const longform = (item.options ?? [])
-          .some((option) => option.length > 24)
-          || (item.question ?? "").length > 60;
+        const options = item.options ?? [];
+        // 短选项(全部 ≤14 字且不超过 4 个)走紧凑行内;其余走单选卡片。
+        const compact = options.length <= 4
+          && options.every((option) => option.length <= 14);
         const customActive =
           !!customOpen[item.question] && !!custom[item.question]?.trim();
+        const skippable = optional(item.question);
         return (
           <div className="question" key={item.question}>
             <div className="question-text">
               {item.question || "需要你确认"}
+              {skippable && <span className="q-optional">可跳过</span>}
             </div>
-            <div className={"options " + (longform ? "longform" : "compact")}>
-              {(item.options ?? []).map((option) => (
-                <button
-                  key={option}
-                  className={
-                    "option"
-                    + (picked[item.question] === option ? " picked" : "")}
-                  onClick={() => pickOption(item.question, option)}
-                >
-                  {option}
-                </button>
-              ))}
+            <div className={"options " + (compact ? "compact" : "cards")}>
+              {options.map((option) => {
+                const chosen = picked[item.question] === option;
+                // 模型把推荐理由写在括号里:主行只留结论,理由降级为说明。
+                const split = option.match(/^([^（(]+)[（(](.+)[）)]\s*$/);
+                const [title, hint] = split
+                  ? [split[1].trim(), split[2].trim()]
+                  : [option, ""];
+                return (
+                  <button
+                    key={option}
+                    className={"option" + (chosen ? " picked" : "")}
+                    role="radio"
+                    aria-checked={chosen}
+                    onClick={() => pickOption(item.question, option)}
+                  >
+                    {!compact && (
+                      <span className={"radio" + (chosen ? " on" : "")} />
+                    )}
+                    <span className="option-body">
+                      <span className="option-title">{title}</span>
+                      {hint && <span className="option-hint">{hint}</span>}
+                    </span>
+                  </button>
+                );
+              })}
               {!customOpen[item.question] && (
                 <button
-                  className="option custom-entry"
+                  className={"option custom-entry"
+                    + (compact ? "" : " cards-entry")}
                   onClick={() => openCustom(item.question)}
                 >
-                  ✎ 其他
+                  {!compact && <span className="radio" />}
+                  <span className="option-body">
+                    <span className="option-title">✎ 其他(自己写)</span>
+                  </span>
                 </button>
               )}
             </div>

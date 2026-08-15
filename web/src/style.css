@@ -811,3 +811,72 @@ pre {
   border-radius: 0 6px 6px 0;
 }
 .md a { color: var(--accent); }
+
+/* ---- 审批卡选项:单选卡片(实战反馈:旧版按钮堆叠不好读) ---- */
+.q-optional {
+  margin-left: .5rem;
+  font-size: .72rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  padding: .05rem .45rem;
+  vertical-align: 1px;
+}
+.options.cards {
+  display: flex;
+  flex-direction: column;
+  gap: .4rem;
+}
+.options.cards .option {
+  display: flex;
+  align-items: flex-start;
+  gap: .6rem;
+  width: 100%;
+  text-align: left;
+  margin: 0;
+  padding: .6rem .75rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 120ms, background 120ms;
+}
+.options.cards .option:hover { border-color: var(--border-strong, var(--accent)); }
+.options.cards .option.picked {
+  border-color: var(--accent);
+  background: var(--accent-weak);
+}
+.options.cards .radio {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  margin-top: .28rem;
+  border: 1.5px solid var(--border-strong, var(--text-muted));
+  border-radius: 50%;
+  position: relative;
+  transition: border-color 120ms;
+}
+.options.cards .option.picked .radio { border-color: var(--accent); }
+.options.cards .radio.on::after {
+  content: "";
+  position: absolute;
+  inset: 2.5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.option-body { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
+.option-title {
+  font-size: .88rem;
+  font-weight: 550;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.options.cards .option.picked .option-title { color: var(--accent); }
+.option-hint {
+  font-size: .78rem;
+  line-height: 1.55;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+.options.cards .custom-entry { border-style: dashed; }
