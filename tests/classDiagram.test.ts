@@ -123,3 +123,27 @@ Y --> X
   const done = layerClasses(cyclic);      // 不抛错、不无限递归就算过
   assert.equal(done.length, 2);
 });
+
+test("分层:接口画在实现之上——按依赖方向直接排会读成倒的", () => {
+  // UML 约定父类与接口在上、实现在下。按"谁依赖谁"直接排会把接口压到
+  // 实现类底下:图没错,但读着是倒的,而类图的第一价值恰恰是一眼看出
+  // 谁是抽象、谁是落地。
+  const model = parseClassDiagram(`@startuml
+class NotifyService
+interface ChannelHandler
+class PushChannelHandler
+class EmailChannelHandler
+NotifyService ..> ChannelHandler
+PushChannelHandler ..|> ChannelHandler
+EmailChannelHandler ..|> ChannelHandler
+@enduml`)!;
+  const laid = layerClasses(model);
+  const layer = (name: string) => laid.find((n) => n.name === name)!.layer;
+
+  assert.ok(layer("ChannelHandler") < layer("PushChannelHandler"),
+    "接口必须在实现之上");
+  assert.equal(layer("PushChannelHandler"), layer("EmailChannelHandler"),
+    "同一个接口的实现应当并排在同一层");
+  assert.ok(layer("NotifyService") < layer("ChannelHandler"),
+    "调用方仍在被调用的抽象之上");
+});

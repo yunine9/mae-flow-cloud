@@ -150,7 +150,12 @@ export function layerClasses(model: ClassModel): LaidOutNode[] {
   const outgoing = new Map<string, string[]>();
   for (const edge of model.edges) {
     if (!byName.has(edge.from) || !byName.has(edge.to)) continue;
-    outgoing.set(edge.from, [...(outgoing.get(edge.from) ?? []), edge.to]);
+    // 继承/实现要反向:UML 约定父类与接口画在上面,实现画在下面。
+    // 按依赖方向直接排会把接口压到实现类底下——图是对的但读着是倒的,
+    // 而类图的第一价值就是"一眼看出谁是抽象、谁是落地"。
+    const inherits = edge.kind === "implements" || edge.kind === "extends";
+    const [head, tail] = inherits ? [edge.to, edge.from] : [edge.from, edge.to];
+    outgoing.set(head, [...(outgoing.get(head) ?? []), tail]);
   }
   const depth = new Map<string, number>();
   const visit = (name: string, seen: Set<string>): number => {

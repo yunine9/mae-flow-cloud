@@ -23,6 +23,9 @@ const HEAD_HEIGHT = 34;
 const GAP_X = 26;
 const GAP_Y = 60;
 const PAD = 18;
+/** 一行最多几个盒子:同层十个并排会把画布拉成 2000px 的横条,
+ * 得横向滚动才看得全,等于没画。超了就折行,层内关系不变。 */
+const ROW_MAX = 5;
 /** 成员太多会把一张图撑成长条,截断并注明——省略比挤爆可读。 */
 const MEMBER_MAX = 6;
 
@@ -46,13 +49,21 @@ function place(nodes: LaidOutNode[]): { placed: Placed[]; width: number; height:
     layers.set(node.layer, [...(layers.get(node.layer) ?? []), node]);
   }
   const ordered = [...layers.keys()].sort((left, right) => left - right);
-  const widest = Math.max(1, ...ordered.map((key) => layers.get(key)!.length));
+  const widest = Math.min(ROW_MAX,
+    Math.max(1, ...ordered.map((key) => layers.get(key)!.length)));
   const canvasWidth = PAD * 2 + widest * BOX_WIDTH + (widest - 1) * GAP_X;
+
+  const rows: LaidOutNode[][] = [];
+  for (const key of ordered) {
+    const group = [...layers.get(key)!].sort((a, b) => a.order - b.order);
+    for (let at = 0; at < group.length; at += ROW_MAX) {
+      rows.push(group.slice(at, at + ROW_MAX));
+    }
+  }
 
   const placed: Placed[] = [];
   let y = PAD;
-  for (const key of ordered) {
-    const group = [...layers.get(key)!].sort((a, b) => a.order - b.order);
+  for (const group of rows) {
     const rowWidth = group.length * BOX_WIDTH + (group.length - 1) * GAP_X;
     let x = (canvasWidth - rowWidth) / 2;
     let tallest = 0;
@@ -133,14 +144,17 @@ export function ClassDiagram({ model }: { model: ClassModel }) {
           const from = byName.get(edge.from);
           const to = byName.get(edge.to);
           if (!from || !to) return null;
-          const marker = edge.kind === "composes" ? "diamond"
-            : edge.kind === "uses" ? "dot" : "open";
+          // 组合的实心菱形画在"整体"那一端(A *-- B 里的 A),不是被包含
+          // 的那端——画反了就把包含关系说反了。
+          const composes = edge.kind === "composes";
+          const marker = edge.kind === "uses" ? "dot" : "open";
           return (
             <path
               key={at}
               className={`cd-edge ${EDGE_CLASS[edge.kind]}`}
               d={edgePath(from, to)}
-              markerEnd={`url(#${arrow}-${marker})`}
+              markerStart={composes ? `url(#${arrow}-diamond)` : undefined}
+              markerEnd={composes ? undefined : `url(#${arrow}-${marker})`}
             >
               <title>
                 {`${edge.from} ${EDGE_WORD[edge.kind]} ${edge.to}`}
