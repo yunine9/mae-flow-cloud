@@ -33,6 +33,9 @@ export interface PipelineRun {
   id: number;
   sha: string;
   status: "running" | "success" | "failed";
+  /** 失败详情(平台原文)。修复 agent 的口粮:没有它,修就是瞎修。
+   * 内网真件从"拉日志"CLI 映射到这个字段,契约同形。 */
+  log?: string;
 }
 
 function git(cwd: string, ...args: string[]): string {
@@ -46,6 +49,11 @@ export class FakeGitPlatform {
    * "running" = 模拟真实平台的异步流水线:触发后先跑着,
    * 结局由 finishPipeline 事后裁定。 */
   nextPipelineStatus: "success" | "failed" | "running" = "success";
+  /** 失败时随 run 带出的日志(默认给个像样的样板)。 */
+  nextPipelineLog = "BUILD FAILURE: 模块 notify-service 编译失败";
+  /** 逐次结局队列:修复环一类"先红后绿"的剧本按序消费,
+   * 空了退回 nextPipelineStatus——比测试里掐时序翻开关可靠。 */
+  readonly statusQueue: Array<"success" | "failed" | "running"> = [];
   barePath = "";
   private server?: Server;
   private counter = 0;
@@ -150,10 +158,12 @@ export class FakeGitPlatform {
   private triggerPipeline(sha: string): PipelineRun {
     if (!sha) throw new Error("sha 必填:流水线结果必须绑定代码版本");
     this.counter += 1;
+    const status = this.statusQueue.shift() ?? this.nextPipelineStatus;
     const run: PipelineRun = {
       id: this.counter,
       sha,
-      status: this.nextPipelineStatus,
+      status,
+      log: status === "failed" ? this.nextPipelineLog : undefined,
     };
     this.pipelines.push(run);
     if (run.status === "success") {
@@ -171,9 +181,12 @@ export class FakeGitPlatform {
 
   /** 异步流水线的事后裁定(模拟真实平台跑完):running → 终态,
    * 绿灯连带把同 SHA 的 MR 升为等待合入——与同步路径同一语义。 */
-  finishPipeline(sha: string, status: "success" | "failed"): void {
+  finishPipeline(sha: string, status: "success" | "failed", log?: string): void {
     for (const run of this.pipelines) {
-      if (run.sha === sha && run.status === "running") run.status = status;
+      if (run.sha === sha && run.status === "running") {
+        run.status = status;
+        if (status === "failed") run.log = log ?? this.nextPipelineLog;
+      }
     }
     if (status === "success") {
       for (const mr of this.mergeRequests) {

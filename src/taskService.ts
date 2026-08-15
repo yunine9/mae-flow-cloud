@@ -79,6 +79,16 @@ export interface TaskSummary {
     pipeline?: string;
     sha?: string;
     skipped?: string;
+    /** 修复环账本(小状态机):流水线直至全绿是最终目标(用户拍板)。
+     * 红灯→专职修复会话→推新提交→新流水线,循环受 max 预算约束;
+     * last_sha 防"没产生新提交还烧一轮"。全部是事实记账,页面可见。 */
+    loop?: {
+      round: number;
+      max: number;
+      state: "repairing" | "green" | "exhausted" | "halted";
+      failure?: string;
+      last_sha?: string;
+    };
   };
   /** 从现场看板的 panel-pulse.js/panel.html 读取的进度摘要。 */
   progress?: TaskProgress;
@@ -106,6 +116,9 @@ export interface TaskServiceOptions {
     platformUrl: string;
     pollIntervalMs?: number;
     pollTimeoutMs?: number;
+    /** 流水线红灯的修复轮预算(默认 2;0 = 关掉修复环,红灯即留痕请人工)。
+     * 每轮 = 一次专职修复会话 + 一次新流水线;耗尽如实停在 verifying。 */
+    repairRounds?: number;
   };
   /** 审批链接的前缀(通知里带的 URL),如 http://host:port。 */
   linkBase?: string;
@@ -193,6 +206,9 @@ interface TaskState {
   resume?: boolean;
   /** 恢复期收到的人工决定:重建会话就绪后由 driver 补登记再续跑。 */
   pendingResume?: WaitingRecord;
+  /** 专项使命(修复环):下次会话的压轴指令,消费即清。
+   * 要随 task.json 落盘——修复会话跑一半被重启,使命不能丢。 */
+  mission?: string;
   /** 避免列表轮询反复解析未变化的现场面板。 */
   progressPulse?: string;
   progressCache?: TaskProgress;
@@ -527,7 +543,8 @@ export class TaskService {
     try {
       const path = join(task.summary.workspace, "task.json");
       writeFileSync(path + ".tmp", JSON.stringify(
-        { summary: task.summary, cwd: task.cwd }, null, 1));
+        { summary: task.summary, cwd: task.cwd, mission: task.mission },
+        null, 1));
       renameSync(path + ".tmp", path);
     } catch (error) {
       this.options.log?.(`任务 ${task.summary.id} 落盘失败: ${String(error)}`);
@@ -559,6 +576,8 @@ export class TaskService {
           humanGate: new HumanGate(join(workspace, "waiting.json")),
           cwd: typeof saved.cwd === "string" ? saved.cwd : undefined,
           resume: true,
+          mission: typeof saved.mission === "string"
+            ? saved.mission : undefined,
         };
         this.tasks.set(summary.id, task);
         this.counter = Math.max(
@@ -817,6 +836,10 @@ export class TaskService {
             : []),
         ].filter(Boolean).join("\n\n");
       }
+      // 专项使命(修复环)压轴:模型最后读到的最要紧。这里只用不清——
+      // 修复会话跑一半被重启,使命要跟着 task.json 回来再喂一遍;
+      // 清账在 settle 收口处,会话真做完了才算消费掉。
+      if (task.mission) prompt = `${prompt}\n\n${task.mission}`;
       // 容器隔离:bash 进任务专属容器(工作区同路径挂载),
       // 起不来直接抛=任务 failed——静默降级回宿主是假隔离。
       if (this.options.isolation) {
@@ -958,6 +981,8 @@ export class TaskService {
                request: { sha }, sha, startedAt: runStarted, result: run,
                finishedAt: new Date().toISOString() });
       task.summary.delivery = {
+        ...(task.summary.delivery?.loop
+          ? { loop: task.summary.delivery.loop } : {}),
         mr_url: mr.url,
         mr_state: run.status === "success" ? "等待合入" : "验证中",
         pipeline: run.status,
@@ -965,9 +990,14 @@ export class TaskService {
       };
       task.summary.status =
         run.status === "success" ? "await_merge" : "verifying";
-      // 真实平台的流水线是异步的:running 不是结局,由带预算的
-      // 轮询收敛到 绿→等待合入 / 红→验证中留痕。
-      if (run.status === "running") void this.pollPipeline(task);
+      // 终态当场裁决;running 不是结局,由带预算的轮询收敛后再裁。
+      if (run.status === "running") {
+        void this.pollPipeline(task);
+      } else {
+        this.pipelineVerdict(task, sha,
+          run.status === "success" ? "success" : "failed",
+          String(run.log ?? ""));
+      }
     } catch (error) {
       task.summary.delivery = { skipped: `交付动作失败: ${String(error)}` };
       this.options.log?.(`任务 ${task.summary.id} 交付失败: ${String(error)}`);
@@ -1012,8 +1042,6 @@ export class TaskService {
       if (terminal.status === "success") {
         task.summary.status = "await_merge";
       }
-      this.persist(task);
-      this.notifyOutcome(task);
       void this.options.projection?.recordAction({
         taskId: task.summary.id,
         idemKey: `pipeline:${sha}`,
@@ -1024,6 +1052,11 @@ export class TaskService {
         startedAt: new Date().toISOString(),
         finishedAt: new Date().toISOString(),
       });
+      // 终态交给裁决点:绿=收口通知;红=修复环决定下一步。
+      // (persist/notify 都在裁决点里,别在这儿重复收口。)
+      this.pipelineVerdict(task, sha,
+        terminal.status === "success" ? "success" : "failed",
+        String(terminal.log ?? ""));
       return;
     }
     if (task.summary.status !== "verifying") return;
@@ -1032,6 +1065,78 @@ export class TaskService {
       pipeline: "running(轮询预算耗尽,请人工查看流水线)",
     };
     this.persist(task);
+  }
+
+  /**
+   * 流水线终态裁决点(小状态机)——"流水线直至全绿是最终目标"(用户拍板)。
+   *
+   * 两个入口(触发即终态 / 轮询收敛到终态)都汇到这里,转移规则:
+   *   绿 → loop.state=green,收口(await_merge 由调用方已置);
+   *   红 → 同一 SHA 修过一轮又红 = 修复会话没产生新提交 → halted 请人工;
+   *       修复轮预算耗尽 → exhausted 请人工;
+   *       否则派专职修复会话:使命=拿失败日志把流水线修绿,任务重入队,
+   *       修完 settle→tryDeliver 自然触发新 SHA 的新流水线——环由现有
+   *       机械闭合,这里只记账和扳道岔。
+   * 通知不在这儿发:两个调用方各自收口,免得一条消息发两遍。
+   */
+  private pipelineVerdict(
+    task: TaskState,
+    sha: string,
+    status: "success" | "failed",
+    log: string,
+  ): void {
+    const delivery = task.summary.delivery;
+    if (!delivery) return;
+    if (status === "success") {
+      if (delivery.loop) delivery.loop.state = "green";
+      this.persist(task);
+      return;
+    }
+    const max = this.options.delivery?.repairRounds ?? 2;
+    // repairRounds=0 = 关掉修复环:保持旧语义(红灯留痕请人工),不记环账。
+    if (max === 0 && !delivery.loop) {
+      this.persist(task);
+      return;
+    }
+    const loop = delivery.loop
+      ?? (delivery.loop = { round: 0, max, state: "repairing" as const });
+    if (loop.last_sha === sha) {
+      loop.state = "halted";
+      delivery.pipeline = "failed(修复会话未产生新提交,请人工)";
+      this.persist(task);
+      return;
+    }
+    if (loop.round >= loop.max) {
+      loop.state = "exhausted";
+      delivery.pipeline = `failed(${loop.max} 轮修复预算用完,请人工)`;
+      this.persist(task);
+      return;
+    }
+    loop.round += 1;
+    loop.last_sha = sha;
+    loop.state = "repairing";
+    loop.failure = log.slice(0, 2000) || "(平台未提供失败详情)";
+    delivery.pipeline = `failed(第 ${loop.round}/${loop.max} 轮修复中)`;
+    task.mission = [
+      `流水线红了,把它修到绿是你此刻唯一的使命(第 ${loop.round}/${loop.max} 轮修复):`,
+      `- 分支上提交 ${sha} 的权威流水线结果是 failed。`,
+      `- 失败详情(平台原文,截断到 2000 字):`,
+      loop.failure,
+      `- 只修让流水线变红的问题;修完在同一分支提交并 push。`,
+      `- 别的都不要动;顺手的重构、无关的优化一律不做。`,
+      `- 如果你判断修不了或不该修(比如失败与代码无关),说明理由后停下,`
+      + `不要硬改——没有新提交时系统会如实停下请人工,这是正确结局之一。`,
+    ].join("\n");
+    task.summary.status = "queued";
+    task.summary.detail = `流水线红,第 ${loop.round}/${loop.max} 轮修复排队中`;
+    task.resume = true;
+    this.persist(task);
+    this.queue.push(task.summary.id);
+    // 不能当场 pump:这里可能正处在 settle→tryDeliver 的调用链里,而
+    // pump 会同步把状态置成 running,settle 随后那句"running→completed"
+    // 就把修复轮当场盖掉(读代码逮住的竞态)。setImmediate 排到微任务链
+    // 之后,settle 收完自己的账、原会话的 finally 归还并发额度,再派单。
+    setImmediate(() => void this.pump());
   }
 
   /** 待办 → 小鲁班。投递失败不改流程状态;结果回填 summary.notify
@@ -1217,6 +1322,9 @@ export class TaskService {
         }
         task.driver?.dispose();
         void task.container?.stop();
+        // 专项使命到这儿才算消费掉:会话真做完了。早清会让"修一半
+        // 被重启"的重建会话拿不到使命。
+        task.mission = undefined;
         // 终态在交付判定之后才定:先标 completed 再改,轮询会撞见
         // 中间态(实测竞态)。交付把状态升为 verifying/await_merge,
         // 没交付动作时才落 completed。

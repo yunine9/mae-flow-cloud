@@ -48,6 +48,11 @@ export class ScriptedModelServer {
   constructor(
     readonly script: Scene[],
     readonly modelId = "scripted-v1",
+    /** linear=剧本跨会话顺演(每个请求推进一幕)。默认按当前对话深度
+     * 选幕——那是单会话剧本的形状,新会话会从第 0 幕重演;修复环这类
+     * "多会话接力"的剧本必须顺演,不然第二个会话拿到的是第一幕
+     * (实测:修复会话跑去 checkout -b,报 branch already exists)。 */
+    readonly options: { linear?: boolean } = {},
   ) {}
 
   get baseUrl(): string {
@@ -83,7 +88,10 @@ export class ScriptedModelServer {
         }
         this.requests.push(body);
         const index = Math.min(
-          countToolResults(body.messages), this.script.length - 1);
+          this.options.linear
+            ? this.requests.length - 1
+            : countToolResults(body.messages),
+          this.script.length - 1);
         const scene = this.script[index];
         const blocks = sceneBlocks(scene, index);
         const stopReason = scene.tool ? "tool_use" : "end_turn";

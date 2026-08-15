@@ -55,7 +55,8 @@ function buildService(
   platform: FakeGitPlatform,
   dataDir: string,
   modelsJson: Record<string, unknown>,
-  poll?: { pollIntervalMs?: number; pollTimeoutMs?: number },
+  poll?: { pollIntervalMs?: number; pollTimeoutMs?: number;
+           repairRounds?: number },
 ) {
   return new TaskService({
     dataDir,
@@ -89,10 +90,12 @@ async function until(
 async function runTask(
   platform: FakeGitPlatform,
   push: boolean,
-  poll?: { pollIntervalMs?: number; pollTimeoutMs?: number },
+  poll?: { pollIntervalMs?: number; pollTimeoutMs?: number;
+           repairRounds?: number },
   dataDir = mkdtempSync(join(tmpdir(), "mfc-deliver-")),
+  extraScenes: Scene[] = [],
 ) {
-  const model = new ScriptedModelServer(walkScript(push));
+  const model = new ScriptedModelServer([...walkScript(push), ...extraScenes]);
   await model.start();
   const service = buildService(platform, dataDir, model.modelsJson(), poll);
   const created = service.create("交付 REQ9:演练交付链");
@@ -120,13 +123,13 @@ test("分支已推+流水线绿 → MR 等待合入", async () => {
   }
 });
 
-test("流水线红 → 验证中,不标完成", async () => {
+test("流水线红(修复环关闭) → 验证中留痕,不标完成", async () => {
   const platform = new FakeGitPlatform();
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
   platform.nextPipelineStatus = "failed";
   await platform.start();
   try {
-    const { task } = await runTask(platform, true);
+    const { task } = await runTask(platform, true, { repairRounds: 0 });
     assert.equal(task.status, "verifying");
     assert.equal(task.delivery?.mr_state, "验证中");
     assert.equal(task.delivery?.pipeline, "failed");
@@ -156,14 +159,14 @@ test("异步流水线:running 验证中,绿灯后轮询收敛到等待合入", a
   }
 });
 
-test("异步流水线:红灯留痕,任务停在验证中不标完成", async () => {
+test("异步流水线:红灯留痕(修复环关闭),任务停在验证中不标完成", async () => {
   const platform = new FakeGitPlatform();
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
   platform.nextPipelineStatus = "running";
   await platform.start();
   try {
     const { task, service } = await runTask(
-      platform, true, { pollIntervalMs: 100 });
+      platform, true, { pollIntervalMs: 100, repairRounds: 0 });
     platform.finishPipeline(task.delivery!.sha!, "failed");
     await until(() =>
       service.get(task.id)!.delivery?.pipeline === "failed", "轮询看到红灯");
@@ -191,6 +194,113 @@ test("进程可死轮询不死:重启 recover 后继续收敛流水线", async (
     await until(() =>
       revived.get(task.id)!.status === "await_merge", "重启后轮询收敛");
   } finally {
+    await platform.stop();
+  }
+});
+
+/** 修复环剧本:一幕修复提交(可选推送)+ 一幕收口。 */
+function repairScenes(push: boolean): Scene[] {
+  const doPush = push ? " && git push --quiet origin master_bot_REQ9" : "";
+  return [
+    { text: "流水线红了,我来修。",
+      tool: { name: "bash", input: { command:
+        "echo fixed >> a.txt && git add . && " +
+        'git commit --quiet -m "fix: 流水线修复"' + doPush } } },
+    { text: "修复完成。" },
+  ];
+}
+
+test("修复环:红→专职会话修复→推新提交→新流水线绿→等待合入", async () => {
+  // "流水线直至全绿是最终目标"(用户拍板)。修复本身是纯提示词:
+  // 专职会话拿失败日志干活;宿主只做等待(带预算)、事实(绑 SHA)、
+  // 刹车(轮数/新提交)三件提示词干不了的事。
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  platform.statusQueue.push("failed");        // 第一跑红,之后默认绿
+  platform.nextPipelineLog = "BUILD FAILURE: NotifyServiceTest 断言失败";
+  await platform.start();
+  const model = new ScriptedModelServer(
+    [...walkScript(true), ...repairScenes(true)],
+    "scripted-v1", { linear: true });
+  await model.start();
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-deliver-"));
+  const service = buildService(platform, dataDir, model.modelsJson(),
+    { repairRounds: 2 });
+  try {
+    const id = service.create("交付 REQ9:演练修复环").id;
+    await until(() => service.get(id)!.status === "await_merge",
+      "修复后收敛到等待合入");
+    const task = service.get(id)!;
+    assert.equal(task.delivery?.loop?.round, 1, "用了一轮修复");
+    assert.equal(task.delivery?.loop?.state, "green");
+    assert.equal(task.delivery?.pipeline, "success");
+    // 第二次流水线绑的是修复后的新提交,不是旧 SHA 的旧绿灯
+    assert.equal(platform.pipelines.length, 2);
+    assert.notEqual(platform.pipelines[1].sha, platform.pipelines[0].sha,
+      "新流水线必须绑修复后的新 SHA");
+    // 修复会话拿到的是使命 + 平台失败原文
+    const seen = model.requests
+      .flatMap((request) => (request as any).messages ?? [])
+      .map((message: any) => JSON.stringify(message.content ?? ""))
+      .join("\n");
+    assert.match(seen, /唯一的使命/);
+    assert.match(seen, /NotifyServiceTest 断言失败/);
+  } finally {
+    await model.stop();
+    await platform.stop();
+  }
+});
+
+test("修复环:会话没产生新提交 → 停下请人工,不再烧轮", async () => {
+  // 修复会话自己判断"这红灯不该由改码解决"是合法结局——但同一 SHA
+  // 修过一轮还红,再派就是无人看管的烧钱环,必须刹车。
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  platform.statusQueue.push("failed", "failed");
+  await platform.start();
+  const model = new ScriptedModelServer([
+    ...walkScript(true),
+    { text: "失败原因是平台配置,不是代码问题,我不做无关改动。" },
+  ], "scripted-v1", { linear: true });
+  await model.start();
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-deliver-"));
+  const service = buildService(platform, dataDir, model.modelsJson(),
+    { repairRounds: 2 });
+  try {
+    const id = service.create("交付 REQ9:修复环刹车").id;
+    await until(() =>
+      service.get(id)!.delivery?.loop?.state === "halted", "刹车落账");
+    const task = service.get(id)!;
+    assert.equal(task.status, "verifying", "如实停在验证中,不假装有结论");
+    assert.match(task.delivery?.pipeline ?? "", /未产生新提交/);
+    assert.equal(task.delivery?.loop?.round, 1, "只烧了一轮");
+  } finally {
+    await model.stop();
+    await platform.stop();
+  }
+});
+
+test("修复环:轮数预算耗尽 → 如实停下请人工", async () => {
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  platform.statusQueue.push("failed", "failed");
+  await platform.start();
+  const model = new ScriptedModelServer(
+    [...walkScript(true), ...repairScenes(true)],
+    "scripted-v1", { linear: true });
+  await model.start();
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-deliver-"));
+  const service = buildService(platform, dataDir, model.modelsJson(),
+    { repairRounds: 1 });
+  try {
+    const id = service.create("交付 REQ9:修复环预算").id;
+    await until(() =>
+      service.get(id)!.delivery?.loop?.state === "exhausted", "预算耗尽落账");
+    const task = service.get(id)!;
+    assert.equal(task.status, "verifying");
+    assert.match(task.delivery?.pipeline ?? "", /预算用完/);
+  } finally {
+    await model.stop();
     await platform.stop();
   }
 });

@@ -30,6 +30,29 @@ arm64 Linux 容器(maven:3.8-eclipse-temurin-8)对 fieldtest-java
 | Git 服务端 | FakeGitPlatform 裸仓 | `--repo` 指向内网仓地址(克隆凭证走 git credential) | 服务端仓是唯一远端真相 |
 | MR + 流水线 | FakeGitPlatform HTTP | `delivery.platformUrl` + 鉴权 | MR 按(源→目标)幂等;流水线结果绑 SHA;验证中→等待合入 |
 
+内网真件的接线形状(用户确认内部已有 CLI:提交 MR、查 MR 状态、拉
+流水线日志):真件切换点做成**薄适配层**——把内部 CLI 的输出映射成与
+FakeGitPlatform 相同的 JSON 形状(`/mr`、`/pipeline/status?sha=`,失败
+run 带 `log` 字段),状态机与修复环一行不改。适配层进内网后按实际 CLI
+形状填,不在外部瞎猜命令语法。
+
+通知的内网形态,除小鲁班 HTTP 外还有两条候选(均为 Notifier 端口的
+新实现,语义契约不变:投递失败不改流程、幂等、有限退避):
+- **小鲁班 MCP**:若内网提供 MCP 服务端,需引入 MCP 客户端
+  (`@modelcontextprotocol/sdk`,本仓当前未装,纯 JS 无构建);
+  传输方式/工具名/鉴权进内网确认,不预写。
+- **拉群 + CLI 艾特**(用户提议):建群、用内部 CLI 在群里 @ 相关人;
+  适配层同样只做"事实→一条消息",失败落 summary.notify 标红。
+
+## 流水线修复环(全绿是最终目标)
+
+红灯不再是终点:宿主小状态机(`delivery.loop`,5 个字段的记账)派
+**专职修复会话**拿失败日志修复、推新提交、触发新流水线,循环直到绿,
+受三道刹车约束——轮数预算(`repairRounds`,默认 2;0=关)、同 SHA 不
+二修(会话没产生新提交即停)、全部等待走宿主轮询预算。修复本身是纯
+提示词;宿主只做等待、事实(绑 SHA)、刹车三件提示词干不了的事。
+内网需要确认:失败日志 CLI 的输出如何截断(适配层负责喂进 `log`)。
+
 models.json 形状(key 只放服务器本地文件,权限 600,永不进仓):
 
 ```json
