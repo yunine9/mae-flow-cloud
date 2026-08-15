@@ -8,6 +8,7 @@
  *        → 200;版本冲突/已被抢先 → 409 "任务状态已变化"(先到决定生效)
  *   GET  /tasks/:id/events                              → SSE:重放事件日志后持续跟进
  *   GET  /tasks/:id/timeline                            → 人话交付时间线(只读现场)
+ *   GET  /tasks/:id/artifacts[/:name]                   → 检视产物清单/内容(只读现场)
  *
  * Web 不自行推断状态:详情与列表只是 TaskService 状态的镜像,
  * 事件流只是 events.jsonl 的镜像——真相都在文件与状态机里。
@@ -26,6 +27,11 @@ import { dirname, extname, join, resolve, sep } from "node:path";
 import { StateConflictError } from "./humanGate.ts";
 import { NotFoundError, type TaskService } from "./taskService.ts";
 import { buildTimeline } from "./timeline.ts";
+import {
+  listArtifacts,
+  readArtifact,
+  resolveArtifactRoot,
+} from "./artifacts.ts";
 import { WEB_PAGE } from "./webPage.ts";
 import {
   cookieValue,
@@ -243,6 +249,29 @@ export function createTaskServer(
           const cwd = panel ? dirname(dirname(panel)) : undefined;
           return json(response, 200,
             buildTimeline(target.workspace, cwd));
+        }
+        // 检视产物(只读):决策与证据必须同屏——审批卡问"Spec 确认吗",
+        // spec.md 就该在旁边,而不是让人跳到另一套界面里翻。权限口径
+        // 同任务详情;能读哪些文件由 artifacts.ts 的白名单把守。
+        if (request.method === "GET" && parts[2] === "artifacts") {
+          const target = service.get(id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          const panel = service.panelFile(id, "panel.html")
+            ?? service.panelFile(id, "panel-pulse.js");
+          const root = resolveArtifactRoot(
+            target.workspace, panel ? dirname(dirname(panel)) : undefined);
+          if (parts.length === 3) {
+            // 没有现场时给空列表:流程还没走到 init 不是错误。
+            return json(response, 200, root ? listArtifacts(root) : []);
+          }
+          // name 里带 `/`(单号目录/文件名):编码与未编码两种形态都收。
+          const name = decodeURIComponent(parts.slice(3).join("/"));
+          const artifact = root ? readArtifact(root, name) : undefined;
+          if (!artifact) {
+            return json(response, 404,
+              { error: `没有可检视的产物「${name}」` });
+          }
+          return json(response, 200, artifact);
         }
         // 审计读侧(§11):外部动作台账来自 PG 投影。没配投影时
         // 明说,而不是空数组装作"没有动作"。
