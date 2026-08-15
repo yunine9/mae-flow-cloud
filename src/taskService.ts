@@ -338,6 +338,31 @@ export class TaskService {
     return { items, checks };
   }
 
+  /** 发过的插话 + 送达与否。
+   *
+   * "我发了然后就没了,咋知道它消费了没"——发出去没有回执,等于让人对着
+   * 空气说话。送达是可观测的:pi 把消息移出 steering 队列的那一刻,就是
+   * 它进入模型上下文的那一刻。这里只报这个事实,不替人判断"它照做了没"
+   * ——那要看它后面干了什么,判断权是人的。 */
+  listInterrupts(id: string): Array<{ text: string; at: string; delivered: boolean }> {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    const pending = new Set(task.driver?.pendingSteers() ?? []);
+    try {
+      return new EventLog(join(task.summary.workspace, "events.jsonl"))
+        .replay()
+        .filter((event) => event.kind === "user_message"
+          && event.payload?.via === "interrupt")
+        .map((event) => ({
+          text: String(event.payload?.text ?? ""),
+          at: String(event.ts ?? ""),
+          delivered: !pending.has(String(event.payload?.text ?? "")),
+        }));
+    } catch {
+      return [];      // 读不动就当没有:旁路绝不挡住页面
+    }
+  }
+
   addAnnotation(id: string, input: AnnotationInput): Annotation {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);

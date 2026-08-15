@@ -230,6 +230,22 @@ export async function interruptTask(
   return {};
 }
 
+/** 发过的补充说明 + 送达与否。delivered 是可观测事实(消息已离开
+ * pi 的待送队列 = 已进入模型上下文),不是推断。 */
+export interface InterruptRecord {
+  text: string;
+  at: string;
+  delivered: boolean;
+}
+
+export async function listInterrupts(
+  taskId: string,
+): Promise<InterruptRecord[]> {
+  const response = await fetch(`/tasks/${taskId}/interrupts`);
+  if (!response.ok) return [];
+  return response.json();
+}
+
 /* ---------------- 检视批注 ---------------- */
 
 export interface Annotation {

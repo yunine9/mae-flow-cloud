@@ -10,8 +10,8 @@
  * 事就会收到",不写"已送达"。
  */
 
-import { useState } from "react";
-import { interruptTask } from "./api";
+import { useEffect, useState } from "react";
+import { interruptTask, listInterrupts, type InterruptRecord } from "./api";
 import "./steer.css";
 
 export function SteerBox({
@@ -25,6 +25,19 @@ export function SteerBox({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [sent, setSent] = useState(false);
+  const [history, setHistory] = useState<InterruptRecord[]>([]);
+
+  // 发完就没了、不知道它读没读到,等于对着空气说话。送达是可观测的:
+  // 消息离开 pi 的待送队列 = 已进入模型上下文。5 秒跟一次。
+  useEffect(() => {
+    let alive = true;
+    const load = () => void listInterrupts(taskId).then((rows) => {
+      if (alive) setHistory(rows);
+    });
+    load();
+    const timer = window.setInterval(load, 5000);
+    return () => { alive = false; window.clearInterval(timer); };
+  }, [taskId, sent]);
 
   async function send() {
     const message = text.trim();
@@ -86,6 +99,19 @@ export function SteerBox({
         </button>
       </div>
       {error && <div className="alert">{error}</div>}
+      {history.length > 0 && (
+        <ol className="steer-log" aria-label="已发送的补充说明">
+          {history.slice(-4).reverse().map((item, at) => (
+            <li key={`${item.at}-${at}`}
+                className={item.delivered ? "done" : "waiting"}>
+              <span className="steer-log-state">
+                {item.delivered ? "已读取" : "待读取"}
+              </span>
+              <span className="steer-log-text">{item.text}</span>
+            </li>
+          ))}
+        </ol>
+      )}
     </div>
   );
 }

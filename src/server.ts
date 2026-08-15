@@ -7,6 +7,7 @@
  *   POST /tasks/:id/decision   {state_version,decision,notes?}
  *        → 200;版本冲突/已被抢先 → 409 "任务状态已变化"(先到决定生效)
  *   POST /tasks/:id/interrupt  {text}                   → 200;跑动中插话(发送即打断)
+ *   GET  /tasks/:id/interrupts                          → 发过的插话 + 送达与否
  *   GET  /tasks/:id/annotations                         → 待送出批注 + 锚点现状
  *   POST /tasks/:id/annotations {artifact,file,line,anchor,note,kind} → 201
  *   DELETE /tasks/:id/annotations/:annId                → 软删(只能删自己的)
@@ -233,6 +234,12 @@ export function createTaskServer(
         }
         if (request.method === "GET" && parts[2] === "events") {
           return streamEvents(service, id, response);
+        }
+        // 发过的补充说明 + 送达与否:发出去没有回执等于对着空气说话。
+        if (request.method === "GET" && parts[2] === "interrupts") {
+          const target = service.get(id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          return json(response, 200, service.listInterrupts(id));
         }
         // 检视批注:圈注权和送达权分开——谁都能圈(领导路过提一句是
         // 真实场景),送达只有该单负责人。这一刀下去,"多人并发提交"

@@ -188,3 +188,28 @@ test("插话:空内容与不存在的任务如实拒绝", async () => {
   await until(() => service.get(id)?.status === "completed", "任务收口");
   await model.stop();
 });
+
+test("插话回执:发过什么、读到没有,都要能查", async () => {
+  // "我发了然后就没了,咋知道它消费了没"——发出去没有回执等于对着空气
+  // 说话。送达是可观测事实:消息离开 pi 的待送队列 = 已进入模型上下文。
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-steer-log-"));
+  const model = new ScriptedModelServer(SCRIPT);
+  await model.start();
+  const service = new TaskService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+  });
+  const id = service.create("给手机号打码").id;
+  await until(() => model.requests.length >= 1, "模型开跑");
+
+  assert.deepEqual(service.listInterrupts(id), [], "没发过就是空的");
+  await service.interrupt(id, "掩码保留后四位");
+  const logged = service.listInterrupts(id);
+  assert.equal(logged.length, 1);
+  assert.equal(logged[0].text, "掩码保留后四位");
+
+  await until(() => service.get(id)?.status === "completed", "任务收口");
+  // 收口之后队列必然空了 = 已读取
+  assert.equal(service.listInterrupts(id)[0].delivered, true);
+  await model.stop();
+});

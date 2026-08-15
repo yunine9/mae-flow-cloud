@@ -280,6 +280,20 @@ export class CloudSession {
    * 队列,取走即归我,不会出现我补发一遍、pi 事后又送一遍。它连 followUp
    * 队列一并清空——我们从不用 followUp,清了无妨。
    */
+  /** 还压在 pi 队列里、没进模型上下文的插话(只读)。
+   *
+   * pi 在真正开始那条用户消息时才把它移出队列,所以"不在队列里"就是
+   * "模型已经读到了"——这是可观测的事实,不是推断。页面据此如实告诉人
+   * "送达没有",省得他发完一句就石沉大海。 */
+  pendingSteers(): string[] {
+    try {
+      const queue = (this.session as any).getSteeringMessages?.();
+      return Array.isArray(queue) ? [...queue] : [];
+    } catch {
+      return [];
+    }
+  }
+
   takeUndeliveredSteers(): string[] {
     try {
       const queue = (this.session as any).clearQueue?.();
