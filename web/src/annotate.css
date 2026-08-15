@@ -504,8 +504,24 @@
 
 .cd-svg {
   max-width: none;
-  font: 11px/1.3 var(--font-sans, inherit);
+  /* 原来写的是 font: 11px/1.3 var(--font-sans, inherit):--font-sans 全站
+     没定义过,回退值 inherit 放进 font 简写里是非法的,整条声明被丢掉
+     ——写了等于没写。拆成单项。 */
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1.3;
+  /* 全站 icon SVG 默认 stroke: currentColor / 1.7px(style.css 顶部)。
+     不重置的话每个字既填充又描边,看着就是"重影"。时序图那边早踩过,
+     见 .puml-diagram 上的同款注释;类图这张漏了。 */
+  fill: none;
+  stroke: none;
+  stroke-width: 0;
+  stroke-linecap: butt;
+  stroke-linejoin: miter;
 }
+
+/* 文字只填充,不描边——描边是上面那条全站 icon 规则漏下来的。 */
+.cd-svg text { stroke: none; stroke-width: 0; }
 
 .cd-node rect {
   fill: var(--surface);
@@ -553,6 +569,9 @@
 .cd-edge-implements { stroke-dasharray: 6 4; stroke: var(--accent); }
 .cd-edge-extends { stroke: var(--accent); }
 .cd-edge-uses { stroke-dasharray: 2 3; stroke: var(--faint); }
+/* 关联是实线,依赖才是虚线——两者同型的话结构就读不出来了 */
+.cd-edge-associates { stroke: var(--muted); }
+.cd-edge-aggregates { stroke: var(--success); }
 .cd-edge-composes { stroke: var(--success); }
 /* 内嵌:实线但更淡且略粗,和组合的实线区分开——两者语义不同不能同型 */
 .cd-edge-nests { stroke: var(--attention); stroke-width: 2; opacity: 0.55; }
@@ -560,6 +579,7 @@
 .cd-marker-open { fill: var(--surface); stroke: var(--accent); stroke-width: 1.2; }
 .cd-marker-dot { fill: none; stroke: var(--faint); stroke-width: 1.4; }
 .cd-marker-diamond { fill: var(--success); }
+.cd-marker-hollow-diamond { fill: var(--surface); stroke: var(--success); stroke-width: 1.2; }
 
 .cd-legend {
   display: flex;
@@ -583,5 +603,7 @@
 .cd-legend-item.implements::before { border-top-style: dashed; border-color: var(--accent); }
 .cd-legend-item.extends::before { border-color: var(--accent); }
 .cd-legend-item.uses::before { border-top-style: dotted; border-color: var(--faint); }
+.cd-legend-item.associates::before { border-color: var(--muted); }
 .cd-legend-item.composes::before { border-color: var(--success); }
+.cd-legend-item.aggregates::before { border-color: var(--success); border-top-style: double; border-top-width: 3px; }
 .cd-legend-item.nests::before { border-color: var(--attention); border-top-width: 2px; }

@@ -19,9 +19,10 @@ export interface ClassNode {
   members: string[];
 }
 
-/** 关系语义只认这五类,其余按 uses 兜底——线型是给人看的,不能瞎标。 */
+/** 关系语义认这七类,其余按依赖兜底——线型是给人看的,不能瞎标。 */
 export type EdgeKind =
-  | "implements" | "extends" | "uses" | "composes" | "nests";
+  | "implements" | "extends" | "uses" | "associates"
+  | "composes" | "aggregates" | "nests";
 
 export interface ClassEdge {
   from: string;
@@ -56,8 +57,12 @@ function edgeKind(arrow: string): EdgeKind {
   // "生命周期归它管",两回事。
   if (arrow.includes("+")) return "nests";
   if (arrow.includes("*")) return "composes";
+  if (arrow.includes("o")) return "aggregates";
+  // UML 里虚线才是依赖,实线是关联(持有引用)。原来把两者一起兜底成
+  // uses,同一张图上 7 条关联和 9 条依赖长得一模一样——这正是"画得不像
+  // 标准类图,像简化版"的由来:线型不分,结构就读不出来。
   if (arrow.startsWith("..")) return "uses";
-  return "uses";
+  return "associates";
 }
 
 /** 只可能出现在类图里的记号。`-->` 两边都用,不算数;这几个不同:

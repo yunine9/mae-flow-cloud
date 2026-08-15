@@ -111,7 +111,9 @@ const EDGE_CLASS: Record<ClassEdge["kind"], string> = {
   implements: "cd-edge-implements",
   extends: "cd-edge-extends",
   uses: "cd-edge-uses",
+  associates: "cd-edge-associates",
   composes: "cd-edge-composes",
+  aggregates: "cd-edge-aggregates",
   nests: "cd-edge-nests",
 };
 
@@ -143,6 +145,12 @@ export function ClassDiagram({ model }: { model: ClassModel }) {
                   markerWidth="9" markerHeight="9" orient="auto-start-reverse">
             <path d="M 0 6 L 6 2 L 12 6 L 6 10 z" className="cd-marker-diamond" />
           </marker>
+          <marker id={`${arrow}-hollow-diamond`} viewBox="0 0 12 12" refX="11"
+                  refY="6" markerWidth="9" markerHeight="9"
+                  orient="auto-start-reverse">
+            <path d="M 0 6 L 6 2 L 12 6 L 6 10 z"
+                  className="cd-marker-hollow-diamond" />
+          </marker>
         </defs>
 
         {model.edges.map((edge, at) => {
@@ -151,11 +159,16 @@ export function ClassDiagram({ model }: { model: ClassModel }) {
           if (!from || !to) return null;
           // 组合的实心菱形画在"整体"那一端(A *-- B 里的 A),不是被包含
           // 的那端——画反了就把包含关系说反了。
-          const composes = edge.kind === "composes";
+          // 菱形画在"整体"那一端(A *-- B 里的 A),不是被包含的那端
+          // ——画反了就把包含关系说反了。实心=组合,空心=聚合。
+          const diamond = edge.kind === "composes" ? "diamond"
+            : edge.kind === "aggregates" ? "hollow-diamond" : undefined;
           const nests = edge.kind === "nests";
-          const marker = edge.kind === "uses" ? "dot" : "open";
+          // 依赖和关联都是开放箭头(细 V),继承/实现才是空心三角。
+          const marker = edge.kind === "uses" || edge.kind === "associates"
+            ? "dot" : "open";
           // 内嵌关系没有方向,不画箭头;PlantUML 那个 ⊕ 端这里用线型区分。
-          const end = composes || nests
+          const end = diamond || nests
             ? undefined : `url(#${arrow}-${marker})`;
           // <title> 只收单个字符串:给它数组 React 直接不渲染,每条边的
           // 悬停说明就这么静静地全都没了。
@@ -166,7 +179,7 @@ export function ClassDiagram({ model }: { model: ClassModel }) {
               key={at}
               className={`cd-edge ${EDGE_CLASS[edge.kind]}`}
               d={edgePath(from, to)}
-              markerStart={composes ? `url(#${arrow}-diamond)` : undefined}
+              markerStart={diamond ? `url(#${arrow}-${diamond})` : undefined}
               markerEnd={end}
             >
               <title>{tip}</title>
@@ -212,7 +225,9 @@ const EDGE_WORD: Record<ClassEdge["kind"], string> = {
   implements: "实现",
   extends: "继承",
   uses: "依赖",
+  associates: "关联",
   composes: "组合",
+  aggregates: "聚合",
   nests: "内嵌",
 };
 
@@ -222,8 +237,10 @@ export function ClassDiagramLegend() {
     <div className="cd-legend">
       <span className="cd-legend-item implements">虚线空心箭头 · 实现</span>
       <span className="cd-legend-item extends">实线空心箭头 · 继承</span>
-      <span className="cd-legend-item uses">点线 · 依赖</span>
+      <span className="cd-legend-item uses">点线箭头 · 依赖</span>
+      <span className="cd-legend-item associates">实线箭头 · 关联</span>
       <span className="cd-legend-item composes">实心菱形 · 组合</span>
+      <span className="cd-legend-item aggregates">空心菱形 · 聚合</span>
       <span className="cd-legend-item nests">双线 · 内嵌(内部类)</span>
     </div>
   );

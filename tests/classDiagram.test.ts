@@ -80,7 +80,11 @@ test("类图:四种关系分得清,标签留住", () => {
   assert.equal(edge("PushChannelHandler", "ChannelHandler").kind, "implements");
   assert.equal(edge("PushChannelHandler", "NotifyRenderer").kind, "uses");
   assert.equal(edge("NotifyRenderer", "Rendered").kind, "composes");
-  assert.equal(edge("Notification", "ChannelType").kind, "uses");
+  // `-->` 是关联(实线),`..>` 才是依赖(虚线)。原来两者一起兜底成 uses,
+  // 一张图上 7 条关联和 9 条依赖长得一模一样——线型不分,结构就读不出来,
+  // 图看着"像简化版"就是这么来的。
+  // 上面那条 `..>` 已断言是 uses,这里钉住 `-->` 必须落到另一类。
+  assert.equal(edge("Notification", "ChannelType").kind, "associates");
   assert.equal(edge("PushChannelHandler", "NotifyRenderer").label,
     "render / allVariablesMissing");
 });
