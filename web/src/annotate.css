@@ -289,6 +289,7 @@
 .annot-item.draft { border-left-color: var(--accent); }
 .annot-item.waiting { border-left-color: var(--attention); }
 .annot-item.review { border-left-color: var(--attention); }
+.annot-item.done { border-left-color: var(--success); }
 
 .annot-item-head {
   display: flex;
@@ -327,6 +328,28 @@
 .annot-progress.review {
   color: var(--attention);
   background: var(--attention-soft);
+}
+
+.annot-progress.done {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 14%, transparent);
+}
+
+/* 裁决按钮:通过是收口动作给实色,返工是退回动作给描边。 */
+.annot-verdict {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.annot-verdict button.approve {
+  font-weight: 600;
+  color: #fff;
+  background: var(--success);
+  border: 1px solid var(--success);
+  border-radius: 8px;
+  font-size: 12.5px;
+  padding: 5px 13px;
+  cursor: pointer;
 }
 
 .annot-anchor {

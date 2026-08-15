@@ -12,6 +12,8 @@
  *   POST /tasks/:id/annotations {artifact,file,line,anchor,note,kind} → 201
  *   DELETE /tasks/:id/annotations/:annId                → 软删(只能删自己的)
  *   POST /tasks/:id/annotations/send {ids?}             → 走插话通道当场送给模型
+ *   POST /tasks/:id/annotations/:annId/verify           → 裁决:确认通过(只裁自己的)
+ *   POST /tasks/:id/annotations/:annId/reopen           → 裁决:返工,退回草稿再送一轮
  *   GET  /tasks/:id/events                              → SSE:重放事件日志后持续跟进
  *   GET  /tasks/:id/timeline                            → 人话交付时间线(只读现场)
  *   GET  /tasks/:id/artifacts[/:name]                   → 检视产物清单/内容(只读现场)
@@ -286,6 +288,18 @@ export function createTaskServer(
           if (request.method === "DELETE" && parts.length === 4) {
             return json(response, 200,
               service.dropAnnotation(id, decodeURIComponent(parts[3]), author));
+          }
+          // 检视闭环的裁决:确认通过 / 返工。作者校验在台账层——
+          // 谁的意见谁裁决,替别人点"通过"等于替他签字。
+          if (request.method === "POST" && parts.length === 5
+              && parts[4] === "verify") {
+            return json(response, 200,
+              service.verifyAnnotation(id, decodeURIComponent(parts[3]), author));
+          }
+          if (request.method === "POST" && parts.length === 5
+              && parts[4] === "reopen") {
+            return json(response, 200,
+              service.reopenAnnotation(id, decodeURIComponent(parts[3]), author));
           }
         }
         // 跑动中插话(本地 CLI 的 ESC 等价物):发送即打断,模型把手头

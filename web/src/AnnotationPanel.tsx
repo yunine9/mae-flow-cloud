@@ -13,6 +13,7 @@
 import { useEffect, useState } from "react";
 import {
   dropAnnotation,
+  judgeAnnotation,
   sendAnnotations,
   type Annotation,
   type AnchorCheck,
@@ -38,13 +39,23 @@ function relative(iso: string): string {
   return `${Math.floor(hours / 24)} 天前`;
 }
 
-/** 一条批注此刻处在哪:草稿 / 已送出待回应 / 已送出且那处已变。 */
+/** 一条批注此刻处在哪。检视闭环的五站:
+ * 待提交 → 已提交 → 已被改动·请你确认 → 确认通过 / 返工(回到待提交)。 */
 function progressOf(item: Annotation, check?: AnchorCheck): {
-  tone: "draft" | "waiting" | "review";
+  tone: "draft" | "waiting" | "review" | "done";
   text: string;
   hint?: string;
 } {
-  if (item.status !== "sent") return { tone: "draft", text: "待提交" };
+  if (item.status === "verified") {
+    return { tone: "done", text: "确认通过",
+             hint: "你已确认这处改动符合要求。" };
+  }
+  if (item.status !== "sent") {
+    return item.rework
+      ? { tone: "draft", text: `第 ${item.rework + 1} 轮·待提交`,
+          hint: "上一轮改动没达到要求,这条已退回,提交后会再送给 AI。" }
+      : { tone: "draft", text: "待提交" };
+  }
   const changed = check && (check.state === "gone" || check.state === "moved");
   // 原来这里写"待复核"——用户第一反应是"啥意思"。这是我们造的黑话:
   // 它想说的其实是"你批过的那处已经被改动了,改得对不对得你看一眼"。
@@ -164,6 +175,22 @@ export function AnnotationPanel({
                     if (result.error) setError(result.error);
                     onChanged();
                   }}>删除</button>
+                )}
+                {/* 检视闭环的裁决:提过的意见不能停在"请你确认"没有下文。
+                    通过=收口;返工=退回待提交,下一次提交再送给 AI。 */}
+                {item.status === "sent" && canOperate && (
+                  <span className="annot-verdict">
+                    <button type="button" className="ghost" onClick={async () => {
+                      const result = await judgeAnnotation(taskId, item.id, "reopen");
+                      if (result.error) setError(result.error);
+                      onChanged();
+                    }}>返工</button>
+                    <button type="button" className="approve" onClick={async () => {
+                      const result = await judgeAnnotation(taskId, item.id, "verify");
+                      if (result.error) setError(result.error);
+                      onChanged();
+                    }}>确认通过</button>
+                  </span>
                 )}
               </div>
               {/* 靶子变了要说清:意见可能已经过期,送过去轻则白烧一轮,

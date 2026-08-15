@@ -383,6 +383,33 @@ export class TaskService {
     return this.annotations(task).drop(annotationId, by);
   }
 
+  /** 检视闭环的裁决半边:确认通过。 */
+  verifyAnnotation(id: string, annotationId: string, by: string): Annotation {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    return this.annotations(task).verify(annotationId, by);
+  }
+
+  /** 裁决另半边:返工。锚点若已失效,趁重锚定结果在手边把它换成当前
+   * 原文——不换的话,退回的草稿定位还是指着一段已经不存在的文字。 */
+  reopenAnnotation(id: string, annotationId: string, by: string): Annotation {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    const store = this.annotations(task);
+    const item = store.list().find((one) => one.id === annotationId);
+    let update: { line?: number; anchor?: string } | undefined;
+    if (item) {
+      const root = this.artifactRoot(id);
+      const [check] = reanchor([item], (artifact) =>
+        root ? readArtifact(root, artifact)?.content : undefined);
+      if (check?.state === "moved") update = { line: check.line };
+      if (check?.state === "gone" && check.now) {
+        update = { line: item.line, anchor: check.now };
+      }
+    }
+    return store.reopen(annotationId, by, update);
+  }
+
   /** 把批注渲染成模型清单。ids 省略=全部待送出的。
    * 只渲染不落状态——决定卡要先给人看一眼再决定送不送。 */
   previewAnnotations(id: string, ids?: string[]): string {

@@ -19,7 +19,9 @@
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 
 export type AnnotationKind = "doc" | "code";
-export type AnnotationStatus = "draft" | "sent" | "dropped";
+/** verified = 人看过改动、点了"确认通过"——这是人的判断,不是系统推断,
+ * 所以它只能由按钮产生,永远不会被重锚定自动打上。 */
+export type AnnotationStatus = "draft" | "sent" | "verified" | "dropped";
 export type SentVia = "interrupt" | "decision";
 
 export interface Annotation {
@@ -39,6 +41,11 @@ export interface Annotation {
   status: AnnotationStatus;
   sent_at?: string;
   sent_via?: SentVia;
+  verified_at?: string;
+  /** 第几次返工(0 = 首轮)。返工回到 draft,走原有的两条送出通道。 */
+  rework?: number;
+  /** 返工时锚点若已失效,这里存上一轮针对的原文——给模型看历史。 */
+  anchor_was?: string;
 }
 
 export interface AnnotationInput {
@@ -54,7 +61,10 @@ export interface AnnotationInput {
 type Operation =
   | { op: "add"; record: Annotation }
   | { op: "drop"; id: string }
-  | { op: "sent"; ids: string[]; via: SentVia; at: string };
+  | { op: "sent"; ids: string[]; via: SentVia; at: string }
+  | { op: "verify"; id: string; at: string }
+  | { op: "reopen"; id: string; at: string;
+      line?: number; anchor?: string; note?: string };
 
 export class AnnotationError extends Error {}
 
@@ -108,6 +118,30 @@ export class AnnotationStore {
           found.sent_at = operation.at;
           found.sent_via = operation.via;
         }
+        continue;
+      }
+      if (operation.op === "verify") {
+        const found = byId.get(operation.id);
+        if (found) {
+          found.status = "verified";
+          found.verified_at = operation.at;
+        }
+        continue;
+      }
+      if (operation.op === "reopen") {
+        const found = byId.get(operation.id);
+        if (!found) continue;
+        found.status = "draft";
+        found.rework = (found.rework ?? 0) + 1;
+        found.sent_at = undefined;
+        found.sent_via = undefined;
+        found.verified_at = undefined;
+        if (operation.anchor && operation.anchor !== found.anchor) {
+          found.anchor_was = found.anchor;
+          found.anchor = operation.anchor;
+        }
+        if (operation.line) found.line = operation.line;
+        if (operation.note) found.note = operation.note;
       }
     }
     return [...byId.values()];
@@ -168,6 +202,51 @@ export class AnnotationStore {
     this.append({ op: "sent", ids, via, at: new Date().toISOString() });
   }
 
+  /** 谁的意见谁裁决:和 drop 同一条规矩,替别人点"通过"等于替他签字。 */
+  private judgeable(id: string, by: string): Annotation {
+    const found = this.list().find((item) => item.id === id);
+    if (!found) throw new AnnotationError(`批注不存在: ${id}`);
+    if (found.author !== by) {
+      throw new AnnotationError(`这条是 ${found.author} 写的,只能由他裁决`);
+    }
+    if (found.status === "draft") {
+      throw new AnnotationError("还没提交过,没有可裁决的改动");
+    }
+    if (found.status === "dropped") {
+      throw new AnnotationError("这条已经移除");
+    }
+    return found;
+  }
+
+  /** 确认通过:人看过那处改动,认了。检视闭环的收口一步。 */
+  verify(id: string, by: string): Annotation {
+    const found = this.judgeable(id, by);
+    const at = new Date().toISOString();
+    this.append({ op: "verify", id, at });
+    return { ...found, status: "verified", verified_at: at };
+  }
+
+  /**
+   * 返工:改动没达到要求,退回草稿再送一轮。
+   *
+   * 不造新的送出机制——草稿本来就有两条路(跑动中插话/决定卡随批)。
+   * 锚点可能已经失效(原文被改掉正是返工的常见起因),所以允许带上
+   * 当前位置的新原文;旧原文存进 anchor_was,渲染时给模型看历史,
+   * 免得它以为是条全新意见、把上一轮的改动又翻回去。
+   */
+  reopen(id: string, by: string, update?: {
+    line?: number; anchor?: string; note?: string;
+  }): Annotation {
+    this.judgeable(id, by);
+    this.append({
+      op: "reopen", id, at: new Date().toISOString(),
+      line: update?.line, anchor: update?.anchor?.trim() || undefined,
+      note: update?.note?.trim() || undefined,
+    });
+    const replayed = this.list().find((item) => item.id === id)!;
+    return replayed;
+  }
+
   private append(operation: Operation): void {
     appendFileSync(this.path, JSON.stringify(operation) + "\n", "utf-8");
   }
@@ -221,6 +300,16 @@ export function renderAnnotations(
     lines.push(`${index}. 第 ${item.line} 行`);
     lines.push(`   ${item.kind === "code" ? "当前代码" : "原文"}:${item.anchor}`);
     lines.push(`   要求:${item.note}`);
+    // 返工必须点明,不然模型把它当全新意见——轻则重复上一轮的改法,
+    // 重则把已有改动翻回去。历史锚点一并给:它要能对出"上次改成了什么"。
+    if (item.rework) {
+      lines.push(`   注意:这是同一条意见的第 ${item.rework + 1} 次提出,`
+        + "上一轮的改动没有达到要求。先弄清上次改了什么、差在哪,再动手;"
+        + "不要原样重复上次的改法。");
+      if (item.anchor_was) {
+        lines.push(`   上一轮针对的原文:${item.anchor_was}`);
+      }
+    }
   }
   return lines.join("\n");
 }

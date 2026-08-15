@@ -258,9 +258,12 @@ export interface Annotation {
   anchor: string;
   note: string;
   kind: "doc" | "code";
-  status: "draft" | "sent" | "dropped";
+  status: "draft" | "sent" | "verified" | "dropped";
   sent_at?: string;
   sent_via?: "interrupt" | "decision";
+  verified_at?: string;
+  /** 第几次返工(0/缺省 = 首轮)。 */
+  rework?: number;
 }
 
 export interface AnchorCheck {
@@ -301,6 +304,22 @@ export async function dropAnnotation(
   const response = await fetch(
     `/tasks/${taskId}/annotations/${encodeURIComponent(annotationId)}`,
     { method: "DELETE" });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    return { error: String(body.error ?? `HTTP ${response.status}`) };
+  }
+  return {};
+}
+
+/** 检视闭环的裁决:verdict = verify(确认通过) | reopen(返工再送一轮)。 */
+export async function judgeAnnotation(
+  taskId: string,
+  annotationId: string,
+  verdict: "verify" | "reopen",
+): Promise<{ error?: string }> {
+  const response = await fetch(
+    `/tasks/${taskId}/annotations/${encodeURIComponent(annotationId)}/${verdict}`,
+    { method: "POST" });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     return { error: String(body.error ?? `HTTP ${response.status}`) };

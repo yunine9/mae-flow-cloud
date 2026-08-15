@@ -148,6 +148,43 @@ test("append-only:软删留痕、已送出可移出看板、半行 JSON 只丢�
   assert.equal(target.list().length, 2, "坏行不许炸掉整份批注");
 });
 
+test("检视闭环:确认通过收口,返工退回草稿再送一轮", () => {
+  // "本质上是我给 AI 提了检视意见,这条路得闭环"——提出→送达→改动之后,
+  // 人必须能落一个裁决:通过就收口,不行就返工。返工不造新送出机制,
+  // 退回 draft 走原有两条通道。
+  const target = store();
+  const first = seed(target, "掩码保留后四位");
+  target.markSent([first.id], "interrupt");
+
+  // 通过:状态落 verified,不再出现在待送出里
+  const verified = target.verify(first.id, "liaoxiang");
+  assert.equal(verified.status, "verified");
+  assert.ok(verified.verified_at);
+  assert.equal(target.drafts().length, 0);
+
+  // 返工:退回 draft,轮次 +1,锚点可更新且历史留档
+  const reopened = target.reopen(first.id, "liaoxiang",
+    { line: 50, anchor: "掩码保留后四位(新写法)" });
+  assert.equal(reopened.status, "draft");
+  assert.equal(reopened.rework, 1);
+  assert.equal(reopened.line, 50);
+  assert.equal(reopened.anchor, "掩码保留后四位(新写法)");
+  assert.equal(reopened.anchor_was, "手机号按后四位掩码");
+  assert.equal(target.drafts().length, 1, "返工的必须回到待送出队列");
+
+  // 渲染要点明这是第二轮,并给出上一轮锚点——不然模型当新意见处理
+  const text = renderAnnotations(target.drafts(), "REQ-1");
+  assert.match(text, /第 2 次提出/);
+  assert.match(text, /不要原样重复上次的改法/);
+  assert.match(text, /上一轮针对的原文:手机号按后四位掩码/);
+
+  // 边界:草稿没有可裁决的改动;别人的意见不能替裁
+  const draft = seed(target, "另一条");
+  assert.throws(() => target.verify(draft.id, "liaoxiang"), /没有可裁决/);
+  target.markSent([draft.id], "decision");
+  assert.throws(() => target.verify(draft.id, "路人"), /只能由他裁决/);
+});
+
 test("空内容与缺原文一律拒收——没有原文的批注无从定位", () => {
   const target = store();
   assert.throws(() => seed(target, "   "), AnnotationError);
