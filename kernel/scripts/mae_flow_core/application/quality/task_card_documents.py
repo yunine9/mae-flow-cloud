@@ -1,5 +1,6 @@
 """Render full-flow and standalone quality task-card documents."""
 
+from ... import host_env
 from ...quality.task_cards import TaskCardDocument
 from .task_cards import (
     append_execution_context,
@@ -183,12 +184,28 @@ def _append_full_ut(document, groups, targets, batches=(), phase="generate"):
             "上下文接近上限就自然语言收尾，由主会话为下一批启动新实例。"
             "各批共享未提交测试工作区，不 commit、不询问用户；最后必须有一个收口实例"
             "只运行配置的全量 UT 命令。")
-    route = (
-        "本任务是最终收口批，不再调用生成 Skill 或修改测试，只真实执行完整 UT。"
-        if phase == "final" else
-        "必须调用任务卡指定的 Mae-Flow 自带 AutoUT/java-autout Skill"
-        "（或明确配置的既有写法），并真实执行测试。写“随生成方式自带”时"
-        "由对应 Skill 根据项目决定实际命令，并在 EXECUTED_UT 如实报告。")
+    if not host_env.unit_tests_run_locally():
+        # 云端形态:测试照常写——**AutoUT/java-autout 这类 skill 的价值是
+        # "怎么写单测"的写法指南,云端一样照用**(宿主把仓里的 SKILL.md
+        # 直接注进提示词给模型读);对不上的只是"调用 Skill 工具"这个通道
+        # 和它文档里"编译通过"那类本地动作。见 host_env.unit_tests_run_locally。
+        route = (
+            "云端形态:**按本会话已带的 UT 写法指南(AutoUT/java-autout 等 "
+            "skill,由宿主注入)写测试**——命名、分层、断言口径照旧生效,"
+            "是本步的主要依据;"
+            "但这台机器没有构建链,指南里「编译通过」「执行构建/运行测试」"
+            "那类段落做不到,直接跳过,不要为此找工具或改写指南。"
+            "写完就交:运行与统计由交付后的权威流水线负责(结果绑 SHA),"
+            "红灯有专职修复会话跟进。报告里如实写明本地未运行,"
+            "**不要编造 TESTS_TOTAL/PASSED/FAILED 数字**——没跑就没有数字。")
+    elif phase == "final":
+        route = (
+            "本任务是最终收口批，不再调用生成 Skill 或修改测试，只真实执行完整 UT。")
+    else:
+        route = (
+            "必须调用任务卡指定的 Mae-Flow 自带 AutoUT/java-autout Skill"
+            "（或明确配置的既有写法），并真实执行测试。写“随生成方式自带”时"
+            "由对应 Skill 根据项目决定实际命令，并在 EXECUTED_UT 如实报告。")
     document.extend([
         "职责:只对任务卡范围补/改测试；**测试对象=本次修改的函数/行为"
         "(上面硬边界所在函数)+规格条目 EARS 条目,禁止为文件中未修改的"
@@ -253,6 +270,15 @@ def build_full_task_document(facts):
         _append_full_ut(
             document, facts["groups"], facts["ut_targets"],
             facts.get("ut_batches", ()), facts.get("ut_phase", "generate"))
+    elif not host_env.build_runs_locally():
+        # 云端形态:这台机器上没有构建链,教它去跑 mcde/mvn 只会撞墙,
+        # 然后在契约上空转(见 host_env.build_runs_locally)。
+        document.append(
+            "职责(云端形态):本机没有构建链，不要执行任何编译命令，也不要"
+            "调用 build-fix/autout 之类的构建 Skill——它们在这台机器上不存在。"
+            "按任务卡把代码改对，编译是否通过由交付后的权威流水线裁决"
+            "(结果绑 SHA)；红灯会有专职修复会话跟进。"
+            "报告里如实写明本地未编译，不要编造 BUILD_ERRORS 数字。")
     else:
         document.append(
             "职责:严格按任务卡的编译方式执行；配置为 build-fix 时必须调用 Mae-Flow"

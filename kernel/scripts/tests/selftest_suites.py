@@ -119,6 +119,8 @@ REFACTOR_SAFETY_SUITES = (
      ("scripts/tests/test_hook_codecheck_contract.py",), 180, 5000),
     ("UT 真实执行策略回归",
      ("scripts/tests/test_hook_unit_test_contract.py",), 180, 5000),
+    ("云端形态:本地不编译不跑 UT(作弊守卫仍在)",
+     ("scripts/tests/test_cloud_no_local_build.py",), 90, 3000),
     ("Hook Agent 收尾编排回归",
      ("scripts/tests/test_hook_agent_completion.py",), 180, 5000),
     ("Hook 事件路由回归",

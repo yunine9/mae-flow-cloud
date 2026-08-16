@@ -1,5 +1,6 @@
 """Pure UT Agent final-report and execution-risk contract."""
 
+from mae_flow_core import host_env
 from mae_flow_core.quality.agent_contracts import (
     accept,
     reject,
@@ -101,16 +102,24 @@ def _run_decision(context):
     return "", {"reused_run": bool(reused)}
 
 
-def _report_decision(report):
+def _honesty_decision(report):
+    """带着待答问题/已知失败不许报 PASS——与本地是否跑过测试无关,
+    两种形态共用(云端分支也走这一条)。"""
     for name in (
             "PENDING_QUESTIONS", "KNOWN_FAILURES", "SUSPECTED_BUGS"):
         value = report_field(report, name)
         if value is not None and not empty_section(value):
             return (
                 "标记 PASS 但 %s 非空；必须先交主会话和用户处理，"
-                "不能带问题过关。" % name,
-                None,
+                "不能带问题过关。" % name
             )
+    return ""
+
+
+def _report_decision(report):
+    reason = _honesty_decision(report)
+    if reason:
+        return reason, None
     counts = report_counts(report)
     for key, field in (
             ("total", "TESTS_TOTAL"),
@@ -141,6 +150,16 @@ def evaluate_unit_test_contract(context):
     if context.status != "PASS":
         return accept(details={"result": "accepted-honest-nonpass"})
     details = {}
+    if not host_env.unit_tests_run_locally():
+        # 云端形态:测试照常生成,运行交给流水线(绑 SHA)。
+        # 放开的是"本地跑过"这一类证据:EXECUTED_UT、真实 Bash 调用、
+        # 数字对账——没跑就不该有数字,要求它反而是逼模型编。
+        # 诚实检查一条不减:带着待答问题/已知失败不许报 PASS。
+        reason = _honesty_decision(context.report)
+        if reason:
+            return reject(reason, details=details)
+        details["run_deferred_to_pipeline"] = True
+        return accept(details=details)
     reason, generator = _generator_decision(context)
     details.update(generator)
     if reason:

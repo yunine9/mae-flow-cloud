@@ -3,6 +3,7 @@
 import hashlib
 import re
 
+from mae_flow_core import host_env
 from mae_flow_core.quality.agent_contracts import (
     accept,
     build_summary_matches,
@@ -264,6 +265,11 @@ def _build_call(context, build_config):
 def _build_decision(context, numbers):
     if numbers["FIXED"] <= 0:
         return "", {}
+    if not host_env.build_runs_locally():
+        # 云端形态:本地不编译(见 host_env.build_runs_locally)。
+        # CodeCheck 修完不再要求"本轮已编译"的本地证据——那台机器上
+        # 根本没有构建链;修复的成效由交付点流水线绑 SHA 裁决。
+        return "", {"build_deferred_to_pipeline": True}
     build_config = context.config.get("编译方式", "")
     call = _build_call(context, build_config)
     successful = call if call and not call_failed(call) else None

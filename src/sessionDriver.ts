@@ -22,6 +22,7 @@ import {
   type BashOperations,
 } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
+import { existsSync } from "node:fs";
 import { EventLog, type SemanticEvent, type SemanticEventKind, validateEvent } from "./semanticEvents.ts";
 import { TranscriptStore } from "./transcriptStore.ts";
 import { GateService } from "./gateService.ts";
@@ -85,6 +86,10 @@ export interface CloudSessionOptions {
    * 容器跑;工具仍叫 bash,门禁与 transcript 看到的世界不变。
    * 子会话经同一 openSession 装配,天然同套隔离。 */
   bashOperations?: BashOperations;
+  /** 宿主级 skill 目录(部署时放一次,每个任务自动带)。团队的两个
+   * UT skill 在内网、出不来仓,老宿主是"每次手动集成进 ut-generator
+   * 子 agent";云端没有子 agent,得有个固定的家。 */
+  hostSkillsDir?: string;
   log?: (message: string) => void;
 }
 
@@ -376,9 +381,29 @@ export class CloudSession {
     customTools: unknown[];
   }) {
     const { workspace, agentDir, provider, model } = this.options;
+    // Skill=写法指南(团队那两个 UT skill 讲"单测怎么写"),云端照用:
+    // pi 把 SKILL.md 直接注进系统提示让模型读。云端对不上的只是"调用
+    // Skill 工具"这个通道(pi 没有 skill 工具)和指南里"本地编译"那类段落。
+    //
+    // 两个来源,宿主级在前(部署放一次、每个任务都带——团队的 skill 在
+    // 内网出不来仓,老宿主靠"每次手动集成进 ut-generator 子 agent",
+    // 云端给它一个固定的家),仓内的次之(愿意随仓走的)。
+    // 子 Agent 经同一 openSession 装配,自动同样带上这些 skill。
+    // **必须显式喂路径**:pi 的 DefaultResourceLoader 是 includeDefaults
+    // = false,不喂就一个 skill 都不装(读 SDK 才发现,不是放进去就生效)。
+    const skillPaths = [
+      this.options.hostSkillsDir,
+      join(workspace, ".pi", "skills"),
+      join(workspace, ".claude", "skills"), // 团队已有的 Claude 版同格式
+    ].filter((path): path is string => !!path && existsSync(path));
+    if (skillPaths.length) {
+      this.options.log?.(
+        `任务 ${this.options.taskId} 装载 skill 目录: ${skillPaths.join(", ")}`);
+    }
     const loader = new DefaultResourceLoader({
       cwd: workspace,
       agentDir,
+      additionalSkillPaths: skillPaths,
       extensionFactories: [
         {
           name: "mae-flow-gate",

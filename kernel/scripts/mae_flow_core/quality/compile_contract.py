@@ -2,6 +2,7 @@
 
 import re
 
+from mae_flow_core import host_env
 from mae_flow_core.quality.agent_contracts import (
     accept,
     build_summary_matches,
@@ -99,15 +100,21 @@ def evaluate_compile_contract(context):
     if context.status == "FAIL":
         return accept()
     build_config = context.config.get("编译方式", "")
-    execution = _execution_decision(context, build_config)
-    if not execution.accepted:
-        return execution
-    details = dict(execution.details)
-    build_summary = _line_field(context.report, "EXECUTED_BUILD")
-    details["build_summary_inaccurate"] = bool(
-        build_summary
-        and not build_summary_matches(build_summary, build_config)
-    )
+    if not host_env.build_runs_locally():
+        # 云端形态:本地不编译,机器把关移交交付点的权威流水线(绑 SHA)。
+        # 只放开"本地执行证据"这一项——净删行守卫留在下面照旧生效,
+        # 删代码换通过在哪种形态下都是作弊。
+        details = {"deferred_to_pipeline": True}
+    else:
+        execution = _execution_decision(context, build_config)
+        if not execution.accepted:
+            return execution
+        details = dict(execution.details)
+        build_summary = _line_field(context.report, "EXECUTED_BUILD")
+        details["build_summary_inaccurate"] = bool(
+            build_summary
+            and not build_summary_matches(build_summary, build_config)
+        )
     match = re.search(
         r"^\s*BUILD_ERRORS:\s*(\d+)", context.report, re.M)
     errors = int(match.group(1)) if match else None

@@ -312,7 +312,7 @@ test("服务形态全从管理页来:平台/默认仓/免编译零启动项跑�
     const opening = JSON.stringify(
       ((model.requests[0] as any).messages ?? [])
         .filter((m: any) => m.role === "user")[0]?.content ?? "");
-    assert.match(opening, /由流水线代行/);
+    assert.match(opening, /交流水线/);
   } finally {
     await model.stop();
     await platform.stop();
@@ -587,8 +587,9 @@ test("流水线代行验证:环境事实进每次会话的开场,修复会话也
       ((model.requests[at] as any).messages ?? [])
         .filter((m: any) => m.role === "user")[0]?.content ?? "");
     // 首跑会话(请求 0)与修复会话(请求 2)的开场都带环境事实
-    assert.match(firstUser(0), /由流水线代行/);
-    assert.match(firstUser(2), /由流水线代行/);
+    assert.match(firstUser(0), /交流水线/);
+    assert.match(firstUser(2), /交流水线/);
+    assert.match(firstUser(2), /没跑就不许报数字/, "免编译形态下不许编数字");
     assert.match(firstUser(2), /唯一的使命/, "修复使命也在场");
   } finally {
     await model.stop();

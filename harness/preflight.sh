@@ -70,6 +70,25 @@ else
   bad "2. npm test 有红(日志 /tmp/preflight-test.log)"
 fi
 
+# 2.5 类型检查(零构建的代价:tsx 不看类型,字段名写错会静默变
+# undefined——实测吃过一次,靠端到端断言才逮住。门立在这里)
+if npm run typecheck > /tmp/preflight-types.log 2>&1; then
+  ok "2.5 npm run typecheck 无错"
+else
+  bad "2.5 类型检查有错(日志 /tmp/preflight-types.log)"
+fi
+
+# 2.6 前端能构建(web/ 是唯一有构建的目录;构建挂了界面就是白屏)
+if [ -d web/node_modules ]; then
+  if (cd web && npm run build > /tmp/preflight-web.log 2>&1); then
+    ok "2.6 web 构建通过"
+  else
+    bad "2.6 web 构建失败(日志 /tmp/preflight-web.log)"
+  fi
+else
+  skip "2.6 web 构建:先在 web/ 执行 npm install"
+fi
+
 # 3. probe 整链演练(内核裁判在场)
 if npm run probe > /tmp/preflight-probe.log 2>&1; then
   ok "3. probe 九项事实全绿(内核裁判)"

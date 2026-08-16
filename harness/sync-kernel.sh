@@ -6,10 +6,14 @@
 # 坑开发。发布/推送前跑一次本脚本刷新快照。
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
-kernel_src="${1:-$root/../mae-flow}"
+# 找内核仓的顺序与 src/kernelDiscovery.ts 保持一致:显式参数 >
+# MAE_FLOW_HOME > 兄弟目录。写死 ../mae-flow 在 git worktree 里会
+# 当场找不到(worktree 的上一级是 .claude/worktrees,不是 dev/)。
+kernel_src="${1:-${MAE_FLOW_HOME:-$root/../mae-flow}}"
 
 if [ ! -d "$kernel_src/.git" ]; then
   echo "找不到内核仓: $kernel_src" >&2
+  echo "用法: harness/sync-kernel.sh [内核仓路径](或设 MAE_FLOW_HOME)" >&2
   exit 2
 fi
 if ! git -C "$kernel_src" diff --quiet HEAD 2>/dev/null; then

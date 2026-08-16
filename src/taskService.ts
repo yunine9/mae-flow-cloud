@@ -1020,10 +1020,18 @@ export class TaskService {
       if (this.effectiveVerifyViaPipeline()) {
         prompt = `${prompt}\n\n环境事实(宿主声明):本机没有编译/测试工具链,`
           + `也不提供容器构建,不要在本机尝试编译或运行 UT——只会浪费轮次。`
-          + `CodeCheck 亦不在本机执行(内核在云端会如实记账并交由流水线)。`
-          + `凡流程要求本地编译/UT 的环节,如实注明「本地验证由流水线代行」`
-          + `并继续推进(云端已放行对应机器证据)。编码完成后按流程提交并`
-          + `推送,权威流水线是唯一裁判;红灯会由专职修复会话跟进。`;
+          + `仓里带的 UT skill(如 autout/java-autout)是**写法指南,照用**`
+          + `——按它的方法写测试;只是它里面"编译通过""执行构建"那类段落`
+          + `在这台机器上做不到,跳过即可,不要为此找工具。`
+          + `build-fix 这类纯构建 skill 云端用不上,不要调用;`
+          + `CodeCheck 亦不在本机执行。内核在云端形态下(MAE_FLOW_HOST=cloud)`
+          + `不再要求这些本地执行证据,报告如实写「本地未编译/未运行,`
+          + `交流水线」即可放行。`
+          + `**没跑就不许报数字**:不要编造 BUILD_ERRORS 或 `
+          + `TESTS_TOTAL/PASSED/FAILED——编了就是谎,门禁另有守卫。`
+          + `UT 该写还得写(生成测试是本机做得了、也最值钱的部分),`
+          + `只是不在本机跑。编码完成后按流程提交并推送,`
+          + `权威流水线是唯一裁判;红灯会由专职修复会话跟进。`;
       }
       // 仓库地图(加餐):大仓里模型乱 grep 烧轮次,开场先给一张按被
       // 引用程度排序的路标。只在内核模式生成(有真克隆才有仓可画);
@@ -1080,6 +1088,9 @@ export class TaskService {
         taskId: task.summary.id,
         workspace: cwd,
         agentDir,
+        // 宿主级 skill:<数据目录>/skills 放一次,每个任务都带
+        // (团队的 UT 写法指南在内网,老宿主靠手动集成进子 agent)。
+        hostSkillsDir: join(this.options.dataDir, "skills"),
         // 任务级选择 > 设置层默认 > 部署默认;任务级的记在 summary 上,
         // 重启续跑/会话重建都不漂移(设置层后来改了也不影响本单)。
         provider: task.summary.model_choice?.provider
