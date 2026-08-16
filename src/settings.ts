@@ -46,10 +46,22 @@ export interface ModelsSettings {
   model?: string;
 }
 
+/** 服务形态(用户拍板"这些不该是启动项"):平台适配层地址、默认
+ * 交付仓、免编译开关。全部热改:平台/仓=下一次交付动作,免编译=
+ * 下一个新会话。唯一要重启的例外:服务启动时既没有 --repo 也没有
+ * 这里的默认仓,内核模式根本没开——从无到有要重启一次(部署形态
+ * 变化),界面上如实写着。 */
+export interface ServiceSettings {
+  platform_url?: string;
+  default_repo?: string;
+  verify_via_pipeline?: boolean;
+}
+
 interface Stored {
   runtime?: RuntimeKnobs;
   luban?: LubanSettings;
   models?: ModelsSettings;
+  service?: ServiceSettings;
 }
 
 export class SettingsError extends Error {}
@@ -107,6 +119,61 @@ export class RuntimeSettings {
 
   models(): ModelsSettings {
     return this.load().models ?? {};
+  }
+
+  service(): ServiceSettings {
+    return this.load().service ?? {};
+  }
+
+  /** 服务形态。语义同各节:undefined=保留,空串=删除。 */
+  updateService(patch: {
+    platform_url?: unknown;
+    default_repo?: unknown;
+    verify_via_pipeline?: unknown;
+  }): void {
+    const current = this.service();
+    const next: ServiceSettings = { ...current };
+    if (patch.platform_url !== undefined) {
+      const url = String(patch.platform_url).trim();
+      if (!url) delete next.platform_url;
+      else {
+        try {
+          void new URL(url);
+        } catch {
+          throw new SettingsError(`平台地址不是合法 URL: ${url}`);
+        }
+        next.platform_url = url;
+      }
+    }
+    if (patch.default_repo !== undefined) {
+      const repo = String(patch.default_repo).trim();
+      if (!repo) delete next.default_repo;
+      else {
+        if (/\s/.test(repo)) {
+          throw new SettingsError("代码仓地址不能含空白字符");
+        }
+        if (/^https?:\/\//i.test(repo)) {
+          const parsed = new URL(repo);
+          if (parsed.username || parsed.password) {
+            throw new SettingsError(
+              "代码仓 URL 不许携带账号密码——鉴权走个人 Git 令牌");
+          }
+        }
+        next.default_repo = repo;
+      }
+    }
+    if (patch.verify_via_pipeline !== undefined) {
+      const raw = patch.verify_via_pipeline;
+      if (raw === "" || raw === null) delete next.verify_via_pipeline;
+      else if (raw === true || raw === "true") next.verify_via_pipeline = true;
+      else if (raw === false || raw === "false") {
+        next.verify_via_pipeline = false;
+      } else {
+        throw new SettingsError(
+          `免编译开关只认 true/false/空(跟随部署),收到: ${String(raw)}`);
+      }
+    }
+    this.save({ ...this.load(), service: next });
   }
 
   updateRuntime(patch: Record<string, unknown>): void {
@@ -202,6 +269,7 @@ export class RuntimeSettings {
     luban: { endpoint?: string; headers: Array<{ name: string; hint: string }> };
     models: { configured: boolean; provider?: string; model?: string;
               providers: Array<{ name: string; models: string[]; key_hint?: string }> };
+    service: ServiceSettings;
   } {
     const luban = this.luban();
     const models = this.models();
@@ -216,6 +284,7 @@ export class RuntimeSettings {
     }));
     return {
       runtime: this.runtime(),
+      service: this.service(),
       luban: {
         endpoint: luban.endpoint,
         headers: Object.entries(luban.headers ?? {}).map(([name, value]) => ({

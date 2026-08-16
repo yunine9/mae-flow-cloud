@@ -72,6 +72,32 @@ test("数值校验:无限等待没有语法;models 必须真实存在才能选",
   }), /没有模型 no-such/);
 });
 
+test("服务形态节:URL 校验、带密码的仓打回、免编译三态", () => {
+  const settings = store();
+  assert.throws(() => settings.updateService({ platform_url: "不是url" }),
+    SettingsError);
+  assert.throws(() => settings.updateService(
+    { default_repo: "https://u:p@codehub/x.git" }), /不许携带账号密码/);
+  assert.throws(() => settings.updateService(
+    { verify_via_pipeline: "maybe" }), /只认/);
+  settings.updateService({
+    platform_url: "http://127.0.0.1:8790",
+    default_repo: "https://codehub.corp/g/demo.git",
+    verify_via_pipeline: "true",
+  });
+  assert.deepEqual(settings.service(), {
+    platform_url: "http://127.0.0.1:8790",
+    default_repo: "https://codehub.corp/g/demo.git",
+    verify_via_pipeline: true,
+  });
+  // 空串=清掉;免编译清掉=跟随部署
+  settings.updateService({ default_repo: "", verify_via_pipeline: "" });
+  assert.equal(settings.service().default_repo, undefined);
+  assert.equal(settings.service().verify_via_pipeline, undefined);
+  assert.equal(settings.service().platform_url, "http://127.0.0.1:8790",
+    "没动的键保留");
+});
+
 test("读坏 fail-open:settings.json 损坏按无覆盖处理,不挡服务", () => {
   const dir = mkdtempSync(join(tmpdir(), "mfc-set-"));
   writeFileSync(join(dir, "settings.json"), "{ 坏掉的");

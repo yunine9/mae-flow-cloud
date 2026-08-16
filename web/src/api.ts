@@ -542,6 +542,12 @@ export interface SettingsView {
     poll_interval_s?: number;
     poll_timeout_s?: number;
   };
+  /** 服务形态:平台适配层地址、默认交付仓、免编译开关。 */
+  service: {
+    platform_url?: string;
+    default_repo?: string;
+    verify_via_pipeline?: boolean;
+  };
   luban: {
     endpoint?: string;
     headers: Array<{ name: string; hint: string }>;
@@ -561,7 +567,7 @@ export async function getSettings(): Promise<SettingsView> {
 }
 
 async function putSettings(
-  section: "runtime" | "luban" | "models",
+  section: "runtime" | "luban" | "models" | "service",
   body: unknown,
 ): Promise<SettingsView> {
   const response = await fetch(`/settings/${section}`, {
@@ -585,6 +591,15 @@ export function putLubanSettings(body: {
   headers?: Record<string, string>;
 }): Promise<SettingsView> {
   return putSettings("luban", body);
+}
+
+export function putServiceSettings(body: {
+  platform_url?: string;
+  default_repo?: string;
+  /** "true"/"false" 设定,空串=清掉跟随部署。 */
+  verify_via_pipeline?: string;
+}): Promise<SettingsView> {
+  return putSettings("service", body);
 }
 
 export function putModelsSettings(body: {

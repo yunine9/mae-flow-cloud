@@ -224,6 +224,10 @@ export function createTaskServer(
             settings.updateModels(await readBody(request));
             return json(response, 200, settings.view());
           }
+          if (request.method === "PUT" && parts[1] === "service") {
+            settings.updateService(await readBody(request));
+            return json(response, 200, settings.view());
+          }
           if (request.method === "POST" && parts[1] === "luban"
               && parts[2] === "test") {
             const notifier = service.options.notifier;

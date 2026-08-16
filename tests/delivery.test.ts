@@ -257,6 +257,52 @@ function repairScenes(push: boolean): Scene[] {
   ];
 }
 
+test("服务形态全从管理页来:平台/默认仓/免编译零启动项跑通交付", async () => {
+  // 用户拍板"这些不该是启动项"。部署层不给 --repo/--platform/
+  // --verify-via-pipeline,三样全在 settings(管理页)——任务照样
+  // 走完整交付链,开场带免编译环境事实。
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  await platform.start();
+  const model = new ScriptedModelServer(walkScript(true));
+  await model.start();
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-deliver-"));
+  const settings = new RuntimeSettings(dataDir);
+  settings.updateService({
+    platform_url: platform.baseUrl,
+    default_repo: platform.barePath,
+    verify_via_pipeline: "true",
+  });
+  const service = new TaskService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    host: {
+      kernelRoot: process.env.MAE_FLOW_HOME
+        ?? join(process.cwd(), "..", "mae-flow"),
+      python: "python3",
+      // 刻意不给 repoPath:默认仓在管理页
+    },
+    // 刻意不给 delivery:平台地址在管理页
+    settings,
+  });
+  try {
+    const id = service.create("交付 REQ9:纯界面配置").id;
+    await until(() => service.get(id)!.status === "await_merge",
+      "界面配置驱动交付收轮");
+    const task = service.get(id)!;
+    assert.equal(task.delivery?.pipeline, "success");
+    assert.equal(platform.mergeRequests.length, 1, "MR 打到了设置里的平台");
+    // 免编译环境事实也来自设置层
+    const opening = JSON.stringify(
+      ((model.requests[0] as any).messages ?? [])
+        .filter((m: any) => m.role === "user")[0]?.content ?? "");
+    assert.match(opening, /由流水线代行/);
+  } finally {
+    await model.stop();
+    await platform.stop();
+  }
+});
+
 test("交付请求带任务归属人身份头:MR 发起人=本人的原料到位", async () => {
   // 令牌走请求头不走请求体——体会被外部动作台账记进投影,头不会。
   const platform = new FakeGitPlatform();

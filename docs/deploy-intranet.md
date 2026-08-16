@@ -17,34 +17,46 @@
 
 ### WSL 实战速记(2026-08-17 首跑用)
 
-1. **一切放 WSL 自己的 ext4**(`~/` 下):数据目录、两个仓、内核。
-   `/mnt/c` 是 9p,chmod 600 不可靠(密钥文件纪律会破)且慢一个量级;
+**集成产品形态:一个 clone 就是全部**——内核快照收编在 `kernel/`
+(harness/sync-kernel.sh 维护,serve 自动发现:MAE_FLOW_HOME >
+../mae-flow > kernel/),不用再单独 clone 内核仓。
+
+1. **一切放 WSL 自己的 ext4**(`~/` 下)。`/mnt/c` 是 9p,chmod 600
+   不可靠(密钥文件纪律会破)且慢一个量级;
 2. **代理**:内网 git/模型网关/CodeHub 域名全部进 `no_proxy`,
    不然撞代理(外部实测 502 就是这么来的);
-3. **web/dist 不进仓**:`cd web && npm install && npm run build` 一次
-   (npm 指内网 registry),否则只有零构建演示页;
-4. 依赖就 Node≥20 + python3 + git;**不装 JDK/docker**,用
-   `--verify-via-pipeline` 形态,流水线是唯一裁判。**不隔离=显式
+3. 装机:Node≥20 + python3 + git;`git clone <mae-flow-cloud>` →
+   `npm ci` → `cd web && npm install && npm run build`(dist 不进仓);
+   **不装 JDK/docker**——免编译形态流水线是唯一裁判。**不隔离=显式
    选择**,边界要认:agent 与服务同用户跑,auth.json(全体用户令牌
    明文)理论上对它可读、越界写无强制墙——单人自用+单任务+人盯着
    可接受;**转多人共用前容器隔离升回必选**(WSL2 装 docker 无障碍);
-5. 服务和适配层都起在 tmux 里,别指望关掉的终端窗口还活着;
+4. **最小启动(界面优先形态,用户拍板"参数该在界面配")**:
+   ```bash
+   MAE_FLOW_ADMIN_PASSWORD='<至少10位>' \
+   npm run serve -- --data ~/mfc-data --port 8787   # tmux 里
+   ```
+   然后 Windows 浏览器开 `localhost:8787`,管理页配齐:模型网关、
+   交付与形态卡(平台地址/默认仓/免编译开)、并发 1;个人页配 Git
+   令牌+邮箱。**配完默认仓后重启一次 serve**(从无到有开内核模式=
+   部署形态变化,此后仓/平台/免编译全部热改不再重启)。
+   注意:模型网关没配之前是演示模式,**演示模式每次启动清空数据目录**
+   ——所以第一次起服后先配模型网关再配别的;
+5. 适配层:填 adapter.json(codehubcli 命令模板)→ `npm run adapter
+   -- --config adapter.json`(tmux)→ `curl http://127.0.0.1:8790/`
+   → 三端点各手动打一发核对 → 平台地址填进管理页;
 5b. **内部 CLI 只有 Windows 版也不怕**,两条路:①(首选)WSL 互操作
    直接调 .exe——命令模板写 `/mnt/c/.../codehubcli.exe`,其余不变,
-   而且 .exe 走 Windows 侧网络栈,公司代理/VPN 白捡;先验
+   .exe 走 Windows 侧网络栈,公司代理/VPN 白捡;先验
    `/mnt/c/Windows/System32/cmd.exe /c echo hi` 确认互操作开着。
-   ②(兜底)适配层零依赖纯 Node,整个搬去 Windows 原生跑,WSL 里
-   serve 用 `--platform http://<Windows侧地址>:8790` 隔墙喊话
-   (Win11 镜像网络 localhost 互通,老模式用主机 IP)。CLI 输出的
-   \r\n 适配层已归一化。个人令牌 push 走 WSL 的 git,与 CLI 无关;
-6. 启动顺序:填 adapter.json(codehubcli 命令模板)→
-   `npm run adapter` → `curl http://127.0.0.1:8790/`(healthz)→
-   手动 curl 三端点各打一发核对 → `npm run serve -- --platform
-   http://127.0.0.1:8790 --repo <CodeHub 仓> --verify-via-pipeline …`;
-7. 首跑验收(诚实清单口径):推送身份、commit 归属头像、MR 发起人
+   ②(兜底)适配层零依赖纯 Node,整个搬去 Windows 原生跑,管理页
+   平台地址填 `http://<Windows侧地址>:8790`(Win11 镜像网络
+   localhost 互通,老模式用主机 IP)。CLI 输出的 \r\n 已归一化。
+   个人令牌 push 走 WSL 的 git,与 CLI 无关;
+6. 首跑验收(诚实清单口径):推送身份、commit 归属头像、MR 发起人
    **三个都是本人**;CodeHub token 是否兼任 HTTPS push 凭据;
    失败日志是否每个 stage 各留一段摘要(分诊的口粮);
-8. Windows 浏览器访问 `localhost:8787`(WSL2 自动转发);不通再用
+7. Windows 浏览器访问 `localhost:8787`(WSL2 自动转发);不通再用
    WSL IP(`hostname -I`)。
 
 **Linux 容器编译验证(外部已模拟通过)**:2026-08-14 在 Colima

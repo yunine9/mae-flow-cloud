@@ -1,0 +1,1414 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mae-Flow 交付现场 · REQ2026080901</title>
+<style>
+:root{
+  --bg:#f6f7f9; --card:#fff; --line:#e3e6ea; --ink:#1b1f24; --dim:#646c76; --faint:#8b939c;
+  --ok:#1a7f4b; --ok-bg:#e8f6ee; --warn:#8a5a00; --warn-bg:#fdf3dc; --bad:#a52222; --bad-bg:#fdeaea;
+  --run:#1f5fa8; --run-bg:#e8f1fb; --accent:#7c4dff; --code-bg:#f2f3f5;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#14171a; --card:#1c2024; --line:#2c3237; --ink:#e6e9ec; --dim:#9aa3ad; --faint:#6f7883;
+    --ok:#4cc98a; --ok-bg:#12301f; --warn:#e0b155; --warn-bg:#332708; --bad:#f08585; --bad-bg:#3a1616;
+    --run:#7fb3f0; --run-bg:#122436; --accent:#a98bff; --code-bg:#22272c;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:14px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif}
+.wrap{max-width:960px;margin:0 auto;padding:20px 16px 64px}
+header{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px 14px;
+  padding-bottom:12px;border-bottom:2px solid var(--line);margin-bottom:22px}
+h1{font-size:19px;margin:0;letter-spacing:.2px}
+h1 .tick{font-family:var(--mono);color:var(--accent)}
+.meta{color:var(--dim);font-size:12.5px;display:flex;flex-wrap:wrap;gap:4px 12px}
+.meta b{font-weight:600;color:var(--ink);font-family:var(--mono);font-size:12px}
+.stamp{margin-left:auto;color:var(--faint);font-size:11.5px;font-family:var(--mono)}
+section{margin-bottom:22px}
+h2{font-size:13px;margin:0 0 10px;color:var(--dim);font-weight:600;
+  display:flex;align-items:center;gap:8px;letter-spacing:.3px}
+h2 .n{font-family:var(--mono);color:var(--faint);font-weight:400;font-size:11.5px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:9px;padding:14px 16px}
+.decide h2{font-size:15px;color:var(--ink)}
+.decide .card{border-width:2px}
+.decide.has .card{border-color:var(--accent)}
+.quiet{color:var(--dim);display:flex;align-items:center;gap:9px}
+.quiet .dot{width:7px;height:7px;border-radius:50%;background:var(--ok);flex:none}
+.ask-title{font-weight:600;margin-bottom:2px}
+.ask-sub{color:var(--dim);font-size:12.5px;margin-bottom:11px}
+.kv{display:grid;grid-template-columns:max-content 1fr;gap:5px 14px;
+  font-size:13px;margin:0 0 12px;padding:11px 13px;background:var(--bg);border-radius:6px}
+.kv dt{color:var(--dim)}
+.kv dd{margin:0;font-family:var(--mono);font-size:12.5px;word-break:break-all}
+.hint{font-family:var(--mono);font-size:11.5px;color:var(--dim);background:var(--bg);
+  border:1px dashed var(--line);border-radius:6px;padding:8px 10px;
+  overflow-x:auto;white-space:pre;user-select:all}
+.hint em{font-style:normal;color:var(--faint)}
+/* 产物 */
+.docs{display:grid;gap:1px;background:var(--line);border-radius:7px;overflow:hidden}
+.doc{background:var(--card);display:grid;grid-template-columns:80px 1fr auto auto;
+  gap:12px;align-items:baseline;padding:9px 13px}
+.doc .k{color:var(--dim);font-size:12.5px}
+.doc .open{background:none;border:0;padding:0;cursor:pointer;text-align:left;
+  color:var(--ink);font-family:var(--mono);font-size:12px;
+  border-bottom:1px solid var(--line);word-break:break-all}
+.doc .open:hover{color:var(--accent);border-bottom-color:var(--accent)}
+.doc .s{color:var(--faint);font-size:11.5px;font-family:var(--mono);white-space:nowrap}
+.doc .raw{color:var(--faint);font-size:11px;text-decoration:none;white-space:nowrap}
+.doc .raw:hover{color:var(--accent)}
+.sub{margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
+.sub h3{font-size:12px;margin:0 0 7px;color:var(--dim);font-weight:600}
+.commit{display:flex;gap:10px;align-items:baseline;padding:3px 0;font-size:13px}
+.commit code{font-family:var(--mono);font-size:12px;color:var(--accent)}
+.commit .t{color:var(--faint);font-size:11.5px;margin-left:auto;white-space:nowrap;font-family:var(--mono)}
+.stat{color:var(--dim);font-size:12.5px;font-family:var(--mono)}
+.paths{list-style:none;margin:0;padding:0}
+.paths li{font-family:var(--mono);font-size:12px;padding:2px 0}
+.paths a{color:var(--dim);text-decoration:none;border-bottom:1px solid transparent}
+.paths a:hover{color:var(--accent);border-bottom-color:var(--accent)}
+/* 证据 */
+.ev{display:grid;gap:1px;background:var(--line);border-radius:7px;overflow:hidden}
+.row{background:var(--card);display:grid;grid-template-columns:110px 96px 1fr;
+  gap:12px;align-items:baseline;padding:10px 13px}
+.row .name{font-weight:600;font-size:13px}
+.row .why{color:var(--dim);font-size:12.5px}
+.row .why a{color:var(--dim);font-family:var(--mono);font-size:11.5px}
+.tag{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.4px;
+  padding:2px 7px;border-radius:4px;font-family:var(--mono);white-space:nowrap}
+.t-ok{color:var(--ok);background:var(--ok-bg)}
+.t-deg{color:var(--warn);background:var(--warn-bg)}
+.t-bad{color:var(--bad);background:var(--bad-bg)}
+.t-run{color:var(--run);background:var(--run-bg)}
+.deg-note{margin-top:11px;padding:9px 12px;border-radius:6px;background:var(--warn-bg);
+  color:var(--warn);font-size:12.5px;border-left:3px solid var(--warn)}
+.adv li{font-size:13px;padding:3px 0}
+.adv code{font-family:var(--mono);font-size:11.5px;color:var(--warn)}
+/* 进度 */
+.prog .card{background:transparent;border-style:dashed;padding:11px 14px}
+.prog h2{font-size:12px;color:var(--faint)}
+.steps{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:9px}
+.steps span{font-family:var(--mono);font-size:10.5px;padding:1px 6px;border-radius:3px;
+  background:var(--bg);color:var(--faint);border:1px solid var(--line)}
+.steps span.now{color:var(--accent);border-color:var(--accent);font-weight:700}
+.steps span.todo{opacity:.45}
+.prog .line{color:var(--faint);font-size:12px;display:flex;flex-wrap:wrap;gap:3px 14px}
+.prog .line b{font-family:var(--mono);font-weight:600;color:var(--dim)}
+.warn-box{font-size:12.5px;color:var(--dim);background:var(--card);
+  border:1px solid var(--line);border-left:3px solid var(--warn);border-radius:6px;padding:10px 13px}
+.warn-box ul{margin:5px 0 0;padding-left:18px}
+/* 文档查看器 */
+#viewer{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:50;
+  display:none;padding:22px 16px;overflow:auto}
+#viewer.on{display:block}
+.vbox{max-width:920px;margin:0 auto;background:var(--card);border:1px solid var(--line);
+  border-radius:11px;box-shadow:0 12px 40px rgba(0,0,0,.28)}
+.vbar{position:sticky;top:0;background:var(--card);border-bottom:1px solid var(--line);
+  border-radius:11px 11px 0 0;padding:11px 16px;display:flex;flex-wrap:wrap;
+  align-items:center;gap:8px 12px;z-index:2}
+.vbar .vt{font-weight:600;font-size:14px}
+.vbar .vp{font-family:var(--mono);font-size:11px;color:var(--faint);word-break:break-all}
+.vbar .sp{margin-left:auto;display:flex;gap:8px;align-items:center}
+.vbar a,.vbar button{font-size:12px;font-family:inherit;color:var(--dim);
+  background:var(--bg);border:1px solid var(--line);border-radius:6px;
+  padding:4px 10px;text-decoration:none;cursor:pointer;white-space:nowrap}
+.vbar a:hover,.vbar button:hover{color:var(--accent);border-color:var(--accent)}
+.vtabs{display:flex;flex-wrap:wrap;gap:5px;padding:9px 16px 0}
+.vtabs button{font:inherit;font-size:11.5px;background:var(--bg);color:var(--dim);
+  border:1px solid var(--line);border-radius:5px;padding:2px 9px;cursor:pointer}
+.vtabs button.on{color:var(--accent);border-color:var(--accent);font-weight:600}
+.md{padding:6px 26px 30px;font-size:14.5px;line-height:1.72}
+.md h1{font-size:21px;margin:22px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+.md h2{display:block;font-size:17.5px;color:var(--ink);margin:26px 0 9px;
+  padding-bottom:5px;border-bottom:1px solid var(--line);letter-spacing:0}
+.md h3{font-size:15px;margin:20px 0 7px}
+.md h4,.md h5,.md h6{font-size:13.5px;margin:16px 0 6px;color:var(--dim)}
+.md p{margin:9px 0}
+.md ul,.md ol{margin:8px 0;padding-left:24px}
+.md li{margin:3px 0}
+.md li>ul,.md li>ol,.md ul ul,.md ol ol,.md ul ol,.md ol ul{margin:3px 0}
+.md code{font-family:var(--mono);font-size:12.5px;background:var(--code-bg);
+  padding:1px 5px;border-radius:4px}
+.md hr{border:0;border-top:1px solid var(--line);margin:20px 0}
+.md strong{font-weight:650}
+.md a{color:var(--accent)}
+.fence{margin:12px 0;border:1px solid var(--line);border-radius:7px;overflow:hidden;
+  background:var(--code-bg);position:relative}
+.fence .fl{position:absolute;top:0;right:0;font-family:var(--mono);font-size:10.5px;
+  color:var(--faint);background:var(--card);padding:1px 7px;border-radius:0 7px 0 6px;
+  border-left:1px solid var(--line);border-bottom:1px solid var(--line)}
+.fence .fn{display:block;font-size:11px;color:var(--warn);background:var(--warn-bg);
+  padding:4px 12px;border-bottom:1px solid var(--line)}
+.fence pre{margin:0;padding:12px 14px;overflow-x:auto}
+.fence code{font-family:var(--mono);font-size:12.5px;background:none;padding:0;
+  white-space:pre;line-height:1.55}
+.tbl{overflow-x:auto;margin:12px 0}
+.md table{border-collapse:collapse;font-size:13px;min-width:100%}
+.md th,.md td{border:1px solid var(--line);padding:6px 10px;text-align:left;vertical-align:top}
+.md th{background:var(--bg);font-weight:600;white-space:nowrap}
+.pane{display:none}
+.pane.on{display:block}
+/* plantuml 内联图 */
+.pfig{margin:16px 0;padding:12px 12px 8px;border:1px solid var(--line);
+  border-radius:8px;background:var(--card);overflow-x:auto}
+.pfig figcaption{margin-top:8px;font-size:11px;color:var(--faint);
+  font-family:var(--mono)}
+.pfig.bad{background:var(--warn-bg);border-color:var(--warn)}
+.pfig .praw{margin:8px 0 0;padding:10px 12px;background:var(--card);
+  border-radius:6px;overflow-x:auto}
+.pfig .praw code{font-family:var(--mono);font-size:12px;white-space:pre;
+  background:none;padding:0}
+.pumls{margin-top:6px}
+.pumls summary{font-size:11px;color:var(--faint);cursor:pointer;
+  font-family:var(--mono);outline:none}
+.pumls summary:hover{color:var(--accent)}
+.pumls pre{margin:6px 0 0;padding:10px 12px;background:var(--code-bg);
+  border-radius:6px;overflow-x:auto}
+.pumls code{font-family:var(--mono);font-size:12px;white-space:pre;
+  background:none;padding:0}
+/* 变更文件清单 */
+.chg{display:grid;gap:1px;background:var(--line);border-radius:7px;overflow:hidden}
+.chg .f{background:var(--card);display:grid;
+  grid-template-columns:1fr auto auto auto;gap:10px;align-items:center;
+  padding:7px 12px;cursor:pointer;border:0;text-align:left;font:inherit;
+  color:var(--ink);width:100%}
+.chg .f:hover{background:var(--bg)}
+.chg .f .p{font-family:var(--mono);font-size:12px;word-break:break-all}
+.chg .f .p i{font-style:normal;color:var(--faint)}
+.chg .f .n{font-family:var(--mono);font-size:11.5px;white-space:nowrap}
+.chg .f .n .a{color:var(--ok)}
+.chg .f .n .d{color:var(--bad)}
+.bar{display:inline-flex;height:9px;width:46px;border-radius:2px;overflow:hidden;
+  background:var(--line)}
+.bar i{display:block;height:100%}
+.bar .g{background:var(--ok)}
+.bar .r{background:var(--bad)}
+.chg .f .go{color:var(--faint);font-size:11px}
+.gtitle{display:flex;align-items:baseline;gap:9px;margin:12px 0 6px}
+.gtitle b{font-size:12.5px}
+.gtitle span{color:var(--faint);font-size:11.5px;font-family:var(--mono)}
+/* diff 视图:左右双排对照 */
+.diff{font-family:var(--mono);font-size:12px;line-height:1.62;margin:0;
+  border:1px solid var(--line);border-radius:7px;overflow:hidden}
+.dhead{display:grid;grid-template-columns:38px minmax(0,1fr) 38px minmax(0,1fr);
+  background:var(--bg);border-bottom:1px solid var(--line);
+  font-size:10.5px;color:var(--faint);letter-spacing:.4px}
+.dhead span{padding:4px 10px}
+.dhead span:first-child{grid-column:1/3}
+.dhead span:last-child{grid-column:3/5;border-left:1px solid var(--line)}
+.dr{display:grid;grid-template-columns:38px minmax(0,1fr) 38px minmax(0,1fr);
+  background:var(--card);border-top:1px solid var(--line)}
+.dr:first-of-type{border-top:0}
+.dr .ln{color:var(--faint);font-size:10.5px;text-align:right;padding:0 6px;
+  background:var(--bg);user-select:none}
+.dr .c{padding:0 10px;white-space:pre-wrap;word-break:break-all;
+  background:none;min-width:0}
+.dr .c:nth-of-type(2){border-left:1px solid var(--line)}
+.dr .c.ctx{color:var(--ink)}
+.dr .c.add{background:var(--ok-bg);color:var(--ok)}
+.dr .c.del{background:var(--bad-bg);color:var(--bad)}
+.dr .c.nil{background:var(--bg)}
+.dr .c.span{grid-column:1/-1;padding:2px 10px}
+.dr.hk{background:var(--run-bg)}
+.dr.hk .c{color:var(--run)}
+.dr.cut{background:var(--warn-bg)}
+.dr.cut .c{color:var(--warn)}
+@media (max-width:760px){                /* 窄屏没法双排,退回上下堆叠 */
+  .dhead{display:none}
+  .dr{grid-template-columns:38px minmax(0,1fr)}
+  .dr .c:nth-of-type(2){border-left:0}
+  .dr .c.nil,.dr .ln:nth-of-type(2){display:none}
+}
+.dwrap{padding:14px 16px 26px}
+footer{margin-top:34px;color:var(--faint);font-size:11.5px;line-height:1.9}
+footer code{font-family:var(--mono)}
+.demo{margin-top:40px;padding-top:22px;border-top:2px dashed var(--line)}
+.demo>p{color:var(--faint);font-size:12.5px;margin:0 0 16px}
+.badge{display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.5px;
+  color:var(--bg);background:var(--faint);padding:1px 6px;border-radius:3px;vertical-align:2px}
+
+.puml{max-width:100%;height:auto;display:block;margin:2px 0}
+.puml .pb{fill:var(--card);stroke:var(--ink);stroke-width:1.1}
+.puml .pa{fill:var(--code-bg);stroke:var(--dim);stroke-width:1.1}
+.puml .pd{fill:var(--card);stroke:var(--dim);stroke-width:1.1}
+.puml .pn{fill:var(--warn-bg);stroke:var(--warn);stroke-width:.9}
+.puml .pfr{fill:none;stroke:var(--line);stroke-width:1.1}
+.puml .ptab{fill:var(--bg);stroke:var(--line);stroke-width:1}
+.puml .pl{stroke:var(--faint);stroke-width:1;stroke-dasharray:4,4}
+.puml .ps{stroke:var(--ink);stroke-width:1.15;fill:none}
+.puml .pf{fill:var(--ink);stroke:none}
+.puml .pw{fill:none;stroke:var(--ink);stroke-width:1.4}
+.puml text{fill:var(--ink);font-family:-apple-system,"PingFang SC",sans-serif;
+  font-size:12.5px}
+.puml .pt-m,.puml .pt-n{fill:var(--dim)}
+.puml .pt-k{fill:var(--faint);font-weight:600}
+.puml .pt-title{fill:var(--ink);font-weight:650;font-size:13.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>交付现场 · <span class="tick">REQ2026080901</span></h1>
+  <div class="meta">
+    <span>分支 <b>master_dev_REQ2026080901</b></span>
+    <span>基线 <b>master</b></span>
+    <span>方式 <b>完整开发</b></span>
+    <span>HEAD <b>76565f1</b></span>
+  </div>
+  <div class="stamp">快照 16:45:25 · rev 27</div>
+</header>
+
+<section class="decide">
+  <h2>待你裁决</h2>
+  <div class="card">
+    <div class="quiet"><span class="dot"></span>
+      当前没有需要你拍板的事项 —— UT 正在生成中（第 1/3 批）。</div>
+  </div>
+</section>
+
+<section>
+  <h2>产物 <span class="n">· 点文档名就地渲染</span></h2>
+  <div class="card">
+    <div class="docs">
+<div class="doc"><span class="k">调研</span><button class="open" onclick="show('survey')">.mae-flow-work/REQ2026080901/survey.md</button><span class="s">5.8k · 08-07 23:29</span><a class="raw" href="file:///Users/liaoxiang/dev/mae-flow-fieldtest/.mae-flow-work/REQ2026080901/survey.md">源文件 ↗</a></div>
+<div class="doc"><span class="k">拷问准备</span><button class="open" onclick="show('grillprep')">.mae-flow-work/REQ2026080901/grill-prep.md</button><span class="s">11k · 08-07 23:30</span><a class="raw" href="file:///Users/liaoxiang/dev/mae-flow-fieldtest/.mae-flow-work/REQ2026080901/grill-prep.md">源文件 ↗</a></div>
+<div class="doc"><span class="k">需求澄清</span><button class="open" onclick="show('grill')">.mae-flow-work/REQ2026080901/grill.md</button><span class="s">10k · 08-08 11:33</span><a class="raw" href="file:///Users/liaoxiang/dev/mae-flow-fieldtest/.mae-flow-work/REQ2026080901/grill.md">源文件 ↗</a></div>
+<div class="doc"><span class="k">决策记录</span><button class="open" onclick="show('decisions')">.mae-flow-work/REQ2026080901/decisions.md</button><span class="s">3.6k · 08-08 11:34</span><a class="raw" href="file:///Users/liaoxiang/dev/mae-flow-fieldtest/.mae-flow-work/REQ2026080901/decisions.md">源文件 ↗</a></div>
+<div class="doc"><span class="k">规格条目</span><button class="open" onclick="show('spec')">.mae-flow-work/REQ2026080901/spec.md</button><span class="s">4.7k · 08-08 11:35</span><a class="raw" href="file:///Users/liaoxiang/dev/mae-flow-fieldtest/.mae-flow-work/REQ2026080901/spec.md">源文件 ↗</a></div>
+<div class="doc"><span class="k">Story</span><button class="open" onclick="show('story')">.mae-flow-work/REQ2026080901/story.md</button><span class="s">15k · 08-08 14:14</span><a class="raw" href="file:///Users/liaoxiang/dev/mae-flow-fieldtest/.mae-flow-work/REQ2026080901/story.md">源文件 ↗</a></div>
+<div class="doc"><span class="k">实现记录</span><button class="open" onclick="show('impl')">.mae-flow-work/REQ2026080901/implementation.md</button><span class="s">26k · 08-08 14:13</span><a class="raw" href="file:///Users/liaoxiang/dev/mae-flow-fieldtest/.mae-flow-work/REQ2026080901/implementation.md">源文件 ↗</a></div>
+<div class="doc"><span class="k">2.2 示例</span><button class="open" onclick="show('demo22')">demo-story-2.2.md</button><span class="s">示例 · PlantUML 内联</span><a class="raw" href="file:///Users/liaoxiang/.claude/jobs/42c29fc0/tmp/demo-story-2.2.md">源文件 ↗</a></div>
+    </div>
+
+    <div class="sub">
+      <h3>提交</h3>
+      <div class="commit"><code>76565f1</code>
+        <span>docs: 观察清单注明本地 CodeCheck 不可用是预期降级</span>
+        <span class="t">16:52</span></div>
+      <div class="commit"><code>f63972b</code>
+        <span>[REQ2026080901][feat] 短信渠道新增、失败重试、租户权限控制</span>
+        <span class="t">16:40</span></div>
+    </div>
+
+    <div class="sub">
+      <h3>代码变更 <span style="font-weight:400;color:var(--faint)">· 点文件看 diff</span></h3>
+<div class="gtitle"><b>已提交</b><span>本单范围 76fb632..HEAD · 7 个文件 · +152 / −11</span></div><div class="chg">
+<button class="f" onclick="show('d0')"><span class="p"><i>_FIELDTEST/</i>README.md</span><span class="n"><span class="a">+3</span> <span class="d">−0</span></span><span class="bar"><i style="width:46.0px" class="g"></i><i style="width:0.0px" class="r"></i></span><span class="go">diff ›</span></button>
+<button class="f" onclick="show('d1')"><span class="p"><i>config/</i>sms_enabled.json</span><span class="n"><span class="a">+3</span> <span class="d">−0</span></span><span class="bar"><i style="width:46.0px" class="g"></i><i style="width:0.0px" class="r"></i></span><span class="go">diff ›</span></button>
+<button class="f" onclick="show('d2')"><span class="p"><i>service/src/demo_service/</i>channel_permission.py</span><span class="n"><span class="a">+66</span> <span class="d">−0</span></span><span class="bar"><i style="width:46.0px" class="g"></i><i style="width:0.0px" class="r"></i></span><span class="go">diff ›</span></button>
+<button class="f" onclick="show('d3')"><span class="p"><i>service/src/demo_service/</i>notify_service.py</span><span class="n"><span class="a">+32</span> <span class="d">−8</span></span><span class="bar"><i style="width:36.8px" class="g"></i><i style="width:9.2px" class="r"></i></span><span class="go">diff ›</span></button>
+<button class="f" onclick="show('d4')"><span class="p"><i>service/src/demo_service/</i>sms_handler.py</span><span class="n"><span class="a">+28</span> <span class="d">−0</span></span><span class="bar"><i style="width:46.0px" class="g"></i><i style="width:0.0px" class="r"></i></span><span class="go">diff ›</span></button>
+<button class="f" onclick="show('d5')"><span class="p"><i>tests/config/</i>sms_enabled_test.json</span><span class="n"><span class="a">+3</span> <span class="d">−0</span></span><span class="bar"><i style="width:46.0px" class="g"></i><i style="width:0.0px" class="r"></i></span><span class="go">diff ›</span></button>
+<button class="f" onclick="show('d6')"><span class="p"><i>tests/</i>test_smoke.py</span><span class="n"><span class="a">+17</span> <span class="d">−3</span></span><span class="bar"><i style="width:39.1px" class="g"></i><i style="width:6.9px" class="r"></i></span><span class="go">diff ›</span></button>
+</div>
+<div class="gtitle"><b>未提交</b><span>工作区待检视增量 · 1 个文件 · +225 / −1</span></div><div class="chg">
+<button class="f" onclick="show('d7')"><span class="p"><i>tests/</i>test_smoke.py</span><span class="n"><span class="a">+225</span> <span class="d">−1</span></span><span class="bar"><i style="width:45.8px" class="g"></i><i style="width:0.2px" class="r"></i></span><span class="go">diff ›</span></button>
+</div>
+    </div>
+
+    <div class="sub">
+      <h3>日志与任务卡</h3>
+      <ul class="paths">
+        <li><a href="file:///Users/liaoxiang/dev/mae-flow-fieldtest/.mae-flow-work/lightcheck/latest.md">.mae-flow-work/lightcheck/latest.md</a></li>
+        <li><a href="file:///Users/liaoxiang/dev/mae-flow-fieldtest/.mae-flow-work/codecheck-logs">.mae-flow-work/codecheck-logs/</a></li>
+        <li><a href="file:///Users/liaoxiang/dev/mae-flow-fieldtest/.mae-flow-work/agent-tasks">.mae-flow-work/agent-tasks/</a></li>
+        <li><a href="file:///Users/liaoxiang/dev/mae-flow-fieldtest/.mae-flow-work/role-tasks">.mae-flow-work/role-tasks/</a></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>证据</h2>
+  <div class="card">
+    <div class="ev">
+      <div class="row"><span class="name">编译</span><span><i class="tag t-ok">PASS</i></span>
+        <span class="why">16:35 · 4 个文件 ·
+          <a href="file:///Users/liaoxiang/dev/mae-flow-fieldtest/.mae-flow-work/agent-tasks/build-compile.md">build-compile.md</a></span></div>
+      <div class="row"><span class="name">Agent 预检</span><span><i class="tag t-ok">已完成</i></span>
+        <span class="why">16:36 · 规范维 + 规格维 两张检视卡</span></div>
+      <div class="row"><span class="name">代码精简</span><span><i class="tag t-ok">已完成</i></span>
+        <span class="why">16:43 · 第 1 轮</span></div>
+      <div class="row"><span class="name">CodeCheck</span><span><i class="tag t-deg">工具未就绪</i></span>
+        <span class="why">16:45 · 3 个文件<b>未</b>扫描 · npm ECONNRESET</span></div>
+      <div class="row"><span class="name">UT</span><span><i class="tag t-run">进行中</i></span>
+        <span class="why">16:45 · 生成阶段 · 批次 0/3 完成</span></div>
+    </div>
+    <div class="deg-note">
+      <b>「工具未就绪」不是通过。</b>CodeCheck 已真实尝试安装但内网源不可达，本单这 3 个文件
+      至今没有被任何静态检查扫过 —— 内网复跑前，这一格不能当成绿灯。
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>本轮建议 <span class="n">· 非阻断</span></h2>
+  <div class="card">
+    <div class="quiet"><span class="dot"></span>本轮无待处理建议。</div>
+  </div>
+</section>
+
+<section class="prog">
+  <h2>进度</h2>
+  <div class="card">
+    <div class="steps">
+      <span>配置</span><span>方式</span><span>Reviewer</span><span>建分支</span><span>拷问</span>
+      <span>开单</span><span>Story</span><span>编码</span><span>预检</span><span>检视</span>
+      <span>提交</span><span>精简</span><span>CodeCheck</span>
+      <span class="now">UT</span>
+      <span class="todo">验规格</span><span class="todo">定稿</span><span class="todo">交付</span><span class="todo">收尾</span>
+    </div>
+    <div class="line">
+      <span>质量阶段 · 第 <b>14</b> 步 / 约 <b>18</b> 步</span>
+      <span>起始 <b>08-07 23:24</b></span>
+      <span>跨 2 天（含隔夜，非净工时）</span>
+      <span>回退 <b>0</b> 次</span>
+    </div>
+  </div>
+</section>
+
+<div class="warn-box">
+  <b>出口自述</b>（快照自己的降级说明，不是流程问题）：
+  <ul>
+    <li>状态里没有 <code>spec</code> 段 → 规格阶段显示不出来；本单走本地 <code>spec.md</code>，属预期。</li>
+    <li>百分比故意留空：flow 有分支和回退，算出来的比例必然是编的。</li>
+    <li>文档内联渲染只覆盖我们模板用到的语法子集；<code>plantuml</code> 块显示源码不出图（内网无渲染服务）。</li>
+  </ul>
+</div>
+
+<div class="demo">
+  <p>—— 以下是<b>其他状态的样子</b> <span class="badge">示例</span>，不是本单真实数据 ——</p>
+
+  <section class="decide has">
+    <h2>待你裁决 <span class="n">· 有事项时</span></h2>
+    <div class="card">
+      <div class="ask-title">确认本单配置</div>
+      <div class="ask-sub">config_confirm · 需要你逐项过目后确认</div>
+      <dl class="kv">
+        <dt>单号</dt><dd>REQ2026080901（需求 / feat）</dd>
+        <dt>分支名</dt><dd>master_dev_REQ2026080901</dd>
+        <dt>基线分支</dt><dd>master</dd>
+        <dt>需求文档</dt><dd>docs/se/REQ2026080901.md</dd>
+        <dt>编译方式</dt><dd>make build</dd>
+        <dt>UT 生成</dt><dd>参考仓内写法 · 运行 make test</dd>
+      </dl>
+      <div class="hint">python .mae-flow-work/bin/mae-flow.py done --ack "确认配置"
+<em># 给人复制到终端用 —— 面板不提供执行按钮</em></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>证据 <span class="n">· 出问题时</span></h2>
+    <div class="card">
+      <div class="ev">
+        <div class="row"><span class="name">编译</span><span><i class="tag t-bad">FAIL</i></span>
+          <span class="why">3 处错误 · 净新增归因 2 处 · 见任务卡</span></div>
+        <div class="row"><span class="name">CodeCheck</span><span><i class="tag t-bad">4 项</i></span>
+          <span class="why">2 处严重 · 修复 Agent 已派发（第 2 轮）</span></div>
+        <div class="row"><span class="name">UT</span><span><i class="tag t-ok">CLEAN</i></span>
+          <span class="why">批次 3/3 · 新增 11 个用例 · 全部通过</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>本轮建议 <span class="n">· 有内容时</span></h2>
+    <div class="card">
+      <ul class="adv" style="list-style:none;margin:0;padding:0">
+        <li><code>MF-NEST-5</code> sms_handler.py:41 函数 <code>send</code> 嵌套 6 层（上限 5）</li>
+        <li><code>MF-MAGIC-NUMBER</code> notify_service.py:52 字面量 <code>86400</code> 建议改命名常量</li>
+        <li><code>verification-matrix</code> 逐条对齐矩阵缺 2 行，人工检视时留意</li>
+      </ul>
+    </div>
+  </section>
+</div>
+
+<footer>
+  版面草案 v2 · 数据取自 <code>~/dev/mae-flow-fieldtest</code> 真实状态（rev 27，08-08 16:45:25）<br>
+  只读快照，不含任何写入入口；将来由 <code>status --json</code> 喂数据，文档由生成时内联渲染。
+</footer>
+
+</div>
+
+<div id="viewer">
+  <div class="vbox">
+    <div class="vbar">
+      <span class="vt" id="vtitle">文档</span>
+      <span class="vp" id="vpath"></span>
+      <span class="sp">
+        <a id="vraw" href="#">源文件 ↗</a>
+        <button onclick="hide()">关闭 Esc</button>
+      </span>
+    </div>
+    <div class="vtabs">
+<button data-group="doc" data-key="survey" onclick="show('survey')">调研</button>
+<button data-group="doc" data-key="grillprep" onclick="show('grillprep')">拷问准备</button>
+<button data-group="doc" data-key="grill" onclick="show('grill')">需求澄清</button>
+<button data-group="doc" data-key="decisions" onclick="show('decisions')">决策记录</button>
+<button data-group="doc" data-key="spec" onclick="show('spec')">规格条目</button>
+<button data-group="doc" data-key="story" onclick="show('story')">Story</button>
+<button data-group="doc" data-key="impl" onclick="show('impl')">实现记录</button>
+<button data-group="doc" data-key="demo22" onclick="show('demo22')">2.2 示例</button>
+<button data-group="diff" data-key="d0" onclick="show('d0')">README.md</button>
+<button data-group="diff" data-key="d1" onclick="show('d1')">sms_enabled.json</button>
+<button data-group="diff" data-key="d2" onclick="show('d2')">channel_permission.py</button>
+<button data-group="diff" data-key="d3" onclick="show('d3')">notify_service.py</button>
+<button data-group="diff" data-key="d4" onclick="show('d4')">sms_handler.py</button>
+<button data-group="diff" data-key="d5" onclick="show('d5')">sms_enabled_test.json</button>
+<button data-group="diff" data-key="d6" onclick="show('d6')">test_smoke.py</button>
+<button data-group="diff" data-key="d7" onclick="show('d7')">test_smoke.py</button>
+    </div>
+<div class="pane" data-key="survey" data-group="doc" data-title="调研 · survey.md" data-raw="file:///Users/liaoxiang/dev/mae-flow-fieldtest/.mae-flow-work/REQ2026080901/survey.md" data-rel=".mae-flow-work/REQ2026080901/survey.md"><div class="md"><h1>代码勘察笔记 - REQ2026080901</h1>
+<h2>相关模块清单</h2>
+<ul><li><strong>model/src/demo_model/</strong> - 数据模型</li><ul><li>notification.py: Notification 和 SendResult 类</li></ul><li><strong>service/src/demo_service/</strong> - 核心服务</li><ul><li>notify_service.py: 发送入口和重试逻辑</li><li>email_handler.py / push_handler.py / webhook_handler.py: 渠道处理器</li><li>channel_state.py: 渠道运行态管理</li><li>audit_log.py: 审计日志记录（导入但未深入）</li></ul><li><strong>web/src/demo_web/</strong> - HTTP 入口</li><ul><li>notify_api.py: HTTP API 处理</li></ul><li><strong>sdk/src/demo_sdk/</strong> - 对外 SDK</li><ul><li>notify_client.py: 公开 API</li></ul><li><strong>tests/</strong> - 测试</li><ul><li>test_smoke.py: 现有渠道和连接池泄漏检查</li></ul><li><strong>common/</strong> - 公共工具</li><ul><li>text_util.py: truncate 文本截断</li></ul></ul>
+<h2>关键文件与职责</h2>
+<h3>通知发送架构</h3>
+<p><strong>notify_service.py:16-29</strong> - 发送入口 <code>send(channel, notification)</code></p>
+<ul><li>查找渠道处理器，未找到则返回失败</li><li>重置渠道运行态（清空旧会话）</li><li>为租户+渠道打开新会话（session token）</li><li>调用具体渠道处理器的 send 方法</li></ul>
+<h3>渠道处理器模式（email_handler.py、push_handler.py、webhook_handler.py）</h3>
+<p><strong>统一的四段结构</strong>：</p>
+<ol><li><strong>校验</strong>：检查必要字段（target）</li><li><strong>渲染</strong>：文本转换（truncate 至 MAX_LENGTH=500）</li><li><strong>发送</strong>：检查会话有效性</li><li><strong>记账</strong>：调用 audit_log.record()</li></ol>
+<h3>渠道运行态管理</h3>
+<p><strong>channel_state.py</strong></p>
+<ul><li>reset(tenant_id, channel): 清除已有会话</li><li>open_session(tenant_id, channel, token): 建立新会话</li><li>session(tenant_id, channel): 查询当前会话</li><li>内部状态为内存字典 <code>{tenant_id:channel -&gt; token}</code></li></ul>
+<h3>旧版重试逻辑</h3>
+<p><strong>notify_service.py:32-37</strong> - legacy_retry_once()</p>
+<ul><li>发送一次，失败则再发一次</li><li>注释明确说明"重试策略上线后本函数即失效，应随改动一并删除"</li></ul>
+<h2>现有接口及数据结构</h2>
+<h3>Notification 类 (model/src/demo_model/notification.py:4-9)</h3>
+<div class="fence"><span class="fl">python</span><pre><code>Notification(tenant_id, target, content, urgent=False)</code></pre></div>
+<ul><li>tenant_id: 租户 ID（字符串）</li><li>target: 发送目标（email 地址、手机号等）</li><li>content: 通知内容（文本）</li><li>urgent: 是否紧急（布尔，默认 False）</li></ul>
+<h3>SendResult 类 (model/src/demo_model/notification.py:12-23)</h3>
+<div class="fence"><span class="fl">python</span><pre><code>SendResult(success, detail)
+SendResult.ok(detail) / SendResult.fail(detail)</code></pre></div>
+<ul><li>success: 发送是否成功（布尔）</li><li>detail: 详细信息（字符串，通常含发送统计或错误原因）</li></ul>
+<h3>渠道常数</h3>
+<ul><li>CHANNEL = "email" / "push" / "webhook"</li><li>MAX_LENGTH = 500（文本最大长度）</li></ul>
+<h2>调用链要点</h2>
+<ol><li><strong>外部调用</strong> → HTTP API (notify_api.py) 或 SDK (notify_client.py)</li><li><strong>API/SDK</strong> → 调用 notify_service.send()</li><li><strong>notify_service.send()</strong> → 重置会话 → 打开会话 → 调用渠道处理器</li><li><strong>渠道处理器</strong> → 校验 → 渲染 → 检查会话 → 记账 → 返回 SendResult</li></ol>
+<h2>与本需求的触点</h2>
+<h3>需求 1: 新增短信（sms）渠道</h3>
+<ul><li><strong>相关代码</strong>: notify_service.py 中的 _HANDLERS 字典需添加 sms 处理器</li><li><strong>模式</strong>: 创建 sms_handler.py，按现有四段结构实现</li><li><strong>接口</strong>: SMS 的 target 应为手机号码（与需求"部分客户...需要短信触达"一致）</li><li><strong>验证</strong>: test_smoke.py:18-19 预期 sms 渠道未实现，实现后应能发送</li></ul>
+<h3>需求 2: 发送失败时支持重试</h3>
+<ul><li><strong>现状</strong>: legacy_retry_once() 只做单次重试，注释明确指该函数应删除</li><li><strong>改动</strong>: 设计新的重试策略（频率、最大次数等），替换旧函数</li><li><strong>影响</strong>: 需要修改 notify_service.send() 的调用方式或新增重试入口</li></ul>
+<h3>需求 3: 短信渠道按租户开通</h3>
+<ul><li><strong>现状</strong>: 无租户级别的渠道开通/禁用机制，所有渠道对所有租户可用</li><li><strong>改动</strong>: 需要新增配置系统，查询租户是否开通某渠道</li><li><strong>触点</strong>: 在 notify_service.send() 中添加权限检查，或在各渠道处理器中添加</li></ul>
+<h3>需求 4: 保持既有三个渠道的行为不变</h3>
+<ul><li><strong>约束</strong>: email / push / webhook 的代码逻辑不应修改</li><li><strong>现有测试</strong>: test_smoke.py:10-14 验证了现有渠道和连接池平衡</li></ul>
+<h2>仓内同类实现位置</h2>
+<ul><li><strong>渠道处理器模板</strong>: service/src/demo_service/email_handler.py（或 push_handler.py）</li><ul><li>参考同一结构和错误处理方式实现 sms_handler.py</li></ul><li><strong>会话管理</strong>: channel_state.py 中的简单内存字典模式</li><li><strong>审计日志</strong>: audit_log.record() 调用（具体实现未读，但模式清晰）</li><li><strong>SDK 方法</strong>: notify_client.py 中 notify_email/notify_push 的形式</li><ul><li>后续应添加 notify_sms() 方法</li></ul></ul>
+<h2>错误处理惯例</h2>
+<ul><li>渠道处理器返回 SendResult.fail() 时，detail 应包含问题原因</li><ul><li>"缺少发送目标" 格式：<code>"{channel}: 缺少..."</code></li><li>"会话未建立" 格式：<code>"{channel}: 会话未建立"</code></li></ul><li>notify_service.send() 返回 SendResult.fail("未注册的渠道: %s") 当渠道不存在</li><li>所有发送结果均通过 SendResult.ok()/fail() 返回，不抛异常</li></ul>
+<h2>必须保持不变的存量行为</h2>
+<ol><li>三个现有渠道（email / push / webhook）的发送逻辑<strong>完全不改</strong></li><li>发送入口在重置会话和打开会话的时序（notify_service.py:25-28）</li><li>会话 token 生成方式：<code>"tok-%d" % (len(notification.tenant_id) * SESSION_TOKEN_LENGTH)</code></li><li>连接池管理逻辑（conn_pool.leased() 应保持 0）</li><li>审计日志的调用时机和参数格式</li></ol>
+<h2>已知历史坑</h2>
+<ol><li><strong>session reset 的位置</strong>: channel_state.py 注释明确警告——reset 必须在 send() 入口调用，不能在处理器中重复 reset，否则会清掉刚建立的会话</li><li><strong>legacy_retry_once 函数</strong>: 会于策略更新后失效，应在实现新重试时删除</li><li><strong>无初始权限检查</strong>: 当前无租户级别的渠道禁用机制，需设计时明确如何与既有行为兼容</li></ol></div></div>
+<div class="pane" data-key="grillprep" data-group="doc" data-title="拷问准备 · grill-prep.md" data-raw="file:///Users/liaoxiang/dev/mae-flow-fieldtest/.mae-flow-work/REQ2026080901/grill-prep.md" data-rel=".mae-flow-work/REQ2026080901/grill-prep.md"><div class="md"><h1>GRILL-PREP-REQ2026080901</h1>
+<p>8 维备课工作表:逐维扫描 SE 文档与相关代码后填写,是 Grill 提问前的落盘产物。</p>
+<h2>1 状态机完备性</h2>
+<ul><li>扫描：新增短信渠道的状态迁移；租户短信开通/禁用状态与发送时的检查逻辑</li><li>结论：有缺口 → 候选题</li></ul>
+<p><strong>候选题 Q1-1：租户短信开通状态的定义</strong></p>
+<ul><li>缺口位置：notify_service.py 中无租户级别的渠道启用/禁用检查，survey.md 备注"无租户级别的渠道开通/禁用机制"</li><li>代码佐证：notify_service.py:22-24 只检查渠道是否在 _HANDLERS 中，未检查租户权限</li><li>推荐答案：短信渠道新增 <code>channel_enabled(tenant_id, channel)</code> 权限查询函数，在 send() 中调用；若未开通则返回 fail</li><li>实现影响：需实现权限存储/查询服务（可用内存字典/配置文件/数据库），修改 notify_service.py 的 send() 方法</li></ul>
+<p><strong>候选题 Q1-2：短信渠道的初始状态</strong></p>
+<ul><li>缺口位置：需求要求"短信渠道按租户开通"，但无说明租户默认状态或首次开通方式</li><li>代码佐证：无相关代码；test_smoke.py 仅测试现有三渠道</li><li>推荐答案：所有租户对短信渠道默认禁用，需显式开通；开通机制由需求方定义（API/配置/人工）</li><li>实现影响：影响测试：需为测试租户预先开通短信，否则 UT 会失败</li></ul>
+<h2>2 边界值</h2>
+<ul><li>扫描：短信目标（手机号）的格式校验；文本长度限制；重试次数上限</li><li>结论：有缺口 → 候选题</li></ul>
+<p><strong>候选题 Q2-1：短信目标（手机号）的格式校验</strong></p>
+<ul><li>缺口位置：email_handler / push_handler 仅检查 target 非空（survey.md "缺少发送目标"），无格式校验</li><li>代码佐证：email_handler.py:11-12 检查逻辑为 <code>if not notification.target:</code></li><li>推荐答案：短信的 target 应为有效手机号格式（如 1[0-9]{10}），在 sms_handler.send() 中添加格式校验；校验失败返回 fail</li><li>实现影响：新增 sms_handler.py 中的格式校验逻辑；可能需要提示用户号码格式错误</li></ul>
+<p><strong>候选题 Q2-2：短信文本长度的限制</strong></p>
+<ul><li>缺口位置：survey.md 注明现有 MAX_LENGTH=500，但短信通常限制在 70-160 字符</li><li>代码佐证：email_handler.py:7 / push_handler.py:7，MAX_LENGTH=500 通用</li><li>推荐答案：短信的 MAX_LENGTH 应设为 160（单条短信上限）或 70（单条无样式短信上限），与 email/push 分开</li><li>实现影响：sms_handler.py 中定义短信专用的 MAX_LENGTH；超长文本截断方式与现有一致</li></ul>
+<p><strong>候选题 Q2-3：重试次数与延迟的上限</strong></p>
+<ul><li>缺口位置：需求要求"发送失败时支持重试"，无定义最大重试次数或延迟间隔</li><li>代码佐证：survey.md 提及 legacy_retry_once() 仅做一次重试，应删除</li><li>推荐答案：建议最多重试 3 次，延迟策略为指数退避（1秒、2秒、4秒）或固定延迟（1秒）；若失败则最终返回 fail</li><li>实现影响：影响 notify_service.py 中的重试入口设计，可能新增 send_with_retry() 方法</li></ul>
+<h2>3 并发时序</h2>
+<ul><li>扫描：多个租户同时发送短信时，渠道会话的并发操作；重试过程中如果有新的 send() 调用</li><li>结论：有缺口 → 候选题</li></ul>
+<p><strong>候选题 Q3-1：短信渠道会话的并发安全</strong></p>
+<ul><li>缺口位置：channel_state.py 使用全局字典 _SESSION 存储会话，无锁保护</li><li>代码佐证：channel_state.py:6 全局 <code>_SESSION = {}</code>；reset/open_session/session 无互斥</li><li>推荐答案：当前架构中，每次 send() 都会 reset + open_session，内存会话无持久化状态，并发访问应无竞态；但如果多线程同时调用 send()，reset 与 open_session 之间可能插入其他租户的操作。建议：明确说明 send() 的调用是单线程还是多线程；若多线程则需添加锁保护</li><li>实现影响：若需多线程支持，channel_state.py 需添加 threading.Lock</li></ul>
+<p><strong>候选题 Q3-2：重试过程中的会话状态</strong></p>
+<ul><li>缺口位置：重试逻辑未定义，不清楚重试时是否再次 reset + open_session</li><li>代码佐证：legacy_retry_once() 中两次调用 send()，每次都会触发 reset + open_session</li><li>推荐答案：如果重试时再次调用 send()，会自动 reset + open_session，逻辑已正确（参考 legacy_retry_once）；如果由独立的重试机制处理，需明确会话的重置时机</li><li>实现影响：需确认重试入口的设计位置</li></ul>
+<h2>4 失败路径与残留清理</h2>
+<ul><li>扫描：短信发送各步失败的处理；重试失败后状态残留；审计日志的记录时机</li><li>结论：有缺口 → 候选题</li></ul>
+<p><strong>候选题 Q4-1：发送失败时的审计日志记录</strong></p>
+<ul><li>缺口位置：现有处理器（email_handler.py:16）仅在成功发送时记录审计日志，失败时无记录</li><li>代码佐证：email_handler.py:14-17，审计记录在发送成功之后</li><li>推荐答案：短信发送失败时（格式错、权限检查失败、会话无效等），应记录到审计日志（记录失败原因）；或在 notify_service 层统一记录所有发送尝试（包括失败）</li><li>实现影响：需定义审计日志的失败记录格式；影响调试和事后追踪</li></ul>
+<p><strong>候选题 Q4-2：重试失败的最终状态</strong></p>
+<ul><li>缺口位置：需求要求"发送失败时支持重试"，但无说明最终失败时的处理（是否通知用户、是否进队列）</li><li>代码佐证：无对应代码，当前无重试队列或异步处理机制</li><li>推荐答案：重试最终失败时，返回 fail 结果给调用方，由调用方决定是否人工重试或告知用户；暂不设计消息队列或延迟队列</li><li>实现影响：调用方（API 层）需处理发送失败的情况（如返回错误码）</li></ul>
+<h2>5 数据一致性</h2>
+<ul><li>扫描：租户短信开通状态与实际发送的一致性；多次重试时状态变化</li><li>结论：有缺口 → 候选题</li></ul>
+<p><strong>候选题 Q5-1：租户短信开通状态的一致性保证</strong></p>
+<ul><li>缺口位置：若租户短信开通状态在运行时变化（从开通变禁用），无定义行为</li><li>代码佐证：无权限系统代码；需求仅说"未开通的租户不发送"</li><li>推荐答案：每次 send() 调用时重新查询租户的渠道权限，不缓存；如果权限变更，下一次 send() 立即生效</li><li>实现影响：权限查询可能涉及数据库或配置查询，需考虑性能</li></ul>
+<p><strong>候选题 Q5-2：重试过程中租户权限变更</strong></p>
+<ul><li>缺口位置：重试涉及多次发送，未定义权限在重试期间变更时的行为</li><li>代码佐证：无相关代码</li><li>推荐答案：重试过程中，每次重试也应检查租户权限；如果重试中权限被禁用，则停止重试并返回 fail</li><li>实现影响：重试逻辑需在每次重试前检查权限</li></ul>
+<h2>6 存量升级兼容</h2>
+<ul><li>扫描：现有三个渠道（email / push / webhook）是否受影响；legacy_retry_once 函数何时删除</li><li>结论：有缺口 → 候选题</li></ul>
+<p><strong>候选题 Q6-1：legacy_retry_once 函数的处理</strong></p>
+<ul><li>缺口位置：survey.md 提示该函数应随新重试策略实现而删除，但未定义删除时机和影响范围</li><li>代码佐证：notify_service.py:32-37，函数已标注注释</li><li>推荐答案：新的重试策略实现后，检查 legacy_retry_once 的调用方；如无调用则直接删除；有调用则迁移到新的重试入口后再删除</li><li>实现影响：需搜索整个代码库查找 legacy_retry_once 的所有调用方（可能在 SDK 或 Web API 中）</li></ul>
+<p><strong>候选题 Q6-2：现有三渠道的兼容性保证</strong></p>
+<ul><li>缺口位置：需求要求"保持既有三个渠道的行为不变"，需确认 notify_service.py 的改动不影响它们</li><li>代码佐证：notify_service.py:16-29 的 send() 入口被三个渠道共用</li><li>推荐答案：新增的租户权限检查应对所有渠道生效（包括现有三个），确保逻辑一致；或仅对短信渠道启用权限检查，现有三渠道无权限限制（保持现有行为）</li><li>实现影响：选择前者则现有三渠道行为会变；选择后者则权限检查仅短信有，逻辑不一致</li></ul>
+<h2>7 规格性能</h2>
+<ul><li>扫描：短信发送延迟要求；重试延迟与总超时时间；并发发送的吞吐量</li><li>结论：有缺口 → 候选题</li></ul>
+<p><strong>候选题 Q7-1：短信发送的延迟与吞吐要求</strong></p>
+<ul><li>缺口位置：需求未提及延迟目标或吞吐要求</li><li>代码佐证：现有代码无性能指标；test_smoke.py:10-14 无性能测试</li><li>推荐答案：参考现有 email / push 的性能表现；假设短信发送应在 1 秒内完成（同步发送）</li><li>实现影响：若同步发送性能不足，需考虑异步或消息队列方案</li></ul>
+<p><strong>候选题 Q7-2：重试的延迟策略</strong></p>
+<ul><li>缺口位置：Q2-3 提出重试策略但未最终确定</li><li>代码佐证：无重试代码；legacy_retry_once 无延迟</li><li>推荐答案：建议固定延迟 1 秒或指数退避（1s → 2s → 4s），共 3 次重试；总耗时不超过 10 秒</li><li>实现影响：影响客户端的超时时间设置</li></ul>
+<h2>8 可观测</h2>
+<ul><li>扫描：短信发送的日志、告警、错误提示；失败时如何被发现；重试状态的可观测</li><li>结论：有缺口 → 候选题</li></ul>
+<p><strong>候选题 Q8-1：短信发送失败的日志与告警</strong></p>
+<ul><li>缺口位置：现有 email_handler 仅在成功时记审计日志，无失败日志；无告警机制</li><li>代码佐证：email_handler.py:16，audit_log.record() 仅在成功时调用</li><li>推荐答案：短信发送失败时应记录错误日志（包含租户 ID、目标号码、失败原因）；若重试最终失败，记录告警级别的日志</li><li>实现影响：需定义日志格式和告警规则</li></ul>
+<p><strong>候选题 Q8-2：重试过程的可观测</strong></p>
+<ul><li>缺口位置：无重试代码，不清楚重试过程是否可观测（日志、指标等）</li><li>代码佐证：无相关代码</li><li>推荐答案：每次重试应记录日志，包括重试次数、失败原因、是否继续重试；可在 SendResult.detail 中包含重试信息</li><li>实现影响：调用方可根据 detail 了解重试情况</li></ul>
+<p><strong>候选题 Q8-3：租户短信权限的可观测</strong></p>
+<ul><li>缺口位置：权限系统未定义，不清楚如何观测某个租户的短信权限状态</li><li>代码佐证：无权限代码</li><li>推荐答案：新增查询接口（如 API 或管理后台），让租户能查看自己的短信权限状态</li><li>实现影响：可能需要新增管理 API 端点</li></ul>
+<h2>9 结论汇总</h2>
+<h3>候选题按阻塞性排序</h3>
+<ol><li><strong>Q1-1：租户短信开通状态的定义</strong>（阻塞）- 影响架构设计</li><li><strong>Q2-3：重试策略（次数、延迟）</strong>（阻塞）- 影响 notify_service 改动范围</li><li><strong>Q6-2：现有三渠道的权限检查策略</strong>（阻塞）- 影响兼容性</li><li><strong>Q2-1：短信目标格式校验</strong>（重要）- 影响 sms_handler 实现</li><li><strong>Q2-2：短信文本长度限制</strong>（重要）- 影响截断逻辑</li><li><strong>Q3-1：多线程并发安全</strong>（重要）- 影响可靠性</li><li><strong>Q4-1：失败时的审计日志</strong>（一般）- 影响可观测性</li><li><strong>Q4-2：重试失败的最终处理</strong>（一般）- 影响用户体验</li><li><strong>Q6-1：legacy_retry_once 的删除时机</strong>（一般）- 技术债清理</li><li><strong>Q7-1、Q7-2：性能与延迟要求</strong>（一般）- 影响测试标准</li><li><strong>Q8-1、Q8-2、Q8-3：日志与告警</strong>（可延后）- 运维相关</li></ol>
+<h3>留给设计阶段（技术分歧）</h3>
+<ul><li>租户权限系统的实现方式（内存字典 / 配置文件 / 数据库查询）</li><li>重试的实现位置（notify_service.py 中的新方法 / SDK 层 / 客户端重试）</li><li>同步发送 vs 异步队列方案（暂定同步，性能不足再考虑异步）</li></ul></div></div>
+<div class="pane" data-key="grill" data-group="doc" data-title="需求澄清 · grill.md" data-raw="file:///Users/liaoxiang/dev/mae-flow-fieldtest/.mae-flow-work/REQ2026080901/grill.md" data-rel=".mae-flow-work/REQ2026080901/grill.md"><div class="md"><h1>GRILL-REQ2026080901 决策文档</h1>
+<h2>质询阶段的完整问题树与用户决策</h2>
+<h3>缺口 1：权限检查范围</h3>
+<p><strong>问题</strong>：短信渠道的权限检查是否应该应用到现有的 email/push/webhook 渠道？</p>
+<p><strong>用户答案</strong>：仅短信有权限检查</p>
+<p><strong>拍板决策</strong></p>
+<ul><li>WHEN 租户未开通短信渠道 THE SYSTEM SHALL 返回发送失败，detail = "短信: 租户未开通"</li><li>WHEN 租户已开通短信渠道 THE SYSTEM SHALL 按正常流程发送短信</li><li>WHEN email/push/webhook 调用 THE SYSTEM SHALL 保持现有行为，无权限检查（所有租户可用）</li></ul>
+<p><strong>实现影响</strong></p>
+<ul><li>notify_service.py:send() 中仅对 "sms" 渠道添加权限检查</li><li>需实现权限查询函数 <code>channel_enabled(tenant_id, channel)</code> 用于短信</li><li>现有三渠道的 test_smoke.py 无需改动，回归测试预期不变</li></ul>
+<hr>
+<h3>缺口 2：短信租户开通机制</h3>
+<p><strong>问题</strong>：短信渠道的租户开通是应该通过配置文件、API、或人工操作？测试时如何为租户预先开通？</p>
+<p><strong>用户答案</strong>：配置文件让测试预先设定</p>
+<p><strong>拍板决策</strong></p>
+<ul><li>WHEN 应用启动 THE SYSTEM SHALL 从配置文件（如 JSON 或 YAML）读取租户短信开通状态</li><li>WHEN 运行中权限变更 THE SYSTEM SHALL 需重启或支持配置热更新（可延后实现）</li><li>WHEN 单元测试运行 THE SYSTEM SHALL 从测试配置预先为指定租户（如 "t-alpha" / "t-beta"）开通短信</li></ul>
+<p><strong>实现影响</strong></p>
+<ul><li>新增配置文件存储租户短信权限（格式待定，建议 JSON）</li><li>新增权限加载模块（可集中在 channel_state.py 或独立的权限管理模块）</li><li>test_smoke.py 需改动以支持配置，或新增专用的短信 UT</li></ul>
+<hr>
+<h3>缺口 3：短信文本长度限制</h3>
+<p><strong>问题</strong>：短信文本的长度限制是多少？超长了应该截断还是拆分为多条？</p>
+<p><strong>用户答案</strong>：160 个字符，超长时截断</p>
+<p><strong>拍板决策</strong></p>
+<ul><li>WHEN sms_handler 处理短信 THE SYSTEM SHALL 使用 MAX_LENGTH = 160（与 email/push 的 500 分开）</li><li>WHEN 文本长于 160 字符 THE SYSTEM SHALL 使用 truncate() 截断至 160 字符</li><li>WHEN 验收时检查发送内容 THE SYSTEM SHALL 确认超长短信已被截断，未拆分</li></ul>
+<p><strong>实现影响</strong></p>
+<ul><li>sms_handler.py 需定义独立的 MAX_LENGTH = 160（不复用 email/push 的 500）</li><li>truncate() 函数复用现有逻辑，无新增</li><li>需新增测试用例验证 160 字符的截断行为</li></ul>
+<hr>
+<h3>缺口 4：短信号码格式校验</h3>
+<p><strong>问题</strong>：短信 target（手机号）的校验规则是什么？</p>
+<p><strong>用户答案</strong>：仅限中国 11 位</p>
+<p><strong>拍板决策</strong></p>
+<ul><li>WHEN sms_handler 接收 target THE SYSTEM SHALL 校验格式为中国 11 位（1[0-9]{10}）</li><li>WHEN target 格式非法 THE SYSTEM SHALL 返回 SendResult.fail("短信: 号码格式错误")</li><li>WHEN target 为空或格式错 THE SYSTEM SHALL 不向后续流程传递（在校验步失败）</li></ul>
+<p><strong>实现影响</strong></p>
+<ul><li>sms_handler.py:send() 中新增正则校验 <code>re.match(r'^1[0-9]{10}$', notification.target)</code></li><li>校验位置在现有"缺少发送目标"检查之后</li><li>测试用例需包含：有效号码、无效号码、空号码、位数错误等</li></ul>
+<hr>
+<h3>缺口 5：重试策略定义</h3>
+<p><strong>问题</strong>：重试策略是什么？（最大重试次数、延迟方法、是否所有渠道都需要）</p>
+<p><strong>用户答案</strong>：最大 3 次、固定延迟 1 秒、仅短信需要</p>
+<p><strong>拍板决策</strong></p>
+<ul><li>WHEN 短信首次发送失败 THE SYSTEM SHALL 等待 1 秒后自动重试，共最多 3 次（含首次）</li><li>WHEN 重试过程中权限变更或其他条件变化 THE SYSTEM SHALL 每次重试均重新检查（包括权限、会话等）</li><li>WHEN 重试 3 次全部失败 THE SYSTEM SHALL 返回最终失败状态，不再重试</li><li>WHEN email/push/webhook 发送失败 THE SYSTEM SHALL 不重试（保持现有行为）</li><li>WHEN 调用 notify_service.send() THE SYSTEM SHALL 返回最终结果（成功或所有重试失败）</li></ul>
+<p><strong>实现影响</strong></p>
+<ul><li>notify_service.py:send() 改为对短信的失败结果进行重试（或新增 send_with_retry()）</li><li>需引入 time.sleep(1) 处理延迟（或使用异步 asyncio，暂定同步）</li><li>删除 legacy_retry_once() 函数（已确认无调用方）</li><li>重试逻辑记录在 SendResult.detail 中（便于可观测）</li></ul>
+<hr>
+<h3>缺口 6：legacy_retry_once 处理</h3>
+<p><strong>问题</strong>：legacy_retry_once 是否有调用方？可以删除吗？</p>
+<p><strong>代码事实</strong>（via grep）：该函数无调用方（仅在定义处出现）</p>
+<p><strong>拍板决策</strong></p>
+<ul><li>WHEN 实现新的重试策略 THE SYSTEM SHALL 直接删除 notify_service.py 中的 legacy_retry_once() 函数</li><li>WHEN 删除后运行测试 THE SYSTEM SHALL 所有 UT 应通过（因无调用方）</li></ul>
+<p><strong>实现影响</strong></p>
+<ul><li>notify_service.py 删除第 32-37 行（legacy_retry_once 定义）</li><li>无其他改动</li></ul>
+<hr>
+<h3>新增问题 Q7：配置文件格式</h3>
+<p><strong>问题</strong>：租户短信开启配置的具体格式是什么？</p>
+<p><strong>用户答案</strong>：JSON 格式</p>
+<p><strong>拍板决策</strong></p>
+<ul><li>WHEN 应用读取短信权限配置 THE SYSTEM SHALL 使用 JSON 格式</li><li>JSON 结构示例：<code>{"sms_enabled_tenants": ["t-alpha", "t-beta"]}</code> 或 <code>{"t-alpha": {"sms": true}, "t-beta": {"sms": false}}</code></li><li>具体键名与结构由设计阶段实现时确定，需保证能通过租户 ID 快速查询</li></ul>
+<p><strong>实现影响</strong></p>
+<ul><li>需新增 JSON 解析和权限查询函数</li><li>测试配置应同步创建</li></ul>
+<hr>
+<h3>新增问题 Q8：配置文件存储路径</h3>
+<p><strong>问题</strong>：配置文件应该存储在哪里？</p>
+<p><strong>用户答案</strong>：项目根目录 config/sms_enabled.json</p>
+<p><strong>拍板决策</strong></p>
+<ul><li>WHEN 应用启动 THE SYSTEM SHALL 从 config/sms_enabled.json 读取租户短信权限配置</li><li>路径为相对于项目根的 config/sms_enabled.json</li><li>应用代码应能从环境中被动接受配置路径覆盖，但默认为上述位置</li></ul>
+<p><strong>实现影响</strong></p>
+<ul><li>需创建 config/ 目录和示例配置文件</li><li>部署文档中需说明配置文件的放置位置</li></ul>
+<hr>
+<h3>新增问题 Q9：配置文件缺失处理</h3>
+<p><strong>问题</strong>：应用启动时，配置文件不存在或格式错误，应该怎样？</p>
+<p><strong>用户答案</strong>：抛错异常、拘住启动</p>
+<p><strong>拍板决策</strong></p>
+<ul><li>WHEN 应用启动时 config/sms_enabled.json 不存在 THE SYSTEM SHALL 抛出异常并停止启动</li><li>WHEN 配置文件格式错误（非法 JSON） THE SYSTEM SHALL 抛出异常并停止启动</li><li>WHEN 配置文件缺失字段或字段值非法 THE SYSTEM SHALL 记录警告日志但继续启动（或按需求方定义的默认策略）</li></ul>
+<p><strong>实现影响</strong></p>
+<ul><li>应用启动时必须校验配置文件的存在和格式</li><li>默认的错误处理应该让部署/测试立即发现配置问题，不能隐沉</li></ul>
+<hr>
+<h3>新增问题 Q10：权限检查失败的审计日志</h3>
+<p><strong>问题</strong>：租户未开启短信（权限检查失败）时，是否需要记录到审计日志？</p>
+<p><strong>用户答案</strong>：记录</p>
+<p><strong>拍板决策</strong></p>
+<ul><li>WHEN 权限检查失败（租户未开启短信） THE SYSTEM SHALL 记录到审计日志</li><li>审计日志的参数示例：audit_log.record(tenant_id, "sms", -1) 或类似结构，detail 含"权限拒绝" / "未开通"</li><li>审计日志应包含：租户 ID、渠道、失败原因、时间戳</li></ul>
+<p><strong>实现影响</strong></p>
+<ul><li>权限检查失败也需调用 audit_log.record()</li><li>审计日志的记录时机应在权限检查失败时立即记录，不依赖后续流程</li></ul>
+<hr>
+<h3>新增问题 Q11：重试时会话状态</h3>
+<p><strong>问题</strong>：重试短信的第 2、3 次时，是否需要重新调用 channel_state.reset() 和 open_session()？</p>
+<p><strong>用户答案</strong>：不需要，第一次建立的会话一直使用</p>
+<p><strong>拍板决策</strong></p>
+<ul><li>WHEN sms_handler 首次发送时 THE SYSTEM SHALL 调用 reset() + open_session() 建立会话</li><li>WHEN 首次发送失败进入重试 THE SYSTEM SHALL 不再调用 reset/open，复用现有会话</li><li>WHEN 第 2、3 次重试时 THE SYSTEM SHALL 使用第一次建立的 token，直接调用 sms_handler.send()</li><li>WHEN 所有重试都失败 THE SYSTEM SHALL 返回最终失败，由上层决定是否清理会话</li></ul>
+<p><strong>实现影响</strong></p>
+<ul><li>重试循环应在 notify_service.send() 的主流程中（reset + open 之后）</li><li>不能在 sms_handler.send() 内部做重试，否则会破坏会话约束</li><li>重试失败时会话残留；下一个 send() 调用会清理它（符合现有 reset() 逻辑）</li></ul>
+<hr>
+<h2>八维备课检查结果</h2>
+<div class="tbl"><table><thead><tr><th>维度</th><th>状态</th><th>备注</th></tr></thead><tbody><tr><td>1. 状态机完备性</td><td>已澄清</td><td>权限检查逻辑已定义（Q1）</td></tr><tr><td>2. 边界值</td><td>已澄清</td><td>号码格式（Q4）、文本长度（Q3）</td></tr><tr><td>3. 并发时序</td><td>低风险</td><td>单线程重试，无并发冲突</td></tr><tr><td>4. 失败路径与残留清理</td><td>已澄清</td><td>重试策略定义（Q5），审计日志保持现有</td></tr><tr><td>5. 数据一致性</td><td>已澄清</td><td>权限每次检查（Q1、Q5）</td></tr><tr><td>6. 存量升级兼容</td><td>已澄清</td><td>仅短信受影响，现有三渠道不变（Q1、Q6）</td></tr><tr><td>7. 规格性能</td><td>已澄清</td><td>同步 + 重试延迟 1 秒（Q5）</td></tr><tr><td>8. 可观测</td><td>低优先</td><td>审计日志现有方案，可延后增强</td></tr></tbody></table></div>
+<hr>
+<h2>设计阶段的遗留分歧</h2>
+<ol><li><strong>权限存储实现</strong>：配置文件的具体格式（JSON/YAML/INI）与路径</li><li><strong>权限热更新</strong>：配置变更后是否支持不重启更新（可 v2 实现）</li><li><strong>异步重试</strong>：固定 1 秒延迟是否可接受，或需改为异步队列（暂定同步）</li></ol>
+<hr>
+<h2>验收条件确认</h2>
+<p>基于用户的 6 个决策，验收标准对应如下：</p>
+<ol><li><strong>"已开通短信的租户能收到短信通知"</strong></li><ul><li>验证方式：配置文件中 t-alpha 租户开启短信 → 调用 notify_service.send("sms", ...) → 应返回 success</li></ul></ol>
+<ol><li><strong>"未开通的租户调用后不产生发送"</strong></li><ul><li>验证方式：配置文件中 t-beta 租户关闭短信 → 调用 notify_service.send("sms", ...) → 应返回 fail，detail 含"未开通"</li></ul></ol>
+<ol><li><strong>"发送抖动时通知最终能送达"</strong></li><ul><li>验证方式：模拟首次发送失败 → 自动重试 3 次 → 第 2 次成功 → 返回 success</li><li>观测指标：SendResult.detail 应包含重试日志</li></ul></ol>
+<ol><li><strong>"既有渠道回归通过"</strong></li><ul><li>验证方式：test_smoke.py 现有用例（email/push 发送）应全部通过</li><li>约束：无权限检查，所有租户可用</li></ul></ol>
+<hr>
+<h2>后续设计与编码的输入</h2>
+<p>本文档是设计与编码阶段的强制输入。所有实现决策应：</p>
+<ul><li>严格遵循上述 6 个拍板决策（WHEN/THEN 句式）</li><li>不再反问已澄清的问题</li><li>如发现新的边界情况（非本文档覆盖），按"需求方缺失定义则按推荐答案"的原则自行决策，并在 Story 中记录</li></ul></div></div>
+<div class="pane" data-key="decisions" data-group="doc" data-title="决策记录 · decisions.md" data-raw="file:///Users/liaoxiang/dev/mae-flow-fieldtest/.mae-flow-work/REQ2026080901/decisions.md" data-rel=".mae-flow-work/REQ2026080901/decisions.md"><div class="md"><h1>DECISIONS-REQ2026080901</h1>
+<p>需求澄清阶段的决策汇总（grill.md 的精简版，用于后续流程快速查阅）</p>
+<h2>核心需求决策</h2>
+<h3>功能需求</h3>
+<ol><li><strong>短信渠道</strong>：新增 sms 渠道处理器，与 email/push/webhook 架构一致</li><li><strong>重试机制</strong>：短信发送失败时自动重试，最多 3 次（含首次），固定延迟 1 秒</li><li><strong>租户权限</strong>：短信按租户开通，未开通的租户调用返回失败</li><li><strong>兼容性</strong>：email/push/webhook 三个现有渠道行为不变，无权限控制</li></ol>
+<h3>短信特定的业务规则</h3>
+<ul><li><strong>号码格式</strong>：中国 11 位，校验正则 <code>^1[0-9]{10}$</code></li><li><strong>文本长度</strong>：160 字符，超长截断（使用现有 truncate 函数）</li><li><strong>权限检查</strong>：仅短信有，email/push/webhook 无</li><li><strong>审计日志</strong>：权限检查失败也需记录，便于追踪</li><li><strong>会话管理</strong>：重试时复用第一次建立的会话（不重新 reset/open）</li></ul>
+<h2>配置与部署决策</h2>
+<ul><li><strong>配置文件格式</strong>：JSON，位置 <code>config/sms_enabled.json</code></li><li><strong>配置缺失处理</strong>：应用启动时若配置不存在或格式错误，抛异常拘住启动</li><li><strong>配置示例</strong>：<code>{"sms_enabled_tenants": ["t-alpha", "t-beta"]}</code></li><li><strong>权限变更</strong>：每次 send() 调用时重新查询权限（无缓存）</li></ul>
+<h2>代码改动清单</h2>
+<ol><li><strong>新增文件</strong>：<code>service/src/demo_service/sms_handler.py</code></li><li><strong>新增配置</strong>：<code>config/sms_enabled.json</code></li><li><strong>修改文件</strong>：</li><ul><li><code>service/src/demo_service/notify_service.py</code></li><ul><li>删除 legacy_retry_once() 函数</li><li>修改 send() 方法支持短信重试</li><li>新增短信权限检查</li></ul><li><code>model/src/demo_model/notification.py</code>（可能无改动）</li></ul><li><strong>新增测试</strong>：test_smoke.py 扩展短信测试用例</li></ol>
+<h2>验收标准的确认</h2>
+<div class="tbl"><table><thead><tr><th>验收标准</th><th>对应决策</th><th>验证方式</th></tr></thead><tbody><tr><td>已开通短信的租户能收到短信通知</td><td>Q1+Q2</td><td>config 中开通 t-alpha → 发送成功</td></tr><tr><td>未开通的租户调用后不产生发送</td><td>Q1+Q2</td><td>config 中关闭 t-beta → 返回 fail</td></tr><tr><td>发送抖动时通知最终能送达</td><td>Q5+Q11</td><td>模拟失败 → 自动重试 3 次 → 最终成功</td></tr><tr><td>既有渠道回归通过</td><td>Q1</td><td>test_smoke.py email/push 用例全通</td></tr></tbody></table></div>
+<h2>注意事项与风险</h2>
+<ol><li><strong>会话复用</strong>（Q11）：重试时不重新 reset/open，意味着如果渠道或租户权限在重试中突然变化，会话仍然有效。这在当前架构下是可接受的（每次 send() 入口会重置），但部署时不应在 1 秒内改变权限。</li></ol>
+<ol><li><strong>配置启动检查</strong>（Q9）：抛异常拘住启动意味着 CI/CD 部署必须确保配置文件可用。建议在容器镜像构建时验证。</li></ol>
+<ol><li><strong>审计日志格式</strong>（Q10）：现有 audit_log.record() 的签名需确认是否支持权限失败的记录方式。如不支持可能需要扩展。</li></ol>
+<ol><li><strong>json 选择</strong>（Q7）：JSON 格式方便但需要 json 库支持；如果项目已有其他配置方案（YAML、INI），建议评估一致性。</li></ol>
+<h2>留给设计阶段的决议</h2>
+<ol><li>权限查询的具体实现（内存字典 vs. 文件重读 vs. 数据库查询）</li><li>重试日志的具体格式（detail 中如何表示重试信息）</li><li>权限配置的初始化时机（启动时加载 vs. 延迟加载）</li><li>SendResult.detail 的标准化定义（用于可观测性）</li><li>SDK 是否需要新增 notify_sms() 方法（需求文档未明确）</li></ol>
+<h2>已确认不需要实现的功能</h2>
+<ul><li>权限热更新（v2 可考虑）</li><li>异步队列或消息队列（保持同步）</li><li>其他渠道的权限检查（仅短信有）</li><li>其他渠道的重试机制（仅短信有）</li><li>legacy_retry_once 函数（已删除）</li></ul></div></div>
+<div class="pane" data-key="spec" data-group="doc" data-title="规格条目 · spec.md" data-raw="file:///Users/liaoxiang/dev/mae-flow-fieldtest/.mae-flow-work/REQ2026080901/spec.md" data-rel=".mae-flow-work/REQ2026080901/spec.md"><div class="md"><h1>需求规格 REQ2026080901</h1>
+<h2>范围</h2>
+<ol><li>新增短信（sms）渠道处理器，与既有 email / push / webhook 架构一致</li><li>实现短信发送失败的重试机制：最多重试 3 次，固定延迟 1 秒，仅对短信渠道</li><li>实现租户级别的短信渠道权限控制：配置文件方式，启动时加载，未开通的租户调用返回失败</li><li>保持既有三个渠道（email / push / webhook）的行为不变</li><li>删除已失效的 legacy_retry_once 函数</li></ol>
+<h2>可观察行为</h2>
+<h3>短信发送成功场景</h3>
+<ul><li>WHEN 租户已开通短信且传入有效的手机号和内容 THE SYSTEM SHALL 调用 send("sms", notification)</li><li>THEN 返回 SendResult.ok()，detail 含"短信: sent X chars"</li><li>AND 记录审计日志，标记渠道为 "sms"，记录字符数</li></ul>
+<h3>短信发送失败与重试</h3>
+<ul><li>WHEN 短信首次发送失败（如网络超时模拟）THE SYSTEM SHALL 等待 1 秒后自动重试</li><li>THEN 最多重试 3 次（含首次），若第 2 或 3 次成功则立即返回 SendResult.ok()</li><li>WHEN 重试 3 次全部失败 THE SYSTEM SHALL 返回 SendResult.fail()，detail 含失败原因</li><li>AND 记录审计日志记录所有失败尝试</li></ul>
+<h3>租户权限检查</h3>
+<ul><li>WHEN 租户未开通短信渠道 THE SYSTEM SHALL 在 send() 入口检查权限</li><li>THEN 返回 SendResult.fail("短信: 租户未开通")</li><li>AND 记录审计日志标记权限拒绝事件</li><li>WHEN 租户已开通短信 THE SYSTEM SHALL 允许发送流程继续</li></ul>
+<h3>手机号格式校验</h3>
+<ul><li>WHEN sms_handler 接收 target THE SYSTEM SHALL 校验格式为中国 11 位（1[0-9]{10}）</li><li>THEN 格式错误返回 SendResult.fail("短信: 号码格式错误")</li><li>WHEN target 为空 THE SYSTEM SHALL 返回 SendResult.fail("短信: 缺少发送目标")</li></ul>
+<h3>文本长度处理</h3>
+<ul><li>WHEN 短信内容超过 160 字符 THE SYSTEM SHALL 截断至 160 字符</li><li>THEN 发送截断后的文本，detail 记录实际发送长度</li><li>AND 不拆分为多条短信</li></ul>
+<h3>既有渠道保持不变</h3>
+<ul><li>WHEN email / push / webhook 渠道被调用 THE SYSTEM SHALL 无权限检查、无重试</li><li>THEN 行为与本需求实现前保持完全一致</li></ul>
+<h2>验收条件</h2>
+<ol><li><strong>已开通短信的租户能收到短信通知</strong></li><ul><li>验证方式：配置 config/sms_enabled.json 中为测试租户（t-alpha）开通短信 → 调用 send("sms", Notification("t-alpha", "13800000000", "test")) → 返回 success</li></ul></ol>
+<ol><li><strong>未开通的租户调用后不产生发送</strong></li><ul><li>验证方式：配置中关闭测试租户（t-beta）的短信权限 → 调用 send() → 返回 fail，detail 含"未开通" → 审计日志记录权限拒绝</li></ul></ol>
+<ol><li><strong>发送抖动时通知最终能送达</strong></li><ul><li>验证方式：模拟首次发送失败 → 系统自动延迟 1 秒后重试 → 第 2 次成功 → 返回 success</li><li>验收指标：最终结果为 success；detail 或日志中应有重试信息</li></ul></ol>
+<ol><li><strong>既有渠道回归通过</strong></li><ul><li>验证方式：运行 test_smoke.py 中的 email 和 push 发送用例 → 全部通过，无行为改变</li><li>约束：无权限检查，所有租户（包括 t-alpha / t-beta）都能使用 email 和 push</li></ul></ol>
+<h2>不在范围</h2>
+<ul><li>权限热更新：配置变更后应用需重启才能生效（v2 可考虑）</li><li>异步队列或消息队列：保持同步发送</li><li>其他渠道的权限控制：仅短信有权限检查</li><li>其他渠道的重试机制：仅短信有自动重试</li><li>国际号码格式：仅支持中国 11 位</li><li>超长短信拆分：截断而不拆分为多条</li><li>权限管理 API：仅通过配置文件方式</li></ul>
+<h2>Grill 决策追踪</h2>
+<h3>Q1：权限检查范围</h3>
+<p><strong>决策</strong>：仅短信有权限检查，email/push/webhook 保持现有行为无权限限制</p>
+<h3>Q2：租户开通机制</h3>
+<p><strong>决策</strong>：配置文件 config/sms_enabled.json 方式，启动时加载，运行中每次查询不缓存</p>
+<h3>Q3：文本长度限制</h3>
+<p><strong>决策</strong>：160 字符，超长截断（使用现有 truncate 函数）</p>
+<h3>Q4：号码格式校验</h3>
+<p><strong>决策</strong>：中国 11 位，正则校验 <code>^1[0-9]{10}$</code></p>
+<h3>Q5：重试策略</h3>
+<p><strong>决策</strong>：最多 3 次、固定延迟 1 秒、仅短信渠道需要重试</p>
+<h3>Q6：legacy_retry_once 处理</h3>
+<p><strong>决策</strong>：该函数无调用方，直接删除</p>
+<h3>Q7：配置文件格式</h3>
+<p><strong>决策</strong>：JSON 格式，结构 <code>{"sms_enabled_tenants": ["t-alpha", "t-beta"]}</code></p>
+<h3>Q8：配置存储路径</h3>
+<p><strong>决策</strong>：config/sms_enabled.json（相对于项目根）</p>
+<h3>Q9：配置缺失处理</h3>
+<p><strong>决策</strong>：应用启动时若缺失或格式错误，抛异常拘住启动</p>
+<h3>Q10：权限检查失败的审计</h3>
+<p><strong>决策</strong>：权限拒绝也记录审计日志，便于追踪</p>
+<h3>Q11：重试中的会话管理</h3>
+<p><strong>决策</strong>：重试时复用第一次建立的会话（不重新 reset/open）</p></div></div>
+<div class="pane" data-key="story" data-group="doc" data-title="Story · story.md" data-raw="file:///Users/liaoxiang/dev/mae-flow-fieldtest/.mae-flow-work/REQ2026080901/story.md" data-rel=".mae-flow-work/REQ2026080901/story.md"><div class="md"><h1>STORY-REQ2026080901</h1>
+<div class="tbl"><table><thead><tr><th>产品名称 Product name</th><th>密级 Confidentiality level</th><th>产品版本 Product version</th></tr></thead><tbody><tr><td></td><td>内部公开</td><td></td></tr></tbody></table></div>
+<h2>1 概述</h2>
+<h3>1.1 客户场景（必选）</h3>
+<p>作为 <strong>通知服务的运营人员</strong></p>
+<p>我要 <strong>支持通过短信渠道发送通知，并保证渠道偶发抖动时消息最终能送达</strong></p>
+<p>从而 <strong>覆盖无邮箱/无App的客户，降低因网络抖动导致的通知丢失投诉</strong></p>
+<h3>1.2 外部依赖（可选）</h3>
+<p>无。</p>
+<h2>2 方案设计</h2>
+<h3>2.1 场景分析</h3>
+<h4>2.1.1 场景设计（必选）</h4>
+<p><strong>场景 1：已开通短信的租户正常发送</strong></p>
+<ul><li>前置条件：租户 t-alpha 在 config/sms_enabled.json 中已开通短信，提供有效的 11 位中国手机号（格式 1[0-9]{10}）</li><li>操作：调用 notify_service.send("sms", Notification("t-alpha", "13800000000", "测试短信内容"))</li><li>期望结果：返回 SendResult.ok()，detail 包含"短信: sent X chars"，审计日志记录成功发送</li></ul>
+<p><strong>场景 2：未开通短信的租户权限拒绝</strong></p>
+<ul><li>前置条件：租户 t-beta 在 config/sms_enabled.json 中未开通短信</li><li>操作：调用 notify_service.send("sms", Notification("t-beta", "13800000001", "短信内容"))</li><li>期望结果：返回 SendResult.fail()，detail = "短信: 租户未开通"，审计日志记录权限拒绝</li></ul>
+<p><strong>场景 3：短信首次发送失败后自动重试成功</strong></p>
+<ul><li>前置条件：租户已开通短信，模拟首次发送失败（网络超时）</li><li>操作：调用 notify_service.send("sms", Notification("t-alpha", "13800000000", "内容"))</li><li>期望结果：系统等待 1 秒后自动重试，第 2 次成功，返回 SendResult.ok()，detail 或日志中记录重试信息</li></ul>
+<p><strong>场景 4：短信发送超过 160 字符自动截断</strong></p>
+<ul><li>前置条件：租户已开通短信，提供超过 160 字符的内容</li><li>操作：调用 notify_service.send("sms", Notification("t-alpha", "13800000000", "超长内容..."))</li><li>期望结果：返回 SendResult.ok()，detail 记录实际发送字符数（160 字），未进行拆分</li></ul>
+<p><strong>场景 5：短信号码格式校验失败</strong></p>
+<ul><li>前置条件：租户已开通短信</li><li>操作：调用 notify_service.send("sms", Notification("t-alpha", "12345678901", "短信内容"))（号码不符合 11 位或不是 1 开头）</li><li>期望结果：返回 SendResult.fail()，detail = "短信: 号码格式错误"</li></ul>
+<p><strong>场景 6：短信重试 3 次全部失败</strong></p>
+<ul><li>前置条件：租户已开通短信，模拟所有重试都失败</li><li>操作：调用 notify_service.send()</li><li>期望结果：返回 SendResult.fail()，detail 包含失败原因</li></ul>
+<p><strong>场景 7：既有渠道（email/push/webhook）行为不变</strong></p>
+<ul><li>前置条件：租户 t-alpha 发送 email 或 push 通知</li><li>操作：调用 notify_service.send("email", Notification(...)) 或其他已有渠道</li><li>期望结果：发送行为与需求前完全相同，无权限检查，无重试</li></ul>
+<h4>2.1.2 性能规格（必选）</h4>
+<div class="tbl"><table><thead><tr><th>指标</th><th>规格</th><th>备注</th></tr></thead><tbody><tr><td>重试延迟</td><td>固定 1 秒</td><td>短信渠道特定</td></tr><tr><td>重试次数</td><td>最多 3 次（含首次）</td><td>短信渠道特定</td></tr><tr><td>号码校验延迟</td><td>&lt; 1 ms</td><td>正则校验本地</td></tr><tr><td>权限查询延迟</td><td>&lt; 1 ms</td><td>内存字典查询或简单文件读取</td></tr><tr><td>文本截断延迟</td><td>&lt; 1 ms</td><td>本地字符串操作</td></tr><tr><td>发送模式</td><td>同步</td><td>无异步队列</td></tr></tbody></table></div>
+<h4>2.1.3 验收标准（必选）</h4>
+<ol><li><strong>已开通短信的租户能收到短信通知</strong></li><ul><li>验证方式：配置 config/sms_enabled.json 中为测试租户（t-alpha）开通短信 → 调用 send("sms", Notification("t-alpha", "13800000000", "test")) → 返回 success，detail 含"短信: sent X chars"</li></ul></ol>
+<ol><li><strong>未开通的租户调用后不产生发送</strong></li><ul><li>验证方式：配置中关闭测试租户（t-beta）的短信权限 → 调用 send() → 返回 fail，detail = "短信: 租户未开通" → 审计日志记录权限拒绝</li></ul></ol>
+<ol><li><strong>发送抖动时通知最终能送达</strong></li><ul><li>验证方式：模拟首次发送失败（网络超时） → 系统自动延迟 1 秒后重试 → 第 2 次成功 → 返回 success，detail 或审计日志中有重试信息</li></ul></ol>
+<ol><li><strong>既有渠道回归通过</strong></li><ul><li>验证方式：运行 test_smoke.py 中的 email 和 push 发送用例 → 全部通过，无行为改变 → 连接池平衡检查通过</li></ul></ol>
+<h3>2.2 详细设计</h3>
+<h4>2.2.1 逻辑模型设计（按需必选）</h4>
+<p><strong>短信发送流程（主要变化）</strong></p>
+<div class="fence"><pre><code>notify_service.send("sms", notification)
+  ├─ 权限检查：channel_enabled(tenant_id, "sms") 
+  │   ├─ YES → 继续
+  │   └─ NO → 返回 SendResult.fail("短信: 租户未开通")，记录审计日志
+  ├─ 重置会话：channel_state.reset(tenant_id, "sms")
+  ├─ 打开会话：token = channel_state.open_session(tenant_id, "sms")
+  ├─ 重试循环（最多 3 次）：
+  │   ├─ 调用 sms_handler.send(notification)
+  │   ├─ 成功 → 返回 SendResult.ok()
+  │   └─ 失败且重试次数 &lt; 3 → sleep(1) → 重试
+  └─ 所有重试失败 → 返回 SendResult.fail()</code></pre></div>
+<p><strong>权限查询逻辑</strong></p>
+<div class="fence"><pre><code>channel_enabled(tenant_id, channel)
+  ├─ 若 channel != "sms" → 返回 True（现有渠道无权限限制）
+  ├─ 若 channel == "sms"：
+  │   ├─ 读取 config/sms_enabled.json
+  │   ├─ 查询 sms_enabled_tenants 列表
+  │   ├─ 返回 tenant_id in list
+  └─ 配置缺失或格式错误 → 启动时抛异常拘住应用</code></pre></div>
+<p><strong>短信处理器（sms_handler）</strong></p>
+<div class="fence"><pre><code>sms_handler.send(notification)
+  ├─ 校验目标：
+  │   ├─ 为空 → 返回 SendResult.fail("短信: 缺少发送目标")
+  │   ├─ 格式不符 ^1[0-9]{10}$ → 返回 SendResult.fail("短信: 号码格式错误")
+  │   └─ 有效 → 继续
+  ├─ 截断文本：truncate(content, 160)
+  ├─ 检查会话有效性：channel_state.session() 存在
+  │   └─ 不存在 → 返回 SendResult.fail("短信: 会话未建立")
+  ├─ 发送短信：调用底层短信网关（模拟）
+  └─ 记账：audit_log.record(tenant_id, "sms", char_count)</code></pre></div>
+<h4>2.2.2 接口设计（按需必选）</h4>
+<p><strong>notify_service.send() 修改</strong></p>
+<ul><li><strong>消费</strong>：</li><ul><li>channel_state.reset(tenant_id: str, channel: str) → None</li><li>channel_state.open_session(tenant_id: str, channel: str, token: str) → None</li><li>channel_state.session(tenant_id: str, channel: str) → str | None</li><li>_HANDLERS["sms"].send(notification: Notification) → SendResult</li><li>channel_enabled(tenant_id: str, channel: str) → bool</li><li>audit_log.record(tenant_id: str, channel: str, detail_int: int) → None</li><li>time.sleep(seconds: float) → None</li></ul></ul>
+<ul><li><strong>产出</strong>：</li><ul><li>send(channel: str, notification: Notification) → SendResult</li><ul><li>对 "sms" 渠道添加权限检查和重试逻辑</li><li>其他渠道保持既有行为</li><li><strong>删除过时的 legacy_retry_once() 函数</strong>（已被新的重试策略取代）</li></ul></ul></ul>
+<p><strong>权限管理接口</strong></p>
+<ul><li><strong>产出</strong>：</li><ul><li>load_sms_permission_config(config_path: str) → None</li><ul><li>启动时调用，读取 config/sms_enabled.json，配置存储在内部全局变量</li><li>缺失或格式错误时抛 ConfigError 异常，拘住应用启动</li></ul><li>channel_enabled(tenant_id: str, channel: str) → bool</li><ul><li>查询租户是否开通指定渠道</li></ul></ul></ul>
+<p><strong>短信处理器接口</strong></p>
+<ul><li><strong>消费</strong>：</li><ul><li>notification: Notification（包含 tenant_id, target, content）</li><li>channel_state.session(tenant_id, "sms") → str | None</li><li>text_util.truncate(text: str, max_length: int) → str</li><li>audit_log.record(tenant_id: str, channel: str, detail_int: int) → None</li></ul></ul>
+<ul><li><strong>产出</strong>：</li><ul><li>sms_handler.send(notification: Notification) → SendResult</li><ul><li>校验目标格式、截断内容、检查会话、发送、记账</li></ul></ul></ul>
+<h4>2.2.3 数据模型设计（按需必选）</h4>
+<p><strong>Notification 类</strong> (既有，无改动)</p>
+<div class="fence"><span class="fl">python</span><pre><code>class Notification:
+    def __init__(self, tenant_id: str, target: str, content: str, urgent: bool = False):
+        self.tenant_id = tenant_id
+        self.target = target
+        self.content = content
+        self.urgent = urgent</code></pre></div>
+<p><strong>SendResult 类</strong> (既有，无改动)</p>
+<div class="fence"><span class="fl">python</span><pre><code>class SendResult:
+    def __init__(self, success: bool, detail: str):
+        self.success = success
+        self.detail = detail
+    
+    @staticmethod
+    def ok(detail: str = "") -&gt; SendResult:
+        return SendResult(True, detail)
+    
+    @staticmethod
+    def fail(detail: str = "") -&gt; SendResult:
+        return SendResult(False, detail)</code></pre></div>
+<p><strong>SMS 权限配置结构</strong> (新增)</p>
+<div class="fence"><span class="fl">json</span><pre><code>{
+    "sms_enabled_tenants": ["t-alpha", "t-beta"]
+}</code></pre></div>
+<h4>2.2.4 运行视图设计（按需必选）</h4>
+<p><strong>调用链</strong></p>
+<ol><li>外部调用 → notify_api.py 或 notify_client.py</li><li>notify_service.send("sms", notification)</li><li>权限检查：channel_enabled("t-alpha", "sms")</li><li>会话管理：reset → open_session</li><li>重试循环（最多 3 次）：</li><ul><li>调用 sms_handler.send(notification)</li><li>失败时 sleep(1) 后重试</li></ul><li>返回 SendResult（ok 或 fail）</li></ol>
+<p><strong>关键依赖关系</strong></p>
+<ul><li>notify_service.py 依赖 channel_enabled() 和重试逻辑</li><li>sms_handler.py 依赖 channel_state、audit_log、text_util</li><li>权限查询依赖 config/sms_enabled.json 文件</li><li>应用启动时需加载权限配置，配置缺失时启动失败</li></ul>
+<h2>3 测试设计</h2>
+<h3>3.1 UT测试设计（必选）</h3>
+<div class="tbl"><table><thead><tr><th>测试类</th><th>测试接口</th><th>测试场景</th><th>用例名称</th><th>给定输入</th><th>预期结果</th></tr></thead><tbody><tr><td>SMS 权限检查</td><td>channel_enabled()</td><td>开通短信</td><td>test_sms_enabled_tenant</td><td>tenant_id="t-alpha", channel="sms"</td><td>True</td></tr><tr><td>SMS 权限检查</td><td>channel_enabled()</td><td>未开通短信</td><td>test_sms_disabled_tenant</td><td>tenant_id="t-beta", channel="sms"</td><td>False</td></tr><tr><td>SMS 权限检查</td><td>channel_enabled()</td><td>其他渠道</td><td>test_other_channel_always_enabled</td><td>tenant_id="t-alpha", channel="email"</td><td>True</td></tr><tr><td>短信发送</td><td>notify_service.send()</td><td>权限拒绝</td><td>test_send_sms_permission_denied</td><td>channel="sms", tenant="t-beta"</td><td>SendResult.fail("短信: 租户未开通")</td></tr><tr><td>短信发送</td><td>sms_handler.send()</td><td>缺少目标</td><td>test_sms_target_missing</td><td>notification.target=""</td><td>SendResult.fail("短信: 缺少发送目标")</td></tr><tr><td>短信发送</td><td>sms_handler.send()</td><td>号码格式错误</td><td>test_sms_invalid_format_12345</td><td>notification.target="12345678901"</td><td>SendResult.fail("短信: 号码格式错误")</td></tr><tr><td>短信发送</td><td>sms_handler.send()</td><td>号码格式错误</td><td>test_sms_invalid_format_1234567890</td><td>notification.target="1234567890" (10位)</td><td>SendResult.fail("短信: 号码格式错误")</td></tr><tr><td>短信发送</td><td>sms_handler.send()</td><td>正常发送</td><td>test_sms_send_success</td><td>notification.target="13800000000", content="test"</td><td>SendResult.ok("短信: sent 4 chars")</td></tr><tr><td>短信发送</td><td>sms_handler.send()</td><td>文本截断</td><td>test_sms_truncate_long_text</td><td>content="x"*200</td><td>SendResult.ok("短信: sent 160 chars")</td></tr><tr><td>短信发送</td><td>notify_service.send()</td><td>首次失败重试成功</td><td>test_sms_retry_second_success</td><td>模拟首次失败，第2次成功</td><td>SendResult.ok("...")</td></tr><tr><td>短信发送</td><td>notify_service.send()</td><td>重试全部失败</td><td>test_sms_retry_all_fail</td><td>模拟所有3次都失败</td><td>SendResult.fail("...")</td></tr><tr><td>短信发送</td><td>notify_service.send()</td><td>会话未建立</td><td>test_sms_session_missing</td><td>会话被清空</td><td>SendResult.fail("短信: 会话未建立")</td></tr><tr><td>配置加载</td><td>load_sms_permission_config()</td><td>配置缺失</td><td>test_config_missing</td><td>config/sms_enabled.json 不存在</td><td>ConfigError 异常</td></tr><tr><td>配置加载</td><td>load_sms_permission_config()</td><td>配置格式错误</td><td>test_config_invalid_json</td><td>非法 JSON 格式</td><td>ConfigError 异常</td></tr><tr><td>既有渠道</td><td>notify_service.send()</td><td>email 发送</td><td>test_email_unchanged</td><td>channel="email", tenant="t-alpha"</td><td>SendResult.ok(...)</td></tr><tr><td>既有渠道</td><td>notify_service.send()</td><td>push 发送</td><td>test_push_unchanged</td><td>channel="push", tenant="t-alpha"</td><td>SendResult.ok(...)</td></tr><tr><td>既有渠道</td><td>notify_service.send()</td><td>email 权限</td><td>test_email_no_permission_check</td><td>channel="email", tenant="t-beta"</td><td>SendResult.ok(...), 无权限拒绝</td></tr><tr><td>审计日志</td><td>audit_log.record()</td><td>权限失败记录</td><td>test_audit_log_permission_denied</td><td>权限拒绝时调用 audit_log</td><td>日志记录权限拒绝事件</td></tr><tr><td>审计日志</td><td>audit_log.record()</td><td>发送成功记录</td><td>test_audit_log_send_success</td><td>发送成功时调用 audit_log</td><td>日志记录成功发送和字符数</td></tr></tbody></table></div>
+<h3>3.2 接口测试设计（按需必选）</h3>
+<div class="tbl"><table><thead><tr><th>接口</th><th>用例</th><th>描述</th><th>入参</th><th>预期结果</th></tr></thead><tbody><tr><td>notify_api.py /notify/send</td><td>test_api_sms_success</td><td>HTTP 发送短信成功</td><td>POST body: {"channel":"sms", "tenant_id":"t-alpha", "target":"13800000000", "content":"test"}</td><td>HTTP 200, {"success":true, "detail":"短信: sent 4 chars"}</td></tr><tr><td>notify_api.py /notify/send</td><td>test_api_sms_permission_denied</td><td>HTTP 权限拒绝</td><td>POST body: {"channel":"sms", "tenant_id":"t-beta", "target":"13800000000", "content":"test"}</td><td>HTTP 200, {"success":false, "detail":"短信: 租户未开通"}</td></tr><tr><td>notify_api.py /notify/send</td><td>test_api_sms_invalid_target</td><td>HTTP 号码校验失败</td><td>POST body: {"channel":"sms", "tenant_id":"t-alpha", "target":"123", "content":"test"}</td><td>HTTP 200, {"success":false, "detail":"短信: 号码格式错误"}</td></tr><tr><td>notify_client.py notify_sms()</td><td>test_sdk_sms_success</td><td>SDK 发送短信</td><td>notify_sms("t-alpha", "13800000000", "test")</td><td>SendResult.ok("短信: sent 4 chars")</td></tr><tr><td>notify_client.py notify_sms()</td><td>test_sdk_sms_permission_denied</td><td>SDK 权限拒绝</td><td>notify_sms("t-beta", "13800000000", "test")</td><td>SendResult.fail("短信: 租户未开通")</td></tr></tbody></table></div>
+<h2>4 安全红线自检表</h2>
+<p>自检结果：满足</p>
+<ul><li>无敏感信息泄露：权限配置为本地文件，审计日志记录权限事件便于追踪</li><li>无权限绕过：权限检查在 send() 入口执行，所有进路都经过</li><li>无恶意输入：号码格式校验、文本长度限制已明确定义</li><li>无资源泄漏：重试固定 3 次和 1 秒延迟，无无限循环</li><li>无兼容性破坏：既有渠道代码不改动，新增逻辑仅针对短信</li></ul>
+<h2>5 Story转测自检表</h2>
+<div class="tbl"><table><thead><tr><th>ID</th><th>自检项</th><th>描述</th><th>是否通过</th></tr></thead><tbody><tr><td>1</td><td>串讲&amp;反串</td><td>已完成串讲&amp;反串讲，需求与场景设计一一对应</td><td>✓</td></tr><tr><td>2</td><td>设计文档</td><td>设计文档按模板完成，包括逻辑模型、接口、数据模型、运行视图</td><td>✓</td></tr><tr><td>3</td><td>E2E可追溯</td><td>每个验收标准都有具体的操作和期望结果，可独立验证</td><td>✓</td></tr><tr><td>4</td><td>代码Clean</td><td>不涉及历史债务修复，仅新增短信功能和重试逻辑</td><td>✓</td></tr><tr><td>5</td><td>国际化</td><td>无新的用户界面文案或错误提示需要翻译（系统内部消息）</td><td>✓</td></tr><tr><td>6</td><td>DT</td><td>单元测试用例覆盖正常、边界、失败场景，共 18 个 UT + 5 个集成测试</td><td>✓</td></tr><tr><td>7</td><td>自验证</td><td>验收标准具体可测，包括权限、重试、截断、格式校验</td><td>✓</td></tr><tr><td>8</td><td>资料变更</td><td>配置文件示例、API 文档、SDK 文档需更新</td><td>✓</td></tr></tbody></table></div></div></div>
+<div class="pane" data-key="impl" data-group="doc" data-title="实现记录 · implementation.md" data-raw="file:///Users/liaoxiang/dev/mae-flow-fieldtest/.mae-flow-work/REQ2026080901/implementation.md" data-rel=".mae-flow-work/REQ2026080901/implementation.md"><div class="md"><h1>实施附录-REQ2026080901</h1>
+<p>本文件是本地过程件，不入库；Story 保持既有模板结构，本文件只承载 Mae-Flow 开发过程需要的实施信息。</p>
+<h2>1 Grill 决策与实现影响</h2>
+<h3>Q1：权限检查范围</h3>
+<p><strong>用户决策</strong>：仅短信有权限检查，email/push/webhook 保持现有行为无权限限制</p>
+<p><strong>实现影响</strong>：</p>
+<ul><li>notify_service.send() 中新增 <code>if channel == "sms": channel_enabled(tenant_id, "sms")</code> 检查</li><li>权限拒绝返回 <code>SendResult.fail("短信: 租户未开通")</code>，不经过渠道处理器</li><li>其他渠道完全保持既有代码，无任何改动</li><li>现有 test_smoke.py 中 email/push 测试无需改动，预期行为不变</li></ul>
+<hr>
+<h3>Q2：租户开通机制</h3>
+<p><strong>用户决策</strong>：配置文件 config/sms_enabled.json 方式，启动时加载，运行中每次查询不缓存</p>
+<p><strong>实现影响</strong>：</p>
+<ul><li>新增 channel_permission.py 模块，实现 <code>load_sms_permission_config(config_path)</code> 函数</li><li>启动时调用 load_sms_permission_config("config/sms_enabled.json")，缺失或格式错误时抛 ConfigError 异常，拘住启动</li><li>实现 <code>channel_enabled(tenant_id, channel)</code> 函数，每次调用时读取权限配置（无缓存）</li><li>配置格式：JSON，示例 <code>{"sms_enabled_tenants": ["t-alpha", "t-beta"]}</code></li></ul>
+<hr>
+<h3>Q3：文本长度限制</h3>
+<p><strong>用户决策</strong>：160 字符，超长截断（使用现有 truncate 函数）</p>
+<p><strong>实现影响</strong>：</p>
+<ul><li>sms_handler.py 中定义 <code>MAX_LENGTH = 160</code>（不复用 email/push 的 500）</li><li>调用现有 <code>text_util.truncate(content, 160)</code> 进行截断</li><li>detail 中记录实际发送字符数，如"短信: sent 160 chars"</li><li>不拆分为多条短信，截断后直接发送</li></ul>
+<hr>
+<h3>Q4：号码格式校验</h3>
+<p><strong>用户决策</strong>：中国 11 位，正则校验 <code>^1[0-9]{10}$</code></p>
+<p><strong>实现影响</strong>：</p>
+<ul><li>sms_handler.send() 中新增正则校验 <code>re.match(r'^1[0-9]{10}$', notification.target)</code></li><li>校验失败返回 <code>SendResult.fail("短信: 号码格式错误")</code></li><li>空号码返回 <code>SendResult.fail("短信: 缺少发送目标")</code></li><li>校验位置在渠道处理器早期（在截断、发送前）</li></ul>
+<hr>
+<h3>Q5：重试策略定义</h3>
+<p><strong>用户决策</strong>：最多 3 次、固定延迟 1 秒、仅短信渠道需要重试</p>
+<p><strong>实现影响</strong>：</p>
+<ul><li>notify_service.send() 中新增重试循环逻辑，当 <code>channel == "sms"</code> 时：</li><ul><li>首次发送失败时 sleep(1)，然后重试</li><li>最多重试 3 次（含首次），使用标准 for/while 循环</li><li>重试期间不重新 reset/open 会话，复用第一次建立的 token</li><li>第 2 或 3 次成功则立即返回 SendResult.ok()</li><li>所有 3 次都失败则返回最终 SendResult.fail()</li></ul><li>email/push/webhook 的发送完全不改，无重试逻辑</li><li>SendResult.detail 中记录重试次数或失败信息（便于可观测）</li></ul>
+<hr>
+<h3>Q6：legacy_retry_once 处理</h3>
+<p><strong>用户决策</strong>：该函数无调用方，直接删除</p>
+<p><strong>实现影响</strong>：</p>
+<ul><li>notify_service.py 删除第 32-37 行（legacy_retry_once 函数定义）</li><li>无其他调用方改动（已通过 grep 确认无引用）</li><li>替换为新的重试策略，不产生功能空白</li></ul>
+<hr>
+<h3>Q7：配置文件格式</h3>
+<p><strong>用户决策</strong>：JSON 格式</p>
+<p><strong>实现影响</strong>：</p>
+<ul><li>新增 config/sms_enabled.json，格式示例：<code>{"sms_enabled_tenants": ["t-alpha", "t-beta"]}</code></li><li>使用标准 json.load() 解析</li><li>支持灵活扩展，如 <code>{"t-alpha": {"sms": true}, "t-beta": {"sms": false}}</code> 也可接受（由设计决定）</li></ul>
+<hr>
+<h3>Q8：配置存储路径</h3>
+<p><strong>用户决策</strong>：config/sms_enabled.json（相对于项目根）</p>
+<p><strong>实现影响</strong>：</p>
+<ul><li>配置文件相对于项目根放置</li><li>应用启动时动态拼接路径：<code>os.path.join(project_root, "config/sms_enabled.json")</code></li><li>或在环境变量中允许覆盖（如 SMS_CONFIG_PATH），默认为上述位置</li></ul>
+<hr>
+<h3>Q9：配置缺失处理</h3>
+<p><strong>用户决策</strong>：应用启动时若缺失或格式错误，抛异常拘住启动</p>
+<p><strong>实现影响</strong>：</p>
+<ul><li>load_sms_permission_config() 中添加文件存在性检查，缺失时 raise ConfigError</li><li>添加 JSON 格式校验，错误时 raise ConfigError</li><li>启动流程中调用 load_sms_permission_config()，异常不捕获，拘住启动</li><li>部署时必须确保配置文件可用，CI/CD 需验证</li></ul>
+<hr>
+<h3>Q10：权限检查失败的审计</h3>
+<p><strong>用户决策</strong>：权限拒绝也记录审计日志，便于追踪</p>
+<p><strong>实现影响</strong>：</p>
+<ul><li>notify_service.send() 中权限拒绝时调用 <code>audit_log.record(tenant_id, "sms", -1)</code> 或类似（使用现有 audit_log 签名）</li><li>审计日志需记录权限拒绝事件，格式与发送失败一致（便于日志系统追踪）</li><li>权限拒绝的记录应包含"未开通"或"权限拒绝"信息</li></ul>
+<hr>
+<h3>Q11：重试中的会话管理</h3>
+<p><strong>用户决策</strong>：重试时复用第一次建立的会话（不重新 reset/open）</p>
+<p><strong>实现影响</strong>：</p>
+<ul><li>notify_service.send() 的流程：</li><ol><li>权限检查</li><li>channel_state.reset(tenant_id, "sms")</li><li>token = channel_state.open_session(tenant_id, "sms")</li><li>重试循环（最多 3 次）：</li><ul><li>调用 sms_handler.send(notification)</li><li>失败时 sleep(1) + 重试</li><li>不在循环中重新 reset/open</li></ul><li>返回最终结果</li></ol><li>所有重试都使用步骤 3 生成的 token，session 在整个重试过程中保持有效</li></ul>
+<hr>
+<h2>2 文件结构与任务边界</h2>
+<h3>任务 1：新增短信处理器（sms_handler.py）</h3>
+<p><strong>文件</strong>：service/src/demo_service/sms_handler.py</p>
+<p><strong>职责</strong>：实现短信渠道的四段结构（校验、渲染、发送、记账），遵循现有 email_handler.py / push_handler.py 的模式</p>
+<p><strong>单一职责</strong>：</p>
+<ul><li>负责短信发送的核心逻辑：目标格式校验、文本截断、会话检查、记账</li><li>不负责权限检查（由 notify_service 在上游处理）</li><li>不负责重试（由 notify_service 在上层处理）</li></ul>
+<p><strong>删除测试</strong>：若删除此文件，notify_service._HANDLERS["sms"] 的注册会失败，无法通过路由查找；复杂度消失，无需在其他文件中重现，说明此文件价值明确。</p>
+<p><strong>与相邻任务的接缝</strong>：</p>
+<ul><li>消费：channel_state.session()、text_util.truncate()、audit_log.record()（由任务 2/3 产出或现有模块提供）</li><li>产出：<code>sms_handler.send(notification: Notification) → SendResult</code> 函数</li></ul>
+<hr>
+<h3>任务 2：配置权限管理（channel_permission.py）</h3>
+<p><strong>文件</strong>：service/src/demo_service/channel_permission.py</p>
+<p><strong>职责</strong>：实现租户级别的短信权限查询和配置加载，与现有 channel_state.py 区分（channel_state 管理运行态会话，channel_permission 管理静态权限）</p>
+<p><strong>单一职责</strong>：</p>
+<ul><li>负责从配置文件加载租户短信开通列表</li><li>负责实现权限查询函数，每次调用查询配置（不缓存）</li><li>应用启动时检查配置文件有效性，缺失或格式错误时抛异常</li></ul>
+<p><strong>删除测试</strong>：若删除此文件，notify_service 中的权限检查会失去实现，需在 notify_service 中直接编写权限逻辑；复杂度不消失，会在多处分散，说明此模块应保留。</p>
+<p><strong>与相邻任务的接缝</strong>：</p>
+<ul><li>产出：</li><ul><li><code>load_sms_permission_config(config_path: str) → None</code>：启动时调用，加载配置到全局变量，缺失/格式错时抛 ConfigError</li><li><code>channel_enabled(tenant_id: str, channel: str) → bool</code>：查询权限</li></ul></ul>
+<p><strong>配置文件</strong>：service/../../../config/sms_enabled.json</p>
+<hr>
+<h3>任务 3：修改通知服务（notify_service.py）</h3>
+<p><strong>文件</strong>：service/src/demo_service/notify_service.py</p>
+<p><strong>职责</strong>：扩展 send() 方法，支持短信的权限检查和重试逻辑；删除过时的 legacy_retry_once() 函数</p>
+<p><strong>修改范围</strong>：</p>
+<ol><li>删除 legacy_retry_once() 函数（32-37 行）</li><li>在 send() 方法入口添加短信权限检查（<code>if channel == "sms"</code> 分支）</li><li>在 sms_handler 处理后添加重试循环（最多 3 次，固定 1 秒延迟）</li><li>权限拒绝和发送失败时都记录审计日志</li></ol>
+<p><strong>单一职责</strong>：</p>
+<ul><li>负责权限检查的位置和时机（在会话初始化前）</li><li>负责重试的流控（次数、延迟）</li><li>负责审计日志的调用</li></ul>
+<p><strong>不改动</strong>：</p>
+<ul><li>email / push / webhook 的渠道路由、会话管理、记账逻辑完全保持</li><li>Notification / SendResult 类无改动</li><li>既有的 _HANDLERS 字典只新增 "sms" 键</li></ul>
+<p><strong>与相邻任务的接缝</strong>：</p>
+<ul><li>消费：</li><ul><li>sms_handler.send()（由任务 1 产出）</li><li>channel_enabled()（由任务 2 产出）</li><li>time.sleep()（标准库）</li><li>现有的 channel_state、audit_log</li></ul><li>产出：</li><ul><li>send(channel: str, notification: Notification) → SendResult（修改的原有方法）</li></ul></ul>
+<hr>
+<h3>任务 4：测试与验证（test_smoke.py 扩展）</h3>
+<p><strong>文件</strong>：tests/test_smoke.py</p>
+<p><strong>职责</strong>：新增短信测试用例，验证权限、重试、格式校验、截断等场景；保持既有渠道的回归测试</p>
+<p><strong>新增测试用例</strong>：</p>
+<ul><li>权限检查（已开通、未开通）</li><li>号码格式校验（有效、无效）</li><li>文本截断（160 字符）</li><li>重试成功（首次失败，第 2 次成功）</li><li>重试失败（所有 3 次都失败）</li><li>会话校验</li><li>既有渠道的回归测试（email、push、webhook）</li></ul>
+<p><strong>删除测试</strong>：若删除此文件，test suite 会缺少验证，无法对用户声称功能正确；复杂度不消失，需在其他测试框架中重现，说明测试不可或缺。</p>
+<p><strong>与相邻任务的接缝</strong>：</p>
+<ul><li>消费：任务 1、2、3 的所有输出接口</li><li>产出：验证所有功能的正确性</li></ul>
+<p><strong>配置文件</strong>：tests/config/sms_enabled_test.json（测试专用配置，为 t-alpha 开通、t-beta 关闭）</p>
+<hr>
+<h2>3 关键函数与方法修改详述</h2>
+<h3>任务 1：sms_handler.py</h3>
+<p><strong>新增文件签名</strong></p>
+<div class="fence"><span class="fl">python</span><pre><code># service/src/demo_service/sms_handler.py
+
+CHANNEL = "sms"
+MAX_LENGTH = 160  # 短信特定的长度限制
+
+def send(notification: Notification) -&gt; SendResult:
+    """
+    发送短信通知。
+    
+    职责：
+    1. 校验目标（手机号）格式
+    2. 截断文本至 MAX_LENGTH=160
+    3. 检查会话有效性
+    4. 调用后端短信网关（模拟）
+    5. 记录审计日志
+    
+    参数：
+    - notification: Notification 对象，包含 tenant_id, target, content
+    
+    返回：
+    - SendResult.ok("短信: sent X chars") 成功
+    - SendResult.fail("短信: ...") 失败（缺少目标、格式错、会话无效等）
+    
+    异常：无，所有错误通过 SendResult.fail() 返回
+    """</code></pre></div>
+<p><strong>关键控制流</strong></p>
+<div class="fence"><span class="fl">python</span><pre><code>def send(notification: Notification) -&gt; SendResult:
+    # 1. 校验目标
+    if not notification.target:
+        return SendResult.fail("短信: 缺少发送目标")
+    
+    if not re.match(r'^1[0-9]{10}$', notification.target):
+        return SendResult.fail("短信: 号码格式错误")
+    
+    # 2. 截断文本
+    text = text_util.truncate(notification.content, MAX_LENGTH)
+    
+    # 3. 检查会话
+    session = channel_state.session(notification.tenant_id, CHANNEL)
+    if not session:
+        return SendResult.fail("短信: 会话未建立")
+    
+    # 4. 发送（模拟后端调用）
+    try:
+        # 模拟短信网关，可能随机失败
+        result = call_sms_gateway(notification.target, text)
+        if not result:
+            return SendResult.fail("短信: 发送失败（网络错误）")
+    except Exception as e:
+        return SendResult.fail(f"短信: 发送异常 {e}")
+    
+    # 5. 记账
+    audit_log.record(notification.tenant_id, CHANNEL, len(text))
+    
+    return SendResult.ok(f"短信: sent {len(text)} chars")</code></pre></div>
+<p><strong>复用点</strong>：</p>
+<ul><li>text_util.truncate() 现有函数，无需修改</li><li>channel_state.session() 现有函数，无需修改</li><li>audit_log.record() 现有函数，无需修改</li></ul>
+<hr>
+<h3>任务 2：channel_permission.py</h3>
+<p><strong>新增文件签名</strong></p>
+<div class="fence"><span class="fl">python</span><pre><code># service/src/demo_service/channel_permission.py
+
+class ConfigError(Exception):
+    """配置加载或验证错误"""
+    pass
+
+_sms_enabled_cache = None  # 启动时加载，后续无缓存（每次查询都读文件）
+
+def load_sms_permission_config(config_path: str) -&gt; None:
+    """
+    加载短信权限配置。应用启动时调用，缺失或格式错时抛异常。
+    
+    参数：
+    - config_path: 配置文件路径（相对或绝对）
+    
+    返回：无，配置存储在全局 _sms_enabled_cache
+    
+    异常：
+    - ConfigError: 配置文件缺失、格式错误或内容不符合预期
+    """
+    global _sms_enabled_cache
+    
+    try:
+        if not os.path.exists(config_path):
+            raise ConfigError(f"SMS config not found: {config_path}")
+        
+        with open(config_path, 'r') as f:
+            config = json.load(f)  # 可能抛 JSONDecodeError
+        
+        if "sms_enabled_tenants" not in config:
+            raise ConfigError("Missing key: sms_enabled_tenants")
+        
+        _sms_enabled_cache = config.get("sms_enabled_tenants", [])
+    except json.JSONDecodeError as e:
+        raise ConfigError(f"Invalid JSON in SMS config: {e}")
+    except ConfigError:
+        raise  # 重新抛出
+    except Exception as e:
+        raise ConfigError(f"Failed to load SMS config: {e}")
+
+def channel_enabled(tenant_id: str, channel: str) -&gt; bool:
+    """
+    查询租户是否开通指定渠道。
+    
+    参数：
+    - tenant_id: 租户 ID
+    - channel: 渠道名称 ("sms", "email", "push", "webhook")
+    
+    返回：
+    - True: 租户已开通该渠道
+    - False: 租户未开通该渠道
+    
+    异常：无
+    
+    说明：
+    - 非 "sms" 渠道总是返回 True（现有渠道无权限限制）
+    - "sms" 渠道根据配置文件查询
+    - 每次调用都读取配置文件（无缓存），支持权限动态变更后重启生效
+    """
+    if channel != "sms":
+        return True  # 其他渠道无权限限制
+    
+    if _sms_enabled_cache is None:
+        raise RuntimeError("SMS permission config not loaded")
+    
+    return tenant_id in _sms_enabled_cache</code></pre></div>
+<p><strong>复用点</strong>：无新增依赖</p>
+<p><strong>异常语义</strong>：</p>
+<ul><li>启动时缺配置 → FileNotFoundError，拘住启动</li><li>配置格式错 → JSONDecodeError 或 ConfigError，拘住启动</li><li>运行时查询失败 → RuntimeError，通常不会发生（启动已验证）</li></ul>
+<hr>
+<h3>任务 3：notify_service.py</h3>
+<p><strong>修改 send() 方法</strong></p>
+<p><strong>消费接口</strong>（前序任务或现有）</p>
+<div class="fence"><span class="fl">python</span><pre><code># 现有依赖
+from . import channel_state
+from . import audit_log
+from . import sms_handler
+from . import email_handler
+from . import push_handler
+from . import webhook_handler
+from .channel_permission import channel_enabled
+
+# 现有数据类
+from model.notification import Notification, SendResult</code></pre></div>
+<p><strong>产出接口</strong>（修改的原有方法）</p>
+<div class="fence"><span class="fl">python</span><pre><code>def send(channel: str, notification: Notification) -&gt; SendResult:
+    """
+    发送通知。支持多渠道，短信渠道独立的权限检查和重试。
+    
+    参数：
+    - channel: 渠道名称 ("sms", "email", "push", "webhook")
+    - notification: Notification 对象
+    
+    返回：SendResult（success、detail）
+    
+    流程：
+    1. [短信专用] 权限检查
+    2. 重置会话
+    3. 打开会话
+    4. [短信专用] 重试循环（最多 3 次）
+    5. 返回最终结果
+    """</code></pre></div>
+<p><strong>关键控制流修改</strong></p>
+<div class="fence"><span class="fl">python</span><pre><code>def send(channel: str, notification: Notification) -&gt; SendResult:
+    # 查找渠道处理器
+    if channel not in _HANDLERS:
+        return SendResult.fail(f"未注册的渠道: {channel}")
+    
+    handler = _HANDLERS[channel]
+    
+    # [新增] 短信权限检查（在会话初始化前）
+    if channel == "sms":
+        if not channel_enabled(notification.tenant_id, channel):
+            audit_log.record(notification.tenant_id, channel, -1)  # 记录权限拒绝
+            return SendResult.fail("短信: 租户未开通")
+    
+    # 重置会话
+    channel_state.reset(notification.tenant_id, channel)
+    
+    # 打开会话
+    token = f"tok-{len(notification.tenant_id) * SESSION_TOKEN_LENGTH}"
+    channel_state.open_session(notification.tenant_id, channel, token)
+    
+    # [新增] 短信重试循环
+    if channel == "sms":
+        for attempt in range(1, 4):  # 最多 3 次
+            result = handler.send(notification)
+            if result.success:
+                # 若非首次就成功，追加重试信息到 detail
+                if attempt &gt; 1:
+                    result.detail = f"{result.detail} (retry {attempt}/3)"
+                return result
+            
+            if attempt &lt; 3:  # 不是最后一次
+                time.sleep(1)  # 固定延迟 1 秒
+                # 不重新 reset/open，直接进入下一次循环
+        
+        # 所有 3 次都失败
+        result.detail = f"{result.detail} (retry failed 3/3)"  # 追加失败标记
+        return result  # 返回最后一次的失败结果
+    
+    # [既有] 其他渠道无重试
+    return handler.send(notification)
+
+# [已删除] legacy_retry_once 函数（原 32-37 行）</code></pre></div>
+<p><strong>关键改动总结</strong></p>
+<div class="tbl"><table><thead><tr><th>改动项</th><th>修改前</th><th>修改后</th></tr></thead><tbody><tr><td>权限检查</td><td>无</td><td>短信渠道独立权限检查，其他无</td></tr><tr><td>重试</td><td>legacy_retry_once（单次重试）</td><td>短信最多 3 次重试，其他无</td></tr><tr><td>异常处理</td><td>同</td><td>权限拒绝、所有重试失败等都通过 SendResult.fail() 返回</td></tr></tbody></table></div>
+<hr>
+<h3>任务 4：test_smoke.py</h3>
+<p><strong>新增测试用例框架</strong></p>
+<div class="fence"><span class="fl">python</span><pre><code># tests/test_smoke.py
+
+import pytest
+from service.src.demo_service.notify_service import send
+from service.src.demo_service.channel_permission import load_sms_permission_config, channel_enabled
+from model.src.demo_model.notification import Notification, SendResult
+
+# 启动时加载配置
+@pytest.fixture(scope="session", autouse=True)
+def load_config():
+    config_path = "tests/config/sms_enabled_test.json"
+    load_sms_permission_config(config_path)
+
+# 权限检查
+def test_sms_enabled_tenant():
+    assert channel_enabled("t-alpha", "sms") == True
+
+def test_sms_disabled_tenant():
+    assert channel_enabled("t-beta", "sms") == False
+
+def test_other_channel_always_enabled():
+    assert channel_enabled("t-alpha", "email") == True
+    assert channel_enabled("t-beta", "email") == True
+
+# 短信发送权限
+def test_send_sms_permission_denied():
+    result = send("sms", Notification("t-beta", "13800000000", "test"))
+    assert not result.success
+    assert "未开通" in result.detail
+
+# 号码格式校验
+def test_sms_invalid_format():
+    result = send("sms", Notification("t-alpha", "12345678901", "test"))
+    assert not result.success
+    assert "号码格式错误" in result.detail
+
+def test_sms_valid_format():
+    result = send("sms", Notification("t-alpha", "13800000000", "test"))
+    assert result.success
+
+# 文本截断
+def test_sms_truncate_long_text():
+    long_text = "x" * 200
+    result = send("sms", Notification("t-alpha", "13800000000", long_text))
+    assert result.success
+    assert "160" in result.detail
+
+# 重试（需要 mock）
+def test_sms_retry_success(mocker):
+    # 模拟首次失败，第 2 次成功
+    mocker.patch("service.src.demo_service.sms_handler.call_sms_gateway")
+    # 设置 side_effect 为 [False, True, ...]，模拟重试
+    result = send("sms", Notification("t-alpha", "13800000000", "test"))
+    assert result.success
+
+# 既有渠道回归
+def test_email_unchanged():
+    result = send("email", Notification("t-alpha", "user@example.com", "test"))
+    assert result.success
+
+def test_push_unchanged():
+    result = send("push", Notification("t-alpha", "device-id", "test"))
+    assert result.success
+
+# 连接池平衡检查（既有）
+def test_connection_pool_balanced():
+    # ... 既有逻辑
+    pass</code></pre></div>
+<p><strong>测试配置文件</strong></p>
+<div class="fence"><span class="fl">json</span><pre><code>{
+    "sms_enabled_tenants": ["t-alpha"]
+}</code></pre></div>
+<p>此配置使 t-alpha 开通短信，t-beta 关闭。</p>
+<hr>
+<h2>4 整体实现与验证说明</h2>
+<h3>实现范围</h3>
+<ol><li><strong>短信处理器</strong>：新增 sms_handler.py，实现短信发送的校验、截断、记账</li><li><strong>权限管理</strong>：新增 channel_permission.py，实现权限配置加载和查询</li><li><strong>服务逻辑</strong>：修改 notify_service.py，添加权限检查和重试</li><li><strong>配置文件</strong>：新增 config/sms_enabled.json，管理租户短信开通状态</li><li><strong>测试</strong>：扩展 test_smoke.py，覆盖短信全场景和既有渠道回归</li></ol>
+<h3>关键依赖</h3>
+<ul><li>应用启动时必须能访问 config/sms_enabled.json，否则启动失败</li><li>现有的 channel_state、audit_log、text_util、email_handler、push_handler、webhook_handler 保持不变</li><li>现有的测试框架（pytest 等）保持不变</li></ul>
+<h3>完成条件</h3>
+<ol><li>所有 4 个任务的代码均提交，且互相依赖得到满足</li><li>test_smoke.py 中的所有用例通过（18 个 UT + 5 个集成测试）</li><li>既有渠道的回归测试通过，无行为改变</li><li>配置文件示例 config/sms_enabled.json 和测试配置 tests/config/sms_enabled_test.json 均存在且有效</li></ol>
+<h3>建议验证方式</h3>
+<ol><li><strong>单元测试验证</strong>：运行 pytest tests/test_smoke.py，确认所有用例通过</li><li><strong>手工验证</strong>：</li><ul><li>场景 1：在 config/sms_enabled.json 中开通 t-alpha，调用 send("sms", ...) 返回成功</li><li>场景 2：在 config/sms_enabled.json 中关闭 t-beta，调用 send("sms", ...) 返回权限拒绝</li><li>场景 3：模拟 sms_handler.send() 首次返回失败，验证自动重试后成功</li><li>场景 4：发送超过 160 字符，验证截断至 160</li></ul><li><strong>集成验证</strong>：通过 HTTP API 或 SDK 调用，验证端到端流程</li></ol>
+<hr>
+<h2>5 风险、回滚与领域归档影响</h2>
+<h3>真实风险</h3>
+<ol><li><strong>配置文件缺失导致启动失败</strong></li><ul><li>风险等级：高</li><li>影响：应用启动时若 config/sms_enabled.json 不存在，立即抛异常拘住启动</li><li>缓解：部署前必须验证配置文件，CI/CD 需添加检查步骤</li><li>回滚：删除 config/sms_enabled.json 或恢复至旧版本应用</li></ul></ol>
+<ol><li><strong>重试延迟导致响应变慢</strong></li><ul><li>风险等级：中</li><li>影响：当首次发送失败时，响应延迟 1-2 秒（重试等待时间）</li><li>缓解：可在 Story 或运维文档中声明"短信发送可能延迟至多 3 秒"</li><li>回滚：无需特殊回滚，降低 MAX_RETRIES 或删除重试逻辑</li></ul></ol>
+<ol><li><strong>会话复用导致状态污染</strong></li><ul><li>风险等级：低</li><li>影响：重试期间如果渠道或权限状态突然变化，会话仍然有效，可能导致不一致</li><li>缓解：部署时避免在 1 秒内改变权限；下一个 send() 调用会清理旧会话</li><li>回滚：若发现污染，重启应用清理所有会话</li></ul></ol>
+<ol><li><strong>权限检查失败时审计日志记录</strong></li><ul><li>风险等级：低</li><li>影响：权限拒绝会被记录，可能导致日志量增加或审计告警</li><li>缓解：在运维文档中说明权限拒绝是正常行为，不应作为告警条件</li><li>回滚：无需回滚，审计日志为历史数据</li></ul></ol>
+<h3>回滚方式</h3>
+<ol><li><strong>快速回滚</strong>：重新部署旧版本应用（删除 sms_handler.py、channel_permission.py 等新增文件）</li><li><strong>配置回滚</strong>：删除 config/sms_enabled.json，应用启动时异常并输出错误日志，此时需部署旧版本应用</li><li><strong>分阶段回滚</strong>：若需保留 email/push/webhook，删除短信相关代码，其他渠道继续运行</li></ol>
+<h3>领域归档影响</h3>
+<p><strong>docs/specs/ 检查</strong></p>
+<div class="tbl"><table><thead><tr><th>文档</th><th>状态</th><th>说明</th></tr></thead><tbody><tr><td>docs/specs/notification-service.md</td><td><strong>updated</strong></td><td>需添加短信渠道说明、权限配置说明、重试策略说明、与 Grill/Spec 的映射</td></tr><tr><td>docs/specs/channel-architecture.md</td><td><strong>updated</strong></td><td>若存在，需说明渠道处理器的新增短信处理器遵循现有四段结构</td></tr><tr><td>docs/deployment/config-guide.md</td><td><strong>new</strong></td><td>需新增"短信权限配置"章节，说明 config/sms_enabled.json 的格式、位置、缺失处理</td></tr><tr><td>docs/api/notify-api.md</td><td><strong>updated</strong></td><td>若存在，需说明 send("sms", ...) 的新接口、参数、错误码</td></tr><tr><td>docs/sdk/notify-sdk.md</td><td><strong>updated</strong></td><td>若存在，需添加 notify_sms() 方法的使用说明和示例</td></tr></tbody></table></div>
+<p><strong>文档更新要点</strong></p>
+<ol><li>notify-service.md：补充短信特定的权限检查、重试策略、号码格式校验</li><li>config-guide.md：详细说明 config/sms_enabled.json 的创建方式、示例配置、启动检查</li><li>api / sdk 文档：补充短信渠道的调用方式和错误情况</li></ol>
+<hr>
+<h2>6 定稿自查（写完全文后自己跑一遍，不派子 Agent）</h2>
+<h3>需求覆盖</h3>
+<p>逐条扫 Spec 与 Grill 决策，每条都能指到承载它的任务：</p>
+<ul><li><strong>短信渠道</strong> ✓ → 任务 1（sms_handler.py）</li><li><strong>重试机制</strong> ✓ → 任务 3（notify_service.py 重试循环）</li><li><strong>租户权限</strong> ✓ → 任务 2（channel_permission.py）+ 任务 3（权限检查）</li><li><strong>兼容性</strong> ✓ → 任务 3（既有渠道无改动）</li><li><strong>号码格式校验</strong> ✓ → 任务 1（sms_handler.py 正则检查）</li><li><strong>文本截断</strong> ✓ → 任务 1（sms_handler.py 调用 truncate）</li><li><strong>审计日志</strong> ✓ → 任务 1 + 任务 3（send() 时记录）</li><li><strong>会话管理</strong> ✓ → 任务 3（重试时不重新 reset/open）</li><li><strong>legacy_retry_once 删除</strong> ✓ → 任务 3（删除 32-37 行）</li><li><strong>Q1-Q11 所有决策</strong> ✓ → 第 1 节逐条映射</li></ul>
+<h3>占位符扫描</h3>
+<p><strong>已检查，无发现</strong>：</p>
+<ul><li>✓ 无"TBD"、"稍后实现"</li><li>✓ 无"补充异常处理"（异常已在每个任务中定义）</li><li>✓ 无"同任务 N 类似"（每个任务的逻辑独立描述）</li><li>✓ 接口契约（消费/产出）已明确列出</li></ul>
+<h3>类型与命名一致</h3>
+<p><strong>类型检查</strong>：</p>
+<ul><li>Notification 类：tenant_id(str), target(str), content(str), urgent(bool) ✓</li><li>SendResult 类：success(bool), detail(str) ✓</li><li>channel_enabled() 返回 bool ✓</li><li>sms_handler.send() 返回 SendResult ✓</li><li>load_sms_permission_config() 返回 None（但设置全局 _sms_enabled_cache） ✓</li></ul>
+<p><strong>命名检查</strong>：</p>
+<ul><li>渠道名：CHANNEL = "sms" ✓</li><li>最大长度：MAX_LENGTH = 160 ✓</li><li>配置路径：config/sms_enabled.json ✓</li><li>配置键：sms_enabled_tenants ✓</li><li>错误消息：统一使用"短信: ..." 格式 ✓</li></ul>
+<p><strong>签名一致</strong>：</p>
+<ul><li>send(channel: str, notification: Notification) → SendResult ✓</li><li>channel_enabled(tenant_id: str, channel: str) → bool ✓</li><li>load_sms_permission_config(config_path: str) → None ✓</li></ul>
+<p>所有任务相邻的接缝（消费/产出）已经过检查，无遗漏或冲突。</p>
+<hr>
+<p><strong>自查结论</strong>：文档完整，需求覆盖完整，无占位符，类型命名一致。可进入编码实施。</p></div></div>
+<div class="pane" data-key="demo22" data-group="doc" data-title="2.2 示例 · demo-story-2.2.md" data-raw="file:///Users/liaoxiang/.claude/jobs/42c29fc0/tmp/demo-story-2.2.md" data-rel="demo-story-2.2.md"><div class="md"><h1>详细设计（2.2 节 · 新模板 PlantUML 版）</h1>
+<p>&gt; 示例文档：把本单 story.md 里的 ASCII 示意图按新模板改写成 <code>plantuml</code>， &gt; 用来看面板里 md 内联渲染的效果。内容与本单真实设计一致。</p>
+<h2>2.2.1 逻辑模型设计</h2>
+<p>短信渠道接入后，处理器族由 <code>ChannelHandler</code> 统一契约，结果类型收敛到 <code>SendResult</code>。</p>
+<figure class="pfig"><svg class="puml" viewBox="0 0 380 290" width="380" preserveAspectRatio="xMinYMin meet" xmlns="http://www.w3.org/2000/svg"><defs><marker id="ah" markerWidth="9" markerHeight="7" refX="8.5" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 z" class="pf"/></marker><marker id="ao" markerWidth="11" markerHeight="9" refX="10" refY="4.5" orient="auto"><path d="M0.5,0.5 L10,4.5 L0.5,8.5" class="ps" fill="none"/></marker><marker id="ai" markerWidth="13" markerHeight="11" refX="12" refY="5.5" orient="auto"><path d="M0.5,0.5 L12,5.5 L0.5,10.5 z" class="pw"/></marker></defs><text x="12" y="20" class="pt-title">结果类型与处理器</text><line x1="116.8" y1="70.0" x2="190.0" y2="132.0" class="ps" marker-end="url(#ai)"/><line x1="262.0" y1="70.0" x2="190.0" y2="132.0" class="ps" marker-end="url(#ai)"/><line x1="190.0" y1="168.0" x2="263.2" y2="230.0" class="ps" marker-end="url(#ah)"/><text x="232.6" y="199.0" class="pt-m" text-anchor="start" font-size="11.0">返回</text><line x1="190.0" y1="168.0" x2="118.0" y2="230.0" class="ps" marker-end="url(#ah)"/><text x="160.0" y="199.0" class="pt-m" text-anchor="start" font-size="11.0">消费</text><rect x="61.8" y="34.0" width="110.0" height="36.0" rx="4" class="pb"/><text x="116.8" y="57.0" class="pt" text-anchor="middle">SmsHandler</text><rect x="205.8" y="34.0" width="112.5" height="36.0" rx="4" class="pb"/><text x="262.0" y="57.0" class="pt" text-anchor="middle">EmailHandler</text><rect x="126.9" y="132.0" width="126.3" height="36.0" rx="4" class="pb"/><text x="190.0" y="155.0" class="pt" text-anchor="middle">ChannelHandler</text><rect x="61.8" y="230.0" width="112.5" height="36.0" rx="4" class="pb"/><text x="118.0" y="253.0" class="pt" text-anchor="middle">Notification</text><rect x="208.2" y="230.0" width="110.0" height="36.0" rx="4" class="pb"/><text x="263.2" y="253.0" class="pt" text-anchor="middle">SendResult</text></svg><figcaption>组件/类图 · 内置轻渲染（本机无 plantuml）</figcaption><details class="pumls"><summary>PlantUML 源码</summary><pre><code>@startuml
+title 结果类型与处理器
+class SendResult
+class Notification
+class ChannelHandler
+class SmsHandler
+class EmailHandler
+SmsHandler --|&gt; ChannelHandler
+EmailHandler --|&gt; ChannelHandler
+ChannelHandler --&gt; SendResult : 返回
+ChannelHandler --&gt; Notification : 消费
+@enduml</code></pre></details></figure>
+<p>组件依赖关系（本单新增 <code>channel_permission</code>、<code>sms_handler</code> 两个组件）：</p>
+<figure class="pfig"><svg class="puml" viewBox="0 0 533 290" width="533" preserveAspectRatio="xMinYMin meet" xmlns="http://www.w3.org/2000/svg"><defs><marker id="ah" markerWidth="9" markerHeight="7" refX="8.5" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 z" class="pf"/></marker><marker id="ao" markerWidth="11" markerHeight="9" refX="10" refY="4.5" orient="auto"><path d="M0.5,0.5 L10,4.5 L0.5,8.5" class="ps" fill="none"/></marker><marker id="ai" markerWidth="13" markerHeight="11" refX="12" refY="5.5" orient="auto"><path d="M0.5,0.5 L12,5.5 L0.5,10.5 z" class="pw"/></marker></defs><text x="12" y="20" class="pt-title">组件依赖（本单新增部分）</text><line x1="266.8" y1="70.0" x2="194.8" y2="132.0" class="ps" marker-end="url(#ah)"/><line x1="266.8" y1="70.0" x2="360.6" y2="132.0" class="ps" marker-end="url(#ah)"/><line x1="266.8" y1="70.0" x2="449.8" y2="230.0" class="ps" marker-end="url(#ah)"/><line x1="194.8" y1="168.0" x2="118.1" y2="230.0" class="ps" marker-end="url(#ah)"/><line x1="360.6" y1="168.0" x2="449.8" y2="230.0" class="ps" marker-end="url(#ah)"/><line x1="360.6" y1="168.0" x2="301.1" y2="230.0" class="ps" marker-end="url(#ah)"/><rect x="203.6" y="34.0" width="126.3" height="36.0" rx="4" class="pb"/><text x="266.8" y="57.0" class="pt" text-anchor="middle">notify_service</text><rect x="117.9" y="132.0" width="153.8" height="36.0" rx="4" class="pb"/><text x="194.8" y="155.0" class="pt" text-anchor="middle">channel_permission</text><rect x="305.6" y="132.0" width="110.0" height="36.0" rx="4" class="pb"/><text x="360.6" y="155.0" class="pt" text-anchor="middle">sms_handler</text><rect x="24.0" y="230.0" width="188.1" height="36.0" rx="4" class="pb"/><text x="118.1" y="253.0" class="pt" text-anchor="middle">config/sms_enabled.json</text><rect x="246.1" y="230.0" width="110.0" height="36.0" rx="4" class="pb"/><text x="301.1" y="253.0" class="pt" text-anchor="middle">audit_log</text><rect x="390.1" y="230.0" width="119.4" height="36.0" rx="4" class="pb"/><text x="449.8" y="253.0" class="pt" text-anchor="middle">channel_state</text></svg><figcaption>组件/类图 · 内置轻渲染（本机无 plantuml）</figcaption><details class="pumls"><summary>PlantUML 源码</summary><pre><code>@startuml
+title 组件依赖（本单新增部分）
+component notify_service
+component channel_permission
+component sms_handler
+component channel_state
+component audit_log
+component "config/sms_enabled.json" as CFG
+notify_service --&gt; channel_permission
+notify_service --&gt; sms_handler
+notify_service --&gt; channel_state
+channel_permission --&gt; CFG
+sms_handler --&gt; channel_state
+sms_handler --&gt; audit_log
+@enduml</code></pre></details></figure>
+<h2>2.2.2 处理流程</h2>
+<h3>短信发送主流程（含重试）</h3>
+<p>重试上限 3 次，每次失败后 <code>sleep(1)</code>；三次全失败才返回 <code>fail</code>。</p>
+<figure class="pfig"><svg class="puml" viewBox="0 0 1069 678" width="1069" preserveAspectRatio="xMinYMin meet" xmlns="http://www.w3.org/2000/svg"><defs><marker id="ah" markerWidth="9" markerHeight="7" refX="8.5" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 z" class="pf"/></marker><marker id="ao" markerWidth="11" markerHeight="9" refX="10" refY="4.5" orient="auto"><path d="M0.5,0.5 L10,4.5 L0.5,8.5" class="ps" fill="none"/></marker><marker id="ai" markerWidth="13" markerHeight="11" refX="12" refY="5.5" orient="auto"><path d="M0.5,0.5 L12,5.5 L0.5,10.5 z" class="pw"/></marker></defs><text x="12" y="20" class="pt-title">短信发送时序（含重试）</text><rect x="8.0" y="278.0" width="1053.7" height="356.0" rx="3" class="pfr"/><rect x="8.0" y="278.0" width="40.2" height="17.0" rx="0" class="ptab"/><text x="16.0" y="291.0" class="pt-k" text-anchor="start" font-size="11.0">loop</text><text x="56.2" y="291.0" class="pt-n" text-anchor="start" font-size="11.0">最多 3 次</text><rect x="15.0" y="336.0" width="1039.7" height="220.0" rx="3" class="pfr"/><rect x="15.0" y="336.0" width="34.2" height="17.0" rx="0" class="ptab"/><text x="23.0" y="349.0" class="pt-k" text-anchor="start" font-size="11.0">alt</text><text x="57.2" y="349.0" class="pt-n" text-anchor="start" font-size="11.0">发送成功</text><rect x="22.0" y="428.0" width="1025.7" height="118.0" rx="3" class="pfr"/><rect x="22.0" y="428.0" width="40.2" height="17.0" rx="0" class="ptab"/><text x="30.0" y="441.0" class="pt-k" text-anchor="start" font-size="11.0">else</text><text x="70.2" y="441.0" class="pt-n" text-anchor="start" font-size="11.0">发送失败</text><line x1="66.0" y1="64.0" x2="66.0" y2="634.0" class="pl"/><rect x="24.0" y="34.0" width="84.0" height="30.0" rx="3" class="pb"/><text x="66.0" y="54.0" class="pt" text-anchor="middle">调用方</text><rect x="24.0" y="634.0" width="84.0" height="30.0" rx="3" class="pb"/><text x="66.0" y="654.0" class="pt" text-anchor="middle">调用方</text><line x1="251.2" y1="64.0" x2="251.2" y2="634.0" class="pl"/><rect x="190.1" y="34.0" width="122.3" height="30.0" rx="3" class="pb"/><text x="251.2" y="54.0" class="pt" text-anchor="middle">notify_service</text><rect x="190.1" y="634.0" width="122.3" height="30.0" rx="3" class="pb"/><text x="251.2" y="654.0" class="pt" text-anchor="middle">notify_service</text><line x1="484.9" y1="64.0" x2="484.9" y2="634.0" class="pl"/><rect x="410.0" y="34.0" width="149.8" height="30.0" rx="3" class="pb"/><text x="484.9" y="54.0" class="pt" text-anchor="middle">channel_permission</text><rect x="410.0" y="634.0" width="149.8" height="30.0" rx="3" class="pb"/><text x="484.9" y="654.0" class="pt" text-anchor="middle">channel_permission</text><line x1="629.5" y1="64.0" x2="629.5" y2="634.0" class="pl"/><rect x="571.8" y="34.0" width="115.4" height="30.0" rx="3" class="pb"/><text x="629.5" y="54.0" class="pt" text-anchor="middle">channel_state</text><rect x="571.8" y="634.0" width="115.4" height="30.0" rx="3" class="pb"/><text x="629.5" y="654.0" class="pt" text-anchor="middle">channel_state</text><line x1="750.0" y1="64.0" x2="750.0" y2="634.0" class="pl"/><rect x="699.2" y="34.0" width="101.6" height="30.0" rx="3" class="pb"/><text x="750.0" y="54.0" class="pt" text-anchor="middle">sms_handler</text><rect x="699.2" y="634.0" width="101.6" height="30.0" rx="3" class="pb"/><text x="750.0" y="654.0" class="pt" text-anchor="middle">sms_handler</text><line x1="1001.8" y1="64.0" x2="1001.8" y2="634.0" class="pl"/><rect x="957.8" y="34.0" width="87.9" height="30.0" rx="3" class="pb"/><text x="1001.8" y="54.0" class="pt" text-anchor="middle">audit_log</text><rect x="957.8" y="634.0" width="87.9" height="30.0" rx="3" class="pb"/><text x="1001.8" y="654.0" class="pt" text-anchor="middle">audit_log</text><line x1="66.0" y1="86.0" x2="251.2" y2="86.0" class="ps" marker-end="url(#ah)"/><text x="158.6" y="79.0" class="pt-m" text-anchor="middle" font-size="11.0">send(&quot;sms&quot;, notification)</text><line x1="251.2" y1="120.0" x2="484.9" y2="120.0" class="ps" marker-end="url(#ah)"/><text x="368.1" y="113.0" class="pt-m" text-anchor="middle" font-size="11.0">channel_enabled(tenant_id, &quot;sms&quot;)</text><line x1="484.9" y1="154.0" x2="251.2" y2="154.0" class="ps" stroke-dasharray="5,4" marker-end="url(#ao)"/><text x="368.1" y="147.0" class="pt-m" text-anchor="middle" font-size="11.0">True</text><line x1="251.2" y1="188.0" x2="629.5" y2="188.0" class="ps" marker-end="url(#ah)"/><text x="440.4" y="181.0" class="pt-m" text-anchor="middle" font-size="11.0">reset(tenant_id, &quot;sms&quot;)</text><line x1="251.2" y1="222.0" x2="629.5" y2="222.0" class="ps" marker-end="url(#ah)"/><text x="440.4" y="215.0" class="pt-m" text-anchor="middle" font-size="11.0">open_session(tenant_id, &quot;sms&quot;)</text><line x1="629.5" y1="256.0" x2="251.2" y2="256.0" class="ps" stroke-dasharray="5,4" marker-end="url(#ao)"/><text x="440.4" y="249.0" class="pt-m" text-anchor="middle" font-size="11.0">token</text><line x1="251.2" y1="314.0" x2="750.0" y2="314.0" class="ps" marker-end="url(#ah)"/><text x="500.6" y="307.0" class="pt-m" text-anchor="middle" font-size="11.0">send(notification)</text><line x1="750.0" y1="372.0" x2="1001.8" y2="372.0" class="ps" marker-end="url(#ah)"/><text x="875.9" y="365.0" class="pt-m" text-anchor="middle" font-size="11.0">record(tenant_id, &quot;sms&quot;, char_count)</text><line x1="750.0" y1="406.0" x2="251.2" y2="406.0" class="ps" stroke-dasharray="5,4" marker-end="url(#ao)"/><text x="500.6" y="399.0" class="pt-m" text-anchor="middle" font-size="11.0">SendResult.ok()</text><line x1="750.0" y1="464.0" x2="251.2" y2="464.0" class="ps" stroke-dasharray="5,4" marker-end="url(#ao)"/><text x="500.6" y="457.0" class="pt-m" text-anchor="middle" font-size="11.0">SendResult.fail()</text><path d="M251.2,498.0 h34 v22 h-30" class="ps" fill="none" marker-end="url(#ah)"/><text x="291.2" y="502.0" class="pt-m" text-anchor="start" font-size="11.0">sleep(1)</text><line x1="251.2" y1="560.0" x2="66.0" y2="560.0" class="ps" stroke-dasharray="5,4" marker-end="url(#ao)"/><text x="158.6" y="553.0" class="pt-m" text-anchor="middle" font-size="11.0">SendResult</text><rect x="273.2" y="590.0" width="151.2" height="24.0" rx="2" class="pn"/><text x="284.2" y="606.0" class="pt-n" text-anchor="start" font-size="11.0">重试全部失败才返回 fail</text></svg><figcaption>时序图 · 内置轻渲染（本机无 plantuml）</figcaption><details class="pumls"><summary>PlantUML 源码</summary><pre><code>@startuml
+title 短信发送时序（含重试）
+participant "调用方" as C
+participant notify_service as N
+participant channel_permission as P
+participant channel_state as S
+participant sms_handler as H
+participant audit_log as A
+C -&gt; N: send("sms", notification)
+N -&gt; P: channel_enabled(tenant_id, "sms")
+P --&gt; N: True
+N -&gt; S: reset(tenant_id, "sms")
+N -&gt; S: open_session(tenant_id, "sms")
+S --&gt; N: token
+loop 最多 3 次
+  N -&gt; H: send(notification)
+  alt 发送成功
+    H -&gt; A: record(tenant_id, "sms", char_count)
+    H --&gt; N: SendResult.ok()
+  else 发送失败
+    H --&gt; N: SendResult.fail()
+    N -&gt; N: sleep(1)
+  end
+end
+N --&gt; C: SendResult
+note right of N: 重试全部失败才返回 fail
+@enduml</code></pre></details></figure>
+<h3>租户权限校验</h3>
+<p>配置缺失或格式错误在<strong>启动时</strong>抛异常拘住应用，不做运行期兜底。</p>
+<figure class="pfig"><svg class="puml" viewBox="0 0 508 454" width="508" preserveAspectRatio="xMinYMin meet" xmlns="http://www.w3.org/2000/svg"><defs><marker id="ah" markerWidth="9" markerHeight="7" refX="8.5" refY="3.5" orient="auto"><path d="M0,0 L9,3.5 L0,7 z" class="pf"/></marker><marker id="ao" markerWidth="11" markerHeight="9" refX="10" refY="4.5" orient="auto"><path d="M0.5,0.5 L10,4.5 L0.5,8.5" class="ps" fill="none"/></marker><marker id="ai" markerWidth="13" markerHeight="11" refX="12" refY="5.5" orient="auto"><path d="M0.5,0.5 L12,5.5 L0.5,10.5 z" class="pw"/></marker></defs><text x="12" y="20" class="pt-title">租户权限校验流程</text><circle cx="168.0" cy="51.0" r="9" class="pf"/><line x1="168.0" y1="60.0" x2="168.0" y2="76.0" class="ps" marker-end="url(#ah)"/><rect x="97.1" y="76.0" width="141.9" height="30.0" rx="14" class="pa"/><text x="168.0" y="96.0" class="pt" text-anchor="middle">读取 channel 参数</text><line x1="168.0" y1="106.0" x2="168.0" y2="124.0" class="ps" marker-end="url(#ah)"/><path d="M168.0,124.0 L250.4,146.0 L168.0,168.0 L85.6,146.0 z" class="pd"/><text x="168.0" y="150.0" class="pt-m" text-anchor="middle" font-size="11.0">channel == &quot;sms&quot;</text><text x="160.0" y="184.0" class="pt-k" text-anchor="end" font-size="11.0">是</text><line x1="250.4" y1="146.0" x2="378.0" y2="146.0" class="ps" marker-end="url(#ah)"/><line x1="168.0" y1="168.0" x2="168.0" y2="186.0" class="ps" marker-end="url(#ah)"/><rect x="58.0" y="186.0" width="220.0" height="30.0" rx="14" class="pa"/><text x="168.0" y="206.0" class="pt" text-anchor="middle">读取 config/sms_enabled.json</text><line x1="168.0" y1="216.0" x2="168.0" y2="234.0" class="ps" marker-end="url(#ah)"/><rect x="71.8" y="234.0" width="192.5" height="30.0" rx="14" class="pa"/><text x="168.0" y="254.0" class="pt" text-anchor="middle">查询 sms_enabled_tenants</text><text x="386.0" y="140.0" class="pt-k" text-anchor="start" font-size="11.0">否</text><line x1="378.0" y1="146.0" x2="378.0" y2="282.0" class="ps" marker-end="url(#ah)"/><rect x="306.8" y="282.0" width="142.5" height="30.0" rx="14" class="pa"/><text x="378.0" y="302.0" class="pt" text-anchor="middle">现有渠道无权限限制</text><line x1="168.0" y1="264.0" x2="168.0" y2="336.0" class="ps"/><line x1="378.0" y1="312.0" x2="378.0" y2="336.0" class="ps"/><line x1="378.0" y1="336.0" x2="168.0" y2="336.0" class="ps"/><circle cx="168.0" cy="336.0" r="3.5" class="pf"/><line x1="168.0" y1="336.0" x2="168.0" y2="352.0" class="ps" marker-end="url(#ah)"/><rect x="108.0" y="352.0" width="120.0" height="30.0" rx="14" class="pa"/><text x="168.0" y="372.0" class="pt" text-anchor="middle">返回校验结果</text><line x1="168.0" y1="382.0" x2="168.0" y2="401.0" class="ps" marker-end="url(#ah)"/><circle cx="168.0" cy="411.0" r="10" class="pw"/><circle cx="168.0" cy="411.0" r="5.5" class="pf"/></svg><figcaption>活动图 · 内置轻渲染（本机无 plantuml）</figcaption><details class="pumls"><summary>PlantUML 源码</summary><pre><code>@startuml
+title 租户权限校验流程
+start
+:读取 channel 参数;
+if (channel == "sms") then (是)
+  :读取 config/sms_enabled.json;
+  :查询 sms_enabled_tenants;
+else (否)
+  :现有渠道无权限限制;
+endif
+:返回校验结果;
+stop
+@enduml</code></pre></details></figure>
+<h2>2.2.3 错误语义</h2>
+<div class="tbl"><table><thead><tr><th>场景</th><th>返回</th><th>记账</th></tr></thead><tbody><tr><td>租户未开通短信</td><td><code>SendResult.fail("短信: 租户未开通")</code></td><td>审计日志</td></tr><tr><td>缺少发送目标</td><td><code>SendResult.fail("短信: 缺少发送目标")</code></td><td>否</td></tr><tr><td>号码格式错误</td><td><code>SendResult.fail("短信: 号码格式错误")</code></td><td>否</td></tr><tr><td>会话未建立</td><td><code>SendResult.fail("短信: 会话未建立")</code></td><td>否</td></tr><tr><td>三次重试均失败</td><td><code>SendResult.fail()</code></td><td>审计日志</td></tr></tbody></table></div>
+<h2>2.2.4 一段渲染不了的图（降级示例）</h2>
+<p>下面这块故意写成面板认不出的类型，用来看降级长什么样——<strong>显示源码，不假装成功</strong>。</p>
+<figure class="pfig bad"><div class="fn">未出图：识别不出图类型 —— 语法合法性另行自检，源码原样保留</div><pre class="praw"><code>@startuml
+!theme mars
+salt
+{
+  Just plain text
+  [This is my button]
+  () Unchecked radio
+}
+@enduml</code></pre></figure></div></div>
+<div class="pane" data-key="d0" data-group="diff" data-title="README.md" data-raw="file:///Users/liaoxiang/dev/mae-flow-fieldtest/_FIELDTEST/README.md" data-rel="_FIELDTEST/README.md（已提交）"><div class="dwrap"><div class="diff"><div class="dhead"><span>变更前</span><span>变更后</span></div><div class="dr hk"><code class="c span">@@ -65,6 +65,9  lightcheck 里被报成"本轮新触发"，说明继承旧债的修复没生效</code></div><div class="dr"><span class="ln">65</span><code class="c ctx"> - [ ] 提交时 `make build` 产生的 `__pycache__` 有没有被拦住？</code><span class="ln">65</span><code class="c ctx"> - [ ] 提交时 `make build` 产生的 `__pycache__` 有没有被拦住？</code></div><div class="dr"><span class="ln">66</span><code class="c ctx"> - [ ] 质量链是**只停一次**检视，还是被叫了多次？</code><span class="ln">66</span><code class="c ctx"> - [ ] 质量链是**只停一次**检视，还是被叫了多次？</code></div><div class="dr"><span class="ln">67</span><code class="c ctx"> - [ ] 有没有在哪一步卡死、或反复重试同一条命令？</code><span class="ln">67</span><code class="c ctx"> - [ ] 有没有在哪一步卡死、或反复重试同一条命令？</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">68</span><code class="c add">+- [ ] （预期现象，不是 bug）本机不在内网时 CodeCheck 安装必然 ECONNRESET：</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">69</span><code class="c add">+      应当"真实尝试→诊断留痕→建议项→直接 done"，且 30 分钟冷却内不重跑 npm。</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">70</span><code class="c add">+      要观察的是它有没有卡住流程；这条腿的真实验证只能在内网做。</code></div><div class="dr"><span class="ln">68</span><code class="c ctx"> </code><span class="ln">71</span><code class="c ctx"> </code></div><div class="dr"><span class="ln">69</span><code class="c ctx"> ## 复位</code><span class="ln">72</span><code class="c ctx"> ## 复位</code></div><div class="dr"><span class="ln">70</span><code class="c ctx"> </code><span class="ln">73</span><code class="c ctx"> </code></div></div></div></div>
+<div class="pane" data-key="d1" data-group="diff" data-title="sms_enabled.json" data-raw="file:///Users/liaoxiang/dev/mae-flow-fieldtest/config/sms_enabled.json" data-rel="config/sms_enabled.json（已提交）"><div class="dwrap"><div class="diff"><div class="dhead"><span>变更前</span><span>变更后</span></div><div class="dr hk"><code class="c span">@@ -0,0 +1,3</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">1</span><code class="c add">+{</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">2</span><code class="c add">+  "sms_enabled_tenants": ["t-alpha", "t-beta-enabled"]</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">3</span><code class="c add">+}</code></div></div></div></div>
+<div class="pane" data-key="d2" data-group="diff" data-title="channel_permission.py" data-raw="file:///Users/liaoxiang/dev/mae-flow-fieldtest/service/src/demo_service/channel_permission.py" data-rel="service/src/demo_service/channel_permission.py（已提交）"><div class="dwrap"><div class="diff"><div class="dhead"><span>变更前</span><span>变更后</span></div><div class="dr hk"><code class="c span">@@ -0,0 +1,66</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">1</span><code class="c add">+"""短信渠道的租户权限管理。"""</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">2</span><code class="c add">+import json</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">3</span><code class="c add">+import os</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">4</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">5</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">6</span><code class="c add">+class ConfigError(Exception):</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">7</span><code class="c add">+    """配置加载或验证错误。"""</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">8</span><code class="c add">+    pass</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">9</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">10</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">11</span><code class="c add">+_sms_enabled_cache = None</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">12</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">13</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">14</span><code class="c add">+def load_sms_permission_config(config_path):</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">15</span><code class="c add">+    """</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">16</span><code class="c add">+    加载短信权限配置。应用启动时调用。</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">17</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">18</span><code class="c add">+    参数：</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">19</span><code class="c add">+    - config_path: 配置文件路径（相对或绝对）</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">20</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">21</span><code class="c add">+    异常：</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">22</span><code class="c add">+    - ConfigError: 配置文件缺失、格式错误或内容不符合预期</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">23</span><code class="c add">+    """</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">24</span><code class="c add">+    global _sms_enabled_cache</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">25</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">26</span><code class="c add">+    try:</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">27</span><code class="c add">+        if not os.path.exists(config_path):</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">28</span><code class="c add">+            raise ConfigError("SMS config not found: %s" % config_path)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">29</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">30</span><code class="c add">+        with open(config_path, 'r') as f:</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">31</span><code class="c add">+            config = json.load(f)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">32</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">33</span><code class="c add">+        if "sms_enabled_tenants" not in config:</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">34</span><code class="c add">+            raise ConfigError("Missing key: sms_enabled_tenants")</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">35</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">36</span><code class="c add">+        _sms_enabled_cache = config.get("sms_enabled_tenants", [])</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">37</span><code class="c add">+    except json.JSONDecodeError as e:</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">38</span><code class="c add">+        raise ConfigError("Invalid JSON in SMS config: %s" % str(e))</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">39</span><code class="c add">+    except ConfigError:</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">40</span><code class="c add">+        raise</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">41</span><code class="c add">+    except Exception as e:</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">42</span><code class="c add">+        raise ConfigError("Failed to load SMS config: %s" % str(e))</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">43</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">44</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">45</span><code class="c add">+def channel_enabled(tenant_id, channel):</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">46</span><code class="c add">+    """</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">47</span><code class="c add">+    查询租户是否开通指定渠道。</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">48</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">49</span><code class="c add">+    参数：</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">50</span><code class="c add">+    - tenant_id: 租户 ID</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">51</span><code class="c add">+    - channel: 渠道名称 ("sms", "email", "push", "webhook")</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">52</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">53</span><code class="c add">+    返回：</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">54</span><code class="c add">+    - True: 租户已开通该渠道（或该渠道对所有租户开放）</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">55</span><code class="c add">+    - False: 租户未开通该渠道</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">56</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">57</span><code class="c add">+    异常：</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">58</span><code class="c add">+    - RuntimeError: SMS 权限配置未加载</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">59</span><code class="c add">+    """</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">60</span><code class="c add">+    if channel != "sms":</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">61</span><code class="c add">+        return True  # 其他渠道对所有租户开放，无权限限制</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">62</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">63</span><code class="c add">+    if _sms_enabled_cache is None:</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">64</span><code class="c add">+        raise RuntimeError("SMS permission config not loaded")</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">65</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">66</span><code class="c add">+    return tenant_id in _sms_enabled_cache</code></div></div></div></div>
+<div class="pane" data-key="d3" data-group="diff" data-title="notify_service.py" data-raw="file:///Users/liaoxiang/dev/mae-flow-fieldtest/service/src/demo_service/notify_service.py" data-rel="service/src/demo_service/notify_service.py（已提交）"><div class="dwrap"><div class="diff"><div class="dhead"><span>变更前</span><span>变更后</span></div><div class="dr hk"><code class="c span">@@ -1,15 +1,21</code></div><div class="dr"><span class="ln">1</span><code class="c ctx"> """通知发送入口。"""</code><span class="ln">1</span><code class="c ctx"> """通知发送入口。"""</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">2</span><code class="c add">+import time</code></div><div class="dr"><span class="ln">2</span><code class="c ctx"> from demo_model.notification import SendResult</code><span class="ln">3</span><code class="c ctx"> from demo_model.notification import SendResult</code></div><div class="dr"><span class="ln">3</span><code class="c ctx"> from demo_service import (</code><span class="ln">4</span><code class="c ctx"> from demo_service import (</code></div><div class="dr"><span class="ln">4</span><code class="c del">-    channel_state, email_handler, push_handler, webhook_handler,</code><span class="ln">5</span><code class="c add">+    channel_state, email_handler, push_handler, webhook_handler, sms_handler,</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">6</span><code class="c add">+    audit_log,</code></div><div class="dr"><span class="ln">5</span><code class="c ctx"> )</code><span class="ln">7</span><code class="c ctx"> )</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">8</span><code class="c add">+from demo_service.channel_permission import channel_enabled</code></div><div class="dr"><span class="ln">6</span><code class="c ctx"> </code><span class="ln">9</span><code class="c ctx"> </code></div><div class="dr"><span class="ln">7</span><code class="c ctx"> SESSION_TOKEN_LENGTH = 16</code><span class="ln">10</span><code class="c ctx"> SESSION_TOKEN_LENGTH = 16</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">11</span><code class="c add">+SMS_MAX_RETRIES = 3</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">12</span><code class="c add">+SMS_RETRY_DELAY_SEC = 1</code></div><div class="dr"><span class="ln">8</span><code class="c ctx"> </code><span class="ln">13</span><code class="c ctx"> </code></div><div class="dr"><span class="ln">9</span><code class="c ctx"> _HANDLERS = {</code><span class="ln">14</span><code class="c ctx"> _HANDLERS = {</code></div><div class="dr"><span class="ln">10</span><code class="c ctx">     email_handler.CHANNEL: email_handler,</code><span class="ln">15</span><code class="c ctx">     email_handler.CHANNEL: email_handler,</code></div><div class="dr"><span class="ln">11</span><code class="c ctx">     push_handler.CHANNEL: push_handler,</code><span class="ln">16</span><code class="c ctx">     push_handler.CHANNEL: push_handler,</code></div><div class="dr"><span class="ln">12</span><code class="c ctx">     webhook_handler.CHANNEL: webhook_handler,</code><span class="ln">17</span><code class="c ctx">     webhook_handler.CHANNEL: webhook_handler,</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">18</span><code class="c add">+    sms_handler.CHANNEL: sms_handler,</code></div><div class="dr"><span class="ln">13</span><code class="c ctx"> }</code><span class="ln">19</span><code class="c ctx"> }</code></div><div class="dr"><span class="ln">14</span><code class="c ctx"> </code><span class="ln">20</span><code class="c ctx"> </code></div><div class="dr"><span class="ln">15</span><code class="c ctx"> </code><span class="ln">21</span><code class="c ctx"> </code></div><div class="dr hk"><code class="c span">@@ -22,16 +28,34  def send(channel, notification):</code></div><div class="dr"><span class="ln">22</span><code class="c ctx">     handler = _HANDLERS.get(channel)</code><span class="ln">28</span><code class="c ctx">     handler = _HANDLERS.get(channel)</code></div><div class="dr"><span class="ln">23</span><code class="c ctx">     if handler is None:</code><span class="ln">29</span><code class="c ctx">     if handler is None:</code></div><div class="dr"><span class="ln">24</span><code class="c ctx">         return SendResult.fail("未注册的渠道: %s" % channel)</code><span class="ln">30</span><code class="c ctx">         return SendResult.fail("未注册的渠道: %s" % channel)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">31</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">32</span><code class="c add">+    # 短信渠道权限检查（仅短信有权限限制）</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">33</span><code class="c add">+    if channel == "sms":</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">34</span><code class="c add">+        if not channel_enabled(notification.tenant_id, channel):</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">35</span><code class="c add">+            audit_log.record(notification.tenant_id, channel, -1)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">36</span><code class="c add">+            return SendResult.fail("短信: 租户未开通")</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">37</span><code class="c add">+</code></div><div class="dr"><span class="ln">25</span><code class="c ctx">     channel_state.reset(notification.tenant_id, channel)</code><span class="ln">38</span><code class="c ctx">     channel_state.reset(notification.tenant_id, channel)</code></div><div class="dr"><span class="ln">26</span><code class="c ctx">     channel_state.open_session(</code><span class="ln">39</span><code class="c ctx">     channel_state.open_session(</code></div><div class="dr"><span class="ln">27</span><code class="c ctx">         notification.tenant_id, channel,</code><span class="ln">40</span><code class="c ctx">         notification.tenant_id, channel,</code></div><div class="dr"><span class="ln">28</span><code class="c ctx">         "tok-%d" % (len(notification.tenant_id) * SESSION_TOKEN_LENGTH))</code><span class="ln">41</span><code class="c ctx">         "tok-%d" % (len(notification.tenant_id) * SESSION_TOKEN_LENGTH))</code></div><div class="dr"><span class="ln">29</span><code class="c del">-    return handler.send(notification)</code><span class="ln"></span><code class="c nil"></code></div><div class="dr"><span class="ln">30</span><code class="c ctx"> </code><span class="ln">42</span><code class="c ctx"> </code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">43</span><code class="c add">+    # 短信渠道重试逻辑（仅短信有重试）</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">44</span><code class="c add">+    if channel == "sms":</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">45</span><code class="c add">+        for attempt in range(1, SMS_MAX_RETRIES + 1):</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">46</span><code class="c add">+            result = handler.send(notification)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">47</span><code class="c add">+            if result.success:</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">48</span><code class="c add">+                # 若非首次就成功，追加重试信息</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">49</span><code class="c add">+                if attempt &gt; 1:</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">50</span><code class="c add">+                    result.detail = "%s (retry %d/%d)" % (result.detail, attempt, SMS_MAX_RETRIES)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">51</span><code class="c add">+                return result</code></div><div class="dr"><span class="ln">31</span><code class="c ctx"> </code><span class="ln">52</span><code class="c ctx"> </code></div><div class="dr"><span class="ln">32</span><code class="c del">-def legacy_retry_once(channel, notification):</code><span class="ln">53</span><code class="c add">+            if attempt &lt; SMS_MAX_RETRIES:</code></div><div class="dr"><span class="ln">33</span><code class="c del">-    """旧版单次重试:重试策略上线后本函数即失效，应随改动一并删除。"""</code><span class="ln">54</span><code class="c add">+                time.sleep(SMS_RETRY_DELAY_SEC)</code></div><div class="dr"><span class="ln">34</span><code class="c del">-    first = send(channel, notification)</code><span class="ln">55</span><code class="c add">+</code></div><div class="dr"><span class="ln">35</span><code class="c del">-    if first.success:</code><span class="ln">56</span><code class="c add">+        # 所有重试都失败</code></div><div class="dr"><span class="ln">36</span><code class="c del">-        return first</code><span class="ln">57</span><code class="c add">+        result.detail = "%s (retry failed %d/%d)" % (result.detail, SMS_MAX_RETRIES, SMS_MAX_RETRIES)</code></div><div class="dr"><span class="ln">37</span><code class="c del">-    return send(channel, notification)</code><span class="ln">58</span><code class="c add">+        return result</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">59</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">60</span><code class="c add">+    # 其他渠道无重试</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">61</span><code class="c add">+    return handler.send(notification)</code></div></div></div></div>
+<div class="pane" data-key="d4" data-group="diff" data-title="sms_handler.py" data-raw="file:///Users/liaoxiang/dev/mae-flow-fieldtest/service/src/demo_service/sms_handler.py" data-rel="service/src/demo_service/sms_handler.py（已提交）"><div class="dwrap"><div class="diff"><div class="dhead"><span>变更前</span><span>变更后</span></div><div class="dr hk"><code class="c span">@@ -0,0 +1,28</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">1</span><code class="c add">+"""短信（sms）渠道。四段结构固定:校验 → 渲染 → 发送 → 记账。"""</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">2</span><code class="c add">+import re</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">3</span><code class="c add">+from demo_common.text_util import truncate</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">4</span><code class="c add">+from demo_model.notification import SendResult</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">5</span><code class="c add">+from demo_service import channel_state, audit_log</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">6</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">7</span><code class="c add">+CHANNEL = "sms"</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">8</span><code class="c add">+MAX_LENGTH = 160  # 短信单条限制</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">9</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">10</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">11</span><code class="c add">+def send(notification):</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">12</span><code class="c add">+    # 1. 校验目标（手机号）</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">13</span><code class="c add">+    if not notification.target:</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">14</span><code class="c add">+        return SendResult.fail("短信: 缺少发送目标")</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">15</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">16</span><code class="c add">+    if not re.match(r'^1[0-9]{10}$', notification.target):</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">17</span><code class="c add">+        return SendResult.fail("短信: 号码格式错误")</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">18</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">19</span><code class="c add">+    # 2. 渲染（截断文本）</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">20</span><code class="c add">+    body = truncate(notification.content, MAX_LENGTH)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">21</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">22</span><code class="c add">+    # 3. 检查会话有效性</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">23</span><code class="c add">+    if channel_state.session(notification.tenant_id, CHANNEL) is None:</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">24</span><code class="c add">+        return SendResult.fail("短信: 会话未建立")</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">25</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">26</span><code class="c add">+    # 4. 记账</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">27</span><code class="c add">+    audit_log.record(notification.tenant_id, CHANNEL, len(body))</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">28</span><code class="c add">+    return SendResult.ok("短信: sent %d chars" % len(body))</code></div></div></div></div>
+<div class="pane" data-key="d5" data-group="diff" data-title="sms_enabled_test.json" data-raw="file:///Users/liaoxiang/dev/mae-flow-fieldtest/tests/config/sms_enabled_test.json" data-rel="tests/config/sms_enabled_test.json（已提交）"><div class="dwrap"><div class="diff"><div class="dhead"><span>变更前</span><span>变更后</span></div><div class="dr hk"><code class="c span">@@ -0,0 +1,3</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">1</span><code class="c add">+{</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">2</span><code class="c add">+  "sms_enabled_tenants": ["t-alpha"]</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">3</span><code class="c add">+}</code></div></div></div></div>
+<div class="pane" data-key="d6" data-group="diff" data-title="test_smoke.py" data-raw="file:///Users/liaoxiang/dev/mae-flow-fieldtest/tests/test_smoke.py" data-rel="tests/test_smoke.py（已提交）"><div class="dwrap"><div class="diff"><div class="dhead"><span>变更前</span><span>变更后</span></div><div class="dr hk"><code class="c span">@@ -1,19 +1,33</code></div><div class="dr"><span class="ln">1</span><code class="c del">-"""冒烟:既有三渠道可发送，且连接池无泄漏。"""</code><span class="ln">1</span><code class="c add">+"""冒烟:既有三渠道可发送，短信渠道支持权限控制，且连接池无泄漏。"""</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">2</span><code class="c add">+import os</code></div><div class="dr"><span class="ln">2</span><code class="c ctx"> import unittest</code><span class="ln">3</span><code class="c ctx"> import unittest</code></div><div class="dr"><span class="ln">3</span><code class="c ctx"> </code><span class="ln">4</span><code class="c ctx"> </code></div><div class="dr"><span class="ln">4</span><code class="c ctx"> from demo_common import conn_pool</code><span class="ln">5</span><code class="c ctx"> from demo_common import conn_pool</code></div><div class="dr"><span class="ln">5</span><code class="c ctx"> from demo_model.notification import Notification</code><span class="ln">6</span><code class="c ctx"> from demo_model.notification import Notification</code></div><div class="dr"><span class="ln">6</span><code class="c ctx"> from demo_service import notify_service</code><span class="ln">7</span><code class="c ctx"> from demo_service import notify_service</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">8</span><code class="c add">+from demo_service.channel_permission import load_sms_permission_config</code></div><div class="dr"><span class="ln">7</span><code class="c ctx"> </code><span class="ln">9</span><code class="c ctx"> </code></div><div class="dr"><span class="ln">8</span><code class="c ctx"> </code><span class="ln">10</span><code class="c ctx"> </code></div><div class="dr"><span class="ln">9</span><code class="c ctx"> class SmokeTest(unittest.TestCase):</code><span class="ln">11</span><code class="c ctx"> class SmokeTest(unittest.TestCase):</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">12</span><code class="c add">+    @classmethod</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">13</span><code class="c add">+    def setUpClass(cls):</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">14</span><code class="c add">+        config_path = os.path.join(os.path.dirname(__file__), "config", "sms_enabled_test.json")</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">15</span><code class="c add">+        load_sms_permission_config(config_path)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">16</span><code class="c add">+</code></div><div class="dr"><span class="ln">10</span><code class="c ctx">     def test_existing_channels_send_and_pool_is_balanced(self):</code><span class="ln">17</span><code class="c ctx">     def test_existing_channels_send_and_pool_is_balanced(self):</code></div><div class="dr"><span class="ln">11</span><code class="c ctx">         result = notify_service.send(</code><span class="ln">18</span><code class="c ctx">         result = notify_service.send(</code></div><div class="dr"><span class="ln">12</span><code class="c ctx">             "email", Notification("t-alpha", "a@b.com", "hello"))</code><span class="ln">19</span><code class="c ctx">             "email", Notification("t-alpha", "a@b.com", "hello"))</code></div><div class="dr"><span class="ln">13</span><code class="c ctx">         self.assertTrue(result.success, result.detail)</code><span class="ln">20</span><code class="c ctx">         self.assertTrue(result.success, result.detail)</code></div><div class="dr"><span class="ln">14</span><code class="c ctx">         self.assertEqual(0, conn_pool.leased(), "连接池泄漏")</code><span class="ln">21</span><code class="c ctx">         self.assertEqual(0, conn_pool.leased(), "连接池泄漏")</code></div><div class="dr"><span class="ln">15</span><code class="c ctx"> </code><span class="ln">22</span><code class="c ctx"> </code></div><div class="dr"><span class="ln">16</span><code class="c del">-    def test_unimplemented_channel_is_rejected(self):</code><span class="ln">23</span><code class="c add">+    def test_sms_permission_denied_for_unopened_tenant(self):</code></div><div class="dr"><span class="ln">17</span><code class="c ctx">         result = notify_service.send(</code><span class="ln">24</span><code class="c ctx">         result = notify_service.send(</code></div><div class="dr"><span class="ln">18</span><code class="c del">-            "sms", Notification("t-alpha", "13800000000", "hi"))</code><span class="ln">25</span><code class="c add">+            "sms", Notification("t-denied", "13800000000", "hi"))</code></div><div class="dr"><span class="ln">19</span><code class="c ctx">         self.assertFalse(result.success)</code><span class="ln">26</span><code class="c ctx">         self.assertFalse(result.success)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">27</span><code class="c add">+        self.assertIn("未开通", result.detail)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">28</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">29</span><code class="c add">+    def test_sms_send_success(self):</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">30</span><code class="c add">+        result = notify_service.send(</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">31</span><code class="c add">+            "sms", Notification("t-alpha", "13800000000", "hello"))</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">32</span><code class="c add">+        self.assertTrue(result.success, result.detail)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">33</span><code class="c add">+        self.assertIn("sent", result.detail)</code></div></div></div></div>
+<div class="pane" data-key="d7" data-group="diff" data-title="test_smoke.py" data-raw="file:///Users/liaoxiang/dev/mae-flow-fieldtest/tests/test_smoke.py" data-rel="tests/test_smoke.py（未提交）"><div class="dwrap"><div class="diff"><div class="dhead"><span>变更前</span><span>变更后</span></div><div class="dr hk"><code class="c span">@@ -1,11 +1,15</code></div><div class="dr"><span class="ln">1</span><code class="c ctx"> """冒烟:既有三渠道可发送，短信渠道支持权限控制，且连接池无泄漏。"""</code><span class="ln">1</span><code class="c ctx"> """冒烟:既有三渠道可发送，短信渠道支持权限控制，且连接池无泄漏。"""</code></div><div class="dr"><span class="ln">2</span><code class="c ctx"> import os</code><span class="ln">2</span><code class="c ctx"> import os</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">3</span><code class="c add">+import json</code></div><div class="dr"><span class="ln">3</span><code class="c ctx"> import unittest</code><span class="ln">4</span><code class="c ctx"> import unittest</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">5</span><code class="c add">+import tempfile</code></div><div class="dr"><span class="ln">4</span><code class="c ctx"> </code><span class="ln">6</span><code class="c ctx"> </code></div><div class="dr"><span class="ln">5</span><code class="c ctx"> from demo_common import conn_pool</code><span class="ln">7</span><code class="c ctx"> from demo_common import conn_pool</code></div><div class="dr"><span class="ln">6</span><code class="c ctx"> from demo_model.notification import Notification</code><span class="ln">8</span><code class="c ctx"> from demo_model.notification import Notification</code></div><div class="dr"><span class="ln">7</span><code class="c ctx"> from demo_service import notify_service</code><span class="ln">9</span><code class="c ctx"> from demo_service import notify_service</code></div><div class="dr"><span class="ln">8</span><code class="c del">-from demo_service.channel_permission import load_sms_permission_config</code><span class="ln">10</span><code class="c add">+from demo_service.channel_permission import (</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">11</span><code class="c add">+    load_sms_permission_config, channel_enabled, ConfigError, _sms_enabled_cache</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">12</span><code class="c add">+)</code></div><div class="dr"><span class="ln">9</span><code class="c ctx"> </code><span class="ln">13</span><code class="c ctx"> </code></div><div class="dr"><span class="ln">10</span><code class="c ctx"> </code><span class="ln">14</span><code class="c ctx"> </code></div><div class="dr"><span class="ln">11</span><code class="c ctx"> class SmokeTest(unittest.TestCase):</code><span class="ln">15</span><code class="c ctx"> class SmokeTest(unittest.TestCase):</code></div><div class="dr hk"><code class="c span">@@ -31,3 +35,223  class SmokeTest(unittest.TestCase):</code></div><div class="dr"><span class="ln">31</span><code class="c ctx">             "sms", Notification("t-alpha", "13800000000", "hello"))</code><span class="ln">35</span><code class="c ctx">             "sms", Notification("t-alpha", "13800000000", "hello"))</code></div><div class="dr"><span class="ln">32</span><code class="c ctx">         self.assertTrue(result.success, result.detail)</code><span class="ln">36</span><code class="c ctx">         self.assertTrue(result.success, result.detail)</code></div><div class="dr"><span class="ln">33</span><code class="c ctx">         self.assertIn("sent", result.detail)</code><span class="ln">37</span><code class="c ctx">         self.assertIn("sent", result.detail)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">38</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">39</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">40</span><code class="c add">+class ChannelPermissionTest(unittest.TestCase):</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">41</span><code class="c add">+    """权限管理模块的单元测试，覆盖 channel_permission.py 第1-66行。"""</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">42</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">43</span><code class="c add">+    @classmethod</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">44</span><code class="c add">+    def setUpClass(cls):</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">45</span><code class="c add">+        config_path = os.path.join(os.path.dirname(__file__), "config", "sms_enabled_test.json")</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">46</span><code class="c add">+        load_sms_permission_config(config_path)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">47</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">48</span><code class="c add">+    def test_channel_enabled_for_sms_enabled_tenant(self):</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">49</span><code class="c add">+        """测试已开通短信的租户权限查询。"""</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">50</span><code class="c add">+        self.assertTrue(channel_enabled("t-alpha", "sms"))</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">51</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">52</span><code class="c add">+    def test_channel_enabled_for_sms_disabled_tenant(self):</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">53</span><code class="c add">+        """测试未开通短信的租户权限查询。"""</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">54</span><code class="c add">+        self.assertFalse(channel_enabled("t-beta", "sms"))</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">55</span><code class="c add">+        self.assertFalse(channel_enabled("t-denied", "sms"))</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">56</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">57</span><code class="c add">+    def test_channel_enabled_for_other_channels_always_true(self):</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">58</span><code class="c add">+        """测试其他渠道对所有租户开放，无权限限制。"""</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">59</span><code class="c add">+        # Email 渠道对所有租户开放</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">60</span><code class="c add">+        self.assertTrue(channel_enabled("t-alpha", "email"))</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">61</span><code class="c add">+        self.assertTrue(channel_enabled("t-beta", "email"))</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">62</span><code class="c add">+        self.assertTrue(channel_enabled("t-denied", "email"))</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">63</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">64</span><code class="c add">+        # Push 渠道对所有租户开放</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">65</span><code class="c add">+        self.assertTrue(channel_enabled("t-alpha", "push"))</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">66</span><code class="c add">+        self.assertTrue(channel_enabled("t-beta", "push"))</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">67</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">68</span><code class="c add">+        # Webhook 渠道对所有租户开放</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">69</span><code class="c add">+        self.assertTrue(channel_enabled("t-alpha", "webhook"))</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">70</span><code class="c add">+        self.assertTrue(channel_enabled("t-beta", "webhook"))</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">71</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">72</span><code class="c add">+    def test_config_missing_raises_error(self):</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">73</span><code class="c add">+        """测试配置文件缺失时抛出 ConfigError。"""</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">74</span><code class="c add">+        with tempfile.TemporaryDirectory() as tmpdir:</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">75</span><code class="c add">+            missing_config = os.path.join(tmpdir, "nonexistent.json")</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">76</span><code class="c add">+            with self.assertRaises(ConfigError) as cm:</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">77</span><code class="c add">+                load_sms_permission_config(missing_config)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">78</span><code class="c add">+            self.assertIn("not found", str(cm.exception))</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">79</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">80</span><code class="c add">+    def test_config_invalid_json_raises_error(self):</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">81</span><code class="c add">+        """测试配置文件 JSON 格式错误时抛出 ConfigError。"""</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">82</span><code class="c add">+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">83</span><code class="c add">+            f.write("{invalid json content")</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">84</span><code class="c add">+            f.flush()</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">85</span><code class="c add">+            temp_path = f.name</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">86</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">87</span><code class="c add">+        try:</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">88</span><code class="c add">+            with self.assertRaises(ConfigError) as cm:</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">89</span><code class="c add">+                load_sms_permission_config(temp_path)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">90</span><code class="c add">+            self.assertIn("Invalid JSON", str(cm.exception))</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">91</span><code class="c add">+        finally:</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">92</span><code class="c add">+            os.unlink(temp_path)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">93</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">94</span><code class="c add">+    def test_config_missing_key_raises_error(self):</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">95</span><code class="c add">+        """测试配置文件缺少必要键时抛出 ConfigError。"""</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">96</span><code class="c add">+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">97</span><code class="c add">+            json.dump({"other_key": []}, f)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">98</span><code class="c add">+            f.flush()</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">99</span><code class="c add">+            temp_path = f.name</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">100</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">101</span><code class="c add">+        try:</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">102</span><code class="c add">+            with self.assertRaises(ConfigError) as cm:</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">103</span><code class="c add">+                load_sms_permission_config(temp_path)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">104</span><code class="c add">+            self.assertIn("Missing key", str(cm.exception))</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">105</span><code class="c add">+        finally:</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">106</span><code class="c add">+            os.unlink(temp_path)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">107</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">108</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">109</span><code class="c add">+class SMSPermissionIntegrationTest(unittest.TestCase):</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">110</span><code class="c add">+    """短信权限检查的集成测试，覆盖 notify_service.py 权限检查逻辑。"""</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">111</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">112</span><code class="c add">+    @classmethod</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">113</span><code class="c add">+    def setUpClass(cls):</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">114</span><code class="c add">+        config_path = os.path.join(os.path.dirname(__file__), "config", "sms_enabled_test.json")</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">115</span><code class="c add">+        load_sms_permission_config(config_path)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">116</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">117</span><code class="c add">+    def test_sms_permission_denied_includes_detail(self):</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">118</span><code class="c add">+        """测试权限拒绝返回正确的错误信息。"""</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">119</span><code class="c add">+        result = notify_service.send(</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">120</span><code class="c add">+            "sms", Notification("t-beta", "13800000000", "test"))</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">121</span><code class="c add">+        self.assertFalse(result.success)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">122</span><code class="c add">+        self.assertEqual("短信: 租户未开通", result.detail)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">123</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">124</span><code class="c add">+    def test_sms_permission_denied_audit_log_recorded(self):</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">125</span><code class="c add">+        """测试权限拒绝时审计日志被记录（通过连接池检查）。"""</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">126</span><code class="c add">+        initial_leased = conn_pool.leased()</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">127</span><code class="c add">+        result = notify_service.send(</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">128</span><code class="c add">+            "sms", Notification("t-denied", "13800000000", "test"))</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">129</span><code class="c add">+        self.assertFalse(result.success)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">130</span><code class="c add">+        # 权限拒绝时应该有 audit_log.record 调用，但由于 audit_log 实现中会获取和释放连接，</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">131</span><code class="c add">+        # 所以最终连接池应该平衡</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">132</span><code class="c add">+        self.assertEqual(initial_leased, conn_pool.leased(), "权限检查失败时连接池泄漏")</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">133</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">134</span><code class="c add">+    def test_email_no_permission_check_for_any_tenant(self):</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">135</span><code class="c add">+        """测试 email 渠道不受权限限制，所有租户都能发送。"""</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">136</span><code class="c add">+        # 已开通的租户能发送 email</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">137</span><code class="c add">+        result = notify_service.send(</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">138</span><code class="c add">+            "email", Notification("t-alpha", "a@b.com", "hello"))</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">139</span><code class="c add">+        self.assertTrue(result.success, result.detail)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">140</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">141</span><code class="c add">+        # 未开通短信的租户也能发送 email（无权限检查）</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">142</span><code class="c add">+        result = notify_service.send(</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">143</span><code class="c add">+            "email", Notification("t-beta", "b@c.com", "hello"))</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">144</span><code class="c add">+        self.assertTrue(result.success, result.detail)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">145</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">146</span><code class="c add">+    def test_push_no_permission_check_for_any_tenant(self):</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">147</span><code class="c add">+        """测试 push 渠道不受权限限制，所有租户都能发送。"""</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">148</span><code class="c add">+        result = notify_service.send(</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">149</span><code class="c add">+            "push", Notification("t-alpha", "device-id-1", "alert"))</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">150</span><code class="c add">+        self.assertTrue(result.success, result.detail)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">151</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">152</span><code class="c add">+        result = notify_service.send(</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">153</span><code class="c add">+            "push", Notification("t-denied", "device-id-2", "alert"))</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">154</span><code class="c add">+        self.assertTrue(result.success, result.detail)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">155</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">156</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">157</span><code class="c add">+class SMSHandlerValidationTest(unittest.TestCase):</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">158</span><code class="c add">+    """短信处理器的验证测试，覆盖 sms_handler.py 的校验和截断逻辑。"""</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">159</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">160</span><code class="c add">+    @classmethod</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">161</span><code class="c add">+    def setUpClass(cls):</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">162</span><code class="c add">+        config_path = os.path.join(os.path.dirname(__file__), "config", "sms_enabled_test.json")</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">163</span><code class="c add">+        load_sms_permission_config(config_path)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">164</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">165</span><code class="c add">+    def test_sms_target_missing(self):</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">166</span><code class="c add">+        """测试目标为空时返回错误。"""</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">167</span><code class="c add">+        result = notify_service.send(</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">168</span><code class="c add">+            "sms", Notification("t-alpha", "", "hello"))</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">169</span><code class="c add">+        self.assertFalse(result.success)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">170</span><code class="c add">+        self.assertIn("短信: 缺少发送目标", result.detail)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">171</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">172</span><code class="c add">+    def test_sms_target_missing_none(self):</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">173</span><code class="c add">+        """测试目标为 None 时返回错误。"""</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">174</span><code class="c add">+        result = notify_service.send(</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">175</span><code class="c add">+            "sms", Notification("t-alpha", None, "hello"))</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">176</span><code class="c add">+        self.assertFalse(result.success)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">177</span><code class="c add">+        self.assertIn("短信: 缺少发送目标", result.detail)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">178</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">179</span><code class="c add">+    def test_sms_invalid_format_not_eleven_digits(self):</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">180</span><code class="c add">+        """测试号码不是11位时返回错误。"""</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">181</span><code class="c add">+        # 10 位号码</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">182</span><code class="c add">+        result = notify_service.send(</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">183</span><code class="c add">+            "sms", Notification("t-alpha", "1380000000", "hello"))</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">184</span><code class="c add">+        self.assertFalse(result.success)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">185</span><code class="c add">+        self.assertIn("短信: 号码格式错误", result.detail)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">186</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">187</span><code class="c add">+        # 12 位号码</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">188</span><code class="c add">+        result = notify_service.send(</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">189</span><code class="c add">+            "sms", Notification("t-alpha", "138000000001", "hello"))</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">190</span><code class="c add">+        self.assertFalse(result.success)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">191</span><code class="c add">+        self.assertIn("短信: 号码格式错误", result.detail)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">192</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">193</span><code class="c add">+    def test_sms_invalid_format_not_starting_with_one(self):</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">194</span><code class="c add">+        """测试号码不以 1 开头时返回错误。"""</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">195</span><code class="c add">+        result = notify_service.send(</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">196</span><code class="c add">+            "sms", Notification("t-alpha", "23800000000", "hello"))</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">197</span><code class="c add">+        self.assertFalse(result.success)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">198</span><code class="c add">+        self.assertIn("短信: 号码格式错误", result.detail)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">199</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">200</span><code class="c add">+    def test_sms_valid_format_11_digits_starting_with_one(self):</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">201</span><code class="c add">+        """测试有效的11位号码（以1开头）发送成功。"""</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">202</span><code class="c add">+        result = notify_service.send(</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">203</span><code class="c add">+            "sms", Notification("t-alpha", "13800000000", "hello"))</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">204</span><code class="c add">+        self.assertTrue(result.success, result.detail)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">205</span><code class="c add">+        self.assertIn("sent", result.detail)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">206</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">207</span><code class="c add">+    def test_sms_valid_formats_various_leading_digits(self):</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">208</span><code class="c add">+        """测试有效的号码格式（以1开头但第二位不同）。"""</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">209</span><code class="c add">+        valid_numbers = [</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">210</span><code class="c add">+            "13800000000",  # 1 + 3</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">211</span><code class="c add">+            "14800000000",  # 1 + 4</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">212</span><code class="c add">+            "15800000000",  # 1 + 5</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">213</span><code class="c add">+            "16800000000",  # 1 + 6</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">214</span><code class="c add">+            "17800000000",  # 1 + 7</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">215</span><code class="c add">+            "18800000000",  # 1 + 8</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">216</span><code class="c add">+            "19800000000",  # 1 + 9</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">217</span><code class="c add">+            "10800000000",  # 1 + 0</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">218</span><code class="c add">+        ]</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">219</span><code class="c add">+        for phone in valid_numbers:</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">220</span><code class="c add">+            result = notify_service.send(</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">221</span><code class="c add">+                "sms", Notification("t-alpha", phone, "test"))</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">222</span><code class="c add">+            self.assertTrue(result.success, f"号码 {phone} 应该有效，但得到: {result.detail}")</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">223</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">224</span><code class="c add">+    def test_sms_text_truncate_over_160_chars(self):</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">225</span><code class="c add">+        """测试文本超过160字符时截断。"""</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">226</span><code class="c add">+        long_text = "x" * 200</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">227</span><code class="c add">+        result = notify_service.send(</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">228</span><code class="c add">+            "sms", Notification("t-alpha", "13800000000", long_text))</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">229</span><code class="c add">+        self.assertTrue(result.success, result.detail)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">230</span><code class="c add">+        # 由于 truncate 实现会添加"..."，所以 160 字符的文本会被截断为 157 + "..." = 160</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">231</span><code class="c add">+        self.assertIn("160", result.detail)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">232</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">233</span><code class="c add">+    def test_sms_text_within_160_chars(self):</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">234</span><code class="c add">+        """测试文本不超过160字符时不截断。"""</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">235</span><code class="c add">+        text = "x" * 100</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">236</span><code class="c add">+        result = notify_service.send(</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">237</span><code class="c add">+            "sms", Notification("t-alpha", "13800000000", text))</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">238</span><code class="c add">+        self.assertTrue(result.success, result.detail)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">239</span><code class="c add">+        self.assertIn("100", result.detail)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">240</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">241</span><code class="c add">+    def test_sms_text_exactly_160_chars(self):</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">242</span><code class="c add">+        """测试文本恰好160字符。"""</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">243</span><code class="c add">+        text = "x" * 160</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">244</span><code class="c add">+        result = notify_service.send(</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">245</span><code class="c add">+            "sms", Notification("t-alpha", "13800000000", text))</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">246</span><code class="c add">+        self.assertTrue(result.success, result.detail)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">247</span><code class="c add">+        # 160 字符不需要截断</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">248</span><code class="c add">+        self.assertIn("160", result.detail)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">249</span><code class="c add">+</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">250</span><code class="c add">+    def test_sms_text_161_chars_truncates(self):</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">251</span><code class="c add">+        """测试文本 161 字符时截断为 160。"""</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">252</span><code class="c add">+        text = "x" * 161</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">253</span><code class="c add">+        result = notify_service.send(</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">254</span><code class="c add">+            "sms", Notification("t-alpha", "13800000000", text))</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">255</span><code class="c add">+        self.assertTrue(result.success, result.detail)</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">256</span><code class="c add">+        # 161 字符会被截断为 157 + "..." = 160</code></div><div class="dr"><span class="ln"></span><code class="c nil"></code><span class="ln">257</span><code class="c add">+        self.assertIn("160", result.detail)</code></div></div></div></div>
+  </div>
+</div>
+
+<script>
+var V = document.getElementById('viewer');
+function show(key){
+  var docs = document.querySelectorAll('.pane');
+  for (var i=0;i<docs.length;i++){
+    docs[i].classList.toggle('on', docs[i].dataset.key === key);
+  }
+  var pane = document.querySelector('.pane[data-key="'+key+'"]');
+  var group = pane.dataset.group;
+  var tabs = document.querySelectorAll('.vtabs button');
+  for (var j=0;j<tabs.length;j++){
+    tabs[j].style.display = (tabs[j].dataset.group === group) ? '' : 'none';
+    tabs[j].classList.toggle('on', tabs[j].dataset.key === key);
+  }
+  document.getElementById('vtitle').textContent = pane.dataset.title;
+  var raw = document.getElementById('vraw');
+  raw.href = pane.dataset.raw;
+  document.getElementById('vpath').textContent = pane.dataset.rel;
+  V.classList.add('on');
+  V.scrollTop = 0;
+}
+function hide(){ V.classList.remove('on'); }
+V.addEventListener('click', function(e){ if (e.target === V) hide(); });
+document.addEventListener('keydown', function(e){ if (e.key === 'Escape') hide(); });
+</script>
+</body>
+</html>

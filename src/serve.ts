@@ -129,13 +129,30 @@ async function main(): Promise<void> {
   // 被动保底 pi 自动压缩始终在)。
   const compactEvery = Number(flag("--compact-every") ?? 150);
 
+  // 管理页运行时设置先立起来:模型网关、服务形态(默认仓/平台/免编译)
+  // 都可能已在界面配过——boot 判定要读它。
+  const settings = new RuntimeSettings(
+    dataDir, (message) => console.log(`  [settings] ${message}`));
+
   let modelsJson: Record<string, unknown>;
   let provider = flag("--provider") ?? "maeflow";
   let model = flag("--model") ?? "scripted-v1";
   const modelsPath = flag("--models");
+  const settingsModels = settings.models();
+  // 演示判定是三态:--models > 管理页配过模型网关 > 才算演示。
+  // 曾经"无 --models 即演示"会让最小启动(--data --port)每次重启
+  // 清空数据目录——界面配的一切陪葬(用户要 UI 优先形态时逮住)。
+  const demoMode = !modelsPath && !settingsModels.json;
   if (modelsPath) {
     modelsJson = JSON.parse(readFileSync(modelsPath, "utf-8"));
     console.log(`[serve] 使用真模型配置: ${modelsPath} (${provider}/${model})`);
+  } else if (settingsModels.json) {
+    // 模型网关来自管理页:真模式,保数据。launch 时设置层还会现读,
+    // 这里只是给部署层一个兜底值。
+    modelsJson = settingsModels.json;
+    provider = settingsModels.provider ?? provider;
+    model = settingsModels.model ?? model;
+    console.log(`[serve] 模型网关来自管理页设置 (${provider}/${model})`);
   } else {
     // 演示模式每次白纸起步(剧本假设新场);真模型模式保数据,
     // 重启靠 recover() 续命——先 rm 再 recover 是自相矛盾。
@@ -152,31 +169,50 @@ async function main(): Promise<void> {
   if (!auth.hasUsers()) {
     const adminUser = process.env.MAE_FLOW_ADMIN_USER ?? "admin";
     const adminPassword = process.env.MAE_FLOW_ADMIN_PASSWORD
-      ?? (modelsPath ? "" : "mae-flow-demo");
+      ?? (demoMode ? "mae-flow-demo" : "");
     if (!adminPassword) {
       throw new Error(
         "首次启动需设置 MAE_FLOW_ADMIN_PASSWORD(至少 10 个字符)",
       );
     }
     auth.bootstrapAdmin(adminUser, adminPassword);
-    if (!modelsPath) {
+    if (demoMode) {
       console.log("[serve] 演示登录: admin / mae-flow-demo");
     } else {
       console.log(`[serve] 已创建管理员账号: ${adminUser}`);
     }
   }
 
-  // --repo 开启内核纵向闭环:任务=克隆该仓+内核 bootstrap+深层门禁。
-  const repoPath = flag("--repo");
-  let host = repoPath
-    ? {
-        kernelRoot: process.env.MAE_FLOW_HOME
-          ?? resolve(REPO_ROOT, "..", "mae-flow"),
-        repoPath: resolve(repoPath),
-        python: "python3",
-      }
+  // 内核自动发现(集成产品形态):显式 MAE_FLOW_HOME > 开发布局的
+  // 兄弟目录 ../mae-flow(开发机用活内核,不用收编快照)> 仓内收编的
+  // kernel/(部署形态:一个 clone 就是完整产品,harness/sync-kernel.sh
+  // 负责刷新快照)。
+  const kernelRoot = process.env.MAE_FLOW_HOME
+    ?? [resolve(REPO_ROOT, "..", "mae-flow"), resolve(REPO_ROOT, "kernel")]
+      .find((candidate) => existsSync(join(candidate, "scripts")));
+
+  // 内核模式开启条件:找得到内核,且有默认仓(--repo 或管理页配的)
+  // 或明确 --kernel-mode(默认仓之后在界面配/每单下单填)。
+  // 从"没开"到"开"是部署形态变化,要重启一次——界面上如实写着。
+  const repoFlag = flag("--repo");
+  const bootDefaultRepo = settings.service().default_repo;
+  const kernelMode = !!kernelRoot
+    && (!!repoFlag || !!bootDefaultRepo || has("--kernel-mode"));
+  // URL 仓不许过 resolve(会被拼成本地路径,实测毁 URL);本地路径才归一化。
+  const repoPath = repoFlag
+    ? (/^(https?|ssh|git):\/\//i.test(repoFlag)
+        ? repoFlag : resolve(repoFlag))
     : undefined;
-  if (host) console.log(`[serve] 内核模式:试点仓 ${host.repoPath}`);
+  let host = kernelMode
+    ? { kernelRoot: kernelRoot!, repoPath, python: "python3" }
+    : undefined;
+  if (host) {
+    console.log(`[serve] 内核模式:内核 ${host.kernelRoot}`
+      + `,默认仓 ${repoPath ?? bootDefaultRepo ?? "(未配,下单时填)"}`);
+  } else if (kernelRoot) {
+    console.log("[serve] 内核在场但未开内核模式(没有默认仓):"
+      + "演示形态。要接真仓:--repo / --kernel-mode / 管理页配默认仓后重启");
+  }
 
   // Git 交付链:--platform <url> 接真件(内网 MR/流水线网关);
   // --fake-platform 本地起假件——从 --repo 灌一个裸仓当远端,
@@ -204,6 +240,11 @@ async function main(): Promise<void> {
     delivery = { platformUrl, ...pace };
     console.log(`[serve] 交付平台: ${platformUrl}`);
   } else if (host && has("--fake-platform")) {
+    // 假平台从 --repo 的本地仓灌裸仓;URL 仓/无仓没得灌,如实拒绝。
+    if (!host.repoPath || /^(https?|ssh|git):\/\//i.test(host.repoPath)) {
+      console.error("[serve] --fake-platform 需要 --repo 指向本地仓(灌裸仓用)");
+      process.exit(2);
+    }
     const platform = new FakeGitPlatform();
     platform.initBare(host.repoPath, dataDir);
     await platform.start();
@@ -254,18 +295,15 @@ async function main(): Promise<void> {
   // 由修复环扛(红灯自动派修复会话),不占人的时间。
   const verifyViaPipeline = has("--verify-via-pipeline");
   if (verifyViaPipeline) {
-    if (!delivery) {
+    // flag 形态保留硬校验;管理页开的免编译由界面提示"需平台在场",
+    // 没平台时交付如实 skipped,不假绿。
+    if (!delivery && !settings.service().platform_url) {
       console.error("[serve] --verify-via-pipeline 需要流水线在场:"
         + "请同时配 --platform 或 --fake-platform,否则没人裁判。");
       process.exit(2);
     }
     console.log("[serve] 本地验证关闭:编译/UT 交由流水线,红灯走修复环");
   }
-
-  // 管理页运行时设置:settings.json 住数据目录,热改并发/修复轮/轮询/
-  // 通知/模型网关;部署配置是底,这层是覆盖。
-  const settings = new RuntimeSettings(
-    dataDir, (message) => console.log(`  [settings] ${message}`));
 
   const service = new TaskService({
     dataDir, provider, model, modelsJson, maxConcurrent, settings,

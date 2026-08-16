@@ -15,6 +15,7 @@ import {
   putLubanSettings,
   putModelsSettings,
   putRuntimeSettings,
+  putServiceSettings,
   testLuban,
   type SettingsView as Settings,
 } from "./api";
@@ -92,6 +93,70 @@ function RuntimeCard({ view, onSaved }: {
       <KnobField label="流水线轮询预算（秒）" note="超预算如实停在“验证中”请人工"
         value={timeout_} onChange={setTimeout_} />
       <button type="submit" disabled={busy}>{busy ? "正在保存…" : "保存运行参数"}</button>
+      <Feedback message={message} />
+    </form>
+  </div>;
+}
+
+function ServiceCard({ view, onSaved }: {
+  view: Settings; onSaved: (next: Settings) => void;
+}) {
+  const service = view.service;
+  const [platformUrl, setPlatformUrl] = useState(service.platform_url ?? "");
+  const [defaultRepo, setDefaultRepo] = useState(service.default_repo ?? "");
+  const [verify, setVerify] = useState(
+    service.verify_via_pipeline === undefined
+      ? "" : String(service.verify_via_pipeline));
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useMessage();
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setBusy(true); setMessage(null);
+    try {
+      onSaved(await putServiceSettings({
+        platform_url: platformUrl,
+        default_repo: defaultRepo,
+        verify_via_pipeline: verify,
+      }));
+      setMessage({ kind: "success",
+        text: "已保存;平台/默认仓生效于下一次交付动作,免编译生效于下一个新会话。" });
+    } catch (error) {
+      setMessage({ kind: "error", text: String((error as Error).message ?? error) });
+    } finally { setBusy(false); }
+  }
+
+  return <div className="user-create-card settings-card">
+    <div className="user-create-copy">
+      <span className="section-kicker">DELIVERY</span>
+      <h2>交付与形态</h2>
+      <p>平台适配层地址、默认交付仓、免编译开关——原来是启动项，
+        现在在这儿热改。唯一要重启的例外：服务启动时既没有 --repo
+        也没有这里的默认仓，内核模式没开；首次配好默认仓后重启一次。
+        开免编译前确认平台地址在场，否则没人裁判。</p>
+    </div>
+    <form className="user-create-form settings-form" onSubmit={submit}>
+      <label className="span-2">
+        <span>平台适配层地址（MR / 流水线）</span>
+        <input value={platformUrl} placeholder="http://127.0.0.1:8790（留空=用部署值）"
+          onChange={(event) => setPlatformUrl(event.target.value)} />
+      </label>
+      <label className="span-2">
+        <span>默认交付代码仓（下单不填时用它）</span>
+        <input value={defaultRepo} spellCheck={false}
+          placeholder="https://codehub…/xxx.git（不许带账号密码）"
+          onChange={(event) => setDefaultRepo(event.target.value)} />
+      </label>
+      <label>
+        <span>免编译（编译/UT/CodeCheck 交流水线）</span>
+        <select value={verify}
+          onChange={(event) => setVerify(event.target.value)}>
+          <option value="">跟随部署启动项</option>
+          <option value="true">开启</option>
+          <option value="false">关闭</option>
+        </select>
+      </label>
+      <button type="submit" disabled={busy}>{busy ? "正在保存…" : "保存交付配置"}</button>
       <Feedback message={message} />
     </form>
   </div>;
@@ -286,6 +351,8 @@ export function SettingsBoard() {
   // 三张卡共享同一份视图:任一保存返回完整 view,整页跟着刷新,
   // 掩码提示(末4位)因此始终是服务端刚确认过的事实。
   return <section className="user-admin settings-board">
+    <ServiceCard key={`s${JSON.stringify(view.service)}`}
+      view={view} onSaved={setView} />
     <RuntimeCard key={`r${JSON.stringify(view.runtime)}`}
       view={view} onSaved={setView} />
     <LubanCard key={`l${view.luban.endpoint}:${view.luban.headers.length}`}

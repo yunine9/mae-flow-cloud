@@ -123,7 +123,9 @@ export interface TaskServiceOptions {
   /** 内核模式(阶段 1 纵向闭环):任务=克隆 repoPath → 内核 bootstrap
    * (sessionstart+userprompt 捕获需求、铺转发壳)→ 深层门禁与证据
    * 全部经 kernelHost 走内核 dispatch。不配则为纯会话模式(演练)。 */
-  host?: { kernelRoot: string; repoPath: string; python?: string };
+  /** repoPath 缺席=部署没给默认仓:默认仓从管理页(settings.service)
+   * 来,或者每单下单时填——两头都没有的任务如实失败。 */
+  host?: { kernelRoot: string; repoPath?: string; python?: string };
   /** 小鲁班通知(内网能力,外部用 FakeLubanServer 模拟)。 */
   notifier?: Notifier;
   /** Git 交付(§10):平台 API 地址(外部=FakeGitPlatform)。
@@ -549,6 +551,23 @@ export class TaskService {
     return picked;
   }
 
+  /** 服务形态的三个热改项(管理页压部署 flag):平台地址、默认仓、
+   * 免编译。各消费点现读现用,生效边界=下一次交付动作/新会话。 */
+  private effectivePlatformUrl(): string | undefined {
+    return this.options.settings?.service().platform_url
+      ?? this.options.delivery?.platformUrl;
+  }
+
+  private effectiveDefaultRepo(): string | undefined {
+    return this.options.settings?.service().default_repo
+      ?? this.options.host?.repoPath;
+  }
+
+  private effectiveVerifyViaPipeline(): boolean {
+    return this.options.settings?.service().verify_via_pipeline
+      ?? this.options.verifyViaPipeline ?? false;
+  }
+
   /** 当前生效的 models.json 同形内容(设置层压部署层)——
    * 下单模型选项和校验共用这一个口径。 */
   private activeModelsJson(): Record<string, unknown> {
@@ -584,7 +603,7 @@ export class TaskService {
       // 没接内核模式=任务不碰代码仓,表单别摆出输入框骗人。
       repo: {
         enabled: !!this.options.host,
-        default: this.options.host?.repoPath,
+        default: this.effectiveDefaultRepo(),
       },
     };
   }
@@ -995,7 +1014,7 @@ export class TaskService {
       }
       // 流水线代行验证:环境事实进开场白。每次会话(首跑/重建/修复)都
       // 要带——重建会话没有旧上下文,不带它就会再去撞一遍编译。
-      if (this.options.verifyViaPipeline) {
+      if (this.effectiveVerifyViaPipeline()) {
         prompt = `${prompt}\n\n环境事实(宿主声明):本机没有编译/测试工具链,`
           + `也不提供容器构建,不要在本机尝试编译或运行 UT——只会浪费轮次。`
           + `CodeCheck 亦不在本机执行(内核在云端会如实记账并交由流水线)。`
@@ -1022,7 +1041,7 @@ export class TaskService {
         // 其绝对路径,只读)与 Git 远端——但只有本地路径仓(演示裸仓)
         // 才需要挂载;URL 仓走网络,拿路径当挂载参数只会喂 docker 垃圾。
         const effectiveRepo =
-          task.summary.repo_url ?? this.options.host?.repoPath;
+          task.summary.repo_url ?? this.effectiveDefaultRepo();
         const hostMounts = this.options.host
           ? [
               `${this.options.host.kernelRoot}:${this.options.host.kernelRoot}:ro`,
@@ -1109,8 +1128,9 @@ export class TaskService {
    * MR 成功≠完成:流水线过了才"等待合入",否则停在"验证中"。
    * 交付失败不吞:原因写进 summary.delivery,任务保持 completed。 */
   private async tryDeliver(task: TaskState): Promise<void> {
-    const delivery = this.options.delivery;
-    if (!delivery || !this.options.host || !task.cwd) return;
+    // 平台地址热改(管理页压部署 flag):每次交付动作现读现用。
+    const platformUrl = this.effectivePlatformUrl();
+    if (!platformUrl || !this.options.host || !task.cwd) return;
     try {
       const statePath = join(task.cwd, ".mae-flow.json");
       if (!existsSync(statePath)) {
@@ -1143,7 +1163,7 @@ export class TaskService {
       const mrRequest = {
         // 任务级仓进了场,适配层必须知道这单落在哪个仓——
         // repo 字段随 MR/流水线请求走,假件(单仓)忽略它无害。
-        repo: task.summary.repo_url ?? this.options.host?.repoPath,
+        repo: task.summary.repo_url ?? this.effectiveDefaultRepo(),
         source_branch: branch,
         target_branch: baseline,
         title: `${state?.config?.["单号"] ?? branch}: ${task.summary.requirement.slice(0, 60)}`,
@@ -1152,7 +1172,7 @@ export class TaskService {
       const mrStarted = new Date().toISOString();
       ledger({ idemKey: mrKey, kind: "mr_create", request: mrRequest,
                sha, startedAt: mrStarted });
-      const mr = await fetch(`${delivery.platformUrl}/mr`, {
+      const mr = await fetch(`${platformUrl}/mr`, {
         method: "POST",
         headers: this.platformIdentity(task),
         body: JSON.stringify(mrRequest),
@@ -1168,7 +1188,7 @@ export class TaskService {
       const runRequest = { sha, repo: mrRequest.repo };
       ledger({ idemKey: runKey, kind: "pipeline_trigger",
                request: runRequest, sha, startedAt: runStarted });
-      const run = await fetch(`${delivery.platformUrl}/pipeline/trigger`, {
+      const run = await fetch(`${platformUrl}/pipeline/trigger`, {
         method: "POST",
         headers: this.platformIdentity(task),
         body: JSON.stringify(runRequest),
@@ -1208,14 +1228,14 @@ export class TaskService {
   private async pollPipeline(task: TaskState): Promise<void> {
     const delivery = this.options.delivery;
     const sha = task.summary.delivery?.sha;
-    if (!delivery || !sha) return;
+    if (!this.effectivePlatformUrl() || !sha) return;
     const knobs = this.options.settings?.runtime() ?? {};
     const interval = (knobs.poll_interval_s !== undefined
       ? knobs.poll_interval_s * 1000 : undefined)
-      ?? delivery.pollIntervalMs ?? 10_000;
+      ?? delivery?.pollIntervalMs ?? 10_000;
     const deadline = Date.now() + ((knobs.poll_timeout_s !== undefined
       ? knobs.poll_timeout_s * 1000 : undefined)
-      ?? delivery.pollTimeoutMs ?? 30 * 60_000);
+      ?? delivery?.pollTimeoutMs ?? 30 * 60_000);
     while (Date.now() < deadline) {
       // unref:轮询是旁路,不许它吊着进程不退(进程要退就让它退,
       // 重启后 recover 会以 delivery.sha 为锚续轮)。
@@ -1224,9 +1244,10 @@ export class TaskService {
       let terminal;
       try {
         const repo = encodeURIComponent(
-          task.summary.repo_url ?? this.options.host?.repoPath ?? "");
+          task.summary.repo_url ?? this.effectiveDefaultRepo() ?? "");
         const status = await fetch(
-          `${delivery.platformUrl}/pipeline/status?sha=${sha}&repo=${repo}`,
+          `${this.effectivePlatformUrl()}/pipeline/status`
+          + `?sha=${sha}&repo=${repo}`,
           { headers: this.platformIdentity(task) })
           .then((r) => r.json());
         terminal = (status.runs ?? []).findLast(
@@ -1541,8 +1562,13 @@ export class TaskService {
     identity?: { username: string; email?: string },
     repoUrl?: string,
   ): string {
-    // 任务级仓(下单填的)压过部署仓;记在 summary,重启续跑同仓。
-    const source = repoUrl ?? this.options.host!.repoPath;
+    // 任务级仓(下单填的)> 管理页默认仓 > 部署 --repo;都没有=如实
+    // 失败,不猜一个仓出来。记在 summary,重启续跑同仓。
+    const source = repoUrl ?? this.effectiveDefaultRepo();
+    if (!source) {
+      throw new Error(
+        "这单没有代码仓:下单时填「交付代码仓」,或让管理员在服务设置里配默认仓");
+    }
     // 裸仓 origin.git → 工作区目录名去掉 .git 后缀,免得像个裸仓。
     const target = join(
       workspace, basename(source).replace(/\.git$/, "") || "repo");

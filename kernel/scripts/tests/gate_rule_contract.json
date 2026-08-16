@@ -1,0 +1,206 @@
+{
+  "_doc": [
+    "Gate 规则总账。两条红线的锚点:",
+    "  无残留 — 生产规则集合必须与本文件键集合完全相等。删规则必须删条目，",
+    "           新增规则必须登记，不允许出现只剩读取方或只剩条目的半套机制。",
+    "  无死锁 — 每条规则必须声明 escape。裁决类(permit)由 strike_escalation 自动",
+    "           追加放行令出口，结构性保证;绝对类(absolute)不追加任何东西，",
+    "           因此它的出路必须写在自己的拦截文案里，并被 evidence 关键词证实。",
+    "tier 是瘦身分层:A=底线(继续拦) B=流程督促(降级/迁移) C=模式定义(仅特定模式生效)。",
+    "escape 取值: permit | comply | user-terminal | cli:<子命令>",
+    "2026-08-07 瘦身:删除 10 条流程督促规则(本步不许改源码/写规格/写需求文档、分支命名、worktree、comet init、手建 openspec 目录)。它们拦的都是可逆动作，真正的把关在 done 的证据检查;UT 步的测试边界与编译未完成不许提交保留为底线。"
+  ],
+  "rules": {
+    "bash-wrapped-git": {
+      "kind": "absolute",
+      "tier": "A",
+      "escape": "comply",
+      "evidence": "直接使用可见的 git 命令",
+      "why": "换壳执行会让所有 Git 门禁形同虚设"
+    },
+    "bash-mutating-git-alias": {
+      "kind": "absolute",
+      "tier": "A",
+      "escape": "comply",
+      "evidence": "请改用可见的 canonical git",
+      "why": "alias 隐藏真实写动作，Gate 无法预检"
+    },
+    "bash-opaque-pathspec": {
+      "kind": "absolute",
+      "tier": "A",
+      "escape": "comply",
+      "evidence": "请改为显式",
+      "why": "Gate 无法在执行前核对 exact candidates"
+    },
+    "bash-multiple-head-mutations": {
+      "kind": "absolute",
+      "tier": "A",
+      "escape": "comply",
+      "evidence": "请拆成独立命令",
+      "why": "一条 Bash 多次改写 HEAD 无法逐个预检"
+    },
+    "bash-manual-dispatch": {
+      "kind": "absolute",
+      "tier": "A",
+      "escape": "cli:status",
+      "evidence": "status",
+      "why": "手动调 dispatch.py 是伪造 Hook 令牌的通道"
+    },
+    "bash-force-push": {
+      "kind": "absolute",
+      "tier": "A",
+      "escape": "user-terminal",
+      "evidence": "用户",
+      "why": "覆盖远端不可逆"
+    },
+    "bash-recursive-delete": {
+      "kind": "absolute",
+      "tier": "A",
+      "escape": "user-terminal",
+      "evidence": "请用户手动运行",
+      "why": "递归删除不可逆"
+    },
+    "bash-git-clean-ignored": {
+      "kind": "absolute",
+      "tier": "A",
+      "escape": "user-terminal",
+      "evidence": "用户",
+      "why": "会删掉流程状态与令牌，不可逆"
+    },
+    "bash-remote-script-pipe": {
+      "kind": "absolute",
+      "tier": "A",
+      "escape": "user-terminal",
+      "evidence": "请用户手动运行",
+      "why": "下载即执行远端脚本，供应链风险"
+    },
+    "bash-wipe-worktree": {
+      "kind": "permit",
+      "tier": "A",
+      "escape": "permit",
+      "why": "清空工作区会丢未提交成果"
+    },
+    "bash-discard-user-scene": {
+      "kind": "permit",
+      "tier": "A",
+      "escape": "permit",
+      "why": "单文件丢弃若命中用户流程启动前的未提交改动,等于销毁用户现场"
+    },
+    "bash-git-revert-user-authorization": {
+      "kind": "permit",
+      "tier": "A",
+      "escape": "permit",
+      "why": "改写 HEAD 必须绑定用户明确指定的 exact commit"
+    },
+    "bash-wide-add": {
+      "kind": "absolute",
+      "tier": "A",
+      "escape": "comply",
+      "evidence": "必须精确到文件",
+      "why": "宽提交把无关文件卷进交付分支"
+    },
+    "bash-build-artifacts": {
+      "kind": "absolute",
+      "tier": "A",
+      "escape": "comply",
+      "why": "高置信临时产物是完整性边界,不签放行令;文案直接给本地恢复做法",
+      "evidence": "git restore --staged"
+    },
+    "bash-compile-side-effects": {
+      "kind": "absolute",
+      "tier": "A",
+      "escape": "comply",
+      "why": "编译副作用冒充源码改动是完整性边界,不签放行令;文案直接给移除做法",
+      "evidence": "移除这些路径"
+    },
+    "bash-foreign-openspec": {
+      "kind": "permit",
+      "tier": "A",
+      "escape": "permit",
+      "why": "夹带其他单的规格产物"
+    },
+    "bash-cross-delivery-carryover": {
+      "kind": "permit",
+      "tier": "A",
+      "escape": "permit",
+      "why": "夹带上一单遗留改动"
+    },
+    "bash-wide-openspec-add": {
+      "kind": "permit",
+      "tier": "A",
+      "escape": "permit",
+      "why": "整目录暂存规格产物"
+    },
+    "bash-delivery-manifest-unconfirmed": {
+      "kind": "absolute",
+      "tier": "A",
+      "escape": "cli:manifest",
+      "evidence": "manifest show",
+      "why": "提交内容必须先由用户确认"
+    },
+    "bash-delivery-manifest-files": {
+      "kind": "absolute",
+      "tier": "A",
+      "escape": "cli:manifest",
+      "evidence": "manifest show",
+      "why": "提交必须精确等于用户确认的清单"
+    },
+    "bash-delivery-manifest-stage": {
+      "kind": "absolute",
+      "tier": "A",
+      "escape": "cli:manifest",
+      "evidence": "manifest show",
+      "why": "暂存范围必须落在确认清单内"
+    },
+    "bash-internal-state-read": {
+      "kind": "absolute",
+      "tier": "A",
+      "escape": "cli:current",
+      "evidence": "current",
+      "why": "绕过子命令直接读写状态账本等于伪造证据"
+    },
+    "bash-agent-interactive-exit": {
+      "kind": "absolute",
+      "tier": "A",
+      "escape": "user-terminal",
+      "evidence": "展示给用户手动执行",
+      "why": "交互式退出是留给用户的真实终端逃生口，Agent 不得代答"
+    },
+    "bash-commit-format": {
+      "kind": "permit",
+      "tier": "A",
+      "escape": "permit",
+      "why": "提交信息格式推上去就难改;保留拦截但文案要直接给出正确命令"
+    },
+    "bash-commit-branch": {
+      "kind": "permit",
+      "tier": "A",
+      "escape": "permit",
+      "why": "提交到错分支的恢复成本高"
+    },
+    "edit-tests-only": {
+      "kind": "permit",
+      "tier": "A",
+      "escape": "permit",
+      "why": "改产品代码让测试变绿属破坏信任，不是可逆的流程瑕疵;出口是用户裁决后 unlock source"
+    },
+    "bash-tests-only": {
+      "kind": "permit",
+      "tier": "A",
+      "escape": "permit",
+      "why": "同 edit-tests-only"
+    },
+    "bash-compile-task-pending": {
+      "kind": "permit",
+      "tier": "A",
+      "escape": "permit",
+      "why": "编译未完成就提交，回退要 reset/amend;已修复为真实证据放行，不再死锁"
+    },
+    "bash-build-output-artifacts": {
+      "kind": "permit",
+      "tier": "A",
+      "escape": "permit",
+      "why": "输出目录/产物后缀且 Agent 从未直接改写过的候选几乎必然是编译产出;真要交付预编译产物走一次性放行令"
+    }
+  }
+}
