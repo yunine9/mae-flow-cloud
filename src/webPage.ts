@@ -43,8 +43,9 @@ export const WEB_PAGE = `<!doctype html>
 <div id="tasks"></div>
 <script>
 const STATUS_TEXT = {
-  queued: "排队中", running: "进行中", waiting_for_human: "等你决定",
-  completed: "已完成", failed: "出错了",
+  queued: "排队中", running: "进行中", pausing: "正在暂停",
+  paused: "已暂停", waiting_for_human: "等你决定",
+  completed: "已完成", canceled: "已取消", failed: "出错了",
   verifying: "代码已提交,流水线验证中", await_merge: "已提合入请求,等待合入",
 };
 

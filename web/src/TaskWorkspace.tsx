@@ -18,14 +18,20 @@ import { Annotatable } from "./Annotatable";
 import { AnnotationPanel } from "./AnnotationPanel";
 import { AttachedNotes } from "./AttachedNotes";
 import {
+  completeReview,
+  controlTask,
   listAnnotations,
   listArtifacts,
+  listCommitters,
+  listTaskReviews,
   readArtifact,
   repairStopped,
+  requestCommitterReview,
   statusText,
   type AnchorCheck,
   type Annotation,
   type ArtifactMeta,
+  type ReviewRequest,
   type TaskSummary,
 } from "./api";
 import {
@@ -46,11 +52,15 @@ function sizeText(bytes: number): string {
 export function TaskWorkspace({
   task,
   canOperate,
+  canRequestReview,
+  reviewAssignment,
   onChanged,
   onClose,
 }: {
   task: TaskSummary;
   canOperate: boolean;
+  canRequestReview: boolean;
+  reviewAssignment?: ReviewRequest;
   onChanged: () => void;
   onClose: () => void;
 }) {
@@ -66,6 +76,68 @@ export function TaskWorkspace({
   const [notesPulse, setNotesPulse] = useState(0);
   const [attachNotes, setAttachNotes] = useState(true);
   const [livePulse, setLivePulse] = useState(0);
+  const [committers, setCommitters] = useState<Array<{ username: string }>>([]);
+  const [reviewer, setReviewer] = useState("");
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const [reviewResult, setReviewResult] = useState("");
+  const [taskReviews, setTaskReviews] = useState<ReviewRequest[]>([]);
+  const [completeBusy, setCompleteBusy] = useState(false);
+  const [completeError, setCompleteError] = useState("");
+  const [controlBusy, setControlBusy] =
+    useState<"pause" | "resume" | "cancel" | "">("");
+  const [controlError, setControlError] = useState("");
+  const [cancelArmed, setCancelArmed] = useState(false);
+
+  useEffect(() => {
+    if (!canRequestReview) return;
+    let alive = true;
+    void listCommitters().then((users) => {
+      if (!alive) return;
+      setCommitters(users);
+      setReviewer((current) => current || users[0]?.username || "");
+    }).catch((reason) => {
+      if (alive) setReviewResult(reason instanceof Error
+        ? reason.message : "Committer 名单读取失败");
+    });
+    return () => { alive = false; };
+  }, [canRequestReview, task.id]);
+
+  useEffect(() => {
+    if (!canRequestReview) return;
+    let alive = true;
+    void listTaskReviews(task.id).then((reviews) => {
+      if (alive) setTaskReviews(reviews);
+    }).catch(() => undefined);
+    return () => { alive = false; };
+  }, [canRequestReview, task.id]);
+
+  async function inviteReview() {
+    if (!reviewer || reviewBusy) return;
+    setReviewBusy(true); setReviewResult("");
+    try {
+      const result = await requestCommitterReview(task.id, reviewer);
+      setReviewResult(result.delivered
+        ? `已通知 ${reviewer}`
+        : `未送达：${result.last_error || "通知服务暂无回执"}`);
+      setTaskReviews((current) => [
+        result,
+        ...current.filter((item) => item.id !== result.id),
+      ]);
+    } catch (reason) {
+      setReviewResult(reason instanceof Error ? reason.message : "邀请发送失败");
+    } finally { setReviewBusy(false); }
+  }
+
+  async function finishReview() {
+    if (!reviewAssignment || completeBusy) return;
+    setCompleteBusy(true); setCompleteError("");
+    try {
+      await completeReview(reviewAssignment.id);
+      await onChanged();
+    } catch (reason) {
+      setCompleteError(reason instanceof Error ? reason.message : "完成检视失败");
+    } finally { setCompleteBusy(false); }
+  }
 
   // 它在跑的时候材料是活的:界面上写着"材料会随进展刷新",那就得真刷。
   // 原来只在 task.id/status 变化时取一次,于是整段编码期页面一动不动,
@@ -73,7 +145,7 @@ export function TaskWorkspace({
   // 只在 running 时轮询,5 秒一次;拿到一样的内容就不 setState,免得
   // 正在写批注时被重渲染打断。
   useEffect(() => {
-    if (task.status !== "running") return;
+    if (task.status !== "running" && task.status !== "pausing") return;
     const timer = window.setInterval(
       () => setLivePulse((tick) => tick + 1), 5000);
     return () => window.clearInterval(timer);
@@ -162,6 +234,25 @@ export function TaskWorkspace({
   const documents = items?.filter((item) => item.kind === "doc") ?? [];
   const changes = items?.filter((item) => item.kind === "diff") ?? [];
   const waiting = task.status === "waiting_for_human" && task.waiting;
+  const controllable = canOperate && [
+    "queued", "running", "pausing", "paused", "waiting_for_human", "verifying",
+  ].includes(task.status);
+
+  async function runControl(action: "pause" | "resume" | "cancel") {
+    if (controlBusy) return;
+    setControlBusy(action);
+    setControlError("");
+    try {
+      const result = await controlTask(task.id, action);
+      if (result.error) setControlError(result.error);
+      else {
+        setCancelArmed(false);
+        await onChanged();
+      }
+    } finally {
+      setControlBusy("");
+    }
+  }
 
   return (
     <section
@@ -185,6 +276,43 @@ export function TaskWorkspace({
           </div>
           <strong id="task-workspace-title">{task.requirement}</strong>
         </div>
+        {controllable && (
+          <div className="ws-head-controls" aria-label="任务控制">
+            {task.status === "paused" ? (
+              <button type="button" className="primary" disabled={!!controlBusy}
+                title="沿用当前工作区和流程进度继续执行"
+                onClick={() => void runControl("resume")}>
+                {controlBusy === "resume" ? "恢复中…" : "恢复"}
+              </button>
+            ) : task.status === "pausing" ? (
+              <button type="button" disabled title="当前操作结束后自动暂停">
+                正在暂停
+              </button>
+            ) : (
+              <button type="button" disabled={!!controlBusy}
+                title={task.status === "verifying"
+                  ? "停止平台跟踪；外部流水线仍会继续" : "当前操作结束后安全暂停"}
+                onClick={() => void runControl("pause")}>
+                {controlBusy === "pause" ? "暂停中…" : "暂停"}
+              </button>
+            )}
+            {!cancelArmed ? (
+              <button type="button" className="cancel" disabled={!!controlBusy}
+                title="取消后不可恢复，已有文件和记录仍会保留"
+                onClick={() => setCancelArmed(true)}>取消</button>
+            ) : (
+              <div className="ws-cancel-confirm">
+                <span>取消后不可恢复</span>
+                <button type="button" disabled={!!controlBusy}
+                  onClick={() => void runControl("cancel")}>
+                  {controlBusy === "cancel" ? "取消中…" : "确认"}
+                </button>
+                <button type="button" disabled={!!controlBusy}
+                  onClick={() => setCancelArmed(false)}>返回</button>
+              </div>
+            )}
+          </div>
+        )}
         <a className="ws-native" href={`/tasks/${task.id}/panel`} target="_blank" rel="noreferrer">
           内核原生视图
           <svg viewBox="0 0 16 16" aria-hidden><path d="M6 3.5h6.5V10M12.25 3.75 5 11" /></svg>
@@ -291,6 +419,48 @@ export function TaskWorkspace({
               忙完这步就会看到。不用干等到它来问你。 */}
           {!waiting && canOperate && task.status === "running" && (
             <SteerBox taskId={task.id} onSent={onChanged} />
+          )}
+          {controlError && <div className="task-control-error">{controlError}</div>}
+          {task.status === "canceled" && (
+            <div className="task-canceled-note">
+              <strong>任务已取消</strong>
+              <span>执行已停止；此前产生的文档、代码和过程记录仍可查看。</span>
+            </div>
+          )}
+          {reviewAssignment && (
+            <section className="review-assignment" aria-labelledby="review-assignment-title">
+              <div className="review-assignment-mark" aria-hidden>审</div>
+              <div>
+                <span>COMMITTER REVIEW</span>
+                <strong id="review-assignment-title">{reviewAssignment.requester} 邀请你检视</strong>
+                <p>看完材料并留下必要批注后即可完成；这不会代替任务责任人提交决定。</p>
+                {completeError && <small className="review-assignment-error">{completeError}</small>}
+              </div>
+              <button type="button" disabled={completeBusy} onClick={() => void finishReview()}>{completeBusy ? "正在完成…" : "完成检视"}</button>
+            </section>
+          )}
+          {canRequestReview && (
+            <section className="committer-review" aria-labelledby="committer-review-title">
+              <div>
+                <span>OPTIONAL REVIEW</span>
+                <strong id="committer-review-title">邀请 Committer 检视</strong>
+                <p>不会自动通知。只有你主动点击后，所选 Committer 才会收到本任务的检视入口。</p>
+              </div>
+              {committers.length > 0 ? <div className="committer-review-action">
+                <select aria-label="选择 Committer" value={reviewer} onChange={(event) => setReviewer(event.target.value)}>
+                  {committers.map((user) => <option key={user.username} value={user.username}>{user.username}</option>)}
+                </select>
+                <button type="button" disabled={!reviewer || reviewBusy} onClick={() => void inviteReview()}>{reviewBusy ? "发送中…" : "邀请检视"}</button>
+              </div> : <div className="committer-empty">管理员尚未配置 Committer 名单</div>}
+              {reviewResult && <small className="committer-result">{reviewResult}</small>}
+              {taskReviews.length > 0 && <div className="committer-review-history">
+                {taskReviews.slice(0, 3).map((review) => <span key={review.id}>
+                  <i className={review.status} aria-hidden />
+                  <strong>{review.committer}</strong>
+                  <small>{review.status === "completed" ? "已完成检视" : review.delivered ? "等待检视" : "通知未送达"}</small>
+                </span>)}
+              </div>}
+            </section>
           )}
           {task.status === "failed" && task.detail && (
             <div className="alert">

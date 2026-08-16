@@ -133,7 +133,7 @@ async function main(): Promise<number> {
       + `(重新入队 ${recovered.requeued}),任务 ${task.id}`
       + ` 状态 ${task.status}`);
     // 终态但内核没走到 end(环境故障被迫收口的形状)→ 重跑续推。
-    if (["completed", "failed"].includes(task.status)) {
+    if (["completed", "failed", "canceled"].includes(task.status)) {
       const statePath = join(task.workspace, "origin", ".mae-flow.json");
       const current = existsSync(statePath)
         ? String(JSON.parse(readFileSync(statePath, "utf-8"))?.current ?? "")
@@ -159,7 +159,7 @@ async function main(): Promise<number> {
       console.log(`[pilot] ⏱ 超时预算耗尽,当前状态: ${now.status}`);
       break;
     }
-    if (["completed", "failed", "verifying", "await_merge"]
+    if (["completed", "failed", "canceled", "verifying", "await_merge"]
         .includes(now.status)) {
       console.log(`[pilot] 任务收口: ${now.status}`
         + (now.detail ? ` — ${now.detail}` : ""));

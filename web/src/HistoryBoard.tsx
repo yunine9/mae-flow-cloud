@@ -17,7 +17,8 @@ const TILES = [
   {
     label: "推进中",
     tone: "active",
-    match: (status: string) => ["queued", "running", "verifying"].includes(status),
+    match: (status: string) => ["queued", "running", "pausing", "verifying"]
+      .includes(status),
   },
   {
     label: "等待决策",
@@ -30,9 +31,9 @@ const TILES = [
     match: (status: string) => ["completed", "await_merge"].includes(status),
   },
   {
-    label: "异常",
+    label: "异常 / 已取消",
     tone: "danger",
-    match: (status: string) => status === "failed",
+    match: (status: string) => ["failed", "canceled"].includes(status),
   },
 ] as const;
 

@@ -1,0 +1,137 @@
+/**
+ * Committer 检视台账：追加式 JSONL，服务重启后仍能恢复。
+ *
+ * 它刻意只有 pending / completed 两态：责任人主动邀请，Committer
+ * 看完后收口。不引入接单、转派、多人会签等另一套流程系统。
+ */
+
+import {
+  appendFileSync,
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+} from "node:fs";
+import { randomUUID } from "node:crypto";
+import { dirname } from "node:path";
+
+export interface ReviewRequest {
+  id: string;
+  task_id: string;
+  task_title: string;
+  requester: string;
+  committer: string;
+  status: "pending" | "completed";
+  created_at: string;
+  completed_at?: string;
+  delivered: boolean;
+  attempts: number;
+  last_error?: string;
+}
+
+export class ReviewStore {
+  private records = new Map<string, ReviewRequest>();
+
+  constructor(readonly path: string) {
+    this.load();
+  }
+
+  list(): ReviewRequest[] {
+    return [...this.records.values()]
+      .sort((a, b) => b.created_at.localeCompare(a.created_at));
+  }
+
+  forCommitter(committer: string): ReviewRequest[] {
+    return this.list().filter((item) => item.committer === committer);
+  }
+
+  forTask(taskId: string): ReviewRequest[] {
+    return this.list().filter((item) => item.task_id === taskId);
+  }
+
+  create(input: {
+    taskId: string;
+    taskTitle: string;
+    requester: string;
+    committer: string;
+  }): ReviewRequest {
+    const existing = this.list().find((item) =>
+      item.task_id === input.taskId && item.committer === input.committer
+      && item.status === "pending");
+    if (existing) return existing;
+    const record: ReviewRequest = {
+      id: `review-${randomUUID()}`,
+      task_id: input.taskId,
+      task_title: input.taskTitle,
+      requester: input.requester,
+      committer: input.committer,
+      status: "pending",
+      created_at: new Date().toISOString(),
+      delivered: false,
+      attempts: 0,
+    };
+    this.save(record);
+    return record;
+  }
+
+  delivery(
+    id: string,
+    result: { delivered: boolean; attempts: number; last_error?: string },
+  ): ReviewRequest {
+    const current = this.required(id);
+    const next: ReviewRequest = {
+      ...current,
+      delivered: result.delivered,
+      attempts: result.attempts,
+      last_error: result.last_error || undefined,
+    };
+    this.save(next);
+    return next;
+  }
+
+  complete(id: string, committer: string): ReviewRequest {
+    const current = this.required(id);
+    if (current.committer !== committer) {
+      throw new Error("只能完成邀请给自己的检视");
+    }
+    if (current.status === "completed") return current;
+    const next: ReviewRequest = {
+      ...current,
+      status: "completed",
+      completed_at: new Date().toISOString(),
+    };
+    this.save(next);
+    return next;
+  }
+
+  private required(id: string): ReviewRequest {
+    const record = this.records.get(id);
+    if (!record) throw new Error(`检视邀请 ${id} 不存在`);
+    return record;
+  }
+
+  private save(record: ReviewRequest): void {
+    mkdirSync(dirname(this.path), { recursive: true });
+    appendFileSync(this.path, JSON.stringify(record) + "\n", {
+      encoding: "utf-8",
+      mode: 0o600,
+    });
+    chmodSync(this.path, 0o600);
+    this.records.set(record.id, record);
+  }
+
+  private load(): void {
+    if (!existsSync(this.path)) return;
+    for (const line of readFileSync(this.path, "utf-8").split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const record = JSON.parse(line) as ReviewRequest;
+        if (record.id && record.task_id && record.committer) {
+          this.records.set(record.id, record);
+        }
+      } catch {
+        // 进程退出留下半行时只丢半行；前面已经落袋的记录仍可用。
+      }
+    }
+  }
+}

@@ -10,7 +10,9 @@
  */
 
 import {
+  accessSync,
   chmodSync,
+  constants,
   cpSync,
   existsSync,
   mkdirSync,
@@ -42,17 +44,21 @@ import { TranscriptStore } from "./transcriptStore.ts";
 import { GateService, type GateContract } from "./gateService.ts";
 import { HumanGate, renderDecision, type WaitingRecord } from "./humanGate.ts";
 import { CloudSession, type Outcome } from "./sessionDriver.ts";
-import { TaskContainer } from "./containerRuntime.ts";
+import { dockerAvailable, TaskContainer } from "./containerRuntime.ts";
 import type { ExternalAction, PgProjection } from "./projection.ts";
 import type { RuntimeSettings } from "./settings.ts";
+import { ReviewStore, type ReviewRequest } from "./reviews.ts";
 
 export type TaskStatus =
   | "queued"
   | "running"
+  | "pausing"
+  | "paused"
   | "waiting_for_human"
   | "completed"
   | "verifying"      // MR 已建,权威流水线未过(主 spec §10:不能标完成)
   | "await_merge"    // 流水线通过,等待人工合入;系统不自动合并
+  | "canceled"
   | "failed";
 
 export interface TaskProgress {
@@ -66,11 +72,19 @@ export interface TaskProgress {
 
 export interface TaskSummary {
   id: string;
+  /** 扫读标题:需求原文仍完整保留在 requirement。旧任务缺席时由读侧
+   * 从需求首行生成,不要求迁移现场文件。 */
+  title?: string;
   requirement: string;
   status: TaskStatus;
   waiting?: WaitingRecord;
   detail?: string;
   created_at: string;
+  /** 任务运营时间:updated_at 是任意任务事实最近变更,last_progress_at
+   * 只在状态/阶段推进时变化,领导据此识别“长时间没有有效进展”。 */
+  updated_at?: string;
+  last_progress_at?: string;
+  completed_at?: string;
   workspace: string;
   /** 小鲁班通知账号(任务创建时填写,主 spec §5.1)。 */
   luban_account?: string;
@@ -113,6 +127,14 @@ export interface TaskSummary {
   };
   /** 从现场看板的 panel-pulse.js/panel.html 读取的进度摘要。 */
   progress?: TaskProgress;
+  /** 人工控制台账。paused_from 是恢复时的扳道锚点：等待决定、流水线
+   * 验证和普通执行的恢复方式不同，不能靠前端猜。 */
+  control?: {
+    last_action: "pause" | "resume" | "cancel";
+    actor: string;
+    at: string;
+    paused_from?: TaskStatus;
+  };
 }
 
 export interface TaskServiceOptions {
@@ -198,6 +220,38 @@ function personalTaskLink(
     + `&task=${encodeURIComponent(taskId)}`;
 }
 
+function reviewTaskLink(
+  linkBase: string | undefined,
+  taskId: string,
+  reviewId: string,
+): string {
+  const root = (linkBase ?? "").replace(/\/+$/, "");
+  return `${root}/?task=${encodeURIComponent(taskId)}`
+    + `&review=${encodeURIComponent(reviewId)}`;
+}
+
+export type SystemCheckStatus = "ok" | "warning" | "error";
+export interface SystemCheckItem {
+  key: string;
+  label: string;
+  status: SystemCheckStatus;
+  detail: string;
+  suggestion?: string;
+}
+export interface SystemCheckResult {
+  checked_at: string;
+  overall: SystemCheckStatus;
+  items: SystemCheckItem[];
+}
+
+/** 自由需求原文 → 可扫读标题。它只是展示摘要,不改需求输入；按首个非空
+ * 行截断,避免把一整段需求塞进团队列表。 */
+function taskTitle(requirement: string): string {
+  const first = requirement.split(/\r?\n/)
+    .map((line) => line.trim()).find(Boolean) ?? "未命名任务";
+  return first.length > 80 ? `${first.slice(0, 79)}…` : first;
+}
+
 /** 重启前发出、但很可能没送到模型的插话。
  *
  * 插话走 pi 的 steer,消息压在**进程内存**队列里,进程一死就没了;事件
@@ -257,6 +311,13 @@ interface TaskState {
   /** 避免列表轮询反复解析未变化的现场面板。 */
   progressPulse?: string;
   progressCache?: TaskProgress;
+  /** persist 用来识别真正的状态推进,避免普通元数据更新冒充进展。 */
+  lastPersistedStatus?: TaskStatus;
+  /** 每次取消/即时暂停/恢复都会换代。异步回调只允许修改启动时那一代，
+   * 防止“取消后又被旧回调写成完成”。进程重启后旧 Promise 已不存在。 */
+  controlEpoch: number;
+  /** running 的暂停不截断当前工具，等 settle 的安全边界收口。 */
+  pauseRequested?: boolean;
 }
 
 export class TaskService {
@@ -264,8 +325,10 @@ export class TaskService {
   private runningCount = 0;
   private queue: string[] = [];
   private counter = 0;
+  private reviews: ReviewStore;
 
   constructor(readonly options: TaskServiceOptions) {
+    this.reviews = new ReviewStore(join(options.dataDir, "reviews.jsonl"));
     // 桌面通知只有 serve --desktop-notify 显式要了才开(它会设
     // MAE_FLOW_DESKTOP_NOTIFY);其余一切宿主进程——测试、probe、pilot——
     // 一律静音。少了这道闸,npm test 拉起真内核当裁判时会把用户的 mac
@@ -286,10 +349,129 @@ export class TaskService {
     return task ? this.project(task) : undefined;
   }
 
+  /** 责任人主动发出的 Committer 检视邀请。邀请先落盘，再投递；通知
+   * 失败也不会把“有人应当检视”这个事实弄丢。 */
+  async requestReview(
+    id: string,
+    requester: string,
+    committer: string,
+  ): Promise<ReviewRequest> {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    const notifier = this.options.notifier;
+    if (!notifier) throw new Error("本部署未接通知器");
+    const review = this.reviews.create({
+      taskId: id,
+      taskTitle: task.summary.title ?? taskTitle(task.summary.requirement),
+      requester,
+      committer,
+    });
+    const result = await notifier.notifyReview({
+      taskId: id,
+      account: committer,
+      summary: review.task_title,
+      link: reviewTaskLink(this.options.linkBase, id, review.id),
+    });
+    return this.reviews.delivery(review.id, result);
+  }
+
+  listReviewsFor(committer: string): ReviewRequest[] {
+    return this.reviews.forCommitter(committer);
+  }
+
+  listTaskReviews(taskId: string): ReviewRequest[] {
+    if (!this.tasks.has(taskId)) throw new NotFoundError(`任务 ${taskId} 不存在`);
+    return this.reviews.forTask(taskId);
+  }
+
+  completeReview(id: string, committer: string): ReviewRequest {
+    return this.reviews.complete(id, committer);
+  }
+
+  /** 管理员部署自检：只做只读、有限时的探测，不发送测试消息，
+   * 不创建任务，也不改变任何运行配置。 */
+  async systemCheck(): Promise<SystemCheckResult> {
+    const items: SystemCheckItem[] = [];
+    try {
+      accessSync(this.options.dataDir, constants.R_OK | constants.W_OK);
+      items.push({ key: "data", label: "任务数据", status: "ok",
+        detail: "数据目录可读写" });
+    } catch (error) {
+      items.push({ key: "data", label: "任务数据", status: "error",
+        detail: "数据目录不可读写", suggestion: String(error) });
+    }
+
+    const launch = this.launchOptions();
+    const defaultKnown = launch.models.some((item) =>
+      item.provider === launch.default.provider && item.model === launch.default.model);
+    items.push(defaultKnown
+      ? { key: "model", label: "模型网关", status: "ok",
+          detail: `${launch.default.provider}/${launch.default.model} 已配置` }
+      : { key: "model", label: "模型网关", status: "error",
+          detail: "默认模型不在当前模型清单中",
+          suggestion: "在服务设置中检查 models.json 与默认模型" });
+
+    const notify = this.options.notifier?.health();
+    items.push(!notify?.configured
+      ? { key: "notify", label: "通知服务", status: "warning",
+          detail: "未配置通知端点", suggestion: "配置后可用测试消息验证连通" }
+      : notify.last_error
+        ? { key: "notify", label: "通知服务", status: "warning",
+            detail: "已配置，但最近一次投递失败", suggestion: notify.last_error }
+        : { key: "notify", label: "通知服务", status: "ok",
+            detail: "通知端点已配置" });
+
+    const projection = this.options.projection
+      ? await this.options.projection.health() : undefined;
+    items.push(!projection
+      ? { key: "postgres", label: "PostgreSQL", status: "warning",
+          detail: "未配置历史投影", suggestion: "任务仍可运行，但无跨生命周期历史" }
+      : !projection.reachable
+        ? { key: "postgres", label: "PostgreSQL", status: "error",
+            detail: "数据库不可达", suggestion: projection.last_error }
+        : projection.last_error
+          ? { key: "postgres", label: "PostgreSQL", status: "warning",
+              detail: "连接正常，但最近有投影写入失败", suggestion: projection.last_error }
+          : { key: "postgres", label: "PostgreSQL", status: "ok",
+              detail: "连接与投影正常" });
+
+    const platform = this.effectivePlatformUrl();
+    items.push(!launch.repo.enabled
+      ? { key: "git", label: "Git 交付", status: "warning",
+          detail: "当前是纯会话模式", suggestion: "交付代码前启用内核模式与代码仓" }
+      : !platform
+        ? { key: "git", label: "Git 交付", status: "warning",
+            detail: "未配置 MR / 流水线平台", suggestion: "在交付与形态中配置平台地址" }
+        : { key: "git", label: "Git 交付", status: "ok",
+            detail: launch.repo.default ? "平台与默认代码仓已配置" : "平台已配置；代码仓需逐单填写" });
+
+    if (!this.options.isolation) {
+      items.push({ key: "container", label: "容器隔离", status: "warning",
+        detail: "未启用任务容器", suggestion: "内网多人使用前建议配置隔离镜像" });
+    } else {
+      const available = await dockerAvailable();
+      items.push(available
+        ? { key: "container", label: "容器隔离", status: "ok",
+            detail: `Docker 可用，镜像 ${this.options.isolation.image}` }
+        : { key: "container", label: "容器隔离", status: "error",
+            detail: "Docker daemon 不可用", suggestion: "启动 Docker 并确认服务账号有权限" });
+    }
+
+    const overall: SystemCheckStatus = items.some((item) => item.status === "error")
+      ? "error" : items.some((item) => item.status === "warning") ? "warning" : "ok";
+    return { checked_at: new Date().toISOString(), overall, items };
+  }
+
   private project(task: TaskState): TaskSummary {
     const record = task.notifyRecord;
+    const progress = this.readProgress(task);
+    const summary = task.summary;
     return {
-      ...task.summary,
+      ...summary,
+      title: summary.title ?? taskTitle(summary.requirement),
+      updated_at: summary.updated_at ?? summary.created_at,
+      last_progress_at: summary.last_progress_at
+        ?? summary.updated_at ?? summary.created_at,
       notify: record
         ? {
             delivered: record.delivered,
@@ -297,7 +479,7 @@ export class TaskService {
             last_error: record.last_error,
           }
         : undefined,
-      progress: this.readProgress(task),
+      progress,
     };
   }
 
@@ -335,6 +517,9 @@ export class TaskService {
       };
       task.progressPulse = pulseText;
       task.progressCache = progress;
+      const now = new Date().toISOString();
+      task.summary.last_progress_at = now;
+      task.summary.updated_at = now;
       return progress;
     } catch (error) {
       this.options.log?.(
@@ -660,9 +845,12 @@ export class TaskService {
     mkdirSync(workspace, { recursive: true });
     const summary: TaskSummary = {
       id,
+      title: taskTitle(requirement),
       requirement,
       status: "queued",
       created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      last_progress_at: new Date().toISOString(),
       workspace,
       luban_account: options.account || undefined,
       repo_url: repo,
@@ -674,6 +862,8 @@ export class TaskService {
     const task: TaskState = {
       summary,
       humanGate: new HumanGate(join(workspace, "waiting.json")),
+      lastPersistedStatus: summary.status,
+      controlEpoch: 0,
     };
     this.tasks.set(id, task);
     this.persist(task);
@@ -686,6 +876,16 @@ export class TaskService {
    * summary+cwd 就是重启后重建 TaskState 需要的全部——待办在
    * waiting.json、事件在 events.jsonl、流程真相在内核状态文件。 */
   private persist(task: TaskState): void {
+    const now = new Date().toISOString();
+    if (task.lastPersistedStatus !== undefined
+        && task.lastPersistedStatus !== task.summary.status) {
+      task.summary.last_progress_at = now;
+    }
+    if (["completed", "await_merge"].includes(task.summary.status)) {
+      task.summary.completed_at ??= now;
+    }
+    task.summary.updated_at = now;
+    task.lastPersistedStatus = task.summary.status;
     try {
       const path = join(task.summary.workspace, "task.json");
       writeFileSync(path + ".tmp", JSON.stringify(
@@ -724,17 +924,35 @@ export class TaskService {
           resume: true,
           mission: typeof saved.mission === "string"
             ? saved.mission : undefined,
+          lastPersistedStatus: summary.status,
+          controlEpoch: 0,
         };
         this.tasks.set(summary.id, task);
         this.counter = Math.max(
           this.counter, Number(name.slice("task-".length)) || 0);
         restored += 1;
         this.replayProjection(task);
+        // 服务在“正在暂停”窗口退出时，所有执行资源已经随进程消失；
+        // 恢复为 paused 比擅自续跑更符合用户最后一次明确指令。
+        if (summary.status === "pausing") {
+          summary.status = "paused";
+          summary.detail = "服务重启时已完成暂停";
+          summary.control = {
+            ...(summary.control ?? {
+              last_action: "pause",
+              actor: "系统",
+              at: new Date().toISOString(),
+            }),
+            last_action: "pause",
+            paused_from: summary.control?.paused_from ?? "running",
+          };
+          this.persist(task);
+        }
         // 进程可死,轮询不死:重启前在等流水线的任务续轮
         // (锚是 delivery.sha,结果仍只认绑定版本)。
         if (summary.status === "verifying"
             && summary.delivery?.pipeline === "running") {
-          void this.pollPipeline(task);
+          void this.pollPipeline(task, task.controlEpoch);
         }
         if (summary.status === "running" || summary.status === "queued") {
           summary.status = "queued";
@@ -801,6 +1019,7 @@ export class TaskService {
       task.summary.delivery.pipeline = "人工重跑,待重新验证";
     }
     task.summary.status = "queued";
+    delete task.summary.completed_at;
     task.summary.detail = "人工重跑,续接内核当前步骤";
     task.resume = true;
     this.persist(task);
@@ -900,23 +1119,171 @@ export class TaskService {
     return { ...task.summary };
   }
 
+  /** 安全暂停：排队/等待人工/验证中可立即停；正在执行时只登记请求，
+   * 当前工具完成并回到回合边界后再释放会话和容器。 */
+  async pause(id: string, actor: string): Promise<TaskSummary> {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    const status = task.summary.status;
+    if (status === "paused" || status === "pausing") {
+      return { ...task.summary };
+    }
+    if (["completed", "await_merge", "failed", "canceled"].includes(status)) {
+      throw new TaskControlError(`任务 ${id} 当前是 ${status}，不能暂停`);
+    }
+    task.summary.control = {
+      last_action: "pause",
+      actor,
+      at: new Date().toISOString(),
+      paused_from: status,
+    };
+    if (status === "running") {
+      task.pauseRequested = true;
+      task.summary.status = "pausing";
+      task.summary.detail = "正在完成当前操作，随后暂停";
+      this.persist(task);
+      return { ...task.summary };
+    }
+    task.controlEpoch += 1;
+    this.removeFromQueue(id);
+    await this.finishPause(task, status);
+    return { ...task.summary };
+  }
+
+  /** 只允许 paused 恢复。等待人工回到决定卡，验证中回到流水线轮询，
+   * 其余状态重建会话并从已有工作区/内核 current 续跑。 */
+  resume(id: string, actor: string): TaskSummary {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    if (task.summary.status !== "paused") {
+      throw new TaskControlError(
+        `任务 ${id} 当前是 ${task.summary.status}，只有已暂停任务可以恢复`);
+    }
+    const from = task.summary.control?.paused_from ?? "running";
+    task.controlEpoch += 1;
+    task.pauseRequested = false;
+    task.summary.control = {
+      last_action: "resume",
+      actor,
+      at: new Date().toISOString(),
+      paused_from: from,
+    };
+    if (from === "waiting_for_human" && task.summary.waiting) {
+      task.summary.status = "waiting_for_human";
+      task.summary.detail = "已恢复，等待你的决定";
+      this.persist(task);
+      return { ...task.summary };
+    }
+    if (from === "verifying" && task.summary.delivery?.sha) {
+      task.summary.status = "verifying";
+      task.summary.detail = "已恢复流水线状态跟踪";
+      this.persist(task);
+      void this.pollPipeline(task, task.controlEpoch);
+      return { ...task.summary };
+    }
+    task.summary.status = "queued";
+    task.summary.detail = "已恢复，等待续跑";
+    task.resume = from !== "queued";
+    this.persist(task);
+    this.queue.push(id);
+    void this.pump();
+    return { ...task.summary };
+  }
+
+  /** 取消是不可恢复终态。先换代并落盘，再中止会话/容器；因此即使
+   * 清理期间旧请求返回，读侧也会立即看到 canceled，旧回调也无权改写。 */
+  async cancel(id: string, actor: string): Promise<TaskSummary> {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    const status = task.summary.status;
+    if (status === "canceled") return { ...task.summary };
+    if (["completed", "await_merge"].includes(status)) {
+      throw new TaskControlError(`任务 ${id} 已交付，不能取消`);
+    }
+    task.controlEpoch += 1;
+    task.pauseRequested = false;
+    this.removeFromQueue(id);
+    task.summary.status = "canceled";
+    task.summary.detail = `已由 ${actor} 取消`;
+    task.summary.control = {
+      last_action: "cancel",
+      actor,
+      at: new Date().toISOString(),
+      paused_from: status === "paused"
+        ? task.summary.control?.paused_from : status,
+    };
+    task.summary.waiting = undefined;
+    task.mission = undefined;
+    this.persist(task);
+    const driver = task.driver;
+    const container = task.container;
+    task.driver = undefined;
+    task.container = undefined;
+    await Promise.allSettled([
+      driver?.abort() ?? Promise.resolve(),
+      container?.stop() ?? Promise.resolve(),
+    ]);
+    driver?.dispose();
+    return { ...task.summary };
+  }
+
+  private removeFromQueue(id: string): void {
+    this.queue = this.queue.filter((queued) => queued !== id);
+  }
+
+  private current(task: TaskState, epoch: number): boolean {
+    return task.controlEpoch === epoch && task.summary.status !== "canceled";
+  }
+
+  private async finishPause(
+    task: TaskState,
+    from: TaskStatus,
+  ): Promise<void> {
+    const driver = task.driver;
+    const container = task.container;
+    task.driver = undefined;
+    task.container = undefined;
+    task.pauseRequested = false;
+    driver?.dispose();
+    await (container?.stop() ?? Promise.resolve()).catch(() => undefined);
+    task.summary.status = "paused";
+    task.summary.detail = from === "waiting_for_human"
+      ? "已暂停，恢复后继续等待决定"
+      : from === "verifying"
+        ? "已暂停状态跟踪，外部流水线不会被中止"
+        : "已安全暂停，可从当前进度恢复";
+    task.summary.control = {
+      ...(task.summary.control ?? {
+        last_action: "pause",
+        actor: "系统",
+        at: new Date().toISOString(),
+      }),
+      last_action: "pause",
+      paused_from: from,
+    };
+    this.persist(task);
+  }
+
   private async pump(): Promise<void> {
     const max = this.options.settings?.runtime().max_concurrent
       ?? this.options.maxConcurrent ?? 2;
     while (this.runningCount < max && this.queue.length) {
       const id = this.queue.shift()!;
-      const task = this.tasks.get(id)!;
+      const task = this.tasks.get(id);
+      // 控制动作可能已经把重复/陈旧队列项暂停或取消。
+      if (!task || task.summary.status !== "queued") continue;
       this.runningCount += 1;
       task.summary.status = "running";
       this.persist(task);
-      void this.launch(task).finally(() => {
+      const epoch = task.controlEpoch;
+      void this.launch(task, epoch).finally(() => {
         this.runningCount -= 1;
         void this.pump();
       });
     }
   }
 
-  private async launch(task: TaskState): Promise<void> {
+  private async launch(task: TaskState, epoch: number): Promise<void> {
     const { workspace } = task.summary;
     try {
       const agentDir = join(workspace, "pi-agent");
@@ -964,6 +1331,7 @@ export class TaskService {
         // 不由云端复述内核该说的话。重启后的 sessionstart 对内核是
         // 常态(老宿主重启会话同款),ACTIVE 状态下引导即当前步指引。
         const guidance = await kernel.bootstrap(task.summary.requirement);
+        if (!this.current(task, epoch)) return;
         prompt = guidance
           ? `${task.summary.requirement}\n\n${guidance}`
           : task.summary.requirement;
@@ -1084,6 +1452,11 @@ export class TaskService {
           this.options.log,
           [...hostMounts, ...(volumes ?? [])], { memory, cpus, user });
         await task.container.start();
+        if (!this.current(task, epoch)) {
+          await task.container.stop().catch(() => undefined);
+          task.container = undefined;
+          return;
+        }
       }
       task.driver = await CloudSession.create({
         taskId: task.summary.id,
@@ -1116,6 +1489,18 @@ export class TaskService {
           : undefined,
         log: this.options.log,
       });
+      if (!this.current(task, epoch)) {
+        task.driver.dispose();
+        task.driver = undefined;
+        await (task.container?.stop() ?? Promise.resolve())
+          .catch(() => undefined);
+        task.container = undefined;
+        return;
+      }
+      if (task.pauseRequested || task.summary.status === "pausing") {
+        await this.finishPause(task, "running");
+        return;
+      }
       // 重建会话:恢复期收到的决定先补登记(tool_result 与崩溃前的
       // tool_use 行 join,答案进内核台账),再从内核 current 续跑。
       // 内核模式下克隆丢失=现场没了,决定无处可注,只能从头来。
@@ -1132,8 +1517,9 @@ export class TaskService {
       }
       await this.settle(task, rebuild
         ? task.driver.startResume(prompt)
-        : task.driver.start(prompt));
+        : task.driver.start(prompt), epoch);
     } catch (error) {
+      if (!this.current(task, epoch)) return;
       task.summary.status = "failed";
       task.summary.detail = String(error);
       void task.container?.stop();
@@ -1160,7 +1546,7 @@ export class TaskService {
    * 全部来自远端真实状态(ls-remote),不信任务自己的说法。
    * MR 成功≠完成:流水线过了才"等待合入",否则停在"验证中"。
    * 交付失败不吞:原因写进 summary.delivery,任务保持 completed。 */
-  private async tryDeliver(task: TaskState): Promise<void> {
+  private async tryDeliver(task: TaskState, epoch: number): Promise<void> {
     // 平台地址热改(管理页压部署 flag):每次交付动作现读现用。
     const platformUrl = this.effectivePlatformUrl();
     if (!platformUrl || !this.options.host || !task.cwd) return;
@@ -1213,6 +1599,7 @@ export class TaskService {
         if (!r.ok) throw new Error(`MR 创建失败 HTTP ${r.status}`);
         return readJson(r);
       });
+      if (!this.current(task, epoch)) return;
       ledger({ idemKey: mrKey, kind: "mr_create", request: mrRequest,
                sha, startedAt: mrStarted, result: mr,
                finishedAt: new Date().toISOString() });
@@ -1226,6 +1613,7 @@ export class TaskService {
         headers: this.platformIdentity(task),
         body: JSON.stringify(runRequest),
       }).then((r) => readJson(r));
+      if (!this.current(task, epoch)) return;
       ledger({ idemKey: runKey, kind: "pipeline_trigger",
                request: runRequest, sha, startedAt: runStarted, result: run,
                finishedAt: new Date().toISOString() });
@@ -1241,13 +1629,14 @@ export class TaskService {
         run.status === "success" ? "await_merge" : "verifying";
       // 终态当场裁决;running 不是结局,由带预算的轮询收敛后再裁。
       if (run.status === "running") {
-        void this.pollPipeline(task);
+        void this.pollPipeline(task, epoch);
       } else {
         this.pipelineVerdict(task, sha,
           run.status === "success" ? "success" : "failed",
-          String(run.log ?? ""));
+          String(run.log ?? ""), epoch);
       }
     } catch (error) {
+      if (!this.current(task, epoch)) return;
       task.summary.delivery = { skipped: `交付动作失败: ${String(error)}` };
       this.options.log?.(`任务 ${task.summary.id} 交付失败: ${String(error)}`);
     }
@@ -1258,7 +1647,7 @@ export class TaskService {
    * - 查询失败 fail-open 继续轮,预算兜底——绝不无限等(红线);
    * - 预算耗尽留痕请人工,任务停在 verifying,不假装有结论;
    * - 终态落袋:状态/台账/通知一次收口,幂等锚是任务当前状态。 */
-  private async pollPipeline(task: TaskState): Promise<void> {
+  private async pollPipeline(task: TaskState, epoch: number): Promise<void> {
     const delivery = this.options.delivery;
     const sha = task.summary.delivery?.sha;
     if (!this.effectivePlatformUrl() || !sha) return;
@@ -1273,7 +1662,8 @@ export class TaskService {
       // unref:轮询是旁路,不许它吊着进程不退(进程要退就让它退,
       // 重启后 recover 会以 delivery.sha 为锚续轮)。
       await new Promise((tick) => setTimeout(tick, interval).unref());
-      if (task.summary.status !== "verifying") return; // 已被别处推进
+      if (!this.current(task, epoch)
+          || task.summary.status !== "verifying") return; // 已被别处推进
       let terminal;
       try {
         const repo = encodeURIComponent(
@@ -1283,6 +1673,8 @@ export class TaskService {
           + `?sha=${sha}&repo=${repo}`,
           { headers: this.platformIdentity(task) })
           .then((r) => readJson(r));
+        if (!this.current(task, epoch)
+            || task.summary.status !== "verifying") return;
         terminal = (status.runs ?? []).findLast(
           (run: { status?: string }) =>
             run.status === "success" || run.status === "failed");
@@ -1314,10 +1706,11 @@ export class TaskService {
       // (persist/notify 都在裁决点里,别在这儿重复收口。)
       this.pipelineVerdict(task, sha,
         terminal.status === "success" ? "success" : "failed",
-        String(terminal.log ?? ""));
+        String(terminal.log ?? ""), epoch);
       return;
     }
-    if (task.summary.status !== "verifying") return;
+    if (!this.current(task, epoch)
+        || task.summary.status !== "verifying") return;
     task.summary.delivery = {
       ...task.summary.delivery,
       pipeline: "running(轮询预算耗尽,请人工查看流水线)",
@@ -1344,7 +1737,9 @@ export class TaskService {
     sha: string,
     status: "success" | "failed",
     log: string,
+    epoch: number,
   ): void {
+    if (!this.current(task, epoch)) return;
     const delivery = task.summary.delivery;
     if (!delivery) return;
     if (status === "success") {
@@ -1779,12 +2174,18 @@ export class TaskService {
   private async settle(
     task: TaskState,
     turn: Promise<Outcome>,
+    epoch = task.controlEpoch,
   ): Promise<void> {
     const outcome = await turn;
+    if (!this.current(task, epoch)) return;
     switch (outcome.status) {
       case "waiting_for_human": {
-        task.summary.status = "waiting_for_human";
         task.summary.waiting = outcome.waiting;
+        if (task.pauseRequested || task.summary.status === "pausing") {
+          await this.finishPause(task, "waiting_for_human");
+          break;
+        }
+        task.summary.status = "waiting_for_human";
         // 人工节点=流程真实活动,催办账本清零:答复之后若再停在
         // 同名步骤,那是新一次卡壳,应当再催。
         task.nudgedStep = undefined;
@@ -1803,9 +2204,18 @@ export class TaskService {
         break;
       }
       case "turn_finished": {
+        if (task.pauseRequested) {
+          await this.finishPause(task, "running");
+          break;
+        }
         // 主动压缩:回合间隙是唯一安全的压缩点(等待人工时压会
         // 打断挂起的人工节点)。以内核锚点组织摘要,注意力不许飘。
         await this.maybeCompact(task);
+        if (!this.current(task, epoch)) break;
+        if (task.pauseRequested) {
+          await this.finishPause(task, "running");
+          break;
+        }
         // 回合收口时 steer 队列还压着货 = 那条插话从没送到(撞在回合
         // 间隙,pi 收下却不会自己送)。取回来补发,而且排在催办和收工
         // 之前:人说的话优先于系统催办,更不能因为"流程刚好走完了"被吞掉。
@@ -1813,7 +2223,8 @@ export class TaskService {
         if (late.length && task.driver) {
           this.options.log?.(
             `任务 ${task.summary.id} 补发 ${late.length} 条未送达的插话`);
-          await this.settle(task, task.driver.continueWith(late.join("\n\n")));
+          await this.settle(
+            task, task.driver.continueWith(late.join("\n\n")), epoch);
           break;
         }
         // 回合结束≠流程走完:模型可能提前收嘴(run3 实测停在
@@ -1831,7 +2242,7 @@ export class TaskService {
             `流程尚未走完:内核当前步骤是 ${stalled},不是 end。` +
             `尚未 init 就按开工引导先执行 init;否则执行 current ` +
             `查看本步指引并继续,直到流程 end。` +
-            `已答复过的确认项不要重复提问。`));
+            `已答复过的确认项不要重复提问。`), epoch);
           break;
         }
         // 收口发言先落袋:修复会话"判断修不了"时这就是给人的诊断,
@@ -1845,7 +2256,17 @@ export class TaskService {
         // 终态在交付判定之后才定:先标 completed 再改,轮询会撞见
         // 中间态(实测竞态)。交付把状态升为 verifying/await_merge,
         // 没交付动作时才落 completed。
-        await this.tryDeliver(task);
+        await this.tryDeliver(task, epoch);
+        if (!this.current(task, epoch)) break;
+        // 交付请求本身也可能耗时；用户若在这段窗口点了暂停，外部流水线
+        // 已触发就停在 verifying 跟踪点，否则停在普通执行点。若已经绿灯
+        // 进入 await_merge，则任务事实上已完成交付，无需再造 paused 中间态。
+        if (task.pauseRequested && task.summary.status !== "await_merge") {
+          await this.finishPause(task,
+            task.summary.status === "verifying" ? "verifying" : "running");
+          break;
+        }
+        task.pauseRequested = false;
         if (task.summary.status === "running") {
           task.summary.status = "completed";
         }
@@ -1854,6 +2275,10 @@ export class TaskService {
         break;
       }
       case "session_ended":
+        if (task.pauseRequested || task.summary.status === "pausing") {
+          await this.finishPause(task, "running");
+          break;
+        }
         task.summary.status = "failed";
         task.summary.detail = outcome.detail ?? outcome.reason;
         task.driver?.dispose();
@@ -1866,3 +2291,4 @@ export class TaskService {
 }
 
 export class NotFoundError extends Error {}
+export class TaskControlError extends Error {}

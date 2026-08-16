@@ -12,12 +12,14 @@
 import { useEffect, useState } from "react";
 import {
   getSettings,
+  getSystemCheck,
   putLubanSettings,
   putModelsSettings,
   putRuntimeSettings,
   putServiceSettings,
   testLuban,
   type SettingsView as Settings,
+  type SystemCheckResult,
 } from "./api";
 
 type Message = { kind: "success" | "error"; text: string } | null;
@@ -31,6 +33,38 @@ function Feedback({ message }: { message: Message }) {
   if (!message) return null;
   return <div className={`form-message ${message.kind}`} role="status">
     {message.text}</div>;
+}
+
+function SystemCheckCard() {
+  const [result, setResult] = useState<SystemCheckResult>();
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function run() {
+    setBusy(true); setError("");
+    try { setResult(await getSystemCheck()); }
+    catch (cause) { setError(String((cause as Error).message ?? cause)); }
+    finally { setBusy(false); }
+  }
+
+  useEffect(() => { void run(); }, []);
+  const summary = result?.overall === "ok" ? "全部正常"
+    : result?.overall === "error" ? "存在不可用项" : "可运行，但有待完善项";
+  return <section className="system-check-card" aria-labelledby="system-check-title">
+    <div className="system-check-head">
+      <div><span className="section-kicker">DEPLOYMENT CHECK</span><h2 id="system-check-title">部署自检</h2><p>只读检查当前服务，不发送消息、不创建任务。</p></div>
+      <div className="system-check-actions">
+        {result && <span className={`check-summary ${result.overall}`}><i aria-hidden />{summary}</span>}
+        <button type="button" disabled={busy} onClick={() => void run()}>{busy ? "检查中…" : "重新检查"}</button>
+      </div>
+    </div>
+    {error && <div className="form-message error">{error}</div>}
+    {!result && !error && <div className="settings-loading">正在检查服务…</div>}
+    {result && <div className="system-check-grid">{result.items.map((item) => <article className={`system-check-item ${item.status}`} key={item.key}>
+      <span className="check-icon" aria-hidden>{item.status === "ok" ? "✓" : item.status === "error" ? "!" : "·"}</span>
+      <div><strong>{item.label}</strong><p>{item.detail}</p>{item.suggestion && <small>{item.suggestion}</small>}</div>
+    </article>)}</div>}
+  </section>;
 }
 
 /** 数字项:显示当前覆盖值,空=用部署值。提交空串服务端清掉覆盖。 */
@@ -351,6 +385,7 @@ export function SettingsBoard() {
   // 三张卡共享同一份视图:任一保存返回完整 view,整页跟着刷新,
   // 掩码提示(末4位)因此始终是服务端刚确认过的事实。
   return <section className="user-admin settings-board">
+    <SystemCheckCard />
     <ServiceCard key={`s${JSON.stringify(view.service)}`}
       view={view} onSaved={setView} />
     <RuntimeCard key={`r${JSON.stringify(view.runtime)}`}

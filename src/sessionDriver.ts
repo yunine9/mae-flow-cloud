@@ -370,6 +370,12 @@ export class CloudSession {
     }
   }
 
+  /** 取消任务用的硬边界：中止当前 agent 回合并等它回到 idle。
+   * 容器由 TaskService 同时停止，长 bash 不会遗留在隔离环境里。 */
+  async abort(): Promise<void> {
+    await (this.session as any).abort();
+  }
+
   dispose(): void {
     this.session.dispose();
   }

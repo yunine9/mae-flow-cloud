@@ -25,6 +25,8 @@ export type UserRole = "admin" | "developer";
 export interface AuthUser {
   username: string;
   role: UserRole;
+  /** 可被任务责任人主动邀请检视。它是能力标记，不是第三种角色。 */
+  committer?: boolean;
 }
 
 interface StoredUser extends AuthUser {
@@ -198,6 +200,16 @@ export class LocalAuth {
     this.persist();
   }
 
+  /** 管理员维护 Committer 名单；权限校验由 HTTP 边界负责。 */
+  setCommitter(username: string, on: boolean): AuthUser {
+    const stored = this.users.get(username);
+    if (!stored) throw new Error(`账号 ${username} 不存在`);
+    if (on) stored.committer = true;
+    else delete stored.committer;
+    this.persist();
+    return publicUser(stored);
+  }
+
   moonlightEnabled(username: string | undefined): boolean {
     if (!username) return false;
     const stored = this.users.get(username);
@@ -282,7 +294,11 @@ export class LocalAuth {
 }
 
 function publicUser(user: StoredUser): AuthUser {
-  return { username: user.username, role: user.role };
+  return {
+    username: user.username,
+    role: user.role,
+    ...(user.committer ? { committer: true } : {}),
+  };
 }
 
 function validateCredentials(username: string, password: string): void {
