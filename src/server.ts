@@ -304,10 +304,16 @@ export function createTaskServer(
         if (!requirement) {
           return json(response, 400, { error: "requirement 不能为空" });
         }
+        // 任务归属人:开发者只能是自己(不许替别人下单);管理员可以
+        // 替人下单(填了账号就按填的),**没填就是自己的单**。
+        // 踩过的坑(界面实走逮住):这里原来是管理员不填就留空,于是
+        // 归属人为空——月光模式按归属人现读现判,对自己下的单一点反应
+        // 没有;个人 Git 令牌同样按归属人取,推送也拿不到本人令牌。
+        // 而部署后第一个账号正是管理员,最先踩的就是他。
         const requested = body.account ? String(body.account) : undefined;
         const account = viewer?.role === "developer"
           ? viewer.username
-          : requested;
+          : (requested ?? viewer?.username);
         // 任务级可配(用户拍板):交付代码仓、车道、模型、修复轮预算。
         const repo = body.repo === undefined ? undefined : String(body.repo);
         const lane = body.lane === undefined ? undefined : String(body.lane);

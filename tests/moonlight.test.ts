@@ -171,3 +171,54 @@ test("路由:开关落账、开启即清场、/auth/me 回显;账号库重启后
     await model.stop();
   }
 });
+
+test("管理员不填账号下单,任务仍归自己——月光与个人令牌都按归属人走", async () => {
+  // 界面实走逮住的真 bug:下单表单的"小鲁班账号"是可选的,原来管理员
+  // 不填就归属人为空,于是月光模式对自己下的单毫无反应、个人 Git 令牌
+  // 也取不到。而部署后第一个账号正是管理员——最先踩坑的就是他。
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-ml-admin-"));
+  const auth = new LocalAuth(join(dataDir, "auth.json"));
+  auth.createUser("boss", "boss-password-11", "admin");
+  const model = new ScriptedModelServer([REVIEW_CARD, { text: "收口。" }]);
+  await model.start();
+  const service = new TaskService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    moonlight: (account) => auth.moonlightEnabled(account),
+  });
+  const server = createTaskServer(service, { auth });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  try {
+    const login = await fetch(`${base}/auth/login`, {
+      method: "POST",
+      body: JSON.stringify({ username: "boss", password: "boss-password-11" }),
+    });
+    const cookie = String(login.headers.get("set-cookie") ?? "").split(";")[0];
+
+    const created = await fetch(`${base}/tasks`, {
+      method: "POST", headers: { cookie },
+      body: JSON.stringify({ requirement: "管理员自己的单" }),
+    }).then((r) => readJson(r));
+    assert.equal(created.luban_account, "boss", "不填账号就该归自己");
+    await settle(service, created.id, ["waiting_for_human"]);
+
+    const on = await fetch(`${base}/auth/me/moonlight`, {
+      method: "PUT", headers: { cookie },
+      body: JSON.stringify({ on: true }),
+    }).then((r) => readJson(r));
+    assert.deepEqual(on, { moonlight: true, swept: 1 },
+      "月光开启要清掉管理员自己在等的卡");
+    assert.equal(await settle(service, created.id, ["completed"]), "completed");
+
+    // 替别人下单仍按填的账号走(管理员的正当用法,别被这条修改压掉)
+    const forOther = await fetch(`${base}/tasks`, {
+      method: "POST", headers: { cookie },
+      body: JSON.stringify({ requirement: "替小张下的单", account: "zhang" }),
+    }).then((r) => readJson(r));
+    assert.equal(forOther.luban_account, "zhang");
+  } finally {
+    server.close();
+    await model.stop();
+  }
+});
