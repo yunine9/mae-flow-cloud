@@ -1056,6 +1056,20 @@ export class TaskService {
     }
   }
 
+  /** 平台请求的个人身份头:适配层拿它调 CLI,MR 发起人=任务归属人;
+   * 没配令牌的回落适配层的服务账号。percent 编码防非 ASCII 撞 HTTP
+   * 头限制;**令牌只进请求头,绝不进请求体**——体会被外部动作台账
+   * 原样记进投影,头不会。 */
+  private platformIdentity(task: TaskState): Record<string, string> {
+    const credential =
+      this.options.gitCredential?.(task.summary.luban_account);
+    if (!credential) return {};
+    return {
+      "x-mfc-git-user": encodeURIComponent(credential.username),
+      "x-mfc-git-token": encodeURIComponent(credential.password),
+    };
+  }
+
   /** Git 交付(§10):任务收轮后,分支已推到远端才建 MR——交付事实
    * 全部来自远端真实状态(ls-remote),不信任务自己的说法。
    * MR 成功≠完成:流水线过了才"等待合入",否则停在"验证中"。
@@ -1106,6 +1120,7 @@ export class TaskService {
                sha, startedAt: mrStarted });
       const mr = await fetch(`${delivery.platformUrl}/mr`, {
         method: "POST",
+        headers: this.platformIdentity(task),
         body: JSON.stringify(mrRequest),
       }).then((r) => {
         if (!r.ok) throw new Error(`MR 创建失败 HTTP ${r.status}`);
@@ -1120,7 +1135,9 @@ export class TaskService {
       ledger({ idemKey: runKey, kind: "pipeline_trigger",
                request: runRequest, sha, startedAt: runStarted });
       const run = await fetch(`${delivery.platformUrl}/pipeline/trigger`, {
-        method: "POST", body: JSON.stringify(runRequest),
+        method: "POST",
+        headers: this.platformIdentity(task),
+        body: JSON.stringify(runRequest),
       }).then((r) => r.json());
       ledger({ idemKey: runKey, kind: "pipeline_trigger",
                request: runRequest, sha, startedAt: runStarted, result: run,
@@ -1172,8 +1189,11 @@ export class TaskService {
       if (task.summary.status !== "verifying") return; // 已被别处推进
       let terminal;
       try {
+        const repo = encodeURIComponent(
+          task.summary.repo_url ?? this.options.host?.repoPath ?? "");
         const status = await fetch(
-          `${delivery.platformUrl}/pipeline/status?sha=${sha}`)
+          `${delivery.platformUrl}/pipeline/status?sha=${sha}&repo=${repo}`,
+          { headers: this.platformIdentity(task) })
           .then((r) => r.json());
         terminal = (status.runs ?? []).findLast(
           (run: { status?: string }) =>

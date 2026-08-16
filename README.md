@@ -120,6 +120,16 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
   delivery.test.ts 设置压部署值),serve 真入口 curl 冒烟已过(掩码/
   测试按钮如实报错/校验 400/文件 600);**前端页面只过了构建与类型
   检查,没在浏览器里点过**,进内网前应人工过一遍三张卡;
+- **CodeHub 适配层骨架已就位(2026-08-16,src/platformAdapter.ts)**:
+  `npm run adapter -- --config adapter.json`,进内网只填 codehubcli
+  命令模板(argv 占位符+json/regex/const 抽取+状态映射表),代码零改动。
+  纪律内置:未映射状态 502 拒绝猜、CLI 超时预算、非零退出带 stderr
+  上浮、令牌不落日志、配置坏拒启。宿主平台请求带任务归属人身份头
+  (x-mfc-git-token/user,percent 编码,只走头不走体——体进投影台账),
+  适配层 {token} 优先个人、回落服务账号 → MR 发起人=本人。测试用真
+  子进程假 CLI(tests/platformAdapter.test.ts 4 项 + delivery.test.ts
+  身份头消费证明)。**真 codehubcli 的输出形状没见过**,命令模板、
+  抽取路径、状态映射都要进场当天对着真输出填;
 - **修复环升级:默认不限轮+分诊使命+诊断出口(2026-08-16,用户拍板
   "不该有最大轮数限制"+"一次修全再提交")**:repairRounds 从默认 2 降级
   为可配手刹(不配=修到绿为止);收敛靠同 SHA 不二修 + "原地打转必须

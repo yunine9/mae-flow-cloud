@@ -257,6 +257,42 @@ function repairScenes(push: boolean): Scene[] {
   ];
 }
 
+test("交付请求带任务归属人身份头:MR 发起人=本人的原料到位", async () => {
+  // 令牌走请求头不走请求体——体会被外部动作台账记进投影,头不会。
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  await platform.start();
+  const model = new ScriptedModelServer(walkScript(true));
+  await model.start();
+  const service = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-deliver-")),
+    provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    host: {
+      kernelRoot: process.env.MAE_FLOW_HOME
+        ?? join(process.cwd(), "..", "mae-flow"),
+      repoPath: platform.barePath,
+      python: "python3",
+    },
+    delivery: { platformUrl: platform.baseUrl },
+    gitCredential: (account) => account === "zhang"
+      ? { username: "zhang.san", password: "glpat-秘密-8888" } : undefined,
+  });
+  try {
+    const id = service.create("交付 REQ9:身份头", { account: "zhang" }).id;
+    await until(() => service.get(id)!.status === "await_merge", "交付收轮");
+    const mrCall = platform.seenIdentity.find((c) => c.path === "/mr");
+    assert.equal(mrCall?.user, "zhang.san");
+    assert.equal(decodeURIComponent(mrCall?.token ?? ""), "glpat-秘密-8888",
+      "非 ASCII 令牌经 percent 编码后原样到达");
+    assert.ok(platform.seenIdentity.some((c) =>
+      c.path === "/pipeline/trigger" && c.token), "触发流水线也带身份");
+  } finally {
+    await model.stop();
+    await platform.stop();
+  }
+});
+
 test("修复环:红→专职会话修复→推新提交→新流水线绿→等待合入", async () => {
   // "流水线直至全绿是最终目标"(用户拍板)。修复本身是纯提示词:
   // 专职会话拿失败日志干活;宿主只做等待(带预算)、事实(绑 SHA)、

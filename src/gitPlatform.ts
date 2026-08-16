@@ -82,12 +82,25 @@ export class FakeGitPlatform {
     return git(this.barePath, "rev-parse", branch);
   }
 
+  /** 每个请求的身份头台账(测试断言用):真适配层靠这两个头把
+   * MR 发起人落到任务归属人,假件只记录不消费。 */
+  readonly seenIdentity: Array<{
+    path: string;
+    user?: string;
+    token?: string;
+  }> = [];
+
   async start(): Promise<void> {
     this.server = createServer((request, response) => {
       const chunks: Buffer[] = [];
       request.on("data", (chunk) => chunks.push(chunk as Buffer));
       request.on("end", () => {
         const url = new URL(request.url ?? "/", "http://localhost");
+        this.seenIdentity.push({
+          path: url.pathname,
+          user: request.headers["x-mfc-git-user"] as string | undefined,
+          token: request.headers["x-mfc-git-token"] as string | undefined,
+        });
         let body: Record<string, any> = {};
         try {
           body = JSON.parse(

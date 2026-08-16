@@ -15,6 +15,27 @@
 | JDK + Maven | 试点仓(Java)编译验证用;版本按试点仓 `pom.xml` 要求。**--verify-via-pipeline 形态不需要**(docker 同) |
 | npm 依赖 | `npm ci`(pi 锁 0.84.1,升级必须重跑 probe+全套测试再拍板) |
 
+### WSL 实战速记(2026-08-17 首跑用)
+
+1. **一切放 WSL 自己的 ext4**(`~/` 下):数据目录、两个仓、内核。
+   `/mnt/c` 是 9p,chmod 600 不可靠(密钥文件纪律会破)且慢一个量级;
+2. **代理**:内网 git/模型网关/CodeHub 域名全部进 `no_proxy`,
+   不然撞代理(外部实测 502 就是这么来的);
+3. **web/dist 不进仓**:`cd web && npm install && npm run build` 一次
+   (npm 指内网 registry),否则只有零构建演示页;
+4. 依赖就 Node≥20 + python3 + git;**不装 JDK/docker**,用
+   `--verify-via-pipeline` 形态,流水线是唯一裁判;
+5. 服务和适配层都起在 tmux 里,别指望关掉的终端窗口还活着;
+6. 启动顺序:填 adapter.json(codehubcli 命令模板)→
+   `npm run adapter` → `curl http://127.0.0.1:8790/`(healthz)→
+   手动 curl 三端点各打一发核对 → `npm run serve -- --platform
+   http://127.0.0.1:8790 --repo <CodeHub 仓> --verify-via-pipeline …`;
+7. 首跑验收(诚实清单口径):推送身份、commit 归属头像、MR 发起人
+   **三个都是本人**;CodeHub token 是否兼任 HTTPS push 凭据;
+   失败日志是否每个 stage 各留一段摘要(分诊的口粮);
+8. Windows 浏览器访问 `localhost:8787`(WSL2 自动转发);不通再用
+   WSL IP(`hostname -I`)。
+
 **Linux 容器编译验证(外部已模拟通过)**:2026-08-14 在 Colima
 arm64 Linux 容器(maven:3.8-eclipse-temurin-8)对 fieldtest-java
 干净副本验证 compile/test 退出码 0。上内网第一件事仍然是:在**目标
@@ -51,15 +72,31 @@ arm64 Linux 容器(maven:3.8-eclipse-temurin-8)对 fieldtest-java
 
 ### 适配层契约(照抄即可实现,字段是代码真实消费的全集)
 
-适配层 = 一个把内部 CLI 输出翻译成下列 JSON 的小 HTTP 服务
-(或直接改造 `delivery.platformUrl` 的指向)。宿主只读这些字段,
+**适配层骨架已就位:`npm run adapter -- --config adapter.json`**
+(src/platformAdapter.ts,零依赖零构建)。进内网当天只填配置文件里的
+codehubcli 命令行,代码零改动。配置形状(权限 600,文件头注释里有
+完整示例):每个端点一条 argv 命令模板(占位符 `{repo} {source_branch}
+{target_branch} {title} {sha} {token} {git_username}`,不过 shell,
+标题带空格/注入都不是问题)+ 输出抽取(`{"json": "data.web_url"}` 点路径
+/ `{"regex": "..."}` 首个捕获组 / `{"const": "running"}` 固定值)+
+状态映射表(`{"SUCCESS": "success", ...}`)。纪律内置:CLI 超时预算
+(默认 60s)、**未映射状态 502 拒绝猜**(猜 running 白轮询、猜 failed
+白烧修复)、CLI 非零退出带 stderr 上浮、令牌不落日志、配置坏拒启。
+
+**个人身份头**:宿主每个平台请求带 `x-mfc-git-token`/`x-mfc-git-user`
+(percent 编码;任务归属人的个人令牌,来自「我的工作」页配置)。
+适配层的 `{token}` 优先取它——**MR 发起人=本人**;没带头回落配置里的
+`token`/`token_file`(服务账号)。令牌只走请求头不走请求体:请求体
+会被外部动作台账原样记进 PG 投影,头不会。
+
+自研适配层(不用骨架)时,契约同样是下面三个端点。宿主只读这些字段,
 多余字段一律忽略;状态机、修复环、轮询一行不改:
 
 | 端点 | 请求 | 宿主消费的响应字段 |
 |---|---|---|
 | `POST /mr` | `{repo, source_branch, target_branch, title}` | `{url}`(MR 链接,展示用) |
 | `POST /pipeline/trigger` | `{repo, sha}` | `{status: "success"\|"failed"\|"running", log?}` |
-| `GET /pipeline/status?sha=<sha>` | — | `{runs: [{status, log?}]}`(取最后一个终态 run) |
+| `GET /pipeline/status?sha=<sha>&repo=<url>` | — | `{runs: [{status, log?}]}`(取最后一个终态 run) |
 
 - `repo` = 这一单的交付仓地址(任务级可选,缺省=部署仓)。单仓部署的
   适配层/假件可以忽略它;多仓时靠它路由到对的 CodeHub 仓;

@@ -8,6 +8,7 @@
     "probe": "tsx src/probe.ts",
     "test": "tsx --test tests/*.test.ts",
     "serve": "tsx src/serve.ts",
+    "adapter": "tsx src/platformAdapter.ts",
     "pilot": "tsx src/pilot.ts"
   },
   "dependencies": {
