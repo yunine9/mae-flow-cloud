@@ -78,6 +78,53 @@ test("预算帽:输出字符帽截断如实 truncated;文件数帽同理", () =>
   assert.equal(few.fileCount <= 2, true);
 });
 
+test("真仓实测逼出的两条:测试文件降权、通用词不算引用信号", () => {
+  // 内核仓上第一版地图前排全是 tests/ 与 check/write/state 刷出来的
+  // 假扇入,模型拿到手根本找不到实现。这里把那两条修正钉成契约。
+  const dir = mkdtempSync(join(tmpdir(), "mfc-map-rank-"));
+  const src = join(dir, "src");
+  const tests = join(dir, "tests");
+  mkdirSync(src, { recursive: true });
+  mkdirSync(tests, { recursive: true });
+  // 实现:名字独特,被两个同伴引用
+  writeFileSync(join(src, "InvoiceReconciler.java"), [
+    "public class InvoiceReconciler {",
+    "  public void reconcile() {}",
+    "}",
+  ].join("\n"));
+  for (const name of ["BillingJob", "LedgerSync"]) {
+    writeFileSync(join(src, `${name}.java`), [
+      `public class ${name} {`,
+      "  private InvoiceReconciler invoiceReconciler;",
+      `  public void run${name}() {}`,
+      `  public void stop${name}() {}`,
+      "}",
+    ].join("\n"));
+  }
+  // 测试文件:主符号是 check/write/state 这类通用词(真仓里 Python
+  // 模块级函数就长这样),词频高到"全仓都提到我"——不剔通用词的话
+  // 它们扇入满分直接霸榜。数量要够多,否则词频到不了阈值。
+  for (const name of ["AlphaTest", "BetaTest", "GammaTest", "DeltaTest",
+                      "EpsilonTest", "ZetaTest", "EtaTest"]) {
+    writeFileSync(join(tests, `${name}.java`), [
+      `public class ${name} {`,
+      "  public void check() {}",
+      "  public void write() {}",
+      "  public void state() {}",
+      "  public void verifyAlphaTest() { check(); write(); state(); }",
+      "}",
+    ].join("\n"));
+  }
+  const map = buildRepoMap(dir);
+  const lines = map.markdown.split("\n").filter((l) => l.startsWith("- "));
+  assert.match(lines[0], /InvoiceReconciler\.java/,
+    "被引用的实现要排在测试前面");
+  assert.ok(lines.slice(0, 3).every((line) => !line.includes("Test.java")),
+    `测试文件不该霸占前排:${lines.slice(0, 3).join(" | ")}`);
+  // 降权不是剔除:测试仍在地图上,只是靠后
+  assert.ok(map.markdown.includes("AlphaTest.java"), "测试仍要在地图上");
+});
+
 test("fail-open:不存在的目录返回空地图,不炸", () => {
   const map = buildRepoMap("/不存在的/路径");
   assert.equal(map.markdown, "");

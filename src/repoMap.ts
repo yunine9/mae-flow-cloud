@@ -39,7 +39,10 @@ export interface RepoMapResult {
 
 /** 每语言一条顶层符号正则:m 多行锚定行首附近,粗而稳。 */
 const SYMBOL_PATTERNS: Record<string, RegExp> = {
-  ".java": /^[ \t]*(?:public|protected)?[ \t]*(?:final[ \t]+|abstract[ \t]+|static[ \t]+)*(?:class|interface|enum|record)[ \t]+(\w+)|^[ \t]{2,8}(?:public|protected)[ \t][^=;{]*?(\w+)[ \t]*\([^;]*\)[ \t]*(?:throws[^{]*)?\{/gm,
+  // Java 方法那半边的字符类必须排掉 {}、换行:早先写成 [^;]*,
+  // 参数括号里允许跨行跨大括号,于是一个类只抽出第一个方法(后面
+  // 全被吞进同一个匹配)——真 Java 仓的地图会严重缺符号。
+  ".java": /^[ \t]*(?:public|protected)?[ \t]*(?:final[ \t]+|abstract[ \t]+|static[ \t]+)*(?:class|interface|enum|record)[ \t]+(\w+)|^[ \t]{2,8}(?:public|protected)[ \t][^=;{}\n]*?(\w+)[ \t]*\([^;{}\n]*\)[ \t]*(?:throws[^{\n]*)?\{/gm,
   ".ts": /^export[ \t]+(?:default[ \t]+)?(?:async[ \t]+)?(?:function|class|interface|const|enum|type)[ \t]+(\w+)/gm,
   ".tsx": /^export[ \t]+(?:default[ \t]+)?(?:async[ \t]+)?(?:function|class|const)[ \t]+(\w+)/gm,
   ".js": /^(?:export[ \t]+)?(?:async[ \t]+)?(?:function|class)[ \t]+(\w+)/gm,
@@ -125,17 +128,48 @@ export function buildRepoMap(
 
     // 第二遍:扇入排序——统计"别的文件提到我"的次数。主符号取前 3 个
     // (通常是类名/入口),加上文件基名;全文 includes 粗算,不建索引。
+    //
+    // 真仓实测(kernel/ 500 文件)逼出来的两条修正:
+    // 1. **通用词要剔**:check/write/state/read 这种名字全仓都出现,
+    //    按它算扇入等于给每个文件送满分,地图前排全是噪音。用文档
+    //    频率(DF)当判据:出现在超过 15% 文件里的名字不算引用信号
+    //    ——这是 IDF 的穷人版,不建索引也算得起;
+    // 2. **测试文件要降权**:它们符号多、互相引用多,天然刷榜,但
+    //    模型要找的是被测的那个实现。降权而非剔除(知道测试在哪
+    //    仍有用),让实现文件浮上来。
+    const documentFrequency = new Map<string, number>();
+    const frequencyOf = (key: string): number => {
+      let known = documentFrequency.get(key);
+      if (known === undefined) {
+        known = 0;
+        for (const text of contents.values()) if (text.includes(key)) known += 1;
+        documentFrequency.set(key, known);
+      }
+      return known;
+    };
+    // 绝对下限 5:小仓里核心类本来就"到处出现"(6 个文件的仓,核心类
+    // 出现在 4 个文件是信号不是噪音),只按比例算会把它当通用词剔掉
+    // ——合成小仓上实测翻过一次车。
+    const genericCutoff = Math.max(5, Math.ceil(contents.size * 0.15));
+    const isTestish = (file: string): boolean =>
+      /(^|\/)tests?\//i.test(file) || /(^|\/)(test_|spec_)/i.test(file)
+      || /(\.|_)(test|spec)\.\w+$/i.test(file) || /Tests?\.\w+$/.test(file);
+
     const scores = new Map<string, number>();
     for (const [file, names] of symbols) {
       if (!withinBudget()) { truncated = true; break; }
       const keys = [basename(file).replace(/\.\w+$/, ""), ...names.slice(0, 3)]
-        .filter((key) => key.length >= 4); // 短名(如 run/main)全仓都是,不算
+        .filter((key) => key.length >= 4)          // 短名(run/main)不算
+        .filter((key) => frequencyOf(key) <= genericCutoff); // 通用词不算
       let fanIn = 0;
-      for (const [other, text] of contents) {
-        if (other === file) continue;
-        if (keys.some((key) => text.includes(key))) fanIn += 1;
+      if (keys.length) {
+        for (const [other, text] of contents) {
+          if (other === file) continue;
+          if (keys.some((key) => text.includes(key))) fanIn += 1;
+        }
       }
-      scores.set(file, fanIn * 10 + Math.min(names.length, 10));
+      const raw = fanIn * 10 + Math.min(names.length, 10);
+      scores.set(file, isTestish(file) ? raw * 0.3 : raw);
     }
 
     const ranked = [...symbols.keys()]
@@ -148,7 +182,10 @@ export function buildRepoMap(
     let used = lines.join("\n").length;
     let listed = 0;
     for (const file of ranked) {
-      const names = symbols.get(file) ?? [];
+      // 公开符号先出场:一行只放得下十来个,别让 _git/_abs 这类私有
+      // 助手占满(真仓实测:私有助手常在文件头部,按出现顺序会刷屏)。
+      const names = [...(symbols.get(file) ?? [])]
+        .sort((a, b) => Number(a.startsWith("_")) - Number(b.startsWith("_")));
       const line = names.length
         ? `- ${file}: ${names.slice(0, 12).join(", ")}`
         : `- ${file}`;
