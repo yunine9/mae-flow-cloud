@@ -272,6 +272,8 @@ async function main(): Promise<void> {
     // 个人 Git 令牌(界面只写不读):任务启动时按归属人取,经
     // credential helper 注入;没配的用户走部署级访问方式。
     gitCredential: (account) => auth.gitCredential(account),
+    // 月光模式:每张卡到达时现读——开着的直行,关了的恢复审批。
+    moonlight: (account) => auth.moonlightEnabled(account),
     compactEveryEvents: compactEvery,
     contract: demoContract,
     host,

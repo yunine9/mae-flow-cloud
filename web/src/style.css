@@ -1791,6 +1791,22 @@ pre {
 .git-token-note.success { color: var(--success); }
 .git-token-note.error { color: var(--danger); }
 
+/* 月光模式开关(免审批):身份栏右侧,开着时点亮。 */
+.identity-actions { display: flex; align-items: center; gap: 12px; }
+.moonlight-toggle { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+.moonlight-toggle button {
+  display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px;
+  color: var(--muted); background: transparent; border: 1px solid var(--line);
+  border-radius: 999px; cursor: pointer; font-size: 11px; font-weight: 650;
+}
+.moonlight-toggle button svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.6; }
+.moonlight-toggle button:hover { border-color: var(--accent); }
+.moonlight-toggle.on button {
+  color: #ffd88a; border-color: rgba(255, 216, 138, .45);
+  background: rgba(255, 216, 138, .08);
+}
+.moonlight-toggle small { color: var(--muted); font-size: 10px; }
+
 @media (max-width: 1080px) {
   .app-shell { grid-template-columns: 210px minmax(0, 1fr); }
   .workspace-header, .workspace-main { padding-left: 28px; padding-right: 28px; }

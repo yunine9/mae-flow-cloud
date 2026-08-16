@@ -40,6 +40,9 @@ interface StoredUser extends AuthUser {
    * "这个 commit 是谁的"按 commit email 映射账号——令牌只管推送
    * 鉴权,署名归这里。不是密钥,可以回显。 */
   git_email?: string;
+  /** 月光模式(免审批):开着时本人任务的人工节点由系统代答放行,
+   * 事后复盘。随时可开可关,是持续状态不是下单时的一次性选择。 */
+  moonlight?: boolean;
 }
 
 interface UserFile {
@@ -184,6 +187,21 @@ export class LocalAuth {
     const token = this.users.get(username)?.git_token;
     if (!token) return undefined;
     return token.length <= 4 ? "••••" : `••••${token.slice(-4)}`;
+  }
+
+  /** 月光模式开关。开=本人任务免审批(系统代答),关=恢复人工闸。 */
+  setMoonlight(username: string, on: boolean): void {
+    const stored = this.users.get(username);
+    if (!stored) throw new Error(`账号 ${username} 不存在`);
+    if (on) stored.moonlight = true;
+    else delete stored.moonlight;
+    this.persist();
+  }
+
+  moonlightEnabled(username: string | undefined): boolean {
+    if (!username) return false;
+    const stored = this.users.get(username);
+    return !!stored?.moonlight && !stored.disabled;
   }
 
   /** 给界面回显的非密部分:掩码提示 + 平台用户名/邮箱。 */

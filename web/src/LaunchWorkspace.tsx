@@ -23,6 +23,8 @@ export function LaunchWorkspace({
   // 拉不到数据源就不展示——表单退回最简形态,发单不受影响(fail-open)。
   const [options, setOptions] = useState<LaunchOptions | null>(null);
   const [repo, setRepo] = useState("");
+  // 车道下单就定(用户拍板:不让 agent 来问),默认慢速。
+  const [lane, setLane] = useState("慢速");
   const [modelKey, setModelKey] = useState("");
   const [repairRounds, setRepairRounds] = useState("");
 
@@ -58,6 +60,7 @@ export function LaunchWorkspace({
         session.role === "admin" ? account.trim() || undefined : session.username,
         {
           repo: repo.trim() || undefined,
+          lane,
           model: modelKey ? { provider, model } : undefined,
           repairRounds: repairRounds.trim() === ""
             ? undefined : Number(repairRounds),
@@ -141,6 +144,17 @@ export function LaunchWorkspace({
                   placeholder="本地账号"
                   readOnly={session.role !== "admin"}
                 />
+              </label>
+              <label className="account-field">
+                <span>工作流车道</span>
+                <select
+                  className="launch-model-select"
+                  value={lane}
+                  onChange={(event) => setLane(event.target.value)}
+                >
+                  <option value="慢速">慢速（完整流程，默认）</option>
+                  <option value="快速">快速（轻量流程）</option>
+                </select>
               </label>
               {options && options.models.length > 1 && (
                 <label className="account-field">

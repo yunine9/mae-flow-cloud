@@ -130,7 +130,19 @@ export function createTaskServer(
           return json(response, 200, {
             ...viewer,
             ...options.auth?.gitProfile(viewer.username),
+            moonlight: options.auth?.moonlightEnabled(viewer.username) ?? false,
           });
+        }
+        // 月光模式(免审批):默认关;开=本人任务的人工节点由系统代答
+        // 直行,且对已经在等的卡立刻生效;关=之后的节点恢复审批。
+        if (request.method === "PUT" && parts[1] === "me"
+            && parts[2] === "moonlight") {
+          if (!viewer) return json(response, 401, { error: "尚未登录" });
+          const body = await readBody(request);
+          const on = body.on === true;
+          options.auth!.setMoonlight(viewer.username, on);
+          const swept = on ? service.sweepMoonlight(viewer.username) : 0;
+          return json(response, 200, { moonlight: on, swept });
         }
         // 个人 Git 令牌:谁登录改谁的,写完只回掩码(只写不读)。
         if (request.method === "PUT" && parts[1] === "me"
@@ -292,8 +304,9 @@ export function createTaskServer(
         const account = viewer?.role === "developer"
           ? viewer.username
           : requested;
-        // 任务级可配(用户拍板):交付代码仓、模型选择、修复轮预算。
+        // 任务级可配(用户拍板):交付代码仓、车道、模型、修复轮预算。
         const repo = body.repo === undefined ? undefined : String(body.repo);
+        const lane = body.lane === undefined ? undefined : String(body.lane);
         const model = body.model
           ? {
               provider: String((body.model as { provider?: unknown })
@@ -306,7 +319,7 @@ export function createTaskServer(
           ? undefined : Number(body.repair_rounds);
         try {
           return json(response, 201, service.create(requirement,
-            { account, repo, model, repairRounds }));
+            { account, repo, lane, model, repairRounds }));
         } catch (error) {
           return json(response, 400, { error: String(error) });
         }

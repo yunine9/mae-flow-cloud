@@ -74,6 +74,10 @@ export interface TaskSummary {
   /** 下单时填的交付代码仓;缺席=部署仓(--repo)。记在任务上:
    * 重启续跑同仓不漂移,MR/流水线请求也带它给平台适配层。 */
   repo_url?: string;
+  /** 工作流车道(用户拍板:下单就选好,不让 agent 来问,默认慢速)。
+   * 内核 Q2 仍会举卡——流程规则是内核的,宿主不删它的问题;但答案
+   * 用户已在下单时给了,卡来了对得上就自动交卷(预答,不是代判)。 */
+  lane?: string;
   /** 下单时选的模型;缺席=跟随服务当前默认(设置层/部署层)。
    * 记在任务上是为了两件事:重启续跑不漂移、页面能说清"谁跑的"。 */
   model_choice?: { provider: string; model: string };
@@ -168,7 +172,11 @@ export interface TaskServiceOptions {
    * 访问方式(服务账号/开放内网)。生效边界=下一次任务启动/会话重建。 */
   gitCredential?: (
     account?: string,
-  ) => { username: string; password: string } | undefined;
+  ) => { username: string; password: string; email?: string } | undefined;
+  /** 月光模式(免审批)查询口:按任务归属人现读现判(serve 接
+   * LocalAuth.moonlightEnabled)。开着时该用户任务的人工节点由
+   * 系统代答放行,答复里写明预授权与复盘要求;随时可开可关。 */
+  moonlight?: (account?: string) => boolean;
   log?: (message: string) => void;
 }
 
@@ -586,10 +594,15 @@ export class TaskService {
     options: {
       account?: string;
       repo?: string;
+      lane?: string;
       model?: { provider: string; model: string };
       repairRounds?: number;
     } = {},
   ): TaskSummary {
+    if (options.lane !== undefined
+        && !["快速", "慢速"].includes(options.lane)) {
+      throw new Error(`车道只能是 快速/慢速,收到: ${options.lane}`);
+    }
     const repo = (options.repo ?? "").trim() || undefined;
     if (repo) {
       if (!this.options.host) {
@@ -631,6 +644,8 @@ export class TaskService {
       workspace,
       luban_account: options.account || undefined,
       repo_url: repo,
+      // 用户拍板:车道下单就定,不让 agent 来问;默认慢速。
+      lane: options.lane ?? "慢速",
       model_choice: options.model,
       repair_rounds: options.repairRounds,
     };
@@ -1369,6 +1384,94 @@ export class TaskService {
     setImmediate(() => void this.pump());
   }
 
+  /** 人工节点的"现成答案":有则自动交卷,没有才真等人。两个来源:
+   * - **下单预选(车道)**:内核 Q2 仍举卡(流程规则归内核,宿主不删
+   *   它的问题),但答案用户下单时已给——问题里带"车道"字样就把预选
+   *   项交上去。这是送达用户早给的答案,不是宿主代做判断;对不上
+   *   (内核改了措辞)就退回真等人,fail-open 到人工;
+   * - **月光模式**:用户显式开启免审批,其余问题一律代答"预授权放行,
+   *   按最稳妥判断继续,理由写明供复盘"。
+   * 混合卡(既有车道又有别的问题)只在月光开着时整卡交,否则等人。 */
+  private autoAnswerFor(task: TaskState): {
+    why: string;
+    answers: Record<string, string>;
+    notes: string;
+  } | undefined {
+    const waiting = task.summary.waiting;
+    const questions = ((waiting?.question as any)?.questions ?? []) as Array<{
+      question?: string;
+      options?: string[];
+    }>;
+    if (!waiting || questions.length === 0) return undefined;
+    const moonlight =
+      this.options.moonlight?.(task.summary.luban_account) ?? false;
+    const lane = task.summary.lane;
+    const reasons = new Set<string>();
+    const answers: Record<string, string> = {};
+    for (const item of questions) {
+      const text = String(item.question ?? "");
+      if (lane && text.includes("车道")) {
+        // 选项里找含预选词的原样标签(内核按选项标签记账),
+        // 找不到就交预选词本身。
+        answers[text] = (item.options ?? [])
+          .find((option) => option.includes(lane)) ?? lane;
+        reasons.add(`下单预选车道:${lane}`);
+      } else if (moonlight) {
+        answers[text] =
+          "【月光模式代答】用户已开启免审批预授权:按工程上最稳妥的" +
+          "判断替用户选择并继续推进,拿不准的选保守项;把你的选择和" +
+          "理由写清楚,供事后人工复盘。";
+        reasons.add("月光模式免审批");
+      } else {
+        return undefined; // 有答不上的问题,整卡留给人
+      }
+    }
+    return {
+      why: [...reasons].join(" + "),
+      answers,
+      notes: `系统自动交卷(${[...reasons].join(";")}),非人工现场答复`,
+    };
+  }
+
+  /** 自动交卷:走人工决定同一条通路(decide),内核台账、事件、
+   * 竞态语义一字不差;人若抢先答了(409/状态翻篇)就当没发生。 */
+  private async autoDecide(
+    task: TaskState,
+    auto: { answers: Record<string, string>; notes: string },
+  ): Promise<void> {
+    const waiting = task.summary.waiting;
+    if (task.summary.status !== "waiting_for_human" || !waiting) return;
+    try {
+      const single = Object.values(auto.answers);
+      await this.decide(task.summary.id, {
+        state_version: waiting.state_version,
+        ...(single.length === 1
+          ? { decision: single[0] }
+          : { answers: auto.answers }),
+        notes: auto.notes,
+      });
+    } catch (error) {
+      this.options.log?.(
+        `任务 ${task.summary.id} 自动交卷未生效(可能人已答): ${String(error)}`);
+    }
+  }
+
+  /** 月光模式开启的即时清场:把该用户当前所有等人的卡就地代答——
+   * "随时开启"就该对已经在等的卡立刻生效,不是只管以后的。 */
+  sweepMoonlight(account: string): number {
+    let swept = 0;
+    for (const task of this.tasks.values()) {
+      if (task.summary.status !== "waiting_for_human") continue;
+      if (task.summary.luban_account !== account) continue;
+      const auto = this.autoAnswerFor(task);
+      if (auto) {
+        swept += 1;
+        void this.autoDecide(task, auto);
+      }
+    }
+    return swept;
+  }
+
   /** 待办 → 小鲁班。投递失败不改流程状态;结果回填 summary.notify
    * 供页面标红。未配置通知器或未填账号时静默跳过(演示模式)。 */
   private notifyWaiting(task: TaskState): void {
@@ -1612,15 +1715,26 @@ export class TaskService {
   ): Promise<void> {
     const outcome = await turn;
     switch (outcome.status) {
-      case "waiting_for_human":
+      case "waiting_for_human": {
         task.summary.status = "waiting_for_human";
         task.summary.waiting = outcome.waiting;
         // 人工节点=流程真实活动,催办账本清零:答复之后若再停在
         // 同名步骤,那是新一次卡壳,应当再催。
         task.nudgedStep = undefined;
         this.persist(task);
-        this.notifyWaiting(task);
+        // 先看有没有现成答案(下单预选/月光模式):有就自动交卷,
+        // 不通知不打扰;没有才是真·等人。setImmediate 让本轮 settle
+        // 先收完账再交卷——decide 会立刻把状态翻回 running。
+        const auto = this.autoAnswerFor(task);
+        if (auto) {
+          this.options.log?.(
+            `任务 ${task.summary.id} 人工节点自动交卷(${auto.why})`);
+          setImmediate(() => void this.autoDecide(task, auto));
+        } else {
+          this.notifyWaiting(task);
+        }
         break;
+      }
       case "turn_finished": {
         // 主动压缩:回合间隙是唯一安全的压缩点(等待人工时压会
         // 打断挂起的人工节点)。以内核锚点组织摘要,注意力不许飘。

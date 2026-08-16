@@ -13,6 +13,7 @@ import { LaunchWorkspace } from "./LaunchWorkspace";
 import { TaskWorkspace } from "./TaskWorkspace";
 import { SettingsBoard } from "./SettingsView";
 import { GitTokenCard } from "./GitTokenCard";
+import { putMoonlight } from "./api";
 import { byUrgency } from "./taskTime";
 
 type View = "team" | "mine" | "history" | "users" | "settings";
@@ -20,6 +21,46 @@ type View = "team" | "mine" | "history" | "users" | "settings";
 function initialView(user: AuthUser): View {
   return new URLSearchParams(location.search).has("task")
     ? "mine" : user.role === "admin" ? "team" : "mine";
+}
+
+/** 月光模式(免审批)开关:默认关;开=本人任务的人工节点自动放行
+ * (已在等的卡立刻清场),关=之后恢复审批。状态是服务端事实,
+ * 界面只呈现与切换。 */
+function MoonlightToggle({
+  session,
+  onChanged,
+}: {
+  session: AuthUser;
+  onChanged: () => Promise<void>;
+}) {
+  const [on, setOn] = useState(!!session.moonlight);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState("");
+  async function toggle() {
+    setBusy(true);
+    try {
+      const result = await putMoonlight(!on);
+      setOn(result.moonlight);
+      setNote(result.moonlight
+        ? (result.swept > 0
+            ? `已开启,顺手放行了 ${result.swept} 张在等的卡`
+            : "已开启:人工节点自动放行,事后复盘")
+        : "已关闭:之后的节点恢复审批");
+      await onChanged();
+    } catch (cause) {
+      setNote(String((cause as Error).message ?? cause));
+    } finally { setBusy(false); }
+  }
+  return <span className={`moonlight-toggle${on ? " on" : ""}`}>
+    <button type="button" disabled={busy} onClick={() => void toggle()}
+      title="月光模式:开着时你的任务不再等你审批,一路直行,事后复盘">
+      <svg viewBox="0 0 20 20" aria-hidden>
+        <path d="M15.5 12.5A6.5 6.5 0 0 1 7.5 4.5a6.5 6.5 0 1 0 8 8Z" />
+      </svg>
+      月光模式{on ? "·开" : "·关"}
+    </button>
+    {note && <small>{note}</small>}
+  </span>;
 }
 
 function NavIcon({ name }: { name: View }) {
@@ -166,7 +207,7 @@ export function App() {
         </>}
 
         {view === "mine" && <>
-          <section className="identity-bar session-bar"><div className="identity-copy"><span className="section-kicker">PERSONAL INBOX</span><strong>{session.username} 的专属工作台</strong><small>{session.role === "admin" ? "显示分配给你的工作，并兜底承接尚未分配负责人的待确认事项。" : "登录身份已和任务归属绑定；这里始终只显示分配给你的工作。"}</small></div><span className={`role-chip ${session.role}`}>{session.role === "admin" ? "管理员身份" : "开发身份"}</span></section>
+          <section className="identity-bar session-bar"><div className="identity-copy"><span className="section-kicker">PERSONAL INBOX</span><strong>{session.username} 的专属工作台</strong><small>{session.role === "admin" ? "显示分配给你的工作，并兜底承接尚未分配负责人的待确认事项。" : "登录身份已和任务归属绑定；这里始终只显示分配给你的工作。"}</small></div><span className="identity-actions"><MoonlightToggle session={session} onChanged={refresh} /><span className={`role-chip ${session.role}`}>{session.role === "admin" ? "管理员身份" : "开发身份"}</span></span></section>
           <GitTokenCard session={session} />
           <section className="personal-pulse" aria-label="我的任务摘要"><div className="personal-stat attention"><span>待我核对</span><strong>{myWaiting.length}</strong></div><div className="personal-stat active"><span>执行中</span><strong>{myTasks.filter((task) => ACTIVE_STATUSES.includes(task.status)).length}</strong></div><div className="personal-stat success"><span>待合入 / 完成</span><strong>{myTasks.filter((task) => DELIVERED_STATUSES.includes(task.status)).length}</strong></div></section>
           <section className="review-inbox" aria-labelledby="review-title"><div className="section-head"><div><span className="section-kicker">REVIEW INBOX</span><h2 id="review-title">待我核对</h2></div><span className="section-count attention">{myWaiting.length} 项</span></div>{myWaiting.length === 0 ? <div className="review-clear"><span aria-hidden>✓</span><div><strong>当前没有需要你核对的事项</strong><p>新的人工节点会通过小鲁班提醒，并自动出现在这里。</p></div></div> : <div className="task-list review-list">{myWaiting.map((task) => <TaskCard key={task.id} task={task} onChanged={refresh} focused={task.id === targetTaskId} canOperate onOpenArtifacts={() => openArtifacts(task)} />)}</div>}</section>

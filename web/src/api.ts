@@ -66,6 +66,21 @@ export interface AuthUser {
   /** 平台用户名/邮箱(commit 署名,平台按邮箱认人)。非密,可回显。 */
   git_username?: string;
   git_email?: string;
+  /** 月光模式(免审批):开着时本人任务的人工节点自动放行。 */
+  moonlight?: boolean;
+}
+
+/** 切换月光模式。开启时服务端会把当前已在等的卡就地代答,
+ * swept=清了几张。 */
+export async function putMoonlight(
+  on: boolean,
+): Promise<{ moonlight: boolean; swept: number }> {
+  const response = await fetch("/auth/me/moonlight", {
+    method: "PUT",
+    body: JSON.stringify({ on }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
 }
 
 async function errorText(response: Response): Promise<string> {
@@ -236,6 +251,7 @@ export async function createTask(
   account?: string,
   extras?: {
     repo?: string;
+    lane?: string;
     model?: { provider: string; model: string };
     repairRounds?: number;
   },
@@ -246,6 +262,7 @@ export async function createTask(
       requirement,
       account: account || undefined,
       repo: extras?.repo || undefined,
+      lane: extras?.lane,
       model: extras?.model,
       repair_rounds: extras?.repairRounds,
     }),
