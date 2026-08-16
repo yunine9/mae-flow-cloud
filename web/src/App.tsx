@@ -59,7 +59,10 @@ function MoonlightToggle({
       </svg>
       月光模式{on ? "·开" : "·关"}
     </button>
-    {note && <small>{note}</small>}
+    {/* 常驻备注:别让人当成界面主题切换(用户点名)。 */}
+    <small>{note || (on
+      ? "免审批中:你的任务不等审批直行,事后复盘"
+      : "免审批开关:开启后你的任务不再等你审批")}</small>
   </span>;
 }
 
