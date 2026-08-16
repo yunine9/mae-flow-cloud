@@ -10,7 +10,7 @@ import {
   listActions,
   listTimeline,
   retryTask,
-  STATUS_TEXT,
+  statusText,
   tailEvents,
   type ExternalAction,
   type SemanticEvent,
@@ -78,7 +78,7 @@ export function TaskCard({
               <i aria-hidden />
               {decisionMode === "signal" && task.status === "waiting_for_human"
                 ? "待拍板"
-                : STATUS_TEXT[task.status] ?? task.status}
+                : statusText(task)}
             </span>
             <WaitBadge task={task} personal={showDecisionForm} />
             <span className="task-created">{formatTime(task.created_at)}</span>

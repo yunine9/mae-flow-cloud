@@ -21,7 +21,7 @@ import {
   listAnnotations,
   listArtifacts,
   readArtifact,
-  STATUS_TEXT,
+  statusText,
   type AnchorCheck,
   type Annotation,
   type ArtifactMeta,
@@ -178,7 +178,7 @@ export function TaskWorkspace({
           <div className="ws-identity-line">
             <code>{task.id}</code>
             <span className={`pill ${task.status}`}>
-              <i aria-hidden />{STATUS_TEXT[task.status] ?? task.status}
+              <i aria-hidden />{statusText(task)}
             </span>
             <WaitBadge task={task} personal={canOperate} />
           </div>

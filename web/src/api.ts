@@ -23,6 +23,26 @@ export const STATUS_TEXT: Record<TaskStatus, string> = {
   await_merge: "已提合入请求,等待合入",
 };
 
+/** 状态文案:修复环激活时,"机器正在自救/机器停了需要人"比伞状态
+ * "验证中"更有信息量——数据全部来自服务端 loop 账本,不做推断。
+ * 人工节点与出错永远压过修复环文案(等人/坏了都比修复更紧急)。 */
+export function statusText(task: {
+  status: TaskStatus;
+  delivery?: { loop?: { round: number; max?: number; state: string } };
+}): string {
+  const loop = task.delivery?.loop;
+  if (loop && task.status !== "waiting_for_human"
+      && task.status !== "failed") {
+    if (loop.state === "repairing") {
+      return `流水线修复中(第 ${loop.round}${
+        loop.max !== undefined ? `/${loop.max}` : ""} 轮)`;
+    }
+    if (loop.state === "halted") return "自动修复已停,需人工";
+    if (loop.state === "exhausted") return "修复预算用完,需人工";
+  }
+  return STATUS_TEXT[task.status] ?? task.status;
+}
+
 export type UserRole = "admin" | "developer";
 
 export interface AuthUser {
@@ -133,6 +153,13 @@ export interface TaskSummary {
     mr_state?: string;
     pipeline?: string;
     skipped?: string;
+    /** 修复环账本(服务端事实镜像,前端不推断只呈现)。 */
+    loop?: {
+      round: number;
+      max?: number;
+      state: "repairing" | "green" | "exhausted" | "halted";
+      diagnosis?: string;
+    };
   };
   progress?: {
     phases: string[];
