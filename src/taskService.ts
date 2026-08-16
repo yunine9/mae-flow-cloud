@@ -1020,7 +1020,8 @@ export class TaskService {
       if (this.effectiveVerifyViaPipeline()) {
         prompt = `${prompt}\n\n环境事实(宿主声明):本机没有编译/测试工具链,`
           + `也不提供容器构建,不要在本机尝试编译或运行 UT——只会浪费轮次。`
-          + `仓里带的 UT skill(如 autout/java-autout)是**写法指南,照用**`
+          + `本会话已带的 UT skill(如 autout/java-autout,见系统提示里的`
+          + `可用 skill 清单)是**写法指南,照用**`
           + `——按它的方法写测试;只是它里面"编译通过""执行构建"那类段落`
           + `在这台机器上做不到,跳过即可,不要为此找工具。`
           + `build-fix 这类纯构建 skill 云端用不上,不要调用;`
