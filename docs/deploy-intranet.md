@@ -59,6 +59,37 @@
 7. Windows 浏览器访问 `localhost:8787`(WSL2 自动转发);不通再用
    WSL IP(`hostname -I`)。
 
+### 暴露给内网同事(WSL 里的服务,别人怎么访问)
+
+服务默认只听 `127.0.0.1`——不声明就不上网是姿态。要给同事用,三步:
+
+1. **serve 加 `--host 0.0.0.0`**(适配层**不要**跟着放开:它拿着服务
+   令牌执行 CLI,保持默认回环,只给本机宿主调);
+2. **打通 Windows → WSL**,二选一:
+   - **镜像网络(Win11 22H2+,首选)**:`C:\Users\<你>\.wslconfig` 写
+     `[wsl2]` + `networkingMode=mirrored`,`wsl --shutdown` 重进——
+     WSL 直接共享 Windows 网卡,第 3 步做完即通;
+   - **NAT 模式(默认)**:管理员 PowerShell 做端口转发
+     (WSL IP 用 `wsl hostname -I` 取,重启会变,写成开机脚本):
+     ```powershell
+     netsh interface portproxy add v4tov4 listenport=8787 `
+       listenaddress=0.0.0.0 connectport=8787 connectaddress=<WSL_IP>
+     ```
+3. **Windows 防火墙放行入站 8787**(管理员 PowerShell):
+   ```powershell
+   New-NetFirewallRule -DisplayName "mae-flow-cloud" -Direction Inbound `
+     -LocalPort 8787 -Protocol TCP -Action Allow
+   ```
+
+同事访问 `http://<你的 Windows 内网 IP>:8787`(`ipconfig` 看 IPv4;
+公司 AD 环境通常也能用 `http://<机器名>:8787`)。账号由你在「账号
+管理」页创建,每人配自己的 Git 令牌,任务身份互不掺和。
+
+要认的两条边界:**内网是明文 http**,会话 cookie 可被同网段嗅探——
+试用可接受,转正式部署套反代 TLS;**工作机合盖=全员断线**,它是
+工作站不是服务器,多人依赖后尽快挪到常驻机器(顺带把容器隔离升回
+必选,见"不隔离部署的边界")。
+
 **Linux 容器编译验证(外部已模拟通过)**:2026-08-14 在 Colima
 arm64 Linux 容器(maven:3.8-eclipse-temurin-8)对 fieldtest-java
 干净副本验证 compile/test 退出码 0。上内网第一件事仍然是:在**目标

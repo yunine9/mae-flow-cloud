@@ -348,10 +348,19 @@ async function main(): Promise<void> {
     ?? [join(REPO_ROOT, "web", "dist")].find((dir) =>
          existsSync(join(dir, "index.html")));
   if (webRoot) console.log(`[serve] 正式前端: ${webRoot}`);
+  // --host 0.0.0.0 = 暴露给内网同事用(默认只听本机回环——不声明
+  // 就不上网,是姿态不是疏忽)。暴露时登录/权限本来就在,但要认两条:
+  // 内网是明文 http(会话 cookie 可被同网段嗅探,正式部署前加反代
+  // TLS);工作机合盖=全员断线,它是工作站不是服务器。
+  const bindHost = flag("--host") ?? "127.0.0.1";
   const server = createTaskServer(service, { webRoot, auth });
-  server.listen(port, "127.0.0.1", () => {
+  server.listen(port, bindHost, () => {
     const actual = (server.address() as AddressInfo).port;
-    console.log(`[serve] http://127.0.0.1:${actual}  (数据目录 ${dataDir})`);
+    console.log(`[serve] http://${bindHost}:${actual}  (数据目录 ${dataDir})`);
+    if (bindHost !== "127.0.0.1") {
+      console.log("[serve] 已对外监听:同事经内网 IP 访问;明文 http,"
+        + "正式部署前套反代 TLS");
+    }
   });
 }
 

@@ -68,6 +68,9 @@ interface CommandSpec {
 
 interface AdapterConfig {
   port?: number;
+  /** 监听地址,默认 127.0.0.1(只给本机宿主)。适配层在 Windows 侧、
+   * 宿主在 WSL 里时才需要放开(它拿着服务令牌,放开要想清楚)。 */
+  host?: string;
   token?: string;
   token_file?: string;
   timeout_s?: number;
@@ -314,7 +317,12 @@ export class PlatformAdapter {
     });
     return new Promise((resolve) => {
       const listenPort = port ?? this.config.port ?? 8790;
-      server.listen(listenPort, () =>
+      // 默认只听回环:适配层拿着服务令牌执行 CLI,敞给全网卡等于
+      // 内网任何人都能借服务账号建 MR。宿主在本机时不需要暴露;
+      // 适配层跑在 Windows 侧、宿主在 WSL 里隔墙喊话时,配置里
+      // 显式给 host(如 0.0.0.0),自担边界。
+      const listenHost = this.config.host ?? "127.0.0.1";
+      server.listen(listenPort, listenHost, () =>
         resolve((server.address() as { port: number }).port));
     });
   }
