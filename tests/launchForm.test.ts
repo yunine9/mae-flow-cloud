@@ -18,6 +18,7 @@ import { RuntimeSettings } from "../src/settings.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskService } from "../src/taskService.ts";
 import { createTaskServer } from "../src/server.ts";
+import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
 
 const SCRIPT: Scene[] = [{ text: "完成。" }];
 
@@ -102,8 +103,8 @@ function makeRepo(name: string): string {
 test("消费:任务级代码仓压过部署仓,克隆的就是下单填的那个", async () => {
   const repoA = makeRepo("aaa");
   const repoB = makeRepo("bbb");
-  const kernelRoot = process.env.MAE_FLOW_HOME
-    ?? join(process.cwd(), "..", "mae-flow");
+  const kernelRoot = discoverKernelRoot(process.cwd());
+  if (!kernelRoot) throw new Error("找不到内核(MAE_FLOW_HOME/../mae-flow/仓内 kernel/ 皆无)");
   const model = new ScriptedModelServer(SCRIPT);
   await model.start();
   const service = new TaskService({

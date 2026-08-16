@@ -17,10 +17,11 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskService } from "../src/taskService.ts";
+import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
 
 const REPO_ROOT = resolve(fileURLToPath(import.meta.url), "..", "..");
-const KERNEL_ROOT = process.env.MAE_FLOW_HOME
-  ?? resolve(REPO_ROOT, "..", "mae-flow");
+const KERNEL_ROOT = discoverKernelRoot(REPO_ROOT)
+  ?? resolve(REPO_ROOT, "kernel"); // 兜底给 READY 探测一个必然落空的路径
 const FIELDTEST = process.env.MAE_FLOW_FIELDTEST_JAVA
   ?? resolve(REPO_ROOT, "..", "mae-flow-fieldtest-java");
 const READY = existsSync(join(KERNEL_ROOT, "hooks", "dispatch.py"))

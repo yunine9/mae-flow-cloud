@@ -26,6 +26,7 @@ import { LocalAuth } from "../src/auth.ts";
 import { createTaskServer } from "../src/server.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskService } from "../src/taskService.ts";
+import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
 
 const TOKEN = "glpat-secret-8642";
 
@@ -197,8 +198,8 @@ test("消费:clone 经 helper 过鉴权;config 只有脚本路径没有明文;�
     + Buffer.from(`zhang.san:${TOKEN}`).toString("base64");
   const remote = await serveBareRepo(join(bare, "r.git"), expectAuth);
   const repoUrl = `http://127.0.0.1:${remote.port}/repo.git`;
-  const kernelRoot = process.env.MAE_FLOW_HOME
-    ?? join(process.cwd(), "..", "mae-flow");
+  const kernelRoot = discoverKernelRoot(process.cwd());
+  if (!kernelRoot) throw new Error("找不到内核(MAE_FLOW_HOME/../mae-flow/仓内 kernel/ 皆无)");
   const model = new ScriptedModelServer(SCRIPT);
   await model.start();
 

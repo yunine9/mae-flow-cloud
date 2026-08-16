@@ -21,6 +21,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { TaskService } from "./taskService.ts";
+import { discoverKernelRoot } from "./kernelDiscovery.ts";
 import { FakeGitPlatform } from "./gitPlatform.ts";
 import { FakeLubanServer, Notifier } from "./notifier.ts";
 
@@ -60,8 +61,11 @@ async function main(): Promise<number> {
   const provider = flag("--provider", "glm")!;
   const model = flag("--model", "glm-5.1")!;
   const repoPath = resolve(flag("--repo", "../mae-flow-fieldtest-java")!);
-  const kernelRoot = process.env.MAE_FLOW_HOME
-    ?? resolve(REPO_ROOT, "..", "mae-flow");
+  const kernelRoot = discoverKernelRoot(REPO_ROOT);
+  if (!kernelRoot) {
+    console.error("[pilot] 找不到内核(MAE_FLOW_HOME/../mae-flow/kernel 皆无),不硬跑");
+    process.exit(1);
+  }
   const maxCards = Number(flag("--max-cards", "12"));
   const timeoutMs = Number(flag("--timeout-min", "20")) * 60_000;
   const requirement = flag(

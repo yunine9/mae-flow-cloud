@@ -12,6 +12,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AddressInfo } from "node:net";
 import { ScriptedModelServer, type Scene } from "./scriptedModel.ts";
+import { discoverKernelRoot } from "./kernelDiscovery.ts";
 import { TaskService } from "./taskService.ts";
 import { createTaskServer } from "./server.ts";
 import { FakeLubanServer, Notifier } from "./notifier.ts";
@@ -183,13 +184,9 @@ async function main(): Promise<void> {
     }
   }
 
-  // 内核自动发现(集成产品形态):显式 MAE_FLOW_HOME > 开发布局的
-  // 兄弟目录 ../mae-flow(开发机用活内核,不用收编快照)> 仓内收编的
-  // kernel/(部署形态:一个 clone 就是完整产品,harness/sync-kernel.sh
-  // 负责刷新快照)。
-  const kernelRoot = process.env.MAE_FLOW_HOME
-    ?? [resolve(REPO_ROOT, "..", "mae-flow"), resolve(REPO_ROOT, "kernel")]
-      .find((candidate) => existsSync(join(candidate, "scripts")));
+  // 内核自动发现:链的语义与顺序见 kernelDiscovery.ts(serve/pilot/
+  // 测试共用一条链,不许各写各的)。
+  const kernelRoot = discoverKernelRoot(REPO_ROOT);
 
   // 内核模式开启条件:找得到内核,且有默认仓(--repo 或管理页配的)
   // 或明确 --kernel-mode(默认仓之后在界面配/每单下单填)。

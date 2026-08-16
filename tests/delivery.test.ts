@@ -16,6 +16,12 @@ import { FakeLubanServer, Notifier } from "../src/notifier.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskService } from "../src/taskService.ts";
 import { RuntimeSettings } from "../src/settings.ts";
+import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
+
+// bootstrap 会真跑内核(INACTIVE 全放行),所以内核必须真找得到——
+// worktree 里 cwd()/../mae-flow 不存在,手写路径曾让整批用例超时。
+const KERNEL_ROOT = discoverKernelRoot(process.cwd());
+if (!KERNEL_ROOT) throw new Error("找不到内核(MAE_FLOW_HOME/../mae-flow/仓内 kernel/ 皆无)");
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf-8" }).trim();
@@ -70,8 +76,7 @@ function buildService(
     // host 指向裸仓:克隆即从"服务端"取码。kernelRoot 不参与本测
     // (bootstrap 会跑,INACTIVE 全放行;状态文件由剧本伪造)。
     host: {
-      kernelRoot: process.env.MAE_FLOW_HOME
-        ?? join(process.cwd(), "..", "mae-flow"),
+      kernelRoot: KERNEL_ROOT,
       repoPath: platform.barePath,
       python: "python3",
     },
@@ -277,8 +282,7 @@ test("服务形态全从管理页来:平台/默认仓/免编译零启动项跑�
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
     host: {
-      kernelRoot: process.env.MAE_FLOW_HOME
-        ?? join(process.cwd(), "..", "mae-flow"),
+      kernelRoot: KERNEL_ROOT,
       python: "python3",
       // 刻意不给 repoPath:默认仓在管理页
     },
@@ -315,8 +319,7 @@ test("交付请求带任务归属人身份头:MR 发起人=本人的原料到位
     provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
     host: {
-      kernelRoot: process.env.MAE_FLOW_HOME
-        ?? join(process.cwd(), "..", "mae-flow"),
+      kernelRoot: KERNEL_ROOT,
       repoPath: platform.barePath,
       python: "python3",
     },
@@ -401,8 +404,7 @@ test("修复环:会话没新提交 → 带诊断停下,主动喊人", async () =
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
     host: {
-      kernelRoot: process.env.MAE_FLOW_HOME
-        ?? join(process.cwd(), "..", "mae-flow"),
+      kernelRoot: KERNEL_ROOT,
       repoPath: platform.barePath,
       python: "python3",
     },
@@ -546,8 +548,7 @@ test("流水线代行验证:环境事实进每次会话的开场,修复会话也
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
     host: {
-      kernelRoot: process.env.MAE_FLOW_HOME
-        ?? join(process.cwd(), "..", "mae-flow"),
+      kernelRoot: KERNEL_ROOT,
       repoPath: platform.barePath,
       python: "python3",
     },
