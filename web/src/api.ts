@@ -31,6 +31,9 @@ export interface AuthUser {
   /** 个人 Git 令牌的掩码提示(••••末4位);没配则缺席。只写不读:
    * 明文永远不会出现在任何 API 响应里。 */
   git_token_hint?: string;
+  /** 平台用户名/邮箱(commit 署名,平台按邮箱认人)。非密,可回显。 */
+  git_username?: string;
+  git_email?: string;
 }
 
 async function errorText(response: Response): Promise<string> {
@@ -61,14 +64,23 @@ export async function logout(): Promise<void> {
   await fetch("/auth/logout", { method: "POST" });
 }
 
-/** 设置/更换/删除(传空串)自己的 Git 令牌。回的只有掩码。 */
+/** 设置/更换/删除(传空串)自己的 Git 令牌。回的只有掩码+非密署名。 */
 export async function putGitToken(
   token: string,
   gitUsername?: string,
-): Promise<{ git_token_hint?: string }> {
+  gitEmail?: string,
+): Promise<{
+  git_token_hint?: string;
+  git_username?: string;
+  git_email?: string;
+}> {
   const response = await fetch("/auth/me/git-token", {
     method: "PUT",
-    body: JSON.stringify({ token, git_username: gitUsername }),
+    body: JSON.stringify({
+      token,
+      git_username: gitUsername,
+      git_email: gitEmail,
+    }),
   });
   if (!response.ok) throw new Error(await errorText(response));
   return response.json();
@@ -169,6 +181,8 @@ export interface LaunchOptions {
   models: Array<{ provider: string; model: string }>;
   default: { provider?: string; model?: string };
   repair_rounds: number;
+  /** enabled=false 表示本部署不接代码仓(纯会话演练),表单不显示。 */
+  repo: { enabled: boolean; default?: string };
 }
 
 export async function getLaunchOptions(): Promise<LaunchOptions> {
@@ -181,6 +195,7 @@ export async function createTask(
   requirement: string,
   account?: string,
   extras?: {
+    repo?: string;
     model?: { provider: string; model: string };
     repairRounds?: number;
   },
@@ -190,6 +205,7 @@ export async function createTask(
     body: JSON.stringify({
       requirement,
       account: account || undefined,
+      repo: extras?.repo || undefined,
       model: extras?.model,
       repair_rounds: extras?.repairRounds,
     }),

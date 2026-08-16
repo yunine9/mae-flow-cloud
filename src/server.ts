@@ -125,10 +125,11 @@ export function createTaskServer(
         }
         if (request.method === "GET" && parts[1] === "me") {
           if (!viewer) return json(response, 401, { error: "尚未登录" });
-          // 令牌只回掩码提示——"配过了、是哪个"够用,明文不出网。
+          // 令牌只回掩码提示——"配过了、是哪个"够用,明文不出网;
+          // 平台用户名/邮箱不是密钥,回显给表单确认用。
           return json(response, 200, {
             ...viewer,
-            git_token_hint: options.auth?.gitTokenHint(viewer.username),
+            ...options.auth?.gitProfile(viewer.username),
           });
         }
         // 个人 Git 令牌:谁登录改谁的,写完只回掩码(只写不读)。
@@ -142,13 +143,14 @@ export function createTaskServer(
               String(body.token ?? ""),
               body.git_username === undefined
                 ? undefined : String(body.git_username),
+              body.git_email === undefined
+                ? undefined : String(body.git_email),
             );
           } catch (error) {
             return json(response, 400, { error: String(error) });
           }
-          return json(response, 200, {
-            git_token_hint: options.auth!.gitTokenHint(viewer.username),
-          });
+          return json(response, 200,
+            options.auth!.gitProfile(viewer.username));
         }
         if (request.method === "POST" && parts[1] === "logout") {
           options.auth?.endSession(sessionToken);
@@ -290,7 +292,8 @@ export function createTaskServer(
         const account = viewer?.role === "developer"
           ? viewer.username
           : requested;
-        // 任务级可配的只有这两个(用户拍板):模型选择与修复轮预算。
+        // 任务级可配(用户拍板):交付代码仓、模型选择、修复轮预算。
+        const repo = body.repo === undefined ? undefined : String(body.repo);
         const model = body.model
           ? {
               provider: String((body.model as { provider?: unknown })
@@ -303,7 +306,7 @@ export function createTaskServer(
           ? undefined : Number(body.repair_rounds);
         try {
           return json(response, 201, service.create(requirement,
-            { account, model, repairRounds }));
+            { account, repo, model, repairRounds }));
         } catch (error) {
           return json(response, 400, { error: String(error) });
         }

@@ -57,10 +57,18 @@ arm64 Linux 容器(maven:3.8-eclipse-temurin-8)对 fieldtest-java
 
 | 端点 | 请求 | 宿主消费的响应字段 |
 |---|---|---|
-| `POST /mr` | `{source_branch, target_branch, title}` | `{url}`(MR 链接,展示用) |
-| `POST /pipeline/trigger` | `{sha}` | `{status: "success"\|"failed"\|"running", log?}` |
+| `POST /mr` | `{repo, source_branch, target_branch, title}` | `{url}`(MR 链接,展示用) |
+| `POST /pipeline/trigger` | `{repo, sha}` | `{status: "success"\|"failed"\|"running", log?}` |
 | `GET /pipeline/status?sha=<sha>` | — | `{runs: [{status, log?}]}`(取最后一个终态 run) |
 
+- `repo` = 这一单的交付仓地址(任务级可选,缺省=部署仓)。单仓部署的
+  适配层/假件可以忽略它;多仓时靠它路由到对的 CodeHub 仓;
+- **内部平台是 CodeHub(类比 GitHub)**:codehubcli 配一个从 CodeHub
+  申请的 token 即可做 MR 等操作。对接两件事:① 适配层调 CLI 时应带
+  **任务归属人的个人令牌**(auth.gitCredential 那份),MR 发起人才是
+  本人,没配的回落服务账号;② 进场实测**同一个 CodeHub token 是否也
+  当 HTTPS push 凭据**——类比 GitHub PAT 是同一个,但企业平台可能把
+  API token 与推送凭据分开;若是两个,令牌表单加一格即可,机制不变;
 - `log` = 失败详情原文(修复 agent 只看前 2000 字,适配层自行截断);
 - 平台若只有"触发后异步跑",trigger 返回 `running` 即可,宿主轮询收敛;
 - 轮询旋钮:`pollIntervalMs` 默认 10 秒(内网建议 30~60 秒,看 CLI 开销),
@@ -185,14 +193,20 @@ models.json 形状(key 只放服务器本地文件,权限 600,永不进仓):
   失败、错误如实上浮,绝不挂死等密码(不卡死红线);
 - 生效边界=下一次任务启动/会话重建;在跑的任务不换凭据;
 - 存储在 auth.json(0600):密码是哈希,令牌必须明文(git 要用原文),
-  所以只许住这份 600 文件;界面与 API 只见 ••••末4位。
+  所以只许住这份 600 文件;界面与 API 只见 ••••末4位;
+- **commit 署名与推送鉴权是两码事**:令牌只管 push 过门禁,"commit
+  是谁的"平台按 commit email 认。表单里的平台用户名/邮箱会写进克隆的
+  `user.name`/`user.email`;邮箱没填则 commit 归属可能认不到人,界面
+  有提示。MR 发起人是第三码事,归适配层带个人令牌解决(见适配层契约)。
 
 **刻意不可配的**(这些不是缺口,是立场):判定逻辑与证据标准(内核
 唯一权威);fail-open 与预算上限的**存在性**(数值可调,"无限等待"这个
 取值不存在);ASKUSER 人工闸;`MAE_FLOW_HOST`(宿主自动设,不给人配错
-的机会)。任务级可配的收在四个:工作流车道(内核 Q2 强制选)、通知
-账号、模型选择(多于一个模型才显示下拉,记在任务上重启不漂移)、
-修复轮预算(0=本单关修复环)——任务表单刻意不再膨胀。
+的机会)。任务级可配的收在五个:工作流车道(内核 Q2 强制选)、通知
+账号、**交付代码仓**(留空=部署仓;URL 不许带账号密码,鉴权走个人
+令牌;MR/流水线请求带 repo 字段给适配层)、模型选择(多于一个模型才
+显示下拉)、修复轮预算(0=本单关修复环)——都记在任务上重启不漂移,
+表单刻意不再膨胀。
 
 ## 启动与守护
 

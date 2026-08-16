@@ -22,6 +22,7 @@ export function LaunchWorkspace({
   // 任务级可选项(用户拍板只有这两个):模型选择、修复轮预算。
   // 拉不到数据源就不展示——表单退回最简形态,发单不受影响(fail-open)。
   const [options, setOptions] = useState<LaunchOptions | null>(null);
+  const [repo, setRepo] = useState("");
   const [modelKey, setModelKey] = useState("");
   const [repairRounds, setRepairRounds] = useState("");
 
@@ -56,6 +57,7 @@ export function LaunchWorkspace({
         requirement.trim(),
         session.role === "admin" ? account.trim() || undefined : session.username,
         {
+          repo: repo.trim() || undefined,
           model: modelKey ? { provider, model } : undefined,
           repairRounds: repairRounds.trim() === ""
             ? undefined : Number(repairRounds),
@@ -111,6 +113,24 @@ export function LaunchWorkspace({
                 required
               />
             </label>
+            {options?.repo.enabled && (
+              <label className="repo-field">
+                <span>交付代码仓</span>
+                <input
+                  type="text"
+                  value={repo}
+                  onChange={(event) => setRepo(event.target.value)}
+                  placeholder={options.repo.default
+                    ? `默认：${options.repo.default}`
+                    : "代码仓地址（如 https://codehub…/xxx.git）"}
+                  spellCheck={false}
+                />
+                <small className="repo-field-note">
+                  留空用服务默认仓；地址不要带账号密码，推送鉴权走个人
+                  Git 令牌。
+                </small>
+              </label>
+            )}
             <div className="composer-actions">
               <label className="account-field">
                 <span>{session.role === "admin" ? "任务负责人" : "任务归属"}</span>

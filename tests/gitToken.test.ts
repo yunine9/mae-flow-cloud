@@ -55,17 +55,29 @@ test("存储:只写不读,掩码可看,消费口给明文,禁用即失效", () =
   assert.ok(!JSON.stringify(auth.listUsers()).includes(TOKEN));
   // 消费口:git 用户名默认=登录账号
   assert.deepEqual(auth.gitCredential("zhang"),
-    { username: "zhang", password: TOKEN });
-  // 平台 git 用户名可以另配
-  auth.setGitToken("zhang", TOKEN, "zhang.san");
+    { username: "zhang", password: TOKEN, email: undefined });
+  // 平台 git 用户名/邮箱可以另配;邮箱是署名(平台按它认 commit)
+  auth.setGitToken("zhang", TOKEN, "zhang.san", "zhang@corp.example");
   assert.equal(auth.gitCredential("zhang")!.username, "zhang.san");
+  assert.equal(auth.gitCredential("zhang")!.email, "zhang@corp.example");
+  // 回显口:掩码+非密的用户名/邮箱,没有明文
+  const profile = auth.gitProfile("zhang");
+  assert.deepEqual(profile, {
+    git_token_hint: "••••8642",
+    git_username: "zhang.san",
+    git_email: "zhang@corp.example",
+  });
+  // 邮箱格式不对当场打回
+  assert.throws(() => auth.setGitToken("zhang", TOKEN, "z", "不是邮箱"),
+    /邮箱格式/);
   // 重启(重新加载文件)后令牌还在——auth.json 是真相
   const revived = new LocalAuth(join(dir, "auth.json"));
   assert.equal(revived.gitCredential("zhang")!.password, TOKEN);
-  // 空串=删除
+  // 空串=删除,署名一起清
   auth.setGitToken("zhang", "");
   assert.equal(auth.gitCredential("zhang"), undefined);
   assert.equal(auth.gitTokenHint("zhang"), undefined);
+  assert.deepEqual(auth.gitProfile("zhang"), {});
   // 没配的、不存在的账号都安静返回 undefined
   assert.equal(auth.gitCredential("admin"), undefined);
   assert.equal(auth.gitCredential(undefined), undefined);
@@ -97,7 +109,7 @@ test("路由:登录者改自己的令牌,响应只带掩码,明文不出网", as
 
     const put = await fetch(`${base}/auth/me/git-token`, {
       method: "PUT", headers: { cookie },
-      body: JSON.stringify({ token: TOKEN }),
+      body: JSON.stringify({ token: TOKEN, git_email: "dev@corp.example" }),
     });
     assert.equal(put.status, 200);
     const putBody = await put.text();
@@ -108,6 +120,7 @@ test("路由:登录者改自己的令牌,响应只带掩码,明文不出网", as
       .then((r) => r.text());
     assert.ok(!me.includes(TOKEN), "/auth/me 带出了明文令牌");
     assert.match(me, /••••8642/);
+    assert.match(me, /dev@corp\.example/, "署名邮箱该回显给表单确认");
     // 消费口拿到的是登录者本人的凭据
     assert.equal(auth.gitCredential("dev")!.password, TOKEN);
 
@@ -207,7 +220,9 @@ test("消费:clone 经 helper 过鉴权;config 只有脚本路径没有明文;�
       modelsJson: model.modelsJson(),
       host: { kernelRoot, repoPath: repoUrl, python: "python3" },
       gitCredential: (account) => account === "zhang"
-        ? { username: "zhang.san", password: TOKEN } : undefined,
+        ? { username: "zhang.san", password: TOKEN,
+            email: "zhang@corp.example" }
+        : undefined,
     });
     const id = service.create("验证个人令牌注入", { account: "zhang" }).id;
     assert.equal(await settle(service, id), "completed",
@@ -228,6 +243,10 @@ test("消费:clone 经 helper 过鉴权;config 只有脚本路径没有明文;�
       /helper\s*=\s*\n\s*helper\s*=\s*\S*git-credential\.sh/);
     // 远端 URL 干净(没被拼进用户名密码)
     assert.equal(git(clone, "remote", "get-url", "origin"), repoUrl);
+    // commit 署名写进了克隆配置:令牌管推送鉴权,"commit 是谁的"
+    // 平台按 email 认——两码事,都得对
+    assert.equal(git(clone, "config", "user.name"), "zhang.san");
+    assert.equal(git(clone, "config", "user.email"), "zhang@corp.example");
     // 凭据文件 0600、脚本 0700
     const agentDir = join(workspace, "pi-agent");
     assert.equal(

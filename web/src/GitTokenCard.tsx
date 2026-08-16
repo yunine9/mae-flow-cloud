@@ -5,13 +5,18 @@
  */
 
 import { useState } from "react";
-import { putGitToken } from "./api";
+import { putGitToken, type AuthUser } from "./api";
 
-export function GitTokenCard({ initialHint }: { initialHint?: string }) {
-  const [hint, setHint] = useState(initialHint);
+export function GitTokenCard({ session }: { session: AuthUser }) {
+  const [hint, setHint] = useState(session.git_token_hint);
+  const [identity, setIdentity] = useState({
+    username: session.git_username,
+    email: session.git_email,
+  });
   const [open, setOpen] = useState(false);
   const [token, setToken] = useState("");
-  const [gitUsername, setGitUsername] = useState("");
+  const [gitUsername, setGitUsername] = useState(session.git_username ?? "");
+  const [gitEmail, setGitEmail] = useState(session.git_email ?? "");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -20,13 +25,19 @@ export function GitTokenCard({ initialHint }: { initialHint?: string }) {
     setBusy(true); setMessage(""); setError("");
     try {
       const result = await putGitToken(
-        clear ? "" : token, clear ? undefined : gitUsername || undefined);
+        clear ? "" : token,
+        clear ? undefined : gitUsername || undefined,
+        clear ? undefined : gitEmail || undefined);
       setHint(result.git_token_hint);
-      setToken(""); setGitUsername("");
+      setIdentity({
+        username: result.git_username,
+        email: result.git_email,
+      });
+      setToken("");
       setMessage(clear
         ? "已删除;之后的任务回到服务级 Git 访问方式。"
-        : "已保存;下一次任务启动开始用你的令牌推代码。");
-      if (clear) setOpen(false);
+        : "已保存;下一次任务启动开始用你的身份推代码、署名提交。");
+      if (clear) { setOpen(false); setGitUsername(""); setGitEmail(""); }
     } catch (cause) {
       setError(String((cause as Error).message ?? cause));
     } finally { setBusy(false); }
@@ -38,7 +49,11 @@ export function GitTokenCard({ initialHint }: { initialHint?: string }) {
       <strong>个人 Git 令牌</strong>
       <small>
         {hint
-          ? <>已配置(<code>{hint}</code>),任务以你的身份推代码。</>
+          ? <>已配置(<code>{hint}</code>
+              {identity.username ? <> · {identity.username}</> : null}
+              {identity.email ? <> · {identity.email}</> : null}
+              ),任务以你的身份推代码并署名提交。
+              {!identity.email && "没填邮箱,commit 归属可能认不到你——平台按邮箱认人。"}</>
           : "未配置;任务用服务级方式访问代码仓。"}
         令牌只写不读——保存后这里永远只显示末 4 位。
       </small>
@@ -56,6 +71,9 @@ export function GitTokenCard({ initialHint }: { initialHint?: string }) {
         <input value={gitUsername} autoComplete="off"
           placeholder="平台用户名(默认=登录账号)"
           onChange={(event) => setGitUsername(event.target.value)} />
+        <input type="email" value={gitEmail} autoComplete="off"
+          placeholder="平台邮箱(commit 按它归属到你)"
+          onChange={(event) => setGitEmail(event.target.value)} />
         <button type="submit" disabled={busy || !token.trim()}>
           {busy ? "保存中…" : "保存"}</button>
         <button type="button" className="ghost" disabled={busy}

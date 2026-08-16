@@ -8,9 +8,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { LocalAuth } from "../src/auth.ts";
 import { RuntimeSettings } from "../src/settings.ts";
@@ -53,17 +54,78 @@ test("launch-options:清单来自生效 models.json,设置层压部署层", () =
   assert.equal(after.repair_rounds, 0);
 });
 
-test("下单即校验:不存在的模型、负预算,当场打回", () => {
+test("下单即校验:不存在的模型、负预算、带密码的仓地址,当场打回", () => {
   const service = new TaskService({
     dataDir: mkdtempSync(join(tmpdir(), "mfc-lf-")),
     provider: "a", model: "a-1",
     modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
+    host: { kernelRoot: "/tmp", repoPath: "/tmp/repo" },
   });
   assert.throws(() =>
     service.create("x", { model: { provider: "a", model: "无此模型" } }),
     /没有模型/);
   assert.throws(() =>
     service.create("x", { repairRounds: -1 }), /≥0/);
+  // 明文凭据拼 URL 是堵死的洞,下单口也不许开
+  assert.throws(() =>
+    service.create("x", { repo: "https://user:pass@codehub.corp/r.git" }),
+    /不许携带账号密码/);
+  assert.throws(() =>
+    service.create("x", { repo: "https://a b/r.git" }), /空白字符/);
+
+  // 没接内核模式:仓字段整个不该出现(enabled=false),硬塞就打回
+  const bald = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-lf-")),
+    provider: "a", model: "a-1",
+    modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
+  });
+  assert.equal(bald.launchOptions().repo.enabled, false);
+  assert.throws(() => bald.create("x", { repo: "https://x/r.git" }),
+    /未接内核模式/);
+});
+
+function git(cwd: string, ...args: string[]): string {
+  return execFileSync("git", args, { cwd, encoding: "utf-8" }).trim();
+}
+
+function makeRepo(name: string): string {
+  const dir = mkdtempSync(join(tmpdir(), `mfc-lf-${name}-`));
+  git(dir, "init", "--quiet", "-b", "master");
+  git(dir, "config", "user.email", "bot@test");
+  git(dir, "config", "user.name", "bot");
+  writeFileSync(join(dir, `${name}.md`), `# ${name}\n`);
+  git(dir, "add", ".");
+  git(dir, "commit", "--quiet", "-m", "init");
+  return dir;
+}
+
+test("消费:任务级代码仓压过部署仓,克隆的就是下单填的那个", async () => {
+  const repoA = makeRepo("aaa");
+  const repoB = makeRepo("bbb");
+  const kernelRoot = process.env.MAE_FLOW_HOME
+    ?? join(process.cwd(), "..", "mae-flow");
+  const model = new ScriptedModelServer(SCRIPT);
+  await model.start();
+  const service = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-lf-repo-")),
+    provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    host: { kernelRoot, repoPath: repoA, python: "python3" },
+  });
+  const id = service.create("验证任务级代码仓", { repo: repoB }).id;
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    const status = service.get(id)!.status;
+    if (status === "completed" || status === "failed") break;
+    await new Promise((tick) => setTimeout(tick, 100));
+  }
+  const task = service.get(id)!;
+  assert.equal(task.status, "completed", task.detail ?? "");
+  assert.equal(task.repo_url, repoB);
+  // 克隆目录名与 origin 都指向下单填的仓,不是部署仓
+  const clone = join(task.workspace, basename(repoB));
+  assert.equal(git(clone, "remote", "get-url", "origin"), repoB);
+  await model.stop();
 });
 
 test("消费:任务级模型选择压过服务默认(默认是打不通的网关)", async () => {

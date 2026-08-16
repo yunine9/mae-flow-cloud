@@ -36,6 +36,10 @@ interface StoredUser extends AuthUser {
   git_token?: string;
   /** 平台侧的 git 用户名,PAT 的搭档;不填默认用登录账号名。 */
   git_username?: string;
+  /** 平台邮箱:commit 署名用。平台(CodeHub,类比 GitHub)判定
+   * "这个 commit 是谁的"按 commit email 映射账号——令牌只管推送
+   * 鉴权,署名归这里。不是密钥,可以回显。 */
+  git_email?: string;
 }
 
 interface UserFile {
@@ -143,11 +147,12 @@ export class LocalAuth {
   }
 
   /** 设置/更换/删除个人 Git 令牌。只写不读:调用方拿不回明文,
-   * 想看只有掩码(gitTokenHint)。空串=删除。 */
+   * 想看只有掩码(gitTokenHint)。空串=删除(连署名一起清)。 */
   setGitToken(
     username: string,
     token: string,
     gitUsername?: string,
+    gitEmail?: string,
   ): void {
     const stored = this.users.get(username);
     if (!stored) throw new Error(`账号 ${username} 不存在`);
@@ -155,14 +160,21 @@ export class LocalAuth {
     if (!trimmed) {
       delete stored.git_token;
       delete stored.git_username;
+      delete stored.git_email;
     } else {
       if (Buffer.byteLength(trimmed, "utf-8") > 512) {
         throw new Error("令牌过长");
+      }
+      const email = (gitEmail ?? "").trim();
+      if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        throw new Error(`平台邮箱格式不对: ${email}`);
       }
       stored.git_token = trimmed;
       const name = (gitUsername ?? "").trim();
       if (name) stored.git_username = name;
       else delete stored.git_username;
+      if (email) stored.git_email = email;
+      else delete stored.git_email;
     }
     this.persist();
   }
@@ -174,17 +186,33 @@ export class LocalAuth {
     return token.length <= 4 ? "••••" : `••••${token.slice(-4)}`;
   }
 
+  /** 给界面回显的非密部分:掩码提示 + 平台用户名/邮箱。 */
+  gitProfile(username: string): {
+    git_token_hint?: string;
+    git_username?: string;
+    git_email?: string;
+  } {
+    const stored = this.users.get(username);
+    if (!stored?.git_token) return {};
+    return {
+      git_token_hint: this.gitTokenHint(username),
+      git_username: stored.git_username,
+      git_email: stored.git_email,
+    };
+  }
+
   /** 消费口(唯一允许碰明文的出口):任务启动时注入 credential
-   * helper 用。git 用户名没配就用登录账号名。 */
+   * helper 与 commit 署名用。git 用户名没配就用登录账号名。 */
   gitCredential(
     username: string | undefined,
-  ): { username: string; password: string } | undefined {
+  ): { username: string; password: string; email?: string } | undefined {
     if (!username) return undefined;
     const stored = this.users.get(username);
     if (!stored?.git_token || stored.disabled) return undefined;
     return {
       username: stored.git_username ?? stored.username,
       password: stored.git_token,
+      email: stored.git_email,
     };
   }
 

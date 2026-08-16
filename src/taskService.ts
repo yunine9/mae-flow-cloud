@@ -71,6 +71,9 @@ export interface TaskSummary {
   workspace: string;
   /** 小鲁班通知账号(任务创建时填写,主 spec §5.1)。 */
   luban_account?: string;
+  /** 下单时填的交付代码仓;缺席=部署仓(--repo)。记在任务上:
+   * 重启续跑同仓不漂移,MR/流水线请求也带它给平台适配层。 */
+  repo_url?: string;
   /** 下单时选的模型;缺席=跟随服务当前默认(设置层/部署层)。
    * 记在任务上是为了两件事:重启续跑不漂移、页面能说清"谁跑的"。 */
   model_choice?: { provider: string; model: string };
@@ -544,6 +547,7 @@ export class TaskService {
     models: Array<{ provider: string; model: string }>;
     default: { provider?: string; model?: string };
     repair_rounds: number;
+    repo: { enabled: boolean; default?: string };
   } {
     const providers = (this.activeModelsJson() as {
       providers?: Record<string, { models?: Array<{ id?: string }> }>;
@@ -561,6 +565,11 @@ export class TaskService {
       },
       repair_rounds: this.options.settings?.runtime().repair_rounds
         ?? this.options.delivery?.repairRounds ?? 2,
+      // 没接内核模式=任务不碰代码仓,表单别摆出输入框骗人。
+      repo: {
+        enabled: !!this.options.host,
+        default: this.options.host?.repoPath,
+      },
     };
   }
 
@@ -568,10 +577,26 @@ export class TaskService {
     requirement: string,
     options: {
       account?: string;
+      repo?: string;
       model?: { provider: string; model: string };
       repairRounds?: number;
     } = {},
   ): TaskSummary {
+    const repo = (options.repo ?? "").trim() || undefined;
+    if (repo) {
+      if (!this.options.host) {
+        throw new Error("本部署未接内核模式,任务不克隆代码仓");
+      }
+      if (/\s/.test(repo)) throw new Error("代码仓地址不能含空白字符");
+      if (/^https?:\/\//i.test(repo)) {
+        // 明文凭据拼 URL 是我们刚堵死的洞,这里不许再开:
+        // 鉴权走个人令牌的 credential helper,URL 保持干净。
+        const parsed = new URL(repo);
+        if (parsed.username || parsed.password) {
+          throw new Error("代码仓 URL 不许携带账号密码——鉴权走个人 Git 令牌");
+        }
+      }
+    }
     if (options.model) {
       // 下单即校验:选了不存在的模型,晚到会话启动才炸是坑人。
       const known = this.launchOptions().models;
@@ -597,6 +622,7 @@ export class TaskService {
       created_at: new Date().toISOString(),
       workspace,
       luban_account: options.account || undefined,
+      repo_url: repo,
       model_choice: options.model,
       repair_rounds: options.repairRounds,
     };
@@ -839,8 +865,11 @@ export class TaskService {
         JSON.stringify(modelOverride.json ?? this.options.modelsJson));
       // 个人 Git 凭据:每次启动(含会话重建)现读现写——换了令牌,
       // 下一次启动就用新的;凭据文件在 agentDir,不进仓库克隆。
-      const gitHelper = this.prepareGitCredential(
-        agentDir, task.summary.luban_account);
+      // 凭据也带 commit 署名(用户名/邮箱),克隆时写进仓库配置。
+      const gitIdentity =
+        this.options.gitCredential?.(task.summary.luban_account);
+      const gitHelper = gitIdentity
+        ? this.prepareGitCredential(agentDir, gitIdentity) : undefined;
       const transcriptPath = join(workspace, "transcript.jsonl");
       // 恢复=工作区(仓库克隆)还在;克隆丢了就只能从头来。
       // savedCwd 必须先落袋:下面 task.cwd 会被暂写成 workspace,
@@ -854,7 +883,10 @@ export class TaskService {
       let hostHooks;
       task.cwd = cwd;
       if (this.options.host) {
-        cwd = resuming ? savedCwd! : this.cloneRepo(workspace, gitHelper);
+        cwd = resuming
+          ? savedCwd!
+          : this.cloneRepo(workspace, gitHelper, gitIdentity,
+              task.summary.repo_url);
         task.cwd = cwd;
         const kernel = new KernelHost({
           kernelRoot: this.options.host.kernelRoot,
@@ -945,11 +977,15 @@ export class TaskService {
         const instance = createHash("sha256")
           .update(this.options.dataDir).digest("hex").slice(0, 6);
         // host 模式的两条硬依赖也要进容器:内核插件根(转发壳硬编码
-        // 其绝对路径,只读)与 Git 远端(裸仓是文件路径,push 要写)。
+        // 其绝对路径,只读)与 Git 远端——但只有本地路径仓(演示裸仓)
+        // 才需要挂载;URL 仓走网络,拿路径当挂载参数只会喂 docker 垃圾。
+        const effectiveRepo =
+          task.summary.repo_url ?? this.options.host?.repoPath;
         const hostMounts = this.options.host
           ? [
               `${this.options.host.kernelRoot}:${this.options.host.kernelRoot}:ro`,
-              `${this.options.host.repoPath}:${this.options.host.repoPath}`,
+              ...(effectiveRepo && existsSync(effectiveRepo)
+                ? [`${effectiveRepo}:${effectiveRepo}`] : []),
             ]
           : [];
         task.container = new TaskContainer(
@@ -1049,6 +1085,9 @@ export class TaskService {
         void this.options.projection?.recordAction(
           { taskId: task.summary.id, ...action });
       const mrRequest = {
+        // 任务级仓进了场,适配层必须知道这单落在哪个仓——
+        // repo 字段随 MR/流水线请求走,假件(单仓)忽略它无害。
+        repo: task.summary.repo_url ?? this.options.host?.repoPath,
         source_branch: branch,
         target_branch: baseline,
         title: `${state?.config?.["单号"] ?? branch}: ${task.summary.requirement.slice(0, 60)}`,
@@ -1069,13 +1108,14 @@ export class TaskService {
                finishedAt: new Date().toISOString() });
       const runKey = `pipeline:${sha}`;
       const runStarted = new Date().toISOString();
+      const runRequest = { sha, repo: mrRequest.repo };
       ledger({ idemKey: runKey, kind: "pipeline_trigger",
-               request: { sha }, sha, startedAt: runStarted });
+               request: runRequest, sha, startedAt: runStarted });
       const run = await fetch(`${delivery.platformUrl}/pipeline/trigger`, {
-        method: "POST", body: JSON.stringify({ sha }),
+        method: "POST", body: JSON.stringify(runRequest),
       }).then((r) => r.json());
       ledger({ idemKey: runKey, kind: "pipeline_trigger",
-               request: { sha }, sha, startedAt: runStarted, result: run,
+               request: runRequest, sha, startedAt: runStarted, result: run,
                finishedAt: new Date().toISOString() });
       task.summary.delivery = {
         ...(task.summary.delivery?.loop
@@ -1281,10 +1321,8 @@ export class TaskService {
    * 绝对路径在容器内照样成立。没有凭据返回 undefined,一切如旧。 */
   private prepareGitCredential(
     agentDir: string,
-    account?: string,
-  ): string | undefined {
-    const credential = this.options.gitCredential?.(account);
-    if (!credential) return undefined;
+    credential: { username: string; password: string },
+  ): string {
     const file = join(agentDir, "git-credential");
     writeFileSync(file,
       `username=${credential.username}\npassword=${credential.password}\n`);
@@ -1305,9 +1343,17 @@ export class TaskService {
   }
 
   /** 仓库进工作区:git 仓走 clone(历史/分支语义齐全),
-   * 非 git 目录降级复制并剔除旧现场(.mae-flow-work 不跨任务串场)。 */
-  private cloneRepo(workspace: string, gitHelper?: string): string {
-    const source = this.options.host!.repoPath;
+   * 非 git 目录降级复制并剔除旧现场(.mae-flow-work 不跨任务串场)。
+   * identity = commit 署名:令牌只管推送鉴权,"commit 是谁的"平台按
+   * commit email 映射——两码事,都得写。 */
+  private cloneRepo(
+    workspace: string,
+    gitHelper?: string,
+    identity?: { username: string; email?: string },
+    repoUrl?: string,
+  ): string {
+    // 任务级仓(下单填的)压过部署仓;记在 summary,重启续跑同仓。
+    const source = repoUrl ?? this.options.host!.repoPath;
     // 裸仓 origin.git → 工作区目录名去掉 .git 后缀,免得像个裸仓。
     const target = join(
       workspace, basename(source).replace(/\.git$/, "") || "repo");
@@ -1358,6 +1404,17 @@ export class TaskService {
         filter: (path) => !path.includes(".mae-flow-work")
           && !path.endsWith(".mae-flow.json"),
       });
+    }
+    // 署名与传输方式无关(本地路径克隆的演练也该署对名):配了就写,
+    // 邮箱没填只写名字——平台认领靠邮箱,表单里已经把话说明白。
+    // 会话重建复用旧克隆,署名改动生效边界=下一次新克隆(与凭据一致)。
+    if (identity && existsSync(join(target, ".git"))) {
+      spawnSync("git", ["config", "user.name", identity.username],
+        { cwd: target, encoding: "utf-8" });
+      if (identity.email) {
+        spawnSync("git", ["config", "user.email", identity.email],
+          { cwd: target, encoding: "utf-8" });
+      }
     }
     return target;
   }

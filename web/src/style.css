@@ -761,6 +761,9 @@ svg {
   gap: 12px;
 }
 .composer-actions .account-field { flex: 1 1 160px; min-width: 150px; }
+.repo-field { margin-top: 12px; display: grid; gap: 6px; }
+.repo-field input { width: 100%; }
+.repo-field-note { color: var(--muted); font-size: 10.5px; }
 .composer-actions .account-field input { width: 100%; }
 .composer-actions .repair-field { flex: 0 1 150px; }
 .composer-actions > button { flex: 0 0 auto; margin-left: auto; }
