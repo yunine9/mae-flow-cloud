@@ -247,7 +247,11 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
 
 0. **先验两个 CLI**(部署形态由此定,顺序不能换),并确认**流水线含
    静态检查(CodeCheck)stage**——云端不做本地扫描(内核 cloud 宿主
-   短路,lightcheck 照常),流水线是它唯一的兜底:
+   短路,lightcheck 照常),流水线是它唯一的兜底。
+   另:**ut-generator 在内网对应两个具体 skill(用户确认存在,外部
+   看不到内容)**——进场后把它们收编进 git,不进平台配置:方法论类
+   落内核仓、由 UT 步骤任务卡引用;仓库特有约定落目标仓 docs、
+   由 agent.md 索引。收编前 ut-generator 只有内核步骤卡自带的方法论:
    - MR/流水线 CLI 三能力逐一实测:交 MR、按 SHA 查状态、**拉失败日志**
      ——第 3 项拉不到,免编译形态(--verify-via-pipeline)不成立,
      回容器编译形态;
