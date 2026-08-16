@@ -20,8 +20,12 @@ import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
 
 // bootstrap 会真跑内核(INACTIVE 全放行),所以内核必须真找得到——
 // worktree 里 cwd()/../mae-flow 不存在,手写路径曾让整批用例超时。
-const KERNEL_ROOT = discoverKernelRoot(process.cwd());
-if (!KERNEL_ROOT) throw new Error("找不到内核(MAE_FLOW_HOME/../mae-flow/仓内 kernel/ 皆无)");
+function kernelRootOrDie(): string {
+  const found = discoverKernelRoot(process.cwd());
+  if (!found) throw new Error("找不到内核(MAE_FLOW_HOME/../mae-flow/仓内 kernel/ 皆无)");
+  return found;
+}
+const KERNEL_ROOT = kernelRootOrDie();
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf-8" }).trim();

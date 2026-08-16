@@ -7,6 +7,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readJson } from "../src/jsonBody.ts";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -74,7 +75,7 @@ test("配 webRoot:index 与资产按类型出文件,API 与穿越各归各位", 
 
     // API 路由优先于静态文件,不被前端接管。
     const api = await fetch(base + "/tasks");
-    assert.deepEqual(await api.json(), []);
+    assert.deepEqual(await readJson(api), []);
 
     // 穿越:fetch 会在客户端就规范化 "..",测不到服务端——
     // 用裸 socket 发未规范化路径,断言真属性:秘密永不泄露。

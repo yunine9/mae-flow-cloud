@@ -6,6 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readJson } from "../src/jsonBody.ts";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -54,7 +55,7 @@ test("裸仓灌历史 → 克隆 → 推分支 → MR 幂等 → 流水线绑 SH
         target_branch: "master",
         title: "feat: REQ1",
       }),
-    }).then((r) => r.json());
+    }).then((r) => readJson(r));
     const mr = await create();
     const replay = await create();
     assert.equal(replay.id, mr.id);
@@ -64,16 +65,16 @@ test("裸仓灌历史 → 克隆 → 推分支 → MR 幂等 → 流水线绑 SH
     // 旧 SHA 没有任何流水线记录可背书。
     const empty = await fetch(
       `${platform.baseUrl}/pipeline/status?sha=${sha}`)
-      .then((r) => r.json());
+      .then((r) => readJson(r));
     assert.equal(empty.runs.length, 0);
 
     // 流水线通过 → 同 SHA 的 MR 变"等待合入";系统不自动合并。
     const run = await fetch(`${platform.baseUrl}/pipeline/trigger`, {
       method: "POST", body: JSON.stringify({ sha }),
-    }).then((r) => r.json());
+    }).then((r) => readJson(r));
     assert.equal(run.status, "success");
     const after = (await fetch(`${platform.baseUrl}/mr`)
-      .then((r) => r.json()))[0];
+      .then((r) => readJson(r)))[0];
     assert.equal(after.state, "等待合入");
 
     // 新提交出现:旧绿灯不背书新代码。
@@ -83,7 +84,7 @@ test("裸仓灌历史 → 克隆 → 推分支 → MR 幂等 → 流水线绑 SH
     const newSha = git(work, "rev-parse", "HEAD");
     const stale = await fetch(
       `${platform.baseUrl}/pipeline/status?sha=${newSha}`)
-      .then((r) => r.json());
+      .then((r) => readJson(r));
     assert.equal(stale.runs.length, 0);
   } finally {
     await platform.stop();
@@ -103,14 +104,14 @@ test("流水线失败:MR 停在验证中;失败结果同样绑 SHA 留痕", asyn
       body: JSON.stringify({
         source_branch: "master", target_branch: "master", title: "t",
       }),
-    }).then((r) => r.json());
+    }).then((r) => readJson(r));
     platform.nextPipelineStatus = "failed";
     const run = await fetch(`${platform.baseUrl}/pipeline/trigger`, {
       method: "POST", body: JSON.stringify({ sha }),
-    }).then((r) => r.json());
+    }).then((r) => readJson(r));
     assert.equal(run.status, "failed");
     const after = (await fetch(`${platform.baseUrl}/mr`)
-      .then((r) => r.json()))[0];
+      .then((r) => readJson(r)))[0];
     assert.equal(after.state, "验证中");
     assert.equal(mr.id, after.id);
   } finally {

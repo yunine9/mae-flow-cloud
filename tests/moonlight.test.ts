@@ -8,6 +8,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readJson } from "../src/jsonBody.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -149,12 +150,12 @@ test("路由:开关落账、开启即清场、/auth/me 回显;账号库重启后
     const on = await fetch(`${base}/auth/me/moonlight`, {
       method: "PUT", headers: { cookie },
       body: JSON.stringify({ on: true }),
-    }).then((r) => r.json());
+    }).then((r) => readJson(r));
     assert.deepEqual(on, { moonlight: true, swept: 1 }, "开启即清场");
     assert.equal(await settle(service, id, ["completed"]), "completed");
 
     const me = await fetch(`${base}/auth/me`, { headers: { cookie } })
-      .then((r) => r.json());
+      .then((r) => readJson(r));
     assert.equal(me.moonlight, true);
     // 状态持久:重新加载账号库还开着
     assert.equal(new LocalAuth(join(dataDir, "auth.json"))
@@ -163,7 +164,7 @@ test("路由:开关落账、开启即清场、/auth/me 回显;账号库重启后
     const off = await fetch(`${base}/auth/me/moonlight`, {
       method: "PUT", headers: { cookie },
       body: JSON.stringify({ on: false }),
-    }).then((r) => r.json());
+    }).then((r) => readJson(r));
     assert.equal(off.moonlight, false);
   } finally {
     server.close();

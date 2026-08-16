@@ -13,6 +13,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readJson } from "../src/jsonBody.ts";
 import {
   mkdirSync,
   mkdtempSync,
@@ -251,7 +252,7 @@ test("路由 GET /tasks/:id/artifacts[/:name]:能看任务就能看材料", asyn
     const created = await fetch(`${base}/tasks`, {
       method: "POST",
       body: JSON.stringify({ requirement: "演练:检视产物路由" }),
-    }).then((response) => response.json());
+    }).then((response) => readJson(response));
     const deadline = Date.now() + 30_000;
     while (service.get(created.id)!.status !== "completed") {
       if (Date.now() > deadline) throw new Error("任务未收口");
@@ -261,7 +262,7 @@ test("路由 GET /tasks/:id/artifacts[/:name]:能看任务就能看材料", asyn
     // 演练模式没有内核现场:空列表而不是 500——流程没到 init 不是错误。
     const list = await fetch(`${base}/tasks/${created.id}/artifacts`);
     assert.equal(list.status, 200);
-    assert.deepEqual(await list.json(), []);
+    assert.deepEqual(await readJson(list), []);
 
     // 现场铺上材料后,同一路由就能列出来、读出来。
     const workspace = service.get(created.id)!.workspace;
@@ -270,13 +271,13 @@ test("路由 GET /tasks/:id/artifacts[/:name]:能看任务就能看材料", asyn
     writeFileSync(join(ticket, ".ticket-id"), "REQ7");
     writeFileSync(join(ticket, "spec.md"), "# 规格\n\n决策与证据同屏。\n");
     const listed = await fetch(`${base}/tasks/${created.id}/artifacts`)
-      .then((response) => response.json()) as ArtifactMeta[];
+      .then((response) => readJson(response)) as ArtifactMeta[];
     assert.deepEqual(names(listed), ["REQ7/spec.md"]);
 
     const encoded = encodeURIComponent("REQ7/spec.md");
     const read = await fetch(`${base}/tasks/${created.id}/artifacts/${encoded}`);
     assert.equal(read.status, 200);
-    assert.match(String((await read.json()).content), /决策与证据同屏/);
+    assert.match(String((await readJson(read)).content), /决策与证据同屏/);
 
     const missing = await fetch(
       `${base}/tasks/${created.id}/artifacts/${encodeURIComponent("没有这份.md")}`);

@@ -7,6 +7,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readJson } from "../src/jsonBody.ts";
 import {
   appendFileSync,
   existsSync,
@@ -84,13 +85,13 @@ test("任务 API 整链:等待人工/409 冲突/决定生效/SSE 镜像", async 
     const created = await fetch(`${base}/tasks`, {
       method: "POST",
       body: JSON.stringify({ requirement: "交付 API-1:编译并检视" }),
-    }).then((r) => r.json());
+    }).then((r) => readJson(r));
     // 并发额度未满时队列泵在 create 返回前就已起跑,两种都合法。
     assert.ok(["queued", "running"].includes(created.status));
 
     const waiting = await until(async () => {
       const task = await fetch(`${base}/tasks/${created.id}`)
-        .then((r) => r.json());
+        .then((r) => readJson(r));
       return task.status === "waiting_for_human" ? task : undefined;
     }, "任务进入等待人工");
     assert.equal(
@@ -124,7 +125,7 @@ test("任务 API 整链:等待人工/409 冲突/决定生效/SSE 镜像", async 
 
     const done = await until(async () => {
       const task = await fetch(`${base}/tasks/${created.id}`)
-        .then((r) => r.json());
+        .then((r) => readJson(r));
       return task.status === "completed" ? task : undefined;
     }, "任务完成");
     assert.ok(existsSync(join(done.workspace, "transcript.jsonl")));
@@ -135,7 +136,7 @@ test("任务 API 整链:等待人工/409 冲突/决定生效/SSE 镜像", async 
       assert.ok(kinds.has(expected), `SSE 缺少 ${expected}`);
     }
 
-    const listed = await fetch(`${base}/tasks`).then((r) => r.json());
+    const listed = await fetch(`${base}/tasks`).then((r) => readJson(r));
     assert.equal(listed.length, 1);
     assert.equal(listed[0].status, "completed");
   } finally {
@@ -246,7 +247,7 @@ test("现场面板路由:没有面板时说人话,有面板时原样呈现", asy
     await new Promise((r) => setTimeout(r, 500));
     const missing = await fetch(`${base}/tasks/${created.id}/panel`);
     assert.equal(missing.status, 404);
-    assert.match((await missing.json()).error, /还没有现场面板/);
+    assert.match((await readJson(missing)).error, /还没有现场面板/);
 
     // 内核会在任务工作区生成单文件面板;这里替它放一份。
     const workDir = join(created.workspace, ".mae-flow-work");

@@ -7,6 +7,7 @@
   "scripts": {
     "probe": "tsx src/probe.ts",
     "test": "tsx --test tests/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json",
     "serve": "tsx src/serve.ts",
     "adapter": "tsx src/platformAdapter.ts",
     "pilot": "tsx src/pilot.ts"

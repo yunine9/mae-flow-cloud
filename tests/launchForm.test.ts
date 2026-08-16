@@ -8,6 +8,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readJson } from "../src/jsonBody.ts";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -186,7 +187,7 @@ test("路由:/launch-options 登录可看;POST /tasks 带坏参数 400", async (
     const options = await fetch(`${base}/launch-options`,
       { headers: { cookie } });
     assert.equal(options.status, 200);
-    assert.deepEqual((await options.json()).models,
+    assert.deepEqual((await readJson(options)).models,
       [{ provider: "maeflow", model: "scripted-v1" }]);
 
     const bad = await fetch(`${base}/tasks`, {

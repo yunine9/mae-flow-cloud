@@ -13,6 +13,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readJson } from "../src/jsonBody.ts";
 import { appendFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -274,7 +275,7 @@ test("批注 HTTP 面:圈注→清单带进展→送出走插话通道", async (
   try {
     const created = await fetch(`${base}/tasks`, {
       method: "POST", body: JSON.stringify({ requirement: "给手机号打码" }),
-    }).then((response) => response.json());
+    }).then((response) => readJson(response));
     const id: string = created.id;
     await until(() => model.requests.length >= 1, "模型开跑");
 
@@ -289,19 +290,19 @@ test("批注 HTTP 面:圈注→清单带进展→送出走插话通道", async (
 
     // 清单里能看见"我圈了什么、现在什么进展"
     const before = await fetch(`${base}/tasks/${id}/annotations`)
-      .then((response) => response.json());
+      .then((response) => readJson(response));
     assert.equal(before.items.length, 1);
     assert.equal(before.items[0].status, "draft");
     assert.equal(before.checks.length, 1);
 
     const sent = await fetch(`${base}/tasks/${id}/annotations/send`, {
       method: "POST", body: JSON.stringify({}),
-    }).then((response) => response.json());
+    }).then((response) => readJson(response));
     assert.equal(sent.sent.length, 1);
 
     // 送出后不下架:状态翻成 sent,人还看得见"这条提过了"
     const after = await fetch(`${base}/tasks/${id}/annotations`)
-      .then((response) => response.json());
+      .then((response) => readJson(response));
     assert.equal(after.items[0].status, "sent");
     assert.equal(after.items[0].sent_via, "interrupt");
 
@@ -314,7 +315,7 @@ test("批注 HTTP 面:圈注→清单带进展→送出走插话通道", async (
     // AI 收到之后说的话要能在清单里看到(原话,不做逐条对应)——
     // 不然"不同意+理由"永远躺在会话流里,面板上像什么都没发生。
     const replied = await fetch(`${base}/tasks/${id}/annotations`)
-      .then((response) => response.json());
+      .then((response) => readJson(response));
     assert.ok(replied.reply, "送出之后必须带回 AI 的回话");
     assert.match(replied.reply.texts.join("\n"), /按你圈的改完了/);
   } finally {

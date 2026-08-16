@@ -5,6 +5,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readJson } from "../src/jsonBody.ts";
 import { mkdtempSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -74,7 +75,7 @@ test("HTTP 登录:开发看全部任务,创建归自己,不能操作别人任务
       }),
     });
     assert.equal(createdResponse.status, 201);
-    const created = await createdResponse.json() as {
+    const created = await readJson(createdResponse) as {
       id: string;
       luban_account: string;
     };
@@ -85,7 +86,7 @@ test("HTTP 登录:开发看全部任务,创建归自己,不能操作别人任务
       headers: { cookie: alice },
     });
     assert.equal(list.status, 200, "开发可查看团队全部任务");
-    assert.equal((await list.json() as unknown[]).length, 1);
+    assert.equal((await readJson(list) as unknown[]).length, 1);
 
     const forbidden = await fetch(
       `${base}/tasks/${created.id}/decision`,

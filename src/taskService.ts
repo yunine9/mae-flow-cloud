@@ -35,6 +35,7 @@ import { readArtifact, resolveArtifactRoot } from "./artifacts.ts";
 import { KernelHost } from "./kernelHost.ts";
 import { buildRepoMap } from "./repoMap.ts";
 import { collectKnowledge } from "./knowledgeBlocks.ts";
+import { readJson } from "./jsonBody.ts";
 import type { Notifier, NotifyRecord } from "./notifier.ts";
 import { EventLog } from "./semanticEvents.ts";
 import { TranscriptStore } from "./transcriptStore.ts";
@@ -1198,7 +1199,7 @@ export class TaskService {
         body: JSON.stringify(mrRequest),
       }).then((r) => {
         if (!r.ok) throw new Error(`MR 创建失败 HTTP ${r.status}`);
-        return r.json();
+        return readJson(r);
       });
       ledger({ idemKey: mrKey, kind: "mr_create", request: mrRequest,
                sha, startedAt: mrStarted, result: mr,
@@ -1212,7 +1213,7 @@ export class TaskService {
         method: "POST",
         headers: this.platformIdentity(task),
         body: JSON.stringify(runRequest),
-      }).then((r) => r.json());
+      }).then((r) => readJson(r));
       ledger({ idemKey: runKey, kind: "pipeline_trigger",
                request: runRequest, sha, startedAt: runStarted, result: run,
                finishedAt: new Date().toISOString() });
@@ -1269,7 +1270,7 @@ export class TaskService {
           `${this.effectivePlatformUrl()}/pipeline/status`
           + `?sha=${sha}&repo=${repo}`,
           { headers: this.platformIdentity(task) })
-          .then((r) => r.json());
+          .then((r) => readJson(r));
         terminal = (status.runs ?? []).findLast(
           (run: { status?: string }) =>
             run.status === "success" || run.status === "failed");

@@ -13,6 +13,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readJson } from "../src/jsonBody.ts";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -195,7 +196,7 @@ test("路由 GET /tasks/:id/timeline:能看任务就能看时间线;不存在 40
       const created = await fetch(`${base}/tasks`, {
         method: "POST",
         body: JSON.stringify({ requirement: "演练:时间线路由" }),
-      }).then((response) => response.json());
+      }).then((response) => readJson(response));
       const deadline = Date.now() + 30_000;
       while (service.get(created.id)!.status !== "completed") {
         if (Date.now() > deadline) throw new Error("任务未收口");
@@ -204,7 +205,7 @@ test("路由 GET /tasks/:id/timeline:能看任务就能看时间线;不存在 40
 
       const response = await fetch(`${base}/tasks/${created.id}/timeline`);
       assert.equal(response.status, 200);
-      const entries = (await response.json()) as TimelineEntry[];
+      const entries = (await readJson(response)) as TimelineEntry[];
       assert.ok(Array.isArray(entries) && entries.length > 0);
       assert.ok(entries.some((entry) => entry.title === "开始执行"));
 

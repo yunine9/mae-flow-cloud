@@ -6,6 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readJson } from "../src/jsonBody.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -49,7 +50,7 @@ test("终态任务可重跑续推;不存在的任务 404", async () => {
     const retried = await fetch(`${base}/tasks/${created.id}/retry`,
       { method: "POST" });
     assert.equal(retried.status, 200);
-    const body = await retried.json();
+    const body = await readJson(retried);
     assert.match(String(body.detail), /重跑/);
     await until(() =>
       service.get(created.id)!.status === "completed", "重跑后再次收口");

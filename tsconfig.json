@@ -1,18 +1,19 @@
 {
+  "//": "零构建仍要类型检查:tsx 直跑不看类型,写错字段名会静默变 undefined(实测踩过 task.delivery/task.summary.delivery)。npm run typecheck 是唯一用途,不产出文件。web/ 有自己的 tsconfig。",
   "compilerOptions": {
-    "target": "ES2022",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "strict": true,
     "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "target": "es2022",
+    "lib": ["es2023"],
     "skipLibCheck": true,
-    "types": [
-      "node"
-    ],
-    "allowImportingTsExtensions": true
+    "jsx": "react-jsx",
+    "types": ["node"],
+    "strictNullChecks": true,
+    "noImplicitThis": true,
+    "useUnknownInCatchVariables": false
   },
-  "include": [
-    "src",
-    "tests"
-  ]
+  "include": ["src/**/*.ts", "tests/**/*.ts"],
+  "exclude": ["node_modules", "web", "kernel", ".pilot"]
 }
