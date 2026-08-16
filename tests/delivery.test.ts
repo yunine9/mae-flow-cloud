@@ -497,6 +497,8 @@ test("修复环默认不限轮:三连红一路修到绿,没有人为断头", asy
       .map((message: any) => JSON.stringify(message.content ?? ""))
       .join("\n");
     assert.match(seen, /先分诊再动手/);
+    assert.match(seen, /定位先于修改/, "定位这一步必须写死在使命里");
+    assert.match(seen, /定位依据/, "定位要交依据,不许凭猜改");
     assert.match(seen, /专职子 agent/);
     assert.match(seen, /诊断出口/);
     assert.match(seen, /上一轮修复后流水线仍红/);
