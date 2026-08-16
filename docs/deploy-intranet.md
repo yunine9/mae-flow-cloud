@@ -251,7 +251,10 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
    另:**ut-generator 在内网对应两个具体 skill(用户确认存在,外部
    看不到内容)**——进场后把它们收编进 git,不进平台配置:方法论类
    落内核仓、由 UT 步骤任务卡引用;仓库特有约定落目标仓 docs、
-   由 agent.md 索引。收编前 ut-generator 只有内核步骤卡自带的方法论:
+   由仓根 **AGENTS.md** 索引(注意不是 agent.md——pi 与 CC 同款机制,
+   只认 AGENTS.md/CLAUDE.md 这几个名字,认出后**进系统提示词每次携带**,
+   已实测接线在 CloudSession 的 resource loader 上,零开发)。
+   收编前 ut-generator 只有内核步骤卡自带的方法论:
    - MR/流水线 CLI 三能力逐一实测:交 MR、按 SHA 查状态、**拉失败日志**
      ——第 3 项拉不到,免编译形态(--verify-via-pipeline)不成立,
      回容器编译形态;
