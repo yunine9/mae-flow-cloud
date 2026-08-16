@@ -122,6 +122,23 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
   (tests/repoMap.test.ts 4 项),没在真实巨型 Java 仓上量过**:
   正则漏/误报率、3 秒预算在几万文件仓够不够、地图对真实修复轮次的
   影响,都要进内网首批任务后看实际效果再调;
+- **知识块按触发词注入(2026-08-16,路线图 #4 另一半)**:交付仓的
+  `.mae-flow/knowledge/*.md` 带 triggers,命中才进开场白(无 triggers=
+  常驻);匹配语料=需求原文+本轮流水线失败详情,红灯日志里的关键词
+  会召唤出对应那条规矩。知识在仓不在平台——平台不做知识库、不做配置
+  面,换个仓就是换套知识。端到端实锤在 delivery.test.ts(命中的进、
+  没命中的不进)。**没有真实团队知识喂过**:触发词该多细、常驻块会不会
+  被写成大杂烩,要进场用起来才知道;
+- **定位先于修改(2026-08-16,路线图 #2)**:修复使命在分诊之后、动手
+  之前插一步——落到具体文件/函数并写明依据(日志哪行、堆栈哪帧、
+  覆盖率报告哪个类)。**这是提示词纪律不是机器门禁**:模型糊弄着写个
+  假依据系统也拦不住,真实效果要看内网首批修复轮的实际表现;
+- **npm run typecheck 立起来了(2026-08-16)**:零构建(tsx 直跑)一直
+  没有类型关,写错字段名静默变 undefined——实测吃过亏(task.delivery
+  实为 task.summary.delivery,靠端到端断言才逮住)。全仓 61 个报错
+  (全是 Response.json() 返 unknown 的老账)用 src/jsonBody.ts 的
+  readJson 收敛到 0。**开着 strictNullChecks 但没全 strict**:先把门
+  立起来,别让完美挡住可用;**没接进 CI/preflight**,目前靠人自觉跑;
 - **内核发现收敛(2026-08-16)**:`MAE_FLOW_HOME > ../mae-flow 活内核
   > 仓内 kernel/ 快照`这条链原先在 serve、pilot、六个测试文件里各写
   一遍,测试那几份还手写 `cwd()/../mae-flow`——在 git worktree 里

@@ -29,12 +29,15 @@ Mae-Flow 云端服务:pi(pi-mono)进程内集成 + Mae-Flow 内核宿主适配�
   集群、真 docker、真 kill -9),没有条件时**显式 skip 并明说**,
   静默跳过等于假装测过。
 - 零构建:tsx 直跑,无 build 步;web/ 是唯一有构建的目录(Vite)。
+  但零构建**不等于不查类型**:改完跑 `npm run typecheck`(tsx 不看
+  类型,字段名写错会静默变 undefined——实测吃过亏)。
 - 前端不推断状态,一切文案来自任务 API 镜像;零外部依赖(内网可用)。
 
 ## 常用命令
 
 ```bash
 npm test                 # 全量(需 docker/PG 的用例没有环境会显式 skip)
+npm run typecheck        # 零构建≠不查类型(tsx 不看类型,写错字段名会静默)
 npm run probe            # 整链演练,内核裁判九项事实
 npm run serve            # 演示模式(剧本假模型,每次清场)
 npm run pilot -- --label <名>            # 真模型试跑(.local/models.json)
