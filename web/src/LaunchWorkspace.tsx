@@ -1,5 +1,10 @@
 import { useEffect, useState } from "react";
-import { createTask, type AuthUser } from "./api";
+import {
+  createTask,
+  getLaunchOptions,
+  type AuthUser,
+  type LaunchOptions,
+} from "./api";
 
 export function LaunchWorkspace({
   session,
@@ -14,6 +19,15 @@ export function LaunchWorkspace({
   const [account, setAccount] = useState(session.username);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  // 任务级可选项(用户拍板只有这两个):模型选择、修复轮预算。
+  // 拉不到数据源就不展示——表单退回最简形态,发单不受影响(fail-open)。
+  const [options, setOptions] = useState<LaunchOptions | null>(null);
+  const [modelKey, setModelKey] = useState("");
+  const [repairRounds, setRepairRounds] = useState("");
+
+  useEffect(() => {
+    getLaunchOptions().then(setOptions).catch(() => setOptions(null));
+  }, []);
 
   useEffect(() => {
     const previous = document.body.style.overflow;
@@ -34,9 +48,18 @@ export function LaunchWorkspace({
     setSubmitting(true);
     setError("");
     try {
+      // 模型 id 里可能有 "/"(如 org/model),只切第一段作 provider。
+      const slash = modelKey.indexOf("/");
+      const provider = modelKey.slice(0, slash);
+      const model = modelKey.slice(slash + 1);
       await createTask(
         requirement.trim(),
         session.role === "admin" ? account.trim() || undefined : session.username,
+        {
+          model: modelKey ? { provider, model } : undefined,
+          repairRounds: repairRounds.trim() === ""
+            ? undefined : Number(repairRounds),
+        },
       );
       await onCreated();
       onClose();
@@ -99,6 +122,41 @@ export function LaunchWorkspace({
                   readOnly={session.role !== "admin"}
                 />
               </label>
+              {options && options.models.length > 1 && (
+                <label className="account-field">
+                  <span>模型</span>
+                  <select
+                    className="launch-model-select"
+                    value={modelKey}
+                    onChange={(event) => setModelKey(event.target.value)}
+                  >
+                    <option value="">
+                      默认{options.default.model
+                        ? `（${options.default.model}）` : ""}
+                    </option>
+                    {options.models.map((item) => (
+                      <option
+                        key={`${item.provider}/${item.model}`}
+                        value={`${item.provider}/${item.model}`}
+                      >
+                        {item.model}（{item.provider}）
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {options && (
+                <label className="account-field repair-field">
+                  <span>修复轮预算</span>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={repairRounds}
+                    onChange={(event) => setRepairRounds(event.target.value)}
+                    placeholder={`默认 ${options.repair_rounds}（0=关）`}
+                  />
+                </label>
+              )}
               <button type="submit" disabled={submitting}>
                 <span>{submitting ? "正在发起" : "确认发起"}</span>
                 <svg viewBox="0 0 20 20" aria-hidden><path d="M4 10h11M11 6l4 4-4 4" /></svg>

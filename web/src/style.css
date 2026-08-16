@@ -752,12 +752,24 @@ svg {
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 .composer-actions {
+  /* 字段可增可减(模型下拉只在多于一个模型时出现):弹性换行,
+   * 按钮永远收尾。 */
   margin-top: 12px;
-  display: grid;
-  grid-template-columns: minmax(180px, 1fr) auto;
-  align-items: end;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
   gap: 12px;
 }
+.composer-actions .account-field { flex: 1 1 160px; min-width: 150px; }
+.composer-actions .account-field input { width: 100%; }
+.composer-actions .repair-field { flex: 0 1 150px; }
+.composer-actions > button { flex: 0 0 auto; margin-left: auto; }
+.launch-model-select {
+  height: 40px; width: 100%; padding: 0 10px; color: var(--text);
+  background: var(--surface-soft); border: 1px solid var(--line);
+  border-radius: var(--radius-sm); font-size: 12px; appearance: auto;
+}
+.launch-model-select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); outline: none; }
 .composer-actions > button, .submit-decision {
   height: 40px;
   padding: 0 16px;

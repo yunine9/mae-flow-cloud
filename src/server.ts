@@ -228,6 +228,16 @@ export function createTaskServer(
         return json(response, 404, { error: "未知设置接口" });
       }
 
+      // 下单表单的数据源:模型清单与当前默认。登录即可看(不是密钥,
+      // 只有名字);选项从当前生效的 models.json 来,设置层热改即时反映。
+      // 必须先于静态托管兜底(和 /history 一样,非 /tasks 的 GET 会被接管)。
+      if (request.method === "GET" && url.pathname === "/launch-options") {
+        if (options.auth && !viewer) {
+          return json(response, 401, { error: "请先登录" });
+        }
+        return json(response, 200, service.launchOptions());
+      }
+
       const protectedRoute =
         url.pathname === "/history" || parts[0] === "tasks";
       if (options.auth && protectedRoute && !viewer) {
@@ -280,7 +290,23 @@ export function createTaskServer(
         const account = viewer?.role === "developer"
           ? viewer.username
           : requested;
-        return json(response, 201, service.create(requirement, { account }));
+        // 任务级可配的只有这两个(用户拍板):模型选择与修复轮预算。
+        const model = body.model
+          ? {
+              provider: String((body.model as { provider?: unknown })
+                .provider ?? ""),
+              model: String((body.model as { model?: unknown }).model ?? ""),
+            }
+          : undefined;
+        const repairRounds = body.repair_rounds === undefined
+          || body.repair_rounds === null || body.repair_rounds === ""
+          ? undefined : Number(body.repair_rounds);
+        try {
+          return json(response, 201, service.create(requirement,
+            { account, model, repairRounds }));
+        } catch (error) {
+          return json(response, 400, { error: String(error) });
+        }
       }
       if (request.method === "GET" && url.pathname === "/tasks") {
         return json(response, 200, service.list());

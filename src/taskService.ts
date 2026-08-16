@@ -71,6 +71,11 @@ export interface TaskSummary {
   workspace: string;
   /** 小鲁班通知账号(任务创建时填写,主 spec §5.1)。 */
   luban_account?: string;
+  /** 下单时选的模型;缺席=跟随服务当前默认(设置层/部署层)。
+   * 记在任务上是为了两件事:重启续跑不漂移、页面能说清"谁跑的"。 */
+  model_choice?: { provider: string; model: string };
+  /** 下单时的修复轮预算;缺席=跟随服务当前默认。0=本单关掉修复环。 */
+  repair_rounds?: number;
   /** 最近一张待办的通知投递事实(失败标红的依据,不影响流程)。 */
   notify?: Pick<NotifyRecord, "delivered" | "attempts" | "last_error">;
   /** Git 交付事实(§10):MR 链接/状态、流水线结果、或没交付的原因。
@@ -526,10 +531,61 @@ export class TaskService {
     return picked;
   }
 
+  /** 当前生效的 models.json 同形内容(设置层压部署层)——
+   * 下单模型选项和校验共用这一个口径。 */
+  private activeModelsJson(): Record<string, unknown> {
+    return (this.options.settings?.models().json ?? this.options.modelsJson
+      ?? {}) as Record<string, unknown>;
+  }
+
+  /** 下单表单的数据源:可选模型清单 + 当前默认。选项≤1 时表单
+   * 不必展示下拉——没得选就别摆出选择的样子。 */
+  launchOptions(): {
+    models: Array<{ provider: string; model: string }>;
+    default: { provider?: string; model?: string };
+    repair_rounds: number;
+  } {
+    const providers = (this.activeModelsJson() as {
+      providers?: Record<string, { models?: Array<{ id?: string }> }>;
+    }).providers ?? {};
+    const models = Object.entries(providers).flatMap(([name, spec]) =>
+      (spec?.models ?? [])
+        .map((item) => String(item?.id ?? "")).filter(Boolean)
+        .map((model) => ({ provider: name, model })));
+    const override = this.options.settings?.models() ?? {};
+    return {
+      models,
+      default: {
+        provider: override.provider ?? this.options.provider,
+        model: override.model ?? this.options.model,
+      },
+      repair_rounds: this.options.settings?.runtime().repair_rounds
+        ?? this.options.delivery?.repairRounds ?? 2,
+    };
+  }
+
   create(
     requirement: string,
-    options: { account?: string } = {},
+    options: {
+      account?: string;
+      model?: { provider: string; model: string };
+      repairRounds?: number;
+    } = {},
   ): TaskSummary {
+    if (options.model) {
+      // 下单即校验:选了不存在的模型,晚到会话启动才炸是坑人。
+      const known = this.launchOptions().models;
+      if (!known.some((item) => item.provider === options.model!.provider
+          && item.model === options.model!.model)) {
+        throw new Error(
+          `没有模型 ${options.model.provider}/${options.model.model}`);
+      }
+    }
+    if (options.repairRounds !== undefined
+        && (!Number.isFinite(options.repairRounds)
+            || options.repairRounds < 0)) {
+      throw new Error("修复轮预算必须是 ≥0 的数字");
+    }
     this.counter += 1;
     const id = `task-${this.counter}`;
     const workspace = join(this.options.dataDir, id);
@@ -541,6 +597,8 @@ export class TaskService {
       created_at: new Date().toISOString(),
       workspace,
       luban_account: options.account || undefined,
+      model_choice: options.model,
+      repair_rounds: options.repairRounds,
     };
     const task: TaskState = {
       summary,
@@ -904,8 +962,12 @@ export class TaskService {
         taskId: task.summary.id,
         workspace: cwd,
         agentDir,
-        provider: modelOverride.provider ?? this.options.provider,
-        model: modelOverride.model ?? this.options.model,
+        // 任务级选择 > 设置层默认 > 部署默认;任务级的记在 summary 上,
+        // 重启续跑/会话重建都不漂移(设置层后来改了也不影响本单)。
+        provider: task.summary.model_choice?.provider
+          ?? modelOverride.provider ?? this.options.provider,
+        model: task.summary.model_choice?.model
+          ?? modelOverride.model ?? this.options.model,
         eventLog: new EventLog(
           join(workspace, "events.jsonl"),
           (event) => void this.options.projection?.appendEvent(event)),
@@ -1132,7 +1194,8 @@ export class TaskService {
       this.persist(task);
       return;
     }
-    const max = this.options.settings?.runtime().repair_rounds
+    const max = task.summary.repair_rounds
+      ?? this.options.settings?.runtime().repair_rounds
       ?? this.options.delivery?.repairRounds ?? 2;
     // repairRounds=0 = 关掉修复环:保持旧语义(红灯留痕请人工),不记环账。
     if (max === 0 && !delivery.loop) {

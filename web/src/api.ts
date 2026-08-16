@@ -164,13 +164,35 @@ export async function listTasks(): Promise<TaskSummary[]> {
   return response.json();
 }
 
+/** 下单表单的数据源:可选模型清单(≤1 个时不必展示下拉)与当前默认。 */
+export interface LaunchOptions {
+  models: Array<{ provider: string; model: string }>;
+  default: { provider?: string; model?: string };
+  repair_rounds: number;
+}
+
+export async function getLaunchOptions(): Promise<LaunchOptions> {
+  const response = await fetch("/launch-options");
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
 export async function createTask(
   requirement: string,
   account?: string,
+  extras?: {
+    model?: { provider: string; model: string };
+    repairRounds?: number;
+  },
 ): Promise<void> {
   const response = await fetch("/tasks", {
     method: "POST",
-    body: JSON.stringify({ requirement, account: account || undefined }),
+    body: JSON.stringify({
+      requirement,
+      account: account || undefined,
+      model: extras?.model,
+      repair_rounds: extras?.repairRounds,
+    }),
   });
   if (!response.ok) throw new Error(await errorText(response));
 }

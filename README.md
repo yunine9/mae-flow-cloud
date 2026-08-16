@@ -120,6 +120,11 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
   delivery.test.ts 设置压部署值),serve 真入口 curl 冒烟已过(掩码/
   测试按钮如实报错/校验 400/文件 600);**前端页面只过了构建与类型
   检查,没在浏览器里点过**,进内网前应人工过一遍三张卡;
+- **下单表单任务级可配已落地(2026-08-16)**:模型选择(数据源
+  /launch-options,清单来自当前生效 models.json,>1 个才显示下拉)与
+  修复轮预算(0=本单关修复环),覆盖链=任务>设置>部署,下单即校验
+  (不存在的模型/负预算 400 打回);选择记在 task.json,重启续跑不
+  漂移(tests/launchForm.test.ts 4 项 + delivery.test.ts 任务级压部署值);
 - **个人 Git 令牌已落地(2026-08-16)**:每用户 PAT,「我的工作」页只写
   不读;任务启动时经 credential helper 注入(先清继承的 helper 列表——
   git 对全列表广播 store,macOS 钥匙串实测存走过令牌;明文只在 0600

@@ -98,12 +98,13 @@ async function runTask(
   dataDir = mkdtempSync(join(tmpdir(), "mfc-deliver-")),
   extraScenes: Scene[] = [],
   settings?: RuntimeSettings,
+  createExtras?: { repairRounds?: number },
 ) {
   const model = new ScriptedModelServer([...walkScript(push), ...extraScenes]);
   await model.start();
   const service = buildService(
     platform, dataDir, model.modelsJson(), poll, settings);
-  const created = service.create("交付 REQ9:演练交付链");
+  const created = service.create("交付 REQ9:演练交付链", createExtras);
   await until(() =>
     ["completed", "failed", "verifying", "await_merge"]
       .includes(service.get(created.id)!.status), "任务收口");
@@ -159,6 +160,25 @@ test("运行时设置压过部署值:界面把修复轮改 0,红灯不再触发�
     assert.equal(task.status, "verifying", JSON.stringify(task.delivery));
     assert.equal(task.delivery?.loop, undefined,
       "设置层的 0 没压过部署的 2,修复环被触发了");
+  } finally {
+    await platform.stop();
+  }
+});
+
+test("任务级修复轮压过部署值:下单填 0,这一单红灯不修", async () => {
+  // 覆盖链的最上层:任务 > 设置 > 部署。部署 2 轮,这单点了 0。
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  platform.nextPipelineStatus = "failed";
+  await platform.start();
+  try {
+    const { task } = await runTask(
+      platform, true, { repairRounds: 2 },
+      mkdtempSync(join(tmpdir(), "mfc-deliver-")), [], undefined,
+      { repairRounds: 0 });
+    assert.equal(task.status, "verifying", JSON.stringify(task.delivery));
+    assert.equal(task.delivery?.loop, undefined,
+      "任务级的 0 没压过部署的 2,修复环被触发了");
   } finally {
     await platform.stop();
   }
