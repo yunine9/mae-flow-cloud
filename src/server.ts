@@ -124,9 +124,31 @@ export function createTaskServer(
           return json(response, 200, result.user);
         }
         if (request.method === "GET" && parts[1] === "me") {
-          return viewer
-            ? json(response, 200, viewer)
-            : json(response, 401, { error: "尚未登录" });
+          if (!viewer) return json(response, 401, { error: "尚未登录" });
+          // 令牌只回掩码提示——"配过了、是哪个"够用,明文不出网。
+          return json(response, 200, {
+            ...viewer,
+            git_token_hint: options.auth?.gitTokenHint(viewer.username),
+          });
+        }
+        // 个人 Git 令牌:谁登录改谁的,写完只回掩码(只写不读)。
+        if (request.method === "PUT" && parts[1] === "me"
+            && parts[2] === "git-token") {
+          if (!viewer) return json(response, 401, { error: "尚未登录" });
+          const body = await readBody(request);
+          try {
+            options.auth!.setGitToken(
+              viewer.username,
+              String(body.token ?? ""),
+              body.git_username === undefined
+                ? undefined : String(body.git_username),
+            );
+          } catch (error) {
+            return json(response, 400, { error: String(error) });
+          }
+          return json(response, 200, {
+            git_token_hint: options.auth!.gitTokenHint(viewer.username),
+          });
         }
         if (request.method === "POST" && parts[1] === "logout") {
           options.auth?.endSession(sessionToken);

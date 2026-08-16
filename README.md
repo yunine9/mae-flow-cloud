@@ -120,6 +120,13 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
   delivery.test.ts 设置压部署值),serve 真入口 curl 冒烟已过(掩码/
   测试按钮如实报错/校验 400/文件 600);**前端页面只过了构建与类型
   检查,没在浏览器里点过**,进内网前应人工过一遍三张卡;
+- **个人 Git 令牌已落地(2026-08-16)**:每用户 PAT,「我的工作」页只写
+  不读;任务启动时经 credential helper 注入(先清继承的 helper 列表——
+  git 对全列表广播 store,macOS 钥匙串实测存走过令牌;明文只在 0600
+  文件,不进 .git/config/远端 URL);缺凭据 GIT_TERMINAL_PROMPT=0 快败
+  不挂死。消费证明用真件:带 Basic 鉴权的 dumb-HTTP git 服务器
+  (tests/gitToken.test.ts,3 项)。**push 侧未在真平台验证**(dumb 协议
+  只读),进内网首跑要看一眼推送用的确实是本人身份;
 - **免编译形态可选(2026-08-15,用户拍板"先不编译了,直接上流水线")**:
   serve 加 `--verify-via-pipeline` 后本机不做编译/UT,每次会话开场注入
   环境事实,流水线是唯一裁判,红灯走修复环;慢的代价由机器扛,不占人的

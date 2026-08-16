@@ -10,6 +10,7 @@
  */
 
 import {
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -150,6 +151,12 @@ export interface TaskServiceOptions {
   /** 运行时设置覆盖(管理页):并发/修复轮/轮询/通知/模型网关。
    * 部署配置是底,这层是热改;各消费点即时读,生效边界见 settings.ts。 */
   settings?: RuntimeSettings;
+  /** 按任务归属人取个人 Git 凭据(serve 接 LocalAuth.gitCredential)。
+   * 有凭据→经 credential helper 注入 clone/push;没有→维持部署级
+   * 访问方式(服务账号/开放内网)。生效边界=下一次任务启动/会话重建。 */
+  gitCredential?: (
+    account?: string,
+  ) => { username: string; password: string } | undefined;
   log?: (message: string) => void;
 }
 
@@ -772,6 +779,10 @@ export class TaskService {
       writeFileSync(
         join(agentDir, "models.json"),
         JSON.stringify(modelOverride.json ?? this.options.modelsJson));
+      // 个人 Git 凭据:每次启动(含会话重建)现读现写——换了令牌,
+      // 下一次启动就用新的;凭据文件在 agentDir,不进仓库克隆。
+      const gitHelper = this.prepareGitCredential(
+        agentDir, task.summary.luban_account);
       const transcriptPath = join(workspace, "transcript.jsonl");
       // 恢复=工作区(仓库克隆)还在;克隆丢了就只能从头来。
       // savedCwd 必须先落袋:下面 task.cwd 会被暂写成 workspace,
@@ -785,7 +796,7 @@ export class TaskService {
       let hostHooks;
       task.cwd = cwd;
       if (this.options.host) {
-        cwd = resuming ? savedCwd! : this.cloneRepo(workspace);
+        cwd = resuming ? savedCwd! : this.cloneRepo(workspace, gitHelper);
         task.cwd = cwd;
         const kernel = new KernelHost({
           kernelRoot: this.options.host.kernelRoot,
@@ -1198,9 +1209,41 @@ export class TaskService {
       });
   }
 
+  /** 个人 Git 凭据落地为 credential helper 三件套:
+   * - agentDir/git-credential(0600):明文凭据,git 凭据格式;
+   * - agentDir/git-credential.sh(0700):只答 get,现读同目录凭据文件;
+   * - .git/config 里只记脚本路径,**明文永不进 .git/config 或远端 URL**
+   *   (令牌拼 URL 会原样留在 config 里,等着被 cat 出来)。
+   * 容器隔离下工作区按原路径挂载(containerRuntime -v ws:ws),
+   * 绝对路径在容器内照样成立。没有凭据返回 undefined,一切如旧。 */
+  private prepareGitCredential(
+    agentDir: string,
+    account?: string,
+  ): string | undefined {
+    const credential = this.options.gitCredential?.(account);
+    if (!credential) return undefined;
+    const file = join(agentDir, "git-credential");
+    writeFileSync(file,
+      `username=${credential.username}\npassword=${credential.password}\n`);
+    chmodSync(file, 0o600);
+    const script = join(agentDir, "git-credential.sh");
+    writeFileSync(script, [
+      "#!/bin/sh",
+      "# git credential helper:只答 get;凭据与本脚本同目录,0600。",
+      "# store/erase 一律无视并成功返回,免得 git 刷警告。",
+      'if [ "$1" = "get" ]; then',
+      '  cat "$(dirname "$0")/git-credential"',
+      "fi",
+      "exit 0",
+      "",
+    ].join("\n"));
+    chmodSync(script, 0o700);
+    return script;
+  }
+
   /** 仓库进工作区:git 仓走 clone(历史/分支语义齐全),
    * 非 git 目录降级复制并剔除旧现场(.mae-flow-work 不跨任务串场)。 */
-  private cloneRepo(workspace: string): string {
+  private cloneRepo(workspace: string, gitHelper?: string): string {
     const source = this.options.host!.repoPath;
     // 裸仓 origin.git → 工作区目录名去掉 .git 后缀,免得像个裸仓。
     const target = join(
@@ -1210,11 +1253,41 @@ export class TaskService {
     const isGit = existsSync(join(source, ".git"))
       || (existsSync(join(source, "HEAD"))
           && existsSync(join(source, "objects")));
-    if (isGit) {
+    // 凭据只对 http(s) 远端有意义;本地路径克隆(演示/试跑)不掺和。
+    const useCredential = !!gitHelper && /^https?:\/\//i.test(source);
+    if (isGit || /^(https?|ssh|git):\/\//i.test(source)) {
+      // 空 helper 在前=清空继承的 helper 列表(系统钥匙串之流):
+      // 个人令牌只从我们的脚本来,也不许被别的 helper 顺手存走
+      // (git 会对列表里所有 helper 广播 store——实测令牌进过
+      // macOS 钥匙串,测试负例因此假绿)。没有个人凭据时不动列表,
+      // 部署机自己的服务账号 helper 照常工作。
       const cloned = spawnSync(
-        "git", ["clone", "--quiet", source, target], { encoding: "utf-8" });
+        "git",
+        [
+          ...(useCredential
+            ? ["-c", "credential.helper=",
+               "-c", `credential.helper=${gitHelper}`]
+            : []),
+          "clone", "--quiet", source, target,
+        ],
+        {
+          encoding: "utf-8",
+          // 子进程没有终端,git 想问密码只会把任务挂死——明令禁问,
+          // 缺凭据就地失败,错误如实上浮(不卡死红线)。
+          env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+        });
       if (cloned.status !== 0) {
         throw new Error(`仓库克隆失败: ${cloned.stderr}`);
+      }
+      if (useCredential) {
+        // 会话里的 push/fetch 也走同一个 helper:写进克隆自己的
+        // config(记的是脚本路径,不是明文);同样先清列表再登记。
+        spawnSync("git",
+          ["config", "credential.helper", ""],
+          { cwd: target, encoding: "utf-8" });
+        spawnSync("git",
+          ["config", "--add", "credential.helper", gitHelper!],
+          { cwd: target, encoding: "utf-8" });
       }
     } else {
       cpSync(source, target, {

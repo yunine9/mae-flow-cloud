@@ -28,6 +28,9 @@ export type UserRole = "admin" | "developer";
 export interface AuthUser {
   username: string;
   role: UserRole;
+  /** 个人 Git 令牌的掩码提示(••••末4位);没配则缺席。只写不读:
+   * 明文永远不会出现在任何 API 响应里。 */
+  git_token_hint?: string;
 }
 
 async function errorText(response: Response): Promise<string> {
@@ -56,6 +59,19 @@ export async function login(
 
 export async function logout(): Promise<void> {
   await fetch("/auth/logout", { method: "POST" });
+}
+
+/** 设置/更换/删除(传空串)自己的 Git 令牌。回的只有掩码。 */
+export async function putGitToken(
+  token: string,
+  gitUsername?: string,
+): Promise<{ git_token_hint?: string }> {
+  const response = await fetch("/auth/me/git-token", {
+    method: "PUT",
+    body: JSON.stringify({ token, git_username: gitUsername }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
 }
 
 export async function listUsers(): Promise<AuthUser[]> {

@@ -31,6 +31,11 @@ interface StoredUser extends AuthUser {
   password_hash: string;
   created_at: string;
   disabled: boolean;
+  /** 个人 Git 平台令牌(PAT)。密码是哈希,这个必须明文存——git 要用
+   * 原文;所以只许住在 0600 的本文件里,永不进公开视图/日志/URL。 */
+  git_token?: string;
+  /** 平台侧的 git 用户名,PAT 的搭档;不填默认用登录账号名。 */
+  git_username?: string;
 }
 
 interface UserFile {
@@ -135,6 +140,52 @@ export class LocalAuth {
     }
     this.failures.delete(key);
     return { user: publicUser(stored) };
+  }
+
+  /** 设置/更换/删除个人 Git 令牌。只写不读:调用方拿不回明文,
+   * 想看只有掩码(gitTokenHint)。空串=删除。 */
+  setGitToken(
+    username: string,
+    token: string,
+    gitUsername?: string,
+  ): void {
+    const stored = this.users.get(username);
+    if (!stored) throw new Error(`账号 ${username} 不存在`);
+    const trimmed = token.trim();
+    if (!trimmed) {
+      delete stored.git_token;
+      delete stored.git_username;
+    } else {
+      if (Buffer.byteLength(trimmed, "utf-8") > 512) {
+        throw new Error("令牌过长");
+      }
+      stored.git_token = trimmed;
+      const name = (gitUsername ?? "").trim();
+      if (name) stored.git_username = name;
+      else delete stored.git_username;
+    }
+    this.persist();
+  }
+
+  /** 掩码提示(••••末4位),给界面确认"配过了、是哪个"用。 */
+  gitTokenHint(username: string): string | undefined {
+    const token = this.users.get(username)?.git_token;
+    if (!token) return undefined;
+    return token.length <= 4 ? "••••" : `••••${token.slice(-4)}`;
+  }
+
+  /** 消费口(唯一允许碰明文的出口):任务启动时注入 credential
+   * helper 用。git 用户名没配就用登录账号名。 */
+  gitCredential(
+    username: string | undefined,
+  ): { username: string; password: string } | undefined {
+    if (!username) return undefined;
+    const stored = this.users.get(username);
+    if (!stored?.git_token || stored.disabled) return undefined;
+    return {
+      username: stored.git_username ?? stored.username,
+      password: stored.git_token,
+    };
   }
 
   createSession(user: AuthUser): string {

@@ -1741,6 +1741,41 @@ pre {
 .secret-remove:hover { background: rgba(240, 169, 180, .12); }
 .settings-loading { color: var(--muted); font-size: 12px; }
 
+/* 个人 Git 令牌细条("我的工作"页):只写不读,永远只见末 4 位。 */
+.git-token-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 18px; flex-wrap: wrap; padding: 14px 18px;
+  border: 1px solid var(--line); border-radius: var(--radius-lg);
+  background: var(--surface); box-shadow: var(--shadow-xs);
+}
+.git-token-copy { display: grid; gap: 3px; }
+.git-token-copy strong { color: var(--text-strong); font-size: 13px; }
+.git-token-copy small { color: var(--muted); font-size: 11px; }
+.git-token-copy code { color: var(--accent); letter-spacing: .08em; }
+.git-token-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.git-token-form { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.git-token-form input {
+  padding: 8px 10px; min-width: 200px; color: var(--text);
+  background: var(--surface-soft); border: 1px solid var(--line);
+  border-radius: 8px; font-size: 11.5px;
+}
+.git-token-form input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); outline: none; }
+.git-token-form button[type="submit"] {
+  padding: 8px 14px; color: #fff; background: var(--accent); border: none;
+  border-radius: 8px; cursor: pointer; font-size: 11.5px; font-weight: 650;
+}
+.git-token-form button[type="submit"]:disabled { opacity: .5; cursor: not-allowed; }
+.git-token-actions .ghost {
+  padding: 8px 12px; color: var(--text-strong); background: transparent;
+  border: 1px solid var(--line); border-radius: 8px; cursor: pointer;
+  font-size: 11.5px; font-weight: 600;
+}
+.git-token-actions .ghost:hover { border-color: var(--accent); }
+.git-token-actions .ghost.danger { color: var(--danger); }
+.git-token-note { font-size: 11px; }
+.git-token-note.success { color: var(--success); }
+.git-token-note.error { color: var(--danger); }
+
 @media (max-width: 1080px) {
   .app-shell { grid-template-columns: 210px minmax(0, 1fr); }
   .workspace-header, .workspace-main { padding-left: 28px; padding-right: 28px; }
