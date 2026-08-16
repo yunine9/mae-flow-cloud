@@ -120,6 +120,15 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
   delivery.test.ts 设置压部署值),serve 真入口 curl 冒烟已过(掩码/
   测试按钮如实报错/校验 400/文件 600);**前端页面只过了构建与类型
   检查,没在浏览器里点过**,进内网前应人工过一遍三张卡;
+- **不隔离部署的边界(2026-08-16,WSL 单人实战为显式选择)**:不配
+  `--isolate-image` 时任务 bash 直接跑在宿主——这是诚实形态不是降级
+  (红线管的是"配了容器起不来必须 failed")。三个真实差异:agent 与
+  服务同用户,auth.json(全体用户的 Git 令牌明文)/settings.json/
+  adapter.json 理论上对它可读;工作区是约定不是物理墙,越界写没有
+  强制拦截;无资源上限。免编译形态收窄了风险面(本机不跑构建,agent
+  正当活动只有工作区读写+git),单人自用+单任务+人盯着可接受;
+  **多人共用的正式部署前容器隔离必须升回必选**——那时 auth.json 里
+  躺着全组人的令牌,"agent 可读密钥文件"不再是尾部风险;
 - **CodeHub 适配层骨架已就位(2026-08-16,src/platformAdapter.ts)**:
   `npm run adapter -- --config adapter.json`,进内网只填 codehubcli
   命令模板(argv 占位符+json/regex/const 抽取+状态映射表),代码零改动。

@@ -24,7 +24,10 @@
 3. **web/dist 不进仓**:`cd web && npm install && npm run build` 一次
    (npm 指内网 registry),否则只有零构建演示页;
 4. 依赖就 Node≥20 + python3 + git;**不装 JDK/docker**,用
-   `--verify-via-pipeline` 形态,流水线是唯一裁判;
+   `--verify-via-pipeline` 形态,流水线是唯一裁判。**不隔离=显式
+   选择**,边界要认:agent 与服务同用户跑,auth.json(全体用户令牌
+   明文)理论上对它可读、越界写无强制墙——单人自用+单任务+人盯着
+   可接受;**转多人共用前容器隔离升回必选**(WSL2 装 docker 无障碍);
 5. 服务和适配层都起在 tmux 里,别指望关掉的终端窗口还活着;
 6. 启动顺序:填 adapter.json(codehubcli 命令模板)→
    `npm run adapter` → `curl http://127.0.0.1:8790/`(healthz)→
