@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { FakeGitPlatform } from "../src/gitPlatform.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskService } from "../src/taskService.ts";
+import { RuntimeSettings } from "../src/settings.ts";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf-8" }).trim();
@@ -57,12 +58,14 @@ function buildService(
   modelsJson: Record<string, unknown>,
   poll?: { pollIntervalMs?: number; pollTimeoutMs?: number;
            repairRounds?: number },
+  settings?: RuntimeSettings,
 ) {
   return new TaskService({
     dataDir,
     provider: "maeflow",
     model: "scripted-v1",
     modelsJson,
+    settings,
     // host 指向裸仓:克隆即从"服务端"取码。kernelRoot 不参与本测
     // (bootstrap 会跑,INACTIVE 全放行;状态文件由剧本伪造)。
     host: {
@@ -94,10 +97,12 @@ async function runTask(
            repairRounds?: number },
   dataDir = mkdtempSync(join(tmpdir(), "mfc-deliver-")),
   extraScenes: Scene[] = [],
+  settings?: RuntimeSettings,
 ) {
   const model = new ScriptedModelServer([...walkScript(push), ...extraScenes]);
   await model.start();
-  const service = buildService(platform, dataDir, model.modelsJson(), poll);
+  const service = buildService(
+    platform, dataDir, model.modelsJson(), poll, settings);
   const created = service.create("交付 REQ9:演练交付链");
   await until(() =>
     ["completed", "failed", "verifying", "await_merge"]
@@ -133,6 +138,27 @@ test("流水线红(修复环关闭) → 验证中留痕,不标完成", async () 
     assert.equal(task.status, "verifying");
     assert.equal(task.delivery?.mr_state, "验证中");
     assert.equal(task.delivery?.pipeline, "failed");
+  } finally {
+    await platform.stop();
+  }
+});
+
+test("运行时设置压过部署值:界面把修复轮改 0,红灯不再触发修复", async () => {
+  // 管理页热改的消费证明:部署给 repairRounds=2,设置层写 0,
+  // 生效在下一次红灯——结果应与"修复环关闭"的路径一字不差。
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  platform.nextPipelineStatus = "failed";
+  await platform.start();
+  try {
+    const dataDir = mkdtempSync(join(tmpdir(), "mfc-deliver-"));
+    const settings = new RuntimeSettings(dataDir);
+    settings.updateRuntime({ repair_rounds: 0 });
+    const { task } = await runTask(
+      platform, true, { repairRounds: 2 }, dataDir, [], settings);
+    assert.equal(task.status, "verifying", JSON.stringify(task.delivery));
+    assert.equal(task.delivery?.loop, undefined,
+      "设置层的 0 没压过部署的 2,修复环被触发了");
   } finally {
     await platform.stop();
   }

@@ -19,6 +19,7 @@ import { FakeGitPlatform } from "./gitPlatform.ts";
 import { PgProjection } from "./projection.ts";
 import type { GateDecision } from "./gateService.ts";
 import { LocalAuth } from "./auth.ts";
+import { RuntimeSettings } from "./settings.ts";
 
 const REPO_ROOT = resolve(fileURLToPath(import.meta.url), "..", "..");
 
@@ -261,8 +262,13 @@ async function main(): Promise<void> {
     console.log("[serve] 本地验证关闭:编译/UT 交由流水线,红灯走修复环");
   }
 
+  // 管理页运行时设置:settings.json 住数据目录,热改并发/修复轮/轮询/
+  // 通知/模型网关;部署配置是底,这层是覆盖。
+  const settings = new RuntimeSettings(
+    dataDir, (message) => console.log(`  [settings] ${message}`));
+
   const service = new TaskService({
-    dataDir, provider, model, modelsJson, maxConcurrent,
+    dataDir, provider, model, modelsJson, maxConcurrent, settings,
     compactEveryEvents: compactEvery,
     contract: demoContract,
     host,
@@ -277,7 +283,12 @@ async function main(): Promise<void> {
           user: flag("--isolate-user"),
         }
       : undefined,
-    notifier: new Notifier({ endpoint: lubanEndpoint, headers: lubanHeaders }),
+    notifier: new Notifier({
+      endpoint: lubanEndpoint,
+      headers: lubanHeaders,
+      // 管理页热改的通知端点/鉴权头:每条消息投递时现读。
+      live: () => settings.luban(),
+    }),
     projection,
     linkBase: `http://127.0.0.1:${port}`,
     log: (message) => console.log(`  [task] ${message}`),

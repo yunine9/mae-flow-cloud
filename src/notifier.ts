@@ -35,6 +35,9 @@ export interface NotifierOptions {
   /** 真件鉴权头(如 Authorization)。假件不需要;值是密钥,来自
    * 权限 600 的配置文件,不落日志。 */
   headers?: Record<string, string>;
+  /** 运行时覆盖(管理页热改):每次投递现读,返回 endpoint/headers 的
+   * 覆盖值,没有就回落静态配置。生效边界=下一条消息。 */
+  live?: () => { endpoint?: string; headers?: Record<string, string> };
   /** 有限退避重试的间隔(毫秒);长度即最大重试次数。 */
   backoffMs?: number[];
   log?: (message: string) => void;
@@ -109,17 +112,49 @@ export class Notifier {
     return record;
   }
 
+  /** 当前生效的投递目标:运行时覆盖压过静态配置。 */
+  private target(): { endpoint: string; headers: Record<string, string> } {
+    const live = this.options.live?.() ?? {};
+    return {
+      endpoint: live.endpoint ?? this.options.endpoint,
+      headers: { ...this.options.headers, ...live.headers },
+    };
+  }
+
+  /** 测试投递(管理页按钮):单次、不重试、结果如实带回。
+   * 它绕开台账(records)——测试消息不是业务事实,不该混进投递记录。 */
+  async testDelivery(account: string): Promise<{ ok: boolean; error?: string }> {
+    const { endpoint, headers } = this.target();
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...headers },
+        body: JSON.stringify({
+          account,
+          text: "Mae-Flow 通知连通测试:看到这条即配置生效",
+          link: "",
+        }),
+      });
+      return response.ok
+        ? { ok: true }
+        : { ok: false, error: `HTTP ${response.status}` };
+    } catch (error) {
+      return { ok: false, error: String(error) };
+    }
+  }
+
   private async deliver(record: NotifyRecord): Promise<void> {
     const backoff = this.options.backoffMs ?? [0, 2_000, 10_000];
     for (const delay of backoff) {
       if (delay) await new Promise((tick) => setTimeout(tick, delay));
       record.attempts += 1;
       try {
-        const response = await fetch(this.options.endpoint, {
+        const { endpoint, headers } = this.target();
+        const response = await fetch(endpoint, {
           method: "POST",
           headers: {
             "content-type": "application/json",
-            ...this.options.headers,
+            ...headers,
           },
           body: JSON.stringify({
             account: record.account,

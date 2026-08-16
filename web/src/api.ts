@@ -422,6 +422,74 @@ export async function listArtifacts(
   return { items: await response.json() };
 }
 
+/** 管理页运行时设置(服务端 src/settings.ts 的镜像)。
+ * 密钥只写不读:视图里只有掩码(••••末4位),明文永远不出网。 */
+export interface SettingsView {
+  runtime: {
+    max_concurrent?: number;
+    repair_rounds?: number;
+    poll_interval_s?: number;
+    poll_timeout_s?: number;
+  };
+  luban: {
+    endpoint?: string;
+    headers: Array<{ name: string; hint: string }>;
+  };
+  models: {
+    configured: boolean;
+    provider?: string;
+    model?: string;
+    providers: Array<{ name: string; models: string[]; key_hint?: string }>;
+  };
+}
+
+export async function getSettings(): Promise<SettingsView> {
+  const response = await fetch("/settings");
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+async function putSettings(
+  section: "runtime" | "luban" | "models",
+  body: unknown,
+): Promise<SettingsView> {
+  const response = await fetch(`/settings/${section}`, {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export function putRuntimeSettings(
+  body: Record<string, unknown>,
+): Promise<SettingsView> {
+  return putSettings("runtime", body);
+}
+
+/** headers 语义:给值=替换,给空串=删除,不给的键服务端保留——
+ * 界面只有掩码,回填明文不可能,合并责任在服务端。 */
+export function putLubanSettings(body: {
+  endpoint?: string;
+  headers?: Record<string, string>;
+}): Promise<SettingsView> {
+  return putSettings("luban", body);
+}
+
+export function putModelsSettings(body: {
+  json?: unknown;
+  provider?: string;
+  model?: string;
+}): Promise<SettingsView> {
+  return putSettings("models", body);
+}
+
+export async function testLuban(): Promise<{ ok: boolean; error?: string }> {
+  const response = await fetch("/settings/luban/test", { method: "POST" });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
 export async function readArtifact(
   taskId: string,
   name: string,

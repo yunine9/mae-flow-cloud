@@ -11,9 +11,10 @@ import { TaskCard } from "./TaskCard";
 import { HistoryBoard } from "./HistoryBoard";
 import { LaunchWorkspace } from "./LaunchWorkspace";
 import { TaskWorkspace } from "./TaskWorkspace";
+import { SettingsBoard } from "./SettingsView";
 import { byUrgency } from "./taskTime";
 
-type View = "team" | "mine" | "history" | "users";
+type View = "team" | "mine" | "history" | "users" | "settings";
 
 function initialView(user: AuthUser): View {
   return new URLSearchParams(location.search).has("task")
@@ -24,6 +25,7 @@ function NavIcon({ name }: { name: View }) {
   if (name === "team") return <svg viewBox="0 0 24 24" aria-hidden><path d="M4.75 19.25V11.5h4v7.75h-4Zm5.75 0V4.75h4v14.5h-4Zm5.75 0V8h4v11.25h-4Z" /></svg>;
   if (name === "mine") return <svg viewBox="0 0 24 24" aria-hidden><circle cx="12" cy="8" r="3.25" /><path d="M5.5 19.25c.65-3.45 2.82-5.25 6.5-5.25s5.85 1.8 6.5 5.25" /></svg>;
   if (name === "users") return <svg viewBox="0 0 24 24" aria-hidden><circle cx="9" cy="8" r="3" /><path d="M3.75 18.5c.55-3.15 2.3-4.75 5.25-4.75s4.7 1.6 5.25 4.75M16.5 7.5h4M18.5 5.5v4" /></svg>;
+  if (name === "settings") return <svg viewBox="0 0 24 24" aria-hidden><circle cx="12" cy="12" r="3" /><path d="M12 4.5v2M12 17.5v2M4.5 12h2M17.5 12h2M6.7 6.7l1.4 1.4M15.9 15.9l1.4 1.4M6.7 17.3l1.4-1.4M15.9 8.1l1.4-1.4" /></svg>;
   return <svg viewBox="0 0 24 24" aria-hidden><path d="M5 4.75h14A1.25 1.25 0 0 1 20.25 6v12A1.25 1.25 0 0 1 19 19.25H5A1.25 1.25 0 0 1 3.75 18V6A1.25 1.25 0 0 1 5 4.75Z" /><path d="M8 9h8M8 13h5" /></svg>;
 }
 
@@ -42,6 +44,7 @@ export function App() {
   const [view, setView] = useState<View>("team");
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [artifactTaskId, setArtifactTaskId] = useState("");
+  const [artifactTaskSnapshot, setArtifactTaskSnapshot] = useState<TaskSummary>();
   const [launchOpen, setLaunchOpen] = useState(false);
   const [targetTaskId] = useState(() => new URLSearchParams(location.search).get("task")?.trim() ?? "");
 
@@ -74,6 +77,15 @@ export function App() {
     return () => clearTimeout(timer);
   }, [view, targetTaskId, tasks.length]);
 
+  // 打开的工作台必须跨轮询稳定存在。任务在状态切换时可能有一拍没出现在
+  // 列表响应里；若直接用 tasks.find 渲染,组件会被卸载再挂载,表现为
+  // “一点专注审阅就闪退”,同时丢掉当前文件和展开状态。
+  useEffect(() => {
+    if (!artifactTaskId) return;
+    const latest = tasks.find((task) => task.id === artifactTaskId);
+    if (latest) setArtifactTaskSnapshot(latest);
+  }, [tasks, artifactTaskId]);
+
   const assignedToMe = session
     ? tasks.filter((task) => task.luban_account === session.username)
     : [];
@@ -94,7 +106,19 @@ export function App() {
   const myTasks = [...assignedToMe, ...adminFallbackWaiting];
   const myWaiting = myTasks.filter((task) => task.status === "waiting_for_human");
   const myOtherTasks = myTasks.filter((task) => task.status !== "waiting_for_human");
-  const artifactTask = tasks.find((task) => task.id === artifactTaskId);
+  const artifactTask = artifactTaskId
+    ? tasks.find((task) => task.id === artifactTaskId)
+      ?? (artifactTaskSnapshot?.id === artifactTaskId
+        ? artifactTaskSnapshot : undefined)
+    : undefined;
+  const openArtifacts = (task: TaskSummary) => {
+    setArtifactTaskSnapshot(task);
+    setArtifactTaskId(task.id);
+  };
+  const closeArtifacts = () => {
+    setArtifactTaskId("");
+    setArtifactTaskSnapshot(undefined);
+  };
   // 谁能提交决定:管理员或任务归属人。工作台与列表共用这一个口径。
   const canOperate = (task: TaskSummary) =>
     session.role === "admin" || task.luban_account === session.username;
@@ -105,6 +129,7 @@ export function App() {
     mine: { title: "我的工作", description: "集中处理分配给我的需求、待确认事项和后续交付动作。" },
     history: { title: "交付历史", description: "从投影读侧回看跨生命周期的任务与交付记录。" },
     users: { title: "账号管理", description: "创建本地账号并分配管理员或开发权限。" },
+    settings: { title: "服务设置", description: "运行参数、通知投递与模型网关；改了即刻安全生效，密钥只写不读。" },
   }[view];
   const relevantWaiting = view === "mine" ? myWaiting.length : waitingCount;
   return <div className="app-shell">
@@ -118,6 +143,7 @@ export function App() {
           <NavButton view="history" current={view} onSelect={setView} label="交付历史" />
           <span className="nav-section-label admin-tools">系统管理</span>
           <NavButton view="users" current={view} onSelect={setView} label="账号管理" />
+          <NavButton view="settings" current={view} onSelect={setView} label="服务设置" />
         </> : <>
           <span className="nav-section-label">个人工作台</span>
           <NavButton view="mine" current={view} onSelect={setView} label="我的工作" badge={myWaiting.length} personal />
@@ -130,26 +156,27 @@ export function App() {
     </aside>
 
     <div className="workspace">
-      <header className="workspace-header"><div><div className="eyebrow">MAE-FLOW CLOUD</div><h1>{header.title}</h1><p>{header.description}</p></div><div className="workspace-header-actions">{relevantWaiting > 0 && view !== "history" && view !== "users" && <div className="header-attention"><span className="attention-pulse" aria-hidden /><span><strong>{relevantWaiting}</strong>{view === "mine" ? " 项需要我核对" : " 项工作等待决策"}</span></div>}{view === "mine" && <button type="button" className="header-launch" onClick={() => setLaunchOpen(true)}><svg viewBox="0 0 20 20" aria-hidden><path d="M10 4v12M4 10h12" /></svg><span>发起新任务</span></button>}</div></header>
+      <header className="workspace-header"><div><div className="eyebrow">MAE-FLOW CLOUD</div><h1>{header.title}</h1><p>{header.description}</p></div><div className="workspace-header-actions">{relevantWaiting > 0 && view !== "history" && view !== "users" && view !== "settings" && <div className="header-attention"><span className="attention-pulse" aria-hidden /><span><strong>{relevantWaiting}</strong>{view === "mine" ? " 项需要我核对" : " 项工作等待决策"}</span></div>}{view === "mine" && <button type="button" className="header-launch" onClick={() => setLaunchOpen(true)}><svg viewBox="0 0 20 20" aria-hidden><path d="M10 4v12M4 10h12" /></svg><span>发起新任务</span></button>}</div></header>
       <main className="workspace-main">
         {view === "team" && <>
           <section className="team-pulse" aria-labelledby="pulse-title"><div className="section-head pulse-head"><div><span className="section-kicker">TEAM PULSE</span><h2 id="pulse-title">团队任务态势</h2></div><span className="live-label"><i aria-hidden /> 实时更新</span></div><div className="pulse-grid">{PULSE_GROUPS.map((group) => { const count = group.statuses ? tasks.filter((task) => group.statuses!.includes(task.status)).length : tasks.length; return <div className={`pulse-card ${group.tone}`} key={group.label}><span className="pulse-card-label"><i aria-hidden />{group.label}</span><strong>{count}</strong></div>; })}</div></section>
           <PhaseFunnel tasks={tasks} />
-          <section className="task-section" aria-labelledby="team-queue-title"><div className="section-head"><div><span className="section-kicker">TEAM QUEUE</span><h2 id="team-queue-title">团队任务明细</h2></div><span className="section-count">{tasks.length} 项</span></div>{tasks.length === 0 && <TaskEmpty personal={false} />}<div className="task-list">{tasks.map((task) => <TaskCard key={task.id} task={task} onChanged={refresh} canOperate={false} decisionMode="signal" onOpenArtifacts={() => setArtifactTaskId(task.id)} />)}</div></section>
+          <section className="task-section" aria-labelledby="team-queue-title"><div className="section-head"><div><span className="section-kicker">TEAM QUEUE</span><h2 id="team-queue-title">团队任务明细</h2></div><span className="section-count">{tasks.length} 项</span></div>{tasks.length === 0 && <TaskEmpty personal={false} />}<div className="task-list">{tasks.map((task) => <TaskCard key={task.id} task={task} onChanged={refresh} canOperate={false} decisionMode="signal" onOpenArtifacts={() => openArtifacts(task)} />)}</div></section>
         </>}
 
         {view === "mine" && <>
           <section className="identity-bar session-bar"><div className="identity-copy"><span className="section-kicker">PERSONAL INBOX</span><strong>{session.username} 的专属工作台</strong><small>{session.role === "admin" ? "显示分配给你的工作，并兜底承接尚未分配负责人的待确认事项。" : "登录身份已和任务归属绑定；这里始终只显示分配给你的工作。"}</small></div><span className={`role-chip ${session.role}`}>{session.role === "admin" ? "管理员身份" : "开发身份"}</span></section>
           <section className="personal-pulse" aria-label="我的任务摘要"><div className="personal-stat attention"><span>待我核对</span><strong>{myWaiting.length}</strong></div><div className="personal-stat active"><span>执行中</span><strong>{myTasks.filter((task) => ACTIVE_STATUSES.includes(task.status)).length}</strong></div><div className="personal-stat success"><span>待合入 / 完成</span><strong>{myTasks.filter((task) => DELIVERED_STATUSES.includes(task.status)).length}</strong></div></section>
-          <section className="review-inbox" aria-labelledby="review-title"><div className="section-head"><div><span className="section-kicker">REVIEW INBOX</span><h2 id="review-title">待我核对</h2></div><span className="section-count attention">{myWaiting.length} 项</span></div>{myWaiting.length === 0 ? <div className="review-clear"><span aria-hidden>✓</span><div><strong>当前没有需要你核对的事项</strong><p>新的人工节点会通过小鲁班提醒，并自动出现在这里。</p></div></div> : <div className="task-list review-list">{myWaiting.map((task) => <TaskCard key={task.id} task={task} onChanged={refresh} focused={task.id === targetTaskId} canOperate onOpenArtifacts={() => setArtifactTaskId(task.id)} />)}</div>}</section>
-          <section className="task-section" aria-labelledby="my-queue-title"><div className="section-head"><div><span className="section-kicker">MY TASKS</span><h2 id="my-queue-title">我的其他任务</h2></div><span className="section-count">{myOtherTasks.length} 项</span></div>{myOtherTasks.length === 0 && <TaskEmpty personal />}<div className="task-list">{myOtherTasks.map((task) => <TaskCard key={task.id} task={task} onChanged={refresh} focused={task.id === targetTaskId} canOperate onOpenArtifacts={() => setArtifactTaskId(task.id)} />)}</div></section>
+          <section className="review-inbox" aria-labelledby="review-title"><div className="section-head"><div><span className="section-kicker">REVIEW INBOX</span><h2 id="review-title">待我核对</h2></div><span className="section-count attention">{myWaiting.length} 项</span></div>{myWaiting.length === 0 ? <div className="review-clear"><span aria-hidden>✓</span><div><strong>当前没有需要你核对的事项</strong><p>新的人工节点会通过小鲁班提醒，并自动出现在这里。</p></div></div> : <div className="task-list review-list">{myWaiting.map((task) => <TaskCard key={task.id} task={task} onChanged={refresh} focused={task.id === targetTaskId} canOperate onOpenArtifacts={() => openArtifacts(task)} />)}</div>}</section>
+          <section className="task-section" aria-labelledby="my-queue-title"><div className="section-head"><div><span className="section-kicker">MY TASKS</span><h2 id="my-queue-title">我的其他任务</h2></div><span className="section-count">{myOtherTasks.length} 项</span></div>{myOtherTasks.length === 0 && <TaskEmpty personal />}<div className="task-list">{myOtherTasks.map((task) => <TaskCard key={task.id} task={task} onChanged={refresh} focused={task.id === targetTaskId} canOperate onOpenArtifacts={() => openArtifacts(task)} />)}</div></section>
         </>}
         {view === "history" && <HistoryBoard />}
         {view === "users" && session.role === "admin" && <UsersBoard />}
+        {view === "settings" && session.role === "admin" && <SettingsBoard />}
       </main>
     </div>
     {launchOpen && <LaunchWorkspace session={session} onCreated={refresh} onClose={() => setLaunchOpen(false)} />}
-    {artifactTask && <TaskWorkspace task={artifactTask} canOperate={canOperate(artifactTask)} onChanged={refresh} onClose={() => setArtifactTaskId("")} />}
+    {artifactTask && <TaskWorkspace task={artifactTask} canOperate={canOperate(artifactTask)} onChanged={refresh} onClose={closeArtifacts} />}
   </div>;
 }
 

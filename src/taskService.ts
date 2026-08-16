@@ -40,6 +40,7 @@ import { HumanGate, renderDecision, type WaitingRecord } from "./humanGate.ts";
 import { CloudSession, type Outcome } from "./sessionDriver.ts";
 import { TaskContainer } from "./containerRuntime.ts";
 import type { ExternalAction, PgProjection } from "./projection.ts";
+import type { RuntimeSettings } from "./settings.ts";
 
 export type TaskStatus =
   | "queued"
@@ -146,6 +147,9 @@ export interface TaskServiceOptions {
    * 这个旗子做的唯一一件事:把环境事实写进每次会话的开场,别让模型猜。
    * 慢的代价由修复环扛(红灯自动派修复会话),不占人的时间。 */
   verifyViaPipeline?: boolean;
+  /** 运行时设置覆盖(管理页):并发/修复轮/轮询/通知/模型网关。
+   * 部署配置是底,这层是热改;各消费点即时读,生效边界见 settings.ts。 */
+  settings?: RuntimeSettings;
   log?: (message: string) => void;
 }
 
@@ -742,7 +746,8 @@ export class TaskService {
   }
 
   private async pump(): Promise<void> {
-    const max = this.options.maxConcurrent ?? 2;
+    const max = this.options.settings?.runtime().max_concurrent
+      ?? this.options.maxConcurrent ?? 2;
     while (this.runningCount < max && this.queue.length) {
       const id = this.queue.shift()!;
       const task = this.tasks.get(id)!;
@@ -761,9 +766,12 @@ export class TaskService {
     try {
       const agentDir = join(workspace, "pi-agent");
       mkdirSync(agentDir, { recursive: true });
+      // 模型网关热改边界:在这里生效——每个新会话起时现读设置,
+      // 在跑的会话不换血(管理页如实写明了这一条)。
+      const modelOverride = this.options.settings?.models() ?? {};
       writeFileSync(
         join(agentDir, "models.json"),
-        JSON.stringify(this.options.modelsJson));
+        JSON.stringify(modelOverride.json ?? this.options.modelsJson));
       const transcriptPath = join(workspace, "transcript.jsonl");
       // 恢复=工作区(仓库克隆)还在;克隆丢了就只能从头来。
       // savedCwd 必须先落袋:下面 task.cwd 会被暂写成 workspace,
@@ -885,8 +893,8 @@ export class TaskService {
         taskId: task.summary.id,
         workspace: cwd,
         agentDir,
-        provider: this.options.provider,
-        model: this.options.model,
+        provider: modelOverride.provider ?? this.options.provider,
+        model: modelOverride.model ?? this.options.model,
         eventLog: new EventLog(
           join(workspace, "events.jsonl"),
           (event) => void this.options.projection?.appendEvent(event)),
@@ -1029,8 +1037,13 @@ export class TaskService {
     const delivery = this.options.delivery;
     const sha = task.summary.delivery?.sha;
     if (!delivery || !sha) return;
-    const interval = delivery.pollIntervalMs ?? 10_000;
-    const deadline = Date.now() + (delivery.pollTimeoutMs ?? 30 * 60_000);
+    const knobs = this.options.settings?.runtime() ?? {};
+    const interval = (knobs.poll_interval_s !== undefined
+      ? knobs.poll_interval_s * 1000 : undefined)
+      ?? delivery.pollIntervalMs ?? 10_000;
+    const deadline = Date.now() + ((knobs.poll_timeout_s !== undefined
+      ? knobs.poll_timeout_s * 1000 : undefined)
+      ?? delivery.pollTimeoutMs ?? 30 * 60_000);
     while (Date.now() < deadline) {
       // unref:轮询是旁路,不许它吊着进程不退(进程要退就让它退,
       // 重启后 recover 会以 delivery.sha 为锚续轮)。
@@ -1108,7 +1121,8 @@ export class TaskService {
       this.persist(task);
       return;
     }
-    const max = this.options.delivery?.repairRounds ?? 2;
+    const max = this.options.settings?.runtime().repair_rounds
+      ?? this.options.delivery?.repairRounds ?? 2;
     // repairRounds=0 = 关掉修复环:保持旧语义(红灯留痕请人工),不记环账。
     if (max === 0 && !delivery.loop) {
       this.persist(task);

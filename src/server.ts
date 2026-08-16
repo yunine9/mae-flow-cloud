@@ -46,6 +46,7 @@ import {
   type AuthUser,
   type LocalAuth,
 } from "./auth.ts";
+import { SettingsError } from "./settings.ts";
 
 /** 正式前端静态文件的最小类型表:Vite 产物就这几种。 */
 const MIME: Record<string, string> = {
@@ -155,6 +156,54 @@ export function createTaskServer(
           }
         }
         return json(response, 404, { error: "未知身份接口" });
+      }
+
+      // 管理页运行时设置:改了即刻安全生效的那层(运行参数/通知/模型)。
+      // 部署形态(仓库/平台/端口)不在这儿——那些改了要重启+过自查清单。
+      // 密钥只写不读:GET 永远给掩码,PUT 不给的键保持不动。
+      if (parts[0] === "settings") {
+        if (options.auth) {
+          if (!viewer) return json(response, 401, { error: "请先登录" });
+          if (viewer.role !== "admin") {
+            return json(response, 403, { error: "只有管理员可以改服务设置" });
+          }
+        }
+        const settings = service.options.settings;
+        if (!settings) {
+          return json(response, 404, { error: "本部署未接运行时设置" });
+        }
+        try {
+          if (request.method === "GET" && parts.length === 1) {
+            return json(response, 200, settings.view());
+          }
+          if (request.method === "PUT" && parts[1] === "runtime") {
+            settings.updateRuntime(await readBody(request));
+            return json(response, 200, settings.view());
+          }
+          if (request.method === "PUT" && parts[1] === "luban") {
+            settings.updateLuban(await readBody(request));
+            return json(response, 200, settings.view());
+          }
+          if (request.method === "PUT" && parts[1] === "models") {
+            settings.updateModels(await readBody(request));
+            return json(response, 200, settings.view());
+          }
+          if (request.method === "POST" && parts[1] === "luban"
+              && parts[2] === "test") {
+            const notifier = service.options.notifier;
+            if (!notifier) {
+              return json(response, 404, { error: "本部署未接通知器" });
+            }
+            const account = viewer?.username ?? "本地用户";
+            return json(response, 200, await notifier.testDelivery(account));
+          }
+        } catch (error) {
+          if (error instanceof SettingsError) {
+            return json(response, 400, { error: error.message });
+          }
+          throw error;
+        }
+        return json(response, 404, { error: "未知设置接口" });
       }
 
       const protectedRoute =
