@@ -388,6 +388,38 @@ test("修复环:会话没新提交 → 带诊断停下,主动喊人", async () =
   }
 });
 
+test("停机后的回程票:人工办完外部事项,重跑续推到绿灯收口", async () => {
+  // "需人工"不能是死胡同:halted 的任务点重跑=人工背书"外部的事
+  // 办完了",清停机账,同 SHA 重新验证——外部配置修好后同一提交的
+  // 流水线就该绿。在途验证(非停机)点重跑要被拒,别重复烧流水线。
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  platform.statusQueue.push("failed", "failed");   // 停机前两跑红,之后绿
+  await platform.start();
+  const model = new ScriptedModelServer([
+    ...walkScript(true),
+    { text: "诊断:需要在质量平台配 sonar.yaml,不是代码问题。" },
+    { text: "外部配置已就绪,续推收口。" },        // 重跑的重建会话
+  ], "scripted-v1", { linear: true });
+  await model.start();
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-deliver-"));
+  const service = buildService(platform, dataDir, model.modelsJson());
+  try {
+    const id = service.create("交付 REQ9:停机重跑").id;
+    await until(() =>
+      service.get(id)!.delivery?.loop?.state === "halted", "先停机");
+    service.retry(id);
+    await until(() => service.get(id)!.status === "await_merge",
+      "重跑后绿灯收口");
+    const task = service.get(id)!;
+    assert.equal(task.delivery?.pipeline, "success");
+    assert.equal(task.delivery?.loop, undefined, "停机账本已清");
+  } finally {
+    await model.stop();
+    await platform.stop();
+  }
+});
+
 test("修复环默认不限轮:三连红一路修到绿,没有人为断头", async () => {
   // 用户拍板"不应该有最大轮数限制,都该尽力修好"。老默认 2 轮在
   // 第三轮红时就 exhausted 了;现在不配就是不限,修到绿为止。

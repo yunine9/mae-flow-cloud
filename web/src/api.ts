@@ -23,6 +23,18 @@ export const STATUS_TEXT: Record<TaskStatus, string> = {
   await_merge: "已提合入请求,等待合入",
 };
 
+/** 修复停机(需人工):与服务端 retry 的准入同一口径——只有这时
+ * verifying 的任务才给重跑按钮(在途验证点重跑=重复烧流水线)。 */
+export function repairStopped(task: {
+  status: TaskStatus;
+  delivery?: { pipeline?: string; loop?: { state: string } };
+}): boolean {
+  const loop = task.delivery?.loop;
+  return task.status === "verifying" && (
+    loop?.state === "halted" || loop?.state === "exhausted"
+    || (task.delivery?.pipeline ?? "").includes("轮询预算耗尽"));
+}
+
 /** 状态文案:修复环激活时,"机器正在自救/机器停了需要人"比伞状态
  * "验证中"更有信息量——数据全部来自服务端 loop 账本,不做推断。
  * 人工节点与出错永远压过修复环文案(等人/坏了都比修复更紧急)。 */

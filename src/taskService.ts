@@ -736,13 +736,32 @@ export class TaskService {
   /** 重跑一单:completed/failed 的任务重新入队,host 模式以内核
    * current 为锚续跑。用于环境修复后续推(run7-resume 实测:容器
    * 被并行实例误杀,整单被迫收口,内核还停在 verify_ut——环境
-   * 修好后流程应当接着推,而不是从头再来)。 */
+   * 修好后流程应当接着推,而不是从头再来)。
+   *
+   * verifying 的准入按事实收窄:只有修复环停机(halted/exhausted)
+   * 或轮询预算耗尽的才许重跑——在途轮询/修复中点重跑只会重复烧
+   * 流水线。停机重跑=人工背书"外部的事我办完了/值得再试":清掉
+   * 停机账本,同 SHA 也给全新的修复机会(halted 的 last_sha 刹车
+   * 挡的是"机器无人看管地空转",不该挡人工明确授权的再来一次)。 */
   retry(id: string): TaskSummary {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
-    if (!["completed", "failed"].includes(task.summary.status)) {
+    const { status, delivery } = task.summary;
+    const repairStopped = delivery?.loop?.state === "halted"
+      || delivery?.loop?.state === "exhausted"
+      || (delivery?.pipeline ?? "").includes("轮询预算耗尽");
+    if (status === "verifying" && !repairStopped) {
       throw new NotFoundError(
-        `任务 ${id} 状态是 ${task.summary.status},只有 completed/failed 可重跑`);
+        `任务 ${id} 流水线验证还在进行中,重跑会重复烧流水线;` +
+        `等它收敛或停机后再说`);
+    }
+    if (!["completed", "failed", "verifying"].includes(status)) {
+      throw new NotFoundError(
+        `任务 ${id} 状态是 ${status},只有 completed/failed/停机的 verifying 可重跑`);
+    }
+    if (status === "verifying" && task.summary.delivery) {
+      task.summary.delivery.loop = undefined;
+      task.summary.delivery.pipeline = "人工重跑,待重新验证";
     }
     task.summary.status = "queued";
     task.summary.detail = "人工重跑,续接内核当前步骤";

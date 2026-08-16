@@ -10,6 +10,7 @@ import {
   listActions,
   listTimeline,
   retryTask,
+  repairStopped,
   statusText,
   tailEvents,
   type ExternalAction,
@@ -153,7 +154,18 @@ export function TaskCard({
               </span>
             </div>
           )}
-          {canOperate && (task.status === "failed" || task.status === "completed") && (
+          {repairStopped(task) && (
+            <div className="alert">
+              <strong>自动修复已停，需要你介入</strong>
+              <span>
+                {task.delivery?.loop?.diagnosis ?? task.detail
+                  ?? "请查看流水线日志确认原因。"}
+                {" "}办完之后点「重跑续推」，机器接着干。
+              </span>
+            </div>
+          )}
+          {canOperate && (task.status === "failed"
+            || task.status === "completed" || repairStopped(task)) && (
             <RetryButton taskId={task.id} onDone={onChanged} />
           )}
           {showDecisionForm && canOperate && task.status === "waiting_for_human" && task.waiting && (

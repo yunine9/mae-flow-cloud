@@ -21,6 +21,7 @@ import {
   listAnnotations,
   listArtifacts,
   readArtifact,
+  repairStopped,
   statusText,
   type AnchorCheck,
   type Annotation,
@@ -280,7 +281,8 @@ export function TaskWorkspace({
                   ? "模型正在推进这一步，材料会随进展刷新。"
                   : "左侧是这一单已产出的全部材料。"}
               </p>
-              {canOperate && (task.status === "failed" || task.status === "completed") && (
+              {canOperate && (task.status === "failed"
+                || task.status === "completed" || repairStopped(task)) && (
                 <RetryButton taskId={task.id} onDone={onChanged} />
               )}
             </div>
