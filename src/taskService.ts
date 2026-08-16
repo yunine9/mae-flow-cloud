@@ -89,15 +89,19 @@ export interface TaskSummary {
     pipeline?: string;
     sha?: string;
     skipped?: string;
-    /** 修复环账本(小状态机):流水线直至全绿是最终目标(用户拍板)。
-     * 红灯→专职修复会话→推新提交→新流水线,循环受 max 预算约束;
-     * last_sha 防"没产生新提交还烧一轮"。全部是事实记账,页面可见。 */
+    /** 修复环账本(小状态机):流水线直至全绿是最终目标(用户拍板
+     * "不该有最大轮数限制,都该尽力修好")。红灯→专职修复会话(分诊
+     * 后按类修,可派专职子 agent)→推新提交→新流水线,循环到绿;
+     * max 缺席=不限轮(默认),数字=可配的手刹;真正的收敛刹车是
+     * last_sha(没新提交即停)+提示词里的"原地打转必须换思路或出诊断"。
+     * diagnosis=修复会话停下时留给人的话(缺什么、去哪配)。 */
     loop?: {
       round: number;
-      max: number;
+      max?: number;
       state: "repairing" | "green" | "exhausted" | "halted";
       failure?: string;
       last_sha?: string;
+      diagnosis?: string;
     };
   };
   /** 从现场看板的 panel-pulse.js/panel.html 读取的进度摘要。 */
@@ -234,6 +238,9 @@ interface TaskState {
   /** 专项使命(修复环):下次会话的压轴指令,消费即清。
    * 要随 task.json 落盘——修复会话跑一半被重启,使命不能丢。 */
   mission?: string;
+  /** 会话收口时的最后发言(内存态):修复会话不提交时它就是诊断,
+   * halted 裁决把它带给人。不落盘——窗口极窄,时间线里也有原文。 */
+  lastReply?: string;
   /** 避免列表轮询反复解析未变化的现场面板。 */
   progressPulse?: string;
   progressCache?: TaskProgress;
@@ -546,7 +553,8 @@ export class TaskService {
   launchOptions(): {
     models: Array<{ provider: string; model: string }>;
     default: { provider?: string; model?: string };
-    repair_rounds: number;
+    /** 当前默认修复轮:数字=手刹上限;缺席=不限轮(默认形态)。 */
+    repair_rounds?: number;
     repo: { enabled: boolean; default?: string };
   } {
     const providers = (this.activeModelsJson() as {
@@ -564,7 +572,7 @@ export class TaskService {
         model: override.model ?? this.options.model,
       },
       repair_rounds: this.options.settings?.runtime().repair_rounds
-        ?? this.options.delivery?.repairRounds ?? 2,
+        ?? this.options.delivery?.repairRounds,
       // 没接内核模式=任务不碰代码仓,表单别摆出输入框骗人。
       repo: {
         enabled: !!this.options.host,
@@ -1214,12 +1222,14 @@ export class TaskService {
    *
    * 两个入口(触发即终态 / 轮询收敛到终态)都汇到这里,转移规则:
    *   绿 → loop.state=green,收口(await_merge 由调用方已置);
-   *   红 → 同一 SHA 修过一轮又红 = 修复会话没产生新提交 → halted 请人工;
-   *       修复轮预算耗尽 → exhausted 请人工;
-   *       否则派专职修复会话:使命=拿失败日志把流水线修绿,任务重入队,
-   *       修完 settle→tryDeliver 自然触发新 SHA 的新流水线——环由现有
-   *       机械闭合,这里只记账和扳道岔。
-   * 通知不在这儿发:两个调用方各自收口,免得一条消息发两遍。
+   *   红 → 同一 SHA 修过一轮又红 = 修复会话没产生新提交 → halted,
+   *       会话的收口发言当诊断带给人(它判了"改代码解决不了");
+   *       修复轮预算(可配手刹,默认不限)耗尽 → exhausted 请人工;
+   *       否则派专职修复会话:使命=分诊后按类修绿(可派专职子 agent),
+   *       任务重入队,修完 settle→tryDeliver 自然触发新 SHA 的新流水线
+   *       ——环由现有机械闭合,这里只记账和扳道岔。
+   * 常规收口通知仍归两个调用方;halted/exhausted 例外,在这儿主动
+   * 喊人(带独立幂等键)——轮询路径收敛到停机时没有别的收口点。
    */
   private pipelineVerdict(
     task: TaskState,
@@ -1234,9 +1244,12 @@ export class TaskService {
       this.persist(task);
       return;
     }
+    // 三层覆盖:任务 > 设置 > 部署;全都没配 = 不限轮(用户拍板
+    // "不该有最大轮数限制"),0 = 关。真正兜住无限的是收敛刹车:
+    // 没新提交即停 + 无进展必须换思路或出诊断(使命里的纪律)。
     const max = task.summary.repair_rounds
       ?? this.options.settings?.runtime().repair_rounds
-      ?? this.options.delivery?.repairRounds ?? 2;
+      ?? this.options.delivery?.repairRounds;
     // repairRounds=0 = 关掉修复环:保持旧语义(红灯留痕请人工),不记环账。
     if (max === 0 && !delivery.loop) {
       this.persist(task);
@@ -1245,34 +1258,68 @@ export class TaskService {
     const loop = delivery.loop
       ?? (delivery.loop = { round: 0, max, state: "repairing" as const });
     if (loop.last_sha === sha) {
+      // 修复会话没产生新提交 = 会话自己判了"改代码解决不了"。
+      // 它的收口发言就是诊断(缺什么、去哪配),原文带给人,
+      // 别让人拿着一句"已停"再去翻日志猜。
       loop.state = "halted";
-      delivery.pipeline = "failed(修复会话未产生新提交,请人工)";
+      const diagnosis = (task.lastReply ?? "").trim();
+      if (diagnosis) loop.diagnosis = diagnosis.slice(0, 2000);
+      delivery.pipeline = "failed(自动修复已停,需人工)";
+      task.summary.detail = diagnosis
+        ? `自动修复停下,修复会话的诊断:${diagnosis.slice(0, 600)}`
+        : "修复会话未产生新提交,流水线仍红,请人工查看流水线日志";
       this.persist(task);
+      this.notifyRepairStopped(task);
       return;
     }
-    if (loop.round >= loop.max) {
+    if (loop.max !== undefined && loop.round >= loop.max) {
       loop.state = "exhausted";
       delivery.pipeline = `failed(${loop.max} 轮修复预算用完,请人工)`;
+      task.summary.detail =
+        `${loop.max} 轮修复预算用完,流水线仍红,请人工`;
       this.persist(task);
+      this.notifyRepairStopped(task);
       return;
     }
+    // 上一轮的失败详情留一份给新使命对比——"和上轮同一处打转"是
+    // 换思路/出诊断的触发条件,这个判断只有会话自己做得可靠。
+    const previousFailure = loop.round > 0 ? loop.failure : undefined;
     loop.round += 1;
     loop.last_sha = sha;
     loop.state = "repairing";
     loop.failure = log.slice(0, 2000) || "(平台未提供失败详情)";
-    delivery.pipeline = `failed(第 ${loop.round}/${loop.max} 轮修复中)`;
+    const roundText = loop.max !== undefined
+      ? `第 ${loop.round}/${loop.max} 轮` : `第 ${loop.round} 轮`;
+    delivery.pipeline = `failed(${roundText}修复中)`;
     task.mission = [
-      `流水线红了,把它修到绿是你此刻唯一的使命(第 ${loop.round}/${loop.max} 轮修复):`,
-      `- 分支上提交 ${sha} 的权威流水线结果是 failed。`,
-      `- 失败详情(平台原文,截断到 2000 字):`,
+      `流水线红了,把它修到绿是你此刻唯一的使命(${roundText}修复):`,
+      `- 分支上提交 ${sha} 的权威流水线结果是 failed。失败详情(平台原文):`,
       loop.failure,
-      `- 只修让流水线变红的问题;修完在同一分支提交并 push。`,
-      `- 别的都不要动;顺手的重构、无关的优化一律不做。`,
-      `- 如果你判断修不了或不该修(比如失败与代码无关),说明理由后停下,`
-      + `不要硬改——没有新提交时系统会如实停下请人工,这是正确结局之一。`,
+      ...(previousFailure ? [
+        `- 上一轮修复后流水线仍红,上一轮的失败详情如下,先对比再动手:`
+        + `若与本轮是同一处原地打转,说明上轮改法无效,必须换思路;`
+        + `换思路也解决不了的,走下面的诊断出口,不许重复同样的修改。`,
+        previousFailure,
+      ] : []),
+      `- 先分诊再动手:通读日志,列出本轮暴露的全部问题类别`
+      + `(编译报错/编译告警/UT 失败/UT 覆盖率不够/CodeCheck/其他),`
+      + `一轮把能修的全修完,不留尾巴等下一轮。`,
+      `- 按类修复,能派专职子 agent 的派专职去修:编译类、UT/覆盖率类、`
+      + `检视类各修各的,互不搅和。`,
+      `- 修复纪律:补覆盖率要写真测试,不许凑数骗指标;CodeCheck 修问题`
+      + `本身,不许加抑制注释糊弄;编译告警要消除,不是关闭告警。`,
+      `- 全部修完凑成一次提交,收尾时一次 push(不 push 等于没修):`
+      + `远端每收到一次 push 就要烧一整条流水线,修一个推一个`
+      + `等于拿流水线当调试器——中途绝不 push。`
+      + `别的都不要动,顺手的重构、无关的优化一律不做。`,
+      `- 诊断出口:凡不是本仓代码能修的(外部平台的配置、权限、环境、`
+      + `流水线自身的问题),那一类不要硬改碰运气;若所有问题都不可修,`
+      + `不要提交,把诊断写清楚:缺什么、要去哪配、配好之后如何重跑`
+      + `——没有新提交时系统会带着你的诊断如实停下请人工,`
+      + `这是正确结局之一,不是失败。`,
     ].join("\n");
     task.summary.status = "queued";
-    task.summary.detail = `流水线红,第 ${loop.round}/${loop.max} 轮修复排队中`;
+    task.summary.detail = `流水线红,${roundText}修复排队中`;
     task.resume = true;
     this.persist(task);
     this.queue.push(task.summary.id);
@@ -1419,6 +1466,30 @@ export class TaskService {
     return target;
   }
 
+  /** 自动修复停下(halted/exhausted)→ 小鲁班。这是修复环里唯一
+   * 真正需要人的时刻,必须主动喊人,不能等人自己来看页面。
+   * 幂等键带 loop 状态,与早先发过的"验证中"收口通知不同键——
+   * 那条说的是"机器在干活",这条说的是"机器干不动了,该你了"。 */
+  private notifyRepairStopped(task: TaskState): void {
+    const { notifier } = this.options;
+    const account = task.summary.luban_account;
+    const loop = task.summary.delivery?.loop;
+    if (!notifier || !account || !loop) return;
+    const why = loop.state === "halted"
+      ? (loop.diagnosis
+          ? `修复会话判断需人工处理:${loop.diagnosis.slice(0, 200)}`
+          : "修复会话未产生新提交,请人工查看流水线日志")
+      : `${loop.max} 轮修复预算用完,流水线仍红`;
+    void notifier.notifyOutcome({
+      taskId: task.summary.id,
+      account,
+      status: `repair_${loop.state}`,
+      summary: `流水线自动修复已停,需要你介入——${why}`,
+      link: personalTaskLink(
+        this.options.linkBase, account, task.summary.id),
+    });
+  }
+
   /** 任务收口 → 小鲁班(说人话)。语义同待办通知:失败不改流程,
    * 同任务同状态幂等。没配通知器或没填账号静默跳过。 */
   private notifyOutcome(task: TaskState): void {
@@ -1543,6 +1614,9 @@ export class TaskService {
             `已答复过的确认项不要重复提问。`));
           break;
         }
+        // 收口发言先落袋:修复会话"判断修不了"时这就是给人的诊断,
+        // 下面 tryDeliver→pipelineVerdict 的 halted 分支要用。
+        task.lastReply = task.driver?.finalReply();
         task.driver?.dispose();
         void task.container?.stop();
         // 专项使命到这儿才算消费掉:会话真做完了。早清会让"修一半

@@ -180,7 +180,8 @@ export async function listTasks(): Promise<TaskSummary[]> {
 export interface LaunchOptions {
   models: Array<{ provider: string; model: string }>;
   default: { provider?: string; model?: string };
-  repair_rounds: number;
+  /** 数字=手刹上限;缺席=不限轮(默认形态,靠收敛刹车兜底)。 */
+  repair_rounds?: number;
   /** enabled=false 表示本部署不接代码仓(纯会话演练),表单不显示。 */
   repo: { enabled: boolean; default?: string };
 }

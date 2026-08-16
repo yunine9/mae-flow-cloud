@@ -146,6 +146,12 @@ export class CloudSession {
 
   private constructor(private readonly options: CloudSessionOptions) {}
 
+  /** 主会话最后一段发言。修复会话不提交时,这就是它留给人的诊断
+   * (缺什么、去哪配),halted 裁决原文上浮。 */
+  finalReply(): string {
+    return this.lastAssistantText.get(this.sessionId) ?? "";
+  }
+
   static async create(options: CloudSessionOptions): Promise<CloudSession> {
     ensureLoopbackDirect();
     const driver = new CloudSession(options);

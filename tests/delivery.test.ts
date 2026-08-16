@@ -12,6 +12,7 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FakeGitPlatform } from "../src/gitPlatform.ts";
+import { FakeLubanServer, Notifier } from "../src/notifier.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskService } from "../src/taskService.ts";
 import { RuntimeSettings } from "../src/settings.ts";
@@ -297,29 +298,92 @@ test("修复环:红→专职会话修复→推新提交→新流水线绿→等�
   }
 });
 
-test("修复环:会话没产生新提交 → 停下请人工,不再烧轮", async () => {
-  // 修复会话自己判断"这红灯不该由改码解决"是合法结局——但同一 SHA
-  // 修过一轮还红,再派就是无人看管的烧钱环,必须刹车。
+test("修复环:会话没新提交 → 带诊断停下,主动喊人", async () => {
+  // 修复会话自己判断"这红灯不该由改码解决"是合法结局(你说的
+  // "要去别的平台配 yaml"就是这类)——它的收口发言就是给人的诊断,
+  // 必须跟着刹车走到人面前,不能让人拿着一句"已停"去翻日志猜。
   const platform = new FakeGitPlatform();
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
   platform.statusQueue.push("failed", "failed");
   await platform.start();
+  const luban = new FakeLubanServer();
+  await luban.start();
   const model = new ScriptedModelServer([
     ...walkScript(true),
-    { text: "失败原因是平台配置,不是代码问题,我不做无关改动。" },
+    { text: "诊断:流水线要求 sonar.yaml,需在质量平台为本仓开通配置;"
+        + "配好后重跑即可。这不是本仓代码能修的,我不做无关改动。" },
   ], "scripted-v1", { linear: true });
   await model.start();
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-deliver-"));
-  const service = buildService(platform, dataDir, model.modelsJson(),
-    { repairRounds: 2 });
+  const service = new TaskService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    host: {
+      kernelRoot: process.env.MAE_FLOW_HOME
+        ?? join(process.cwd(), "..", "mae-flow"),
+      repoPath: platform.barePath,
+      python: "python3",
+    },
+    delivery: { platformUrl: platform.baseUrl },
+    notifier: new Notifier({ endpoint: luban.endpoint }),
+  });
   try {
-    const id = service.create("交付 REQ9:修复环刹车").id;
+    const id = service.create("交付 REQ9:修复环刹车",
+      { account: "liaoxiang" }).id;
     await until(() =>
       service.get(id)!.delivery?.loop?.state === "halted", "刹车落账");
     const task = service.get(id)!;
     assert.equal(task.status, "verifying", "如实停在验证中,不假装有结论");
-    assert.match(task.delivery?.pipeline ?? "", /未产生新提交/);
+    assert.match(task.delivery?.pipeline ?? "", /自动修复已停/);
     assert.equal(task.delivery?.loop?.round, 1, "只烧了一轮");
+    // 诊断原文上浮:环账、任务详情都有"缺什么、去哪配"
+    assert.match(task.delivery?.loop?.diagnosis ?? "", /sonar\.yaml/);
+    assert.match(task.detail ?? "", /质量平台/);
+    // 而且主动喊了人,不是等人来看页面
+    await until(() => luban.messages.some((message) =>
+      String(message.text ?? "").includes("需要你介入")), "停机通知送达");
+    assert.ok(luban.messages.some((message) =>
+      String(message.text ?? "").includes("sonar.yaml")),
+      "通知里没带诊断,人还得自己猜");
+  } finally {
+    await model.stop();
+    await platform.stop();
+    await luban.stop();
+  }
+});
+
+test("修复环默认不限轮:三连红一路修到绿,没有人为断头", async () => {
+  // 用户拍板"不应该有最大轮数限制,都该尽力修好"。老默认 2 轮在
+  // 第三轮红时就 exhausted 了;现在不配就是不限,修到绿为止。
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  platform.statusQueue.push("failed", "failed", "failed");
+  platform.nextPipelineLog = "BUILD FAILURE: 覆盖率 62% 未达标";
+  await platform.start();
+  const model = new ScriptedModelServer(
+    [...walkScript(true), ...repairScenes(true),
+     ...repairScenes(true), ...repairScenes(true)],
+    "scripted-v1", { linear: true });
+  await model.start();
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-deliver-"));
+  const service = buildService(platform, dataDir, model.modelsJson());
+  try {
+    const id = service.create("交付 REQ9:不限轮修复").id;
+    await until(() => service.get(id)!.status === "await_merge",
+      "三轮修复后全绿", 120_000);
+    const task = service.get(id)!;
+    assert.equal(task.delivery?.loop?.round, 3, "第三轮才绿,老默认早断头了");
+    assert.equal(task.delivery?.loop?.max, undefined, "不限轮不记假上限");
+    assert.equal(task.delivery?.loop?.state, "green");
+    // 使命升级在场:分诊、专职分派、诊断出口;第 2 轮起带上一轮失败对比
+    const seen = model.requests
+      .flatMap((request) => (request as any).messages ?? [])
+      .map((message: any) => JSON.stringify(message.content ?? ""))
+      .join("\n");
+    assert.match(seen, /先分诊再动手/);
+    assert.match(seen, /专职子 agent/);
+    assert.match(seen, /诊断出口/);
+    assert.match(seen, /上一轮修复后流水线仍红/);
   } finally {
     await model.stop();
     await platform.stop();

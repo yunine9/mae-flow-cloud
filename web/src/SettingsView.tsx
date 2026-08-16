@@ -77,13 +77,15 @@ function RuntimeCard({ view, onSaved }: {
     <div className="user-create-copy">
       <span className="section-kicker">RUNTIME</span>
       <h2>运行参数</h2>
-      <p>都带预算——“无限等待”不是合法取值，这里连填它的语法都没有。
-        修复轮填 0 表示关掉流水线自动修复，红灯留痕请人工。</p>
+      <p>等待都带预算——“无限等待”不是合法取值。修复轮默认不限
+        （修到绿为止，收敛靠“没新提交即停+原地打转出诊断”两道刹车），
+        数字是可选的手刹，0 表示完全关掉自动修复。</p>
     </div>
     <form className="user-create-form settings-form" onSubmit={submit}>
       <KnobField label="并发任务数" note="生效于下一次调度决策"
         value={concurrent} onChange={setConcurrent} />
-      <KnobField label="流水线修复轮预算" note="生效于下一次红灯（0 = 关闭修复环）"
+      <KnobField label="流水线修复轮上限（手刹）"
+        note="生效于下一次红灯；0=关闭修复环；各层都不配=不限轮，修到绿或修复会话出诊断为止"
         value={repair} onChange={setRepair} />
       <KnobField label="流水线轮询间隔（秒）" note="生效于下一轮轮询"
         value={interval} onChange={setInterval_} />

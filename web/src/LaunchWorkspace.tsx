@@ -173,7 +173,9 @@ export function LaunchWorkspace({
                     inputMode="numeric"
                     value={repairRounds}
                     onChange={(event) => setRepairRounds(event.target.value)}
-                    placeholder={`默认 ${options.repair_rounds}（0=关）`}
+                    placeholder={options.repair_rounds !== undefined
+                      ? `默认 ${options.repair_rounds}（0=关）`
+                      : "默认不限轮（0=关）"}
                   />
                 </label>
               )}
