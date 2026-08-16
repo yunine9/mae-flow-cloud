@@ -33,6 +33,7 @@ import {
 } from "./annotations.ts";
 import { readArtifact, resolveArtifactRoot } from "./artifacts.ts";
 import { KernelHost } from "./kernelHost.ts";
+import { buildRepoMap } from "./repoMap.ts";
 import type { Notifier, NotifyRecord } from "./notifier.ts";
 import { EventLog } from "./semanticEvents.ts";
 import { TranscriptStore } from "./transcriptStore.ts";
@@ -1021,6 +1022,14 @@ export class TaskService {
           + `凡流程要求本地编译/UT 的环节,如实注明「本地验证由流水线代行」`
           + `并继续推进(云端已放行对应机器证据)。编码完成后按流程提交并`
           + `推送,权威流水线是唯一裁判;红灯会由专职修复会话跟进。`;
+      }
+      // 仓库地图(加餐):大仓里模型乱 grep 烧轮次,开场先给一张按被
+      // 引用程度排序的路标。只在内核模式生成(有真克隆才有仓可画);
+      // 每次会话都重画——修复/重建会话面对的是改动后的工作区,旧图作废。
+      // fail-open:空地图不上桌,带预算绝不拖住启动(不卡死红线)。
+      if (this.options.host) {
+        const repoMap = buildRepoMap(cwd);
+        if (repoMap.markdown) prompt = `${prompt}\n\n${repoMap.markdown}`;
       }
       // 专项使命(修复环)压轴:模型最后读到的最要紧。这里只用不清——
       // 修复会话跑一半被重启,使命要跟着 task.json 回来再喂一遍;
