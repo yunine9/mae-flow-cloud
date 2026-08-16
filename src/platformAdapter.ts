@@ -188,7 +188,9 @@ export class PlatformAdapter {
               `CLI 失败: ${executable} 退出异常(${error.message.slice(0, 200)})`
               + `\nstderr: ${String(stderr).slice(0, 1000)}`));
           } else {
-            resolve(String(stdout));
+            // Windows CLI(WSL 互操作调 .exe / 适配层直跑 Windows)输出
+            // 是 \r\n,\r 会咬正则抽取一口——统一归一化,JSON 不受影响。
+            resolve(String(stdout).replace(/\r/g, ""));
           }
         });
     });

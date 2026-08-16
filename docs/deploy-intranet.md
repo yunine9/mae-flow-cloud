@@ -29,6 +29,14 @@
    明文)理论上对它可读、越界写无强制墙——单人自用+单任务+人盯着
    可接受;**转多人共用前容器隔离升回必选**(WSL2 装 docker 无障碍);
 5. 服务和适配层都起在 tmux 里,别指望关掉的终端窗口还活着;
+5b. **内部 CLI 只有 Windows 版也不怕**,两条路:①(首选)WSL 互操作
+   直接调 .exe——命令模板写 `/mnt/c/.../codehubcli.exe`,其余不变,
+   而且 .exe 走 Windows 侧网络栈,公司代理/VPN 白捡;先验
+   `/mnt/c/Windows/System32/cmd.exe /c echo hi` 确认互操作开着。
+   ②(兜底)适配层零依赖纯 Node,整个搬去 Windows 原生跑,WSL 里
+   serve 用 `--platform http://<Windows侧地址>:8790` 隔墙喊话
+   (Win11 镜像网络 localhost 互通,老模式用主机 IP)。CLI 输出的
+   \r\n 适配层已归一化。个人令牌 push 走 WSL 的 git,与 CLI 无关;
 6. 启动顺序:填 adapter.json(codehubcli 命令模板)→
    `npm run adapter` → `curl http://127.0.0.1:8790/`(healthz)→
    手动 curl 三端点各打一发核对 → `npm run serve -- --platform
