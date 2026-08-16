@@ -34,6 +34,7 @@ import {
 import { readArtifact, resolveArtifactRoot } from "./artifacts.ts";
 import { KernelHost } from "./kernelHost.ts";
 import { buildRepoMap } from "./repoMap.ts";
+import { collectKnowledge } from "./knowledgeBlocks.ts";
 import type { Notifier, NotifyRecord } from "./notifier.ts";
 import { EventLog } from "./semanticEvents.ts";
 import { TranscriptStore } from "./transcriptStore.ts";
@@ -1030,6 +1031,16 @@ export class TaskService {
       if (this.options.host) {
         const repoMap = buildRepoMap(cwd);
         if (repoMap.markdown) prompt = `${prompt}\n\n${repoMap.markdown}`;
+        // 仓里的知识块:命中触发词才注入(知识在仓不在平台,换个仓
+        // 就是换套知识)。匹配语料 = 需求原文 + 本轮失败详情——修复
+        // 会话该被日志里的关键词(如 flyway/覆盖率)召唤出对应规矩。
+        const knowledge = collectKnowledge(
+          cwd,
+          [task.summary.requirement,
+           task.summary.delivery?.loop?.failure ?? ""]
+            .join("\n"),
+        );
+        if (knowledge.markdown) prompt = `${prompt}\n\n${knowledge.markdown}`;
       }
       // 专项使命(修复环)压轴:模型最后读到的最要紧。这里只用不清——
       // 修复会话跑一半被重启,使命要跟着 task.json 回来再喂一遍;

@@ -27,12 +27,20 @@ function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf-8" }).trim();
 }
 
-function makeSourceRepo(): string {
+function makeSourceRepo(knowledge?: Record<string, string>): string {
   const dir = mkdtempSync(join(tmpdir(), "mfc-dsrc-"));
   git(dir, "init", "--quiet", "-b", "master");
   git(dir, "config", "user.email", "bot@test");
   git(dir, "config", "user.name", "bot");
   writeFileSync(join(dir, "README.md"), "# demo\n");
+  // 知识块随仓走(不是平台配置),克隆下来就在工作区里
+  if (knowledge) {
+    const kdir = join(dir, ".mae-flow", "knowledge");
+    mkdirSync(kdir, { recursive: true });
+    for (const [name, text] of Object.entries(knowledge)) {
+      writeFileSync(join(kdir, name), text);
+    }
+  }
   git(dir, "add", ".");
   git(dir, "commit", "--quiet", "-m", "init");
   return dir;
@@ -472,7 +480,13 @@ test("修复环默认不限轮:三连红一路修到绿,没有人为断头", asy
   // 用户拍板"不应该有最大轮数限制,都该尽力修好"。老默认 2 轮在
   // 第三轮红时就 exhausted 了;现在不配就是不限,修到绿为止。
   const platform = new FakeGitPlatform();
-  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  // 顺带证明知识块:仓里两篇,失败日志里的"覆盖率"该召唤出对应那篇,
+  // 另一篇(前端)不该到场——知识在仓不在平台,命中才占上下文。
+  platform.initBare(makeSourceRepo({
+    "coverage.md": "---\ntriggers: 覆盖率, coverage\n---\n覆盖率补齐要写真断言,"
+      + "本仓禁止用 @Generated 排除。",
+    "frontend.md": "---\ntriggers: 前端, React\n---\n组件一律函数式。",
+  }), mkdtempSync(join(tmpdir(), "mfc-p-")));
   platform.statusQueue.push("failed", "failed", "failed");
   platform.nextPipelineLog = "BUILD FAILURE: 覆盖率 62% 未达标";
   await platform.start();
@@ -502,6 +516,11 @@ test("修复环默认不限轮:三连红一路修到绿,没有人为断头", asy
     assert.match(seen, /专职子 agent/);
     assert.match(seen, /诊断出口/);
     assert.match(seen, /上一轮修复后流水线仍红/);
+    // 知识块:失败日志里的"覆盖率"召唤出对应那篇,前端那篇不该到场
+    assert.match(seen, /禁止用 @Generated 排除/, "命中的知识块要进开场白");
+    assert.ok(!seen.includes("组件一律函数式"), "没命中的不占上下文");
+    // 仓库地图同场证明:开场白里有地图标题
+    assert.match(seen, /仓库地图/, "地图该在会话开场");
   } finally {
     await model.stop();
     await platform.stop();
