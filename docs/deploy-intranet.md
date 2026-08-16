@@ -10,10 +10,30 @@
 | --- | --- |
 | Node.js | ≥ 20(`tsx` 直跑 TS,无构建步) |
 | Python 3 | ≥ 3.10,mae-flow 内核的运行时 |
-| mae-flow 内核 | checkout 到服务器,`MAE_FLOW_HOME` 指向仓根(缺省找 `../mae-flow`) |
+| mae-flow 内核 | **不用单独准备**:快照收编在 `kernel/`,ZIP 下载也带着(是普通目录不是 submodule,`.gitattributes` 也没有 export-ignore)。开发机想用活内核就设 `MAE_FLOW_HOME` |
 | Git | 任务克隆/推分支/ls-remote 都用它 |
 | JDK + Maven | 试点仓(Java)编译验证用;版本按试点仓 `pom.xml` 要求。**--verify-via-pipeline 形态不需要**(docker 同) |
-| npm 依赖 | `npm ci`(pi 锁 0.84.1,升级必须重跑 probe+全套测试再拍板) |
+| npm 依赖 | `npm ci`(pi 锁 0.84.1,升级必须重跑 probe+全套测试再拍板)。**进内网前先验这一步能不能过**,见下 |
+
+#### 离线/内网装依赖:进场前先验,别到现场才发现
+
+代码可以靠 ZIP 带进去(内核快照在里面),但 `node_modules` **不在仓里**,
+必须能装出来。要装的东西:运行时 `@earendil-works/pi-coding-agent@0.84.1`、
+`pg`、`typebox`;开发 `tsx`、`typescript`;前端 `web/` 那套(react+vite)。
+
+风险点是 `@earendil-works/pi-coding-agent` 未必在内网 npm 镜像里,而
+**`tsx` 是零构建的命门**——它依赖 esbuild,那是**平台专属二进制**。
+
+三种情况,进场前先确认走哪条:
+
+1. **内网源装得到** → 解开 ZIP,`npm ci` 完事,最省事;
+2. **装不到** → 找一台能上网的 **Linux x64** 机器(WSL 也行)跑 `npm install`,
+   把整个 `node_modules` 打包带进去。**不能从 macOS 拷**——esbuild 装的是
+   `@esbuild/darwin-arm64`,Linux 认不了这个二进制;
+3. 完全离线 → 外网机 `npm pack` 出全集离线安装,能走前两条就别走这条。
+
+**这一步没过,后面全部免谈**——比内核快照的风险大得多,建议进内网前一天
+就在能连外网的机器上试一次。
 
 ### WSL 实战速记(2026-08-17 首跑用)
 
