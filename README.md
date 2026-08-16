@@ -116,6 +116,12 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
   serve 加 `--verify-via-pipeline` 后本机不做编译/UT,每次会话开场注入
   环境事实,流水线是唯一裁判,红灯走修复环;慢的代价由机器扛,不占人的
   时间。代价要如实:错误发现得更晚,一轮往返=一次流水线+一次修复会话;
+- **CodeCheck 云端不做本地扫描(2026-08-16,用户拍板"lightcheck 保留,
+  codecheck 依赖流水线")**:CodeCheck 是内网 npm 件,云端装不上,原来
+  每次扫描空撞安装(30 分钟冷却)+ TOOL_ERROR 噪声(task-1 实锤)。
+  内核在 cloud 宿主下 codecheck-scan 如实记 PIPELINE 状态、
+  review_codecheck 放行并注明"交由流水线核对";lightcheck 照常。
+  **内网部署前须确认流水线含静态检查 stage**,否则这块无人兜底;
 - **云端放开了子 Agent 台账门禁(2026-08-15,用户拍板)**:pi 宿主取不到
   内核格式的子会话执行台账,UT/COMPILE/REVIEWER/STORY/GRILL 的生命周期
   证据在 `MAE_FLOW_HOST=cloud` 下不再拦 done,CodeCheck 修复轮的"合法

@@ -245,7 +245,9 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
 可执行版:`harness/preflight.sh --java-repo <试点仓> --models <models.json> --provider <网关名>`
 ——1~4 项自动核验真实退出码,5/6 两项人工,脚本会原样提醒。
 
-0. **先验两个 CLI**(部署形态由此定,顺序不能换):
+0. **先验两个 CLI**(部署形态由此定,顺序不能换),并确认**流水线含
+   静态检查(CodeCheck)stage**——云端不做本地扫描(内核 cloud 宿主
+   短路,lightcheck 照常),流水线是它唯一的兜底:
    - MR/流水线 CLI 三能力逐一实测:交 MR、按 SHA 查状态、**拉失败日志**
      ——第 3 项拉不到,免编译形态(--verify-via-pipeline)不成立,
      回容器编译形态;
