@@ -88,7 +88,8 @@ export interface CloudSessionOptions {
   bashOperations?: BashOperations;
   /** 宿主级 skill 目录(部署时放一次,每个任务自动带)。团队的两个
    * UT skill 在内网、出不来仓,老宿主是"每次手动集成进 ut-generator
-   * 子 agent";云端没有子 agent,得有个固定的家。 */
+   * 子 agent";云端子 Agent 照样有(Task 工具),缺的是自动装载——
+   * pi 的 includeDefaults=false,不喂路径就一个 skill 都不装。 */
   hostSkillsDir?: string;
   log?: (message: string) => void;
 }
