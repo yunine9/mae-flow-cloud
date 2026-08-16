@@ -6,7 +6,8 @@ import {
   type DiffReviewRow,
 } from "./diffLines";
 
-type ChangeStage = "staged" | "unstaged" | "untracked";
+type ChangeStage = "committed" | "committed_working" | "staged"
+  | "staged_working" | "unstaged" | "untracked";
 type FileKind = "代码" | "文档" | "测试" | "配置" | "其他";
 
 interface ChangedFile {
@@ -20,10 +21,18 @@ interface ChangedFile {
 }
 
 const stageName: Record<ChangeStage, string> = {
+  committed: "已提交",
+  committed_working: "已提交后又修改",
   staged: "已暂存",
+  staged_working: "已暂存后又修改",
   unstaged: "未暂存",
   untracked: "未跟踪",
 };
+
+const stageOrder: ChangeStage[] = [
+  "committed", "committed_working", "staged", "staged_working",
+  "unstaged", "untracked",
+];
 
 function fileKind(path: string): FileKind {
   const lower = path.toLowerCase();
@@ -58,6 +67,9 @@ function parseChanges(text: string): ChangedFile[] {
   };
 
   for (const line of text.split("\n")) {
+    if (/^## 已提交后又修改/.test(line)) { finish(); stage = "committed_working"; continue; }
+    if (/^## 已提交/.test(line)) { finish(); stage = "committed"; continue; }
+    if (/^## 已暂存后又修改/.test(line)) { finish(); stage = "staged_working"; continue; }
     if (/^## 已暂存/.test(line)) { finish(); stage = "staged"; continue; }
     if (/^## 未暂存/.test(line)) { finish(); stage = "unstaged"; continue; }
     if (/^## 未跟踪/.test(line)) { finish(); stage = "untracked"; continue; }
@@ -198,7 +210,7 @@ export function GitDiff({ text }: { text: string }) {
   const kinds = Array.from(new Set(files.map((file) => file.kind)));
 
   if (!files.length) {
-    return <div className="worktree-clean"><strong>工作区干净</strong><span>{text}</span></div>;
+    return <div className="worktree-clean"><strong>暂无代码变更</strong><span>{text}</span></div>;
   }
 
   return (
@@ -233,7 +245,7 @@ export function GitDiff({ text }: { text: string }) {
           <div>
             <span>WORKTREE</span>
             <strong>{files.length} 个文件发生变化</strong>
-            <small>{kinds.join("、")} · 来自版本库实时状态</small>
+          <small>{kinds.join("、")} · 任务基线至当前工作区</small>
           </div>
           <div className="change-summary-actions">
             <div className="change-totals" aria-label="变更统计">
@@ -251,7 +263,7 @@ export function GitDiff({ text }: { text: string }) {
       {focused ? (
       <div className="git-change-browser">
         <nav className="change-files" aria-label="变更文件">
-          {(["staged", "unstaged", "untracked"] as ChangeStage[]).map((group) => {
+          {stageOrder.map((group) => {
             const grouped = files.filter((file) => file.stage === group);
             if (!grouped.length) return null;
             return (

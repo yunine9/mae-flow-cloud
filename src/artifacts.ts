@@ -173,39 +173,139 @@ function changedPaths(status: string): string[] {
     });
 }
 
-/** 未提交改动快照:已暂存 + 未暂存 + 未跟踪清单。
- * 不是 git 仓或 git 不可用时返回 undefined(这项就不出现)。 */
+type ChangeOrigin = "committed" | "committed_working" | "staged"
+  | "staged_working" | "unstaged";
+
+const ORIGIN_HEADING: Record<ChangeOrigin, string> = {
+  committed: "已提交(committed)",
+  committed_working: "已提交后又修改(committed-working)",
+  staged: "已暂存(staged)",
+  staged_working: "已暂存后又修改(staged-working)",
+  unstaged: "未暂存(unstaged)",
+};
+
+/** 内核在建分支时记录的 HEAD 就是任务基线；旧现场没有该字段时，
+ * 再退到配置的基线分支 / origin/HEAD。拿不到就保留旧的工作区口径。 */
+function taskBaseline(cwd: string): string | undefined {
+  try {
+    const state = JSON.parse(readFileSync(join(cwd, ".mae-flow.json"), "utf-8"));
+    const recorded = [
+      state?.step_heads?.branch_create,
+      state?.step_heads?.workflow_select,
+    ].find((value) => typeof value === "string" && value.trim());
+    if (recorded
+        && git(cwd, ["cat-file", "-e", `${recorded}^{commit}`]) !== undefined) {
+      return String(recorded);
+    }
+    const branch = String(state?.config?.["基线分支"] ?? "").trim();
+    if (branch) {
+      for (const ref of [branch, `origin/${branch}`]) {
+        const base = git(cwd, ["merge-base", "HEAD", ref])?.trim();
+        if (base) return base;
+      }
+    }
+  } catch {
+    // 旧现场或半写 JSON:继续尝试 Git 自己的远端默认分支。
+  }
+  return git(cwd, ["merge-base", "HEAD", "origin/HEAD"])?.trim()
+    || undefined;
+}
+
+function diffChunks(text: string): Array<{ path: string; text: string }> {
+  return text.split(/(?=^diff --git )/m).map((chunk) => chunk.trim())
+    .filter(Boolean)
+    .flatMap((chunk) => {
+      const header = chunk.match(/^diff --git a\/(.+?) b\/(.+)$/m);
+      return header ? [{ path: header[2], text: chunk }] : [];
+    });
+}
+
+function statusEntries(status: string): Map<string, { x: string; y: string }> {
+  const entries = new Map<string, { x: string; y: string }>();
+  for (const line of status.split("\n")) {
+    if (line.length < 4 || line.startsWith("??")) continue;
+    const arrow = line.slice(3).trim().split(" -> ");
+    const path = (arrow[1] ?? arrow[0]).replace(/^"|"$/g, "");
+    if (path) entries.set(path, { x: line[0], y: line[1] });
+  }
+  return entries;
+}
+
+function originOf(
+  path: string,
+  committed: Set<string>,
+  statuses: Map<string, { x: string; y: string }>,
+): ChangeOrigin {
+  const status = statuses.get(path);
+  const indexChanged = !!status && status.x !== " ";
+  const worktreeChanged = !!status && status.y !== " ";
+  if (committed.has(path) && (indexChanged || worktreeChanged)) {
+    return "committed_working";
+  }
+  if (indexChanged && worktreeChanged) return "staged_working";
+  if (indexChanged) return "staged";
+  if (worktreeChanged) return "unstaged";
+  return "committed";
+}
+
+/** 本任务变更快照:任务基线到当前工作区,包含已提交、未提交与未跟踪。
+ * 基线不可用时退化为原有的工作区状态,旁路不因旧现场失效。 */
 function collectDiff(
   cwd: string,
 ): { text: string; changed: string[] } | undefined {
   // 展开未跟踪目录到文件级,前端才能把其中的文档/测试/配置正确分类。
   const status = git(cwd, ["status", "--porcelain", "--untracked-files=all"]);
   if (status === undefined) return undefined;
-  const changed = changedPaths(status);
+  const worktreeChanged = changedPaths(status);
   // 把完整上下文带回前端，再由审阅器默认折叠未改动区。只取 Git 默认
   // 的三行上下文会让“展开全文”永远缺材料，也无法复现内核看板的能力。
   const fullContext = "--unified=999999";
-  const staged = (git(cwd, ["diff", "--cached", fullContext]) ?? "").trim();
-  const unstaged = (git(cwd, ["diff", fullContext]) ?? "").trim();
   const untracked = status.split("\n")
     .filter((line) => line.startsWith("??"))
     .map((line) => line.slice(3).trim())
     .filter(Boolean);
-  if (!staged && !unstaged && untracked.length === 0) {
-    return { text: "工作区干净:没有未提交改动。", changed };
-  }
+  const baseline = taskBaseline(cwd);
   const sections: string[] = [];
-  if (staged) sections.push(`## 已暂存(staged)\n\n${staged}`);
-  if (unstaged) sections.push(`## 未暂存(unstaged)\n\n${unstaged}`);
+  let trackedPaths: string[] = [];
+  if (baseline) {
+    const aggregate = (git(cwd, ["diff", fullContext, baseline, "--"]) ?? "").trim();
+    const committed = new Set((git(cwd,
+      ["diff", "--name-only", baseline, "HEAD", "--"]) ?? "")
+      .split("\n").filter(Boolean));
+    const statuses = statusEntries(status);
+    const grouped = new Map<ChangeOrigin, string[]>();
+    for (const chunk of diffChunks(aggregate)) {
+      trackedPaths.push(chunk.path);
+      const origin = originOf(chunk.path, committed, statuses);
+      grouped.set(origin, [...(grouped.get(origin) ?? []), chunk.text]);
+    }
+    for (const origin of ["committed", "committed_working", "staged",
+      "staged_working", "unstaged"] as ChangeOrigin[]) {
+      const chunks = grouped.get(origin);
+      if (chunks?.length) {
+        sections.push(`## ${ORIGIN_HEADING[origin]}\n\n${chunks.join("\n\n")}`);
+      }
+    }
+  } else {
+    const staged = (git(cwd, ["diff", "--cached", fullContext]) ?? "").trim();
+    const unstaged = (git(cwd, ["diff", fullContext]) ?? "").trim();
+    if (staged) sections.push(`## ${ORIGIN_HEADING.staged}\n\n${staged}`);
+    if (unstaged) sections.push(`## ${ORIGIN_HEADING.unstaged}\n\n${unstaged}`);
+    trackedPaths = worktreeChanged.filter((path) => !untracked.includes(path));
+  }
   if (untracked.length) {
     const snapshots = untracked.map((path) =>
       untrackedDiff(cwd, path) || `?? ${path}`);
     sections.push(`## 未跟踪(untracked)\n\n${snapshots.join("\n\n")}`);
   }
+  const changed = Array.from(new Set([...trackedPaths, ...untracked]));
+  if (!sections.length) {
+    return { text: "本任务暂无代码变更。", changed };
+  }
   return { text: sections.join("\n\n"), changed };
 }
 
-/** 未提交改动的元信息。时间取"改动文件里最新的那个 mtime":
+/** 本任务变更的元信息。时间取"改动文件里最新的那个 mtime":
  * 工作区干净时退回目录时间,免得一个空 diff 长期霸占列表首位。 */
 function diffMeta(cwd: string): ArtifactMeta | undefined {
   const diff = collectDiff(cwd);
@@ -227,7 +327,7 @@ function diffMeta(cwd: string): ArtifactMeta | undefined {
   }
   return {
     name: DIFF_NAME,
-    label: "工作区变更",
+    label: "本任务变更",
     kind: "diff",
     bytes: Buffer.byteLength(diff.text, "utf-8"),
     modified_at: new Date(newest).toISOString(),

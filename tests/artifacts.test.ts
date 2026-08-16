@@ -109,7 +109,7 @@ test("未提交改动:已暂存/未暂存/未跟踪都在快照里", () => {
   const diff = items.find((item) => item.name === DIFF_NAME);
   assert.ok(diff, `未提交改动没出现: ${names(items).join(" | ")}`);
   assert.equal(diff!.kind, "diff");
-  assert.equal(diff!.label, "工作区变更");
+  assert.equal(diff!.label, "本任务变更");
   assert.ok(diff!.bytes > 0);
 
   const snapshot = readArtifact(cwd, DIFF_NAME);
@@ -137,10 +137,36 @@ test("变更快照包含完整文件上下文,前端才能默认折叠后按需�
   assert.match(String(snapshot?.content), /第 30 行/);
 });
 
-test("工作区干净时如实说干净,而不是假装没这项", () => {
+test("任务基线到当前工作区:提交后的文件不消失,再次修改会标明来源", () => {
+  const cwd = makeSite({ git: true });
+  const run = (...args: string[]) =>
+    execFileSync("git", ["-C", cwd, ...args], { encoding: "utf-8" });
+  const baseline = run("rev-parse", "HEAD").trim();
+  writeFileSync(join(cwd, ".git", "info", "exclude"), ".mae-flow.json\n");
+  writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify({
+    config: { "基线分支": "master" },
+    step_heads: { branch_create: baseline },
+  }));
+
+  writeFileSync(join(cwd, "committed.txt"), "已经提交的任务代码\n");
+  writeFileSync(join(cwd, "tracked.txt"), "任务提交版本\n");
+  run("add", "committed.txt", "tracked.txt");
+  run("commit", "--quiet", "-m", "task changes");
+  writeFileSync(join(cwd, "tracked.txt"), "提交后又修改\n");
+
+  const snapshot = readArtifact(cwd, DIFF_NAME);
+  const content = String(snapshot?.content);
+  assert.match(content, /## 已提交\(committed\)/);
+  assert.match(content, /committed\.txt/);
+  assert.match(content, /已经提交的任务代码/);
+  assert.match(content, /## 已提交后又修改\(committed-working\)/);
+  assert.match(content, /提交后又修改/);
+});
+
+test("本任务没有代码变更时如实说明,而不是假装没这项", () => {
   const cwd = makeSite({ docs: { "spec.md": "# 规格\n" }, git: true });
   const snapshot = readArtifact(cwd, DIFF_NAME);
-  assert.match(String(snapshot?.content), /工作区干净/);
+  assert.match(String(snapshot?.content), /本任务暂无代码变更/);
 });
 
 test("白名单是唯一边界:集合外的 name 与穿越一律不认", () => {
