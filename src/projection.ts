@@ -42,16 +42,22 @@ export interface ExternalAction {
 const SCHEMA = `
 create table if not exists tasks (
   task_id       text primary key,
+  title         text,
   requirement   text not null,
   status        text not null,
   detail        text,
   luban_account text,
   workspace     text not null,
   created_at    timestamptz not null,
+  last_progress_at timestamptz,
+  completed_at  timestamptz,
   waiting       jsonb,
   delivery      jsonb,
   updated_at    timestamptz not null default now()
 );
+alter table tasks add column if not exists title text;
+alter table tasks add column if not exists last_progress_at timestamptz;
+alter table tasks add column if not exists completed_at timestamptz;
 create table if not exists task_events (
   task_id    text not null,
   event_id   bigint not null,
@@ -105,17 +111,23 @@ export class PgProjection {
     try {
       await this.ensureSchema();
       await this.pool.query(
-        `insert into tasks (task_id, requirement, status, detail,
-           luban_account, workspace, created_at, waiting, delivery, updated_at)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9, now())
+        `insert into tasks (task_id, title, requirement, status, detail,
+           luban_account, workspace, created_at, last_progress_at,
+           completed_at, waiting, delivery, updated_at)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now())
          on conflict (task_id) do update set
-           status = excluded.status, detail = excluded.detail,
+           title = excluded.title, status = excluded.status,
+           detail = excluded.detail,
            waiting = excluded.waiting, delivery = excluded.delivery,
-           luban_account = excluded.luban_account, updated_at = now()`,
+           luban_account = excluded.luban_account,
+           last_progress_at = excluded.last_progress_at,
+           completed_at = excluded.completed_at, updated_at = now()`,
         [
-          summary.id, summary.requirement, summary.status,
+          summary.id, summary.title ?? null, summary.requirement, summary.status,
           summary.detail ?? null, summary.luban_account ?? null,
           summary.workspace, summary.created_at,
+          summary.last_progress_at ?? summary.created_at,
+          summary.completed_at ?? null,
           summary.waiting ? JSON.stringify(summary.waiting) : null,
           summary.delivery ? JSON.stringify(summary.delivery) : null,
         ]);
@@ -169,8 +181,9 @@ export class PgProjection {
   async listTaskHistory(limit = 100): Promise<TaskHistoryEntry[]> {
     await this.ensureSchema();
     const rows = await this.pool.query(
-      `select t.task_id, t.requirement, t.status, t.detail,
+      `select t.task_id, t.title, t.requirement, t.status, t.detail,
               t.luban_account, t.workspace, t.created_at, t.updated_at,
+              t.last_progress_at, t.completed_at,
               t.waiting, t.delivery, coalesce(e.n, 0) as event_count
          from tasks t
          left join (select task_id, count(*)::int as n
@@ -180,6 +193,7 @@ export class PgProjection {
       [limit]);
     return rows.rows.map((row) => ({
       id: row.task_id,
+      title: row.title ?? undefined,
       requirement: row.requirement,
       status: row.status,
       detail: row.detail ?? undefined,
@@ -187,6 +201,10 @@ export class PgProjection {
       workspace: row.workspace,
       created_at: new Date(row.created_at).toISOString(),
       updated_at: new Date(row.updated_at).toISOString(),
+      last_progress_at: row.last_progress_at
+        ? new Date(row.last_progress_at).toISOString() : undefined,
+      completed_at: row.completed_at
+        ? new Date(row.completed_at).toISOString() : undefined,
       waiting: row.waiting ?? undefined,
       delivery: row.delivery ?? undefined,
       event_count: row.event_count,
@@ -222,6 +240,17 @@ export class PgProjection {
       startedAt: String(row.started_at),
       finishedAt: row.finished_at ? String(row.finished_at) : undefined,
     }));
+  }
+
+  /** 管理页主动自检：真实执行 select 1，但不改变写侧 fail-open 语义。 */
+  async health(): Promise<{ reachable: boolean; last_error?: string }> {
+    try {
+      await this.ensureSchema();
+      await this.pool.query("select 1");
+      return { reachable: true, last_error: this.lastError };
+    } catch (error) {
+      return { reachable: false, last_error: String(error) };
+    }
   }
 
   async close(): Promise<void> {

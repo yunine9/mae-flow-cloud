@@ -52,6 +52,16 @@ export class Notifier {
     return [...this.records.values()];
   }
 
+  /** 自检只暴露“是否配置/最近是否失败”，不回端点鉴权内容。 */
+  health(): { configured: boolean; last_error?: string } {
+    const latest = this.list().at(-1);
+    return {
+      configured: !!this.target().endpoint.trim(),
+      last_error: latest && !latest.delivered && latest.attempts > 0
+        ? latest.last_error || "最近一条通知未送达" : undefined,
+    };
+  }
+
   /** 投递一张待办。同 waiting_id 幂等——恢复重放不重复通知。 */
   async notifyWaiting(input: {
     waitingId: string;
@@ -109,6 +119,32 @@ export class Notifier {
     };
     this.records.set(key, record);
     void this.deliver(record);
+    return record;
+  }
+
+  /** 责任人主动邀请 Committer 检视。与流程自动通知不同：
+   * 每次点击都是一次明确动作，因此不跨点击幂等，并等待投递结果回给界面。 */
+  async notifyReview(input: {
+    taskId: string;
+    account: string;
+    summary: string;
+    link: string;
+  }): Promise<NotifyRecord> {
+    const key = `${input.taskId}:review:${input.account}:${Date.now()}`;
+    const record: NotifyRecord = {
+      waiting_id: key,
+      task_id: input.taskId,
+      account: input.account,
+      step: "committer_review",
+      summary: input.summary,
+      link: input.link,
+      text: `【Mae-Flow】任务 ${input.taskId} 邀请你检视：${input.summary}`,
+      attempts: 0,
+      delivered: false,
+      last_error: "",
+    };
+    this.records.set(key, record);
+    await this.deliver(record);
     return record;
   }
 

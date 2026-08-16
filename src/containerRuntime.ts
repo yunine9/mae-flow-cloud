@@ -116,10 +116,10 @@ export class TaskContainer {
 
 /** docker 可用性探测(daemon 活着才算可用,只装了 CLI 不算)。 */
 export async function dockerAvailable(): Promise<boolean> {
-  try {
-    await docker("info", "--format", "{{.ServerVersion}}");
-    return true;
-  } catch {
-    return false;
-  }
+  return new Promise((resolve) => {
+    execFile("docker", ["info", "--format", "{{.ServerVersion}}"], {
+      encoding: "utf-8",
+      timeout: 5_000,
+    }, (error) => resolve(!error));
+  });
 }

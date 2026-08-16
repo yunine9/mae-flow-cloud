@@ -7,6 +7,7 @@
  *   POST /tasks/:id/decision   {state_version,decision,notes?}
  *        → 200;版本冲突/已被抢先 → 409 "任务状态已变化"(先到决定生效)
  *   POST /tasks/:id/interrupt  {text}                   → 200;跑动中插话(发送即打断)
+ *   POST /tasks/:id/pause|resume|cancel                 → 200;任务控制
  *   GET  /tasks/:id/interrupts                          → 发过的插话 + 送达与否
  *   GET  /tasks/:id/annotations                         → 待送出批注 + 锚点现状
  *   POST /tasks/:id/annotations {artifact,file,line,anchor,note,kind} → 201
@@ -33,7 +34,11 @@ import {
 } from "node:fs";
 import { dirname, extname, join, resolve, sep } from "node:path";
 import { StateConflictError } from "./humanGate.ts";
-import { NotFoundError, type TaskService } from "./taskService.ts";
+import {
+  NotFoundError,
+  TaskControlError,
+  type TaskService,
+} from "./taskService.ts";
 import { buildTimeline } from "./timeline.ts";
 import {
   listArtifacts,
@@ -190,6 +195,24 @@ export function createTaskServer(
               return json(response, 400, { error: String(error) });
             }
           }
+          if (request.method === "PUT" && parts.length === 4
+              && parts[3] === "committer") {
+            const body = await readBody(request);
+            try {
+              const user = options.auth!.setCommitter(
+                decodeURIComponent(parts[2]), body.on === true);
+              return json(response, 200, user);
+            } catch (error) {
+              return json(response, 400, { error: String(error) });
+            }
+          }
+        }
+        // Committer 名单不是账号管理能力：登录开发需要读取它，才能主动
+        // 选择检视人；只有上面的管理员接口可以改名单。
+        if (request.method === "GET" && parts[1] === "committers") {
+          if (!viewer) return json(response, 401, { error: "尚未登录" });
+          return json(response, 200,
+            options.auth?.listUsers().filter((user) => user.committer) ?? []);
         }
         return json(response, 404, { error: "未知身份接口" });
       }
@@ -203,6 +226,9 @@ export function createTaskServer(
           if (viewer.role !== "admin") {
             return json(response, 403, { error: "只有管理员可以改服务设置" });
           }
+        }
+        if (request.method === "GET" && parts[1] === "check") {
+          return json(response, 200, await service.systemCheck());
         }
         const settings = service.options.settings;
         if (!settings) {
@@ -257,7 +283,8 @@ export function createTaskServer(
       }
 
       const protectedRoute =
-        url.pathname === "/history" || parts[0] === "tasks";
+        url.pathname === "/history" || parts[0] === "tasks"
+        || parts[0] === "reviews";
       if (options.auth && protectedRoute && !viewer) {
         return json(response, 401, { error: "请先登录" });
       }
@@ -271,6 +298,24 @@ export function createTaskServer(
             { error: "未配置 PostgreSQL 投影(--pg),没有历史可查" });
         }
         return json(response, 200, await projection.listTaskHistory());
+      }
+      // Committer 的个人检视收件箱。名单只决定“还能不能被新邀请”，
+      // 已经发给本人的邀请即使后来移出名单也仍应可见、可完成。
+      if (parts[0] === "reviews") {
+        if (!viewer) return json(response, 401, { error: "请先登录" });
+        if (request.method === "GET" && parts[1] === "mine") {
+          return json(response, 200, service.listReviewsFor(viewer.username));
+        }
+        if (request.method === "POST" && parts.length === 3
+            && parts[2] === "complete") {
+          try {
+            return json(response, 200,
+              service.completeReview(decodeURIComponent(parts[1]), viewer.username));
+          } catch (error) {
+            return json(response, 403, { error: String(error) });
+          }
+        }
+        return json(response, 404, { error: "未知检视接口" });
       }
       // 静态前端(webRoot=React 构建产物):/ 与非 API 路径出文件;
       // 没配 webRoot 时零构建演示页兜底——两种形态永远有一个能用。
@@ -363,6 +408,31 @@ export function createTaskServer(
           });
           return json(response, 200, task);
         }
+        // Committer 检视必须由该单责任人主动发起。管理员只维护名单，
+        // 即使拥有其他操作兜底权，也不能替开发点击邀请。
+        if (request.method === "POST" && parts[2] === "review-request") {
+          const target = service.get(id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          if (!viewer || viewer.username !== target.luban_account) {
+            return json(response, 403,
+              { error: "只有该任务责任人可以邀请 Committer 检视" });
+          }
+          const body = await readBody(request);
+          const committer = String(body.committer ?? "").trim();
+          const allowed = options.auth?.listUsers().some((user) =>
+            user.username === committer && user.committer);
+          if (!allowed) {
+            return json(response, 400,
+              { error: "请选择管理员配置的 Committer" });
+          }
+          return json(response, 200,
+            await service.requestReview(id, viewer.username, committer));
+        }
+        if (request.method === "GET" && parts[2] === "reviews") {
+          const target = service.get(id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          return json(response, 200, service.listTaskReviews(id));
+        }
         if (request.method === "GET" && parts[2] === "events") {
           return streamEvents(service, id, response);
         }
@@ -436,6 +506,22 @@ export function createTaskServer(
           const body = await readBody(request);
           const task = await service.interrupt(id, String(body.text ?? ""));
           return json(response, 200, task);
+        }
+        if (request.method === "POST"
+            && ["pause", "resume", "cancel"].includes(parts[2])) {
+          const target = service.get(id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          if (!canOperate(viewer, target.luban_account, !!options.auth)) {
+            return json(response, 403, { error: "只能控制分配给自己的任务" });
+          }
+          const actor = viewer?.username ?? "本地用户";
+          if (parts[2] === "pause") {
+            return json(response, 200, await service.pause(id, actor));
+          }
+          if (parts[2] === "resume") {
+            return json(response, 200, service.resume(id, actor));
+          }
+          return json(response, 200, await service.cancel(id, actor));
         }
         // 重跑一单(run7 实测的运维刚需):环境故障被迫收口的任务,
         // 修好环境后续接内核当前步骤,不从头再来。终态校验在服务层。
@@ -519,6 +605,9 @@ export function createTaskServer(
       if (error instanceof StateConflictError) {
         // 先到决定生效:后到的提交必须知道自己没生效,不能静默吞掉。
         return json(response, 409, { error: `任务状态已变化: ${error.message}` });
+      }
+      if (error instanceof TaskControlError) {
+        return json(response, 409, { error: error.message });
       }
       if (error instanceof NotFoundError) {
         return json(response, 404, { error: error.message });
@@ -614,7 +703,7 @@ function streamEvents(
       }
     }
     const status = service.get(id)?.status;
-    if (status === "completed" || status === "failed") {
+    if (status === "completed" || status === "failed" || status === "canceled") {
       response.end();
       return;
     }

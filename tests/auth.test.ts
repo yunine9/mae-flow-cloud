@@ -13,6 +13,7 @@ import type { AddressInfo } from "node:net";
 import { LocalAuth } from "../src/auth.ts";
 import { TaskService } from "../src/taskService.ts";
 import { createTaskServer } from "../src/server.ts";
+import { FakeLubanServer, Notifier } from "../src/notifier.ts";
 
 test("账号库:scrypt 哈希落盘且重启后仍可登录", () => {
   const dir = mkdtempSync(join(tmpdir(), "mfc-auth-"));
@@ -98,11 +99,157 @@ test("HTTP 登录:开发看全部任务,创建归自己,不能操作别人任务
     );
     assert.equal(forbidden.status, 403);
 
+    const forbiddenPause = await fetch(
+      `${base}/tasks/${created.id}/pause`, {
+        method: "POST", headers: { cookie: alice },
+      });
+    assert.equal(forbiddenPause.status, 403,
+      "普通开发不能暂停别人的任务");
+    const ownerPause = await fetch(
+      `${base}/tasks/${created.id}/pause`, {
+        method: "POST", headers: { cookie: bob },
+      });
+    assert.equal(ownerPause.status, 200);
+    assert.equal((await ownerPause.json() as { status: string }).status, "paused");
+    const admin = await login("admin", "administrator-pass");
+    const adminResume = await fetch(
+      `${base}/tasks/${created.id}/resume`, {
+        method: "POST", headers: { cookie: admin },
+      });
+    assert.equal(adminResume.status, 200, "管理员可兜底恢复任务");
+
     const users = await fetch(`${base}/auth/users`, {
       headers: { cookie: alice },
     });
     assert.equal(users.status, 403, "普通开发不能管理账号");
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("Committer 检视:管理员只配名单,仅任务责任人主动邀请后才通知", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-review-http-"));
+  const auth = new LocalAuth(join(dir, "auth.json"));
+  auth.bootstrapAdmin("admin", "administrator-pass");
+  auth.createUser("alice", "alice-password-1", "developer");
+  auth.createUser("bob", "bob-password-123", "developer");
+  const luban = new FakeLubanServer();
+  await luban.start();
+  const service = new TaskService({
+    dataDir: join(dir, "tasks"), provider: "test", model: "test",
+    modelsJson: {}, maxConcurrent: 0,
+    notifier: new Notifier({ endpoint: luban.endpoint, backoffMs: [0] }),
+    linkBase: "http://mae-flow.internal",
+  });
+  const server = createTaskServer(service, { auth });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as AddressInfo).port;
+  const base = `http://127.0.0.1:${port}`;
+
+  async function login(username: string, password: string): Promise<string> {
+    const response = await fetch(`${base}/auth/login`, {
+      method: "POST", body: JSON.stringify({ username, password }),
+    });
+    assert.equal(response.status, 200);
+    return response.headers.get("set-cookie")!.split(";")[0];
+  }
+
+  try {
+    const admin = await login("admin", "administrator-pass");
+    const alice = await login("alice", "alice-password-1");
+    const bob = await login("bob", "bob-password-123");
+    const configured = await fetch(`${base}/auth/users/bob/committer`, {
+      method: "PUT", headers: { cookie: admin }, body: JSON.stringify({ on: true }),
+    });
+    assert.equal(configured.status, 200);
+    assert.equal((await configured.json() as { committer?: boolean }).committer, true);
+
+    const committers = await fetch(`${base}/auth/committers`, {
+      headers: { cookie: alice },
+    });
+    assert.equal(committers.status, 200, "普通开发可读取可选检视人");
+    assert.deepEqual(await committers.json(), [
+      { username: "bob", role: "developer", committer: true },
+    ]);
+
+    const createdResponse = await fetch(`${base}/tasks`, {
+      method: "POST", headers: { cookie: alice },
+      body: JSON.stringify({ requirement: "实现订单检索" }),
+    });
+    const created = await createdResponse.json() as { id: string };
+    assert.equal(luban.messages.length, 0,
+      "配置 Committer 后创建任务仍不会自动通知他");
+
+    const adminCannotInvite = await fetch(
+      `${base}/tasks/${created.id}/review-request`, {
+        method: "POST", headers: { cookie: admin },
+        body: JSON.stringify({ committer: "bob" }),
+      });
+    assert.equal(adminCannotInvite.status, 403,
+      "管理员不能替责任人主动发起检视");
+    const otherDeveloperCannotInvite = await fetch(
+      `${base}/tasks/${created.id}/review-request`, {
+        method: "POST", headers: { cookie: bob },
+        body: JSON.stringify({ committer: "bob" }),
+      });
+    assert.equal(otherDeveloperCannotInvite.status, 403);
+
+    const invalid = await fetch(
+      `${base}/tasks/${created.id}/review-request`, {
+        method: "POST", headers: { cookie: alice },
+        body: JSON.stringify({ committer: "admin" }),
+      });
+    assert.equal(invalid.status, 400, "只能选择管理员配置的 Committer");
+    assert.equal(luban.messages.length, 0);
+
+    const invited = await fetch(
+      `${base}/tasks/${created.id}/review-request`, {
+        method: "POST", headers: { cookie: alice },
+        body: JSON.stringify({ committer: "bob" }),
+    });
+    assert.equal(invited.status, 200);
+    const review = await invited.json() as {
+      id: string; delivered: boolean; status: string;
+    };
+    assert.equal(review.delivered, true);
+    assert.equal(review.status, "pending");
+    assert.equal(luban.messages.length, 1);
+    assert.equal(luban.messages[0].account, "bob");
+    assert.equal(luban.messages[0].text,
+      `【Mae-Flow】任务 ${created.id} 邀请你检视：实现订单检索`);
+    assert.equal(luban.messages[0].link,
+      `http://mae-flow.internal/?task=${created.id}&review=${review.id}`);
+
+    const inbox = await fetch(`${base}/reviews/mine`, {
+      headers: { cookie: bob },
+    });
+    assert.equal(inbox.status, 200);
+    assert.equal((await inbox.json() as Array<{ id: string }>)[0].id, review.id,
+      "通知之外还有持久化的待我检视收件箱");
+    const adminCannotComplete = await fetch(
+      `${base}/reviews/${review.id}/complete`, {
+        method: "POST", headers: { cookie: admin },
+      });
+    assert.equal(adminCannotComplete.status, 403);
+    const completed = await fetch(
+      `${base}/reviews/${review.id}/complete`, {
+        method: "POST", headers: { cookie: bob },
+      });
+    assert.equal(completed.status, 200);
+    assert.equal((await completed.json() as { status: string }).status, "completed");
+
+    const afterRestart = new TaskService({
+      dataDir: join(dir, "tasks"), provider: "test", model: "test",
+      modelsJson: {}, maxConcurrent: 0,
+    });
+    assert.equal(afterRestart.listReviewsFor("bob")[0]?.status, "completed",
+      "检视记录与完成状态跨进程保留");
+
+    const restored = new LocalAuth(join(dir, "auth.json"));
+    assert.equal(restored.listUsers().find((user) => user.username === "bob")
+      ?.committer, true, "Committer 名单持久化");
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await luban.stop();
   }
 });

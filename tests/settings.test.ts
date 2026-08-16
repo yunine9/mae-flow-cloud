@@ -202,6 +202,23 @@ test("路由权限:admin 可读改,开发成员 403,密钥不出网", async () =
     const denied = await fetch(`${base}/settings`, {
       headers: { cookie: dev } });
     assert.equal(denied.status, 403);
+    const deniedCheck = await fetch(`${base}/settings/check`, {
+      headers: { cookie: dev } });
+    assert.equal(deniedCheck.status, 403, "部署自检也只允许管理员查看");
+
+    const checked = await fetch(`${base}/settings/check`, {
+      headers: { cookie: admin },
+    });
+    assert.equal(checked.status, 200);
+    const checkBody = await checked.json() as {
+      overall: string;
+      items: Array<{ key: string; status: string }>;
+    };
+    assert.ok(["ok", "warning", "error"].includes(checkBody.overall));
+    assert.deepEqual(checkBody.items.map((item) => item.key),
+      ["data", "model", "notify", "postgres", "git", "container"]);
+    assert.equal(checkBody.items.find((item) => item.key === "model")?.status,
+      "ok");
 
     const put = await fetch(`${base}/settings/luban`, {
       method: "PUT", headers: { cookie: admin },

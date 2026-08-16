@@ -19,6 +19,7 @@ import {
   type TimelineEntry,
 } from "./api";
 import { formatWait, URGENT_MINUTES, waitedMs } from "./taskTime";
+import { responsibleOf } from "./teamOps";
 
 function formatTime(iso: string): string {
   const date = new Date(iso);
@@ -84,7 +85,10 @@ export function TaskCard({
             <WaitBadge task={task} personal={showDecisionForm} />
             <span className="task-created">{formatTime(task.created_at)}</span>
           </span>
-          <strong className="task-title">{task.requirement}</strong>
+          <strong className="task-title">{task.title ?? task.requirement}</strong>
+          <span className="task-ownership">
+            <span>责任人 · {responsibleOf(task) ?? "未指定"}</span>
+          </span>
           {task.progress && (
             <TaskProgress
               progress={task.progress}
@@ -134,7 +138,7 @@ export function TaskCard({
           <span className="meta-fact">交付 · {task.delivery.skipped}</span>
         )}
         {task.luban_account && (
-          <span className="meta-fact">通知 · {task.luban_account}</span>
+          <span className="meta-fact">责任人 · {responsibleOf(task)}</span>
         )}
       </div>
 

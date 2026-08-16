@@ -7,20 +7,26 @@
 export type TaskStatus =
   | "queued"
   | "running"
+  | "pausing"
+  | "paused"
   | "waiting_for_human"
   | "completed"
   | "verifying"
   | "await_merge"
+  | "canceled"
   | "failed";
 
 export const STATUS_TEXT: Record<TaskStatus, string> = {
   queued: "排队中",
   running: "进行中",
+  pausing: "正在暂停",
+  paused: "已暂停",
   waiting_for_human: "等你决定",
   completed: "已完成",
   failed: "出错了",
   verifying: "代码已提交,流水线验证中",
   await_merge: "已提合入请求,等待合入",
+  canceled: "已取消",
 };
 
 /** 修复停机(需人工):与服务端 retry 的准入同一口径——只有这时
@@ -43,8 +49,8 @@ export function statusText(task: {
   delivery?: { loop?: { round: number; max?: number; state: string } };
 }): string {
   const loop = task.delivery?.loop;
-  if (loop && task.status !== "waiting_for_human"
-      && task.status !== "failed") {
+  if (loop && ["queued", "running", "pausing", "verifying"]
+    .includes(task.status)) {
     if (loop.state === "repairing") {
       return `流水线修复中(第 ${loop.round}${
         loop.max !== undefined ? `/${loop.max}` : ""} 轮)`;
@@ -60,6 +66,8 @@ export type UserRole = "admin" | "developer";
 export interface AuthUser {
   username: string;
   role: UserRole;
+  /** 管理员配置的可选检视人；不是角色，也不会自动收到任务通知。 */
+  committer?: boolean;
   /** 个人 Git 令牌的掩码提示(••••末4位);没配则缺席。只写不读:
    * 明文永远不会出现在任何 API 响应里。 */
   git_token_hint?: string;
@@ -152,6 +160,70 @@ export async function createUser(
   return response.json();
 }
 
+export async function listCommitters(): Promise<AuthUser[]> {
+  const response = await fetch("/auth/committers");
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function putCommitter(
+  username: string,
+  on: boolean,
+): Promise<AuthUser> {
+  const response = await fetch(
+    `/auth/users/${encodeURIComponent(username)}/committer`, {
+      method: "PUT",
+      body: JSON.stringify({ on }),
+    });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function requestCommitterReview(
+  taskId: string,
+  committer: string,
+): Promise<ReviewRequest> {
+  const response = await fetch(`/tasks/${encodeURIComponent(taskId)}/review-request`, {
+    method: "POST",
+    body: JSON.stringify({ committer }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export interface ReviewRequest {
+  id: string;
+  task_id: string;
+  task_title: string;
+  requester: string;
+  committer: string;
+  status: "pending" | "completed";
+  created_at: string;
+  completed_at?: string;
+  delivered: boolean;
+  attempts: number;
+  last_error?: string;
+}
+
+export async function listMyReviews(): Promise<ReviewRequest[]> {
+  const response = await fetch("/reviews/mine");
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function listTaskReviews(taskId: string): Promise<ReviewRequest[]> {
+  const response = await fetch(`/tasks/${encodeURIComponent(taskId)}/reviews`);
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function completeReview(reviewId: string): Promise<ReviewRequest> {
+  const response = await fetch(
+    `/reviews/${encodeURIComponent(reviewId)}/complete`, { method: "POST" });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
 export interface WaitingQuestion {
   question: string;
   options?: string[];
@@ -159,10 +231,14 @@ export interface WaitingQuestion {
 
 export interface TaskSummary {
   id: string;
+  title?: string;
   requirement: string;
   status: TaskStatus;
   detail?: string;
   created_at: string;
+  updated_at?: string;
+  last_progress_at?: string;
+  completed_at?: string;
   luban_account?: string;
   waiting?: {
     waiting_id: string;
@@ -194,6 +270,12 @@ export interface TaskSummary {
     current_phase: string;
     step?: string;
     revision?: number;
+  };
+  control?: {
+    last_action: "pause" | "resume" | "cancel";
+    actor: string;
+    at: string;
+    paused_from?: TaskStatus;
   };
 }
 
@@ -339,6 +421,20 @@ export async function interruptTask(
     return { error: String(body.error ?? `HTTP ${response.status}`) };
   }
   return {};
+}
+
+export async function controlTask(
+  taskId: string,
+  action: "pause" | "resume" | "cancel",
+): Promise<{ task?: TaskSummary; error?: string }> {
+  const response = await fetch(`/tasks/${encodeURIComponent(taskId)}/${action}`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    return { error: String(body.error ?? `HTTP ${response.status}`) };
+  }
+  return { task: await response.json() };
 }
 
 /** 发过的补充说明 + 送达与否。delivered 是可观测事实(消息已离开
@@ -558,6 +654,26 @@ export interface SettingsView {
     model?: string;
     providers: Array<{ name: string; models: string[]; key_hint?: string }>;
   };
+}
+
+export interface SystemCheckItem {
+  key: string;
+  label: string;
+  status: "ok" | "warning" | "error";
+  detail: string;
+  suggestion?: string;
+}
+
+export interface SystemCheckResult {
+  checked_at: string;
+  overall: "ok" | "warning" | "error";
+  items: SystemCheckItem[];
+}
+
+export async function getSystemCheck(): Promise<SystemCheckResult> {
+  const response = await fetch("/settings/check");
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
 }
 
 export async function getSettings(): Promise<SettingsView> {
