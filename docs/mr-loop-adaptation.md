@@ -103,9 +103,14 @@
   宿主会当成未知项);
 - `detail` 可选,人话一句,进任务详情给人看。
 
-> 待确认 **Q2**:门禁查询在 codehubcli / MCP 上具体是哪个调用?
-> 发我一份**真实返回的 JSON 样例**(脱敏即可,保留字段名与取值形状)。
-> 尤其是九项的确切拼写,以及"未通过"是布尔还是状态串。
+> **Q2 已核实(2026-08-17 报告)**:真实调用是 REST
+> `GET /api/v3/projects/{路径}/merge_requests/{iid}/mergeable_state`,
+> 返回**不是数组,是平铺布尔对象**:九项门禁名与 §4 的表逐字吻合、
+> 全是布尔,另有约 18 个额外布尔字段、一个 `reason` 文案对象和
+> `merge_request_switch` 总开关。适配层为此加了 `bools`/`reason`/
+> `ignore_fields` 平铺模式(把布尔字段翻译成上面的 gates 数组,
+> reason 同名文案进 detail),契约本身不变——宿主"认不出的名字按
+> 等人处理"的设计正好兜住那 18 个额外字段。参考填法见 §11。
 
 ### 3.2 `GET /mr/discussions?repo=<url>&mr=<iid>`
 
@@ -124,11 +129,17 @@
 
 ### 3.3 `POST /mr/discussions/:id/reply`
 
-请求 `{repo, mr, body, resolve: true}` → 回 `{ok: true}`。
-把 agent 写的逐条回复发布到对应讨论,并按 `resolve` 决定是否标记已解决。
+请求 `{repo, mr, body, resolve: <bool>}` → 回 `{ok: true, resolved: <bool>}`。
+把 agent 写的逐条回复发布到对应讨论;`resolve` 为 true 且适配层配了
+`discussion_resolve` 时才标记已解决。
 
-> 待确认 **Q3**:回复与"标记已解决"在内网是一个调用还是两个?
-> 发我调用形状(命令行或 MCP 工具名 + 参数)。
+> **Q3 已核实(2026-08-17 报告 D3)**:回复(POST notes)与标已解决
+> (PUT discussions / 新代 CLI `--resolve` 带 note id)是**两个调用**,
+> 且既有框架**刻意只回复不代 resolve**——"that is the reviewer's
+> responsibility"。宿主已改为同一语义:默认 `resolve:false`,回复
+> 发布后讨论保持未解决,任务挂"等检视人确认已回复的意见"继续监控
+> (不是刹车),检视人点掉后门禁自然清。平台/团队明确允许代点的
+> 部署,serve 加 `--resolve-discussions` 才走两步调用。
 
 ### 3.4 `GET /pipeline/artifacts?sha=<sha>&repo=<url>`
 
@@ -170,6 +181,13 @@
 
 优先级含义:同时有多项未过时,**只派优先级最高的那一路**(检视 > 冲突 >
 CI)。理由照抄内网框架:冲突不解,CI 白跑;检视优先于代码问题。
+一个例外(2026-08-17 报告 D3 之后):检视这一路"这批意见都答复过了、
+只是检视人还没点已解决"时**不占路**——归入等待名单,顺位落到下一
+优先级继续派(等人不许把 CI 修复堵死)。
+
+报告 B 节实证:九项拼写与上表逐字一致、全布尔;真实端点还有约 18 个
+额外布尔字段(`squash_passed`/`title_check_passed` 等)——它们落进
+"认不出的名字"那一行,未过时挂起留痕,不瞎修,正是想要的行为。
 
 "等人"不是失败:任务停在验证中,**继续轮询**,并给归属人发通知说清
 "卡在哪一项、需要谁做什么"。这是本仓现在缺的语义——现在会一路轮询到
@@ -211,21 +229,28 @@ CI)。理由照抄内网框架:冲突不解,CI 白跑;检视优先于代码问�
 > 每批都必须:①有测试(假件裁判,契约写进测试);②`npm test` 全绿;
 > ③`npm run typecheck` 0 错;④README 诚实清单补一条"什么验过、什么没验"。
 
-- **批 1~4:已完成(2026-08-17)**,tests/mrLoop.test.ts 四条端到端 +
+- **批 1~4:已完成(2026-08-17)**,tests/mrLoop.test.ts 端到端 +
   delivery.test.ts 旧 16 项全绿;适配层四个新端点与 `--selftest` 就绪。
-  等内网的《能力核对报告》(见 docs/mr-loop-capability-audit.md)回来
-  钉死真实形状。
+- **报告已回并消化(2026-08-17)**:《MR 闭环能力核对报告》总判定
+  "可以集成,3 处缺口"。按报告改了三处契约(都在外网改,内网零代码):
+  ①检视回复默认不代 resolve(D3),已回复未确认=等人不等于修不动;
+  ②适配层 mr_gates 加平铺布尔模式(B 节 mergeable_state 真实形状);
+  ③MR 先查后建 + 创建失败回查兜竞态(A2 幂等语义不统一)。
+  三个缺口进试点清单(§11 末尾)。
 - ~~批 1(核心)~~:门禁进契约 + 分类表 + 优先级派单 + 重试语义
   (只 CI 扣)+ 挂起等待状态与通知。假件 `gitPlatform.ts` 加门禁模拟。
 - ~~批 2~~:日志落盘 `pipeline/` + 双通道开场白。
 - ~~批 3~~:检视修复闭环(拉讨论→使命→回复发布并标已解决)。
 - ~~批 4~~:冲突修复(merge 造标记→使命→解完提交)。
 
-**MCP 怎么办(用户问)**:适配层现在只会拉起命令行。内网若某能力只有
-MCP 一条路,两个选项:① 包一个"MCP→命令行"小桥(几十行脚本,stdin
-收参数、stdout 吐 JSON——桥是配置产物,不算内网改代码);② 外网给
-适配层加原生 MCP 客户端。选哪个取决于网关的传输形态(stdio/SSE/
-streamable HTTP)与鉴权——这正是能力问卷 C2 要收集的,报告回来再定。
+**MCP 怎么办(已定,依据报告 C2)**:网关是 streamable HTTP——
+`GET /sse` 拿 session_id,`POST /messages` 发 JSON-RPC;鉴权分两个
+网关(主网关 `X-Auth-Token` + w3token,SSE 日志网关 auth:false 但要
+`x_auth_token` 参数)。这个形态**包桥就够了**:一个几十行的脚本
+(argv 收参数 → 发两个 HTTP 请求 → stdout 吐 JSON),适配层照常以
+命令行拉起它——桥是配置产物,不算内网改代码,原生 MCP 客户端不做。
+唯一必须走 MCP 的能力是完整构建日志下载(A6:CLI token 打日志网关
+401,要 MCP access token),桥只为它服务;其余能力 CLI/REST 全够。
 - **批 5(内网模型做,只改配置不碰代码)**:在 `adapter.json` 里填四个
   新端点的命令模板/MCP 调用与形状映射;`npm run adapter -- --selftest`
   自检通过;再用 curl 逐个端点验一遍。**不许改任何 .ts**(见 §9)。
@@ -285,21 +310,127 @@ npm run adapter -- --config adapter.json --selftest
 
 ---
 
-## 10. 待确认问题清单(逐条回我就能继续)
+## 10. 待确认问题清单(2026-08-17 报告已答大半)
 
-| # | 问题 | 我要的东西 |
+| # | 问题 | 答案(依据能力核对报告) |
 |---|---|---|
-| Q1 | 工作分支是平台自建固定格式吗?force-push 是不是必需 | 一句话即可 |
-| Q2 | 门禁查询怎么调、返回长什么样 | **真实 JSON 样例**(脱敏),九项确切拼写 |
-| Q3 | 检视讨论:拉取/回复/标记已解决各是什么调用 | 命令行或 MCP 工具名 + 参数 + 返回样例 |
-| Q4 | SSE 日志网关在试点机能不能直连;`get_mr_pipeline_info` 返回样例 | JSON 样例 |
-| Q5 | `mr update`(改描述)的子命令与参数 | 命令行样例 |
-| Q6 | SuperChecker"不可修"怎么识别 | 判据(工具名?错误码?)+ 一条真实失败样例 |
-| Q7 | 试点是单仓还是多仓 | 一句话;多仓的话我把 repo 路由补上 |
-| Q8 | CodeHub token 是否兼任 HTTPS push 凭据 | 进场实测一次即可 |
-| Q9 | 等审批时希望系统怎么表现 | 通知谁、隔多久提醒一次、要不要自动催 |
-| Q10 | 你们的 `maxRetries=20` 在本仓要不要保留 | 本仓默认不限轮(用户拍板),需要上限就说个数 |
+| Q1 | 工作分支格式 | ✅ 平台固定 `<目标分支>_<用户>_<单号>`(实测 `master_z30003938_REQ...`),与内核"分支名"配置同形;force-push 维持禁用 |
+| Q2 | 门禁查询形状 | ✅ REST `mergeable_state`,平铺布尔+reason,见 §3.1/§11 |
+| Q3 | 回复/标已解决 | ✅ 两个调用;框架刻意不代 resolve,宿主已同语义,见 §3.3 |
+| Q4 | SSE 日志网关 | ⚠️ 试点机可达、缺陷信息免鉴权可拿;**完整日志要 MCP access token**(CLI token 401)——缺口②,走 §7 的桥 |
+| Q5 | `mr update` | 未真调(非闭环必需,暂不消费) |
+| Q6 | SuperChecker 识别 | ⚠️ 源码实锤有 skip 逻辑,但无真调样例(缺口③);本仓现行为:派一轮修复→会话诊断"不可修"→halted 带诊断请人工,诚实但多烧一个会话,拿到判据后再做前置跳过 |
+| Q7 | 单仓/多仓 | 试点单仓;多仓路由(repo 字段)已在契约里,配置层面扩 |
+| Q8 | token 兼任 push 凭据 | ✅ 同一个 token,但框架用 `https://oauth2:{token}@host` 形式(用户名固定 `oauth2`);push 本身被代理 504 挡住未走通(缺口①),部署手册有对策 |
+| Q9 | 等审批表现 | 已实现:waiting_on 说清卡在哪 + 幂等通知归属人(同一批等待只响一次) |
+| Q10 | maxRetries=20 | 维持本仓语义:默认不限轮、可配手刹,收敛靠同 SHA 刹车 |
 
-**没有 Q2/Q3 我就只能按上面的契约先写死形状**——真实返回不一致时,
-适配层那边翻译一下即可,宿主不用改。所以批 1~4 我现在就能动手,
-不必等你回来。
+补充实证(不在问题清单里但影响契约的):
+- **A2 幂等**:CLI 重复建报 stderr `Another open merge request already
+  exists...: !N`;REST 重复建**静默 200 空 body**。两种形状都别赌——
+  适配层已加 `mr_lookup` 先查后建,创建失败再回查一次兜竞态;
+- **D5 触发**:push 自动触发流水线,不需要显式 trigger——
+  `pipeline_trigger` 配成查询 `actual_head_pipeline` 的只读命令 +
+  `status: {"const": "running"}` 即可(§11);注意 `is_valid: false`
+  表示 MR 头上还没有有效流水线(挂着的可能是旧分支的陈灯),适配层
+  这时**不要**把旧灯翻译成终态;
+- **C1 CLI 三代不兼容**:Python codehub.exe v0.4.9(已装)与设计契约
+  参照的 Node codehub-cli 1.6.0 子命令/参数完全不同(如 v0.4.9 用
+  `--source-project <数字id>`,MR 建单要项目 id 不是路径)。适配层是
+  命令模板,**照装机上真实存在的那一代填**,selftest 会当场暴露对不上
+  的形状;试点单仓可以把项目 id 直接写死在模板里。
+
+---
+
+## 11. adapter.json 参考填法(照报告的真实形状,进场对着微调)
+
+下面是按报告钉出来的骨架——REST 优先(形状最稳、不吃 CLI 代际),
+`curl` 都是只读或幂等安全的。**占位说明**:`<pid>`=项目数字 id
+(试点单仓写死),`<host>`=CodeHub API 域名;`{mr}` 等花括号占位符
+由适配层运行时填。真实字段名以 selftest 输出为准,对不上改这份配置,
+不改代码。
+
+```jsonc
+{
+  "token_file": "/etc/mae-flow-cloud/codehub-token",   // 0600
+  "mr_lookup": {   // 先查后建(A2:幂等语义不统一,查询是唯一稳的路)
+    "command": ["curl", "-sf", "-H", "X-Auth-Token: {token}",
+      "https://<host>/api/v3/projects/<pid>/merge_requests?state=opened&source_branch={source_branch}&target_branch={target_branch}"],
+    "url": {"json": "0.web_url"},
+    "id": {"json": "0.iid"}
+  },
+  "mr_create": {
+    "command": ["curl", "-sf", "-X", "POST",
+      "-H", "X-Auth-Token: {token}", "-H", "Content-Type: application/json",
+      "-d", "{\"source_branch\":\"{source_branch}\",\"target_branch\":\"{target_branch}\",\"title\":\"{title}\"}",
+      "https://<host>/api/v3/projects/<pid>/merge_requests"],
+    "url": {"json": "web_url"},
+    "id": {"json": "iid"}
+    // 注意:重复建时 REST 回 200 空 body,url 抽取会失败——
+    // 但 mr_lookup 在前面已经把已存在的单接走了,这条只处理真创建。
+  },
+  "pipeline_trigger": {   // D5:push 自动触发,这里只是查询,不产生副作用
+    "command": ["curl", "-sf", "-H", "X-Auth-Token: {token}",
+      "https://<host>/api/v3/projects/<pid>/merge_requests/{mr}/pipelines/latest"],
+    "status": {"const": "running"}   // 交给宿主轮询 pipeline_status 收敛
+  },
+  "pipeline_status": {
+    // actual_head_pipeline:注意 is_valid=false 时挂的是旧灯,不是
+    // 本次提交的结果——包一层 jq 只在 is_valid 且 sha 匹配时输出 run
+    "command": ["bash", "/etc/mae-flow-cloud/pipeline-status.sh",
+      "{sha}", "{token}"],
+    "status": {"json": "state"},
+    "log": {"json": "fail_summary"},
+    "status_map": {"success": "success", "failed": "failed",
+                   "running": "running", "pending": "running",
+                   "canceled": "failed"}
+  },
+  "mr_gates": {   // B 节:mergeable_state 平铺布尔 + reason
+    "command": ["curl", "-sf", "-H", "X-Auth-Token: {token}",
+      "https://<host>/api/v3/projects/<pid>/merge_requests/{mr}/mergeable_state"],
+    "bools": {"json": ""},            // 布尔字段在哪层就指到哪层
+    "reason": {"json": "reason"},
+    "ignore_fields": ["merge_request_switch"],
+    "mr_state": {"json": "state"},
+    "mr_state_map": {"opened": "opened", "merged": "merged",
+                     "closed": "closed", "locked": "opened"}
+  },
+  "mr_discussions": {
+    "command": ["bash", "/etc/mae-flow-cloud/unresolved-discussions.sh",
+      "{mr}", "{token}"],   // jq 过滤 resolved==false,拍平 notes[0]
+    "fields": {"id": {"json": "id"}, "file": {"json": "position.new_path"},
+               "line": {"json": "position.new_line"},
+               "author": {"json": "author"}, "body": {"json": "body"}}
+  },
+  "discussion_reply": {
+    "command": ["curl", "-sf", "-X", "POST",
+      "-H", "X-Auth-Token: {token}", "-H", "Content-Type: application/json",
+      "-d", "{\"body\":\"{body}\"}",
+      "https://<host>/api/v3/projects/<pid>/merge_requests/{mr}/discussions/{id}/notes"],
+    "note_id": {"json": "id"}
+  },
+  // discussion_resolve 默认不配(D3:resolve 归检视人)。团队拍板要
+  // 代点再配:PUT .../discussions/{id} -d '{"resolved":true}'
+  "pipeline_artifacts": {   // A6:完整日志走 MCP 桥(§7),先落盘再读
+    "command": ["python3", "/etc/mae-flow-cloud/mcp-log-bridge.py",
+      "--sha", "{sha}", "--out", "/var/mfc/artifacts/{sha}"],
+    "files_dir": "/var/mfc/artifacts/{sha}"
+  }
+}
+```
+
+两个小脚本(pipeline-status.sh / unresolved-discussions.sh)和 MCP 桥
+都是**配置产物**——几十行、只做取数和过滤、不做判定,放 /etc 下随
+adapter.json 一起管,不进仓库、不算改代码。
+
+### 试点必验清单(报告的三个缺口,都不是本仓代码能修的)
+
+1. **push 走不走得通**(缺口①):报告里 push 被代理 504 挡住。在试点
+   机器上用 `git push https://oauth2:<token>@<host>/<repo>` 实推一次
+   测试分支;404/401 再试把凭据用户名换成平台账号。结论回填部署手册;
+2. **MCP access token 供给**(缺口②):完整构建日志要它。找平台方拿
+   token 文件路径与刷新方式,MCP 桥读它;拿不到就先降级——
+   `pipeline_artifacts` 不配,修复环走摘要通道(宿主自动 fail-open);
+3. **SuperChecker 真实失败样例**(缺口③):逮到一条后把工具名/错误码
+   贴回来,外网把"前置跳过不可修工具失败"补上;在那之前的行为是
+   多烧一个诊断会话后诚实停机,不会瞎修。

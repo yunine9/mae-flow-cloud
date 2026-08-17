@@ -47,6 +47,25 @@ function fakeCli(dir: string): string {
     } else if (sub === "boom") {
       console.error("CLI 炸了: token 无效");
       process.exit(3);
+    } else if (sub === "mergeable") {
+      // CodeHub mergeable_state 的真实形状(能力核对报告 B 节):
+      // 平铺布尔 + reason 文案对象 + merge_request_switch 总开关。
+      console.log(JSON.stringify({ data: {
+        state: "opened",
+        conflict_passed: true,
+        ci_state_passed: false,
+        resolve_discussion_passed: true,
+        approvers_passed: false,
+        merge_request_switch: true,
+        reason: { ci_state_passed: "pipeline #88 failed" },
+      } }));
+    } else if (sub === "mrlist") {
+      console.log(JSON.stringify({ data: args.includes("--found")
+        ? [{ web_url: "https://codehub.corp/mr/7", iid: 7 }] : [] }));
+    } else if (sub === "note") {
+      console.log(JSON.stringify({ result: { id: 555 } }));
+    } else if (sub === "resolvecmd") {
+      console.log("{}");
     }
   `);
   return path;
@@ -154,6 +173,99 @@ test("诚实 502:未映射状态拒绝猜;CLI 非零退出带 stderr 上浮", as
     adapter.handle("POST", "/mr", new URLSearchParams(),
       { repo: "r", source_branch: "s", target_branch: "t", title: "x" }, {}),
     /token 无效/);
+});
+
+test("报告后新口子:平铺布尔门禁、先查后建、两步回复/解决", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-adapter-rpt-"));
+  const cli = fakeCli(dir);
+  const lastArgv = () => JSON.parse(
+    readFileSync(join(dir, "last-argv.json"), "utf-8")) as string[];
+  const makeConfig = (lookupFound: boolean) => {
+    const configPath = join(dir, `adapter-${lookupFound}.json`);
+    writeFileSync(configPath, JSON.stringify({
+      token: "svc-token-0000",
+      mr_create: {
+        command: ["node", cli, "mr", "--source", "{source_branch}",
+          "--target", "{target_branch}", "--token", "{token}"],
+        url: { json: "data.web_url" },
+      },
+      mr_lookup: {
+        command: lookupFound
+          ? ["node", cli, "mrlist", "--found", "--source",
+             "{source_branch}", "--token", "{token}"]
+          : ["node", cli, "mrlist", "--source", "{source_branch}",
+             "--token", "{token}"],
+        url: { json: "data.0.web_url" },
+        id: { json: "data.0.iid" },
+      },
+      pipeline_trigger: { command: ["node", cli, "trigger"],
+        status: { const: "running" } },
+      pipeline_status: { command: ["node", cli, "status"],
+        runs: { json: "data.runs" }, status: { json: "state" },
+        status_map: { RUNNING: "running", FAILED: "failed" } },
+      mr_gates: {
+        command: ["node", cli, "mergeable", "--mr", "{mr}",
+          "--token", "{token}"],
+        bools: { json: "data" },
+        reason: { json: "data.reason" },
+        ignore_fields: ["merge_request_switch"],
+        mr_state: { json: "data.state" },
+      },
+      discussion_reply: {
+        command: ["node", cli, "note", "--id", "{id}",
+          "--body", "{body}", "--token", "{token}"],
+        note_id: { json: "result.id" },
+      },
+      discussion_resolve: {
+        command: ["node", cli, "resolvecmd", "--note", "{note_id}",
+          "--token", "{token}"],
+      },
+    }));
+    return new PlatformAdapter(configPath, () => {});
+  };
+
+  // 平铺布尔模式:布尔字段即门禁;reason 同名文案进 detail;
+  // 非布尔(state/reason)与 ignore_fields(总开关)不冒充门禁。
+  const adapter = makeConfig(true);
+  const gates = await adapter.handle("GET", "/mr/gates",
+    new URLSearchParams("repo=r&mr=42"), {}, {});
+  const list = (gates.payload as any).gates as
+    Array<{ name: string; passed: boolean; detail?: string }>;
+  const byName = Object.fromEntries(list.map((g) => [g.name, g]));
+  assert.equal((gates.payload as any).mr_state, "opened");
+  assert.equal(byName.ci_state_passed.passed, false);
+  assert.match(byName.ci_state_passed.detail ?? "", /pipeline #88/,
+    "reason 文案要进 detail 给修复使命用");
+  assert.equal(byName.conflict_passed.passed, true);
+  assert.equal(byName.merge_request_switch, undefined,
+    "总开关不是门禁,不许上报");
+  assert.equal(byName.state, undefined);
+  assert.equal(byName.reason, undefined);
+
+  // 先查后建:查到已开 MR 直接复用(创建命令根本不跑),iid 一并带回
+  const reused = await adapter.handle("POST", "/mr", new URLSearchParams(),
+    { repo: "r", source_branch: "s", target_branch: "t", title: "x" }, {});
+  assert.equal((reused.payload as any).url, "https://codehub.corp/mr/7");
+  assert.equal((reused.payload as any).id, "7");
+  assert.ok(lastArgv().includes("mrlist"), "复用时不该执行创建命令");
+
+  // 查不到 → 走创建
+  const created = await makeConfig(false).handle("POST", "/mr",
+    new URLSearchParams(),
+    { repo: "r", source_branch: "s", target_branch: "t", title: "x" }, {});
+  assert.equal((created.payload as any).url, "https://codehub.corp/mr/42");
+
+  // 回复默认一步:resolve 未带/false 时只跑 reply 命令
+  await adapter.handle("POST", "/mr/discussions/d-1/reply",
+    new URLSearchParams(), { repo: "r", body: "回复正文" }, {});
+  assert.ok(lastArgv().includes("note"), "只回复时最后一跳是 reply 命令");
+
+  // resolve:true → 第二跳执行,note id 从 reply 输出抽出来传进去
+  const two = await adapter.handle("POST", "/mr/discussions/d-1/reply",
+    new URLSearchParams(), { repo: "r", body: "回复正文", resolve: true }, {});
+  assert.equal((two.payload as any).resolved, true);
+  assert.ok(lastArgv().includes("resolvecmd"));
+  assert.ok(lastArgv().includes("555"), "note id 没接力到 resolve 命令");
 });
 
 test("配置坏了拒绝启动;引用 {token} 但两头都没有=502", async () => {

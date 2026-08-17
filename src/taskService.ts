@@ -138,6 +138,10 @@ export interface TaskSummary {
       last_sha?: string;
       /** 检视修复的刹车锚:上一轮处理的讨论 id 集(排序拼接)。 */
       review_ids?: string;
+      /** 已把回复发布到平台的讨论 id 集。与 review_ids 相等 = 这批
+       * 意见都答复过了,门禁还红只是检视人没点"已解决"——那是等人,
+       * 不是修不动(报告 D3:既有框架刻意不代检视人 resolve)。 */
+      replied_ids?: string;
       diagnosis?: string;
     };
   };
@@ -180,6 +184,10 @@ export interface TaskServiceOptions {
     /** 流水线红灯的修复轮预算(默认 2;0 = 关掉修复环,红灯即留痕请人工)。
      * 每轮 = 一次专职修复会话 + 一次新流水线;耗尽如实停在 verifying。 */
     repairRounds?: number;
+    /** 发布检视回复时顺手标"已解决"。默认关——内网既有框架的实证
+     * (报告 D3):平台文化是"回复归作者,resolve 归检视人",代点
+     * 是越权。平台/团队明确允许代点的部署再打开。 */
+    resolveDiscussions?: boolean;
   };
   /** 审批链接的前缀(通知里带的 URL),如 http://host:port。 */
   linkBase?: string;
@@ -258,26 +266,24 @@ interface GateView {
   gates: GateItem[];
 }
 
-/** 失败分类:可修的挑最高优先级一路;等人的翻成人话列表。 */
+/** 失败分类:可修的按优先级排序(全部返回——高优先级不可派时要能
+ * 落到下一路,如"检视已回复等确认"时 CI 还得修);等人的翻成人话。 */
 function classifyGates(gates: GateItem[]): {
-  repair?: { kind: "review" | "conflict" | "ci"; gate: GateItem };
+  repairs: Array<{ kind: "review" | "conflict" | "ci"; gate: GateItem;
+                   priority: number }>;
   waiting: string[];
 } {
-  let repair: { kind: "review" | "conflict" | "ci"; gate: GateItem;
-                priority: number } | undefined;
+  const repairs: Array<{ kind: "review" | "conflict" | "ci";
+                         gate: GateItem; priority: number }> = [];
   const waiting: string[] = [];
   for (const gate of gates) {
     if (gate.passed) continue;
     const known = REPAIRABLE_GATES[gate.name];
-    if (known) {
-      if (!repair || known.priority < repair.priority) {
-        repair = { ...known, gate };
-      }
-    } else {
-      waiting.push(HUMAN_GATE_TEXT[gate.name] ?? `等 ${gate.name}`);
-    }
+    if (known) repairs.push({ ...known, gate });
+    else waiting.push(HUMAN_GATE_TEXT[gate.name] ?? `等 ${gate.name}`);
   }
-  return { repair, waiting };
+  repairs.sort((a, b) => a.priority - b.priority);
+  return { repairs, waiting };
 }
 
 /** 检视意见(适配层契约形状,宿主只读这些字段)。 */
@@ -1887,16 +1893,29 @@ export class TaskService {
       this.settleMergeState(task, view.mrState);
       return;
     }
-    const sorted = view ? classifyGates(view.gates) : { waiting: [] };
-    if (sorted.repair?.kind === "review") {
-      await this.dispatchReviewRepair(task, max, epoch);
+    const sorted = view
+      ? classifyGates(view.gates) : { repairs: [], waiting: [] };
+    // 按优先级顺序找第一条派得出去的路。检视"已回复等检视人确认"
+    // 不占路(报告 D3:平台不代人 resolve,红着只是没人点)——落到
+    // 下一优先级继续,别让等人把 CI 修复堵死。
+    for (const candidate of sorted.repairs) {
+      if (candidate.kind === "review") {
+        const outcome = await this.dispatchReviewRepair(task, max, epoch);
+        if (!this.current(task, epoch)) return;
+        if (outcome === "waiting" || outcome === "skip") continue;
+        return; // dispatched/halted 都已各自收口
+      }
+      if (candidate.kind === "conflict") {
+        this.dispatchConflictRepair(task, sha, max, epoch);
+        return;
+      }
+      await this.dispatchCiRepair(task, sha,
+        log || (candidate.gate.detail ?? ""), max, epoch);
       return;
     }
-    if (sorted.repair?.kind === "conflict") {
-      this.dispatchConflictRepair(task, sha, max, epoch);
-      return;
-    }
-    this.dispatchCiRepair(task, sha, log, max, epoch);
+    // 没有可派的修复路(门禁不可得,或可修门禁都在等人):按旧语义
+    // 走 CI 修复——流水线红是实锤,同 SHA 刹车会兜住原地打转。
+    await this.dispatchCiRepair(task, sha, log, max, epoch);
   }
 
   /** CI 修复派单(修复环的老主路):同 SHA 不二修、轮数预算、
@@ -2109,24 +2128,38 @@ export class TaskService {
           return;
         }
         const sorted = classifyGates(view.gates);
-        if (sorted.repair) {
+        if (sorted.repairs.length) {
           // 绿灯后门禁又亮红:检视/冲突照常派;CI 红说明平台侧又跑了
           // 一条流水线(目标分支动了之类),失败详情用门禁给的话。
+          // 检视"已回复等检视人确认"不派单也不停环——归入等待名单,
+          // 继续盯下一优先级和 MR 状态(报告 D3 的语义)。
           const max = task.summary.repair_rounds
             ?? this.options.settings?.runtime().repair_rounds
             ?? this.options.delivery?.repairRounds;
           if (max === 0) return; // 修复环关着:留在 await_merge 请人工
           const sha = task.summary.delivery?.sha ?? "";
-          if (sorted.repair.kind === "review") {
-            await this.dispatchReviewRepair(task, max, epoch);
-          } else if (sorted.repair.kind === "conflict") {
-            this.dispatchConflictRepair(task, sha, max, epoch);
-          } else {
+          for (const candidate of sorted.repairs) {
+            if (candidate.kind === "review") {
+              const outcome =
+                await this.dispatchReviewRepair(task, max, epoch);
+              if (!this.current(task, epoch)
+                  || task.summary.status !== "await_merge") return;
+              if (outcome === "waiting") {
+                sorted.waiting.push("等检视人确认已回复的意见");
+                continue;
+              }
+              if (outcome === "skip") continue;
+              return; // dispatched/halted 都已各自收口
+            }
+            if (candidate.kind === "conflict") {
+              this.dispatchConflictRepair(task, sha, max, epoch);
+              return;
+            }
             await this.dispatchCiRepair(task, sha,
-              sorted.repair.gate.detail ?? "门禁 ci_state_passed 未通过",
+              candidate.gate.detail ?? "门禁 ci_state_passed 未通过",
               max, epoch);
+            return;
           }
-          return;
         }
         const waitingText = sorted.waiting.join("、");
         if (waitingText !== (task.summary.delivery?.waiting_on ?? "")) {
@@ -2167,41 +2200,50 @@ export class TaskService {
   }
 
   /** 检视修复派单(批3):拉未解决讨论→落盘 reviews/→专职会话逐条
-   * 处理并写 ../review_replies.md→收口后宿主发布回复并标已解决。
-   * 不扣 CI 重试且清零(流程性问题不许耗掉代码修复额度);刹车=
-   * 同一批讨论 id 处理过一轮仍未解决即停。 */
+   * 处理并写 ../review_replies.md→收口后宿主发布回复(默认不代
+   * resolve,报告 D3)。不扣 CI 重试且清零(流程性问题不许耗掉代码
+   * 修复额度)。同一批讨论 id 分两种结局:回复都发布过了=等检视人
+   * 确认(waiting,调用方落到下一优先级继续);一条都没答复=会话
+   * 没干活,真刹车(halted)。 */
   private async dispatchReviewRepair(
     task: TaskState,
     max: number | undefined,
     epoch: number,
-  ): Promise<void> {
-    if (!this.current(task, epoch)) return;
+  ): Promise<"dispatched" | "waiting" | "halted" | "skip"> {
+    if (!this.current(task, epoch)) return "skip";
     const delivery = task.summary.delivery!;
     const loop = delivery.loop
       ?? (delivery.loop = { round: 0, max, state: "repairing" as const });
     const discussions = await this.fetchDiscussions(task);
-    if (!this.current(task, epoch)) return;
+    if (!this.current(task, epoch)) return "skip";
     if (!discussions.length) {
       // 门禁说未解决但明细拉不到:可能是刚解决的竞态,别硬派——
-      // 留在当前状态,下一轮监控再看。
+      // 让调用方落到下一优先级,下一轮监控再看这路。
       this.options.log?.(
         `任务 ${task.summary.id} 检视门禁未过但拉不到未解决讨论,等下一轮`);
-      return;
+      return "skip";
     }
     const ids = discussions.map((item) => item.id).sort().join(",");
     if (loop.kind === "review" && loop.review_ids === ids) {
+      if (loop.replied_ids === ids) {
+        // 这批意见的回复都发布过了,门禁红只是检视人还没点"已解决"
+        // ——那是等人,不是修不动。不派单不停环,调用方把它记进
+        // waiting_on 继续盯。
+        return "waiting";
+      }
       loop.state = "halted";
       const diagnosis = (task.lastReply ?? "").trim();
       if (diagnosis) loop.diagnosis = diagnosis.slice(0, 2000);
       task.summary.detail =
-        "同一批检视意见处理过一轮仍未解决,请人工查看 MR 讨论";
+        "同一批检视意见处理过一轮仍未答复完,请人工查看 MR 讨论";
       this.persist(task);
       this.notifyRepairStopped(task);
-      return;
+      return "halted";
     }
     loop.kind = "review";
     loop.round = 0; // 检视触发清零 CI 重试(内网框架的实证语义)
     loop.review_ids = ids;
+    loop.replied_ids = undefined; // 新一批意见,答复台账从零记
     loop.state = "repairing";
     // 意见落盘 reviews/(仓库外):原始数据给 agent 自读,摘要进使命。
     const reviewsDir = join(task.summary.workspace, "reviews");
@@ -2234,10 +2276,12 @@ export class TaskService {
         `  <这条的回复:改了什么/为什么不改,一两句讲清>`,
         `- 有代码改动就凑成一次提交并 push(一次修全一次推);`
         + `全部是解释、没有代码改动就不提交——这也是正常结局。`,
-        `- 系统会把你的回复发布到对应讨论并标记已解决,回复写给检视人看,`
-        + `说人话,别写流程黑话。`,
+        `- 系统会把你的回复发布到对应讨论(是否代点"已解决"由部署配置`
+        + `决定,默认留给检视人点),回复写给检视人看,说人话,`
+        + `别写流程黑话。`,
       ].join("\n"),
       `检视意见 ${discussions.length} 条,专职会话处理中`);
+    return "dispatched";
   }
 
   /** 冲突修复派单(批4):宿主先 merge 目标分支**故意把冲突标记留在
@@ -2357,6 +2401,10 @@ export class TaskService {
       replies.push({ id: current.id, body: current.body.join("\n").trim() });
     }
     const repo = task.summary.repo_url ?? this.effectiveDefaultRepo() ?? "";
+    // 默认只回复不代点"已解决"——内网既有框架的实证(报告 D3):
+    // resolve 是检视人的职责,代点是越权。开关给明确允许的部署。
+    const resolve = this.options.delivery?.resolveDiscussions ?? false;
+    const posted: string[] = [];
     for (const item of replies) {
       if (!item.body) continue;
       try {
@@ -2369,10 +2417,11 @@ export class TaskService {
               repo,
               mr: task.summary.delivery?.mr_id,
               body: item.body,
-              resolve: true,
+              resolve,
             }),
           });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        posted.push(item.id);
         void this.options.projection?.recordAction({
           taskId: task.summary.id,
           idemKey: `review-reply:${item.id}`,
@@ -2386,6 +2435,16 @@ export class TaskService {
           `任务 ${task.summary.id} 检视回复发布失败(讨论 ${item.id}): `
           + String(error));
       }
+    }
+    // 记下"哪些讨论答复过了":与 review_ids 比对是"等检视人确认"
+    // 和"会话没干活"的分界线。只发出去一部分就只记一部分——漏答的
+    // 下一轮按真刹车处理,不许拿半份回复冒充全答。
+    const loop = task.summary.delivery?.loop;
+    if (loop?.kind === "review" && posted.length) {
+      const already = loop.replied_ids ? loop.replied_ids.split(",") : [];
+      loop.replied_ids =
+        [...new Set([...already, ...posted])].sort().join(",");
+      this.persist(task);
     }
     // 消费掉:下一轮修复(如果有)重写,不重复发布旧回复。
     try {

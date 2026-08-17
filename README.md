@@ -120,15 +120,19 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
   agent 在真冲突上解);等人门禁(审批/投票/WIP)挂起等待不空转,
   说清卡在哪并通知归属人;MR merged=完成、closed=失败请人工;失败
   材料落盘工作区外 pipeline/ 双通道喂修复会话;同 SHA 不再重复触发
-  流水线(修复无新提交时直接按上次结果裁,省一条流水线)。四条端到
-  端用例(tests/mrLoop.test.ts)+旧 delivery 16 项全绿。**全部在假件
-  上验证**:真 CodeHub 的门禁拼写、讨论形状、resolve 权限、SuperChecker
-  不可修判据都没见过——docs/mr-loop-capability-audit.md 是给内网模型
-  的能力自检问卷,报告带回来再钉死契约;适配层四个新端点
-  (mr_gates/mr_discussions/discussion_reply/pipeline_artifacts)与
-  `--selftest` 已备好,内网只填配置。**MCP 通道未做**:内网若有能力
-  只走 MCP,先用"MCP→命令行"小桥接(问卷 C2 收集传输形态后再定
-  要不要原生客户端);
+  流水线(修复无新提交时直接按上次结果裁,省一条流水线)。五条端到
+  端用例(tests/mrLoop.test.ts)+旧 delivery 16 项全绿。
+- **能力核对报告已消化(2026-08-17,报告原文由内网模型按
+  docs/mr-loop-capability-audit.md 真调产出)**:九项门禁拼写与分类
+  假设全部证实(平铺布尔+reason,适配层加 bools 模式);检视回复改为
+  **默认不代点已解决**(报告 D3:resolve 归检视人;已回复未确认=
+  挂"等检视人确认"继续监控,不算修不动;`--resolve-discussions`
+  显式开代点);MR 建单先查后建(幂等语义 CLI/REST 不统一,查询兜底);
+  MCP 定为**桥方案**(streamable HTTP,几十行脚本,只为完整日志下载
+  服务)。**仍未在真平台上验证的三件事**(报告实测受阻,试点必验,
+  清单在 docs/mr-loop-adaptation.md §11):①oauth2 token push(被
+  代理 504 挡住);②MCP access token 供给(CLI token 打日志网关 401);
+  ③SuperChecker 不可修的真实样例(现行为:烧一个诊断会话后诚实停机);
 
 - **仓库地图进开场白(2026-08-16,路线图 #4)**:内核模式下每次会话
   启动现画一张按引用扇入排序的文件+符号地图(src/repoMap.ts),垫在

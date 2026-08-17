@@ -169,18 +169,29 @@ codehubcli 命令行,代码零改动。配置形状(权限 600,文件头注释�
 
 | 端点 | 请求 | 宿主消费的响应字段 |
 |---|---|---|
-| `POST /mr` | `{repo, source_branch, target_branch, title}` | `{url}`(MR 链接,展示用) |
+| `POST /mr` | `{repo, source_branch, target_branch, title}` | `{url}`(MR 链接,展示用)`, id?`(iid,门禁/讨论查询带回) |
 | `POST /pipeline/trigger` | `{repo, sha}` | `{status: "success"\|"failed"\|"running", log?}` |
 | `GET /pipeline/status?sha=<sha>&repo=<url>` | — | `{runs: [{status, log?}]}`(取最后一个终态 run) |
+
+MR 闭环的可选端点(mr_gates/mr_discussions/discussion_reply/
+pipeline_artifacts,不配=404=宿主按纯流水线旧语义)与按能力核对报告
+钉出来的 adapter.json 参考填法(mergeable_state 平铺布尔、先查后建、
+两步回复/解决、MCP 日志桥),见 **docs/mr-loop-adaptation.md §3/§11**。
+检视回复默认只回复不代点"已解决"(报告 D3:resolve 归检视人);
+团队明确允许代点的部署,serve 加 `--resolve-discussions` 且适配层配
+`discussion_resolve`。
 
 - `repo` = 这一单的交付仓地址(任务级可选,缺省=部署仓)。单仓部署的
   适配层/假件可以忽略它;多仓时靠它路由到对的 CodeHub 仓;
 - **内部平台是 CodeHub(类比 GitHub)**:codehubcli 配一个从 CodeHub
   申请的 token 即可做 MR 等操作。对接两件事:① 适配层调 CLI 时应带
   **任务归属人的个人令牌**(auth.gitCredential 那份),MR 发起人才是
-  本人,没配的回落服务账号;② 进场实测**同一个 CodeHub token 是否也
-  当 HTTPS push 凭据**——类比 GitHub PAT 是同一个,但企业平台可能把
-  API token 与推送凭据分开;若是两个,令牌表单加一格即可,机制不变;
+  本人,没配的回落服务账号;② **同一个 token 兼任 push 凭据已由能力
+  核对报告 D2 证实**(2026-08-17),但既有框架的用法是
+  `https://oauth2:{token}@<host>`——**凭据用户名固定写 `oauth2`**,
+  不是平台账号名;试点首推若 401,先把用户名换成 oauth2 试(报告里
+  push 本身被代理 504 挡住没走通,这条是试点必验第 1 项,见
+  docs/mr-loop-adaptation.md §11);
 - `log` = 失败详情原文(修复 agent 只看前 2000 字,适配层自行截断);
   **多类问题并发时每个失败 stage 各留一段摘要**——修复会话按它分诊,
   只给第一个 stage 塞满 2000 字会让其余问题类别漏诊;

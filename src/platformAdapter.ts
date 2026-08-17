@@ -45,9 +45,19 @@
  *   }
  * }
  *
- * 占位符:{repo} {source_branch} {target_branch} {title} {sha}
+ * 占位符:{repo} {source_branch} {target_branch} {title} {sha} {mr}
+ *        {id} {body} {note_id}(检视回复链)
  *        {token} {git_username}(后两个优先取请求头里的个人身份)。
  * 命令以 argv 数组直接 spawn,不过 shell——标题带空格、注入都不是问题。
+ *
+ * 按能力核对报告(2026-08-17)补的三个口子:
+ * - mr_lookup:先查后建(A2:CLI 幂等报 stderr、REST 静默 200 空
+ *   body,形状不统一,查询是唯一稳的路);
+ * - mr_gates.bools/reason/ignore_fields:mergeable_state 平铺布尔
+ *   形状(B 节:九项门禁 + ~18 个额外布尔 + reason 文案对象);
+ * - discussion_resolve:回复与"标已解决"两个调用(D3),宿主默认
+ *   不代 resolve,带 resolve:true 才执行第二条。
+ * adapter.json 的参考填法见 docs/mr-loop-adaptation.md §11。
  */
 
 import { execFile } from "node:child_process";
@@ -65,6 +75,13 @@ interface CommandSpec {
   url?: Extract;
   runs?: Extract;
   status_map?: Record<string, string>;
+  /** MR 标识(iid)抽取(mr_create/mr_lookup 用,可选):抽到了就随
+   * {url} 一起回给宿主,后续门禁/讨论查询带回来当 {mr}。 */
+  id?: Extract;
+  /** 检视回复的 note id 抽取(discussion_reply 用,可选):新代 CLI
+   * 的 resolve 要的是 note id 而不是讨论 id(能力核对报告 D3),
+   * 从 reply 命令的输出里抽出来,喂给 discussion_resolve 的 {note_id}。 */
+  note_id?: Extract;
 }
 
 /** 列表型端点(门禁/讨论/材料):items 指到数组,fields 逐字段抽。 */
@@ -83,6 +100,17 @@ interface ListSpec extends CommandSpec {
    * 这个目录(可用 {sha}/{repo} 占位),适配层读目录里全部文件返回
    * ——SSE 日志网关那类"先落盘再取"的形态就走这条,不用逐字段抽。 */
   files_dir?: string;
+  /** 平铺布尔门禁模式(mr_gates 用)——CodeHub mergeable_state 的
+   * 真实形状(能力核对报告 B 节):不是数组,是"字段名→布尔"的
+   * 平铺对象。bools 指到那个对象,每个布尔字段就是一项门禁;配了
+   * bools 就不走 items/fields。 */
+  bools?: Extract;
+  /** 门禁未过原因的文案对象(可选,与 bools 搭配):平台把每项的
+   * 解释放在 reason 对象里,同名字段的文案作为 detail 带给宿主。 */
+  reason?: Extract;
+  /** 不是门禁的布尔字段(bools 模式用),如 merge_request_switch
+   * (MR 功能总开关)——列在这里的字段跳过,不当门禁上报。 */
+  ignore_fields?: string[];
 }
 
 interface AdapterConfig {
@@ -94,6 +122,11 @@ interface AdapterConfig {
   token_file?: string;
   timeout_s?: number;
   mr_create: CommandSpec;
+  /** 先查后建(可选):建 MR 前先查同分支对有没有已开的 MR,查到了
+   * 直接复用。CodeHub 的建 MR 幂等语义不统一(CLI 报 stderr、REST
+   * 静默回 200 空 body——能力核对报告 A2 实测),查询是唯一稳的路。
+   * 抽取:url 必配(查到即回),id 可选;查不到/命令失败=走创建。 */
+  mr_lookup?: CommandSpec;
   pipeline_trigger: CommandSpec;
   pipeline_status: CommandSpec;
   /** MR 闭环的四个可选端点(docs/mr-loop-adaptation.md §3):
@@ -101,6 +134,10 @@ interface AdapterConfig {
   mr_gates?: ListSpec;
   mr_discussions?: ListSpec;
   discussion_reply?: CommandSpec;
+  /** 标记讨论"已解决"的第二条命令(可选):CodeHub 回复与 resolve
+   * 是两个调用(报告 D3)。宿主请求带 resolve:true 且配了它才执行;
+   * 宿主默认不代 resolve(那是检视人的职责),所以多数部署不用配。 */
+  discussion_resolve?: CommandSpec;
   pipeline_artifacts?: ListSpec;
 }
 
@@ -108,8 +145,10 @@ const CONTRACT_STATUS = new Set(["success", "failed", "running"]);
 
 class AdapterError extends Error {}
 
-/** 点路径取值:"data.runs.0.state" 一路走下去,走不通=undefined。 */
+/** 点路径取值:"data.runs.0.state" 一路走下去,走不通=undefined。
+ * 空路径 "" = 整个输出本身(mergeable_state 那类布尔平铺在根上的用)。 */
 function dig(source: unknown, path: string): unknown {
+  if (path === "") return source;
   let current: any = source;
   for (const key of path.split(".")) {
     if (current === null || current === undefined) return undefined;
@@ -279,6 +318,28 @@ export class PlatformAdapter {
     return { stdout, parsed, items };
   }
 
+  /** 查同分支对已开的 MR(mr_lookup 配了才查)。查询失败/抽不到 url
+   * 一律回 undefined——查不到不是错,走创建;真正的诚实失败留给
+   * 创建那一步报。 */
+  private async lookupMr(
+    values: Record<string, string>,
+  ): Promise<{ url: string; id?: string } | undefined> {
+    const spec = this.config.mr_lookup;
+    if (!spec?.url) return undefined;
+    try {
+      const stdout = await this.run(spec, values);
+      let parsedCache: unknown;
+      const parsed = () => parsedCache ??= JSON.parse(stdout);
+      const url = String(extractOptional(spec.url, stdout, parsed) ?? "");
+      if (!url) return undefined;
+      const id = spec.id
+        ? extractOptional(spec.id, stdout, parsed) : undefined;
+      return { url, ...(id !== undefined ? { id: String(id) } : {}) };
+    } catch {
+      return undefined;
+    }
+  }
+
   private gatePassed(spec: ListSpec, raw: unknown): boolean {
     const accepted = (spec.passed_values
       ?? ["true", "1", "passed", "success", "yes"])
@@ -301,12 +362,31 @@ export class PlatformAdapter {
       } };
     }
     if (method === "POST" && path === "/mr") {
+      const values = this.values(body, headers);
+      // 先查后建:同分支对已有开着的 MR 就复用,不去撞平台的幂等
+      // 语义(CLI 报 stderr / REST 静默 200 空 body,形状不统一)。
+      const found = await this.lookupMr(values);
+      if (found) return { status: 201, payload: found };
       const spec = this.config.mr_create;
-      const stdout = await this.run(spec, this.values(body, headers));
+      let stdout: string;
+      try {
+        stdout = await this.run(spec, values);
+      } catch (error) {
+        // 创建失败再查一次兜竞态(查后建之间别人建了同分支对的 MR,
+        // 平台会拒绝):查到了就复用,查不到才把创建的报错如实抛出。
+        const retried = await this.lookupMr(values);
+        if (retried) return { status: 201, payload: retried };
+        throw error;
+      }
       let parsedCache: unknown;
       const parsed = () => parsedCache ??= JSON.parse(stdout);
       const url = extract(spec.url, "MR 链接", stdout, parsed);
-      return { status: 201, payload: { url: String(url ?? "") } };
+      const id = spec.id
+        ? extractOptional(spec.id, stdout, parsed) : undefined;
+      return { status: 201, payload: {
+        url: String(url ?? ""),
+        ...(id !== undefined ? { id: String(id) } : {}),
+      } };
     }
     if (method === "POST" && path === "/pipeline/trigger") {
       const spec = this.config.pipeline_trigger;
@@ -347,20 +427,56 @@ export class PlatformAdapter {
     if (method === "GET" && path === "/mr/gates") {
       const spec = this.config.mr_gates;
       if (!spec) return { status: 404, payload: { error: "未配置 mr_gates" } };
-      const { stdout, parsed, items } = await this.runList(spec, this.values({
+      const values = this.values({
         repo: query.get("repo") ?? "",
         source_branch: query.get("source_branch") ?? "",
         target_branch: query.get("target_branch") ?? "",
         mr: query.get("mr") ?? "",
-      }, headers));
-      const rawState = spec.mr_state
-        ? String(extractOptional(spec.mr_state, stdout, parsed) ?? "")
-        : "opened";
-      const mapped = spec.mr_state_map?.[rawState] ?? rawState;
-      const mrState = ["opened", "merged", "closed"].includes(mapped)
-        ? mapped : "opened"; // 认不出的生命周期按在途处理,别把单误杀
+      }, headers);
+      const mrStateOf = (stdout: string, parsed: () => unknown) => {
+        const rawState = spec.mr_state
+          ? String(extractOptional(spec.mr_state, stdout, parsed) ?? "")
+          : "opened";
+        const mapped = spec.mr_state_map?.[rawState] ?? rawState;
+        return ["opened", "merged", "closed"].includes(mapped)
+          ? mapped : "opened"; // 认不出的生命周期按在途处理,别把单误杀
+      };
+      // 平铺布尔模式:CodeHub mergeable_state 的真实形状(报告 B 节)
+      // ——门禁不是数组,是对象里一堆 *_passed 布尔 + reason 文案。
+      // 布尔字段即门禁(非布尔跳过),ignore_fields 剔掉总开关类字段;
+      // 宿主那头"认不出的名字按等人处理",所以多出来的布尔门禁安全。
+      if (spec.bools) {
+        const stdout = await this.run(spec, values);
+        let parsedCache: unknown;
+        const parsed = () => parsedCache ??= JSON.parse(stdout);
+        const bools = extract(spec.bools, "门禁布尔对象", stdout, parsed);
+        if (!bools || typeof bools !== "object" || Array.isArray(bools)) {
+          throw new AdapterError(
+            "bools 抽出来的不是对象——检查 bools 点路径");
+        }
+        const reason = spec.reason
+          ? extractOptional(spec.reason, stdout, parsed) : undefined;
+        const ignore = new Set(spec.ignore_fields ?? []);
+        const gates = Object.entries(bools as Record<string, unknown>)
+          .filter(([name, value]) =>
+            typeof value === "boolean" && !ignore.has(name))
+          .map(([name, value]) => {
+            const why = (reason as Record<string, unknown> | undefined)
+              ?.[name];
+            return {
+              name,
+              passed: value as boolean,
+              ...(why !== undefined && why !== null && why !== "" ? {
+                detail: typeof why === "string" ? why : JSON.stringify(why),
+              } : {}),
+            };
+          });
+        return { status: 200, payload: {
+          mr_state: mrStateOf(stdout, parsed), gates } };
+      }
+      const { stdout, parsed, items } = await this.runList(spec, values);
       return { status: 200, payload: {
-        mr_state: mrState,
+        mr_state: mrStateOf(stdout, parsed),
         gates: items
           .filter((row) => row.name !== undefined)
           .map((row) => ({
@@ -403,9 +519,24 @@ export class PlatformAdapter {
           return { status: 404,
                    payload: { error: "未配置 discussion_reply" } };
         }
-        await this.run(spec, this.values(
-          { ...body, id: decodeURIComponent(replyMatch[1]) }, headers));
-        return { status: 200, payload: { ok: true } };
+        const values = this.values(
+          { ...body, id: decodeURIComponent(replyMatch[1]) }, headers);
+        const stdout = await this.run(spec, values);
+        // 回复与"标已解决"是两个调用(报告 D3)。宿主默认不代
+        // resolve(检视人的职责);带了 resolve:true 且配了第二条
+        // 命令才执行——新代 CLI 要 note id,从 reply 输出里抽。
+        let resolved = false;
+        if (values.resolve === "true" && this.config.discussion_resolve) {
+          let parsedCache: unknown;
+          const parsed = () => parsedCache ??= JSON.parse(stdout);
+          const noteId = spec.note_id
+            ? String(extractOptional(spec.note_id, stdout, parsed) ?? "")
+            : "";
+          await this.run(this.config.discussion_resolve,
+            { ...values, note_id: noteId });
+          resolved = true;
+        }
+        return { status: 200, payload: { ok: true, resolved } };
       }
     }
     if (method === "GET" && path === "/pipeline/artifacts") {
@@ -453,11 +584,13 @@ export class PlatformAdapter {
       .map((part) => part.replace(/\{token\}/g, "<token>")).join(" ");
     const sections: Array<[string, CommandSpec | undefined]> = [
       ["mr_create(只印不执行)", this.config.mr_create],
+      ["mr_lookup(先查后建的查询)", this.config.mr_lookup],
       ["pipeline_trigger(只印不执行)", this.config.pipeline_trigger],
       ["pipeline_status", this.config.pipeline_status],
       ["mr_gates", this.config.mr_gates],
       ["mr_discussions", this.config.mr_discussions],
       ["discussion_reply(只印不执行)", this.config.discussion_reply],
+      ["discussion_resolve(只印不执行)", this.config.discussion_resolve],
       ["pipeline_artifacts", this.config.pipeline_artifacts],
     ];
     for (const [name, spec] of sections) {

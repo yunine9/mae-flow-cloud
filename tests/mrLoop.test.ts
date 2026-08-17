@@ -64,12 +64,14 @@ function buildService(
   platform: FakeGitPlatform,
   dataDir: string,
   modelsJson: Record<string, unknown>,
+  deliveryExtra: { resolveDiscussions?: boolean } = {},
 ): TaskService {
   return new TaskService({
     dataDir, provider: "maeflow", model: "scripted-v1", modelsJson,
     host: { kernelRoot: KERNEL_ROOT, repoPath: platform.barePath,
             python: "python3" },
-    delivery: { platformUrl: platform.baseUrl, pollIntervalMs: 120 },
+    delivery: { platformUrl: platform.baseUrl, pollIntervalMs: 120,
+                ...deliveryExtra },
   });
 }
 
@@ -85,7 +87,7 @@ async function until(
   }
 }
 
-test("检视优先于 CI;回复发布并标已解决;CI 接棒;合入收口", async () => {
+test("检视优先于 CI;回复发布并标已解决(显式开代 resolve);CI 接棒;合入收口", async () => {
   const platform = new FakeGitPlatform();
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
   platform.statusQueue.push("failed", "success"); // 首跑红;CI 修后绿
@@ -113,7 +115,10 @@ EOF` } } },
   ], "scripted-v1", { linear: true });
   await model.start();
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-"));
-  const service = buildService(platform, dataDir, model.modelsJson());
+  // 代 resolve 是显式开关(默认关,报告 D3:resolve 归检视人);
+  // 这条用例验证开了之后回复+标已解决一气呵成、检视门禁当轮清掉。
+  const service = buildService(platform, dataDir, model.modelsJson(),
+    { resolveDiscussions: true });
   try {
     const id = service.create("交付 REQ9:检视优先").id;
     // 第一裁:流水线红 + 检视未解决 → 派的是检视修复(不是 CI),round=0
@@ -146,6 +151,58 @@ EOF` } } },
     assert.match(seen, /逐条处理它们是你此刻唯一的使命/, "检视使命在场");
     assert.match(seen, /review_replies\.md/, "回复文件契约在使命里");
     assert.match(seen, /pipeline\/build_101\.log/, "落盘路径要交给修复会话");
+  } finally {
+    await model.stop();
+    await platform.stop();
+  }
+});
+
+test("默认只回复不代 resolve:已答复=等检视人确认,检视人点掉后合入", async () => {
+  // 能力核对报告 D3 的语义:既有框架刻意只回复、把 resolve 留给
+  // 检视人("that is the reviewer's responsibility")。默认配置下:
+  // 回复发布后讨论保持未解决 → 不是修不动(不 halted),是等人
+  // (waiting_on 说清);检视人手动 resolve 后门禁清,合入收口。
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  platform.seedDiscussion({
+    id: "d-9", file: "a.txt", line: 1, severity: "minor",
+    author: "李四", body: "变量名建议改成 templateVars",
+  });
+  await platform.start();
+  const model = new ScriptedModelServer([
+    ...walkScript(),
+    // 检视修复会话:解释类回复,不改代码
+    { tool: { name: "bash", input: { command:
+        `cat > ../review_replies.md <<'EOF'
+[d-9]
+命名保持与现有模块一致,暂不改;后续统一重命名时一起处理。
+EOF` } } },
+    { text: "检视意见已答复。" },
+  ], "scripted-v1", { linear: true });
+  await model.start();
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-ro-"));
+  const service = buildService(platform, dataDir, model.modelsJson());
+  try {
+    const id = service.create("交付 REQ9:回复不代点").id;
+    // 流水线绿 → 监控发现检视门禁红 → 派检视修复
+    await until(() =>
+      (service.get(id)!.delivery?.loop?.kind ?? "") === "review",
+      "检视修复派单");
+    // 回复发布到平台,但讨论保持未解决(默认不代 resolve)
+    await until(() => (platform.discussions[0].replies[0] ?? "") !== "",
+      "回复要发到平台");
+    assert.equal(platform.discussions[0].resolved, false,
+      "默认不许代检视人点已解决");
+    // 已答复未确认 = 等人,不是刹车:waiting_on 说清、不 halted
+    await until(() =>
+      (service.get(id)!.delivery?.waiting_on ?? "")
+        .includes("等检视人确认"), "挂到等检视人确认");
+    assert.notEqual(service.get(id)!.delivery?.loop?.state, "halted",
+      "等检视人确认不是修不动,不许停环");
+    // 检视人看过回复,点了已解决 → 门禁清 → 平台合入 → 收口
+    platform.discussions[0].resolved = true;
+    platform.settleMr("master_bot_REQ9", "merged");
+    await until(() => service.get(id)!.status === "completed", "合入收口");
   } finally {
     await model.stop();
     await platform.stop();

@@ -246,8 +246,13 @@ async function main(): Promise<void> {
       process.exit(2);
     }
   }
+  // --resolve-discussions:发布检视回复时顺手代点"已解决"。默认不开
+  // ——内网既有框架的实证(能力核对报告 D3):resolve 归检视人,
+  // 代点是越权;平台/团队明确允许的部署才加这个 flag。
+  const resolveDiscussions = has("--resolve-discussions");
   if (platformUrl) {
-    delivery = { platformUrl, ...pace };
+    delivery = { platformUrl, ...pace,
+                 ...(resolveDiscussions ? { resolveDiscussions } : {}) };
     console.log(`[serve] 交付平台: ${platformUrl}`);
   } else if (host && has("--fake-platform")) {
     // 假平台从 --repo 的本地仓灌裸仓;URL 仓/无仓没得灌,如实拒绝。
@@ -259,7 +264,8 @@ async function main(): Promise<void> {
     platform.initBare(host.repoPath, dataDir);
     await platform.start();
     host = { ...host, repoPath: platform.barePath };
-    delivery = { platformUrl: platform.baseUrl, ...pace };
+    delivery = { platformUrl: platform.baseUrl, ...pace,
+                 ...(resolveDiscussions ? { resolveDiscussions } : {}) };
     console.log(`[serve] 假 Git 平台已就位(裸仓远端): ${platform.baseUrl}`);
   }
 
