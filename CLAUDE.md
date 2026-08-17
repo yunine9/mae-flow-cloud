@@ -39,7 +39,7 @@ Mae-Flow 云端服务:pi(pi-mono)进程内集成 + Mae-Flow 内核宿主适配�
 npm test                 # 全量(需 docker/PG 的用例没有环境会显式 skip)
 npm run typecheck        # 零构建≠不查类型(tsx 不看类型,写错字段名会静默)
 npm run probe            # 整链演练,内核裁判九项事实
-npm run serve            # 演示模式(剧本假模型,每次清场)
+npm run serve            # 演示模式(剧本假模型;清场要显式 --fresh)
 npm run pilot -- --label <名>            # 真模型试跑(.local/models.json)
 npm run pilot -- --resume <label>        # 断点续跑(quota 和进度都是钱)
 harness/preflight.sh     # 上线自查 1~4 项;--java-repo/--isolate-image/--models 加项

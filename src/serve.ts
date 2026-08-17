@@ -7,7 +7,7 @@
  * models.json 形状见 README「接真模型」。数据目录默认 .tasks/。
  */
 
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AddressInfo } from "node:net";
@@ -155,9 +155,22 @@ async function main(): Promise<void> {
     model = settingsModels.model ?? model;
     console.log(`[serve] 模型网关来自管理页设置 (${provider}/${model})`);
   } else {
-    // 演示模式每次白纸起步(剧本假设新场);真模型模式保数据,
-    // 重启靠 recover() 续命——先 rm 再 recover 是自相矛盾。
-    rmSync(dataDir, { recursive: true, force: true });
+    // 演示模式曾经**每次启动静默删光数据目录**(理由:剧本假设新场)。
+    // 用户实测踩到:随手起个演示实例指到真数据目录,一条 await_merge
+    // 的真单当场没了——"要不要清"这种事不该靠人记住命令的副作用。
+    // 现在:清场必须显式 --fresh,且清之前把要删的东西数出来告诉人;
+    // 不加 --fresh 就沿用现有数据(演示剧本照跑,顶多列表里有旧单)。
+    if (has("--fresh")) {
+      const doomed = existsSync(dataDir)
+        ? readdirSync(dataDir).filter((name) => name.startsWith("task-")).length
+        : 0;
+      console.log(`[serve] --fresh:清空数据目录 ${dataDir}`
+        + (doomed ? `(含 ${doomed} 个任务现场,不可恢复)` : ""));
+      rmSync(dataDir, { recursive: true, force: true });
+    } else if (existsSync(dataDir)
+        && readdirSync(dataDir).some((name) => name.startsWith("task-"))) {
+      console.log("[serve] 演示模式沿用现有数据目录(要白纸起步加 --fresh)");
+    }
     const scripted = new ScriptedModelServer(DEMO_SCRIPT);
     await scripted.start();
     modelsJson = scripted.modelsJson();
