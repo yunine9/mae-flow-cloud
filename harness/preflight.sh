@@ -21,13 +21,14 @@ ok()   { echo "✅ $1"; PASS=$((PASS+1)); }
 bad()  { echo "❌ $1"; FAIL=$((FAIL+1)); }
 skip() { echo "⏭️  $1"; SKIP=$((SKIP+1)); }
 
-JAVA_REPO=""; MODELS=""; PROVIDER=""; ISOLATE_IMAGE=""
+JAVA_REPO=""; MODELS=""; PROVIDER=""; ISOLATE_IMAGE=""; ADAPTER=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --java-repo)     JAVA_REPO=$2;     shift 2 ;;
     --models)        MODELS=$2;        shift 2 ;;
     --provider)      PROVIDER=$2;      shift 2 ;;
     --isolate-image) ISOLATE_IMAGE=$2; shift 2 ;;
+    --adapter)       ADAPTER=$2;       shift 2 ;;
     *) echo "未知参数: $1"; exit 2 ;;
   esac
 done
@@ -122,6 +123,24 @@ PY
   fi
 else
   skip "4. 网关连通:给 --models 与 --provider 后执行"
+fi
+
+# 4.5 适配层可达(进场项:--adapter http://127.0.0.1:8790)。只打
+# 根路径冒烟——契约字段的真对拍走 adapter --selftest,这里不重复。
+# --noproxy '*':适配层是内网/回环服务,绝不该走公司代理——代理截
+# 内网请求正是报告里 push 撞 504 的同款失败模式(本机实测:代理连
+# 127.0.0.1 都截,不加这个假阴性)。
+if [ -n "$ADAPTER" ]; then
+  BODY=$(curl -sf --noproxy '*' --max-time 10 "$ADAPTER/" \
+    2>/tmp/preflight-adapter.log)
+  if [ -n "$BODY" ] && printf '%s' "$BODY" | grep -q '"ok"'; then
+    ok "4.5 适配层可达($ADAPTER)"
+    echo "     契约对拍另跑: npm run adapter -- --config adapter.json --selftest ..."
+  else
+    bad "4.5 适配层不可达或响应异常($ADAPTER;日志 /tmp/preflight-adapter.log)"
+  fi
+else
+  skip "4.5 适配层可达:给 --adapter <url> 后执行(内网进场项)"
 fi
 
 echo

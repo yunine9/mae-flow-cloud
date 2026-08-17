@@ -533,8 +533,10 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
 
 ## 上线自查清单(按序)
 
-可执行版:`harness/preflight.sh --java-repo <试点仓> --models <models.json> --provider <网关名>`
-——1~4 项自动核验真实退出码,5/6 两项人工,脚本会原样提醒。
+可执行版:`harness/preflight.sh --java-repo <试点仓> --models <models.json> --provider <网关名> --adapter http://127.0.0.1:8790`
+——1~4.5 项自动核验真实退出码,5/6 两项人工,脚本会原样提醒。
+(--adapter 是进场项:适配层起来后加上,冒烟根路径;契约字段的
+真对拍走 adapter --selftest,不重复。)
 
 0. **先验两个 CLI**(部署形态由此定,顺序不能换),并确认**流水线含
    静态检查(CodeCheck)stage**——云端不做本地扫描(内核 cloud 宿主

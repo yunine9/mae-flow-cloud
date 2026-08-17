@@ -42,7 +42,7 @@ npm run probe            # 整链演练,内核裁判九项事实
 npm run serve            # 演示模式(剧本假模型;清场要显式 --fresh)
 npm run pilot -- --label <名>            # 真模型试跑(.local/models.json)
 npm run pilot -- --resume <label>        # 断点续跑(quota 和进度都是钱)
-harness/preflight.sh     # 上线自查 1~4 项;--java-repo/--isolate-image/--models 加项
+harness/preflight.sh     # 上线自查 1~4 项;--java-repo/--isolate-image/--models/--adapter 加项
 harness/restart-drill.sh # 真 kill -9 重启演练
 python3 harness/run-report.py .pilot/<label>   # 试跑现场一键对拍
 ```
