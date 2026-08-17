@@ -112,6 +112,24 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
 
 ## 已知边界(诚实清单)
 
+- **MR 闭环升级(2026-08-17,对照内网既有框架,docs/mr-loop-adaptation.md)**:
+  失败先分类再派单——九项合并门禁进契约(`GET /mr/gates`,可选端点,
+  平台不支持=旧语义一字不变),检视>冲突>CI 只派最高优先级一路;
+  重试只数 CI(检视/冲突触发清零);检视闭环(拉讨论→专职会话逐条
+  回复→宿主发布并标已解决);冲突修复(宿主 merge 造真实冲突标记,
+  agent 在真冲突上解);等人门禁(审批/投票/WIP)挂起等待不空转,
+  说清卡在哪并通知归属人;MR merged=完成、closed=失败请人工;失败
+  材料落盘工作区外 pipeline/ 双通道喂修复会话;同 SHA 不再重复触发
+  流水线(修复无新提交时直接按上次结果裁,省一条流水线)。四条端到
+  端用例(tests/mrLoop.test.ts)+旧 delivery 16 项全绿。**全部在假件
+  上验证**:真 CodeHub 的门禁拼写、讨论形状、resolve 权限、SuperChecker
+  不可修判据都没见过——docs/mr-loop-capability-audit.md 是给内网模型
+  的能力自检问卷,报告带回来再钉死契约;适配层四个新端点
+  (mr_gates/mr_discussions/discussion_reply/pipeline_artifacts)与
+  `--selftest` 已备好,内网只填配置。**MCP 通道未做**:内网若有能力
+  只走 MCP,先用"MCP→命令行"小桥接(问卷 C2 收集传输形态后再定
+  要不要原生客户端);
+
 - **仓库地图进开场白(2026-08-16,路线图 #4)**:内核模式下每次会话
   启动现画一张按引用扇入排序的文件+符号地图(src/repoMap.ts),垫在
   环境事实之后、修复使命之前——大仓里模型不必全仓乱 grep 找入口。

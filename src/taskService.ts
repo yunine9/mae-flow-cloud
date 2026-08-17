@@ -19,6 +19,7 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
@@ -106,22 +107,37 @@ export interface TaskSummary {
    * sha = 流水线绑定的代码版本,也是重启后续轮的锚。 */
   delivery?: {
     mr_url?: string;
+    /** MR 标识(平台返回的 id/iid):门禁与讨论查询要带回去。 */
+    mr_id?: number | string;
+    /** 交付分支对(门禁查询与冲突修复都要用,重启后不靠重读状态文件)。 */
+    source_branch?: string;
+    target_branch?: string;
     mr_state?: string;
     pipeline?: string;
     sha?: string;
     skipped?: string;
-    /** 修复环账本(小状态机):流水线直至全绿是最终目标(用户拍板
-     * "不该有最大轮数限制,都该尽力修好")。红灯→专职修复会话(分诊
-     * 后按类修,可派专职子 agent)→推新提交→新流水线,循环到绿;
-     * max 缺席=不限轮(默认),数字=可配的手刹;真正的收敛刹车是
-     * last_sha(没新提交即停)+提示词里的"原地打转必须换思路或出诊断"。
+    /** 挂起等待的人话(等审批/等投票……):MR 闭环里"没人动它"和
+     * "出了问题"必须让人一眼分得开。 */
+    waiting_on?: string;
+    /** 修复环账本(小状态机):MR 全绿合入是最终目标(用户拍板
+     * "不该有最大轮数限制,都该尽力修好")。失败先分类再派单
+     * (检视>冲突>CI,同时多项只修最高优先级那一路——冲突不解 CI
+     * 白跑);round 只数 CI 修复(检视/冲突触发时清零,流程性问题
+     * 不许耗掉代码修复的额度);max 缺席=不限轮,数字=可配手刹。
+     * 真正的收敛刹车按类分:CI/冲突=同 SHA 不二修(没新提交即停),
+     * 检视=同一批讨论 id 修过一轮仍未解决即停;加上提示词里的
+     * "原地打转必须换思路或出诊断"。
      * diagnosis=修复会话停下时留给人的话(缺什么、去哪配)。 */
     loop?: {
       round: number;
       max?: number;
       state: "repairing" | "green" | "exhausted" | "halted";
+      /** 最近一次派的修复类型:回程(settle 后)按它走收尾动作。 */
+      kind?: "ci" | "review" | "conflict";
       failure?: string;
       last_sha?: string;
+      /** 检视修复的刹车锚:上一轮处理的讨论 id 集(排序拼接)。 */
+      review_ids?: string;
       diagnosis?: string;
     };
   };
@@ -205,6 +221,73 @@ export interface TaskServiceOptions {
    * 系统代答放行,答复里写明预授权与复盘要求;随时可开可关。 */
   moonlight?: (account?: string) => boolean;
   log?: (message: string) => void;
+}
+
+/** MR 合并门禁的分类表(照内网既有框架的实证结论,
+ * docs/mr-loop-adaptation.md §4)。三项可修按优先级排:数字小=先修,
+ * 同时多项失败只派最高优先级那一路——冲突不解 CI 白跑,检视优先于
+ * 代码问题。其余六项(审批/投票/WIP/e2e/自定义/评估)只能等人:
+ * 系统保持监控、通知归属人,不派 agent 不扣重试。认不出的名字一律
+ * 按等人处理并把名字留痕——瞎修比不修危险。 */
+const REPAIRABLE_GATES: Record<
+  string,
+  { kind: "review" | "conflict" | "ci"; priority: number }
+> = {
+  resolve_discussion_passed: { kind: "review", priority: 10 },
+  conflict_passed: { kind: "conflict", priority: 15 },
+  ci_state_passed: { kind: "ci", priority: 20 },
+};
+
+const HUMAN_GATE_TEXT: Record<string, string> = {
+  approvers_passed: "等审批",
+  vote_passed: "等投票",
+  work_in_progress_passed: "等摘除 WIP 标记",
+  e2e_check_passed: "等 e2e 检查",
+  custom_ctrl_items_passed: "等自定义门禁",
+  evaluation_passed: "等评估",
+};
+
+interface GateItem {
+  name: string;
+  passed: boolean;
+  detail?: string;
+}
+
+interface GateView {
+  mrState: "opened" | "merged" | "closed";
+  gates: GateItem[];
+}
+
+/** 失败分类:可修的挑最高优先级一路;等人的翻成人话列表。 */
+function classifyGates(gates: GateItem[]): {
+  repair?: { kind: "review" | "conflict" | "ci"; gate: GateItem };
+  waiting: string[];
+} {
+  let repair: { kind: "review" | "conflict" | "ci"; gate: GateItem;
+                priority: number } | undefined;
+  const waiting: string[] = [];
+  for (const gate of gates) {
+    if (gate.passed) continue;
+    const known = REPAIRABLE_GATES[gate.name];
+    if (known) {
+      if (!repair || known.priority < repair.priority) {
+        repair = { ...known, gate };
+      }
+    } else {
+      waiting.push(HUMAN_GATE_TEXT[gate.name] ?? `等 ${gate.name}`);
+    }
+  }
+  return { repair, waiting };
+}
+
+/** 检视意见(适配层契约形状,宿主只读这些字段)。 */
+interface DiscussionItem {
+  id: string;
+  file?: string;
+  line?: number;
+  severity?: string;
+  author?: string;
+  body?: string;
 }
 
 /** 小鲁班链接必须落到个人处置台，而不是 /tasks/:id 的 JSON API。
@@ -296,6 +379,8 @@ interface TaskState {
   nudgeCount?: number;
   /** 任务专属容器(隔离模式):随任务起,随收口停。 */
   container?: TaskContainer;
+  /** 合入监控环的防重入锁(内存态):一任务只挂一环。 */
+  mergeWatchActive?: boolean;
   /** 上次主动压缩时的事件水位(事件量是上下文增长的诚实代理)。 */
   lastCompactAt?: number;
   /** 恢复标记:launch 走重建会话路径(不重克隆、内核 current 续跑)。 */
@@ -954,6 +1039,11 @@ export class TaskService {
             && summary.delivery?.pipeline === "running") {
           void this.pollPipeline(task, task.controlEpoch);
         }
+        // 合入监控同理续:重启前在等合入/等审批的接着盯(平台不支持
+        // 门禁契约的,watchMerge 一轮就退,行为与旧版完全一致)。
+        if (summary.status === "await_merge") {
+          void this.watchMerge(task, task.controlEpoch);
+        }
         if (summary.status === "running" || summary.status === "queued") {
           summary.status = "queued";
           summary.detail = "服务重启,等待续跑";
@@ -1574,6 +1664,28 @@ export class TaskService {
         return;
       }
       const sha = line.split(/\s+/)[0];
+      // 修复回程的岔路:SHA 没变说明本轮没有新代码(检视修复只回复
+      // 不改码、或修复会话判断无需改动)。这时**绝不再触发流水线**
+      // ——远端每跑一条流水线都是钱,同 SHA 重跑还是同一个结果。
+      // 上一轮绿 → 直接回门禁监控;上一轮红 → 重新分类裁决
+      // (检视清了之后可能轮到 CI 修,brake 按类各管各的)。
+      const previous = task.summary.delivery;
+      if (previous?.sha === sha && previous.pipeline) {
+        if (previous.pipeline === "success") {
+          task.summary.status = "await_merge";
+          this.persist(task);
+          void this.watchMerge(task, epoch);
+          return;
+        }
+        if (previous.pipeline.startsWith("failed")) {
+          // 老路径里状态由触发块扳到 verifying,这条岔路必须自己扳——
+          // 不扳的话 settle 会把还红着的任务误收成 completed(实测)。
+          task.summary.status = "verifying";
+          await this.pipelineVerdict(task, sha, "failed",
+            previous.loop?.failure ?? "", epoch);
+          return;
+        }
+      }
       // 外部动作台账(§11):请求先落一行(带幂等键),结果回来再补
       // 结果侧——恢复时"先查远端真实状态"就有底账可对。纯旁路。
       const ledger = (action: Omit<ExternalAction, "taskId">) =>
@@ -1621,6 +1733,11 @@ export class TaskService {
         ...(task.summary.delivery?.loop
           ? { loop: task.summary.delivery.loop } : {}),
         mr_url: mr.url,
+        // 平台给了 MR 标识就记下:门禁/讨论查询要带回去(假件给 id,
+        // codehubcli 给 iid;没有也不碍事,适配层还能按分支对查)。
+        ...(mr.id !== undefined ? { mr_id: mr.id } : {}),
+        source_branch: branch,
+        target_branch: baseline,
         mr_state: run.status === "success" ? "等待合入" : "验证中",
         pipeline: run.status,
         sha,
@@ -1631,7 +1748,7 @@ export class TaskService {
       if (run.status === "running") {
         void this.pollPipeline(task, epoch);
       } else {
-        this.pipelineVerdict(task, sha,
+        await this.pipelineVerdict(task, sha,
           run.status === "success" ? "success" : "failed",
           String(run.log ?? ""), epoch);
       }
@@ -1704,7 +1821,7 @@ export class TaskService {
       });
       // 终态交给裁决点:绿=收口通知;红=修复环决定下一步。
       // (persist/notify 都在裁决点里,别在这儿重复收口。)
-      this.pipelineVerdict(task, sha,
+      await this.pipelineVerdict(task, sha,
         terminal.status === "success" ? "success" : "failed",
         String(terminal.log ?? ""), epoch);
       return;
@@ -1732,19 +1849,23 @@ export class TaskService {
    * 常规收口通知仍归两个调用方;halted/exhausted 例外,在这儿主动
    * 喊人(带独立幂等键)——轮询路径收敛到停机时没有别的收口点。
    */
-  private pipelineVerdict(
+  private async pipelineVerdict(
     task: TaskState,
     sha: string,
     status: "success" | "failed",
     log: string,
     epoch: number,
-  ): void {
+  ): Promise<void> {
     if (!this.current(task, epoch)) return;
     const delivery = task.summary.delivery;
     if (!delivery) return;
     if (status === "success") {
       if (delivery.loop) delivery.loop.state = "green";
       this.persist(task);
+      // 流水线绿≠赢了:九项门禁全过 + 合入才是终点(内网既有框架的
+      // 实证)。支持门禁契约的平台接着盯;不支持的(fetchGates 回
+      // undefined)保持旧语义——await_merge 即收口,一字不变。
+      void this.watchMerge(task, epoch);
       return;
     }
     // 三层覆盖:任务 > 设置 > 部署;全都没配 = 不限轮(用户拍板
@@ -1758,9 +1879,41 @@ export class TaskService {
       this.persist(task);
       return;
     }
+    // 失败先分类再派单(检视>冲突>CI,同时多项只修最高优先级那一路)。
+    // 门禁不可得(平台不支持/查询失败)时按 CI 处理——正是旧语义。
+    const view = await this.fetchGates(task);
+    if (!this.current(task, epoch)) return;
+    if (view?.mrState === "merged" || view?.mrState === "closed") {
+      this.settleMergeState(task, view.mrState);
+      return;
+    }
+    const sorted = view ? classifyGates(view.gates) : { waiting: [] };
+    if (sorted.repair?.kind === "review") {
+      await this.dispatchReviewRepair(task, max, epoch);
+      return;
+    }
+    if (sorted.repair?.kind === "conflict") {
+      this.dispatchConflictRepair(task, sha, max, epoch);
+      return;
+    }
+    this.dispatchCiRepair(task, sha, log, max, epoch);
+  }
+
+  /** CI 修复派单(修复环的老主路):同 SHA 不二修、轮数预算、
+   * 分诊+定位使命。唯一会累加 round 的一路——检视/冲突是流程性
+   * 问题,不许耗掉代码修复的额度。 */
+  private async dispatchCiRepair(
+    task: TaskState,
+    sha: string,
+    log: string,
+    max: number | undefined,
+    epoch: number,
+  ): Promise<void> {
+    if (!this.current(task, epoch)) return;
+    const delivery = task.summary.delivery!;
     const loop = delivery.loop
       ?? (delivery.loop = { round: 0, max, state: "repairing" as const });
-    if (loop.last_sha === sha) {
+    if (loop.kind === "ci" && loop.last_sha === sha) {
       // 修复会话没产生新提交 = 会话自己判了"改代码解决不了"。
       // 它的收口发言就是诊断(缺什么、去哪配),原文带给人,
       // 别让人拿着一句"已停"再去翻日志猜。
@@ -1789,8 +1942,13 @@ export class TaskService {
     const previousFailure = loop.round > 0 ? loop.failure : undefined;
     loop.round += 1;
     loop.last_sha = sha;
+    loop.kind = "ci";
     loop.state = "repairing";
     loop.failure = log.slice(0, 2000) || "(平台未提供失败详情)";
+    // 批2 双通道:摘要进使命(下面),完整日志落盘工作区外 pipeline/
+    // 让修复会话自读——2000 字摘要装不下多类问题并发的全部原料。
+    const artifacts = await this.mirrorPipelineArtifacts(task);
+    if (!this.current(task, epoch)) return;
     const roundText = loop.max !== undefined
       ? `第 ${loop.round}/${loop.max} 轮` : `第 ${loop.round} 轮`;
     delivery.pipeline = `failed(${roundText}修复中)`;
@@ -1798,6 +1956,11 @@ export class TaskService {
       `流水线红了,把它修到绿是你此刻唯一的使命(${roundText}修复):`,
       `- 分支上提交 ${sha} 的权威流水线结果是 failed。失败详情(平台原文):`,
       loop.failure,
+      ...(artifacts.length ? [
+        `- 完整失败材料已镜像到 ../pipeline/(仓库外,不会进提交),`
+        + `分诊与定位先读它们,别只凭上面的摘要猜:`,
+        ...artifacts.map((name) => `  ../pipeline/${name}`),
+      ] : []),
       ...(previousFailure ? [
         `- 上一轮修复后流水线仍红,上一轮的失败详情如下,先对比再动手:`
         + `若与本轮是同一处原地打转,说明上轮改法无效,必须换思路;`
@@ -1838,6 +2001,476 @@ export class TaskService {
     // pump 会同步把状态置成 running,settle 随后那句"running→completed"
     // 就把修复轮当场盖掉(读代码逮住的竞态)。setImmediate 排到微任务链
     // 之后,settle 收完自己的账、原会话的 finally 归还并发额度,再派单。
+    setImmediate(() => void this.pump());
+  }
+
+  /** 门禁视图:平台不支持(404/没配分支对)或查询失败一律回
+   * undefined——调用方按"旧语义"处理,绝不让门禁查询卡死闭环。
+   * 形状校验从严:name/passed 类型不对的项直接丢弃,宿主不猜。 */
+  private async fetchGates(task: TaskState): Promise<GateView | undefined> {
+    const platformUrl = this.effectivePlatformUrl();
+    const delivery = task.summary.delivery;
+    if (!platformUrl || !delivery?.source_branch
+        || !delivery.target_branch) {
+      return undefined;
+    }
+    try {
+      const params = new URLSearchParams({
+        repo: task.summary.repo_url ?? this.effectiveDefaultRepo() ?? "",
+        source_branch: delivery.source_branch,
+        target_branch: delivery.target_branch,
+      });
+      if (delivery.mr_id !== undefined) {
+        params.set("mr", String(delivery.mr_id));
+      }
+      const response = await fetch(
+        `${platformUrl}/mr/gates?${params}`,
+        { headers: this.platformIdentity(task) });
+      if (response.status === 404) return undefined; // 平台不支持门禁契约
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const body = await readJson(response);
+      const gates: GateItem[] = (Array.isArray(body.gates) ? body.gates : [])
+        .filter((gate: any) => typeof gate?.name === "string"
+          && typeof gate?.passed === "boolean")
+        .map((gate: any) => ({
+          name: gate.name,
+          passed: gate.passed,
+          ...(gate.detail ? { detail: String(gate.detail) } : {}),
+        }));
+      const mrState = body.mr_state === "merged" || body.mr_state === "closed"
+        ? body.mr_state : "opened";
+      return { mrState, gates };
+    } catch (error) {
+      this.options.log?.(
+        `任务 ${task.summary.id} 门禁查询失败(按不可得处理): ${String(error)}`);
+      return undefined;
+    }
+  }
+
+  /** MR 平台侧终态:merged=任务真正的赢(比 await_merge 更进一步),
+   * closed=被人关掉(不是系统能修的,如实 failed 请人看)。 */
+  private settleMergeState(
+    task: TaskState,
+    state: "merged" | "closed",
+  ): void {
+    const delivery = task.summary.delivery!;
+    if (state === "merged") {
+      if (delivery.loop) delivery.loop.state = "green";
+      delivery.mr_state = "已合入";
+      delivery.waiting_on = undefined;
+      task.summary.status = "completed";
+      task.summary.detail = "MR 已合入,交付完成";
+      this.persist(task);
+      const account = task.summary.luban_account;
+      if (this.options.notifier && account) {
+        void this.options.notifier.notifyOutcome({
+          taskId: task.summary.id,
+          account,
+          status: "merged",
+          summary: `MR 已合入`
+            + (delivery.mr_url ? `:${delivery.mr_url}` : ""),
+          link: personalTaskLink(
+            this.options.linkBase, account, task.summary.id),
+        });
+      }
+      return;
+    }
+    delivery.mr_state = "已关闭";
+    task.summary.status = "failed";
+    task.summary.detail = "MR 被关闭(未合入),请人工确认原因";
+    this.persist(task);
+    this.notifyOutcome(task);
+  }
+
+  /** 合入监控环:流水线绿之后接着盯门禁与 MR 状态,直到合入/关闭/
+   * 出现可修失败/预算耗尽。内网既有框架的"挂起等待"语义在这里:
+   * 等审批/投票不是异常,保持监控、告诉人卡在哪,不空转不扣重试。
+   * 平台不支持门禁契约时本方法一轮就退——await_merge 即收口(旧语义)。 */
+  private async watchMerge(task: TaskState, epoch: number): Promise<void> {
+    if (task.mergeWatchActive) return; // 防重入:一任务一环
+    task.mergeWatchActive = true;
+    try {
+      const knobs = this.options.settings?.runtime() ?? {};
+      const interval = (knobs.poll_interval_s !== undefined
+        ? knobs.poll_interval_s * 1000 : undefined)
+        ?? this.options.delivery?.pollIntervalMs ?? 10_000;
+      const deadline = Date.now() + ((knobs.poll_timeout_s !== undefined
+        ? knobs.poll_timeout_s * 1000 : undefined)
+        ?? this.options.delivery?.pollTimeoutMs ?? 30 * 60_000);
+      while (Date.now() < deadline) {
+        if (!this.current(task, epoch)
+            || task.summary.status !== "await_merge") return;
+        const view = await this.fetchGates(task);
+        if (!this.current(task, epoch)
+            || task.summary.status !== "await_merge") return;
+        if (!view) return; // 平台不支持/暂不可得:保持旧语义收口
+        if (view.mrState === "merged" || view.mrState === "closed") {
+          this.settleMergeState(task, view.mrState);
+          return;
+        }
+        const sorted = classifyGates(view.gates);
+        if (sorted.repair) {
+          // 绿灯后门禁又亮红:检视/冲突照常派;CI 红说明平台侧又跑了
+          // 一条流水线(目标分支动了之类),失败详情用门禁给的话。
+          const max = task.summary.repair_rounds
+            ?? this.options.settings?.runtime().repair_rounds
+            ?? this.options.delivery?.repairRounds;
+          if (max === 0) return; // 修复环关着:留在 await_merge 请人工
+          const sha = task.summary.delivery?.sha ?? "";
+          if (sorted.repair.kind === "review") {
+            await this.dispatchReviewRepair(task, max, epoch);
+          } else if (sorted.repair.kind === "conflict") {
+            this.dispatchConflictRepair(task, sha, max, epoch);
+          } else {
+            await this.dispatchCiRepair(task, sha,
+              sorted.repair.gate.detail ?? "门禁 ci_state_passed 未通过",
+              max, epoch);
+          }
+          return;
+        }
+        const waitingText = sorted.waiting.join("、");
+        if (waitingText !== (task.summary.delivery?.waiting_on ?? "")) {
+          task.summary.delivery!.waiting_on = waitingText || undefined;
+          task.summary.detail = waitingText
+            ? `门禁与流水线已过,MR 在${waitingText}`
+            : "门禁全绿,等待合入";
+          this.persist(task);
+          // 等人的事要告诉人(幂等键=门禁集合,同一批等待只提醒一次;
+          // 换了一批等待项才再响)。
+          const account = task.summary.luban_account;
+          if (waitingText && this.options.notifier && account) {
+            void this.options.notifier.notifyOutcome({
+              taskId: task.summary.id,
+              account,
+              status: `waiting:${sorted.waiting.sort().join("+")}`,
+              summary: `MR 在${waitingText},需要相关人处理`
+                + (task.summary.delivery?.mr_url
+                  ? `:${task.summary.delivery.mr_url}` : ""),
+              link: personalTaskLink(
+                this.options.linkBase, account, task.summary.id),
+            });
+          }
+        }
+        await new Promise((tick) => setTimeout(tick, interval).unref());
+      }
+      // 预算耗尽:不是错误(MR 还开着),但监控停了要明说。
+      if (this.current(task, epoch)
+          && task.summary.status === "await_merge") {
+        task.summary.detail =
+          `合入监控预算耗尽,MR 仍未合入(${task.summary.delivery?.waiting_on
+            ?? "原因见平台"}),请人工留意`;
+        this.persist(task);
+      }
+    } finally {
+      task.mergeWatchActive = false;
+    }
+  }
+
+  /** 检视修复派单(批3):拉未解决讨论→落盘 reviews/→专职会话逐条
+   * 处理并写 ../review_replies.md→收口后宿主发布回复并标已解决。
+   * 不扣 CI 重试且清零(流程性问题不许耗掉代码修复额度);刹车=
+   * 同一批讨论 id 处理过一轮仍未解决即停。 */
+  private async dispatchReviewRepair(
+    task: TaskState,
+    max: number | undefined,
+    epoch: number,
+  ): Promise<void> {
+    if (!this.current(task, epoch)) return;
+    const delivery = task.summary.delivery!;
+    const loop = delivery.loop
+      ?? (delivery.loop = { round: 0, max, state: "repairing" as const });
+    const discussions = await this.fetchDiscussions(task);
+    if (!this.current(task, epoch)) return;
+    if (!discussions.length) {
+      // 门禁说未解决但明细拉不到:可能是刚解决的竞态,别硬派——
+      // 留在当前状态,下一轮监控再看。
+      this.options.log?.(
+        `任务 ${task.summary.id} 检视门禁未过但拉不到未解决讨论,等下一轮`);
+      return;
+    }
+    const ids = discussions.map((item) => item.id).sort().join(",");
+    if (loop.kind === "review" && loop.review_ids === ids) {
+      loop.state = "halted";
+      const diagnosis = (task.lastReply ?? "").trim();
+      if (diagnosis) loop.diagnosis = diagnosis.slice(0, 2000);
+      task.summary.detail =
+        "同一批检视意见处理过一轮仍未解决,请人工查看 MR 讨论";
+      this.persist(task);
+      this.notifyRepairStopped(task);
+      return;
+    }
+    loop.kind = "review";
+    loop.round = 0; // 检视触发清零 CI 重试(内网框架的实证语义)
+    loop.review_ids = ids;
+    loop.state = "repairing";
+    // 意见落盘 reviews/(仓库外):原始数据给 agent 自读,摘要进使命。
+    const reviewsDir = join(task.summary.workspace, "reviews");
+    try {
+      rmSync(reviewsDir, { recursive: true, force: true });
+      mkdirSync(reviewsDir, { recursive: true });
+      writeFileSync(join(reviewsDir, "discussions.json"),
+        JSON.stringify(discussions, null, 2));
+    } catch {
+      /* 落盘失败不拦路:使命里的摘要仍然够用 */
+    }
+    const lines = discussions.map((item) =>
+      `  [${item.id}] ${item.file ?? "(整体意见)"}`
+      + `${item.line !== undefined ? `:${item.line}` : ""}`
+      + `${item.severity ? ` (${item.severity})` : ""}`
+      + `${item.author ? ` ${item.author}` : ""}:`
+      + ` ${String(item.body ?? "").slice(0, 300)}`);
+    this.enqueueRepair(task,
+      [
+        `MR 上有 ${discussions.length} 条检视意见未解决,`
+        + `逐条处理它们是你此刻唯一的使命:`,
+        ...lines,
+        `- 原始数据在 ../reviews/discussions.json(仓库外),需要完整`
+        + `上下文时自己读。`,
+        `- 意见对的就改代码,意见基于误解的不改——但必须说清依据,`
+        + `不许含糊带过;不确定的按意见改(检视人对本仓比你熟)。`,
+        `- 把逐条回复写到 ../review_replies.md(仓库外,不会进提交),`
+        + `格式严格如下,每条以方括号 id 单独一行开头:`,
+        `  [${discussions[0].id}]`,
+        `  <这条的回复:改了什么/为什么不改,一两句讲清>`,
+        `- 有代码改动就凑成一次提交并 push(一次修全一次推);`
+        + `全部是解释、没有代码改动就不提交——这也是正常结局。`,
+        `- 系统会把你的回复发布到对应讨论并标记已解决,回复写给检视人看,`
+        + `说人话,别写流程黑话。`,
+      ].join("\n"),
+      `检视意见 ${discussions.length} 条,专职会话处理中`);
+  }
+
+  /** 冲突修复派单(批4):宿主先 merge 目标分支**故意把冲突标记留在
+   * 工作区**,让 agent 在真实冲突上下文里解,而不是凭描述想象
+   * (内网框架里最值得抄的一条)。merge 干净=没有真冲突,宿主直接
+   * push 合并提交回监控,不烧会话。刹车=同 SHA 不二修。 */
+  private dispatchConflictRepair(
+    task: TaskState,
+    sha: string,
+    max: number | undefined,
+    epoch: number,
+  ): void {
+    if (!this.current(task, epoch)) return;
+    const delivery = task.summary.delivery!;
+    const target = delivery.target_branch;
+    if (!task.cwd || !target) return;
+    const loop = delivery.loop
+      ?? (delivery.loop = { round: 0, max, state: "repairing" as const });
+    if (loop.kind === "conflict" && loop.last_sha === sha) {
+      loop.state = "halted";
+      const diagnosis = (task.lastReply ?? "").trim();
+      if (diagnosis) loop.diagnosis = diagnosis.slice(0, 2000);
+      task.summary.detail =
+        "冲突修复会话没有产生新提交,冲突仍在,请人工处理";
+      this.persist(task);
+      this.notifyRepairStopped(task);
+      return;
+    }
+    const git = (...args: string[]) => spawnSync(
+      "git", args, { cwd: task.cwd, encoding: "utf-8" });
+    const fetched = git("fetch", "origin", target);
+    if (fetched.status !== 0) {
+      task.summary.detail =
+        `冲突修复准备失败(fetch ${target}):${(fetched.stderr || "").slice(0, 300)}`;
+      this.persist(task);
+      return; // 环境问题不硬闯,留痕等人(或下一轮监控重试)
+    }
+    const merged = git("merge", "--no-edit", `origin/${target}`);
+    if (merged.status === 0) {
+      // 干净合并:没有真冲突(门禁可能滞后)。宿主直接推合并提交——
+      // 纯机械动作,不含判定;推完回交付链跑新流水线。
+      const pushed = git("push", "origin", "HEAD");
+      if (pushed.status === 0) {
+        loop.kind = "conflict";
+        loop.last_sha = sha;
+        task.summary.detail = "与目标分支干净合并,已推送,等新流水线";
+        this.persist(task);
+        setImmediate(() => void this.tryDeliver(task, epoch));
+      } else {
+        git("merge", "--abort");
+        task.summary.detail =
+          `合并提交推送失败:${(pushed.stderr || "").slice(0, 300)}`;
+        this.persist(task);
+      }
+      return;
+    }
+    const conflicted = (git(
+      "diff", "--name-only", "--diff-filter=U").stdout || "")
+      .trim().split("\n").filter(Boolean);
+    if (!conflicted.length) {
+      // merge 失败却没有冲突文件 = 环境怪状(本地脏文件之类),
+      // 别把 agent 派进一个说不清的现场。
+      git("merge", "--abort");
+      task.summary.detail =
+        `merge 失败但无冲突文件,请人工:${(merged.stderr || "").slice(0, 300)}`;
+      this.persist(task);
+      return;
+    }
+    loop.kind = "conflict";
+    loop.round = 0; // 冲突触发同样清零 CI 重试
+    loop.last_sha = sha;
+    loop.state = "repairing";
+    this.enqueueRepair(task,
+      [
+        `MR 与目标分支 ${target} 冲突,解决它是你此刻唯一的使命:`,
+        `- 宿主已在工作区执行 git merge origin/${target},`
+        + `真实的冲突标记(<<<<<<< ======= >>>>>>>)已经在下列文件里:`,
+        ...conflicted.map((file) => `  ${file}`),
+        `- 逐个文件解决:保留双方必要改动,把标记删干净;拿不准语义时`
+        + `读两边的提交历史(git log)再定,不许无脑选一边。`,
+        `- 解完 git add 全部冲突文件,git commit 完成合并提交`
+        + `(用默认合并信息即可),然后 push。`,
+        `- 不要 rebase、不要 force push、不要动无关文件。`,
+      ].join("\n"),
+      `与 ${target} 冲突(${conflicted.length} 个文件),专职会话解决中`);
+  }
+
+  /** 检视回复发布(批3 收尾):修复会话收口后,把 ../review_replies.md
+   * 逐条发到平台并标已解决。发布失败 fail-open 留痕——回复发不出去
+   * 顶多门禁下一轮还红,再走一次刹车判定,绝不卡死收口。 */
+  private async publishReviewReplies(task: TaskState): Promise<void> {
+    const platformUrl = this.effectivePlatformUrl();
+    const repliesPath = join(task.summary.workspace, "review_replies.md");
+    if (!platformUrl || !existsSync(repliesPath)) return;
+    let text = "";
+    try {
+      text = readFileSync(repliesPath, "utf-8");
+    } catch {
+      return;
+    }
+    // 解析:每条以 [id] 单独成行开头,正文到下一个 [id] 行为止。
+    const replies: Array<{ id: string; body: string }> = [];
+    let current: { id: string; body: string[] } | undefined;
+    for (const line of text.split("\n")) {
+      const head = line.trim().match(/^\[([^\]\s]+)\]$/);
+      if (head) {
+        if (current) {
+          replies.push({ id: current.id,
+                         body: current.body.join("\n").trim() });
+        }
+        current = { id: head[1], body: [] };
+      } else if (current) {
+        current.body.push(line);
+      }
+    }
+    if (current) {
+      replies.push({ id: current.id, body: current.body.join("\n").trim() });
+    }
+    const repo = task.summary.repo_url ?? this.effectiveDefaultRepo() ?? "";
+    for (const item of replies) {
+      if (!item.body) continue;
+      try {
+        const response = await fetch(
+          `${platformUrl}/mr/discussions/${encodeURIComponent(item.id)}/reply`,
+          {
+            method: "POST",
+            headers: this.platformIdentity(task),
+            body: JSON.stringify({
+              repo,
+              mr: task.summary.delivery?.mr_id,
+              body: item.body,
+              resolve: true,
+            }),
+          });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        void this.options.projection?.recordAction({
+          taskId: task.summary.id,
+          idemKey: `review-reply:${item.id}`,
+          kind: "review_reply",
+          request: { id: item.id, body: item.body.slice(0, 500) },
+          startedAt: new Date().toISOString(),
+          finishedAt: new Date().toISOString(),
+        });
+      } catch (error) {
+        this.options.log?.(
+          `任务 ${task.summary.id} 检视回复发布失败(讨论 ${item.id}): `
+          + String(error));
+      }
+    }
+    // 消费掉:下一轮修复(如果有)重写,不重复发布旧回复。
+    try {
+      rmSync(repliesPath, { force: true });
+    } catch { /* 删不掉顶多下轮重发,幂等键兜着 */ }
+  }
+
+  /** 批2 落盘通道:拉平台的失败材料镜像到工作区外 pipeline/。
+   * 每轮先清空再重下(给 agent 的必须是最新一轮);平台不支持
+   * (404)或失败回空数组,修复照走摘要通道。 */
+  private async mirrorPipelineArtifacts(task: TaskState): Promise<string[]> {
+    const platformUrl = this.effectivePlatformUrl();
+    const sha = task.summary.delivery?.sha;
+    if (!platformUrl || !sha) return [];
+    try {
+      const repo = encodeURIComponent(
+        task.summary.repo_url ?? this.effectiveDefaultRepo() ?? "");
+      const response = await fetch(
+        `${platformUrl}/pipeline/artifacts?sha=${sha}&repo=${repo}`,
+        { headers: this.platformIdentity(task) });
+      if (response.status === 404) return [];
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const body = await readJson(response);
+      const files = (Array.isArray(body.files) ? body.files : [])
+        .filter((file: any) => typeof file?.name === "string"
+          && typeof file?.text === "string");
+      if (!files.length) return [];
+      const dir = join(task.summary.workspace, "pipeline");
+      rmSync(dir, { recursive: true, force: true });
+      mkdirSync(dir, { recursive: true });
+      const written: string[] = [];
+      for (const file of files) {
+        // 路径穿越防线:文件名只留基名,别让平台字段写出目录外。
+        const name = basename(String(file.name));
+        if (!name) continue;
+        writeFileSync(join(dir, name), String(file.text).slice(0, 512 * 1024));
+        written.push(name);
+      }
+      return written;
+    } catch (error) {
+      this.options.log?.(
+        `任务 ${task.summary.id} 流水线材料镜像失败(走摘要通道): `
+        + String(error));
+      return [];
+    }
+  }
+
+  private async fetchDiscussions(task: TaskState): Promise<DiscussionItem[]> {
+    const platformUrl = this.effectivePlatformUrl();
+    const delivery = task.summary.delivery;
+    if (!platformUrl || !delivery) return [];
+    try {
+      const params = new URLSearchParams({
+        repo: task.summary.repo_url ?? this.effectiveDefaultRepo() ?? "",
+      });
+      if (delivery.mr_id !== undefined) {
+        params.set("mr", String(delivery.mr_id));
+      }
+      const response = await fetch(
+        `${platformUrl}/mr/discussions?${params}`,
+        { headers: this.platformIdentity(task) });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const body = await readJson(response);
+      return (Array.isArray(body.discussions) ? body.discussions : [])
+        .filter((item: any) => typeof item?.id === "string" && item.id);
+    } catch (error) {
+      this.options.log?.(
+        `任务 ${task.summary.id} 检视讨论拉取失败: ${String(error)}`);
+      return [];
+    }
+  }
+
+  /** 修复派单的共同尾巴:使命上膛、任务重排队,setImmediate 避开
+   * settle 链上的状态竞态(同 dispatchCiRepair 里那条注释)。 */
+  private enqueueRepair(
+    task: TaskState,
+    mission: string,
+    detail: string,
+  ): void {
+    task.mission = mission;
+    task.summary.status = "queued";
+    task.summary.detail = detail;
+    task.resume = true;
+    this.persist(task);
+    this.queue.push(task.summary.id);
     setImmediate(() => void this.pump());
   }
 
@@ -2253,6 +2886,12 @@ export class TaskService {
         // 专项使命到这儿才算消费掉:会话真做完了。早清会让"修一半
         // 被重启"的重建会话拿不到使命。
         task.mission = undefined;
+        // 检视修复的回程票:把会话写的逐条回复发到平台并标已解决,
+        // 必须在 tryDeliver 之前——门禁的下一次判定要看到"已解决"。
+        if (task.summary.delivery?.loop?.kind === "review") {
+          await this.publishReviewReplies(task);
+          if (!this.current(task, epoch)) break;
+        }
         // 终态在交付判定之后才定:先标 completed 再改,轮询会撞见
         // 中间态(实测竞态)。交付把状态升为 verifying/await_merge,
         // 没交付动作时才落 completed。

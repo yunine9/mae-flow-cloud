@@ -30,7 +30,7 @@ export interface ExternalAction {
   taskId: string;
   /** 幂等键:同任务同键只落一行(如 mr:feat->master、pipeline:<sha>)。 */
   idemKey: string;
-  kind: "mr_create" | "pipeline_trigger";
+  kind: "mr_create" | "pipeline_trigger" | "review_reply";
   request: Record<string, unknown>;
   result?: Record<string, unknown>;
   /** 绑定的代码版本:结果只为这个 SHA 背书(旧绿灯不背书新代码)。 */

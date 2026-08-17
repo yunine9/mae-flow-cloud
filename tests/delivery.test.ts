@@ -454,7 +454,9 @@ test("停机后的回程票:人工办完外部事项,重跑续推到绿灯收口
   // 流水线就该绿。在途验证(非停机)点重跑要被拒,别重复烧流水线。
   const platform = new FakeGitPlatform();
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
-  platform.statusQueue.push("failed", "failed");   // 停机前两跑红,之后绿
+  // 停机前一跑红,之后绿。旧机械同 SHA 修复失败要再烧一条流水线才判
+  // halted,MR 闭环改造后不烧(同 SHA 直接按上次结果裁),队列只需一个红。
+  platform.statusQueue.push("failed");
   await platform.start();
   const model = new ScriptedModelServer([
     ...walkScript(true),

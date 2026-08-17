@@ -51,7 +51,8 @@
  */
 
 import { execFile } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { createServer } from "node:http";
 
 type Extract = { json?: string; regex?: string; const?: string };
@@ -66,6 +67,24 @@ interface CommandSpec {
   status_map?: Record<string, string>;
 }
 
+/** 列表型端点(门禁/讨论/材料):items 指到数组,fields 逐字段抽。 */
+interface ListSpec extends CommandSpec {
+  /** 数组在输出 JSON 里的位置(缺省=输出本身就是数组)。 */
+  items?: Extract;
+  /** 每个元素抽哪些字段(点路径相对元素本身)。 */
+  fields?: Record<string, Extract>;
+  /** 门禁 passed 的判定词(原始值命中任一=通过),缺省
+   * ["true","1","passed","success","yes"](大小写不敏感)。 */
+  passed_values?: string[];
+  /** MR 生命周期抽取与映射(mr_gates 用):opened/merged/closed。 */
+  mr_state?: Extract;
+  mr_state_map?: Record<string, string>;
+  /** 材料落盘目录模板(pipeline_artifacts 用):命令负责把日志下载到
+   * 这个目录(可用 {sha}/{repo} 占位),适配层读目录里全部文件返回
+   * ——SSE 日志网关那类"先落盘再取"的形态就走这条,不用逐字段抽。 */
+  files_dir?: string;
+}
+
 interface AdapterConfig {
   port?: number;
   /** 监听地址,默认 127.0.0.1(只给本机宿主)。适配层在 Windows 侧、
@@ -77,6 +96,12 @@ interface AdapterConfig {
   mr_create: CommandSpec;
   pipeline_trigger: CommandSpec;
   pipeline_status: CommandSpec;
+  /** MR 闭环的四个可选端点(docs/mr-loop-adaptation.md §3):
+   * 不配=对应 HTTP 路由回 404,宿主 fail-open 回纯流水线语义。 */
+  mr_gates?: ListSpec;
+  mr_discussions?: ListSpec;
+  discussion_reply?: CommandSpec;
+  pipeline_artifacts?: ListSpec;
 }
 
 const CONTRACT_STATUS = new Set(["success", "failed", "running"]);
@@ -219,9 +244,46 @@ export class PlatformAdapter {
       target_branch: String(body.target_branch ?? ""),
       title: String(body.title ?? ""),
       sha: String(body.sha ?? ""),
+      mr: String(body.mr ?? ""),
+      id: String(body.id ?? ""),
+      body: String(body.body ?? ""),
+      resolve: String(body.resolve ?? ""),
       token: personal || this.serviceToken,
       git_username: decode(headers["x-mfc-git-user"]),
     };
+  }
+
+  /** 列表端点的通用执行:跑命令→取数组→逐字段抽。字段抽取失败按
+   * "这个字段没有"处理(可选字段是常态),但 items 指错=502 明说。 */
+  private async runList(
+    spec: ListSpec,
+    values: Record<string, string>,
+  ): Promise<{ stdout: string; parsed: () => unknown;
+               items: Array<Record<string, unknown>> }> {
+    const stdout = await this.run(spec, values);
+    let parsedCache: unknown;
+    const parsed = () => parsedCache ??= JSON.parse(stdout);
+    const rawList = spec.items
+      ? extract(spec.items, "items 数组", stdout, parsed)
+      : parsed();
+    if (!Array.isArray(rawList)) {
+      throw new AdapterError("items 抽出来的不是数组——检查 items 点路径");
+    }
+    const items = rawList.map((element) => {
+      const row: Record<string, unknown> = {};
+      for (const [name, fieldSpec] of Object.entries(spec.fields ?? {})) {
+        row[name] = extractOptional(fieldSpec, stdout, () => element);
+      }
+      return row;
+    });
+    return { stdout, parsed, items };
+  }
+
+  private gatePassed(spec: ListSpec, raw: unknown): boolean {
+    const accepted = (spec.passed_values
+      ?? ["true", "1", "passed", "success", "yes"])
+      .map((word) => word.toLowerCase());
+    return accepted.includes(String(raw ?? "").toLowerCase());
   }
 
   async handle(
@@ -281,7 +343,153 @@ export class PlatformAdapter {
       }));
       return { status: 200, payload: { runs } };
     }
+    // ---- MR 闭环的四个可选端点:不配=404,宿主 fail-open ----
+    if (method === "GET" && path === "/mr/gates") {
+      const spec = this.config.mr_gates;
+      if (!spec) return { status: 404, payload: { error: "未配置 mr_gates" } };
+      const { stdout, parsed, items } = await this.runList(spec, this.values({
+        repo: query.get("repo") ?? "",
+        source_branch: query.get("source_branch") ?? "",
+        target_branch: query.get("target_branch") ?? "",
+        mr: query.get("mr") ?? "",
+      }, headers));
+      const rawState = spec.mr_state
+        ? String(extractOptional(spec.mr_state, stdout, parsed) ?? "")
+        : "opened";
+      const mapped = spec.mr_state_map?.[rawState] ?? rawState;
+      const mrState = ["opened", "merged", "closed"].includes(mapped)
+        ? mapped : "opened"; // 认不出的生命周期按在途处理,别把单误杀
+      return { status: 200, payload: {
+        mr_state: mrState,
+        gates: items
+          .filter((row) => row.name !== undefined)
+          .map((row) => ({
+            name: String(row.name),
+            passed: this.gatePassed(spec, row.passed),
+            ...(row.detail !== undefined
+              ? { detail: String(row.detail) } : {}),
+          })),
+      } };
+    }
+    if (method === "GET" && path === "/mr/discussions") {
+      const spec = this.config.mr_discussions;
+      if (!spec) {
+        return { status: 404, payload: { error: "未配置 mr_discussions" } };
+      }
+      const { items } = await this.runList(spec, this.values({
+        repo: query.get("repo") ?? "",
+        mr: query.get("mr") ?? "",
+      }, headers));
+      return { status: 200, payload: {
+        discussions: items
+          .filter((row) => row.id !== undefined && row.id !== "")
+          .map((row) => ({
+            id: String(row.id),
+            ...(row.file !== undefined ? { file: String(row.file) } : {}),
+            ...(row.line !== undefined ? { line: Number(row.line) } : {}),
+            ...(row.severity !== undefined
+              ? { severity: String(row.severity) } : {}),
+            ...(row.author !== undefined
+              ? { author: String(row.author) } : {}),
+            ...(row.body !== undefined ? { body: String(row.body) } : {}),
+          })),
+      } };
+    }
+    {
+      const replyMatch = path.match(/^\/mr\/discussions\/([^/]+)\/reply$/);
+      if (method === "POST" && replyMatch) {
+        const spec = this.config.discussion_reply;
+        if (!spec) {
+          return { status: 404,
+                   payload: { error: "未配置 discussion_reply" } };
+        }
+        await this.run(spec, this.values(
+          { ...body, id: decodeURIComponent(replyMatch[1]) }, headers));
+        return { status: 200, payload: { ok: true } };
+      }
+    }
+    if (method === "GET" && path === "/pipeline/artifacts") {
+      const spec = this.config.pipeline_artifacts;
+      if (!spec) {
+        return { status: 404,
+                 payload: { error: "未配置 pipeline_artifacts" } };
+      }
+      const values = this.values({
+        sha: query.get("sha") ?? "",
+        repo: query.get("repo") ?? "",
+      }, headers);
+      // 两种形态:命令下载到目录(SSE 网关那类)→ 读目录;
+      // 或命令直接输出 JSON → items/fields 抽 {name, text}。
+      if (spec.files_dir) {
+        await this.run(spec, values);
+        const dir = spec.files_dir.replace(/\{(\w+)\}/g,
+          (_whole, name: string) => values[name] ?? "");
+        const files = existsSync(dir)
+          ? readdirSync(dir).map((name) => ({
+              name,
+              text: readFileSync(join(dir, name), "utf-8")
+                .slice(0, 512 * 1024),
+            }))
+          : [];
+        return { status: 200, payload: { files } };
+      }
+      const { items } = await this.runList(spec, values);
+      return { status: 200, payload: {
+        files: items
+          .filter((row) => row.name !== undefined && row.text !== undefined)
+          .map((row) => ({
+            name: String(row.name), text: String(row.text) })),
+      } };
+    }
     return { status: 404, payload: { error: "未知路径" } };
+  }
+
+  /** 自检(--selftest):把"内网那边的形状"打印出来带回给外网看——
+   * 每个端点的解析后命令(令牌打码)、只读端点的一次真实调用与契约
+   * 字段核对。变更类端点(mr_create/trigger/reply)只印命令不执行。 */
+  async selftest(sample: Record<string, string>): Promise<string> {
+    const lines: string[] = ["== adapter selftest =="];
+    const mask = (parts: string[]) => parts
+      .map((part) => part.replace(/\{token\}/g, "<token>")).join(" ");
+    const sections: Array<[string, CommandSpec | undefined]> = [
+      ["mr_create(只印不执行)", this.config.mr_create],
+      ["pipeline_trigger(只印不执行)", this.config.pipeline_trigger],
+      ["pipeline_status", this.config.pipeline_status],
+      ["mr_gates", this.config.mr_gates],
+      ["mr_discussions", this.config.mr_discussions],
+      ["discussion_reply(只印不执行)", this.config.discussion_reply],
+      ["pipeline_artifacts", this.config.pipeline_artifacts],
+    ];
+    for (const [name, spec] of sections) {
+      lines.push(spec
+        ? `[配置] ${name}: ${mask(spec.command)}`
+        : `[缺席] ${name}: 未配置(对应端点 404,宿主按旧语义 fail-open)`);
+    }
+    const probes: Array<[string, string, URLSearchParams]> = [
+      ["GET /pipeline/status", "/pipeline/status",
+       new URLSearchParams({ sha: sample.sha ?? "", repo: sample.repo ?? "" })],
+      ["GET /mr/gates", "/mr/gates", new URLSearchParams({
+        repo: sample.repo ?? "",
+        source_branch: sample.source_branch ?? "",
+        target_branch: sample.target_branch ?? "",
+        mr: sample.mr ?? "" })],
+      ["GET /mr/discussions", "/mr/discussions", new URLSearchParams({
+        repo: sample.repo ?? "", mr: sample.mr ?? "" })],
+      ["GET /pipeline/artifacts", "/pipeline/artifacts",
+       new URLSearchParams({ sha: sample.sha ?? "", repo: sample.repo ?? "" })],
+    ];
+    for (const [label, path, query] of probes) {
+      try {
+        const result = await this.handle("GET", path, query, {}, {});
+        lines.push(`[试跑] ${label} -> HTTP ${result.status}`);
+        lines.push("  " + JSON.stringify(result.payload).slice(0, 1500));
+      } catch (error) {
+        lines.push(`[试跑] ${label} -> 失败: `
+          + String((error as Error).message).slice(0, 500));
+      }
+    }
+    lines.push("把以上输出原样带回外网,契约对不上的在外网改,内网不打补丁。");
+    return lines.join("\n");
   }
 
   serve(port?: number): Promise<number> {
@@ -349,12 +557,31 @@ if (process.argv[1]?.endsWith("platformAdapter.ts")) {
     console.error("用法: tsx src/platformAdapter.ts --config <adapter.json>");
     process.exit(2);
   }
+  const argValue = (name: string) => {
+    const at = process.argv.indexOf(name);
+    return at >= 0 ? process.argv[at + 1] ?? "" : "";
+  };
   try {
     const adapter = new PlatformAdapter(configPath);
-    void adapter.serve().then((port) => {
-      console.log(`[adapter] CodeHub 适配层就绪: http://127.0.0.1:${port}`);
-      console.log("[adapter] 宿主侧: npm run serve -- --platform http://127.0.0.1:" + port);
-    });
+    if (process.argv.includes("--selftest")) {
+      // 自检形态:打印形状与只读试跑结果后退出——输出誊回外网,
+      // 等于外网看到了内网的真实返回(防分叉纪律的口子)。
+      void adapter.selftest({
+        repo: argValue("--repo"),
+        source_branch: argValue("--source-branch"),
+        target_branch: argValue("--target-branch"),
+        sha: argValue("--sha"),
+        mr: argValue("--mr"),
+      }).then((report) => {
+        console.log(report);
+        process.exit(0);
+      });
+    } else {
+      void adapter.serve().then((port) => {
+        console.log(`[adapter] CodeHub 适配层就绪: http://127.0.0.1:${port}`);
+        console.log("[adapter] 宿主侧: npm run serve -- --platform http://127.0.0.1:" + port);
+      });
+    }
   } catch (error) {
     console.error(`[adapter] 配置不可用,拒绝启动: ${String(error)}`);
     process.exit(2);

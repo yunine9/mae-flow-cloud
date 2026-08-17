@@ -27,6 +27,21 @@ export interface MergeRequest {
   sha: string;
   state: "验证中" | "等待合入";
   url: string;
+  /** 平台侧生命周期(门禁契约用):opened=在途,merged/closed=终态。 */
+  merge_state: "opened" | "merged" | "closed";
+}
+
+/** 检视讨论(真件=CodeHub 的 MR discussion;假件同语义)。 */
+export interface Discussion {
+  id: string;
+  file?: string;
+  line?: number;
+  severity?: string;
+  author?: string;
+  body: string;
+  resolved: boolean;
+  /** 发布过的回复(测试断言"回复真到了平台"用)。 */
+  replies: string[];
 }
 
 export interface PipelineRun {
@@ -54,6 +69,15 @@ export class FakeGitPlatform {
   /** 逐次结局队列:修复环一类"先红后绿"的剧本按序消费,
    * 空了退回 nextPipelineStatus——比测试里掐时序翻开关可靠。 */
   readonly statusQueue: Array<"success" | "failed" | "running"> = [];
+  /** 检视讨论(测试注入 seedDiscussion;修复闭环回复+resolve 落这里)。 */
+  readonly discussions: Discussion[] = [];
+  /** 冲突门禁:true=conflict_passed 不过(真件由平台判,假件测试拨)。 */
+  conflictGate = false;
+  /** 等人类门禁覆盖(approvers_passed 等):不设=通过。
+   * 测试拨 false 模拟"等审批",拨回 true 模拟"有人批了"。 */
+  readonly humanGates: Record<string, boolean> = {};
+  /** 流水线附件(批2 落盘契约):测试注入,按名给文本。 */
+  readonly artifacts: Array<{ name: string; text: string }> = [];
   barePath = "";
   private server?: Server;
   private counter = 0;
@@ -116,6 +140,8 @@ export class FakeGitPlatform {
             .end(text);
         };
         try {
+          const replyMatch = url.pathname.match(
+            /^\/mr\/discussions\/([^/]+)\/reply$/);
           if (request.method === "POST" && url.pathname === "/mr") {
             reply(201, this.createMergeRequest(body));
           } else if (request.method === "GET" && url.pathname === "/mr") {
@@ -127,6 +153,21 @@ export class FakeGitPlatform {
               && url.pathname === "/pipeline/status") {
             reply(200, this.pipelineStatus(
               url.searchParams.get("sha") ?? ""));
+          } else if (request.method === "GET"
+              && url.pathname === "/mr/gates") {
+            reply(200, this.mergeGates(
+              url.searchParams.get("source_branch") ?? "",
+              url.searchParams.get("target_branch") ?? ""));
+          } else if (request.method === "GET"
+              && url.pathname === "/mr/discussions") {
+            reply(200, { discussions: this.discussions
+              .filter((item) => !item.resolved)
+              .map(({ replies: _r, resolved: _s, ...rest }) => rest) });
+          } else if (request.method === "POST" && replyMatch) {
+            reply(200, this.replyDiscussion(replyMatch[1], body));
+          } else if (request.method === "GET"
+              && url.pathname === "/pipeline/artifacts") {
+            reply(200, { files: this.artifacts });
           } else {
             reply(404, { error: "未知路径" });
           }
@@ -145,14 +186,20 @@ export class FakeGitPlatform {
     this.server = undefined;
   }
 
-  /** 同(源→目标)分支已有 MR 时幂等返回——恢复重放不翻倍(§10 幂等键)。 */
+  /** 同(源→目标)分支已有 MR 时幂等返回——恢复重放不翻倍(§10 幂等键)。
+   * 幂等复用时顺带把 sha 对齐到分支最新(修复推了新提交,MR 跟着走,
+   * 真平台就是这个行为)。 */
   private createMergeRequest(body: Record<string, any>): MergeRequest {
     const source = String(body.source_branch ?? "");
     const target = String(body.target_branch ?? "");
     if (!source || !target) throw new Error("source_branch/target_branch 必填");
     const existing = this.mergeRequests.find(
-      (mr) => mr.source_branch === source && mr.target_branch === target);
-    if (existing) return existing;
+      (mr) => mr.source_branch === source && mr.target_branch === target
+        && mr.merge_state === "opened");
+    if (existing) {
+      existing.sha = this.branchSha(source);
+      return existing;
+    }
     const sha = this.branchSha(source); // 分支必须已推到位,否则这里抛错
     this.counter += 1;
     const mr: MergeRequest = {
@@ -163,9 +210,70 @@ export class FakeGitPlatform {
       sha,
       state: "验证中",
       url: `${this.baseUrl}/mr/${this.counter}`,
+      merge_state: "opened",
     };
     this.mergeRequests.push(mr);
     return mr;
+  }
+
+  /** 门禁九项的假件版:三项可修按真实状态算,等人类由测试拨。
+   * 语义与真件对齐:名字用 CodeHub 原始拼写,passed 是布尔。 */
+  private mergeGates(source: string, target: string): {
+    mr_state: string;
+    gates: Array<{ name: string; passed: boolean; detail?: string }>;
+  } {
+    const mr = this.mergeRequests.find(
+      (item) => item.source_branch === source
+        && item.target_branch === target);
+    if (!mr) throw new Error(`MR(${source}->${target}) 不存在`);
+    const unresolved = this.discussions.filter((item) => !item.resolved);
+    const lastRun = this.pipelines.findLast((run) => run.sha === mr.sha);
+    const gates = [
+      {
+        name: "resolve_discussion_passed",
+        passed: unresolved.length === 0,
+        ...(unresolved.length
+          ? { detail: `${unresolved.length} 条检视意见未解决` } : {}),
+      },
+      {
+        name: "conflict_passed",
+        passed: !this.conflictGate,
+        ...(this.conflictGate ? { detail: "与目标分支存在冲突" } : {}),
+      },
+      {
+        name: "ci_state_passed",
+        passed: lastRun?.status === "success",
+        ...(lastRun?.status !== "success"
+          ? { detail: `流水线 ${lastRun?.status ?? "未跑"}` } : {}),
+      },
+      ...Object.entries(this.humanGates).map(([name, passed]) => ({
+        name, passed,
+      })),
+    ];
+    return { mr_state: mr.merge_state, gates };
+  }
+
+  private replyDiscussion(
+    id: string,
+    body: Record<string, any>,
+  ): { ok: boolean } {
+    const discussion = this.discussions.find((item) => item.id === id);
+    if (!discussion) throw new Error(`讨论 ${id} 不存在`);
+    discussion.replies.push(String(body.body ?? ""));
+    if (body.resolve === true) discussion.resolved = true;
+    return { ok: true };
+  }
+
+  /** 测试注入:种一条未解决的检视意见。 */
+  seedDiscussion(input: Omit<Discussion, "resolved" | "replies">): void {
+    this.discussions.push({ ...input, resolved: false, replies: [] });
+  }
+
+  /** 测试裁定:平台侧把 MR 合入/关闭(审批人点了按钮)。 */
+  settleMr(source: string, state: "merged" | "closed"): void {
+    for (const mr of this.mergeRequests) {
+      if (mr.source_branch === source) mr.merge_state = state;
+    }
   }
 
   private triggerPipeline(sha: string): PipelineRun {
