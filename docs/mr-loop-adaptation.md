@@ -338,24 +338,29 @@ npm run adapter -- --config adapter.json --selftest
   参照的 Node codehub-cli 1.6.0 子命令/参数完全不同(如 v0.4.9 用
   `--source-project <数字id>`,MR 建单要项目 id 不是路径)。适配层是
   命令模板,**照装机上真实存在的那一代填**,selftest 会当场暴露对不上
-  的形状;试点单仓可以把项目 id 直接写死在模板里。
+  的形状;REST 用自动派生的 `{repo_path}` 不需要 id,只有 CLI 命令
+  要数字 id 时按 §11 的办法查一次写进模板。
 
 ---
 
 ## 11. adapter.json 参考填法(照报告的真实形状,进场对着微调)
 
 下面是按报告钉出来的骨架——REST 优先(形状最稳、不吃 CLI 代际),
-`curl` 都是只读或幂等安全的。**占位说明**:`<pid>`=项目数字 id
-(试点单仓写死),`<host>`=CodeHub API 域名;`{mr}` 等花括号占位符
-由适配层运行时填。真实字段名以 selftest 输出为准,对不上改这份配置,
-不改代码。
+`curl` 都是只读或幂等安全的。**占位说明**:`<host>`=CodeHub API
+域名(手填这一个就够);`{repo_path}` 等花括号占位符由适配层运行时
+填——`{repo_path}` 是从宿主传来的仓库 URL **自动派生**的 URL 编码
+项目路径(如 `g%2Fdemo`),CodeHub REST 按路径定位仓,**不用手抄
+项目数字 id**。只有走 v0.4.9 CLI 的命令才要数字 id(它不认路径),
+那也别手抄:`curl .../api/v3/projects/{repo_path}` 的返回里 `.id`
+就是,查一次写进模板。真实字段名以 selftest 输出为准,对不上改
+这份配置,不改代码。
 
 ```jsonc
 {
   "token_file": "/etc/mae-flow-cloud/codehub-token",   // 0600
   "mr_lookup": {   // 先查后建(A2:幂等语义不统一,查询是唯一稳的路)
     "command": ["curl", "-sf", "-H", "X-Auth-Token: {token}",
-      "https://<host>/api/v3/projects/<pid>/merge_requests?state=opened&source_branch={source_branch}&target_branch={target_branch}"],
+      "https://<host>/api/v3/projects/{repo_path}/merge_requests?state=opened&source_branch={source_branch}&target_branch={target_branch}"],
     "url": {"json": "0.web_url"},
     "id": {"json": "0.iid"}
   },
@@ -363,7 +368,7 @@ npm run adapter -- --config adapter.json --selftest
     "command": ["curl", "-sf", "-X", "POST",
       "-H", "X-Auth-Token: {token}", "-H", "Content-Type: application/json",
       "-d", "{\"source_branch\":\"{source_branch}\",\"target_branch\":\"{target_branch}\",\"title\":\"{title}\"}",
-      "https://<host>/api/v3/projects/<pid>/merge_requests"],
+      "https://<host>/api/v3/projects/{repo_path}/merge_requests"],
     "url": {"json": "web_url"},
     "id": {"json": "iid"}
     // 注意:重复建时 REST 回 200 空 body,url 抽取会失败——
@@ -371,7 +376,7 @@ npm run adapter -- --config adapter.json --selftest
   },
   "pipeline_trigger": {   // D5:push 自动触发,这里只是查询,不产生副作用
     "command": ["curl", "-sf", "-H", "X-Auth-Token: {token}",
-      "https://<host>/api/v3/projects/<pid>/merge_requests/{mr}/pipelines/latest"],
+      "https://<host>/api/v3/projects/{repo_path}/merge_requests/{mr}/pipelines/latest"],
     "status": {"const": "running"}   // 交给宿主轮询 pipeline_status 收敛
   },
   "pipeline_status": {
@@ -387,7 +392,7 @@ npm run adapter -- --config adapter.json --selftest
   },
   "mr_gates": {   // B 节:mergeable_state 平铺布尔 + reason
     "command": ["curl", "-sf", "-H", "X-Auth-Token: {token}",
-      "https://<host>/api/v3/projects/<pid>/merge_requests/{mr}/mergeable_state"],
+      "https://<host>/api/v3/projects/{repo_path}/merge_requests/{mr}/mergeable_state"],
     "bools": {"json": ""},            // 布尔字段在哪层就指到哪层
     "reason": {"json": "reason"},
     "ignore_fields": ["merge_request_switch"],
@@ -406,7 +411,7 @@ npm run adapter -- --config adapter.json --selftest
     "command": ["curl", "-sf", "-X", "POST",
       "-H", "X-Auth-Token: {token}", "-H", "Content-Type: application/json",
       "-d", "{\"body\":\"{body}\"}",
-      "https://<host>/api/v3/projects/<pid>/merge_requests/{mr}/discussions/{id}/notes"],
+      "https://<host>/api/v3/projects/{repo_path}/merge_requests/{mr}/discussions/{id}/notes"],
     "note_id": {"json": "id"}
   },
   // discussion_resolve 默认不配(D3:resolve 归检视人)。团队拍板要

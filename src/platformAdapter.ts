@@ -46,6 +46,8 @@
  * }
  *
  * 占位符:{repo} {source_branch} {target_branch} {title} {sha} {mr}
+ *        {repo_path}(从 {repo} 自动派生的 URL 编码项目路径,
+ *          CodeHub REST 的 /projects/{路径}/ 直接用,不用手抄项目 id)
  *        {id} {body} {note_id}(检视回复链)
  *        {token} {git_username}(后两个优先取请求头里的个人身份)。
  * 命令以 argv 数组直接 spawn,不过 shell——标题带空格、注入都不是问题。
@@ -277,8 +279,19 @@ export class PlatformAdapter {
       }
     };
     const personal = decode(headers["x-mfc-git-token"]);
+    // {repo_path}:从仓库 URL 自动派生"URL 编码的项目路径"——
+    // CodeHub REST 按 /api/v3/projects/{路径}/... 定位仓,人不该手抄
+    // 项目 id(用户拍板:能从 MR/仓地址推出来的就自动拿)。
+    // 非 URL(本地路径/空)时留空,模板引用到会诚实报"没有值"。
+    const repoUrl = String(body.repo ?? "");
+    let repoPath = "";
+    try {
+      repoPath = new URL(repoUrl).pathname
+        .replace(/^\/+/, "").replace(/\.git$/, "");
+    } catch { /* 不是 URL 就没有路径可派生 */ }
     return {
-      repo: String(body.repo ?? ""),
+      repo: repoUrl,
+      repo_path: encodeURIComponent(repoPath),
       source_branch: String(body.source_branch ?? ""),
       target_branch: String(body.target_branch ?? ""),
       title: String(body.title ?? ""),

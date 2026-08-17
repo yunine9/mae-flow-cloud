@@ -77,6 +77,7 @@ function makeAdapter(dir: string, cli: string): PlatformAdapter {
     token: "svc-token-0000",
     mr_create: {
       command: ["node", cli, "mr", "--repo", "{repo}",
+        "--project", "{repo_path}",   // 从仓 URL 自动派生,人不填 id
         "--source", "{source_branch}", "--target", "{target_branch}",
         "--title", "{title}", "--token", "{token}"],
       url: { json: "data.web_url" },
@@ -110,6 +111,11 @@ test("三端点走真 CLI:模板套值、抽取、状态映射、多 run 全对"
   }, {});
   assert.equal(mr.status, 201);
   assert.equal((mr.payload as any).url, "https://codehub.corp/mr/42");
+  // {repo_path}:从 https://codehub.corp/g/demo.git 自动派生
+  // URL 编码路径 g%2Fdemo——CodeHub REST 按路径定位仓,不用手抄项目 id
+  const argv = JSON.parse(
+    readFileSync(join(dir, "last-argv.json"), "utf-8")) as string[];
+  assert.ok(argv.includes("g%2Fdemo"), "repo_path 没从仓 URL 派生出来");
 
   const trigger = await adapter.handle("POST", "/pipeline/trigger",
     new URLSearchParams(), { repo: "r", sha: "abc123" }, {});
@@ -131,7 +137,8 @@ test("身份:个人令牌头压过服务账号;没带头回落服务账号", asy
 
   // 带个人令牌头:CLI 收到的必须是个人的,不是服务账号的
   const personal = await adapter.handle("POST", "/mr", new URLSearchParams(), {
-    repo: "r", source_branch: "s", target_branch: "t", title: "x",
+    repo: "https://codehub.corp/g/demo.git",
+    source_branch: "s", target_branch: "t", title: "x",
   }, { "x-mfc-git-token": encodeURIComponent("glpat-personal-7777"),
        "x-mfc-git-user": "zhang.san" });
   assert.equal(personal.status, 201);
