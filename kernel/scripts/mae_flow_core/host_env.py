@@ -83,6 +83,18 @@ def unit_tests_run_locally():
     return host_kind() != CLOUD
 
 
+def pipeline_adjudicates():
+    """流水线是不是这台机器之外的最终裁判。
+
+    云端把编译/UT/CodeCheck 的执行都推迟给了流水线(上面三个开关),
+    这个开关是那句承诺的"兑现侧":为真时,宿主会在流水线终态把平台
+    事实喂给 `pipeline record`,内核绑 HEAD 裁决并落盘 quality.pipeline
+    ——推迟从一句话变成有据可查的物证。本地形态恒假:本地的裁判是
+    本地执行本身,没有第二个裁判。
+    """
+    return host_kind() == CLOUD
+
+
 def codecheck_runs_locally():
     """CodeCheck 本地扫描还做不做。
 

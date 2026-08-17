@@ -23,7 +23,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { basename, dirname, join } from "node:path";
 import {
   AnnotationStore,
@@ -116,6 +116,11 @@ export interface TaskSummary {
     pipeline?: string;
     sha?: string;
     skipped?: string;
+    /** 内核对流水线证据的裁决戳(如 "PASS@abc123456789"):终态时宿主
+     * 把平台事实喂给内核 `pipeline record`,内核绑工作区 HEAD 裁决并
+     * 写进 .mae-flow.json 的 quality.pipeline——这里只是那份现场记录
+     * 的镜像。"未裁决(...)"= 登记失败留痕(fail-open,不拦收口)。 */
+    attested?: string;
     /** 挂起等待的人话(等审批/等投票……):MR 闭环里"没人动它"和
      * "出了问题"必须让人一眼分得开。 */
     waiting_on?: string;
@@ -1868,12 +1873,23 @@ export class TaskService {
     if (status === "success") {
       if (delivery.loop) delivery.loop.state = "green";
       this.persist(task);
+      // 证据口在状态转移之后:平台事实喂给内核绑 HEAD 裁决
+      // (PASS/RED/STALE),"编译/UT 推迟给流水线"的承诺从此有物证。
+      // 记账是旁路——绿灯不等记账,先扳道再登记(先登记的话轮询侧
+      // 已置 await_merge,外面会在记账空窗里看到半新不旧的环账,实测
+      // 逮过);内核调不动只留痕"未裁决",绝不拦收口。
+      await this.recordPipelineEvidence(task, sha, status);
+      if (!this.current(task, epoch)) return;
+      this.persist(task);
       // 流水线绿≠赢了:九项门禁全过 + 合入才是终点(内网既有框架的
       // 实证)。支持门禁契约的平台接着盯;不支持的(fetchGates 回
       // undefined)保持旧语义——await_merge 即收口,一字不变。
       void this.watchMerge(task, epoch);
       return;
     }
+    // 红灯也过证据口(RED/STALE 照记):留的是最近一次终态的物证。
+    await this.recordPipelineEvidence(task, sha, status);
+    if (!this.current(task, epoch)) return;
     // 三层覆盖:任务 > 设置 > 部署;全都没配 = 不限轮(用户拍板
     // "不该有最大轮数限制"),0 = 关。真正兜住无限的是收敛刹车:
     // 没新提交即停 + 无进展必须换思路或出诊断(使命里的纪律)。
@@ -2450,6 +2466,77 @@ export class TaskService {
     try {
       rmSync(repliesPath, { force: true });
     } catch { /* 删不掉顶多下轮重发,幂等键兜着 */ }
+  }
+
+  /** 流水线证据口:终态时把平台事实(sha/status/来源)写成文件喂给
+   * 内核仓的 `pipeline record`,内核绑工作区当前 HEAD 裁决并把结论写
+   * 进 .mae-flow.json 的 quality.pipeline——判定一行不在本仓(红线:
+   * 内核唯一权威;宿主只递事实)。delivery.attested 是那份现场记录的
+   * 镜像戳。纯旁路:内核调不动/退非零只留痕"未裁决",30s 预算,
+   * 绝不拦收口(fail-open 红线)。 */
+  private async recordPipelineEvidence(
+    task: TaskState,
+    sha: string,
+    status: "success" | "failed",
+  ): Promise<void> {
+    const kernelRoot = this.options.host?.kernelRoot;
+    const delivery = task.summary.delivery;
+    if (!kernelRoot || !task.cwd || !delivery) return;
+    const factsPath = join(task.summary.workspace, "pipeline-facts.json");
+    try {
+      writeFileSync(factsPath, JSON.stringify({
+        sha,
+        status,
+        source: this.effectivePlatformUrl() ?? "",
+        url: delivery.mr_url ?? "",
+      }, null, 2));
+      const result = await new Promise<
+        { code: number | null; out: string; err: string }>(
+        (resolve) => {
+          const child = spawn(this.options.host!.python ?? "python3",
+            [join(kernelRoot, "scripts", "mae-flow.py"),
+             "pipeline", "record", "--file", factsPath],
+            { cwd: task.cwd!, stdio: ["ignore", "pipe", "pipe"] });
+          let out = "";
+          let err = "";
+          child.stdout.setEncoding("utf-8");
+          child.stderr.setEncoding("utf-8");
+          child.stdout.on("data", (chunk: string) => (out += chunk));
+          child.stderr.on("data", (chunk: string) => (err += chunk));
+          const timer = setTimeout(() => child.kill("SIGKILL"), 30_000);
+          timer.unref();
+          child.on("close", (code) => {
+            clearTimeout(timer);
+            resolve({ code, out, err });
+          });
+          child.on("error", () => {
+            clearTimeout(timer);
+            resolve({ code: null, out, err });
+          });
+        });
+      // 内核约定:末行是机器可读的裁决 JSON(quality.pipeline 原文)。
+      const lastLine = result.out.trim().split("\n").at(-1) ?? "";
+      let record: { verdict?: unknown; sha?: unknown } | undefined;
+      try {
+        record = JSON.parse(lastLine);
+      } catch {
+        record = undefined;
+      }
+      if (result.code === 0 && typeof record?.verdict === "string") {
+        delivery.attested =
+          `${record.verdict}@${String(record.sha ?? sha).slice(0, 12)}`;
+      } else {
+        delivery.attested = "未裁决(内核登记失败,详见服务日志)";
+        this.options.log?.(
+          `任务 ${task.summary.id} 流水线证据登记失败(code `
+          + `${result.code ?? "spawn-error"}): ${result.out.slice(0, 300)} `
+          + result.err.slice(0, 300));
+      }
+    } catch (error) {
+      delivery.attested = "未裁决(登记异常,详见服务日志)";
+      this.options.log?.(
+        `任务 ${task.summary.id} 流水线证据登记异常: ${String(error)}`);
+    }
   }
 
   /** 批2 落盘通道:拉平台的失败材料镜像到工作区外 pipeline/。

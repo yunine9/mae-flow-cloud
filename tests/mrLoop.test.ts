@@ -11,7 +11,13 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -144,6 +150,18 @@ EOF` } } },
     platform.settleMr("master_bot_REQ9", "merged");
     await until(() => service.get(id)!.status === "completed", "合入收口");
     assert.equal(service.get(id)!.delivery?.mr_state, "已合入");
+    // 流水线证据口:绿灯终态时内核已绑 HEAD 裁决,现场文件是真相,
+    // delivery.attested 只是它的镜像戳。
+    const statePath = readdirSync(workspace)
+      .map((name) => join(workspace, name, ".mae-flow.json"))
+      .find((candidate) => existsSync(candidate))!;
+    const kernelState = JSON.parse(readFileSync(statePath, "utf-8"));
+    assert.equal(kernelState.quality?.pipeline?.verdict, "PASS",
+      "内核裁决要落进现场文件");
+    assert.equal(kernelState.quality.pipeline.head,
+      service.get(id)!.delivery?.sha, "裁决必须绑最终交付的 SHA");
+    assert.match(service.get(id)!.delivery?.attested ?? "", /^PASS@/,
+      "任务侧要有裁决镜像戳");
     const seen = model.requests
       .flatMap((request) => (request as any).messages ?? [])
       .map((message: any) => JSON.stringify(message.content ?? ""))

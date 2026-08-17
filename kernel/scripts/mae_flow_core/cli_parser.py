@@ -23,7 +23,7 @@ class MFParser(argparse.ArgumentParser):
             "其余子命令: status|panel|doctor|report|envcheck|skip|goto|unlock|allow|spec|template|"
             "agent-task|lightcheck|accept-risk|moonlight|action|messages|config-review|requirement-record|"
             "story-localize|local-spec|domain-docs|domain-archive|manifest|codecheck-scan|"
-            "codecheck-scope|codecheck-record|approve-exemption|"
+            "codecheck-scope|codecheck-record|approve-exemption|pipeline|"
             "migrate-flow|exit"
             "(用法见 current/exit 指令)。\n"
             "注意:子命令不带连字符(是 current 不是 --current);"
@@ -274,6 +274,13 @@ def build_parser():
     record.add_argument("--diagnostic", required=True)
     record.add_argument("--reason", required=True)
     record.add_argument("--message-id", required=True)
+    pipeline = sub.add_parser("pipeline")
+    pipeline_actions = pipeline.add_subparsers(dest="action", required=True)
+    pipeline_record = pipeline_actions.add_parser("record")
+    pipeline_record.add_argument(
+        "--file", required=True,
+        help="平台事实 JSON(云端宿主写):{sha, status, source?, url?}")
+    pipeline_actions.add_parser("show")
     exemption = sub.add_parser("approve-exemption")
     exemption.add_argument("--rule", required=True)
     exemption.add_argument("--file", required=True)

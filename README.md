@@ -112,6 +112,16 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
 
 ## 已知边界(诚实清单)
 
+- **流水线证据口第一期(2026-08-17)**:云端"编译/UT 推迟给流水线"的
+  承诺有了兑现侧——流水线终态时宿主把平台事实(sha/status/来源)喂给
+  内核 `pipeline record`,内核绑工作区 HEAD 裁决(PASS/RED/STALE,
+  旧绿灯不背书新代码)写进 `.mae-flow.json` 的 `quality.pipeline`,
+  任务侧 `delivery.attested` 是镜像戳;内核调不动记"未裁决"留痕不拦
+  收口。**边界**:第一期是物证不是门禁(登记不推动流程步骤);裁决
+  只证"流水线成功且绑本 SHA",**不证流水线里跑了哪些 job**——流水线
+  含编译/UT/CodeCheck stage 仍是部署时的人工确认项(上线自查第 0 条);
+  三个 deferred 内存标记与证据口的逐项核销(待核销清单)是第二期。
+
 - **MR 闭环升级(2026-08-17,对照内网既有框架,docs/mr-loop-adaptation.md)**:
   失败先分类再派单——九项合并门禁进契约(`GET /mr/gates`,可选端点,
   平台不支持=旧语义一字不变),检视>冲突>CI 只派最高优先级一路;

@@ -31,6 +31,7 @@ from .cli_commands import gate as _gate
 from .cli_commands import agent_task as _agent_task
 from .cli_commands import role_task as _role_task
 from .cli_commands import codecheck_commands as _codecheck_commands
+from .cli_commands import pipeline_commands as _pipeline_commands
 from .cli_commands import story_diag as _story_diag
 from .cli_commands import moonlight_commands as _moonlight_commands
 from .cli_commands import lifecycle as _lifecycle
@@ -126,6 +127,7 @@ _COMMAND_MODULES = (
     _agent_task,
     _role_task,
     _codecheck_commands,
+    _pipeline_commands,
     _story_diag,
     _moonlight_commands,
     _lifecycle,
