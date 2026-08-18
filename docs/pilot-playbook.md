@@ -56,8 +56,10 @@
 ## 阶段 0:环境就位(验收:npm test 能跑)
 
 1. 确认快照版本:`git log --oneline -1` 应不早于
-   `a3b8a27`(feat(mr-loop): 按内网能力核对报告钉契约)。早于它的
-   快照检视语义是错的,停下来要新 ZIP;
+   `10bd38a`(feat(delivery): 流水线证据口第一期)。早于它的 ZIP 有
+   两个硬伤——检视语义是旧的(会代检视人点"已解决"),仓内 `kernel/`
+   快照也还没刷(内核缺 pipeline 子命令,证据口调不通);停下来要新 ZIP。
+   自检:`kernel/VENDORED` 里的来源应是 `mae-flow@6d9c1d2…`;
 2. 装依赖:`npm install` 走内网源。**esbuild 是平台专属二进制,
    不能用别的机器拷来的 node_modules**;装不上
    `@earendil-works/pi-coding-agent` 是一票否决项,原文记报错;
