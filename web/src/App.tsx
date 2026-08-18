@@ -29,7 +29,7 @@ import {
   progressAgeMs,
 } from "./teamOps";
 
-type View = "team" | "mine" | "history" | "users" | "settings";
+type View = "team" | "mine" | "profile" | "history" | "users" | "settings";
 type Theme = "light" | "dark";
 
 function initialView(user: AuthUser): View {
@@ -49,39 +49,46 @@ function MoonlightToggle({
   onChanged,
 }: {
   session: AuthUser;
-  onChanged: () => Promise<void>;
+  onChanged: (moonlight: boolean) => Promise<void>;
 }) {
   const [on, setOn] = useState(!!session.moonlight);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
-  async function toggle() {
+  async function select(next: boolean) {
+    if (next === on || busy) return;
     setBusy(true);
     try {
-      const result = await putMoonlight(!on);
+      const result = await putMoonlight(next);
       setOn(result.moonlight);
       setNote(result.moonlight
         ? (result.swept > 0
-            ? `已开启,顺手放行了 ${result.swept} 张在等的卡`
-            : "已开启:人工节点自动放行,事后复盘")
-        : "已关闭:之后的节点恢复审批");
-      await onChanged();
+            ? `已自动放行 ${result.swept} 项正在等待的确认`
+            : "已启用自动放行，执行过程不再等待逐项确认")
+        : "已恢复逐步确认，后续人工节点会等待你拍板");
+      await onChanged(result.moonlight);
     } catch (cause) {
       setNote(String((cause as Error).message ?? cause));
     } finally { setBusy(false); }
   }
-  return <span className={`moonlight-toggle${on ? " on" : ""}`}>
-    <button type="button" disabled={busy} onClick={() => void toggle()}
-      title="月光模式:开着时你的任务不再等你审批,一路直行,事后复盘">
-      <svg viewBox="0 0 20 20" aria-hidden>
-        <path d="M15.5 12.5A6.5 6.5 0 0 1 7.5 4.5a6.5 6.5 0 1 0 8 8Z" />
-      </svg>
-      月光模式{on ? "·开" : "·关"}
-    </button>
-    {/* 常驻备注:别让人当成界面主题切换(用户点名)。 */}
-    <small>{note || (on
-      ? "免审批中:你的任务不等审批直行,事后复盘"
-      : "免审批开关:开启后你的任务不再等你审批")}</small>
-  </span>;
+  return <section className={`approval-setting${on ? " is-auto" : ""}`} aria-labelledby="approval-setting-title">
+    <header className="approval-setting-head">
+      <span className="approval-setting-icon" aria-hidden><svg viewBox="0 0 20 20"><path d="M15.5 12.5A6.5 6.5 0 0 1 7.5 4.5a6.5 6.5 0 1 0 8 8Z" /></svg></span>
+      <div><span className="section-kicker">APPROVAL MODE</span><h2 id="approval-setting-title">任务审批方式</h2></div>
+      <span className="approval-setting-state">当前：{on ? "自动放行" : "逐步确认"}</span>
+    </header>
+    <p className="approval-setting-summary">决定 Agent 遇到人工节点时，是停下来等你确认，还是继续执行并在事后复盘。</p>
+    <div className="approval-options" role="group" aria-label="任务审批方式">
+      <button type="button" className={!on ? "on" : ""} disabled={busy}
+        onClick={() => void select(false)}>
+        <i aria-hidden>✓</i><span><strong>逐步确认</strong><small>关键节点等待你拍板，控制更稳妥</small></span>
+      </button>
+      <button type="button" className={on ? "on" : ""} disabled={busy}
+        onClick={() => void select(true)}>
+        <i aria-hidden><svg viewBox="0 0 20 20"><path d="M15.5 12.5A6.5 6.5 0 0 1 7.5 4.5a6.5 6.5 0 1 0 8 8Z" /></svg></i><span><strong>月光模式 · 自动放行</strong><small>不中断执行，完成后统一复盘</small></span>
+      </button>
+    </div>
+    {note && <p className="approval-setting-note" role="status">{note}</p>}
+  </section>;
 }
 
 function ThemeSwitch({ theme, onChange }: {
@@ -103,9 +110,58 @@ function ThemeSwitch({ theme, onChange }: {
   </button>;
 }
 
+function PersonalSetupStatus({ session, onOpen }: {
+  session: AuthUser;
+  onOpen: () => void;
+}) {
+  const codehub = !!session.git_token_hint && !!session.git_email;
+  const luban = !!session.luban_token_hint;
+  const ready = codehub && luban;
+  return <section className={`personal-setup-status${ready ? " is-ready" : ""}`} aria-label="个人接入状态">
+    <span className="personal-setup-mark" aria-hidden>{ready ? "✓" : "!"}</span>
+    <div className="personal-setup-copy">
+      <strong>{ready ? "个人接入已就绪" : "个人接入待完善"}</strong>
+      <small>配置后，代码提交与任务提醒会自动使用你的身份。</small>
+    </div>
+    <div className="personal-setup-chips">
+      <span className={codehub ? "ok" : "missing"}><i />CodeHub {codehub ? "已配置" : "待配置"}</span>
+      <span className={luban ? "ok" : "missing"}><i />小鲁班 {luban ? "已配置" : "待配置"}</span>
+    </div>
+    <button type="button" onClick={onOpen}>{ready ? "查看设置" : "前往配置"}<svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg></button>
+  </section>;
+}
+
+function PersonalSettingsPage({
+  session,
+  onSessionPatch,
+  onTasksChanged,
+}: {
+  session: AuthUser;
+  onSessionPatch: (patch: Partial<AuthUser>) => void;
+  onTasksChanged: () => Promise<void>;
+}) {
+  return <div className="personal-settings-page">
+    <MoonlightToggle session={session} onChanged={async (moonlight) => {
+      onSessionPatch({ moonlight });
+      await onTasksChanged();
+    }} />
+    <section className="personal-connections" aria-labelledby="personal-connections-title">
+      <div className="personal-connections-head">
+        <div><span className="section-kicker">PERSONAL CONNECTIONS</span><h2 id="personal-connections-title">个人接入</h2></div>
+        <p>配置一次，后续任务自动使用你的代码身份和消息通知。</p>
+      </div>
+      <div className="credential-grid">
+        <GitTokenCard session={session} onChanged={onSessionPatch} />
+        <LubanTokenCard session={session} onChanged={onSessionPatch} />
+      </div>
+    </section>
+  </div>;
+}
+
 function NavIcon({ name }: { name: View }) {
   if (name === "team") return <svg viewBox="0 0 24 24" aria-hidden><path d="M4.75 19.25V11.5h4v7.75h-4Zm5.75 0V4.75h4v14.5h-4Zm5.75 0V8h4v11.25h-4Z" /></svg>;
   if (name === "mine") return <svg viewBox="0 0 24 24" aria-hidden><circle cx="12" cy="8" r="3.25" /><path d="M5.5 19.25c.65-3.45 2.82-5.25 6.5-5.25s5.85 1.8 6.5 5.25" /></svg>;
+  if (name === "profile") return <svg viewBox="0 0 24 24" aria-hidden><circle cx="9" cy="8" r="3" /><path d="M3.75 18.5c.55-3.15 2.3-4.75 5.25-4.75s4.7 1.6 5.25 4.75" /><circle cx="17.5" cy="15.5" r="2.25" /><path d="M17.5 11.75v1.5M17.5 17.75v1.5M13.75 15.5h1.5M19.75 15.5h1.5" /></svg>;
   if (name === "users") return <svg viewBox="0 0 24 24" aria-hidden><circle cx="9" cy="8" r="3" /><path d="M3.75 18.5c.55-3.15 2.3-4.75 5.25-4.75s4.7 1.6 5.25 4.75M16.5 7.5h4M18.5 5.5v4" /></svg>;
   if (name === "settings") return <svg viewBox="0 0 24 24" aria-hidden><circle cx="12" cy="12" r="3" /><path d="M12 4.5v2M12 17.5v2M4.5 12h2M17.5 12h2M6.7 6.7l1.4 1.4M15.9 15.9l1.4 1.4M6.7 17.3l1.4-1.4M15.9 8.1l1.4-1.4" /></svg>;
   return <svg viewBox="0 0 24 24" aria-hidden><path d="M5 4.75h14A1.25 1.25 0 0 1 20.25 6v12A1.25 1.25 0 0 1 19 19.25H5A1.25 1.25 0 0 1 3.75 18V6A1.25 1.25 0 0 1 5 4.75Z" /><path d="M8 9h8M8 13h5" /></svg>;
@@ -204,6 +260,10 @@ export function App() {
     try { localStorage.setItem("mae-flow-theme", next); } catch { /* 仍保留本次选择 */ }
   }
 
+  function patchSession(patch: Partial<AuthUser>) {
+    setSession((current) => current ? { ...current, ...patch } : current);
+  }
+
   const waitingCount = tasks.filter((task) => task.status === "waiting_for_human").length;
   const myTasks = assignedToMe;
   const myWaiting = myTasks.filter((task) => task.status === "waiting_for_human");
@@ -238,12 +298,14 @@ export function App() {
       ? { title: "团队总览", description: "看团队推进、负责人和阻塞风险；需要兜底时打开任务的过程工作台处置(暂停/恢复/决定)。" }
       : { title: "团队动态", description: "只读了解团队正在推进什么；你的待办与操作始终留在个人工作台。" },
     mine: { title: "我的工作", description: "集中处理分配给我的需求、待确认事项和后续交付动作。" },
+    profile: { title: "个人设置", description: "集中管理任务审批方式、CodeHub 提交身份和小鲁班通知。" },
     history: { title: "交付历史", description: "从投影读侧回看跨生命周期的任务与交付记录。" },
     users: { title: "账号管理", description: "创建本地账号并分配管理员或开发权限。" },
     settings: { title: "服务设置", description: "运行参数、通知投递与模型网关；改了即刻安全生效，密钥只写不读。" },
   }[view];
   const relevantWaiting = view === "mine"
-    ? myWaiting.length + pendingReviews.length : waitingCount;
+    ? myWaiting.length + pendingReviews.length
+    : view === "team" ? waitingCount : 0;
   return <div className="app-shell">
     <aside className="sidebar">
       <div className="brand-lockup"><span className="brand-symbol" aria-hidden><svg viewBox="0 0 28 28"><path d="M5.5 20.5 10.7 7l3.3 7.15L17.3 7l5.2 13.5" /><path d="M8.1 16.1h11.8" /></svg></span><span className="brand-copy"><strong>Mae-Flow</strong><small>{session.role === "admin" ? "Management Console" : "Developer Workspace"}</small></span></div>
@@ -258,6 +320,7 @@ export function App() {
         </> : <>
           <span className="nav-section-label">个人工作台</span>
           <NavButton view="mine" current={view} onSelect={setView} label="我的工作" badge={myWaiting.length + pendingReviews.length} personal />
+          <NavButton view="profile" current={view} onSelect={setView} label="个人设置" />
           <span className="nav-section-label team-context">团队信息</span>
           <NavButton view="team" current={view} onSelect={setView} label="团队动态" badge={waitingCount} />
           <NavButton view="history" current={view} onSelect={setView} label="交付历史" />
@@ -280,32 +343,25 @@ export function App() {
         />}
 
         {view === "mine" && <>
-          <section className="identity-bar session-bar"><div className="identity-copy"><span className="section-kicker">PERSONAL INBOX</span><strong>{session.username} 的专属工作台</strong><small>{session.role === "admin" ? "显示分配给你的工作，并兜底承接尚未分配负责人的待确认事项。" : "登录身份已和任务归属绑定；这里始终只显示分配给你的工作。"}</small></div><span className="identity-actions"><MoonlightToggle session={session} onChanged={refresh} /><span className={`role-chip ${session.role}`}>{session.role === "admin" ? "管理员身份" : "开发身份"}</span></span></section>
+          <section className="identity-bar session-bar"><div className="identity-copy"><span className="section-kicker">PERSONAL INBOX</span><strong>{session.username} 的专属工作台</strong><small>{session.role === "admin" ? "显示分配给你的工作，并兜底承接尚未分配负责人的待确认事项。" : "登录身份已和任务归属绑定；这里始终只显示分配给你的工作。"}</small></div><span className={`role-chip ${session.role}`}>{session.role === "admin" ? "管理员身份" : "开发身份"}</span></section>
+          <PersonalSetupStatus session={session} onOpen={() => setView("profile")} />
+          <section className="personal-pulse four" aria-label="我的任务摘要"><div className="personal-stat attention"><span>待我核对</span><strong>{myWaiting.length}</strong></div><div className="personal-stat danger"><span>需要介入 / 已暂停</span><strong>{myBlocked.length + myPaused.length}</strong></div><div className="personal-stat active"><span>机器执行中</span><strong>{myActive.length}</strong></div><div className="personal-stat success"><span>待合入 / 完成</span><strong>{myDelivered.length}</strong></div></section>
           {(session.committer || myReviews.length > 0) && <CommitterInbox
             reviews={pendingReviews}
             tasks={tasks}
             onOpen={openArtifacts}
           />}
-          <section className="personal-connections" aria-labelledby="personal-connections-title">
-            <div className="personal-connections-head">
-              <div>
-                <span className="section-kicker">PERSONAL CONNECTIONS</span>
-                <h2 id="personal-connections-title">个人接入</h2>
-              </div>
-              <p>配置一次，后续任务自动使用你的代码身份和消息通知。</p>
-            </div>
-            <div className="credential-grid">
-              <GitTokenCard session={session} />
-              <LubanTokenCard session={session} />
-            </div>
-          </section>
-          <section className="personal-pulse four" aria-label="我的任务摘要"><div className="personal-stat attention"><span>待我核对</span><strong>{myWaiting.length}</strong></div><div className="personal-stat danger"><span>需要介入 / 已暂停</span><strong>{myBlocked.length + myPaused.length}</strong></div><div className="personal-stat active"><span>机器执行中</span><strong>{myActive.length}</strong></div><div className="personal-stat success"><span>待合入 / 完成</span><strong>{myDelivered.length}</strong></div></section>
           <section className="review-inbox" aria-labelledby="review-title"><div className="section-head"><div><span className="section-kicker">REVIEW INBOX</span><h2 id="review-title">待我核对</h2></div><span className="section-count attention">{myWaiting.length} 项</span></div>{myWaiting.length === 0 ? <div className="review-clear"><span aria-hidden>✓</span><div><strong>当前没有需要你核对的事项</strong><p>新的人工节点会通过小鲁班提醒，并自动出现在这里。</p></div></div> : <div className="task-list review-list">{myWaiting.map((task) => <TaskCard key={task.id} task={task} onChanged={refresh} focused={task.id === targetTaskId} canOperate onOpenArtifacts={() => openArtifacts(task)} />)}</div>}</section>
           {myBlocked.length > 0 && <TaskGroup kicker="NEEDS ATTENTION" title="需要我介入" tasks={myBlocked} onChanged={refresh} onOpenArtifacts={openArtifacts} targetTaskId={targetTaskId} tone="danger" />}
           {myPaused.length > 0 && <TaskGroup kicker="PAUSED" title="已暂停，可随时恢复" tasks={myPaused} onChanged={refresh} onOpenArtifacts={openArtifacts} targetTaskId={targetTaskId} />}
           <TaskGroup kicker="IN PROGRESS" title="机器执行中" tasks={myActive} onChanged={refresh} onOpenArtifacts={openArtifacts} targetTaskId={targetTaskId} empty="当前没有机器执行中的任务" />
           {myDelivered.length > 0 && <TaskGroup kicker="DELIVERY" title="等待合入与最近完成" tasks={myDelivered} onChanged={refresh} onOpenArtifacts={openArtifacts} targetTaskId={targetTaskId} />}
         </>}
+        {view === "profile" && session.role !== "admin" && <PersonalSettingsPage
+          session={session}
+          onSessionPatch={patchSession}
+          onTasksChanged={refresh}
+        />}
         {view === "history" && <HistoryBoard />}
         {view === "users" && session.role === "admin" && <UsersBoard />}
         {view === "settings" && session.role === "admin" && <SettingsBoard />}

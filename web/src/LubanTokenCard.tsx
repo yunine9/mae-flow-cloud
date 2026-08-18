@@ -10,7 +10,13 @@
 import { useState } from "react";
 import { putLubanToken, type AuthUser } from "./api";
 
-export function LubanTokenCard({ session }: { session: AuthUser }) {
+export function LubanTokenCard({
+  session,
+  onChanged,
+}: {
+  session: AuthUser;
+  onChanged?: (credential: { luban_token_hint?: string }) => void;
+}) {
   const [hint, setHint] = useState(session.luban_token_hint);
   const [open, setOpen] = useState(false);
   const [token, setToken] = useState("");
@@ -23,6 +29,7 @@ export function LubanTokenCard({ session }: { session: AuthUser }) {
     try {
       const result = await putLubanToken(clear ? "" : token);
       setHint(result.luban_token_hint);
+      onChanged?.({ luban_token_hint: result.luban_token_hint });
       setToken("");
       setMessage(clear
         ? "小鲁班通知已关闭。"

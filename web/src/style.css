@@ -2013,21 +2013,88 @@ pre {
 .credential-form input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); outline: none; }
 .credential-form footer { display: flex; justify-content: flex-end; gap: 8px; }
 
-/* 月光模式开关(免审批):身份栏右侧,开着时点亮。 */
-.identity-actions { display: flex; align-items: center; gap: 12px; }
-.moonlight-toggle { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
-.moonlight-toggle button {
-  display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px;
-  color: var(--muted); background: transparent; border: 1px solid var(--line);
-  border-radius: 999px; cursor: pointer; font-size: 11px; font-weight: 650;
+/* 个人设置从工作台剥离；工作台仅保留一条接入状态，设置页集中承载。 */
+.personal-setup-status {
+  min-height: 66px; margin-bottom: 12px; padding: 11px 13px;
+  display: grid; grid-template-columns: 34px minmax(190px, 1fr) auto auto;
+  align-items: center; gap: 12px;
+  border: 1px solid color-mix(in srgb, var(--attention) 24%, var(--line));
+  border-radius: var(--radius); background: color-mix(in srgb, var(--attention-soft) 48%, var(--surface));
+  box-shadow: var(--shadow-xs);
 }
-.moonlight-toggle button svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.6; }
-.moonlight-toggle button:hover { border-color: var(--accent); }
-.moonlight-toggle.on button {
-  color: #ffd88a; border-color: rgba(255, 216, 138, .45);
-  background: rgba(255, 216, 138, .08);
+.personal-setup-status.is-ready { border-color: color-mix(in srgb, var(--success) 21%, var(--line)); background: color-mix(in srgb, var(--success-soft) 42%, var(--surface)); }
+.personal-setup-mark {
+  width: 32px; height: 32px; display: grid; place-items: center;
+  color: var(--attention); border-radius: 9px; background: var(--attention-soft);
+  font-size: 13px; font-weight: 800;
 }
-.moonlight-toggle small { color: var(--muted); font-size: 10px; }
+.is-ready .personal-setup-mark { color: var(--success); background: var(--success-soft); }
+.personal-setup-copy { min-width: 0; display: grid; gap: 2px; }
+.personal-setup-copy strong { color: var(--text-strong); font-size: 11.5px; }
+.personal-setup-copy small { color: var(--muted); font-size: 9.5px; }
+.personal-setup-chips { display: flex; align-items: center; gap: 6px; }
+.personal-setup-chips span {
+  padding: 4px 7px; display: inline-flex; align-items: center; gap: 5px;
+  color: var(--muted); border: 1px solid var(--line); border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 72%, transparent); font-size: 8.5px; font-weight: 700;
+}
+.personal-setup-chips i { width: 5px; height: 5px; border-radius: 50%; background: var(--attention); }
+.personal-setup-chips .ok i { background: var(--success); }
+.personal-setup-status > button {
+  height: 32px; padding: 0 10px; display: inline-flex; align-items: center; gap: 5px;
+  color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--line));
+  border-radius: 8px; background: var(--accent-soft); cursor: pointer;
+  font-size: 9.5px; font-weight: 700;
+}
+.personal-setup-status > button:hover { border-color: var(--accent); }
+.personal-setup-status > button svg { width: 13px; height: 13px; }
+
+.personal-settings-page { display: grid; gap: 24px; }
+.personal-settings-page .personal-connections { margin-bottom: 0; }
+.approval-setting {
+  padding: 22px; border: 1px solid var(--line); border-radius: var(--radius-lg);
+  background:
+    radial-gradient(circle at 100% 0, color-mix(in srgb, var(--accent) 10%, transparent), transparent 42%),
+    var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+.approval-setting-head {
+  display: grid; grid-template-columns: 42px minmax(0, 1fr) auto;
+  align-items: center; gap: 12px;
+}
+.approval-setting-icon {
+  width: 42px; height: 42px; display: grid; place-items: center;
+  color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--line));
+  border-radius: 12px; background: var(--accent-soft);
+}
+.approval-setting-icon svg { width: 20px; height: 20px; }
+.approval-setting-head > div { display: grid; gap: 4px; }
+.approval-setting-head h2 { margin: 0; color: var(--text-strong); font-size: 17px; letter-spacing: -.025em; }
+.approval-setting-state {
+  padding: 5px 9px; color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--line));
+  border-radius: 999px; background: var(--accent-soft); font-size: 9.5px; font-weight: 700;
+}
+.approval-setting-summary { margin: 14px 0; color: var(--muted); font-size: 10.5px; }
+.approval-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+.approval-options button {
+  min-height: 74px; padding: 12px; display: grid; grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center; gap: 10px; color: var(--muted); border: 1px solid var(--line);
+  border-radius: 11px; background: var(--surface-soft); cursor: pointer; text-align: left;
+}
+.approval-options button:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
+.approval-options button.on { color: var(--text); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); background: var(--accent-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 8%, transparent); }
+.approval-options button:disabled { opacity: .65; cursor: wait; }
+.approval-options button > i {
+  width: 28px; height: 28px; display: grid; place-items: center;
+  color: var(--faint); border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface); font-size: 10px; font-style: normal;
+}
+.approval-options button.on > i { color: #fff; border-color: var(--accent); background: var(--accent); }
+.approval-options button > i svg { width: 15px; height: 15px; }
+.approval-options button > span { min-width: 0; display: grid; gap: 3px; }
+.approval-options strong { color: var(--text-strong); font-size: 11.5px; }
+.approval-options small { color: var(--muted); font-size: 9px; line-height: 1.45; }
+.approval-setting-note { margin: 11px 0 0; color: var(--success); font-size: 9.5px; }
 
 @media (max-width: 1080px) {
   .app-shell { grid-template-columns: 210px minmax(0, 1fr); }
@@ -2100,6 +2167,7 @@ pre {
   }
   .pulse-card { min-height: 88px; }
   .identity-bar { align-items: stretch; flex-direction: column; gap: 14px; }
+  .approval-options { grid-template-columns: 1fr; }
   .personal-connections-head { align-items: flex-start; flex-direction: column; gap: 5px; }
   .credential-grid { grid-template-columns: 1fr; }
   .credential-card { min-height: 0; }
@@ -2166,6 +2234,13 @@ pre {
   .identity-bar { padding: 17px; border-radius: var(--radius); }
   .identity-control { grid-template-columns: 1fr; }
   .identity-control button { height: 38px; }
+  .personal-setup-status { grid-template-columns: 32px minmax(0, 1fr) auto; }
+  .personal-setup-chips { grid-column: 2 / -1; }
+  .personal-setup-status > button { grid-column: 2 / -1; justify-self: start; }
+  .approval-setting { padding: 17px; }
+  .approval-setting-head { grid-template-columns: 38px minmax(0, 1fr); }
+  .approval-setting-icon { width: 38px; height: 38px; }
+  .approval-setting-state { grid-column: 2; justify-self: start; }
   .credential-card { padding: 15px; }
   .credential-facts { grid-template-columns: 1fr; }
   .credential-howto { align-items: flex-start; flex-direction: column; gap: 3px; }
