@@ -301,6 +301,15 @@ test("冲突门禁:宿主 merge 造真实冲突标记,会话在真冲突上解,�
     }, "解完回monitoring", 90_000);
     platform.conflictGate = false;
     await until(() => service.get(id)!.status === "await_merge", "回到等待合入");
+    // 合并提交信息的形状是**平台硬约束**(2026-08-18 拿到 pre-receive
+    // 完整正则):放行 "Merge remote-tracking branch '…' into x" 与
+    // git pull 那两种,**不放行本地 merge 的 "Merge branch 'master'
+    // into x"**。所以宿主必须 merge origin/<target> 而不是 <target>
+    // ——改错一个词,冲突修复的推送会在钩子那里被拒。
+    const mergeSubject = git(platform.barePath, "log", "-1", "--format=%s",
+      "master_bot_REQ9");
+    assert.match(mergeSubject, /^Merge remote-tracking branch 'origin\//,
+      `合并提交信息形状不对(平台钩子会拒收): ${mergeSubject}`);
     platform.settleMr("master_bot_REQ9", "merged");
     await until(() => service.get(id)!.status === "completed", "合入收口");
   } finally {

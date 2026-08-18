@@ -202,14 +202,38 @@ pipeline_artifacts,不配=404=宿主按纯流水线旧语义)与按能力核对�
   假件难模拟,重启后回调丢了仍要轮询兜底——等于养两套。真有需要时
   webhook 可后加,轮询留作兜底,语义不变。
 
-### 通知 CLI 的两条候选(Notifier 端口的新实现,语义契约不变)
+### 通知:小鲁班怎么接(2026-08-18 内网实测通,端到端收到消息)
 
-契约:投递失败不改流程状态、按 waiting_id 幂等、有限退避。
-- **拉群 + CLI 艾特**(用户提议):建群、用内部 CLI 在群里 @ 相关人;
-  适配层只做"事实→一条消息",失败落 `summary.notify` 标红;
-- **小鲁班 MCP**:若内网提供 MCP 服务端,需引入 MCP 客户端
-  (`@modelcontextprotocol/sdk`,本仓当前未装,纯 JS 无构建);
-  传输方式/工具名/鉴权进内网确认,不预写。
+契约不变:投递失败不改流程状态、按 waiting_id 幂等、有限退避。
+
+小鲁班是**普通 HTTP 接口,不是 MCP**:
+
+| 项 | 值 |
+|---|---|
+| URL | `http://xiaoluban.rnd.huawei.com:80/`(**要绕代理**) |
+| 方法 | POST JSON |
+| 请求体 | `{"content": "正文", "receiver": "首字母+工号", "auth": "<token>"}` |
+| 鉴权 | **body 里的 `auth` 字段**,不是 Authorization 头 |
+| 正文 | 纯文本 + 部分 HTML(`<span style=...>`、表格、emoji) |
+| 成功 | `{"status":"ok"}` |
+
+宿主的 Notifier 发的是 `{account, text, link}`(见 `src/notifier.ts`),
+形状对不上——**中间放一个几十行的桥**(与 MR 适配层同一思路:形状翻译
+是配置产物,不改宿主代码):
+
+```bash
+# 桥:监听 127.0.0.1:8791,收 {account,text,link} → 发 {content,receiver,auth}
+#     content = text + "\n" + link;auth 从 0600 的 token 文件读;不走代理
+python3 /etc/mae-flow-cloud/luban-bridge.py --port 8791 &
+npm run serve -- ... --luban http://127.0.0.1:8791
+```
+
+为什么不让宿主直接发:`auth` 进请求体是那家接口的特例,而本仓的密钥
+纪律是**令牌只走请求头**(请求体会被外部动作台账原样记进投影)。桥
+把这个特例关在外面,宿主一行不改、台账里也不会出现令牌。
+
+早先设想的"小鲁班 MCP / 拉群 CLI 艾特"两条候选就此作废——真件是
+上面这个 HTTP 接口,已实测送达。
 
 ## 流水线修复环(全绿是最终目标)
 
@@ -300,6 +324,27 @@ npm run serve -- ... --commit-convention '业务提交按内核要求写
 管理页(服务形态)也能热改同一项,设置层压部署层;超过 500 字会被
 打回——完整规范该放仓里的 `AGENTS.md`(知识在仓不在平台),这里只留
 一句能让人第一次就写对的话。
+
+**钩子正则全文**(2026-08-18 内网实测取回,五个分支):
+
+```
+(^(\[\w+\])(\[(feat|fix|refactor|test|chore|docs|style)\])\s*\S+)
+|(^(Merge remote-tracking branch '.+' into \w+))
+|(^(merge '.+' into '.+'))
+|(^(Merge branch '.+' of .+ into .+))
+|(^(Merge branch '.+' of .+))
+```
+
+对我们的三条推论:
+
+- 业务提交:内核要求的 `[单号][feat|fix]描述` 命中第 1 分支,天然过;
+- **合并提交:必须 merge 远程跟踪分支**。宿主的冲突修复本来就是
+  `git merge --no-edit origin/<目标分支>`,产生的
+  `Merge remote-tracking branch 'origin/master' into <分支>` 命中第 2
+  分支;若改成 merge 本地分支,信息会变成 `Merge branch 'master' into
+  <分支>`——**五个分支一个都不匹配,推送会被拒**。测试已把这个形状钉住;
+- revert 不放行(`Revert "..."` 五条都不匹配)。本仓不做 revert,无影响;
+  真要 revert 得改项目 hook 配置。
 
 **`contextWindow` 必填(内网实测的坑)**:内网网关的真实上限是
 169984 token,超了直接 400——

@@ -241,10 +241,25 @@ selftest 拿到真实门禁集(19 项)**,九项之外多这十项,分类与文�
 |---|---|---|---|
 | CI 修复 | rebase 到目标分支最新;刷新 `pipeline/` 落盘 | 失败摘要 + 日志路径清单 + 上一轮失败对比 | 无(推送后回监控) |
 | 检视修复 | 拉未解决讨论落盘 `reviews/` | 逐条意见(文件/行号/原话)+ 要求写 `review_replies.md` | 把回复发布到对应讨论并标记已解决 |
-| 冲突修复 | `git merge <目标分支>` 故意造冲突标记 | 冲突文件清单 + "保留双方必要改动、删干净标记" | 无 |
+| 冲突修复 | `git merge --no-edit origin/<目标分支>` 故意造冲突标记 | 冲突文件清单 + "保留双方必要改动、删干净标记" | 无 |
 
 冲突修复那条的巧思值得抄:**让 agent 在真实冲突标记上解**,而不是给它
 一段描述让它凭空想——这是内网框架里最实用的一条。
+
+**merge 必须写 `origin/<目标分支>`,不是 `<目标分支>`**(2026-08-18
+内网拿到平台 pre-receive 完整正则后确认的硬约束):
+
+| 合并提交信息 | 平台钩子 |
+|---|---|
+| `Merge remote-tracking branch 'origin/master' into <分支>`(merge origin/x 的默认信息) | ✅ 放行 |
+| `Merge branch 'master' of <url> into <分支>`(git pull 的默认信息) | ✅ 放行 |
+| `Merge branch 'master' into <分支>`(**merge 本地分支**的默认信息) | ❌ 拒收 |
+
+宿主代码本来就是 `origin/` 形式(`src/taskService.ts` 的
+`dispatchConflictRepair`),所以这条天然过——但**本文档此前把它简写成
+`git merge <目标分支>`,内网照文档读代码,判成"契约洞"报了回来**。
+教训写在这儿:文档里的命令是会被当契约读的,简写要付代价。测试已把
+合并提交信息的形状钉住(`tests/mrLoop.test.ts` 冲突用例)。
 
 ---
 
