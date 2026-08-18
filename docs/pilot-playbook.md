@@ -39,6 +39,11 @@
 
 执行前先向我(人)要齐这些输入,拿不齐的项标注后跳过对应步骤:
 
+- **内网既有框架的源码仓路径**(别人已跑通的那套 MR 自动闭环)。
+  这是你填配置时的**第一证据来源**:它真实用过的 CLI 子命令、REST
+  路径、字段解析、MCP 调用与 token 来路,全在源码里,比你自己试出来
+  可靠得多。**只抄调用形状,不抄判定逻辑**——状态机、重试语义、
+  门禁分类在本仓宿主侧已经实现,你抄进来就是分叉;
 - 试点仓地址、目标分支(项目 id 不用要:REST 用自动派生的
   `{repo_path}`;CLI 真要数字 id 时你自己按 §11 查一次);
 - 一个能用的 CodeHub token(写进哪个文件我会告诉你);
@@ -69,6 +74,11 @@
 
 ## 阶段 1:适配层配通(验收:selftest 全端点有真实输出)
 
+0. **每个端点动手前先去既有框架源码里搜它怎么调的**(搜子命令名、
+   搜 `mergeable_state`/`discussions`/`notes` 这些字段名、搜 MCP 工具
+   名),把真实调用抄下来当模板底稿,再套进 §11 的形状。能力核对报告
+   是这套源码的摘要,遇到报告没覆盖的细节(某个参数、某个字段路径、
+   token 怎么拿),回源码里找,别猜也别硬试;
 1. 照 `docs/mr-loop-adaptation.md` §11 的骨架写 `adapter.json`
    (权限 600)。要点:
    - REST 优先;CLI 只用装机上真实那一代的语法(先 `--version`,
@@ -102,10 +112,12 @@
    - 504 → 检查 no_proxy 是否包含 CodeHub 域名,再试;
    - 401 → 把 `oauth2` 换成平台账号名再试一次;
    - 每次尝试的完整报错原文都要记录,成功也要记录用的是哪种形式;
-2. **MCP 完整日志**:如果拿到了 access token,写
-   `/etc/mae-flow-cloud/mcp-log-bridge.py`(GET /sse 拿 session_id →
-   POST /messages 调 download_build_task_log → 落盘),配进
-   `pipeline_artifacts` 后重跑一次 selftest;拿不到 token 就记
+2. **MCP 完整日志**:**先去既有框架源码里找它是怎么连 MCP 的**
+   (网关地址、`X-Auth-Token`/`w3token` 从哪来、调的哪个工具名、
+   返回怎么解析)——那是跑通过的代码,照抄比自己摸报文快得多。
+   然后写 `/etc/mae-flow-cloud/mcp-log-bridge.py`(GET /sse 拿
+   session_id → POST /messages 调 download_build_task_log → 落盘),
+   配进 `pipeline_artifacts` 后重跑一次 selftest;token 拿不到就记
    「未供给,已降级摘要通道」;
 3. **SuperChecker**:在流水线历史里找一条 SuperChecker 类失败,把
    工具名/错误码/返回 JSON 脱敏抄进报告(找不到就记「本期无样例」)。
