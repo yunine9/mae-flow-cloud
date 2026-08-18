@@ -19,17 +19,28 @@ REPO = os.path.dirname(HERE)
 
 
 def kernel_scripts_dir():
+    """内核发现链,**必须与 src/kernelDiscovery.ts 同序同项**:
+    MAE_FLOW_HOME > 兄弟目录 ../mae-flow(开发机的活内核)> 仓内
+    kernel/ 快照(部署形态:一个 ZIP 就是完整产品)。
+
+    第三项是补的:原来只找前两项,而**内网只能下 ZIP、没有兄弟目录**
+    ——那边跑到这一步会直接 SystemExit,一条本来能过的验收莫名其妙
+    地挂掉(worktree 里同样撞得到,因为上一级是 .claude/worktrees)。
+    发现链写两遍就会漂移,这就是证据。
+    """
     candidates = []
     env = os.environ.get("MAE_FLOW_HOME")
     if env:
         candidates.append(env)
     candidates.append(os.path.join(os.path.dirname(REPO), "mae-flow"))
+    candidates.append(os.path.join(REPO, "kernel"))
     for candidate in candidates:
         scripts = os.path.join(candidate, "scripts")
         if os.path.isdir(os.path.join(scripts, "mae_flow_core")):
             return scripts
     raise SystemExit(
-        "找不到 mae-flow 内核仓。设置 MAE_FLOW_HOME 或把内核仓放在 ../mae-flow")
+        "找不到 mae-flow 内核:设 MAE_FLOW_HOME、放在 ../mae-flow,"
+        "或确认仓内 kernel/ 快照完整(harness/sync-kernel.sh 刷新)")
 
 
 sys.path.insert(0, kernel_scripts_dir())
