@@ -32,6 +32,10 @@ import { RuntimeSettings } from "./settings.ts";
 
 const REPO_ROOT = resolve(fileURLToPath(import.meta.url), "..", "..");
 
+// 断管免疫要装在**第一行输出之前**(下面 CONFIG 的模块级初始化就会
+// console.log):装晚一步,启动期的日志就有机会成为死因。
+muzzleBrokenPipes();
+
 const DEMO_SCRIPT: Scene[] = [
   { text: "先跑专项编译",
     tool: { name: "bash", input: { command: "echo BUILD SUCCESS" } } },
@@ -322,12 +326,14 @@ async function main(): Promise<void> {
   // --luban-header "Name: value"(可重复)带鉴权头;头的值是密钥,
   // 建议放配置文件并把文件权限设 600,别写进 systemd 单元。
   let lubanEndpoint = flag("--luban");
+  let lubanIsFake = false;
   if (lubanEndpoint) {
     console.log(`[serve] 小鲁班真件: ${lubanEndpoint}`);
   } else {
     const luban = new FakeLubanServer();
     await luban.start();
     lubanEndpoint = luban.endpoint;
+    lubanIsFake = true;  // 假件不索个人令牌(配置门禁据此放行)
     console.log(`[serve] 假小鲁班已就位,消息可查: ${luban.endpoint.replace("/notify", "")}`);
   }
   const lubanHeaders: Record<string, string> = {};
@@ -393,6 +399,7 @@ async function main(): Promise<void> {
     notifier: new Notifier({
       endpoint: lubanEndpoint,
       headers: lubanHeaders,
+      fake: lubanIsFake,
       // 管理页热改的通知端点/鉴权头:每条消息投递时现读。
       live: () => settings.luban(),
       // 收件人自己的通知令牌:小鲁班以令牌对应的人的身份发消息,
@@ -485,20 +492,53 @@ function warnStaleWeb(webRoot: string | undefined): void {
  *
  * 崩溃现场同时落盘一份(终端会滚没,而人往往只记得"它挂了"),
  * 让人能把原文带回来——诊断不该靠回忆。
+ *
+ * 勘误(2026-08-18 内网实测,crash.log 实锤):这个兜底的第一版
+ * **自己就是一次事故**。stdout/stderr 的管道断掉后(后台起服,读端
+ * 进程先退了),每一次 console 写都抛 EPIPE;record 里的 console.error
+ * 又写 → 又 EPIPE → 又进 uncaughtException → 又 record——无限递归把
+ * 事件循环吃死,症状是 API 全部超时、crash.log 同一毫秒刷出成对的
+ * "write EPIPE",栈指向 record 自己。三层修法,缺一不可:
+ * - **流上装 error 监听**(muzzleBrokenPipes):EPIPE 在源头吞掉,
+ *   输出没了服务还在——这才是治本;
+ * - **先落盘后上屏**:crash.log 是给人的,console 只是顺手;
+ * - **重入保险**:记账过程自己出的事不再记,递归到此为止。
  */
 function guardProcess(dataDir: string): void {
+  let recording = false;
   const record = (kind: string, error: unknown) => {
-    const detail = error instanceof Error
-      ? `${error.message}\n${error.stack ?? ""}` : String(error);
-    const line = `[${new Date().toISOString()}] ${kind}: ${detail}\n`;
-    console.error(`[serve] ${kind}(服务继续运行,请把这段发回外网):\n`
-      + detail);
+    if (recording) return; // 兜底自己出事不再兜:递归在这儿断
+    recording = true;
     try {
-      appendFileSync(join(dataDir, "crash.log"), line);
-    } catch { /* 落盘失败不能再抛,否则就成了兜底自己把服务弄挂 */ }
+      const detail = error instanceof Error
+        ? `${error.message}\n${error.stack ?? ""}` : String(error);
+      const line = `[${new Date().toISOString()}] ${kind}: ${detail}\n`;
+      try {
+        appendFileSync(join(dataDir, "crash.log"), line);
+      } catch { /* 落盘失败不能再抛,否则就成了兜底自己把服务弄挂 */ }
+      try {
+        console.error(`[serve] ${kind}(服务继续运行,请把这段发回外网):\n`
+          + detail);
+      } catch { /* 管道断了:输出丢弃,crash.log 已经有了 */ }
+    } finally {
+      recording = false;
+    }
   };
   process.on("unhandledRejection", (reason) => record("未处理的异步异常", reason));
   process.on("uncaughtException", (error) => record("未捕获异常", error));
+}
+
+/** stdout/stderr 断管免疫:管道读端没了(后台起服、tmux 分离、日志
+ * 采集进程先退),写日志不许变成服务的死因。
+ *
+ * 机理:对已断管道的 write,错误以流的 error **事件**回报——没有监听
+ * 器的 error 事件就是 uncaughtException。也就是说,不装这个监听,
+ * 任何一行 console.log 都可能杀进程(或进 guardProcess 的记账递归)。
+ * 装了:那次输出静静丢掉,服务照跑——日志是旁路,旁路 fail-open。 */
+function muzzleBrokenPipes(): void {
+  for (const stream of [process.stdout, process.stderr]) {
+    stream.on("error", () => { /* 断管即丢弃:输出是旁路,不许反噬 */ });
+  }
 }
 
 main().catch((error) => {

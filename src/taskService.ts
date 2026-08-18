@@ -957,7 +957,10 @@ export class TaskService {
       needs: {
         // 个人令牌该不该要,由部署形态决定(同上:只拦真会咬人的)。
         git_token: !!this.options.host,
-        luban_token: !!this.options.notifier,
+        // 假小鲁班不索令牌(没人消费它);切了真端点要求立刻恢复。
+        // 判定在 Notifier 里,跟着生效端点走——内网 agent 实测在演示
+        // 形态被"先配令牌"挡住,那是一道谁也过不去也不必过的假门。
+        luban_token: this.options.notifier?.needsPersonalToken() ?? false,
       },
     };
   }

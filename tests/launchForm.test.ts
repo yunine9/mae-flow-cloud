@@ -140,6 +140,29 @@ test("交付方式:选项与默认值都取自内核 flow.json,自造的当场�
     workflows, "表单选项必须与内核目录逐字一致");
 });
 
+test("假小鲁班不索个人令牌;管理页切真端点后要求立刻恢复", () => {
+  // 内网 agent 实测:演示形态(serve 自起假小鲁班)登进去第一件事就被
+  // "先配个人通知令牌"挡住——假件收什么都行,那个令牌谁也不消费,
+  // 这是一道谁也过不去也不必过的假门。判定跟着**生效端点**走:
+  // 管理页一旦热改成真端点,要求立刻恢复(真件确实按令牌认人)。
+  let override: { endpoint?: string } = {};
+  const service = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-lf-fake-luban-")),
+    provider: "a", model: "a-1",
+    modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
+    notifier: new Notifier({
+      endpoint: "http://127.0.0.1:1/notify",
+      fake: true,
+      live: () => override,
+    }),
+  });
+  assert.equal(service.launchOptions().needs.luban_token, false,
+    "假件在场不该逼人配令牌");
+  override = { endpoint: "http://luban.corp/notify" };
+  assert.equal(service.launchOptions().needs.luban_token, true,
+    "切了真端点,个人令牌的要求要立刻回来");
+});
+
 test("下单即校验:不存在的模型、负预算、带密码的仓地址,当场打回", () => {
   const service = new TaskService({
     dataDir: mkdtempSync(join(tmpdir(), "mfc-lf-")),

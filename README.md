@@ -125,8 +125,23 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
   记账,不再裸 `void`;③内核 hook 子进程的 `stdin` 补 `error` 监听——
   EPIPE 是**流上的 error 事件**,不经过 Promise,catch 拦不住,没监听器
   就是 uncaughtException。**假件能裁的**:投影全线拒绝服务时任务照常收口
-  且留痕、收口抛异常时任务 failed 写明原因;**假件裁不了的**:内网那台
-  机器上到底是哪条旁路先抛的——要等更新后的 `crash.log` 回来才知道。
+  且留痕、收口抛异常时任务 failed 写明原因。
+
+  **勘误(同日,内网 crash.log 回来了)**:上一段"裁不了的"已经有了
+  答案,而且答案难堪——**先抛的是修复本身**。第一版 guardProcess 的
+  record 在 stderr 断管(后台起服,日志读端先退)时 console.error 抛
+  EPIPE → 又进 uncaughtException → 又 record → 无限递归吃死事件循环:
+  进程还在、CPU 0%、API 全部超时、crash.log 同一毫秒成对的
+  "write EPIPE",栈指向 record 自己。教训写成代码三层:stdout/stderr
+  装 error 监听在源头吞断管(muzzleBrokenPipes,装在第一行输出之前)、
+  record 先落盘后上屏、重入保险断递归。真子进程用例复现该现场
+  (serveBrokenPipe.test):掐断两条输出管道后登录/下单/答卡/收口全程
+  HTTP 正常应答。**兜底代码必须在它所防御的故障下被测过才算兜底**——
+  第一版没有,于是它成了事故本体。
+  顺带逮住的第二道假门:演示形态(serve 自起假小鲁班)也索要个人通知
+  令牌,可假件收什么都行,那个令牌谁也不消费——内网 agent 端到端验证
+  在这儿被"先配令牌"挡住。现在判定跟着生效端点走:假件不索,管理页
+  切真端点后要求立刻恢复。
 
 - **上下文撑爆的自愈(2026-08-18,内网实战逼出来的)**:网关窗口比 pi
   估计的小时会吐硬报错(实测 `input too long ... max input length is

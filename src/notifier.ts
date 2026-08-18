@@ -42,6 +42,11 @@ export interface NotifierOptions {
    * 按人取,不是服务级配一个)。**只经请求头下发**——请求体会被外部
    * 动作台账原样记进投影,令牌进体等于把密钥写进数据库。 */
   personalToken?: (account: string) => string | undefined;
+  /** 端点是假小鲁班(演示/试跑形态,serve 自己起的):假件收什么都行,
+   * 个人令牌在它面前没有意义。这个标记让配置门禁不去索要一个谁也用
+   * 不上的令牌——演示模式登进去第一件事就被"先配令牌"挡住,是内网
+   * agent 端到端验证实测撞上的假门。 */
+  fake?: boolean;
   /** 有限退避重试的间隔(毫秒);长度即最大重试次数。 */
   backoffMs?: number[];
   log?: (message: string) => void;
@@ -54,6 +59,15 @@ export class Notifier {
 
   list(): NotifyRecord[] {
     return [...this.records.values()];
+  }
+
+  /** 配置门禁问的:这个通知器要不要逼人配个人令牌?
+   * 假件在场且没被管理页热改成真端点 → 不要(令牌没人消费);
+   * 管理页一旦切了真端点,要求立刻恢复——判定跟着**生效端点**走,
+   * 不是跟着启动形态走。 */
+  needsPersonalToken(): boolean {
+    if (!this.options.fake) return true;
+    return !!this.options.live?.()?.endpoint?.trim();
   }
 
   /** 自检只暴露“是否配置/最近是否失败”，不回端点鉴权内容。 */
