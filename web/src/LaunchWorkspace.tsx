@@ -181,7 +181,7 @@ export function LaunchWorkspace({
                         spellCheck={false}
                         required={options.repo.required}
                       />
-                      <small className="repo-field-note">请填写纯仓库地址；推送鉴权使用你的个人 Git 令牌。</small>
+                      <small className="repo-field-note">请填写纯仓库地址；推送鉴权使用你的 CodeHub Token。</small>
                     </label>
                   )}
                   <div className="launch-field-grid">
