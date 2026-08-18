@@ -115,9 +115,9 @@ export function TaskCard({
       )}
 
       <div className="task-meta">
-        {task.status !== "queued" && (
+        {onOpenArtifacts && (
           <button type="button" className="panel-link" onClick={onOpenArtifacts}>
-            <span>进入过程工作台</span>
+            <span>进入任务工作台</span>
             <svg viewBox="0 0 16 16" aria-hidden>
               <path d="M6 3.5h6.5V10M12.25 3.75 5 11" />
             </svg>
