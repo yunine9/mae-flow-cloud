@@ -268,17 +268,33 @@ models.json 形状(key 只放服务器本地文件,权限 600,永不进仓):
 }
 ```
 
-**提交信息规范必须配(内网实测的坑)**:试点仓的 pre-receive 钩子按
-正则校验提交信息,不合规**直接拒收 push**——
-`Deny by project hooks setting 'default': message of commit '...' does
-not match the regular-expression '(^(\[\w+\])(\[(feat|fix|refactor|
-test|chore|docs|style)\])\s*\S+)|...'`(2026-08-18 实测,改成
-`[test][chore] push verification` 后即通过)。撞上时代码早已写完,
-重来一遍纯浪费,所以规矩要**开场就进提示词**:
+**提交信息:先搞清楚谁在管,别配出互相打架的规矩**
+
+两层校验,**业务提交这两层是兼容的,不用额外配**:
+
+- **内核(权威)**:`guard/safety_kernel.py` 硬门禁——业务提交必须
+  `[<单号>][feat|fix]描述`,不合规连 commit 都做不成(不是事后拒收);
+- **平台 pre-receive 钩子**:正则
+  `(^(\[\w+\])(\[(feat|fix|refactor|test|chore|docs|style)\])\s*\S+)|(…)`,
+  不合规**拒收 push**(2026-08-18 内网实测原文:`Deny by project hooks
+  setting 'default': message of commit '…' does not match the
+  regular-expression …`)。
+
+内核那条是平台那条的**真子集**(`REQ…` 命中 `\w+`,`feat|fix` 在平台
+类型表内),所以走流程的业务提交天然合规。实测那次被拒的是手工搓的
+测试提交(`push verification from mae-flow pilot`),没走内核。
+
+**`--commit-convention` 什么时候才用**:平台钩子有内核管不到的额外
+要求时——比如**合并提交**(冲突修复会产生 `Merge branch …`,由宿主
+直接推送,不经内核门禁)、revert、或本仓要求带模块前缀。配的时候
+**必须与内核规则一致**,只做补充不做改写:
 
 ```bash
-npm run serve -- ... --commit-convention '提交信息格式:[模块][类型] 一句话,
-类型取 feat|fix|refactor|test|chore|docs|style,例:[access][fix] 修复空指针'
+# 反例(会打架):--commit-convention '[模块][类型] 一句话'
+#   → agent 写成 [access][fix]…,内核门禁当场 block(单号对不上)
+npm run serve -- ... --commit-convention '业务提交按内核要求写
+[单号][feat|fix]描述(如 [REQ2026081401][fix]修复空指针);
+合并提交保留默认 Merge 信息即可'
 ```
 
 管理页(服务形态)也能热改同一项,设置层压部署层;超过 500 字会被
