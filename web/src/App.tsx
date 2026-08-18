@@ -110,27 +110,6 @@ function ThemeSwitch({ theme, onChange }: {
   </button>;
 }
 
-function PersonalSetupStatus({ session, onOpen }: {
-  session: AuthUser;
-  onOpen: () => void;
-}) {
-  const codehub = !!session.git_token_hint && !!session.git_email;
-  const luban = !!session.luban_token_hint;
-  const ready = codehub && luban;
-  return <section className={`personal-setup-status${ready ? " is-ready" : ""}`} aria-label="个人接入状态">
-    <span className="personal-setup-mark" aria-hidden>{ready ? "✓" : "!"}</span>
-    <div className="personal-setup-copy">
-      <strong>{ready ? "个人接入已就绪" : "个人接入待完善"}</strong>
-      <small>配置后，代码提交与任务提醒会自动使用你的身份。</small>
-    </div>
-    <div className="personal-setup-chips">
-      <span className={codehub ? "ok" : "missing"}><i />CodeHub {codehub ? "已配置" : "待配置"}</span>
-      <span className={luban ? "ok" : "missing"}><i />小鲁班 {luban ? "已配置" : "待配置"}</span>
-    </div>
-    <button type="button" onClick={onOpen}>{ready ? "查看设置" : "前往配置"}<svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg></button>
-  </section>;
-}
-
 function PersonalSettingsPage({
   session,
   onSessionPatch,
@@ -345,7 +324,6 @@ export function App() {
         />}
 
         {view === "mine" && <>
-          <PersonalSetupStatus session={session} onOpen={() => setView("profile")} />
           <section className="personal-pulse four" aria-label="我的任务摘要"><div className="personal-stat attention"><span>待我核对</span><strong>{myWaiting.length}</strong></div><div className="personal-stat danger"><span>需要介入 / 已暂停</span><strong>{myBlocked.length + myPaused.length}</strong></div><div className="personal-stat active"><span>正在推进</span><strong>{myActive.length}</strong></div><div className="personal-stat success"><span>待合入 / 完成</span><strong>{myDelivered.length}</strong></div></section>
           {(session.committer || myReviews.length > 0) && <CommitterInbox
             reviews={pendingReviews}

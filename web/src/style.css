@@ -2086,42 +2086,6 @@ pre {
 .credential-form input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); outline: none; }
 .credential-form footer { display: flex; justify-content: flex-end; gap: 8px; }
 
-/* 个人设置从工作台剥离；工作台仅保留一条接入状态，设置页集中承载。 */
-.personal-setup-status {
-  min-height: 66px; margin-bottom: 12px; padding: 11px 13px;
-  display: grid; grid-template-columns: 34px minmax(190px, 1fr) auto auto;
-  align-items: center; gap: 12px;
-  border: 1px solid color-mix(in srgb, var(--attention) 24%, var(--line));
-  border-radius: var(--radius); background: color-mix(in srgb, var(--attention-soft) 48%, var(--surface));
-  box-shadow: var(--shadow-xs);
-}
-.personal-setup-status.is-ready { border-color: color-mix(in srgb, var(--success) 21%, var(--line)); background: color-mix(in srgb, var(--success-soft) 42%, var(--surface)); }
-.personal-setup-mark {
-  width: 32px; height: 32px; display: grid; place-items: center;
-  color: var(--attention); border-radius: 9px; background: var(--attention-soft);
-  font-size: 13px; font-weight: 800;
-}
-.is-ready .personal-setup-mark { color: var(--success); background: var(--success-soft); }
-.personal-setup-copy { min-width: 0; display: grid; gap: 2px; }
-.personal-setup-copy strong { color: var(--text-strong); font-size: 11.5px; }
-.personal-setup-copy small { color: var(--muted); font-size: 9.5px; }
-.personal-setup-chips { display: flex; align-items: center; gap: 6px; }
-.personal-setup-chips span {
-  padding: 4px 7px; display: inline-flex; align-items: center; gap: 5px;
-  color: var(--muted); border: 1px solid var(--line); border-radius: 999px;
-  background: color-mix(in srgb, var(--surface) 72%, transparent); font-size: 8.5px; font-weight: 700;
-}
-.personal-setup-chips i { width: 5px; height: 5px; border-radius: 50%; background: var(--attention); }
-.personal-setup-chips .ok i { background: var(--success); }
-.personal-setup-status > button {
-  height: 32px; padding: 0 10px; display: inline-flex; align-items: center; gap: 5px;
-  color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--line));
-  border-radius: 8px; background: var(--accent-soft); cursor: pointer;
-  font-size: 9.5px; font-weight: 700;
-}
-.personal-setup-status > button:hover { border-color: var(--accent); }
-.personal-setup-status > button svg { width: 13px; height: 13px; }
-
 .personal-settings-page { display: grid; gap: 24px; }
 .personal-settings-page .personal-connections { margin-bottom: 0; }
 .approval-setting {
@@ -2312,9 +2276,6 @@ pre {
   .identity-bar { padding: 17px; border-radius: var(--radius); }
   .identity-control { grid-template-columns: 1fr; }
   .identity-control button { height: 38px; }
-  .personal-setup-status { grid-template-columns: 32px minmax(0, 1fr) auto; }
-  .personal-setup-chips { grid-column: 2 / -1; }
-  .personal-setup-status > button { grid-column: 2 / -1; justify-self: start; }
   .approval-setting { padding: 17px; }
   .approval-setting-head { grid-template-columns: 38px minmax(0, 1fr); }
   .approval-setting-icon { width: 38px; height: 38px; }
