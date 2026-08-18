@@ -1128,6 +1128,19 @@ export class TaskService {
       try {
         const saved = JSON.parse(readFileSync(path, "utf-8"));
         const summary = saved.summary as TaskSummary;
+        // 旧版遗留的交付方式("快速/慢速"是宿主自造的词,内核不认):
+        // 留着它,预答会永远命中不了内核举的卡——续跑的老单看起来就是
+        // "更新了还在中途问交付方式"。清掉+留痕,让老单诚实地走真等人。
+        const laneChoices = workflowChoices(this.options.host?.kernelRoot)
+          .map((item) => item.label);
+        if (summary.lane && laneChoices.length
+            && !laneChoices.includes(summary.lane)) {
+          this.options.log?.(
+            `任务 ${summary.id} 的交付方式「${summary.lane}」不在内核选项`
+            + `(${laneChoices.join("/")})里——旧版自造的词,已清除;`
+            + `流程举卡时将真等人,答卡请选内核选项原文`);
+          summary.lane = undefined;
+        }
         const task: TaskState = {
           summary,
           humanGate: new HumanGate(join(workspace, "waiting.json")),
@@ -1636,6 +1649,21 @@ export class TaskService {
       if (convention) {
         prompt = `${prompt}\n\n提交信息规范(平台钩子会按它校验,不合规`
           + `直接拒收 push,请第一次就写对):${convention}`;
+      }
+      // 交付方式的预答契约要**开场就告诉模型**:预答机制只认"标准卡"
+      // (选项原文里含有用户选的那一项)。不说这句,模型有它自己的好心
+      // ——从需求原文猜到用户想局部修改,就自造一张"是否选择局部修改?"
+      // 的是/否卡(内网实测),而是/否里没有选项原文,预答对不上号,
+      // 卡真去等人:用户明明下单时答过,中途又被问一遍。宿主不替内核
+      // 判卡(是/否算不算数是内核的事),但可以不让模型把卡出歪。
+      if (this.options.host && task.summary.lane) {
+        prompt = `${prompt}\n\n交付方式用户已在下单时选定:`
+          + `${task.summary.lane}。流程里问到交付方式时,照内核指引`
+          + `**原样列出标准选项**——单独成卡时系统会替用户选中含`
+          + `「${task.summary.lane}」的那一项;与配置确认合并成卡时`
+          + `用户会在卡上一并作答。不要自造"是/否"确认卡(选项原文`
+          + `对不上号,预答接不住,只能真去等人),也不要跳过出卡`
+          + `直接 done --choice,内核会拒绝。`;
       }
       // 仓库地图(加餐):大仓里模型乱 grep 烧轮次,开场先给一张按被
       // 引用程度排序的路标。只在内核模式生成(有真克隆才有仓可画);
@@ -2803,6 +2831,17 @@ export class TaskService {
           "理由写清楚,供事后人工复盘。";
         reasons.add("月光模式免审批");
       } else {
+        // 答不上,整卡留给人。但有一种"答不上"必须留明账:问题**正文**
+        // 里带着用户选的交付方式,选项里却没有——十有八九是模型自造了
+        // "是否选择局部修改?"式的是/否卡(内网实测)。宿主不替内核判
+        // 是/否算不算数,但要把"预答为什么没接住"写清楚,不然现场只看到
+        // "又在等人",查不到为什么。
+        if (lane && text.includes(lane)) {
+          this.options.log?.(
+            `任务 ${task.summary.id} 交付方式卡不是标准形状:问题提到`
+            + `「${lane}」但选项(${(item.options ?? []).join("/")})里没有`
+            + `它,预答无法命中,退回等人——多半是模型自造了是/否确认卡`);
+        }
         return undefined; // 有答不上的问题,整卡留给人
       }
     }

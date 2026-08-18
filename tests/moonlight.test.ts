@@ -15,11 +15,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readJson } from "../src/jsonBody.ts";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { LocalAuth } from "../src/auth.ts";
+import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
 import { createTaskServer } from "../src/server.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskService } from "../src/taskService.ts";
@@ -85,6 +86,73 @@ test("交付方式预答:内核举卡,下单选定的那项自动交卷,不等�
   // 自造词会被判"没有检测到本步骤的真实选项回答"),且标明非人工答复
   assert.match(allSeen(model), new RegExp(`${lane}\\(${choice.key}\\)`));
   assert.match(allSeen(model), /非人工现场答复/);
+  await model.stop();
+});
+
+test("模型自造是/否确认卡:预答不硬猜,退回等人并写明为什么没接住", async (t) => {
+  // 内网实测:模型从需求原文猜到用户想局部修改,自造了一张
+  // "是否选择局部修改?"的是/否卡。是/否里没有选项原文,预答对不上号
+  // ——这是对的(是/否算不算数归内核判,宿主不替);但"为什么没接住"
+  // 必须留明账,否则现场只看到"又在等人",查不出原因。
+  if (!LANES.length) {
+    t.skip("缺内核 flow.json 的 workflow_select(kernel/ 快照不完整)");
+    return;
+  }
+  const lane = (LANES.find((item) => item.key === "tweak") ?? LANES[0]).label;
+  const logs: string[] = [];
+  const model = new ScriptedModelServer([
+    { tool: { name: "AskUserQuestion", input: { questions: [{
+      question: `是否选择${lane}(tweak)?`, options: ["是", "否"],
+    }] } } },
+    { text: "收口。" },
+  ]);
+  await model.start();
+  const service = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-binary-card-")),
+    provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    log: (line) => logs.push(line),
+  });
+  const id = service.create("是否卡演练", { lane }).id;
+  assert.equal(await settle(service, id, ["waiting_for_human"]),
+    "waiting_for_human", "非标准卡该真等人,不硬猜是/否");
+  const traced = logs.filter((line) => line.includes("不是标准形状"));
+  assert.equal(traced.length, 1, `要留明账,日志:\n${logs.join("\n")}`);
+  assert.match(traced[0], /是\/否/);
+  await model.stop();
+});
+
+test("恢复:老单带着旧版自造的交付方式,清除留痕而不是永远命中不了", async (t) => {
+  if (!LANES.length) {
+    t.skip("缺内核 flow.json 的 workflow_select(kernel/ 快照不完整)");
+    return;
+  }
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-old-lane-"));
+  const model = new ScriptedModelServer([REVIEW_CARD, { text: "收口。" }]);
+  await model.start();
+  const before = new TaskService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+  });
+  const id = before.create("老单演练").id;
+  await settle(before, id, ["waiting_for_human"]);
+  // 手写旧版现场:task.json 里的 lane 是自造的"慢速"
+  const path = join(dataDir, id, "task.json");
+  const saved = JSON.parse(readFileSync(path, "utf-8"));
+  saved.summary.lane = "慢速";
+  writeFileSync(path, JSON.stringify(saved));
+
+  const logs: string[] = [];
+  const after = new TaskService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    host: { kernelRoot: discoverKernelRoot(process.cwd())!, repoPath: "/tmp/r" },
+    log: (line) => logs.push(line),
+  });
+  after.recover();
+  assert.equal(after.get(id)!.lane, undefined, "内核不认的旧值要清掉");
+  assert.ok(logs.some((line) => line.includes("旧版自造的词")),
+    `清除要留痕,日志:\n${logs.join("\n")}`);
   await model.stop();
 });
 
