@@ -297,7 +297,7 @@ export function App() {
     team: session.role === "admin"
       ? { title: "团队总览", description: "看团队推进、负责人和阻塞风险；需要兜底时打开任务的过程工作台处置(暂停/恢复/决定)。" }
       : { title: "团队动态", description: "只读了解团队正在推进什么；你的待办与操作始终留在个人工作台。" },
-    mine: { title: "我的工作", description: "集中处理分配给我的需求、待确认事项和后续交付动作。" },
+    mine: { title: "我的工作", description: "仅显示分配给你的需求，集中处理待确认事项和后续交付动作。" },
     profile: { title: "个人设置", description: "集中管理任务审批方式、CodeHub 提交身份和小鲁班通知。" },
     history: { title: "交付历史", description: "从投影读侧回看跨生命周期的任务与交付记录。" },
     users: { title: "账号管理", description: "创建本地账号并分配管理员或开发权限。" },
@@ -306,6 +306,8 @@ export function App() {
   const relevantWaiting = view === "mine"
     ? myWaiting.length + pendingReviews.length
     : view === "team" ? waitingCount : 0;
+  const personalSetupReady = !!session.git_token_hint
+    && !!session.git_email && !!session.luban_token_hint;
   return <div className="app-shell">
     <aside className="sidebar">
       <div className="brand-lockup"><span className="brand-symbol" aria-hidden><svg viewBox="0 0 28 28"><path d="M5.5 20.5 10.7 7l3.3 7.15L17.3 7l5.2 13.5" /><path d="M8.1 16.1h11.8" /></svg></span><span className="brand-copy"><strong>Mae-Flow</strong><small>{session.role === "admin" ? "Management Console" : "Developer Workspace"}</small></span></div>
@@ -333,7 +335,7 @@ export function App() {
     </aside>
 
     <div className="workspace">
-      <header className="workspace-header"><div><div className="eyebrow">MAE-FLOW CLOUD</div><h1>{header.title}</h1><p>{header.description}</p></div><div className="workspace-header-actions">{relevantWaiting > 0 && view !== "history" && view !== "users" && view !== "settings" && <div className="header-attention"><span className="attention-pulse" aria-hidden /><span><strong>{relevantWaiting}</strong>{view === "mine" ? " 项需要我处理" : " 项工作等待决策"}</span></div>}{view === "mine" && session.role !== "admin" && <button type="button" className="header-launch" onClick={() => setLaunchOpen(true)}><svg viewBox="0 0 20 20" aria-hidden><path d="M10 4v12M4 10h12" /></svg><span>发起新任务</span></button>}</div></header>
+      <header className="workspace-header"><div><div className="eyebrow">MAE-FLOW CLOUD</div><h1>{header.title}</h1><p className={view === "mine" ? "header-context-line" : undefined}>{view === "mine" && <span className="header-user-context">{session.username}</span>}<span>{header.description}</span></p></div><div className="workspace-header-actions">{relevantWaiting > 0 && view !== "history" && view !== "users" && view !== "settings" && <div className="header-attention"><span className="attention-pulse" aria-hidden /><span><strong>{relevantWaiting}</strong>{view === "mine" ? " 项需要我处理" : " 项工作等待决策"}</span></div>}{view === "mine" && session.role !== "admin" && <button type="button" className="header-launch" disabled={!personalSetupReady} title={personalSetupReady ? "发起新任务" : "请先在个人设置中配置个人邮箱、CodeHub Token 和小鲁班 Token"} aria-label={personalSetupReady ? "发起新任务" : "发起新任务不可用，请先完成个人设置"} onClick={() => personalSetupReady && setLaunchOpen(true)}><svg viewBox="0 0 20 20" aria-hidden>{personalSetupReady ? <path d="M10 4v12M4 10h12" /> : <><rect x="5" y="8.5" width="10" height="8" rx="1.5" /><path d="M7.5 8.5V6.75a2.5 2.5 0 0 1 5 0V8.5" /></>}</svg><span>发起新任务</span></button>}</div></header>
       <main className="workspace-main">
         {view === "team" && <TeamDashboard
           tasks={tasks}
@@ -343,18 +345,19 @@ export function App() {
         />}
 
         {view === "mine" && <>
-          <section className="identity-bar session-bar"><div className="identity-copy"><span className="section-kicker">PERSONAL INBOX</span><strong>{session.username} 的专属工作台</strong><small>{session.role === "admin" ? "显示分配给你的工作，并兜底承接尚未分配负责人的待确认事项。" : "登录身份已和任务归属绑定；这里始终只显示分配给你的工作。"}</small></div><span className={`role-chip ${session.role}`}>{session.role === "admin" ? "管理员身份" : "开发身份"}</span></section>
           <PersonalSetupStatus session={session} onOpen={() => setView("profile")} />
-          <section className="personal-pulse four" aria-label="我的任务摘要"><div className="personal-stat attention"><span>待我核对</span><strong>{myWaiting.length}</strong></div><div className="personal-stat danger"><span>需要介入 / 已暂停</span><strong>{myBlocked.length + myPaused.length}</strong></div><div className="personal-stat active"><span>机器执行中</span><strong>{myActive.length}</strong></div><div className="personal-stat success"><span>待合入 / 完成</span><strong>{myDelivered.length}</strong></div></section>
+          <section className="personal-pulse four" aria-label="我的任务摘要"><div className="personal-stat attention"><span>待我核对</span><strong>{myWaiting.length}</strong></div><div className="personal-stat danger"><span>需要介入 / 已暂停</span><strong>{myBlocked.length + myPaused.length}</strong></div><div className="personal-stat active"><span>正在推进</span><strong>{myActive.length}</strong></div><div className="personal-stat success"><span>待合入 / 完成</span><strong>{myDelivered.length}</strong></div></section>
           {(session.committer || myReviews.length > 0) && <CommitterInbox
             reviews={pendingReviews}
             tasks={tasks}
             onOpen={openArtifacts}
           />}
-          <section className="review-inbox" aria-labelledby="review-title"><div className="section-head"><div><span className="section-kicker">REVIEW INBOX</span><h2 id="review-title">待我核对</h2></div><span className="section-count attention">{myWaiting.length} 项</span></div>{myWaiting.length === 0 ? <div className="review-clear"><span aria-hidden>✓</span><div><strong>当前没有需要你核对的事项</strong><p>新的人工节点会通过小鲁班提醒，并自动出现在这里。</p></div></div> : <div className="task-list review-list">{myWaiting.map((task) => <TaskCard key={task.id} task={task} onChanged={refresh} focused={task.id === targetTaskId} canOperate onOpenArtifacts={() => openArtifacts(task)} />)}</div>}</section>
+          <div className="primary-work-grid" aria-label="需要我处理的主要工作">
+            <section className="review-inbox primary-work-panel" aria-labelledby="review-title"><div className="section-head"><div><span className="section-kicker">REVIEW INBOX</span><h2 id="review-title">待我核对</h2></div><span className="section-count attention">{myWaiting.length} 项</span></div>{myWaiting.length === 0 ? <div className="review-clear"><span aria-hidden>✓</span><div><strong>当前没有需要你核对的事项</strong><p>新的人工节点会通过小鲁班提醒，并自动出现在这里。</p></div></div> : <div className="task-list review-list">{myWaiting.map((task) => <TaskCard key={task.id} task={task} onChanged={refresh} focused={task.id === targetTaskId} canOperate onOpenArtifacts={() => openArtifacts(task)} />)}</div>}</section>
+            <TaskGroup className="primary-work-panel progress-work-panel" kicker="IN PROGRESS" title="正在推进" tasks={myActive} onChanged={refresh} onOpenArtifacts={openArtifacts} targetTaskId={targetTaskId} empty="当前没有正在推进的任务" />
+          </div>
           {myBlocked.length > 0 && <TaskGroup kicker="NEEDS ATTENTION" title="需要我介入" tasks={myBlocked} onChanged={refresh} onOpenArtifacts={openArtifacts} targetTaskId={targetTaskId} tone="danger" />}
           {myPaused.length > 0 && <TaskGroup kicker="PAUSED" title="已暂停，可随时恢复" tasks={myPaused} onChanged={refresh} onOpenArtifacts={openArtifacts} targetTaskId={targetTaskId} />}
-          <TaskGroup kicker="IN PROGRESS" title="机器执行中" tasks={myActive} onChanged={refresh} onOpenArtifacts={openArtifacts} targetTaskId={targetTaskId} empty="当前没有机器执行中的任务" />
           {myDelivered.length > 0 && <TaskGroup kicker="DELIVERY" title="等待合入与最近完成" tasks={myDelivered} onChanged={refresh} onOpenArtifacts={openArtifacts} targetTaskId={targetTaskId} />}
         </>}
         {view === "profile" && session.role !== "admin" && <PersonalSettingsPage
@@ -590,6 +593,7 @@ function TaskGroup({
   targetTaskId,
   empty,
   tone,
+  className,
 }: {
   kicker: string;
   title: string;
@@ -599,8 +603,9 @@ function TaskGroup({
   targetTaskId: string;
   empty?: string;
   tone?: string;
+  className?: string;
 }) {
-  return <section className={`task-section${tone ? ` ${tone}` : ""}`}>
+  return <section className={`task-section${tone ? ` ${tone}` : ""}${className ? ` ${className}` : ""}`}>
     <div className="section-head"><div><span className="section-kicker">{kicker}</span><h2>{title}</h2></div><span className={`section-count ${tone ?? ""}`}>{tasks.length} 项</span></div>
     {tasks.length === 0 && <div className="review-clear compact"><span aria-hidden>✓</span><div><strong>{empty ?? "当前没有任务"}</strong></div></div>}
     <div className="task-list">{tasks.map((task) => <TaskCard key={task.id} task={task} onChanged={onChanged} focused={task.id === targetTaskId} canOperate onOpenArtifacts={() => onOpenArtifacts(task)} />)}</div>

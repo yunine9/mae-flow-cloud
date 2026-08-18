@@ -387,6 +387,17 @@ svg {
   color: var(--muted);
   font-size: 14px;
 }
+.header-context-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.header-user-context {
+  padding: 3px 8px;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line));
+  border-radius: 999px;
+  background: var(--accent-soft);
+  font-size: 10.5px;
+  font-weight: 750;
+  line-height: 1.35;
+}
 .header-attention {
   padding: 10px 13px;
   display: flex;
@@ -424,6 +435,11 @@ svg {
   transition: transform var(--ease), background var(--ease);
 }
 .header-launch:hover { background: var(--accent-hover); transform: translateY(-1px); }
+.header-launch:disabled,
+.header-launch:disabled:hover {
+  color: var(--faint); background: var(--surface-muted); border-color: var(--line);
+  box-shadow: none; cursor: not-allowed; transform: none;
+}
 .header-launch svg { width: 16px; height: 16px; }
 .attention-pulse {
   width: 8px;
@@ -666,6 +682,31 @@ svg {
 .review-clear strong { color: var(--text-strong); font-size: 12.5px; }
 .review-clear p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
 .review-list .task-card { border-color: color-mix(in srgb, var(--attention) 32%, var(--line)); }
+.primary-work-grid {
+  margin-bottom: 28px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+.primary-work-panel {
+  min-width: 0;
+  margin: 0;
+  padding: 17px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--surface) 82%, var(--page));
+  box-shadow: var(--shadow-xs);
+}
+.primary-work-panel .section-head { margin-bottom: 12px; }
+.primary-work-panel .review-clear { min-height: 90px; padding: 15px 16px; }
+.primary-work-panel .task-summary { padding-left: 18px; padding-right: 15px; }
+.primary-work-panel .task-overline { flex-wrap: wrap; }
+.progress-work-panel .section-count {
+  color: var(--active);
+  border-color: color-mix(in srgb, var(--active) 22%, var(--line));
+  background: var(--active-soft);
+}
 
 /* A run's artifacts belong to the task, so they get a dedicated full workspace. */
 .artifact-workspace {
@@ -2114,6 +2155,10 @@ pre {
   }
   .history-table-head > :nth-child(3),
   .history-delivery { display: none; }
+}
+
+@media (max-width: 980px) {
+  .primary-work-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 760px) {
