@@ -104,9 +104,12 @@ export function createTaskServer(
        * 身份发——管理员代配不了(密钥只写不读),所以只能各人自己配,
        * 没配就别让他下单(用户 2026-08-18 拍板)。 */
       const personalBlockers = (
-        who: { username: string } | undefined,
+        who: { username: string; role?: string } | undefined,
       ): Array<{ key: string; label: string; where: "admin" | "me" }> => {
         if (!options.auth || !who) return [];
+        // 管理员不发起任务,个人令牌对他不咬人——别拿"你缺 Git 令牌"
+        // 去烦一个本来就不下单的角色。
+        if (who.role === "admin") return [];
         const needs = service.launchOptions().needs;
         const missing: Array<
           { key: string; label: string; where: "admin" | "me" }> = [];
@@ -402,16 +405,21 @@ export function createTaskServer(
         if (!requirement) {
           return json(response, 400, { error: "requirement 不能为空" });
         }
-        // 任务归属人:开发者只能是自己(不许替别人下单);管理员可以
-        // 替人下单(填了账号就按填的),**没填就是自己的单**。
-        // 踩过的坑(界面实走逮住):这里原来是管理员不填就留空,于是
-        // 归属人为空——月光模式按归属人现读现判,对自己下的单一点反应
-        // 没有;个人 Git 令牌同样按归属人取,推送也拿不到本人令牌。
-        // 而部署后第一个账号正是管理员,最先踩的就是他。
-        const requested = body.account ? String(body.account) : undefined;
-        const account = viewer?.role === "developer"
-          ? viewer.username
-          : (requested ?? viewer?.username);
+        // 管理员不发起任务(用户 2026-08-19 拍板):管理平台与干活是两个
+        // 角色——管理员配服务、建账号、兜底控制,任务由开发者自己发起、
+        // 挂在自己名下。替人下单看似方便,实际是把"以谁的身份推代码/
+        // 收通知"的归属搞混的入口(之前那套"管理员填账号替人下单"的
+        // 逻辑连带它踩过的归属人为空的坑,一并退役)。
+        if (viewer?.role === "admin") {
+          return json(response, 403, {
+            error: "管理员不发起任务——用开发者账号登录下单;"
+              + "管理员负责配置平台、管理账号与兜底控制",
+          });
+        }
+        // 任务归属人=登录者本人(不许替别人下单);无鉴权形态(本地
+        // 单人/测试)沿用请求体里的账号。
+        const account = viewer?.username
+          ?? (body.account ? String(body.account) : undefined);
         // 任务级可配(用户拍板):交付代码仓、交付方式(选项来自内核)、修复轮预算。
         const repo = body.repo === undefined ? undefined : String(body.repo);
         const lane = body.lane === undefined ? undefined : String(body.lane);

@@ -16,7 +16,6 @@ export function LaunchWorkspace({
   onClose: () => void;
 }) {
   const [requirement, setRequirement] = useState("");
-  const [account, setAccount] = useState(session.username);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   // 任务级可填项(2026-08-18 重定口径):交付仓**必填**、交付方式、修复轮
@@ -61,7 +60,7 @@ export function LaunchWorkspace({
     try {
       await createTask(
         requirement.trim(),
-        session.role === "admin" ? account.trim() || undefined : session.username,
+        session.username,   // 归属人=本人;管理员不发起任务(入口已隐藏)
         {
           repo: repo.trim() || undefined,
           lane,
@@ -105,9 +104,7 @@ export function LaunchWorkspace({
           <div className="launch-copy">
             <span className="section-kicker">CREATE WORK</span>
             <h2 id="launch-title">描述要交付的结果</h2>
-            <p>{session.role === "admin"
-              ? "创建任务并指定负责人；提交后回到个人待办继续跟进。"
-              : "任务会自动归入你的工作台，人工节点也会回到你的待核对列表。"}</p>
+            <p>任务会自动归入你的工作台，人工节点也会回到你的待核对列表。</p>
           </div>
           {blocked && (
             <div className="launch-blockers" role="alert">
@@ -186,14 +183,8 @@ export function LaunchWorkspace({
                 </label>
               )}
               <label className="account-field">
-                <span>{session.role === "admin" ? "任务负责人" : "任务归属"}</span>
-                <input
-                  type="text"
-                  value={session.role === "admin" ? account : session.username}
-                  onChange={(event) => setAccount(event.target.value)}
-                  placeholder="本地账号"
-                  readOnly={session.role !== "admin"}
-                />
+                <span>任务归属</span>
+                <input type="text" value={session.username} readOnly />
               </label>
               {(options?.workflows.length ?? 0) > 0 && (
                 // 选项来自内核 flow.json(不在前端另抄一份):下单选定，

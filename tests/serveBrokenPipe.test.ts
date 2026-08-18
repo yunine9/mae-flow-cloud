@@ -74,9 +74,11 @@ test("断管之后:登录、下单、答卡、收口,一路 HTTP 正常应答", 
     child.stdout!.destroy();
     child.stderr!.destroy();
 
+    // dev 是演示模式随管理员一起建的开发者账号——管理员不发起任务
+    // (用户拍板),下单要用干活的角色。
     const login = await fetch(`${base}/auth/login`, {
       method: "POST",
-      body: JSON.stringify({ username: "admin", password: "mae-flow-demo" }),
+      body: JSON.stringify({ username: "dev", password: "mae-flow-demo" }),
       signal: AbortSignal.timeout(5_000),
     });
     assert.equal(login.status, 200, "断管后登录不许超时");

@@ -288,51 +288,57 @@ test("路由:开关落账、开启即清场、/auth/me 回显;账号库重启后
   }
 });
 
-test("管理员不填账号下单,任务仍归自己——月光与个人令牌都按归属人走", async () => {
-  // 界面实走逮住的真 bug:下单表单的"小鲁班账号"是可选的,原来管理员
-  // 不填就归属人为空,于是月光模式对自己下的单毫无反应、个人 Git 令牌
-  // 也取不到。而部署后第一个账号正是管理员——最先踩坑的就是他。
+test("管理员不发起任务:下单 403 说人话;开发者不能冒领给别人", async () => {
+  // 用户 2026-08-19 拍板:管理平台与干活是两个角色——管理员配服务、
+  // 建账号、兜底控制,任务由开发者自己发起、挂自己名下。"管理员替人
+  // 下单"连同它踩过的归属人为空的坑一并退役。
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-ml-admin-"));
   const auth = new LocalAuth(join(dataDir, "auth.json"));
   auth.createUser("boss", "boss-password-11", "admin");
+  auth.createUser("zhang", "zhang-password-11", "developer");
   const model = new ScriptedModelServer([REVIEW_CARD, { text: "收口。" }]);
   await model.start();
   const service = new TaskService({
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
-    moonlight: (account) => auth.moonlightEnabled(account),
   });
   const server = createTaskServer(service, { auth });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  try {
-    const login = await fetch(`${base}/auth/login`, {
-      method: "POST",
-      body: JSON.stringify({ username: "boss", password: "boss-password-11" }),
+  const login = async (username: string, password: string) => {
+    const response = await fetch(`${base}/auth/login`, {
+      method: "POST", body: JSON.stringify({ username, password }),
     });
-    const cookie = String(login.headers.get("set-cookie") ?? "").split(";")[0];
-
-    const created = await fetch(`${base}/tasks`, {
-      method: "POST", headers: { cookie },
-      body: JSON.stringify({ requirement: "管理员自己的单" }),
-    }).then((r) => readJson(r));
-    assert.equal(created.luban_account, "boss", "不填账号就该归自己");
-    await settle(service, created.id, ["waiting_for_human"]);
-
-    const on = await fetch(`${base}/auth/me/moonlight`, {
-      method: "PUT", headers: { cookie },
-      body: JSON.stringify({ on: true }),
-    }).then((r) => readJson(r));
-    assert.deepEqual(on, { moonlight: true, swept: 1 },
-      "月光开启要清掉管理员自己在等的卡");
-    assert.equal(await settle(service, created.id, ["completed"]), "completed");
-
-    // 替别人下单仍按填的账号走(管理员的正当用法,别被这条修改压掉)
+    return String(response.headers.get("set-cookie") ?? "").split(";")[0];
+  };
+  try {
+    const boss = await login("boss", "boss-password-11");
+    const denied = await fetch(`${base}/tasks`, {
+      method: "POST", headers: { cookie: boss },
+      body: JSON.stringify({ requirement: "管理员想下单" }),
+    });
+    assert.equal(denied.status, 403);
+    assert.match((await readJson(denied)).error, /管理员不发起任务/);
+    // 替别人下单同样不给:发起任务本身就不是这个角色的事
     const forOther = await fetch(`${base}/tasks`, {
-      method: "POST", headers: { cookie },
+      method: "POST", headers: { cookie: boss },
       body: JSON.stringify({ requirement: "替小张下的单", account: "zhang" }),
+    });
+    assert.equal(forOther.status, 403);
+    // 管理员不下单,个人令牌对他不咬人:缺项清单不该拿这个烦他
+    const options = await fetch(`${base}/launch-options`,
+      { headers: { cookie: boss } }).then((r) => readJson(r));
+    assert.ok(!options.blockers.some(
+      (item: { where: string }) => item.where === "me"),
+      "管理员不该被要求配个人令牌");
+
+    // 开发者:自己的单归自己,想挂别人名下也不行
+    const zhang = await login("zhang", "zhang-password-11");
+    const created = await fetch(`${base}/tasks`, {
+      method: "POST", headers: { cookie: zhang },
+      body: JSON.stringify({ requirement: "小张的单", account: "boss" }),
     }).then((r) => readJson(r));
-    assert.equal(forOther.luban_account, "zhang");
+    assert.equal(created.luban_account, "zhang", "归属人=登录者本人");
   } finally {
     server.close();
     await model.stop();

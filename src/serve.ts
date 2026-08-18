@@ -234,9 +234,14 @@ async function main(): Promise<void> {
     }
     auth.bootstrapAdmin(adminUser, adminPassword);
     if (demoMode) {
-      console.log("[serve] 演示登录: admin / mae-flow-demo");
+      // 管理员不发起任务(用户拍板:管理平台与干活是两个角色),
+      // 演示必须再给一个开发者账号——只有 admin 的演示是发不了单的。
+      auth.createUser("dev", "mae-flow-demo", "developer");
+      console.log("[serve] 演示登录: dev / mae-flow-demo(下单用)"
+        + "; admin / mae-flow-demo(管理平台,不发起任务)");
     } else {
-      console.log(`[serve] 已创建管理员账号: ${adminUser}`);
+      console.log(`[serve] 已创建管理员账号: ${adminUser}`
+        + "(管理员不发起任务,请为成员建开发者账号)");
     }
   }
 
