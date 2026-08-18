@@ -104,6 +104,26 @@ function demoContract(
   return undefined;
 }
 
+/** 选中的模型有没有声明上下文窗口(pi 的 models.json 原样透传,
+ * contextWindow 是它自己的字段)。读不动一律当"没声明"——这只是
+ * 一句启动提醒,不许因为配置形状意外把服务拦下。 */
+function declaresContextWindow(
+  modelsJson: Record<string, unknown>,
+  provider: string,
+  model: string,
+): boolean {
+  try {
+    const providers = (modelsJson as { providers?: Record<string, any> })
+      .providers ?? {};
+    const models = (providers[provider]?.models ?? []) as Array<
+      { id?: string; contextWindow?: number }>;
+    const entry = models.find((item) => item?.id === model) ?? models[0];
+    return typeof entry?.contextWindow === "number" && entry.contextWindow > 0;
+  } catch {
+    return false;
+  }
+}
+
 async function main(): Promise<void> {
   // 云端服务默认静音内核桌面弹窗:该被叫的是控制台前的人,不是跑服务的
   // 那台机器。内核默认开弹窗,是为"人坐在终端旁"的单机场景设计的;放到
@@ -175,6 +195,15 @@ async function main(): Promise<void> {
     await scripted.start();
     modelsJson = scripted.modelsJson();
     console.log("[serve] 演示模式:内置剧本假模型(接真模型用 --models)");
+  }
+  // 窗口没声明就提醒一句(内网实测:网关上限 169984,pi 按自己估的
+  // 窗口做自动压缩,估大了就撞硬报错——宿主有一次压缩自愈,但那已经
+  // 白跑一轮。声明了 pi 会提前压,根本不撞墙)。只提醒不拦路。
+  if (!demoMode && !declaresContextWindow(modelsJson, provider, model)) {
+    console.log(
+      `[serve] 提示:models.json 里 ${provider}/${model} 没声明 contextWindow`
+      + ";网关窗口若小于 pi 的默认估计会撞\"input too long\"硬报错。"
+      + "建议按网关真实上限留出余量声明(如上限 169984 → 写 160000)");
   }
 
   // 本地账号是控制台身份源。生产首次启动必须从环境变量注入管理员

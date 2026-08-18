@@ -44,6 +44,9 @@ function sceneBlocks(scene: Scene, index: number): Block[] {
 export class ScriptedModelServer {
   readonly requests: Array<Record<string, unknown>> = [];
   private server?: Server;
+  /** 还要吐几次网关错误(failWith 设置,吐完自动回到正常剧本)。 */
+  private failuresLeft = 0;
+  private failMessage = "";
 
   constructor(
     readonly script: Scene[],
@@ -54,6 +57,12 @@ export class ScriptedModelServer {
      * (实测:修复会话跑去 checkout -b,报 branch already exists)。 */
     readonly options: { linear?: boolean } = {},
   ) {}
+
+  /** 让接下来 times 次请求以网关错误告终(测超限自愈这类失败路径)。 */
+  failWith(message: string, times = 1): void {
+    this.failMessage = message;
+    this.failuresLeft = times;
+  }
 
   get baseUrl(): string {
     const address = this.server!.address() as AddressInfo;
@@ -87,6 +96,18 @@ export class ScriptedModelServer {
           return;
         }
         this.requests.push(body);
+        // 网关级错误注入(裁判上下文超限自愈用):按次数吐真实形状的
+        // 400,内网网关的原文就是这个样子——不吐 200 空回复,那会被
+        // 当成"空转回合"走催办,测不到超限这条路。
+        if (this.failuresLeft > 0) {
+          this.failuresLeft -= 1;
+          response.writeHead(400, { "content-type": "application/json" })
+            .end(JSON.stringify({
+              type: "error",
+              error: { type: "invalid_request_error", message: this.failMessage },
+            }));
+          return;
+        }
         const index = Math.min(
           this.options.linear
             ? this.requests.length - 1

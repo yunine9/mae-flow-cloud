@@ -262,11 +262,24 @@ models.json 形状(key 只放服务器本地文件,权限 600,永不进仓):
       "baseUrl": "https://<内网网关>/api/anthropic",
       "api": "anthropic-messages",
       "apiKey": "<从凭证系统注入>",
-      "models": [{ "id": "glm-5.1" }]
+      "models": [{ "id": "glm-5.1", "contextWindow": 160000 }]
     }
   }
 }
 ```
+
+**`contextWindow` 必填(内网实测的坑)**:内网网关的真实上限是
+169984 token,超了直接 400——
+`input too long, exceed max input length, max input length is 169984,
+current input length is 171308`。pi 的自动压缩按它自己估的窗口触发,
+估大了就撞墙。**按网关真实上限留出余量声明**(169984 → 写 160000,
+余量给输出和统计误差),pi 会提前压缩,根本不撞。没声明时 serve 启动
+会提醒一句。
+
+撞上了也不会当场死:宿主有一次压缩自愈(按内核现场压缩后原样重发,
+该轮零活动所以不会重做已完成的事),**只补救一次**——压完还爆说明是
+单轮输入本身过大(把大文件/长日志整段塞进了会话),那时如实失败并
+把这句话写进任务详情。
 
 ## 团队的 UT skill 怎么进云端(部署放一次,不用再手动集成)
 

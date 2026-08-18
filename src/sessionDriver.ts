@@ -91,6 +91,9 @@ export interface CloudSessionOptions {
    * 子 agent";云端子 Agent 照样有(Task 工具),缺的是自动装载——
    * pi 的 includeDefaults=false,不喂路径就一个 skill 都不装。 */
   hostSkillsDir?: string;
+  /** 上下文超限自愈用的锚点提供者(通常是内核现场 current/config)。
+   * 不给就用需求原话兜底——锚永远来自权威,不由云端编造。 */
+  compactAnchor?: () => string;
   log?: (message: string) => void;
 }
 
@@ -103,6 +106,18 @@ function deferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((r) => (resolve = r));
   return { promise, resolve };
+}
+
+/** 上下文撑爆的判据。各家网关文案不同,只认这几种说法的交集:
+ * 内网网关实测 "input too long, exceed max input length, max input
+ * length is 169984, current input length is 171308";Anthropic 系是
+ * "prompt is too long"/context_length_exceeded;OpenAI 兼容网关是
+ * "maximum context length"。**宁可漏判也不许误判**——把别的错误当
+ * 超限去压缩,等于拿真错误当噪声吞掉(压完重试还是错,只是晚一步
+ * 失败,但日志会误导人)。 */
+export function looksLikeContextOverflow(detail: string): boolean {
+  return /input too long|exceed(s)? max input length|context[_ ]length|maximum context|prompt is too long|too many tokens/i
+    .test(detail);
 }
 
 /** 主动压缩的指令模板:摘要以内核锚点为纲——注意力飘不飘,锚说了算。 */
@@ -145,6 +160,9 @@ export class CloudSession {
    * 直接 end_turn),宿主必须自己识别,否则空转被标成 completed。 */
   private turnActivity = 0;
   private turnError = "";
+  /** 上下文超限只自愈一次(整条会话计):压完还爆是单轮输入本身过大,
+   * 再压是空转——按预算纪律,补救必须有次数上限。 */
+  private overflowRepaired = false;
   private toolArgs = new Map<string, Record<string, unknown>>();
   private lastAssistantText = new Map<string, string>();
   private childCount = 0;
@@ -198,7 +216,7 @@ export class CloudSession {
 
   async start(userMessage: string): Promise<Outcome> {
     this.emit("session_started", this.sessionId, { resume: false });
-    return this.promptTurn(userMessage);
+    return this.turnWithOverflowRepair(userMessage);
   }
 
   /** 服务重启后的重建会话:pi 侧上下文不可恢复(inMemory),
@@ -206,7 +224,7 @@ export class CloudSession {
    * 续跑,这正是"裁决源在工作区"的红利。 */
   async startResume(userMessage: string): Promise<Outcome> {
     this.emit("session_started", this.sessionId, { resume: true });
-    return this.promptTurn(userMessage);
+    return this.turnWithOverflowRepair(userMessage);
   }
 
   /** 恢复场景的决定回注:旧会话已死,没有挂起的工具调用可 resolve,
@@ -319,7 +337,52 @@ export class CloudSession {
    * 模型提前收嘴(run3 实测:拿到 message-id 后直接 end_turn)不等于
    * 任务完成——阶段真相只看内核状态,宿主负责把会话推回流程。 */
   async continueWith(text: string): Promise<Outcome> {
-    return this.promptTurn(text);
+    return this.turnWithOverflowRepair(text);
+  }
+
+  /**
+   * 上下文撑爆的自愈:压一次,原样重发,只补救一次。
+   *
+   * 为什么必须在这一层做:窗口是网关说了算的(内网实测 169984),而
+   * pi 的自动压缩按它自己估的窗口走——网关比它以为的小,硬报错就漏
+   * 到宿主,任务当场判死。这类失败的特点是**零活动**:模型一个字都
+   * 没吐、一个工具都没调,所以原样重发是安全的,不会重做已完成的事。
+   *
+   * 三条边界(都是红线的直接推论):
+   * - **只补救一次**。压完还爆说明不是"历史太长"而是单轮输入本身
+   *   过大(比如一次贴进来一个巨型文件),再压也没用,如实失败;
+   * - **压不动就如实失败**,不假装恢复;
+   * - 判据从严(见 looksLikeContextOverflow):别的错误一律原样上抛,
+   *   压缩不是万能兜底。
+   */
+  private async turnWithOverflowRepair(userMessage: string): Promise<Outcome> {
+    const outcome = await this.promptTurn(userMessage);
+    if (outcome.status !== "session_ended"
+        || !looksLikeContextOverflow(outcome.detail ?? "")) {
+      return outcome;
+    }
+    if (this.overflowRepaired) {
+      this.options.log?.(
+        `任务 ${this.options.taskId} 压缩后仍超限,如实失败(单轮输入过大?)`);
+      return outcome;
+    }
+    this.overflowRepaired = true;
+    this.options.log?.(
+      `任务 ${this.options.taskId} 上下文超限,按内核锚点压缩后重试一次`);
+    const anchor = this.options.compactAnchor?.()
+      ?? "(无内核现场可锚,按当前任务需求组织摘要)";
+    if (!await this.compactAnchored(anchor)) {
+      // 压不动的最常见原因是"历史本来就不长"——那就说明撑爆的是
+      // 单轮输入本身(一次贴进来的巨型文件/日志),压缩救不了。把这
+      // 句话给人,别让他对着一行网关英文猜该改什么。
+      return {
+        ...outcome,
+        detail: `${outcome.detail ?? ""}(已尝试压缩自愈但压不动:`
+          + `多半是单轮输入过大而非历史太长——检查是不是把大文件或`
+          + `长日志整段塞进了会话)`,
+      };
+    }
+    return this.promptTurn(userMessage);
   }
 
   /** 把 Web 决定回注为 AskUserQuestion 的工具结果,继续本轮。 */

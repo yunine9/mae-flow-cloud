@@ -1566,6 +1566,9 @@ export class TaskService {
         // 宿主级 skill:<数据目录>/skills 放一次,每个任务都带
         // (团队的 UT 写法指南在内网,老宿主靠手动集成进子 agent)。
         hostSkillsDir: join(this.options.dataDir, "skills"),
+        // 上下文撑爆时自愈压缩用的锚:与主动压缩同一个内核现场,
+        // 摘要围绕"当前步骤+已确认配置"组织,不由云端编造。
+        compactAnchor: () => this.kernelAnchor(task),
         // 任务级选择 > 设置层默认 > 部署默认;任务级的记在 summary 上,
         // 重启续跑/会话重建都不漂移(设置层后来改了也不影响本单)。
         provider: task.summary.model_choice?.provider
