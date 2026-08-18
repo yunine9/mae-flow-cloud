@@ -663,3 +663,32 @@
 .cd-legend-item.composes::before { border-color: var(--success); }
 .cd-legend-item.aggregates::before { border-color: var(--success); border-top-style: double; border-top-width: 3px; }
 .cd-legend-item.nests::before { border-color: var(--attention); border-top-width: 2px; }
+
+/* 点了但没开成框时的一句人话。悬在材料底部,点掉即走——
+   "点了没反应"是这个功能最常见的投诉,多数时候只差这一句。 */
+.annot-hint {
+  position: sticky;
+  bottom: 8px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: fit-content;
+  max-width: 100%;
+  margin: 10px auto 0;
+  padding: 7px 12px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  box-shadow: 0 6px 18px rgba(20, 29, 48, .16);
+  font-size: 12px;
+  cursor: pointer;
+  animation: annotFabIn 120ms ease-out;
+}
+
+.annot-hint b {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+}

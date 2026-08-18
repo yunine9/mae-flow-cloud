@@ -11,10 +11,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { addAnnotation, type Annotation } from "./api";
+import {
+  anchorOf, blockedBySelection, pickRow, type RowNode,
+} from "./annotateTargets";
 import "./annotate.css";
-
-/** 原文快照的长度上限,和内核面板一致:够定位,又不至于把整段搬走。 */
-const ANCHOR_MAX = 90;
 
 interface Draft {
   file: string;
@@ -23,19 +23,6 @@ interface Draft {
   kind: "doc" | "code";
   /** 编辑框挂在哪个元素后面。 */
   host: HTMLElement;
-}
-
-/** 原文快照只取"内容"那一段。
- *
- * 渲染出来的一行里还夹着行号和 diff 的 +/− 标记;整行 textContent 抓下来
- * 就是 `28+ ? "push 已发送"` 这种脏原文——送给模型是噪声,回头重锚定更是
- * 一比一个不中,于是"这处已被改动"整片误报(实测:代码一字没动,三条
- * 全被标成已改)。带 data-code 的子节点就是内容本身,有它就只认它。
- */
-function anchorOf(node: HTMLElement): string {
-  const content = node.querySelector<HTMLElement>("[data-code]") ?? node;
-  const text = (content.textContent ?? "").replace(/\s+/g, " ").trim();
-  return text.length > ANCHOR_MAX ? text.slice(0, ANCHOR_MAX) : text;
 }
 
 export function Annotatable({
@@ -62,6 +49,9 @@ export function Annotatable({
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // 点了但没开成框时的一句人话:功能"点不了"的投诉里,多数其实是
+  // 落点没命中行,而代码原来一声不吭。
+  const [hint, setHint] = useState("");
   const [hovered, setHovered] = useState<HTMLElement>();
 
   // 已圈过的行留一道竖杠:人扫一眼就知道自己圈到哪儿了。
@@ -83,19 +73,27 @@ export function Annotatable({
   }, [items, artifact, children]);
 
   function openRow(row: HTMLElement) {
-    // 划词是在读,不是要批注——有选区就别弹编辑框(内核那条经验)。
-    if (String(window.getSelection() ?? "").trim()) return;
+    // 划词是在读,不是要批注——但只认**这块材料里**的划词:原来只要
+    // 页面上任何地方残留一段选中文本,整块材料就点不动(用户看到的正是
+    // "批注功能点不了"),而那段选区多半来自别处、甚至上一次搜索。
+    const root = host.current;
+    if (blockedBySelection(window.getSelection(), (node) =>
+      !!node && !!root && root.contains(node as Node))) {
+      setHint("正在划词?松开鼠标、点一下空白处取消选择,再点这一行圈注");
+      return;
+    }
     const line = Number(row.dataset.l);
     if (!Number.isFinite(line) || line <= 0) return;
-    const anchor = anchorOf(row);
-    if (!anchor) return;
     setError("");
+    setHint("");
     setNote("");
     setDraft({
       file: row.closest<HTMLElement>("[data-file]")?.dataset.file
         ?? fallbackFile,
       line,
-      anchor,
+      // 空行/图块也允许圈:锚点退回"第 N 行"。原来空快照直接放弃,
+      // 点了什么都不发生——沉默比拒绝更难查。
+      anchor: anchorOf(row as unknown as RowNode, line),
       kind,
       host: row,
     });
@@ -105,9 +103,19 @@ export function Annotatable({
   function open(event: React.MouseEvent) {
     const target = event.target as HTMLElement | null;
     if (!target?.closest) return;
+    const row = pickRow(
+      target as unknown as RowNode,
+      host.current as unknown as RowNode,
+    ) as unknown as HTMLElement | undefined;
+    if (row) {
+      openRow(row);
+      return;
+    }
+    // 点在了材料上、却落不到任何一行(容器空隙、纯装饰块):**说一句**,
+    // 别装作没点——"点了没反应"是这个功能最常见的投诉,而多数时候它只是
+    // 差了这一句话。点在交互元素上(按钮/链接)不打扰。
     if (target.closest("button, a, textarea, input, .annot-editor")) return;
-    const row = target.closest<HTMLElement>("[data-l]");
-    if (row) openRow(row);
+    setHint("这一处没有行号可锚定,点正文那一行(标题/段落/列表项/代码行)");
   }
 
   function track(event: React.MouseEvent) {
@@ -150,6 +158,12 @@ export function Annotatable({
       onMouseLeave={() => setHovered(undefined)}
     >
       {children}
+      {hint && !draft && (
+        <div className="annot-hint" role="status" onClick={(event) => {
+          event.stopPropagation();
+          setHint("");
+        }}>{hint}<b>知道了</b></div>
+      )}
       {hovered && !draft && (
         <button
           type="button"

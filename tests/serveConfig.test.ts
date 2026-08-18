@@ -9,7 +9,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -88,6 +88,24 @@ test("端口被占:说人话并退出,不甩一段栈", async () => {
   } finally {
     squatter.close();
   }
+});
+
+test("前端构建比源码旧:启动就明说,别让人以为功能坏了", async () => {
+  // 内网实测的坑:web/dist 是 gitignore 的,拉了新代码不重新构建,
+  // 页面还是旧的——新功能在人眼里就是"点不了/坏了"(他手上那份前端
+  // 压根没有这段代码)。页面不会自己声明版本,所以服务启动时说。
+  const dir = mkdtempSync(join(tmpdir(), "mfc-staleweb-"));
+  const dist = join(dir, "dist");
+  mkdirSync(dist);
+  writeFileSync(join(dist, "index.html"), "<html>旧构建</html>");
+  // 把构建时间调到 2020 年:比仓里任何源码都旧
+  const old = new Date("2020-01-01T00:00:00Z");
+  utimesSync(join(dist, "index.html"), old, old);
+  const { output } = await run(
+    ["--web", dist, "--data", join(dir, "tasks"), "--port", "0"],
+    (line) => line.includes("前端构建比源码旧"));
+  assert.match(output, /前端构建比源码旧/);
+  assert.match(output, /npm run build/, "要给出照做就能修好的命令");
 });
 
 test("配置文件供值,命令行压过文件", async () => {

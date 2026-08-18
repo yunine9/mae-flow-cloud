@@ -14,6 +14,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -414,6 +415,7 @@ async function main(): Promise<void> {
     ?? [join(REPO_ROOT, "web", "dist")].find((dir) =>
          existsSync(join(dir, "index.html")));
   if (webRoot) console.log(`[serve] 正式前端: ${webRoot}`);
+  warnStaleWeb(webRoot);
   // --host 0.0.0.0 = 暴露给内网同事用(默认只听本机回环——不声明
   // 就不上网,是姿态不是疏忽)。暴露时登录/权限本来就在,但要认两条:
   // 内网是明文 http(会话 cookie 可被同网段嗅探,正式部署前加反代
@@ -443,6 +445,34 @@ async function main(): Promise<void> {
     console.log("[serve] 前台进程:关掉这个终端/断开 SSH 服务就没了。"
       + "长期跑请用 tmux 或 systemd(部署手册「启动与守护」)");
   });
+}
+
+/** 前端构建过期就明说。
+ *
+ * `web/dist` 是 gitignore 的(构建产物不进仓),所以**拉了新代码不重新
+ * 构建,页面就还是旧的**——而页面不会自己声明版本,人只会觉得"这个功能
+ * 坏了/点不了",其实是他手上那份前端根本没有这段代码(内网实测:界面
+ * 是 25 个提交之前构建的)。零构建是本仓的原则,但 web/ 是唯一例外,
+ * 这一句提醒就是那个例外的守卫。
+ *
+ * fail-open:读不到时间戳(权限/文件系统怪)就不说话,绝不挡启动。 */
+function warnStaleWeb(webRoot: string | undefined): void {
+  if (!webRoot) return;
+  try {
+    const built = statSync(join(webRoot, "index.html")).mtimeMs;
+    const srcDir = join(REPO_ROOT, "web", "src");
+    if (!existsSync(srcDir)) return;   // 只带 dist 的发布件:没源码可比
+    let newest = 0;
+    for (const name of readdirSync(srcDir)) {
+      const at = statSync(join(srcDir, name)).mtimeMs;
+      if (at > newest) newest = at;
+    }
+    if (newest > built) {
+      console.log("[serve] ⚠ 前端构建比源码旧:页面上看到的是上一次构建的"
+        + "版本(新功能会像\"坏了/点不了\")。修:cd web && npm run build,"
+        + "然后刷新浏览器(强制刷新 Cmd/Ctrl+Shift+R)");
+    }
+  } catch { /* 比不出来就不说话:提醒是旁路,不许挡启动 */ }
 }
 
 /** 进程级兜底:**一条旁路的异常不许带走整个服务**。
