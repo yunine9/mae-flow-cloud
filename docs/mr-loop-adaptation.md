@@ -185,9 +185,33 @@ CI)。理由照抄内网框架:冲突不解,CI 白跑;检视优先于代码问�
 只是检视人还没点已解决"时**不占路**——归入等待名单,顺位落到下一
 优先级继续派(等人不许把 CI 修复堵死)。
 
-报告 B 节实证:九项拼写与上表逐字一致、全布尔;真实端点还有约 18 个
-额外布尔字段(`squash_passed`/`title_check_passed` 等)——它们落进
-"认不出的名字"那一行,未过时挂起留痕,不瞎修,正是想要的行为。
+报告 B 节实证:九项拼写与上表逐字一致、全布尔。**2026-08-18 内网
+selftest 拿到真实门禁集(19 项)**,九项之外多这十项,分类与文案已按
+实物钉死:
+
+| 平台原始名 | 分类 | 界面文案 |
+|---|---|---|
+| `codequality_passed` | **可修 · CI(优先级 25)** | ——(派修复,见下) |
+| `approval_approvers_required_passed` | 等人 | 等必需审批人审批 |
+| `approval_reviewers_required_passed` | 等人 | 等必需检视人检视 |
+| `committer_must_cast_two_votes_passed` | 等人 | 等提交人以外的两票 |
+| `merge_by_self_passed` | 等人 | 等他人代为合入 |
+| `merged_by_user_passed` | 等人 | 等有权限的人点合入(目标分支受保护) |
+| `mr_state_passed` | 等人 | 等 MR 回到可合入状态 |
+| `no_commits_passed` | 等人 | 等分支上出现提交 |
+| `branch_missing_passed` | 等人 | 等分支恢复(远端分支不见了) |
+| `non_ff_passed` | 等人 | 等处理非快进(需变基,自动修复不做强推) |
+
+两条判断的理由:
+
+- **`codequality_passed` 必须归可修**。它是 CodeCheck/CodeCC 那类扫描
+  结论——改代码就能解决,正是 CI 修复使命里"按类分诊"已覆盖的一类。
+  归到等人的话,MR 卡在这里没有任何人会来动,任务干等到监控预算耗尽
+  (首次实测时它正是 false)。排在 `ci_state_passed` 之后同一路:同一个
+  修复会话一次修完,而流水线原文比质量门禁的一句话更全;
+- **`non_ff_passed` 只能等人**。平台要求线性历史时,宿主的冲突修复走
+  `git merge`(产生合并提交)解不了它;真解法是变基后强推,而强推是
+  内核明令禁止的不可逆动作。如实挂等人,交给人裁决,不假装能自动修。
 
 "等人"不是失败:任务停在验证中,**继续轮询**,并给归属人发通知说清
 "卡在哪一项、需要谁做什么"。这是本仓现在缺的语义——现在会一路轮询到
@@ -395,8 +419,14 @@ npm run adapter -- --config adapter.json --selftest
       "https://<host>/api/v3/projects/{repo_path}/merge_requests/{mr}/mergeable_state"],
     "bools": {"json": ""},            // 布尔字段在哪层就指到哪层
     "reason": {"json": "reason"},
-    "ignore_fields": ["merge_request_switch"],
-    "mr_state": {"json": "state"},
+    // ⚠️ mergeable_state 里的 `state` 是**布尔**(整体可不可合),
+    // 不是 opened/merged/closed 的生命周期(2026-08-18 内网实测)。
+    // 它必须进 ignore_fields(否则被当成一项门禁),而 mr_state 要
+    // 从 MR 详情端点取:GET .../merge_requests/{iid} 的 state 字段。
+    // 单条命令拿不到两样东西时,包一个 sh 脚本把两个响应合成一个
+    // JSON 输出(脚本是配置产物,不算改代码)。
+    "ignore_fields": ["merge_request_switch", "state"],
+    "mr_state": {"json": "mr_state"},   // 脚本合成:来自 MR 详情
     "mr_state_map": {"opened": "opened", "merged": "merged",
                      "closed": "closed", "locked": "opened"}
   },

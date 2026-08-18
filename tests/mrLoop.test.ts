@@ -309,6 +309,62 @@ test("冲突门禁:宿主 merge 造真实冲突标记,会话在真冲突上解,�
   }
 });
 
+test("内网真实门禁集(19 项):质量红要派修复,受保护分支挂人话等待", async () => {
+  // 2026-08-18 内网 selftest 第一次拿到真门禁集,比契约里的九项多十项。
+  // 两件事必须钉死:
+  // ①`codequality_passed` 是**改代码能解决的**(CodeCheck/CodeCC 那类),
+  //   归到等人就会让 MR 卡着没人动、任务干等到预算耗尽——必须派修复;
+  // ②多出来的等人项要说人话:界面上"等 merged_by_user_passed"没人
+  //   看得懂,而它的真实含义是"目标分支受保护,得让有权限的人点合入"。
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  // 首跑流水线绿(ci_state_passed 过),但质量门禁红——这正是内网
+  // 那条 MR 的形状:流水线与质量是两个门禁,别互相冒充。
+  Object.assign(platform.humanGates, {
+    codequality_passed: false,
+    merged_by_user_passed: false,
+    approval_reviewers_required_passed: true,
+    committer_must_cast_two_votes_passed: true,
+    non_ff_passed: true,
+  });
+  await platform.start();
+  const model = new ScriptedModelServer([
+    ...walkScript(),
+    // 质量修复会话:改代码并推新提交
+    { tool: { name: "bash", input: { command:
+        "echo quality-fixed >> a.txt && git add . "
+        + "&& git commit --quiet -m fix-quality "
+        + "&& git push --quiet origin master_bot_REQ9" } } },
+    { text: "质量问题已修,已推送。" },
+  ], "scripted-v1", { linear: true });
+  await model.start();
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-19-"));
+  const service = buildService(platform, dataDir, model.modelsJson());
+  try {
+    const id = service.create("交付 REQ9:真实门禁集").id;
+    // 质量门禁红 → 派 CI 那一路修复(不是干等)
+    await until(() =>
+      (service.get(id)!.delivery?.loop?.kind ?? "") === "ci",
+      "质量门禁要派修复而不是挂起");
+    // 修完推新提交 → 质量门禁转绿 → 只剩"等人点合入"
+    platform.humanGates.codequality_passed = true;
+    await until(() =>
+      (service.get(id)!.delivery?.waiting_on ?? "").includes("等有权限的人点合入"),
+      "受保护分支要说人话");
+    assert.ok(
+      !(service.get(id)!.delivery?.waiting_on ?? "")
+        .includes("merged_by_user_passed"),
+      "别把平台字段名甩给人看");
+    // 有权限的人点了合入 → 收口
+    platform.humanGates.merged_by_user_passed = true;
+    platform.settleMr("master_bot_REQ9", "merged");
+    await until(() => service.get(id)!.status === "completed", "合入收口");
+  } finally {
+    await model.stop();
+    await platform.stop();
+  }
+});
+
 test("MR 被关闭 → 如实 failed 请人工,不硬修", async () => {
   const platform = new FakeGitPlatform();
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));

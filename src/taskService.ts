@@ -249,8 +249,18 @@ const REPAIRABLE_GATES: Record<
   resolve_discussion_passed: { kind: "review", priority: 10 },
   conflict_passed: { kind: "conflict", priority: 15 },
   ci_state_passed: { kind: "ci", priority: 20 },
+  // 代码质量门禁(内网 2026-08-18 首次拿到真实门禁集才发现有这一项)。
+  // 它是**改代码能解决的**——CodeCheck/CodeCC 那类扫描结论,正是 CI
+  // 修复使命里"按类分诊"已经覆盖的一类。归到等人的话,MR 卡在这里
+  // 永远没人动,任务干等到监控预算耗尽(逮住时它正是 false)。
+  // 与 ci_state_passed 同一路(同一个修复会话一次修完),排在其后:
+  // 流水线红通常连带质量红,先看流水线原文更全。
+  codequality_passed: { kind: "ci", priority: 25 },
 };
 
+/** 等人门禁的人话。名字缺席不影响判定(认不出=等人),只影响文案:
+ * 界面上"等 approval_reviewers_required_passed"没人看得懂,而这些
+ * 名字来自内网真实 MR(2026-08-18 selftest 实测的 19 项)。 */
 const HUMAN_GATE_TEXT: Record<string, string> = {
   approvers_passed: "等审批",
   vote_passed: "等投票",
@@ -258,6 +268,18 @@ const HUMAN_GATE_TEXT: Record<string, string> = {
   e2e_check_passed: "等 e2e 检查",
   custom_ctrl_items_passed: "等自定义门禁",
   evaluation_passed: "等评估",
+  approval_approvers_required_passed: "等必需审批人审批",
+  approval_reviewers_required_passed: "等必需检视人检视",
+  committer_must_cast_two_votes_passed: "等提交人以外的两票",
+  merge_by_self_passed: "等他人代为合入(不允许自己合自己的单)",
+  merged_by_user_passed: "等有权限的人点合入(目标分支受保护)",
+  mr_state_passed: "等 MR 回到可合入状态",
+  no_commits_passed: "等分支上出现提交",
+  branch_missing_passed: "等分支恢复(远端分支不见了)",
+  // 非快进:平台要求线性历史。宿主的冲突修复走 merge(会产生合并
+  // 提交),对"必须快进"的仓解不了;真解法是变基后强推,而强推是
+  // 内核明令禁止的不可逆动作——所以这一项如实挂等人,交给人裁决。
+  non_ff_passed: "等处理非快进(需变基,自动修复不做强推)",
 };
 
 interface GateItem {
