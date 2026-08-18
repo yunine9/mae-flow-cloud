@@ -340,7 +340,10 @@ export interface LaunchOptions {
    * 前端一个字都不许另抄——抄了就会出现"页面说快速/慢速、内核只认
    * 完整开发/局部修改",于是下单选过的交付方式在流程里又被问一遍。
    * 空数组=读不到内核定义,那就不预选,老老实实等流程里问。 */
-  workflows: Array<{ key: string; label: string }>;
+  /** steps/acks:这条链多少步、要拍板几次——内核按 flow 现算,
+   * 给人掂量快慢;算不出时缺席,只显示名字。 */
+  workflows: Array<
+    { key: string; label: string; steps?: number; acks?: number }>;
 }
 
 export async function getLaunchOptions(): Promise<LaunchOptions> {

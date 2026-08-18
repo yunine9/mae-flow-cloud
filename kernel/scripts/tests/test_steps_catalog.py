@@ -42,6 +42,16 @@ class StepsCatalogTests(unittest.TestCase):
         keys = [item["key"] for item in self.catalog["workflows"]]
         self.assertEqual(keys, self.flow["steps"]["workflow_select"]["choices"])
 
+    def test_review_is_not_for_new_orders(self):
+        """review 仅限已交付单(步骤文档的禁令):目录要机器可读地标出来,
+        宿主的下单表单照它摆——否则新单选了 review,跳过设计与定稿还不碰
+        规格,必错。其余三项照常可选。"""
+        flags = {item["key"]: item["for_new_orders"]
+                 for item in self.catalog["workflows"]}
+        self.assertEqual(flags, {
+            "full": True, "hotfix": True, "tweak": True, "review": False,
+        })
+
     def test_answers_are_the_texts_done_verifies_against(self):
         """目录给的选项原文必须就是 workflow_select 对账用的那几句——
         宿主照目录出卡、照目录回传,done --choice 才认得出来。"""

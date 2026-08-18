@@ -334,11 +334,16 @@ def _steps_catalog(flow, st):
 
     所以把它变成明面上的契约:分类归内核,宿主问一句就能拿到,拿到的
     `answer` 就是它该回传的选项原文。别处不要再有第二份交付方式清单。"""
+    select = flow.get("steps", {}).get("workflow_select", {})
+    # 新单可选集:review 仅限已交付单(步骤文档的禁令,这里机器可读)。
+    # 字段缺席=全部可选,旧 flow 不炸。
+    new_order = select.get("new_order_choices")
     return {
         "workflows": [
             {
                 "key": wf,
                 "label": WORKFLOW_LABELS[wf],
+                "for_new_orders": (wf in new_order) if new_order else True,
                 # 选项原文:卡上就该出现它,done --choice 也按它对账
                 "answers": list(
                     (flow.get("steps", {}).get("workflow_select", {})

@@ -20,10 +20,15 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 /** 一个交付方式:key 是内核的 choice(full/hotfix/…),label 是给人看的,
- * 也正是回传给内核的**选项原文**(done --choice 按它对账)。 */
+ * 也正是回传给内核的**选项原文**(done --choice 按它对账)。
+ * steps/acks 是给人掂量快慢用的(这条链多少步、要拍板几次)——数字由
+ * 内核 steps --json 按 flow 现算,不是前端手写一份会过期的说明;兜底
+ * 路径(直接读 flow.json)算不出链就缺席,表单只显示名字。 */
 export interface WorkflowChoice {
   key: string;
   label: string;
+  steps?: number;
+  acks?: number;
 }
 
 const cache = new Map<string, WorkflowChoice[]>();
@@ -40,11 +45,22 @@ function fromKernelCommand(kernelRoot: string): WorkflowChoice[] {
   });
   const catalog = JSON.parse(stdout.trim().split("\n").pop() ?? "{}");
   return ((catalog.workflows ?? []) as Array<Record<string, any>>)
-    .map((item) => ({
-      key: String(item.key ?? ""),
-      // answers[0] 是内核对账用的原文;没有就退回展示名
-      label: String(item.answers?.[0] ?? item.label ?? ""),
-    }))
+    // 下单表单只列新单可选的:review 仅限已交付单(内核目录的
+    // for_new_orders 标记,来源是 flow.json 的 new_order_choices)——
+    // 新单选它跳过设计与定稿还不碰规格,必错;检视意见由修复环自动走。
+    .filter((item) => item.for_new_orders !== false)
+    .map((item) => {
+      const chain = (item.steps ?? []) as Array<{ user_ack?: boolean }>;
+      return {
+        key: String(item.key ?? ""),
+        // answers[0] 是内核对账用的原文;没有就退回展示名
+        label: String(item.answers?.[0] ?? item.label ?? ""),
+        ...(chain.length ? {
+          steps: chain.length,
+          acks: chain.filter((step) => step.user_ack).length,
+        } : {}),
+      };
+    })
     .filter((item) => item.key && item.label);
 }
 
@@ -55,9 +71,14 @@ function fromFlowJson(kernelRoot: string): WorkflowChoice[] {
   const flow = JSON.parse(readFileSync(path, "utf-8"));
   const step = flow?.steps?.workflow_select ?? {};
   const answers = (step.choice_answers ?? {}) as Record<string, string[]>;
+  // 兜底同样尊重 new_order_choices;字段缺席(老 flow)=全部可选。
+  const newOrder = Array.isArray(step.new_order_choices)
+    ? new Set((step.new_order_choices as unknown[]).map(String))
+    : undefined;
   return ((step.choices ?? []) as unknown[])
     .map((key) => ({ key: String(key), label: answers[String(key)]?.[0] }))
-    .filter((item): item is WorkflowChoice => !!item.label);
+    .filter((item): item is WorkflowChoice =>
+      !!item.label && (!newOrder || newOrder.has(item.key)));
 }
 
 export function workflowChoices(kernelRoot: string | undefined): WorkflowChoice[] {

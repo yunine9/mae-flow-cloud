@@ -117,10 +117,15 @@ test("交付方式:选项与默认值都取自内核 flow.json,自造的当场�
     host: { kernelRoot, repoPath: "/tmp/repo" },
   });
   const workflows = service.launchOptions().workflows;
+  // review 不在新单表单里(内核 flow.json 的 new_order_choices:它仅限
+  // 已交付单,新单选它必错;检视意见由 MR 修复环自动处理)。
   assert.deepEqual(workflows.map((item) => item.key),
-    ["full", "hotfix", "tweak", "review"]);
+    ["full", "hotfix", "tweak"]);
   assert.equal(workflows.find((item) => item.key === "tweak")!.label,
     "局部修改");
+  assert.throws(() => service.create("新单想选评审",
+    { repo: "https://x/r.git", ticket: "REQ1", lane: "处理评审意见" }),
+    /交付方式只能是/);
   // 不填=内核第一项;自造词打回(免得下单选了个内核不认识的答案)
   assert.equal(service.create("默认交付方式").lane, workflows[0].label);
   assert.equal(service.create("点名交付方式", { lane: "局部修改" }).lane,
@@ -135,9 +140,19 @@ test("交付方式:选项与默认值都取自内核 flow.json,自造的当场�
     [join(kernelRoot, "scripts", "mae-flow.py"), "steps", "--json"],
     { encoding: "utf-8" }).trim().split("\n").pop()!);
   assert.deepEqual(
-    catalog.workflows.map((item: { key: string; answers: string[] }) =>
-      ({ key: item.key, label: item.answers[0] })),
-    workflows, "表单选项必须与内核目录逐字一致");
+    catalog.workflows
+      .filter((item: { for_new_orders: boolean }) => item.for_new_orders)
+      .map((item: { key: string; answers: string[] }) =>
+        ({ key: item.key, label: item.answers[0] })),
+    workflows.map((item) => ({ key: item.key, label: item.label })),
+    "表单选项必须与内核目录(新单可选集)逐字一致");
+  // 步数/拍板数给人掂量快慢(完整开发=慢道,局部修改=快道),
+  // 数字按内核 flow 现算:完整开发必然比局部修改步数多。
+  const byKey = Object.fromEntries(
+    workflows.map((item) => [item.key, item]));
+  assert.ok(byKey.full.steps! > byKey.tweak.steps!,
+    "完整开发的链应长于局部修改——快慢从数字上可见");
+  assert.ok(byKey.full.acks! >= 1);
 });
 
 test("单号/基线分支:下单收齐,基线默认 master,纯会话形态不摆这些框", () => {

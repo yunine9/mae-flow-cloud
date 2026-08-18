@@ -32,9 +32,12 @@ import {
 type View = "team" | "mine" | "history" | "users" | "settings";
 
 function initialView(user: AuthUser): View {
+  // 管理员没有"我的待办"(不下单的角色没有个人任务收件箱,用户拍板):
+  // 深链也一律落到团队总览,从那里打开任意任务行使兜底控制。
+  if (user.role === "admin") return "team";
   const params = new URLSearchParams(location.search);
   if (params.has("review")) return "mine";
-  return params.has("task") ? "mine" : user.role === "admin" ? "team" : "mine";
+  return "mine";
 }
 
 /** 月光模式(免审批)开关:默认关;开=本人任务的人工节点自动放行
@@ -161,9 +164,8 @@ export function App() {
   const assignedToMe = session
     ? tasks.filter((task) => responsibleOf(task) === session.username)
     : [];
-  const adminFallbackWaiting = session?.role === "admin"
-    ? tasks.filter((task) => !task.luban_account && task.status === "waiting_for_human")
-    : [];
+  // 管理员不再有个人待办:归属人=下单人是硬规则,无主任务只可能来自
+  // 无鉴权的老现场,团队总览里照常可见、可打开兜底处置。
 
   if (session === undefined) return <LoadingScreen />;
   if (session === null) return <LoginScreen onAuthenticated={(user) => {
@@ -175,7 +177,7 @@ export function App() {
   }
 
   const waitingCount = tasks.filter((task) => task.status === "waiting_for_human").length;
-  const myTasks = [...assignedToMe, ...adminFallbackWaiting];
+  const myTasks = assignedToMe;
   const myWaiting = myTasks.filter((task) => task.status === "waiting_for_human");
   const pendingReviews = myReviews.filter((review) => review.status === "pending");
   const myBlocked = myTasks.filter((task) =>
@@ -205,7 +207,7 @@ export function App() {
     session.role === "admin" || responsibleOf(task) === session.username;
   const header = {
     team: session.role === "admin"
-      ? { title: "团队总览", description: "只看团队推进、负责人和阻塞风险；具体操作统一回到个人工作台。" }
+      ? { title: "团队总览", description: "看团队推进、负责人和阻塞风险；需要兜底时打开任务的过程工作台处置(暂停/恢复/决定)。" }
       : { title: "团队动态", description: "只读了解团队正在推进什么；你的待办与操作始终留在个人工作台。" },
     mine: { title: "我的工作", description: "集中处理分配给我的需求、待确认事项和后续交付动作。" },
     history: { title: "交付历史", description: "从投影读侧回看跨生命周期的任务与交付记录。" },
@@ -221,7 +223,6 @@ export function App() {
         {session.role === "admin" ? <>
           <span className="nav-section-label">管理视角</span>
           <NavButton view="team" current={view} onSelect={setView} label="团队总览" badge={waitingCount} />
-          <NavButton view="mine" current={view} onSelect={setView} label="我的待办" badge={myWaiting.length + pendingReviews.length} personal />
           <NavButton view="history" current={view} onSelect={setView} label="交付历史" />
           <span className="nav-section-label admin-tools">系统管理</span>
           <NavButton view="users" current={view} onSelect={setView} label="账号管理" />

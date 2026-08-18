@@ -933,7 +933,8 @@ export class TaskService {
     /** 交付方式选项:**现读内核 flow.json**,不在 TS 侧另抄一份。
      * 空数组=读不到内核定义,表单就别摆出选择(下单不预选,卡到时
      * 老老实实问人)。 */
-    workflows: Array<{ key: string; label: string }>;
+    workflows: Array<
+      { key: string; label: string; steps?: number; acks?: number }>;
     /** 服务级缺的配置(管理员去补)。非空=不给下单。 */
     blockers: Array<{ key: string; label: string; where: "admin" | "me" }>;
     /** 本部署要不要这两把个人令牌(由形态决定,见下方注释)。 */

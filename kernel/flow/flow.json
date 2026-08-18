@@ -41,6 +41,11 @@
         "tweak",
         "review"
       ],
+      "new_order_choices": [
+        "full",
+        "hotfix",
+        "tweak"
+      ],
       "choice_answers": {
         "full": [
           "完整开发"

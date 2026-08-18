@@ -182,10 +182,6 @@ export function LaunchWorkspace({
                   />
                 </label>
               )}
-              <label className="account-field">
-                <span>任务归属</span>
-                <input type="text" value={session.username} readOnly />
-              </label>
               {(options?.workflows.length ?? 0) > 0 && (
                 // 选项来自内核 flow.json(不在前端另抄一份):下单选定，
                 // 流程里那张“交付方式”卡由系统拿这个答案自动交卷。
@@ -199,6 +195,8 @@ export function LaunchWorkspace({
                     {options!.workflows.map((item) => (
                       <option key={item.key} value={item.label}>
                         {item.label}
+                        {item.steps !== undefined
+                          ? `（${item.steps} 步 · 拍板 ${item.acks} 次）` : ""}
                       </option>
                     ))}
                   </select>
