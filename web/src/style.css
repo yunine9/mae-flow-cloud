@@ -416,7 +416,7 @@ svg {
   justify-content: flex-end;
   gap: 10px;
 }
-.header-launch-gate { display: grid; justify-items: end; gap: 6px; }
+.header-launch-gate { display: grid; justify-items: center; gap: 6px; }
 .header-launch {
   min-width: 156px;
   height: 48px;
@@ -704,48 +704,25 @@ svg {
 .review-clear strong { color: var(--text-strong); font-size: 12.5px; }
 .review-clear p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
 .review-list .task-card { border-color: color-mix(in srgb, var(--attention) 32%, var(--line)); }
-.primary-work-grid {
-  margin-bottom: 28px;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  align-items: stretch;
+.current-work-section { margin-top: 0; margin-bottom: 28px; }
+.current-work-counts { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
+.current-work-counts .section-count.danger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 22%, var(--line));
+  background: var(--danger-weak);
 }
-.primary-work-panel {
-  min-width: 0;
-  margin: 0;
-  padding: 17px;
-  display: flex;
-  flex-direction: column;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  background: var(--surface);
-  box-shadow: inset 0 2px 0 color-mix(in srgb, var(--attention) 72%, transparent), var(--shadow-xs);
-}
-.primary-work-panel .section-head { margin-bottom: 12px; }
-.primary-work-panel .review-clear,
-.primary-work-panel .review-clear.compact {
-  min-height: 94px;
-  flex: 1;
-  padding: 15px 16px;
+.current-work-empty {
+  min-height: 104px;
   border-color: var(--line);
-  background: color-mix(in srgb, var(--success-soft) 42%, var(--surface-soft));
+  background: color-mix(in srgb, var(--success-soft) 38%, var(--surface-soft));
 }
-.primary-work-panel .task-summary { padding-left: 18px; padding-right: 15px; }
-.primary-work-panel .task-overline { flex-wrap: wrap; }
-.progress-work-panel {
-  box-shadow: inset 0 2px 0 color-mix(in srgb, var(--active) 72%, transparent), var(--shadow-xs);
+.current-work-list .status-waiting_for_human {
+  border-color: color-mix(in srgb, var(--attention) 38%, var(--line));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--attention) 8%, transparent), var(--shadow-xs);
 }
-.progress-work-panel .section-count {
-  color: var(--active);
-  border-color: color-mix(in srgb, var(--active) 22%, var(--line));
-  background: var(--active-soft);
+.current-work-list .status-failed {
+  border-color: color-mix(in srgb, var(--danger) 34%, var(--line));
 }
-.progress-work-panel .review-clear {
-  border-color: color-mix(in srgb, var(--active) 16%, var(--line));
-  background: color-mix(in srgb, var(--active-soft) 46%, var(--surface-soft));
-}
-.progress-work-panel .review-clear > span { background: var(--active); }
 
 /* A run's artifacts belong to the task, so they get a dedicated full workspace. */
 .artifact-workspace {
@@ -2160,10 +2137,6 @@ pre {
   .history-delivery { display: none; }
 }
 
-@media (max-width: 980px) {
-  .primary-work-grid { grid-template-columns: 1fr; }
-}
-
 @media (max-width: 760px) {
   .app-shell { display: block; }
   .sidebar {
@@ -2205,7 +2178,7 @@ pre {
     gap: 14px;
   }
   .workspace-header-actions { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
-  .header-launch-gate { justify-items: start; }
+  .header-launch-gate { justify-items: center; }
   .workspace-header h1 { font-size: 27px; }
   .workspace-header p { font-size: 12.5px; }
   .workspace-main { padding: 0 18px 52px; }

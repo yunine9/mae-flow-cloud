@@ -254,6 +254,7 @@ export function App() {
     task.status !== "waiting_for_human" && !isBlocked(task)
     && task.status !== "paused" && task.status !== "canceled"
     && !DELIVERED_STATUSES.includes(task.status));
+  const myCurrent = [...myWaiting, ...myBlocked, ...myPaused, ...myActive];
   const myDelivered = myTasks.filter((task) =>
     DELIVERED_STATUSES.includes(task.status));
   const artifactTask = artifactTaskId
@@ -324,18 +325,17 @@ export function App() {
         />}
 
         {view === "mine" && <>
-          <section className="personal-pulse four" aria-label="我的任务摘要"><div className="personal-stat attention"><span>待我核对</span><strong>{myWaiting.length}</strong></div><div className="personal-stat danger"><span>需要介入 / 已暂停</span><strong>{myBlocked.length + myPaused.length}</strong></div><div className="personal-stat active"><span>正在推进</span><strong>{myActive.length}</strong></div><div className="personal-stat success"><span>待合入 / 完成</span><strong>{myDelivered.length}</strong></div></section>
+          <section className="personal-pulse four" aria-label="我的任务摘要"><div className="personal-stat attention"><span>待我核对</span><strong>{myWaiting.length}</strong></div><div className="personal-stat danger"><span>需要介入 / 已暂停</span><strong>{myBlocked.length + myPaused.length}</strong></div><div className="personal-stat active"><span>自动推进中</span><strong>{myActive.length}</strong></div><div className="personal-stat success"><span>待合入 / 完成</span><strong>{myDelivered.length}</strong></div></section>
           {(session.committer || myReviews.length > 0) && <CommitterInbox
             reviews={pendingReviews}
             tasks={tasks}
             onOpen={openArtifacts}
           />}
-          <div className="primary-work-grid" aria-label="需要我处理的主要工作">
-            <section className="review-inbox primary-work-panel" aria-labelledby="review-title"><div className="section-head"><div><span className="section-kicker">REVIEW INBOX</span><h2 id="review-title">待我核对</h2></div><span className="section-count attention">{myWaiting.length} 项</span></div>{myWaiting.length === 0 ? <div className="review-clear"><span aria-hidden>✓</span><div><strong>当前没有需要你核对的事项</strong><p>新的人工节点会通过小鲁班提醒，并自动出现在这里。</p></div></div> : <div className="task-list review-list">{myWaiting.map((task) => <TaskCard key={task.id} task={task} onChanged={refresh} focused={task.id === targetTaskId} canOperate onOpenArtifacts={() => openArtifacts(task)} />)}</div>}</section>
-            <TaskGroup className="primary-work-panel progress-work-panel" kicker="IN PROGRESS" title="正在推进" tasks={myActive} onChanged={refresh} onOpenArtifacts={openArtifacts} targetTaskId={targetTaskId} empty="当前没有正在推进的任务" emptyDetail="任务启动后，当前阶段和运行进度会自动出现在这里。" emptyIcon="→" />
-          </div>
-          {myBlocked.length > 0 && <TaskGroup kicker="NEEDS ATTENTION" title="需要我介入" tasks={myBlocked} onChanged={refresh} onOpenArtifacts={openArtifacts} targetTaskId={targetTaskId} tone="danger" />}
-          {myPaused.length > 0 && <TaskGroup kicker="PAUSED" title="已暂停，可随时恢复" tasks={myPaused} onChanged={refresh} onOpenArtifacts={openArtifacts} targetTaskId={targetTaskId} />}
+          <section className="task-section current-work-section" aria-labelledby="current-work-title">
+            <div className="section-head"><div><span className="section-kicker">CURRENT WORK</span><h2 id="current-work-title">当前任务</h2></div><div className="current-work-counts">{myWaiting.length > 0 && <span className="section-count attention">{myWaiting.length} 项待核对</span>}{myBlocked.length + myPaused.length > 0 && <span className="section-count danger">{myBlocked.length + myPaused.length} 项需介入</span>}<span className="section-count">共 {myCurrent.length} 项</span></div></div>
+            {myCurrent.length === 0 && <div className="review-clear current-work-empty"><span aria-hidden>✓</span><div><strong>当前没有进行中的任务</strong><p>新任务启动后会出现在这里；需要你核对的任务会自动排在最前。</p></div></div>}
+            <div className="task-list current-work-list">{myCurrent.map((task) => <TaskCard key={task.id} task={task} onChanged={refresh} focused={task.id === targetTaskId} canOperate onOpenArtifacts={() => openArtifacts(task)} />)}</div>
+          </section>
           {myDelivered.length > 0 && <TaskGroup kicker="DELIVERY" title="等待合入与最近完成" tasks={myDelivered} onChanged={refresh} onOpenArtifacts={openArtifacts} targetTaskId={targetTaskId} />}
         </>}
         {view === "profile" && session.role !== "admin" && <PersonalSettingsPage
@@ -570,10 +570,7 @@ function TaskGroup({
   onOpenArtifacts,
   targetTaskId,
   empty,
-  emptyDetail,
-  emptyIcon,
   tone,
-  className,
 }: {
   kicker: string;
   title: string;
@@ -582,14 +579,11 @@ function TaskGroup({
   onOpenArtifacts: (task: TaskSummary) => void;
   targetTaskId: string;
   empty?: string;
-  emptyDetail?: string;
-  emptyIcon?: string;
   tone?: string;
-  className?: string;
 }) {
-  return <section className={`task-section${tone ? ` ${tone}` : ""}${className ? ` ${className}` : ""}`}>
+  return <section className={`task-section${tone ? ` ${tone}` : ""}`}>
     <div className="section-head"><div><span className="section-kicker">{kicker}</span><h2>{title}</h2></div><span className={`section-count ${tone ?? ""}`}>{tasks.length} 项</span></div>
-    {tasks.length === 0 && <div className="review-clear compact"><span aria-hidden>{emptyIcon ?? "✓"}</span><div><strong>{empty ?? "当前没有任务"}</strong>{emptyDetail && <p>{emptyDetail}</p>}</div></div>}
+    {tasks.length === 0 && <div className="review-clear compact"><span aria-hidden>✓</span><div><strong>{empty ?? "当前没有任务"}</strong></div></div>}
     <div className="task-list">{tasks.map((task) => <TaskCard key={task.id} task={task} onChanged={onChanged} focused={task.id === targetTaskId} canOperate onOpenArtifacts={() => onOpenArtifacts(task)} />)}</div>
   </section>;
 }
