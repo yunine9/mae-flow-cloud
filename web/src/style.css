@@ -416,32 +416,39 @@ svg {
   justify-content: flex-end;
   gap: 10px;
 }
-.header-launch-gate { display: grid; justify-items: end; gap: 5px; }
+.header-launch-gate { display: grid; justify-items: end; gap: 6px; }
 .header-launch {
-  height: 40px;
-  padding: 0 15px;
+  min-width: 156px;
+  height: 48px;
+  padding: 0 20px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
+  gap: 9px;
   flex: none;
   color: #fff;
-  background: var(--accent);
+  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 76%, #9f8cff));
   border: 1px solid var(--accent);
-  border-radius: 9px;
-  font-size: 12px;
-  font-weight: 700;
-  box-shadow: 0 7px 18px color-mix(in srgb, var(--accent) 22%, transparent);
+  border-radius: 12px;
+  font-size: 13.5px;
+  font-weight: 750;
+  letter-spacing: .01em;
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--accent) 28%, transparent);
   cursor: pointer;
-  transition: transform var(--ease), background var(--ease);
+  transition: transform var(--ease), background var(--ease), box-shadow var(--ease);
 }
-.header-launch:hover { background: var(--accent-hover); transform: translateY(-1px); }
+.header-launch:hover {
+  background: linear-gradient(135deg, var(--accent-hover), color-mix(in srgb, var(--accent-hover) 74%, #aa98ff));
+  box-shadow: 0 13px 28px color-mix(in srgb, var(--accent) 34%, transparent);
+  transform: translateY(-2px);
+}
+.header-launch:focus-visible { outline: 3px solid var(--accent-soft); outline-offset: 3px; }
 .header-launch:disabled,
 .header-launch:disabled:hover {
-  color: var(--faint); background: var(--surface-muted); border-color: var(--line);
+  color: var(--faint); background: var(--surface-muted); border-color: var(--line-strong);
   box-shadow: none; cursor: not-allowed; transform: none;
 }
-.header-launch svg { width: 16px; height: 16px; }
+.header-launch svg { width: 18px; height: 18px; }
 .header-unlock {
   padding: 0;
   display: inline-flex;
@@ -450,7 +457,7 @@ svg {
   color: var(--accent);
   border: 0;
   background: transparent;
-  font-size: 10px;
+  font-size: 10.5px;
   font-weight: 650;
   cursor: pointer;
 }
