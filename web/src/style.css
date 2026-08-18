@@ -81,34 +81,34 @@
 
 :root[data-theme="light"] {
   color-scheme: light;
-  --page: #f4f6f9;
-  --surface: #ffffff;
-  --surface-soft: #f8fafc;
-  --surface-muted: #eef1f5;
-  --sidebar: #121722;
-  --sidebar-soft: #1b2230;
-  --text: #172033;
-  --text-strong: #0b1020;
-  --muted: #687287;
-  --faint: #98a1b2;
-  --line: #e3e7ee;
-  --line-strong: #d2d8e2;
-  --accent: #5b5bd6;
-  --accent-hover: #4e4ec4;
-  --accent-soft: #ededff;
-  --active: #4f67d9;
+  --page: #f1f3f9;
+  --surface: rgba(255, 255, 255, .9);
+  --surface-soft: #f7f8fc;
+  --surface-muted: #eceff6;
+  --sidebar: #f2f0fa;
+  --sidebar-soft: #e7e4f5;
+  --text: #2b3347;
+  --text-strong: #151b2d;
+  --muted: #6d768a;
+  --faint: #9aa3b4;
+  --line: #dde1eb;
+  --line-strong: #cbd1df;
+  --accent: #655bd8;
+  --accent-hover: #5148c5;
+  --accent-soft: #eeecff;
+  --active: #536bcf;
   --active-soft: #edf1ff;
-  --attention: #c77913;
-  --attention-soft: #fff5e5;
-  --success: #16805c;
-  --success-soft: #e9f8f2;
-  --danger: #c2414d;
-  --danger-soft: #fff0f1;
-  --purple: #8055c7;
-  --purple-soft: #f3edff;
-  --shadow-xs: 0 1px 2px rgba(20, 29, 48, .04);
-  --shadow-sm: 0 8px 28px rgba(20, 29, 48, .07);
-  --shadow-md: 0 18px 50px rgba(20, 29, 48, .1);
+  --attention: #b66d13;
+  --attention-soft: #fff4df;
+  --success: #18765c;
+  --success-soft: #e7f7f1;
+  --danger: #c44452;
+  --danger-soft: #fff0f2;
+  --purple: #7a57bf;
+  --purple-soft: #f1ebff;
+  --shadow-xs: 0 1px 2px rgba(38, 43, 72, .045);
+  --shadow-sm: 0 10px 30px rgba(46, 49, 81, .075);
+  --shadow-md: 0 22px 60px rgba(46, 49, 81, .12);
 }
 
 :root[data-theme="dark"] {
@@ -331,6 +331,32 @@ svg {
 }
 .logout-button:hover { color: #fff; background: rgba(255, 255, 255, .08); }
 .logout-button svg { width: 16px; height: 16px; }
+.sidebar-bottom { margin-top: auto; display: grid; gap: 8px; }
+.sidebar-bottom .sidebar-foot { margin-top: 0; }
+.theme-switch {
+  width: 100%; min-height: 48px; padding: 7px 9px;
+  display: grid; grid-template-columns: 30px minmax(0, 1fr) 28px;
+  align-items: center; gap: 9px;
+  color: #cbd3df; border: 1px solid rgba(255, 255, 255, .075);
+  border-radius: 11px; background: rgba(255, 255, 255, .035);
+  cursor: pointer; text-align: left;
+  transition: color var(--ease), border-color var(--ease), background var(--ease);
+}
+.theme-switch:hover { color: #fff; border-color: rgba(151, 151, 255, .28); background: rgba(119, 119, 236, .08); }
+.theme-switch-icon {
+  width: 30px; height: 30px; display: grid; place-items: center;
+  color: #a8a8ff; border-radius: 8px; background: rgba(119, 119, 236, .14);
+}
+.theme-switch-icon svg { width: 16px; height: 16px; }
+.theme-switch-copy { min-width: 0; display: grid; gap: 1px; }
+.theme-switch-copy strong { font-size: 10.5px; font-weight: 700; }
+.theme-switch-copy small { color: #707c90; font-size: 8.5px; }
+.theme-switch-track {
+  width: 28px; height: 17px; padding: 2px; display: flex; align-items: center;
+  border-radius: 999px; background: #272f3e;
+}
+.theme-switch-track i { width: 13px; height: 13px; border-radius: 50%; background: #8585f2; transition: transform var(--ease), background var(--ease); }
+.theme-switch.is-light .theme-switch-track i { transform: translateX(11px); }
 .workspace { min-width: 0; }
 .workspace-header {
   max-width: 1260px;
@@ -2039,6 +2065,10 @@ pre {
   .brand-symbol { width: 32px; height: 32px; border-radius: 9px; }
   .brand-symbol svg { width: 21px; height: 21px; }
   .brand-copy small, .sidebar-foot { display: none; }
+  .sidebar-bottom { margin: 0; display: block; flex: none; }
+  .theme-switch { width: 36px; min-height: 36px; padding: 3px; display: grid; grid-template-columns: 1fr; border-radius: 9px; }
+  .theme-switch-icon { width: 28px; height: 28px; }
+  .theme-switch-copy, .theme-switch-track { display: none; }
   .brand-copy strong { font-size: 13px; }
   .sidebar-nav {
     margin-left: auto;
@@ -3458,4 +3488,138 @@ pre {
     border-bottom: 1px solid var(--line);
   }
   .git-change-summary { align-items: flex-end; }
+}
+
+/* 云昼主题：暖白画布 + 淡紫玻璃导航。代码 diff 仍保留深色编辑器语义，
+   其余工作台、弹层和管理界面统一进入明亮环境。 */
+:root[data-theme="light"] body {
+  background:
+    radial-gradient(circle at 78% -12%, rgba(117, 105, 226, .14), transparent 31%),
+    radial-gradient(circle at 28% 108%, rgba(78, 184, 157, .08), transparent 28%),
+    var(--page);
+}
+:root[data-theme="light"] .sidebar {
+  color: #394158;
+  background:
+    radial-gradient(circle at 14% -8%, rgba(112, 96, 222, .19), transparent 34%),
+    linear-gradient(180deg, rgba(248, 247, 253, .96), rgba(239, 238, 248, .98));
+  border-right-color: rgba(75, 72, 113, .1);
+  box-shadow: 8px 0 34px rgba(61, 58, 94, .045);
+}
+:root[data-theme="light"] .brand-copy strong { color: #1c2236; }
+:root[data-theme="light"] .brand-copy small { color: #858da0; }
+:root[data-theme="light"] .nav-section-label { color: #9994ad; }
+:root[data-theme="light"] .nav-item { color: #6b7286; }
+:root[data-theme="light"] .nav-item:hover { color: #39365e; background: rgba(101, 91, 216, .065); }
+:root[data-theme="light"] .nav-item.on {
+  color: #312d67;
+  background: rgba(255, 255, 255, .76);
+  border-color: rgba(101, 91, 216, .13);
+  box-shadow: inset 3px 0 #655bd8, 0 6px 18px rgba(67, 59, 118, .06);
+}
+:root[data-theme="light"] .nav-badge { color: #92570f; background: rgba(182, 109, 19, .12); }
+:root[data-theme="light"] .nav-badge.personal { color: #5a51bf; background: rgba(101, 91, 216, .12); }
+:root[data-theme="light"] .theme-switch {
+  color: #3e465c; border-color: rgba(78, 75, 112, .11);
+  background: rgba(255, 255, 255, .55);
+}
+:root[data-theme="light"] .theme-switch:hover { color: #272450; border-color: rgba(101, 91, 216, .25); background: rgba(255, 255, 255, .84); }
+:root[data-theme="light"] .theme-switch-icon { color: #9d6b20; background: #fff3d8; }
+:root[data-theme="light"] .theme-switch-copy small { color: #8a91a1; }
+:root[data-theme="light"] .theme-switch-track { background: #dcd8ed; }
+:root[data-theme="light"] .theme-switch-track i { background: #655bd8; }
+:root[data-theme="light"] .sidebar-foot { color: #798195; border-top-color: rgba(76, 74, 105, .1); }
+:root[data-theme="light"] .sidebar-account strong { color: #30384d; }
+:root[data-theme="light"] .sidebar-account small { color: #9299a8; }
+:root[data-theme="light"] .account-avatar { color: #4d46a9; background: rgba(101, 91, 216, .13); }
+:root[data-theme="light"] .logout-button {
+  color: #82899a; border-color: rgba(76, 74, 105, .11); background: rgba(255, 255, 255, .48);
+}
+:root[data-theme="light"] .logout-button:hover { color: #5148c5; background: #fff; }
+
+:root[data-theme="light"] .identity-bar {
+  color: var(--text);
+  background:
+    radial-gradient(circle at 91% -62%, rgba(101, 91, 216, .22), transparent 48%),
+    linear-gradient(135deg, rgba(255, 255, 255, .92), rgba(238, 236, 251, .9));
+  border-color: rgba(101, 91, 216, .11);
+}
+:root[data-theme="light"] .identity-copy .section-kicker { color: var(--accent); }
+:root[data-theme="light"] .identity-copy strong { color: var(--text-strong); }
+:root[data-theme="light"] .identity-copy small { color: var(--muted); }
+:root[data-theme="light"] .session-bar .role-chip {
+  color: #5c53bd; background: rgba(101, 91, 216, .1); border-color: rgba(101, 91, 216, .15);
+}
+
+:root[data-theme="light"] .launch-copy,
+:root[data-theme="light"] .user-create-copy {
+  color: #5f6680;
+  background:
+    radial-gradient(circle at 100% 0, rgba(101, 91, 216, .2), transparent 48%),
+    linear-gradient(150deg, #f5f3ff, #e9e8f7);
+}
+:root[data-theme="light"] .launch-copy .section-kicker,
+:root[data-theme="light"] .user-create-copy .section-kicker { color: #685fd3; }
+:root[data-theme="light"] .launch-copy h2,
+:root[data-theme="light"] .user-create-copy h2 { color: #242943; }
+:root[data-theme="light"] .launch-copy > p,
+:root[data-theme="light"] .user-create-copy p { color: #687087; }
+:root[data-theme="light"] .launch-guide strong { color: #363c55; }
+:root[data-theme="light"] .launch-guide small,
+:root[data-theme="light"] .launch-copy-foot { color: #81889a; }
+:root[data-theme="light"] .launch-guide li:not(:last-child)::after { background: rgba(101, 91, 216, .18); }
+:root[data-theme="light"] .launch-guide i {
+  color: #655bd8; border-color: rgba(101, 91, 216, .25); background: rgba(255, 255, 255, .72);
+}
+
+:root[data-theme="light"] .artifact-workspace-head,
+:root[data-theme="light"] .ws-head,
+:root[data-theme="light"] .code-review-head {
+  color: var(--text);
+  background: rgba(249, 249, 253, .94);
+  border-bottom-color: var(--line);
+  box-shadow: 0 7px 24px rgba(46, 49, 81, .08);
+  backdrop-filter: blur(18px);
+}
+:root[data-theme="light"] .artifact-back,
+:root[data-theme="light"] .artifact-external,
+:root[data-theme="light"] .ws-back,
+:root[data-theme="light"] .ws-native,
+:root[data-theme="light"] .code-review-back {
+  color: #626a7d; border-color: var(--line); background: rgba(255, 255, 255, .72);
+}
+:root[data-theme="light"] .artifact-back:hover,
+:root[data-theme="light"] .artifact-external:hover,
+:root[data-theme="light"] .ws-back:hover,
+:root[data-theme="light"] .ws-native:hover,
+:root[data-theme="light"] .code-review-back:hover {
+  color: var(--accent); border-color: rgba(101, 91, 216, .24); background: var(--accent-soft);
+}
+:root[data-theme="light"] .artifact-workspace-title > strong,
+:root[data-theme="light"] .ws-identity strong,
+:root[data-theme="light"] .code-review-title strong { color: var(--text-strong); }
+:root[data-theme="light"] .artifact-workspace-title code,
+:root[data-theme="light"] .ws-identity code,
+:root[data-theme="light"] .code-review-title small { color: var(--muted); }
+:root[data-theme="light"] .code-review-title span { color: var(--accent); }
+
+:root[data-theme="light"] .login-shell {
+  background:
+    radial-gradient(circle at 74% 18%, rgba(101, 91, 216, .2), transparent 31%),
+    linear-gradient(145deg, #ececf7, #f6f7fb);
+}
+:root[data-theme="light"] .login-aside {
+  color: #252944;
+  background:
+    radial-gradient(circle at 90% 5%, rgba(101, 91, 216, .22), transparent 42%),
+    linear-gradient(150deg, #e9e6fa, #dcdff2);
+}
+:root[data-theme="light"] .login-aside span { color: #655bd8; }
+:root[data-theme="light"] .login-aside i { background: rgba(70, 69, 101, .12); }
+:root[data-theme="light"] .secret-list code { color: #564eb4; }
+
+body, .sidebar, .identity-bar, .launch-copy, .user-create-copy,
+.artifact-workspace-head, .ws-head, .code-review-head,
+.credential-card, .personal-stat, .task-card {
+  transition: color 180ms ease, background-color 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
 }

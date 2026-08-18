@@ -30,6 +30,7 @@ import {
 } from "./teamOps";
 
 type View = "team" | "mine" | "history" | "users" | "settings";
+type Theme = "light" | "dark";
 
 function initialView(user: AuthUser): View {
   // 管理员没有"我的待办"(不下单的角色没有个人任务收件箱,用户拍板):
@@ -83,6 +84,25 @@ function MoonlightToggle({
   </span>;
 }
 
+function ThemeSwitch({ theme, onChange }: {
+  theme: Theme;
+  onChange: (theme: Theme) => void;
+}) {
+  const light = theme === "light";
+  return <button type="button" className={`theme-switch${light ? " is-light" : ""}`}
+    onClick={() => onChange(light ? "dark" : "light")}
+    title={light ? "切换到深夜主题" : "切换到云昼主题"}
+    aria-label={light ? "当前为云昼主题，切换到深夜主题" : "当前为深夜主题，切换到云昼主题"}>
+    <span className="theme-switch-icon" aria-hidden>
+      {light
+        ? <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="3.2" /><path d="M10 2.2v1.5M10 16.3v1.5M2.2 10h1.5M16.3 10h1.5M4.5 4.5l1 1M14.5 14.5l1 1M4.5 15.5l1-1M14.5 5.5l1-1" /></svg>
+        : <svg viewBox="0 0 20 20"><path d="M15.5 12.5A6.5 6.5 0 0 1 7.5 4.5a6.5 6.5 0 1 0 8 8Z" /></svg>}
+    </span>
+    <span className="theme-switch-copy"><strong>{light ? "云昼主题" : "深夜主题"}</strong><small>{light ? "明亮 · 柔和" : "沉浸 · 专注"}</small></span>
+    <span className="theme-switch-track" aria-hidden><i /></span>
+  </button>;
+}
+
 function NavIcon({ name }: { name: View }) {
   if (name === "team") return <svg viewBox="0 0 24 24" aria-hidden><path d="M4.75 19.25V11.5h4v7.75h-4Zm5.75 0V4.75h4v14.5h-4Zm5.75 0V8h4v11.25h-4Z" /></svg>;
   if (name === "mine") return <svg viewBox="0 0 24 24" aria-hidden><circle cx="12" cy="8" r="3.25" /><path d="M5.5 19.25c.65-3.45 2.82-5.25 6.5-5.25s5.85 1.8 6.5 5.25" /></svg>;
@@ -94,6 +114,8 @@ function NavIcon({ name }: { name: View }) {
 const DELIVERED_STATUSES: TaskStatus[] = ["await_merge", "completed"];
 
 export function App() {
+  const [theme, setTheme] = useState<Theme>(() =>
+    document.documentElement.dataset.theme === "light" ? "light" : "dark");
   const [session, setSession] = useState<AuthUser | null>();
   const [view, setView] = useState<View>("team");
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
@@ -176,6 +198,12 @@ export function App() {
     await logout().catch(() => undefined); setTasks([]); setSession(null);
   }
 
+  function changeTheme(next: Theme) {
+    document.documentElement.dataset.theme = next;
+    setTheme(next);
+    try { localStorage.setItem("mae-flow-theme", next); } catch { /* 仍保留本次选择 */ }
+  }
+
   const waitingCount = tasks.filter((task) => task.status === "waiting_for_human").length;
   const myTasks = assignedToMe;
   const myWaiting = myTasks.filter((task) => task.status === "waiting_for_human");
@@ -235,7 +263,10 @@ export function App() {
           <NavButton view="history" current={view} onSelect={setView} label="交付历史" />
         </>}
       </nav>
-      <div className="sidebar-foot session-foot"><span className="account-avatar" aria-hidden>{session.username.slice(0, 1).toUpperCase()}</span><span className="sidebar-account"><strong>{session.username}</strong><small>{session.role === "admin" ? "管理员" : "开发成员"}</small></span><button type="button" className="logout-button" onClick={signOut} title="退出登录" aria-label="退出登录"><svg viewBox="0 0 20 20"><path d="M8 4H4.75A1.25 1.25 0 0 0 3.5 5.25v9.5A1.25 1.25 0 0 0 4.75 16H8M12.5 6.5 16 10l-3.5 3.5M7 10h9" /></svg></button></div>
+      <div className="sidebar-bottom">
+        <ThemeSwitch theme={theme} onChange={changeTheme} />
+        <div className="sidebar-foot session-foot"><span className="account-avatar" aria-hidden>{session.username.slice(0, 1).toUpperCase()}</span><span className="sidebar-account"><strong>{session.username}</strong><small>{session.role === "admin" ? "管理员" : "开发成员"}</small></span><button type="button" className="logout-button" onClick={signOut} title="退出登录" aria-label="退出登录"><svg viewBox="0 0 20 20"><path d="M8 4H4.75A1.25 1.25 0 0 0 3.5 5.25v9.5A1.25 1.25 0 0 0 4.75 16H8M12.5 6.5 16 10l-3.5 3.5M7 10h9" /></svg></button></div>
+      </div>
     </aside>
 
     <div className="workspace">
