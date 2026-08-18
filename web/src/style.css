@@ -3376,7 +3376,7 @@ pre {
 .task-ownership em { overflow: hidden; max-width: 62%; color: var(--danger); font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
 
 .personal-pulse.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-.personal-stat.danger { border-color: color-mix(in srgb, var(--danger) 28%, var(--line)); }
+.personal-stat.danger { border-color: var(--line); border-top: 3px solid var(--danger); }
 .personal-stat.danger strong { color: var(--danger); }
 .review-clear.compact { min-height: 72px; }
 
