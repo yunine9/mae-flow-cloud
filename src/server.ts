@@ -110,10 +110,20 @@ export function createTaskServer(
         const needs = service.launchOptions().needs;
         const missing: Array<
           { key: string; label: string; where: "admin" | "me" }> = [];
-        if (needs.git_token && !options.auth.gitCredential(who.username)) {
+        const credential = needs.git_token
+          ? options.auth.gitCredential(who.username) : undefined;
+        if (needs.git_token && !credential) {
           missing.push({ key: "git_token", where: "me",
             label: "个人 Git 令牌未配置(我的工作 → 令牌),"
               + "没有它推不了代码、MR 也挂不到你名下" });
+        }
+        // 邮箱与令牌同级必填(用户拍板):commit 署名要它,平台按邮箱
+        // 对人——缺它推上去的提交是无主的。老账号只配过令牌没配邮箱,
+        // 在这儿被逮住补配,而不是等提交推上去才发现署名残缺。
+        if (needs.git_token && credential && !credential.email) {
+          missing.push({ key: "git_email", where: "me",
+            label: "个人 Git 邮箱未配置(我的工作 → 令牌,与令牌同卡),"
+              + "commit 署名与平台对人都要它" });
         }
         if (needs.luban_token && !options.auth.lubanToken(who.username)) {
           missing.push({ key: "luban_token", where: "me",
@@ -182,8 +192,6 @@ export function createTaskServer(
             options.auth!.setGitToken(
               viewer.username,
               String(body.token ?? ""),
-              body.git_username === undefined
-                ? undefined : String(body.git_username),
               body.git_email === undefined
                 ? undefined : String(body.git_email),
             );
@@ -407,6 +415,10 @@ export function createTaskServer(
         // 任务级可配(用户拍板):交付代码仓、交付方式(选项来自内核)、修复轮预算。
         const repo = body.repo === undefined ? undefined : String(body.repo);
         const lane = body.lane === undefined ? undefined : String(body.lane);
+        const ticket = body.ticket === undefined
+          ? undefined : String(body.ticket);
+        const baseline = body.baseline === undefined
+          ? undefined : String(body.baseline);
         const model = body.model
           ? {
               provider: String((body.model as { provider?: unknown })
@@ -433,7 +445,7 @@ export function createTaskServer(
         }
         try {
           return json(response, 201, service.create(requirement,
-            { account, repo, lane, model, repairRounds }));
+            { account, repo, lane, ticket, baseline, model, repairRounds }));
         } catch (error) {
           return json(response, 400, { error: String(error) });
         }

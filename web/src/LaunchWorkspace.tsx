@@ -23,6 +23,10 @@ export function LaunchWorkspace({
   // 预算。模型不给选——管理员统一配一个,这里只显示"这单用谁跑"。
   const [options, setOptions] = useState<LaunchOptions | null>(null);
   const [repo, setRepo] = useState("");
+  // 单号/基线分支:内核配置确认要的两项事实,下单一并收齐——
+  // 不让模型开工后再逐项来问(用户 2026-08-19 拍板,基线默认 master)。
+  const [ticket, setTicket] = useState("");
+  const [baseline, setBaseline] = useState("");
   // 交付方式下单就定(用户拍板:不让 agent 再问一遍);选项与默认值
   // 都来自内核,空串=等 options 到了再取第一项。
   const [lane, setLane] = useState("");
@@ -61,6 +65,8 @@ export function LaunchWorkspace({
         {
           repo: repo.trim() || undefined,
           lane,
+          ticket: ticket.trim() || undefined,
+          baseline: baseline.trim() || undefined,
           repairRounds: repairRounds.trim() === ""
             ? undefined : Number(repairRounds),
         },
@@ -153,6 +159,32 @@ export function LaunchWorkspace({
               </label>
             )}
             <div className="composer-actions">
+              {/* 单号/基线分支:下单收齐,模型开工不再逐项来问。 */}
+              {options?.ticket.enabled && (
+                <label className="account-field">
+                  <span>需求/问题单号{options.ticket.required ? "（必填）" : ""}</span>
+                  <input
+                    type="text"
+                    value={ticket}
+                    onChange={(event) => setTicket(event.target.value)}
+                    placeholder="如 REQ2026xxxx / DTS2026xxxx"
+                    spellCheck={false}
+                    required={options.ticket.required}
+                  />
+                </label>
+              )}
+              {options?.baseline.enabled && (
+                <label className="account-field">
+                  <span>基线分支</span>
+                  <input
+                    type="text"
+                    value={baseline}
+                    onChange={(event) => setBaseline(event.target.value)}
+                    placeholder={`默认 ${options.baseline.default}`}
+                    spellCheck={false}
+                  />
+                </label>
+              )}
               <label className="account-field">
                 <span>{session.role === "admin" ? "任务负责人" : "任务归属"}</span>
                 <input

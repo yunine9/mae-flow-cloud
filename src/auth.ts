@@ -154,12 +154,16 @@ export class LocalAuth {
     return { user: publicUser(stored) };
   }
 
-  /** 设置/更换/删除个人 Git 令牌。只写不读:调用方拿不回明文,
-   * 想看只有掩码(gitTokenHint)。空串=删除(连署名一起清)。 */
+  /** 设置/更换/删除个人 Git 令牌 + 署名邮箱。只写不读:调用方拿不回
+   * 明文,想看只有掩码(gitTokenHint)。空令牌=删除(连邮箱一起清)。
+   *
+   * **邮箱必填**(用户 2026-08-19 拍板):commit 署名要它,内网平台还
+   * 按邮箱对人——没有它推上去的提交是无主的。**用户名不另配**:git
+   * 用户名就是登录账号名(同一次拍板)——账号由管理员按平台用户名建,
+   * 再开一个"平台用户名"字段只会造出两个可以互相不一致的真相。 */
   setGitToken(
     username: string,
     token: string,
-    gitUsername?: string,
     gitEmail?: string,
   ): void {
     const stored = this.users.get(username);
@@ -174,15 +178,16 @@ export class LocalAuth {
         throw new Error("令牌过长");
       }
       const email = (gitEmail ?? "").trim();
-      if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      if (!email) {
+        throw new Error("平台邮箱必填:commit 署名与平台对人都要它");
+      }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
         throw new Error(`平台邮箱格式不对: ${email}`);
       }
       stored.git_token = trimmed;
-      const name = (gitUsername ?? "").trim();
-      if (name) stored.git_username = name;
-      else delete stored.git_username;
-      if (email) stored.git_email = email;
-      else delete stored.git_email;
+      // 旧版遗留的独立 git_username 顺手清掉:用户名以账号名为准。
+      delete stored.git_username;
+      stored.git_email = email;
     }
     this.persist();
   }
@@ -254,14 +259,12 @@ export class LocalAuth {
   /** 给界面回显的非密部分:掩码提示 + 平台用户名/邮箱。 */
   gitProfile(username: string): {
     git_token_hint?: string;
-    git_username?: string;
     git_email?: string;
   } {
     const stored = this.users.get(username);
     if (!stored?.git_token) return {};
     return {
       git_token_hint: this.gitTokenHint(username),
-      git_username: stored.git_username,
       git_email: stored.git_email,
     };
   }
@@ -275,7 +278,9 @@ export class LocalAuth {
     const stored = this.users.get(username);
     if (!stored?.git_token || stored.disabled) return undefined;
     return {
-      username: stored.git_username ?? stored.username,
+      // 用户名=账号名(用户拍板):账号由管理员按平台用户名建,不留
+      // 第二个可以与之不一致的字段。旧数据里的 git_username 不再读。
+      username: stored.username,
       password: stored.git_token,
       email: stored.git_email,
     };

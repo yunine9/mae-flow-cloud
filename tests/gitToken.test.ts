@@ -50,26 +50,25 @@ test("存储:只写不读,掩码可看,消费口给明文,禁用即失效", () =
   auth.bootstrapAdmin("admin", "admin-password-1");
   auth.createUser("zhang", "zhang-password-1", "developer");
 
-  auth.setGitToken("zhang", TOKEN);
+  // 邮箱必填(用户 2026-08-19 拍板):commit 署名与平台对人都要它,
+  // 只给令牌不给邮箱当场打回,不留"配了一半"的账号。
+  assert.throws(() => auth.setGitToken("zhang", TOKEN), /邮箱必填/);
+  auth.setGitToken("zhang", TOKEN, "zhang@corp.example");
   assert.equal(auth.gitTokenHint("zhang"), "••••8642");
   // 公开视图永远没有令牌的影子
   assert.ok(!JSON.stringify(auth.listUsers()).includes(TOKEN));
-  // 消费口:git 用户名默认=登录账号
+  // 消费口:git 用户名**就是**登录账号名(同一次拍板:账号由管理员按
+  // 平台用户名建,不留第二个可以与之不一致的字段)
   assert.deepEqual(auth.gitCredential("zhang"),
-    { username: "zhang", password: TOKEN, email: undefined });
-  // 平台 git 用户名/邮箱可以另配;邮箱是署名(平台按它认 commit)
-  auth.setGitToken("zhang", TOKEN, "zhang.san", "zhang@corp.example");
-  assert.equal(auth.gitCredential("zhang")!.username, "zhang.san");
-  assert.equal(auth.gitCredential("zhang")!.email, "zhang@corp.example");
-  // 回显口:掩码+非密的用户名/邮箱,没有明文
+    { username: "zhang", password: TOKEN, email: "zhang@corp.example" });
+  // 回显口:掩码+邮箱,没有明文
   const profile = auth.gitProfile("zhang");
   assert.deepEqual(profile, {
     git_token_hint: "••••8642",
-    git_username: "zhang.san",
     git_email: "zhang@corp.example",
   });
   // 邮箱格式不对当场打回
-  assert.throws(() => auth.setGitToken("zhang", TOKEN, "z", "不是邮箱"),
+  assert.throws(() => auth.setGitToken("zhang", TOKEN, "不是邮箱"),
     /邮箱格式/);
   // 重启(重新加载文件)后令牌还在——auth.json 是真相
   const revived = new LocalAuth(join(dir, "auth.json"));

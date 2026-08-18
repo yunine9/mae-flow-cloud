@@ -140,6 +140,42 @@ test("交付方式:选项与默认值都取自内核 flow.json,自造的当场�
     workflows, "表单选项必须与内核目录逐字一致");
 });
 
+test("单号/基线分支:下单收齐,基线默认 master,纯会话形态不摆这些框", () => {
+  // 用户 2026-08-19 拍板:这两项和交付方式一样在表单上一次给完,
+  // 不让模型开工后再逐项来问。单号必填与"交付仓必填"同口径;
+  // 基线分支给默认 master——多数单就交到 master,少数改一下即可。
+  const kernel = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-lf-ticket-")),
+    provider: "a", model: "a-1",
+    modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
+    host: { kernelRoot: "/tmp" },
+  });
+  assert.deepEqual(kernel.launchOptions().ticket,
+    { enabled: true, required: true });
+  assert.deepEqual(kernel.launchOptions().baseline,
+    { enabled: true, default: "master" });
+  assert.throws(() => kernel.create("没单号", { repo: "https://x/r.git" }),
+    /单号/);
+  assert.throws(() => kernel.create("坏单号",
+    { repo: "https://x/r.git", ticket: "REQ 123" }), /空白字符/);
+  const created = kernel.create("齐活",
+    { repo: "https://x/r.git", ticket: "REQ2026001" });
+  assert.equal(created.ticket, "REQ2026001");
+  assert.equal(created.baseline, "master", "不填基线就默认 master");
+  const picked = kernel.create("点名基线",
+    { repo: "https://x/r.git", ticket: "DTS9", baseline: "develop" });
+  assert.equal(picked.baseline, "develop");
+
+  // 纯会话形态:没有配置确认这回事,单号/基线的框都不该摆出来
+  const chat = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-lf-chat2-")),
+    provider: "a", model: "a-1",
+    modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
+  });
+  assert.equal(chat.launchOptions().ticket.enabled, false);
+  assert.equal(chat.create("纯会话不需要单号").ticket, undefined);
+});
+
 test("假小鲁班不索个人令牌;管理页切真端点后要求立刻恢复", () => {
   // 内网 agent 实测:演示形态(serve 自起假小鲁班)登进去第一件事就被
   // "先配个人通知令牌"挡住——假件收什么都行,那个令牌谁也不消费,

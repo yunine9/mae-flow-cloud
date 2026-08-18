@@ -71,8 +71,8 @@ export interface AuthUser {
   /** 个人 Git 令牌的掩码提示(••••末4位);没配则缺席。只写不读:
    * 明文永远不会出现在任何 API 响应里。 */
   git_token_hint?: string;
-  /** 平台用户名/邮箱(commit 署名,平台按邮箱认人)。非密,可回显。 */
-  git_username?: string;
+  /** 署名邮箱(必填,commit 归属与平台对人都按它)。git 用户名即登录
+   * 账号名,不另配。非密,可回显。 */
   git_email?: string;
   /** 个人通知令牌的掩码提示;同样只写不读。通知以令牌对应的人的
    * 身份发,所以按人配——管理员配一个服务号,大家收到的都是机器人。 */
@@ -122,23 +122,18 @@ export async function logout(): Promise<void> {
   await fetch("/auth/logout", { method: "POST" });
 }
 
-/** 设置/更换/删除(传空串)自己的 Git 令牌。回的只有掩码+非密署名。 */
+/** 设置/更换/删除(传空串)自己的 Git 令牌+署名邮箱(必填)。
+ * 回的只有掩码+邮箱;git 用户名即登录账号名,不另配。 */
 export async function putGitToken(
   token: string,
-  gitUsername?: string,
   gitEmail?: string,
 ): Promise<{
   git_token_hint?: string;
-  git_username?: string;
   git_email?: string;
 }> {
   const response = await fetch("/auth/me/git-token", {
     method: "PUT",
-    body: JSON.stringify({
-      token,
-      git_username: gitUsername,
-      git_email: gitEmail,
-    }),
+    body: JSON.stringify({ token, git_email: gitEmail }),
   });
   if (!response.ok) throw new Error(await errorText(response));
   return response.json();
@@ -335,6 +330,10 @@ export interface LaunchOptions {
   /** enabled=false 表示本部署不接代码仓(纯会话演练),表单不显示。
    * required=true 时必填——本部署不设默认仓,每单写明交到哪儿。 */
   repo: { enabled: boolean; required: boolean };
+  /** 单号/基线分支:内核配置确认要的两项事实,下单一并收齐——
+   * 不让模型开工后再逐项来问(和交付方式同一逻辑)。 */
+  ticket: { enabled: boolean; required: boolean };
+  baseline: { enabled: boolean; default: string };
   /** 没配齐的配置项:where=admin 归管理员,me 归本人。非空=不给下单。 */
   blockers: Array<{ key: string; label: string; where: "admin" | "me" }>;
   /** 交付方式:**取自内核 flow.json**(key=内核代号,label=给人看的),
@@ -356,6 +355,8 @@ export async function createTask(
   extras?: {
     repo?: string;
     lane?: string;
+    ticket?: string;
+    baseline?: string;
     model?: { provider: string; model: string };
     repairRounds?: number;
   },
@@ -367,6 +368,8 @@ export async function createTask(
       account: account || undefined,
       repo: extras?.repo || undefined,
       lane: extras?.lane,
+      ticket: extras?.ticket || undefined,
+      baseline: extras?.baseline || undefined,
       model: extras?.model,
       repair_rounds: extras?.repairRounds,
     }),

@@ -304,7 +304,8 @@ test("服务形态全从管理页来:平台/免编译零启动项跑通交付", 
   });
   try {
     const id = service.create("交付 REQ9:纯界面配置",
-      { repo: platform.barePath }).id;   // 仓按单填(没有默认仓)
+      // 仓与单号按单填(没有默认仓;单号必填与仓同口径)
+      { repo: platform.barePath, ticket: "REQ9" }).id;
     await until(() => service.get(id)!.status === "await_merge",
       "界面配置驱动交付收轮");
     const task = service.get(id)!;

@@ -100,6 +100,11 @@ export interface TaskSummary {
    * 内核仍会举卡(流程规则是内核的,宿主不删它的问题),对得上就自动
    * 交卷(预答,不是代判)。 */
   lane?: string;
+  /** 需求/问题单号(REQ/DTS)。下单就给(用户 2026-08-19 拍板),
+   * 开场当事实喂给模型——配置确认不再为它开口问。 */
+  ticket?: string;
+  /** 基线分支,默认 master(同一次拍板)。 */
+  baseline?: string;
   /** 下单时选的模型;缺席=跟随服务当前默认(设置层/部署层)。
    * 记在任务上是为了两件事:重启续跑不漂移、页面能说清"谁跑的"。 */
   model_choice?: { provider: string; model: string };
@@ -921,6 +926,10 @@ export class TaskService {
     /** 当前默认修复轮:数字=手刹上限;缺席=不限轮(默认形态)。 */
     repair_rounds?: number;
     repo: { enabled: boolean; required: boolean };
+    /** 单号/基线分支:内核配置确认要的两项事实,表单下单就收——
+     * 和交付方式同一逻辑,不让模型开工后逐项来问。 */
+    ticket: { enabled: boolean; required: boolean };
+    baseline: { enabled: boolean; default: string };
     /** 交付方式选项:**现读内核 flow.json**,不在 TS 侧另抄一份。
      * 空数组=读不到内核定义,表单就别摆出选择(下单不预选,卡到时
      * 老老实实问人)。 */
@@ -952,6 +961,8 @@ export class TaskService {
         ?? this.options.delivery?.repairRounds,
       // 没接内核模式=任务不碰代码仓,表单别摆出输入框骗人。
       repo: { enabled: !!this.options.host, required: !!this.options.host },
+      ticket: { enabled: !!this.options.host, required: !!this.options.host },
+      baseline: { enabled: !!this.options.host, default: "master" },
       workflows: workflowChoices(this.options.host?.kernelRoot),
       blockers,
       needs: {
@@ -988,6 +999,11 @@ export class TaskService {
       account?: string;
       repo?: string;
       lane?: string;
+      /** 需求/问题单号(REQ/DTS):内核配置确认的"单号"项,下单就给,
+       * 不让模型开工后再来问一遍(用户 2026-08-19 拍板)。 */
+      ticket?: string;
+      /** 基线分支,默认 master(同一次拍板)。 */
+      baseline?: string;
       model?: { provider: string; model: string };
       repairRounds?: number;
     } = {},
@@ -1003,6 +1019,23 @@ export class TaskService {
         && !laneChoices.includes(options.lane)) {
       throw new Error(
         `交付方式只能是 ${laneChoices.join("/")},收到: ${options.lane}`);
+    }
+    // 单号/基线分支:内核配置确认要的两项事实,下单就收齐(和交付方式
+    // 同一逻辑:能在表单上一次给完的,不让模型开工后逐项来问)。单号
+    // 只在内核模式必填——纯会话形态没有配置确认这回事。校验只做"像不
+    // 像个单号"的最低限(非空、无空白);REQ→feat/DTS→fix 的推导是
+    // 内核的判定,宿主不代判。
+    const ticket = (options.ticket ?? "").trim() || undefined;
+    if (ticket && /\s/.test(ticket)) {
+      throw new Error("单号不能含空白字符");
+    }
+    if (!ticket && this.options.host && !this.options.host.repoPath) {
+      throw new Error("请填写需求/问题单号(REQ/DTS)——分支名和提交信息都要用它");
+    }
+    const baseline = (options.baseline ?? "").trim()
+      || (this.options.host ? "master" : undefined);
+    if (baseline && /\s/.test(baseline)) {
+      throw new Error("基线分支不能含空白字符");
     }
     const repo = (options.repo ?? "").trim() || undefined;
     // 交付仓必填(用户 2026-08-18 拍板:没有"默认仓"这回事)。一个
@@ -1066,6 +1099,8 @@ export class TaskService {
       // 用户拍板:交付方式下单就定,不让 agent 再问一遍。默认取内核
       // 选项里的第一项(通常是"完整开发"),读不到内核就不预选。
       lane: options.lane ?? laneChoices[0],
+      ticket,
+      baseline,
       model_choice: options.model,
       repair_rounds: options.repairRounds,
     };
@@ -1656,6 +1691,23 @@ export class TaskService {
       // 的是/否卡(内网实测),而是/否里没有选项原文,预答对不上号,
       // 卡真去等人:用户明明下单时答过,中途又被问一遍。宿主不替内核
       // 判卡(是/否算不算数是内核的事),但可以不让模型把卡出歪。
+      // 配置事实(用户下单时已给):单号/基线分支/工号不再让模型开口
+      // 问——配置确认"一次问一项事实"的前提是事实缺席,这些没缺。取值
+      // 口径仍归内核(REQ→feat/DTS→fix 的推导、分支名派生都是它的判定,
+      // 宿主只递事实);确认卡照出,用户最终把关的那一道不省。
+      const facts: string[] = [];
+      if (task.summary.ticket) facts.push(`单号:${task.summary.ticket}`);
+      if (task.summary.baseline) {
+        facts.push(`基线分支:${task.summary.baseline}`);
+      }
+      if (gitIdentity) {
+        facts.push(`工号(git 用户名,已写进仓库配置):${gitIdentity.username}`);
+      }
+      if (this.options.host && facts.length) {
+        prompt = `${prompt}\n\n配置事实(用户下单时已提供,配置确认直接`
+          + `采用,不要再逐项询问):${facts.join(";")}。其余配置项照`
+          + `内核口径取值或询问。`;
+      }
       if (this.options.host && task.summary.lane) {
         prompt = `${prompt}\n\n交付方式用户已在下单时选定:`
           + `${task.summary.lane}。流程里问到交付方式时,照内核指引`
