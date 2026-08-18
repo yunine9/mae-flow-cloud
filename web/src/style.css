@@ -416,6 +416,7 @@ svg {
   justify-content: flex-end;
   gap: 10px;
 }
+.header-launch-gate { display: grid; justify-items: end; gap: 5px; }
 .header-launch {
   height: 40px;
   padding: 0 15px;
@@ -441,6 +442,20 @@ svg {
   box-shadow: none; cursor: not-allowed; transform: none;
 }
 .header-launch svg { width: 16px; height: 16px; }
+.header-unlock {
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--accent);
+  border: 0;
+  background: transparent;
+  font-size: 10px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.header-unlock:hover { color: var(--accent-hover); text-decoration: underline; }
+.header-unlock svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.5; }
 .attention-pulse {
   width: 8px;
   height: 8px;
@@ -687,26 +702,43 @@ svg {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
-  align-items: start;
+  align-items: stretch;
 }
 .primary-work-panel {
   min-width: 0;
   margin: 0;
   padding: 17px;
+  display: flex;
+  flex-direction: column;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--surface) 82%, var(--page));
-  box-shadow: var(--shadow-xs);
+  background: var(--surface);
+  box-shadow: inset 0 2px 0 color-mix(in srgb, var(--attention) 72%, transparent), var(--shadow-xs);
 }
 .primary-work-panel .section-head { margin-bottom: 12px; }
-.primary-work-panel .review-clear { min-height: 90px; padding: 15px 16px; }
+.primary-work-panel .review-clear,
+.primary-work-panel .review-clear.compact {
+  min-height: 94px;
+  flex: 1;
+  padding: 15px 16px;
+  border-color: var(--line);
+  background: color-mix(in srgb, var(--success-soft) 42%, var(--surface-soft));
+}
 .primary-work-panel .task-summary { padding-left: 18px; padding-right: 15px; }
 .primary-work-panel .task-overline { flex-wrap: wrap; }
+.progress-work-panel {
+  box-shadow: inset 0 2px 0 color-mix(in srgb, var(--active) 72%, transparent), var(--shadow-xs);
+}
 .progress-work-panel .section-count {
   color: var(--active);
   border-color: color-mix(in srgb, var(--active) 22%, var(--line));
   background: var(--active-soft);
 }
+.progress-work-panel .review-clear {
+  border-color: color-mix(in srgb, var(--active) 16%, var(--line));
+  background: color-mix(in srgb, var(--active-soft) 46%, var(--surface-soft));
+}
+.progress-work-panel .review-clear > span { background: var(--active); }
 
 /* A run's artifacts belong to the task, so they get a dedicated full workspace. */
 .artifact-workspace {
@@ -2202,6 +2234,7 @@ pre {
     gap: 14px;
   }
   .workspace-header-actions { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
+  .header-launch-gate { justify-items: start; }
   .workspace-header h1 { font-size: 27px; }
   .workspace-header p { font-size: 12.5px; }
   .workspace-main { padding: 0 18px 52px; }
