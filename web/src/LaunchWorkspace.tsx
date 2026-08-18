@@ -18,6 +18,8 @@ export function LaunchWorkspace({
   const [requirement, setRequirement] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [optionsLoading, setOptionsLoading] = useState(true);
+  const [optionsError, setOptionsError] = useState("");
   // 任务级可填项(2026-08-18 重定口径):交付仓**必填**、交付方式、修复轮
   // 预算。模型不给选——管理员统一配一个,这里只显示"这单用谁跑"。
   const [options, setOptions] = useState<LaunchOptions | null>(null);
@@ -33,10 +35,18 @@ export function LaunchWorkspace({
   // 配置没配齐不让下单:缺项来自后端(服务级+个人级),前端只负责
   // 摆在明面上。后端同样硬拦——绕过界面打接口一样被 409 挡住。
   const blockers = options?.blockers ?? [];
-  const blocked = blockers.length > 0;
+  const blocked = optionsLoading || blockers.length > 0 || !!optionsError;
 
   useEffect(() => {
-    getLaunchOptions().then(setOptions).catch(() => setOptions(null));
+    let alive = true;
+    void getLaunchOptions().then((result) => {
+      if (alive) setOptions(result);
+    }).catch(() => {
+      if (alive) setOptionsError("未能读取任务配置，请刷新后重试");
+    }).finally(() => {
+      if (alive) setOptionsLoading(false);
+    });
+    return () => { alive = false; };
   }, []);
 
   useEffect(() => {
@@ -54,7 +64,7 @@ export function LaunchWorkspace({
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (!requirement.trim() || submitting) return;
+    if (!requirement.trim() || submitting || blocked) return;
     setSubmitting(true);
     setError("");
     try {
@@ -101,136 +111,142 @@ export function LaunchWorkspace({
 
       <main className="launch-workspace-body">
         <section className="launch-panel" aria-labelledby="launch-title">
-          <div className="launch-copy">
+          <aside className="launch-copy">
             <span className="section-kicker">CREATE WORK</span>
             <h2 id="launch-title">描述要交付的结果</h2>
             <p>任务会自动归入你的工作台，人工节点也会回到你的待核对列表。</p>
-          </div>
-          {blocked && (
-            <div className="launch-blockers" role="alert">
-              <strong>先把配置补齐,才能下单</strong>
-              <ul>
-                {blockers.map((item) => (
-                  <li key={item.key}>
-                    <span className={`blocker-where blocker-${item.where}`}>
-                      {item.where === "admin" ? "管理员" : "你自己"}
-                    </span>
-                    {item.label}
-                  </li>
-                ))}
-              </ul>
-              <small>
-                这些都是"以谁的身份做事"的凭据:Git 令牌决定推送与 MR
-                挂在谁名下,通知令牌决定消息以谁的身份发——密钥只写不读,
-                管理员也代配不了,只能各人自己配一次。
-              </small>
+            <ol className="launch-guide" aria-label="创建任务步骤">
+              <li><i>1</i><span><strong>说清结果</strong><small>描述完成标准，不必编排 Agent 步骤</small></span></li>
+              <li><i>2</i><span><strong>锁定交付</strong><small>指定代码仓、单号与基线</small></span></li>
+              <li><i>3</i><span><strong>确认执行</strong><small>负责人和交付方式一次选好</small></span></li>
+            </ol>
+            <small className="launch-copy-foot">提交后可在“我的工作”持续跟进和控制任务。</small>
+          </aside>
+
+          <div className="launch-form-shell">
+            <div className="launch-form-intro">
+              <div><span>NEW DELIVERY</span><strong>填写任务信息</strong></div>
+              <small><i aria-hidden /> 必填项请一次填完整</small>
             </div>
-          )}
-          <form className="composer" onSubmit={submit}>
-            <label className="requirement-field">
-              <span>任务需求</span>
-              <textarea
-                value={requirement}
-                onChange={(event) => setRequirement(event.target.value)}
-                placeholder="例如：交付 REQ2026xxxx，修复通知模板变量缺失问题并补齐单元测试"
-                rows={5}
-                autoFocus
-                required
-              />
-            </label>
-            {options?.repo.enabled && (
-              <label className="repo-field">
-                <span>交付代码仓{options.repo.required ? "（必填）" : ""}</span>
-                <input
-                  type="text"
-                  value={repo}
-                  onChange={(event) => setRepo(event.target.value)}
-                  placeholder="代码仓地址（如 https://codehub…/xxx.git）"
-                  spellCheck={false}
-                  required={options.repo.required}
-                />
-                <small className="repo-field-note">
-                  每单都要写明交到哪个仓（本部署不设默认仓，避免下错地方）；
-                  地址不要带账号密码，推送鉴权走个人 Git 令牌。
-                </small>
-              </label>
+
+            {optionsLoading && <div className="launch-loading">正在读取任务配置…</div>}
+            {optionsError && <div className="launch-blockers" role="alert"><strong>暂时无法发起</strong><p>{optionsError}</p></div>}
+            {!optionsLoading && blockers.length > 0 && (
+              <div className="launch-blockers" role="alert">
+                <div className="launch-blocker-head">
+                  <span aria-hidden>!</span>
+                  <div><strong>还差 {blockers.length} 项配置</strong><small>补齐后即可发起任务</small></div>
+                </div>
+                <ul>
+                  {blockers.map((item) => (
+                    <li key={item.key}>
+                      <span className={`blocker-where blocker-${item.where}`}>
+                        {item.where === "admin" ? "管理员" : "你自己"}
+                      </span>
+                      {item.label}
+                    </li>
+                  ))}
+                </ul>
+                <p>个人凭据只能由本人在“我的工作”配置，密钥不会回显。</p>
+              </div>
             )}
-            <div className="composer-actions">
-              {/* 单号/基线分支:下单收齐,模型开工不再逐项来问。 */}
-              {options?.ticket.enabled && (
-                <label className="account-field">
-                  <span>需求/问题单号{options.ticket.required ? "（必填）" : ""}</span>
-                  <input
-                    type="text"
-                    value={ticket}
-                    onChange={(event) => setTicket(event.target.value)}
-                    placeholder="如 REQ2026xxxx / DTS2026xxxx"
-                    spellCheck={false}
-                    required={options.ticket.required}
+
+            <form className="composer launch-composer" onSubmit={submit}>
+              <section className="launch-form-section launch-requirement-section">
+                <div className="launch-section-head"><i>01</i><div><strong>交付目标</strong><small>用结果和验收标准描述任务</small></div><em>必填</em></div>
+                <label className="requirement-field">
+                  <span>任务需求</span>
+                  <textarea
+                    value={requirement}
+                    onChange={(event) => setRequirement(event.target.value)}
+                    placeholder="例如：交付 REQ2026xxxx，修复通知模板变量缺失问题并补齐单元测试"
+                    rows={5}
+                    autoFocus
+                    required
                   />
                 </label>
+              </section>
+
+              {options && (options.repo.enabled || options.ticket.enabled || options.baseline.enabled) && (
+                <section className="launch-form-section">
+                  <div className="launch-section-head"><i>02</i><div><strong>交付定位</strong><small>Agent 据此进入正确仓库和分支</small></div></div>
+                  {options.repo.enabled && (
+                    <label className="repo-field">
+                      <span>交付代码仓{options.repo.required ? "（必填）" : ""}</span>
+                      <input
+                        type="text"
+                        value={repo}
+                        onChange={(event) => setRepo(event.target.value)}
+                        placeholder="https://codehub…/team/project.git"
+                        spellCheck={false}
+                        required={options.repo.required}
+                      />
+                      <small className="repo-field-note">请填写纯仓库地址；推送鉴权使用你的个人 Git 令牌。</small>
+                    </label>
+                  )}
+                  <div className="launch-field-grid">
+                    {options.ticket.enabled && (
+                      <label className="account-field">
+                        <span>需求/问题单号{options.ticket.required ? "（必填）" : ""}</span>
+                        <input type="text" value={ticket}
+                          onChange={(event) => setTicket(event.target.value)}
+                          placeholder="REQ2026xxxx / DTS2026xxxx" spellCheck={false}
+                          required={options.ticket.required} />
+                      </label>
+                    )}
+                    {options.baseline.enabled && (
+                      <label className="account-field">
+                        <span>基线分支</span>
+                        <input type="text" value={baseline}
+                          onChange={(event) => setBaseline(event.target.value)}
+                          placeholder={`默认 ${options.baseline.default}`} spellCheck={false} />
+                      </label>
+                    )}
+                  </div>
+                </section>
               )}
-              {options?.baseline.enabled && (
-                <label className="account-field">
-                  <span>基线分支</span>
-                  <input
-                    type="text"
-                    value={baseline}
-                    onChange={(event) => setBaseline(event.target.value)}
-                    placeholder={`默认 ${options.baseline.default}`}
-                    spellCheck={false}
-                  />
-                </label>
-              )}
-              {(options?.workflows.length ?? 0) > 0 && (
-                // 选项来自内核 flow.json(不在前端另抄一份):下单选定，
-                // 流程里那张“交付方式”卡由系统拿这个答案自动交卷。
-                <label className="account-field">
-                  <span>交付方式</span>
-                  <select
-                    className="launch-model-select"
-                    value={lane || options!.workflows[0].label}
-                    onChange={(event) => setLane(event.target.value)}
-                  >
-                    {options!.workflows.map((item) => (
-                      <option key={item.key} value={item.label}>
-                        {item.label}
-                        {item.steps !== undefined
-                          ? `（${item.steps} 步 · 拍板 ${item.acks} 次）` : ""}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
-              {options?.model && (
-                // 模型不给选(管理员统一配),只告诉人这单谁来跑。
-                <label className="account-field">
-                  <span>执行模型</span>
-                  <input type="text" value={options.model.model} readOnly />
-                </label>
-              )}
-              {options && (
-                <label className="account-field repair-field">
-                  <span>修复轮预算</span>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    value={repairRounds}
-                    onChange={(event) => setRepairRounds(event.target.value)}
-                    placeholder={options.repair_rounds !== undefined
-                      ? `默认 ${options.repair_rounds}（0=关）`
-                      : "默认不限轮（0=关）"}
-                  />
-                </label>
-              )}
-              <button type="submit" disabled={submitting || blocked}>
-                <span>{submitting ? "正在发起"
-                  : blocked ? "配置未完成" : "确认发起"}</span>
-                <svg viewBox="0 0 20 20" aria-hidden><path d="M4 10h11M11 6l4 4-4 4" /></svg>
-              </button>
-            </div>
-            {error && <div className="composer-error" role="alert">{error}</div>}
-          </form>
+              <section className="launch-form-section">
+                <div className="launch-section-head"><i>03</i><div><strong>执行设置</strong><small>选定交付方式和修复预算;任务自动归属你本人</small></div></div>
+                <div className="launch-field-grid launch-settings-grid">
+                  {(options?.workflows.length ?? 0) > 0 && (
+                    <label className="account-field">
+                      <span>交付方式</span>
+                      <select className="launch-model-select"
+                        value={lane || options!.workflows[0].label}
+                        onChange={(event) => setLane(event.target.value)}>
+                        {options!.workflows.map((item) => (
+                          <option key={item.key} value={item.label}>
+                            {item.label}
+                            {item.steps !== undefined
+                              ? `（${item.steps} 步 · 拍板 ${item.acks} 次）` : ""}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                  {options && (
+                    <label className="account-field repair-field">
+                      <span>修复轮预算</span>
+                      <input type="text" inputMode="numeric" value={repairRounds}
+                        onChange={(event) => setRepairRounds(event.target.value)}
+                        placeholder={options.repair_rounds !== undefined
+                          ? `默认 ${options.repair_rounds}（0=关）`
+                          : "默认不限轮（0=关）"} />
+                    </label>
+                  )}
+                </div>
+              </section>
+
+              {error && <div className="composer-error" role="alert">{error}</div>}
+              <footer className="launch-submit-bar">
+                <div><strong>{blocked ? "暂时不能发起" : "信息确认后即可启动"}</strong><small>{blocked ? "请先处理上方配置项" : "任务创建后会自动进入你的工作台"}</small></div>
+                <button type="submit" disabled={submitting || blocked}>
+                  <span>{submitting ? "正在发起" : optionsLoading ? "读取配置中" : blocked ? "配置未完成" : "确认发起"}</span>
+                  <svg viewBox="0 0 20 20" aria-hidden><path d="M4 10h11M11 6l4 4-4 4" /></svg>
+                </button>
+              </footer>
+            </form>
+          </div>
         </section>
       </main>
     </section>

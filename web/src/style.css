@@ -702,7 +702,8 @@ svg {
 .launch-panel {
   margin-bottom: 30px;
   display: grid;
-  grid-template-columns: minmax(225px, .68fr) minmax(0, 1.75fr);
+  grid-template-columns: 270px minmax(0, 1fr);
+  align-items: stretch;
   overflow: hidden;
   background: var(--surface);
   border: 1px solid var(--line);
@@ -710,15 +711,50 @@ svg {
   box-shadow: var(--shadow-sm);
 }
 .launch-copy {
-  padding: 26px 28px;
+  min-width: 0;
+  padding: 34px 30px 28px;
+  display: flex;
+  flex-direction: column;
   color: #b2bbca;
   background:
     radial-gradient(circle at 100% 0, rgba(119, 119, 236, .28), transparent 48%),
     linear-gradient(145deg, #171e2c, #111722);
 }
 .launch-copy .section-kicker { color: #8d8df3; }
-.launch-copy h2 { color: #fff; font-size: 21px; }
-.launch-copy p { margin: 8px 0 0; font-size: 12px; line-height: 1.65; }
+.launch-copy h2 { margin-top: 9px; color: #fff; font-size: 23px; line-height: 1.25; }
+.launch-copy > p { margin: 11px 0 0; color: #9da8b9; font-size: 12px; line-height: 1.75; }
+.launch-guide {
+  margin: 38px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 22px;
+  list-style: none;
+}
+.launch-guide li { position: relative; display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 11px; }
+.launch-guide li:not(:last-child)::after {
+  content: ""; position: absolute; top: 28px; bottom: -18px; left: 12px;
+  width: 1px; background: rgba(141, 141, 243, .24);
+}
+.launch-guide i {
+  position: relative; z-index: 1; width: 26px; height: 26px; display: grid;
+  place-items: center; color: #aaaaf6; border: 1px solid rgba(141, 141, 243, .34);
+  border-radius: 50%; background: #171e2c; font: 700 9px ui-monospace, monospace;
+}
+.launch-guide span { min-width: 0; display: grid; gap: 3px; }
+.launch-guide strong { color: #e6ebf3; font-size: 11.5px; }
+.launch-guide small { color: #7f899a; font-size: 9.5px; line-height: 1.5; }
+.launch-copy-foot { margin-top: auto; padding-top: 34px; color: #737e90; font-size: 9.5px; line-height: 1.55; }
+.launch-form-shell { min-width: 0; padding: 24px 26px 26px; background: var(--surface); }
+.launch-form-intro {
+  min-height: 42px; margin-bottom: 16px; display: flex; align-items: center;
+  justify-content: space-between; gap: 18px;
+}
+.launch-form-intro > div { display: grid; gap: 3px; }
+.launch-form-intro > div > span { color: var(--accent); font: 700 8.5px ui-monospace, monospace; letter-spacing: .14em; }
+.launch-form-intro strong { color: var(--text-strong); font-size: 15px; }
+.launch-form-intro > small { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 9.5px; }
+.launch-form-intro > small i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.launch-loading { margin-bottom: 14px; padding: 13px 14px; color: var(--muted); border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); font-size: 10.5px; }
 .composer { padding: 22px 24px; }
 .composer label { display: block; }
 .composer label > span {
@@ -751,6 +787,30 @@ svg {
   background: var(--surface);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
+.launch-composer { padding: 0; display: grid; gap: 12px; }
+.launch-form-section {
+  min-width: 0; padding: 17px 18px 18px; border: 1px solid var(--line);
+  border-radius: 12px; background: color-mix(in srgb, var(--surface-soft) 72%, var(--surface));
+}
+.launch-section-head {
+  margin-bottom: 14px; display: flex; align-items: center; gap: 9px;
+}
+.launch-section-head > i {
+  width: 25px; height: 25px; display: grid; place-items: center; flex: none;
+  color: var(--accent); border-radius: 7px; background: var(--accent-soft);
+  font: 750 8.5px ui-monospace, monospace;
+}
+.launch-section-head > div { min-width: 0; display: grid; gap: 2px; }
+.launch-section-head strong { color: var(--text-strong); font-size: 12px; }
+.launch-section-head small { color: var(--muted); font-size: 9.5px; }
+.launch-section-head em {
+  margin-left: auto; padding: 2px 7px; color: var(--attention);
+  border-radius: 999px; background: var(--attention-soft); font-size: 8.5px;
+  font-style: normal; font-weight: 700;
+}
+.launch-requirement-section textarea { min-height: 132px; resize: vertical; font-size: 12.5px; }
+.launch-field-grid { margin-top: 12px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.launch-settings-grid { margin-top: 0; }
 .composer-actions {
   /* 字段可增可减(模型下拉只在多于一个模型时出现):弹性换行,
    * 按钮永远收尾。 */
@@ -761,7 +821,7 @@ svg {
   gap: 12px;
 }
 .composer-actions .account-field { flex: 1 1 160px; min-width: 150px; }
-.repo-field { margin-top: 12px; display: grid; gap: 6px; }
+.repo-field { display: grid; gap: 6px; }
 .repo-field input { width: 100%; }
 .repo-field-note { color: var(--muted); font-size: 10.5px; }
 .composer-actions .account-field input { width: 100%; }
@@ -808,28 +868,35 @@ svg {
 /* 配置未配齐:摆在下单表单最上面,醒目但不吓人——它不是错误,
    是"还差两步"。按钮同时禁用,后端也会 409 拦住绕过界面的调用。 */
 .launch-blockers {
-  margin-bottom: 18px;
-  padding: 14px 16px;
-  border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  margin-bottom: 14px;
+  padding: 13px 14px;
+  border: 1px solid color-mix(in srgb, var(--attention) 35%, var(--line));
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--attention-soft) 30%, var(--surface));
 }
-.launch-blockers strong { display: block; margin-bottom: 8px; font-size: 14px; }
-.launch-blockers ul { margin: 0 0 8px; padding-left: 0; list-style: none; }
+.launch-blocker-head { display: flex; align-items: center; gap: 10px; }
+.launch-blocker-head > span {
+  width: 25px; height: 25px; display: grid; place-items: center; flex: none;
+  color: var(--attention); border-radius: 8px; background: var(--attention-soft);
+  font-size: 11px; font-weight: 800;
+}
+.launch-blocker-head > div { display: grid; gap: 2px; }
+.launch-blockers strong { color: var(--text-strong); font-size: 11.5px; }
+.launch-blocker-head small { color: var(--muted); font-size: 9px; }
+.launch-blockers ul { margin: 10px 0 0; padding-left: 0; display: grid; gap: 5px; list-style: none; }
 .launch-blockers li {
   display: flex;
   gap: 8px;
   align-items: baseline;
-  margin-bottom: 6px;
-  font-size: 13px;
+  font-size: 10.5px;
   line-height: 1.5;
 }
-.launch-blockers small { color: var(--muted); font-size: 12px; line-height: 1.6; }
+.launch-blockers > p { margin: 9px 0 0; color: var(--muted); font-size: 9.5px; line-height: 1.5; }
 .blocker-where {
   flex: none;
   padding: 1px 8px;
   border-radius: 999px;
-  font-size: 11px;
+  font-size: 9px;
   font-weight: 600;
 }
 .blocker-admin {
@@ -850,10 +917,26 @@ svg {
     var(--page);
 }
 .launch-workspace-body > .launch-panel {
-  width: min(980px, 100%);
+  width: min(1120px, 100%);
   margin: 0 auto;
 }
-.launch-workspace .composer textarea { min-height: 170px; }
+.launch-submit-bar {
+  min-height: 62px; padding: 13px 2px 0; display: flex; align-items: center;
+  justify-content: space-between; gap: 16px; border-top: 1px solid var(--line);
+}
+.launch-submit-bar > div { display: grid; gap: 3px; }
+.launch-submit-bar > div strong { color: var(--text-strong); font-size: 10.5px; }
+.launch-submit-bar > div small { color: var(--muted); font-size: 9px; }
+.launch-submit-bar > button {
+  height: 40px; min-width: 126px; padding: 0 16px; display: inline-flex;
+  align-items: center; justify-content: center; gap: 9px; color: #fff;
+  border: 0; border-radius: 9px; background: var(--accent); font-size: 11px;
+  font-weight: 750; box-shadow: 0 6px 16px color-mix(in srgb, var(--accent) 23%, transparent);
+  cursor: pointer;
+}
+.launch-submit-bar > button:hover:not(:disabled) { background: var(--accent-hover); transform: translateY(-1px); }
+.launch-submit-bar > button:disabled { opacity: .44; box-shadow: none; cursor: not-allowed; }
+.launch-submit-bar > button svg { width: 16px; height: 16px; }
 
 /* Current task list */
 .task-section { margin-top: 4px; }
@@ -1864,7 +1947,12 @@ pre {
   .pulse-card:first-child, .history-metric:first-child { grid-row: span 2; }
   .launch-panel { grid-template-columns: 1fr; }
   .user-create-card { grid-template-columns: 1fr; }
-  .launch-copy { padding: 20px 24px; }
+  .launch-copy { padding: 22px 24px; }
+  .launch-copy > p { max-width: 660px; }
+  .launch-guide { margin-top: 22px; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+  .launch-guide li:not(:last-child)::after { display: none; }
+  .launch-copy-foot { display: none; }
+  .launch-form-shell { padding: 22px 24px 24px; }
   .history-table-head, .history-row {
     grid-template-columns: minmax(220px, 2fr) minmax(130px, 1fr) 80px 90px;
   }
@@ -1928,7 +2016,16 @@ pre {
   .personal-pulse { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .personal-stat { min-height: 82px; padding: 12px; flex-direction: column; align-items: flex-start; }
   .launch-copy { padding: 18px 20px; }
+  .launch-copy h2 { font-size: 20px; }
+  .launch-guide { display: none; }
+  .launch-form-shell { padding: 17px 14px 20px; }
+  .launch-form-intro > small { display: none; }
+  .launch-form-section { padding: 15px 14px 16px; }
+  .launch-field-grid { grid-template-columns: 1fr; gap: 10px; }
+  .launch-submit-bar { align-items: stretch; flex-direction: column; }
+  .launch-submit-bar > button { width: 100%; }
   .composer { padding: 18px; }
+  .launch-composer { padding: 0; }
   .composer-actions { grid-template-columns: 1fr; }
   .launch-workspace-body { padding: 20px 14px 36px; }
   .task-summary { min-height: 78px; padding: 14px 14px 10px 17px; gap: 10px; }
