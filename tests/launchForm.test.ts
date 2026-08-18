@@ -88,9 +88,9 @@ test("配置缺项:只拦真会咬人的那几样,文案说清去哪配", () => 
     "接了代码仓就要个人 Git 令牌");
   assert.equal(kernel.launchOptions().needs.luban_token, false,
     "没接通知端点就别要通知令牌");
-  // 缺项文案要说清去哪配、以及不配会怎样,不能只报一个字段名
+  // 缺项文案要说清由谁处理、以及不处理会怎样,不能只报一个字段名。
   for (const item of kernel.launchOptions().blockers) {
-    assert.ok(/管理页|我的工作/.test(item.label) && item.label.includes(";"),
+    assert.ok(/管理页|我的工作|部署维护/.test(item.label) && /；|;/.test(item.label),
       `缺项文案没说清去哪配/后果: ${item.label}`);
   }
   // 纯会话形态(不接仓):平台与 Git 令牌都不该被要求
@@ -191,11 +191,11 @@ test("单号/基线分支:下单收齐,基线默认 master,纯会话形态不摆
   assert.equal(chat.create("纯会话不需要单号").ticket, undefined);
 });
 
-test("假小鲁班不索个人令牌;管理页切真端点后要求立刻恢复", () => {
+test("假小鲁班不索个人令牌;部署切真端点后要求立刻恢复", () => {
   // 内网 agent 实测:演示形态(serve 自起假小鲁班)登进去第一件事就被
   // "先配个人通知令牌"挡住——假件收什么都行,那个令牌谁也不消费,
   // 这是一道谁也过不去也不必过的假门。判定跟着**生效端点**走:
-  // 管理页一旦热改成真端点,要求立刻恢复(真件确实按令牌认人)。
+  // 部署切成真端点后要求立刻恢复(真件确实按令牌认人)。
   let override: { endpoint?: string } = {};
   const service = new TaskService({
     dataDir: mkdtempSync(join(tmpdir(), "mfc-lf-fake-luban-")),

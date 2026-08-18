@@ -281,7 +281,7 @@ export function App() {
     profile: { title: "个人设置", description: "集中管理任务审批方式、CodeHub 提交身份和小鲁班通知。" },
     history: { title: "交付历史", description: "从投影读侧回看跨生命周期的任务与交付记录。" },
     users: { title: "账号管理", description: "创建本地账号并分配管理员或开发权限。" },
-    settings: { title: "服务设置", description: "运行参数、通知投递与模型网关；改了即刻安全生效，密钥只写不读。" },
+    settings: { title: "服务设置", description: "集中管理模型网关和团队运行策略；部署链路在此只读自检。" },
   }[view];
   const relevantWaiting = view === "mine"
     ? myWaiting.length + pendingReviews.length
@@ -391,7 +391,11 @@ function CommitterInbox({
 }
 
 function NavButton({ view, current, onSelect, label, badge = 0, personal = false }: { view: View; current: View; onSelect: (view: View) => void; label: string; badge?: number; personal?: boolean }) {
-  return <button className={`nav-item ${current === view ? "on" : ""}`} onClick={() => onSelect(view)}><NavIcon name={view} /><span>{label}</span>{badge > 0 && <span className={`nav-badge${personal ? " personal" : ""}`}>{badge}</span>}</button>;
+  return <button className={`nav-item ${current === view ? "on" : ""}`}
+    aria-label={label} title={label} onClick={() => onSelect(view)}>
+    <NavIcon name={view} /><span>{label}</span>{badge > 0
+      && <span className={`nav-badge${personal ? " personal" : ""}`}>{badge}</span>}
+  </button>;
 }
 
 function LoginScreen({ onAuthenticated }: { onAuthenticated: (user: AuthUser) => void }) {
