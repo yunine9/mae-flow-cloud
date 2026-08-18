@@ -404,7 +404,7 @@ export function createTaskServer(
         const account = viewer?.role === "developer"
           ? viewer.username
           : (requested ?? viewer?.username);
-        // 任务级可配(用户拍板):交付代码仓、车道、模型、修复轮预算。
+        // 任务级可配(用户拍板):交付代码仓、交付方式(选项来自内核)、修复轮预算。
         const repo = body.repo === undefined ? undefined : String(body.repo);
         const lane = body.lane === undefined ? undefined : String(body.lane);
         const model = body.model

@@ -6,3 +6,5 @@ node_modules/
 .pilot/
 web/dist/
 web/*.tsbuildinfo
+# 内核在仓根落的临时工作目录(probe/用例跑内核时生成)
+.mae-flow-work/

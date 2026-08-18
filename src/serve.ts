@@ -7,7 +7,14 @@
  * models.json 形状见 README「接真模型」。数据目录默认 .tasks/。
  */
 
-import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AddressInfo } from "node:net";
@@ -144,6 +151,8 @@ async function main(): Promise<void> {
   process.env.MAE_FLOW_HOST = "cloud";
   const port = Number(flag("--port") ?? 8787);
   const dataDir = resolve(flag("--data") ?? join(REPO_ROOT, ".tasks"));
+  mkdirSync(dataDir, { recursive: true });
+  guardProcess(dataDir);   // 旁路异常不许带走整个服务(见函数注释)
   // 管理旋钮(主 spec §4:最大并发由管理员配置,超出排队)。
   const maxConcurrent = Number(flag("--max-concurrent") ?? 2);
   // 主动压缩节奏(事件量为代理,回合间隙以内核锚点压缩;0=关,
@@ -411,6 +420,19 @@ async function main(): Promise<void> {
   // TLS);工作机合盖=全员断线,它是工作站不是服务器。
   const bindHost = flag("--host") ?? "127.0.0.1";
   const server = createTaskServer(service, { webRoot, auth });
+  // 监听失败要说人话就退。没有这个处理器时 EADDRINUSE 会作为未捕获的
+  // error 事件把进程炸掉,现场只剩一段栈——实战里表现为"服务莫名其妙
+  // 挂了",而真相往往只是上一次的进程还占着端口。
+  server.on("error", (error: NodeJS.ErrnoException) => {
+    if (error.code === "EADDRINUSE") {
+      console.error(`[serve] 端口 ${port} 已被占用:上一次的服务可能还在跑。`
+        + `\n  查:lsof -i :${port} 或 ss -lptn 'sport = :${port}'`
+        + `\n  然后停掉它,或换一个 --port 重启`);
+    } else {
+      console.error(`[serve] 监听失败(${error.code ?? "未知"}): ${error.message}`);
+    }
+    process.exit(2);
+  });
   server.listen(port, bindHost, () => {
     const actual = (server.address() as AddressInfo).port;
     console.log(`[serve] http://${bindHost}:${actual}  (数据目录 ${dataDir})`);
@@ -418,7 +440,35 @@ async function main(): Promise<void> {
       console.log("[serve] 已对外监听:同事经内网 IP 访问;明文 http,"
         + "正式部署前套反代 TLS");
     }
+    console.log("[serve] 前台进程:关掉这个终端/断开 SSH 服务就没了。"
+      + "长期跑请用 tmux 或 systemd(部署手册「启动与守护」)");
   });
+}
+
+/** 进程级兜底:**一条旁路的异常不许带走整个服务**。
+ *
+ * Node 从 15 起,未处理的 Promise rejection 默认直接终止进程。而本仓
+ * 到处是 `void this.某个旁路()` 的即发即忘(通知、投影、门禁查询、
+ * 合入监控)——其中任何一条抖一下,整台服务连着所有在跑的任务一起
+ * 没,这正是"旁路一律 fail-open、agent 不能因 harness 卡死"红线要
+ * 禁止的事。所以:**记下来,继续服务**。
+ *
+ * 崩溃现场同时落盘一份(终端会滚没,而人往往只记得"它挂了"),
+ * 让人能把原文带回来——诊断不该靠回忆。
+ */
+function guardProcess(dataDir: string): void {
+  const record = (kind: string, error: unknown) => {
+    const detail = error instanceof Error
+      ? `${error.message}\n${error.stack ?? ""}` : String(error);
+    const line = `[${new Date().toISOString()}] ${kind}: ${detail}\n`;
+    console.error(`[serve] ${kind}(服务继续运行,请把这段发回外网):\n`
+      + detail);
+    try {
+      appendFileSync(join(dataDir, "crash.log"), line);
+    } catch { /* 落盘失败不能再抛,否则就成了兜底自己把服务弄挂 */ }
+  };
+  process.on("unhandledRejection", (reason) => record("未处理的异步异常", reason));
+  process.on("uncaughtException", (error) => record("未捕获异常", error));
 }
 
 main().catch((error) => {

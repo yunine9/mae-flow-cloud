@@ -323,10 +323,50 @@ def _workflow_chain(flow, wf):
     """按交付方式线性展开步骤链(可选询问步取"做"分支展示完整形态)。"""
     return workflow_transitions.workflow_chain(flow, wf)
 
+def _steps_catalog(flow, st):
+    """给宿主的机读目录:交付方式代号 + 选项原文 + 步骤链。
+
+    存在的理由(2026-08-18 云端实战):宿主的下单表单要让人先选交付方式,
+    它原来**自造了一套"快速/慢速车道"**——内核只认 完整开发/已定位问题
+    修复/局部修改/处理评审意见,于是下单选过的答案在 workflow_select 那张
+    卡上永远对不上,用户被重复问一遍。宿主随后改成直接读 flow/flow.json,
+    对了,但那是在扒内核的内脏:文件布局一改宿主就哑。
+
+    所以把它变成明面上的契约:分类归内核,宿主问一句就能拿到,拿到的
+    `answer` 就是它该回传的选项原文。别处不要再有第二份交付方式清单。"""
+    return {
+        "workflows": [
+            {
+                "key": wf,
+                "label": WORKFLOW_LABELS[wf],
+                # 选项原文:卡上就该出现它,done --choice 也按它对账
+                "answers": list(
+                    (flow.get("steps", {}).get("workflow_select", {})
+                     .get("choice_answers", {}) or {}).get(wf, [])
+                    or [WORKFLOW_LABELS[wf]]),
+                "steps": [
+                    {
+                        "id": sid,
+                        "title": flow["steps"][sid].get("title", ""),
+                        "user_ack": bool(flow["steps"][sid].get("user_ack")),
+                    }
+                    for sid in _workflow_chain(flow, wf)
+                ],
+            }
+            for wf in ("full", "hotfix", "tweak", "review")
+        ],
+        "active": (st.get("choices", {}) or {}).get("workflow") if st else None,
+        "current": st.get("current") if st else None,
+    }
+
 def cmd_steps(flow, st, args):
     """工作流全景:每条交付方式背后的完整步骤链、每步卡什么、哪些环节可裁。
 
-    透明化诉求:用户选档/裁剪前先看得见全貌;质量门禁步骤不在可裁白名单。"""
+    透明化诉求:用户选档/裁剪前先看得见全貌;质量门禁步骤不在可裁白名单。
+    --json 是给宿主(云端下单表单)的机读形态,见 _steps_catalog。"""
+    if getattr(args, "json", False):
+        print(json.dumps(_steps_catalog(flow, st), ensure_ascii=False))
+        return
     current = st.get("current") if st else None
     active_wf = (st.get("choices", {}) or {}).get("workflow") if st else None
     ask_labels = {

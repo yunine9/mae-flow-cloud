@@ -36,6 +36,7 @@ import {
 } from "./annotations.ts";
 import { readArtifact, resolveArtifactRoot } from "./artifacts.ts";
 import { KernelHost } from "./kernelHost.ts";
+import { workflowChoices } from "./kernelChoices.ts";
 import { buildRepoMap } from "./repoMap.ts";
 import { collectKnowledge } from "./knowledgeBlocks.ts";
 import { readJson } from "./jsonBody.ts";
@@ -92,9 +93,12 @@ export interface TaskSummary {
   /** 下单时填的交付代码仓;缺席=部署仓(--repo)。记在任务上:
    * 重启续跑同仓不漂移,MR/流水线请求也带它给平台适配层。 */
   repo_url?: string;
-  /** 工作流车道(用户拍板:下单就选好,不让 agent 来问,默认慢速)。
-   * 内核 Q2 仍会举卡——流程规则是内核的,宿主不删它的问题;但答案
-   * 用户已在下单时给了,卡来了对得上就自动交卷(预答,不是代判)。 */
+  /** 交付方式(用户拍板:下单就选好,不让 agent 来问)。取值是**内核
+   * flow.json 里 workflow_select 的选项原文**(完整开发/已定位问题修复/
+   * 局部修改/处理评审意见),不是宿主自造的词——自造过一次,结果是
+   * 卡来了永远对不上、用户在流程里被重复问一遍(2026-08-18 内网实测)。
+   * 内核仍会举卡(流程规则是内核的,宿主不删它的问题),对得上就自动
+   * 交卷(预答,不是代判)。 */
   lane?: string;
   /** 下单时选的模型;缺席=跟随服务当前默认(设置层/部署层)。
    * 记在任务上是为了两件事:重启续跑不漂移、页面能说清"谁跑的"。 */
@@ -906,7 +910,8 @@ export class TaskService {
    *   默认仓只会让人漏看一眼就把单下错地方;
    * - **模型不给选**:管理员统一配一个,所有人用同一个。选择权留给
    *   人只会制造"为什么他的比我快"的困惑,也让成本不可控;
-   * - 车道与修复轮预算仍按单可选(前者影响审批节奏,后者是钱)。
+   * - 交付方式与修复轮预算仍按单可选(前者决定走哪条链,后者是钱);
+   *   交付方式的选项**现读内核 flow.json**,前端与本文件都不另抄一份。
    *
    * `model` 字段仍然返回当前生效的那一个——不是给人选,是给界面显示
    * "这单会用谁跑",让人心里有数。 */
@@ -916,6 +921,10 @@ export class TaskService {
     /** 当前默认修复轮:数字=手刹上限;缺席=不限轮(默认形态)。 */
     repair_rounds?: number;
     repo: { enabled: boolean; required: boolean };
+    /** 交付方式选项:**现读内核 flow.json**,不在 TS 侧另抄一份。
+     * 空数组=读不到内核定义,表单就别摆出选择(下单不预选,卡到时
+     * 老老实实问人)。 */
+    workflows: Array<{ key: string; label: string }>;
     /** 服务级缺的配置(管理员去补)。非空=不给下单。 */
     blockers: Array<{ key: string; label: string; where: "admin" | "me" }>;
     /** 本部署要不要这两把个人令牌(由形态决定,见下方注释)。 */
@@ -943,6 +952,7 @@ export class TaskService {
         ?? this.options.delivery?.repairRounds,
       // 没接内核模式=任务不碰代码仓,表单别摆出输入框骗人。
       repo: { enabled: !!this.options.host, required: !!this.options.host },
+      workflows: workflowChoices(this.options.host?.kernelRoot),
       blockers,
       needs: {
         // 个人令牌该不该要,由部署形态决定(同上:只拦真会咬人的)。
@@ -979,9 +989,17 @@ export class TaskService {
       repairRounds?: number;
     } = {},
   ): TaskSummary {
-    if (options.lane !== undefined
-        && !["快速", "慢速"].includes(options.lane)) {
-      throw new Error(`车道只能是 快速/慢速,收到: ${options.lane}`);
+    // 交付方式:选项是内核的领地,现读它的 flow.json 校验
+    // (2026-08-18 修正:此前 TS 侧自造"快速/慢速",与内核的
+    // full/hotfix/tweak/review 对不上,预选永远匹配不上内核举的卡,
+    // 用户下单答过一次、页面上还要再答一次)。读不到内核定义时不校验
+    // ——宁可放行也不拿一套猜出来的选项挡人。
+    const laneChoices = workflowChoices(this.options.host?.kernelRoot)
+      .map((item) => item.label);
+    if (options.lane !== undefined && laneChoices.length
+        && !laneChoices.includes(options.lane)) {
+      throw new Error(
+        `交付方式只能是 ${laneChoices.join("/")},收到: ${options.lane}`);
     }
     const repo = (options.repo ?? "").trim() || undefined;
     // 交付仓必填(用户 2026-08-18 拍板:没有"默认仓"这回事)。一个
@@ -1042,8 +1060,9 @@ export class TaskService {
       workspace,
       luban_account: options.account || undefined,
       repo_url: repo,
-      // 用户拍板:车道下单就定,不让 agent 来问;默认慢速。
-      lane: options.lane ?? "慢速",
+      // 用户拍板:交付方式下单就定,不让 agent 再问一遍。默认取内核
+      // 选项里的第一项(通常是"完整开发"),读不到内核就不预选。
+      lane: options.lane ?? laneChoices[0],
       model_choice: options.model,
       repair_rounds: options.repairRounds,
     };
@@ -1247,6 +1266,8 @@ export class TaskService {
     if (!decision.trim()) {
       throw new NotFoundError("决定不能为空:给 decision 或 answers");
     }
+    this.warnOffMenuAnswer(task, waiting, Object.keys(answers).length
+      ? Object.values(answers) : [decision]);
     // 批注进 notes 而不是 decision:内核按选项标签给这次选择记账
     // (choice receipts),往 decision 里塞正文会让它对不上原选项。
     // notes 是自由正文,本来就是给"为什么打回"用的。
@@ -2725,13 +2746,13 @@ export class TaskService {
   }
 
   /** 人工节点的"现成答案":有则自动交卷,没有才真等人。两个来源:
-   * - **下单预选(车道)**:内核 Q2 仍举卡(流程规则归内核,宿主不删
-   *   它的问题),但答案用户下单时已给——问题里带"车道"字样就把预选
-   *   项交上去。这是送达用户早给的答案,不是宿主代做判断;对不上
-   *   (内核改了措辞)就退回真等人,fail-open 到人工;
+   * - **下单预选(交付方式)**:内核仍举卡(流程规则归内核,宿主不删
+   *   它的问题),但答案用户下单时已给——卡上出现了用户选定的那个
+   *   **内核选项**就把它交上去。这是送达用户早给的答案,不是宿主代做
+   *   判断;对不上就退回真等人,fail-open 到人工;
    * - **月光模式**:用户显式开启免审批,其余问题一律代答"预授权放行,
    *   按最稳妥判断继续,理由写明供复盘"。
-   * 混合卡(既有车道又有别的问题)只在月光开着时整卡交,否则等人。 */
+   * 混合卡(既有交付方式又有别的问题)只在月光开着时整卡交,否则等人。 */
   private autoAnswerFor(task: TaskState): {
     why: string;
     answers: Record<string, string>;
@@ -2750,12 +2771,17 @@ export class TaskService {
     const answers: Record<string, string> = {};
     for (const item of questions) {
       const text = String(item.question ?? "");
-      if (lane && text.includes("车道")) {
-        // 选项里找含预选词的原样标签(内核按选项标签记账),
-        // 找不到就交预选词本身。
-        answers[text] = (item.options ?? [])
-          .find((option) => option.includes(lane)) ?? lane;
-        reasons.add(`下单预选车道:${lane}`);
+      // 认卡不靠问题措辞,靠**选项**:内核举的卡里出现了用户下单时选
+      // 的那一项,就是这张卡在问交付方式。此前按"车道"二字匹配,而内核
+      // 的问题里根本没有这两个字(它问"交付方式?"),于是预选形同虚设
+      // ——措辞是内核的自由,选项才是双方共用的语言。
+      const preselected = lane
+        ? (item.options ?? []).find((option) => option === lane
+            || option.includes(lane))
+        : undefined;
+      if (preselected) {
+        answers[text] = preselected;
+        reasons.add(`下单预选交付方式:${lane}`);
       } else if (moonlight) {
         answers[text] =
           "【月光模式代答】用户已开启免审批预授权:按工程上最稳妥的" +
@@ -2771,6 +2797,38 @@ export class TaskService {
       answers,
       notes: `系统自动交卷(${[...reasons].join(";")}),非人工现场答复`,
     };
+  }
+
+  /** 选项卡上交了"不在菜单里"的答复:**记一条明账,不拦**。
+   *
+   * 内核按选项原文对账(choice receipts),交上去的词不在选项里,它就
+   * 判"没有检测到本步骤的真实选项回答"——报错落在几步之后的 done 上,
+   * 现场看起来像流程卡死。内网实测吃过:有人绕开界面直接打接口,交了
+   * 个自造的 "approve",真正的选择写在备注里,内核当然不认。
+   *
+   * 为什么只警告不拦:界面本来就允许"自定义答复"(打回、补充要求),
+   * 那是合法用法;判定哪种自由文本算数是内核的事,宿主不许替它判——
+   * 拦下去就是在 TS 侧复刻判定。这里只负责让因果在同一处可见。 */
+  private warnOffMenuAnswer(
+    task: TaskState,
+    waiting: { question?: unknown },
+    values: string[],
+  ): void {
+    const questions = ((waiting.question as any)?.questions ?? []) as Array<{
+      options?: string[];
+    }>;
+    const menu = questions.flatMap((item) => item.options ?? []);
+    if (!menu.length) return;   // 开放题:本来就没有菜单
+    const offMenu = values.filter((value) => {
+      const text = value.trim();
+      return text && !menu.some((option) =>
+        option === text || option.includes(text) || text.includes(option));
+    });
+    if (!offMenu.length) return;
+    this.options.log?.(
+      `任务 ${task.summary.id} 的答复不在选项原文里(${offMenu.join(" / ")});`
+      + `本卡选项:${menu.join(" / ")}。若内核随后报"没有检测到本步骤的`
+      + `真实选项回答",原因就在这里——交回选项原文即可。`);
   }
 
   /** 自动交卷:走人工决定同一条通路(decide),内核台账、事件、

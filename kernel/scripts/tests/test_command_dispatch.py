@@ -53,6 +53,8 @@ class CommandDispatchTests(unittest.TestCase):
             "codecheck-scan": "cmd_codecheck_scan",
             "codecheck-scope": "cmd_codecheck_scope",
             "codecheck-record": "cmd_codecheck_record",
+            # 云端宿主喂平台事实的口子;加路由时漏了这行,基线就一直红着
+            "pipeline": "cmd_pipeline",
             "approve-exemption": "cmd_approve_exemption",
             "accept-risk": "cmd_accept_risk",
             "allow": "cmd_allow",

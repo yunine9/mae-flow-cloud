@@ -157,7 +157,11 @@ def build_parser():
         "--repair-state", action="store_true",
         help="仅修复损坏的辅助状态；绝不覆盖完整流程断点")
     sub.add_parser("envcheck")
-    sub.add_parser("steps")  # 工作流全景:各交付方式的步骤链与可裁环节
+    steps = sub.add_parser("steps")  # 工作流全景:各交付方式的步骤链与可裁环节
+    steps.add_argument(
+        "--json", action="store_true",
+        help="机读目录(宿主用):交付方式代号/选项原文/步骤链。"
+             "宿主的下单表单照它取选项,不要另抄一份分类")
     capability = sub.add_parser("capability")
     capabilities = capability.add_subparsers(
         dest="capability_action", required=True)

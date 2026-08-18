@@ -19,12 +19,13 @@ export function LaunchWorkspace({
   const [account, setAccount] = useState(session.username);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
-  // 任务级可填项(2026-08-18 重定口径):交付仓**必填**、车道、修复轮
+  // 任务级可填项(2026-08-18 重定口径):交付仓**必填**、交付方式、修复轮
   // 预算。模型不给选——管理员统一配一个,这里只显示"这单用谁跑"。
   const [options, setOptions] = useState<LaunchOptions | null>(null);
   const [repo, setRepo] = useState("");
-  // 车道下单就定(用户拍板:不让 agent 来问),默认慢速。
-  const [lane, setLane] = useState("慢速");
+  // 交付方式下单就定(用户拍板:不让 agent 再问一遍);选项与默认值
+  // 都来自内核,空串=等 options 到了再取第一项。
+  const [lane, setLane] = useState("");
   const [repairRounds, setRepairRounds] = useState("");
   // 配置没配齐不让下单:缺项来自后端(服务级+个人级),前端只负责
   // 摆在明面上。后端同样硬拦——绕过界面打接口一样被 409 挡住。
@@ -162,17 +163,24 @@ export function LaunchWorkspace({
                   readOnly={session.role !== "admin"}
                 />
               </label>
-              <label className="account-field">
-                <span>工作流车道</span>
-                <select
-                  className="launch-model-select"
-                  value={lane}
-                  onChange={(event) => setLane(event.target.value)}
-                >
-                  <option value="慢速">慢速（完整流程，默认）</option>
-                  <option value="快速">快速（轻量流程）</option>
-                </select>
-              </label>
+              {(options?.workflows.length ?? 0) > 0 && (
+                // 选项来自内核 flow.json(不在前端另抄一份):下单选定，
+                // 流程里那张“交付方式”卡由系统拿这个答案自动交卷。
+                <label className="account-field">
+                  <span>交付方式</span>
+                  <select
+                    className="launch-model-select"
+                    value={lane || options!.workflows[0].label}
+                    onChange={(event) => setLane(event.target.value)}
+                  >
+                    {options!.workflows.map((item) => (
+                      <option key={item.key} value={item.label}>
+                        {item.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
               {options?.model && (
                 // 模型不给选(管理员统一配),只告诉人这单谁来跑。
                 <label className="account-field">

@@ -103,6 +103,43 @@ test("配置缺项:只拦真会咬人的那几样,文案说清去哪配", () => 
   assert.equal(chat.launchOptions().needs.git_token, false);
 });
 
+test("交付方式:选项与默认值都取自内核 flow.json,自造的当场打回", () => {
+  // 内网实战逮住的摩擦:表单原来自造"快速/慢速车道",而内核 workflow_select
+  // 的选项是 full/hotfix/tweak/review(完整开发/已定位问题修复/局部修改/
+  // 处理评审意见)。两套词对不上 → 下单选过的交付方式在流程里又被问一遍。
+  // 分类是内核的领地,宿主现读它的定义;这条用例就是防再抄一份的封条。
+  const kernelRoot = discoverKernelRoot(process.cwd());
+  if (!kernelRoot) throw new Error("找不到内核(仓内 kernel/ 快照应随仓自带)");
+  const service = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-lf-lane-")),
+    provider: "a", model: "a-1",
+    modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
+    host: { kernelRoot, repoPath: "/tmp/repo" },
+  });
+  const workflows = service.launchOptions().workflows;
+  assert.deepEqual(workflows.map((item) => item.key),
+    ["full", "hotfix", "tweak", "review"]);
+  assert.equal(workflows.find((item) => item.key === "tweak")!.label,
+    "局部修改");
+  // 不填=内核第一项;自造词打回(免得下单选了个内核不认识的答案)
+  assert.equal(service.create("默认交付方式").lane, workflows[0].label);
+  assert.equal(service.create("点名交付方式", { lane: "局部修改" }).lane,
+    "局部修改");
+  assert.throws(() => service.create("x", { lane: "慢速车道" }),
+    /交付方式只能是/);
+
+  // 取值走的是内核**明面上的契约**(steps --json),不是扒 flow.json
+  // 的内脏。这条同时兼作收编快照的新鲜度检查:快照旧到没有这个宿主口
+  // 就会在这里露馅,而不是等到内网真跑时才发现表单是空的。
+  const catalog = JSON.parse(execFileSync("python3",
+    [join(kernelRoot, "scripts", "mae-flow.py"), "steps", "--json"],
+    { encoding: "utf-8" }).trim().split("\n").pop()!);
+  assert.deepEqual(
+    catalog.workflows.map((item: { key: string; answers: string[] }) =>
+      ({ key: item.key, label: item.answers[0] })),
+    workflows, "表单选项必须与内核目录逐字一致");
+});
+
 test("下单即校验:不存在的模型、负预算、带密码的仓地址,当场打回", () => {
   const service = new TaskService({
     dataDir: mkdtempSync(join(tmpdir(), "mfc-lf-")),

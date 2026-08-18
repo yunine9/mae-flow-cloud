@@ -11,6 +11,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -65,6 +67,27 @@ test("配置文件坏了拒绝启动,不静默忽略", async () => {
     "--config", join(dir, "no-such.json"), "--data", join(dir, "tasks"),
   ], () => false, 15_000);
   assert.notEqual(missing.code, 0);
+});
+
+test("端口被占:说人话并退出,不甩一段栈", async () => {
+  // 内网反复报"server 挂了"里,有一份就是这个:上一次的服务还占着端口,
+  // 新起的进程在 listen 上抛 EADDRINUSE。没有处理器时它是未捕获的 error
+  // 事件——终端只剩一段栈,人只记得"挂了"。占端口的真件在这儿,不是假件。
+  const dir = mkdtempSync(join(tmpdir(), "mfc-cfg-busy-"));
+  const squatter = createServer(() => {});
+  await new Promise<void>((ready) => squatter.listen(0, "127.0.0.1", ready));
+  const port = (squatter.address() as AddressInfo).port;
+  try {
+    const { code, output } = await run([
+      "--port", String(port), "--data", join(dir, "tasks"),
+    ], () => false, 20_000);
+    assert.equal(code, 2, `应以 2 退出,实际 ${code};输出:\n${output}`);
+    assert.match(output, /端口 \d+ 已被占用/);
+    assert.match(output, /lsof|ss -lptn/, "要给出查占用的具体命令");
+    assert.doesNotMatch(output, /at Server\./, "别把栈甩给用户");
+  } finally {
+    squatter.close();
+  }
 });
 
 test("配置文件供值,命令行压过文件", async () => {

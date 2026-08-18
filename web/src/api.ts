@@ -337,6 +337,11 @@ export interface LaunchOptions {
   repo: { enabled: boolean; required: boolean };
   /** 没配齐的配置项:where=admin 归管理员,me 归本人。非空=不给下单。 */
   blockers: Array<{ key: string; label: string; where: "admin" | "me" }>;
+  /** 交付方式:**取自内核 flow.json**(key=内核代号,label=给人看的),
+   * 前端一个字都不许另抄——抄了就会出现"页面说快速/慢速、内核只认
+   * 完整开发/局部修改",于是下单选过的交付方式在流程里又被问一遍。
+   * 空数组=读不到内核定义,那就不预选,老老实实等流程里问。 */
+  workflows: Array<{ key: string; label: string }>;
 }
 
 export async function getLaunchOptions(): Promise<LaunchOptions> {
