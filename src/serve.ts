@@ -350,6 +350,14 @@ async function main(): Promise<void> {
     console.log("[serve] 本地验证关闭:编译/UT 交由流水线,红灯走修复环");
   }
 
+  // 提交信息规范:平台 pre-receive 钩子按正则拒收不合规提交(内网
+  // 实测),规矩要开场就进提示词。部署级给一句,管理页可热改覆盖。
+  const commitConvention = flag("--commit-convention");
+  if (commitConvention) {
+    console.log(`[serve] 提交信息规范已上膛: ${commitConvention.slice(0, 60)}`
+      + (commitConvention.length > 60 ? "…" : ""));
+  }
+
   const service = new TaskService({
     dataDir, provider, model, modelsJson, maxConcurrent, settings,
     // 个人 Git 令牌(界面只写不读):任务启动时按归属人取,经
@@ -362,6 +370,7 @@ async function main(): Promise<void> {
     host,
     delivery,
     verifyViaPipeline,
+    commitConvention,
     isolation: isolateImage
       ? {
           image: isolateImage,

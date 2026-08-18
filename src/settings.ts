@@ -55,6 +55,9 @@ export interface ServiceSettings {
   platform_url?: string;
   default_repo?: string;
   verify_via_pipeline?: boolean;
+  /** 提交信息规范(一句话,进每个会话开场)。平台钩子按正则拒收不
+   * 合规提交,规矩得让 agent 第一次就知道(内网实测被拒过)。 */
+  commit_convention?: string;
 }
 
 interface Stored {
@@ -130,6 +133,7 @@ export class RuntimeSettings {
     platform_url?: unknown;
     default_repo?: unknown;
     verify_via_pipeline?: unknown;
+    commit_convention?: unknown;
   }): void {
     const current = this.service();
     const next: ServiceSettings = { ...current };
@@ -172,6 +176,16 @@ export class RuntimeSettings {
         throw new SettingsError(
           `免编译开关只认 true/false/空(跟随部署),收到: ${String(raw)}`);
       }
+    }
+    if (patch.commit_convention !== undefined) {
+      // 一句话规矩,原样进提示词。长度设上限只为防止有人把整份规范
+      // 贴进来挤占开场白(那该放仓里的 AGENTS.md,知识在仓不在平台)。
+      const text = String(patch.commit_convention).trim();
+      if (!text) delete next.commit_convention;
+      else if (text.length > 500) {
+        throw new SettingsError(
+          "提交信息规范请压到 500 字以内(完整规范放仓里的 AGENTS.md)");
+      } else next.commit_convention = text;
     }
     this.save({ ...this.load(), service: next });
   }

@@ -171,6 +171,45 @@ test("模型热改:下一个新会话用设置里的网关,部署值退位", asy
   await model.stop();
 });
 
+test("提交信息规范:进每个会话开场;设置层压部署层;超长打回", async () => {
+  // 内网实测:平台 pre-receive 钩子按正则拒收不合规提交信息
+  // ("does not match the regular-expression"),那时代码已经写完,
+  // 重来一遍纯浪费。所以规矩必须开场就给,而不是等它撞墙自己猜。
+  const model = new ScriptedModelServer(SCRIPT);
+  await model.start();
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-set-commit-"));
+  const settings = new RuntimeSettings(dataDir);
+  settings.updateService({ commit_convention: "[模块][type] 一句话" });
+  // 超长的完整规范该放仓里的 AGENTS.md,不许挤占开场白。
+  assert.throws(
+    () => settings.updateService({ commit_convention: "x".repeat(501) }),
+    /500 字/);
+  const service = new TaskService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    settings,
+    commitConvention: "部署级的旧规矩(应被设置层压掉)",
+  });
+  try {
+    const id = service.create("验证提交规范进提示词").id;
+    const deadline = Date.now() + 60_000;
+    while (Date.now() < deadline) {
+      const status = service.get(id)!.status;
+      if (status === "completed" || status === "failed") break;
+      await new Promise((tick) => setTimeout(tick, 100));
+    }
+    const seen = model.requests
+      .flatMap((request) => (request as any).messages ?? [])
+      .map((message: any) => JSON.stringify(message.content ?? ""))
+      .join("\n");
+    assert.match(seen, /\[模块\]\[type\] 一句话/, "规范没进开场白");
+    assert.match(seen, /不合规/, "要说清不合规的后果(拒收 push)");
+    assert.ok(!seen.includes("部署级的旧规矩"), "设置层没压住部署层");
+  } finally {
+    await model.stop();
+  }
+});
+
 test("路由权限:admin 可读改,开发成员 403,密钥不出网", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-set-http-"));
   const auth = new LocalAuth(join(dataDir, "auth.json"));

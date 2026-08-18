@@ -268,6 +268,23 @@ models.json 形状(key 只放服务器本地文件,权限 600,永不进仓):
 }
 ```
 
+**提交信息规范必须配(内网实测的坑)**:试点仓的 pre-receive 钩子按
+正则校验提交信息,不合规**直接拒收 push**——
+`Deny by project hooks setting 'default': message of commit '...' does
+not match the regular-expression '(^(\[\w+\])(\[(feat|fix|refactor|
+test|chore|docs|style)\])\s*\S+)|...'`(2026-08-18 实测,改成
+`[test][chore] push verification` 后即通过)。撞上时代码早已写完,
+重来一遍纯浪费,所以规矩要**开场就进提示词**:
+
+```bash
+npm run serve -- ... --commit-convention '提交信息格式:[模块][类型] 一句话,
+类型取 feat|fix|refactor|test|chore|docs|style,例:[access][fix] 修复空指针'
+```
+
+管理页(服务形态)也能热改同一项,设置层压部署层;超过 500 字会被
+打回——完整规范该放仓里的 `AGENTS.md`(知识在仓不在平台),这里只留
+一句能让人第一次就写对的话。
+
 **`contextWindow` 必填(内网实测的坑)**:内网网关的真实上限是
 169984 token,超了直接 400——
 `input too long, exceed max input length, max input length is 169984,

@@ -220,6 +220,11 @@ export interface TaskServiceOptions {
    * 这个旗子做的唯一一件事:把环境事实写进每次会话的开场,别让模型猜。
    * 慢的代价由修复环扛(红灯自动派修复会话),不占人的时间。 */
   verifyViaPipeline?: boolean;
+  /** 提交信息规范(部署级一句话,进每个会话的开场)。平台的
+   * pre-receive 钩子按正则校验提交信息,不合规**直接拒收 push**
+   * (内网实测:`does not match the regular-expression ...`)——那时
+   * 代码早写完了,重来一遍纯浪费。规矩要开场就给,不靠模型撞墙后猜。 */
+  commitConvention?: string;
   /** 运行时设置覆盖(管理页):并发/修复轮/轮询/通知/模型网关。
    * 部署配置是底,这层是热改;各消费点即时读,生效边界见 settings.ts。 */
   settings?: RuntimeSettings;
@@ -874,6 +879,15 @@ export class TaskService {
       ?? this.options.verifyViaPipeline ?? false;
   }
 
+  /** 生效的提交信息规范(设置层压部署层)。平台钩子按正则拒收不合规
+   * 提交(内网实测),这条规矩要在每个会话开场就给——包括修复会话。 */
+  private effectiveCommitConvention(): string | undefined {
+    const text = this.options.settings?.service().commit_convention
+      ?? this.options.commitConvention;
+    const trimmed = String(text ?? "").trim();
+    return trimmed || undefined;
+  }
+
   /** 当前生效的 models.json 同形内容(设置层压部署层)——
    * 下单模型选项和校验共用这一个口径。 */
   private activeModelsJson(): Record<string, unknown> {
@@ -1524,6 +1538,15 @@ export class TaskService {
           + `UT 该写还得写(生成测试是本机做得了、也最值钱的部分),`
           + `只是不在本机跑。编码完成后按流程提交并推送,`
           + `权威流水线是唯一裁判;红灯会由专职修复会话跟进。`;
+      }
+      // 提交信息规范(部署级):平台的 pre-receive 钩子会按正则拒收不
+      // 合规的提交信息——内网实测被拒过一次("does not match the
+      // regular-expression"),而那时代码早已写完,重来一遍是纯浪费。
+      // 规矩必须开场就给,每个会话都带:修复会话同样要提交。
+      const convention = this.effectiveCommitConvention();
+      if (convention) {
+        prompt = `${prompt}\n\n提交信息规范(平台钩子会按它校验,不合规`
+          + `直接拒收 push,请第一次就写对):${convention}`;
       }
       // 仓库地图(加餐):大仓里模型乱 grep 烧轮次,开场先给一张按被
       // 引用程度排序的路标。只在内核模式生成(有真克隆才有仓可画);
