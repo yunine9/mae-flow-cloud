@@ -133,6 +133,9 @@ test("Committer 检视:管理员只配名单,仅任务责任人主动邀请后�
   auth.bootstrapAdmin("admin", "administrator-pass");
   auth.createUser("alice", "alice-password-1", "developer");
   auth.createUser("bob", "bob-password-123", "developer");
+  // 接了通知端点的部署,下单前要求本人配过通知令牌(消息以本人身份
+  // 发,管理员代配不了)——这里是走产品面下单,规矩照吃。
+  auth.setLubanToken("alice", "luban-alice");
   const luban = new FakeLubanServer();
   await luban.start();
   const service = new TaskService({

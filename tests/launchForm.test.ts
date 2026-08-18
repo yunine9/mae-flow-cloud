@@ -1,9 +1,12 @@
 /**
- * 下单表单的任务级可配项(用户拍板只有两个):模型选择、修复轮预算。
- * - /launch-options 是表单数据源:模型清单来自当前生效的 models.json,
- *   设置层热改即时反映;
- * - 下单即校验:不存在的模型、负的预算,400 打回,不许晚到会话才炸;
- * - 消费:任务级选择压过服务默认,记在 summary 上重启不漂移。
+ * 下单表单(口径 2026-08-18 按内网实战重定):
+ * - **交付仓必填**,没有"默认仓"这回事——一个部署服务很多个仓,
+ *   默认值只会让人漏看一眼就把单下错地方;
+ * - **模型不给选**:管理员统一配一个,表单只显示"这单用谁跑";
+ *   管理员贴完 models.json 即自动生效(不必再手打一遍 provider/model);
+ * - 车道与修复轮预算仍按单可选;
+ * - **配置没配齐不给下单**:服务级(模型/平台/通知)+ 个人级
+ *   (Git 令牌/通知令牌)缺一样都 409,前端把缺项摆明面。
  */
 
 import { test } from "node:test";
@@ -15,6 +18,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { LocalAuth } from "../src/auth.ts";
+import { Notifier } from "../src/notifier.ts";
 import { RuntimeSettings } from "../src/settings.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskService } from "../src/taskService.ts";
@@ -23,7 +27,7 @@ import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
 
 const SCRIPT: Scene[] = [{ text: "完成。" }];
 
-test("launch-options:清单来自生效 models.json,设置层压部署层", () => {
+test("launch-options:生效模型来自 models.json,设置层压部署层", () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-lf-"));
   const settings = new RuntimeSettings(dataDir);
   const service = new TaskService({
@@ -36,24 +40,67 @@ test("launch-options:清单来自生效 models.json,设置层压部署层", () =
     settings,
   });
   const before = service.launchOptions();
-  assert.deepEqual(before.models, [
-    { provider: "a", model: "a-1" },
-    { provider: "a", model: "a-2" },
-    { provider: "b", model: "b-1" },
-  ]);
-  assert.deepEqual(before.default, { provider: "a", model: "a-1" });
+  assert.deepEqual(before.model, { provider: "a", model: "a-1" });
   assert.equal(before.repair_rounds, 3);
 
-  // 设置层热改:清单、默认、预算全部跟着走
+  // 设置层热改:生效模型与预算跟着走
   settings.updateModels({
     json: { providers: { c: { models: [{ id: "c-1" }] } } },
     provider: "c", model: "c-1",
   });
   settings.updateRuntime({ repair_rounds: 0 });
   const after = service.launchOptions();
-  assert.deepEqual(after.models, [{ provider: "c", model: "c-1" }]);
-  assert.deepEqual(after.default, { provider: "c", model: "c-1" });
+  assert.deepEqual(after.model, { provider: "c", model: "c-1" });
   assert.equal(after.repair_rounds, 0);
+});
+
+test("模型默认自动派生:管理员只贴 models.json 也能直接用", () => {
+  // 实测踩到:服务起来后表单是空的,人不知道还差"再手打一遍
+  // provider/model"这一步。贴完就该能用——第一个 provider 的第一个
+  // 模型即默认,显式配了才压过它。
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-lf-auto-"));
+  const settings = new RuntimeSettings(dataDir);
+  settings.updateModels({
+    json: { providers: { gw: { models: [{ id: "glm-5.1" }, { id: "x" }] } } },
+  });
+  const service = new TaskService({
+    dataDir, provider: "", model: "", modelsJson: {}, settings,
+  });
+  assert.deepEqual(service.launchOptions().model,
+    { provider: "gw", model: "glm-5.1" });
+  assert.ok(!service.launchOptions().blockers
+    .some((item) => item.key === "model"), "配了就不该再报缺模型");
+});
+
+test("配置缺项:只拦真会咬人的那几样,文案说清去哪配", () => {
+  // 一刀切的门禁会把用不上那件东西的部署一起挡在门外:纯会话形态
+  // (不接代码仓)要什么 Git 令牌?没接通知端点要什么通知令牌?
+  // 所以每条缺项都绑自己的前提。
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-lf-block-"));
+  const kernel = new TaskService({
+    dataDir, provider: "", model: "", modelsJson: {},
+    host: { kernelRoot: "/tmp" },   // 接了仓,但没配平台
+  });
+  const keys = kernel.launchOptions().blockers.map((item) => item.key);
+  assert.ok(keys.includes("model"), "没模型任何任务都跑不了,要拦");
+  assert.ok(keys.includes("platform"), "内核模式没平台=交付不出去,要拦");
+  assert.equal(kernel.launchOptions().needs.git_token, true,
+    "接了代码仓就要个人 Git 令牌");
+  assert.equal(kernel.launchOptions().needs.luban_token, false,
+    "没接通知端点就别要通知令牌");
+  // 缺项文案要说清去哪配、以及不配会怎样,不能只报一个字段名
+  for (const item of kernel.launchOptions().blockers) {
+    assert.ok(/管理页|我的工作/.test(item.label) && item.label.includes(";"),
+      `缺项文案没说清去哪配/后果: ${item.label}`);
+  }
+  // 纯会话形态(不接仓):平台与 Git 令牌都不该被要求
+  const chat = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-lf-chat-")),
+    provider: "gw", model: "m",
+    modelsJson: { providers: { gw: { models: [{ id: "m" }] } } },
+  });
+  assert.deepEqual(chat.launchOptions().blockers, []);
+  assert.equal(chat.launchOptions().needs.git_token, false);
 });
 
 test("下单即校验:不存在的模型、负预算、带密码的仓地址,当场打回", () => {
@@ -162,7 +209,7 @@ test("消费:任务级模型选择压过服务默认(默认是打不通的网关
   await model.stop();
 });
 
-test("路由:/launch-options 登录可看;POST /tasks 带坏参数 400", async () => {
+test("路由:没配齐令牌 409 不给下单;补齐后放行;坏参数仍 400", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-lf-http-"));
   const auth = new LocalAuth(join(dataDir, "auth.json"));
   auth.createUser("dev", "dev-password-11", "developer");
@@ -171,6 +218,8 @@ test("路由:/launch-options 登录可看;POST /tasks 带坏参数 400", async (
   const service = new TaskService({
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
+    // 通知端点在场(服务级不缺),缺的只有这个人自己的两个令牌
+    notifier: new Notifier({ endpoint: "http://127.0.0.1:1" }),
   });
   const server = createTaskServer(service, { auth });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -184,12 +233,32 @@ test("路由:/launch-options 登录可看;POST /tasks 带坏参数 400", async (
       body: JSON.stringify({ username: "dev", password: "dev-password-11" }),
     });
     const cookie = String(login.headers.get("set-cookie") ?? "").split(";")[0];
-    const options = await fetch(`${base}/launch-options`,
-      { headers: { cookie } });
-    assert.equal(options.status, 200);
-    assert.deepEqual((await readJson(options)).models,
-      [{ provider: "maeflow", model: "scripted-v1" }]);
+    const options = await readJson(
+      await fetch(`${base}/launch-options`, { headers: { cookie } }));
+    assert.deepEqual(options.model,
+      { provider: "maeflow", model: "scripted-v1" });
+    const keys = options.blockers.map((item: { key: string }) => item.key);
+    // 这个部署接了通知端点、没接代码仓:只该要通知令牌
+    assert.deepEqual(keys, ["luban_token"],
+      `缺项应只有通知令牌,实际: ${keys.join(",")}`);
 
+    // 后端硬拦:绕过界面直接打接口一样不给下单
+    const blocked = await fetch(`${base}/tasks`, {
+      method: "POST", headers: { cookie },
+      body: JSON.stringify({ requirement: "x" }),
+    });
+    assert.equal(blocked.status, 409);
+    assert.match((await readJson(blocked)).error, /配置未完成/);
+
+    // 本人配上令牌 → 放行(管理员代配不了,密钥只写不读)
+    auth.setLubanToken("dev", "luban-yyyy");
+    const ok = await fetch(`${base}/tasks`, {
+      method: "POST", headers: { cookie },
+      body: JSON.stringify({ requirement: "配齐后下单" }),
+    });
+    assert.equal(ok.status, 201);
+
+    // 参数校验照旧:坏模型/负预算 400(不是 409,那是配置问题)
     const bad = await fetch(`${base}/tasks`, {
       method: "POST", headers: { cookie },
       body: JSON.stringify({ requirement: "x",

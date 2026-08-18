@@ -805,6 +805,41 @@ svg {
   color: var(--danger);
   font-size: 12px;
 }
+/* 配置未配齐:摆在下单表单最上面,醒目但不吓人——它不是错误,
+   是"还差两步"。按钮同时禁用,后端也会 409 拦住绕过界面的调用。 */
+.launch-blockers {
+  margin-bottom: 18px;
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+.launch-blockers strong { display: block; margin-bottom: 8px; font-size: 14px; }
+.launch-blockers ul { margin: 0 0 8px; padding-left: 0; list-style: none; }
+.launch-blockers li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin-bottom: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.launch-blockers small { color: var(--muted); font-size: 12px; line-height: 1.6; }
+.blocker-where {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.blocker-admin {
+  background: color-mix(in srgb, var(--muted) 20%, transparent);
+  color: var(--muted);
+}
+.blocker-me {
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  color: var(--danger);
+}
 .launch-workspace-body {
   flex: 1;
   min-height: 0;

@@ -74,6 +74,9 @@ export interface AuthUser {
   /** 平台用户名/邮箱(commit 署名,平台按邮箱认人)。非密,可回显。 */
   git_username?: string;
   git_email?: string;
+  /** 个人通知令牌的掩码提示;同样只写不读。通知以令牌对应的人的
+   * 身份发,所以按人配——管理员配一个服务号,大家收到的都是机器人。 */
+  luban_token_hint?: string;
   /** 月光模式(免审批):开着时本人任务的人工节点自动放行。 */
   moonlight?: boolean;
 }
@@ -136,6 +139,17 @@ export async function putGitToken(
       git_username: gitUsername,
       git_email: gitEmail,
     }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function putLubanToken(
+  token: string,
+): Promise<{ luban_token_hint?: string }> {
+  const response = await fetch("/auth/me/luban-token", {
+    method: "PUT",
+    body: JSON.stringify({ token }),
   });
   if (!response.ok) throw new Error(await errorText(response));
   return response.json();
@@ -314,12 +328,15 @@ export async function listTasks(): Promise<TaskSummary[]> {
 
 /** 下单表单的数据源:可选模型清单(≤1 个时不必展示下拉)与当前默认。 */
 export interface LaunchOptions {
-  models: Array<{ provider: string; model: string }>;
-  default: { provider?: string; model?: string };
+  /** 当前生效的模型(展示用;模型不给选,管理员统一配一个)。 */
+  model?: { provider: string; model: string };
   /** 数字=手刹上限;缺席=不限轮(默认形态,靠收敛刹车兜底)。 */
   repair_rounds?: number;
-  /** enabled=false 表示本部署不接代码仓(纯会话演练),表单不显示。 */
-  repo: { enabled: boolean; default?: string };
+  /** enabled=false 表示本部署不接代码仓(纯会话演练),表单不显示。
+   * required=true 时必填——本部署不设默认仓,每单写明交到哪儿。 */
+  repo: { enabled: boolean; required: boolean };
+  /** 没配齐的配置项:where=admin 归管理员,me 归本人。非空=不给下单。 */
+  blockers: Array<{ key: string; label: string; where: "admin" | "me" }>;
 }
 
 export async function getLaunchOptions(): Promise<LaunchOptions> {

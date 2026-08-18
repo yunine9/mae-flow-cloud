@@ -36,6 +36,9 @@ interface StoredUser extends AuthUser {
   /** 个人 Git 平台令牌(PAT)。密码是哈希,这个必须明文存——git 要用
    * 原文;所以只许住在 0600 的本文件里,永不进公开视图/日志/URL。 */
   git_token?: string;
+  /** 个人通知令牌(小鲁班):该接口以令牌对应的人的身份发消息,
+   * 所以按人存,不是服务级配一个。 */
+  luban_token?: string;
   /** 平台侧的 git 用户名,PAT 的搭档;不填默认用登录账号名。 */
   git_username?: string;
   /** 平台邮箱:commit 署名用。平台(CodeHub,类比 GitHub)判定
@@ -186,9 +189,41 @@ export class LocalAuth {
 
   /** 掩码提示(••••末4位),给界面确认"配过了、是哪个"用。 */
   gitTokenHint(username: string): string | undefined {
-    const token = this.users.get(username)?.git_token;
-    if (!token) return undefined;
-    return token.length <= 4 ? "••••" : `••••${token.slice(-4)}`;
+    return maskToken(this.users.get(username)?.git_token);
+  }
+
+  /** 设置/删除个人通知令牌(小鲁班)。与 Git 令牌同样是"只写不读"。
+   *
+   * 为什么按人存而不是全服务配一个:那个接口是**以令牌对应的人的
+   * 身份发消息**——用服务号统一发,所有人收到的都是同一个机器人;
+   * 每人配自己的,消息就是自己发给自己,不需要额外申请机器人账号
+   * (用户 2026-08-18 拍板)。空串=删除。 */
+  setLubanToken(username: string, token: string): void {
+    const stored = this.users.get(username);
+    if (!stored) throw new Error(`账号 ${username} 不存在`);
+    const trimmed = token.trim();
+    if (!trimmed) {
+      delete stored.luban_token;
+    } else {
+      if (Buffer.byteLength(trimmed, "utf-8") > 512) {
+        throw new Error("令牌过长");
+      }
+      stored.luban_token = trimmed;
+    }
+    this.persist();
+  }
+
+  lubanTokenHint(username: string): string | undefined {
+    return maskToken(this.users.get(username)?.luban_token);
+  }
+
+  /** 消费口(唯一碰明文的出口):投递通知时按收件人取他自己的令牌。
+   * 停用账号不给——离职/停权的人不该继续以他的身份发消息。 */
+  lubanToken(username: string | undefined): string | undefined {
+    if (!username) return undefined;
+    const stored = this.users.get(username);
+    if (!stored || stored.disabled) return undefined;
+    return stored.luban_token;
   }
 
   /** 月光模式开关。开=本人任务免审批(系统代答),关=恢复人工闸。 */
@@ -291,6 +326,12 @@ export class LocalAuth {
     renameSync(temp, this.file);
     chmodSync(this.file, 0o600);
   }
+}
+
+/** 掩码:••••末4位。密钥一律只写不读,界面只用它确认"配过了、是哪个"。 */
+function maskToken(token: string | undefined): string | undefined {
+  if (!token) return undefined;
+  return token.length <= 4 ? "••••" : `••••${token.slice(-4)}`;
 }
 
 function publicUser(user: StoredUser): AuthUser {

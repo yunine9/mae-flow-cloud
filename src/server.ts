@@ -99,6 +99,29 @@ export function createTaskServer(
         "mae_flow_session",
       );
       const viewer = options.auth?.sessionUser(sessionToken);
+      /** 当前登录者自己缺的配置。两样都是"以本人身份做事"的凭据:
+       * Git 令牌决定 push 与 MR 发起人是谁,通知令牌决定消息以谁的
+       * 身份发——管理员代配不了(密钥只写不读),所以只能各人自己配,
+       * 没配就别让他下单(用户 2026-08-18 拍板)。 */
+      const personalBlockers = (
+        who: { username: string } | undefined,
+      ): Array<{ key: string; label: string; where: "admin" | "me" }> => {
+        if (!options.auth || !who) return [];
+        const needs = service.launchOptions().needs;
+        const missing: Array<
+          { key: string; label: string; where: "admin" | "me" }> = [];
+        if (needs.git_token && !options.auth.gitCredential(who.username)) {
+          missing.push({ key: "git_token", where: "me",
+            label: "个人 Git 令牌未配置(我的工作 → 令牌),"
+              + "没有它推不了代码、MR 也挂不到你名下" });
+        }
+        if (needs.luban_token && !options.auth.lubanToken(who.username)) {
+          missing.push({ key: "luban_token", where: "me",
+            label: "个人通知令牌未配置(我的工作 → 令牌),"
+              + "没有它任务要你决定时没人喊得到你" });
+        }
+        return missing;
+      };
 
       // 登录页资产公开，身份 API 自己决定是否需要会话。
       if (parts[0] === "auth") {
@@ -135,6 +158,7 @@ export function createTaskServer(
           return json(response, 200, {
             ...viewer,
             ...options.auth?.gitProfile(viewer.username),
+            luban_token_hint: options.auth?.lubanTokenHint(viewer.username),
             moonlight: options.auth?.moonlightEnabled(viewer.username) ?? false,
           });
         }
@@ -168,6 +192,23 @@ export function createTaskServer(
           }
           return json(response, 200,
             options.auth!.gitProfile(viewer.username));
+        }
+        // 个人通知令牌(小鲁班):同样只写不读。按人存是因为那个接口
+        // 以令牌对应的人的身份发消息——管理员配一个服务号,所有人收到
+        // 的都是同一个机器人;各人配自己的,就是自己发给自己。
+        if (request.method === "PUT" && parts[1] === "me"
+            && parts[2] === "luban-token") {
+          if (!viewer) return json(response, 401, { error: "尚未登录" });
+          const body = await readBody(request);
+          try {
+            options.auth!.setLubanToken(
+              viewer.username, String(body.token ?? ""));
+          } catch (error) {
+            return json(response, 400, { error: String(error) });
+          }
+          return json(response, 200, {
+            luban_token_hint: options.auth!.lubanTokenHint(viewer.username),
+          });
         }
         if (request.method === "POST" && parts[1] === "logout") {
           options.auth?.endSession(sessionToken);
@@ -279,7 +320,11 @@ export function createTaskServer(
         if (options.auth && !viewer) {
           return json(response, 401, { error: "请先登录" });
         }
-        return json(response, 200, service.launchOptions());
+        const launch = service.launchOptions();
+        return json(response, 200, {
+          ...launch,
+          blockers: [...launch.blockers, ...personalBlockers(viewer)],
+        });
       }
 
       const protectedRoute =
@@ -372,6 +417,20 @@ export function createTaskServer(
         const repairRounds = body.repair_rounds === undefined
           || body.repair_rounds === null || body.repair_rounds === ""
           ? undefined : Number(body.repair_rounds);
+        // 配置没配齐不给下单(用户拍板)。前端会把缺项摆在明面上,
+        // 但拦必须在后端——绕过界面直接打接口的一样要被拦住,
+        // 否则任务会带着缺失的令牌一路跑到推送/通知那步才炸。
+        const blockers = [
+          ...service.launchOptions().blockers,
+          ...personalBlockers(viewer),
+        ];
+        if (blockers.length) {
+          return json(response, 409, {
+            error: "配置未完成,先补齐这些再下单:"
+              + blockers.map((item) => item.label).join(";"),
+            blockers,
+          });
+        }
         try {
           return json(response, 201, service.create(requirement,
             { account, repo, lane, model, repairRounds }));

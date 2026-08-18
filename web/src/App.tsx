@@ -15,6 +15,7 @@ import { LaunchWorkspace } from "./LaunchWorkspace";
 import { TaskWorkspace } from "./TaskWorkspace";
 import { SettingsBoard } from "./SettingsView";
 import { GitTokenCard } from "./GitTokenCard";
+import { LubanTokenCard } from "./LubanTokenCard";
 import { putMoonlight } from "./api";
 import { byUrgency } from "./taskTime";
 import {
@@ -254,6 +255,7 @@ export function App() {
             onOpen={openArtifacts}
           />}
           <GitTokenCard session={session} />
+          <LubanTokenCard session={session} />
           <section className="personal-pulse four" aria-label="我的任务摘要"><div className="personal-stat attention"><span>待我核对</span><strong>{myWaiting.length}</strong></div><div className="personal-stat danger"><span>需要介入 / 已暂停</span><strong>{myBlocked.length + myPaused.length}</strong></div><div className="personal-stat active"><span>机器执行中</span><strong>{myActive.length}</strong></div><div className="personal-stat success"><span>待合入 / 完成</span><strong>{myDelivered.length}</strong></div></section>
           <section className="review-inbox" aria-labelledby="review-title"><div className="section-head"><div><span className="section-kicker">REVIEW INBOX</span><h2 id="review-title">待我核对</h2></div><span className="section-count attention">{myWaiting.length} 项</span></div>{myWaiting.length === 0 ? <div className="review-clear"><span aria-hidden>✓</span><div><strong>当前没有需要你核对的事项</strong><p>新的人工节点会通过小鲁班提醒，并自动出现在这里。</p></div></div> : <div className="task-list review-list">{myWaiting.map((task) => <TaskCard key={task.id} task={task} onChanged={refresh} focused={task.id === targetTaskId} canOperate onOpenArtifacts={() => openArtifacts(task)} />)}</div>}</section>
           {myBlocked.length > 0 && <TaskGroup kicker="NEEDS ATTENTION" title="需要我介入" tasks={myBlocked} onChanged={refresh} onOpenArtifacts={openArtifacts} targetTaskId={targetTaskId} tone="danger" />}

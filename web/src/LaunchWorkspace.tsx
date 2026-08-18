@@ -19,14 +19,17 @@ export function LaunchWorkspace({
   const [account, setAccount] = useState(session.username);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
-  // 任务级可选项(用户拍板只有这两个):模型选择、修复轮预算。
-  // 拉不到数据源就不展示——表单退回最简形态,发单不受影响(fail-open)。
+  // 任务级可填项(2026-08-18 重定口径):交付仓**必填**、车道、修复轮
+  // 预算。模型不给选——管理员统一配一个,这里只显示"这单用谁跑"。
   const [options, setOptions] = useState<LaunchOptions | null>(null);
   const [repo, setRepo] = useState("");
   // 车道下单就定(用户拍板:不让 agent 来问),默认慢速。
   const [lane, setLane] = useState("慢速");
-  const [modelKey, setModelKey] = useState("");
   const [repairRounds, setRepairRounds] = useState("");
+  // 配置没配齐不让下单:缺项来自后端(服务级+个人级),前端只负责
+  // 摆在明面上。后端同样硬拦——绕过界面打接口一样被 409 挡住。
+  const blockers = options?.blockers ?? [];
+  const blocked = blockers.length > 0;
 
   useEffect(() => {
     getLaunchOptions().then(setOptions).catch(() => setOptions(null));
@@ -51,17 +54,12 @@ export function LaunchWorkspace({
     setSubmitting(true);
     setError("");
     try {
-      // 模型 id 里可能有 "/"(如 org/model),只切第一段作 provider。
-      const slash = modelKey.indexOf("/");
-      const provider = modelKey.slice(0, slash);
-      const model = modelKey.slice(slash + 1);
       await createTask(
         requirement.trim(),
         session.role === "admin" ? account.trim() || undefined : session.username,
         {
           repo: repo.trim() || undefined,
           lane,
-          model: modelKey ? { provider, model } : undefined,
           repairRounds: repairRounds.trim() === ""
             ? undefined : Number(repairRounds),
         },
@@ -104,6 +102,26 @@ export function LaunchWorkspace({
               ? "创建任务并指定负责人；提交后回到个人待办继续跟进。"
               : "任务会自动归入你的工作台，人工节点也会回到你的待核对列表。"}</p>
           </div>
+          {blocked && (
+            <div className="launch-blockers" role="alert">
+              <strong>先把配置补齐,才能下单</strong>
+              <ul>
+                {blockers.map((item) => (
+                  <li key={item.key}>
+                    <span className={`blocker-where blocker-${item.where}`}>
+                      {item.where === "admin" ? "管理员" : "你自己"}
+                    </span>
+                    {item.label}
+                  </li>
+                ))}
+              </ul>
+              <small>
+                这些都是"以谁的身份做事"的凭据:Git 令牌决定推送与 MR
+                挂在谁名下,通知令牌决定消息以谁的身份发——密钥只写不读,
+                管理员也代配不了,只能各人自己配一次。
+              </small>
+            </div>
+          )}
           <form className="composer" onSubmit={submit}>
             <label className="requirement-field">
               <span>任务需求</span>
@@ -118,19 +136,18 @@ export function LaunchWorkspace({
             </label>
             {options?.repo.enabled && (
               <label className="repo-field">
-                <span>交付代码仓</span>
+                <span>交付代码仓{options.repo.required ? "（必填）" : ""}</span>
                 <input
                   type="text"
                   value={repo}
                   onChange={(event) => setRepo(event.target.value)}
-                  placeholder={options.repo.default
-                    ? `默认：${options.repo.default}`
-                    : "代码仓地址（如 https://codehub…/xxx.git）"}
+                  placeholder="代码仓地址（如 https://codehub…/xxx.git）"
                   spellCheck={false}
+                  required={options.repo.required}
                 />
                 <small className="repo-field-note">
-                  留空用服务默认仓；地址不要带账号密码，推送鉴权走个人
-                  Git 令牌。
+                  每单都要写明交到哪个仓（本部署不设默认仓，避免下错地方）；
+                  地址不要带账号密码，推送鉴权走个人 Git 令牌。
                 </small>
               </label>
             )}
@@ -156,27 +173,11 @@ export function LaunchWorkspace({
                   <option value="快速">快速（轻量流程）</option>
                 </select>
               </label>
-              {options && options.models.length > 1 && (
+              {options?.model && (
+                // 模型不给选(管理员统一配),只告诉人这单谁来跑。
                 <label className="account-field">
-                  <span>模型</span>
-                  <select
-                    className="launch-model-select"
-                    value={modelKey}
-                    onChange={(event) => setModelKey(event.target.value)}
-                  >
-                    <option value="">
-                      默认{options.default.model
-                        ? `（${options.default.model}）` : ""}
-                    </option>
-                    {options.models.map((item) => (
-                      <option
-                        key={`${item.provider}/${item.model}`}
-                        value={`${item.provider}/${item.model}`}
-                      >
-                        {item.model}（{item.provider}）
-                      </option>
-                    ))}
-                  </select>
+                  <span>执行模型</span>
+                  <input type="text" value={options.model.model} readOnly />
                 </label>
               )}
               {options && (
@@ -193,8 +194,9 @@ export function LaunchWorkspace({
                   />
                 </label>
               )}
-              <button type="submit" disabled={submitting}>
-                <span>{submitting ? "正在发起" : "确认发起"}</span>
+              <button type="submit" disabled={submitting || blocked}>
+                <span>{submitting ? "正在发起"
+                  : blocked ? "配置未完成" : "确认发起"}</span>
                 <svg viewBox="0 0 20 20" aria-hidden><path d="M4 10h11M11 6l4 4-4 4" /></svg>
               </button>
             </div>

@@ -38,6 +38,10 @@ export interface NotifierOptions {
   /** 运行时覆盖(管理页热改):每次投递现读,返回 endpoint/headers 的
    * 覆盖值,没有就回落静态配置。生效边界=下一条消息。 */
   live?: () => { endpoint?: string; headers?: Record<string, string> };
+  /** 收件人自己的通知令牌(小鲁班以令牌对应的人的身份发消息,所以
+   * 按人取,不是服务级配一个)。**只经请求头下发**——请求体会被外部
+   * 动作台账原样记进投影,令牌进体等于把密钥写进数据库。 */
+  personalToken?: (account: string) => string | undefined;
   /** 有限退避重试的间隔(毫秒);长度即最大重试次数。 */
   backoffMs?: number[];
   log?: (message: string) => void;
@@ -186,11 +190,16 @@ export class Notifier {
       record.attempts += 1;
       try {
         const { endpoint, headers } = this.target();
+        const personal = this.options.personalToken?.(record.account);
         const response = await fetch(endpoint, {
           method: "POST",
           headers: {
             "content-type": "application/json",
             ...headers,
+            // 个人令牌走头不走体(密钥纪律,同交付链的 x-mfc-git-token):
+            // 桥拿它填进内网接口要的字段,宿主这边台账里不会留下明文。
+            ...(personal
+              ? { "x-mfc-luban-token": encodeURIComponent(personal) } : {}),
           },
           body: JSON.stringify({
             account: record.account,

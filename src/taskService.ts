@@ -530,15 +530,13 @@ export class TaskService {
         detail: "数据目录不可读写", suggestion: String(error) });
     }
 
-    const launch = this.launchOptions();
-    const defaultKnown = launch.models.some((item) =>
-      item.provider === launch.default.provider && item.model === launch.default.model);
-    items.push(defaultKnown
+    const active = this.launchOptions().model;
+    items.push(active
       ? { key: "model", label: "模型网关", status: "ok",
-          detail: `${launch.default.provider}/${launch.default.model} 已配置` }
+          detail: `${active.provider}/${active.model} 已配置` }
       : { key: "model", label: "模型网关", status: "error",
-          detail: "默认模型不在当前模型清单中",
-          suggestion: "在服务设置中检查 models.json 与默认模型" });
+          detail: "没有可用模型",
+          suggestion: "管理页 → 模型网关:贴 models.json 同形内容" });
 
     const notify = this.options.notifier?.health();
     items.push(!notify?.configured
@@ -565,14 +563,14 @@ export class TaskService {
               detail: "连接与投影正常" });
 
     const platform = this.effectivePlatformUrl();
-    items.push(!launch.repo.enabled
+    items.push(!this.options.host
       ? { key: "git", label: "Git 交付", status: "warning",
           detail: "当前是纯会话模式", suggestion: "交付代码前启用内核模式与代码仓" }
       : !platform
         ? { key: "git", label: "Git 交付", status: "warning",
             detail: "未配置 MR / 流水线平台", suggestion: "在交付与形态中配置平台地址" }
         : { key: "git", label: "Git 交付", status: "ok",
-            detail: launch.repo.default ? "平台与默认代码仓已配置" : "平台已配置；代码仓需逐单填写" });
+            detail: "平台已配置;代码仓逐单填写(本部署不设默认仓)" });
 
     if (!this.options.isolation) {
       items.push({ key: "container", label: "容器隔离", status: "warning",
@@ -901,37 +899,74 @@ export class TaskService {
       ?? {}) as Record<string, unknown>;
   }
 
-  /** 下单表单的数据源:可选模型清单 + 当前默认。选项≤1 时表单
-   * 不必展示下拉——没得选就别摆出选择的样子。 */
+  /** 下单表单的数据源。
+   *
+   * 口径(用户 2026-08-18 拍板,按内网实战定的):
+   * - **交付仓必填**,没有"默认仓"这回事——一个部署要服务很多个仓,
+   *   默认仓只会让人漏看一眼就把单下错地方;
+   * - **模型不给选**:管理员统一配一个,所有人用同一个。选择权留给
+   *   人只会制造"为什么他的比我快"的困惑,也让成本不可控;
+   * - 车道与修复轮预算仍按单可选(前者影响审批节奏,后者是钱)。
+   *
+   * `model` 字段仍然返回当前生效的那一个——不是给人选,是给界面显示
+   * "这单会用谁跑",让人心里有数。 */
   launchOptions(): {
-    models: Array<{ provider: string; model: string }>;
-    default: { provider?: string; model?: string };
+    /** 当前生效的模型(展示用,下单表单不提供选择)。 */
+    model?: { provider: string; model: string };
     /** 当前默认修复轮:数字=手刹上限;缺席=不限轮(默认形态)。 */
     repair_rounds?: number;
-    repo: { enabled: boolean; default?: string };
+    repo: { enabled: boolean; required: boolean };
+    /** 服务级缺的配置(管理员去补)。非空=不给下单。 */
+    blockers: Array<{ key: string; label: string; where: "admin" | "me" }>;
+    /** 本部署要不要这两把个人令牌(由形态决定,见下方注释)。 */
+    needs: { git_token: boolean; luban_token: boolean };
   } {
-    const providers = (this.activeModelsJson() as {
-      providers?: Record<string, { models?: Array<{ id?: string }> }>;
-    }).providers ?? {};
-    const models = Object.entries(providers).flatMap(([name, spec]) =>
-      (spec?.models ?? [])
-        .map((item) => String(item?.id ?? "")).filter(Boolean)
-        .map((model) => ({ provider: name, model })));
-    const override = this.options.settings?.models() ?? {};
+    const active = this.activeModelChoice();
+    const blockers: Array<
+      { key: string; label: string; where: "admin" | "me" }> = [];
+    // 每条缺项**只在它真会咬人时才拦**:纯会话形态(不接代码仓)拦
+    // Git 令牌毫无道理,没接通知端点拦通知令牌也一样——一刀切的门禁
+    // 会把用不上那件东西的部署一起挡在门外。
+    if (!active) {
+      blockers.push({ key: "model", where: "admin",
+        label: "模型网关未配置(管理页 → 模型网关,贴 models.json 同形内容)"
+          + ";没有它任何任务都跑不起来" });
+    }
+    if (this.options.host && !this.effectivePlatformUrl()) {
+      blockers.push({ key: "platform", where: "admin",
+        label: "交付平台未配置(管理页 → 服务形态 → 平台地址)"
+          + ";没有它代码交付不出去" });
+    }
     return {
-      models,
-      default: {
-        provider: override.provider ?? this.options.provider,
-        model: override.model ?? this.options.model,
-      },
+      model: active,
       repair_rounds: this.options.settings?.runtime().repair_rounds
         ?? this.options.delivery?.repairRounds,
       // 没接内核模式=任务不碰代码仓,表单别摆出输入框骗人。
-      repo: {
-        enabled: !!this.options.host,
-        default: this.effectiveDefaultRepo(),
+      repo: { enabled: !!this.options.host, required: !!this.options.host },
+      blockers,
+      needs: {
+        // 个人令牌该不该要,由部署形态决定(同上:只拦真会咬人的)。
+        git_token: !!this.options.host,
+        luban_token: !!this.options.notifier,
       },
     };
+  }
+
+  /** 当前生效的模型:设置层显式配的 > models.json 里的第一个 >
+   * 部署参数。**自动兜底那一步是有意的**——管理员贴完 models.json
+   * 就能用,不必再手打一遍 provider/model(实测:服务起来后表单是空的,
+   * 人不知道还差一步)。 */
+  private activeModelChoice(): { provider: string; model: string } | undefined {
+    const override = this.options.settings?.models() ?? {};
+    const providers = (this.activeModelsJson() as {
+      providers?: Record<string, { models?: Array<{ id?: string }> }>;
+    }).providers ?? {};
+    const firstProvider = Object.keys(providers)[0];
+    const provider = override.provider || this.options.provider || firstProvider;
+    const listed = (providers[provider ?? ""]?.models ?? [])
+      .map((item) => String(item?.id ?? "")).filter(Boolean);
+    const model = override.model || listed[0] || this.options.model;
+    return provider && model ? { provider, model } : undefined;
   }
 
   create(
@@ -949,6 +984,16 @@ export class TaskService {
       throw new Error(`车道只能是 快速/慢速,收到: ${options.lane}`);
     }
     const repo = (options.repo ?? "").trim() || undefined;
+    // 交付仓必填(用户 2026-08-18 拍板:没有"默认仓"这回事)。一个
+    // 部署要服务很多个仓,兜底一个默认值只会让人漏看一眼就把单下错
+    // 地方——宁可当场拒绝,也不替人猜他要交到哪儿。
+    // 唯一豁免:部署显式用 `--repo` 钉死了单仓(演示/试跑/测试的
+    // harness 形态,那是命令行不是产品面)。生产按 `--kernel-mode`
+    // 不带 `--repo` 起,于是每单都必须写明。
+    if (!repo && this.options.host && !this.options.host.repoPath) {
+      throw new Error(
+        "请填写交付代码仓——本部署不设默认仓,每单都要写明交到哪个仓");
+    }
     if (repo) {
       if (!this.options.host) {
         throw new Error("本部署未接内核模式,任务不克隆代码仓");
@@ -964,10 +1009,15 @@ export class TaskService {
       }
     }
     if (options.model) {
-      // 下单即校验:选了不存在的模型,晚到会话启动才炸是坑人。
-      const known = this.launchOptions().models;
-      if (!known.some((item) => item.provider === options.model!.provider
-          && item.model === options.model!.model)) {
+      // 下单不再给选模型(用户拍板:管理员统一配一个)。这条通路留给
+      // 试跑器/测试显式指定,仍然当场校验存在性——选了不存在的模型,
+      // 晚到会话启动才炸是坑人。
+      const providers = (this.activeModelsJson() as {
+        providers?: Record<string, { models?: Array<{ id?: string }> }>;
+      }).providers ?? {};
+      const listed = (providers[options.model.provider]?.models ?? [])
+        .map((item) => String(item?.id ?? ""));
+      if (!listed.includes(options.model.model)) {
         throw new Error(
           `没有模型 ${options.model.provider}/${options.model.model}`);
       }

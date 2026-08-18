@@ -385,6 +385,9 @@ async function main(): Promise<void> {
       headers: lubanHeaders,
       // 管理页热改的通知端点/鉴权头:每条消息投递时现读。
       live: () => settings.luban(),
+      // 收件人自己的通知令牌:小鲁班以令牌对应的人的身份发消息,
+      // 每人配自己的=自己发给自己,不用申请机器人账号。
+      personalToken: (account) => auth.lubanToken(account),
     }),
     projection,
     linkBase: `http://127.0.0.1:${port}`,
