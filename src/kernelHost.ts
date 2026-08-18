@@ -168,6 +168,14 @@ export class KernelHost {
         this.options.log?.(`dispatch ${event} 启动失败: ${String(error)}`);
         resolve({ code: 0, stdout: "", stderr: String(error) });
       });
+      // stdin 的 error 必须有人接:子进程若在我们写之前就没了(超时被
+      // SIGKILL、python 崩了、管道断了),EPIPE 会作为流上的 error 事件
+      // 抛出来——**没有监听器的 error 事件是 uncaughtException,直接掀
+      // 掉整个进程**。这是"通知/门禁一条旁路不许带走服务"红线里最不
+      // 显眼的一个漏口:它连 Promise 都不经过,catch 拦不住。
+      child.stdin.on("error", (error) => {
+        this.options.log?.(`dispatch ${event} 写入失败(fail-open): ${error}`);
+      });
       child.stdin.write(JSON.stringify(payload) + "\n");
       child.stdin.end();
     });

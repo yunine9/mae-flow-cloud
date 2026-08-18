@@ -246,8 +246,22 @@ export class CloudSession {
       result: renderDecision(record),
       answers: answersOf(record, record),
     });
-    void this.options.hostHooks?.postTool?.(finished);
+    this.kernelBypass(this.options.hostHooks?.postTool?.(finished));
     this.hostAnswered.add(record.call_id);
+  }
+
+  /** 进内核的登记是旁路:抛了记一笔,**绝不带走进程**。
+   *
+   * postTool 是即发即忘(证据登记不该拖慢模型这一轮),而 Node 里没人
+   * 接的 rejection 默认终止进程——python 起不来、管道半路断掉,后果就
+   * 是整台服务连着所有在跑的任务一起没。红线:旁路一律 fail-open。 */
+  private kernelBypass(work: Promise<unknown> | undefined): void {
+    if (!work) return;
+    void work.catch((error) => {
+      this.options.log?.(
+        `任务 ${this.options.taskId} 内核登记失败(fail-open,流程照走): `
+        + String(error));
+    });
   }
 
   /** 发一条用户消息并跑完本轮,统一收口判定。 */
@@ -409,7 +423,7 @@ export class CloudSession {
       answers: answersOf(record, waiting),
     });
     // 决定进内核:旧插件 posttooluse 捕获 AskUserQuestion 答案的同一路径。
-    void this.options.hostHooks?.postTool?.(finished);
+    this.kernelBypass(this.options.hostHooks?.postTool?.(finished));
     this.hostAnswered.add(waiting.call_id);
     this.decisionResolvers.delete(waiting.call_id);
     this.waitingRecord = undefined;
@@ -601,7 +615,7 @@ export class CloudSession {
       this.options.eventLog.append(semantic);
       this.options.transcript.record(semantic);
       // 证据登记交内核(fire 进 KernelHost 的串行链,顺序由它保证)。
-      void this.options.hostHooks?.postTool?.(semantic);
+      this.kernelBypass(this.options.hostHooks?.postTool?.(semantic));
     }
   }
 
@@ -758,7 +772,7 @@ export class CloudSession {
     this.hostAnswered.add(callId); // pi 对 dispatch_agent 的回声丢弃
     // 完成对账进内核:posttooluse(Task) 走 hook_agent_lifecycle 的
     // tool_use_id 绑定,子 transcript 布局与旧确定性解析一致。
-    void this.options.hostHooks?.postTool?.({
+    this.kernelBypass(this.options.hostHooks?.postTool?.({
       eventId: this.options.eventLog.lastEventId(),
       taskId: this.options.taskId,
       sessionId: this.sessionId,
@@ -768,7 +782,7 @@ export class CloudSession {
         call_id: callId, name: "Task", input: params,
         is_error: lifecycle !== "returned", result: finalText,
       },
-    });
+    }));
     if (lifecycle !== "returned") {
       throw new Error(finalText || "子 Agent 中断,无最终报告");
     }

@@ -1075,7 +1075,7 @@ export class TaskService {
     this.tasks.set(id, task);
     this.persist(task);
     this.queue.push(id);
-    void this.pump();
+    this.bypass(undefined, "任务泵", this.pump());
     return { ...summary };
   }
 
@@ -1103,7 +1103,8 @@ export class TaskService {
       this.options.log?.(`任务 ${task.summary.id} 落盘失败: ${String(error)}`);
     }
     // 文件先落袋(它才是真相),投影旁路跟进;失败由投影自己 fail-open。
-    void this.options.projection?.upsertTask(this.project(task));
+    this.bypass(task, "投影 upsert",
+      this.options.projection?.upsertTask(this.project(task)));
   }
 
   /** 服务重启后恢复任务(服务启动时调用一次):
@@ -1159,12 +1160,14 @@ export class TaskService {
         // (锚是 delivery.sha,结果仍只认绑定版本)。
         if (summary.status === "verifying"
             && summary.delivery?.pipeline === "running") {
-          void this.pollPipeline(task, task.controlEpoch);
+          this.bypass(task, "流水线轮询",
+            this.pollPipeline(task, task.controlEpoch));
         }
         // 合入监控同理续:重启前在等合入/等审批的接着盯(平台不支持
         // 门禁契约的,watchMerge 一轮就退,行为与旧版完全一致)。
         if (summary.status === "await_merge") {
-          void this.watchMerge(task, task.controlEpoch);
+          this.bypass(task, "合入监控",
+            this.watchMerge(task, task.controlEpoch));
         }
         if (summary.status === "running" || summary.status === "queued") {
           summary.status = "queued";
@@ -1177,7 +1180,7 @@ export class TaskService {
         this.options.log?.(`恢复 ${name} 失败: ${String(error)}`);
       }
     }
-    if (requeued) void this.pump();
+    if (requeued) this.bypass(undefined, "任务泵", this.pump());
     return { restored, requeued };
   }
 
@@ -1187,12 +1190,13 @@ export class TaskService {
   private replayProjection(task: TaskState): void {
     const projection = this.options.projection;
     if (!projection) return;
-    void projection.upsertTask(this.project(task));
+    this.bypass(task, "投影 upsert",
+      projection.upsertTask(this.project(task)));
     try {
       const log = new EventLog(
         join(task.summary.workspace, "events.jsonl"));
       for (const event of log.replay()) {
-        void projection.appendEvent(event);
+        this.bypass(task, "投影事件", projection.appendEvent(event));
       }
     } catch (error) {
       this.options.log?.(
@@ -1236,7 +1240,7 @@ export class TaskService {
     task.resume = true;
     this.persist(task);
     this.queue.push(id);
-    void this.pump();
+    this.bypass(undefined, "任务泵", this.pump());
     return { ...task.summary };
   }
 
@@ -1291,7 +1295,11 @@ export class TaskService {
     if (task.driver) {
       task.summary.status = "running";
       this.persist(task);
-      void this.settle(task, task.driver.resumeWithDecision(resolved));
+      // 决定之后的这一轮是即发即忘:settle 自己会把异常收成"任务
+      // failed",这里再兜一层——连收口都失败时,宁可只丢一条日志,
+      // 也不许一个没人接的 rejection 掀掉整台服务(内网实测的死法)。
+      this.bypass(task, "决定后续跑",
+        this.settle(task, task.driver.resumeWithDecision(resolved)));
     } else {
       // 恢复场景:旧会话死于服务重启,决定先落袋(waiting.json 已
       // resolved),任务入队走重建会话——launch 会补登记这份决定。
@@ -1301,7 +1309,7 @@ export class TaskService {
       task.resume = true;
       this.persist(task);
       this.queue.push(task.summary.id);
-      void this.pump();
+      this.bypass(undefined, "任务泵", this.pump());
     }
     return { ...task.summary };
   }
@@ -1392,7 +1400,8 @@ export class TaskService {
       task.summary.status = "verifying";
       task.summary.detail = "已恢复流水线状态跟踪";
       this.persist(task);
-      void this.pollPipeline(task, task.controlEpoch);
+      this.bypass(task, "流水线轮询",
+        this.pollPipeline(task, task.controlEpoch));
       return { ...task.summary };
     }
     task.summary.status = "queued";
@@ -1400,7 +1409,7 @@ export class TaskService {
     task.resume = from !== "queued";
     this.persist(task);
     this.queue.push(id);
-    void this.pump();
+    this.bypass(undefined, "任务泵", this.pump());
     return { ...task.summary };
   }
 
@@ -1490,10 +1499,10 @@ export class TaskService {
       task.summary.status = "running";
       this.persist(task);
       const epoch = task.controlEpoch;
-      void this.launch(task, epoch).finally(() => {
+      this.bypass(task, "任务启动", this.launch(task, epoch).finally(() => {
         this.runningCount -= 1;
-        void this.pump();
-      });
+        this.bypass(undefined, "任务泵", this.pump());
+      }));
     }
   }
 
@@ -1699,7 +1708,8 @@ export class TaskService {
           ?? modelOverride.model ?? this.options.model,
         eventLog: new EventLog(
           join(workspace, "events.jsonl"),
-          (event) => void this.options.projection?.appendEvent(event)),
+          (event) => this.bypass(
+            task, "投影事件", this.options.projection?.appendEvent(event))),
         transcript: new TranscriptStore(transcriptPath, "main"),
         gate: new GateService({
           contract: this.options.contract,
@@ -1748,7 +1758,7 @@ export class TaskService {
       if (!this.current(task, epoch)) return;
       task.summary.status = "failed";
       task.summary.detail = String(error);
-      void task.container?.stop();
+      this.bypass(task, "容器清理", task.container?.stop());
       this.persist(task);
       this.options.log?.(`任务 ${task.summary.id} 启动失败: ${String(error)}`);
     }
@@ -1810,7 +1820,7 @@ export class TaskService {
         if (previous.pipeline === "success") {
           task.summary.status = "await_merge";
           this.persist(task);
-          void this.watchMerge(task, epoch);
+          this.bypass(task, "合入监控", this.watchMerge(task, epoch));
           return;
         }
         if (previous.pipeline.startsWith("failed")) {
@@ -1825,8 +1835,8 @@ export class TaskService {
       // 外部动作台账(§11):请求先落一行(带幂等键),结果回来再补
       // 结果侧——恢复时"先查远端真实状态"就有底账可对。纯旁路。
       const ledger = (action: Omit<ExternalAction, "taskId">) =>
-        void this.options.projection?.recordAction(
-          { taskId: task.summary.id, ...action });
+        this.bypass(task, "投影动作", this.options.projection?.recordAction(
+          { taskId: task.summary.id, ...action }));
       const mrRequest = {
         // 任务级仓进了场,适配层必须知道这单落在哪个仓——
         // repo 字段随 MR/流水线请求走,假件(单仓)忽略它无害。
@@ -1882,7 +1892,7 @@ export class TaskService {
         run.status === "success" ? "await_merge" : "verifying";
       // 终态当场裁决;running 不是结局,由带预算的轮询收敛后再裁。
       if (run.status === "running") {
-        void this.pollPipeline(task, epoch);
+        this.bypass(task, "流水线轮询", this.pollPipeline(task, epoch));
       } else {
         await this.pipelineVerdict(task, sha,
           run.status === "success" ? "success" : "failed",
@@ -1945,7 +1955,7 @@ export class TaskService {
       if (terminal.status === "success") {
         task.summary.status = "await_merge";
       }
-      void this.options.projection?.recordAction({
+      this.bypass(task, "投影动作", this.options.projection?.recordAction({
         taskId: task.summary.id,
         idemKey: `pipeline:${sha}`,
         kind: "pipeline_trigger",
@@ -1954,7 +1964,7 @@ export class TaskService {
         sha,
         startedAt: new Date().toISOString(),
         finishedAt: new Date().toISOString(),
-      });
+      }));
       // 终态交给裁决点:绿=收口通知;红=修复环决定下一步。
       // (persist/notify 都在裁决点里,别在这儿重复收口。)
       await this.pipelineVerdict(task, sha,
@@ -2009,7 +2019,7 @@ export class TaskService {
       // 流水线绿≠赢了:九项门禁全过 + 合入才是终点(内网既有框架的
       // 实证)。支持门禁契约的平台接着盯;不支持的(fetchGates 回
       // undefined)保持旧语义——await_merge 即收口,一字不变。
-      void this.watchMerge(task, epoch);
+      this.bypass(task, "合入监控", this.watchMerge(task, epoch));
       return;
     }
     // 红灯也过证据口(RED/STALE 照记):留的是最近一次终态的物证。
@@ -2161,7 +2171,7 @@ export class TaskService {
     // pump 会同步把状态置成 running,settle 随后那句"running→completed"
     // 就把修复轮当场盖掉(读代码逮住的竞态)。setImmediate 排到微任务链
     // 之后,settle 收完自己的账、原会话的 finally 归还并发额度,再派单。
-    setImmediate(() => void this.pump());
+    setImmediate(() => this.bypass(undefined, "任务泵", this.pump()));
   }
 
   /** 门禁视图:平台不支持(404/没配分支对)或查询失败一律回
@@ -2223,7 +2233,7 @@ export class TaskService {
       this.persist(task);
       const account = task.summary.luban_account;
       if (this.options.notifier && account) {
-        void this.options.notifier.notifyOutcome({
+        this.bypass(task, "收口通知", this.options.notifier.notifyOutcome({
           taskId: task.summary.id,
           account,
           status: "merged",
@@ -2231,7 +2241,7 @@ export class TaskService {
             + (delivery.mr_url ? `:${delivery.mr_url}` : ""),
           link: personalTaskLink(
             this.options.linkBase, account, task.summary.id),
-        });
+        }));
       }
       return;
     }
@@ -2313,7 +2323,8 @@ export class TaskService {
           // 换了一批等待项才再响)。
           const account = task.summary.luban_account;
           if (waitingText && this.options.notifier && account) {
-            void this.options.notifier.notifyOutcome({
+            this.bypass(task, "等待通知",
+              this.options.notifier.notifyOutcome({
               taskId: task.summary.id,
               account,
               status: `waiting:${sorted.waiting.sort().join("+")}`,
@@ -2322,7 +2333,7 @@ export class TaskService {
                   ? `:${task.summary.delivery.mr_url}` : ""),
               link: personalTaskLink(
                 this.options.linkBase, account, task.summary.id),
-            });
+            }));
           }
         }
         await new Promise((tick) => setTimeout(tick, interval).unref());
@@ -2563,14 +2574,14 @@ export class TaskService {
           });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         posted.push(item.id);
-        void this.options.projection?.recordAction({
+        this.bypass(task, "投影动作", this.options.projection?.recordAction({
           taskId: task.summary.id,
           idemKey: `review-reply:${item.id}`,
           kind: "review_reply",
           request: { id: item.id, body: item.body.slice(0, 500) },
           startedAt: new Date().toISOString(),
           finishedAt: new Date().toISOString(),
-        });
+        }));
       } catch (error) {
         this.options.log?.(
           `任务 ${task.summary.id} 检视回复发布失败(讨论 ${item.id}): `
@@ -2742,7 +2753,7 @@ export class TaskService {
     task.resume = true;
     this.persist(task);
     this.queue.push(task.summary.id);
-    setImmediate(() => void this.pump());
+    setImmediate(() => this.bypass(undefined, "任务泵", this.pump()));
   }
 
   /** 人工节点的"现成答案":有则自动交卷,没有才真等人。两个来源:
@@ -2881,7 +2892,7 @@ export class TaskService {
       ((waiting.question as any)?.questions ?? []) as Array<{
         question?: string;
       }>;
-    void notifier
+    this.bypass(task, "待办通知", notifier
       .notifyWaiting({
         waitingId: waiting.waiting_id,
         taskId: task.summary.id,
@@ -2896,7 +2907,7 @@ export class TaskService {
       })
       .then((record) => {
         task.notifyRecord = record;
-      });
+      }));
   }
 
   /** 个人 Git 凭据落地为 credential helper 三件套:
@@ -3025,14 +3036,14 @@ export class TaskService {
           ? `修复会话判断需人工处理:${loop.diagnosis.slice(0, 200)}`
           : "修复会话未产生新提交,请人工查看流水线日志")
       : `${loop.max} 轮修复预算用完,流水线仍红`;
-    void notifier.notifyOutcome({
+    this.bypass(task, "修复停摆通知", notifier.notifyOutcome({
       taskId: task.summary.id,
       account,
       status: `repair_${loop.state}`,
       summary: `流水线自动修复已停,需要你介入——${why}`,
       link: personalTaskLink(
         this.options.linkBase, account, task.summary.id),
-    });
+    }));
   }
 
   /** 任务收口 → 小鲁班(说人话)。语义同待办通知:失败不改流程,
@@ -3051,13 +3062,13 @@ export class TaskService {
       failed: `出错了:${detail || "原因见任务页"}`,
     };
     if (!text[status]) return;
-    void notifier.notifyOutcome({
+    this.bypass(task, "收口通知", notifier.notifyOutcome({
       taskId: id,
       account,
       status,
       summary: text[status],
       link: personalTaskLink(this.options.linkBase, account, id),
-    });
+    }));
   }
 
   /** 主动压缩(用户关切:长编码阶段注意力漂移):事件量每涨
@@ -3111,8 +3122,59 @@ export class TaskService {
     }
   }
 
-  /** outcome → 任务状态。等待人工不占并发额度之外的资源,会话原地挂起。 */
+  /** 旁路的即发即忘统一走这里:**抛了就记账,绝不带走进程**。
+   *
+   * `void 某个异步旁路()` 是本仓的常用写法(通知、投影、流水线轮询、
+   * 合入监控、容器清理),但 Node 从 15 起未处理的 rejection 默认终止
+   * 进程——于是"PG 抖一下""docker 没了""平台 502"这类旁路故障,后果
+   * 是整台服务连着所有在跑的任务一起没。红线写得很清楚:旁路一律
+   * fail-open。这个壳子就是那条红线在代码里的落点,别再裸 void。 */
+  private bypass(
+    task: TaskState | undefined,
+    what: string,
+    work: Promise<unknown> | undefined,
+  ): void {
+    if (!work) return;
+    void work.catch((error) => {
+      const who = task ? `任务 ${task.summary.id} ` : "";
+      this.options.log?.(
+        `${who}旁路「${what}」出错(fail-open,流程照走): ${String(error)}`);
+    });
+  }
+
+  /** outcome → 任务状态。等待人工不占并发额度之外的资源,会话原地挂起。
+   *
+   * **一整条链都在 try 里**,这不是防御性编程的洁癖:decide 那头是
+   * `void this.settle(...)`——人点了"通过",模型跑一轮,这条链上任何
+   * 一处抛异常都是一个没人接的 Promise,Node 默认直接杀进程。内网反复
+   * 报的"serve 莫名其妙挂了、一点错误输出都没有",症状(人工审批通过、
+   * 模型跑完一轮后进程退出)与它严丝合缝。
+   *
+   * 进程级兜底(serve 的 guardProcess)拦得住"死",拦不住"哑":异常
+   * 被吞了,任务会永远停在 running,人在页面上等一个不会来的结果。所以
+   * 这里如实收口——任务 failed,原因写进 detail,通知照发。 */
   private async settle(
+    task: TaskState,
+    turn: Promise<Outcome>,
+    epoch = task.controlEpoch,
+  ): Promise<void> {
+    try {
+      await this.settleTurn(task, turn, epoch);
+    } catch (error) {
+      if (!this.current(task, epoch)) return;
+      task.summary.status = "failed";
+      task.summary.detail = `本轮收口时出错: ${String(error)}`;
+      task.driver?.dispose();
+      this.bypass(task, "容器清理", task.container?.stop());
+      this.persist(task);
+      this.notifyOutcome(task);
+      this.options.log?.(
+        `任务 ${task.summary.id} 收口时抛异常(任务如实 failed,服务继续): `
+        + String(error));
+    }
+  }
+
+  private async settleTurn(
     task: TaskState,
     turn: Promise<Outcome>,
     epoch = task.controlEpoch,
@@ -3190,7 +3252,7 @@ export class TaskService {
         // 下面 tryDeliver→pipelineVerdict 的 halted 分支要用。
         task.lastReply = task.driver?.finalReply();
         task.driver?.dispose();
-        void task.container?.stop();
+        this.bypass(task, "容器清理", task.container?.stop());
         // 专项使命到这儿才算消费掉:会话真做完了。早清会让"修一半
         // 被重启"的重建会话拿不到使命。
         task.mission = undefined;
@@ -3229,7 +3291,7 @@ export class TaskService {
         task.summary.status = "failed";
         task.summary.detail = outcome.detail ?? outcome.reason;
         task.driver?.dispose();
-        void task.container?.stop();
+        this.bypass(task, "容器清理", task.container?.stop());
         this.persist(task);
         this.notifyOutcome(task);
         break;

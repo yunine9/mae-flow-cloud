@@ -112,6 +112,22 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
 
 ## 已知边界(诚实清单)
 
+- **"serve 反复挂、一点错误输出都没有"的真凶(2026-08-18,内网实战)**:
+  死法不是内存也不是端口,是**没人接的 Promise rejection**——Node 从 15
+  起默认因此终止进程(本机 v24.17 实测:`void Promise.reject(...)` 直接
+  exit 1)。而本仓到处是 `void 某个异步旁路()` 的即发即忘(通知、投影、
+  流水线轮询、合入监控、容器清理、内核登记),其中最要命的一条是
+  `decide` 那头的 `void this.settle(...)`:人点"通过"→模型跑一轮→链上
+  任何一处抛异常→整台服务连着所有在跑的任务一起没,后台跑时 stderr 还
+  丢了,现场只剩"进程不见了"。三处一起补:①`settle` 整条链进 try,抛了
+  **任务如实 failed 并写明原因**(进程级兜底只保证不死,不保证不哑——
+  异常被吞、任务永远转圈更难查);②旁路统一走 `bypass()`/`kernelBypass()`
+  记账,不再裸 `void`;③内核 hook 子进程的 `stdin` 补 `error` 监听——
+  EPIPE 是**流上的 error 事件**,不经过 Promise,catch 拦不住,没监听器
+  就是 uncaughtException。**假件能裁的**:投影全线拒绝服务时任务照常收口
+  且留痕、收口抛异常时任务 failed 写明原因;**假件裁不了的**:内网那台
+  机器上到底是哪条旁路先抛的——要等更新后的 `crash.log` 回来才知道。
+
 - **上下文撑爆的自愈(2026-08-18,内网实战逼出来的)**:网关窗口比 pi
   估计的小时会吐硬报错(实测 `input too long ... max input length is
   169984`),原来当场判任务失败。现在:判据命中(见
