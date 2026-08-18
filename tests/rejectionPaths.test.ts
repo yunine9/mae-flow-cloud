@@ -18,15 +18,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskService } from "../src/taskService.ts";
-import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
-
-const REPO_ROOT = resolve(fileURLToPath(import.meta.url), "..", "..");
-const KERNEL_ROOT = discoverKernelRoot(REPO_ROOT)
-  ?? resolve(REPO_ROOT, "kernel"); // 兜底给 READY 探测一个必然落空的路径
-const FIELDTEST = process.env.MAE_FLOW_FIELDTEST_JAVA
-  ?? resolve(REPO_ROOT, "..", "mae-flow-fieldtest-java");
-const READY = existsSync(join(KERNEL_ROOT, "hooks", "dispatch.py"))
-  && existsSync(FIELDTEST);
+import { KERNEL_ROOT, FIELDTEST, KERNEL_SKIP } from "./kernelFixture.ts";
 
 const MAEFLOW = 'python ".mae-flow-work/bin/mae-flow.py"';
 
@@ -145,7 +137,7 @@ async function runWalk(
 }
 
 test("配置打回:否定答案不是背书,重审后才准推进", {
-  skip: READY ? false : "缺 mae-flow 内核或 fieldtest-java,无法裁决",
+  skip: KERNEL_SKIP,
 }, async () => {
   const ticket = "REQ2026081404";
   const script: Scene[] = [
@@ -183,7 +175,7 @@ test("配置打回:否定答案不是背书,重审后才准推进", {
 });
 
 test("交付方式分叉:hotfix/tweak/review 各入各链", {
-  skip: READY ? false : "缺 mae-flow 内核或 fieldtest-java,无法裁决",
+  skip: KERNEL_SKIP,
 }, async () => {
   const routes = [
     { choice: "hotfix", answer: "已定位问题修复", expect: /^hf_/ },

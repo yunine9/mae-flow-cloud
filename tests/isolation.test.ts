@@ -20,12 +20,23 @@ import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskService } from "../src/taskService.ts";
 
 const DOCKER = await dockerAvailable();
-const SKIP = DOCKER ? false : "docker daemon 不可用;起 Colima/Docker 后重跑";
-const IMAGE = "alpine";
+// 镜像可换:内网拉不到公网 alpine,指一个内部仓的等价小镜像即可
+// (要有 sh;容器隔离验的是"真进容器",跟发行版无关)。
+const IMAGE = process.env.MFC_TEST_IMAGE || "alpine";
+let SKIP: false | string =
+  DOCKER ? false : "docker daemon 不可用;起 Colima/Docker 后重跑";
 
 if (DOCKER) {
-  // 镜像预拉:拉取时间不算进用例,拉不下来在这里就炸清楚。
-  execFileSync("docker", ["pull", "-q", IMAGE], { stdio: "ignore" });
+  // 镜像预拉:拉取时间不算进用例。**拉不到不许炸整个文件**——内网
+  // 有 docker 但没有公网仓库是常态,那是环境不具备不是代码有病,
+  // 按仓里的诚实纪律显式 skip 并说清怎么补(内网首跑实测踩到:
+  // 整个用例文件在顶层 throw,报成两条红灯,吓人且误导)。
+  try {
+    execFileSync("docker", ["pull", "-q", IMAGE], { stdio: "ignore" });
+  } catch {
+    SKIP = `镜像 ${IMAGE} 拉不到(内网通常上不了公网仓库):`
+      + "用 MFC_TEST_IMAGE 指一个本地已有/内部仓的镜像后重跑";
+  }
 }
 
 const SCRIPT: Scene[] = [

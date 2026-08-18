@@ -21,12 +21,19 @@ import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskService } from "../src/taskService.ts";
 
 const DOCKER = await dockerAvailable();
-const SKIP = DOCKER ? false : "docker daemon 不可用;起 Colima/Docker 后重跑";
-const IMAGE = "alpine";
+const IMAGE = process.env.MFC_TEST_IMAGE || "alpine";
+let SKIP: false | string =
+  DOCKER ? false : "docker daemon 不可用;起 Colima/Docker 后重跑";
 
 if (DOCKER) {
-  // 镜像预拉:拉取时间不算进用例,拉不下来在这里就炸清楚。
-  execFileSync("docker", ["pull", "-q", IMAGE], { stdio: "ignore" });
+  // 拉不到不许炸整个文件(同 isolation.test.ts 的注):内网有 docker
+  // 却上不了公网仓库是常态,显式 skip 说清怎么补,别报成代码红灯。
+  try {
+    execFileSync("docker", ["pull", "-q", IMAGE], { stdio: "ignore" });
+  } catch {
+    SKIP = `镜像 ${IMAGE} 拉不到(内网通常上不了公网仓库):`
+      + "用 MFC_TEST_IMAGE 指一个本地已有/内部仓的镜像后重跑";
+  }
 }
 
 /** 现场必须放在 $HOME 下(isolation.test.ts 同款坑注):macOS 的

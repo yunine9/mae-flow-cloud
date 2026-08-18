@@ -17,15 +17,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskService } from "../src/taskService.ts";
-import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
-
-const REPO_ROOT = resolve(fileURLToPath(import.meta.url), "..", "..");
-const KERNEL_ROOT = discoverKernelRoot(REPO_ROOT)
-  ?? resolve(REPO_ROOT, "kernel"); // 兜底给 READY 探测一个必然落空的路径
-const FIELDTEST = process.env.MAE_FLOW_FIELDTEST_JAVA
-  ?? resolve(REPO_ROOT, "..", "mae-flow-fieldtest-java");
-const READY = existsSync(join(KERNEL_ROOT, "hooks", "dispatch.py"))
-  && existsSync(FIELDTEST);
+import { KERNEL_ROOT, FIELDTEST, KERNEL_SKIP } from "./kernelFixture.ts";
 
 const MAEFLOW = 'python ".mae-flow-work/bin/mae-flow.py"';
 const TICKET = "REQ2026081403";
@@ -77,7 +69,7 @@ async function until<T>(
 }
 
 test("内核模式恢复:跨进程决定进内核台账,重建会话可见", {
-  skip: READY ? false : "缺 mae-flow 内核或 fieldtest-java,无法裁决",
+  skip: KERNEL_SKIP,
 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-krecover-"));
   const host = {
