@@ -29,6 +29,9 @@ export interface MergeRequest {
   url: string;
   /** 平台侧生命周期(门禁契约用):opened=在途,merged/closed=终态。 */
   merge_state: "opened" | "merged" | "closed";
+  /** 关联的 E2E 单号(REQ/DTS):真件走 --e2e-issues,假件存证同语义
+   * ——测试据此裁"宿主把单号递到了平台",不许只拼进 title。 */
+  e2e_issues?: string;
 }
 
 /** 检视讨论(真件=CodeHub 的 MR discussion;假件同语义)。 */
@@ -207,6 +210,7 @@ export class FakeGitPlatform {
       source_branch: source,
       target_branch: target,
       title: String(body.title ?? source),
+      e2e_issues: String(body.dts_no ?? "") || undefined,
       sha,
       state: "验证中",
       url: `${this.baseUrl}/mr/${this.counter}`,

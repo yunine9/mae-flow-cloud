@@ -295,6 +295,10 @@ export class PlatformAdapter {
       source_branch: String(body.source_branch ?? ""),
       target_branch: String(body.target_branch ?? ""),
       title: String(body.title ?? ""),
+      // E2E 单号(REQ/DTS 都可能):mr_create 模板拿它填 --e2e-issues,
+      // MR 与单号在平台侧可追踪。取值表是白名单不是任意透传——body 里
+      // 没带而模板引用了 {dts_no},render 会诚实报"没有值",别猜。
+      dts_no: String(body.dts_no ?? ""),
       sha: String(body.sha ?? ""),
       mr: String(body.mr ?? ""),
       id: String(body.id ?? ""),

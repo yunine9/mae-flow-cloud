@@ -116,13 +116,14 @@ async function runTask(
   dataDir = mkdtempSync(join(tmpdir(), "mfc-deliver-")),
   extraScenes: Scene[] = [],
   settings?: RuntimeSettings,
-  createExtras?: { repairRounds?: number },
+  createExtras?: { repairRounds?: number; ticket?: string },
 ) {
   const model = new ScriptedModelServer([...walkScript(push), ...extraScenes]);
   await model.start();
   const service = buildService(
     platform, dataDir, model.modelsJson(), poll, settings);
-  const created = service.create("交付 REQ9:演练交付链", createExtras);
+  const created = service.create("交付 REQ9:演练交付链",
+    { ticket: "REQ9", ...createExtras });
   await until(() =>
     ["completed", "failed", "verifying", "await_merge"]
       .includes(service.get(created.id)!.status), "任务收口");
@@ -142,6 +143,8 @@ test("分支已推+流水线绿 → MR 等待合入", async () => {
     assert.match(task.delivery?.mr_url ?? "", /\/mr\/\d+$/);
     assert.equal(platform.mergeRequests.length, 1);
     assert.equal(platform.mergeRequests[0].target_branch, "master");
+    // 单号以独立字段递到平台(--e2e-issues 的原料),不许只活在 title
+    assert.equal(platform.mergeRequests[0].e2e_issues, "REQ9");
   } finally {
     await platform.stop();
   }

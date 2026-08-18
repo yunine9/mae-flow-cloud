@@ -1928,6 +1928,14 @@ export class TaskService {
         source_branch: branch,
         target_branch: baseline,
         title: `${state?.config?.["单号"] ?? branch}: ${task.summary.requirement.slice(0, 60)}`,
+        // E2E 单号关联(内网诉求 2026-08-19):单号只拼进 title 平台看
+        // 不见,要走 codehub-cli 的 --e2e-issues 才可追踪。取值优先
+        // **用户下单填的需求号**(用户拍板"直接关联开始填入的那个"),
+        // 回落内核配置确认的定稿(老单/无表单形态);REQ/DTS 都走这个
+        // 参数,平台不区分类型(toolkit 源码里两类混传)。字段名跟
+        // 内网 adapter.json 已定的 {dts_no} 占位符,不折腾他们返工。
+        dts_no: task.summary.ticket
+          ?? String(state?.config?.["单号"] ?? ""),
       };
       const mrKey = `mr:${branch}->${baseline}`;
       const mrStarted = new Date().toISOString();

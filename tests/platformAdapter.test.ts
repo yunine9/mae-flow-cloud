@@ -79,7 +79,8 @@ function makeAdapter(dir: string, cli: string): PlatformAdapter {
       command: ["node", cli, "mr", "--repo", "{repo}",
         "--project", "{repo_path}",   // 从仓 URL 自动派生,人不填 id
         "--source", "{source_branch}", "--target", "{target_branch}",
-        "--title", "{title}", "--token", "{token}"],
+        "--title", "{title}", "--e2e-issues", "{dts_no}",
+        "--token", "{token}"],
       url: { json: "data.web_url" },
     },
     pipeline_trigger: {
@@ -108,6 +109,9 @@ test("三端点走真 CLI:模板套值、抽取、状态映射、多 run 全对"
     repo: "https://codehub.corp/g/demo.git",
     source_branch: "master_bot_REQ9", target_branch: "master",
     title: "REQ9: 修复通知模板 变量缺失",   // 带空格,argv 直传不走 shell
+    // E2E 单号关联(内网诉求):单号必须以独立参数走 --e2e-issues,
+    // 只拼进 title 平台看不见。REQ/DTS 同一个参数,平台不分型。
+    dts_no: "DTS2026081800001",
   }, {});
   assert.equal(mr.status, 201);
   assert.equal((mr.payload as any).url, "https://codehub.corp/mr/42");
@@ -116,6 +120,8 @@ test("三端点走真 CLI:模板套值、抽取、状态映射、多 run 全对"
   const argv = JSON.parse(
     readFileSync(join(dir, "last-argv.json"), "utf-8")) as string[];
   assert.ok(argv.includes("g%2Fdemo"), "repo_path 没从仓 URL 派生出来");
+  assert.equal(argv[argv.indexOf("--e2e-issues") + 1], "DTS2026081800001",
+    "单号要走 --e2e-issues 递到平台,不许只活在 title 里");
 
   const trigger = await adapter.handle("POST", "/pipeline/trigger",
     new URLSearchParams(), { repo: "r", sha: "abc123" }, {});
@@ -138,7 +144,7 @@ test("身份:个人令牌头压过服务账号;没带头回落服务账号", asy
   // 带个人令牌头:CLI 收到的必须是个人的,不是服务账号的
   const personal = await adapter.handle("POST", "/mr", new URLSearchParams(), {
     repo: "https://codehub.corp/g/demo.git",
-    source_branch: "s", target_branch: "t", title: "x",
+    source_branch: "s", target_branch: "t", title: "x", dts_no: "REQ1",
   }, { "x-mfc-git-token": encodeURIComponent("glpat-personal-7777"),
        "x-mfc-git-user": "zhang.san" });
   assert.equal(personal.status, 201);

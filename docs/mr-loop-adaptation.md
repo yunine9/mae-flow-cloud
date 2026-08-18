@@ -394,6 +394,13 @@ npm run adapter -- --config adapter.json --selftest
 就是,查一次写进模板。真实字段名以 selftest 输出为准,对不上改
 这份配置,不改代码。
 
+`{dts_no}`(2026-08-19 内网诉求加的):E2E 单号,来自**用户下单填的
+需求号**(回落内核配置确认的"单号")——`mr_create` 模板里接
+`codehub-cli mr create --e2e-issues {dts_no}`,MR 与单号在平台侧可
+追踪;REQ/DTS 走同一个参数,平台不分型(toolkit 源码里两类混传)。
+注意:模板引用了 `{dts_no}` 而请求没带值时适配层会 502 明说"没有值"
+——老宿主(没有 ticket 字段的版本)配新模板会撞这个,先升宿主。
+
 ```jsonc
 {
   "token_file": "/etc/mae-flow-cloud/codehub-token",   // 0600
