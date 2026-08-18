@@ -1059,7 +1059,7 @@ export class TaskService {
         // 鉴权走个人令牌的 credential helper,URL 保持干净。
         const parsed = new URL(repo);
         if (parsed.username || parsed.password) {
-          throw new Error("代码仓 URL 不许携带账号密码——鉴权走个人 Git 令牌");
+          throw new Error("代码仓 URL 不许携带账号密码——鉴权使用个人 CodeHub Token");
         }
       }
     }

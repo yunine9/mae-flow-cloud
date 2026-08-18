@@ -1889,40 +1889,103 @@ pre {
 .secret-remove:hover { background: rgba(240, 169, 180, .12); }
 .settings-loading { color: var(--muted); font-size: 12px; }
 
-/* 个人 Git 令牌细条("我的工作"页):只写不读,永远只见末 4 位。 */
-.git-token-bar {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 18px; flex-wrap: wrap; padding: 14px 18px;
+/* 我的工作 / 个人接入:把技术凭据翻译成用户能识别的两个用途。 */
+.personal-connections { margin-bottom: 18px; }
+.personal-connections-head {
+  margin-bottom: 11px; padding: 0 2px;
+  display: flex; align-items: flex-end; justify-content: space-between; gap: 18px;
+}
+.personal-connections-head h2 {
+  margin: 5px 0 0; color: var(--text-strong); font-size: 17px;
+  line-height: 1.2; letter-spacing: -.025em;
+}
+.personal-connections-head p { margin: 0; color: var(--muted); font-size: 10.5px; }
+.credential-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 11px; }
+.credential-card {
+  min-width: 0; min-height: 252px; padding: 18px;
+  display: flex; flex-direction: column;
   border: 1px solid var(--line); border-radius: var(--radius-lg);
-  background: var(--surface); box-shadow: var(--shadow-xs);
+  background:
+    radial-gradient(circle at 104% -20%, rgba(119, 119, 236, .09), transparent 42%),
+    var(--surface);
+  box-shadow: var(--shadow-xs);
+  transition: border-color .18s ease, transform .18s ease;
 }
-.git-token-copy { display: grid; gap: 3px; }
-.git-token-copy strong { color: var(--text-strong); font-size: 13px; }
-.git-token-copy small { color: var(--muted); font-size: 11px; }
-.git-token-copy code { color: var(--accent); letter-spacing: .08em; }
-.git-token-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.git-token-form { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.git-token-form input {
-  padding: 8px 10px; min-width: 200px; color: var(--text);
+.credential-card:hover { border-color: color-mix(in srgb, var(--accent) 24%, var(--line)); }
+.credential-card.is-ready {
+  background:
+    radial-gradient(circle at 104% -20%, color-mix(in srgb, var(--success) 10%, transparent), transparent 42%),
+    var(--surface);
+}
+.credential-card-head {
+  display: grid; grid-template-columns: 36px minmax(0, 1fr) auto;
+  align-items: center; gap: 11px;
+}
+.credential-card-head > div { min-width: 0; display: grid; gap: 3px; }
+.credential-card-head strong { color: var(--text-strong); font-size: 13.5px; }
+.credential-icon {
+  width: 36px; height: 36px; display: grid; place-items: center;
+  color: #aaaaff; border: 1px solid rgba(137, 137, 245, .22);
+  border-radius: 10px; background: rgba(119, 119, 236, .1);
+}
+.credential-icon.luban { color: #6fd8c0; border-color: rgba(93, 199, 177, .22); background: rgba(93, 199, 177, .09); }
+.credential-icon svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.55; stroke-linecap: round; stroke-linejoin: round; }
+.credential-state {
+  padding: 4px 8px; display: inline-flex; align-items: center; gap: 6px;
+  color: var(--attention); border: 1px solid color-mix(in srgb, var(--attention) 25%, var(--line));
+  border-radius: 999px; background: var(--attention-soft); font-size: 9.5px; font-weight: 700;
+}
+.credential-state i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.is-ready .credential-state { color: var(--success); border-color: color-mix(in srgb, var(--success) 25%, var(--line)); background: var(--success-soft); }
+.credential-summary { margin: 13px 0 14px; color: var(--muted); font-size: 10.5px; line-height: 1.65; }
+.credential-facts { margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.credential-facts.single { grid-template-columns: 1fr; }
+.credential-facts > div {
+  min-width: 0; padding: 9px 10px; display: grid; gap: 3px;
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+  border-radius: 8px; background: color-mix(in srgb, var(--surface-soft) 72%, transparent);
+}
+.credential-facts dt { color: var(--faint); font-size: 8.5px; font-weight: 700; letter-spacing: .04em; }
+.credential-facts dd { overflow: hidden; margin: 0; color: var(--text); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+.credential-facts code { color: var(--accent); font-size: 10px; letter-spacing: .08em; }
+.credential-howto {
+  margin-top: 7px; padding: 8px 10px; display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  color: var(--muted); border: 1px solid rgba(93, 199, 177, .14);
+  border-radius: 8px; background: rgba(93, 199, 177, .055); font-size: 9.5px;
+}
+.credential-howto span { color: #6fcdb9; font-weight: 700; }
+.credential-howto p { margin: 0; }
+.credential-howto code { color: var(--text-strong); font: 600 9.5px var(--font-mono, ui-monospace, monospace); }
+.credential-card-actions { margin-top: auto; padding-top: 15px; display: grid; gap: 9px; }
+.credential-buttons { display: flex; align-items: center; gap: 10px; }
+.credential-primary, .credential-secondary, .credential-text {
+  min-height: 34px; padding: 0 13px; border-radius: 8px;
+  cursor: pointer; font-size: 10.5px; font-weight: 700;
+}
+.credential-primary { color: #fff; border: 1px solid var(--accent); background: var(--accent); box-shadow: 0 5px 14px rgba(104, 104, 222, .16); }
+.credential-primary:hover { background: var(--accent-hover); }
+.credential-secondary { color: var(--text); border: 1px solid var(--line); background: transparent; }
+.credential-secondary:hover { border-color: var(--accent); }
+.credential-text { padding: 0 4px; color: var(--muted); border: 0; background: transparent; }
+.credential-text.danger:hover { color: var(--danger); }
+.credential-primary:disabled, .credential-secondary:disabled, .credential-text:disabled { opacity: .5; cursor: not-allowed; }
+.credential-feedback { font-size: 9.5px; line-height: 1.45; }
+.credential-feedback.success { color: var(--success); }
+.credential-feedback.error { color: var(--danger); }
+.credential-form {
+  margin-top: 14px; padding-top: 14px; display: grid; gap: 11px;
+  border-top: 1px solid var(--line);
+}
+.credential-form label { display: grid; gap: 5px; }
+.credential-form label > span { color: var(--text); font-size: 10px; font-weight: 700; }
+.credential-form label > small { color: var(--faint); font-size: 8.5px; line-height: 1.45; }
+.credential-form input {
+  width: 100%; min-width: 0; padding: 9px 10px; color: var(--text);
   background: var(--surface-soft); border: 1px solid var(--line);
-  border-radius: 8px; font-size: 11.5px;
+  border-radius: 8px; font-size: 11px;
 }
-.git-token-form input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); outline: none; }
-.git-token-form button[type="submit"] {
-  padding: 8px 14px; color: #fff; background: var(--accent); border: none;
-  border-radius: 8px; cursor: pointer; font-size: 11.5px; font-weight: 650;
-}
-.git-token-form button[type="submit"]:disabled { opacity: .5; cursor: not-allowed; }
-.git-token-actions .ghost {
-  padding: 8px 12px; color: var(--text-strong); background: transparent;
-  border: 1px solid var(--line); border-radius: 8px; cursor: pointer;
-  font-size: 11.5px; font-weight: 600;
-}
-.git-token-actions .ghost:hover { border-color: var(--accent); }
-.git-token-actions .ghost.danger { color: var(--danger); }
-.git-token-note { font-size: 11px; }
-.git-token-note.success { color: var(--success); }
-.git-token-note.error { color: var(--danger); }
+.credential-form input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); outline: none; }
+.credential-form footer { display: flex; justify-content: flex-end; gap: 8px; }
 
 /* 月光模式开关(免审批):身份栏右侧,开着时点亮。 */
 .identity-actions { display: flex; align-items: center; gap: 12px; }
@@ -2007,6 +2070,9 @@ pre {
   }
   .pulse-card { min-height: 88px; }
   .identity-bar { align-items: stretch; flex-direction: column; gap: 14px; }
+  .personal-connections-head { align-items: flex-start; flex-direction: column; gap: 5px; }
+  .credential-grid { grid-template-columns: 1fr; }
+  .credential-card { min-height: 0; }
   .artifact-workspace-head { min-height: 64px; padding: 0 12px; grid-template-columns: auto minmax(0, 1fr); gap: 10px; }
   .artifact-back span { display: none; }
   .artifact-back { width: 38px; padding: 0; justify-content: center; }
@@ -2070,6 +2136,9 @@ pre {
   .identity-bar { padding: 17px; border-radius: var(--radius); }
   .identity-control { grid-template-columns: 1fr; }
   .identity-control button { height: 38px; }
+  .credential-card { padding: 15px; }
+  .credential-facts { grid-template-columns: 1fr; }
+  .credential-howto { align-items: flex-start; flex-direction: column; gap: 3px; }
   .personal-pulse { gap: 7px; }
   .personal-stat { min-height: 84px; padding: 10px; }
   .personal-stat span { font-size: 10px; }

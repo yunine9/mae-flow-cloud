@@ -160,7 +160,7 @@ export class RuntimeSettings {
           const parsed = new URL(repo);
           if (parsed.username || parsed.password) {
             throw new SettingsError(
-              "代码仓 URL 不许携带账号密码——鉴权走个人 Git 令牌");
+              "代码仓 URL 不许携带账号密码——鉴权使用个人 CodeHub Token");
           }
         }
         next.default_repo = repo;
