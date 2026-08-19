@@ -68,6 +68,7 @@ export function TaskWorkspace({
   const [unavailable, setUnavailable] = useState("");
   const [active, setActive] = useState("");
   const [content, setContent] = useState("");
+  const [branch, setBranch] = useState("");
   const [loading, setLoading] = useState(false);
   const [notes, setNotes] = useState<Annotation[]>([]);
   const [checks, setChecks] = useState<AnchorCheck[]>([]);
@@ -190,6 +191,7 @@ export function TaskWorkspace({
       const next = result.content ?? result.unavailable ?? "";
       // 内容没变就别 setState:轮询期间无谓重渲染会把正在写的批注打断。
       setContent((current) => current === next ? current : next);
+      setBranch(result.branch ?? "");
       setLoading(false);
     });
     return () => { alive = false; };
@@ -368,7 +370,7 @@ export function TaskWorkspace({
                 onAdded={() => setNotesPulse((tick) => tick + 1)}
               >
                 {activeMeta?.kind === "diff"
-                  ? <GitDiff text={content} />
+                  ? <GitDiff text={content} branch={branch} />
                   : <Markdown text={content} />}
               </Annotatable>
             )}

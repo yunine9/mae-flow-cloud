@@ -172,7 +172,7 @@ function DiffCellView({ cell }: { cell?: DiffCell }) {
   );
 }
 
-export function GitDiff({ text }: { text: string }) {
+export function GitDiff({ text, branch }: { text: string; branch?: string }) {
   const files = useMemo(() => parseChanges(text), [text]);
   const [selected, setSelected] = useState(files[0]?.key ?? "");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -208,6 +208,7 @@ export function GitDiff({ text }: { text: string }) {
   const additions = files.reduce((sum, file) => sum + file.additions, 0);
   const deletions = files.reduce((sum, file) => sum + file.deletions, 0);
   const kinds = Array.from(new Set(files.map((file) => file.kind)));
+  const branchLabel = branch || "分支未知";
 
   if (!files.length) {
     return <div className="worktree-clean"><strong>暂无代码变更</strong><span>{text}</span></div>;
@@ -234,7 +235,8 @@ export function GitDiff({ text }: { text: string }) {
           <div className="code-review-title">
             <span>CODE REVIEW</span>
             <strong>代码审阅</strong>
-            <small>{files.length} 个文件 · {kinds.join("、")}</small>
+            <small><code title={`当前分支：${branchLabel}`}>{branchLabel}</code>
+              <i>·</i>{files.length} 个文件 · {kinds.join("、")}</small>
           </div>
           <div className="code-review-totals" aria-label="变更统计">
             <b>+{additions}</b><i>−{deletions}</i>
@@ -245,7 +247,8 @@ export function GitDiff({ text }: { text: string }) {
           <div>
             <span>WORKTREE</span>
             <strong>{files.length} 个文件发生变化</strong>
-          <small>{kinds.join("、")} · 任务基线至当前工作区</small>
+            <small><code title={`当前分支：${branchLabel}`}>{branchLabel}</code>
+              <i>·</i>{kinds.join("、")} · 任务基线至当前工作区</small>
           </div>
           <div className="change-summary-actions">
             <div className="change-totals" aria-label="变更统计">
