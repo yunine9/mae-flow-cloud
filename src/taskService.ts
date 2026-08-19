@@ -636,6 +636,23 @@ export class TaskService {
         : { key: "notify", label: "消息通知", status: "ok",
             detail: "小鲁班通知通道已就绪" });
 
+    // 通知链接地址:2026-08-19 内网实锤——没配 --public-url,发起人又
+    // 只从回环地址(本机/SSH 隧道)访问,通知里的链接别人打不开。回环
+    // 已不入账,所以这里能如实分三种:显式配置 > 已自学 > 还没着落。
+    const linkBase = this.notificationLinkBase();
+    items.push(this.options.linkBase
+      ? { key: "link", label: "通知链接地址", status: "ok",
+          detail: `固定为 ${this.options.linkBase}(--public-url)` }
+      : linkBase
+        ? { key: "link", label: "通知链接地址", status: "ok",
+            detail: `已从内网访问自学:${linkBase}`,
+            suggestion: "建议启动时加 --public-url 固定,不依赖谁先登录" }
+        : { key: "link", label: "通知链接地址", status: "warning",
+            detail: "尚无可用地址:未配 --public-url,也还没有人从内网地址"
+              + "访问过(回环地址不算——发给别人打不开)",
+            suggestion: "启动加 --public-url http://<内网IP>:<端口>,"
+              + "或先用内网地址打开一次本页面" });
+
     const projection = this.options.projection
       ? await this.options.projection.health() : undefined;
     items.push(!projection

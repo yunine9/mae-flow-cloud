@@ -154,9 +154,13 @@ test("路由权限:admin 可读改,开发成员 403,密钥不出网", async () =
     };
     assert.ok(["ok", "warning", "error"].includes(checkBody.overall));
     assert.deepEqual(checkBody.items.map((item) => item.key),
-      ["data", "model", "notify", "postgres", "git", "container"]);
+      ["data", "model", "notify", "link", "postgres", "git", "container"]);
     assert.equal(checkBody.items.find((item) => item.key === "model")?.status,
       "ok");
+    // 通知链接地址:未配 --public-url、也没人从内网地址访问过 → 警告
+    // 并说清两条出路(内网实锤:回环入口发出去的邀请别人打不开)。
+    const link = checkBody.items.find((item) => item.key === "link")!;
+    assert.equal(link.status, "warning");
 
     const put = await fetch(`${base}/settings/models`, {
       method: "PUT", headers: { cookie: admin },
