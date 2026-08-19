@@ -21,6 +21,7 @@ import {
   readdirSync,
   readFileSync,
   readSync,
+  realpathSync,
   statSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -49,7 +50,12 @@ function isFlowControlPath(path: string): boolean {
     || normalized === ".mae-flow-work"
     || normalized.startsWith(".mae-flow-work/")
     || normalized === ".codecheckcli"
-    || normalized.startsWith(".codecheckcli/");
+    || normalized.startsWith(".codecheckcli/")
+    // 平台自己写的现场文件(下单事实/跨仓方案/仓库预设):正常路在
+    // .git/info/exclude 里挡着,这里兜"exclude 没登记上的旧克隆"。
+    || normalized === ".mae-flow-order.json"
+    || normalized === ".mae-flow-chain.md"
+    || normalized === ".mae-flow-defaults.json";
 }
 
 export interface ArtifactMeta {
@@ -293,6 +299,19 @@ function originOf(
 function collectDiff(
   cwd: string,
 ): { text: string; changed: string[] } | undefined {
+  // cwd 必须**就是**仓库顶层才谈变更:git -C 会向上爬认包住它的任何
+  // 仓——分析单的 cwd(repositories/ 聚合目录)不是 git 仓,部署形态
+  // 里它上层往往就是部署仓自己,于是 .tasks 现场全被当"未提交改动"
+  // 端给用户看(内网实锤:一堆莫名其妙的未渲染文本)。不是仓顶层=
+  // 本任务没有可谈的工作区变更,如实返回空。
+  const toplevel = git(cwd, ["rev-parse", "--show-toplevel"])?.trim();
+  let sameRoot = false;
+  try {
+    sameRoot = !!toplevel && realpathSync(toplevel) === realpathSync(cwd);
+  } catch {
+    sameRoot = false;
+  }
+  if (!sameRoot) return undefined;
   // 展开未跟踪目录到文件级,前端才能把其中的文档/测试/配置正确分类。
   const status = git(cwd, ["status", "--porcelain", "--untracked-files=all"]);
   if (status === undefined) return undefined;

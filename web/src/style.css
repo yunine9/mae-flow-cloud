@@ -1802,6 +1802,18 @@ pre {
 /* Minimal markdown renderer */
 .md-p { margin: .35rem 0; overflow-wrap: anywhere; }
 .md-heading { margin: .7rem 0 .35rem; color: var(--text-strong); font-weight: 700; }
+/* 标题分级:满篇一个字号看不出文档结构(内网"没渲染"观感的一部分)。 */
+.md-h1 { font-size: 1.25em; }
+.md-h2 { font-size: 1.12em; }
+.md-h3 { font-size: 1.02em; }
+.md-h4 { font-size: .95em; }
+.md-ordered { list-style: none; }
+.md-ordered li { position: relative; }
+.md-ordered li::before {
+  content: attr(value) "."; position: absolute; left: -1.4em;
+  color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.md-hr { margin: .8rem 0; border: none; border-top: 1px solid var(--line); }
 .md-code {
   padding: .05em .32em;
   border: 1px solid var(--line);

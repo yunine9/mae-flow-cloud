@@ -123,6 +123,32 @@ export function Markdown({ text }: { text: string }) {
         </ul>);
       continue;
     }
+    // 有序列表:连续 "1." / "1)" 行。内核与 CHAIN 文档满篇编号步骤,
+    // 不认它们的后果就是整屏"没渲染的文本"(内网实锤)。编号用原文的,
+    // 不让浏览器重排——文档里"步骤 3"必须和屏上的 3 对得上。
+    if (/^\s*\d+[.)]\s+/.test(line)) {
+      const items: Array<{ mark: string; text: string; at: number }> = [];
+      while (index < lines.length && /^\s*\d+[.)]\s+/.test(lines[index])) {
+        const match = lines[index].match(/^\s*(\d+)[.)]\s+(.*)$/)!;
+        items.push({ mark: match[1], text: match[2], at: index + 1 });
+        index += 1;
+      }
+      blocks.push(
+        <ol key={key++} className="md-list md-ordered">
+          {items.map((item, i) => (
+            <li key={i} value={Number(item.mark)} data-l={item.at}>
+              {inline(item.text)}
+            </li>
+          ))}
+        </ol>);
+      continue;
+    }
+    // 分隔线:--- / *** / ___ 单独成行。
+    if (/^\s*([-*_])\s*(?:\1\s*){2,}$/.test(line)) {
+      blocks.push(<hr key={key++} className="md-hr" data-l={at} />);
+      index += 1;
+      continue;
+    }
     // 引用块:连续 > 行
     if (/^\s*>\s?/.test(line)) {
       const quoted: string[] = [];
@@ -136,12 +162,33 @@ export function Markdown({ text }: { text: string }) {
         </blockquote>);
       continue;
     }
-    if (/^#{1,4}\s+/.test(line)) {
+    const heading = line.match(/^(#{1,6})\s+(.*)$/);
+    if (heading) {
+      // 层级进 class:满篇标题长一个样,文档结构就看不出来了。
       blocks.push(
-        <div key={key++} className="md-heading" data-l={at}>
-          {inline(line.replace(/^#{1,4}\s+/, ""))}
+        <div key={key++}
+          className={`md-heading md-h${Math.min(heading[1].length, 4)}`}
+          data-l={at}>
+          {inline(heading[2])}
         </div>);
       index += 1;
+      continue;
+    }
+    // 缩进代码(≥4 空格,无围栏):模型手写的示例/日志常这么排,摊成
+    // 段落会丢缩进变成一锅粥,按代码块如实呈现。
+    if (/^ {4,}\S/.test(line)) {
+      const source: string[] = [];
+      while (index < lines.length
+             && (/^ {4,}\S/.test(lines[index]) || !lines[index].trim())) {
+        if (!lines[index].trim() && !(index + 1 < lines.length
+            && /^ {4,}\S/.test(lines[index + 1]))) break;
+        source.push(lines[index].replace(/^ {4}/, ""));
+        index += 1;
+      }
+      blocks.push(
+        <pre key={key++} className="md-block-code" data-l={at}>
+          <code>{source.join("\n")}</code>
+        </pre>);
       continue;
     }
     blocks.push(<p key={key++} className="md-p" data-l={at}>{inline(line)}</p>);
