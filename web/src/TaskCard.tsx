@@ -143,7 +143,7 @@ export function TaskCard({
       )}
 
       <div className="task-meta">
-        {onOpenArtifacts && (
+        {onOpenArtifacts && !chainReview && (
           <button type="button" className="panel-link" onClick={onOpenArtifacts}>
             <span>{chainReview ? "检视方案与依赖图" : "进入任务工作台"}</span>
             <svg viewBox="0 0 16 16" aria-hidden>

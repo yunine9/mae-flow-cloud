@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { confirmRequirementGraph, type TaskSummary } from "./api";
+import type { TaskSummary } from "./api";
 
 function repoName(id: string, task: TaskSummary): string {
   return task.requirement_graph?.repositories.find((item) => item.id === id)?.name ?? id;
@@ -8,27 +8,13 @@ function repoName(id: string, task: TaskSummary): string {
 export function RequirementGraph({
   task,
   onOpenTask,
-  onConfirmed,
 }: {
   task: TaskSummary;
   onOpenTask?: (taskId: string) => void;
-  /** 确认成功后让宿主刷新任务镜像(子任务 ID 是服务端事实)。 */
-  onConfirmed?: () => void | Promise<void>;
 }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
   const [expanded, setExpanded] = useState(true);
   const graph = task.requirement_graph;
   if (!graph || graph.repositories.length < 2) return null;
-  // 平台自己的确认入口(结构化):Agent 卡上的「确认并生成任务」选项
-  // 文字是模型写的,写漂了字符串就对不上——这颗按钮不经模型,直达
-  // 服务端确认接口,漂了也不丢单。已全部生成任务后按钮退场。
-  const pending = graph.repositories.some((repository) => !repository.task_id);
-  // 兼容旧版本留下的现场:子任务已生成但父分析会话仍停在确认卡时，
-  // 仍显示一次“完成确认”，让同一颗按钮把父会话续上。
-  const needsConfirmation = pending || task.status === "waiting_for_human";
-  const canConfirm = task.status === "waiting_for_human"
-    || ["completed", "failed", "canceled"].includes(task.status);
   const remaining = new Set(graph.repositories.map((repository) => repository.id));
   const stages: typeof graph.repositories[] = [];
   while (remaining.size) {
@@ -40,16 +26,6 @@ export function RequirementGraph({
       : graph.repositories.filter((repository) => remaining.has(repository.id));
     stages.push(current);
     current.forEach((repository) => remaining.delete(repository.id));
-  }
-  async function confirm() {
-    if (busy) return;
-    setBusy(true); setError("");
-    try {
-      await confirmRequirementGraph(task.id);
-      await onConfirmed?.();
-    } catch (cause) {
-      setError(String((cause as Error).message ?? cause));
-    } finally { setBusy(false); }
   }
   return <details className="requirement-graph" open={expanded}
     onToggle={(event) => setExpanded(event.currentTarget.open)}>
@@ -94,17 +70,9 @@ export function RequirementGraph({
           {edge.reason && <small>{edge.reason}</small>}
         </div>)}
       </div>}
-      {needsConfirmation && <div className="requirement-graph-confirm">
-        <p className="requirement-graph-note">
-          先核对下方 Chain 正文；确认后，平台才会按以上顺序生成各仓交付任务。
-        </p>
-        <button type="button" disabled={busy || !canConfirm}
-          onClick={() => void confirm()}>
-          {busy ? "确认中…" : !canConfirm ? "分析完成后可确认"
-            : pending ? "确认方案并开始各仓交付" : "完成方案确认"}
-        </button>
-        {error && <p className="requirement-graph-error" role="alert">{error}</p>}
-      </div>}
+      {task.status === "waiting_for_human" && <p className="requirement-graph-note">
+        核对完成后，请在右侧决策卡统一选择“确认并生成任务”或“需要修改”。
+      </p>}
     </div>
   </details>;
 }

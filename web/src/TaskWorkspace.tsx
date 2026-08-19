@@ -377,7 +377,7 @@ export function TaskWorkspace({
           <div className="ws-doc">
             {materialView === "chain" ? (
               <RequirementGraph task={task} onOpenTask={onOpenTask}
-                onConfirmed={onChanged} />
+              />
             ) : <>
               {unavailable && <div className="utility-note">{unavailable}</div>}
               {!unavailable && !items && <div className="utility-note">正在读取现场…</div>}
