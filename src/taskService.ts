@@ -1398,6 +1398,13 @@ export class TaskService {
     if (!graph || graph.repositories.length !== task.summary.repositories?.length) {
       throw new NotFoundError("需求图尚未生成完整，请先让 Agent 补齐分析产物");
     }
+    const ticket = task.summary.ticket ?? task.summary.id;
+    const artifact = task.cwd
+      ? readArtifact(task.cwd, `${ticket}/CHAIN-${ticket}.md`)
+      : undefined;
+    if (!artifact?.content.trim()) {
+      throw new NotFoundError("跨仓方案正文尚未生成，请先让 Agent 补齐 Chain 文档");
+    }
     const ids = new Set(graph.repositories.map((repository) => repository.id));
     const incoming = new Map<string, string[]>();
     for (const id of ids) incoming.set(id, []);
@@ -1465,15 +1472,42 @@ export class TaskService {
     this.persist(task);
   }
 
-  /** 平台自己的确认入口(结构化,不靠模型把「确认并生成任务」八个字
-   * 写对):需求图面板的确认按钮走这里。decide() 里的字符串匹配保留,
-   * 是给"模型恰好写对了选项原文"的顺路便车;这条路才是兜底的正门——
-   * 选项文字漂了、或分析会话已经收尾,都还能从面板把任务生出来。 */
-  confirmRequirementGraph(id: string): TaskSummary {
+  /** 需求图面板不是第二套审批:分析会话正在等人时,这颗结构化按钮
+   * 先消费当前 HumanGate 决定、恢复同一会话,再幂等生成各仓普通任务。
+   * 这样不会出现“子任务已经生成,父分析单却还在等确认”的双状态。
+   * 已经收尾的旧单仍允许从图面板补建,用于兼容历史现场。 */
+  async confirmRequirementGraph(id: string): Promise<TaskSummary> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     if (!this.isRequirementAnalysis(task)) {
       throw new NotFoundError("该任务不是多仓需求分析单,没有需求图可确认");
+    }
+    this.requirementGraphPlan(task);
+    const alreadyGenerated = task.summary.requirement_graph?.repositories
+      .every((repository) => repository.task_id) ?? false;
+    if (alreadyGenerated && task.summary.status !== "waiting_for_human") {
+      return { ...task.summary };
+    }
+    if (task.summary.status === "waiting_for_human" && task.summary.waiting) {
+      const questions = (
+        (task.summary.waiting.question as any)?.questions ?? []
+      ) as Array<{ question?: string }>;
+      if (questions.length !== 1) {
+        throw new NotFoundError(
+          "仍有多项需求问题待澄清，请先逐题处理，再确认跨仓方案",
+        );
+      }
+      await this.decide(id, {
+        state_version: task.summary.waiting.state_version,
+        decision: "确认并生成任务",
+      });
+      // decide 会在标准选项命中时生成任务；这里再走一次幂等兜底，
+      // 让模型即使把选项写成“方案通过”也不会丢掉拆单动作。
+      this.createRepositoryDeliveries(task);
+      return { ...task.summary };
+    }
+    if (!["completed", "failed", "canceled"].includes(task.summary.status)) {
+      throw new NotFoundError("需求分析尚未进入人工检视，暂不能确认方案");
     }
     this.createRepositoryDeliveries(task);
     this.bypass(undefined, "任务泵", this.pump());
@@ -3410,6 +3444,7 @@ export class TaskService {
         + "每个触点必须给出仓库、文件、符号、相关原因和置信度；"
         + "拿不准的事项使用 AskUserQuestion 逐题询问，不能猜。"
         + "逐题确认仓库职责、接口形态/字段/错误语义，以及依赖方向和可并行范围。",
+      "只有全部不确定事项都已经逐题确认后，才能生成以下两份最终产物。",
       `把供人检视的完整方案写到 ${join(artifactDir, `CHAIN-${ticket}.md`)}。`
         + "正文必须包含需求理解、仓库职责、带证据触点、接口契约、"
         + "依赖关系与交付顺序、逐仓启动说明。依赖图使用 Mermaid。",

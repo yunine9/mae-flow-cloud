@@ -958,6 +958,18 @@ svg {
 .task-graph-summary, .task-dependency-wait { display: inline-flex; align-items: center; gap: 6px; width: max-content; margin-top: 5px; padding: 4px 7px; border-radius: 6px; color: var(--muted); background: var(--surface-soft); font-size: 8.5px; }
 .task-graph-summary b { color: var(--accent); }
 .task-dependency-wait { color: #d59a3c; }
+.chain-review-entry {
+  margin: 14px 0 0; padding: 15px 16px; border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line));
+  border-radius: 11px; background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+  display: grid; gap: 6px; justify-items: start;
+}
+.chain-review-entry > span { color: var(--accent); font: 700 9px ui-monospace, monospace; letter-spacing: .14em; }
+.chain-review-entry > strong { color: var(--text-strong); font-size: 13px; }
+.chain-review-entry > p { margin: 0; color: var(--muted); font-size: 10.5px; line-height: 1.6; }
+.chain-review-entry > button {
+  margin-top: 3px; padding: 8px 12px; border: 0; border-radius: 8px;
+  color: #fff; background: var(--accent); font-size: 10.5px; font-weight: 700; cursor: pointer;
+}
 .composer-actions > button, .submit-decision {
   height: 40px;
   padding: 0 16px;

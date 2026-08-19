@@ -60,6 +60,9 @@ export function TaskCard({
   }, [task.status, focused, showDecisionForm]);
 
   const waitingQuestions = task.waiting?.question?.questions?.length ?? 0;
+  const chainReview = showDecisionForm
+    && task.status === "waiting_for_human"
+    && (task.requirement_graph?.repositories.length ?? 0) > 1;
 
   return (
     <article
@@ -94,7 +97,11 @@ export function TaskCard({
               <b>{task.requirement_graph!.repositories.length} 个仓库</b>
               <i aria-hidden>·</i>
               <span>{task.requirement_graph!.stage === "analysis"
-                ? "正在核对职责与依赖"
+                ? task.status === "waiting_for_human"
+                  ? task.requirement_graph!.dependencies.length > 0
+                    ? `${task.requirement_graph!.dependencies.length} 条硬依赖待检视`
+                    : "仓间可并行，方案待检视"
+                  : "正在核对职责与依赖"
                 : `${task.requirement_graph!.dependencies.length} 条开发依赖`}</span>
             </span>
           )}
@@ -129,7 +136,7 @@ export function TaskCard({
       <div className="task-meta">
         {onOpenArtifacts && (
           <button type="button" className="panel-link" onClick={onOpenArtifacts}>
-            <span>进入任务工作台</span>
+            <span>{chainReview ? "检视方案与依赖图" : "进入任务工作台"}</span>
             <svg viewBox="0 0 16 16" aria-hidden>
               <path d="M6 3.5h6.5V10M12.25 3.75 5 11" />
             </svg>
@@ -184,7 +191,16 @@ export function TaskCard({
             || task.status === "completed" || repairStopped(task)) && (
             <RetryButton taskId={task.id} onDone={onChanged} />
           )}
-          {showDecisionForm && canOperate && task.status === "waiting_for_human" && task.waiting && (
+          {chainReview && canOperate && (
+            <div className="chain-review-entry">
+              <span>CHAIN REVIEW</span>
+              <strong>跨仓方案已经生成，先看依赖再确认</strong>
+              <p>仓库职责、硬依赖和交付顺序都在任务工作台中；确认后才会拆成各仓交付任务。</p>
+              <button type="button" onClick={onOpenArtifacts}>检视方案与依赖图</button>
+            </div>
+          )}
+          {showDecisionForm && canOperate && !chainReview
+            && task.status === "waiting_for_human" && task.waiting && (
             <WaitingCard task={task} onDecided={onChanged} />
           )}
           {showDecisionForm && !canOperate && task.status === "waiting_for_human" && (

@@ -208,8 +208,8 @@ export async function putCommitter(
   return response.json();
 }
 
-/** 多仓需求图的结构化确认:平台按钮直达,不依赖模型把「确认并生成
- * 任务」的选项原文写对。幂等,已生成的仓不重复建。 */
+/** 多仓需求图的结构化确认:消费同一张人工检视卡并恢复分析会话，
+ * 随后幂等生成各仓交付；不是独立于审批卡之外的第二套状态。 */
 export async function confirmRequirementGraph(
   taskId: string,
 ): Promise<TaskSummary> {

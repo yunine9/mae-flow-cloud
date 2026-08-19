@@ -92,10 +92,10 @@ test("跨仓分析会话:克隆只读现场→写产物→举卡→确认拆单�
     }, "确认卡");
     // 卡到手时投影应已能从产物读出依赖(面板据此画图)。
     assert.equal(card.requirement_graph?.dependencies.length, 1);
-    await service.decide(parent.id, {
-      state_version: card.waiting!.state_version,
-      answers: { "跨仓方案是否确认?": "确认并生成任务" },
-    });
+    const confirmed = await service.confirmRequirementGraph(parent.id);
+    assert.notEqual(confirmed.status, "waiting_for_human",
+      "图上确认必须同时消费人工检视卡,不能让父单继续假等");
+    assert.equal(confirmed.waiting, undefined);
     const graph = service.get(parent.id)!.requirement_graph!;
     assert.equal(graph.stage, "confirmed");
     const apiChild = service.get(graph.repositories[0].task_id!)!;

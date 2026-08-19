@@ -23,6 +23,11 @@ export function RequirementGraph({
   // 文字是模型写的,写漂了字符串就对不上——这颗按钮不经模型,直达
   // 服务端确认接口,漂了也不丢单。已全部生成任务后按钮退场。
   const pending = graph.repositories.some((repository) => !repository.task_id);
+  // 兼容旧版本留下的现场:子任务已生成但父分析会话仍停在确认卡时，
+  // 仍显示一次“完成确认”，让同一颗按钮把父会话续上。
+  const needsConfirmation = pending || task.status === "waiting_for_human";
+  const canConfirm = task.status === "waiting_for_human"
+    || ["completed", "failed", "canceled"].includes(task.status);
   async function confirm() {
     if (busy) return;
     setBusy(true); setError("");
@@ -68,13 +73,15 @@ export function RequirementGraph({
         {edge.reason && <small>{edge.reason}</small>}
       </div>)}
     </div>}
-    {pending && <div className="requirement-graph-confirm">
+    {needsConfirmation && <div className="requirement-graph-confirm">
       <p className="requirement-graph-note">
-        这是 Agent 从分析产物投影出的依赖关系；请结合左侧 Chain 文档检视。
-        检视通过后在此确认——各仓交付任务由平台按上图依赖生成并排队。
+        这是 Agent 从 Chain 方案投影出的依赖关系。请结合下方方案正文检视；
+        确认后，当前检视会结束，各仓交付任务将按上图依赖自动排队。
       </p>
-      <button type="button" disabled={busy} onClick={() => void confirm()}>
-        {busy ? "生成中…" : "确认方案，生成各仓交付任务"}
+      <button type="button" disabled={busy || !canConfirm}
+        onClick={() => void confirm()}>
+        {busy ? "确认中…" : !canConfirm ? "分析完成后可确认"
+          : pending ? "确认方案并开始各仓交付" : "完成方案确认"}
       </button>
       {error && <p className="requirement-graph-error" role="alert">{error}</p>}
     </div>}

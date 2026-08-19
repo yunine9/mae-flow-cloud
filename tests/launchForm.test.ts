@@ -223,7 +223,7 @@ test("统一需求图:单仓是一个节点,多仓进入同一任务的需求分
     "多仓需求仍是一张普通需求单，不是第二套任务类型");
 });
 
-test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队", () => {
+test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-lf-chain-confirm-"));
   const service = new TaskService({
     dataDir, provider: "a", model: "a-1", maxConcurrent: 0,
@@ -269,9 +269,9 @@ test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队
 
   // 结构化确认入口:平台按钮直达,不依赖模型把选项原文写对;
   // 非分析单调用要如实拒绝。
-  assert.equal(service.confirmRequirementGraph(parent.id).requirement_graph
+  assert.equal((await service.confirmRequirementGraph(parent.id)).requirement_graph
     ?.repositories.every((repository) => repository.task_id), true);
-  assert.throws(() => service.confirmRequirementGraph(apiTask.id),
+  await assert.rejects(() => service.confirmRequirementGraph(apiTask.id),
     /不是多仓需求分析单/);
 });
 

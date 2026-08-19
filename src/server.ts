@@ -532,7 +532,7 @@ export function createTaskServer(
           if (!canOperate(viewer, target.luban_account, !!options.auth)) {
             return json(response, 403, { error: "只能处理分配给自己的任务" });
           }
-          return json(response, 200, service.confirmRequirementGraph(id));
+          return json(response, 200, await service.confirmRequirementGraph(id));
         }
         // Committer 检视必须由该单责任人主动发起。管理员只维护名单，
         // 即使拥有其他操作兜底权，也不能替开发点击邀请。
