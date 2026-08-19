@@ -6,6 +6,7 @@
  */
 
 import type { ReactNode } from "react";
+import { MermaidFlow } from "./MermaidFlow";
 import { PlantUml } from "./PlantUml";
 
 /** 行内:**加粗**、`代码` 与 [文字](链接)。链接只认站内路径与
@@ -68,6 +69,10 @@ export function Markdown({ text }: { text: string }) {
         ? <div key={key++} className="md-uml" data-l={at}>
             <PlantUml source={source.join("\n")} />
           </div>
+        : language === "mermaid"
+          ? <div key={key++} className="md-uml" data-l={at}>
+              <MermaidFlow source={source.join("\n")} />
+            </div>
         : <pre key={key++} className="md-block-code" data-l={at}>
             <code>{source.join("\n")}</code>
           </pre>);

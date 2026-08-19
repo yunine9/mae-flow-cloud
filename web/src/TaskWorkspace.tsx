@@ -332,9 +332,6 @@ export function TaskWorkspace({
         </div>
       )}
 
-      <RequirementGraph task={task} onOpenTask={onOpenTask}
-        onConfirmed={onChanged} />
-
       <div className={`ws-body${waiting ? " has-decision" : ""}`}>
         <section className="ws-evidence" aria-label="待检视材料">
           <div className="ws-pane-head">
@@ -344,6 +341,8 @@ export function TaskWorkspace({
             </div>
             <small>{items ? `${documents.length} 份文档 · ${changes.length} 组变更` : "读取中"}</small>
           </div>
+          <RequirementGraph task={task} onOpenTask={onOpenTask}
+            onConfirmed={onChanged} />
           <div className="ws-source-switch" aria-label="材料类型">
             <button className={activeMeta?.kind !== "diff" ? "on" : ""} onClick={() => documents[0] && setActive(documents[0].name)}>
               <span>过程文档</span><i>{documents.length}</i>
