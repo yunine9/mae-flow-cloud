@@ -533,6 +533,19 @@ export class TaskService {
 
   observeLinkBase(base: string | undefined): void {
     if (this.options.linkBase || !base) return;
+    // 回环地址永不入账:它只对本机成立,发给别人就是死链(内网实锤:
+    // 邀请检视的链接是 127.0.0.1)。管理员在服务器本机或经 SSH 隧道
+    // (Host 就是 127.0.0.1)登录一次,不该把全体人的通知地址带沟里——
+    // 学过的可用地址也不许被回环访问冲掉。
+    try {
+      const host = new URL(base).hostname.toLowerCase();
+      if (host === "localhost" || host === "127.0.0.1"
+          || host === "::1" || host === "[::1]") {
+        return;
+      }
+    } catch {
+      return;   // 解析不了的地址不入账
+    }
     this.observedLinkBase = base.replace(/\/+$/, "");
   }
 

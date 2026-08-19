@@ -440,6 +440,22 @@ test("Committer 检视:管理员只配名单,仅任务责任人主动邀请后�
       `http://mae-flow.intra:8787/work/${created.id}/review/${review.id}`,
       "未配置 public-url 时按浏览器实际访问的内网 Origin 生成链接");
 
+    // 回环地址不许污染学到的入口:管理员在服务器本机(或 SSH 隧道,
+    // Host 就是 127.0.0.1)登录一次,不能把之后所有人的通知链接带沟里
+    // ——内网实锤过"邀请检视发的是 127.0.0.1,别人点不开"。
+    await fetch(`${base}/tasks`, {
+      headers: { cookie: admin, origin: "http://127.0.0.1:8787" },
+    });
+    const reinvited = await fetch(
+      `${base}/tasks/${created.id}/review-request`, {
+        method: "POST", headers: { cookie: alice },
+        body: JSON.stringify({ committer: "bob" }),
+      });
+    assert.equal(reinvited.status, 200);
+    assert.match(String(luban.messages[1].link),
+      /^http:\/\/mae-flow\.intra:8787\//,
+      "回环访问之后,通知链接仍是此前学到的内网地址");
+
     const inbox = await fetch(`${base}/reviews/mine`, {
       headers: { cookie: bob },
     });
