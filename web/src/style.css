@@ -955,9 +955,18 @@ svg {
 }
 .requirement-graph-confirm button:disabled { opacity: .55; cursor: not-allowed; }
 .requirement-graph-error { margin: 0; color: var(--danger, #c0392b); font-size: 10.5px; }
-.task-graph-summary, .task-dependency-wait { display: inline-flex; align-items: center; gap: 6px; width: max-content; margin-top: 5px; padding: 4px 7px; border-radius: 6px; color: var(--muted); background: var(--surface-soft); font-size: 8.5px; }
+.task-chain-overview { display: grid; justify-items: start; gap: 5px; margin-top: 5px; }
+.task-graph-summary, .task-dependency-wait { display: inline-flex; align-items: center; gap: 6px; width: max-content; padding: 4px 7px; border-radius: 6px; color: var(--muted); background: var(--surface-soft); font-size: 8.5px; }
 .task-graph-summary b { color: var(--accent); }
-.task-dependency-wait { color: #d59a3c; }
+.task-repo-list { display: flex; flex-wrap: wrap; gap: 5px; }
+.task-repo-list > span {
+  display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 210px;
+  padding: 4px 7px; border: 1px solid var(--line); border-radius: 6px;
+  color: var(--text); background: var(--surface); font-size: 8.5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.task-repo-list > span > i { flex: none; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
+.task-dependency-wait { margin-top: 5px; color: #d59a3c; }
 .chain-review-entry {
   margin: 14px 0 0; padding: 15px 16px; border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line));
   border-radius: 11px; background: color-mix(in srgb, var(--accent) 7%, var(--surface));

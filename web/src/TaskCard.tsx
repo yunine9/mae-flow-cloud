@@ -93,16 +93,25 @@ export function TaskCard({
             <span>责任人 · {responsibleOf(task) ?? "未指定"}</span>
           </span>
           {(task.requirement_graph?.repositories.length ?? 0) > 1 && (
-            <span className="task-graph-summary">
-              <b>{task.requirement_graph!.repositories.length} 个仓库</b>
-              <i aria-hidden>·</i>
-              <span>{task.requirement_graph!.stage === "analysis"
-                ? task.status === "waiting_for_human"
-                  ? task.requirement_graph!.dependencies.length > 0
-                    ? `${task.requirement_graph!.dependencies.length} 条硬依赖待检视`
-                    : "仓间可并行，方案待检视"
-                  : "正在核对职责与依赖"
-                : `${task.requirement_graph!.dependencies.length} 条开发依赖`}</span>
+            <span className="task-chain-overview">
+              <span className="task-graph-summary">
+                <b>{task.requirement_graph!.repositories.length} 个仓库</b>
+                <i aria-hidden>·</i>
+                <span>{task.requirement_graph!.stage === "analysis"
+                  ? task.status === "waiting_for_human"
+                    ? task.requirement_graph!.dependencies.length > 0
+                      ? `${task.requirement_graph!.dependencies.length} 条硬依赖待检视`
+                      : "仓间可并行，方案待检视"
+                    : "正在核对职责与依赖"
+                  : `${task.requirement_graph!.dependencies.length} 条开发依赖`}</span>
+              </span>
+              <span className="task-repo-list" aria-label="涉及仓库">
+                {task.requirement_graph!.repositories.map((repository) => (
+                  <span key={repository.id} title={repository.url}>
+                    <i aria-hidden />{repository.name}
+                  </span>
+                ))}
+              </span>
             </span>
           )}
           {(task.blocked_by?.length ?? 0) > 0 && task.status === "queued" && (
