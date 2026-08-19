@@ -258,6 +258,29 @@ export function createTaskServer(
               return json(response, 400, { error: String(error) });
             }
           }
+          // 内部平台的管理员特权(用户拍板:内网自用,不要自助找回那
+          // 套):改密码不验旧密码;删号即物理删除。守自己的两条底线
+          // (删自己/删最后一个管理员)在 LocalAuth 里,这儿只递操作人。
+          if (request.method === "PUT" && parts.length === 4
+              && parts[3] === "password") {
+            const body = await readBody(request);
+            try {
+              options.auth!.resetPassword(
+                decodeURIComponent(parts[2]), String(body.password ?? ""));
+              return json(response, 200, { ok: true });
+            } catch (error) {
+              return json(response, 400, { error: String(error) });
+            }
+          }
+          if (request.method === "DELETE" && parts.length === 3) {
+            try {
+              options.auth!.deleteUser(
+                decodeURIComponent(parts[2]), viewer.username);
+              return json(response, 200, { ok: true });
+            } catch (error) {
+              return json(response, 400, { error: String(error) });
+            }
+          }
         }
         // Committer 名单不是账号管理能力：登录开发需要读取它，才能主动
         // 选择检视人；只有上面的管理员接口可以改名单。

@@ -169,6 +169,26 @@ export async function createUser(
   return response.json();
 }
 
+/** 管理员重置密码:内部平台,不验旧密码(忘了就找管理员)。 */
+export async function resetUserPassword(
+  username: string,
+  password: string,
+): Promise<void> {
+  const response = await fetch(
+    `/auth/users/${encodeURIComponent(username)}/password`, {
+      method: "PUT",
+      body: JSON.stringify({ password }),
+    });
+  if (!response.ok) throw new Error(await errorText(response));
+}
+
+/** 管理员删账号(物理删除;不能删自己/最后一个管理员,服务端把关)。 */
+export async function deleteUser(username: string): Promise<void> {
+  const response = await fetch(
+    `/auth/users/${encodeURIComponent(username)}`, { method: "DELETE" });
+  if (!response.ok) throw new Error(await errorText(response));
+}
+
 export async function listCommitters(): Promise<AuthUser[]> {
   const response = await fetch("/auth/committers");
   if (!response.ok) throw new Error(await errorText(response));

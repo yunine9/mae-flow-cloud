@@ -127,6 +127,106 @@ test("HTTP 登录:开发看全部任务,创建归自己,不能操作别人任务
   }
 });
 
+test("管理员特权:免旧密码重置 + 删号;底线是删自己/末位管理员/越权", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-auth-admin-"));
+  const auth = new LocalAuth(join(dir, "auth.json"));
+  auth.bootstrapAdmin("admin", "administrator-pass");
+  auth.createUser("alice", "alice-password-1", "developer");
+  auth.createUser("bob", "bob-password-123", "developer");
+  const service = new TaskService({
+    dataDir: join(dir, "tasks"),
+    provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0,
+  });
+  const server = createTaskServer(service, { auth });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as AddressInfo).port;
+  const base = `http://127.0.0.1:${port}`;
+
+  async function login(username: string, password: string): Promise<string> {
+    const response = await fetch(`${base}/auth/login`, {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    });
+    assert.equal(response.status, 200, `${username} 登录该成功`);
+    return response.headers.get("set-cookie")!.split(";")[0];
+  }
+
+  try {
+    const alice = await login("alice", "alice-password-1");
+    const admin = await login("admin", "administrator-pass");
+
+    // 越权先堵死:开发既不能重置别人密码,也不能删号。
+    const stolen = await fetch(`${base}/auth/users/bob/password`, {
+      method: "PUT", headers: { cookie: alice },
+      body: JSON.stringify({ password: "hacked-password-1" }),
+    });
+    assert.equal(stolen.status, 403);
+    const stab = await fetch(`${base}/auth/users/bob`, {
+      method: "DELETE", headers: { cookie: alice },
+    });
+    assert.equal(stab.status, 403);
+
+    // 管理员免旧密码重置:旧密码作废、旧会话下线、新密码可登录。
+    const reset = await fetch(`${base}/auth/users/alice/password`, {
+      method: "PUT", headers: { cookie: admin },
+      body: JSON.stringify({ password: "alice-new-pass-9" }),
+    });
+    assert.equal(reset.status, 200);
+    const staleSession = await fetch(`${base}/auth/me`, {
+      headers: { cookie: alice },
+    });
+    assert.equal(staleSession.status, 401, "重置后旧会话必须下线");
+    const oldLogin = await fetch(`${base}/auth/login`, {
+      method: "POST",
+      body: JSON.stringify({ username: "alice", password: "alice-password-1" }),
+    });
+    assert.equal(oldLogin.status, 401, "旧密码必须作废");
+    await login("alice", "alice-new-pass-9");
+    // 弱密码照旧被同一套校验拦住,特权不豁免长度底线。
+    const weak = await fetch(`${base}/auth/users/alice/password`, {
+      method: "PUT", headers: { cookie: admin },
+      body: JSON.stringify({ password: "short" }),
+    });
+    assert.equal(weak.status, 400);
+
+    // 删号:人没了,登录当然也没了;名单如实收缩。
+    const removed = await fetch(`${base}/auth/users/bob`, {
+      method: "DELETE", headers: { cookie: admin },
+    });
+    assert.equal(removed.status, 200);
+    const ghost = await fetch(`${base}/auth/login`, {
+      method: "POST",
+      body: JSON.stringify({ username: "bob", password: "bob-password-123" }),
+    });
+    assert.equal(ghost.status, 401);
+    const roster = await fetch(`${base}/auth/users`, {
+      headers: { cookie: admin },
+    });
+    assert.deepEqual(
+      (await readJson(roster) as Array<{ username: string }>)
+        .map((user) => user.username).sort(),
+      ["admin", "alice"]);
+
+    // 两条底线:不能删自己;不能删掉最后一个管理员。
+    const suicide = await fetch(`${base}/auth/users/admin`, {
+      method: "DELETE", headers: { cookie: admin },
+    });
+    assert.equal(suicide.status, 400, "不能删除自己");
+    auth.createUser("admin2", "second-admin-pass", "admin");
+    const admin2 = await login("admin2", "second-admin-pass");
+    const removeAdmin = await fetch(`${base}/auth/users/admin`, {
+      method: "DELETE", headers: { cookie: admin2 },
+    });
+    assert.equal(removeAdmin.status, 200, "还有别的管理员时可以删管理员");
+    const lastStand = await fetch(`${base}/auth/users/admin2`, {
+      method: "DELETE", headers: { cookie: admin2 },
+    });
+    assert.equal(lastStand.status, 400, "最后一个管理员必须删不掉");
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
 test("Committer 检视:管理员只配名单,仅任务责任人主动邀请后才通知", async () => {
   const dir = mkdtempSync(join(tmpdir(), "mfc-review-http-"));
   const auth = new LocalAuth(join(dir, "auth.json"));

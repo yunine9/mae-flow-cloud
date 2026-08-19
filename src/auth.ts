@@ -122,6 +122,45 @@ export class LocalAuth {
     return publicUser(user);
   }
 
+  /** 管理员删账号。内部平台的口径:人走了账号就清,不搞停用/归档两套
+   * 状态。两条底线仍要守——不许删自己(正在用的会话把自己删了,页面
+   * 立刻变砖,误触无法挽回),不许删掉最后一个管理员(没人能再进管理
+   * 页,只能上服务器改文件)。历史任务不受影响:任务台账记的是账号名
+   * 字符串,人没了名字还在,凭据消费口查不到人自然返回空(fail-open)。 */
+  deleteUser(username: string, operator: string): void {
+    const stored = this.users.get(username);
+    if (!stored) throw new Error(`账号 ${username} 不存在`);
+    if (username === operator) {
+      throw new Error("不能删除自己——请让另一位管理员操作");
+    }
+    if (stored.role === "admin"
+        && [...this.users.values()]
+          .filter((user) => user.role === "admin" && !user.disabled)
+          .length <= 1) {
+      throw new Error("这是最后一个管理员账号,删掉就没人能管理平台了");
+    }
+    this.users.delete(username);
+    // 他手里的活会话一并作废:账号都没了,令牌不该再能用。
+    for (const [token, session] of this.sessions) {
+      if (session.username === username) this.sessions.delete(token);
+    }
+    this.persist();
+  }
+
+  /** 管理员直接改密码,不验旧密码(内部平台,用户拍板:忘了密码找管理
+   * 员重置,不搞自助找回那套)。新密码仍走同一套长度校验;改完把这个
+   * 人的活会话全部作废——旧会话若还能用,"重置"就只是半截。 */
+  resetPassword(username: string, password: string): void {
+    const stored = this.users.get(username);
+    if (!stored) throw new Error(`账号 ${username} 不存在`);
+    validateCredentials(stored.username, password);
+    stored.password_hash = hashPassword(password);
+    for (const [token, session] of this.sessions) {
+      if (session.username === username) this.sessions.delete(token);
+    }
+    this.persist();
+  }
+
   authenticate(
     username: string,
     password: string,

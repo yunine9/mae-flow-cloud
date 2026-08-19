@@ -4,8 +4,8 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import {
-  createUser, getSession, listMyReviews, listTasks, listUsers, login, logout,
-  putCommitter,
+  createUser, deleteUser, getSession, listMyReviews, listTasks, listUsers,
+  login, logout, putCommitter, resetUserPassword,
   type AuthUser, type TaskStatus, type TaskSummary,
   type ReviewRequest, type UserRole,
 } from "./api";
@@ -344,7 +344,8 @@ export function App() {
           onTasksChanged={refresh}
         />}
         {view === "history" && <HistoryBoard />}
-        {view === "users" && session.role === "admin" && <UsersBoard />}
+        {view === "users" && session.role === "admin"
+          && <UsersBoard me={session.username} />}
         {view === "settings" && session.role === "admin" && <SettingsBoard />}
       </main>
     </div>
@@ -414,10 +415,15 @@ function LoadingScreen() {
   return <main className="loading-screen"><span className="brand-symbol"><svg viewBox="0 0 28 28"><path d="M5.5 20.5 10.7 7l3.3 7.15L17.3 7l5.2 13.5" /><path d="M8.1 16.1h11.8" /></svg></span><span>正在进入工作台…</span></main>;
 }
 
-function UsersBoard() {
+function UsersBoard({ me }: { me: string }) {
   const [users, setUsers] = useState<AuthUser[]>([]); const [username, setUsername] = useState("");
   const [password, setPassword] = useState(""); const [role, setRole] = useState<UserRole>("developer");
   const [busy, setBusy] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState("");
+  // 行内操作(内部平台的管理员特权:重置密码不验旧密码,删号即物理
+  // 删除)。resetFor=正在给谁改密码;deleteArm=删除按钮二次确认锁,
+  // 点第一下只上膛,再点才执行——不用 window.confirm 打断浏览器。
+  const [resetFor, setResetFor] = useState(""); const [resetPassword, setResetPassword] = useState("");
+  const [deleteArm, setDeleteArm] = useState("");
   async function refreshUsers() { try { setUsers(await listUsers()); } catch (reason) { setError(reason instanceof Error ? reason.message : "账号列表加载失败"); } }
   useEffect(() => { void refreshUsers(); }, []);
   async function submit(event: React.FormEvent) {
@@ -434,6 +440,33 @@ function UsersBoard() {
       await refreshUsers();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Committer 名单更新失败");
+    }
+  }
+  async function submitReset(event: React.FormEvent) {
+    event.preventDefault(); if (busy) return;
+    setBusy(true); setError(""); setMessage("");
+    try {
+      await resetUserPassword(resetFor, resetPassword);
+      // 重置会作废对方所有活会话;改的是自己则本会话也没了,页面下一次
+      // 请求会 401 回登录页——这是诚实结果,不是故障。
+      setMessage(`已重置 ${resetFor} 的密码,其登录会话已全部下线`
+        + (resetFor === me ? "(包括当前会话,请重新登录)" : ""));
+      setResetFor(""); setResetPassword("");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "密码重置失败");
+    } finally { setBusy(false); }
+  }
+  async function removeUser(user: AuthUser) {
+    if (deleteArm !== user.username) {
+      setDeleteArm(user.username); setMessage(""); setError(""); return;
+    }
+    setDeleteArm(""); setError(""); setMessage("");
+    try {
+      await deleteUser(user.username);
+      setMessage(`已删除账号 ${user.username}(历史任务记录保留)`);
+      await refreshUsers();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "账号删除失败");
     }
   }
   return <section className="user-admin">
@@ -458,12 +491,29 @@ function UsersBoard() {
         <span className="section-count">{users.length} 人</span>
       </div>
       <div className="user-table">
-        <div className="user-table-head"><span>成员</span><span>角色</span><span>默认入口</span><span>Committer</span></div>
-        {users.map((user) => <div className="user-row" key={user.username}>
-          <span className="user-cell"><i>{user.username.slice(0, 1).toUpperCase()}</i><strong>{user.username}</strong></span>
-          <span><em className={`role-chip ${user.role}`}>{user.role === "admin" ? "管理员" : "开发成员"}</em></span>
-          <span className="user-entry">{user.role === "admin" ? "团队总览" : "我的工作"}</span>
-          <span><button type="button" className={`committer-toggle${user.committer ? " on" : ""}`} aria-pressed={!!user.committer} onClick={() => void toggleCommitter(user)}><i aria-hidden />{user.committer ? "已加入" : "加入名单"}</button></span>
+        <div className="user-table-head"><span>成员</span><span>角色</span><span>默认入口</span><span>Committer</span><span>操作</span></div>
+        {users.map((user) => <div className="user-block" key={user.username}>
+          <div className="user-row">
+            <span className="user-cell"><i>{user.username.slice(0, 1).toUpperCase()}</i><strong>{user.username}</strong></span>
+            <span><em className={`role-chip ${user.role}`}>{user.role === "admin" ? "管理员" : "开发成员"}</em></span>
+            <span className="user-entry">{user.role === "admin" ? "团队总览" : "我的工作"}</span>
+            <span><button type="button" className={`committer-toggle${user.committer ? " on" : ""}`} aria-pressed={!!user.committer} onClick={() => void toggleCommitter(user)}><i aria-hidden />{user.committer ? "已加入" : "加入名单"}</button></span>
+            <span className="user-actions">
+              <button type="button" className="user-action" onClick={() => {
+                setResetFor(resetFor === user.username ? "" : user.username);
+                setResetPassword(""); setDeleteArm(""); setMessage(""); setError("");
+              }}>{resetFor === user.username ? "收起" : "重置密码"}</button>
+              {user.username === me
+                ? <button type="button" className="user-action" disabled title="不能删除自己——请让另一位管理员操作">删除</button>
+                : <button type="button" className={`user-action danger${deleteArm === user.username ? " armed" : ""}`} onClick={() => void removeUser(user)}>{deleteArm === user.username ? "确认删除?" : "删除"}</button>}
+            </span>
+          </div>
+          {resetFor === user.username && <form className="user-reset-row" onSubmit={submitReset}>
+            <input type="password" value={resetPassword} placeholder="新密码,至少 10 个字符" minLength={10} autoComplete="new-password" autoFocus required
+              onChange={(event) => setResetPassword(event.target.value)} />
+            <button type="submit" disabled={busy || resetPassword.length < 10}>{busy ? "重置中…" : "确认重置"}</button>
+            <small>不需要旧密码;重置后该账号的登录会话全部下线。</small>
+          </form>}
         </div>)}
       </div>
     </section>

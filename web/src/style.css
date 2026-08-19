@@ -1926,10 +1926,33 @@ pre {
 .user-list-card .section-head h2 { margin: 6px 0 0; color: var(--text-strong); font-size: 19px; }
 .section-note { margin: 6px 0 0; color: var(--muted); font-size: 10.5px; }
 .user-table { overflow: hidden; border: 1px solid var(--line); border-radius: 10px; }
-.user-table-head, .user-row { display: grid; grid-template-columns: minmax(180px, 1.7fr) minmax(110px, .7fr) minmax(100px, .7fr) minmax(118px, .75fr); align-items: center; gap: 18px; padding: 12px 16px; }
+.user-table-head, .user-row { display: grid; grid-template-columns: minmax(160px, 1.5fr) minmax(100px, .65fr) minmax(90px, .6fr) minmax(112px, .7fr) minmax(150px, .9fr); align-items: center; gap: 16px; padding: 12px 16px; }
 .user-table-head { color: var(--muted); background: var(--surface-soft); border-bottom: 1px solid var(--line); font-size: 10px; font-weight: 700; }
-.user-row { min-height: 58px; border-bottom: 1px solid var(--line); }
-.user-row:last-child { border-bottom: none; }
+/* 行外多了一层 .user-block(为了挂行内重置表单),分隔线随之挂到块上。 */
+.user-block { border-bottom: 1px solid var(--line); }
+.user-block:last-child { border-bottom: none; }
+.user-row { min-height: 58px; }
+.user-actions { display: inline-flex; gap: 8px; }
+.user-action {
+  padding: 7px 10px; color: var(--muted); border: 1px solid var(--line);
+  border-radius: 8px; background: var(--surface); font-size: 10.5px; cursor: pointer;
+}
+.user-action:disabled { opacity: .45; cursor: not-allowed; }
+.user-action.danger { color: var(--danger, #c0392b); border-color: color-mix(in srgb, var(--danger, #c0392b) 32%, var(--line)); }
+.user-action.danger.armed { color: #fff; background: var(--danger, #c0392b); border-color: var(--danger, #c0392b); }
+.user-reset-row {
+  display: flex; align-items: center; gap: 10px; padding: 0 16px 12px;
+}
+.user-reset-row input {
+  flex: 0 1 260px; padding: 8px 10px; border: 1px solid var(--line);
+  border-radius: 8px; background: var(--surface); color: var(--text-strong); font-size: 12px;
+}
+.user-reset-row button {
+  padding: 8px 12px; color: #fff; border: none; border-radius: 8px;
+  background: var(--accent); font-size: 11px; cursor: pointer;
+}
+.user-reset-row button:disabled { opacity: .5; cursor: not-allowed; }
+.user-reset-row small { color: var(--muted); font-size: 10.5px; }
 .user-cell { display: flex; align-items: center; gap: 10px; }
 .user-cell i { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 8px; color: var(--accent); background: var(--accent-soft); font-size: 11px; font-style: normal; font-weight: 750; }
 .user-cell strong { color: var(--text-strong); font-size: 12.5px; }
@@ -2307,6 +2330,8 @@ pre {
   .user-table-head { display: none; }
   .user-row { grid-template-columns: 1fr auto; gap: 8px; }
   .user-entry { padding-left: 40px; }
+  .user-actions { grid-column: 1 / -1; }
+  .user-reset-row { flex-wrap: wrap; }
 }
 
 @media (prefers-reduced-motion: reduce) {
