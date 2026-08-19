@@ -511,6 +511,9 @@ interface TaskState {
 }
 
 export class TaskService {
+  /** 没有部署级 public URL 时，记住最近一次已登录用户实际访问的地址。
+   * 通知由该次请求触发时即可带上同事能访问的内网 Host，而不是回环地址。 */
+  private observedLinkBase?: string;
   private tasks = new Map<string, TaskState>();
   private runningCount = 0;
   private queue: string[] = [];
@@ -526,6 +529,15 @@ export class TaskService {
     if (!process.env.MAE_FLOW_DESKTOP_NOTIFY) {
       process.env.MAE_FLOW_NO_NOTIFY ??= "1";
     }
+  }
+
+  observeLinkBase(base: string | undefined): void {
+    if (this.options.linkBase || !base) return;
+    this.observedLinkBase = base.replace(/\/+$/, "");
+  }
+
+  private notificationLinkBase(): string | undefined {
+    return this.options.linkBase ?? this.observedLinkBase;
   }
 
   list(): TaskSummary[] {
@@ -561,7 +573,7 @@ export class TaskService {
       senderAccount: requester,
       account: committer,
       summary: review.task_title,
-      link: reviewTaskLink(this.options.linkBase, id, review.id),
+      link: reviewTaskLink(this.notificationLinkBase(), id, review.id),
     });
     return this.reviews.delivery(review.id, result);
   }
@@ -2777,7 +2789,7 @@ export class TaskService {
           summary: `MR 已合入`
             + (delivery.mr_url ? `:${delivery.mr_url}` : ""),
           link: personalTaskLink(
-            this.options.linkBase, account, task.summary.id),
+            this.notificationLinkBase(), account, task.summary.id),
         }));
       }
       return;
@@ -2869,7 +2881,7 @@ export class TaskService {
                 + (task.summary.delivery?.mr_url
                   ? `:${task.summary.delivery.mr_url}` : ""),
               link: personalTaskLink(
-                this.options.linkBase, account, task.summary.id),
+                this.notificationLinkBase(), account, task.summary.id),
             }));
           }
         }
@@ -3448,7 +3460,7 @@ export class TaskService {
         step: waiting.step,
         summary: String(questions[0]?.question ?? "需要你确认"),
         link: personalTaskLink(
-          this.options.linkBase,
+          this.notificationLinkBase(),
           account,
           task.summary.id,
         ),
@@ -3648,7 +3660,7 @@ export class TaskService {
       status: `repair_${loop.state}`,
       summary: `流水线自动修复已停,需要你介入——${why}`,
       link: personalTaskLink(
-        this.options.linkBase, account, task.summary.id),
+        this.notificationLinkBase(), account, task.summary.id),
     }));
   }
 
@@ -3673,7 +3685,7 @@ export class TaskService {
       account,
       status,
       summary: text[status],
-      link: personalTaskLink(this.options.linkBase, account, id),
+      link: personalTaskLink(this.notificationLinkBase(), account, id),
     }));
   }
 

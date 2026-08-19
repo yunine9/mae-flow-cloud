@@ -155,6 +155,21 @@ async function main(): Promise<void> {
   // 用户实测撞到这个:"还让去 ide 检视代码,明显不对了"。
   process.env.MAE_FLOW_HOST = "cloud";
   const port = Number(flag("--port") ?? 8787);
+  const bindHost = flag("--host") ?? "127.0.0.1";
+  const publicUrlFlag = flag("--public-url")?.trim();
+  let publicUrl: string | undefined;
+  if (publicUrlFlag) {
+    try {
+      const parsed = new URL(publicUrlFlag);
+      if (!/https?:/.test(parsed.protocol) || parsed.username || parsed.password) {
+        throw new Error("只接受不含账号密码的 http/https 地址");
+      }
+      publicUrl = publicUrlFlag.replace(/\/+$/, "");
+    } catch (error) {
+      console.error(`[serve] --public-url 无效:${String(error)}`);
+      process.exit(2);
+    }
+  }
   const dataDir = resolve(flag("--data") ?? join(REPO_ROOT, ".tasks"));
   mkdirSync(dataDir, { recursive: true });
   guardProcess(dataDir);   // 旁路异常不许带走整个服务(见函数注释)
@@ -407,7 +422,9 @@ async function main(): Promise<void> {
       personalToken: (account) => auth.lubanToken(account),
     }),
     projection,
-    linkBase: `http://127.0.0.1:${port}`,
+    // 正式部署建议固定 public-url；未配置时，服务会从已登录用户的
+    // 实际请求 Host 学到内网入口，绝不再默认写死 127.0.0.1。
+    linkBase: publicUrl,
     log: (message) => console.log(`  [task] ${message}`),
   });
   // 进程可死任务不死:重启后重建索引,在跑的任务续跑,等人的继续等。
@@ -427,7 +444,6 @@ async function main(): Promise<void> {
   // 就不上网,是姿态不是疏忽)。暴露时登录/权限本来就在,但要认两条:
   // 内网是明文 http(会话 cookie 可被同网段嗅探,正式部署前加反代
   // TLS);工作机合盖=全员断线,它是工作站不是服务器。
-  const bindHost = flag("--host") ?? "127.0.0.1";
   const server = createTaskServer(service, { webRoot, auth });
   // 监听失败要说人话就退。没有这个处理器时 EADDRINUSE 会作为未捕获的
   // error 事件把进程炸掉,现场只剩一段栈——实战里表现为"服务莫名其妙
@@ -445,6 +461,7 @@ async function main(): Promise<void> {
   server.listen(port, bindHost, () => {
     const actual = (server.address() as AddressInfo).port;
     console.log(`[serve] http://${bindHost}:${actual}  (数据目录 ${dataDir})`);
+    if (publicUrl) console.log(`[serve] 通知访问地址:${publicUrl}`);
     if (bindHost !== "127.0.0.1") {
       console.log("[serve] 已对外监听:同事经内网 IP 访问;明文 http,"
         + "正式部署前套反代 TLS");

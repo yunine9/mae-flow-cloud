@@ -351,7 +351,6 @@ test("Committer 检视:管理员只配名单,仅任务责任人主动邀请后�
         return auth.lubanToken(account);
       },
     }),
-    linkBase: "http://mae-flow.internal",
   });
   const server = createTaskServer(service, { auth });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -416,7 +415,11 @@ test("Committer 检视:管理员只配名单,仅任务责任人主动邀请后�
 
     const invited = await fetch(
       `${base}/tasks/${created.id}/review-request`, {
-        method: "POST", headers: { cookie: alice },
+        method: "POST", headers: {
+          cookie: alice,
+          "x-forwarded-host": "10.23.4.8:8787",
+          "x-forwarded-proto": "http",
+        },
         body: JSON.stringify({ committer: "bob" }),
     });
     assert.equal(invited.status, 200);
@@ -432,7 +435,8 @@ test("Committer 检视:管理员只配名单,仅任务责任人主动邀请后�
     assert.equal(luban.messages[0].text,
       `【Mae-Flow】任务 ${created.id} 邀请你检视：实现订单检索`);
     assert.equal(luban.messages[0].link,
-      `http://mae-flow.internal/work/${created.id}/review/${review.id}`);
+      `http://10.23.4.8:8787/work/${created.id}/review/${review.id}`,
+      "未配置 public-url 时按用户实际访问的内网 Host 生成链接");
 
     const inbox = await fetch(`${base}/reviews/mine`, {
       headers: { cookie: bob },

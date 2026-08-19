@@ -86,6 +86,25 @@ function json(
   response.end(text);
 }
 
+/** 从这次 HTTP 请求还原用户真正访问的站点。部署在反代后时优先认
+ * X-Forwarded-*；正式环境可用 --public-url 固定，避免多入口漂移。 */
+function requestBaseUrl(
+  request: import("node:http").IncomingMessage,
+): string | undefined {
+  const first = (value: string | string[] | undefined) =>
+    (Array.isArray(value) ? value[0] : value)?.split(",")[0]?.trim();
+  const host = first(request.headers["x-forwarded-host"])
+    ?? first(request.headers.host);
+  if (!host || /[\r\n/\\]/.test(host)) return undefined;
+  const forwardedProtocol = first(request.headers["x-forwarded-proto"]);
+  const protocol = forwardedProtocol === "https" ? "https" : "http";
+  try {
+    return new URL(`${protocol}://${host}`).origin;
+  } catch {
+    return undefined;
+  }
+}
+
 export function createTaskServer(
   service: TaskService,
   options: { webRoot?: string; auth?: LocalAuth } = {},
@@ -99,6 +118,7 @@ export function createTaskServer(
         "mae_flow_session",
       );
       const viewer = options.auth?.sessionUser(sessionToken);
+      if (viewer) service.observeLinkBase(requestBaseUrl(request));
       /** 当前登录者自己缺的配置。两样都是"以本人身份做事"的凭据:
        * Git 令牌决定 push 与 MR 发起人是谁,通知令牌决定消息以谁的
        * 身份发——管理员代配不了(密钥只写不读),所以只能各人自己配,

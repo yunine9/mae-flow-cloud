@@ -954,12 +954,12 @@ svg {
 .repo-node-head button { padding: 3px 5px; color: var(--accent); border: 0; border-radius: 5px; background: var(--accent-soft); font-size: 8px; cursor: pointer; }
 .requirement-stage article > p { margin: 6px 0 0; color: var(--text); font-size: 9px; line-height: 1.45; }
 .repo-prerequisite { display: block; margin-top: 5px; color: #c28a35; font-size: 8.5px; }
-.requirement-edges { margin-top: 7px; display: grid; gap: 5px; }
-.requirement-edges > div { min-width: 0; padding: 6px 8px; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 9px; border-radius: 7px; background: var(--surface-soft); color: var(--muted); font-size: 8.5px; }
-.requirement-edges > div > span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.requirement-edges { margin-top: 9px; display: grid; gap: 7px; }
+.requirement-edges > div { min-width: 0; padding: 10px 12px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); color: var(--muted); }
+.requirement-edges > div > span { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 10.5px; }
 .requirement-edges i { color: var(--accent); font-style: normal; }
 .requirement-edges strong { color: var(--text); font-weight: 650; }
-.requirement-edges small { min-width: 0; padding-left: 9px; border-left: 1px solid var(--line); color: var(--muted); line-height: 1.5; overflow-wrap: anywhere; white-space: normal; }
+.requirement-edges > div > small { display: block; min-width: 0; padding-top: 8px; border-top: 1px solid var(--line); color: var(--text); font-size: 12px; line-height: 1.7; overflow: visible; overflow-wrap: anywhere; text-overflow: clip; white-space: normal; word-break: break-word; }
 .requirement-graph-note { margin: 8px 0 0; padding-top: 8px; border-top: 1px dashed var(--line); color: var(--muted); font-size: 9px; line-height: 1.5; }
 .task-chain-overview { display: grid; justify-items: start; gap: 5px; margin-top: 5px; }
 .task-graph-summary, .task-dependency-wait { display: inline-flex; align-items: center; gap: 6px; width: max-content; padding: 4px 7px; border-radius: 6px; color: var(--muted); background: var(--surface-soft); font-size: 8.5px; }
