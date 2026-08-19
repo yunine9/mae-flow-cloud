@@ -20,18 +20,11 @@ import {
 } from "./api";
 import { formatWait, URGENT_MINUTES, waitedMs } from "./taskTime";
 import { responsibleOf } from "./teamOps";
-
-function formatTime(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  return date.toLocaleString("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
-}
+import {
+  formatLocalClock,
+  formatLocalDateTime,
+  instantMs,
+} from "./time";
 
 export function TaskCard({
   task,
@@ -87,7 +80,7 @@ export function TaskCard({
                 : statusText(task)}
             </span>
             <WaitBadge task={task} personal={showDecisionForm} />
-            <span className="task-created">{formatTime(task.created_at)}</span>
+            <span className="task-created">{formatLocalDateTime(task.created_at)}</span>
           </span>
           <strong className="task-title">{task.title ?? task.requirement}</strong>
           <span className="task-ownership">
@@ -579,28 +572,26 @@ export function TaskTimeline({ taskId }: { taskId: string }) {
   );
 }
 
-/** 现场时间戳是 "YYYY-MM-DD HH:mm:ss"(内核格式,不是 ISO):
- * Safari 对非 ISO 串解析不保证,补上 T 再交给 Date。 */
-function stamp(ts: string): number {
-  const value = new Date(ts.replace(" ", "T")).getTime();
-  return Number.isNaN(value) ? 0 : value;
-}
-
 /** 耗时与卡点:同一份现场,回答"时间去哪了、卡在谁身上"。
  * 倒放流水账没有信息量(用户实测原话),这里只留结论与关键节点。 */
+function timelineInstant(value: string): number {
+  const timestamp = instantMs(value);
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
 function CostBreakdown({ entries }: { entries: TimelineEntry[] }) {
   const [showAll, setShowAll] = useState(false);
-  const first = stamp(entries[0].ts);
-  const last = Math.max(stamp(entries[entries.length - 1].ts), first);
+  const first = timelineInstant(entries[0].ts);
+  const last = Math.max(timelineInstant(entries[entries.length - 1].ts), first);
   // 审批卡 → 下一条决定 = 一段人工等待;没等到决定的就是此刻还在等。
   const waits: Array<{ ask: TimelineEntry; ms: number; answer?: string }> = [];
   entries.forEach((entry, index) => {
     if (entry.kind !== "ask") return;
     const answered = entries.slice(index + 1).find((it) => it.kind === "decision");
-    const until = answered ? stamp(answered.ts) : Date.now();
+    const until = answered ? timelineInstant(answered.ts) : Date.now();
     waits.push({
       ask: entry,
-      ms: Math.max(0, until - stamp(entry.ts)),
+      ms: Math.max(0, until - timelineInstant(entry.ts)),
       answer: answered?.title.replace(/^你的决定[:：]/, ""),
     });
   });
@@ -687,7 +678,10 @@ function CostBreakdown({ entries }: { entries: TimelineEntry[] }) {
           {entries.map((entry, index) => (
             <li className={`timeline-item ${entry.tone}`} key={index}>
               <span className="timeline-dot" aria-hidden />
-              <span className="timeline-time">{entry.ts.slice(-8, -3)}</span>
+              <time className="timeline-time" dateTime={entry.ts}
+                title={formatLocalDateTime(entry.ts, { seconds: true, year: true })}>
+                {formatLocalClock(entry.ts)}
+              </time>
               <span className="timeline-body">
                 <strong>{entry.title}</strong>
                 {entry.detail && <span>{entry.detail}</span>}
@@ -813,7 +807,10 @@ function EventRecord({ event }: { event: SemanticEvent }) {
         <span className="event-record-dot" aria-hidden />
         <strong>{EVENT_KIND_LABEL[event.kind] ?? event.kind}</strong>
         <code>#{event.eventId}</code>
-        <time title={event.ts}>{event.ts.slice(5)}</time>
+        <time dateTime={event.ts}
+          title={formatLocalDateTime(event.ts, { seconds: true, year: true })}>
+          {formatLocalDateTime(event.ts, { seconds: true })}
+        </time>
       </header>
       {fields.length === 0 ? (
         <div className="event-record-empty">本事件没有附加内容</div>

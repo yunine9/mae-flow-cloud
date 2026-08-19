@@ -20,12 +20,34 @@ import { join } from "node:path";
 export type TimelineTone = "info" | "attention" | "success" | "danger";
 
 export interface TimelineEntry {
-  /** 现场里的原始时间戳(内核与事件账本同格式,可直接排序)。 */
+  /** 带时区的 ISO 时间。页面只按本地时区格式化，不再猜来源。 */
   ts: string;
   kind: "session" | "phase" | "ask" | "decision" | "agent" | "quality";
   title: string;
   detail?: string;
   tone: TimelineTone;
+}
+
+const BARE_TIMESTAMP = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
+
+/**
+ * 历史语义事件的裸串来自 `toISOString()` 去掉 T/Z，实际是 UTC；
+ * 内核 Python 的裸串来自 `time.strftime()`，实际是服务所在时区。
+ * 两路在这里各自补全为 ISO，前端从此只接收无歧义的时间点。
+ */
+function normalizeTimestamp(
+  value: unknown,
+  bareMeans: "utc" | "local",
+): string {
+  const raw = String(value ?? "");
+  if (!raw) return "";
+  const candidate = BARE_TIMESTAMP.test(raw)
+    ? `${raw.replace(" ", "T")}${bareMeans === "utc" ? "Z" : ""}`
+    : raw;
+  const milliseconds = new Date(candidate).getTime();
+  return Number.isFinite(milliseconds)
+    ? new Date(milliseconds).toISOString()
+    : raw;
 }
 
 function clip(value: unknown, limit: number): string {
@@ -108,7 +130,7 @@ function fromEvents(workspace: string): TimelineEntry[] {
     rebuildIds.some((id) => id > eventId);
 
   for (const event of events) {
-    const ts = String(event.ts ?? "");
+    const ts = normalizeTimestamp(event.ts, "utc");
     const payload = (event.payload ?? {}) as Record<string, any>;
     switch (event.kind) {
       case "session_started":
@@ -218,7 +240,7 @@ function fromKernel(cwd: string): TimelineEntry[] {
     const step = clip(item.step, 40) || "?";
     const result = clip(item.result, 20);
     entries.push({
-      ts: String(item.at ?? ""),
+      ts: normalizeTimestamp(item.at, "local"),
       kind: "phase",
       title: `完成步骤「${step}」`,
       detail: [result && `结果 ${result}`, clip(item.note, 60)]
@@ -242,7 +264,7 @@ function fromQualityLedger(cwd: string): TimelineEntry[] {
     const kind = String(row.kind ?? "");
     const ok = row.succeeded === true;
     entries.push({
-      ts: String(row.at ?? ""),
+      ts: normalizeTimestamp(row.at, "local"),
       kind: "quality",
       title: `${label[kind] ?? kind}执行:${ok ? "成功" : "失败"}`,
       detail: [clip(row.step, 40) && `步骤 ${clip(row.step, 40)}`,
@@ -276,11 +298,14 @@ export function buildTimeline(
     push(() => fromKernel(codeDir));
     push(() => fromQualityLedger(codeDir));
   }
-  // 时间戳同格式(YYYY-MM-DD HH:MM:SS),字符串序即时间序;
-  // 没有时间戳的条目沉到最后,不假装知道它发生在何时。
+  // 有效时间都已规范成 ISO；异常/缺失时间沉到最后，不假装顺序。
   return entries.sort((left, right) => {
     if (!left.ts) return 1;
     if (!right.ts) return -1;
-    return left.ts.localeCompare(right.ts);
+    const leftAt = new Date(left.ts).getTime();
+    const rightAt = new Date(right.ts).getTime();
+    if (!Number.isFinite(leftAt)) return 1;
+    if (!Number.isFinite(rightAt)) return -1;
+    return leftAt - rightAt;
   });
 }

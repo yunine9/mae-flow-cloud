@@ -2,14 +2,16 @@
 
 import { useEffect, useState } from "react";
 import { listHistory, STATUS_TEXT, type TaskHistoryEntry } from "./api";
+import { formatLocalDate, instantMs } from "./time";
 
 function timeAgo(iso: string): string {
-  const minutes = Math.floor((Date.now() - new Date(iso).getTime()) / 60_000);
+  const minutes = Math.max(0,
+    Math.floor((Date.now() - instantMs(iso)) / 60_000));
   if (minutes < 1) return "刚刚";
   if (minutes < 60) return `${minutes} 分钟前`;
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours} 小时前`;
-  return new Date(iso).toLocaleDateString("zh-CN");
+  return formatLocalDate(iso);
 }
 
 const TILES = [

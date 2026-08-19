@@ -4,6 +4,8 @@
  * 前端只做呈现,不推断状态。
  */
 
+import { instantMs } from "./time";
+
 type WaitableTask = {
   status: string;
   waiting?: { created_at?: string } | null;
@@ -17,10 +19,7 @@ export const URGENT_MINUTES = 30;
  * `YYYY-MM-DD HH:mm:ss`。这类历史值必须补回 Z；标准 ISO 和真正带
  * 偏移量的时间保持原样。 */
 export function waitingTimestamp(iso: string): number {
-  const legacyUtc = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(iso)
-    ? `${iso.replace(" ", "T")}Z`
-    : iso;
-  return new Date(legacyUtc).getTime();
+  return instantMs(iso);
 }
 
 /** 等待中的任务已等毫秒数;不在等待或没有时间戳返回 -1。 */
@@ -51,5 +50,5 @@ export function byUrgency(a: WaitableTask, b: WaitableTask): number {
   if (left >= 0 && right >= 0) return right - left;
   if (left >= 0) return -1;
   if (right >= 0) return 1;
-  return b.created_at.localeCompare(a.created_at);
+  return instantMs(b.created_at) - instantMs(a.created_at);
 }

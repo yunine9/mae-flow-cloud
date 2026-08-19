@@ -1,3 +1,5 @@
+import { instantMs } from "./time";
+
 /** 团队运营只依赖这些稳定字段。保持为自包含结构，根级 typecheck
  * 在测试该纯函数时不必把整个浏览器 API 客户端一并拖进 Node 类型域。 */
 export interface TeamTask {
@@ -38,9 +40,9 @@ export function needsAction(task: TeamTask): boolean {
 }
 
 export function progressAgeMs(task: TeamTask, now = Date.now()): number {
-  const at = new Date(
+  const at = instantMs(
     task.last_progress_at ?? task.updated_at ?? task.created_at,
-  ).getTime();
+  );
   return Number.isFinite(at) ? Math.max(0, now - at) : 0;
 }
 
@@ -58,8 +60,8 @@ export function byTeamAttention(a: TeamTask, b: TeamTask): number {
 
 export function cycleTimeMs(task: TeamTask): number | undefined {
   if (!task.completed_at) return undefined;
-  const start = new Date(task.created_at).getTime();
-  const end = new Date(task.completed_at).getTime();
+  const start = instantMs(task.created_at);
+  const end = instantMs(task.completed_at);
   if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) {
     return undefined;
   }
