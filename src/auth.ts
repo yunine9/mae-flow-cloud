@@ -29,6 +29,15 @@ export interface AuthUser {
   committer?: boolean;
 }
 
+/** 登录后交给界面的本人视图。密钥原文永不离开服务端，只暴露能让
+ * 用户确认“已经配置、末四位是什么”的掩码。 */
+export interface AuthSessionUser extends AuthUser {
+  git_token_hint?: string;
+  git_email?: string;
+  luban_token_hint?: string;
+  moonlight: boolean;
+}
+
 interface StoredUser extends AuthUser {
   password_hash: string;
   created_at: string;
@@ -53,6 +62,8 @@ interface StoredUser extends AuthUser {
 interface UserFile {
   version: 1;
   users: StoredUser[];
+  /** 已删除账号永久占用用户名，避免后来同名账号继承旧任务操作权。 */
+  retired_usernames?: string[];
 }
 
 interface FailureWindow {
@@ -66,6 +77,7 @@ const MAX_FAILURES = 5;
 
 export class LocalAuth {
   private users = new Map<string, StoredUser>();
+  private retiredUsernames = new Set<string>();
   private sessions = new Map<string, { username: string; expiresAt: number }>();
   private failures = new Map<string, FailureWindow>();
 
@@ -110,6 +122,9 @@ export class LocalAuth {
     if (this.users.has(normalized)) {
       throw new Error(`账号 ${normalized} 已存在`);
     }
+    if (this.retiredUsernames.has(normalized)) {
+      throw new Error(`账号 ${normalized} 已删除，不能同名重建；历史任务仍归原账号`);
+    }
     const user: StoredUser = {
       username: normalized,
       role,
@@ -140,6 +155,9 @@ export class LocalAuth {
       throw new Error("这是最后一个管理员账号,删掉就没人能管理平台了");
     }
     this.users.delete(username);
+    // 任务归属当前以用户名作为稳定身份。若允许同名重建，新用户会立刻
+    // 获得旧用户历史任务的决定/暂停/取消权，因此删除名必须永久保留。
+    this.retiredUsernames.add(username);
     // 他手里的活会话一并作废:账号都没了,令牌不该再能用。
     for (const [token, session] of this.sessions) {
       if (session.username === username) this.sessions.delete(token);
@@ -295,6 +313,19 @@ export class LocalAuth {
     return !!stored?.moonlight && !stored.disabled;
   }
 
+  /** 登录与 /auth/me 共用同一份本人视图，避免登录响应漏字段后让前端
+   * 误以为个人配置丢失。只按传入账号读取，不接受客户端指定目标用户。 */
+  sessionView(username: string): AuthSessionUser | undefined {
+    const stored = this.users.get(username);
+    if (!stored || stored.disabled) return undefined;
+    return {
+      ...publicUser(stored),
+      ...this.gitProfile(username),
+      luban_token_hint: this.lubanTokenHint(username),
+      moonlight: this.moonlightEnabled(username),
+    };
+  }
+
   /** 给界面回显的非密部分:掩码提示 + 平台用户名/邮箱。 */
   gitProfile(username: string): {
     git_token_hint?: string;
@@ -357,12 +388,20 @@ export class LocalAuth {
       throw new Error(`账号文件格式不受支持: ${this.file}`);
     }
     for (const user of parsed.users) this.users.set(user.username, user);
+    for (const username of parsed.retired_usernames ?? []) {
+      if (typeof username === "string") this.retiredUsernames.add(username);
+    }
   }
 
   private persist(): void {
     mkdirSync(dirname(this.file), { recursive: true });
     const temp = `${this.file}.tmp`;
-    const body: UserFile = { version: 1, users: [...this.users.values()] };
+    const body: UserFile = {
+      version: 1,
+      users: [...this.users.values()],
+      ...(this.retiredUsernames.size
+        ? { retired_usernames: [...this.retiredUsernames].sort() } : {}),
+    };
     writeFileSync(temp, JSON.stringify(body, null, 2), {
       encoding: "utf-8",
       mode: 0o600,

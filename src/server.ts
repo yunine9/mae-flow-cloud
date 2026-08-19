@@ -162,18 +162,15 @@ export function createTaskServer(
           }
           const token = options.auth.createSession(result.user);
           response.setHeader("set-cookie", sessionCookie(token, request));
-          return json(response, 200, result.user);
+          // 登录成功后的首屏与刷新页面走的 /auth/me 必须是同一份视图。
+          // 之前这里只回账号/角色，前端便把已有 Token 状态覆盖成“未配”。
+          return json(response, 200,
+            options.auth.sessionView(result.user.username));
         }
         if (request.method === "GET" && parts[1] === "me") {
           if (!viewer) return json(response, 401, { error: "尚未登录" });
-          // 令牌只回掩码提示——"配过了、是哪个"够用,明文不出网;
-          // 平台用户名/邮箱不是密钥,回显给表单确认用。
-          return json(response, 200, {
-            ...viewer,
-            ...options.auth?.gitProfile(viewer.username),
-            luban_token_hint: options.auth?.lubanTokenHint(viewer.username),
-            moonlight: options.auth?.moonlightEnabled(viewer.username) ?? false,
-          });
+          return json(response, 200,
+            options.auth!.sessionView(viewer.username));
         }
         // 月光模式(免审批):默认关;开=本人任务的人工节点由系统代答
         // 直行,且对已经在等的卡立刻生效;关=之后的节点恢复审批。

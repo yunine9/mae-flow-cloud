@@ -38,6 +38,94 @@ test("账号库:scrypt 哈希落盘且重启后仍可登录", () => {
   );
 });
 
+test("个人配置:退出重登与账号库重载后仍在,且不同用户严格隔离", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-auth-profile-"));
+  const file = join(dir, "auth.json");
+  const original = new LocalAuth(file);
+  original.bootstrapAdmin("admin", "administrator-pass");
+  original.createUser("alice", "alice-password-1", "developer");
+  original.createUser("bob", "bob-password-123", "developer");
+  original.setGitToken("alice", "alice-codehub-secret", "alice@example.com");
+  original.setLubanToken("alice", "alice-luban-secret");
+  original.setMoonlight("alice", true);
+  original.setGitToken("bob", "bob-codehub-secret", "bob@example.com");
+  original.setLubanToken("bob", "bob-luban-secret");
+
+  // 用新的 LocalAuth 模拟服务重启，证明事实来自账号文件而非前端内存。
+  const auth = new LocalAuth(file);
+  const service = new TaskService({
+    dataDir: join(dir, "tasks"), provider: "test", model: "test",
+    modelsJson: {}, maxConcurrent: 0,
+  });
+  const server = createTaskServer(service, { auth });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as AddressInfo).port;
+  const base = `http://127.0.0.1:${port}`;
+
+  async function login(username: string, password: string) {
+    const response = await fetch(`${base}/auth/login`, {
+      method: "POST", body: JSON.stringify({ username, password }),
+    });
+    assert.equal(response.status, 200);
+    return {
+      cookie: response.headers.get("set-cookie")!.split(";")[0],
+      text: await response.text(),
+    };
+  }
+
+  try {
+    const alice = await login("alice", "alice-password-1");
+    const aliceView = JSON.parse(alice.text) as Record<string, unknown>;
+    assert.deepEqual(aliceView, {
+      username: "alice",
+      role: "developer",
+      git_token_hint: "••••cret",
+      git_email: "alice@example.com",
+      luban_token_hint: "••••cret",
+      moonlight: true,
+    });
+    assert.doesNotMatch(alice.text,
+      /alice-codehub-secret|alice-luban-secret|bob-codehub-secret|bob@example/,
+      "登录响应不得泄露本人明文或他人配置");
+
+    const logout = await fetch(`${base}/auth/logout`, {
+      method: "POST", headers: { cookie: alice.cookie },
+    });
+    assert.equal(logout.status, 200);
+    const aliceAgain = await login("alice", "alice-password-1");
+    assert.deepEqual(JSON.parse(aliceAgain.text), aliceView,
+      "退出再登录后个人配置视图必须完整恢复");
+
+    const bob = await login("bob", "bob-password-123");
+    const bobView = JSON.parse(bob.text) as Record<string, unknown>;
+    assert.deepEqual(bobView, {
+      username: "bob",
+      role: "developer",
+      git_token_hint: "••••cret",
+      git_email: "bob@example.com",
+      luban_token_hint: "••••cret",
+      moonlight: false,
+    });
+    assert.equal(bobView.git_email, "bob@example.com");
+    assert.notEqual(bobView.git_email, aliceView.git_email);
+
+    const me = await fetch(`${base}/auth/me`, {
+      headers: { cookie: aliceAgain.cookie },
+    });
+    assert.equal(me.status, 200);
+    assert.deepEqual(await me.json(), aliceView,
+      "登录响应与 /auth/me 不得再出现字段漂移");
+
+    const users = await fetch(`${base}/auth/users`, {
+      headers: { cookie: bob.cookie },
+    });
+    assert.equal(users.status, 403,
+      "普通开发不能借账号管理接口读取其他用户信息");
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
 test("HTTP 登录:开发看全部任务,创建归自己,不能操作别人任务", async () => {
   const dir = mkdtempSync(join(tmpdir(), "mfc-auth-http-"));
   const auth = new LocalAuth(join(dir, "auth.json"));
@@ -199,6 +287,19 @@ test("管理员特权:免旧密码重置 + 删号;底线是删自己/末位管�
       body: JSON.stringify({ username: "bob", password: "bob-password-123" }),
     });
     assert.equal(ghost.status, 401);
+    const reused = await fetch(`${base}/auth/users`, {
+      method: "POST", headers: { cookie: admin },
+      body: JSON.stringify({
+        username: "bob", password: "different-person-1", role: "developer",
+      }),
+    });
+    assert.equal(reused.status, 400,
+      "删除后的同名账号不能重建，否则会继承旧任务操作权");
+    assert.match(await reused.text(), /不能同名重建/);
+    const restoredAfterDelete = new LocalAuth(join(dir, "auth.json"));
+    assert.throws(() => restoredAfterDelete.createUser(
+      "bob", "different-person-1", "developer"), /不能同名重建/,
+    "用户名墓碑必须跨服务重启保留");
     const roster = await fetch(`${base}/auth/users`, {
       headers: { cookie: admin },
     });
