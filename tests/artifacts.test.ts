@@ -114,6 +114,9 @@ test("未提交改动:已暂存/未暂存/未跟踪都在快照里", () => {
   assert.ok(diff!.bytes > 0);
 
   const snapshot = readArtifact(cwd, DIFF_NAME);
+  assert.equal(snapshot?.branch,
+    execFileSync("git", ["-C", cwd, "branch", "--show-current"],
+      { encoding: "utf-8" }).trim());
   assert.match(String(snapshot?.content), /已暂存/);
   assert.match(String(snapshot?.content), /staged\.txt/);
   assert.match(String(snapshot?.content), /未暂存/);

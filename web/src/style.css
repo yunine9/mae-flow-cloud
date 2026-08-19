@@ -2902,7 +2902,15 @@ pre {
 .git-change-summary > div:first-child { display: flex; flex-direction: column; gap: 2px; }
 .git-change-summary span { color: var(--accent); font-size: 8px; font-weight: 750; letter-spacing: .14em; }
 .git-change-summary strong { color: var(--text-strong); font-size: 13px; }
-.git-change-summary small { color: var(--muted); font-size: 10px; }
+.git-change-summary small { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 10px; }
+.git-change-summary small code, .code-review-title small code {
+  overflow: hidden; max-width: 220px; padding: 2px 6px;
+  color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line));
+  border-radius: 5px; background: var(--accent-soft);
+  font: 700 9px ui-monospace, "SF Mono", Menlo, monospace;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.git-change-summary small i, .code-review-title small i { color: var(--faint); font-style: normal; }
 .change-summary-actions { display: flex; align-items: center; gap: 14px; }
 .change-totals { display: flex; gap: 9px; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; }
 .change-totals .plus { color: var(--success); }
@@ -3049,6 +3057,11 @@ pre {
 .code-review-title span { color: #8b93ff; font-size: 8px; font-weight: 800; letter-spacing: .15em; }
 .code-review-title strong { color: #fff; font-size: 14px; }
 .code-review-title small { overflow: hidden; color: #8994a7; font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
+.code-review-title small { display: flex; align-items: center; gap: 6px; }
+.code-review-title small code {
+  flex: none; max-width: 260px; color: #a7adff;
+  border-color: rgba(139, 147, 255, .24); background: rgba(139, 147, 255, .1);
+}
 .code-review-totals { display: flex; gap: 10px; font: 700 11px ui-monospace, "SF Mono", Menlo, monospace; }
 .code-review-totals b { color: #86efac; }
 .code-review-totals i { color: #fda4af; font-style: normal; }

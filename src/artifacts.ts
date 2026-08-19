@@ -64,6 +64,8 @@ export interface ArtifactMeta {
 
 export interface ArtifactContent extends ArtifactMeta {
   content: string;
+  /** Git 差异所属的当前分支；文档产物没有此字段。 */
+  branch?: string;
   /** 触顶截断时为 true:页面要如实告诉用户"这不是全文"。 */
   truncated?: boolean;
 }
@@ -157,6 +159,16 @@ function git(cwd: string, args: string[]): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/** 当前工作区分支。detached HEAD 仍给出短提交，避免把真实状态误报成
+ * “未知分支”。 */
+function currentBranch(cwd: string): string | undefined {
+  const branch = git(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"])
+    ?.trim();
+  if (branch) return branch;
+  const head = git(cwd, ["rev-parse", "--short", "HEAD"])?.trim();
+  return head ? `detached@${head}` : undefined;
 }
 
 /** 未跟踪文件相对于 /dev/null 的统一 diff。
@@ -437,7 +449,7 @@ export function readArtifact(
       const diff = collectDiff(cwd);
       if (!meta || !diff) return undefined;
       const { content, truncated } = cap(diff.text);
-      return { ...meta, content, truncated };
+      return { ...meta, content, truncated, branch: currentBranch(cwd) };
     }
     const doc = collectDocs(cwd).find((entry) => entry.meta.name === wanted);
     if (!doc) return undefined;

@@ -745,7 +745,7 @@ export function putModelsSettings(body: {
 export async function readArtifact(
   taskId: string,
   name: string,
-): Promise<{ content?: string; kind?: string; unavailable?: string }> {
+): Promise<{ content?: string; kind?: string; branch?: string; unavailable?: string }> {
   const response = await fetch(
     `/tasks/${taskId}/artifacts/${encodeURIComponent(name)}`);
   if (!response.ok) {
@@ -753,5 +753,9 @@ export async function readArtifact(
     return { unavailable: String(body.error ?? `HTTP ${response.status}`) };
   }
   const body = await response.json();
-  return { content: String(body.content ?? ""), kind: String(body.kind ?? "doc") };
+  return {
+    content: String(body.content ?? ""),
+    kind: String(body.kind ?? "doc"),
+    branch: body.branch ? String(body.branch) : undefined,
+  };
 }
