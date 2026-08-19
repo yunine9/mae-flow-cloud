@@ -63,6 +63,48 @@ def whole_card_values(text, config):
     ]
 
 
+def _trusted_answer_candidates(text):
+    """Return actual answer values, excluding question/option metadata."""
+    return [
+        re.sub(r"\s+", "", value)
+        for value in _trusted_answer_values(text)
+        if re.sub(r"\s+", "", value)
+    ]
+
+
+def _trusted_answer_values(text):
+    """Return answer values with their original wording and whitespace."""
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        return [(text or "").strip()] if (text or "").strip() else []
+    if isinstance(parsed, str):
+        return [parsed.strip()] if parsed.strip() else []
+    out = []
+    answer_keys = {
+        "answer", "answers", "response", "responses", "selected",
+        "selection", "selectedoption", "selectedoptions", "result",
+    }
+
+    def walk(value, trusted=False):
+        if isinstance(value, str) and trusted and value.strip():
+            out.append(value.strip())
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                normalized = re.sub(
+                    r"[^a-z]", "", str(key).lower())
+                walk(item, trusted or normalized in answer_keys)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item, trusted)
+
+    if isinstance(parsed, list):
+        walk(parsed, trusted=True)
+    else:
+        walk(parsed)
+    return out
+
+
 def reviewed_config(st):
     """待确认的配置在 config_review.config 里;此刻 st["config"] 往往还是空的。
     取错地方的后果:单项回答("确认 master")找不到可比对的值,就被当成整份确认。"""

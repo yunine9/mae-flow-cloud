@@ -197,6 +197,56 @@ HISTORY_PATH = ".mae-flow-history.jsonl"
 
 DEFAULTS_PATH = ".mae-flow-defaults.json"
 
+# 下单事实(宿主契约,2026-08-19):云端下单表单收齐的配置事实——单号/
+# 基线分支/工号/交付方式——由宿主写进工作区这个文件,内核直接消费:
+# config-review 拿它们补缺省(--set 显式给的赢,打回改口不受影响),
+# 配置确认卡不再问交付方式,workflow_select 无捕获答案时以它为准。
+# 为什么是文件不是 prompt:prompt 靠模型转述,弱模型会漏、会再问一遍
+# (车道实战);文件是机械读取,模型连转述的机会都没有。与仓库预设
+# (.mae-flow-defaults.json,进仓的团队恒定项)不同,它是**每单**的、
+# 宿主生成的、不进仓。
+ORDER_PATH = ".mae-flow-order.json"
+
+
+def load_order_facts():
+    """读下单事实。缺席=非云端下单形态,一切照旧;解析失败可见不静默。"""
+    if not os.path.exists(ORDER_PATH):
+        return {}, ""
+    try:
+        with open(ORDER_PATH, encoding="utf-8-sig") as stream:
+            data = json.load(stream)
+        return (data if isinstance(data, dict) else {}), ""
+    except Exception as e:
+        return {}, f"⚠ {ORDER_PATH} 解析失败,已忽略(宿主生成的下单事实): {e}"
+
+
+def resolve_order_workflow(step, facts):
+    """下单事实的「交付方式」→ 内核 choice 代号;认代号或选项原文全等,
+    不做子串搜索(与 ack 的对账纪律同款)。认不出返回 ""。"""
+    value = str((facts or {}).get("交付方式", "") or "").strip()
+    if not value:
+        return ""
+    answers = step.get("choice_answers") or {}
+    for key in step.get("choices") or []:
+        if value == key or value in (answers.get(key) or []):
+            return key
+    return ""
+
+def order_workflow_verdict(step, choice):
+    """下单事实对 --choice 的裁决:(handled, accepted, why)。
+    handled=False 表示下单事实没覆盖本步骤(文件缺席/交付方式认不出/
+    步骤 choices 对不上),调用方走原有拒绝路径,一个字不变。"""
+    order_wf = resolve_order_workflow(step, load_order_facts()[0])
+    if not order_wf:
+        return False, False, ""
+    if order_wf == choice:
+        return True, True, ""
+    return True, False, (
+        "用户下单时选定的交付方式是「%s」,但 Agent 准备提交 --choice %s。"
+        "请按下单事实执行,禁止替用户改选;用户要换道须经确认卡打回改选。"
+        % (order_wf, choice)
+    )
+
 FLOW = None
 
 MOONLIGHT_REPORT_PATH = os.path.join(".mae-flow-work", "moonlight-report.md")

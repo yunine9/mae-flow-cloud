@@ -1,11 +1,13 @@
 """CLI responsibilities extracted from the historical entrypoint."""
 
 from .shared import (
-    CONFIG_CONFIRM_ACK, FAILURE_PATH, STATE_PATH, hashlib, json, re, read_text, time,
+    CONFIG_CONFIRM_ACK, FAILURE_PATH, STATE_PATH, hashlib, json,
+    order_workflow_verdict, re, read_text, time,
     update_json, workflow_completion,
 )
 from .ack_confirmation import (
     _button_confirmation_alias, _is_positive_confirmation,
+    _trusted_answer_candidates, _trusted_answer_values,
     reviewed_config, whole_card_answers, whole_card_values)
 from .wiring import api
 
@@ -86,47 +88,6 @@ def _ack_candidates(text):
     except Exception:
         pass
     return [re.sub(r"\s+", "", v) for v in out if re.sub(r"\s+", "", v)]
-
-def _trusted_answer_candidates(text):
-    """Return actual answer values, excluding question/option metadata."""
-    return [
-        re.sub(r"\s+", "", value)
-        for value in _trusted_answer_values(text)
-        if re.sub(r"\s+", "", value)
-    ]
-
-
-def _trusted_answer_values(text):
-    """Return answer values with their original wording and whitespace."""
-    try:
-        parsed = json.loads(text)
-    except Exception:
-        return [(text or "").strip()] if (text or "").strip() else []
-    if isinstance(parsed, str):
-        return [parsed.strip()] if parsed.strip() else []
-    out = []
-    answer_keys = {
-        "answer", "answers", "response", "responses", "selected",
-        "selection", "selectedoption", "selectedoptions", "result",
-    }
-
-    def walk(value, trusted=False):
-        if isinstance(value, str) and trusted and value.strip():
-            out.append(value.strip())
-        elif isinstance(value, dict):
-            for key, item in value.items():
-                normalized = re.sub(
-                    r"[^a-z]", "", str(key).lower())
-                walk(item, trusted or normalized in answer_keys)
-        elif isinstance(value, list):
-            for item in value:
-                walk(item, trusted)
-
-    if isinstance(parsed, list):
-        walk(parsed, trusted=True)
-    else:
-        walk(parsed)
-    return out
 
 def _all_ack_messages():
     try:
@@ -358,6 +319,15 @@ def _choice_verified(step, st, choice, ack_cursor=None):
                 "请按按钮真实结果执行，禁止替用户改选。" % (candidate, choice)
             )
 
+    # 没捕获到卡上答案:退到**下单事实**(.mae-flow-order.json,和捕获
+    # 答案同级真实——都是用户亲手给的)。捕获答案上面已优先消费(中途
+    # 改口赢);这里只兜"确认卡没问 Q2、也没人再出卡"的正常新路。
+    handled, accepted, why = order_workflow_verdict(step, choice)
+    if handled:
+        if accepted:
+            _ack_failure(st, success=True)
+            return True, ""
+        return False, why
     scope_why = _out_of_scope_ack_reason(st) if not rows else ""
     if scope_why:
         return False, scope_why

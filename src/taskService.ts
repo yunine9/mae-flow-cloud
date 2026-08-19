@@ -1594,6 +1594,44 @@ export class TaskService {
           : this.cloneRepo(workspace, gitHelper, gitIdentity,
               task.summary.repo_url);
         task.cwd = cwd;
+        // 下单事实(.mae-flow-order.json,内核契约):表单收齐的单号/
+        // 基线分支/工号/交付方式机械交给内核——config-review 拿它补
+        // 缺省、确认卡不再问交付方式、workflow_select 免卡直接 done。
+        // 光写进 prompt 靠模型转述不够:弱模型会漏、会把交付方式折成
+        // 是/否卡再问一遍(车道实战教训)。交付方式写选项原文(label),
+        // 内核认代号或原文全等。每次启动都重写(含重建会话):值来自
+        // summary,幂等;fail-open——写不进去只记日志,流程退回转述
+        // 老路,绝不拦启动。
+        try {
+          const order: Record<string, string> = {};
+          if (task.summary.ticket) order["单号"] = task.summary.ticket;
+          if (task.summary.baseline) {
+            order["基线分支"] = task.summary.baseline;
+          }
+          const badge = gitIdentity?.username ?? task.summary.luban_account;
+          if (badge) order["工号"] = badge;
+          if (task.summary.lane) order["交付方式"] = task.summary.lane;
+          if (Object.keys(order).length) {
+            writeFileSync(join(cwd, ".mae-flow-order.json"),
+              JSON.stringify(order, null, 2) + "\n");
+            // 平台的现场文件不该混进交付提交:登记进 .git/info/exclude
+            // (不动仓里的 .gitignore——那是用户的文件)。
+            const infoDir = join(cwd, ".git", "info");
+            if (existsSync(infoDir)) {
+              const excludePath = join(infoDir, "exclude");
+              const current = existsSync(excludePath)
+                ? readFileSync(excludePath, "utf-8") : "";
+              if (!current.includes(".mae-flow-order.json")) {
+                writeFileSync(excludePath,
+                  `${current}${current && !current.endsWith("\n") ? "\n" : ""}`
+                  + ".mae-flow-order.json\n");
+              }
+            }
+          }
+        } catch (cause) {
+          this.options.log?.(
+            `[order] 下单事实写入失败(fail-open,退回 prompt 转述): ${cause}`);
+        }
         const kernel = new KernelHost({
           kernelRoot: this.options.host.kernelRoot,
           workspace: cwd,
@@ -1709,14 +1747,18 @@ export class TaskService {
           + `采用,不要再逐项询问):${facts.join(";")}。其余配置项照`
           + `内核口径取值或询问。`;
       }
+      // 交付方式已由下单事实文件交给内核:内核 current 会自己下指令
+      // (已选定则"直接 done --choice 不出卡";旧快照没这契约则照旧
+      // 举卡)。prompt 只补一句立场,具体怎么走听内核的——两种内核
+      // 版本都不矛盾。唯一要钉死的是不许自造"是/否"卡:选项原文对
+      // 不上号,预答接不住,只能真去等人(内网实测)。
       if (this.options.host && task.summary.lane) {
         prompt = `${prompt}\n\n交付方式用户已在下单时选定:`
-          + `${task.summary.lane}。流程里问到交付方式时,照内核指引`
-          + `**原样列出标准选项**——单独成卡时系统会替用户选中含`
-          + `「${task.summary.lane}」的那一项;与配置确认合并成卡时`
-          + `用户会在卡上一并作答。不要自造"是/否"确认卡(选项原文`
-          + `对不上号,预答接不住,只能真去等人),也不要跳过出卡`
-          + `直接 done --choice,内核会拒绝。`;
+          + `${task.summary.lane}(已写入工作区下单事实,内核能读到)。`
+          + `流程走到交付方式选择时**严格照内核指令执行**:内核说直接`
+          + ` done --choice 就直接执行,内核要求出卡就**原样列出标准`
+          + `选项**(系统会替用户选中含「${task.summary.lane}」的那一`
+          + `项)。禁止自造"是/否"确认卡,禁止替用户改选。`;
       }
       // 仓库地图(加餐):大仓里模型乱 grep 烧轮次,开场先给一张按被
       // 引用程度排序的路标。只在内核模式生成(有真克隆才有仓可画);

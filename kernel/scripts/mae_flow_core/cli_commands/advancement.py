@@ -1,8 +1,10 @@
 """CLI responsibilities extracted from the historical entrypoint."""
 
 from .shared import (
-    CONFIG_CONFIRM_ACK, EXIT_PATH, HISTORY_PATH, hashlib, json, os, re, read_lines,
-    read_text, review_status_count, review_statuses, sys, tempfile, time,
+    CONFIG_CONFIRM_ACK, EXIT_PATH, HISTORY_PATH, ORDER_PATH, hashlib, json,
+    load_order_facts, os, re, read_lines,
+    read_text, resolve_order_workflow, review_status_count, review_statuses,
+    sys, tempfile, time,
     workflow_advancement, workflow_transitions, write_text,
 )
 from .wiring import api
@@ -200,6 +202,20 @@ def _validated_pending_config(step, st, set_values):
         if bad:
             api.die(f"{k}「{v}」不合法:{bad}。", 2)
         pending_config[k] = v
+    # 下单事实补缺省:云端表单收齐的三项(单号/基线分支/工号)机械落进
+    # 候选——模型不必转述,也就没有"给了还问一遍"的机会(车道实战教训:
+    # 靠 prompt 转述,弱模型会漏)。--set 显式给的赢:打回改口走 --set,
+    # 用户改口永远压过下单时的值。同样过校验,坏值当场打回不静默。
+    order_facts, order_warn = load_order_facts()
+    if order_warn:
+        print(order_warn)
+    for key in ("单号", "基线分支", "工号"):
+        value = str(order_facts.get(key, "") or "").strip()
+        if value and not pending_config.get(key) and key in allowed_sets:
+            bad = api._validate_config_value(key, value)
+            if bad:
+                api.die(f"下单事实 {ORDER_PATH} 的 {key}「{value}」不合法:{bad}。", 2)
+            pending_config[key] = value
     if pending_config.get("单号") and not pending_config.get("单号类型"):
         pending_config["单号类型"] = "feat" if pending_config["单号"].startswith("REQ") else "fix"
     # 需求文档:单号与需求完全解耦(单号只管 git 命名,需求只管做什么),内容对不对只有用户能判定,
@@ -318,13 +334,25 @@ def cmd_config_review(flow, st, args):
     print("Q1 上述完整配置是否正确？")
     print("  - " + CONFIG_CONFIRM_ACK)
     print("  - 需要修改")
+    select_step = flow["steps"].get("workflow_select", {})
+    order_wf = resolve_order_workflow(select_step, load_order_facts()[0])
+    if order_wf:
+        # 交付方式下单已选(下单事实):确认卡只问 Q1,不再重复问——
+        # 这正是"车道被问两遍"的病根;用户要改口就选"需要修改"打回。
+        label = (select_step.get("choice_answers", {}).get(order_wf)
+                 or [order_wf])[0]
+        print("Q2 不问:交付方式用户下单时已选定——%s(%s),"
+              "随确认单一并转述给用户;要换就选「需要修改」打回。"
+              % (label, order_wf))
+        print("Q1 确认后 workflow_select 直接执行 done --choice %s,"
+              "不再出卡提问。" % order_wf)
     workflow_options = [
         (key, (labels or [key])[0])
         for key, labels in (
             (flow["steps"].get("workflow_select", {})
              .get("choice_answers") or {}).items())
     ]
-    if workflow_options:
+    if workflow_options and not order_wf:
         # 选档是全流程最贵的一次选择,却和"配置对不对"排在同一张卡里、长得
         # 一模一样,实战里被当例行公事点过去——然后小改动走了完整开发,
         # 多花三道前期工序。把代价现算出来摆在选项后面,并把"不能换道"

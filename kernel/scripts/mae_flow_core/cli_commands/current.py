@@ -1,8 +1,10 @@
 """CLI responsibilities extracted from the historical entrypoint."""
 
 from .shared import (
-    CapabilityError, DEFAULTS_PATH, HERE, MOONLIGHT_QUALITY_STEPS, STATE_PATH,
-    STEPS_DIR, json, load_json, os, re, read_text, render_pack, subst, sys,
+    CapabilityError, DEFAULTS_PATH, HERE, MOONLIGHT_QUALITY_STEPS, ORDER_PATH,
+    STATE_PATH,
+    STEPS_DIR, json, load_json, load_order_facts, os, re, read_text,
+    render_pack, resolve_order_workflow, subst, sys,
     time, workflow_transitions,
 )
 from ..workflow.advisories import pending_advisories, render_advisories
@@ -354,10 +356,35 @@ def print_current(flow, st):
         print("它会生成晨间报告并允许本轮正常停止，不会让 Stop Hook 无限打回。")
     if sid == "moonlight_review":
         return
+    if sid == "workflow_select":
+        # 下单事实在场:交付方式用户下单时已选,这一步不出卡不提问——
+        # "被问第二遍"的病根就在这儿,指令必须由内核自己说(prompt 转述
+        # 靠不住,弱模型会漏,车道实战)。
+        facts, order_warn = load_order_facts()
+        if order_warn:
+            print(order_warn)
+        order_wf = resolve_order_workflow(step, facts)
+        if order_wf:
+            label = (step.get("choice_answers", {}).get(order_wf)
+                     or [order_wf])[0]
+            print(f"📌 交付方式已由下单事实选定({ORDER_PATH}):"
+                  f"{label}({order_wf})。直接执行 done --choice {order_wf},"
+                  "**不要**再用 AskUserQuestion 提问;用户要换道须回配置"
+                  "确认卡打回改选。")
     if step.get("require_sets"):
         dft, warn = _defaults()
         if warn:
             print(warn)
+        facts, order_warn = load_order_facts()
+        if order_warn:
+            print(order_warn)
+        order_show = {k: v for k, v in facts.items()
+                      if k in step["require_sets"] and str(v).strip()}
+        if order_show:
+            print(f"──── 下单事实({ORDER_PATH},用户下单时已提供,"
+                  "config-review 自动采用,**不要再问用户**) ────")
+            for k, v in order_show.items():
+                print(f"  {k} = {v}")
         show = {k: v for k, v in (dft or {}).items() if k in step["require_sets"]}
         if show:
             suffix = ("月光模式下须结合用户原话与仓库事实自行核验后 --set，不得询问或编造"
