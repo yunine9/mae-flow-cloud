@@ -71,6 +71,30 @@ class EditGateTests(unittest.TestCase):
             with self.subTest(rule=label):
                 self.assertEqual("allow", decide_edit(context).kind)
 
+    def test_flow_head_blocks_source_until_workflow_chosen(self):
+        """交付方式未选定=流程头部,源码一行不许动(2026-08-19 跨仓实锤:
+        需求正文带实施方案,模型跳过配置直接开写,写完才回头问配置)。
+        文档不受限;用户裁决解锁尊重;选定后即回到退役口径(不拦)。"""
+        head = decide_edit(self.context(
+            path="src/main.py", match_path="src/main.py",
+            step="config_confirm", is_source=True, workflow_chosen=False))
+        self.assertEqual(("block", "edit-before-workflow"),
+                         (head.kind, head.rule))
+        self.assertIn("交付方式尚未选定", head.message)
+        self.assertIn("current", head.message)
+        # 需求/方案文档在头部照写不误——分析结论就该落在这儿。
+        self.assertEqual("allow", decide_edit(self.context(
+            path="docs/req/REQ1.md", match_path="docs/req/REQ1.md",
+            step="config_confirm", workflow_chosen=False)).kind)
+        # 用户裁决解锁压过头部禁令(人高于流程)。
+        self.assertEqual("allow", decide_edit(self.context(
+            path="src/main.py", match_path="src/main.py", is_source=True,
+            workflow_chosen=False, source_unlocked=True)).kind)
+        # 选定之后回到退役口径:中段改源码不再逐步拦。
+        self.assertEqual("allow", decide_edit(self.context(
+            path="src/main.py", match_path="src/main.py",
+            is_source=True, workflow_chosen=True)).kind)
+
     def test_allowed_edit_has_no_rule_or_message(self):
         self.assertEqual(
             ("allow", "", ""),
@@ -119,6 +143,19 @@ class BashWriteGateTests(unittest.TestCase):
         # 仍可表达的那一例:只有源码 offenders、没有 tests_only 时不拦
         self.assertEqual("allow", decide_bash_write(self.context(
             offenders=("src/main.py",))).kind)
+
+    def test_flow_head_blocks_bash_source_writes(self):
+        """Bash 写源码与 Edit 同一条头部纪律(sed -i/重定向绕不过去)。"""
+        head = decide_bash_write(self.context(
+            command="sed -i s/a/b/ src/main.py", writeish=True,
+            step="requirement_record",
+            offenders=("src/main.py",), workflow_chosen=False))
+        self.assertEqual(("block", "bash-before-workflow"),
+                         (head.kind, head.rule))
+        self.assertIn("src/main.py", head.message)
+        # 没碰源码的命令(纯读/写文档)头部照常放行。
+        self.assertEqual("allow", decide_bash_write(self.context(
+            command="cat src/main.py", workflow_chosen=False)).kind)
 
     def test_ut_step_still_blocks_bash_writes_to_product_code(self):
         result = decide_bash_write(self.context(

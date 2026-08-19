@@ -209,7 +209,10 @@ def _validated_pending_config(step, st, set_values):
     order_facts, order_warn = load_order_facts()
     if order_warn:
         print(order_warn)
-    for key in ("单号", "基线分支", "工号"):
+    # 需求文档也可来自下单事实:跨仓拆单时宿主把人工检视过的方案文档
+    # 落进工作区并在这里指路——不然方案只能塞进 prompt 正文,实测模型
+    # 会把它当实施计划直接开写,跳过整个流程头部。
+    for key in ("单号", "基线分支", "工号", "需求文档"):
         value = str(order_facts.get(key, "") or "").strip()
         if value and not pending_config.get(key) and key in allowed_sets:
             bad = api._validate_config_value(key, value)

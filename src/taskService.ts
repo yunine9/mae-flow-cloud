@@ -1522,12 +1522,19 @@ export class TaskService {
       if (repository.task_id) continue;
       const blockers = (incoming.get(id) ?? [])
         .map((parent) => taskIds.get(parent)).filter(Boolean) as string[];
+      // 方案正文**不进需求原文**(2026-08-19 内网实锤:整份方案含
+      // "逐仓启动说明"塞进 prompt,模型把它当实施计划直接开写代码,
+      // 跳过 init→配置确认整个流程头部)。方案落到子任务工作区文件,
+      // launch 时进克隆并经下单事实把「需求文档」指过去——模型按内核
+      // 流程在配置阶段读它,而不是开场就被它牵着跑。
       const requirement = [
         task.summary.requirement,
-        "以下为已经人工检视确认的跨仓需求方案；只交付当前仓职责，"
-          + "发现方案不够用时停止并报告，不要自行改变跨仓契约。",
+        "本需求已跨仓分析并经人工检视确认。完整跨仓方案(仓库职责、"
+          + "接口契约、依赖关系)在工作区文件 .mae-flow-chain.md,"
+          + "配置确认的「需求文档」会自动指向它——按内核流程推进,"
+          + "在需求/设计阶段读它,不要跳过流程直接实施。只交付当前仓"
+          + "职责;发现方案不够用时停止并报告,不要自行改变跨仓契约。",
         `当前仓库:${repository.name}\n当前职责:${repository.responsibility ?? "见方案正文"}`,
-        artifact?.content ?? "",
       ].filter(Boolean).join("\n\n");
       const child = this.create(requirement, {
         title: taskTitle(
@@ -1542,6 +1549,19 @@ export class TaskService {
         parentTaskId: task.summary.id,
         blockedBy: blockers,
       });
+      // 方案文档放子任务 workspace 根(不删现场,重启/重建都在);
+      // launch 每次把它带进仓库克隆。写不进去不拦拆单——launch 侧
+      // 缺文件时子任务照常走流程,只是配置阶段要人补需求文档。
+      try {
+        writeFileSync(join(child.workspace, "chain-plan.md"), [
+          artifact?.content ?? "",
+          `\n\n---\n当前仓库:${repository.name}\n`
+            + `当前职责:${repository.responsibility ?? "见方案正文"}\n`,
+        ].join(""));
+      } catch (cause) {
+        this.options.log?.(
+          `任务 ${child.id} 方案文档落盘失败(fail-open): ${String(cause)}`);
+      }
       repository.task_id = child.id;
       taskIds.set(id, child.id);
       this.persist(task);
@@ -1579,6 +1599,10 @@ export class TaskService {
       await this.decide(id, {
         state_version: task.summary.waiting.state_version,
         decision: "确认并生成任务",
+        // 收尾令随决定送达:确认后父会话再举卡会被系统代答赶下台
+        // (autoAnswerFor 的分析单兜底),但第一选择是它自己别举。
+        notes: "各仓交付任务由平台自动生成与调度,不归本会话跟进;"
+          + "请写一段简短收尾说明后立即结束,不要再提问。",
       });
       // decide 会在标准选项命中时生成任务；这里再走一次幂等兜底，
       // 让模型即使把选项写成“方案通过”也不会丢掉拆单动作。
@@ -2022,6 +2046,16 @@ export class TaskService {
           const badge = gitIdentity?.username ?? task.summary.luban_account;
           if (badge) order["工号"] = badge;
           if (task.summary.lane) order["交付方式"] = task.summary.lane;
+          // 跨仓拆单的方案文档:拆单时落在任务 workspace 根,这里带进
+          // 克隆并经下单事实把「需求文档」指过去——方案经内核流程在
+          // 配置/需求阶段被读,而不是塞进开场 prompt 被模型当实施计划
+          // 直接开写(2026-08-19 内网实锤)。每次启动重拷,幂等。
+          const planSource = join(workspace, "chain-plan.md");
+          if (existsSync(planSource)) {
+            writeFileSync(join(cwd, ".mae-flow-chain.md"),
+              readFileSync(planSource, "utf-8"));
+            order["需求文档"] = ".mae-flow-chain.md";
+          }
           if (Object.keys(order).length) {
             writeFileSync(join(cwd, ".mae-flow-order.json"),
               JSON.stringify(order, null, 2) + "\n");
@@ -2032,10 +2066,12 @@ export class TaskService {
               const excludePath = join(infoDir, "exclude");
               const current = existsSync(excludePath)
                 ? readFileSync(excludePath, "utf-8") : "";
-              if (!current.includes(".mae-flow-order.json")) {
+              const missing = [".mae-flow-order.json", ".mae-flow-chain.md"]
+                .filter((entry) => !current.includes(entry));
+              if (missing.length) {
                 writeFileSync(excludePath,
                   `${current}${current && !current.endsWith("\n") ? "\n" : ""}`
-                  + ".mae-flow-order.json\n");
+                  + missing.join("\n") + "\n");
               }
             }
           }
@@ -3324,6 +3360,24 @@ export class TaskService {
       options?: string[];
     }>;
     if (!waiting || questions.length === 0) return undefined;
+    // 分析单已确认拆单完毕,父会话再举的任何卡都不该到人(内网实锤:
+    // task-5 确认后模型"好心"又举卡让人检视 task-6 的事——子任务有
+    // 自己的检视闸,父单的活到确认就结束了)。整卡代答,催它收尾。
+    const graph = task.summary.requirement_graph;
+    if (this.isRequirementAnalysis(task) && graph?.stage === "confirmed"
+        && graph.repositories.every((repository) => repository.task_id)) {
+      const answers: Record<string, string> = {};
+      for (const item of questions) {
+        answers[String(item.question ?? "")] =
+          "跨仓方案已确认,各仓交付任务已由平台生成并自动调度,不归本"
+          + "会话跟进。分析工作到此为止:请立即收尾结束,不要再提问。";
+      }
+      return {
+        why: "分析单已确认拆单,父会话不再举卡",
+        answers,
+        notes: "系统自动交卷(分析已确认,子任务各有检视闸),非人工答复",
+      };
+    }
     const moonlight =
       this.options.moonlight?.(task.summary.luban_account) ?? false;
     const lane = task.summary.lane;
@@ -3540,7 +3594,10 @@ export class TaskService {
         + "只有确实不能并行的硬依赖才写，禁止循环依赖。",
       "方案写完后必须调用 AskUserQuestion，请用户选择「需要修改」或"
         + "「确认并生成任务」。用户选择需要修改时，结合随决定提交的批注"
-        + "继续修订同一份方案，再次发起检视；确认前不得收尾。",
+        + "继续修订同一份方案，再次发起检视；确认前不得收尾。"
+        + "用户确认后：各仓交付任务由平台自动生成与调度，**不归你跟进**"
+        + "——写一段简短收尾说明后立即结束，禁止再调用 AskUserQuestion、"
+        + "禁止替用户检视或跟进任何子任务。",
     ].join("\n\n");
   }
 

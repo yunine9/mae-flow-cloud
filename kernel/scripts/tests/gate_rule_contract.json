@@ -190,6 +190,18 @@
       "escape": "permit",
       "why": "同 edit-tests-only"
     },
+    "edit-before-workflow": {
+      "kind": "permit",
+      "tier": "A",
+      "escape": "permit",
+      "why": "交付方式选定前是流程头部:没分支没确认配置,写码全是污染基线的废功(2026-08-19 跨仓实锤:方案进 prompt 模型跳过流程直接开写)。正路是 current 走完配置确认与交付方式选择;破格走用户裁决 unlock source"
+    },
+    "bash-before-workflow": {
+      "kind": "permit",
+      "tier": "A",
+      "escape": "permit",
+      "why": "同 edit-before-workflow(sed -i/重定向写源码绕不过同一条头部纪律)"
+    },
     "bash-compile-task-pending": {
       "kind": "permit",
       "tier": "A",

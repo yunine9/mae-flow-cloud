@@ -232,6 +232,18 @@ def resolve_order_workflow(step, facts):
             return key
     return ""
 
+def workflow_chosen(st):
+    """交付方式(choices.workflow)已选定=流程头部已走完。
+    编辑/Bash 门禁用它封"配置确认前写源码"(2026-08-19 跨仓实锤)。"""
+    return bool(((st or {}).get("choices") or {}).get("workflow"))
+
+
+def source_unlocked_for(st, sid):
+    """用户裁决的源码解锁是否对当前步生效(unlock source 的对账口)。"""
+    unlock = (st or {}).get("unlock") or {}
+    return unlock.get("scope") == "source" and unlock.get("step") == sid
+
+
 def order_workflow_verdict(step, choice):
     """下单事实对 --choice 的裁决:(handled, accepted, why)。
     handled=False 表示下单事实没覆盖本步骤(文件缺席/交付方式认不出/

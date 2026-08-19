@@ -12,7 +12,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readJson } from "../src/jsonBody.ts";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -267,8 +267,14 @@ test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队
   assert.equal(apiTask.parent_task_id, parent.id);
   assert.deepEqual(apiTask.blocked_by, undefined);
   assert.deepEqual(webTask.blocked_by, [apiTask.id]);
-  assert.match(webTask.requirement, /已确认方案/,
-    "子任务直接复用人工检视过的 Chain 正文，不再理解一套新需求");
+  // 方案正文落工作区文件而非内联进需求(整份方案进 prompt 会被模型
+  // 当实施计划直接开写,跳过流程头部——2026-08-19 内网实锤)。
+  assert.match(webTask.requirement, /\.mae-flow-chain\.md/,
+    "子任务需求只指路方案文件,不再内联正文");
+  assert.match(
+    readFileSync(join(dataDir, webTask.id, "chain-plan.md"), "utf-8"),
+    /已确认方案/,
+    "人工检视过的 Chain 正文随子任务落盘,配置阶段经需求文档被读");
   assert.equal(apiTask.title, "跨仓订单状态交付 · api");
   assert.equal(webTask.title, "跨仓订单状态交付 · web");
 

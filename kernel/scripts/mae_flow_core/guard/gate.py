@@ -23,6 +23,10 @@ class EditGateContext:
     is_source: bool
     tests_only_patterns: tuple
     source_unlocked: bool
+    # 交付方式(choices.workflow)是否已选定。它必然发生在配置确认之后,
+    # 是"流程头部已走完"的单一干净信号。默认 True:老调用点/流程中段
+    # 行为不变——逐步的"本步不许改源码"是退役决定,这里只封头部。
+    workflow_chosen: bool = True
 
 
 @dataclass(frozen=True)
@@ -36,6 +40,7 @@ class BashWriteContext:
     tests_only_patterns: tuple
     source_unlocked: bool
     bad_test_sources: tuple
+    workflow_chosen: bool = True
 
 
 def _absolute(message, rule="absolute-policy"):
@@ -83,6 +88,29 @@ def _repository_edit_decision(context):
     return None
 
 
+def _flow_head_decision(context):
+    """流程头部(交付方式未选定)不存在合法的源码修改。
+
+    2026-08-19 内网跨仓实战:需求正文里带了整份实施方案,模型跳过
+    init→配置确认直接开写代码和 UT,写完才回头问配置——过程文档为零,
+    工作区一堆脱缰的未提交改动。逐步的"本步不许改源码"是退役决定
+    (可逆动作交给 done 的证据检查),但那说的是流程**中段**;头部
+    这段连分支都还没建,写下的每一行都在污染基线,必须同步打回。
+    需求/方案/规格文档(非源码)不受限;用户裁决解锁(unlock source)
+    照旧尊重。"""
+    if not context.is_source:
+        return None
+    if context.workflow_chosen or context.source_unlocked:
+        return None
+    return _block(
+        "edit-before-workflow",
+        "当前流程还在需求/配置阶段(step=%s),交付方式尚未选定,禁止"
+        "修改源码——现在写的代码没有分支、没有确认过的配置,全是废功。"
+        "请执行 current 按内核指引走完配置确认与交付方式选择,进入"
+        "交付链后再动代码。分析结论请先写进方案/需求文档(不受限)。"
+        % (context.step or "?"))
+
+
 def _source_edit_decision(context):
     match_path = context.match_path
     if not context.is_source:
@@ -113,6 +141,7 @@ def decide_edit(context):
     for evaluator in (
         _protected_file_decision,
         _repository_edit_decision,
+        _flow_head_decision,
         _source_edit_decision,
     ):
         decision = evaluator(context)
@@ -184,9 +213,24 @@ def _bash_source_decision(context):
     return None
 
 
+def _bash_flow_head_decision(context):
+    """Bash 写源码与 Edit 同一条头部纪律(sed -i / 重定向同样是写码)。"""
+    if not context.offenders:
+        return None
+    if context.workflow_chosen or context.source_unlocked:
+        return None
+    return _block(
+        "bash-before-workflow",
+        "当前流程还在需求/配置阶段(step=%s),交付方式尚未选定,禁止"
+        "经 Bash 写源码(命中: %s)。请执行 current 走完配置确认与"
+        "交付方式选择,进入交付链后再动代码。"
+        % (context.step or "?", "、".join(context.offenders[:3])))
+
+
 def decide_bash_write(context):
     for evaluator in (
         _bash_absolute_decision,
+        _bash_flow_head_decision,
         _bash_source_decision,
     ):
         decision = evaluator(context)

@@ -5,7 +5,8 @@ from .shared import (
     STATE_PATH, WRITEISH_STRONG, WRITEISH_WEAK, decide_bash_write,
     decide_commit_branch, decide_compile_task_commit, decide_edit,
     decide_ownership, decide_post_commit, decide_pre_commit, git_intent,
-    guard_intent, os, re, replace, sys, time,
+    guard_intent, os, re, replace, source_unlocked_for, sys, time,
+    workflow_chosen,
 )
 from ..workflow.advisories import record_advisory
 # quality_input_snapshot/successful_quality_execution 必须静态导入。经 api.* 动态
@@ -117,7 +118,6 @@ def _gate_edit(flow, st, sid, step, intent, jdie):
     patterns = (
         tuple(api._effective_test_patterns(st))
         if step.get("tests_only") else ())
-    unlock = (st or {}).get("unlock") or {}
     decision = decide_edit(EditGateContext(
         path=p,
         match_path=pm,
@@ -126,9 +126,8 @@ def _gate_edit(flow, st, sid, step, intent, jdie):
             plugin_root + "/"),
         is_source=api._is_source_path(p, st, flow),
         tests_only_patterns=patterns,
-        source_unlocked=(
-            unlock.get("scope") == "source"
-            and unlock.get("step") == sid),
+        source_unlocked=source_unlocked_for(st, sid),
+        workflow_chosen=workflow_chosen(st),
     ))
     if decision.kind == "absolute":
         _die_decision(decision)
@@ -290,10 +289,7 @@ def _gate_bash_writes(flow, st, sid, step, intent, jdie):
     patterns = (
         tuple(api._effective_test_patterns(st))
         if step.get("tests_only") else ())
-    unlock = (st or {}).get("unlock") or {}
-    source_unlocked = (
-        unlock.get("scope") == "source"
-        and unlock.get("step") == sid)
+    source_unlocked = source_unlocked_for(st, sid)
     bad = [
         path for path in offenders
         if not any(re.search(
@@ -313,6 +309,7 @@ def _gate_bash_writes(flow, st, sid, step, intent, jdie):
         tests_only_patterns=patterns,
         source_unlocked=source_unlocked,
         bad_test_sources=tuple(bad),
+        workflow_chosen=workflow_chosen(st),
     ))
     if decision.kind == "absolute":
         _die_decision(decision)

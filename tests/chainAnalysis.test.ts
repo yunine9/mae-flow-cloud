@@ -11,7 +11,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -128,9 +128,18 @@ test("跨仓分析会话:克隆只读现场→写产物→举卡→确认拆单�
     assert.equal(apiChild.parent_task_id, parent.id);
     assert.equal(apiChild.ticket, ticket);
     assert.equal(apiChild.luban_account, "cloudbot");
-    assert.match(apiChild.requirement, /跨仓方案/,
-      "人工检视过的 CHAIN 正文必须原样进子任务需求");
+    // 方案正文不进需求原文(整份方案塞 prompt 会被模型当实施计划直接
+    // 开写,跳过流程头部——内网实锤):落成工作区文件,需求里只指路,
+    // launch 再把它带进克隆并经下单事实指给「需求文档」。
+    assert.match(apiChild.requirement, /\.mae-flow-chain\.md/,
+      "需求原文只指路,不内联方案正文");
+    assert.ok(!apiChild.requirement.includes("先 api 后 web"),
+      "方案正文不得内联进需求");
     assert.match(apiChild.requirement, /提供接口/);
+    const plan = readFileSync(
+      join(dataDir, apiChild.id, "chain-plan.md"), "utf-8");
+    assert.match(plan, /跨仓方案/, "人工检视过的 CHAIN 正文随子任务落盘");
+    assert.match(plan, /提供接口/, "方案文件带当前仓职责");
   } finally {
     await model.stop();
   }

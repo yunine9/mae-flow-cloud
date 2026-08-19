@@ -110,7 +110,9 @@ class ConfigReviewMergeTests(unittest.TestCase):
             with open(os.path.join(project, ".mae-flow-order.json"), "w",
                       encoding="utf-8") as stream:
                 json.dump({"单号": "DTS2026081900001", "基线分支": "master",
-                           "工号": "cloudbot", "交付方式": "局部修改"},
+                           "工号": "cloudbot", "交付方式": "局部修改",
+                           # 跨仓拆单形态:方案文档由宿主落盘并在此指路
+                           "需求文档": "req.md"},
                           stream, ensure_ascii=False)
             env = {**os.environ, "MAE_FLOW_NO_NOTIFY": "1"}
             init = subprocess.run(
@@ -119,7 +121,6 @@ class ConfigReviewMergeTests(unittest.TestCase):
             self.assertEqual(0, init.returncode, init.stderr)
             review = subprocess.run(
                 [sys.executable, MAE, "config-review",
-                 "--set", "需求文档=req.md",
                  "--set", "基线分支=develop",   # 显式改口:压过下单值
                  "--set", "编译方式=交流水线",
                  "--set", "UT生成方式=参考仓内写法",
@@ -134,6 +135,8 @@ class ConfigReviewMergeTests(unittest.TestCase):
             pending = state["config_review"]["config"]
             self.assertEqual(pending["单号"], "DTS2026081900001",
                              "缺省单号该由下单事实补上")
+            self.assertEqual(pending["需求文档"], "req.md",
+                             "需求文档同样走下单事实(跨仓拆单形态)")
             self.assertEqual(pending["工号"], "cloudbot")
             self.assertEqual(pending["基线分支"], "develop",
                              "--set 显式给的必须压过下单值")
