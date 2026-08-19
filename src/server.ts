@@ -86,13 +86,23 @@ function json(
   response.end(text);
 }
 
-/** 从这次 HTTP 请求还原用户真正访问的站点。部署在反代后时优先认
- * X-Forwarded-*；正式环境可用 --public-url 固定，避免多入口漂移。 */
+/** 从这次 HTTP 请求还原用户真正访问的站点。浏览器 Origin 最接近
+ * 用户地址栏，即使反代把后端 Host 改成 127.0.0.1 也不受影响；其次
+ * 才认 X-Forwarded-* 与 Host。--public-url 只用于特殊部署覆盖。 */
 function requestBaseUrl(
   request: import("node:http").IncomingMessage,
 ): string | undefined {
   const first = (value: string | string[] | undefined) =>
     (Array.isArray(value) ? value[0] : value)?.split(",")[0]?.trim();
+  const origin = first(request.headers.origin);
+  if (origin && origin !== "null") {
+    try {
+      const parsed = new URL(origin);
+      if (/^https?:$/.test(parsed.protocol) && !parsed.username && !parsed.password) {
+        return parsed.origin;
+      }
+    } catch { /* 坏 Origin 继续走代理头和 Host，不挡请求。 */ }
+  }
   const host = first(request.headers["x-forwarded-host"])
     ?? first(request.headers.host);
   if (!host || /[\r\n/\\]/.test(host)) return undefined;

@@ -417,8 +417,10 @@ test("Committer 检视:管理员只配名单,仅任务责任人主动邀请后�
       `${base}/tasks/${created.id}/review-request`, {
         method: "POST", headers: {
           cookie: alice,
-          "x-forwarded-host": "10.23.4.8:8787",
-          "x-forwarded-proto": "http",
+          // 后端 Host 即使是回环地址，也必须以浏览器实际访问的内网
+          // Origin 为准；部署无需把某台机器 IP 硬编码进代码或启动项。
+          origin: "http://mae-flow.intra:8787",
+          "x-forwarded-host": "127.0.0.1:8787",
         },
         body: JSON.stringify({ committer: "bob" }),
     });
@@ -435,8 +437,8 @@ test("Committer 检视:管理员只配名单,仅任务责任人主动邀请后�
     assert.equal(luban.messages[0].text,
       `【Mae-Flow】任务 ${created.id} 邀请你检视：实现订单检索`);
     assert.equal(luban.messages[0].link,
-      `http://10.23.4.8:8787/work/${created.id}/review/${review.id}`,
-      "未配置 public-url 时按用户实际访问的内网 Host 生成链接");
+      `http://mae-flow.intra:8787/work/${created.id}/review/${review.id}`,
+      "未配置 public-url 时按浏览器实际访问的内网 Origin 生成链接");
 
     const inbox = await fetch(`${base}/reviews/mine`, {
       headers: { cookie: bob },
