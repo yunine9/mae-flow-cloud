@@ -74,7 +74,9 @@ export function LaunchWorkspace({
         {
           repo: repos[0]?.trim() || undefined,
           repos: repos.map((item) => item.trim()).filter(Boolean),
-          lane,
+          // select 虽然会视觉显示第一项，但用户没手动切换时 state 仍是
+          // 空串；提交必须使用屏幕上真正显示的默认项。
+          lane: lane || options?.workflows[0]?.label,
           ticket: ticket.trim() || undefined,
           baseline: baseline.trim() || undefined,
           repairRounds: repairRounds.trim() === ""

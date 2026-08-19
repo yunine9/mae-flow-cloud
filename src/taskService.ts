@@ -1085,10 +1085,11 @@ export class TaskService {
     // ——宁可放行也不拿一套猜出来的选项挡人。
     const laneChoices = workflowChoices(this.options.host?.kernelRoot)
       .map((item) => item.label);
-    if (options.lane !== undefined && laneChoices.length
-        && !laneChoices.includes(options.lane)) {
+    const requestedLane = options.lane?.trim() || undefined;
+    if (requestedLane !== undefined && laneChoices.length
+        && !laneChoices.includes(requestedLane)) {
       throw new Error(
-        `交付方式只能是 ${laneChoices.join("/")},收到: ${options.lane}`);
+        `交付方式只能是 ${laneChoices.join("/")},收到: ${requestedLane}`);
     }
     // 单号/基线分支:内核配置确认要的两项事实,下单就收齐(和交付方式
     // 同一逻辑:能在表单上一次给完的,不让模型开工后逐项来问)。单号
@@ -1186,7 +1187,7 @@ export class TaskService {
       blocked_by: options.blockedBy?.length ? [...options.blockedBy] : undefined,
       // 用户拍板:交付方式下单就定,不让 agent 再问一遍。默认取内核
       // 选项里的第一项(通常是"完整开发"),读不到内核就不预选。
-      lane: options.lane ?? laneChoices[0],
+      lane: requestedLane ?? laneChoices[0],
       ticket,
       baseline,
       model_choice: options.model,

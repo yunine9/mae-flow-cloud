@@ -472,7 +472,10 @@ export function createTaskServer(
         const repo = body.repo === undefined ? undefined : String(body.repo);
         const repos = Array.isArray(body.repos)
           ? body.repos.map(String) : undefined;
-        const lane = body.lane === undefined ? undefined : String(body.lane);
+        // 兼容旧前端：select 显示了默认项但可能提交空串。空白就是
+        // “未指定”，交给 TaskService 采用内核默认交付方式。
+        const lane = body.lane === undefined
+          ? undefined : String(body.lane).trim() || undefined;
         const ticket = body.ticket === undefined
           ? undefined : String(body.ticket);
         const baseline = body.baseline === undefined

@@ -128,6 +128,11 @@ test("交付方式:选项与默认值都取自内核 flow.json,自造的当场�
     /交付方式只能是/);
   // 不填=内核第一项;自造词打回(免得下单选了个内核不认识的答案)
   assert.equal(service.create("默认交付方式").lane, workflows[0].label);
+  assert.equal(service.create("空字符串也使用默认交付方式", { lane: "" }).lane,
+    workflows[0].label,
+    "旧前端 select 显示默认项却提交空串时不能阻断下单");
+  assert.equal(service.create("纯空白也使用默认交付方式", { lane: "   " }).lane,
+    workflows[0].label);
   assert.equal(service.create("点名交付方式", { lane: "局部修改" }).lane,
     "局部修改");
   assert.throws(() => service.create("x", { lane: "慢速车道" }),

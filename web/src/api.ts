@@ -414,7 +414,9 @@ export async function createTask(
       account: account || undefined,
       repo: extras?.repo || undefined,
       repos: extras?.repos?.length ? extras.repos : undefined,
-      lane: extras?.lane,
+      // 空白等于没选，由服务端使用内核第一项；不要把 "" 伪装成
+      // 一个需要校验的交付方式。
+      lane: extras?.lane?.trim() || undefined,
       ticket: extras?.ticket || undefined,
       baseline: extras?.baseline || undefined,
       model: extras?.model,
