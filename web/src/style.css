@@ -1678,6 +1678,126 @@ pre {
   letter-spacing: 0;
 }
 .event-log { margin: 8px; }
+.event-panel { grid-column: 1 / -1; }
+.event-panel[open] > summary { background: var(--surface-soft); }
+.event-panel[open] > summary small { color: var(--success); }
+.event-stream {
+  max-height: min(540px, 62vh);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: auto;
+  background: var(--surface-muted);
+  scrollbar-gutter: stable;
+}
+.event-empty {
+  min-height: 116px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  text-align: center;
+}
+.event-empty > span {
+  width: 8px;
+  height: 8px;
+  margin-bottom: 9px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 0 5px var(--success-soft);
+}
+.event-empty strong { color: var(--text-strong); font-size: 11.5px; }
+.event-empty small { margin-top: 2px; font-size: 10px; }
+.event-record {
+  position: relative;
+  overflow: hidden;
+  flex: none;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
+}
+.event-record > header {
+  min-height: 36px;
+  padding: 7px 10px;
+  display: grid;
+  grid-template-columns: 8px auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-soft);
+}
+.event-record-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
+.event-record.user .event-record-dot { background: var(--active); }
+.event-record.agent .event-record-dot { background: var(--purple); }
+.event-record.success .event-record-dot { background: var(--success); }
+.event-record.danger .event-record-dot { background: var(--danger); }
+.event-record > header strong { color: var(--text-strong); font-size: 11.5px; font-weight: 700; }
+.event-record > header code {
+  padding: 1px 5px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+  font-size: 9.5px;
+}
+.event-record > header time {
+  justify-self: end;
+  color: var(--muted);
+  font: 500 10px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+.event-record dl { margin: 0; padding: 3px 10px 7px; }
+.event-record dl > div {
+  min-width: 0;
+  padding: 7px 0;
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+.event-record dl > div + div { border-top: 1px solid var(--line); }
+.event-record dt {
+  padding-top: 2px;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 650;
+}
+.event-record dd { min-width: 0; margin: 0; color: var(--text); }
+.event-value-text {
+  display: block;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.event-value-atom {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 4px;
+  padding: 2px 5px;
+  font-size: 10.5px;
+}
+.event-value-structured {
+  max-height: none;
+  margin: 0;
+  padding: 8px 9px;
+  color: var(--text);
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.event-record-empty { padding: 11px; color: var(--muted); font-size: 10px; }
+@media (max-width: 680px) {
+  .event-record dl > div { grid-template-columns: 1fr; gap: 3px; }
+}
 
 /* Minimal markdown renderer */
 .md-p { margin: .35rem 0; overflow-wrap: anywhere; }
@@ -3879,6 +3999,26 @@ pre {
 :root[data-theme="light"] .ws-identity code,
 :root[data-theme="light"] .code-review-title small { color: var(--muted); }
 :root[data-theme="light"] .code-review-title span { color: var(--accent); }
+
+/* 白昼过程记录：事件卡与代码块都使用真实浅色表面，避免灰字浮在灰底上。 */
+:root[data-theme="light"] .event-stream { background: #edf0f6; }
+:root[data-theme="light"] .event-record {
+  color: #273044;
+  background: #ffffff;
+  border-color: #d4dae6;
+}
+:root[data-theme="light"] .event-record > header {
+  background: #f7f8fb;
+  border-bottom-color: #dbe0e9;
+}
+:root[data-theme="light"] .event-record dt,
+:root[data-theme="light"] .event-record > header time { color: #5f697d; }
+:root[data-theme="light"] .event-value-text { color: #273044; }
+:root[data-theme="light"] .event-value-structured {
+  color: #263246;
+  background: #eef2f7;
+  border-color: #d8dee8;
+}
 
 /* 白昼代码审阅：不能只把外壳变亮、仍沿用深色编辑器的浅色正文。
    增删行使用低饱和底色 + 深色文字，行号单独降级，长时间检视也清楚。 */

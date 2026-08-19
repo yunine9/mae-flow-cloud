@@ -702,27 +702,31 @@ function CostBreakdown({ entries }: { entries: TimelineEntry[] }) {
 
 function EventTail({ taskId }: { taskId: string }) {
   const [open, setOpen] = useState(false);
-  const [lines, setLines] = useState<string[]>([]);
-  const pre = useRef<HTMLPreElement>(null);
+  const [events, setEvents] = useState<SemanticEvent[]>([]);
+  const stream = useRef<HTMLDivElement>(null);
+
+  useEffect(() => setEvents([]), [taskId]);
 
   useEffect(() => {
     if (!open) return;
     const stop = tailEvents(taskId, (event: SemanticEvent) => {
-      setLines((prev) => [
-        ...prev,
-        `${event.kind}  ${JSON.stringify(event.payload).slice(0, 160)}`,
-      ]);
+      setEvents((previous) => previous.some((item) => (
+        item.eventId === event.eventId
+      )) ? previous : [...previous, event]);
     });
     return stop;
   }, [open, taskId]);
 
   useEffect(() => {
-    pre.current?.scrollTo(0, pre.current.scrollHeight);
-  }, [lines]);
+    stream.current?.scrollTo({
+      top: stream.current.scrollHeight,
+      behavior: events.length > 1 ? "smooth" : "auto",
+    });
+  }, [events]);
 
   return (
     <details
-      className="utility-panel"
+      className="utility-panel event-panel"
       onToggle={(toggle) => setOpen(
         (toggle.target as HTMLDetailsElement).open,
       )}
@@ -730,13 +734,99 @@ function EventTail({ taskId }: { taskId: string }) {
       <summary>
         <span>
           <strong>过程记录</strong>
-          <small>SSE 实时事件流</small>
+          <small>{open ? `实时接收中 · ${events.length} 条` : "SSE 实时事件流 · 展开查看完整内容"}</small>
         </span>
         <i aria-hidden />
       </summary>
-      <pre ref={pre} className="event-log">
-        {lines.length > 0 ? lines.join("\n") : "等待新的过程事件…"}
-      </pre>
+      <div ref={stream} className="event-stream" aria-live="polite">
+        {events.length === 0 && (
+          <div className="event-empty">
+            <span aria-hidden />
+            <strong>正在连接任务现场</strong>
+            <small>新的执行动作会实时出现在这里。</small>
+          </div>
+        )}
+        {events.map((event) => (
+          <EventRecord event={event} key={event.eventId} />
+        ))}
+      </div>
     </details>
+  );
+}
+
+const EVENT_KIND_LABEL: Record<string, string> = {
+  session_started: "会话开始",
+  user_message: "用户指令",
+  assistant_message: "Agent 回复",
+  tool_requested: "调用工具",
+  tool_finished: "工具结果",
+  turn_finished: "本轮结束",
+  task_status_changed: "状态变化",
+};
+
+const EVENT_FIELD_LABEL: Record<string, string> = {
+  text: "内容",
+  name: "工具",
+  input: "输入",
+  result: "结果",
+  reason: "原因",
+  answers: "答复",
+  is_error: "执行异常",
+  resume: "恢复会话",
+  call_id: "调用编号",
+};
+
+function eventTone(event: SemanticEvent): string {
+  if (event.payload.is_error === true || /error|failed/.test(event.kind)) {
+    return "danger";
+  }
+  if (event.kind === "tool_finished" || event.kind === "turn_finished") {
+    return "success";
+  }
+  if (event.kind === "assistant_message") return "agent";
+  if (event.kind === "user_message") return "user";
+  return "neutral";
+}
+
+function EventValue({ value }: { value: unknown }) {
+  if (typeof value === "string") {
+    return <span className="event-value-text">{value || "（空）"}</span>;
+  }
+  if (typeof value === "boolean") {
+    return <code className="event-value-atom">{value ? "是" : "否"}</code>;
+  }
+  if (value === null || value === undefined || typeof value === "number") {
+    return <code className="event-value-atom">{String(value)}</code>;
+  }
+  return (
+    <pre className="event-value-structured">
+      {JSON.stringify(value, null, 2)}
+    </pre>
+  );
+}
+
+function EventRecord({ event }: { event: SemanticEvent }) {
+  const fields = Object.entries(event.payload);
+  return (
+    <article className={`event-record ${eventTone(event)}`}>
+      <header>
+        <span className="event-record-dot" aria-hidden />
+        <strong>{EVENT_KIND_LABEL[event.kind] ?? event.kind}</strong>
+        <code>#{event.eventId}</code>
+        <time title={event.ts}>{event.ts.slice(5)}</time>
+      </header>
+      {fields.length === 0 ? (
+        <div className="event-record-empty">本事件没有附加内容</div>
+      ) : (
+        <dl>
+          {fields.map(([field, value]) => (
+            <div key={field}>
+              <dt>{EVENT_FIELD_LABEL[field] ?? field}</dt>
+              <dd><EventValue value={value} /></dd>
+            </div>
+          ))}
+        </dl>
+      )}
+    </article>
   );
 }
