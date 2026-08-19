@@ -28,6 +28,7 @@ import {
   responsibleOf,
   progressAgeMs,
 } from "./teamOps";
+import { formatLocalDateTime, instantMs } from "./time";
 
 type View = "team" | "mine" | "profile" | "history" | "users" | "settings";
 type Theme = "light" | "dark";
@@ -442,7 +443,7 @@ function CommitterInbox({
           return <button type="button" key={review.id} disabled={!task}
             onClick={() => task && onOpen(task)}>
             <span className="committer-inbox-mark" aria-hidden>审</span>
-            <span className="committer-inbox-copy"><strong>{review.task_title}</strong><small>{review.requester} 邀请 · {new Date(review.created_at).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</small></span>
+            <span className="committer-inbox-copy"><strong>{review.task_title}</strong><small>{review.requester} 邀请 · {formatLocalDateTime(review.created_at)}</small></span>
             <span className={`delivery-state${review.delivered ? " ok" : " warning"}`}>{review.delivered ? "通知已送达" : "通知未送达"}</span>
             <svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg>
           </button>;
@@ -618,7 +619,7 @@ function TeamDashboard({
     ["queued", "running", "pausing", "verifying", "waiting_for_human"]
       .includes(task.status));
   const deliveredWeek = tasks.filter((task) => {
-    const completed = new Date(task.completed_at ?? "").getTime();
+    const completed = instantMs(task.completed_at);
     return Number.isFinite(completed) && completed >= now - 7 * 86_400_000;
   });
   const medianCycle = median(tasks.map(cycleTimeMs)

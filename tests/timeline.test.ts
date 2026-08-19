@@ -91,9 +91,10 @@ test("阶段轨迹/审批卡与决定/台账成败:读成人话且按时间正�
   });
 
   const entries = buildTimeline(workspace, cwd);
-  // 时间正序:字符串同格式即时间序。
+  // 两路来源都已规范成带时区 ISO，再按真实时间正序。
   const stamps = entries.map((entry) => entry.ts);
   assert.deepEqual(stamps, [...stamps].sort());
+  assert.ok(stamps.every((stamp) => !stamp || /T.*Z$/.test(stamp)));
 
   const ask = find(entries, "请你决定");
   assert.ok(ask, `没有审批卡条目: ${titles(entries).join(" | ")}`);

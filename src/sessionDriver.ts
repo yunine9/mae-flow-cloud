@@ -201,7 +201,7 @@ export class CloudSession {
       eventId: this.options.eventLog.lastEventId() + 1,
       taskId: this.options.taskId,
       sessionId,
-      ts: new Date().toISOString().replace("T", " ").slice(0, 19),
+      ts: new Date().toISOString(),
       kind,
       payload,
     };
@@ -541,7 +541,7 @@ export class CloudSession {
       eventId: this.options.eventLog.lastEventId() + 1,
       taskId: this.options.taskId,
       sessionId,
-      ts: new Date().toISOString().replace("T", " ").slice(0, 19),
+      ts: new Date().toISOString(),
       kind: "tool_requested",
       payload: { call_id: callId, name, input: event.input ?? {} },
     };
@@ -602,7 +602,7 @@ export class CloudSession {
         eventId: this.options.eventLog.lastEventId() + 1,
         taskId: this.options.taskId,
         sessionId,
-        ts: new Date().toISOString().replace("T", " ").slice(0, 19),
+        ts: new Date().toISOString(),
         kind: "tool_finished",
         payload: {
           call_id: callId,
