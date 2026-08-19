@@ -275,6 +275,41 @@ test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队
     /不是多仓需求分析单/);
 });
 
+test("分析现场只读:真 push 必须在传输层死掉,不靠 prompt 嘱咐", () => {
+  // 分析会话没有内核 preTool 门禁兜底,"禁止推送"若只是开场白的一句
+  // 话,模型犯浑就真推上去了。用真仓验证:readonly 克隆后 push 失败,
+  // 普通克隆(交付任务)push 照常。
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-lf-readonly-"));
+  const origin = join(dataDir, "origin");
+  execFileSync("git", ["init", "-q", "-b", "master", origin]);
+  execFileSync("git", ["-C", origin, "commit", "-q", "--allow-empty",
+    "-m", "init"], { env: { ...process.env,
+      GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t",
+      GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } });
+  const service = new TaskService({
+    dataDir, provider: "a", model: "a-1", maxConcurrent: 0,
+    modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
+    host: { kernelRoot: "/tmp" },
+  });
+  const guarded = (service as any).cloneRepo(
+    join(dataDir, "ws1"), undefined, undefined, origin, "1-origin", true);
+  execFileSync("git", ["-C", guarded, "commit", "-q", "--allow-empty",
+    "-m", "escape"], { env: { ...process.env,
+      GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t",
+      GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } });
+  assert.throws(() => execFileSync(
+    "git", ["-C", guarded, "push", "-q", "origin", "master"],
+    { stdio: "pipe" }), "只读分析现场的 push 必须失败");
+  const normal = (service as any).cloneRepo(
+    join(dataDir, "ws2"), undefined, undefined, origin, "repo");
+  execFileSync("git", ["-C", normal, "commit", "-q", "--allow-empty",
+    "-m", "deliver"], { env: { ...process.env,
+      GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t",
+      GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } });
+  execFileSync("git", ["-C", normal, "push", "-q", "origin",
+    "master:deliver-check"], { stdio: "pipe" });
+});
+
 test("前置死透不许无限等:取消→子任务如实 failed;失败→留队说明", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-lf-chain-dep-"));
   const service = new TaskService({

@@ -1857,8 +1857,11 @@ export class TaskService {
         if (!resuming) {
           mkdirSync(analysisRoot, { recursive: true });
           (task.summary.repositories ?? []).forEach((repository, index) => {
+            // readonly:分析现场推送硬禁用(没有内核门禁兜底,禁令
+            // 不能只写在 prompt 里)。
             this.cloneRepo(analysisRoot, gitHelper, gitIdentity, repository,
-              `${index + 1}-${basename(repository).replace(/\.git$/, "") || "repo"}`);
+              `${index + 1}-${basename(repository).replace(/\.git$/, "") || "repo"}`,
+              true);
           });
           const ticket = task.summary.ticket ?? task.summary.id;
           const artifactDir = join(analysisRoot, ".mae-flow-work", ticket);
@@ -3393,9 +3396,15 @@ export class TaskService {
     const artifactDir = join(cwd, ".mae-flow-work", ticket);
     return [
       `需求原文:\n${task.summary.requirement}`,
-      `你正在执行 Mae-Flow 的需求理解阶段。所有需求都是仓库交付图，`
-        + `本需求涉及 ${task.summary.repositories?.length ?? 0} 个仓库。`
-        + `此阶段只分析与澄清，禁止修改业务代码、提交、推送或启动交付。`,
+      // 措辞纠偏:这是**平台的**跨仓分析前置阶段,不是内核流程——
+      // 内核的交付流程(init/配置确认/门禁/MR)在确认后的各仓子任务里
+      // 才开始,别让模型以为此刻该跑 mae-flow 命令。
+      `你正在执行云端平台的跨仓需求分析(交付前置阶段):把一个需求在`
+        + `${task.summary.repositories?.length ?? 0} 个仓库间的职责与依赖`
+        + `理清楚,供人检视。注意:此阶段**不在 Mae-Flow 内核流程里**,`
+        + `不要执行任何 mae-flow 命令;各仓的正式交付流程会在方案确认后`
+        + `的独立任务中由内核主导。此阶段只读分析,禁止修改业务代码、`
+        + `提交或启动交付;工作区已在 git 配置层禁用推送,push 必然失败。`,
       `仓库清单（ID | 原始地址 | 本地只读分析路径）:\n${repositories}`,
       "请亲自阅读各仓代码，从关键词、接口调用链、配置路由三条路径核查。"
         + "每个触点必须给出仓库、文件、符号、相关原因和置信度；"
@@ -3427,6 +3436,11 @@ export class TaskService {
     identity?: { username: string; email?: string },
     repoUrl?: string,
     targetName?: string,
+    /** 只读分析现场(多仓需求理解):克隆后在 git 配置层禁用推送。
+     * 分析会话没有内核 preTool 门禁兜底,"禁止推送"不能只靠 prompt
+     * 嘱咐——pushurl 指向不存在的路径 + 不登记 credential helper,
+     * 模型真去 push 只会得到一个诚实的失败。 */
+    readonly = false,
   ): string {
     // 任务级仓(正式下单)> 部署 --repo(仅单仓试跑);都没有就如实失败，
     // 不猜一个仓出来。任务仓记在 summary，重启续跑仍使用同一地址。
@@ -3469,7 +3483,7 @@ export class TaskService {
       if (cloned.status !== 0) {
         throw new Error(`仓库克隆失败: ${cloned.stderr}`);
       }
-      if (useCredential) {
+      if (useCredential && !readonly) {
         // 会话里的 push/fetch 也走同一个 helper:写进克隆自己的
         // config(记的是脚本路径,不是明文);同样先清列表再登记。
         spawnSync("git",
@@ -3485,6 +3499,14 @@ export class TaskService {
         filter: (path) => !path.includes(".mae-flow-work")
           && !path.endsWith(".mae-flow.json"),
       });
+    }
+    // 只读现场的推送硬禁用:pushurl 指向必然不存在的路径,git push
+    // 走到传输层就死,与是否配了 helper 无关(本地路径克隆连凭据都
+    // 不需要,所以只拦 helper 拦不住)。fetch/log/grep 一概不受影响。
+    if (readonly && existsSync(join(target, ".git"))) {
+      spawnSync("git",
+        ["config", "remote.origin.pushurl", "/dev/null/mae-flow-readonly"],
+        { cwd: target, encoding: "utf-8" });
     }
     // 署名与传输方式无关(本地路径克隆的演练也该署对名):配了就写,
     // 邮箱没填只写名字——平台认领靠邮箱,表单里已经把话说明白。
