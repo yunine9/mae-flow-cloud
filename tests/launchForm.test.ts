@@ -12,7 +12,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readJson } from "../src/jsonBody.ts";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -189,6 +189,77 @@ test("单号/基线分支:下单收齐,基线默认 master,纯会话形态不摆
   });
   assert.equal(chat.launchOptions().ticket.enabled, false);
   assert.equal(chat.create("纯会话不需要单号").ticket, undefined);
+});
+
+test("统一需求图:单仓是一个节点,多仓进入同一任务的需求分析阶段", () => {
+  const service = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-lf-graph-")),
+    provider: "a", model: "a-1", maxConcurrent: 0,
+    modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
+    host: { kernelRoot: "/tmp" },
+  });
+  const one = service.create("单仓需求", {
+    repos: ["https://codehub/team/api.git"], ticket: "REQ-G1",
+  });
+  assert.equal(one.repo_url, "https://codehub/team/api.git");
+  assert.equal(one.requirement_graph?.stage, "confirmed");
+  assert.equal(one.requirement_graph?.repositories.length, 1);
+  assert.deepEqual(one.requirement_graph?.dependencies, []);
+
+  const many = service.create("多仓需求", {
+    repos: [
+      "https://codehub/team/api.git",
+      "https://codehub/team/web.git",
+      "https://codehub/team/api.git", // 重复输入只保留一个节点
+    ], ticket: "REQ-G2",
+  });
+  assert.deepEqual(many.repositories, [
+    "https://codehub/team/api.git", "https://codehub/team/web.git",
+  ]);
+  assert.equal(many.requirement_graph?.stage, "analysis");
+  assert.deepEqual(many.requirement_graph?.repositories.map((item) => item.name),
+    ["api", "web"]);
+  assert.equal(many.parent_task_id, undefined,
+    "多仓需求仍是一张普通需求单，不是第二套任务类型");
+});
+
+test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队", () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-lf-chain-confirm-"));
+  const service = new TaskService({
+    dataDir, provider: "a", model: "a-1", maxConcurrent: 0,
+    modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
+    host: { kernelRoot: "/tmp" },
+  });
+  const parent = service.create("跨仓交付", {
+    repos: ["https://codehub/team/api.git", "https://codehub/team/web.git"],
+    ticket: "REQ-G3",
+  });
+  const state = (service as any).tasks.get(parent.id);
+  const root = join(dataDir, parent.id, "repositories");
+  const artifacts = join(root, ".mae-flow-work", "REQ-G3");
+  mkdirSync(artifacts, { recursive: true });
+  writeFileSync(join(artifacts, ".ticket-id"), "REQ-G3\n");
+  writeFileSync(join(artifacts, "CHAIN-REQ-G3.md"), "# 已确认方案\n");
+  writeFileSync(join(artifacts, "requirement-graph.json"), JSON.stringify({
+    repositories: [
+      { id: "api", name: "api", url: "https://codehub/team/api.git",
+        responsibility: "提供接口" },
+      { id: "web", name: "web", url: "https://codehub/team/web.git",
+        responsibility: "消费接口" },
+    ],
+    dependencies: [{ from: "api", to: "web", reason: "等待接口可用" }],
+  }));
+  state.cwd = root;
+  (service as any).createRepositoryDeliveries(state);
+  const graph = service.get(parent.id)!.requirement_graph!;
+  const apiTask = service.get(graph.repositories[0].task_id!)!;
+  const webTask = service.get(graph.repositories[1].task_id!)!;
+  assert.equal(graph.stage, "confirmed");
+  assert.equal(apiTask.parent_task_id, parent.id);
+  assert.deepEqual(apiTask.blocked_by, undefined);
+  assert.deepEqual(webTask.blocked_by, [apiTask.id]);
+  assert.match(webTask.requirement, /已确认方案/,
+    "子任务直接复用人工检视过的 Chain 正文，不再理解一套新需求");
 });
 
 test("假小鲁班不索个人令牌;部署切真端点后要求立刻恢复", () => {

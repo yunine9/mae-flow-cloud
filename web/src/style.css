@@ -907,6 +907,16 @@ svg {
 .repo-field { display: grid; gap: 6px; }
 .repo-field input { width: 100%; }
 .repo-field-note { color: var(--muted); font-size: 10.5px; }
+.repo-field-title { display: flex; align-items: end; justify-content: space-between; gap: 12px; }
+.repo-field-title > span { color: var(--text); font-size: 10.5px; font-weight: 650; }
+.repo-field-title > small { color: var(--muted); font-size: 9px; }
+.repo-list { display: grid; gap: 7px; }
+.repo-row { display: grid; grid-template-columns: 28px minmax(0, 1fr) 30px; align-items: center; gap: 7px; }
+.repo-row > span { color: var(--muted); font: 700 9px ui-monospace, monospace; text-align: center; }
+.repo-row > button { height: 30px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); background: var(--surface-soft); cursor: pointer; }
+.repo-row > button:hover { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+.repo-add { width: max-content; padding: 6px 10px; border: 1px dashed var(--line-strong); border-radius: 8px; color: var(--accent); background: transparent; font-size: 9.5px; cursor: pointer; }
+.repo-add:hover { border-color: var(--accent); background: var(--accent-soft); }
 .composer-actions .account-field input { width: 100%; }
 .composer-actions .repair-field { flex: 0 1 150px; }
 .composer-actions > button { flex: 0 0 auto; margin-left: auto; }
@@ -916,6 +926,31 @@ svg {
   border-radius: var(--radius-sm); font-size: 12px; appearance: auto;
 }
 .launch-model-select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); outline: none; }
+
+.requirement-graph { flex: none; margin: 12px 18px 0; padding: 14px 16px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface); }
+.requirement-graph > header { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.requirement-graph > header > div { display: grid; gap: 2px; }
+.requirement-graph > header span { color: var(--accent); font: 700 9px ui-monospace, monospace; letter-spacing: .14em; }
+.requirement-graph > header strong { color: var(--text-strong); font-size: 14px; }
+.requirement-graph > header small { color: var(--muted); font-size: 10.5px; }
+.requirement-repos { margin-top: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 9px; }
+.requirement-repos article { min-width: 0; padding: 11px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); }
+.repo-node-head { display: grid; grid-template-columns: 7px minmax(0, 1fr) auto; align-items: center; gap: 7px; }
+.repo-node-head > i { width: 7px; height: 7px; border-radius: 50%; background: #39b980; box-shadow: 0 0 0 3px rgba(57, 185, 128, .1); }
+.has-prerequisite .repo-node-head > i { background: #e3a74b; box-shadow: 0 0 0 3px rgba(227, 167, 75, .1); }
+.repo-node-head strong { overflow: hidden; color: var(--text-strong); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
+.repo-node-head span { color: var(--muted); font-size: 9.5px; }
+.requirement-repos article > p { margin: 8px 0 0; color: var(--text); font-size: 10.5px; line-height: 1.55; }
+.repo-node-links { margin-top: 8px; display: grid; gap: 3px; color: var(--muted); font-size: 9.5px; }
+.requirement-repos article > button { margin-top: 9px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; color: var(--accent); background: transparent; font-size: 8.5px; cursor: pointer; }
+.requirement-edges { margin-top: 9px; display: flex; flex-wrap: wrap; gap: 6px; }
+.requirement-edges > div { display: inline-flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 8px; background: var(--surface-soft); color: var(--muted); font-size: 9.5px; }
+.requirement-edges strong { color: var(--text); font-weight: 650; }
+.requirement-edges small { padding-left: 6px; border-left: 1px solid var(--line); color: var(--muted); }
+.requirement-graph-note { margin: 9px 0 0; color: var(--muted); font-size: 10px; line-height: 1.55; }
+.task-graph-summary, .task-dependency-wait { display: inline-flex; align-items: center; gap: 6px; width: max-content; margin-top: 5px; padding: 4px 7px; border-radius: 6px; color: var(--muted); background: var(--surface-soft); font-size: 8.5px; }
+.task-graph-summary b { color: var(--accent); }
+.task-dependency-wait { color: #d59a3c; }
 .composer-actions > button, .submit-decision {
   height: 40px;
   padding: 0 16px;
@@ -2223,6 +2258,11 @@ pre {
   .workspace-header h1 { font-size: 27px; }
   .workspace-header p { font-size: 12.5px; }
   .workspace-main { padding: 0 18px 52px; }
+  .requirement-graph { margin: 10px 10px 0; padding: 13px; }
+  .requirement-graph > header { align-items: flex-start; flex-direction: column; gap: 5px; }
+  .requirement-repos { grid-template-columns: 1fr; }
+  .requirement-edges > div { width: 100%; flex-wrap: wrap; }
+  .requirement-edges small { width: 100%; padding: 4px 0 0; border: 0; }
   .pulse-grid, .history-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .pulse-card:first-child, .history-metric:first-child {
     grid-row: auto;

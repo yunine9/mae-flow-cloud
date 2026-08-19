@@ -455,6 +455,8 @@ export function createTaskServer(
           ?? (body.account ? String(body.account) : undefined);
         // 任务级可配(用户拍板):交付代码仓、交付方式(选项来自内核)、修复轮预算。
         const repo = body.repo === undefined ? undefined : String(body.repo);
+        const repos = Array.isArray(body.repos)
+          ? body.repos.map(String) : undefined;
         const lane = body.lane === undefined ? undefined : String(body.lane);
         const ticket = body.ticket === undefined
           ? undefined : String(body.ticket);
@@ -486,7 +488,7 @@ export function createTaskServer(
         }
         try {
           return json(response, 201, service.create(requirement,
-            { account, repo, lane, ticket, baseline, model, repairRounds }));
+            { account, repo, repos, lane, ticket, baseline, model, repairRounds }));
         } catch (error) {
           return json(response, 400, { error: String(error) });
         }

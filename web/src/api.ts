@@ -269,6 +269,17 @@ export interface TaskSummary {
   last_progress_at?: string;
   completed_at?: string;
   luban_account?: string;
+  repo_url?: string;
+  repositories?: string[];
+  requirement_graph?: {
+    stage: "analysis" | "confirmed";
+    repositories: Array<{
+      id: string; name: string; url: string; responsibility?: string; task_id?: string;
+    }>;
+    dependencies: Array<{ from: string; to: string; reason?: string }>;
+  };
+  parent_task_id?: string;
+  blocked_by?: string[];
   waiting?: {
     waiting_id: string;
     state_version: number;
@@ -377,6 +388,7 @@ export async function createTask(
   account?: string,
   extras?: {
     repo?: string;
+    repos?: string[];
     lane?: string;
     ticket?: string;
     baseline?: string;
@@ -390,6 +402,7 @@ export async function createTask(
       requirement,
       account: account || undefined,
       repo: extras?.repo || undefined,
+      repos: extras?.repos?.length ? extras.repos : undefined,
       lane: extras?.lane,
       ticket: extras?.ticket || undefined,
       baseline: extras?.baseline || undefined,

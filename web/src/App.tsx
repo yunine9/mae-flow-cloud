@@ -358,6 +358,10 @@ export function App() {
         review.task_id === artifactTask.id && review.status === "pending")}
       onChanged={refresh}
       onClose={closeArtifacts}
+      onOpenTask={(taskId) => {
+        const related = tasks.find((task) => task.id === taskId);
+        if (related) openArtifacts(related);
+      }}
     />}
   </div>;
 }

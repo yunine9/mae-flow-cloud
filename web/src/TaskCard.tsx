@@ -89,6 +89,18 @@ export function TaskCard({
           <span className="task-ownership">
             <span>责任人 · {responsibleOf(task) ?? "未指定"}</span>
           </span>
+          {(task.requirement_graph?.repositories.length ?? 0) > 1 && (
+            <span className="task-graph-summary">
+              <b>{task.requirement_graph!.repositories.length} 个仓库</b>
+              <i aria-hidden>·</i>
+              <span>{task.requirement_graph!.stage === "analysis"
+                ? "正在核对职责与依赖"
+                : `${task.requirement_graph!.dependencies.length} 条开发依赖`}</span>
+            </span>
+          )}
+          {(task.blocked_by?.length ?? 0) > 0 && task.status === "queued" && (
+            <span className="task-dependency-wait">等待前置任务完成后自动开始</span>
+          )}
           {task.progress && (
             <TaskProgress
               progress={task.progress}

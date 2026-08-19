@@ -17,6 +17,7 @@ import { SteerBox } from "./SteerBox";
 import { Annotatable } from "./Annotatable";
 import { AnnotationPanel } from "./AnnotationPanel";
 import { AttachedNotes } from "./AttachedNotes";
+import { RequirementGraph } from "./RequirementGraph";
 import {
   completeReview,
   controlTask,
@@ -56,6 +57,7 @@ export function TaskWorkspace({
   reviewAssignment,
   onChanged,
   onClose,
+  onOpenTask,
 }: {
   task: TaskSummary;
   canOperate: boolean;
@@ -63,6 +65,7 @@ export function TaskWorkspace({
   reviewAssignment?: ReviewRequest;
   onChanged: () => void;
   onClose: () => void;
+  onOpenTask?: (taskId: string) => void;
 }) {
   const [items, setItems] = useState<ArtifactMeta[]>();
   const [unavailable, setUnavailable] = useState("");
@@ -315,10 +318,12 @@ export function TaskWorkspace({
             )}
           </div>
         )}
-        <a className="ws-native" href={`/tasks/${task.id}/panel`} target="_blank" rel="noreferrer">
-          内核原生视图
-          <svg viewBox="0 0 16 16" aria-hidden><path d="M6 3.5h6.5V10M12.25 3.75 5 11" /></svg>
-        </a>
+        {(task.repositories?.length ?? 0) < 2 && (
+          <a className="ws-native" href={`/tasks/${task.id}/panel`} target="_blank" rel="noreferrer">
+            内核原生视图
+            <svg viewBox="0 0 16 16" aria-hidden><path d="M6 3.5h6.5V10M12.25 3.75 5 11" /></svg>
+          </a>
+        )}
       </header>
 
       {task.progress && (
@@ -326,6 +331,8 @@ export function TaskWorkspace({
           <TaskProgress progress={task.progress} showDetailedStep />
         </div>
       )}
+
+      <RequirementGraph task={task} onOpenTask={onOpenTask} />
 
       <div className={`ws-body${waiting ? " has-decision" : ""}`}>
         <section className="ws-evidence" aria-label="待检视材料">

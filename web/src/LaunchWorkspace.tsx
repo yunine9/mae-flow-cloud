@@ -23,7 +23,7 @@ export function LaunchWorkspace({
   // 任务级可填项(2026-08-18 重定口径):交付仓**必填**、交付方式、修复轮
   // 预算。模型不给选——管理员统一配一个,这里只显示"这单用谁跑"。
   const [options, setOptions] = useState<LaunchOptions | null>(null);
-  const [repo, setRepo] = useState("");
+  const [repos, setRepos] = useState([""]);
   // 单号/基线分支:内核配置确认要的两项事实,下单一并收齐——
   // 不让模型开工后再逐项来问(用户 2026-08-19 拍板,基线默认 master)。
   const [ticket, setTicket] = useState("");
@@ -72,7 +72,8 @@ export function LaunchWorkspace({
         requirement.trim(),
         session.username,   // 归属人=本人;管理员不发起任务(入口已隐藏)
         {
-          repo: repo.trim() || undefined,
+          repo: repos[0]?.trim() || undefined,
+          repos: repos.map((item) => item.trim()).filter(Boolean),
           lane,
           ticket: ticket.trim() || undefined,
           baseline: baseline.trim() || undefined,
@@ -117,7 +118,7 @@ export function LaunchWorkspace({
             <p>任务会自动归入你的工作台，人工节点也会回到你的待核对列表。</p>
             <ol className="launch-guide" aria-label="创建任务步骤">
               <li><i>1</i><span><strong>说清结果</strong><small>描述完成标准，不必编排 Agent 步骤</small></span></li>
-              <li><i>2</i><span><strong>锁定交付</strong><small>指定代码仓、单号与基线</small></span></li>
+              <li><i>2</i><span><strong>圈定范围</strong><small>填写一个或多个相关代码仓</small></span></li>
               <li><i>3</i><span><strong>确认执行</strong><small>负责人和交付方式一次选好</small></span></li>
             </ol>
             <small className="launch-copy-foot">提交后可在“我的工作”持续跟进和控制任务。</small>
@@ -171,18 +172,38 @@ export function LaunchWorkspace({
                 <section className="launch-form-section">
                   <div className="launch-section-head"><i>02</i><div><strong>交付定位</strong><small>Agent 据此进入正确仓库和分支</small></div></div>
                   {options.repo.enabled && (
-                    <label className="repo-field">
-                      <span>交付代码仓{options.repo.required ? "（必填）" : ""}</span>
-                      <input
-                        type="text"
-                        value={repo}
-                        onChange={(event) => setRepo(event.target.value)}
-                        placeholder="https://codehub…/team/project.git"
-                        spellCheck={false}
-                        required={options.repo.required}
-                      />
-                      <small className="repo-field-note">请填写纯仓库地址；推送鉴权使用你的 CodeHub Token。</small>
-                    </label>
+                    <div className="repo-field">
+                      <div className="repo-field-title">
+                        <span>涉及代码仓{options.repo.required ? "（至少一个）" : ""}</span>
+                        <small>单仓与多仓使用同一条需求交付流程</small>
+                      </div>
+                      <div className="repo-list">
+                        {repos.map((value, index) => (
+                          <div className="repo-row" key={index}>
+                            <span>{String(index + 1).padStart(2, "0")}</span>
+                            <input type="text" value={value}
+                              onChange={(event) => setRepos((current) => current.map(
+                                (item, itemIndex) => itemIndex === index ? event.target.value : item))}
+                              placeholder="https://codehub…/team/project.git"
+                              spellCheck={false}
+                              required={options.repo.required} />
+                            {repos.length > 1 && <button type="button"
+                              aria-label={`移除第 ${index + 1} 个仓库`}
+                              onClick={() => setRepos((current) => current.filter(
+                                (_, itemIndex) => itemIndex !== index))}>×</button>}
+                          </div>
+                        ))}
+                      </div>
+                      <button type="button" className="repo-add"
+                        onClick={() => setRepos((current) => [...current, ""])}>
+                        <span>＋</span> 添加代码仓
+                      </button>
+                      <small className="repo-field-note">
+                        {repos.length > 1
+                          ? `已选择 ${repos.length} 个仓库；系统会先分析职责、接口与开发依赖，人工确认后再拆分交付。`
+                          : "一个仓库就是只有一个交付节点的需求；需要跨仓时继续添加。"}
+                      </small>
+                    </div>
                   )}
                   <div className="launch-field-grid">
                     {options.ticket.enabled && (
