@@ -3880,6 +3880,59 @@ pre {
 :root[data-theme="light"] .code-review-title small { color: var(--muted); }
 :root[data-theme="light"] .code-review-title span { color: var(--accent); }
 
+/* 白昼代码审阅：不能只把外壳变亮、仍沿用深色编辑器的浅色正文。
+   增删行使用低饱和底色 + 深色文字，行号单独降级，长时间检视也清楚。 */
+:root[data-theme="light"] .ws-diff {
+  color: #263246;
+  background: #ffffff;
+  border-color: #d7dde8;
+}
+:root[data-theme="light"] .diff-review-head {
+  color: #526077;
+  background: #eef2f7;
+  border-bottom-color: #d5dce7;
+}
+:root[data-theme="light"] .diff-review-head span + span,
+:root[data-theme="light"] .diff-cell + .diff-cell { border-left-color: #d9dfe9; }
+:root[data-theme="light"] .diff-cell { color: #263246; background: #ffffff; }
+:root[data-theme="light"] .diff-review-row:hover .diff-cell.context { background: #f3f6fa; }
+:root[data-theme="light"] .diff-line-number {
+  color: #758198;
+  background: #f5f7fa;
+  border-right-color: #dfe4ec;
+}
+:root[data-theme="light"] .diff-cell.added {
+  color: #155b3a;
+  background: #eaf7f0;
+}
+:root[data-theme="light"] .diff-cell.added .diff-line-number {
+  color: #257451;
+  background: #dff2e8;
+}
+:root[data-theme="light"] .diff-cell.removed {
+  color: #8a2c36;
+  background: #fff0f1;
+}
+:root[data-theme="light"] .diff-cell.removed .diff-line-number {
+  color: #a0444d;
+  background: #fbe3e6;
+}
+:root[data-theme="light"] .diff-cell.empty { background: #f3f5f8; }
+:root[data-theme="light"] .diff-review-hunk {
+  color: #5c45ae;
+  background: #f1edff;
+  border-top-color: #ddd5ff;
+  border-bottom-color: #ddd5ff;
+}
+:root[data-theme="light"] .diff-review-meta { color: #667085; background: #f4f6f9; }
+:root[data-theme="light"] .diff-fold {
+  color: #657187;
+  background: #f1f4f8;
+  border-top-color: #dce2eb;
+  border-bottom-color: #dce2eb;
+}
+:root[data-theme="light"] .diff-fold:hover { color: #5448bd; background: #eceaff; }
+
 :root[data-theme="light"] .login-shell {
   background:
     radial-gradient(circle at 74% 18%, rgba(101, 91, 216, .2), transparent 31%),
