@@ -11,7 +11,13 @@
 import { useState } from "react";
 import { putGitToken, type AuthUser } from "./api";
 
-export function GitTokenCard({ session }: { session: AuthUser }) {
+export function GitTokenCard({
+  session,
+  onChanged,
+}: {
+  session: AuthUser;
+  onChanged?: (credential: { git_token_hint?: string; git_email?: string }) => void;
+}) {
   const [hint, setHint] = useState(session.git_token_hint);
   const [email, setEmail] = useState(session.git_email);
   const [open, setOpen] = useState(false);
@@ -29,6 +35,10 @@ export function GitTokenCard({ session }: { session: AuthUser }) {
         clear ? undefined : gitEmail || undefined);
       setHint(result.git_token_hint);
       setEmail(result.git_email);
+      onChanged?.({
+        git_token_hint: result.git_token_hint,
+        git_email: result.git_email,
+      });
       setToken("");
       setMessage(clear
         ? "CodeHub 配置已清除。"

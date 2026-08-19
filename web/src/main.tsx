@@ -2,11 +2,16 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import "./style.css";
 
-// 主题:默认跟随系统;?theme=light|dark 强制指定(截图核查与
-// 手动切换共用这条路,落在 :root[data-theme] 上)。
-const theme = new URLSearchParams(location.search).get("theme");
-if (theme === "light" || theme === "dark") {
-  document.documentElement.dataset.theme = theme;
-}
+// 主题:URL 仅用于截图/核查;日常选择持久化。第一次访问才跟随系统，
+// 之后由用户明确选择，避免刷新时在明暗之间闪烁。
+const queryTheme = new URLSearchParams(location.search).get("theme");
+let savedTheme: string | null = null;
+try { savedTheme = localStorage.getItem("mae-flow-theme"); } catch { /* 私密模式也能用 */ }
+const theme = queryTheme === "light" || queryTheme === "dark"
+  ? queryTheme
+  : savedTheme === "light" || savedTheme === "dark"
+    ? savedTheme
+    : matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+document.documentElement.dataset.theme = theme;
 
 createRoot(document.getElementById("root")!).render(<App />);

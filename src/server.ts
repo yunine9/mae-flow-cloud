@@ -269,8 +269,8 @@ export function createTaskServer(
         return json(response, 404, { error: "未知身份接口" });
       }
 
-      // 管理页运行时设置:改了即刻安全生效的那层(运行参数/通知/模型)。
-      // 部署形态(仓库/平台/端口)不在这儿——那些改了要重启+过自查清单。
+      // 管理页服务设置:运行参数与模型网关。仓库/平台/端口等部署形态
+      // 不在这儿——由启动配置固定注入，管理员只看自检结果。
       // 密钥只写不读:GET 永远给掩码,PUT 不给的键保持不动。
       if (parts[0] === "settings") {
         if (options.auth) {
@@ -286,34 +286,44 @@ export function createTaskServer(
         if (!settings) {
           return json(response, 404, { error: "本部署未接运行时设置" });
         }
+        const settingsView = () => {
+          const providers = (service.options.modelsJson as {
+            providers?: Record<string, any>;
+          }).providers ?? {};
+          const provider = service.options.provider || Object.keys(providers)[0];
+          const modelSpec = providers[provider] ?? {};
+          const model = service.options.model
+            || String(modelSpec.models?.[0]?.id ?? "");
+          return ({
+            ...settings.view(),
+            defaults: {
+              runtime: {
+                max_concurrent: service.options.maxConcurrent ?? 2,
+                repair_rounds: service.options.delivery?.repairRounds ?? null,
+                poll_interval_s:
+                  (service.options.delivery?.pollIntervalMs ?? 10_000) / 1000,
+                poll_timeout_s:
+                  (service.options.delivery?.pollTimeoutMs ?? 30 * 60_000) / 1000,
+              },
+              models: {
+                configured: !!modelSpec.baseUrl && !!modelSpec.apiKey && !!model,
+                url: modelSpec.baseUrl ? String(modelSpec.baseUrl) : undefined,
+                model: model || undefined,
+              },
+            },
+          });
+        };
         try {
           if (request.method === "GET" && parts.length === 1) {
-            return json(response, 200, settings.view());
+            return json(response, 200, settingsView());
           }
           if (request.method === "PUT" && parts[1] === "runtime") {
             settings.updateRuntime(await readBody(request));
-            return json(response, 200, settings.view());
-          }
-          if (request.method === "PUT" && parts[1] === "luban") {
-            settings.updateLuban(await readBody(request));
-            return json(response, 200, settings.view());
+            return json(response, 200, settingsView());
           }
           if (request.method === "PUT" && parts[1] === "models") {
             settings.updateModels(await readBody(request));
-            return json(response, 200, settings.view());
-          }
-          if (request.method === "PUT" && parts[1] === "service") {
-            settings.updateService(await readBody(request));
-            return json(response, 200, settings.view());
-          }
-          if (request.method === "POST" && parts[1] === "luban"
-              && parts[2] === "test") {
-            const notifier = service.options.notifier;
-            if (!notifier) {
-              return json(response, 404, { error: "本部署未接通知器" });
-            }
-            const account = viewer?.username ?? "本地用户";
-            return json(response, 200, await notifier.testDelivery(account));
+            return json(response, 200, settingsView());
           }
         } catch (error) {
           if (error instanceof SettingsError) {

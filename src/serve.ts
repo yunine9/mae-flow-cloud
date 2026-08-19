@@ -164,7 +164,7 @@ async function main(): Promise<void> {
   // 被动保底 pi 自动压缩始终在)。
   const compactEvery = Number(flag("--compact-every") ?? 150);
 
-  // 管理页运行时设置先立起来:模型网关、服务形态(默认仓/平台/免编译)
+  // 管理页运行时设置先立起来:模型网关与运行参数
   // 都可能已在界面配过——boot 判定要读它。
   const settings = new RuntimeSettings(
     dataDir, (message) => console.log(`  [settings] ${message}`));
@@ -249,13 +249,11 @@ async function main(): Promise<void> {
   // 测试共用一条链,不许各写各的)。
   const kernelRoot = discoverKernelRoot(REPO_ROOT);
 
-  // 内核模式开启条件:找得到内核,且有默认仓(--repo 或管理页配的)
-  // 或明确 --kernel-mode(默认仓之后在界面配/每单下单填)。
-  // 从"没开"到"开"是部署形态变化,要重启一次——界面上如实写着。
+  // 内核模式开启条件:找得到内核,且用 --repo 钉死单仓(演示/测试)
+  // 或明确 --kernel-mode(正式形态,代码仓由开发逐单必填)。
   const repoFlag = flag("--repo");
-  const bootDefaultRepo = settings.service().default_repo;
   const kernelMode = !!kernelRoot
-    && (!!repoFlag || !!bootDefaultRepo || has("--kernel-mode"));
+    && (!!repoFlag || has("--kernel-mode"));
   // URL 仓不许过 resolve(会被拼成本地路径,实测毁 URL);本地路径才归一化。
   const repoPath = repoFlag
     ? (/^(https?|ssh|git):\/\//i.test(repoFlag)
@@ -266,10 +264,10 @@ async function main(): Promise<void> {
     : undefined;
   if (host) {
     console.log(`[serve] 内核模式:内核 ${host.kernelRoot}`
-      + `,默认仓 ${repoPath ?? bootDefaultRepo ?? "(未配,下单时填)"}`);
+      + `,代码仓 ${repoPath ?? "(下单时逐单填写)"}`);
   } else if (kernelRoot) {
-    console.log("[serve] 内核在场但未开内核模式(没有默认仓):"
-      + "演示形态。要接真仓:--repo / --kernel-mode / 管理页配默认仓后重启");
+    console.log("[serve] 内核在场但未开内核模式:演示形态。"
+      + "正式部署请加 --kernel-mode；--repo 仅用于钉死单仓的试跑");
   }
 
   // Git 交付链:--platform <url> 接真件(内网 MR/流水线网关);
@@ -361,9 +359,8 @@ async function main(): Promise<void> {
   // 由修复环扛(红灯自动派修复会话),不占人的时间。
   const verifyViaPipeline = has("--verify-via-pipeline");
   if (verifyViaPipeline) {
-    // flag 形态保留硬校验;管理页开的免编译由界面提示"需平台在场",
-    // 没平台时交付如实 skipped,不假绿。
-    if (!delivery && !settings.service().platform_url) {
+    // 验证形态与交付服务都由部署固定注入；没平台时拒绝启动，不假绿。
+    if (!delivery) {
       console.error("[serve] --verify-via-pipeline 需要流水线在场:"
         + "请同时配 --platform 或 --fake-platform,否则没人裁判。");
       process.exit(2);
@@ -405,8 +402,6 @@ async function main(): Promise<void> {
       endpoint: lubanEndpoint,
       headers: lubanHeaders,
       fake: lubanIsFake,
-      // 管理页热改的通知端点/鉴权头:每条消息投递时现读。
-      live: () => settings.luban(),
       // 收件人自己的通知令牌:小鲁班以令牌对应的人的身份发消息,
       // 每人配自己的=自己发给自己,不用申请机器人账号。
       personalToken: (account) => auth.lubanToken(account),

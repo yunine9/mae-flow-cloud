@@ -182,8 +182,7 @@ export interface TaskServiceOptions {
   /** 内核模式(阶段 1 纵向闭环):任务=克隆 repoPath → 内核 bootstrap
    * (sessionstart+userprompt 捕获需求、铺转发壳)→ 深层门禁与证据
    * 全部经 kernelHost 走内核 dispatch。不配则为纯会话模式(演练)。 */
-  /** repoPath 缺席=部署没给默认仓:默认仓从管理页(settings.service)
-   * 来,或者每单下单时填——两头都没有的任务如实失败。 */
+  /** repoPath 仅用于 --repo 钉死单仓的演示/测试形态；正式下单逐单填仓。 */
   host?: { kernelRoot: string; repoPath?: string; python?: string };
   /** 小鲁班通知(内网能力,外部用 FakeLubanServer 模拟)。 */
   notifier?: Notifier;
@@ -545,17 +544,18 @@ export class TaskService {
           detail: `${active.provider}/${active.model} 已配置` }
       : { key: "model", label: "模型网关", status: "error",
           detail: "没有可用模型",
-          suggestion: "管理页 → 模型网关:贴 models.json 同形内容" });
+          suggestion: "管理页 → 模型网关：填写网关地址、API Key 和模型名称" });
 
     const notify = this.options.notifier?.health();
     items.push(!notify?.configured
-      ? { key: "notify", label: "通知服务", status: "warning",
-          detail: "未配置通知端点", suggestion: "配置后可用测试消息验证连通" }
+      ? { key: "notify", label: "消息通知", status: "warning",
+          detail: "通知通道未配置",
+          suggestion: "这是部署项；成员只需在个人设置中填写自己的小鲁班 Token" }
       : notify.last_error
-        ? { key: "notify", label: "通知服务", status: "warning",
+        ? { key: "notify", label: "消息通知", status: "warning",
             detail: "已配置，但最近一次投递失败", suggestion: notify.last_error }
-        : { key: "notify", label: "通知服务", status: "ok",
-            detail: "通知端点已配置" });
+        : { key: "notify", label: "消息通知", status: "ok",
+            detail: "小鲁班通知通道已就绪" });
 
     const projection = this.options.projection
       ? await this.options.projection.health() : undefined;
@@ -577,7 +577,8 @@ export class TaskService {
           detail: "当前是纯会话模式", suggestion: "交付代码前启用内核模式与代码仓" }
       : !platform
         ? { key: "git", label: "Git 交付", status: "warning",
-            detail: "未配置 MR / 流水线平台", suggestion: "在交付与形态中配置平台地址" }
+            detail: "MR / 流水线服务未就绪",
+            suggestion: "请部署维护人员检查平台适配服务" }
         : { key: "git", label: "Git 交付", status: "ok",
             detail: "平台已配置;代码仓逐单填写(本部署不设默认仓)" });
 
@@ -875,28 +876,23 @@ export class TaskService {
     return picked;
   }
 
-  /** 服务形态的三个热改项(管理页压部署 flag):平台地址、默认仓、
-   * 免编译。各消费点现读现用,生效边界=下一次交付动作/新会话。 */
+  /** MR/流水线连接是部署基础设施，管理员页面只读自检、不暴露地址。 */
   private effectivePlatformUrl(): string | undefined {
-    return this.options.settings?.service().platform_url
-      ?? this.options.delivery?.platformUrl;
+    return this.options.delivery?.platformUrl;
   }
 
   private effectiveDefaultRepo(): string | undefined {
-    return this.options.settings?.service().default_repo
-      ?? this.options.host?.repoPath;
+    return this.options.host?.repoPath;
   }
 
   private effectiveVerifyViaPipeline(): boolean {
-    return this.options.settings?.service().verify_via_pipeline
-      ?? this.options.verifyViaPipeline ?? false;
+    return this.options.verifyViaPipeline ?? false;
   }
 
   /** 生效的提交信息规范(设置层压部署层)。平台钩子按正则拒收不合规
    * 提交(内网实测),这条规矩要在每个会话开场就给——包括修复会话。 */
   private effectiveCommitConvention(): string | undefined {
-    const text = this.options.settings?.service().commit_convention
-      ?? this.options.commitConvention;
+    const text = this.options.commitConvention;
     const trimmed = String(text ?? "").trim();
     return trimmed || undefined;
   }
@@ -948,13 +944,12 @@ export class TaskService {
     // 会把用不上那件东西的部署一起挡在门外。
     if (!active) {
       blockers.push({ key: "model", where: "admin",
-        label: "模型网关未配置(管理页 → 模型网关,贴 models.json 同形内容)"
+        label: "模型网关未配置(管理页 → 模型网关,填写地址、API Key 和模型名称)"
           + ";没有它任何任务都跑不起来" });
     }
     if (this.options.host && !this.effectivePlatformUrl()) {
       blockers.push({ key: "platform", where: "admin",
-        label: "交付平台未配置(管理页 → 服务形态 → 平台地址)"
-          + ";没有它代码交付不出去" });
+        label: "交付基础设施未就绪；代码暂时无法交付，请联系部署维护人员检查 MR / 流水线服务" });
     }
     return {
       model: active,
@@ -1909,7 +1904,7 @@ export class TaskService {
    * MR 成功≠完成:流水线过了才"等待合入",否则停在"验证中"。
    * 交付失败不吞:原因写进 summary.delivery,任务保持 completed。 */
   private async tryDeliver(task: TaskState, epoch: number): Promise<void> {
-    // 平台地址热改(管理页压部署 flag):每次交付动作现读现用。
+    // 平台地址由部署固定注入；每次交付动作使用同一条基础设施链路。
     const platformUrl = this.effectivePlatformUrl();
     if (!platformUrl || !this.options.host || !task.cwd) return;
     try {
@@ -3095,12 +3090,12 @@ export class TaskService {
     identity?: { username: string; email?: string },
     repoUrl?: string,
   ): string {
-    // 任务级仓(下单填的)> 管理页默认仓 > 部署 --repo;都没有=如实
-    // 失败,不猜一个仓出来。记在 summary,重启续跑同仓。
+    // 任务级仓(正式下单)> 部署 --repo(仅单仓试跑);都没有就如实失败，
+    // 不猜一个仓出来。任务仓记在 summary，重启续跑仍使用同一地址。
     const source = repoUrl ?? this.effectiveDefaultRepo();
     if (!source) {
       throw new Error(
-        "这单没有代码仓:下单时填「交付代码仓」,或让管理员在服务设置里配默认仓");
+        "这单没有代码仓：请在发起任务时填写「交付代码仓」");
     }
     // 裸仓 origin.git → 工作区目录名去掉 .git 后缀,免得像个裸仓。
     const target = join(

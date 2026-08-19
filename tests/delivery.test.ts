@@ -277,10 +277,8 @@ function repairScenes(push: boolean): Scene[] {
   ];
 }
 
-test("服务形态全从管理页来:平台/免编译零启动项跑通交付", async () => {
-  // 用户拍板"这些不该是启动项"。部署层不给 --platform/
-  // --verify-via-pipeline,两样全在 settings(管理页)——任务照样
-  // 走完整交付链,开场带免编译环境事实。
+test("交付服务是部署基础设施:固定地址跑通交付", async () => {
+  // MR/流水线服务与验证形态都是部署事实，不在管理员页面暴露。
   // 仓不在此列(2026-08-18 改口径):**交付仓每单必填,没有默认仓**
   // ——一个部署服务很多个仓,默认值只会让人把单下错地方。
   const platform = new FakeGitPlatform();
@@ -289,21 +287,16 @@ test("服务形态全从管理页来:平台/免编译零启动项跑通交付", 
   const model = new ScriptedModelServer(walkScript(true));
   await model.start();
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-deliver-"));
-  const settings = new RuntimeSettings(dataDir);
-  settings.updateService({
-    platform_url: platform.baseUrl,
-    verify_via_pipeline: "true",
-  });
   const service = new TaskService({
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
     host: {
       kernelRoot: KERNEL_ROOT,
       python: "python3",
-      // 刻意不给 repoPath:默认仓在管理页
+      // 刻意不给 repoPath:代码仓由本单明确填写
     },
-    // 刻意不给 delivery:平台地址在管理页
-    settings,
+    delivery: { platformUrl: platform.baseUrl },
+    verifyViaPipeline: true,
   });
   try {
     const id = service.create("交付 REQ9:纯界面配置",
@@ -313,8 +306,8 @@ test("服务形态全从管理页来:平台/免编译零启动项跑通交付", 
       "界面配置驱动交付收轮");
     const task = service.get(id)!;
     assert.equal(task.delivery?.pipeline, "success");
-    assert.equal(platform.mergeRequests.length, 1, "MR 打到了设置里的平台");
-    // 免编译环境事实也来自设置层
+    assert.equal(platform.mergeRequests.length, 1, "MR 打到了部署配置的平台");
+    // 免编译环境事实来自部署形态
     const opening = JSON.stringify(
       ((model.requests[0] as any).messages ?? [])
         .filter((m: any) => m.role === "user")[0]?.content ?? "");

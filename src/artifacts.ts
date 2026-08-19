@@ -34,6 +34,24 @@ const TRUNCATED_NOTE =
 /** Git 工作区差异的固定标识:它是"虚拟产物",不对应磁盘上某个文件。 */
 export const DIFF_NAME = "未提交改动";
 
+/** Mae-Flow 自己的流程状态不是代码交付内容。Git 本地排除规则是第一道
+ * 防线，但它可能缺失、写入失败或来自旧现场；差异采集必须再守一道，
+ * 不能把过程状态混进代码审阅。口径与内核 source_paths.py 保持一致。 */
+function isFlowControlPath(path: string): boolean {
+  const normalized = path.replace(/\\/g, "/")
+    .replace(/^(?:\.\/)+/, "").replace(/^"|"$/g, "");
+  return normalized === ".mae-flow.json"
+    || normalized.startsWith(".mae-flow.json.")
+    || normalized === ".mae-flow-history.jsonl"
+    || normalized === ".mae-flow-need-reload"
+    || normalized === ".mae-flow"
+    || normalized.startsWith(".mae-flow/")
+    || normalized === ".mae-flow-work"
+    || normalized.startsWith(".mae-flow-work/")
+    || normalized === ".codecheckcli"
+    || normalized.startsWith(".codecheckcli/");
+}
+
 export interface ArtifactMeta {
   /** 稳定标识,也是 URL 里的取值:文档为 `<单号目录>/<文件名>`。 */
   name: string;
@@ -170,7 +188,8 @@ function changedPaths(status: string): string[] {
     .map((path) => {
       const arrow = path.split(" -> ");
       return (arrow[1] ?? arrow[0]).replace(/^"|"$/g, "");
-    });
+    })
+    .filter((path) => !isFlowControlPath(path));
 }
 
 type ChangeOrigin = "committed" | "committed_working" | "staged"
@@ -220,6 +239,15 @@ function diffChunks(text: string): Array<{ path: string; text: string }> {
     });
 }
 
+/** 从聚合 diff 中只保留业务文件。不能只过滤 untracked：旧现场若曾把
+ * 状态文件暂存或提交，仍不该在代码审阅里重新出现。 */
+function deliveryDiff(text: string): string {
+  return diffChunks(text)
+    .filter((chunk) => !isFlowControlPath(chunk.path))
+    .map((chunk) => chunk.text)
+    .join("\n\n");
+}
+
 function statusEntries(status: string): Map<string, { x: string; y: string }> {
   const entries = new Map<string, { x: string; y: string }>();
   for (const line of status.split("\n")) {
@@ -263,7 +291,7 @@ function collectDiff(
   const untracked = status.split("\n")
     .filter((line) => line.startsWith("??"))
     .map((line) => line.slice(3).trim())
-    .filter(Boolean);
+    .filter((path) => path && !isFlowControlPath(path));
   const baseline = taskBaseline(cwd);
   const sections: string[] = [];
   let trackedPaths: string[] = [];
@@ -274,7 +302,8 @@ function collectDiff(
       .split("\n").filter(Boolean));
     const statuses = statusEntries(status);
     const grouped = new Map<ChangeOrigin, string[]>();
-    for (const chunk of diffChunks(aggregate)) {
+    for (const chunk of diffChunks(aggregate)
+      .filter((item) => !isFlowControlPath(item.path))) {
       trackedPaths.push(chunk.path);
       const origin = originOf(chunk.path, committed, statuses);
       grouped.set(origin, [...(grouped.get(origin) ?? []), chunk.text]);
@@ -287,8 +316,10 @@ function collectDiff(
       }
     }
   } else {
-    const staged = (git(cwd, ["diff", "--cached", fullContext]) ?? "").trim();
-    const unstaged = (git(cwd, ["diff", fullContext]) ?? "").trim();
+    const staged = deliveryDiff(
+      (git(cwd, ["diff", "--cached", fullContext]) ?? "").trim());
+    const unstaged = deliveryDiff(
+      (git(cwd, ["diff", fullContext]) ?? "").trim());
     if (staged) sections.push(`## ${ORIGIN_HEADING.staged}\n\n${staged}`);
     if (unstaged) sections.push(`## ${ORIGIN_HEADING.unstaged}\n\n${unstaged}`);
     trackedPaths = worktreeChanged.filter((path) => !untracked.includes(path));

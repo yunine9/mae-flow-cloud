@@ -3,11 +3,11 @@
  *
  * 分界线(用户拍板):部署配置改"这套服务长什么样"(仓库/平台/端口,
  * 改了要重启+过自查清单);这里只放**改了即刻安全生效、错了随手改回来**
- * 的东西:运行参数(并发/修复轮/轮询)、通知端点、模型网关。
+ * 的东西:运行参数(并发/修复轮/轮询)与模型网关。
  *
  * 落盘纪律:
  * - settings.json 住 --data 下(文件即真相),原子写(tmp+rename),
- *   权限 0600——里面有通知鉴权头和模型 apiKey;
+ *   权限 0600——里面有模型 apiKey;
  * - 读坏了 fail-open 回部署值并记日志:它是旁路覆盖,不许挡住服务;
  *   (对比 --config:那是部署配置,坏了拒启。两种失败语义都是刻意的。)
  * - 密钥只写不读:view() 给界面的永远是掩码(末 4 位),API 不回明文,
@@ -15,7 +15,7 @@
  *
  * 生效边界(诚实,写给界面看):
  * - 并发:下一次调度决策;修复轮/轮询:下一次红灯/下一轮轮询;
- * - 通知:下一条消息;模型:下一个新会话(在跑的会话不换血)。
+ * - 模型:下一个新会话(在跑的会话不换血)。
  */
 
 import {
@@ -34,11 +34,6 @@ export interface RuntimeKnobs {
   poll_timeout_s?: number;
 }
 
-export interface LubanSettings {
-  endpoint?: string;
-  headers?: Record<string, string>;
-}
-
 export interface ModelsSettings {
   /** models.json 同形内容(providers 结构),含 apiKey——密钥所在。 */
   json?: Record<string, unknown>;
@@ -46,25 +41,9 @@ export interface ModelsSettings {
   model?: string;
 }
 
-/** 服务形态(用户拍板"这些不该是启动项"):平台适配层地址、默认
- * 交付仓、免编译开关。全部热改:平台/仓=下一次交付动作,免编译=
- * 下一个新会话。唯一要重启的例外:服务启动时既没有 --repo 也没有
- * 这里的默认仓,内核模式根本没开——从无到有要重启一次(部署形态
- * 变化),界面上如实写着。 */
-export interface ServiceSettings {
-  platform_url?: string;
-  default_repo?: string;
-  verify_via_pipeline?: boolean;
-  /** 提交信息规范(一句话,进每个会话开场)。平台钩子按正则拒收不
-   * 合规提交,规矩得让 agent 第一次就知道(内网实测被拒过)。 */
-  commit_convention?: string;
-}
-
 interface Stored {
   runtime?: RuntimeKnobs;
-  luban?: LubanSettings;
   models?: ModelsSettings;
-  service?: ServiceSettings;
 }
 
 export class SettingsError extends Error {}
@@ -116,78 +95,8 @@ export class RuntimeSettings {
     return this.load().runtime ?? {};
   }
 
-  luban(): LubanSettings {
-    return this.load().luban ?? {};
-  }
-
   models(): ModelsSettings {
     return this.load().models ?? {};
-  }
-
-  service(): ServiceSettings {
-    return this.load().service ?? {};
-  }
-
-  /** 服务形态。语义同各节:undefined=保留,空串=删除。 */
-  updateService(patch: {
-    platform_url?: unknown;
-    default_repo?: unknown;
-    verify_via_pipeline?: unknown;
-    commit_convention?: unknown;
-  }): void {
-    const current = this.service();
-    const next: ServiceSettings = { ...current };
-    if (patch.platform_url !== undefined) {
-      const url = String(patch.platform_url).trim();
-      if (!url) delete next.platform_url;
-      else {
-        try {
-          void new URL(url);
-        } catch {
-          throw new SettingsError(`平台地址不是合法 URL: ${url}`);
-        }
-        next.platform_url = url;
-      }
-    }
-    if (patch.default_repo !== undefined) {
-      const repo = String(patch.default_repo).trim();
-      if (!repo) delete next.default_repo;
-      else {
-        if (/\s/.test(repo)) {
-          throw new SettingsError("代码仓地址不能含空白字符");
-        }
-        if (/^https?:\/\//i.test(repo)) {
-          const parsed = new URL(repo);
-          if (parsed.username || parsed.password) {
-            throw new SettingsError(
-              "代码仓 URL 不许携带账号密码——鉴权使用个人 CodeHub Token");
-          }
-        }
-        next.default_repo = repo;
-      }
-    }
-    if (patch.verify_via_pipeline !== undefined) {
-      const raw = patch.verify_via_pipeline;
-      if (raw === "" || raw === null) delete next.verify_via_pipeline;
-      else if (raw === true || raw === "true") next.verify_via_pipeline = true;
-      else if (raw === false || raw === "false") {
-        next.verify_via_pipeline = false;
-      } else {
-        throw new SettingsError(
-          `免编译开关只认 true/false/空(跟随部署),收到: ${String(raw)}`);
-      }
-    }
-    if (patch.commit_convention !== undefined) {
-      // 一句话规矩,原样进提示词。长度设上限只为防止有人把整份规范
-      // 贴进来挤占开场白(那该放仓里的 AGENTS.md,知识在仓不在平台)。
-      const text = String(patch.commit_convention).trim();
-      if (!text) delete next.commit_convention;
-      else if (text.length > 500) {
-        throw new SettingsError(
-          "提交信息规范请压到 500 字以内(完整规范放仓里的 AGENTS.md)");
-      } else next.commit_convention = text;
-    }
-    this.save({ ...this.load(), service: next });
   }
 
   updateRuntime(patch: Record<string, unknown>): void {
@@ -205,48 +114,52 @@ export class RuntimeSettings {
     this.save({ ...this.load(), runtime: next });
   }
 
-  /** 通知设置。headers 按键合并:给值=替换,给空串=删除,不给=保留
-   * ——界面拿到的是掩码,只写不读的语义下它没法"原样回填",所以
-   * 服务端必须替它记住没动过的键。 */
-  updateLuban(patch: {
-    endpoint?: unknown;
-    headers?: Record<string, unknown>;
-  }): void {
-    const current = this.luban();
-    const endpoint = patch.endpoint === undefined
-      ? current.endpoint
-      : String(patch.endpoint).trim() || undefined;
-    if (endpoint !== undefined) {
-      try {
-        void new URL(endpoint);
-      } catch {
-        throw new SettingsError(`通知端点不是合法 URL: ${endpoint}`);
-      }
-    }
-    const headers = { ...(current.headers ?? {}) };
-    for (const [name, value] of Object.entries(patch.headers ?? {})) {
-      const key = name.trim();
-      if (!key) continue;
-      if (value === "" || value === null) delete headers[key];
-      else headers[key] = String(value);
-    }
-    this.save({
-      ...this.load(),
-      luban: {
-        endpoint,
-        headers: Object.keys(headers).length ? headers : undefined,
-      },
-    });
-  }
-
-  /** 模型网关。整份 models.json 同形内容 + 默认 provider/model;
-   * provider/model 必须真实存在于给的 json 里,不收"以后再补"。 */
+  /** 模型网关。管理页使用地址/API Key/模型名三个简单字段；旧的 JSON
+   * 参数只为兼容已有调用与落盘数据，provider/model 必须真实存在。 */
   updateModels(patch: {
     json?: unknown;
     provider?: unknown;
     model?: unknown;
+    url?: unknown;
+    api_key?: unknown;
   }): void {
     const current = this.models();
+    // 管理页只暴露地址、密钥、模型名三项；内部仍转换成 pi 需要的
+    // models.json 形状。api_key 留空表示保留现有密钥。
+    if (patch.url !== undefined || patch.api_key !== undefined) {
+      const existingProviders = (current.json as {
+        providers?: Record<string, any>;
+      } | undefined)?.providers ?? {};
+      const provider = current.provider || Object.keys(existingProviders)[0]
+        || "maeflow";
+      const existing = existingProviders[provider] ?? {};
+      const url = patch.url === undefined
+        ? String(existing.baseUrl ?? "").trim()
+        : String(patch.url).trim();
+      const suppliedKey = patch.api_key === undefined
+        ? "" : String(patch.api_key).trim();
+      const apiKey = suppliedKey || String(existing.apiKey ?? "").trim();
+      const model = patch.model === undefined
+        ? String(current.model ?? existing.models?.[0]?.id ?? "").trim()
+        : String(patch.model).trim();
+      if (!url || !apiKey || !model) {
+        throw new SettingsError("请完整填写模型网关地址、API Key 和模型名称");
+      }
+      try { void new URL(url); } catch {
+        throw new SettingsError(`模型网关地址不是合法 URL: ${url}`);
+      }
+      const previousModel = (existing.models ?? []).find(
+        (item: { id?: string }) => item?.id === model) ?? {};
+      const json = { providers: { [provider]: {
+        ...existing,
+        baseUrl: url,
+        api: existing.api ?? "anthropic-messages",
+        apiKey,
+        models: [{ ...previousModel, id: model }],
+      } } };
+      this.save({ ...this.load(), models: { json, provider, model } });
+      return;
+    }
     const json = patch.json === undefined
       ? current.json
       : (patch.json as Record<string, unknown>);
@@ -280,12 +193,10 @@ export class RuntimeSettings {
    * 谁在这个函数里返回明文,谁就在给未来的泄漏签字。 */
   view(): {
     runtime: RuntimeKnobs;
-    luban: { endpoint?: string; headers: Array<{ name: string; hint: string }> };
     models: { configured: boolean; provider?: string; model?: string;
+              url?: string; key_hint?: string;
               providers: Array<{ name: string; models: string[]; key_hint?: string }> };
-    service: ServiceSettings;
   } {
-    const luban = this.luban();
     const models = this.models();
     const providers = Object.entries(
       (models.json as { providers?: Record<string, any> } | undefined)
@@ -296,20 +207,21 @@ export class RuntimeSettings {
         .map((item) => String(item?.id ?? "")).filter(Boolean),
       key_hint: spec?.apiKey ? mask(String(spec.apiKey)) : undefined,
     }));
+    const selectedProvider = models.provider || providers[0]?.name;
+    const selectedSpec = ((models.json as {
+      providers?: Record<string, any>;
+    } | undefined)?.providers ?? {})[selectedProvider ?? ""];
     return {
       runtime: this.runtime(),
-      service: this.service(),
-      luban: {
-        endpoint: luban.endpoint,
-        headers: Object.entries(luban.headers ?? {}).map(([name, value]) => ({
-          name,
-          hint: mask(value),
-        })),
-      },
       models: {
-        configured: models.json !== undefined,
+        configured: !!selectedSpec?.baseUrl && !!selectedSpec?.apiKey
+          && !!models.model,
         provider: models.provider,
         model: models.model,
+        url: selectedSpec?.baseUrl
+          ? String(selectedSpec.baseUrl) : undefined,
+        key_hint: selectedSpec?.apiKey
+          ? mask(String(selectedSpec.apiKey)) : undefined,
         providers,
       },
     };

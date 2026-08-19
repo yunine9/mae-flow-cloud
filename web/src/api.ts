@@ -666,21 +666,27 @@ export interface SettingsView {
     poll_interval_s?: number;
     poll_timeout_s?: number;
   };
-  /** 服务形态:平台适配层地址、默认交付仓、免编译开关。 */
-  service: {
-    platform_url?: string;
-    default_repo?: string;
-    verify_via_pipeline?: boolean;
-  };
-  luban: {
-    endpoint?: string;
-    headers: Array<{ name: string; hint: string }>;
-  };
   models: {
     configured: boolean;
     provider?: string;
     model?: string;
+    url?: string;
+    key_hint?: string;
     providers: Array<{ name: string; models: string[]; key_hint?: string }>;
+  };
+  /** 未设置覆盖时实际采用的服务默认值，不让管理员猜启动参数。 */
+  defaults: {
+    runtime: {
+      max_concurrent: number;
+      repair_rounds: number | null;
+      poll_interval_s: number;
+      poll_timeout_s: number;
+    };
+    models: {
+      configured: boolean;
+      url?: string;
+      model?: string;
+    };
   };
 }
 
@@ -711,7 +717,7 @@ export async function getSettings(): Promise<SettingsView> {
 }
 
 async function putSettings(
-  section: "runtime" | "luban" | "models" | "service",
+  section: "runtime" | "models",
   body: unknown,
 ): Promise<SettingsView> {
   const response = await fetch(`/settings/${section}`, {
@@ -728,36 +734,12 @@ export function putRuntimeSettings(
   return putSettings("runtime", body);
 }
 
-/** headers 语义:给值=替换,给空串=删除,不给的键服务端保留——
- * 界面只有掩码,回填明文不可能,合并责任在服务端。 */
-export function putLubanSettings(body: {
-  endpoint?: string;
-  headers?: Record<string, string>;
-}): Promise<SettingsView> {
-  return putSettings("luban", body);
-}
-
-export function putServiceSettings(body: {
-  platform_url?: string;
-  default_repo?: string;
-  /** "true"/"false" 设定,空串=清掉跟随部署。 */
-  verify_via_pipeline?: string;
-}): Promise<SettingsView> {
-  return putSettings("service", body);
-}
-
 export function putModelsSettings(body: {
-  json?: unknown;
-  provider?: string;
+  url: string;
+  api_key: string;
   model?: string;
 }): Promise<SettingsView> {
   return putSettings("models", body);
-}
-
-export async function testLuban(): Promise<{ ok: boolean; error?: string }> {
-  const response = await fetch("/settings/luban/test", { method: "POST" });
-  if (!response.ok) throw new Error(await errorText(response));
-  return response.json();
 }
 
 export async function readArtifact(
