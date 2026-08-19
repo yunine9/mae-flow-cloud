@@ -1617,6 +1617,32 @@ export class TaskService {
     return { ...task.summary };
   }
 
+  /** 父分析单确认即硬收口(用户拍板 2026-08-19:拆单后它的使命就
+   * 结束了)。不等模型自觉写收尾:并发槽让给子任务,"确认后又举卡"
+   * 的窗口彻底关死。会话直接终止没有可丢的——CHAIN 方案在盘上,
+   * 子任务已生成,决定也已落袋(waiting.json)。teardown 与 cancel
+   * 同款:先涨 controlEpoch 让在途 settle 对不上暗号,不回写状态。 */
+  private async finishRequirementAnalysis(task: TaskState): Promise<void> {
+    task.controlEpoch += 1;
+    task.pauseRequested = false;
+    this.removeFromQueue(task.summary.id);
+    task.summary.status = "completed";
+    task.summary.completed_at = new Date().toISOString();
+    task.mission = undefined;
+    this.persist(task);
+    const driver = task.driver;
+    const container = task.container;
+    task.driver = undefined;
+    task.container = undefined;
+    await Promise.allSettled([
+      driver?.abort() ?? Promise.resolve(),
+      container?.stop() ?? Promise.resolve(),
+    ]);
+    driver?.dispose();
+    this.notifyOutcome(task);
+    this.bypass(undefined, "任务泵", this.pump());
+  }
+
   /** Web 决定:先到生效;冲突抛 StateConflictError 由 API 层变 409。
    * 多问题卡必须给 answers(问题→选项);单问题卡给 decision 即可。 */
   async decide(
@@ -1679,6 +1705,21 @@ export class TaskService {
     if (confirmingGraph) {
       try {
         this.createRepositoryDeliveries(task);
+        // 拆单成功=父分析单使命结束(用户拍板 2026-08-19):确认即
+        // 硬收口,不等模型自觉写完——省下并发槽给子任务,也彻底关掉
+        // "确认后又举卡让人检视子任务"的窗口(预答兜底退居末防线)。
+        // 会话直接终止:CHAIN 方案在盘上、子任务已生成,没有可丢的。
+        task.summary.waiting = undefined;
+        // 决定必须先回注再掐会话:会话此刻停在 AskUserQuestion 工具里
+        // 等这份决定,不解开它 abort 会一直等回合收束(实测挂死——
+        // 等待必须带出路,不许无限等的红线在自己身上也成立)。回注是
+        // 同步解扣,后续回合不等,收口里的 abort 负责掐断。
+        if (task.driver) {
+          this.bypass(task, "分析收口回注",
+            task.driver.resumeWithDecision(resolved).then(() => undefined));
+        }
+        await this.finishRequirementAnalysis(task);
+        return { ...task.summary };
       } catch (cause) {
         task.summary.detail =
           `确认已收到,但生成仓库任务失败:${String(cause)}。`

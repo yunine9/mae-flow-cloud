@@ -94,22 +94,19 @@ test("跨仓分析会话:克隆只读现场→写产物→举卡→确认拆单�
     // 卡到手时投影应已能从产物读出依赖(面板据此画图)。
     assert.equal(card.requirement_graph?.dependencies.length, 1);
     const confirmed = await service.confirmRequirementGraph(parent.id);
-    assert.notEqual(confirmed.status, "waiting_for_human",
-      "图上确认必须同时消费人工检视卡,不能让父单继续假等");
+    // 确认即硬收口(用户拍板:拆单后父单使命结束):不等模型自觉写
+    // 收尾,状态同步落 completed,再举卡的窗口彻底不存在。
+    assert.equal(confirmed.status, "completed",
+      "确认必须同步收口父分析单,不许留假等/假跑");
     assert.equal(confirmed.waiting, undefined);
     const graph = service.get(parent.id)!.requirement_graph!;
     assert.equal(graph.stage, "confirmed");
     const apiChild = service.get(graph.repositories[0].task_id!)!;
     const webChild = service.get(graph.repositories[1].task_id!)!;
-    // 子任务先取消:它们的交付链(内核)由别的端到端覆盖,这里不跑,
-    // 也顺带避免剧本模型的场景被子会话误消费。
+    // 子任务立即取消:它们的交付链(内核)由别的端到端覆盖,这里不跑
+    // (父单收口会放出并发槽,晚一步取消子会话就会去误消费剧本场景)。
     await service.cancel(apiChild.id, "tester");
     await service.cancel(webChild.id, "tester");
-    await until(() => {
-      const now = service.get(parent.id)!;
-      if (now.status === "failed") throw new Error(now.detail);
-      return now.status === "completed" ? now : undefined;
-    }, "分析单收口");
 
     // 现场:两仓按序克隆成只读(pushurl 已改指死路)。
     const root = join(dataDir, parent.id, "repositories");
