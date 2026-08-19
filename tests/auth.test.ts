@@ -422,7 +422,7 @@ test("Committer 检视:管理员只配名单,仅任务责任人主动邀请后�
     assert.equal(luban.messages[0].text,
       `【Mae-Flow】任务 ${created.id} 邀请你检视：实现订单检索`);
     assert.equal(luban.messages[0].link,
-      `http://mae-flow.internal/?task=${created.id}&review=${review.id}`);
+      `http://mae-flow.internal/work/${created.id}/review/${review.id}`);
 
     const inbox = await fetch(`${base}/reviews/mine`, {
       headers: { cookie: bob },

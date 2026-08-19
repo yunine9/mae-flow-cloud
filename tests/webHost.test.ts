@@ -77,6 +77,20 @@ test("配 webRoot:index 与资产按类型出文件,API 与穿越各归各位", 
     const api = await fetch(base + "/tasks");
     assert.deepEqual(await readJson(api), []);
 
+    // 任务工作台有真正的可刷新子 URL，由 SPA 入口接管；旧通知若仍指向
+    // /tasks/:id，浏览器导航会跳到新地址，而 API fetch 仍返回 JSON。
+    const work = await fetch(base + "/work/task-7");
+    assert.equal(work.status, 200);
+    assert.match(await work.text(), /正式前端/);
+    const legacy = await fetch(base + "/tasks/task-7", {
+      headers: { accept: "text/html" }, redirect: "manual",
+    });
+    assert.equal(legacy.status, 302);
+    assert.equal(legacy.headers.get("location"), "/work/task-7");
+    const apiDetail = await fetch(base + "/tasks/task-7");
+    assert.equal(apiDetail.status, 404);
+    assert.match(apiDetail.headers.get("content-type") ?? "", /application\/json/);
+
     // 穿越:fetch 会在客户端就规范化 "..",测不到服务端——
     // 用裸 socket 发未规范化路径,断言真属性:秘密永不泄露。
     const raw = await rawGet(base, "/assets/../../secret.txt");

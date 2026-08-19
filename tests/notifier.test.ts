@@ -108,8 +108,8 @@ test("端到端:任务进入等待即通知;通知死透不改流程,页面可�
     );
     assert.equal(
       waitingNotice.link,
-      `http://127.0.0.1:8787/?account=liaoxiang&task=${created.id}`,
-      "通知应直达个人工作台并定位目标任务",
+      `http://127.0.0.1:8787/work/${created.id}`,
+      "通知应直达有稳定地址的任务工作台",
     );
     // 通知死透:流程仍在等待,决定照常可提交,页面拿得到失败事实。
     const failed = await until(() => {

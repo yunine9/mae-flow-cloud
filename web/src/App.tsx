@@ -32,12 +32,41 @@ import {
 type View = "team" | "mine" | "profile" | "history" | "users" | "settings";
 type Theme = "light" | "dark";
 
+interface WorkspaceRoute {
+  taskId: string;
+  reviewId: string;
+}
+
+function readWorkspaceRoute(): WorkspaceRoute {
+  const match = location.pathname.match(
+    /^\/work\/([^/]+)(?:\/review\/([^/]+))?\/?$/,
+  );
+  if (match) {
+    try {
+      return {
+        taskId: decodeURIComponent(match[1]),
+        reviewId: match[2] ? decodeURIComponent(match[2]) : "",
+      };
+    } catch { return { taskId: "", reviewId: "" }; }
+  }
+  // 兼容此前已经发送的根路径查询参数通知，进入后会规范成 /work/...。
+  const params = new URLSearchParams(location.search);
+  return {
+    taskId: params.get("task")?.trim() ?? "",
+    reviewId: params.get("review")?.trim() ?? "",
+  };
+}
+
+function workspacePath(taskId: string, reviewId = ""): string {
+  return `/work/${encodeURIComponent(taskId)}`
+    + (reviewId ? `/review/${encodeURIComponent(reviewId)}` : "");
+}
+
 function initialView(user: AuthUser): View {
   // 管理员没有"我的待办"(不下单的角色没有个人任务收件箱,用户拍板):
   // 深链也一律落到团队总览,从那里打开任意任务行使兜底控制。
   if (user.role === "admin") return "team";
-  const params = new URLSearchParams(location.search);
-  if (params.has("review")) return "mine";
+  if (readWorkspaceRoute().reviewId) return "mine";
   return "mine";
 }
 
@@ -159,9 +188,22 @@ export function App() {
   const [artifactTaskId, setArtifactTaskId] = useState("");
   const [artifactTaskSnapshot, setArtifactTaskSnapshot] = useState<TaskSummary>();
   const [launchOpen, setLaunchOpen] = useState(false);
-  const [targetTaskId] = useState(() => new URLSearchParams(location.search).get("task")?.trim() ?? "");
-  const [targetReviewId] = useState(() =>
-    new URLSearchParams(location.search).get("review")?.trim() ?? "");
+  const [targetRoute, setTargetRoute] = useState(readWorkspaceRoute);
+  const targetTaskId = targetRoute.taskId;
+  const targetReviewId = targetRoute.reviewId;
+
+  useEffect(() => {
+    const syncRoute = () => {
+      const next = readWorkspaceRoute();
+      setTargetRoute(next);
+      if (!next.taskId) {
+        setArtifactTaskId("");
+        setArtifactTaskSnapshot(undefined);
+      }
+    };
+    addEventListener("popstate", syncRoute);
+    return () => removeEventListener("popstate", syncRoute);
+  }, []);
 
   useEffect(() => {
     void getSession().then((user) => {
@@ -201,12 +243,18 @@ export function App() {
     return () => clearTimeout(timer);
   }, [view, targetTaskId, tasks.length]);
 
-  // Committer 从通知进入时直接打开指定任务的只读检视台。它不要求任务
-  // 归属本人，因此落在团队视图，而不是把别人的任务伪装进“我的工作”。
+  // 通知/复制链接进入时直接打开指定任务工作台。Committer 不要求任务
+  // 归属本人；能否操作仍由服务端和 canOperate 决定，URL 不授予权限。
   useEffect(() => {
-    if (!targetReviewId || !targetTaskId || artifactTaskId || tasks.length === 0) return;
+    if (!targetTaskId || artifactTaskId === targetTaskId || tasks.length === 0) return;
     const target = tasks.find((task) => task.id === targetTaskId);
-    if (target) openArtifacts(target);
+    if (!target) return;
+    setArtifactTaskSnapshot(target);
+    setArtifactTaskId(target.id);
+    const canonical = workspacePath(targetTaskId, targetReviewId);
+    if (location.pathname + location.search !== canonical) {
+      history.replaceState({}, "", canonical);
+    }
   }, [targetReviewId, targetTaskId, tasks, artifactTaskId]);
 
   // 打开的工作台必须跨轮询稳定存在。任务在状态切换时可能有一拍没出现在
@@ -265,10 +313,17 @@ export function App() {
   const openArtifacts = (task: TaskSummary) => {
     setArtifactTaskSnapshot(task);
     setArtifactTaskId(task.id);
+    const next = workspacePath(task.id);
+    if (location.pathname + location.search !== next) {
+      history.pushState({}, "", next);
+      setTargetRoute({ taskId: task.id, reviewId: "" });
+    }
   };
   const closeArtifacts = () => {
     setArtifactTaskId("");
     setArtifactTaskSnapshot(undefined);
+    history.replaceState({}, "", "/");
+    setTargetRoute({ taskId: "", reviewId: "" });
   };
   // 谁能提交决定:管理员或任务归属人。工作台与列表共用这一个口径。
   const canOperate = (task: TaskSummary) =>

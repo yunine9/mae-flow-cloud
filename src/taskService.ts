@@ -370,17 +370,16 @@ interface DiscussionItem {
   body?: string;
 }
 
-/** 小鲁班链接必须落到个人处置台，而不是 /tasks/:id 的 JSON API。
- * account 让无登录态的内网 MVP 也能直接筛出本人任务，task 用于
- * 自动定位并展开目标卡；二者只承载展示定位，不参与任务判定。 */
+/** 小鲁班链接必须落到前端任务工作台，而不是 /tasks/:id 的 JSON API。
+ * 身份只认登录会话，URL 只承载任务定位；每个任务因此也有可复制、
+ * 可刷新、可从通知直接进入的稳定页面地址。 */
 function personalTaskLink(
   linkBase: string | undefined,
-  account: string,
+  _account: string,
   taskId: string,
 ): string {
   const root = (linkBase ?? "").replace(/\/+$/, "");
-  return `${root}/?account=${encodeURIComponent(account)}`
-    + `&task=${encodeURIComponent(taskId)}`;
+  return `${root}/work/${encodeURIComponent(taskId)}`;
 }
 
 function reviewTaskLink(
@@ -389,8 +388,8 @@ function reviewTaskLink(
   reviewId: string,
 ): string {
   const root = (linkBase ?? "").replace(/\/+$/, "");
-  return `${root}/?task=${encodeURIComponent(taskId)}`
-    + `&review=${encodeURIComponent(reviewId)}`;
+  return `${root}/work/${encodeURIComponent(taskId)}`
+    + `/review/${encodeURIComponent(reviewId)}`;
 }
 
 export type SystemCheckStatus = "ok" | "warning" | "error";

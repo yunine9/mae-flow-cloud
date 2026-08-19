@@ -371,6 +371,19 @@ export function createTaskServer(
       const protectedRoute =
         url.pathname === "/history" || parts[0] === "tasks"
         || parts[0] === "reviews";
+      // 兼容已经发出去的旧通知。/tasks/:id 是 JSON API，但旧链接若由
+      // 浏览器作为页面打开，应带人去新的任务工作台；程序 fetch 默认
+      // Accept: */*，仍拿原来的 JSON，不改变 API 契约。
+      const legacyTaskPage = request.method === "GET"
+        && parts[0] === "tasks" && parts.length === 2
+        && String(request.headers.accept ?? "").includes("text/html");
+      if (legacyTaskPage) {
+        response.writeHead(302, {
+          location: `/work/${encodeURIComponent(decodeURIComponent(parts[1]))}`,
+          "cache-control": "no-store",
+        });
+        return response.end();
+      }
       if (options.auth && protectedRoute && !viewer) {
         return json(response, 401, { error: "请先登录" });
       }
@@ -404,12 +417,17 @@ export function createTaskServer(
         return json(response, 404, { error: "未知检视接口" });
       }
       // 静态前端(webRoot=React 构建产物):/ 与非 API 路径出文件;
+      // /work/:taskId[/review/:reviewId] 是前端深链，文件系统里当然没有
+      // 这个文件，必须回退 index.html 交给 React 解析。
       // 没配 webRoot 时零构建演示页兜底——两种形态永远有一个能用。
       if (request.method === "GET"
           && (url.pathname === "/" || parts[0] !== "tasks")) {
-        const file = options.webRoot
+        const workspaceRoute = parts[0] === "work" && parts.length >= 2;
+        const exactFile = options.webRoot
           ? staticFile(options.webRoot, url.pathname)
           : undefined;
+        const file = exactFile ?? (options.webRoot && workspaceRoute
+          ? staticFile(options.webRoot, "/") : undefined);
         if (file) {
           response.writeHead(200, {
             "content-type": MIME[extname(file)] ?? "application/octet-stream",
@@ -422,7 +440,7 @@ export function createTaskServer(
           });
           return response.end(readFileSync(file));
         }
-        if (url.pathname === "/") {
+        if (url.pathname === "/" || workspaceRoute) {
           response.writeHead(200,
             { "content-type": "text/html; charset=utf-8" });
           return response.end(WEB_PAGE);
