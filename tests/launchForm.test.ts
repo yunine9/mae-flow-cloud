@@ -204,8 +204,10 @@ test("统一需求图:单仓是一个节点,多仓进入同一任务的需求分
     host: { kernelRoot: "/tmp" },
   });
   const one = service.create("单仓需求", {
-    repos: ["https://codehub/team/api.git"], ticket: "REQ-G1",
+    title: "订单状态接口", repos: ["https://codehub/team/api.git"], ticket: "REQ-G1",
   });
+  assert.equal(one.title, "订单状态接口");
+  assert.equal(one.requirement, "单仓需求", "任务名称不能覆盖需求原文");
   assert.equal(one.repo_url, "https://codehub/team/api.git");
   assert.equal(one.requirement_graph?.stage, "confirmed");
   assert.equal(one.requirement_graph?.repositories.length, 1);
@@ -236,6 +238,7 @@ test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队
     host: { kernelRoot: "/tmp" },
   });
   const parent = service.create("跨仓交付", {
+    title: "跨仓订单状态交付",
     repos: ["https://codehub/team/api.git", "https://codehub/team/web.git"],
     ticket: "REQ-G3",
   });
@@ -265,6 +268,8 @@ test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队
   assert.deepEqual(webTask.blocked_by, [apiTask.id]);
   assert.match(webTask.requirement, /已确认方案/,
     "子任务直接复用人工检视过的 Chain 正文，不再理解一套新需求");
+  assert.equal(apiTask.title, "跨仓订单状态交付 · api");
+  assert.equal(webTask.title, "跨仓订单状态交付 · web");
 
   // 可重入:部分仓已有 task_id 时重跑,不许重复建任务(第 N 个仓
   // create 抛错/中途重启后的重试路径)。

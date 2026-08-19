@@ -16,6 +16,7 @@ export function LaunchWorkspace({
   onClose: () => void;
 }) {
   const [requirement, setRequirement] = useState("");
+  const [title, setTitle] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [optionsLoading, setOptionsLoading] = useState(true);
@@ -64,7 +65,7 @@ export function LaunchWorkspace({
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (!requirement.trim() || submitting || blocked) return;
+    if (!title.trim() || !requirement.trim() || submitting || blocked) return;
     setSubmitting(true);
     setError("");
     try {
@@ -72,6 +73,7 @@ export function LaunchWorkspace({
         requirement.trim(),
         session.username,   // 归属人=本人;管理员不发起任务(入口已隐藏)
         {
+          title: title.trim(),
           repo: repos[0]?.trim() || undefined,
           repos: repos.map((item) => item.trim()).filter(Boolean),
           // select 虽然会视觉显示第一项，但用户没手动切换时 state 仍是
@@ -156,17 +158,27 @@ export function LaunchWorkspace({
 
             <form className="composer launch-composer" onSubmit={submit}>
               <section className="launch-form-section launch-requirement-section">
-                <div className="launch-section-head"><i>01</i><div><strong>交付目标</strong><small>用结果和验收标准描述任务</small></div><em>必填</em></div>
+                <div className="launch-section-head"><i>01</i><div><strong>任务与需求</strong><small>名称用于快速识别，需求文档完整交给 Agent</small></div><em>必填</em></div>
+                <label className="account-field launch-title-field">
+                  <span>任务名称</span>
+                  <input type="text" value={title} maxLength={80}
+                    onChange={(event) => setTitle(event.target.value)}
+                    placeholder="例如：修复通知模板变量缺失"
+                    autoFocus required />
+                  <small>用于任务卡、通知和团队总览，不会替代需求文档</small>
+                </label>
                 <label className="requirement-field">
-                  <span>任务需求</span>
+                  <span>需求文档</span>
                   <textarea
                     value={requirement}
                     onChange={(event) => setRequirement(event.target.value)}
-                    placeholder="例如：交付 REQ2026xxxx，修复通知模板变量缺失问题并补齐单元测试"
-                    rows={5}
-                    autoFocus
+                    placeholder="粘贴完整需求说明、背景、范围和验收标准；支持 Markdown"
+                    rows={10}
                     required
                   />
+                  <small>{requirement
+                    ? `${requirement.split(/\r?\n/).length} 行 · ${requirement.length} 字符，原文将完整保留`
+                    : "这里是 Agent 实际接收的完整原文，不会被截成标题"}</small>
                 </label>
               </section>
 

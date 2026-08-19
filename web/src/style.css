@@ -891,7 +891,11 @@ svg {
   border-radius: 999px; background: var(--attention-soft); font-size: 8.5px;
   font-style: normal; font-weight: 700;
 }
-.launch-requirement-section textarea { min-height: 132px; resize: vertical; font-size: 12.5px; }
+.launch-requirement-section { gap: 16px; }
+.launch-title-field { max-width: 680px; }
+.launch-title-field small,
+.requirement-field > small { color: var(--faint); font-size: 10px; line-height: 1.5; }
+.launch-requirement-section textarea { min-height: 260px; resize: vertical; font-size: 12.5px; line-height: 1.65; }
 .launch-field-grid { margin-top: 12px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .launch-settings-grid { margin-top: 0; }
 .composer-actions {
@@ -1147,6 +1151,11 @@ svg {
   font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   font-size: 10.5px;
   letter-spacing: .01em;
+}
+.task-ticket {
+  color: var(--accent);
+  font: 750 10.5px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  letter-spacing: .02em;
 }
 .task-created {
   margin-left: auto;
@@ -2686,6 +2695,11 @@ pre {
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   font-size: .76rem; color: var(--text-muted);
 }
+.ws-business-id {
+  color: var(--accent);
+  font: 750 10px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  letter-spacing: .04em;
+}
 .ws-identity strong {
   font-size: .95rem; font-weight: 600; line-height: 1.4;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -2976,6 +2990,20 @@ pre {
 .ws-doc .md-table { margin: 14px 0; font-size: 12px; }
 .ws-doc .md-table th, .ws-doc .md-table td { padding: 7px 9px; }
 .ws-doc > .requirement-graph { width: min(900px, 100%); margin: 0 auto; }
+.requirement-source { width: min(860px, 100%); margin: 0 auto; }
+.requirement-source-label {
+  margin-bottom: 18px;
+  padding-bottom: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+}
+.requirement-source-label span { color: var(--text-strong); font-weight: 700; }
+.requirement-source-label small { color: var(--faint); }
 .ws-diff {
   width: min(1040px, 100%);
   max-height: none;

@@ -449,6 +449,8 @@ export function createTaskServer(
       }
       if (request.method === "POST" && url.pathname === "/tasks") {
         const body = await readBody(request);
+        const title = body.title === undefined
+          ? undefined : String(body.title).trim() || undefined;
         const requirement = String(body.requirement ?? "").trim();
         if (!requirement) {
           return json(response, 400, { error: "requirement 不能为空" });
@@ -506,7 +508,7 @@ export function createTaskServer(
         }
         try {
           return json(response, 201, service.create(requirement,
-            { account, repo, repos, lane, ticket, baseline, model, repairRounds }));
+            { title, account, repo, repos, lane, ticket, baseline, model, repairRounds }));
         } catch (error) {
           return json(response, 400, { error: String(error) });
         }

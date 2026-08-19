@@ -282,6 +282,8 @@ export interface TaskSummary {
   luban_account?: string;
   repo_url?: string;
   repositories?: string[];
+  /** 业务需求/问题单号；与平台内部 task-xx 分开显示。 */
+  ticket?: string;
   requirement_graph?: {
     stage: "analysis" | "confirmed";
     repositories: Array<{
@@ -398,6 +400,7 @@ export async function createTask(
   requirement: string,
   account?: string,
   extras?: {
+    title?: string;
     repo?: string;
     repos?: string[];
     lane?: string;
@@ -411,6 +414,7 @@ export async function createTask(
     method: "POST",
     body: JSON.stringify({
       requirement,
+      title: extras?.title?.trim() || undefined,
       account: account || undefined,
       repo: extras?.repo || undefined,
       repos: extras?.repos?.length ? extras.repos : undefined,

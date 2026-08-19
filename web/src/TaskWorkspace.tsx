@@ -70,7 +70,8 @@ export function TaskWorkspace({
   const [items, setItems] = useState<ArtifactMeta[]>();
   const [unavailable, setUnavailable] = useState("");
   const [active, setActive] = useState("");
-  const [materialView, setMaterialView] = useState<"doc" | "chain" | "diff">("doc");
+  const [materialView, setMaterialView] =
+    useState<"source" | "doc" | "chain" | "diff">("doc");
   const [content, setContent] = useState("");
   const [branch, setBranch] = useState("");
   const [loading, setLoading] = useState(false);
@@ -244,7 +245,9 @@ export function TaskWorkspace({
   const documents = items?.filter((item) => item.kind === "doc") ?? [];
   const changes = items?.filter((item) => item.kind === "diff") ?? [];
   const hasRequirementGraph = (task.requirement_graph?.repositories.length ?? 0) > 1;
-  const materialHeading = materialView === "chain"
+  const materialHeading = materialView === "source"
+    ? { kicker: "REQUEST SOURCE", title: "需求原文" }
+    : materialView === "chain"
     ? { kicker: "CHAIN OVERVIEW", title: "仓间依赖" }
     : materialView === "diff"
       ? { kicker: "WORKTREE CHANGES", title: "工作区变更" }
@@ -284,13 +287,14 @@ export function TaskWorkspace({
         </button>
         <div className="ws-identity">
           <div className="ws-identity-line">
-            <code>{task.id}</code>
+            {task.ticket && <span className="ws-business-id">{task.ticket}</span>}
+            <code title="平台内部编号">{task.id}</code>
             <span className={`pill ${task.status}`}>
               <i aria-hidden />{statusText(task)}
             </span>
             <WaitBadge task={task} personal={canOperate} />
           </div>
-          <strong id="task-workspace-title">{task.requirement}</strong>
+          <strong id="task-workspace-title">{task.title ?? task.requirement}</strong>
         </div>
         {controllable && (
           <div className="ws-head-controls" aria-label="任务控制">
@@ -351,6 +355,10 @@ export function TaskWorkspace({
               <strong>{materialHeading.title}</strong>
             </div>
             <div className="ws-source-switch" aria-label="材料类型">
+              <button className={materialView === "source" ? "on" : ""}
+                onClick={() => setMaterialView("source")}>
+                <span>需求原文</span><i>原始</i>
+              </button>
               <button className={materialView === "doc" ? "on" : ""}
                 onClick={() => { setMaterialView("doc"); if (documents[0]) setActive(documents[0].name); }}>
                 <span>过程文档</span><i>{documents.length}</i>
@@ -375,7 +383,15 @@ export function TaskWorkspace({
             </div>
           )}
           <div className="ws-doc">
-            {materialView === "chain" ? (
+            {materialView === "source" ? (
+              <article className="requirement-source">
+                <div className="requirement-source-label">
+                  <span>用户提交的完整内容</span>
+                  <small>{task.requirement.split(/\r?\n/).length} 行 · {task.requirement.length} 字符</small>
+                </div>
+                <Markdown text={task.requirement} />
+              </article>
+            ) : materialView === "chain" ? (
               <RequirementGraph task={task} onOpenTask={onOpenTask}
               />
             ) : <>

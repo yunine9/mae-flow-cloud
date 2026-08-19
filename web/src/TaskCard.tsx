@@ -78,7 +78,8 @@ export function TaskCard({
         <span className="task-status-rail" aria-hidden />
         <span className="task-summary-body">
           <span className="task-overline">
-            <span className="task-id">{task.id}</span>
+            {task.ticket && <span className="task-ticket">{task.ticket}</span>}
+            <span className="task-id" title="平台内部编号">{task.id}</span>
             <span className={`pill ${task.status}${decisionMode === "signal" && task.status === "waiting_for_human" ? " team-signal" : ""}`}>
               <i aria-hidden />
               {decisionMode === "signal" && task.status === "waiting_for_human"

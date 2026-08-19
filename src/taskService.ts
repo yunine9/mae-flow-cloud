@@ -1062,6 +1062,8 @@ export class TaskService {
   create(
     requirement: string,
     options: {
+      /** 用户明确填写的任务名称：只用于列表/通知/搜索，不替代需求原文。 */
+      title?: string;
       account?: string;
       repo?: string;
       repos?: string[];
@@ -1078,6 +1080,10 @@ export class TaskService {
       blockedBy?: string[];
     } = {},
   ): TaskSummary {
+    const explicitTitle = options.title?.trim().replace(/\s+/g, " ") || undefined;
+    if (explicitTitle && explicitTitle.length > 80) {
+      throw new Error("任务名称不能超过 80 个字符");
+    }
     // 交付方式:选项是内核的领地,现读它的 flow.json 校验
     // (2026-08-18 修正:此前 TS 侧自造"快速/慢速",与内核的
     // full/hotfix/tweak/review 对不上,预选永远匹配不上内核举的卡,
@@ -1162,7 +1168,9 @@ export class TaskService {
     mkdirSync(workspace, { recursive: true });
     const summary: TaskSummary = {
       id,
-      title: taskTitle(requirement),
+      // 旧调用方/历史兼容仍可从首行生成；产品下单界面会明确收任务名称，
+      // 不再让用户输入的长需求文档悄悄承担标题职责。
+      title: explicitTitle ?? taskTitle(requirement),
       requirement,
       status: "queued",
       created_at: new Date().toISOString(),
@@ -1466,6 +1474,8 @@ export class TaskService {
         artifact?.content ?? "",
       ].filter(Boolean).join("\n\n");
       const child = this.create(requirement, {
+        title: taskTitle(
+          `${task.summary.title ?? taskTitle(task.summary.requirement)} · ${repository.name}`),
         account: task.summary.luban_account,
         repo: repository.url,
         lane: task.summary.lane,
@@ -2316,7 +2326,8 @@ export class TaskService {
         repo: task.summary.repo_url ?? this.effectiveDefaultRepo(),
         source_branch: branch,
         target_branch: baseline,
-        title: `${state?.config?.["单号"] ?? branch}: ${task.summary.requirement.slice(0, 60)}`,
+        title: `${state?.config?.["单号"] ?? branch}: ${
+          task.summary.title ?? taskTitle(task.summary.requirement)}`,
         // E2E 单号关联(内网诉求 2026-08-19):单号只拼进 title 平台看
         // 不见,要走 codehub-cli 的 --e2e-issues 才可追踪。取值优先
         // **用户下单填的需求号**(用户拍板"直接关联开始填入的那个"),
