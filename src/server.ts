@@ -522,6 +522,18 @@ export function createTaskServer(
           });
           return json(response, 200, task);
         }
+        // 多仓需求图的结构化确认:平台自己的按钮,不依赖模型把
+        // 「确认并生成任务」的选项原文写对(魔法字符串漂了会静默丢单,
+        // 车道双问同款教训)。幂等:已生成的仓不重复建。
+        if (request.method === "POST" && parts[2] === "graph"
+            && parts[3] === "confirm") {
+          const target = service.get(id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          if (!canOperate(viewer, target.luban_account, !!options.auth)) {
+            return json(response, 403, { error: "只能处理分配给自己的任务" });
+          }
+          return json(response, 200, service.confirmRequirementGraph(id));
+        }
         // Committer 检视必须由该单责任人主动发起。管理员只维护名单，
         // 即使拥有其他操作兜底权，也不能替开发点击邀请。
         if (request.method === "POST" && parts[2] === "review-request") {

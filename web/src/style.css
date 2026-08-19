@@ -948,6 +948,13 @@ svg {
 .requirement-edges strong { color: var(--text); font-weight: 650; }
 .requirement-edges small { padding-left: 6px; border-left: 1px solid var(--line); color: var(--muted); }
 .requirement-graph-note { margin: 9px 0 0; color: var(--muted); font-size: 10px; line-height: 1.55; }
+.requirement-graph-confirm { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); display: grid; gap: 8px; justify-items: start; }
+.requirement-graph-confirm button {
+  padding: 8px 14px; color: #fff; border: none; border-radius: 8px;
+  background: var(--accent); font-size: 11px; font-weight: 650; cursor: pointer;
+}
+.requirement-graph-confirm button:disabled { opacity: .55; cursor: not-allowed; }
+.requirement-graph-error { margin: 0; color: var(--danger, #c0392b); font-size: 10.5px; }
 .task-graph-summary, .task-dependency-wait { display: inline-flex; align-items: center; gap: 6px; width: max-content; margin-top: 5px; padding: 4px 7px; border-radius: 6px; color: var(--muted); background: var(--surface-soft); font-size: 8.5px; }
 .task-graph-summary b { color: var(--accent); }
 .task-dependency-wait { color: #d59a3c; }

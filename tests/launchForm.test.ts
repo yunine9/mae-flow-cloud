@@ -260,6 +260,51 @@ test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队
   assert.deepEqual(webTask.blocked_by, [apiTask.id]);
   assert.match(webTask.requirement, /已确认方案/,
     "子任务直接复用人工检视过的 Chain 正文，不再理解一套新需求");
+
+  // 可重入:部分仓已有 task_id 时重跑,不许重复建任务(第 N 个仓
+  // create 抛错/中途重启后的重试路径)。
+  const before = service.list().length;
+  (service as any).createRepositoryDeliveries(state);
+  assert.equal(service.list().length, before, "重复确认不许再生任务");
+
+  // 结构化确认入口:平台按钮直达,不依赖模型把选项原文写对;
+  // 非分析单调用要如实拒绝。
+  assert.equal(service.confirmRequirementGraph(parent.id).requirement_graph
+    ?.repositories.every((repository) => repository.task_id), true);
+  assert.throws(() => service.confirmRequirementGraph(apiTask.id),
+    /不是多仓需求分析单/);
+});
+
+test("前置死透不许无限等:取消→子任务如实 failed;失败→留队说明", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-lf-chain-dep-"));
+  const service = new TaskService({
+    dataDir, provider: "a", model: "a-1", maxConcurrent: 0,
+    modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
+    host: { kernelRoot: "/tmp" },
+  });
+  const parent = service.create("前置任务", {
+    repos: ["https://codehub/team/api.git"], ticket: "REQ-D1",
+  });
+  const child = service.create("后置任务", {
+    repos: ["https://codehub/team/web.git"], ticket: "REQ-D1",
+    parentTaskId: "task-0", blockedBy: [parent.id],
+  } as any);
+  // maxConcurrent 0:两单都停在队列里,泵只做依赖清账不真启动。
+  const parentState = (service as any).tasks.get(parent.id);
+  parentState.summary.status = "failed";
+  await (service as any).pump();
+  assert.equal(service.get(child.id)!.status, "queued",
+    "前置失败还有救(可重试),子任务留队");
+  assert.match(service.get(child.id)!.detail ?? "", /前置任务.*失败/,
+    "但必须把话写在明面上,不许静默蹲着");
+
+  parentState.summary.status = "queued";
+  await service.cancel(parent.id, "tester");
+  // cancel 内部已触发泵(fire-and-forget),等它跑完。
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(service.get(child.id)!.status, "failed",
+    "前置取消是终态,等它=永远等——子任务必须如实 failed");
+  assert.match(service.get(child.id)!.detail ?? "", /已取消或不存在/);
 });
 
 test("假小鲁班不索个人令牌;部署切真端点后要求立刻恢复", () => {

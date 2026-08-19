@@ -332,7 +332,8 @@ export function TaskWorkspace({
         </div>
       )}
 
-      <RequirementGraph task={task} onOpenTask={onOpenTask} />
+      <RequirementGraph task={task} onOpenTask={onOpenTask}
+        onConfirmed={onChanged} />
 
       <div className={`ws-body${waiting ? " has-decision" : ""}`}>
         <section className="ws-evidence" aria-label="待检视材料">

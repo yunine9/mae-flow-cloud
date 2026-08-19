@@ -208,6 +208,17 @@ export async function putCommitter(
   return response.json();
 }
 
+/** 多仓需求图的结构化确认:平台按钮直达,不依赖模型把「确认并生成
+ * 任务」的选项原文写对。幂等,已生成的仓不重复建。 */
+export async function confirmRequirementGraph(
+  taskId: string,
+): Promise<TaskSummary> {
+  const response = await fetch(
+    `/tasks/${encodeURIComponent(taskId)}/graph/confirm`, { method: "POST" });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
 export async function requestCommitterReview(
   taskId: string,
   committer: string,

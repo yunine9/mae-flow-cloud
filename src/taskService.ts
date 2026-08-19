@@ -1384,14 +1384,20 @@ export class TaskService {
     return { ...task.summary };
   }
 
-  /** 人工确认 Chain 产物后，把图上的节点落成现有普通任务。 */
-  private createRepositoryDeliveries(task: TaskState): void {
+  /** 需求图体检(只验不建):图齐不齐、依赖合不合法、有没有环。
+   * 单独成函数的原因是 decide() 的顺序纪律——校验必须在决定落袋
+   * (humanGate.resolve 的乐观锁)之前,建任务必须在之后;原来两件事
+   * 挤在一个函数里,版本冲突 409 时子任务已经先落地了。 */
+  private requirementGraphPlan(task: TaskState): {
+    graph: RequirementGraph;
+    order: string[];
+    incoming: Map<string, string[]>;
+  } {
     this.refreshRequirementGraph(task);
     const graph = task.summary.requirement_graph;
     if (!graph || graph.repositories.length !== task.summary.repositories?.length) {
       throw new NotFoundError("需求图尚未生成完整，请先让 Agent 补齐分析产物");
     }
-    if (graph.repositories.every((repository) => repository.task_id)) return;
     const ids = new Set(graph.repositories.map((repository) => repository.id));
     const incoming = new Map<string, string[]>();
     for (const id of ids) incoming.set(id, []);
@@ -1409,13 +1415,27 @@ export class TaskService {
       if (!ready.length) throw new NotFoundError("仓库依赖存在循环，不能生成任务");
       ready.forEach((id) => { remaining.delete(id); order.push(id); });
     }
+    return { graph, order, incoming };
+  }
+
+  /** 人工确认 Chain 产物后，把图上的节点落成现有普通任务。
+   * 可重入:已有 task_id 的仓跳过(第 N 个仓 create 抛错或中途重启后
+   * 重试,不许把前面的仓再建一遍);每建一个就 persist——task_id 只写
+   * 内存的话,重启即失忆,重试必出重复任务。 */
+  private createRepositoryDeliveries(task: TaskState): void {
+    const { graph, order, incoming } = this.requirementGraphPlan(task);
+    if (graph.repositories.every((repository) => repository.task_id)) return;
     const artifact = task.cwd
       ? readArtifact(task.cwd,
           `${task.summary.ticket ?? task.summary.id}/CHAIN-${task.summary.ticket ?? task.summary.id}.md`)
       : undefined;
     const taskIds = new Map<string, string>();
+    for (const repository of graph.repositories) {
+      if (repository.task_id) taskIds.set(repository.id, repository.task_id);
+    }
     for (const id of order) {
       const repository = graph.repositories.find((item) => item.id === id)!;
+      if (repository.task_id) continue;
       const blockers = (incoming.get(id) ?? [])
         .map((parent) => taskIds.get(parent)).filter(Boolean) as string[];
       const requirement = [
@@ -1438,10 +1458,26 @@ export class TaskService {
       });
       repository.task_id = child.id;
       taskIds.set(id, child.id);
+      this.persist(task);
     }
     graph.stage = "confirmed";
     task.summary.detail = `需求方案已确认，已生成 ${order.length} 个仓库交付任务`;
     this.persist(task);
+  }
+
+  /** 平台自己的确认入口(结构化,不靠模型把「确认并生成任务」八个字
+   * 写对):需求图面板的确认按钮走这里。decide() 里的字符串匹配保留,
+   * 是给"模型恰好写对了选项原文"的顺路便车;这条路才是兜底的正门——
+   * 选项文字漂了、或分析会话已经收尾,都还能从面板把任务生出来。 */
+  confirmRequirementGraph(id: string): TaskSummary {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    if (!this.isRequirementAnalysis(task)) {
+      throw new NotFoundError("该任务不是多仓需求分析单,没有需求图可确认");
+    }
+    this.createRepositoryDeliveries(task);
+    this.bypass(undefined, "任务泵", this.pump());
+    return { ...task.summary };
   }
 
   /** Web 决定:先到生效;冲突抛 StateConflictError 由 API 层变 409。
@@ -1470,11 +1506,15 @@ export class TaskService {
     if (!decision.trim()) {
       throw new NotFoundError("决定不能为空:给 decision 或 answers");
     }
-    if (this.isRequirementAnalysis(task)
-        && Object.values(answers).concat(decision).some((answer) =>
-          answer.includes("确认并生成任务"))) {
-      this.createRepositoryDeliveries(task);
-    }
+    // 多仓确认的顺序纪律:图的体检放在决定落袋**之前**(图不完整就报
+    // 错,决定不消费,agent 继续等,用户看得到原因);建任务放在落袋
+    // **之后**(乐观锁 409 时不许先把子任务生出来)。字符串匹配只是
+    // "模型把选项原文写对了"的顺路便车,正门是需求图面板的确认按钮
+    // (confirmRequirementGraph)——选项文字漂了也不丢单。
+    const confirmingGraph = this.isRequirementAnalysis(task)
+      && Object.values(answers).concat(decision).some((answer) =>
+        answer.includes("确认并生成任务"));
+    if (confirmingGraph) this.requirementGraphPlan(task);
     this.warnOffMenuAnswer(task, waiting, Object.keys(answers).length
       ? Object.values(answers) : [decision]);
     // 批注进 notes 而不是 decision:内核按选项标签给这次选择记账
@@ -1495,6 +1535,19 @@ export class TaskService {
     // 决定已经落袋(waiting.json 写完),批注才算送出去。
     if (picked.length) {
       this.annotations(task).markSent(picked.map((item) => item.id), "decision");
+    }
+    // 决定生效之后才生子任务(体检在落袋前做过,这里不会因图不齐半途
+    // 而废)。建任务失败不回滚决定——决定是用户的事实;失败原因写进
+    // detail,面板确认按钮随时可重试(可重入)。
+    if (confirmingGraph) {
+      try {
+        this.createRepositoryDeliveries(task);
+      } catch (cause) {
+        task.summary.detail =
+          `确认已收到,但生成仓库任务失败:${String(cause)}。`
+          + "可在需求图面板重试「确认并生成任务」";
+        this.options.log?.(`任务 ${id} 生成仓库交付失败: ${String(cause)}`);
+      }
     }
     task.summary.waiting = undefined;
     if (task.driver) {
@@ -1652,6 +1705,9 @@ export class TaskService {
       container?.stop() ?? Promise.resolve(),
     ]);
     driver?.dispose();
+    // 等它的任务不许无限等(取消是终态):立刻跑一遍泵,把 blocked_by
+    // 指向本单的排队任务如实清账,而不是等下一次碰巧有人触发泵。
+    this.bypass(undefined, "任务泵", this.pump());
     return { ...task.summary };
   }
 
@@ -1695,6 +1751,39 @@ export class TaskService {
   private async pump(): Promise<void> {
     const max = this.options.settings?.runtime().max_concurrent
       ?? this.options.maxConcurrent ?? 2;
+    // 前置死透的排队任务先清账,不许无限等(哪怕队列里还有别的活可干,
+    // 也不能让它静默蹲着):
+    // - 前置**已取消**是用户意志的终态,等它=永远等——本任务如实
+    //   failed,说明白是替谁陪葬;
+    // - 前置**失败**还有救(可重试),继续排队但把话写在 detail 上,
+    //   人知道该去修谁或者干脆取消本单。
+    for (const queued of [...this.queue]) {
+      const candidate = this.tasks.get(queued);
+      if (!candidate?.summary.blocked_by?.length) continue;
+      const gone = candidate.summary.blocked_by.filter((dependency) => {
+        const status = this.tasks.get(dependency)?.summary.status;
+        // 不存在的前置和取消一样是死透:没人能把它变回 completed。
+        return status === "canceled" || status === undefined;
+      });
+      if (gone.length) {
+        this.queue.splice(this.queue.indexOf(queued), 1);
+        candidate.summary.status = "failed";
+        candidate.summary.detail =
+          `前置任务 ${gone.join("、")} 已取消或不存在,本任务不会启动`;
+        this.persist(candidate);
+        continue;
+      }
+      const stuck = candidate.summary.blocked_by.filter((dependency) =>
+        this.tasks.get(dependency)?.summary.status === "failed");
+      if (stuck.length) {
+        const detail = `前置任务 ${stuck.join("、")} 失败,`
+          + "重试它后本任务自动启动;不打算修就取消本任务";
+        if (candidate.summary.detail !== detail) {
+          candidate.summary.detail = detail;
+          this.persist(candidate);
+        }
+      }
+    }
     while (this.runningCount < max && this.queue.length) {
       const readyIndex = this.queue.findIndex((queued) => {
         const candidate = this.tasks.get(queued);
@@ -1708,8 +1797,12 @@ export class TaskService {
           if (!candidate?.summary.blocked_by?.length) continue;
           const waiting = candidate.summary.blocked_by.filter((dependency) =>
             this.tasks.get(dependency)?.summary.status !== "completed");
-          candidate.summary.detail = `等待前置任务 ${waiting.join("、")} 完成`;
-          this.persist(candidate);
+          const detail = `等待前置任务 ${waiting.join("、")} 完成`;
+          if (candidate.summary.detail !== detail
+              && !candidate.summary.detail?.startsWith("前置任务")) {
+            candidate.summary.detail = detail;
+            this.persist(candidate);
+          }
         }
         break;
       }
