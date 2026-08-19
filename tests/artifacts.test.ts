@@ -123,6 +123,54 @@ test("未提交改动:已暂存/未暂存/未跟踪都在快照里", () => {
   assert.match(String(snapshot?.content), /没跟踪的新文件/);
 });
 
+test("Mae-Flow 流程状态不混入代码差异,普通未跟踪文件仍展示", () => {
+  const cwd = makeSite({ git: true });
+  writeFileSync(join(cwd, "feature.ts"), "export const ready = true;\n");
+  writeFileSync(join(cwd, ".mae-flow.json"), "{\"current\":\"build\"}\n");
+  writeFileSync(join(cwd, ".mae-flow.json.agent-writes"), "{}\n");
+  writeFileSync(join(cwd, ".mae-flow-history.jsonl"), "{}\n");
+  writeFileSync(join(cwd, ".mae-flow-need-reload"), "1\n");
+  mkdirSync(join(cwd, ".mae-flow-work", "REQ1"), { recursive: true });
+  writeFileSync(join(cwd, ".mae-flow-work", "REQ1", "story.md"), "过程件\n");
+  mkdirSync(join(cwd, ".codecheckcli"), { recursive: true });
+  writeFileSync(join(cwd, ".codecheckcli", "result.json"), "{}\n");
+
+  const content = String(readArtifact(cwd, DIFF_NAME)?.content);
+  assert.match(content, /feature\.ts/);
+  assert.match(content, /ready = true/);
+  assert.doesNotMatch(content, /\.mae-flow/);
+  assert.doesNotMatch(content, /\.codecheckcli/);
+});
+
+test("误暂存的流程状态也不进入代码差异", () => {
+  const cwd = makeSite({ git: true });
+  writeFileSync(join(cwd, "business.txt"), "业务改动\n");
+  writeFileSync(join(cwd, ".mae-flow.json.last"), "{\"current\":\"end\"}\n");
+  execFileSync("git", ["-C", cwd, "add", "business.txt", ".mae-flow.json.last"]);
+
+  const content = String(readArtifact(cwd, DIFF_NAME)?.content);
+  assert.match(content, /business\.txt/);
+  assert.doesNotMatch(content, /\.mae-flow\.json\.last/);
+});
+
+test("任务基线后的误提交流程状态也不进入代码差异", () => {
+  const cwd = makeSite({ git: true });
+  const baseline = execFileSync("git", ["-C", cwd, "rev-parse", "HEAD"],
+    { encoding: "utf-8" }).trim();
+  writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify({
+    step_heads: { branch_create: baseline },
+  }));
+  writeFileSync(join(cwd, "delivered.ts"), "export const result = 1;\n");
+  writeFileSync(join(cwd, ".mae-flow.json.last"), "{\"current\":\"end\"}\n");
+  execFileSync("git", ["-C", cwd, "add", "delivered.ts", ".mae-flow.json.last"]);
+  execFileSync("git", ["-C", cwd, "commit", "--quiet", "-m", "task result"]);
+
+  const content = String(readArtifact(cwd, DIFF_NAME)?.content);
+  assert.match(content, /已提交\(committed\)/);
+  assert.match(content, /delivered\.ts/);
+  assert.doesNotMatch(content, /\.mae-flow\.json\.last/);
+});
+
 test("变更快照包含完整文件上下文,前端才能默认折叠后按需展开", () => {
   const cwd = makeSite({ git: true });
   const original = Array.from({ length: 30 }, (_, index) => `第 ${index + 1} 行`);
