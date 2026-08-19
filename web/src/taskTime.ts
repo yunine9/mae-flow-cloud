@@ -4,17 +4,31 @@
  * 前端只做呈现,不推断状态。
  */
 
-import type { TaskSummary } from "./api";
+type WaitableTask = {
+  status: string;
+  waiting?: { created_at?: string } | null;
+  created_at: string;
+};
 
 /** 超过这个分钟数视为久等:徽章升级为红色,排序也靠它。 */
 export const URGENT_MINUTES = 30;
 
+/** 旧版 HumanGate 写的是 UTC 时钟，但错误地保存成无时区
+ * `YYYY-MM-DD HH:mm:ss`。这类历史值必须补回 Z；标准 ISO 和真正带
+ * 偏移量的时间保持原样。 */
+export function waitingTimestamp(iso: string): number {
+  const legacyUtc = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(iso)
+    ? `${iso.replace(" ", "T")}Z`
+    : iso;
+  return new Date(legacyUtc).getTime();
+}
+
 /** 等待中的任务已等毫秒数;不在等待或没有时间戳返回 -1。 */
-export function waitedMs(task: TaskSummary): number {
+export function waitedMs(task: WaitableTask): number {
   if (task.status !== "waiting_for_human") return -1;
   const iso = task.waiting?.created_at;
   if (!iso) return -1;
-  const started = new Date(iso).getTime();
+  const started = waitingTimestamp(iso);
   if (Number.isNaN(started)) return -1;
   return Math.max(0, Date.now() - started);
 }
@@ -31,7 +45,7 @@ export function formatWait(ms: number): string {
 
 /** 排序:等人的排最前(等最久的第一),其余按创建时间倒序。
  * "谁在等我、等了多久"是这块屏幕最该先回答的问题。 */
-export function byUrgency(a: TaskSummary, b: TaskSummary): number {
+export function byUrgency(a: WaitableTask, b: WaitableTask): number {
   const left = waitedMs(a);
   const right = waitedMs(b);
   if (left >= 0 && right >= 0) return right - left;

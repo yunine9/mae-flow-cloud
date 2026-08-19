@@ -339,10 +339,18 @@ test("Committer 检视:管理员只配名单,仅任务责任人主动邀请后�
   auth.setLubanToken("alice", "luban-alice");
   const luban = new FakeLubanServer();
   await luban.start();
+  const tokenLookups: string[] = [];
   const service = new TaskService({
     dataDir: join(dir, "tasks"), provider: "test", model: "test",
     modelsJson: {}, maxConcurrent: 0,
-    notifier: new Notifier({ endpoint: luban.endpoint, backoffMs: [0] }),
+    notifier: new Notifier({
+      endpoint: luban.endpoint,
+      backoffMs: [0],
+      personalToken: (account) => {
+        tokenLookups.push(account);
+        return auth.lubanToken(account);
+      },
+    }),
     linkBase: "http://mae-flow.internal",
   });
   const server = createTaskServer(service, { auth });
@@ -419,6 +427,8 @@ test("Committer 检视:管理员只配名单,仅任务责任人主动邀请后�
     assert.equal(review.status, "pending");
     assert.equal(luban.messages.length, 1);
     assert.equal(luban.messages[0].account, "bob");
+    assert.deepEqual(tokenLookups, ["alice"],
+      "用责任人的发送 Token 投给 Committer 工号，收件人无需配置 Token");
     assert.equal(luban.messages[0].text,
       `【Mae-Flow】任务 ${created.id} 邀请你检视：实现订单检索`);
     assert.equal(luban.messages[0].link,

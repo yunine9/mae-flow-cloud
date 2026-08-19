@@ -959,7 +959,7 @@ svg {
 .requirement-edges > div > span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
 .requirement-edges i { color: var(--accent); font-style: normal; }
 .requirement-edges strong { color: var(--text); font-weight: 650; }
-.requirement-edges small { min-width: 0; padding-left: 9px; overflow: hidden; border-left: 1px solid var(--line); color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+.requirement-edges small { min-width: 0; padding-left: 9px; border-left: 1px solid var(--line); color: var(--muted); line-height: 1.5; overflow-wrap: anywhere; white-space: normal; }
 .requirement-graph-note { margin: 8px 0 0; padding-top: 8px; border-top: 1px dashed var(--line); color: var(--muted); font-size: 9px; line-height: 1.5; }
 .task-chain-overview { display: grid; justify-items: start; gap: 5px; margin-top: 5px; }
 .task-graph-summary, .task-dependency-wait { display: inline-flex; align-items: center; gap: 6px; width: max-content; padding: 4px 7px; border-radius: 6px; color: var(--muted); background: var(--surface-soft); font-size: 8.5px; }

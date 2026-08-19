@@ -289,6 +289,7 @@ export interface TaskSummary {
     repositories: Array<{
       id: string; name: string; url: string; responsibility?: string; task_id?: string;
     }>;
+    /** `from 依赖 to`：from 等待 to，to 是前置仓库。 */
     dependencies: Array<{ from: string; to: string; reason?: string }>;
   };
   parent_task_id?: string;

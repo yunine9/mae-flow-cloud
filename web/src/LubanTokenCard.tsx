@@ -3,7 +3,7 @@
  *
  * 为什么按人配而不是服务级配一个:那个接口**以令牌对应的人的身份
  * 发消息**——服务号统一发,大家收到的都是同一个机器人;各人配自己
- * 的,就是自己发给自己,不必额外申请机器人账号(用户 2026-08-18 拍板)。
+ * 的,既能接收自己的任务提醒，也能主动通知所选 Committer。
  * 同样只写不读:输入框永远从空白开始,配没配只看服务端给的掩码。
  */
 
@@ -51,7 +51,7 @@ export function LubanTokenCard({
       </div>
       <span className="credential-state"><i aria-hidden />{hint ? "已配置" : "待配置"}</span>
     </header>
-    <p className="credential-summary">任务需要你确认、审批或处理异常时，及时发送消息提醒你。</p>
+    <p className="credential-summary">用于发送任务提醒：自己的待办发给自己，邀请检视时发给所选 Committer 工号。</p>
 
     <dl className="credential-facts single">
       <div><dt>小鲁班 Token</dt><dd>{hint ? <code>{hint}</code> : "未设置"}</dd></div>

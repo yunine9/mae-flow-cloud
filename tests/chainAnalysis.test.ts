@@ -54,7 +54,8 @@ test("跨仓分析会话:克隆只读现场→写产物→举卡→确认拆单�
       { id: "repo-2", name: "svc-web", url: webRepo, responsibility: "消费接口" },
     ],
     dependencies: [
-      { from: "repo-1", to: "repo-2", reason: "接口没就绪前端无从联调" },
+      { dependent: "repo-2", prerequisite: "repo-1",
+        reason: "svc-web 依赖 svc-api，接口没就绪前端无从联调" },
     ],
   });
   const artifactDir = join(".mae-flow-work", ticket);

@@ -258,7 +258,8 @@ export class LocalAuth {
    *
    * 为什么按人存而不是全服务配一个:那个接口是**以令牌对应的人的
    * 身份发消息**——用服务号统一发,所有人收到的都是同一个机器人;
-   * 每人配自己的,消息就是自己发给自己,不需要额外申请机器人账号
+   * 每人配自己的,普通提醒可自己发给自己,也能主动发给检视人,
+   * 不需要额外申请机器人账号
    * (用户 2026-08-18 拍板)。空串=删除。 */
   setLubanToken(username: string, token: string): void {
     const stored = this.users.get(username);
@@ -279,7 +280,7 @@ export class LocalAuth {
     return maskToken(this.users.get(username)?.luban_token);
   }
 
-  /** 消费口(唯一碰明文的出口):投递通知时按收件人取他自己的令牌。
+  /** 消费口(唯一碰明文的出口):投递通知时按发起人取发送令牌。
    * 停用账号不给——离职/停权的人不该继续以他的身份发消息。 */
   lubanToken(username: string | undefined): string | undefined {
     if (!username) return undefined;

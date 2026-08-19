@@ -255,6 +255,7 @@ test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队
       { id: "web", name: "web", url: "https://codehub/team/web.git",
         responsibility: "消费接口" },
     ],
+    // 历史产物的 from/to 是“api 先于 web”；升级后仍要读成 web 等 api。
     dependencies: [{ from: "api", to: "web", reason: "等待接口可用" }],
   }));
   state.cwd = root;

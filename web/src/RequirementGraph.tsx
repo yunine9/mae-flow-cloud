@@ -19,8 +19,8 @@ export function RequirementGraph({
   const stages: typeof graph.repositories[] = [];
   while (remaining.size) {
     const ready = graph.repositories.filter((repository) => remaining.has(repository.id)
-      && graph.dependencies.filter((edge) => edge.to === repository.id)
-        .every((edge) => !remaining.has(edge.from)));
+      && graph.dependencies.filter((edge) => edge.from === repository.id)
+        .every((edge) => !remaining.has(edge.to)));
     // Agent 产物若暂时成环，先如实放在同一阶段；确认时服务端会阻止落单。
     const current = ready.length ? ready
       : graph.repositories.filter((repository) => remaining.has(repository.id));
@@ -44,7 +44,7 @@ export function RequirementGraph({
           <small>{stage === 0 ? "可先行" : `第 ${stage + 1} 阶段`}</small>
           <div>
             {repositories.map((repository) => {
-              const parents = graph.dependencies.filter((edge) => edge.to === repository.id);
+              const parents = graph.dependencies.filter((edge) => edge.from === repository.id);
               return <article key={repository.id}
                 className={parents.length ? "has-prerequisite" : "ready"}
                 title={repository.url}>
@@ -56,7 +56,7 @@ export function RequirementGraph({
                 </div>
                 {repository.responsibility && <p>{repository.responsibility}</p>}
                 {parents.length > 0 && <span className="repo-prerequisite">
-                  等待 {parents.map((edge) => repoName(edge.from, task)).join("、")}
+                  等待 {parents.map((edge) => repoName(edge.to, task)).join("、")}
                 </span>}
               </article>;
             })}
@@ -65,7 +65,7 @@ export function RequirementGraph({
       </div>
       {graph.dependencies.length > 0 && <div className="requirement-edges">
         {graph.dependencies.map((edge, index) => <div key={`${edge.from}-${edge.to}-${index}`}>
-          <span><strong>{repoName(edge.from, task)}</strong><i>→</i>
+          <span><strong>{repoName(edge.from, task)}</strong><i>依赖</i>
             <strong>{repoName(edge.to, task)}</strong></span>
           {edge.reason && <small>{edge.reason}</small>}
         </div>)}

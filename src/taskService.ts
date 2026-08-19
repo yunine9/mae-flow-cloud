@@ -81,9 +81,35 @@ export interface RequirementRepository {
 }
 
 export interface RequirementDependency {
+  /** 依赖方。语义是 `from 依赖 to`，因此 from 必须等待 to。 */
   from: string;
+  /** 被依赖的前置仓库。 */
   to: string;
   reason?: string;
+}
+
+interface RawRequirementDependency {
+  /** 新格式：字段本身就说明方向。 */
+  dependent?: string;
+  prerequisite?: string;
+  /** 旧格式：历史约定是 from 先于 to，但早期模型偶尔会按自然语言写反。 */
+  from?: string;
+  to?: string;
+  reason?: string;
+}
+
+function dependencyStatement(
+  reason: string | undefined,
+  dependent: RequirementRepository | undefined,
+  prerequisite: RequirementRepository | undefined,
+): boolean {
+  if (!reason || !dependent || !prerequisite) return false;
+  const escaped = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const dependentNames = [...new Set([dependent.id, dependent.name])];
+  const prerequisiteNames = [...new Set([prerequisite.id, prerequisite.name])];
+  return dependentNames.some((left) => prerequisiteNames.some((right) =>
+    new RegExp(`${escaped(left)}.{0,32}(?:依赖|等待|晚于|后于).{0,32}${escaped(right)}`, "i")
+      .test(reason)));
 }
 
 /** 所有需求都是一张仓库交付图：单仓只是只有一个节点、没有边。 */
@@ -532,6 +558,7 @@ export class TaskService {
     });
     const result = await notifier.notifyReview({
       taskId: id,
+      senderAccount: requester,
       account: committer,
       summary: review.task_title,
       link: reviewTaskLink(this.options.linkBase, id, review.id),
@@ -663,7 +690,7 @@ export class TaskService {
     try {
       const parsed = JSON.parse(readFileSync(path, "utf-8")) as {
         repositories?: RequirementRepository[];
-        dependencies?: RequirementDependency[];
+        dependencies?: RawRequirementDependency[];
       };
       const expected = task.summary.repositories ?? [];
       const repositories = Array.isArray(parsed.repositories)
@@ -676,8 +703,24 @@ export class TaskService {
         : [];
       if (repositories.length !== expected.length) return;
       const ids = new Set(repositories.map((item) => item.id));
+      // 新产物使用 dependent/prerequisite 消除歧义。旧版契约原本是
+      // from 先于 to；若 reason 明确写了“A 依赖 B”，则以人工看到的
+      // 说明为准，兼容早期模型把旧字段按自然语言填写的任务。
       const dependencies = Array.isArray(parsed.dependencies)
-        ? parsed.dependencies.filter((edge) =>
+        ? parsed.dependencies.map((edge) => {
+            if (edge.dependent && edge.prerequisite) return {
+              from: edge.dependent, to: edge.prerequisite, reason: edge.reason,
+            };
+            const legacyFrom = edge.from ?? "";
+            const legacyTo = edge.to ?? "";
+            const fromRepository = repositories.find((item) => item.id === legacyFrom);
+            const toRepository = repositories.find((item) => item.id === legacyTo);
+            const reasonUsesNaturalDirection = dependencyStatement(
+              edge.reason, fromRepository, toRepository);
+            return reasonUsesNaturalDirection
+              ? { from: legacyFrom, to: legacyTo, reason: edge.reason }
+              : { from: legacyTo, to: legacyFrom, reason: edge.reason };
+          }).filter((edge) =>
             ids.has(edge.from) && ids.has(edge.to) && edge.from !== edge.to)
         : [];
       task.summary.requirement_graph = {
@@ -1427,23 +1470,24 @@ export class TaskService {
       throw new NotFoundError("跨仓方案正文尚未生成，请先让 Agent 补齐 Chain 文档");
     }
     const ids = new Set(graph.repositories.map((repository) => repository.id));
-    const incoming = new Map<string, string[]>();
-    for (const id of ids) incoming.set(id, []);
+    const prerequisites = new Map<string, string[]>();
+    for (const id of ids) prerequisites.set(id, []);
     for (const edge of graph.dependencies) {
       if (!ids.has(edge.from) || !ids.has(edge.to) || edge.from === edge.to) {
         throw new NotFoundError("需求图包含无效依赖，请让 Agent 修正后再确认");
       }
-      incoming.get(edge.to)!.push(edge.from);
+      // `from 依赖 to`：from 的前置项是 to。
+      prerequisites.get(edge.from)!.push(edge.to);
     }
     const remaining = new Set(ids);
     const order: string[] = [];
     while (remaining.size) {
       const ready = [...remaining].filter((id) =>
-        (incoming.get(id) ?? []).every((parent) => !remaining.has(parent)));
+        (prerequisites.get(id) ?? []).every((parent) => !remaining.has(parent)));
       if (!ready.length) throw new NotFoundError("仓库依赖存在循环，不能生成任务");
       ready.forEach((id) => { remaining.delete(id); order.push(id); });
     }
-    return { graph, order, incoming };
+    return { graph, order, incoming: prerequisites };
   }
 
   /** 人工确认 Chain 产物后，把图上的节点落成现有普通任务。
@@ -3475,10 +3519,13 @@ export class TaskService {
       `同时把机器可读投影写到 ${join(artifactDir, "requirement-graph.json")}，`
         + "格式严格为 "
         + `{"repositories":[{"id":"repo-1","name":"名称","url":"原始地址",`
-        + `"responsibility":"职责"}],"dependencies":[{"from":"repo-1",`
-        + `"to":"repo-2","reason":"为什么后者必须等待前者"}]}。`
+        + `"responsibility":"职责"}],"dependencies":[{`
+        + `"dependent":"repo-2","prerequisite":"repo-1",`
+        + `"reason":"为什么 dependent 必须等待 prerequisite"}]}。`
         + "repositories 必须覆盖上方全部仓库且 url 原样照录；"
-        + "只有确实不能并行的硬依赖才写 dependencies，禁止循环依赖。",
+        + "dependencies 的语义必须是 dependent 依赖 prerequisite，"
+        + "也就是 prerequisite 先开发、dependent 后开发；"
+        + "只有确实不能并行的硬依赖才写，禁止循环依赖。",
       "方案写完后必须调用 AskUserQuestion，请用户选择「需要修改」或"
         + "「确认并生成任务」。用户选择需要修改时，结合随决定提交的批注"
         + "继续修订同一份方案，再次发起检视；确认前不得收尾。",

@@ -402,8 +402,8 @@ async function main(): Promise<void> {
       endpoint: lubanEndpoint,
       headers: lubanHeaders,
       fake: lubanIsFake,
-      // 收件人自己的通知令牌:小鲁班以令牌对应的人的身份发消息,
-      // 每人配自己的=自己发给自己,不用申请机器人账号。
+      // 发起人的通知令牌:普通任务提醒是自己发给自己；主动邀请检视时，
+      // 用责任人的令牌向所选 Committer 工号发送，不要求收件人配令牌。
       personalToken: (account) => auth.lubanToken(account),
     }),
     projection,

@@ -45,7 +45,9 @@ interface Store {
 }
 
 function now(): string {
-  return new Date().toISOString().replace("T", " ").slice(0, 19);
+  // 必须保留 Z。旧实现把 UTC 的 T/Z 剥掉，浏览器会把它当成本地时间，
+  // 在东八区一张刚生成的卡会立刻显示“等你 8 小时”。
+  return new Date().toISOString();
 }
 
 export class HumanGate {

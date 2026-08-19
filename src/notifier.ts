@@ -38,8 +38,8 @@ export interface NotifierOptions {
   /** 运行时覆盖(管理页热改):每次投递现读,返回 endpoint/headers 的
    * 覆盖值,没有就回落静态配置。生效边界=下一条消息。 */
   live?: () => { endpoint?: string; headers?: Record<string, string> };
-  /** 收件人自己的通知令牌(小鲁班以令牌对应的人的身份发消息,所以
-   * 按人取,不是服务级配一个)。**只经请求头下发**——请求体会被外部
+  /** 发件人的通知令牌(小鲁班以令牌对应的人的身份发消息,所以
+   * 按发起人取,不是服务级配一个)。**只经请求头下发**——请求体会被外部
    * 动作台账原样记进投影,令牌进体等于把密钥写进数据库。 */
   personalToken?: (account: string) => string | undefined;
   /** 端点是假小鲁班(演示/试跑形态,serve 自己起的):假件收什么都行,
@@ -144,6 +144,7 @@ export class Notifier {
    * 每次点击都是一次明确动作，因此不跨点击幂等，并等待投递结果回给界面。 */
   async notifyReview(input: {
     taskId: string;
+    senderAccount: string;
     account: string;
     summary: string;
     link: string;
@@ -162,7 +163,7 @@ export class Notifier {
       last_error: "",
     };
     this.records.set(key, record);
-    await this.deliver(record);
+    await this.deliver(record, input.senderAccount);
     return record;
   }
 
@@ -197,14 +198,17 @@ export class Notifier {
     }
   }
 
-  private async deliver(record: NotifyRecord): Promise<void> {
+  private async deliver(
+    record: NotifyRecord,
+    tokenAccount = record.account,
+  ): Promise<void> {
     const backoff = this.options.backoffMs ?? [0, 2_000, 10_000];
     for (const delay of backoff) {
       if (delay) await new Promise((tick) => setTimeout(tick, delay));
       record.attempts += 1;
       try {
         const { endpoint, headers } = this.target();
-        const personal = this.options.personalToken?.(record.account);
+        const personal = this.options.personalToken?.(tokenAccount);
         const response = await fetch(endpoint, {
           method: "POST",
           headers: {

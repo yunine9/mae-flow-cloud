@@ -203,7 +203,8 @@ export function createTaskServer(
         }
         // 个人通知令牌(小鲁班):同样只写不读。按人存是因为那个接口
         // 以令牌对应的人的身份发消息——管理员配一个服务号,所有人收到
-        // 的都是同一个机器人;各人配自己的,就是自己发给自己。
+        // 的都是同一个机器人；各人配自己的，普通提醒发给自己，主动
+        // 邀请检视时则发给所选 Committer 工号。
         if (request.method === "PUT" && parts[1] === "me"
             && parts[2] === "luban-token") {
           if (!viewer) return json(response, 401, { error: "尚未登录" });
