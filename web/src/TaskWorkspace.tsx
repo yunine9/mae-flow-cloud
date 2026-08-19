@@ -70,6 +70,7 @@ export function TaskWorkspace({
   const [items, setItems] = useState<ArtifactMeta[]>();
   const [unavailable, setUnavailable] = useState("");
   const [active, setActive] = useState("");
+  const [materialView, setMaterialView] = useState<"doc" | "chain" | "diff">("doc");
   const [content, setContent] = useState("");
   const [branch, setBranch] = useState("");
   const [loading, setLoading] = useState(false);
@@ -91,6 +92,8 @@ export function TaskWorkspace({
     useState<"pause" | "resume" | "cancel" | "">("");
   const [controlError, setControlError] = useState("");
   const [cancelArmed, setCancelArmed] = useState(false);
+
+  useEffect(() => setMaterialView("doc"), [task.id]);
 
   useEffect(() => {
     if (!canRequestReview) return;
@@ -221,6 +224,8 @@ export function TaskWorkspace({
    * 等待有预算(2 秒封顶),找不到就算了——旁路不许把界面卡住。 */
   function locate(item: Annotation) {
     if (item.artifact !== active) setActive(item.artifact);
+    setMaterialView(items?.find((artifact) => artifact.name === item.artifact)
+      ?.kind === "diff" ? "diff" : "doc");
     let tries = 0;
     const seek = () => {
       const node = document.querySelector<HTMLElement>(
@@ -238,6 +243,12 @@ export function TaskWorkspace({
   const activeMeta = items?.find((item) => item.name === active);
   const documents = items?.filter((item) => item.kind === "doc") ?? [];
   const changes = items?.filter((item) => item.kind === "diff") ?? [];
+  const hasRequirementGraph = (task.requirement_graph?.repositories.length ?? 0) > 1;
+  const materialHeading = materialView === "chain"
+    ? { kicker: "CHAIN OVERVIEW", title: "仓间依赖" }
+    : materialView === "diff"
+      ? { kicker: "WORKTREE CHANGES", title: "工作区变更" }
+      : { kicker: "WORK DOCUMENTS", title: "过程文档" };
   const waiting = task.status === "waiting_for_human" && task.waiting;
   const controllable = canOperate && [
     "queued", "running", "pausing", "paused", "waiting_for_human", "verifying",
@@ -336,22 +347,25 @@ export function TaskWorkspace({
         <section className="ws-evidence" aria-label="待检视材料">
           <div className="ws-pane-head">
             <div>
-              <span>{activeMeta?.kind === "diff" ? "WORKTREE CHANGES" : "WORK DOCUMENTS"}</span>
-              <strong>{activeMeta?.kind === "diff" ? "工作区变更" : "过程文档"}</strong>
+              <span>{materialHeading.kicker}</span>
+              <strong>{materialHeading.title}</strong>
             </div>
-            <small>{items ? `${documents.length} 份文档 · ${changes.length} 组变更` : "读取中"}</small>
+            <div className="ws-source-switch" aria-label="材料类型">
+              <button className={materialView === "doc" ? "on" : ""}
+                onClick={() => { setMaterialView("doc"); if (documents[0]) setActive(documents[0].name); }}>
+                <span>过程文档</span><i>{documents.length}</i>
+              </button>
+              {hasRequirementGraph && <button className={materialView === "chain" ? "on" : ""}
+                onClick={() => setMaterialView("chain")}>
+                <span>仓间依赖</span><i>{task.requirement_graph!.dependencies.length}</i>
+              </button>}
+              <button className={materialView === "diff" ? "on" : ""}
+                onClick={() => { setMaterialView("diff"); if (changes[0]) setActive(changes[0].name); }} disabled={!changes.length}>
+                <span>工作区变更</span><i>{changes.length}</i>
+              </button>
+            </div>
           </div>
-          <RequirementGraph task={task} onOpenTask={onOpenTask}
-            onConfirmed={onChanged} />
-          <div className="ws-source-switch" aria-label="材料类型">
-            <button className={activeMeta?.kind !== "diff" ? "on" : ""} onClick={() => documents[0] && setActive(documents[0].name)}>
-              <span>过程文档</span><i>{documents.length}</i>
-            </button>
-            <button className={activeMeta?.kind === "diff" ? "on" : ""} onClick={() => changes[0] && setActive(changes[0].name)} disabled={!changes.length}>
-              <span>工作区变更</span><i>{changes.length}</i>
-            </button>
-          </div>
-          {activeMeta?.kind !== "diff" && (
+          {materialView === "doc" && documents.length > 1 && (
             <div className="ws-tabs">
               {documents.map((item) => (
                 <button key={item.name} className={"ws-tab" + (item.name === active ? " on" : "")} onClick={() => setActive(item.name)}>
@@ -361,13 +375,17 @@ export function TaskWorkspace({
             </div>
           )}
           <div className="ws-doc">
-            {unavailable && <div className="utility-note">{unavailable}</div>}
-            {!unavailable && !items && <div className="utility-note">正在读取现场…</div>}
-            {items?.length === 0 && (
-              <div className="utility-note">这一单还没有可检视的产物。</div>
-            )}
-            {loading && <div className="utility-note">正在打开 {activeMeta?.label}…</div>}
-            {!loading && content && (
+            {materialView === "chain" ? (
+              <RequirementGraph task={task} onOpenTask={onOpenTask}
+                onConfirmed={onChanged} />
+            ) : <>
+              {unavailable && <div className="utility-note">{unavailable}</div>}
+              {!unavailable && !items && <div className="utility-note">正在读取现场…</div>}
+              {items?.length === 0 && (
+                <div className="utility-note">这一单还没有可检视的产物。</div>
+              )}
+              {loading && <div className="utility-note">正在打开 {activeMeta?.label}…</div>}
+              {!loading && content && (
               <Annotatable
                 taskId={task.id}
                 artifact={active}
@@ -376,11 +394,12 @@ export function TaskWorkspace({
                 items={notes}
                 onAdded={() => setNotesPulse((tick) => tick + 1)}
               >
-                {activeMeta?.kind === "diff"
+                {materialView === "diff"
                   ? <GitDiff text={content} branch={branch} />
                   : <Markdown text={content} />}
               </Annotatable>
-            )}
+              )}
+            </>}
           </div>
         </section>
 

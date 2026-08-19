@@ -2906,6 +2906,10 @@ pre {
   border-bottom: 1px solid var(--line);
   background: var(--surface);
 }
+.ws-pane-head > .ws-source-switch {
+  width: auto; min-width: 0; min-height: 0; padding: 0;
+  flex: none; flex-direction: row; border: 0; background: transparent;
+}
 .ws-source-switch button {
   height: 32px;
   padding: 0 11px;
@@ -2978,6 +2982,7 @@ pre {
 .ws-doc .md-list { margin: 8px 0; padding-left: 22px; }
 .ws-doc .md-table { margin: 14px 0; font-size: 12px; }
 .ws-doc .md-table th, .ws-doc .md-table td { padding: 7px 9px; }
+.ws-doc > .requirement-graph { width: min(900px, 100%); margin: 0 auto; }
 .ws-diff {
   width: min(1040px, 100%);
   max-height: none;
@@ -3726,7 +3731,8 @@ pre {
 
 @media (max-width: 560px) {
   .ws-identity strong { font-size: 11px; }
-  .ws-pane-head { padding-left: 14px; padding-right: 14px; }
+  .ws-pane-head { padding: 10px 14px; align-items: flex-start; flex-direction: column; }
+  .ws-pane-head > .ws-source-switch { width: 100%; overflow-x: auto; }
   .ws-source-switch { padding-left: 10px; padding-right: 10px; }
   .ws-tabs { padding-left: 10px; }
   .ws-doc .md { font-size: 13px; }
