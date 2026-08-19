@@ -1309,7 +1309,20 @@ export class TaskService {
           this.bypass(task, "合入监控",
             this.watchMerge(task, task.controlEpoch));
         }
-        if (summary.status === "running" || summary.status === "queued") {
+        // 旧版本可能把一个已经 resolved 的 WaitingRecord 再次写成
+        // waiting_for_human(重建会话重放同 call_id 时发生)。这是矛盾
+        // 状态:人已经答过,页面却还在催人。恢复时以 waiting.json 的
+        // resolved 事实为准,自动续跑并把原决定带回重建会话。
+        if (summary.status === "waiting_for_human"
+            && summary.waiting?.status === "resolved") {
+          task.pendingResume = { ...summary.waiting };
+          summary.waiting = undefined;
+          summary.status = "queued";
+          summary.detail = "检测到已完成的重复决策卡，自动恢复续跑";
+          this.persist(task);
+          this.queue.push(summary.id);
+          requeued += 1;
+        } else if (summary.status === "running" || summary.status === "queued") {
           summary.status = "queued";
           summary.detail = "服务重启,等待续跑";
           this.persist(task);

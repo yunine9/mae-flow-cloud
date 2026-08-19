@@ -10,11 +10,12 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskService, type TaskSummary } from "../src/taskService.ts";
+import { HumanGate } from "../src/humanGate.ts";
 
 async function until<T>(
   probe: () => T | undefined,
@@ -109,6 +110,95 @@ test("恢复:等待人工的任务跨进程存活,决定走重建会话续跑", 
     "重建会话以 resume:true 留痕");
   assert.ok(events.some((event) => event.kind === "human_decision"),
     "人工决定进事件日志");
+  await modelB.stop();
+});
+
+test("恢复重放同一提问 ID:已回答的卡直接回放,不再次等人", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-recover-repeat-card-"));
+  // 两个进程都跑同一剧本,因此重建会话会再次产生 scripted-1。
+  // 这正是演示模型暴露出来、真实网关重试也可能撞到的幂等边界。
+  const script: Scene[] = [
+    { text: "先读取现场", tool: { name: "bash", input: { command: "echo ok" } } },
+    { tool: { name: "AskUserQuestion", input: { questions: [
+      { question: "方案确认吗?", options: ["确认", "打回"] },
+    ] } } },
+    { text: "决定已消费,正常收口。" },
+  ];
+  const modelA = new ScriptedModelServer(script);
+  await modelA.start();
+  const serviceA = new TaskService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: modelA.modelsJson(),
+  });
+  const created = serviceA.create("演练:重复卡不得复活");
+  const waiting = await until(() => {
+    const task = serviceA.get(created.id);
+    return task?.status === "waiting_for_human" ? task.waiting : undefined;
+  }, "前一进程进入等待");
+  await modelA.stop();
+
+  const modelB = new ScriptedModelServer(script);
+  await modelB.start();
+  const serviceB = new TaskService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: modelB.modelsJson(),
+  });
+  serviceB.recover();
+  await serviceB.decide(created.id, {
+    state_version: waiting!.state_version,
+    decision: "确认",
+  });
+  const done = await until(() => {
+    const task = serviceB.get(created.id);
+    if (task?.status === "waiting_for_human") {
+      throw new Error("已回答的同一张卡被重复展示");
+    }
+    return task?.status === "completed" ? task : undefined;
+  }, "重放原决定后收口");
+  assert.equal(done.waiting, undefined);
+  await modelB.stop();
+});
+
+test("恢复自愈:概要还在等人但 waiting 已 resolved,自动续跑", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-recover-resolved-card-"));
+  const modelA = new ScriptedModelServer(LIFE_A);
+  await modelA.start();
+  const serviceA = new TaskService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: modelA.modelsJson(),
+  });
+  const created = serviceA.create("演练:旧版矛盾状态自动修复");
+  const waiting = await until(() => {
+    const task = serviceA.get(created.id);
+    return task?.status === "waiting_for_human" ? task.waiting : undefined;
+  }, "任务进入等待");
+  await modelA.stop();
+
+  // 模拟旧版本留下的现场:waiting.json 已有答案，task.json 却仍写
+  // waiting_for_human + resolved waiting，页面因此重复举卡。
+  const workspace = join(dataDir, created.id);
+  const resolved = new HumanGate(join(workspace, "waiting.json")).resolve(
+    waiting!.waiting_id,
+    { stateVersion: waiting!.state_version, decision: "确认" },
+  );
+  const taskPath = join(workspace, "task.json");
+  const saved = JSON.parse(readFileSync(taskPath, "utf-8"));
+  saved.summary.status = "waiting_for_human";
+  saved.summary.waiting = resolved;
+  writeFileSync(taskPath, JSON.stringify(saved, null, 1));
+
+  const modelB = new ScriptedModelServer(LIFE_B);
+  await modelB.start();
+  const serviceB = new TaskService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: modelB.modelsJson(),
+  });
+  const recovered = serviceB.recover();
+  assert.equal(recovered.requeued, 1, "矛盾状态必须自动入队,不能继续催人");
+  const done = await until(() =>
+    serviceB.get(created.id)?.status === "completed"
+      ? serviceB.get(created.id) : undefined, "自愈后收口");
+  assert.equal(done?.waiting, undefined);
   await modelB.stop();
 });
 
