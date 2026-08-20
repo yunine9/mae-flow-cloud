@@ -37,6 +37,7 @@ import {
 } from "./api";
 import {
   ActionLedger,
+  ActivityPanel,
   RetryButton,
   TaskProgress,
   TaskTimeline,
@@ -526,6 +527,7 @@ export function TaskWorkspace({
             onChanged={() => { setNotesPulse((tick) => tick + 1); onChanged(); }}
           />
           <div className="task-utilities">
+            <ActivityPanel task={task} />
             <TaskTimeline taskId={task.id} />
             {task.delivery && <ActionLedger taskId={task.id} />}
           </div>

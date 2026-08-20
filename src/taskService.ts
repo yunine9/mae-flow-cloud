@@ -42,6 +42,9 @@ import { collectKnowledge } from "./knowledgeBlocks.ts";
 import { readJson } from "./jsonBody.ts";
 import type { Notifier, NotifyRecord } from "./notifier.ts";
 import { EventLog } from "./semanticEvents.ts";
+import {
+  buildActivity, readActivityEvents, type ActivityView,
+} from "./activity.ts";
 import { TranscriptStore } from "./transcriptStore.ts";
 import { GateService, type GateContract } from "./gateService.ts";
 import { HumanGate, renderDecision, type WaitingRecord } from "./humanGate.ts";
@@ -822,6 +825,16 @@ export class TaskService {
 
   eventLogPath(id: string): string {
     return join(this.tasks.get(id)!.summary.workspace, "events.jsonl");
+  }
+
+  /** 行为摘要(只读旁路):事件流折叠成"此刻在干嘛/干了什么/有什么
+   * 值得看"。每次现算,不留第二份状态;10~20 人规模下逐行读一遍
+   * 事件账本毫无压力,先别上缓存。 */
+  activity(id: string): ActivityView {
+    const task = this.tasks.get(id)!;
+    return buildActivity(readActivityEvents(this.eventLogPath(id)), {
+      running: task.summary.status === "running",
+    });
   }
 
   /** 内核现场面板文件(panel.html / panel-pulse.js / panel-stamp.js)。

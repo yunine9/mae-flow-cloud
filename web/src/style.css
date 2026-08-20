@@ -2685,6 +2685,83 @@ pre {
   overflow-wrap: anywhere;
 }
 
+/* ---- 执行心流:原始流人盯不过来,这里只看折叠段与异常信号 ---- */
+.activity-alert-badge {
+  margin-left: 8px;
+  padding: 1px 7px;
+  font-style: normal;
+  font-size: 10px;
+  color: var(--attention);
+  background: var(--attention-soft);
+  border-radius: 999px;
+}
+.activity-alerts {
+  padding: 10px 13px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.activity-alert {
+  padding: 8px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid var(--attention);
+  border-radius: 8px;
+  background: var(--attention-soft);
+}
+.activity-alert strong { font-size: 11.5px; color: var(--text-strong); }
+.activity-alert span { font-size: 10.5px; color: var(--muted); word-break: break-all; }
+.activity-alert time { font-size: 9.5px; color: var(--muted); }
+.activity-segments {
+  margin: 0;
+  padding: 10px 13px;
+  max-height: 320px;
+  overflow-y: auto;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.activity-segment {
+  display: grid;
+  grid-template-columns: 18px auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+}
+.activity-segment i {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-style: normal;
+  font-size: 9px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface-soft);
+}
+.activity-segment.edit i,
+.activity-segment.bash i { color: var(--accent); border-color: var(--accent-soft); }
+.activity-segment.has-error i { color: var(--danger); border-color: var(--danger); background: var(--danger-soft); }
+.activity-segment time { font-size: 9.5px; color: var(--muted); white-space: nowrap; }
+.activity-segment-body { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.activity-segment-body strong { font-size: 11px; color: var(--text-strong); font-weight: 600; }
+.activity-segment.has-error .activity-segment-body strong { color: var(--danger); }
+.activity-segment-body span {
+  font-size: 10px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.activity-truncated, .activity-foot {
+  font-size: 9.5px;
+  color: var(--muted);
+}
+.activity-foot { padding: 0 13px 10px; }
+
 /* ---- 耗时与卡点:先看现在卡在哪,再看时间为什么花掉 ---- */
 .cost { padding: 12px; display: flex; flex-direction: column; gap: 12px; }
 .cost-focus {

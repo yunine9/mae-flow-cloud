@@ -7,12 +7,14 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Markdown } from "./markdown";
 import {
   decide,
+  fetchActivity,
   listActions,
   listTimeline,
   retryTask,
   repairStopped,
   statusText,
   tailEvents,
+  type ActivityView,
   type ExternalAction,
   type SemanticEvent,
   type TaskSummary,
@@ -212,6 +214,7 @@ export function TaskCard({
             </div>
           )}
           <div className="task-utilities">
+            <ActivityPanel task={task} />
             <TaskTimeline taskId={task.id} />
             {task.delivery && <ActionLedger taskId={task.id} />}
             <EventTail taskId={task.id} />
@@ -691,6 +694,108 @@ function CostBreakdown({ entries }: { entries: TimelineEntry[] }) {
         </ol>
       )}
     </div>
+  );
+}
+
+/** 心流的持续时间:分钟级就够,精确到秒反而制造焦虑。 */
+function sinceText(iso?: string): string {
+  if (!iso) return "";
+  const ms = Date.now() - instantMs(iso);
+  if (!Number.isFinite(ms) || ms < 0) return "";
+  if (ms < 60_000) return "刚刚开始";
+  return `已持续 ${Math.round(ms / 60_000)} 分钟`;
+}
+
+const SEGMENT_ICON: Record<string, string> = {
+  read: "读", edit: "改", bash: "跑", tool: "具",
+  talk: "说", agent: "派", ask: "决",
+};
+
+/** 行为摘要:原始 SSE 人盯不过来(用户原话"一直在刷"),这里呈现
+ * 服务端折叠好的心流——此刻在干嘛、干了什么、有什么值得看一眼。
+ * 前端不二次解读,条目全部来自 /activity 镜像;在跑时轮询跟进。 */
+export function ActivityPanel({ task }: { task: TaskSummary }) {
+  const [view, setView] = useState<ActivityView>();
+  const [unavailable, setUnavailable] = useState("");
+  const running = task.status === "running";
+  const list = useRef<HTMLOListElement>(null);
+
+  useEffect(() => {
+    let alive = true;
+    async function load() {
+      const result = await fetchActivity(task.id);
+      if (!alive) return;
+      setUnavailable(result.unavailable ?? "");
+      if (result.view) setView(result.view);
+    }
+    void load();
+    // 在跑才有心流可追;停了页面上留最后一份摘要即可,不空转轮询。
+    if (!running) return () => { alive = false; };
+    const timer = setInterval(() => void load(), 5000);
+    return () => { alive = false; clearInterval(timer); };
+  }, [task.id, running]);
+
+  // 新段追加时贴住底部——人关心的是最新动向。
+  useEffect(() => {
+    list.current?.scrollTo({ top: list.current.scrollHeight });
+  }, [view?.segments.length, view?.events_seen]);
+
+  if (unavailable) return null;
+  if (!view || (!view.segments.length && !view.alerts.length)) return null;
+  const alerts = view.alerts;
+
+  return (
+    <details className="utility-block activity-panel" open={running}>
+      <summary>
+        <strong>
+          执行心流
+          {alerts.length > 0 && (
+            <em className="activity-alert-badge">{alerts.length} 个信号</em>
+          )}
+        </strong>
+        <span>
+          {view.now
+            ? `${view.now} · ${sinceText(view.now_since)}`
+            : "折叠后的行为账 · 展开看它干了什么"}
+        </span>
+      </summary>
+
+      {alerts.length > 0 && (
+        <div className="activity-alerts">
+          {alerts.map((alert, index) => (
+            <div key={index} className="activity-alert">
+              <strong>{alert.title}</strong>
+              {alert.detail && <span>{alert.detail}</span>}
+              <time dateTime={alert.ts}>{formatLocalClock(alert.ts)}</time>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <ol ref={list} className="activity-segments">
+        {view.truncated && (
+          <li className="activity-truncated">更早的动作已折叠,只保留最近部分。</li>
+        )}
+        {view.segments.map((segment, index) => (
+          <li key={index}
+              className={`activity-segment ${segment.kind}${segment.errors ? " has-error" : ""}`}>
+            <i aria-hidden>{SEGMENT_ICON[segment.kind] ?? "·"}</i>
+            <time dateTime={segment.start}
+                  title={formatLocalDateTime(segment.start, { seconds: true })}>
+              {formatLocalClock(segment.start)}
+            </time>
+            <span className="activity-segment-body">
+              <strong>{segment.title}</strong>
+              {segment.detail && <span>{segment.detail}</span>}
+            </span>
+          </li>
+        ))}
+      </ol>
+      <div className="activity-foot">
+        共 {view.events_seen} 条原始事件,折叠为 {view.segments.length} 段;
+        原话在下方「过程记录」。
+      </div>
+    </details>
   );
 }
 

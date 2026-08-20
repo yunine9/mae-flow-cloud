@@ -18,6 +18,7 @@
  *   POST /tasks/:id/annotations/:annId/reopen           → 裁决:返工,退回草稿再送一轮
  *   GET  /tasks/:id/events                              → SSE:重放事件日志后持续跟进
  *   GET  /tasks/:id/timeline                            → 人话交付时间线(只读现场)
+ *   GET  /tasks/:id/activity                            → 行为摘要:此刻在干嘛/分段折叠/异常信号
  *   GET  /tasks/:id/artifacts[/:name]                   → 检视产物清单/内容(只读现场)
  *
  * Web 不自行推断状态:详情与列表只是 TaskService 状态的镜像,
@@ -721,6 +722,13 @@ export function createTaskServer(
             return json(response, 403, { error: "只能重跑分配给自己的任务" });
           }
           return json(response, 200, service.retry(id));
+        }
+        // 行为摘要(只读):事件流折叠成人看得过来的分段与异常信号。
+        // 权限口径同任务详情;纯展示,不参与任何判定。
+        if (request.method === "GET" && parts[2] === "activity") {
+          const target = service.get(id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          return json(response, 200, service.activity(id));
         }
         // 交付时间线(只读):现场文件读成人话,权限口径同任务详情
         // ——能看任务就能看它经历了什么。纯展示,不参与判定。
