@@ -39,12 +39,16 @@ export type GateContract = (
 
 /** 宿主自己的账本:在工作区里但不属于会话。读随便读(那都是它自己的
  * 记录),写一律拒绝——伪造事件流/等待记录/流水线事实等于伪造证据。
- * 用后缀匹配(相对工作区根),目录项连同其下全部内容。 */
+ * 路径按相对工作区根判定,目录项连同其下全部内容。 */
 const HOST_LEDGERS = [
   "events.jsonl", "transcript.jsonl", "waiting.json", "task.json",
   "annotations.jsonl", "pipeline-facts.json",
 ];
-const HOST_LEDGER_DIRS = ["pi-agent", ".pi", ".claude"];
+const HOST_LEDGER_DIRS = [".pi", ".claude"];
+/** 会话运行时目录:`pi-agent/models.json` 明文存着模型网关 API Key,
+ * 所以这里连读都不给——把可达边界放宽到工作区(修复材料在仓外)的
+ * 同时,必须把这一格重新焊死,否则等于把密钥递到会话手上。 */
+const HOST_SECRET_DIRS = ["pi-agent"];
 
 export interface GateServiceOptions {
   moonlight?: boolean;
@@ -129,8 +133,17 @@ export class GateService {
           reason: `文件工具只能访问当前任务的工作区，已阻止越界路径: ${escaped}`,
         };
       }
+      const secret = paths.find(
+        (path) => this.hitsHostPath(path, HOST_SECRET_DIRS, []));
+      if (secret) {
+        return {
+          action: "deny",
+          reason: `会话运行时目录里有宿主凭据,禁止访问: ${secret}。`,
+        };
+      }
       if (tool !== "Read") {
-        const ledger = paths.find((path) => this.hitsHostLedger(path));
+        const ledger = paths.find(
+          (path) => this.hitsHostPath(path, HOST_LEDGER_DIRS, HOST_LEDGERS));
         if (ledger) {
           return {
             action: "deny",
@@ -184,16 +197,21 @@ export class GateService {
     return target ? this.descendsFromWorkspace(target) : false;
   }
 
-  /** 命中宿主账本(按工作区根下的相对路径判,不看会话在哪个子目录)。 */
-  private hitsHostLedger(value: string): boolean {
+  /** 命中宿主的某类路径(按工作区根下的相对路径判,不看会话在哪个
+   * 子目录):dirs 连同其下全部内容,files 只认工作区根下的同名文件。 */
+  private hitsHostPath(
+    value: string,
+    dirs: readonly string[],
+    files: readonly string[],
+  ): boolean {
     if (!this.workspace) return false;
     const target = this.realTarget(value);
     if (!target) return false;
     const rel = relative(this.workspace, target);
     if (!rel || rel.startsWith("..") || isAbsolute(rel)) return false;
     const parts = rel.split(sep);
-    return (parts.length === 1 && HOST_LEDGERS.includes(parts[0]))
-      || HOST_LEDGER_DIRS.includes(parts[0]);
+    return dirs.includes(parts[0])
+      || (parts.length === 1 && files.includes(parts[0]));
   }
 
   private descendsFromWorkspace(target: string): boolean {
