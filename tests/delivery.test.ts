@@ -459,6 +459,60 @@ test("进程可死轮询不死:重启 recover 后继续收敛流水线", async (
   }
 });
 
+test("老单不被新尺子重新量:恢复不翻状态、更不会把分支重新推回去", async () => {
+  // 读代码逮住、第一次重启就会发生的事:恢复时对每个落盘 completed 的
+  // 任务重做终态对账,而老单现场里没有 execution_contract,判据按"云端
+  // 默认三项交流水线"取——老单永远拿不出逐项 PASS,一律被判伪终态:
+  // 状态翻回验证中,接着 tryDeliver 真的 git push。已合入、远端分支早
+  // 删掉的老单会被重新推回去,列表里一堆历史单变"验证中"。
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  await platform.start();
+  try {
+    const dataDir = mkdtempSync(join(tmpdir(), "mfc-legacy-"));
+    const workspace = join(dataDir, "task-1");
+    const cwd = join(workspace, "repo");
+    mkdirSync(cwd, { recursive: true });
+    git(cwd, "init", "--quiet", "-b", "master_bot_REQ1");
+    git(cwd, "config", "user.email", "bot@test");
+    git(cwd, "config", "user.name", "bot");
+    writeFileSync(join(cwd, "a.txt"), "old\n");
+    git(cwd, "add", ".");
+    git(cwd, "commit", "--quiet", "-m", "老单当时的交付");
+    // origin 必须真接得上,否则"没推成"是因为推不动,断言就成了摆设
+    // ——老行为在这里是**能推上去**的,这才是这条用例要挡的事。
+    git(cwd, "remote", "add", "origin", platform.barePath);
+    // 老现场:没有 execution_contract,也没有外部验证记录。
+    writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify({
+      schema_version: 2, current: "end", revision: 1,
+      config: { 分支名: "master_bot_REQ1", 基线分支: "master", 单号: "REQ1" },
+      choices: {}, history: [],
+    }));
+    writeFileSync(join(workspace, "task.json"), JSON.stringify({
+      summary: {
+        id: "task-1", requirement: "老单", status: "completed",
+        created_at: new Date().toISOString(), workspace,
+        delivery: { mr_state: "已合入", sha: git(cwd, "rev-parse", "HEAD") },
+      },
+      cwd,
+    }));
+
+    const revived = buildService(platform, dataDir, {});
+    assert.equal(revived.recover().restored, 1);
+    await new Promise((tick) => setTimeout(tick, 400));
+    const task = revived.get("task-1")!;
+    assert.equal(task.status, "completed", "老单不该被翻回验证中");
+    assert.equal(task.delivery?.stalled, undefined);
+    // 最要命的那一下:远端一次都不该被写(已合入的老单分支往往早删了,
+    // 重推等于把它凭空复活)。
+    assert.equal(
+      git(platform.barePath, "branch", "--list", "master_bot_REQ1"), "",
+      "老单的分支被重新推回了远端");
+  } finally {
+    await platform.stop();
+  }
+});
+
 /** 修复环剧本:一幕修复提交(可选)+一幕收口；传输始终归宿主。 */
 function repairScenes(commit: boolean): Scene[] {
   const command = commit

@@ -1526,7 +1526,8 @@ export class TaskService {
           this.counter, Number(name.slice("task-".length)) || 0);
         restored += 1;
         let terminalMismatch = false;
-        if (["completed", "await_merge"].includes(summary.status)) {
+        if (["completed", "await_merge"].includes(summary.status)
+            && !this.settledBeforeContract(task)) {
           const attestation = this.completionAttestation(task);
           if (attestation && !attestation.complete) {
             terminalMismatch = true;
@@ -2136,6 +2137,34 @@ export class TaskService {
    * 多仓分析单是 Cloud 自己的前置会话，本来就没有 mae-flow 状态；纯
    * 会话演练同理。除此之外一律不能拿 task.json.status 自证完成。
    */
+  /** 这一单是不是在"外部验证契约"存在之前就已经收口的。
+   *
+   * 踩过的坑(读代码逮住,第一次重启就会发生):恢复时对每个落盘为
+   * completed/await_merge 的任务重做终态对账,而老单的现场里根本没有
+   * execution_contract——判据于是按"云端默认三项交流水线"取,老单永远
+   * 拿不出流水线逐项 PASS,被一律判成伪终态:状态翻回验证中,接着
+   * tryDeliver 真的执行 git push。已合入、远端分支早删掉的老单会被
+   * **重新推回去**,任务列表里一堆历史单变"验证中"。
+   *
+   * 老单是按当时的规矩收的口,不该用后来的尺子重新量。判据取两条
+   * 机械事实:现场没有 execution_contract(新单必然有,内核从下单事实
+   * 写入),且从来没有过外部验证记录;或者交付账本已经记了合入。 */
+  private settledBeforeContract(task: TaskState): boolean {
+    const delivery = task.summary.delivery;
+    if (delivery?.mr_state === "已合入") return true;
+    if (!task.cwd) return false;
+    try {
+      const statePath = join(task.cwd, ".mae-flow.json");
+      if (!existsSync(statePath)) return false;
+      const state = JSON.parse(readFileSync(statePath, "utf-8"));
+      return !state?.execution_contract
+        && !state?.quality?.external_verification;
+    } catch {
+      // 读不出来就不敢断言"老单",走原有对账(宁可多查一次)。
+      return false;
+    }
+  }
+
   private completionAttestation(
     task: TaskState,
   ): KernelCompletionAttestation | undefined {
