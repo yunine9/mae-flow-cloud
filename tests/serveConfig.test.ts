@@ -134,6 +134,20 @@ test("配置文件供值,命令行压过文件", async () => {
     `命令行未压过文件,输出:\n${fromCli.output.slice(0, 800)}`);
 });
 
+test("内核模式没有交付平台 → 拒绝启动,不起一台每单必卡的服务", async () => {
+  // 执行契约固定把编译/UT/CodeCheck 交给流水线,流程必然停在
+  // external_verify 等宿主递事实。没有平台就没人递:每一单都会卡在
+  // 验证中。老的 --verify-via-pipeline 有这条守卫,退役那个开关时被
+  // 一并删掉了——契约固定之后它反而更该在,因为没有别的形态可退。
+  const dir = mkdtempSync(join(tmpdir(), "mfc-nokernelplat-"));
+  const { code, output } = await run(
+    ["--kernel-mode", "--data", join(dir, "tasks"), "--port", "0"],
+    () => false, 30_000);
+  assert.equal(code, 2, `应当拒绝启动,输出:\n${output.slice(0, 800)}`);
+  assert.match(output, /内核模式需要交付平台在场/);
+  assert.match(output, /--platform|--fake-platform/);
+});
+
 test("旧 --verify-via-pipeline 仅提示弃用,不再切换执行语义", async () => {
   const dir = mkdtempSync(join(tmpdir(), "mfc-legacy-pipeline-"));
   const { output, matched } = await run(

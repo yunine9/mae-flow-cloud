@@ -806,3 +806,67 @@ test("宿主推送失败 → 不硬造 MR,停在验证中并说明原因", async
     await platform.stop();
   }
 });
+
+test("某一项永远不给结果 → 核销重试也吃预算,不无限空转", async () => {
+  // 实测过的另一潭死水:平台把 UT 报成 skipped(rules 跳过、或 manual
+  // 没人点),内核判 INCOMPLETE,而宿主的证据重试没有预算——6 秒里
+  // 登记了 16 次,每次拉一个内核子进程,永远不会收敛,retry 还被拒。
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  platform.nextPipelineChecks = [
+    { dimension: "COMPILE", status: "success", job: "compile" },
+    { dimension: "UT", status: "skipped", job: "unit-test" },
+    { dimension: "CODECHECK", status: "success", job: "codecheck" },
+  ];
+  await platform.start();
+  try {
+    const { task, service } = await runTask(
+      platform, true, { pollIntervalMs: 100, pollTimeoutMs: 1200 });
+    assert.match(task.delivery?.attested ?? "", /^INCOMPLETE@/);
+    await until(() => Boolean(service.get(task.id)!.delivery?.stalled),
+      "核销预算耗尽后如实停摆");
+    const stalled = service.get(task.id)!;
+    assert.match(stalled.delivery!.stalled!, /UT|核销/);
+    assert.match(stalled.detail ?? "", /自动验证已停/);
+    // 停摆后不再空转:再等一会儿,登记次数不该继续涨。
+    const before = platform.pipelines.length;
+    await new Promise((tick) => setTimeout(tick, 600));
+    assert.equal(platform.pipelines.length, before, "停摆后不许继续烧平台");
+    assert.doesNotThrow(() => service.retry(task.id));
+  } finally {
+    await platform.stop();
+  }
+});
+
+test("交付失败先自愈、预算耗尽如实停摆,人拿得回控制权", async () => {
+  // 实测过的死水:推送失败(内网 504 是已知风险)后任务永久停在
+  // verifying——没有定时器盯、重启不复活、retry 还拿"验证还在进行中"
+  // 顶回来,而根本没有任何东西在跑。唯一出路是取消整单。
+  // 现在的语义:先带预算自己再试(504 多半是一阵子的事),预算烧完
+  // 就如实停下写清原因并喊人,人办完外部的事点重跑接着干。
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  await platform.start();
+  try {
+    const { task, service } = await runTask(
+      platform, false, { pollIntervalMs: 120, pollTimeoutMs: 1500 });
+    // 自愈期内不许判停摆,也不许放人重跑(那会重复烧流水线)。
+    assert.equal(task.delivery?.stalled, undefined);
+    assert.throws(() => service.retry(task.id), /还在进行中/);
+
+    await until(() => Boolean(service.get(task.id)!.delivery?.stalled),
+      "自愈预算耗尽后如实停摆");
+    const stalled = service.get(task.id)!;
+    assert.equal(stalled.status, "verifying"); // 代码确实提交了,不假装 failed
+    assert.match(stalled.delivery!.stalled!, /宿主推送失败/);
+    assert.match(stalled.detail ?? "", /自动验证已停,需要你介入/);
+    // 回程票:停摆之后人点得动「重跑续推」,且账本被清干净重新开表。
+    const again = service.retry(task.id);
+    // 排上队即可(任务泵可能当场就把它接走,状态已经是 running)。
+    assert.ok(["queued", "running"].includes(again.status), again.status);
+    assert.equal(again.delivery?.stalled, undefined);
+    assert.equal(again.delivery?.verify_deadline, undefined);
+  } finally {
+    await platform.stop();
+  }
+});

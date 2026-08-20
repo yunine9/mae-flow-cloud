@@ -33,11 +33,14 @@ export const STATUS_TEXT: Record<TaskStatus, string> = {
  * verifying 的任务才给重跑按钮(在途验证点重跑=重复烧流水线)。 */
 export function repairStopped(task: {
   status: TaskStatus;
-  delivery?: { pipeline?: string; loop?: { state: string } };
+  delivery?: { pipeline?: string; stalled?: string; loop?: { state: string } };
 }): boolean {
   const loop = task.delivery?.loop;
   return task.status === "verifying" && (
     loop?.state === "halted" || loop?.state === "exhausted"
+    // stalled = 外部验证自愈预算烧完并如实停下(推送一直失败、流水线
+    // 迟迟不给可核销结果)。同样是"机器停了,该人上"。
+    || Boolean(task.delivery?.stalled)
     || (task.delivery?.pipeline ?? "").includes("轮询预算耗尽"));
 }
 
@@ -325,6 +328,12 @@ export interface TaskSummary {
     mr_state?: string;
     pipeline?: string;
     skipped?: string;
+    /** 卡在哪一环的人话(等审批、等某一项核销结果……)。服务端一直
+     * 在写,前端一直没显示——于是"验证中"三个字后面藏着的真实原因
+     * 谁也看不到,任务看着像马上要成了,其实早就停了。 */
+    waiting_on?: string;
+    /** 自愈已停、等人介入的原因。有它就该亮牌子给「重跑续推」。 */
+    stalled?: string;
     /** 修复环账本(服务端事实镜像,前端不推断只呈现)。 */
     loop?: {
       round: number;

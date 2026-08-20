@@ -713,6 +713,13 @@ def _call_literals(node, skip=""):
 def _gate_rule_from_call(node):
     name = getattr(node.func, "id", "") or getattr(node.func, "attr", "")
     if name in _GATE_PRODUCERS:
+        # 规则名可能在第一个位置参数(_block/_die_rule),也可能在 rule=
+        # 关键字里(_absolute 的签名是 message 在前)。只认位置参数时,
+        # 后一种写法整类隐形——guard/gate.py 里一批绝对类规则因此从来
+        # 没进过总账,"无残留/无死锁"的保证在它们身上是空的。
+        keywords = {item.arg: item.value for item in node.keywords}
+        if isinstance(keywords.get("rule"), ast.Constant):
+            return _GATE_PRODUCERS[name], keywords["rule"].value
         rule = (
             node.args[0].value
             if node.args and isinstance(node.args[0], ast.Constant)

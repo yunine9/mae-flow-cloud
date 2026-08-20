@@ -176,8 +176,35 @@ def decide_edit(context):
     return GateDecision("allow")
 
 
+def _pipeline_record_decision(context):
+    """流水线事实只收宿主递的,不收会话自述。
+
+    2026-08-20 复核实锤:`pipeline record` 是权限最大的命令——它能把
+    整单交付判绿——却是唯一一个不要 message-id、不要任何授权锚的命令
+    (manifest confirm / accept-risk / goto / allow / unlock 全都要)。
+    实测:手写一份两字段 JSON 递进去,内核就记下 PASS、三项全 passed、
+    连"宿主已推送"的收据也照收,义务核销当场放行——什么都没编译、
+    没测、没扫、没推。宿主是直接子进程调用,不走这条门禁,所以挡住
+    会话这一条路不影响正常交付。这不是防坏人,是防"流水线一直不通,
+    我先登记一下"的糊弄——本仓所有证据闸门都是这个量级的防御。"""
+    if re.search(
+        r"mae-flow(?:\.py)?[^\n;|&]*\bpipeline\b[^\n;|&]*\brecord\b",
+        context.command, re.I,
+    ):
+        return _absolute(
+            "流水线事实由宿主从平台取回后递交内核登记,不接受会话自述"
+            "——自己写一份结果登记等于自己给自己发绿灯。"
+            "本步在等流水线就结束当前回合,宿主拿到平台结果会自己登记;"
+            "想看已登记的结论执行 pipeline show。",
+            rule="bash-pipeline-record-self-report")
+    return None
+
+
 def _bash_absolute_decision(context):
     command = context.command
+    decision = _pipeline_record_decision(context)
+    if decision is not None:
+        return decision
     if (
         context.writeish
         and any(token.lower().endswith(
@@ -186,7 +213,8 @@ def _bash_absolute_decision(context):
     ):
         return _absolute(
             "comet/openspec 状态文件禁止经 Bash 改写:它们由 comet-state 维护"
-            "(黑名单#4),直写等同伪造阶段/验证证据。",
+            "(黑名单#4),直写等同伪造阶段/验证证据。"
+            "要推进流程请执行 current 按本步指引走。",
             rule="bash-comet-state-write")
     if re.search(r"COMET_FORCE_PHASE", command, re.I):
         return _absolute(
@@ -214,7 +242,8 @@ def _bash_absolute_decision(context):
         return _absolute(
             "流程状态/历史账本/待重启标记/仓库预设/月光宝盒报告由 mae-flow "
             "维护,禁止经 Bash 改写/删除(待重启标记只能靠重启会话清;"
-            "仓库预设决定门禁口径,流程外走正常评审提交)。",
+            "仓库预设决定门禁口径,流程外走正常评审提交)。"
+            "要推进或纠正流程请执行 current 按本步指引走。",
             rule="bash-internal-state-write")
     return None
 

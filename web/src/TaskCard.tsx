@@ -184,12 +184,25 @@ export function TaskCard({
           )}
           {repairStopped(task) && (
             <div className="alert">
-              <strong>自动修复已停，需要你介入</strong>
+              <strong>
+                {task.delivery?.stalled ? "自动验证已停，需要你介入"
+                  : "自动修复已停，需要你介入"}
+              </strong>
               <span>
-                {task.delivery?.loop?.diagnosis ?? task.detail
-                  ?? "请查看流水线日志确认原因。"}
+                {task.delivery?.stalled ?? task.delivery?.loop?.diagnosis
+                  ?? task.detail ?? "请查看流水线日志确认原因。"}
                 {" "}办完之后点「重跑续推」，机器接着干。
               </span>
+            </div>
+          )}
+          {/* 还在等的时候也要说清在等什么。这行原来根本不渲染:页面只有
+              "验证中"三个字,底下藏着的"某一项流水线结果一直没给"谁都
+              看不到,任务看着像马上要成了。 */}
+          {!repairStopped(task) && task.status === "verifying"
+            && task.delivery?.waiting_on && (
+            <div className="verify-waiting">
+              <strong>正在等</strong>
+              <span>{task.delivery.waiting_on}</span>
             </div>
           )}
           {canOperate && (task.status === "failed"

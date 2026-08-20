@@ -37,11 +37,31 @@ export type GateContract = (
   event: SemanticEvent,
 ) => GateDecision | undefined;
 
+/** 宿主自己的账本:在工作区里但不属于会话。读随便读(那都是它自己的
+ * 记录),写一律拒绝——伪造事件流/等待记录/流水线事实等于伪造证据。
+ * 用后缀匹配(相对工作区根),目录项连同其下全部内容。 */
+const HOST_LEDGERS = [
+  "events.jsonl", "transcript.jsonl", "waiting.json", "task.json",
+  "annotations.jsonl", "pipeline-facts.json",
+];
+const HOST_LEDGER_DIRS = ["pi-agent", ".pi", ".claude"];
+
 export interface GateServiceOptions {
   moonlight?: boolean;
   contract?: GateContract;
-  /** 任务代码工作区；配置后文件工具在任何内核状态下都不得越界。 */
+  /** 文件工具的可达边界=**任务工作区**(含代码仓与仓外的修复材料)。
+   *
+   * 踩过的坑:边界一度锚在代码仓上,而修复使命指挥模型读 ../pipeline/
+   * 的完整失败日志、写 ../review_replies.md 的逐条检视回复——两者都在
+   * 仓外,于是 Read/Write 被拒(Bash 不走这条路,所以测试全绿也照样没
+   * 逮住)。检视修复环因此第一轮就死:回复文件写不出来,宿主发布环节
+   * 空转,下一轮判"同一批意见处理过一轮仍未答复完"直接停机。
+   * 边界的本意是"别跑出这个任务",不是"别出代码仓"。 */
   workspace?: string;
+  /** 相对路径的解析基准=代码仓(会话的 cwd)。模型写的 `../pipeline/x`
+   * 是相对它的工作目录说的,不是相对工作区根;两者混用会把仓内相对
+   * 路径解析到工作区根上去。缺省时同 workspace。 */
+  cwd?: string;
   log?: (message: string) => void;
 }
 
@@ -49,6 +69,7 @@ export class GateService {
   private readonly moonlight: boolean;
   private readonly contract?: GateContract;
   private readonly workspace?: string;
+  private readonly cwd?: string;
   private readonly log: (message: string) => void;
 
   constructor(options: GateServiceOptions = {}) {
@@ -57,6 +78,9 @@ export class GateService {
     this.workspace = options.workspace
       ? realpathSync(resolve(options.workspace))
       : undefined;
+    this.cwd = options.cwd
+      ? realpathSync(resolve(options.cwd))
+      : this.workspace;
     this.log = options.log ?? (() => {});
   }
 
@@ -102,8 +126,18 @@ export class GateService {
       if (escaped) {
         return {
           action: "deny",
-          reason: `文件工具只能访问当前任务仓库，已阻止越界路径: ${escaped}`,
+          reason: `文件工具只能访问当前任务的工作区，已阻止越界路径: ${escaped}`,
         };
+      }
+      if (tool !== "Read") {
+        const ledger = paths.find((path) => this.hitsHostLedger(path));
+        if (ledger) {
+          return {
+            action: "deny",
+            reason: `这是宿主的账本,不是你的产物,禁止写入: ${ledger}。`
+              + "要说的话写进你的收口发言,或写到使命指定的文件里。",
+          };
+        }
       }
       return this.deep(tool, paths[0] ?? "", event);
     }
@@ -118,32 +152,48 @@ export class GateService {
     return this.contract(tool, value, event) ?? ALLOW;
   }
 
-  private insideWorkspace(value: string): boolean {
-    if (!this.workspace || !value || value.includes("\0")) return false;
-    if (/^[A-Za-z]:[^\\/]/.test(value)) return false;
+  /** 解析成真实绝对路径;解析不了(畸形/软链跳出)返回空串。 */
+  private realTarget(value: string): string {
+    if (!this.cwd || !value || value.includes("\0")) return "";
+    if (/^[A-Za-z]:[^\\/]/.test(value)) return "";
     // POSIX 上不能把 Windows 绝对/盘符相对路径当成带冒号的普通文件名。
     if (process.platform !== "win32" && /^(?:[A-Za-z]:|[\\/]{2})/.test(value)) {
-      return false;
+      return "";
     }
     const normalized = sep === "/" ? value.replaceAll("\\", "/") : value;
-    const target = resolve(this.workspace, normalized);
+    const target = resolve(this.cwd, normalized);
 
     // 目标可以尚不存在；解析最近的已存在祖先，阻止仓内软链跳到仓外。
     let ancestor = target;
     const missing: string[] = [];
     while (!existsSync(ancestor)) {
       const parent = dirname(ancestor);
-      if (parent === ancestor) return false;
+      if (parent === ancestor) return "";
       missing.push(basename(ancestor));
       ancestor = parent;
     }
     try {
-      return this.descendsFromWorkspace(
-        resolve(realpathSync(ancestor), ...missing.reverse()),
-      );
+      return resolve(realpathSync(ancestor), ...missing.reverse());
     } catch {
-      return false;
+      return "";
     }
+  }
+
+  private insideWorkspace(value: string): boolean {
+    const target = this.realTarget(value);
+    return target ? this.descendsFromWorkspace(target) : false;
+  }
+
+  /** 命中宿主账本(按工作区根下的相对路径判,不看会话在哪个子目录)。 */
+  private hitsHostLedger(value: string): boolean {
+    if (!this.workspace) return false;
+    const target = this.realTarget(value);
+    if (!target) return false;
+    const rel = relative(this.workspace, target);
+    if (!rel || rel.startsWith("..") || isAbsolute(rel)) return false;
+    const parts = rel.split(sep);
+    return (parts.length === 1 && HOST_LEDGERS.includes(parts[0]))
+      || HOST_LEDGER_DIRS.includes(parts[0]);
   }
 
   private descendsFromWorkspace(target: string): boolean {

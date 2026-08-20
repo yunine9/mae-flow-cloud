@@ -219,6 +219,48 @@
       "tier": "A",
       "escape": "permit",
       "why": "输出目录/产物后缀且 Agent 从未直接改写过的候选几乎必然是编译产出;真要交付预编译产物走一次性放行令"
+    },
+    "bash-pipeline-record-self-report": {
+      "kind": "absolute",
+      "tier": "A",
+      "escape": "comply",
+      "evidence": "结束当前回合",
+      "why": "流水线事实是权限最大的证据(能把整单判绿)却没有授权锚,实测手写两字段 JSON 即可自发绿灯;宿主直接子进程调用不过门禁,挡住会话这条路不影响正常交付"
+    },
+    "bash-comet-state-write": {
+      "kind": "absolute",
+      "tier": "A",
+      "escape": "cli:current",
+      "evidence": "执行 current",
+      "why": "状态文件直写等同伪造阶段/验证证据;正路是按 current 的本步指引推进"
+    },
+    "bash-internal-state-write": {
+      "kind": "absolute",
+      "tier": "A",
+      "escape": "cli:current",
+      "evidence": "执行 current",
+      "why": "同上,Bash 侧的对应拦截(改写/删除流程状态、账本、待重启标记、仓库预设)"
+    },
+    "bash-retired-force-phase": {
+      "kind": "absolute",
+      "tier": "A",
+      "escape": "cli:doctor",
+      "evidence": "doctor",
+      "why": "已退役的外部阶段引擎逃生口;阶段归 mae-flow 管,异常走 doctor"
+    },
+    "bash-vendored-runtime": {
+      "kind": "absolute",
+      "tier": "A",
+      "escape": "cli:current",
+      "evidence": "capability 命令",
+      "why": "直接执行内嵌脚本会丢 capability 包装的环境,退落全局版本导致版本锁失效"
+    },
+    "bash-global-openspec": {
+      "kind": "absolute",
+      "tier": "A",
+      "escape": "cli:current",
+      "evidence": "capability openspec",
+      "why": "全局 openspec 随上游漂移且 init 会污染仓库;正路是 current 给出的 capability 命令"
     }
   }
 }

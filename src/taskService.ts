@@ -267,6 +267,13 @@ export interface TaskSummary {
     /** 挂起等待的人话(等审批/等投票……):MR 闭环里"没人动它"和
      * "出了问题"必须让人一眼分得开。 */
     waiting_on?: string;
+    /** 外部验证自愈预算的到期时刻(ISO)。重启后照旧对表,不重新开表
+     * ——否则每重启一次就白送半小时。 */
+    verify_deadline?: string;
+    /** 自愈已停,等人工介入的原因。设了它:retry 放行、页面亮牌子、
+     * 通知发出。这是"验证中"这潭水里唯一诚实的出口——没有它的时候
+     * 任务会既不完成也不失败也不重试,人连重跑都点不动(实测)。 */
+    stalled?: string;
     /** 修复环账本(小状态机):MR 全绿合入是最终目标(用户拍板
      * "不该有最大轮数限制,都该尽力修好")。失败先分类再派单
      * (检视>冲突>CI,同时多项只修最高优先级那一路——冲突不解 CI
@@ -588,6 +595,7 @@ interface TaskState {
   mergeWatchActive?: boolean;
   /** 流水线证据核销重试的防重入锁。纯宿主 timer，不占 Agent 会话。 */
   evidenceRetryActive?: boolean;
+  deliveryRecoveryActive?: boolean;
   /** 上次主动压缩时的事件水位(事件量是上下文增长的诚实代理)。 */
   lastCompactAt?: number;
   /** 恢复标记:launch 走重建会话路径(不重克隆、内核 current 续跑)。 */
@@ -1573,10 +1581,15 @@ export class TaskService {
           // 结果不完整）：重启只重做核销，不重复触发同 SHA 流水线。
           this.bypass(task, "流水线证据核销",
             this.tryDeliver(task, task.controlEpoch));
-        } else if (summary.status === "verifying" && terminalMismatch) {
+        } else if (summary.status === "verifying"
+            && !summary.delivery?.stalled) {
           // 没有可续轮的旧平台状态也不能静默蹲住；让 tryDeliver 查远端
           // 分支并触发/恢复权威验证，仍由内核裁决是否能到 end。
-          this.bypass(task, "终态恢复对账",
+          // 这一支原来只认 terminalMismatch(落盘是 completed/await_merge
+          // 的伪终态),于是"落盘就是 verifying、连平台状态都没有"的那类
+          // ——推送失败停在等待点的——重启后一行代码都不碰它,永远蹲着
+          // (实测)。已经如实停摆的不动:那是在等人,不是在等机器。
+          this.bypass(task, "验证恢复对账",
             this.tryDeliver(task, task.controlEpoch));
         }
         // 合入监控同理续:重启前在等合入/等审批的接着盯(平台不支持
@@ -1647,8 +1660,12 @@ export class TaskService {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     const { status, delivery } = task.summary;
+    // stalled = 外部验证的自愈预算已经烧完并如实停下(推送一直失败、
+    // 流水线迟迟不给可核销结果……)。它必须和修复环停机同等对待:
+    // 那种状态下没有任何东西在收敛,再拦着人重跑就是把任务锁死。
     const repairStopped = delivery?.loop?.state === "halted"
       || delivery?.loop?.state === "exhausted"
+      || Boolean(delivery?.stalled)
       || (delivery?.pipeline ?? "").includes("轮询预算耗尽");
     if (status === "verifying" && !repairStopped) {
       throw new NotFoundError(
@@ -1662,6 +1679,9 @@ export class TaskService {
     if (status === "verifying" && task.summary.delivery) {
       task.summary.delivery.loop = undefined;
       task.summary.delivery.pipeline = "人工重跑,待重新验证";
+      // 人工背书"再试一次":停摆账本清掉,自愈预算重新开表。
+      task.summary.delivery.stalled = undefined;
+      task.summary.delivery.verify_deadline = undefined;
     }
     task.summary.status = "queued";
     delete task.summary.completed_at;
@@ -2588,7 +2608,10 @@ export class TaskService {
         transcript: new TranscriptStore(transcriptPath, "main"),
         gate: new GateService({
           contract: this.options.contract,
-          workspace: cwd,
+          // 边界=整个任务工作区(修复材料在仓外的 ../pipeline、../reviews);
+          // 相对路径仍按会话 cwd(代码仓)解析。
+          workspace,
+          cwd,
           log: this.options.log,
         }),
         humanGate: task.humanGate,
@@ -2667,6 +2690,121 @@ export class TaskService {
     this.persist(task);
   }
 
+  /** 外部验证的自愈预算:第一次挂起时开表,之后每次续命都对表。
+   *
+   * 为什么要有:等待点上的每一次挂起都可能是暂时的(内网 push 504、
+   * MR 网关抖、内核登记撞上并发),值得自己再试;但"再试"没有尽头就
+   * 是死等——本仓的红线写死了凡等待必须带预算。预算沿用轮询那一档
+   * (默认 30 分钟),不另立旋钮。 */
+  private verificationDeadline(task: TaskState): number {
+    const delivery = task.summary.delivery;
+    const existing = delivery?.verify_deadline
+      ? Date.parse(delivery.verify_deadline) : NaN;
+    if (Number.isFinite(existing)) return existing;
+    const knobs = this.options.settings?.runtime() ?? {};
+    const budget = (knobs.poll_timeout_s !== undefined
+      ? knobs.poll_timeout_s * 1000 : undefined)
+      ?? this.options.delivery?.pollTimeoutMs ?? 30 * 60_000;
+    const deadline = Date.now() + budget;
+    task.summary.delivery = {
+      ...delivery,
+      verify_deadline: new Date(deadline).toISOString(),
+    };
+    return deadline;
+  }
+
+  /** 自愈到头了:如实停下、写清原因、喊人。任务留在 verifying(代码
+   * 确实已提交,不能假装 failed 也不能假装完成),但从此 retry 放行、
+   * 页面亮牌子——人办完外部的事点「重跑续推」,机器接着干。 */
+  private markVerificationStalled(task: TaskState, reason: string): void {
+    const delivery = task.summary.delivery;
+    if (delivery?.stalled) return; // 幂等:同一次停摆只喊一次
+    task.summary.status = "verifying";
+    task.summary.detail = `自动验证已停,需要你介入:${reason}`;
+    task.summary.delivery = {
+      ...delivery,
+      mr_state: delivery?.mr_state ?? "验证中",
+      waiting_on: reason,
+      stalled: reason,
+      verify_deadline: undefined,
+    };
+    this.persist(task);
+    this.notifyRepairStopped(task);
+  }
+
+  /** 挂起=先自愈再说:排一次带预算的重试;预算到了就停下喊人。
+   * 停摆之后不再自动重排——人点了「重跑续推」才重新开表。 */
+  private holdWithRecovery(
+    task: TaskState,
+    reason: string,
+    epoch: number,
+  ): void {
+    if (task.summary.delivery?.stalled) {
+      this.holdExternalVerification(task, reason);
+      return;
+    }
+    const deadline = this.verificationDeadline(task);
+    this.holdExternalVerification(task, reason);
+    if (Date.now() >= deadline) {
+      this.markVerificationStalled(task, reason);
+      return;
+    }
+    this.scheduleDeliveryRecovery(task, epoch);
+  }
+
+  /** 交付侧的带预算重试(推送/MR/流水线触发失败走这条)。
+   *
+   * 对表由这条循环自己拿着,不能指望 tryDeliver:内核停在 end 时它
+   * 的 catch 根本不挂起(那是 external_verify 才走的分支),于是只会
+   * 试一次就散——测试逮住过。 */
+  private scheduleDeliveryRecovery(task: TaskState, epoch: number): void {
+    if (task.deliveryRecoveryActive) return;
+    task.deliveryRecoveryActive = true;
+    const knobs = this.options.settings?.runtime() ?? {};
+    const delay = Math.max(50,
+      (knobs.poll_interval_s !== undefined
+        ? knobs.poll_interval_s * 1000 : undefined)
+      ?? this.options.delivery?.pollIntervalMs ?? 10_000);
+    const timer = setTimeout(() => {
+      task.deliveryRecoveryActive = false;
+      this.bypass(task, "交付自愈重试", this.runDeliveryRecovery(task, epoch));
+    }, delay);
+    timer.unref();
+  }
+
+  private async runDeliveryRecovery(
+    task: TaskState,
+    epoch: number,
+  ): Promise<void> {
+    if (!this.recoveryStillNeeded(task, epoch)) return;
+    await this.tryDeliver(task, epoch);
+    if (!this.recoveryStillNeeded(task, epoch)) return;
+    if (Date.now() >= this.verificationDeadline(task)) {
+      this.markVerificationStalled(task, this.stallReason(task));
+      return;
+    }
+    this.scheduleDeliveryRecovery(task, epoch);
+  }
+
+  /** 停摆要说病因不是症状:"权威流水线尚未逐项通过"是症状,
+   * "宿主推送失败: fatal: ..." 才是人能拿着去办的那句。交付成功时
+   * delivery 会整份换掉,skipped 不会残留成假线索。 */
+  private stallReason(task: TaskState): string {
+    const delivery = task.summary.delivery;
+    return delivery?.skipped ?? delivery?.waiting_on
+      ?? task.summary.detail ?? "外部验证迟迟没有结果";
+  }
+
+  /** 还该不该我管:别人在盯的(流水线轮询、证据核销重试)让它盯,
+   * 已经走出验证中或已如实停摆的收手——两条自愈链不许互相踩。 */
+  private recoveryStillNeeded(task: TaskState, epoch: number): boolean {
+    return this.current(task, epoch)
+      && task.summary.status === "verifying"
+      && !task.summary.delivery?.stalled
+      && task.summary.delivery?.pipeline !== "running"
+      && !task.evidenceRetryActive;
+  }
+
   /** INCOMPLETE / STALE / 登记抖动都是宿主等待，不得把 Agent 催回来
    * “补证据”。同 SHA 只刷新平台事实并重做内核 record；仅 STALE（本地
    * HEAD 已变化）回 tryDeliver，让宿主推新 HEAD 并启动对应的新流水线。
@@ -2679,6 +2817,13 @@ export class TaskService {
     stale: boolean,
   ): void {
     if (task.evidenceRetryActive) return;
+    if (task.summary.delivery?.stalled) return;
+    // 核销重试也吃同一份预算:平台把某个 job 报成 skipped/manual 时
+    // 它永远不会变绿,原来会每 10 秒拉一个内核子进程一直转到天荒地老。
+    if (Date.now() >= this.verificationDeadline(task)) {
+      this.markVerificationStalled(task, this.stallReason(task));
+      return;
+    }
     task.evidenceRetryActive = true;
     const knobs = this.options.settings?.runtime() ?? {};
     const delay = Math.max(50,
@@ -2752,8 +2897,8 @@ export class TaskService {
     const platformUrl = this.effectivePlatformUrl();
     if (!platformUrl || !this.options.host || !task.cwd) {
       if (this.atExternalVerificationWait(task)) {
-        this.holdExternalVerification(
-          task, "等待权威流水线：MR / 流水线服务未就绪");
+        this.holdWithRecovery(
+          task, "等待权威流水线：MR / 流水线服务未就绪", epoch);
       }
       return;
     }
@@ -2768,9 +2913,11 @@ export class TaskService {
       const baseline = String(state?.config?.["基线分支"] ?? "");
       if (!branch || !baseline) {
         const reason = "配置未确认,无分支可交付";
-        task.summary.delivery = { skipped: reason };
+        task.summary.delivery = { ...task.summary.delivery, skipped: reason };
         if (state.current === "external_verify") {
-          this.holdExternalVerification(task, `等待权威流水线：${reason}`);
+          // 这一条重试没有意义:配置不会自己长出来。直接如实停下喊人,
+          // 别用预算空转半小时再说同一句话。
+          this.markVerificationStalled(task, reason);
         }
         return;
       }
@@ -2890,7 +3037,10 @@ export class TaskService {
       const reason = `交付动作失败: ${String(error)}`;
       task.summary.delivery = { ...task.summary.delivery, skipped: reason };
       if (this.atExternalVerificationWait(task)) {
-        this.holdExternalVerification(task, `等待权威流水线：${reason}`);
+        // push 504 / MR 网关 500 这类多半是一阵子的事,自己再试几轮;
+        // 预算用完就停下说人话,而不是永远停在"验证中"没人管
+        // (实测过:那种状态既没定时器、重启也不复活、连重跑都被拒)。
+        this.holdWithRecovery(task, `等待权威流水线：${reason}`, epoch);
       }
       this.options.log?.(`任务 ${task.summary.id} 交付失败: ${String(error)}`);
     }
@@ -4592,7 +4742,11 @@ export class TaskService {
           // 返回，只要内核还没 terminal + PASS，就只能继续验证/显式失败。
           if (afterDelivery.kind === "external_verify"
               || (afterDelivery.terminal && afterDelivery.external_required)) {
-            this.holdExternalVerification(task, afterDelivery.reason);
+            // 这里是"交付这一轮没能把义务核销掉"的总收口——推送失败、
+            // MR 建不起来、内核登记没成,最后都落到这一句。挂起必须带
+            // 自愈预算:原来它只写个状态就散场,于是任务既没人再推它、
+            // 重启也不管它、连重跑都被拒(实测的那潭死水)。
+            this.holdWithRecovery(task, afterDelivery.reason, epoch);
           } else {
             task.summary.status = "failed";
             task.summary.detail = `不能完成任务：${afterDelivery.reason}`;

@@ -376,6 +376,20 @@ async function main(): Promise<void> {
       + "Cloud 已固定由流水线执行编译、UT 运行与 CodeCheck");
   }
   if (host) {
+    // 内核模式下执行契约固定为"三项交流水线",流程必然停在 external_verify
+    // 等宿主递事实。没有平台就没人递,每一单都会走到等待点后无人核销——
+    // 起服=每单必卡。这条守卫是 --verify-via-pipeline 时代就有的,退役那个
+    // 开关时被一并删掉了;契约固定之后它反而更该在,因为现在没有"不走
+    // 流水线"的形态可退。宁可拒绝启动,也不要起一台每单都废的服务。
+    if (!delivery) {
+      console.error(
+        "[serve] 内核模式需要交付平台在场:请加 --platform <url> 接真件,"
+        + "或 --fake-platform 起本地假件。\n"
+        + "        原因:云端执行契约把编译/UT/CodeCheck 交给权威流水线,"
+        + "流程会停在 external_verify 等平台事实;没有平台就没人核销,"
+        + "每一单都会卡在验证中且无法自愈。");
+      process.exit(2);
+    }
     console.log("[serve] Cloud 执行契约:本机编写代码/UT;"
       + "编译、UT 运行、CodeCheck 由流水线执行");
   }

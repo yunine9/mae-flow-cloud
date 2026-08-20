@@ -2719,6 +2719,25 @@ pre {
   overflow-wrap: anywhere;
 }
 
+/* 验证等待的实话:在等什么要写出来,不能只留"验证中"三个字。 */
+.verify-waiting {
+  margin-bottom: 10px;
+  padding: 9px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+.verify-waiting strong { font-size: 11px; color: var(--text-strong); }
+.verify-waiting span {
+  font-size: 10.5px;
+  color: var(--muted);
+  word-break: break-word;
+}
+
 /* ---- 执行心流:原始流人盯不过来,这里只看折叠段与异常信号 ---- */
 .activity-alert-badge {
   margin-left: 8px;

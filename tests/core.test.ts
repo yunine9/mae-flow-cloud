@@ -4,7 +4,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, symlinkSync } from "node:fs";
+import {
+  mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -165,4 +167,43 @@ test("门禁:文件工具只能访问任务工作区且不跟随软链逃逸", (
     assert.equal(decide("Write", "outside-link/new.ts").action, "deny");
   }
   assert.deepEqual(calls, ["src/new.ts", join(workspace, "src")]);
+});
+
+test("门禁:修复材料在仓外也要够得着,宿主账本只读", () => {
+  // 边界一度锚在代码仓上,而修复使命指挥模型读 ../pipeline/ 的失败日志、
+  // 写 ../review_replies.md 的检视回复——都在仓外,于是 Read/Write 被拒,
+  // 检视修复环第一轮就死在"回复文件不存在"。边界的本意是"别跑出这个
+  // 任务",不是"别出代码仓";账本另外守。
+  const workspace = mkdtempSync(join(tmpdir(), "mfc-repair-"));
+  const cwd = join(workspace, "repo");
+  mkdirSync(join(workspace, "pipeline"), { recursive: true });
+  mkdirSync(join(workspace, "reviews"), { recursive: true });
+  mkdirSync(cwd, { recursive: true });
+  writeFileSync(join(workspace, "pipeline", "compile.log"), "boom");
+  writeFileSync(join(workspace, "events.jsonl"), "{}\n");
+  const gate = new GateService({ workspace, cwd });
+  const decide = (tool: string, path: string) => gate.decide(
+    event(1, "tool_requested", {
+      call_id: "c1", name: tool, input: { path },
+    }),
+  ).action;
+
+  // 修复使命点名要用的三条路径,一条都不能被拦。
+  assert.equal(decide("Read", "../pipeline/compile.log"), "allow");
+  assert.equal(decide("Read", "../reviews/discussions.json"), "allow");
+  assert.equal(decide("Write", "../review_replies.md"), "allow");
+  assert.equal(decide("Edit", "src/a.java"), "allow");
+  // 账本:读随便读(本来就是它自己的记录),写一律拒——伪造事件流、
+  // 等待记录或流水线事实等于伪造证据。
+  assert.equal(decide("Read", "../events.jsonl"), "allow");
+  for (const ledger of [
+    "../events.jsonl", "../transcript.jsonl", "../waiting.json",
+    "../task.json", "../annotations.jsonl", "../pipeline-facts.json",
+    "../pi-agent/config.json",
+  ]) {
+    assert.equal(decide("Write", ledger), "deny", ledger);
+  }
+  // 放宽到工作区不等于放开:任务之外照旧拦死。
+  assert.equal(decide("Read", "../../别人的任务"), "deny");
+  assert.equal(decide("Write", "/etc/passwd"), "deny");
 });

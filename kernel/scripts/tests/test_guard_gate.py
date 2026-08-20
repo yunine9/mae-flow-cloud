@@ -168,6 +168,29 @@ class BashWriteGateTests(unittest.TestCase):
         self.assertEqual("allow", decide_bash_write(self.context(
             offenders=("src/main.py",))).kind)
 
+    def test_pipeline_record_is_not_a_self_service_green_light(self):
+        """流水线事实只收宿主递的:会话自己登记=自己给自己发绿灯。
+
+        2026-08-20 复核实测:手写一份两字段 JSON 递给 pipeline record,
+        内核就记 PASS、三项全 passed、连"宿主已推送"的收据也照收,
+        义务核销当场放行——什么都没编译、没测、没扫、没推。宿主是
+        直接子进程调用,不走这条门禁,所以挡住会话这条路不误伤交付。"""
+        for command in (
+            'python ".mae-flow-work/bin/mae-flow.py" pipeline record '
+            '--file f.json',
+            "python3 /plugin/scripts/mae-flow.py  pipeline  record --file x",
+        ):
+            with self.subTest(command=command):
+                blocked = decide_bash_write(self.context(command=command))
+                self.assertEqual(
+                    ("absolute", "bash-pipeline-record-self-report"),
+                    (blocked.kind, blocked.rule))
+                # 绝对类不追加放行令,出路必须写在文案里。
+                self.assertIn("结束当前回合", blocked.message)
+        # 只读的 show 不受影响:看已登记的结论是正当需求。
+        self.assertEqual("allow", decide_bash_write(self.context(
+            command='python "mae-flow.py" pipeline show')).kind)
+
     def test_flow_head_blocks_bash_source_writes(self):
         """Bash 写源码与 Edit 同一条头部纪律(sed -i/重定向绕不过去)。"""
         head = decide_bash_write(self.context(
