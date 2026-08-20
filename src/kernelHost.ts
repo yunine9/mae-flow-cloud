@@ -153,11 +153,47 @@ export class KernelHost {
     };
   }
 
+  /** 基础设施故障重试:超时/起不来才重试,内核**答了**(退 0 或退 2)
+   * 就是它的裁决,一次都不重试。
+   *
+   * 为什么要有这一层:门禁与证据登记现在是 fail-closed(登记失败还往下
+   * 走,等于让没记账的动作过关),但 fail-closed 不等于"一次抖动就判死"
+   * ——宿主负载高、python 冷启动、内网巨仓的一次 30 秒超时,不该让整轮
+   * 白跑。先自己再试,试不动了再如实停。 */
+  private static readonly INFRA_ATTEMPTS = 3;
+
+  private async dispatchWithRetry(
+    event: string,
+    payload: Record<string, unknown>,
+  ): Promise<DispatchResult> {
+    let last = await this.spawnDispatch(event, payload);
+    for (let attempt = 2;
+         last.infraError && attempt <= KernelHost.INFRA_ATTEMPTS;
+         attempt += 1) {
+      this.options.log?.(
+        `${last.infraError},第 ${attempt}/${KernelHost.INFRA_ATTEMPTS} 次重试`);
+      await new Promise((tick) =>
+        setTimeout(tick, 200 * (attempt - 1)).unref());
+      last = await this.spawnDispatch(event, payload);
+    }
+    if (last.infraError) {
+      last = {
+        ...last,
+        infraError: `${last.infraError}(已重试 `
+          + `${KernelHost.INFRA_ATTEMPTS} 次仍不可用)`,
+      };
+      this.options.log?.(
+        `${last.infraError};门禁与证据登记按 fail-closed 处理,`
+        + "任务如实收口请人工查看内核环境");
+    }
+    return last;
+  }
+
   private dispatch(
     event: string,
     payload: Record<string, unknown>,
   ): Promise<DispatchResult> {
-    const run = this.chain.then(() => this.spawnDispatch(event, payload));
+    const run = this.chain.then(() => this.dispatchWithRetry(event, payload));
     // 失败不断链:fail-open 由调用方语义决定,串行化必须继续。
     this.chain = run.catch(() => undefined);
     return run;
@@ -183,8 +219,11 @@ export class KernelHost {
       child.stdout.on("data", (chunk: string) => (stdout += chunk));
       child.stderr.on("data", (chunk: string) => (stderr += chunk));
       const timer = setTimeout(() => {
+        // 这里只记事实,判不判死是 dispatchWithRetry 的事(可能只是抖了
+        // 一下)。原来这行直接宣布"按 fail-closed 停止推进",而那时候
+        // 还没试第二次,日志比真相严重。
         infraError = `dispatch ${event} 超时`;
-        this.options.log?.(`${infraError},当前任务按 fail-closed 停止推进`);
+        this.options.log?.(infraError);
         child.kill("SIGKILL");
       }, this.options.timeoutMs ?? 30_000);
       child.on("close", (code) => {
