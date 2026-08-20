@@ -374,6 +374,56 @@ test("内网真实门禁集(19 项):质量红要派修复,受保护分支挂人�
   }
 });
 
+test("日志只详细到一维时:失败维度逐项点名,不许修完细的那维就交差", async () => {
+  // 2026-08-21 内网真实数据:log 里 CODECHECK 给到了文件+行号+规则
+  // (1181 字),COMPILE 只有一句"构建失败=1"(build log 拿不到)。
+  // 只喂 log,模型会照着详细那一维修完就提交,编译照旧红,又白烧一轮。
+  // checks 是结构化的平台事实,失败维度必须点名进使命。
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  platform.statusQueue.push("failed");
+  platform.nextPipelineChecks = [
+    { dimension: "COMPILE", status: "failed", job: "CloudBuild2.0" },
+    { dimension: "UT", status: "success", job: "unit-test" },
+    { dimension: "CODECHECK", status: "failed", job: "CodeCCP2.0" },
+  ];
+  platform.nextPipelineLog = [
+    "FAILED stage=CodeCCP2.0",
+    "【CODECHECK 告警明细】",
+    "  NRANROpMgr.cpp:115 | function 'processAdviceStatus' exceeds size",
+    "    规则: G.FUN.01-CPP 函数功能要单一",
+  ].join("\n");
+  await platform.start();
+  const model = new ScriptedModelServer([
+    ...walkScript(),
+    { text: "CodeCheck 已修;COMPILE 这一维日志与 ../pipeline/ 均无失败原文,"
+        + "不猜改——请补 build log 通道。" },
+  ], "scripted-v1", { linear: true });
+  await model.start();
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-dims-"));
+  const service = buildService(platform, dataDir, model.modelsJson());
+  try {
+    const id = service.create("交付 REQ9:逐项维度").id;
+    await until(() =>
+      (service.get(id)!.delivery?.loop?.state ?? "") === "halted",
+      "无新提交应如实停下");
+    const seen = model.requests
+      .flatMap((request) => (request as any).messages ?? [])
+      .map((message: any) => JSON.stringify(message.content ?? ""))
+      .join("\n");
+    assert.match(seen, /本轮失败的维度/, "失败维度要单独点名");
+    assert.match(seen, /COMPILE\(CloudBuild2\.0\)/, "点名要带 job 便于定位");
+    assert.match(seen, /CODECHECK\(CodeCCP2\.0\)/);
+    assert.ok(!seen.includes("UT(unit-test)"), "过了的维度不许混进来");
+    assert.match(seen, /每一维都要收拾/, "得堵死'修细的那维就交差'");
+    // 日志本身有真内容,不该被"无证据"判据误伤
+    assert.match(seen, /失败详情\(平台原文\)/);
+  } finally {
+    await model.stop();
+    await platform.stop();
+  }
+});
+
 test("失败详情只是个链接:使命明说无证据,不许假装'平台原文'", async () => {
   // 内网实锤:适配层把 log 填成流水线页面链接(会话没有登录态打不开),
   // 使命却包装成"失败详情(平台原文)"——会话以为自己有输入,硬着头皮

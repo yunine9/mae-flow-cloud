@@ -3389,8 +3389,23 @@ export class TaskService {
     const roundText = loop.max !== undefined
       ? `第 ${loop.round}/${loop.max} 轮` : `第 ${loop.round} 轮`;
     delivery.pipeline = `failed(${roundText}修复中)`;
+    // 逐项事实单独进使命(2026-08-21 内网数据逼出来的):平台的 log 详细
+    // 程度按维度不均——CODECHECK 给到了文件行号规则,COMPILE 只有一句
+    // "构建失败=1"。只喂 log,模型会照着详细那一维修完就交,另一维照旧
+    // 红,又是白烧一轮。checks 是结构化的平台事实,把失败维度点名列出,
+    // 模型才知道本轮的完整战场;某一维没有细节就明说去要,别默默漏掉。
+    const failedDimensions = (delivery.checks ?? [])
+      .filter((check) => check.status === "failed")
+      .map((check) => check.dimension + (check.job ? `(${check.job})` : ""));
     task.mission = [
       `流水线红了,把它修到绿是你此刻唯一的使命(${roundText}修复):`,
+      ...(failedDimensions.length ? [
+        `- 本轮失败的维度(平台逐项事实,权威):`
+        + `${failedDimensions.join("、")}。**每一维都要收拾**,`
+        + `不要只修下面日志里讲得细的那一维就交差——日志的详细程度`
+        + `按维度不均,讲得少不等于没红。某一维在日志和 ../pipeline/ 里`
+        + `都找不到细节时,不许猜改,把"缺哪一维的失败原文"写进收口发言。`,
+      ] : []),
       ...(blindInput ? [
         `- 分支上提交 ${sha} 的权威流水线结果是 failed,**但平台没有给出`
         + `失败日志原文**(只给了: ${loop.failure})。你手里没有可信的`
