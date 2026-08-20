@@ -3375,9 +3375,17 @@ export class TaskService {
     // ——会话以为自己有输入,硬着头皮定位→修改→提交,看着专业实为
     // 猜改,烧流水线还烧不出结论。证据缺席必须明说,行为才会从"猜改
     // 凑提交"变成"能自证的修、不能自证的走诊断出口停下喊人"。
+    // 判据不能只认裸链接:内网真实形态是"标签 + 链接"
+    // (`FAILED stage=CodeCCP2.0 job=CodeCCP2.0  detail: https://…`),
+    // 只认裸链接的第一版正好漏掉了它要防的那个场景(2026-08-21 读进场
+    // 报告逮住)。改判"把链接抠掉之后还剩多少诊断内容":剩下的只有
+    // stage/job 标签 = 链接在替内容站岗。没有链接则不论长短都是平台
+    // 给的真内容(如 "BUILD FAILURE: 模块 x 编译失败"),不算无证据。
+    const withoutLinks = loop.failure.replace(/https?:\/\/\S+/g, "").trim();
     const blindInput = !artifacts.length
-      && (/^https?:\/\/\S+$/.test(loop.failure.trim())
-        || loop.failure === "(平台未提供失败详情)");
+      && (loop.failure === "(平台未提供失败详情)"
+        || (withoutLinks.length < loop.failure.trim().length
+          && withoutLinks.length < 120));
     const roundText = loop.max !== undefined
       ? `第 ${loop.round}/${loop.max} 轮` : `第 ${loop.round} 轮`;
     delivery.pipeline = `failed(${roundText}修复中)`;

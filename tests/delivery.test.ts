@@ -637,6 +637,11 @@ test("修复环:红→专职会话修复→推新提交→新流水线绿→等�
       .join("\n");
     assert.match(seen, /唯一的使命/);
     assert.match(seen, /NotifyServiceTest 断言失败/);
+    // 反向守卫:短但真实的失败原文(平台就给这么多,没有链接)不许被
+    // "无证据"判据误伤——那条判据是给"链接替内容站岗"准备的。
+    assert.match(seen, /失败详情\(平台原文\)/,
+      "有真内容时必须走正常分支");
+    assert.ok(!seen.includes("没有给出"), "短原文不是无证据");
   } finally {
     await model.stop();
     await platform.stop();

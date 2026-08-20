@@ -382,7 +382,11 @@ test("失败详情只是个链接:使命明说无证据,不许假装'平台原�
   const platform = new FakeGitPlatform();
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
   platform.statusQueue.push("failed");
-  platform.nextPipelineLog = "https://pipeline.corp/runs/9527";
+  // 内网真实形态:标签 + 链接。第一版判据只认裸链接,正好漏掉它
+  // (2026-08-21 读进场报告逮住)——用真实形态当裁判,别用理想形态。
+  platform.nextPipelineLog =
+    "FAILED stage=CodeCCP2.0 job=CodeCCP2.0  detail: "
+    + "https://codeccp.tool.corp/tasks/44944736";
   await platform.start();
   const model = new ScriptedModelServer([
     ...walkScript(),
