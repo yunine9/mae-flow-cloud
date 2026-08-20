@@ -67,7 +67,8 @@ export interface Outcome {
  * 不接时行为与演练模式一致,接上时内核契约成为真正的门禁与证据引擎。 */
 export interface HostHooks {
   preTool?(event: SemanticEvent): Promise<{ action: string; reason?: string } | undefined>;
-  postTool?(event: SemanticEvent): Promise<void>;
+  /** 解析出字符串 = 内核退 2 的纠偏话,调用方须送回模型,不是失败。 */
+  postTool?(event: SemanticEvent): Promise<void | string>;
   flush?(): Promise<void>;
 }
 
@@ -336,7 +337,15 @@ export class CloudSession {
   private kernelBypass(work: Promise<unknown> | undefined): void {
     if (!work) return;
     let tracked!: Promise<void>;
-    tracked = work.then(() => undefined).catch((error) => {
+    tracked = work.then((feedback) => {
+      // 解析出字符串 = 内核退 2 的纠偏话(补模板章节、对账不符)。那是
+      // 让模型改的指令,不是登记失败——进 kernelFailures 会把"让模型改"
+      // 升级成整单判死(内网实锤:IMPLEMENTATION 缺一节,任务 failed,
+      // push/MR 全没发生,而模型全程没见过那句话)。
+      if (typeof feedback === "string" && feedback.trim()) {
+        this.relayKernelFeedback(feedback.trim());
+      }
+    }).catch((error) => {
       const detail = String(error);
       this.kernelFailures.push(detail);
       this.options.log?.(
@@ -344,6 +353,21 @@ export class CloudSession {
         + detail);
     }).finally(() => this.pendingKernel.delete(tracked));
     this.pendingKernel.add(tracked);
+  }
+
+  /** 把内核 posttooluse 的纠偏话送回模型。单机形态里这段 stderr 由
+   * harness 直接喂进上下文;云端的等价通道是 steer——当前工具调用一做完
+   * 就送达,模型在同一轮里补。撞上回合收口没送到也不丢:settleTurn 的
+   * "未送达插话补发"会连它一起取回补发。送达失败只记日志(fail-open):
+   * 反馈丢了顶多这轮没纠,下次写同一文件内核还会再说一遍。 */
+  private relayKernelFeedback(text: string): void {
+    Promise.resolve()
+      .then(() => (this.session as any).steer(text))
+      .then(() => this.emit("user_message", this.sessionId,
+        { text, via: "kernel" }))
+      .catch((error) => this.options.log?.(
+        `任务 ${this.options.taskId} 内核反馈未能送回会话(已丢弃): `
+        + String(error)));
   }
 
   private async flushKernel(): Promise<string> {

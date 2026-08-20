@@ -91,6 +91,32 @@ test("内核进程不可用时授权与证据都 fail-closed", async () => {
   );
 });
 
+test("posttooluse 退 2 是纠偏话不是登记失败:原文返回,不抛异常", async () => {
+  // 2026-08-20 内网实锤:IMPLEMENTATION 缺"定稿自查"一节,内核 posttooluse
+  // 退 2 + stderr 让模型补——单机形态里这段 stderr 直接进模型上下文。
+  // 云端却把一切非零当"登记失败"抛出去,整单判死,push/MR 全没发生,
+  // 模型全程没见过那句话。
+  const workspace = mkdtempSync(join(tmpdir(), "mfc-verdict-ws-"));
+  const kernelRoot = mkdtempSync(join(tmpdir(), "mfc-verdict-kernel-"));
+  mkdirSync(join(kernelRoot, "hooks"), { recursive: true });
+  writeFileSync(join(kernelRoot, "hooks", "dispatch.py"), [
+    "import sys",
+    "if sys.argv[1] == 'posttooluse':",
+    "    sys.stderr.write('[mae-flow] IMPLEMENTATION 结构与模板不符,"
+      + "缺少章节: 3 定稿自查。请补齐缺失章节。')",
+    "    sys.exit(2)",
+    "sys.exit(0)",
+  ].join("\n"));
+  const host = new KernelHost({
+    kernelRoot, workspace,
+    transcriptPath: join(workspace, "transcript.jsonl"),
+    taskId: "t-verdict", python: "python3",
+  });
+  const feedback = await host.postTool(toolEvent("tool_finished", "c9"));
+  assert.match(feedback ?? "", /缺少章节: 3 定稿自查/,
+    "退 2 的原文必须完整交给调用方送回模型");
+});
+
 test("基础设施抖一下不判死:内核恢复后照常放行,不重试真裁决", async () => {
   // 宿主负载高、python 冷启动、内网巨仓的一次超时,不该让整轮白跑。
   // 但内核**答了**(退 0 放行 / 退 2 打回)就是它的裁决,一次都不许重试

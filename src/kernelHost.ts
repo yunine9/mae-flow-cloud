@@ -87,8 +87,15 @@ export class KernelHost {
     return undefined;
   }
 
-  /** posttooluse:证据登记、契约校验、Task 完成对账都走这条。 */
-  async postTool(event: SemanticEvent): Promise<void> {
+  /** posttooluse:证据登记、契约校验、Task 完成对账都走这条。
+   *
+   * 退 2 不是登记失败,是内核裁决完给模型的纠偏话(补模板章节、Task
+   * 返回对账不符),单机形态里这段 stderr 由 harness 直接喂回模型——
+   * 这里返回给调用方送回会话。只有 infra(重试后仍起不来)和其余非零
+   * 才是真·登记失败。2026-08-20 内网实锤:IMPLEMENTATION 缺"定稿自查"
+   * 一节,退 2 被当成登记失败,整单判死,push/MR 全没发生;而模型全程
+   * 没见过那句"请补齐缺失章节"。 */
+  async postTool(event: SemanticEvent): Promise<string | undefined> {
     const payload = event.payload as Record<string, any>;
     // AskUserQuestion 的回传形状是结构化 answers(问题→选项):
     // 内核 ack 的"整份背书"判定按结构而非措辞——键是配置项名的只代表
@@ -108,8 +115,14 @@ export class KernelHost {
       tool_response: response,
       ...this.common(),
     });
+    if (!result.infraError && result.code === 2) {
+      await this.captureRequirementAfterInit(payload);
+      return (result.stdout + "\n" + result.stderr).trim()
+        || "[mae-flow] 已打回,内核未给出原因";
+    }
     this.requireSuccess("posttooluse", result);
     await this.captureRequirementAfterInit(payload);
+    return undefined;
   }
 
   /** Wait until every queued Hook write is durable before a turn can settle. */
