@@ -340,6 +340,10 @@ export interface TaskSummary {
       max?: number;
       state: "repairing" | "green" | "exhausted" | "halted";
       diagnosis?: string;
+      /** 流水线失败的平台原文(摘要)。刹车告警必须连它一起亮:诊断是
+       * 会话的收口发言,可能在聊别的事(内网实锤:最后一轮会话在补文档
+       * 章节,告警正文全是章节标题,流水线到底红在哪谁也看不见)。 */
+      failure?: string;
     };
   };
   progress?: TaskProgress;

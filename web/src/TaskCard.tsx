@@ -193,6 +193,13 @@ export function TaskCard({
                   ?? task.detail ?? "请查看流水线日志确认原因。"}
                 {" "}办完之后点「重跑续推」，机器接着干。
               </span>
+              {/* 诊断是会话的收口发言,可能在聊别的事(实锤:最后一轮在补
+                  文档章节)。流水线到底红在哪必须单独亮,不靠诊断捎带。 */}
+              {task.delivery?.loop?.failure && (
+                <span className="alert-failure">
+                  流水线失败原文:{task.delivery.loop.failure}
+                </span>
+              )}
             </div>
           )}
           {/* 还在等的时候也要说清在等什么。这行原来根本不渲染:页面只有
