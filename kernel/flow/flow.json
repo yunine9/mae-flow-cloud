@@ -236,6 +236,10 @@
     "open": {
       "title": "本地 Spec 确认",
       "user_ack": true,
+      "approval_subject": {
+        "kind": "artifacts",
+        "artifacts": ["spec"]
+      },
       "confirmation_answers": [
         "Spec 内容已确认，生成 Story"
       ],
@@ -263,6 +267,10 @@
     "story": {
       "title": "Story 与实施附录生成及一次设计检视",
       "user_ack": true,
+      "approval_subject": {
+        "kind": "artifacts",
+        "artifacts": ["story", "implementation"]
+      },
       "confirmation_answers": [
         "Story 与实施附录已确认，进入编码实现"
       ],
@@ -312,6 +320,10 @@
     "hf_open": {
       "title": "已定位问题修复 — 确认修改范围",
       "user_ack": true,
+      "approval_subject": {
+        "kind": "artifacts",
+        "artifacts": ["spec"]
+      },
       "confirmation_answers": [
         "确认范围并继续"
       ],
@@ -325,6 +337,10 @@
     "tw_open": {
       "title": "局部修改 — 确认修改范围",
       "user_ack": true,
+      "approval_subject": {
+        "kind": "artifacts",
+        "artifacts": ["spec"]
+      },
       "confirmation_answers": [
         "确认范围并继续"
       ],
@@ -432,6 +448,9 @@
     "build_review": {
       "title": "编码完成 — 用户检视代码",
       "user_ack": true,
+      "approval_subject": {
+        "kind": "worktree"
+      },
       "choice_key": "build_review_decision",
       "choices": [
         "continue",
@@ -472,6 +491,9 @@
     "quality_review": {
       "title": "质量改动 — 用户统一检视",
       "user_ack": true,
+      "approval_subject": {
+        "kind": "worktree"
+      },
       "choice_key": "quality_review_decision",
       "choices": [
         "continue",
@@ -686,12 +708,26 @@
     "push": {
       "title": "推送分支",
       "dynamic_next": [
-        "moonlight_review"
+        "moonlight_review",
+        "external_verify"
       ],
       "evidence": [
         {
           "type": "pushed"
         }
+      ],
+      "next": "end"
+    },
+    "external_verify": {
+      "title": "等待权威流水线",
+      "host_wait": true,
+      "evidence": [
+        {
+          "type": "pipeline_obligations_passed"
+        }
+      ],
+      "dynamic_next": [
+        "moonlight_review"
       ],
       "next": "end"
     },

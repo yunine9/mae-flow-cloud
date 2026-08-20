@@ -88,6 +88,26 @@ def main():
           r.returncode == 0, r.stdout + r.stderr)
     r = gate(root, "edit", "openspec/changes/probe-x/change.md")
     check("build 步改本单 change.md 放行", r.returncode == 0, r.stdout + r.stderr)
+    # UT 抢跑提醒(2026-08-20 云端实锤:模型在 build 步顺手开写 UT,
+    # 手写不计证据纯烧 token):新建测试文件放行但记 advisory;
+    # 修改已有测试不提醒——重构弄坏旧测试后修它是合法动作。
+    adv_path = os.path.join(root, ".mae-flow.json.advisories")
+
+    def advisories_text():
+        if not os.path.exists(adv_path):
+            return ""
+        with open(adv_path, encoding="utf-8") as fh:
+            return fh.read()
+
+    write(root, "tests/test_old.py", "def test_old():\n    pass\n")
+    r = gate(root, "edit", "tests/test_old.py")
+    check("build 步改已有测试放行且不提醒",
+          r.returncode == 0 and "edit-ut-preempt" not in advisories_text(),
+          r.stdout + r.stderr)
+    r = gate(root, "edit", "tests/test_new.py")
+    check("build 步新建测试文件放行但记 UT 抢跑提醒",
+          r.returncode == 0 and "edit-ut-preempt" in advisories_text(),
+          r.stdout + r.stderr)
     root = make_repo(base, "g2", "open")
     r = gate(root, "edit", "src/foo.c")
     check("open 步改源码放行(本步不许改源码属流程督促,已退役)",

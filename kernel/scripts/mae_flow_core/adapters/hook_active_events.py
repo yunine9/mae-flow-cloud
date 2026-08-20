@@ -31,21 +31,14 @@ from mae_flow_core.adapters.hook_agent_lifecycle import HookAgentLifecycle
 from mae_flow_core.panel import sync as panel_sync
 from mae_flow_core.adapters.hook_transcript_paths import (
     resolve_agent_transcript,
-    transcript_quality_call,
 )
-from mae_flow_core.workflow.agent_observations import (
-    record_agent_started,
-    started_observation,
+from mae_flow_core.adapters.hook_quality_execution import (
+    HookQualityExecutionMixin,
 )
-from mae_flow_core.workflow.quality_executions import (
-    quality_input_snapshot,
-    record_quality_execution,
-)
+from mae_flow_core.workflow.agent_observations import record_agent_started
 from mae_flow_core.quality.tool_transcript import (
-    bash_call, bash_calls, call_failed, exact_skill_call, parse_transcript,
-    skill_call,
+    parse_transcript,
 )
-from mae_flow_core.quality.agent_contracts import required_skill
 from mae_flow_core.quality.compile_side_effects import (
     successful_direct_write_paths,
 )
@@ -67,6 +60,7 @@ _ACTION_BASH_BLOCKED = (
     "[mae-flow] 禁止通过命令修改独立任务状态、任务卡或手工调用 Hook。"
     "查看用 action status，退出用 action cancel。\n"
 )
+_PATH_BLOCKED = "[mae-flow] 文件工具只能访问当前任务仓库；已阻止越过仓库边界的路径: %s\n"
 _STOP_BLOCKED = (
     "[mae-flow] 月光宝盒仍在执行，当前步骤 %s，禁止提前结束回复或等待用户。"
     "继续执行 current 输出给出的动作；质量问题尽力后用 moonlight defer，"
@@ -81,7 +75,7 @@ _ERROR_PATTERN = re.compile(
 )
 
 
-class ActiveHookEventAdapter:
+class ActiveHookEventAdapter(HookQualityExecutionMixin):
     """Execute application decisions through filesystem and CLI ports."""
 
     def __init__(
@@ -161,12 +155,13 @@ class ActiveHookEventAdapter:
     def pretool(self, payload):
         tool = payload.get("tool_name", "")
         tool_input = payload.get("tool_input") or {}
-        decision = active_pretool_decision(
-            tool, tool_input, self._moonlight_enabled())
+        decision = active_pretool_decision(tool, tool_input, self._moonlight_enabled(), self.repository_root)
         if decision.action == "agent":
             return self._gate_agent_dispatch(payload, tool_input)
         if decision.action == "block-question":
             return HookResponse(exit_code=2, stderr=_QUESTION_BLOCKED)
+        if decision.action == "block-path":
+            return HookResponse(exit_code=2, stderr=_PATH_BLOCKED % decision.value)
         if decision.action == "gate-edit":
             return HookResponse(
                 exit_code=self.maeflow("gate", "edit", decision.value))
@@ -177,10 +172,11 @@ class ActiveHookEventAdapter:
 
     def standalone_pretool(self, payload):
         tool_input = payload.get("tool_input") or {}
-        decision = standalone_pretool_decision(
-            payload.get("tool_name", ""), tool_input)
+        decision = standalone_pretool_decision(payload.get("tool_name", ""), tool_input, self.repository_root)
         if decision.action == "agent":
             return self._gate_agent_dispatch(payload, tool_input)
+        if decision.action == "block-path":
+            return HookResponse(exit_code=2, stderr=_PATH_BLOCKED % decision.value)
         if decision.action == "block-edit":
             return HookResponse(exit_code=2, stderr=_ACTION_EDIT_BLOCKED)
         if decision.action == "block-bash":
@@ -314,59 +310,6 @@ class ActiveHookEventAdapter:
         # 按 meta 精确绑定,并用确知的项目根反推目录(不靠 hook 进程 cwd)。
         return resolve_agent_transcript(
             payload, invocation_id, project_root=self.repository_root)
-
-    @staticmethod
-    def _quality_call(kind, calls, config, task=None):
-        if kind == "COMPILE":
-            build = str(config.get("编译方式", "") or "")
-            if "build-fix" in build.lower():
-                return skill_call(calls, "build-fix")
-            return bash_call(calls, build)
-        if kind == "UT":
-            generator = str(config.get("UT生成方式", "") or "")
-            need = required_skill(generator)
-            if (str((task or {}).get("ut_phase", "")) != "final" and need):
-                generator_call = exact_skill_call(calls, need)
-                if not generator_call or call_failed(generator_call):
-                    return None
-            return bash_call(calls, str(config.get("UT运行命令", "") or ""))
-        if kind == "CODECHECK":
-            matches = bash_calls(calls, "codecheck fullcheck")
-            return matches[-1][0] if matches else None
-        return None
-
-    def _record_quality_execution(self, payload, invocation_id, lifecycle):
-        started = started_observation(self.state, invocation_id) or {}
-        kind = started.get("kind", "")
-        if kind not in ("COMPILE", "CODECHECK", "UT"):
-            return
-        state = self.runtime._contract_state()
-        task = (state.get("agent_tasks", {}) or {}).get(kind, {}) or {}
-        # 宿主把 transcript 刷盘晚于事件本身(实测 0~8 秒),必须重试等落盘
-        call = transcript_quality_call(
-            payload, invocation_id,
-            lambda path: parse_transcript(
-                self._load_agent_transcript(path)).tool_calls,
-            lambda calls: self._quality_call(
-                kind, calls, state.get("config", {}) or {}, task),
-            log=self.log, project_root=self.repository_root)
-        if call is None and lifecycle == "returned":
-            self.log("quality transcript unresolved after retries"
-                     "(fail-closed evidence)")
-        command = ""
-        if call:
-            value = call.input
-            command = value.get("command", "") if isinstance(value, dict) else str(value)
-            if call.name.lower() == "skill":
-                command = "Skill:" + str(value)
-        succeeded = bool(
-            lifecycle == "returned" and call and not call_failed(call))
-        record_quality_execution(
-            self.state, kind, started.get("step", ""), invocation_id,
-            command, succeeded,
-            quality_input_snapshot(state, kind, started.get("step", "")),
-            time.strftime("%Y-%m-%d %H:%M:%S"), lifecycle=lifecycle,
-        )
 
     def _scope_violation(self, payload, invocation_id):
         """Check repository writes without interpreting the Agent response."""

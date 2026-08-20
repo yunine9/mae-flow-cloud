@@ -1,11 +1,20 @@
 小改的单元测试步骤。纯文档改动直接尝试 done；存在源码、测试或构建文件变化时必须运行 UT。
 
-1. 执行 `python "{MAEFLOW_PATH}" agent-task ut`，按任务卡的自适应批次推进；
+1. 执行 `python "{MAEFLOW_PATH}" agent-task ut`，按任务卡的自适应批次推进；先审计并复用已有测试，
+   覆盖充分时不改文件，只有缺口才新增/修改测试；
 2. 把输出的唯一启动话术原样交给 ut-generator-agent；
-3. Agent 必须按任务卡的生成方式和运行命令执行，不得猜测；
-4. 以真实测试调用和退出状态判断；存在失败、疑似源码缺陷或验收缺口时不能推进。
+3. Agent 必须按任务卡的 UT 编写方式执行，不得猜测；
+{{#LOCAL_UT_RUN}}
+4. 按任务卡运行命令真实执行，以调用与退出状态判断；存在失败、疑似源码缺陷或验收缺口时不能推进。
+{{/LOCAL_UT_RUN}}
+{{#PIPELINE_UT_RUN}}
+4. 本机只编写/审计测试，不运行、不报虚构数字；所有编写批真实返回后执行 `done`，
+   登记待权威流水线核销的 UT 运行义务。
+{{/PIPELINE_UT_RUN}}
 
 大范围每个实例只执行 Harness 当前签发的一批。各批共享本轮未提交测试，不逐批提交；
-全量收口通过后只进行一次统一用户检视和提交。
+{{#LOCAL_UT_RUN}}全量收口通过后{{/LOCAL_UT_RUN}}{{#PIPELINE_UT_RUN}}全部编写批完成后{{/PIPELINE_UT_RUN}}
+只进行一次统一用户检视和提交。
 UT 如果发现源码可能有问题，仍按主流程的用户裁决方式处理。用户确认修改源码后，done 会先进入
-compile-agent 和统一检视，提交后从小改 CodeCheck 继续，不回跑 Ponytail。
+{{#LOCAL_COMPILE}}compile-agent{{/LOCAL_COMPILE}}{{#PIPELINE_COMPILE}}外部 COMPILE 义务刷新{{/PIPELINE_COMPILE}}
+和统一检视，提交后从小改 CodeCheck 继续，不回跑 Ponytail。

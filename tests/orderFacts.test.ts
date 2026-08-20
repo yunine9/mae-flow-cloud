@@ -14,7 +14,13 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
@@ -69,8 +75,7 @@ test("下单事实:三项配置免问、Q2 不出、tweak 免卡入链、改选�
     { tool: { name: "bash", input: { command:
         `${MAEFLOW} config-review ` +
         `--set 需求文档=docs/req/REQ-${ticket}.md ` +
-        `--set "编译方式=mvn -B -q compile" --set UT生成方式=java-autout ` +
-        `--set "UT运行命令=mvn -B test"` } } },
+        `--set UT生成方式=java-autout` } } },
     { tool: { name: "AskUserQuestion", input: Q1_ONLY_CARD } },
     { tool: { name: "bash", input: { command: `${MAEFLOW} done` } } },
     // 先演一次背叛:替用户改选 full——内核必须按下单事实拒绝。
@@ -87,6 +92,10 @@ test("下单事实:三项配置免问、Q2 不出、tweak 免卡入链、改选�
     { text: "下单事实契约演练完毕。" },
   ];
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-order-"));
+  const skillDir = join(dataDir, "skills", "java-autout");
+  mkdirSync(skillDir, { recursive: true });
+  writeFileSync(join(skillDir, "SKILL.md"),
+    "---\nname: java-autout\ndescription: 只负责 Java 单元测试编写\n---\n");
   const model = new ScriptedModelServer(script);
   await model.start();
   const service = new TaskService({
@@ -116,16 +125,30 @@ test("下单事实:三项配置免问、Q2 不出、tweak 免卡入链、改选�
         answers,
       });
     }
-    await until(() => {
+    const settled = await until(() => {
       const now = service.get(created.id)!;
-      if (now.status === "failed") throw new Error(now.detail);
-      return now.status === "completed" ? now : undefined;
+      return now.status === "failed" || now.status === "completed"
+        ? now : undefined;
     }, "任务收口");
+    // 剧本只走到 tw_open 就结束，终态硬不变式应如实拒绝 completed；
+    // 本用例关注的是此前已落袋的下单事实，不靠伪终态放行。
+    assert.equal(settled.status, "failed");
+    assert.match(settled.detail ?? "", /tw_open|尚未到 terminal/);
     const repoDir = join(dataDir, created.id, "mae-flow-fieldtest-java");
     // 宿主真把下单事实落了盘,且不混进交付提交(info/exclude 登记)。
     const order = JSON.parse(readFileSync(
       join(repoDir, ".mae-flow-order.json"), "utf-8"));
     assert.deepEqual(order, {
+      execution_contract: {
+        schema: "mae-flow-execution/1",
+        host: "cloud",
+        compile: "pipeline",
+        ut_write: "agent",
+        ut_run: "pipeline",
+        codecheck: "pipeline",
+        git_push: "host",
+      },
+      "UT生成方式": "java-autout",
       "单号": ticket, "基线分支": "master",
       "工号": "cloudbot", "交付方式": "局部修改",
     });

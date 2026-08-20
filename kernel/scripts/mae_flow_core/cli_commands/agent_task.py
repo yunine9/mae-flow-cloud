@@ -9,6 +9,7 @@ from mae_flow_core.quality.ut_batches import (
 from mae_flow_core.orchestration.behavior_baseline import (
     load_relevant_domain_context,
 )
+from mae_flow_core.quality.ut_artifacts import task_contract as ut_artifact_contract
 
 from .shared import (
     BUILD_DESCRIPTOR_EXTS, SOURCE_FILENAMES, STATE_PATH, append_codecheck_event,
@@ -17,6 +18,7 @@ from .shared import (
     sys,
 )
 from .wiring import api
+from mae_flow_core import host_env
 
 def _task_scope(st, diff_override=""):
     if diff_override:
@@ -126,7 +128,8 @@ def _prepare_ut_session(
         st, sid, args, groups, task_head, accumulated, prior_returned):
     targets, error = api._changed_hunk_targets(st, groups["business"])
     if error:
-        api.die("无法计算 UT 函数级范围：" + error, 2)
+        api.die("无法计算 UT 函数级范围：" + error
+                + "；请先执行 doctor 检查 Git 范围，再重试 agent-task ut。", 2)
     target_ids = []
     for path in groups["business"]:
         rows = targets.get(path.replace("\\", "/"), [])
@@ -248,6 +251,7 @@ def _store_agent_task(flow, st, args, context):
         unchanged_initial_dirty=context["inherited_dirty"],
         ut_phase=context.get("ut_phase", ""),
         agent_write_receipts=api._agent_written_receipts(),
+        ut_artifact_contract=context.get("ut_artifact_contract", {}),
         at=time.strftime("%Y-%m-%d %H:%M:%S"))
     if kind == "CODECHECK":
         append_codecheck_event(
@@ -273,6 +277,11 @@ def cmd_agent_task(flow, st, args):
     """由代码生成完整子 Agent 任务卡，主模型不再临时拼参数。"""
     kind = args.kind.upper()
     sid = st["current"]
+    if kind == "COMPILE" and not host_env.build_runs_locally(st):
+        api.die(
+            "本单没有本地编译环境，不生成 COMPILE 任务卡，也不要启动 "
+            "compile-agent。直接执行 done；内核会登记待权威流水线核销的 "
+            "COMPILE 义务，尚未核销前不会宣称编译通过。", 2)
     task_diff_override = ""
     current_step = (flow.get("steps", {}) or {}).get(sid, {})
     precommit_review = kind == "COMPILE" and (
@@ -394,6 +403,9 @@ def cmd_agent_task(flow, st, args):
         if session.get("completed_batches") or ut_phase == "final":
             sources = _incremental_ut_sources(
                 st, final=ut_phase == "final")
+    ut_contract = (
+        ut_artifact_contract(ut_targets, ut_batches)
+        if kind == "UT" else {})
     lines = quality_task_card_documents.build_full_task_document({
         "kind": kind,
         "sid": sid,
@@ -417,8 +429,10 @@ def cmd_agent_task(flow, st, args):
         "notes": tuple(notes),
         "scan": scan,
         "ut_targets": ut_targets,
+        "ut_artifact_contract": ut_contract,
         "ut_batches": ut_batches,
         "ut_phase": ut_phase,
+        "execution_contract": st.get("execution_contract"),
     })
     _store_agent_task(flow, st, args, {
         "kind": kind, "sid": sid, "document": lines,
@@ -428,4 +442,5 @@ def cmd_agent_task(flow, st, args):
         "lightcheck_result": lightcheck_result, "ut_targets": ut_targets,
         "inherited_dirty": inherited_dirty,
         "ut_phase": ut_phase,
+        "ut_artifact_contract": ut_contract,
     })

@@ -41,13 +41,15 @@ def _supersedes(existing, incoming):
 
 def record_quality_execution(
         state_path, kind, step, invocation_id, command, succeeded,
-        input_snapshot, at, lifecycle="returned"):
+        input_snapshot, at, lifecycle="returned", details=None):
     record = {
         "kind": str(kind), "step": str(step),
         "invocation_id": str(invocation_id), "command": str(command or ""),
         "succeeded": bool(succeeded), "input_snapshot": dict(input_snapshot),
         "at": str(at), "lifecycle": str(lifecycle),
     }
+    if details:
+        record["details"] = dict(details)
 
     def same_invocation(item):
         return (
@@ -86,6 +88,27 @@ def successful_quality_execution(state_path, kind, step, input_snapshot):
                 and item.get("input_snapshot") == input_snapshot):
             return dict(item)
     return None
+
+
+def ut_artifact_receipts(state_path, step, input_snapshot=None):
+    """Return task-bound UT-writing receipts, irrespective of run location."""
+    data, error = safe_read_json(quality_execution_path(state_path))
+    if error or not isinstance(data, dict):
+        return ()
+    found = []
+    for item in data.get("executions", []):
+        if (not isinstance(item, dict)
+                or item.get("kind") != "UT"
+                or item.get("step") != step
+                or item.get("lifecycle") != "returned"):
+            continue
+        if (input_snapshot is not None
+                and item.get("input_snapshot") != input_snapshot):
+            continue
+        receipt = (item.get("details") or {}).get("ut_artifact")
+        if isinstance(receipt, dict):
+            found.append(dict(receipt))
+    return tuple(found)
 
 
 def invalidate_quality_executions(state_path, kind, step):

@@ -45,8 +45,8 @@ PHASES = {
     # domain_archive(领域知识归档)跑在 verify_spec 之后、最终检视之前。
     # 它曾按名字被归进「定规格」,于是阶段轨道走到这一步会从「验证」倒退
     # 两格——用户看到的"进度条不对"就是这么来的。
-    "交付": ("domain_archive", "delivery_review", "push", "moonlight_review",
-             "end"),
+    "交付": ("domain_archive", "delivery_review", "push", "external_verify",
+             "moonlight_review", "end"),
 }
 _STEP_PHASE = {step: phase for phase, steps in PHASES.items()
                for step in steps}

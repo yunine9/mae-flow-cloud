@@ -36,11 +36,21 @@ function fakeCli(dir: string): string {
       console.log(JSON.stringify({ data: { web_url:
         "https://codehub.corp/mr/42", argv: args } }));
     } else if (sub === "trigger") {
-      console.log(JSON.stringify({ data: { state: "RUNNING", argv: args } }));
+      console.log(JSON.stringify({ data: { state: "RUNNING", jobs: [
+        { quality: "COMPILE", state: "RUNNING", name: "compile" },
+        { quality: "UT", state: "PENDING", name: "unit-test" },
+        { quality: "CODECHECK", state: "PENDING", name: "codecheck" },
+      ], argv: args } }));
     } else if (sub === "status") {
       console.log(JSON.stringify({ data: { runs: [
-        { state: "RUNNING" },
-        { state: "FAILED", fail_log: "BUILD FAILURE: 覆盖率 61%" },
+        { state: "RUNNING", jobs: [
+          { quality: "COMPILE", state: "RUNNING", name: "compile" },
+        ] },
+        { state: "FAILED", fail_log: "BUILD FAILURE: 覆盖率 61%", jobs: [
+          { quality: "COMPILE", state: "SUCCESS", name: "compile" },
+          { quality: "UT", state: "FAILED", name: "unit-test" },
+          { quality: "CODECHECK", state: "SKIPPED", name: "codecheck" },
+        ] },
       ], argv: args } }));
     } else if (sub === "weird") {
       console.log(JSON.stringify({ data: { state: "SUSPENDED" } }));
@@ -87,14 +97,30 @@ function makeAdapter(dir: string, cli: string): PlatformAdapter {
       command: ["node", cli, "trigger", "--repo", "{repo}",
         "--sha", "{sha}", "--token", "{token}"],
       status: { json: "data.state" },
+      checks: { json: "data.jobs" },
+      check_dimension: { json: "quality" },
+      check_status: { json: "state" },
+      check_job: { json: "name" },
       status_map: { RUNNING: "running", SUCCESS: "success", FAILED: "failed" },
+      check_status_map: {
+        RUNNING: "running", PENDING: "pending", SUCCESS: "success",
+        FAILED: "failed", SKIPPED: "skipped",
+      },
     },
     pipeline_status: {
       command: ["node", cli, "status", "--sha", "{sha}", "--token", "{token}"],
       runs: { json: "data.runs" },
       status: { json: "state" },
       log: { json: "fail_log" },
+      checks: { json: "jobs" },
+      check_dimension: { json: "quality" },
+      check_status: { json: "state" },
+      check_job: { json: "name" },
       status_map: { RUNNING: "running", SUCCESS: "success", FAILED: "failed" },
+      check_status_map: {
+        RUNNING: "running", PENDING: "pending", SUCCESS: "success",
+        FAILED: "failed", SKIPPED: "skipped",
+      },
     },
   }));
   chmodSync(configPath, 0o600);
@@ -126,12 +152,18 @@ test("三端点走真 CLI:模板套值、抽取、状态映射、多 run 全对"
   const trigger = await adapter.handle("POST", "/pipeline/trigger",
     new URLSearchParams(), { repo: "r", sha: "abc123" }, {});
   assert.equal((trigger.payload as any).status, "running", "RUNNING 映射到契约词");
+  assert.deepEqual((trigger.payload as any).checks.map(
+    (item: { dimension: string }) => item.dimension),
+  ["COMPILE", "UT", "CODECHECK"]);
 
   const status = await adapter.handle("GET", "/pipeline/status",
     new URLSearchParams("sha=abc123&repo=r"), {}, {});
   const runs = (status.payload as any).runs;
   assert.equal(runs.length, 2);
   assert.equal(runs[1].status, "failed");
+  assert.equal(runs[1].checks[1].dimension, "UT");
+  assert.equal(runs[1].checks[1].status, "failed");
+  assert.equal(runs[1].checks[2].status, "skipped");
   assert.match(runs[1].log, /覆盖率 61%/, "失败日志是修复环的口粮");
 });
 

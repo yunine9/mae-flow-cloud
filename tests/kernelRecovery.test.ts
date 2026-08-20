@@ -41,8 +41,7 @@ const LIFE_A: Scene[] = [
       `${MAEFLOW} config-review --set 工号=cloudbot --set 基线分支=master ` +
       `--set 单号=${TICKET} --set 单号类型=REQ ` +
       `--set 需求文档=docs/req/REQ-${TICKET}.md ` +
-      `--set "编译方式=mvn -B -q compile" --set UT生成方式=java-autout ` +
-      `--set "UT运行命令=mvn -B test"` } } },
+      `--set UT生成方式=java-autout` } } },
   { tool: { name: "AskUserQuestion", input: CONFIG_CARD } },
   { text: "不该走到这里:等待应在上一幕挂起" },
 ];

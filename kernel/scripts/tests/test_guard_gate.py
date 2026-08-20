@@ -95,6 +95,30 @@ class EditGateTests(unittest.TestCase):
             path="src/main.py", match_path="src/main.py",
             is_source=True, workflow_chosen=True)).kind)
 
+    def test_new_test_file_in_compile_step_advises_not_blocks(self):
+        """编码步手写 UT 是抢跑白费(2026-08-20 云端实锤):只提醒不拦。
+        修改已有测试合法(重构会弄坏旧测试),非测试新文件不提醒。"""
+        preempt = decide_edit(self.context(
+            path="tests/test_new.py", match_path="tests/test_new.py",
+            is_source=True, compile_step=True, new_file=True,
+            is_test_path=True))
+        self.assertEqual(("advisory", "edit-ut-preempt"),
+                         (preempt.kind, preempt.rule))
+        self.assertIn("不计任何证据", preempt.message)
+        # 三个事实缺任何一个都不提醒:改已有测试/新建普通源码/非编码步。
+        for label, overrides in (
+                ("existing-test", dict(new_file=False, is_test_path=True,
+                                       compile_step=True)),
+                ("new-source", dict(new_file=True, is_test_path=False,
+                                    compile_step=True)),
+                ("not-compile-step", dict(new_file=True, is_test_path=True,
+                                          compile_step=False)),
+        ):
+            with self.subTest(case=label):
+                self.assertEqual("allow", decide_edit(self.context(
+                    path="src/x.py", match_path="src/x.py",
+                    is_source=True, **overrides)).kind)
+
     def test_allowed_edit_has_no_rule_or_message(self):
         self.assertEqual(
             ("allow", "", ""),

@@ -33,22 +33,34 @@ def user_on_this_machine():
 
 
 def worker_agent_ledger_gates():
-    """子 Agent 生命周期台账还作不作机器门禁。
+    """Whether real worker lifecycle facts are enforced.
 
-    云端宿主(pi 进程内)取不到内核格式的子会话执行台账:agent 真跑了、
-    真返回了,证据口就是看不见,同一批签发多少次都不前进,最后只能
-    accept-risk——令牌仪式在云端退化成纯摩擦(实战 verify_ut 连撞 3 次)。
-
-    云端的机器把关走另一条路:交付事实来自远端真实状态,流水线结果绑
-    SHA(见 mae-flow-cloud 红线)。所以云端放开的只是"子会话记账"这一种
-    证据形态,不是放弃验证;本地 CLI 一字不变。
-
-    ASKUSER 不在此列——那是人工闸,云端决定卡走得通,放开它等于把人踢出局。
+    Cloud's Pi adapter now records child start/return events.  The historical
+    blanket bypass also released Story, Reviewer and UT-writing work and made
+    the UT Skill decorative, so it is intentionally retired for every host.
+    External COMPILE/UT-run/CodeCheck are handled as typed obligations instead
+    of pretending a worker returned.
     """
-    return host_kind() != CLOUD
+    return True
 
 
-def build_runs_locally():
+def _runs_locally(state, capability):
+    """Resolve persisted task truth when available, legacy host truth otherwise."""
+    if state is None:
+        return host_kind() != CLOUD
+    # Local import keeps this low-level host module usable during early CLI
+    # bootstrap while making an initialized task independent of later env drift.
+    from mae_flow_core.workflow.execution_contract import contract_for_state
+    return contract_for_state(state, host_kind())[capability] == "local"
+
+
+def execution_contract(state=None):
+    """Expose the effective task contract to host-aware quality consumers."""
+    from mae_flow_core.workflow.execution_contract import contract_for_state
+    return contract_for_state(state, host_kind())
+
+
+def build_runs_locally(state=None):
     """本地编译还做不做。
 
     云端宿主没有构建链(内网巨型 Java 仓的 mcde/mvn 装在流水线那边,
@@ -66,10 +78,10 @@ def build_runs_locally():
     权威了——流水线跑的是团队公认的那套构建。契约据此不再要求本地
     执行证据,但删代码换通过之类的作弊守卫(净产出、诚实报告)照旧。
     """
-    return host_kind() != CLOUD
+    return _runs_locally(state, "compile")
 
 
-def unit_tests_run_locally():
+def unit_tests_run_locally(state=None):
     """本地跑不跑 UT。
 
     与 build_runs_locally 同理:UT 运行依赖同一套构建链。云端仍然
@@ -80,10 +92,10 @@ def unit_tests_run_locally():
     已生成,运行由流水线裁决"。契约据此不要求 EXECUTED_UT 与数字
     对账——**没跑就不许报数字**,报了才是谎。
     """
-    return host_kind() != CLOUD
+    return _runs_locally(state, "ut_run")
 
 
-def pipeline_adjudicates():
+def pipeline_adjudicates(state=None):
     """流水线是不是这台机器之外的最终裁判。
 
     云端把编译/UT/CodeCheck 的执行都推迟给了流水线(上面三个开关),
@@ -92,10 +104,13 @@ def pipeline_adjudicates():
     ——推迟从一句话变成有据可查的物证。本地形态恒假:本地的裁判是
     本地执行本身,没有第二个裁判。
     """
-    return host_kind() == CLOUD
+    if state is None:
+        return host_kind() == CLOUD
+    from mae_flow_core.workflow.execution_contract import uses_pipeline
+    return uses_pipeline(state, host_kind())
 
 
-def codecheck_runs_locally():
+def codecheck_runs_locally(state=None):
     """CodeCheck 本地扫描还做不做。
 
     CodeCheck 是内网 npm 工具(fullcheck,内部源安装)。云端宿主装不上,
@@ -104,4 +119,16 @@ def codecheck_runs_locally():
     用户拍板:云端 CodeCheck 交由流水线核对,本地不扫;lightcheck
     (内核自带轻检查,不依赖外部工具)不受影响照常跑。本地 CLI 一字不变。
     """
-    return host_kind() != CLOUD
+    return _runs_locally(state, "codecheck")
+
+
+def git_push_runs_locally(state=None):
+    """Whether the interactive Agent may receive transport credentials.
+
+    Cloud owns Git transport and performs it only after the Agent session has
+    been disposed, so personal tokens never enter the task's tool boundary.
+    Local CLI keeps its historical direct push behavior.
+    """
+    if state is None:
+        return host_kind() != CLOUD
+    return execution_contract(state).get("git_push", "local") == "local"

@@ -258,8 +258,7 @@ class HookStateMixin:
             if not text:
                 return
             step = ""
-            config_review_sha = ""
-            config_review_id = ""
+            bindings = {}
             action = None
             if os.path.exists(self.STATE):
                 try:
@@ -267,10 +266,9 @@ class HookStateMixin:
                     flow_state = normalize_document(
                         raw, "flow") if not err and raw else {}
                     step = flow_state.get("current", "")
-                    review = flow_state.get("config_review") or {}
-                    if step == "config_confirm" and review.get("step") == step:
-                        config_review_sha = str(review.get("sha256", ""))
-                        config_review_id = str(review.get("id", ""))
+                    from mae_flow_core.application.hooks.decision_bindings import (
+                        decision_bindings)
+                    bindings = decision_bindings(flow_state, step)
                 except Exception:
                     pass
             else:
@@ -296,9 +294,7 @@ class HookStateMixin:
                 row["askuser"] = askuser
             if action and action.get("scope_sha256"):
                 row["scope_sha256"] = str(action["scope_sha256"])
-            if config_review_sha:
-                row["config_review_sha256"] = config_review_sha
-                row["config_review_id"] = config_review_id
+            row.update(bindings)
 
             def append_message(msgs):
                 if not isinstance(msgs, list):

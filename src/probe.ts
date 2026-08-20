@@ -21,20 +21,20 @@ import { CloudSession } from "./sessionDriver.ts";
 const REPO_ROOT = resolve(fileURLToPath(import.meta.url), "..", "..");
 
 /** 剧本(主/子会话共用,按各自对话的 tool_result 数走幕):
- * 编译放行 → 危险命令打回 → 派发子 Agent(子会话里再派发被嵌套封顶
+ * 工作区命令放行 → 危险命令打回 → 派发 UT 编写 Agent(子会话里再派发被嵌套封顶
  * 打回、提问被"子 Agent 不设人工节点"打回)→ 人工节点挂起 → 收口。 */
 const SCRIPT: Scene[] = [
-  { text: "先跑专项编译",
-    tool: { name: "bash", input: { command: "echo BUILD SUCCESS" } } },
+  { text: "先确认工作区可用",
+    tool: { name: "bash", input: { command: "printf 'WORKSPACE_READY\\n'" } } },
   { tool: { name: "bash", input: { command: "rm -rf 演练禁区" } } },
   { tool: { name: "Task",
-            input: { subagent_type: "compile-agent",
-                     description: "专项编译验证",
-                     prompt: "按契约执行编译并报告" } } },
+            input: { subagent_type: "ut-generator-agent",
+                     description: "编写单元测试",
+                     prompt: "只编写单元测试，不在本机运行" } } },
   { tool: { name: "AskUserQuestion",
             input: { questions: [{ question: "未提交 Diff 通过吗?",
                                    options: ["通过", "打回"] }] } } },
-  { text: "COMPILE_RESULT: PASS 按决定继续交付" },
+  { text: "UT_WRITE_RESULT: DONE 已按决定继续交付" },
 ];
 
 function demoContract(
@@ -74,14 +74,15 @@ async function main(): Promise<number> {
     model: "scripted-v1",
     eventLog: new EventLog(join(out, "events.jsonl")),
     transcript: new TranscriptStore(mainPath, "main"),
-    gate: new GateService({ contract: demoContract }),
+    gate: new GateService({ workspace: out, contract: demoContract }),
     humanGate,
     currentStep: () => "build_review",
     log: (message) => console.log(`  [pi] ${message}`),
   });
 
   try {
-    let outcome = await driver.start("交付 PROBE-1:完成需求并编译验证");
+    let outcome = await driver.start(
+      "交付 PROBE-1:完成需求并补齐单测；质量执行交给流水线");
     if (outcome.status !== "waiting_for_human" || !outcome.waiting) {
       console.log(`[probe] ❌ 预期人工节点挂起,实际: ${outcome.status}`);
       return 1;
@@ -105,8 +106,7 @@ async function main(): Promise<number> {
   // 内核裁判:证据判定的唯一权威实现在 mae_flow_core,这里只递现场。
   const judge = spawnSync(
     "python3",
-    [join(REPO_ROOT, "harness", "verify_transcript.py"), out,
-     "--compile-command", "echo BUILD SUCCESS"],
+    [join(REPO_ROOT, "harness", "verify_transcript.py"), out],
     { stdio: "inherit", encoding: "utf-8" },
   );
   return judge.status ?? 1;

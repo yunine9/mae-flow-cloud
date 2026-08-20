@@ -15,6 +15,7 @@ import {
   constants,
   cpSync,
   existsSync,
+  mkdtempSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -25,6 +26,7 @@ import {
 import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { basename, dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 import {
   AnnotationStore,
   reanchor,
@@ -53,6 +55,14 @@ import { dockerAvailable, TaskContainer } from "./containerRuntime.ts";
 import type { ExternalAction, PgProjection } from "./projection.ts";
 import type { RuntimeSettings } from "./settings.ts";
 import { ReviewStore, type ReviewRequest } from "./reviews.ts";
+import {
+  parsePipelineChecks,
+  type PipelineCheck,
+} from "./pipelineContract.ts";
+import {
+  inspectKernelCompletion,
+  type KernelCompletionAttestation,
+} from "./terminalAttestation.ts";
 
 export type TaskStatus =
   | "queued"
@@ -73,6 +83,13 @@ export interface TaskProgress {
   current_phase: string;
   step?: string;
   revision?: number;
+  /** build 内的非门禁观察事件；不改变阶段、不参与完成判定。 */
+  milestone?: {
+    task_id: string;
+    title: string;
+    event: "started" | "completed" | "blocked";
+    reason?: string;
+  };
 }
 
 export interface RequirementRepository {
@@ -113,6 +130,54 @@ function dependencyStatement(
   return dependentNames.some((left) => prerequisiteNames.some((right) =>
     new RegExp(`${escaped(left)}.{0,32}(?:依赖|等待|晚于|后于).{0,32}${escaped(right)}`, "i")
       .test(reason)));
+}
+
+/** Cloud 的质量动作分工是部署事实，不由用户或每单参数选择。 */
+const CLOUD_EXECUTION_CONTRACT = {
+  schema: "mae-flow-execution/1",
+  host: "cloud",
+  compile: "pipeline",
+  ut_write: "agent",
+  ut_run: "pipeline",
+  codecheck: "pipeline",
+  git_push: "host",
+} as const;
+
+/** 找到本次会话真正能装载的 UT 编写 Skill。目录名就是 pi 展示给
+ * 模型的能力名；不读正文、不猜技术栈。部署级目录优先于仓内目录，
+ * 与 CloudSession 的装载顺序保持一致。 */
+function availableUtGenerationMethod(dataDir: string, workspace: string): string {
+  const roots = [
+    join(dataDir, "skills"),
+    join(workspace, ".pi", "skills"),
+    join(workspace, ".claude", "skills"),
+  ];
+  const found: string[] = [];
+  for (const root of roots) {
+    if (!existsSync(root)) continue;
+    try {
+      for (const entry of readdirSync(root, { withFileTypes: true })) {
+        if (!entry.isDirectory()
+            || !existsSync(join(root, entry.name, "SKILL.md"))) continue;
+        if (/(?:^|[-_])(?:java[-_])?(?:auto)?ut(?:$|[-_])/i.test(entry.name)
+            || /ut[-_]generator/i.test(entry.name)) {
+          found.push(entry.name);
+        }
+      }
+    } catch {
+      // Skill 装载本身是 fail-open；这里只记可用方式，保持同一语义。
+    }
+  }
+  const unique = [...new Set(found)];
+  const rank = (name: string): number => {
+    const normalized = name.toLowerCase();
+    if (normalized === "java-autout") return 0;
+    if (normalized === "autout") return 1;
+    return 2;
+  };
+  unique.sort((left, right) => rank(left) - rank(right)
+    || left.localeCompare(right));
+  return unique[0] ?? "仓内既有写法";
 }
 
 /** 所有需求都是一张仓库交付图：单仓只是只有一个节点、没有边。 */
@@ -180,12 +245,24 @@ export interface TaskSummary {
     target_branch?: string;
     mr_state?: string;
     pipeline?: string;
+    /** 平台按质量维度返回的 Job 结果（可选诊断增强）。契约已声明三项
+     * 均由该权威流水线覆盖时，总体 success 可聚合核销；若逐项明确
+     * failed / pending，内核仍以更精确事实裁决 RED / INCOMPLETE。 */
+    checks?: PipelineCheck[];
+    /** Cloud 在 Agent 会话释放后完成的推送收据；内核要求它与流水线
+     * SHA、工作区 HEAD 三者一致，避免模型接触个人 Token。 */
+    git_push?: {
+      sha: string;
+      ref: string;
+      remote: string;
+      url?: string;
+    };
     sha?: string;
     skipped?: string;
     /** 内核对流水线证据的裁决戳(如 "PASS@abc123456789"):终态时宿主
      * 把平台事实喂给内核 `pipeline record`,内核绑工作区 HEAD 裁决并
      * 写进 .mae-flow.json 的 quality.pipeline——这里只是那份现场记录
-     * 的镜像。"未裁决(...)"= 登记失败留痕(fail-open,不拦收口)。 */
+     * 的镜像。"未裁决(...)"= 登记失败留痕，并阻止进入 await_merge。 */
     attested?: string;
     /** 挂起等待的人话(等审批/等投票……):MR 闭环里"没人动它"和
      * "出了问题"必须让人一眼分得开。 */
@@ -270,7 +347,7 @@ export interface TaskServiceOptions {
   compactEveryEvents?: number;
   /** 容器隔离(设计文档):bash 命令进任务专属容器执行,镜像按
    * 试点仓选。容器起不来任务如实 failed,不静默降级回宿主。
-   * volumes = 额外挂载(构建缓存等),"宿主:容器" 形状;
+   * volumes = 额外挂载,"宿主:容器" 形状;
    * memory/cpus/user = 资源限额与身份映射,不配即不限。 */
   isolation?: {
     image: string;
@@ -279,12 +356,6 @@ export interface TaskServiceOptions {
     cpus?: string;
     user?: string;
   };
-  /** 本地不做编译/UT,流水线是唯一裁判(用户拍板:"先不编译了,直接上
-   * 流水线";"慢点就慢点,反正人也不需要介入")。宿主没有构建链时,
-   * 让 agent 在本机撞编译只会烧轮次;云端台账门禁已放开,done 不拦。
-   * 这个旗子做的唯一一件事:把环境事实写进每次会话的开场,别让模型猜。
-   * 慢的代价由修复环扛(红灯自动派修复会话),不占人的时间。 */
-  verifyViaPipeline?: boolean;
   /** 提交信息规范(部署级一句话,进每个会话的开场)。
    *
    * **业务提交的格式权威在内核**(`[<单号>][feat|fix]描述`,内核门禁
@@ -300,8 +371,9 @@ export interface TaskServiceOptions {
    * 部署配置是底,这层是热改;各消费点即时读,生效边界见 settings.ts。 */
   settings?: RuntimeSettings;
   /** 按任务归属人取个人 Git 凭据(serve 接 LocalAuth.gitCredential)。
-   * 有凭据→经 credential helper 注入 clone/push;没有→维持部署级
-   * 访问方式(服务账号/开放内网)。生效边界=下一次任务启动/会话重建。 */
+   * 有凭据→只在宿主 clone/push 的短生命周期 helper 中使用；Agent
+   * 目录与仓库配置永远不落 token/helper。没有→维持部署级访问方式
+   * (服务账号/开放内网)。 */
   gitCredential?: (
     account?: string,
   ) => { username: string; password: string; email?: string } | undefined;
@@ -472,6 +544,31 @@ function undeliveredInterrupts(workspace: string): string[] {
   }
 }
 
+/** 读取内核定义的 append-only build 观察事件。坏文件只影响这一行进度，
+ * 不能拖住任务列表，更不能被 Cloud 当成第二套流程状态。 */
+function latestBuildMilestone(text: string): TaskProgress["milestone"] {
+  if (!text) return undefined;
+  try {
+    const rows = JSON.parse(text)?.events;
+    if (!Array.isArray(rows)) return undefined;
+    const row = [...rows].reverse().find((item) => item
+      && typeof item === "object"
+      && ["started", "completed", "blocked"].includes(String(item.event))
+      && String(item.task_id ?? "").trim()
+      && String(item.task_title ?? "").trim());
+    if (!row) return undefined;
+    return {
+      task_id: String(row.task_id),
+      title: String(row.task_title),
+      event: String(row.event) as "started" | "completed" | "blocked",
+      ...(String(row.reason ?? "").trim()
+        ? { reason: String(row.reason).trim() } : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 interface TaskState {
   summary: TaskSummary;
   driver?: CloudSession;
@@ -489,6 +586,8 @@ interface TaskState {
   container?: TaskContainer;
   /** 合入监控环的防重入锁(内存态):一任务只挂一环。 */
   mergeWatchActive?: boolean;
+  /** 流水线证据核销重试的防重入锁。纯宿主 timer，不占 Agent 会话。 */
+  evidenceRetryActive?: boolean;
   /** 上次主动压缩时的事件水位(事件量是上下文增长的诚实代理)。 */
   lastCompactAt?: number;
   /** 恢复标记:launch 走重建会话路径(不重克隆、内核 current 续跑)。 */
@@ -511,6 +610,20 @@ interface TaskState {
   controlEpoch: number;
   /** running 的暂停不截断当前工具，等 settle 的安全边界收口。 */
   pauseRequested?: boolean;
+}
+
+interface PipelineAttestation {
+  verdict: string;
+  sha?: string;
+  reason?: string;
+  checks?: Record<string, unknown>;
+}
+
+interface GitPushReceipt {
+  sha: string;
+  ref: string;
+  remote: string;
+  url?: string;
 }
 
 export class TaskService {
@@ -787,7 +900,11 @@ export class TaskService {
     if (!existsSync(pulsePath) || !existsSync(panelPath)) return undefined;
     try {
       const pulseText = readFileSync(pulsePath, "utf-8");
-      if (pulseText === task.progressPulse) return task.progressCache;
+      const milestonePath = join(task.cwd, ".mae-flow.json.build-milestones");
+      const milestoneText = existsSync(milestonePath)
+        ? readFileSync(milestonePath, "utf-8") : "";
+      const progressSource = `${pulseText}\0${milestoneText}`;
+      if (progressSource === task.progressPulse) return task.progressCache;
       const first = pulseText.indexOf("{");
       const last = pulseText.lastIndexOf("}");
       if (first < 0 || last <= first) return undefined;
@@ -802,6 +919,9 @@ export class TaskService {
       const currentIndex = currentByClass >= 0
         ? currentByClass : phases.indexOf(currentPhase);
       if (phases.length === 0 || currentIndex < 0) return undefined;
+      const milestone = ["build", "build_rework"].includes(
+        String(pulse.step ?? ""))
+        ? latestBuildMilestone(milestoneText) : undefined;
       const progress: TaskProgress = {
         phases,
         current_index: currentIndex,
@@ -809,8 +929,9 @@ export class TaskService {
         step: pulse.step_title ? String(pulse.step_title) : undefined,
         revision: Number.isFinite(Number(pulse.revision))
           ? Number(pulse.revision) : undefined,
+        ...(milestone ? { milestone } : {}),
       };
-      task.progressPulse = pulseText;
+      task.progressPulse = progressSource;
       task.progressCache = progress;
       const now = new Date().toISOString();
       task.summary.last_progress_at = now;
@@ -1066,10 +1187,6 @@ export class TaskService {
 
   private effectiveDefaultRepo(): string | undefined {
     return this.options.host?.repoPath;
-  }
-
-  private effectiveVerifyViaPipeline(): boolean {
-    return this.options.verifyViaPipeline ?? false;
   }
 
   /** 生效的提交信息规范(设置层压部署层)。平台钩子按正则拒收不合规
@@ -1400,6 +1517,32 @@ export class TaskService {
         this.counter = Math.max(
           this.counter, Number(name.slice("task-".length)) || 0);
         restored += 1;
+        let terminalMismatch = false;
+        if (["completed", "await_merge"].includes(summary.status)) {
+          const attestation = this.completionAttestation(task);
+          if (attestation && !attestation.complete) {
+            terminalMismatch = true;
+            delete summary.completed_at;
+            if (attestation.kind === "external_verify"
+                || (attestation.terminal && attestation.external_required)) {
+              // 进程可能死在“平台已回结果→内核登记→状态投影”之间。
+              // 恢复只重做对账/核销，不拿旧 task.json 直接放行。
+              summary.status = "verifying";
+              summary.detail = `恢复对账：${attestation.reason}`;
+              summary.delivery = {
+                ...summary.delivery,
+                mr_state: "验证中",
+                waiting_on: attestation.reason,
+              };
+            } else {
+              summary.status = "queued";
+              summary.detail = `恢复对账发现伪终态：${attestation.reason}，`
+                + "将从内核 current 继续";
+              task.resume = true;
+            }
+            this.persist(task);
+          }
+        }
         this.replayProjection(task);
         // 服务在“正在暂停”窗口退出时，所有执行资源已经随进程消失；
         // 恢复为 paused 比擅自续跑更符合用户最后一次明确指令。
@@ -1423,6 +1566,18 @@ export class TaskService {
             && summary.delivery?.pipeline === "running") {
           this.bypass(task, "流水线轮询",
             this.pollPipeline(task, task.controlEpoch));
+        } else if (summary.status === "verifying"
+            && summary.delivery?.pipeline === "success"
+            && summary.delivery.sha) {
+          // 平台已绿但内核还没 PASS（进程可能死在登记窗口，或当时逐项
+          // 结果不完整）：重启只重做核销，不重复触发同 SHA 流水线。
+          this.bypass(task, "流水线证据核销",
+            this.tryDeliver(task, task.controlEpoch));
+        } else if (summary.status === "verifying" && terminalMismatch) {
+          // 没有可续轮的旧平台状态也不能静默蹲住；让 tryDeliver 查远端
+          // 分支并触发/恢复权威验证，仍由内核裁决是否能到 end。
+          this.bypass(task, "终态恢复对账",
+            this.tryDeliver(task, task.controlEpoch));
         }
         // 合入监控同理续:重启前在等合入/等审批的接着盯(平台不支持
         // 门禁契约的,watchMerge 一轮就退,行为与旧版完全一致)。
@@ -1445,7 +1600,7 @@ export class TaskService {
           requeued += 1;
         } else if (summary.status === "running" || summary.status === "queued") {
           summary.status = "queued";
-          summary.detail = "服务重启,等待续跑";
+          if (!terminalMismatch) summary.detail = "服务重启,等待续跑";
           this.persist(task);
           this.queue.push(summary.id);
           requeued += 1;
@@ -1955,6 +2110,28 @@ export class TaskService {
     return task.controlEpoch === epoch && task.summary.status !== "canceled";
   }
 
+  /**
+   * completed/await_merge/blocked_by 共用的内核终态证明。
+   *
+   * 多仓分析单是 Cloud 自己的前置会话，本来就没有 mae-flow 状态；纯
+   * 会话演练同理。除此之外一律不能拿 task.json.status 自证完成。
+   */
+  private completionAttestation(
+    task: TaskState,
+  ): KernelCompletionAttestation | undefined {
+    if (!this.options.host || this.isRequirementAnalysis(task)) return undefined;
+    return inspectKernelCompletion(
+      task.cwd,
+      this.options.host.kernelRoot,
+      true,
+    );
+  }
+
+  private dependencyCompleted(task: TaskState | undefined): boolean {
+    if (!task || task.summary.status !== "completed") return false;
+    return this.completionAttestation(task)?.complete ?? true;
+  }
+
   private async finishPause(
     task: TaskState,
     from: TaskStatus,
@@ -2025,14 +2202,14 @@ export class TaskService {
         const candidate = this.tasks.get(queued);
         if (!candidate) return true;
         return (candidate.summary.blocked_by ?? []).every((dependency) =>
-          this.tasks.get(dependency)?.summary.status === "completed");
+          this.dependencyCompleted(this.tasks.get(dependency)));
       });
       if (readyIndex < 0) {
         for (const queued of this.queue) {
           const candidate = this.tasks.get(queued);
           if (!candidate?.summary.blocked_by?.length) continue;
           const waiting = candidate.summary.blocked_by.filter((dependency) =>
-            this.tasks.get(dependency)?.summary.status !== "completed");
+            !this.dependencyCompleted(this.tasks.get(dependency)));
           const detail = `等待前置任务 ${waiting.join("、")} 完成`;
           if (candidate.summary.detail !== detail
               && !candidate.summary.detail?.startsWith("前置任务")) {
@@ -2062,19 +2239,21 @@ export class TaskService {
     try {
       const agentDir = join(workspace, "pi-agent");
       mkdirSync(agentDir, { recursive: true });
+      // 兼容旧版本现场：明文凭据/helper 曾落在 agentDir。任何模型文件
+      // 与 CloudSession 创建之前先机械清掉，避免恢复任务把旧秘密重新
+      // 暴露给 Agent。
+      this.hardenAgentGitBoundary(agentDir);
       // 模型网关热改边界:在这里生效——每个新会话起时现读设置,
       // 在跑的会话不换血(管理页如实写明了这一条)。
       const modelOverride = this.options.settings?.models() ?? {};
       writeFileSync(
         join(agentDir, "models.json"),
         JSON.stringify(modelOverride.json ?? this.options.modelsJson));
-      // 个人 Git 凭据:每次启动(含会话重建)现读现写——换了令牌,
-      // 下一次启动就用新的;凭据文件在 agentDir,不进仓库克隆。
-      // 凭据也带 commit 署名(用户名/邮箱),克隆时写进仓库配置。
+      // 个人 Git 身份每次启动现读。用户名/邮箱只用于 commit 署名；
+      // token 仅在宿主 clone/push 的同步窗口进入 0700 临时目录，绝不
+      // 进入 agentDir、仓库配置或 Agent 会话。
       const gitIdentity =
         this.options.gitCredential?.(task.summary.luban_account);
-      const gitHelper = gitIdentity
-        ? this.prepareGitCredential(agentDir, gitIdentity) : undefined;
       const transcriptPath = join(workspace, "transcript.jsonl");
       // 恢复=工作区(仓库克隆)还在;克隆丢了就只能从头来。
       // savedCwd 必须先落袋:下面 task.cwd 会被暂写成 workspace,
@@ -2092,13 +2271,20 @@ export class TaskService {
         const analysisRoot = resuming ? savedCwd! : join(workspace, "repositories");
         if (!resuming) {
           mkdirSync(analysisRoot, { recursive: true });
-          (task.summary.repositories ?? []).forEach((repository, index) => {
-            // readonly:分析现场推送硬禁用(没有内核门禁兜底,禁令
-            // 不能只写在 prompt 里)。
-            this.cloneRepo(analysisRoot, gitHelper, gitIdentity, repository,
-              `${index + 1}-${basename(repository).replace(/\.git$/, "") || "repo"}`,
-              true);
-          });
+          const prepared = gitIdentity
+            ? this.prepareHostGitCredential(gitIdentity) : undefined;
+          try {
+            (task.summary.repositories ?? []).forEach((repository, index) => {
+              // readonly:分析现场推送硬禁用(没有内核门禁兜底,禁令
+              // 不能只写在 prompt 里)。
+              this.cloneRepo(analysisRoot, prepared?.helper, gitIdentity,
+                repository,
+                `${index + 1}-${basename(repository).replace(/\.git$/, "") || "repo"}`,
+                true);
+            });
+          } finally {
+            this.cleanupHostGitCredential(prepared);
+          }
           const ticket = task.summary.ticket ?? task.summary.id;
           const artifactDir = join(analysisRoot, ".mae-flow-work", ticket);
           mkdirSync(artifactDir, { recursive: true });
@@ -2106,6 +2292,13 @@ export class TaskService {
         }
         cwd = analysisRoot;
         task.cwd = cwd;
+        // 恢复旧分析现场时也清除曾经持久化的 helper；每个仓仍可正常
+        // fetch/read，但 pushurl 固定为不可写地址。
+        (task.summary.repositories ?? []).forEach((repository, index) => {
+          const repoDir = join(analysisRoot,
+            `${index + 1}-${basename(repository).replace(/\.git$/, "") || "repo"}`);
+          this.hardenAgentGitBoundary(agentDir, repoDir);
+        });
         prompt = this.requirementAnalysisPrompt(task, cwd);
         if (resuming) {
           prompt = [
@@ -2123,11 +2316,20 @@ export class TaskService {
           ].filter(Boolean).join("\n\n");
         }
       } else if (this.options.host) {
-        cwd = resuming
-          ? savedCwd!
-          : this.cloneRepo(workspace, gitHelper, gitIdentity,
+        if (resuming) {
+          cwd = savedCwd!;
+        } else {
+          const prepared = gitIdentity
+            ? this.prepareHostGitCredential(gitIdentity) : undefined;
+          try {
+            cwd = this.cloneRepo(workspace, prepared?.helper, gitIdentity,
               task.summary.repo_url);
+          } finally {
+            this.cleanupHostGitCredential(prepared);
+          }
+        }
         task.cwd = cwd;
+        this.hardenAgentGitBoundary(agentDir, cwd);
         // 下单事实(.mae-flow-order.json,内核契约):表单收齐的单号/
         // 基线分支/工号/交付方式机械交给内核——config-review 拿它补
         // 缺省、确认卡不再问交付方式、workflow_select 免卡直接 done。
@@ -2137,7 +2339,12 @@ export class TaskService {
         // summary,幂等;fail-open——写不进去只记日志,流程退回转述
         // 老路,绝不拦启动。
         try {
-          const order: Record<string, string> = {};
+          const utGenerationMethod = availableUtGenerationMethod(
+            this.options.dataDir, cwd);
+          const order: Record<string, unknown> = {
+            execution_contract: { ...CLOUD_EXECUTION_CONTRACT },
+            "UT生成方式": utGenerationMethod,
+          };
           if (task.summary.ticket) order["单号"] = task.summary.ticket;
           if (task.summary.baseline) {
             order["基线分支"] = task.summary.baseline;
@@ -2155,23 +2362,21 @@ export class TaskService {
               readFileSync(planSource, "utf-8"));
             order["需求文档"] = ".mae-flow-chain.md";
           }
-          if (Object.keys(order).length) {
-            writeFileSync(join(cwd, ".mae-flow-order.json"),
-              JSON.stringify(order, null, 2) + "\n");
-            // 平台的现场文件不该混进交付提交:登记进 .git/info/exclude
-            // (不动仓里的 .gitignore——那是用户的文件)。
-            const infoDir = join(cwd, ".git", "info");
-            if (existsSync(infoDir)) {
-              const excludePath = join(infoDir, "exclude");
-              const current = existsSync(excludePath)
-                ? readFileSync(excludePath, "utf-8") : "";
-              const missing = [".mae-flow-order.json", ".mae-flow-chain.md"]
-                .filter((entry) => !current.includes(entry));
-              if (missing.length) {
-                writeFileSync(excludePath,
-                  `${current}${current && !current.endsWith("\n") ? "\n" : ""}`
-                  + missing.join("\n") + "\n");
-              }
+          writeFileSync(join(cwd, ".mae-flow-order.json"),
+            JSON.stringify(order, null, 2) + "\n");
+          // 平台的现场文件不该混进交付提交:登记进 .git/info/exclude
+          // (不动仓里的 .gitignore——那是用户的文件)。
+          const infoDir = join(cwd, ".git", "info");
+          if (existsSync(infoDir)) {
+            const excludePath = join(infoDir, "exclude");
+            const current = existsSync(excludePath)
+              ? readFileSync(excludePath, "utf-8") : "";
+            const missing = [".mae-flow-order.json", ".mae-flow-chain.md"]
+              .filter((entry) => !current.includes(entry));
+            if (missing.length) {
+              writeFileSync(excludePath,
+                `${current}${current && !current.endsWith("\n") ? "\n" : ""}`
+                + missing.join("\n") + "\n");
             }
           }
         } catch (cause) {
@@ -2226,6 +2431,7 @@ export class TaskService {
         hostHooks = {
           preTool: kernel.preTool.bind(kernel),
           postTool: kernel.postTool.bind(kernel),
+          flush: kernel.flush.bind(kernel),
         };
       } else if (resuming || task.resume) {
         // 非内核模式(演练/测试)同样不许丢话:重建会话没有挂起的工具
@@ -2242,24 +2448,21 @@ export class TaskService {
             : []),
         ].filter(Boolean).join("\n\n");
       }
-      // 流水线代行验证:环境事实进开场白。每次会话(首跑/重建/修复)都
-      // 要带——重建会话没有旧上下文,不带它就会再去撞一遍编译。
-      if (!requirementAnalysis && this.effectiveVerifyViaPipeline()) {
-        prompt = `${prompt}\n\n环境事实(宿主声明):本机没有编译/测试工具链,`
-          + `也不提供容器构建,不要在本机尝试编译或运行 UT——只会浪费轮次。`
-          + `本会话已带的 UT skill(如 autout/java-autout,见系统提示里的`
-          + `可用 skill 清单)是**写法指南,照用**`
-          + `——按它的方法写测试;只是它里面"编译通过""执行构建"那类段落`
-          + `在这台机器上做不到,跳过即可,不要为此找工具。`
-          + `build-fix 这类纯构建 skill 云端用不上,不要调用;`
-          + `CodeCheck 亦不在本机执行。内核在云端形态下(MAE_FLOW_HOST=cloud)`
-          + `不再要求这些本地执行证据,报告如实写「本地未编译/未运行,`
-          + `交流水线」即可放行。`
-          + `**没跑就不许报数字**:不要编造 BUILD_ERRORS 或 `
-          + `TESTS_TOTAL/PASSED/FAILED——编了就是谎,门禁另有守卫。`
-          + `UT 该写还得写(生成测试是本机做得了、也最值钱的部分),`
-          + `只是不在本机跑。编码完成后按流程提交并推送,`
-          + `权威流水线是唯一裁判;红灯会由专职修复会话跟进。`;
+      // Cloud 固有执行契约:每次代码会话(首跑/重建/修复)都带。它说明
+      // 能力边界，不替内核宣告放行，更不把模型自述当质量证据。
+      if (this.options.host && !requirementAnalysis) {
+        const utGenerationMethod = availableUtGenerationMethod(
+          this.options.dataDir, cwd);
+        prompt = `${prompt}\n\nCloud 执行契约(宿主事实):本机只负责代码与单元测试的编写。`
+          + `编译、单元测试运行和 CodeCheck 统一由绑定当前提交 SHA 的`
+          + `权威流水线执行。可用的 UT 编写方式是「${utGenerationMethod}」;`
+          + `已装载的 UT skill 只用于指导编写或修改测试，不负责运行测试，`
+          + `也不能证明测试通过。不要在本机调用编译、测试运行、CodeCheck`
+          + `或相关构建修复能力，不要编造命令、结果、数量或绿灯。`
+          + `完成实现与 UT 编写后按内核流程提交；不要读取或索要个人`
+          + `Git 令牌，也不要 push，Agent 会话释放后由 Cloud 宿主统一`
+          + `推送并复核远端 SHA。流水线失败时，`
+          + `只依据该次流水线证据定位并修复。`;
       }
       // 提交信息规范(部署级):平台的 pre-receive 钩子会按正则拒收不
       // 合规的提交信息——内网实测被拒过一次("does not match the
@@ -2385,6 +2588,7 @@ export class TaskService {
         transcript: new TranscriptStore(transcriptPath, "main"),
         gate: new GateService({
           contract: this.options.contract,
+          workspace: cwd,
           log: this.options.log,
         }),
         humanGate: task.humanGate,
@@ -2450,8 +2654,95 @@ export class TaskService {
     };
   }
 
-  /** Git 交付(§10):任务收轮后,分支已推到远端才建 MR——交付事实
-   * 全部来自远端真实状态(ls-remote),不信任务自己的说法。
+  /** external_verify 之后的异常不是“交付旁路失败也算完成”。内核正在
+   * 明确等待宿主核销三项质量义务，任何缺口都只能留在 verifying。 */
+  private holdExternalVerification(task: TaskState, reason: string): void {
+    task.summary.status = "verifying";
+    task.summary.detail = reason;
+    task.summary.delivery = {
+      ...task.summary.delivery,
+      mr_state: task.summary.delivery?.mr_state ?? "验证中",
+      waiting_on: reason,
+    };
+    this.persist(task);
+  }
+
+  /** INCOMPLETE / STALE / 登记抖动都是宿主等待，不得把 Agent 催回来
+   * “补证据”。同 SHA 只刷新平台事实并重做内核 record；仅 STALE（本地
+   * HEAD 已变化）回 tryDeliver，让宿主推新 HEAD 并启动对应的新流水线。
+   * timer unref，不吊住进程；重启由 recover 的 verifying+success 分支
+   * 重新挂起。 */
+  private schedulePipelineEvidenceRetry(
+    task: TaskState,
+    sha: string,
+    epoch: number,
+    stale: boolean,
+  ): void {
+    if (task.evidenceRetryActive) return;
+    task.evidenceRetryActive = true;
+    const knobs = this.options.settings?.runtime() ?? {};
+    const delay = Math.max(50,
+      (knobs.poll_interval_s !== undefined
+        ? knobs.poll_interval_s * 1000 : undefined)
+      ?? this.options.delivery?.pollIntervalMs
+      ?? 10_000);
+    const timer = setTimeout(() => {
+      task.evidenceRetryActive = false;
+      if (!this.current(task, epoch)
+          || task.summary.status !== "verifying"
+          || task.summary.delivery?.sha !== sha
+          || task.summary.delivery?.pipeline !== "success") return;
+      this.bypass(task, "流水线证据自动重试", stale
+        ? this.tryDeliver(task, epoch)
+        : this.retryPipelineEvidence(task, sha, epoch));
+    }, delay);
+    timer.unref();
+  }
+
+  /** 同 SHA 只查已有 run 并重做 record，绝不 POST trigger。查询短暂失败
+   * 时仍可用上次已落袋的整体状态重试登记。 */
+  private async retryPipelineEvidence(
+    task: TaskState,
+    sha: string,
+    epoch: number,
+  ): Promise<void> {
+    if (!this.current(task, epoch)
+        || task.summary.status !== "verifying"
+        || task.summary.delivery?.sha !== sha) return;
+    let status: "success" | "failed" = "success";
+    let checks = task.summary.delivery.checks;
+    let log = "";
+    try {
+      const repo = encodeURIComponent(
+        task.summary.repo_url ?? this.effectiveDefaultRepo() ?? "");
+      const result = await fetch(
+        `${this.effectivePlatformUrl()}/pipeline/status`
+        + `?sha=${sha}&repo=${repo}`,
+        { headers: this.platformIdentity(task) }).then((r) => readJson(r));
+      if (!this.current(task, epoch)
+          || task.summary.status !== "verifying") return;
+      const terminal = (Array.isArray(result.runs) ? result.runs : [])
+        .findLast((run: { status?: string }) =>
+          run.status === "success" || run.status === "failed");
+      if (terminal) {
+        status = terminal.status === "failed" ? "failed" : "success";
+        checks = parsePipelineChecks(terminal.checks);
+        log = String(terminal.log ?? "");
+        task.summary.delivery = {
+          ...task.summary.delivery,
+          pipeline: status,
+          ...(checks !== undefined ? { checks } : {}),
+        };
+      }
+    } catch (error) {
+      this.options.log?.(
+        `任务 ${task.summary.id} 流水线证据刷新失败(仍重试登记): ${String(error)}`);
+    }
+    await this.pipelineVerdict(task, sha, status, log, checks, epoch);
+  }
+
+  /** Git 交付(§10):任务收轮并释放 Agent 后,由宿主推送并反查远端
+   * SHA，再建 MR——不信任务自己的说法，也不让 Agent 接触 token。
    * MR 成功≠完成:流水线过了才"等待合入",否则停在"验证中"。
    * 交付失败不吞:原因写进 summary.delivery,任务保持 completed。 */
   private async tryDeliver(task: TaskState, epoch: number): Promise<void> {
@@ -2459,7 +2750,13 @@ export class TaskService {
     if (this.isRequirementAnalysis(task)) return;
     // 平台地址由部署固定注入；每次交付动作使用同一条基础设施链路。
     const platformUrl = this.effectivePlatformUrl();
-    if (!platformUrl || !this.options.host || !task.cwd) return;
+    if (!platformUrl || !this.options.host || !task.cwd) {
+      if (this.atExternalVerificationWait(task)) {
+        this.holdExternalVerification(
+          task, "等待权威流水线：MR / 流水线服务未就绪");
+      }
+      return;
+    }
     try {
       const statePath = join(task.cwd, ".mae-flow.json");
       if (!existsSync(statePath)) {
@@ -2470,31 +2767,33 @@ export class TaskService {
       const branch = String(state?.config?.["分支名"] ?? "");
       const baseline = String(state?.config?.["基线分支"] ?? "");
       if (!branch || !baseline) {
-        task.summary.delivery = { skipped: "配置未确认,无分支可交付" };
+        const reason = "配置未确认,无分支可交付";
+        task.summary.delivery = { skipped: reason };
+        if (state.current === "external_verify") {
+          this.holdExternalVerification(task, `等待权威流水线：${reason}`);
+        }
         return;
       }
-      const remote = spawnSync(
-        "git", ["ls-remote", "--heads", "origin", branch],
-        { cwd: task.cwd, encoding: "utf-8" });
-      const line = (remote.stdout || "").trim();
-      if (!line) {
-        task.summary.delivery = {
-          skipped: `分支 ${branch} 未推送到远端,流程停在 ${state.current}`,
-        };
-        return;
-      }
-      const sha = line.split(/\s+/)[0];
+      const previous = task.summary.delivery;
+      const pushReceipt = this.pushFromHost(task, branch);
+      const sha = pushReceipt.sha;
+      if (previous) previous.git_push = pushReceipt;
+      else task.summary.delivery = { git_push: pushReceipt };
+      // push 已经发生就先落账；即使随后 MR/流水线接口抖动，恢复时也能
+      // 复核同一 SHA，不会把传输事实误当成 Agent 自述。
+      this.persist(task);
       // 修复回程的岔路:SHA 没变说明本轮没有新代码(检视修复只回复
       // 不改码、或修复会话判断无需改动)。这时**绝不再触发流水线**
       // ——远端每跑一条流水线都是钱,同 SHA 重跑还是同一个结果。
       // 上一轮绿 → 直接回门禁监控;上一轮红 → 重新分类裁决
       // (检视清了之后可能轮到 CI 修,brake 按类各管各的)。
-      const previous = task.summary.delivery;
       if (previous?.sha === sha && previous.pipeline) {
         if (previous.pipeline === "success") {
-          task.summary.status = "await_merge";
-          this.persist(task);
-          this.bypass(task, "合入监控", this.watchMerge(task, epoch));
+          // 同 SHA 的总体绿灯只复用事实，不复用结论。进程可能上次死在
+          // 内核登记前也可能进程退出；重新核销但绝不重跑同 SHA 流水线。
+          task.summary.status = "verifying";
+          await this.pipelineVerdict(task, sha, "success", "",
+            previous.checks, epoch);
           return;
         }
         if (previous.pipeline.startsWith("failed")) {
@@ -2502,7 +2801,7 @@ export class TaskService {
           // 不扳的话 settle 会把还红着的任务误收成 completed(实测)。
           task.summary.status = "verifying";
           await this.pipelineVerdict(task, sha, "failed",
-            previous.loop?.failure ?? "", epoch);
+            previous.loop?.failure ?? "", previous.checks, epoch);
           return;
         }
       }
@@ -2555,35 +2854,44 @@ export class TaskService {
         body: JSON.stringify(runRequest),
       }).then((r) => readJson(r));
       if (!this.current(task, epoch)) return;
+      if (!["success", "failed", "running"].includes(String(run.status))) {
+        throw new Error(`流水线返回未知状态: ${String(run.status ?? "(empty)")}`);
+      }
+      const checks = parsePipelineChecks(run.checks);
       ledger({ idemKey: runKey, kind: "pipeline_trigger",
                request: runRequest, sha, startedAt: runStarted, result: run,
                finishedAt: new Date().toISOString() });
       task.summary.delivery = {
         ...(task.summary.delivery?.loop
           ? { loop: task.summary.delivery.loop } : {}),
+        git_push: pushReceipt,
         mr_url: mr.url,
         // 平台给了 MR 标识就记下:门禁/讨论查询要带回去(假件给 id,
         // codehubcli 给 iid;没有也不碍事,适配层还能按分支对查)。
         ...(mr.id !== undefined ? { mr_id: mr.id } : {}),
         source_branch: branch,
         target_branch: baseline,
-        mr_state: run.status === "success" ? "等待合入" : "验证中",
+        mr_state: "验证中",
         pipeline: run.status,
+        ...(checks !== undefined ? { checks } : {}),
         sha,
       };
-      task.summary.status =
-        run.status === "success" ? "await_merge" : "verifying";
+      task.summary.status = "verifying";
       // 终态当场裁决;running 不是结局,由带预算的轮询收敛后再裁。
       if (run.status === "running") {
         this.bypass(task, "流水线轮询", this.pollPipeline(task, epoch));
       } else {
         await this.pipelineVerdict(task, sha,
           run.status === "success" ? "success" : "failed",
-          String(run.log ?? ""), epoch);
+          String(run.log ?? ""), checks, epoch);
       }
     } catch (error) {
       if (!this.current(task, epoch)) return;
-      task.summary.delivery = { skipped: `交付动作失败: ${String(error)}` };
+      const reason = `交付动作失败: ${String(error)}`;
+      task.summary.delivery = { ...task.summary.delivery, skipped: reason };
+      if (this.atExternalVerificationWait(task)) {
+        this.holdExternalVerification(task, `等待权威流水线：${reason}`);
+      }
       this.options.log?.(`任务 ${task.summary.id} 交付失败: ${String(error)}`);
     }
   }
@@ -2630,14 +2938,14 @@ export class TaskService {
         continue;
       }
       if (!terminal) continue;
+      const checks = parsePipelineChecks(terminal.checks);
       task.summary.delivery = {
         ...task.summary.delivery,
         pipeline: terminal.status,
-        mr_state: terminal.status === "success" ? "等待合入" : "验证中",
+        mr_state: "验证中",
+        ...(checks !== undefined ? { checks } : {}),
       };
-      if (terminal.status === "success") {
-        task.summary.status = "await_merge";
-      }
+      task.summary.status = "verifying";
       this.bypass(task, "投影动作", this.options.projection?.recordAction({
         taskId: task.summary.id,
         idemKey: `pipeline:${sha}`,
@@ -2652,7 +2960,7 @@ export class TaskService {
       // (persist/notify 都在裁决点里,别在这儿重复收口。)
       await this.pipelineVerdict(task, sha,
         terminal.status === "success" ? "success" : "failed",
-        String(terminal.log ?? ""), epoch);
+        String(terminal.log ?? ""), checks, epoch);
       return;
     }
     if (!this.current(task, epoch)
@@ -2668,7 +2976,9 @@ export class TaskService {
    * 流水线终态裁决点(小状态机)——"流水线直至全绿是最终目标"(用户拍板)。
    *
    * 两个入口(触发即终态 / 轮询收敛到终态)都汇到这里,转移规则:
-   *   绿 → loop.state=green,收口(await_merge 由调用方已置);
+   *   绿 → 内核按 execution_contract 核销 COMPILE/UT/CODECHECK，只有
+   *       PASS 才 loop.state=green + await_merge；typed checks 是可选的
+   *       诊断增强，明确 pending/failed/过期仍 verifying/RED;
    *   红 → 同一 SHA 修过一轮又红 = 修复会话没产生新提交 → halted,
    *       会话的收口发言当诊断带给人(它判了"改代码解决不了");
    *       修复轮预算(可配手刹,默认不限)耗尽 → exhausted 请人工;
@@ -2683,21 +2993,61 @@ export class TaskService {
     sha: string,
     status: "success" | "failed",
     log: string,
+    checks: PipelineCheck[] | undefined,
     epoch: number,
   ): Promise<void> {
     if (!this.current(task, epoch)) return;
     const delivery = task.summary.delivery;
     if (!delivery) return;
     if (status === "success") {
-      if (delivery.loop) delivery.loop.state = "green";
-      this.persist(task);
-      // 证据口在状态转移之后:平台事实喂给内核绑 HEAD 裁决
-      // (PASS/RED/STALE),"编译/UT 推迟给流水线"的承诺从此有物证。
-      // 记账是旁路——绿灯不等记账,先扳道再登记(先登记的话轮询侧
-      // 已置 await_merge,外面会在记账空窗里看到半新不旧的环账,实测
-      // 逮过);内核调不动只留痕"未裁决",绝不拦收口。
-      await this.recordPipelineEvidence(task, sha, status);
+      // 平台总体 success 绑定精确 SHA，且 execution_contract 已声明该
+      // 权威流水线覆盖三项时可以聚合核销。typed checks 若存在则提供更
+      // 精确裁决；登记失败、pending、STALE 仍一律不放行。
+      const attestation = await this.recordPipelineEvidence(
+        task, sha, status, checks);
       if (!this.current(task, epoch)) return;
+      if (attestation?.verdict === "RED") {
+        // overall 与逐项结果矛盾时，裁决权仍在内核。typed RED 进入与
+        // 常规红灯完全相同的轻量修复环，不挂一张人工 Diff 卡。
+        delivery.pipeline = "failed(逐项质量结果未通过)";
+        await this.handlePipelineRed(
+          task, sha, attestation.reason ?? log, epoch);
+        return;
+      }
+      if (attestation?.verdict !== "PASS") {
+        const verdict = attestation?.verdict;
+        const reason = attestation?.reason
+          ?? (checks === undefined
+            ? "内核未完成整体流水线核销；逐项 Job 未配置，仅影响诊断"
+            : "内核未能登记流水线逐项结果");
+        const waiting = verdict
+          ? `等待流水线证据核销：${verdict} · ${reason}`
+          : `等待流水线证据核销：${reason}`;
+        task.summary.status = "verifying";
+        delivery.mr_state = "验证中";
+        delivery.waiting_on = waiting;
+        task.summary.detail = waiting;
+        this.persist(task);
+        this.schedulePipelineEvidenceRetry(
+          task, sha, epoch, verdict === "STALE");
+        return;
+      }
+      const terminal = this.completionAttestation(task);
+      if (terminal && !terminal.complete) {
+        // `pipeline record` 的返回值不能单独成为 Cloud 终态。必须重新读
+        // 内核落盘现场，确认 command 已把 external_verify 推到 flow 的
+        // terminal，且 PASS 仍绑定当前 HEAD；这样 hook/保存/推进任一
+        // 处失败都不会从返回字符串的空窗里漏进 await_merge。
+        this.holdExternalVerification(
+          task, `等待内核终态对账：${terminal.reason}`);
+        this.schedulePipelineEvidenceRetry(task, sha, epoch, false);
+        return;
+      }
+      if (delivery.loop) delivery.loop.state = "green";
+      delivery.mr_state = "等待合入";
+      delivery.waiting_on = undefined;
+      task.summary.status = "await_merge";
+      task.summary.detail = "编译、UT 运行与 CodeCheck 均已由权威流水线核销";
       this.persist(task);
       // 流水线绿≠赢了:九项门禁全过 + 合入才是终点(内网既有框架的
       // 实证)。支持门禁契约的平台接着盯;不支持的(fetchGates 回
@@ -2705,9 +3055,27 @@ export class TaskService {
       this.bypass(task, "合入监控", this.watchMerge(task, epoch));
       return;
     }
-    // 红灯也过证据口(RED/STALE 照记):留的是最近一次终态的物证。
-    await this.recordPipelineEvidence(task, sha, status);
+    // 红灯也过证据口：先留绑定 SHA 的逐项物证，再进同一轻量修复环。
+    await this.recordPipelineEvidence(task, sha, status, checks);
     if (!this.current(task, epoch)) return;
+    await this.handlePipelineRed(task, sha, log, epoch);
+  }
+
+  /** 内核裁成 RED 后的唯一处理器。来源可以是总体 failed，也可以是
+   * “总体 success、某个 typed check failed”的矛盾平台响应；两者都只
+   * 派轻量修复会话，不回人工 Diff、不重放内核完整质量链。 */
+  private async handlePipelineRed(
+    task: TaskState,
+    sha: string,
+    log: string,
+    epoch: number,
+  ): Promise<void> {
+    if (!this.current(task, epoch)) return;
+    const delivery = task.summary.delivery;
+    if (!delivery) return;
+    task.summary.status = "verifying";
+    delivery.mr_state = "验证中";
+    delivery.waiting_on = undefined;
     // 三层覆盖:任务 > 设置 > 部署;全都没配 = 不限轮(用户拍板
     // "不该有最大轮数限制"),0 = 关。真正兜住无限的是收敛刹车:
     // 没新提交即停 + 无进展必须换思路或出诊断(使命里的纪律)。
@@ -2835,9 +3203,8 @@ export class TaskService {
       + `一并交给它,别让它从头再查一遍。`,
       `- 修复纪律:补覆盖率要写真测试,不许凑数骗指标;CodeCheck 修问题`
       + `本身,不许加抑制注释糊弄;编译告警要消除,不是关闭告警。`,
-      `- 全部修完凑成一次提交,收尾时一次 push(不 push 等于没修):`
-      + `远端每收到一次 push 就要烧一整条流水线,修一个推一个`
-      + `等于拿流水线当调试器——中途绝不 push。`
+      `- 全部修完凑成一次提交。不要读取或索要个人 Git 令牌，`
+      + `也不要 push；会话释放后 Cloud 宿主会统一推送并复核远端 SHA。`
       + `别的都不要动,顺手的重构、无关的优化一律不做。`,
       `- 诊断出口:凡不是本仓代码能修的(外部平台的配置、权限、环境、`
       + `流水线自身的问题),那一类不要硬改碰运气;若所有问题都不可修,`
@@ -2908,6 +3275,18 @@ export class TaskService {
   ): void {
     const delivery = task.summary.delivery!;
     if (state === "merged") {
+      const attestation = this.completionAttestation(task);
+      if (attestation && !attestation.complete) {
+        // 远端 MR 状态不能反向篡改内核流程真相。即使有人在平台上手工
+        // 合入，也只有内核 terminal + 当前 HEAD 的逐项 PASS 才能解锁
+        // 下游；恢复会再次对账并把该任务续到正确锚点。
+        delivery.mr_state = "已合入（内核终态待对账）";
+        delivery.waiting_on = attestation.reason;
+        task.summary.status = "verifying";
+        task.summary.detail = `MR 已合入，但不能标记完成：${attestation.reason}`;
+        this.persist(task);
+        return;
+      }
       if (delivery.loop) delivery.loop.state = "green";
       delivery.mr_state = "已合入";
       delivery.waiting_on = undefined;
@@ -3110,7 +3489,8 @@ export class TaskService {
         + `格式严格如下,每条以方括号 id 单独一行开头:`,
         `  [${discussions[0].id}]`,
         `  <这条的回复:改了什么/为什么不改,一两句讲清>`,
-        `- 有代码改动就凑成一次提交并 push(一次修全一次推);`
+        `- 有代码改动就凑成一次提交；不要读取或索要个人 Git 令牌，`
+        + `也不要 push，Cloud 宿主会在会话释放后统一推送;`
         + `全部是解释、没有代码改动就不提交——这也是正常结局。`,
         `- 系统会把你的回复发布到对应讨论(是否代点"已解决"由部署配置`
         + `决定,默认留给检视人点),回复写给检视人看,说人话,`
@@ -3122,8 +3502,8 @@ export class TaskService {
 
   /** 冲突修复派单(批4):宿主先 merge 目标分支**故意把冲突标记留在
    * 工作区**,让 agent 在真实冲突上下文里解,而不是凭描述想象
-   * (内网框架里最值得抄的一条)。merge 干净=没有真冲突,宿主直接
-   * push 合并提交回监控,不烧会话。刹车=同 SHA 不二修。 */
+   * (内网框架里最值得抄的一条)。merge 干净=没有真冲突,交回统一的
+   * host push 链，不烧会话。刹车=同 SHA 不二修。 */
   private dispatchConflictRepair(
     task: TaskState,
     sha: string,
@@ -3157,21 +3537,13 @@ export class TaskService {
     }
     const merged = git("merge", "--no-edit", `origin/${target}`);
     if (merged.status === 0) {
-      // 干净合并:没有真冲突(门禁可能滞后)。宿主直接推合并提交——
-      // 纯机械动作,不含判定;推完回交付链跑新流水线。
-      const pushed = git("push", "origin", "HEAD");
-      if (pushed.status === 0) {
-        loop.kind = "conflict";
-        loop.last_sha = sha;
-        task.summary.detail = "与目标分支干净合并,已推送,等新流水线";
-        this.persist(task);
-        setImmediate(() => void this.tryDeliver(task, epoch));
-      } else {
-        git("merge", "--abort");
-        task.summary.detail =
-          `合并提交推送失败:${(pushed.stderr || "").slice(0, 300)}`;
-        this.persist(task);
-      }
+      // 干净合并:没有真冲突(门禁可能滞后)。统一交给 tryDeliver 的
+      // host-only 推送与远端 SHA 复核，避免这里另开一条无收据的旁路。
+      loop.kind = "conflict";
+      loop.last_sha = sha;
+      task.summary.detail = "与目标分支干净合并,等待宿主推送并触发新流水线";
+      this.persist(task);
+      setImmediate(() => void this.tryDeliver(task, epoch));
       return;
     }
     const conflicted = (git(
@@ -3199,7 +3571,8 @@ export class TaskService {
         `- 逐个文件解决:保留双方必要改动,把标记删干净;拿不准语义时`
         + `读两边的提交历史(git log)再定,不许无脑选一边。`,
         `- 解完 git add 全部冲突文件,git commit 完成合并提交`
-        + `(用默认合并信息即可),然后 push。`,
+        + `(用默认合并信息即可)。不要读取或索要个人 Git 令牌，也不要`
+        + ` push；Cloud 宿主会在会话释放后统一推送。`,
         `- 不要 rebase、不要 force push、不要动无关文件。`,
       ].join("\n"),
       `与 ${target} 冲突(${conflicted.length} 个文件),专职会话解决中`);
@@ -3288,25 +3661,28 @@ export class TaskService {
     } catch { /* 删不掉顶多下轮重发,幂等键兜着 */ }
   }
 
-  /** 流水线证据口:终态时把平台事实(sha/status/来源)写成文件喂给
+  /** 流水线证据口:终态时把平台事实(sha/status/可选 checks/来源)写成文件喂给
    * 内核仓的 `pipeline record`,内核绑工作区当前 HEAD 裁决并把结论写
-   * 进 .mae-flow.json 的 quality.pipeline——判定一行不在本仓(红线:
-   * 内核唯一权威;宿主只递事实)。delivery.attested 是那份现场记录的
-   * 镜像戳。纯旁路:内核调不动/退非零只留痕"未裁决",30s 预算,
-   * 绝不拦收口(fail-open 红线)。 */
+   * 进 .mae-flow.json 的 quality.external_verification——判定一行不在
+   * 本仓(红线:内核唯一权威;宿主只递事实)。delivery.attested 是那份
+   * 现场记录的镜像戳。30s 预算；登记失败返回 undefined，总体绿灯
+   * 必须 fail-closed 留在 verifying，红灯仍可进入轻量修复环。 */
   private async recordPipelineEvidence(
     task: TaskState,
     sha: string,
     status: "success" | "failed",
-  ): Promise<void> {
+    checks: PipelineCheck[] | undefined,
+  ): Promise<PipelineAttestation | undefined> {
     const kernelRoot = this.options.host?.kernelRoot;
     const delivery = task.summary.delivery;
-    if (!kernelRoot || !task.cwd || !delivery) return;
+    if (!kernelRoot || !task.cwd || !delivery) return undefined;
     const factsPath = join(task.summary.workspace, "pipeline-facts.json");
     try {
       writeFileSync(factsPath, JSON.stringify({
         sha,
         status,
+        ...(checks !== undefined ? { checks } : {}),
+        ...(delivery.git_push ? { git_push: delivery.git_push } : {}),
         source: this.effectivePlatformUrl() ?? "",
         url: delivery.mr_url ?? "",
       }, null, 2));
@@ -3336,7 +3712,7 @@ export class TaskService {
         });
       // 内核约定:末行是机器可读的裁决 JSON(quality.pipeline 原文)。
       const lastLine = result.out.trim().split("\n").at(-1) ?? "";
-      let record: { verdict?: unknown; sha?: unknown } | undefined;
+      let record: Record<string, unknown> | undefined;
       try {
         record = JSON.parse(lastLine);
       } catch {
@@ -3345,6 +3721,13 @@ export class TaskService {
       if (result.code === 0 && typeof record?.verdict === "string") {
         delivery.attested =
           `${record.verdict}@${String(record.sha ?? sha).slice(0, 12)}`;
+        return {
+          verdict: record.verdict,
+          sha: typeof record.sha === "string" ? record.sha : sha,
+          reason: typeof record.reason === "string" ? record.reason : undefined,
+          checks: record.checks && typeof record.checks === "object"
+            ? record.checks as Record<string, unknown> : undefined,
+        };
       } else {
         delivery.attested = "未裁决(内核登记失败,详见服务日志)";
         this.options.log?.(
@@ -3357,6 +3740,7 @@ export class TaskService {
       this.options.log?.(
         `任务 ${task.summary.id} 流水线证据登记异常: ${String(error)}`);
     }
+    return undefined;
   }
 
   /** 批2 落盘通道:拉平台的失败材料镜像到工作区外 pipeline/。
@@ -3623,34 +4007,155 @@ export class TaskService {
       }));
   }
 
-  /** 个人 Git 凭据落地为 credential helper 三件套:
-   * - agentDir/git-credential(0600):明文凭据,git 凭据格式;
-   * - agentDir/git-credential.sh(0700):只答 get,现读同目录凭据文件;
-   * - .git/config 里只记脚本路径,**明文永不进 .git/config 或远端 URL**
-   *   (令牌拼 URL 会原样留在 config 里,等着被 cat 出来)。
-   * 容器隔离下工作区按原路径挂载(containerRuntime -v ws:ws),
-   * 绝对路径在容器内照样成立。没有凭据返回 undefined,一切如旧。 */
-  private prepareGitCredential(
-    agentDir: string,
+  /** Host Git 动作使用的短生命周期 helper。目录/脚本仅活在一次
+   * clone 或 push 的同步调用窗口，绝不进入 agentDir，也不写进仓库
+   * config；调用方必须 finally cleanupHostGitCredential。 */
+  private prepareHostGitCredential(
     credential: { username: string; password: string },
-  ): string {
-    const file = join(agentDir, "git-credential");
+  ): { dir: string; helper: string } {
+    // 系统临时目录避免 helper 路径中出现工作区空格，也让凭据天然位于
+    // Agent 工作区之外。
+    const dir = mkdtempSync(join(tmpdir(), "mae-flow-git-"));
+    chmodSync(dir, 0o700);
+    const file = join(dir, "credential");
     writeFileSync(file,
       `username=${credential.username}\npassword=${credential.password}\n`);
     chmodSync(file, 0o600);
-    const script = join(agentDir, "git-credential.sh");
+    const script = join(dir, "helper.sh");
     writeFileSync(script, [
       "#!/bin/sh",
-      "# git credential helper:只答 get;凭据与本脚本同目录,0600。",
-      "# store/erase 一律无视并成功返回,免得 git 刷警告。",
       'if [ "$1" = "get" ]; then',
-      '  cat "$(dirname "$0")/git-credential"',
+      '  cat "$(dirname "$0")/credential"',
       "fi",
       "exit 0",
       "",
     ].join("\n"));
     chmodSync(script, 0o700);
-    return script;
+    return { dir, helper: script };
+  }
+
+  private cleanupHostGitCredential(
+    prepared: { dir: string; helper: string } | undefined,
+  ): void {
+    if (!prepared) return;
+    try {
+      rmSync(prepared.dir, { recursive: true, force: true });
+    } catch (error) {
+      this.options.log?.(
+        `临时 Git 凭据目录清理失败 ${prepared.dir}: ${String(error)}`);
+    }
+  }
+
+  /** 新任务和旧任务恢复都执行：清掉历史版本留在 agentDir / repo config
+   * 的 helper，并把 origin pushurl 改成必失败地址。Agent 可以读写/提交，
+   * 但拿不到凭据也无法传输；宿主 push 使用显式干净 URL，不走 pushurl。 */
+  private hardenAgentGitBoundary(agentDir: string, cwd?: string): void {
+    for (const name of ["git-credential", "git-credential.sh"]) {
+      rmSync(join(agentDir, name), { force: true });
+    }
+    if (!cwd || !existsSync(join(cwd, ".git"))) return;
+    spawnSync("git", ["config", "--local", "--unset-all", "credential.helper"],
+      { cwd, encoding: "utf-8" });
+    // clone 会照录带 userinfo 的 URL；即便部署误把 token 写进 repo_url，
+    // 也必须在 Agent 进入前从 repo config 擦掉。
+    const origin = spawnSync("git", ["remote", "get-url", "origin"],
+      { cwd, encoding: "utf-8" });
+    const rawOrigin = String(origin.stdout ?? "").trim();
+    if (origin.status === 0 && rawOrigin) {
+      const cleanOrigin = this.cleanRemoteUrl(rawOrigin);
+      if (cleanOrigin !== rawOrigin) {
+        spawnSync("git", ["remote", "set-url", "origin", cleanOrigin],
+          { cwd, encoding: "utf-8" });
+      }
+    }
+    const existingPush = spawnSync(
+      "git", ["config", "--local", "--get-all", "remote.origin.pushurl"],
+      { cwd, encoding: "utf-8" });
+    // 跨仓分析克隆已有更强的只读标记；不能用“宿主可推”的普通执行
+    // 标记覆盖它。两者都指向 /dev/null，但语义必须保留下来供恢复和
+    // 部署自检区分。
+    if (!String(existingPush.stdout ?? "").includes("mae-flow-readonly")) {
+      spawnSync("git", ["config", "--local", "remote.origin.pushurl",
+        "/dev/null/mae-flow-host-owned"], { cwd, encoding: "utf-8" });
+    }
+  }
+
+  private cleanRemoteUrl(raw: string): string {
+    try {
+      const parsed = new URL(raw);
+      parsed.username = "";
+      parsed.password = "";
+      return parsed.toString();
+    } catch {
+      return raw;
+    }
+  }
+
+  /** Agent 会话已释放后由宿主完成唯一一次传输，并立刻从远端反查 SHA。
+   * 返回值既是 TaskSummary 现场，也是 `pipeline record` 的内核收据。 */
+  private pushFromHost(task: TaskState, branch: string): GitPushReceipt {
+    if (task.driver) {
+      throw new Error("安全拒绝：Agent 会话仍在，不能执行宿主 Git 推送");
+    }
+    if (!task.cwd) throw new Error("任务没有代码工作区，不能推送");
+    const checked = spawnSync(
+      "git", ["check-ref-format", "--branch", branch],
+      { cwd: task.cwd, encoding: "utf-8" });
+    if (checked.status !== 0) {
+      throw new Error(`分支名不合法，拒绝推送: ${branch}`);
+    }
+    const head = spawnSync("git", ["rev-parse", "--verify", "HEAD"],
+      { cwd: task.cwd, encoding: "utf-8" });
+    const sha = String(head.stdout ?? "").trim();
+    if (head.status !== 0 || !sha) {
+      throw new Error(`读取待推送 HEAD 失败: ${String(head.stderr ?? "")}`);
+    }
+    const remoteResult = spawnSync("git", ["remote", "get-url", "origin"],
+      { cwd: task.cwd, encoding: "utf-8" });
+    const remoteUrl = String(remoteResult.stdout ?? "").trim();
+    if (remoteResult.status !== 0 || !remoteUrl) {
+      throw new Error(`读取 origin 地址失败: ${String(remoteResult.stderr ?? "")}`);
+    }
+    const credential = this.options.gitCredential?.(
+      task.summary.luban_account);
+    const prepared = credential
+      ? this.prepareHostGitCredential(credential)
+      : undefined;
+    const authArgs = prepared
+      ? ["-c", "credential.helper=", "-c",
+         `credential.helper=${prepared.helper}`]
+      : [];
+    const ref = `refs/heads/${branch}`;
+    try {
+      const pushed = spawnSync("git", [
+        ...authArgs, "push", "--porcelain", remoteUrl, `HEAD:${ref}`,
+      ], {
+        cwd: task.cwd,
+        encoding: "utf-8",
+        env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+      });
+      if (pushed.status !== 0) {
+        throw new Error(`宿主推送失败: ${String(pushed.stderr ?? pushed.stdout)}`);
+      }
+      const verified = spawnSync("git", [
+        ...authArgs, "ls-remote", "--heads", remoteUrl, ref,
+      ], {
+        cwd: task.cwd,
+        encoding: "utf-8",
+        env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+      });
+      const remoteSha = String(verified.stdout ?? "").trim().split(/\s+/)[0];
+      if (verified.status !== 0 || remoteSha !== sha) {
+        throw new Error(
+          `远端 SHA 复核失败: 本地 ${sha.slice(0, 12)}，远端 `
+          + `${remoteSha ? remoteSha.slice(0, 12) : "缺失"}`);
+      }
+      return {
+        sha, ref, remote: "origin", url: this.cleanRemoteUrl(remoteUrl),
+      };
+    } finally {
+      this.cleanupHostGitCredential(prepared);
+    }
   }
 
   private requirementAnalysisPrompt(task: TaskState, cwd: string): string {
@@ -3757,16 +4262,6 @@ export class TaskService {
       if (cloned.status !== 0) {
         throw new Error(`仓库克隆失败: ${cloned.stderr}`);
       }
-      if (useCredential && !readonly) {
-        // 会话里的 push/fetch 也走同一个 helper:写进克隆自己的
-        // config(记的是脚本路径,不是明文);同样先清列表再登记。
-        spawnSync("git",
-          ["config", "credential.helper", ""],
-          { cwd: target, encoding: "utf-8" });
-        spawnSync("git",
-          ["config", "--add", "credential.helper", gitHelper!],
-          { cwd: target, encoding: "utf-8" });
-      }
     } else {
       cpSync(source, target, {
         recursive: true,
@@ -3784,7 +4279,7 @@ export class TaskService {
     }
     // 署名与传输方式无关(本地路径克隆的演练也该署对名):配了就写,
     // 邮箱没填只写名字——平台认领靠邮箱,表单里已经把话说明白。
-    // 会话重建复用旧克隆,署名改动生效边界=下一次新克隆(与凭据一致)。
+    // 会话重建复用旧克隆,署名改动生效边界=下一次新克隆。
     if (identity && existsSync(join(target, ".git"))) {
       spawnSync("git", ["config", "user.name", identity.username],
         { cwd: target, encoding: "utf-8" });
@@ -3890,9 +4385,25 @@ export class TaskService {
       if (!existsSync(statePath)) return "init(尚未初始化)";
       const current = String(
         JSON.parse(readFileSync(statePath, "utf-8"))?.current ?? "");
+      // external_verify 是 flow.json 明示的宿主等待点。Agent 到这里结束
+      // 回合就是正确行为：不能再催它本地编译/跑 UT，更不能连催五轮。
+      // settle 随后会释放会话并调用 tryDeliver，由宿主触发权威流水线。
+      if (current === "external_verify") return undefined;
       return current && current !== "end" ? current : undefined;
     } catch {
       return undefined;
+    }
+  }
+
+  private atExternalVerificationWait(task: TaskState): boolean {
+    if (!task.cwd) return false;
+    try {
+      const statePath = join(task.cwd, ".mae-flow.json");
+      return existsSync(statePath)
+        && String(JSON.parse(readFileSync(statePath, "utf-8"))?.current ?? "")
+          === "external_verify";
+    } catch {
+      return false;
     }
   }
 
@@ -4008,10 +4519,13 @@ export class TaskService {
         // delivery_review)。内核 current 不在终态且催办还有效时,
         // 同一会话催办续跑,而不是把半截流程标成 completed。
         const stalled = this.stalledStep(task);
-        if (stalled && task.driver
-            && task.nudgedStep !== stalled
-            && (task.nudgeCount ?? 0) < 5) {
+        if (stalled && task.nudgedStep !== stalled) {
+          // 换了步骤才重置预算；同一步第二次 end_turn 不能因为“已经催过”
+          // 就越过内核直接交付。最多催五次，之后如实停机等重跑。
           task.nudgedStep = stalled;
+          task.nudgeCount = 0;
+        }
+        if (stalled && task.driver && (task.nudgeCount ?? 0) < 5) {
           task.nudgeCount = (task.nudgeCount ?? 0) + 1;
           this.options.log?.(
             `任务 ${task.summary.id} 催办续跑(流程停在 ${stalled})`);
@@ -4022,10 +4536,30 @@ export class TaskService {
             `已答复过的确认项不要重复提问。`), epoch);
           break;
         }
+        const beforeDelivery = this.completionAttestation(task);
+        if (beforeDelivery
+            && beforeDelivery.kind !== "terminal"
+            && beforeDelivery.kind !== "external_verify") {
+          // end_turn 是模型会话事实，不是内核流程事实。催办用尽、driver
+          // 消失或状态损坏时宁可显式失败，也不能 tryDeliver 后把 running
+          // 兜成 completed。failed 可由人工重跑从 current 原地恢复。
+          task.lastReply = task.driver?.finalReply();
+          task.driver?.dispose();
+          this.bypass(task, "容器清理", task.container?.stop());
+          task.mission = undefined;
+          task.summary.status = "failed";
+          task.summary.detail = `Agent 提前结束，${beforeDelivery.reason}`;
+          this.persist(task);
+          this.notifyOutcome(task);
+          break;
+        }
         // 收口发言先落袋:修复会话"判断修不了"时这就是给人的诊断,
         // 下面 tryDeliver→pipelineVerdict 的 halted 分支要用。
         task.lastReply = task.driver?.finalReply();
         task.driver?.dispose();
+        // host push 的硬前提：不仅调用 dispose，还要先从任务状态移除
+        // 会话句柄。pushFromHost 会再次校验，防未来改动把传输挪回会话期。
+        task.driver = undefined;
         this.bypass(task, "容器清理", task.container?.stop());
         // 专项使命到这儿才算消费掉:会话真做完了。早清会让"修一半
         // 被重启"的重建会话拿不到使命。
@@ -4050,7 +4584,20 @@ export class TaskService {
           break;
         }
         task.pauseRequested = false;
-        if (task.summary.status === "running") {
+        const afterDelivery = this.completionAttestation(task);
+        if (afterDelivery && !afterDelivery.complete
+            && ["running", "completed", "await_merge"].includes(
+              task.summary.status)) {
+          // tryDeliver 是 I/O 编排，不拥有终态解释权。无论它从哪个旁路
+          // 返回，只要内核还没 terminal + PASS，就只能继续验证/显式失败。
+          if (afterDelivery.kind === "external_verify"
+              || (afterDelivery.terminal && afterDelivery.external_required)) {
+            this.holdExternalVerification(task, afterDelivery.reason);
+          } else {
+            task.summary.status = "failed";
+            task.summary.detail = `不能完成任务：${afterDelivery.reason}`;
+          }
+        } else if (task.summary.status === "running") {
           task.summary.status = "completed";
         }
         this.persist(task);

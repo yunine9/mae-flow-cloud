@@ -715,7 +715,9 @@ class RuntimeAndStateTests(unittest.TestCase):
             payload = json.dumps({
                 "cwd": td, "tool_name": "Edit",
                 "tool_input": {
-                    "file_path": os.path.join(td, ".mae-flow.json")},
+                    # Pi 的真实文件工具字段是 path；必须同样进入完整流程
+                    # gate edit，不能因旧 Hook 的 file_path 接缝而绕过。
+                    "path": os.path.join(td, ".mae-flow.json")},
             }) + "\n"
             hook = subprocess.run(
                 [sys.executable, os.path.join(

@@ -27,6 +27,11 @@ class EditGateContext:
     # 是"流程头部已走完"的单一干净信号。默认 True:老调用点/流程中段
     # 行为不变——逐步的"本步不许改源码"是退役决定,这里只封头部。
     workflow_chosen: bool = True
+    # UT 抢跑提醒的三个事实:编码步(证据含 COMPILE agent)、新建文件、
+    # 命中测试路径。默认全 False:老调用点不触发提醒,行为不变。
+    compile_step: bool = False
+    new_file: bool = False
+    is_test_path: bool = False
 
 
 @dataclass(frozen=True)
@@ -136,6 +141,26 @@ def _source_edit_decision(context):
     return None
 
 
+def _ut_preempt_advisory(context):
+    """编码步新建测试文件:放行,但提醒这是抢跑白费。
+
+    2026-08-20 云端实战:模型在 build 步写完源码顺手开写 UT。流程语义上
+    这不越闸(build_review 的检视卡照弹,verify_ut 只认 UT 子 agent 的
+    分批证据),但主会话手写的 UT 一行不计证据,到了 verify_ut 仍由
+    子 agent 重做——纯烧 token。只提醒不拦:编码中**修改已有**测试是
+    合法的(重构本来就会弄坏旧测试),所以只盯"新建";真有先建测试
+    骨架的正当场景,advisory 也不挡路。"""
+    if not (context.compile_step and context.new_file
+            and context.is_test_path):
+        return None
+    return GateDecision(
+        "advisory", rule="edit-ut-preempt",
+        message="检测到在编码步新建测试文件。UT 由 verify_ut 步的 UT 子 "
+                "agent 按任务卡分批生成,现在手写的测试不计任何证据,到了 "
+                "verify_ut 仍会由子 agent 重做——纯属浪费。请专注本步交付"
+                "源码,测试交给后续流程。")
+
+
 def decide_edit(context):
     """Return the first historical Edit Gate decision in rule order."""
     for evaluator in (
@@ -143,6 +168,7 @@ def decide_edit(context):
         _repository_edit_decision,
         _flow_head_decision,
         _source_edit_decision,
+        _ut_preempt_advisory,
     ):
         decision = evaluator(context)
         if decision is not None:

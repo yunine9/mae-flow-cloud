@@ -70,3 +70,20 @@ test("合成载荷:pre/post 两侧 tool_use_id 同源,生命周期可精确对�
   assert.equal(post?.payload.tool_use_id, "call_A");
   assert.equal(pre?.payload.tool_use_id, post?.payload.tool_use_id);
 });
+
+test("内核进程不可用时授权与证据都 fail-closed", async () => {
+  const host = new KernelHost({
+    kernelRoot: mkdtempSync(join(tmpdir(), "mfc-missing-kernel-")),
+    workspace: mkdtempSync(join(tmpdir(), "mfc-missing-ws-")),
+    transcriptPath: join(tmpdir(), "missing-transcript.jsonl"),
+    taskId: "t-fail-closed",
+    python: "__mae_flow_python_does_not_exist__",
+  });
+  const verdict = await host.preTool(toolEvent("tool_requested", "call_X"));
+  assert.equal(verdict?.action, "deny");
+  assert.match(verdict?.reason ?? "", /内核门禁不可用/);
+  await assert.rejects(
+    () => host.postTool(toolEvent("tool_finished", "call_X")),
+    /内核 posttooluse 登记失败/,
+  );
+});

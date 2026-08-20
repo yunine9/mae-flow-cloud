@@ -12,7 +12,7 @@
 | Python 3 | ≥ 3.10,mae-flow 内核的运行时 |
 | mae-flow 内核 | **不用单独准备**:快照收编在 `kernel/`,ZIP 下载也带着(是普通目录不是 submodule,`.gitattributes` 也没有 export-ignore)。开发机想用活内核就设 `MAE_FLOW_HOME` |
 | Git | 任务克隆/推分支/ls-remote 都用它 |
-| JDK + Maven | 试点仓(Java)编译验证用;版本按试点仓 `pom.xml` 要求。**--verify-via-pipeline 形态不需要**(docker 同) |
+| 质量执行环境 | Cloud 宿主不安装 JDK/Maven/CodeCheck，也不运行 UT；编译、UT 运行、CodeCheck 必须由权威流水线提供 |
 | npm 依赖 | `npm ci`(pi 锁 0.84.1,升级必须重跑 probe+全套测试再拍板)。**进内网前先验这一步能不能过**,见下 |
 
 #### 离线/内网装依赖:进场前先验,别到现场才发现
@@ -47,7 +47,8 @@
    不然撞代理(外部实测 502 就是这么来的);
 3. 装机:Node≥20 + python3 + git;`git clone <mae-flow-cloud>` →
    `npm ci` → `cd web && npm install && npm run build`(dist 不进仓);
-   **不装 JDK/docker**——免编译形态流水线是唯一裁判。**不隔离=显式
+   **不装 JDK/Maven/CodeCheck**——Cloud 固定以流水线为质量执行环境。
+   Docker 只在启用任务隔离时需要。**不隔离=显式
    选择**,边界要认:agent 与服务同用户跑,auth.json(全体用户令牌
    明文)理论上对它可读、越界写无强制墙——单人自用+单任务+人盯着
    可接受;**转多人共用前容器隔离升回必选**(WSL2 装 docker 无障碍);
@@ -111,11 +112,9 @@
 工作站不是服务器,多人依赖后尽快挪到常驻机器(顺带把容器隔离升回
 必选,见"不隔离部署的边界")。
 
-**Linux 容器编译验证(外部已模拟通过)**:2026-08-14 在 Colima
-arm64 Linux 容器(maven:3.8-eclipse-temurin-8)对 fieldtest-java
-干净副本验证 compile/test 退出码 0。上内网第一件事仍然是:在**目标
-容器镜像**里跑 `mvn compile && mvn test`,退出码必须真实核验
-(不许管道吞码)——外部模拟不替代目标镜像的最终裁决。
+**任务容器只承担隔离**：启用 `--isolate-image` 时，镜像需提供运行时
+所需的 shell、python3 与 git；不需要 JDK/Maven/CodeCheck。编译、UT
+运行和 CodeCheck 的真实退出码只能从绑定提交 SHA 的流水线获取。
 
 ## 四个假件 → 真件切换表
 
@@ -128,22 +127,27 @@ arm64 Linux 容器(maven:3.8-eclipse-temurin-8)对 fieldtest-java
 
 ## 内网依赖就两个 CLI(强度刻意不同)
 
-除标准件(git / python3 / node;`--verify-via-pipeline` 形态下
-**docker 也不需要**)外,内网新增的外部依赖只有两个内部 CLI:
+除标准件(git / python3 / node；不启用任务隔离时 docker 也不需要)外，
+内网新增的外部依赖只有两个内部 CLI:
 
 | | 干什么 | 强度 | 挂了会怎样 |
 |---|---|---|---|
-| MR/流水线 CLI | 交 MR、按 SHA 查状态、拉失败日志 | **硬依赖**(交付链的裁判入口) | 交付动作失败如实落账(`summary.delivery` 带原因原文),任务停在 completed/verifying 留痕,不假装交付 |
+| MR/流水线 CLI | 交 MR、按 SHA 查整体状态、可选返回三项 checks、拉失败日志 | **硬依赖**(交付链的裁判入口) | 交付动作失败如实落账(`summary.delivery` 带原因原文),任务停在 verifying 留痕,不假装交付 |
 | 通知 CLI(拉群艾特;或小鲁班 HTTP/MCP,三选一) | 事实 → 一条消息@到人 | 软依赖(旁路 fail-open) | 只把 `summary.notify` 标红,流程一步不停 |
 
-### MR/流水线 CLI:严格说是三个能力,第 3 个最要命
+### MR/流水线 CLI:严格说是四个能力,后两个都是上线门槛
 
 1. **交 MR**(源分支→目标分支,幂等);
 2. **按 SHA 查流水线状态**(结果必须绑提交,旧绿灯不背书新代码);
-3. **拉失败日志** ← **进内网第一件要核实的能力**。它是修复 agent 的
+3. **建议按质量维度返回 Job 结果**：`COMPILE / UT / CODECHECK`
+   checks 是可选的诊断增强。订单的 `execution_contract` 已声明整体
+   流水线覆盖三项，因此精确 SHA 的总体 `success` 可聚合核销；checks
+   一旦明确给出 `failed` / `pending`，更精确事实优先，分别裁为 RED /
+   INCOMPLETE。没有逐项 Job 不会永久卡住，但红灯定位粒度会变差;
+4. **拉失败日志** ← **进内网第一件要核实的能力**。它是修复 agent 的
    口粮:没有失败日志,修复环退化成瞎修。若内部 CLI 拉不到日志,
-   退路是修复 agent 只拿到"哪个 job 红了"、在本地复现——那就又绕回
-   编译环境,免编译形态的意义损失大半。**先验这一条,再谈部署形态。**
+   不能回退到 Cloud 本机复现。退路只能是保留诊断并请人工补齐流水线
+   材料，因此失败日志是试点上线的硬前置。**先验这一条,再谈部署。**
 
 ### 适配层契约(照抄即可实现,字段是代码真实消费的全集)
 
@@ -154,7 +158,11 @@ codehubcli 命令行,代码零改动。配置形状(权限 600,文件头注释�
 {target_branch} {title} {sha} {token} {git_username}`,不过 shell,
 标题带空格/注入都不是问题)+ 输出抽取(`{"json": "data.web_url"}` 点路径
 / `{"regex": "..."}` 首个捕获组 / `{"const": "running"}` 固定值)+
-状态映射表(`{"SUCCESS": "success", ...}`)。纪律内置:CLI 超时预算
+状态映射表(`{"SUCCESS": "success", ...}`)。流水线命令另配
+可选配置 `checks`（Job 数组点路径）、`check_dimension`、`check_status`，
+以及可选的
+`check_job`/`check_url`，以及 `check_status_map`；适配层会输出统一的
+`{dimension,status,job?,url?}`。纪律内置:CLI 超时预算
 (默认 60s)、**未映射状态 502 拒绝猜**(猜 running 白轮询、猜 failed
 白烧修复)、CLI 非零退出带 stderr 上浮、令牌不落日志、配置坏拒启。
 
@@ -170,8 +178,23 @@ codehubcli 命令行,代码零改动。配置形状(权限 600,文件头注释�
 | 端点 | 请求 | 宿主消费的响应字段 |
 |---|---|---|
 | `POST /mr` | `{repo, source_branch, target_branch, title}` | `{url}`(MR 链接,展示用)`, id?`(iid,门禁/讨论查询带回) |
-| `POST /pipeline/trigger` | `{repo, sha}` | `{status: "success"\|"failed"\|"running", log?}` |
-| `GET /pipeline/status?sha=<sha>&repo=<url>` | — | `{runs: [{status, log?}]}`(取最后一个终态 run) |
+| `POST /pipeline/trigger` | `{repo, sha}` | `{status: "success"\|"failed"\|"running", log?, checks?}` |
+| `GET /pipeline/status?sha=<sha>&repo=<url>` | — | `{runs: [{status, log?, checks?}]}`(取最后一个终态 run) |
+
+可选的终态 `checks` 固定形状如下。`status` 可用
+`success/failed/running/pending/canceled/skipped/not_run`；部署适配层负责
+把内部平台词映射过来。缺席时总体 `success` + 精确 SHA 按执行契约聚合
+核销；存在时逐项事实优先，任何明确失败都不会被总体绿灯盖掉：
+
+```json
+{
+  "checks": [
+    {"dimension": "COMPILE", "status": "success", "job": "compile"},
+    {"dimension": "UT", "status": "success", "job": "unit-test"},
+    {"dimension": "CODECHECK", "status": "success", "job": "codecheck"}
+  ]
+}
+```
 
 MR 闭环的可选端点(mr_gates/mr_discussions/discussion_reply/
 pipeline_artifacts,不配=404=宿主按纯流水线旧语义)与按能力核对报告
@@ -258,8 +281,9 @@ npm run serve -- ... --luban http://127.0.0.1:8791
 按类修复、能派专职子 agent 的派专职(编译类/UT 类/检视类各修各的,
 定位结果随派单一起交过去);纪律写死:补覆盖率写
 真测试不许凑数、CodeCheck 修问题不许加抑制、告警要消除不是关闭;
-**全部修完凑一次提交、收尾一次 push**——远端每收到一次 push 就烧一整
-条流水线,中途绝不 push(用户原则:一次修全,大幅降低流水线重跑)。
+**全部修完凑一次提交；Agent 不读取/索要个人令牌，也不 push**。会话
+释放后 Cloud 宿主使用短生命周期凭据统一推送并反查远端 SHA，再启动
+流水线(用户原则:一次修全,大幅降低流水线重跑)。
 不是本仓代码能修的(外部平台配置如 yaml、权限、环境)不硬改,出诊断。
 
 修复本身是纯提示词;宿主只做等待、事实(绑 SHA)、刹车三件提示词
@@ -267,15 +291,39 @@ npm run serve -- ... --luban http://127.0.0.1:8791
 每个失败 stage 都要在 `log` 里留一段摘要**(分诊的原料),不能只给
 第一个 stage 塞满 2000 字。
 
-### 免编译形态:--verify-via-pipeline(用户拍板:"先不编译了,直接上流水线")
+### Cloud 固有执行契约（无部署开关）
 
-宿主没有构建链、也不想供养容器镜像时,加 `--verify-via-pipeline`
-(必须同时有 --platform/--fake-platform,否则没人裁判):
-- 每次会话开场注入环境事实:本机不做编译/UT,流程里对应环节注明
-  「本地验证由流水线代行」并继续(云端台账门禁已放开,done 不拦);
-- 慢的代价由修复环扛:红灯自动派修复会话,不占人的时间;
-- 上线自查第 1 项(容器内 mvn compile)对此形态**不适用**,改为核验
-  第 5 项时流水线真实跑过 compile+test(结果绑 SHA)。
+Cloud 只有一种质量执行语义，不需要管理员选择：
+
+- 本机 Agent 编写代码与 UT；可用 UT 编写方式随每单写入
+  `.mae-flow-order.json` 的 `UT生成方式`；
+- 编译、UT 运行、CodeCheck 固定由流水线执行；订单中的
+  `execution_contract` 以机器可读字段写明这四项分工；
+- Agent 只提交，不持有个人 Git 凭据、不 push；宿主释放会话后推送，
+  远端 SHA 复核收据与流水线 facts 一并交给内核；
+- UT skill 只指导编写/修改测试，不负责运行，也不构成通过证据；
+- 流水线红灯进入修复环，修复只依据该次绑定 SHA 的流水线材料。
+
+订单中的固定形状如下（除 `UT生成方式` 会按实际可用 Skill 选择外，不是
+配置项）：
+
+```json
+{
+  "execution_contract": {
+    "schema": "mae-flow-execution/1",
+    "host": "cloud",
+    "compile": "pipeline",
+    "ut_write": "agent",
+    "ut_run": "pipeline",
+    "codecheck": "pipeline",
+    "git_push": "host"
+  },
+  "UT生成方式": "java-autout"
+}
+```
+
+历史 `--verify-via-pipeline` 参数仍可出现在旧启动脚本中，但只会打印
+弃用提示并被忽略；带与不带该参数的行为完全一致。
 
 models.json 形状(key 只放服务器本地文件,权限 600,永不进仓):
 
@@ -382,16 +430,15 @@ skill 随仓走、众筹修改的话用这条。
 - pi 不提供"调用 Skill 工具"这个通道,它把 SKILL.md **注进系统提示**让
   模型读。所以内核在云端形态下不再要求"transcript 里必须有 Skill 调用"
   这类证据(否则永远等不到,死循环);
-- skill 里"编译通过""执行构建/运行测试"那类段落在云端做不到,任务卡
-  已明说**跳过这些段落、其余照写**。你也可以在收编时把那几段删掉,
-  两种做法都行,不删也不会卡住流程。
+- skill 里"编译通过""执行构建/运行测试"那类段落不属于 Cloud 能力，
+  应在收编时删掉或明确标为流水线职责；Skill 在 Cloud 中只负责测试编写。
 
 `build-fix` 这类纯构建 skill 云端用不上(本机不编译),不必收编。
 
 ### 收编时顺手改这几处(省轮次,不是保命)
 
-内核已经不要求本地编译/运行的证据了,所以下面这些不改也**不会卡死**;
-不改的代价是模型照着 skill 去试一把、撞一次"命令不存在",白烧一两轮。
+执行契约会阻止模型把本机结果当证据；仍建议清理 Skill 中冲突段落，
+避免模型尝试不存在的能力、白烧轮次。
 
 **最值钱的一处:把 `description` 写准。** pi 只把每个 skill 的
 `name`/`description`/路径注进系统提示,**正文要模型自己决定去读**。
@@ -460,7 +507,6 @@ skill 随仓走、众筹修改的话用这条。
   "luban-header": ["Authorization: Bearer <密钥>"],
   "pg": "postgresql://...",
   "data": "/var/lib/mae-flow-cloud", "port": 8787,
-  "verify-via-pipeline": true,
   "poll-interval": 30, "poll-timeout": 1800,
   "max-concurrent": 2
 }
@@ -475,7 +521,6 @@ skill 随仓走、众筹修改的话用这条。
 | pg | 无 | 投影(纯旁路) |
 | data / port / web | .tasks / 8787 / web-dist | 现场目录、端口、前端 |
 | isolate-image/-volume/-memory/-cpus/-user | 无 | 容器隔离 |
-| verify-via-pipeline | false | 免编译形态(需 platform 在场) |
 | repair-rounds | 不限 | 修复环手刹:数字=上限,0=关;不配=修到绿/出诊断为止 |
 | poll-interval / poll-timeout | 10 / 1800(秒) | 流水线轮询节奏与预算 |
 | max-concurrent | 2 | 并发任务数 |
@@ -515,19 +560,19 @@ MR/流水线服务同样是部署基础设施，管理页仅通过「部署自�
 ### 个人 Git 令牌(每用户,「我的工作」页配置)
 
 开发成员在自己的工作台配平台访问令牌(PAT)+ 平台用户名(默认=登录
-账号),之后**这个人的任务**以他的身份 clone/push;没配的用户走服务
-级访问方式(服务账号 helper / 开放内网)。机制与纪律:
+账号),之后**宿主**以这个人的身份 clone/push;没配的用户走服务级访问
+方式(服务账号 helper / 开放内网)。机制与纪律:
 
-- 注入走 **credential helper**:明文凭据(0600)与只答 `get` 的脚本
-  (0700)放任务的 pi-agent 目录,`.git/config` 只记脚本路径——
-  **明文永不进 config、永不拼进远端 URL**(拼 URL 会原样留在
-  config 里等着被 cat 出来);
-- 注入时先**清空继承的 helper 列表**再登记我们的脚本:git 会对列表里
-  所有 helper 广播 store,不清的话令牌会被系统钥匙串之流顺手存走
-  (macOS 实测中招);
+- 每次 clone/push 才在系统临时目录创建 0700 目录与 helper(凭据文件
+  0600)，同步 Git 命令结束后 `finally` 删除；helper 不进入任务目录;
+- CloudSession 创建前清理旧版本可能遗留的 `pi-agent/git-credential*`
+  和仓库本地 `credential.helper`；`.git/config` 不持久化 helper/token;
+- Agent 会话内 origin 的 fetch URL 保持干净，pushurl 指向不可写地址；
+  会话释放后宿主用显式干净 URL 推送并 `ls-remote` 反查同一 SHA;
 - clone 一律 `GIT_TERMINAL_PROMPT=0`:子进程没有终端,缺凭据就地
   失败、错误如实上浮,绝不挂死等密码(不卡死红线);
-- 生效边界=下一次任务启动/会话重建;在跑的任务不换凭据;
+- clone 在任务启动时现读凭据；push 在会话释放后再次现读，不把凭据
+  生命周期扩张到 Agent 执行期;
 - 存储在 auth.json(0600):密码是哈希,令牌必须明文(git 要用原文),
   所以只许住这份 600 文件;界面与 API 只见 ••••末4位;
 - **commit 署名与推送鉴权是两码事**:令牌只管 push 过门禁,"commit
@@ -594,16 +639,13 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
   重建索引;崩溃时在跑的任务重新入队,以内核 current 为锚重建会话续跑;
   等人的任务原地挂起,决定到来走重建会话。**任何模式都不会自动清数据**
   ——清场只在显式 `--fresh` 时发生(且清前把要删的任务数报出来)。
-- **容器隔离(强烈建议内网开启)**:`--isolate-image <构建镜像>`
+- **容器隔离(强烈建议内网开启)**:`--isolate-image <运行时镜像>`
   后模型的 bash 命令进任务专属容器执行(会话/门禁/内核留宿主,
-  工作区同路径挂载)。镜像按试点仓选并需包含 python3 + git +
-  构建链(Java 例:maven + JDK + python3,参考 mfc-java-pilot 的
-  Dockerfile 形状);`--isolate-volume ~/.m2:/root/.m2` 挂构建缓存;
+  工作区同路径挂载)。镜像需包含 shell + python3 + git，不承载编译、
+  UT 运行或 CodeCheck，也不需要挂 Maven 等构建缓存;
   `--isolate-memory 4g --isolate-cpus 2` 限额;
   `--isolate-user $(id -u):$(id -g)` 防挂载卷文件属主漂移。
-  教训(run7 实锤):宿主没有构建链时,模型会自己发明 docker 包裹
-  命令拿到真实绿灯,但内核台账铁面拒收(命令与任务卡不符)——
-  环境必须由部署侧给足,不能指望模型绕。
+  任务容器是安全边界，不是质量执行环境；流水线才是唯一质量裁判。
 - 守护用 systemd `Restart=on-failure` 即可,恢复逻辑在服务内部。
   单元文件样例:
 
@@ -620,9 +662,9 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
   ExecStart=/usr/bin/npm run serve -- \
     --models /etc/mae-flow-cloud/models.json \
     --provider <网关名> --model glm-5.1 \
-    --repo <内网仓地址> --platform <MR/流水线网关地址> \
+    --kernel-mode --platform <MR/流水线网关地址> \
     --pg postgresql://<用户>@<PG地址>/<库名> \
-    --isolate-image <构建镜像> --isolate-volume /var/cache/m2:/root/.m2 \
+    --isolate-image <任务运行时镜像> \
     --data /var/lib/mae-flow-cloud --port 8787
   Restart=on-failure
   RestartSec=3
@@ -638,8 +680,8 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
 
 ## 上线自查清单(按序)
 
-可执行版:`harness/preflight.sh --java-repo <试点仓> --models <models.json> --provider <网关名> --adapter http://127.0.0.1:8790`
-——1~4.5 项自动核验真实退出码,5/6 两项人工,脚本会原样提醒。
+可执行版:`harness/preflight.sh --models <models.json> --provider <网关名> --adapter http://127.0.0.1:8790`
+——本机服务与连接项自动核验，流水线与恢复项按清单演练。
 (--adapter 是进场项:适配层起来后加上,冒烟根路径;契约字段的
 真对拍走 adapter --selftest,不重复。)
 
@@ -653,18 +695,21 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
    只认 AGENTS.md/CLAUDE.md 这几个名字,认出后**进系统提示词每次携带**,
    已实测接线在 CloudSession 的 resource loader 上,零开发)。
    收编前 ut-generator 只有内核步骤卡自带的方法论:
-   - MR/流水线 CLI 三能力逐一实测:交 MR、按 SHA 查状态、**拉失败日志**
-     ——第 3 项拉不到,免编译形态(--verify-via-pipeline)不成立,
-     回容器编译形态;
+   - MR/流水线 CLI 四能力逐一实测:交 MR、按 SHA 查状态、可选返回
+     **COMPILE/UT/CODECHECK 三项 checks**、**拉失败日志**——checks 建议
+     配置以提升诊断；日志拉不到，Cloud 修复环没有可信输入，试点不得上线;
    - 通知 CLI 发一条真消息@到人(失败只标红不阻流程,但要验真投得到);
-1. 容器内 `mvn compile && mvn test` 真实退出码 0
-   (--verify-via-pipeline 形态跳过本项,以第 5 项流水线真实跑过
-   compile+test 且结果绑 SHA 代替);
-2. `npm test` 全绿(17 项,含恢复/并发/交付三条路);
-3. `npm run probe` 九项事实全绿(内核裁判在场);
-4. 网关连通:发一个最小任务,确认首回合不是空转
+1. `npm test` 全绿，`npm run typecheck` 无错，前端可构建;
+2. `npm run probe` 全绿(内核裁判在场);
+3. 网关连通:发一个最小任务,确认首回合不是空转
    (429/网关错误会如实落 failed + detail,不会假 completed);
-5. 一单真需求走到 `await_merge`,MR 出现在真平台上;
+4. 适配层自检通过，管理员「部署自检」确认通知链接、MR/流水线连接均为
+   内网可访问地址；
+5. 一单真需求走到 `await_merge`,MR 出现在真平台上；核对
+   `delivery.git_push.sha`、`delivery.sha`、远端分支 SHA 三者一致，
+   `delivery.attested` 为同一 SHA 的 `PASS@...`；若平台提供逐项 Job，
+   再核对 `delivery.checks` 含 COMPILE、UT、CODECHECK。任务订单的
+   `execution_contract` 与 `UT生成方式` 完整;
    顺带演练修复环:故意让流水线红一次,确认修复会话拿到失败日志、
    推新提交、新流水线绑新 SHA(而不是旧 SHA 的旧绿灯);
 6. 杀进程重启,确认等待中的任务还在、决定后能续跑

@@ -268,6 +268,21 @@ test("现场面板路由:没有面板时说人话,有面板时原样呈现", asy
     assert.deepEqual(progress.phases, ["启动", "澄清需求", "定规格"]);
     assert.equal(progress.current_index, 1);
     assert.equal(progress.step, "需求澄清(逐题拍板)");
+    // build 里程碑是内核 append-only 旁路，只补充“正在做哪块”，不改
+    // 阶段轨道；即使 pulse 本身没变化，sidecar 新事件也应刷新投影。
+    writeFileSync(join(created.workspace, ".mae-flow.json.build-milestones"),
+      JSON.stringify({ events: [{
+        event: "started", task_id: "2", task_title: "接入库存接口",
+        reason: "等待上游字段", at: "2026-08-20 10:00:00",
+      }] }));
+    writeFileSync(join(workDir, "panel-pulse.js"),
+      'window.__panelPulse={"phase":"澄清需求","step":"build",'
+      + '"step_title":"编码实现","revision":9};');
+    const buildProgress = service.get(created.id)!.progress!;
+    assert.deepEqual(buildProgress.milestone, {
+      task_id: "2", title: "接入库存接口", event: "started",
+      reason: "等待上游字段",
+    });
     // 路由白名单:面板目录里的其他文件不放行。
     const sneak = await fetch(`${base}/tasks/${created.id}/secrets.txt`);
     assert.equal(sneak.status, 404);

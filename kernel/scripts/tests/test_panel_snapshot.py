@@ -162,6 +162,36 @@ class SnapshotTests(unittest.TestCase):
         # 纯机器证据步骤不该出现在"待你裁决"里
         self.assertEqual([], snapshot.build(self.root, STATE, FLOW)["pending"])
 
+    def test_cloud_config_card_shows_agent_input_and_read_only_pipeline(self):
+        flow = json.loads(json.dumps(FLOW))
+        flow["steps"]["config_confirm"]["require_sets"] = [
+            "工号", "编译方式", "UT生成方式", "UT运行命令",
+        ]
+        state = json.loads(json.dumps(STATE))
+        state.update({
+            "current": "config_confirm",
+            "config": {
+                "工号": "cloudbot",
+                "UT生成方式": "参考仓内写法",
+            },
+            "execution_contract": {
+                "schema": "mae-flow-execution/1",
+                "host": "cloud",
+                "compile": "pipeline",
+                "ut_write": "agent",
+                "ut_run": "pipeline",
+                "codecheck": "pipeline",
+                "source": "order",
+            },
+        })
+        item = snapshot.build(self.root, state, flow)["pending"][0]
+        self.assertEqual([
+            ("工号", "cloudbot"),
+            ("UT 编写方式", "参考仓内写法"),
+            ("验证环境", "权威流水线（编译、UT 执行、CodeCheck）（只读）"),
+        ], [(entry["label"], entry["value"])
+            for entry in item["items"]])
+
     def test_story_confirmation_lists_the_story_not_the_config(self):
         """卡片说"确认 Story",内容就必须真是 Story——倒整张项目配置进去,
         是视觉在提醒、信息在撒谎(实战反馈)。"""

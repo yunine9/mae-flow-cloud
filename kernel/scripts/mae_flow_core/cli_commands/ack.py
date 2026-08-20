@@ -123,6 +123,11 @@ def _current_ack_messages(st, extra_steps=()):
             # 一卡合一预答通道:配置确认卡合并收集的选择(交付方式/质询/STORY),
             # 供随后的选择步直接消费,免逐步重复提问;仍是本单内真实捕获的用户答案。
             out.append(item)
+    subject = (st or {}).get("approval_subject") or {}
+    if subject.get("step") == sid and subject.get("sha256"):
+        out = [item for item in out
+               if item.get("approval_subject_sha256") == subject.get("sha256")
+               and item.get("approval_subject_id") == subject.get("id")]
     return out
 
 

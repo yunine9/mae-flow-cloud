@@ -48,7 +48,7 @@ function makeSourceRepo(): string {
   return dir;
 }
 
-/** 首跑剧本:预焙提交+推送+伪造内核终态(交付判定只看远端与状态文件)。 */
+/** 首跑剧本:预焙提交+伪造内核终态；推送统一由宿主在会话释放后做。 */
 function walkScript(): Scene[] {
   return [
     { tool: { name: "bash", input: { command:
@@ -56,9 +56,11 @@ function walkScript(): Scene[] {
         "git checkout --quiet -b master_bot_REQ9 && " +
         "echo change > a.txt && git add . && " +
         'git commit --quiet -m "feat: REQ9" && ' +
-        "git push --quiet origin master_bot_REQ9 && " +
         `cat > .mae-flow.json <<'EOF'
 {"schema_version": 2, "current": "end", "revision": 1,
+ "execution_contract": {"schema": "mae-flow-execution/1", "host": "cloud",
+   "compile": "pipeline", "ut_write": "agent", "ut_run": "pipeline",
+   "codecheck": "pipeline", "git_push": "host"},
  "config": {"分支名": "master_bot_REQ9", "基线分支": "master",
             "单号": "REQ9"}, "choices": {}, "history": []}
 EOF` } } },
@@ -113,11 +115,10 @@ test("检视优先于 CI;回复发布并标已解决(显式开代 resolve);CI �
 意见成立,已在本轮 CI 修复里一并补判空;模板缺失变量将输出降级文案。
 EOF` } } },
     { text: "检视意见处理完毕。" },
-    // CI 修复会话:推新提交
+    // CI 修复会话:只提交，宿主随后推送
     { tool: { name: "bash", input: { command:
-        "echo fixed >> a.txt && git add . && git commit --quiet -m fix "
-        + "&& git push --quiet origin master_bot_REQ9" } } },
-    { text: "流水线问题已修,已推送。" },
+        "echo fixed >> a.txt && git add . && git commit --quiet -m fix" } } },
+    { text: "流水线问题已修并提交。" },
   ], "scripted-v1", { linear: true });
   await model.start();
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-"));
@@ -261,13 +262,12 @@ test("冲突门禁:宿主 merge 造真实冲突标记,会话在真冲突上解,�
   await platform.start();
   const model = new ScriptedModelServer([
     ...walkScript(),
-    // 冲突修复会话:确认标记在,解掉,完成合并提交并推送
+    // 冲突修复会话:确认标记在,解掉,完成合并提交；宿主随后推送
     { tool: { name: "bash", input: { command:
         "grep -q '<<<<<<<' a.txt && "
         + "printf 'change\\nupstream\\n' > a.txt && git add a.txt "
-        + "&& git commit --quiet --no-edit && "
-        + "git push --quiet origin master_bot_REQ9" } } },
-    { text: "冲突已解,合并提交已推送。" },
+        + "&& git commit --quiet --no-edit" } } },
+    { text: "冲突已解并完成合并提交。" },
   ], "scripted-v1", { linear: true });
   await model.start();
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-cf-"));
@@ -339,12 +339,11 @@ test("内网真实门禁集(19 项):质量红要派修复,受保护分支挂人�
   await platform.start();
   const model = new ScriptedModelServer([
     ...walkScript(),
-    // 质量修复会话:改代码并推新提交
+    // 质量修复会话:改代码并提交，宿主随后推送
     { tool: { name: "bash", input: { command:
         "echo quality-fixed >> a.txt && git add . "
-        + "&& git commit --quiet -m fix-quality "
-        + "&& git push --quiet origin master_bot_REQ9" } } },
-    { text: "质量问题已修,已推送。" },
+        + "&& git commit --quiet -m fix-quality" } } },
+    { text: "质量问题已修并提交。" },
   ], "scripted-v1", { linear: true });
   await model.start();
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-19-"));

@@ -16,6 +16,12 @@ from mae_flow_core.workflow.build_scope import (
     build_scope_hint,
     maven_modules,
 )
+from mae_flow_core.workflow.execution_contract import (
+    contract_for_state,
+    effective_config_keys,
+    uses_pipeline,
+    validation_environment,
+)
 
 
 def _bounded_next(st, sid, nxt):
@@ -42,6 +48,14 @@ def _bounded_next(st, sid, nxt):
 def _clear_completed_review(st, sid):
     if sid == "quality_commit":
         st.pop("quality_review", None)
+
+
+def _host_transition_target(st, sid, target):
+    if sid == "push" and host_env.pipeline_adjudicates(st):
+        return "external_verify"
+    if sid == "external_verify" and api._moonlight(st):
+        return "moonlight_review"
+    return target
 
 def _gitignore():
     gi = ".gitignore"
@@ -110,7 +124,8 @@ def advance(flow, st, sid, step, tag, note=""):
     if sid == "branch_create" and st.get("choices", {}).get("workflow") == "review":
         base = api.sh("git rev-parse --verify HEAD")
         if not base:
-            api.die("无法记录评审意见处理基点 HEAD,拒绝进入本轮修改。", 2)
+            api.die("无法记录评审意见处理基点 HEAD,拒绝进入本轮修改；"
+                    "请先执行 doctor 检查 Git 状态。", 2)
         st["review_base_head"] = base
     # 兼容旧版已经停在 rf_verify 的在途单：按 history 自动恢复返工前 HEAD。
     if sid == "rf_verify" and st.get("choices", {}).get("workflow") == "review":
@@ -130,6 +145,7 @@ def advance(flow, st, sid, step, tag, note=""):
             review_text, "转规格轮次(已确认)")
     st.pop("unlock", None)   # 源码解锁仅限本步实例,推进即失效
     st.pop("risk_acceptances", None)   # 风险放行同样只属于当前步骤实例
+    st.pop("approval_subject", None)   # 人工决定只绑定本步展示的内容
     st["history"].append({"step": sid, "result": tag, "note": note, "at": time.strftime("%Y-%m-%d %H:%M:%S")})
     try:
         for event in workflow_advancement.transition_events(
@@ -145,7 +161,7 @@ def advance(flow, st, sid, step, tag, note=""):
                 nxt = event.step
     except workflow_advancement.TransitionResolutionError as exc:
         api.die(f"月光旁路步骤 {exc.step_id} 缺少可解析的 moonlight_choice/next，拒绝卡死流程。", 2)
-    nxt = _bounded_next(st, sid, nxt)
+    nxt = _host_transition_target(st, sid, _bounded_next(st, sid, nxt))
     if api._moonlight(st) and sid == "push":
         api._moonlight_resolve_kind(st, "push")
         ml = api._moonlight_data(st)
@@ -190,7 +206,9 @@ def _validated_pending_config(step, st, set_values):
     # 配置先在内存候选副本里完成全部校验；任何一步失败都不污染已确认状态。
     # 旧实现遇到需求路径不存在会先 save_state，导致下一轮继续携带半套/乱码配置。
     pending_config = dict(st.get("config", {}) or {})
-    allowed_sets = api._allowed_set_keys(step)
+    effective_keys = effective_config_keys(
+        step, st, host_env.host_kind())
+    allowed_sets = api._allowed_set_keys(step, st)
     for kv in set_values or []:
         if "=" not in kv:
             api.die(f"--set 需为 k=v 形式: {kv}")
@@ -212,7 +230,7 @@ def _validated_pending_config(step, st, set_values):
     # 需求文档也可来自下单事实:跨仓拆单时宿主把人工检视过的方案文档
     # 落进工作区并在这里指路——不然方案只能塞进 prompt 正文,实测模型
     # 会把它当实施计划直接开写,跳过整个流程头部。
-    for key in ("单号", "基线分支", "工号", "需求文档"):
+    for key in ("单号", "基线分支", "工号", "需求文档", "UT生成方式"):
         value = str(order_facts.get(key, "") or "").strip()
         if value and not pending_config.get(key) and key in allowed_sets:
             bad = api._validate_config_value(key, value)
@@ -235,14 +253,14 @@ def _validated_pending_config(step, st, set_values):
                 "不要让用户重复说“我确认”，确认无法修复坏文件；"
                 "用户口述用 messages + requirement-record --message-id，"
                 "已有 GBK/UTF-16 文本用 requirement-record --source 规范化。", 2)
-    if step.get("require_sets"):
-        missing = [k for k in step["require_sets"] if not pending_config.get(k)]
+    if effective_keys:
+        missing = [k for k in effective_keys if not pending_config.get(k)]
         if missing:
             remedy = ("用 --set 补齐；月光模式禁止询问用户，只能从本轮需求原话、仓库预设、"
                       "当前分支和代码事实中保守取得，不能编造"
                       if api._moonlight(st) else "用 --set 补齐;缺失项应询问用户")
             api.die("配置缺失,禁止推进: " + "、".join(missing) + "(" + remedy + ")", 2)
-        if "基线分支" in step["require_sets"]:
+        if "基线分支" in effective_keys:
             derived_branch = "{基线分支}_{工号}_{单号}".format(**pending_config)
             bad = api._validate_config_value("分支名", derived_branch)
             if bad:
@@ -275,18 +293,27 @@ def _root_pom_modules():
         return ()
 
 
-def _print_config_review(review, step):
+def _print_config_review(review, step, st=None):
     pending = review.get("config") or {}
+    contract_state = st or {
+        "execution_contract": review.get("execution_contract")
+    }
+    effective_keys = effective_config_keys(
+        step, contract_state, host_env.host_kind())
     print("[mae-flow] 完整配置确认单（收据 %s，指纹 %s）" % (
         review.get("id", "?"), str(review.get("sha256", ""))[:12]))
-    for key in step.get("require_sets", []):
-        print("  %s: %s" % (key, pending.get(key, "")))
+    for key in effective_keys:
+        label = "UT 编写方式" if key == "UT生成方式" else key
+        print("  %s: %s" % (label, pending.get(key, "")))
         if key == "编译方式":
             # 用户拍板编译命令的这一刻,是说"别整仓编译"的唯一合适时机。
             hint = build_scope_hint(
                 pending.get(key, ""), _root_pom_modules())
             if hint:
                 print(hint)
+    if uses_pipeline(contract_state, host_env.host_kind()):
+        print("  验证环境: %s（只读，由部署执行契约决定）" %
+              validation_environment(contract_state, host_env.host_kind()))
     print("  分支名: %s" % pending.get("分支名", ""))
     excerpt = _config_review_excerpt(pending.get("需求文档", ""))
     if excerpt:
@@ -294,7 +321,8 @@ def _print_config_review(review, step):
 
 def cmd_config_review(flow, st, args):
     if st.get("current") != "config_confirm":
-        api.die("config-review 只用于配置确认阶段。其他步骤的已确认配置不能偷偷改写。", 2)
+        api.die("config-review 只用于配置确认阶段。其他步骤的已确认配置不能偷偷改写；"
+                "请执行 current 继续当前步骤。", 2)
     if api._moonlight(st):
         api.die("月光宝盒不询问用户，不需要 config-review；按 current 指令保守补齐配置后直接 done。", 2)
     step = flow["steps"]["config_confirm"]
@@ -311,11 +339,13 @@ def cmd_config_review(flow, st, args):
         "requirement_sha256": requirement_sha,
         "head": api.sh("git rev-parse --verify HEAD"),
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "execution_contract": contract_for_state(
+            st, host_env.host_kind()),
     }
     api.save_state(st)
     api._ack_failure(st, success=True)
 
-    _print_config_review(st["config_review"], step)
+    _print_config_review(st["config_review"], step, st)
     # 确认单是这一刻当场打印出来的——产物就在眼前,现在叫人才准。
     # (进入 config_confirm 那一刻还没有单子,所以进门不响。)
     notify.announce_ready(flow, "config_confirm", os.getcwd(),

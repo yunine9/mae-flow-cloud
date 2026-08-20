@@ -9,6 +9,13 @@ from .shared import (
 )
 from ..workflow.advisories import pending_advisories, render_advisories
 from .wiring import api
+from mae_flow_core import host_env
+from mae_flow_core.workflow.execution_contract import (
+    effective_config_keys,
+    uses_pipeline,
+    validation_environment,
+)
+from mae_flow_core.cli_commands.approval_subject import build_subject
 
 def perms_line(step):
     """本步的写入范围提示——只陈述真实成立的事。
@@ -168,6 +175,31 @@ def _step_md_text(sid, st):
     if not os.path.exists(md):
         return None
     txt = read_text(md).rstrip()
+    if (sid in {"verify_codecheck", "rf_codecheck", "tw_codecheck"}
+            and not host_env.codecheck_runs_locally(st)):
+        txt = (
+            "本机不执行 CodeCheck，也不安装或启动 codecheck-fix-agent；"
+            "内置 lightcheck 仍照常运行。\n\n"
+            "直接执行 `python \"{MAEFLOW_PATH}\" done`。内核会把 "
+            "CODECHECK 记为待权威流水线核销，而不是伪装成已通过。"
+            "流水线若报告 CodeCheck 问题，宿主会启动轻量修复 Agent，"
+            "集中修复并以新 SHA 重跑，不新增人工确认。"
+        )
+    conditions = {
+        "LOCAL_COMPILE": host_env.build_runs_locally(st),
+        "PIPELINE_COMPILE": not host_env.build_runs_locally(st),
+        "LOCAL_UT_RUN": host_env.unit_tests_run_locally(st),
+        "PIPELINE_UT_RUN": not host_env.unit_tests_run_locally(st),
+        "LOCAL_CODECHECK": host_env.codecheck_runs_locally(st),
+        "PIPELINE_CODECHECK": not host_env.codecheck_runs_locally(st),
+        "LOCAL_PUSH": host_env.git_push_runs_locally(st),
+        "HOST_PUSH": not host_env.git_push_runs_locally(st),
+    }
+    for name, enabled in conditions.items():
+        pattern = r"\{\{#%s\}\}(.*?)\{\{/%s\}\}" % (name, name)
+        txt = re.sub(
+            pattern, (lambda match: match.group(1) if enabled else ""),
+            txt, flags=re.S)
     for ph, name in (("{STORY_TEMPLATE_PATH}", "STORY-TEMPLATE.md"),
                      ("{GRILL_PREP_TEMPLATE_PATH}", "GRILL-PREP-TEMPLATE.md"),
                      ("{REVIEW_TEMPLATE_PATH}", "REVIEW-TEMPLATE.md")):
@@ -247,6 +279,16 @@ def print_current(flow, st):
         print(note)
     sid = st["current"]
     step = flow["steps"][sid]
+    if step.get("approval_subject") and not api._moonlight(st):
+        try:
+            subject = build_subject(os.getcwd(), st, sid, step)
+        except (OSError, RuntimeError) as exc:
+            subject = None
+            print("❌ 无法生成内容绑定审批卡: " + str(exc))
+        if subject and subject != st.get("approval_subject"):
+            subject["presented_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            st["approval_subject"] = subject
+            api.save_state(st)
     print(f"═══ 当前步骤: {sid} — {step['title']} ═══")
     if api._moonlight(st):
         ml = api._moonlight_data(st)
@@ -371,7 +413,9 @@ def print_current(flow, st):
                   f"{label}({order_wf})。直接执行 done --choice {order_wf},"
                   "**不要**再用 AskUserQuestion 提问;用户要换道须回配置"
                   "确认卡打回改选。")
-    if step.get("require_sets"):
+    config_keys = effective_config_keys(
+        step, st, host_env.host_kind())
+    if config_keys:
         dft, warn = _defaults()
         if warn:
             print(warn)
@@ -379,13 +423,13 @@ def print_current(flow, st):
         if order_warn:
             print(order_warn)
         order_show = {k: v for k, v in facts.items()
-                      if k in step["require_sets"] and str(v).strip()}
+                      if k in config_keys and str(v).strip()}
         if order_show:
             print(f"──── 下单事实({ORDER_PATH},用户下单时已提供,"
                   "config-review 自动采用,**不要再问用户**) ────")
             for k, v in order_show.items():
                 print(f"  {k} = {v}")
-        show = {k: v for k, v in (dft or {}).items() if k in step["require_sets"]}
+        show = {k: v for k, v in (dft or {}).items() if k in config_keys}
         if show:
             suffix = ("月光模式下须结合用户原话与仓库事实自行核验后 --set，不得询问或编造"
                       if api._moonlight(st) else
@@ -393,17 +437,21 @@ def print_current(flow, st):
             print(f"──── 仓库预设({DEFAULTS_PATH},{suffix}) ────")
             for k, v in show.items():
                 print(f"  {k} = {v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)}")
+        if uses_pipeline(st, host_env.host_kind()):
+            print("──── 部署执行契约（只读，不需要用户填写） ────")
+            print("  验证环境 = "
+                  + validation_environment(st, host_env.host_kind()))
     print("──── 完成后执行 ────")
     if sid == "config_confirm" and not api._moonlight(st):
         review = st.get("config_review") or {}
         if review.get("sha256"):
-            api._print_config_review(review, step)
+            api._print_config_review(review, step, st)
             print("把上述确认单逐项复制进你的回复正文(用户看不见工具输出),"
                   "再只问一次最终确认；不要再拼接前面的单项回答。")
             print('python "%s" done' % os.path.abspath(sys.argv[0]))
         else:
             sets = " --set ".join(
-                key + "=<值>" for key in step.get("require_sets", []))
+                key + "=<值>" for key in config_keys)
             print('python "%s" config-review --set %s' % (
                 os.path.abspath(sys.argv[0]), sets))
             print("该命令会一次性校验并展示完整配置；用户最终确认后再执行它输出的简短 done 命令。")
@@ -411,9 +459,9 @@ def print_current(flow, st):
     extra = ""
     if step.get("choice_key"):
         extra += f" --choice <{'|'.join(step['choices'])}>"
-    if step.get("require_sets"):
+    if config_keys:
         missing_sets = [
-            k for k in step["require_sets"]
+            k for k in config_keys
             if not (st.get("config", {}) or {}).get(k)
         ]
         if missing_sets:

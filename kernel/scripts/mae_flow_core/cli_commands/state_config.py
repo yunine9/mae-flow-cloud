@@ -10,7 +10,9 @@ from .shared import (
     workflow_definition,
 )
 from .wiring import api
+from mae_flow_core import host_env
 from mae_flow_core.orchestration.work_package import ensure_work_package
+from mae_flow_core.workflow.execution_contract import effective_config_keys
 
 def find_project_root(start=None):
     """从 start(默认 cwd)向上定位项目根,消除"模型 cd 进子目录后调用"的错位:
@@ -162,9 +164,9 @@ def _step_entered_at(st):
             return h.get("at", st.get("started", ""))
     return st.get("started", "")
 
-def _allowed_set_keys(step):
+def _allowed_set_keys(step, st=None):
     """配置只允许在声明它的步骤写入，防止后续把基线改成 HEAD 等方式洗空检查范围。"""
-    keys = set(step.get("require_sets", []))
+    keys = set(effective_config_keys(step, st, host_env.host_kind()))
     if "基线分支" in keys:
         keys.add("分支名")
     return keys

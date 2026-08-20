@@ -9,5 +9,14 @@
 
 禁止"你说得完全对""好建议"这类表演式回应——直接给技术确认或直接开工。
 
+需要展示返工块进度时可使用 `milestone start/complete/block --task <implementation.md 任务编号>`；
+它只追加观察事件，不拆步骤、不新增人工卡，也不参与 done 门禁。
+
 主 Agent 根据用户本轮检视意见直接修改代码，不派实现子 Agent，不重新执行可选 CODE Agent 预检。
+{{#LOCAL_COMPILE}}
 修改完成后重新生成 COMPILE 任务卡并运行 compile-agent；编译通过后执行 `done`，回到用户检视。
+{{/LOCAL_COMPILE}}
+{{#PIPELINE_COMPILE}}
+修改完成后直接执行 `done`，登记待权威流水线核销的 COMPILE 义务并回到用户检视；
+本机不生成 COMPILE 任务卡、不启动 compile-agent，也不声称已经编译。
+{{/PIPELINE_COMPILE}}

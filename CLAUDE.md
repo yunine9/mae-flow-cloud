@@ -42,15 +42,15 @@ npm run probe            # 整链演练,内核裁判九项事实
 npm run serve            # 演示模式(剧本假模型;清场要显式 --fresh)
 npm run pilot -- --label <名>            # 真模型试跑(.local/models.json)
 npm run pilot -- --resume <label>        # 断点续跑(quota 和进度都是钱)
-harness/preflight.sh     # 上线自查 1~4 项;--java-repo/--isolate-image/--models/--adapter 加项
+harness/preflight.sh     # 上线自查;--isolate-image/--models/--adapter 加项
 harness/restart-drill.sh # 真 kill -9 重启演练
 python3 harness/run-report.py .pilot/<label>   # 试跑现场一键对拍
 ```
 
 ## 本机环境的坑(细节见用户级记忆)
 
-- 宿主无 JDK/mvn,Java 编译一律走容器(镜像 mfc-java-pilot:
-  maven3.8+JDK8+git+python3,本地构建,Dockerfile 形状见部署手册)。
+- Cloud 宿主不提供编译、UT 运行或 CodeCheck；容器只做任务隔离，质量
+  执行统一交给绑定提交 SHA 的流水线。UT skill 只负责测试编写。
 - docker 走 Colima:VM 只挂 $HOME(/var/folders 挂进去是空目录);
   **有容器任务在跑时绝不 colima start/stop 任何 profile**(会切
   docker context,活容器 exec 全灭,实测打死过一次续跑)。

@@ -133,3 +133,14 @@ test("配置文件供值,命令行压过文件", async () => {
   assert.ok(fromCli.matched,
     `命令行未压过文件,输出:\n${fromCli.output.slice(0, 800)}`);
 });
+
+test("旧 --verify-via-pipeline 仅提示弃用,不再切换执行语义", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-legacy-pipeline-"));
+  const { output, matched } = await run(
+    ["--verify-via-pipeline", "--data", join(dir, "tasks"), "--port", "0"],
+    (line) => line.includes("--verify-via-pipeline 已弃用"));
+  assert.ok(matched, `旧参数没有给迁移提示,输出:\n${output.slice(0, 1000)}`);
+  assert.match(output, /已弃用并被忽略/);
+  assert.doesNotMatch(output, /需要流水线在场/,
+    "兼容参数不能再保留旧的条件分支");
+});

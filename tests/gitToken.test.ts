@@ -2,8 +2,8 @@
  * 个人 Git 令牌(每用户 PAT)的契约:
  * - 存储沿用密钥模板:只写不读,公开视图/网络响应只有掩码;
  *   明文只住 0600 的 auth.json,消费口(gitCredential)是唯一出口;
- * - 注入走 credential helper:.git/config 只记脚本路径,
- *   明文永不进 config 或远端 URL——令牌拼 URL 会原样留在 config 里;
+ * - credential helper 仅在宿主 clone/push 的同步窗口存在，随后删除；
+ *   Agent 会话期间 agentDir/.git/config/远端 URL 均无 token/helper;
  * - 缺凭据不挂死:GIT_TERMINAL_PROMPT=0,克隆就地失败、错误如实上浮。
  *
  * 消费证明用真件:dumb-HTTP git 服务器带 Basic 鉴权,凭据对了才发码。
@@ -15,7 +15,6 @@ import {
   existsSync,
   mkdtempSync,
   readFileSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
 import { execFileSync, spawn } from "node:child_process";
@@ -180,7 +179,7 @@ async function serveBareRepo(bare: string, expectAuth: string) {
   };
 }
 
-test("消费:clone 经 helper 过鉴权;config 只有脚本路径没有明文;缺凭据快败不挂死", async () => {
+test("消费:宿主 clone 短暂鉴权;Agent 会话无凭据/config helper;缺凭据快败", async () => {
   // 源仓 → 裸仓 → update-server-info(dumb 协议的索引)
   const source = mkdtempSync(join(tmpdir(), "mfc-gt-src-"));
   git(source, "init", "--quiet", "-b", "master");
@@ -199,7 +198,18 @@ test("消费:clone 经 helper 过鉴权;config 只有脚本路径没有明文;�
   const repoUrl = `http://127.0.0.1:${remote.port}/repo.git`;
   const kernelRoot = discoverKernelRoot(process.cwd());
   if (!kernelRoot) throw new Error("找不到内核(MAE_FLOW_HOME/../mae-flow/仓内 kernel/ 皆无)");
-  const model = new ScriptedModelServer(SCRIPT);
+  const boundaryScript: Scene[] = [
+    { tool: { name: "bash", input: { command:
+        "test ! -e ../pi-agent/git-credential && "
+        + "test ! -e ../pi-agent/git-credential.sh && "
+        + 'test -z "$(git config --local --get-all credential.helper)" && '
+        + "! grep -qi credential .git/config && "
+        + "test \"$(git remote get-url --push origin)\" = "
+        + "\"/dev/null/mae-flow-host-owned\" && "
+        + "printf ok > credential-boundary.ok" } } },
+    { text: "凭据边界检查完成。" },
+  ];
+  const model = new ScriptedModelServer(boundaryScript);
   await model.start();
 
   async function settle(service: TaskService, id: string) {
@@ -213,7 +223,8 @@ test("消费:clone 经 helper 过鉴权;config 只有脚本路径没有明文;�
   }
 
   try {
-    // 有凭据:克隆过鉴权,任务收口
+    // 有凭据:克隆过鉴权。剧本故意不 init，因此终态硬门禁应在验证完
+    // clone 后如实失败，不能再把一个空 end_turn 冒充 completed。
     const dataDir = mkdtempSync(join(tmpdir(), "mfc-gt-run-"));
     const service = new TaskService({
       dataDir, provider: "maeflow", model: "scripted-v1",
@@ -225,41 +236,33 @@ test("消费:clone 经 helper 过鉴权;config 只有脚本路径没有明文;�
         : undefined,
     });
     const id = service.create("验证个人令牌注入", { account: "zhang" }).id;
-    assert.equal(await settle(service, id), "completed",
-      service.get(id)!.detail ?? "");
+    assert.equal(await settle(service, id), "failed");
+    assert.match(service.get(id)!.detail ?? "", /状态文件不存在|尚未初始化/);
     assert.ok(remote.authSeen().some((auth) => auth === expectAuth),
       "git 没带上 helper 给的凭据");
 
     const workspace = service.get(id)!.workspace;
     const clone = join(workspace, "repo");
-    // .git/config 只有脚本路径,明文令牌一个字都不能有
+    // Agent 在会话内执行过边界负例；marker 存在证明不是仅在收口后看。
+    assert.equal(readFileSync(join(clone, "credential-boundary.ok"), "utf-8"),
+      "ok");
+    // .git/config 既没有明文，也没有可被 Agent 调用的 helper/token 路径。
     const config = readFileSync(join(clone, ".git", "config"), "utf-8");
     assert.ok(!config.includes(TOKEN), "明文令牌漏进 .git/config");
-    assert.match(config, /credential/);
-    assert.match(config, /git-credential\.sh/);
-    // helper 列表 = [空, 我们的脚本]:空项清掉继承的系统 helper,
-    // 令牌既只从脚本来,也不会被钥匙串之流顺手存走(实测踩过)。
-    assert.match(config,
-      /helper\s*=\s*\n\s*helper\s*=\s*\S*git-credential\.sh/);
+    assert.ok(!/credential/i.test(config), "仓库配置仍持久化 credential helper");
     // 远端 URL 干净(没被拼进用户名密码)
     assert.equal(git(clone, "remote", "get-url", "origin"), repoUrl);
+    assert.equal(git(clone, "remote", "get-url", "--push", "origin"),
+      "/dev/null/mae-flow-host-owned", "Agent 传输层必须硬禁用");
     // commit 署名写进了克隆配置:令牌管推送鉴权,"commit 是谁的"
     // 平台按 email 认——两码事,都得对
     assert.equal(git(clone, "config", "user.name"), "zhang.san");
     assert.equal(git(clone, "config", "user.email"), "zhang@corp.example");
-    // 凭据文件 0600、脚本 0700
+    // 宿主 clone 的临时 helper 已在 CloudSession 创建前删除；旧版本留在
+    // agentDir 的两个固定文件也必须不存在。
     const agentDir = join(workspace, "pi-agent");
-    assert.equal(
-      statSync(join(agentDir, "git-credential")).mode & 0o777, 0o600);
-    assert.equal(
-      statSync(join(agentDir, "git-credential.sh")).mode & 0o777, 0o700);
-    // 脚本本身可独立执行:get 出凭据,别的动作安静成功
-    const answer = execFileSync(
-      join(agentDir, "git-credential.sh"), ["get"], { encoding: "utf-8" });
-    assert.match(answer, new RegExp(`password=${TOKEN}`));
-    assert.equal(execFileSync(
-      join(agentDir, "git-credential.sh"), ["store"],
-      { encoding: "utf-8" }), "");
+    assert.ok(!existsSync(join(agentDir, "git-credential")));
+    assert.ok(!existsSync(join(agentDir, "git-credential.sh")));
 
     // 没凭据:git 禁问密码,克隆快败,任务如实 failed 不挂死
     const bald = new TaskService({

@@ -10,6 +10,7 @@ import os
 
 from . import (annotate, assets, banners, diffview, markdown,
                notes_drawer, notify, plantuml)
+from .external_quality import display_external
 from .markdown import escape
 
 def _fence_hook(language, body):
@@ -259,6 +260,11 @@ def _evidence_rows(evidence, steps_done):
         else:
             row(name, "进行中", "t-run", running_why)
 
+    passed, attention = display_external(evidence)
+    fine.extend(passed)
+    for item in attention:
+        row(*item)
+
     compile_ev = evidence.get("compile")
     if compile_ev:
         gate(compile_ev, "编译",
@@ -289,10 +295,10 @@ def _evidence_rows(evidence, steps_done):
     unit = evidence.get("ut")
     if unit:
         if unit["complete"]:
-            fine.append("单元测试")
+            fine.append("UT 编写")
         else:
             total = max(unit["batches"], 1)
-            row("单元测试", "进行中", "t-run",
+            row("UT 编写", "进行中", "t-run",
                 "正在生成用例 · 第 %d/%d 批"
                 % (min(unit["completed_batches"] + 1, total), total))
     if fine:

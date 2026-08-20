@@ -55,7 +55,6 @@ from mae_flow_core.quality.tool_transcript import (  # noqa: E402
     bash_call,
     call_failed,
     parse_transcript,
-    select_contract_marker,
 )
 
 
@@ -67,7 +66,6 @@ def read_jsonl(path):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("scene_dir", help="现场目录(transcript/events/waiting)")
-    parser.add_argument("--compile-command", default="echo BUILD SUCCESS")
     args = parser.parse_args()
 
     main_path = os.path.join(args.scene_dir, "transcript.jsonl")
@@ -79,11 +77,12 @@ def main():
         print(("  ✅ " if passed else "  ❌ ") + text)
         ok = ok and bool(passed)
 
-    compile_call = bash_call(transcript.tool_calls, args.compile_command)
-    fact(compile_call is not None and compile_call.result_seen
-         and not call_failed(compile_call)
-         and "BUILD SUCCESS" in compile_call.result,
-         "编译证据经内核契约函数命中(格式一个字节没漂)")
+    workspace_call = bash_call(
+        transcript.tool_calls, "printf 'WORKSPACE_READY\\n'")
+    fact(workspace_call is not None and workspace_call.result_seen
+         and not call_failed(workspace_call)
+         and "WORKSPACE_READY" in workspace_call.result,
+         "工作区工具调用经内核解析命中(格式一个字节没漂)")
 
     denied = [call for call in transcript.tool_calls
               if call.name == "Bash"
@@ -96,10 +95,10 @@ def main():
     fact(len(ask) == 1 and ask[0].result.startswith("通过"),
          "决定以工具结果按 call_id 回注,同 id 不出双行")
 
-    marker = select_contract_marker(transcript.assistant_texts[-1])
-    fact((marker.kind, marker.status) == ("COMPILE", "PASS"),
-         "结果标记判定照旧: %s_RESULT %s"
-         % (marker.kind or "?", marker.status or "?"))
+    final_text = transcript.assistant_texts[-1]
+    fact("UT_WRITE_RESULT: DONE" in final_text
+         and "COMPILE_RESULT" not in final_text,
+         "收口只声明 UT 编写完成，不伪造本机质量绿灯")
 
     task_calls = [call for call in transcript.tool_calls
                   if call.name == "Task"]
@@ -109,7 +108,7 @@ def main():
             {"transcript_path": main_path,
              "tool_use_id": task_calls[0].call_id})
     fact(len(task_calls) == 1
-         and "COMPILE_RESULT" in task_calls[0].result
+         and "UT_WRITE_RESULT: DONE" in task_calls[0].result
          and bool(child) and os.path.isfile(child),
          "子 Agent 桥:Task 一次调用,子会话证据单独落盘且绑定命中")
 
@@ -128,8 +127,8 @@ def main():
             and block.get("name") == "Task"
         ]
         fact(bool(spawn_inputs)
-             and agent_kind(spawn_inputs[0]) == "COMPILE",
-             "agent_kind 推断照旧:派发意图字段名没漂")
+             and agent_kind(spawn_inputs[0]) == "UT",
+             "agent_kind 推断照旧:UT 编写派发意图字段名没漂")
 
     waiting_path = os.path.join(args.scene_dir, "waiting.json")
     waiting = json.load(open(waiting_path, encoding="utf-8"))

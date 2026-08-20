@@ -73,6 +73,29 @@ def pending_advisories(state_path, step, since=""):
     )
 
 
+def lightcheck_advisory(result):
+    """Summarize lightcheck findings for this channel; empty when clean."""
+    findings = result.get("findings") or []
+    if not findings:
+        return ""
+    lines = [
+        "提交前轻量编码预检发现 %d 个本轮新触发问题(建议修复，不阻断):"
+        % len(findings)
+    ]
+    for item in findings[:12]:
+        function = (" " + item["function"]) if item.get("function") else ""
+        lines.append("%s %s:%s%s — %s (%s > %s)" % (
+            item["rule"], item["file"], item["line"], function,
+            item["message"], item["actual"], item["limit"]))
+    if len(findings) > 12:
+        lines.append("…其余 %d 项见报告" % (len(findings) - 12))
+    if result.get("report_path"):
+        lines.append("人类可读报告: " + str(result["report_path"]))
+    lines.append(
+        "只修高置信且属于本次范围的项，最多两轮；仍不确定的留给正式 CodeCheck。")
+    return "\n".join(lines)
+
+
 def render_advisories(notices):
     """One compact block; empty when there is nothing to say."""
     if not notices:

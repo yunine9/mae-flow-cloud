@@ -17,6 +17,13 @@ import subprocess
 import time
 
 from mae_flow_core.foundation import source_paths
+from mae_flow_core import host_env
+from mae_flow_core.panel.external_quality import snapshot_external
+from mae_flow_core.workflow.execution_contract import (
+    effective_config_keys,
+    uses_pipeline,
+    validation_environment,
+)
 
 SCHEMA = "mae-flow-status/1"
 WORK_DIR = ".mae-flow-work"
@@ -267,6 +274,9 @@ def _evidence(state):
         "codecheck": _codecheck(state),
         "reviews": _reviews(state),
     }
+    external = snapshot_external(state)
+    if external:
+        out["external"] = external
     ponytail = attempts.get("ponytail")
     if isinstance(ponytail, dict):
         # 有尝试记录≠检查通过;通过与否由步骤是否走完判定(展示层据 step 判)
@@ -275,7 +285,7 @@ def _evidence(state):
     if ut_session:
         batches = ut_session.get("batches") or []
         out["ut"] = {
-            "name": "UT", "at": ut_session.get("at", ""),
+            "name": "UT 编写", "at": ut_session.get("at", ""),
             "phase": ut_session.get("phase", ""),
             "complete": bool(ut_session.get("complete")),
             "batches": len(batches),
@@ -358,12 +368,25 @@ def _pending(state, flow, documents):
         }]
     if not step.get("user_ack"):
         return []
-    if step.get("require_sets"):        # 配置确认:确认的就是这几项配置
+    config_keys = effective_config_keys(
+        step, state, host_env.host_kind())
+    if config_keys:        # 配置确认:确认的就是当前宿主真正使用的配置
+        reviewed = ((state or {}).get("config_review", {}) or {}).get(
+            "config", {}) or config
+        items = [{
+            "label": "UT 编写方式" if key == "UT生成方式" else key,
+            "value": str(reviewed.get(key, "")),
+        } for key in config_keys]
+        if uses_pipeline(state, host_env.host_kind()):
+            items.append({
+                "label": "验证环境",
+                "value": validation_environment(
+                    state, host_env.host_kind()) + "（只读）",
+            })
         return [{
             "kind": "config_review", "step": current,
             "title": step.get("title", ""), "needs": "user_ack",
-            "items": [{"label": key, "value": str(config.get(key, ""))}
-                      for key in step["require_sets"]],
+            "items": items,
             "paths": [],
         }]
     kinds = ACK_REVIEW_DOCS.get(current, ())

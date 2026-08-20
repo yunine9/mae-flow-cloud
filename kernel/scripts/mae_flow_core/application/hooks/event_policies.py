@@ -54,6 +54,63 @@ _TEMPLATE_TARGETS = (
     (r"(^|/)\.mae-flow-work/(?:\S+/)*review\.md$", "REVIEW-TEMPLATE.md", "REVIEW"),
 )
 
+_FILE_TOOLS = ("Read", "Edit", "Write", "MultiEdit")
+
+
+def _tool_paths(tool_input):
+    """Return real host path fields in execution-order preference.
+
+    Pi uses ``path`` while the historical Claude Hook uses ``file_path``.
+    Check every supplied field at the repository boundary, but route the Pi
+    field first so the path we authorize is the path Pi will execute.
+    """
+    if not isinstance(tool_input, dict):
+        return ()
+    values = []
+    for key in ("path", "file_path"):
+        value = tool_input.get(key)
+        if isinstance(value, str) and value and value not in values:
+            values.append(value)
+    return tuple(values)
+
+
+def _inside_repository(path, repository_root):
+    """Resolve an input path against the task repo without allowing escape.
+
+    ``realpath`` also catches an in-repo symlink whose target is outside.  A
+    Windows absolute/drive-relative spelling received on POSIX is never a
+    legitimate local task path, so reject it instead of treating it as a
+    harmless filename containing a colon or backslashes.
+    """
+    if not repository_root or not isinstance(path, str) or not path:
+        return True
+    if "\0" in path:
+        return False
+    normalized = path.replace("\\", os.sep)
+    if re.match(r"^[A-Za-z]:[^\\/]", path):
+        return False
+    if os.name != "nt" and re.match(r"^(?:[A-Za-z]:|//)", normalized):
+        return False
+    root = os.path.realpath(repository_root)
+    target = os.path.realpath(
+        normalized if os.path.isabs(normalized)
+        else os.path.join(root, normalized)
+    )
+    try:
+        return os.path.commonpath((root, target)) == root
+    except (TypeError, ValueError):
+        return False
+
+
+def _file_path_decision(tool, tool_input, repository_root):
+    if tool not in _FILE_TOOLS:
+        return None
+    paths = _tool_paths(tool_input)
+    if paths and repository_root and any(
+            not _inside_repository(path, repository_root) for path in paths):
+        return PretoolDecision("block-path", paths[0])
+    return PretoolDecision("file-path", paths[0] if paths else "")
+
 
 def agent_kind(tool_input):
     blob = " ".join(
@@ -70,13 +127,19 @@ def agent_kind(tool_input):
     )
 
 
-def active_pretool_decision(tool, tool_input, moonlight):
+def active_pretool_decision(
+        tool, tool_input, moonlight, repository_root=""):
     if tool in ("Task", "Agent"):
         return PretoolDecision("agent")
     if tool == "AskUserQuestion" and moonlight:
         return PretoolDecision("block-question")
-    if tool in ("Edit", "Write", "MultiEdit"):
-        path = tool_input.get("file_path", "") or ""
+    file_path = _file_path_decision(tool, tool_input, repository_root)
+    if file_path is not None:
+        if file_path.action == "block-path":
+            return file_path
+        path = file_path.value
+        if tool == "Read":
+            return PretoolDecision("allow")
         return PretoolDecision(
             "gate-edit" if path else "allow", path)
     if tool == "Bash":
@@ -100,11 +163,14 @@ def _standalone_protected(value):
     )
 
 
-def standalone_pretool_decision(tool, tool_input):
+def standalone_pretool_decision(tool, tool_input, repository_root=""):
     if tool in ("Task", "Agent"):
         return PretoolDecision("agent")
-    if tool in ("Edit", "Write", "MultiEdit"):
-        path = tool_input.get("file_path") or tool_input.get("path")
+    file_path = _file_path_decision(tool, tool_input, repository_root)
+    if file_path is not None:
+        if file_path.action == "block-path":
+            return file_path
+        path = file_path.value
         if _standalone_protected(path):
             return PretoolDecision("block-edit")
     if tool == "Bash":

@@ -249,11 +249,36 @@ export function TaskProgress({
   const currentLabel = showDetailedStep
     ? progress.step ?? progress.current_phase
     : progress.current_phase;
+  const milestone = progress.milestone;
+  const milestoneEvent = milestone
+    ? ({
+        started: "开始",
+        completed: "完成",
+        blocked: "受阻",
+        start: "开始",
+        complete: "完成",
+        block: "受阻",
+      } as Record<string, string>)[milestone.event]
+    : undefined;
+  const showMilestone = Boolean(
+    milestone?.task_id && milestone.title && milestoneEvent,
+  );
   return <span className="task-progress" aria-label={`当前阶段：${currentLabel}`}>
     <span className="task-progress-caption">
       <span>当前进度</span>
       <strong>{currentLabel}</strong>
     </span>
+    {showMilestone && milestone && (
+      <span className={`task-milestone ${milestone.event}`}>
+        <i aria-hidden />
+        <span className="task-milestone-summary">
+          任务 {milestone.task_id} · {milestone.title} · {milestoneEvent}
+        </span>
+        {milestone.reason && (
+          <span className="task-milestone-reason">· {milestone.reason}</span>
+        )}
+      </span>
+    )}
     <span className="task-phase-track">
       {progress.phases.map((phase, index) => {
         const state = index < progress.current_index

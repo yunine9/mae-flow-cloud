@@ -13,6 +13,7 @@ from .shared import (
 from .wiring import api
 from mae_flow_core.workflow.advisories import record_advisory
 from mae_flow_core.workflow import agent_observations
+from mae_flow_core import host_env
 from mae_flow_core.workflow.agent_observations import (
     finished_observation,
     open_started_observations,
@@ -219,6 +220,7 @@ _DELIVERY_EVIDENCE = DeliveryEvidenceRules(DeliveryEvidencePorts(
     agent_written_paths=lambda: api._agent_written_paths(),
     read_text_replace=lambda path: read_text(path, errors="replace"),
     agent_ran=lambda spec, state: _AGENT_EVIDENCE.agent_ran(spec, state),
+    push_runs_locally=lambda state: host_env.git_push_runs_locally(state),
     review_document=lambda state: os.path.join(
         ensure_work_package(
             os.getcwd(), (state.get("config") or {}).get("单号", "")).root,

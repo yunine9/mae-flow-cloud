@@ -8,8 +8,8 @@
  *
  * 契约(与 docs/deploy-intranet.md 一字对应):
  *   POST /mr               {repo, source_branch, target_branch, title} → {url}
- *   POST /pipeline/trigger {repo, sha} → {status, log?}
- *   GET  /pipeline/status?sha=&repo=   → {runs: [{status, log?}]}
+ *   POST /pipeline/trigger {repo, sha} → {status, log?, checks?}
+ *   GET  /pipeline/status?sha=&repo=   → {runs: [{status, log?, checks?}]}
  *
  * 纪律(与本仓宪法一致):
  * - 诚实失败:CLI 缺失/非零退出/输出解析不出/状态映射不到,一律 502
@@ -33,15 +33,27 @@
  *     "command": [...同上占位符,外加 {sha}...],
  *     "status": {"json": "data.state"},    // 或 {"const": "running"}
  *     "log": {"json": "data.fail_log"},    // 可选
+ *     "checks": {"json": "data.jobs"},     // 可选，建议配置以便诊断
+ *     "check_dimension": {"json": "quality_dimension"},
+ *     "check_status": {"json": "state"},
+ *     "check_job": {"json": "name"},       // 可选
+ *     "check_url": {"json": "web_url"},    // 可选
  *     "status_map": {"SUCCESS": "success", "FAILED": "failed",
- *                    "RUNNING": "running", "PENDING": "running"}
+ *                    "RUNNING": "running", "PENDING": "running"},
+ *     "check_status_map": {"SUCCESS": "success", "FAILED": "failed",
+ *                          "PENDING": "pending", "SKIPPED": "skipped"}
  *   },
  *   "pipeline_status": {
  *     "command": [...],
  *     "runs": {"json": "data.runs"},       // 指向数组;缺省=整个输出是数组
  *     "status": {"json": "state"},         // 相对每个 run 元素
  *     "log": {"json": "fail_log"},
- *     "status_map": {...}
+ *     "checks": {"json": "jobs"},         // 相对每个 run 元素
+ *     "check_dimension": {"json": "quality_dimension"},
+ *     "check_status": {"json": "state"},
+ *     "check_job": {"json": "name"},
+ *     "status_map": {...},
+ *     "check_status_map": {...}
  *   }
  * }
  *
@@ -66,6 +78,11 @@ import { execFile } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createServer } from "node:http";
+import {
+  PIPELINE_DIMENSIONS,
+  type PipelineCheck,
+  type PipelineCheckStatus,
+} from "./pipelineContract.ts";
 
 type Extract = { json?: string; regex?: string; const?: string };
 
@@ -77,6 +94,15 @@ interface CommandSpec {
   url?: Extract;
   runs?: Extract;
   status_map?: Record<string, string>;
+  /** 一次流水线 run 内的逐项质量结果。checks 指数组，后续字段相对
+   * 数组元素抽取。缺席允许 trigger 只回 running；终态缺席会被宿主
+   * fail-closed 留在 verifying，不能拿总体 success 代替。 */
+  checks?: Extract;
+  check_dimension?: Extract;
+  check_status?: Extract;
+  check_job?: Extract;
+  check_url?: Extract;
+  check_status_map?: Record<string, string>;
   /** MR 标识(iid)抽取(mr_create/mr_lookup 用,可选):抽到了就随
    * {url} 一起回给宿主,后续门禁/讨论查询带回来当 {mr}。 */
   id?: Extract;
@@ -144,6 +170,11 @@ interface AdapterConfig {
 }
 
 const CONTRACT_STATUS = new Set(["success", "failed", "running"]);
+const CONTRACT_CHECK_STATUS = new Set<PipelineCheckStatus>([
+  "success", "failed", "running", "pending", "canceled", "skipped",
+  "not_run",
+]);
+const CONTRACT_DIMENSION = new Set<string>(PIPELINE_DIMENSIONS);
 
 class AdapterError extends Error {}
 
@@ -205,6 +236,60 @@ function mapStatus(
       + `请在 status_map 里补上它对应 success/failed/running 哪个`);
   }
   return mapped;
+}
+
+function mapCheckStatus(
+  raw: unknown,
+  map: Record<string, string> | undefined,
+): PipelineCheckStatus {
+  const key = String(raw ?? "");
+  const mapped = map ? map[key] ?? map[key.toUpperCase()] : key.toLowerCase();
+  if (!mapped || !CONTRACT_CHECK_STATUS.has(mapped as PipelineCheckStatus)) {
+    throw new AdapterError(
+      `流水线逐项状态 "${key}" 不在映射表里,拒绝猜测——`
+      + `请在 check_status_map 里映射为 `
+      + `success/failed/running/pending/canceled/skipped/not_run`);
+  }
+  return mapped as PipelineCheckStatus;
+}
+
+/** 从一次 run 的原始输出中抽出 COMPILE/UT/CODECHECK 逐项事实。 */
+function extractChecks(
+  spec: CommandSpec,
+  stdout: string,
+  parsed: () => unknown,
+): PipelineCheck[] | undefined {
+  if (!spec.checks) return undefined;
+  const rawChecks = extract(spec.checks, "checks 数组", stdout, parsed);
+  if (!Array.isArray(rawChecks)) {
+    throw new AdapterError("checks 抽出来的不是数组——检查 checks 点路径");
+  }
+  const dimensionSpec = spec.check_dimension ?? { json: "dimension" };
+  const statusSpec = spec.check_status ?? { json: "status" };
+  return rawChecks.map((raw, index) => {
+    const item = () => raw;
+    const dimension = String(extract(
+      dimensionSpec, `checks[${index}] dimension`, stdout, item,
+    ) ?? "").toUpperCase();
+    if (!CONTRACT_DIMENSION.has(dimension)) {
+      throw new AdapterError(
+        `checks[${index}] dimension "${dimension}" 不受支持，`
+        + `只允许 COMPILE/UT/CODECHECK`);
+    }
+    const status = mapCheckStatus(extract(
+      statusSpec, `checks[${index}] status`, stdout, item,
+    ), spec.check_status_map ?? spec.status_map);
+    const job = spec.check_job
+      ? extractOptional(spec.check_job, stdout, item) : undefined;
+    const url = spec.check_url
+      ? extractOptional(spec.check_url, stdout, item) : undefined;
+    return {
+      dimension: dimension as PipelineCheck["dimension"],
+      status,
+      ...(job !== undefined && job !== "" ? { job: String(job) } : {}),
+      ...(url !== undefined && url !== "" ? { url: String(url) } : {}),
+    };
+  });
 }
 
 export class PlatformAdapter {
@@ -414,7 +499,10 @@ export class PlatformAdapter {
         extract(spec.status, "流水线状态", stdout, parsed), spec.status_map);
       const log = spec.log
         ? String(extractOptional(spec.log, stdout, parsed) ?? "") : undefined;
-      return { status: 201, payload: { status, log } };
+      const checks = extractChecks(spec, stdout, parsed);
+      return { status: 201, payload: {
+        status, log, ...(checks !== undefined ? { checks } : {}),
+      } };
     }
     if (method === "GET" && path === "/pipeline/status") {
       const spec = this.config.pipeline_status;
@@ -430,14 +518,21 @@ export class PlatformAdapter {
       if (!Array.isArray(list)) {
         throw new AdapterError("pipeline_status 抽出来的不是数组");
       }
-      const runs = list.map((run) => ({
-        status: mapStatus(
+      const runs = list.map((run) => {
+        const current = () => run;
+        const status = mapStatus(
           extract(spec.status, "run 状态", stdout, () => run),
-          spec.status_map),
-        log: spec.log
+          spec.status_map);
+        const log = spec.log
           ? String(extractOptional(spec.log, stdout, () => run) ?? "")
-          : undefined,
-      }));
+          : undefined;
+        const checks = extractChecks(spec, stdout, current);
+        return {
+          status,
+          log,
+          ...(checks !== undefined ? { checks } : {}),
+        };
+      });
       return { status: 200, payload: { runs } };
     }
     // ---- MR 闭环的四个可选端点:不配=404,宿主 fail-open ----
@@ -615,6 +710,13 @@ export class PlatformAdapter {
         ? `[配置] ${name}: ${mask(spec.command)}`
         : `[缺席] ${name}: 未配置(对应端点 404,宿主按旧语义 fail-open)`);
     }
+    const pipelineSpec = this.config.pipeline_status;
+    lines.push(pipelineSpec.checks && pipelineSpec.check_dimension
+      && pipelineSpec.check_status
+      ? "[配置] 流水线逐项结果: ok (checks + dimension + status)"
+      : "[建议] 流水线逐项结果: 当前使用整体流水线核销；建议为 "
+        + "pipeline_status 配置 checks / check_dimension / check_status，"
+        + "以便红灯时精确诊断");
     const probes: Array<[string, string, URLSearchParams]> = [
       ["GET /pipeline/status", "/pipeline/status",
        new URLSearchParams({ sha: sample.sha ?? "", repo: sample.repo ?? "" })],

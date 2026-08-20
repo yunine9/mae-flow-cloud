@@ -68,6 +68,7 @@ export interface Outcome {
 export interface HostHooks {
   preTool?(event: SemanticEvent): Promise<{ action: string; reason?: string } | undefined>;
   postTool?(event: SemanticEvent): Promise<void>;
+  flush?(): Promise<void>;
 }
 
 export interface CloudSessionOptions {
@@ -166,6 +167,9 @@ export class CloudSession {
   private toolArgs = new Map<string, Record<string, unknown>>();
   private lastAssistantText = new Map<string, string>();
   private childCount = 0;
+  private childSessions = new Map<string, any>();
+  private pendingKernel = new Set<Promise<void>>();
+  private kernelFailures: string[] = [];
   readonly sessionId = "main";
 
   private constructor(private readonly options: CloudSessionOptions) {}
@@ -223,8 +227,81 @@ export class CloudSession {
    * 流程真相在内核状态文件与事件日志里——重建会话从内核 current
    * 续跑,这正是"裁决源在工作区"的红利。 */
   async startResume(userMessage: string): Promise<Outcome> {
+    await this.reconcileInterruptedWork();
     this.emit("session_started", this.sessionId, { resume: true });
     return this.turnWithOverflowRepair(userMessage);
+  }
+
+  /** Close the lifecycle gap left by a process crash.
+   *
+   * A tool/child that has a durable start event but no finish event is not a
+   * success and not safe to redispatch silently.  Recovery first records an
+   * explicit interrupted result into the same transcript/Hook ledger, then
+   * lets the new session consult the kernel current step and retry normally. */
+  private async reconcileInterruptedWork(): Promise<void> {
+    const events = this.options.eventLog.replay();
+    for (const event of events) {
+      if (event.kind !== "agent_spawned") continue;
+      const payload = event.payload as Record<string, any>;
+      const childId = String(payload.child_session_id ?? "");
+      const callId = String(payload.call_id ?? "");
+      if (childId && callId) {
+        this.options.transcript.bindChild(childId, callId);
+        const ordinal = /^child-(\d+)$/.exec(childId);
+        if (ordinal) this.childCount = Math.max(
+          this.childCount, Number(ordinal[1]));
+      }
+    }
+    const finishedTools = new Set(events
+      .filter((event) => event.kind === "tool_finished")
+      .map((event) => `${event.sessionId}:${String(event.payload.call_id ?? "")}`));
+    const finishedAgents = new Set(events
+      .filter((event) => event.kind === "agent_finished")
+      .map((event) => String(event.payload.call_id ?? "")));
+    for (const event of events) {
+      const payload = event.payload as Record<string, any>;
+      if (event.kind === "tool_requested") {
+        const callId = String(payload.call_id ?? "");
+        const name = String(payload.name ?? "");
+        if (!callId || name === "AskUserQuestion"
+            || finishedTools.has(`${event.sessionId}:${callId}`)) continue;
+        const interrupted = this.emit("tool_finished", event.sessionId, {
+          call_id: callId, name, input: payload.input ?? {}, is_error: true,
+          result: "服务重启时发现该工具没有可靠完成记录，已按 interrupted 登记",
+        });
+        this.kernelBypass(this.options.hostHooks?.postTool?.(interrupted));
+      }
+      if (event.kind === "agent_spawned") {
+        const callId = String(payload.call_id ?? "");
+        if (!callId || finishedAgents.has(callId)) continue;
+        const childId = String(payload.child_session_id ?? "");
+        this.emit("agent_finished", this.sessionId, {
+          call_id: callId, child_session_id: childId,
+          lifecycle: "interrupted",
+          final_text: "服务重启时发现子 Agent 未返回，已登记中断；可按原任务卡受控重派",
+        });
+        this.kernelBypass(this.options.hostHooks?.postTool?.({
+          eventId: this.options.eventLog.lastEventId(),
+          taskId: this.options.taskId,
+          sessionId: this.sessionId,
+          ts: new Date().toISOString(),
+          kind: "tool_finished",
+          payload: {
+            call_id: callId, name: "Task",
+            input: {
+              subagent_type: payload.agent_type,
+              description: payload.description,
+              prompt: payload.prompt,
+            },
+            is_error: true,
+            result: "服务重启导致子 Agent 中断",
+          },
+        }));
+      }
+    }
+    const failure = await this.flushKernel();
+    if (failure) throw new Error(
+      `恢复中断现场时内核登记失败，任务已安全停止: ${failure}`);
   }
 
   /** 恢复场景的决定回注:旧会话已死,没有挂起的工具调用可 resolve,
@@ -250,18 +327,36 @@ export class CloudSession {
     this.hostAnswered.add(record.call_id);
   }
 
-  /** 进内核的登记是旁路:抛了记一笔,**绝不带走进程**。
+  /** Queue a Hook write without blocking the model, but never lose failure.
    *
-   * postTool 是即发即忘(证据登记不该拖慢模型这一轮),而 Node 里没人
-   * 接的 rejection 默认终止进程——python 起不来、管道半路断掉,后果就
-   * 是整台服务连着所有在跑的任务一起没。红线:旁路一律 fail-open。 */
+   * The old fire-and-forget path kept the process alive by swallowing every
+   * rejection.  That also let a task advance after its authorization/evidence
+   * write had failed.  We now isolate the process in the same way, then flush
+   * and adjudicate these writes before the turn can settle. */
   private kernelBypass(work: Promise<unknown> | undefined): void {
     if (!work) return;
-    void work.catch((error) => {
+    let tracked!: Promise<void>;
+    tracked = work.then(() => undefined).catch((error) => {
+      const detail = String(error);
+      this.kernelFailures.push(detail);
       this.options.log?.(
-        `任务 ${this.options.taskId} 内核登记失败(fail-open,流程照走): `
-        + String(error));
-    });
+        `任务 ${this.options.taskId} 内核授权/证据登记失败(fail-closed): `
+        + detail);
+    }).finally(() => this.pendingKernel.delete(tracked));
+    this.pendingKernel.add(tracked);
+  }
+
+  private async flushKernel(): Promise<string> {
+    while (this.pendingKernel.size) {
+      await Promise.all([...this.pendingKernel]);
+    }
+    try {
+      await this.options.hostHooks?.flush?.();
+    } catch (error) {
+      this.kernelFailures.push(String(error));
+    }
+    const failures = this.kernelFailures.splice(0);
+    return failures.join("；");
   }
 
   /** 发一条用户消息并跑完本轮,统一收口判定。 */
@@ -272,7 +367,7 @@ export class CloudSession {
     this.waitingSignal = deferred<Outcome>();
     this.pendingTurn = this.session
       .prompt(userMessage)
-      .then((): Outcome => this.turnOutcome())
+      .then(() => this.turnOutcome())
       .catch((error): Outcome => {
         this.emit("session_ended", this.sessionId, {
           reason: "failed", detail: String(error),
@@ -284,7 +379,15 @@ export class CloudSession {
 
   /** 回合收口:零活动+模型层错误 = 会话失败(把 pi 吞掉的 API 错误
    * 亮出来);零活动无错误 = 空转回合(交上层催办);否则正常收轮。 */
-  private turnOutcome(): Outcome {
+  private async turnOutcome(): Promise<Outcome> {
+    const kernelFailure = await this.flushKernel();
+    if (kernelFailure) {
+      const detail = `内核授权或证据登记未可靠落盘: ${kernelFailure}`;
+      this.emit("session_ended", this.sessionId, {
+        reason: "failed", detail,
+      });
+      return { status: "session_ended", reason: "failed", detail };
+    }
     if (!this.turnActivity && this.turnError) {
       const detail = `模型回合失败: ${this.turnError}`;
       this.emit("session_ended", this.sessionId, {
@@ -451,10 +554,16 @@ export class CloudSession {
   /** 取消任务用的硬边界：中止当前 agent 回合并等它回到 idle。
    * 容器由 TaskService 同时停止，长 bash 不会遗留在隔离环境里。 */
   async abort(): Promise<void> {
-    await (this.session as any).abort();
+    await Promise.allSettled([
+      (this.session as any).abort(),
+      ...[...this.childSessions.values()].map((child) => child.abort()),
+    ]);
+    await this.flushKernel();
   }
 
   dispose(): void {
+    for (const child of this.childSessions.values()) child.dispose();
+    this.childSessions.clear();
     this.session.dispose();
   }
 
@@ -465,9 +574,9 @@ export class CloudSession {
     customTools: unknown[];
   }) {
     const { workspace, agentDir, provider, model } = this.options;
-    // Skill=写法指南(团队那两个 UT skill 讲"单测怎么写"),云端照用:
-    // pi 把 SKILL.md 直接注进系统提示让模型读。云端对不上的只是"调用
-    // Skill 工具"这个通道(pi 没有 skill 工具)和指南里"本地编译"那类段落。
+    // Skill=写法指南(团队那两个 UT skill 只负责"单测怎么写"),云端照用:
+    // pi 把 SKILL.md 直接注进系统提示让模型读；它不承担 UT 运行，也不
+    // 构成通过证据。正文里若含本地构建段落，以 Cloud 执行契约为准。
     //
     // 两个来源,宿主级在前(部署放一次、每个任务都带——团队的 skill 在
     // 内网出不来仓,老宿主靠"每次手动集成进 ut-generator 子 agent",
@@ -701,7 +810,9 @@ export class CloudSession {
         "派发一个子 Agent 完成任务卡并返回其最终报告(等价旧插件的 Task 工具)。" +
         "子 Agent 不能提问、不能再派子 Agent。",
       parameters: Type.Object({
-        subagent_type: Type.String({ description: "子 Agent 类型,如 compile-agent" }),
+        subagent_type: Type.String({
+          description: "子 Agent 类型,如 ut-generator-agent 或 reviewer-agent",
+        }),
         description: Type.String({ description: "一句话任务描述" }),
         prompt: Type.String({ description: "完整任务卡内容" }),
       }),
@@ -775,6 +886,7 @@ export class CloudSession {
           "Task", "Dispatch Agent", refusal),
       ],
     });
+    this.childSessions.set(childId, child);
     let lifecycle: "returned" | "interrupted" = "returned";
     try {
       await child.prompt(String(params.prompt ?? ""));
@@ -782,6 +894,7 @@ export class CloudSession {
       lifecycle = "interrupted";
       this.options.log?.(`子 Agent ${childId} 中断: ${String(error)}`);
     } finally {
+      this.childSessions.delete(childId);
       child.dispose();
     }
     const finalText = this.lastAssistantText.get(childId) ?? "";

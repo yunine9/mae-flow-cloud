@@ -18,6 +18,7 @@ import type { AddressInfo } from "node:net";
 import { execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
+import type { PipelineCheck } from "./pipelineContract.ts";
 
 export interface MergeRequest {
   id: number;
@@ -51,6 +52,9 @@ export interface PipelineRun {
   id: number;
   sha: string;
   status: "running" | "success" | "failed";
+  /** 可选的逐项诊断事实；明确 failed/pending 优先于总体状态。缺席时
+   * execution_contract 已声明覆盖范围，整体 success 可聚合核销。 */
+  checks?: PipelineCheck[];
   /** 失败详情(平台原文)。修复 agent 的口粮:没有它,修就是瞎修。
    * 内网真件从"拉日志"CLI 映射到这个字段,契约同形。 */
   log?: string;
@@ -72,6 +76,10 @@ export class FakeGitPlatform {
   /** 逐次结局队列:修复环一类"先红后绿"的剧本按序消费,
    * 空了退回 nextPipelineStatus——比测试里掐时序翻开关可靠。 */
   readonly statusQueue: Array<"success" | "failed" | "running"> = [];
+  /** 模拟仅提供总体状态的平台（仍可聚合核销，诊断粒度较低）。 */
+  omitTypedChecks = false;
+  /** 测试可覆盖下一次 run 的逐项结果；触发后消费一次。 */
+  nextPipelineChecks?: PipelineCheck[];
   /** 检视讨论(测试注入 seedDiscussion;修复闭环回复+resolve 落这里)。 */
   readonly discussions: Discussion[] = [];
   /** 冲突门禁:true=conflict_passed 不过(真件由平台判,假件测试拨)。 */
@@ -288,6 +296,8 @@ export class FakeGitPlatform {
       id: this.counter,
       sha,
       status,
+      ...(!this.omitTypedChecks
+        ? { checks: this.consumePipelineChecks(status) } : {}),
       log: status === "failed" ? this.nextPipelineLog : undefined,
     };
     this.pipelines.push(run);
@@ -310,6 +320,9 @@ export class FakeGitPlatform {
     for (const run of this.pipelines) {
       if (run.sha === sha && run.status === "running") {
         run.status = status;
+        if (!this.omitTypedChecks) {
+          run.checks = this.consumePipelineChecks(status);
+        }
         if (status === "failed") run.log = log ?? this.nextPipelineLog;
       }
     }
@@ -318,5 +331,32 @@ export class FakeGitPlatform {
         if (mr.sha === sha) mr.state = "等待合入";
       }
     }
+  }
+
+  private consumePipelineChecks(
+    status: "running" | "success" | "failed",
+  ): PipelineCheck[] {
+    const injected = this.nextPipelineChecks;
+    this.nextPipelineChecks = undefined;
+    if (injected) return injected.map((item) => ({ ...item }));
+    if (status === "success") {
+      return [
+        { dimension: "COMPILE", status: "success", job: "compile" },
+        { dimension: "UT", status: "success", job: "unit-test" },
+        { dimension: "CODECHECK", status: "success", job: "codecheck" },
+      ];
+    }
+    if (status === "running") {
+      return [
+        { dimension: "COMPILE", status: "running", job: "compile" },
+        { dimension: "UT", status: "pending", job: "unit-test" },
+        { dimension: "CODECHECK", status: "pending", job: "codecheck" },
+      ];
+    }
+    return [
+      { dimension: "COMPILE", status: "failed", job: "compile" },
+      { dimension: "UT", status: "not_run", job: "unit-test" },
+      { dimension: "CODECHECK", status: "not_run", job: "codecheck" },
+    ];
   }
 }

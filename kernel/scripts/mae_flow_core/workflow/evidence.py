@@ -70,6 +70,7 @@ def build_evidence_registry(*, workflow, agent, delivery, quality):
         ("agent_or_no_source", agent.agent_or_no_source),
         ("review_codecheck", quality.review_codecheck),
         ("ut_session_complete", quality.ut_session_complete),
+        ("pipeline_obligations_passed", quality.pipeline_obligations_passed),
         ("domain_archive_complete", workflow.domain_archive_complete),
         ("local_spec_valid", workflow.local_spec_valid),
         ("verification_passed", workflow.verification_passed),

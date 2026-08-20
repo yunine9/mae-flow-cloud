@@ -64,12 +64,13 @@ class AgentEvidenceRules:
         kind = spec["agent"]
         if kind == "ASKUSER" and self.ports.moonlight(state):
             return EvidenceResult(True, "")
-        # 云端宿主取不到子会话台账,工作类 Agent 的生命周期证据不再作机器
-        # 门禁——机器把关移到交付点(流水线结果绑 SHA)。ASKUSER 是人工闸,
-        # 云端决定卡走得通,照常验。为什么与何时收紧见 host_env 的说明。
-        if kind != "ASKUSER" and not host_env.worker_agent_ledger_gates():
+        # 外部编译是一项待流水线兑现的义务，不是一张假 COMPILE Agent
+        # 任务卡。done 会先把义务持久化；这里仅说明本步不要求本地子会话。
+        # 其他工作 Agent（尤其 UT 编写、Reviewer、Story、Grill）仍必须有
+        # 真实生命周期台账，不能被“宿主在云端”一刀切放行。
+        if kind == "COMPILE" and not host_env.build_runs_locally(state):
             return EvidenceResult(
-                True, "云端宿主:子会话台账不作门禁,交付点流水线核对")
+                True, "本单编译由权威流水线执行；已登记外部 COMPILE 义务")
         entered = self.ports.step_entered(state)
         accepted, accepted_why = self.ports.risk_acceptance(
             kind, state)
@@ -128,7 +129,22 @@ class AgentEvidenceRules:
         observation = observations[-1] if observations else None
         required = self._required_returns(spec, state, entered)
         if observation and len(observations) >= required:
-            if (kind in ("COMPILE", "CODECHECK", "UT")
+            requires_local_execution = (
+                kind in ("COMPILE", "CODECHECK", "UT")
+                and not (
+                    kind == "COMPILE"
+                    and not host_env.build_runs_locally(state)
+                )
+                and not (
+                    kind == "UT"
+                    and not host_env.unit_tests_run_locally(state)
+                )
+                and not (
+                    kind == "CODECHECK"
+                    and not host_env.codecheck_runs_locally(state)
+                )
+            )
+            if (requires_local_execution
                     and not observation.get("legacy")
                     and not self.ports.quality_execution(
                         kind, state.get("current", ""), state)):

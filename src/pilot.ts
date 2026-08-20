@@ -119,6 +119,8 @@ async function main(): Promise<number> {
   });
 
   console.log(`[pilot] 真模型试跑: ${provider}/${model}`);
+  console.log("[pilot] Cloud 执行契约:本机编写代码/UT;"
+    + "编译、UT 运行、CodeCheck 由流水线执行");
   let task;
   if (resumeLabel) {
     // 断点续跑 = 服务重启语义:崩溃时在跑的任务重新入队,以内核

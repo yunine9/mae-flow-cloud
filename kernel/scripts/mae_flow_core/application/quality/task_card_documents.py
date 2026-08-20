@@ -136,7 +136,9 @@ def _append_full_codecheck(document, scan):
         "主会话不得代修；修复后按任务卡编译方式验证并复验。")
 
 
-def _append_full_ut(document, groups, targets, batches=(), phase="generate"):
+def _append_full_ut(
+        document, groups, targets, batches=(), phase="generate", state=None,
+        artifact_contract=None):
     document.append("UT覆盖目标（硬边界，不等于整个文件）:")
     if groups.business:
         for business_file in groups.business:
@@ -184,7 +186,7 @@ def _append_full_ut(document, groups, targets, batches=(), phase="generate"):
             "上下文接近上限就自然语言收尾，由主会话为下一批启动新实例。"
             "各批共享未提交测试工作区，不 commit、不询问用户；最后必须有一个收口实例"
             "只运行配置的全量 UT 命令。")
-    if not host_env.unit_tests_run_locally():
+    if not host_env.unit_tests_run_locally(state):
         # 云端形态:测试照常写——**AutoUT/java-autout 这类 skill 的价值是
         # "怎么写单测"的写法指南,云端一样照用**(宿主把仓里的 SKILL.md
         # 直接注进提示词给模型读);对不上的只是"调用 Skill 工具"这个通道
@@ -195,7 +197,7 @@ def _append_full_ut(document, groups, targets, batches=(), phase="generate"):
             "是本步的主要依据;"
             "但这台机器没有构建链,指南里「编译通过」「执行构建/运行测试」"
             "那类段落做不到,直接跳过,不要为此找工具或改写指南。"
-            "写完就交:运行与统计由交付后的权威流水线负责(结果绑 SHA),"
+            "审计复用或补齐后就交:运行与统计由交付后的权威流水线负责(结果绑 SHA),"
             "红灯有专职修复会话跟进。报告里如实写明本地未运行,"
             "**不要编造 TESTS_TOTAL/PASSED/FAILED 数字**——没跑就没有数字。")
     elif phase == "final":
@@ -207,10 +209,27 @@ def _append_full_ut(document, groups, targets, batches=(), phase="generate"):
             "（或明确配置的既有写法），并真实执行测试。写“随生成方式自带”时"
             "由对应 Skill 根据项目决定实际命令，并在 EXECUTED_UT 如实报告。")
     document.extend([
-        "职责:只对任务卡范围补/改测试；**测试对象=本次修改的函数/行为"
+        "职责:先查找并读取任务范围内的既有测试，审计其断言是否已经覆盖下面目标；"
+        "覆盖充分就原样复用，不为制造 diff 重写测试；只有真实缺口才新增或修改测试。"
+        "**测试对象=本次修改的函数/行为"
         "(上面硬边界所在函数)+规格条目 EARS 条目,禁止为文件中未修改的"
         "存量函数补测**；" + route,
         "评审意见处理不修改规格，测试依据使用上面列出的既有需求/规格。",
+    ])
+    _append_ut_artifact_receipt(document, artifact_contract)
+
+
+def _append_ut_artifact_receipt(document, artifact_contract):
+    contract = artifact_contract or {}
+    targets = "；".join(contract.get("coverage_targets") or ())
+    document.extend([
+        "UT 产物收据(由宿主依据工具与 Git 事实登记，不靠报告自述):",
+        "- inspected_existing: 已实际读取并复用/审计的既有测试",
+        "- added_test_paths / modified_test_paths: 本轮真实新增或修改的测试",
+        "- test_digest: 上述测试内容指纹",
+        "- coverage_targets: " + (targets or "本卡 UT 覆盖目标"),
+        "若既有测试已完整覆盖，允许 added/modified 为空；但必须真实读取相关测试，"
+        "让 inspected_existing 与 test_digest 可核对。",
     ])
 
 
@@ -218,7 +237,10 @@ def build_full_task_document(facts):
     """Build the complete full-flow task card from already-validated facts."""
     kind = facts["kind"]
     config = facts["config"]
-    document = TaskCardDocument([
+    execution_state = (
+        {"execution_contract": facts.get("execution_contract")}
+        if facts.get("execution_contract") else None)
+    header = [
         "# Mae-Flow %s TASK CARD" % kind,
         "本文件由 harness 生成。不得猜测、替换或省略其中配置；缺项按 agent 契约 FAIL/BLOCKED 收尾。",
         "项目根: " + facts["project_root"],
@@ -230,11 +252,18 @@ def build_full_task_document(facts):
         "本轮检查范围: " + facts["diff"],
         "本次子任务范围: "
         + (facts["scope"] or "任务卡文件清单全部"),
-        "编译方式: " + config.get("编译方式", ""),
-        "UT生成方式: " + config.get("UT生成方式", ""),
-        "UT运行命令: " + config.get("UT运行命令", ""),
-        "需求/规格依据:",
-    ])
+    ]
+    if host_env.build_runs_locally(execution_state):
+        header.append("编译方式: " + config.get("编译方式", ""))
+    else:
+        header.append("编译执行: 权威流水线（本机不运行）")
+    header.append("UT 编写方式: " + config.get("UT生成方式", ""))
+    if host_env.unit_tests_run_locally(execution_state):
+        header.append("UT 运行命令: " + config.get("UT运行命令", ""))
+    else:
+        header.append("UT 运行: 权威流水线（本机只编写/审计测试）")
+    header.append("需求/规格依据:")
+    document = TaskCardDocument(header)
     if facts["precommit_review"]:
         _append_precommit(document)
     inherited = facts["inherited_dirty"]
@@ -269,8 +298,9 @@ def build_full_task_document(facts):
     elif kind == "UT":
         _append_full_ut(
             document, facts["groups"], facts["ut_targets"],
-            facts.get("ut_batches", ()), facts.get("ut_phase", "generate"))
-    elif not host_env.build_runs_locally():
+            facts.get("ut_batches", ()), facts.get("ut_phase", "generate"),
+            execution_state, facts.get("ut_artifact_contract"))
+    elif not host_env.build_runs_locally(execution_state):
         # 云端形态:这台机器上没有构建链,教它去跑 mcde/mvn 只会撞墙,
         # 然后在契约上空转(见 host_env.build_runs_locally)。
         document.append(

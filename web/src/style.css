@@ -1201,6 +1201,40 @@ svg {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.task-milestone {
+  min-width: 0;
+  margin: -1px 0 8px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 9.5px;
+  line-height: 1.35;
+}
+.task-milestone > i {
+  width: 5px;
+  height: 5px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.task-milestone-summary {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-milestone-reason {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-milestone.completed > i { background: var(--success); }
+.task-milestone.blocked > i { background: var(--danger); }
 .task-phase-track {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(44px, 1fr));

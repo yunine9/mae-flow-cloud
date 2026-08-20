@@ -1,61 +1,46 @@
-"""流水线证据口(云端):宿主喂平台事实,内核裁决并落盘现场。
+"""Typed pipeline evidence and the external-verification state transition.
 
-为什么存在:云端契约把编译/UT"推迟给流水线"(host_env.build_runs_locally
-等三个开关),但推迟只是一句承诺——此前那三个 deferred 标记只活在
-ContractDecision.details 的内存里,没人落盘、没人事后核销。这里补上
-兑现的一半:宿主在流水线终态时把平台事实(SHA/状态/来源)写成 JSON
-递进来,内核绑工作区当前 HEAD 裁决,结论写进 .mae-flow.json 的
-quality.pipeline——现场文件是唯一真相,云端页面与投影只是它的镜像。
-
-裁决规则(判定只在这里,宿主一行不判):
-- 事实里的 sha 必须等于当前 HEAD,否则 STALE——旧绿灯不背书新代码
-  (mvp 设计 14.5;STALE 照记不拒登,记录本身就是诚实的物证);
-- SHA 对上且 status=success → PASS;status=failed → RED(留痕;
-  修复环是宿主的事,内核只记事实与结论);
-- 事实缺 sha / status 不认识 → 拒绝登记退 2,不猜。
-
-这不是门禁(第一期):登记不推动任何步骤——流程此刻通常已在 end,
-它是物证,让"推迟给流水线"的承诺兑现与否从此有据可查。record 不要求
---message-id:事实来自平台 API(宿主转递),不是人的断言;source/url
-字段留审计线索。本地 CLI 行为不变:命令是新增的,本地没人喂事实就
-永远不会被调用。
+Cloud does not compile or run tests locally. The host therefore reports facts
+for three independent dimensions (COMPILE / UT / CODECHECK); the kernel binds
+them to the current HEAD, persists the adjudication and alone decides whether
+the workflow may finish or must enter a controlled repair round.
 """
 
 import json
 
 from .shared import os, time
 from .wiring import api
+from mae_flow_core.quality.external_verification import (
+    PipelineDecision,
+    adjudicate_pipeline,
+    apply_pipeline_decision,
+    record_git_push_receipt,
+    required_dimensions,
+)
+from mae_flow_core.quality.external_repair import issue_repair_authorization
 
 
 _VALID_STATUS = ("success", "failed")
 
 
 def adjudicate(facts, head):
-    """纯判定:平台事实 + 当前 HEAD → (verdict, reason)。
-
-    单独成函数是为了测试可直插(不用装配整个 CLI 运行时),也为了
-    让"判定规则"与"落盘仪式"分开审——改规则不该动 IO。
-    """
+    """Compatibility aggregate adjudicator for historical diagnostics only."""
     sha = str(facts.get("sha") or "")
     status = str(facts.get("status") or "")
     if not sha or status not in _VALID_STATUS:
         return "INVALID", "事实缺 sha,或 status 不是 success/failed"
     if sha != head:
-        return ("STALE",
-                "流水线绑的是 %s,当前 HEAD 是 %s——旧结果不背书新代码"
-                % (sha[:12], head[:12]))
+        return (
+            "STALE",
+            "流水线绑的是 %s,当前 HEAD 是 %s——旧结果不背书新代码"
+            % (sha[:12], head[:12]),
+        )
     if status == "success":
         return "PASS", "流水线成功且绑定当前 HEAD"
     return "RED", "流水线失败(已绑定当前 HEAD),待修复或人工"
 
 
-def cmd_pipeline(flow, st, args):
-    quality = st.setdefault("quality", {})
-    if args.action == "show":
-        record = quality.get("pipeline")
-        print(json.dumps(record, ensure_ascii=False) if record else "null")
-        return
-    path = os.path.abspath(args.file)
+def _read_facts(path):
     try:
         with open(path, "r", encoding="utf-8") as stream:
             facts = json.load(stream)
@@ -63,13 +48,16 @@ def cmd_pipeline(flow, st, args):
         api.die("pipeline record 读不了事实文件 %s: %s" % (path, exc), 2)
     if not isinstance(facts, dict):
         api.die("pipeline record 的事实文件必须是 JSON 对象。", 2)
-    head = api.sh("git rev-parse --verify HEAD")
+    return facts
+
+
+def _legacy_record(st, facts, head, at):
     verdict, reason = adjudicate(facts, head)
     if verdict == "INVALID":
         api.die("pipeline record 拒绝登记:" + reason, 2)
-    record = {
+    return {
         "step": st.get("current", ""),
-        "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "at": at,
         "head": head,
         "sha": str(facts.get("sha")),
         "status": str(facts.get("status")),
@@ -77,9 +65,71 @@ def cmd_pipeline(flow, st, args):
         "reason": reason,
         "source": str(facts.get("source") or ""),
         "url": str(facts.get("url") or ""),
+        "legacy_aggregate": True,
     }
-    quality["pipeline"] = record
+
+
+def _route_external_verification(flow, st, record):
+    if st.get("current") != "external_verify":
+        return
+    verdict = record.get("verdict")
+    if verdict == "PASS":
+        api.advance(
+            flow, st, "external_verify", {"next": "end"},
+            "pipeline:pass", str(record.get("reason") or ""))
+    # RED stays at external_verify.  Cloud starts a focused repair Agent which
+    # fixes, commits and pushes once; the next SHA is adjudicated here again.
+    # No human Diff card and no replay of the heavyweight kernel quality chain.
+
+
+def cmd_pipeline(flow, st, args):
+    quality = st.setdefault("quality", {})
+    if args.action == "show":
+        record = quality.get("external_verification") or quality.get("pipeline")
+        print(json.dumps(record, ensure_ascii=False) if record else "null")
+        return
+
+    facts = _read_facts(os.path.abspath(args.file))
+    head = api.sh("git rev-parse --verify HEAD")
+    at = time.strftime("%Y-%m-%d %H:%M:%S")
+    required = required_dimensions(st)
+    if required:
+        decision = adjudicate_pipeline(facts, head, required)
+        if decision.verdict == "INVALID":
+            api.die("pipeline record 拒绝登记:" + decision.reason, 2)
+        pushed, push_reason = record_git_push_receipt(
+            st, facts, head=head, at=at)
+        if decision.verdict == "PASS" and not pushed:
+            decision = PipelineDecision(
+                "INCOMPLETE", push_reason, decision.checks)
+        external = apply_pipeline_decision(
+            st, facts, decision, head=head, at=at)
+        issue_repair_authorization(
+            st, decision, head=head, at=at, dirty_paths=api._dirty_paths())
+        record = {
+            "step": st.get("current", ""),
+            "at": at,
+            "head": head,
+            "sha": str(facts.get("sha") or ""),
+            "status": str(facts.get("status") or ""),
+            "verdict": decision.verdict,
+            "reason": decision.reason,
+            "source": str(facts.get("source") or ""),
+            "url": str(facts.get("url") or ""),
+            "required": list(required),
+            "checks": decision.checks,
+        }
+        # Compatibility mirror for projections written before the typed model.
+        quality["pipeline"] = record
+        quality["external_verification"] = external
+    else:
+        record = _legacy_record(st, facts, head, at)
+        quality["pipeline"] = record
+
     api.save_state(st)
-    print("[mae-flow] 流水线裁决 %s: %s" % (verdict, reason))
-    # 机器可读的最后一行:宿主(mae-flow-cloud)按"末行 JSON"消费。
+    _route_external_verification(flow, st, record)
+    print("[mae-flow] 流水线裁决 %s: %s" % (
+        record["verdict"], record["reason"]))
+    # Machine-readable final line. Cloud consumes this record and may not
+    # independently reinterpret an aggregate platform status.
     print(json.dumps(record, ensure_ascii=False))

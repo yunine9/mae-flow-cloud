@@ -23,6 +23,7 @@ class DeliveryEvidencePorts:
     agent_written_paths: object
     read_text_replace: object
     agent_ran: object
+    push_runs_locally: object = lambda _state: True
     review_document: object = None
 
 
@@ -384,11 +385,10 @@ class DeliveryEvidenceRules:
         return None
 
     def pushed(self, _spec, state):
-        for evaluator in (
-            self._push_head_result,
-            self._push_committed_result,
-            self._push_dirty_result,
-        ):
+        evaluators = [self._push_committed_result, self._push_dirty_result]
+        if self.ports.push_runs_locally(state):
+            evaluators.insert(0, self._push_head_result)
+        for evaluator in evaluators:
             result = evaluator(state)
             if result is not None:
                 return result

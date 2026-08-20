@@ -56,8 +56,7 @@ const SCRIPT: Scene[] = [
       `${MAEFLOW} config-review --set 工号=cloudbot --set 基线分支=master ` +
       `--set 单号=${TICKET} --set 单号类型=REQ ` +
       `--set 需求文档=docs/req/REQ-${TICKET}.md ` +
-      `--set "编译方式=mvn -B -q compile" --set UT生成方式=java-autout ` +
-      `--set "UT运行命令=mvn -B test"` } } },
+      `--set UT生成方式=java-autout` } } },
   { tool: { name: "AskUserQuestion", input: CONFIG_CARD } },
   { tool: { name: "bash", input: { command: `${MAEFLOW} done` } } },
   { tool: { name: "bash", input: { command: `${MAEFLOW} done --choice full` } } },
@@ -86,7 +85,7 @@ async function until<T>(
 }
 
 test(
-  "内核纵向闭环:happy path 走到 Grill 门口,门禁全程在场",
+  "内核纵向闭环:走到 Grill 门口不冒充完成,门禁全程在场",
   { skip: KERNEL_SKIP },
   async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "mfc-kernel-"));
@@ -132,14 +131,15 @@ test(
         answers: { "是否启用独立 CODE Reviewer?": "不启用" },
       });
 
-      const done = await until(() => {
+      const stopped = await until(() => {
         const task = service.get(created.id)!;
-        if (task.status === "failed") throw new Error(task.detail);
-        return task.status === "completed" ? task : undefined;
-      }, "任务收口");
+        return task.status === "failed" ? task : undefined;
+      }, "Grill 门口显式停机");
+      assert.match(stopped.detail ?? "", /grill/,
+        "模型在 Grill 门口提前 end_turn 只能停机，不能伪 completed");
 
       // 内核状态机是唯一裁决源:走到哪一步以 .mae-flow.json 为准。
-      const repoDir = join(done.workspace, "mae-flow-fieldtest-java");
+      const repoDir = join(stopped.workspace, "mae-flow-fieldtest-java");
       const state = JSON.parse(
         readFileSync(join(repoDir, ".mae-flow.json"), "utf-8"));
       assert.match(String(state.current), /^grill/,
@@ -154,7 +154,7 @@ test(
       assert.equal(branch, BRANCH);
 
       // 门禁全程在场:中途伪造状态被内核打回。
-      const rows = readFileSync(join(done.workspace, "transcript.jsonl"),
+      const rows = readFileSync(join(stopped.workspace, "transcript.jsonl"),
         "utf-8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
       const results = new Map<string, any>();
       const calls = new Map<string, any>();

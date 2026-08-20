@@ -35,6 +35,7 @@ interface DispatchResult {
   code: number;
   stdout: string;
   stderr: string;
+  infraError?: string;
 }
 
 export class KernelHost {
@@ -47,9 +48,11 @@ export class KernelHost {
   async bootstrap(requirement: string): Promise<string> {
     this.requirement = requirement;
     const started = await this.dispatch("sessionstart", {});
+    this.requireSuccess("sessionstart", started);
     const prompted = await this.dispatch("userprompt", {
       prompt: requirement,
     });
+    this.requireSuccess("userprompt", prompted);
     return [started.stdout, prompted.stdout]
       .map((text) => text.trim())
       .filter(Boolean)
@@ -69,6 +72,14 @@ export class KernelHost {
       tool_use_id: payload.call_id,
       ...this.common(),
     });
+    if (result.infraError || (result.code !== 0 && result.code !== 2)) {
+      const detail = result.infraError
+        ?? (result.stdout + "\n" + result.stderr).trim();
+      return {
+        action: "deny",
+        reason: `内核门禁不可用，已安全拒绝本次工具调用: ${detail}`,
+      };
+    }
     if (result.code === 2) {
       const reason = (result.stdout + "\n" + result.stderr).trim();
       return { action: "deny", reason: reason || "被 mae-flow 门禁打回" };
@@ -90,14 +101,20 @@ export class KernelHost {
             content: [{ type: "text", text: String(payload.result ?? "") }],
             is_error: Boolean(payload.is_error),
           };
-    await this.dispatch("posttooluse", {
+    const result = await this.dispatch("posttooluse", {
       tool_name: payload.name,
       tool_input: payload.input,
       tool_use_id: payload.call_id,
       tool_response: response,
       ...this.common(),
     });
+    this.requireSuccess("posttooluse", result);
     await this.captureRequirementAfterInit(payload);
+  }
+
+  /** Wait until every queued Hook write is durable before a turn can settle. */
+  async flush(): Promise<void> {
+    await this.chain;
   }
 
   /** 需求原话是 init 前发的,进不了 ACTIVE 台账(老宿主同样如此,
@@ -115,7 +132,17 @@ export class KernelHost {
     if (!/mae-flow\.py"?\s+init\b/.test(command)) return;
     if (!String(payload.result ?? "").includes("流程已初始化")) return;
     this.requirementCaptured = true;
-    await this.dispatch("userprompt", { prompt: this.requirement });
+    const result = await this.dispatch(
+      "userprompt", { prompt: this.requirement });
+    this.requireSuccess("userprompt(requirement)", result);
+  }
+
+  private requireSuccess(event: string, result: DispatchResult): void {
+    if (!result.infraError && result.code === 0) return;
+    const detail = result.infraError
+      ?? ((result.stdout + "\n" + result.stderr).trim()
+        || `exit ${result.code}`);
+    throw new Error(`内核 ${event} 登记失败: ${detail}`);
   }
 
   private common(): Record<string, unknown> {
@@ -150,23 +177,26 @@ export class KernelHost {
       );
       let stdout = "";
       let stderr = "";
+      let infraError = "";
       child.stdout.setEncoding("utf-8");
       child.stderr.setEncoding("utf-8");
       child.stdout.on("data", (chunk: string) => (stdout += chunk));
       child.stderr.on("data", (chunk: string) => (stderr += chunk));
       const timer = setTimeout(() => {
-        // 对齐 dispatch 自己的看门狗精神:超时按 fail-open 放行并留痕。
-        this.options.log?.(`dispatch ${event} 超时,按 fail-open 放行`);
+        infraError = `dispatch ${event} 超时`;
+        this.options.log?.(`${infraError},当前任务按 fail-closed 停止推进`);
         child.kill("SIGKILL");
       }, this.options.timeoutMs ?? 30_000);
       child.on("close", (code) => {
         clearTimeout(timer);
-        resolve({ code: code ?? 0, stdout, stderr });
+        resolve({ code: code ?? (infraError ? 1 : 0), stdout, stderr,
+                  infraError: infraError || undefined });
       });
       child.on("error", (error) => {
         clearTimeout(timer);
         this.options.log?.(`dispatch ${event} 启动失败: ${String(error)}`);
-        resolve({ code: 0, stdout: "", stderr: String(error) });
+        resolve({ code: 1, stdout: "", stderr: String(error),
+                  infraError: `dispatch ${event} 启动失败: ${String(error)}` });
       });
       // stdin 的 error 必须有人接:子进程若在我们写之前就没了(超时被
       // SIGKILL、python 崩了、管道断了),EPIPE 会作为流上的 error 事件
@@ -174,7 +204,8 @@ export class KernelHost {
       // 掉整个进程**。这是"通知/门禁一条旁路不许带走服务"红线里最不
       // 显眼的一个漏口:它连 Promise 都不经过,catch 拦不住。
       child.stdin.on("error", (error) => {
-        this.options.log?.(`dispatch ${event} 写入失败(fail-open): ${error}`);
+        infraError = `dispatch ${event} 写入失败: ${error}`;
+        this.options.log?.(`${infraError}(当前任务按 fail-closed 停止推进)`);
       });
       child.stdin.write(JSON.stringify(payload) + "\n");
       child.stdin.end();

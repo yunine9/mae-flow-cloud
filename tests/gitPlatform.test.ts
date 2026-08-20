@@ -73,6 +73,12 @@ test("裸仓灌历史 → 克隆 → 推分支 → MR 幂等 → 流水线绑 SH
       method: "POST", body: JSON.stringify({ sha }),
     }).then((r) => readJson(r));
     assert.equal(run.status, "success");
+    assert.deepEqual(
+      run.checks.map((item: { dimension: string }) => item.dimension),
+      ["COMPILE", "UT", "CODECHECK"],
+      "总体绿灯之外必须给内核三项独立事实");
+    assert.ok(run.checks.every((item: { status: string }) =>
+      item.status === "success"));
     const after = (await fetch(`${platform.baseUrl}/mr`)
       .then((r) => readJson(r)))[0];
     assert.equal(after.state, "等待合入");

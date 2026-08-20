@@ -26,6 +26,7 @@ def _state_sidecars():
             STATE_PATH + ".agent-rejections", STATE_PATH + ".agent-evidence",
             STATE_PATH + ".agent-observations", STATE_PATH + ".advisories",
             STATE_PATH + ".quality-executions",
+            STATE_PATH + ".build-milestones",
             AGENT_WRITES_PATH,
             STATE_PATH + ".stop-guard", GATE_STRIKES_PATH, GATE_PERMITS_PATH,
             MOONLIGHT_INTENT_PATH, EXIT_INTENT_PATH, FAILURE_PATH, STATE_PATH + ".tmp"]

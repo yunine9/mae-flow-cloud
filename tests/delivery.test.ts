@@ -1,13 +1,12 @@
 /**
- * Git 交付判定(§10):事实来自远端真实状态,不信任务自述。
- * 三条路:分支已推 → MR+流水线 → 等待合入;流水线红 → 验证中;
- * 分支未推 → 明说原因,不硬造 MR。不需要模型:预焙工作区直接测
- * tryDeliver 的判定(经 TaskService 的私有路径,用最小任务壳驱动)。
+ * Git 交付判定(§10):Agent 只提交，宿主释放会话后推送并反查远端 SHA。
+ * 三条路:host push → MR+流水线 → 等待合入;流水线红 → 验证中;
+ * host push 失败 → 明说原因,不硬造 MR。用最小剧本驱动真实闭环。
  */
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -50,24 +49,49 @@ function makeSourceRepo(knowledge?: Record<string, string>): string {
   return dir;
 }
 
-/** 剧本:在克隆里预焙一笔提交并推送,再伪造内核状态收轮——
- * 交付判定只看远端与状态文件,这样测的就是判定本身。 */
-function walkScript(push: boolean): Scene[] {
-  const doPush = push
-    ? " && git push --quiet origin master_bot_REQ9"
-    : "";
+/** 剧本只在克隆里预焙一笔提交并伪造内核状态收轮。Agent 不 push；
+ * allowHostPush=false 时破坏 origin，专门验证宿主传输失败的留痕。 */
+function walkScript(allowHostPush: boolean): Scene[] {
+  const breakOrigin = allowHostPush
+    ? ""
+    : "git remote set-url origin /nonexistent/mae-flow-host-push && ";
+  return [
+    { tool: { name: "bash", input: { command:
+        breakOrigin +
+        "git config user.email bot@test && git config user.name bot && " +
+        "git checkout --quiet -b master_bot_REQ9 && " +
+        "echo change > a.txt && git add . && " +
+        'git commit --quiet -m "feat: REQ9" && ' +
+        `cat > .mae-flow.json <<'EOF'
+{"schema_version": 2, "current": "end", "revision": 1,
+ "execution_contract": {"schema": "mae-flow-execution/1", "host": "cloud",
+   "compile": "pipeline", "ut_write": "agent", "ut_run": "pipeline",
+   "codecheck": "pipeline", "git_push": "host"},
+ "config": {"分支名": "master_bot_REQ9", "基线分支": "master",
+            "单号": "REQ9"}, "choices": {}, "history": []}
+EOF` } } },
+    { text: "交付完成。" },
+  ];
+}
+
+/** external_verify 是宿主等待点：模型在此结束回合后应立即交给流水线，
+ * 不能被“流程没到 end”催办继续。 */
+function externalWaitScript(): Scene[] {
   return [
     { tool: { name: "bash", input: { command:
         "git config user.email bot@test && git config user.name bot && " +
         "git checkout --quiet -b master_bot_REQ9 && " +
         "echo change > a.txt && git add . && " +
-        'git commit --quiet -m "feat: REQ9"' + doPush + " && " +
+        'git commit --quiet -m "feat: REQ9" && ' +
         `cat > .mae-flow.json <<'EOF'
-{"schema_version": 2, "current": "end", "revision": 1,
+{"schema_version": 2, "current": "external_verify", "revision": 1,
+ "execution_contract": {"schema": "mae-flow-execution/1", "host": "cloud",
+   "compile": "pipeline", "ut_write": "agent", "ut_run": "pipeline",
+   "codecheck": "pipeline", "git_push": "host"},
  "config": {"分支名": "master_bot_REQ9", "基线分支": "master",
             "单号": "REQ9"}, "choices": {}, "history": []}
 EOF` } } },
-    { text: "交付完成。" },
+    { text: "已到宿主流水线等待点。" },
   ];
 }
 
@@ -117,16 +141,32 @@ async function runTask(
   extraScenes: Scene[] = [],
   settings?: RuntimeSettings,
   createExtras?: { repairRounds?: number; ticket?: string },
+  linear = false,
 ) {
-  const model = new ScriptedModelServer([...walkScript(push), ...extraScenes]);
+  const model = new ScriptedModelServer(
+    [...walkScript(push), ...extraScenes], "scripted-v1", { linear });
   await model.start();
   const service = buildService(
     platform, dataDir, model.modelsJson(), poll, settings);
   const created = service.create("交付 REQ9:演练交付链",
     { ticket: "REQ9", ...createExtras });
-  await until(() =>
-    ["completed", "failed", "verifying", "await_merge"]
-      .includes(service.get(created.id)!.status), "任务收口");
+  const effectiveRepairRounds = createExtras?.repairRounds
+    ?? settings?.runtime().repair_rounds ?? poll?.repairRounds;
+  await until(() => {
+    const current = service.get(created.id)!;
+    if (["completed", "failed", "await_merge"].includes(current.status)) {
+      return true;
+    }
+    if (current.status !== "verifying") return false;
+    // running 是稳定的宿主等待态；终态 success/failed 还要等内核登记
+    // 完成，避免在 pipelineVerdict 的异步窗口读到半份 delivery。
+    return current.delivery?.pipeline === "running"
+      || Boolean(current.delivery?.waiting_on)
+      || ["halted", "exhausted"].includes(
+        current.delivery?.loop?.state ?? "")
+      || (effectiveRepairRounds === 0
+        && (current.delivery?.pipeline ?? "").startsWith("failed"));
+  }, "任务收口");
   await model.stop();
   return { task: service.get(created.id)!, service, dataDir };
 }
@@ -143,9 +183,163 @@ test("分支已推+流水线绿 → MR 等待合入", async () => {
     assert.match(task.delivery?.mr_url ?? "", /\/mr\/\d+$/);
     assert.equal(platform.mergeRequests.length, 1);
     assert.equal(platform.mergeRequests[0].target_branch, "master");
+    assert.equal(task.delivery?.git_push?.sha, task.delivery?.sha,
+      "宿主推送收据必须与流水线 SHA 一致");
+    assert.equal(task.delivery?.git_push?.ref,
+      "refs/heads/master_bot_REQ9");
+    assert.equal(platform.branchSha("master_bot_REQ9"), task.delivery?.sha,
+      "推送后必须以远端反查 SHA 为准");
+    const facts = JSON.parse(readFileSync(
+      join(task.workspace, "pipeline-facts.json"), "utf-8"));
+    assert.deepEqual(facts.git_push, task.delivery?.git_push,
+      "内核 facts 必须携带 host push receipt");
     // 单号以独立字段递到平台(--e2e-issues 的原料),不许只活在 title
     assert.equal(platform.mergeRequests[0].e2e_issues, "REQ9");
   } finally {
+    await platform.stop();
+  }
+});
+
+test("总体绿且精确 SHA、无逐项 Job → 按 execution_contract 聚合核销", async () => {
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  platform.omitTypedChecks = true;
+  await platform.start();
+  try {
+    const { task } = await runTask(platform, true);
+    assert.equal(task.delivery?.pipeline, "success");
+    assert.equal(task.status, "await_merge", JSON.stringify(task.delivery));
+    assert.equal(task.delivery?.checks, undefined, "没有伪造逐项 Job");
+    assert.match(task.delivery?.attested ?? "", /^PASS@/);
+  } finally {
+    await platform.stop();
+  }
+});
+
+test("typed check 暂未完成 → 纯宿主同 SHA 自动重试核销，不催 Agent/不重跑", async () => {
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  platform.nextPipelineChecks = [
+    { dimension: "COMPILE", status: "success", job: "compile" },
+    { dimension: "UT", status: "pending", job: "unit-test" },
+    { dimension: "CODECHECK", status: "success", job: "codecheck" },
+  ];
+  await platform.start();
+  try {
+    const { task, service } = await runTask(
+      platform, true, { pollIntervalMs: 80 });
+    assert.equal(task.status, "verifying");
+    assert.match(task.delivery?.attested ?? "", /^INCOMPLETE@/);
+    const sha = task.delivery!.sha!;
+    const requestsBefore = platform.pipelines.length;
+    platform.pipelines[0].checks = [
+      { dimension: "COMPILE", status: "success", job: "compile" },
+      { dimension: "UT", status: "success", job: "unit-test" },
+      { dimension: "CODECHECK", status: "success", job: "codecheck" },
+    ];
+    await until(() => service.get(task.id)!.status === "await_merge",
+      "宿主自动刷新证据并完成核销");
+    const settled = service.get(task.id)!;
+    assert.equal(settled.delivery?.sha, sha);
+    assert.equal(platform.pipelines.length, requestsBefore,
+      "同 SHA 证据重试不得重新触发流水线");
+  } finally {
+    await platform.stop();
+  }
+});
+
+test("总体 success 但 typed UT 失败 → 按内核 RED 进入轻量修复处理", async () => {
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  platform.nextPipelineChecks = [
+    { dimension: "COMPILE", status: "success", job: "compile" },
+    { dimension: "UT", status: "failed", job: "unit-test" },
+    { dimension: "CODECHECK", status: "success", job: "codecheck" },
+  ];
+  await platform.start();
+  try {
+    const { task } = await runTask(
+      platform, true, undefined,
+      mkdtempSync(join(tmpdir(), "mfc-deliver-")), repairScenes(true),
+      undefined, undefined, true);
+    assert.equal(task.status, "await_merge", JSON.stringify(task));
+    assert.equal(platform.pipelines.length, 2,
+      "typed RED 应派一次轻量修复并以新 SHA 重跑流水线");
+    assert.equal(platform.pipelines[0].status, "success",
+      "反例刻意让总体状态为 success");
+    assert.equal(platform.pipelines[0].checks?.find(
+      (item) => item.dimension === "UT")?.status, "failed");
+    assert.notEqual(platform.pipelines[0].sha, platform.pipelines[1].sha);
+    assert.match(task.delivery?.attested ?? "", /^PASS@/);
+  } finally {
+    await platform.stop();
+  }
+});
+
+test("external_verify 是宿主等待点：不催办 Agent，直接触发并核销流水线", async () => {
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  await platform.start();
+  const model = new ScriptedModelServer(externalWaitScript());
+  await model.start();
+  try {
+    const dataDir = mkdtempSync(join(tmpdir(), "mfc-deliver-"));
+    const service = buildService(platform, dataDir, model.modelsJson());
+    const created = service.create("交付 REQ9:宿主等待点", { ticket: "REQ9" });
+    await until(() => service.get(created.id)!.status === "await_merge",
+      "宿主等待点触发流水线并通过内核核销");
+    const task = service.get(created.id)!;
+    assert.equal(platform.pipelines.length, 1);
+    assert.match(task.delivery?.attested ?? "", /^PASS@/);
+    assert.equal(task.delivery?.waiting_on, undefined);
+  } finally {
+    await model.stop();
+    await platform.stop();
+  }
+});
+
+test("旧 SHA 总体绿但 HEAD 已变化 → 先 STALE，再由宿主推新 HEAD 自动再验", async () => {
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  platform.nextPipelineStatus = "running";
+  await platform.start();
+  const model = new ScriptedModelServer(externalWaitScript());
+  await model.start();
+  try {
+    const dataDir = mkdtempSync(join(tmpdir(), "mfc-deliver-"));
+    const service = buildService(platform, dataDir, model.modelsJson(),
+      { pollIntervalMs: 100 });
+    const created = service.create("交付 REQ9:旧结果不背书新 HEAD",
+      { ticket: "REQ9" });
+    await until(() =>
+      service.get(created.id)!.delivery?.pipeline === "running",
+    "宿主已推送旧 SHA 并等待流水线");
+    const before = service.get(created.id)!;
+    const saved = JSON.parse(readFileSync(
+      join(before.workspace, "task.json"), "utf-8"));
+    const cwd = String(saved.cwd);
+    writeFileSync(join(cwd, "local-only.txt"), "newer\n");
+    git(cwd, "add", "local-only.txt");
+    git(cwd, "commit", "--quiet", "-m", "fix: unpushed head");
+    // 旧 SHA 先收敛成 success；宿主发现 STALE 后推新 HEAD，新 SHA
+    // 必须触发自己的流水线，测试明确让第二条同步变绿。
+    platform.nextPipelineStatus = "success";
+    platform.finishPipeline(before.delivery!.sha!, "success");
+    await until(() => Boolean(service.get(created.id)!.delivery?.waiting_on),
+      "内核拒绝旧 SHA");
+    const task = service.get(created.id)!;
+    assert.equal(task.status, "verifying");
+    assert.match(task.delivery?.attested ?? "", /^STALE@/);
+    assert.match(task.delivery?.waiting_on ?? "", /STALE|旧结果不背书/);
+    const requestsAtStale = model.requests.length;
+    await until(() => service.get(created.id)!.status === "await_merge",
+      "STALE 后由宿主推送新 HEAD 并重验");
+    assert.equal(platform.pipelines.length, 2,
+      "新 HEAD 必须有自己绑定的新流水线");
+    assert.equal(model.requests.length, requestsAtStale,
+      "STALE 是宿主等待/重验，不得催 Agent 回来补证据");
+  } finally {
+    await model.stop();
     await platform.stop();
   }
 });
@@ -265,14 +459,15 @@ test("进程可死轮询不死:重启 recover 后继续收敛流水线", async (
   }
 });
 
-/** 修复环剧本:一幕修复提交(可选推送)+ 一幕收口。 */
-function repairScenes(push: boolean): Scene[] {
-  const doPush = push ? " && git push --quiet origin master_bot_REQ9" : "";
+/** 修复环剧本:一幕修复提交(可选)+一幕收口；传输始终归宿主。 */
+function repairScenes(commit: boolean): Scene[] {
+  const command = commit
+    ? "echo fixed >> a.txt && git add . && "
+      + 'git commit --quiet -m "fix: 流水线修复"'
+    : "git status --short";
   return [
     { text: "流水线红了,我来修。",
-      tool: { name: "bash", input: { command:
-        "echo fixed >> a.txt && git add . && " +
-        'git commit --quiet -m "fix: 流水线修复"' + doPush } } },
+      tool: { name: "bash", input: { command } } },
     { text: "修复完成。" },
   ];
 }
@@ -296,7 +491,6 @@ test("交付服务是部署基础设施:固定地址跑通交付", async () => {
       // 刻意不给 repoPath:代码仓由本单明确填写
     },
     delivery: { platformUrl: platform.baseUrl },
-    verifyViaPipeline: true,
   });
   try {
     const id = service.create("交付 REQ9:纯界面配置",
@@ -307,11 +501,12 @@ test("交付服务是部署基础设施:固定地址跑通交付", async () => {
     const task = service.get(id)!;
     assert.equal(task.delivery?.pipeline, "success");
     assert.equal(platform.mergeRequests.length, 1, "MR 打到了部署配置的平台");
-    // 免编译环境事实来自部署形态
+    // Cloud 固有执行契约不依赖可选旗子。
     const opening = JSON.stringify(
       ((model.requests[0] as any).messages ?? [])
         .filter((m: any) => m.role === "user")[0]?.content ?? "");
-    assert.match(opening, /交流水线/);
+    assert.match(opening, /Cloud 执行契约/);
+    assert.match(opening, /权威流水线/);
   } finally {
     await model.stop();
     await platform.stop();
@@ -557,10 +752,9 @@ test("修复环:轮数预算耗尽 → 如实停下请人工", async () => {
   }
 });
 
-test("流水线代行验证:环境事实进每次会话的开场,修复会话也不例外", async () => {
-  // "先不编译了,直接上流水线"(用户拍板)。旗子只做一件事:把环境事实
-  // 告诉模型,别让它在没有构建链的机器上白撞。重建/修复会话没有旧上下文,
-  // 漏带一次它就会再去撞一遍编译——所以断言两个会话都看到了。
+test("Cloud 固有执行契约进每次会话开场,修复会话也不例外", async () => {
+  // Cloud 没有本地质量执行形态。重建/修复会话没有旧上下文，漏带一次
+  // 就可能越过宿主能力边界，所以断言两个会话都看到了同一份契约。
   const platform = new FakeGitPlatform();
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
   platform.statusQueue.push("failed");
@@ -579,7 +773,6 @@ test("流水线代行验证:环境事实进每次会话的开场,修复会话也
       python: "python3",
     },
     delivery: { platformUrl: platform.baseUrl, repairRounds: 2 },
-    verifyViaPipeline: true,
   });
   try {
     const id = service.create("交付 REQ9:流水线代行").id;
@@ -588,9 +781,10 @@ test("流水线代行验证:环境事实进每次会话的开场,修复会话也
       ((model.requests[at] as any).messages ?? [])
         .filter((m: any) => m.role === "user")[0]?.content ?? "");
     // 首跑会话(请求 0)与修复会话(请求 2)的开场都带环境事实
-    assert.match(firstUser(0), /交流水线/);
-    assert.match(firstUser(2), /交流水线/);
-    assert.match(firstUser(2), /没跑就不许报数字/, "免编译形态下不许编数字");
+    assert.match(firstUser(0), /Cloud 执行契约/);
+    assert.match(firstUser(2), /Cloud 执行契约/);
+    assert.match(firstUser(2), /UT skill 只用于指导编写或修改测试/);
+    assert.match(firstUser(2), /不要编造命令、结果、数量或绿灯/);
     assert.match(firstUser(2), /唯一的使命/, "修复使命也在场");
   } finally {
     await model.stop();
@@ -598,14 +792,15 @@ test("流水线代行验证:环境事实进每次会话的开场,修复会话也
   }
 });
 
-test("分支没推 → 不硬造 MR,原因明说", async () => {
+test("宿主推送失败 → 不硬造 MR,停在验证中并说明原因", async () => {
   const platform = new FakeGitPlatform();
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
   await platform.start();
   try {
     const { task } = await runTask(platform, false);
-    assert.equal(task.status, "completed");
-    assert.match(task.delivery?.skipped ?? "", /未推送/);
+    assert.equal(task.status, "verifying");
+    assert.match(task.delivery?.skipped ?? "", /宿主推送失败/);
+    assert.match(task.delivery?.waiting_on ?? "", /尚未逐项通过|权威流水线/);
     assert.equal(platform.mergeRequests.length, 0);
   } finally {
     await platform.stop();

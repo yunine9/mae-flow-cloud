@@ -202,6 +202,12 @@
       "escape": "permit",
       "why": "同 edit-before-workflow(sed -i/重定向写源码绕不过同一条头部纪律)"
     },
+    "edit-ut-preempt": {
+      "kind": "advisory",
+      "tier": "B",
+      "escape": "comply",
+      "why": "编码步新建测试文件是抢跑白费:UT 由 verify_ut 的子 agent 分批生成,主会话手写不计证据(2026-08-20 云端实锤,纯烧 token)。不拦只提醒——修改已有测试是合法的(重构会弄坏旧测试),先建骨架也不该被挡"
+    },
     "bash-compile-task-pending": {
       "kind": "permit",
       "tier": "A",

@@ -23,7 +23,7 @@ class MFParser(argparse.ArgumentParser):
             "其余子命令: status|panel|doctor|report|envcheck|skip|goto|unlock|allow|spec|template|"
             "agent-task|lightcheck|accept-risk|moonlight|action|messages|config-review|requirement-record|"
             "story-localize|local-spec|domain-docs|domain-archive|manifest|codecheck-scan|"
-            "codecheck-scope|codecheck-record|approve-exemption|pipeline|"
+            "codecheck-scope|codecheck-record|approve-exemption|pipeline|milestone|"
             "migrate-flow|exit"
             "(用法见 current/exit 指令)。\n"
             "注意:子命令不带连字符(是 current 不是 --current);"
@@ -250,6 +250,17 @@ def build_parser():
     task = sub.add_parser("agent-task")
     task.add_argument("kind", choices=["compile", "codecheck", "ut"])
     task.add_argument("--scope", help="批次/单告警范围说明；写入受指纹保护的任务卡")
+    milestone = sub.add_parser(
+        "milestone", help="记录 implementation.md 任务的观察进度（不参与门禁）")
+    milestone_actions = milestone.add_subparsers(dest="action", required=True)
+    for action_name in ("start", "complete", "block"):
+        milestone_action = milestone_actions.add_parser(action_name)
+        milestone_action.add_argument("--task", required=True)
+        milestone_action.add_argument("--reason")
+        milestone_action.set_defaults(json=False)
+    milestone_show = milestone_actions.add_parser("show")
+    milestone_show.add_argument("--json", action="store_true")
+    milestone_show.set_defaults(task="", reason="")
     role_task = sub.add_parser("role-task")
     role_task.add_argument("role", choices=[
         "code-review",

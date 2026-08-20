@@ -44,6 +44,8 @@ FLOW_ROUTES = MappingProxyType({
         "cmd_codecheck_record", ("flow", "state", "args")),
     "pipeline": CommandRoute(
         "cmd_pipeline", ("flow", "state", "args")),
+    "milestone": CommandRoute(
+        "cmd_build_milestone", ("flow", "state", "args")),
     "approve-exemption": CommandRoute(
         "cmd_approve_exemption", ("flow", "state", "args")),
     "accept-risk": CommandRoute(

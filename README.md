@@ -155,15 +155,22 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
   收口"要真模型的大会话才成立,假件裁不了**(pi 对小会话一律拒压),
   等真模型试跑现场验。
 
-- **流水线证据口第一期(2026-08-17)**:云端"编译/UT 推迟给流水线"的
-  承诺有了兑现侧——流水线终态时宿主把平台事实(sha/status/来源)喂给
-  内核 `pipeline record`,内核绑工作区 HEAD 裁决(PASS/RED/STALE,
-  旧绿灯不背书新代码)写进 `.mae-flow.json` 的 `quality.pipeline`,
-  任务侧 `delivery.attested` 是镜像戳;内核调不动记"未裁决"留痕不拦
-  收口。**边界**:第一期是物证不是门禁(登记不推动流程步骤);裁决
-  只证"流水线成功且绑本 SHA",**不证流水线里跑了哪些 job**——流水线
-  含编译/UT/CodeCheck stage 仍是部署时的人工确认项(上线自查第 0 条);
-  三个 deferred 内存标记与证据口的逐项核销(待核销清单)是第二期。
+- **Cloud 固有执行契约(2026-08-20 收口)**:云端不再有“本地验证 / 流水线
+  验证”两种形态。每个执行仓的 `.mae-flow-order.json` 都显式写入
+  `execution_contract`（`schema=mae-flow-execution/1`、`host=cloud`）：
+  编译/UT 运行/CodeCheck=`pipeline`，UT 编写=`agent`，并记录本次真正
+  可用的 `UT生成方式`。历史 CLI 旗子
+  `--verify-via-pipeline` 仅兼容旧启动脚本，已弃用且不改变语义。
+  这项契约已经接到真正的交付门禁：Agent 推送后内核停在
+  `external_verify` 宿主等待点，不催 Agent 在本机继续；宿主触发权威
+  流水线，把绑定 SHA 的总体结果和可选 `COMPILE / UT / CODECHECK`
+  checks 喂给内核 `pipeline record`。执行契约已经声明权威流水线覆盖
+  三项，因此精确 SHA 的总体 success 可以聚合核销；逐项 checks 是诊断
+  增强，若明确出现 failed/pending 则优先采用，不会被总体绿灯掩盖。
+  STALE 或登记失败仍 fail-closed 留在 `verifying`，但不会催 Agent 补
+  宿主证据；`delivery.waiting_on` 明说缺口，`delivery.attested` 镜像内核裁决。
+  流水线红灯仍走轻量专职修复 Agent（编译/告警/UT/覆盖率/CodeCheck
+  分诊，一次提交一次 push），不回人工 Diff，也不重跑内核完整质量流程。
 
 - **MR 闭环升级(2026-08-17,对照内网既有框架,docs/mr-loop-adaptation.md)**:
   失败先分类再派单——九项合并门禁进契约(`GET /mr/gates`,可选端点,
@@ -238,8 +245,9 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
   默认仓；模型网关本就在界面。正式部署用 --kernel-mode 开内核模式。
   演示判定改三态(--models > 管理页配过
   模型 > 才算演示),堵住"最小启动每次重启清空数据目录"的雷。
-  **收编快照的新鲜度靠纪律**:发布前跑 sync-kernel.sh,忘了就是旧
-  内核上线——VENDORED 文件记着来源 SHA 供对账;
+  **收编快照的新鲜度已经进入上线自检**:发布前跑 sync-kernel.sh；
+  preflight 会核对 VENDORED 来源 SHA 与兄弟内核 HEAD，并强制用仓内
+  kernel/ 跑 probe。开发测试不能再替旧部署快照“考绿”;
 - **交付方式下单预选 + 月光模式(2026-08-16 拍板,08-18 按内网实战
   改口径)**:交付方式不再让 agent 来问——下单就选,**选项现读内核
   `flow/flow.json`**(完整开发/已定位问题修复/局部修改/处理评审意见);
@@ -256,7 +264,7 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
   (红线管的是"配了容器起不来必须 failed")。三个真实差异:agent 与
   服务同用户,auth.json(全体用户的 Git 令牌明文)/settings.json/
   adapter.json 理论上对它可读;工作区是约定不是物理墙,越界写没有
-  强制拦截;无资源上限。免编译形态收窄了风险面(本机不跑构建,agent
+  强制拦截;无资源上限。Cloud 固有契约收窄了风险面(本机不跑质量执行,agent
   正当活动只有工作区读写+git),单人自用+单任务+人盯着可接受;
   **多人共用的正式部署前容器隔离必须升回必选**——那时 auth.json 里
   躺着全组人的令牌,"agent 可读密钥文件"不再是尾部风险;
@@ -298,10 +306,10 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
   进内网首跑要看三个都是本人:推送身份、commit 归属头像、MR 发起人;
   CodeHub token 是否同时当 push 凭据也要实测(类比 GitHub PAT 是同
   一个;若平台分俩,令牌表单加一格即可,机制不变);
-- **免编译形态可选(2026-08-15,用户拍板"先不编译了,直接上流水线")**:
-  serve 加 `--verify-via-pipeline` 后本机不做编译/UT,每次会话开场注入
-  环境事实,流水线是唯一裁判,红灯走修复环;慢的代价由机器扛,不占人的
-  时间。代价要如实:错误发现得更晚,一轮往返=一次流水线+一次修复会话;
+- **本机质量执行已移除(2026-08-20)**:Cloud 本机只写代码和 UT；编译、
+  UT 运行、CodeCheck 固定交给绑定当前提交 SHA 的权威流水线。每次代码
+  会话都收到同一份简短能力边界，UT skill 只指导测试编写，不承担运行、
+  不证明通过。代价要如实:错误发现更晚，一轮往返=一次流水线+一次修复会话;
 - **CodeCheck 云端不做本地扫描(2026-08-16,用户拍板"lightcheck 保留,
   codecheck 依赖流水线")**:CodeCheck 是内网 npm 件,云端装不上,原来
   每次扫描空撞安装(30 分钟冷却)+ TOOL_ERROR 噪声(task-1 实锤)。
@@ -313,10 +321,9 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
   证据在 `MAE_FLOW_HOST=cloud` 下不再拦 done,CodeCheck 修复轮的"合法
   令牌"同族放开(内核 `host_env.worker_agent_ledger_gates`,测试
   `test_cloud_worker_ledger.py`)。**这意味着"某个子 Agent 真跑过"在云端
-  没有机器证明**;机器把关依赖的是:UTRUN 一类命令令牌(Bash 钩子仍在)、
-  CodeCheck 重扫零信任自述、以及交付点流水线结果绑 SHA。ASKUSER 人工闸
-  不放开;本地 CLI 行为一字不变。流水线证据口(内核读平台 API)尚未建成,
-  建成前 verify_ut 的"真跑过"只有工作区实物(surefire 报告)可查;
+  没有机器证明**;Cloud 不再以本地命令令牌或模型报告代替质量结果，机器
+  把关只认订单里的执行契约与交付点绑定 SHA 的流水线事实。ASKUSER 人工闸
+  不放开;本地 CLI 行为一字不变;
 - **完整交付链已在真模型上全程走通(2026-08-14 run7,GLM@bigmodel,
   fieldtest-java,容器隔离)**:需求→Grill→Spec→Story→编码→质量链→
   交付检视→push→MR→流水线,内核 current=end,任务收口 await_merge,
@@ -328,16 +335,14 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
   (含两张"证据缺口风险卡"——并行派发丢返回登记的实锤,已修:
   pretooluse 随带 tool_use_id,见 tests/kernelHost.test.ts);
 - **本机已无 JDK/mvn(2026-08-14 run7 实测:which mvn 不存在,
-  java 仅剩 macOS 空壳 stub)——早前"本机直接编译已过"的记录失效**,
-  宿主直接编译不可用,编译一律走容器;Linux 容器内验证已过
-  (2026-08-14,Colima arm64 + maven:3.8-eclipse-temurin-8,
-  compile/test 退出码 0、4 UT 全过);x86_64 形态见下条;
+  java 仅剩 macOS 空壳 stub)——早前"本机直接编译已过"的记录失效**。
+  早期用 Linux 构建容器验证过 fieldtest-java，但那只是历史实验，不再是
+  Cloud 运行形态；当前容器只提供任务隔离，质量执行统一在流水线;
 - 任务级恢复已实现(tests/recovery.test.ts):进程可死任务不死——
   重启后 recover() 重建索引,决定走重建会话续跑;pi 侧会话仍是
   inMemory,重建会话不带旧对话上下文,以内核 current 为锚(设计如此);
-- x86_64 Linux 容器验证同样已过(2026-08-14,Colima --arch x86_64
-  QEMU 模拟,同镜像 compile/test 退出码 0、4 UT 全过);内网目标
-  镜像里仍需按部署手册做最终重验;部署准备件见 docs/deploy-intranet.md;
+- x86_64 Linux 构建容器的历史实验同样曾验证通过(2026-08-14)，仅保留
+  为迁移记录，不作为内网部署前置或 Cloud 质量证据;
 - PostgreSQL 投影已接线(projection.ts + serve --pg,主 spec §11):
   摘要/事件副本/外部动作台账三张表,恢复时以现场文件为源重放;
   纯旁路 fail-open——阶段真相仍只在工作区 .mae-flow.json,
@@ -346,7 +351,8 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
   `--isolate-image <镜像>` 后 bash 命令进任务专属容器执行,
   文件工具/门禁/内核 dispatch 留宿主,工作区同路径挂载三方同视;
   容器起不来任务如实 failed 不静默降级;隔离证据有测试
-  (宿主 Darwin、容器内 uname=Linux);资源限额/uid 映射待做;
+  (宿主 Darwin、容器内 uname=Linux)。镜像只需满足运行时与 git 能力，
+  不承载编译/UT/CodeCheck；资源限额/uid 映射待做;
 - 正式 React 前端已起头并接上部署形态(web/:Vite+React+TS,
   类型化 API 层,功能与演示页对齐——列表/发起/审批卡/SSE 过程
   记录/现场面板链接;`web/dist` 存在时 serve 自动托管,--web 可

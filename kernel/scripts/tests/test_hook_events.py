@@ -202,6 +202,71 @@ class HookEventTests(unittest.TestCase):
                     tool, value, moonlight)
                 self.assertEqual(expected, (decision.action, decision.value))
 
+    def test_pi_path_field_is_gated_and_repository_escape_is_blocked(self):
+        with tempfile.TemporaryDirectory() as parent:
+            project = os.path.join(parent, "project")
+            os.makedirs(os.path.join(project, "src"))
+            inside = os.path.join(project, "src", "inside.py")
+            outside = os.path.join(parent, "outside.py")
+
+            pi_write = active_pretool_decision(
+                "Write", {"path": inside}, False, project)
+            legacy_edit = active_pretool_decision(
+                "Edit", {"file_path": "src/legacy.py"}, False, project)
+            inside_read = active_pretool_decision(
+                "Read", {"path": inside}, False, project)
+            traversal = active_pretool_decision(
+                "Write", {"path": "../outside.py"}, False, project)
+            absolute_escape = active_pretool_decision(
+                "Read", {"path": outside}, False, project)
+            link_escape = None
+            try:
+                os.symlink(parent, os.path.join(project, "outside-link"))
+                link_escape = active_pretool_decision(
+                    "Write", {"path": "outside-link/secret.py"},
+                    False, project)
+            except (OSError, NotImplementedError):
+                pass
+
+        self.assertEqual(("gate-edit", inside),
+                         (pi_write.action, pi_write.value))
+        self.assertEqual(("gate-edit", "src/legacy.py"),
+                         (legacy_edit.action, legacy_edit.value))
+        self.assertEqual("allow", inside_read.action)
+        self.assertEqual("block-path", traversal.action)
+        self.assertEqual("block-path", absolute_escape.action)
+        if link_escape is not None:
+            self.assertEqual("block-path", link_escape.action)
+
+    def test_active_adapter_routes_pi_path_to_gate_and_blocks_escape_first(self):
+        calls = []
+        runtime = SimpleNamespace(_contract_state=lambda: {})
+        with tempfile.TemporaryDirectory() as parent:
+            project = os.path.join(parent, "project")
+            os.makedirs(project)
+            adapter = ActiveHookEventAdapter(
+                state=os.path.join(project, ".mae-flow.json"),
+                maeflow_path=os.path.join(ROOT, "scripts", "mae-flow.py"),
+                repository_root=project,
+                maeflow=lambda *args: calls.append(args) or 2,
+                runtime_adapter=runtime,
+                task_card_ports=lambda: None,
+                log=lambda message: None,
+            )
+            protected = adapter.pretool({
+                "tool_name": "Write",
+                "tool_input": {"path": ".mae-flow.json"},
+            })
+            escaped = adapter.pretool({
+                "tool_name": "Read",
+                "tool_input": {"path": "../secret.txt"},
+            })
+
+        self.assertEqual(2, protected.exit_code)
+        self.assertEqual([("gate", "edit", ".mae-flow.json")], calls)
+        self.assertEqual(2, escaped.exit_code)
+        self.assertIn("当前任务仓库", escaped.stderr)
+
     def test_standalone_control_files_and_hook_commands_are_protected(self):
         edit = standalone_pretool_decision(
             "Write",

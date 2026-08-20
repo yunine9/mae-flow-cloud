@@ -45,8 +45,7 @@ function reviewScene(ticket: string, worker: string): Scene {
     `${MAEFLOW} config-review --set 工号=${worker} --set 基线分支=master ` +
     `--set 单号=${ticket} --set 单号类型=REQ ` +
     `--set 需求文档=docs/req/REQ-${ticket}.md ` +
-    `--set "编译方式=mvn -B -q compile" --set UT生成方式=java-autout ` +
-    `--set "UT运行命令=mvn -B test"` } } };
+    `--set UT生成方式=java-autout` } } };
 }
 
 function openingScenes(ticket: string): Scene[] {
@@ -105,6 +104,7 @@ async function runWalk(
   script: Scene[],
   requirement: string,
   answersPerCard: Array<Record<string, string>>,
+  expectedCurrent?: RegExp,
 ): Promise<{ state: any; transcript: string; cards: string[] }> {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-reject-"));
   const model = new ScriptedModelServer(script);
@@ -120,6 +120,14 @@ async function runWalk(
       answersPerCard);
     await until(() => {
       const now = service.get(created.id)!;
+      if (expectedCurrent && now.status === "failed") {
+        const statePath = join(
+          dataDir, created.id, "mae-flow-fieldtest-java", ".mae-flow.json");
+        if (!existsSync(statePath)) return false;
+        const current = String(JSON.parse(
+          readFileSync(statePath, "utf-8")).current ?? "");
+        if (expectedCurrent.test(current)) return now;
+      }
       if (now.status === "failed") throw new Error(now.detail);
       return now.status === "completed" ? now : undefined;
     }, "任务收口");
@@ -159,6 +167,7 @@ test("配置打回:否定答案不是背书,重审后才准推进", {
       { "上述完整配置是否正确?": "需要修改", "交付方式?": "完整开发" },
       { "上述完整配置是否正确?": "确认以上全部配置", "交付方式?": "完整开发" },
     ],
+    /^code_reviewer_ask$/,
   );
   assert.equal(cards.length, 2, "打回必须引出第二张配置卡");
   // 推进标记只许出现一次,且必须在第二张卡(重审)的工具行之后——
@@ -207,6 +216,7 @@ test("交付方式分叉:hotfix/tweak/review 各入各链", {
           "交付方式?": route.answer },
         { "是否启用独立 CODE Reviewer?": "不启用" },
       ],
+      route.expect,
     );
     assert.match(String(state.current), route.expect,
       `${route.choice} 应入 ${route.expect},实际 ${state.current}`);

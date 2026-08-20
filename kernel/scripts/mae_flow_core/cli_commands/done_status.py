@@ -11,6 +11,7 @@ from .quality_routing import (
     _done_transition_to_recheck,
 )
 from .wiring import api
+from mae_flow_core.cli_commands.approval_subject import subject_matches
 
 def _done_pending_config(step, st, args, sid):
     review = st.get("config_review") if sid == "config_confirm" else None
@@ -49,6 +50,17 @@ def _done_pending_config(step, st, args, sid):
 
 
 def _done_validate_choice_and_ack(step, st, args, sid):
+    if step.get("approval_subject") and not api._moonlight(st):
+        previous_subject = dict(st.get("approval_subject") or {})
+        ok, why = subject_matches(os.getcwd(), st, sid, step)
+        if not ok:
+            # subject_matches rotates a missing/stale subject in-memory.  Save
+            # it before returning the recoverable error so the next human card
+            # is already bound to the new stable content; no Agent loop through
+            # current/reasoning is needed merely to mint another identifier.
+            if st.get("approval_subject") != previous_subject:
+                api.save_state(st)
+            api.die(why, 2)
     error = workflow_completion.choice_error(step, args.choice)
     if error:
         api.die(error, 2)
@@ -200,6 +212,7 @@ def cmd_done(flow, st, args):
     _done_commit_inputs(step, st, args, sid, pending_config)
     _done_guard_branch(st, sid)
     _done_resolve_moonlight_branch(flow, st, sid)
+    api._done_prepare_external_verification(step, st, sid)
     _done_require_evidence(step, st, args, sid)
     if _done_route_quality_changes(flow, st, sid, step):
         return

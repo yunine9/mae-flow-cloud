@@ -4,7 +4,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -71,13 +71,13 @@ test("transcript:未绑定子会话拒收;绑定后落到确定性路径", () =>
   assert.throws(() => store.record(
     event(1, "assistant_message", { text: "hi" }, "S9")));
   store.record(event(1, "agent_spawned", {
-    call_id: "toolu-7", agent_type: "compile-agent",
-    description: "编译", prompt: "去编译", child_session_id: "S2",
+    call_id: "toolu-7", agent_type: "ut-generator-agent",
+    description: "编写单元测试", prompt: "只写测试", child_session_id: "S2",
   }));
   assert.match(store.childPath("S2"), /subagents\/agent-toolu-7\.jsonl$/);
-  store.record(event(2, "assistant_message", { text: "COMPILE_RESULT: PASS" }, "S2"));
+  store.record(event(2, "assistant_message", { text: "UT_WRITE_RESULT: DONE" }, "S2"));
   const child = readFileSync(store.childPath("S2"), "utf-8");
-  assert.match(child, /COMPILE_RESULT/);
+  assert.match(child, /UT_WRITE_RESULT/);
 });
 
 test("门禁:路由与 fail-open", () => {
@@ -100,4 +100,69 @@ test("门禁:路由与 fail-open", () => {
   assert.equal(new GateService().decide(event(1, "tool_requested", {
     call_id: "c1", name: "Task", input: {},
   })).action, "agent");
+});
+
+test("门禁:Pi 文件工具的 path 与旧宿主 file_path 走同一契约", () => {
+  const calls: Array<{ tool: string; value: string }> = [];
+  const gate = new GateService({
+    contract: (tool, value) => {
+      calls.push({ tool, value });
+      return undefined;
+    },
+  });
+
+  for (const [tool, input] of [
+    ["Read", { path: "src/read.ts" }],
+    ["Write", { path: ".mae-flow.json" }],
+    ["Edit", { file_path: "src/legacy.ts" }],
+  ] as const) {
+    assert.equal(gate.decide(event(1, "tool_requested", {
+      call_id: "c1", name: tool, input,
+    })).action, "allow");
+  }
+
+  assert.deepEqual(calls, [
+    { tool: "Read", value: "src/read.ts" },
+    { tool: "Write", value: ".mae-flow.json" },
+    { tool: "Edit", value: "src/legacy.ts" },
+  ]);
+});
+
+test("门禁:文件工具只能访问任务工作区且不跟随软链逃逸", () => {
+  const parent = mkdtempSync(join(tmpdir(), "mfc-gate-"));
+  const workspace = join(parent, "workspace");
+  mkdirSync(join(workspace, "src"), { recursive: true });
+  let hasOutsideLink = true;
+  try {
+    symlinkSync(parent, join(workspace, "outside-link"), "dir");
+  } catch {
+    hasOutsideLink = false;
+  }
+  const calls: string[] = [];
+  const gate = new GateService({
+    workspace,
+    contract: (_tool, value) => {
+      calls.push(value);
+      return undefined;
+    },
+  });
+  const decide = (tool: string, path: string) => gate.decide(
+    event(1, "tool_requested", {
+      call_id: "c1", name: tool, input: { path },
+    }),
+  );
+
+  assert.equal(decide("Write", "src/new.ts").action, "allow");
+  assert.equal(decide("Read", join(workspace, "src")).action, "allow");
+  assert.equal(decide("Edit", "../outside.ts").action, "deny");
+  assert.equal(decide("Read", join(parent, "secret.txt")).action, "deny");
+  assert.equal(gate.decide(event(1, "tool_requested", {
+    call_id: "c2", name: "Write", input: {
+      path: "src/safe.ts", file_path: join(parent, "hidden.ts"),
+    },
+  })).action, "deny");
+  if (hasOutsideLink) {
+    assert.equal(decide("Write", "outside-link/new.ts").action, "deny");
+  }
+  assert.deepEqual(calls, ["src/new.ts", join(workspace, "src")]);
 });

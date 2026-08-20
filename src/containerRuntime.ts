@@ -29,7 +29,7 @@ export class TaskContainer {
      * 崩溃留下的孤儿不累积。 */
     readonly name: string,
     private log?: (message: string) => void,
-    /** 额外挂载("宿主:容器"),如构建缓存 ~/.m2/repository——
+    /** 额外挂载("宿主:容器"),如只读工具或运行时目录——
      * 没有它每个任务都从零下依赖。 */
     private volumes: string[] = [],
     /** 资源限额与身份映射(设计文档后续项):memory 如 "2g"、

@@ -4,11 +4,14 @@ from mae_flow_core.foundation import source_paths
 
 from .shared import (
     AGENT_WRITES_PATH, CapabilityError, EXIT_PATH, STATE_PATH, atomic_write_json,
-    capability_diagnostics, ensure_codecheck, json, os, prepare_project,
-    remove_with_retry, run_comet, run_openspec, sys, time,
+    capability_diagnostics, ensure_codecheck, json, load_order_facts, os,
+    prepare_project, remove_with_retry, run_comet, run_openspec, sys, time,
 )
 from .wiring import api
 from mae_flow_core import host_env
+from mae_flow_core.workflow.execution_contract import (
+    resolve_execution_contract,
+)
 
 def _drop_round_residue():
     """过程区里按步骤命名的残留必须跟着新一轮一起清——换单会同名撞上。"""
@@ -122,8 +125,17 @@ def cmd_init(flow, args):
     # 从现场保护里摘掉它们是有风险的,而体积问题第一档就解决了。
     dirty = [path for path in api._dirty_paths()
              if not source_paths.is_tool_managed_path(path)]
+    order_facts, order_warning = load_order_facts()
+    if order_warning:
+        print(order_warning)
+    try:
+        execution_contract = resolve_execution_contract(
+            order_facts, host_env.host_kind())
+    except ValueError as exc:
+        api.die("下单执行契约无效，尚未创建流程状态：%s" % exc, 2)
     st = {"current": flow["start"], "config": {}, "choices": {},
           "protocols": {},
+          "execution_contract": execution_contract,
           "history": [], "started": time.strftime("%Y-%m-%d %H:%M:%S"),
           "initial_dirty": dirty,
           "initial_dirty_fingerprints": {p: api._path_fingerprint(p) for p in dirty}}

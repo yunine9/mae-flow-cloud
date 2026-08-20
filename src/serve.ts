@@ -37,12 +37,12 @@ const REPO_ROOT = resolve(fileURLToPath(import.meta.url), "..", "..");
 muzzleBrokenPipes();
 
 const DEMO_SCRIPT: Scene[] = [
-  { text: "先跑专项编译",
-    tool: { name: "bash", input: { command: "echo BUILD SUCCESS" } } },
+  { text: "先确认工作区状态",
+    tool: { name: "bash", input: { command: "git status --short" } } },
   { tool: { name: "AskUserQuestion",
-            input: { questions: [{ question: "未提交 Diff 通过吗?",
+            input: { questions: [{ question: "当前改动可以继续交付吗?",
                                    options: ["通过", "打回"] }] } } },
-  { text: "COMPILE_RESULT: PASS 按决定继续交付" },
+  { text: "已按你的决定继续交付。" },
 ];
 
 /**
@@ -364,23 +364,20 @@ async function main(): Promise<void> {
     lubanHeaders[header.slice(0, at).trim()] = header.slice(at + 1).trim();
   }
 
-  // 容器隔离:--isolate-image <镜像> 让 bash 命令进任务专属容器
-  // (镜像按试点仓选,Java 仓即 maven:3.8-eclipse-temurin-8)。
+  // 容器隔离:--isolate-image <镜像> 让 bash 命令进任务专属容器。
+  // 它提供安全边界，不承担编译、UT 运行或 CodeCheck。
   const isolateImage = flag("--isolate-image");
   if (isolateImage) console.log(`[serve] 容器隔离: ${isolateImage}`);
 
-  // --verify-via-pipeline:本地不做编译/UT,流水线是唯一裁判。
-  // 适用于宿主没有构建链、也不想供养容器镜像的部署形态——慢的代价
-  // 由修复环扛(红灯自动派修复会话),不占人的时间。
-  const verifyViaPipeline = has("--verify-via-pipeline");
-  if (verifyViaPipeline) {
-    // 验证形态与交付服务都由部署固定注入；没平台时拒绝启动，不假绿。
-    if (!delivery) {
-      console.error("[serve] --verify-via-pipeline 需要流水线在场:"
-        + "请同时配 --platform 或 --fake-platform,否则没人裁判。");
-      process.exit(2);
-    }
-    console.log("[serve] 本地验证关闭:编译/UT 交由流水线,红灯走修复环");
+  // 历史开关仅保留命令行兼容。Cloud 从现在起只有一种执行语义：
+  // 本机编写代码/UT，编译、UT 运行、CodeCheck 一律交给流水线。
+  if (has("--verify-via-pipeline")) {
+    console.warn("[serve] --verify-via-pipeline 已弃用并被忽略:"
+      + "Cloud 已固定由流水线执行编译、UT 运行与 CodeCheck");
+  }
+  if (host) {
+    console.log("[serve] Cloud 执行契约:本机编写代码/UT;"
+      + "编译、UT 运行、CodeCheck 由流水线执行");
   }
 
   // 提交信息规范:平台 pre-receive 钩子按正则拒收不合规提交(内网
@@ -402,7 +399,6 @@ async function main(): Promise<void> {
     contract: demoContract,
     host,
     delivery,
-    verifyViaPipeline,
     commitConvention,
     isolation: isolateImage
       ? {

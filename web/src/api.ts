@@ -269,6 +269,21 @@ export interface WaitingQuestion {
   options?: string[];
 }
 
+export interface TaskProgress {
+  phases: string[];
+  current_index: number;
+  current_phase: string;
+  step?: string;
+  revision?: number;
+  /** 子任务里程碑由服务端透传；缺席时沿用原有阶段进度展示。 */
+  milestone?: {
+    task_id: string;
+    title: string;
+    event: "started" | "completed" | "blocked";
+    reason?: string;
+  };
+}
+
 export interface TaskSummary {
   id: string;
   title?: string;
@@ -318,13 +333,7 @@ export interface TaskSummary {
       diagnosis?: string;
     };
   };
-  progress?: {
-    phases: string[];
-    current_index: number;
-    current_phase: string;
-    step?: string;
-    revision?: number;
-  };
+  progress?: TaskProgress;
   control?: {
     last_action: "pause" | "resume" | "cancel";
     actor: string;

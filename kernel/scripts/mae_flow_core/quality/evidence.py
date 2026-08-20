@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from ..foundation.models import EvidenceResult
 from ..workflow.evidence import legacy_result
 from .. import host_env
+from .external_verification import obligations_passed
 
 
 @dataclass(frozen=True)
@@ -54,20 +55,41 @@ class QualityEvidenceRules:
         accepted, _why = self.ports.risk_acceptance("UT", state)
         if accepted:
             return EvidenceResult(True, "")
-        # 云端宿主:批次记账靠"上一批 agent 返回"推进,而返回台账在云端
-        # 恒不可见——批次永远走不到 final,这里就是死循环的第二道闸。
-        # 随子会话台账一起放开;机器把关在交付点由流水线(绑 SHA)接手。
-        if not host_env.worker_agent_ledger_gates():
-            return EvidenceResult(
-                True, "云端宿主:UT 批次记账不作门禁,交付点流水线核对")
         session = state.get("ut_session") or {}
+        expected_phase = (
+            "external" if not host_env.unit_tests_run_locally(state)
+            else "final")
+        if expected_phase == "external" and session.get("output_missing"):
+            return EvidenceResult(
+                False,
+                "UT 编写 Agent 已返回，但没有可核对的测试产物：既没有"
+                "inspected_existing 审计收据，也没有新增/修改测试文件。"
+                "已有测试充分时应真实读取并复用；存在缺口时才补测试。"
+                "Skill 只出现在提示词里不算完成。",
+            )
         if (session.get("step") != state.get("current")
-                or session.get("phase") != "final"):
+                or session.get("phase") != expected_phase
+                or (expected_phase == "external"
+                    and not session.get("complete"))):
             return EvidenceResult(
                 False, "UT 自适应生成批尚未全部完成；按 current 继续下一批，"
-                "最后必须签发并完成全量收口批。"
+                + ("全部编写批完成后由权威流水线执行，不再签发本地运行批。"
+                   if expected_phase == "external" else
+                   "最后必须签发并完成全量收口批。")
                 + _ut_loop_hint(session))
+        if expected_phase == "external":
+            return EvidenceResult(True, "UT 编写批已完成；UT 运行等待权威流水线")
         return legacy_result(self.ports.agent_ran({"agent": "UT"}, state))
+
+    def pipeline_obligations_passed(self, _spec, state):
+        passed, reason = obligations_passed(state, self.ports.git_head())
+        if passed:
+            return EvidenceResult(True, "")
+        return EvidenceResult(
+            False,
+            (reason or "权威流水线尚未全部通过")
+            + "。本步由宿主自动处理，不要用 done、skip 或口头确认绕过。",
+        )
 
     def _scan_cache_result(self, state, files):
         scan = (state.get("quality", {}) or {}).get(

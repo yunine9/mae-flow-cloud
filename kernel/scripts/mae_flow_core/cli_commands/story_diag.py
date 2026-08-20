@@ -2,7 +2,13 @@
 
 import tempfile
 
+from mae_flow_core import host_env
 from mae_flow_core.adapters.hook_diagnostics import recent_hook_anomalies
+from mae_flow_core.workflow.execution_contract import (
+    effective_config_keys,
+    uses_pipeline,
+    validation_environment,
+)
 
 from .shared import (
     COMET_COMPAT_BEGIN, FAILURE_PATH, GATE_STRIKES_PATH, GATE_STRIKE_LIMIT, STATE_PATH,
@@ -225,8 +231,22 @@ def cmd_doctor(flow, st, args):
     ef = api.run_env_checks()
     print(("✅ 插件运行时: 完整" if not ef else
            "❌ 插件运行时不完整: " + "、".join(ef)))
-    for k in ("单号", "编译方式", "UT生成方式"):
-        print(("✅" if st["config"].get(k) else "❌") + f" 配置 {k}: {st['config'].get(k, '缺失')}")
+    config_step = (flow.get("steps", {}) or {}).get("config_confirm", {})
+    declared = config_step.get("require_sets")
+    visible_keys = set(effective_config_keys(
+        config_step, st, host_env.host_kind())) if declared else {
+            "单号", "编译方式", "UT生成方式"
+        }
+    for key in ("单号", "编译方式", "UT生成方式"):
+        if key not in visible_keys:
+            continue
+        label = "UT 编写方式" if key == "UT生成方式" else key
+        value = st["config"].get(key)
+        print(("✅" if value else "❌")
+              + f" 配置 {label}: {value or '缺失'}")
+    if uses_pipeline(st, host_env.host_kind()):
+        print("✅ 验证环境: %s（只读，由部署执行契约决定）" %
+              validation_environment(st, host_env.host_kind()))
     if step.get("tests_only"):
         tp = api._test_patterns(st)
         if tp:

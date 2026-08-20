@@ -24,6 +24,7 @@ from .cli_commands import standalone_commands as _standalone_commands
 from .cli_commands import direct_reentry as _direct_reentry
 from .cli_commands import init_capability as _init_capability
 from .cli_commands import advancement as _advancement
+from .cli_commands import external_prepare as _external_prepare
 from .cli_commands import done_status as _done_status
 from .cli_commands import gate_permit_state as _gate_permit_state
 from .cli_commands import spec as _spec
@@ -32,6 +33,7 @@ from .cli_commands import agent_task as _agent_task
 from .cli_commands import role_task as _role_task
 from .cli_commands import codecheck_commands as _codecheck_commands
 from .cli_commands import pipeline_commands as _pipeline_commands
+from .cli_commands import build_milestones as _build_milestones
 from .cli_commands import story_diag as _story_diag
 from .cli_commands import moonlight_commands as _moonlight_commands
 from .cli_commands import lifecycle as _lifecycle
@@ -120,6 +122,7 @@ _COMMAND_MODULES = (
     _direct_reentry,
     _init_capability,
     _advancement,
+    _external_prepare,
     _done_status,
     _gate_permit_state,
     _spec,
@@ -128,6 +131,7 @@ _COMMAND_MODULES = (
     _role_task,
     _codecheck_commands,
     _pipeline_commands,
+    _build_milestones,
     _story_diag,
     _moonlight_commands,
     _lifecycle,

@@ -6,7 +6,6 @@
 #
 # 用法(在 mae-flow-cloud 仓根执行):
 #   harness/preflight.sh                      # 只跑本机可判的项
-#   harness/preflight.sh --java-repo <dir>    # 加:容器内 mvn 编译验证
 #   harness/preflight.sh --models <json> --provider <名>
 #                                             # 加:网关连通(1 token 探针)
 #
@@ -21,10 +20,9 @@ ok()   { echo "✅ $1"; PASS=$((PASS+1)); }
 bad()  { echo "❌ $1"; FAIL=$((FAIL+1)); }
 skip() { echo "⏭️  $1"; SKIP=$((SKIP+1)); }
 
-JAVA_REPO=""; MODELS=""; PROVIDER=""; ISOLATE_IMAGE=""; ADAPTER=""
+MODELS=""; PROVIDER=""; ISOLATE_IMAGE=""; ADAPTER=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --java-repo)     JAVA_REPO=$2;     shift 2 ;;
     --models)        MODELS=$2;        shift 2 ;;
     --provider)      PROVIDER=$2;      shift 2 ;;
     --isolate-image) ISOLATE_IMAGE=$2; shift 2 ;;
@@ -35,33 +33,44 @@ done
 
 echo "== 上线自查 =="
 
-# 1. 容器内编译验证(目标镜像里跑才算数;外部这里是模拟演练)
-if [ -n "$JAVA_REPO" ] && command -v docker >/dev/null; then
-  if docker run --rm -v "$(cd "$JAVA_REPO" && pwd)":/src -w /src \
-       maven:3.8-eclipse-temurin-8 \
-       bash -c 'mvn -B -q clean compile && mvn -B -q clean test' \
-       > /tmp/preflight-mvn.log 2>&1; then
-    ok "1. 容器内 mvn compile+test 退出码 0"
+# 0. 收编内核新鲜度。开发机默认优先使用兄弟目录里的活内核，若不在
+# 发布前单独核对，最危险的假绿就是“测试跑的是新内核，部署包带的却
+# 是旧快照”。有兄弟内核时同时要求 HEAD 一致且工作树干净；部署机没
+# 有兄弟仓时至少校验来源元数据，后面的 probe 再强制使用仓内快照。
+VENDORED_FILE="kernel/VENDORED"
+VENDORED_SHA=""
+if [ -f "$VENDORED_FILE" ]; then
+  VENDORED_SHA=$(sed -n 's/^来源: mae-flow@//p' "$VENDORED_FILE" | head -n 1)
+fi
+if ! printf '%s' "$VENDORED_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+  bad "0. 仓内内核快照缺少有效来源 SHA(harness/sync-kernel.sh 刷新)"
+elif [ -d "../mae-flow/.git" ]; then
+  LIVE_SHA=$(git -C ../mae-flow rev-parse HEAD 2>/dev/null || true)
+  LIVE_DIRTY=$(git -C ../mae-flow status --porcelain 2>/dev/null || true)
+  if [ -n "$LIVE_DIRTY" ]; then
+    bad "0. 兄弟内核有未提交改动，收编快照无法代表当前测试内容"
+  elif [ "$VENDORED_SHA" != "$LIVE_SHA" ]; then
+    bad "0. 仓内内核快照落后(运行 harness/sync-kernel.sh 后再发布)"
   else
-    bad "1. 容器内 mvn 失败(日志 /tmp/preflight-mvn.log)"
+    ok "0. 仓内内核快照与 mae-flow HEAD 一致(${VENDORED_SHA%????????????????????????????})"
   fi
 else
-  skip "1. 容器内编译验证:给 --java-repo 且装 docker 后执行;内网在目标镜像里做最终裁决"
+  ok "0. 仓内内核快照来源可追溯(${VENDORED_SHA%????????????????????????????})"
 fi
 
-# 1.5 隔离镜像体检(run7 教训:python3/git 是转发壳与提交链的硬
-# 依赖,构建链按试点仓;镜像缺件要在上线前炸出来,不能等模型发现)
+# 1. 隔离镜像体检：容器只提供安全边界，python3/git 是转发壳与提交链
+# 的硬依赖；编译、UT 运行和 CodeCheck 不在这里执行。
 if [ -n "$ISOLATE_IMAGE" ] && command -v docker >/dev/null; then
   if docker run --rm "$ISOLATE_IMAGE" sh -lc \
        'command -v python3 && command -v git' > /tmp/preflight-image.log 2>&1; then
-    ok "1.5 隔离镜像含 python3+git($ISOLATE_IMAGE)"
+    ok "1. 隔离镜像含 python3+git($ISOLATE_IMAGE)"
   else
-    bad "1.5 隔离镜像缺 python3/git(转发壳跑不了;日志 /tmp/preflight-image.log)"
+    bad "1. 隔离镜像缺 python3/git(转发壳跑不了;日志 /tmp/preflight-image.log)"
   fi
 elif [ -n "$ISOLATE_IMAGE" ]; then
-  bad "1.5 给了 --isolate-image 但本机没有 docker"
+  bad "1. 给了 --isolate-image 但本机没有 docker"
 else
-  skip "1.5 隔离镜像体检:给 --isolate-image 后执行"
+  skip "1. 隔离镜像体检:给 --isolate-image 后执行"
 fi
 
 # 2. 全量测试
@@ -90,11 +99,12 @@ else
   skip "2.6 web 构建:先在 web/ 执行 npm install"
 fi
 
-# 3. probe 整链演练(内核裁判在场)
-if npm run probe > /tmp/preflight-probe.log 2>&1; then
-  ok "3. probe 九项事实全绿(内核裁判)"
+# 3. probe 整链演练。这里故意覆盖发现顺序，强制使用发布包里的
+# kernel/，不能再让兄弟活内核替旧快照把上线自检“考绿”。
+if MAE_FLOW_HOME="$PWD/kernel" npm run probe > /tmp/preflight-probe.log 2>&1; then
+  ok "3. probe 九项事实全绿(仓内收编内核裁判)"
 else
-  bad "3. probe 失败(日志 /tmp/preflight-probe.log)"
+  bad "3. 仓内收编内核 probe 失败(日志 /tmp/preflight-probe.log)"
 fi
 
 # 4. 网关连通(1 token 探针:验证地址与鉴权,不烧正经额度)

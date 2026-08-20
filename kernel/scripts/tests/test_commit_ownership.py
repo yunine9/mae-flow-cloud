@@ -72,6 +72,86 @@ class CommitOwnershipTests(unittest.TestCase):
             "initial_dirty": [], "initial_dirty_fingerprints": {},
         }
 
+    def red_repair_state(self, baseline_dirty=()):
+        state = self.state(current="external_verify")
+        head = git(self.repo, "rev-parse", "HEAD")
+        state["quality"] = {"external_verification": {
+            "verdict": "RED", "sha": head,
+        }}
+        state["external_repair_authorization"] = {
+            "schema": "mae-flow-external-repair/1",
+            "status": "ready",
+            "failed_sha": head,
+            "issued_at": "2026-08-20 12:00:00",
+            "baseline_dirty": list(baseline_dirty),
+        }
+        # Deliberately stale human manifest: the RED repair may need a new test
+        # file, but must not manufacture another human Diff review round.
+        state["delivery_manifest"] = {
+            "files": ["README.md"],
+            "commit_message": "[REQ123][fix]original delivery",
+            "target_branch": "main",
+            "adopted_dirty": {},
+            "confirmed": True,
+        }
+        return state
+
+    def test_external_red_allows_one_exact_lightweight_repair_commit(self):
+        repair = "src/pipeline_fix.py"
+        write(self.repo, repair, "fixed = True\n")
+        mf.save_state(self.red_repair_state())
+        command = (
+            'git add -- "%s" && '
+            'git commit -m "[REQ123][fix]pipeline repair"' % repair
+        )
+
+        allowed = self.gate_bash(command)
+
+        self.assertEqual(0, allowed.returncode, allowed.stdout + allowed.stderr)
+        git(self.repo, "add", "--", repair)
+        git(self.repo, "commit", "-qm", "[REQ123][fix]pipeline repair")
+        # HEAD changed, so the failed-SHA capability consumed itself.  A later
+        # change falls back to the human manifest instead of silently widening.
+        later = "src/later.py"
+        write(self.repo, later, "later = True\n")
+        blocked = self.gate_bash(
+            'git add -- "%s" && git commit -m "[REQ123][fix]later"' % later)
+        self.assertNotEqual(0, blocked.returncode)
+        self.assertIn("用户确认清单", blocked.stdout + blocked.stderr)
+
+    def test_external_red_never_adopts_startup_or_pre_red_dirt(self):
+        startup = "docs/user-before.txt"
+        before_red = "src/pre_red.py"
+        repair = "src/pipeline_fix.py"
+        write(self.repo, startup, "mine\n")
+        write(self.repo, before_red, "ambiguous\n")
+        state = self.red_repair_state((before_red,))
+        self.mark_initial(state, startup)
+        write(self.repo, repair, "fixed = True\n")
+        mf.save_state(state)
+        command = (
+            'git add -- "%s" "%s" "%s" && '
+            'git commit -m "[REQ123][fix]pipeline repair"'
+            % (repair, startup, before_red)
+        )
+
+        blocked = self.gate_bash(command)
+
+        output = blocked.stdout + blocked.stderr
+        self.assertNotEqual(0, blocked.returncode, output)
+        self.assertIn(startup, output)
+        self.assertIn(before_red, output)
+
+    def test_external_red_still_rejects_broad_staging(self):
+        write(self.repo, "src/pipeline_fix.py", "fixed = True\n")
+        mf.save_state(self.red_repair_state())
+
+        blocked = self.gate_bash(
+            'git add -A && git commit -m "[REQ123][fix]pipeline repair"')
+
+        self.assertNotEqual(0, blocked.returncode)
+        self.assertIn("精确暂存", blocked.stdout + blocked.stderr)
+
     def test_digest_free_compile_task_uses_real_lifecycle_execution_fact(self):
         task = {"step": "build", "task_files": ["src/a.cpp"]}
 

@@ -10,6 +10,7 @@ EXPECTED_STEPS = {
         "build_rework",
         "verify_recompile",
         "verify_post_ponytail_compile",
+        "verify_codecheck_compile",
         "quality_recompile",
     },
     "CODECHECK": {
@@ -83,6 +84,7 @@ def task_record(
     at,
     ut_phase="",
     agent_write_receipts=None,
+    ut_artifact_contract=None,
 ):
     record = {
         "step": step,
@@ -107,5 +109,6 @@ def task_record(
         "at": at,
         "ut_phase": str(ut_phase or ""),
         "agent_write_receipts": dict(agent_write_receipts or {}),
+        "ut_artifact_contract": dict(ut_artifact_contract or {}),
     }
     return record
