@@ -400,6 +400,18 @@ test("下单即校验:不存在的模型、负预算、带密码的仓地址,当
     /不许携带账号密码/);
   assert.throws(() =>
     service.create("x", { repo: "https://a b/r.git" }), /空白字符/);
+  // SSH 地址下单即拒(内网实锤:宿主凭据链是 HTTPS 令牌,SSH 推送必然
+  // publickey 拒绝,还死在整轮流程跑完之后)。两种写法都要认得出。
+  assert.throws(() =>
+    service.create("x", {
+      repo: "ssh://szv-y.codehub.corp:2222/MAE-M/Access/SONService.git" }),
+    /请填 HTTPS 地址/);
+  assert.throws(() =>
+    service.create("x", { repo: "git@codehub.corp:MAE-M/r.git" }),
+    /请填 HTTPS 地址/);
+  // 本地路径(演练/试跑的假件形态)不能被 SSH 拦截误伤
+  assert.doesNotThrow(() =>
+    service.create("x", { repo: "/tmp/bare-repo.git" }));
 
   // 没接内核模式:仓字段整个不该出现(enabled=false),硬塞就打回
   const bald = new TaskService({

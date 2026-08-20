@@ -1372,6 +1372,18 @@ export class TaskService {
         throw new Error("本部署未接内核模式,任务不克隆代码仓");
       }
       if (/\s/.test(candidate)) throw new Error("代码仓地址不能含空白字符");
+      // SSH 地址当场拒(2026-08-21 内网实锤):宿主的凭据链整个是 HTTPS
+      // 形态(个人令牌 + credential.helper),SSH 走 key pair,平台没有
+      // 也不该有私钥——clone 可能靠机器上的只读 key 侥幸成功,推送必然
+      // Permission denied (publickey),而且死在整轮流程跑完之后。
+      // 不做自动换写:实测 SSH 与 HTTPS 的域名都可能不同
+      // (szv-y.codehub… vs codehub-y…),机械换 scheme 造出的地址更坑人。
+      if (/^(?:ssh:\/\/|git\+ssh:\/\/|[\w.-]+@[\w.-]+:)/i.test(candidate)) {
+        throw new Error(
+          `代码仓请填 HTTPS 地址(收到 SSH 形式: ${candidate})。`
+          + `宿主推送与 MR 用个人令牌走 HTTPS,SSH 没有可用凭据,`
+          + `会在交付推送时 Permission denied`);
+      }
       if (/^https?:\/\//i.test(candidate)) {
         // 明文凭据拼 URL 是我们刚堵死的洞,这里不许再开:
         // 鉴权走个人令牌的 credential helper,URL 保持干净。
@@ -4353,7 +4365,16 @@ export class TaskService {
         env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
       });
       if (pushed.status !== 0) {
-        throw new Error(`宿主推送失败: ${String(pushed.stderr ?? pushed.stdout)}`);
+        const stderrText = String(pushed.stderr ?? pushed.stdout);
+        // 老单的 origin 若是 SSH 地址,报错原文是一句和凭据链对不上的
+        // "publickey"——把因果说全,省得排障从零猜起(内网实锤:查了
+        // 半天才发现是下单时填了 SSH 地址)。新单已在下单口拒收 SSH。
+        const sshHint = /publickey/i.test(stderrText)
+            && !/^https?:\/\//i.test(remoteUrl)
+          ? "(origin 是 SSH 地址,而宿主凭据是 HTTPS 个人令牌——在任务"
+            + "工作区把 origin 改成 HTTPS 地址后重跑;新单请直接填 HTTPS)"
+          : "";
+        throw new Error(`宿主推送失败: ${stderrText}${sshHint}`);
       }
       const verified = spawnSync("git", [
         ...authArgs, "ls-remote", "--heads", remoteUrl, ref,
