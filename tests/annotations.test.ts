@@ -19,6 +19,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   AnnotationError,
+  AnnotationPermissionError,
   AnnotationStore,
   orderAnnotations,
   reanchor,
@@ -29,6 +30,7 @@ import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskService } from "../src/taskService.ts";
 import { createTaskServer } from "../src/server.ts";
 import type { AddressInfo } from "node:net";
+import { LocalAuth } from "../src/auth.ts";
 
 function store(): AnnotationStore {
   return new AnnotationStore(
@@ -147,6 +149,119 @@ test("append-only:软删留痕、已送出可移出看板、半行 JSON 只丢�
   // 崩在写一半留下的半行,只能丢它自己
   appendFileSync(target.path, '{"op":"add","record":{"id":"an-x"', "utf-8");
   assert.equal(target.list().length, 2, "坏行不许炸掉整份批注");
+});
+
+test("批注归作者管理:本人可编辑删除,其他人无权代改", () => {
+  const target = store();
+  const mine = seed(target, "第一版意见", { author: "committer" });
+
+  assert.throws(
+    () => target.edit(mine.id, "越权修改", "developer"),
+    AnnotationPermissionError,
+  );
+  assert.throws(
+    () => target.drop(mine.id, "developer"),
+    AnnotationPermissionError,
+  );
+
+  const edited = target.edit(mine.id, "第二版意见", "committer");
+  assert.equal(edited.note, "第二版意见");
+  assert.ok(edited.edited_at);
+
+  target.markSent([mine.id], "decision");
+  const sentEdited = target.edit(mine.id, "提交后再修正", "committer");
+  assert.equal(sentEdited.status, "draft",
+    "改过的版本必须重新提交,不能冒充旧版本已经送达");
+  assert.equal(sentEdited.sent_at, undefined);
+
+  const dropped = target.drop(mine.id, "committer");
+  assert.equal(dropped.status, "dropped");
+});
+
+test("批注 HTTP 权限:开发与 Committer 都只能管理自己提出的意见", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-anno-auth-"));
+  const auth = new LocalAuth(join(dir, "auth.json"));
+  auth.bootstrapAdmin("admin", "administrator-pass");
+  auth.createUser("developer", "developer-pass-1", "developer");
+  auth.createUser("committer", "committer-pass-1", "developer");
+  const service = new TaskService({
+    dataDir: join(dir, "tasks"), provider: "test", model: "test",
+    modelsJson: {}, maxConcurrent: 0,
+  });
+  const server = createTaskServer(service, { auth });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+  async function login(username: string, password: string): Promise<string> {
+    const response = await fetch(`${base}/auth/login`, {
+      method: "POST", body: JSON.stringify({ username, password }),
+    });
+    assert.equal(response.status, 200);
+    return response.headers.get("set-cookie")!.split(";")[0];
+  }
+
+  try {
+    const developer = await login("developer", "developer-pass-1");
+    const committer = await login("committer", "committer-pass-1");
+    const created = await fetch(`${base}/tasks`, {
+      method: "POST", headers: { cookie: developer },
+      body: JSON.stringify({ requirement: "检视作者权限" }),
+    }).then((response) => readJson(response)) as { id: string };
+
+    async function add(cookie: string, note: string): Promise<Annotation> {
+      const response = await fetch(`${base}/tasks/${created.id}/annotations`, {
+        method: "POST", headers: { cookie },
+        body: JSON.stringify({
+          artifact: "spec.md", file: "spec.md", line: 1,
+          anchor: "原始内容", note, kind: "doc",
+        }),
+      });
+      assert.equal(response.status, 201);
+      return await response.json() as Annotation;
+    }
+
+    const committerNote = await add(committer, "Committer 的意见");
+    const developerNote = await add(developer, "开发的意见");
+
+    const committerEditsOwn = await fetch(
+      `${base}/tasks/${created.id}/annotations/${committerNote.id}`, {
+        method: "PATCH", headers: { cookie: committer },
+        body: JSON.stringify({ note: "Committer 修改后的意见" }),
+      });
+    assert.equal(committerEditsOwn.status, 200,
+      "Committer 即使不是任务责任人也能编辑自己的批注");
+
+    const developerCannotEdit = await fetch(
+      `${base}/tasks/${created.id}/annotations/${committerNote.id}`, {
+        method: "PATCH", headers: { cookie: developer },
+        body: JSON.stringify({ note: "开发越权修改" }),
+      });
+    assert.equal(developerCannotEdit.status, 403);
+    const developerCannotDelete = await fetch(
+      `${base}/tasks/${created.id}/annotations/${committerNote.id}`, {
+        method: "DELETE", headers: { cookie: developer },
+      });
+    assert.equal(developerCannotDelete.status, 403);
+
+    const committerCannotEdit = await fetch(
+      `${base}/tasks/${created.id}/annotations/${developerNote.id}`, {
+        method: "PATCH", headers: { cookie: committer },
+        body: JSON.stringify({ note: "Committer 越权修改" }),
+      });
+    assert.equal(committerCannotEdit.status, 403);
+
+    const committerDeletesOwn = await fetch(
+      `${base}/tasks/${created.id}/annotations/${committerNote.id}`, {
+        method: "DELETE", headers: { cookie: committer },
+      });
+    assert.equal(committerDeletesOwn.status, 200);
+    const listed = await fetch(`${base}/tasks/${created.id}/annotations`, {
+      headers: { cookie: developer },
+    }).then((response) => readJson(response)) as { items: Annotation[] };
+    assert.deepEqual(listed.items.map((item) => item.id), [developerNote.id]);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });
 
 test("检视闭环:确认通过收口,返工退回草稿再送一轮", () => {

@@ -19,6 +19,7 @@
 import { useEffect, useState } from "react";
 import {
   dropAnnotation,
+  editAnnotation,
   judgeAnnotation,
   sendAnnotations,
   type Annotation,
@@ -61,12 +62,14 @@ function progressOf(item: Annotation, check?: AnchorCheck): {
 }
 
 function deliveryText(item: Annotation): string {
+  if (item.status === "verified") return "已确认";
   if (item.status !== "sent") return "尚未提交";
   return item.sent_via === "decision" ? "通过审批提交" : "执行中发送";
 }
 
 export function AnnotationPanel({
   taskId,
+  viewerUsername,
   items,
   checks,
   reply,
@@ -76,6 +79,7 @@ export function AnnotationPanel({
   onLocate,
 }: {
   taskId: string;
+  viewerUsername: string;
   items: Annotation[];
   checks: AnchorCheck[];
   /** 最后一批送出后 AI 的原话。不做逐条对应——配错了比不显示更害人。 */
@@ -88,6 +92,9 @@ export function AnnotationPanel({
   onChanged: () => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [editingId, setEditingId] = useState("");
+  const [editingNote, setEditingNote] = useState("");
+  const [mutationBusy, setMutationBusy] = useState("");
   const [error, setError] = useState("");
   const drafts = items.filter((item) => item.status === "draft");
   const [open, setOpen] = useState(drafts.length > 0);
@@ -145,6 +152,8 @@ export function AnnotationPanel({
         {items.map((item) => {
           const check = checkOf(item.id);
           const progress = progressOf(item, check);
+          const isAuthor = item.author === viewerUsername;
+          const editing = editingId === item.id;
           return (
             <li key={item.id} className={`annot-item ${progress.tone}`}>
               <div className="annot-item-head">
@@ -158,31 +167,76 @@ export function AnnotationPanel({
                   {progress.text}
                 </span>
               </div>
-              <p className="annot-note">{item.note}</p>
+              {editing ? (
+                <div className="annot-inline-editor">
+                  <textarea value={editingNote} autoFocus rows={3}
+                            aria-label="修改批注意见"
+                            onChange={(event) => setEditingNote(event.target.value)} />
+                  <div>
+                    <span>{item.status === "draft"
+                      ? "保存后仍在待提交清单中。"
+                      : "修改后会回到待提交，避免新内容被误认为已经送达。"}</span>
+                    <button type="button" className="ghost"
+                            disabled={!!mutationBusy}
+                            onClick={() => { setEditingId(""); setEditingNote(""); }}>
+                      取消
+                    </button>
+                    <button type="button" className="primary"
+                            disabled={!editingNote.trim() || !!mutationBusy}
+                            onClick={async () => {
+                              setMutationBusy(item.id);
+                              setError("");
+                              const result = await editAnnotation(
+                                taskId, item.id, editingNote);
+                              setMutationBusy("");
+                              if (result.error) setError(result.error);
+                              else { setEditingId(""); setEditingNote(""); }
+                              onChanged();
+                            }}>
+                      {mutationBusy === item.id ? "保存中…" : "保存"}
+                    </button>
+                  </div>
+                </div>
+              ) : <p className="annot-note">{item.note}</p>}
               <blockquote className="annot-anchor"><span>针对</span>{item.anchor}</blockquote>
               <div className="annot-item-foot">
                 <small>
                   {deliveryText(item)} · {item.author} · {relativeTime(item.created_at)}
+                  {item.edited_at && " · 已编辑"}
                   {check && check.state !== "hit"
                     && ` · ${ANCHOR_TEXT[check.state]}`}
                 </small>
-                {item.status === "draft" && canOperate && (
-                  <button type="button" className="ghost" onClick={async () => {
-                    const result = await dropAnnotation(taskId, item.id);
-                    if (result.error) setError(result.error);
-                    onChanged();
-                  }}>删除</button>
+                {isAuthor && !editing && (
+                  <span className="annot-owner-actions">
+                    <button type="button" className="ghost"
+                            disabled={!!mutationBusy}
+                            onClick={() => {
+                              setEditingId(item.id);
+                              setEditingNote(item.note);
+                            }}>编辑</button>
+                    <button type="button" className="ghost danger"
+                            disabled={!!mutationBusy} onClick={async () => {
+                      setMutationBusy(item.id);
+                      setError("");
+                      const result = await dropAnnotation(taskId, item.id);
+                      setMutationBusy("");
+                      if (result.error) setError(result.error);
+                      onChanged();
+                    }}>删除</button>
+                  </span>
                 )}
                 {/* 检视闭环的裁决:提过的意见不能停在"请你确认"没有下文。
                     通过=收口;返工=退回待提交,下一次提交再送给 AI。 */}
-                {item.status === "sent" && canOperate && (
+                {item.status === "sent" && isAuthor && !editing && (
                   <span className="annot-verdict">
-                    <button type="button" className="ghost" onClick={async () => {
+                    <button type="button" className="ghost"
+                            disabled={!!mutationBusy} onClick={async () => {
                       const result = await judgeAnnotation(taskId, item.id, "reopen");
                       if (result.error) setError(result.error);
                       onChanged();
                     }}>返工</button>
-                    <button type="button" className="approve" onClick={async () => {
+                    <button type="button" className="approve"
+                            disabled={!!mutationBusy} onClick={async () => {
                       const result = await judgeAnnotation(taskId, item.id, "verify");
                       if (result.error) setError(result.error);
                       onChanged();

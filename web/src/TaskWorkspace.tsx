@@ -52,6 +52,7 @@ function sizeText(bytes: number): string {
 
 export function TaskWorkspace({
   task,
+  viewerUsername,
   canOperate,
   canRequestReview,
   reviewAssignment,
@@ -60,6 +61,7 @@ export function TaskWorkspace({
   onOpenTask,
 }: {
   task: TaskSummary;
+  viewerUsername: string;
   canOperate: boolean;
   canRequestReview: boolean;
   reviewAssignment?: ReviewRequest;
@@ -514,6 +516,7 @@ export function TaskWorkspace({
           )}
           <AnnotationPanel
             taskId={task.id}
+            viewerUsername={viewerUsername}
             items={notes}
             checks={checks}
             reply={reply}
