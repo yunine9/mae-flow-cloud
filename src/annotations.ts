@@ -324,12 +324,20 @@ export function renderAnnotations(
  *
  * 这里只报告事实,不替人决定撤不撤:判定权是人的。
  */
-/** 比对前的归一化:锚点是渲染时抓的(空白已折叠),文件里是原始缩进。
- * 两边不按同一把尺子量,一条带缩进的代码永远"找不到"——实测三条批注
- * 全被误报成"这处已被改动",而代码一个字都没动。误报比不报更坏:人会
- * 以为提过的都落实了。 */
+/** 比对前的归一化:锚点是渲染时抓的,文件里是源文本——两边必须按同
+ * 一把尺子量,否则永远"找不到"。踩过两回:
+ * - 只折叠空白那版,带缩进的代码全被误报"已被改动"(代码一字没动);
+ * - 2026-08-20 内网实锤:带加粗(星号)、行内代码(反引号)、链接、
+ *   表格竖线、标题井号的行,渲染把语法字符吃掉了,锚点拿"干净文本"
+ *   回源文件里搜,批注刚圈上就被判"原文已删除"。
+ * 所以:链接取显示文字,markdown 装饰字符与全部空白一律剥掉再比。
+ * 代价是极小概率把"只动了标记/空白"的改动误判成没动——漏报一条提醒,
+ * 远好过每条批注生下来就是误报(误报比不报更坏)。 */
 function normalize(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
+  return text
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
+    .replace(/[`*_~|>#]/g, "")
+    .replace(/\s+/g, "");
 }
 
 export function reanchor(
@@ -349,7 +357,13 @@ export function reanchor(
     // 读不到产物不等于靶子没了(可能是权限/路径问题),按 hit 放行——
     // 旁路一律 fail-open,重锚定绝不能挡住人送出意见。
     if (!lines) return { id: item.id, state: "hit", line: item.line };
+    // 空行/图块的锚点是"第 N 行"占位文本(人指的是位置不是文字),
+    // 源文件里当然没有这串字——按位置放行,别把它判成"原文已删除"。
+    if (/^第 \d+ 行$/.test(item.anchor)) {
+      return { id: item.id, state: "hit", line: item.line };
+    }
     const needle = normalize(item.anchor);
+    if (!needle) return { id: item.id, state: "hit", line: item.line };
     const hits: number[] = [];
     lines.forEach((line, at) => {
       if (normalize(line).includes(needle)) hits.push(at + 1);

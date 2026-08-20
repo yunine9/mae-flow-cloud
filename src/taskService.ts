@@ -903,11 +903,16 @@ export class TaskService {
     if (!sentTimes.length) return undefined;
     const lastSent = Math.max(...sentTimes);
     try {
-      // 事件 ts 是去掉 T/Z 的 UTC 裸串(sessionDriver 的 toISOString 截断),
-      // 直接 new Date() 会按本地时区解析——差 8 小时,所有回话都被误判成
-      // 发生在送出之前。补回 Z 按 UTC 读。
-      const utc = (ts: unknown) =>
-        +new Date(String(ts ?? "").replace(" ", "T") + "Z");
+      // 事件 ts 有两代格式:老现场是去掉 T/Z 的 UTC 裸串(按本地时区
+      // 解析会差 8 小时),新现场(全站时间口径统一后)是带 Z 的完整
+      // ISO。盲补 Z 会把新格式补成 "…ZZ"——Invalid Date,所有回话被
+      // 判成发生在送出之前,面板上像 AI 没回话(实测测试红过)。
+      const utc = (ts: unknown) => {
+        const raw = String(ts ?? "");
+        return /z$|[+-]\d{2}:\d{2}$/i.test(raw)
+          ? +new Date(raw)
+          : +new Date(raw.replace(" ", "T") + "Z");
+      };
       const texts = new EventLog(join(task.summary.workspace, "events.jsonl"))
         .replay()
         .filter((event) => event.kind === "assistant_message"

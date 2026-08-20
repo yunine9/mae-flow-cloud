@@ -342,3 +342,37 @@ test("重锚定:缩进不同也算命中——两边必须一把尺子量", () =
   assert.equal(checks[0].id, one.id);
   assert.notEqual(checks[0].state, "gone", "缩进差异不该被判成原文消失");
 });
+
+test("重锚定:渲染吃掉的 markdown 语法不该被判成原文消失", () => {
+  // 2026-08-20 内网实锤:锚点是页面渲染后的 textContent,**加粗**、
+  // `行内代码`、[链接]、表格 |、标题 # 的语法字符全被渲染剥掉;拿这份
+  // "干净文本"回源文件搜,批注刚圈上(还没送给 agent)就被判"原位置
+  // 内容已删除,请核查"。
+  const target = store();
+  const cases: Array<{ anchor: string; line: number }> = [
+    { anchor: "修改 接口 并保持 幂等", line: 1 },        // 加粗+行内代码
+    { anchor: "部署手册", line: 2 },                      // 链接显示文字
+    { anchor: "步骤总览", line: 3 },                      // 标题
+    { anchor: "单号 REQ1 状态 进行中", line: 4 },         // 表格行
+    { anchor: "第 5 行", line: 5 },                       // 空行占位锚
+  ];
+  for (const item of cases) {
+    seed(target, "检视意见", { anchor: item.anchor, line: item.line });
+  }
+  const file = [
+    "修改 **接口** 并保持 `幂等`",
+    "见 [部署手册](docs/deploy.md)",
+    "## 步骤总览",
+    "| 单号 | REQ1 | 状态 | 进行中 |",
+    "",
+  ].join("\n");
+  const checks = reanchor(target.drafts(), () => file);
+  for (const [at, check] of checks.entries()) {
+    assert.notEqual(check.state, "gone",
+      `第 ${at + 1} 条(${cases[at].anchor})不该被判成原文消失`);
+  }
+  // 真删了仍要如实报:诚实的 gone 不能被归一化磨掉。
+  const removed = seed(target, "真没了", { anchor: "这句真的被删了" });
+  const after = reanchor([removed], () => file);
+  assert.equal(after[0].state, "gone");
+});
