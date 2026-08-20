@@ -25,6 +25,7 @@ import { FakeGitPlatform } from "../src/gitPlatform.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskService } from "../src/taskService.ts";
 import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
+import { workflowChoices, workflowLabel } from "../src/kernelChoices.ts";
 
 const KERNEL_ROOT = (() => {
   const found = discoverKernelRoot(process.cwd());
@@ -371,6 +372,96 @@ test("内网真实门禁集(19 项):质量红要派修复,受保护分支挂人�
     await model.stop();
     await platform.stop();
   }
+});
+
+test("检视意见开的是真 review 单:下单事实换交付方式,修完这轮就换回来", async () => {
+  // 2026-08-20 查实的洞:内核的 end = "推送 + 流水线绿",云端的交付完成
+  // = 合入。中间等合入这段冒出来的检视意见,原来是往**终态**工作区塞个
+  // mission 重新入队——current 还停在 end,Hook 门禁整体旁路,这一轮改动
+  // 没人裁决、没人记账,改完也不会被流水线复验。
+  //
+  // 内核对这段本来就有路,而且是机读契约:workflow_select 的 choices 里
+  // 有 review,但 new_order_choices 没有它(「review 仅限已交付单」)。
+  // 宿主该做的只有一件事:这一轮把下单事实的交付方式写成内核的
+  // 「处理评审意见」,并在使命里让会话先 init --new 把单开出来。
+  //
+  // 本用例钉的是**宿主交出去的东西**(下单事实 + 使命),不是模型听不听话
+  // ——剧本里的会话故意没有 init,那条路由内核门禁和催办各自兜着。
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  platform.statusQueue.push("failed", "success"); // 首跑红;修后绿
+  platform.seedDiscussion({
+    id: "d-1", file: "a.txt", line: 1, severity: "major",
+    author: "李四", body: "这里的空指针要判一下",
+  });
+  await platform.start();
+  const model = new ScriptedModelServer([
+    ...walkScript(),
+    { tool: { name: "bash", input: { command:
+        `cat > ../review_replies.md <<'EOF'
+[d-1]
+意见成立,已补判空。
+EOF` } } },
+    { text: "检视意见处理完毕。" },
+    { tool: { name: "bash", input: { command:
+        "echo fixed >> a.txt && git add . && git commit --quiet -m fix" } } },
+    { text: "流水线问题已修并提交。" },
+  ], "scripted-v1", { linear: true });
+  await model.start();
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-revorder-"));
+  const service = buildService(platform, dataDir, model.modelsJson(),
+    { resolveDiscussions: true });
+  try {
+    const id = service.create("交付 REQ9:检视轮换单", { lane: "完整开发" }).id;
+    const workspace = service.get(id)!.workspace;
+    const readOrder = (): Record<string, unknown> | undefined => {
+      for (const name of readdirSync(workspace)) {
+        const path = join(workspace, name, ".mae-flow-order.json");
+        if (existsSync(path)) {
+          try {
+            return JSON.parse(readFileSync(path, "utf-8"));
+          } catch { return undefined; }   // 半行=还在写,下一轮再看
+        }
+      }
+      return undefined;
+    };
+    // 派检视修复这一轮:下单事实的交付方式换成内核的 review 原文。
+    // 等的是文件内容不是 loop.kind——kind 先落、会话起来才重写事实。
+    await until(() => readOrder()?.["交付方式"] === "处理评审意见",
+      "检视轮的下单事实要换成「处理评审意见」");
+    assert.equal(service.get(id)!.delivery?.loop?.kind, "review");
+    // 单号/基线分支/工号必须原样沿用:内核按这三项派生分支名,沿用才
+    // 派生出同一个 MR 分支,review 的 branch_create 于是原地冻结 HEAD
+    // 当增量基点,不会另建分支。
+    assert.equal(readOrder()?.["基线分支"], "master", "基线分支不许换");
+    // 这一轮结束(CI 接棒)后必须换回本单原交付方式,否则下次重建会话
+    // 会莫名其妙又开一张 review 单。
+    await until(() => readOrder()?.["交付方式"] === "完整开发",
+      "检视轮结束就换回本单原交付方式");
+    assert.equal(service.get(id)!.delivery?.loop?.kind, "ci");
+    await until(() => service.get(id)!.status === "await_merge", "绿灯");
+    const seen = model.requests
+      .flatMap((request) => (request as any).messages ?? [])
+      .map((message: any) => JSON.stringify(message.content ?? ""))
+      .join("\n");
+    assert.match(seen, /init --new/, "使命必须先让会话把这一轮的单开出来");
+    assert.match(seen, /门禁全部旁路/, "得讲清不开单的后果,不然模型会跳过");
+  } finally {
+    await model.stop();
+    await platform.stop();
+  }
+});
+
+test("下单表单不列 review,但修复环问得到它的选项原文", () => {
+  // 两个调用方对同一份内核目录的取法必须分开:表单只能列新单可选的
+  // (选 review 会跳过设计与定稿还不碰规格,必错),而修复环要的恰恰
+  // 是被滤掉的那个。谁也不许在 TS 侧写死"处理评审意见"。
+  const labels = workflowChoices(KERNEL_ROOT).map((item) => item.label);
+  assert.ok(labels.includes("完整开发"), "表单要列新单可选的");
+  assert.ok(!labels.includes("处理评审意见"), "表单不许列 review");
+  assert.equal(workflowLabel(KERNEL_ROOT, "review"), "处理评审意见");
+  assert.equal(workflowLabel(undefined, "review"), "",
+    "问不到内核就回空串,调用方 fail-open 回本单原交付方式");
 });
 
 test("MR 被关闭 → 如实 failed 请人工,不硬修", async () => {

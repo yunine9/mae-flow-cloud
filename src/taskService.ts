@@ -38,7 +38,7 @@ import {
 } from "./annotations.ts";
 import { readArtifact, resolveArtifactRoot } from "./artifacts.ts";
 import { KernelHost } from "./kernelHost.ts";
-import { workflowChoices } from "./kernelChoices.ts";
+import { workflowChoices, workflowLabel } from "./kernelChoices.ts";
 import { buildRepoMap } from "./repoMap.ts";
 import { collectKnowledge } from "./knowledgeBlocks.ts";
 import { readJson } from "./jsonBody.ts";
@@ -2400,7 +2400,15 @@ export class TaskService {
           }
           const badge = gitIdentity?.username ?? task.summary.luban_account;
           if (badge) order["工号"] = badge;
-          if (task.summary.lane) order["交付方式"] = task.summary.lane;
+          // 检视意见修复轮:交付方式换成内核的「处理评审意见」,让这一轮
+          // 开出来的是一张真正的 review 单,而不是往终态旧单上打补丁。
+          // 单号/基线分支/工号照旧沿用——内核按这三项派生分支名
+          // ({基线分支}_{工号}_{单号}),沿用就派生出同一个 MR 分支,
+          // review 的 branch_create 于是原地冻结 HEAD 当增量基点,不另建。
+          // 问不到内核选项原文就退回本单原交付方式(fail-open 到老路)。
+          const reviewLane = this.reviewRoundLane(task);
+          const lane = reviewLane || task.summary.lane;
+          if (lane) order["交付方式"] = lane;
           // 跨仓拆单的方案文档:拆单时落在任务 workspace 根,这里带进
           // 克隆并经下单事实把「需求文档」指过去——方案经内核流程在
           // 配置/需求阶段被读,而不是塞进开场 prompt 被模型当实施计划
@@ -3593,6 +3601,27 @@ export class TaskService {
     }
   }
 
+  /** 检视意见修复轮在飞时,本轮该用的交付方式(内核选项原文)。
+   *
+   * 为什么要开新单而不是在旧单上改(2026-08-20 查实):内核的 end =
+   * "推送 + 流水线绿",而云端的交付完成 = 合入。中间等合入这段冒出来
+   * 的检视意见,原来是往**终态**工作区塞个 mission 重新入队——`current`
+   * 还停在 end,Hook 门禁整体旁路,修复会话全程裸奔。
+   *
+   * 内核对这段早有designed的路,而且是机读契约:workflow_select 的
+   * choices 里有 review,但 new_order_choices 没有它(「review 仅限
+   * 已交付单」)。走这条路修复要重新过 rf_codecheck/rf_ut/delivery_review,
+   * push 之后还自动进 external_verify 复验——修复本身也要流水线判绿
+   * 才算数。
+   *
+   * 只认 state="repairing":轮次判绿或刹车后就该恢复本单原交付方式,
+   * 否则下次重建会话会莫名其妙又开一张 review 单。 */
+  private reviewRoundLane(task: TaskState): string {
+    const loop = task.summary.delivery?.loop;
+    if (loop?.kind !== "review" || loop.state !== "repairing") return "";
+    return workflowLabel(this.options.host?.kernelRoot, "review");
+  }
+
   /** 检视修复派单(批3):拉未解决讨论→落盘 reviews/→专职会话逐条
    * 处理并写 ../review_replies.md→收口后宿主发布回复(默认不代
    * resolve,报告 D3)。不扣 CI 重试且清零(流程性问题不许耗掉代码
@@ -3660,6 +3689,14 @@ export class TaskService {
         `MR 上有 ${discussions.length} 条检视意见未解决,`
         + `逐条处理它们是你此刻唯一的使命:`,
         ...lines,
+        `- **第一件事:执行 init --new 开这一轮的单**。上一单已交付到`
+        + `终态,内核会把它归一化成"终态换轮"并自动归档,不需要`
+        + `exit/goto/skip。交付方式已由下单事实给定(处理评审意见),`
+        + `选卡会自动通过;分支不会新建,内核按本单单号派生的就是当前`
+        + `这个 MR 分支。开单之后一律按 current 的本步指引走到 end,`
+        + `不要跳步、不要自己拼流程。`,
+        `- 为什么必须开单:不开单的话流程停在 end,门禁全部旁路——`
+        + `你这一轮的改动没人裁决、没人记账,改完也不会被流水线复验。`,
         `- 原始数据在 ../reviews/discussions.json(仓库外),需要完整`
         + `上下文时自己读。`,
         `- 意见对的就改代码,意见基于误解的不改——但必须说清依据,`
@@ -3668,9 +3705,11 @@ export class TaskService {
         + `格式严格如下,每条以方括号 id 单独一行开头:`,
         `  [${discussions[0].id}]`,
         `  <这条的回复:改了什么/为什么不改,一两句讲清>`,
-        `- 有代码改动就凑成一次提交；不要读取或索要个人 Git 令牌，`
-        + `也不要 push，Cloud 宿主会在会话释放后统一推送;`
-        + `全部是解释、没有代码改动就不提交——这也是正常结局。`,
+        `- 提交按内核 build_commit 步的指引做,不要自己另起一套；`
+        + `不要读取或索要个人 Git 令牌,也不要 push,`
+        + `Cloud 宿主会在会话释放后统一推送。`,
+        `- 全部是解释、没有代码改动也是正常结局:照样按 current 走完,`
+        + `在对应步骤如实说明本轮无代码改动,不要为了凑步骤改代码。`,
         `- 系统会把你的回复发布到对应讨论(是否代点"已解决"由部署配置`
         + `决定,默认留给检视人点),回复写给检视人看,说人话,`
         + `别写流程黑话。`,

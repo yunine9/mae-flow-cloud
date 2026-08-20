@@ -31,11 +31,18 @@ export interface WorkflowChoice {
   acks?: number;
 }
 
-const cache = new Map<string, WorkflowChoice[]>();
+/** 目录里还带着"能不能给新单选"这一位。下单表单要的是能选的那批,
+ * 修复环要的恰恰是**不给新单选**的那个(review)——所以缓存存全量,
+ * 各取所需,不必为此再问内核第二遍。 */
+interface WorkflowEntry extends WorkflowChoice {
+  forNewOrders: boolean;
+}
+
+const cache = new Map<string, WorkflowEntry[]>();
 
 /** 首选:问内核要机读目录。python 不在/命令老(旧快照没有 --json)都
  * 只是拿不到,不是错误——静静退回兜底。 */
-function fromKernelCommand(kernelRoot: string): WorkflowChoice[] {
+function fromKernelCommand(kernelRoot: string): WorkflowEntry[] {
   const script = join(kernelRoot, "scripts", "mae-flow.py");
   if (!existsSync(script)) return [];
   const stdout = execFileSync("python3", [script, "steps", "--json"], {
@@ -45,16 +52,13 @@ function fromKernelCommand(kernelRoot: string): WorkflowChoice[] {
   });
   const catalog = JSON.parse(stdout.trim().split("\n").pop() ?? "{}");
   return ((catalog.workflows ?? []) as Array<Record<string, any>>)
-    // 下单表单只列新单可选的:review 仅限已交付单(内核目录的
-    // for_new_orders 标记,来源是 flow.json 的 new_order_choices)——
-    // 新单选它跳过设计与定稿还不碰规格,必错;检视意见由修复环自动走。
-    .filter((item) => item.for_new_orders !== false)
     .map((item) => {
       const chain = (item.steps ?? []) as Array<{ user_ack?: boolean }>;
       return {
         key: String(item.key ?? ""),
         // answers[0] 是内核对账用的原文;没有就退回展示名
         label: String(item.answers?.[0] ?? item.label ?? ""),
+        forNewOrders: item.for_new_orders !== false,
         ...(chain.length ? {
           steps: chain.length,
           acks: chain.filter((step) => step.user_ack).length,
@@ -65,35 +69,57 @@ function fromKernelCommand(kernelRoot: string): WorkflowChoice[] {
 }
 
 /** 兜底:直接读 flow.json。够用但耦合内核文件布局,能问就别读。 */
-function fromFlowJson(kernelRoot: string): WorkflowChoice[] {
+function fromFlowJson(kernelRoot: string): WorkflowEntry[] {
   const path = join(kernelRoot, "flow", "flow.json");
   if (!existsSync(path)) return [];
   const flow = JSON.parse(readFileSync(path, "utf-8"));
   const step = flow?.steps?.workflow_select ?? {};
   const answers = (step.choice_answers ?? {}) as Record<string, string[]>;
-  // 兜底同样尊重 new_order_choices;字段缺席(老 flow)=全部可选。
+  // 字段缺席(老 flow)=全部可给新单选。
   const newOrder = Array.isArray(step.new_order_choices)
     ? new Set((step.new_order_choices as unknown[]).map(String))
     : undefined;
   return ((step.choices ?? []) as unknown[])
-    .map((key) => ({ key: String(key), label: answers[String(key)]?.[0] }))
-    .filter((item): item is WorkflowChoice =>
-      !!item.label && (!newOrder || newOrder.has(item.key)));
+    .map((key) => ({
+      key: String(key),
+      label: answers[String(key)]?.[0],
+      forNewOrders: !newOrder || newOrder.has(String(key)),
+    }))
+    .filter((item): item is WorkflowEntry => !!item.label);
 }
 
-export function workflowChoices(kernelRoot: string | undefined): WorkflowChoice[] {
+function allWorkflows(kernelRoot: string | undefined): WorkflowEntry[] {
   if (!kernelRoot) return [];
   const cached = cache.get(kernelRoot);
   if (cached) return cached;
-  let choices: WorkflowChoice[] = [];
+  let entries: WorkflowEntry[] = [];
   for (const read of [fromKernelCommand, fromFlowJson]) {
     try {
-      choices = read(kernelRoot);
+      entries = read(kernelRoot);
     } catch {
-      choices = [];   // 读不动=不预选,不猜
+      entries = [];   // 读不动=不预选,不猜
     }
-    if (choices.length) break;
+    if (entries.length) break;
   }
-  cache.set(kernelRoot, choices);
-  return choices;
+  cache.set(kernelRoot, entries);
+  return entries;
+}
+
+/** 下单表单能列的交付方式:只有新单可选的那批。review 仅限已交付单
+ * (内核目录的 for_new_orders,来源是 flow.json 的 new_order_choices)
+ * ——新单选它跳过设计与定稿还不碰规格,必错;检视意见由修复环自动走。 */
+export function workflowChoices(kernelRoot: string | undefined): WorkflowChoice[] {
+  return allWorkflows(kernelRoot)
+    .filter((item) => item.forNewOrders)
+    .map(({ forNewOrders: _drop, ...choice }) => choice);
+}
+
+/** 某个交付方式回传给内核的**选项原文**;问不到内核就回空串。
+ * 修复环要拿它写下单事实,而 workflowChoices 按设计把 review 滤掉了。
+ * 别在调用方写死"处理评审意见"——那正是本文件开头那条教训。 */
+export function workflowLabel(
+  kernelRoot: string | undefined,
+  key: string,
+): string {
+  return allWorkflows(kernelRoot).find((item) => item.key === key)?.label ?? "";
 }
