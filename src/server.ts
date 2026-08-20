@@ -11,6 +11,7 @@
  *   GET  /tasks/:id/interrupts                          → 发过的插话 + 送达与否
  *   GET  /tasks/:id/annotations                         → 待送出批注 + 锚点现状
  *   POST /tasks/:id/annotations {artifact,file,line,anchor,note,kind} → 201
+ *   PATCH /tasks/:id/annotations/:annId {note}        → 修改(只能改自己的)
  *   DELETE /tasks/:id/annotations/:annId                → 软删(只能删自己的)
  *   POST /tasks/:id/annotations/send {ids?}             → 走插话通道当场送给模型
  *   POST /tasks/:id/annotations/:annId/verify           → 裁决:确认通过(只裁自己的)
@@ -52,6 +53,10 @@ import {
   type LocalAuth,
 } from "./auth.ts";
 import { SettingsError } from "./settings.ts";
+import {
+  AnnotationError,
+  AnnotationPermissionError,
+} from "./annotations.ts";
 
 /** 正式前端静态文件的最小类型表:Vite 产物就这几种。 */
 const MIME: Record<string, string> = {
@@ -654,6 +659,13 @@ export function createTaskServer(
             return json(response, 200,
               { text: service.previewAnnotations(id) });
           }
+          // 批注归作者本人管理，与任务责任人 / Committer 身份无关。
+          if (request.method === "PATCH" && parts.length === 4) {
+            const body = await readBody(request);
+            return json(response, 200,
+              service.editAnnotation(id, decodeURIComponent(parts[3]),
+                String(body.note ?? ""), author));
+          }
           // 只能删自己写的:多人环境里替别人删等于替他改主意。
           if (request.method === "DELETE" && parts.length === 4) {
             return json(response, 200,
@@ -788,6 +800,12 @@ export function createTaskServer(
       }
       if (error instanceof NotFoundError) {
         return json(response, 404, { error: error.message });
+      }
+      if (error instanceof AnnotationPermissionError) {
+        return json(response, 403, { error: error.message });
+      }
+      if (error instanceof AnnotationError) {
+        return json(response, 400, { error: error.message });
       }
       return json(response, 500, { error: String(error) });
     }

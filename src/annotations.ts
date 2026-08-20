@@ -37,6 +37,8 @@ export interface Annotation {
   /** 原文快照——定位以它为准。内核那条经验在活靶子上更要紧。 */
   anchor: string;
   note: string;
+  /** 最近一次修改意见的时间。修改留在 append-only 台账里，不覆盖旧记录。 */
+  edited_at?: string;
   kind: AnnotationKind;
   status: AnnotationStatus;
   sent_at?: string;
@@ -60,6 +62,7 @@ export interface AnnotationInput {
 
 type Operation =
   | { op: "add"; record: Annotation }
+  | { op: "edit"; id: string; note: string; at: string }
   | { op: "drop"; id: string }
   | { op: "sent"; ids: string[]; via: SentVia; at: string }
   | { op: "verify"; id: string; at: string }
@@ -67,6 +70,7 @@ type Operation =
       line?: number; anchor?: string; note?: string };
 
 export class AnnotationError extends Error {}
+export class AnnotationPermissionError extends AnnotationError {}
 
 /** 锚点还在不在:送出前问一次,答案摊给人看,不替人决定。 */
 export type AnchorState = "hit" | "moved" | "gone" | "ambiguous";
@@ -108,6 +112,21 @@ export class AnnotationStore {
       if (operation.op === "drop") {
         const found = byId.get(operation.id);
         if (found) found.status = "dropped";
+        continue;
+      }
+      if (operation.op === "edit") {
+        const found = byId.get(operation.id);
+        if (!found || found.status === "dropped") continue;
+        found.note = operation.note;
+        found.edited_at = operation.at;
+        // 已送出的意见一旦改字，就不能继续冒充“这版已提交”。退回草稿，
+        // 由责任人重新送出；旧内容和送出记录仍完整保留在 jsonl 中。
+        if (found.status !== "draft") {
+          found.status = "draft";
+          found.sent_at = undefined;
+          found.sent_via = undefined;
+          found.verified_at = undefined;
+        }
         continue;
       }
       if (operation.op === "sent") {
@@ -191,10 +210,28 @@ export class AnnotationStore {
     const found = this.list().find((item) => item.id === id);
     if (!found) throw new AnnotationError(`批注不存在: ${id}`);
     if (found.author !== by) {
-      throw new AnnotationError(`这条是 ${found.author} 写的,不能替他删`);
+      throw new AnnotationPermissionError(`这条是 ${found.author} 写的,不能替他删`);
     }
     this.append({ op: "drop", id });
     return { ...found, status: "dropped" };
+  }
+
+  /** 改意见只认作者，不认任务角色。已提交/已确认的意见修改后退回待提交，
+   * 避免清单显示的是新文字，Agent 实际收到的却还是旧文字。 */
+  edit(id: string, note: string, by: string): Annotation {
+    const found = this.list().find((item) => item.id === id);
+    if (!found) throw new AnnotationError(`批注不存在: ${id}`);
+    if (found.author !== by) {
+      throw new AnnotationPermissionError(`这条是 ${found.author} 写的,不能替他改`);
+    }
+    if (found.status === "dropped") {
+      throw new AnnotationError("这条已经移除");
+    }
+    const normalized = String(note ?? "").trim();
+    if (!normalized) throw new AnnotationError("批注内容不能为空");
+    const at = new Date().toISOString();
+    this.append({ op: "edit", id, note: normalized, at });
+    return this.list().find((item) => item.id === id)!;
   }
 
   markSent(ids: string[], via: SentVia): void {
@@ -207,7 +244,7 @@ export class AnnotationStore {
     const found = this.list().find((item) => item.id === id);
     if (!found) throw new AnnotationError(`批注不存在: ${id}`);
     if (found.author !== by) {
-      throw new AnnotationError(`这条是 ${found.author} 写的,只能由他裁决`);
+      throw new AnnotationPermissionError(`这条是 ${found.author} 写的,只能由他裁决`);
     }
     if (found.status === "draft") {
       throw new AnnotationError("还没提交过,没有可裁决的改动");

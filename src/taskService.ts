@@ -903,21 +903,20 @@ export class TaskService {
     if (!sentTimes.length) return undefined;
     const lastSent = Math.max(...sentTimes);
     try {
-      // 事件 ts 有两代格式:老现场是去掉 T/Z 的 UTC 裸串(按本地时区
-      // 解析会差 8 小时),新现场(全站时间口径统一后)是带 Z 的完整
-      // ISO。盲补 Z 会把新格式补成 "…ZZ"——Invalid Date,所有回话被
-      // 判成发生在送出之前,面板上像 AI 没回话(实测测试红过)。
-      const utc = (ts: unknown) => {
-        const raw = String(ts ?? "");
-        return /z$|[+-]\d{2}:\d{2}$/i.test(raw)
-          ? +new Date(raw)
-          : +new Date(raw.replace(" ", "T") + "Z");
+      // 新事件是完整 ISO；旧事件是去掉 T/Z 的 UTC 裸串。只给旧格式补 Z，
+      // 不能给新格式再拼一个 Z（会得到 ...ZZ，整批回话因此被过滤掉）。
+      const instant = (ts: unknown) => {
+        const raw = String(ts ?? "").trim();
+        const candidate = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(raw)
+          ? `${raw.replace(" ", "T")}Z`
+          : raw;
+        return new Date(candidate).getTime();
       };
       const texts = new EventLog(join(task.summary.workspace, "events.jsonl"))
         .replay()
         .filter((event) => event.kind === "assistant_message"
           && String(event.sessionId ?? "main") === "main"
-          && utc(event.ts) > lastSent)
+          && instant(event.ts) > lastSent)
         .map((event) => String(event.payload?.text ?? "").trim())
         .filter(Boolean);
       if (!texts.length) return undefined;
@@ -969,6 +968,17 @@ export class TaskService {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     return this.annotations(task).drop(annotationId, by);
+  }
+
+  editAnnotation(
+    id: string,
+    annotationId: string,
+    note: string,
+    by: string,
+  ): Annotation {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    return this.annotations(task).edit(annotationId, note, by);
   }
 
   /** 检视闭环的裁决半边:确认通过。 */

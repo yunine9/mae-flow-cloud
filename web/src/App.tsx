@@ -408,6 +408,7 @@ export function App() {
     {launchOpen && <LaunchWorkspace session={session} onCreated={refresh} onClose={() => setLaunchOpen(false)} />}
     {artifactTask && <TaskWorkspace
       task={artifactTask}
+      viewerUsername={session.username}
       canOperate={canOperate(artifactTask)}
       canRequestReview={responsibleOf(artifactTask) === session.username}
       reviewAssignment={myReviews.find((review) =>

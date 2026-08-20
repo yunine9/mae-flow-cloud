@@ -543,6 +543,7 @@ export interface Annotation {
   line: number;
   anchor: string;
   note: string;
+  edited_at?: string;
   kind: "doc" | "code";
   status: "draft" | "sent" | "verified" | "dropped";
   sent_at?: string;
@@ -600,6 +601,25 @@ export async function dropAnnotation(
     return { error: String(body.error ?? `HTTP ${response.status}`) };
   }
   return {};
+}
+
+export async function editAnnotation(
+  taskId: string,
+  annotationId: string,
+  note: string,
+): Promise<{ annotation?: Annotation; error?: string }> {
+  const response = await fetch(
+    `/tasks/${taskId}/annotations/${encodeURIComponent(annotationId)}`,
+    {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ note }),
+    });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    return { error: String(body.error ?? `HTTP ${response.status}`) };
+  }
+  return { annotation: await response.json() };
 }
 
 /** 检视闭环的裁决:verdict = verify(确认通过) | reopen(返工再送一轮)。 */

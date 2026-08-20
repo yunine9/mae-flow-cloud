@@ -412,6 +412,62 @@
   color: var(--text-strong);
 }
 
+.annot-inline-editor {
+  margin: 2px 0 8px;
+  padding: 10px;
+  background: var(--surface-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line));
+  border-radius: 9px;
+}
+
+.annot-inline-editor textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  resize: vertical;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-strong);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+}
+
+.annot-inline-editor textarea:focus {
+  outline: 2px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  border-color: var(--accent);
+}
+
+.annot-inline-editor > div {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 8px;
+}
+
+.annot-inline-editor > div > span {
+  flex: 1;
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.annot-owner-actions {
+  display: inline-flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.annot-panel button.ghost.danger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 28%, var(--line));
+}
+
+.annot-panel button:disabled {
+  cursor: default;
+  opacity: .55;
+}
+
 .annot-item-foot {
   display: flex;
   align-items: center;
@@ -420,8 +476,14 @@
 }
 
 .annot-item-foot small {
+  flex: 1;
+  min-width: 180px;
   font-size: 11.5px;
   color: var(--faint);
+}
+
+.annot-item-foot {
+  flex-wrap: wrap;
 }
 
 .annot-stale {
