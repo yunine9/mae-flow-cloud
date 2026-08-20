@@ -374,6 +374,47 @@ test("内网真实门禁集(19 项):质量红要派修复,受保护分支挂人�
   }
 });
 
+test("失败详情只是个链接:使命明说无证据,不许假装'平台原文'", async () => {
+  // 内网实锤:适配层把 log 填成流水线页面链接(会话没有登录态打不开),
+  // 使命却包装成"失败详情(平台原文)"——会话以为自己有输入,硬着头皮
+  // 定位→修改→提交,看着专业实为猜改。证据缺席必须明说,会话的正确
+  // 行为才成立:能自证的修,不能自证的写诊断停下喊人。
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  platform.statusQueue.push("failed");
+  platform.nextPipelineLog = "https://pipeline.corp/runs/9527";
+  await platform.start();
+  const model = new ScriptedModelServer([
+    ...walkScript(),
+    // 修复会话按证据纪律行事:无据不猜改,写诊断收口(不提交)。
+    { text: "平台未提供失败日志,无法自证定位;诊断:请补适配层 log 原文"
+        + "与 pipeline_artifacts 端点,补齐后重跑。" },
+  ], "scripted-v1", { linear: true });
+  await model.start();
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-blind-"));
+  const service = buildService(platform, dataDir, model.modelsJson());
+  try {
+    const id = service.create("交付 REQ9:无证据修复").id;
+    // 无提交 → 同 SHA 刹车,诊断原文带给人。
+    await until(() =>
+      (service.get(id)!.delivery?.loop?.state ?? "") === "halted",
+      "无据轮次应如实停下");
+    const seen = model.requests
+      .flatMap((request) => (request as any).messages ?? [])
+      .map((message: any) => JSON.stringify(message.content ?? ""))
+      .join("\n");
+    assert.match(seen, /没有给出.*失败日志原文/, "使命必须明说证据缺席");
+    assert.match(seen, /证据纪律/, "无据时的行为准则要进使命");
+    assert.ok(!seen.includes("失败详情(平台原文)"),
+      "不许把链接包装成平台原文——那正是猜改的病根");
+    assert.match(service.get(id)!.delivery?.loop?.diagnosis ?? "",
+      /补适配层/, "会话的诊断要原文带给人");
+  } finally {
+    await model.stop();
+    await platform.stop();
+  }
+});
+
 test("检视意见开的是真 review 单:下单事实换交付方式,修完这轮就换回来", async () => {
   // 2026-08-20 查实的洞:内核的 end = "推送 + 流水线绿",云端的交付完成
   // = 合入。中间等合入这段冒出来的检视意见,原来是往**终态**工作区塞个

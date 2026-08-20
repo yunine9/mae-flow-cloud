@@ -3369,13 +3369,33 @@ export class TaskService {
     // 让修复会话自读——2000 字摘要装不下多类问题并发的全部原料。
     const artifacts = await this.mirrorPipelineArtifacts(task);
     if (!this.current(task, epoch)) return;
+    // 输入可信度:log 是纯链接或干脆缺席、又没有镜像材料时,修复会话
+    // 手里没有任何失败证据。内网实锤:适配层把 log 填成流水线页面链接
+    // (会话没有登录态,打不开),使命却把它包装成"失败详情(平台原文)"
+    // ——会话以为自己有输入,硬着头皮定位→修改→提交,看着专业实为
+    // 猜改,烧流水线还烧不出结论。证据缺席必须明说,行为才会从"猜改
+    // 凑提交"变成"能自证的修、不能自证的走诊断出口停下喊人"。
+    const blindInput = !artifacts.length
+      && (/^https?:\/\/\S+$/.test(loop.failure.trim())
+        || loop.failure === "(平台未提供失败详情)");
     const roundText = loop.max !== undefined
       ? `第 ${loop.round}/${loop.max} 轮` : `第 ${loop.round} 轮`;
     delivery.pipeline = `failed(${roundText}修复中)`;
     task.mission = [
       `流水线红了,把它修到绿是你此刻唯一的使命(${roundText}修复):`,
-      `- 分支上提交 ${sha} 的权威流水线结果是 failed。失败详情(平台原文):`,
-      loop.failure,
+      ...(blindInput ? [
+        `- 分支上提交 ${sha} 的权威流水线结果是 failed,**但平台没有给出`
+        + `失败日志原文**(只给了: ${loop.failure})。你手里没有可信的`
+        + `失败证据,本轮第一要务是取证,不是动手改。`,
+        `- 证据纪律:只修你能在工作区自证的问题(通读代码找得到、`
+        + `lightcheck 报得出的,并写明依据);自证不了的不许猜改碰运气`
+        + `——把"平台未提供失败日志,适配层需补 log 原文与`
+        + ` pipeline_artifacts 端点"写成诊断,不提交,系统会带着你的`
+        + `诊断如实停下请人工,这比猜改一轮更有价值。`,
+      ] : [
+        `- 分支上提交 ${sha} 的权威流水线结果是 failed。失败详情(平台原文):`,
+        loop.failure,
+      ]),
       ...(artifacts.length ? [
         `- 完整失败材料已镜像到 ../pipeline/(仓库外,不会进提交),`
         + `分诊与定位先读它们,别只凭上面的摘要猜:`,
