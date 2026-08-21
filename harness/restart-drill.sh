@@ -21,10 +21,36 @@ DATA_DIR="$DRILL_DIR/data"
 # bash 会 fork 子 shell,必须 exec 让子 shell 变身 node 本体,
 # $! 才是真正要杀的进程(两坑都实测踩过)。
 tsx_run() { exec node --import tsx "$@"; }
+# serve 后来加了"首次启动必须注入管理员密码",这个脚本自建立起没动过,
+# 于是上线清单第 6 项其实一直跑不起来(2026-08-22 发现)。演练用的是
+# 一次性数据目录,密码不外泄也不复用。
+export MAE_FLOW_ADMIN_USER="${MAE_FLOW_ADMIN_USER:-admin}"
+export MAE_FLOW_ADMIN_PASSWORD="${MAE_FLOW_ADMIN_PASSWORD:-drill-only-passw0rd}"
 GATEWAY_PID=""; SERVE_PID=""
 FAILED=0
 
-req() { curl -s --noproxy '*' "$@"; }
+# 服务后来加了本地登录,业务 API 一律要会话 cookie。演练脚本原来直接
+# 裸 curl,于是 POST /tasks 只拿得到 401(2026-08-22 和密码要求一起发现)。
+COOKIE_JAR="$DRILL_DIR/cookies.txt"
+req() { curl -s --noproxy '*' -b "$COOKIE_JAR" -c "$COOKIE_JAR" "$@"; }
+
+login() { # login <账号> <密码>
+  req -X POST "$BASE/auth/login" -H 'content-type: application/json' \
+    -d "{\"username\":\"$1\",\"password\":\"$2\"}" | grep -q '"username"'
+}
+
+# 角色分离后管理员不发起任务(第三处陈旧,同日发现):管理员只配置和
+# 管账号,下单必须用开发者账号。演练照真流程走一遍,而不是绕过它。
+DEV_USER="drill-dev"
+DEV_PASSWORD="drill-only-passw0rd"
+ensure_developer() {
+  login "$MAE_FLOW_ADMIN_USER" "$MAE_FLOW_ADMIN_PASSWORD" || return 1
+  # 已存在会 400,那不是错——重启后第二次调用走的就是这条路。
+  req -X POST "$BASE/auth/users" -H 'content-type: application/json' \
+    -d "{\"username\":\"$DEV_USER\",\"password\":\"$DEV_PASSWORD\",\"role\":\"developer\"}" \
+    > /dev/null
+  login "$DEV_USER" "$DEV_PASSWORD"
+}
 
 say()  { echo "$@"; }
 ok()   { say "✅ $1"; }
@@ -90,8 +116,9 @@ tsx_run src/serve.ts --models "$DRILL_DIR/modelsA.json" \
 SERVE_PID=$!
 disown "$SERVE_PID"
 wait_until "serve#1 就绪" 20 serve_up || bad "2. serve#1 没起来(serve1.log)"
+ensure_developer || bad "2. 建开发者账号/登录失败(serve1.log)"
 
-TASK_ID=$(req -X POST "$BASE/tasks" \
+TASK_ID=$(req -X POST "$BASE/tasks" -H 'content-type: application/json' \
   -d '{"requirement":"重启演练:等待人工时杀进程"}' \
   | python3 -c "import json,sys; print(json.load(sys.stdin)['id'])") \
   || bad "2. 发任务失败(serve1.log)"
@@ -114,6 +141,7 @@ tsx_run src/serve.ts --models "$DRILL_DIR/modelsB.json" \
 SERVE_PID=$!
 disown "$SERVE_PID"
 wait_until "serve#2 就绪" 20 serve_up || bad "4. serve#2 没起来(serve2.log)"
+ensure_developer || bad "4. serve#2 登录失败(serve2.log)"
 STATUS=$(task_field "status")
 RESTORED_WAITING=$(task_field "waiting.waiting_id")
 [ "$STATUS" = "waiting_for_human" ] \
@@ -124,7 +152,7 @@ ok "4. 重启后任务还在、待办原样($STATUS / $WAITING_ID)"
 
 # 5. 决定 → 重建会话续跑到完成
 HTTP=$(req -o /dev/null -w "%{http_code}" -X POST \
-  "$BASE/tasks/$TASK_ID/decision" \
+  "$BASE/tasks/$TASK_ID/decision" -H 'content-type: application/json' \
   -d "{\"state_version\":$STATE_VERSION,\"decision\":\"确认\",\"notes\":\"重启演练\"}")
 [ "$HTTP" = "200" ] || bad "5. 决定提交失败 HTTP $HTTP(serve2.log)"
 wait_until "重建会话续跑到完成" 30 task_completed \

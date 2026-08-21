@@ -633,7 +633,7 @@ Agent 的上下文。同名 Skill 因此也可以分别用于不同仓。
 | isolate-memory / isolate-cpus / isolate-pids | 3g / 2 / 512 | 每个任务容器的资源上限 |
 | isolate-network | bridge | 任务容器网络；拒绝 host/container 模式 |
 | isolate-cache-root | `<data>/build-cache` | 按仓库哈希隔离的 Maven/npm/ccache/XDG 缓存 |
-| isolate-user | 镜像内非 root 用户 | UID:GID；Linux 上应与工作区/缓存属主一致 |
+| isolate-user | **Linux:服务进程 uid:gid**;其他平台:镜像内非 root 用户 | UID:GID。Linux 上不配就按服务账号自己的 uid:gid 跑，保证容器写出的文件宿主能接手 git；服务本身以 root 运行则拒绝启动 |
 | build-slots | 1 | 同时运行的 prepush 重构建数，独立于普通 Agent 并发 |
 | repair-rounds | 不限 | 修复环手刹:数字=上限,0=关;不配=修到绿/出诊断为止 |
 | poll-interval / poll-timeout | 10 / 1800(秒) | 流水线轮询节奏与预算 |
@@ -778,9 +778,20 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
   现场，不进入业务 Diff、审批哈希或预推送工作区洁净度判断。
 - **缓存不是共享工作区**:`--isolate-cache-root` 下按仓库地址 SHA-256
   分 Maven/npm/ccache/XDG 四类目录；不同仓不共享可写缓存。工作区产物仍
-  留在各任务目录。Linux 上镜像 builder UID/GID 应与服务账号一致，或用
-  `--isolate-user <uid>:<gid>` 并预先处理缓存权限。缓存只用于加速，最终
-  流水线仍是权威裁判。
+  留在各任务目录。Linux 上容器默认就以服务账号的 uid:gid 运行，缓存目录
+  只要归服务账号所有即可；若显式配了 `--isolate-user <uid>:<gid>`，那就
+  由你负责让该 uid 对工作区与缓存可写。缓存只用于加速，最终流水线仍是
+  权威裁判。
+- **一个数据目录只能起一个实例**:`<data>/instance.lock` 是独占锁，起服
+  时被本机活着的实例占用就直接拒绝启动并报出占用者 pid。这不是洁癖——
+  实例身份就是 dataDir 指纹，第二个实例起来的瞬间会按这个指纹把第一个
+  正在跑的编译/prepush 容器清掉。进程被 `kill -9` 后留下的锁由下次启动
+  自动接管，不需要手工清理；确实要手工清时先确认对方真的没了，再删这个
+  文件。**跨机共享同一个数据目录不受支持**（NFS 之类），会被直接拒绝。
+- **等审批的任务不占容器**:人挂在审批卡上时任务容器会被释放，答复到
+  达后自动重新开。日志里能看到「已释放闲置任务容器」和「任务容器已重新
+  开起」。这意味着容器里 `/tmp` 与 HOME 的临时文件跨审批不保留——需要留
+  存的东西写进工作区。
 - 守护用 systemd `Restart=on-failure` 即可,恢复逻辑在服务内部。
   单元文件样例:
 

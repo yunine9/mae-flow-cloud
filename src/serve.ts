@@ -29,6 +29,12 @@ import { PgProjection } from "./projection.ts";
 import type { GateDecision } from "./gateService.ts";
 import { LocalAuth } from "./auth.ts";
 import { RuntimeSettings } from "./settings.ts";
+import { resolveContainerUser } from "./containerRuntime.ts";
+import {
+  acquireInstanceLock,
+  INSTANCE_LOCK_FILE,
+  InstanceLockedError,
+} from "./instanceLock.ts";
 
 const REPO_ROOT = resolve(fileURLToPath(import.meta.url), "..", "..");
 
@@ -172,6 +178,20 @@ async function main(): Promise<void> {
   }
   const dataDir = resolve(flag("--data") ?? join(REPO_ROOT, ".tasks"));
   mkdirSync(dataDir, { recursive: true });
+  // 独占锁必须在碰这个目录的任何东西之前拿到:实例身份就是 dataDir
+  // 指纹,起服会按它清扫"本实例"的遗留容器——第二个实例起来的瞬间
+  // 就会杀掉第一个正在跑的编译/prepush 容器。这不是抢资源,是踩现场。
+  let instanceLock;
+  try {
+    instanceLock = acquireInstanceLock(dataDir,
+      { log: (message) => console.log(`[serve] ${message}`) });
+  } catch (error) {
+    if (error instanceof InstanceLockedError) {
+      console.error(`[serve] 拒绝启动:${error.message}`);
+      process.exit(2);
+    }
+    throw error;
+  }
   guardProcess(dataDir);   // 旁路异常不许带走整个服务(见函数注释)
   // 管理旋钮(主 spec §4:最大并发由管理员配置,超出排队)。
   const maxConcurrent = Number(flag("--max-concurrent") ?? 2);
@@ -215,7 +235,12 @@ async function main(): Promise<void> {
         : 0;
       console.log(`[serve] --fresh:清空数据目录 ${dataDir}`
         + (doomed ? `(含 ${doomed} 个任务现场,不可恢复)` : ""));
-      rmSync(dataDir, { recursive: true, force: true });
+      // 逐项删,跳过本进程刚拿到的独占锁。整目录 rmSync 会把锁一起
+      // 带走,等于清场期间大门敞开——那正是并发实例踩进来的窗口。
+      for (const name of readdirSync(dataDir)) {
+        if (name === INSTANCE_LOCK_FILE) continue;
+        rmSync(join(dataDir, name), { recursive: true, force: true });
+      }
     } else if (existsSync(dataDir)
         && readdirSync(dataDir).some((name) => name.startsWith("task-"))) {
       console.log("[serve] 演示模式沿用现有数据目录(要白纸起步加 --fresh)");
@@ -393,10 +418,25 @@ async function main(): Promise<void> {
     console.error("[serve] --isolate-user 禁止使用 root/0 或空值,拒绝启动");
     process.exit(2);
   }
+  // 容器用户在 Linux 上决定工作区文件的宿主属主,配错要到 push 前才炸。
+  let containerUser;
+  try {
+    containerUser = resolveContainerUser({
+      configured: isolateUser,
+      platform: process.platform,
+      uid: process.getuid?.(),
+      gid: process.getgid?.(),
+    });
+  } catch (error) {
+    console.error(`[serve] 拒绝启动:${String((error as Error).message)}`);
+    process.exit(2);
+  }
   if (isolateImage) {
     console.log(`[serve] 统一任务容器: ${isolateImage}`
       + `;memory=${isolateMemory},cpus=${isolateCpus},pids=${isolatePids}`
       + `,network=${isolateNetwork},build-slots=${buildSlots}`);
+    console.log(`[serve] 任务容器用户: ${containerUser.user ?? "镜像默认"}`
+      + `(${containerUser.reason})`);
     console.log(`[serve] 分仓构建缓存: ${isolateCacheRoot}`);
   }
 
@@ -463,7 +503,7 @@ async function main(): Promise<void> {
           cacheRoot: isolateCacheRoot,
           memory: isolateMemory,
           cpus: isolateCpus,
-          user: isolateUser,
+          user: containerUser.user,
           pidsLimit: isolatePids,
           network: isolateNetwork,
         }
@@ -537,6 +577,14 @@ async function main(): Promise<void> {
       exitCode = 1;
       console.error(`[serve] PostgreSQL 投影关闭失败: ${String(error)}`);
     });
+    // 最后才撒手:锁在容器确认释放之前松开,下一个实例会去清扫还没
+    // 死透的容器。释放本身不许把退出码带坏——留个陈旧锁下次能接管,
+    // 但拿不到退出码会让 systemd 误判。
+    try {
+      instanceLock.release();
+    } catch (error) {
+      console.error(`[serve] 释放数据目录锁失败(下次启动会自动接管): ${String(error)}`);
+    }
     process.exit(exitCode);
   };
   process.once("SIGTERM", () => { void terminate("SIGTERM"); });

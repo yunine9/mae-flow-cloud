@@ -275,6 +275,67 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
   prepush Agent 的所有 Bash 都进入任务容器。文件 Read/Edit/Write 仍由
   宿主执行，但受任务工作区 realpath/软链边界和 fail-closed Gate 约束。
   纯会话演示与测试仍可不配镜像，它们不属于多人生产形态;
+- **多人生产加固四项(2026-08-22,容器化终审提出,已补三项半)**:
+  - **实例互斥已闭合**:实例身份就是 `sha256(realpath(dataDir))`,起服
+    按它清扫"本实例"的遗留容器。以前两个 serve 指同一个 `--data`,后起
+    的会把先起那个**正在跑的编译/prepush 容器全杀掉**,两边还共写同一
+    套 task.json。现在 dataDir 上有独占锁(`instance.lock`,pid+主机名),
+    活着就拒绝启动并报出占用者 pid;进程被 kill -9 留下的陈旧锁由下一个
+    实例接管(抢占走 rename+回读验明,不 unlink,避免并发抢占互删);
+    跨机共享同一个 dataDir 判不了对端死活,一律拒绝而不是猜。
+    真件裁判:两个 serve 真起、真 SIGTERM、真 kill -9 各验过一遍。
+  - **Linux 容器 uid 已闭合**:工作区是 bind mount,容器里写出来的文件
+    在宿主上就是容器 uid 的。镜像默认 builder 是 10001,和服务账号对不
+    上时宿主接手 git add/commit 直接 EACCES——**炸在 Agent 干完活之后**,
+    最贵的位置。现在 Linux 上不配 `--isolate-user` 就按服务进程自己的
+    uid:gid 跑;服务本身以 root 运行则拒绝启动(不许把 root 兜进容器)。
+    macOS/Windows 保持镜像默认——那边 Docker 在 VM 边界做 uid 映射,
+    套本机 uid 反而撞上 VM 里不存在的用户。**这条本机验不了真故障**
+    (Colima 是 VM),判据按 platform 参数化进了单测。
+  - **等人期间释放容器已闭合**:一张审批卡挂一晚上,3g 内存和 pids 名额
+    就占一晚上,10~20 人共用一台机器时会把后面排队的单堵死。现在真等人
+    时停容器、会话原样留着(pi 停在工具调用里),答复到达后第一条 Bash
+    重新开同一套挂载/限额/label。自动交卷不做"停了再开"的无用功。
+    释放属旁路只记不抛;**重开失败必须抛成这条 Bash 的执行失败,绝不
+    回落宿主**。代价如实:丢 HOME 与 `/tmp` 两个 tmpfs,以及上一轮遗留
+    的后台进程——后者本就活不过会话。
+  - **凭据边界补了一半**:带个人令牌的 clone 与仓内 Skill 只读发现,
+    以前**没走** push/ls-remote 那套加固沙箱。宿主的 credential helper
+    是"问什么答什么"的(不看 git 传进来的 host),部署机 `~/.gitconfig`
+    或 `/etc/gitconfig` 里一条 `url.<别处>.insteadOf` 就能把 clone 改道
+    到另一台主机,**用户的个人 CodeHub 令牌跟着递过去**。现在这两条
+    路径与 push 共用 `prepareHostGitSandbox`(空 HOME/全局/系统配置、
+    关 ext 传输与仓库 hooks、拒交互 askpass、清 `GIT_*`)。真 git 当
+    裁判,并配了负例守卫证明不加固时改道确实发生。
+    **没补的那一半**:无个人令牌时仍沿用部署账号自己的 git 配置(那是
+    管理员本人的配置,且没有用户令牌可泄,是有意保留);helper 本身仍
+    不校验 git 请求的 host,只是现在没有配置来源能让它被改道问到。
+- **上线自查里两件"以为测过其实没测"的事(2026-08-22)**:
+  - `harness/restart-drill.sh`(清单第 6 项的可执行版)自建立起没动过,
+    而服务后来陆续加了**管理员密码强制注入**、**登录会话**、
+    **管理员不许下单(角色分离)** 三道门——脚本三处都撞上,也就是说
+    "杀进程重启恢复"这一项**从来没真跑成功过**。三处已补齐(演练照真
+    流程走:管理员登录 → 建开发者账号 → 开发者下单),现在真 kill -9
+    真 HTTP 全绿,顺带成了实例锁陈旧接管的真件裁判。
+  - `tests/isolation.test.ts` / `tests/isolationConcurrency.test.ts` 三条真
+    容器用例一直因缺 `MFC_REAL_BUILD_IMAGE` 而 skip,skip 得诚实,但夹具
+    早已过期:它们造的是**真实服务永远不会产生的配置**(不给 cacheRoot)。
+    统一构建镜像的 entrypoint 会校验 `/cache/*` 可写,不给缓存挂载就退 73。
+    夹具已按真形态补上;`src/pilot.ts` 也漏了同一个字段,同批修掉——
+    否则 `npm run pilot -- --isolate-image` 一起手就是容器起不来。
+    教训:**长期 skip 的用例会静默腐烂,解开时要先怀疑夹具而不是产品**。
+- **并发实战演练已脚本化(2026-08-22,harness/concurrency-drill.ts)**:
+  真 GLM + 真 Docker + 真 TaskService,三单并发,判据全落在宿主能自己
+  核实的事实上(容器名、`docker ps` 残留、工作区产物、容器内 `uname`/
+  `id -u`),不信模型自述。连跑两遍各 16/16;其中第三单被要求先举卡,
+  用来真跑"审批期释放容器→代答→原地重开"(日志里能看到同名容器换了
+  新 id)。并发峰值 3。
+- **软链接 TOCTOU:识别了,本仓修不了(2026-08-22)**:文件工具的工作区
+  边界在 `gateService.realTarget()`——它从目标往上找最近的已存在祖先做
+  realpath 再拼未存在的部分,**仓内软链跳仓外是拦得住的**。残余是判完
+  到宿主文件工具真正执行之间的时间窗:Agent 可以在这中间把目录换成软链。
+  根治要在文件工具里用 `O_NOFOLLOW` 打开,那是 pi 的代码,不在本仓。
+  当前形态下的实际风险面很窄(要精确卡这个窗口),但**它没被关掉**;
 - **CodeHub 适配层骨架已就位(2026-08-16,src/platformAdapter.ts)**:
   `npm run adapter -- --config adapter.json`,进内网只填 codehubcli
   命令模板(argv 占位符+json/regex/const 抽取+状态映射表),代码零改动。

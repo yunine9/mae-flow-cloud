@@ -107,6 +107,10 @@ async function main(): Promise<number> {
     isolation: flag("--isolate-image")
       ? {
           image: flag("--isolate-image")!,
+          // serve 的 --isolate-cache-root 永远有默认值,试跑器却漏了它。
+          // 统一构建镜像的 entrypoint 会校验 /cache/* 可写,不给缓存
+          // 挂载就退 73——试跑一起手就是"容器启动后未处于 running"。
+          cacheRoot: join(dataDir, "build-cache"),
           volumes: process.argv.flatMap((argument, index) =>
             argument === "--isolate-volume" && process.argv[index + 1]
               ? [process.argv[index + 1]]

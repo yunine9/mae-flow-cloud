@@ -272,6 +272,68 @@ function inside(parent: string, child: string): boolean {
     && !isAbsolute(path));
 }
 
+export interface ContainerUserInput {
+  /** --isolate-user 的原值;未配置为 undefined。 */
+  configured?: string;
+  platform: NodeJS.Platform;
+  /** 服务进程自己的 uid/gid;非 POSIX 平台上可能取不到。 */
+  uid?: number;
+  gid?: number;
+}
+
+export interface ContainerUserChoice {
+  user?: string;
+  /** 为什么是这个值——启动日志要打出来,不能让人事后靠猜。 */
+  reason: string;
+}
+
+/**
+ * 决定容器以哪个用户跑。
+ *
+ * Linux 上这不是性能旋钮而是正确性问题:工作区是 bind mount,容器里
+ * 写出来的文件在宿主上就是容器 uid 的。镜像默认 builder 是 10001,
+ * 和服务账号对不上时,宿主接手做 git add/commit/push 直接 EACCES——
+ * 而且是在 Agent 干完活之后才炸,现场已经脏了。所以 Linux 不配就按
+ * 服务进程自己的 uid:gid 跑,让容器写出来的东西天生归宿主所有。
+ *
+ * macOS/Windows 的 Docker(Desktop、Colima)在 VM 边界上做 uid 映射,
+ * 宿主看到的属主永远是当前用户,套本机 uid 反而会撞上 VM 里不存在的
+ * 用户。那边保持镜像默认。
+ */
+export function resolveContainerUser(
+  input: ContainerUserInput,
+): ContainerUserChoice {
+  const configured = input.configured?.trim();
+  if (configured) {
+    return { user: configured, reason: "由 --isolate-user 显式指定" };
+  }
+  if (input.platform !== "linux") {
+    return {
+      reason: `${input.platform} 的 Docker 在 VM 边界做 uid 映射,`
+        + "沿用镜像内置非 root 用户",
+    };
+  }
+  const { uid, gid } = input;
+  if (!Number.isInteger(uid) || !Number.isInteger(gid)) {
+    throw new Error(
+      "Linux 上取不到服务进程的 uid/gid，无法保证容器写出的文件宿主可读写。"
+      + "请显式指定 --isolate-user <uid>:<gid>。");
+  }
+  if (uid === 0 || gid === 0) {
+    // 兜到 0:0 等于让业务命令在容器里当 root,那是明确红线。此时
+    // 拒绝启动比"降级成镜像默认用户"诚实——后者会在 push 前才炸。
+    throw new Error(
+      "Mae-Flow Cloud 正以 root 运行，不能把 root 兜进任务容器。"
+      + "请用非 root 服务账号启动，或显式指定 --isolate-user <uid>:<gid>"
+      + "（该 uid 需对工作区与构建缓存可写）。");
+  }
+  return {
+    user: `${uid}:${gid}`,
+    reason: "Linux 未配 --isolate-user,按服务进程 uid:gid 兜底,"
+      + "保证容器写出的文件宿主可读写",
+  };
+}
+
 /** dataDir 是一个 Cloud 实例的持久身份。完整指纹用于 ownership label，
  * 短前缀只用于可读容器名；清扫永远按完整指纹过滤，不能只凭名字猜。 */
 export function taskContainerInstance(dataDir: string): {
@@ -840,6 +902,33 @@ export class TaskContainer {
     }
   }
 
+  /**
+   * 容器启动即退出时的诊断补充:退出码 + 它自己打的最后几行。
+   *
+   * 纯旁路——取不到就返回空串,绝不把"拿日志失败"变成新的故障;
+   * 这里已经在报错路径上,再抛一次只会盖掉真正的原因。
+   */
+  private async exitDiagnosis(reference: string): Promise<string> {
+    const parts: string[] = [];
+    try {
+      const state = await this.containerInspect(reference);
+      const code = (state?.State as { ExitCode?: number } | undefined)?.ExitCode;
+      if (code !== undefined) parts.push(`退出码 ${code}`);
+    } catch {
+      // inspect 失败不影响下面取日志。
+    }
+    try {
+      const logs = await this.runner.command(
+        ["logs", "--tail", "20", reference],
+        { timeoutMs: this.runtime.managementTimeoutMs });
+      const text = logs.trim();
+      if (text) parts.push(`容器输出: ${text.slice(0, 2000)}`);
+    } catch {
+      // 容器可能已被 --rm 收走;没日志就只报退出码。
+    }
+    return parts.length ? `(${parts.join("；")})` : "";
+  }
+
   private async readAndValidateMetadata(reference: string): Promise<TaskContainerMetadata> {
     const inspected = await this.containerInspect(reference);
     if (!inspected) throw new Error(`启动后找不到任务容器 ${this.name}`);
@@ -851,7 +940,14 @@ export class TaskContainer {
     if (inspectedName !== this.name) {
       throw new Error(`Docker inspect 返回了非目标容器名: ${inspectedName || "<空>"}`);
     }
-    if (!inspected.State?.Running) throw new Error("任务容器启动后未处于 running");
+    if (!inspected.State?.Running) {
+      // 容器启动即退出时,真正的原因只在它自己的 stdout/stderr 里
+      // (实测:统一构建镜像的 entrypoint 会校验缓存目录可写,不给
+      // 缓存挂载就 "build environment is not writable" 退 73)。光说
+      // "未处于 running" 等于让人去手工复现一遍——把日志带上来。
+      const detail = await this.exitDiagnosis(id);
+      throw new Error(`任务容器启动后未处于 running${detail}`);
+    }
     const configuredUser = String(inspected.Config?.User ?? "").trim();
     if (!configuredUser || /^(?:root|0)(?::|$)/i.test(configuredUser)) {
       throw new Error("任务容器 Config.User 为空或为 root/0，拒绝运行");

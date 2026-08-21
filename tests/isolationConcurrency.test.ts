@@ -110,11 +110,13 @@ test("跨实例不误杀:两个实例的 task-1 并发跑,互不清对方容器"
     await modelB.start();
     const serviceA = new TaskService({
       dataDir: dataDirA, provider: "maeflow", model: "scripted-v1",
-      modelsJson: modelA.modelsJson(), isolation: { image: IMAGE },
+      modelsJson: modelA.modelsJson(),
+      isolation: { image: IMAGE, cacheRoot: join(dataDirA, "build-cache") },
     });
     const serviceB = new TaskService({
       dataDir: dataDirB, provider: "maeflow", model: "scripted-v1",
-      modelsJson: modelB.modelsJson(), isolation: { image: IMAGE },
+      modelsJson: modelB.modelsJson(),
+      isolation: { image: IMAGE, cacheRoot: join(dataDirB, "build-cache") },
     });
     try {
       // 背靠背发起:B 的容器启动(含 rm -f 清孤儿)落在 A 的
@@ -161,7 +163,8 @@ test("同实例串行复用:task-1/task-2 容器名不同,先后收口无残留"
     await model.start();
     const service = new TaskService({
       dataDir, provider: "maeflow", model: "scripted-v1",
-      modelsJson: model.modelsJson(), isolation: { image: IMAGE },
+      modelsJson: model.modelsJson(),
+      isolation: { image: IMAGE, cacheRoot: join(dataDir, "build-cache") },
     });
     try {
       const first = service.create("演练:第一单");

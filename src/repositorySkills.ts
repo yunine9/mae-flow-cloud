@@ -49,6 +49,12 @@ export interface DiscoverRepositorySkillsOptions {
   baseline?: string;
   /** 宿主创建的短生命周期 Git credential helper；不会写入 clone config。 */
   credentialHelper?: string;
+  /** 带个人令牌时必须一起给加固环境(prepareHostGitSandbox 的 env/args)。
+   * 我们的 helper 问什么答什么、不看 host,部署机全局配置里一条
+   * `url.<别处>.insteadOf` 就能把这次只读发现改道到另一台主机,顺手
+   * 把用户令牌带走。空 HOME/全局/系统配置让改道的配置来源不存在。 */
+  credentialArgs?: readonly string[];
+  credentialEnv?: NodeJS.ProcessEnv;
   timeoutMs?: number;
 }
 
@@ -156,6 +162,8 @@ function runGit(
     cwd?: string;
     deadline: number;
     maxBuffer?: number;
+    /** 带令牌时由调用方给出的加固环境;缺省沿用宿主环境。 */
+    env?: NodeJS.ProcessEnv;
   },
 ): Promise<Buffer> {
   const remaining = options.deadline - Date.now();
@@ -170,7 +178,7 @@ function runGit(
       killSignal: "SIGKILL",
       maxBuffer: options.maxBuffer ?? MAX_TREE_BYTES,
       env: {
-        ...process.env,
+        ...(options.env ?? process.env),
         GIT_TERMINAL_PROMPT: "0",
         // 禁掉 ext 等外部 remote helper；只开放平台实际会用到的传输。
         GIT_ALLOW_PROTOCOL: "file:http:https:ssh:git",
@@ -255,7 +263,12 @@ export async function discoverRepositorySkills(
   const temporaryRoot = mkdtempSync(join(tmpdir(), TEMP_PREFIX));
   const cloneDir = join(temporaryRoot, "repository.git");
   const parseDir = join(temporaryRoot, "parse");
-  const authArgs = gitAuthArgs(options.credentialHelper);
+  // 只有这两条真的带着个人令牌上网,加固环境跟着它们走;后面
+  // ls-tree/cat-file 都在本地临时克隆上跑,不登记 helper。
+  const authArgs = options.credentialHelper
+    ? [...(options.credentialArgs ?? []), ...gitAuthArgs(options.credentialHelper)]
+    : [];
+  const authEnv = options.credentialHelper ? options.credentialEnv : undefined;
   let revision = "";
   try {
     await runGit([
@@ -263,13 +276,13 @@ export async function discoverRepositorySkills(
       ...authArgs,
       "clone", "--quiet", "--no-checkout", "--no-local", "--depth=1",
       "--", options.repository, cloneDir,
-    ], { deadline, maxBuffer: 256 * 1024 });
+    ], { deadline, maxBuffer: 256 * 1024, env: authEnv });
 
     if (options.baseline) {
       await runGit([
         ...authArgs,
         "fetch", "--quiet", "--depth=1", "origin", options.baseline,
-      ], { cwd: cloneDir, deadline, maxBuffer: 256 * 1024 });
+      ], { cwd: cloneDir, deadline, maxBuffer: 256 * 1024, env: authEnv });
       revision = (await runGit(
         ["rev-parse", "--verify", "FETCH_HEAD^{commit}"],
         { cwd: cloneDir, deadline, maxBuffer: 4096 },

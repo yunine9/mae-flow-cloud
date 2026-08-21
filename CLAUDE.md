@@ -51,13 +51,23 @@ npm run pilot -- --label <名>            # 真模型试跑(.local/models.json)
 npm run pilot -- --resume <label>        # 断点续跑(quota 和进度都是钱)
 harness/preflight.sh     # 上线自查;--isolate-image/--models/--adapter 加项
 harness/restart-drill.sh # 真 kill -9 重启演练
+npx tsx harness/concurrency-drill.ts --image <镜像>   # 真模型+真容器并发实战
+MFC_REAL_BUILD_IMAGE=<镜像> npm test   # 解开 6 条真 Docker 用例(0 skip)
 python3 harness/run-report.py .pilot/<label>   # 试跑现场一键对拍
 ```
 
 ## 本机环境的坑(细节见用户级记忆)
 
-- Cloud 宿主不提供编译、UT 运行或 CodeCheck；容器只做任务隔离，质量
-  执行统一交给绑定提交 SHA 的流水线。UT skill 只负责测试编写。
+- **2026-08-22 勘误**:原文"Cloud 宿主不提供编译、UT 运行或 CodeCheck"
+  已被 cc2da9d 推翻。现在的口径是:普通编码会话仍不编译,但**宿主在每个
+  新 HEAD push 前另起一个推送前验证 Agent**,在一次性构建容器里跑仓库
+  真实的编译与 UT,失败可自行修复并本地 commit。它是 push 前的闸门,
+  不是质量裁判——CodeCheck 与最终核销仍只在绑定 SHA 的流水线。UT skill
+  仍只负责测试编写。详见 README「Cloud 固有执行契约」。
+- 容器不只做隔离了:内核模式未配 `--isolate-image` 直接拒绝启动;
+  主 Agent、子 Agent、修复会话与 prepush 的**所有 Bash** 都进容器,
+  文件 Read/Edit/Write 仍在宿主(受工作区 realpath 边界 + fail-closed
+  Gate 约束)。
 - docker 走 Colima:VM 只挂 $HOME(/var/folders 挂进去是空目录);
   **有容器任务在跑时绝不 colima start/stop 任何 profile**(会切
   docker context,活容器 exec 全灭,实测打死过一次续跑)。

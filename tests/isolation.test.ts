@@ -73,7 +73,10 @@ test("bash 进容器执行;产物宿主可见;收口后容器销毁", { skip: SK
       provider: "maeflow",
       model: "scripted-v1",
       modelsJson: model.modelsJson(),
-      isolation: { image: IMAGE },
+      // 真实部署的 --isolate-cache-root 永远有值(默认 <data>/build-cache)。
+      // 不给缓存挂载时统一构建镜像的 entrypoint 会因 /cache/* 不可写退 73,
+      // 那是这里造出来的、线上不存在的配置——夹具必须照着真形态搭。
+      isolation: { image: IMAGE, cacheRoot: join(dataDir, "build-cache") },
     });
     try {
       const created = service.create("演练:确认命令在容器里跑");

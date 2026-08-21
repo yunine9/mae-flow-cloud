@@ -736,8 +736,15 @@ interface TaskState {
    * 对"推不动"无效);累计上限防对话式空转。 */
   nudgedStep?: string;
   nudgeCount?: number;
-  /** 任务专属容器(隔离模式):随任务起,随收口停。 */
+  /** 任务专属容器(隔离模式):随任务起,随收口停。等人期间会被释放,
+   * 此时为 undefined 而会话仍活着——下一条 Bash 到来时按 containerWorkspace
+   * 重新开。 */
   container?: TaskCommandContainer;
+  /** 容器该挂哪个目录。需求理解单挂 repositories/,普通单挂仓根;
+   * 释放后重开必须挂回同一个,不能靠猜。 */
+  containerWorkspace?: string;
+  /** 重开动作的防重入:一个回合里并发的多条 Bash 只该开一个容器。 */
+  containerReopen?: Promise<TaskCommandContainer>;
   /** 合入监控环的防重入锁(内存态):一任务只挂一环。 */
   mergeWatchActive?: boolean;
   /** 流水线证据核销重试的防重入锁。纯宿主 timer，不占 Agent 会话。 */
@@ -946,6 +953,137 @@ export class TaskService {
       taskId: ownedInput.options.labels?.["com.mae-flow-cloud.task"] ?? "system",
     });
     return tracked;
+  }
+
+  /**
+   * 起一个普通编码任务容器并等它就绪。
+   *
+   * 抽出来是因为它现在有两个调用点:会话开场,以及等人期间释放后
+   * 第一条 Bash 到来时重新开。两处必须用同一套挂载、限额与 label,
+   * 否则"释放再开"会悄悄换掉隔离参数。
+   */
+  private async startCodingContainer(
+    task: TaskState,
+  ): Promise<TaskCommandContainer> {
+    const isolation = this.options.isolation;
+    if (!isolation) throw new Error("未配置任务容器隔离");
+    const cwd = task.containerWorkspace;
+    if (!cwd) throw new Error("任务容器工作区未知，拒绝按猜测挂载");
+    const {
+      image, volumes, memory, cpus, user, pidsLimit, labels,
+      readOnlyRoot, tmpfsHome, tmpfsTmp, network,
+      forwardEnvironment, stopGraceSeconds, managementTimeoutMs,
+    } = isolation;
+    // 容器名带数据目录指纹:同 dataDir 重启后同名(孤儿可清扫),
+    // 不同实例(测试与试跑并行)绝不同名——只按任务 id 命名时,
+    // 另一实例的 rm -f 会把这边活着的容器当孤儿误杀(实测:
+    // run7 续跑期间并行跑隔离测试,容器被杀,模型如实报告
+    // "执行容器丢失",整单被迫收口)。
+    const instance = taskContainerInstance(this.options.dataDir).namePrefix;
+    // host 模式的两条硬依赖也要进容器:内核插件根(转发壳硬编码
+    // 其绝对路径,只读)与 Git 远端——但只有本地路径仓(演示裸仓)
+    // 才需要挂载;URL 仓走网络,拿路径当挂载参数只会喂 docker 垃圾。
+    const effectiveRepo =
+      task.summary.repo_url ?? this.effectiveDefaultRepo();
+    const hostMounts = this.options.host
+      ? [
+          `${this.options.host.kernelRoot}:${this.options.host.kernelRoot}:ro`,
+          ...(effectiveRepo && existsSync(effectiveRepo)
+            ? [`${effectiveRepo}:${effectiveRepo}`] : []),
+        ]
+      : [];
+    const mounts = this.taskContainerMounts(
+      task, [...hostMounts, ...(volumes ?? [])]);
+    const container = this.createTaskContainer({
+      image,
+      workspace: cwd,
+      name: `mfc-${instance}-${task.summary.id}`,
+      log: this.options.log,
+      volumes: mounts.volumes,
+      limits: { memory, cpus, user, pidsLimit },
+      options: {
+        labels: {
+          ...(labels ?? {}),
+          "com.mae-flow-cloud.task": task.summary.id,
+          "com.mae-flow-cloud.role": "coding",
+        },
+        readOnlyRoot,
+        tmpfsHome,
+        tmpfsTmp,
+        network,
+        environment: mounts.environment,
+        forwardEnvironment,
+        stopGraceSeconds,
+        managementTimeoutMs,
+      },
+    });
+    await container.start();
+    return container;
+  }
+
+  /**
+   * 等人期间把闲置容器还给机器。
+   *
+   * 一张审批卡挂一晚上,容器就占一晚上内存和 pids 名额——10~20 人
+   * 共用一台机器时这是真的会把后面的单堵死。释放是安全的:每条
+   * Bash 都是独立 docker exec,本来就不依赖上一条留下的 shell 状态;
+   * 工作区是 bind mount,改动都在宿主盘上。丢的只有 HOME 与 /tmp
+   * 两个 tmpfs,以及上一轮遗留的后台进程——后者本就活不过会话。
+   *
+   * 释放属于旁路,失败只记不抛(不卡死红线);真正 fail-closed 的是
+   * 重新开:开不起来就拒绝执行命令,绝不落回宿主。
+   */
+  private async releaseIdleContainer(
+    task: TaskState,
+    why: string,
+  ): Promise<void> {
+    const container = task.container;
+    if (!container) return;
+    task.container = undefined;
+    try {
+      await container.stop();
+      this.options.log?.(
+        `任务 ${task.summary.id} ${why},已释放闲置任务容器`);
+    } catch (error) {
+      this.options.log?.(
+        `任务 ${task.summary.id} ${why}释放容器失败(下次执行会重新开): `
+        + String(error));
+    }
+  }
+
+  /**
+   * 取得可用的任务容器:还在就直接用,等人期间被释放过就重新开。
+   *
+   * 开不起来一律抛给调用方 → 变成这条 Bash 的执行失败。这里绝不
+   * 能退回宿主执行:那是"要隔离就真隔离"红线的正面。
+   */
+  private async activeTaskContainer(
+    task: TaskState,
+  ): Promise<TaskCommandContainer> {
+    if (task.container) return task.container;
+    if (!task.containerReopen) {
+      // 重开是异步的,期间用户完全可能按下暂停/取消——那条路径刚
+      // 停完容器就把 task.container 置空,我们再挂一个上去就是无主
+      // 泄漏。拿 epoch 当凭证:换了就地自毁,不往任务上挂。
+      const epoch = task.controlEpoch;
+      task.containerReopen = this.startCodingContainer(task)
+        .then(async (container) => {
+          if (!this.current(task, epoch)) {
+            await container.stop().catch(() => undefined);
+            throw new Error("任务容器重开期间任务已暂停或取消，已就地回收");
+          }
+          if (task.container) {
+            await container.stop().catch(() => undefined);
+            return task.container;
+          }
+          task.container = container;
+          this.options.log?.(
+            `任务 ${task.summary.id} 收到新命令,任务容器已重新开起`);
+          return container;
+        })
+        .finally(() => { task.containerReopen = undefined; });
+    }
+    return task.containerReopen;
   }
 
   /** recover 前调用：只清扫完整 dataDir ownership 指纹匹配的遗留容器。 */
@@ -1944,8 +2082,10 @@ export class TaskService {
     if (/\s/.test(baseline)) throw new Error("基线分支不能含空白字符");
 
     const credential = this.options.gitCredential?.(input.account);
+    // 只读发现同样带着用户的个人令牌上网,和 clone/push 用同一套加固
+    // 沙箱:部署机全局配置里的 insteadOf 改道不能把令牌带去别处。
     const prepared = credential
-      ? this.prepareHostGitCredential(credential) : undefined;
+      ? this.prepareHostGitSandbox(credential) : undefined;
     const catalogs: RepositorySkillCatalog[] = [];
     try {
       for (const repository of repositories) {
@@ -1953,6 +2093,8 @@ export class TaskService {
           repository,
           baseline,
           credentialHelper: prepared?.helper,
+          credentialArgs: prepared?.args,
+          credentialEnv: prepared?.env,
           timeoutMs: 30_000,
         });
         catalogs.push(this.catalogWithConflicts({
@@ -3341,12 +3483,12 @@ export class TaskService {
         if (!resuming) {
           mkdirSync(analysisRoot, { recursive: true });
           const prepared = gitIdentity
-            ? this.prepareHostGitCredential(gitIdentity) : undefined;
+            ? this.prepareHostGitSandbox(gitIdentity) : undefined;
           try {
             (task.summary.repositories ?? []).forEach((repository, index) => {
               // readonly:分析现场推送硬禁用(没有内核门禁兜底,禁令
               // 不能只写在 prompt 里)。
-              this.cloneRepo(analysisRoot, prepared?.helper, gitIdentity,
+              this.cloneRepo(analysisRoot, prepared, gitIdentity,
                 repository, task.summary.baseline,
                 `${index + 1}-${basename(repository).replace(/\.git$/, "") || "repo"}`,
                 true);
@@ -3389,9 +3531,9 @@ export class TaskService {
           cwd = savedCwd!;
         } else {
           const prepared = gitIdentity
-            ? this.prepareHostGitCredential(gitIdentity) : undefined;
+            ? this.prepareHostGitSandbox(gitIdentity) : undefined;
           try {
-            cwd = this.cloneRepo(workspace, prepared?.helper, gitIdentity,
+            cwd = this.cloneRepo(workspace, prepared, gitIdentity,
               task.summary.repo_url, task.summary.baseline);
           } finally {
             this.cleanupHostGitCredential(prepared);
@@ -3634,55 +3776,10 @@ export class TaskService {
       // 容器隔离:bash 进任务专属容器(工作区同路径挂载),
       // 起不来直接抛=任务 failed——静默降级回宿主是假隔离。
       if (this.options.isolation) {
-        const {
-          image, volumes, memory, cpus, user, pidsLimit, labels,
-          readOnlyRoot, tmpfsHome, tmpfsTmp, network,
-          forwardEnvironment, stopGraceSeconds, managementTimeoutMs,
-        } = this.options.isolation;
-        // 容器名带数据目录指纹:同 dataDir 重启后同名(孤儿可清扫),
-        // 不同实例(测试与试跑并行)绝不同名——只按任务 id 命名时,
-        // 另一实例的 rm -f 会把这边活着的容器当孤儿误杀(实测:
-        // run7 续跑期间并行跑隔离测试,容器被杀,模型如实报告
-        // "执行容器丢失",整单被迫收口)。
-        const instance = taskContainerInstance(this.options.dataDir).namePrefix;
-        // host 模式的两条硬依赖也要进容器:内核插件根(转发壳硬编码
-        // 其绝对路径,只读)与 Git 远端——但只有本地路径仓(演示裸仓)
-        // 才需要挂载;URL 仓走网络,拿路径当挂载参数只会喂 docker 垃圾。
-        const effectiveRepo =
-          task.summary.repo_url ?? this.effectiveDefaultRepo();
-        const hostMounts = this.options.host
-          ? [
-              `${this.options.host.kernelRoot}:${this.options.host.kernelRoot}:ro`,
-              ...(effectiveRepo && existsSync(effectiveRepo)
-                ? [`${effectiveRepo}:${effectiveRepo}`] : []),
-            ]
-          : [];
-        const mounts = this.taskContainerMounts(
-          task, [...hostMounts, ...(volumes ?? [])]);
-        task.container = this.createTaskContainer({
-          image,
-          workspace: cwd,
-          name: `mfc-${instance}-${task.summary.id}`,
-          log: this.options.log,
-          volumes: mounts.volumes,
-          limits: { memory, cpus, user, pidsLimit },
-          options: {
-            labels: {
-              ...(labels ?? {}),
-              "com.mae-flow-cloud.task": task.summary.id,
-              "com.mae-flow-cloud.role": "coding",
-            },
-            readOnlyRoot,
-            tmpfsHome,
-            tmpfsTmp,
-            network,
-            environment: mounts.environment,
-            forwardEnvironment,
-            stopGraceSeconds,
-            managementTimeoutMs,
-          },
-        });
-        await task.container.start();
+        // 工作区记在任务上:等人期间容器会被释放,重新开时得知道
+        // 当时挂的是哪个目录(需求理解单的 cwd 是 repositories/)。
+        task.containerWorkspace = cwd;
+        task.container = await this.startCodingContainer(task);
         if (!this.current(task, epoch)) {
           await task.container.stop().catch(() => undefined);
           task.container = undefined;
@@ -3724,8 +3821,11 @@ export class TaskService {
         hostHooks,
         bashOperations: task.container
           ? {
-              exec: (command, dir, execOptions) =>
-                task.container!.exec(command, dir, execOptions),
+              // 不锁死开场那个容器实例:等人期间它会被释放,这里必须
+              // 每次现取,取不到就现开(开不起来照样抛,不回宿主)。
+              exec: async (command, dir, execOptions) =>
+                (await this.activeTaskContainer(task))
+                  .exec(command, dir, execOptions),
             }
           : undefined,
         log: this.options.log,
@@ -6219,7 +6319,9 @@ export class TaskService {
    * commit email 映射——两码事,都得写。 */
   private cloneRepo(
     workspace: string,
-    gitHelper?: string,
+    /** 带个人令牌时必须传加固沙箱(prepareHostGitSandbox),不能只给
+     * helper 路径——见下面 useCredential 分支的注释。 */
+    sandbox?: { helper?: string; args: string[]; env: NodeJS.ProcessEnv },
     identity?: { username: string; email?: string },
     repoUrl?: string,
     /** 下单时明确的代码基线。新克隆必须直接检出它，不能先落到远端
@@ -6255,19 +6357,29 @@ export class TaskService {
       || (existsSync(join(source, "HEAD"))
           && existsSync(join(source, "objects")));
     // 凭据只对 http(s) 远端有意义;本地路径克隆(演示/试跑)不掺和。
-    const useCredential = !!gitHelper && /^https?:\/\//i.test(source);
+    const useCredential = !!sandbox?.helper && /^https?:\/\//i.test(source);
     if (isGit || /^(?:https?|ssh|git|file):\/\//i.test(source)) {
       // 空 helper 在前=清空继承的 helper 列表(系统钥匙串之流):
       // 个人令牌只从我们的脚本来,也不许被别的 helper 顺手存走
       // (git 会对列表里所有 helper 广播 store——实测令牌进过
       // macOS 钥匙串,测试负例因此假绿)。没有个人凭据时不动列表,
       // 部署机自己的服务账号 helper 照常工作。
+      //
+      // 带个人令牌时还必须走 push/ls-remote 同一套加固沙箱。理由是
+      // 我们的 helper 是"问什么都答"的——它不看 git 传进来的 host。
+      // 部署机 ~/.gitconfig 或 /etc/gitconfig 里一条
+      // `url.<别处>.insteadOf` 就能把这次 clone 改道到另一台主机,
+      // 而 helper 会照样把用户的个人 CodeHub 令牌交出去。沙箱把
+      // HOME/全局/系统配置全部换成空的,改道的配置来源就不存在了;
+      // 顺带关掉 ext 传输、仓库 hooks 与交互式 askpass。
+      const hardened = useCredential ? sandbox! : undefined;
       const cloned = spawnSync(
         "git",
         [
-          ...(useCredential
-            ? ["-c", "credential.helper=",
-               "-c", `credential.helper=${gitHelper}`]
+          ...(hardened
+            ? [...hardened.args,
+               "-c", "credential.helper=",
+               "-c", `credential.helper=${hardened.helper}`]
             : []),
           "clone", "--quiet",
           ...(checkoutBaseline ? ["--branch", checkoutBaseline] : []),
@@ -6277,7 +6389,9 @@ export class TaskService {
           encoding: "utf-8",
           // 子进程没有终端,git 想问密码只会把任务挂死——明令禁问,
           // 缺凭据就地失败,错误如实上浮(不卡死红线)。
-          env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+          env: hardened
+            ? { ...hardened.env, GIT_TERMINAL_PROMPT: "0" }
+            : { ...process.env, GIT_TERMINAL_PROMPT: "0" },
         });
       if (cloned.status !== 0) {
         const detail = String(cloned.stderr || "").trim().slice(0, 500);
@@ -6515,8 +6629,13 @@ export class TaskService {
         if (auto) {
           this.options.log?.(
             `任务 ${task.summary.id} 人工节点自动交卷(${auto.why})`);
+          // 自动交卷=马上就要接着跑,别做"停了再开"的无用功。
           setImmediate(() => void this.autoDecide(task, auto));
         } else {
+          // 真·等人:一张卡可能挂一晚上,容器不该陪着占内存和 pids
+          // 名额。会话仍活着(pi 停在工具调用里),答复到达后第一条
+          // Bash 会把容器重新开起来。
+          await this.releaseIdleContainer(task, "等待人工决定");
           this.notifyWaiting(task);
         }
         break;
