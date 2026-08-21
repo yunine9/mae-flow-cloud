@@ -36,7 +36,6 @@ import {
   type TaskSummary,
 } from "./api";
 import {
-  ActionLedger,
   ActivityPanel,
   RetryButton,
   TaskProgress,
@@ -529,7 +528,7 @@ export function TaskWorkspace({
           <div className="task-utilities">
             <ActivityPanel task={task} />
             <TaskTimeline taskId={task.id} />
-            {task.delivery && <ActionLedger taskId={task.id} />}
+            {/* 外部动作台账不再上页面,理由同 TaskCard;接口仍在。 */}
           </div>
         </aside>
       </div>

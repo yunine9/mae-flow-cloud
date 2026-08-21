@@ -1660,10 +1660,13 @@ svg {
   border-radius: 9px;
   font-size: 11.5px;
 }
+/* 单列:这几块都是"展开细读"的东西,两列并排时每块只剩半个屏宽,
+   执行心流的正文被压成一条缝——那正是截断难受的另一半原因。
+   去掉外部动作台账之后剩三块,竖着排信息密度也不过载。 */
 .task-utilities {
   margin-top: 12px;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
 }
 .utility-panel {
@@ -1684,9 +1687,20 @@ svg {
   list-style: none;
 }
 .utility-panel summary::-webkit-details-marker { display: none; }
-.utility-panel summary > span { display: flex; flex-direction: column; }
+/* min-width:0 是关键:侧栏很窄时,不给它 flex 子项会被内容撑破,
+   标题与副标题一起溢出到箭头底下。 */
+.utility-panel summary > span {
+  min-width: 0; display: flex; flex-direction: column;
+}
 .utility-panel summary strong { color: var(--text-strong); font-size: 11.5px; }
-.utility-panel summary small { margin-top: 2px; color: var(--muted); font-size: 10px; }
+.utility-panel summary small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.utility-panel summary > i { flex: none; }
 .utility-panel summary > i {
   width: 7px;
   height: 7px;
@@ -2523,7 +2537,6 @@ pre {
   .decision-footer { align-items: stretch; flex-direction: column; }
   .decision-notes label { grid-template-columns: 1fr; gap: 4px; }
   .submit-decision { width: 100%; }
-  .task-utilities { grid-template-columns: 1fr; }
   .history-intro { padding: 18px; align-items: flex-start; }
   .history-intro p { max-width: 360px; }
   .history-table-head { display: none; }
@@ -2779,22 +2792,26 @@ pre {
 .activity-segments {
   margin: 0;
   padding: 10px 13px;
-  max-height: 320px;
+  max-height: 420px;      /* detail 改成折行后行数会多,给足再滚 */
   overflow-y: auto;
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 9px;
 }
+/* 时间不再独占一列:窄侧栏里"图标+时间+正文"三列会把正文挤成一条缝。
+   时间挪进正文行首,正文拿满整行宽度。 */
 .activity-segment {
   display: grid;
-  grid-template-columns: 18px auto minmax(0, 1fr);
+  grid-template-columns: 18px minmax(0, 1fr);
   gap: 8px;
-  align-items: baseline;
+  align-items: start;
 }
 .activity-segment i {
+  margin-top: 1px;        /* 与正文首行基线对齐(align-items 改 start 后需要) */
   width: 18px;
   height: 18px;
+  flex: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2808,17 +2825,35 @@ pre {
 .activity-segment.edit i,
 .activity-segment.bash i { color: var(--accent); border-color: var(--accent-soft); }
 .activity-segment.has-error i { color: var(--danger); border-color: var(--danger); background: var(--danger-soft); }
-.activity-segment time { font-size: 9.5px; color: var(--muted); white-space: nowrap; }
-.activity-segment-body { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.activity-segment-body strong { font-size: 11px; color: var(--text-strong); font-weight: 600; }
-.activity-segment.has-error .activity-segment-body strong { color: var(--danger); }
-.activity-segment-body span {
-  font-size: 10px;
+.activity-segment time {
+  margin-right: 6px;
   color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-size: 9.5px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+.activity-segment-body { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.activity-segment-body strong {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-strong);
+  font-weight: 600;
+}
+.activity-segment.has-error .activity-segment-body strong { color: var(--danger); }
+/* detail 原来是单行 + 省略号,而服务端一条 detail 可能是四条命令拼起来
+   的三百多字——一行装不下,省略号后面全看不见,等于白记(用户原话:
+   "有截断很难受")。这里改成整段折行:面板本来就是可滚动区域,信息
+   密度换来的是真能读。 */
+.activity-segment-body span {
+  font-size: 10px;
+  line-height: 1.55;
+  color: var(--muted);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.activity-segment-body strong { overflow-wrap: anywhere; }
 .activity-truncated, .activity-foot {
   font-size: 9.5px;
   color: var(--muted);
@@ -3833,29 +3868,13 @@ pre {
 .ws-decision .decision-footer { min-height: 76px; padding: 16px 18px; }
 .ws-decision .decision-notes > button { font-size: 12.5px; }
 .ws-decision .submit-decision { min-height: 44px; padding-left: 18px; padding-right: 18px; font-size: 13px; }
-.ws-decision .task-utilities { grid-template-columns: 1fr; margin-top: 2px; }
-.ws-decision .utility-panel,
-.ws-decision .utility-block {
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--surface);
-  box-shadow: var(--shadow-xs);
-}
-.utility-block { margin: 0; }
-.utility-block > summary {
-  min-height: 54px;
-  padding: 10px 13px;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  cursor: pointer;
-  list-style: none;
-}
-.utility-block > summary::-webkit-details-marker { display: none; }
-.utility-block > summary strong { color: var(--text-strong); font-size: 11.5px; }
-.utility-block > summary span { margin-top: 2px; color: var(--muted); font-size: 10px; }
-.utility-block[open] > summary { border-bottom: 1px solid var(--line); }
+.ws-decision .task-utilities { margin-top: 2px; }
+.ws-decision .utility-panel { box-shadow: var(--shadow-xs); }
+/* 曾经这里还有一整套 .utility-block(无边框的裸折叠块)。它只有在
+   .ws-decision 上下文里才被补上边框,于是同样四块面板——执行心流、
+   耗时与卡点用 block,外部动作台账、过程记录用 panel——在任务卡上
+   一半是卡片一半是裸的,连 summary 的 DOM 结构都两套。
+   2026-08-21 用户提"有的是卡片有的不是",全部并入 .utility-panel。 */
 .ws-idle {
   padding: 15px 16px;
   color: var(--muted);

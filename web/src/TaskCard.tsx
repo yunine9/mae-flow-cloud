@@ -236,7 +236,9 @@ export function TaskCard({
           <div className="task-utilities">
             <ActivityPanel task={task} />
             <TaskTimeline taskId={task.id} />
-            {task.delivery && <ActionLedger taskId={task.id} />}
+            {/* 外部动作台账(ActionLedger)不再上页面:一屏四块信息密度
+                过载,而它是排障口不是日常口。组件与 GET /tasks/:id/actions
+                都还在,要查幂等键/绑定 SHA 时直接调接口。 */}
             <EventTail taskId={task.id} />
           </div>
         </div>
@@ -601,14 +603,17 @@ export function TaskTimeline({ taskId }: { taskId: string }) {
 
   return (
     <details
-      className="utility-block"
+      className="utility-panel"
       onToggle={(toggle) => {
         if ((toggle.target as HTMLDetailsElement).open) void load();
       }}
     >
       <summary>
-        <strong>耗时与卡点</strong>
-        <span>时间去哪了 · 卡在谁身上</span>
+        <span>
+          <strong>耗时与卡点</strong>
+          <small>时间去哪了 · 卡在谁身上</small>
+        </span>
+        <i aria-hidden />
       </summary>
       {loading && <div className="utility-note">正在读取现场…</div>}
       {unavailable && <div className="utility-note">{unavailable}</div>}
@@ -790,19 +795,22 @@ export function ActivityPanel({ task }: { task: TaskSummary }) {
   const alerts = view.alerts;
 
   return (
-    <details className="utility-block activity-panel" open={running}>
+    <details className="utility-panel activity-panel" open={running}>
       <summary>
-        <strong>
-          执行心流
-          {alerts.length > 0 && (
-            <em className="activity-alert-badge">{alerts.length} 个信号</em>
-          )}
-        </strong>
         <span>
-          {view.now
-            ? `${view.now} · ${sinceText(view.now_since)}`
-            : "折叠后的行为账 · 展开看它干了什么"}
+          <strong>
+            执行心流
+            {alerts.length > 0 && (
+              <em className="activity-alert-badge">{alerts.length} 个信号</em>
+            )}
+          </strong>
+          <small>
+            {view.now
+              ? `${view.now} · ${sinceText(view.now_since)}`
+              : "折叠后的行为账 · 展开看它干了什么"}
+          </small>
         </span>
+        <i aria-hidden />
       </summary>
 
       {alerts.length > 0 && (
@@ -825,12 +833,14 @@ export function ActivityPanel({ task }: { task: TaskSummary }) {
           <li key={index}
               className={`activity-segment ${segment.kind}${segment.errors ? " has-error" : ""}`}>
             <i aria-hidden>{SEGMENT_ICON[segment.kind] ?? "·"}</i>
-            <time dateTime={segment.start}
-                  title={formatLocalDateTime(segment.start, { seconds: true })}>
-              {formatLocalClock(segment.start)}
-            </time>
             <span className="activity-segment-body">
-              <strong>{segment.title}</strong>
+              <strong>
+                <time dateTime={segment.start}
+                      title={formatLocalDateTime(segment.start, { seconds: true })}>
+                  {formatLocalClock(segment.start)}
+                </time>
+                {segment.title}
+              </strong>
               {segment.detail && <span>{segment.detail}</span>}
             </span>
           </li>
