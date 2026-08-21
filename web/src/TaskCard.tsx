@@ -23,6 +23,7 @@ import {
 import { formatWait, URGENT_MINUTES, waitedMs } from "./taskTime";
 import { responsibleOf } from "./teamOps";
 import type { RepositorySkillSelection } from "./RepositorySkillPicker";
+import { PrepushStatus } from "./PrepushStatus";
 import {
   formatLocalClock,
   formatLocalDateTime,
@@ -120,6 +121,7 @@ export function TaskCard({
               showDetailedStep={decisionMode === "form"}
             />
           )}
+          <PrepushStatus prepush={task.delivery?.prepush} />
         </span>
         <span className="task-chevron" aria-hidden>
           <svg viewBox="0 0 20 20">

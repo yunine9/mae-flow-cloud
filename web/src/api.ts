@@ -287,6 +287,29 @@ export interface TaskProgress {
   };
 }
 
+/** Cloud 在每次 push 前运行的独立验证会话。它不属于内核流程状态，
+ * 因此只作为 delivery 的可选事实镜像；旧后端不返回时前端保持原样。 */
+export type PrepushState =
+  | "queued"
+  | "preparing"
+  | "compiling"
+  | "testing"
+  | "repairing"
+  | "blocked"
+  | "environment_error"
+  | "passed";
+
+export interface PrepushVerification {
+  state: PrepushState | (string & {});
+  /** 自动修复轮次；只有 Cloud 启动修复 Agent 后才会出现。 */
+  round?: number;
+  /** 当前动作或异常摘要，由 Cloud 原样透传。 */
+  message?: string;
+  /** 本次验证绑定的提交；push 只能复用同一 SHA 的通过结果。 */
+  sha?: string;
+  updated_at?: string;
+}
+
 export interface TaskSummary {
   id: string;
   title?: string;
@@ -332,6 +355,8 @@ export interface TaskSummary {
     mr_state?: string;
     pipeline?: string;
     skipped?: string;
+    /** Cloud 原生推送前快检；缺席表示服务端尚未开始或不支持该能力。 */
+    prepush?: PrepushVerification;
     /** 卡在哪一环的人话(等审批、等某一项核销结果……)。服务端一直
      * 在写,前端一直没显示——于是"验证中"三个字后面藏着的真实原因
      * 谁也看不到,任务看着像马上要成了,其实早就停了。 */

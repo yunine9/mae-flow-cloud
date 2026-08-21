@@ -1468,6 +1468,125 @@ svg {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
 }
 .task-phase > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 推送前快检独立于内核主状态：列表卡片用一条轻量状态带，工作台
+   展开动作摘要与绑定 SHA；服务端未返回 prepush 时组件不占任何空间。 */
+.prepush-status {
+  --prepush-color: var(--muted);
+  --prepush-soft: var(--surface-muted);
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--prepush-color);
+  border: 1px solid color-mix(in srgb, var(--prepush-color) 19%, var(--line));
+  background: color-mix(in srgb, var(--prepush-soft) 72%, var(--surface));
+}
+.prepush-status.tone-active { --prepush-color: var(--active); --prepush-soft: var(--active-soft); }
+.prepush-status.tone-repair { --prepush-color: var(--attention); --prepush-soft: var(--attention-soft); }
+.prepush-status.tone-danger { --prepush-color: var(--danger); --prepush-soft: var(--danger-soft); }
+.prepush-status.tone-success { --prepush-color: var(--success); --prepush-soft: var(--success-soft); }
+.prepush-marker {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  background: var(--prepush-soft);
+}
+.prepush-marker > i {
+  width: 7px;
+  height: 7px;
+  display: block;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 12%, transparent);
+}
+.prepush-marker.busy > i { animation: prepushPulse 1.35s ease-in-out infinite; }
+@keyframes prepushPulse {
+  50% { opacity: .36; transform: scale(.78); }
+}
+.phase-passed .prepush-marker > i {
+  width: 9px;
+  height: 5px;
+  margin-top: -2px;
+  border: solid currentColor;
+  border-width: 0 0 2px 2px;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  transform: rotate(-45deg);
+}
+.phase-environment .prepush-marker > i {
+  width: 10px;
+  height: 10px;
+  position: relative;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.phase-environment .prepush-marker > i::before,
+.phase-environment .prepush-marker > i::after {
+  content: "";
+  position: absolute;
+  top: 4px;
+  left: 0;
+  width: 10px;
+  height: 2px;
+  border-radius: 2px;
+  background: currentColor;
+  transform: rotate(45deg);
+}
+.phase-environment .prepush-marker > i::after { transform: rotate(-45deg); }
+.prepush-copy { min-width: 0; display: flex; align-items: baseline; gap: 7px; }
+.prepush-copy strong { min-width: 0; color: var(--text-strong); font-size: 11.5px; }
+.prepush-copy small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.prepush-facts {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 9px;
+  white-space: nowrap;
+}
+.prepush-facts > span { padding: 2px 6px; border-radius: 999px; background: var(--prepush-soft); }
+.prepush-facts code {
+  color: var(--muted);
+  font: 650 8.5px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  letter-spacing: .02em;
+}
+.prepush-card {
+  width: min(100%, 720px);
+  min-height: 34px;
+  margin-top: 10px;
+  padding: 5px 9px;
+  border-radius: 9px;
+}
+.prepush-workspace {
+  min-height: 48px;
+  padding: 8px 24px;
+  border-width: 0 0 1px;
+  border-radius: 0;
+  box-shadow: var(--shadow-xs);
+}
+.prepush-workspace .prepush-copy {
+  flex: 1;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 2px;
+}
+.prepush-workspace .prepush-copy strong { font-size: 12.5px; }
 .task-chevron {
   width: 28px;
   height: 28px;
@@ -4221,6 +4340,7 @@ pre {
   .ws-back { width: 38px; padding: 0; }
   .ws-progress { padding: 9px 14px 11px; overflow-x: auto; }
   .ws-progress .task-progress { min-width: 620px; }
+  .prepush-workspace { padding: 8px 14px; }
   .ws-body, .ws-body:not(.has-decision) { display: flex; flex-direction: column; overflow-y: auto; }
   .ws-evidence {
     min-height: 62vh;
@@ -4237,6 +4357,8 @@ pre {
 }
 
 @media (max-width: 560px) {
+  .prepush-workspace .prepush-copy small { white-space: normal; }
+  .prepush-workspace .prepush-facts code { display: none; }
   .ws-identity strong { font-size: 11px; }
   .ws-pane-head { padding: 10px 14px; align-items: flex-start; flex-direction: column; }
   .ws-pane-head > .ws-source-switch { width: 100%; overflow-x: auto; }

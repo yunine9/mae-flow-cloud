@@ -79,6 +79,27 @@ import {
   type RepositorySkillCatalog,
   type RepositorySkillDescriptor,
 } from "./repositorySkills.ts";
+import {
+  createPrePushGateContract,
+  parsePrePushAgentReport,
+  prePushMission,
+  verifyPrePushEvidence,
+  type PrePushAgentReport,
+  type PrePushRunRequest,
+  type PrePushRunResult,
+  type PrePushRunner,
+} from "./prepushAgent.ts";
+import {
+  beginPrePushAttempt,
+  getReusablePushReceipt,
+  observePrePushRevision,
+  recordPrePushReport,
+  retryPrePushVerification,
+  restorePrePushVerification,
+  type PrePushReport,
+  type PrePushRevision,
+  type PrePushVerificationState,
+} from "./prePushVerification.ts";
 
 export type TaskStatus =
   | "queued"
@@ -302,6 +323,10 @@ export interface TaskSummary {
       remote: string;
       url?: string;
     };
+    /** Cloud 在每次新 HEAD 推送前运行的独立编译/UT 会话。它不是
+     * Mae-Flow 步骤或审批门禁；PASS 收据只负责避免把明显红灯送去慢
+     * 流水线，并按 SHA + 工作区指纹支持纯网络重试复用。 */
+    prepush?: PrePushVerificationState;
     sha?: string;
     skipped?: string;
     /** 内核对流水线证据的裁决戳(如 "PASS@abc123456789"):终态时宿主
@@ -387,6 +412,13 @@ export interface TaskServiceOptions {
      * (报告 D3):平台文化是"回复归作者,resolve 归检视人",代点
      * 是越权。平台/团队明确允许代点的部署再打开。 */
     resolveDiscussions?: boolean;
+  };
+  /** 推送前的 Cloud-native 编译/UT Agent。生产 serve 默认启用；测试、
+   * pilot 或渐进部署不配时保持旧交付路径。runner 是窄测试/私有执行器
+   * 注入口，缺席时使用独立 Pi 会话，明确不挂 Mae-Flow Hooks。 */
+  prepush?: {
+    enabled?: boolean;
+    runner?: PrePushRunner;
   };
   /** 审批链接的前缀(通知里带的 URL),如 http://host:port。 */
   linkBase?: string;
@@ -641,6 +673,9 @@ interface TaskState {
   /** 流水线证据核销重试的防重入锁。纯宿主 timer，不占 Agent 会话。 */
   evidenceRetryActive?: boolean;
   deliveryRecoveryActive?: boolean;
+  /** 所有 push 入口共享同一个异步准备动作；避免恢复轮询与会话收口
+   * 同时撞进来，为同一 HEAD 启两个编译 Agent。 */
+  prepushActive?: Promise<boolean>;
   /** 上次主动压缩时的事件水位(事件量是上下文增长的诚实代理)。 */
   lastCompactAt?: number;
   /** 恢复标记:launch 走重建会话路径(不重克隆、内核 current 续跑)。 */
@@ -861,6 +896,35 @@ export class TaskService {
             suggestion: "请部署维护人员检查平台适配服务" }
         : { key: "git", label: "Git 交付", status: "ok",
             detail: "平台已配置;代码仓逐单填写(本部署不设默认仓)" });
+
+    const available = (name: string, args = ["--version"]): boolean => {
+      const result = spawnSync(name, args, {
+        encoding: "utf-8", timeout: 3_000,
+      });
+      return result.status === 0;
+    };
+    const buildTools = {
+      "JS/TS": available("node") && available("npm"),
+      Java: available("java", ["-version"])
+        && (available("mvn") || available("gradle")),
+      "C/C++": available("c++")
+        && (available("cmake") || available("make") || available("ninja")),
+    };
+    const readyLanguages = Object.entries(buildTools)
+      .filter(([, ready]) => ready).map(([language]) => language);
+    const missingLanguages = Object.entries(buildTools)
+      .filter(([, ready]) => !ready).map(([language]) => language);
+    items.push(!this.options.prepush?.enabled
+      ? { key: "prepush", label: "推送前编译与 UT", status: "warning",
+          detail: "当前部署未启用推送前快速验证" }
+      : missingLanguages.length
+        ? { key: "prepush", label: "推送前编译与 UT", status: "warning",
+            detail: `已启用；可用 ${readyLanguages.join("、") || "无"}，`
+              + `未发现 ${missingLanguages.join("、")} 的完整基础工具链`,
+            suggestion: "按实际业务仓安装 JDK+Maven/Gradle、Node+npm、"
+              + "C++ 编译器+CMake/Make；仓库 wrapper 可在真实任务中补足" }
+        : { key: "prepush", label: "推送前编译与 UT", status: "ok",
+            detail: "已启用；JS/TS、Java、C/C++ 基础工具链均可执行" });
 
     if (!this.options.isolation) {
       items.push({ key: "container", label: "容器隔离", status: "warning",
@@ -1858,7 +1922,18 @@ export class TaskService {
         // waiting_for_human(重建会话重放同 call_id 时发生)。这是矛盾
         // 状态:人已经答过,页面却还在催人。恢复时以 waiting.json 的
         // resolved 事实为准,自动续跑并把原决定带回重建会话。
-        if (summary.status === "waiting_for_human"
+        if (summary.status === "running"
+            && summary.delivery?.prepush?.active_attempt
+            && task.cwd) {
+          // 崩在独立编译/UT 会话中时，不先重建一轮无事可做的内核编码
+          // 会话。专项状态机会把在途 attempt 视为中断并对同一现场重跑。
+          summary.status = "verifying";
+          summary.detail = "服务重启，重新执行未完成的推送前编译与 UT";
+          this.persist(task);
+          this.bypass(task, "推送前验证恢复",
+            this.tryDeliver(task, task.controlEpoch));
+          requeued += 1;
+        } else if (summary.status === "waiting_for_human"
             && summary.waiting?.status === "resolved") {
           task.pendingResume = { ...summary.waiting };
           summary.waiting = undefined;
@@ -2824,16 +2899,17 @@ export class TaskService {
             : []),
         ].filter(Boolean).join("\n\n");
       }
-      // Cloud 固有执行契约:每次代码会话(首跑/重建/修复)都带。它说明
-      // 能力边界，不替内核宣告放行，更不把模型自述当质量证据。
+      // 普通编码会话仍按 Cloud 执行契约轻量推进；编译/UT 被挪到 push
+      // 前的独立专项会话，不回填成内核步骤，也不把模型自述当质量证据。
       if (this.options.host && !requirementAnalysis) {
         const utGenerationMethod = availableUtGenerationMethod(
           this.options.dataDir, loadedRepositorySkillNames);
-        prompt = `${prompt}\n\nCloud 执行契约(宿主事实):本机只负责代码与单元测试的编写。`
-          + `编译、单元测试运行和 CodeCheck 统一由绑定当前提交 SHA 的`
-          + `权威流水线执行。可用的 UT 编写方式是「${utGenerationMethod}」;`
+        prompt = `${prompt}\n\nCloud 执行契约(宿主事实):当前编码会话只负责代码与单元测试的编写。`
+          + `每次 push 前，Cloud 会另起不受内核步骤束缚的专项 Agent 在`
+          + `服务器完成编译、UT 与必要修复；CodeCheck 和最终复核仍由绑定`
+          + `提交 SHA 的权威流水线执行。可用的 UT 编写方式是「${utGenerationMethod}」;`
           + `已装载的 UT skill 只用于指导编写或修改测试，不负责运行测试，`
-          + `也不能证明测试通过。不要在本机调用编译、测试运行、CodeCheck`
+          + `也不能证明测试通过。不要在当前编码会话调用编译、测试运行、CodeCheck`
           + `或相关构建修复能力，不要编造命令、结果、数量或绿灯。`
           + `完成实现与 UT 编写后按内核流程提交；不要读取或索要个人`
           + `Git 令牌，也不要 push，Agent 会话释放后由 Cloud 宿主统一`
@@ -3250,6 +3326,317 @@ export class TaskService {
     await this.pipelineVerdict(task, sha, status, log, checks, epoch);
   }
 
+  /** 读取真正准备传输的 Git 现场。PASS 收据只在 clean worktree 上签发，
+   * 因而稳定态的 fingerprint 实际由 HEAD + 空 status 唯一确定；运行中
+   * 仍把完整 status 纳入哈希，恢复时不会复用半截 attempt。 */
+  private prePushRevision(task: TaskState): PrePushRevision {
+    if (!task.cwd) throw new Error("任务没有代码工作区，不能执行推送前验证");
+    const head = spawnSync("git", ["rev-parse", "--verify", "HEAD"], {
+      cwd: task.cwd, encoding: "utf-8",
+    });
+    const sha = String(head.stdout ?? "").trim();
+    if (head.status !== 0 || !sha) {
+      throw new Error(`推送前读取 HEAD 失败: ${String(head.stderr ?? "")}`);
+    }
+    const status = spawnSync(
+      "git", [
+        "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", ".",
+        ":(exclude).mae-flow.json", ":(exclude).mae-flow-*",
+        ":(exclude).mae-flow-work/**", ":(exclude).codecheckcli/**",
+      ],
+      { cwd: task.cwd, encoding: "utf-8" });
+    if (status.status !== 0) {
+      throw new Error(`推送前读取工作区失败: ${String(status.stderr ?? "")}`);
+    }
+    return {
+      sha,
+      workspace_fingerprint: createHash("sha256")
+        .update(sha).update("\0").update(String(status.stdout ?? ""))
+        .digest("hex"),
+    };
+  }
+
+  private prePushWorktreeClean(task: TaskState): boolean {
+    if (!task.cwd) return false;
+    const status = spawnSync(
+      "git", [
+        "status", "--porcelain=v1", "--untracked-files=all", "--", ".",
+        ":(exclude).mae-flow.json", ":(exclude).mae-flow-*",
+        ":(exclude).mae-flow-work/**", ":(exclude).codecheckcli/**",
+      ],
+      { cwd: task.cwd, encoding: "utf-8" });
+    return status.status === 0 && !String(status.stdout ?? "").trim();
+  }
+
+  private setPrePushState(
+    task: TaskState,
+    state: PrePushVerificationState,
+  ): void {
+    task.summary.delivery = { ...task.summary.delivery, prepush: state };
+  }
+
+  private prePushDomainReport(result: PrePushRunResult): PrePushReport {
+    const failed = result.status === "infrastructure_failure"
+      ? "infrastructure_failure" as const : "code_failure" as const;
+    const map = (check: PrePushAgentReport["compile"]) => ({
+      outcome: check.status === "passed"
+        ? "passed" as const
+        : check.status === "failed"
+          ? failed
+          : result.status === "infrastructure_failure"
+            ? "infrastructure_failure" as const
+            : "not_run" as const,
+      ...(check.summary ? { message: check.summary } : {}),
+    });
+    if (result.report) {
+      return {
+        compile: map(result.report.compile),
+        unit_test: map(result.report.unit_test),
+      };
+    }
+    if (result.status === "passed") {
+      return {
+        compile: { outcome: "passed", message: result.message },
+        unit_test: { outcome: "passed", message: result.message },
+      };
+    }
+    return {
+      compile: { outcome: failed, message: result.message },
+      unit_test: { outcome: "not_run", message: result.message },
+    };
+  }
+
+  /** 默认执行器：与普通编码会话使用同一模型、工作区和显式 Skill，
+   * 但不创建 KernelHost、不挂 hostHooks，也不提供人工问答工具。 */
+  private async runCloudPrePushAgent(
+    task: TaskState,
+    request: PrePushRunRequest,
+  ): Promise<PrePushRunResult> {
+    if (!task.cwd) throw new Error("推送前验证缺少代码工作区");
+    if (task.driver) throw new Error("已有 Agent 会话在运行，不能启动推送前验证");
+    const agentDir = join(task.summary.workspace, "pi-agent");
+    mkdirSync(agentDir, { recursive: true });
+    this.hardenAgentGitBoundary(agentDir, task.cwd);
+    const modelOverride = this.options.settings?.models() ?? {};
+    writeFileSync(join(agentDir, "models.json"),
+      JSON.stringify(modelOverride.json ?? this.options.modelsJson));
+
+    let repositorySkillPaths: string[] = [];
+    const activeRepository = task.summary.repo_url ?? this.effectiveDefaultRepo();
+    if (activeRepository) {
+      const materialized = materializeRepositorySkills({
+        selected: task.summary.repository_skills,
+        bindings: [{ repository: activeRepository, workspace: task.cwd }],
+        snapshotRoot: join(task.cwd, ".mae-flow-work", "repository-skills"),
+        reservedNames: hostSkillNames(this.options.dataDir),
+      });
+      repositorySkillPaths = materialized.paths;
+      for (const warning of materialized.warnings) {
+        this.options.log?.(
+          `[prepush-skill] 任务 ${task.summary.id}: ${warning}`);
+      }
+    }
+
+    const runRoot = join(
+      task.summary.workspace, "prepush",
+      `round-${request.round}-${request.sha.slice(0, 12)}`);
+    mkdirSync(runRoot, { recursive: true });
+    const eventLog = new EventLog(join(runRoot, "events.jsonl"));
+    const transcript = new TranscriptStore(
+      join(runRoot, "transcript.jsonl"), "main");
+    const driver = await CloudSession.create({
+      taskId: `${task.summary.id}:prepush:${request.round}`,
+      workspace: task.cwd,
+      agentDir,
+      hostSkillsDir: join(this.options.dataDir, "skills"),
+      repositorySkillPaths,
+      provider: task.summary.model_choice?.provider
+        ?? modelOverride.provider ?? this.options.provider,
+      model: task.summary.model_choice?.model
+        ?? modelOverride.model ?? this.options.model,
+      eventLog,
+      transcript,
+      gate: new GateService({
+        contract: createPrePushGateContract(this.options.contract),
+        workspace: task.cwd,
+        cwd: task.cwd,
+        log: this.options.log,
+      }),
+      humanGate: task.humanGate,
+      allowHumanQuestions: false,
+      compactAnchor: () => `推送前验证任务: ${task.summary.requirement}`,
+      log: this.options.log,
+    });
+    task.driver = driver;
+    try {
+      let outcome = await driver.start(prePushMission(request));
+      for (let correction = 0; correction < 3; correction += 1) {
+        if (outcome.status === "session_ended") {
+          return {
+            status: "infrastructure_failure",
+            sha: this.prePushRevision(task).sha,
+            message: outcome.detail ?? outcome.reason ?? "推送前会话异常结束",
+          };
+        }
+        const report = parsePrePushAgentReport(driver.finalReply());
+        if (report && report.status !== "passed") {
+          return {
+            status: report.status,
+            sha: this.prePushRevision(task).sha,
+            message: report.summary,
+            report,
+          };
+        }
+        const evidence = report
+          ? verifyPrePushEvidence(eventLog.replay(), report)
+          : "收口缺少合法的 <prepush-result> 结构";
+        const dirty = !this.prePushWorktreeClean(task);
+        if (report && !evidence && !dirty) {
+          return {
+            status: "passed",
+            sha: this.prePushRevision(task).sha,
+            message: report.summary,
+            report,
+          };
+        }
+        if (correction === 2) {
+          return {
+            status: "code_failure",
+            sha: this.prePushRevision(task).sha,
+            message: [evidence, dirty ? "工作区仍有未提交业务改动" : ""]
+              .filter(Boolean).join("；"),
+          };
+        }
+        outcome = await driver.continueWith([
+          "推送前验证尚不能签发 PASS，请在当前专项会话继续处理。",
+          evidence,
+          dirty ? "git status 仍有业务改动：请提交后重新执行编译与 UT。" : "",
+          "不要只重写结论；两项命令必须在最后一次代码修改后真实成功。",
+        ].filter(Boolean).join("\n"));
+      }
+      throw new Error("推送前验证会话超过收口预算");
+    } finally {
+      if (task.driver === driver) task.driver = undefined;
+      driver.dispose();
+    }
+  }
+
+  private async performPrePush(
+    task: TaskState,
+    branch: string,
+    baseline: string,
+    epoch: number,
+  ): Promise<boolean> {
+    const at = new Date().toISOString();
+    const initialRevision = this.prePushRevision(task);
+    let state = restorePrePushVerification(
+      task.summary.delivery?.prepush, initialRevision, at);
+    this.setPrePushState(task, state);
+    if (getReusablePushReceipt(state, initialRevision)) {
+      this.persist(task);
+      return true;
+    }
+    if (["blocked", "environment_error"].includes(state.state)) {
+      state = retryPrePushVerification(
+        state, at, "重新执行推送前编译与 UT 验证");
+    }
+    state = beginPrePushAttempt(state, at);
+    const attemptId = state.active_attempt?.id;
+    if (!attemptId) {
+      throw new Error(`推送前验证无法启动，当前状态: ${state.state}`);
+    }
+    this.setPrePushState(task, state);
+    const previousStatus = task.summary.status;
+    task.summary.status = "running";
+    task.summary.detail = state.message;
+    this.persist(task);
+
+    const request: PrePushRunRequest = {
+      taskId: task.summary.id,
+      workspace: task.cwd!,
+      sha: initialRevision.sha,
+      round: state.round,
+      requirement: task.summary.requirement,
+      branch,
+      baseline,
+    };
+    let result: PrePushRunResult;
+    try {
+      result = await (this.options.prepush?.runner
+        ?? ((input) => this.runCloudPrePushAgent(task, input)))(request);
+    } catch (error) {
+      result = {
+        status: "infrastructure_failure",
+        sha: this.prePushRevision(task).sha,
+        message: `推送前验证执行失败: ${String(error)}`,
+      };
+    }
+    if (!this.current(task, epoch)) return false;
+
+    const finalRevision = this.prePushRevision(task);
+    if (state.sha !== finalRevision.sha
+        || state.workspace_fingerprint !== finalRevision.workspace_fingerprint) {
+      state = observePrePushRevision(
+        state, finalRevision, new Date().toISOString());
+      state = beginPrePushAttempt(
+        state, new Date().toISOString(), attemptId);
+    }
+    if (result.sha !== finalRevision.sha) {
+      result = {
+        status: "infrastructure_failure",
+        sha: finalRevision.sha,
+        message: `验证结果绑定 ${result.sha.slice(0, 12)}，但当前 HEAD 是 `
+          + `${finalRevision.sha.slice(0, 12)}，拒绝复用陈旧结论`,
+      };
+    } else if (result.status === "passed" && !this.prePushWorktreeClean(task)) {
+      result = {
+        status: "code_failure",
+        sha: finalRevision.sha,
+        message: "编译与 UT 虽已执行，但工作区仍有未提交业务改动",
+      };
+    }
+    state = recordPrePushReport(
+      state, attemptId, this.prePushDomainReport(result),
+      new Date().toISOString());
+    this.setPrePushState(task, state);
+    const passed = Boolean(getReusablePushReceipt(state, finalRevision));
+    if (passed) {
+      task.summary.status = previousStatus;
+      task.summary.detail = "推送前编译与 UT 已通过，准备推送";
+      if (task.summary.delivery) delete task.summary.delivery.skipped;
+    } else {
+      task.summary.status = "failed";
+      task.summary.detail = `推送前验证未通过：${state.message}`;
+      task.summary.delivery = {
+        ...task.summary.delivery,
+        skipped: task.summary.detail,
+      };
+    }
+    this.persist(task);
+    if (task.pauseRequested && this.current(task, epoch)) {
+      await this.finishPause(task, previousStatus);
+      return false;
+    }
+    return passed;
+  }
+
+  private async preparePush(
+    task: TaskState,
+    branch: string,
+    baseline: string,
+    epoch: number,
+  ): Promise<boolean> {
+    if (!this.options.prepush?.enabled) return true;
+    if (task.prepushActive) return task.prepushActive;
+    const running = this.performPrePush(task, branch, baseline, epoch);
+    task.prepushActive = running;
+    try {
+      return await running;
+    } finally {
+      if (task.prepushActive === running) task.prepushActive = undefined;
+    }
+  }
+
   /** Git 交付(§10):任务收轮并释放 Agent 后,由宿主推送并反查远端
    * SHA，再建 MR——不信任务自己的说法，也不让 Agent 接触 token。
    * MR 成功≠完成:流水线过了才"等待合入",否则停在"验证中"。
@@ -3285,6 +3672,8 @@ export class TaskService {
         }
         return;
       }
+      if (!await this.preparePush(task, branch, baseline, epoch)) return;
+      if (!this.current(task, epoch)) return;
       const previous = task.summary.delivery;
       const pushReceipt = this.pushFromHost(task, branch);
       const sha = pushReceipt.sha;
@@ -3375,6 +3764,8 @@ export class TaskService {
       task.summary.delivery = {
         ...(task.summary.delivery?.loop
           ? { loop: task.summary.delivery.loop } : {}),
+        ...(task.summary.delivery?.prepush
+          ? { prepush: task.summary.delivery.prepush } : {}),
         git_push: pushReceipt,
         mr_url: mr.url,
         // 平台给了 MR 标识就记下:门禁/讨论查询要带回去(假件给 id,

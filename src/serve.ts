@@ -369,11 +369,12 @@ async function main(): Promise<void> {
   const isolateImage = flag("--isolate-image");
   if (isolateImage) console.log(`[serve] 容器隔离: ${isolateImage}`);
 
-  // 历史开关仅保留命令行兼容。Cloud 从现在起只有一种执行语义：
-  // 本机编写代码/UT，编译、UT 运行、CodeCheck 一律交给流水线。
+  // 历史开关仅保留命令行兼容。内核的最终验证契约仍只有一种：三项
+  // 由流水线核销；push 前的服务器编译/UT Agent 是 Cloud 加速层，
+  // 不改变该契约，也不让内核新增步骤。
   if (has("--verify-via-pipeline")) {
     console.warn("[serve] --verify-via-pipeline 已弃用并被忽略:"
-      + "Cloud 已固定由流水线执行编译、UT 运行与 CodeCheck");
+      + "最终编译、UT 与 CodeCheck 仍固定由流水线核销");
   }
   if (host) {
     // 内核模式下执行契约固定为"三项交流水线",流程必然停在 external_verify
@@ -390,8 +391,8 @@ async function main(): Promise<void> {
         + "每一单都会卡在验证中且无法自愈。");
       process.exit(2);
     }
-    console.log("[serve] Cloud 执行契约:本机编写代码/UT;"
-      + "编译、UT 运行、CodeCheck 由流水线执行");
+    console.log("[serve] Cloud 执行契约:编码会话不运行构建;每次 push 前由"
+      + "独立 Agent 在服务器完成编译与 UT，CodeCheck 和最终复核仍由流水线执行");
   }
 
   // 提交信息规范:平台 pre-receive 钩子按正则拒收不合规提交(内网
@@ -413,6 +414,7 @@ async function main(): Promise<void> {
     contract: demoContract,
     host,
     delivery,
+    prepush: host ? { enabled: true } : undefined,
     commitConvention,
     isolation: isolateImage
       ? {

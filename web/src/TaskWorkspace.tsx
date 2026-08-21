@@ -18,6 +18,7 @@ import { Annotatable } from "./Annotatable";
 import { AnnotationPanel } from "./AnnotationPanel";
 import { AttachedNotes } from "./AttachedNotes";
 import { RequirementGraph } from "./RequirementGraph";
+import { PrepushStatus } from "./PrepushStatus";
 import {
   EMPTY_REPOSITORY_SKILL_PICKER_STATE,
   RepositorySkillPicker,
@@ -368,6 +369,7 @@ export function TaskWorkspace({
           <TaskProgress progress={task.progress} showDetailedStep />
         </div>
       )}
+      <PrepushStatus prepush={task.delivery?.prepush} placement="workspace" />
 
       <div className={`ws-body${waiting ? " has-decision" : ""}`}>
         <section className="ws-evidence" aria-label="待检视材料">

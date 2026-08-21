@@ -83,6 +83,9 @@ export interface CloudSessionOptions {
   gate: GateService;
   humanGate: HumanGate;
   hostHooks?: HostHooks;
+  /** 专项宿主会话可关闭人工问答工具。推送前编译/UT 会话必须自己收口，
+   * 不能在交付临门一脚再生成一张脱离内核语义的等待卡。缺省保留原行为。 */
+  allowHumanQuestions?: boolean;
   currentStep?: () => string;
   /** 容器隔离(设计文档):换掉内建 bash 的执行后端,命令进任务
    * 容器跑;工具仍叫 bash,门禁与 transcript 看到的世界不变。
@@ -193,7 +196,10 @@ export class CloudSession {
     });
     driver.session = await driver.openSession({
       sessionId: driver.sessionId,
-      customTools: [driver.askTool(), driver.dispatchTool()],
+      customTools: [
+        ...(options.allowHumanQuestions === false ? [] : [driver.askTool()]),
+        driver.dispatchTool(),
+      ],
     });
     options.transcript.mainSessionId = driver.sessionId;
     return driver;
