@@ -92,6 +92,34 @@ class TaskCardContractTests(unittest.TestCase):
         self.assertFalse(decision.accepted)
         self.assertIn("旧步骤", decision.reason)
 
+    def test_dispatch_says_so_when_the_step_issues_no_such_card(self):
+        """出路必须真走得通。
+
+        云端实锤(2026-08-21):交付后的流水线修复轮停在 external_verify,
+        会话拿 verify_ut 的旧 UT 卡派发被拦,照着"生成当前步骤的新任务卡"
+        去执行 agent-task ut,又被"当前步骤不允许生成"打回,再 current
+        回到"在等流水线"——三条命令来回空转。本步压根不签发这类卡时,
+        必须直说生成不出来,并给出真正的做法。
+        """
+        state = dict(self.state)
+        state["current"] = "external_verify"
+        state["agent_tasks"] = {"UT": {"step": "verify_ut", "head": HEAD}}
+        decision = verify_dispatch_task("UT", state, self.ports())
+        self.assertFalse(decision.accepted)
+        self.assertIn("不签发 UT 任务卡", decision.reason)
+        self.assertIn("生成不出来", decision.reason)
+        self.assertIn("自己动手", decision.reason, "得给出真正的做法")
+        self.assertNotIn("生成当前步骤的新任务卡", decision.reason,
+                         "不许再把会话支去走死路")
+
+        # 本步确实签发这类卡时,原来的指引一字不变(verify_ut 允许 UT 卡)。
+        live = dict(self.state)
+        live["current"] = "verify_ut"
+        live["agent_tasks"] = {"UT": {"step": "rf_ut", "head": HEAD}}
+        usual = verify_dispatch_task("UT", live, self.ports())
+        self.assertFalse(usual.accepted)
+        self.assertIn("生成当前步骤的新任务卡", usual.reason)
+
     def test_scope_enforces_each_agent_write_boundary(self):
         cases = (
             (

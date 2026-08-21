@@ -5,6 +5,7 @@ from typing import Callable
 
 from mae_flow_core.application.hooks.models import accepted, rejected
 from mae_flow_core.foundation.source_paths import repository_path_identity
+from mae_flow_core.quality.task_cards import task_allowed
 
 
 @dataclass(frozen=True)
@@ -75,14 +76,24 @@ def verify_dispatch_task(kind, state, ports):
     if not task:
         return rejected(_dispatch_missing_message(kind, script_path, state))
     if task.get("step") != state.get("current"):
+        current = state.get("current", "?")
+        # 出路必须真的走得通。本步压根不签发这类卡时(云端实锤:
+        # 交付后流水线修复轮停在 external_verify,UT 卡只挂在 verify_ut/
+        # rf_ut/tw_ut/rf_verify),原话"生成当前步骤的新任务卡"会把会话
+        # 支到 agent-task ut → "当前步骤不允许生成" → current → 再回来,
+        # 三条命令来回空转。说不通就直说不通,并给出真正的做法。
+        if not task_allowed(kind, current):
+            return rejected(
+                "[mae-flow] 派发前拦截:%s 任务卡属于旧步骤 %s，而当前步骤 %s "
+                "不签发 %s 任务卡——不要再去生成,生成不出来。这类专项 Agent "
+                "只在对应的验证步派发;本步要改代码就自己动手,或派不带任务卡的"
+                "通用子 Agent。" % (kind, task.get("step", "?"), current, kind),
+                task,
+            )
         return rejected(
             "[mae-flow] 派发前拦截:%s 任务卡属于旧步骤 %s，当前步骤为 %s。"
             "先按 current/action status 生成当前步骤的新任务卡，再派发。"
-            % (
-                kind,
-                task.get("step", "?"),
-                state.get("current", "?"),
-            ),
+            % (kind, task.get("step", "?"), current),
             task,
         )
     return accepted(task)

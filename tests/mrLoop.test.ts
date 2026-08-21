@@ -418,6 +418,14 @@ test("日志只详细到一维时:失败维度逐项点名,不许修完细的那
     assert.match(seen, /每一维都要收拾/, "得堵死'修细的那维就交差'");
     // 日志本身有真内容,不该被"无证据"判据误伤
     assert.match(seen, /失败详情\(平台原文\)/);
+    // 使命不许指挥内核禁止的动作(2026-08-21 内网实锤):修复轮停在
+    // external_verify,而内核的 EXPECTED_STEPS 只在各验证步签发
+    // COMPILE/UT/CODECHECK 任务卡。原文让它"派专职子 agent",模型照做
+    // 就在"拿旧卡被拦→生成被拒→current 说在等流水线"之间空转。
+    assert.match(seen, /不要派 COMPILE\/UT\/CODECHECK 专职子 agent/,
+      "得明说本轮派不了专职质量 agent");
+    assert.ok(!/能派专职子 agent 的派专职去修/.test(seen),
+      "旧话术会把模型支去撞内核的拦截");
   } finally {
     await model.stop();
     await platform.stop();
