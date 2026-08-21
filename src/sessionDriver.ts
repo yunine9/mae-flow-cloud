@@ -21,8 +21,8 @@ import {
   SessionManager,
   type BashOperations,
 } from "@earendil-works/pi-coding-agent";
-import { join } from "node:path";
-import { existsSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
+import { existsSync, statSync } from "node:fs";
 import { EventLog, type SemanticEvent, type SemanticEventKind, validateEvent } from "./semanticEvents.ts";
 import { TranscriptStore } from "./transcriptStore.ts";
 import { GateService } from "./gateService.ts";
@@ -93,6 +93,10 @@ export interface CloudSessionOptions {
    * 子 agent";云端子 Agent 照样有(Task 工具),缺的是自动装载——
    * pi 的 includeDefaults=false,不喂路径就一个 skill 都不装。 */
   hostSkillsDir?: string;
+  /** 本单明确选中的仓库 Skill。每项必须是一个存在的 SKILL.md 文件；
+   * 不能传 skills 目录，否则同目录下未选择的 Skill 也会被 Pi 扫入。
+   * 跨仓时可同时传多个仓各自的文件，主/子 Agent 共用同一 allowlist。 */
+  repositorySkillPaths?: string[];
   /** 上下文超限自愈用的锚点提供者(通常是内核现场 current/config)。
    * 不给就用需求原话兜底——锚永远来自权威,不由云端编造。 */
   compactAnchor?: () => string;
@@ -604,22 +608,50 @@ export class CloudSession {
     //
     // 两个来源,宿主级在前(部署放一次、每个任务都带——团队的 skill 在
     // 内网出不来仓,老宿主靠"每次手动集成进 ut-generator 子 agent",
-    // 云端给它一个固定的家),仓内的次之(愿意随仓走的)。
-    // 子 Agent 经同一 openSession 装配,自动同样带上这些 skill。
+    // 云端给它一个固定的家),仓内 Skill 必须由任务明确选中,只传精确
+    // SKILL.md 文件。绝不能把 .pi/.claude 的 skills 目录整体交给 Pi,
+    // 否则同仓乃至跨仓未选中的能力也会静默进入模型上下文。
+    // 子 Agent 经同一 openSession 装配,自动使用完全相同的 allowlist。
     // **必须显式喂路径**:pi 的 DefaultResourceLoader 是 includeDefaults
     // = false,不喂就一个 skill 都不装(读 SDK 才发现,不是放进去就生效)。
-    const skillPaths = [
-      this.options.hostSkillsDir,
-      join(workspace, ".pi", "skills"),
-      join(workspace, ".claude", "skills"), // 团队已有的 Claude 版同格式
-    ].filter((path): path is string => !!path && existsSync(path));
+    const hostSkillPath = this.options.hostSkillsDir;
+    const repositorySkillPaths = (this.options.repositorySkillPaths ?? [])
+      .filter((path) => {
+        if (basename(path) !== "SKILL.md" || !existsSync(path)) return false;
+        try {
+          return statSync(path).isFile();
+        } catch {
+          return false;
+        }
+      });
+    const skillPaths = [...new Set([
+      ...(hostSkillPath && existsSync(hostSkillPath) ? [hostSkillPath] : []),
+      ...repositorySkillPaths,
+    ])];
     if (skillPaths.length) {
+      const safeRepositoryNames = repositorySkillPaths.map((path) => {
+        const fromWorkspace = relative(workspace, path);
+        if (fromWorkspace && fromWorkspace !== ".."
+            && !fromWorkspace.startsWith(`..${sep}`)
+            && !isAbsolute(fromWorkspace)) {
+          return fromWorkspace;
+        }
+        return join(basename(dirname(path)), "SKILL.md");
+      });
+      const labels = [
+        ...(hostSkillPath && existsSync(hostSkillPath) ? ["宿主技能"] : []),
+        ...safeRepositoryNames,
+      ];
       this.options.log?.(
-        `任务 ${this.options.taskId} 装载 skill 目录: ${skillPaths.join(", ")}`);
+        `任务 ${this.options.taskId} 装载 skill: ${labels.join(", ")}`);
     }
     const loader = new DefaultResourceLoader({
       cwd: workspace,
       agentDir,
+      // Pi 默认会经 package/settings 解析项目 .pi/skills；allowlist 模式
+      // 必须关掉这条隐式来源。noSkills 仍会保留 additionalSkillPaths，
+      // SDK 在该模式下的语义正是“只装显式路径”。
+      noSkills: true,
       additionalSkillPaths: skillPaths,
       extensionFactories: [
         {

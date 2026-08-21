@@ -405,9 +405,44 @@ export function createTaskServer(
         });
       }
 
+      // 仓库 Skill 目录属于下单前的显式只读动作：用户填好仓和基线后
+      // 才触发，服务端用本人的 Git 凭据读取；不把路径/正文交给浏览器
+      // 决定。管理员没有下单入口，也不替开发者读取私仓。
+      if (request.method === "POST"
+          && url.pathname === "/repository-skills/scan") {
+        if (options.auth && !viewer) {
+          return json(response, 401, { error: "请先登录" });
+        }
+        if (viewer?.role === "admin") {
+          return json(response, 403, { error: "管理员不发起任务，不能读取仓内能力" });
+        }
+        const blockers = personalBlockers(viewer)
+          .filter((item) => item.key === "git_token" || item.key === "git_email");
+        if (blockers.length) {
+          return json(response, 409, {
+            error: "请先完成个人 CodeHub 接入，再读取私有仓库能力",
+            blockers,
+          });
+        }
+        try {
+          const body = await readBody(request);
+          const repositories = Array.isArray(body.repositories)
+            ? body.repositories.map(String) : [];
+          const baseline = body.baseline === undefined
+            ? undefined : String(body.baseline);
+          return json(response, 200, await service.scanRepositorySkills({
+            repositories,
+            baseline,
+            account: viewer?.username,
+          }));
+        } catch (error) {
+          return json(response, 400, { error: String(error) });
+        }
+      }
+
       const protectedRoute =
         url.pathname === "/history" || parts[0] === "tasks"
-        || parts[0] === "reviews";
+        || parts[0] === "reviews" || parts[0] === "repository-skills";
       // 兼容已经发出去的旧通知。/tasks/:id 是 JSON API，但旧链接若由
       // 浏览器作为页面打开，应带人去新的任务工作台；程序 fetch 默认
       // Accept: */*，仍拿原来的 JSON，不改变 API 契约。
@@ -529,6 +564,12 @@ export function createTaskServer(
         const repairRounds = body.repair_rounds === undefined
           || body.repair_rounds === null || body.repair_rounds === ""
           ? undefined : Number(body.repair_rounds);
+        const repositorySkillCatalogToken =
+          body.repository_skill_catalog_token === undefined
+            ? undefined : String(body.repository_skill_catalog_token);
+        const selectedRepositorySkillIds =
+          Array.isArray(body.selected_repository_skill_ids)
+            ? body.selected_repository_skill_ids.map(String) : undefined;
         // 配置没配齐不给下单(用户拍板)。前端会把缺项摆在明面上,
         // 但拦必须在后端——绕过界面直接打接口的一样要被拦住,
         // 否则任务会带着缺失的令牌一路跑到推送/通知那步才炸。
@@ -545,7 +586,11 @@ export function createTaskServer(
         }
         try {
           return json(response, 201, service.create(requirement,
-            { title, account, repo, repos, lane, ticket, baseline, model, repairRounds }));
+            {
+              title, account, repo, repos, lane, ticket, baseline, model,
+              repairRounds, repositorySkillCatalogToken,
+              selectedRepositorySkillIds,
+            }));
         } catch (error) {
           return json(response, 400, { error: String(error) });
         }
@@ -576,6 +621,12 @@ export function createTaskServer(
             notes: body.notes ? String(body.notes) : undefined,
             annotation_ids: Array.isArray(body.annotation_ids)
               ? body.annotation_ids.map(String) : undefined,
+            repository_skill_catalog_token:
+              body.repository_skill_catalog_token === undefined
+                ? undefined : String(body.repository_skill_catalog_token),
+            selected_repository_skill_ids:
+              Array.isArray(body.selected_repository_skill_ids)
+                ? body.selected_repository_skill_ids.map(String) : undefined,
           });
           return json(response, 200, task);
         }
@@ -589,7 +640,13 @@ export function createTaskServer(
           if (!canOperate(viewer, target.luban_account, !!options.auth)) {
             return json(response, 403, { error: "只能处理分配给自己的任务" });
           }
-          return json(response, 200, await service.confirmRequirementGraph(id));
+          const body = await readBody(request);
+          return json(response, 200, await service.confirmRequirementGraph(id, {
+            catalog_token: body.repository_skill_catalog_token === undefined
+              ? undefined : String(body.repository_skill_catalog_token),
+            selected_ids: Array.isArray(body.selected_repository_skill_ids)
+              ? body.selected_repository_skill_ids.map(String) : undefined,
+          }));
         }
         // Committer 检视必须由该单责任人主动发起。管理员只维护名单，
         // 即使拥有其他操作兜底权，也不能替开发点击邀请。

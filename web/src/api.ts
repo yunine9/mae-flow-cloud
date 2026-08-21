@@ -300,6 +300,10 @@ export interface TaskSummary {
   luban_account?: string;
   repo_url?: string;
   repositories?: string[];
+  /** 下单或 Chain 方案确认时选中的仓内 Skill；每个子任务只继承自己仓。 */
+  repository_skills?: SelectedRepositorySkill[];
+  /** 仓内 Skill 与代码交付使用同一基线。 */
+  baseline?: string;
   /** 业务需求/问题单号；与平台内部 task-xx 分开显示。 */
   ticket?: string;
   requirement_graph?: {
@@ -419,6 +423,54 @@ export async function getLaunchOptions(): Promise<LaunchOptions> {
   return response.json();
 }
 
+/** 业务仓自带的、可由本任务显式启用的 Skill。扫描只建立目录，真正
+ * 读取哪个 Skill、何时读取由 Agent 按任务语义决定。 */
+export interface RepositorySkill {
+  id: string;
+  name: string;
+  description: string;
+  relative_path: string;
+  source: string;
+  digest: string;
+  selectable: boolean;
+  warning?: string;
+}
+
+/** 已经由服务端目录令牌验证、记在任务上的仓内 Skill。Chain 检视页
+ * 只用它展示/映射当前选择，不接收浏览器自报的正文或绝对路径。 */
+export interface SelectedRepositorySkill extends RepositorySkill {
+  repository: string;
+  revision: string;
+}
+
+export interface RepositorySkillCatalog {
+  catalog_token: string;
+  repositories: Array<{
+    repository: string;
+    revision: string;
+    skills: RepositorySkill[];
+    error?: string;
+  }>;
+}
+
+/** 明确由用户触发，不随仓库输入自动 clone/扫描。 */
+export async function scanRepositorySkills(
+  repositories: string[],
+  baseline?: string,
+  signal?: AbortSignal,
+): Promise<RepositorySkillCatalog> {
+  const response = await fetch("/repository-skills/scan", {
+    method: "POST",
+    signal,
+    body: JSON.stringify({
+      repositories,
+      baseline: baseline?.trim() || undefined,
+    }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
 export async function createTask(
   requirement: string,
   account?: string,
@@ -431,6 +483,8 @@ export async function createTask(
     baseline?: string;
     model?: { provider: string; model: string };
     repairRounds?: number;
+    repositorySkillCatalogToken?: string;
+    selectedRepositorySkillIds?: string[];
   },
 ): Promise<void> {
   const response = await fetch("/tasks", {
@@ -448,6 +502,10 @@ export async function createTask(
       baseline: extras?.baseline || undefined,
       model: extras?.model,
       repair_rounds: extras?.repairRounds,
+      repository_skill_catalog_token:
+        extras?.repositorySkillCatalogToken || undefined,
+      selected_repository_skill_ids:
+        extras?.selectedRepositorySkillIds,
     }),
   });
   if (!response.ok) throw new Error(await errorText(response));
@@ -464,6 +522,12 @@ export async function decide(
   /** 随这次决定一起提交的批注:圈过的几处就是"需要修改"的理由。
    * 渲染由服务端做——清单格式和那四条护栏只该有一份。 */
   annotationIds?: string[],
+  /** Chain 方案确认与 Skill 选择共用一次提交。字段缺席=沿用父任务
+   * 已有选择；目录读取成功后即使 ids 为空也必须提交，明确表示清空。 */
+  repositorySkills?: {
+    catalogToken: string;
+    selectedIds: string[];
+  },
 ): Promise<{ conflict?: string }> {
   const response = await fetch(`/tasks/${taskId}/decision`, {
     method: "POST",
@@ -472,6 +536,8 @@ export async function decide(
       answers,
       notes: notes?.trim() || undefined,
       annotation_ids: annotationIds?.length ? annotationIds : undefined,
+      repository_skill_catalog_token: repositorySkills?.catalogToken,
+      selected_repository_skill_ids: repositorySkills?.selectedIds,
     }),
   });
   if (response.status === 409) {

@@ -22,6 +22,7 @@ import {
 } from "./api";
 import { formatWait, URGENT_MINUTES, waitedMs } from "./taskTime";
 import { responsibleOf } from "./teamOps";
+import type { RepositorySkillSelection } from "./RepositorySkillPicker";
 import {
   formatLocalClock,
   formatLocalDateTime,
@@ -319,6 +320,7 @@ export function WaitingCard({
   onDecided,
   annotationIds,
   attachment,
+  repositorySkillSelection,
 }: {
   task: TaskSummary;
   onDecided: () => void;
@@ -328,6 +330,8 @@ export function WaitingCard({
    * (它按标签给这次选择记账,前端改写会让记下的选择对不上用户点的),
    * 所以"这次会带上哪几处"只能摆在人按下提交的那一眼里。 */
   attachment?: ReactNode;
+  /** 仅 Chain 的“确认并生成任务”消费；未扫描/需要修改都不发送。 */
+  repositorySkillSelection?: RepositorySkillSelection;
 }) {
   const [picked, setPicked] = useState<Record<string, string>>({});
   const [custom, setCustom] = useState<Record<string, string>>({});
@@ -335,6 +339,7 @@ export function WaitingCard({
   const [notes, setNotes] = useState("");
   const [notesOpen, setNotesOpen] = useState(false);
   const [conflict, setConflict] = useState("");
+  const [submitting, setSubmitting] = useState(false);
   const questions = task.waiting?.question?.questions ?? [];
 
   const answerOf = (question: string) =>
@@ -345,7 +350,10 @@ export function WaitingCard({
     /可忽略|若上题|如无|可跳过|可不填/.test(question);
   const ready = questions.every(
     (item) => optional(item.question) || answerOf(item.question),
-  );
+  ) && !repositorySkillSelection?.scanning
+    && (!repositorySkillSelection?.scanned
+      || !!repositorySkillSelection.catalogToken)
+    && !submitting;
 
   function pickOption(question: string, option: string) {
     setPicked({ ...picked, [question]: option });
@@ -359,20 +367,41 @@ export function WaitingCard({
   }
 
   async function submit() {
+    if (!ready || submitting) return;
     const answers: Record<string, string> = {};
     for (const item of questions) {
       const answer = answerOf(item.question);
       if (answer) answers[item.question] = answer;
     }
-    const result = await decide(
-      task.id,
-      task.waiting!.state_version,
-      answers,
-      notes,
-      annotationIds,
-    );
-    if (result.conflict) setConflict(result.conflict);
-    onDecided();
+    const confirmsChain = Object.values(answers).some((answer) =>
+      answer.includes("确认并生成任务"));
+    const repositorySkills = confirmsChain
+      && repositorySkillSelection?.scanned
+      && repositorySkillSelection.catalogToken
+      ? {
+          catalogToken: repositorySkillSelection.catalogToken,
+          // 空数组有业务含义：明确清空父任务的预选，不能转成 undefined。
+          selectedIds: repositorySkillSelection.selectedIds,
+        }
+      : undefined;
+    setSubmitting(true);
+    setConflict("");
+    try {
+      const result = await decide(
+        task.id,
+        task.waiting!.state_version,
+        answers,
+        notes,
+        annotationIds,
+        repositorySkills,
+      );
+      if (result.conflict) setConflict(result.conflict);
+      onDecided();
+    } catch (reason) {
+      setConflict(reason instanceof Error ? reason.message : "决定提交失败，请重试");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -470,7 +499,11 @@ export function WaitingCard({
         })}
       </div>
 
-      {attachment}
+      {attachment && (
+        <fieldset className="decision-attachment" disabled={submitting}>
+          {attachment}
+        </fieldset>
+      )}
 
       <footer className="decision-footer">
         <div className="decision-notes">
@@ -497,7 +530,8 @@ export function WaitingCard({
           disabled={!ready}
           onClick={submit}
         >
-          提交决定
+          {submitting ? "正在提交…" : repositorySkillSelection?.scanning
+            ? "等待能力读取" : "提交决定"}
           <svg viewBox="0 0 20 20" aria-hidden>
             <path d="m4 10 3.2 3.2L16 5.5" />
           </svg>

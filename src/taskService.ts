@@ -23,10 +23,11 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
+import { loadSkills } from "@earendil-works/pi-coding-agent";
 import {
   AnnotationStore,
   reanchor,
@@ -49,7 +50,12 @@ import {
 } from "./activity.ts";
 import { TranscriptStore } from "./transcriptStore.ts";
 import { GateService, type GateContract } from "./gateService.ts";
-import { HumanGate, renderDecision, type WaitingRecord } from "./humanGate.ts";
+import {
+  HumanGate,
+  StateConflictError,
+  renderDecision,
+  type WaitingRecord,
+} from "./humanGate.ts";
 import { CloudSession, type Outcome } from "./sessionDriver.ts";
 import { dockerAvailable, TaskContainer } from "./containerRuntime.ts";
 import type { ExternalAction, PgProjection } from "./projection.ts";
@@ -63,6 +69,16 @@ import {
   inspectKernelCompletion,
   type KernelCompletionAttestation,
 } from "./terminalAttestation.ts";
+import {
+  materializeRepositorySkills,
+  type SelectedRepositorySkill,
+  validRepositorySkillPath,
+} from "./repositorySkillRuntime.ts";
+import {
+  discoverRepositorySkills,
+  type RepositorySkillCatalog,
+  type RepositorySkillDescriptor,
+} from "./repositorySkills.ts";
 
 export type TaskStatus =
   | "queued"
@@ -143,32 +159,36 @@ const CLOUD_EXECUTION_CONTRACT = {
   git_push: "host",
 } as const;
 
-/** 找到本次会话真正能装载的 UT 编写 Skill。目录名就是 pi 展示给
- * 模型的能力名；不读正文、不猜技术栈。部署级目录优先于仓内目录，
- * 与 CloudSession 的装载顺序保持一致。 */
-function availableUtGenerationMethod(dataDir: string, workspace: string): string {
-  const roots = [
-    join(dataDir, "skills"),
-    join(workspace, ".pi", "skills"),
-    join(workspace, ".claude", "skills"),
-  ];
-  const found: string[] = [];
-  for (const root of roots) {
-    if (!existsSync(root)) continue;
-    try {
-      for (const entry of readdirSync(root, { withFileTypes: true })) {
-        if (!entry.isDirectory()
-            || !existsSync(join(root, entry.name, "SKILL.md"))) continue;
-        if (/(?:^|[-_])(?:java[-_])?(?:auto)?ut(?:$|[-_])/i.test(entry.name)
-            || /ut[-_]generator/i.test(entry.name)) {
-          found.push(entry.name);
-        }
-      }
-    } catch {
-      // Skill 装载本身是 fail-open；这里只记可用方式，保持同一语义。
-    }
+/** 找到本次会话真正能装载的宿主 Skill 名。名称必须由 Pi 自己解析：
+ * frontmatter name 可以和目录名不同；缺 name 时 Pi 才以目录名兜底，
+ * 解析失败/缺 description 时则与运行时一样不算可加载 Skill。
+ * CloudSession 也把整个宿主 skills 根交给同一个 loader，因此这里会
+ * 同样覆盖递归、ignore、符号链接和根目录 Markdown 的发现语义。 */
+function hostSkillNames(dataDir: string): string[] {
+  const root = join(dataDir, "skills");
+  try {
+    return loadSkills({
+      cwd: dataDir,
+      agentDir: dataDir,
+      skillPaths: [root],
+      includeDefaults: false,
+    }).skills.map((skill) => skill.name);
+  } catch {
+    // Skill 装载本身是 fail-open；catalog 同样不因宿主目录损坏而失败。
+    return [];
   }
-  const unique = [...new Set(found)];
+}
+
+function availableUtGenerationMethod(
+  dataDir: string,
+  loadedRepositorySkillNames: string[] = [],
+): string {
+  const unique = [...new Set([
+    ...hostSkillNames(dataDir),
+    ...loadedRepositorySkillNames,
+  ].filter((name) =>
+    /(?:^|[-_])(?:java[-_])?(?:auto)?ut(?:$|[-_])/i.test(name)
+      || /ut[-_]generator/i.test(name)))];
   const rank = (name: string): number => {
     const normalized = name.toLowerCase();
     if (normalized === "java-autout") return 0;
@@ -178,6 +198,27 @@ function availableUtGenerationMethod(dataDir: string, workspace: string): string
   unique.sort((left, right) => rank(left) - rank(right)
     || left.localeCompare(right));
   return unique[0] ?? "仓内既有写法";
+}
+
+function validateRepositoryAddress(candidate: string): void {
+  if (/\s/.test(candidate)) {
+    throw new Error("代码仓地址不能含空白字符");
+  }
+  if (!candidate || candidate.startsWith("-") || /[\0\r\n]/.test(candidate)) {
+    throw new Error("代码仓地址不能含控制字符或以 - 开头");
+  }
+  if (/^(?:ssh:\/\/|git\+ssh:\/\/|[\w.-]+@[\w.-]+:)/i.test(candidate)) {
+    throw new Error(
+      `代码仓请填 HTTPS 地址(收到 SSH 形式: ${candidate})。`
+      + `宿主推送与 MR 用个人令牌走 HTTPS,SSH 没有可用凭据,`
+      + `会在交付推送时 Permission denied`);
+  }
+  if (/^https?:\/\//i.test(candidate)) {
+    const parsed = new URL(candidate);
+    if (parsed.username || parsed.password) {
+      throw new Error("代码仓 URL 不许携带账号密码——鉴权使用个人 CodeHub Token");
+    }
+  }
 }
 
 /** 所有需求都是一张仓库交付图：单仓只是只有一个节点、没有边。 */
@@ -210,6 +251,10 @@ export interface TaskSummary {
   repo_url?: string;
   /** 需求影响的全部仓库。repo_url 保留为单仓交付兼容字段。 */
   repositories?: string[];
+  /** 用户在下单时从各业务仓能力目录中明确选中的 Skill。空数组表示
+   * 新任务明确不加载仓内 Skill；字段缺席仅用于兼容旧任务此前的全量
+   * 自动加载。Skill 是建议上下文，不是流程步骤或完成证据。 */
+  repository_skills?: SelectedRepositorySkill[];
   /** 多仓时由 Chain 产物投影；单仓时是一个节点的退化图。 */
   requirement_graph?: RequirementGraph;
   /** 确认 Chain 方案后生成的普通仓库交付任务关系。 */
@@ -634,6 +679,19 @@ interface GitPushReceipt {
   url?: string;
 }
 
+interface RepositorySkillCatalogTicket {
+  account?: string;
+  repositories: string[];
+  baseline?: string;
+  expiresAt: number;
+  catalogs: RepositorySkillCatalog[];
+}
+
+export interface RepositorySkillCatalogResponse {
+  catalog_token: string;
+  repositories: RepositorySkillCatalog[];
+}
+
 export class TaskService {
   /** 没有部署级 public URL 时，记住最近一次已登录用户实际访问的地址。
    * 通知由该次请求触发时即可带上同事能访问的内网 Host，而不是回环地址。 */
@@ -643,6 +701,8 @@ export class TaskService {
   private queue: string[] = [];
   private counter = 0;
   private reviews: ReviewStore;
+  private repositorySkillCatalogs =
+    new Map<string, RepositorySkillCatalogTicket>();
 
   constructor(readonly options: TaskServiceOptions) {
     this.reviews = new ReviewStore(join(options.dataDir, "reviews.jsonl"));
@@ -1297,6 +1357,177 @@ export class TaskService {
     return provider && model ? { provider, model } : undefined;
   }
 
+  /**
+   * 用户在下单页显式触发的只读目录发现。令牌把“谁、哪些仓、哪条
+   * 基线、当时看到的 Skill”绑在一起；创建任务只交所选 id，不接受
+   * 浏览器自报路径或正文。
+   */
+  async scanRepositorySkills(input: {
+    repositories: string[];
+    baseline?: string;
+    account?: string;
+  }): Promise<RepositorySkillCatalogResponse> {
+    if (!this.options.host) throw new Error("本部署未接代码仓，无法读取仓内能力");
+    const repositories = input.repositories
+      .map((item) => String(item).trim()).filter(Boolean)
+      .filter((item, index, all) => all.indexOf(item) === index);
+    if (!repositories.length) throw new Error("请先填写至少一个代码仓");
+    if (repositories.length > 12) throw new Error("一次最多读取 12 个代码仓");
+    repositories.forEach(validateRepositoryAddress);
+    const baseline = input.baseline?.trim() || "master";
+    if (/\s/.test(baseline)) throw new Error("基线分支不能含空白字符");
+
+    const credential = this.options.gitCredential?.(input.account);
+    const prepared = credential
+      ? this.prepareHostGitCredential(credential) : undefined;
+    const catalogs: RepositorySkillCatalog[] = [];
+    try {
+      for (const repository of repositories) {
+        const discovered = await discoverRepositorySkills({
+          repository,
+          baseline,
+          credentialHelper: prepared?.helper,
+          timeoutMs: 30_000,
+        });
+        catalogs.push(this.catalogWithConflicts({
+          ...discovered,
+          // 服务端选择与任务 summary 均使用用户输入的规范化字符串；
+          // 发现器内部即使为本地相对路径做了绝对化，也不能让 key 漂移。
+          repository,
+        }));
+      }
+    } finally {
+      this.cleanupHostGitCredential(prepared);
+    }
+
+    const now = Date.now();
+    for (const [key, value] of this.repositorySkillCatalogs) {
+      if (value.expiresAt <= now) this.repositorySkillCatalogs.delete(key);
+    }
+    while (this.repositorySkillCatalogs.size >= 64) {
+      const oldest = this.repositorySkillCatalogs.keys().next().value;
+      if (!oldest) break;
+      this.repositorySkillCatalogs.delete(oldest);
+    }
+    const catalogToken = randomUUID();
+    this.repositorySkillCatalogs.set(catalogToken, {
+      account: input.account,
+      repositories,
+      baseline,
+      expiresAt: now + 10 * 60_000,
+      catalogs,
+    });
+    return { catalog_token: catalogToken, repositories: catalogs };
+  }
+
+  private catalogWithConflicts(
+    catalog: RepositorySkillCatalog,
+  ): RepositorySkillCatalog {
+    const hostNames = new Set(
+      hostSkillNames(this.options.dataDir).map((name) => name.toLowerCase()));
+    const counts = new Map<string, number>();
+    for (const skill of catalog.skills) {
+      const key = skill.name.toLowerCase();
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    const reserved = (name: string) => name === "mae-flow"
+      || name === "build-fix"
+      || /^(?:comet|openspec|ponytail)(?:-|$)/.test(name);
+    const skills = catalog.skills.map((skill): RepositorySkillDescriptor => {
+      const name = skill.name.toLowerCase();
+      const conflict = hostNames.has(name)
+        ? "与平台常驻 Skill 同名"
+        : reserved(name)
+          ? "与 Mae-Flow 平台能力重名"
+          : (counts.get(name) ?? 0) > 1
+            ? "本仓存在同名 Skill，无法确定应加载哪一个"
+            : undefined;
+      return conflict
+        ? { ...skill, selectable: false, warning: conflict }
+        : skill;
+    });
+    return { ...catalog, skills };
+  }
+
+  private selectedSkillsFromCatalog(options: {
+    catalogToken?: string;
+    selectedIds?: string[];
+    repositories: string[];
+    baseline?: string;
+    account?: string;
+    /** Chain 检视重新读取目录时，不能因单个仓临时扫描失败
+     * 就把父任务上已经确认的 Skill 清掉。仅该场景传入旧值；
+     * 新下单仍不会从扫描失败的仓带入任何选择。 */
+    preserveForErroredRepositories?: SelectedRepositorySkill[];
+  }): SelectedRepositorySkill[] {
+    const ids = [...new Set((options.selectedIds ?? []).map(String))];
+    if (!ids.length && !options.catalogToken) return [];
+    if (!options.catalogToken) throw new Error("选择仓内能力前请重新读取 Skill 目录");
+    const ticket = this.repositorySkillCatalogs.get(options.catalogToken);
+    if (!ticket || ticket.expiresAt <= Date.now()) {
+      this.repositorySkillCatalogs.delete(options.catalogToken);
+      throw new Error("仓内能力目录已过期，请重新读取后再发起任务");
+    }
+    if (ticket.account !== options.account) {
+      throw new Error("仓内能力目录不属于当前登录用户");
+    }
+    if (JSON.stringify(ticket.repositories) !== JSON.stringify(options.repositories)
+        || ticket.baseline !== options.baseline) {
+      throw new Error("代码仓或基线已变化，请重新读取仓内能力");
+    }
+    if (ids.length > 20) throw new Error("每个任务最多选择 20 个仓内 Skill");
+    const byId = new Map<string, {
+      catalog: RepositorySkillCatalog;
+      skill: RepositorySkillDescriptor;
+    }>();
+    const successfulRepositories = new Set(
+      ticket.catalogs.filter((catalog) => !catalog.error)
+        .map((catalog) => catalog.repository));
+    for (const catalog of ticket.catalogs) {
+      // 失败目录不参与 ID 还原。即使未来某个发现器在
+      // error 上还附了部分 skills，也不能把不完整快照当成可选清单。
+      if (catalog.error) continue;
+      for (const skill of catalog.skills) byId.set(skill.id, { catalog, skill });
+    }
+    const selected = ids.map((id): SelectedRepositorySkill => {
+      const found = byId.get(id);
+      if (!found || !found.skill.selectable) {
+        throw new Error("所选仓内 Skill 不存在或不可由 Agent 自主使用，请重新读取");
+      }
+      if (!validRepositorySkillPath(found.skill.relative_path)) {
+        throw new Error("仓内 Skill 路径不合法");
+      }
+      return {
+        id: found.skill.id,
+        repository: found.catalog.repository,
+        revision: found.catalog.revision,
+        name: found.skill.name,
+        description: found.skill.description,
+        relative_path: found.skill.relative_path,
+        source: found.skill.source,
+        digest: found.skill.digest,
+      };
+    });
+    const merged = options.preserveForErroredRepositories === undefined
+      ? selected
+      : ticket.repositories.flatMap((repository) => {
+          if (successfulRepositories.has(repository)) {
+            // 成功仓以本次 IDs 为准；没选中任何项就是显式清空。
+            return selected.filter((skill) => skill.repository === repository);
+          }
+          // catalog.error（以及防御性的目录缺失）保留该仓旧值，
+          // 不影响其他成功仓的更新。
+          return options.preserveForErroredRepositories!
+            .filter((skill) => skill.repository === repository)
+            .map((skill) => ({ ...skill }));
+        });
+    if (merged.length > 20) {
+      throw new Error("每个任务最多选择 20 个仓内 Skill");
+    }
+    this.repositorySkillCatalogs.delete(options.catalogToken);
+    return merged;
+  }
+
   create(
     requirement: string,
     options: {
@@ -1316,6 +1547,15 @@ export class TaskService {
       /** Chain 确认后生成的仓库交付任务使用；不暴露给普通 API。 */
       parentTaskId?: string;
       blockedBy?: string[];
+      /** 普通 API 只提交短期目录令牌和所选 id；服务端把它还原为
+       * 已验证清单。repositorySkills 只供 Chain 拆单内部透传。 */
+      repositorySkillCatalogToken?: string;
+      selectedRepositorySkillIds?: string[];
+      repositorySkills?: SelectedRepositorySkill[];
+      /** 仅供旧跨仓父任务拆单：旧现场没有 repository_skills 字段时，
+       * 子任务必须继续保留 undefined，让物化器走旧版全量加载兼容；
+       * 不能与新下单的“明确未选择”空数组混为一谈。 */
+      preserveUndefinedRepositorySkills?: boolean;
     } = {},
   ): TaskSummary {
     const explicitTitle = options.title?.trim().replace(/\s+/g, " ") || undefined;
@@ -1371,27 +1611,9 @@ export class TaskService {
       if (!this.options.host) {
         throw new Error("本部署未接内核模式,任务不克隆代码仓");
       }
-      if (/\s/.test(candidate)) throw new Error("代码仓地址不能含空白字符");
-      // SSH 地址当场拒(2026-08-21 内网实锤):宿主的凭据链整个是 HTTPS
-      // 形态(个人令牌 + credential.helper),SSH 走 key pair,平台没有
-      // 也不该有私钥——clone 可能靠机器上的只读 key 侥幸成功,推送必然
-      // Permission denied (publickey),而且死在整轮流程跑完之后。
-      // 不做自动换写:实测 SSH 与 HTTPS 的域名都可能不同
-      // (szv-y.codehub… vs codehub-y…),机械换 scheme 造出的地址更坑人。
-      if (/^(?:ssh:\/\/|git\+ssh:\/\/|[\w.-]+@[\w.-]+:)/i.test(candidate)) {
-        throw new Error(
-          `代码仓请填 HTTPS 地址(收到 SSH 形式: ${candidate})。`
-          + `宿主推送与 MR 用个人令牌走 HTTPS,SSH 没有可用凭据,`
-          + `会在交付推送时 Permission denied`);
-      }
-      if (/^https?:\/\//i.test(candidate)) {
-        // 明文凭据拼 URL 是我们刚堵死的洞,这里不许再开:
-        // 鉴权走个人令牌的 credential helper,URL 保持干净。
-        const parsed = new URL(candidate);
-        if (parsed.username || parsed.password) {
-          throw new Error("代码仓 URL 不许携带账号密码——鉴权使用个人 CodeHub Token");
-        }
-      }
+      // SSH、明文 userinfo 与控制字符的口径同时服务任务创建和 Skill
+      // 目录扫描，不能让“能列出、却注定无法交付”的仓进入下一步。
+      validateRepositoryAddress(candidate);
     }
     if (options.model) {
       // 下单不再给选模型(用户拍板:管理员统一配一个)。这条通路留给
@@ -1412,6 +1634,26 @@ export class TaskService {
             || options.repairRounds < 0)) {
       throw new Error("修复轮预算必须是 ≥0 的数字");
     }
+    const repositorySkills = options.preserveUndefinedRepositorySkills
+      ? undefined
+      : options.repositorySkills !== undefined
+        ? options.repositorySkills.map((skill) => {
+            if (!repositories.includes(skill.repository)
+                || !validRepositorySkillPath(skill.relative_path)) {
+              throw new Error(`仓内 Skill ${skill.name} 不属于本任务代码仓`);
+            }
+            return { ...skill };
+          })
+        : this.selectedSkillsFromCatalog({
+            catalogToken: options.repositorySkillCatalogToken,
+            selectedIds: options.selectedRepositorySkillIds,
+            repositories,
+            baseline,
+            account: options.account,
+          });
+    if ((repositorySkills?.length ?? 0) > 20) {
+      throw new Error("每个任务最多选择 20 个仓内 Skill");
+    }
     this.counter += 1;
     const id = `task-${this.counter}`;
     const workspace = join(this.options.dataDir, id);
@@ -1430,6 +1672,7 @@ export class TaskService {
       luban_account: options.account || undefined,
       repo_url: repo,
       repositories: repositories.length ? repositories : undefined,
+      repository_skills: repositorySkills,
       requirement_graph: repositories.length
         ? {
             stage: repositories.length > 1 ? "analysis" : "confirmed",
@@ -1782,6 +2025,8 @@ export class TaskService {
           + "职责;发现方案不够用时停止并报告,不要自行改变跨仓契约。",
         `当前仓库:${repository.name}\n当前职责:${repository.responsibility ?? "见方案正文"}`,
       ].filter(Boolean).join("\n\n");
+      const preserveUndefinedRepositorySkills =
+        task.summary.repository_skills === undefined;
       const child = this.create(requirement, {
         title: taskTitle(
           `${task.summary.title ?? taskTitle(task.summary.requirement)} · ${repository.name}`),
@@ -1794,6 +2039,11 @@ export class TaskService {
         repairRounds: task.summary.repair_rounds,
         parentTaskId: task.summary.id,
         blockedBy: blockers,
+        repositorySkills: preserveUndefinedRepositorySkills
+          ? undefined
+          : task.summary.repository_skills!.filter(
+              (skill) => skill.repository === repository.url),
+        preserveUndefinedRepositorySkills,
       });
       // 方案文档放子任务 workspace 根(不删现场,重启/重建都在);
       // launch 每次把它带进仓库克隆。写不进去不拦拆单——launch 侧
@@ -1821,7 +2071,13 @@ export class TaskService {
    * 先消费当前 HumanGate 决定、恢复同一会话,再幂等生成各仓普通任务。
    * 这样不会出现“子任务已经生成,父分析单却还在等确认”的双状态。
    * 已经收尾的旧单仍允许从图面板补建,用于兼容历史现场。 */
-  async confirmRequirementGraph(id: string): Promise<TaskSummary> {
+  async confirmRequirementGraph(
+    id: string,
+    skillSelection?: {
+      catalog_token?: string;
+      selected_ids?: string[];
+    },
+  ): Promise<TaskSummary> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     if (!this.isRequirementAnalysis(task)) {
@@ -1845,6 +2101,8 @@ export class TaskService {
       await this.decide(id, {
         state_version: task.summary.waiting.state_version,
         decision: "确认并生成任务",
+        repository_skill_catalog_token: skillSelection?.catalog_token,
+        selected_repository_skill_ids: skillSelection?.selected_ids,
         // 收尾令随决定送达:确认后父会话再举卡会被系统代答赶下台
         // (autoAnswerFor 的分析单兜底),但第一选择是它自己别举。
         notes: "各仓交付任务由平台自动生成与调度,不归本会话跟进;"
@@ -1901,6 +2159,10 @@ export class TaskService {
       /** 随这次决定一起提交的批注:圈过的几处就是"需要修改"的理由,
        * 不用人再复述一遍。 */
       annotation_ids?: string[];
+      /** Chain 检视卡上可在同一次决定里调整按仓 Skill。服务端先把
+       * 选择绑定到父分析单并落盘，再生成子任务；这不是第二张审批卡。 */
+      repository_skill_catalog_token?: string;
+      selected_repository_skill_ids?: string[];
     },
   ): Promise<TaskSummary> {
     const task = this.tasks.get(id);
@@ -1924,6 +2186,34 @@ export class TaskService {
       && Object.values(answers).concat(decision).some((answer) =>
         answer.includes("确认并生成任务"));
     if (confirmingGraph) this.requirementGraphPlan(task);
+    const updatesRepositorySkills =
+      input.repository_skill_catalog_token !== undefined
+      || input.selected_repository_skill_ids !== undefined;
+    if (updatesRepositorySkills) {
+      if (!this.isRequirementAnalysis(task)) {
+        throw new NotFoundError("只有跨仓方案检视可以在决定时调整仓内 Skill");
+      }
+      // 只允许在图已经可供检视、且 HumanGate 仍是当前版本时换选择。
+      // 先验版本检查避免陈旧页面消费 catalog token、覆盖较新的选择；
+      // 本方法到 humanGate.resolve 之间没有 await，单进程内不会被另一
+      // 个决定插入。
+      if (waiting.state_version !== input.state_version
+          || waiting.status !== "waiting") {
+        throw new StateConflictError(`任务状态已变化:待办 ${waiting.waiting_id} 版本不匹配`);
+      }
+      this.requirementGraphPlan(task);
+      task.summary.repository_skills = this.selectedSkillsFromCatalog({
+        catalogToken: input.repository_skill_catalog_token,
+        selectedIds: input.selected_repository_skill_ids,
+        repositories: task.summary.repositories ?? [],
+        baseline: task.summary.baseline,
+        account: task.summary.luban_account,
+        preserveForErroredRepositories: task.summary.repository_skills ?? [],
+      });
+      // 必须先于 humanGate.resolve/createRepositoryDeliveries 落盘：确认
+      // 后父会话会立刻收口，重启也只能从 task.json 恢复这份选择。
+      this.persist(task);
+    }
     this.warnOffMenuAnswer(task, waiting, Object.keys(answers).length
       ? Object.values(answers) : [decision]);
     // 批注进 notes 而不是 decision:内核按选项标签给这次选择记账
@@ -2327,6 +2617,8 @@ export class TaskService {
       let cwd = workspace;
       let prompt = task.summary.requirement;
       let hostHooks;
+      let repositorySkillPaths: string[] = [];
+      let loadedRepositorySkillNames: string[] = [];
       task.cwd = cwd;
       if (this.options.host && requirementAnalysis) {
         const analysisRoot = resuming ? savedCwd! : join(workspace, "repositories");
@@ -2339,7 +2631,7 @@ export class TaskService {
               // readonly:分析现场推送硬禁用(没有内核门禁兜底,禁令
               // 不能只写在 prompt 里)。
               this.cloneRepo(analysisRoot, prepared?.helper, gitIdentity,
-                repository,
+                repository, task.summary.baseline,
                 `${index + 1}-${basename(repository).replace(/\.git$/, "") || "repo"}`,
                 true);
             });
@@ -2384,13 +2676,28 @@ export class TaskService {
             ? this.prepareHostGitCredential(gitIdentity) : undefined;
           try {
             cwd = this.cloneRepo(workspace, prepared?.helper, gitIdentity,
-              task.summary.repo_url);
+              task.summary.repo_url, task.summary.baseline);
           } finally {
             this.cleanupHostGitCredential(prepared);
           }
         }
         task.cwd = cwd;
         this.hardenAgentGitBoundary(agentDir, cwd);
+        const activeRepository = task.summary.repo_url
+          ?? this.effectiveDefaultRepo();
+        if (activeRepository) {
+          const materialized = materializeRepositorySkills({
+            selected: task.summary.repository_skills,
+            bindings: [{ repository: activeRepository, workspace: cwd }],
+            snapshotRoot: join(cwd, ".mae-flow-work", "repository-skills"),
+            reservedNames: hostSkillNames(this.options.dataDir),
+          });
+          repositorySkillPaths = materialized.paths;
+          loadedRepositorySkillNames = materialized.names;
+          for (const warning of materialized.warnings) {
+            this.options.log?.(`[repository-skill] 任务 ${task.summary.id}: ${warning}`);
+          }
+        }
         // 下单事实(.mae-flow-order.json,内核契约):表单收齐的单号/
         // 基线分支/工号/交付方式机械交给内核——config-review 拿它补
         // 缺省、确认卡不再问交付方式、workflow_select 免卡直接 done。
@@ -2401,7 +2708,7 @@ export class TaskService {
         // 老路,绝不拦启动。
         try {
           const utGenerationMethod = availableUtGenerationMethod(
-            this.options.dataDir, cwd);
+            this.options.dataDir, loadedRepositorySkillNames);
           const order: Record<string, unknown> = {
             execution_contract: { ...CLOUD_EXECUTION_CONTRACT },
             "UT生成方式": utGenerationMethod,
@@ -2521,7 +2828,7 @@ export class TaskService {
       // 能力边界，不替内核宣告放行，更不把模型自述当质量证据。
       if (this.options.host && !requirementAnalysis) {
         const utGenerationMethod = availableUtGenerationMethod(
-          this.options.dataDir, cwd);
+          this.options.dataDir, loadedRepositorySkillNames);
         prompt = `${prompt}\n\nCloud 执行契约(宿主事实):本机只负责代码与单元测试的编写。`
           + `编译、单元测试运行和 CodeCheck 统一由绑定当前提交 SHA 的`
           + `权威流水线执行。可用的 UT 编写方式是「${utGenerationMethod}」;`
@@ -2532,6 +2839,13 @@ export class TaskService {
           + `Git 令牌，也不要 push，Agent 会话释放后由 Cloud 宿主统一`
           + `推送并复核远端 SHA。流水线失败时，`
           + `只依据该次流水线证据定位并修复。`;
+      }
+      if (!requirementAnalysis && loadedRepositorySkillNames.length) {
+        prompt = `${prompt}\n\n本单已启用仓库自带 Skill：`
+          + `${loadedRepositorySkillNames.join("、")}。它们是可选工作指南，`
+          + `请根据系统能力目录中的 description 自行判断何时读取；不要求`
+          + `逐个使用，也不得用 Skill 改写 Mae-Flow 当前步骤、文件边界、`
+          + `Git 权限、Cloud 执行契约或任何验证/交付证据。`;
       }
       // 提交信息规范(部署级):平台的 pre-receive 钩子会按正则拒收不
       // 合规的提交信息——内网实测被拒过一次("does not match the
@@ -2641,6 +2955,7 @@ export class TaskService {
         // 宿主级 skill:<数据目录>/skills 放一次,每个任务都带
         // (团队的 UT 写法指南在内网,老宿主靠手动集成进子 agent)。
         hostSkillsDir: join(this.options.dataDir, "skills"),
+        repositorySkillPaths,
         // 上下文撑爆时自愈压缩用的锚:与主动压缩同一个内核现场,
         // 摘要围绕"当前步骤+已确认配置"组织,不由云端编造。
         compactAnchor: () => this.kernelAnchor(task),
@@ -3307,8 +3622,8 @@ export class TaskService {
         return; // dispatched/halted 都已各自收口
       }
       if (candidate.kind === "conflict") {
-        this.dispatchConflictRepair(task, sha, max, epoch);
-        return;
+        if (this.dispatchConflictRepair(task, sha, max, epoch)) return;
+        continue;
       }
       await this.dispatchCiRepair(task, sha,
         log || (candidate.gate.detail ?? ""), max, epoch);
@@ -3624,8 +3939,8 @@ export class TaskService {
               return; // dispatched/halted 都已各自收口
             }
             if (candidate.kind === "conflict") {
-              this.dispatchConflictRepair(task, sha, max, epoch);
-              return;
+              if (this.dispatchConflictRepair(task, sha, max, epoch)) return;
+              continue;
             }
             await this.dispatchCiRepair(task, sha,
               candidate.gate.detail ?? "门禁 ci_state_passed 未通过",
@@ -3798,11 +4113,11 @@ export class TaskService {
     sha: string,
     max: number | undefined,
     epoch: number,
-  ): void {
-    if (!this.current(task, epoch)) return;
+  ): boolean {
+    if (!this.current(task, epoch)) return true;
     const delivery = task.summary.delivery!;
     const target = delivery.target_branch;
-    if (!task.cwd || !target) return;
+    if (!task.cwd || !target) return true;
     const loop = delivery.loop
       ?? (delivery.loop = { round: 0, max, state: "repairing" as const });
     if (loop.kind === "conflict" && loop.last_sha === sha) {
@@ -3813,7 +4128,7 @@ export class TaskService {
         "冲突修复会话没有产生新提交,冲突仍在,请人工处理";
       this.persist(task);
       this.notifyRepairStopped(task);
-      return;
+      return true;
     }
     const git = (...args: string[]) => spawnSync(
       "git", args, { cwd: task.cwd, encoding: "utf-8" });
@@ -3822,10 +4137,21 @@ export class TaskService {
       task.summary.detail =
         `冲突修复准备失败(fetch ${target}):${(fetched.stderr || "").slice(0, 300)}`;
       this.persist(task);
-      return; // 环境问题不硬闯,留痕等人(或下一轮监控重试)
+      return true; // 环境问题不硬闯,留痕等人(或下一轮监控重试)
     }
+    const beforeMerge = (git("rev-parse", "HEAD").stdout || "").trim();
     const merged = git("merge", "--no-edit", `origin/${target}`);
     if (merged.status === 0) {
+      const afterMerge = (git("rev-parse", "HEAD").stdout || "").trim();
+      if (beforeMerge && afterMerge === beforeMerge) {
+        // 新提交已经包含目标分支，但平台的 conflict gate 可能还没刷新。
+        // 这不是“修复会话没有提交”：不写 last_sha、不退出监控，让
+        // watchMerge 按原轮询节奏继续看门禁/MR。旧实现会把当前 SHA
+        // 记成已修，再下一拍误命中同 SHA 刹车，导致合入后无人收口。
+        task.summary.detail = "本地已无冲突，等待平台刷新冲突门禁";
+        this.persist(task);
+        return false;
+      }
       // 干净合并:没有真冲突(门禁可能滞后)。统一交给 tryDeliver 的
       // host-only 推送与远端 SHA 复核，避免这里另开一条无收据的旁路。
       loop.kind = "conflict";
@@ -3833,7 +4159,7 @@ export class TaskService {
       task.summary.detail = "与目标分支干净合并,等待宿主推送并触发新流水线";
       this.persist(task);
       setImmediate(() => void this.tryDeliver(task, epoch));
-      return;
+      return true;
     }
     const conflicted = (git(
       "diff", "--name-only", "--diff-filter=U").stdout || "")
@@ -3845,7 +4171,7 @@ export class TaskService {
       task.summary.detail =
         `merge 失败但无冲突文件,请人工:${(merged.stderr || "").slice(0, 300)}`;
       this.persist(task);
-      return;
+      return true;
     }
     loop.kind = "conflict";
     loop.round = 0; // 冲突触发同样清零 CI 重试
@@ -3865,6 +4191,7 @@ export class TaskService {
         `- 不要 rebase、不要 force push、不要动无关文件。`,
       ].join("\n"),
       `与 ${target} 冲突(${conflicted.length} 个文件),专职会话解决中`);
+    return true;
   }
 
   /** 检视回复发布(批3 收尾):修复会话收口后,把 ../review_replies.md
@@ -4512,6 +4839,10 @@ export class TaskService {
     gitHelper?: string,
     identity?: { username: string; email?: string },
     repoUrl?: string,
+    /** 下单时明确的代码基线。新克隆必须直接检出它，不能先落到远端
+     * 默认分支再让后续流程纠正：仓内 Skill 会在内核 bootstrap 前
+     * 物化，错一拍就会把“已选择”变成 digest 不符而静默跳过。 */
+    baseline?: string,
     targetName?: string,
     /** 只读分析现场(多仓需求理解):克隆后在 git 配置层禁用推送。
      * 分析会话没有内核 preTool 门禁兜底,"禁止推送"不能只靠 prompt
@@ -4526,6 +4857,12 @@ export class TaskService {
       throw new Error(
         "这单没有代码仓：请在发起任务时填写「交付代码仓」");
     }
+    const checkoutBaseline = baseline?.trim() || undefined;
+    if (checkoutBaseline && (checkoutBaseline.length > 255
+        || checkoutBaseline.startsWith("-")
+        || /[\0\r\n\s\\]/.test(checkoutBaseline))) {
+      throw new Error(`基线分支格式不合法，无法克隆：${checkoutBaseline}`);
+    }
     // 裸仓 origin.git → 工作区目录名去掉 .git 后缀,免得像个裸仓。
     const target = join(
       workspace, targetName ?? (basename(source).replace(/\.git$/, "") || "repo"));
@@ -4536,7 +4873,7 @@ export class TaskService {
           && existsSync(join(source, "objects")));
     // 凭据只对 http(s) 远端有意义;本地路径克隆(演示/试跑)不掺和。
     const useCredential = !!gitHelper && /^https?:\/\//i.test(source);
-    if (isGit || /^(https?|ssh|git):\/\//i.test(source)) {
+    if (isGit || /^(?:https?|ssh|git|file):\/\//i.test(source)) {
       // 空 helper 在前=清空继承的 helper 列表(系统钥匙串之流):
       // 个人令牌只从我们的脚本来,也不许被别的 helper 顺手存走
       // (git 会对列表里所有 helper 广播 store——实测令牌进过
@@ -4549,7 +4886,9 @@ export class TaskService {
             ? ["-c", "credential.helper=",
                "-c", `credential.helper=${gitHelper}`]
             : []),
-          "clone", "--quiet", source, target,
+          "clone", "--quiet",
+          ...(checkoutBaseline ? ["--branch", checkoutBaseline] : []),
+          "--", source, target,
         ],
         {
           encoding: "utf-8",
@@ -4558,7 +4897,13 @@ export class TaskService {
           env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
         });
       if (cloned.status !== 0) {
-        throw new Error(`仓库克隆失败: ${cloned.stderr}`);
+        const detail = String(cloned.stderr || "").trim().slice(0, 500);
+        if (checkoutBaseline) {
+          throw new Error(
+            `仓库克隆失败：代码仓基线「${checkoutBaseline}」不存在或不可访问`
+            + (detail ? `：${detail}` : ""));
+        }
+        throw new Error(`仓库克隆失败${detail ? `：${detail}` : ""}`);
       }
     } else {
       cpSync(source, target, {

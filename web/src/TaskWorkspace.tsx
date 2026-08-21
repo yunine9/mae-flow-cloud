@@ -19,6 +19,11 @@ import { AnnotationPanel } from "./AnnotationPanel";
 import { AttachedNotes } from "./AttachedNotes";
 import { RequirementGraph } from "./RequirementGraph";
 import {
+  EMPTY_REPOSITORY_SKILL_PICKER_STATE,
+  RepositorySkillPicker,
+  type RepositorySkillPickerState,
+} from "./RepositorySkillPicker";
+import {
   completeReview,
   controlTask,
   listAnnotations,
@@ -95,8 +100,13 @@ export function TaskWorkspace({
     useState<"pause" | "resume" | "cancel" | "">("");
   const [controlError, setControlError] = useState("");
   const [cancelArmed, setCancelArmed] = useState(false);
+  const [chainSkillPicker, setChainSkillPicker] =
+    useState<RepositorySkillPickerState>(EMPTY_REPOSITORY_SKILL_PICKER_STATE);
 
-  useEffect(() => setMaterialView("doc"), [task.id]);
+  useEffect(() => {
+    setMaterialView("doc");
+    setChainSkillPicker(EMPTY_REPOSITORY_SKILL_PICKER_STATE);
+  }, [task.id]);
 
   useEffect(() => {
     if (!canRequestReview) return;
@@ -255,6 +265,16 @@ export function TaskWorkspace({
       ? { kicker: "WORKTREE CHANGES", title: "工作区变更" }
       : { kicker: "WORK DOCUMENTS", title: "过程文档" };
   const waiting = task.status === "waiting_for_human" && task.waiting;
+  const chainReview = !!waiting
+    && task.requirement_graph?.stage === "analysis"
+    && (task.requirement_graph.repositories.length ?? 0) > 1
+    // 多仓分析过程中的普通澄清也处于 analysis；仓内能力只应在最终
+    // Chain 方案检视卡出现，避免尚未定案时就让人误以为即将下发。
+    && (waiting.question?.questions?.some((question) =>
+      question.options?.some((option) => option.includes("确认并生成任务"))) ?? false);
+  const chainRepositories = task.repositories?.length
+    ? task.repositories
+    : task.requirement_graph?.repositories.map((repository) => repository.url) ?? [];
   const controllable = canOperate && [
     "queued", "running", "pausing", "paused", "waiting_for_human", "verifying",
   ].includes(task.status);
@@ -421,7 +441,8 @@ export function TaskWorkspace({
           </div>
         </section>
 
-        <aside className="ws-decision" aria-label="决策与账目">
+        <aside className={`ws-decision${chainReview ? " has-chain-skills" : ""}`}
+          aria-label="决策与账目">
           <div className="ws-pane-head ws-pane-head-side">
             <div><span>NEXT ACTION</span><strong>{waiting ? "当前需要处理" : "任务现场"}</strong></div>
             <small>{waiting ? "完成后流程继续" : "实时更新"}</small>
@@ -435,9 +456,23 @@ export function TaskWorkspace({
               task={task}
               onDecided={() => { setNotesPulse((tick) => tick + 1); onChanged(); }}
               annotationIds={attachNotes ? draftIds : undefined}
+              repositorySkillSelection={chainReview
+                ? chainSkillPicker.selection : undefined}
               attachment={
-                <AttachedNotes items={drafts} attached={attachNotes}
-                               onToggle={setAttachNotes} onLocate={locate} />
+                <>
+                  {chainReview && (
+                    <RepositorySkillPicker
+                      repositories={chainRepositories}
+                      baseline={task.baseline}
+                      initialSkills={task.repository_skills}
+                      presentation="decision"
+                      state={chainSkillPicker}
+                      onStateChange={setChainSkillPicker}
+                    />
+                  )}
+                  <AttachedNotes items={drafts} attached={attachNotes}
+                                 onToggle={setAttachNotes} onLocate={locate} />
+                </>
               }
             />
           )}

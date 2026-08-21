@@ -309,7 +309,8 @@ test("分析现场只读:真 push 必须在传输层死掉,不靠 prompt 嘱咐"
     host: { kernelRoot: "/tmp" },
   });
   const guarded = (service as any).cloneRepo(
-    join(dataDir, "ws1"), undefined, undefined, origin, "1-origin", true);
+    join(dataDir, "ws1"), undefined, undefined, origin,
+    undefined, "1-origin", true);
   execFileSync("git", ["-C", guarded, "commit", "-q", "--allow-empty",
     "-m", "escape"], { env: { ...process.env,
       GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t",
@@ -318,7 +319,7 @@ test("分析现场只读:真 push 必须在传输层死掉,不靠 prompt 嘱咐"
     "git", ["-C", guarded, "push", "-q", "origin", "master"],
     { stdio: "pipe" }), "只读分析现场的 push 必须失败");
   const normal = (service as any).cloneRepo(
-    join(dataDir, "ws2"), undefined, undefined, origin, "repo");
+    join(dataDir, "ws2"), undefined, undefined, origin, undefined, "repo");
   execFileSync("git", ["-C", normal, "commit", "-q", "--allow-empty",
     "-m", "deliver"], { env: { ...process.env,
       GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t",

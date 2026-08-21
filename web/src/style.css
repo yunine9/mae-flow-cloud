@@ -931,6 +931,190 @@ svg {
 }
 .launch-model-select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); outline: none; }
 
+/* 发起任务 · 仓库自带 Skill。目录必须由用户显式读取；卡片只表达
+   “本任务可用”，不把 Skill 伪装成新的权限或固定流程步骤。 */
+.repository-skills-section {
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--accent-soft) 42%, transparent), transparent 42%),
+    color-mix(in srgb, var(--surface-soft) 72%, var(--surface));
+}
+.repository-skills-head {
+  margin-bottom: 14px; display: flex; align-items: center; gap: 9px;
+}
+.repository-skills-head > i {
+  width: 25px; height: 25px; display: grid; place-items: center; flex: none;
+  color: var(--accent); border-radius: 7px; background: var(--accent-soft);
+  font: 750 10px ui-monospace, monospace;
+}
+.repository-skills-head > div { min-width: 0; display: grid; gap: 2px; }
+.repository-skills-head strong { color: var(--text-strong); font-size: 12.5px; }
+.repository-skills-head small { color: var(--muted); font-size: 10px; line-height: 1.45; }
+.repository-skills-head em {
+  margin-left: auto; padding: 2px 7px; flex: none; color: var(--attention);
+  border-radius: 999px; background: var(--attention-soft); font-size: 9px;
+  font-style: normal; font-weight: 700;
+}
+.repository-skills-decision {
+  margin: 2px 18px 16px; padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line));
+  border-radius: 11px;
+}
+.repository-skills-decision .repository-skills-head strong { font-size: 14px; }
+.repository-skills-decision .repository-skills-head small,
+.repository-skills-decision .repository-skills-toolbar > p { font-size: 11.5px; }
+.repository-skills-toolbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 18px;
+}
+.repository-skills-toolbar > p {
+  max-width: 650px; margin: 0; color: var(--muted); font-size: 10.5px; line-height: 1.65;
+}
+.repository-skills-toolbar > p code { color: var(--accent); font-size: .94em; overflow-wrap: anywhere; }
+.repository-skills-toolbar > div { flex: none; display: flex; align-items: center; gap: 9px; }
+.repository-skills-toolbar small { color: var(--accent); font-size: 9.5px; font-weight: 700; }
+.repository-skills-toolbar small.at-limit { color: var(--attention); }
+.repository-skills-toolbar button {
+  min-height: 34px; padding: 0 12px; border: 1px solid var(--accent);
+  border-radius: 8px; color: var(--accent); background: var(--surface);
+  font-size: 10px; font-weight: 700; cursor: pointer;
+  transition: color var(--ease), background var(--ease), border-color var(--ease);
+}
+.repository-skills-toolbar button:hover:not(:disabled) { color: #fff; background: var(--accent); }
+.repository-skills-toolbar button:disabled { color: var(--faint); border-color: var(--line); background: var(--surface-soft); cursor: not-allowed; }
+.repository-skills-empty,
+.repository-skills-error {
+  margin-top: 12px; padding: 12px 13px; border: 1px dashed var(--line-strong);
+  border-radius: 9px; color: var(--muted); background: var(--surface);
+  font-size: 10px; line-height: 1.55;
+}
+.repository-skills-error {
+  display: grid; gap: 3px; border-style: solid;
+  border-color: color-mix(in srgb, var(--danger) 32%, var(--line));
+  background: color-mix(in srgb, var(--danger-soft) 58%, var(--surface));
+}
+.repository-skills-error strong { color: var(--danger); font-size: 10.5px; }
+.repository-skills-error small { color: var(--muted); }
+.repository-skills-current {
+  margin-top: 12px; padding: 12px 13px; display: grid; gap: 4px;
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--line));
+  border-radius: 9px; background: var(--surface); line-height: 1.5;
+}
+.repository-skills-current strong { color: var(--text-strong); font-size: 11px; }
+.repository-skills-current span { color: var(--accent); font-size: 10.5px; overflow-wrap: anywhere; }
+.repository-skills-current small { color: var(--muted); font-size: 9.5px; }
+.repository-skill-groups { margin-top: 12px; display: grid; gap: 10px; }
+.repository-skill-group {
+  min-width: 0; overflow: hidden; border: 1px solid var(--line);
+  border-radius: 10px; background: var(--surface);
+}
+.repository-skill-group > header {
+  min-height: 48px; padding: 9px 11px; display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 11px;
+  border-bottom: 1px solid var(--line); background: var(--surface-soft);
+}
+.repository-skill-group > header > div:first-child { min-width: 0; display: grid; gap: 1px; }
+.repository-skill-group > header > div:first-child strong {
+  overflow: hidden; color: var(--text-strong); font-size: 11px;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.repository-skill-group > header > div:first-child span {
+  overflow: hidden; color: var(--muted); font-size: 8.5px;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.repository-skill-group > header > code {
+  max-width: 130px; overflow: hidden; padding: 3px 6px; border-radius: 5px;
+  color: var(--muted); background: var(--surface-muted); font-size: 8.5px;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.repository-skill-actions { display: flex; align-items: center; gap: 5px; }
+.repository-skill-actions small { min-width: 26px; color: var(--muted); font-size: 8.5px; text-align: right; }
+.repository-skill-actions button {
+  padding: 4px 7px; border: 1px solid var(--line); border-radius: 6px;
+  color: var(--accent); background: var(--surface); font-size: 8.5px; cursor: pointer;
+}
+.repository-skill-actions button:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
+.repository-skill-actions button:disabled { color: var(--faint); background: transparent; cursor: not-allowed; }
+.repository-skill-group-error,
+.repository-skill-none {
+  margin: 10px 11px; padding: 9px 10px; border-radius: 7px;
+  color: var(--muted); background: var(--surface-soft); font-size: 9.5px;
+}
+.repository-skill-group-error { color: var(--danger); background: var(--danger-soft); }
+.repository-skill-list {
+  padding: 10px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px;
+}
+.repository-skill-card {
+  position: relative; min-width: 0; min-height: 98px; padding: 11px;
+  display: grid; grid-template-columns: 17px minmax(0, 1fr); align-content: start; gap: 9px;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--surface-soft);
+  cursor: pointer; transition: border-color var(--ease), background var(--ease), box-shadow var(--ease);
+}
+.repository-skill-card:hover:not(.disabled) { border-color: var(--accent); background: var(--surface); }
+.repository-skill-card:has(input:checked) {
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--line));
+  background: color-mix(in srgb, var(--accent-soft) 52%, var(--surface));
+  box-shadow: inset 3px 0 var(--accent);
+}
+.repository-skill-card.disabled { opacity: .62; cursor: not-allowed; }
+.repository-skill-card > input {
+  position: absolute; left: 11px; top: 12px; z-index: 1;
+  width: 16px; height: 16px; margin: 0; padding: 0;
+  opacity: 0; border: 0; border-radius: 0; outline: none; background: transparent;
+  box-shadow: none; cursor: inherit;
+}
+.repository-skill-card > .repository-skill-check {
+  width: 16px; height: 16px; margin: 1px 0 0; display: block;
+  border: 1px solid var(--line-strong); border-radius: 5px; background: var(--surface);
+}
+.repository-skill-card > input:checked + .repository-skill-check {
+  border-color: var(--accent); background: var(--accent);
+  box-shadow: inset 0 0 0 3px var(--surface);
+}
+.repository-skill-card > input:focus-visible + .repository-skill-check {
+  outline: 3px solid color-mix(in srgb, var(--accent) 30%, transparent); outline-offset: 2px;
+}
+.repository-skill-card > .repository-skill-copy {
+  min-width: 0; margin: 0; display: grid; align-content: start; gap: 4px;
+  color: inherit; font-size: inherit; font-weight: inherit;
+}
+.repository-skill-copy > strong { color: var(--text-strong); font-size: 10.5px; line-height: 1.35; }
+.repository-skill-copy > span { color: var(--muted); font-size: 9.5px; line-height: 1.5; overflow-wrap: anywhere; }
+.repository-skill-copy > code {
+  width: fit-content; max-width: 100%; overflow: hidden; color: var(--accent);
+  font-size: 8.5px; text-overflow: ellipsis; white-space: nowrap;
+}
+.repository-skill-copy > small { color: var(--danger); font-size: 8.5px; line-height: 1.4; }
+.repository-skills-limit {
+  margin-top: 10px; padding: 9px 11px; color: var(--attention);
+  border-radius: 8px; background: var(--attention-soft); font-size: 10px; line-height: 1.5;
+}
+.repository-skills-decision .repository-skills-toolbar {
+  align-items: stretch; flex-direction: column; gap: 10px;
+}
+.repository-skills-decision .repository-skills-toolbar > div { justify-content: space-between; }
+.repository-skills-decision .repository-skill-group > header {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+.repository-skills-decision .repository-skill-actions {
+  grid-column: 1 / -1; justify-content: flex-end;
+}
+.repository-skills-decision .repository-skill-list { grid-template-columns: 1fr; }
+.repository-skills-decision .repository-skill-card { min-height: 0; }
+.repository-skills-decision .repository-skill-copy > strong { font-size: 12px; }
+.repository-skills-decision .repository-skill-copy > span { font-size: 11px; }
+.repository-skills-decision .repository-skill-copy > code,
+.repository-skills-decision .repository-skill-copy > small { font-size: 9.5px; }
+.repository-skills-decision .repository-skill-group > header > div:first-child strong {
+  font-size: 12px;
+}
+.repository-skills-decision .repository-skill-group > header > div:first-child span,
+.repository-skills-decision .repository-skill-group > header > code {
+  font-size: 10px;
+}
+.repository-skills-decision .repository-skill-actions small { font-size: 10px; }
+.repository-skills-decision .repository-skill-actions button {
+  min-height: 32px; padding: 0 10px; font-size: 10.5px;
+}
+
 .requirement-graph { flex: none; margin: 10px 14px 0; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); box-shadow: var(--shadow-xs); overflow: hidden; }
 .requirement-graph > summary { min-height: 51px; padding: 9px 13px; display: grid; grid-template-columns: minmax(0, 1fr) auto 16px; align-items: center; gap: 12px; cursor: pointer; list-style: none; background: color-mix(in srgb, var(--surface-soft) 72%, var(--surface)); }
 .requirement-graph > summary::-webkit-details-marker { display: none; }
@@ -1453,6 +1637,10 @@ svg {
   text-transform: uppercase;
 }
 .question-list { padding: 5px 20px 3px; }
+.decision-attachment {
+  min-width: 0; margin: 0; padding: 0; display: grid; border: 0;
+}
+.decision-attachment:disabled { opacity: .72; }
 .question {
   min-width: 0;
   margin: 0;
@@ -2519,6 +2707,12 @@ pre {
   .launch-form-intro > small { display: none; }
   .launch-form-section { padding: 15px 14px 16px; }
   .launch-field-grid { grid-template-columns: 1fr; gap: 10px; }
+  .repository-skills-toolbar { align-items: stretch; flex-direction: column; gap: 10px; }
+  .repository-skills-toolbar > div { justify-content: space-between; }
+  .repository-skills-decision { margin-left: 14px; margin-right: 14px; padding: 14px; }
+  .repository-skill-group > header { grid-template-columns: minmax(0, 1fr) auto; }
+  .repository-skill-actions { grid-column: 1 / -1; justify-content: flex-end; }
+  .repository-skill-list { grid-template-columns: 1fr; }
   .launch-submit-bar { align-items: stretch; flex-direction: column; }
   .launch-submit-bar > button { width: 100%; }
   .composer { padding: 18px; }
@@ -4036,6 +4230,7 @@ pre {
     border-bottom: 1px solid var(--line);
   }
   .ws-body.has-decision .ws-decision { order: -1; max-height: 72vh; flex: none; }
+  .ws-body.has-decision .ws-decision.has-chain-skills { max-height: none; }
   .ws-decision { overflow: visible; padding: 14px 12px 28px; }
   .ws-pane-head-side { margin: -14px -12px 2px; }
   .ws-doc { padding: 22px 18px 44px; }

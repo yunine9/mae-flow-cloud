@@ -276,6 +276,7 @@ test("冲突门禁:宿主 merge 造真实冲突标记,会话在真冲突上解,�
   try {
     const id = service.create("交付 REQ9:解冲突").id;
     await until(() => service.get(id)!.status === "await_merge", "先绿");
+    const preConflictSha = service.get(id)!.delivery?.sha;
     // 目标分支动了且与工作分支冲突(a.txt 两边都改)
     const other = mkdtempSync(join(tmpdir(), "mfc-mrl-other-"));
     execFileSync("git",
@@ -295,11 +296,15 @@ test("冲突门禁:宿主 merge 造真实冲突标记,会话在真冲突上解,�
       "冲突修复派单");
     assert.equal(service.get(id)!.delivery?.loop?.round, 0);
     // 会话解完推送(剧本里 grep 证明标记真实在场)→ 新流水线绿
-    await until(() => {
-      const detail = service.get(id)!.detail ?? "";
-      return service.get(id)!.status === "await_merge"
-        || detail.includes("等新流水线");
-    }, "解完回monitoring", 90_000);
+    await until(() => service.get(id)!.status === "await_merge"
+      && service.get(id)!.delivery?.sha !== preConflictSha,
+    "解完推送新合并提交并回到 monitoring", 90_000);
+    // 故意让平台冲突门禁多红几拍，模拟真实平台异步刷新。宿主已确认
+    // HEAD 包含目标分支时必须继续监控，不能把陈旧门禁误判成“同 SHA
+    // 修复无提交”而停环；旧实现稳定在这里进入 halted。
+    await new Promise((tick) => setTimeout(tick, 600));
+    assert.notEqual(service.get(id)!.delivery?.loop?.state, "halted",
+      "平台冲突门禁刷新滞后不应触发同 SHA 刹车");
     platform.conflictGate = false;
     await until(() => service.get(id)!.status === "await_merge", "回到等待合入");
     // 合并提交信息的形状是**平台硬约束**(2026-08-18 拿到 pre-receive

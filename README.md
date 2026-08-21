@@ -310,6 +310,11 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
   UT 运行、CodeCheck 固定交给绑定当前提交 SHA 的权威流水线。每次代码
   会话都收到同一份简短能力边界，UT skill 只指导测试编写，不承担运行、
   不证明通过。代价要如实:错误发现更晚，一轮往返=一次流水线+一次修复会话;
+- **业务仓 Skill 可按单选择(2026-08-21)**:下单页在仓库/基线之后显式
+  读取 `.agents/skills`、`.pi/skills`、`.claude/skills`、`.cac/skills` 的标准
+  `SKILL.md`，多仓按仓分组，默认不选。服务端令牌校验后只把选中的精确
+  文件以只读快照交给 Pi；Pi 根据 description 自主判断何时读取，未选项
+  完全不可见，Skill 不增加权限、不成为内核门禁或质量通过证据;
 - **CodeCheck 云端不做本地扫描(2026-08-16,用户拍板"lightcheck 保留,
   codecheck 依赖流水线")**:CodeCheck 是内网 npm 件,云端装不上,原来
   每次扫描空撞安装(30 分钟冷却)+ TOOL_ERROR 噪声(task-1 实锤)。

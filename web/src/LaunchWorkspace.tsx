@@ -5,6 +5,11 @@ import {
   type AuthUser,
   type LaunchOptions,
 } from "./api";
+import {
+  EMPTY_REPOSITORY_SKILL_SELECTION,
+  RepositorySkillPicker,
+  type RepositorySkillSelection,
+} from "./RepositorySkillPicker";
 
 export function LaunchWorkspace({
   session,
@@ -33,6 +38,8 @@ export function LaunchWorkspace({
   // 都来自内核,空串=等 options 到了再取第一项。
   const [lane, setLane] = useState("");
   const [repairRounds, setRepairRounds] = useState("");
+  const [repositorySkillSelection, setRepositorySkillSelection] =
+    useState<RepositorySkillSelection>(EMPTY_REPOSITORY_SKILL_SELECTION);
   // 配置没配齐不让下单:缺项来自后端(服务级+个人级),前端只负责
   // 摆在明面上。后端同样硬拦——绕过界面打接口一样被 409 挡住。
   const blockers = options?.blockers ?? [];
@@ -63,9 +70,36 @@ export function LaunchWorkspace({
     };
   }, [onClose, submitting]);
 
+  function invalidateSkillCatalog() {
+    setRepositorySkillSelection(EMPTY_REPOSITORY_SKILL_SELECTION);
+  }
+
+  function changeRepository(index: number, value: string) {
+    invalidateSkillCatalog();
+    setRepos((current) => current.map(
+      (item, itemIndex) => itemIndex === index ? value : item));
+  }
+
+  function addRepository() {
+    invalidateSkillCatalog();
+    setRepos((current) => [...current, ""]);
+  }
+
+  function removeRepository(index: number) {
+    invalidateSkillCatalog();
+    setRepos((current) => current.filter(
+      (_, itemIndex) => itemIndex !== index));
+  }
+
+  function changeBaseline(value: string) {
+    invalidateSkillCatalog();
+    setBaseline(value);
+  }
+
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (!title.trim() || !requirement.trim() || submitting || blocked) return;
+    if (!title.trim() || !requirement.trim() || submitting || blocked
+        || repositorySkillSelection.scanning) return;
     setSubmitting(true);
     setError("");
     try {
@@ -83,6 +117,12 @@ export function LaunchWorkspace({
           baseline: baseline.trim() || undefined,
           repairRounds: repairRounds.trim() === ""
             ? undefined : Number(repairRounds),
+          repositorySkillCatalogToken:
+            repositorySkillSelection.selectedIds.length > 0
+              ? repositorySkillSelection.catalogToken : undefined,
+          selectedRepositorySkillIds:
+            repositorySkillSelection.selectedIds.length > 0
+              ? repositorySkillSelection.selectedIds : undefined,
         },
       );
       await onCreated();
@@ -196,20 +236,18 @@ export function LaunchWorkspace({
                           <div className="repo-row" key={index}>
                             <span>{String(index + 1).padStart(2, "0")}</span>
                             <input type="text" value={value}
-                              onChange={(event) => setRepos((current) => current.map(
-                                (item, itemIndex) => itemIndex === index ? event.target.value : item))}
+                              onChange={(event) => changeRepository(index, event.target.value)}
                               placeholder="https://codehub…/team/project.git"
                               spellCheck={false}
                               required={options.repo.required} />
                             {repos.length > 1 && <button type="button"
                               aria-label={`移除第 ${index + 1} 个仓库`}
-                              onClick={() => setRepos((current) => current.filter(
-                                (_, itemIndex) => itemIndex !== index))}>×</button>}
+                              onClick={() => removeRepository(index)}>×</button>}
                           </div>
                         ))}
                       </div>
                       <button type="button" className="repo-add"
-                        onClick={() => setRepos((current) => [...current, ""])}>
+                        onClick={addRepository}>
                         <span>＋</span> 添加代码仓
                       </button>
                       <small className="repo-field-note">
@@ -233,12 +271,20 @@ export function LaunchWorkspace({
                       <label className="account-field">
                         <span>基线分支</span>
                         <input type="text" value={baseline}
-                          onChange={(event) => setBaseline(event.target.value)}
+                          onChange={(event) => changeBaseline(event.target.value)}
                           placeholder={`默认 ${options.baseline.default}`} spellCheck={false} />
                       </label>
                     )}
                   </div>
                 </section>
+              )}
+              {options?.repo.enabled && (
+                <RepositorySkillPicker
+                  key={JSON.stringify([repos, baseline])}
+                  repositories={repos}
+                  baseline={baseline}
+                  onSelectionChange={setRepositorySkillSelection}
+                />
               )}
               <section className="launch-form-section">
                 <div className="launch-section-head"><i>03</i><div><strong>执行设置</strong><small>选定交付方式和修复预算;任务自动归属你本人</small></div></div>
@@ -274,9 +320,26 @@ export function LaunchWorkspace({
 
               {error && <div className="composer-error" role="alert">{error}</div>}
               <footer className="launch-submit-bar">
-                <div><strong>{blocked ? "暂时不能发起" : "信息确认后即可启动"}</strong><small>{blocked ? "请先处理上方配置项" : "任务创建后会自动进入你的工作台"}</small></div>
-                <button type="submit" disabled={submitting || blocked}>
-                  <span>{submitting ? "正在发起" : optionsLoading ? "读取配置中" : blocked ? "配置未完成" : "确认发起"}</span>
+                <div><strong>{blocked
+                  ? "暂时不能发起"
+                  : repositorySkillSelection.scanning
+                    ? "正在读取仓内能力"
+                    : "信息确认后即可启动"}</strong><small>{blocked
+                  ? "请先处理上方配置项"
+                  : repositorySkillSelection.scanning
+                    ? "读取完成后可确认选择并启动"
+                    : "任务创建后会自动进入你的工作台"}</small></div>
+                <button type="submit" disabled={submitting || blocked
+                  || repositorySkillSelection.scanning}>
+                  <span>{submitting
+                    ? "正在发起"
+                    : optionsLoading
+                      ? "读取配置中"
+                      : blocked
+                        ? "配置未完成"
+                        : repositorySkillSelection.scanning
+                          ? "读取能力中"
+                          : "确认发起"}</span>
                   <svg viewBox="0 0 20 20" aria-hidden><path d="M4 10h11M11 6l4 4-4 4" /></svg>
                 </button>
               </footer>
