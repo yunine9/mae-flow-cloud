@@ -897,18 +897,40 @@ export class TaskService {
         : { key: "git", label: "Git 交付", status: "ok",
             detail: "平台已配置;代码仓逐单填写(本部署不设默认仓)" });
 
-    const available = (name: string, args = ["--version"]): boolean => {
+    const probeTool = (name: string, args = ["--version"]) => {
       const result = spawnSync(name, args, {
         encoding: "utf-8", timeout: 3_000,
       });
-      return result.status === 0;
+      return {
+        ready: result.status === 0,
+        output: `${result.stdout ?? ""}\n${result.stderr ?? ""}`.trim(),
+      };
     };
+    const leadingMajor = (text: string): number | undefined => {
+      const match = text.match(/(?:^|[\s"'v])((?:1\.)?\d+)(?:[._\s"'-]|$)/i);
+      if (!match) return undefined;
+      const parts = match[1].split(".");
+      const value = Number(parts[0] === "1" ? parts[1] : parts[0]);
+      return Number.isFinite(value) ? value : undefined;
+    };
+    const java = probeTool("java", ["-version"]);
+    const maven = probeTool("mvn");
+    const node = probeTool("node");
+    const npm = probeTool("npm");
+    const cpp = probeTool("c++");
+    const binutils = probeTool("ar");
+    const bison = probeTool("bison");
+    const flex = probeTool("flex");
+    const ccache = probeTool("ccache");
+    const javaMajor = leadingMajor(java.output);
+    const nodeMajor = leadingMajor(node.output);
+    const npmMajor = leadingMajor(npm.output);
+    const mavenBase = java.ready && javaMajor === 21 && maven.ready;
     const buildTools = {
-      "JS/TS": available("node") && available("npm"),
-      Java: available("java", ["-version"])
-        && (available("mvn") || available("gradle")),
-      "C/C++": available("c++")
-        && (available("cmake") || available("make") || available("ninja")),
+      "JS/TS": mavenBase && node.ready && (nodeMajor ?? 0) >= 18
+        && npm.ready && (npmMajor ?? 0) >= 9,
+      Java: mavenBase,
+      "C/C++": mavenBase && cpp.ready && binutils.ready && bison.ready && flex.ready,
     };
     const readyLanguages = Object.entries(buildTools)
       .filter(([, ready]) => ready).map(([language]) => language);
@@ -921,10 +943,13 @@ export class TaskService {
         ? { key: "prepush", label: "推送前编译与 UT", status: "warning",
             detail: `已启用；可用 ${readyLanguages.join("、") || "无"}，`
               + `未发现 ${missingLanguages.join("、")} 的完整基础工具链`,
-            suggestion: "按实际业务仓安装 JDK+Maven/Gradle、Node+npm、"
-              + "C++ 编译器+CMake/Make；仓库 wrapper 可在真实任务中补足" }
+            suggestion: `内网基线要求 JDK 21 + Maven、Node 18+ / npm 9+、`
+              + `GCC/G++、binutils、bison、flex（ccache${ccache.ready ? "已就绪" : "建议安装"}）；`
+              + `当前探测 Java=${javaMajor ?? "无"}、Node=${nodeMajor ?? "无"}、npm=${npmMajor ?? "无"}` }
         : { key: "prepush", label: "推送前编译与 UT", status: "ok",
-            detail: "已启用；JS/TS、Java、C/C++ 基础工具链均可执行" });
+            detail: `已启用；JDK ${javaMajor}+Maven 统一编排，`
+              + `Node ${nodeMajor}/npm ${npmMajor} 与 C/C++ 工具链均可执行`
+              + (ccache.ready ? "，ccache 可用" : "") });
 
     if (!this.options.isolation) {
       items.push({ key: "container", label: "容器隔离", status: "warning",

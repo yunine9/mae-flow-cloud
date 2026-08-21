@@ -3,6 +3,7 @@ import type {
   GateContract,
   GateDecision,
 } from "./gateService.ts";
+import { prePushBuildGuidance } from "./prepushBuildPlaybook.ts";
 
 export type PrePushFailureKind = "code_failure" | "infrastructure_failure";
 
@@ -92,6 +93,27 @@ export function prePushSecurityDecision(
     return DENY("推送前验证会话不能读取或改写宿主模型配置与凭据。");
   }
 
+  // Maven/npm/Git 的用户级配置可能内含仓库凭据，JDK truststore 与 shell
+  // profile 则属于整台宿主机。专项 Agent 只能使用部署时准备好的环境，不能
+  // 通过文件工具或 Bash 把一次构建诊断固化成全局配置。仓内 pom、package、
+  // .npmrc 等项目配置不匹配这些绝对/用户目录规则，仍可正常读取和修复。
+  const homeConfigPath = /(?:~|\$(?:HOME|\{HOME\})|\/(?:root|home\/[^\\/\s'"`;&|]+|Users\/[^\\/\s'"`;&|]+))[\\/](?:\.gitconfig|\.npmrc|\.m2[\\/]settings\.xml|\.(?:bashrc|bash_profile|profile|zshrc|zprofile))(?:$|[\s'"`;&|])/i;
+  const systemConfigPath = /(?:^|[\s'"`=])\/(?:etc[\\/](?:gitconfig|npmrc|maven[\\/]settings\.xml|profile(?:\.d[\\/][^\\/\s'"`;&|]+)?)|usr[\\/](?:share[\\/]maven[\\/]conf[\\/]settings\.xml|local[\\/](?:etc[\\/]npmrc|[^\\/\s'"`;&|]*jdk[^\\/\s'"`;&|]*[\\/]lib[\\/]security[\\/]cacerts))|Library[\\/]Java[\\/]JavaVirtualMachines[\\/][^\\/\s'"`;&|]+[\\/]Contents[\\/]Home[\\/]lib[\\/]security[\\/]cacerts)(?:$|[\s'"`;&|\\/])/i;
+  const systemCertificatePath = /(?:^|[\s'"`=])\/(?:etc[\\/](?:ssl|pki)|usr[\\/]local[\\/]share[\\/]ca-certificates)(?:[\\/]|$)/i;
+  const environmentConfigPath = /\$(?:\{(?:JAVA_HOME|M2_HOME|MAVEN_HOME)\}|(?:JAVA_HOME|M2_HOME|MAVEN_HOME))\/(?:lib\/security\/cacerts|conf\/settings\.xml)(?:$|[\s'"`;&|])/i;
+  if (homeConfigPath.test(source)
+    || systemConfigPath.test(source)
+    || systemCertificatePath.test(source)
+    || environmentConfigPath.test(source)) {
+    return DENY("推送前验证会话不能读取或修改宿主的全局 Git、Maven、npm、JDK 或证书配置。");
+  }
+
+  // Write/Edit 的 value 在不同接线中可能是路径，也可能带着待写内容；一旦
+  // 出现典型认证字段，宁可让宿主注入，也不能把凭据写进仓库配置。
+  if (/\b(?:_authToken|authorization|private-token|oauth-token)\b\s*[:=]/i.test(source)) {
+    return DENY("推送前验证会话不能读取、写入或持久化认证 Token。");
+  }
+
   if (kind !== "bash") return undefined;
 
   // 不允许通过环境变量侧门把宿主密钥打印进上下文。指定 JAVA_HOME、PATH
@@ -106,6 +128,9 @@ export function prePushSecurityDecision(
   const shellSegments = source.split(/(?:&&|\|\||[;\n])/);
   for (const segment of shellSegments) {
     if (!/\bgit\b/i.test(segment)) continue;
+    if (/\bgit\b[\s\S]*\bclone\b/i.test(segment)) {
+      return DENY("禁止在推送前验证会话中重新克隆仓库；请使用 Cloud 已准备好的工作区。");
+    }
     if (/\bgit\b[\s\S]*\bpush\b/i.test(segment)) {
       return DENY("禁止在推送前验证会话中执行 git push；Cloud 会统一推送已复核的 HEAD。");
     }
@@ -115,7 +140,13 @@ export function prePushSecurityDecision(
     if (/\bgit\b[\s\S]*\bcredential(?:-[\w-]+)?\b/i.test(segment)) {
       return DENY("禁止在推送前验证会话中读取、批准或改写 Git 凭据。");
     }
-    if (/\bgit\b[\s\S]*\bconfig\b[\s\S]*(?:credential\.|remote\.|url\.|http\.[^\s=]*extraheader|core\.askpass|include(?:if)?\.path|gpg\.program)/i.test(segment)) {
+    if (/\bgit\b[\s\S]*\bconfig\b[\s\S]*(?:--global\b|--system\b)/i.test(segment)) {
+      return DENY("禁止在推送前验证会话中修改宿主级 Git 配置；仅允许使用现有配置和本地提交。");
+    }
+    if (/\bgit\b[\s\S]*(?:\bconfig\b[\s\S]*\bhttp\.sslverify\b(?:\s|=)+["']?(?:false|0|no|off)\b["']?|(?:^|\s)-c\s*http\.sslverify\s*=\s*["']?(?:false|0|no|off)\b["']?)/i.test(segment)) {
+      return DENY("禁止关闭 Git TLS 证书校验；证书问题应报告为宿主基础设施故障。");
+    }
+    if (/\bgit\b[\s\S]*\bconfig\b[\s\S]*(?:credential\.|remote\.|url\.|http\.[^\s=]*(?:extraheader|token|auth)|core\.askpass|include(?:if)?\.path|gpg\.program|[^\s=]*(?:token|password|passwd|secret|oauth)[^\s=]*)/i.test(segment)) {
       return DENY("禁止在推送前验证会话中改写 Git 远端或凭据配置。");
     }
     if (/\bgit\b[\s\S]*\bclean\b/i.test(segment)
@@ -131,6 +162,32 @@ export function prePushSecurityDecision(
     || /\b(?:GIT|SSH)_ASKPASS\s*=/i.test(source)
     || /\bGIT_SSH_COMMAND\s*=/i.test(source)) {
     return DENY("禁止在推送前验证会话中改写 Git 远端或认证入口。");
+  }
+
+  // 避免把 Token 直接塞进 URL/header，或让包管理器在 Agent 会话中登录、
+  // 改用户配置和全局安装。常规 install/build/test 不受影响。
+  if (/\bhttps?:\/\/[^\s'"/@:]+:[^\s'"/@]+@/i.test(source)
+    || /\b(?:authorization|private-token|oauth-token)\s*[:=]\s*(?:bearer\s+)?[^\s'";&|]+/i.test(source)
+    || /(?:^|\s)(?:--token|--password|--passwd)(?:=|\s+)/i.test(source)) {
+    return DENY("禁止在推送前验证会话中读取、传入或持久化远端 Token/密码。");
+  }
+  if (/\b(?:npm|pnpm|yarn)\b[\s\S]*\b(?:login|logout|adduser|token)\b/i.test(source)
+    || /\b(?:npm|pnpm|yarn)\b[\s\S]*\bconfig\b[\s\S]*\b(?:set|delete|del|edit)\b/i.test(source)
+    || /\b(?:npm|pnpm)\b[\s\S]*(?:\s-g\b|\s--global\b)[\s\S]*\b(?:add|install|i)\b/i.test(source)
+    || /\b(?:npm|pnpm)\b[\s\S]*\b(?:add|install|i)\b[\s\S]*(?:\s-g\b|\s--global\b)/i.test(source)) {
+    return DENY("禁止在推送前验证会话中登录包仓、改写包管理器配置或安装全局工具。");
+  }
+
+  // TLS/证书只能由部署侧统一维护；专项 Agent 不得以“先跑通”为由关闭
+  // 校验或改写系统/JDK truststore。
+  if (/\bNODE_TLS_REJECT_UNAUTHORIZED\s*=\s*0\b/i.test(source)
+    || /\bGIT_SSL_NO_VERIFY\s*=\s*(?:1|true|yes|on)\b/i.test(source)
+    || /\bNPM_CONFIG_STRICT_SSL\s*=\s*(?:0|false|no|off)\b/i.test(source)
+    || /-Dmaven\.wagon\.http\.ssl\.(?:insecure|allowall)\s*=\s*true\b/i.test(source)
+    || /\bkeytool\b[\s\S]*-(?:importcert|importkeystore|delete|changealias|storepasswd|keypasswd|genkeypair)\b/i.test(source)
+    || /\b(?:update-ca-certificates|update-ca-trust)\b/i.test(source)
+    || /\bsecurity\b[\s\S]*\badd-trusted-cert\b/i.test(source)) {
+    return DENY("禁止关闭 TLS 校验或修改宿主/JDK 证书；请报告基础设施故障。");
   }
 
   // clean 生命周期交给真实构建工具；Agent 不需要原始递归强删能力。
@@ -259,6 +316,7 @@ export function verifyPrePushEvidence(
 }
 
 export function prePushMission(request: PrePushRunRequest): string {
+  const buildGuidance = prePushBuildGuidance(request.workspace);
   return [
     "你是 Cloud 的推送前验证与修复 Agent。这是独立专项会话，不在 Mae-Flow 内核流程中。",
     "不要执行 current、done、agent-task、AskUserQuestion，也不要读取或修改 .mae-flow 状态。",
@@ -272,6 +330,8 @@ export function prePushMission(request: PrePushRunRequest): string {
     "Cloud 会在会话释放并复核后注入短期凭据、统一推送。禁止递归强删；clean 请走构建工具生命周期。",
     "依赖下载、工具缺失、磁盘/网络/权限等不是改代码能解决的问题，归类为 infrastructure_failure，",
     "写清缺什么后停止，不要为了制造绿灯篡改测试、关闭检查或编造执行结果。",
+    "",
+    buildGuidance,
     "",
     "收口前确认 git status 没有应提交的业务改动。最后一段必须严格输出下面结构（命令须与实际 Bash 调用完全一致）：",
     "<prepush-result>",

@@ -321,7 +321,15 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
   Agent，用服务器工具链执行仓库真实编译与 UT，并可自动修复、commit。
   该会话刻意不挂 Mae-Flow Hooks，避免把快速修复重新塞进内核阶段门禁。
   它不跑 CodeCheck，也不替代最终流水线和 `external_verify`；本地 PASS
-  收据只对最终 SHA + clean worktree 有效，同 SHA 的网络 push 重试可复用;
+  收据只对最终 SHA + clean worktree 有效，同 SHA 的网络 push 重试可复用。
+  命令发现顺序固定为**仓库真实构建配置与脚本 > 相关 Skill 的辅助说明 >
+  内网默认经验**；Skill 由 Agent 按任务相关性自行决定是否读取，不能覆盖
+  安全边界，也不把“Java/JS/C++”直接硬编码成某条命令。当前内网首批三类业务
+  仓均以 Maven 为主要入口，服务账号基线为 JDK 21；Java 分开跑 compile、
+  test 和必要的定向 test，JS 按需准备 `website` 依赖但不无脑 clean，C++
+  保留仓库声明的 DT 参数并优先增量、定向编译/测试/覆盖。具体 profile、
+  模块与私服参数只能从本仓材料取得，不能凭经验臆造。缺工具、私服/证书/
+  网络/权限失败归环境故障；不得靠关闭 SSL、写全局配置或输出 token 造绿灯;
 - **业务仓 Skill 可按单选择(2026-08-21)**:下单页在仓库/基线之后显式
   读取 `.agents/skills`、`.pi/skills`、`.claude/skills`、`.cac/skills` 的标准
   `SKILL.md`，多仓按仓分组，默认不选。服务端令牌校验后只把选中的精确
@@ -354,6 +362,8 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
 - **服务器构建工具链现在是部署前置**:运行服务的同一账号必须能非交互
   执行目标仓声明的 JS/Java/C++ 编译与 UT 命令（例如 Node 包管理器、
   JDK/Maven/Gradle、C/C++ 编译器与 CMake/Ninja/Make，或仓库自带 wrapper）。
+  当前内网业务仓的落地基线是 JDK 21，且 Java/JS/C++ 均由 Maven 作为
+  主要编排入口；这只是部署工具链经验，不覆盖仓库脚本与 Skill 的明确说明。
   早期“不装 JDK/mvn、只等流水线”的现场记录已经失效；缺工具或依赖会
   由推送前会话明确标为环境故障并停止 push;
 - 任务级恢复已实现(tests/recovery.test.ts):进程可死任务不死——

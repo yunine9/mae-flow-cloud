@@ -138,8 +138,12 @@ test("prepush evidence: 失败、伪造或不匹配的 Bash 结果不能充当�
 test("prepush gate: 放行构建、UT、本地提交和只读 Git", () => {
   for (const command of [
     "mvn -q test",
+    "JAVA_HOME=/usr/local/jdk-21 mvn compile",
+    "mvn -s .mvn/project-settings.xml test",
     "./gradlew clean test",
+    "npm install --legacy-peer-deps",
     "pnpm install && pnpm test",
+    "npm config get registry",
     "cmake --build build && ctest --test-dir build",
     "env NODE_ENV=test npm run build",
     "printenv JAVA_HOME",
@@ -156,11 +160,21 @@ test("prepush gate: 拦住 push、remote 与凭据改写", () => {
   for (const command of [
     "git push origin HEAD",
     "/usr/bin/git -C . push --force-with-lease",
+    "git clone https://example.invalid/repo.git /tmp/repo",
     "git remote set-url origin https://example.invalid/repo.git",
     "git remote add backup ssh://example.invalid/repo.git",
     "git config --local credential.helper store",
+    "git config --global user.email agent@example.invalid",
+    "git config --system core.autocrlf false",
+    "git config http.sslVerify false",
+    "git config --local http.sslVerify 'false'",
+    "git -c http.sslVerify=false fetch origin",
+    "GIT_SSL_NO_VERIFY=true git fetch origin",
     "git config remote.origin.pushurl ssh://example.invalid/repo.git",
+    "git config codehub.token secret",
     "git credential fill",
+    "git fetch https://user:secret@example.invalid/repo.git",
+    "git -c http.extraHeader='Authorization: Bearer secret' fetch origin",
     "printf x >> .git/config",
     "GIT_ASKPASS=/tmp/helper git fetch",
   ]) {
@@ -177,6 +191,19 @@ test("prepush gate: 拦住宿主秘密和危险删除，不误伤仓库 skill", 
     ["Bash", "cat ../pi-agent/models.json"],
     ["Read", "~/.ssh/id_rsa"],
     ["Bash", "cat $HOME/.netrc"],
+    ["Read", "~/.m2/settings.xml"],
+    ["Write", "$HOME/.npmrc"],
+    ["Bash", "printf x >> ~/.gitconfig"],
+    ["Bash", "sed -i s/old/new/ /etc/maven/settings.xml"],
+    ["Write", "/etc/ssl/certs/corp-ca.pem"],
+    ["Bash", "printf 'export JAVA_HOME=/tmp/jdk' >> ~/.bashrc"],
+    ["Bash", "keytool -importcert -file corp.crt -keystore $JAVA_HOME/lib/security/cacerts"],
+    ["Bash", "npm config set registry https://example.invalid"],
+    ["Write", ".npmrc\n_authToken=secret"],
+    ["Bash", "npm login --registry https://example.invalid"],
+    ["Bash", "npm install -g typescript"],
+    ["Bash", "NODE_TLS_REJECT_UNAUTHORIZED=0 npm test"],
+    ["Bash", "mvn -Dmaven.wagon.http.ssl.insecure=true test"],
     ["Bash", "echo $MODEL_API_KEY"],
     ["Bash", "printenv ACCESS_TOKEN"],
     ["Bash", "env | sort"],
@@ -190,6 +217,8 @@ test("prepush gate: 拦住宿主秘密和危险删除，不误伤仓库 skill", 
   }
   assert.equal(prePushSecurityDecision("Read", ".claude/skills/java/SKILL.md"), undefined);
   assert.equal(prePushSecurityDecision("Read", ".codex/skills/test/SKILL.md"), undefined);
+  assert.equal(prePushSecurityDecision("Read", ".npmrc"), undefined);
+  assert.equal(prePushSecurityDecision("Write", ".mvn/project-settings.xml"), undefined);
   assert.equal(prePushSecurityDecision(
     "Read", ".mae-flow-work/repository-skills/java/SKILL.md"), undefined);
   assert.equal(prePushSecurityDecision("Bash", "rm build/old.log"), undefined);
