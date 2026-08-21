@@ -6,7 +6,14 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,6 +37,10 @@ function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf-8" }).trim();
 }
 
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
 function makeSourceRepo(knowledge?: Record<string, string>): string {
   const dir = mkdtempSync(join(tmpdir(), "mfc-dsrc-"));
   git(dir, "init", "--quiet", "-b", "master");
@@ -50,14 +61,16 @@ function makeSourceRepo(knowledge?: Record<string, string>): string {
 }
 
 /** 剧本只在克隆里预焙一笔提交并伪造内核状态收轮。Agent 不 push；
- * allowHostPush=false 时破坏 origin，专门验证宿主传输失败的留痕。 */
-function walkScript(allowHostPush: boolean): Scene[] {
-  const breakOrigin = allowHostPush
+ * allowHostPush=false 时把测试裸仓模拟成离线，专门验证**权威地址**真实
+ * 不可达的留痕。改 origin 已不再能影响宿主，不能拿它冒充基础设施故障。 */
+function walkScript(allowHostPush: boolean, authoritativeRepo?: string): Scene[] {
+  const breakTransport = allowHostPush
     ? ""
-    : "git remote set-url origin /nonexistent/mae-flow-host-push && ";
+    : `mv ${shellQuote(authoritativeRepo ?? "/nonexistent/source")} `
+      + `${shellQuote(`${authoritativeRepo ?? "/nonexistent/source"}.offline`)} && `;
   return [
     { tool: { name: "bash", input: { command:
-        breakOrigin +
+        breakTransport +
         "git config user.email bot@test && git config user.name bot && " +
         "git checkout --quiet -b master_bot_REQ9 && " +
         "echo change > a.txt && git add . && " +
@@ -144,7 +157,8 @@ async function runTask(
   linear = false,
 ) {
   const model = new ScriptedModelServer(
-    [...walkScript(push), ...extraScenes], "scripted-v1", { linear });
+    [...walkScript(push, platform.barePath), ...extraScenes],
+    "scripted-v1", { linear });
   await model.start();
   const service = buildService(
     platform, dataDir, model.modelsJson(), poll, settings);
@@ -196,6 +210,77 @@ test("分支已推+流水线绿 → MR 等待合入", async () => {
     // 单号以独立字段递到平台(--e2e-issues 的原料),不许只活在 title
     assert.equal(platform.mergeRequests[0].e2e_issues, "REQ9");
   } finally {
+    await platform.stop();
+  }
+});
+
+test("宿主 Git 边界:不执行 Agent hook,不信 origin/ext 改道", async () => {
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  await platform.start();
+  const attacker = mkdtempSync(join(tmpdir(), "mfc-git-attacker-"));
+  git(attacker, "init", "--quiet", "--bare");
+  const evidence = mkdtempSync(join(tmpdir(), "mfc-git-boundary-"));
+  const hookMarker = join(evidence, "pre-push-ran");
+  const extMarker = join(evidence, "remote-ext-ran");
+  const extHelper = join(evidence, "remote-ext.sh");
+  writeFileSync(extHelper, [
+    "#!/bin/sh",
+    `printf compromised > ${shellQuote(extMarker)}`,
+    "exit 1",
+    "",
+  ].join("\n"));
+  chmodSync(extHelper, 0o700);
+  const hostile: Scene[] = [
+    { tool: { name: "bash", input: { command:
+        "git config user.email bot@test && git config user.name bot && "
+        + "git checkout --quiet -b master_bot_REQ9 && "
+        + "echo change > a.txt && git add . && "
+        + 'git commit --quiet -m "feat: REQ9" && '
+        + "mkdir -p .git/hooks && "
+        + `printf '#!/bin/sh\\nprintf compromised > %s\\nexit 1\\n' `
+        + `${shellQuote(hookMarker)} > .git/hooks/pre-push && `
+        + "chmod +x .git/hooks/pre-push && "
+        // 两层改道同时落入 Agent 可写配置：origin 指向攻击仓，攻击仓
+        // 又被 insteadOf 改写成 ext helper。宿主必须两层都不读取。
+        + `git remote set-url origin ${shellQuote(attacker)} && `
+        + "git config protocol.ext.allow always && "
+        + `git config ${shellQuote(`url.ext::${extHelper}.insteadOf`)} `
+        + `${shellQuote(attacker)} && `
+        + `cat > .mae-flow.json <<'EOF'
+{"schema_version": 2, "current": "external_verify", "revision": 1,
+ "execution_contract": {"schema": "mae-flow-execution/1", "host": "cloud",
+   "compile": "pipeline", "ut_write": "agent", "ut_run": "pipeline",
+   "codecheck": "pipeline", "git_push": "host"},
+ "config": {"分支名": "master_bot_REQ9", "基线分支": "master",
+            "单号": "REQ9"}, "choices": {}, "history": []}
+EOF` } } },
+    { text: "代码已提交，等待宿主交付。" },
+  ];
+  const model = new ScriptedModelServer(hostile);
+  await model.start();
+  try {
+    const service = buildService(platform,
+      mkdtempSync(join(tmpdir(), "mfc-deliver-")), model.modelsJson());
+    const created = service.create("交付 REQ9:宿主 Git 信任边界",
+      { ticket: "REQ9" });
+    await until(() => service.get(created.id)!.status === "await_merge",
+      "宿主绕过不可信 Git 配置后完成交付");
+    const task = service.get(created.id)!;
+    assert.equal(existsSync(hookMarker), false,
+      "宿主 push 执行了 Agent 写入的 pre-push hook");
+    assert.equal(existsSync(extMarker), false,
+      "宿主传输读取了 Agent 写入的 protocol.ext/url.insteadOf 配置");
+    assert.equal(git(attacker, "branch", "--list", "master_bot_REQ9"), "",
+      "Agent 篡改的 origin 收到了宿主提交");
+    assert.equal(
+      git(platform.barePath, "rev-parse", "refs/heads/master_bot_REQ9"),
+      task.delivery?.sha,
+      "权威下单/部署仓没有收到绑定 SHA");
+    assert.equal(task.delivery?.git_push?.url, platform.barePath,
+      "交付收据没有记录权威仓地址");
+  } finally {
+    await model.stop();
     await platform.stop();
   }
 });

@@ -12,29 +12,41 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
-import { dockerAvailable } from "../src/containerRuntime.ts";
+import { dockerAvailable, taskContainerInstance } from "../src/containerRuntime.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskService } from "../src/taskService.ts";
 
 const DOCKER = await dockerAvailable();
 // 镜像可换:内网拉不到公网 alpine,指一个内部仓的等价小镜像即可
 // (要有 sh;容器隔离验的是"真进容器",跟发行版无关)。
-const IMAGE = process.env.MFC_TEST_IMAGE || "alpine";
+const IMAGE = process.env.MFC_REAL_BUILD_IMAGE ?? process.env.MFC_TEST_IMAGE ?? "";
 let SKIP: false | string =
-  DOCKER ? false : "docker daemon 不可用;起 Colima/Docker 后重跑";
+  !DOCKER ? "docker daemon 不可用;起 Colima/Docker 后重跑"
+    : !IMAGE
+      ? "未指定非 root 任务镜像;设置 MFC_REAL_BUILD_IMAGE 后重跑"
+      : false;
 
-if (DOCKER) {
+if (DOCKER && IMAGE) {
   // 镜像预拉:拉取时间不算进用例。**拉不到不许炸整个文件**——内网
   // 有 docker 但没有公网仓库是常态,那是环境不具备不是代码有病,
   // 按仓里的诚实纪律显式 skip 并说清怎么补(内网首跑实测踩到:
   // 整个用例文件在顶层 throw,报成两条红灯,吓人且误导)。
   try {
-    execFileSync("docker", ["pull", "-q", IMAGE], { stdio: "ignore" });
+    try {
+      execFileSync("docker", ["image", "inspect", IMAGE], { stdio: "ignore" });
+    } catch {
+      execFileSync("docker", ["pull", "-q", IMAGE], { stdio: "ignore" });
+    }
+    const user = execFileSync("docker", [
+      "image", "inspect", "--format", "{{.Config.User}}", IMAGE,
+    ], { encoding: "utf-8" }).trim();
+    if (!user || /^(?:root|0)(?::|$)/i.test(user)) {
+      SKIP = `镜像 ${IMAGE} 的 Config.User=${user || "<空>"}，不满足非 root 隔离契约`;
+    }
   } catch {
-    SKIP = `镜像 ${IMAGE} 拉不到(内网通常上不了公网仓库):`
+    SKIP = `镜像 ${IMAGE} 本地不存在且拉不到(内网通常上不了公网仓库):`
       + "用 MFC_TEST_IMAGE 指一个本地已有/内部仓的镜像后重跑";
   }
 }
@@ -84,8 +96,7 @@ test("bash 进容器执行;产物宿主可见;收口后容器销毁", { skip: SK
       assert.match(readFileSync(artifact, "utf-8"), /Linux/);
       // 收口后容器销毁。清理是异步旁路(不许卡收口),等它一拍。
       // 容器名带 dataDir 指纹(防跨实例误杀),按同一规则拼出来查。
-      const instance = createHash("sha256")
-        .update(dataDir).digest("hex").slice(0, 6);
+      const instance = taskContainerInstance(dataDir).namePrefix;
       const gone = Date.now() + 15_000;
       for (;;) {
         const leftovers = execFileSync("docker",

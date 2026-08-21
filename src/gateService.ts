@@ -7,7 +7,8 @@
  *
  * 深层契约(gate-edit/gate-bash 的证据链)是内核的领地,经 contract
  * 端口注入——接线形态是调用容器内的内核 CLI(python mae-flow.py gate),
- * 不在 TS 里复刻规则。fail-open 语义保留:门禁自身故障=放行+留痕。
+ * 不在 TS 里复刻规则。演练默认保留 fail-open；正式任务可显式启用
+ * fail-closed，避免门禁/证据登记故障被解释成“允许执行”。
  */
 
 import type { SemanticEvent } from "./semanticEvents.ts";
@@ -66,6 +67,9 @@ export interface GateServiceOptions {
    * 是相对它的工作目录说的,不是相对工作区根;两者混用会把仓内相对
    * 路径解析到工作区根上去。缺省时同 workspace。 */
   cwd?: string;
+  /** 正式任务的安全边界。开启后，门禁契约本身抛错会拒绝本次工具调用，
+   * 不会悄悄落回宿主执行。缺省 false 仅为演练和旧调用兼容。 */
+  failClosed?: boolean;
   log?: (message: string) => void;
 }
 
@@ -74,6 +78,7 @@ export class GateService {
   private readonly contract?: GateContract;
   private readonly workspace?: string;
   private readonly cwd?: string;
+  private readonly failClosed: boolean;
   private readonly log: (message: string) => void;
 
   constructor(options: GateServiceOptions = {}) {
@@ -85,6 +90,7 @@ export class GateService {
     this.cwd = options.cwd
       ? realpathSync(resolve(options.cwd))
       : this.workspace;
+    this.failClosed = Boolean(options.failClosed);
     this.log = options.log ?? (() => {});
   }
 
@@ -92,9 +98,13 @@ export class GateService {
     try {
       return this.route(event);
     } catch (error) {
-      // fail-open:门禁不许因为自己坏了卡死交付。
-      this.log(`gate fail-open: ${String(error)}`);
-      return ALLOW;
+      const mode = this.failClosed ? "closed" : "open";
+      this.log(`gate fail-${mode}: ${String(error)}`);
+      if (!this.failClosed) return ALLOW;
+      return {
+        action: "deny",
+        reason: "任务安全门禁暂时不可用，本次工具调用已阻止；请稍后重试或联系管理员。",
+      };
     }
   }
 

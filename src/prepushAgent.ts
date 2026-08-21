@@ -4,6 +4,7 @@ import type {
   GateDecision,
 } from "./gateService.ts";
 import { prePushBuildGuidance } from "./prepushBuildPlaybook.ts";
+import type { PrePushExecutionAttestation } from "./prePushVerification.ts";
 
 export type PrePushFailureKind = "code_failure" | "infrastructure_failure";
 
@@ -36,6 +37,8 @@ export interface PrePushRunResult {
   sha: string;
   message: string;
   report?: PrePushAgentReport;
+  /** 原生 runner 的加固容器事实；自定义执行器可暂不提供。 */
+  execution?: PrePushExecutionAttestation;
 }
 
 /** 测试/部署可注入其他执行器；生产缺席时由 Cloud 原生 Pi 会话执行。 */

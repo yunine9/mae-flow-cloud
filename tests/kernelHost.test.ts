@@ -10,11 +10,25 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { KernelHost } from "../src/kernelHost.ts";
 import type { SemanticEvent } from "../src/semanticEvents.ts";
+
+function gitWorkspace(prefix: string): string {
+  const workspace = mkdtempSync(join(tmpdir(), prefix));
+  execFileSync("git", ["init", "--quiet", workspace]);
+  return workspace;
+}
 
 function stubKernel(): string {
   const root = mkdtempSync(join(tmpdir(), "mfc-stub-kernel-"));
@@ -57,7 +71,7 @@ test("合成载荷:pre/post 两侧 tool_use_id 同源,生命周期可精确对�
   const root = stubKernel();
   const host = new KernelHost({
     kernelRoot: root,
-    workspace: mkdtempSync(join(tmpdir(), "mfc-stub-ws-")),
+    workspace: gitWorkspace("mfc-stub-ws-"),
     transcriptPath: join(root, "transcript.jsonl"),
     taskId: "t1",
   });
@@ -74,7 +88,7 @@ test("合成载荷:pre/post 两侧 tool_use_id 同源,生命周期可精确对�
 test("内核进程不可用时授权与证据都 fail-closed", async () => {
   const host = new KernelHost({
     kernelRoot: mkdtempSync(join(tmpdir(), "mfc-missing-kernel-")),
-    workspace: mkdtempSync(join(tmpdir(), "mfc-missing-ws-")),
+    workspace: gitWorkspace("mfc-missing-ws-"),
     transcriptPath: join(tmpdir(), "missing-transcript.jsonl"),
     taskId: "t-fail-closed",
     python: "__mae_flow_python_does_not_exist__",
@@ -96,7 +110,7 @@ test("posttooluse 退 2 是纠偏话不是登记失败:原文返回,不抛异常
   // 退 2 + stderr 让模型补——单机形态里这段 stderr 直接进模型上下文。
   // 云端却把一切非零当"登记失败"抛出去,整单判死,push/MR 全没发生,
   // 模型全程没见过那句话。
-  const workspace = mkdtempSync(join(tmpdir(), "mfc-verdict-ws-"));
+  const workspace = gitWorkspace("mfc-verdict-ws-");
   const kernelRoot = mkdtempSync(join(tmpdir(), "mfc-verdict-kernel-"));
   mkdirSync(join(kernelRoot, "hooks"), { recursive: true });
   writeFileSync(join(kernelRoot, "hooks", "dispatch.py"), [
@@ -121,7 +135,7 @@ test("基础设施抖一下不判死:内核恢复后照常放行,不重试真裁
   // 宿主负载高、python 冷启动、内网巨仓的一次超时,不该让整轮白跑。
   // 但内核**答了**(退 0 放行 / 退 2 打回)就是它的裁决,一次都不许重试
   // ——重试一个真裁决等于反复问同一个问题直到得到想要的答案。
-  const workspace = mkdtempSync(join(tmpdir(), "mfc-flaky-ws-"));
+  const workspace = gitWorkspace("mfc-flaky-ws-");
   const kernelRoot = mkdtempSync(join(tmpdir(), "mfc-flaky-kernel-"));
   mkdirSync(join(kernelRoot, "hooks"), { recursive: true });
   const counter = join(workspace, "attempts.txt");
@@ -144,4 +158,30 @@ test("基础设施抖一下不判死:内核恢复后照常放行,不重试真裁
   assert.equal(first?.action, "deny");
   assert.equal(readFileSync(counter, "utf-8"), "1",
     "内核答了就是裁决,不许重试");
+});
+
+test("内核 Python 间接调用 Git 也不读取 Agent 的 fsmonitor 配置", async () => {
+  const workspace = gitWorkspace("mfc-kernel-safe-git-");
+  const marker = join(workspace, "host-command-ran");
+  const monitor = join(workspace, "monitor.sh");
+  writeFileSync(monitor,
+    `#!/bin/sh\nprintf compromised > '${marker}'\nexit 1\n`);
+  chmodSync(monitor, 0o700);
+  execFileSync("git", ["-C", workspace, "config", "core.fsmonitor", monitor]);
+  const kernelRoot = mkdtempSync(join(tmpdir(), "mfc-kernel-git-stub-"));
+  mkdirSync(join(kernelRoot, "hooks"), { recursive: true });
+  writeFileSync(join(kernelRoot, "hooks", "dispatch.py"), [
+    "import subprocess",
+    "subprocess.run(['git', 'status', '--porcelain'], check=True,",
+    "               stdout=subprocess.PIPE, stderr=subprocess.PIPE)",
+  ].join("\n"));
+  const host = new KernelHost({
+    kernelRoot, workspace,
+    transcriptPath: join(workspace, "transcript.jsonl"),
+    taskId: "t-safe-git", python: "python3",
+  });
+  assert.equal(await host.preTool(toolEvent("tool_requested", "safe-1")),
+    undefined);
+  assert.equal(existsSync(marker), false,
+    "dispatch 子进程的 git status 不能穿透到宿主执行 Agent 命令");
 });

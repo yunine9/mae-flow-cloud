@@ -104,6 +104,21 @@ test("门禁:路由与 fail-open", () => {
   })).action, "agent");
 });
 
+test("正式任务门禁故障 fail-closed，不回落执行工具", () => {
+  const logged: string[] = [];
+  const gate = new GateService({
+    failClosed: true,
+    contract: () => { throw new Error("证据服务不可用"); },
+    log: (message) => logged.push(message),
+  });
+  const decision = gate.decide(event(1, "tool_requested", {
+    call_id: "c1", name: "Bash", input: { command: "./build.sh" },
+  }));
+  assert.equal(decision.action, "deny");
+  assert.match(decision.reason ?? "", /安全门禁暂时不可用/);
+  assert.ok(logged.some((line) => line.includes("fail-closed")));
+});
+
 test("门禁:Pi 文件工具的 path 与旧宿主 file_path 走同一契约", () => {
   const calls: Array<{ tool: string; value: string }> = [];
   const gate = new GateService({

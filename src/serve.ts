@@ -364,10 +364,41 @@ async function main(): Promise<void> {
     lubanHeaders[header.slice(0, at).trim()] = header.slice(at + 1).trim();
   }
 
-  // 容器隔离:--isolate-image <镜像> 让 bash 命令进任务专属容器。
-  // 它提供安全边界，不承担编译、UT 运行或 CodeCheck。
+  // 统一任务执行面:普通编码/修复/子 Agent/推送前编译与 UT 的 Bash
+  // 全部进入同一类加固容器。Cloud 控制面、Git 凭据、MR/通知仍留宿主。
   const isolateImage = flag("--isolate-image");
-  if (isolateImage) console.log(`[serve] 容器隔离: ${isolateImage}`);
+  const isolateMemory = flag("--isolate-memory") ?? "3g";
+  const isolateCpus = flag("--isolate-cpus") ?? "2";
+  const isolatePids = Number(flag("--isolate-pids") ?? "512");
+  const isolateNetwork = flag("--isolate-network") ?? "bridge";
+  const isolateUser = flag("--isolate-user");
+  const isolateCacheRoot = resolve(
+    flag("--isolate-cache-root") ?? join(dataDir, "build-cache"),
+  );
+  const buildSlots = Number(flag("--build-slots") ?? "1");
+  if (!Number.isInteger(isolatePids) || isolatePids <= 0) {
+    console.error("[serve] --isolate-pids 必须是正整数,拒绝启动");
+    process.exit(2);
+  }
+  if (!Number.isInteger(buildSlots) || buildSlots <= 0) {
+    console.error("[serve] --build-slots 必须是正整数,拒绝启动");
+    process.exit(2);
+  }
+  if (/^(?:host|container(?::.*)?)$/i.test(isolateNetwork)) {
+    console.error("[serve] --isolate-network 不能使用 host/container 模式,拒绝启动");
+    process.exit(2);
+  }
+  if (isolateUser !== undefined
+      && (!isolateUser.trim() || /^(?:root|0)(?::|$)/i.test(isolateUser.trim()))) {
+    console.error("[serve] --isolate-user 禁止使用 root/0 或空值,拒绝启动");
+    process.exit(2);
+  }
+  if (isolateImage) {
+    console.log(`[serve] 统一任务容器: ${isolateImage}`
+      + `;memory=${isolateMemory},cpus=${isolateCpus},pids=${isolatePids}`
+      + `,network=${isolateNetwork},build-slots=${buildSlots}`);
+    console.log(`[serve] 分仓构建缓存: ${isolateCacheRoot}`);
+  }
 
   // 历史开关仅保留命令行兼容。内核的最终验证契约仍只有一种：三项
   // 由流水线核销；push 前的服务器编译/UT Agent 是 Cloud 加速层，
@@ -391,8 +422,17 @@ async function main(): Promise<void> {
         + "每一单都会卡在验证中且无法自愈。");
       process.exit(2);
     }
-    console.log("[serve] Cloud 执行契约:编码会话不运行构建;每次 push 前由"
-      + "独立 Agent 在服务器完成编译与 UT，CodeCheck 和最终复核仍由流水线执行");
+    if (!isolateImage) {
+      console.error(
+        "[serve] 内核模式要求统一任务容器:请加 --isolate-image <构建镜像>。\n"
+        + "        原因:编码、修复、子 Agent 及 push 前编译/UT 的业务命令"
+        + "必须隔离执行；缺少镜像时拒绝静默回退宿主机。\n"
+        + "        镜像构建见 deploy/build-image/README.md。",
+      );
+      process.exit(2);
+    }
+    console.log("[serve] Cloud 执行契约:所有任务 Bash 进入加固容器;每次 push 前"
+      + "由独立 Agent 在新构建容器完成编译与 UT，CodeCheck 和最终复核仍由流水线执行");
   }
 
   // 提交信息规范:平台 pre-receive 钩子按正则拒收不合规提交(内网
@@ -414,15 +454,18 @@ async function main(): Promise<void> {
     contract: demoContract,
     host,
     delivery,
-    prepush: host ? { enabled: true } : undefined,
+    prepush: host ? { enabled: true, buildSlots } : undefined,
     commitConvention,
     isolation: isolateImage
       ? {
           image: isolateImage,
           volumes: flags("--isolate-volume"),
-          memory: flag("--isolate-memory"),
-          cpus: flag("--isolate-cpus"),
-          user: flag("--isolate-user"),
+          cacheRoot: isolateCacheRoot,
+          memory: isolateMemory,
+          cpus: isolateCpus,
+          user: isolateUser,
+          pidsLimit: isolatePids,
+          network: isolateNetwork,
         }
       : undefined,
     notifier: new Notifier({
@@ -439,6 +482,13 @@ async function main(): Promise<void> {
     linkBase: publicUrl,
     log: (message) => console.log(`  [task] ${message}`),
   });
+  // 先清理本 dataDir 实例上次崩溃遗留的 coding/prepush/system-check
+  // 容器，再恢复任务。顺序不能反：recover 一旦入队就可能撞上旧容器。
+  const swept = await service.sweepOrphanContainers();
+  if (swept.removed.length) {
+    console.log(`[serve] 已清理遗留任务容器 ${swept.removed.length} 个: `
+      + swept.removed.join(", "));
+  }
   // 进程可死任务不死:重启后重建索引,在跑的任务续跑,等人的继续等。
   const recovered = service.recover();
   if (recovered.restored) {
@@ -457,6 +507,40 @@ async function main(): Promise<void> {
   // 内网是明文 http(会话 cookie 可被同网段嗅探,正式部署前加反代
   // TLS);工作机合盖=全员断线,它是工作站不是服务器。
   const server = createTaskServer(service, { webRoot, auth });
+  let terminating = false;
+  const terminate = async (signal: "SIGTERM" | "SIGINT") => {
+    if (terminating) return;
+    terminating = true;
+    console.log(`[serve] 收到 ${signal}，停止接单并清理会话/任务容器...`);
+    const closed = new Promise<void>((resolveClose) => {
+      server.close(() => resolveClose());
+    });
+    let exitCode = 0;
+    try {
+      await service.shutdown();
+      console.log("[serve] 所有任务会话与容器已确认释放；业务状态保持不变，"
+        + "下次启动将继续恢复");
+    } catch (error) {
+      exitCode = 1;
+      console.error(`[serve] 优雅关闭未完全成功: ${String(error)}`);
+      if (error instanceof AggregateError) {
+        error.errors.forEach((cause, index) => {
+          console.error(`[serve] 关闭失败 ${index + 1}: ${String(cause)}`);
+        });
+      }
+    }
+    // SSE/keep-alive 连接不会自行让 server.close 回调；业务资源清完后
+    // 再断开这些纯读连接，保证 systemd stop 不悬挂。
+    server.closeAllConnections?.();
+    await closed;
+    await projection?.close().catch((error) => {
+      exitCode = 1;
+      console.error(`[serve] PostgreSQL 投影关闭失败: ${String(error)}`);
+    });
+    process.exit(exitCode);
+  };
+  process.once("SIGTERM", () => { void terminate("SIGTERM"); });
+  process.once("SIGINT", () => { void terminate("SIGINT"); });
   // 监听失败要说人话就退。没有这个处理器时 EADDRINUSE 会作为未捕获的
   // error 事件把进程炸掉,现场只剩一段栈——实战里表现为"服务莫名其妙
   // 挂了",而真相往往只是上一次的进程还占着端口。

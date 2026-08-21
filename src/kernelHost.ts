@@ -17,6 +17,7 @@ import { spawn } from "node:child_process";
 import { join } from "node:path";
 import type { SemanticEvent } from "./semanticEvents.ts";
 import type { GateDecision } from "./gateService.ts";
+import { createSafeGitView } from "./safeGit.ts";
 
 export interface KernelHostOptions {
   /** mae-flow 内核仓根目录 */
@@ -218,11 +219,34 @@ export class KernelHost {
   ): Promise<DispatchResult> {
     const { kernelRoot, workspace } = this.options;
     const script = join(kernelRoot, "hooks", "dispatch.py");
+    let gitView: ReturnType<typeof createSafeGitView>;
+    try {
+      gitView = createSafeGitView(workspace);
+    } catch (error) {
+      return Promise.resolve({
+        code: 1,
+        stdout: "",
+        stderr: String(error),
+        infraError: `dispatch ${event} 无法建立安全 Git 视图: ${String(error)}`,
+      });
+    }
     return new Promise((resolve) => {
+      let cleaned = false;
+      const cleanup = () => {
+        if (cleaned) return;
+        cleaned = true;
+        gitView.cleanup();
+      };
       const child = spawn(
         this.options.python ?? "python3",
         [script, event],
-        { cwd: workspace, stdio: ["pipe", "pipe", "pipe"] },
+        {
+          cwd: workspace,
+          stdio: ["pipe", "pipe", "pipe"],
+          // dispatch.py 会间接执行很多 git status/diff/rev-parse。它们必须
+          // 看真实 index/objects，却绝不能读取 Agent 可写的 .git/config。
+          env: gitView.environment(),
+        },
       );
       let stdout = "";
       let stderr = "";
@@ -241,11 +265,13 @@ export class KernelHost {
       }, this.options.timeoutMs ?? 30_000);
       child.on("close", (code) => {
         clearTimeout(timer);
+        cleanup();
         resolve({ code: code ?? (infraError ? 1 : 0), stdout, stderr,
                   infraError: infraError || undefined });
       });
       child.on("error", (error) => {
         clearTimeout(timer);
+        cleanup();
         this.options.log?.(`dispatch ${event} 启动失败: ${String(error)}`);
         resolve({ code: 1, stdout: "", stderr: String(error),
                   infraError: `dispatch ${event} 启动失败: ${String(error)}` });

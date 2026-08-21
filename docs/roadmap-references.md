@@ -54,9 +54,10 @@
 ### 5. 环境即代码
 
 - **业界**:devcontainer / E2B / Daytona——环境声明进仓。
-- **已有**:--isolate-image 部署级指定镜像。
-- **可借**:认仓里的 devcontainer.json,每仓自声明构建环境;容器隔离
-  升回必选(多人共用前)时按它起容器。
+- **已有**:`--isolate-image` 已是正式内核模式的必选边界，普通 Agent、
+  子 Agent、修复与 prepush 的 Bash 共用统一加固运行时。
+- **可借**:未来可评估仓内 devcontainer 声明，但必须先转换成平台审批过的
+  镜像与资源契约，不能让业务仓直接放宽当前安全边界。
 
 ### 6. recipes 众筹
 

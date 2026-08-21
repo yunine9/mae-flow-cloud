@@ -12,7 +12,7 @@
 | Python 3 | ≥ 3.10,mae-flow 内核的运行时 |
 | mae-flow 内核 | **不用单独准备**:快照收编在 `kernel/`,ZIP 下载也带着(是普通目录不是 submodule,`.gitattributes` 也没有 export-ignore)。开发机想用活内核就设 `MAE_FLOW_HOME` |
 | Git | 任务克隆/推分支/ls-remote 都用它 |
-| 推送前工具链 | Cloud 宿主必须能以服务账号非交互执行目标仓的编译与 UT：JS/TS 的 Node 包管理器与仓库脚本、Java 的 JDK + Maven/Gradle（优先仓库 wrapper）、C/C++ 的编译器 + CMake/Ninja/Make，或项目明确提供的等价命令 |
+| Docker + 统一构建镜像 | 宿主运行 Docker；`deploy/build-image/` 镜像提供 JDK 21/Maven、Node/npm、GCC/G++/CMake/Ninja 等。项目 wrapper/脚本在容器内非交互执行 |
 | 最终质量环境 | CodeCheck 与最终编译/UT 结论仍由绑定提交 SHA 的权威流水线提供；流水线不是可选项 |
 | npm 依赖 | `npm ci`(pi 锁 0.84.1,升级必须重跑 probe+全套测试再拍板)。**进内网前先验这一步能不能过**,见下 |
 
@@ -46,16 +46,13 @@
    不可靠(密钥文件纪律会破)且慢一个量级;
 2. **代理**:内网 git/模型网关/CodeHub 域名全部进 `no_proxy`,
    不然撞代理(外部实测 502 就是这么来的);
-3. 装机:Node≥20 + python3 + git，并按业务仓覆盖范围安装 JS/Java/C++
-   构建与测试工具链；`git clone <mae-flow-cloud>` →
+3. 装机:Node≥20 + python3 + git + Docker；`git clone <mae-flow-cloud>` →
    `npm ci` → `cd web && npm install && npm run build`(dist 不进仓);
-   至少用运行服务的同一账号，在代表性业务仓各跑一次真实编译与 UT 命令，
-   验证 PATH、私服、缓存目录和证书。CodeCheck 不需要装在 Cloud 宿主，
-   仍由流水线执行。
-   Docker 只在启用任务隔离时需要。**不隔离=显式
-   选择**,边界要认:agent 与服务同用户跑,auth.json(全体用户令牌
-   明文)理论上对它可读、越界写无强制墙——单人自用+单任务+人盯着
-   可接受;**转多人共用前容器隔离升回必选**(WSL2 装 docker 无障碍);
+   构建或拉取 `deploy/build-image/` 的统一构建镜像。JDK/Maven、Node/npm、
+   C/C++ 工具链不要求装在 Cloud 宿主；代表仓的真实编译与 UT 必须在该
+   镜像、同一组缓存/证书/私服挂载下验收。正式内核模式强制
+   `--isolate-image`，没有“不隔离继续跑”的生产降级；CodeCheck 仍由
+   流水线执行。
 4. **最小启动(界面优先形态,用户拍板"参数该在界面配")**:
    ```bash
    MAE_FLOW_ADMIN_PASSWORD='<至少10位>' \
@@ -119,13 +116,14 @@
 
 要认的两条边界:**内网是明文 http**,会话 cookie 可被同网段嗅探——
 试用可接受,转正式部署套反代 TLS;**工作机合盖=全员断线**,它是
-工作站不是服务器,多人依赖后尽快挪到常驻机器(顺带把容器隔离升回
-必选,见"不隔离部署的边界")。
+工作站不是服务器,多人依赖后尽快挪到常驻机器。内核模式现在强制统一
+任务容器，未配置镜像会拒绝启动，不再把多人安全边界留给操作习惯。
 
-**任务容器只承担普通编码会话的隔离**：启用 `--isolate-image` 时，镜像
-需提供运行时所需的 shell、python3 与 git。独立的推送前验证 Agent 在
-Cloud 宿主运行，因此 JDK/Maven、C/C++ 等构建工具链装在宿主而非这个
-隔离镜像；CodeCheck 仍不装，最终质量结论仍以绑定提交 SHA 的流水线为准。
+**统一任务容器承担所有业务命令**：主 Agent、子 Agent、修复会话及独立
+推送前验证 Agent 的 Bash 都使用同一类镜像；宿主只保留控制面、凭据、
+clone/push、MR/通知。镜像由 `deploy/build-image/` 构建，包含 JDK 21/
+Maven、Node/npm 与 C/C++ 工具链。CodeCheck 仍不装，最终质量结论仍以
+绑定提交 SHA 的流水线为准。
 
 ## 四个假件 → 真件切换表
 
@@ -138,7 +136,7 @@ Cloud 宿主运行，因此 JDK/Maven、C/C++ 等构建工具链装在宿主而�
 
 ## 内网依赖就两个 CLI(强度刻意不同)
 
-除标准件(git / python3 / node；不启用任务隔离时 docker 也不需要)外，
+除宿主标准件(git / python3 / node / Docker；正式内核模式强制 Docker)外，
 内网新增的外部依赖只有两个内部 CLI:
 
 | | 干什么 | 强度 | 挂了会怎样 |
@@ -278,11 +276,12 @@ Cloud-native 验证 Agent。它不是普通编码会话的延长，也不是 Mae
 
 - 普通编码会话仍只写代码和 UT；推送前会话不挂 Mae-Flow Hooks，不读取
   或改写内核 `current/done`，因此轻量修复不会被内核阶段门禁卡住；
-- 它在服务器工作区发现并执行仓库真实的编译、UT 命令，失败时可修改代码、
-  重跑并在本地 commit；它不读取个人 Git 令牌，也不能自行 push；
+- 它在一次性加固构建容器中发现并执行仓库真实的编译、UT 命令，失败时可
+  修改代码、重跑并在本地 commit；它不读取个人 Git 令牌，也不能自行 push；
 - 它只核对编译与 UT，不运行 CodeCheck。成功收据同时绑定最终 commit SHA
   和 clean worktree，修复产生新 commit 后以新 SHA 出具；工作区或 HEAD
-  再变化，旧收据立即失效；
+  再变化，旧收据立即失效。收据附带实际镜像 digest、只读根、资源/网络和
+  挂载目的地；暂停/取消会销毁整个 attempt 容器，恢复后新建一轮；
 - 宿主拿到 PASS 才 push。若只是网络失败，重试同一 SHA 且工作区仍干净时
   复用收据，不再烧一次模型和构建；代码失败或工具链/依赖环境失败则停止
   push，并在任务状态中分别说明；
@@ -297,12 +296,13 @@ Cloud-native 验证 Agent。它不是普通编码会话的延长，也不是 Mae
 Skill 是否相关，需要时自行读取其说明；Skill 不能覆盖真实配置或安全边界。
 只有这些材料都没有明确说明时，才采用内网默认经验。跨仓
 需求逐仓判断，A 仓的参数不能套到 B 仓。当前首批内网业务仓虽覆盖 Java、
-JS 和 C++，共同经验是**以 Maven 为主要编排入口、服务账号使用 JDK 21**；
+JS 和 C++，共同经验是**以 Maven 为主要编排入口、统一镜像使用 JDK 21**；
 这是一条部署基线，不是绕过仓库约定的硬编码。
 
-上线前用运行服务的同一账号核对 `java -version` 与 `mvn -version` 确实指向
-JDK 21，并分别在代表性仓库跑通一次。Agent 的执行次序如下（方括号表示从
-本仓脚本或 Skill 取得的参数，不照抄为字面量）：
+上线前从管理页执行「部署自检」，确认真实任务容器中的 `java -version`、
+`mvn -version`、Node/npm 与 C/C++ 工具链通过，并分别把代表性仓库放进同一
+镜像跑通。不要拿宿主 PATH 的结果冒充任务环境。Agent 的执行次序如下
+（方括号表示从本仓脚本或 Skill 取得的参数，不照抄为字面量）：
 
 | 仓库类型 | 推荐的快速验证顺序 | 不能省略的仓库信息 |
 | --- | --- | --- |
@@ -360,13 +360,13 @@ JS 依赖缓存，也避免 C++ 全量编译把一次小修拖成长流水线。
 
 ### Cloud 固有执行契约（无部署开关）
 
-Cloud 只有一种最终质量语义，不需要管理员选择。推送前 Agent 是宿主的
+Cloud 只有一种最终质量语义，不需要管理员选择。推送前 Agent 是容器化
 快速反馈层，不改变订单契约：
 
 - 普通编码 Agent 编写代码与 UT，不在 Mae-Flow 会话内编译；可用 UT 编写方式随每单写入
   `.mae-flow-order.json` 的 `UT生成方式`；
-- 每个新 HEAD push 前，独立 Agent 在 Cloud 宿主运行编译+UT，可自动修复
-  并本地 commit；它不挂 Mae-Flow Hooks，不做 CodeCheck；
+- 每个新 HEAD push 前，独立 Agent 在一次性加固容器运行编译+UT，可自动
+  修复并本地 commit；它不挂 Mae-Flow Hooks，不做 CodeCheck；
 - 普通 Agent 与推送前 Agent 都不持有个人 Git 凭据、不 push；宿主只在
   获得绑定最终 SHA + clean worktree 的 PASS 收据后推送；
 - `execution_contract` 中编译、UT 运行、CodeCheck 仍写 `pipeline`，表示
@@ -611,7 +611,12 @@ Agent 的上下文。同名 Skill 因此也可以分别用于不同仓。
   "pg": "postgresql://...",
   "data": "/var/lib/mae-flow-cloud", "port": 8787,
   "poll-interval": 30, "poll-timeout": 1800,
-  "max-concurrent": 2
+  "max-concurrent": 2,
+  "isolate-image": "registry.intra/mae-flow/task-builder@sha256:<digest>",
+  "isolate-memory": "3g", "isolate-cpus": "2", "isolate-pids": 512,
+  "isolate-network": "bridge",
+  "isolate-cache-root": "/var/cache/mae-flow-cloud/build",
+  "build-slots": 1
 }
 ```
 
@@ -623,7 +628,13 @@ Agent 的上下文。同名 Skill 因此也可以分别用于不同仓。
 | luban / luban-header | 假小鲁班 | 通知端点与鉴权头(可重复) |
 | pg | 无 | 投影(纯旁路) |
 | data / port / web | .tasks / 8787 / web-dist | 现场目录、端口、前端 |
-| isolate-image/-volume/-memory/-cpus/-user | 无 | 容器隔离 |
+| isolate-image | 无(内核模式必填) | 统一任务构建镜像 |
+| isolate-volume | 无 | 部署只读配置/CA 等额外挂载(可重复) |
+| isolate-memory / isolate-cpus / isolate-pids | 3g / 2 / 512 | 每个任务容器的资源上限 |
+| isolate-network | bridge | 任务容器网络；拒绝 host/container 模式 |
+| isolate-cache-root | `<data>/build-cache` | 按仓库哈希隔离的 Maven/npm/ccache/XDG 缓存 |
+| isolate-user | 镜像内非 root 用户 | UID:GID；Linux 上应与工作区/缓存属主一致 |
+| build-slots | 1 | 同时运行的 prepush 重构建数，独立于普通 Agent 并发 |
 | repair-rounds | 不限 | 修复环手刹:数字=上限,0=关;不配=修到绿/出诊断为止 |
 | poll-interval / poll-timeout | 10 / 1800(秒) | 流水线轮询节奏与预算 |
 | max-concurrent | 2 | 并发任务数 |
@@ -710,6 +721,10 @@ MAE_FLOW_ADMIN_PASSWORD='<从凭证系统注入的初始密码>' \
 npm run serve -- --models /etc/mae-flow-cloud/models.json \
   --provider <网关名> --model glm-5.1 \
   --repo <内网仓地址> --platform <MR/流水线网关地址> \
+  --isolate-image <统一任务构建镜像@sha256:digest> \
+  --isolate-memory 3g --isolate-cpus 2 --isolate-pids 512 \
+  --isolate-cache-root /var/cache/mae-flow-cloud/build \
+  --build-slots 1 \
   --pg postgresql://<用户>@<PG地址>/<库名> \
   --data /var/lib/mae-flow-cloud --port 8787
 ```
@@ -742,15 +757,30 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
   重建索引;崩溃时在跑的任务重新入队,以内核 current 为锚重建会话续跑;
   等人的任务原地挂起,决定到来走重建会话。**任何模式都不会自动清数据**
   ——清场只在显式 `--fresh` 时发生(且清前把要删的任务数报出来)。
-- **容器隔离(强烈建议内网开启)**:`--isolate-image <运行时镜像>`
-  后模型的 bash 命令进任务专属容器执行(会话/门禁/内核留宿主,
-  工作区同路径挂载)。镜像需包含 shell + python3 + git。当前独立推送前
-  Agent 在 Cloud 宿主运行编译与 UT，所以 Maven/JDK/C++ 工具链及构建
-  缓存配置在宿主；CodeCheck 仍只由流水线执行;
-  `--isolate-memory 4g --isolate-cpus 2` 限额;
-  `--isolate-user $(id -u):$(id -g)` 防挂载卷文件属主漂移。
-  任务容器是普通编码会话的安全边界；推送前宿主检查是快速门禁，流水线
-  才是最终质量裁判。
+- **统一任务容器(正式内核模式必选)**:`--isolate-image <构建镜像>` 后
+  所有任务 Bash 进入容器；缺镜像、Daemon、加固项、工具链或清理证明时
+  都明确失败，不允许回宿主。默认只读根、cap-drop ALL、
+  no-new-privileges、PID 512、bridge 网络、HOME 与 `/tmp` tmpfs；`/tmp`
+  显式保留 exec 以兼容 Maven Jansi/JNA/native。资源默认 3g/2 CPU，可按
+  代表仓实测上调；`--build-slots` 控制重构建并发，避免一台机器被多单
+  Maven/C++ 同时打满。镜像构建与内部 CA/Maven settings 的只读挂载见
+  `deploy/build-image/README.md`。镜像 `Config.User` 为空/root/0 或显式
+  `--isolate-user root/0` 会拒绝运行；不要用 root 绕过目录权限。
+- **关机与孤儿回收**:SIGTERM/SIGINT 会停止调度、释放构建队列、abort
+  会话并等待容器 TERM→KILL→rm；不会改写任务业务状态。重启时先按完整
+  dataDir ownership label 清理本实例遗留的 coding/prepush/system-check
+  容器，再执行 `recover()`；日志包含 phase/role/name/短 ID/镜像，定位时
+  不必靠猜。
+- **编译错误全文可回读**:每条容器 Bash 的完整原始输出写到对应任务仓
+  `.mae-flow-work/bash-logs/<task>/<session>/*.log`（`0600`）。页面/Agent
+  看到的截断预览最后一行会给这个相对路径；排查 Maven、UT、C++ 长输出
+  时直接打开它，不要再去宿主或容器 `/tmp` 猜临时文件。该目录属于过程
+  现场，不进入业务 Diff、审批哈希或预推送工作区洁净度判断。
+- **缓存不是共享工作区**:`--isolate-cache-root` 下按仓库地址 SHA-256
+  分 Maven/npm/ccache/XDG 四类目录；不同仓不共享可写缓存。工作区产物仍
+  留在各任务目录。Linux 上镜像 builder UID/GID 应与服务账号一致，或用
+  `--isolate-user <uid>:<gid>` 并预先处理缓存权限。缓存只用于加速，最终
+  流水线仍是权威裁判。
 - 守护用 systemd `Restart=on-failure` 即可,恢复逻辑在服务内部。
   单元文件样例:
 
@@ -769,10 +799,15 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
     --provider <网关名> --model glm-5.1 \
     --kernel-mode --platform <MR/流水线网关地址> \
     --pg postgresql://<用户>@<PG地址>/<库名> \
-    --isolate-image <任务运行时镜像> \
+    --isolate-image <统一任务构建镜像@sha256:digest> \
+    --isolate-memory 3g --isolate-cpus 2 --isolate-pids 512 \
+    --isolate-cache-root /var/cache/mae-flow-cloud/build \
+    --build-slots 1 \
     --data /var/lib/mae-flow-cloud --port 8787
   Restart=on-failure
   RestartSec=3
+  KillSignal=SIGTERM
+  TimeoutStopSec=180
 
   [Install]
   WantedBy=multi-user.target
@@ -804,17 +839,21 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
      **COMPILE/UT/CODECHECK 三项 checks**、**拉失败日志**——checks 建议
      配置以提升诊断；日志拉不到，Cloud 修复环没有可信输入，试点不得上线;
    - 通知 CLI 发一条真消息@到人(失败只标红不阻流程,但要验真投得到);
-1. `npm test` 全绿，`npm run typecheck` 无错，前端可构建；再以运行服务的
-   同一账号对 JS/Java/C++ 代表仓逐个执行真实编译与 UT 命令，确认无需
-   交互输入且 PATH、私服、证书与缓存目录均可用;
+1. `npm test` 全绿，`npm run typecheck` 无错，前端可构建；构建
+   `deploy/build-image/` 后以 `MFC_REAL_BUILD_IMAGE=<镜像> npm test` 运行
+   真实 Docker 自检。再对 JS/Java/C++ 代表仓各跑一单，确认容器内无需
+   交互、私服/证书/缓存可用，宿主无需安装项目构建链;
 2. `npm run probe` 全绿(内核裁判在场);
 3. 网关连通:发一个最小任务,确认首回合不是空转
    (429/网关错误会如实落 failed + detail,不会假 completed);
 4. 适配层自检通过，管理员「部署自检」确认通知链接、MR/流水线连接均为
-   内网可访问地址；
+   内网可访问地址；「统一任务容器」必须为 ok，并显示不可变镜像 digest，
+   该项会在 bind-mounted 工作区真实写文件并编译 Java/C++，逐项写读删
+   Maven/npm/ccache/XDG 缓存，检查 Node/Maven 后确认容器销毁;
 5. 一单真需求走到 `await_merge`,MR 出现在真平台上；核对
    新 HEAD 在 push 前出现推送前验证状态，`delivery.prepush` 的 PASS
-   绑定最终 SHA 且当时 worktree clean；模拟一次 push 网络失败后重试，
+   绑定最终 SHA 且当时 worktree clean，receipt.execution 记录同次容器的
+   镜像 digest、只读根、资源和网络；模拟一次 push 网络失败后重试，
    确认同 SHA 复用收据，改出新 commit 后必须重新编译+UT。随后核对
    `delivery.git_push.sha`、`delivery.sha`、远端分支 SHA 三者一致，
    `delivery.attested` 为同一 SHA 的 `PASS@...`；若平台提供逐项 Job，

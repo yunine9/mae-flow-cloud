@@ -163,7 +163,7 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
   `UT生成方式`。历史 CLI 旗子
   `--verify-via-pipeline` 仅兼容旧启动脚本，已弃用且不改变语义。
   **Cloud 在每个新 HEAD 由宿主 push 前另起一个推送前验证 Agent**：它在
-  服务器工作区运行仓库真实的编译与 UT 命令，失败时可直接修复并本地
+  一次性任务构建容器运行仓库真实的编译与 UT 命令，失败时可直接修复并本地
   commit，直至通过或明确报告代码/环境故障；它不挂 Mae-Flow Hooks，
   不推进或回退内核流程，也不持有 Git 凭据、不自行 push、不跑
   CodeCheck。PASS 收据绑定修复后的最终 SHA 与 clean worktree；纯网络
@@ -268,16 +268,13 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
   的卡一律代答直行(答复写明预授权+复盘要求),开启即清在等的卡,
   关掉恢复审批。代答走 decide 同一条通路,台账完整。**ASKUSER 人工闸
   本体未动**:这是用户显式预授权的代答,不是放开内核闸门;
-- **不隔离部署的边界(2026-08-16,WSL 单人实战为显式选择)**:不配
-  `--isolate-image` 时任务 bash 直接跑在宿主——这是诚实形态不是降级
-  (红线管的是"配了容器起不来必须 failed")。三个真实差异:agent 与
-  服务同用户,auth.json(全体用户的 Git 令牌明文)/settings.json/
-  adapter.json 理论上对它可读;工作区是约定不是物理墙,越界写没有
-  强制拦截;无资源上限。普通编码 agent 的正当活动仍只有工作区读写+git；
-  独立推送前验证 Agent 会在同一宿主运行仓库构建/UT 命令，因此还要把
-  构建脚本本身视为宿主代码执行面。单人自用+单任务+人盯着可接受;
-  **多人共用的正式部署前容器隔离必须升回必选**——那时 auth.json 里
-  躺着全组人的令牌,"agent 可读密钥文件"不再是尾部风险;
+- **统一任务容器已成为正式部署硬边界(2026-08-21)**:内核模式未配
+  `--isolate-image` 会在启动期直接拒绝，不再允许普通编码、修复或推送前
+  构建悄悄回落宿主。Cloud/Pi 控制面、个人 Git 凭据、clone/push、MR、
+  通知留在可信宿主；主 Agent、Task 子 Agent、流水线/检视修复及独立
+  prepush Agent 的所有 Bash 都进入任务容器。文件 Read/Edit/Write 仍由
+  宿主执行，但受任务工作区 realpath/软链边界和 fail-closed Gate 约束。
+  纯会话演示与测试仍可不配镜像，它们不属于多人生产形态;
 - **CodeHub 适配层骨架已就位(2026-08-16,src/platformAdapter.ts)**:
   `npm run adapter -- --config adapter.json`,进内网只填 codehubcli
   命令模板(argv 占位符+json/regex/const 抽取+状态映射表),代码零改动。
@@ -316,16 +313,19 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
   进内网首跑要看三个都是本人:推送身份、commit 归属头像、MR 发起人;
   CodeHub token 是否同时当 push 凭据也要实测(类比 GitHub PAT 是同
   一个;若平台分俩,令牌表单加一格即可,机制不变);
-- **push 前本机编译+UT 已接回(2026-08-21)**:普通编码会话保持轻量，不
+- **push 前容器编译+UT 已接回(2026-08-21)**:普通编码会话保持轻量，不
   编译、不持有推送凭据；宿主在每个新 HEAD push 前启动独立 Cloud-native
-  Agent，用服务器工具链执行仓库真实编译与 UT，并可自动修复、commit。
+  Agent，在一次性加固构建容器中执行仓库真实编译与 UT，并可自动修复、
+  commit。普通编码容器会先确认销毁，再启动 prepush attempt，二者不会
+  同时写同一工作区；暂停/取消会销毁整个容器进程树，恢复使用新 attempt。
   该会话刻意不挂 Mae-Flow Hooks，避免把快速修复重新塞进内核阶段门禁。
   它不跑 CodeCheck，也不替代最终流水线和 `external_verify`；本地 PASS
-  收据只对最终 SHA + clean worktree 有效，同 SHA 的网络 push 重试可复用。
+  收据只对最终 SHA + clean worktree 有效，同 SHA 的网络 push 重试可复用，
+  并记录实际镜像 digest、容器资源/网络/只读根和挂载目的地供审计。
   命令发现顺序固定为**仓库真实构建配置与脚本 > 相关 Skill 的辅助说明 >
   内网默认经验**；Skill 由 Agent 按任务相关性自行决定是否读取，不能覆盖
   安全边界，也不把“Java/JS/C++”直接硬编码成某条命令。当前内网首批三类业务
-  仓均以 Maven 为主要入口，服务账号基线为 JDK 21；Java 分开跑 compile、
+  仓均以 Maven 为主要入口，统一构建镜像基线为 JDK 21；Java 分开跑 compile、
   test 和必要的定向 test，JS 按需准备 `website` 依赖但不无脑 clean，C++
   保留仓库声明的 DT 参数并优先增量、定向编译/测试/覆盖。具体 profile、
   模块与私服参数只能从本仓材料取得，不能凭经验臆造。缺工具、私服/证书/
@@ -359,13 +359,14 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
 - 现场归档在 .pilot/archive/run3-REQ2026081402-glm-delivery
   (含两张"证据缺口风险卡"——并行派发丢返回登记的实锤,已修:
   pretooluse 随带 tool_use_id,见 tests/kernelHost.test.ts);
-- **服务器构建工具链现在是部署前置**:运行服务的同一账号必须能非交互
-  执行目标仓声明的 JS/Java/C++ 编译与 UT 命令（例如 Node 包管理器、
-  JDK/Maven/Gradle、C/C++ 编译器与 CMake/Ninja/Make，或仓库自带 wrapper）。
+- **统一构建镜像现在是部署前置**:宿主只需 Docker；目标仓声明的
+  JS/Java/C++ 编译与 UT 命令统一在 `deploy/build-image/` 生成的非 root
+  镜像中执行（Node/npm、JDK 21/Maven、GCC/G++/binutils/bison/flex、
+  ccache、CMake/Ninja、Git、Python）。
   当前内网业务仓的落地基线是 JDK 21，且 Java/JS/C++ 均由 Maven 作为
   主要编排入口；这只是部署工具链经验，不覆盖仓库脚本与 Skill 的明确说明。
-  早期“不装 JDK/mvn、只等流水线”的现场记录已经失效；缺工具或依赖会
-  由推送前会话明确标为环境故障并停止 push;
+  缓存按仓库哈希隔离挂载，内部 Maven/npm 镜像与 CA 由部署只读注入；
+  缺工具、镜像、权限或依赖会明确标为环境故障并停止 push，不回退宿主;
 - 任务级恢复已实现(tests/recovery.test.ts):进程可死任务不死——
   重启后 recover() 重建索引,决定走重建会话续跑;pi 侧会话仍是
   inMemory,重建会话不带旧对话上下文,以内核 current 为锚(设计如此);
@@ -376,13 +377,11 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
   纯旁路 fail-open——阶段真相仍只在工作区 .mae-flow.json,
   语义测试 tests/projection.test.ts(临时真 PG 集群当裁判);
 - 任务容器隔离已落地(docs/container-isolation-design.md):
-  `--isolate-image <镜像>` 后 bash 命令进任务专属容器执行,
+  `--isolate-image <镜像>` 后所有任务 bash 命令进任务专属容器执行,
   文件工具/门禁/内核 dispatch 留宿主,工作区同路径挂载三方同视;
-  容器起不来任务如实 failed 不静默降级;隔离证据有测试
-  (宿主 Darwin、容器内 uname=Linux)。当前推送前编译与 UT 在 Cloud 宿主
-  运行，因此隔离镜像仍只需满足普通编码会话的运行时与 git 能力；宿主
-  必须另行安装构建工具链。CodeCheck 仍只在权威流水线执行；资源限额/
-  uid 映射待做;
+  默认只读根、cap-drop ALL、no-new-privileges、PID/CPU/内存限制、HOME 与
+  `/tmp` tmpfs、精确 safe.directory、环境变量白名单；镜像/Daemon/inspect/
+  清理任一失败均 fail-closed。CodeCheck 仍只在权威流水线执行;
 - 正式 React 前端已起头并接上部署形态(web/:Vite+React+TS,
   类型化 API 层,功能与演示页对齐——列表/发起/审批卡/SSE 过程
   记录/现场面板链接;`web/dist` 存在时 serve 自动托管,--web 可

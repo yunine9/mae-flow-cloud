@@ -14,7 +14,6 @@
 import { Type } from "typebox";
 import {
   createAgentSession,
-  createBashToolDefinition,
   DefaultResourceLoader,
   defineTool,
   ModelRuntime,
@@ -27,6 +26,7 @@ import { EventLog, type SemanticEvent, type SemanticEventKind, validateEvent } f
 import { TranscriptStore } from "./transcriptStore.ts";
 import { GateService } from "./gateService.ts";
 import { HumanGate, renderDecision, type WaitingRecord } from "./humanGate.ts";
+import { createWorkspaceBashToolDefinition } from "./bashOutputMirror.ts";
 
 /** pi 工具名 → 内核工具词汇表。不认识的原样透传(错认比不认更危险)。 */
 const TOOL_NAME_MAP: Record<string, string> = {
@@ -588,6 +588,16 @@ export class CloudSession {
   /** 取消任务用的硬边界：中止当前 agent 回合并等它回到 idle。
    * 容器由 TaskService 同时停止，长 bash 不会遗留在隔离环境里。 */
   async abort(): Promise<void> {
+    // Pi 的 abort 不会替宿主 resolve 自定义 AskUserQuestion 工具里的
+    // Promise。若会话正停在人工卡，直接 await abort 会永久等待，导致
+    // pause/cancel/SIGTERM 全部挂死。先只解开内存工具调用（不写人类决定
+    // 事件；HumanGate 的 waiting 仍在盘上），再让 Pi 收束并中止回合。
+    for (const [callId, resolver] of this.decisionResolvers) {
+      this.hostAnswered.add(callId);
+      resolver("[mae-flow-cloud] 会话已由宿主中止，人工待办仍保留");
+    }
+    this.decisionResolvers.clear();
+    this.waitingRecord = undefined;
     await Promise.allSettled([
       (this.session as any).abort(),
       ...[...this.childSessions.values()].map((child) => child.abort()),
@@ -678,9 +688,18 @@ export class CloudSession {
     // 同名 customTool 后写覆盖内建(agent-session._refreshToolRegistry),
     // 不能用 excludeTools(denylist 按名字生效,会连替换品一起杀,实测)。
     const isolatedTools = this.options.bashOperations
-      ? [createBashToolDefinition(workspace, {
-          operations: this.options.bashOperations,
-        })]
+      ? [createWorkspaceBashToolDefinition(
+          workspace,
+          this.options.bashOperations,
+          {
+            // 每个主/子/prepush 会话各有自己的受控日志目录。所有命令仍由
+            // 原容器 backend 执行；这层只镜像输出并把可达相对路径交给 Pi。
+            workspace,
+            taskId: this.options.taskId,
+            sessionId: config.sessionId,
+            log: this.options.log,
+          },
+        )]
       : [];
     const { session } = await createAgentSession({
       cwd: workspace,

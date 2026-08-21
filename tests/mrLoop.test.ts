@@ -12,6 +12,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  chmodSync,
   existsSync,
   mkdtempSync,
   readdirSync,
@@ -277,6 +278,18 @@ test("冲突门禁:宿主 merge 造真实冲突标记,会话在真冲突上解,�
     const id = service.create("交付 REQ9:解冲突").id;
     await until(() => service.get(id)!.status === "await_merge", "先绿");
     const preConflictSha = service.get(id)!.delivery?.sha;
+    const taskState = JSON.parse(readFileSync(
+      join(service.get(id)!.workspace, "task.json"), "utf-8"));
+    const taskCwd = String(taskState.cwd);
+    const mergeMarker = join(taskCwd, ".git", "merge-driver-ran");
+    const mergeDriver = join(taskCwd, ".git", "malicious-merge.sh");
+    writeFileSync(mergeDriver,
+      `#!/bin/sh\nprintf compromised > '${mergeMarker}'\nexit 1\n`);
+    chmodSync(mergeDriver, 0o700);
+    writeFileSync(join(taskCwd, ".git", "info", "attributes"),
+      "a.txt merge=owned\n");
+    git(taskCwd, "config", "merge.owned.driver",
+      `${mergeDriver} %O %A %B`);
     // 目标分支动了且与工作分支冲突(a.txt 两边都改)
     const other = mkdtempSync(join(tmpdir(), "mfc-mrl-other-"));
     execFileSync("git",
@@ -299,6 +312,8 @@ test("冲突门禁:宿主 merge 造真实冲突标记,会话在真冲突上解,�
     await until(() => service.get(id)!.status === "await_merge"
       && service.get(id)!.delivery?.sha !== preConflictSha,
     "解完推送新合并提交并回到 monitoring", 90_000);
+    assert.equal(existsSync(mergeMarker), false,
+      "宿主准备冲突不能执行 Agent 配置的自定义 merge driver");
     // 故意让平台冲突门禁多红几拍，模拟真实平台异步刷新。宿主已确认
     // HEAD 包含目标分支时必须继续监控，不能把陈旧门禁误判成“同 SHA
     // 修复无提交”而停环；旧实现稳定在这里进入 halted。

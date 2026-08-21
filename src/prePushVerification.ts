@@ -13,6 +13,7 @@
 
 export const PRE_PUSH_STATE_SCHEMA = "mae-flow-cloud/prepush-verification/1" as const;
 export const PRE_PUSH_RECEIPT_SCHEMA = "mae-flow-cloud/prepush-pass/1" as const;
+export const PRE_PUSH_EXECUTION_SCHEMA = "mae-flow-cloud/prepush-execution/1" as const;
 
 export type PrePushStateName =
   | "preparing"
@@ -98,6 +99,26 @@ export interface PrePushPassReceipt {
     compile: PrePushPassedCheck;
     unit_test: PrePushPassedCheck;
   };
+  /** 宿主签入的容器事实。它用于审计与排障，不替代编译/UT 两项证据。 */
+  execution?: PrePushExecutionAttestation;
+}
+
+export interface PrePushExecutionAttestation {
+  schema: typeof PRE_PUSH_EXECUTION_SCHEMA;
+  attempt_id: string;
+  sha: string;
+  container_id: string;
+  image_reference: string;
+  image_id: string;
+  image_digest: string;
+  network: string;
+  read_only_root: boolean;
+  pids_limit: number;
+  memory_bytes?: number;
+  nano_cpus?: number;
+  user?: string;
+  started_at?: string;
+  mount_destinations: string[];
 }
 
 /**
@@ -517,6 +538,37 @@ export function recordPrePushReport(
   return next;
 }
 
+/** 把真实容器事实绑定到已签发的同 attempt/SHA 收据。错配直接拒绝，
+ * 但没有该字段的自定义 runner 仍可沿用原有收据兼容路径。 */
+export function attestPrePushExecution(
+  state: PrePushVerificationState,
+  execution: PrePushExecutionAttestation,
+): PrePushVerificationState {
+  const receipt = state.receipt;
+  if (state.state !== "passed" || !receipt) {
+    throw new Error("只有已通过的推送前验证才能登记容器事实");
+  }
+  if (execution.schema !== PRE_PUSH_EXECUTION_SCHEMA
+      || execution.sha !== receipt.sha
+      || execution.attempt_id !== receipt.checks.compile.attempt_id
+      || execution.attempt_id !== receipt.checks.unit_test.attempt_id
+      || !execution.container_id || !execution.image_id
+      || !execution.image_digest || execution.read_only_root !== true
+      || !Number.isInteger(execution.pids_limit) || execution.pids_limit <= 0) {
+    throw new Error("容器事实与推送前验证收据不匹配");
+  }
+  return {
+    ...state,
+    receipt: {
+      ...receipt,
+      execution: {
+        ...execution,
+        mount_destinations: [...execution.mount_destinations].sort(),
+      },
+    },
+  };
+}
+
 export function retryPrePushVerification(
   state: PrePushVerificationState,
   at: string,
@@ -608,6 +660,22 @@ function isPassedCheck(value: unknown): value is PrePushPassedCheck {
   return isCheckRecord(value) && value.state === "passed";
 }
 
+function isExecutionAttestation(value: unknown): value is PrePushExecutionAttestation {
+  return isObject(value)
+    && value.schema === PRE_PUSH_EXECUTION_SCHEMA
+    && typeof value.attempt_id === "string" && Boolean(value.attempt_id)
+    && typeof value.sha === "string" && Boolean(value.sha)
+    && typeof value.container_id === "string" && Boolean(value.container_id)
+    && typeof value.image_reference === "string"
+    && typeof value.image_id === "string" && Boolean(value.image_id)
+    && typeof value.image_digest === "string" && Boolean(value.image_digest)
+    && typeof value.network === "string"
+    && value.read_only_root === true
+    && Number.isInteger(value.pids_limit) && Number(value.pids_limit) > 0
+    && Array.isArray(value.mount_destinations)
+    && value.mount_destinations.every((item) => typeof item === "string");
+}
+
 /** 严格识别可恢复状态；畸形/伪造 receipt 一律由 restore 退回重验。 */
 export function isPrePushVerificationState(
   value: unknown,
@@ -648,7 +716,12 @@ export function isPrePushVerificationState(
         || value.receipt.checks.unit_test.attempt_id
           !== value.checks.unit_test.attempt_id
         || value.receipt.checks.unit_test.completed_at
-          !== value.checks.unit_test.completed_at) return false;
+          !== value.checks.unit_test.completed_at
+        || (value.receipt.execution !== undefined
+          && (!isExecutionAttestation(value.receipt.execution)
+            || value.receipt.execution.sha !== value.sha
+            || value.receipt.execution.attempt_id
+              !== value.checks.compile.attempt_id))) return false;
   } else if (value.receipt !== undefined) {
     return false;
   }

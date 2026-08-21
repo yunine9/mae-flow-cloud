@@ -13,25 +13,37 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { dockerAvailable } from "../src/containerRuntime.ts";
+import { dockerAvailable, taskContainerInstance } from "../src/containerRuntime.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskService } from "../src/taskService.ts";
 
 const DOCKER = await dockerAvailable();
-const IMAGE = process.env.MFC_TEST_IMAGE || "alpine";
+const IMAGE = process.env.MFC_REAL_BUILD_IMAGE ?? process.env.MFC_TEST_IMAGE ?? "";
 let SKIP: false | string =
-  DOCKER ? false : "docker daemon 不可用;起 Colima/Docker 后重跑";
+  !DOCKER ? "docker daemon 不可用;起 Colima/Docker 后重跑"
+    : !IMAGE
+      ? "未指定非 root 任务镜像;设置 MFC_REAL_BUILD_IMAGE 后重跑"
+      : false;
 
-if (DOCKER) {
+if (DOCKER && IMAGE) {
   // 拉不到不许炸整个文件(同 isolation.test.ts 的注):内网有 docker
   // 却上不了公网仓库是常态,显式 skip 说清怎么补,别报成代码红灯。
   try {
-    execFileSync("docker", ["pull", "-q", IMAGE], { stdio: "ignore" });
+    try {
+      execFileSync("docker", ["image", "inspect", IMAGE], { stdio: "ignore" });
+    } catch {
+      execFileSync("docker", ["pull", "-q", IMAGE], { stdio: "ignore" });
+    }
+    const user = execFileSync("docker", [
+      "image", "inspect", "--format", "{{.Config.User}}", IMAGE,
+    ], { encoding: "utf-8" }).trim();
+    if (!user || /^(?:root|0)(?::|$)/i.test(user)) {
+      SKIP = `镜像 ${IMAGE} 的 Config.User=${user || "<空>"}，不满足非 root 隔离契约`;
+    }
   } catch {
-    SKIP = `镜像 ${IMAGE} 拉不到(内网通常上不了公网仓库):`
+    SKIP = `镜像 ${IMAGE} 本地不存在且拉不到(内网通常上不了公网仓库):`
       + "用 MFC_TEST_IMAGE 指一个本地已有/内部仓的镜像后重跑";
   }
 }
@@ -45,7 +57,7 @@ function makeDataDir(prefix: string): string {
 }
 
 function fingerprint(dataDir: string): string {
-  return createHash("sha256").update(dataDir).digest("hex").slice(0, 6);
+  return taskContainerInstance(dataDir).namePrefix;
 }
 
 /** 存活证明剧本:sleep 横跨对方启动窗口,产物在 sleep 之后才落盘

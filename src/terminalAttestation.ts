@@ -7,9 +7,9 @@
  * 修改任何状态，恢复、交付、依赖解锁都可以复用同一把尺子。
  */
 
-import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { runSafeWorktreeGit } from "./safeGit.ts";
 
 const PIPELINE_DIMENSIONS = {
   compile: "COMPILE",
@@ -73,11 +73,10 @@ function requiredDimensions(state: any, pipelineByDefault: boolean): string[] {
 
 function gitHead(cwd: string): string | undefined {
   try {
-    return execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd,
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim() || undefined;
+    const result = runSafeWorktreeGit(cwd, ["rev-parse", "HEAD"]);
+    return result.status === 0
+      ? String(result.stdout ?? "").trim() || undefined
+      : undefined;
   } catch {
     return undefined;
   }

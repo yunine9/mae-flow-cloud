@@ -69,6 +69,29 @@ test("配置文件坏了拒绝启动,不静默忽略", async () => {
   assert.notEqual(missing.code, 0);
 });
 
+test("--isolate-user 拒绝 root/0，不能把容器隔离变成 root 执行", async () => {
+  for (const user of ["root", "root:root", "0", "0:0"]) {
+    const dir = mkdtempSync(join(tmpdir(), "mfc-root-user-"));
+    const result = await run([
+      "--data", join(dir, "tasks"),
+      "--isolate-image", "fixture/builder:test",
+      "--isolate-user", user,
+    ], () => false, 15_000);
+    assert.equal(result.code, 2, `用户 ${user} 必须拒绝启动`);
+    assert.match(result.output, /禁止使用 root\/0/);
+  }
+});
+
+test("SIGTERM 走优雅关闭并明确承诺业务状态不变", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-graceful-stop-"));
+  const result = await run([
+    "--data", join(dir, "tasks"), "--port", "0",
+  ], (line) => line.includes("http://127.0.0.1:"));
+  assert.equal(result.code, 0, result.output);
+  assert.match(result.output, /收到 SIGTERM，停止接单并清理/);
+  assert.match(result.output, /业务状态保持不变/);
+});
+
 test("端口被占:说人话并退出,不甩一段栈", async () => {
   // 内网反复报"server 挂了"里,有一份就是这个:上一次的服务还占着端口,
   // 新起的进程在 listen 上抛 EADDRINUSE。没有处理器时它是未捕获的 error
@@ -146,6 +169,20 @@ test("内核模式没有交付平台 → 拒绝启动,不起一台每单必卡�
   assert.equal(code, 2, `应当拒绝启动,输出:\n${output.slice(0, 800)}`);
   assert.match(output, /内核模式需要交付平台在场/);
   assert.match(output, /--platform|--fake-platform/);
+});
+
+test("内核模式没有任务镜像 → 拒绝启动,不允许业务命令回退宿主", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-noisolation-"));
+  const { code, output } = await run([
+    "--kernel-mode",
+    "--platform", "http://127.0.0.1:9",
+    "--data", join(dir, "tasks"),
+    "--port", "0",
+  ], () => false, 30_000);
+  assert.equal(code, 2, `应当拒绝启动,输出:\n${output.slice(0, 1200)}`);
+  assert.match(output, /内核模式要求统一任务容器/);
+  assert.match(output, /--isolate-image/);
+  assert.match(output, /拒绝静默回退宿主机/);
 });
 
 test("旧 --verify-via-pipeline 仅提示弃用,不再切换执行语义", async () => {

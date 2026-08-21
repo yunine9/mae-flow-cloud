@@ -15,17 +15,19 @@ import {
   constants,
   cpSync,
   existsSync,
+  lstatSync,
   mkdtempSync,
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
 import {
@@ -57,7 +59,15 @@ import {
   type WaitingRecord,
 } from "./humanGate.ts";
 import { CloudSession, type Outcome } from "./sessionDriver.ts";
-import { dockerAvailable, TaskContainer } from "./containerRuntime.ts";
+import {
+  TaskContainer,
+  sweepManagedTaskContainers,
+  taskContainerInstance,
+  type DockerRunner,
+  type TaskContainerLimits,
+  type TaskContainerMetadata,
+  type TaskContainerOptions,
+} from "./containerRuntime.ts";
 import type { ExternalAction, PgProjection } from "./projection.ts";
 import type { RuntimeSettings } from "./settings.ts";
 import { ReviewStore, type ReviewRequest } from "./reviews.ts";
@@ -90,16 +100,24 @@ import {
   type PrePushRunner,
 } from "./prepushAgent.ts";
 import {
+  PRE_PUSH_EXECUTION_SCHEMA,
+  attestPrePushExecution,
   beginPrePushAttempt,
   getReusablePushReceipt,
   observePrePushRevision,
   recordPrePushReport,
   retryPrePushVerification,
   restorePrePushVerification,
+  type PrePushExecutionAttestation,
   type PrePushReport,
   type PrePushRevision,
   type PrePushVerificationState,
 } from "./prePushVerification.ts";
+import {
+  createSafeGitView,
+  runSafeWorktreeGit,
+  safeGitEnvironment,
+} from "./safeGit.ts";
 
 export type TaskStatus =
   | "queued"
@@ -419,6 +437,9 @@ export interface TaskServiceOptions {
   prepush?: {
     enabled?: boolean;
     runner?: PrePushRunner;
+    /** 编译属于重资源动作，和普通 Agent 并发分开计数。默认只放行一单，
+     * 避免同一台内网宿主被多个 Maven/C++ 进程瞬间打满。 */
+    buildSlots?: number;
   };
   /** 审批链接的前缀(通知里带的 URL),如 http://host:port。 */
   linkBase?: string;
@@ -436,9 +457,27 @@ export interface TaskServiceOptions {
   isolation?: {
     image: string;
     volumes?: string[];
+    /** 构建缓存宿主根目录。平台按仓库 URL 的哈希自动分区，绝不让
+     * Maven/npm/ccache 在无关业务仓之间共享同一份可写缓存。 */
+    cacheRoot?: string;
     memory?: string;
     cpus?: string;
     user?: string;
+    pidsLimit?: number;
+    labels?: Record<string, string>;
+    readOnlyRoot?: boolean;
+    tmpfsHome?: string | false;
+    tmpfsTmp?: string | false;
+    network?: string;
+    environment?: NodeJS.ProcessEnv;
+    forwardEnvironment?: readonly string[];
+    stopGraceSeconds?: number;
+    managementTimeoutMs?: number;
+    /** Docker CLI 注入口，仅供无 daemon 单测和受控运行时适配。 */
+    runner?: DockerRunner;
+    /** 窄测试/运行时适配注入口。生产不配置时始终使用 TaskContainer；
+     * 结构化接口让测试能证明普通会话与 prepush 都没有宿主 Bash 回退。 */
+    containerFactory?: TaskContainerFactory;
   };
   /** 提交信息规范(部署级一句话,进每个会话的开场)。
    *
@@ -467,6 +506,37 @@ export interface TaskServiceOptions {
   moonlight?: (account?: string) => boolean;
   log?: (message: string) => void;
 }
+
+export interface TaskCommandContainer {
+  /** 真 Docker 后端在 start 后提供；测试/私有执行器可不实现。 */
+  readonly metadata?: TaskContainerMetadata;
+  start(): Promise<void>;
+  exec(
+    command: string,
+    cwd: string,
+    options: {
+      onData: (data: Buffer) => void;
+      signal?: AbortSignal;
+      timeout?: number;
+      env?: NodeJS.ProcessEnv;
+    },
+  ): Promise<{ exitCode: number | null }>;
+  stop(): Promise<void>;
+}
+
+export interface TaskContainerFactoryInput {
+  image: string;
+  workspace: string;
+  name: string;
+  log?: (message: string) => void;
+  volumes: string[];
+  limits: TaskContainerLimits;
+  options: TaskContainerOptions;
+}
+
+export type TaskContainerFactory = (
+  input: TaskContainerFactoryInput,
+) => TaskCommandContainer;
 
 /** MR 合并门禁的分类表(照内网既有框架的实证结论,
  * docs/mr-loop-adaptation.md §4)。三项可修按优先级排:数字小=先修,
@@ -667,7 +737,7 @@ interface TaskState {
   nudgedStep?: string;
   nudgeCount?: number;
   /** 任务专属容器(隔离模式):随任务起,随收口停。 */
-  container?: TaskContainer;
+  container?: TaskCommandContainer;
   /** 合入监控环的防重入锁(内存态):一任务只挂一环。 */
   mergeWatchActive?: boolean;
   /** 流水线证据核销重试的防重入锁。纯宿主 timer，不占 Agent 会话。 */
@@ -676,6 +746,10 @@ interface TaskState {
   /** 所有 push 入口共享同一个异步准备动作；避免恢复轮询与会话收口
    * 同时撞进来，为同一 HEAD 启两个编译 Agent。 */
   prepushActive?: Promise<boolean>;
+  /** prepush 回合的宿主中断信号。Pi 的 abort 偶尔只回到 idle、没有让
+   * 已返回给调用方的 turn Promise 收口；这条信号用于结束宿主等待，
+   * 容器销毁仍是进程树终止的安全边界。 */
+  prepushAbort?: AbortController;
   /** 上次主动压缩时的事件水位(事件量是上下文增长的诚实代理)。 */
   lastCompactAt?: number;
   /** 恢复标记:launch 走重建会话路径(不重克隆、内核 current 续跑)。 */
@@ -698,6 +772,12 @@ interface TaskState {
   controlEpoch: number;
   /** running 的暂停不截断当前工具，等 settle 的安全边界收口。 */
   pauseRequested?: boolean;
+}
+
+interface PrePushBuildWaiter {
+  task: TaskState;
+  epoch: number;
+  resolve: (release: (() => void) | undefined) => void;
 }
 
 interface PipelineAttestation {
@@ -735,6 +815,21 @@ export class TaskService {
   private runningCount = 0;
   private queue: string[] = [];
   private counter = 0;
+  /** 编译槽与普通 Agent 并发彻底分账。槽位释放才唤醒下一单，等待者
+   * 仍保留在任务现场里，可暂停/取消，不靠不可见的 Promise 排队。 */
+  private activePrePushBuilds = 0;
+  private prePushBuildQueue: PrePushBuildWaiter[] = [];
+  /** 所有已创建且尚未确认删除的容器。任务字段只指向“当前”一个，
+   * 这个集合还能覆盖 system-check 与正在 finally 清理的旧 attempt。 */
+  private activeContainers = new Set<TaskCommandContainer>();
+  private activeContainerContexts = new Map<TaskCommandContainer, {
+    name: string;
+    image: string;
+    role: string;
+    taskId: string;
+  }>();
+  private shuttingDown = false;
+  private shutdownPromise?: Promise<void>;
   private reviews: ReviewStore;
   private repositorySkillCatalogs =
     new Map<string, RepositorySkillCatalogTicket>();
@@ -770,6 +865,300 @@ export class TaskService {
 
   private notificationLinkBase(): string | undefined {
     return this.options.linkBase ?? this.observedLinkBase;
+  }
+
+  private createTaskContainer(
+    input: TaskContainerFactoryInput,
+  ): TaskCommandContainer {
+    if (this.shuttingDown) {
+      throw new Error("服务正在关闭，拒绝创建新的任务容器");
+    }
+    const instance = taskContainerInstance(this.options.dataDir);
+    const ownedInput: TaskContainerFactoryInput = {
+      ...input,
+      options: {
+        ...input.options,
+        runner: input.options.runner ?? this.options.isolation?.runner,
+        labels: {
+          ...(input.options.labels ?? {}),
+          // 完整 dataDir 指纹是跨重启 ownership；短名字只供人辨认。
+          "com.mae-flow-cloud.instance": instance.fingerprint,
+        },
+      },
+    };
+    const created = this.options.isolation?.containerFactory?.(ownedInput)
+      ?? new TaskContainer(
+        ownedInput.image,
+        ownedInput.workspace,
+        ownedInput.name,
+        ownedInput.log,
+        ownedInput.volumes,
+        ownedInput.limits,
+        ownedInput.options,
+      );
+    const service = this;
+    let startPromise: Promise<void> | undefined;
+    const tracked: TaskCommandContainer = {
+      get metadata() { return created.metadata; },
+      start: async () => {
+        if (service.shuttingDown) {
+          await created.stop();
+          service.activeContainers.delete(tracked);
+          service.activeContainerContexts.delete(tracked);
+          throw new Error("服务正在关闭，拒绝启动新的任务容器");
+        }
+        if (!startPromise) {
+          const attempt = Promise.resolve().then(() => created.start());
+          startPromise = attempt.then(async () => {
+            // docker run/inspect 在 await 期间收到 SIGTERM：容器可能刚刚
+            // 出现。必须先确认删除，再让 start 以关闭错误返回。
+            if (service.shuttingDown) {
+              await created.stop();
+              service.activeContainers.delete(tracked);
+              service.activeContainerContexts.delete(tracked);
+              throw new Error("服务关闭期间任务容器完成启动，已立即回收");
+            }
+          }).finally(() => { startPromise = undefined; });
+        }
+        return startPromise;
+      },
+      exec: (command, cwd, options) => {
+        if (service.shuttingDown) {
+          return Promise.reject(new Error(
+            "服务正在关闭，拒绝向任务容器下发新的命令"));
+        }
+        return created.exec(command, cwd, options);
+      },
+      stop: async () => {
+        // 不与 docker run/inspect 对冲；让启动动作先取得明确结果，再按
+        // ownership 执行 TERM→KILL→rm。否则可能“先查不存在、后 run 出来”。
+        if (startPromise) await startPromise.catch(() => undefined);
+        await created.stop();
+        service.activeContainers.delete(tracked);
+        service.activeContainerContexts.delete(tracked);
+      },
+    };
+    this.activeContainers.add(tracked);
+    this.activeContainerContexts.set(tracked, {
+      name: ownedInput.name,
+      image: ownedInput.image,
+      role: ownedInput.options.labels?.["com.mae-flow-cloud.role"] ?? "unknown",
+      taskId: ownedInput.options.labels?.["com.mae-flow-cloud.task"] ?? "system",
+    });
+    return tracked;
+  }
+
+  /** recover 前调用：只清扫完整 dataDir ownership 指纹匹配的遗留容器。 */
+  async sweepOrphanContainers(): Promise<{ found: number; removed: string[] }> {
+    const isolation = this.options.isolation;
+    if (!isolation) return { found: 0, removed: [] };
+    const instance = taskContainerInstance(this.options.dataDir);
+    return sweepManagedTaskContainers({
+      instanceFingerprint: instance.fingerprint,
+      namePrefix: instance.namePrefix,
+      stopGraceSeconds: isolation.stopGraceSeconds,
+      managementTimeoutMs: isolation.managementTimeoutMs,
+      runner: isolation.runner,
+      log: this.options.log,
+    });
+  }
+
+  /**
+   * 进程级优雅关闭。只换掉内存 epoch、停调度并释放资源，不改写任务
+   * 业务状态；下次启动仍由 recover 按原来的 task.json 续跑。
+   */
+  async shutdown(): Promise<void> {
+    if (this.shutdownPromise) return this.shutdownPromise;
+    this.shuttingDown = true;
+    this.shutdownPromise = (async () => {
+      this.queue = [];
+      const waiters = this.prePushBuildQueue.splice(0);
+      for (const waiter of waiters) waiter.resolve(undefined);
+
+      const drivers = new Map<CloudSession, string>();
+      const prepushes: Array<{ taskId: string; work: Promise<unknown> }> = [];
+      for (const task of this.tasks.values()) {
+        // 旧回调即使稍后返回，也不能在关机窗口改写业务状态。
+        task.controlEpoch += 1;
+        task.pauseRequested = false;
+        task.prepushAbort?.abort();
+        task.prepushAbort = undefined;
+        if (task.driver) drivers.set(task.driver, task.summary.id);
+        task.driver = undefined;
+        task.container = undefined;
+        if (task.prepushActive) {
+          prepushes.push({ taskId: task.summary.id, work: task.prepushActive });
+        }
+      }
+
+      const cleanup: Array<{ label: string; work: Promise<unknown> }> = [];
+      for (const [driver, taskId] of drivers) {
+        cleanup.push({ label: `phase=abort-session task=${taskId}`,
+          work: driver.abort() });
+      }
+      for (const container of this.activeContainers) {
+        const metadata = container.metadata;
+        const planned = this.activeContainerContexts.get(container);
+        const role = metadata?.labels["com.mae-flow-cloud.role"]
+          ?? planned?.role ?? "unknown";
+        const taskId = metadata?.labels["com.mae-flow-cloud.task"]
+          ?? planned?.taskId ?? "system";
+        const name = metadata?.name ?? planned?.name ?? "unknown";
+        const id = metadata?.containerId.slice(0, 12) ?? "unknown";
+        const image = metadata?.immutableImageReference
+          ?? planned?.image ?? "unknown";
+        const label = `phase=remove-container role=${role} task=${taskId}`
+          + ` name=${name} id=${id} image=${image}`;
+        this.options.log?.(`服务关闭 ${label}`);
+        cleanup.push({ label, work: container.stop() });
+      }
+      for (const prepush of prepushes) {
+        cleanup.push({ label: `phase=await-prepush task=${prepush.taskId}`,
+          work: prepush.work });
+      }
+      const contextual = cleanup.map(({ label, work }) => work.catch((cause) => {
+        throw new Error(`${label}: ${String(cause)}`, { cause });
+      }));
+      const settled = await Promise.allSettled(contextual);
+      for (const driver of drivers.keys()) driver.dispose();
+      this.activePrePushBuilds = 0;
+      const failures = settled
+        .filter((item): item is PromiseRejectedResult => item.status === "rejected")
+        .map((item) => item.reason);
+      if (failures.length) {
+        throw new AggregateError(failures,
+          `服务关闭时有 ${failures.length} 项资源未能确认释放: `
+            + failures.map(String).join(" | "));
+      }
+      this.options.log?.(`服务关闭完成: ${cleanup.length} 项会话/容器资源已释放`);
+    })();
+    return this.shutdownPromise;
+  }
+
+  private taskContainerMounts(
+    task: TaskState,
+    volumes: string[],
+  ): { volumes: string[]; environment: NodeJS.ProcessEnv } {
+    const repository = task.summary.repo_url
+      ?? this.effectiveDefaultRepo()
+      ?? task.cwd
+      ?? task.summary.id;
+    return this.containerMountsForRepository(repository, volumes);
+  }
+
+  private containerMountsForRepository(
+    repository: string,
+    volumes: string[],
+  ): { volumes: string[]; environment: NodeJS.ProcessEnv } {
+    const isolation = this.options.isolation;
+    const environment = { ...(isolation?.environment ?? {}) };
+    if (!isolation?.cacheRoot) return { volumes, environment };
+
+    const destinations = new Set([
+      "/cache/maven", "/cache/npm", "/cache/ccache", "/cache/xdg",
+    ]);
+    for (const volume of volumes) {
+      const destination = volume.split(":")[1];
+      if (destination && destinations.has(destination.replace(/\/+$/, ""))) {
+        throw new Error(
+          `自定义挂载不能覆盖平台的分仓缓存目录: ${destination}`,
+        );
+      }
+    }
+    const key = createHash("sha256").update(repository).digest("hex").slice(0, 20);
+    const cacheBase = join(resolve(isolation.cacheRoot), key);
+    const caches = [
+      ["maven", "/cache/maven"],
+      ["npm", "/cache/npm"],
+      ["ccache", "/cache/ccache"],
+      ["xdg", "/cache/xdg"],
+    ] as const;
+    for (const [name] of caches) mkdirSync(join(cacheBase, name), { recursive: true });
+    const mavenOptions = String(environment.MAVEN_OPTS ?? "").trim();
+    return {
+      volumes: [
+        ...volumes,
+        ...caches.map(([name, destination]) =>
+          `${join(cacheBase, name)}:${destination}`),
+      ],
+      environment: {
+        ...environment,
+        MAVEN_OPTS: [mavenOptions,
+          "-Dmaven.repo.local=/cache/maven/repository"]
+          .filter(Boolean).join(" "),
+        npm_config_cache: "/cache/npm",
+        CCACHE_DIR: "/cache/ccache",
+        XDG_CACHE_HOME: "/cache/xdg",
+      },
+    };
+  }
+
+  private prePushBuildSlotCount(): number {
+    const configured = Number(this.options.prepush?.buildSlots ?? 1);
+    return Number.isFinite(configured)
+      ? Math.max(1, Math.floor(configured)) : 1;
+  }
+
+  private releasePrePushBuildSlot(): () => void {
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.activePrePushBuilds = Math.max(0, this.activePrePushBuilds - 1);
+      this.drainPrePushBuildQueue();
+    };
+  }
+
+  private drainPrePushBuildQueue(): void {
+    if (this.shuttingDown) {
+      const waiters = this.prePushBuildQueue.splice(0);
+      for (const waiter of waiters) waiter.resolve(undefined);
+      return;
+    }
+    const slots = this.prePushBuildSlotCount();
+    while (this.activePrePushBuilds < slots
+        && this.prePushBuildQueue.length) {
+      const waiter = this.prePushBuildQueue.shift()!;
+      if (!this.current(waiter.task, waiter.epoch)
+          || waiter.task.summary.status === "paused"
+          || waiter.task.summary.status === "pausing") {
+        waiter.resolve(undefined);
+        continue;
+      }
+      this.activePrePushBuilds += 1;
+      waiter.task.summary.detail = `已获得推送前构建资源（`
+        + `${this.activePrePushBuilds}/${slots} 使用中）`;
+      this.persist(waiter.task);
+      waiter.resolve(this.releasePrePushBuildSlot());
+    }
+  }
+
+  private acquirePrePushBuildSlot(
+    task: TaskState,
+    epoch: number,
+  ): Promise<(() => void) | undefined> {
+    if (this.shuttingDown) return Promise.resolve(undefined);
+    if (!this.current(task, epoch)) return Promise.resolve(undefined);
+    const slots = this.prePushBuildSlotCount();
+    if (this.activePrePushBuilds < slots) {
+      this.activePrePushBuilds += 1;
+      return Promise.resolve(this.releasePrePushBuildSlot());
+    }
+    task.summary.detail = `等待推送前构建资源（${this.activePrePushBuilds}/`
+      + `${slots} 使用中，按任务顺序排队）`;
+    this.persist(task);
+    return new Promise((resolve) => {
+      this.prePushBuildQueue.push({ task, epoch, resolve });
+    });
+  }
+
+  private removePrePushBuildWaiter(task: TaskState): void {
+    const kept: PrePushBuildWaiter[] = [];
+    for (const waiter of this.prePushBuildQueue) {
+      if (waiter.task === task) waiter.resolve(undefined);
+      else kept.push(waiter);
+    }
+    this.prePushBuildQueue = kept;
   }
 
   list(): TaskSummary[] {
@@ -823,8 +1212,137 @@ export class TaskService {
     return this.reviews.complete(id, committer);
   }
 
-  /** 管理员部署自检：只做只读、有限时的探测，不发送测试消息，
-   * 不创建任务，也不改变任何运行配置。 */
+  /** 启动一次与真实任务同约束的短命容器，验证的不是宿主 PATH，而是
+   * 真正会承载 Agent 命令的镜像、挂载、身份和工具链。 */
+  private async probeTaskContainerToolchain(): Promise<{
+    ready: boolean;
+    detail: string;
+    suggestion?: string;
+  }> {
+    const isolation = this.options.isolation;
+    if (!isolation) {
+      return {
+        ready: false,
+        detail: "未配置统一任务容器",
+        suggestion: "启动时加 --isolate-image <统一构建镜像>",
+      };
+    }
+    const workspace = join(this.options.dataDir, "system-check-container");
+    mkdirSync(workspace, { recursive: true });
+    const mounted = this.containerMountsForRepository(
+      "mae-flow-cloud/system-check", isolation.volumes ?? [],
+    );
+    const instance = taskContainerInstance(this.options.dataDir).namePrefix;
+    const containerName = `mfc-${instance}-system-check-${randomUUID().slice(0, 8)}`;
+    const container = this.createTaskContainer({
+      image: isolation.image,
+      workspace,
+      name: containerName,
+      log: this.options.log,
+      volumes: mounted.volumes,
+      limits: {
+        memory: isolation.memory,
+        cpus: isolation.cpus,
+        user: isolation.user,
+        pidsLimit: isolation.pidsLimit,
+      },
+      options: {
+        labels: {
+          ...(isolation.labels ?? {}),
+          "com.mae-flow-cloud.role": "system-check",
+        },
+        readOnlyRoot: isolation.readOnlyRoot,
+        tmpfsHome: isolation.tmpfsHome,
+        tmpfsTmp: isolation.tmpfsTmp,
+        network: isolation.network,
+        environment: mounted.environment,
+        forwardEnvironment: isolation.forwardEnvironment,
+        stopGraceSeconds: isolation.stopGraceSeconds,
+        managementTimeoutMs: isolation.managementTimeoutMs,
+      },
+    });
+    let output = "";
+    let failure: unknown;
+    let failurePhase = "start";
+    let detail = "";
+    try {
+      await container.start();
+      failurePhase = "toolchain-exec";
+      const command = [
+        "set -eu",
+        // 写入真正的 bind-mounted workspace，避免“只在 /tmp 能编译”
+        // 的坏镜像通过自检。EXIT trap 保证失败路径也不留探针文件。
+        'scratch="$PWD/.mfc-self-check-$$"',
+        'trap \'rm -rf "$scratch"\' EXIT',
+        'mkdir -p "$scratch"',
+        'test -w "$PWD"',
+        // 四类缓存都必须是实际可写挂载；逐个写读删，不只看目录权限位。
+        'for cache in /cache/maven /cache/npm /cache/ccache /cache/xdg; do test -d "$cache"; probe="$cache/.mfc-self-check-$$"; printf cache-ok > "$probe"; test "$(cat "$probe")" = cache-ok; rm -f "$probe"; done',
+        "java -version 2>&1",
+        "java -version 2>&1 | grep -Eq 'version \\\"21([.]|\\\"| )'",
+        "mvn --version",
+        "node --version",
+        'test "$(node -p \'Number(process.versions.node.split(\".\")[0])\')" -ge 18',
+        "npm --version",
+        'test "$(npm --version | cut -d. -f1)" -ge 9',
+        "c++ --version",
+        "ar --version",
+        "bison --version",
+        "flex --version",
+        "ccache --version",
+        "git --version",
+        "python3 --version",
+        'printf \'class MfcSelfCheck { public static void main(String[] a) { System.out.print("java-ok"); } }\\n\' > "$scratch/MfcSelfCheck.java"',
+        'javac -d "$scratch" "$scratch/MfcSelfCheck.java"',
+        'java -cp "$scratch" MfcSelfCheck',
+        'printf \'#include <iostream>\\nint main(){std::cout<<" cpp-ok";}\\n\' > "$scratch/check.cpp"',
+        'c++ "$scratch/check.cpp" -o "$scratch/check"',
+        '"$scratch/check"',
+        "node -e 'process.stdout.write(\" node-ok\")'",
+        'printf \' __MFC_CONTAINER_TOOLCHAIN_OK__\\n\'',
+      ].join("; ");
+      const result = await container.exec(command, workspace, {
+        timeout: 60,
+        onData: (chunk) => { output += chunk.toString(); },
+      });
+      if (result.exitCode !== 0
+          || !output.includes("__MFC_CONTAINER_TOOLCHAIN_OK__")) {
+        throw new Error(`容器工具链自检退出码 ${result.exitCode}`);
+      }
+      failurePhase = "verify-metadata";
+      const immutable = container.metadata?.immutableImageReference
+        ?? isolation.image;
+      detail = `镜像 ${immutable} 已真实启动；bind 工作区可写并以 JDK 21/Maven、`
+        + "C/C++ 完成编译执行，Maven/npm/ccache/XDG 缓存均可写；"
+        + "Node 18+/npm 9+、Git、Python 工具通过";
+    } catch (error) {
+      failure = error;
+    } finally {
+      try {
+        await container.stop();
+      } catch (error) {
+        failurePhase = failure ? `${failurePhase}+cleanup` : "cleanup";
+        failure = failure
+          ? new AggregateError([failure, error], "自检容器执行及清理均失败")
+          : error;
+      }
+    }
+    if (!failure) return { ready: true, detail };
+    const tail = output.trim().split("\n").slice(-8).join(" | ");
+    const metadata = container.metadata;
+    const context = `phase=${failurePhase} role=system-check name=${containerName}`
+      + ` id=${metadata?.containerId.slice(0, 12) ?? "unknown"}`
+      + ` image=${metadata?.immutableImageReference ?? isolation.image}`;
+    return {
+      ready: false,
+      detail: "统一任务容器或其工具链不可用",
+      suggestion: `${context}: ${String(failure)}`
+        + `${tail ? `；末段输出: ${tail}` : ""}`,
+    };
+  }
+
+  /** 管理员部署自检：不发送测试消息、不创建业务任务，也不改变运行配置；
+   * 会启动并销毁一个短命构建容器，以免把宿主工具链误报成任务可用。 */
   async systemCheck(): Promise<SystemCheckResult> {
     const items: SystemCheckItem[] = [];
     try {
@@ -897,70 +1415,29 @@ export class TaskService {
         : { key: "git", label: "Git 交付", status: "ok",
             detail: "平台已配置;代码仓逐单填写(本部署不设默认仓)" });
 
-    const probeTool = (name: string, args = ["--version"]) => {
-      const result = spawnSync(name, args, {
-        encoding: "utf-8", timeout: 3_000,
-      });
-      return {
-        ready: result.status === 0,
-        output: `${result.stdout ?? ""}\n${result.stderr ?? ""}`.trim(),
-      };
-    };
-    const leadingMajor = (text: string): number | undefined => {
-      const match = text.match(/(?:^|[\s"'v])((?:1\.)?\d+)(?:[._\s"'-]|$)/i);
-      if (!match) return undefined;
-      const parts = match[1].split(".");
-      const value = Number(parts[0] === "1" ? parts[1] : parts[0]);
-      return Number.isFinite(value) ? value : undefined;
-    };
-    const java = probeTool("java", ["-version"]);
-    const maven = probeTool("mvn");
-    const node = probeTool("node");
-    const npm = probeTool("npm");
-    const cpp = probeTool("c++");
-    const binutils = probeTool("ar");
-    const bison = probeTool("bison");
-    const flex = probeTool("flex");
-    const ccache = probeTool("ccache");
-    const javaMajor = leadingMajor(java.output);
-    const nodeMajor = leadingMajor(node.output);
-    const npmMajor = leadingMajor(npm.output);
-    const mavenBase = java.ready && javaMajor === 21 && maven.ready;
-    const buildTools = {
-      "JS/TS": mavenBase && node.ready && (nodeMajor ?? 0) >= 18
-        && npm.ready && (npmMajor ?? 0) >= 9,
-      Java: mavenBase,
-      "C/C++": mavenBase && cpp.ready && binutils.ready && bison.ready && flex.ready,
-    };
-    const readyLanguages = Object.entries(buildTools)
-      .filter(([, ready]) => ready).map(([language]) => language);
-    const missingLanguages = Object.entries(buildTools)
-      .filter(([, ready]) => !ready).map(([language]) => language);
+    const containerProbe = await this.probeTaskContainerToolchain();
     items.push(!this.options.prepush?.enabled
       ? { key: "prepush", label: "推送前编译与 UT", status: "warning",
           detail: "当前部署未启用推送前快速验证" }
-      : missingLanguages.length
-        ? { key: "prepush", label: "推送前编译与 UT", status: "warning",
-            detail: `已启用；可用 ${readyLanguages.join("、") || "无"}，`
-              + `未发现 ${missingLanguages.join("、")} 的完整基础工具链`,
-            suggestion: `内网基线要求 JDK 21 + Maven、Node 18+ / npm 9+、`
-              + `GCC/G++、binutils、bison、flex（ccache${ccache.ready ? "已就绪" : "建议安装"}）；`
-              + `当前探测 Java=${javaMajor ?? "无"}、Node=${nodeMajor ?? "无"}、npm=${npmMajor ?? "无"}` }
+      : !containerProbe.ready
+        ? { key: "prepush", label: "推送前编译与 UT", status: "error",
+            detail: "已启用，但任务构建环境未通过真实自检",
+            suggestion: containerProbe.suggestion }
         : { key: "prepush", label: "推送前编译与 UT", status: "ok",
-            detail: `已启用；JDK ${javaMajor}+Maven 统一编排，`
-              + `Node ${nodeMajor}/npm ${npmMajor} 与 C/C++ 工具链均可执行`
-              + (ccache.ready ? "，ccache 可用" : "") });
+            detail: "已启用；每次 push 前在独立容器执行编译与 UT，构建槽位 "
+              + `${this.prePushBuildSlotCount()}` });
 
     if (!this.options.isolation) {
-      items.push({ key: "container", label: "容器隔离", status: "warning",
-        detail: "未启用任务容器", suggestion: "内网多人使用前建议配置隔离镜像" });
+      items.push({ key: "container", label: "统一任务容器",
+        status: this.options.host ? "error" : "warning",
+        detail: "未启用任务容器",
+        suggestion: "正式部署必须配置 --isolate-image；业务命令不会回退宿主" });
     } else {
-      const available = await dockerAvailable();
-      items.push(available
-        ? { key: "container", label: "容器隔离", status: "ok",
-            detail: `Docker 可用，镜像 ${this.options.isolation.image}` }
-        : { key: "container", label: "容器隔离", status: "error",
-            detail: "Docker daemon 不可用", suggestion: "启动 Docker 并确认服务账号有权限" });
+      items.push(containerProbe.ready
+        ? { key: "container", label: "统一任务容器", status: "ok",
+            detail: containerProbe.detail }
+        : { key: "container", label: "统一任务容器", status: "error",
+            detail: containerProbe.detail, suggestion: containerProbe.suggestion });
     }
 
     const overall: SystemCheckStatus = items.some((item) => item.status === "error")
@@ -2032,6 +2509,12 @@ export class TaskService {
       throw new NotFoundError(
         `任务 ${id} 状态是 ${status},只有 completed/failed/停机的 verifying 可重跑`);
     }
+    if (task.container || task.driver) {
+      throw new TaskControlError(
+        `任务 ${id} 上一次执行资源尚未确认释放，拒绝重跑；`
+        + "请先取消重试或重启服务触发 ownership 清扫",
+      );
+    }
     if (status === "verifying" && task.summary.delivery) {
       task.summary.delivery.loop = undefined;
       task.summary.delivery.pipeline = "人工重跑,待重新验证";
@@ -2236,13 +2719,31 @@ export class TaskService {
     this.persist(task);
     const driver = task.driver;
     const container = task.container;
-    task.driver = undefined;
-    task.container = undefined;
-    await Promise.allSettled([
+    const prepushAbort = task.prepushAbort;
+    prepushAbort?.abort();
+    const cleanup = await Promise.allSettled([
       driver?.abort() ?? Promise.resolve(),
       container?.stop() ?? Promise.resolve(),
     ]);
-    driver?.dispose();
+    if (cleanup[0].status === "fulfilled" && task.driver === driver) {
+      task.driver = undefined;
+      driver?.dispose();
+    }
+    if (cleanup[1].status === "fulfilled" && task.container === container) {
+      task.container = undefined;
+    }
+    if (task.prepushAbort === prepushAbort) task.prepushAbort = undefined;
+    const failures = cleanup.flatMap((result, index) =>
+      result.status === "rejected"
+        ? [`${index === 0 ? "会话中止" : "容器回收"}: ${String(result.reason)}`]
+        : []);
+    if (failures.length) {
+      task.summary.detail = "需求分析已完成，但执行资源未能确认释放："
+        + failures.join("；") + "。服务重启会按 ownership 再清扫";
+      this.persist(task);
+      this.options.log?.(`任务 ${task.summary.id} 分析收口清理不完整: `
+        + failures.join(" | "));
+    }
     this.notifyOutcome(task);
     this.bypass(undefined, "任务泵", this.pump());
   }
@@ -2434,8 +2935,20 @@ export class TaskService {
     if (status === "running") {
       task.pauseRequested = true;
       task.summary.status = "pausing";
-      task.summary.detail = "正在完成当前操作，随后暂停";
+      const prepushRunning = Boolean(
+        task.summary.delivery?.prepush?.active_attempt,
+      );
+      task.summary.detail = prepushRunning
+        ? "正在终止推送前构建容器，随后可从本轮验证恢复"
+        : "正在完成当前操作，随后暂停";
       this.persist(task);
+      if (prepushRunning) {
+        // 编译可能持续数十分钟，暂停不能等 Maven/C++ 自己收口。换代使
+        // 在途结果失去回写权，再销毁整个 attempt 容器及进程树。
+        task.controlEpoch += 1;
+        this.removePrePushBuildWaiter(task);
+        await this.finishPause(task, "running");
+      }
       return { ...task.summary };
     }
     task.controlEpoch += 1;
@@ -2476,6 +2989,17 @@ export class TaskService {
         this.pollPipeline(task, task.controlEpoch));
       return { ...task.summary };
     }
+    if (task.summary.delivery?.prepush?.active_attempt && task.cwd) {
+      // 暂停杀掉的是一次可重建的构建 attempt，不是编码上下文。恢复时
+      // 直接回交付入口，restorePrePushVerification 会清理旧 attempt
+      // 并对同一 SHA 重跑；绝不再起一轮普通编码 Agent。
+      task.summary.status = "verifying";
+      task.summary.detail = "已恢复，等待重新执行推送前编译与 UT";
+      this.persist(task);
+      this.bypass(task, "推送前验证恢复",
+        this.resumePrePushVerification(task, task.controlEpoch));
+      return { ...task.summary };
+    }
     task.summary.status = "queued";
     task.summary.detail = "已恢复，等待续跑";
     task.resume = from !== "queued";
@@ -2491,13 +3015,16 @@ export class TaskService {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     const status = task.summary.status;
-    if (status === "canceled") return { ...task.summary };
+    if (status === "canceled" && !task.driver && !task.container) {
+      return { ...task.summary };
+    }
     if (["completed", "await_merge"].includes(status)) {
       throw new TaskControlError(`任务 ${id} 已交付，不能取消`);
     }
     task.controlEpoch += 1;
     task.pauseRequested = false;
     this.removeFromQueue(id);
+    this.removePrePushBuildWaiter(task);
     task.summary.status = "canceled";
     task.summary.detail = `已由 ${actor} 取消`;
     task.summary.control = {
@@ -2512,13 +3039,33 @@ export class TaskService {
     this.persist(task);
     const driver = task.driver;
     const container = task.container;
-    task.driver = undefined;
-    task.container = undefined;
-    await Promise.allSettled([
+    const prepushAbort = task.prepushAbort;
+    prepushAbort?.abort();
+    const cleanup = await Promise.allSettled([
       driver?.abort() ?? Promise.resolve(),
       container?.stop() ?? Promise.resolve(),
     ]);
-    driver?.dispose();
+    if (cleanup[0].status === "fulfilled") {
+      if (task.driver === driver) {
+        task.driver = undefined;
+        driver?.dispose();
+      }
+    }
+    if (cleanup[1].status === "fulfilled" && task.container === container) {
+      task.container = undefined;
+    }
+    if (task.prepushAbort === prepushAbort) task.prepushAbort = undefined;
+    const failures = cleanup.flatMap((result, index) =>
+      result.status === "rejected"
+        ? [`${index === 0 ? "会话中止" : "容器回收"}: ${String(result.reason)}`]
+        : []);
+    if (failures.length) {
+      task.summary.detail = `已由 ${actor} 取消，但执行资源未能确认释放：`
+        + failures.join("；")
+        + "。同任务禁止重跑；服务重启会按 ownership 再清扫";
+      this.persist(task);
+      this.options.log?.(`任务 ${id} 取消清理不完整: ${failures.join(" | ")}`);
+    }
     // 等它的任务不许无限等(取消是终态):立刻跑一遍泵,把 blocked_by
     // 指向本单的排队任务如实清账,而不是等下一次碰巧有人触发泵。
     this.bypass(undefined, "任务泵", this.pump());
@@ -2529,8 +3076,26 @@ export class TaskService {
     this.queue = this.queue.filter((queued) => queued !== id);
   }
 
+  /** 暂停返回时旧 prepush Promise 可能还在跑 finally(销毁容器/释放槽)。
+   * 直接 tryDeliver 会被 preparePush 的防重锁认成“旧动作仍在处理”并
+   * 复用一个注定返回 false 的 Promise，之后再没人唤醒。先等旧锁自然
+   * 清掉，再以恢复后的 epoch 启动新 attempt。 */
+  private async resumePrePushVerification(
+    task: TaskState,
+    epoch: number,
+  ): Promise<void> {
+    const interrupted = task.prepushActive;
+    if (interrupted) await interrupted.catch(() => false);
+    if (!this.current(task, epoch)
+        || task.summary.status === "paused"
+        || task.summary.status === "pausing") return;
+    await this.tryDeliver(task, epoch);
+  }
+
   private current(task: TaskState, epoch: number): boolean {
-    return task.controlEpoch === epoch && task.summary.status !== "canceled";
+    return !this.shuttingDown
+      && task.controlEpoch === epoch
+      && task.summary.status !== "canceled";
   }
 
   /**
@@ -2583,17 +3148,67 @@ export class TaskService {
     return this.completionAttestation(task)?.complete ?? true;
   }
 
+  /** 终止/失败分支也必须串行确认容器删除。失败时保留 task.container，
+   * retry 会据此拒绝覆盖句柄，cancel/shutdown 仍可重试回收。 */
+  private async stopTaskContainer(
+    task: TaskState,
+    context: string,
+  ): Promise<string | undefined> {
+    const container = task.container;
+    if (!container) return undefined;
+    try {
+      await container.stop();
+      if (task.container === container) task.container = undefined;
+      return undefined;
+    } catch (error) {
+      const detail = `${context}容器未能确认释放: ${String(error)}`;
+      this.options.log?.(`任务 ${task.summary.id} ${detail}`);
+      return detail;
+    }
+  }
+
   private async finishPause(
     task: TaskState,
     from: TaskStatus,
   ): Promise<void> {
+    const epoch = task.controlEpoch;
     const driver = task.driver;
     const container = task.container;
-    task.driver = undefined;
-    task.container = undefined;
+    const prepushAbort = task.prepushAbort;
     task.pauseRequested = false;
-    driver?.dispose();
-    await (container?.stop() ?? Promise.resolve()).catch(() => undefined);
+    prepushAbort?.abort();
+    const cleanup = await Promise.allSettled([
+      driver?.abort() ?? Promise.resolve(),
+      container?.stop() ?? Promise.resolve(),
+    ]);
+    if (cleanup[0].status === "fulfilled") {
+      if (task.driver === driver) {
+        task.driver = undefined;
+        driver?.dispose();
+      }
+    }
+    if (cleanup[1].status === "fulfilled" && task.container === container) {
+      task.container = undefined;
+    }
+    if (task.prepushAbort === prepushAbort) task.prepushAbort = undefined;
+    // pause 等待资源清理期间可能又收到 cancel。后者换了 epoch 并拥有
+    // 最终状态解释权；旧 pause 绝不能把 canceled 覆盖回 paused。
+    if (task.controlEpoch !== epoch || task.summary.status === "canceled") return;
+    const failures = cleanup.flatMap((result, index) =>
+      result.status === "rejected"
+        ? [`${index === 0 ? "会话中止" : "容器回收"}: ${String(result.reason)}`]
+        : []);
+    if (failures.length) {
+      task.summary.status = "failed";
+      task.summary.detail = "暂停失败，执行资源未能确认释放："
+        + failures.join("；")
+        + "。同任务禁止重跑；可取消后重试清理或重启服务";
+      this.persist(task);
+      this.notifyOutcome(task);
+      this.options.log?.(`任务 ${task.summary.id} 暂停清理失败: `
+        + failures.join(" | "));
+      return;
+    }
     task.summary.status = "paused";
     task.summary.detail = from === "waiting_for_human"
       ? "已暂停，恢复后继续等待决定"
@@ -2613,6 +3228,7 @@ export class TaskService {
   }
 
   private async pump(): Promise<void> {
+    if (this.shuttingDown) return;
     const max = this.options.settings?.runtime().max_concurrent
       ?? this.options.maxConcurrent ?? 2;
     // 前置死透的排队任务先清账,不许无限等(哪怕队列里还有别的活可干,
@@ -3018,14 +3634,17 @@ export class TaskService {
       // 容器隔离:bash 进任务专属容器(工作区同路径挂载),
       // 起不来直接抛=任务 failed——静默降级回宿主是假隔离。
       if (this.options.isolation) {
-        const { image, volumes, memory, cpus, user } = this.options.isolation;
+        const {
+          image, volumes, memory, cpus, user, pidsLimit, labels,
+          readOnlyRoot, tmpfsHome, tmpfsTmp, network,
+          forwardEnvironment, stopGraceSeconds, managementTimeoutMs,
+        } = this.options.isolation;
         // 容器名带数据目录指纹:同 dataDir 重启后同名(孤儿可清扫),
         // 不同实例(测试与试跑并行)绝不同名——只按任务 id 命名时,
         // 另一实例的 rm -f 会把这边活着的容器当孤儿误杀(实测:
         // run7 续跑期间并行跑隔离测试,容器被杀,模型如实报告
         // "执行容器丢失",整单被迫收口)。
-        const instance = createHash("sha256")
-          .update(this.options.dataDir).digest("hex").slice(0, 6);
+        const instance = taskContainerInstance(this.options.dataDir).namePrefix;
         // host 模式的两条硬依赖也要进容器:内核插件根(转发壳硬编码
         // 其绝对路径,只读)与 Git 远端——但只有本地路径仓(演示裸仓)
         // 才需要挂载;URL 仓走网络,拿路径当挂载参数只会喂 docker 垃圾。
@@ -3038,10 +3657,31 @@ export class TaskService {
                 ? [`${effectiveRepo}:${effectiveRepo}`] : []),
             ]
           : [];
-        task.container = new TaskContainer(
-          image, cwd, `mfc-${instance}-${task.summary.id}`,
-          this.options.log,
-          [...hostMounts, ...(volumes ?? [])], { memory, cpus, user });
+        const mounts = this.taskContainerMounts(
+          task, [...hostMounts, ...(volumes ?? [])]);
+        task.container = this.createTaskContainer({
+          image,
+          workspace: cwd,
+          name: `mfc-${instance}-${task.summary.id}`,
+          log: this.options.log,
+          volumes: mounts.volumes,
+          limits: { memory, cpus, user, pidsLimit },
+          options: {
+            labels: {
+              ...(labels ?? {}),
+              "com.mae-flow-cloud.task": task.summary.id,
+              "com.mae-flow-cloud.role": "coding",
+            },
+            readOnlyRoot,
+            tmpfsHome,
+            tmpfsTmp,
+            network,
+            environment: mounts.environment,
+            forwardEnvironment,
+            stopGraceSeconds,
+            managementTimeoutMs,
+          },
+        });
         await task.container.start();
         if (!this.current(task, epoch)) {
           await task.container.stop().catch(() => undefined);
@@ -3078,6 +3718,7 @@ export class TaskService {
           workspace,
           cwd,
           log: this.options.log,
+          failClosed: Boolean(this.options.host),
         }),
         humanGate: task.humanGate,
         hostHooks,
@@ -3120,9 +3761,14 @@ export class TaskService {
         : task.driver.start(prompt), epoch);
     } catch (error) {
       if (!this.current(task, epoch)) return;
+      const driver = task.driver;
+      if (task.driver === driver) task.driver = undefined;
+      driver?.dispose();
+      const cleanupFailure = await this.stopTaskContainer(task, "启动失败后");
+      if (!this.current(task, epoch)) return;
       task.summary.status = "failed";
-      task.summary.detail = String(error);
-      this.bypass(task, "容器清理", task.container?.stop());
+      task.summary.detail = [String(error), cleanupFailure]
+        .filter(Boolean).join("；");
       this.persist(task);
       this.options.log?.(`任务 ${task.summary.id} 启动失败: ${String(error)}`);
     }
@@ -3356,20 +4002,18 @@ export class TaskService {
    * 仍把完整 status 纳入哈希，恢复时不会复用半截 attempt。 */
   private prePushRevision(task: TaskState): PrePushRevision {
     if (!task.cwd) throw new Error("任务没有代码工作区，不能执行推送前验证");
-    const head = spawnSync("git", ["rev-parse", "--verify", "HEAD"], {
-      cwd: task.cwd, encoding: "utf-8",
-    });
+    const head = runSafeWorktreeGit(
+      task.cwd, ["rev-parse", "--verify", "HEAD"]);
     const sha = String(head.stdout ?? "").trim();
     if (head.status !== 0 || !sha) {
       throw new Error(`推送前读取 HEAD 失败: ${String(head.stderr ?? "")}`);
     }
-    const status = spawnSync(
-      "git", [
+    const status = runSafeWorktreeGit(
+      task.cwd, [
         "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", ".",
         ":(exclude).mae-flow.json", ":(exclude).mae-flow-*",
         ":(exclude).mae-flow-work/**", ":(exclude).codecheckcli/**",
-      ],
-      { cwd: task.cwd, encoding: "utf-8" });
+      ]);
     if (status.status !== 0) {
       throw new Error(`推送前读取工作区失败: ${String(status.stderr ?? "")}`);
     }
@@ -3383,13 +4027,12 @@ export class TaskService {
 
   private prePushWorktreeClean(task: TaskState): boolean {
     if (!task.cwd) return false;
-    const status = spawnSync(
-      "git", [
+    const status = runSafeWorktreeGit(
+      task.cwd, [
         "status", "--porcelain=v1", "--untracked-files=all", "--", ".",
         ":(exclude).mae-flow.json", ":(exclude).mae-flow-*",
         ":(exclude).mae-flow-work/**", ":(exclude).codecheckcli/**",
-      ],
-      { cwd: task.cwd, encoding: "utf-8" });
+      ]);
     return status.status === 0 && !String(status.stdout ?? "").trim();
   }
 
@@ -3436,9 +4079,30 @@ export class TaskService {
   private async runCloudPrePushAgent(
     task: TaskState,
     request: PrePushRunRequest,
+    epoch: number,
+    attemptId: string,
   ): Promise<PrePushRunResult> {
     if (!task.cwd) throw new Error("推送前验证缺少代码工作区");
     if (task.driver) throw new Error("已有 Agent 会话在运行，不能启动推送前验证");
+    const isolation = this.options.isolation;
+    if (!isolation) {
+      throw new Error(
+        "推送前编译与 UT 必须在任务容器中执行；当前未配置隔离镜像，"
+        + "已拒绝回退宿主机",
+      );
+    }
+
+    // 正常收口路径会在 tryDeliver 前串行停净普通编码容器；恢复/异常
+    // 路径也在这里再兜一次。绝不能让两个容器同时写同一工作区。
+    const previousContainer = task.container;
+    if (previousContainer) {
+      await previousContainer.stop();
+      if (task.container === previousContainer) task.container = undefined;
+    }
+    if (!this.current(task, epoch)) {
+      throw new Error("任务已停止，拒绝启动推送前构建容器");
+    }
+
     const agentDir = join(task.summary.workspace, "pi-agent");
     mkdirSync(agentDir, { recursive: true });
     this.hardenAgentGitBoundary(agentDir, task.cwd);
@@ -3469,80 +4133,173 @@ export class TaskService {
     const eventLog = new EventLog(join(runRoot, "events.jsonl"));
     const transcript = new TranscriptStore(
       join(runRoot, "transcript.jsonl"), "main");
-    const driver = await CloudSession.create({
-      taskId: `${task.summary.id}:prepush:${request.round}`,
+    const instance = taskContainerInstance(this.options.dataDir).namePrefix;
+    const attempt = `r${request.round}-${request.sha.slice(0, 12)}`
+      .replace(/[^a-zA-Z0-9_.-]/g, "-");
+    const mounts = this.taskContainerMounts(task, isolation.volumes ?? []);
+    const container = this.createTaskContainer({
+      image: isolation.image,
       workspace: task.cwd,
-      agentDir,
-      hostSkillsDir: join(this.options.dataDir, "skills"),
-      repositorySkillPaths,
-      provider: task.summary.model_choice?.provider
-        ?? modelOverride.provider ?? this.options.provider,
-      model: task.summary.model_choice?.model
-        ?? modelOverride.model ?? this.options.model,
-      eventLog,
-      transcript,
-      gate: new GateService({
-        contract: createPrePushGateContract(this.options.contract),
-        workspace: task.cwd,
-        cwd: task.cwd,
-        log: this.options.log,
-      }),
-      humanGate: task.humanGate,
-      allowHumanQuestions: false,
-      compactAnchor: () => `推送前验证任务: ${task.summary.requirement}`,
+      // 名字按任务稳定：进程死在 attempt 中间，下一次启动/恢复会先
+      // ownership 复验并清掉同名残留；round/SHA 只进 label 与收据。
+      name: `mfc-${instance}-${task.summary.id}-prepush`,
       log: this.options.log,
+      volumes: mounts.volumes,
+      limits: {
+        memory: isolation.memory,
+        cpus: isolation.cpus,
+        user: isolation.user,
+        pidsLimit: isolation.pidsLimit,
+      },
+      options: {
+        labels: {
+          ...(isolation.labels ?? {}),
+          "com.mae-flow-cloud.task": task.summary.id,
+          "com.mae-flow-cloud.role": "prepush",
+          "com.mae-flow-cloud.prepush-round": String(request.round),
+          "com.mae-flow-cloud.sha": request.sha,
+        },
+        readOnlyRoot: isolation.readOnlyRoot,
+        tmpfsHome: isolation.tmpfsHome,
+        tmpfsTmp: isolation.tmpfsTmp,
+        network: isolation.network,
+        environment: mounts.environment,
+        forwardEnvironment: isolation.forwardEnvironment,
+        stopGraceSeconds: isolation.stopGraceSeconds,
+        managementTimeoutMs: isolation.managementTimeoutMs,
+      },
     });
-    task.driver = driver;
+    task.container = container;
+    const abortController = new AbortController();
+    task.prepushAbort = abortController;
+    const interrupted = new Promise<Outcome>((resolve) => {
+      const finish = () => resolve({
+        status: "session_ended",
+        reason: "prepush_interrupted",
+        detail: "推送前验证已由任务控制操作终止",
+      });
+      if (abortController.signal.aborted) finish();
+      else abortController.signal.addEventListener("abort", finish, { once: true });
+    });
+    const waitForTurn = (turn: Promise<Outcome>) =>
+      Promise.race([turn, interrupted]);
+    let driver: CloudSession | undefined;
+    const withExecution = (result: PrePushRunResult): PrePushRunResult => {
+      const metadata = container.metadata;
+      if (!metadata) return result;
+      const execution: PrePushExecutionAttestation = {
+        schema: PRE_PUSH_EXECUTION_SCHEMA,
+        attempt_id: attemptId,
+        sha: result.sha,
+        container_id: metadata.containerId,
+        image_reference: metadata.imageReference,
+        image_id: metadata.imageId,
+        image_digest: metadata.imageDigest,
+        network: metadata.network,
+        read_only_root: metadata.readOnlyRoot,
+        pids_limit: metadata.pidsLimit,
+        ...(metadata.memoryBytes !== undefined
+          ? { memory_bytes: metadata.memoryBytes } : {}),
+        ...(metadata.nanoCpus !== undefined
+          ? { nano_cpus: metadata.nanoCpus } : {}),
+        ...(metadata.user ? { user: metadata.user } : {}),
+        ...(metadata.startedAt ? { started_at: metadata.startedAt } : {}),
+        mount_destinations: metadata.mounts.map((mount) => mount.destination),
+      };
+      return { ...result, execution };
+    };
     try {
-      let outcome = await driver.start(prePushMission(request));
+      await container.start();
+      if (!this.current(task, epoch)) {
+        throw new Error("任务已停止，推送前构建容器不再执行命令");
+      }
+      driver = await CloudSession.create({
+        taskId: `${task.summary.id}:prepush:${request.round}`,
+        workspace: task.cwd,
+        agentDir,
+        hostSkillsDir: join(this.options.dataDir, "skills"),
+        repositorySkillPaths,
+        provider: task.summary.model_choice?.provider
+          ?? modelOverride.provider ?? this.options.provider,
+        model: task.summary.model_choice?.model
+          ?? modelOverride.model ?? this.options.model,
+        eventLog,
+        transcript,
+        gate: new GateService({
+          contract: createPrePushGateContract(this.options.contract),
+          workspace: task.cwd,
+          cwd: task.cwd,
+          log: this.options.log,
+          failClosed: Boolean(this.options.host),
+        }),
+        humanGate: task.humanGate,
+        allowHumanQuestions: false,
+        compactAnchor: () => `推送前验证任务: ${task.summary.requirement}`,
+        bashOperations: {
+          exec: (command, dir, execOptions) =>
+            container.exec(command, dir, execOptions),
+        },
+        log: this.options.log,
+      });
+      if (!this.current(task, epoch) || abortController.signal.aborted) {
+        driver.dispose();
+        throw new Error("任务已停止，推送前 Agent 不再启动");
+      }
+      task.driver = driver;
+      let outcome = await waitForTurn(driver.start(prePushMission(request)));
       for (let correction = 0; correction < 3; correction += 1) {
         if (outcome.status === "session_ended") {
-          return {
+          return withExecution({
             status: "infrastructure_failure",
             sha: this.prePushRevision(task).sha,
             message: outcome.detail ?? outcome.reason ?? "推送前会话异常结束",
-          };
+          });
         }
         const report = parsePrePushAgentReport(driver.finalReply());
         if (report && report.status !== "passed") {
-          return {
+          return withExecution({
             status: report.status,
             sha: this.prePushRevision(task).sha,
             message: report.summary,
             report,
-          };
+          });
         }
         const evidence = report
           ? verifyPrePushEvidence(eventLog.replay(), report)
           : "收口缺少合法的 <prepush-result> 结构";
         const dirty = !this.prePushWorktreeClean(task);
         if (report && !evidence && !dirty) {
-          return {
+          return withExecution({
             status: "passed",
             sha: this.prePushRevision(task).sha,
             message: report.summary,
             report,
-          };
+          });
         }
         if (correction === 2) {
-          return {
+          return withExecution({
             status: "code_failure",
             sha: this.prePushRevision(task).sha,
             message: [evidence, dirty ? "工作区仍有未提交业务改动" : ""]
               .filter(Boolean).join("；"),
-          };
+          });
         }
-        outcome = await driver.continueWith([
+        outcome = await waitForTurn(driver.continueWith([
           "推送前验证尚不能签发 PASS，请在当前专项会话继续处理。",
           evidence,
           dirty ? "git status 仍有业务改动：请提交后重新执行编译与 UT。" : "",
           "不要只重写结论；两项命令必须在最后一次代码修改后真实成功。",
-        ].filter(Boolean).join("\n"));
+        ].filter(Boolean).join("\n")));
       }
       throw new Error("推送前验证会话超过收口预算");
     } finally {
-      if (task.driver === driver) task.driver = undefined;
-      driver.dispose();
+      if (driver && task.driver === driver) task.driver = undefined;
+      if (task.prepushAbort === abortController) task.prepushAbort = undefined;
+      driver?.dispose();
+      if (task.container === container) task.container = undefined;
+      // 这是业务执行面的硬边界：无论模型成功、失败、暂停还是异常，
+      // 都等容器真正退出后才允许宿主进入 push。
+      await container.stop();
     }
   }
 
@@ -3586,15 +4343,23 @@ export class TaskService {
       baseline,
     };
     let result: PrePushRunResult;
+    const releaseBuildSlot = await this.acquirePrePushBuildSlot(task, epoch);
+    if (!releaseBuildSlot || !this.current(task, epoch)) {
+      releaseBuildSlot?.();
+      return false;
+    }
     try {
       result = await (this.options.prepush?.runner
-        ?? ((input) => this.runCloudPrePushAgent(task, input)))(request);
+        ?? ((input) => this.runCloudPrePushAgent(
+          task, input, epoch, attemptId)))(request);
     } catch (error) {
       result = {
         status: "infrastructure_failure",
         sha: this.prePushRevision(task).sha,
         message: `推送前验证执行失败: ${String(error)}`,
       };
+    } finally {
+      releaseBuildSlot();
     }
     if (!this.current(task, epoch)) return false;
 
@@ -3623,6 +4388,9 @@ export class TaskService {
     state = recordPrePushReport(
       state, attemptId, this.prePushDomainReport(result),
       new Date().toISOString());
+    if (state.state === "passed" && result.execution) {
+      state = attestPrePushExecution(state, result.execution);
+    }
     this.setPrePushState(task, state);
     const passed = Boolean(getReusablePushReceipt(state, finalRevision));
     if (passed) {
@@ -4546,68 +5314,166 @@ export class TaskService {
       this.notifyRepairStopped(task);
       return true;
     }
-    const git = (...args: string[]) => spawnSync(
-      "git", args, { cwd: task.cwd, encoding: "utf-8" });
-    const fetched = git("fetch", "origin", target);
-    if (fetched.status !== 0) {
-      task.summary.detail =
-        `冲突修复准备失败(fetch ${target}):${(fetched.stderr || "").slice(0, 300)}`;
-      this.persist(task);
-      return true; // 环境问题不硬闯,留痕等人(或下一轮监控重试)
-    }
-    const beforeMerge = (git("rev-parse", "HEAD").stdout || "").trim();
-    const merged = git("merge", "--no-edit", `origin/${target}`);
-    if (merged.status === 0) {
-      const afterMerge = (git("rev-parse", "HEAD").stdout || "").trim();
-      if (beforeMerge && afterMerge === beforeMerge) {
-        // 新提交已经包含目标分支，但平台的 conflict gate 可能还没刷新。
-        // 这不是“修复会话没有提交”：不写 last_sha、不退出监控，让
-        // watchMerge 按原轮询节奏继续看门禁/MR。旧实现会把当前 SHA
-        // 记成已修，再下一拍误命中同 SHA 刹车，导致合入后无人收口。
-        task.summary.detail = "本地已无冲突，等待平台刷新冲突门禁";
-        this.persist(task);
-        return false;
+    const cwd = task.cwd;
+    let remoteUrl: string;
+    try {
+      const configured = task.summary.repo_url ?? this.effectiveDefaultRepo();
+      if (!configured) throw new Error("任务没有权威代码仓地址");
+      validateRepositoryAddress(configured);
+      if (/^[a-z][a-z\d+.-]*:/i.test(configured)
+          && !/^(?:https?|file):\/\//i.test(configured)) {
+        throw new Error("只允许 HTTPS 或本地仓传输");
       }
-      // 干净合并:没有真冲突(门禁可能滞后)。统一交给 tryDeliver 的
-      // host-only 推送与远端 SHA 复核，避免这里另开一条无收据的旁路。
+      remoteUrl = /^(?:https?|file):\/\//i.test(configured)
+        ? configured : resolve(configured);
+    } catch (error) {
+      task.summary.detail = `冲突修复准备失败: ${String(error)}`;
+      this.persist(task);
+      return true;
+    }
+    const credential = this.options.gitCredential?.(
+      task.summary.luban_account);
+    let sandbox: ReturnType<TaskService["prepareHostGitSandbox"]>;
+    try {
+      sandbox = this.prepareHostGitSandbox(credential);
+    } catch (error) {
+      task.summary.detail = `冲突修复 Git 沙箱创建失败: ${String(error)}`;
+      this.persist(task);
+      return true;
+    }
+    let gitView: ReturnType<typeof createSafeGitView>;
+    try {
+      gitView = createSafeGitView(cwd);
+    } catch (error) {
+      this.cleanupHostGitCredential(sandbox);
+      task.summary.detail = `冲突修复安全 Git 视图创建失败: ${String(error)}`;
+      this.persist(task);
+      return true;
+    }
+    const identityName = credential?.username
+      ?? task.summary.luban_account ?? "mae-flow-cloud";
+    const identityEmail = credential?.email
+      ?? `${identityName.replace(/[^a-zA-Z0-9_.+-]/g, "-")}@localhost`;
+    const worktreeArgs = [
+      ...sandbox.args,
+      "-c", `safe.directory=${resolve(cwd)}`,
+      "-c", "core.fsmonitor=false",
+      "-c", "commit.gpgSign=false",
+      "-c", `user.name=${identityName}`,
+      "-c", `user.email=${identityEmail}`,
+    ];
+    // fetch/merge 看真实 refs/index/objects，但 config 来自空代理 gitdir。
+    // 因而 Agent 写入的 fsmonitor、filter、merge driver、url.insteadOf 与
+    // credential helper 都不可能在带宿主权限/短期令牌的进程里执行。
+    const worktreeEnv = gitView.environment(sandbox.env);
+    const git = (...args: string[]) => spawnSync(
+      "git", [...worktreeArgs, ...args], {
+        cwd, encoding: "utf-8", env: worktreeEnv,
+      });
+    try {
+      const targetCheck = git("check-ref-format", "--branch", target);
+      if (targetCheck.status !== 0) {
+        task.summary.detail = `冲突修复准备失败:目标分支名不合法 ${target}`;
+        this.persist(task);
+        return true;
+      }
+      const fetched = git(
+        "fetch", "--no-tags", "--no-recurse-submodules", remoteUrl,
+        `+refs/heads/${target}:refs/remotes/origin/${target}`);
+      if (fetched.status !== 0) {
+        task.summary.detail = `冲突修复准备失败(fetch ${target}):`
+          + `${String(fetched.stderr || "").slice(0, 300)}`;
+        this.persist(task);
+        return true; // 环境问题不硬闯,留痕等人(或下一轮监控重试)
+      }
+      const beforeMerge = String(
+        git("rev-parse", "HEAD").stdout || "").trim();
+      const merged = git("merge", "--no-edit", `origin/${target}`);
+      if (merged.status === 0) {
+        const afterMerge = String(
+          git("rev-parse", "HEAD").stdout || "").trim();
+        if (beforeMerge && afterMerge === beforeMerge) {
+          // 新提交已经包含目标分支，但平台的 conflict gate 可能还没刷新。
+          // 这不是“修复会话没有提交”：不写 last_sha、不退出监控，让
+          // watchMerge 按原轮询节奏继续看门禁/MR。
+          task.summary.detail = "本地已无冲突，等待平台刷新冲突门禁";
+          this.persist(task);
+          return false;
+        }
+        // 干净合并:没有真冲突(门禁可能滞后)。统一交给 tryDeliver 的
+        // host-only 推送与远端 SHA 复核，避免另开无收据旁路。
+        loop.kind = "conflict";
+        loop.last_sha = sha;
+        task.summary.detail = "与目标分支干净合并,等待宿主推送并触发新流水线";
+        this.persist(task);
+        setImmediate(() => void this.tryDeliver(task, epoch));
+        return true;
+      }
+      const conflicted = String(git(
+        "diff", "--no-ext-diff", "--no-textconv",
+        "--name-only", "--diff-filter=U").stdout || "")
+        .trim().split("\n").filter(Boolean);
+      if (!conflicted.length) {
+        // merge 失败却没有冲突文件 = 环境怪状(本地脏文件之类),
+        // 别把 agent 派进一个说不清的现场。
+        git("merge", "--abort");
+        task.summary.detail = "merge 失败但无冲突文件,请人工:"
+          + `${String(merged.stderr || "").slice(0, 300)}`;
+        this.persist(task);
+        return true;
+      }
+      // merge 的 config 必须隔离，但冲突会话随后使用真实 `.git`。将 Git
+      // 在可信代理 gitdir 中生成的最小 merge 状态复制回真实 gitdir；
+      // index/objects/refs 本来就绑定真实仓。若目标被 Agent 换成软链，
+      // 先在代理视图里 abort，再 fail-closed，绝不跟随它写宿主文件。
+      try {
+        for (const name of [
+          "MERGE_HEAD", "MERGE_MODE", "MERGE_MSG", "ORIG_HEAD",
+        ]) {
+          const source = join(gitView.proxyGitDir, name);
+          if (!existsSync(source)) continue;
+          const sourceInfo = lstatSync(source);
+          if (!sourceInfo.isFile() || sourceInfo.isSymbolicLink()) {
+            throw new Error(`代理 Git 状态 ${name} 不是普通文件`);
+          }
+          const targetPath = join(gitView.repositoryGitDir, name);
+          if (existsSync(targetPath)) {
+            const targetInfo = lstatSync(targetPath);
+            if (!targetInfo.isFile() || targetInfo.isSymbolicLink()) {
+              throw new Error(`任务 Git 状态 ${name} 不是普通文件`);
+            }
+          }
+          writeFileSync(targetPath, readFileSync(source), { mode: 0o600 });
+        }
+      } catch (error) {
+        git("merge", "--abort");
+        task.summary.detail = `冲突现场安全落盘失败: ${String(error)}`;
+        this.persist(task);
+        return true;
+      }
       loop.kind = "conflict";
+      loop.round = 0; // 冲突触发同样清零 CI 重试
       loop.last_sha = sha;
-      task.summary.detail = "与目标分支干净合并,等待宿主推送并触发新流水线";
-      this.persist(task);
-      setImmediate(() => void this.tryDeliver(task, epoch));
+      loop.state = "repairing";
+      this.enqueueRepair(task,
+        [
+          `MR 与目标分支 ${target} 冲突,解决它是你此刻唯一的使命:`,
+          `- 宿主已在安全 Git 沙箱中准备 origin/${target} 的真实冲突现场,`,
+          `  冲突标记(<<<<<<< ======= >>>>>>>)位于:`,
+          ...conflicted.map((file) => `  ${file}`),
+          `- 逐个文件解决:保留双方必要改动,把标记删干净;拿不准语义时`
+          + `读两边的提交历史(git log)再定,不许无脑选一边。`,
+          `- 解完 git add 全部冲突文件,git commit 完成合并提交`
+          + `(用默认合并信息即可)。不要读取或索要个人 Git 令牌，也不要`
+          + ` push；Cloud 宿主会在会话释放后统一推送。`,
+          `- 不要 rebase、不要 force push、不要动无关文件。`,
+        ].join("\n"),
+        `与 ${target} 冲突(${conflicted.length} 个文件),专职会话解决中`);
       return true;
+    } finally {
+      gitView.cleanup();
+      this.cleanupHostGitCredential(sandbox);
     }
-    const conflicted = (git(
-      "diff", "--name-only", "--diff-filter=U").stdout || "")
-      .trim().split("\n").filter(Boolean);
-    if (!conflicted.length) {
-      // merge 失败却没有冲突文件 = 环境怪状(本地脏文件之类),
-      // 别把 agent 派进一个说不清的现场。
-      git("merge", "--abort");
-      task.summary.detail =
-        `merge 失败但无冲突文件,请人工:${(merged.stderr || "").slice(0, 300)}`;
-      this.persist(task);
-      return true;
-    }
-    loop.kind = "conflict";
-    loop.round = 0; // 冲突触发同样清零 CI 重试
-    loop.last_sha = sha;
-    loop.state = "repairing";
-    this.enqueueRepair(task,
-      [
-        `MR 与目标分支 ${target} 冲突,解决它是你此刻唯一的使命:`,
-        `- 宿主已在工作区执行 git merge origin/${target},`
-        + `真实的冲突标记(<<<<<<< ======= >>>>>>>)已经在下列文件里:`,
-        ...conflicted.map((file) => `  ${file}`),
-        `- 逐个文件解决:保留双方必要改动,把标记删干净;拿不准语义时`
-        + `读两边的提交历史(git log)再定,不许无脑选一边。`,
-        `- 解完 git add 全部冲突文件,git commit 完成合并提交`
-        + `(用默认合并信息即可)。不要读取或索要个人 Git 令牌，也不要`
-        + ` push；Cloud 宿主会在会话释放后统一推送。`,
-        `- 不要 rebase、不要 force push、不要动无关文件。`,
-      ].join("\n"),
-      `与 ${target} 冲突(${conflicted.length} 个文件),专职会话解决中`);
-    return true;
   }
 
   /** 检视回复发布(批3 收尾):修复会话收口后,把 ../review_replies.md
@@ -4718,13 +5584,18 @@ export class TaskService {
         source: this.effectivePlatformUrl() ?? "",
         url: delivery.mr_url ?? "",
       }, null, 2));
+      const gitView = createSafeGitView(task.cwd);
       const result = await new Promise<
         { code: number | null; out: string; err: string }>(
         (resolve) => {
           const child = spawn(this.options.host!.python ?? "python3",
             [join(kernelRoot, "scripts", "mae-flow.py"),
              "pipeline", "record", "--file", factsPath],
-            { cwd: task.cwd!, stdio: ["ignore", "pipe", "pipe"] });
+            {
+              cwd: task.cwd!,
+              stdio: ["ignore", "pipe", "pipe"],
+              env: gitView.environment(),
+            });
           let out = "";
           let err = "";
           child.stdout.setEncoding("utf-8");
@@ -4741,7 +5612,7 @@ export class TaskService {
             clearTimeout(timer);
             resolve({ code: null, out, err });
           });
-        });
+        }).finally(() => gitView.cleanup());
       // 内核约定:末行是机器可读的裁决 JSON(quality.pipeline 原文)。
       const lastLine = result.out.trim().split("\n").at(-1) ?? "";
       let record: Record<string, unknown> | undefined;
@@ -5067,7 +5938,7 @@ export class TaskService {
   }
 
   private cleanupHostGitCredential(
-    prepared: { dir: string; helper: string } | undefined,
+    prepared: { dir: string } | undefined,
   ): void {
     if (!prepared) return;
     try {
@@ -5078,6 +5949,71 @@ export class TaskService {
     }
   }
 
+  /** Host push/ls-remote 不得继承 Agent 可写的仓库配置或部署机用户配置。
+   *
+   * 工作区里的 .git/config、hooks、origin 都属于不可信输入：Agent 为了
+   * 正常开发必须能写它们，但宿主传输不能因此执行 hook、credential
+   * helper、ext remote helper，或被 url.*.insteadOf 改道。这里给一次
+   * 交付动作建全新的 HOME/全局配置/askpass 边界；真正的 push 还会从
+   * 一个临时 bare 仓发起，从物理上不读取工作区 .git/config。 */
+  private prepareHostGitSandbox(
+    credential: { username: string; password: string } | undefined,
+  ): {
+    dir: string;
+    helper?: string;
+    args: string[];
+    env: NodeJS.ProcessEnv;
+  } {
+    const prepared = credential
+      ? this.prepareHostGitCredential(credential) : undefined;
+    const dir = prepared?.dir ?? mkdtempSync(join(tmpdir(), "mae-flow-git-"));
+    chmodSync(dir, 0o700);
+    const home = join(dir, "home");
+    const xdg = join(dir, "xdg");
+    mkdirSync(home, { mode: 0o700 });
+    mkdirSync(xdg, { mode: 0o700 });
+    const globalConfig = join(dir, "global.gitconfig");
+    const systemConfig = join(dir, "system.gitconfig");
+    writeFileSync(globalConfig, "");
+    writeFileSync(systemConfig, "");
+    chmodSync(globalConfig, 0o600);
+    chmodSync(systemConfig, 0o600);
+    const askpass = join(dir, "reject-askpass.sh");
+    writeFileSync(askpass, "#!/bin/sh\nexit 1\n");
+    chmodSync(askpass, 0o700);
+
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    // Git 的环境配置注入优先级高于文件配置。部署进程若意外带了这些
+    // 变量，不能让它们越过下面的 -c 硬边界；工作区定位类变量同理。
+    for (const key of Object.keys(env)) {
+      if (/^GIT_CONFIG$/i.test(key)
+          || /^GIT_CONFIG_(?:COUNT|KEY_\d+|VALUE_\d+|PARAMETERS)$/i.test(key)
+          || /^(?:GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR|GIT_INDEX_FILE|GIT_OBJECT_DIRECTORY|GIT_ALTERNATE_OBJECT_DIRECTORIES|GIT_EXEC_PATH|GIT_TEMPLATE_DIR|GIT_SSH|GIT_SSH_COMMAND|GIT_PROXY_COMMAND)$/i.test(key)) {
+        delete env[key];
+      }
+    }
+    Object.assign(env, {
+      HOME: home,
+      XDG_CONFIG_HOME: xdg,
+      GIT_CONFIG_GLOBAL: globalConfig,
+      GIT_CONFIG_SYSTEM: systemConfig,
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_TERMINAL_PROMPT: "0",
+      GIT_ASKPASS: askpass,
+      SSH_ASKPASS: askpass,
+      SSH_ASKPASS_REQUIRE: "never",
+      GCM_INTERACTIVE: "Never",
+    });
+    const args = [
+      "-c", "core.hooksPath=/dev/null",
+      "-c", "protocol.ext.allow=never",
+      // 空项先清除任何低优先级 helper；个人令牌只交给本次临时 helper。
+      "-c", "credential.helper=",
+      ...(prepared ? ["-c", `credential.helper=${prepared.helper}`] : []),
+    ];
+    return { dir, helper: prepared?.helper, args, env };
+  }
+
   /** 新任务和旧任务恢复都执行：清掉历史版本留在 agentDir / repo config
    * 的 helper，并把 origin pushurl 改成必失败地址。Agent 可以读写/提交，
    * 但拿不到凭据也无法传输；宿主 push 使用显式干净 URL，不走 pushurl。 */
@@ -5086,29 +6022,39 @@ export class TaskService {
       rmSync(join(agentDir, name), { force: true });
     }
     if (!cwd || !existsSync(join(cwd, ".git"))) return;
-    spawnSync("git", ["config", "--local", "--unset-all", "credential.helper"],
-      { cwd, encoding: "utf-8" });
+    const view = createSafeGitView(cwd);
+    const configPath = join(view.repositoryGitDir, "config");
+    view.cleanup();
+    const configInfo = lstatSync(configPath);
+    if (!configInfo.isFile() || configInfo.isSymbolicLink()
+        || realpathSync(configPath) !== configPath) {
+      throw new Error("Git config 不是任务仓内的普通文件，拒绝宿主改写");
+    }
+    // `git config --file` 不做仓库发现，也不读取 include；相比 --local /
+    // `git remote`，不会触发 Agent 写入的 fsmonitor/filter/url.* 配置。
+    const config = (...args: string[]) => spawnSync(
+      "git", ["config", "--file", configPath, ...args], {
+        encoding: "utf-8",
+        env: safeGitEnvironment(),
+      });
+    config("--unset-all", "credential.helper");
     // clone 会照录带 userinfo 的 URL；即便部署误把 token 写进 repo_url，
     // 也必须在 Agent 进入前从 repo config 擦掉。
-    const origin = spawnSync("git", ["remote", "get-url", "origin"],
-      { cwd, encoding: "utf-8" });
+    const origin = config("--get", "remote.origin.url");
     const rawOrigin = String(origin.stdout ?? "").trim();
     if (origin.status === 0 && rawOrigin) {
       const cleanOrigin = this.cleanRemoteUrl(rawOrigin);
       if (cleanOrigin !== rawOrigin) {
-        spawnSync("git", ["remote", "set-url", "origin", cleanOrigin],
-          { cwd, encoding: "utf-8" });
+        config("--replace-all", "remote.origin.url", cleanOrigin);
       }
     }
-    const existingPush = spawnSync(
-      "git", ["config", "--local", "--get-all", "remote.origin.pushurl"],
-      { cwd, encoding: "utf-8" });
+    const existingPush = config("--get-all", "remote.origin.pushurl");
     // 跨仓分析克隆已有更强的只读标记；不能用“宿主可推”的普通执行
     // 标记覆盖它。两者都指向 /dev/null，但语义必须保留下来供恢复和
     // 部署自检区分。
     if (!String(existingPush.stdout ?? "").includes("mae-flow-readonly")) {
-      spawnSync("git", ["config", "--local", "remote.origin.pushurl",
-        "/dev/null/mae-flow-host-owned"], { cwd, encoding: "utf-8" });
+      config("--replace-all", "remote.origin.pushurl",
+        "/dev/null/mae-flow-host-owned");
     }
   }
 
@@ -5130,60 +6076,80 @@ export class TaskService {
       throw new Error("安全拒绝：Agent 会话仍在，不能执行宿主 Git 推送");
     }
     if (!task.cwd) throw new Error("任务没有代码工作区，不能推送");
-    const checked = spawnSync(
-      "git", ["check-ref-format", "--branch", branch],
-      { cwd: task.cwd, encoding: "utf-8" });
-    if (checked.status !== 0) {
-      throw new Error(`分支名不合法，拒绝推送: ${branch}`);
+    // 交付目标是下单/部署事实，不是 Agent 可改的 remote.origin.url。
+    // 无 scheme 的本地演示仓按服务进程 cwd 解析，避免切到临时 bare 仓
+    // 后相对路径含义漂移。
+    const configuredRemote = task.summary.repo_url
+      ?? this.effectiveDefaultRepo();
+    if (!configuredRemote) throw new Error("任务没有权威代码仓地址，拒绝推送");
+    validateRepositoryAddress(configuredRemote);
+    if (/^[a-z][a-z\d+.-]*:/i.test(configuredRemote)
+        && !/^(?:https?|file):\/\//i.test(configuredRemote)) {
+      throw new Error("代码仓传输协议不受支持，宿主只允许 HTTPS 或本地仓");
     }
-    const head = spawnSync("git", ["rev-parse", "--verify", "HEAD"],
-      { cwd: task.cwd, encoding: "utf-8" });
-    const sha = String(head.stdout ?? "").trim();
-    if (head.status !== 0 || !sha) {
-      throw new Error(`读取待推送 HEAD 失败: ${String(head.stderr ?? "")}`);
-    }
-    const remoteResult = spawnSync("git", ["remote", "get-url", "origin"],
-      { cwd: task.cwd, encoding: "utf-8" });
-    const remoteUrl = String(remoteResult.stdout ?? "").trim();
-    if (remoteResult.status !== 0 || !remoteUrl) {
-      throw new Error(`读取 origin 地址失败: ${String(remoteResult.stderr ?? "")}`);
-    }
+    const remoteUrl = /^(?:https?|file):\/\//i.test(configuredRemote)
+      ? configuredRemote : resolve(configuredRemote);
     const credential = this.options.gitCredential?.(
       task.summary.luban_account);
-    const prepared = credential
-      ? this.prepareHostGitCredential(credential)
-      : undefined;
-    const authArgs = prepared
-      ? ["-c", "credential.helper=", "-c",
-         `credential.helper=${prepared.helper}`]
-      : [];
+    const sandbox = this.prepareHostGitSandbox(credential);
+    let gitView: ReturnType<typeof createSafeGitView> | undefined;
     const ref = `refs/heads/${branch}`;
     try {
+      gitView = createSafeGitView(task.cwd);
+      const transportGit = (
+        args: string[], extraEnv?: NodeJS.ProcessEnv,
+      ) => spawnSync(
+        "git", [...sandbox.args, ...args], {
+          encoding: "utf-8",
+          env: { ...sandbox.env, ...extraEnv },
+        });
+      const worktreeGit = (args: string[]) => spawnSync(
+        "git", [...sandbox.args, ...args], {
+          cwd: task.cwd,
+          encoding: "utf-8",
+          env: gitView!.environment(sandbox.env),
+        });
+      const checked = transportGit(["check-ref-format", "--branch", branch]);
+      if (checked.status !== 0) {
+        throw new Error(`分支名不合法，拒绝推送: ${branch}`);
+      }
+      // 只从工作区读取要交付的对象/HEAD；传输在新建 bare 仓中进行，
+      // 因而工作区 hooks、origin、url.*、protocol.*、helper 全部不生效。
+      const head = worktreeGit(["rev-parse", "--verify", "HEAD"]);
+      const sha = String(head.stdout ?? "").trim();
+      if (head.status !== 0 || !sha) {
+        throw new Error(`读取待推送 HEAD 失败: ${String(head.stderr ?? "")}`);
+      }
+      const objects = gitView.objectDirectory;
+      const staging = join(sandbox.dir, "transport.git");
+      const initialized = transportGit(["init", "--quiet", "--bare", staging]);
+      if (initialized.status !== 0) {
+        throw new Error(`创建宿主传输仓失败: ${String(initialized.stderr ?? "")}`);
+      }
+      const objectEnv = { GIT_ALTERNATE_OBJECT_DIRECTORIES: objects };
+      const objectCheck = transportGit([
+        `--git-dir=${staging}`, "cat-file", "-e", `${sha}^{commit}`,
+      ], objectEnv);
+      if (objectCheck.status !== 0) {
+        throw new Error("待推送 HEAD 不是可读取的提交对象");
+      }
       const pushed = spawnSync("git", [
-        ...authArgs, "push", "--porcelain", remoteUrl, `HEAD:${ref}`,
+        ...sandbox.args, `--git-dir=${staging}`, "push", "--no-verify",
+        "--porcelain", remoteUrl, `${sha}:${ref}`,
       ], {
-        cwd: task.cwd,
         encoding: "utf-8",
-        env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+        env: { ...sandbox.env, ...objectEnv },
       });
       if (pushed.status !== 0) {
         const stderrText = String(pushed.stderr ?? pushed.stdout);
-        // 老单的 origin 若是 SSH 地址,报错原文是一句和凭据链对不上的
-        // "publickey"——把因果说全,省得排障从零猜起(内网实锤:查了
-        // 半天才发现是下单时填了 SSH 地址)。新单已在下单口拒收 SSH。
-        const sshHint = /publickey/i.test(stderrText)
-            && !/^https?:\/\//i.test(remoteUrl)
-          ? "(origin 是 SSH 地址,而宿主凭据是 HTTPS 个人令牌——在任务"
-            + "工作区把 origin 改成 HTTPS 地址后重跑;新单请直接填 HTTPS)"
-          : "";
-        throw new Error(`宿主推送失败: ${stderrText}${sshHint}`);
+        throw new Error(`宿主推送失败: ${stderrText}`);
       }
       const verified = spawnSync("git", [
-        ...authArgs, "ls-remote", "--heads", remoteUrl, ref,
+        ...sandbox.args, `--git-dir=${staging}`,
+        "ls-remote", "--heads", remoteUrl, ref,
       ], {
-        cwd: task.cwd,
         encoding: "utf-8",
-        env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+        env: sandbox.env,
       });
       const remoteSha = String(verified.stdout ?? "").trim().split(/\s+/)[0];
       if (verified.status !== 0 || remoteSha !== sha) {
@@ -5195,7 +6161,8 @@ export class TaskService {
         sha, ref, remote: "origin", url: this.cleanRemoteUrl(remoteUrl),
       };
     } finally {
-      this.cleanupHostGitCredential(prepared);
+      gitView?.cleanup();
+      this.cleanupHostGitCredential(sandbox);
     }
   }
 
@@ -5506,10 +6473,14 @@ export class TaskService {
       await this.settleTurn(task, turn, epoch);
     } catch (error) {
       if (!this.current(task, epoch)) return;
+      const driver = task.driver;
+      if (task.driver === driver) task.driver = undefined;
+      driver?.dispose();
+      const cleanupFailure = await this.stopTaskContainer(task, "收口异常后");
+      if (!this.current(task, epoch)) return;
       task.summary.status = "failed";
-      task.summary.detail = `本轮收口时出错: ${String(error)}`;
-      task.driver?.dispose();
-      this.bypass(task, "容器清理", task.container?.stop());
+      task.summary.detail = `本轮收口时出错: ${String(error)}`
+        + (cleanupFailure ? `；${cleanupFailure}` : "");
       this.persist(task);
       this.notifyOutcome(task);
       this.options.log?.(
@@ -5603,11 +6574,16 @@ export class TaskService {
           // 消失或状态损坏时宁可显式失败，也不能 tryDeliver 后把 running
           // 兜成 completed。failed 可由人工重跑从 current 原地恢复。
           task.lastReply = task.driver?.finalReply();
-          task.driver?.dispose();
-          this.bypass(task, "容器清理", task.container?.stop());
+          const earlyDriver = task.driver;
+          if (task.driver === earlyDriver) task.driver = undefined;
+          earlyDriver?.dispose();
+          const cleanupFailure = await this.stopTaskContainer(
+            task, "Agent 提前结束后");
+          if (!this.current(task, epoch)) break;
           task.mission = undefined;
           task.summary.status = "failed";
-          task.summary.detail = `Agent 提前结束，${beforeDelivery.reason}`;
+          task.summary.detail = `Agent 提前结束，${beforeDelivery.reason}`
+            + (cleanupFailure ? `；${cleanupFailure}` : "");
           this.persist(task);
           this.notifyOutcome(task);
           break;
@@ -5617,9 +6593,13 @@ export class TaskService {
         task.lastReply = task.driver?.finalReply();
         task.driver?.dispose();
         // host push 的硬前提：不仅调用 dispose，还要先从任务状态移除
-        // 会话句柄。pushFromHost 会再次校验，防未来改动把传输挪回会话期。
+        // 会话句柄，还要串行停净普通编码容器。异步 fire-and-forget 会
+        // 让旧容器和紧接着启动的 prepush attempt 同时写一个 workspace。
         task.driver = undefined;
-        this.bypass(task, "容器清理", task.container?.stop());
+        const completedContainer = task.container;
+        await (completedContainer?.stop() ?? Promise.resolve());
+        if (task.container === completedContainer) task.container = undefined;
+        if (!this.current(task, epoch)) break;
         // 专项使命到这儿才算消费掉:会话真做完了。早清会让"修一半
         // 被重启"的重建会话拿不到使命。
         task.mission = undefined;
@@ -5672,10 +6652,14 @@ export class TaskService {
           await this.finishPause(task, "running");
           break;
         }
+        const endedDriver = task.driver;
+        if (task.driver === endedDriver) task.driver = undefined;
+        endedDriver?.dispose();
+        const cleanupFailure = await this.stopTaskContainer(task, "会话异常结束后");
+        if (!this.current(task, epoch)) break;
         task.summary.status = "failed";
-        task.summary.detail = outcome.detail ?? outcome.reason;
-        task.driver?.dispose();
-        this.bypass(task, "容器清理", task.container?.stop());
+        task.summary.detail = (outcome.detail ?? outcome.reason)
+          + (cleanupFailure ? `；${cleanupFailure}` : "");
         this.persist(task);
         this.notifyOutcome(task);
         break;

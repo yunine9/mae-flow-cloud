@@ -9,6 +9,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  PRE_PUSH_EXECUTION_SCHEMA,
+  attestPrePushExecution,
   beginPrePushAttempt,
   canPushRevision,
   createPrePushVerification,
@@ -291,4 +293,34 @@ test("恢复遇到坏账或伪造 receipt 时 fail-closed 重新验证", () => {
   assert.equal(restored.round, 0);
   assert.equal(restored.receipt, undefined);
   assert.equal(canPushRevision(restored, REVISION), false);
+});
+
+test("容器镜像与资源事实绑定同一 SHA/attempt，错配不能混入收据", () => {
+  const passed = pass(createPrePushVerification(REVISION, at(0)), 1);
+  const attempt = passed.receipt!.checks.compile.attempt_id;
+  const attested = attestPrePushExecution(passed, {
+    schema: PRE_PUSH_EXECUTION_SCHEMA,
+    attempt_id: attempt,
+    sha: REVISION.sha,
+    container_id: "container-1",
+    image_reference: "internal/builder:2026.08",
+    image_id: `sha256:${"b".repeat(64)}`,
+    image_digest: `internal/builder@sha256:${"c".repeat(64)}`,
+    network: "bridge",
+    read_only_root: true,
+    pids_limit: 512,
+    memory_bytes: 3 * 1024 ** 3,
+    nano_cpus: 2 * 10 ** 9,
+    user: "10001:10001",
+    mount_destinations: ["/cache/npm", "/workspace", "/cache/maven"],
+  });
+  assert.equal(attested.receipt?.execution?.image_digest,
+    `internal/builder@sha256:${"c".repeat(64)}`);
+  assert.deepEqual(attested.receipt?.execution?.mount_destinations,
+    ["/cache/maven", "/cache/npm", "/workspace"]);
+  assert.equal(canPushRevision(attested, REVISION), true);
+  assert.throws(() => attestPrePushExecution(passed, {
+    ...attested.receipt!.execution!,
+    sha: "different-sha",
+  }), /不匹配/);
 });

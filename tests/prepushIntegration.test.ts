@@ -11,8 +11,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  existsSync,
   mkdtempSync,
-  readFileSync,
+  renameSync,
   writeFileSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -26,6 +27,7 @@ import type {
   PrePushRunRequest,
   PrePushRunner,
 } from "../src/prepushAgent.ts";
+import { FakeTaskContainerHarness } from "./support/fakeTaskContainer.ts";
 
 const KERNEL_ROOT = (() => {
   const found = discoverKernelRoot(process.cwd());
@@ -50,9 +52,9 @@ function sourceRepo(): string {
   return cwd;
 }
 
-function deliveryScenes(brokenOrigin = false): Scene[] {
-  const breakPush = brokenOrigin
-    ? "git remote set-url origin /nonexistent/mfc-prepush-origin && "
+function deliveryScenes(breakTransport = false, authoritativeRepo?: string): Scene[] {
+  const breakPush = breakTransport
+    ? `mv '${authoritativeRepo}' '${authoritativeRepo}.offline' && `
     : "";
   return [
     { tool: { name: "bash", input: { command:
@@ -165,7 +167,8 @@ test("prepush 已通过后 host push 网络重试同一 SHA 不重复调用 Agen
   const platform = new FakeGitPlatform();
   platform.initBare(sourceRepo(), mkdtempSync(join(tmpdir(), "mfc-prepush-p-")));
   await platform.start();
-  const model = new ScriptedModelServer(deliveryScenes(true));
+  const model = new ScriptedModelServer(
+    deliveryScenes(true, platform.barePath));
   await model.start();
   const calls: PrePushRunRequest[] = [];
   const service = serviceWithRunner(platform, model, async (request) => {
@@ -184,9 +187,7 @@ test("prepush 已通过后 host push 网络重试同一 SHA 不重复调用 Agen
       .includes("宿主推送失败"), "第一次 host push 失败");
     assert.equal(calls.length, 1, "首次 push 前应完成一次 prepush");
 
-    const saved = JSON.parse(readFileSync(
-      join(service.get(id)!.workspace, "task.json"), "utf-8"));
-    git(String(saved.cwd), "remote", "set-url", "origin", platform.barePath);
+    renameSync(`${platform.barePath}.offline`, platform.barePath);
 
     await until(() => service.get(id)!.status === "await_merge",
       "同 SHA 传输自愈后完成交付");
@@ -198,6 +199,10 @@ test("prepush 已通过后 host push 网络重试同一 SHA 不重复调用 Agen
     assert.equal(platform.pipelines.length, 1,
       "网络重试成功后只触发一条绑定该 SHA 的流水线");
   } finally {
+    if (!existsSync(platform.barePath)
+        && existsSync(`${platform.barePath}.offline`)) {
+      renameSync(`${platform.barePath}.offline`, platform.barePath);
+    }
     await model.stop();
     await platform.stop();
   }
@@ -270,6 +275,7 @@ test("原生 prepush 会话修复提交后把 PASS 收据绑定最终 HEAD", asy
   const model = new ScriptedModelServer(
     [...deliveryScenes(), ...prepushScenes], "scripted-v1", { linear: true });
   await model.start();
+  const containers = new FakeTaskContainerHarness();
   const service = new TaskService({
     dataDir: mkdtempSync(join(tmpdir(), "mfc-prepush-data-")),
     provider: "maeflow",
@@ -282,6 +288,10 @@ test("原生 prepush 会话修复提交后把 PASS 收据绑定最终 HEAD", asy
       pollTimeoutMs: 10_000,
     },
     prepush: { enabled: true },
+    isolation: {
+      image: "fixture/build-toolchain:test",
+      containerFactory: containers.factory,
+    },
   });
   try {
     const id = service.create("REQ_PREPUSH：原生会话修复后再推送", {
@@ -297,6 +307,19 @@ test("原生 prepush 会话修复提交后把 PASS 收据绑定最终 HEAD", asy
     assert.equal(summary.delivery?.prepush?.state, "passed");
     assert.equal(model.requests.length, deliveryScenes().length + prepushScenes.length,
       "专项会话应在普通编码会话之后独立消费模型回合");
+    const prepushContainer = containers.records.find((record) =>
+      record.name.endsWith("-prepush"));
+    assert.ok(prepushContainer, "prepush 必须使用任务级稳定名称的独立容器");
+    assert.ok(prepushContainer.commands.includes(compile));
+    assert.ok(prepushContainer.commands.includes(unitTest));
+    assert.equal(prepushContainer.stopped, true,
+      "签发收据并 push 前必须等 prepush 容器退出");
+    const ordinary = containers.records.find((record) =>
+      !record.name.endsWith("-prepush"));
+    assert.ok(ordinary?.stopped, "普通编码容器必须先停止");
+    assert.ok(containers.events.indexOf(`stop:${ordinary!.name}`)
+      < containers.events.indexOf(`start:${prepushContainer.name}`),
+    "prepush 不得与普通编码容器同时写同一工作区");
   } finally {
     await model.stop();
     await platform.stop();

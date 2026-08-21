@@ -17,8 +17,8 @@
  */
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { execFileSync } from "node:child_process";
 import { basename, extname, join, relative } from "node:path";
+import { runSafeWorktreeGit } from "./safeGit.ts";
 
 export interface RepoMapOptions {
   /** 进入地图的文件数上限(默认 1500;超出按扇入截断)。 */
@@ -58,10 +58,11 @@ const SKIP_DIRS = new Set([
 /** 文件清单:git 仓用 ls-files(尊重仓的边界),失败退目录遍历。 */
 function listFiles(root: string, budget: () => boolean): string[] {
   try {
-    return execFileSync("git", ["ls-files"], {
-      cwd: root, encoding: "utf-8", maxBuffer: 32 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "ignore"], // 非 git 目录走回退,fatal 声不外漏
-    }).split("\n").filter(Boolean);
+    const result = runSafeWorktreeGit(root, ["ls-files"], {
+      maxBuffer: 32 * 1024 * 1024,
+    });
+    if (result.status !== 0) throw new Error("not a git repository");
+    return String(result.stdout ?? "").split("\n").filter(Boolean);
   } catch {
     const found: string[] = [];
     const walk = (dir: string) => {

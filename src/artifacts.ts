@@ -24,8 +24,8 @@ import {
   realpathSync,
   statSync,
 } from "node:fs";
-import { spawnSync } from "node:child_process";
 import { basename, join, resolve, sep } from "node:path";
+import { runSafeWorktreeGit } from "./safeGit.ts";
 
 const WORK_DIR = ".mae-flow-work";
 /** 单个产物最多回传这么多字节:一个巨型 diff 不能把页面拖死。 */
@@ -155,10 +155,12 @@ function collectDocs(cwd: string): DocEntry[] {
 /** git 子进程:失败一律返回 undefined(不是 git 仓、git 不在、超时)。 */
 function git(cwd: string, args: string[]): string | undefined {
   try {
-    const run = spawnSync("git", ["-C", cwd, ...args], {
-      encoding: "utf-8",
-      timeout: 10_000,
+    const hardened = args[0] === "diff"
+      ? ["diff", "--no-ext-diff", "--no-textconv", ...args.slice(1)]
+      : args;
+    const run = runSafeWorktreeGit(cwd, hardened, {
       maxBuffer: 16 * 1024 * 1024,
+      timeoutMs: 10_000,
     });
     if (run.error || run.status !== 0) return undefined;
     return run.stdout ?? "";
@@ -182,15 +184,10 @@ function currentBranch(cwd: string): string | undefined {
  * 不是执行失败。二进制文件也会由 git 给出如实提示。 */
 function untrackedDiff(cwd: string, path: string): string | undefined {
   try {
-    const run = spawnSync(
-      "git",
-      ["-C", cwd, "diff", "--no-index", "--", "/dev/null", path],
-      {
-        encoding: "utf-8",
-        timeout: 10_000,
-        maxBuffer: 16 * 1024 * 1024,
-      },
-    );
+    const run = runSafeWorktreeGit(cwd, [
+      "diff", "--no-ext-diff", "--no-textconv", "--no-index",
+      "--", "/dev/null", path,
+    ], { timeoutMs: 10_000, maxBuffer: 16 * 1024 * 1024 });
     if (run.error || (run.status !== 0 && run.status !== 1)) return undefined;
     return (run.stdout ?? "").trim();
   } catch {
