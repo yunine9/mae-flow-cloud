@@ -103,6 +103,11 @@ async function main(): Promise<number> {
     modelsJson: JSON.parse(readFileSync(modelsPath, "utf-8")),
     host: { kernelRoot, repoPath: platform.barePath, python: "python3" },
     delivery: { platformUrl: platform.baseUrl },
+    // serve 里这是 `host ? { enabled: true } : undefined`,试跑器整个漏了
+    // ——于是 push 前的编译+UT **一次都没跑过**,而试跑照样收口 await_merge,
+    // 看不出少了一环(2026-08-21 首次整链试跑实测:全部 bash 日志里
+    // 连一次 mvn 都没有)。试跑器必须和真服务同形,否则它证明不了什么。
+    prepush: { enabled: true, buildSlots: Number(flag("--build-slots", "1")) },
     compactEveryEvents: Number(flag("--compact-every", "150")),
     isolation: flag("--isolate-image")
       ? {
@@ -123,8 +128,13 @@ async function main(): Promise<number> {
   });
 
   console.log(`[pilot] 真模型试跑: ${provider}/${model}`);
-  console.log("[pilot] Cloud 执行契约:本机编写代码/UT;"
-    + "编译、UT 运行、CodeCheck 由流水线执行");
+  // 这句在 cc2da9d 之后就不准了:编码会话确实不编译,但宿主会在每个新
+  // HEAD push 前另起一个容器里的 prepush Agent 跑真实编译与 UT。
+  console.log("[pilot] Cloud 执行契约:编码会话只写代码/UT;"
+    + (flag("--isolate-image")
+      ? "push 前由独立 Agent 在构建容器跑编译与 UT;"
+      : "未配 --isolate-image,内核模式会拒绝启动;")
+    + "CodeCheck 与最终核销由流水线执行");
   let task;
   if (resumeLabel) {
     // 断点续跑 = 服务重启语义:崩溃时在跑的任务重新入队,以内核

@@ -324,6 +324,35 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
     夹具已按真形态补上;`src/pilot.ts` 也漏了同一个字段,同批修掉——
     否则 `npm run pilot -- --isolate-image` 一起手就是容器起不来。
     教训:**长期 skip 的用例会静默腐烂,解开时要先怀疑夹具而不是产品**。
+- **整链首次真的跑通了(2026-08-22,现场 .pilot/e2e-container-2)**:内核完整
+  流程 + 容器 + prepush + 交付,这四件事凑在一起以前**一次都没跑过**。这次
+  用真 GLM + 真 Docker + 真 Maven 五模块仓跑完:需求澄清(模型自己问出 7 条,
+  含 `+86`/座机误伤、mask 与 truncate 顺序)→ Spec/Story → 容器内编码 →
+  提交 → **prepush 在独立构建容器跑真 Maven(18 tests 全绿)** → PASS 收据
+  绑 SHA → 宿主 push → MR → 流水线三项绑 SHA 全绿 → `current=end` →
+  `await_merge`。假件只有平台那一端。收据里带完整容器事实存根(container_id、
+  image_digest、只读根、pids、user、挂载点),事后可审计。
+- **prepush PASS 闸曾经"基本过不去"(2026-08-22 整链试跑逮住,已修)**:
+  `verifyPrePushEvidence` 用**整条 bash 命令原文精确相等**核对证据,而使命
+  要求模型上报"与实际 Bash 调用完全一致"的命令。现实里模型发的是
+  `cd /很长的路径 && mvn test; echo TEST_EXIT=$?`,上报的是 `mvn test`——
+  永远对不上。实测后果:模型真跑了、真绿了、还自己修好一个真编译错误
+  (测试类缺 `ChannelHandler` 导入),却被判"没有真实成功执行"、任务 failed、
+  不 push。**而失败措辞读起来像在指控模型作弊**,人得去翻 bash 日志才看得出
+  是冤枉。已改成包含匹配(空白归一化),并把"跑过但只在改动之前"和"压根没跑"
+  分成两句话。**松了多少如实说**:上报 `mvn test` 实跑 `mvn test -DskipTests`
+  现在混得过去;接受它是因为这道闸的定位是 push 前的流量闸门而非最终裁判
+  (真裁判是绑 SHA 的流水线),而一道永远过不去的闸比稍松的闸有害得多。
+  "退出成功"和"发生在最后一次修改/提交之后"两条硬约束没动。
+  **为什么以前没发现**:codex 的真模型冒烟里工作区就是 cwd,模型不需要 `cd`,
+  命令原文恰好等于 `npm test`——夹具恰好绕开了唯一会踩的形态。
+- **试跑器漏配 prepush(同日,同一文件第二次)**:`src/pilot.ts` 压根没写
+  `prepush: { enabled: true }`(serve 里是 `host ? {...} : undefined`),
+  于是首轮整链试跑**一次 mvn 都没跑过**却照样收口 `await_merge`,少了一环
+  完全看不出来。判据只能落在"bash 日志里有没有 mvn 真实输出",不能看状态。
+  连同早先的 `cacheRoot` 漏配,**今天四次撞上同一个模式:夹具与真形态不一致,
+  测试全绿但证明不了东西**。凡是"试跑器/夹具"和 serve 不同形的地方都要当
+  缺陷看。
 - **并发实战演练已脚本化(2026-08-22,harness/concurrency-drill.ts)**:
   真 GLM + 真 Docker + 真 TaskService,三单并发,判据全落在宿主能自己
   核实的事实上(容器名、`docker ps` 残留、工作区产物、容器内 `uname`/

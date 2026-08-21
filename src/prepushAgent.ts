@@ -299,23 +299,58 @@ export function verifyPrePushEvidence(
       });
     }
   }
-  const successful = new Map<string, number>();
+  const successful: string[] = [];
+  const ranBeforeLastWrite: string[] = [];
   for (const event of events) {
     if (event.kind !== "tool_finished") continue;
     const payload = event.payload as Record<string, any>;
     if (String(payload.name ?? "") !== "Bash" || Boolean(payload.is_error)) continue;
     const call = requested.get(
       `${event.sessionId}:${String(payload.call_id ?? "")}`);
-    if (!call || !call.command || call.eventId <= lastWrite
-      || event.eventId <= call.eventId) continue;
-    successful.set(call.command,
-      Math.max(successful.get(call.command) ?? 0, event.eventId));
+    if (!call || !call.command || event.eventId <= call.eventId) continue;
+    // 两个桶分开记:一个是合格证据,一个只用来把"跑过但太早"和
+    // "压根没跑"区分开——它们对人的含义完全不同(见下面的报错措辞)。
+    (call.eventId <= lastWrite ? ranBeforeLastWrite : successful)
+      .push(call.command);
   }
+  const covers = (bucket: string[], reported: string) => {
+    const needle = normalizeCommand(reported);
+    return Boolean(needle)
+      && bucket.some((actual) => normalizeCommand(actual).includes(needle));
+  };
   const missing = [report.compile.command, report.unit_test.command]
-    .filter((command) => !successful.has(command));
-  return missing.length
-    ? `报告中的命令没有在最后一次代码修改后真实成功执行: ${missing.join("；")}`
-    : "";
+    .filter((command) => !covers(successful, command));
+  if (!missing.length) return "";
+  // 措辞必须让人一眼分清三种情况,否则"跑了但报得不一样"会被当成作弊
+  // (2026-08-21 整链试跑实锤:模型真跑了、真绿了、还自己修好一个真编译
+  // 错误,却被判"没有真实成功执行",人只能去翻 bash 日志才看得出冤枉)。
+  const stale = missing.filter((command) => covers(ranBeforeLastWrite, command));
+  if (stale.length === missing.length) {
+    return "报告中的命令只在最后一次代码修改/提交之前成功过，改动之后没有重跑: "
+      + missing.join("；");
+  }
+  return "报告中的命令没有在最后一次代码修改后真实成功执行"
+    + "（若确实跑过，请核对上报命令与实际 Bash 调用是否一致）: "
+    + missing.join("；");
+}
+
+/**
+ * 命令比对用的归一化。
+ *
+ * 为什么不是精确相等:使命要求"命令须与实际 Bash 调用完全一致",但模型
+ * 实际发的是 `cd /很长的路径 && mvn test; echo TEST_EXIT=$?`,上报的是
+ * `mvn test`——要它逐字节回抄一条带路径前缀和退出码后缀的 shell 命令,
+ * 现实中不可能稳定做到。精确相等让这道闸**基本过不去**(2026-08-21
+ * 首次整链试跑实测:三次合格的成功执行全部落空)。改成包含匹配。
+ *
+ * 松了多少要说清楚:上报 `mvn test`、实跑 `mvn test -DskipTests` 现在混得
+ * 过去。接受这个代价的理由是这道闸的定位——push 前的快速反馈与流量闸门,
+ * **不冒充最终质量裁判**;真裁判是绑提交 SHA 的流水线。一道永远过不去的
+ * 闸比一道稍松的闸有害得多。"退出成功"和"发生在最后一次修改之后"两条
+ * 硬约束都没动。
+ */
+function normalizeCommand(command: string): string {
+  return String(command ?? "").replace(/\s+/g, " ").trim();
 }
 
 export function prePushMission(request: PrePushRunRequest): string {
@@ -336,7 +371,12 @@ export function prePushMission(request: PrePushRunRequest): string {
     "",
     buildGuidance,
     "",
-    "收口前确认 git status 没有应提交的业务改动。最后一段必须严格输出下面结构（命令须与实际 Bash 调用完全一致）：",
+    // 原文要求"与实际 Bash 调用完全一致",但模型实际发的是带 cd 前缀和
+    // 退出码后缀的长命令,做不到逐字节回抄——这条契约把闸卡死过(实测)。
+    // 现在只要求写真正执行的那一段构建命令,宿主按包含匹配核对。
+    "收口前确认 git status 没有应提交的业务改动。最后一段必须严格输出下面结构"
+      + "（command 写你真正执行的那段构建命令原文，如 `mvn test`；不必带 cd 前缀"
+      + "和 echo 退出码后缀，但**不能写没跑过的命令**，宿主会回执行记录核对）：",
     "<prepush-result>",
     '{"status":"passed|code_failure|infrastructure_failure",'
       + '"compile":{"command":"实际命令","status":"passed|failed|skipped","summary":"简述"},'

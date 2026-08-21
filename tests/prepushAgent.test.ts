@@ -242,3 +242,75 @@ test("prepush gate: 专项硬边界优先，未命中时组合部署契约", () 
   assert.deepEqual(seen, ["Bash:forbidden-by-deployment"]);
   assert.equal(contract("Bash", "mvn test", fakeEvent), undefined);
 });
+
+// —— 以下三条来自 2026-08-21 首次整链试跑的实锤(.pilot/e2e-container-2)——
+// 模型真跑了 mvn、真绿了(Tests run: 18, Failures: 0)、还自己修好一个真编译
+// 错误,却被判"没有真实成功执行"。原因是证据比对用的是**整条 bash 命令原文
+// 精确相等**,而模型上报的是 `mvn test`、实发的是
+// `cd /很长的路径 && mvn test; echo TEST_EXIT=$?`——这道闸当时基本过不去。
+
+test("prepush evidence: 实发命令带 cd 前缀和退出码后缀时,上报的构建命令仍算数", () => {
+  // 这一串是试跑现场命令形状的等价复刻,不是臆造的夹具。
+  const prefix = "cd /srv/tasks/task-1/origin && ";
+  const events = [
+    event(1, "tool_requested", {
+      call_id: "compile", name: "Bash",
+      input: { command: `${prefix}${PASSED.compile.command} 2>&1 | tail -20; echo EXIT=$?` },
+    }),
+    event(2, "tool_finished", {
+      call_id: "compile", name: "Bash", is_error: false, result: "BUILD SUCCESS",
+    }),
+    event(3, "tool_requested", {
+      call_id: "ut", name: "Bash",
+      input: { command: `${prefix}${PASSED.unit_test.command} > /tmp/mvn.log 2>&1; echo TEST_EXIT=$?` },
+    }),
+    event(4, "tool_finished", {
+      call_id: "ut", name: "Bash", is_error: false, result: "Tests run: 18",
+    }),
+  ];
+  assert.equal(verifyPrePushEvidence(events, PASSED), "",
+    "包裹在 cd/重定向/echo 里的真实执行必须被认成证据");
+});
+
+test("prepush evidence: 跑过但只在改动之前——措辞要和'压根没跑'分开", () => {
+  const events = [
+    event(1, "tool_requested", {
+      call_id: "compile", name: "Bash",
+      input: { command: `cd /x && ${PASSED.compile.command}` },
+    }),
+    event(2, "tool_finished", { call_id: "compile", name: "Bash", is_error: false }),
+    event(3, "tool_requested", {
+      call_id: "ut", name: "Bash", input: { command: `cd /x && ${PASSED.unit_test.command}` },
+    }),
+    event(4, "tool_finished", { call_id: "ut", name: "Bash", is_error: false }),
+    // 两条都跑完之后才提交:证据全部作废,但这不是"没跑过"。
+    event(5, "tool_requested", {
+      call_id: "commit", name: "Bash",
+      input: { command: 'git -c user.name=a commit -m "fix"' },
+    }),
+    event(6, "tool_finished", { call_id: "commit", name: "Bash", is_error: false }),
+  ];
+  const error = verifyPrePushEvidence(events, PASSED);
+  assert.match(error, /只在最后一次代码修改\/提交之前成功过/);
+  assert.doesNotMatch(error, /没有在最后一次代码修改后真实成功执行/,
+    "跑过但太早,不能用和'压根没跑'一样的措辞——会被当成作弊");
+});
+
+test("prepush evidence: 放松成包含匹配后,没跑过的命令照样拦得住", () => {
+  const events = [
+    event(1, "tool_requested", {
+      call_id: "ls", name: "Bash", input: { command: "cd /x && ls -la" },
+    }),
+    event(2, "tool_finished", { call_id: "ls", name: "Bash", is_error: false }),
+  ];
+  const error = verifyPrePushEvidence(events, PASSED);
+  assert.match(error, /没有在最后一次代码修改后真实成功执行/);
+  assert.match(error, /mvn -q -DskipTests package/);
+  assert.match(error, /mvn -q test/);
+  // 空命令不能因为"空串是任何串的子串"而白捡一张通行证。
+  assert.match(
+    verifyPrePushEvidence(events, {
+      ...PASSED, compile: { command: "   ", status: "passed" },
+    }),
+    /没有在最后一次代码修改后真实成功执行/);
+});
