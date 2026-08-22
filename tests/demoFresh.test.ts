@@ -18,14 +18,11 @@ import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const TSX = join(process.cwd(), "node_modules", ".bin", "tsx");
-const SERVE = join(process.cwd(), "src", "serve.ts");
+import { spawnServe } from "./support/serveProcess.ts";
 
 function boot(args: string[], timeoutMs = 30_000): Promise<string> {
   return new Promise((resolve) => {
-    const child = spawn(TSX, [SERVE, ...args], {
-      env: { ...process.env, MAE_FLOW_NO_NOTIFY: "1" },
-    });
+    const child = spawnServe(args);
     let output = "";
     const stop = () => child.kill("SIGTERM");
     const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);

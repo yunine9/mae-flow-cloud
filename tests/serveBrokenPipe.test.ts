@@ -20,8 +20,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const TSX = join(process.cwd(), "node_modules", ".bin", "tsx");
-const SERVE = join(process.cwd(), "src", "serve.ts");
+import { spawnServe } from "./support/serveProcess.ts";
 
 function waitListening(child: ChildProcess): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -62,9 +61,8 @@ async function api<T>(
 
 test("断管之后:登录、下单、答卡、收口,一路 HTTP 正常应答", async () => {
   const dir = mkdtempSync(join(tmpdir(), "mfc-epipe-"));
-  const child = spawn(TSX, [
-    SERVE, "--port", "0", "--data", join(dir, "tasks"), "--fresh",
-  ], { env: { ...process.env, MAE_FLOW_NO_NOTIFY: "1" } });
+  const child = spawnServe(
+    ["--port", "0", "--data", join(dir, "tasks"), "--fresh"]);
   try {
     const port = await waitListening(child);
     const base = `http://127.0.0.1:${port}`;

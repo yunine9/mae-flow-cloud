@@ -324,6 +324,23 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
     夹具已按真形态补上;`src/pilot.ts` 也漏了同一个字段,同批修掉——
     否则 `npm run pilot -- --isolate-image` 一起手就是容器起不来。
     教训:**长期 skip 的用例会静默腐烂,解开时要先怀疑夹具而不是产品**。
+- **测试自己在漏进程(2026-08-22 逮住,已修)**:需要真 HTTP 的用例用
+  `node_modules/.bin/tsx` 起 serve,而那是个包装脚本,自己再 spawn 一个 node。
+  **SIGTERM 它转发,SIGKILL 转发不了**——包装进程当场死,真正在监听端口的
+  node 变孤儿活下去。`serveBrokenPipe` 收尾固定 SIGKILL,于是**每跑一次漏
+  一个**。清场时本机逮到 **57 个**孤儿 serve,最老的活了 2 天 12 小时,
+  合计约 3GB。已统一走 `tests/support/serveProcess.ts`(`node --import tsx`
+  直起,被 kill 的就是本体);修后全量跑完 `serve.ts` 孤儿为 0。
+  两个附带发现:
+  - 同批还捡到一个**活了 6 天**的孤儿 test runner(某次
+    `--test-name-pattern` 单测调试留下的),说明漏的不只是 serve,
+    手工起的调试进程一样会留;
+  - 清场那次的全量跑**在 delivery.test.ts 上挂了 8 小时没动**。
+    最可能是我的清场脚本按模式匹配时把那次跑用的 serve 一起杀了,
+    但**没有实锤,原因存疑**;重跑一次 363 用例 61 秒跑完、0 失败、
+    0 孤儿。记在这里是因为"没查实的偶发"不该被当成已解决。
+  教训:`harness/restart-drill.sh` 早就踩过同一个坑并写进注释了,测试这边
+  没跟上——**一处踩坑要横向扫一遍同类调用点**,不然它换个地方接着漏。
 - **整链首次真的跑通了(2026-08-22,现场 .pilot/e2e-container-2)**:内核完整
   流程 + 容器 + prepush + 交付,这四件事凑在一起以前**一次都没跑过**。这次
   用真 GLM + 真 Docker + 真 Maven 五模块仓跑完:需求澄清(模型自己问出 7 条,
@@ -471,7 +488,9 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
   文件工具/门禁/内核 dispatch 留宿主,工作区同路径挂载三方同视;
   默认只读根、cap-drop ALL、no-new-privileges、PID/CPU/内存限制、HOME 与
   `/tmp` tmpfs、精确 safe.directory、环境变量白名单；镜像/Daemon/inspect/
-  清理任一失败均 fail-closed。CodeCheck 仍只在权威流水线执行;
+  清理任一失败均 fail-closed。CodeCheck 仍只在权威流水线执行。
+  **内网侧一步都还没走**——欠什么、按什么顺序补、周一先做哪一件,
+  见 docs/intranet-container-rollout.md;
 - 正式 React 前端已起头并接上部署形态(web/:Vite+React+TS,
   类型化 API 层,功能与演示页对齐——列表/发起/审批卡/SSE 过程
   记录/现场面板链接;`web/dist` 存在时 serve 自动托管,--web 可

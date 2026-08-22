@@ -16,8 +16,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const TSX = join(process.cwd(), "node_modules", ".bin", "tsx");
-const SERVE = join(process.cwd(), "src", "serve.ts");
+import { spawnServe } from "./support/serveProcess.ts";
 
 function run(
   args: string[],
@@ -25,9 +24,7 @@ function run(
   timeoutMs = 30_000,
 ): Promise<{ code: number | null; output: string; matched: boolean }> {
   return new Promise((resolve) => {
-    const child = spawn(TSX, [SERVE, ...args], {
-      env: { ...process.env, MAE_FLOW_NO_NOTIFY: "1" },
-    });
+    const child = spawnServe(args);
     let output = "";
     let matched = false;
     const finish = (code: number | null) =>
