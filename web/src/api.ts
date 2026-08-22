@@ -320,6 +320,9 @@ export interface TaskSummary {
   updated_at?: string;
   last_progress_at?: string;
   completed_at?: string;
+  /** 现场被回收的时刻。有值 = 代码克隆等大件已删,过程记录/证据/批注仍在。
+   * 页面据此如实说明,别让人对着 404 的代码差异发愣。 */
+  workspace_reclaimed_at?: string;
   luban_account?: string;
   repo_url?: string;
   repositories?: string[];
@@ -894,6 +897,7 @@ export interface SettingsView {
     repair_rounds?: number;
     poll_interval_s?: number;
     poll_timeout_s?: number;
+    workspace_retention_days?: number;
   };
   models: {
     configured: boolean;
@@ -910,6 +914,7 @@ export interface SettingsView {
       repair_rounds: number | null;
       poll_interval_s: number;
       poll_timeout_s: number;
+      workspace_retention_days: number;
     };
     models: {
       configured: boolean;

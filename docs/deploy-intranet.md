@@ -612,6 +612,7 @@ Agent 的上下文。同名 Skill 因此也可以分别用于不同仓。
   "data": "/var/lib/mae-flow-cloud", "port": 8787,
   "poll-interval": 30, "poll-timeout": 1800,
   "max-concurrent": 2,
+  "workspace-retention-days": 14,
   "isolate-image": "registry.intra/mae-flow/task-builder@sha256:<digest>",
   "isolate-memory": "3g", "isolate-cpus": "2", "isolate-pids": 512,
   "isolate-network": "bridge",
@@ -638,6 +639,7 @@ Agent 的上下文。同名 Skill 因此也可以分别用于不同仓。
 | repair-rounds | 不限 | 修复环手刹:数字=上限,0=关;不配=修到绿/出诊断为止 |
 | poll-interval / poll-timeout | 10 / 1800(秒) | 流水线轮询节奏与预算 |
 | max-concurrent | 2 | 并发任务数 |
+| workspace-retention-days | 14 | 现场保留期(天)。终态任务过期后回收**代码克隆等编译环境**,交付账本/事件/transcript/prepush 收据/流水线证据/批注一律保留;`0`=永不回收。只碰 completed/failed/canceled,`await_merge` 与 `verifying` 不碰 |
 | compact-every | 150 | 主动压缩节奏(事件数;0=关) |
 | desktop-notify | false | 单机手感的桌面弹窗 |
 
@@ -646,7 +648,7 @@ Agent 的上下文。同名 Skill 因此也可以分别用于不同仓。
 管理员登录 Web 后左侧「服务设置」页,可热改两类东西(存
 `<data>/settings.json`,权限 600,**压过部署值**):
 
-- **运行参数**:并发数、修复轮预算、轮询间隔/预算。生效边界如实:
+- **运行参数**:并发数、修复轮预算、轮询间隔/预算、现场保留期。生效边界如实:
   并发=下一次调度,修复轮/轮询=下一次红灯/下一轮轮询;页面直接显示
   当前服务默认值，留空即使用默认值，不要求管理员猜启动参数。
 - **模型网关**:网关地址、API Key、模型名称三项；服务端转换为任务

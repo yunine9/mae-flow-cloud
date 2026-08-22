@@ -598,6 +598,54 @@ test("老单不被新尺子重新量:恢复不翻状态、更不会把分支重�
   }
 });
 
+test("现场回收过的单封存台账,不再重新裁决——更不许重新推回远端", async () => {
+  // 上一条挡的是"老单没有 execution_contract 被新尺子量";这条挡的是
+  // 同一个坑的另一种成因:**尺子是我们自己弄丢的**。现场回收把克隆连同
+  // .mae-flow.json 一起删了,恢复时再对账必然读不到证据 → 收好口的单被翻
+  // 成验证中 → tryDeliver 真的 git push,把两周前早已合入、分支早删的
+  // 老单凭空复活。所以回收 = 台账封存,recover 不许再量它。
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  await platform.start();
+  try {
+    const dataDir = mkdtempSync(join(tmpdir(), "mfc-reclaimed-"));
+    const workspace = join(dataDir, "task-1");
+    const cwd = join(workspace, "notify-service");   // 已被回收,不存在
+    mkdirSync(workspace, { recursive: true });
+    // 台账还在(交付历史一个字节都没动),现场没了。
+    // 注意 delivery 里**没有** mr_state:"已合入"——那条捷径会让
+    // settledBeforeContract 直接放行,断言就成了摆设,挡不住真正的坑。
+    writeFileSync(join(workspace, "task.json"), JSON.stringify({
+      summary: {
+        id: "task-1", requirement: "两周前那单", status: "completed",
+        created_at: new Date(Date.now() - 30 * 86400_000).toISOString(),
+        completed_at: new Date(Date.now() - 28 * 86400_000).toISOString(),
+        workspace,
+        workspace_reclaimed_at: new Date().toISOString(),
+        delivery: { mr_url: "https://内网/mr/42", sha: "abc123" },
+      },
+      cwd,
+    }));
+    writeFileSync(join(workspace, "events.jsonl"), "");
+
+    const revived = buildService(platform, dataDir, {});
+    assert.equal(revived.recover().restored, 1, "回收过的单仍要出现在历史里");
+    await new Promise((tick) => setTimeout(tick, 400));
+    const task = revived.get("task-1")!;
+    assert.equal(task.status, "completed", "回收过的单被翻回验证中了");
+    assert.equal(task.delivery?.mr_url, "https://内网/mr/42",
+      "交付账本必须原样活下来");
+    assert.equal(task.workspace_reclaimed_at !== undefined, true,
+      "回收标记要能被前端读到,页面才说得出「现场已回收」");
+    // 最要命的那一下:远端一次都不该被写。
+    assert.equal(
+      git(platform.barePath, "branch", "--list", "master_bot_REQ1"), "",
+      "回收过的老单分支被重新推回了远端");
+  } finally {
+    await platform.stop();
+  }
+});
+
 /** 修复环剧本:一幕修复提交(可选)+一幕收口；传输始终归宿主。 */
 function repairScenes(commit: boolean): Scene[] {
   const command = commit

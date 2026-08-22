@@ -238,6 +238,15 @@ export function TaskCard({
             </div>
           )}
           <div className="task-utilities">
+            {/* 现场回收后代码差异那类面板会空着,不说清楚人会以为坏了。
+                说明里必须点名"什么还在"——只写"已回收"像是历史没了。 */}
+            {task.workspace_reclaimed_at && (
+              <div className="read-only-notice">
+                任务现场已于 {formatLocalDateTime(task.workspace_reclaimed_at)} 回收
+                （超过保留期，释放代码克隆等可再生的大件）。
+                过程记录、交付账本、流水线证据与批注都还在，代码差异不再可看。
+              </div>
+            )}
             <ActivityPanel task={task} />
             <TaskTimeline taskId={task.id} />
             {/* 外部动作台账(ActionLedger)不再上页面:一屏四块信息密度

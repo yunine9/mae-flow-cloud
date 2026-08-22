@@ -118,6 +118,14 @@ import {
   runSafeWorktreeGit,
   safeGitEnvironment,
 } from "./safeGit.ts";
+import {
+  humanBytes,
+  judgeReclaim,
+  reclaimWorkspace,
+} from "./workspaceReclaim.ts";
+
+/** 现场保留期默认两周(用户 2026-08-22 拍板)。 */
+export const DEFAULT_WORKSPACE_RETENTION_DAYS = 14;
 
 export type TaskStatus =
   | "queued"
@@ -283,6 +291,11 @@ export interface TaskSummary {
   last_progress_at?: string;
   completed_at?: string;
   workspace: string;
+  /** 现场被回收的时刻(ISO)。有值 = 克隆等重货已删,台账还在。
+   * 它还是一道闸:恢复时**不许再拿内核状态重新裁决这单**——原件已经
+   * 不在了,再量一遍只会把收好口的老单翻成"验证中"甚至重新推分支
+   * (同一个坑 settledBeforeContract 已经踩过一次)。 */
+  workspace_reclaimed_at?: string;
   /** 小鲁班通知账号(任务创建时填写,主 spec §5.1)。 */
   luban_account?: string;
   /** 下单时填的交付代码仓;缺席=部署仓(--repo)。记在任务上:
@@ -407,6 +420,9 @@ export interface TaskServiceOptions {
   /** 每个任务 agent 目录的 models.json 内容(生产=GLM 网关,演练=剧本假模型)。 */
   modelsJson: Record<string, unknown>;
   maxConcurrent?: number;
+  /** 现场保留期(天)。终态任务过期后回收克隆等重货,台账原样留下;
+   * 0 = 永不回收。部署值,可被管理页运行时设置压过。默认见 serve.ts。 */
+  workspaceRetentionDays?: number;
   contract?: GateContract;
   /** 内核模式(阶段 1 纵向闭环):任务=克隆 repoPath → 内核 bootstrap
    * (sessionstart+userprompt 捕获需求、铺转发壳)→ 深层门禁与证据
@@ -2519,7 +2535,12 @@ export class TaskService {
           this.counter, Number(name.slice("task-".length)) || 0);
         restored += 1;
         let terminalMismatch = false;
+        // 现场回收过的单:内核状态原件已经删了,再对账一次必然"读不到证据"
+        // → 老单被翻成验证中,tryDeliver 甚至会把早已合入的分支重新推回去。
+        // 这正是"老单不被新尺子重新量"那条教训的同一个坑,只是这回尺子
+        // 是我们自己弄丢的。回收 = 台账封存,不再重新裁决。
         if (["completed", "await_merge"].includes(summary.status)
+            && !summary.workspace_reclaimed_at
             && !this.settledBeforeContract(task)) {
           const attestation = this.completionAttestation(task);
           if (attestation && !attestation.complete) {
@@ -2629,6 +2650,76 @@ export class TaskService {
     }
     if (requeued) this.bypass(undefined, "任务泵", this.pump());
     return { restored, requeued };
+  }
+
+  /** 现场保留期(天):管理页运行时设置 > 部署值 > 默认 14 天。
+   * 0 = 永不回收(诚实的"关掉",不是偷偷不干活)。 */
+  workspaceRetentionDays(): number {
+    const runtime = this.options.settings?.runtime().workspace_retention_days;
+    const value = runtime ?? this.options.workspaceRetentionDays
+      ?? DEFAULT_WORKSPACE_RETENTION_DAYS;
+    return Number.isFinite(value) && value >= 0
+      ? value : DEFAULT_WORKSPACE_RETENTION_DAYS;
+  }
+
+  /**
+   * 扫一遍终态任务,回收过了保留期的现场(纯旁路,fail-open)。
+   *
+   * 由 serve 定时驱动,不在这里起 setInterval——TaskService 一直没有自己的
+   * 定时器,加一个就多一个重启后忘了清的句柄。
+   *
+   * 只删克隆等能再生的重货,台账原样留下(见 workspaceReclaim.ts)。
+   * 回收后把 workspace_reclaimed_at 记进 task.json:页面据此如实说
+   * "现场已回收",恢复时据此**不再重新裁决**这单。
+   */
+  reclaimIdleWorkspaces(now = Date.now()): {
+    reclaimed: number; freed: number;
+  } {
+    const retentionDays = this.workspaceRetentionDays();
+    let reclaimed = 0;
+    let freed = 0;
+    for (const task of this.tasks.values()) {
+      const summary = task.summary;
+      const verdict = judgeReclaim({
+        id: summary.id,
+        status: summary.status,
+        workspace: summary.workspace,
+        completed_at: summary.completed_at,
+        updated_at: summary.updated_at,
+        created_at: summary.created_at,
+        workspace_reclaimed_at: summary.workspace_reclaimed_at,
+      }, {
+        now,
+        retentionDays,
+        // 状态是收口那一刻写的,清理和收尾可能正擦肩而过:句柄还在就不碰。
+        busy: !!task.driver || !!task.container || !!task.containerReopen,
+      });
+      if (!verdict.reclaim) continue;
+      try {
+        const result = reclaimWorkspace(summary.workspace, {
+          cwd: task.cwd,
+          // 现场路径是任务创建时写死的绝对路径,现场目录被拷走/搬走之后
+          // 它会指向别处——删除动作必须自己验边界,不能信这个字段。
+          dataDir: this.options.dataDir,
+        });
+        if (result.refused) {
+          this.options.log?.(`回收现场 ${summary.id} 被边界拦下: ${result.refused}`);
+          continue;
+        }
+        summary.workspace_reclaimed_at = new Date(now).toISOString();
+        this.persist(task);
+        reclaimed += 1;
+        freed += result.freed;
+        this.options.log?.(
+          `回收现场 ${summary.id}(${verdict.reason}):释放 `
+          + `${humanBytes(result.freed)},删除 ${result.removed.join("、") || "无"}`
+          + `;台账与证据保留${result.snapshotted ? ",内核阶段已留档" : ""}`);
+      } catch (error) {
+        // 回收是旁路:删不动就是磁盘没省下来,绝不许它影响任务读写。
+        this.options.log?.(`回收现场 ${summary.id} 失败: ${String(error)}`);
+      }
+    }
+    return { reclaimed, freed };
   }
 
   /** 恢复重放投影(§11):以现场文件为源补齐读侧——摘要整行覆盖,

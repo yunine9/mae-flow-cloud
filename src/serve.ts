@@ -21,7 +21,11 @@ import { fileURLToPath } from "node:url";
 import type { AddressInfo } from "node:net";
 import { ScriptedModelServer, type Scene } from "./scriptedModel.ts";
 import { discoverKernelRoot } from "./kernelDiscovery.ts";
-import { TaskService } from "./taskService.ts";
+import {
+  DEFAULT_WORKSPACE_RETENTION_DAYS,
+  TaskService,
+} from "./taskService.ts";
+import { humanBytes } from "./workspaceReclaim.ts";
 import { createTaskServer } from "./server.ts";
 import { FakeLubanServer, Notifier } from "./notifier.ts";
 import { FakeGitPlatform } from "./gitPlatform.ts";
@@ -401,6 +405,15 @@ async function main(): Promise<void> {
     flag("--isolate-cache-root") ?? join(dataDir, "build-cache"),
   );
   const buildSlots = Number(flag("--build-slots") ?? "1");
+  // 现场保留期:终态任务过期后回收克隆等重货,台账原样留下。
+  // 以前一条回收策略都没有,dataDir 只涨不消(2026-08-22 查出来的)。
+  const retentionDays = Number(
+    flag("--workspace-retention-days") ?? String(DEFAULT_WORKSPACE_RETENTION_DAYS));
+  if (!Number.isFinite(retentionDays) || retentionDays < 0) {
+    console.error("[serve] --workspace-retention-days 必须是 ≥0 的数字"
+      + "(0 = 永不回收),拒绝启动");
+    process.exit(2);
+  }
   if (!Number.isInteger(isolatePids) || isolatePids <= 0) {
     console.error("[serve] --isolate-pids 必须是正整数,拒绝启动");
     process.exit(2);
@@ -495,6 +508,7 @@ async function main(): Promise<void> {
     host,
     delivery,
     prepush: host ? { enabled: true, buildSlots } : undefined,
+    workspaceRetentionDays: retentionDays,
     commitConvention,
     isolation: isolateImage
       ? {
@@ -535,6 +549,28 @@ async function main(): Promise<void> {
     console.log(`[serve] 恢复任务 ${recovered.restored} 个`
       + `(重新入队 ${recovered.requeued} 个)`);
   }
+  // 现场回收:启动扫一次(服务可能停了很久),之后每天一次。
+  // 纯旁路 fail-open——回收失败只是磁盘没省下来,不许它拖住服务。
+  // unref():这个定时器不该成为进程不肯退出的理由。
+  const sweepWorkspaces = () => {
+    try {
+      const swept = service.reclaimIdleWorkspaces();
+      if (swept.reclaimed) {
+        console.log(`[serve] 现场回收 ${swept.reclaimed} 个任务,`
+          + `释放 ${humanBytes(swept.freed)}(保留期 `
+          + `${service.workspaceRetentionDays()} 天;台账与证据保留)`);
+      }
+    } catch (error) {
+      console.log(`[serve] 现场回收失败(不影响服务): ${String(error)}`);
+    }
+  };
+  if (retentionDays > 0) {
+    sweepWorkspaces();
+    setInterval(sweepWorkspaces, 24 * 60 * 60_000).unref();
+  } else {
+    console.log("[serve] 现场保留期配置为 0:永不回收,dataDir 需自行看管");
+  }
+
   // 正式前端:--web <dist> 显式指定;web/dist 存在时自动接上
   // (构建过就用正式版,没构建就是零构建演示页,永远有页面可开)。
   const webRoot = flag("--web")

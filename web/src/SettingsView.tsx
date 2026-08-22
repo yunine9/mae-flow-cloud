@@ -86,6 +86,8 @@ function RuntimeCard({ view, onSaved }: {
   const [repair, setRepair] = useState(text(runtime.repair_rounds));
   const [interval, setInterval_] = useState(text(runtime.poll_interval_s));
   const [timeout_, setTimeout_] = useState(text(runtime.poll_timeout_s));
+  const [retention, setRetention] = useState(
+    text(runtime.workspace_retention_days));
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useMessage();
   const timeoutDefault = defaults.poll_timeout_s >= 60
@@ -102,6 +104,7 @@ function RuntimeCard({ view, onSaved }: {
         repair_rounds: repair.trim(),
         poll_interval_s: interval.trim(),
         poll_timeout_s: timeout_.trim(),
+        workspace_retention_days: retention.trim(),
       }));
       setMessage({ kind: "success", text: "已保存；留空项继续使用页面标注的默认值。" });
     } catch (error) {
@@ -130,6 +133,13 @@ function RuntimeCard({ view, onSaved }: {
       <KnobField label="流水线最长等待（秒）" defaultText={timeoutDefault}
         note="超过时间后停止等待并提示人工介入"
         value={timeout_} onChange={setTimeout_} />
+      {/* 回收是不可逆动作,note 必须把"删什么、留什么"说全——
+          光写"保留期"会让人以为整单历史都没了。 */}
+      <KnobField label="任务现场保留期（天）"
+        defaultText={defaults.workspace_retention_days === 0
+          ? "永不回收" : `${defaults.workspace_retention_days} 天`}
+        note="终态任务过期后回收代码克隆等可再生的大件；过程记录、证据与批注永久保留。0 表示永不回收"
+        value={retention} onChange={setRetention} />
       <button type="submit" disabled={busy}>{busy ? "正在保存…" : "保存运行参数"}</button>
       <Feedback message={message} />
     </form>

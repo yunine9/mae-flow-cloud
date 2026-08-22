@@ -37,6 +37,7 @@ import {
 import { dirname, extname, join, resolve, sep } from "node:path";
 import { StateConflictError } from "./humanGate.ts";
 import {
+  DEFAULT_WORKSPACE_RETENTION_DAYS,
   NotFoundError,
   TaskControlError,
   type TaskService,
@@ -361,6 +362,9 @@ export function createTaskServer(
                   (service.options.delivery?.pollIntervalMs ?? 10_000) / 1000,
                 poll_timeout_s:
                   (service.options.delivery?.pollTimeoutMs ?? 30 * 60_000) / 1000,
+                workspace_retention_days:
+                  service.options.workspaceRetentionDays
+                    ?? DEFAULT_WORKSPACE_RETENTION_DAYS,
               },
               models: {
                 configured: !!modelSpec.baseUrl && !!modelSpec.apiKey && !!model,

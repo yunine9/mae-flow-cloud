@@ -32,6 +32,9 @@ export interface RuntimeKnobs {
   repair_rounds?: number;
   poll_interval_s?: number;
   poll_timeout_s?: number;
+  /** 现场保留期(天):终态任务过期后回收克隆等重货,台账原样留下。
+   * 0 = 永不回收。改了下一轮清理生效(每天扫一次)。 */
+  workspace_retention_days?: number;
 }
 
 export interface ModelsSettings {
@@ -110,6 +113,12 @@ export class RuntimeSettings {
         ?? (("poll_interval_s" in patch) ? undefined : this.runtime().poll_interval_s),
       poll_timeout_s: knob(patch.poll_timeout_s, "轮询预算", 1)
         ?? (("poll_timeout_s" in patch) ? undefined : this.runtime().poll_timeout_s),
+      // 最小值 0 而不是 1:0 是"永不回收",一个诚实且必须能表达的选择
+      // (对比"无限等待"——那个连语法都不给,因为它没有正当用途)。
+      workspace_retention_days:
+        knob(patch.workspace_retention_days, "现场保留期")
+        ?? (("workspace_retention_days" in patch)
+          ? undefined : this.runtime().workspace_retention_days),
     };
     this.save({ ...this.load(), runtime: next });
   }
