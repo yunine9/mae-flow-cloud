@@ -22,6 +22,7 @@ import {
 } from "./api";
 import { formatWait, URGENT_MINUTES, waitedMs } from "./taskTime";
 import { responsibleOf } from "./teamOps";
+import { atBottom, backlog } from "./follow";
 import type { RepositorySkillSelection } from "./RepositorySkillPicker";
 import { PrepushStatus } from "./PrepushStatus";
 import {
@@ -794,8 +795,60 @@ function sinceText(iso?: string): string {
 
 const SEGMENT_ICON: Record<string, string> = {
   read: "读", edit: "改", bash: "跑", tool: "具",
-  talk: "说", agent: "派", ask: "决",
+  talk: "说", agent: "派", ask: "决", steer: "嘱",
 };
+
+/** 贴底跟随,但**人一往上翻就撒手**。判据见 follow.ts(纯函数,有用例)。 */
+function useStickyBottom<T extends HTMLElement>(count: number) {
+  const ref = useRef<T>(null);
+  const pinned = useRef(true);
+  const mark = useRef(count);
+  const [behind, setBehind] = useState(0);
+
+  useEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    if (pinned.current) {
+      node.scrollTo({ top: node.scrollHeight });
+      mark.current = count;
+      setBehind(0);
+    } else {
+      setBehind(backlog(count, mark.current));
+    }
+  }, [count]);
+
+  const onScroll = () => {
+    const node = ref.current;
+    if (!node) return;
+    const bottom = atBottom(node);
+    if (bottom === pinned.current) return;
+    pinned.current = bottom;
+    if (bottom) { mark.current = count; setBehind(0); }
+  };
+
+  const toBottom = () => {
+    const node = ref.current;
+    if (!node) return;
+    pinned.current = true;
+    mark.current = count;
+    setBehind(0);
+    node.scrollTo({ top: node.scrollHeight, behavior: "smooth" });
+  };
+
+  return { ref, behind, paused: !pinned.current, onScroll, toBottom };
+}
+
+/** 「已暂停跟随」的角标。停下来看东西时,人需要知道两件事:
+ * 它没停(还在收),以及积压了多少。 */
+function FollowPaused({ behind, onResume }: {
+  behind: number; onResume: () => void;
+}) {
+  return (
+    <button type="button" className="follow-resume" onClick={onResume}>
+      {behind > 0 ? `↓ ${behind} 条新的` : "↓ 回到最新"}
+    </button>
+  );
+}
 
 /** 行为摘要:原始 SSE 人盯不过来(用户原话"一直在刷"),这里呈现
  * 服务端折叠好的心流——此刻在干嘛、干了什么、有什么值得看一眼。
@@ -804,7 +857,7 @@ export function ActivityPanel({ task }: { task: TaskSummary }) {
   const [view, setView] = useState<ActivityView>();
   const [unavailable, setUnavailable] = useState("");
   const running = task.status === "running";
-  const list = useRef<HTMLOListElement>(null);
+  const follow = useStickyBottom<HTMLOListElement>(view?.segments.length ?? 0);
 
   useEffect(() => {
     let alive = true;
@@ -820,11 +873,6 @@ export function ActivityPanel({ task }: { task: TaskSummary }) {
     const timer = setInterval(() => void load(), 5000);
     return () => { alive = false; clearInterval(timer); };
   }, [task.id, running]);
-
-  // 新段追加时贴住底部——人关心的是最新动向。
-  useEffect(() => {
-    list.current?.scrollTo({ top: list.current.scrollHeight });
-  }, [view?.segments.length, view?.events_seen]);
 
   if (unavailable) return null;
   if (!view || (!view.segments.length && !view.alerts.length)) return null;
@@ -861,7 +909,8 @@ export function ActivityPanel({ task }: { task: TaskSummary }) {
         </div>
       )}
 
-      <ol ref={list} className="activity-segments">
+      <ol ref={follow.ref} className="activity-segments"
+          onScroll={follow.onScroll}>
         {view.truncated && (
           <li className="activity-truncated">更早的动作已折叠,只保留最近部分。</li>
         )}
@@ -883,6 +932,9 @@ export function ActivityPanel({ task }: { task: TaskSummary }) {
         ))}
       </ol>
       <div className="activity-foot">
+        {follow.paused && (
+          <FollowPaused behind={follow.behind} onResume={follow.toBottom} />
+        )}
         共 {view.events_seen} 条原始事件,折叠为 {view.segments.length} 段;
         原话在下方「过程记录」。
       </div>
@@ -893,7 +945,7 @@ export function ActivityPanel({ task }: { task: TaskSummary }) {
 function EventTail({ taskId }: { taskId: string }) {
   const [open, setOpen] = useState(false);
   const [events, setEvents] = useState<SemanticEvent[]>([]);
-  const stream = useRef<HTMLDivElement>(null);
+  const follow = useStickyBottom<HTMLDivElement>(events.length);
 
   useEffect(() => setEvents([]), [taskId]);
 
@@ -907,13 +959,6 @@ function EventTail({ taskId }: { taskId: string }) {
     return stop;
   }, [open, taskId]);
 
-  useEffect(() => {
-    stream.current?.scrollTo({
-      top: stream.current.scrollHeight,
-      behavior: events.length > 1 ? "smooth" : "auto",
-    });
-  }, [events]);
-
   return (
     <details
       className="utility-panel event-panel"
@@ -924,11 +969,23 @@ function EventTail({ taskId }: { taskId: string }) {
       <summary>
         <span>
           <strong>过程记录</strong>
-          <small>{open ? `实时接收中 · ${events.length} 条` : "SSE 实时事件流 · 展开查看完整内容"}</small>
+          <small>{open
+            ? `实时接收中 · ${events.length} 条`
+              + (follow.paused ? " · 已暂停跟随" : "")
+            : "SSE 实时事件流 · 展开查看完整内容"}</small>
         </span>
         <i aria-hidden />
       </summary>
-      <div ref={stream} className="event-stream" aria-live="polite">
+      {follow.paused && (
+        <div className="event-follow">
+          <span>已暂停跟随,你正在往回看——新事件仍在接收。</span>
+          <FollowPaused behind={follow.behind} onResume={follow.toBottom} />
+        </div>
+      )}
+      <div ref={follow.ref} className="event-stream"
+           onScroll={follow.onScroll}
+           /* aria-live 去掉了:一个每秒刷新的流对读屏软件是灾难,
+              而且"暂停跟随"之后再朗读最新内容,与人的意图正好相反。 */>
         {events.length === 0 && (
           <div className="event-empty">
             <span aria-hidden />

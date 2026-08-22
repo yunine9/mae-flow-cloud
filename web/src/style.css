@@ -3137,6 +3137,13 @@ pre {
 }
 .activity-segment.edit i,
 .activity-segment.bash i { color: var(--accent); border-color: var(--accent-soft); }
+/* 人自己捎的话在动作流里要认得出来:这一条不是它干的,是你说的。 */
+.activity-segment.steer i {
+  color: var(--attention);
+  border-color: var(--attention);
+  background: var(--attention-soft);
+}
+.activity-segment.steer .activity-segment-body strong { color: var(--attention); }
 .activity-segment.has-error i { color: var(--danger); border-color: var(--danger); background: var(--danger-soft); }
 .activity-segment time {
   margin-right: 6px;
@@ -3171,7 +3178,42 @@ pre {
   font-size: 9.5px;
   color: var(--muted);
 }
-.activity-foot { padding: 0 13px 10px; }
+.activity-foot {
+  padding: 0 13px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ---- 暂停跟随:人往回翻的时候,别把他拽回最新 ---- */
+/* 按钮而不是自动恢复:什么时候回到最新是人的决定,不是滚动位置的推论。 */
+.follow-resume {
+  flex: none;
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 650;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-soft);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.follow-resume:hover { border-color: var(--accent); }
+
+.event-follow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 12px;
+  font-size: 10px;
+  color: var(--muted);
+  background: var(--surface-soft);
+  border-bottom: 1px solid var(--line);
+}
 
 /* ---- 耗时与卡点:先看现在卡在哪,再看时间为什么花掉 ---- */
 .cost { padding: 12px; display: flex; flex-direction: column; gap: 12px; }

@@ -1844,21 +1844,51 @@ export class TaskService {
    * "我发了然后就没了,咋知道它消费了没"——发出去没有回执,等于让人对着
    * 空气说话。送达是可观测的:pi 把消息移出 steering 队列的那一刻,就是
    * 它进入模型上下文的那一刻。这里只报这个事实,不替人判断"它照做了没"
-   * ——那要看它后面干了什么,判断权是人的。 */
-  listInterrupts(id: string): Array<{ text: string; at: string; delivered: boolean }> {
+   * ——那要看它后面干了什么,判断权是人的。
+   *
+   * said:捎话之后模型说的话。用户 2026-08-22 原话:"有时我是问了个问题,
+   * 有时我是下达了个指令,我看不到 agent 的回复"——只报"已读取"而不给
+   * 下文,提问就永远没有答案,那这个框一半是废的。
+   *
+   * 口径仍是事实而非推断:**这些是你说完之后它说的话,不是"对你的回复"**。
+   * 我们没法证明哪句是答你的(steer 在回合间隙送达,模型可能先把手头
+   * 那段话说完),所以只按时间切片给到下一条插话为止,标签也这么写。 */
+  listInterrupts(id: string): Array<{
+    text: string; at: string; delivered: boolean;
+    said: Array<{ text: string; at: string }>;
+  }> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     const pending = new Set(task.driver?.pendingSteers() ?? []);
     try {
-      return new EventLog(join(task.summary.workspace, "events.jsonl"))
-        .replay()
-        .filter((event) => event.kind === "user_message"
-          && event.payload?.via === "interrupt")
-        .map((event) => ({
-          text: String(event.payload?.text ?? ""),
-          at: String(event.ts ?? ""),
-          delivered: !pending.has(String(event.payload?.text ?? "")),
-        }));
+      const rows: Array<{
+        text: string; at: string; delivered: boolean;
+        said: Array<{ text: string; at: string }>;
+      }> = [];
+      for (const event of new EventLog(
+        join(task.summary.workspace, "events.jsonl"),
+      ).replay()) {
+        if (event.kind === "user_message"
+            && event.payload?.via === "interrupt") {
+          const text = String(event.payload?.text ?? "");
+          rows.push({
+            text, at: String(event.ts ?? ""),
+            delivered: !pending.has(text), said: [],
+          });
+          continue;
+        }
+        // 还没有人捎过话,前面的说明与这个框无关,不收。
+        if (event.kind !== "assistant_message" || !rows.length) continue;
+        const said = String(event.payload?.text ?? "").trim();
+        // 一条插话下面挂太多段就成了第二个过程记录,收前 4 段够看趋势;
+        // 想看全的在「过程记录」里,那才是原话的正本。
+        if (said && rows[rows.length - 1].said.length < 4) {
+          rows[rows.length - 1].said.push({
+            text: said, at: String(event.ts ?? ""),
+          });
+        }
+      }
+      return rows;
     } catch {
       return [];      // 读不动就当没有:旁路绝不挡住页面
     }

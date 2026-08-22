@@ -110,6 +110,22 @@ export function SteerBox({
                 {item.delivered ? "已读取" : "待读取"}
               </span>
               <span className="steer-log-text">{item.text}</span>
+              {/* 只报"已读取"而不给下文,提问就永远没有答案。这里给的是
+                  时间顺序上的下文,不敢叫"回复"——见 listInterrupts 注释。 */}
+              {item.said.length > 0 && (
+                <span className="steer-said">
+                  <em>你说完之后它说的:</em>
+                  {item.said.map((said, index) => (
+                    <span key={`${said.at}-${index}`}>{said.text}</span>
+                  ))}
+                </span>
+              )}
+              {item.delivered && !item.said.length && (
+                <span className="steer-said quiet">
+                  它读到了,但之后还没说过话——可能正埋头执行,
+                  过程记录里能看到它在干什么。
+                </span>
+              )}
             </li>
           ))}
         </ol>

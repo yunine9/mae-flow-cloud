@@ -17,7 +17,7 @@
 import { existsSync, readFileSync } from "node:fs";
 
 export type SegmentKind =
-  | "read" | "edit" | "bash" | "tool" | "talk" | "agent" | "ask";
+  | "read" | "edit" | "bash" | "tool" | "talk" | "agent" | "ask" | "steer";
 
 export interface ActivitySegment {
   /** 段首/段尾时间(ISO)。单事件段两者相同。 */
@@ -72,6 +72,8 @@ const GATE_BLOCKS = 2;
 const FAILURE_STREAK = 3;
 const STALL_IDLE_MS = 10 * 60_000;
 const STALL_TOOL_MS = 30 * 60_000;
+/** 说话类条目(模型说明、人捎的话)的保留长度。摘要要能读,不是标签。 */
+const TALK_LIMIT = 400;
 
 function clip(value: unknown, limit: number): string {
   const text = String(value ?? "").replace(/\s+/g, " ").trim();
@@ -91,6 +93,26 @@ function pathOf(input: Record<string, unknown>): string {
 function shortPath(path: string): string {
   const parts = path.split("/").filter(Boolean);
   return parts.length <= 2 ? path : "…/" + parts.slice(-2).join("/");
+}
+
+/** 命令抬头:抬头只有 60 字,得让这 60 字装的是"它到底跑了什么"。
+ *
+ * 三样噪声全是实测出来的(2026-08-22 拿 .pilot 真现场 520 条事件对拍):
+ * 1. `cd 长路径 && ` / `cd "$(git rev-parse --show-toplevel)"; ` 前缀——
+ *    整链试跑里模型上报 `mvn test`、实发 `cd /很长的路径 && mvn test`;
+ * 2. `python3 "/Users/…/mae-flow/scripts/mae-flow.py" done` 这种内核调用,
+ *    真正有信息的只有末尾那个子命令,前面的绝对路径把抬头全占了——
+ *    真现场里连着七八段抬头一模一样,等于什么都没说;
+ * 3. `; echo TEST_EXIT=$?` 尾巴。
+ * 原文一律保留在 detail 里,这里删的只是显示,不是记录。 */
+function commandHeadline(command: string): string {
+  const stripped = String(command ?? "")
+    .replace(/^\s*cd\s+(?:'[^']*'|"[^"]*"|\S+)\s*(?:&&|;)\s*/, "")
+    .replace(
+      /\b(?:python3?|py)\s+(?:'[^']*'|"[^"]*"|\S+)mae-flow\.py(['"]?)/g,
+      "mae-flow")
+    .replace(/\s*;\s*echo\s+\S*EXIT\S*=\$\?\s*$/i, "");
+  return clip(stripped || command, 60);
 }
 
 /** 一批路径的主导目录:一半以上在同一目录下才有资格说"为主"。 */
@@ -134,12 +156,27 @@ function toAtom(event: Record<string, any>): Atom | null {
     if (tool === "Bash") {
       return { ...base, kind: "bash", subject: clip(input.command, 120) };
     }
+    // 决定卡已经有 human_decision 那条账(还带着人选了什么),这里再记一条
+    // 光秃秃的「调用 AskUserQuestion」就是同一件事记两遍。真现场里这两条
+    // 永远连着出现,占两行、说一件事。
+    if (tool === "AskUserQuestion") return null;
     return { ...base, kind: "tool", subject: tool };
   }
   if (kind === "assistant_message") {
     return {
       ts, ms, kind: "talk", subject: "", isError: false, gateBlocked: false,
-      text: clip(payload.text, 160),
+      // 160 字砍掉的正是最该看的东西:模型解释"为什么这么改"通常三五百字,
+      // 一刀下去只剩开场白,人当然觉得"很多省略"(用户 2026-08-22 原话)。
+      text: clip(payload.text, TALK_LIMIT),
+    };
+  }
+  // 人自己捎的话也是心流的一部分。以前它只在「顺便说一句」那个小框里,
+  // 心流账上完全没有——于是"我下达了个指令"之后,时间线上看不出这句话
+  // 存在过,更看不出它落在哪两个动作之间。
+  if (kind === "user_message" && payload.via === "interrupt") {
+    return {
+      ts, ms, kind: "steer", subject: "", isError: false, gateBlocked: false,
+      text: clip(payload.text, TALK_LIMIT),
     };
   }
   if (kind === "agent_spawned" || kind === "agent_finished") {
@@ -197,17 +234,25 @@ function segmentTitle(kind: SegmentKind, atoms: Atom[]): {
   }
   if (kind === "bash") {
     const commands = [...new Set(atoms.map((a) => a.subject))];
+    const headline = commandHeadline(commands[0] ?? "");
+    // 原来是光秃秃的"执行 5 条命令"——数量是这条账里最没用的信息,
+    // 人想知道的是"它到底跑了什么"。抬头给真命令,数量退到后面。
+    const title = atoms.length === 1
+      ? `执行 ${headline}`
+      : commands.length === 1
+        ? `执行 ${headline},重复 ${atoms.length} 次`
+        : `执行 ${headline} 等 ${commands.length} 条命令`;
     return {
-      title: `执行 ${atoms.length} 条命令${failText}`,
+      title: title + failText,
       detail: commands.slice(0, 4).map((cmd) => clip(cmd, 80)).join(" ⏎ "),
     };
   }
   if (kind === "talk") {
-    const last = atoms[atoms.length - 1];
-    return {
-      title: atoms.length === 1 ? "Agent 说明" : `Agent 说明 ${atoms.length} 段`,
-      detail: last.text,
-    };
+    // 不再合并(见 foldSegments),所以这里就是一条说明的原文。
+    return { title: "Agent 说明", detail: atoms[atoms.length - 1].text };
+  }
+  if (kind === "steer") {
+    return { title: "你捎了一句", detail: atoms[atoms.length - 1].text };
   }
   if (kind === "agent") {
     const last = atoms[atoms.length - 1];
@@ -241,7 +286,11 @@ function foldSegments(atoms: Atom[]): ActivitySegment[] {
     bucket = [];
   };
   for (const atom of atoms) {
-    if (bucket.length && bucket[0].kind !== atom.kind) close();
+    // 说话类条目一条一段:合并只留最后一条,等于把中间说的话直接吞掉。
+    // 动作类合并是压缩噪声(读 12 个文件不必列 12 行),说明合并是丢内容。
+    if (bucket.length
+        && (bucket[0].kind !== atom.kind
+          || atom.kind === "talk" || atom.kind === "steer")) close();
     bucket.push(atom);
   }
   close();
@@ -290,6 +339,7 @@ function nowLine(
     talk: "刚输出了一段说明",
     agent: last.text === "返回" ? "子任务刚返回" : "刚派发了子任务",
     ask: "刚收到人工决定",
+    steer: "刚收到你捎的话",
   };
   return { now: label[last.kind], since: last.ts };
 }

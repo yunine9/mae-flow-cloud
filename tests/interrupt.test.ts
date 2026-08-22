@@ -208,8 +208,20 @@ test("插话回执:发过什么、读到没有,都要能查", async () => {
   assert.equal(logged.length, 1);
   assert.equal(logged[0].text, "掩码保留后四位");
 
+  assert.deepEqual(logged[0].said, [], "还没说下文就是空的,不许硬凑");
+
   await until(() => service.get(id)?.status === "completed", "任务收口");
   // 收口之后队列必然空了 = 已读取
-  assert.equal(service.listInterrupts(id)[0].delivered, true);
+  const done = service.listInterrupts(id)[0];
+  assert.equal(done.delivered, true);
+
+  // "有时我是问了个问题…我看不到 agent 的回复"(用户 2026-08-22 原话):
+  // 只报"已读取"而不给下文,提问就永远没有答案。这里给的是时间顺序上的
+  // 下文——刻意不叫"回复",宿主证明不了哪一段是在答你。
+  assert.deepEqual(done.said.map((item) => item.text),
+    ["收到,按你说的办,完成。"]);
+  // 边界:你开口之前它说过的话,不许算到你这条账上。
+  assert.ok(!done.said.some((item) => item.text.includes("先看一眼现场")),
+    "第一幕的说明发生在插话之前,不是你说完之后的下文");
   await model.stop();
 });

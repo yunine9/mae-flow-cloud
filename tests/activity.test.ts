@@ -215,3 +215,103 @@ test("容错读账本:坏行跳过,好行照常进摘要", () => {
   assert.match(view.segments[0].title, /阅读 1 个文件/);
   assert.equal(readActivityEvents(join(dir, "missing.jsonl")).length, 0);
 });
+
+/* ---- 别再"很多省略":摘要要能读,不是一排标签 ----
+ * 用户 2026-08-22 原话:"执行心流还是很鸡肋,很多省略,也不知道能干啥"。
+ * 下面四条把"省略"逐个钉成契约。 */
+
+test("命令段的抬头是真命令,不是「执行 N 条命令」", () => {
+  const view = buildActivity([
+    ...toolPair("Bash", { command: "cd /很长很长的工作区路径/origin && mvn -q test; echo TEST_EXIT=$?" }),
+    ...toolPair("Bash", { command: "git status --short" }),
+  ], { running: false });
+  assert.equal(view.segments.length, 1);
+  // cd 前缀和 echo 退出码尾巴都是噪声:抬头 60 字全给它们,人就白看了。
+  assert.match(view.segments[0].title, /执行 mvn -q test 等 2 条命令/);
+  assert.doesNotMatch(view.segments[0].title, /很长很长/);
+  assert.doesNotMatch(view.segments[0].title, /TEST_EXIT/);
+  // 原文仍在 detail 里,不是被删了。
+  assert.match(String(view.segments[0].detail), /很长很长/);
+});
+
+test("同一条命令重复跑:说重复几次,而不是假装是几条不同的命令", () => {
+  const view = buildActivity([
+    ...toolPair("Bash", { command: "mvn test" }, { isError: true }),
+    ...toolPair("Bash", { command: "mvn test" }, { isError: true }),
+  ], { running: false });
+  assert.match(view.segments[0].title, /执行 mvn test,重复 2 次,失败 2 次/);
+});
+
+test("模型说的每一段都留下:合并只留最后一条等于把中间的话吞掉", () => {
+  const view = buildActivity([
+    event("assistant_message", { text: "先看一遍现有实现" }),
+    event("assistant_message", { text: "发现掩码顺序反了,先改这里" }),
+    event("assistant_message", { text: "再补一条边界用例" }),
+  ], { running: false });
+  assert.equal(view.segments.length, 3, "三段说明就该是三段,不是一段");
+  assert.deepEqual(view.segments.map((s) => s.detail), [
+    "先看一遍现有实现", "发现掩码顺序反了,先改这里", "再补一条边界用例",
+  ]);
+});
+
+test("说明保留到 400 字:160 字砍掉的正是「为什么这么改」", () => {
+  const long = "掩" .repeat(380);
+  const view = buildActivity([
+    event("assistant_message", { text: long }),
+  ], { running: false });
+  assert.equal(view.segments[0].detail, long, "380 字整段留下,一个字不砍");
+});
+
+test("人捎的话进心流:看得出它落在哪两个动作之间", () => {
+  const view = buildActivity([
+    ...toolPair("Read", { file_path: "src/TextUtil.java" }),
+    event("user_message", { text: "掩码保留后四位,不要处理区号", via: "interrupt" }),
+    ...toolPair("Edit", { file_path: "src/TextUtil.java" }),
+  ], { running: true });
+  const steer = view.segments.find((segment) => segment.kind === "steer");
+  assert.ok(steer, "插话必须自成一段——只躺在「顺便说一句」框里,时间线上就没有它");
+  assert.equal(steer.title, "你捎了一句");
+  assert.equal(steer.detail, "掩码保留后四位,不要处理区号");
+  // 顺序即事实:读完之后说的,说完之后才改。
+  assert.deepEqual(view.segments.map((s) => s.kind), ["read", "steer", "edit"]);
+});
+
+test("普通用户消息不算插话:只有 via=interrupt 才进心流", () => {
+  const view = buildActivity([
+    event("user_message", { text: "催办:流程没走完,继续" }),
+  ], { running: false });
+  assert.equal(view.segments.length, 0, "宿主催办不是人捎的话,不占心流");
+});
+
+/* 下面两条是拿 .pilot/e2e-container-2 的 520 条真事件对拍时冒出来的:
+ * 光把 cd 前缀剥掉还不够,真现场里连着七八段抬头长得一模一样。 */
+
+test("内核 CLI 折成 mae-flow:绝对路径把抬头占满,子命令才是信息", () => {
+  const view = buildActivity([
+    ...toolPair("Bash", {
+      command: 'python3 "/Users/liaoxiang/dev/mae-flow/scripts/mae-flow.py" done',
+    }),
+    ...toolPair("Bash", {
+      command: 'cd "$(git rev-parse --show-toplevel)"; python3 '
+        + '"/Users/liaoxiang/dev/mae-flow/scripts/mae-flow.py" manifest set --file a.md',
+    }),
+  ], { running: false });
+  // 真现场实测:不折的话这两条抬头都是
+  // "执行 python3 "/Users/liaoxiang/dev/mae-flow/scripts/mae-flow.py" …",
+  // 分不出哪条是 done 哪条是 manifest set。
+  assert.match(view.segments[0].title, /执行 mae-flow done 等 2 条命令/);
+  assert.doesNotMatch(view.segments[0].title, /liaoxiang/);
+  // `cd "$(…)";` 这种带命令替换的前缀也要剥掉(&& 和 ; 两种写法都有)。
+  assert.match(String(view.segments[0].detail), /mae-flow\.py" done/,
+    "原文一字不改地留在 detail 里——删的只是显示,不是记录");
+});
+
+test("决定卡不记两遍:human_decision 已经说了人选了什么", () => {
+  const view = buildActivity([
+    ...toolPair("AskUserQuestion", { questions: [{ question: "通过吗?" }] }),
+    event("human_decision", { decision: "通过" }),
+  ], { running: false });
+  assert.deepEqual(view.segments.map((s) => s.kind), ["ask"],
+    "同一件事占两行、说一句话,那就是在制造「很多省略」的观感");
+  assert.equal(view.segments[0].detail, "通过");
+});
