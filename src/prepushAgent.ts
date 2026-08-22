@@ -384,5 +384,15 @@ export function prePushMission(request: PrePushRunRequest): string {
       + '"summary":"最终结论"}',
     "</prepush-result>",
     "只有编译和 UT 都在最后一次代码修改后真实返回成功，status 才能写 passed。",
+    // 用户 2026-08-22 点名的担心:"我就怕只跑编译不跑 UT"。
+    // 宿主侧刻意不加"这条命令是不是在跑测试"的判定(会误伤 UT 入口不含
+    // test 字样的仓),所以这里必须说到明面上——这条靠的是嘱咐,不是闸。
+    // 措辞不许夸大宿主的核对能力:它核的是"你上报的命令确实成功跑过",
+    // 核不出那条命令跑的是编译还是测试。
+    "unit_test 必须填**真跑过测试**的那条命令（如 `mvn test`、"
+      + "`mvn compile -DDT_test=UT -DDT_run=true`、`npm test`），"
+      + "**不能把编译命令填进 UT 栏顶账**：只编译不跑 UT 等于这一关没做，"
+      + "代价是把没测过的代码推上去烧流水线。"
+      + "仓库确实没有 UT 入口时，如实报 code_failure 并写清楚，不要以编译代替。",
   ].join("\n");
 }
