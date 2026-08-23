@@ -3655,7 +3655,7 @@ pre {
   border-bottom: 1px solid var(--border);
   background: var(--surface);
 }
-.ws-back, .ws-native {
+.ws-back {
   display: inline-flex;
   align-items: center;
   gap: .35rem;
@@ -3669,8 +3669,8 @@ pre {
   text-decoration: none;
   white-space: nowrap;
 }
-.ws-back:hover, .ws-native:hover { border-color: var(--accent); color: var(--accent); }
-.ws-back svg, .ws-native svg {
+.ws-back:hover { border-color: var(--accent); color: var(--accent); }
+.ws-back svg {
   width: 14px; height: 14px; fill: none;
   stroke: currentColor; stroke-width: 1.6;
   stroke-linecap: round; stroke-linejoin: round;
@@ -3802,14 +3802,14 @@ pre {
   min-height: 70px;
   padding: 10px 22px;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 18px;
   color: #dfe5ef;
   background: var(--sidebar);
   border-bottom-color: rgba(255, 255, 255, .08);
   box-shadow: 0 6px 22px rgba(8, 13, 24, .16);
 }
-.ws-back, .ws-native {
+.ws-back {
   height: 36px;
   padding: 0 11px;
   justify-content: center;
@@ -3820,13 +3820,13 @@ pre {
   font-size: 11px;
   font-weight: 650;
 }
-.ws-back:hover, .ws-native:hover {
+.ws-back:hover {
   border-color: rgba(255, 255, 255, .22);
   color: #fff;
   background: rgba(255, 255, 255, .08);
 }
 .ws-back:disabled { opacity: .5; cursor: wait; }
-.ws-back svg, .ws-native svg { width: 15px; height: 15px; }
+.ws-back svg { width: 15px; height: 15px; }
 .ws-identity { gap: 3px; }
 .ws-identity-line { gap: 8px; }
 .ws-identity code {
@@ -3872,22 +3872,12 @@ pre {
 .ws-progress .task-phase > i { background: var(--surface); }
 .ws-progress .task-phase.current > i { border-color: var(--surface); }
 .ws-progress .task-phase-track { grid-template-columns: repeat(7, minmax(64px, 1fr)); }
-.ws-execution {
-  flex: none;
-  padding: 9px 24px 10px;
-  border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--page) 76%, var(--surface));
-  box-shadow: var(--shadow-xs);
+.ws-progress.is-fallback .task-progress-caption > span::after {
+  content: " · 概览";
+  color: var(--faint);
+  font-weight: 550;
 }
-.ws-execution .execution-panel {
-  border-radius: 10px;
-  box-shadow: var(--shadow-xs);
-}
-.ws-execution .utility-toggle { min-height: 48px; padding: 8px 13px; }
-.ws-execution .utility-toggle strong { font-size: 12px; }
-.ws-execution .utility-toggle small { font-size: 10.5px; }
-.ws-execution .activity-segments { max-height: min(240px, 28vh); }
-.ws-execution .event-stream { max-height: min(300px, 34vh); }
+.ws-progress.is-fallback .task-phase-track { opacity: .88; }
 .ws-body {
   min-height: 0;
   grid-template-columns: minmax(0, 1fr) clamp(460px, 40vw, 620px);
@@ -4641,6 +4631,27 @@ pre {
 .ws-decision .submit-decision { min-height: 44px; padding-left: 18px; padding-right: 18px; font-size: 13px; }
 .ws-decision .task-utilities { margin-top: 2px; }
 .ws-decision .utility-panel { box-shadow: var(--shadow-xs); }
+.ws-decision .execution-panel .activity-segments { max-height: min(300px, 34vh); }
+.ws-decision .execution-panel .event-stream { max-height: min(360px, 40vh); }
+.ws-usage-summary {
+  min-height: 38px;
+  padding: 8px 11px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--faint);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--surface-soft) 65%, transparent);
+}
+.ws-usage-summary > span {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+}
+.ws-usage-summary .token-usage { margin: 0; padding: 0; border: 0; background: none; }
 /* 曾经这里还有一整套 .utility-block(无边框的裸折叠块)。它只有在
    .ws-decision 上下文里才被补上边框,于是同样四块面板——执行心流、
    耗时与卡点用 block,外部动作台账、过程记录用 panel——在任务卡上
@@ -4794,7 +4805,7 @@ pre {
 
 @media (max-width: 980px) {
   .ws-head { min-height: 64px; padding: 9px 12px; gap: 10px; }
-  .ws-back span, .ws-native { display: none; }
+  .ws-back span { display: none; }
   .ws-back { width: 38px; padding: 0; }
   .ws-health { padding: 9px 14px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ws-health > div { padding: 4px 12px; }
@@ -4810,7 +4821,6 @@ pre {
     gap: 12px;
   }
   .token-usage-total { padding: 0 12px; }
-  .ws-execution { padding: 8px 12px; }
   .ws-body, .ws-body:not(.has-decision) { display: flex; flex-direction: column; overflow-y: auto; }
   .ws-evidence {
     min-height: 62vh;
@@ -4947,14 +4957,12 @@ pre {
 :root[data-theme="light"] .artifact-back,
 :root[data-theme="light"] .artifact-external,
 :root[data-theme="light"] .ws-back,
-:root[data-theme="light"] .ws-native,
 :root[data-theme="light"] .code-review-back {
   color: #626a7d; border-color: var(--line); background: rgba(255, 255, 255, .72);
 }
 :root[data-theme="light"] .artifact-back:hover,
 :root[data-theme="light"] .artifact-external:hover,
 :root[data-theme="light"] .ws-back:hover,
-:root[data-theme="light"] .ws-native:hover,
 :root[data-theme="light"] .code-review-back:hover {
   color: var(--accent); border-color: rgba(101, 91, 216, .24); background: var(--accent-soft);
 }

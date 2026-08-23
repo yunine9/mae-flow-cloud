@@ -1066,13 +1066,12 @@ function EventTail({ taskId, active }: { taskId: string; active: boolean }) {
 /** 同一份事件账的两种读法：心流用于日常扫读，SSE 用于完整取证。
  * 两者不再平铺成重复面板；切到原始事件时才建立实时连接。 */
 export function ExecutionPanel({ task }: { task: TaskSummary }) {
-  const running = task.status === "running";
-  const [expanded, setExpanded] = useState(running);
+  const [expanded, setExpanded] = useState(false);
   const [mode, setMode] = useState<"flow" | "events">("flow");
 
   useEffect(() => {
-    setExpanded(running);
-  }, [task.id, running]);
+    setExpanded(false);
+  }, [task.id]);
 
   useEffect(() => {
     setMode("flow");

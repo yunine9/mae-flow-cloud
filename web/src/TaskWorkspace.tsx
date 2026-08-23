@@ -6,8 +6,8 @@
  * 这里把两半合成一屏:左证据(产物页签,我们自己的排版渲染)、
  * 右决策(审批卡原样搬来)、下面是耗时/台账/事件。
  *
- * 内核面板不再是主路径,降级为「内核原生视图」外链(排障用)——
- * 它是内核为"人坐在终端旁"生成的单文件 HTML,嵌进来永远是两套。
+ * 内核面板不再暴露给业务用户：它是内核为“人坐在终端旁”生成的
+ * 单文件 HTML，工作台自己承接材料、决策与过程观察，避免形成两套入口。
  */
 
 import { useEffect, useState } from "react";
@@ -58,6 +58,29 @@ function sizeText(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** 内核现场始终优先；旧任务、分析任务或纯会话模式没有 panel 文件时，
+ * 仍给人一条 Cloud 生命周期轨道，避免工作台最重要的“走到哪了”整块消失。
+ * 这只是只读展示兜底，不参与流程判断或任务迁移。 */
+function workspaceProgress(task: TaskSummary): NonNullable<TaskSummary["progress"]> {
+  if (task.progress) return task.progress;
+  const phases = [
+    "已受理", "需求理解", "开发实现", "人工确认", "交付验证", "等待合入", "完成",
+  ];
+  const inAnalysis = task.requirement_graph?.stage === "analysis";
+  const currentIndex = task.status === "queued" ? 0
+    : task.status === "waiting_for_human" ? (inAnalysis ? 1 : 3)
+    : task.status === "verifying" ? 4
+    : task.status === "await_merge" ? 5
+    : task.status === "completed" ? 6
+    : inAnalysis ? 1 : 2;
+  return {
+    phases,
+    current_index: currentIndex,
+    current_phase: phases[currentIndex],
+    step: task.focus?.headline ?? statusText(task),
+  };
 }
 
 export function TaskWorkspace({
@@ -289,6 +312,7 @@ export function TaskWorkspace({
     "queued", "running", "pausing", "paused", "waiting_for_human", "verifying",
   ].includes(task.status);
   const health = taskHealthFacts(task, viewerUsername);
+  const visibleProgress = workspaceProgress(task);
 
   async function runControl(action: "pause" | "resume" | "cancel") {
     if (controlBusy) return;
@@ -366,12 +390,6 @@ export function TaskWorkspace({
             )}
           </div>
         )}
-        {(task.repositories?.length ?? 0) < 2 && (
-          <a className="ws-native" href={`/tasks/${task.id}/panel`} target="_blank" rel="noreferrer">
-            内核原生视图
-            <svg viewBox="0 0 16 16" aria-hidden><path d="M6 3.5h6.5V10M12.25 3.75 5 11" /></svg>
-          </a>
-        )}
       </header>
 
       {health && (
@@ -398,17 +416,10 @@ export function TaskWorkspace({
         </section>
       )}
 
-      {task.progress && (
-        <div className="ws-progress">
-          <TaskProgress progress={task.progress} showDetailedStep />
-        </div>
-      )}
-      <PrepushStatus prepush={task.delivery?.prepush} placement="workspace" />
-      <TokenUsage usage={task.token_usage} placement="workspace" />
-
-      <div className="ws-execution" aria-label="任务执行现场">
-        <ExecutionPanel task={task} />
+      <div className={`ws-progress${task.progress ? "" : " is-fallback"}`}>
+        <TaskProgress progress={visibleProgress} showDetailedStep />
       </div>
+      <PrepushStatus prepush={task.delivery?.prepush} placement="workspace" />
 
       <div className={`ws-body${waiting ? " has-decision" : ""}`
         + `${collaborationVisible ? " has-collaboration" : ""}`}>
@@ -607,6 +618,13 @@ export function TaskWorkspace({
           />
           <div className="task-utilities">
             <TaskTimeline taskId={task.id} />
+            <ExecutionPanel task={task} />
+            {task.token_usage && (
+              <div className="ws-usage-summary" title="来自模型提供方的真实用量统计">
+                <span>模型用量</span>
+                <TokenUsage usage={task.token_usage} placement="history" />
+              </div>
+            )}
             {/* 外部动作台账不再上页面,理由同 TaskCard;接口仍在。 */}
           </div>
         </aside>
