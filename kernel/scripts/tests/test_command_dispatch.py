@@ -55,6 +55,7 @@ class CommandDispatchTests(unittest.TestCase):
             "codecheck-record": "cmd_codecheck_record",
             # 云端宿主喂平台事实的口子;加路由时漏了这行,基线就一直红着
             "pipeline": "cmd_pipeline",
+            "intervention": "cmd_user_intervention",
             "milestone": "cmd_build_milestone",
             "approve-exemption": "cmd_approve_exemption",
             "accept-risk": "cmd_accept_risk",

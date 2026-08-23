@@ -13,8 +13,8 @@ import {
   beginDeveloperAssistantHandoff,
   captureDeveloperAssistantWorktree,
   finishDeveloperAssistantHandoff,
-  handoffCoreStillMatches,
   inspectDeveloperAssistantAvailability,
+  summarizeDeveloperAssistantChangedPaths,
 } from "../src/developerAssistantHandoff.ts";
 
 function git(cwd: string, ...args: string[]): string {
@@ -63,7 +63,7 @@ function fixture(): { root: string; repo: string; kernel: string } {
   return { root, repo, kernel };
 }
 
-test("开发助手只在内核明确允许通用源码修改的窗口开放", () => {
+test("开发助手把内核位置当上下文，不阻止用户主动接管", () => {
   const { repo, kernel } = fixture();
   const inspect = () => inspectDeveloperAssistantAvailability(repo, kernel);
 
@@ -72,18 +72,15 @@ test("开发助手只在内核明确允许通用源码修改的窗口开放", ()
     { available: true, code: "edit_window" },
   );
 
-  for (const [current, code] of [
-    ["build_review", "approval_pending"],
-    ["verify_ut", "tests_only"],
-    ["external_verify", "host_wait"],
-    ["build_commit", "not_editable"],
+  for (const current of [
+    "build_review", "verify_ut", "external_verify", "build_commit",
   ] as const) {
     writeFileSync(join(repo, ".mae-flow.json"), JSON.stringify({
       current, revision: 8,
     }));
     const availability = inspect();
-    assert.equal(availability.available, false, current);
-    assert.equal(availability.code, code, current);
+    assert.equal(availability.available, true, current);
+    assert.equal(availability.code, "user_override", current);
   }
 });
 
@@ -113,7 +110,47 @@ test("交还快照识别同一脏文件的内容变化，并跨多轮保留最�
     "同一次暂停期间的第二轮助手不能把第一轮修改当成新基线");
 });
 
-test("内核 revision 变化时旧助手现场不能直接交还", () => {
+test("交还快照对大工作区实行路径与读取预算，不生成完整 binary diff", () => {
+  const { repo } = fixture();
+  for (let index = 0; index < 300; index += 1) {
+    writeFileSync(join(repo, `note-${String(index).padStart(3, "0")}.md`),
+      `note ${index}\n`);
+  }
+  writeFileSync(join(repo, "large.bin"), Buffer.alloc(8 * 1024 * 1024, 7));
+  const before = captureDeveloperAssistantWorktree(repo);
+  assert.equal(before.paths.length, 256);
+  assert.equal(before.paths_truncated, true);
+  assert.ok(Object.keys(before.path_fingerprints).length <= 256);
+
+  writeFileSync(join(repo, "note-299.md"), "user changed this document\n");
+  const after = captureDeveloperAssistantWorktree(repo);
+  const handoff = finishDeveloperAssistantHandoff({
+    id: "bounded-snapshot", state: "running",
+    started_at: "2026-08-23T00:00:00.000Z",
+    initial: before, message: "running",
+  }, after);
+  assert.equal(handoff.state, "changed");
+  assert.equal(handoff.paths_truncated, true,
+    "路径超预算只做保守提示，不能把整个 diff/文件内容塞进交还协议");
+});
+
+test("暂停前已有未跟踪源码目录，助手改同长度内容仍必须被识别", () => {
+  const { repo } = fixture();
+  mkdirSync(join(repo, "src", "new-module"), { recursive: true });
+  const source = join(repo, "src", "new-module", "A.ts");
+  writeFileSync(source, "export const value = 'old';\n");
+  const before = captureDeveloperAssistantWorktree(repo);
+  writeFileSync(source, "export const value = 'new';\n");
+  const handoff = finishDeveloperAssistantHandoff({
+    id: "untracked-source", state: "running",
+    started_at: "2026-08-23T00:00:00.000Z",
+    initial: before, message: "running",
+  }, captureDeveloperAssistantWorktree(repo));
+  assert.equal(handoff.state, "changed");
+  assert.deepEqual(handoff.changed_paths, ["src/new-module/A.ts"]);
+});
+
+test("内核 revision 变化只用于定位，不阻止交还", () => {
   const { repo, kernel } = fixture();
   const before = inspectDeveloperAssistantAvailability(repo, kernel);
   const handoff = beginDeveloperAssistantHandoff(
@@ -122,12 +159,66 @@ test("内核 revision 变化时旧助手现场不能直接交还", () => {
     current: "build", revision: 8,
   }));
   const after = inspectDeveloperAssistantAvailability(repo, kernel);
-  assert.equal(handoffCoreStillMatches(handoff, after), false);
+  assert.equal(after.core?.revision, 8);
+  assert.equal(handoff.core?.revision, 7);
   assert.equal(JSON.parse(readFileSync(join(repo, ".mae-flow.json"), "utf-8")).current,
     "build");
 });
 
-test("助手若间接改变 Git HEAD，交还协议 fail-closed", () => {
+test("多轮助手不因 revision 变化吞掉第一轮修改", () => {
+  const { repo, kernel } = fixture();
+  const first = beginDeveloperAssistantHandoff(undefined,
+    inspectDeveloperAssistantAvailability(repo, kernel),
+    captureDeveloperAssistantWorktree(repo));
+  writeFileSync(join(repo, "first.ts"), "export const first = true;\n");
+  const finished = finishDeveloperAssistantHandoff(
+    first, captureDeveloperAssistantWorktree(repo));
+  writeFileSync(join(repo, ".mae-flow.json"), JSON.stringify({
+    current: "build_review", revision: 99,
+  }));
+  const second = beginDeveloperAssistantHandoff(finished,
+    inspectDeveloperAssistantAvailability(repo, kernel),
+    captureDeveloperAssistantWorktree(repo));
+  assert.equal(second.initial.fingerprint, first.initial.fingerprint);
+  assert.equal(finishDeveloperAssistantHandoff(
+    second, captureDeveloperAssistantWorktree(repo)).state, "changed");
+});
+
+test("新一轮助手不继承上一轮 derived/truncated 诊断标记", () => {
+  const { repo, kernel } = fixture();
+  const initial = captureDeveloperAssistantWorktree(repo);
+  const second = beginDeveloperAssistantHandoff({
+    id: "same-intervention", state: "changed",
+    started_at: "2026-08-23T00:00:00.000Z",
+    initial,
+    current: initial,
+    changed_paths: [],
+    derived_only: true,
+    paths_truncated: true,
+    message: "第一轮只有构建产物",
+  }, inspectDeveloperAssistantAvailability(repo, kernel), initial);
+  assert.equal(second.derived_only, undefined);
+  assert.equal(second.paths_truncated, undefined);
+  assert.equal(second.id, "same-intervention",
+    "同一次用户接管仍复用最早起点和幂等编号");
+});
+
+test("交还路径摘要优先源码并过滤构建洪水", () => {
+  const summary = summarizeDeveloperAssistantChangedPaths([
+    ...Array.from({ length: 500 }, (_, index) => `target/classes/C${index}.class`),
+    "docs/readme.md", "src/main/java/A.java", "tests/a_test.cpp",
+  ], 2);
+  assert.deepEqual(summary.paths, ["src/main/java/A.java", "tests/a_test.cpp"]);
+  assert.equal(summary.total, 503);
+  assert.equal(summary.truncated, true,
+    "仍有一条有效文档路径超过上限，应明确告诉内核摘要被截断");
+  assert.equal(summary.derivedOnly, false);
+  assert.equal(summarizeDeveloperAssistantChangedPaths([
+    "target/classes/A.class", "node_modules/pkg/index.js",
+  ]).derivedOnly, true);
+});
+
+test("Git HEAD 变化会刷新现场但不会阻止交还", () => {
   const { repo, kernel } = fixture();
   const availability = inspectDeveloperAssistantAvailability(repo, kernel);
   const handoff = beginDeveloperAssistantHandoff(
@@ -138,6 +229,6 @@ test("助手若间接改变 Git HEAD，交还协议 fail-closed", () => {
 
   const finished = finishDeveloperAssistantHandoff(
     handoff, captureDeveloperAssistantWorktree(repo));
-  assert.equal(finished.state, "blocked");
-  assert.match(finished.message, /Git HEAD 发生变化/);
+  assert.equal(finished.state, "changed");
+  assert.match(finished.message, /不会阻塞任务/);
 });

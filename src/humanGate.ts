@@ -30,7 +30,7 @@ export interface WaitingRecord {
    * (真人实战第一单实测)。 */
   context?: string;
   state_version: number;
-  status: "waiting" | "resolved";
+  status: "waiting" | "resolved" | "superseded";
   decision: string;
   /** 结构化回答(问题→选项)。多问题卡必填;单问题卡可由 decision 派生。 */
   answers?: Record<string, string>;
@@ -130,6 +130,30 @@ export class HumanGate {
       record.answers = { ...options.answers };
     }
     record.notes = String(options.notes ?? "");
+    record.state_version += 1;
+    record.resolved_at = now();
+    this.save(store);
+    return { ...record };
+  }
+
+  /** 用户主动接管代码后，旧问题绑定的现场已经失效。它不是一次
+   * “通过/打回”决定，只从待办列表撤下并保留审计原因。 */
+  supersede(
+    waitingId: string,
+    options: { stateVersion: number; notes: string },
+  ): WaitingRecord {
+    const store = this.load();
+    const record = store.records[waitingId];
+    if (!record) throw new StateConflictError(`待办 ${waitingId} 不存在`);
+    if (record.status === "superseded") return { ...record };
+    if (record.status !== "waiting"
+        || record.state_version !== options.stateVersion) {
+      throw new StateConflictError(`任务状态已变化:待办 ${waitingId} 已失效`);
+    }
+    record.status = "superseded";
+    record.decision = "";
+    record.answers = undefined;
+    record.notes = String(options.notes);
     record.state_version += 1;
     record.resolved_at = now();
     this.save(store);

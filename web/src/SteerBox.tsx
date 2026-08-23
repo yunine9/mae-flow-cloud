@@ -186,8 +186,7 @@ export function SteerBox({
   const canSteer = task.status === "running";
   const waitingForPause = !!pendingAssistant && task.status !== "paused";
   const assistantAvailable = assistant.availability.available;
-  const handoffBlocked = assistant.handoff?.state === "blocked"
-    || assistant.handoff?.state === "running";
+  const handoffBlocked = assistant.handoff?.state === "running";
 
   return (
     <section className="steer" aria-label="开发协作">
@@ -212,7 +211,7 @@ export function SteerBox({
           className={mode === "assistant" ? "active" : ""}
           onClick={() => setMode("assistant")}>
           <strong>开发助手</strong>
-          <small>在内核允许修改时，直接查代码、跑命令、修改</small>
+          <small>你主动接管现场，直接查代码、跑命令、修改</small>
         </button>
       </div>
 
@@ -293,12 +292,13 @@ export function SteerBox({
 
           <p className="steer-copy assistant-copy">
             像本地 CLI 一样直接说要做什么。助手可读写当前仓、运行构建与测试；
-            不推进 Mae-Flow、不提交或推送。只有内核明确允许源码修改的阶段才开放，
-            所有改动和执行结果都会作为现场摘要交还主任务。
+            不替你推进 Mae-Flow，也不提交或推送。当前流程位置只作为上下文，
+            不限制你的介入；改动和执行结果会直接交还主任务。
           </p>
 
           {assistant.handoff && assistant.handoff.state !== "running" && (
-            <div className={`assistant-handoff ${assistant.handoff.state}`}>
+            <div className={`assistant-handoff ${assistant.handoff.state === "blocked"
+              ? "changed" : assistant.handoff.state}`}>
               <div>
                 <i aria-hidden />
                 <strong>{assistant.handoff.state === "changed"
@@ -307,7 +307,7 @@ export function SteerBox({
                     ? "无代码变化"
                     : assistant.handoff.state === "returned"
                       ? "已交给主任务"
-                      : "现场核对失败"}</strong>
+                      : "现场将重新读取"}</strong>
               </div>
               <p>{assistant.handoff.message}</p>
               {!!assistant.handoff.changed_paths?.length && (

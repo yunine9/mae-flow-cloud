@@ -889,6 +889,26 @@ export class CloudSession {
             details: {},
           };
         }
+        if (record.status === "superseded") {
+          const text = "这张旧问题已因用户接管代码现场而失效。请重新读取 mae-flow current；"
+            + "如果当前步骤仍需要确认，请基于最新现场重新提问。";
+          const finished = driver.emit("tool_finished", driver.sessionId, {
+            call_id: callId,
+            name: "AskUserQuestion",
+            input: params ?? {},
+            is_error: true,
+            result: text,
+          });
+          driver.kernelBypass(driver.options.hostHooks?.postTool?.(finished));
+          driver.hostAnswered.add(callId);
+          driver.options.log?.(
+            `任务 ${driver.options.taskId} 拒绝重放已失效待办 ${record.waiting_id}`);
+          return {
+            content: [{ type: "text", text }],
+            details: {},
+            isError: true,
+          };
+        }
         driver.waitingRecord = record;
         const decision = new Promise<string>((resolve) =>
           driver.decisionResolvers.set(callId, resolve));

@@ -4,13 +4,14 @@
  * The assistant remains a Cloud sidecar: it never receives KernelHost hooks.
  * This module only answers two mechanical questions at the boundary:
  *
- * 1. Does the current Mae-Flow step explicitly allow general source edits?
+ * 1. Where was Mae-Flow when the user deliberately took over the workspace?
  * 2. What changed in the worktree while the main session was paused?
  *
- * It deliberately does not invent transitions or mark any core evidence PASS.
+ * The step is context, not permission: user intervention can override normal
+ * edit windows. This module never invents transitions or marks evidence PASS.
  */
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   closeSync,
   constants,
@@ -26,6 +27,7 @@ import { runSafeWorktreeGit } from "./safeGit.ts";
 
 export type DeveloperAssistantAvailabilityCode =
   | "edit_window"
+  | "user_override"
   | "approval_pending"
   | "tests_only"
   | "host_wait"
@@ -53,10 +55,15 @@ export interface DeveloperAssistantWorktreeCheckpoint {
   fingerprint: string;
   paths: string[];
   path_fingerprints: Record<string, string>;
+  paths_truncated?: boolean;
+  derived_only?: boolean;
 }
 
 export interface DeveloperAssistantHandoff {
+  /** `blocked` is retained only for reading snapshots written by older versions. */
   state: "running" | "unchanged" | "changed" | "returned" | "blocked";
+  /** Stable retry identity; it is not a code/content gate. */
+  id?: string;
   started_at: string;
   finished_at?: string;
   returned_at?: string;
@@ -64,7 +71,62 @@ export interface DeveloperAssistantHandoff {
   initial: DeveloperAssistantWorktreeCheckpoint;
   current?: DeveloperAssistantWorktreeCheckpoint;
   changed_paths?: string[];
+  paths_truncated?: boolean;
+  derived_only?: boolean;
   message: string;
+}
+
+export interface DeveloperAssistantChangedPathSummary {
+  paths: string[];
+  total: number;
+  truncated: boolean;
+  derivedOnly: boolean;
+}
+
+const GENERATED_SEGMENTS = new Set([
+  ".git", ".gradle", ".m2", ".cache", "node_modules", "coverage",
+  ".mae-flow-work",
+]);
+const GENERATED_OUTPUT = /\.(?:class|o|obj|so|dylib|dll|a|lib|jar|war|ear|pyc|pyo|exe|pdb|d)$/i;
+const CODE_PATH = /\.(?:[cm]?[jt]sx?|java|kt|kts|groovy|c|cc|cpp|cxx|h|hh|hpp|hxx|py|go|rs|cs|swift|scala|rb|php|sh|bash|zsh|sql|proto)$/i;
+const TEST_PATH = /(^|\/)(?:tests?|__tests__)(\/|$)|(?:^|[._-])(?:test|spec)s?\.[^/]+$/i;
+const BUILD_PATH = /(^|\/)(?:pom\.xml|package(?:-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|CMakeLists\.txt|Makefile|build\.gradle(?:\.kts)?|settings\.gradle(?:\.kts)?)$/i;
+const DOC_PATH = /(^|\/)docs?\/|\.(?:md|mdx|rst|adoc|txt)$/i;
+
+function pathPriority(path: string): number {
+  if (TEST_PATH.test(path) || CODE_PATH.test(path)) return 0;
+  if (BUILD_PATH.test(path)) return 1;
+  if (DOC_PATH.test(path)) return 2;
+  return 3;
+}
+
+function knownGenerated(path: string): boolean {
+  const parts = path.split("/");
+  if (parts.some((segment) => GENERATED_SEGMENTS.has(segment))) return true;
+  return parts.some((segment) => ["target", "build", "dist", "out"]
+    .includes(segment)) && GENERATED_OUTPUT.test(path);
+}
+
+/** Bound diagnostic paths so build output can never make hand-off impossible. */
+export function summarizeDeveloperAssistantChangedPaths(
+  values: string[],
+  limit = 160,
+): DeveloperAssistantChangedPathSummary {
+  const unique = [...new Set(values.map((value) => value.replace(/\\/g, "/")
+    .replace(/^(?:\.\/)+/, "").trim()).filter((value) => value
+      && !value.startsWith("/") && value !== ".." && !value.startsWith("../")
+      && !value.includes("/../")))];
+  const useful = unique.filter((path) => !knownGenerated(path));
+  useful.sort((left, right) => pathPriority(left) - pathPriority(right)
+    || left.localeCompare(right));
+  const paths = useful.slice(0, Math.max(1, limit))
+    .map((path) => path.slice(0, 500));
+  return {
+    paths,
+    total: unique.length,
+    truncated: useful.length > paths.length,
+    derivedOnly: unique.length > 0 && useful.length === 0,
+  };
 }
 
 const CONTROL_PATHSPECS = [
@@ -139,34 +201,8 @@ export function inspectDeveloperAssistantAvailability(
     if (!step) throw new Error(`内核步骤 ${stepId} 不在流程定义中`);
     const title = String(step.title ?? "").trim() || undefined;
     const core = coreCheckpoint(state, stepId, title);
-    if (step.user_ack || step.approval_subject) {
-      return {
-        available: false,
-        code: "approval_pending",
-        mode: "unavailable",
-        core,
-        reason: `当前正在「${title ?? stepId}」等待检视；如需改代码，请先选择“需要调整”进入返工阶段`,
-      };
-    }
-    if (step.tests_only) {
-      return {
-        available: false,
-        code: "tests_only",
-        mode: "unavailable",
-        core,
-        reason: `当前「${title ?? stepId}」只允许测试范围修改，通用开发助手可能越界，请先交由主任务完成该步骤`,
-      };
-    }
-    if (step.host_wait) {
-      return {
-        available: false,
-        code: "host_wait",
-        mode: "unavailable",
-        core,
-        reason: `当前「${title ?? stepId}」由宿主等待外部结果，不开放旁路修改`,
-      };
-    }
-    if (step.allow_source_edit === true) {
+    if (step.allow_source_edit === true && !step.tests_only
+        && !step.user_ack && !step.approval_subject && !step.host_wait) {
       return {
         available: true,
         code: "edit_window",
@@ -176,18 +212,18 @@ export function inspectDeveloperAssistantAvailability(
       };
     }
     return {
-      available: false,
-      code: "not_editable",
-      mode: "unavailable",
+      available: true,
+      code: "user_override",
+      mode: "edit",
       core,
-      reason: `当前「${title ?? stepId}」不是源码修改阶段，请先让主任务推进到可修改步骤`,
+      reason: `当前主流程位于「${title ?? stepId}」；这是用户主动接管的旁路助手，可直接处理代码，交还后主任务会重新读取现场`,
     };
   } catch (error) {
     return {
-      available: false,
-      code: "core_unavailable",
-      mode: "unavailable",
-      reason: `无法确认内核修改边界，已安全停用开发助手：${String(error)}`,
+      available: true,
+      code: "user_override",
+      mode: "edit",
+      reason: `内核位置暂时不可读，但不阻止用户接管代码现场；交还后主任务会重新读取：${String(error)}`,
     };
   }
 }
@@ -206,12 +242,17 @@ function contained(root: string, candidate: string): boolean {
     && !isAbsolute(path));
 }
 
-function fingerprintPath(root: string, relativePath: string): string {
+function fingerprintPath(
+  root: string,
+  relativePath: string,
+  readBudget: { remaining: number },
+): string {
   const absolute = resolve(root, relativePath);
   if (!contained(root, absolute) || !existsSync(absolute)) return "missing";
   const info = lstatSync(absolute);
   const hash = createHash("sha256")
-    .update(String(info.mode)).update("\0").update(String(info.size)).update("\0");
+    .update(String(info.mode)).update("\0").update(String(info.size)).update("\0")
+    .update(String(info.mtimeMs)).update("\0");
   if (info.isSymbolicLink()) {
     return hash.update("symlink\0").update(readlinkSync(absolute)).digest("hex");
   }
@@ -219,11 +260,22 @@ function fingerprintPath(root: string, relativePath: string): string {
   let descriptor: number | undefined;
   try {
     descriptor = openSync(absolute, constants.O_RDONLY | constants.O_NOFOLLOW);
-    const buffer = Buffer.allocUnsafe(64 * 1024);
-    for (;;) {
-      const size = readSync(descriptor, buffer, 0, buffer.length, null);
-      if (!size) break;
-      hash.update(buffer.subarray(0, size));
+    const allowance = Math.min(64 * 1024, readBudget.remaining, info.size);
+    if (allowance > 0) {
+      const firstSize = info.size > allowance ? Math.ceil(allowance / 2) : allowance;
+      const first = Buffer.allocUnsafe(firstSize);
+      const firstRead = readSync(descriptor, first, 0, first.length, 0);
+      hash.update("head\0").update(first.subarray(0, firstRead));
+      let total = firstRead;
+      const tailSize = allowance - firstRead;
+      if (tailSize > 0 && info.size > firstRead) {
+        const tail = Buffer.allocUnsafe(tailSize);
+        const offset = Math.max(firstRead, info.size - tailSize);
+        const tailRead = readSync(descriptor, tail, 0, tail.length, offset);
+        hash.update("tail\0").update(tail.subarray(0, tailRead));
+        total += tailRead;
+      }
+      readBudget.remaining -= total;
     }
     return hash.digest("hex");
   } finally {
@@ -242,37 +294,28 @@ export function captureDeveloperAssistantWorktree(
   const root = resolve(cwd);
   const sha = gitOutput(root, ["rev-parse", "--verify", "HEAD"], "读取 HEAD").trim();
   const pathspec = ["--", ".", ...CONTROL_PATHSPECS];
-  const diff = gitOutput(root,
-    ["diff", "--binary", "--no-ext-diff", "HEAD", ...pathspec], "读取代码差异");
-  const status = gitOutput(root,
-    ["status", "--porcelain=v1", "-z", "--untracked-files=all", ...pathspec],
-    "读取工作区状态");
   const tracked = splitZero(gitOutput(root,
     ["diff", "--name-only", "-z", "HEAD", ...pathspec], "读取变更文件"));
   const untracked = splitZero(gitOutput(root,
     ["ls-files", "--others", "--exclude-standard", "-z", ...pathspec],
     "读取新文件"));
-  const paths = [...new Set([...tracked, ...untracked])].sort();
+  const candidates = [...new Set([...tracked, ...untracked])].sort();
+  const summary = summarizeDeveloperAssistantChangedPaths(candidates, 256);
+  const paths = summary.paths;
+  const readBudget = { remaining: 4 * 1024 * 1024 };
   const pathFingerprints = Object.fromEntries(paths.map((path) =>
-    [path, fingerprintPath(root, path)]));
+    [path, fingerprintPath(root, path, readBudget)]));
   const fingerprint = createHash("sha256")
-    .update(sha).update("\0").update(diff).update("\0").update(status)
+    .update(sha).update("\0").update(JSON.stringify(candidates))
     .update("\0").update(JSON.stringify(pathFingerprints)).digest("hex");
   return {
     sha,
     fingerprint,
     paths,
     path_fingerprints: pathFingerprints,
+    paths_truncated: summary.truncated,
+    derived_only: summary.derivedOnly,
   };
-}
-
-function sameCore(
-  left: DeveloperAssistantCoreCheckpoint | undefined,
-  right: DeveloperAssistantCoreCheckpoint | undefined,
-): boolean {
-  if (!left || !right) return left === right;
-  return left.step === right.step && left.revision === right.revision
-    && left.approval_subject_id === right.approval_subject_id;
 }
 
 export function beginDeveloperAssistantHandoff(
@@ -281,18 +324,21 @@ export function beginDeveloperAssistantHandoff(
   worktree: DeveloperAssistantWorktreeCheckpoint,
   at = new Date().toISOString(),
 ): DeveloperAssistantHandoff {
-  if (previous && previous.state !== "returned"
-      && sameCore(previous.core, availability.core)) {
+  if (previous && previous.state !== "returned") {
     return {
       ...previous,
+      id: previous.id ?? randomUUID(),
       state: "running",
       current: undefined,
       finished_at: undefined,
       changed_paths: undefined,
+      paths_truncated: undefined,
+      derived_only: undefined,
       message: "开发助手正在处理，主任务继续保持暂停",
     };
   }
   return {
+    id: randomUUID(),
     state: "running",
     started_at: at,
     core: availability.core,
@@ -306,18 +352,6 @@ export function finishDeveloperAssistantHandoff(
   current: DeveloperAssistantWorktreeCheckpoint,
   at = new Date().toISOString(),
 ): DeveloperAssistantHandoff {
-  if (handoff.initial.sha !== current.sha) {
-    return {
-      ...handoff,
-      state: "blocked",
-      current,
-      finished_at: at,
-      changed_paths: [...new Set([
-        ...handoff.initial.paths, ...current.paths,
-      ])].sort(),
-      message: "开发助手运行期间 Git HEAD 发生变化；平台已阻止直接交还，避免绕过主流程提交边界",
-    };
-  }
   const candidates = new Set([
     ...Object.keys(handoff.initial.path_fingerprints),
     ...Object.keys(current.path_fingerprints),
@@ -325,7 +359,12 @@ export function finishDeveloperAssistantHandoff(
   let changedPaths = [...candidates].filter((path) =>
     handoff.initial.path_fingerprints[path]
       !== current.path_fingerprints[path]).sort();
-  const changed = handoff.initial.fingerprint !== current.fingerprint;
+  const pathsTruncated = Boolean(
+    handoff.initial.paths_truncated || current.paths_truncated);
+  // 超过有界快照时不能证明“完全没改”。用户既然主动接管，宁可让
+  // 内核多做一次安全回退，也不能保留可能已过期的审批/流水线。
+  const changed = handoff.initial.fingerprint !== current.fingerprint
+    || pathsTruncated;
   if (changed && changedPaths.length === 0) {
     changedPaths = [...new Set([
       ...handoff.initial.paths, ...current.paths,
@@ -337,17 +376,15 @@ export function finishDeveloperAssistantHandoff(
     current,
     finished_at: at,
     changed_paths: changedPaths,
+    paths_truncated: pathsTruncated,
+    derived_only: changed && changedPaths.length === 0
+      && Boolean(handoff.initial.derived_only || current.derived_only),
     message: changed
-      ? `助手修改了 ${changedPaths.length || "若干"} 个文件；交还后主任务会收到完整现场摘要`
+      ? handoff.initial.sha !== current.sha
+        ? `代码基线发生了变化；平台已刷新当前现场并交给主任务重新读取，不会阻塞任务`
+        : `助手修改了 ${changedPaths.length || "若干"} 个文件；交还后主任务会收到现场摘要`
       : "助手没有改变业务代码，可直接交还主任务",
   };
-}
-
-export function handoffCoreStillMatches(
-  handoff: DeveloperAssistantHandoff,
-  availability: DeveloperAssistantAvailability,
-): boolean {
-  return sameCore(handoff.core, availability.core);
 }
 
 export function markDeveloperAssistantReturned(

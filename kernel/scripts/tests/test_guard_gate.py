@@ -191,6 +191,15 @@ class BashWriteGateTests(unittest.TestCase):
         self.assertEqual("allow", decide_bash_write(self.context(
             command='python "mae-flow.py" pipeline show')).kind)
 
+    def test_user_intervention_cannot_be_forged_by_main_agent(self):
+        blocked = decide_bash_write(self.context(
+            command='python ".mae-flow-work/bin/mae-flow.py" '
+                    'intervention reconcile --file handoff.json'))
+        self.assertEqual(
+            ("absolute", "bash-user-intervention-self-report"),
+            (blocked.kind, blocked.rule))
+        self.assertIn("Cloud", blocked.message)
+
     def test_flow_head_blocks_bash_source_writes(self):
         """Bash 写源码与 Edit 同一条头部纪律(sed -i/重定向绕不过去)。"""
         head = decide_bash_write(self.context(

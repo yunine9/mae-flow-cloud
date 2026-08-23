@@ -16,6 +16,7 @@ from mae_flow_core.workflow.execution_contract import (
     validation_environment,
 )
 from mae_flow_core.cli_commands.approval_subject import build_subject
+from mae_flow_core.cli_commands.user_intervention import render_user_intervention
 
 def perms_line(step):
     """本步的写入范围提示——只陈述真实成立的事。
@@ -309,6 +310,9 @@ def print_current(flow, st):
             print("──── 当前遗留（修复轮必须优先处理） ────")
             print(api._moonlight_issue_context(st))
     print(perms_line(step))
+    intervention = render_user_intervention(st)
+    if intervention:
+        print(intervention)
     for _w in _sentinel_lines(sid, st):
         print(_w)
     # 门禁放行时写的非阻断提示走不到模型(退 0 的 stderr 只给人看),在这里补送。

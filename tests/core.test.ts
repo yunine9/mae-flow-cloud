@@ -67,6 +67,26 @@ test("人工待办:同 call_id 幂等,先到决定生效", () => {
   assert.equal(gate.pending().length, 0);
 });
 
+test("用户接管只作废旧待办，不伪造通过或打回答案", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-"));
+  const gate = new HumanGate(join(dir, "waiting.json"));
+  const waiting = gate.createWaiting({
+    taskId: "T-1", step: "build_review", callId: "c2",
+    questionInput: { q: "代码通过吗" },
+  });
+  const closed = gate.supersede(waiting.waiting_id, {
+    stateVersion: waiting.state_version,
+    notes: "用户接管代码，旧检视对象失效",
+  });
+  assert.equal(closed.status, "superseded");
+  assert.equal(closed.decision, "");
+  assert.equal(gate.pending().length, 0);
+  assert.equal(gate.supersede(waiting.waiting_id, {
+    stateVersion: waiting.state_version,
+    notes: "重放",
+  }).status, "superseded");
+});
+
 test("transcript:未绑定子会话拒收;绑定后落到确定性路径", () => {
   const dir = mkdtempSync(join(tmpdir(), "mfc-"));
   const store = new TranscriptStore(join(dir, "transcript.jsonl"), "main");

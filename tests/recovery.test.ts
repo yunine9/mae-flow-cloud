@@ -159,6 +159,53 @@ test("恢复重放同一提问 ID:已回答的卡直接回放,不再次等人", 
   await modelB.stop();
 });
 
+test("恢复重放同一提问 ID:已失效的旧卡返回工具错误,不再次挂起", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-recover-superseded-card-"));
+  const workspace = join(dataDir, "task-1");
+  const gate = new HumanGate(join(workspace, "waiting.json"));
+  const stale = gate.createWaiting({
+    taskId: "task-1",
+    step: "build_review",
+    callId: "scripted-0",
+    questionInput: { questions: [{
+      question: "旧代码可以继续吗?", options: ["继续", "修改"],
+    }] },
+  });
+  gate.supersede(stale.waiting_id, {
+    stateVersion: stale.state_version,
+    notes: "用户已接管并修改代码",
+  });
+  const model = new ScriptedModelServer([
+    { tool: { name: "AskUserQuestion", input: { questions: [{
+      question: "旧代码可以继续吗?", options: ["继续", "修改"],
+    }] } } },
+    { text: "旧卡已失效，已重新读取现场并继续。" },
+  ]);
+  await model.start();
+  const service = new TaskService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+  });
+  const created = service.create("演练:旧卡失效后不能复活");
+  assert.equal(created.id, "task-1");
+  const done = await until(() => {
+    const task = service.get(created.id);
+    if (task?.status === "waiting_for_human") {
+      throw new Error("已失效的同一张卡被重复展示");
+    }
+    return task?.status === "completed" ? task : undefined;
+  }, "失效卡作为工具错误返回后收口");
+  assert.equal(done.waiting, undefined);
+  const events = readFileSync(join(workspace, "events.jsonl"), "utf-8")
+    .trim().split("\n").map((line) => JSON.parse(line));
+  assert.ok(events.some((event) => event.kind === "tool_finished"
+    && event.payload?.call_id === "scripted-0"
+    && event.payload?.is_error === true),
+  "失效卡必须作为可见工具错误回给 Agent，而不是静默吞掉");
+  await service.shutdown();
+  await model.stop();
+});
+
 test("恢复自愈:概要还在等人但 waiting 已 resolved,自动续跑", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-recover-resolved-card-"));
   const modelA = new ScriptedModelServer(LIFE_A);

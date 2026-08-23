@@ -146,6 +146,7 @@ def advance(flow, st, sid, step, tag, note=""):
     st.pop("unlock", None)   # 源码解锁仅限本步实例,推进即失效
     st.pop("risk_acceptances", None)   # 风险放行同样只属于当前步骤实例
     st.pop("approval_subject", None)   # 人工决定只绑定本步展示的内容
+    st.pop("user_intervention", None)  # 下一步已承接，避免旧介入说明反复刷屏
     st["history"].append({"step": sid, "result": tag, "note": note, "at": time.strftime("%Y-%m-%d %H:%M:%S")})
     try:
         for event in workflow_advancement.transition_events(

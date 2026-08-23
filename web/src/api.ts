@@ -668,7 +668,7 @@ export interface DeveloperAssistantToolRun {
 
 export interface DeveloperAssistantAvailability {
   available: boolean;
-  code: "edit_window" | "approval_pending" | "tests_only" | "host_wait"
+  code: "edit_window" | "user_override" | "approval_pending" | "tests_only" | "host_wait"
     | "not_editable" | "core_unavailable" | "session_only";
   mode: "edit" | "unavailable";
   reason: string;

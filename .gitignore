@@ -8,3 +8,7 @@ web/dist/
 web/*.tsbuildinfo
 # 内核在仓根落的临时工作目录(probe/用例跑内核时生成)
 .mae-flow-work/
+.mae-flow.json*
+.mae-flow.json.exited
+.mae-flow-history.jsonl
+openspec/config.yaml

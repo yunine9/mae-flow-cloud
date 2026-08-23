@@ -19,6 +19,7 @@ from .cli_commands import codecheck_facts as _codecheck_facts
 from .cli_commands import ack as _ack
 from .cli_commands import ack_confirmation as _ack_confirmation
 from .cli_commands import current as _current
+from .cli_commands import user_intervention as _user_intervention
 from .cli_commands import standalone_core as _standalone_core
 from .cli_commands import standalone_commands as _standalone_commands
 from .cli_commands import direct_reentry as _direct_reentry
@@ -117,6 +118,7 @@ _COMMAND_MODULES = (
     _ack,
     _ack_confirmation,
     _current,
+    _user_intervention,
     _standalone_core,
     _standalone_commands,
     _direct_reentry,

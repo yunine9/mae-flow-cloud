@@ -23,7 +23,7 @@ class MFParser(argparse.ArgumentParser):
             "其余子命令: status|panel|doctor|report|envcheck|skip|goto|unlock|allow|spec|template|"
             "agent-task|lightcheck|accept-risk|moonlight|action|messages|config-review|requirement-record|"
             "story-localize|local-spec|domain-docs|domain-archive|manifest|codecheck-scan|"
-            "codecheck-scope|codecheck-record|approve-exemption|pipeline|milestone|"
+            "codecheck-scope|codecheck-record|approve-exemption|pipeline|milestone|intervention|"
             "migrate-flow|exit"
             "(用法见 current/exit 指令)。\n"
             "注意:子命令不带连字符(是 current 不是 --current);"
@@ -52,6 +52,12 @@ def build_parser():
         "--new", action="store_true",
         help="保留已退出的旧现场并开启另一轮流程；未指定时恢复原流程")
     sub.add_parser("current")
+    intervention = sub.add_parser(
+        "intervention", help="宿主登记用户接管后的代码现场（只回退，不放行质量证据）")
+    intervention_actions = intervention.add_subparsers(
+        dest="intervention_action", required=True)
+    intervention_reconcile = intervention_actions.add_parser("reconcile")
+    intervention_reconcile.add_argument("--file", required=True)
     migrate = sub.add_parser(
         "migrate-flow",
         help="恢复命令：把 Lean v3 在途状态安全恢复到稳定流程")

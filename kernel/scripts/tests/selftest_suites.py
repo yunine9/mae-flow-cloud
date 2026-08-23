@@ -85,6 +85,8 @@ REFACTOR_SAFETY_SUITES = (
      ("scripts/tests/test_quality_codecheck_state.py",), 180, 5000),
     ("CLI 命令路由契约回归",
      ("scripts/tests/test_command_dispatch.py",), 180, 5000),
+    ("用户介入现场接纳与回退契约",
+     ("scripts/tests/test_user_intervention.py",), 180, 5000),
     ("编码任务里程碑观察事件回归",
      ("scripts/tests/test_build_milestones.py",), 180, 5000),
     ("CLI 公共门面兼容回归",

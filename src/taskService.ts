@@ -149,9 +149,9 @@ import {
   beginDeveloperAssistantHandoff,
   captureDeveloperAssistantWorktree,
   finishDeveloperAssistantHandoff,
-  handoffCoreStillMatches,
   inspectDeveloperAssistantAvailability,
   markDeveloperAssistantReturned,
+  summarizeDeveloperAssistantChangedPaths,
   type DeveloperAssistantAvailability,
   type DeveloperAssistantHandoff,
 } from "./developerAssistantHandoff.ts";
@@ -818,6 +818,13 @@ interface TaskState {
   resume?: boolean;
   /** 恢复期收到的人工决定:重建会话就绪后由 driver 补登记再续跑。 */
   pendingResume?: WaitingRecord;
+  /** 已由内核接纳且严格写入 task.json 的用户介入 id；只供崩溃重放。 */
+  appliedDeveloperInterventionId?: string;
+  /** task.json 先隐藏、waiting.json 后作废的那一张旧卡。 */
+  obsoleteDeveloperWaiting?: {
+    waitingId: string;
+    stateVersion: number;
+  };
   /** 专项使命(修复环):下次会话的压轴指令,消费即清。
    * 要随 task.json 落盘——修复会话跑一半被重启,使命不能丢。 */
   mission?: string;
@@ -853,6 +860,13 @@ interface PipelineAttestation {
   sha?: string;
   reason?: string;
   checks?: Record<string, unknown>;
+}
+
+interface UserInterventionReconciliation {
+  id: string;
+  changed: boolean;
+  from: string;
+  target: string;
 }
 
 interface GitPushReceipt {
@@ -1025,6 +1039,7 @@ export class TaskService {
    */
   private async startCodingContainer(
     task: TaskState,
+    safety: { gitReadOnly?: boolean } = {},
   ): Promise<TaskCommandContainer> {
     const isolation = this.options.isolation;
     if (!isolation) throw new Error("未配置任务容器隔离");
@@ -1053,8 +1068,13 @@ export class TaskService {
             ? [`${effectiveRepo}:${effectiveRepo}`] : []),
         ]
       : [];
-    const mounts = this.taskContainerMounts(
-      task, [...hostMounts, ...(volumes ?? [])]);
+    const gitPath = join(cwd, ".git");
+    const mounts = this.taskContainerMounts(task, [
+      ...hostMounts,
+      ...(volumes ?? []),
+      ...(safety.gitReadOnly && existsSync(gitPath)
+        ? [`${gitPath}:${gitPath}:ro`] : []),
+    ]);
     const container = this.createTaskContainer({
       image,
       workspace: cwd,
@@ -2530,7 +2550,7 @@ export class TaskService {
     return { ...summary };
   }
 
-  private writeTaskState(task: TaskState): void {
+  private writeTaskState(task: TaskState, strict = false): void {
     try {
       const path = join(task.summary.workspace, "task.json");
       writeFileSync(path + ".tmp", JSON.stringify({
@@ -2538,11 +2558,19 @@ export class TaskService {
         cwd: task.cwd,
         mission: task.mission,
         assistant_handoff: task.pendingAssistantHandoff,
+        applied_developer_intervention_id:
+          task.appliedDeveloperInterventionId,
+        obsolete_developer_waiting: task.obsoleteDeveloperWaiting,
         token_usage_state: task.tokenUsage,
       }, null, 1));
       renameSync(path + ".tmp", path);
     } catch (error) {
       this.options.log?.(`任务 ${task.summary.id} 落盘失败: ${String(error)}`);
+      if (strict) {
+        throw new TaskControlError(
+          `任务现场未能可靠落盘，已停止本次交还，可直接重试：${String(error)}`,
+        );
+      }
     }
   }
 
@@ -2558,7 +2586,7 @@ export class TaskService {
   /** 任务事实落盘(原子写):进程可死,任务不能死。
    * summary+cwd 就是重启后重建 TaskState 需要的全部——待办在
    * waiting.json、事件在 events.jsonl、流程真相在内核状态文件。 */
-  private persist(task: TaskState): void {
+  private persist(task: TaskState, strict = false): void {
     const now = new Date().toISOString();
     if (task.lastPersistedStatus !== undefined
         && task.lastPersistedStatus !== task.summary.status) {
@@ -2569,7 +2597,7 @@ export class TaskService {
     }
     task.summary.updated_at = now;
     task.lastPersistedStatus = task.summary.status;
-    this.writeTaskState(task);
+    this.writeTaskState(task, strict);
     // 文件先落袋(它才是真相),投影旁路跟进;失败由投影自己 fail-open。
     this.bypass(task, "投影 upsert",
       this.options.projection?.upsertTask(this.project(task)));
@@ -2617,10 +2645,32 @@ export class TaskService {
           pendingAssistantHandoff:
             typeof saved.assistant_handoff === "string"
               ? saved.assistant_handoff : undefined,
+          appliedDeveloperInterventionId:
+            typeof saved.applied_developer_intervention_id === "string"
+              ? saved.applied_developer_intervention_id : undefined,
+          obsoleteDeveloperWaiting:
+            saved.obsolete_developer_waiting
+              && typeof saved.obsolete_developer_waiting.waitingId === "string"
+              && Number.isInteger(saved.obsolete_developer_waiting.stateVersion)
+              ? saved.obsolete_developer_waiting : undefined,
           lastPersistedStatus: summary.status,
           controlEpoch: 0,
         };
         this.tasks.set(summary.id, task);
+        const assistantSnapshot = readDeveloperAssistant(workspace);
+        if (assistantSnapshot.handoff?.id
+            && assistantSnapshot.handoff.state !== "returned"
+            && task.appliedDeveloperInterventionId
+              === assistantSnapshot.handoff.id) {
+          const obsolete = task.obsoleteDeveloperWaiting;
+          if (obsolete) {
+            this.supersedeWaitingForUserIntervention(task, {
+              waiting_id: obsolete.waitingId,
+              state_version: obsolete.stateVersion,
+            });
+          }
+          this.markPreparedDeveloperAssistantReturned(task);
+        }
         this.counter = Math.max(
           this.counter, Number(name.slice("task-".length)) || 0);
         restored += 1;
@@ -3336,17 +3386,28 @@ export class TaskService {
     }
     const previous = readDeveloperAssistant(task.summary.workspace);
     let handoff: DeveloperAssistantHandoff | undefined;
-    try {
-      handoff = this.options.host && task.cwd
-        ? beginDeveloperAssistantHandoff(
-            previous.handoff,
-            availability,
-            captureDeveloperAssistantWorktree(task.cwd),
-          )
-        : undefined;
-    } catch (error) {
-      throw new TaskControlError(
-        `无法冻结开发助手交还起点，已拒绝启动：${String(error)}`,
+    if (this.options.host && task.cwd) {
+      let initial;
+      try {
+        initial = captureDeveloperAssistantWorktree(task.cwd);
+      } catch (error) {
+        // 现场摘要只用于帮助主 Agent 少做一次扫描，不是运行门禁。
+        // Git/哈希读取偶发失败时仍允许助手工作，恢复后由主 Agent
+        // 重新读取 current 与工作区，避免把任务永久留在暂停态。
+        this.options.log?.(
+          `任务 ${id} 开发助手起点摘要不可用，将在交还时刷新: ${String(error)}`,
+        );
+        initial = {
+          sha: "unavailable",
+          fingerprint: "unavailable",
+          paths: [],
+          path_fingerprints: {},
+        };
+      }
+      handoff = beginDeveloperAssistantHandoff(
+        previous.handoff,
+        availability,
+        initial,
       );
     }
 
@@ -3374,7 +3435,7 @@ export class TaskService {
     try {
       if (!task.cwd) throw new Error("开发助手缺少代码工作区");
       task.containerWorkspace = task.cwd;
-      container = await this.startCodingContainer(task);
+      container = await this.startCodingContainer(task, { gitReadOnly: true });
       if (!this.current(task, epoch) || task.summary.status !== "paused") {
         throw new Error("开发助手启动期间任务状态已变化");
       }
@@ -3510,16 +3571,17 @@ export class TaskService {
       );
       writeDeveloperAssistant(task.summary.workspace, { ...snapshot, handoff });
     } catch (error) {
-      const detail = `无法核对开发助手交还现场：${String(error)}`;
+      const detail = `现场摘要暂时不可读，主任务恢复后会自行重新扫描：${String(error)}`;
       writeDeveloperAssistant(task.summary.workspace, {
         ...snapshot,
         handoff: {
           ...snapshot.handoff,
-          state: "blocked",
+          state: "changed",
           finished_at: new Date().toISOString(),
+          paths_truncated: true,
+          derived_only: false,
           message: detail,
         },
-        error: detail,
       });
     }
   }
@@ -3580,7 +3642,36 @@ export class TaskService {
         || readDeveloperAssistant(task.summary.workspace).state === "running") {
       throw new TaskControlError("开发助手仍在处理，请等待它返回后再交还主任务");
     }
-    this.prepareDeveloperAssistantReturn(task);
+    const beforeSummary = JSON.parse(JSON.stringify(task.summary)) as TaskSummary;
+    const beforeHandoffPrompt = task.pendingAssistantHandoff;
+    const beforePersistedStatus = task.lastPersistedStatus;
+    const beforeAppliedIntervention = task.appliedDeveloperInterventionId;
+    const beforeObsoleteWaiting = task.obsoleteDeveloperWaiting;
+    let intervention: UserInterventionReconciliation | undefined;
+    try {
+      intervention = this.prepareDeveloperAssistantReturn(task, actor);
+    } catch (error) {
+      task.summary = beforeSummary;
+      task.pendingAssistantHandoff = beforeHandoffPrompt;
+      task.lastPersistedStatus = beforePersistedStatus;
+      task.appliedDeveloperInterventionId = beforeAppliedIntervention;
+      task.obsoleteDeveloperWaiting = beforeObsoleteWaiting;
+      throw error;
+    }
+    const persistReturn = (): void => {
+      try {
+        this.persist(task, Boolean(intervention));
+      } catch (error) {
+        task.summary = beforeSummary;
+        task.pendingAssistantHandoff = beforeHandoffPrompt;
+        task.lastPersistedStatus = beforePersistedStatus;
+        task.appliedDeveloperInterventionId = beforeAppliedIntervention;
+        task.obsoleteDeveloperWaiting = beforeObsoleteWaiting;
+        throw error;
+      }
+    };
+    const markReturned = (): void =>
+      this.markPreparedDeveloperAssistantReturned(task);
     const from = task.summary.control?.paused_from ?? "running";
     task.controlEpoch += 1;
     task.pauseRequested = false;
@@ -3591,15 +3682,36 @@ export class TaskService {
       paused_from: from,
     };
     if (from === "waiting_for_human" && task.summary.waiting) {
+      if (intervention?.changed) {
+        const obsoleteWaiting = { ...task.summary.waiting };
+        task.summary.waiting = undefined;
+        task.obsoleteDeveloperWaiting = {
+          waitingId: obsoleteWaiting.waiting_id,
+          stateVersion: obsoleteWaiting.state_version,
+        };
+        task.summary.status = "queued";
+        task.summary.detail = "用户介入已接纳，等待主任务承接当前代码现场";
+        task.resume = true;
+        task.pendingResume = undefined;
+        persistReturn();
+        this.supersedeWaitingForUserIntervention(task, obsoleteWaiting);
+        markReturned();
+        this.queue.push(id);
+        this.bypass(undefined, "任务泵", this.pump());
+        return { ...task.summary };
+      }
       task.summary.status = "waiting_for_human";
       task.summary.detail = "已恢复，等待你的决定";
-      this.persist(task);
+      persistReturn();
+      markReturned();
       return { ...task.summary };
     }
-    if (from === "verifying" && task.summary.delivery?.sha) {
+    if (from === "verifying" && task.summary.delivery?.sha
+        && !intervention?.changed) {
       task.summary.status = "verifying";
       task.summary.detail = "已恢复流水线状态跟踪";
-      this.persist(task);
+      persistReturn();
+      markReturned();
       this.bypass(task, "流水线轮询",
         this.pollPipeline(task, task.controlEpoch));
       return { ...task.summary };
@@ -3610,59 +3722,215 @@ export class TaskService {
       // 并对同一 SHA 重跑；绝不再起一轮普通编码 Agent。
       task.summary.status = "verifying";
       task.summary.detail = "已恢复，等待重新执行推送前编译与 UT";
-      this.persist(task);
+      persistReturn();
+      markReturned();
       this.bypass(task, "推送前验证恢复",
         this.resumePrePushVerification(task, task.controlEpoch));
       return { ...task.summary };
     }
     task.summary.status = "queued";
-    task.summary.detail = "已恢复，等待续跑";
+    task.summary.detail = intervention?.changed
+      ? `用户介入已接纳，内核将从「${intervention.target}」重新读取现场`
+      : "已恢复，等待续跑";
     task.resume = from !== "queued";
-    this.persist(task);
+    persistReturn();
+    markReturned();
     this.queue.push(id);
     this.bypass(undefined, "任务泵", this.pump());
     return { ...task.summary };
   }
 
-  private prepareDeveloperAssistantReturn(task: TaskState): void {
+  private prepareDeveloperAssistantReturn(
+    task: TaskState,
+    actor: string,
+  ): UserInterventionReconciliation | undefined {
     this.finishDeveloperAssistantHandoff(task);
     const snapshot = readDeveloperAssistant(task.summary.workspace);
     const handoff = snapshot.handoff;
-    if (!handoff || handoff.state === "returned") return;
+    if (!handoff) return undefined;
+    if (handoff.state === "returned") return undefined;
     if (handoff.state === "running") {
       throw new TaskControlError("开发助手现场仍在收口，请稍后再交还主任务");
     }
-    if (handoff.state === "blocked") {
-      throw new TaskControlError(
-        `${handoff.message}。主任务继续保持暂停，修复现场核对后再恢复`,
-      );
-    }
-    const availability = this.developerAssistantAvailability(task);
-    if (!availability.available) {
-      throw new TaskControlError(
-        `开发助手启动后的内核阶段发生变化，不能直接交还：${availability.reason}`,
-      );
-    }
-    if (!handoffCoreStillMatches(handoff, availability)) {
-      throw new TaskControlError(
-        "开发助手启动后的内核步骤或 revision 已变化，已阻止旧现场直接回灌；主任务继续保持暂停",
-      );
+    // revision / HEAD / 摘要哈希只帮助诊断，绝不作为恢复门禁。
+    // 恢复后的主 Agent 会重新执行 mae-flow current 并扫描工作区，以
+    // 内核和 Git 的最新事实继续；旧助手结论不会被当成批准或证据。
+    let reconciled = handoff.state === "blocked"
+      ? {
+          ...handoff,
+          state: "changed" as const,
+          message: "旧版现场核对曾失败；已改为交由主任务重新读取，不再阻塞恢复",
+        }
+      : handoff;
+    const pathSummary = summarizeDeveloperAssistantChangedPaths(
+      reconciled.changed_paths ?? [],
+    );
+    if (reconciled.state === "changed"
+        && (reconciled.derived_only || pathSummary.derivedOnly)) {
+      reconciled = {
+        ...reconciled,
+        state: "unchanged" as const,
+        message: "本轮只产生了可识别的构建/依赖产物，没有业务代码变化",
+      };
     }
     const events = new EventLog(
       join(task.summary.workspace, "events.jsonl"),
     ).replay();
+    const tools = developerAssistantTools(events);
+    const changed = reconciled.state === "changed";
+    let coreReconciliation: UserInterventionReconciliation | undefined;
+    if (changed && task.cwd && this.options.host) {
+      coreReconciliation = this.reconcileDeveloperAssistantWithCore(
+        task,
+        actor,
+        { ...snapshot, handoff: reconciled },
+        tools,
+      );
+      task.appliedDeveloperInterventionId = coreReconciliation.id;
+      if (coreReconciliation.changed) {
+        this.invalidateDeliveryAfterUserIntervention(task);
+      }
+    }
     const prompt = developerAssistantHandoffPrompt(
-      snapshot,
-      developerAssistantTools(events),
+      { ...snapshot, handoff: reconciled }, tools,
     );
     if (prompt) {
       task.pendingAssistantHandoff = [task.pendingAssistantHandoff, prompt]
         .filter(Boolean).join("\n\n---\n\n");
     }
-    writeDeveloperAssistant(task.summary.workspace, {
-      ...snapshot,
-      handoff: markDeveloperAssistantReturned(handoff),
-    });
+    const id = reconciled.id ?? reconciled.started_at;
+    return coreReconciliation ?? {
+      id,
+      changed,
+      from: reconciled.core?.step ?? "",
+      target: reconciled.core?.step ?? "",
+    };
+  }
+
+  private supersedeWaitingForUserIntervention(
+    task: TaskState,
+    waiting: Pick<WaitingRecord, "waiting_id" | "state_version">,
+  ): void {
+    try {
+      task.humanGate.supersede(waiting.waiting_id, {
+        stateVersion: waiting.state_version,
+        notes: "用户主动接管代码现场，旧问题绑定的内容已经失效。",
+      });
+    } catch (error) {
+      // task.json 已先原子落成 queued 且不再引用这张卡；这里失败最多
+      // 留下一条不可见审计孤儿，不能让主任务重新卡回旧 waiting。
+      this.options.log?.(
+        `任务 ${task.summary.id} 关闭旧开发助手待办失败(不阻塞恢复): ${String(error)}`,
+      );
+    }
+  }
+
+  private markPreparedDeveloperAssistantReturned(task: TaskState): void {
+    try {
+      const snapshot = readDeveloperAssistant(task.summary.workspace);
+      if (!snapshot.handoff || snapshot.handoff.state === "running"
+          || snapshot.handoff.state === "returned") return;
+      writeDeveloperAssistant(task.summary.workspace, {
+        ...snapshot,
+        handoff: markDeveloperAssistantReturned(snapshot.handoff),
+      });
+    } catch (error) {
+      // task.json 与内核已经安全落盘。标记仅用于展示，恢复时会补做。
+      this.options.log?.(
+        `任务 ${task.summary.id} 开发助手交还标记待恢复补写: ${String(error)}`,
+      );
+    }
+  }
+
+  /** 把用户要求、助手结论、真实工具结果和变更文件交给内核的正式入口。
+   * 内核只允许保持/回退步骤并作废旧证据，不会把这些内容判成 PASS。 */
+  private reconcileDeveloperAssistantWithCore(
+    task: TaskState,
+    actor: string,
+    snapshot: ReturnType<typeof readDeveloperAssistant>,
+    tools: ReturnType<typeof developerAssistantTools>,
+  ): UserInterventionReconciliation {
+    if (!task.cwd || !this.options.host) {
+      throw new TaskControlError("用户介入现场缺少内核工作区，暂不能交还");
+    }
+    const user = [...snapshot.messages].reverse()
+      .find((message) => message.role === "user")?.text ?? "";
+    const assistant = [...snapshot.messages].reverse()
+      .find((message) => message.role === "assistant")?.text ?? "";
+    const changedPaths = summarizeDeveloperAssistantChangedPaths(
+      snapshot.handoff?.changed_paths ?? [],
+    );
+    const interventionId = snapshot.handoff?.id
+      ?? snapshot.handoff?.started_at ?? randomUUID();
+    const factsPath = join(task.summary.workspace, "user-intervention.json");
+    writeFileSync(factsPath, JSON.stringify({
+      schema: "mae-flow-user-intervention/1",
+      intervention_id: interventionId,
+      actor: actor.slice(0, 100),
+      request: user.slice(0, 2_000),
+      assistant_summary: assistant.slice(0, 4_000),
+      changed: true,
+      changed_paths: changedPaths.paths,
+      changed_paths_total: changedPaths.total,
+      paths_truncated: Boolean(
+        snapshot.handoff?.paths_truncated || changedPaths.truncated),
+      derived_only: Boolean(
+        snapshot.handoff?.derived_only || changedPaths.derivedOnly),
+      executions: tools.filter((tool) => tool.state !== "running")
+        .slice(-8).map((tool) => ({
+          name: tool.name.slice(0, 80),
+          state: tool.state.slice(0, 24),
+          result: (tool.result ?? "").slice(0, 800),
+        })),
+    }, null, 2), { mode: 0o600 });
+    chmodSync(factsPath, 0o600);
+    const gitView = createSafeGitView(task.cwd);
+    try {
+      const result = spawnSync(
+        this.options.host.python ?? "python3",
+        [join(this.options.host.kernelRoot, "scripts", "mae-flow.py"),
+         "intervention", "reconcile", "--file", factsPath],
+        {
+          cwd: task.cwd,
+          encoding: "utf-8",
+          env: gitView.environment(),
+          maxBuffer: 2 * 1024 * 1024,
+        },
+      );
+      const line = String(result.stdout ?? "").trim().split("\n").at(-1) ?? "";
+      let record: Partial<UserInterventionReconciliation> = {};
+      try { record = JSON.parse(line); } catch { /* 下面统一报人话 */ }
+      if (result.status !== 0 || typeof record.target !== "string"
+          || typeof record.from !== "string") {
+        throw new Error(
+          String(result.stderr ?? result.stdout ?? "内核没有返回接管位置").trim(),
+        );
+      }
+      return {
+        id: interventionId,
+        changed: record.changed === true,
+        from: record.from,
+        target: record.target,
+      };
+    } catch (error) {
+      throw new TaskControlError(
+        `内核暂未接纳用户介入现场，可直接重试“交还主任务”：${String(error)}`,
+      );
+    } finally {
+      gitView.cleanup();
+    }
+  }
+
+  private invalidateDeliveryAfterUserIntervention(task: TaskState): void {
+    const delivery = task.summary.delivery;
+    if (!delivery) return;
+    task.summary.delivery = {
+      mr_url: delivery.mr_url,
+      mr_id: delivery.mr_id,
+      source_branch: delivery.source_branch,
+      target_branch: delivery.target_branch,
+      mr_state: delivery.mr_state,
+    };
   }
 
   /** 取消是不可恢复终态。先换代并落盘，再中止会话/容器；因此即使

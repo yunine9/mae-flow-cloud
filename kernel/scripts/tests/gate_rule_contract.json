@@ -227,6 +227,13 @@
       "evidence": "结束当前回合",
       "why": "流水线事实是权限最大的证据(能把整单判绿)却没有授权锚,实测手写两字段 JSON 即可自发绿灯;宿主直接子进程调用不过门禁,挡住会话这条路不影响正常交付"
     },
+    "bash-user-intervention-self-report": {
+      "kind": "absolute",
+      "tier": "A",
+      "escape": "cli:current",
+      "evidence": "执行 current",
+      "why": "用户接管事实会清理旧审批和质量证据,只接受 Cloud 在用户主动交还现场时登记;宿主直接子进程调用不过门禁,主会话应通过 current 承接已经登记的现场"
+    },
     "bash-comet-state-write": {
       "kind": "absolute",
       "tier": "A",

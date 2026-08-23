@@ -200,9 +200,24 @@ def _pipeline_record_decision(context):
     return None
 
 
+def _user_intervention_decision(context):
+    """用户接管事实只接受 Cloud 宿主登记，不给主 Agent 自助回退。"""
+    if re.search(
+        r"mae-flow(?:\.py)?[^\n;|&]*\bintervention\b[^\n;|&]*\breconcile\b",
+        context.command, re.I,
+    ):
+        return _absolute(
+            "用户介入现场只能由 Cloud 在用户主动交还时登记。主 Agent "
+            "不能自行伪造接管事实、清除审批或质量证据；请执行 current "
+            "承接宿主已经登记的现场。",
+            rule="bash-user-intervention-self-report")
+    return None
+
+
 def _bash_absolute_decision(context):
     command = context.command
-    decision = _pipeline_record_decision(context)
+    decision = (_pipeline_record_decision(context)
+                or _user_intervention_decision(context))
     if decision is not None:
         return decision
     if (

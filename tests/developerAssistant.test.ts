@@ -59,6 +59,9 @@ test("开发助手门禁绕开流程命令限制，但保留内核/Git/凭据边
   assert.equal(decide("Bash", "git restore src/example.ts")?.action, "deny");
   assert.equal(decide("Bash", "git commit -am test")?.action, "deny");
   assert.equal(decide("Bash", "git push origin HEAD")?.action, "deny");
+  assert.equal(decide("Write", ".git/HEAD")?.action, "deny");
+  assert.equal(decide("Edit", ".git/refs/heads/main")?.action, "deny");
+  assert.equal(decide("Bash", "printf x > .git/HEAD")?.action, "deny");
   assert.equal(decide("Read", ".mae-flow.json")?.action, "deny");
   assert.equal(decide("Read", "../pi-agent/models.json")?.action, "deny");
 });
