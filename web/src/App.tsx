@@ -303,7 +303,9 @@ export function App() {
     task.status !== "waiting_for_human" && !isBlocked(task)
     && task.status !== "paused" && task.status !== "canceled"
     && !DELIVERED_STATUSES.includes(task.status));
-  const myCurrent = [...myWaiting, ...myBlocked, ...myPaused, ...myActive];
+  const myCurrent = myTasks.filter((task) =>
+    task.status !== "canceled" && !DELIVERED_STATUSES.includes(task.status))
+    .sort(byTeamAttention);
   const myDelivered = myTasks.filter((task) =>
     DELIVERED_STATUSES.includes(task.status));
   const artifactTask = artifactTaskId
@@ -591,6 +593,7 @@ function formatOpsDuration(ms: number | undefined): string {
 }
 
 function riskReason(task: TaskSummary): string {
+  if (task.focus) return `${task.focus.headline} · ${task.focus.next_action}`;
   if (task.status === "waiting_for_human") return "等待负责人决策";
   if (task.status === "paused") return "任务已暂停，等待恢复";
   if (task.status === "failed") return task.detail ?? "任务执行失败";

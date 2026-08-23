@@ -11,6 +11,13 @@ export interface TeamTask {
   last_progress_at?: string;
   completed_at?: string;
   luban_account?: string;
+  focus?: {
+    kind: string;
+    headline: string;
+    next_action: string;
+    needs_attention: boolean;
+    priority: number;
+  };
   delivery?: {
     pipeline?: string;
     loop?: { state: string };
@@ -31,12 +38,13 @@ export function responsibleOf(task: TeamTask): string | undefined {
 }
 
 export function isBlocked(task: TeamTask): boolean {
-  return task.status === "failed" || repairStopped(task);
+  return task.focus?.kind === "blocked"
+    || task.status === "failed" || repairStopped(task);
 }
 
 export function needsAction(task: TeamTask): boolean {
-  return task.status === "waiting_for_human"
-    || task.status === "paused" || isBlocked(task);
+  return task.focus?.needs_attention ?? (task.status === "waiting_for_human"
+    || task.status === "paused" || isBlocked(task));
 }
 
 export function progressAgeMs(task: TeamTask, now = Date.now()): number {
@@ -53,6 +61,8 @@ export function isStale(task: TeamTask, now = Date.now()): boolean {
 
 /** 行动项在前,同类里停滞久的在前。 */
 export function byTeamAttention(a: TeamTask, b: TeamTask): number {
+  const priority = (b.focus?.priority ?? 0) - (a.focus?.priority ?? 0);
+  if (priority) return priority;
   const action = Number(needsAction(b)) - Number(needsAction(a));
   if (action) return action;
   return progressAgeMs(b) - progressAgeMs(a);

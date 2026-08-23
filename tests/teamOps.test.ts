@@ -51,3 +51,34 @@ test("团队排序先行动项,再看停滞时长;交付周期中位数可解释
   })), 3 * 60 * 60_000);
   assert.equal(median([1, 9, 3, 5]), 4);
 });
+
+test("团队排序优先使用服务端焦点,环境故障不会藏在普通运行态里", () => {
+  const rows = [
+    task({ id: "running" }),
+    task({
+      id: "environment",
+      focus: {
+        kind: "blocked",
+        headline: "Maven 仓库不可达",
+        next_action: "等待平台恢复编译环境",
+        needs_attention: true,
+        priority: 85,
+      },
+    }),
+    task({
+      id: "decision",
+      focus: {
+        kind: "human_action",
+        headline: "需要确认 2 个决策项",
+        next_action: "提交决定后 Agent 自动继续",
+        needs_attention: true,
+        priority: 100,
+      },
+    }),
+  ].sort(byTeamAttention);
+  assert.deepEqual(rows.map((row) => row.id), [
+    "decision", "environment", "running",
+  ]);
+  assert.equal(needsAction(rows[1]), true);
+  assert.equal(isBlocked(rows[1]), true);
+});

@@ -315,6 +315,15 @@ export interface TaskSummary {
   title?: string;
   requirement: string;
   status: TaskStatus;
+  /** 服务端对现有事实的唯一扫读解释；旧后端缺席时界面安全降级。 */
+  focus?: {
+    kind: "human_action" | "blocked" | "machine" | "external" | "done" | "inactive";
+    headline: string;
+    next_action: string;
+    owner: "responsible" | "agent" | "platform" | "none";
+    needs_attention: boolean;
+    priority: number;
+  };
   detail?: string;
   created_at: string;
   updated_at?: string;

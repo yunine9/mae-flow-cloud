@@ -123,6 +123,7 @@ import {
   judgeReclaim,
   reclaimWorkspace,
 } from "./workspaceReclaim.ts";
+import { projectTaskFocus, type TaskFocus } from "./taskFocus.ts";
 
 /** 现场保留期默认两周(用户 2026-08-22 拍板)。 */
 export const DEFAULT_WORKSPACE_RETENTION_DAYS = 14;
@@ -282,6 +283,8 @@ export interface TaskSummary {
   title?: string;
   requirement: string;
   status: TaskStatus;
+  /** 读侧统一投影：只解释当前事实，不参与流程迁移或门禁。 */
+  focus?: TaskFocus;
   waiting?: WaitingRecord;
   detail?: string;
   created_at: string;
@@ -1604,7 +1607,7 @@ export class TaskService {
     const record = task.notifyRecord;
     const progress = this.readProgress(task);
     const summary = task.summary;
-    return {
+    const projected = {
       ...summary,
       title: summary.title ?? taskTitle(summary.requirement),
       updated_at: summary.updated_at ?? summary.created_at,
@@ -1619,6 +1622,7 @@ export class TaskService {
         : undefined,
       progress,
     };
+    return { ...projected, focus: projectTaskFocus(projected) };
   }
 
   private isRequirementAnalysis(task: TaskState): boolean {

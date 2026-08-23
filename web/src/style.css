@@ -2018,6 +2018,36 @@ svg {
 }
 .utility-panel[open] summary > i { transform: rotate(225deg); }
 .utility-panel[open] summary { border-bottom: 1px solid var(--line); }
+.execution-tabs {
+  padding: 8px 10px 0; display: flex; gap: 5px;
+  background: var(--surface-soft);
+}
+.execution-tabs button {
+  padding: 7px 11px; color: var(--muted); border: 1px solid transparent;
+  border-bottom: 0; border-radius: 7px 7px 0 0; background: transparent;
+  font: inherit; font-size: 10.5px; cursor: pointer;
+}
+.execution-tabs button:hover { color: var(--text-strong); }
+.execution-tabs button.active {
+  color: var(--text-strong); border-color: var(--line); background: var(--surface);
+  font-weight: 650;
+}
+.execution-body { min-width: 0; }
+.activity-current {
+  padding: 10px 13px 0; display: flex; align-items: center; gap: 7px;
+  color: var(--muted); font-size: 10px;
+}
+.activity-current strong { color: var(--text-strong); font-size: 11px; }
+.activity-current .activity-alert-badge { margin-left: auto; }
+.event-live-state {
+  padding: 8px 12px; display: flex; align-items: center; gap: 7px;
+  color: var(--success); background: var(--surface-soft); font-size: 10px;
+  border-bottom: 1px solid var(--line);
+}
+.event-live-state > i {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 13%, transparent);
+}
 .utility-note { padding: 12px 13px; color: var(--muted); font-size: 11px; }
 .ledger-list { padding: 8px; display: grid; gap: 7px; }
 .ledger-row { padding: 10px; border-radius: 7px; background: var(--surface-soft); }
@@ -4159,6 +4189,22 @@ pre {
 
 .task-ownership { margin-top: 5px; display: flex; align-items: center; gap: 9px; color: var(--faint); font-size: 9px; }
 .task-ownership em { overflow: hidden; max-width: 62%; color: var(--danger); font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+.task-focus {
+  min-width: 0; margin-top: 8px; display: grid;
+  grid-template-columns: 7px max-content minmax(0, 1fr); align-items: center;
+  gap: 7px; color: var(--muted); font-size: 10px;
+}
+.task-focus > i { width: 6px; height: 6px; border-radius: 50%; background: var(--active); }
+.task-focus > strong { color: var(--text-strong); font-size: 10.5px; font-weight: 650; }
+.task-focus > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-focus-human_action > i { background: var(--attention); box-shadow: 0 0 0 3px var(--attention-soft); }
+.task-focus-human_action > strong { color: var(--attention); }
+.task-focus-blocked > i { background: var(--danger); box-shadow: 0 0 0 3px var(--danger-weak); }
+.task-focus-blocked > strong { color: var(--danger); }
+.task-focus-external > i { background: var(--purple); }
+.task-focus-done > i { background: var(--success); }
+.task-focus-inactive { color: var(--faint); }
+.task-focus-inactive > i { background: var(--faint); }
 
 .personal-pulse.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .personal-stat.danger { border-color: var(--line); border-top: 3px solid var(--danger); }
@@ -4176,6 +4222,8 @@ pre {
   .risk-list button { grid-template-columns: 8px minmax(0, 1fr) 16px; }
   .risk-owner, .risk-age { display: none; }
   .task-filters select { flex: 1; min-width: 0; }
+  .task-focus { grid-template-columns: 7px minmax(0, 1fr); }
+  .task-focus > span { grid-column: 2; white-space: normal; }
 }
 .puml-note { fill: var(--attention-soft); stroke: var(--attention); stroke-width: .7; }
 .puml-note-fold { fill: none; stroke: var(--attention); stroke-width: .7; }

@@ -42,7 +42,7 @@ import {
   type TaskSummary,
 } from "./api";
 import {
-  ActivityPanel,
+  ExecutionPanel,
   RetryButton,
   TaskProgress,
   TaskTimeline,
@@ -563,7 +563,7 @@ export function TaskWorkspace({
             onChanged={() => { setNotesPulse((tick) => tick + 1); onChanged(); }}
           />
           <div className="task-utilities">
-            <ActivityPanel task={task} />
+            <ExecutionPanel task={task} />
             <TaskTimeline taskId={task.id} />
             {/* 外部动作台账不再上页面,理由同 TaskCard;接口仍在。 */}
           </div>

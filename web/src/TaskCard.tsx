@@ -91,6 +91,13 @@ export function TaskCard({
           <span className="task-ownership">
             <span>责任人 · {responsibleOf(task) ?? "未指定"}</span>
           </span>
+          {task.focus && (
+            <span className={`task-focus task-focus-${task.focus.kind}`}>
+              <i aria-hidden />
+              <strong>{task.focus.headline}</strong>
+              <span>下一步 · {task.focus.next_action}</span>
+            </span>
+          )}
           {(task.requirement_graph?.repositories.length ?? 0) > 1 && (
             <span className="task-chain-overview">
               <span className="task-graph-summary">
@@ -247,12 +254,11 @@ export function TaskCard({
                 过程记录、交付账本、流水线证据与批注都还在，代码差异不再可看。
               </div>
             )}
-            <ActivityPanel task={task} />
+            <ExecutionPanel task={task} />
             <TaskTimeline taskId={task.id} />
             {/* 外部动作台账(ActionLedger)不再上页面:一屏四块信息密度
                 过载,而它是排障口不是日常口。组件与 GET /tasks/:id/actions
                 都还在,要查幂等键/绑定 SHA 时直接调接口。 */}
-            <EventTail taskId={task.id} />
           </div>
         </div>
       )}
@@ -862,7 +868,7 @@ function FollowPaused({ behind, onResume }: {
 /** 行为摘要:原始 SSE 人盯不过来(用户原话"一直在刷"),这里呈现
  * 服务端折叠好的心流——此刻在干嘛、干了什么、有什么值得看一眼。
  * 前端不二次解读,条目全部来自 /activity 镜像;在跑时轮询跟进。 */
-export function ActivityPanel({ task }: { task: TaskSummary }) {
+function ActivityFlow({ task }: { task: TaskSummary }) {
   const [view, setView] = useState<ActivityView>();
   const [unavailable, setUnavailable] = useState("");
   const running = task.status === "running";
@@ -883,29 +889,21 @@ export function ActivityPanel({ task }: { task: TaskSummary }) {
     return () => { alive = false; clearInterval(timer); };
   }, [task.id, running]);
 
-  if (unavailable) return null;
-  if (!view || (!view.segments.length && !view.alerts.length)) return null;
+  if (unavailable) {
+    return <div className="utility-note">心流摘要暂不可用，可切换到原始事件查看现场。</div>;
+  }
+  if (!view || (!view.segments.length && !view.alerts.length)) {
+    return <div className="utility-note">还没有可折叠的执行动作；原始事件仍会完整保留。</div>;
+  }
   const alerts = view.alerts;
 
   return (
-    <details className="utility-panel activity-panel" open={running}>
-      <summary>
-        <span>
-          <strong>
-            执行心流
-            {alerts.length > 0 && (
-              <em className="activity-alert-badge">{alerts.length} 个信号</em>
-            )}
-          </strong>
-          <small>
-            {view.now
-              ? `${view.now} · ${sinceText(view.now_since)}`
-              : "折叠后的行为账 · 展开看它干了什么"}
-          </small>
-        </span>
-        <i aria-hidden />
-      </summary>
-
+    <div className="activity-panel-body">
+      {alerts.length > 0 && <div className="activity-current">
+        <strong>{view.now ?? "发现需要关注的执行信号"}</strong>
+        {view.now && <span>{sinceText(view.now_since)}</span>}
+        <em className="activity-alert-badge">{alerts.length} 个信号</em>
+      </div>}
       {alerts.length > 0 && (
         <div className="activity-alerts">
           {alerts.map((alert, index) => (
@@ -945,46 +943,35 @@ export function ActivityPanel({ task }: { task: TaskSummary }) {
           <FollowPaused behind={follow.behind} onResume={follow.toBottom} />
         )}
         共 {view.events_seen} 条原始事件,折叠为 {view.segments.length} 段;
-        原话在下方「过程记录」。
+        原始内容可切换到「原始事件」查看。
       </div>
-    </details>
+    </div>
   );
 }
 
-function EventTail({ taskId }: { taskId: string }) {
-  const [open, setOpen] = useState(false);
+function EventTail({ taskId, active }: { taskId: string; active: boolean }) {
   const [events, setEvents] = useState<SemanticEvent[]>([]);
   const follow = useStickyBottom<HTMLDivElement>(events.length);
 
   useEffect(() => setEvents([]), [taskId]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!active) return;
     const stop = tailEvents(taskId, (event: SemanticEvent) => {
       setEvents((previous) => previous.some((item) => (
         item.eventId === event.eventId
       )) ? previous : [...previous, event]);
     });
     return stop;
-  }, [open, taskId]);
+  }, [active, taskId]);
 
   return (
-    <details
-      className="utility-panel event-panel"
-      onToggle={(toggle) => setOpen(
-        (toggle.target as HTMLDetailsElement).open,
-      )}
-    >
-      <summary>
-        <span>
-          <strong>过程记录</strong>
-          <small>{open
-            ? `实时接收中 · ${events.length} 条`
-              + (follow.paused ? " · 已暂停跟随" : "")
-            : "SSE 实时事件流 · 展开查看完整内容"}</small>
-        </span>
+    <div className="event-panel-body">
+      <div className="event-live-state">
         <i aria-hidden />
-      </summary>
+        <span>实时接收中 · {events.length} 条
+          {follow.paused ? " · 已暂停跟随" : ""}</span>
+      </div>
       {follow.paused && (
         <div className="event-follow">
           <span>已暂停跟随,你正在往回看——新事件仍在接收。</span>
@@ -1005,6 +992,54 @@ function EventTail({ taskId }: { taskId: string }) {
         {events.map((event) => (
           <EventRecord event={event} key={event.eventId} />
         ))}
+      </div>
+    </div>
+  );
+}
+
+/** 同一份事件账的两种读法：心流用于日常扫读，SSE 用于完整取证。
+ * 两者不再平铺成重复面板；切到原始事件时才建立实时连接。 */
+export function ExecutionPanel({ task }: { task: TaskSummary }) {
+  const running = task.status === "running";
+  const [expanded, setExpanded] = useState(running);
+  const [mode, setMode] = useState<"flow" | "events">("flow");
+
+  useEffect(() => {
+    setExpanded(running);
+  }, [task.id, running]);
+
+  useEffect(() => {
+    setMode("flow");
+  }, [task.id]);
+
+  return (
+    <details
+      className="utility-panel execution-panel"
+      open={expanded}
+      onToggle={(toggle) => setExpanded(
+        (toggle.target as HTMLDetailsElement).open,
+      )}
+    >
+      <summary>
+        <span>
+          <strong>执行现场</strong>
+          <small>{task.focus?.headline
+            ?? "心流摘要与 SSE 原始事件共用同一份现场记录"}</small>
+        </span>
+        <i aria-hidden />
+      </summary>
+      <div className="execution-tabs" role="tablist" aria-label="执行现场视图">
+        <button type="button" role="tab" aria-selected={mode === "flow"}
+          className={mode === "flow" ? "active" : ""}
+          onClick={() => setMode("flow")}>执行心流</button>
+        <button type="button" role="tab" aria-selected={mode === "events"}
+          className={mode === "events" ? "active" : ""}
+          onClick={() => setMode("events")}>原始事件 · SSE</button>
+      </div>
+      <div className="execution-body">
+        {mode === "flow"
+          ? <ActivityFlow task={task} />
+          : <EventTail taskId={task.id} active={expanded} />}
       </div>
     </details>
   );
