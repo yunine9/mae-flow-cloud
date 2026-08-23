@@ -90,6 +90,10 @@ export interface CloudSessionOptions {
   /** 专项宿主会话可关闭人工问答工具。推送前编译/UT 会话必须自己收口，
    * 不能在交付临门一脚再生成一张脱离内核语义的等待卡。缺省保留原行为。 */
   allowHumanQuestions?: boolean;
+  /** 专项旁路会话可关闭 Task，避免一个轻量助手再扩散出子 Agent 树。 */
+  allowSubagents?: boolean;
+  /** 同一任务事件账里的会话身份；缺省 main，旁路助手使用独立身份。 */
+  sessionId?: string;
   currentStep?: () => string;
   /** 容器隔离(设计文档):换掉内建 bash 的执行后端,命令进任务
    * 容器跑;工具仍叫 bash,门禁与 transcript 看到的世界不变。
@@ -184,9 +188,11 @@ export class CloudSession {
   private childSessions = new Map<string, any>();
   private pendingKernel = new Set<Promise<void>>();
   private kernelFailures: string[] = [];
-  readonly sessionId = "main";
+  readonly sessionId: string;
 
-  private constructor(private readonly options: CloudSessionOptions) {}
+  private constructor(private readonly options: CloudSessionOptions) {
+    this.sessionId = options.sessionId ?? "main";
+  }
 
   /** 主会话最后一段发言。修复会话不提交时,这就是它留给人的诊断
    * (缺什么、去哪配),halted 裁决原文上浮。 */
@@ -204,7 +210,7 @@ export class CloudSession {
       sessionId: driver.sessionId,
       customTools: [
         ...(options.allowHumanQuestions === false ? [] : [driver.askTool()]),
-        driver.dispatchTool(),
+        ...(options.allowSubagents === false ? [] : [driver.dispatchTool()]),
       ],
     });
     options.transcript.mainSessionId = driver.sessionId;

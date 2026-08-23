@@ -434,6 +434,8 @@ export interface SemanticEvent {
   eventId: number;
   kind: string;
   ts: string;
+  /** 同一任务的主 Agent、开发助手、子 Agent 共用事件流，用它区分来源。 */
+  sessionId?: string;
   payload: Record<string, unknown>;
 }
 
@@ -645,6 +647,57 @@ export async function interruptTask(
     return { error: String(body.error ?? `HTTP ${response.status}`) };
   }
   return {};
+}
+
+export interface DeveloperAssistantMessage {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  at: string;
+}
+
+export interface DeveloperAssistantToolRun {
+  call_id: string;
+  name: string;
+  input: string;
+  result?: string;
+  state: "running" | "passed" | "failed";
+  started_at: string;
+  finished_at?: string;
+}
+
+export interface DeveloperAssistantView {
+  state: "idle" | "running" | "completed" | "failed" | "interrupted";
+  messages: DeveloperAssistantMessage[];
+  tools: DeveloperAssistantToolRun[];
+  updated_at?: string;
+  error?: string;
+}
+
+export async function getDeveloperAssistant(
+  taskId: string,
+): Promise<DeveloperAssistantView> {
+  const response = await fetch(
+    `/tasks/${encodeURIComponent(taskId)}/developer-assistant`,
+  );
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function startDeveloperAssistant(
+  taskId: string,
+  text: string,
+): Promise<DeveloperAssistantView> {
+  const response = await fetch(
+    `/tasks/${encodeURIComponent(taskId)}/developer-assistant`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text }),
+    },
+  );
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
 }
 
 export async function controlTask(

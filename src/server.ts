@@ -7,6 +7,7 @@
  *   POST /tasks/:id/decision   {state_version,decision,notes?}
  *        → 200;版本冲突/已被抢先 → 409 "任务状态已变化"(先到决定生效)
  *   POST /tasks/:id/interrupt  {text}                   → 200;跑动中插话(发送即打断)
+ *   GET/POST /tasks/:id/developer-assistant             → 旁路开发助手现场/发起处理
  *   POST /tasks/:id/pause|resume|cancel                 → 200;任务控制
  *   GET  /tasks/:id/interrupts                          → 发过的插话 + 送达与否
  *   GET  /tasks/:id/annotations                         → 待送出批注 + 锚点现状
@@ -737,6 +738,25 @@ export function createTaskServer(
         }
         if (request.method === "GET" && parts[2] === "events") {
           return streamEvents(service, id, response);
+        }
+        if (parts[2] === "developer-assistant") {
+          const target = service.get(id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          if (request.method === "GET") {
+            return json(response, 200, service.developerAssistant(id));
+          }
+          if (request.method === "POST") {
+            if (!canOperate(viewer, target.luban_account, !!options.auth)) {
+              return json(response, 403,
+                { error: "只能为分配给自己的任务使用开发助手" });
+            }
+            const body = await readBody(request);
+            return json(response, 202, service.startDeveloperAssistant(
+              id,
+              String(body.text ?? ""),
+              viewer?.username ?? "本地用户",
+            ));
+          }
         }
         // 发过的补充说明 + 送达与否:发出去没有回执等于对着空气说话。
         if (request.method === "GET" && parts[2] === "interrupts") {

@@ -273,6 +273,8 @@ export function TaskWorkspace({
       ? { kicker: "WORKTREE CHANGES", title: "工作区变更" }
       : { kicker: "WORK DOCUMENTS", title: "过程文档" };
   const waiting = task.status === "waiting_for_human" && task.waiting;
+  const collaborationVisible = !waiting && canOperate
+    && ["running", "pausing", "paused"].includes(task.status);
   const chainReview = !!waiting
     && task.requirement_graph?.stage === "analysis"
     && (task.requirement_graph.repositories.length ?? 0) > 1
@@ -408,7 +410,8 @@ export function TaskWorkspace({
         <ExecutionPanel task={task} />
       </div>
 
-      <div className={`ws-body${waiting ? " has-decision" : ""}`}>
+      <div className={`ws-body${waiting ? " has-decision" : ""}`
+        + `${collaborationVisible ? " has-collaboration" : ""}`}>
         <section className="ws-evidence" aria-label="待检视材料">
           <div className="ws-pane-head">
             <div>
@@ -535,10 +538,13 @@ export function TaskWorkspace({
               )}
             </div>
           )}
-          {/* 它在跑的时候人也能捎话——btw 定位:不打断手头操作,
-              忙完这步就会看到。不用干等到它来问你。 */}
-          {!waiting && canOperate && task.status === "running" && (
-            <SteerBox taskId={task.id} onSent={onChanged} />
+          {/* 主任务运行时可以顺手补充；运行/暂停交界处还可以启动旁路
+              开发助手。助手必须先等主任务安全暂停，二者不会并发写仓。 */}
+          {collaborationVisible && (
+            <SteerBox task={task} onChanged={() => {
+              setLivePulse((value) => value + 1);
+              onChanged();
+            }} />
           )}
           {controlError && <div className="task-control-error">{controlError}</div>}
           {task.status === "canceled" && (
