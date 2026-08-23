@@ -1,0 +1,44 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  historyTaskTitle,
+  workspaceHistoryEntries,
+} from "../web/src/historyModel.ts";
+
+interface TestTask {
+  id: string;
+  title?: string;
+  requirement: string;
+  status: string;
+  created_at: string;
+  updated_at?: string;
+  last_progress_at?: string;
+}
+
+function task(overrides: Partial<TestTask> = {}): TestTask {
+  return {
+    id: "task-1",
+    title: "清晰标题",
+    requirement: "很长的需求正文\n第二行",
+    status: "running",
+    created_at: "2026-08-22T08:00:00Z",
+    ...overrides,
+  };
+}
+
+test("现场历史优先使用任务标题，并为旧任务提取需求首行", () => {
+  assert.equal(historyTaskTitle(task()), "清晰标题");
+  assert.equal(historyTaskTitle(task({ title: "", requirement: "首行摘要\n完整正文" })), "首行摘要");
+});
+
+test("现场历史按最近活动倒序并保留可跳转的完整任务", () => {
+  const entries = workspaceHistoryEntries([
+    task({ id: "task-1", updated_at: "2026-08-22T09:00:00Z" }),
+    task({ id: "task-2", title: "较新的任务", last_progress_at: "2026-08-22T10:00:00Z" }),
+  ]);
+
+  assert.deepEqual(entries.map((entry) => entry.id), ["task-2", "task-1"]);
+  assert.equal(entries[0]?.updated_at, "2026-08-22T10:00:00Z");
+  assert.equal(entries[0]?.event_count, 0);
+  assert.equal(entries[0]?.title, "较新的任务");
+});

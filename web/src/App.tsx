@@ -337,7 +337,7 @@ export function App() {
       : { title: "团队动态", description: "只读了解团队正在推进什么；你的待办与操作始终留在个人工作台。" },
     mine: { title: "我的工作", description: "从发起到交付，集中推进你的每一项任务。" },
     profile: { title: "个人设置", description: "集中管理任务审批方式、CodeHub 提交身份和小鲁班通知。" },
-    history: { title: "交付历史", description: "从投影读侧回看跨生命周期的任务与交付记录。" },
+    history: { title: "交付历史", description: "回看任务与交付记录；未启用历史投影时仍可浏览当前任务现场。" },
     users: { title: "账号管理", description: "创建本地账号并分配管理员或开发权限。" },
     settings: { title: "服务设置", description: "集中管理模型网关和团队运行策略；部署链路在此只读自检。" },
   }[view];
@@ -401,7 +401,7 @@ export function App() {
           onSessionPatch={patchSession}
           onTasksChanged={refresh}
         />}
-        {view === "history" && <HistoryBoard />}
+        {view === "history" && <HistoryBoard tasks={tasks} onOpenTask={openArtifacts} />}
         {view === "users" && session.role === "admin"
           && <UsersBoard me={session.username} />}
         {view === "settings" && session.role === "admin" && <SettingsBoard />}

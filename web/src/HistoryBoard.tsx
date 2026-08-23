@@ -1,7 +1,13 @@
-/** PostgreSQL 投影的跨生命周期读侧：用于管理视角的整体回望。 */
+/** 历史投影优先、当前任务现场兜底的只读回望。 */
 
 import { useEffect, useState } from "react";
-import { listHistory, STATUS_TEXT, type TaskHistoryEntry } from "./api";
+import {
+  listHistory,
+  STATUS_TEXT,
+  type TaskHistoryEntry,
+  type TaskSummary,
+} from "./api";
+import { historyTaskTitle, workspaceHistoryEntries } from "./historyModel";
 import { formatLocalDate, instantMs } from "./time";
 
 function timeAgo(iso: string): string {
@@ -39,7 +45,12 @@ const TILES = [
   },
 ] as const;
 
-export function HistoryBoard() {
+interface HistoryBoardProps {
+  tasks: TaskSummary[];
+  onOpenTask?: (task: TaskSummary) => void;
+}
+
+export function HistoryBoard({ tasks, onOpenTask }: HistoryBoardProps) {
   const [entries, setEntries] = useState<TaskHistoryEntry[]>();
   const [unavailable, setUnavailable] = useState("");
   const [loading, setLoading] = useState(true);
@@ -47,21 +58,31 @@ export function HistoryBoard() {
   async function load() {
     setLoading(true);
     setUnavailable("");
-    const result = await listHistory();
-    if (result.unavailable) setUnavailable(result.unavailable);
-    else setEntries(result.entries ?? []);
-    setLoading(false);
+    try {
+      const result = await listHistory();
+      if (result.unavailable) setUnavailable(result.unavailable);
+      else setEntries(result.entries ?? []);
+    } catch (error) {
+      setUnavailable(error instanceof Error ? error.message : String(error));
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => { void load(); }, []);
+
+  const workspaceEntries = workspaceHistoryEntries(tasks);
+  const usingWorkspace = Boolean(unavailable);
+  const visibleEntries = usingWorkspace ? workspaceEntries : (entries ?? []);
+  const currentTasks = new Map(tasks.map((task) => [task.id, task]));
 
   return (
     <section className="history-board">
       <div className="history-intro">
         <div>
           <span className="section-kicker">DELIVERY HISTORY</span>
-          <h2>跨生命周期任务</h2>
-          <p>以 PostgreSQL 投影快速浏览，现场文件仍是阶段事实源。</p>
+          <h2>任务与交付记录</h2>
+          <p>优先回看跨生命周期历史；未启用投影时仍可浏览当前任务现场。</p>
         </div>
         <button className="refresh-button" onClick={() => void load()}>
           <svg viewBox="0 0 20 20" aria-hidden>
@@ -78,38 +99,38 @@ export function HistoryBoard() {
         </div>
       )}
 
-      {!loading && unavailable && (
+      {!loading && usingWorkspace && visibleEntries.length > 0 && (
+        <div className="history-source-note" role="status" title={unavailable}>
+          <span className="history-source-icon" aria-hidden>◎</span>
+          <span>
+            <strong>当前使用任务现场</strong>
+            <small>历史投影暂不可用；这里展示本服务仍保留的任务，恢复后会自动切换。</small>
+          </span>
+        </div>
+      )}
+
+      {!loading && visibleEntries.length === 0 && (
         <div className="board-empty">
           <span className="empty-database" aria-hidden>
             <i /><i /><i />
           </span>
-          <strong>历史看板需要 PostgreSQL 投影</strong>
-          <p>{unavailable}</p>
-          <code>
-            npm run serve -- --pg postgresql://&lt;用户&gt;@&lt;地址&gt;/&lt;库名&gt;
-          </code>
-          <small>开启后历史会自动补齐，不改变现场文件这一事实源。</small>
+          <strong>{usingWorkspace ? "当前没有可回看的任务" : "历史里还没有任务"}</strong>
+          <p>
+            {usingWorkspace
+              ? "发起第一项工作后，这里就能直接进入任务现场。"
+              : "发起第一项工作后，这里会留下跨生命周期的完整轨迹。"}
+          </p>
         </div>
       )}
 
-      {!loading && entries && entries.length === 0 && !unavailable && (
-        <div className="board-empty">
-          <span className="empty-database" aria-hidden>
-            <i /><i /><i />
-          </span>
-          <strong>投影里还没有任务</strong>
-          <p>发起第一项工作后，这里会留下跨生命周期的完整轨迹。</p>
-        </div>
-      )}
-
-      {!loading && entries && entries.length > 0 && (
+      {!loading && visibleEntries.length > 0 && (
         <>
           <div className="history-metrics">
             {TILES.map((tile) => (
               <div className={`history-metric ${tile.tone}`} key={tile.label}>
                 <span><i aria-hidden />{tile.label}</span>
                 <strong>
-                  {entries.filter((entry) => tile.match(entry.status)).length}
+                  {visibleEntries.filter((entry) => tile.match(entry.status)).length}
                 </strong>
               </div>
             ))}
@@ -124,39 +145,55 @@ export function HistoryBoard() {
               <span>最近更新</span>
             </div>
             <div className="history-rows">
-              {entries.map((entry) => (
-                <div className="history-row" key={entry.id}>
-                  <div className="history-task">
-                    <span className="task-id">{entry.id}</span>
-                    <strong title={entry.requirement}>{entry.requirement}</strong>
+              {visibleEntries.map((entry) => {
+                const currentTask = currentTasks.get(entry.id);
+                const title = historyTaskTitle(entry);
+                return (
+                  <div className="history-row" key={entry.id}>
+                    <div className="history-task">
+                      <span className="task-id">{entry.id}</span>
+                      {currentTask && onOpenTask ? (
+                        <button
+                          className="history-task-button"
+                          title={`${title} · 打开工作台`}
+                          onClick={() => onOpenTask(currentTask)}
+                        >
+                          <strong>{title}</strong>
+                          <span>打开工作台 <i aria-hidden>→</i></span>
+                        </button>
+                      ) : <strong title={title}>{title}</strong>}
+                    </div>
+                    <div>
+                      <span className={`pill ${entry.status}`}>
+                        <i aria-hidden />
+                        {STATUS_TEXT[entry.status] ?? entry.status}
+                      </span>
+                    </div>
+                    <div className="history-delivery">
+                      {entry.delivery?.mr_url ? (
+                        <a
+                          href={entry.delivery.mr_url}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          MR · {entry.delivery.mr_state ?? "查看"}
+                          <svg viewBox="0 0 16 16" aria-hidden>
+                            <path d="M6 3.5h6.5V10M12.25 3.75 5 11" />
+                          </svg>
+                        </a>
+                      ) : <span>—</span>}
+                    </div>
+                    <div className={`history-events${usingWorkspace ? " current" : ""}`}>
+                      {usingWorkspace ? (
+                        <><strong>现场</strong><span>查看详情</span></>
+                      ) : (
+                        <><strong>{entry.event_count}</strong><span>个事件</span></>
+                      )}
+                    </div>
+                    <time dateTime={entry.updated_at}>{timeAgo(entry.updated_at)}</time>
                   </div>
-                  <div>
-                    <span className={`pill ${entry.status}`}>
-                      <i aria-hidden />
-                      {STATUS_TEXT[entry.status] ?? entry.status}
-                    </span>
-                  </div>
-                  <div className="history-delivery">
-                    {entry.delivery?.mr_url ? (
-                      <a
-                        href={entry.delivery.mr_url}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        MR · {entry.delivery.mr_state ?? "查看"}
-                        <svg viewBox="0 0 16 16" aria-hidden>
-                          <path d="M6 3.5h6.5V10M12.25 3.75 5 11" />
-                        </svg>
-                      </a>
-                    ) : <span>—</span>}
-                  </div>
-                  <div className="history-events">
-                    <strong>{entry.event_count}</strong>
-                    <span>个事件</span>
-                  </div>
-                  <time dateTime={entry.updated_at}>{timeAgo(entry.updated_at)}</time>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </>
