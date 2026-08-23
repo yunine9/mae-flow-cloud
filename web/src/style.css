@@ -3976,8 +3976,39 @@ pre {
   background: var(--surface);
   box-shadow: var(--shadow-xs);
 }
+.ws-workspace-nav button.attention:not(.active) {
+  border-color: color-mix(in srgb, var(--attention) 32%, var(--line));
+  background: color-mix(in srgb, var(--attention-soft) 36%, transparent);
+}
 .ws-workspace-nav button.active::after { background: var(--accent); }
-.ws-workspace-nav strong { font-size: 11.5px; font-weight: 720; }
+.ws-workspace-nav strong {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  font-weight: 720;
+}
+.ws-workspace-nav strong em {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line));
+  border-radius: 999px;
+  background: var(--accent-soft);
+  font-size: 8.5px;
+  font-style: normal;
+  font-weight: 760;
+}
+.ws-workspace-nav button.attention strong em {
+  color: var(--attention);
+  border-color: color-mix(in srgb, var(--attention) 30%, var(--line));
+  background: var(--attention-soft);
+}
 .ws-workspace-nav small {
   max-width: 210px;
   overflow: hidden;

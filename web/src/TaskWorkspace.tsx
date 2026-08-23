@@ -431,17 +431,24 @@ export function TaskWorkspace({
       <nav className="ws-workspace-nav" aria-label="任务工作台视图">
         {([
           ["materials", "交付材料", "文档、依赖与代码变更"],
+          ["insights", "批注与检视", drafts.length
+            ? `${drafts.length} 条批注待提交` : notes.length
+              ? `${notes.length} 条批注` : "圈选原文、协作检视"],
           ["collaboration", "开发协作", collaborationVisible
             ? "补充主任务或主动接管" : assistantUnavailableReason(task)],
           ["execution", "执行现场", task.focus?.headline ?? "心流与原始事件"],
-          ["insights", "分析与检视", notes.length
-            ? `${notes.length} 条批注与任务账目` : "批注、耗时与用量"],
         ] as Array<[WorkspaceView, string, string]>).map(([view, label, hint]) => (
           <button type="button" role="tab" key={view}
             aria-selected={workspaceView === view}
-            className={workspaceView === view ? "active" : ""}
+            className={`${workspaceView === view ? "active" : ""}`
+              + `${view === "insights" && drafts.length ? " attention" : ""}`}
             onClick={() => setWorkspaceView(view)}>
-            <strong>{label}</strong>
+            <strong>
+              {label}
+              {view === "insights" && notes.length > 0 && (
+                <em>{drafts.length > 0 ? `${drafts.length} 待提交` : notes.length}</em>
+              )}
+            </strong>
             <small>{hint}</small>
           </button>
         ))}
@@ -547,13 +554,32 @@ export function TaskWorkspace({
             </div>
           </> : <>
             <div className="ws-pane-head">
-              <div><span>REVIEW & INSIGHTS</span><strong>分析与检视</strong></div>
-              <small>批注、Committer、耗时与模型用量</small>
+              <div><span>REVIEW NOTES</span><strong>批注与检视</strong></div>
+              <small>管理批注意见、检视协作与处理进展</small>
             </div>
             <div className="ws-primary-scroll ws-insights-view">
               <div className="ws-insights-grid">
                 <section className="ws-insight-column">
-                  <header><span>REVIEW</span><strong>检视协作</strong></header>
+                  <header><span>ANNOTATIONS</span><strong>批注意见</strong></header>
+                  <AnnotationPanel
+                    taskId={task.id}
+                    viewerUsername={viewerUsername}
+                    items={notes}
+                    checks={checks}
+                    reply={reply}
+                    canOperate={canOperate}
+                    running={task.status === "running"}
+                    onLocate={locate}
+                    onChanged={() => { setNotesPulse((tick) => tick + 1); onChanged(); }}
+                  />
+                  {!notes.length && (
+                    <div className="ws-insight-empty">
+                      在“交付材料”中圈选原文或代码，即可创建批注。
+                    </div>
+                  )}
+                </section>
+                <section className="ws-insight-column">
+                  <header><span>REVIEW & OPERATIONS</span><strong>检视协作与进展</strong></header>
                   {reviewAssignment && (
                     <section className="review-assignment" aria-labelledby="review-assignment-title">
                       <div className="review-assignment-mark" aria-hidden>审</div>
@@ -589,23 +615,9 @@ export function TaskWorkspace({
                       </div>}
                     </section>
                   )}
-                  <AnnotationPanel
-                    taskId={task.id}
-                    viewerUsername={viewerUsername}
-                    items={notes}
-                    checks={checks}
-                    reply={reply}
-                    canOperate={canOperate}
-                    running={task.status === "running"}
-                    onLocate={locate}
-                    onChanged={() => { setNotesPulse((tick) => tick + 1); onChanged(); }}
-                  />
-                  {!reviewAssignment && !canRequestReview && !notes.length && (
-                    <div className="ws-insight-empty">当前没有检视协作事项。</div>
+                  {!reviewAssignment && !canRequestReview && (
+                    <div className="ws-insight-empty">当前没有 Committer 检视事项。</div>
                   )}
-                </section>
-                <section className="ws-insight-column">
-                  <header><span>OPERATIONS</span><strong>耗时与资源</strong></header>
                   <TaskTimeline taskId={task.id} defaultOpen />
                   {task.token_usage ? (
                     <div className="ws-usage-summary ws-usage-expanded" title="来自模型提供方的真实用量统计">
