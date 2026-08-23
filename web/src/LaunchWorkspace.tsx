@@ -118,11 +118,14 @@ export function LaunchWorkspace({
           repairRounds: repairRounds.trim() === ""
             ? undefined : Number(repairRounds),
           repositorySkillCatalogToken:
-            repositorySkillSelection.selectedIds.length > 0
+            repositorySkillSelection.scanned
               ? repositorySkillSelection.catalogToken : undefined,
           selectedRepositorySkillIds:
-            repositorySkillSelection.selectedIds.length > 0
+            repositorySkillSelection.scanned
               ? repositorySkillSelection.selectedIds : undefined,
+          selectedRepositoryKnowledgeIds:
+            repositorySkillSelection.scanned
+              ? repositorySkillSelection.selectedKnowledgeIds : undefined,
         },
       );
       await onCreated();

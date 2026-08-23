@@ -37,10 +37,29 @@ export interface RepositorySkillDescriptor {
   warning?: string;
 }
 
+export type RepositoryKnowledgeKind = "rules" | "document";
+
+/** 业务知识与 Skill 共用同一次只读仓库目录。规则文件由 Pi 自动加载，
+ * docs 文档可由用户在下单时明确选为“本单重点知识”。 */
+export interface RepositoryKnowledgeDescriptor {
+  id: string;
+  title: string;
+  description: string;
+  relative_path: string;
+  kind: RepositoryKnowledgeKind;
+  digest: string;
+  bytes: number;
+  selectable: boolean;
+  recommended: boolean;
+  auto_load: boolean;
+  warning?: string;
+}
+
 export interface RepositorySkillCatalog {
   repository: string;
   revision: string;
   skills: RepositorySkillDescriptor[];
+  knowledge: RepositoryKnowledgeDescriptor[];
   error?: string;
 }
 
@@ -60,6 +79,9 @@ export interface DiscoverRepositorySkillsOptions {
 
 const MAX_SKILL_BYTES = 128 * 1024;
 const MAX_SKILLS = 100;
+const MAX_KNOWLEDGE_BYTES = 128 * 1024;
+const MAX_KNOWLEDGE_FILES = 200;
+const MAX_KNOWLEDGE_DEPTH = 6;
 const MAX_TREE_BYTES = 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 15_000;
 const TEMP_PREFIX = "mae-flow-repository-skills-";
@@ -225,6 +247,132 @@ async function rootTree(
     && entry.mode === "040000" && entry.type === "tree");
 }
 
+function markdownSummary(content: string, fallback: string): {
+  title: string;
+  description: string;
+} {
+  const normalized = content.replace(/^---\s*[\s\S]*?\n---\s*/m, "");
+  const lines = normalized.split(/\r?\n/);
+  const heading = lines.find((line) => /^#{1,3}\s+\S/.test(line.trim()))
+    ?.replace(/^#{1,3}\s+/, "").trim();
+  const paragraph = lines
+    .map((line) => line.trim())
+    .find((line) => line && !line.startsWith("#")
+      && !line.startsWith("<!--") && !line.startsWith("```")
+      && !/^[-*+]\s/.test(line));
+  const clean = (value: string, limit: number) => {
+    const text = value.replace(/[`*_>#\[\]]/g, "").replace(/\s+/g, " ").trim();
+    return text.length > limit ? `${text.slice(0, limit)}…` : text;
+  };
+  return {
+    title: clean(heading || fallback.replace(/\.(?:md|mdx)$/i, ""), 80),
+    description: clean(paragraph || "仓库随附的业务知识文档", 180),
+  };
+}
+
+async function readBlob(
+  cwd: string,
+  entry: TreeEntry,
+  deadline: number,
+  maxBytes: number,
+): Promise<Buffer | undefined> {
+  if (entry.type !== "blob" || !/^100(?:644|755)$/.test(entry.mode)) {
+    return undefined;
+  }
+  const sizeText = (await runGit(["cat-file", "-s", entry.oid], {
+    cwd, deadline, maxBuffer: 4096,
+  })).toString("utf-8").trim();
+  const size = Number(sizeText);
+  if (!Number.isSafeInteger(size) || size < 0 || size > maxBytes) return undefined;
+  const content = await runGit(["cat-file", "blob", entry.oid], {
+    cwd, deadline, maxBuffer: maxBytes + 1024,
+  });
+  return content.length === size ? content : undefined;
+}
+
+async function discoverKnowledge(
+  cwd: string,
+  revision: string,
+  repository: string,
+  deadline: number,
+): Promise<RepositoryKnowledgeDescriptor[]> {
+  const rootEntries = await listTree(cwd, revision, deadline);
+  const ruleNames = [
+    "AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD",
+  ];
+  const rules: RepositoryKnowledgeDescriptor[] = [];
+  let ruleText = "";
+  const ruleEntry = ruleNames
+    .map((name) => rootEntries.find((entry) => entry.name === name))
+    .find(Boolean);
+  if (ruleEntry) {
+    const content = await readBlob(cwd, ruleEntry, deadline, MAX_KNOWLEDGE_BYTES);
+    if (content) {
+      ruleText = content.toString("utf-8");
+      const summary = markdownSummary(ruleText, ruleEntry.name);
+      const digest = sha256(content);
+      rules.push({
+        id: sha256([repository, revision, ruleEntry.name, digest].join("\0")),
+        ...summary,
+        relative_path: ruleEntry.name,
+        kind: "rules",
+        digest,
+        bytes: content.length,
+        selectable: false,
+        recommended: true,
+        auto_load: true,
+        warning: "项目规则由 Pi 自动加载，无需手动选择",
+      });
+    }
+  }
+
+  const docsEntry = rootEntries.find((entry) => entry.name === "docs"
+    && entry.mode === "040000" && entry.type === "tree");
+  if (!docsEntry) return rules;
+  const files: Array<{ path: string; entry: TreeEntry }> = [];
+  const walk = async (tree: TreeEntry, prefix: string, depth: number): Promise<void> => {
+    if (depth > MAX_KNOWLEDGE_DEPTH || files.length >= MAX_KNOWLEDGE_FILES) return;
+    const children = (await listTree(cwd, tree.oid, deadline))
+      .filter((entry) => safePathSegment(entry.name))
+      .sort((left, right) => left.name.localeCompare(right.name));
+    for (const child of children) {
+      if (files.length >= MAX_KNOWLEDGE_FILES) break;
+      const path = `${prefix}/${child.name}`;
+      if (child.mode === "040000" && child.type === "tree") {
+        await walk(child, path, depth + 1);
+      } else if (child.type === "blob" && /^100(?:644|755)$/.test(child.mode)
+          && /\.(?:md|mdx)$/i.test(child.name)) {
+        files.push({ path, entry: child });
+      }
+    }
+  };
+  await walk(docsEntry, "docs", 0);
+
+  const normalizedRules = ruleText.replace(/\\/g, "/");
+  const documents: RepositoryKnowledgeDescriptor[] = [];
+  for (const file of files) {
+    const content = await readBlob(cwd, file.entry, deadline, MAX_KNOWLEDGE_BYTES);
+    if (!content) continue;
+    const text = content.toString("utf-8");
+    const digest = sha256(content);
+    const summary = markdownSummary(text, file.path.split("/").pop() ?? file.path);
+    const recommended = normalizedRules.includes(file.path)
+      || normalizedRules.includes(`./${file.path}`);
+    documents.push({
+      id: sha256([repository, revision, file.path, digest].join("\0")),
+      ...summary,
+      relative_path: file.path,
+      kind: "document",
+      digest,
+      bytes: content.length,
+      selectable: true,
+      recommended,
+      auto_load: false,
+    });
+  }
+  return [...rules, ...documents];
+}
+
 function gitAuthArgs(credentialHelper: string | undefined): string[] {
   return credentialHelper
     ? ["-c", "credential.helper=", "-c", `credential.helper=${credentialHelper}`]
@@ -244,6 +392,7 @@ export async function discoverRepositorySkills(
     repository: displayRepository,
     revision: "",
     skills: [],
+    knowledge: [],
     error: message,
   });
   if (!repositoryIsSafe(options.repository)) {
@@ -297,6 +446,8 @@ export async function discoverRepositorySkills(
       throw new Error("invalid resolved revision");
     }
 
+    const knowledge = await discoverKnowledge(
+      cloneDir, revision, displayRepository, deadline);
     const candidates: Array<{
       root: (typeof REPOSITORY_SKILL_ROOTS)[number];
       directory: TreeEntry;
@@ -373,15 +524,16 @@ export async function discoverRepositorySkills(
       if (skills.length >= MAX_SKILLS) break;
     }
 
-    return { repository: displayRepository, revision, skills };
+    return { repository: displayRepository, revision, skills, knowledge };
   } catch (error) {
     return {
       repository: displayRepository,
       revision,
       skills: [],
+      knowledge: [],
       error: error instanceof DiscoveryTimeoutError
-        ? "仓库 Skill 发现超时"
-        : "仓库或基线不可访问，无法发现 Skill",
+        ? "仓内知识与 Skill 发现超时"
+        : "仓库或基线不可访问，无法发现仓内知识与 Skill",
     };
   } finally {
     rmSync(temporaryRoot, { recursive: true, force: true });

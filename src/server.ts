@@ -633,6 +633,9 @@ export function createTaskServer(
         const selectedRepositorySkillIds =
           Array.isArray(body.selected_repository_skill_ids)
             ? body.selected_repository_skill_ids.map(String) : undefined;
+        const selectedRepositoryKnowledgeIds =
+          Array.isArray(body.selected_repository_knowledge_ids)
+            ? body.selected_repository_knowledge_ids.map(String) : undefined;
         // 配置没配齐不给下单(用户拍板)。前端会把缺项摆在明面上,
         // 但拦必须在后端——绕过界面直接打接口的一样要被拦住,
         // 否则任务会带着缺失的令牌一路跑到推送/通知那步才炸。
@@ -652,7 +655,7 @@ export function createTaskServer(
             {
               title, account, repo, repos, lane, ticket, baseline, model,
               repairRounds, repositorySkillCatalogToken,
-              selectedRepositorySkillIds,
+              selectedRepositorySkillIds, selectedRepositoryKnowledgeIds,
             }));
         } catch (error) {
           return json(response, 400, { error: String(error) });
@@ -690,6 +693,9 @@ export function createTaskServer(
             selected_repository_skill_ids:
               Array.isArray(body.selected_repository_skill_ids)
                 ? body.selected_repository_skill_ids.map(String) : undefined,
+            selected_repository_knowledge_ids:
+              Array.isArray(body.selected_repository_knowledge_ids)
+                ? body.selected_repository_knowledge_ids.map(String) : undefined,
           });
           return json(response, 200, task);
         }
@@ -709,6 +715,9 @@ export function createTaskServer(
               ? undefined : String(body.repository_skill_catalog_token),
             selected_ids: Array.isArray(body.selected_repository_skill_ids)
               ? body.selected_repository_skill_ids.map(String) : undefined,
+            selected_knowledge_ids:
+              Array.isArray(body.selected_repository_knowledge_ids)
+                ? body.selected_repository_knowledge_ids.map(String) : undefined,
           }));
         }
         // Committer 检视必须由该单责任人主动发起。管理员只维护名单，

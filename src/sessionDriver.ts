@@ -20,8 +20,8 @@ import {
   SessionManager,
   type BashOperations,
 } from "@earendil-works/pi-coding-agent";
-import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
-import { existsSync, statSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { EventLog, type SemanticEvent, type SemanticEventKind, validateEvent } from "./semanticEvents.ts";
 import { TranscriptStore } from "./transcriptStore.ts";
 import { GateService } from "./gateService.ts";
@@ -31,6 +31,11 @@ import {
   modelTokenUsageSample,
   type ModelTokenUsageSample,
 } from "./tokenUsage.ts";
+import {
+  KnowledgeTrace,
+  type KnowledgeResourceRef,
+} from "./knowledgeTrace.ts";
+import type { MaterializedKnowledgeEntry } from "./repositoryKnowledgeRuntime.ts";
 
 /** pi 工具名 → 内核工具词汇表。不认识的原样透传(错认比不认更危险)。 */
 const TOOL_NAME_MAP: Record<string, string> = {
@@ -108,6 +113,13 @@ export interface CloudSessionOptions {
    * 不能传 skills 目录，否则同目录下未选择的 Skill 也会被 Pi 扫入。
    * 跨仓时可同时传多个仓各自的文件，主/子 Agent 共用同一 allowlist。 */
   repositorySkillPaths?: string[];
+  /** 与 repositorySkillPaths 一一对应的业务身份，仅用于知识足迹归因；
+   * 缺失时仍能按实际 Skill 文件记录，不影响装载。 */
+  repositorySkillResources?: Array<KnowledgeResourceRef & { actual_path: string }>;
+  /** 用户在下单时选定、已经过安全物化的重点知识。正文作为项目上下文
+   * 注入一次；主/子/恢复会话共用，失败只影响观测与上下文，不碰内核。 */
+  repositoryKnowledge?: MaterializedKnowledgeEntry[];
+  knowledgeTrace?: KnowledgeTrace;
   /** 上下文超限自愈用的锚点提供者(通常是内核现场 current/config)。
    * 不给就用需求原话兜底——锚永远来自权威,不由云端编造。 */
   compactAnchor?: () => string;
@@ -656,6 +668,32 @@ export class CloudSession {
       ...(hostSkillPath && existsSync(hostSkillPath) ? [hostSkillPath] : []),
       ...repositorySkillPaths,
     ])];
+    const knowledgeEntries = (this.options.repositoryKnowledge ?? [])
+      .filter((item) => existsSync(item.path) && statSync(item.path).isFile());
+    for (const item of knowledgeEntries) {
+      this.options.knowledgeTrace?.register(item.path, {
+        id: item.id,
+        kind: "document",
+        name: item.title,
+        path: item.relative_path,
+        repository: item.repository,
+        description: item.description,
+        digest: item.digest,
+        selected: true,
+      });
+    }
+    for (const item of this.options.repositorySkillResources ?? []) {
+      this.options.knowledgeTrace?.register(item.actual_path, {
+        id: item.id,
+        kind: item.kind,
+        name: item.name,
+        path: item.path,
+        repository: item.repository,
+        description: item.description,
+        digest: item.digest,
+        selected: item.selected,
+      }, true);
+    }
     if (skillPaths.length) {
       const safeRepositoryNames = repositorySkillPaths.map((path) => {
         const fromWorkspace = relative(workspace, path);
@@ -681,6 +719,18 @@ export class CloudSession {
       // SDK 在该模式下的语义正是“只装显式路径”。
       noSkills: true,
       additionalSkillPaths: skillPaths,
+      // 重点知识不是 Skill：用户勾选意味着“本单开局就让 Agent 看见”，
+      // 因此作为项目上下文直接进入系统提示。原路径仍保留在任务记录中，
+      // 页面能说清是哪一仓哪一篇，不把快照哈希路径暴露给人。
+      agentsFilesOverride: (current) => ({
+        agentsFiles: [
+          ...current.agentsFiles,
+          ...knowledgeEntries.map((item) => ({
+            path: item.path,
+            content: readFileSync(item.path, "utf-8"),
+          })),
+        ],
+      }),
       extensionFactories: [
         {
           name: "mae-flow-gate",
@@ -692,6 +742,63 @@ export class CloudSession {
       ],
     });
     await loader.reload();
+    const repositorySkillByPath = new Map(
+      (this.options.repositorySkillResources ?? [])
+        .map((item) => [resolve(item.actual_path), item] as const));
+    for (const skill of loader.getSkills().skills) {
+      const known = repositorySkillByPath.get(resolve(skill.filePath));
+      const displayPath = skill.filePath.includes(workspace)
+        ? relative(workspace, skill.filePath).split(sep).join("/")
+        : `宿主技能/${skill.name}/SKILL.md`;
+      // actual_path 只用于宿主侧匹配，不能跟着知识事件/API 泄露快照
+      // 的绝对宿主路径。
+      const resource: KnowledgeResourceRef = known ? {
+        id: known.id,
+        kind: known.kind,
+        name: known.name,
+        path: known.path,
+        repository: known.repository,
+        description: known.description,
+        digest: known.digest,
+        selected: known.selected,
+      } : {
+        id: `skill:${skill.name}:${displayPath}`,
+        kind: "skill",
+        name: skill.name,
+        path: displayPath,
+        description: skill.description,
+      };
+      this.options.knowledgeTrace?.register(skill.filePath, resource, true);
+      this.options.knowledgeTrace?.record(
+        "available", config.sessionId, resource);
+    }
+    for (const file of loader.getAgentsFiles().agentsFiles) {
+      const selected = knowledgeEntries.find(
+        (item) => resolve(item.path) === resolve(file.path));
+      const withinWorkspace = resolve(file.path).startsWith(`${resolve(workspace)}${sep}`)
+        || resolve(file.path) === resolve(workspace);
+      const display = selected?.relative_path
+        ?? (withinWorkspace
+          ? relative(workspace, file.path).split(sep).join("/")
+          : file.path.split(sep).slice(-2).join("/"));
+      const resource: KnowledgeResourceRef = selected ? {
+        id: selected.id,
+        kind: "document",
+        name: selected.title,
+        path: selected.relative_path,
+        repository: selected.repository,
+        description: selected.description,
+        digest: selected.digest,
+        selected: true,
+      } : {
+        id: `rules:${display}`,
+        kind: "rules",
+        name: display.split("/").at(-1) || "项目规则",
+        path: display,
+      };
+      this.options.knowledgeTrace?.register(file.path, resource);
+      this.options.knowledgeTrace?.record("loaded", config.sessionId, resource);
+    }
     const resolved = this.modelRuntime.getModel(provider, model);
     if (!resolved) {
       throw new Error(`models.json 里找不到模型 ${provider}/${model}`);
@@ -825,6 +932,12 @@ export class CloudSession {
       };
       this.options.eventLog.append(semantic);
       this.options.transcript.record(semantic);
+      this.options.knowledgeTrace?.observeTool(
+        sessionId,
+        String(semantic.payload.name ?? ""),
+        input,
+        Boolean(event.isError),
+      );
       // 证据登记交内核(fire 进 KernelHost 的串行链,顺序由它保证)。
       this.kernelBypass(this.options.hostHooks?.postTool?.(semantic));
     }

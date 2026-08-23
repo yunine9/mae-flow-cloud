@@ -23,6 +23,10 @@ import { EventLog } from "../src/semanticEvents.ts";
 import { TranscriptStore } from "../src/transcriptStore.ts";
 import { GateService } from "../src/gateService.ts";
 import { HumanGate } from "../src/humanGate.ts";
+import {
+  KnowledgeTrace,
+  knowledgeUsageSnapshot,
+} from "../src/knowledgeTrace.ts";
 
 const SCRIPT: Scene[] = [{ text: "写完了。" }];
 
@@ -134,6 +138,52 @@ test("精确选择仓 A 的 Skill,不会顺带装载同目录仓 B Skill", async
   const seen = JSON.stringify(await runDirect(workspace, [skillA]));
   assert.match(seen, /REPO-A-MARKER/);
   assert.ok(!seen.includes("REPO-B-MARKER"));
+});
+
+test("用户选择的业务文档开局进入 Pi 上下文并留下加载足迹", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "mfc-repo-knowledge-"));
+  const knowledgePath = join(workspace, "selected-orders.md");
+  writeFileSync(knowledgePath, "# 订单知识\n\nORDER-KNOWLEDGE-MARKER\n");
+  const model = new ScriptedModelServer(SCRIPT);
+  await model.start();
+  const agentDir = join(workspace, "pi-agent");
+  mkdirSync(agentDir, { recursive: true });
+  writeFileSync(join(agentDir, "models.json"), JSON.stringify(model.modelsJson()));
+  const session = await CloudSession.create({
+    taskId: "T-repository-knowledge",
+    workspace,
+    agentDir,
+    provider: "maeflow",
+    model: "scripted-v1",
+    eventLog: new EventLog(join(workspace, "events.jsonl")),
+    transcript: new TranscriptStore(join(workspace, "transcript.jsonl"), "main"),
+    gate: new GateService(),
+    humanGate: new HumanGate(join(workspace, "waiting.json")),
+    repositoryKnowledge: [{
+      id: "knowledge-1",
+      repository: "orders",
+      title: "订单知识",
+      description: "订单领域约束",
+      relative_path: "docs/orders.md",
+      digest: "digest",
+      path: knowledgePath,
+    }],
+    knowledgeTrace: new KnowledgeTrace(
+      join(workspace, "knowledge-events.jsonl"),
+      "T-repository-knowledge", workspace,
+    ),
+  });
+  try {
+    const outcome = await session.start("开始");
+    assert.equal(outcome.status, "turn_finished", outcome.detail ?? "");
+    assert.match(JSON.stringify(model.requests), /ORDER-KNOWLEDGE-MARKER/);
+    const usage = knowledgeUsageSnapshot({ workspace })!;
+    assert.ok(usage.events.some((event) => event.id === "knowledge-1"
+      && event.action === "loaded"));
+  } finally {
+    session.dispose();
+    await model.stop();
+  }
 });
 
 test("子 Agent 与主 Agent 使用同一仓库 Skill allowlist", async () => {

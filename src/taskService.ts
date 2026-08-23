@@ -85,10 +85,22 @@ import {
   validRepositorySkillPath,
 } from "./repositorySkillRuntime.ts";
 import {
+  materializeRepositoryKnowledge,
+  type MaterializedKnowledgeEntry,
+  type SelectedRepositoryKnowledge,
+  validRepositoryKnowledgePath,
+} from "./repositoryKnowledgeRuntime.ts";
+import {
   discoverRepositorySkills,
   type RepositorySkillCatalog,
   type RepositorySkillDescriptor,
 } from "./repositorySkills.ts";
+import {
+  KnowledgeTrace,
+  knowledgeUsageSnapshot,
+  type KnowledgeResourceRef,
+  type TaskKnowledgeUsage,
+} from "./knowledgeTrace.ts";
 import {
   createPrePushGateContract,
   parsePrePushAgentReport,
@@ -344,6 +356,11 @@ export interface TaskSummary {
    * 新任务明确不加载仓内 Skill；字段缺席仅用于兼容旧任务此前的全量
    * 自动加载。Skill 是建议上下文，不是流程步骤或完成证据。 */
   repository_skills?: SelectedRepositorySkill[];
+  /** 用户在下单时明确选择为“本单重点知识”的 docs 文档。正文会在
+   * 会话开局进入上下文；它和 Skill 一样是辅助材料，不是内核证据。 */
+  repository_knowledge?: SelectedRepositoryKnowledge[];
+  /** 任务详情读侧投影：提供/加载/阅读的宿主事实，不参与任务落盘。 */
+  knowledge_usage?: TaskKnowledgeUsage;
   /** 多仓时由 Chain 产物投影；单仓时是一个节点的退化图。 */
   requirement_graph?: RequirementGraph;
   /** 确认 Chain 方案后生成的普通仓库交付任务关系。 */
@@ -1409,7 +1426,7 @@ export class TaskService {
 
   get(id: string): TaskSummary | undefined {
     const task = this.tasks.get(id);
-    return task ? this.project(task) : undefined;
+    return task ? this.project(task, true) : undefined;
   }
 
   /** 责任人主动发出的 Committer 检视邀请。邀请先落盘，再投递；通知
@@ -1685,7 +1702,7 @@ export class TaskService {
     return { checked_at: new Date().toISOString(), overall, items };
   }
 
-  private project(task: TaskState): TaskSummary {
+  private project(task: TaskState, includeKnowledgeUsage = false): TaskSummary {
     this.refreshRequirementGraph(task);
     const record = task.notifyRecord;
     const progress = this.readProgress(task);
@@ -1705,8 +1722,26 @@ export class TaskService {
         : undefined,
       progress,
       token_usage: tokenUsageSnapshot(task.tokenUsage),
+      knowledge_usage: includeKnowledgeUsage
+        ? knowledgeUsageSnapshot({
+            workspace: task.summary.workspace,
+            selectedKnowledge: summary.repository_knowledge,
+            selectedSkills: summary.repository_skills,
+          })
+        : undefined,
     };
     return { ...projected, focus: projectTaskFocus(projected) };
+  }
+
+  /** 知识足迹是 Cloud 观测旁路：阶段只读内核投影，写失败不影响任务。 */
+  private knowledgeTrace(task: TaskState, cwd: string): KnowledgeTrace {
+    return new KnowledgeTrace(
+      join(task.summary.workspace, "knowledge-events.jsonl"),
+      task.summary.id,
+      cwd,
+      () => this.readProgress(task)?.step ?? "",
+      this.options.log,
+    );
   }
 
   private isRequirementAnalysis(task: TaskState): boolean {
@@ -2291,19 +2326,29 @@ export class TaskService {
     return { ...catalog, skills };
   }
 
-  private selectedSkillsFromCatalog(options: {
+  private selectedResourcesFromCatalog(options: {
     catalogToken?: string;
-    selectedIds?: string[];
+    selectedSkillIds?: string[];
+    selectedKnowledgeIds?: string[];
     repositories: string[];
     baseline?: string;
     account?: string;
     /** Chain 检视重新读取目录时，不能因单个仓临时扫描失败
      * 就把父任务上已经确认的 Skill 清掉。仅该场景传入旧值；
      * 新下单仍不会从扫描失败的仓带入任何选择。 */
-    preserveForErroredRepositories?: SelectedRepositorySkill[];
-  }): SelectedRepositorySkill[] {
-    const ids = [...new Set((options.selectedIds ?? []).map(String))];
-    if (!ids.length && !options.catalogToken) return [];
+    preserveSkillsForErroredRepositories?: SelectedRepositorySkill[];
+    preserveKnowledgeForErroredRepositories?: SelectedRepositoryKnowledge[];
+  }): {
+    skills: SelectedRepositorySkill[];
+    knowledge: SelectedRepositoryKnowledge[];
+  } {
+    const skillIds = [...new Set((options.selectedSkillIds ?? []).map(String))];
+    const knowledgeIds = [
+      ...new Set((options.selectedKnowledgeIds ?? []).map(String)),
+    ];
+    if (!skillIds.length && !knowledgeIds.length && !options.catalogToken) {
+      return { skills: [], knowledge: [] };
+    }
     if (!options.catalogToken) throw new Error("选择仓内能力前请重新读取 Skill 目录");
     const ticket = this.repositorySkillCatalogs.get(options.catalogToken);
     if (!ticket || ticket.expiresAt <= Date.now()) {
@@ -2317,10 +2362,15 @@ export class TaskService {
         || ticket.baseline !== options.baseline) {
       throw new Error("代码仓或基线已变化，请重新读取仓内能力");
     }
-    if (ids.length > 20) throw new Error("每个任务最多选择 20 个仓内 Skill");
-    const byId = new Map<string, {
+    if (skillIds.length > 20) throw new Error("每个任务最多选择 20 个仓内 Skill");
+    if (knowledgeIds.length > 12) throw new Error("每个任务最多选择 12 篇重点知识");
+    const skillsById = new Map<string, {
       catalog: RepositorySkillCatalog;
       skill: RepositorySkillDescriptor;
+    }>();
+    const knowledgeById = new Map<string, {
+      catalog: RepositorySkillCatalog;
+      knowledge: RepositorySkillCatalog["knowledge"][number];
     }>();
     const successfulRepositories = new Set(
       ticket.catalogs.filter((catalog) => !catalog.error)
@@ -2329,10 +2379,15 @@ export class TaskService {
       // 失败目录不参与 ID 还原。即使未来某个发现器在
       // error 上还附了部分 skills，也不能把不完整快照当成可选清单。
       if (catalog.error) continue;
-      for (const skill of catalog.skills) byId.set(skill.id, { catalog, skill });
+      for (const skill of catalog.skills) {
+        skillsById.set(skill.id, { catalog, skill });
+      }
+      for (const knowledge of catalog.knowledge) {
+        knowledgeById.set(knowledge.id, { catalog, knowledge });
+      }
     }
-    const selected = ids.map((id): SelectedRepositorySkill => {
-      const found = byId.get(id);
+    const selectedSkills = skillIds.map((id): SelectedRepositorySkill => {
+      const found = skillsById.get(id);
       if (!found || !found.skill.selectable) {
         throw new Error("所选仓内 Skill 不存在或不可由 Agent 自主使用，请重新读取");
       }
@@ -2350,24 +2405,66 @@ export class TaskService {
         digest: found.skill.digest,
       };
     });
-    const merged = options.preserveForErroredRepositories === undefined
-      ? selected
+    const selectedKnowledge = knowledgeIds.map((id): SelectedRepositoryKnowledge => {
+      const found = knowledgeById.get(id);
+      if (!found || !found.knowledge.selectable
+          || found.knowledge.kind !== "document") {
+        throw new Error("所选业务知识不存在或不能手动加载，请重新读取");
+      }
+      if (!validRepositoryKnowledgePath(found.knowledge.relative_path)) {
+        throw new Error("业务知识路径不合法");
+      }
+      return {
+        id: found.knowledge.id,
+        repository: found.catalog.repository,
+        revision: found.catalog.revision,
+        title: found.knowledge.title,
+        description: found.knowledge.description,
+        relative_path: found.knowledge.relative_path,
+        kind: "document",
+        digest: found.knowledge.digest,
+        bytes: found.knowledge.bytes,
+      };
+    });
+    if (selectedKnowledge.reduce((sum, item) => sum + item.bytes, 0)
+        > 256 * 1024) {
+      throw new Error("本单重点知识正文合计不能超过 256 KiB");
+    }
+    const mergedSkills = options.preserveSkillsForErroredRepositories === undefined
+      ? selectedSkills
       : ticket.repositories.flatMap((repository) => {
           if (successfulRepositories.has(repository)) {
             // 成功仓以本次 IDs 为准；没选中任何项就是显式清空。
-            return selected.filter((skill) => skill.repository === repository);
+            return selectedSkills.filter((skill) => skill.repository === repository);
           }
           // catalog.error（以及防御性的目录缺失）保留该仓旧值，
           // 不影响其他成功仓的更新。
-          return options.preserveForErroredRepositories!
+          return options.preserveSkillsForErroredRepositories!
             .filter((skill) => skill.repository === repository)
             .map((skill) => ({ ...skill }));
         });
-    if (merged.length > 20) {
+    const mergedKnowledge =
+      options.preserveKnowledgeForErroredRepositories === undefined
+        ? selectedKnowledge
+        : ticket.repositories.flatMap((repository) => {
+            if (successfulRepositories.has(repository)) {
+              return selectedKnowledge.filter(
+                (item) => item.repository === repository);
+            }
+            return options.preserveKnowledgeForErroredRepositories!
+              .filter((item) => item.repository === repository)
+              .map((item) => ({ ...item }));
+          });
+    if (mergedSkills.length > 20) {
       throw new Error("每个任务最多选择 20 个仓内 Skill");
     }
+    if (mergedKnowledge.length > 12
+        || mergedKnowledge.reduce((sum, item) => sum + item.bytes, 0)
+          > 256 * 1024) {
+      throw new Error("每个任务最多选择 12 篇且合计不超过 256 KiB 的重点知识");
+    }
     this.repositorySkillCatalogs.delete(options.catalogToken);
-    return merged;
+    return { skills: mergedSkills, knowledge: mergedKnowledge };
   }
 
   create(
@@ -2393,7 +2490,9 @@ export class TaskService {
        * 已验证清单。repositorySkills 只供 Chain 拆单内部透传。 */
       repositorySkillCatalogToken?: string;
       selectedRepositorySkillIds?: string[];
+      selectedRepositoryKnowledgeIds?: string[];
       repositorySkills?: SelectedRepositorySkill[];
+      repositoryKnowledge?: SelectedRepositoryKnowledge[];
       /** 仅供旧跨仓父任务拆单：旧现场没有 repository_skills 字段时，
        * 子任务必须继续保留 undefined，让物化器走旧版全量加载兼容；
        * 不能与新下单的“明确未选择”空数组混为一谈。 */
@@ -2476,25 +2575,46 @@ export class TaskService {
             || options.repairRounds < 0)) {
       throw new Error("修复轮预算必须是 ≥0 的数字");
     }
+    const directResources = options.repositorySkills !== undefined
+      || options.repositoryKnowledge !== undefined;
+    const selectedResources = !options.preserveUndefinedRepositorySkills
+        && !directResources
+      ? this.selectedResourcesFromCatalog({
+          catalogToken: options.repositorySkillCatalogToken,
+          selectedSkillIds: options.selectedRepositorySkillIds,
+          selectedKnowledgeIds: options.selectedRepositoryKnowledgeIds,
+          repositories,
+          baseline,
+          account: options.account,
+        })
+      : undefined;
     const repositorySkills = options.preserveUndefinedRepositorySkills
       ? undefined
-      : options.repositorySkills !== undefined
-        ? options.repositorySkills.map((skill) => {
+      : directResources
+        ? (options.repositorySkills ?? []).map((skill) => {
             if (!repositories.includes(skill.repository)
                 || !validRepositorySkillPath(skill.relative_path)) {
               throw new Error(`仓内 Skill ${skill.name} 不属于本任务代码仓`);
             }
             return { ...skill };
           })
-        : this.selectedSkillsFromCatalog({
-            catalogToken: options.repositorySkillCatalogToken,
-            selectedIds: options.selectedRepositorySkillIds,
-            repositories,
-            baseline,
-            account: options.account,
-          });
+        : selectedResources!.skills;
+    const repositoryKnowledge = directResources
+      ? (options.repositoryKnowledge ?? []).map((item) => {
+          if (!repositories.includes(item.repository)
+              || !validRepositoryKnowledgePath(item.relative_path)) {
+            throw new Error(`业务知识 ${item.title} 不属于本任务代码仓`);
+          }
+          return { ...item };
+        })
+      : selectedResources?.knowledge ?? [];
     if ((repositorySkills?.length ?? 0) > 20) {
       throw new Error("每个任务最多选择 20 个仓内 Skill");
+    }
+    if (repositoryKnowledge.length > 12
+        || repositoryKnowledge.reduce((sum, item) => sum + item.bytes, 0)
+          > 256 * 1024) {
+      throw new Error("每个任务最多选择 12 篇且合计不超过 256 KiB 的重点知识");
     }
     this.counter += 1;
     const id = `task-${this.counter}`;
@@ -2515,6 +2635,7 @@ export class TaskService {
       repo_url: repo,
       repositories: repositories.length ? repositories : undefined,
       repository_skills: repositorySkills,
+      repository_knowledge: repositoryKnowledge,
       requirement_graph: repositories.length
         ? {
             stage: repositories.length > 1 ? "analysis" : "confirmed",
@@ -3029,6 +3150,8 @@ export class TaskService {
           ? undefined
           : task.summary.repository_skills!.filter(
               (skill) => skill.repository === repository.url),
+        repositoryKnowledge: (task.summary.repository_knowledge ?? [])
+          .filter((item) => item.repository === repository.url),
         preserveUndefinedRepositorySkills,
       });
       // 方案文档放子任务 workspace 根(不删现场,重启/重建都在);
@@ -3062,6 +3185,7 @@ export class TaskService {
     skillSelection?: {
       catalog_token?: string;
       selected_ids?: string[];
+      selected_knowledge_ids?: string[];
     },
   ): Promise<TaskSummary> {
     const task = this.tasks.get(id);
@@ -3089,6 +3213,8 @@ export class TaskService {
         decision: "确认并生成任务",
         repository_skill_catalog_token: skillSelection?.catalog_token,
         selected_repository_skill_ids: skillSelection?.selected_ids,
+        selected_repository_knowledge_ids:
+          skillSelection?.selected_knowledge_ids,
         // 收尾令随决定送达:确认后父会话再举卡会被系统代答赶下台
         // (autoAnswerFor 的分析单兜底),但第一选择是它自己别举。
         notes: "各仓交付任务由平台自动生成与调度,不归本会话跟进;"
@@ -3167,6 +3293,7 @@ export class TaskService {
        * 选择绑定到父分析单并落盘，再生成子任务；这不是第二张审批卡。 */
       repository_skill_catalog_token?: string;
       selected_repository_skill_ids?: string[];
+      selected_repository_knowledge_ids?: string[];
     },
   ): Promise<TaskSummary> {
     const task = this.tasks.get(id);
@@ -3192,7 +3319,8 @@ export class TaskService {
     if (confirmingGraph) this.requirementGraphPlan(task);
     const updatesRepositorySkills =
       input.repository_skill_catalog_token !== undefined
-      || input.selected_repository_skill_ids !== undefined;
+      || input.selected_repository_skill_ids !== undefined
+      || input.selected_repository_knowledge_ids !== undefined;
     if (updatesRepositorySkills) {
       if (!this.isRequirementAnalysis(task)) {
         throw new NotFoundError("只有跨仓方案检视可以在决定时调整仓内 Skill");
@@ -3206,14 +3334,20 @@ export class TaskService {
         throw new StateConflictError(`任务状态已变化:待办 ${waiting.waiting_id} 版本不匹配`);
       }
       this.requirementGraphPlan(task);
-      task.summary.repository_skills = this.selectedSkillsFromCatalog({
+      const resources = this.selectedResourcesFromCatalog({
         catalogToken: input.repository_skill_catalog_token,
-        selectedIds: input.selected_repository_skill_ids,
+        selectedSkillIds: input.selected_repository_skill_ids,
+        selectedKnowledgeIds: input.selected_repository_knowledge_ids,
         repositories: task.summary.repositories ?? [],
         baseline: task.summary.baseline,
         account: task.summary.luban_account,
-        preserveForErroredRepositories: task.summary.repository_skills ?? [],
+        preserveSkillsForErroredRepositories:
+          task.summary.repository_skills ?? [],
+        preserveKnowledgeForErroredRepositories:
+          task.summary.repository_knowledge ?? [],
       });
+      task.summary.repository_skills = resources.skills;
+      task.summary.repository_knowledge = resources.knowledge;
       // 必须先于 humanGate.resolve/createRepositoryDeliveries 落盘：确认
       // 后父会话会立刻收口，重启也只能从 task.json 恢复这份选择。
       this.persist(task);
@@ -3451,6 +3585,10 @@ export class TaskService {
         });
 
       let repositorySkillPaths: string[] = [];
+      let repositorySkillResources: Array<KnowledgeResourceRef & {
+        actual_path: string;
+      }> = [];
+      let repositoryKnowledge: MaterializedKnowledgeEntry[] = [];
       const repository = task.summary.repo_url ?? this.effectiveDefaultRepo();
       if (repository) {
         const materialized = materializeRepositorySkills({
@@ -3460,9 +3598,30 @@ export class TaskService {
           reservedNames: hostSkillNames(this.options.dataDir),
         });
         repositorySkillPaths = materialized.paths;
+        repositorySkillResources = materialized.entries.map(({ path, skill }) => ({
+          id: skill.id,
+          kind: "skill" as const,
+          name: skill.name,
+          path: skill.relative_path,
+          repository: skill.repository,
+          description: skill.description,
+          digest: skill.digest,
+          selected: true,
+          actual_path: path,
+        }));
         for (const warning of materialized.warnings) {
           this.options.log?.(
             `[developer-assistant-skill] 任务 ${task.summary.id}: ${warning}`);
+        }
+        const materializedKnowledge = materializeRepositoryKnowledge({
+          selected: task.summary.repository_knowledge,
+          bindings: [{ repository, workspace: task.cwd }],
+          snapshotRoot: join(workspace, "repository-knowledge"),
+        });
+        repositoryKnowledge = materializedKnowledge.entries;
+        for (const warning of materializedKnowledge.warnings) {
+          this.options.log?.(
+            `[developer-assistant-knowledge] 任务 ${task.summary.id}: ${warning}`);
         }
       }
 
@@ -3479,6 +3638,9 @@ export class TaskService {
         agentDir,
         hostSkillsDir: join(this.options.dataDir, "skills"),
         repositorySkillPaths,
+        repositorySkillResources,
+        repositoryKnowledge,
+        knowledgeTrace: this.knowledgeTrace(task, task.cwd),
         provider: task.summary.model_choice?.provider
           ?? modelOverride.provider ?? this.options.provider,
         model: task.summary.model_choice?.model
@@ -3501,6 +3663,7 @@ export class TaskService {
         allowHumanQuestions: false,
         allowSubagents: false,
         sessionId: DEVELOPER_ASSISTANT_SESSION,
+        currentStep: () => this.readProgress(task)?.step ?? "",
         compactAnchor: () => `开发助手只处理当前代码现场：${task.summary.requirement}`,
         onTokenUsage: (sample) => this.recordTaskTokenUsage(task, sample),
         bashOperations: {
@@ -4264,6 +4427,10 @@ export class TaskService {
       let hostHooks;
       let repositorySkillPaths: string[] = [];
       let loadedRepositorySkillNames: string[] = [];
+      let repositorySkillResources: Array<KnowledgeResourceRef & {
+        actual_path: string;
+      }> = [];
+      let repositoryKnowledge: MaterializedKnowledgeEntry[] = [];
       task.cwd = cwd;
       if (this.options.host && requirementAnalysis) {
         const analysisRoot = resuming ? savedCwd! : join(workspace, "repositories");
@@ -4297,6 +4464,44 @@ export class TaskService {
             `${index + 1}-${basename(repository).replace(/\.git$/, "") || "repo"}`);
           this.hardenAgentGitBoundary(agentDir, repoDir);
         });
+        const bindings = (task.summary.repositories ?? []).map(
+          (repository, index) => ({
+            repository,
+            workspace: join(analysisRoot,
+              `${index + 1}-${basename(repository).replace(/\.git$/, "") || "repo"}`),
+          }));
+        const materialized = materializeRepositorySkills({
+          selected: task.summary.repository_skills,
+          bindings,
+          snapshotRoot: join(analysisRoot, ".mae-flow-work", "repository-skills"),
+          reservedNames: hostSkillNames(this.options.dataDir),
+        });
+        repositorySkillPaths = materialized.paths;
+        loadedRepositorySkillNames = materialized.names;
+        repositorySkillResources = materialized.entries.map(({ path, skill }) => ({
+          id: skill.id,
+          kind: "skill" as const,
+          name: skill.name,
+          path: skill.relative_path,
+          repository: skill.repository,
+          description: skill.description,
+          digest: skill.digest,
+          selected: true,
+          actual_path: path,
+        }));
+        const materializedKnowledge = materializeRepositoryKnowledge({
+          selected: task.summary.repository_knowledge,
+          bindings,
+          snapshotRoot: join(workspace, "repository-knowledge"),
+        });
+        repositoryKnowledge = materializedKnowledge.entries;
+        for (const warning of [
+          ...materialized.warnings,
+          ...materializedKnowledge.warnings,
+        ]) {
+          this.options.log?.(
+            `[repository-resource] 任务 ${task.summary.id}: ${warning}`);
+        }
         prompt = this.requirementAnalysisPrompt(task, cwd);
         if (resuming) {
           prompt = [
@@ -4339,8 +4544,29 @@ export class TaskService {
           });
           repositorySkillPaths = materialized.paths;
           loadedRepositorySkillNames = materialized.names;
+          repositorySkillResources = materialized.entries.map(({ path, skill }) => ({
+            id: skill.id,
+            kind: "skill" as const,
+            name: skill.name,
+            path: skill.relative_path,
+            repository: skill.repository,
+            description: skill.description,
+            digest: skill.digest,
+            selected: true,
+            actual_path: path,
+          }));
           for (const warning of materialized.warnings) {
             this.options.log?.(`[repository-skill] 任务 ${task.summary.id}: ${warning}`);
+          }
+          const materializedKnowledge = materializeRepositoryKnowledge({
+            selected: task.summary.repository_knowledge,
+            bindings: [{ repository: activeRepository, workspace: cwd }],
+            snapshotRoot: join(workspace, "repository-knowledge"),
+          });
+          repositoryKnowledge = materializedKnowledge.entries;
+          for (const warning of materializedKnowledge.warnings) {
+            this.options.log?.(
+              `[repository-knowledge] 任务 ${task.summary.id}: ${warning}`);
           }
         }
         // 下单事实(.mae-flow-order.json,内核契约):表单收齐的单号/
@@ -4554,7 +4780,22 @@ export class TaskService {
            task.summary.delivery?.loop?.failure ?? ""]
             .join("\n"),
         );
-        if (knowledge.markdown) prompt = `${prompt}\n\n${knowledge.markdown}`;
+        if (knowledge.markdown) {
+          prompt = `${prompt}\n\n${knowledge.markdown}`;
+          const trace = this.knowledgeTrace(task, cwd);
+          for (const name of knowledge.used) {
+            const path = join(cwd, ".mae-flow", "knowledge", name);
+            const resource: KnowledgeResourceRef = {
+              id: `knowledge-block:${name}`,
+              kind: "document",
+              name,
+              path: `.mae-flow/knowledge/${name}`,
+              description: "按需求或失败信息命中的仓内知识块",
+            };
+            trace.register(path, resource);
+            trace.record("loaded", "main", resource);
+          }
+        }
       }
       if (task.pendingAssistantHandoff) {
         prompt = `${prompt}\n\n${task.pendingAssistantHandoff}`;
@@ -4584,6 +4825,10 @@ export class TaskService {
         // (团队的 UT 写法指南在内网,老宿主靠手动集成进子 agent)。
         hostSkillsDir: join(this.options.dataDir, "skills"),
         repositorySkillPaths,
+        repositorySkillResources,
+        repositoryKnowledge,
+        knowledgeTrace: this.knowledgeTrace(task, cwd),
+        currentStep: () => this.readProgress(task)?.step ?? "",
         // 上下文撑爆时自愈压缩用的锚:与主动压缩同一个内核现场,
         // 摘要围绕"当前步骤+已确认配置"组织,不由云端编造。
         compactAnchor: () => this.kernelAnchor(task),
@@ -5009,6 +5254,10 @@ export class TaskService {
       JSON.stringify(modelOverride.json ?? this.options.modelsJson));
 
     let repositorySkillPaths: string[] = [];
+    let repositorySkillResources: Array<KnowledgeResourceRef & {
+      actual_path: string;
+    }> = [];
+    let repositoryKnowledge: MaterializedKnowledgeEntry[] = [];
     const activeRepository = task.summary.repo_url ?? this.effectiveDefaultRepo();
     if (activeRepository) {
       const materialized = materializeRepositorySkills({
@@ -5018,9 +5267,30 @@ export class TaskService {
         reservedNames: hostSkillNames(this.options.dataDir),
       });
       repositorySkillPaths = materialized.paths;
+      repositorySkillResources = materialized.entries.map(({ path, skill }) => ({
+        id: skill.id,
+        kind: "skill" as const,
+        name: skill.name,
+        path: skill.relative_path,
+        repository: skill.repository,
+        description: skill.description,
+        digest: skill.digest,
+        selected: true,
+        actual_path: path,
+      }));
       for (const warning of materialized.warnings) {
         this.options.log?.(
           `[prepush-skill] 任务 ${task.summary.id}: ${warning}`);
+      }
+      const materializedKnowledge = materializeRepositoryKnowledge({
+        selected: task.summary.repository_knowledge,
+        bindings: [{ repository: activeRepository, workspace: task.cwd }],
+        snapshotRoot: join(task.summary.workspace, "repository-knowledge"),
+      });
+      repositoryKnowledge = materializedKnowledge.entries;
+      for (const warning of materializedKnowledge.warnings) {
+        this.options.log?.(
+          `[prepush-knowledge] 任务 ${task.summary.id}: ${warning}`);
       }
     }
 
@@ -5117,6 +5387,9 @@ export class TaskService {
         agentDir,
         hostSkillsDir: join(this.options.dataDir, "skills"),
         repositorySkillPaths,
+        repositorySkillResources,
+        repositoryKnowledge,
+        knowledgeTrace: this.knowledgeTrace(task, task.cwd),
         provider: task.summary.model_choice?.provider
           ?? modelOverride.provider ?? this.options.provider,
         model: task.summary.model_choice?.model
@@ -5132,6 +5405,8 @@ export class TaskService {
         }),
         humanGate: task.humanGate,
         allowHumanQuestions: false,
+        sessionId: `prepush-${request.round}`,
+        currentStep: () => this.readProgress(task)?.step ?? "",
         compactAnchor: () => `推送前验证任务: ${task.summary.requirement}`,
         onTokenUsage: (sample) => this.recordTaskTokenUsage(task, sample),
         bashOperations: {

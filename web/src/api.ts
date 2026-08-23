@@ -351,6 +351,10 @@ export interface TaskSummary {
   repositories?: string[];
   /** 下单或 Chain 方案确认时选中的仓内 Skill；每个子任务只继承自己仓。 */
   repository_skills?: SelectedRepositorySkill[];
+  /** 本单开局明确加载的 docs 业务知识；规则文件无需手选。 */
+  repository_knowledge?: SelectedRepositoryKnowledge[];
+  /** Cloud 的知识消费观测，不参与内核裁决。 */
+  knowledge_usage?: TaskKnowledgeUsage;
   /** 仓内 Skill 与代码交付使用同一基线。 */
   baseline?: string;
   /** 业务需求/问题单号；与平台内部 task-xx 分开显示。 */
@@ -495,6 +499,71 @@ export interface RepositorySkill {
   warning?: string;
 }
 
+export interface RepositoryKnowledge {
+  id: string;
+  title: string;
+  description: string;
+  relative_path: string;
+  kind: "rules" | "document";
+  digest: string;
+  bytes: number;
+  selectable: boolean;
+  recommended: boolean;
+  auto_load: boolean;
+  warning?: string;
+}
+
+export interface SelectedRepositoryKnowledge extends RepositoryKnowledge {
+  repository: string;
+  revision: string;
+  kind: "document";
+}
+
+export type KnowledgeKind = "rules" | "document" | "skill";
+export type KnowledgeAction = "available" | "loaded" | "read" | "searched";
+
+export interface TaskKnowledgeResource {
+  id: string;
+  kind: KnowledgeKind;
+  name: string;
+  path: string;
+  repository?: string;
+  description?: string;
+  digest?: string;
+  selected?: boolean;
+  state: "available" | "loaded" | "used";
+  available_count: number;
+  loaded_count: number;
+  read_count: number;
+  first_at?: string;
+  last_at?: string;
+}
+
+export interface TaskKnowledgeUsage {
+  summary: {
+    resources: number;
+    loaded: number;
+    used: number;
+    skills_used: number;
+    selected_unused: number;
+  };
+  resources: TaskKnowledgeResource[];
+  events: Array<{
+    id: string;
+    kind: KnowledgeKind;
+    name: string;
+    path: string;
+    repository?: string;
+    selected?: boolean;
+    ts: string;
+    session_id: string;
+    session_role: "main" | "subagent" | "prepush" | "developer-assistant";
+    step?: string;
+    action: KnowledgeAction;
+    observed_path?: string;
+  }>;
+}
+
 /** 已经由服务端目录令牌验证、记在任务上的仓内 Skill。Chain 检视页
  * 只用它展示/映射当前选择，不接收浏览器自报的正文或绝对路径。 */
 export interface SelectedRepositorySkill extends RepositorySkill {
@@ -508,6 +577,7 @@ export interface RepositorySkillCatalog {
     repository: string;
     revision: string;
     skills: RepositorySkill[];
+    knowledge: RepositoryKnowledge[];
     error?: string;
   }>;
 }
@@ -544,6 +614,7 @@ export async function createTask(
     repairRounds?: number;
     repositorySkillCatalogToken?: string;
     selectedRepositorySkillIds?: string[];
+    selectedRepositoryKnowledgeIds?: string[];
   },
 ): Promise<void> {
   const response = await fetch("/tasks", {
@@ -565,6 +636,8 @@ export async function createTask(
         extras?.repositorySkillCatalogToken || undefined,
       selected_repository_skill_ids:
         extras?.selectedRepositorySkillIds,
+      selected_repository_knowledge_ids:
+        extras?.selectedRepositoryKnowledgeIds,
     }),
   });
   if (!response.ok) throw new Error(await errorText(response));
@@ -586,6 +659,7 @@ export async function decide(
   repositorySkills?: {
     catalogToken: string;
     selectedIds: string[];
+    selectedKnowledgeIds: string[];
   },
 ): Promise<{ conflict?: string }> {
   const response = await fetch(`/tasks/${taskId}/decision`, {
@@ -597,6 +671,8 @@ export async function decide(
       annotation_ids: annotationIds?.length ? annotationIds : undefined,
       repository_skill_catalog_token: repositorySkills?.catalogToken,
       selected_repository_skill_ids: repositorySkills?.selectedIds,
+      selected_repository_knowledge_ids:
+        repositorySkills?.selectedKnowledgeIds,
     }),
   });
   if (response.status === 409) {

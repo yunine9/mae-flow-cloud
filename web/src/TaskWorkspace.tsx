@@ -20,6 +20,7 @@ import { AttachedNotes } from "./AttachedNotes";
 import { RequirementGraph } from "./RequirementGraph";
 import { PrepushStatus } from "./PrepushStatus";
 import { TokenUsage } from "./TokenUsage";
+import { KnowledgeFootprint } from "./KnowledgeFootprint";
 import { taskHealthFacts } from "./taskHealth";
 import { relativeTime } from "./time";
 import { startVisiblePolling } from "./visiblePolling";
@@ -550,6 +551,7 @@ export function TaskWorkspace({
               <small>日常看心流，需要取证时切原始 SSE</small>
             </div>
             <div className="ws-primary-scroll ws-execution-view">
+              <KnowledgeFootprint usage={task.knowledge_usage} />
               <ExecutionPanel task={task} defaultOpen />
             </div>
           </> : <>
@@ -652,6 +654,7 @@ export function TaskWorkspace({
                       repositories={chainRepositories}
                       baseline={task.baseline}
                       initialSkills={task.repository_skills}
+                      initialKnowledge={task.repository_knowledge}
                       presentation="decision"
                       state={chainSkillPicker}
                       onStateChange={setChainSkillPicker}

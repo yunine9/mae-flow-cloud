@@ -54,6 +54,7 @@ export interface RepositoryWorkspaceBinding {
 export interface MaterializedRepositorySkills {
   paths: string[];
   names: string[];
+  entries: Array<{ path: string; skill: SelectedRepositorySkill }>;
   warnings: string[];
 }
 
@@ -316,6 +317,7 @@ export function materializeRepositorySkills(options: {
     : options.selected;
   const paths: string[] = [];
   const names: string[] = [];
+  const entries: Array<{ path: string; skill: SelectedRepositorySkill }> = [];
   const seen = new Set<string>();
   for (const skill of candidates.slice(0, MAX_SELECTED)) {
     if (seen.has(skill.id)) continue;
@@ -334,9 +336,10 @@ export function materializeRepositorySkills(options: {
     if (!path) continue;
     paths.push(path);
     names.push(skill.name);
+    entries.push({ path, skill: { ...skill } });
   }
   if (candidates.length > MAX_SELECTED) {
     warnings.push(`最多装载 ${MAX_SELECTED} 个仓库 Skill，其余已跳过`);
   }
-  return { paths, names, warnings };
+  return { paths, names, entries, warnings };
 }
