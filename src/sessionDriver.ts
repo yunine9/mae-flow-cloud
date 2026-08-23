@@ -27,6 +27,10 @@ import { TranscriptStore } from "./transcriptStore.ts";
 import { GateService } from "./gateService.ts";
 import { HumanGate, renderDecision, type WaitingRecord } from "./humanGate.ts";
 import { createWorkspaceBashToolDefinition } from "./bashOutputMirror.ts";
+import {
+  modelTokenUsageSample,
+  type ModelTokenUsageSample,
+} from "./tokenUsage.ts";
 
 /** pi 工具名 → 内核工具词汇表。不认识的原样透传(错认比不认更危险)。 */
 const TOOL_NAME_MAP: Record<string, string> = {
@@ -103,6 +107,8 @@ export interface CloudSessionOptions {
   /** 上下文超限自愈用的锚点提供者(通常是内核现场 current/config)。
    * 不给就用需求原话兜底——锚永远来自权威,不由云端编造。 */
   compactAnchor?: () => string;
+  /** 模型提供方真实 usage 的旁路出口。统计失败不得影响会话。 */
+  onTokenUsage?: (sample: ModelTokenUsageSample) => void;
   log?: (message: string) => void;
 }
 
@@ -757,6 +763,15 @@ export class CloudSession {
     if (kind === "message_end") {
       const message = event.message ?? {};
       if (message.role !== "assistant") return;
+      const usage = modelTokenUsageSample(message, sessionId);
+      if (usage) {
+        try {
+          this.options.onTokenUsage?.(usage);
+        } catch (error) {
+          this.options.log?.(
+            `任务 ${this.options.taskId} Token 统计失败(不影响会话): ${String(error)}`);
+        }
+      }
       // 模型层错误藏在 stopReason 里(消息往往无文本,不能只看 text)。
       if (sessionId === this.sessionId
           && String(message.stopReason ?? "") === "error") {

@@ -114,6 +114,15 @@ import {
   type PrePushVerificationState,
 } from "./prePushVerification.ts";
 import {
+  emptyTokenUsageState,
+  recordTokenUsage,
+  restoreTokenUsageState,
+  tokenUsageSnapshot,
+  type ModelTokenUsageSample,
+  type TaskTokenUsage,
+  type TokenUsageState,
+} from "./tokenUsage.ts";
+import {
   createSafeGitView,
   runSafeWorktreeGit,
   safeGitEnvironment,
@@ -293,6 +302,9 @@ export interface TaskSummary {
   updated_at?: string;
   last_progress_at?: string;
   completed_at?: string;
+  /** 模型提供方真实上报的任务级累计与最近一分钟吞吐。主/子/prepush
+   * Agent 统一计入；缺席表示网关没有可靠 usage，绝不按字符数估算。 */
+  token_usage?: TaskTokenUsage;
   workspace: string;
   /** 现场被回收的时刻(ISO)。有值 = 克隆等重货已删,台账还在。
    * 它还是一道闸:恢复时**不许再拿内核状态重新裁决这单**——原件已经
@@ -744,6 +756,8 @@ function latestBuildMilestone(text: string): TaskProgress["milestone"] {
 
 interface TaskState {
   summary: TaskSummary;
+  /** 持久化在 task.json 的内部台账；不属于流程状态，也不更新推进时间。 */
+  tokenUsage: TokenUsageState;
   driver?: CloudSession;
   humanGate: HumanGate;
   /** 任务代码工作区(host 模式=仓库克隆目录),交付模块读内核状态用。 */
@@ -1621,6 +1635,7 @@ export class TaskService {
           }
         : undefined,
       progress,
+      token_usage: tokenUsageSnapshot(task.tokenUsage),
     };
     return { ...projected, focus: projectTaskFocus(projected) };
   }
@@ -2454,6 +2469,7 @@ export class TaskService {
     };
     const task: TaskState = {
       summary,
+      tokenUsage: emptyTokenUsageState(),
       humanGate: new HumanGate(join(workspace, "waiting.json")),
       lastPersistedStatus: summary.status,
       controlEpoch: 0,
@@ -2463,6 +2479,30 @@ export class TaskService {
     this.queue.push(id);
     this.bypass(undefined, "任务泵", this.pump());
     return { ...summary };
+  }
+
+  private writeTaskState(task: TaskState): void {
+    try {
+      const path = join(task.summary.workspace, "task.json");
+      writeFileSync(path + ".tmp", JSON.stringify({
+        summary: task.summary,
+        cwd: task.cwd,
+        mission: task.mission,
+        token_usage_state: task.tokenUsage,
+      }, null, 1));
+      renameSync(path + ".tmp", path);
+    } catch (error) {
+      this.options.log?.(`任务 ${task.summary.id} 落盘失败: ${String(error)}`);
+    }
+  }
+
+  private recordTaskTokenUsage(
+    task: TaskState,
+    sample: ModelTokenUsageSample,
+  ): void {
+    task.tokenUsage = recordTokenUsage(task.tokenUsage, sample);
+    // Token 流量不是阶段推进，不能刷新 updated_at / 卡点时钟。
+    this.writeTaskState(task);
   }
 
   /** 任务事实落盘(原子写):进程可死,任务不能死。
@@ -2479,15 +2519,7 @@ export class TaskService {
     }
     task.summary.updated_at = now;
     task.lastPersistedStatus = task.summary.status;
-    try {
-      const path = join(task.summary.workspace, "task.json");
-      writeFileSync(path + ".tmp", JSON.stringify(
-        { summary: task.summary, cwd: task.cwd, mission: task.mission },
-        null, 1));
-      renameSync(path + ".tmp", path);
-    } catch (error) {
-      this.options.log?.(`任务 ${task.summary.id} 落盘失败: ${String(error)}`);
-    }
+    this.writeTaskState(task);
     // 文件先落袋(它才是真相),投影旁路跟进;失败由投影自己 fail-open。
     this.bypass(task, "投影 upsert",
       this.options.projection?.upsertTask(this.project(task)));
@@ -2526,6 +2558,7 @@ export class TaskService {
         }
         const task: TaskState = {
           summary,
+          tokenUsage: restoreTokenUsageState(saved.token_usage_state),
           humanGate: new HumanGate(join(workspace, "waiting.json")),
           cwd: typeof saved.cwd === "string" ? saved.cwd : undefined,
           resume: true,
@@ -3922,6 +3955,7 @@ export class TaskService {
         // 上下文撑爆时自愈压缩用的锚:与主动压缩同一个内核现场,
         // 摘要围绕"当前步骤+已确认配置"组织,不由云端编造。
         compactAnchor: () => this.kernelAnchor(task),
+        onTokenUsage: (sample) => this.recordTaskTokenUsage(task, sample),
         // 任务级选择 > 设置层默认 > 部署默认;任务级的记在 summary 上,
         // 重启续跑/会话重建都不漂移(设置层后来改了也不影响本单)。
         provider: task.summary.model_choice?.provider
@@ -4460,6 +4494,7 @@ export class TaskService {
         humanGate: task.humanGate,
         allowHumanQuestions: false,
         compactAnchor: () => `推送前验证任务: ${task.summary.requirement}`,
+        onTokenUsage: (sample) => this.recordTaskTokenUsage(task, sample),
         bashOperations: {
           exec: (command, dir, execOptions) =>
             container.exec(command, dir, execOptions),

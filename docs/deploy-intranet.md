@@ -881,6 +881,8 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
 ## 监控与排障
 
 - 页面 `GET /`:任务状态说人话;通知失败红条;MR 链接。
+- `GET /tasks`:每个任务可带 `token_usage`，来自模型提供方真实 usage；
+  含累计输入/输出与最近 60 秒吞吐，网关不返回 usage 时字段缺席。
 - `GET /tasks/:id/events`(SSE):语义事件实时镜像。
 - `GET /tasks/:id/actions`:外部动作台账(MR/流水线,含幂等键与
   绑定 SHA)——恢复时"先查远端真实状态"的对账入口;需配 `--pg`。

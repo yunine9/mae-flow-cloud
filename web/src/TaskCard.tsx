@@ -33,6 +33,7 @@ import {
 } from "./eventView";
 import type { RepositorySkillSelection } from "./RepositorySkillPicker";
 import { PrepushStatus } from "./PrepushStatus";
+import { TokenUsage } from "./TokenUsage";
 import {
   formatLocalClock,
   formatLocalDateTime,
@@ -138,6 +139,7 @@ export function TaskCard({
             />
           )}
           <PrepushStatus prepush={task.delivery?.prepush} />
+          <TokenUsage usage={task.token_usage} />
         </span>
         <span className="task-chevron" aria-hidden>
           <svg viewBox="0 0 20 20">

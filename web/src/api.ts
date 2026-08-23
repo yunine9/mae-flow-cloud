@@ -310,6 +310,19 @@ export interface PrepushVerification {
   updated_at?: string;
 }
 
+export interface TaskTokenUsage {
+  /** 均为模型提供方真实上报；服务端不做字符数估算。 */
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  /** 最近 60 秒吞吐；没有新响应时会自然归零。 */
+  input_tokens_per_minute: number;
+  output_tokens_per_minute: number;
+  rate_window_seconds: 60;
+  updated_at: string;
+  source: "provider";
+}
+
 export interface TaskSummary {
   id: string;
   title?: string;
@@ -329,6 +342,7 @@ export interface TaskSummary {
   updated_at?: string;
   last_progress_at?: string;
   completed_at?: string;
+  token_usage?: TaskTokenUsage;
   /** 现场被回收的时刻。有值 = 代码克隆等大件已删,过程记录/证据/批注仍在。
    * 页面据此如实说明,别让人对着 404 的代码差异发愣。 */
   workspace_reclaimed_at?: string;

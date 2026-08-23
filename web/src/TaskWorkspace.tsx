@@ -19,6 +19,7 @@ import { AnnotationPanel } from "./AnnotationPanel";
 import { AttachedNotes } from "./AttachedNotes";
 import { RequirementGraph } from "./RequirementGraph";
 import { PrepushStatus } from "./PrepushStatus";
+import { TokenUsage } from "./TokenUsage";
 import { taskHealthFacts } from "./taskHealth";
 import { relativeTime } from "./time";
 import {
@@ -397,6 +398,7 @@ export function TaskWorkspace({
         </div>
       )}
       <PrepushStatus prepush={task.delivery?.prepush} placement="workspace" />
+      <TokenUsage usage={task.token_usage} placement="workspace" />
 
       <div className="ws-execution" aria-label="任务执行现场">
         <ExecutionPanel task={task} />

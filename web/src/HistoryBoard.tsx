@@ -9,6 +9,7 @@ import {
 } from "./api";
 import { historyTaskTitle, workspaceHistoryEntries } from "./historyModel";
 import { formatLocalDate, instantMs } from "./time";
+import { TokenUsage } from "./TokenUsage";
 
 function timeAgo(iso: string): string {
   const minutes = Math.max(0,
@@ -162,6 +163,7 @@ export function HistoryBoard({ tasks, onOpenTask }: HistoryBoardProps) {
                           <span>打开工作台 <i aria-hidden>→</i></span>
                         </button>
                       ) : <strong title={title}>{title}</strong>}
+                      <TokenUsage usage={entry.token_usage} placement="history" />
                     </div>
                     <div>
                       <span className={`pill ${entry.status}`}>
