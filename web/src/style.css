@@ -499,6 +499,8 @@ svg {
   cursor: pointer;
 }
 .header-unlock:hover { color: var(--accent-hover); text-decoration: underline; }
+.header-unlock.is-status { color: var(--faint); cursor: default; }
+.header-unlock.is-status:hover { color: var(--faint); text-decoration: none; }
 .header-unlock svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.5; }
 .attention-pulse {
   width: 8px;

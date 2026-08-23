@@ -212,7 +212,7 @@ export function createTaskServer(
           ? options.auth.gitCredential(who.username) : undefined;
         if (needs.git_token && !credential) {
           missing.push({ key: "git_token", where: "me",
-            label: "CodeHub Token 未配置（我的工作 → 个人接入），"
+            label: "CodeHub Token 未配置（个人设置 → 个人接入），"
               + "没有它无法用你的身份推送代码" });
         }
         // 邮箱与令牌同级必填(用户拍板):commit 署名要它,平台按邮箱
@@ -220,12 +220,12 @@ export function createTaskServer(
         // 在这儿被逮住补配,而不是等提交推上去才发现署名残缺。
         if (needs.git_token && credential && !credential.email) {
           missing.push({ key: "git_email", where: "me",
-            label: "个人邮箱未配置（我的工作 → 个人接入），"
+            label: "个人邮箱未配置（个人设置 → 个人接入），"
               + "Git 提交署名和 CodeHub 归属需要它" });
         }
         if (needs.luban_token && !options.auth.lubanToken(who.username)) {
           missing.push({ key: "luban_token", where: "me",
-            label: "小鲁班 Token 未配置（我的工作 → 个人接入），"
+            label: "小鲁班 Token 未配置（个人设置 → 个人接入），"
               + "没有它就无法及时提醒你处理任务" });
         }
         return missing;

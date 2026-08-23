@@ -90,7 +90,7 @@ test("配置缺项:只拦真会咬人的那几样,文案说清去哪配", () => 
     "没接通知端点就别要通知令牌");
   // 缺项文案要说清由谁处理、以及不处理会怎样,不能只报一个字段名。
   for (const item of kernel.launchOptions().blockers) {
-    assert.ok(/管理页|我的工作|部署维护/.test(item.label) && /；|;/.test(item.label),
+    assert.ok(/管理页|个人设置|部署维护/.test(item.label) && /；|;/.test(item.label),
       `缺项文案没说清去哪配/后果: ${item.label}`);
   }
   // 纯会话形态(不接仓):平台与 Git 令牌都不该被要求

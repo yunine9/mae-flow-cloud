@@ -4,7 +4,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  createUser, deleteUser, getSession, listMyReviews, listTasks, listUsers,
+  createUser, deleteUser, getLaunchOptions, getSession, listMyReviews, listTasks, listUsers,
   login, logout, putCommitter, resetUserPassword,
   type AuthUser, type TaskStatus, type TaskSummary,
   type ReviewRequest, type UserRole,
@@ -31,6 +31,10 @@ import {
 } from "./teamOps";
 import { formatLocalDateTime } from "./time";
 import { taskSyncCopy, type TaskSyncState } from "./taskSync";
+import {
+  launchGateCopy,
+  type LaunchGateState,
+} from "./launchGate";
 
 type View = "team" | "mine" | "profile" | "history" | "users" | "settings";
 type Theme = "light" | "dark";
@@ -221,6 +225,8 @@ export function App() {
   const [artifactTaskId, setArtifactTaskId] = useState("");
   const [artifactTaskSnapshot, setArtifactTaskSnapshot] = useState<TaskSummary>();
   const [launchOpen, setLaunchOpen] = useState(false);
+  const [launchGate, setLaunchGate] = useState<LaunchGateState>({ kind: "checking" });
+  const launchGateRequest = useRef(0);
   const [taskSync, setTaskSync] = useState<TaskSyncState>({ kind: "loading" });
   const refreshInFlight = useRef<Promise<void> | undefined>(undefined);
   const [targetRoute, setTargetRoute] = useState(readWorkspaceRoute);
@@ -246,6 +252,39 @@ export function App() {
       if (user) setView(initialView(user));
     }).catch(() => setSession(null));
   }, []);
+
+  function refreshLaunchGate(showChecking = true): Promise<void> {
+    const account = session;
+    if (!account || account.role === "admin") return Promise.resolve();
+    const request = ++launchGateRequest.current;
+    if (showChecking) setLaunchGate({ kind: "checking" });
+    return getLaunchOptions().then((options) => {
+      if (launchGateRequest.current !== request) return;
+      setLaunchGate(options.blockers.length > 0
+        ? { kind: "blocked", blockers: options.blockers }
+        : { kind: "ready" });
+    }).catch((cause) => {
+      if (launchGateRequest.current !== request) return;
+      setLaunchGate({
+        kind: "error",
+        detail: cause instanceof Error ? cause.message : String(cause),
+      });
+    });
+  }
+
+  // 发起条件必须以服务端为准：部署形态决定是否需要 Git / 小鲁班，
+  // 管理员配置也可能热更新。个人设置保存后 session hint 改变，会立即
+  // 复查；不能再靠前端硬编码几个字段猜测。
+  useEffect(() => {
+    if (!session || session.role === "admin") return;
+    void refreshLaunchGate(true);
+  }, [
+    session?.username,
+    session?.role,
+    session?.git_token_hint,
+    session?.git_email,
+    session?.luban_token_hint,
+  ]);
 
   function refresh(): Promise<void> {
     if (refreshInFlight.current) return refreshInFlight.current;
@@ -331,6 +370,8 @@ export function App() {
 
   if (session === undefined) return <LoadingScreen />;
   if (session === null) return <LoginScreen onAuthenticated={(user) => {
+    launchGateRequest.current += 1;
+    setLaunchGate({ kind: "checking" });
     setSession(user); setMineScope("all"); setView(initialView(user));
   }} />;
 
@@ -339,6 +380,8 @@ export function App() {
     setTasks([]);
     setMineScope("all");
     setTaskSync({ kind: "loading" });
+    launchGateRequest.current += 1;
+    setLaunchGate({ kind: "checking" });
     setSession(null);
   }
 
@@ -415,8 +458,7 @@ export function App() {
   const relevantWaiting = view === "mine"
     ? myWaiting.length + pendingReviews.length
     : view === "team" ? waitingCount : 0;
-  const personalSetupReady = !!session.git_token_hint
-    && !!session.git_email && !!session.luban_token_hint;
+  const launchEntry = launchGateCopy(launchGate);
   return <div className="app-shell">
     <aside className="sidebar">
       <div className="brand-lockup"><span className="brand-symbol" aria-hidden><svg viewBox="0 0 28 28"><path d="M5.5 20.5 10.7 7l3.3 7.15L17.3 7l5.2 13.5" /><path d="M8.1 16.1h11.8" /></svg></span><span className="brand-copy"><strong>Mae-Flow</strong><small>{session.role === "admin" ? "Management Console" : "Developer Workspace"}</small></span></div>
@@ -444,7 +486,7 @@ export function App() {
     </aside>
 
     <div className="workspace">
-      <header className="workspace-header"><div><div className="eyebrow">MAE-FLOW CLOUD</div><h1>{header.title}</h1><p className={view === "mine" ? "header-context-line" : undefined}>{view === "mine" && <span className="header-user-context">{session.username}</span>}<span>{header.description}</span></p></div><div className="workspace-header-actions"><TaskSyncIndicator state={taskSync} onRetry={refresh} />{relevantWaiting > 0 && view !== "history" && view !== "users" && view !== "settings" && <div className="header-attention"><span className="attention-pulse" aria-hidden /><span><strong>{relevantWaiting}</strong>{view === "mine" ? " 项需要我处理" : " 项工作等待决策"}</span></div>}{view === "mine" && session.role !== "admin" && <div className="header-launch-gate"><button type="button" className="header-launch" disabled={!personalSetupReady} title={personalSetupReady ? "发起新任务" : "请先完成个人设置"} aria-label={personalSetupReady ? "发起新任务" : "发起新任务不可用，请先完成个人设置"} onClick={() => personalSetupReady && setLaunchOpen(true)}><svg viewBox="0 0 20 20" aria-hidden>{personalSetupReady ? <path d="M10 4v12M4 10h12" /> : <><rect x="5" y="8.5" width="10" height="8" rx="1.5" /><path d="M7.5 8.5V6.75a2.5 2.5 0 0 1 5 0V8.5" /></>}</svg><span>发起新任务</span></button>{!personalSetupReady && <button type="button" className="header-unlock" onClick={() => setView("profile")}>完成个人设置后解锁<svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg></button>}</div>}</div></header>
+      <header className="workspace-header"><div><div className="eyebrow">MAE-FLOW CLOUD</div><h1>{header.title}</h1><p className={view === "mine" ? "header-context-line" : undefined}>{view === "mine" && <span className="header-user-context">{session.username}</span>}<span>{header.description}</span></p></div><div className="workspace-header-actions"><TaskSyncIndicator state={taskSync} onRetry={refresh} />{relevantWaiting > 0 && view !== "history" && view !== "users" && view !== "settings" && <div className="header-attention"><span className="attention-pulse" aria-hidden /><span><strong>{relevantWaiting}</strong>{view === "mine" ? " 项需要我处理" : " 项工作等待决策"}</span></div>}{view === "mine" && session.role !== "admin" && <div className="header-launch-gate"><button type="button" className="header-launch" disabled={!launchEntry.enabled} title={launchEntry.title} aria-label={launchEntry.ariaLabel} onClick={() => launchEntry.enabled && setLaunchOpen(true)}><svg viewBox="0 0 20 20" aria-hidden>{launchEntry.enabled ? <path d="M10 4v12M4 10h12" /> : <><rect x="5" y="8.5" width="10" height="8" rx="1.5" /><path d="M7.5 8.5V6.75a2.5 2.5 0 0 1 5 0V8.5" /></>}</svg><span>发起新任务</span></button>{launchEntry.helper && (launchEntry.action ? <button type="button" className="header-unlock" title={launchEntry.title} onClick={() => launchEntry.action === "profile" ? setView("profile") : void refreshLaunchGate(true)}>{launchEntry.helper}<svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg></button> : <span className="header-unlock is-status" title={launchEntry.title}>{launchEntry.helper}</span>)}</div>}</div></header>
       <main className="workspace-main">
         {view === "team" && <TeamDashboard
           tasks={tasks}

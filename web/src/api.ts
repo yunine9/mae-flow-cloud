@@ -444,6 +444,12 @@ export async function listTasks(): Promise<TaskSummary[]> {
 }
 
 /** 下单表单的数据源:可选模型清单(≤1 个时不必展示下拉)与当前默认。 */
+export interface LaunchBlocker {
+  key: string;
+  label: string;
+  where: "admin" | "me";
+}
+
 export interface LaunchOptions {
   /** 当前生效的模型(展示用;模型不给选,管理员统一配一个)。 */
   model?: { provider: string; model: string };
@@ -457,7 +463,7 @@ export interface LaunchOptions {
   ticket: { enabled: boolean; required: boolean };
   baseline: { enabled: boolean; default: string };
   /** 没配齐的配置项:where=admin 归管理员,me 归本人。非空=不给下单。 */
-  blockers: Array<{ key: string; label: string; where: "admin" | "me" }>;
+  blockers: LaunchBlocker[];
   /** 交付方式:**取自内核 flow.json**(key=内核代号,label=给人看的),
    * 前端一个字都不许另抄——抄了就会出现"页面说快速/慢速、内核只认
    * 完整开发/局部修改",于是下单选过的交付方式在流程里又被问一遍。
