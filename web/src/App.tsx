@@ -35,6 +35,7 @@ import {
   launchGateCopy,
   type LaunchGateState,
 } from "./launchGate";
+import { startVisiblePolling } from "./visiblePolling";
 
 type View = "team" | "mine" | "profile" | "history" | "users" | "settings";
 type Theme = "light" | "dark";
@@ -323,9 +324,7 @@ export function App() {
   useEffect(() => {
     if (!session) return;
     setTaskSync({ kind: "loading" });
-    void refresh();
-    const timer = setInterval(refresh, 1500);
-    return () => clearInterval(timer);
+    return startVisiblePolling(() => void refresh(), 1500, document);
   }, [session?.username]);
 
   useEffect(() => {

@@ -34,6 +34,7 @@ import {
 import type { RepositorySkillSelection } from "./RepositorySkillPicker";
 import { PrepushStatus } from "./PrepushStatus";
 import { TokenUsage } from "./TokenUsage";
+import { startVisiblePolling } from "./visiblePolling";
 import {
   formatLocalClock,
   formatLocalDateTime,
@@ -892,11 +893,14 @@ function ActivityFlow({ task }: { task: TaskSummary }) {
       setUnavailable(result.unavailable ?? "");
       if (result.view) setView(result.view);
     }
-    void load();
-    // 在跑才有心流可追;停了页面上留最后一份摘要即可,不空转轮询。
-    if (!running) return () => { alive = false; };
-    const timer = setInterval(() => void load(), 5000);
-    return () => { alive = false; clearInterval(timer); };
+    // 在跑才有心流可追；隐藏页签停轮询，回来立即补一次。停了页面上
+    // 留最后一份摘要即可，不空转请求。
+    if (!running) {
+      void load();
+      return () => { alive = false; };
+    }
+    const stop = startVisiblePolling(() => void load(), 5000, document);
+    return () => { alive = false; stop(); };
   }, [task.id, running]);
 
   if (unavailable) {

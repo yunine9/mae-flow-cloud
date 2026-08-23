@@ -14,6 +14,7 @@
 
 import { useEffect, useState } from "react";
 import { interruptTask, listInterrupts, type InterruptRecord } from "./api";
+import { startVisiblePolling } from "./visiblePolling";
 import "./steer.css";
 
 export function SteerBox({
@@ -36,9 +37,8 @@ export function SteerBox({
     const load = () => void listInterrupts(taskId).then((rows) => {
       if (alive) setHistory(rows);
     });
-    load();
-    const timer = window.setInterval(load, 5000);
-    return () => { alive = false; window.clearInterval(timer); };
+    const stop = startVisiblePolling(load, 5000, document);
+    return () => { alive = false; stop(); };
   }, [taskId, sent]);
 
   async function send() {

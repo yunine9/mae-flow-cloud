@@ -22,6 +22,7 @@ import { PrepushStatus } from "./PrepushStatus";
 import { TokenUsage } from "./TokenUsage";
 import { taskHealthFacts } from "./taskHealth";
 import { relativeTime } from "./time";
+import { startVisiblePolling } from "./visiblePolling";
 import {
   EMPTY_REPOSITORY_SKILL_PICKER_STATE,
   RepositorySkillPicker,
@@ -170,9 +171,12 @@ export function TaskWorkspace({
   // 正在写批注时被重渲染打断。
   useEffect(() => {
     if (task.status !== "running" && task.status !== "pausing") return;
-    const timer = window.setInterval(
-      () => setLivePulse((tick) => tick + 1), 5000);
-    return () => window.clearInterval(timer);
+    return startVisiblePolling(
+      () => setLivePulse((tick) => tick + 1),
+      5000,
+      document,
+      { runOnStart: false },
+    );
   }, [task.status]);
 
   useEffect(() => {
