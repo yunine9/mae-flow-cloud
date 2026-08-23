@@ -3867,10 +3867,53 @@ pre {
   box-shadow: var(--shadow-xs);
 }
 .ws-progress .task-progress { width: 100%; max-width: none; margin: 0; }
-.ws-progress .task-progress-caption { margin-bottom: 7px; }
-.ws-progress .task-phase { font-size: 9px; }
-.ws-progress .task-phase > i { background: var(--surface); }
-.ws-progress .task-phase.current > i { border-color: var(--surface); }
+.ws-progress .task-progress-caption { margin-bottom: 11px; }
+.ws-progress .task-phase {
+  --phase-color: #7267e9;
+  --phase-next: #4f83ee;
+  gap: 8px;
+  color: color-mix(in srgb, var(--phase-color) 62%, var(--muted));
+  font-size: 10px;
+  font-weight: 650;
+}
+.ws-progress .task-phase:nth-child(1) { --phase-color: #7b61d9; --phase-next: #5978e8; }
+.ws-progress .task-phase:nth-child(2) { --phase-color: #5978e8; --phase-next: #318fcf; }
+.ws-progress .task-phase:nth-child(3) { --phase-color: #318fcf; --phase-next: #20a99a; }
+.ws-progress .task-phase:nth-child(4) { --phase-color: #20a99a; --phase-next: #65ae62; }
+.ws-progress .task-phase:nth-child(5) { --phase-color: #65ae62; --phase-next: #d49b37; }
+.ws-progress .task-phase:nth-child(6) { --phase-color: #d49b37; --phase-next: #df6b7c; }
+.ws-progress .task-phase:nth-child(7) { --phase-color: #df6b7c; --phase-next: #df6b7c; }
+.ws-progress .task-phase > i {
+  width: 12px;
+  height: 12px;
+  border: 2px solid color-mix(in srgb, var(--phase-color) 58%, var(--line));
+  background: color-mix(in srgb, var(--phase-color) 11%, var(--surface));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--phase-color) 7%, transparent);
+}
+.ws-progress .task-phase:not(:last-child)::before {
+  top: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--phase-color), var(--phase-next));
+  opacity: .24;
+}
+.ws-progress .task-phase.past::before { opacity: .92; }
+.ws-progress .task-phase.current::before { opacity: .38; }
+.ws-progress .task-phase.past > i {
+  border-color: var(--phase-color);
+  background: var(--phase-color);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--phase-color) 13%, transparent);
+}
+.ws-progress .task-phase.current { color: var(--phase-color); }
+.ws-progress .task-phase.current > i {
+  width: 15px;
+  height: 15px;
+  margin-top: -1.5px;
+  border: 3px solid var(--surface);
+  background: var(--phase-color);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--phase-color) 24%, transparent),
+              0 4px 12px color-mix(in srgb, var(--phase-color) 30%, transparent);
+}
 .ws-progress .task-phase-track { grid-template-columns: repeat(7, minmax(64px, 1fr)); }
 .ws-progress.is-fallback .task-progress-caption > span::after {
   content: " · 概览";
