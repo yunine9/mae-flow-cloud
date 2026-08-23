@@ -666,10 +666,35 @@ export interface DeveloperAssistantToolRun {
   finished_at?: string;
 }
 
+export interface DeveloperAssistantAvailability {
+  available: boolean;
+  code: "edit_window" | "approval_pending" | "tests_only" | "host_wait"
+    | "not_editable" | "core_unavailable" | "session_only";
+  mode: "edit" | "unavailable";
+  reason: string;
+  core?: {
+    step: string;
+    title?: string;
+    revision?: number;
+    approval_subject_id?: string;
+  };
+}
+
+export interface DeveloperAssistantHandoff {
+  state: "running" | "unchanged" | "changed" | "returned" | "blocked";
+  message: string;
+  changed_paths?: string[];
+  started_at: string;
+  finished_at?: string;
+  returned_at?: string;
+}
+
 export interface DeveloperAssistantView {
   state: "idle" | "running" | "completed" | "failed" | "interrupted";
   messages: DeveloperAssistantMessage[];
   tools: DeveloperAssistantToolRun[];
+  availability: DeveloperAssistantAvailability;
+  handoff?: DeveloperAssistantHandoff;
   updated_at?: string;
   error?: string;
 }

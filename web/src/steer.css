@@ -289,9 +289,13 @@
 
 .assistant-state strong { font-size: 11.5px; }
 .assistant-state > span {
+  flex: 1;
+  max-width: 72%;
   color: var(--muted);
   font-size: 10px;
+  line-height: 1.45;
   text-align: right;
+  overflow-wrap: anywhere;
 }
 
 .assistant-state.running i { background: var(--active); box-shadow: 0 0 0 4px var(--active-soft); }
@@ -299,6 +303,58 @@
 .assistant-state.failed i { background: var(--danger); }
 .assistant-state.interrupted i { background: var(--attention); }
 .assistant-copy { margin-bottom: 0; }
+
+.assistant-handoff {
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-soft);
+}
+
+.assistant-handoff > div {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.assistant-handoff i {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 999px;
+  background: var(--success);
+}
+
+.assistant-handoff.changed i { background: var(--attention); }
+.assistant-handoff.blocked i { background: var(--danger); }
+.assistant-handoff strong { font-size: 11px; }
+.assistant-handoff p {
+  margin: 4px 0 0 14px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.assistant-handoff details { margin: 5px 0 0 14px; }
+.assistant-handoff summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.assistant-handoff ul {
+  max-height: 112px;
+  margin: 5px 0 0;
+  padding: 7px 8px 7px 23px;
+  overflow: auto;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 9.5px;
+  line-height: 1.55;
+}
 
 .assistant-conversation {
   max-height: 330px;
@@ -426,7 +482,7 @@
   .steer-head { align-items: flex-start; }
   .collaboration-tabs { grid-template-columns: 1fr; }
   .assistant-state { align-items: flex-start; flex-direction: column; gap: 3px; }
-  .assistant-state > span { text-align: left; }
+  .assistant-state > span { max-width: none; text-align: left; }
   .assistant-tools > header { flex-direction: column; gap: 2px; }
   .assistant-actions { align-items: stretch; flex-direction: column; }
   .assistant-buttons { justify-content: flex-end; }

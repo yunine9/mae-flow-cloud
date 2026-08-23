@@ -137,12 +137,24 @@ import {
   DEVELOPER_ASSISTANT_SESSION,
   appendDeveloperAssistantMessage,
   developerAssistantGateContract,
+  developerAssistantHandoffPrompt,
   developerAssistantMission,
   developerAssistantTools,
+  writeDeveloperAssistant,
   interruptDeveloperAssistant,
   readDeveloperAssistant,
   type DeveloperAssistantView,
 } from "./developerAssistant.ts";
+import {
+  beginDeveloperAssistantHandoff,
+  captureDeveloperAssistantWorktree,
+  finishDeveloperAssistantHandoff,
+  handoffCoreStillMatches,
+  inspectDeveloperAssistantAvailability,
+  markDeveloperAssistantReturned,
+  type DeveloperAssistantAvailability,
+  type DeveloperAssistantHandoff,
+} from "./developerAssistantHandoff.ts";
 
 /** 现场保留期默认两周(用户 2026-08-22 拍板)。 */
 export const DEFAULT_WORKSPACE_RETENTION_DAYS = 14;
@@ -825,6 +837,9 @@ interface TaskState {
   /** 用户主动召唤的旁路开发助手。它只在主任务 paused 时运行，不参与
    * 内核状态迁移；Promise 用于防重、恢复/关闭时确认资源收口。 */
   assistantActive?: Promise<void>;
+  /** 开发助手交还给重建主会话的一次性现场摘要。它不是内核证据；
+   * 必须持久化，避免服务死在 resume→launch 之间把用户改动上下文丢掉。 */
+  pendingAssistantHandoff?: string;
 }
 
 interface PrePushBuildWaiter {
@@ -2522,6 +2537,7 @@ export class TaskService {
         summary: task.summary,
         cwd: task.cwd,
         mission: task.mission,
+        assistant_handoff: task.pendingAssistantHandoff,
         token_usage_state: task.tokenUsage,
       }, null, 1));
       renameSync(path + ".tmp", path);
@@ -2598,6 +2614,9 @@ export class TaskService {
           resume: true,
           mission: typeof saved.mission === "string"
             ? saved.mission : undefined,
+          pendingAssistantHandoff:
+            typeof saved.assistant_handoff === "string"
+              ? saved.assistant_handoff : undefined,
           lastPersistedStatus: summary.status,
           controlEpoch: 0,
         };
@@ -3260,7 +3279,20 @@ export class TaskService {
     const events = new EventLog(
       join(task.summary.workspace, "events.jsonl"),
     ).replay();
-    return { ...snapshot, tools: developerAssistantTools(events) };
+    return {
+      ...snapshot,
+      tools: developerAssistantTools(events),
+      availability: this.developerAssistantAvailability(task),
+    };
+  }
+
+  private developerAssistantAvailability(
+    task: TaskState,
+  ): DeveloperAssistantAvailability {
+    return inspectDeveloperAssistantAvailability(
+      task.cwd,
+      this.options.host?.kernelRoot,
+    );
   }
 
   /**
@@ -3298,8 +3330,28 @@ export class TaskService {
       throw new TaskControlError("开发助手或其他任务会话仍在运行，请等待本轮收口");
     }
 
+    const availability = this.developerAssistantAvailability(task);
+    if (!availability.available) {
+      throw new TaskControlError(availability.reason);
+    }
+    const previous = readDeveloperAssistant(task.summary.workspace);
+    let handoff: DeveloperAssistantHandoff | undefined;
+    try {
+      handoff = this.options.host && task.cwd
+        ? beginDeveloperAssistantHandoff(
+            previous.handoff,
+            availability,
+            captureDeveloperAssistantWorktree(task.cwd),
+          )
+        : undefined;
+    } catch (error) {
+      throw new TaskControlError(
+        `无法冻结开发助手交还起点，已拒绝启动：${String(error)}`,
+      );
+    }
+
     appendDeveloperAssistantMessage(
-      task.summary.workspace, "user", message, "running");
+      task.summary.workspace, "user", message, "running", undefined, handoff);
     this.options.log?.(`任务 ${id} 开发助手由 ${actor} 发起`);
     const epoch = task.controlEpoch;
     const work = this.runDeveloperAssistant(task, epoch);
@@ -3404,6 +3456,7 @@ export class TaskService {
       const outcome = await driver.start(developerAssistantMission(
         task.summary.requirement,
         snapshot.messages,
+        this.developerAssistantAvailability(task),
       ));
       if (!this.current(task, epoch)) {
         interruptDeveloperAssistant(workspace, "任务控制操作中断了开发助手");
@@ -3442,6 +3495,32 @@ export class TaskService {
             workspace, "assistant", detail, "failed", detail);
         }
       }
+      this.finishDeveloperAssistantHandoff(task);
+    }
+  }
+
+  private finishDeveloperAssistantHandoff(task: TaskState): void {
+    const snapshot = readDeveloperAssistant(task.summary.workspace);
+    if (!snapshot.handoff || !task.cwd
+        || snapshot.handoff.state === "returned") return;
+    try {
+      const handoff = finishDeveloperAssistantHandoff(
+        snapshot.handoff,
+        captureDeveloperAssistantWorktree(task.cwd),
+      );
+      writeDeveloperAssistant(task.summary.workspace, { ...snapshot, handoff });
+    } catch (error) {
+      const detail = `无法核对开发助手交还现场：${String(error)}`;
+      writeDeveloperAssistant(task.summary.workspace, {
+        ...snapshot,
+        handoff: {
+          ...snapshot.handoff,
+          state: "blocked",
+          finished_at: new Date().toISOString(),
+          message: detail,
+        },
+        error: detail,
+      });
     }
   }
 
@@ -3501,6 +3580,7 @@ export class TaskService {
         || readDeveloperAssistant(task.summary.workspace).state === "running") {
       throw new TaskControlError("开发助手仍在处理，请等待它返回后再交还主任务");
     }
+    this.prepareDeveloperAssistantReturn(task);
     const from = task.summary.control?.paused_from ?? "running";
     task.controlEpoch += 1;
     task.pauseRequested = false;
@@ -3544,6 +3624,47 @@ export class TaskService {
     return { ...task.summary };
   }
 
+  private prepareDeveloperAssistantReturn(task: TaskState): void {
+    this.finishDeveloperAssistantHandoff(task);
+    const snapshot = readDeveloperAssistant(task.summary.workspace);
+    const handoff = snapshot.handoff;
+    if (!handoff || handoff.state === "returned") return;
+    if (handoff.state === "running") {
+      throw new TaskControlError("开发助手现场仍在收口，请稍后再交还主任务");
+    }
+    if (handoff.state === "blocked") {
+      throw new TaskControlError(
+        `${handoff.message}。主任务继续保持暂停，修复现场核对后再恢复`,
+      );
+    }
+    const availability = this.developerAssistantAvailability(task);
+    if (!availability.available) {
+      throw new TaskControlError(
+        `开发助手启动后的内核阶段发生变化，不能直接交还：${availability.reason}`,
+      );
+    }
+    if (!handoffCoreStillMatches(handoff, availability)) {
+      throw new TaskControlError(
+        "开发助手启动后的内核步骤或 revision 已变化，已阻止旧现场直接回灌；主任务继续保持暂停",
+      );
+    }
+    const events = new EventLog(
+      join(task.summary.workspace, "events.jsonl"),
+    ).replay();
+    const prompt = developerAssistantHandoffPrompt(
+      snapshot,
+      developerAssistantTools(events),
+    );
+    if (prompt) {
+      task.pendingAssistantHandoff = [task.pendingAssistantHandoff, prompt]
+        .filter(Boolean).join("\n\n---\n\n");
+    }
+    writeDeveloperAssistant(task.summary.workspace, {
+      ...snapshot,
+      handoff: markDeveloperAssistantReturned(handoff),
+    });
+  }
+
   /** 取消是不可恢复终态。先换代并落盘，再中止会话/容器；因此即使
    * 清理期间旧请求返回，读侧也会立即看到 canceled，旧回调也无权改写。 */
   async cancel(id: string, actor: string): Promise<TaskSummary> {
@@ -3571,6 +3692,7 @@ export class TaskService {
     };
     task.summary.waiting = undefined;
     task.mission = undefined;
+    task.pendingAssistantHandoff = undefined;
     interruptDeveloperAssistant(
       task.summary.workspace,
       `任务已由 ${actor} 取消，开发助手同时终止`,
@@ -4166,6 +4288,9 @@ export class TaskService {
         );
         if (knowledge.markdown) prompt = `${prompt}\n\n${knowledge.markdown}`;
       }
+      if (task.pendingAssistantHandoff) {
+        prompt = `${prompt}\n\n${task.pendingAssistantHandoff}`;
+      }
       // 专项使命(修复环)压轴:模型最后读到的最要紧。这里只用不清——
       // 修复会话跑一半被重启,使命要跟着 task.json 回来再喂一遍;
       // 清账在 settle 收口处,会话真做完了才算消费掉。
@@ -4254,9 +4379,16 @@ export class TaskService {
         this.options.log?.(
           `任务 ${task.summary.id} 工作区丢失,决定无法回注,从头执行`);
       }
-      await this.settle(task, rebuild
+      const turn = rebuild
         ? task.driver.startResume(prompt)
-        : task.driver.start(prompt), epoch);
+        : task.driver.start(prompt);
+      // start/startResume 已同步把 prompt 交给会话；到这里才消费一次性
+      // 交还摘要。若此前进程退出，task.json 仍保留它，下次不会丢。
+      if (task.pendingAssistantHandoff) {
+        task.pendingAssistantHandoff = undefined;
+        this.writeTaskState(task);
+      }
+      await this.settle(task, turn, epoch);
     } catch (error) {
       if (!this.current(task, epoch)) return;
       const driver = task.driver;

@@ -32,6 +32,8 @@ src/
   humanGate.ts        WAITING_FOR_HUMAN:同 call_id 幂等、先到决定生效
   sessionDriver.ts    进程内会话驱动(拦截/挂起/子会话/登记归属规则)
   kernelHost.ts       内核宿主:合成 Hook 载荷喂 dispatch.py,深层门禁/证据全走内核
+  developerAssistant.ts / developerAssistantHandoff.ts
+                      开发助手旁路会话 + 与内核步骤/revision/工作区的交还协议
   taskService.ts      任务编排:工作区/受限并发队列/状态由 outcome 驱动;host 模式=克隆仓库+内核 bootstrap
   server.ts           任务 API:REST + SSE(决定冲突=409 任务状态已变化)
   webPage.ts          零构建演示页:列表/发起/审批卡直接点(说人话)
@@ -97,6 +99,15 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
 初始化、current 出步骤指令、伪造 `.mae-flow.json` 被内核当场打回。
 所有 dispatch 调用串行化(posttool 写状态,与下一条 pretool 交错
 就是并发写状态——旧世界由宿主天然串行,这里用 promise 链保住)。
+
+开发工作台里的“开发助手”不挂 KernelHost，普通检索、构建和测试命令不会
+被流程步骤误拦；但它也不是第二套流程。服务端每次都读取当前内核步骤，只有
+`allow_source_edit=true` 且非审批、非 tests-only、非 host-wait 的窗口才
+允许启动。启动时冻结内核 step/revision 与工作区内容指纹，结束时生成变更
+文件和真实工具结果摘要；交还前再次核对内核锚点。审批卡已经生成、内核锚点
+变化、Git HEAD 被间接改写或现场无法核对时一律保持暂停，不把旧现场硬塞回
+主任务。正常交还由重建主会话先执行 `current`，再在原步骤承接修改；摘要仅
+是上下文，不是批准或质量证据。
 
 ## 内网能力模拟件(用户原则:外部完全就绪才碰内网)
 

@@ -1,6 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventLog } from "../src/semanticEvents.ts";
@@ -18,6 +25,33 @@ async function until(
     if (Date.now() > deadline) throw new Error(`等待超时: ${what}`);
     await new Promise((resolve) => setTimeout(resolve, 30));
   }
+}
+
+function coreFixture(root: string): { repo: string; kernel: string } {
+  const repo = join(root, "repo");
+  const kernel = join(root, "kernel");
+  mkdirSync(repo);
+  mkdirSync(join(kernel, "flow"), { recursive: true });
+  writeFileSync(join(kernel, "flow", "flow.json"), JSON.stringify({
+    steps: {
+      build: { title: "编码实现", allow_source_edit: true },
+      build_review: {
+        title: "用户检视代码",
+        user_ack: true,
+        approval_subject: { kind: "worktree" },
+      },
+    },
+  }));
+  execFileSync("git", ["-C", repo, "init", "-q"]);
+  execFileSync("git", ["-C", repo, "config", "user.name", "fixture"]);
+  execFileSync("git", ["-C", repo, "config", "user.email", "fixture@example.com"]);
+  writeFileSync(join(repo, "source.ts"), "export const value = 1;\n");
+  execFileSync("git", ["-C", repo, "add", "source.ts"]);
+  execFileSync("git", ["-C", repo, "commit", "-qm", "fixture"]);
+  writeFileSync(join(repo, ".mae-flow.json"), JSON.stringify({
+    current: "build", revision: 3,
+  }));
+  return { repo, kernel };
 }
 
 test("开发助手:安全暂停主任务后执行真实命令，回复/工具结果可见且不推进主状态", async () => {
@@ -89,6 +123,79 @@ test("开发助手:安全暂停主任务后执行真实命令，回复/工具结
     const resumed = service.resume(id, "alice");
     assert.equal(resumed.status, "waiting_for_human",
       "交还后应回到原来的 Mae-Flow/主任务状态，而不是由助手越级推进");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
+test("开发助手:仅在内核修改窗口启动，并把变更/命令结果一次性交给主会话", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mfc-developer-assistant-core-"));
+  const { repo, kernel } = coreFixture(root);
+  const model = new ScriptedModelServer([
+    { tool: { name: "bash", input: { command:
+      "printf 'export const fixed = true;\\n' > fixed.ts && printf 'unit-ok\\n'",
+    } } },
+    { text: "已修复 fixed.ts，并完成定向检查。" },
+  ], "scripted-v1", { linear: true });
+  await model.start();
+  const containers = new FakeTaskContainerHarness();
+  const dataDir = join(root, "data");
+  const service = new TaskService({
+    dataDir,
+    provider: "maeflow",
+    model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    maxConcurrent: 0,
+    host: { kernelRoot: kernel, repoPath: repo },
+    isolation: {
+      image: "fixture/developer-assistant:test",
+      containerFactory: containers.factory,
+    },
+  });
+
+  try {
+    const id = service.create("修复代码并交还").id;
+    await service.pause(id, "alice");
+    const internal = (service as unknown as {
+      tasks: Map<string, { cwd?: string }>;
+    }).tasks.get(id)!;
+    internal.cwd = repo;
+
+    assert.equal(service.developerAssistant(id).availability.code, "edit_window");
+    service.startDeveloperAssistant(id, "修复并运行检查", "alice");
+    await until(() => service.developerAssistant(id).state === "completed",
+      "内核窗口中的助手完成");
+
+    const view = service.developerAssistant(id);
+    assert.equal(view.handoff?.state, "changed");
+    assert.deepEqual(view.handoff?.changed_paths, ["fixed.ts"]);
+
+    const resumed = service.resume(id, "alice");
+    assert.equal(resumed.status, "queued");
+    const saved = JSON.parse(readFileSync(
+      join(dataDir, id, "task.json"), "utf-8"));
+    assert.match(saved.assistant_handoff, /fixed\.ts/);
+    assert.match(saved.assistant_handoff, /unit-ok/);
+    assert.match(saved.assistant_handoff, /不是 Mae-Flow 步骤、批准或质量证据/);
+    assert.equal(service.developerAssistant(id).handoff?.state, "returned");
+
+    const reviewId = service.create("审批阶段不可旁路修改").id;
+    await service.pause(reviewId, "alice");
+    const reviewTask = (service as unknown as {
+      tasks: Map<string, { cwd?: string }>;
+    }).tasks.get(reviewId)!;
+    reviewTask.cwd = repo;
+    writeFileSync(join(repo, ".mae-flow.json"), JSON.stringify({
+      current: "build_review", revision: 4,
+      approval_subject: { id: "subject-a" },
+    }));
+    assert.equal(service.developerAssistant(reviewId).availability.code,
+      "approval_pending");
+    assert.throws(
+      () => service.startDeveloperAssistant(reviewId, "顺手再改一下", "alice"),
+      /先选择“需要调整”进入返工阶段/,
+    );
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();

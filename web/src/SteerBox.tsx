@@ -28,6 +28,12 @@ const EMPTY_ASSISTANT: DeveloperAssistantView = {
   state: "idle",
   messages: [],
   tools: [],
+  availability: {
+    available: false,
+    code: "core_unavailable",
+    mode: "unavailable",
+    reason: "正在确认当前内核步骤…",
+  },
 };
 
 const ASSISTANT_STATE: Record<DeveloperAssistantView["state"], string> = {
@@ -147,6 +153,10 @@ export function SteerBox({
   async function sendAssistant() {
     const message = text.trim();
     if (!message || busy || assistant.state === "running") return;
+    if (!assistant.availability.available) {
+      setError(assistant.availability.reason);
+      return;
+    }
     setMode("assistant");
     setPendingAssistant(message);
     setError("");
@@ -175,6 +185,9 @@ export function SteerBox({
   const assistantBusy = assistant.state === "running" || !!pendingAssistant;
   const canSteer = task.status === "running";
   const waitingForPause = !!pendingAssistant && task.status !== "paused";
+  const assistantAvailable = assistant.availability.available;
+  const handoffBlocked = assistant.handoff?.state === "blocked"
+    || assistant.handoff?.state === "running";
 
   return (
     <section className="steer" aria-label="开发协作">
@@ -199,7 +212,7 @@ export function SteerBox({
           className={mode === "assistant" ? "active" : ""}
           onClick={() => setMode("assistant")}>
           <strong>开发助手</strong>
-          <small>暂停主任务，直接查代码、跑命令、修改</small>
+          <small>在内核允许修改时，直接查代码、跑命令、修改</small>
         </button>
       </div>
 
@@ -270,7 +283,9 @@ export function SteerBox({
             <span>
               {waitingForPause
                 ? "当前操作收口后自动启动助手"
-                : task.status === "paused"
+                : !assistantAvailable
+                  ? assistant.availability.reason
+                  : task.status === "paused"
                   ? "主任务保持暂停，不会和助手同时改代码"
                   : "发送后会自动暂停主任务"}
             </span>
@@ -278,8 +293,35 @@ export function SteerBox({
 
           <p className="steer-copy assistant-copy">
             像本地 CLI 一样直接说要做什么。助手可读写当前仓、运行构建与测试；
-            不推进 Mae-Flow、不提交或推送，所有修改稍后交还主任务统一检视。
+            不推进 Mae-Flow、不提交或推送。只有内核明确允许源码修改的阶段才开放，
+            所有改动和执行结果都会作为现场摘要交还主任务。
           </p>
+
+          {assistant.handoff && assistant.handoff.state !== "running" && (
+            <div className={`assistant-handoff ${assistant.handoff.state}`}>
+              <div>
+                <i aria-hidden />
+                <strong>{assistant.handoff.state === "changed"
+                  ? "有修改，等待交还"
+                  : assistant.handoff.state === "unchanged"
+                    ? "无代码变化"
+                    : assistant.handoff.state === "returned"
+                      ? "已交给主任务"
+                      : "现场核对失败"}</strong>
+              </div>
+              <p>{assistant.handoff.message}</p>
+              {!!assistant.handoff.changed_paths?.length && (
+                <details>
+                  <summary>{assistant.handoff.changed_paths.length} 个变更文件</summary>
+                  <ul>
+                    {assistant.handoff.changed_paths.map((path) => (
+                      <li key={path}>{path}</li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+            </div>
+          )}
 
           {assistant.messages.length > 0 && (
             <div className="assistant-conversation" aria-label="开发助手对话">
@@ -316,8 +358,10 @@ export function SteerBox({
           )}
 
           <textarea id={`assistant-${task.id}`} className="steer-input"
-            value={text} disabled={busy || assistantBusy}
-            placeholder="例如：帮我定位这个空指针，跑一下相关 UT，能修就直接修"
+            value={text} disabled={busy || assistantBusy || !assistantAvailable}
+            placeholder={assistantAvailable
+              ? "例如：帮我定位这个空指针，跑一下相关 UT，能修就直接修"
+              : assistant.availability.reason}
             rows={4} onChange={(event) => setText(event.target.value)}
             onKeyDown={(event) => {
               if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
@@ -335,12 +379,13 @@ export function SteerBox({
             <div className="assistant-buttons">
               {task.status === "paused" && assistant.state !== "running" && (
                 <button type="button" className="assistant-return"
-                  disabled={busy} onClick={() => void resumeMainTask()}>
+                  disabled={busy || handoffBlocked}
+                  onClick={() => void resumeMainTask()}>
                   交还主任务
                 </button>
               )}
               <button type="button" className="steer-send"
-                disabled={busy || assistantBusy || !text.trim()}
+                disabled={busy || assistantBusy || !assistantAvailable || !text.trim()}
                 onClick={() => void sendAssistant()}>
                 {waitingForPause ? "正在暂停…" : assistant.state === "running" ? "处理中…" : "让助手处理"}
               </button>
