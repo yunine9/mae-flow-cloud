@@ -41,10 +41,9 @@ export interface LubanPluginReply {
 }
 
 export interface LubanApprovalGatewayOptions {
-  secret: string;
+  token: string;
   accountEnabled: (account: string) => boolean;
   now?: () => number;
-  maxClockSkewMs?: number;
   log?: (message: string) => void;
 }
 
@@ -64,7 +63,6 @@ interface InflightReply {
   promise: Promise<LubanPluginReply>;
 }
 
-const CALLBACK_MAX_AGE_MS = 5 * 60_000;
 const CACHE_TTL_MS = 10 * 60_000;
 const MAX_CACHE_ENTRIES = 1_000;
 const MAX_RESPONSE_CHARS = 3_800;
@@ -75,28 +73,18 @@ class CallbackError extends Error {
   }
 }
 
-/** 回调密钥只从 0600 文件读取，避免明文进入进程参数和部署配置 diff。 */
-export function loadLubanPluginSecret(path: string): string {
+/** 回调 Token 只从 0600 文件读取，避免明文进入进程参数和部署配置 diff。 */
+export function loadLubanPluginToken(path: string): string {
   const info = statSync(path);
-  if (!info.isFile()) throw new Error("小鲁班插件密钥路径不是普通文件");
+  if (!info.isFile()) throw new Error("小鲁班插件 Token 路径不是普通文件");
   if (process.platform !== "win32" && (info.mode & 0o077) !== 0) {
-    throw new Error("小鲁班插件密钥文件权限必须是 0600");
+    throw new Error("小鲁班插件 Token 文件权限必须是 0600");
   }
-  const secret = readFileSync(path, "utf-8").trim();
-  if (Buffer.byteLength(secret, "utf-8") < 32) {
-    throw new Error("小鲁班插件密钥至少需要 32 字节");
+  const token = readFileSync(path, "utf-8").trim();
+  if (Buffer.byteLength(token, "utf-8") < 32) {
+    throw new Error("小鲁班插件 Token 至少需要 32 字节");
   }
-  return secret;
-}
-
-/** 部署桥与测试共用的签名算法：HMAC-SHA256(timestamp + '.' + rawBody)。 */
-export function signLubanPluginCallback(
-  secret: string,
-  timestamp: string,
-  rawBody: string,
-): string {
-  return `sha256=${createHmac("sha256", secret)
-    .update(`${timestamp}.${rawBody}`, "utf-8").digest("hex")}`;
+  return token;
 }
 
 function oneLine(value: string, limit = 120): string {
@@ -162,10 +150,11 @@ function parseEnvelope(rawBody: string): LubanPluginEnvelope {
   return { message_id: messageId, sender, content };
 }
 
-function signatureBytes(value: string | undefined): Buffer | undefined {
-  const hex = value?.trim().replace(/^sha256=/i, "");
-  return hex && /^[a-f0-9]{64}$/i.test(hex)
-    ? Buffer.from(hex, "hex") : undefined;
+function sameToken(actual: string | undefined, expected: string): boolean {
+  if (!actual) return false;
+  const left = Buffer.from(actual, "utf-8");
+  const right = Buffer.from(expected, "utf-8");
+  return left.length === right.length && timingSafeEqual(left, right);
 }
 
 export class LubanApprovalGateway {
@@ -176,16 +165,15 @@ export class LubanApprovalGateway {
     private readonly service: LubanApprovalService,
     private readonly options: LubanApprovalGatewayOptions,
   ) {
-    if (Buffer.byteLength(options.secret, "utf-8") < 32) {
-      throw new Error("小鲁班插件密钥至少需要 32 字节");
+    if (Buffer.byteLength(options.token, "utf-8") < 32) {
+      throw new Error("小鲁班插件 Token 至少需要 32 字节");
     }
   }
 
-  /** HTTP 边界把原始正文交进来；必须在 JSON 解析前验签。 */
+  /** 固定 Token 只证明请求来自受信插件/桥；任务版本仍负责防陈旧决定。 */
   async handle(input: {
     rawBody: string;
-    timestamp?: string;
-    signature?: string;
+    token?: string;
   }): Promise<LubanPluginReply> {
     try {
       this.verify(input);
@@ -194,7 +182,7 @@ export class LubanApprovalGateway {
         throw new CallbackError(403, "该工号未启用 Mae-Flow 账号");
       }
       const digest = createHash("sha256")
-        .update(`${input.timestamp}.${input.rawBody}`, "utf-8").digest("hex");
+        .update(input.rawBody, "utf-8").digest("hex");
       this.pruneCache();
       const cached = this.replies.get(envelope.message_id);
       if (cached) {
@@ -235,24 +223,10 @@ export class LubanApprovalGateway {
 
   private verify(input: {
     rawBody: string;
-    timestamp?: string;
-    signature?: string;
+    token?: string;
   }): void {
-    const timestamp = String(input.timestamp ?? "").trim();
-    if (!/^\d{10}$/.test(timestamp)) {
-      throw new CallbackError(401, "回调时间戳缺失或格式不正确");
-    }
-    const at = Number(timestamp) * 1_000;
-    const skew = this.options.maxClockSkewMs ?? CALLBACK_MAX_AGE_MS;
-    if (!Number.isFinite(at) || Math.abs(this.now() - at) > skew) {
-      throw new CallbackError(401, "回调已过期，请重新操作");
-    }
-    const actual = signatureBytes(input.signature);
-    const expected = signatureBytes(signLubanPluginCallback(
-      this.options.secret, timestamp, input.rawBody));
-    if (!actual || !expected || actual.length !== expected.length
-        || !timingSafeEqual(actual, expected)) {
-      throw new CallbackError(401, "回调签名无效");
+    if (!sameToken(input.token, this.options.token)) {
+      throw new CallbackError(401, "回调 Token 无效");
     }
   }
 
@@ -277,7 +251,7 @@ export class LubanApprovalGateway {
 
   private approvalCode(task: TaskSummary): string {
     const waiting = task.waiting!;
-    return createHmac("sha256", this.options.secret).update([
+    return createHmac("sha256", this.options.token).update([
       "approval", task.luban_account, task.id,
       waiting.waiting_id, waiting.state_version,
     ].join("\0"), "utf-8").digest("hex").slice(0, 10).toUpperCase();

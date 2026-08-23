@@ -12,9 +12,8 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { WaitingRecord } from "../src/humanGate.ts";
 import {
-  loadLubanPluginSecret,
+  loadLubanPluginToken,
   LubanApprovalGateway,
-  signLubanPluginCallback,
   type LubanApprovalService,
 } from "../src/lubanApproval.ts";
 import { createTaskServer } from "../src/server.ts";
@@ -24,9 +23,8 @@ import {
 } from "../src/taskService.ts";
 import { Notifier } from "../src/notifier.ts";
 
-const SECRET = "test-luban-plugin-secret-32-bytes-minimum";
+const TOKEN = "test-luban-plugin-token-32-bytes-minimum";
 const NOW = 1_800_000_000_000;
-const TIMESTAMP = String(NOW / 1_000);
 
 function waiting(
   taskId: string,
@@ -84,14 +82,12 @@ class FakeApprovalService implements LubanApprovalService {
 function callback(
   gateway: LubanApprovalGateway,
   body: Record<string, unknown>,
-  signatureOverride?: string,
+  token = TOKEN,
 ) {
   const rawBody = JSON.stringify(body);
   return gateway.handle({
     rawBody,
-    timestamp: TIMESTAMP,
-    signature: signatureOverride
-      ?? signLubanPluginCallback(SECRET, TIMESTAMP, rawBody),
+    token,
   });
 }
 
@@ -103,7 +99,7 @@ function codeOf(text: string): string {
 
 function gateway(service: FakeApprovalService): LubanApprovalGateway {
   return new LubanApprovalGateway(service, {
-    secret: SECRET, now: () => NOW,
+    token: TOKEN, now: () => NOW,
     accountEnabled: (account) => ["alice", "bob"].includes(account),
   });
 }
@@ -174,23 +170,13 @@ test("选择与退回始终提交选项原文；同 message_id 并发/重放不�
   assert.match(rejectService.calls[0].notes!, /请补充异常场景/);
 });
 
-test("验签、时间窗、账号与消息 ID 冲突均 fail-closed", async () => {
+test("固定 Token、账号与消息 ID 冲突均 fail-closed", async () => {
   const service = new FakeApprovalService([task("task-1", "alice", "支付修复")]);
   const entry = gateway(service);
   const bad = await callback(entry, {
     message_id: "bad", sender: "alice", content: "mae-flow 待审批",
-  }, "sha256=" + "0".repeat(64));
+  }, "wrong-token-that-is-long-enough-but-still-wrong");
   assert.equal(bad.status, 401);
-
-  const rawBody = JSON.stringify({
-    message_id: "old", sender: "alice", content: "mae-flow 待审批",
-  });
-  const oldTimestamp = String((NOW - 600_000) / 1_000);
-  const old = await entry.handle({
-    rawBody, timestamp: oldTimestamp,
-    signature: signLubanPluginCallback(SECRET, oldTimestamp, rawBody),
-  });
-  assert.equal(old.status, 401);
 
   const disabled = await callback(entry, {
     message_id: "disabled", sender: "mallory", content: "mae-flow 待审批",
@@ -264,9 +250,7 @@ test("HTTP 回调复用主服务端口且不需要浏览器 Cookie", async () =>
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-mfc-luban-timestamp": TIMESTAMP,
-        "x-mfc-luban-signature": signLubanPluginCallback(
-          SECRET, TIMESTAMP, rawBody),
+        "x-mfc-luban-plugin-token": TOKEN,
       },
       body: rawBody,
     });
@@ -283,14 +267,14 @@ test("HTTP 回调复用主服务端口且不需要浏览器 Cookie", async () =>
   }
 });
 
-test("插件密钥文件必须足够长且权限为 0600", () => {
-  const dir = mkdtempSync(join(tmpdir(), "mfc-luban-secret-"));
-  const file = join(dir, "plugin.secret");
-  writeFileSync(file, SECRET);
+test("插件 Token 文件必须足够长且权限为 0600", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-luban-token-"));
+  const file = join(dir, "plugin.token");
+  writeFileSync(file, TOKEN);
   chmodSync(file, 0o600);
-  assert.equal(loadLubanPluginSecret(file), SECRET);
+  assert.equal(loadLubanPluginToken(file), TOKEN);
   chmodSync(file, 0o644);
-  assert.throws(() => loadLubanPluginSecret(file), /0600/);
+  assert.throws(() => loadLubanPluginToken(file), /0600/);
 });
 
 test("启用手机入口后，待办通知告诉用户调用插件而不是只给内网链接", async () => {

@@ -29,7 +29,7 @@ import { humanBytes } from "./workspaceReclaim.ts";
 import { createTaskServer } from "./server.ts";
 import { FakeLubanServer, Notifier } from "./notifier.ts";
 import {
-  loadLubanPluginSecret,
+  loadLubanPluginToken,
   LubanApprovalGateway,
 } from "./lubanApproval.ts";
 import { FakeGitPlatform } from "./gitPlatform.ts";
@@ -396,18 +396,18 @@ async function main(): Promise<void> {
     }
     lubanHeaders[header.slice(0, at).trim()] = header.slice(at + 1).trim();
   }
-  // 手机审批是入站回调，与上面的出站通知令牌是两套身份。密钥只从
+  // 手机审批是入站回调，与上面的出站通知令牌是两套身份。Token 只从
   // 0600 文件读，不允许塞进命令行或 JSON 配置的明文字段。
-  const lubanPluginSecretFile = flag("--luban-plugin-secret-file");
-  let lubanPluginSecret: string | undefined;
-  if (lubanPluginSecretFile) {
+  const lubanPluginTokenFile = flag("--luban-plugin-token-file");
+  let lubanPluginToken: string | undefined;
+  if (lubanPluginTokenFile) {
     try {
-      lubanPluginSecret = loadLubanPluginSecret(
-        resolve(lubanPluginSecretFile));
+      lubanPluginToken = loadLubanPluginToken(
+        resolve(lubanPluginTokenFile));
       console.log("[serve] 小鲁班手机审批回调已启用: "
         + "/integrations/luban/plugin");
     } catch (error) {
-      console.error(`[serve] 小鲁班插件密钥无效，拒绝启动: ${String(error)}`);
+      console.error(`[serve] 小鲁班插件 Token 无效，拒绝启动: ${String(error)}`);
       process.exit(2);
     }
   }
@@ -545,7 +545,7 @@ async function main(): Promise<void> {
       endpoint: lubanEndpoint,
       headers: lubanHeaders,
       fake: lubanIsFake,
-      mobileApproval: !!lubanPluginSecret,
+      mobileApproval: !!lubanPluginToken,
       // 发起人的通知令牌:普通任务提醒是自己发给自己；主动邀请检视时，
       // 用责任人的令牌向所选 Committer 工号发送，不要求收件人配令牌。
       personalToken: (account) => auth.lubanToken(account),
@@ -569,9 +569,9 @@ async function main(): Promise<void> {
     console.log(`[serve] 恢复任务 ${recovered.restored} 个`
       + `(重新入队 ${recovered.requeued} 个)`);
   }
-  const lubanApproval = lubanPluginSecret
+  const lubanApproval = lubanPluginToken
     ? new LubanApprovalGateway(service, {
-        secret: lubanPluginSecret,
+        token: lubanPluginToken,
         accountEnabled: (account) => !!auth.sessionView(account),
         log: (message) => console.log(`  [luban-plugin] ${message}`),
       })

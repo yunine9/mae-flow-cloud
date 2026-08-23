@@ -281,12 +281,12 @@ Cloud 复用主服务端口，启用后监听：
 POST /integrations/luban/plugin
 ```
 
-先创建至少 32 字节的随机密钥并限制权限，再配置路径：
+先创建一个随机回调 Token 并限制权限，再配置路径：
 
 ```bash
 umask 077
-openssl rand -hex 32 > /etc/mae-flow-cloud/luban-plugin.secret
-# serve.json: "luban-plugin-secret-file": "/etc/mae-flow-cloud/luban-plugin.secret"
+openssl rand -hex 32 > /etc/mae-flow-cloud/luban-plugin.token
+# serve.json: "luban-plugin-token-file": "/etc/mae-flow-cloud/luban-plugin.token"
 ```
 
 小鲁班真实插件的回调形状、验签方式尚未拿到，因此部署桥负责把它转换成
@@ -296,16 +296,15 @@ Cloud 的稳定内部契约；如果插件本身可按该契约发出，也可�
 ```http
 POST /integrations/luban/plugin
 Content-Type: application/json
-X-MFC-Luban-Timestamp: <10位 Unix 秒>
-X-MFC-Luban-Signature: sha256=<HMAC-SHA256十六进制>
+X-MFC-Luban-Plugin-Token: <固定回调Token>
 
 {"message_id":"唯一消息ID","sender":"Mae-Flow账户名","content":"mae-flow 待审批"}
 ```
 
-签名原文是 `timestamp + "." + HTTP原始正文`。Cloud 要求时间偏差不超过
-5 分钟；签名、工号、正文长度任一不合法都 fail-closed；同 message_id
-重放复用原结果，不会重复提交决定。`sender` 必须是启用中的 Mae-Flow
-本地账号，不能由桥自行伪造映射。
+Token 不对、工号不存在或正文不合法就拒绝；同 message_id 重放复用原
+结果，不会重复提交决定。`sender` 必须是启用中的 Mae-Flow 本地账号。
+这个 Token 只是防止其他内网请求伪装成小鲁班回调，不是用户的个人发送
+Token，也不需要每个人配置。
 
 首版命令刻意保持很少：
 
@@ -323,9 +322,9 @@ mae-flow 退回 <审批码> <意见>
 真实插件若要求其他响应形状，由同一部署桥翻译。
 
 内网插件侧只需确认五件事：回调 URL 能从小鲁班服务器访问、真实工号字段、
-唯一消息 ID、原生验签方式、HTTP 响应如何显示给用户。若原生签名算法与
-Cloud 不同，桥先验原生签名，再用上面的内部密钥重新签名；不要跳过第一段
-验签。手机不需要访问 Cloud 内网页面。
+唯一消息 ID、插件能否携带固定 Header、HTTP 响应如何显示给用户。若插件
+本身已有可靠验签，桥先按原生方式验证，再加上这个固定内部 Token 转给
+Cloud。手机不需要访问 Cloud 内网页面。
 
 ## 推送前验证与流水线修复环(全绿是最终目标)
 
@@ -667,7 +666,7 @@ Agent 的上下文。同名 Skill 因此也可以分别用于不同仓。
   "platform": "<MR/流水线适配层地址>",
   "luban": "<通知端点>",
   "luban-header": ["Authorization: Bearer <密钥>"],
-  "luban-plugin-secret-file": "/etc/mae-flow-cloud/luban-plugin.secret",
+  "luban-plugin-token-file": "/etc/mae-flow-cloud/luban-plugin.token",
   "pg": "postgresql://...",
   "data": "/var/lib/mae-flow-cloud", "port": 8787,
   "poll-interval": 30, "poll-timeout": 1800,
@@ -687,7 +686,7 @@ Agent 的上下文。同名 Skill 因此也可以分别用于不同仓。
 | repo | 无(纯会话演练) | 内核模式的目标仓 |
 | platform / fake-platform | 无 | 交付平台地址 / 本地假件 |
 | luban / luban-header | 假小鲁班 | 通知端点与鉴权头(可重复) |
-| luban-plugin-secret-file | 无 | 启用手机纯文本审批；0600、至少 32 字节的入站回调 HMAC 密钥文件 |
+| luban-plugin-token-file | 无 | 启用手机纯文本审批；0600、至少 32 字节的固定回调 Token 文件 |
 | pg | 无 | 投影(纯旁路) |
 | data / port / web | .tasks / 8787 / web-dist | 现场目录、端口、前端 |
 | isolate-image | 无(内核模式必填) | 统一任务构建镜像 |

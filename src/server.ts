@@ -84,8 +84,7 @@ function readBody(request: import("node:http").IncomingMessage): Promise<any> {
   });
 }
 
-/** 插件签名覆盖原始字节，不能先 JSON.parse 再 stringify。顺手把回调
- * 正文卡在 16 KiB：这里只有工号和一条文本命令，大包没有正当用途。 */
+/** 回调正文卡在 16 KiB：这里只有工号和一条文本命令，大包没有用途。 */
 function readRawBody(
   request: import("node:http").IncomingMessage,
   limit = 16 * 1024,
@@ -165,7 +164,7 @@ export function createTaskServer(
       const viewer = options.auth?.sessionUser(sessionToken);
       if (viewer) service.observeLinkBase(requestBaseUrl(request));
 
-      // 小鲁班插件回调使用独立 HMAC 身份，不依赖浏览器 Cookie。插件
+      // 小鲁班插件回调使用独立固定 Token，不依赖浏览器 Cookie。插件
       // 只获得这一个纯文本入口，绝不能借它穿透成通用任务 API。
       if (parts[0] === "integrations" && parts[1] === "luban"
           && parts[2] === "plugin" && parts.length === 3) {
@@ -184,10 +183,11 @@ export function createTaskServer(
         }
         const first = (value: string | string[] | undefined) =>
           Array.isArray(value) ? value[0] : value;
+        const authorization = first(request.headers.authorization);
         const reply = await options.lubanApproval.handle({
           rawBody,
-          timestamp: first(request.headers["x-mfc-luban-timestamp"]),
-          signature: first(request.headers["x-mfc-luban-signature"]),
+          token: first(request.headers["x-mfc-luban-plugin-token"])
+            ?? authorization?.replace(/^Bearer\s+/i, ""),
         });
         return json(response, reply.status, {
           text: reply.text,
