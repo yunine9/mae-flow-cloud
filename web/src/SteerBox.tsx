@@ -62,7 +62,7 @@ export function SteerBox({
   onChanged?: () => void;
 }) {
   const [mode, setMode] = useState<CollaborationMode>(
-    task.status === "paused" ? "assistant" : "steer",
+    task.status === "running" ? "steer" : "assistant",
   );
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -77,6 +77,10 @@ export function SteerBox({
   const onChangedRef = useRef(onChanged);
 
   useEffect(() => { onChangedRef.current = onChanged; }, [onChanged]);
+
+  useEffect(() => {
+    setMode(task.status === "running" ? "steer" : "assistant");
+  }, [task.id]);
 
   // 补充说明的「已读取」是模型上下文实际消费事实，不是假回执。
   useEffect(() => {

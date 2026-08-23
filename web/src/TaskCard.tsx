@@ -654,10 +654,17 @@ export function ActionLedger({ taskId }: { taskId: string }) {
 
 /** 交付时间线:这单经历了什么(人话)。展开才查——原始事件流留给
  * EventTail,这里只呈现服务端归纳好的条目,前端不二次解读。 */
-export function TaskTimeline({ taskId }: { taskId: string }) {
+export function TaskTimeline({
+  taskId,
+  defaultOpen = false,
+}: {
+  taskId: string;
+  defaultOpen?: boolean;
+}) {
   const [entries, setEntries] = useState<TimelineEntry[]>();
   const [unavailable, setUnavailable] = useState("");
   const [loading, setLoading] = useState(false);
+  const [expanded, setExpanded] = useState(defaultOpen);
 
   async function load() {
     setLoading(true);
@@ -667,27 +674,37 @@ export function TaskTimeline({ taskId }: { taskId: string }) {
     setLoading(false);
   }
 
+  useEffect(() => {
+    setExpanded(defaultOpen);
+    setEntries(undefined);
+    setUnavailable("");
+    if (defaultOpen) void load();
+  }, [taskId, defaultOpen]);
+
   return (
-    <details
-      className="utility-panel"
-      onToggle={(toggle) => {
-        if ((toggle.target as HTMLDetailsElement).open) void load();
-      }}
-    >
-      <summary>
+    <section className={`utility-panel${expanded ? " is-open" : ""}`}>
+      <button type="button" className="utility-toggle"
+        aria-expanded={expanded}
+        onClick={() => {
+          const next = !expanded;
+          setExpanded(next);
+          if (next) void load();
+        }}>
         <span>
           <strong>耗时与卡点</strong>
           <small>时间去哪了 · 卡在谁身上</small>
         </span>
         <i aria-hidden />
-      </summary>
-      {loading && <div className="utility-note">正在读取现场…</div>}
-      {unavailable && <div className="utility-note">{unavailable}</div>}
-      {entries && entries.length === 0 && (
-        <div className="utility-note">现场还没有可归纳的记录。</div>
-      )}
-      {entries && entries.length > 0 && <CostBreakdown entries={entries} />}
-    </details>
+      </button>
+      {expanded && <>
+        {loading && <div className="utility-note">正在读取现场…</div>}
+        {unavailable && <div className="utility-note">{unavailable}</div>}
+        {entries && entries.length === 0 && (
+          <div className="utility-note">现场还没有可归纳的记录。</div>
+        )}
+        {entries && entries.length > 0 && <CostBreakdown entries={entries} />}
+      </>}
+    </section>
   );
 }
 
@@ -1068,13 +1085,19 @@ function EventTail({ taskId, active }: { taskId: string; active: boolean }) {
 
 /** 同一份事件账的两种读法：心流用于日常扫读，SSE 用于完整取证。
  * 两者不再平铺成重复面板；切到原始事件时才建立实时连接。 */
-export function ExecutionPanel({ task }: { task: TaskSummary }) {
-  const [expanded, setExpanded] = useState(false);
+export function ExecutionPanel({
+  task,
+  defaultOpen = false,
+}: {
+  task: TaskSummary;
+  defaultOpen?: boolean;
+}) {
+  const [expanded, setExpanded] = useState(defaultOpen);
   const [mode, setMode] = useState<"flow" | "events">("flow");
 
   useEffect(() => {
-    setExpanded(false);
-  }, [task.id]);
+    setExpanded(defaultOpen);
+  }, [task.id, defaultOpen]);
 
   useEffect(() => {
     setMode("flow");

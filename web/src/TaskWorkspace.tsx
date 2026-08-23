@@ -3,8 +3,8 @@
  *
  * 用户实测的摩擦:审批卡问"本地 Spec 确认",spec.md 却只在内核
  * 现场面板(另一套 UI 的 iframe)里能看——读材料要跳出决策上下文。
- * 这里把两半合成一屏:左证据(产物页签,我们自己的排版渲染)、
- * 右决策(审批卡原样搬来)、下面是耗时/台账/事件。
+ * 这里把两半合成一屏:主画布一次只承载材料、开发协作、执行现场或
+ * 分析检视中的一种；右侧只保留此刻必须处理的决定。
  *
  * 内核面板不再暴露给业务用户：它是内核为“人坐在终端旁”生成的
  * 单文件 HTML，工作台自己承接材料、决策与过程观察，避免形成两套入口。
@@ -54,6 +54,8 @@ import {
   WaitingCard,
 } from "./TaskCard";
 
+type WorkspaceView = "materials" | "collaboration" | "execution" | "insights";
+
 function sizeText(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
@@ -84,11 +86,8 @@ function workspaceProgress(task: TaskSummary): NonNullable<TaskSummary["progress
 }
 
 function assistantUnavailableReason(task: TaskSummary): string {
-  if (task.status === "waiting_for_human") {
-    return "正在等待人工决定；提交后进入可编辑阶段再开放";
-  }
-  if (task.status === "verifying" || task.status === "await_merge") {
-    return "正在交付验证；此时不允许旁路修改代码";
+  if (["waiting_for_human", "verifying"].includes(task.status)) {
+    return "先暂停主任务即可接管当前代码现场";
   }
   if (task.status === "completed") {
     return "任务已经结束；运行中的开发实现阶段可直接查代码、跑命令和修改";
@@ -96,7 +95,7 @@ function assistantUnavailableReason(task: TaskSummary): string {
   if (task.status === "canceled" || task.status === "failed") {
     return "任务已经停止；重跑并进入可编辑阶段后开放";
   }
-  return "任务启动并进入内核允许修改源码的阶段后开放";
+  return "代码现场就绪后即可使用";
 }
 
 export function TaskWorkspace({
@@ -146,11 +145,19 @@ export function TaskWorkspace({
   const [cancelArmed, setCancelArmed] = useState(false);
   const [chainSkillPicker, setChainSkillPicker] =
     useState<RepositorySkillPickerState>(EMPTY_REPOSITORY_SKILL_PICKER_STATE);
+  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>(
+    task.status === "paused" ? "collaboration" : "materials",
+  );
 
   useEffect(() => {
     setMaterialView("doc");
+    setWorkspaceView(task.status === "paused" ? "collaboration" : "materials");
     setChainSkillPicker(EMPTY_REPOSITORY_SKILL_PICKER_STATE);
   }, [task.id]);
+
+  useEffect(() => {
+    if (task.status === "paused") setWorkspaceView("collaboration");
+  }, [task.status]);
 
   useEffect(() => {
     if (!canRequestReview) return;
@@ -283,6 +290,7 @@ export function TaskWorkspace({
    * 改批注前人几乎总要再看一眼上下文,只报"第 23 行"等于让他自己找。
    * 等待有预算(2 秒封顶),找不到就算了——旁路不许把界面卡住。 */
   function locate(item: Annotation) {
+    setWorkspaceView("materials");
     if (item.artifact !== active) setActive(item.artifact);
     setMaterialView(items?.find((artifact) => artifact.name === item.artifact)
       ?.kind === "diff" ? "diff" : "doc");
@@ -312,8 +320,9 @@ export function TaskWorkspace({
       ? { kicker: "WORKTREE CHANGES", title: "工作区变更" }
       : { kicker: "WORK DOCUMENTS", title: "过程文档" };
   const waiting = task.status === "waiting_for_human" && task.waiting;
-  const collaborationVisible = !waiting && canOperate
-    && ["running", "pausing", "paused"].includes(task.status);
+  const collaborationVisible = canOperate && [
+    "running", "pausing", "paused", "waiting_for_human", "verifying",
+  ].includes(task.status);
   const chainReview = !!waiting
     && task.requirement_graph?.stage === "analysis"
     && (task.requirement_graph.repositories.length ?? 0) > 1
@@ -419,9 +428,28 @@ export function TaskWorkspace({
       </div>
       <PrepushStatus prepush={task.delivery?.prepush} placement="workspace" />
 
-      <div className={`ws-body${waiting ? " has-decision" : ""}`
-        + `${collaborationVisible ? " has-collaboration" : ""}`}>
+      <nav className="ws-workspace-nav" aria-label="任务工作台视图">
+        {([
+          ["materials", "交付材料", "文档、依赖与代码变更"],
+          ["collaboration", "开发协作", collaborationVisible
+            ? "补充主任务或主动接管" : assistantUnavailableReason(task)],
+          ["execution", "执行现场", task.focus?.headline ?? "心流与原始事件"],
+          ["insights", "分析与检视", notes.length
+            ? `${notes.length} 条批注与任务账目` : "批注、耗时与用量"],
+        ] as Array<[WorkspaceView, string, string]>).map(([view, label, hint]) => (
+          <button type="button" role="tab" key={view}
+            aria-selected={workspaceView === view}
+            className={workspaceView === view ? "active" : ""}
+            onClick={() => setWorkspaceView(view)}>
+            <strong>{label}</strong>
+            <small>{hint}</small>
+          </button>
+        ))}
+      </nav>
+
+      <div className={`ws-body${waiting ? " has-decision" : ""}`}>
         <section className="ws-evidence" aria-label="待检视材料">
+          {workspaceView === "materials" ? <>
           <div className="ws-pane-head">
             <div>
               <span>{materialHeading.kicker}</span>
@@ -490,13 +518,112 @@ export function TaskWorkspace({
               )}
             </>}
           </div>
+          </> : workspaceView === "collaboration" ? <>
+            <div className="ws-pane-head">
+              <div><span>DEVELOPER CONSOLE</span><strong>开发协作</strong></div>
+              <small>完整回复、命令结果与交还操作</small>
+            </div>
+            <div className="ws-primary-scroll ws-collaboration-view">
+              {collaborationVisible ? (
+                <SteerBox task={task} onChanged={() => {
+                  setLivePulse((value) => value + 1);
+                  onChanged();
+                }} />
+              ) : (
+                <section className="ws-view-empty" aria-label="开发助手状态">
+                  <span aria-hidden>›_</span>
+                  <strong>当前没有可接管的代码现场</strong>
+                  <p>{assistantUnavailableReason(task)}</p>
+                </section>
+              )}
+            </div>
+          </> : workspaceView === "execution" ? <>
+            <div className="ws-pane-head">
+              <div><span>LIVE EXECUTION</span><strong>执行现场</strong></div>
+              <small>日常看心流，需要取证时切原始 SSE</small>
+            </div>
+            <div className="ws-primary-scroll ws-execution-view">
+              <ExecutionPanel task={task} defaultOpen />
+            </div>
+          </> : <>
+            <div className="ws-pane-head">
+              <div><span>REVIEW & INSIGHTS</span><strong>分析与检视</strong></div>
+              <small>批注、Committer、耗时与模型用量</small>
+            </div>
+            <div className="ws-primary-scroll ws-insights-view">
+              <div className="ws-insights-grid">
+                <section className="ws-insight-column">
+                  <header><span>REVIEW</span><strong>检视协作</strong></header>
+                  {reviewAssignment && (
+                    <section className="review-assignment" aria-labelledby="review-assignment-title">
+                      <div className="review-assignment-mark" aria-hidden>审</div>
+                      <div>
+                        <span>COMMITTER REVIEW</span>
+                        <strong id="review-assignment-title">{reviewAssignment.requester} 邀请你检视</strong>
+                        <p>看完材料并留下必要批注后即可完成；这不会代替任务责任人提交决定。</p>
+                        {completeError && <small className="review-assignment-error">{completeError}</small>}
+                      </div>
+                      <button type="button" disabled={completeBusy} onClick={() => void finishReview()}>{completeBusy ? "正在完成…" : "完成检视"}</button>
+                    </section>
+                  )}
+                  {canRequestReview && (
+                    <section className="committer-review" aria-labelledby="committer-review-title">
+                      <div>
+                        <span>OPTIONAL REVIEW</span>
+                        <strong id="committer-review-title">邀请 Committer 检视</strong>
+                        <p>仅在你主动邀请后通知，不影响任务责任人的最终决定。</p>
+                      </div>
+                      {committers.length > 0 ? <div className="committer-review-action">
+                        <select aria-label="选择 Committer" value={reviewer} onChange={(event) => setReviewer(event.target.value)}>
+                          {committers.map((user) => <option key={user.username} value={user.username}>{user.username}</option>)}
+                        </select>
+                        <button type="button" disabled={!reviewer || reviewBusy} onClick={() => void inviteReview()}>{reviewBusy ? "发送中…" : "邀请检视"}</button>
+                      </div> : <div className="committer-empty">管理员尚未配置 Committer 名单</div>}
+                      {reviewResult && <small className="committer-result">{reviewResult}</small>}
+                      {taskReviews.length > 0 && <div className="committer-review-history">
+                        {taskReviews.slice(0, 3).map((review) => <span key={review.id}>
+                          <i className={review.status} aria-hidden />
+                          <strong>{review.committer}</strong>
+                          <small>{review.status === "completed" ? "已完成检视" : review.delivered ? "等待检视" : "通知未送达"}</small>
+                        </span>)}
+                      </div>}
+                    </section>
+                  )}
+                  <AnnotationPanel
+                    taskId={task.id}
+                    viewerUsername={viewerUsername}
+                    items={notes}
+                    checks={checks}
+                    reply={reply}
+                    canOperate={canOperate}
+                    running={task.status === "running"}
+                    onLocate={locate}
+                    onChanged={() => { setNotesPulse((tick) => tick + 1); onChanged(); }}
+                  />
+                  {!reviewAssignment && !canRequestReview && !notes.length && (
+                    <div className="ws-insight-empty">当前没有检视协作事项。</div>
+                  )}
+                </section>
+                <section className="ws-insight-column">
+                  <header><span>OPERATIONS</span><strong>耗时与资源</strong></header>
+                  <TaskTimeline taskId={task.id} defaultOpen />
+                  {task.token_usage ? (
+                    <div className="ws-usage-summary ws-usage-expanded" title="来自模型提供方的真实用量统计">
+                      <span>模型用量</span>
+                      <TokenUsage usage={task.token_usage} placement="history" />
+                    </div>
+                  ) : <div className="ws-insight-empty">模型提供方暂未返回 Token 用量。</div>}
+                </section>
+              </div>
+            </div>
+          </>}
         </section>
 
         <aside className={`ws-decision${chainReview ? " has-chain-skills" : ""}`}
-          aria-label="决策与账目">
+          aria-label="当前决策与关键操作">
           <div className="ws-pane-head ws-pane-head-side">
-            <div><span>NEXT ACTION</span><strong>{waiting ? "当前需要处理" : "任务现场"}</strong></div>
-            <small>{waiting ? "完成后流程继续" : "实时更新"}</small>
+            <div><span>NEXT ACTION</span><strong>{waiting ? "当前需要处理" : "当前无待办"}</strong></div>
+            <small>{waiting ? "完成后流程继续" : "无需处理"}</small>
           </div>
           {waiting && canOperate && (
             /* 批注挂在提交按钮正上方(WaitingCard 内部),不放卡片外面:
@@ -538,31 +665,14 @@ export function TaskWorkspace({
               <strong>当前没有待你决定的事项</strong>
               <p>
                 {task.status === "running"
-                  ? "模型正在推进这一步，材料会随进展刷新。"
-                  : "左侧是这一单已产出的全部材料。"}
+                  ? "模型正在推进；需要时可切到执行现场查看。"
+                  : "材料、协作和运行记录都在左侧主视图。"}
               </p>
               {canOperate && (task.status === "failed"
                 || task.status === "completed" || repairStopped(task)) && (
                 <RetryButton taskId={task.id} onDone={onChanged} />
               )}
             </div>
-          )}
-          {/* 主任务运行时可以顺手补充；运行/暂停交界处还可以启动旁路
-              开发助手。助手必须先等主任务安全暂停，二者不会并发写仓。 */}
-          {collaborationVisible && (
-            <SteerBox task={task} onChanged={() => {
-              setLivePulse((value) => value + 1);
-              onChanged();
-            }} />
-          )}
-          {canOperate && !collaborationVisible && (
-            <section className="assistant-discovery" aria-label="开发助手状态">
-              <span className="assistant-discovery-mark" aria-hidden>›_</span>
-              <div>
-                <span><strong>开发助手</strong><em>当前不可用</em></span>
-                <small>{assistantUnavailableReason(task)}</small>
-              </div>
-            </section>
           )}
           {controlError && <div className="task-control-error">{controlError}</div>}
           {task.status === "canceled" && (
@@ -571,69 +681,12 @@ export function TaskWorkspace({
               <span>执行已停止；此前产生的文档、代码和过程记录仍可查看。</span>
             </div>
           )}
-          {reviewAssignment && (
-            <section className="review-assignment" aria-labelledby="review-assignment-title">
-              <div className="review-assignment-mark" aria-hidden>审</div>
-              <div>
-                <span>COMMITTER REVIEW</span>
-                <strong id="review-assignment-title">{reviewAssignment.requester} 邀请你检视</strong>
-                <p>看完材料并留下必要批注后即可完成；这不会代替任务责任人提交决定。</p>
-                {completeError && <small className="review-assignment-error">{completeError}</small>}
-              </div>
-              <button type="button" disabled={completeBusy} onClick={() => void finishReview()}>{completeBusy ? "正在完成…" : "完成检视"}</button>
-            </section>
-          )}
-          {canRequestReview && (
-            <section className="committer-review" aria-labelledby="committer-review-title">
-              <div>
-                <span>OPTIONAL REVIEW</span>
-                <strong id="committer-review-title">邀请 Committer 检视</strong>
-                <p>不会自动通知。只有你主动点击后，所选 Committer 才会收到本任务的检视入口。</p>
-              </div>
-              {committers.length > 0 ? <div className="committer-review-action">
-                <select aria-label="选择 Committer" value={reviewer} onChange={(event) => setReviewer(event.target.value)}>
-                  {committers.map((user) => <option key={user.username} value={user.username}>{user.username}</option>)}
-                </select>
-                <button type="button" disabled={!reviewer || reviewBusy} onClick={() => void inviteReview()}>{reviewBusy ? "发送中…" : "邀请检视"}</button>
-              </div> : <div className="committer-empty">管理员尚未配置 Committer 名单</div>}
-              {reviewResult && <small className="committer-result">{reviewResult}</small>}
-              {taskReviews.length > 0 && <div className="committer-review-history">
-                {taskReviews.slice(0, 3).map((review) => <span key={review.id}>
-                  <i className={review.status} aria-hidden />
-                  <strong>{review.committer}</strong>
-                  <small>{review.status === "completed" ? "已完成检视" : review.delivered ? "等待检视" : "通知未送达"}</small>
-                </span>)}
-              </div>}
-            </section>
-          )}
           {task.status === "failed" && task.detail && (
             <div className="alert">
               <strong>任务执行失败</strong>
               <span>{task.detail}</span>
             </div>
           )}
-          <AnnotationPanel
-            taskId={task.id}
-            viewerUsername={viewerUsername}
-            items={notes}
-            checks={checks}
-            reply={reply}
-            canOperate={canOperate}
-            running={task.status === "running"}
-            onLocate={locate}
-            onChanged={() => { setNotesPulse((tick) => tick + 1); onChanged(); }}
-          />
-          <div className="task-utilities">
-            <TaskTimeline taskId={task.id} />
-            <ExecutionPanel task={task} />
-            {task.token_usage && (
-              <div className="ws-usage-summary" title="来自模型提供方的真实用量统计">
-                <span>模型用量</span>
-                <TokenUsage usage={task.token_usage} placement="history" />
-              </div>
-            )}
-            {/* 外部动作台账不再上页面,理由同 TaskCard;接口仍在。 */}
-          </div>
         </aside>
       </div>
     </section>

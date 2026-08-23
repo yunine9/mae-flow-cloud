@@ -477,6 +477,54 @@
 .assistant-return:hover:not(:disabled) { background: var(--surface-soft); }
 .assistant-return:disabled { opacity: .5; cursor: default; }
 
+/* 工作台把开发协作提升为主画布之后，不再沿用窄侧栏的字号和高度。
+   组件本身仍可在任务卡里紧凑展示，这些规则只作用于完整协作视图。 */
+.ws-collaboration-view .steer {
+  margin-top: 0;
+  padding: 22px 24px 26px;
+  gap: 13px;
+  border-radius: 15px;
+  box-shadow: var(--shadow-sm);
+}
+.ws-collaboration-view .steer-head > div { gap: 4px; }
+.ws-collaboration-view .steer-head > div strong { font-size: 17px; }
+.ws-collaboration-view .steer-head > div span { font-size: 11.5px; }
+.ws-collaboration-view .steer-head > em { padding: 5px 10px; font-size: 10px; }
+.ws-collaboration-view .collaboration-tabs { gap: 7px; padding: 5px; }
+.ws-collaboration-view .collaboration-tabs button { min-height: 52px; padding: 9px 12px; }
+.ws-collaboration-view .collaboration-tabs strong { font-size: 12.5px; }
+.ws-collaboration-view .collaboration-tabs small { font-size: 10.5px; }
+.ws-collaboration-view .steer-copy { font-size: 12px; }
+.ws-collaboration-view .steer-input { min-height: 108px; font-size: 13.5px; }
+.ws-collaboration-view .assistant-state,
+.ws-collaboration-view .assistant-handoff { padding: 11px 13px; }
+.ws-collaboration-view .assistant-state strong,
+.ws-collaboration-view .assistant-handoff strong { font-size: 12px; }
+.ws-collaboration-view .assistant-state > span,
+.ws-collaboration-view .assistant-handoff p { font-size: 10.5px; }
+.ws-collaboration-view .assistant-conversation {
+  max-height: min(480px, 52vh);
+  padding: 7px;
+  gap: 9px;
+}
+.ws-collaboration-view .assistant-conversation article {
+  width: min(82%, 720px);
+  padding: 12px 14px;
+  border-radius: 11px;
+}
+.ws-collaboration-view .assistant-conversation article strong { font-size: 10.5px; }
+.ws-collaboration-view .assistant-conversation article p { font-size: 12.5px; line-height: 1.72; }
+.ws-collaboration-view .assistant-tools {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  padding: 11px;
+}
+.ws-collaboration-view .assistant-tools > header { grid-column: 1 / -1; padding-bottom: 5px; }
+.ws-collaboration-view .assistant-tools summary { min-height: 40px; padding: 8px 10px; }
+.ws-collaboration-view .assistant-tools pre { max-height: 260px; font-size: 10.5px; }
+.ws-collaboration-view .steer-send,
+.ws-collaboration-view .assistant-return { min-height: 38px; padding-left: 16px; padding-right: 16px; }
+
 @media (max-width: 600px) {
   .steer { padding: 13px; }
   .steer-head { align-items: flex-start; }
@@ -484,6 +532,9 @@
   .assistant-state { align-items: flex-start; flex-direction: column; gap: 3px; }
   .assistant-state > span { max-width: none; text-align: left; }
   .assistant-tools > header { flex-direction: column; gap: 2px; }
+  .ws-collaboration-view .assistant-tools { grid-template-columns: 1fr; }
+  .ws-collaboration-view .assistant-tools > header { grid-column: auto; }
+  .ws-collaboration-view .assistant-conversation article { width: 96%; }
   .assistant-actions { align-items: stretch; flex-direction: column; }
   .assistant-buttons { justify-content: flex-end; }
 }
