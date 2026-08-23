@@ -314,7 +314,7 @@ export class LubanApprovalGateway {
     match = command.match(/^退回\s+([A-Za-z0-9_-]+)(?:\s+([\s\S]+))?$/i);
     if (match) {
       if (!match[2]?.trim()) {
-        return { status: 400, text: "退回必须写明意见，例如：mae 退回 A7K9 请补充异常场景" };
+        return { status: 400, text: "退回必须写明意见，例如：mae-flow 退回 A7K9 请补充异常场景" };
       }
       return await this.chooseByMeaning(
         envelope.sender, match[1], false, match[2].trim());
@@ -325,11 +325,11 @@ export class LubanApprovalGateway {
   private renderHelp(): string {
     return [
       "Mae-Flow 手机审批指令：",
-      "mae 待审批",
-      "mae 详情 <审批码>",
-      "mae 选择 <审批码> <选项序号>",
-      "mae 通过 <审批码>",
-      "mae 退回 <审批码> <意见>",
+      "mae-flow 待审批",
+      "mae-flow 详情 <审批码>",
+      "mae-flow 选择 <审批码> <选项序号>",
+      "mae-flow 通过 <审批码>",
+      "mae-flow 退回 <审批码> <意见>",
     ].join("\n");
   }
 
@@ -345,7 +345,7 @@ export class LubanApprovalGateway {
       lines.push(`阶段：${oneLine(waiting.step || "当前步骤", 50)}`);
       lines.push(`事项：${oneLine(questions[0]?.question ?? "需要你确认", 110)}`);
       if (questions.length > 1) lines.push(`提示：包含 ${questions.length} 个问题，请在电脑端处理`);
-      lines.push(`查看：mae 详情 ${this.approvalCode(task)}`);
+      lines.push(`查看：mae-flow 详情 ${this.approvalCode(task)}`);
     });
     if (pending.length > shown.length) {
       lines.push("", `另有 ${pending.length - shown.length} 项，请处理后再次查询。`);
@@ -377,10 +377,10 @@ export class LubanApprovalGateway {
     if (questions.length > 1) {
       lines.push("", "这是一张多题澄清卡。为避免错配答案，首版手机入口不提交多题决定，请在电脑端处理。" );
     } else if (questions[0].options.length) {
-      lines.push("", `提交：mae 选择 ${this.approvalCode(task)} <序号>`);
-      lines.push(`退回：mae 退回 ${this.approvalCode(task)} <意见>`);
+      lines.push("", `提交：mae-flow 选择 ${this.approvalCode(task)} <序号>`);
+      lines.push(`退回：mae-flow 退回 ${this.approvalCode(task)} <意见>`);
     } else {
-      lines.push("", `回复：mae 回复 ${this.approvalCode(task)} <答复>`);
+      lines.push("", `回复：mae-flow 回复 ${this.approvalCode(task)} <答复>`);
     }
     return { status: 200, text: capReply(lines.join("\n")) };
   }
@@ -399,7 +399,7 @@ export class LubanApprovalGateway {
     }
     const option = questions[0].options[optionNumber - 1];
     if (!option) {
-      return { status: 400, text: `选项序号无效，请发送：mae 详情 ${this.approvalCode(task)}` };
+      return { status: 400, text: `选项序号无效，请发送：mae-flow 详情 ${this.approvalCode(task)}` };
     }
     return await this.submit(task, option, notes);
   }
@@ -413,7 +413,7 @@ export class LubanApprovalGateway {
     if (!task) return this.stale();
     const questions = questionsOf(task.waiting!);
     if (questions.length !== 1 || questions[0].options.length) {
-      return { status: 400, text: `该事项应按选项提交，请发送：mae 详情 ${this.approvalCode(task)}` };
+      return { status: 400, text: `该事项应按选项提交，请发送：mae-flow 详情 ${this.approvalCode(task)}` };
     }
     if (!answer) return { status: 400, text: "答复不能为空" };
     return await this.submit(task, answer);
@@ -440,7 +440,7 @@ export class LubanApprovalGateway {
       : negativePattern.test(option));
     if (matches.length !== 1) {
       return { status: 400, text: "无法安全判断你指的是哪个选项，请发送："
-        + `mae 详情 ${this.approvalCode(task)}，再用“mae 选择 审批码 序号”。` };
+        + `mae-flow 详情 ${this.approvalCode(task)}，再用“mae-flow 选择 审批码 序号”。` };
     }
     return await this.submit(task, matches[0], notes);
   }
@@ -473,7 +473,7 @@ export class LubanApprovalGateway {
   private stale(): LubanPluginReply {
     return {
       status: 409,
-      text: "审批事项已更新或审批码已过期，请重新发送：mae 待审批",
+      text: "审批事项已更新或审批码已过期，请重新发送：mae-flow 待审批",
     };
   }
 }

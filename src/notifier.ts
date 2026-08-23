@@ -104,7 +104,7 @@ export class Notifier {
         `【Mae-Flow】任务 ${input.taskId} 等你决定` +
         `(${input.step || "当前步骤"}):${input.summary}` +
         (this.options.mobileApproval
-          ? "\n手机处理：调用 Mae-Flow 插件并输入“mae 待审批”"
+          ? "\n手机处理：调用 Mae-Flow 插件并输入“mae-flow 待审批”"
           : ""),
       attempts: 0,
       delivered: false,

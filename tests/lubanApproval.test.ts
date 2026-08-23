@@ -115,7 +115,7 @@ test("手机审批只列本人待办，详情使用绑定当前版本的短审�
   ]);
   const entry = gateway(service);
   const listed = await callback(entry, {
-    message_id: "m-1", sender: "alice", content: "mae 待审批",
+    message_id: "m-1", sender: "alice", content: "mae-flow 待审批",
   });
   assert.equal(listed.status, 200);
   assert.match(listed.text, /支付接口修复/);
@@ -123,16 +123,16 @@ test("手机审批只列本人待办，详情使用绑定当前版本的短审�
 
   const code = codeOf(listed.text);
   const detail = await callback(entry, {
-    message_id: "m-2", sender: "alice", content: `mae 详情 ${code}`,
+    message_id: "m-2", sender: "alice", content: `mae-flow 详情 ${code}`,
   });
   assert.equal(detail.status, 200);
   assert.match(detail.text, /编译与 UT 已通过/);
   assert.match(detail.text, /1\. 通过/);
-  assert.match(detail.text, new RegExp(`mae 选择 ${code}`));
+  assert.match(detail.text, new RegExp(`mae-flow 选择 ${code}`));
 
   service.tasks[0].waiting!.state_version += 1;
   const stale = await callback(entry, {
-    message_id: "m-3", sender: "alice", content: `mae 详情 ${code}`,
+    message_id: "m-3", sender: "alice", content: `mae-flow 详情 ${code}`,
   });
   assert.equal(stale.status, 409);
   assert.match(stale.text, /已更新|已过期/);
@@ -142,10 +142,10 @@ test("选择与退回始终提交选项原文；同 message_id 并发/重放不�
   const service = new FakeApprovalService([task("task-1", "alice", "支付修复")]);
   const entry = gateway(service);
   const listed = await callback(entry, {
-    message_id: "list", sender: "alice", content: "mae 待审批",
+    message_id: "list", sender: "alice", content: "mae-flow 待审批",
   });
   const code = codeOf(listed.text);
-  const body = { message_id: "approve-1", sender: "alice", content: `mae 通过 ${code}` };
+  const body = { message_id: "approve-1", sender: "alice", content: `mae-flow 通过 ${code}` };
   const [first, repeated] = await Promise.all([
     callback(entry, body), callback(entry, body),
   ]);
@@ -159,15 +159,15 @@ test("选择与退回始终提交选项原文；同 message_id 并发/重放不�
   const rejectService = new FakeApprovalService([task("task-3", "alice", "异常补充")]);
   const rejectEntry = gateway(rejectService);
   const rejectCode = codeOf((await callback(rejectEntry, {
-    message_id: "list-2", sender: "alice", content: "mae 待审批",
+    message_id: "list-2", sender: "alice", content: "mae-flow 待审批",
   })).text);
   const noReason = await callback(rejectEntry, {
-    message_id: "reject-empty", sender: "alice", content: `mae 退回 ${rejectCode}`,
+    message_id: "reject-empty", sender: "alice", content: `mae-flow 退回 ${rejectCode}`,
   });
   assert.equal(noReason.status, 400);
   const rejected = await callback(rejectEntry, {
     message_id: "reject", sender: "alice",
-    content: `mae 退回 ${rejectCode} 请补充异常场景`,
+    content: `mae-flow 退回 ${rejectCode} 请补充异常场景`,
   });
   assert.equal(rejected.status, 200);
   assert.equal(rejectService.calls[0].decision, "打回");
@@ -178,12 +178,12 @@ test("验签、时间窗、账号与消息 ID 冲突均 fail-closed", async () =
   const service = new FakeApprovalService([task("task-1", "alice", "支付修复")]);
   const entry = gateway(service);
   const bad = await callback(entry, {
-    message_id: "bad", sender: "alice", content: "mae 待审批",
+    message_id: "bad", sender: "alice", content: "mae-flow 待审批",
   }, "sha256=" + "0".repeat(64));
   assert.equal(bad.status, 401);
 
   const rawBody = JSON.stringify({
-    message_id: "old", sender: "alice", content: "mae 待审批",
+    message_id: "old", sender: "alice", content: "mae-flow 待审批",
   });
   const oldTimestamp = String((NOW - 600_000) / 1_000);
   const old = await entry.handle({
@@ -193,12 +193,12 @@ test("验签、时间窗、账号与消息 ID 冲突均 fail-closed", async () =
   assert.equal(old.status, 401);
 
   const disabled = await callback(entry, {
-    message_id: "disabled", sender: "mallory", content: "mae 待审批",
+    message_id: "disabled", sender: "mallory", content: "mae-flow 待审批",
   });
   assert.equal(disabled.status, 403);
 
   const first = await callback(entry, {
-    message_id: "same", sender: "alice", content: "mae 待审批",
+    message_id: "same", sender: "alice", content: "mae-flow 待审批",
   });
   assert.equal(first.status, 200);
   const collision = await callback(entry, {
@@ -217,10 +217,10 @@ test("多题澄清只读不提交，避免纯文本答案错配", async () => {
   )]);
   const entry = gateway(service);
   const code = codeOf((await callback(entry, {
-    message_id: "many-list", sender: "alice", content: "mae 待审批",
+    message_id: "many-list", sender: "alice", content: "mae-flow 待审批",
   })).text);
   const attempt = await callback(entry, {
-    message_id: "many-choose", sender: "alice", content: `mae 选择 ${code} 1`,
+    message_id: "many-choose", sender: "alice", content: `mae-flow 选择 ${code} 1`,
   });
   assert.equal(attempt.status, 400);
   assert.match(attempt.text, /电脑端/);
@@ -236,10 +236,10 @@ test("通过快捷命令绝不把“不通过”当成正向选项", async () =>
   )]);
   const entry = gateway(service);
   const code = codeOf((await callback(entry, {
-    message_id: "negative-list", sender: "alice", content: "mae 待审批",
+    message_id: "negative-list", sender: "alice", content: "mae-flow 待审批",
   })).text);
   const result = await callback(entry, {
-    message_id: "negative-pass", sender: "alice", content: `mae 通过 ${code}`,
+    message_id: "negative-pass", sender: "alice", content: `mae-flow 通过 ${code}`,
   });
   assert.equal(result.status, 400);
   assert.match(result.text, /无法安全判断/);
@@ -258,7 +258,7 @@ test("HTTP 回调复用主服务端口且不需要浏览器 Cookie", async () =>
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   try {
     const rawBody = JSON.stringify({
-      message_id: "http-1", sender: "alice", content: "mae 待审批",
+      message_id: "http-1", sender: "alice", content: "mae-flow 待审批",
     });
     const response = await fetch(`${base}/integrations/luban/plugin`, {
       method: "POST",
@@ -304,5 +304,5 @@ test("启用手机入口后，待办通知告诉用户调用插件而不是只�
     step: "build_review", summary: "Diff 通过吗？",
     link: "http://intranet/work/task-1",
   });
-  assert.match(record.text, /mae 待审批/);
+  assert.match(record.text, /mae-flow 待审批/);
 });

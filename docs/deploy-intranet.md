@@ -299,7 +299,7 @@ Content-Type: application/json
 X-MFC-Luban-Timestamp: <10位 Unix 秒>
 X-MFC-Luban-Signature: sha256=<HMAC-SHA256十六进制>
 
-{"message_id":"唯一消息ID","sender":"Mae-Flow账户名","content":"mae 待审批"}
+{"message_id":"唯一消息ID","sender":"Mae-Flow账户名","content":"mae-flow 待审批"}
 ```
 
 签名原文是 `timestamp + "." + HTTP原始正文`。Cloud 要求时间偏差不超过
@@ -310,11 +310,11 @@ X-MFC-Luban-Signature: sha256=<HMAC-SHA256十六进制>
 首版命令刻意保持很少：
 
 ```text
-mae 待审批
-mae 详情 <审批码>
-mae 选择 <审批码> <选项序号>
-mae 通过 <审批码>
-mae 退回 <审批码> <意见>
+mae-flow 待审批
+mae-flow 详情 <审批码>
+mae-flow 选择 <审批码> <选项序号>
+mae-flow 通过 <审批码>
+mae-flow 退回 <审批码> <意见>
 ```
 
 审批码绑定账号、task、waiting_id 与 state_version，卡片变化后旧码立即
