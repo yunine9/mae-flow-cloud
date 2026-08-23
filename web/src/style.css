@@ -3931,7 +3931,8 @@ pre {
 .ws-workspace-nav {
   min-height: 58px;
   padding: 7px 22px;
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(158px, 1fr));
   align-items: stretch;
   gap: 6px;
   flex: none;
@@ -3941,7 +3942,8 @@ pre {
   scrollbar-width: thin;
 }
 .ws-workspace-nav button {
-  min-width: 158px;
+  --workspace-tab-color: var(--accent);
+  min-width: 0;
   padding: 7px 11px 8px;
   display: grid;
   align-content: center;
@@ -3949,12 +3951,16 @@ pre {
   position: relative;
   color: var(--muted);
   text-align: left;
-  border: 1px solid transparent;
+  border: 1px solid color-mix(in srgb, var(--workspace-tab-color) 17%, var(--line));
   border-radius: 9px;
-  background: transparent;
+  background: color-mix(in srgb, var(--workspace-tab-color) 5%, var(--surface));
   cursor: pointer;
   transition: color var(--ease), border-color var(--ease), background var(--ease), box-shadow var(--ease);
 }
+.ws-workspace-nav button:nth-child(1) { --workspace-tab-color: #7566df; }
+.ws-workspace-nav button:nth-child(2) { --workspace-tab-color: #d28a31; }
+.ws-workspace-nav button:nth-child(3) { --workspace-tab-color: #20a28f; }
+.ws-workspace-nav button:nth-child(4) { --workspace-tab-color: #3b83d5; }
 .ws-workspace-nav button::after {
   content: "";
   height: 2px;
@@ -3967,20 +3973,20 @@ pre {
 }
 .ws-workspace-nav button:hover {
   color: var(--text);
-  border-color: var(--line);
-  background: var(--surface-soft);
+  border-color: color-mix(in srgb, var(--workspace-tab-color) 34%, var(--line));
+  background: color-mix(in srgb, var(--workspace-tab-color) 9%, var(--surface));
 }
 .ws-workspace-nav button.active {
   color: var(--text-strong);
-  border-color: color-mix(in srgb, var(--accent) 25%, var(--line));
-  background: var(--surface);
+  border-color: color-mix(in srgb, var(--workspace-tab-color) 48%, var(--line));
+  background: color-mix(in srgb, var(--workspace-tab-color) 13%, var(--surface));
   box-shadow: var(--shadow-xs);
 }
 .ws-workspace-nav button.attention:not(.active) {
   border-color: color-mix(in srgb, var(--attention) 32%, var(--line));
   background: color-mix(in srgb, var(--attention-soft) 36%, transparent);
 }
-.ws-workspace-nav button.active::after { background: var(--accent); }
+.ws-workspace-nav button.active::after { background: var(--workspace-tab-color); }
 .ws-workspace-nav strong {
   min-width: 0;
   display: flex;
@@ -3996,10 +4002,10 @@ pre {
   display: inline-grid;
   place-items: center;
   flex: none;
-  color: var(--accent);
-  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line));
+  color: var(--workspace-tab-color);
+  border: 1px solid color-mix(in srgb, var(--workspace-tab-color) 24%, var(--line));
   border-radius: 999px;
-  background: var(--accent-soft);
+  background: color-mix(in srgb, var(--workspace-tab-color) 10%, var(--surface));
   font-size: 8.5px;
   font-style: normal;
   font-weight: 760;
@@ -5085,7 +5091,7 @@ pre {
   .ws-progress .task-progress-caption-context > span:nth-child(n + 2) { display: none; }
   .prepush-workspace { padding: 8px 14px; }
   .ws-workspace-nav { padding-left: 12px; padding-right: 12px; }
-  .ws-workspace-nav button { min-width: 146px; }
+  .ws-workspace-nav { grid-template-columns: repeat(4, minmax(146px, 1fr)); }
   .token-usage-workspace {
     padding: 9px 14px;
     grid-template-columns: minmax(145px, 1fr) auto minmax(125px, auto) minmax(125px, auto);
@@ -5121,7 +5127,8 @@ pre {
   .token-usage-direction { padding-top: 8px; border-top: 1px solid var(--line); }
   .ws-identity strong { font-size: 11px; }
   .ws-workspace-nav { min-height: 54px; padding-top: 6px; padding-bottom: 6px; }
-  .ws-workspace-nav button { min-width: 132px; padding-left: 9px; padding-right: 9px; }
+  .ws-workspace-nav { grid-template-columns: repeat(4, minmax(132px, 1fr)); }
+  .ws-workspace-nav button { padding-left: 9px; padding-right: 9px; }
   .ws-workspace-nav button::after { left: 9px; right: 9px; bottom: -7px; }
   .ws-workspace-nav strong { font-size: 11px; }
   .ws-workspace-nav small { font-size: 8.5px; }
