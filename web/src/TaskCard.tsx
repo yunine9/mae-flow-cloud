@@ -17,12 +17,20 @@ import {
   type ActivityView,
   type ExternalAction,
   type SemanticEvent,
+  type SseConnectionState,
   type TaskSummary,
   type TimelineEntry,
 } from "./api";
 import { formatWait, URGENT_MINUTES, waitedMs } from "./taskTime";
 import { responsibleOf } from "./teamOps";
 import { atBottom, backlog } from "./follow";
+import {
+  eventFilterCounts,
+  eventWindow,
+  filterEvents,
+  isErrorEvent,
+  type EventFilter,
+} from "./eventView";
 import type { RepositorySkillSelection } from "./RepositorySkillPicker";
 import { PrepushStatus } from "./PrepushStatus";
 import {
@@ -899,11 +907,14 @@ function ActivityFlow({ task }: { task: TaskSummary }) {
 
   return (
     <div className="activity-panel-body">
-      {alerts.length > 0 && <div className="activity-current">
-        <strong>{view.now ?? "发现需要关注的执行信号"}</strong>
+      <div className="activity-current">
+        <span className="activity-current-label">此刻</span>
+        <strong>{view.now || (running ? "Agent 正在准备下一步" : "本轮执行已经收口")}</strong>
         {view.now && <span>{sinceText(view.now_since)}</span>}
-        <em className="activity-alert-badge">{alerts.length} 个信号</em>
-      </div>}
+        {alerts.length > 0 && (
+          <em className="activity-alert-badge">{alerts.length} 个信号</em>
+        )}
+      </div>
       {alerts.length > 0 && (
         <div className="activity-alerts">
           {alerts.map((alert, index) => (
@@ -950,27 +961,63 @@ function ActivityFlow({ task }: { task: TaskSummary }) {
 }
 
 function EventTail({ taskId, active }: { taskId: string; active: boolean }) {
+  const PAGE_SIZE = 120;
   const [events, setEvents] = useState<SemanticEvent[]>([]);
-  const follow = useStickyBottom<HTMLDivElement>(events.length);
+  const [connection, setConnection] = useState<SseConnectionState>("connecting");
+  const [filter, setFilter] = useState<EventFilter>("all");
+  const [visibleLimit, setVisibleLimit] = useState(PAGE_SIZE);
+  const filtered = filterEvents(events, filter);
+  const visible = eventWindow(filtered, visibleLimit);
+  const counts = eventFilterCounts(events);
+  const follow = useStickyBottom<HTMLDivElement>(filtered.length);
 
-  useEffect(() => setEvents([]), [taskId]);
+  useEffect(() => {
+    setEvents([]);
+    setConnection("connecting");
+    setFilter("all");
+    setVisibleLimit(PAGE_SIZE);
+  }, [taskId]);
+
+  useEffect(() => setVisibleLimit(PAGE_SIZE), [filter]);
 
   useEffect(() => {
     if (!active) return;
-    const stop = tailEvents(taskId, (event: SemanticEvent) => {
-      setEvents((previous) => previous.some((item) => (
-        item.eventId === event.eventId
-      )) ? previous : [...previous, event]);
-    });
+    const stop = tailEvents(
+      taskId,
+      (event: SemanticEvent) => {
+        setEvents((previous) => previous.some((item) => (
+          item.eventId === event.eventId
+        )) ? previous : [...previous, event]);
+      },
+      setConnection,
+    );
     return stop;
   }, [active, taskId]);
 
   return (
     <div className="event-panel-body">
-      <div className="event-live-state">
+      <div className={`event-live-state ${connection}`}>
         <i aria-hidden />
-        <span>实时接收中 · {events.length} 条
+        <span>{!active ? "实时连接已暂停"
+          : connection === "live" ? "实时接收中"
+            : connection === "reconnecting" ? "连接中断，正在自动重连"
+              : "正在连接任务现场"} · {events.length} 条
           {follow.paused ? " · 已暂停跟随" : ""}</span>
+      </div>
+      <div className="event-filters" role="group" aria-label="筛选原始事件">
+        {([
+          ["all", "全部"],
+          ["messages", "消息"],
+          ["tools", "工具"],
+          ["errors", "异常"],
+        ] as Array<[EventFilter, string]>).map(([value, label]) => (
+          <button type="button" key={value}
+            className={filter === value ? "active" : ""}
+            aria-pressed={filter === value}
+            onClick={() => setFilter(value)}>
+            {label}<span>{counts[value]}</span>
+          </button>
+        ))}
       </div>
       {follow.paused && (
         <div className="event-follow">
@@ -982,6 +1029,13 @@ function EventTail({ taskId, active }: { taskId: string; active: boolean }) {
            onScroll={follow.onScroll}
            /* aria-live 去掉了:一个每秒刷新的流对读屏软件是灾难,
               而且"暂停跟随"之后再朗读最新内容,与人的意图正好相反。 */>
+        {visible.hidden > 0 && (
+          <button type="button" className="event-load-earlier"
+            onClick={() => setVisibleLimit((current) => current + PAGE_SIZE)}>
+            查看更早的 {Math.min(PAGE_SIZE, visible.hidden)} 条
+            <small>仍有 {visible.hidden} 条未挂载</small>
+          </button>
+        )}
         {events.length === 0 && (
           <div className="event-empty">
             <span aria-hidden />
@@ -989,7 +1043,13 @@ function EventTail({ taskId, active }: { taskId: string; active: boolean }) {
             <small>新的执行动作会实时出现在这里。</small>
           </div>
         )}
-        {events.map((event) => (
+        {events.length > 0 && filtered.length === 0 && (
+          <div className="event-empty filtered">
+            <strong>这个筛选下没有事件</strong>
+            <small>原始事件没有丢失，可以切回“全部”继续查看。</small>
+          </div>
+        )}
+        {visible.items.map((event) => (
           <EventRecord event={event} key={event.eventId} />
         ))}
       </div>
@@ -1037,9 +1097,10 @@ export function ExecutionPanel({ task }: { task: TaskSummary }) {
           onClick={() => setMode("events")}>原始事件 · SSE</button>
       </div>
       <div className="execution-body">
-        {mode === "flow"
-          ? <ActivityFlow task={task} />
-          : <EventTail taskId={task.id} active={expanded} />}
+        <div hidden={mode !== "flow"}><ActivityFlow task={task} /></div>
+        <div hidden={mode !== "events"}>
+          <EventTail taskId={task.id} active={expanded && mode === "events"} />
+        </div>
       </div>
     </details>
   );
@@ -1068,9 +1129,7 @@ const EVENT_FIELD_LABEL: Record<string, string> = {
 };
 
 function eventTone(event: SemanticEvent): string {
-  if (event.payload.is_error === true || /error|failed/.test(event.kind)) {
-    return "danger";
-  }
+  if (isErrorEvent(event)) return "danger";
   if (event.kind === "tool_finished" || event.kind === "turn_finished") {
     return "success";
   }
@@ -1081,6 +1140,15 @@ function eventTone(event: SemanticEvent): string {
 
 function EventValue({ value }: { value: unknown }) {
   if (typeof value === "string") {
+    if (value.length > 480) {
+      return <details className="event-value-expand">
+        <summary>
+          <span>{value.slice(0, 180).trim()}…</span>
+          <small>展开完整内容 · {value.length} 字</small>
+        </summary>
+        <pre>{value}</pre>
+      </details>;
+    }
     return <span className="event-value-text">{value || "（空）"}</span>;
   }
   if (typeof value === "boolean") {
@@ -1089,11 +1157,14 @@ function EventValue({ value }: { value: unknown }) {
   if (value === null || value === undefined || typeof value === "number") {
     return <code className="event-value-atom">{String(value)}</code>;
   }
-  return (
-    <pre className="event-value-structured">
-      {JSON.stringify(value, null, 2)}
-    </pre>
-  );
+  const structured = JSON.stringify(value, null, 2);
+  return <details className="event-value-expand structured">
+    <summary>
+      <span>结构化内容</span>
+      <small>展开查看 · {structured.split("\n").length} 行</small>
+    </summary>
+    <pre className="event-value-structured">{structured}</pre>
+  </details>;
 }
 
 function EventRecord({ event }: { event: SemanticEvent }) {

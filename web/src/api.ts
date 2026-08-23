@@ -795,14 +795,21 @@ export async function listActions(
   return { actions: await response.json() };
 }
 
-/** SSE 事件流:重放 + 跟进,组件卸载时调用返回的清理函数。 */
+export type SseConnectionState = "connecting" | "live" | "reconnecting";
+
+/** SSE 事件流:重放 + 跟进,组件卸载时调用返回的清理函数。
+ * error 时不能主动 close：EventSource 自带断线重连，服务端重放再由
+ * eventId 去重；主动关闭会把一次内网抖动变成永久断流。 */
 export function tailEvents(
   taskId: string,
   onEvent: (event: SemanticEvent) => void,
+  onState?: (state: SseConnectionState) => void,
 ): () => void {
+  onState?.("connecting");
   const source = new EventSource(`/tasks/${taskId}/events`);
+  source.onopen = () => onState?.("live");
   source.onmessage = (message) => onEvent(JSON.parse(message.data));
-  source.onerror = () => source.close();
+  source.onerror = () => onState?.("reconnecting");
   return () => source.close();
 }
 
