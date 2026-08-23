@@ -1983,32 +1983,44 @@ svg {
   background: var(--surface);
   overflow: hidden;
 }
-.utility-panel summary {
+.utility-panel summary,
+.utility-toggle {
+  width: 100%;
   min-height: 56px;
   padding: 10px 13px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  color: inherit;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  font: inherit;
   cursor: pointer;
   list-style: none;
 }
 .utility-panel summary::-webkit-details-marker { display: none; }
 /* min-width:0 是关键:侧栏很窄时,不给它 flex 子项会被内容撑破,
    标题与副标题一起溢出到箭头底下。 */
-.utility-panel summary > span {
+.utility-panel summary > span,
+.utility-toggle > span {
   min-width: 0; display: flex; flex-direction: column;
 }
-.utility-panel summary strong { color: var(--text-strong); font-size: 11.5px; }
-.utility-panel summary small {
+.utility-panel summary strong,
+.utility-toggle strong { color: var(--text-strong); font-size: 11.5px; }
+.utility-panel summary small,
+.utility-toggle small {
   margin-top: 2px;
   color: var(--muted);
   font-size: 10px;
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
-.utility-panel summary > i { flex: none; }
-.utility-panel summary > i {
+.utility-panel summary > i,
+.utility-toggle > i { flex: none; }
+.utility-panel summary > i,
+.utility-toggle > i {
   width: 7px;
   height: 7px;
   border-right: 1.5px solid var(--muted);
@@ -2016,8 +2028,10 @@ svg {
   transform: rotate(45deg);
   transition: transform var(--ease);
 }
-.utility-panel[open] summary > i { transform: rotate(225deg); }
-.utility-panel[open] summary { border-bottom: 1px solid var(--line); }
+.utility-panel[open] summary > i,
+.utility-panel.is-open .utility-toggle > i { transform: rotate(225deg); }
+.utility-panel[open] summary,
+.utility-panel.is-open .utility-toggle { border-bottom: 1px solid var(--line); }
 .execution-tabs {
   padding: 8px 10px 0; display: flex; gap: 5px;
   background: var(--surface-soft);
@@ -3644,6 +3658,22 @@ pre {
 .ws-progress .task-phase > i { background: var(--surface); }
 .ws-progress .task-phase.current > i { border-color: var(--surface); }
 .ws-progress .task-phase-track { grid-template-columns: repeat(7, minmax(64px, 1fr)); }
+.ws-execution {
+  flex: none;
+  padding: 9px 24px 10px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--page) 76%, var(--surface));
+  box-shadow: var(--shadow-xs);
+}
+.ws-execution .execution-panel {
+  border-radius: 10px;
+  box-shadow: var(--shadow-xs);
+}
+.ws-execution .utility-toggle { min-height: 48px; padding: 8px 13px; }
+.ws-execution .utility-toggle strong { font-size: 12px; }
+.ws-execution .utility-toggle small { font-size: 10.5px; }
+.ws-execution .activity-segments { max-height: min(240px, 28vh); }
+.ws-execution .event-stream { max-height: min(300px, 34vh); }
 .ws-body {
   min-height: 0;
   grid-template-columns: minmax(0, 1fr) clamp(460px, 40vw, 620px);
@@ -4524,6 +4554,7 @@ pre {
   .ws-progress { padding: 9px 14px 11px; overflow-x: auto; }
   .ws-progress .task-progress { min-width: 620px; }
   .prepush-workspace { padding: 8px 14px; }
+  .ws-execution { padding: 8px 12px; }
   .ws-body, .ws-body:not(.has-decision) { display: flex; flex-direction: column; overflow-y: auto; }
   .ws-evidence {
     min-height: 62vh;
@@ -4532,8 +4563,9 @@ pre {
     border-right: 0;
     border-bottom: 1px solid var(--line);
   }
-  .ws-body.has-decision .ws-decision { order: -1; max-height: 72vh; flex: none; }
-  .ws-body.has-decision .ws-decision.has-chain-skills { max-height: none; }
+  /* 窄屏只有 ws-body 自己滚动。过去这里把决策栏限在 72vh、同时又
+     overflow:visible，结果长决策卡会直接盖到材料区上。 */
+  .ws-body.has-decision .ws-decision { order: -1; max-height: none; flex: none; }
   .ws-decision { overflow: visible; padding: 14px 12px 28px; }
   .ws-pane-head-side { margin: -14px -12px 2px; }
   .ws-doc { padding: 22px 18px 44px; }

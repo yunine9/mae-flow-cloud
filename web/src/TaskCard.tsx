@@ -1073,36 +1073,34 @@ export function ExecutionPanel({ task }: { task: TaskSummary }) {
   }, [task.id]);
 
   return (
-    <details
-      className="utility-panel execution-panel"
-      open={expanded}
-      onToggle={(toggle) => setExpanded(
-        (toggle.target as HTMLDetailsElement).open,
-      )}
-    >
-      <summary>
+    <section className={`utility-panel execution-panel${expanded ? " is-open" : ""}`}>
+      <button type="button" className="utility-toggle"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((current) => !current)}>
         <span>
           <strong>执行现场</strong>
           <small>{task.focus?.headline
             ?? "心流摘要与 SSE 原始事件共用同一份现场记录"}</small>
         </span>
         <i aria-hidden />
-      </summary>
-      <div className="execution-tabs" role="tablist" aria-label="执行现场视图">
-        <button type="button" role="tab" aria-selected={mode === "flow"}
-          className={mode === "flow" ? "active" : ""}
-          onClick={() => setMode("flow")}>执行心流</button>
-        <button type="button" role="tab" aria-selected={mode === "events"}
-          className={mode === "events" ? "active" : ""}
-          onClick={() => setMode("events")}>原始事件 · SSE</button>
-      </div>
-      <div className="execution-body">
-        <div hidden={mode !== "flow"}><ActivityFlow task={task} /></div>
-        <div hidden={mode !== "events"}>
-          <EventTail taskId={task.id} active={expanded && mode === "events"} />
+      </button>
+      {expanded && <>
+        <div className="execution-tabs" role="tablist" aria-label="执行现场视图">
+          <button type="button" role="tab" aria-selected={mode === "flow"}
+            className={mode === "flow" ? "active" : ""}
+            onClick={() => setMode("flow")}>执行心流</button>
+          <button type="button" role="tab" aria-selected={mode === "events"}
+            className={mode === "events" ? "active" : ""}
+            onClick={() => setMode("events")}>原始事件 · SSE</button>
         </div>
-      </div>
-    </details>
+        <div className="execution-body">
+          <div hidden={mode !== "flow"}><ActivityFlow task={task} /></div>
+          <div hidden={mode !== "events"}>
+            <EventTail taskId={task.id} active={mode === "events"} />
+          </div>
+        </div>
+      </>}
+    </section>
   );
 }
 

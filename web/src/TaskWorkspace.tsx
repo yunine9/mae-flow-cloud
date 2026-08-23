@@ -398,6 +398,10 @@ export function TaskWorkspace({
       )}
       <PrepushStatus prepush={task.delivery?.prepush} placement="workspace" />
 
+      <div className="ws-execution" aria-label="任务执行现场">
+        <ExecutionPanel task={task} />
+      </div>
+
       <div className={`ws-body${waiting ? " has-decision" : ""}`}>
         <section className="ws-evidence" aria-label="待检视材料">
           <div className="ws-pane-head">
@@ -590,7 +594,6 @@ export function TaskWorkspace({
             onChanged={() => { setNotesPulse((tick) => tick + 1); onChanged(); }}
           />
           <div className="task-utilities">
-            <ExecutionPanel task={task} />
             <TaskTimeline taskId={task.id} />
             {/* 外部动作台账不再上页面,理由同 TaskCard;接口仍在。 */}
           </div>
