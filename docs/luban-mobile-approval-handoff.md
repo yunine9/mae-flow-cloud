@@ -1,0 +1,217 @@
+# 小鲁班手机审批：内网对接交接单
+
+目标只有一个：用户不打开电脑，也能在小鲁班里完成 Mae-Flow 的**单题
+审批**。进度查询、任务控制、自由对话和多题澄清不在本次范围。
+
+## 1. Cloud 已经完成什么
+
+Mae-Flow Cloud 已经提供以下能力，内网不需要重做：
+
+- 复用 Cloud 主 HTTP 端口的回调路由：
+  `POST /integrations/luban/plugin`；
+- 纯文本指令：`mae-flow 待审批 / 详情 / 选择 / 通过 / 退回`；
+- 只列出并处理 `sender` 本人的任务；
+- 审批码绑定账号、task、`waiting_id` 和 `state_version`，事项变化后旧码
+  自动失效；
+- `message_id` 幂等，同一条小鲁班消息重试不会重复提交决定；
+- 最终复用现有 `TaskService.decide()`，没有第二套审批状态机；
+- 多题澄清只展示，不允许从手机提交，避免答案错配；
+- 启用手机审批后，原有待办通知会提示用户输入
+  `mae-flow 待审批`。
+
+因此，内网侧只负责**协议翻译、网络可达和消息展示**，不保存任务状态，
+也不调用 Mae-Flow 内核。
+
+## 2. 内网必须完成什么
+
+### 2.1 确认小鲁班插件协议
+
+请从小鲁班平台拿到并记录以下五项，不要靠猜：
+
+| 必须确认 | 用途 |
+| --- | --- |
+| 一份真实回调 JSON 样例 | 确定消息正文与字段层级 |
+| 用户工号字段 | 映射到 Mae-Flow 本地账号 |
+| 唯一消息/事件 ID | 映射为 `message_id`，保证重试幂等 |
+| 是否能配置固定 HTTP Header | 决定插件能否直连 Cloud |
+| HTTP 响应怎样显示给用户 | 决定同步返回还是另发一条小鲁班消息 |
+
+还需确认回调超时、重试次数、来源网段，以及平台是否提供原生验签。
+
+### 2.2 打通网络
+
+小鲁班**服务器**必须能访问 Cloud，不是手机直接访问 Cloud。注册地址应为
+稳定的内网域名或负载均衡地址，例如：
+
+```text
+https://mae-flow.example.intra/integrations/luban/plugin
+```
+
+禁止注册 `127.0.0.1`、个人电脑临时 IP 或只能从浏览器所在网段访问的地址。
+若 Cloud 前有反向代理，只放通该 `POST` 路径即可，不需要开放其他任务 API。
+
+### 2.3 配置固定回调 Token
+
+这个 Token 只证明请求来自受信的小鲁班插件或内网桥：它不是个人小鲁班
+发送 Token，也不需要每位用户配置。
+
+Cloud 服务器上创建一次：
+
+```bash
+umask 077
+openssl rand -hex 32 > /etc/mae-flow-cloud/luban-plugin.token
+chmod 600 /etc/mae-flow-cloud/luban-plugin.token
+```
+
+在 `serve.json` 增加：
+
+```json
+{
+  "luban-plugin-token-file": "/etc/mae-flow-cloud/luban-plugin.token"
+}
+```
+
+插件或内网桥调用 Cloud 时携带：
+
+```text
+X-MFC-Luban-Plugin-Token: <文件中的固定值>
+```
+
+也兼容标准头 `Authorization: Bearer <固定值>`。Token 不得写进仓库、日志、
+小鲁班消息正文或 URL 查询参数。
+
+## 3. 直连还是走桥
+
+### 方案 A：插件直连 Cloud
+
+只有小鲁班插件同时满足以下条件时使用：
+
+- 可自定义回调 URL；
+- 可发送固定 Header；
+- 请求能直接形成 Cloud 所需的三字段 JSON；
+- 能把 Cloud 的 `{"text":"..."}` 响应显示给用户。
+
+Cloud 的稳定请求契约为：
+
+```http
+POST /integrations/luban/plugin
+Content-Type: application/json
+X-MFC-Luban-Plugin-Token: <固定Token>
+
+{
+  "message_id": "小鲁班唯一事件ID",
+  "sender": "Mae-Flow账户名",
+  "content": "mae-flow 待审批"
+}
+```
+
+### 方案 B：扩展现有 `luban-bridge.py`（更可能）
+
+小鲁班真实字段不一致、不能加 Header，或者响应格式不同，就让现有通知桥
+增加一个入站路由。桥只做以下翻译：
+
+```text
+小鲁班原生回调
+  → 验证小鲁班原生身份（如果平台提供）
+  → 提取稳定事件 ID、真实工号、用户输入
+  → 去掉 @机器人等平台前缀
+  → 组装 {message_id, sender, content}
+  → 加 X-MFC-Luban-Plugin-Token
+  → POST 到 Cloud
+  → 把 Cloud 返回的 text 转成小鲁班要求的响应形状
+```
+
+桥不缓存待办、不判断选项、不生成审批码、不调用内核。若小鲁班回调不支持
+同步展示响应，桥再调用现有小鲁班发送接口，把 Cloud 返回的 `text` 发给
+原 `sender`；审批语义仍只在 Cloud。
+
+## 4. 字段映射要求
+
+| Cloud 字段 | 内网映射要求 |
+| --- | --- |
+| `message_id` | 必须来自小鲁班稳定事件 ID；平台重试时保持不变。没有原生 ID 时，桥对不变的原始事件内容计算稳定哈希，不能每次随机生成 |
+| `sender` | 必须是可信回调里的真实工号，并与 Mae-Flow 登录账号完全一致；不要相信用户在消息正文里自报的工号 |
+| `content` | 用户主动调用插件时输入的原文；桥可去除 @机器人/插件固定前缀，但不要改审批码、选项序号或意见正文 |
+
+若小鲁班工号形状与 Mae-Flow 账号不同，应由管理员提供一份明确、唯一的
+映射；映射不到或一对多时拒绝请求，不能猜。
+
+## 5. Cloud 响应与状态码
+
+响应正文固定为 JSON：
+
+```json
+{"text":"要展示给用户的纯文本"}
+```
+
+| HTTP 状态 | 含义 | 内网处理 |
+| --- | --- | --- |
+| 200 | 查询成功或决定已提交 | 原样展示 `text` |
+| 400 | 指令/选项格式不对 | 原样展示 `text`，不要自动重试 |
+| 401 | 固定 Token 不对 | 记桥日志并报警，不向用户泄露 Token |
+| 403 | 工号没有启用中的 Mae-Flow 账号 | 提示联系管理员 |
+| 409 | 审批码过期、事项变化或 message_id 冲突 | 展示 `text`，让用户重新执行 `mae-flow 待审批` |
+| 413 | 回调正文异常过大 | 记桥日志，不重试 |
+| 500 | Cloud 临时失败 | 小鲁班按有限次数重试；保持原 message_id |
+
+## 6. 联调顺序
+
+1. 确认 Cloud 当前没有运行中的任务，按现有部署手册重启服务；必须保留
+   `--public-url http://<内网地址>:<端口>` 和已有容器/平台参数。
+2. 启动日志应出现：
+   `小鲁班手机审批回调已启用: /integrations/luban/plugin`。
+3. 使用一个已启用的开发账号，从内网桥请求 `mae-flow 待审批`；没有待办时
+   应返回 `当前没有待审批事项。`。
+
+   可先用占位值核对请求形状；实际 Token 从受控文件读取，不要把它提交到
+   脚本仓库或粘贴进共享日志：
+
+   ```bash
+   curl -sS -X POST \
+     'https://mae-flow.example.intra/integrations/luban/plugin' \
+     -H 'Content-Type: application/json' \
+     -H 'X-MFC-Luban-Plugin-Token: <实际Token>' \
+     --data '{"message_id":"manual-check-001","sender":"<有效账号>","content":"mae-flow 待审批"}'
+   ```
+
+4. 创建一张单题待审批任务，在手机依次验证：
+   `mae-flow 待审批` → `mae-flow 详情 <审批码>` →
+   `mae-flow 选择 <审批码> <序号>`。
+5. 验证另一账号看不到该任务。
+6. 使用同一个 `message_id` 重发决定，确认不会二次审批。
+7. 先让电脑端处理事项，再用手机提交旧审批码，应收到“事项已更新或审批码
+   已过期”。
+8. 使用错误 Token 请求，应返回 401。
+
+## 7. 上线验收标准
+
+- [ ] 手机无需访问 Cloud 内网网页；
+- [ ] 小鲁班通知能提示 `mae-flow 待审批`；
+- [ ] 只能看到和审批本人任务；
+- [ ] 详情中的问题、选项和 Cloud 页面一致；
+- [ ] 退回必须带意见；
+- [ ] 重试不会产生两次决定；
+- [ ] 旧审批码不能批准新事项；
+- [ ] 多题卡明确引导到电脑端，不能误提交；
+- [ ] Token 与个人发送 Token 均不出现在日志和响应中；
+- [ ] 去掉 `luban-plugin-token-file` 后仅手机审批关闭，原出站通知和 Web
+      审批不受影响。
+
+## 8. 内网需要回传给 Cloud 开发的信息
+
+联调前请把以下内容落到部署记录，后续若要做原生适配可直接复现：
+
+```text
+小鲁班插件名称：
+回调 URL：
+真实回调样例（脱敏）：
+工号字段路径：
+唯一事件 ID 字段路径：
+是否支持固定 Header：
+原生验签方式：
+同步响应格式：
+超时与重试规则：
+来源网段/防火墙变更：
+采用直连还是 luban-bridge：
+联调日期与执行人：
+```

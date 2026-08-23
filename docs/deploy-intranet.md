@@ -270,6 +270,10 @@ npm run serve -- ... --luban http://127.0.0.1:8791
 
 ### 手机纯文本审批:小鲁班插件回调
 
+内网 Agent/运维请优先按独立交接单
+[`docs/luban-mobile-approval-handoff.md`](./luban-mobile-approval-handoff.md)
+执行；本节只保留 Cloud 契约摘要。
+
 这条链与上面的**出站通知**分开:通知负责喊人,插件回调负责把用户在
 手机上的明确指令送回 Cloud。它不增加第二套审批状态,最终仍调用
 TaskService 的现有 `decide()`，因此 `waiting_id/state_version`、账号归属、

@@ -115,7 +115,8 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
 服务端口的 `POST /integrations/luban/plugin` 发请求。支持“待审批/详情/选择/
 通过/退回”，审批码绑定当前 waiting 版本；多题澄清不在手机端猜答案。
 真实插件的字段与原生验签由部署桥翻译，Cloud 不复制审批状态机。完整契约
-见 `docs/deploy-intranet.md`「手机纯文本审批」。
+见 `docs/luban-mobile-approval-handoff.md`；内网 Agent 可直接按其中的
+部署、字段映射、联调与验收清单执行。
 
 ## 已知边界(诚实清单)
 
