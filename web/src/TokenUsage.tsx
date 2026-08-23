@@ -12,7 +12,11 @@ function tokenText(value: number): string {
 }
 
 function rateText(value: number): string {
-  return value > 0 ? `${tokenText(value)}/分钟` : "当前空闲";
+  return `${tokenText(value)} Token/分钟`;
+}
+
+function amountText(value: number): string {
+  return `${tokenText(value)} Token`;
 }
 
 /** ↑/↓ 沿用 Pi 的输入/输出语义，不表示网络流量。 */
@@ -21,11 +25,57 @@ export function TokenUsage({
   placement = "compact",
 }: {
   usage?: TaskTokenUsage;
-  placement?: "compact" | "workspace" | "history";
+  placement?: "compact" | "workspace" | "history" | "detail";
 }) {
   if (!usage) return null;
   const title = `模型真实用量 · 更新于 ${formatLocalDateTime(
     usage.updated_at, { seconds: true })}`;
+
+  if (placement === "detail") {
+    const totalRate = usage.input_tokens_per_minute
+      + usage.output_tokens_per_minute;
+    return (
+      <section className="token-usage-detail" aria-label="任务模型 Token 用量" title={title}>
+        <header>
+          <div className="token-detail-title">
+            <i aria-hidden>↕</i>
+            <span>
+              <small>MODEL USAGE</small>
+              <strong>模型 Token 用量</strong>
+            </span>
+          </div>
+          <div className={`token-detail-rate${totalRate > 0 ? " active" : ""}`}>
+            <span><i aria-hidden />最近 {usage.rate_window_seconds} 秒速率</span>
+            <strong>{rateText(totalRate)}</strong>
+          </div>
+        </header>
+        <div className="token-detail-metrics">
+          <article className="total">
+            <small>累计总量</small>
+            <strong>{amountText(usage.total_tokens)}</strong>
+            <span>输入与输出合计</span>
+          </article>
+          <article className="input">
+            <small><b aria-hidden>↑</b> 输入</small>
+            <strong>{amountText(usage.input_tokens)}</strong>
+            <span>{rateText(usage.input_tokens_per_minute)}</span>
+          </article>
+          <article className="output">
+            <small><b aria-hidden>↓</b> 输出</small>
+            <strong>{amountText(usage.output_tokens)}</strong>
+            <span>{rateText(usage.output_tokens_per_minute)}</span>
+          </article>
+        </div>
+        <footer>
+          <span>单位：Token</span>
+          <span>速率窗口：最近 {usage.rate_window_seconds} 秒</span>
+          <time dateTime={usage.updated_at}>
+            更新于 {formatLocalDateTime(usage.updated_at, { seconds: true })}
+          </time>
+        </footer>
+      </section>
+    );
+  }
 
   if (placement !== "workspace") {
     return (

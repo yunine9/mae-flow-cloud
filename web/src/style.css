@@ -1766,6 +1766,163 @@ svg {
   font-style: normal;
   white-space: nowrap;
 }
+.token-usage-detail {
+  overflow: hidden;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
+  font-variant-numeric: tabular-nums;
+}
+.token-usage-detail > header {
+  min-height: 66px;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, #3b83d5 6%, var(--surface));
+}
+.token-detail-title {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.token-detail-title > i {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  color: #3b83d5;
+  border-radius: 9px;
+  background: color-mix(in srgb, #3b83d5 12%, var(--surface));
+  font: 780 15px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+.token-detail-title > span { min-width: 0; display: grid; gap: 3px; }
+.token-detail-title small {
+  color: #3b83d5;
+  font-size: 8px;
+  font-weight: 780;
+  letter-spacing: .13em;
+}
+.token-detail-title strong { color: var(--text-strong); font-size: 12.5px; }
+.token-detail-rate {
+  min-width: 132px;
+  padding-left: 14px;
+  display: grid;
+  justify-items: end;
+  gap: 3px;
+  border-left: 1px solid var(--line);
+}
+.token-detail-rate > span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--faint);
+  font-size: 8.5px;
+}
+.token-detail-rate > span > i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+.token-detail-rate.active > span > i {
+  background: var(--success);
+  box-shadow: 0 0 0 3px var(--success-soft);
+}
+.token-detail-rate > strong {
+  color: var(--text-strong);
+  font: 720 11px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  white-space: nowrap;
+}
+.token-detail-metrics {
+  padding: 11px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+.token-detail-metrics article {
+  min-width: 0;
+  min-height: 88px;
+  padding: 11px 12px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-soft);
+}
+.token-detail-metrics article.total {
+  background: color-mix(in srgb, #7566df 7%, var(--surface));
+  border-color: color-mix(in srgb, #7566df 20%, var(--line));
+}
+.token-detail-metrics article.input {
+  background: color-mix(in srgb, #20a28f 7%, var(--surface));
+  border-color: color-mix(in srgb, #20a28f 20%, var(--line));
+}
+.token-detail-metrics article.output {
+  background: color-mix(in srgb, #3b83d5 7%, var(--surface));
+  border-color: color-mix(in srgb, #3b83d5 20%, var(--line));
+}
+.token-detail-metrics small {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 8.5px;
+  font-weight: 700;
+}
+.token-detail-metrics small b { color: currentColor; font-size: 11px; }
+.token-detail-metrics article.input small {
+  color: color-mix(in srgb, #20a28f 78%, var(--text-strong));
+}
+.token-detail-metrics article.output small {
+  color: color-mix(in srgb, #3b83d5 78%, var(--text-strong));
+}
+.token-detail-metrics strong {
+  overflow: hidden;
+  color: var(--text-strong);
+  font: 740 14px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.token-detail-metrics article > span {
+  color: var(--muted);
+  font: 620 8.5px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  white-space: nowrap;
+}
+.token-usage-detail > footer {
+  min-height: 34px;
+  padding: 7px 13px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--faint);
+  border-top: 1px solid var(--line);
+  font-size: 8.5px;
+}
+.token-usage-detail > footer time { margin-left: auto; }
+@media (max-width: 560px) {
+  .token-usage-detail > header { align-items: flex-start; flex-direction: column; }
+  .token-detail-rate {
+    width: 100%;
+    padding: 9px 0 0;
+    align-items: center;
+    grid-template-columns: 1fr auto;
+    border-top: 1px solid var(--line);
+    border-left: 0;
+  }
+  .token-detail-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .token-detail-metrics article.total { grid-column: 1 / -1; }
+  .token-usage-detail > footer { align-items: flex-start; flex-wrap: wrap; }
+  .token-usage-detail > footer time { width: 100%; margin-left: 0; }
+}
 .task-chevron {
   width: 28px;
   height: 28px;

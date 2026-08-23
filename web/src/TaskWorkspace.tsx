@@ -618,13 +618,10 @@ export function TaskWorkspace({
                   {!reviewAssignment && !canRequestReview && (
                     <div className="ws-insight-empty">当前没有 Committer 检视事项。</div>
                   )}
-                  <TaskTimeline taskId={task.id} defaultOpen />
                   {task.token_usage ? (
-                    <div className="ws-usage-summary ws-usage-expanded" title="来自模型提供方的真实用量统计">
-                      <span>模型用量</span>
-                      <TokenUsage usage={task.token_usage} placement="history" />
-                    </div>
+                    <TokenUsage usage={task.token_usage} placement="detail" />
                   ) : <div className="ws-insight-empty">模型提供方暂未返回 Token 用量。</div>}
+                  <TaskTimeline taskId={task.id} />
                 </section>
               </div>
             </div>
