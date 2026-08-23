@@ -4702,6 +4702,43 @@ pre {
   text-transform: uppercase;
 }
 .ws-usage-summary .token-usage { margin: 0; padding: 0; border: 0; background: none; }
+.assistant-discovery {
+  min-height: 52px;
+  padding: 9px 11px;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  border: 1px dashed color-mix(in srgb, var(--accent) 24%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent-soft) 24%, var(--surface));
+}
+.assistant-discovery-mark {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface));
+  font: 750 10px/1 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+.assistant-discovery > div { min-width: 0; display: grid; gap: 3px; }
+.assistant-discovery > div > span { display: flex; align-items: baseline; gap: 7px; }
+.assistant-discovery strong { color: var(--text-strong); font-size: 11.5px; }
+.assistant-discovery small {
+  color: var(--muted);
+  font-size: 9.5px;
+  line-height: 1.45;
+}
+.assistant-discovery em {
+  color: var(--faint);
+  font-size: 8.5px;
+  font-style: normal;
+  font-weight: 700;
+  white-space: nowrap;
+}
 /* 曾经这里还有一整套 .utility-block(无边框的裸折叠块)。它只有在
    .ws-decision 上下文里才被补上边框,于是同样四块面板——执行心流、
    耗时与卡点用 block,外部动作台账、过程记录用 panel——在任务卡上

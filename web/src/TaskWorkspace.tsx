@@ -83,6 +83,22 @@ function workspaceProgress(task: TaskSummary): NonNullable<TaskSummary["progress
   };
 }
 
+function assistantUnavailableReason(task: TaskSummary): string {
+  if (task.status === "waiting_for_human") {
+    return "正在等待人工决定；提交后进入可编辑阶段再开放";
+  }
+  if (task.status === "verifying" || task.status === "await_merge") {
+    return "正在交付验证；此时不允许旁路修改代码";
+  }
+  if (task.status === "completed") {
+    return "任务已经结束；运行中的开发实现阶段可直接查代码、跑命令和修改";
+  }
+  if (task.status === "canceled" || task.status === "failed") {
+    return "任务已经停止；重跑并进入可编辑阶段后开放";
+  }
+  return "任务启动并进入内核允许修改源码的阶段后开放";
+}
+
 export function TaskWorkspace({
   task,
   viewerUsername,
@@ -538,6 +554,15 @@ export function TaskWorkspace({
               setLivePulse((value) => value + 1);
               onChanged();
             }} />
+          )}
+          {canOperate && !collaborationVisible && (
+            <section className="assistant-discovery" aria-label="开发助手状态">
+              <span className="assistant-discovery-mark" aria-hidden>›_</span>
+              <div>
+                <span><strong>开发助手</strong><em>当前不可用</em></span>
+                <small>{assistantUnavailableReason(task)}</small>
+              </div>
+            </section>
           )}
           {controlError && <div className="task-control-error">{controlError}</div>}
           {task.status === "canceled" && (
