@@ -4438,6 +4438,39 @@ pre {
 .ops-grid .pulse-card small {
   margin-top: auto; color: var(--faint); font-size: 9.5px; line-height: 1.45;
 }
+.metric-action {
+  width: 100%;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: transform var(--ease), border-color var(--ease), box-shadow var(--ease), background var(--ease);
+}
+.metric-action:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, currentColor 32%, var(--line));
+  background: color-mix(in srgb, currentColor 3%, var(--surface));
+  box-shadow: var(--shadow-sm);
+}
+.metric-action:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.metric-action.selected {
+  border-color: color-mix(in srgb, currentColor 48%, var(--line));
+  box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 10%, transparent), var(--shadow-xs);
+}
+.metric-action-hint {
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: currentColor;
+  font-size: 9px;
+  font-weight: 700;
+  opacity: .56;
+}
+.metric-action-hint i { font-style: normal; transition: transform var(--ease); }
+.metric-action:hover .metric-action-hint,
+.metric-action.selected .metric-action-hint { opacity: 1; }
+.metric-action:hover .metric-action-hint i { transform: translateX(2px); }
 
 .risk-radar {
   margin-top: 22px; padding: 20px; border: 1px solid var(--line);

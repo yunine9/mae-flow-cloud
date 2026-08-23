@@ -24,6 +24,21 @@ export interface TeamTask {
   };
 }
 
+export type TeamScope =
+  | "all"
+  | "action"
+  | "stale"
+  | "wip"
+  | "waiting"
+  | "week"
+  | "delivered";
+
+const WIP_STATUSES = [
+  "queued", "running", "pausing", "verifying", "waiting_for_human",
+];
+const DELIVERED_STATUSES = ["await_merge", "completed"];
+const WEEK_MS = 7 * 86_400_000;
+
 function repairStopped(task: TeamTask): boolean {
   const state = task.delivery?.loop?.state;
   return task.status === "verifying" && (
@@ -57,6 +72,27 @@ export function progressAgeMs(task: TeamTask, now = Date.now()): number {
 export function isStale(task: TeamTask, now = Date.now()): boolean {
   return ["queued", "running", "pausing", "verifying"].includes(task.status)
     && progressAgeMs(task, now) >= STALE_AFTER_MS;
+}
+
+/** 顶部运营指标与明细筛选共用同一把尺，避免“卡上 5 项、点开 4 项”。 */
+export function matchesTeamScope(
+  task: TeamTask,
+  scope: TeamScope,
+  now = Date.now(),
+): boolean {
+  if (scope === "all") return true;
+  if (scope === "action") return needsAction(task);
+  if (scope === "stale") return isStale(task, now);
+  if (scope === "wip") return WIP_STATUSES.includes(task.status);
+  if (scope === "waiting") return task.status === "waiting_for_human";
+  if (scope === "delivered") return DELIVERED_STATUSES.includes(task.status);
+  if (scope === "week") {
+    if (!task.completed_at) return false;
+    const completed = instantMs(task.completed_at);
+    return Number.isFinite(completed)
+      && completed >= now - WEEK_MS && completed <= now + 1_000;
+  }
+  return false;
 }
 
 /** 行动项在前,同类里停滞久的在前。 */

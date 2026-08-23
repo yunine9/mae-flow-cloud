@@ -23,12 +23,13 @@ import {
   cycleTimeMs,
   isBlocked,
   isStale,
+  matchesTeamScope,
   median,
-  needsAction,
   responsibleOf,
   progressAgeMs,
+  type TeamScope,
 } from "./teamOps";
-import { formatLocalDateTime, instantMs } from "./time";
+import { formatLocalDateTime } from "./time";
 import { taskSyncCopy, type TaskSyncState } from "./taskSync";
 
 type View = "team" | "mine" | "profile" | "history" | "users" | "settings";
@@ -670,18 +671,17 @@ function TeamDashboard({
   onOpenArtifacts: (task: TaskSummary) => void;
 }) {
   const [query, setQuery] = useState("");
-  const [scope, setScope] = useState("all");
+  const [scope, setScope] = useState<TeamScope>("all");
   const [responsible, setResponsible] = useState("");
+  const queueRef = useRef<HTMLElement>(null);
   const now = Date.now();
-  const actionable = tasks.filter(needsAction);
-  const stale = tasks.filter((task) => isStale(task, now));
-  const wip = tasks.filter((task) =>
-    ["queued", "running", "pausing", "verifying", "waiting_for_human"]
-      .includes(task.status));
-  const deliveredWeek = tasks.filter((task) => {
-    const completed = instantMs(task.completed_at);
-    return Number.isFinite(completed) && completed >= now - 7 * 86_400_000;
-  });
+  const actionable = tasks.filter((task) =>
+    matchesTeamScope(task, "action", now));
+  const stale = tasks.filter((task) =>
+    matchesTeamScope(task, "stale", now));
+  const wip = tasks.filter((task) => matchesTeamScope(task, "wip", now));
+  const deliveredWeek = tasks.filter((task) =>
+    matchesTeamScope(task, "week", now));
   const medianCycle = median(tasks.map(cycleTimeMs)
     .filter((value): value is number => value !== undefined));
   const risks = [...new Map(
@@ -695,22 +695,25 @@ function TeamDashboard({
     if (responsible === "__unassigned" && responsibleOf(task)) return false;
     if (responsible && responsible !== "__unassigned"
         && responsibleOf(task) !== responsible) return false;
-    if (scope === "action" && !needsAction(task)) return false;
-    if (scope === "wip" && !["queued", "running", "pausing", "verifying"]
-      .includes(task.status)) return false;
-    if (scope === "waiting" && task.status !== "waiting_for_human") return false;
-    if (scope === "delivered" && !DELIVERED_STATUSES.includes(task.status)) return false;
+    if (!matchesTeamScope(task, scope, now)) return false;
     return true;
   }).sort(byTeamAttention), [tasks, query, scope, responsible]);
+
+  function openMetric(next: Exclude<TeamScope, "all" | "waiting" | "delivered">) {
+    setScope((current) => current === next ? "all" : next);
+    requestAnimationFrame(() => queueRef.current?.scrollIntoView({
+      behavior: "smooth", block: "start",
+    }));
+  }
 
   return <>
     <section className="team-pulse ops-pulse" aria-labelledby="pulse-title">
       <div className="section-head pulse-head"><div><span className="section-kicker">TEAM OPERATIONS</span><h2 id="pulse-title">团队行动态势</h2></div><span className="section-count">行动项优先</span></div>
       <div className="pulse-grid ops-grid">
-        <div className="pulse-card attention"><span className="pulse-card-label"><i aria-hidden />需要处理</span><strong>{actionable.length}</strong><small>决策、失败与人工阻塞</small></div>
-        <div className="pulse-card danger"><span className="pulse-card-label"><i aria-hidden />停滞任务</span><strong>{stale.length}</strong><small>2 小时没有有效推进</small></div>
-        <div className="pulse-card active"><span className="pulse-card-label"><i aria-hidden />当前在制</span><strong>{wip.length}</strong><small>机器与人工正在推进</small></div>
-        <div className="pulse-card success"><span className="pulse-card-label"><i aria-hidden />近 7 天交付</span><strong>{deliveredWeek.length}</strong><small>进入完成或等待合入</small></div>
+        <button type="button" className={`pulse-card metric-action attention${scope === "action" ? " selected" : ""}`} aria-pressed={scope === "action"} aria-controls="team-queue" onClick={() => openMetric("action")}><span className="pulse-card-label"><i aria-hidden />需要处理</span><strong>{actionable.length}</strong><small>决策、失败与人工阻塞</small><span className="metric-action-hint">查看明细 <i aria-hidden>→</i></span></button>
+        <button type="button" className={`pulse-card metric-action danger${scope === "stale" ? " selected" : ""}`} aria-pressed={scope === "stale"} aria-controls="team-queue" onClick={() => openMetric("stale")}><span className="pulse-card-label"><i aria-hidden />停滞任务</span><strong>{stale.length}</strong><small>2 小时没有有效推进</small><span className="metric-action-hint">查看明细 <i aria-hidden>→</i></span></button>
+        <button type="button" className={`pulse-card metric-action active${scope === "wip" ? " selected" : ""}`} aria-pressed={scope === "wip"} aria-controls="team-queue" onClick={() => openMetric("wip")}><span className="pulse-card-label"><i aria-hidden />当前在制</span><strong>{wip.length}</strong><small>机器与人工正在推进</small><span className="metric-action-hint">查看明细 <i aria-hidden>→</i></span></button>
+        <button type="button" className={`pulse-card metric-action success${scope === "week" ? " selected" : ""}`} aria-pressed={scope === "week"} aria-controls="team-queue" onClick={() => openMetric("week")}><span className="pulse-card-label"><i aria-hidden />近 7 天交付</span><strong>{deliveredWeek.length}</strong><small>进入完成或等待合入</small><span className="metric-action-hint">查看明细 <i aria-hidden>→</i></span></button>
         <div className="pulse-card neutral"><span className="pulse-card-label"><i aria-hidden />典型交付周期</span><strong className="duration">{formatOpsDuration(medianCycle)}</strong><small>当前历史中位数</small></div>
       </div>
     </section>
@@ -722,11 +725,11 @@ function TeamDashboard({
 
     <PhaseFunnel tasks={tasks} />
 
-    <section className="task-section" aria-labelledby="team-queue-title">
+    <section className="task-section" id="team-queue" ref={queueRef} aria-labelledby="team-queue-title">
       <div className="section-head"><div><span className="section-kicker">TEAM QUEUE</span><h2 id="team-queue-title">团队任务明细</h2></div><span className="section-count">{visible.length} / {tasks.length} 项</span></div>
       <div className="task-filters" aria-label="筛选团队任务">
         <label className="task-search"><svg viewBox="0 0 18 18" aria-hidden><circle cx="8" cy="8" r="4.5" /><path d="m11.5 11.5 3 3" /></svg><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索任务、需求或负责人" /></label>
-        <select aria-label="任务范围" value={scope} onChange={(event) => setScope(event.target.value)}><option value="all">全部范围</option><option value="action">需要处理</option><option value="wip">推进中</option><option value="waiting">等待决策</option><option value="delivered">已交付</option></select>
+        <select aria-label="任务范围" value={scope} onChange={(event) => setScope(event.target.value as TeamScope)}><option value="all">全部范围</option><option value="action">需要处理</option><option value="stale">停滞任务</option><option value="wip">当前在制</option><option value="waiting">等待决策</option><option value="week">近 7 天交付</option><option value="delivered">全部已交付</option></select>
         <select aria-label="责任人" value={responsible} onChange={(event) => setResponsible(event.target.value)}><option value="">全部责任人</option><option value="__unassigned">未指定</option>{users.map((user) => <option value={user.username} key={user.username}>{user.username}</option>)}</select>
         {(query || scope !== "all" || responsible) && <button type="button" className="filter-reset" onClick={() => { setQuery(""); setScope("all"); setResponsible(""); }}>清除筛选</button>}
       </div>

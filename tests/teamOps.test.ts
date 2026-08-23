@@ -6,6 +6,7 @@ import {
   isBlocked,
   isStale,
   median,
+  matchesTeamScope,
   needsAction,
   responsibleOf,
   type TeamTask,
@@ -81,4 +82,33 @@ test("团队排序优先使用服务端焦点,环境故障不会藏在普通运�
   ]);
   assert.equal(needsAction(rows[1]), true);
   assert.equal(isBlocked(rows[1]), true);
+});
+
+test("运营指标点开后的任务数必须和卡片口径一致", () => {
+  const now = Date.parse("2026-08-23T08:00:00.000Z");
+  const rows = [
+    task({ id: "decision", status: "waiting_for_human" }),
+    task({
+      id: "stale", status: "running",
+      last_progress_at: "2026-08-23T05:00:00.000Z",
+    }),
+    task({
+      id: "week", status: "completed",
+      completed_at: "2026-08-22T08:00:00.000Z",
+    }),
+    task({
+      id: "old", status: "completed",
+      completed_at: "2026-08-01T08:00:00.000Z",
+    }),
+  ];
+  assert.deepEqual(rows.filter((row) => matchesTeamScope(row, "action", now))
+    .map((row) => row.id), ["decision"]);
+  assert.deepEqual(rows.filter((row) => matchesTeamScope(row, "stale", now))
+    .map((row) => row.id), ["stale"]);
+  assert.deepEqual(rows.filter((row) => matchesTeamScope(row, "wip", now))
+    .map((row) => row.id), ["decision", "stale"]);
+  assert.deepEqual(rows.filter((row) => matchesTeamScope(row, "week", now))
+    .map((row) => row.id), ["week"]);
+  assert.deepEqual(rows.filter((row) => matchesTeamScope(row, "delivered", now))
+    .map((row) => row.id), ["week", "old"]);
 });
