@@ -19,6 +19,8 @@ import { AnnotationPanel } from "./AnnotationPanel";
 import { AttachedNotes } from "./AttachedNotes";
 import { RequirementGraph } from "./RequirementGraph";
 import { PrepushStatus } from "./PrepushStatus";
+import { taskHealthFacts } from "./taskHealth";
+import { relativeTime } from "./time";
 import {
   EMPTY_REPOSITORY_SKILL_PICKER_STATE,
   RepositorySkillPicker,
@@ -279,6 +281,7 @@ export function TaskWorkspace({
   const controllable = canOperate && [
     "queued", "running", "pausing", "paused", "waiting_for_human", "verifying",
   ].includes(task.status);
+  const health = taskHealthFacts(task, viewerUsername);
 
   async function runControl(action: "pause" | "resume" | "cancel") {
     if (controlBusy) return;
@@ -363,6 +366,30 @@ export function TaskWorkspace({
           </a>
         )}
       </header>
+
+      {health && (
+        <section className={`ws-health${health.needs_attention ? " attention" : ""}`}
+          aria-label="任务健康概览">
+          <div className="ws-health-current">
+            <span>当前</span>
+            <strong title={health.current}>{health.current}</strong>
+          </div>
+          <div className="ws-health-next">
+            <span>下一步</span>
+            <strong title={health.next}>{health.next}</strong>
+          </div>
+          <div>
+            <span>当前责任方</span>
+            <strong>{health.actor}</strong>
+          </div>
+          <div>
+            <span>最近有效推进</span>
+            <strong title={health.last_progress_at}>
+              {relativeTime(health.last_progress_at) || "暂无记录"}
+            </strong>
+          </div>
+        </section>
+      )}
 
       {task.progress && (
         <div className="ws-progress">
