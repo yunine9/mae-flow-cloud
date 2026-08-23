@@ -3,6 +3,7 @@
  *
  *   POST /tasks                {requirement}            → 201 摘要
  *   GET  /tasks                                         → 列表
+ *   GET  /knowledge-insights                            → 团队知识效能(只读)
  *   GET  /tasks/:id                                     → 详情(含待办)
  *   POST /tasks/:id/decision   {state_version,decision,notes?}
  *        → 200;版本冲突/已被抢先 → 409 "任务状态已变化"(先到决定生效)
@@ -505,6 +506,7 @@ export function createTaskServer(
 
       const protectedRoute =
         url.pathname === "/history" || parts[0] === "tasks"
+        || url.pathname === "/knowledge-insights"
         || parts[0] === "reviews" || parts[0] === "repository-skills";
       // 兼容已经发出去的旧通知。/tasks/:id 是 JSON API，但旧链接若由
       // 浏览器作为页面打开，应带人去新的任务工作台；程序 fetch 默认
@@ -532,6 +534,11 @@ export function createTaskServer(
             { error: "未配置 PostgreSQL 投影(--pg),没有历史可查" });
         }
         return json(response, 200, await projection.listTaskHistory());
+      }
+      // 团队知识运营同样先于静态前端兜底；否则这个非 /tasks 的 GET
+      // 会被当成前端资源并返回 404。只读口径与团队任务可见性一致。
+      if (request.method === "GET" && url.pathname === "/knowledge-insights") {
+        return json(response, 200, service.knowledgeInsights());
       }
       // Committer 的个人检视收件箱。名单只决定“还能不能被新邀请”，
       // 已经发给本人的邀请即使后来移出名单也仍应可见、可完成。

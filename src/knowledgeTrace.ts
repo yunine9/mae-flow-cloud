@@ -183,7 +183,15 @@ export class KnowledgeTrace {
 
 function parseEvents(file: string): KnowledgeTraceEvent[] {
   if (!existsSync(file)) return [];
-  return readFileSync(file, "utf-8").split("\n").filter(Boolean)
+  let raw: string;
+  try {
+    raw = readFileSync(file, "utf-8");
+  } catch {
+    // 足迹损坏或已随现场回收时只少一块观察数据，不能拖垮任务详情，
+    // 更不能让团队聚合因为一张老单不可读而整体 500。
+    return [];
+  }
+  return raw.split("\n").filter(Boolean)
     .flatMap((line) => {
       try {
         const event = JSON.parse(line) as KnowledgeTraceEvent;

@@ -449,6 +449,13 @@ export async function listTasks(): Promise<TaskSummary[]> {
   return response.json();
 }
 
+/** 团队知识运营使用独立低频读接口，不扩大任务列表轮询响应。 */
+export async function getKnowledgeInsights(): Promise<TeamKnowledgeInsights> {
+  const response = await fetch("/knowledge-insights");
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
 /** 下单表单的数据源:可选模型清单(≤1 个时不必展示下拉)与当前默认。 */
 export interface LaunchBlocker {
   key: string;
@@ -562,6 +569,55 @@ export interface TaskKnowledgeUsage {
     action: KnowledgeAction;
     observed_path?: string;
   }>;
+}
+
+export type KnowledgeRecommendationKind =
+  | "coverage-gap"
+  | "needs-review"
+  | "selected-unused"
+  | "promote";
+
+export interface KnowledgeInsightResource {
+  key: string;
+  kind: KnowledgeKind;
+  name: string;
+  path: string;
+  repository?: string;
+  provided_tasks: number;
+  selected_tasks: number;
+  loaded_tasks: number;
+  accessed_tasks: number;
+  access_events: number;
+  completed_tasks: number;
+  repair_tasks: number;
+  attention_tasks: number;
+  last_used_at?: string;
+}
+
+export interface KnowledgeRecommendation {
+  id: string;
+  kind: KnowledgeRecommendationKind;
+  tone: "attention" | "info" | "positive";
+  title: string;
+  evidence: string;
+  action: string;
+  resource_key?: string;
+  task_ids?: string[];
+}
+
+export interface TeamKnowledgeInsights {
+  generated_at: string;
+  summary: {
+    tracked_tasks: number;
+    accessed_tasks: number;
+    unique_resources: number;
+    active_resources: number;
+    selected_unused: number;
+    opportunities: number;
+    access_rate: number;
+  };
+  resources: KnowledgeInsightResource[];
+  recommendations: KnowledgeRecommendation[];
 }
 
 /** 已经由服务端目录令牌验证、记在任务上的仓内 Skill。Chain 检视页

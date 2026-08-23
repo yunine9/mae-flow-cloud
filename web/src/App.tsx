@@ -4,10 +4,10 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  createUser, deleteUser, getLaunchOptions, getSession, listMyReviews, listTasks, listUsers,
+  createUser, deleteUser, getKnowledgeInsights, getLaunchOptions, getSession, listMyReviews, listTasks, listUsers,
   login, logout, putCommitter, resetUserPassword,
   type AuthUser, type TaskStatus, type TaskSummary,
-  type ReviewRequest, type UserRole,
+  type ReviewRequest, type TeamKnowledgeInsights, type UserRole,
 } from "./api";
 import { TaskCard } from "./TaskCard";
 import { HistoryBoard } from "./HistoryBoard";
@@ -36,6 +36,7 @@ import {
   type LaunchGateState,
 } from "./launchGate";
 import { startVisiblePolling } from "./visiblePolling";
+import { KnowledgeFlywheel } from "./KnowledgeFlywheel";
 
 type View = "team" | "mine" | "profile" | "history" | "users" | "settings";
 type Theme = "light" | "dark";
@@ -222,6 +223,9 @@ export function App() {
   const [mineScope, setMineScope] = useState<MineScope>("all");
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [teamUsers, setTeamUsers] = useState<AuthUser[]>([]);
+  const [knowledgeInsights, setKnowledgeInsights] = useState<TeamKnowledgeInsights>();
+  const [knowledgeInsightsLoading, setKnowledgeInsightsLoading] = useState(false);
+  const [knowledgeInsightsError, setKnowledgeInsightsError] = useState("");
   const [myReviews, setMyReviews] = useState<ReviewRequest[]>([]);
   const [artifactTaskId, setArtifactTaskId] = useState("");
   const [artifactTaskSnapshot, setArtifactTaskSnapshot] = useState<TaskSummary>();
@@ -332,6 +336,23 @@ export function App() {
     void listUsers().then(setTeamUsers).catch(() => setTeamUsers([]));
   }, [session?.username, session?.role, view]);
 
+  function refreshKnowledgeInsights(): void {
+    setKnowledgeInsightsLoading(true);
+    setKnowledgeInsightsError("");
+    void getKnowledgeInsights().then(setKnowledgeInsights).catch((cause) => {
+      setKnowledgeInsightsError(cause instanceof Error ? cause.message : String(cause));
+    }).finally(() => setKnowledgeInsightsLoading(false));
+  }
+
+  // 知识聚合要读取多份任务足迹，独立低频刷新，不能跟 1.5 秒任务心跳
+  // 绑在一起。开发成员也能看团队只读视图，和现有任务可见性一致。
+  useEffect(() => {
+    if (!session || view !== "team") return;
+    refreshKnowledgeInsights();
+    const timer = window.setInterval(refreshKnowledgeInsights, 60_000);
+    return () => window.clearInterval(timer);
+  }, [session?.username, view]);
+
   useEffect(() => {
     if (view !== "mine" || !targetTaskId || tasks.length === 0) return;
     const timer = window.setTimeout(() => document.getElementById(`task-${targetTaskId}`)?.scrollIntoView({ behavior: "smooth", block: "start" }), 120);
@@ -377,6 +398,8 @@ export function App() {
   async function signOut() {
     await logout().catch(() => undefined);
     setTasks([]);
+    setKnowledgeInsights(undefined);
+    setKnowledgeInsightsError("");
     setMineScope("all");
     setTaskSync({ kind: "loading" });
     launchGateRequest.current += 1;
@@ -490,6 +513,10 @@ export function App() {
         {view === "team" && <TeamDashboard
           tasks={tasks}
           users={teamUsers}
+          knowledgeInsights={knowledgeInsights}
+          knowledgeInsightsLoading={knowledgeInsightsLoading}
+          knowledgeInsightsError={knowledgeInsightsError}
+          onRefreshKnowledge={refreshKnowledgeInsights}
           onChanged={refresh}
           onOpenArtifacts={openArtifacts}
         />}
@@ -722,11 +749,19 @@ function riskReason(task: TaskSummary): string {
 function TeamDashboard({
   tasks,
   users,
+  knowledgeInsights,
+  knowledgeInsightsLoading,
+  knowledgeInsightsError,
+  onRefreshKnowledge,
   onChanged,
   onOpenArtifacts,
 }: {
   tasks: TaskSummary[];
   users: AuthUser[];
+  knowledgeInsights?: TeamKnowledgeInsights;
+  knowledgeInsightsLoading: boolean;
+  knowledgeInsightsError: string;
+  onRefreshKnowledge: () => void;
   onChanged: () => void;
   onOpenArtifacts: (task: TaskSummary) => void;
 }) {
@@ -784,6 +819,17 @@ function TeamDashboard({
     </section>}
 
     <PhaseFunnel tasks={tasks} />
+
+    <KnowledgeFlywheel
+      insights={knowledgeInsights}
+      loading={knowledgeInsightsLoading}
+      error={knowledgeInsightsError}
+      onRetry={onRefreshKnowledge}
+      onOpenTask={(taskId) => {
+        const target = tasks.find((task) => task.id === taskId);
+        if (target) onOpenArtifacts(target);
+      }}
+    />
 
     <section className="task-section" id="team-queue" ref={queueRef} aria-labelledby="team-queue-title">
       <div className="section-head"><div><span className="section-kicker">TEAM QUEUE</span><h2 id="team-queue-title">团队任务明细</h2></div><span className="section-count">{visible.length} / {tasks.length} 项</span></div>

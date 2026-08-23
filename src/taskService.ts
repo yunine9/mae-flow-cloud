@@ -102,6 +102,10 @@ import {
   type TaskKnowledgeUsage,
 } from "./knowledgeTrace.ts";
 import {
+  buildTeamKnowledgeInsights,
+  type TeamKnowledgeInsights,
+} from "./knowledgeInsights.ts";
+import {
   createPrePushGateContract,
   parsePrePushAgentReport,
   prePushMission,
@@ -1422,6 +1426,13 @@ export class TaskService {
     return [...this.tasks.values()]
       .map((task) => this.project(task))
       .sort((a, b) => b.created_at.localeCompare(a.created_at));
+  }
+
+  /** 团队知识运营读模型。独立接口按需计算，避免把所有任务足迹塞进
+   * 1.5 秒一次的任务列表轮询。任何建议都不参与流程或质量裁决。 */
+  knowledgeInsights(): TeamKnowledgeInsights {
+    return buildTeamKnowledgeInsights([...this.tasks.values()]
+      .map((task) => this.project(task, true)));
   }
 
   get(id: string): TaskSummary | undefined {
