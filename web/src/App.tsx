@@ -34,6 +34,7 @@ import { taskSyncCopy, type TaskSyncState } from "./taskSync";
 
 type View = "team" | "mine" | "profile" | "history" | "users" | "settings";
 type Theme = "light" | "dark";
+type MineScope = "all" | "waiting" | "intervention" | "active" | "delivered";
 
 interface WorkspaceRoute {
   taskId: string;
@@ -213,6 +214,7 @@ export function App() {
     document.documentElement.dataset.theme === "light" ? "light" : "dark");
   const [session, setSession] = useState<AuthUser | null>();
   const [view, setView] = useState<View>("team");
+  const [mineScope, setMineScope] = useState<MineScope>("all");
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [teamUsers, setTeamUsers] = useState<AuthUser[]>([]);
   const [myReviews, setMyReviews] = useState<ReviewRequest[]>([]);
@@ -329,12 +331,13 @@ export function App() {
 
   if (session === undefined) return <LoadingScreen />;
   if (session === null) return <LoginScreen onAuthenticated={(user) => {
-    setSession(user); setView(initialView(user));
+    setSession(user); setMineScope("all"); setView(initialView(user));
   }} />;
 
   async function signOut() {
     await logout().catch(() => undefined);
     setTasks([]);
+    setMineScope("all");
     setTaskSync({ kind: "loading" });
     setSession(null);
   }
@@ -356,6 +359,9 @@ export function App() {
   const myBlocked = myTasks.filter((task) =>
     task.status !== "waiting_for_human" && isBlocked(task));
   const myPaused = myTasks.filter((task) => task.status === "paused");
+  const myIntervention = [...new Map(
+    [...myBlocked, ...myPaused].map((task) => [task.id, task]),
+  ).values()].sort(byTeamAttention);
   const myActive = myTasks.filter((task) =>
     task.status !== "waiting_for_human" && !isBlocked(task)
     && task.status !== "paused" && task.status !== "canceled"
@@ -365,6 +371,14 @@ export function App() {
     .sort(byTeamAttention);
   const myDelivered = myTasks.filter((task) =>
     DELIVERED_STATUSES.includes(task.status));
+  const visibleMyWork = mineScope === "waiting" ? myWaiting
+    : mineScope === "intervention" ? myIntervention
+      : mineScope === "active" ? myActive
+        : mineScope === "delivered" ? myDelivered : myCurrent;
+  const myWorkTitle = mineScope === "waiting" ? "待我核对"
+    : mineScope === "intervention" ? "需要介入 / 已暂停"
+      : mineScope === "active" ? "自动推进中"
+        : mineScope === "delivered" ? "等待合入与最近完成" : "当前任务";
   const artifactTask = artifactTaskId
     ? tasks.find((task) => task.id === artifactTaskId)
       ?? (artifactTaskSnapshot?.id === artifactTaskId
@@ -440,18 +454,23 @@ export function App() {
         />}
 
         {view === "mine" && <>
-          <section className="personal-pulse four" aria-label="我的任务摘要"><div className="personal-stat attention"><span>待我核对</span><strong>{myWaiting.length}</strong></div><div className="personal-stat danger"><span>需要介入 / 已暂停</span><strong>{myBlocked.length + myPaused.length}</strong></div><div className="personal-stat active"><span>自动推进中</span><strong>{myActive.length}</strong></div><div className="personal-stat success"><span>待合入 / 完成</span><strong>{myDelivered.length}</strong></div></section>
+          <section className="personal-pulse four" aria-label="我的任务摘要">
+            <button type="button" className={`personal-stat personal-action attention${mineScope === "waiting" ? " selected" : ""}`} aria-pressed={mineScope === "waiting"} onClick={() => setMineScope((current) => current === "waiting" ? "all" : "waiting")}><span>待我核对 <i aria-hidden>→</i></span><strong>{myWaiting.length}</strong></button>
+            <button type="button" className={`personal-stat personal-action danger${mineScope === "intervention" ? " selected" : ""}`} aria-pressed={mineScope === "intervention"} onClick={() => setMineScope((current) => current === "intervention" ? "all" : "intervention")}><span>需要介入 / 已暂停 <i aria-hidden>→</i></span><strong>{myIntervention.length}</strong></button>
+            <button type="button" className={`personal-stat personal-action active${mineScope === "active" ? " selected" : ""}`} aria-pressed={mineScope === "active"} onClick={() => setMineScope((current) => current === "active" ? "all" : "active")}><span>自动推进中 <i aria-hidden>→</i></span><strong>{myActive.length}</strong></button>
+            <button type="button" className={`personal-stat personal-action success${mineScope === "delivered" ? " selected" : ""}`} aria-pressed={mineScope === "delivered"} onClick={() => setMineScope((current) => current === "delivered" ? "all" : "delivered")}><span>待合入 / 完成 <i aria-hidden>→</i></span><strong>{myDelivered.length}</strong></button>
+          </section>
           {(session.committer || myReviews.length > 0) && <CommitterInbox
             reviews={pendingReviews}
             tasks={tasks}
             onOpen={openArtifacts}
           />}
           <section className="task-section current-work-section" aria-labelledby="current-work-title">
-            <div className="section-head"><div><span className="section-kicker">CURRENT WORK</span><h2 id="current-work-title">当前任务</h2></div><div className="current-work-counts">{myWaiting.length > 0 && <span className="section-count attention">{myWaiting.length} 项待核对</span>}{myBlocked.length + myPaused.length > 0 && <span className="section-count danger">{myBlocked.length + myPaused.length} 项需介入</span>}<span className="section-count">共 {myCurrent.length} 项</span></div></div>
-            {myCurrent.length === 0 && <div className="review-clear current-work-empty"><span aria-hidden>✓</span><div><strong>当前没有进行中的任务</strong><p>新任务启动后会出现在这里；需要你核对的任务会自动排在最前。</p></div></div>}
-            <div className="task-list current-work-list">{myCurrent.map((task) => <TaskCard key={task.id} task={task} onChanged={refresh} focused={task.id === targetTaskId} canOperate onOpenArtifacts={() => openArtifacts(task)} />)}</div>
+            <div className="section-head"><div><span className="section-kicker">{mineScope === "all" ? "CURRENT WORK" : "FOCUSED WORK"}</span><h2 id="current-work-title">{myWorkTitle}</h2></div><div className="current-work-counts">{mineScope === "all" && myWaiting.length > 0 && <span className="section-count attention">{myWaiting.length} 项待核对</span>}{mineScope === "all" && myIntervention.length > 0 && <span className="section-count danger">{myIntervention.length} 项需介入</span>}<span className="section-count">{mineScope === "all" ? `共 ${visibleMyWork.length} 项` : `筛选出 ${visibleMyWork.length} 项`}</span></div></div>
+            {visibleMyWork.length === 0 && <div className="review-clear current-work-empty"><span aria-hidden>✓</span><div><strong>{mineScope === "all" ? "当前没有进行中的任务" : `没有${myWorkTitle}的任务`}</strong><p>{mineScope === "all" ? "新任务启动后会出现在这里；需要你核对的任务会自动排在最前。" : "再次点击上方已选中的摘要卡，可恢复查看全部当前任务。"}</p></div></div>}
+            <div className="task-list current-work-list">{visibleMyWork.map((task) => <TaskCard key={task.id} task={task} onChanged={refresh} focused={task.id === targetTaskId} canOperate onOpenArtifacts={() => openArtifacts(task)} />)}</div>
           </section>
-          {myDelivered.length > 0 && <TaskGroup kicker="DELIVERY" title="等待合入与最近完成" tasks={myDelivered} onChanged={refresh} onOpenArtifacts={openArtifacts} targetTaskId={targetTaskId} />}
+          {mineScope === "all" && myDelivered.length > 0 && <TaskGroup kicker="DELIVERY" title="等待合入与最近完成" tasks={myDelivered} onChanged={refresh} onOpenArtifacts={openArtifacts} targetTaskId={targetTaskId} />}
         </>}
         {view === "profile" && session.role !== "admin" && <PersonalSettingsPage
           session={session}

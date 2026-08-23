@@ -708,9 +708,38 @@ svg {
   line-height: 1;
   font-variant-numeric: tabular-nums;
 }
-.personal-stat.attention { border-top: 3px solid var(--attention); }
-.personal-stat.active { border-top: 3px solid var(--active); }
-.personal-stat.success { border-top: 3px solid var(--success); }
+.personal-stat.attention { color: var(--attention); border-top: 3px solid var(--attention); }
+.personal-stat.active { color: var(--active); border-top: 3px solid var(--active); }
+.personal-stat.success { color: var(--success); border-top: 3px solid var(--success); }
+.personal-action {
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: transform var(--ease), border-color var(--ease), box-shadow var(--ease), background var(--ease);
+}
+.personal-action span { display: inline-flex; align-items: center; gap: 5px; }
+.personal-action span i {
+  color: var(--faint);
+  font-size: 10px;
+  font-style: normal;
+  opacity: .58;
+  transition: transform var(--ease), color var(--ease), opacity var(--ease);
+}
+.personal-action:hover {
+  transform: translateY(-1px);
+  border-color: var(--line-strong);
+  background: var(--surface-soft);
+  box-shadow: var(--shadow-sm);
+}
+.personal-action:hover span i { color: currentColor; opacity: 1; transform: translateX(2px); }
+.personal-action:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.personal-action.selected {
+  border-color: color-mix(in srgb, currentColor 38%, var(--line));
+  background: color-mix(in srgb, currentColor 4%, var(--surface));
+  box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 9%, transparent), var(--shadow-xs);
+}
+.personal-action.selected span i { color: currentColor; opacity: 1; transform: rotate(90deg); }
 .review-inbox { margin-bottom: 28px; }
 .section-count.attention {
   color: var(--attention);
@@ -4530,7 +4559,7 @@ pre {
 .task-focus-inactive > i { background: var(--faint); }
 
 .personal-pulse.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-.personal-stat.danger { border-color: var(--line); border-top: 3px solid var(--danger); }
+.personal-stat.danger { color: var(--danger); border-color: var(--line); border-top: 3px solid var(--danger); }
 .personal-stat.danger strong { color: var(--danger); }
 .review-clear.compact { min-height: 72px; }
 
