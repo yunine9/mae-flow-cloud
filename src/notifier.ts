@@ -49,6 +49,8 @@ export interface NotifierOptions {
   fake?: boolean;
   /** 有限退避重试的间隔(毫秒);长度即最大重试次数。 */
   backoffMs?: number[];
+  /** 已启用小鲁班插件回调时，在待办通知里告诉用户手机入口。 */
+  mobileApproval?: boolean;
   log?: (message: string) => void;
 }
 
@@ -100,7 +102,10 @@ export class Notifier {
       link: input.link,
       text:
         `【Mae-Flow】任务 ${input.taskId} 等你决定` +
-        `(${input.step || "当前步骤"}):${input.summary}`,
+        `(${input.step || "当前步骤"}):${input.summary}` +
+        (this.options.mobileApproval
+          ? "\n手机处理：调用 Mae-Flow 插件并输入“mae 待审批”"
+          : ""),
       attempts: 0,
       delivered: false,
       last_error: "",

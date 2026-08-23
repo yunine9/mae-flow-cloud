@@ -59,6 +59,7 @@ import {
   AnnotationError,
   AnnotationPermissionError,
 } from "./annotations.ts";
+import type { LubanApprovalGateway } from "./lubanApproval.ts";
 
 /** 正式前端静态文件的最小类型表:Vite 产物就这几种。 */
 const MIME: Record<string, string> = {
@@ -80,6 +81,29 @@ function readBody(request: import("node:http").IncomingMessage): Promise<any> {
         reject(error);
       }
     });
+  });
+}
+
+/** 插件签名覆盖原始字节，不能先 JSON.parse 再 stringify。顺手把回调
+ * 正文卡在 16 KiB：这里只有工号和一条文本命令，大包没有正当用途。 */
+function readRawBody(
+  request: import("node:http").IncomingMessage,
+  limit = 16 * 1024,
+): Promise<string> {
+  return new Promise((resolveBody, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let tooLarge = false;
+    request.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > limit) tooLarge = true;
+      else chunks.push(chunk);
+    });
+    request.on("end", () => {
+      if (tooLarge) reject(new Error("回调正文超过 16 KiB"));
+      else resolveBody(Buffer.concat(chunks).toString("utf-8"));
+    });
+    request.on("error", reject);
   });
 }
 
@@ -124,7 +148,11 @@ function requestBaseUrl(
 
 export function createTaskServer(
   service: TaskService,
-  options: { webRoot?: string; auth?: LocalAuth } = {},
+  options: {
+    webRoot?: string;
+    auth?: LocalAuth;
+    lubanApproval?: LubanApprovalGateway;
+  } = {},
 ): Server {
   return createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://localhost");
@@ -136,6 +164,36 @@ export function createTaskServer(
       );
       const viewer = options.auth?.sessionUser(sessionToken);
       if (viewer) service.observeLinkBase(requestBaseUrl(request));
+
+      // 小鲁班插件回调使用独立 HMAC 身份，不依赖浏览器 Cookie。插件
+      // 只获得这一个纯文本入口，绝不能借它穿透成通用任务 API。
+      if (parts[0] === "integrations" && parts[1] === "luban"
+          && parts[2] === "plugin" && parts.length === 3) {
+        if (!options.lubanApproval) {
+          return json(response, 404, { error: "未启用小鲁班手机审批" });
+        }
+        if (request.method !== "POST") {
+          response.setHeader("allow", "POST");
+          return json(response, 405, { error: "只接受 POST" });
+        }
+        let rawBody: string;
+        try {
+          rawBody = await readRawBody(request);
+        } catch (error) {
+          return json(response, 413, { error: String(error) });
+        }
+        const first = (value: string | string[] | undefined) =>
+          Array.isArray(value) ? value[0] : value;
+        const reply = await options.lubanApproval.handle({
+          rawBody,
+          timestamp: first(request.headers["x-mfc-luban-timestamp"]),
+          signature: first(request.headers["x-mfc-luban-signature"]),
+        });
+        return json(response, reply.status, {
+          text: reply.text,
+          ...(reply.replayed ? { replayed: true } : {}),
+        });
+      }
       /** 当前登录者自己缺的配置。两样都是"以本人身份做事"的凭据:
        * Git 令牌决定 push 与 MR 发起人是谁,通知令牌决定消息以谁的
        * 身份发——管理员代配不了(密钥只写不读),所以只能各人自己配,

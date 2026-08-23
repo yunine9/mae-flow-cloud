@@ -110,6 +110,13 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
 语义(投递失败不改流程、MR 幂等、旧绿灯不背书新代码、验证中→等待合入)
 是真假件共同的契约,写在各自测试里。
 
+小鲁班插件的手机审批入口也已收敛为纯文本适配层：配置权限 0600 的
+`--luban-plugin-secret-file` 后，插件或内网桥向同一服务端口的
+`POST /integrations/luban/plugin` 发送验签回调。支持“待审批/详情/选择/
+通过/退回”，审批码绑定当前 waiting 版本；多题澄清不在手机端猜答案。
+真实插件的字段与原生验签由部署桥翻译，Cloud 不复制审批状态机。完整契约
+见 `docs/deploy-intranet.md`「手机纯文本审批」。
+
 ## 已知边界(诚实清单)
 
 - **"serve 反复挂、一点错误输出都没有"的真凶(2026-08-18,内网实战)**:

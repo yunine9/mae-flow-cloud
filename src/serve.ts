@@ -28,6 +28,10 @@ import {
 import { humanBytes } from "./workspaceReclaim.ts";
 import { createTaskServer } from "./server.ts";
 import { FakeLubanServer, Notifier } from "./notifier.ts";
+import {
+  loadLubanPluginSecret,
+  LubanApprovalGateway,
+} from "./lubanApproval.ts";
 import { FakeGitPlatform } from "./gitPlatform.ts";
 import { PgProjection } from "./projection.ts";
 import type { GateDecision } from "./gateService.ts";
@@ -392,6 +396,21 @@ async function main(): Promise<void> {
     }
     lubanHeaders[header.slice(0, at).trim()] = header.slice(at + 1).trim();
   }
+  // 手机审批是入站回调，与上面的出站通知令牌是两套身份。密钥只从
+  // 0600 文件读，不允许塞进命令行或 JSON 配置的明文字段。
+  const lubanPluginSecretFile = flag("--luban-plugin-secret-file");
+  let lubanPluginSecret: string | undefined;
+  if (lubanPluginSecretFile) {
+    try {
+      lubanPluginSecret = loadLubanPluginSecret(
+        resolve(lubanPluginSecretFile));
+      console.log("[serve] 小鲁班手机审批回调已启用: "
+        + "/integrations/luban/plugin");
+    } catch (error) {
+      console.error(`[serve] 小鲁班插件密钥无效，拒绝启动: ${String(error)}`);
+      process.exit(2);
+    }
+  }
 
   // 统一任务执行面:普通编码/修复/子 Agent/推送前编译与 UT 的 Bash
   // 全部进入同一类加固容器。Cloud 控制面、Git 凭据、MR/通知仍留宿主。
@@ -526,6 +545,7 @@ async function main(): Promise<void> {
       endpoint: lubanEndpoint,
       headers: lubanHeaders,
       fake: lubanIsFake,
+      mobileApproval: !!lubanPluginSecret,
       // 发起人的通知令牌:普通任务提醒是自己发给自己；主动邀请检视时，
       // 用责任人的令牌向所选 Committer 工号发送，不要求收件人配令牌。
       personalToken: (account) => auth.lubanToken(account),
@@ -549,6 +569,13 @@ async function main(): Promise<void> {
     console.log(`[serve] 恢复任务 ${recovered.restored} 个`
       + `(重新入队 ${recovered.requeued} 个)`);
   }
+  const lubanApproval = lubanPluginSecret
+    ? new LubanApprovalGateway(service, {
+        secret: lubanPluginSecret,
+        accountEnabled: (account) => !!auth.sessionView(account),
+        log: (message) => console.log(`  [luban-plugin] ${message}`),
+      })
+    : undefined;
   // 现场回收:启动扫一次(服务可能停了很久),之后每天一次。
   // 纯旁路 fail-open——回收失败只是磁盘没省下来,不许它拖住服务。
   // unref():这个定时器不该成为进程不肯退出的理由。
@@ -582,7 +609,7 @@ async function main(): Promise<void> {
   // 就不上网,是姿态不是疏忽)。暴露时登录/权限本来就在,但要认两条:
   // 内网是明文 http(会话 cookie 可被同网段嗅探,正式部署前加反代
   // TLS);工作机合盖=全员断线,它是工作站不是服务器。
-  const server = createTaskServer(service, { webRoot, auth });
+  const server = createTaskServer(service, { webRoot, auth, lubanApproval });
   let terminating = false;
   const terminate = async (signal: "SIGTERM" | "SIGINT") => {
     if (terminating) return;
