@@ -416,6 +416,43 @@ svg {
   justify-content: flex-end;
   gap: 10px;
 }
+.task-sync {
+  min-height: 38px;
+  padding: 6px 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  color: var(--muted);
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+}
+.task-sync > i {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 0 4px var(--success-soft);
+}
+.task-sync > span { display: grid; gap: 1px; }
+.task-sync strong { color: var(--text-strong); font-size: 10px; font-weight: 700; }
+.task-sync small { color: var(--faint); font-size: 8.5px; white-space: nowrap; }
+.task-sync.loading > i { background: var(--active); box-shadow: 0 0 0 4px var(--active-soft); animation: taskSyncPulse 1.25s ease-in-out infinite; }
+.task-sync.error {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 25%, var(--line));
+  background: var(--danger-soft);
+  cursor: pointer;
+}
+.task-sync.error:hover { border-color: var(--danger); }
+.task-sync.error > i { background: var(--danger); box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 13%, transparent); }
+.task-sync.error strong, .task-sync.error small { color: var(--danger); }
+.task-sync > svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+@keyframes taskSyncPulse { 50% { opacity: .38; transform: scale(.78); } }
 .header-launch-gate { display: grid; justify-items: center; gap: 6px; }
 .header-launch {
   min-width: 156px;
@@ -2891,6 +2928,8 @@ pre {
 @media (max-width: 1080px) {
   .app-shell { grid-template-columns: 210px minmax(0, 1fr); }
   .workspace-header, .workspace-main { padding-left: 28px; padding-right: 28px; }
+  .workspace-header-actions { flex-wrap: wrap; }
+  .task-sync:not(.error) small { display: none; }
   .pulse-grid, .history-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .pulse-card:first-child, .history-metric:first-child { grid-row: span 2; }
   .launch-panel { grid-template-columns: 1fr; }

@@ -2,7 +2,7 @@
  * 管理员默认看团队全局，开发默认直达我的工作；
  * 登录身份决定任务归属与操作权限，任务事实仍来自服务端。
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   createUser, deleteUser, getSession, listMyReviews, listTasks, listUsers,
   login, logout, putCommitter, resetUserPassword,
@@ -29,6 +29,7 @@ import {
   progressAgeMs,
 } from "./teamOps";
 import { formatLocalDateTime, instantMs } from "./time";
+import { taskSyncCopy, type TaskSyncState } from "./taskSync";
 
 type View = "team" | "mine" | "profile" | "history" | "users" | "settings";
 type Theme = "light" | "dark";
@@ -140,6 +141,34 @@ function ThemeSwitch({ theme, onChange }: {
   </button>;
 }
 
+function TaskSyncIndicator({
+  state,
+  onRetry,
+}: {
+  state: TaskSyncState;
+  onRetry: () => Promise<void>;
+}) {
+  const copy = taskSyncCopy(state);
+  const title = state.kind === "error"
+    ? state.detail
+    : state.last_success_at
+      ? `最近同步：${formatLocalDateTime(state.last_success_at, { seconds: true })}`
+      : copy.detail;
+  const body = <>
+    <i aria-hidden />
+    <span><strong>{copy.title}</strong><small>{copy.detail}</small></span>
+    {copy.retry && <svg viewBox="0 0 18 18" aria-hidden>
+      <path d="M14.5 6.5A5.75 5.75 0 1 0 15 11M14.5 3v3.5H11" />
+    </svg>}
+  </>;
+  return copy.retry ? (
+    <button type="button" className="task-sync error" title={title}
+      onClick={() => void onRetry()}>{body}</button>
+  ) : (
+    <span className={`task-sync ${state.kind}`} title={title}>{body}</span>
+  );
+}
+
 function PersonalSettingsPage({
   session,
   onSessionPatch,
@@ -189,6 +218,8 @@ export function App() {
   const [artifactTaskId, setArtifactTaskId] = useState("");
   const [artifactTaskSnapshot, setArtifactTaskSnapshot] = useState<TaskSummary>();
   const [launchOpen, setLaunchOpen] = useState(false);
+  const [taskSync, setTaskSync] = useState<TaskSyncState>({ kind: "loading" });
+  const refreshInFlight = useRef<Promise<void> | undefined>(undefined);
   const [targetRoute, setTargetRoute] = useState(readWorkspaceRoute);
   const targetTaskId = targetRoute.taskId;
   const targetReviewId = targetRoute.reviewId;
@@ -213,21 +244,43 @@ export function App() {
     }).catch(() => setSession(null));
   }, []);
 
-  async function refresh() {
+  function refresh(): Promise<void> {
+    if (refreshInFlight.current) return refreshInFlight.current;
     // 等人的排最前、等最久的第一:这块屏幕先回答"谁在等我"。
-    try {
-      const [nextTasks, reviews] = await Promise.all([listTasks(), listMyReviews()]);
-      setTasks(nextTasks.sort(byUrgency));
-      setMyReviews(reviews);
-    }
-    catch {
-      const current = await getSession().catch(() => null);
-      if (!current) setSession(null);
-    }
+    setTaskSync((current) => current.kind === "error"
+      ? { kind: "loading", last_success_at: current.last_success_at }
+      : current);
+    const running = (async () => {
+      try {
+        const [nextTasks, reviews] = await Promise.all([listTasks(), listMyReviews()]);
+        setTasks(nextTasks.sort(byUrgency));
+        setMyReviews(reviews);
+        setTaskSync({ kind: "live", last_success_at: new Date().toISOString() });
+      } catch (cause) {
+        // 网络抖动不能把用户踢回登录页；只有 /auth/me 明确返回未登录才退出。
+        let current: AuthUser | null | undefined;
+        try { current = await getSession(); } catch { current = undefined; }
+        if (current === null) {
+          setSession(null);
+          return;
+        }
+        setTaskSync((previous) => ({
+          kind: "error",
+          last_success_at: previous.last_success_at,
+          detail: cause instanceof Error ? cause.message : String(cause),
+        }));
+      }
+    })();
+    refreshInFlight.current = running;
+    void running.finally(() => {
+      if (refreshInFlight.current === running) refreshInFlight.current = undefined;
+    });
+    return running;
   }
 
   useEffect(() => {
     if (!session) return;
+    setTaskSync({ kind: "loading" });
     void refresh();
     const timer = setInterval(refresh, 1500);
     return () => clearInterval(timer);
@@ -279,7 +332,10 @@ export function App() {
   }} />;
 
   async function signOut() {
-    await logout().catch(() => undefined); setTasks([]); setSession(null);
+    await logout().catch(() => undefined);
+    setTasks([]);
+    setTaskSync({ kind: "loading" });
+    setSession(null);
   }
 
   function changeTheme(next: Theme) {
@@ -373,7 +429,7 @@ export function App() {
     </aside>
 
     <div className="workspace">
-      <header className="workspace-header"><div><div className="eyebrow">MAE-FLOW CLOUD</div><h1>{header.title}</h1><p className={view === "mine" ? "header-context-line" : undefined}>{view === "mine" && <span className="header-user-context">{session.username}</span>}<span>{header.description}</span></p></div><div className="workspace-header-actions">{relevantWaiting > 0 && view !== "history" && view !== "users" && view !== "settings" && <div className="header-attention"><span className="attention-pulse" aria-hidden /><span><strong>{relevantWaiting}</strong>{view === "mine" ? " 项需要我处理" : " 项工作等待决策"}</span></div>}{view === "mine" && session.role !== "admin" && <div className="header-launch-gate"><button type="button" className="header-launch" disabled={!personalSetupReady} title={personalSetupReady ? "发起新任务" : "请先完成个人设置"} aria-label={personalSetupReady ? "发起新任务" : "发起新任务不可用，请先完成个人设置"} onClick={() => personalSetupReady && setLaunchOpen(true)}><svg viewBox="0 0 20 20" aria-hidden>{personalSetupReady ? <path d="M10 4v12M4 10h12" /> : <><rect x="5" y="8.5" width="10" height="8" rx="1.5" /><path d="M7.5 8.5V6.75a2.5 2.5 0 0 1 5 0V8.5" /></>}</svg><span>发起新任务</span></button>{!personalSetupReady && <button type="button" className="header-unlock" onClick={() => setView("profile")}>完成个人设置后解锁<svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg></button>}</div>}</div></header>
+      <header className="workspace-header"><div><div className="eyebrow">MAE-FLOW CLOUD</div><h1>{header.title}</h1><p className={view === "mine" ? "header-context-line" : undefined}>{view === "mine" && <span className="header-user-context">{session.username}</span>}<span>{header.description}</span></p></div><div className="workspace-header-actions"><TaskSyncIndicator state={taskSync} onRetry={refresh} />{relevantWaiting > 0 && view !== "history" && view !== "users" && view !== "settings" && <div className="header-attention"><span className="attention-pulse" aria-hidden /><span><strong>{relevantWaiting}</strong>{view === "mine" ? " 项需要我处理" : " 项工作等待决策"}</span></div>}{view === "mine" && session.role !== "admin" && <div className="header-launch-gate"><button type="button" className="header-launch" disabled={!personalSetupReady} title={personalSetupReady ? "发起新任务" : "请先完成个人设置"} aria-label={personalSetupReady ? "发起新任务" : "发起新任务不可用，请先完成个人设置"} onClick={() => personalSetupReady && setLaunchOpen(true)}><svg viewBox="0 0 20 20" aria-hidden>{personalSetupReady ? <path d="M10 4v12M4 10h12" /> : <><rect x="5" y="8.5" width="10" height="8" rx="1.5" /><path d="M7.5 8.5V6.75a2.5 2.5 0 0 1 5 0V8.5" /></>}</svg><span>发起新任务</span></button>{!personalSetupReady && <button type="button" className="header-unlock" onClick={() => setView("profile")}>完成个人设置后解锁<svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg></button>}</div>}</div></header>
       <main className="workspace-main">
         {view === "team" && <TeamDashboard
           tasks={tasks}
@@ -649,7 +705,7 @@ function TeamDashboard({
 
   return <>
     <section className="team-pulse ops-pulse" aria-labelledby="pulse-title">
-      <div className="section-head pulse-head"><div><span className="section-kicker">TEAM OPERATIONS</span><h2 id="pulse-title">团队行动态势</h2></div><span className="live-label"><i aria-hidden /> 实时更新</span></div>
+      <div className="section-head pulse-head"><div><span className="section-kicker">TEAM OPERATIONS</span><h2 id="pulse-title">团队行动态势</h2></div><span className="section-count">行动项优先</span></div>
       <div className="pulse-grid ops-grid">
         <div className="pulse-card attention"><span className="pulse-card-label"><i aria-hidden />需要处理</span><strong>{actionable.length}</strong><small>决策、失败与人工阻塞</small></div>
         <div className="pulse-card danger"><span className="pulse-card-label"><i aria-hidden />停滞任务</span><strong>{stale.length}</strong><small>2 小时没有有效推进</small></div>
