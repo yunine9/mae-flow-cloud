@@ -392,32 +392,14 @@ export function TaskWorkspace({
         )}
       </header>
 
-      {health && (
-        <section className={`ws-health${health.needs_attention ? " attention" : ""}`}
-          aria-label="任务健康概览">
-          <div className="ws-health-current">
-            <span>当前</span>
-            <strong title={health.current}>{health.current}</strong>
-          </div>
-          <div className="ws-health-next">
-            <span>下一步</span>
-            <strong title={health.next}>{health.next}</strong>
-          </div>
-          <div>
-            <span>当前责任方</span>
-            <strong>{health.actor}</strong>
-          </div>
-          <div>
-            <span>最近有效推进</span>
-            <strong title={health.last_progress_at}>
-              {relativeTime(health.last_progress_at) || "暂无记录"}
-            </strong>
-          </div>
-        </section>
-      )}
-
-      <div className={`ws-progress${task.progress ? "" : " is-fallback"}`}>
-        <TaskProgress progress={visibleProgress} showDetailedStep />
+      <div className={`ws-progress${task.progress ? "" : " is-fallback"}`
+        + `${health?.needs_attention ? " attention" : ""}`}>
+        <TaskProgress progress={visibleProgress} showDetailedStep context={health && <>
+          <span title={health.next}><i>下一步</i>{health.next}</span>
+          <span><i>责任</i>{health.actor}</span>
+          <span title={health.last_progress_at}><i>更新</i>
+            {relativeTime(health.last_progress_at) || "暂无记录"}</span>
+        </>} />
       </div>
       <PrepushStatus prepush={task.delivery?.prepush} placement="workspace" />
 

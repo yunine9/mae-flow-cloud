@@ -1444,6 +1444,33 @@ svg {
   font-size: 9.5px;
 }
 .task-progress-caption > span { font-weight: 650; }
+.task-progress-caption-context {
+  min-width: 0;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 13px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 550 !important;
+}
+.task-progress-caption-context > span {
+  min-width: 0;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-progress-caption-context i {
+  color: var(--faint);
+  font-size: 8px;
+  font-style: normal;
+  font-weight: 700;
+  letter-spacing: .04em;
+}
 .task-progress-caption > strong {
   min-width: 0;
   overflow: hidden;
@@ -3839,35 +3866,15 @@ pre {
   font-size: 12px;
   font-weight: 650;
 }
-.ws-health {
-  padding: 10px 24px; display: grid;
-  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1.35fr) minmax(150px, .7fr) minmax(130px, .55fr);
-  gap: 0; border-bottom: 1px solid var(--line); background: var(--surface);
-}
-.ws-health > div {
-  min-width: 0; padding: 3px 16px; display: flex; flex-direction: column;
-  gap: 4px; border-left: 1px solid var(--line);
-}
-.ws-health > div:first-child { padding-left: 0; border-left: 0; }
-.ws-health > div:last-child { padding-right: 0; }
-.ws-health span {
-  color: var(--faint); font-size: 9px; font-weight: 700;
-  letter-spacing: .08em; text-transform: uppercase;
-}
-.ws-health strong {
-  overflow: hidden; color: var(--text-strong); font-size: 11px;
-  font-weight: 620; line-height: 1.5; text-overflow: ellipsis; white-space: nowrap;
-}
-.ws-health-current strong { color: var(--accent); }
-.ws-health.attention .ws-health-current strong { color: var(--attention); }
-.ws-health.attention { box-shadow: inset 3px 0 0 var(--attention); }
 .ws-progress {
   padding: 10px 24px 12px;
   border-bottom-color: var(--line);
   box-shadow: var(--shadow-xs);
 }
+.ws-progress.attention { box-shadow: inset 3px 0 0 var(--attention), var(--shadow-xs); }
 .ws-progress .task-progress { width: 100%; max-width: none; margin: 0; }
 .ws-progress .task-progress-caption { margin-bottom: 11px; }
+.ws-progress .task-progress-caption > strong { margin-left: 14px; }
 .ws-progress .task-phase {
   --phase-color: #7267e9;
   --phase-next: #4f83ee;
@@ -3915,7 +3922,7 @@ pre {
               0 4px 12px color-mix(in srgb, var(--phase-color) 30%, transparent);
 }
 .ws-progress .task-phase-track { grid-template-columns: repeat(7, minmax(64px, 1fr)); }
-.ws-progress.is-fallback .task-progress-caption > span::after {
+.ws-progress.is-fallback .task-progress-caption > span:first-child::after {
   content: " · 概览";
   color: var(--faint);
   font-weight: 550;
@@ -4850,13 +4857,9 @@ pre {
   .ws-head { min-height: 64px; padding: 9px 12px; gap: 10px; }
   .ws-back span { display: none; }
   .ws-back { width: 38px; padding: 0; }
-  .ws-health { padding: 9px 14px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .ws-health > div { padding: 4px 12px; }
-  .ws-health > div:nth-child(odd) { padding-left: 0; border-left: 0; }
-  .ws-health > div:nth-child(n + 3) { margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--line); }
-  .ws-health strong { white-space: normal; }
   .ws-progress { padding: 9px 14px 11px; overflow-x: auto; }
   .ws-progress .task-progress { min-width: 620px; }
+  .ws-progress .task-progress-caption-context > span:nth-child(n + 2) { display: none; }
   .prepush-workspace { padding: 8px 14px; }
   .token-usage-workspace {
     padding: 9px 14px;

@@ -294,9 +294,11 @@ export function WaitBadge({ task, personal }: { task: TaskSummary; personal: boo
 export function TaskProgress({
   progress,
   showDetailedStep,
+  context,
 }: {
   progress: NonNullable<TaskSummary["progress"]>;
   showDetailedStep: boolean;
+  context?: ReactNode;
 }) {
   const currentLabel = showDetailedStep
     ? progress.step ?? progress.current_phase
@@ -318,6 +320,7 @@ export function TaskProgress({
   return <span className="task-progress" aria-label={`当前阶段：${currentLabel}`}>
     <span className="task-progress-caption">
       <span>当前进度</span>
+      {context && <span className="task-progress-caption-context">{context}</span>}
       <strong>{currentLabel}</strong>
     </span>
     {showMilestone && milestone && (
