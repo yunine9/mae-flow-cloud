@@ -446,7 +446,9 @@ async function main(): Promise<void> {
     process.exit(2);
   }
   if (isolateUser !== undefined
-      && (!isolateUser.trim() || /^(?:root|0)(?::|$)/i.test(isolateUser.trim()))) {
+      && (!isolateUser.trim()
+        || /^(?:root|0)(?::|$)/i.test(isolateUser.trim())
+        || /:0$/i.test(isolateUser.trim()))) {
     console.error("[serve] --isolate-user 禁止使用 root/0 或空值,拒绝启动");
     process.exit(2);
   }

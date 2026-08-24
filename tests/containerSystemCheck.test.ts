@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { dockerAvailable } from "../src/containerRuntime.ts";
@@ -14,11 +14,15 @@ test("部署自检真实走统一容器并验证三类工具链，结束后销�
   const calls: string[] = [];
   let input: TaskContainerFactoryInput | undefined;
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-container-check-"));
+  const kernelRoot = join(dataDir, "kernel");
+  mkdirSync(join(kernelRoot, "scripts"), { recursive: true });
+  writeFileSync(join(kernelRoot, "scripts", "mae-flow.py"), "# fixture\n");
   const service = new TaskService({
     dataDir,
     provider: "fixture",
     model: "fixture",
     modelsJson: {},
+    host: { kernelRoot, repoPath: join(dataDir, "repo"), python: "python3" },
     prepush: { enabled: true, buildSlots: 2 },
     isolation: {
       image: "internal/mae-flow-builder@sha256:fixture",
@@ -35,6 +39,10 @@ test("部署自检真实走统一容器并验证三类工具链，结束后销�
             assert.match(command, /javac/);
             assert.match(command, /c\+\+/);
             assert.match(command, /node --version/);
+            assert.match(command, /\/etc\/profile\.d\/\*\.sh/);
+            assert.match(command, /ca-bundle\.crt/);
+            assert.match(command, /codehub-cli spes/);
+            assert.match(command, /MFC_KERNEL_ROOT/);
             assert.match(command, /scratch="\$PWD\/\.mfc-self-check-\$\$"/,
               "编译探针必须落在 bind-mounted workspace，不得只测 /tmp");
             for (const cache of ["maven", "npm", "ccache", "xdg"]) {
@@ -59,6 +67,9 @@ test("部署自检真实走统一容器并验证三类工具链，结束后销�
   assert.deepEqual(calls, ["start", "exec", "stop"]);
   assert.ok(input?.volumes.some((volume) =>
     volume.endsWith(":/cache/maven")), "自检也必须验证真实缓存挂载");
+  assert.ok(input?.volumes.includes(`${kernelRoot}:${kernelRoot}:ro`),
+    "自检必须同形挂载并验证 Mae-Flow 内核根");
+  assert.equal(input?.options.environment?.MFC_KERNEL_ROOT, kernelRoot);
   assert.equal(input?.limits.memory, "3g");
   assert.equal(input?.limits.pidsLimit, 512);
   assert.equal(input?.options.labels?.["com.mae-flow-cloud.role"], "system-check");

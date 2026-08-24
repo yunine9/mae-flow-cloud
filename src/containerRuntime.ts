@@ -305,6 +305,13 @@ export function resolveContainerUser(
 ): ContainerUserChoice {
   const configured = input.configured?.trim();
   if (configured) {
+    if (input.platform === "linux" && (input.uid === 0 || input.gid === 0)
+        && !/^[1-9][0-9]*:[1-9][0-9]*$/.test(configured)) {
+      throw new Error(
+        "Mae-Flow Cloud 以 root 运行时，--isolate-user 必须使用非 root "
+        + "数字 uid:gid（例如 10001:10001），宿主才能安全准备工作区属主",
+      );
+    }
     return { user: configured, reason: "由 --isolate-user 显式指定" };
   }
   if (input.platform !== "linux") {

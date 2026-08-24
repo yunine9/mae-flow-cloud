@@ -33,9 +33,17 @@ docker build \
 `--build-arg INSTALL_OS_PACKAGES=false`，构建过程仍会逐项校验工具，缺失
 时立即失败。否则基础镜像必须已配置能访问的内部 apt 镜像。
 
-`BUILDER_UID`、`BUILDER_GID` 默认都是 `10001`。生产环境建议用运行
-Mae-Flow Cloud 的服务账号 UID/GID 重建镜像，或者确保工作区和缓存卷
-对 `10001:10001` 可写；不要用 root 规避文件权限问题。
+`BUILDER_UID`、`BUILDER_GID` 默认都是 `10001`。生产环境优先用运行
+Mae-Flow Cloud 的服务账号 UID/GID 重建镜像。服务若由 root 守护进程
+启动，必须显式配置数字形式的 `--isolate-user <uid>:<gid>`；Cloud 会在
+每次任务容器启动前，只把实际 bind 的代码工作区和平台构建缓存交给该
+用户；宿主 Write/Edit 与内核状态换新后也会立即修正对应文件，不会改任务
+控制面或凭据目录。禁止用 `umask 0000` 代替所有权处理。
+
+最终镜像不能假设任务用户属于 root 组。所有预装 CLI、JDK/Node 环境脚本
+必须让普通用户可读/执行，CA 路径的每一级目录必须可遍历，证书文件必须
+可读。标准 Dockerfile 会在切换到 `USER builder:builder` 后用 `sh -lc`
+再次验证这些条件；基于自有 rootfs 派生镜像时也必须保留同等检查。
 
 ## 运行时挂载约定
 

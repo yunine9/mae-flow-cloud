@@ -1,0 +1,248 @@
+/**
+ * Root 宿主与非 root 任务容器之间的文件所有权接缝。
+ *
+ * 正式推荐仍是“服务账号 uid:gid = 容器 uid:gid”。但部分部署由 root
+ * 守护进程启动，并显式把业务命令降到 10001:10001。此时 clone、内核
+ * bootstrap 和宿主文件工具创建的内容都归 root；只把 Docker `-u` 改成
+ * 10001 并不会自动改变 bind mount 的所有权。
+ *
+ * 本模块只处理真正挂给任务容器的代码工作区和平台管理的构建缓存。
+ * task.json、models.json、账号与凭据等控制面目录绝不能顺手 chown。
+ */
+
+import {
+  chmodSync,
+  chownSync,
+  existsSync,
+  lchownSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+
+const CACHE_DESTINATIONS = new Set([
+  "/cache/maven",
+  "/cache/npm",
+  "/cache/ccache",
+  "/cache/xdg",
+]);
+const OWNER_MARKER_PREFIX = ".mae-flow-container-owner-v1";
+
+export interface NumericOwner {
+  uid: number;
+  gid: number;
+}
+
+export interface ContainerOwnershipRuntime {
+  platform?: NodeJS.Platform;
+  effectiveUid?: number;
+}
+
+export interface PreparedOwnership {
+  active: boolean;
+  owner?: NumericOwner;
+  workspaceEntries: number;
+  cacheTrees: number;
+}
+
+/** Root/Linux 才需要代容器用户接管宿主文件；其他形态天然同属主或由
+ * Docker Desktop 做映射。Root 形态必须给精确数字 uid:gid，名字只在
+ * 容器 `/etc/passwd` 内有意义，宿主无法安全地拿它 chown。 */
+export function rootContainerOwner(
+  user: string | undefined,
+  runtime: ContainerOwnershipRuntime = {},
+): NumericOwner | undefined {
+  const platform = runtime.platform ?? process.platform;
+  const effectiveUid = runtime.effectiveUid ?? process.getuid?.();
+  if (platform !== "linux" || effectiveUid !== 0) return undefined;
+  const match = user?.trim().match(/^([0-9]+):([0-9]+)$/);
+  if (!match) {
+    throw new Error(
+      "服务以 root 运行时，--isolate-user 必须是非 root 数字 uid:gid"
+      + "（例如 10001:10001），以便准备 bind 工作区所有权",
+    );
+  }
+  const uid = Number(match[1]);
+  const gid = Number(match[2]);
+  if (!Number.isSafeInteger(uid) || !Number.isSafeInteger(gid)
+      || uid <= 0 || gid <= 0) {
+    throw new Error(
+      "服务以 root 运行时，--isolate-user 的 uid 和 gid 必须都是正整数",
+    );
+  }
+  return { uid, gid };
+}
+
+function chownTree(path: string, owner: NumericOwner): number {
+  const root = resolve(path);
+  if (root === "/" || !existsSync(root)) {
+    throw new Error(`拒绝准备不安全或不存在的容器目录：${root}`);
+  }
+  if (lstatSync(root).isSymbolicLink()) {
+    throw new Error(`容器挂载根不能是符号链接：${root}`);
+  }
+  let changed = 0;
+  const visit = (entry: string): void => {
+    let stat;
+    try {
+      stat = lstatSync(entry);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    if (stat.isSymbolicLink()) {
+      if (stat.uid !== owner.uid || stat.gid !== owner.gid) {
+        lchownSync(entry, owner.uid, owner.gid);
+        changed += 1;
+      }
+      return; // 只改链接本身，绝不跟随到工作区外。
+    }
+    if (stat.uid !== owner.uid || stat.gid !== owner.gid) {
+      chownSync(entry, owner.uid, owner.gid);
+      changed += 1;
+    }
+    if (!stat.isDirectory()) return;
+    for (const child of readdirSync(entry)) visit(join(entry, child));
+  };
+  visit(root);
+  return changed;
+}
+
+function cacheSource(volume: string): string | undefined {
+  const [source, destination, mode] = volume.split(":");
+  if (!source || !destination || !isAbsolute(source)) return undefined;
+  if (!CACHE_DESTINATIONS.has(resolve(destination))) return undefined;
+  if (mode?.split(",").includes("ro")) return undefined;
+  return resolve(source);
+}
+
+function ownershipMarkerRoot(path: string): void {
+  mkdirSync(path, { recursive: true, mode: 0o700 });
+  const stat = lstatSync(path);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw new Error(`容器属主标记目录必须是宿主专用真实目录：${path}`);
+  }
+  // 旧部署可能曾用 umask 0000。标记决定 root 是否跳过整棵缓存核对，
+  // 不能放在容器可写目录里，也不能继续继承 world-writable 权限。
+  chmodSync(path, 0o700);
+}
+
+function prepareCache(
+  path: string,
+  owner: NumericOwner,
+  markerRoot: string,
+): boolean {
+  mkdirSync(path, { recursive: true });
+  ownershipMarkerRoot(markerRoot);
+  const signature = `${owner.uid}:${owner.gid}\n`;
+  const sourceId = createHash("sha256").update(resolve(path)).digest("hex");
+  const marker = join(
+    markerRoot,
+    `${OWNER_MARKER_PREFIX}-${sourceId}-${owner.uid}-${owner.gid}`,
+  );
+  try {
+    if (lstatSync(marker).isSymbolicLink()) {
+      throw new Error(`容器属主标记不能是符号链接：${marker}`);
+    }
+    if (readFileSync(marker, "utf-8") === signature) return false;
+  } catch {
+    // 首次使用、旧用户或损坏标记都重新核对整棵缓存。
+  }
+  chownTree(path, owner);
+  const temporary = join(
+    dirname(marker), `.${basename(marker)}.${process.pid}.${randomUUID()}.tmp`);
+  writeFileSync(temporary, signature, { mode: 0o600, flag: "wx" });
+  renameSync(temporary, marker);
+  return true;
+}
+
+/** 在 docker run 之前调用。workspace 必须是本次真正 bind 的代码现场，
+ * 不能传任务控制面根目录。缓存使用属主标记避免每单递归扫描大仓库。 */
+export function prepareContainerHostPaths(input: {
+  workspace: string;
+  volumes: readonly string[];
+  user?: string;
+  /** 宿主专用，绝不能 bind 给任务容器。缓存跳过标记放在这里。 */
+  markerRoot?: string;
+  runtime?: ContainerOwnershipRuntime;
+}): PreparedOwnership {
+  const owner = rootContainerOwner(input.user, input.runtime);
+  if (!owner) {
+    return { active: false, workspaceEntries: 0, cacheTrees: 0 };
+  }
+  if (!input.markerRoot) {
+    throw new Error("root 宿主准备容器缓存时缺少宿主专用属主标记目录");
+  }
+  const workspaceEntries = chownTree(input.workspace, owner);
+  let cacheTrees = 0;
+  const seen = new Set<string>();
+  for (const volume of input.volumes) {
+    const source = cacheSource(volume);
+    if (!source || seen.has(source)) continue;
+    seen.add(source);
+    if (prepareCache(source, owner, resolve(input.markerRoot))) cacheTrees += 1;
+  }
+  return { active: true, owner, workspaceEntries, cacheTrees };
+}
+
+/**
+ * Pi 的 Write/Edit 在宿主进程执行。root 宿主写完一个文件后要立刻把该
+ * 文件及新建父目录交回容器用户；否则开场 chown 虽成功，下一次编译仍
+ * 可能因刚生成的 root 文件失败。工作区外的修复材料不在 bind mount 中，
+ * 这里明确忽略，不扩大 chown 边界。
+ */
+export function repairContainerMutationOwnership(input: {
+  workspace: string;
+  path: string;
+  user?: string;
+  runtime?: ContainerOwnershipRuntime;
+}): boolean {
+  const owner = rootContainerOwner(input.user, input.runtime);
+  if (!owner) return false;
+  const workspace = resolve(input.workspace);
+  const target = resolve(workspace, input.path);
+  if (target !== workspace && !target.startsWith(`${workspace}/`)) return false;
+  if (!existsSync(target)) {
+    throw new Error(`文件工具写入后目标不存在，无法准备容器属主：${target}`);
+  }
+  let cursor = target;
+  while (true) {
+    const stat = lstatSync(cursor);
+    if (stat.isSymbolicLink()) {
+      // GateService 已在执行前校验真实目标；此处仍只 lchown 链接本身，
+      // 不让一个写入后的竞态把 root chown 引到工作区外。
+      if (stat.uid !== owner.uid || stat.gid !== owner.gid) {
+        lchownSync(cursor, owner.uid, owner.gid);
+      }
+    } else if (stat.uid !== owner.uid || stat.gid !== owner.gid) {
+      chownSync(cursor, owner.uid, owner.gid);
+    }
+    if (cursor === workspace) break;
+    cursor = dirname(cursor);
+  }
+  return true;
+}
+
+/** 宿主 KernelHost 使用原子 replace 写状态，会把原本属于容器用户的
+ * `.mae-flow*` 文件重新变成 root。每次 Hook 收口只核对这些小型状态树，
+ * 不递归扫描整个业务仓。 */
+export function repairContainerKernelOwnership(input: {
+  workspace: string;
+  user?: string;
+  runtime?: ContainerOwnershipRuntime;
+}): number {
+  const owner = rootContainerOwner(input.user, input.runtime);
+  if (!owner) return 0;
+  const workspace = resolve(input.workspace);
+  let changed = 0;
+  for (const name of readdirSync(workspace)) {
+    if (!name.startsWith(".mae-flow") && name !== ".codecheckcli") continue;
+    changed += chownTree(join(workspace, name), owner);
+  }
+  return changed;
+}

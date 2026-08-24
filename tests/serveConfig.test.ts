@@ -66,8 +66,8 @@ test("配置文件坏了拒绝启动,不静默忽略", async () => {
   assert.notEqual(missing.code, 0);
 });
 
-test("--isolate-user 拒绝 root/0，不能把容器隔离变成 root 执行", async () => {
-  for (const user of ["root", "root:root", "0", "0:0"]) {
+test("--isolate-user 拒绝 root uid/gid，不能把容器隔离变成 root 执行", async () => {
+  for (const user of ["root", "root:root", "0", "0:0", "10001:0"]) {
     const dir = mkdtempSync(join(tmpdir(), "mfc-root-user-"));
     const result = await run([
       "--data", join(dir, "tasks"),

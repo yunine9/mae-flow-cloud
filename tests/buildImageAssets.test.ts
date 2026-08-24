@@ -30,6 +30,12 @@ test("build image: 工具链版本明确且最终以非 root builder 运行", ()
   assert.match(dockerfile, /test "\$\(node --version\)" = "v18\.16\.1"/);
   assert.match(dockerfile, /test "\$\(npm --version\)" = "9\.5\.1"/);
   assert.match(dockerfile, /USER builder:builder/);
+  assert.ok(dockerfile.indexOf("USER builder:builder")
+    < dockerfile.indexOf("RUN sh -lc 'set -eu"),
+  "工具链必须在最终非 root 用户下验证");
+  assert.match(dockerfile, /\/etc\/profile\.d\/\*\.sh/);
+  assert.match(dockerfile, /\/etc\/pki\/tls\/certs\/ca-bundle\.crt/);
+  assert.match(dockerfile, /codehub-cli spes/);
   assert.match(dockerfile, /HOME=\/home\/mae-flow/);
   assert.match(dockerfile, /MAVEN_CONFIG=\/home\/mae-flow\/\.m2/);
   assert.doesNotMatch(dockerfile, /\/home\/builder/);

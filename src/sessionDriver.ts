@@ -18,10 +18,20 @@ import {
   defineTool,
   ModelRuntime,
   SessionManager,
+  createEditToolDefinition,
+  createWriteToolDefinition,
   type BashOperations,
+  type EditOperations,
+  type WriteOperations,
 } from "@earendil-works/pi-coding-agent";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { constants, existsSync, readFileSync, statSync } from "node:fs";
+import {
+  access as fsAccess,
+  mkdir as fsMkdir,
+  readFile as fsReadFile,
+  writeFile as fsWriteFile,
+} from "node:fs/promises";
 import { EventLog, type SemanticEvent, type SemanticEventKind, validateEvent } from "./semanticEvents.ts";
 import { TranscriptStore } from "./transcriptStore.ts";
 import { GateService } from "./gateService.ts";
@@ -104,6 +114,9 @@ export interface CloudSessionOptions {
    * 容器跑;工具仍叫 bash,门禁与 transcript 看到的世界不变。
    * 子会话经同一 openSession 装配,天然同套隔离。 */
   bashOperations?: BashOperations;
+  /** root 宿主 + 非 root 容器时，内建 Write/Edit 成功落盘后立刻修正
+   * bind 文件属主。回调失败会让本次工具调用失败，不把隐患拖到编译时。 */
+  afterFileMutation?: (absolutePath: string) => void | Promise<void>;
   /** 宿主级 skill 目录(部署时放一次,每个任务自动带)。团队的两个
    * UT skill 在内网、出不来仓,老宿主是"每次手动集成进 ut-generator
    * 子 agent";云端子 Agent 照样有(Task 工具),缺的是自动装载——
@@ -820,6 +833,9 @@ export class CloudSession {
           },
         )]
       : [];
+    const ownedFileTools = this.options.afterFileMutation
+      ? this.ownedFileTools(workspace, this.options.afterFileMutation)
+      : [];
     const { session } = await createAgentSession({
       cwd: workspace,
       agentDir,
@@ -828,6 +844,7 @@ export class CloudSession {
       resourceLoader: loader,
       customTools: [
         ...(config.customTools as any[]),
+        ...ownedFileTools,
         ...isolatedTools,
       ] as any,
       sessionManager: SessionManager.inMemory(),
@@ -837,6 +854,29 @@ export class CloudSession {
     (session as any).setAutoCompactionEnabled?.(true);
     session.subscribe((event: any) => this.onSessionEvent(config.sessionId, event));
     return session;
+  }
+
+  private ownedFileTools(
+    workspace: string,
+    afterMutation: (absolutePath: string) => void | Promise<void>,
+  ): unknown[] {
+    const finish = async (path: string, content: string): Promise<void> => {
+      await fsWriteFile(path, content, "utf-8");
+      await afterMutation(path);
+    };
+    const writeOperations: WriteOperations = {
+      mkdir: (path) => fsMkdir(path, { recursive: true }).then(() => undefined),
+      writeFile: finish,
+    };
+    const editOperations: EditOperations = {
+      access: (path) => fsAccess(path, constants.R_OK | constants.W_OK),
+      readFile: fsReadFile,
+      writeFile: finish,
+    };
+    return [
+      createWriteToolDefinition(workspace, { operations: writeOperations }),
+      createEditToolDefinition(workspace, { operations: editOperations }),
+    ];
   }
 
   // ---- 同步拦截(tool_call 钩子) ----

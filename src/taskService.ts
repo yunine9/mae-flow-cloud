@@ -68,6 +68,11 @@ import {
   type TaskContainerMetadata,
   type TaskContainerOptions,
 } from "./containerRuntime.ts";
+import {
+  prepareContainerHostPaths,
+  repairContainerKernelOwnership,
+  repairContainerMutationOwnership,
+} from "./containerOwnership.ts";
 import type { ExternalAction, PgProjection } from "./projection.ts";
 import type { RuntimeSettings } from "./settings.ts";
 import { ReviewStore, type ReviewRequest } from "./reviews.ts";
@@ -1011,7 +1016,29 @@ export class TaskService {
           throw new Error("服务正在关闭，拒绝启动新的任务容器");
         }
         if (!startPromise) {
-          const attempt = Promise.resolve().then(() => created.start());
+          const attempt = Promise.resolve().then(() => {
+            // Root 守护进程 + 非 root 容器时，clone、内核 bootstrap 和
+            // 宿主文件工具留下的是 root 属主。必须在真正 docker run 前
+            // 统一交给容器用户；只在 clone 后做一次会漏掉随后生成的
+            // .mae-flow 状态，靠 umask 0000 又会把现场开放给所有用户。
+            const prepared = prepareContainerHostPaths({
+              workspace: ownedInput.workspace,
+              volumes: ownedInput.volumes,
+              user: ownedInput.limits.user,
+              markerRoot: join(
+                service.options.dataDir, ".container-ownership"),
+            });
+            if (prepared.active
+                && (prepared.workspaceEntries || prepared.cacheTrees)) {
+              service.options.log?.(
+                `[container-ownership] ${ownedInput.name}: `
+                + `workspace=${prepared.workspaceEntries},`
+                + `cache-trees=${prepared.cacheTrees},`
+                + `owner=${prepared.owner!.uid}:${prepared.owner!.gid}`,
+              );
+            }
+            return created.start();
+          });
           startPromise = attempt.then(async () => {
             // docker run/inspect 在 await 期间收到 SIGTERM：容器可能刚刚
             // 出现。必须先确认删除，再让 start 以关闭错误返回。
@@ -1086,7 +1113,9 @@ export class TaskService {
       ? [
           `${this.options.host.kernelRoot}:${this.options.host.kernelRoot}:ro`,
           ...(effectiveRepo && existsSync(effectiveRepo)
-            ? [`${effectiveRepo}:${effectiveRepo}`] : []),
+            // 本地裸仓只供演练/离线环境读取。Agent 的 push 已由宿主
+            // 统一执行，不能因“这是本地路径”就把远端仓 RW 交给容器。
+            ? [`${effectiveRepo}:${effectiveRepo}:ro`] : []),
         ]
       : [];
     const gitPath = join(cwd, ".git");
@@ -1497,8 +1526,13 @@ export class TaskService {
     }
     const workspace = join(this.options.dataDir, "system-check-container");
     mkdirSync(workspace, { recursive: true });
+    const kernelRoot = this.options.host?.kernelRoot;
     const mounted = this.containerMountsForRepository(
-      "mae-flow-cloud/system-check", isolation.volumes ?? [],
+      "mae-flow-cloud/system-check",
+      [
+        ...(isolation.volumes ?? []),
+        ...(kernelRoot ? [`${kernelRoot}:${kernelRoot}:ro`] : []),
+      ],
     );
     const instance = taskContainerInstance(this.options.dataDir).namePrefix;
     const containerName = `mfc-${instance}-system-check-${randomUUID().slice(0, 8)}`;
@@ -1523,7 +1557,10 @@ export class TaskService {
         tmpfsHome: isolation.tmpfsHome,
         tmpfsTmp: isolation.tmpfsTmp,
         network: isolation.network,
-        environment: mounted.environment,
+        environment: {
+          ...mounted.environment,
+          ...(kernelRoot ? { MFC_KERNEL_ROOT: kernelRoot } : {}),
+        },
         forwardEnvironment: isolation.forwardEnvironment,
         stopGraceSeconds: isolation.stopGraceSeconds,
         managementTimeoutMs: isolation.managementTimeoutMs,
@@ -1546,6 +1583,15 @@ export class TaskService {
         'test -w "$PWD"',
         // 四类缓存都必须是实际可写挂载；逐个写读删，不只看目录权限位。
         'for cache in /cache/maven /cache/npm /cache/ccache /cache/xdg; do test -d "$cache"; probe="$cache/.mfc-self-check-$$"; printf cache-ok > "$probe"; test "$(cat "$probe")" = cache-ok; rm -f "$probe"; done',
+        // 内部基础镜像曾把 profile、平台 CLI 和 CA 路径做成 0750
+        // root:root；root 阶段 docker build 全绿，10001 真跑却全拒绝。
+        'for script in /etc/profile.d/*.sh; do test ! -e "$script" || test -r "$script"; done',
+        'for directory in /etc/pki /etc/pki/tls /etc/pki/tls/certs; do test ! -e "$directory" || test -x "$directory"; done',
+        'for ca in /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/certs/ca-certificates.crt; do test ! -e "$ca" || test -r "$ca"; done',
+        'for optional in codehub-cli spes; do path="$(command -v "$optional" 2>/dev/null || true)"; test -z "$path" || test -x "$path"; done',
+        // 真任务会把内核根只读挂入；父目录 0750 时工具链自检会绿，
+        // mae-flow 第一条命令却 Permission denied。这里必须同形验证。
+        'if test -n "${MFC_KERNEL_ROOT:-}"; then test -x "$MFC_KERNEL_ROOT"; test -r "$MFC_KERNEL_ROOT/scripts/mae-flow.py"; fi',
         "java -version 2>&1",
         "java -version 2>&1 | grep -Eq 'version \\\"21([.]|\\\"| )'",
         "mvn --version",
@@ -1582,7 +1628,8 @@ export class TaskService {
         ?? isolation.image;
       detail = `镜像 ${immutable} 已真实启动；bind 工作区可写并以 JDK 21/Maven、`
         + "C/C++ 完成编译执行，Maven/npm/ccache/XDG 缓存均可写；"
-        + "Node 18+/npm 9+、Git、Python 工具通过";
+        + "Node 18+/npm 9+、Git、Python 工具及 profile/CA/可选平台 CLI"
+        + `${kernelRoot ? "、Mae-Flow 内核挂载" : ""}权限通过`;
     } catch (error) {
       failure = error;
     } finally {
@@ -3681,6 +3728,15 @@ export class TaskService {
           exec: (command, dir, execOptions) =>
             container!.exec(command, dir, execOptions),
         },
+        afterFileMutation: this.options.isolation
+          ? (path) => {
+            repairContainerMutationOwnership({
+              workspace: task.cwd!,
+              path,
+              user: this.options.isolation?.user,
+            });
+          }
+          : undefined,
         log: this.options.log,
       });
       if (!this.current(task, epoch) || task.summary.status !== "paused") {
@@ -4686,9 +4742,24 @@ export class TaskService {
               : "",
           ].filter(Boolean).join("\n\n");
         }
+        const repairKernelOwnership = () => {
+          if (!this.options.isolation) return;
+          repairContainerKernelOwnership({
+            workspace: cwd,
+            user: this.options.isolation.user,
+          });
+        };
         hostHooks = {
-          preTool: kernel.preTool.bind(kernel),
-          postTool: kernel.postTool.bind(kernel),
+          preTool: async (event) => {
+            const result = await kernel.preTool(event);
+            repairKernelOwnership();
+            return result;
+          },
+          postTool: async (event) => {
+            const result = await kernel.postTool(event);
+            repairKernelOwnership();
+            return result;
+          },
           flush: kernel.flush.bind(kernel),
         };
       } else if (resuming || task.resume) {
@@ -4874,6 +4945,15 @@ export class TaskService {
                 (await this.activeTaskContainer(task))
                   .exec(command, dir, execOptions),
             }
+          : undefined,
+        afterFileMutation: this.options.isolation
+          ? (path) => {
+            repairContainerMutationOwnership({
+              workspace: cwd,
+              path,
+              user: this.options.isolation?.user,
+            });
+          }
           : undefined,
         log: this.options.log,
       });
@@ -5423,6 +5503,13 @@ export class TaskService {
         bashOperations: {
           exec: (command, dir, execOptions) =>
             container.exec(command, dir, execOptions),
+        },
+        afterFileMutation: (path) => {
+          repairContainerMutationOwnership({
+            workspace: task.cwd!,
+            path,
+            user: isolation.user,
+          });
         },
         log: this.options.log,
       });

@@ -44,6 +44,17 @@ test("服务以 root 跑且没配用户时拒绝启动,不许把 root 兜进容�
     /正以 root 运行/);
 });
 
+test("服务以 root 跑时显式用户必须是可供宿主 chown 的数字 uid:gid", () => {
+  assert.equal(resolveContainerUser({
+    configured: "10001:10001", platform: "linux", uid: 0, gid: 0,
+  }).user, "10001:10001");
+  for (const configured of ["builder:builder", "10001", "10001:0", "0:10001"]) {
+    assert.throws(() => resolveContainerUser({
+      configured, platform: "linux", uid: 0, gid: 0,
+    }), /数字 uid:gid/);
+  }
+});
+
 test("Linux 上取不到 uid 就直说,不静默沿用镜像默认", () => {
   assert.throws(
     () => resolveContainerUser({ platform: "linux" }),

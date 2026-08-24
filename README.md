@@ -320,7 +320,10 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
     在宿主上就是容器 uid 的。镜像默认 builder 是 10001,和服务账号对不
     上时宿主接手 git add/commit 直接 EACCES——**炸在 Agent 干完活之后**,
     最贵的位置。现在 Linux 上不配 `--isolate-user` 就按服务进程自己的
-    uid:gid 跑;服务本身以 root 运行则拒绝启动(不许把 root 兜进容器)。
+    uid:gid 跑；服务由 root 守护时必须显式给非 root 数字 uid:gid，Cloud
+    在容器启动前只修正实际挂载的代码工作区和分仓缓存属主，不把 root
+    兜进容器；宿主 Write/Edit 与内核原子写状态也即时交还对应文件，不靠
+    `umask 0000` 开放整个数据目录。
     macOS/Windows 保持镜像默认——那边 Docker 在 VM 边界做 uid 映射,
     套本机 uid 反而撞上 VM 里不存在的用户。**这条本机验不了真故障**
     (Colima 是 VM),判据按 platform 参数化进了单测。

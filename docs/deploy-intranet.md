@@ -722,7 +722,7 @@ Skill 需要补说明。该台账是 fail-open 观测旁路，不能替代质量
 | isolate-memory / isolate-cpus / isolate-pids | 3g / 2 / 512 | 每个任务容器的资源上限 |
 | isolate-network | bridge | 任务容器网络；拒绝 host/container 模式 |
 | isolate-cache-root | `<data>/build-cache` | 按仓库哈希隔离的 Maven/npm/ccache/XDG 缓存 |
-| isolate-user | **Linux:服务进程 uid:gid**;其他平台:镜像内非 root 用户 | UID:GID。Linux 上不配就按服务账号自己的 uid:gid 跑，保证容器写出的文件宿主能接手 git；服务本身以 root 运行则拒绝启动 |
+| isolate-user | **Linux:服务进程 uid:gid**;root 守护形态必须显式给数字 uid:gid;其他平台:镜像内非 root 用户 | Linux 普通服务账号不配时按自己的 uid:gid 跑。root 守护进程必须显式给非 root 数字 uid:gid；Cloud 在容器启动前把实际代码工作区和分仓缓存安全交给该用户，不修改任务台账与凭据目录 |
 | build-slots | 1 | 同时运行的 prepush 重构建数，独立于普通 Agent 并发 |
 | repair-rounds | 不限 | 修复环手刹:数字=上限,0=关;不配=修到绿/出诊断为止 |
 | poll-interval / poll-timeout | 10 / 1800(秒) | 流水线轮询节奏与预算 |
@@ -856,6 +856,23 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
   Maven/C++ 同时打满。镜像构建与内部 CA/Maven settings 的只读挂载见
   `deploy/build-image/README.md`。镜像 `Config.User` 为空/root/0 或显式
   `--isolate-user root/0` 会拒绝运行；不要用 root 绕过目录权限。
+- **Root 守护与非 root 容器的属主接缝**:首选仍是让服务账号与容器使用
+  同一 uid:gid。若进程管理器必须以 root 启动 Cloud，则必须配置数字形式
+  的 `--isolate-user 10001:10001`（示例），不能写用户名。每次 docker run
+  前，Cloud 会在宿主上递归核对本次真正挂载的代码工作区，并在首次使用
+  时修正该仓的 Maven/npm/ccache/XDG 缓存；符号链接只改链接本身，不跟随
+  到工作区外。后续宿主 Write/Edit 与内核原子换新状态文件时也会立即把
+  对应文件交还容器用户，属主修正失败会在当次工具调用暴露，不拖到编译
+  阶段。缓存跳过标记保存在容器不可见的宿主控制目录，不能由任务伪造。
+  任务台账、模型配置、账号与凭据目录不参与 chown。禁止用
+  `umask 0000` 让所有系统用户可写；老数据第一次修正可能耗时，日志会以
+  `[container-ownership]` 报出处理数量，后续缓存由属主标记直接复用。
+- **镜像普通用户权限是上线门槛**:预装二进制（包括可选平台 CLI）必须
+  `a+rx`，`/etc/profile.d/*.sh` 必须可读，CA 目录逐级可遍历且 bundle
+  可读。统一 Dockerfile 会切到最终非 root 用户后用 login shell 真验；
+  管理页「统一任务容器」自检也按真实任务用户复验 bind 工作区、四类缓存、
+  profile、CA、可选平台 CLI 与只读 Mae-Flow 内核挂载，不能拿 root 构建
+  阶段的成功结果代替。
 - **关机与孤儿回收**:SIGTERM/SIGINT 会停止调度、释放构建队列、abort
   会话并等待容器 TERM→KILL→rm；不会改写任务业务状态。重启时先按完整
   dataDir ownership label 清理本实例遗留的 coding/prepush/system-check
