@@ -123,8 +123,10 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
 
 小鲁班插件的手机审批入口也已收敛为纯文本适配层：配置权限 0600 的
 `--luban-plugin-token-file` 后，插件或内网桥带固定回调 Token 向同一
-服务端口的 `POST /integrations/luban/plugin` 发请求。支持“待审批/详情/选择/
-通过/退回”，审批码绑定当前 waiting 版本；多题澄清不在手机端猜答案。
+服务端口的 `POST /integrations/luban/plugin` 发请求。唯一待办会直接返回完整
+详情，随后可裸回复选项序号、确认语句或具体修改意见；“详情/选择/通过/退回”
+仍作为无会话上下文时的兼容指令。短期会话只负责定位卡片，每次提交仍核对
+当前 waiting 版本；多题澄清不在手机端猜答案。
 真实插件的字段与原生验签由部署桥翻译，Cloud 不复制审批状态机。完整契约
 见 `docs/luban-mobile-approval-handoff.md`；内网 Agent 可直接按其中的
 部署、字段映射、联调与验收清单执行。

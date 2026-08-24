@@ -15,8 +15,13 @@ import {
   readFileSync,
   statSync,
 } from "node:fs";
-import type { WaitingRecord } from "./humanGate.ts";
 import type { TaskSummary } from "./taskService.ts";
+import {
+  questionsOf,
+  renderLubanDetail,
+  renderLubanHelp,
+  renderLubanTaskList,
+} from "./lubanApprovalView.ts";
 
 export interface LubanApprovalService {
   list(): TaskSummary[];
@@ -47,11 +52,6 @@ export interface LubanApprovalGatewayOptions {
   log?: (message: string) => void;
 }
 
-interface Question {
-  question: string;
-  options: string[];
-}
-
 interface CachedReply {
   digest: string;
   at: number;
@@ -63,10 +63,21 @@ interface InflightReply {
   promise: Promise<LubanPluginReply>;
 }
 
+interface BoundApproval {
+  taskId: string;
+  waitingId: string;
+  stateVersion: number;
+  code: string;
+}
+
+interface ConversationCursor {
+  at: number;
+  entries: BoundApproval[];
+  selected?: BoundApproval;
+}
+
 const CACHE_TTL_MS = 10 * 60_000;
 const MAX_CACHE_ENTRIES = 1_000;
-const MAX_RESPONSE_CHARS = 3_800;
-
 class CallbackError extends Error {
   constructor(readonly status: number, message: string) {
     super(message);
@@ -87,41 +98,8 @@ export function loadLubanPluginToken(path: string): string {
   return token;
 }
 
-function oneLine(value: string, limit = 120): string {
-  const normalized = value.replace(/\s+/g, " ").trim();
-  return normalized.length > limit
-    ? normalized.slice(0, limit - 1) + "…" : normalized;
-}
-
-function excerpt(value: string, limit: number): string {
-  const normalized = value.replace(/\r\n/g, "\n").trim();
-  return normalized.length > limit
-    ? normalized.slice(0, limit - 1) + "…" : normalized;
-}
-
-function questionsOf(waiting: WaitingRecord): Question[] {
-  const raw = (waiting.question as { questions?: unknown }).questions;
-  if (!Array.isArray(raw)) return [];
-  return raw.flatMap((item): Question[] => {
-    if (!item || typeof item !== "object") return [];
-    const record = item as { question?: unknown; options?: unknown };
-    const question = String(record.question ?? "").trim();
-    if (!question) return [];
-    const options = Array.isArray(record.options)
-      ? record.options.map(String).map((value) => value.trim()).filter(Boolean)
-      : [];
-    return [{ question, options }];
-  });
-}
-
 function normalizeCode(value: string): string {
   return value.replace(/[^a-z0-9]/gi, "").toUpperCase();
-}
-
-function capReply(text: string): string {
-  if (text.length <= MAX_RESPONSE_CHARS) return text;
-  return text.slice(0, MAX_RESPONSE_CHARS - 24)
-    + "\n\n内容较长，已截断。";
 }
 
 function parseEnvelope(rawBody: string): LubanPluginEnvelope {
@@ -160,6 +138,11 @@ function sameToken(actual: string | undefined, expected: string): boolean {
 export class LubanApprovalGateway {
   private readonly replies = new Map<string, CachedReply>();
   private readonly inflight = new Map<string, InflightReply>();
+  /**
+   * 只保存“用户刚刚在看哪张卡”的短期导航上下文。审批真相仍完全来自
+   * TaskService；每次裸回复提交前都会重新核对 waiting_id/state_version。
+   */
+  private readonly cursors = new Map<string, ConversationCursor>();
 
   constructor(
     private readonly service: LubanApprovalService,
@@ -240,6 +223,9 @@ export class LubanApprovalGateway {
       if (!first) break;
       this.replies.delete(first);
     }
+    for (const [account, cursor] of this.cursors) {
+      if (cursor.at < oldest) this.cursors.delete(account);
+    }
   }
 
   private pending(account: string): TaskSummary[] {
@@ -263,14 +249,30 @@ export class LubanApprovalGateway {
       this.approvalCode(task) === wanted);
   }
 
+  private bind(task: TaskSummary): BoundApproval {
+    return {
+      taskId: task.id,
+      waitingId: task.waiting!.waiting_id,
+      stateVersion: task.waiting!.state_version,
+      code: this.approvalCode(task),
+    };
+  }
+
+  private taskFor(account: string, binding: BoundApproval): TaskSummary | undefined {
+    return this.pending(account).find((task) => task.id === binding.taskId
+      && task.waiting!.waiting_id === binding.waitingId
+      && task.waiting!.state_version === binding.stateVersion
+      && this.approvalCode(task) === binding.code);
+  }
+
   private async execute(envelope: LubanPluginEnvelope): Promise<LubanPluginReply> {
     const command = envelope.content
       .replace(/^\/?mae(?:-flow)?(?:\s+|$)/i, "").trim();
     if (!command || /^(?:待审批|审批|我的审批)$/.test(command)) {
-      return { status: 200, text: this.renderList(envelope.sender) };
+      return this.showPending(envelope.sender);
     }
     if (/^(?:帮助|help|\?)$/i.test(command)) {
-      return { status: 200, text: this.renderHelp() };
+      return { status: 200, text: renderLubanHelp() };
     }
     let match = command.match(/^详情\s+([A-Za-z0-9_-]+)$/i);
     if (match) return this.detail(envelope.sender, match[1]);
@@ -293,70 +295,40 @@ export class LubanApprovalGateway {
       return await this.chooseByMeaning(
         envelope.sender, match[1], false, match[2].trim());
     }
-    return { status: 400, text: "没有识别这条指令。\n\n" + this.renderHelp() };
+    return await this.answerFromCursor(envelope.sender, command);
   }
 
-  private renderHelp(): string {
-    return [
-      "Mae-Flow 手机审批指令：",
-      "mae-flow 待审批",
-      "mae-flow 详情 <审批码>",
-      "mae-flow 选择 <审批码> <选项序号>",
-      "mae-flow 通过 <审批码>",
-      "mae-flow 退回 <审批码> <意见>",
-    ].join("\n");
-  }
-
-  private renderList(account: string): string {
+  private showPending(account: string): LubanPluginReply {
     const pending = this.pending(account);
-    if (!pending.length) return "当前没有待审批事项。";
-    const shown = pending.slice(0, 5);
-    const lines = [`你有 ${pending.length} 项待审批：`];
-    shown.forEach((task) => {
-      const waiting = task.waiting!;
-      const questions = questionsOf(waiting);
-      lines.push("", `【${this.approvalCode(task)}】${task.id} · ${oneLine(task.title ?? task.requirement, 80)}`);
-      lines.push(`阶段：${oneLine(waiting.step || "当前步骤", 50)}`);
-      lines.push(`事项：${oneLine(questions[0]?.question ?? "需要你确认", 110)}`);
-      if (questions.length > 1) lines.push(`提示：包含 ${questions.length} 个问题，请在电脑端处理`);
-      lines.push(`查看：mae-flow 详情 ${this.approvalCode(task)}`);
-    });
-    if (pending.length > shown.length) {
-      lines.push("", `另有 ${pending.length - shown.length} 项，请处理后再次查询。`);
+    if (!pending.length) {
+      this.cursors.delete(account);
+      return { status: 200, text: "当前没有待审批事项。" };
     }
-    return capReply(lines.join("\n"));
+    if (pending.length === 1) {
+      const binding = this.bind(pending[0]);
+      this.cursors.set(account, {
+        at: this.now(), entries: [binding], selected: binding,
+      });
+      return this.renderDetail(pending[0]);
+    }
+    const shown = pending.slice(0, 5);
+    const entries = shown.map((task) => this.bind(task));
+    this.cursors.set(account, { at: this.now(), entries });
+    return { status: 200, text: renderLubanTaskList(shown, pending.length) };
   }
 
   private detail(account: string, code: string): LubanPluginReply {
     const task = this.find(account, code);
-    if (!task) return this.stale();
-    const waiting = task.waiting!;
-    const questions = questionsOf(waiting);
-    const lines = [
-      `【${this.approvalCode(task)}】${task.id} · ${oneLine(task.title ?? task.requirement, 100)}`,
-      `阶段：${oneLine(waiting.step || "当前步骤", 80)}`,
-    ];
-    if (waiting.context?.trim()) {
-      lines.push("", "审批上下文：", excerpt(waiting.context, 1_000));
-    }
-    if (!questions.length) {
-      lines.push("", "当前待办没有可读取的问题，请在电脑端处理。" );
-      return { status: 200, text: capReply(lines.join("\n")) };
-    }
-    questions.forEach((question, index) => {
-      lines.push("", `${questions.length > 1 ? `问题 ${index + 1}：` : "问题："}${question.question}`);
-      question.options.forEach((option, optionIndex) =>
-        lines.push(`${optionIndex + 1}. ${option}`));
+    if (!task) return this.stale(account);
+    const binding = this.bind(task);
+    this.cursors.set(account, {
+      at: this.now(), entries: [binding], selected: binding,
     });
-    if (questions.length > 1) {
-      lines.push("", "这是一张多题澄清卡。为避免错配答案，首版手机入口不提交多题决定，请在电脑端处理。" );
-    } else if (questions[0].options.length) {
-      lines.push("", `提交：mae-flow 选择 ${this.approvalCode(task)} <序号>`);
-      lines.push(`退回：mae-flow 退回 ${this.approvalCode(task)} <意见>`);
-    } else {
-      lines.push("", `回复：mae-flow 回复 ${this.approvalCode(task)} <答复>`);
-    }
-    return { status: 200, text: capReply(lines.join("\n")) };
+    return this.renderDetail(task);
+  }
+
+  private renderDetail(task: TaskSummary): LubanPluginReply {
+    return { status: 200, text: renderLubanDetail(task, this.approvalCode(task)) };
   }
 
   private async choose(
@@ -366,7 +338,7 @@ export class LubanApprovalGateway {
     notes?: string,
   ): Promise<LubanPluginReply> {
     const task = this.find(account, code);
-    if (!task) return this.stale();
+    if (!task) return this.stale(account);
     const questions = questionsOf(task.waiting!);
     if (questions.length !== 1) {
       return { status: 400, text: "该事项包含多项问题，请在电脑端处理，避免答案错配。" };
@@ -384,7 +356,7 @@ export class LubanApprovalGateway {
     answer: string,
   ): Promise<LubanPluginReply> {
     const task = this.find(account, code);
-    if (!task) return this.stale();
+    if (!task) return this.stale(account);
     const questions = questionsOf(task.waiting!);
     if (questions.length !== 1 || questions[0].options.length) {
       return { status: 400, text: `该事项应按选项提交，请发送：mae-flow 详情 ${this.approvalCode(task)}` };
@@ -400,7 +372,7 @@ export class LubanApprovalGateway {
     notes?: string,
   ): Promise<LubanPluginReply> {
     const task = this.find(account, code);
-    if (!task) return this.stale();
+    if (!task) return this.stale(account);
     const questions = questionsOf(task.waiting!);
     if (questions.length !== 1) {
       return { status: 400, text: "该事项不是单题审批，请先查看详情并在电脑端处理。" };
@@ -419,6 +391,67 @@ export class LubanApprovalGateway {
     return await this.submit(task, matches[0], notes);
   }
 
+  private async answerFromCursor(
+    account: string,
+    answer: string,
+  ): Promise<LubanPluginReply> {
+    const cursor = this.cursors.get(account);
+    if (!cursor || cursor.at < this.now() - CACHE_TTL_MS) {
+      this.cursors.delete(account);
+      return {
+        status: 400,
+        text: "没有找到你正在处理的审批，请先发送：mae-flow 待审批",
+      };
+    }
+    if (!cursor.selected) {
+      const number = Number(answer);
+      const binding = Number.isInteger(number) ? cursor.entries[number - 1] : undefined;
+      if (!binding) {
+        return { status: 400, text: "请先回复待办前的任务序号，查看完整详情。" };
+      }
+      const task = this.taskFor(account, binding);
+      if (!task) return this.stale(account);
+      cursor.selected = binding;
+      cursor.at = this.now();
+      return this.renderDetail(task);
+    }
+    const task = this.taskFor(account, cursor.selected);
+    if (!task) return this.stale(account);
+    const questions = questionsOf(task.waiting!);
+    if (questions.length !== 1) {
+      return { status: 400, text: "该事项包含多项问题，请在电脑端处理，避免答案错配。" };
+    }
+    const number = Number(answer);
+    if (Number.isInteger(number) && String(number) === answer.trim()) {
+      const option = questions[0].options[number - 1];
+      if (!option) return { status: 400, text: "选项序号无效，请按详情中的序号回复。" };
+      return await this.submit(task, option);
+    }
+    if (!questions[0].options.length) return await this.submit(task, answer);
+
+    const exact = questions[0].options.find((option) => option === answer);
+    if (exact) return await this.submit(task, exact);
+    const negative = questions[0].options.filter((option) =>
+      /打回|退回|修改|拒绝|不通过|调整|补充/.test(option));
+    const positive = questions[0].options.filter((option) =>
+      /通过|确认|同意|接受|批准|继续/.test(option)
+      && !/打回|退回|修改|拒绝|不通过/.test(option));
+    const negativeIntent = /打回|退回|拒绝|不通过|不行|不对|有问题|请.{0,8}(?:改|补充|调整)|改成|需要修改|需要补充|需要调整/;
+    const positiveIntent = /通过|确认|同意|接受|批准|继续|可以|没问题|好的?|\bok\b|\byes\b/i;
+    if (positiveIntent.test(answer) && !negativeIntent.test(answer)
+        && positive.length === 1) {
+      return await this.submit(task, positive[0]);
+    }
+    if (negative.length === 1) {
+      // 自然语言修改意见既保留原文，又提交卡片已有的“修改/退回”选项，
+      // 避免内核把一段自由文本误当成未知选项而重新追问。
+      return await this.submit(task, negative[0], answer);
+    }
+    // Web 本就允许自定义回答；没有唯一安全的选项映射时保持用户原意，
+    // 不让插件或 Cloud 猜测一个可能相反的决定。
+    return await this.submit(task, answer);
+  }
+
   private async submit(
     task: TaskSummary,
     decision: string,
@@ -430,6 +463,7 @@ export class LubanApprovalGateway {
         decision,
         notes: notes ? `小鲁班手机审批：${notes}` : "小鲁班手机审批",
       });
+      if (task.luban_account) this.cursors.delete(task.luban_account);
       return {
         status: 200,
         text: `已提交：${task.id} · ${decision}\n当前状态：${result.status}`,
@@ -437,14 +471,15 @@ export class LubanApprovalGateway {
     } catch (error) {
       const message = String(error);
       if (/状态已变化|没有待人工决定|不存在|版本不匹配/.test(message)) {
-        return this.stale();
+        return this.stale(task.luban_account);
       }
       this.options.log?.(`任务 ${task.id} 手机审批提交失败: ${message}`);
       return { status: 500, text: "审批没有提交成功，请稍后重试或回到电脑端处理。" };
     }
   }
 
-  private stale(): LubanPluginReply {
+  private stale(account?: string): LubanPluginReply {
+    if (account) this.cursors.delete(account);
     return {
       status: 409,
       text: "审批事项已更新或审批码已过期，请重新发送：mae-flow 待审批",

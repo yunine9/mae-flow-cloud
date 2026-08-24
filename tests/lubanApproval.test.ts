@@ -104,7 +104,7 @@ function gateway(service: FakeApprovalService): LubanApprovalGateway {
   });
 }
 
-test("手机审批只列本人待办，详情使用绑定当前版本的短审批码", async () => {
+test("唯一待办首次查询直接展示完整详情，裸序号提交当前选项", async () => {
   const service = new FakeApprovalService([
     task("task-1", "alice", "支付接口修复"),
     task("task-2", "bob", "不能泄露给 Alice 的任务"),
@@ -116,6 +116,9 @@ test("手机审批只列本人待办，详情使用绑定当前版本的短审�
   assert.equal(listed.status, 200);
   assert.match(listed.text, /支付接口修复/);
   assert.doesNotMatch(listed.text, /不能泄露/);
+  assert.match(listed.text, /编译与 UT 已通过/);
+  assert.match(listed.text, /1\. 通过/);
+  assert.match(listed.text, /直接回复选项序号/);
 
   const code = codeOf(listed.text);
   const detail = await callback(entry, {
@@ -126,12 +129,135 @@ test("手机审批只列本人待办，详情使用绑定当前版本的短审�
   assert.match(detail.text, /1\. 通过/);
   assert.match(detail.text, new RegExp(`mae-flow 选择 ${code}`));
 
+  const chosen = await callback(entry, {
+    message_id: "m-bare-choice", sender: "alice", content: "1",
+  });
+  assert.equal(chosen.status, 200);
+  assert.deepEqual(service.calls, [{
+    id: "task-1", decision: "通过", notes: "小鲁班手机审批",
+  }]);
+
+  service.tasks[0].status = "waiting_for_human";
+  service.tasks[0].waiting = waiting("task-1", [{
+    question: "新一轮 Diff 通过吗？", options: ["通过", "打回"],
+  }], 2);
   service.tasks[0].waiting!.state_version += 1;
   const stale = await callback(entry, {
     message_id: "m-3", sender: "alice", content: `mae-flow 详情 ${code}`,
   });
   assert.equal(stale.status, 409);
   assert.match(stale.text, /已更新|已过期/);
+});
+
+test("多项待办先用裸序号选任务，再用裸序号审批", async () => {
+  const service = new FakeApprovalService([
+    task("task-1", "alice", "支付接口修复"),
+    task("task-2", "alice", "订单接口修复"),
+  ]);
+  const entry = gateway(service);
+  const listed = await callback(entry, {
+    message_id: "many-tasks", sender: "alice", content: "待审批",
+  });
+  assert.match(listed.text, /1\. task-1/);
+  assert.match(listed.text, /2\. task-2/);
+  assert.doesNotMatch(listed.text, /审批上下文/);
+
+  const selected = await callback(entry, {
+    message_id: "select-task", sender: "alice", content: "2",
+  });
+  assert.match(selected.text, /task-2/);
+  assert.match(selected.text, /审批上下文/);
+
+  const approved = await callback(entry, {
+    message_id: "select-option", sender: "alice", content: "1",
+  });
+  assert.equal(approved.status, 200);
+  assert.deepEqual(service.calls, [{
+    id: "task-2", decision: "通过", notes: "小鲁班手机审批",
+  }]);
+});
+
+test("自然语言确认与修改意见安全路由到当前单题", async () => {
+  const approveService = new FakeApprovalService([task(
+    "task-confirm", "alice", "确认范围",
+    waiting("task-confirm", [{
+      question: "是否确认修改范围？",
+      options: ["确认范围并继续", "需要修改"],
+    }]),
+  )]);
+  const approveEntry = gateway(approveService);
+  await callback(approveEntry, {
+    message_id: "confirm-list", sender: "alice", content: "mae-flow 待审批",
+  });
+  const confirmed = await callback(approveEntry, {
+    message_id: "confirm-natural", sender: "alice", content: "确认，可以继续",
+  });
+  assert.equal(confirmed.status, 200);
+  assert.equal(approveService.calls[0].decision, "确认范围并继续");
+
+  const reviseService = new FakeApprovalService([task(
+    "task-revise", "alice", "确认范围",
+    waiting("task-revise", [{
+      question: "是否确认修改范围？",
+      options: ["确认范围并继续", "需要修改"],
+    }]),
+  )]);
+  const reviseEntry = gateway(reviseService);
+  await callback(reviseEntry, {
+    message_id: "revise-list", sender: "alice", content: "待审批",
+  });
+  const revised = await callback(reviseEntry, {
+    message_id: "revise-natural", sender: "alice",
+    content: "README 注释请改成 [maven-test]",
+  });
+  assert.equal(revised.status, 200);
+  assert.equal(reviseService.calls[0].decision, "需要修改");
+  assert.match(reviseService.calls[0].notes!, /README 注释请改成/);
+});
+
+test("开放题支持裸自然语言，自定义回答不要求审批码", async () => {
+  const service = new FakeApprovalService([task(
+    "task-open", "alice", "补充说明",
+    waiting("task-open", [{ question: "请说明期望的兼容范围" }]),
+  )]);
+  const entry = gateway(service);
+  await callback(entry, {
+    message_id: "open-list", sender: "alice", content: "待审批",
+  });
+  const result = await callback(entry, {
+    message_id: "open-answer", sender: "alice",
+    content: "兼容 2.3 及以上版本，不兼容旧协议",
+  });
+  assert.equal(result.status, 200);
+  assert.equal(service.calls[0].decision, "兼容 2.3 及以上版本，不兼容旧协议");
+});
+
+test("裸回复只在短期当前卡上生效，卡片变化后拒绝旧上下文", async () => {
+  let now = NOW;
+  const service = new FakeApprovalService([task("task-1", "alice", "支付修复")]);
+  const entry = new LubanApprovalGateway(service, {
+    token: TOKEN, now: () => now, accountEnabled: () => true,
+  });
+  await callback(entry, {
+    message_id: "cursor-list", sender: "alice", content: "待审批",
+  });
+  service.tasks[0].waiting!.state_version += 1;
+  const stale = await callback(entry, {
+    message_id: "cursor-stale", sender: "alice", content: "1",
+  });
+  assert.equal(stale.status, 409);
+  assert.equal(service.calls.length, 0);
+
+  await callback(entry, {
+    message_id: "cursor-refresh", sender: "alice", content: "待审批",
+  });
+  now += 10 * 60_000 + 1;
+  const expired = await callback(entry, {
+    message_id: "cursor-expired", sender: "alice", content: "1",
+  });
+  assert.equal(expired.status, 400);
+  assert.match(expired.text, /先发送.*待审批/);
+  assert.equal(service.calls.length, 0);
 });
 
 test("选择与退回始终提交选项原文；同 message_id 并发/重放不重复决定", async () => {
@@ -277,7 +403,7 @@ test("插件 Token 文件必须足够长且权限为 0600", () => {
   assert.throws(() => loadLubanPluginToken(file), /0600/);
 });
 
-test("启用手机入口后，待办通知告诉用户调用插件而不是只给内网链接", async () => {
+test("启用手机入口后，待办通知说明会话式审批方式", async () => {
   const notifier = new Notifier({
     endpoint: "http://127.0.0.1:1/unused",
     mobileApproval: true,
@@ -288,5 +414,6 @@ test("启用手机入口后，待办通知告诉用户调用插件而不是只�
     step: "build_review", summary: "Diff 通过吗？",
     link: "http://intranet/work/task-1",
   });
-  assert.match(record.text, /mae-flow 待审批/);
+  assert.match(record.text, /Mae-Flow 待审批/);
+  assert.match(record.text, /直接回复序号或意见/);
 });
