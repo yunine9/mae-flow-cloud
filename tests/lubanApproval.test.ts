@@ -149,6 +149,31 @@ test("唯一待办首次查询直接展示完整详情，裸序号提交当前�
   assert.match(stale.text, /已更新|已过期/);
 });
 
+test("DTS 待办显示问题单号与根因阶段，仍沿用同一手机审批通道", async () => {
+  const issue = task(
+    "task-12", "alice", "播放器偶发黑屏",
+    waiting("task-12", [{
+      question: "是否确认上述根因与修改方案？",
+      options: ["需要调整", "确认根因与修改方案"],
+    }]),
+  );
+  issue.entry_kind = "dts";
+  issue.ticket = "DTS20260824001";
+  issue.issue_context = {
+    source: "manual", stage: "triage", environments: [],
+    adapter: { logs: true, deploy: false, rollback: false },
+  };
+  issue.waiting!.step = "问题诊断 / 根因确认";
+  const entry = gateway(new FakeApprovalService([issue]));
+  const detail = await callback(entry, {
+    message_id: "dts-list", sender: "alice", content: "mae-flow 待审批",
+  });
+  assert.equal(detail.status, 200);
+  assert.match(detail.text, /问题单 DTS20260824001 · task-12/);
+  assert.match(detail.text, /阶段：问题诊断 \/ 根因确认/);
+  assert.match(detail.text, /2\. 确认根因与修改方案/);
+});
+
 test("多项待办先用裸序号选任务，再用裸序号审批", async () => {
   const service = new FakeApprovalService([
     task("task-1", "alice", "支付接口修复"),
@@ -411,9 +436,11 @@ test("启用手机入口后，待办通知说明会话式审批方式", async ()
   });
   const record = await notifier.notifyWaiting({
     waitingId: "waiting-1", taskId: "task-1", account: "alice",
+    subject: "问题单 DTS20260824001（task-1）",
     step: "build_review", summary: "Diff 通过吗？",
     link: "http://intranet/work/task-1",
   });
   assert.match(record.text, /Mae-Flow 待审批/);
+  assert.match(record.text, /问题单 DTS20260824001/);
   assert.match(record.text, /直接回复序号或意见/);
 });

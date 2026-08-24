@@ -1830,7 +1830,7 @@ export class TaskService {
   private project(task: TaskState, includeKnowledgeUsage = false): TaskSummary {
     this.refreshRequirementGraph(task);
     const record = task.notifyRecord;
-    const progress = this.readProgress(task);
+    const progress = this.taskProgress(task);
     const summary = task.summary;
     const projected = {
       ...summary,
@@ -1864,7 +1864,7 @@ export class TaskService {
       join(task.summary.workspace, "knowledge-events.jsonl"),
       task.summary.id,
       cwd,
-      () => this.readProgress(task)?.step ?? "",
+      () => this.taskProgress(task)?.step ?? "",
       this.options.log,
     );
   }
@@ -1877,6 +1877,50 @@ export class TaskService {
   private isIssueTriage(task: TaskState): boolean {
     return task.summary.entry_kind === "dts"
       && task.summary.issue_context?.stage === "triage";
+  }
+
+  /** DTS 的前置诊断在 Cloud、代码交付在内核，但用户看到的是同一个
+   * 任务。这里投影一条稳定的产品级轨道，避免交接时进度条消失、倒退
+   * 或误显示为普通需求理解；内核的细步骤仍放在 step/milestone 中。 */
+  private taskProgress(task: TaskState): TaskProgress | undefined {
+    const kernel = this.readProgress(task);
+    if (task.summary.entry_kind !== "dts") return kernel;
+    const phases = [
+      "问题受理", "证据与根因分析", "人工确认", "代码修复",
+      "推送前验证", "流水线与合入", "完成",
+    ];
+    const { status, issue_context: issue, delivery } = task.summary;
+    let current = 3;
+    if (status === "completed") current = 6;
+    else if (status === "verifying" || status === "await_merge") current = 5;
+    else if (delivery?.prepush) current = 4;
+    else if (issue?.stage === "triage") {
+      current = status === "queued" ? 0
+        : status === "waiting_for_human" || !!task.summary.waiting ? 2 : 1;
+    }
+    const step = issue?.stage === "triage"
+      ? status === "queued" ? "等待问题诊断资源"
+        : status === "waiting_for_human" ? "等待确认诊断问题"
+          : status === "paused" ? "问题诊断已暂停"
+            : "核对日志、代码与问题根因"
+      : status === "queued" ? "等待 Mae-Flow 问题修复接管"
+        : kernel?.step ?? task.summary.detail ?? phases[current];
+    return {
+      phases,
+      current_index: current,
+      current_phase: phases[current],
+      step,
+      revision: kernel?.revision,
+      milestone: kernel?.milestone,
+    };
+  }
+
+  /** AskUserQuestion 创建卡片时任务仍是 running，不能靠 status 猜它即将
+   * 等人。DTS 在诊断会话里统一使用清晰的人话阶段，供 Web 与小鲁班共用。 */
+  private currentStepLabel(task: TaskState): string {
+    return this.isIssueTriage(task)
+      ? "问题诊断 / 根因确认"
+      : this.taskProgress(task)?.step ?? "";
   }
 
   /** Agent 写结构化投影，Markdown 仍是给人检视的正文。读失败只是不展示图。 */
@@ -3938,7 +3982,7 @@ export class TaskService {
         allowHumanQuestions: false,
         allowSubagents: false,
         sessionId: DEVELOPER_ASSISTANT_SESSION,
-        currentStep: () => this.readProgress(task)?.step ?? "",
+        currentStep: () => this.currentStepLabel(task),
         compactAnchor: () => `开发助手只处理当前代码现场：${task.summary.requirement}`,
         onTokenUsage: (sample) => this.recordTaskTokenUsage(task, sample),
         bashOperations: {
@@ -5151,7 +5195,7 @@ export class TaskService {
         repositorySkillResources,
         repositoryKnowledge,
         knowledgeTrace: this.knowledgeTrace(task, cwd),
-        currentStep: () => this.readProgress(task)?.step ?? "",
+        currentStep: () => this.currentStepLabel(task),
         // 上下文撑爆时自愈压缩用的锚:与主动压缩同一个内核现场,
         // 摘要围绕"当前步骤+已确认配置"组织,不由云端编造。
         compactAnchor: () => this.kernelAnchor(task),
@@ -5771,7 +5815,7 @@ export class TaskService {
         humanGate: task.humanGate,
         allowHumanQuestions: false,
         sessionId: `prepush-${request.round}`,
-        currentStep: () => this.readProgress(task)?.step ?? "",
+        currentStep: () => this.currentStepLabel(task),
         compactAnchor: () => `推送前验证任务: ${task.summary.requirement}`,
         onTokenUsage: (sample) => this.recordTaskTokenUsage(task, sample),
         bashOperations: {
@@ -7442,6 +7486,9 @@ export class TaskService {
       .notifyWaiting({
         waitingId: waiting.waiting_id,
         taskId: task.summary.id,
+        subject: task.summary.entry_kind === "dts"
+          ? `问题单 ${task.summary.ticket ?? task.summary.id}（${task.summary.id}）`
+          : undefined,
         account,
         step: waiting.step,
         summary: String(questions[0]?.question ?? "需要你确认"),

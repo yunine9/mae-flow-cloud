@@ -86,6 +86,8 @@ export class Notifier {
   async notifyWaiting(input: {
     waitingId: string;
     taskId: string;
+    /** 面向人的任务称呼；DTS 可带问题单号，缺席时保持旧文案。 */
+    subject?: string;
     account: string;
     step: string;
     summary: string;
@@ -101,7 +103,7 @@ export class Notifier {
       summary: input.summary,
       link: input.link,
       text:
-        `【Mae-Flow】任务 ${input.taskId} 等你决定` +
+        `【Mae-Flow】${input.subject?.trim() || `任务 ${input.taskId}`} 等你决定` +
         `(${input.step || "当前步骤"}):${input.summary}` +
         (this.options.mobileApproval
           ? "\n手机处理：打开“Mae-Flow 待审批”插件查看完整事项，随后直接回复序号或意见"

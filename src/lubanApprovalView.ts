@@ -27,6 +27,13 @@ function capReply(text: string): string {
   return text.slice(0, MAX_RESPONSE_CHARS - 24) + "\n\n内容较长，已截断。";
 }
 
+function taskLabel(task: TaskSummary): string {
+  if (task.entry_kind === "dts") {
+    return `问题单 ${task.ticket ?? task.id} · ${task.id}`;
+  }
+  return task.ticket ? `需求 ${task.ticket} · ${task.id}` : task.id;
+}
+
 export function questionsOf(waiting: WaitingRecord): LubanApprovalQuestion[] {
   const raw = (waiting.question as { questions?: unknown }).questions;
   if (!Array.isArray(raw)) return [];
@@ -59,7 +66,7 @@ export function renderLubanTaskList(tasks: TaskSummary[], total: number): string
   tasks.forEach((task, index) => {
     const waiting = task.waiting!;
     const questions = questionsOf(waiting);
-    lines.push("", `${index + 1}. ${task.id} · ${oneLine(task.title ?? task.requirement, 80)}`);
+    lines.push("", `${index + 1}. ${taskLabel(task)} · ${oneLine(task.title ?? task.requirement, 80)}`);
     lines.push(`阶段：${oneLine(waiting.step || "当前步骤", 50)}`);
     lines.push(`事项：${oneLine(questions[0]?.question ?? "需要你确认", 110)}`);
     if (questions.length > 1) {
@@ -77,7 +84,7 @@ export function renderLubanDetail(task: TaskSummary, code: string): string {
   const waiting = task.waiting!;
   const questions = questionsOf(waiting);
   const lines = [
-    `【${code}】${task.id} · ${oneLine(task.title ?? task.requirement, 100)}`,
+    `【${code}】${taskLabel(task)} · ${oneLine(task.title ?? task.requirement, 100)}`,
     `阶段：${oneLine(waiting.step || "当前步骤", 80)}`,
   ];
   if (waiting.context?.trim()) {

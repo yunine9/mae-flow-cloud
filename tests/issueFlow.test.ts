@@ -145,6 +145,14 @@ test("DTS 最小闭环:Cloud 诊断举卡，确认后同任务切入内核 hotfi
       if (task.status === "failed") throw new Error(task.detail);
       return task.status === "waiting_for_human" ? task : undefined;
     }, "DTS 根因确认卡");
+    assert.deepEqual(waiting.progress?.phases, [
+      "问题受理", "证据与根因分析", "人工确认", "代码修复",
+      "推送前验证", "流水线与合入", "完成",
+    ]);
+    assert.equal(waiting.progress?.current_phase, "人工确认");
+    assert.equal(waiting.progress?.step, "等待确认诊断问题");
+    assert.equal(waiting.waiting?.step, "问题诊断 / 根因确认",
+      "Web 与小鲁班应拿到 DTS 专属审批阶段，而不是空的当前步骤");
     assert.deepEqual(seenPasswords,
       ["dts-password-sop", "dts-password-oss", "dts-password-adm"],
       "只有宿主适配器能拿到同一环境的三套密码");
@@ -164,6 +172,8 @@ test("DTS 最小闭环:Cloud 诊断举卡，确认后同任务切入内核 hotfi
       decision: "确认根因与修改方案",
     });
     assert.equal(confirmed.issue_context?.stage, "delivery");
+    assert.equal(service.get(created.id)?.progress?.current_phase, "代码修复",
+      "诊断交给 hotfix 后产品级进度不能倒退回问题受理");
     assert.ok(existsSync(join(dataDir, created.id, "issue-analysis.md")),
       "人工背书的诊断文档应随同一任务交给内核");
     const orderPath = await until(() => {
