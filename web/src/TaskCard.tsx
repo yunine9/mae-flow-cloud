@@ -75,7 +75,7 @@ export function TaskCard({
   return (
     <article
       id={`task-${task.id}`}
-      className={`task-card status-${task.status}${expanded ? " expanded" : ""}${focused ? " focused" : ""}`}
+      className={`task-card task-kind-${task.entry_kind === "dts" ? "dts" : "requirement"} status-${task.status}${expanded ? " expanded" : ""}${focused ? " focused" : ""}`}
     >
       <button
         type="button"

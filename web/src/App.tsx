@@ -41,6 +41,7 @@ import { KnowledgeFlywheel } from "./KnowledgeFlywheel";
 type View = "team" | "mine" | "profile" | "history" | "users" | "settings";
 type Theme = "light" | "dark";
 type MineScope = "all" | "waiting" | "intervention" | "active" | "delivered";
+type TaskKindScope = "all" | "requirement" | "dts";
 
 interface WorkspaceRoute {
   taskId: string;
@@ -221,6 +222,7 @@ export function App() {
   const [session, setSession] = useState<AuthUser | null>();
   const [view, setView] = useState<View>("team");
   const [mineScope, setMineScope] = useState<MineScope>("all");
+  const [taskKindScope, setTaskKindScope] = useState<TaskKindScope>("all");
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [teamUsers, setTeamUsers] = useState<AuthUser[]>([]);
   const [knowledgeInsights, setKnowledgeInsights] = useState<TeamKnowledgeInsights>();
@@ -392,7 +394,8 @@ export function App() {
   if (session === null) return <LoginScreen onAuthenticated={(user) => {
     launchGateRequest.current += 1;
     setLaunchGate({ kind: "checking" });
-    setSession(user); setMineScope("all"); setView(initialView(user));
+    setSession(user); setMineScope("all"); setTaskKindScope("all");
+    setView(initialView(user));
   }} />;
 
   async function signOut() {
@@ -401,6 +404,7 @@ export function App() {
     setKnowledgeInsights(undefined);
     setKnowledgeInsightsError("");
     setMineScope("all");
+    setTaskKindScope("all");
     setTaskSync({ kind: "loading" });
     launchGateRequest.current += 1;
     setLaunchGate({ kind: "checking" });
@@ -436,10 +440,19 @@ export function App() {
     .sort(byTeamAttention);
   const myDelivered = myTasks.filter((task) =>
     DELIVERED_STATUSES.includes(task.status));
-  const visibleMyWork = mineScope === "waiting" ? myWaiting
+  const scopedMyWork = mineScope === "waiting" ? myWaiting
     : mineScope === "intervention" ? myIntervention
       : mineScope === "active" ? myActive
         : mineScope === "delivered" ? myDelivered : myCurrent;
+  const matchesTaskKind = (task: TaskSummary) => taskKindScope === "all"
+    || (taskKindScope === "dts"
+      ? task.entry_kind === "dts" : task.entry_kind !== "dts");
+  const visibleMyWork = scopedMyWork.filter(matchesTaskKind);
+  const kindCounts = {
+    all: scopedMyWork.length,
+    requirement: scopedMyWork.filter((task) => task.entry_kind !== "dts").length,
+    dts: scopedMyWork.filter((task) => task.entry_kind === "dts").length,
+  };
   const myWorkTitle = mineScope === "waiting" ? "待我核对"
     : mineScope === "intervention" ? "需要介入 / 已暂停"
       : mineScope === "active" ? "自动推进中"
@@ -535,7 +548,18 @@ export function App() {
           />}
           <section className="task-section current-work-section" aria-labelledby="current-work-title">
             <div className="section-head"><div><span className="section-kicker">{mineScope === "all" ? "CURRENT WORK" : "FOCUSED WORK"}</span><h2 id="current-work-title">{myWorkTitle}</h2></div><div className="current-work-counts">{mineScope === "all" && myWaiting.length > 0 && <span className="section-count attention">{myWaiting.length} 项待核对</span>}{mineScope === "all" && myIntervention.length > 0 && <span className="section-count danger">{myIntervention.length} 项需介入</span>}<span className="section-count">{mineScope === "all" ? `共 ${visibleMyWork.length} 项` : `筛选出 ${visibleMyWork.length} 项`}</span></div></div>
-            {visibleMyWork.length === 0 && <div className="review-clear current-work-empty"><span aria-hidden>✓</span><div><strong>{mineScope === "all" ? "当前没有进行中的任务" : `没有${myWorkTitle}的任务`}</strong><p>{mineScope === "all" ? "新任务启动后会出现在这里；需要你核对的任务会自动排在最前。" : "再次点击上方已选中的摘要卡，可恢复查看全部当前任务。"}</p></div></div>}
+            <div className="task-kind-tabs" role="tablist" aria-label="按任务类型筛选">
+              {(["all", "requirement", "dts"] as const).map((kind) => (
+                <button type="button" role="tab" key={kind}
+                  aria-selected={taskKindScope === kind}
+                  className={`${taskKindScope === kind ? "on" : ""} ${kind}`}
+                  onClick={() => setTaskKindScope(kind)}>
+                  <span>{kind === "all" ? "全部" : kind === "requirement" ? "需求" : "问题单"}</span>
+                  <i>{kindCounts[kind]}</i>
+                </button>
+              ))}
+            </div>
+            {visibleMyWork.length === 0 && <div className="review-clear current-work-empty"><span aria-hidden>✓</span><div><strong>{taskKindScope !== "all" ? `当前没有${taskKindScope === "dts" ? "问题单" : "需求"}任务` : mineScope === "all" ? "当前没有进行中的任务" : `没有${myWorkTitle}的任务`}</strong><p>{taskKindScope !== "all" ? "切换到“全部”可查看其他类型任务。" : mineScope === "all" ? "新任务启动后会出现在这里；需要你核对的任务会自动排在最前。" : "再次点击上方已选中的摘要卡，可恢复查看全部当前任务。"}</p></div></div>}
             <div className="task-list current-work-list">{visibleMyWork.map((task) => <TaskCard key={task.id} task={task} onChanged={refresh} focused={task.id === targetTaskId} canOperate onOpenArtifacts={() => openArtifacts(task)} />)}</div>
           </section>
           {mineScope === "all" && myDelivered.length > 0 && <TaskGroup kicker="DELIVERY" title="等待合入与最近完成" tasks={myDelivered} onChanged={refresh} onOpenArtifacts={openArtifacts} targetTaskId={targetTaskId} />}
