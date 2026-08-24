@@ -616,6 +616,19 @@ export function createTaskServer(
         const repo = body.repo === undefined ? undefined : String(body.repo);
         const repos = Array.isArray(body.repos)
           ? body.repos.map(String) : undefined;
+        const entryKind = body.entry_kind === undefined
+          ? undefined : String(body.entry_kind) as "requirement" | "dts";
+        const issueEnvironments = Array.isArray(body.issue_environments)
+          ? body.issue_environments.map((item: Record<string, unknown>) => ({
+              name: String(item?.name ?? ""),
+              purpose: String(item?.purpose ?? "") as "logs" | "deploy" | "both",
+              host: String(item?.host ?? ""),
+              port: item?.port === undefined || item?.port === ""
+                ? undefined : Number(item.port),
+              username: String(item?.username ?? ""),
+              password: String(item?.password ?? ""),
+            }))
+          : undefined;
         // 兼容旧前端：select 显示了默认项但可能提交空串。空白就是
         // “未指定”，交给 TaskService 采用内核默认交付方式。
         const lane = body.lane === undefined
@@ -660,7 +673,8 @@ export function createTaskServer(
         try {
           return json(response, 201, service.create(requirement,
             {
-              title, account, repo, repos, lane, ticket, baseline, model,
+              title, account, repo, repos, entryKind, issueEnvironments,
+              lane, ticket, baseline, model,
               repairRounds, repositorySkillCatalogToken,
               selectedRepositorySkillIds, selectedRepositoryKnowledgeIds,
             }));

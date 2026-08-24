@@ -5,6 +5,7 @@ Mae-Flow 云端服务:Pi(pi-mono coding agent)**进程内**集成 + Mae-Flow 内
 设计文档在内核仓:
 - [云端 MVP 设计](../mae-flow/docs/superpowers/specs/2026-08-14-mae-flow-cloud-mvp-design.md)
 - [宿主适配层详设](../mae-flow/docs/superpowers/specs/2026-08-14-cloud-host-adapter-design.md)
+- [DTS 问题单最小流程](docs/dts-issue-flow.md)
 
 ## 三条铁的边界
 

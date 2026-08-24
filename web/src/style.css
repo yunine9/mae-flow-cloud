@@ -874,6 +874,32 @@ svg {
 .launch-copy .section-kicker { color: #8d8df3; }
 .launch-copy h2 { margin-top: 9px; color: #fff; font-size: 23px; line-height: 1.25; }
 .launch-copy > p { margin: 11px 0 0; color: #9da8b9; font-size: 12px; line-height: 1.75; }
+.launch-entry-switch { margin-top: 24px; display: grid; gap: 9px; }
+.launch-entry-switch > button {
+  width: 100%; min-height: 64px; padding: 11px 12px; display: grid;
+  grid-template-columns: 28px minmax(0, 1fr); align-items: center; gap: 10px;
+  color: #9da8b9; text-align: left; border: 1px solid rgba(255, 255, 255, .09);
+  border-radius: 11px; background: rgba(255, 255, 255, .035); cursor: pointer;
+  transition: border-color var(--ease), background var(--ease), transform var(--ease);
+}
+.launch-entry-switch > button:hover { transform: translateX(2px); border-color: rgba(141, 141, 243, .38); }
+.launch-entry-switch > button.active {
+  color: #fff; border-color: rgba(141, 141, 243, .58);
+  background: linear-gradient(135deg, rgba(119, 119, 236, .24), rgba(119, 119, 236, .08));
+}
+.launch-entry-switch > button.issue.active {
+  border-color: rgba(56, 189, 152, .55);
+  background: linear-gradient(135deg, rgba(31, 177, 138, .24), rgba(31, 177, 138, .07));
+}
+.launch-entry-switch > button > i {
+  width: 28px; height: 28px; display: grid; place-items: center; color: #aaaaf6;
+  border-radius: 9px; background: rgba(141, 141, 243, .14);
+  font: 750 8.5px ui-monospace, monospace;
+}
+.launch-entry-switch > button.issue > i { color: #67d8b9; background: rgba(31, 177, 138, .14); }
+.launch-entry-switch > button > span { min-width: 0; display: grid; gap: 3px; }
+.launch-entry-switch strong { color: inherit; font-size: 11px; }
+.launch-entry-switch small { color: #7f899a; font-size: 9px; line-height: 1.45; }
 .launch-guide {
   margin: 38px 0 0;
   padding: 0;
@@ -998,6 +1024,51 @@ svg {
   border-radius: var(--radius-sm); font-size: 12px; appearance: auto;
 }
 .launch-model-select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); outline: none; }
+
+/* DTS 问题单 · 任务级临时环境。密码输入只在浏览器本次表单存在，
+   服务端回包只含 credential_state，页面永远没有“回显密码”路径。 */
+.issue-environments-section {
+  background:
+    linear-gradient(135deg, color-mix(in srgb, #20b486 7%, transparent), transparent 48%),
+    color-mix(in srgb, var(--surface-soft) 72%, var(--surface));
+}
+.issue-environment-empty {
+  padding: 15px 16px; border: 1px dashed var(--line-strong); border-radius: 10px;
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+}
+.issue-environment-empty strong { color: var(--text-strong); font-size: 11px; }
+.issue-environment-empty p { margin: 5px 0 0; color: var(--muted); font-size: 9.5px; line-height: 1.55; }
+.issue-environment-list { display: grid; gap: 10px; }
+.issue-environment-card {
+  padding: 13px 14px 15px; border: 1px solid var(--line); border-radius: 11px;
+  background: var(--surface);
+}
+.issue-environment-card > header {
+  margin-bottom: 11px; display: flex; align-items: center; justify-content: space-between;
+}
+.issue-environment-card > header > span {
+  color: #20a982; font: 750 9px ui-monospace, monospace; letter-spacing: .08em;
+}
+.issue-environment-card > header > button {
+  padding: 4px 8px; color: var(--muted); border: 0; border-radius: 7px;
+  background: transparent; font-size: 9px; cursor: pointer;
+}
+.issue-environment-card > header > button:hover { color: var(--danger); background: var(--danger-soft); }
+.issue-environment-grid {
+  display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, .8fr);
+  gap: 10px 12px;
+}
+.issue-environment-add { margin-top: 11px; }
+.issue-environment-add:disabled { opacity: .5; cursor: not-allowed; }
+.issue-environment-note { display: block; margin-top: 8px; color: var(--muted); font-size: 9.5px; line-height: 1.55; }
+.issue-flow-summary {
+  grid-column: 1 / -1; padding: 13px 14px; display: grid; gap: 4px;
+  border: 1px solid color-mix(in srgb, #20b486 30%, var(--line));
+  border-radius: 10px; background: color-mix(in srgb, #20b486 6%, var(--surface));
+}
+.issue-flow-summary > span { color: #20a982; font-size: 9px; font-weight: 750; }
+.issue-flow-summary > strong { color: var(--text-strong); font-size: 11px; }
+.issue-flow-summary > small { color: var(--muted); font-size: 9.5px; line-height: 1.5; }
 
 /* 发起任务 · 仓库自带 Skill。目录必须由用户显式读取；卡片只表达
    “本任务可用”，不把 Skill 伪装成新的权限或固定流程步骤。 */
@@ -1434,6 +1505,12 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   color: var(--accent);
   font: 750 10.5px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   letter-spacing: .02em;
+}
+.task-entry-kind,
+.ws-issue-stage {
+  padding: 2px 7px; color: #16856a; border: 1px solid rgba(31, 177, 138, .25);
+  border-radius: 999px; background: rgba(31, 177, 138, .1);
+  font-size: 8.5px; font-weight: 750; white-space: nowrap;
 }
 .task-created {
   margin-left: auto;
@@ -3360,6 +3437,9 @@ pre {
   .launch-form-intro > small { display: none; }
   .launch-form-section { padding: 15px 14px 16px; }
   .launch-field-grid { grid-template-columns: 1fr; gap: 10px; }
+  .issue-environment-grid { grid-template-columns: 1fr; }
+  .issue-context-summary li { grid-template-columns: 1fr auto; }
+  .issue-context-summary li code { grid-column: 1 / -1; }
   .repository-skills-toolbar { align-items: stretch; flex-direction: column; gap: 10px; }
   .repository-skills-toolbar > div { justify-content: space-between; }
   .repository-skills-decision { margin-left: 14px; margin-right: 14px; padding: 14px; }
@@ -4348,6 +4428,29 @@ pre {
 }
 .requirement-source-label span { color: var(--text-strong); font-weight: 700; }
 .requirement-source-label small { color: var(--faint); }
+.issue-context-summary {
+  margin: 0 0 20px; padding: 14px 15px; border: 1px solid var(--line);
+  border-radius: 11px; background: color-mix(in srgb, #20b486 5%, var(--surface-soft));
+}
+.issue-context-summary > header {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+}
+.issue-context-summary > header strong { color: var(--text-strong); font-size: 11px; }
+.issue-context-summary > header span { color: #16856a; font-size: 9px; font-weight: 700; }
+.issue-context-summary ul { margin: 11px 0 0; padding: 0; display: grid; gap: 7px; list-style: none; }
+.issue-context-summary li {
+  min-width: 0; padding-top: 7px; display: grid;
+  grid-template-columns: minmax(90px, .8fr) auto minmax(140px, 1.5fr) auto;
+  align-items: center; gap: 9px; border-top: 1px solid var(--line);
+}
+.issue-context-summary li strong { color: var(--text); font-size: 10px; }
+.issue-context-summary li span,
+.issue-context-summary li em { color: var(--muted); font-size: 9px; font-style: normal; }
+.issue-context-summary li code {
+  min-width: 0; overflow: hidden; color: var(--text); font-size: 9px;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.issue-context-summary > p { margin: 9px 0 0; color: var(--muted); font-size: 10px; }
 .ws-primary-scroll {
   flex: 1;
   min-height: 0;
@@ -5661,6 +5764,17 @@ pre {
 :root[data-theme="light"] .launch-guide strong { color: #363c55; }
 :root[data-theme="light"] .launch-guide small,
 :root[data-theme="light"] .launch-copy-foot { color: #81889a; }
+:root[data-theme="light"] .launch-entry-switch > button {
+  color: #626a7d; border-color: rgba(101, 91, 216, .14);
+  background: rgba(255, 255, 255, .55);
+}
+:root[data-theme="light"] .launch-entry-switch > button.active {
+  color: #3e3a77; background: rgba(101, 91, 216, .11);
+}
+:root[data-theme="light"] .launch-entry-switch > button.issue.active {
+  color: #176f5b; background: rgba(31, 177, 138, .11);
+}
+:root[data-theme="light"] .launch-entry-switch small { color: #858c9c; }
 :root[data-theme="light"] .launch-guide li:not(:last-child)::after { background: rgba(101, 91, 216, .18); }
 :root[data-theme="light"] .launch-guide i {
   color: #655bd8; border-color: rgba(101, 91, 216, .25); background: rgba(255, 255, 255, .72);

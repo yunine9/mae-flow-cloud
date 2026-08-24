@@ -28,6 +28,8 @@ export interface TaskFocus {
 
 interface FocusTask {
   status: string;
+  entry_kind?: "requirement" | "dts";
+  issue_context?: { stage?: "triage" | "delivery" };
   detail?: string;
   blocked_by?: string[];
   waiting?: { question?: { questions?: unknown[] } };
@@ -192,6 +194,15 @@ export function projectTaskFocus(task: FocusTask): TaskFocus {
     );
   }
   if (task.status === "queued") {
+    if (task.entry_kind === "dts" && task.issue_context?.stage === "delivery") {
+      return focus(
+        "machine",
+        "根因与修改方案已确认，等待代码修复接管",
+        "获得执行资源后进入 Mae-Flow 问题修复",
+        "platform",
+        32,
+      );
+    }
     return focus(
       "machine",
       task.detail?.trim() || "任务正在执行队列中等待",
@@ -201,6 +212,15 @@ export function projectTaskFocus(task: FocusTask): TaskFocus {
     );
   }
   if (task.status === "running") {
+    if (task.entry_kind === "dts" && task.issue_context?.stage === "triage") {
+      return focus(
+        "machine",
+        "Agent 正在核对日志、代码与问题根因",
+        "形成修改与验证方案后请你确认",
+        "agent",
+        50,
+      );
+    }
     const milestone = task.progress?.milestone;
     const label = milestone?.title || task.progress?.step
       || task.progress?.current_phase;

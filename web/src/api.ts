@@ -327,6 +327,13 @@ export interface TaskSummary {
   id: string;
   title?: string;
   requirement: string;
+  entry_kind?: "requirement" | "dts";
+  issue_context?: {
+    source: "manual";
+    stage: "triage" | "delivery";
+    environments: IssueEnvironmentRef[];
+    adapter: { logs: boolean; deploy: boolean; rollback: boolean };
+  };
   status: TaskStatus;
   /** 服务端对现有事实的唯一扫读解释；旧后端缺席时界面安全降级。 */
   focus?: {
@@ -412,6 +419,26 @@ export interface TaskSummary {
     at: string;
     paused_from?: TaskStatus;
   };
+}
+
+export interface IssueEnvironmentRef {
+  id: string;
+  name: string;
+  purpose: "logs" | "deploy" | "both";
+  protocol: "ssh";
+  host: string;
+  port: number;
+  username: string;
+  credential_state: "stored";
+}
+
+export interface IssueEnvironmentInput {
+  name: string;
+  purpose: "logs" | "deploy" | "both";
+  host: string;
+  port?: number;
+  username: string;
+  password: string;
 }
 
 /** 历史条目(服务端 projection.ts 的 TaskHistoryEntry 镜像)。 */
@@ -663,6 +690,8 @@ export async function createTask(
     title?: string;
     repo?: string;
     repos?: string[];
+    entryKind?: "requirement" | "dts";
+    issueEnvironments?: IssueEnvironmentInput[];
     lane?: string;
     ticket?: string;
     baseline?: string;
@@ -681,6 +710,9 @@ export async function createTask(
       account: account || undefined,
       repo: extras?.repo || undefined,
       repos: extras?.repos?.length ? extras.repos : undefined,
+      entry_kind: extras?.entryKind,
+      issue_environments: extras?.entryKind === "dts"
+        ? extras.issueEnvironments ?? [] : undefined,
       // 空白等于没选，由服务端使用内核第一项；不要把 "" 伪装成
       // 一个需要校验的交付方式。
       lane: extras?.lane?.trim() || undefined,
