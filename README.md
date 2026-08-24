@@ -587,6 +587,11 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
   主要编排入口；这只是部署工具链经验，不覆盖仓库脚本与 Skill 的明确说明。
   缓存按仓库哈希隔离挂载，内部 Maven/npm 镜像与 CA 由部署只读注入；
   缺工具、镜像、权限或依赖会明确标为环境故障并停止 push，不回退宿主;
+- **预推送先验环境检查**:专项 Agent 启动前，Cloud 会按当前仓识别结果
+  本地核对 passwd HOME、Maven 实际 JDK 21、JVM cacerts、显式 settings、
+  构建缓存和 C++ 同级 SDK/父子拓扑。失败直接落为 environment_error，
+  不消耗模型去 curl 盲找仓库；Host Git 的可执行 helper 已移到数据目录下
+  0700 私有运行区，因此宿主 `/tmp` 可保持 noexec;
 - 任务级恢复已实现(tests/recovery.test.ts):进程可死任务不死——
   重启后 recover() 重建索引,决定走重建会话续跑;pi 侧会话仍是
   inMemory,重建会话不带旧对话上下文,以内核 current 为锚(设计如此);

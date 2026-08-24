@@ -4,6 +4,8 @@ import type {
   TaskContainerFactory,
   TaskContainerFactoryInput,
 } from "../../src/taskService.ts";
+import { PRE_PUSH_ENVIRONMENT_SUCCESS_MARKER } from
+  "../../src/prepushEnvironment.ts";
 
 export interface FakeContainerRecord {
   name: string;
@@ -19,6 +21,8 @@ export interface FakeContainerRecord {
 export class FakeTaskContainerHarness {
   readonly records: FakeContainerRecord[] = [];
   readonly events: string[] = [];
+  /** 专门验证“环境坏时不启动模型”的集成路径。 */
+  preflightFailure?: string;
 
   readonly factory: TaskContainerFactory = (
     input: TaskContainerFactoryInput,
@@ -46,6 +50,16 @@ export class FakeTaskContainerHarness {
         }
         record.commands.push(command);
         this.events.push(`exec:${record.name}:${command}`);
+        if (command.includes(PRE_PUSH_ENVIRONMENT_SUCCESS_MARKER)) {
+          if (this.preflightFailure) {
+            options.onData(Buffer.from(
+              `__MFC_PREPUSH_ENV_FAIL__:${this.preflightFailure}\n`,
+            ));
+            return { exitCode: 78 };
+          }
+          options.onData(Buffer.from(`${PRE_PUSH_ENVIRONMENT_SUCCESS_MARKER}\n`));
+          return { exitCode: 0 };
+        }
         if (command.includes("__MFC_HOLD__")) {
           options.onData(Buffer.from("build is running\n"));
           return await new Promise<{ exitCode: number | null }>((resolve) => {

@@ -14,7 +14,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TaskService } from "../src/taskService.ts";
@@ -121,10 +129,27 @@ test("本地仓克隆照常可用:没有令牌可泄,也不该被加固顺手弄
 
 test("临时凭据目录用完即删,令牌不留在盘上", () => {
   const root = mkdtempSync(join(tmpdir(), "mfc-clone-cleanup-"));
-  const service = newService(join(root, "data"));
+  const dataDir = join(root, "data");
+  const service = newService(dataDir);
   const sandbox = service.prepareHostGitSandbox(
     { username: "u", password: "s3cret" });
   assert.equal(existsSync(sandbox.dir), true);
+  assert.equal(sandbox.dir.startsWith(
+    join(realpathSync(dataDir), ".runtime", "host-git", "operation-")), true,
+  "可执行 helper 必须放 Cloud 私有运行目录，不能依赖宿主 /tmp exec");
+  assert.equal(statSync(sandbox.dir).mode & 0o777, 0o700);
   service.cleanupHostGitCredential(sandbox);
   assert.equal(existsSync(sandbox.dir), false);
+});
+
+test("Host Git 私有运行目录拒绝符号链接", () => {
+  const root = mkdtempSync(join(tmpdir(), "mfc-clone-runtime-link-"));
+  const dataDir = join(root, "data");
+  const outside = join(root, "outside");
+  mkdirSync(dataDir, { recursive: true });
+  mkdirSync(outside, { recursive: true });
+  symlinkSync(outside, join(dataDir, ".runtime"));
+  const service = newService(dataDir);
+  assert.throws(() => service.prepareHostGitSandbox(undefined),
+    /不是可信普通目录/);
 });

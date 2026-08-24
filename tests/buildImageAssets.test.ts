@@ -30,6 +30,8 @@ test("build image: 工具链版本明确且最终以非 root builder 运行", ()
   assert.match(dockerfile, /test "\$\(node --version\)" = "v18\.16\.1"/);
   assert.match(dockerfile, /test "\$\(npm --version\)" = "9\.5\.1"/);
   assert.match(dockerfile, /USER builder:builder/);
+  assert.match(dockerfile,
+    /com\.mae-flow\.builder\.contract="mae-flow-task-builder\/1"/);
   assert.ok(dockerfile.indexOf("USER builder:builder")
     < dockerfile.indexOf("RUN sh -lc 'set -eu"),
   "工具链必须在最终非 root 用户下验证");
@@ -39,6 +41,11 @@ test("build image: 工具链版本明确且最终以非 root builder 运行", ()
   assert.match(dockerfile, /HOME=\/home\/mae-flow/);
   assert.match(dockerfile, /MAVEN_CONFIG=\/home\/mae-flow\/\.m2/);
   assert.doesNotMatch(dockerfile, /\/home\/builder/);
+  assert.match(dockerfile, /passwd_home/);
+  assert.match(dockerfile, /Java version: 21/,
+    "镜像构建时必须核对 Maven 实际使用的 JVM，而非只跑 java -version");
+  assert.match(dockerfile, /lib\/security\/cacerts/);
+  assert.match(dockerfile, /\/etc\/mae-flow\/maven/);
   assert.match(dockerfile,
     /ENTRYPOINT \["\/usr\/local\/bin\/mae-flow-build-entrypoint"\]/);
   assert.doesNotMatch(dockerfile,
@@ -62,6 +69,8 @@ test("build image: 缓存分仓挂载，settings 与 CA 只读接入", () => {
   assert.match(readme, /\/tmp` 必须显式带 `exec`/);
   assert.match(entrypoint, /"\$\{HOME\}"/);
   assert.match(entrypoint, /"\$\{MAVEN_CONFIG\}"/);
+  assert.match(entrypoint, /build user HOME mismatch/);
+  assert.match(entrypoint, /mounted Maven settings is not readable/);
 });
 
 test("build image: 不内置凭据、不关闭 TLS、不暴露宿主控制面", () => {

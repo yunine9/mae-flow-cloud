@@ -15,8 +15,10 @@ test("部署自检真实走统一容器并验证三类工具链，结束后销�
   let input: TaskContainerFactoryInput | undefined;
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-container-check-"));
   const kernelRoot = join(dataDir, "kernel");
+  const settingsPath = join(dataDir, "settings.xml");
   mkdirSync(join(kernelRoot, "scripts"), { recursive: true });
   writeFileSync(join(kernelRoot, "scripts", "mae-flow.py"), "# fixture\n");
+  writeFileSync(settingsPath, "<settings/>\n");
   const service = new TaskService({
     dataDir,
     provider: "fixture",
@@ -27,6 +29,9 @@ test("部署自检真实走统一容器并验证三类工具链，结束后销�
     isolation: {
       image: "internal/mae-flow-builder@sha256:fixture",
       cacheRoot: join(dataDir, "cache"),
+      volumes: [
+        `${settingsPath}:/etc/mae-flow/maven/settings.xml:ro`,
+      ],
       memory: "3g",
       cpus: "2",
       pidsLimit: 512,
@@ -43,6 +48,12 @@ test("部署自检真实走统一容器并验证三类工具链，结束后销�
             assert.match(command, /ca-bundle\.crt/);
             assert.match(command, /codehub-cli spes/);
             assert.match(command, /MFC_KERNEL_ROOT/);
+            assert.match(command, /passwd_home/);
+            assert.match(command, /Java version: 21/,
+              "不能只看 java -version，必须核对 Maven 实际使用的 JVM");
+            assert.match(command, /lib\/security\/cacerts/);
+            assert.match(command, /MFC_EXPECT_MAVEN_SETTINGS/);
+            assert.match(command, /\$HOME\/\.m2\/settings\.xml/);
             assert.match(command, /scratch="\$PWD\/\.mfc-self-check-\$\$"/,
               "编译探针必须落在 bind-mounted workspace，不得只测 /tmp");
             for (const cache of ["maven", "npm", "ccache", "xdg"]) {
@@ -77,7 +88,10 @@ test("部署自检真实走统一容器并验证三类工具链，结束后销�
     true, "自检工作区必须保留父目录/仓名层级");
   assert.ok(input?.volumes.includes(`${kernelRoot}:${kernelRoot}:ro`),
     "自检必须同形挂载并验证 Mae-Flow 内核根");
+  assert.ok(input?.volumes.includes(
+    `${settingsPath}:/etc/mae-flow/maven/settings.xml:ro`));
   assert.equal(input?.options.environment?.MFC_KERNEL_ROOT, kernelRoot);
+  assert.equal(input?.options.environment?.MFC_EXPECT_MAVEN_SETTINGS, "1");
   assert.equal(input?.limits.memory, "3g");
   assert.equal(input?.limits.pidsLimit, 512);
   assert.equal(input?.options.labels?.["com.mae-flow-cloud.role"], "system-check");
@@ -125,6 +139,8 @@ test("真实 Docker 部署自检：统一镜像内编译 Java/C++ 并检查 JS �
     const scratch = join(homedir(), ".cache", "mae-flow-cloud-tests");
     mkdirSync(scratch, { recursive: true });
     const dataDir = mkdtempSync(join(scratch, "mfc-real-container-check-"));
+    const settingsPath = join(dataDir, "settings.xml");
+    writeFileSync(settingsPath, "<settings/>\n");
     const service = new TaskService({
       dataDir,
       provider: "fixture",
@@ -134,6 +150,9 @@ test("真实 Docker 部署自检：统一镜像内编译 Java/C++ 并检查 JS �
       isolation: {
         image: REAL_IMAGE!,
         cacheRoot: join(dataDir, "cache"),
+        volumes: [
+          `${settingsPath}:/etc/mae-flow/maven/settings.xml:ro`,
+        ],
         memory: "3g",
         cpus: "2",
         pidsLimit: 512,

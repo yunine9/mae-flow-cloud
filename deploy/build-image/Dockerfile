@@ -16,6 +16,7 @@ ARG BUILDER_GID=10001
 
 LABEL org.opencontainers.image.title="Mae-Flow Cloud task build environment" \
       org.opencontainers.image.description="JDK 21, Maven, Node 18/npm 9 and native build tools for isolated task commands" \
+      com.mae-flow.builder.contract="mae-flow-task-builder/1" \
       com.mae-flow.toolchain.java="21" \
       com.mae-flow.toolchain.node="18.16.1" \
       com.mae-flow.toolchain.npm="9.5.1"
@@ -76,6 +77,9 @@ RUN set -eu; \
       chmod a+rx /etc/profile.d; \
       find /etc/profile.d -maxdepth 1 -type f -exec chmod a+r {} +; \
     fi; \
+    for directory in /home /etc/mae-flow /etc/mae-flow/maven /etc/mae-flow/ca; do \
+      if [ -d "${directory}" ]; then chmod a+rx "${directory}"; fi; \
+    done; \
     for directory in /etc/pki /etc/pki/tls /etc/pki/tls/certs /etc/ssl /etc/ssl/certs; do \
       if [ -d "${directory}" ]; then chmod a+rx "${directory}"; fi; \
     done; \
@@ -113,12 +117,17 @@ USER builder:builder
 # 这段故意位于 USER 之后并使用 login shell：会真实触发 profile.d、PATH、
 # CA 目录遍历和工具执行权限，覆盖 root 构建阶段看不见的 0750 问题。
 RUN sh -lc 'set -eu; \
+    passwd_home="$(awk -F: -v uid="$(id -u)" '\''$3 == uid { print $6; exit }'\'' /etc/passwd)"; \
+    test -n "$passwd_home"; test "$passwd_home" = "$HOME"; \
     for script in /etc/profile.d/*.sh; do [ ! -e "$script" ] || [ -r "$script" ]; done; \
     for directory in /etc/pki /etc/pki/tls /etc/pki/tls/certs; do [ ! -e "$directory" ] || [ -x "$directory" ]; done; \
     for ca in /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/certs/ca-certificates.crt; do [ ! -e "$ca" ] || [ -r "$ca" ]; done; \
     for optional in codehub-cli spes; do path="$(command -v "$optional" 2>/dev/null || true)"; [ -z "$path" ] || [ -x "$path" ]; done; \
     java -version; \
-    mvn --version; \
+    mvn_info="$(mvn --version 2>&1)"; printf "%s\\n" "$mvn_info"; \
+    printf "%s\\n" "$mvn_info" | grep -Eq "Java version: 21([., ]|$)"; \
+    mvn_java_home="$(printf "%s\\n" "$mvn_info" | sed -n "s/^.*runtime: \\([^,]*\\).*$/\\1/p" | head -n 1)"; \
+    test -n "$mvn_java_home"; test -r "$mvn_java_home/lib/security/cacerts"; \
     test "$(node --version)" = "v18.16.1"; \
     test "$(npm --version)" = "9.5.1"; \
     gcc --version; g++ --version; ld --version; bison --version; flex --version; \

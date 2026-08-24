@@ -28,7 +28,6 @@ import {
 import { createHash, randomUUID } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { basename, dirname, join, resolve } from "node:path";
-import { tmpdir } from "node:os";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
 import {
   AnnotationStore,
@@ -120,6 +119,12 @@ import {
   type PrePushRunResult,
   type PrePushRunner,
 } from "./prepushAgent.ts";
+import { detectPrePushBuildProfile } from "./prepushBuildPlaybook.ts";
+import {
+  hasContainerVolumeDestination,
+  inspectPrePushEnvironment,
+  prePushEnvironmentCommand,
+} from "./prepushEnvironment.ts";
 import {
   PRE_PUSH_EXECUTION_SCHEMA,
   attestPrePushExecution,
@@ -1551,6 +1556,10 @@ export class TaskService {
       ],
       workspace,
     );
+    const expectsMavenSettings = hasContainerVolumeDestination(
+      mounted.volumes,
+      "/etc/mae-flow/maven/settings.xml",
+    );
     const instance = taskContainerInstance(this.options.dataDir).namePrefix;
     const containerName = `mfc-${instance}-system-check-${randomUUID().slice(0, 8)}`;
     const container = this.createTaskContainer({
@@ -1577,6 +1586,7 @@ export class TaskService {
         environment: {
           ...mounted.environment,
           ...(kernelRoot ? { MFC_KERNEL_ROOT: kernelRoot } : {}),
+          ...(expectsMavenSettings ? { MFC_EXPECT_MAVEN_SETTINGS: "1" } : {}),
         },
         forwardEnvironment: isolation.forwardEnvironment,
         stopGraceSeconds: isolation.stopGraceSeconds,
@@ -1598,6 +1608,11 @@ export class TaskService {
         'trap \'rm -rf "$scratch"\' EXIT',
         'mkdir -p "$scratch"',
         'test -w "$PWD"',
+        // Maven 会从 passwd 数据库而非 $HOME 发现用户目录；两者漂移时
+        // settings 明明挂好了也会被 Maven 静默忽略。
+        'passwd_home="$(awk -F: -v uid="$(id -u)" \'$3 == uid { print $6; exit }\' /etc/passwd)"',
+        'test -n "$passwd_home"',
+        'test "$passwd_home" = "$HOME"',
         // 五类缓存都必须是实际可写挂载；逐个写读删，不只看目录权限位。
         'sdk_cache="$(dirname "$PWD")/cpp_sdk_repository"',
         'for cache in /cache/maven /cache/npm /cache/ccache /cache/xdg "$sdk_cache"; do test -d "$cache"; probe="$cache/.mfc-self-check-$$"; printf cache-ok > "$probe"; test "$(cat "$probe")" = cache-ok; rm -f "$probe"; done',
@@ -1617,7 +1632,13 @@ export class TaskService {
         'if test -n "${MFC_KERNEL_ROOT:-}"; then test -x "$MFC_KERNEL_ROOT"; test -r "$MFC_KERNEL_ROOT/scripts/mae-flow.py"; fi',
         "java -version 2>&1",
         "java -version 2>&1 | grep -Eq 'version \\\"21([.]|\\\"| )'",
-        "mvn --version",
+        'mvn_info="$(mvn --version 2>&1)"',
+        'printf \'%s\\n\' "$mvn_info"',
+        'printf \'%s\\n\' "$mvn_info" | grep -Eq \'Java version: 21([., ]|$)\'',
+        'mvn_java_home="$(printf \'%s\\n\' "$mvn_info" | sed -n \'s/^.*runtime: \\([^,]*\\).*$/\\1/p\' | head -n 1)"',
+        'test -n "$mvn_java_home"',
+        'test -r "$mvn_java_home/lib/security/cacerts"',
+        'if test "${MFC_EXPECT_MAVEN_SETTINGS:-}" = 1; then test -r /etc/mae-flow/maven/settings.xml; test -r "$HOME/.m2/settings.xml"; fi',
         "node --version",
         'test "$(node -p \'Number(process.versions.node.split(\".\")[0])\')" -ge 18',
         "npm --version",
@@ -1649,7 +1670,9 @@ export class TaskService {
       failurePhase = "verify-metadata";
       const immutable = container.metadata?.immutableImageReference
         ?? isolation.image;
-      detail = `镜像 ${immutable} 已真实启动；bind 工作区可写并以 JDK 21/Maven、`
+      detail = `镜像 ${immutable} 已真实启动；passwd HOME 与容器 HOME 一致，`
+        + `Maven 实际运行于 JDK 21 且 JVM cacerts 可读${expectsMavenSettings
+          ? "、部署 Maven settings 已接入" : ""}；bind 工作区可写并以 JDK 21/Maven、`
         + "C/C++ 完成编译执行，Maven/npm/ccache/XDG 缓存均可写；"
         + "Node 18+/npm 9+、Git、Python 工具及 profile/CA/可选平台 CLI"
         + `${kernelRoot ? "、Mae-Flow 内核挂载" : ""}权限通过`;
@@ -5495,6 +5518,39 @@ export class TaskService {
       if (!this.current(task, epoch)) {
         throw new Error("任务已停止，推送前构建容器不再执行命令");
       }
+      // 先验证确定性的本地环境事实，再花模型额度。settings、Maven 实际
+      // JDK、JVM cacerts、缓存或 C++ 拓扑不对时直接给出基础设施结论，
+      // 不让 Agent curl 盲探几分钟后才猜到部署缺项。
+      const profile = detectPrePushBuildProfile(task.cwd);
+      const preflightCommand = prePushEnvironmentCommand({
+        profile,
+        requireMavenSettings: hasContainerVolumeDestination(
+          mounts.volumes,
+          "/etc/mae-flow/maven/settings.xml",
+        ),
+      });
+      let preflightOutput = "";
+      const preflightRun = await container.exec(preflightCommand, task.cwd, {
+        timeout: 45,
+        signal: abortController.signal,
+        onData: (chunk) => {
+          preflightOutput = `${preflightOutput}${chunk.toString()}`.slice(-64 * 1024);
+        },
+      });
+      const preflight = inspectPrePushEnvironment(
+        preflightRun.exitCode,
+        preflightOutput,
+      );
+      if (!preflight.ready) {
+        this.options.log?.(
+          `[prepush-environment] 任务 ${task.summary.id}: ${preflight.detail}`,
+        );
+        return withExecution({
+          status: "infrastructure_failure",
+          sha: this.prePushRevision(task).sha,
+          message: preflight.detail,
+        });
+      }
       driver = await CloudSession.create({
         taskId: `${task.summary.id}:prepush:${request.round}`,
         workspace: task.cwd,
@@ -7211,9 +7267,9 @@ export class TaskService {
   private prepareHostGitCredential(
     credential: { username: string; password: string },
   ): { dir: string; helper: string } {
-    // 系统临时目录避免 helper 路径中出现工作区空格，也让凭据天然位于
-    // Agent 工作区之外。
-    const dir = mkdtempSync(join(tmpdir(), "mae-flow-git-"));
+    // 可执行 helper 不能放系统 /tmp：生产宿主通常将 /tmp 挂成 noexec。
+    // 使用 Cloud 数据目录下 0700 的控制面运行目录，仍与任务工作区隔离。
+    const dir = this.createHostGitRuntimeDirectory();
     chmodSync(dir, 0o700);
     const file = join(dir, "credential");
     writeFileSync(file,
@@ -7261,7 +7317,7 @@ export class TaskService {
   } {
     const prepared = credential
       ? this.prepareHostGitCredential(credential) : undefined;
-    const dir = prepared?.dir ?? mkdtempSync(join(tmpdir(), "mae-flow-git-"));
+    const dir = prepared?.dir ?? this.createHostGitRuntimeDirectory();
     chmodSync(dir, 0o700);
     const home = join(dir, "home");
     const xdg = join(dir, "xdg");
@@ -7307,6 +7363,35 @@ export class TaskService {
       ...(prepared ? ["-c", `credential.helper=${prepared.helper}`] : []),
     ];
     return { dir, helper: prepared?.helper, args, env };
+  }
+
+  /** 一次 Host Git 动作一个私有目录。拒绝符号链接，防止控制面 helper
+   * 被 Agent 或同机用户引到任务工作区；操作结束仍由既有 cleanup 删除。 */
+  private createHostGitRuntimeDirectory(): string {
+    const configuredDataRoot = resolve(this.options.dataDir);
+    mkdirSync(configuredDataRoot, { recursive: true });
+    const dataRoot = realpathSync(configuredDataRoot);
+    const runtime = join(dataRoot, ".runtime");
+    const gitRoot = join(runtime, "host-git");
+    for (const directory of [runtime, gitRoot]) {
+      if (existsSync(directory)) {
+        const stat = lstatSync(directory);
+        if (!stat.isDirectory() || stat.isSymbolicLink()) {
+          throw new Error(`Host Git 运行目录不是可信普通目录: ${directory}`);
+        }
+      } else {
+        mkdirSync(directory, { mode: 0o700 });
+      }
+      chmodSync(directory, 0o700);
+      const actual = realpathSync(directory);
+      if (actual !== directory
+          || !(actual === dataRoot || actual.startsWith(`${dataRoot}/`))) {
+        throw new Error(`Host Git 运行目录越出 Cloud 数据目录: ${directory}`);
+      }
+    }
+    const operation = mkdtempSync(join(gitRoot, "operation-"));
+    chmodSync(operation, 0o700);
+    return operation;
   }
 
   /** 新任务和旧任务恢复都执行：清掉历史版本留在 agentDir / repo config

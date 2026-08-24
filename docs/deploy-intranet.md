@@ -865,6 +865,16 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
   Maven/C++ 同时打满。镜像构建与内部 CA/Maven settings 的只读挂载见
   `deploy/build-image/README.md`。镜像 `Config.User` 为空/root/0 或显式
   `--isolate-user root/0` 会拒绝运行；不要用 root 绕过目录权限。
+- **构建环境先于模型验明**:管理页「部署自检」会在真实任务身份下核对
+  passwd HOME、Maven 实际使用的 JDK 21、该 JDK cacerts、显式挂载的
+  settings、五类缓存和 C++ 仓父子拓扑。正式任务每次进入推送前验证时还会
+  先做当前仓语言相关的本地预检；缺 settings/JDK/CA/权限/SDK 时直接归类
+  基础设施故障，不启动模型，不用 curl 猜制品仓。预检不访问网络，内部
+  mirror 的真实连通性仍由随后真正的 Maven/npm 命令证明。
+- **宿主 `/tmp` 不需要 exec**:Host Git 的短期 credential helper 和
+  askpass 位于 `<data>/.runtime/host-git/operation-*`（0700，用完删除），
+  不再从系统 `/tmp` 执行。宿主可保持 `/tmp noexec`；只有受限任务容器自己
+  的 `/tmp` tmpfs 为兼容 Maven native 库显式使用 exec，两者不要混淆。
 - **Root 守护与非 root 容器的属主接缝**:首选仍是让服务账号与容器使用
   同一 uid:gid。若进程管理器必须以 root 启动 Cloud，则必须配置数字形式
   的 `--isolate-user 10001:10001`（示例），不能写用户名。每次 docker run

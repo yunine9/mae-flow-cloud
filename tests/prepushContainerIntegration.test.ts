@@ -218,6 +218,64 @@ test("native prepush 未配置隔离镜像时按基础设施失败收口，不�
   }
 });
 
+test("native prepush 环境预检失败时不启动模型、不盲探网络也不 push", async () => {
+  const platform = new FakeGitPlatform();
+  platform.initBare(sourceRepo(),
+    mkdtempSync(join(tmpdir(), "mfc-prepush-preflight-platform-")));
+  await platform.start();
+  const model = new ScriptedModelServer(codingScenes(),
+    "scripted-v1", { linear: true });
+  await model.start();
+  const containers = new FakeTaskContainerHarness();
+  containers.preflightFailure = "Maven 实际使用的不是 JDK 21";
+  const service = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-prepush-preflight-data-")),
+    provider: "maeflow",
+    model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    host: {
+      kernelRoot: KERNEL_ROOT,
+      repoPath: platform.barePath,
+      python: "python3",
+    },
+    delivery: {
+      platformUrl: platform.baseUrl,
+      pollIntervalMs: 100,
+      pollTimeoutMs: 500,
+    },
+    prepush: { enabled: true },
+    isolation: {
+      image: "fixture/build-toolchain:test",
+      cacheRoot: mkdtempSync(join(tmpdir(), "mfc-prepush-preflight-cache-")),
+      containerFactory: containers.factory,
+    },
+  });
+  try {
+    const id = service.create("REQ_CONTAINER：环境坏时立即停止", {
+      ticket: "REQ_CONTAINER",
+    }).id;
+    await until(() => service.get(id)?.delivery?.prepush?.state
+      === "environment_error", "预检失败按基础设施故障落盘");
+    const summary = service.get(id)!;
+    assert.match(String(summary.detail ?? ""), /Maven 实际使用的不是 JDK 21/);
+    assert.equal(model.requests.length, codingScenes().length,
+      "预检失败后不能再消耗一次 prepush 模型会话");
+    const attempt = containers.records.find((record) =>
+      record.name.endsWith("-prepush"));
+    assert.ok(attempt?.stopped, "失败后必须销毁短命构建容器");
+    assert.equal(attempt?.commands.some((command) => /curl|wget/.test(command)),
+      false, "确定性预检不应做网络盲探");
+    assert.equal(git(platform.barePath, "branch", "--list",
+      "master_bot_REQ_CONTAINER"), "");
+    assert.equal(platform.mergeRequests.length, 0);
+    assert.equal(platform.pipelines.length, 0);
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+    await platform.stop();
+  }
+});
+
 test("暂停 native prepush 后销毁旧容器，恢复会新建 attempt 并重跑", async () => {
   const platform = new FakeGitPlatform();
   platform.initBare(sourceRepo(),

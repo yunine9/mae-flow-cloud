@@ -5,6 +5,33 @@
 Node 18.16.1/npm 9.5.1，以及 JavaScript、Java、C++ 仓需要的常见本地
 工具链。
 
+## 镜像契约（不是一次性 `docker commit` 清单）
+
+Cloud 把镜像当作 `mae-flow-task-builder/1` 使用。任何内部基础镜像都必须
+在 Dockerfile 中可重复地满足下面的条件，不能只在某台机器上手工修好：
+
+- 最终用户必须是非 root；`/etc/passwd` 中该 UID 的 HOME 必须与 `$HOME`
+  相同。Maven 会通过 `getpwuid()` 找 `.m2`，只改环境变量不够。
+- `mvn --version` 报告的实际 Java 必须是 21，且该输出中的 runtime 下
+  `lib/security/cacerts` 可读。`java -version` 是 21 但 Maven 仍选到 JDK 8
+  也不合格。
+- `/home`、`/etc/mae-flow`、`/etc/mae-flow/maven`、`/etc/profile.d`、
+  系统 CA 路径逐级可遍历；JDK/Maven/Node/C++ 工具及可选平台 CLI 对最终
+  用户可执行。
+- 内部 CA 必须导入 Maven 实际使用的 JDK truststore，或把已经合并好的
+  cacerts 只读挂到那个 JDK 的默认路径。不得以 `sslVerify=false`、
+  `strict-ssl=false` 或 `curl -k` 代替证书治理。
+- 镜像不预建 `/cpp_sdk_repository`，也不放仓名软链接。Cloud 按仓库隔离
+  SDK 缓存并挂到代码仓同级的 `cpp_sdk_repository`，代码仓保持
+  `<任务目录>/<仓名>` 的真实父子拓扑。
+- `/tmp/mae-flow-build` 由 entrypoint 在每个短命 tmpfs 中重建，不依赖
+  镜像层残留。宿主 `/tmp` 可以且建议保持 `noexec`；只有任务容器自己的
+  `/tmp` 需要 `exec`，用于 Maven Jansi/JNA/native 临时库。
+
+镜像带 `com.mae-flow.builder.contract=mae-flow-task-builder/1` 标签仅用于
+识别；真正的放行依据是管理页「部署自检」启动真实非 root 容器后的行为
+验证，不会只信标签。
+
 ## 构建
 
 开发机可用 Dockerfile 中已经固定 manifest digest 的公共默认镜像验证：
@@ -95,11 +122,22 @@ tmpfs:/tmp:rw,exec,nosuid,nodev,mode=1777
 
 ```bash
 docker run --rm --init mae-flow-task-builder:dev sh -lc '
-  java -version && mvn --version && node --version && npm --version &&
+  passwd_home="$(awk -F: -v uid="$(id -u)" '\''$3 == uid {print $6; exit}'\'' /etc/passwd)" &&
+  test "$passwd_home" = "$HOME" &&
+  java -version &&
+  mvn_info="$(mvn --version 2>&1)" && printf "%s\n" "$mvn_info" &&
+  printf "%s\n" "$mvn_info" | grep -Eq "Java version: 21([., ]|$)" &&
+  node --version && npm --version &&
   gcc --version && g++ --version && bison --version && flex --version &&
   ccache --version && git --version && python3 --version
 '
 ```
+
+启动 Cloud 后还必须在管理页执行「部署自检」。它会使用正式挂载、正式
+UID/GID 和正式资源限制，验证 passwd HOME、Maven 实际 JDK/cacerts、已配置
+settings、五类缓存、C++ 仓父子拓扑及三类工具链。每次推送前，平台还会在
+模型启动前做同一组与当前仓语言相关的快速预检；失败直接显示基础设施
+缺项，不会消耗模型去盲探网络。
 
 然后分别用 Java、JS 和 C++ 代表仓验证增量编译与 UT。仍需由部署方给出
 的值只有：两个基础镜像 digest、内部 apt/Maven/npm 地址及 CA、Cloud
