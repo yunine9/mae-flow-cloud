@@ -203,7 +203,7 @@ export function renderPrePushBuildGuidance(profile: PrePushBuildProfile): string
 
   if (profile.stacks.includes("java")) {
     lines.push(
-      `Java：默认先用增量 \`${mvn} compile\`，UT 用 \`${mvn} test\`；只有首次建立完整基线、生成物陈旧或增量失败能明确归因于缓存时，才升级为 clean。`,
+      `Java：编译/打包检查默认用 \`${mvn} package -DskipTests\`，UT 再单独用 \`${mvn} test\`。不要先跑一次带测试的 package 又重复跑 test；仓库脚本、pom 或已选择 Skill 明确给出其他入口时以仓库事实为准。`,
       "Java 定向 UT 可用 `-Dtest=ClassName`、`-Dtest=ClassName#method`、通配符及 `-pl <module>`；修复循环先跑受影响测试，收口前仍按仓库要求跑完整范围。",
     );
   }
@@ -222,7 +222,8 @@ export function renderPrePushBuildGuidance(profile: PrePushBuildProfile): string
 
   if (profile.stacks.includes("cpp")) {
     lines.push(
-      `C++/native：本平台仍从 Maven 进入。默认增量 \`${mvn} compile -DDT_test=UT -DDT_run=true\`；首次完整基线或确认生成物陈旧时再用 \`${mvn} clean compile -DDT_test=UT -DDT_run=true\`。`,
+      `C++/native：优先从 Maven 插件进入。当前内网经验的候选命令是 \`${mvn} compile -DDT_test=UT -DDT_run=true\`；首次完整基线或确认生成物陈旧时才考虑 \`${mvn} clean compile -DDT_test=UT -DDT_run=true\`。这只是候选，必须先核对 pom、仓库脚本与插件说明。`,
+      "必须从输出确认 UT 进程确实执行并产生用例/结果摘要，不能只看 Maven BUILD SUCCESS 就把它记作 UT。若 DT 参数只生成或编译测试，则继续使用仓库生成目录中的 ctest --output-on-failure 或仓库专用 runner，最终上报真正执行测试的命令。",
       "C++ 定向 UT 可按仓库支持使用 `-DDT_COV_INCLUDES=\"*ModuleName*\"` 或 `-DDT_COV_EXCLUDES=\"*ModuleName*\"`；先缩小修复反馈环，收口前再覆盖仓库要求范围。",
       "svc_profile、SDK 等若由 Maven 生成或拉取，不要手工 export/伪造；工具链或专用依赖确实缺失时报告 infrastructure_failure。",
     );

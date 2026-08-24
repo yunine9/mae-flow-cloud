@@ -1030,6 +1030,7 @@ export class TaskService {
               workspace: ownedInput.workspace,
               volumes: ownedInput.volumes,
               user: ownedInput.limits.user,
+              cacheRoot: service.options.isolation?.cacheRoot,
               markerRoot: join(
                 service.options.dataDir, ".container-ownership"),
             });

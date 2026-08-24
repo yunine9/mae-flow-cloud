@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   prepareContainerHostPaths,
   repairContainerKernelOwnership,
@@ -36,7 +36,7 @@ test("只有 Linux root 宿主需要 chown，且必须给数字非 root uid:gid"
   }
 });
 
-test("工作区与四类缓存统一交给容器用户，符号链接不跟随到外部", () => {
+test("工作区与五类缓存统一交给容器用户，符号链接不跟随到外部", () => {
   const root = mkdtempSync(join(tmpdir(), "mfc-container-owner-"));
   const workspace = join(root, "repo");
   const nested = join(workspace, "src");
@@ -54,6 +54,17 @@ test("工作区与四类缓存统一交给容器用户，符号链接不跟随�
     writeFileSync(join(path, "seed"), name);
     volumes.push(`${path}:/cache/${name}`);
   }
+  const cppSdk = join(cache, "cpp-sdk");
+  mkdirSync(cppSdk, { recursive: true });
+  writeFileSync(join(cppSdk, "seed"), "cpp-sdk");
+  volumes.push(
+    `${cppSdk}:${join(dirname(workspace), "cpp_sdk_repository")}`,
+  );
+  const customOutsideCacheRoot = join(root, "custom-cpp-sdk");
+  mkdirSync(customOutsideCacheRoot, { recursive: true });
+  volumes.push(
+    `${customOutsideCacheRoot}:${join(root, "other", "cpp_sdk_repository")}`,
+  );
 
   const currentUid = process.getuid?.();
   const currentGid = process.getgid?.();
@@ -67,12 +78,15 @@ test("工作区与四类缓存统一交给容器用户，符号链接不跟随�
   const prepared = prepareContainerHostPaths({
     workspace,
     volumes,
+    cacheRoot: cache,
     markerRoot,
     user: `${uid}:${gid}`,
     runtime: { platform: "linux", effectiveUid: 0 },
   });
   assert.equal(prepared.active, true);
-  assert.equal(prepared.cacheTrees, 4);
+  assert.equal(prepared.cacheTrees, 5);
+  assert.equal(statSync(customOutsideCacheRoot).uid, currentUid,
+    "即使目标同名，自定义 volume 也不能被平台递归 chown");
   assert.equal(statSync(workspace).uid, uid);
   assert.equal(statSync(join(nested, "main.ts")).uid, uid);
   assert.equal(lstatSync(join(workspace, "outside-link")).uid, uid);
@@ -81,10 +95,13 @@ test("工作区与四类缓存统一交给容器用户，符号链接不跟随�
   for (const name of ["maven", "npm", "ccache", "xdg"]) {
     assert.equal(statSync(join(cache, name, "seed")).uid, uid);
   }
+  assert.equal(statSync(join(cppSdk, "seed")).uid, uid,
+    "动态目的路径的 C++ SDK 缓存也必须在自检/正式任务前交给容器用户");
 
   const repeated = prepareContainerHostPaths({
     workspace,
     volumes,
+    cacheRoot: cache,
     markerRoot,
     user: `${uid}:${gid}`,
     runtime: { platform: "linux", effectiveUid: 0 },

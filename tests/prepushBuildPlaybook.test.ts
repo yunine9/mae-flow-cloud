@@ -26,7 +26,7 @@ function repository(files: Record<string, string>): { root: string; cleanup(): v
   return { root, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
-test("build playbook: 识别 Java Maven 仓并给出增量与定向 UT", (t) => {
+test("build playbook: Java 先 package 跳测试，再单独跑定向 UT", (t) => {
   const repo = repository({
     "pom.xml": "<project><build><plugins><artifactId>maven-compiler-plugin</artifactId></plugins></build></project>",
     "README.md": "# build",
@@ -41,8 +41,9 @@ test("build playbook: 识别 Java Maven 仓并给出增量与定向 UT", (t) => 
   assert.deepEqual(profile.repository_guides, ["README.md", "mvnw"]);
 
   const guidance = renderPrePushBuildGuidance(profile);
-  assert.match(guidance, /\.\/mvnw compile/);
+  assert.match(guidance, /\.\/mvnw package -DskipTests/);
   assert.match(guidance, /\.\/mvnw test/);
+  assert.match(guidance, /不要先跑一次带测试的 package 又重复跑 test/);
   assert.match(guidance, /-Dtest=ClassName#method/);
   assert.match(guidance, /JDK 21/);
 });
@@ -84,6 +85,8 @@ test("build playbook: 识别 C++ Maven DT 与定向覆盖参数", (t) => {
   const guidance = prePushBuildGuidance(repo.root);
   assert.match(guidance, /mvn compile -DDT_test=UT -DDT_run=true/);
   assert.match(guidance, /mvn clean compile -DDT_test=UT -DDT_run=true/);
+  assert.match(guidance, /必须从输出确认 UT 进程确实执行/);
+  assert.match(guidance, /ctest --output-on-failure/);
   assert.match(guidance, /DT_COV_INCLUDES/);
   assert.match(guidance, /GCC\/G\+\+/);
 });
@@ -154,7 +157,7 @@ test("build playbook: 实际注入预推送 Agent mission，而非仅停留在�
   });
   assert.match(mission, /内网推送前构建参考/);
   assert.match(mission, /pom\/package.*真实可执行入口/);
-  assert.match(mission, /mvn compile/);
+  assert.match(mission, /mvn package -DskipTests/);
   assert.match(mission, /mvn test/);
   assert.match(mission, /内网经验只在仓库材料没有说明时兜底/);
 });

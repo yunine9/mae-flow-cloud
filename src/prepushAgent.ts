@@ -389,7 +389,8 @@ export function prePushMission(request: PrePushRunRequest): string {
     // test 字样的仓),所以这里必须说到明面上——这条靠的是嘱咐,不是闸。
     // 措辞不许夸大宿主的核对能力:它核的是"你上报的命令确实成功跑过",
     // 核不出那条命令跑的是编译还是测试。
-    "unit_test 必须填**真跑过测试**的那条命令（如 `mvn test`、"
+    "unit_test 必须填**真跑过测试**的那条命令（Java 编译栏可用"
+      + " `mvn package -DskipTests`，但 UT 栏仍须另填 `mvn test`；C++ 可用"
       + "`mvn compile -DDT_test=UT -DDT_run=true`、`npm test`），"
       + "**不能把编译命令填进 UT 栏顶账**：只编译不跑 UT 等于这一关没做，"
       + "代价是把没测过的代码推上去烧流水线。"

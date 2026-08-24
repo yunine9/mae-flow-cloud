@@ -113,12 +113,27 @@ function chownTree(path: string, owner: NumericOwner): number {
   return changed;
 }
 
-function cacheSource(volume: string): string | undefined {
+function cacheSource(volume: string, cacheRoot: string | undefined): string | undefined {
   const [source, destination, mode] = volume.split(":");
-  if (!source || !destination || !isAbsolute(source)) return undefined;
-  if (!CACHE_DESTINATIONS.has(resolve(destination))) return undefined;
+  if (!source || !destination || !isAbsolute(source) || !cacheRoot) {
+    return undefined;
+  }
+  const resolvedSource = resolve(source);
+  const resolvedCacheRoot = resolve(cacheRoot);
+  if (resolvedSource !== resolvedCacheRoot
+      && !resolvedSource.startsWith(`${resolvedCacheRoot}/`)) {
+    return undefined;
+  }
+  const resolvedDestination = resolve(destination);
+  // 前四类使用固定容器目录；C++ SDK 为保持业务仓 build/../../ 语义，
+  // 动态挂到代码仓同级的 cpp_sdk_repository。它同样是平台按仓创建的
+  // cacheRoot 子树，root 宿主必须在 docker run 前交给任务 uid。
+  if (!CACHE_DESTINATIONS.has(resolvedDestination)
+      && basename(resolvedDestination) !== "cpp_sdk_repository") {
+    return undefined;
+  }
   if (mode?.split(",").includes("ro")) return undefined;
-  return resolve(source);
+  return resolvedSource;
 }
 
 function ownershipMarkerRoot(path: string): void {
@@ -169,6 +184,8 @@ export function prepareContainerHostPaths(input: {
   user?: string;
   /** 宿主专用，绝不能 bind 给任务容器。缓存跳过标记放在这里。 */
   markerRoot?: string;
+  /** 只有平台管理的缓存根子树才允许递归 chown；自定义 volume 不参与。 */
+  cacheRoot?: string;
   runtime?: ContainerOwnershipRuntime;
 }): PreparedOwnership {
   const owner = rootContainerOwner(input.user, input.runtime);
@@ -182,7 +199,7 @@ export function prepareContainerHostPaths(input: {
   let cacheTrees = 0;
   const seen = new Set<string>();
   for (const volume of input.volumes) {
-    const source = cacheSource(volume);
+    const source = cacheSource(volume, input.cacheRoot);
     if (!source || seen.has(source)) continue;
     seen.add(source);
     if (prepareCache(source, owner, resolve(input.markerRoot))) cacheTrees += 1;
