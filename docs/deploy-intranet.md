@@ -879,7 +879,7 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
 - **镜像普通用户权限是上线门槛**:预装二进制（包括可选平台 CLI）必须
   `a+rx`，`/etc/profile.d/*.sh` 必须可读，CA 目录逐级可遍历且 bundle
   可读。统一 Dockerfile 会切到最终非 root 用户后用 login shell 真验；
-  管理页「统一任务容器」自检也按真实任务用户复验 bind 工作区、四类缓存、
+  管理页「统一任务容器」自检也按真实任务用户复验 bind 工作区、五类缓存、
   profile、CA、可选平台 CLI 与只读 Mae-Flow 内核挂载，不能拿 root 构建
   阶段的成功结果代替。
 - **关机与孤儿回收**:SIGTERM/SIGINT 会停止调度、释放构建队列、abort
@@ -893,7 +893,10 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
   时直接打开它，不要再去宿主或容器 `/tmp` 猜临时文件。该目录属于过程
   现场，不进入业务 Diff、审批哈希或预推送工作区洁净度判断。
 - **缓存不是共享工作区**:`--isolate-cache-root` 下按仓库地址 SHA-256
-  分 Maven/npm/ccache/XDG 四类目录；不同仓不共享可写缓存。工作区产物仍
+  分 Maven/npm/ccache/XDG/C++ SDK 五类目录；不同仓不共享可写缓存。C++ SDK
+  缓存会挂到代码仓同级的 `cpp_sdk_repository`，代码仓仍保持
+  `<任务目录>/<仓名>`，兼容依赖 `build/../..` 的内部构建脚本；不得把仓库
+  拍扁成 `/workspace` 后再用根目录软链接补洞。工作区产物仍
   留在各任务目录。Linux 上容器默认就以服务账号的 uid:gid 运行，缓存目录
   只要归服务账号所有即可；若显式配了 `--isolate-user <uid>:<gid>`，那就
   由你负责让该 uid 对工作区与缓存可写。缓存只用于加速，最终流水线仍是

@@ -68,6 +68,7 @@ async function until(
 
 test("构建缓存按仓库哈希分区并拒绝自定义挂载覆盖", () => {
   const cacheRoot = mkdtempSync(join(tmpdir(), "mfc-build-cache-"));
+  const workspaceRoot = mkdtempSync(join(tmpdir(), "mfc-build-workspace-"));
   const service = new TaskService({
     dataDir: mkdtempSync(join(tmpdir(), "mfc-build-cache-data-")),
     provider: "fixture",
@@ -75,10 +76,19 @@ test("构建缓存按仓库哈希分区并拒绝自定义挂载覆盖", () => {
     modelsJson: {},
     isolation: { image: "fixture/build-toolchain:test", cacheRoot },
   });
-  const mounts = (repository: string, volumes: string[] = []) =>
-    (service as any).taskContainerMounts({
+  const workspaceFor = (repository: string) => {
+    const name = repository.endsWith("a.git") ? "RepoA" : "RepoB";
+    const cwd = join(workspaceRoot, name, name);
+    mkdirSync(cwd, { recursive: true });
+    return cwd;
+  };
+  const mounts = (repository: string, volumes: string[] = []) => {
+    const cwd = workspaceFor(repository);
+    return (service as any).taskContainerMounts({
+      cwd,
       summary: { id: repository, repo_url: repository },
     }, volumes) as { volumes: string[]; environment: NodeJS.ProcessEnv };
+  };
   const first = mounts("https://code.example/team/a.git");
   const repeated = mounts("https://code.example/team/a.git");
   const second = mounts("https://code.example/team/b.git");
@@ -91,8 +101,17 @@ test("构建缓存按仓库哈希分区并拒绝自定义挂载覆盖", () => {
   assert.equal(first.environment.CCACHE_DIR, "/cache/ccache");
   assert.match(String(first.environment.MAVEN_OPTS),
     /maven\.repo\.local=\/cache\/maven\/repository/);
+  const cppSdk = first.volumes.find((volume) =>
+    volume.split(":")[1]?.endsWith("/cpp_sdk_repository"));
+  assert.ok(cppSdk, "C++ SDK 缓存必须作为代码仓同级目录挂载");
+  assert.ok(existsSync(cppSdk.split(":")[0]));
+  assert.equal(cppSdk.split(":")[1],
+    join(workspaceRoot, "RepoA", "cpp_sdk_repository"));
   assert.throws(() => mounts("https://code.example/team/a.git", [
     "/host/shared:/cache/npm",
+  ]), /不能覆盖平台的分仓缓存目录/);
+  assert.throws(() => mounts("https://code.example/team/a.git", [
+    `/host/shared:${join(workspaceRoot, "RepoA", "cpp_sdk_repository")}`,
   ]), /不能覆盖平台的分仓缓存目录/);
 });
 

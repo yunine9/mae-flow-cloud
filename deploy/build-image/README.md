@@ -47,7 +47,9 @@ Mae-Flow Cloud 的服务账号 UID/GID 重建镜像。服务若由 root 守护�
 
 ## 运行时挂载约定
 
-每个仓库使用独立的 Maven、npm、ccache 和 XDG 缓存目录。下面仅展示挂载
+每个仓库使用独立的 Maven、npm、ccache、XDG 和 C++ SDK 缓存目录。任务
+代码保持 `<任务目录>/<仓名>` 的父子层级；内部 C++ 构建脚本可自然通过
+`build/../..` 找到聚合根，不允许把仓库拍扁挂到固定 `/workspace`。下面仅展示挂载
 约定，具体 CPU、内存、PID、临时磁盘和网络限制由 Cloud 运行时统一
 下发：
 
@@ -57,6 +59,7 @@ Mae-Flow Cloud 的服务账号 UID/GID 重建镜像。服务若由 root 守护�
 <cache-root>/<repository-id>/npm:/cache/npm:rw
 <cache-root>/<repository-id>/ccache:/cache/ccache:rw
 <cache-root>/<repository-id>/xdg:/cache/xdg:rw
+<cache-root>/<repository-id>/cpp-sdk:<task-parent>/cpp_sdk_repository:rw
 <deploy-config>/settings.xml:/etc/mae-flow/maven/settings.xml:ro
 <deploy-config>/company-ca.pem:/etc/mae-flow/ca/company-ca.pem:ro
 <deploy-config>/java-cacerts:/opt/java/openjdk/lib/security/cacerts:ro

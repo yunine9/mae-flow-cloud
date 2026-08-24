@@ -1333,19 +1333,29 @@ export class TaskService {
       ?? this.effectiveDefaultRepo()
       ?? task.cwd
       ?? task.summary.id;
-    return this.containerMountsForRepository(repository, volumes);
+    return this.containerMountsForRepository(repository, volumes, task.cwd);
   }
 
   private containerMountsForRepository(
     repository: string,
     volumes: string[],
+    /**
+     * 正式任务是 <任务目录>/<仓名>。部分内部 C++ Maven 插件约定
+     * ${project.basedir}/../cpp_sdk_repository；因此 SDK 缓存必须作为
+     * 仓库同级目录挂入，不能拍扁到 /workspace 或镜像根目录。
+     */
+    workspace?: string,
   ): { volumes: string[]; environment: NodeJS.ProcessEnv } {
     const isolation = this.options.isolation;
     const environment = { ...(isolation?.environment ?? {}) };
     if (!isolation?.cacheRoot) return { volumes, environment };
 
+    const cppSdkDestination = workspace
+      ? join(dirname(resolve(workspace)), "cpp_sdk_repository")
+      : undefined;
     const destinations = new Set([
       "/cache/maven", "/cache/npm", "/cache/ccache", "/cache/xdg",
+      ...(cppSdkDestination ? [cppSdkDestination] : []),
     ]);
     for (const volume of volumes) {
       const destination = volume.split(":")[1];
@@ -1362,6 +1372,9 @@ export class TaskService {
       ["npm", "/cache/npm"],
       ["ccache", "/cache/ccache"],
       ["xdg", "/cache/xdg"],
+      ...(cppSdkDestination
+        ? [["cpp-sdk", cppSdkDestination] as const]
+        : []),
     ] as const;
     for (const [name] of caches) mkdirSync(join(cacheBase, name), { recursive: true });
     const mavenOptions = String(environment.MAVEN_OPTS ?? "").trim();
@@ -1524,7 +1537,10 @@ export class TaskService {
         suggestion: "启动时加 --isolate-image <统一构建镜像>",
       };
     }
-    const workspace = join(this.options.dataDir, "system-check-container");
+    // 自检也使用真实的“父目录/仓名”包络，避免工具链全绿、内部 C++
+    // 项目却因 build/../../ 被拍扁到根目录而失败。
+    const workspaceRoot = join(this.options.dataDir, "system-check-container");
+    const workspace = join(workspaceRoot, "MfcProbeRepository");
     mkdirSync(workspace, { recursive: true });
     const kernelRoot = this.options.host?.kernelRoot;
     const mounted = this.containerMountsForRepository(
@@ -1533,6 +1549,7 @@ export class TaskService {
         ...(isolation.volumes ?? []),
         ...(kernelRoot ? [`${kernelRoot}:${kernelRoot}:ro`] : []),
       ],
+      workspace,
     );
     const instance = taskContainerInstance(this.options.dataDir).namePrefix;
     const containerName = `mfc-${instance}-system-check-${randomUUID().slice(0, 8)}`;
@@ -1581,8 +1598,14 @@ export class TaskService {
         'trap \'rm -rf "$scratch"\' EXIT',
         'mkdir -p "$scratch"',
         'test -w "$PWD"',
-        // 四类缓存都必须是实际可写挂载；逐个写读删，不只看目录权限位。
-        'for cache in /cache/maven /cache/npm /cache/ccache /cache/xdg; do test -d "$cache"; probe="$cache/.mfc-self-check-$$"; printf cache-ok > "$probe"; test "$(cat "$probe")" = cache-ok; rm -f "$probe"; done',
+        // 五类缓存都必须是实际可写挂载；逐个写读删，不只看目录权限位。
+        'sdk_cache="$(dirname "$PWD")/cpp_sdk_repository"',
+        'for cache in /cache/maven /cache/npm /cache/ccache /cache/xdg "$sdk_cache"; do test -d "$cache"; probe="$cache/.mfc-self-check-$$"; printf cache-ok > "$probe"; test "$(cat "$probe")" = cache-ok; rm -f "$probe"; done',
+        // 复现内部 C++ 仓 svc_profile.sh 的路径算法：仓库 build/../../
+        // 必须回到聚合根，聚合根/<仓名> 必须就是当前仓库。
+        'mkdir -p "$PWD/build"',
+        'envelope_root="$(cd "$PWD/build/../.." && pwd)"',
+        'test "$envelope_root/$(basename "$PWD")" = "$PWD"',
         // 内部基础镜像曾把 profile、平台 CLI 和 CA 路径做成 0750
         // root:root；root 阶段 docker build 全绿，10001 真跑却全拒绝。
         'for script in /etc/profile.d/*.sh; do test ! -e "$script" || test -r "$script"; done',

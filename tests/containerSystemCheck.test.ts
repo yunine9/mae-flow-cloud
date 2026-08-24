@@ -48,6 +48,9 @@ test("部署自检真实走统一容器并验证三类工具链，结束后销�
             for (const cache of ["maven", "npm", "ccache", "xdg"]) {
               assert.match(command, new RegExp(`/cache/${cache}`));
             }
+            assert.match(command, /cpp_sdk_repository/);
+            assert.match(command, /build\/\.\.\/\.\./,
+              "自检必须验证仓库父子包络，而不只检查编译器在 PATH");
             options.onData(Buffer.from("__MFC_CONTAINER_TOOLCHAIN_OK__\n"));
             return { exitCode: 0 };
           },
@@ -67,6 +70,11 @@ test("部署自检真实走统一容器并验证三类工具链，结束后销�
   assert.deepEqual(calls, ["start", "exec", "stop"]);
   assert.ok(input?.volumes.some((volume) =>
     volume.endsWith(":/cache/maven")), "自检也必须验证真实缓存挂载");
+  assert.ok(input?.volumes.some((volume) =>
+    volume.split(":")[1]?.endsWith("/cpp_sdk_repository")),
+  "自检也必须同形挂载 C++ SDK 同级缓存");
+  assert.equal(input?.workspace.endsWith("/system-check-container/MfcProbeRepository"),
+    true, "自检工作区必须保留父目录/仓名层级");
   assert.ok(input?.volumes.includes(`${kernelRoot}:${kernelRoot}:ro`),
     "自检必须同形挂载并验证 Mae-Flow 内核根");
   assert.equal(input?.options.environment?.MFC_KERNEL_ROOT, kernelRoot);
