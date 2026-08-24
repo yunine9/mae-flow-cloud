@@ -428,8 +428,13 @@ export interface IssueEnvironmentRef {
   protocol: "ssh";
   host: string;
   port: number;
-  username: string;
-  credential_state: "stored";
+  accounts: Array<{
+    username: string;
+    credential_state: "stored";
+  }>;
+  /** 兼容短暂存在过的单账号任务现场。 */
+  username?: string;
+  credential_state?: "stored";
 }
 
 export interface IssueEnvironmentInput {
@@ -437,8 +442,7 @@ export interface IssueEnvironmentInput {
   purpose: "logs" | "deploy" | "both";
   host: string;
   port?: number;
-  username: string;
-  password: string;
+  accounts: Array<{ username: string; password: string }>;
 }
 
 /** 历史条目(服务端 projection.ts 的 TaskHistoryEntry 镜像)。 */

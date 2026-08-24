@@ -625,8 +625,17 @@ export function createTaskServer(
               host: String(item?.host ?? ""),
               port: item?.port === undefined || item?.port === ""
                 ? undefined : Number(item.port),
-              username: String(item?.username ?? ""),
-              password: String(item?.password ?? ""),
+              accounts: Array.isArray(item?.accounts)
+                ? item.accounts.map((account: Record<string, unknown>) => ({
+                    username: String(account?.username ?? ""),
+                    password: String(account?.password ?? ""),
+                  }))
+                : undefined,
+              // 兼容上一版已打开但尚未刷新的表单。
+              username: item?.username === undefined
+                ? undefined : String(item.username),
+              password: item?.password === undefined
+                ? undefined : String(item.password),
             }))
           : undefined;
         // 兼容旧前端：select 显示了默认项但可能提交空串。空白就是

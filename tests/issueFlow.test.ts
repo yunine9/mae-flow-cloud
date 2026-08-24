@@ -51,21 +51,27 @@ test("问题单环境保险箱:API 引用无密码、宿主可解密、文件不
   const vault = new IssueEnvironmentVault(dataDir);
   const refs = vault.store("task-1", [{
     name: "灰度 A",
-    purpose: "both",
+    purpose: "logs",
     host: "10.0.0.8",
     port: 22,
-    username: "tester",
-    password: "secret-never-in-task-json",
+    accounts: [
+      { username: "sopuser", password: "secret-sop" },
+      { username: "ossuser", password: "secret-oss" },
+      { username: "ossadm", password: "secret-adm" },
+    ],
   }]);
   assert.equal(refs.length, 1);
-  assert.equal("password" in refs[0], false);
-  assert.deepEqual(vault.credential("task-1", refs[0].id), {
-    username: "tester",
-    password: "secret-never-in-task-json",
+  assert.deepEqual(refs[0].accounts.map((account) => account.username),
+    ["sopuser", "ossuser", "ossadm"]);
+  assert.equal(refs[0].accounts.some((account) => "password" in account), false);
+  assert.deepEqual(vault.credential("task-1", refs[0].id, "ossadm"), {
+    username: "ossadm",
+    password: "secret-adm",
   });
+  assert.equal(vault.credentials("task-1", refs[0].id).length, 3);
   const ciphertext = readFileSync(
     join(dataDir, ".issue-environments", "task-1.json"), "utf8");
-  assert.doesNotMatch(ciphertext, /secret-never-in-task-json|tester|10\.0\.0\.8/);
+  assert.doesNotMatch(ciphertext, /secret-sop|secret-oss|secret-adm|sopuser|10\.0\.0\.8/);
   vault.remove("task-1");
   assert.equal(existsSync(join(dataDir, ".issue-environments", "task-1.json")), false);
 });
@@ -93,7 +99,7 @@ test("DTS 最小闭环:Cloud 诊断举卡，确认后同任务切入内核 hotfi
   const seenPasswords: string[] = [];
   const adapter: IssueEnvironmentAdapter = {
     async fetchLogs(request) {
-      seenPasswords.push(request.credential.password);
+      seenPasswords.push(...request.credentials.map((item) => item.password));
       return { content: "ERROR playback init failed", source: "/var/log/app.log" };
     },
   };
@@ -117,16 +123,20 @@ test("DTS 最小闭环:Cloud 诊断举卡，确认后同任务切入内核 hotfi
       ticket,
       issueEnvironments: [{
         name: "灰度 A",
-        purpose: "both",
+        purpose: "logs",
         host: "10.0.0.8",
-        username: "tester",
-        password: "dts-password-must-stay-host-side",
+        accounts: [
+          { username: "sopuser", password: "dts-password-sop" },
+          { username: "ossuser", password: "dts-password-oss" },
+          { username: "ossadm", password: "dts-password-adm" },
+        ],
       }],
     });
     assert.equal(created.entry_kind, "dts");
     assert.equal(created.issue_context?.stage, "triage");
     assert.equal(created.issue_context?.adapter.logs, true);
-    assert.equal(created.issue_context?.environments[0].credential_state, "stored");
+    assert.deepEqual(created.issue_context?.environments[0].accounts
+      .map((account) => account.username), ["sopuser", "ossuser", "ossadm"]);
     assert.equal(created.lane, "已定位问题修复",
       "Cloud 诊断确认后应进入内核 hotfix，不走完整需求链");
 
@@ -135,10 +145,12 @@ test("DTS 最小闭环:Cloud 诊断举卡，确认后同任务切入内核 hotfi
       if (task.status === "failed") throw new Error(task.detail);
       return task.status === "waiting_for_human" ? task : undefined;
     }, "DTS 根因确认卡");
-    assert.equal(seenPasswords[0], "dts-password-must-stay-host-side",
-      "只有宿主适配器能拿到密码");
+    assert.deepEqual(seenPasswords,
+      ["dts-password-sop", "dts-password-oss", "dts-password-adm"],
+      "只有宿主适配器能拿到同一环境的三套密码");
     const requestText = JSON.stringify(model.requests[0]);
-    assert.doesNotMatch(requestText, /dts-password-must-stay-host-side/);
+    assert.doesNotMatch(requestText, /dts-password-sop|dts-password-oss|dts-password-adm/);
+    assert.match(requestText, /sopuser、ossuser、ossadm/);
     assert.match(requestText, /问题诊断前置阶段/);
     assert.ok(existsSync(join(dataDir, created.id, "repositories",
       ".mae-flow-work", ticket, "environment-logs",
@@ -165,7 +177,7 @@ test("DTS 最小闭环:Cloud 诊断举卡，确认后同任务切入内核 hotfi
     assert.ok(existsSync(join(dataDir, created.id, "business-repo",
       ".mae-flow-issue.md")), "内核应直接消费已确认的诊断文档");
     const taskJson = readFileSync(join(dataDir, created.id, "task.json"), "utf8");
-    assert.doesNotMatch(taskJson, /dts-password-must-stay-host-side/);
+    assert.doesNotMatch(taskJson, /dts-password-sop|dts-password-oss|dts-password-adm/);
 
     await service.cancel(created.id, "tester");
     assert.equal(existsSync(join(dataDir, ".issue-environments",
@@ -189,9 +201,29 @@ test("DTS 输入边界:必须一单一仓，普通需求不能夹带环境密码
   assert.throws(() => service.create("普通需求", {
     entryKind: "requirement", ticket: "REQ1", repo: "https://codehub/a.git",
     issueEnvironments: [{
-      name: "x", purpose: "logs", host: "h", username: "u", password: "p",
+      name: "x", purpose: "logs", host: "h",
+      accounts: [{ username: "sopuser", password: "p" }],
     }],
   }), /只有 DTS 问题单入口/);
+  const accounts = [
+    { username: "sopuser", password: "p1" },
+    { username: "ossuser", password: "p2" },
+    { username: "ossadm", password: "p3" },
+  ];
+  assert.throws(() => service.create("问题", {
+    entryKind: "dts", ticket: "DTS2", repo: "https://codehub/a.git",
+    issueEnvironments: [
+      { name: "日志一", purpose: "logs", host: "h1", accounts },
+      { name: "日志二", purpose: "logs", host: "h2", accounts },
+    ],
+  }), /日志环境和换库环境都只能各配置一个/);
+  assert.throws(() => service.create("问题", {
+    entryKind: "dts", ticket: "DTS3", repo: "https://codehub/a.git",
+    issueEnvironments: [{
+      name: "日志", purpose: "logs", host: "h",
+      accounts: [{ username: "sopuser", password: "p" }],
+    }],
+  }), /必须配置 sopuser、ossuser、ossadm/);
 });
 
 test("DTS 恢复:服务在确认卡期间重启，决定仍能交给内核 hotfix", async () => {

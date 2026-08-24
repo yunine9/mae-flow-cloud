@@ -29,13 +29,27 @@ import { join } from "node:path";
 
 export type IssueEnvironmentPurpose = "logs" | "deploy" | "both";
 
+export interface IssueEnvironmentAccountInput {
+  username: string;
+  password: string;
+}
+
 export interface IssueEnvironmentInput {
   name: string;
   purpose: IssueEnvironmentPurpose;
   host: string;
   port?: number;
+  /** 一个环境共享主机信息，但可能需要用不同系统账号完成查日志、换库
+   * 和管理动作。新客户端统一提交 accounts。下面两个字段只用于接住
+   * 94410d9 版本已经发出的单账号请求。 */
+  accounts?: IssueEnvironmentAccountInput[];
+  username?: string;
+  password?: string;
+}
+
+export interface IssueEnvironmentAccountRef {
   username: string;
-  password: string;
+  credential_state: "stored";
 }
 
 /** 可安全进入 task.json/API/模型提示的环境信息。 */
@@ -46,8 +60,10 @@ export interface IssueEnvironmentRef {
   protocol: "ssh";
   host: string;
   port: number;
-  username: string;
-  credential_state: "stored";
+  accounts: IssueEnvironmentAccountRef[];
+  /** 兼容读取 94410d9 写下的旧 task.json。 */
+  username?: string;
+  credential_state?: "stored";
 }
 
 export interface IssueEnvironmentCredential {
@@ -60,6 +76,10 @@ export interface IssueEnvironmentAdapterRequest {
   ticket: string;
   requirement: string;
   environment: IssueEnvironmentRef;
+  /** 同一环境的全部账号。适配器根据内部 SOP 选择需要的身份，Cloud
+   * 和 Agent 都不猜 sopuser/ossuser/ossadm 分别该执行什么。 */
+  credentials: IssueEnvironmentCredential[];
+  /** 单账号适配器兼容口；新实现应使用 credentials。 */
   credential: IssueEnvironmentCredential;
   signal: AbortSignal;
 }
@@ -93,8 +113,8 @@ export interface IssueEnvironmentAdapter {
   }): Promise<IssueDeploymentReceipt>;
 }
 
-interface StoredIssueEnvironment extends IssueEnvironmentRef {
-  password: string;
+interface StoredIssueEnvironment extends Omit<IssueEnvironmentRef, "accounts"> {
+  accounts: IssueEnvironmentCredential[];
 }
 
 interface Envelope {
@@ -104,7 +124,9 @@ interface Envelope {
   ciphertext: string;
 }
 
-const MAX_ENVIRONMENTS = 8;
+const MAX_ENVIRONMENTS = 2;
+const MAX_ACCOUNTS_PER_ENVIRONMENT = 8;
+const STANDARD_ENVIRONMENT_USERS = ["sopuser", "ossuser", "ossadm"] as const;
 const KEY_BYTES = 32;
 
 function requiredText(
@@ -123,12 +145,15 @@ function normalize(
   inputs: IssueEnvironmentInput[],
 ): StoredIssueEnvironment[] {
   if (inputs.length > MAX_ENVIRONMENTS) {
-    throw new Error(`每个问题单最多配置 ${MAX_ENVIRONMENTS} 组环境`);
+    throw new Error("每个问题单最多配置一个日志环境和一个换库环境");
   }
-  return inputs.map((input, index) => {
+  const rows: StoredIssueEnvironment[] = inputs.map((input, index) => {
     const purpose = input.purpose;
     if (!(["logs", "deploy", "both"] as const).includes(purpose)) {
       throw new Error(`第 ${index + 1} 组环境用途不合法`);
+    }
+    if (purpose === "both") {
+      throw new Error("请分别配置日志环境和换库环境，不使用混合环境");
     }
     const port = input.port === undefined || input.port === null
       ? 22 : Number(input.port);
@@ -139,6 +164,37 @@ function normalize(
     if (/\s/.test(host) || host.startsWith("-")) {
       throw new Error(`第 ${index + 1} 组环境地址格式不合法`);
     }
+    const legacyAccount = input.username !== undefined
+        || input.password !== undefined
+      ? [{ username: input.username ?? "", password: input.password ?? "" }]
+      : [];
+    const accountInputs = input.accounts?.length
+      ? input.accounts : legacyAccount;
+    if (!accountInputs.length) {
+      throw new Error(`第 ${index + 1} 组环境至少需要一个登录账号`);
+    }
+    if (accountInputs.length > MAX_ACCOUNTS_PER_ENVIRONMENT) {
+      throw new Error(
+        `第 ${index + 1} 组环境最多配置 ${MAX_ACCOUNTS_PER_ENVIRONMENT} 个账号`);
+    }
+    const accounts = accountInputs.map((account, accountIndex) => ({
+      username: requiredText(account.username,
+        `第 ${index + 1} 组环境第 ${accountIndex + 1} 个用户名`, 128),
+      password: requiredText(account.password,
+        `第 ${index + 1} 组环境第 ${accountIndex + 1} 个密码`, 4096),
+    }));
+    if (new Set(accounts.map((account) => account.username)).size
+        !== accounts.length) {
+      throw new Error(`第 ${index + 1} 组环境的用户名不能重复`);
+    }
+    if (input.accounts?.length) {
+      const usernames = [...accounts.map((account) => account.username)].sort();
+      const expected = [...STANDARD_ENVIRONMENT_USERS].sort();
+      if (JSON.stringify(usernames) !== JSON.stringify(expected)) {
+        throw new Error(
+          `第 ${index + 1} 组环境必须配置 sopuser、ossuser、ossadm 三个账号`);
+      }
+    }
     return {
       id: randomUUID(),
       name: requiredText(input.name, `第 ${index + 1} 组环境名称`, 80),
@@ -146,18 +202,28 @@ function normalize(
       protocol: "ssh",
       host,
       port,
-      username: requiredText(
-        input.username, `第 ${index + 1} 组环境用户名`, 128),
-      password: requiredText(
-        input.password, `第 ${index + 1} 组环境密码`, 4096),
-      credential_state: "stored",
+      accounts,
     };
   });
+  if (new Set(rows.map((row) => row.purpose)).size !== rows.length) {
+    throw new Error("日志环境和换库环境都只能各配置一个");
+  }
+  return rows;
 }
 
 function publicRef(item: StoredIssueEnvironment): IssueEnvironmentRef {
-  const { password: _password, ...safe } = item;
-  return safe;
+  return {
+    id: item.id,
+    name: item.name,
+    purpose: item.purpose,
+    protocol: "ssh",
+    host: item.host,
+    port: item.port,
+    accounts: item.accounts.map((account) => ({
+      username: account.username,
+      credential_state: "stored",
+    })),
+  };
 }
 
 /**
@@ -204,9 +270,21 @@ export class IssueEnvironmentVault {
   credential(
     taskId: string,
     environmentId: string,
+    username?: string,
   ): IssueEnvironmentCredential | undefined {
     const row = this.read(taskId).find((item) => item.id === environmentId);
-    return row ? { username: row.username, password: row.password } : undefined;
+    const account = username
+      ? row?.accounts.find((item) => item.username === username)
+      : row?.accounts[0];
+    return account ? { ...account } : undefined;
+  }
+
+  credentials(
+    taskId: string,
+    environmentId: string,
+  ): IssueEnvironmentCredential[] {
+    const row = this.read(taskId).find((item) => item.id === environmentId);
+    return row?.accounts.map((account) => ({ ...account })) ?? [];
   }
 
   remove(taskId: string): void {
@@ -233,7 +311,20 @@ export class IssueEnvironmentVault {
       decipher.update(Buffer.from(envelope.ciphertext, "base64")),
       decipher.final(),
     ]).toString("utf8");
-    return JSON.parse(plaintext) as StoredIssueEnvironment[];
+    const parsed = JSON.parse(plaintext) as Array<StoredIssueEnvironment & {
+      username?: string;
+      password?: string;
+    }>;
+    // 94410d9 只允许每个环境一个 username/password。读取时原地提升为
+    // accounts，不要求运维迁移保险箱，也不把旧任务卡死。
+    return parsed.map((item) => ({
+      ...item,
+      accounts: Array.isArray(item.accounts) && item.accounts.length
+        ? item.accounts
+        : item.username && item.password
+          ? [{ username: item.username, password: item.password }]
+          : [],
+    }));
   }
 
   private key(): Buffer {

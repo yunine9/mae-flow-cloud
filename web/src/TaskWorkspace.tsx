@@ -517,8 +517,9 @@ export function TaskWorkspace({
                         <li key={environment.id}><strong>{environment.name}</strong>
                           <span>{environment.purpose === "logs" ? "日志"
                             : environment.purpose === "deploy" ? "换库" : "日志 + 换库"}</span>
-                          <code>{environment.username}@{environment.host}:{environment.port}</code>
-                          <em>凭据已保管</em></li>
+                          <code>{environment.host}:{environment.port}</code>
+                          <em>{environment.accounts?.map((account) => account.username)
+                            .join(" / ") || environment.username || "凭据已保管"}</em></li>
                       ))}</ul>
                     ) : <p>本单未填写环境，先依据问题描述与代码完成诊断。</p>}
                   </div>

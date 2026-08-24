@@ -1058,7 +1058,30 @@ svg {
   display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, .8fr);
   gap: 10px 12px;
 }
-.issue-environment-add { margin-top: 11px; }
+.issue-environment-accounts {
+  grid-column: 1 / -1; padding: 12px; display: grid; gap: 9px;
+  border: 1px solid color-mix(in srgb, #20b486 24%, var(--line));
+  border-radius: 10px; background: color-mix(in srgb, #20b486 4%, var(--surface-soft));
+}
+.issue-environment-accounts > span {
+  color: var(--text-strong); font-size: 10px; font-weight: 750;
+}
+.issue-environment-accounts > small {
+  margin-top: -5px; color: var(--muted); font-size: 9px; line-height: 1.45;
+}
+.issue-environment-account {
+  display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr);
+  align-items: end; gap: 10px;
+}
+.issue-environment-account-name { min-width: 0; display: grid; gap: 6px; }
+.issue-environment-account-name > span { color: var(--muted); font-size: 9px; }
+.issue-environment-account-name > code {
+  min-height: 36px; padding: 0 11px; display: flex; align-items: center;
+  color: #16856a; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface-soft); font-size: 10px; font-weight: 750;
+}
+.issue-environment-actions { margin-top: 11px; display: flex; flex-wrap: wrap; gap: 8px; }
+.issue-environment-add { margin-top: 0; }
 .issue-environment-add:disabled { opacity: .5; cursor: not-allowed; }
 .issue-environment-note { display: block; margin-top: 8px; color: var(--muted); font-size: 9.5px; line-height: 1.55; }
 .issue-flow-summary {
@@ -3438,6 +3461,7 @@ pre {
   .launch-form-section { padding: 15px 14px 16px; }
   .launch-field-grid { grid-template-columns: 1fr; gap: 10px; }
   .issue-environment-grid { grid-template-columns: 1fr; }
+  .issue-environment-account { grid-template-columns: 1fr; }
   .issue-context-summary li { grid-template-columns: 1fr auto; }
   .issue-context-summary li code { grid-column: 1 / -1; }
   .repository-skills-toolbar { align-items: stretch; flex-direction: column; gap: 10px; }

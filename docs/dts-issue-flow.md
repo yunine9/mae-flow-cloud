@@ -15,7 +15,9 @@
 
 ## 环境凭据边界
 
-- 每单最多 8 组 SSH 环境，可标为“拉取日志”“换库验证”或“两者”。
+- 每单最多配置一个日志环境和一个换库环境，二者分别填写，不使用混合环境。
+- 一套环境只填写一次主机和端口，并在其下保存三套登录账号；界面固定提供
+  `sopuser`、`ossuser`、`ossadm`。这三个账号不是三套环境。
 - 密码使用宿主任务保险箱加密保存，`task.json`、API、模型提示和事件流中都不含密码。
 - 只有环境适配器在一次调用期间拿到对应凭据；适配器返回的日志才作为普通现场材料交给 Agent。
 - 任务取消、完成或进入等待合入后，临时凭据文件自动删除。
@@ -30,7 +32,8 @@ new TaskService({
   // ...现有参数
   issueEnvironmentAdapter: {
     async fetchLogs(request) {
-      // 使用 request.environment + request.credential 连接环境；
+      // 使用 request.environment + request.credentials 连接环境；
+      // credentials 同时包含本环境的 sopuser/ossuser/ossadm。
       // 服从 request.signal 的取消/超时，返回文本日志。
       return { content: "...", source: "/path/to/app.log" };
     },

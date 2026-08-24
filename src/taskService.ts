@@ -7806,8 +7806,13 @@ export class TaskService {
       .filter((name) => name.endsWith(".log"))
       .map((name) => join(logsDir, name));
     const environments = (task.summary.issue_context?.environments ?? [])
-      .map((item) => `- ${item.name} | ${item.purpose} | ssh://${item.username}`
-        + `@${item.host}:${item.port} | 密码由宿主保险箱持有,模型不可见`)
+      .map((item) => {
+        const usernames = item.accounts?.map((account) => account.username)
+          ?? (item.username ? [item.username] : []);
+        return `- ${item.name} | ${item.purpose} | ssh://${item.host}:${item.port}`
+          + ` | 账号:${usernames.join("、") || "未登记"}`
+          + " | 密码由宿主保险箱持有,模型不可见";
+      })
       .join("\n") || "- 未填写环境；只依据问题描述和代码诊断";
     const adapter = this.options.issueEnvironmentAdapter?.fetchLogs
       ? `日志适配器已启用；已落盘 ${logs.length} 份日志。`
@@ -7853,9 +7858,9 @@ export class TaskService {
     const targets = (task.summary.issue_context?.environments ?? [])
       .filter((item) => item.purpose === "logs" || item.purpose === "both");
     for (const environment of targets) {
-      const credential = this.issueEnvironmentVault.credential(
+      const credentials = this.issueEnvironmentVault.credentials(
         task.summary.id, environment.id);
-      if (!credential) {
+      if (!credentials.length) {
         results.push(`${environment.name}:临时凭据不存在，已跳过`);
         continue;
       }
@@ -7878,7 +7883,8 @@ export class TaskService {
             ticket,
             requirement: task.summary.requirement,
             environment,
-            credential,
+            credentials,
+            credential: credentials[0],
             signal: controller.signal,
           }),
           timeoutFailure,

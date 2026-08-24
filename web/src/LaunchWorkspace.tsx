@@ -13,20 +13,29 @@ import {
 } from "./RepositorySkillPicker";
 
 type EntryKind = "requirement" | "dts";
-type EnvironmentDraft = Omit<IssueEnvironmentInput, "port"> & {
+type EnvironmentAccountDraft = {
+  id: string;
+  username: string;
+  password: string;
+};
+type EnvironmentDraft = Omit<IssueEnvironmentInput, "port" | "accounts"> & {
   id: string;
   port: string;
+  accounts: EnvironmentAccountDraft[];
 };
 
-function environmentDraft(): EnvironmentDraft {
+function environmentAccountDraft(username: string): EnvironmentAccountDraft {
+  return { id: crypto.randomUUID(), username, password: "" };
+}
+
+function environmentDraft(purpose: "logs" | "deploy"): EnvironmentDraft {
   return {
     id: crypto.randomUUID(),
     name: "",
-    purpose: "logs",
+    purpose,
     host: "",
     port: "22",
-    username: "",
-    password: "",
+    accounts: ["sopuser", "ossuser", "ossadm"].map(environmentAccountDraft),
   };
 }
 
@@ -134,6 +143,19 @@ export function LaunchWorkspace({
       (item) => item.id === id ? { ...item, ...patch } : item));
   }
 
+  function updateEnvironmentAccount(
+    environmentId: string,
+    accountId: string,
+    patch: Partial<EnvironmentAccountDraft>,
+  ) {
+    setIssueEnvironments((current) => current.map((environment) =>
+      environment.id !== environmentId ? environment : {
+        ...environment,
+        accounts: environment.accounts.map((account) =>
+          account.id === accountId ? { ...account, ...patch } : account),
+      }));
+  }
+
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     if (!title.trim() || !requirement.trim() || submitting || blocked
@@ -157,9 +179,15 @@ export function LaunchWorkspace({
           repos: repos.map((item) => item.trim()).filter(Boolean),
           entryKind,
           issueEnvironments: entryKind === "dts"
-            ? issueEnvironments.map(({ id: _id, port, ...item }) => ({
-                ...item,
-                port: Number(port || 22),
+            ? issueEnvironments.map((item) => ({
+                name: item.name,
+                purpose: item.purpose,
+                host: item.host,
+                accounts: item.accounts.map((account) => ({
+                  username: account.username,
+                  password: account.password,
+                })),
+                port: Number(item.port || 22),
               }))
             : undefined,
           // select 虽然会视觉显示第一项，但用户没手动切换时 state 仍是
@@ -372,8 +400,8 @@ export function LaunchWorkspace({
               {entryKind === "dts" && (
                 <section className="launch-form-section issue-environments-section">
                   <div className="launch-section-head"><i>03</i><div>
-                    <strong>日志与换库环境</strong>
-                    <small>可添加多组 SSH 环境；密码只写入宿主保险箱，不会交给 Agent</small>
+                    <strong>环境信息</strong>
+                    <small>最多一个日志环境、一个换库环境；每个环境包含三套固定账号</small>
                   </div><em>可选</em></div>
                   {issueEnvironments.length === 0 ? (
                     <div className="issue-environment-empty">
@@ -384,7 +412,8 @@ export function LaunchWorkspace({
                     <div className="issue-environment-list">
                       {issueEnvironments.map((environment, index) => (
                         <article className="issue-environment-card" key={environment.id}>
-                          <header><span>环境 {String(index + 1).padStart(2, "0")}</span>
+                          <header><span>{environment.purpose === "logs"
+                            ? "日志环境" : "换库环境"}</span>
                             <button type="button" aria-label={`移除环境 ${index + 1}`}
                               onClick={() => setIssueEnvironments((current) =>
                                 current.filter((item) => item.id !== environment.id))}>移除</button>
@@ -392,17 +421,13 @@ export function LaunchWorkspace({
                           <div className="issue-environment-grid">
                             <label className="account-field"><span>环境名称</span>
                               <input value={environment.name} required
-                                placeholder="例如：灰度环境 A"
+                                placeholder={environment.purpose === "logs"
+                                  ? "例如：问题日志环境" : "例如：验证换库环境"}
                                 onChange={(event) => updateEnvironment(environment.id,
                                   { name: event.target.value })} /></label>
                             <label className="account-field"><span>用途</span>
-                              <select className="launch-model-select" value={environment.purpose}
-                                onChange={(event) => updateEnvironment(environment.id,
-                                  { purpose: event.target.value as EnvironmentDraft["purpose"] })}>
-                                <option value="logs">拉取日志</option>
-                                <option value="deploy">换库验证</option>
-                                <option value="both">日志 + 换库</option>
-                              </select></label>
+                              <input value={environment.purpose === "logs"
+                                ? "拉取日志" : "换库验证"} disabled /></label>
                             <label className="account-field issue-env-host"><span>主机地址</span>
                               <input value={environment.host} required spellCheck={false}
                                 placeholder="hostname 或 IP"
@@ -413,27 +438,44 @@ export function LaunchWorkspace({
                                 placeholder="22"
                                 onChange={(event) => updateEnvironment(environment.id,
                                   { port: event.target.value })} /></label>
-                            <label className="account-field"><span>用户名</span>
-                              <input value={environment.username} required autoComplete="off"
-                                onChange={(event) => updateEnvironment(environment.id,
-                                  { username: event.target.value })} /></label>
-                            <label className="account-field"><span>密码</span>
-                              <input type="password" value={environment.password} required
-                                autoComplete="new-password" placeholder="仅本任务临时使用"
-                                onChange={(event) => updateEnvironment(environment.id,
-                                  { password: event.target.value })} /></label>
+                            <div className="issue-environment-accounts">
+                              <span>环境账号</span>
+                              <small>三套密码分别加密保存，Agent 只能看到用户名</small>
+                              {environment.accounts.map((account) => (
+                                <div className="issue-environment-account" key={account.id}>
+                                  <div className="issue-environment-account-name">
+                                    <span>登录用户</span><code>{account.username}</code>
+                                  </div>
+                                  <label className="account-field"><span>密码</span>
+                                    <input type="password" value={account.password} required
+                                      autoComplete="new-password"
+                                      placeholder={`${account.username || "该账号"} 密码`}
+                                      onChange={(event) => updateEnvironmentAccount(
+                                        environment.id, account.id,
+                                        { password: event.target.value })} /></label>
+                                </div>
+                              ))}
+                            </div>
                           </div>
                         </article>
                       ))}
                     </div>
                   )}
-                  <button type="button" className="repo-add issue-environment-add"
-                    disabled={issueEnvironments.length >= 8}
-                    onClick={() => setIssueEnvironments((current) =>
-                      [...current, environmentDraft()])}>
-                    <span>＋</span> 添加环境
-                  </button>
-                  <small className="issue-environment-note">最多 8 组。日志适配器接入后可以自动拉取；换库与回滚将在对应适配器接入后启用。任务结束后临时密码自动清除。</small>
+                  <div className="issue-environment-actions">
+                    <button type="button" className="repo-add issue-environment-add"
+                      disabled={issueEnvironments.some((item) => item.purpose === "logs")}
+                      onClick={() => setIssueEnvironments((current) =>
+                        [...current, environmentDraft("logs")])}>
+                      <span>＋</span> 添加日志环境
+                    </button>
+                    <button type="button" className="repo-add issue-environment-add"
+                      disabled={issueEnvironments.some((item) => item.purpose === "deploy")}
+                      onClick={() => setIssueEnvironments((current) =>
+                        [...current, environmentDraft("deploy")])}>
+                      <span>＋</span> 添加换库环境
+                    </button>
+                  </div>
+                  <small className="issue-environment-note">两个环境都可选；每个环境固定填写 sopuser、ossuser、ossadm。日志适配器接入后可自动拉取，换库与回滚在对应适配器接入后启用。任务结束后临时密码自动清除。</small>
                 </section>
               )}
               {options?.repo.enabled && (
