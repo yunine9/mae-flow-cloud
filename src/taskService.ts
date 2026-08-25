@@ -2484,8 +2484,12 @@ export class TaskService {
   }
 
   /** 裁决另半边:返工。锚点若已失效,趁重锚定结果在手边把它换成当前
-   * 原文——不换的话,退回的草稿定位还是指着一段已经不存在的文字。 */
-  reopenAnnotation(id: string, annotationId: string, by: string): Annotation {
+   * 原文——不换的话,退回的草稿定位还是指着一段已经不存在的文字。
+   * 异步读产物:代码批注锚在完整 diff 上,同步读等于在 HTTP 路由里
+   * 现算全工作区 diff(内网实锤:大仓上一次就是主线程堵 20 秒)。 */
+  async reopenAnnotation(
+    id: string, annotationId: string, by: string,
+  ): Promise<Annotation> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     const store = this.annotations(task);
@@ -2493,8 +2497,9 @@ export class TaskService {
     let update: { line?: number; anchor?: string } | undefined;
     if (item) {
       const root = this.artifactRoot(id);
-      const [check] = reanchor([item], (artifact) =>
-        root ? readArtifact(root, artifact)?.content : undefined);
+      const content = root
+        ? (await readArtifactAsync(root, item.artifact))?.content : undefined;
+      const [check] = reanchor([item], () => content);
       if (check?.state === "moved") update = { line: check.line };
       if (check?.state === "gone" && check.now) {
         update = { line: item.line, anchor: check.now };

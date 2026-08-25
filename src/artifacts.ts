@@ -442,8 +442,12 @@ function collectDiff(
     trackedPaths = worktreeChanged.filter((path) => !untracked.includes(path));
   }
   if (untracked.length) {
-    const snapshots = untracked.map((path) =>
-      untrackedDiff(cwd, path) || `?? ${path}`);
+    // 上限与异步侧同一口径(内网实锤:5014 个未跟踪编译产物 × 每个
+    // 一次同步 git diff = 主线程连堵 20 秒,全站 HTTP 全部超时)。
+    // 超限的只列 `?? 路径` 不展开内容——列表完整,细节有帽。
+    const snapshots = untracked.map((path, index) =>
+      (index < MAX_UNTRACKED_DIFF_FILES && untrackedDiff(cwd, path))
+        || `?? ${path}`);
     sections.push(`## 未跟踪(untracked)\n\n${snapshots.join("\n\n")}`);
   }
   const changed = Array.from(new Set([...trackedPaths, ...untracked]));
@@ -643,8 +647,10 @@ export function readArtifact(
   if (!wanted) return undefined;
   try {
     if (wanted === DIFF_NAME) {
-      const meta = diffMeta(cwd);
+      // 快照只算一次:diffMeta 内部会再跑一遍完整 collectDiff,
+      // 在大工作区上等于白白双倍阻塞。
       const diff = collectDiff(cwd);
+      const meta = diffMetaFromSnapshot(cwd, diff);
       if (!meta || !diff) return undefined;
       const { content, truncated } = cap(diff.text);
       return { ...meta, content, truncated, branch: currentBranch(cwd) };

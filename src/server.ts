@@ -919,8 +919,8 @@ export function createTaskServer(
           }
           if (request.method === "POST" && parts.length === 5
               && parts[4] === "reopen") {
-            return json(response, 200,
-              service.reopenAnnotation(id, decodeURIComponent(parts[3]), author));
+            return json(response, 200, await service.reopenAnnotation(
+              id, decodeURIComponent(parts[3]), author));
           }
         }
         // 跑动中插话(本地 CLI 的 ESC 等价物):发送即打断,模型把手头
