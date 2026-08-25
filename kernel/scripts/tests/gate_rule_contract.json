@@ -216,6 +216,13 @@
       "evidence": "进入内核明确允许写源码",
       "why": "同 edit-outside-source-step，禁止用 sed/重定向等 Bash 写入绕过阶段授权"
     },
+    "edit-readonly-resource": {
+      "kind": "absolute",
+      "tier": "A",
+      "escape": "comply",
+      "evidence": "请 Read",
+      "why": "plugin、仓库和宿主 Skill/模板均以任务内快照交给 Agent；允许读取但禁止覆盖或删除，避免同一会话破坏后续指令资源"
+    },
     "edit-ut-preempt": {
       "kind": "advisory",
       "tier": "B",

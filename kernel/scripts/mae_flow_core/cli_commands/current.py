@@ -202,7 +202,8 @@ def _step_md_text(sid, st):
                      ("{GRILL_PREP_TEMPLATE_PATH}", "GRILL-PREP-TEMPLATE.md"),
                      ("{REVIEW_TEMPLATE_PATH}", "REVIEW-TEMPLATE.md")):
         txt = txt.replace(ph, os.path.abspath(
-            os.path.join(HERE, "..", "skills", "mae-flow", "assets", name)))
+            os.path.join(
+                ".mae-flow-work", "plugin-resources", "assets", name)))
     txt = txt.replace("{MAEFLOW_PATH}", os.path.abspath(sys.argv[0]))
     txt = _apply_build_execution_mode(sid, txt)
     for pack in re.findall(r"\{\{CAPABILITY_PACK:([a-z0-9-]+)\}\}", txt):

@@ -57,6 +57,19 @@ _TEMPLATE_TARGETS = (
 _FILE_TOOLS = ("Read", "Edit", "Write", "MultiEdit")
 
 
+def authorized_file_access_root(repository_root, payload):
+    """Accept only Cloud's containing task root; other hosts stay repo-only."""
+    repository = os.path.realpath(repository_root)
+    raw = (payload or {}).get("workspace_root") or repository
+    try:
+        candidate = os.path.realpath(os.path.abspath(os.fspath(raw)))
+        if candidate in (repository, os.path.dirname(repository)):
+            return candidate
+    except (TypeError, ValueError, OSError):
+        pass
+    return repository
+
+
 def _tool_paths(tool_input):
     """Return real host path fields in execution-order preference.
 
@@ -74,8 +87,8 @@ def _tool_paths(tool_input):
     return tuple(values)
 
 
-def _inside_repository(path, repository_root):
-    """Resolve an input path against the task repo without allowing escape.
+def _inside_repository(path, repository_root, access_root=None):
+    """Resolve an input path against the host-provided root without escape.
 
     ``realpath`` also catches an in-repo symlink whose target is outside.  A
     Windows absolute/drive-relative spelling received on POSIX is never a
@@ -91,10 +104,11 @@ def _inside_repository(path, repository_root):
         return False
     if os.name != "nt" and re.match(r"^(?:[A-Za-z]:|//)", normalized):
         return False
-    root = os.path.realpath(repository_root)
+    base = os.path.realpath(repository_root)
+    root = os.path.realpath(access_root or repository_root)
     target = os.path.realpath(
         normalized if os.path.isabs(normalized)
-        else os.path.join(root, normalized)
+        else os.path.join(base, normalized)
     )
     try:
         return os.path.commonpath((root, target)) == root
@@ -102,12 +116,15 @@ def _inside_repository(path, repository_root):
         return False
 
 
-def _file_path_decision(tool, tool_input, repository_root):
+def _file_path_decision(
+        tool, tool_input, repository_root, access_root=None):
     if tool not in _FILE_TOOLS:
         return None
     paths = _tool_paths(tool_input)
     if paths and repository_root and any(
-            not _inside_repository(path, repository_root) for path in paths):
+            not _inside_repository(
+                path, repository_root, access_root or repository_root)
+            for path in paths):
         return PretoolDecision("block-path", paths[0])
     return PretoolDecision("file-path", paths[0] if paths else "")
 
@@ -128,12 +145,13 @@ def agent_kind(tool_input):
 
 
 def active_pretool_decision(
-        tool, tool_input, moonlight, repository_root=""):
+        tool, tool_input, moonlight, repository_root="", access_root=None):
     if tool in ("Task", "Agent"):
         return PretoolDecision("agent")
     if tool == "AskUserQuestion" and moonlight:
         return PretoolDecision("block-question")
-    file_path = _file_path_decision(tool, tool_input, repository_root)
+    file_path = _file_path_decision(
+        tool, tool_input, repository_root, access_root)
     if file_path is not None:
         if file_path.action == "block-path":
             return file_path
@@ -163,10 +181,12 @@ def _standalone_protected(value):
     )
 
 
-def standalone_pretool_decision(tool, tool_input, repository_root=""):
+def standalone_pretool_decision(
+        tool, tool_input, repository_root="", access_root=None):
     if tool in ("Task", "Agent"):
         return PretoolDecision("agent")
-    file_path = _file_path_decision(tool, tool_input, repository_root)
+    file_path = _file_path_decision(
+        tool, tool_input, repository_root, access_root)
     if file_path is not None:
         if file_path.action == "block-path":
             return file_path

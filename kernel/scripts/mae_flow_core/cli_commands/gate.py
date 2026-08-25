@@ -299,7 +299,8 @@ def _gate_bash_writes(flow, st, sid, step, intent, jdie):
         hits_internal_state=guard_intent.hits_path(
             intent,
             r"\.mae-flow(\.json|-history\.jsonl|-need-reload|-defaults\.json)"
-            r"|\.mae-flow-work/moonlight-report\.md"),
+            r"|\.mae-flow-work/(?:moonlight-report\.md|"
+            r"(?:plugin-resources|repository-skills|host-skills)(?:/|$))"),
         step=sid or "",
         offenders=tuple(offenders),
         tests_only_patterns=patterns,

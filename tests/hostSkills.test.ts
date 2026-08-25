@@ -13,9 +13,17 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskService } from "../src/taskService.ts";
 import { CloudSession } from "../src/sessionDriver.ts";
@@ -27,6 +35,7 @@ import {
   KnowledgeTrace,
   knowledgeUsageSnapshot,
 } from "../src/knowledgeTrace.ts";
+import { materializeHostSkills } from "../src/hostSkillRuntime.ts";
 
 const SCRIPT: Scene[] = [{ text: "写完了。" }];
 
@@ -69,6 +78,7 @@ async function runDirect(
   repositorySkillPaths?: string[],
   script: Scene[] = SCRIPT,
   linear = false,
+  hostSkillsDir?: string,
 ): Promise<Array<Record<string, unknown>>> {
   const model = new ScriptedModelServer(
     script, "scripted-v1", linear ? { linear: true } : {});
@@ -85,8 +95,9 @@ async function runDirect(
     model: "scripted-v1",
     eventLog: new EventLog(join(workspace, "events.jsonl")),
     transcript: new TranscriptStore(join(workspace, "transcript.jsonl"), "main"),
-    gate: new GateService(),
+    gate: new GateService({ workspace, cwd: workspace }),
     humanGate: new HumanGate(join(workspace, "waiting.json")),
+    hostSkillsDir,
     repositorySkillPaths,
   });
   try {
@@ -112,6 +123,109 @@ test("没有 skill 目录照常跑——不是每个部署都有内网 skill", a
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-skill-none-"));
   const seen = await runOnce(dataDir);
   assert.ok(!seen.includes("JAVA-AUTOUT-MARKER"));
+});
+
+test("宿主 Skill 正文和附件从任务内只读快照读取,不暴露部署源路径", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mfc-host-skill-projection-"));
+  const workspace = join(root, "repo");
+  const sourceRoot = join(root, "deployment-skills");
+  mkdirSync(workspace, { recursive: true });
+  const sourceSkill = writeSkill(
+    sourceRoot, "java-autout", "HOST-SKILL-DESCRIPTION-MARKER");
+  writeFileSync(sourceSkill,
+    "---\nname: java-autout\ndescription: HOST-SKILL-DESCRIPTION-MARKER\n"
+    + "---\n\nHOST-SKILL-BODY-MARKER\n读取 references/guide.md。\n");
+  const reference = join(dirname(sourceSkill), "references", "guide.md");
+  mkdirSync(dirname(reference), { recursive: true });
+  writeFileSync(reference, "HOST-SKILL-ATTACHMENT-MARKER\n");
+
+  const projected = materializeHostSkills({
+    sourceRoot,
+    workspaceRoot: workspace,
+    snapshotRoot: join(workspace, ".mae-flow-work", "host-skills"),
+  });
+  assert.deepEqual(projected.warnings, []);
+  assert.equal(projected.paths.length, 1);
+  const projectedSkill = projected.paths[0];
+  const projectedReference = join(
+    dirname(projectedSkill), "references", "guide.md");
+  assert.ok(projectedSkill.startsWith(
+    join(realpathSync(workspace), ".mae-flow-work")));
+
+  const requests = await runDirect(workspace, undefined, [
+    { text: "读取宿主 Skill 正文。", tool: {
+      name: "read", input: { path: projectedSkill },
+    } },
+    { text: "读取 Skill 引用的附件。", tool: {
+      name: "read", input: { path: projectedReference },
+    } },
+    { text: "完成。" },
+  ], false, sourceRoot);
+  const seen = JSON.stringify(requests);
+  assert.match(seen, /HOST-SKILL-BODY-MARKER/);
+  assert.match(seen, /HOST-SKILL-ATTACHMENT-MARKER/);
+  assert.ok(!seen.includes(sourceSkill), "模型请求不应出现部署源 SKILL.md 路径");
+});
+
+test("宿主 Skill 包含软链接时不投影,避免附件越出部署 Skill 根", () => {
+  const root = mkdtempSync(join(tmpdir(), "mfc-host-skill-symlink-"));
+  const sourceRoot = join(root, "deployment-skills");
+  const sourceSkill = writeSkill(
+    sourceRoot, "unsafe-skill", "UNSAFE-SKILL-MARKER");
+  const outside = join(root, "outside-secret.md");
+  mkdirSync(join(root, "repo"), { recursive: true });
+  writeFileSync(outside, "SECRET\n");
+  symlinkSync(outside, join(dirname(sourceSkill), "reference.md"));
+
+  const projected = materializeHostSkills({
+    sourceRoot,
+    workspaceRoot: join(root, "repo"),
+    snapshotRoot: join(root, "repo", ".mae-flow-work", "host-skills"),
+  });
+  assert.deepEqual(projected.paths, []);
+  assert.match(projected.warnings.join("\n"), /软链接/);
+});
+
+test("宿主 Skill 只读快照损坏后会安全重建", () => {
+  const root = mkdtempSync(join(tmpdir(), "mfc-host-skill-rebuild-"));
+  const workspace = join(root, "repo");
+  const sourceRoot = join(root, "deployment-skills");
+  mkdirSync(workspace, { recursive: true });
+  writeSkill(sourceRoot, "repair-skill", "REPAIR-SKILL-MARKER");
+  const options = {
+    sourceRoot,
+    workspaceRoot: workspace,
+    snapshotRoot: join(workspace, ".mae-flow-work", "host-skills"),
+  };
+  const first = materializeHostSkills(options);
+  assert.equal(first.paths.length, 1);
+  chmodSync(dirname(first.paths[0]), 0o755);
+  chmodSync(first.paths[0], 0o644);
+  writeFileSync(first.paths[0], "tampered\n");
+
+  const repaired = materializeHostSkills(options);
+  assert.deepEqual(repaired.warnings, []);
+  assert.equal(repaired.paths.length, 1);
+  assert.match(readFileSync(repaired.paths[0], "utf-8"), /REPAIR-SKILL-MARKER/);
+});
+
+test("宿主 Skill 快照祖先是软链接时 fail-closed,不向任务外写入", () => {
+  const root = mkdtempSync(join(tmpdir(), "mfc-host-skill-target-link-"));
+  const workspace = join(root, "repo");
+  const outside = join(root, "outside");
+  const sourceRoot = join(root, "deployment-skills");
+  mkdirSync(workspace, { recursive: true });
+  mkdirSync(outside, { recursive: true });
+  writeSkill(sourceRoot, "safe-skill", "SAFE-SKILL-MARKER");
+  symlinkSync(outside, join(workspace, ".mae-flow-work"), "dir");
+
+  const projected = materializeHostSkills({
+    sourceRoot,
+    workspaceRoot: workspace,
+    snapshotRoot: join(workspace, ".mae-flow-work", "host-skills"),
+  });
+  assert.deepEqual(projected.paths, []);
+  assert.match(projected.warnings.join("\n"), /快照路径包含软链接/);
 });
 
 test("仓内 Skill 未选择时完全不可见,不再自动扫描 .pi/.claude/.cac", async () => {

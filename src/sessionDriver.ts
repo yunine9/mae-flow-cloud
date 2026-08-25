@@ -37,6 +37,7 @@ import { TranscriptStore } from "./transcriptStore.ts";
 import { GateService } from "./gateService.ts";
 import { HumanGate, renderDecision, type WaitingRecord } from "./humanGate.ts";
 import { createWorkspaceBashToolDefinition } from "./bashOutputMirror.ts";
+import { materializeHostSkills } from "./hostSkillRuntime.ts";
 import {
   modelTokenUsageSample,
   type ModelTokenUsageSample,
@@ -117,7 +118,10 @@ export interface CloudSessionOptions {
   /** root 宿主 + 非 root 容器时，内建 Write/Edit 成功落盘后立刻修正
    * bind 文件属主。回调失败会让本次工具调用失败，不把隐患拖到编译时。 */
   afterFileMutation?: (absolutePath: string) => void | Promise<void>;
-  /** 宿主级 skill 目录(部署时放一次,每个任务自动带)。团队的两个
+  /** 宿主级 skill 源目录(部署时放一次,每个任务自动带)。运行时先把
+   * 每个通过校验的完整 Skill 包只读投影到当前任务 .mae-flow-work，
+   * 再把任务内路径交给 Pi，不能向 Agent 暴露部署数据目录的绝对路径。
+   * 团队的两个
    * UT skill 在内网、出不来仓,老宿主是"每次手动集成进 ut-generator
    * 子 agent";云端子 Agent 照样有(Task 工具),缺的是自动装载——
    * pi 的 includeDefaults=false,不喂路径就一个 skill 都不装。 */
@@ -664,10 +668,20 @@ export class CloudSession {
     // 云端给它一个固定的家),仓内 Skill 必须由任务明确选中,只传精确
     // SKILL.md 文件。绝不能把 .pi/.claude 的 skills 目录整体交给 Pi,
     // 否则同仓乃至跨仓未选中的能力也会静默进入模型上下文。
-    // 子 Agent 经同一 openSession 装配,自动使用完全相同的 allowlist。
+    // 宿主 Skill 会先按完整包投影进当前任务，所以正文引导的附件相对路径
+    // 也在边界内；源目录绝对路径绝不进入 Pi。子 Agent 经同一 openSession
+    // 装配,自动使用完全相同的 allowlist。
     // **必须显式喂路径**:pi 的 DefaultResourceLoader 是 includeDefaults
     // = false,不喂就一个 skill 都不装(读 SDK 才发现,不是放进去就生效)。
-    const hostSkillPath = this.options.hostSkillsDir;
+    const hostSkills = materializeHostSkills({
+      sourceRoot: this.options.hostSkillsDir,
+      workspaceRoot: workspace,
+      snapshotRoot: join(workspace, ".mae-flow-work", "host-skills"),
+    });
+    for (const warning of hostSkills.warnings) {
+      this.options.log?.(
+        `[host-skill] 任务 ${this.options.taskId}: ${warning}`);
+    }
     const repositorySkillPaths = (this.options.repositorySkillPaths ?? [])
       .filter((path) => {
         if (basename(path) !== "SKILL.md" || !existsSync(path)) return false;
@@ -678,7 +692,7 @@ export class CloudSession {
         }
       });
     const skillPaths = [...new Set([
-      ...(hostSkillPath && existsSync(hostSkillPath) ? [hostSkillPath] : []),
+      ...hostSkills.paths,
       ...repositorySkillPaths,
     ])];
     const knowledgeEntries = (this.options.repositoryKnowledge ?? [])
@@ -718,7 +732,7 @@ export class CloudSession {
         return join(basename(dirname(path)), "SKILL.md");
       });
       const labels = [
-        ...(hostSkillPath && existsSync(hostSkillPath) ? ["宿主技能"] : []),
+        ...hostSkills.names.map((name) => `宿主技能/${name}`),
         ...safeRepositoryNames,
       ];
       this.options.log?.(

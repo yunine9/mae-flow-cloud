@@ -7,9 +7,12 @@ import io
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from types import SimpleNamespace
 
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -39,6 +42,80 @@ class ProjectResourceTests(unittest.TestCase):
                 "assets", "IMPLEMENTATION-TEMPLATE.md")
             self.assertIn(implementation_template, paths)
             self.assertTrue(os.path.isfile(implementation_template))
+
+    def test_current_hands_grill_agent_the_materialized_template(self):
+        runtime = importlib.import_module("mae_flow_core.cli_runtime")
+        current = importlib.import_module(
+            "mae_flow_core.cli_commands.current")
+        with tempfile.TemporaryDirectory() as root:
+            runtime.materialize_plugin_resources(root, ROOT)
+            before = os.getcwd()
+            os.chdir(root)
+            try:
+                text = current._step_md_text("grill", {
+                    "current": "grill",
+                    "config": {"单号": "REQ-LOCAL-TEMPLATE"},
+                    "choices": {"workflow": "full"},
+                })
+            finally:
+                os.chdir(before)
+            local = os.path.join(
+                root, ".mae-flow-work", "plugin-resources", "assets",
+                "GRILL-PREP-TEMPLATE.md")
+            source = os.path.join(
+                ROOT, "skills", "mae-flow", "assets",
+                "GRILL-PREP-TEMPLATE.md")
+            self.assertIn(local, text)
+            self.assertNotIn(source, text)
+
+    def test_template_command_returns_materialized_paths_for_every_kind(self):
+        runtime = importlib.import_module("mae_flow_core.cli_runtime")
+        commands = importlib.import_module(
+            "mae_flow_core.cli_commands.codecheck_commands")
+        names = {
+            "story": "STORY-TEMPLATE.md",
+            "chain": "CHAIN-TEMPLATE.md",
+            "grill": "GRILL-PREP-TEMPLATE.md",
+            "review": "REVIEW-TEMPLATE.md",
+        }
+        with tempfile.TemporaryDirectory() as root:
+            runtime.materialize_plugin_resources(root, ROOT)
+            before = os.getcwd()
+            os.chdir(root)
+            try:
+                for kind, name in names.items():
+                    output = io.StringIO()
+                    with redirect_stdout(output):
+                        commands.cmd_template(
+                            None, SimpleNamespace(kind=kind))
+                    self.assertEqual(
+                        os.path.realpath(os.path.join(
+                            root, ".mae-flow-work", "plugin-resources",
+                            "assets", name)),
+                        output.getvalue().strip(),
+                    )
+            finally:
+                os.chdir(before)
+
+    def test_standalone_grill_hands_out_project_local_template(self):
+        with tempfile.TemporaryDirectory() as root:
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            env = dict(os.environ)
+            env["PYTHONPYCACHEPREFIX"] = os.path.join(root, "pycache")
+            result = subprocess.run(
+                [sys.executable, os.path.join(ROOT, "scripts", "mae-flow.py"),
+                 "action", "start", "grill", "--request", "澄清需求"],
+                cwd=root, env=env, text=True, capture_output=True, timeout=15)
+            self.assertEqual(0, result.returncode, result.stderr)
+            local = os.path.join(
+                root, ".mae-flow-work", "plugin-resources", "assets",
+                "GRILL-PREP-TEMPLATE.md")
+            source = os.path.join(
+                ROOT, "skills", "mae-flow", "assets",
+                "GRILL-PREP-TEMPLATE.md")
+            self.assertIn(local, result.stdout)
+            self.assertNotIn(source, result.stdout)
+            self.assertTrue(os.path.isfile(local))
 
     def test_ordinary_ticket_keeps_readable_work_directory(self):
         self.assertIsNotNone(importlib.util.find_spec(
@@ -149,6 +226,27 @@ class MirrorCoverageTests(unittest.TestCase):
         cited = self._cited(banner.replace(os.sep, "/"))
         self.assertTrue(cited, "L3 指令应当指向协议全文")
         self.assertEqual(set(), cited - self._mirrored())
+
+    def test_materialized_guidance_and_standard_paths_are_fully_rooted(self):
+        """裸 guidance/standards 路径会从业务仓根解析到错误位置。"""
+        root = self._plugin_root()
+        pattern = re.compile(
+            r"(?<!plugin-resources/)(?<!runtime/)"
+            r"\b(?:guidance|standards)/[A-Za-z0-9_.-]+\.md")
+        offenders = []
+        for folder in ("flow/steps", "runtime/guidance", "skills/mae-flow"):
+            base = os.path.join(root, *folder.split("/"))
+            for here, _dirs, names in os.walk(base):
+                for name in names:
+                    if not name.endswith(".md"):
+                        continue
+                    path = os.path.join(here, name)
+                    with io.open(path, encoding="utf-8") as stream:
+                        for match in pattern.findall(stream.read()):
+                            offenders.append(
+                                "%s → %s" % (
+                                    os.path.relpath(path, root), match))
+        self.assertEqual([], offenders)
 
 
 class CitedArtifactsExistTests(unittest.TestCase):

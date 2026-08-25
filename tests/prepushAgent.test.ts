@@ -221,6 +221,10 @@ test("prepush gate: 拦住宿主秘密和危险删除，不误伤仓库 skill", 
   assert.equal(prePushSecurityDecision("Write", ".mvn/project-settings.xml"), undefined);
   assert.equal(prePushSecurityDecision(
     "Read", ".mae-flow-work/repository-skills/java/SKILL.md"), undefined);
+  assert.equal(prePushSecurityDecision(
+    "Read", ".mae-flow-work/host-skills/snapshot/SKILL.md"), undefined);
+  assert.equal(prePushSecurityDecision(
+    "Write", ".mae-flow-work/host-skills/snapshot/SKILL.md")?.action, "deny");
   assert.equal(prePushSecurityDecision("Bash", "rm build/old.log"), undefined);
 });
 

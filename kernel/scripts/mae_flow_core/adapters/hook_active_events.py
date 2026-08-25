@@ -60,7 +60,7 @@ _ACTION_BASH_BLOCKED = (
     "[mae-flow] 禁止通过命令修改独立任务状态、任务卡或手工调用 Hook。"
     "查看用 action status，退出用 action cancel。\n"
 )
-_PATH_BLOCKED = "[mae-flow] 文件工具只能访问当前任务仓库；已阻止越过仓库边界的路径: %s\n"
+_PATH_BLOCKED = "[mae-flow] 文件工具只能访问当前任务工作区；已阻止越过任务边界的路径: %s\n"
 _STOP_BLOCKED = (
     "[mae-flow] 月光宝盒仍在执行，当前步骤 %s，禁止提前结束回复或等待用户。"
     "继续执行 current 输出给出的动作；质量问题尽力后用 moonlight defer，"
@@ -80,10 +80,12 @@ class ActiveHookEventAdapter(HookQualityExecutionMixin):
 
     def __init__(
             self, *, state, maeflow_path, repository_root, maeflow,
-            runtime_adapter, task_card_ports, log):
+            runtime_adapter, task_card_ports, log, file_access_root=None):
         self.state = state
         self.maeflow_path = maeflow_path
         self.repository_root = os.path.realpath(repository_root)
+        self.file_access_root = os.path.realpath(
+            file_access_root or repository_root)
         self.plugin_root = os.path.abspath(os.path.join(
             os.path.dirname(maeflow_path), ".."))
         self.maeflow = maeflow
@@ -155,7 +157,9 @@ class ActiveHookEventAdapter(HookQualityExecutionMixin):
     def pretool(self, payload):
         tool = payload.get("tool_name", "")
         tool_input = payload.get("tool_input") or {}
-        decision = active_pretool_decision(tool, tool_input, self._moonlight_enabled(), self.repository_root)
+        decision = active_pretool_decision(
+            tool, tool_input, self._moonlight_enabled(),
+            self.repository_root, self.file_access_root)
         if decision.action == "agent":
             return self._gate_agent_dispatch(payload, tool_input)
         if decision.action == "block-question":
@@ -172,7 +176,9 @@ class ActiveHookEventAdapter(HookQualityExecutionMixin):
 
     def standalone_pretool(self, payload):
         tool_input = payload.get("tool_input") or {}
-        decision = standalone_pretool_decision(payload.get("tool_name", ""), tool_input, self.repository_root)
+        decision = standalone_pretool_decision(
+            payload.get("tool_name", ""), tool_input,
+            self.repository_root, self.file_access_root)
         if decision.action == "agent":
             return self._gate_agent_dispatch(payload, tool_input)
         if decision.action == "block-path":

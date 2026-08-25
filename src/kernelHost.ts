@@ -25,6 +25,10 @@ export interface KernelHostOptions {
   kernelRoot: string;
   /** 任务代码工作区(dispatch 的 cwd,即仓库克隆) */
   workspace: string;
+  /** 文件工具可达的任务根。缺省与代码仓相同；Cloud 修复任务传代码仓
+   * 的直接父目录，使 ../pipeline、../reviews 等任务材料可读写，同时
+   * 源码识别与状态文件仍严格锚在 workspace。 */
+  fileAccessRoot?: string;
   /** 云端主 transcript 路径(证据契约从这里取工具事实) */
   transcriptPath: string;
   taskId: string;
@@ -225,6 +229,7 @@ export class KernelHost {
   private common(): Record<string, unknown> {
     return {
       cwd: this.options.workspace,
+      workspace_root: this.options.fileAccessRoot ?? this.options.workspace,
       session_id: this.options.taskId,
       transcript_path: this.options.transcriptPath,
     };

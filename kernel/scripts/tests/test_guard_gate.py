@@ -37,6 +37,10 @@ class EditGateTests(unittest.TestCase):
         for path, fragment in (
             (".mae-flow.json", "流程状态"),
             (".env.production", ".env 类密钥文件"),
+            (".mae-flow-work/plugin-resources/assets/GRILL-PREP-TEMPLATE.md",
+             "只读资源"),
+            (".mae-flow-work/repository-skills/java/SKILL.md", "只读资源"),
+            (".mae-flow-work/host-skills/abc/SKILL.md", "只读资源"),
             ("/plugin/scripts/mae-flow.py", "禁止修改插件自身"),
         ):
             with self.subTest(path=path):
@@ -170,7 +174,7 @@ class BashWriteGateTests(unittest.TestCase):
         internal = decide_bash_write(self.context(
             writeish=True, hits_internal_state=True))
         self.assertEqual("absolute", internal.kind)
-        self.assertIn("流程状态", internal.message)
+        self.assertIn("禁止经 Bash 改写", internal.message)
 
     def test_non_source_bash_writes_remain_available(self):
         """经 Bash 写需求/规格过程件不受源码阶段闸影响。

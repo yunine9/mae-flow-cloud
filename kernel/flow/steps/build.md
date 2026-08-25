@@ -9,7 +9,7 @@
 
 1. 读本单 `spec.md`、`story.md`、`implementation.md`，以及
    `.mae-flow-work/plugin-resources/standards/code-taste-v1.md`（编码基准）与
-   `standards/comment-standard-v1.md`（注释标准）。
+   `.mae-flow-work/plugin-resources/standards/comment-standard-v1.md`（注释标准）。
 2. **分块纪律**：按 `implementation.md` 的任务顺序逐块写，每块收尾过一遍下方**四项自查**
    并给出结论，过了再写下一块。块与块之间不编译、不 done、不询问用户。
    开始/完成某块时可分别执行 `python "{MAEFLOW_PATH}" milestone start --task <编号>` 与

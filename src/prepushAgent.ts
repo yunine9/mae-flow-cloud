@@ -81,11 +81,12 @@ export function prePushSecurityDecision(
   if (!source) return undefined;
 
   // 专项会话绕开内核 Hook 的前提，是它也绝不能改写/伪造内核现场。
-  // 构建与 UT 不需要这些文件；读写都拒绝，避免先读出状态再用 Bash 改。
+  // 只给 Read 精确豁免宿主/仓库 Skill 的任务内快照；其他内部文件以及
+  // 对 Skill 快照的写入仍拒绝，避免先读出状态再用 Bash 改。
   const kernelStatePath = /(?:^|[\\/\s'"`=])\.mae-flow(?:\.json|-[^\\/\s'"`;&|]+|[\\/])(?:$|[\s'"`;&|\\/])/i;
-  const selectedSkillSnapshot = kind === "read"
-    && /(?:^|[\\/])\.mae-flow-work[\\/]repository-skills[\\/]/i.test(source);
-  if (kernelStatePath.test(source) && !selectedSkillSnapshot) {
+  const readonlySkillSnapshot = kind === "read"
+    && /(?:^|[\\/])\.mae-flow-work[\\/](?:repository|host)-skills[\\/]/i.test(source);
+  if (kernelStatePath.test(source) && !readonlySkillSnapshot) {
     return DENY("推送前验证会话不能读取或修改 Mae-Flow 内核现场。");
   }
 

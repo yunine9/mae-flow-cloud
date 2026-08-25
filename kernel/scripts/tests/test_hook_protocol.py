@@ -67,6 +67,30 @@ class HookProtocolTests(unittest.TestCase):
             self.fail("生产 Hook 任务卡端口装配不完整: %s" % exc)
         self.assertTrue(ports.build_like("CMakeLists.txt"))
 
+    def test_cloud_access_root_accepts_only_repo_or_direct_task_parent(self):
+        with tempfile.TemporaryDirectory() as task:
+            project = os.path.join(task, "project")
+            os.makedirs(project)
+            before = os.getcwd()
+            os.chdir(project)
+            try:
+                self.assertEqual(
+                    os.path.realpath(task),
+                    self.dispatch._file_access_root(
+                        {"workspace_root": task}),
+                )
+                self.assertEqual(
+                    os.path.realpath(project),
+                    self.dispatch._file_access_root(
+                        {"workspace_root": os.path.dirname(task)}),
+                )
+                self.assertEqual(
+                    os.path.realpath(project),
+                    self.dispatch._file_access_root({}),
+                )
+            finally:
+                os.chdir(before)
+
     def test_project_launcher_uses_codeagent_plugin_root(self):
         from mae_flow_core.adapters.project_launcher import (
             install_project_launcher,

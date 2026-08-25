@@ -9,6 +9,7 @@ import { execFileSync } from "node:child_process";
 import {
   existsSync,
   mkdtempSync,
+  mkdirSync,
   readFileSync,
   writeFileSync,
 } from "node:fs";
@@ -114,6 +115,10 @@ test("普通措辞也先机械 init/current，模型首个 Edit 在配置阶段�
 test("vendored Cloud Hook 在 grill 阶段同时拒绝 Edit 与 Bash 写源码", async () => {
   const root = mkdtempSync(join(tmpdir(), "mfc-managed-grill-"));
   const repo = repository(root);
+  mkdirSync(join(root, "pipeline"));
+  mkdirSync(join(root, "reviews"));
+  writeFileSync(join(root, "pipeline", "compile.log"), "BUILD FAILURE\n");
+  writeFileSync(join(root, "reviews", "discussions.json"), "[]\n");
   const vendored = join(process.cwd(), "kernel");
   assert.ok(existsSync(join(vendored, "hooks", "dispatch.py")),
     "Cloud 发布快照必须包含可执行 Hook");
@@ -127,12 +132,45 @@ test("vendored Cloud Hook 在 grill 阶段同时拒绝 Edit 与 Bash 写源码",
   const host = new KernelHost({
     kernelRoot: vendored,
     workspace: repo,
+    fileAccessRoot: root,
     transcriptPath: join(root, "transcript.jsonl"),
     taskId: "managed-grill",
     python: "python3",
   });
   const guidance = await host.bootstrapManaged("继续梳理需求边界");
   assert.match(guidance, /grill|需求澄清|需求质询/);
+  const localTemplate = join(
+    repo, ".mae-flow-work", "plugin-resources", "assets",
+    "GRILL-PREP-TEMPLATE.md");
+  const sourceTemplate = join(
+    vendored, "skills", "mae-flow", "assets", "GRILL-PREP-TEMPLATE.md");
+  assert.match(guidance, new RegExp(localTemplate.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+    "current 必须把仓内物化模板交给模型");
+  assert.equal(guidance.includes(sourceTemplate), false,
+    "current 不得暴露会被文件门禁拒绝的内核源码路径");
+
+  const read = (callId: string, path: string) => host.preTool({
+    eventId: 1, taskId: "managed-grill", sessionId: "main", ts: "",
+    kind: "tool_requested",
+    payload: { call_id: callId, name: "Read", input: { path } },
+  });
+  assert.equal(await read("read-local-template", localTemplate), undefined);
+  assert.equal(await read("read-pipeline", "../pipeline/compile.log"), undefined);
+  assert.equal(await read("read-reviews", "../reviews/discussions.json"), undefined);
+  assert.equal((await read("read-kernel-source", sourceTemplate))?.action, "deny");
+  assert.equal((await read("read-other-task", "../../other-task/secret"))?.action,
+    "deny");
+
+  const reply = await host.preTool({
+    eventId: 1, taskId: "managed-grill", sessionId: "main", ts: "",
+    kind: "tool_requested",
+    payload: {
+      call_id: "write-review-replies", name: "Write",
+      input: { path: "../review_replies.md", content: "[discussion-1]\n已修复\n" },
+    },
+  });
+  assert.equal(reply, undefined,
+    "任务根内的检视回复文件必须通过内核路径边界");
 
   const edit = await host.preTool({
     eventId: 1, taskId: "managed-grill", sessionId: "main", ts: "",

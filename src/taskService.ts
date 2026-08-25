@@ -5039,6 +5039,7 @@ export class TaskService {
         const kernel = new KernelHost({
           kernelRoot: this.options.host.kernelRoot,
           workspace: cwd,
+          fileAccessRoot: workspace,
           transcriptPath,
           taskId: task.summary.id,
           python: this.options.host.python,

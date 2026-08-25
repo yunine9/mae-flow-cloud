@@ -355,11 +355,11 @@ def cmd_approve_exemption(flow, st, args):
           f"记录已写入本地过程件 {ex}；不得 git add/commit，禁止手写其他豁免冒充审批。")
 
 def cmd_template(flow, args):
-    """打印模板绝对路径(story|chain)。子 agent/会话在项目目录里搜不到插件安装目录,
-    必须经本命令拿路径。"""
+    """打印项目本地物化模板的绝对路径(story|chain|grill|review)。"""
     name = {"story": "STORY-TEMPLATE.md", "chain": "CHAIN-TEMPLATE.md",
             "grill": "GRILL-PREP-TEMPLATE.md", "review": "REVIEW-TEMPLATE.md"}[args.kind]
-    p = os.path.abspath(os.path.join(HERE, "..", "skills", "mae-flow", "assets", name))
+    p = os.path.abspath(os.path.join(
+        ".mae-flow-work", "plugin-resources", "assets", name))
     if not os.path.exists(p):
-        api.die(name + " 模板缺失: " + p)
+        api.die(name + " 项目本地模板缺失；请重新执行 current 恢复资源: " + p)
     print(p)

@@ -108,8 +108,8 @@ def cmd_action_start(flow, st, args):
                 "备课工作表必须按模板结构填写"
                 "(hook 会校验章节,自由发挥会被打回):%s"
                 % os.path.abspath(os.path.join(
-                    HERE, "..", "skills", "mae-flow",
-                    "assets", "GRILL-PREP-TEMPLATE.md")))
+                    ".mae-flow-work", "plugin-resources", "assets",
+                    "GRILL-PREP-TEMPLATE.md")))
             print(
                 "随后一次只问用户一个问题，每次回答后先检查模糊词、"
                 "新名词、矛盾和衍生边界，答案增量写入：%s"

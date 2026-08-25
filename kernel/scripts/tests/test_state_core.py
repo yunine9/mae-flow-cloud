@@ -787,6 +787,27 @@ class RuntimeAndStateTests(unittest.TestCase):
             set_step("build")
             self.assertEqual(0, gate("edit", source).returncode,
                              "编码步骤的显式授权不得被误伤")
+            resource = os.path.join(
+                td, ".mae-flow-work", "host-skills", "snapshot", "SKILL.md")
+            os.makedirs(os.path.dirname(resource), exist_ok=True)
+            with open(resource, "w", encoding="utf-8") as stream:
+                stream.write("# projected skill\n")
+            edit_resource = gate("edit", resource)
+            self.assertEqual(2, edit_resource.returncode,
+                             edit_resource.stderr)
+            self.assertIn("只读资源", edit_resource.stderr)
+            bash_resource = gate(
+                "bash", "echo changed > .mae-flow-work/host-skills/"
+                "snapshot/SKILL.md")
+            self.assertEqual(2, bash_resource.returncode,
+                             bash_resource.stderr)
+            self.assertIn("只读 Skill/模板资源", bash_resource.stderr)
+            self.assertEqual(
+                0,
+                gate("bash", "cat .mae-flow-work/host-skills/"
+                     "snapshot/SKILL.md").returncode,
+                "任务内投影必须可读，只禁止写入",
+            )
 
     def test_statusline_uses_repository_boundary_and_runtime_precedence(self):
         with tempfile.TemporaryDirectory() as td:

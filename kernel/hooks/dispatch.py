@@ -34,6 +34,9 @@ from mae_flow_core.adapters.hook_events import HookEventAdapter
 from mae_flow_core.adapters.hook_diagnostics import HookBlockDiagnostics
 from mae_flow_core.adapters.hook_runtime import HookRuntimeAdapter
 from mae_flow_core.adapters.project_launcher import install_launcher_for_event
+from mae_flow_core.application.hooks.event_policies import (
+    authorized_file_access_root,
+)
 
 for _s in (sys.stdout, sys.stderr):
     try:
@@ -250,11 +253,16 @@ def _task_card_ports():
     return _runtime_adapter()._task_card_ports()
 
 
-def _hook_event_ports():
+def _file_access_root(payload):
+    return authorized_file_access_root(os.getcwd(), payload)
+
+
+def _hook_event_ports(payload=None):
     active = ActiveHookEventAdapter(
         state=STATE,
         maeflow_path=MAEFLOW,
         repository_root=os.getcwd(),
+        file_access_root=_file_access_root(payload),
         maeflow=maeflow,
         runtime_adapter=_runtime_adapter(),
         task_card_ports=_task_card_ports,
@@ -286,7 +294,7 @@ def main():
         install_launcher_for_event(ev)
         runtime = resolve_runtime(os.getcwd())
         response = _handle_hook_event(
-            ev, d, runtime, _hook_event_ports())
+            ev, d, runtime, _hook_event_ports(d))
         _DIAGNOSTICS.log_pretool_decision(ev, d, response, _log)
         if response.stdout:
             print(response.stdout, end="")

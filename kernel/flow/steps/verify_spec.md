@@ -25,4 +25,4 @@
 
 验证通过并展示摘要后 done。
 
-验证纪律的完整口径见 `.mae-flow-work/plugin-resources/guidance/quality.md` 与 `guidance/review.md`。
+验证纪律的完整口径见 `.mae-flow-work/plugin-resources/guidance/quality.md` 与 `.mae-flow-work/plugin-resources/guidance/review.md`。

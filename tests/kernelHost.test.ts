@@ -121,6 +121,8 @@ test("合成载荷:pre/post 两侧 tool_use_id 同源,生命周期可精确对�
   const pre = rows.find((row) => row.event === "pretooluse");
   const post = rows.find((row) => row.event === "posttooluse");
   assert.equal(pre?.payload.tool_use_id, "call_A");
+  assert.equal(pre?.payload.workspace_root, pre?.payload.cwd,
+    "未显式放宽时文件访问根必须与代码仓相同");
   assert.equal(post?.payload.tool_use_id, "call_A");
   assert.equal(pre?.payload.tool_use_id, post?.payload.tool_use_id);
 });

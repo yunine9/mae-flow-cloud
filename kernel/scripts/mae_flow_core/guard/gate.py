@@ -79,6 +79,14 @@ def _protected_file_decision(context):
         return _absolute(
             "流程运行期间禁止修改 .mae-flow-defaults.json:它决定源码/测试路径的"
             "判定口径,改它等于改门禁规则。团队预设请在流程外走正常评审提交。")
+    if re.search(
+            r"(^|/)\.mae-flow-work/"
+            r"(?:plugin-resources|repository-skills|host-skills)(?:/|$)",
+            path, re.I):
+        return _absolute(
+            "任务内 Skill/模板是宿主或内核投影的只读资源，禁止直接编辑、"
+            "覆盖或删除；需要使用时请 Read，源资源更新后由宿主重新投影。",
+            rule="edit-readonly-resource")
     if (
         re.search(r"(^|/)\.env(\.[\w.-]+)?$", path, re.I)
         and not re.search(
@@ -267,8 +275,9 @@ def _bash_absolute_decision(context):
             rule="bash-global-openspec")
     if context.writeish and context.hits_internal_state:
         return _absolute(
-            "流程状态/历史账本/待重启标记/仓库预设/月光宝盒报告由 mae-flow "
-            "维护,禁止经 Bash 改写/删除(待重启标记只能靠重启会话清;"
+            "流程状态/历史账本/待重启标记/仓库预设/月光宝盒报告和任务内"
+            "只读 Skill/模板资源由 mae-flow 或宿主维护,禁止经 Bash 改写/删除"
+            "(待重启标记只能靠重启会话清;"
             "仓库预设决定门禁口径,流程外走正常评审提交)。"
             "要推进或纠正流程请执行 current 按本步指引走。",
             rule="bash-internal-state-write")

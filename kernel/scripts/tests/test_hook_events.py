@@ -238,6 +238,28 @@ class HookEventTests(unittest.TestCase):
         if link_escape is not None:
             self.assertEqual("block-path", link_escape.action)
 
+    def test_cloud_task_access_root_allows_sibling_repair_material_only(self):
+        with tempfile.TemporaryDirectory() as task:
+            project = os.path.join(task, "project")
+            pipeline = os.path.join(task, "pipeline")
+            os.makedirs(project)
+            os.makedirs(pipeline)
+            sibling = active_pretool_decision(
+                "Read", {"path": "../pipeline/compile.log"},
+                False, project, task)
+            reply = active_pretool_decision(
+                "Write", {"path": "../review_replies.md"},
+                False, project, task)
+            escaped = active_pretool_decision(
+                "Read", {"path": "../../other-task/secret"},
+                False, project, task)
+        self.assertEqual("allow", sibling.action)
+        self.assertEqual(
+            ("gate-edit", "../review_replies.md"),
+            (reply.action, reply.value),
+        )
+        self.assertEqual("block-path", escaped.action)
+
     def test_active_adapter_routes_pi_path_to_gate_and_blocks_escape_first(self):
         calls = []
         runtime = SimpleNamespace(_contract_state=lambda: {})
@@ -265,7 +287,7 @@ class HookEventTests(unittest.TestCase):
         self.assertEqual(2, protected.exit_code)
         self.assertEqual([("gate", "edit", ".mae-flow.json")], calls)
         self.assertEqual(2, escaped.exit_code)
-        self.assertIn("当前任务仓库", escaped.stderr)
+        self.assertIn("当前任务工作区", escaped.stderr)
 
     def test_standalone_control_files_and_hook_commands_are_protected(self):
         edit = standalone_pretool_decision(
