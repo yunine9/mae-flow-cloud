@@ -11,6 +11,9 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { dirname } from "node:path";
@@ -47,6 +50,48 @@ export class ReviewStore {
 
   forTask(taskId: string): ReviewRequest[] {
     return this.list().filter((item) => item.task_id === taskId);
+  }
+
+  /** 彻底删除历史任务时同步清掉它的检视台账。JSONL 是追加日志，不能
+   * 只改内存 Map；必须把该任务所有历史版本一并从文件中滤掉。 */
+  purgeTask(taskId: string): number {
+    const removed = [...this.records.values()]
+      .filter((item) => item.task_id === taskId).length;
+    if (!existsSync(this.path)) {
+      for (const [id, item] of this.records) {
+        if (item.task_id === taskId) this.records.delete(id);
+      }
+      return removed;
+    }
+
+    const kept = readFileSync(this.path, "utf-8").split("\n")
+      .filter((line) => {
+        if (!line.trim()) return false;
+        try {
+          return (JSON.parse(line) as { task_id?: string }).task_id !== taskId;
+        } catch {
+          // 与 load 的容错口径一致：坏行不属于任何已识别任务，保留它，
+          // 不能借删除一单顺手损坏别的审计现场。
+          return true;
+        }
+      });
+    const temporary = `${this.path}.${process.pid}.${randomUUID()}.tmp`;
+    mkdirSync(dirname(this.path), { recursive: true });
+    try {
+      writeFileSync(temporary, kept.length ? `${kept.join("\n")}\n` : "", {
+        encoding: "utf-8",
+        mode: 0o600,
+      });
+      chmodSync(temporary, 0o600);
+      renameSync(temporary, this.path);
+    } catch (error) {
+      rmSync(temporary, { force: true });
+      throw error;
+    }
+    for (const [id, item] of this.records) {
+      if (item.task_id === taskId) this.records.delete(id);
+    }
+    return removed;
   }
 
   create(input: {

@@ -209,6 +209,50 @@ test("历史读侧:按最近更新倒序,jsonb 字段还原,覆盖后见最新",
     }
   });
 
+test("彻底删除投影:事务内清摘要、事件、外部动作，且拒绝在途任务",
+  { skip: SKIP }, async () => {
+    const projection = new PgProjection(conn);
+    const judge = new pg.Pool({ connectionString: conn, max: 1 });
+    try {
+      await projection.upsertTask(summaryOf("task-delete-active", "running"));
+      const refused = await projection.deleteTask("task-delete-active");
+      assert.deepEqual(refused, {
+        found: true, deleted: false, status: "running",
+      });
+      assert.equal((await judge.query(
+        "select count(*)::int as n from tasks where task_id=$1",
+        ["task-delete-active"])).rows[0].n, 1);
+
+      await projection.upsertTask(summaryOf("task-delete-final", "completed"));
+      await projection.appendEvent({
+        eventId: 1, taskId: "task-delete-final", sessionId: "main",
+        ts: "t", kind: "session_started", payload: {},
+      });
+      await projection.recordAction({
+        taskId: "task-delete-final", idemKey: "mr:delete",
+        kind: "mr_create", request: { source: "feat/delete" },
+        startedAt: new Date().toISOString(),
+      });
+      const deleted = await projection.deleteTask("task-delete-final");
+      assert.deepEqual(deleted, {
+        found: true, deleted: true, status: "completed",
+      });
+      for (const table of ["tasks", "task_events", "external_actions"]) {
+        const rows = await judge.query(
+          `select count(*)::int as n from ${table} where task_id=$1`,
+          ["task-delete-final"],
+        );
+        assert.equal(rows.rows[0].n, 0, `${table} 必须同步清空`);
+      }
+      assert.deepEqual(await projection.deleteTask("task-delete-missing"), {
+        found: false, deleted: false,
+      });
+    } finally {
+      await judge.end();
+      await projection.close();
+    }
+  });
+
 test("fail-open:数据库不可达,写入不抛错,失败可观测", async () => {
   // 端口 1 永远连不上;这条不依赖临时集群,无 PG 二进制也要跑。
   const logs: string[] = [];

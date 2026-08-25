@@ -10,6 +10,8 @@
  *   POST /tasks/:id/interrupt  {text}                   → 200;跑动中插话(发送即打断)
  *   GET/POST /tasks/:id/developer-assistant             → 旁路开发助手现场/发起处理
  *   POST /tasks/:id/pause|resume|cancel                 → 200;任务控制
+ *   POST /tasks/:id/rerun                               → 200;原位清空并从头重跑
+ *   DELETE /tasks/:id                                   → 200;管理员彻底删除真终态历史
  *   GET  /tasks/:id/interrupts                          → 发过的插话 + 送达与否
  *   GET  /tasks/:id/annotations                         → 待送出批注 + 锚点现状
  *   POST /tasks/:id/annotations {artifact,file,line,anchor,note,kind} → 201
@@ -699,10 +701,22 @@ export function createTaskServer(
       }
       if (parts[0] === "tasks" && parts.length >= 2) {
         const id = parts[1];
+        if (request.method !== "GET" && service.historyMutationInProgress(id)) {
+          return json(response, 409, {
+            error: `任务 ${id} 正在执行清空重跑或彻底删除，请勿同时修改`,
+          });
+        }
         if (request.method === "GET" && parts.length === 2) {
           const task = service.get(id);
           if (!task) return json(response, 404, { error: `任务 ${id} 不存在` });
           return json(response, 200, task);
+        }
+        if (request.method === "DELETE" && parts.length === 2) {
+          if (viewer?.role !== "admin") {
+            return json(response, 403, { error: "只有管理员可以彻底删除历史任务" });
+          }
+          options.lubanApproval?.purgeTask(id);
+          return json(response, 200, await service.hardDeleteHistory(id));
         }
         if (request.method === "POST" && parts[2] === "decision") {
           const target = service.get(id);
@@ -903,6 +917,29 @@ export function createTaskServer(
             return json(response, 403, { error: "只能重跑分配给自己的任务" });
           }
           return json(response, 200, service.retry(id));
+        }
+        // 从头重跑会原位覆盖旧任务及其审计现场。管理员不替开发者发起
+        // 或冒用其代码身份；鉴权部署下只能由任务本人执行。
+        if (request.method === "POST" && parts[2] === "rerun") {
+          const target = service.get(id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          if (options.auth && (!viewer || viewer.role === "admin"
+              || viewer.username !== target.luban_account)) {
+            return json(response, 403, { error: "只有该任务责任人可以从头重跑" });
+          }
+          const blockers = [
+            ...service.launchOptions().blockers,
+            ...personalBlockers(viewer),
+          ];
+          if (blockers.length) {
+            return json(response, 409, {
+              error: "配置未完成,先补齐这些再从头重跑:"
+                + blockers.map((item) => item.label).join(";"),
+              blockers,
+            });
+          }
+          options.lubanApproval?.purgeTask(id);
+          return json(response, 200, await service.rerunFromStart(id));
         }
         // 行为摘要(只读):事件流折叠成人看得过来的分段与异常信号。
         // 权限口径同任务详情;纯展示,不参与任何判定。

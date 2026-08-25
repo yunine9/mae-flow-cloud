@@ -217,6 +217,19 @@ export type TaskStatus =
   | "canceled"
   | "failed";
 
+const HARD_DELETE_STATUSES: readonly TaskStatus[] = [
+  "completed", "failed", "canceled",
+];
+
+export interface TaskDeletionResult {
+  id: string;
+  deleted: true;
+  local_task: boolean;
+  projection_task: boolean;
+  reviews_removed: number;
+  notifications_removed: number;
+}
+
 export interface TaskProgress {
   /** 与内核现场看板同源的展示阶段；这里只镜像，不参与流程判定。 */
   phases: string[];
@@ -982,10 +995,23 @@ export class TaskService {
   private repositorySkillCatalogs =
     new Map<string, RepositorySkillCatalogTicket>();
   private issueEnvironmentVault: IssueEnvironmentVault;
+  /** 原位重跑与彻底删除共享同一把逐任务锁，防止两个破坏性请求在
+   * projection await 期间都拿着旧 TaskState 继续执行。 */
+  private historyMutationActive = new Set<string>();
 
   constructor(readonly options: TaskServiceOptions) {
     this.reviews = new ReviewStore(join(options.dataDir, "reviews.jsonl"));
     this.issueEnvironmentVault = new IssueEnvironmentVault(options.dataDir);
+    // 被彻底删除的最高编号不能在重启后复用；否则旧通知/浏览器收藏会
+    // 悄悄指向一张毫不相关的新任务。水位单独留在 dataDir，不属于任
+    // 何任务历史，因此硬删除不会碰它。
+    try {
+      const value = Number(readFileSync(
+        join(options.dataDir, ".task-sequence"), "utf-8").trim());
+      if (Number.isSafeInteger(value) && value >= 0) this.counter = value;
+    } catch {
+      // 旧部署没有水位文件；recover 会从仍在盘上的 task-N 补出起点。
+    }
     // 桌面通知只有 serve --desktop-notify 显式要了才开(它会设
     // MAE_FLOW_DESKTOP_NOTIFY);其余一切宿主进程——测试、probe、pilot——
     // 一律静音。少了这道闸,npm test 拉起真内核当裁判时会把用户的 mac
@@ -1523,6 +1549,10 @@ export class TaskService {
   get(id: string): TaskSummary | undefined {
     const task = this.tasks.get(id);
     return task ? this.project(task, true) : undefined;
+  }
+
+  historyMutationInProgress(id: string): boolean {
+    return this.historyMutationActive.has(id);
   }
 
   /** 责任人主动发出的 Committer 检视邀请。邀请先落盘，再投递；通知
@@ -2692,6 +2722,9 @@ export class TaskService {
       /** Chain 确认后生成的仓库交付任务使用；不暴露给普通 API。 */
       parentTaskId?: string;
       blockedBy?: string[];
+      /** 仅供原位从头重跑：复用已删除的 task-N，并等清理完成后再入队。 */
+      reuseTaskId?: string;
+      deferQueue?: boolean;
       /** 普通 API 只提交短期目录令牌和所选 id；服务端把它还原为
        * 已验证清单。repositorySkills 只供 Chain 拆单内部透传。 */
       repositorySkillCatalogToken?: string;
@@ -2844,8 +2877,11 @@ export class TaskService {
           > 256 * 1024) {
       throw new Error("每个任务最多选择 12 篇且合计不超过 256 KiB 的重点知识");
     }
-    this.counter += 1;
-    const id = `task-${this.counter}`;
+    const id = options.reuseTaskId ?? this.allocateTaskId();
+    if (options.reuseTaskId && (!/^task-\d+$/.test(id)
+        || this.tasks.has(id) || existsSync(join(this.options.dataDir, id)))) {
+      throw new TaskControlError(`任务 ${id} 不能安全地原位重建`);
+    }
     const workspace = join(this.options.dataDir, id);
     mkdirSync(workspace, { recursive: true });
     let issueEnvironments: IssueEnvironmentRef[] = [];
@@ -2930,9 +2966,39 @@ export class TaskService {
       rmSync(workspace, { recursive: true, force: true });
       throw error;
     }
-    this.queue.push(id);
-    this.bypass(undefined, "任务泵", this.pump());
+    if (!options.deferQueue) {
+      this.queue.push(id);
+      this.bypass(undefined, "任务泵", this.pump());
+    }
     return { ...summary };
+  }
+
+  private allocateTaskId(): string {
+    this.counter += 1;
+    try {
+      this.persistTaskSequence();
+    } catch (error) {
+      this.counter -= 1;
+      throw error;
+    }
+    return `task-${this.counter}`;
+  }
+
+  private persistTaskSequence(): void {
+    mkdirSync(this.options.dataDir, { recursive: true });
+    const path = join(this.options.dataDir, ".task-sequence");
+    const temporary = `${path}.tmp`;
+    try {
+      writeFileSync(temporary, `${this.counter}\n`, {
+        encoding: "utf-8",
+        mode: 0o600,
+      });
+      chmodSync(temporary, 0o600);
+      renameSync(temporary, path);
+    } catch (error) {
+      rmSync(temporary, { force: true });
+      throw error;
+    }
   }
 
   private writeTaskState(task: TaskState, strict = false): boolean {
@@ -3186,6 +3252,13 @@ export class TaskService {
         this.options.log?.(`恢复 ${name} 失败: ${String(error)}`);
       }
     }
+    if (this.counter > 0) {
+      try {
+        this.persistTaskSequence();
+      } catch (error) {
+        this.options.log?.(`任务编号水位落盘失败: ${String(error)}`);
+      }
+    }
     if (requeued) this.bypass(undefined, "任务泵", this.pump());
     return { restored, requeued };
   }
@@ -3331,6 +3404,254 @@ export class TaskService {
     this.queue.push(id);
     this.bypass(undefined, "任务泵", this.pump());
     return { ...task.summary };
+  }
+
+  /** 从头重跑不是 retry：它原位覆盖同一个 task-N，只继承下单配置与
+   * 结构关系，不继承工作区、流程进度、人工卡、交付结果或检视记录。 */
+  async rerunFromStart(id: string): Promise<TaskSummary> {
+    const release = this.beginHistoryMutation(id);
+    try {
+      return await this.rerunFromStartLocked(id);
+    } finally {
+      release();
+    }
+  }
+
+  private async rerunFromStartLocked(id: string): Promise<TaskSummary> {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    if (!HARD_DELETE_STATUSES.includes(task.summary.status)) {
+      throw new TaskControlError(
+        `任务 ${id} 当前是 ${task.summary.status}，只有 completed/failed/canceled`
+        + " 的任务可以从头重跑",
+      );
+    }
+    if (task.driver || task.container || task.containerReopen
+        || task.prepushActive || task.assistantActive
+        || task.mergeWatchActive || task.evidenceRetryActive
+        || task.deliveryRecoveryActive) {
+      throw new TaskControlError(
+        `任务 ${id} 仍有执行资源或后台收尾动作，暂不能从头重跑`,
+      );
+    }
+    if (task.summary.entry_kind === "dts"
+        && task.summary.issue_context?.environments.length) {
+      throw new TaskControlError(
+        "该 DTS 任务使用过临时环境凭据；终态凭据已按安全策略销毁，"
+        + "请从发起页重新填写环境后创建新任务",
+      );
+    }
+    const generatedChildren = task.summary.requirement_graph?.repositories
+      .flatMap((repository) => repository.task_id ? [repository.task_id] : [])
+      ?? [];
+    if (generatedChildren.length) {
+      throw new TaskControlError(
+        `该跨仓父任务已生成子任务 ${generatedChildren.join("、")}；`
+        + "原位重跑会造成重复拆单，请在对应子任务上分别从头重跑",
+      );
+    }
+    const source = task.summary;
+    const preserveUndefinedRepositorySkills =
+      source.repository_skills === undefined;
+    const createOptions = {
+      title: source.title,
+      account: source.luban_account,
+      repo: source.repo_url,
+      repos: source.repositories ? [...source.repositories] : undefined,
+      entryKind: source.entry_kind,
+      issueEnvironments: [] as IssueEnvironmentInput[],
+      lane: source.lane,
+      ticket: source.ticket,
+      baseline: source.baseline,
+      model: source.model_choice ? { ...source.model_choice } : undefined,
+      repairRounds: source.repair_rounds,
+      requirementDocumentName: source.requirement_document?.name,
+      internalRequirement: Boolean(source.parent_task_id),
+      parentTaskId: source.parent_task_id,
+      blockedBy: source.blocked_by ? [...source.blocked_by] : undefined,
+      repositorySkills: preserveUndefinedRepositorySkills
+        ? undefined
+        : source.repository_skills!.map((item) => ({ ...item })),
+      repositoryKnowledge: (source.repository_knowledge ?? [])
+        .map((item) => ({ ...item })),
+      preserveUndefinedRepositorySkills,
+      reuseTaskId: id,
+      deferQueue: true,
+    };
+
+    const workspace = resolve(this.options.dataDir, id);
+    const dataRoot = resolve(this.options.dataDir);
+    if (dirname(workspace) !== dataRoot) {
+      throw new TaskControlError(`任务 ${id} 的重建路径越过数据目录边界`);
+    }
+    if (existsSync(workspace) && !lstatSync(workspace).isSymbolicLink()) {
+      const realRoot = realpathSync(dataRoot);
+      const realWorkspace = realpathSync(workspace);
+      if (dirname(realWorkspace) !== realRoot) {
+        throw new TaskControlError(`任务 ${id} 的真实路径越过数据目录边界`);
+      }
+    }
+    const backup = join(dataRoot, `.${id}.rerun-${randomUUID()}`);
+    const hadWorkspace = existsSync(workspace);
+    let movedWorkspace = false;
+
+    try {
+      if (this.options.projection) {
+        await this.options.projection.deleteTask(id, true);
+      }
+      // 数据库事务期间原现场保持原位；这样进程若在 await 中退出，重启
+      // 仍能从 task.json 恢复并重放投影。其后的替换均为同步文件操作。
+      if (hadWorkspace) {
+        renameSync(workspace, backup);
+        movedWorkspace = true;
+      }
+      this.removeFromQueue(id);
+      this.tasks.delete(id);
+      const replacement = this.create(source.requirement, createOptions);
+      this.reviews.purgeTask(id);
+      this.options.notifier?.purgeTask(id);
+      this.issueEnvironmentVault.remove(id);
+      if (hadWorkspace) rmSync(backup, { recursive: true, force: true });
+      this.queue.push(id);
+      this.bypass(undefined, "任务泵", this.pump());
+      return replacement;
+    } catch (error) {
+      this.removeFromQueue(id);
+      this.tasks.delete(id);
+      rmSync(workspace, { recursive: true, force: true });
+      if (movedWorkspace && existsSync(backup)) renameSync(backup, workspace);
+      this.tasks.set(id, task);
+      this.persist(task);
+      throw error;
+    }
+  }
+
+  /** 管理员彻底删除一张真终态历史。外部 Git/MR 本身不属于 Cloud
+   * 存储，不在此处远程销毁；Cloud 内的工作区、凭据、检视、引用和
+   * PostgreSQL 投影全部清理。 */
+  async hardDeleteHistory(id: string): Promise<TaskDeletionResult> {
+    const release = this.beginHistoryMutation(id);
+    try {
+      return await this.hardDeleteHistoryLocked(id);
+    } finally {
+      release();
+    }
+  }
+
+  private async hardDeleteHistoryLocked(id: string): Promise<TaskDeletionResult> {
+    const taskNumber = /^task-(\d+)$/.exec(id)?.[1];
+    const numericId = Number(taskNumber);
+    if (!taskNumber || !Number.isSafeInteger(numericId) || numericId < 1) {
+      throw new NotFoundError(`任务 ${id} 不存在`);
+    }
+    const task = this.tasks.get(id);
+    if (task && !HARD_DELETE_STATUSES.includes(task.summary.status)) {
+      throw new TaskControlError(
+        `任务 ${id} 当前是 ${task.summary.status}，只能彻底删除 `
+        + "completed/failed/canceled 的历史任务",
+      );
+    }
+    if (task && (task.driver || task.container || task.containerReopen
+        || task.prepushActive || task.assistantActive
+        || task.mergeWatchActive || task.evidenceRetryActive
+        || task.deliveryRecoveryActive)) {
+      throw new TaskControlError(
+        `任务 ${id} 仍有执行资源或后台收尾动作，拒绝彻底删除`,
+      );
+    }
+    const liveReferences = [...this.tasks.values()].filter((other) =>
+      other !== task && !HARD_DELETE_STATUSES.includes(other.summary.status)
+      && (other.summary.parent_task_id === id
+        || other.summary.blocked_by?.includes(id)));
+    if (liveReferences.length) {
+      throw new TaskControlError(
+        `任务 ${id} 仍被未终止任务 ${liveReferences
+          .map((item) => item.summary.id).join("、")} 引用，`
+        + "请先让关联任务收口或取消，拒绝删除后改变其调度语义",
+      );
+    }
+
+    // 先把删除目标解析到 dataDir 的直属 task-N；绝不信 task.json 里的
+    // workspace 字段。目录若是软链，后续只 unlink 软链本身，不跟出去。
+    const dataRoot = resolve(this.options.dataDir);
+    const workspace = resolve(dataRoot, id);
+    if (dirname(workspace) !== dataRoot) {
+      throw new TaskControlError(`任务 ${id} 的删除路径越过数据目录边界`);
+    }
+    if (existsSync(workspace) && !lstatSync(workspace).isSymbolicLink()) {
+      const realRoot = realpathSync(dataRoot);
+      const realWorkspace = realpathSync(workspace);
+      if (dirname(realWorkspace) !== realRoot) {
+        throw new TaskControlError(`任务 ${id} 的真实路径越过数据目录边界`);
+      }
+    }
+
+    // projection-only 的历史编号也可能高于本机仍保留的现场。先封存水
+    // 位再删，避免下一次重启把已经发出去过的永久链接复用给别的任务。
+    this.counter = Math.max(this.counter, numericId);
+    this.persistTaskSequence();
+
+    const projection = this.options.projection;
+    const projected = projection
+      ? await projection.deleteTask(id, Boolean(task))
+      : { found: false, deleted: false };
+    if (!task && !projected.found) {
+      throw new NotFoundError(`任务 ${id} 不存在`);
+    }
+    if (projected.found && !projected.deleted) {
+      throw new TaskControlError(
+        `任务 ${id} 的历史状态是 ${projected.status}，只能彻底删除 `
+        + "completed/failed/canceled 的历史任务",
+      );
+    }
+
+    const reviewsRemoved = this.reviews.purgeTask(id);
+    const notificationsRemoved = this.options.notifier?.purgeTask(id) ?? 0;
+    this.issueEnvironmentVault.remove(id);
+    this.removeFromQueue(id);
+
+    // 清除其余现场对这张任务的结构化引用，避免看板留下点不开的父子
+    // 链。逐张严格落盘；失败时保留源任务在内存，管理员可原样重试。
+    for (const other of this.tasks.values()) {
+      if (other === task) continue;
+      let changed = false;
+      if (other.summary.parent_task_id === id) {
+        delete other.summary.parent_task_id;
+        changed = true;
+      }
+      if (other.summary.blocked_by?.includes(id)) {
+        const kept = other.summary.blocked_by.filter((item) => item !== id);
+        other.summary.blocked_by = kept.length ? kept : undefined;
+        changed = true;
+      }
+      for (const repository of
+        other.summary.requirement_graph?.repositories ?? []) {
+        if (repository.task_id === id) {
+          delete repository.task_id;
+          changed = true;
+        }
+      }
+      if (changed) this.persist(other, true);
+    }
+
+    rmSync(workspace, { recursive: true, force: true });
+    this.tasks.delete(id);
+    return {
+      id,
+      deleted: true,
+      local_task: Boolean(task),
+      projection_task: projected.found,
+      reviews_removed: reviewsRemoved,
+      notifications_removed: notificationsRemoved,
+    };
+  }
+
+  private beginHistoryMutation(id: string): () => void {
+    if (this.historyMutationActive.has(id)) {
+      throw new TaskControlError(`任务 ${id} 正在执行清空重跑或彻底删除，请勿重复操作`);
+    }
+    this.historyMutationActive.add(id);
+    return () => this.historyMutationActive.delete(id);
   }
 
   /** 需求图体检(只验不建):图齐不齐、依赖合不合法、有没有环。

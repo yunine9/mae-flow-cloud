@@ -2487,7 +2487,7 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   white-space: pre-wrap;
   word-break: break-all;
 }
-.retry-row { margin-bottom: 12px; }
+.retry-row { margin-bottom: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
 .retry-row > button {
   height: 36px;
   padding: 0 12px;
@@ -2503,7 +2503,14 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   cursor: pointer;
 }
 .retry-row > button:hover { color: var(--accent); border-color: var(--accent); }
+.retry-row > button.destructive:hover {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--line));
+  background: color-mix(in srgb, var(--danger) 5%, var(--surface));
+}
+.retry-row > button:disabled { opacity: .55; cursor: wait; }
 .retry-row svg { width: 16px; height: 16px; }
+.retry-row > .alert { flex-basis: 100%; }
 .read-only-notice {
   margin-bottom: 12px;
   padding: 11px 13px;
@@ -2986,7 +2993,7 @@ pre {
 .history-table-head, .history-row {
   display: grid;
   grid-template-columns: minmax(260px, 2.25fr) minmax(140px, 1fr)
-    minmax(120px, .8fr) 90px 100px;
+    minmax(120px, .8fr) 90px 100px minmax(100px, .7fr);
   gap: 16px;
   align-items: center;
 }
@@ -3055,6 +3062,26 @@ pre {
 .history-events strong { color: var(--text-strong); font-size: 13px; }
 .history-events span, .history-row time { color: var(--muted); font-size: 10px; }
 .history-events.current strong { color: var(--accent); font-size: 11px; }
+.history-actions { display: flex; justify-content: flex-end; }
+.history-actions > span { color: var(--faint); font-size: 11px; }
+.history-actions button {
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 10.5px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.history-actions button:hover { color: var(--accent); border-color: var(--accent); }
+.history-actions button.danger:hover {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--line));
+}
+.history-actions button:disabled { opacity: .55; cursor: wait; }
+.history-action-error { margin-bottom: 12px; }
 .board-empty {
   min-height: 360px;
   padding: 56px 24px;
@@ -3461,7 +3488,8 @@ pre {
   .launch-copy-foot { display: none; }
   .launch-form-shell { padding: 22px 24px 24px; }
   .history-table-head, .history-row {
-    grid-template-columns: minmax(220px, 2fr) minmax(130px, 1fr) 80px 90px;
+    grid-template-columns: minmax(220px, 2fr) minmax(130px, 1fr)
+      80px 90px 110px;
   }
   .history-table-head > :nth-child(3),
   .history-delivery { display: none; }
@@ -3583,7 +3611,8 @@ pre {
   .history-task { grid-column: 1 / -1; }
   .history-task strong { white-space: normal; }
   .history-events { align-items: flex-end; }
-  .history-row time { grid-column: 1 / -1; }
+  .history-row time { grid-column: 1; }
+  .history-actions { grid-column: 2; justify-self: end; }
   .login-shell { padding: 18px; grid-template-columns: minmax(0, 500px); }
   .login-card { min-height: calc(100vh - 36px); padding: 38px; border-radius: 18px; }
   .login-aside { display: none; }
@@ -4255,7 +4284,9 @@ pre {
   --phase-color: #7267e9;
   --phase-next: #4f83ee;
   gap: 8px;
-  color: color-mix(in srgb, var(--phase-color) 62%, var(--muted));
+  /* 未到达的阶段不预先铺彩色；颜色只表达“已经走过”，当前节点单独
+     高亮。否则整条彩虹同时亮着，视线反而找不到流程停在哪里。 */
+  color: var(--faint);
   font-size: 10px;
   font-weight: 650;
 }
@@ -4269,19 +4300,25 @@ pre {
 .ws-progress .task-phase > i {
   width: 12px;
   height: 12px;
-  border: 2px solid color-mix(in srgb, var(--phase-color) 58%, var(--line));
-  background: color-mix(in srgb, var(--phase-color) 11%, var(--surface));
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--phase-color) 7%, transparent);
+  border: 2px solid var(--line-strong);
+  background: var(--surface);
+  box-shadow: none;
 }
 .ws-progress .task-phase:not(:last-child)::before {
   top: 4px;
   height: 4px;
   border-radius: 999px;
-  background: linear-gradient(90deg, var(--phase-color), var(--phase-next));
-  opacity: .24;
+  background: var(--line);
+  opacity: 1;
 }
-.ws-progress .task-phase.past::before { opacity: .92; }
-.ws-progress .task-phase.current::before { opacity: .38; }
+.ws-progress .task-phase.past {
+  color: color-mix(in srgb, var(--phase-color) 72%, var(--text));
+}
+.ws-progress .task-phase.past::before {
+  background: linear-gradient(90deg, var(--phase-color), var(--phase-next));
+  opacity: .92;
+}
+.ws-progress .task-phase.current::before { background: var(--line); opacity: 1; }
 .ws-progress .task-phase.past > i {
   border-color: var(--phase-color);
   background: var(--phase-color);

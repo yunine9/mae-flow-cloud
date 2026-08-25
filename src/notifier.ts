@@ -101,6 +101,18 @@ export class Notifier {
     return [...this.records.values()];
   }
 
+  /** 原位重跑或彻底删除后，旧任务通知不能继续占用幂等键。投递中的
+   * Promise 只持有 record 对象，删除 Map 项后即使晚到也不会复活。 */
+  purgeTask(taskId: string): number {
+    let removed = 0;
+    for (const [id, record] of this.records) {
+      if (record.task_id !== taskId) continue;
+      this.records.delete(id);
+      removed += 1;
+    }
+    return removed;
+  }
+
   /** 配置门禁问的:这个通知器要不要逼人配个人令牌?
    * 假件在场且没被管理页热改成真端点 → 不要(令牌没人消费);
    * 管理页一旦切了真端点,要求立刻恢复——判定跟着**生效端点**走,

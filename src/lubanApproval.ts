@@ -160,6 +160,31 @@ export class LubanApprovalGateway {
     }
   }
 
+  /** 同编号原位重跑后，手机端“刚才在看哪张卡”的短期上下文必须失效，
+   * 否则新一轮若恰好复用 waiting/version 形状，旧裸回复可能串单。回调
+   * message_id 的防重缓存继续保留——已处理消息仍不应被再次执行。 */
+  purgeTask(taskId: string): void {
+    for (const [account, cursor] of this.cursors) {
+      const entries = cursor.entries.filter((item) => item.taskId !== taskId);
+      const selected = cursor.selected?.taskId === taskId
+        ? undefined : cursor.selected;
+      if (!entries.length && !selected) {
+        this.cursors.delete(account);
+        continue;
+      }
+      this.cursors.set(account, {
+        ...cursor,
+        entries,
+        selected,
+        ...(selected ? {} : {
+          questionIndex: undefined,
+          answers: undefined,
+          answerNotes: undefined,
+        }),
+      });
+    }
+  }
+
   /** 固定 Token 只证明请求来自受信插件/桥；任务版本仍负责防陈旧决定。 */
   async handle(input: {
     rawBody: string;

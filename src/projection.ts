@@ -39,6 +39,12 @@ export interface ExternalAction {
   finishedAt?: string;
 }
 
+export interface ProjectionDeleteResult {
+  found: boolean;
+  deleted: boolean;
+  status?: string;
+}
+
 const SCHEMA = `
 create table if not exists tasks (
   task_id       text primary key,
@@ -240,6 +246,53 @@ export class PgProjection {
       startedAt: String(row.started_at),
       finishedAt: row.finished_at ? String(row.finished_at) : undefined,
     }));
+  }
+
+  /** 管理员“彻底删除”是少数不能 fail-open 的写操作：成功响应必须
+   * 表示摘要、事件和外部动作三张投影都已经消失。projection-only 的
+   * 老任务没有本地现场可裁决，故在同一事务里锁定状态并只删真终态。 */
+  async deleteTask(
+    taskId: string,
+    verifiedTerminal = false,
+  ): Promise<ProjectionDeleteResult> {
+    await this.ensureSchema();
+    const client = await this.pool.connect();
+    let transaction = false;
+    try {
+      await client.query("begin");
+      transaction = true;
+      const rows = await client.query(
+        "select status from tasks where task_id = $1 for update",
+        [taskId],
+      );
+      if (!rows.rowCount) {
+        await client.query("commit");
+        transaction = false;
+        return { found: false, deleted: false };
+      }
+      const status = String(rows.rows[0].status);
+      if (!verifiedTerminal
+          && !["completed", "failed", "canceled"].includes(status)) {
+        await client.query("rollback");
+        transaction = false;
+        return { found: true, deleted: false, status };
+      }
+      await client.query("delete from task_events where task_id = $1", [taskId]);
+      await client.query(
+        "delete from external_actions where task_id = $1",
+        [taskId],
+      );
+      await client.query("delete from tasks where task_id = $1", [taskId]);
+      await client.query("commit");
+      transaction = false;
+      return { found: true, deleted: true, status };
+    } catch (error) {
+      if (transaction) await client.query("rollback").catch(() => undefined);
+      this.fail(`deleteTask ${taskId}`, error);
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   /** 管理页主动自检：真实执行 select 1，但不改变写侧 fail-open 语义。 */

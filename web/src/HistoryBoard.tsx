@@ -2,8 +2,11 @@
 
 import { useEffect, useState } from "react";
 import {
+  deleteHistoryTask,
   listHistory,
+  rerunTaskFromStart,
   STATUS_TEXT,
+  type AuthUser,
   type TaskHistoryEntry,
   type TaskSummary,
 } from "./api";
@@ -48,13 +51,22 @@ const TILES = [
 
 interface HistoryBoardProps {
   tasks: TaskSummary[];
+  viewer: AuthUser;
+  onChanged: () => void | Promise<void>;
   onOpenTask?: (task: TaskSummary) => void;
 }
 
-export function HistoryBoard({ tasks, onOpenTask }: HistoryBoardProps) {
+export function HistoryBoard({
+  tasks,
+  viewer,
+  onChanged,
+  onOpenTask,
+}: HistoryBoardProps) {
   const [entries, setEntries] = useState<TaskHistoryEntry[]>();
   const [unavailable, setUnavailable] = useState("");
   const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState("");
+  const [actionError, setActionError] = useState("");
 
   async function load() {
     setLoading(true);
@@ -110,6 +122,8 @@ export function HistoryBoard({ tasks, onOpenTask }: HistoryBoardProps) {
         </div>
       )}
 
+      {actionError && <div className="alert history-action-error">{actionError}</div>}
+
       {!loading && visibleEntries.length === 0 && (
         <div className="board-empty">
           <span className="empty-database" aria-hidden>
@@ -144,11 +158,17 @@ export function HistoryBoard({ tasks, onOpenTask }: HistoryBoardProps) {
               <span>交付</span>
               <span>事件</span>
               <span>最近更新</span>
+              <span>操作</span>
             </div>
             <div className="history-rows">
               {visibleEntries.map((entry) => {
                 const currentTask = currentTasks.get(entry.id);
                 const title = historyTaskTitle(entry);
+                const terminal = ["completed", "failed", "canceled"]
+                  .includes(entry.status);
+                const canRerun = viewer.role !== "admin" && terminal
+                  && currentTask?.luban_account === viewer.username;
+                const canDelete = viewer.role === "admin" && terminal;
                 return (
                   <div className="history-row" key={entry.id}>
                     <div className="history-task">
@@ -193,6 +213,61 @@ export function HistoryBoard({ tasks, onOpenTask }: HistoryBoardProps) {
                       )}
                     </div>
                     <time dateTime={entry.updated_at}>{timeAgo(entry.updated_at)}</time>
+                    <div className="history-actions">
+                      {canRerun && (
+                        <button type="button" disabled={Boolean(busy)}
+                          onClick={async () => {
+                            if (!window.confirm(
+                              `确认清空 ${entry.id} 的旧现场并从第一步重跑？`
+                              + "同一任务编号会被覆盖，此操作不可撤销。",
+                            )) return;
+                            setBusy(entry.id);
+                            setActionError("");
+                            try {
+                              const result = await rerunTaskFromStart(entry.id);
+                              if (result.error) setActionError(result.error);
+                              else {
+                                await onChanged();
+                                await load();
+                              }
+                            } catch (error) {
+                              setActionError(error instanceof Error
+                                ? error.message : String(error));
+                            } finally {
+                              setBusy("");
+                            }
+                          }}>
+                          {busy === entry.id ? "处理中…" : "清空重跑"}
+                        </button>
+                      )}
+                      {canDelete && (
+                        <button type="button" className="danger"
+                          disabled={Boolean(busy)} onClick={async () => {
+                            if (!window.confirm(
+                              `确认彻底删除 ${entry.id}「${title}」？工作区、事件、`
+                              + "检视与数据库历史都会永久删除，此操作不可撤销。",
+                            )) return;
+                            setBusy(entry.id);
+                            setActionError("");
+                            try {
+                              const result = await deleteHistoryTask(entry.id);
+                              if (result.error) setActionError(result.error);
+                              else {
+                                await onChanged();
+                                await load();
+                              }
+                            } catch (error) {
+                              setActionError(error instanceof Error
+                                ? error.message : String(error));
+                            } finally {
+                              setBusy("");
+                            }
+                          }}>
+                          {busy === entry.id ? "删除中…" : "彻底删除"}
+                        </button>
+                      )}
+                      {!canRerun && !canDelete && <span>—</span>}
+                    </div>
                   </div>
                 );
               })}

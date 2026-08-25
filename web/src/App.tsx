@@ -569,7 +569,12 @@ export function App() {
           onSessionPatch={patchSession}
           onTasksChanged={refresh}
         />}
-        {view === "history" && <HistoryBoard tasks={tasks} onOpenTask={openArtifacts} />}
+        {view === "history" && <HistoryBoard
+          tasks={tasks}
+          viewer={session}
+          onChanged={refresh}
+          onOpenTask={openArtifacts}
+        />}
         {view === "users" && session.role === "admin"
           && <UsersBoard me={session.username} />}
         {view === "settings" && session.role === "admin" && <SettingsBoard />}

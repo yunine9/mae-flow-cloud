@@ -9,6 +9,7 @@ import {
   decide,
   fetchActivity,
   listActions,
+  rerunTaskFromStart,
   listTimeline,
   retryTask,
   repairStopped,
@@ -238,8 +239,14 @@ export function TaskCard({
             </div>
           )}
           {canOperate && (task.status === "failed"
-            || task.status === "completed" || repairStopped(task)) && (
-            <RetryButton taskId={task.id} onDone={onChanged} />
+            || task.status === "completed" || task.status === "canceled"
+            || repairStopped(task)) && (
+            <RetryButton
+              taskId={task.id}
+              onDone={onChanged}
+              allowFromStart={["completed", "failed", "canceled"]
+                .includes(task.status)}
+            />
           )}
           {chainReview && canOperate && (
             <div className="chain-review-entry">
@@ -589,23 +596,57 @@ function rewritePanelPath(context: string, taskId: string): string {
 export function RetryButton({
   taskId,
   onDone,
+  allowFromStart = false,
 }: {
   taskId: string;
   onDone: () => void;
+  allowFromStart?: boolean;
 }) {
   const [error, setError] = useState("");
+  const [busy, setBusy] = useState<"retry" | "rerun" | "">("");
   return (
     <div className="retry-row">
-      <button type="button" onClick={async () => {
-        const result = await retryTask(taskId);
-        setError(result.error ?? "");
-        onDone();
+      <button type="button" disabled={Boolean(busy)} onClick={async () => {
+        setBusy("retry");
+        try {
+          const result = await retryTask(taskId);
+          setError(result.error ?? "");
+          if (!result.error) onDone();
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : String(cause));
+        } finally {
+          setBusy("");
+        }
       }}>
         <svg viewBox="0 0 20 20" aria-hidden>
           <path d="M15.5 7A6 6 0 1 0 16 12M15.5 3v4h-4" />
         </svg>
-        重跑续推
+        {busy === "retry" ? "正在续推…" : "重跑续推"}
       </button>
+      {allowFromStart && (
+        <button className="destructive" type="button" disabled={Boolean(busy)}
+          onClick={async () => {
+            if (!window.confirm(
+              `确认清空 ${taskId} 的旧工作区、流程、事件和交付记录，`
+              + "并用同一任务编号从第一步重跑？此操作不可撤销。",
+            )) return;
+            setBusy("rerun");
+            try {
+              const result = await rerunTaskFromStart(taskId);
+              setError(result.error ?? "");
+              if (!result.error) onDone();
+            } catch (cause) {
+              setError(cause instanceof Error ? cause.message : String(cause));
+            } finally {
+              setBusy("");
+            }
+          }}>
+          <svg viewBox="0 0 20 20" aria-hidden>
+            <path d="M4 5h12M7 5V3h6v2m-7 3 .7 8h6.6L14 8M8.5 9.5v4m3-4v4" />
+          </svg>
+          {busy === "rerun" ? "正在清空重跑…" : "清空并从头重跑"}
+        </button>
+      )}
       {error && <div className="alert">{error}</div>}
     </div>
   );

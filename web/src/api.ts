@@ -805,6 +805,30 @@ export async function retryTask(
   return {};
 }
 
+/** 清空同一任务的旧现场并从第一步重跑。服务端只允许责任人操作真终态。 */
+export async function rerunTaskFromStart(
+  taskId: string,
+): Promise<{ task?: TaskSummary; error?: string }> {
+  const response = await fetch(`/tasks/${taskId}/rerun`, { method: "POST" });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    return { error: String(body.error ?? `HTTP ${response.status}`) };
+  }
+  return { task: await response.json() };
+}
+
+/** 管理员彻底删除真终态历史及 Cloud 内全部关联现场。 */
+export async function deleteHistoryTask(
+  taskId: string,
+): Promise<{ error?: string }> {
+  const response = await fetch(`/tasks/${taskId}`, { method: "DELETE" });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    return { error: String(body.error ?? `HTTP ${response.status}`) };
+  }
+  return {};
+}
+
 /** 跑动中插话:发送即打断,模型把手头这一轮做完就收到。
  * 服务端拒绝的理由(正等你决定 / 没有在跑的会话)原样带回,前端不改写
  * ——它比我们更清楚这一单此刻处在什么状态。 */
