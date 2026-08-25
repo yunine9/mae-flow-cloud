@@ -16,6 +16,7 @@ import {
   rmSync,
   statSync,
 } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AddressInfo } from "node:net";
@@ -103,6 +104,30 @@ function flag(name: string): string | undefined {
 function has(name: string): boolean {
   return process.argv.includes(name)
     || CONFIG[name.replace(/^--/, "")] === true;
+}
+
+/** 内核解释器选择:MAE_FLOW_PYTHON 显式指定 > 启动时真跑一次探测。
+ * Windows 的 python3 常是应用商店的执行别名桩——`--version` 有回显、
+ * 真执行却无输出直接失败(2026-08-25 本机实测 rc=49),内核 dispatch
+ * 挂上去整条链都起不来。坏桩回落到 python;都探测不动就保留缺省值,
+ * 内核链失败会带着原始报错如实报告,不静默换解释器。 */
+function resolveKernelPython(): string {
+  const override = process.env.MAE_FLOW_PYTHON;
+  if (override?.trim()) return override.trim();
+  const candidates = process.platform === "win32"
+    ? ["python3", "python"] : ["python3"];
+  for (const candidate of candidates) {
+    try {
+      const probe = spawnSync(candidate, ["-c", "print(1)"],
+        { encoding: "utf-8", timeout: 15_000 });
+      if (probe.status === 0 && probe.stdout.toString().trim() === "1") {
+        return candidate;
+      }
+    } catch {
+      // 超时/找不到都继续试下一个候选。
+    }
+  }
+  return "python3";
 }
 
 /** 可重复参数(如 --isolate-volume a:b --isolate-volume c:d);
@@ -308,11 +333,12 @@ async function main(): Promise<void> {
         ? repoFlag : resolve(repoFlag))
     : undefined;
   let host = kernelMode
-    ? { kernelRoot: kernelRoot!, repoPath, python: "python3" }
+    ? { kernelRoot: kernelRoot!, repoPath, python: resolveKernelPython() }
     : undefined;
   if (host) {
     console.log(`[serve] 内核模式:内核 ${host.kernelRoot}`
-      + `,代码仓 ${repoPath ?? "(下单时逐单填写)"}`);
+      + `,代码仓 ${repoPath ?? "(下单时逐单填写)"}`
+      + `,内核 python: ${host.python}`);
   } else if (kernelRoot) {
     console.log("[serve] 内核在场但未开内核模式:演示形态。"
       + "正式部署请加 --kernel-mode；--repo 仅用于钉死单仓的试跑");
