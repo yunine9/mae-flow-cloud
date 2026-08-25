@@ -16,6 +16,8 @@ export const TASK_CONTAINER_HOME = "/home/mae-flow";
 const DEFAULT_PIDS_LIMIT = 512;
 const DEFAULT_STOP_GRACE_SECONDS = 5;
 const DEFAULT_MANAGEMENT_TIMEOUT_MS = 30_000;
+const RUNNING_PROBE_ATTEMPTS = 3;
+const RUNNING_PROBE_BACKOFF_MS = [100, 300] as const;
 const DEFAULT_HOME_TMPFS = "rw,nosuid,nodev,size=256m,mode=1777";
 // Maven libjansi、JNA/SQLite 等会从 /tmp mmap/执行 native library；Docker
 // daemon 在部分环境把 tmpfs 落成 noexec，所以这里必须显式写 exec。
@@ -76,6 +78,26 @@ export class DockerCommandError extends Error {
   ) {
     super(stderr || `docker ${args.join(" ")} 执行失败`);
     this.name = "DockerCommandError";
+  }
+}
+
+export type TaskContainerUnavailableKind =
+  | "missing"
+  | "stopped"
+  | "inspect_unavailable";
+
+/**
+ * 容器执行面的结构化基础设施错误。调用方不能把它当成普通 Bash 失败
+ * 继续让模型试命令；prepush 会据此熔断本轮并如实上报平台故障。
+ */
+export class TaskContainerUnavailableError extends Error {
+  constructor(
+    readonly kind: TaskContainerUnavailableKind,
+    message: string,
+    options: ErrorOptions = {},
+  ) {
+    super(message, options);
+    this.name = "TaskContainerUnavailableError";
   }
 }
 
@@ -897,16 +919,65 @@ export class TaskContainer {
     }
   }
 
-  private async assertRunning(): Promise<void> {
+  /**
+   * exec 前只需要一个 running 位，不应反复拉取包含环境和挂载的完整
+   * inspect JSON。标量输出既降低旧 Docker CLI 的传输面，也让诊断日志
+   * 永远不必接触可能敏感的容器元数据。
+   */
+  private async containerRunning(reference: string): Promise<boolean | undefined> {
     try {
-      const inspected = await this.containerInspect(this.containerId);
-      if (inspected?.State?.Running) return;
-      this.lifecycle = "failed";
-      throw new Error(`任务容器 ${this.name} 已丢失或未运行，拒绝执行命令`);
+      const raw = (await this.command([
+        "inspect", "--type", "container",
+        "--format", "{{.State.Running}}", reference,
+      ])).trim().toLowerCase();
+      if (raw === "true") return true;
+      if (raw === "false") return false;
+      throw new Error(
+        `Docker container inspect 未返回 running 标量（${Buffer.byteLength(raw)} bytes）`,
+      );
     } catch (error) {
-      this.lifecycle = "failed";
+      if (isMissingContainer(error)) return undefined;
       throw error;
     }
+  }
+
+  private async assertRunning(): Promise<void> {
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= RUNNING_PROBE_ATTEMPTS; attempt += 1) {
+      try {
+        const running = await this.containerRunning(this.containerId);
+        if (running === true) return;
+        this.lifecycle = "failed";
+        const kind = running === undefined ? "missing" : "stopped";
+        throw new TaskContainerUnavailableError(
+          kind,
+          `任务容器 ${this.name} 已${kind === "missing" ? "丢失" : "停止"}，拒绝执行命令`,
+        );
+      } catch (error) {
+        if (error instanceof TaskContainerUnavailableError) throw error;
+        lastError = error;
+        if (attempt < RUNNING_PROBE_ATTEMPTS) {
+          this.log?.(
+            `容器运行状态暂不可确认 name=${this.name} attempt=${attempt}`
+              + `/${RUNNING_PROBE_ATTEMPTS}: ${errorDetail(error)}`,
+          );
+          await new Promise<void>((resolveRetry) => {
+            const timer = setTimeout(
+              resolveRetry,
+              RUNNING_PROBE_BACKOFF_MS[attempt - 1],
+            );
+            timer.unref?.();
+          });
+        }
+      }
+    }
+    // inspect 传输/解析失败只代表“当前不可确认”，不能把内存状态永久
+    // 毒成 failed；后续由宿主熔断本轮，下一轮仍可重新探测或重建容器。
+    throw new TaskContainerUnavailableError(
+      "inspect_unavailable",
+      `任务容器 ${this.name} 运行状态连续 ${RUNNING_PROBE_ATTEMPTS} 次无法确认`,
+      { cause: lastError },
+    );
   }
 
   /**

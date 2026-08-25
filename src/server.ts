@@ -48,8 +48,8 @@ import {
 } from "./taskService.ts";
 import { buildTimeline } from "./timeline.ts";
 import {
-  listArtifacts,
-  readArtifact,
+  listArtifactsAsync,
+  readArtifactAsync,
   resolveArtifactRoot,
 } from "./artifacts.ts";
 import { WEB_PAGE } from "./webPage.ts";
@@ -871,7 +871,7 @@ export function createTaskServer(
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
           const author = viewer?.username ?? "本地用户";
           if (request.method === "GET" && parts.length === 3) {
-            return json(response, 200, service.listAnnotations(id));
+            return json(response, 200, await service.listAnnotationsAsync(id));
           }
           if (request.method === "POST" && parts.length === 3) {
             const body = await readBody(request);
@@ -1016,11 +1016,13 @@ export function createTaskServer(
             target.workspace, panel ? dirname(dirname(panel)) : undefined);
           if (parts.length === 3) {
             // 没有现场时给空列表:流程还没走到 init 不是错误。
-            return json(response, 200, root ? listArtifacts(root) : []);
+            return json(response, 200,
+              root ? await listArtifactsAsync(root) : []);
           }
           // name 里带 `/`(单号目录/文件名):编码与未编码两种形态都收。
           const name = decodeURIComponent(parts.slice(3).join("/"));
-          const artifact = root ? readArtifact(root, name) : undefined;
+          const artifact = root
+            ? await readArtifactAsync(root, name) : undefined;
           if (!artifact) {
             return json(response, 404,
               { error: `没有可检视的产物「${name}」` });

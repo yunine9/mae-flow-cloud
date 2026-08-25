@@ -10,6 +10,7 @@ import {
   type DockerStreamProcess,
   TASK_CONTAINER_HOME,
   TaskContainer,
+  TaskContainerUnavailableError,
   dockerAvailable,
   sweepManagedTaskContainers,
   taskContainerInstance,
@@ -38,6 +39,7 @@ class FakeDockerRunner implements DockerRunner {
   insecureInspect = false;
   extraImageEnv: string[] = [];
   hangingStream = false;
+  inspectFailuresRemaining = 0;
   streamKillCount = 0;
   configUser?: string;
   private runArguments: string[] = [];
@@ -56,6 +58,11 @@ class FakeDockerRunner implements DockerRunner {
     }
     if (args[0] === "inspect") {
       if (!this.exists) throw missing(args);
+      if (this.inspectFailuresRemaining > 0) {
+        this.inspectFailuresRemaining -= 1;
+        throw new Error("simulated truncated inspect response");
+      }
+      if (args.includes("--format")) return String(this.running);
       return JSON.stringify([this.inspectRecord()]);
     }
     if (args[0] === "image" && args[1] === "inspect") {
@@ -233,6 +240,42 @@ test("start 强制加固参数、精确 safe.directory，并记录不可变镜�
 
   await subject.stop();
   assert.equal(subject.state, "stopped");
+});
+
+test("exec 的瞬时 inspect 故障会重试且不会永久污染 lifecycle", async () => {
+  const runner = new FakeDockerRunner(workspace());
+  const subject = container(runner);
+  await subject.start();
+  runner.inspectFailuresRemaining = 1;
+
+  const result = await subject.exec("printf ok", runner.workspace, {
+    onData: () => undefined,
+  });
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(subject.state, "running");
+  assert.ok(runner.commands.filter((args) => args.includes("--format")).length >= 2);
+  await subject.stop();
+});
+
+test("连续 inspect 基础设施故障按结构化错误熔断但允许下一轮重新探测", async () => {
+  const runner = new FakeDockerRunner(workspace());
+  const subject = container(runner);
+  await subject.start();
+  runner.inspectFailuresRemaining = 3;
+
+  await assert.rejects(
+    subject.exec("printf first", runner.workspace, { onData: () => undefined }),
+    (error: unknown) => error instanceof TaskContainerUnavailableError
+      && error.kind === "inspect_unavailable",
+  );
+  assert.equal(subject.state, "running", "不可观测不等于容器已停止");
+
+  const recovered = await subject.exec("printf second", runner.workspace, {
+    onData: () => undefined,
+  });
+  assert.equal(recovered.exitCode, 0);
+  await subject.stop();
 });
 
 test("疑似凭据、保留环境、Docker socket 与 host network 均 fail-closed", async () => {

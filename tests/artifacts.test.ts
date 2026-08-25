@@ -27,7 +27,9 @@ import type { AddressInfo } from "node:net";
 import {
   DIFF_NAME,
   listArtifacts,
+  listArtifactsAsync,
   readArtifact,
+  readArtifactAsync,
   resolveArtifactRoot,
   type ArtifactMeta,
 } from "../src/artifacts.ts";
@@ -124,6 +126,19 @@ test("未提交改动:已暂存/未暂存/未跟踪都在快照里", () => {
   assert.match(String(snapshot?.content), /未跟踪/);
   assert.match(String(snapshot?.content), /untracked\.txt/);
   assert.match(String(snapshot?.content), /没跟踪的新文件/);
+});
+
+test("异步工作台读侧与原有差异快照语义一致", async () => {
+  const cwd = makeSite({ docs: { "spec.md": "# 规格\n" }, git: true });
+  writeFileSync(join(cwd, "tracked.txt"), "异步路径修改\n");
+  writeFileSync(join(cwd, "untracked.txt"), "异步路径未跟踪\n");
+
+  const items = await listArtifactsAsync(cwd);
+  assert.ok(items.some((item) => item.name === DIFF_NAME));
+  assert.ok(items.some((item) => item.name.endsWith("/spec.md")));
+  const snapshot = await readArtifactAsync(cwd, DIFF_NAME);
+  assert.match(String(snapshot?.content), /异步路径修改/);
+  assert.match(String(snapshot?.content), /异步路径未跟踪/);
 });
 
 test("Mae-Flow 流程状态不混入代码差异,普通未跟踪文件仍展示", () => {

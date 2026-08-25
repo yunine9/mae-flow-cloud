@@ -8,7 +8,7 @@
  * 真正的网络 push 还需独立的临时传输仓和凭据沙箱，不能只靠本模块。
  */
 
-import { spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { execFile, spawnSync, type SpawnSyncReturns } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -29,6 +29,14 @@ export interface SafeGitOptions {
   env?: NodeJS.ProcessEnv;
   maxBuffer?: number;
   timeoutMs?: number;
+}
+
+export interface SafeGitAsyncResult {
+  status: number | null;
+  signal: NodeJS.Signals | null;
+  stdout: string;
+  stderr: string;
+  error?: Error;
 }
 
 export interface SafeGitView {
@@ -206,4 +214,46 @@ export function runSafeWorktreeGit(
   } finally {
     view.cleanup();
   }
+}
+
+/** HTTP/观测路径必须使用异步 Git。同步版本仍供启动期和状态机内极短的
+ * 本地查询使用；把它放进请求回调会让一个慢 diff 拖死整个 Node 服务。 */
+export function runSafeWorktreeGitAsync(
+  cwd: string,
+  args: readonly string[],
+  options: SafeGitOptions = {},
+): Promise<SafeGitAsyncResult> {
+  let view: SafeGitView;
+  try {
+    view = createSafeGitView(cwd);
+  } catch (error) {
+    return Promise.resolve({
+      status: null,
+      signal: null,
+      stdout: "",
+      stderr: "",
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
+  }
+  return new Promise((resolveResult) => {
+    execFile("git", safeGitArguments(cwd, args, options.configs), {
+      cwd,
+      encoding: "utf-8",
+      maxBuffer: options.maxBuffer ?? 20 * 1024 * 1024,
+      timeout: options.timeoutMs,
+      env: view.environment(options.env),
+    }, (error, stdout, stderr) => {
+      view.cleanup();
+      const code = (error as NodeJS.ErrnoException | null)?.code;
+      resolveResult({
+        status: error ? (typeof code === "number" ? code : null) : 0,
+        signal: (error as NodeJS.ErrnoException & {
+          signal?: NodeJS.Signals;
+        } | null)?.signal ?? null,
+        stdout: stdout ?? "",
+        stderr: stderr ?? "",
+        ...(error ? { error } : {}),
+      });
+    });
+  });
 }

@@ -4,6 +4,7 @@ import type {
   TaskContainerFactory,
   TaskContainerFactoryInput,
 } from "../../src/taskService.ts";
+import { TaskContainerUnavailableError } from "../../src/containerRuntime.ts";
 import { PRE_PUSH_ENVIRONMENT_SUCCESS_MARKER } from
   "../../src/prepushEnvironment.ts";
 
@@ -23,6 +24,8 @@ export class FakeTaskContainerHarness {
   readonly events: string[] = [];
   /** 专门验证“环境坏时不启动模型”的集成路径。 */
   preflightFailure?: string;
+  /** 环境预检通过后的执行面故障，用于证明宿主会熔断而不是让模型重试。 */
+  executionUnavailable?: "missing" | "stopped" | "inspect_unavailable";
 
   readonly factory: TaskContainerFactory = (
     input: TaskContainerFactoryInput,
@@ -59,6 +62,12 @@ export class FakeTaskContainerHarness {
           }
           options.onData(Buffer.from(`${PRE_PUSH_ENVIRONMENT_SUCCESS_MARKER}\n`));
           return { exitCode: 0 };
+        }
+        if (this.executionUnavailable) {
+          throw new TaskContainerUnavailableError(
+            this.executionUnavailable,
+            `simulated ${this.executionUnavailable}`,
+          );
         }
         if (command.includes("__MFC_HOLD__")) {
           options.onData(Buffer.from("build is running\n"));

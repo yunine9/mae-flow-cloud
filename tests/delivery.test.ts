@@ -985,6 +985,35 @@ test("宿主推送失败 → 不硬造 MR,停在验证中并说明原因", async
   }
 });
 
+test("宿主 push 等待远端 Hook 时不阻塞 Node 事件循环", async () => {
+  const cwd = makeSourceRepo();
+  const remote = mkdtempSync(join(tmpdir(), "mfc-async-push-remote-"));
+  git(remote, "init", "--bare", "--quiet");
+  const hook = join(remote, "hooks", "pre-receive");
+  writeFileSync(hook, "#!/bin/sh\nsleep 0.2\nexit 0\n");
+  chmodSync(hook, 0o700);
+  const service = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-async-push-data-")),
+    provider: "fixture",
+    model: "fixture",
+    modelsJson: {},
+  });
+  let timerFired = false;
+  const pushing = (service as any).pushFromHost({
+    cwd,
+    summary: { id: "task-async-push", repo_url: remote },
+  }, "async-push-test");
+  setTimeout(() => { timerFired = true; }, 30);
+  try {
+    const receipt = await pushing;
+    assert.match(receipt.sha, /^[a-f0-9]{40}$/);
+    assert.equal(timerFired, true,
+      "远端 Hook 很慢时定时器、HTTP 和 SSE 回调必须仍能执行");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+  }
+});
+
 test("某一项永远不给结果 → 核销重试也吃预算,不无限空转", async () => {
   // 实测过的另一潭死水:平台把 UT 报成 skipped(rules 跳过、或 manual
   // 没人点),内核判 INCOMPLETE,而宿主的证据重试没有预算——6 秒里

@@ -38,7 +38,11 @@ import {
   type AnnotationInput,
   type SentVia,
 } from "./annotations.ts";
-import { readArtifact, resolveArtifactRoot } from "./artifacts.ts";
+import {
+  readArtifact,
+  readArtifactAsync,
+  resolveArtifactRoot,
+} from "./artifacts.ts";
 import { KernelHost } from "./kernelHost.ts";
 import {
   matchesStepChoice,
@@ -80,6 +84,7 @@ import {
 import { CloudSession, type Outcome } from "./sessionDriver.ts";
 import {
   TaskContainer,
+  TaskContainerUnavailableError,
   sweepManagedTaskContainers,
   taskContainerInstance,
   type DockerRunner,
@@ -170,7 +175,7 @@ import {
 } from "./tokenUsage.ts";
 import {
   createSafeGitView,
-  runSafeWorktreeGit,
+  runSafeWorktreeGitAsync,
   safeGitEnvironment,
 } from "./safeGit.ts";
 import {
@@ -590,6 +595,10 @@ export interface TaskServiceOptions {
     /** 编译属于重资源动作，和普通 Agent 并发分开计数。默认只放行一单，
      * 避免同一台内网宿主被多个 Maven/C++ 进程瞬间打满。 */
     buildSlots?: number;
+    /** 单次 prepush Agent 的墙钟预算。命令各自有 timeout 仍不够：模型可
+     * 在多个失败命令之间无限换策略。默认 30 分钟，超时按基础设施失败
+     * 收口并销毁 attempt 容器。 */
+    attemptTimeoutMs?: number;
   };
   /** DTS 日志/换库/回滚的部署适配器。缺席时问题单仍可按手填材料完成
    * 诊断和代码交付，绝不能因为尚未接内部环境系统而卡死。 */
@@ -1006,6 +1015,90 @@ export interface DecisionSubmission {
   repository_skill_catalog_token?: string;
   selected_repository_skill_ids?: string[];
   selected_repository_knowledge_ids?: string[];
+}
+
+interface AsyncGitResult {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+  signal: NodeJS.Signals | null;
+  timedOut: boolean;
+  error?: Error;
+}
+
+/** 宿主网络 Git 的异步执行边界。timeout 时杀整个进程组，避免只杀 git
+ * 却留下 ssh/credential 子进程；输出有界，远端异常也不能撑爆服务。 */
+function runGitProcess(
+  args: string[],
+  options: {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    timeoutMs: number;
+    maxBuffer?: number;
+  },
+): Promise<AsyncGitResult> {
+  return new Promise((resolveResult) => {
+    const detached = process.platform !== "win32";
+    const child = spawn("git", args, {
+      cwd: options.cwd,
+      env: options.env,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+      detached,
+    });
+    const maxBuffer = options.maxBuffer ?? 20 * 1024 * 1024;
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let overflow: Error | undefined;
+    let timedOut = false;
+    let spawnError: Error | undefined;
+    const append = (target: Buffer[], chunk: Buffer, stream: "stdout" | "stderr") => {
+      const current = stream === "stdout" ? stdoutBytes : stderrBytes;
+      const remaining = maxBuffer - current;
+      if (remaining <= 0) {
+        overflow ??= new Error(`git ${stream} 超过 ${maxBuffer} bytes`);
+        return;
+      }
+      const kept = chunk.subarray(0, remaining);
+      target.push(kept);
+      if (stream === "stdout") stdoutBytes += kept.length;
+      else stderrBytes += kept.length;
+      if (kept.length < chunk.length) {
+        overflow ??= new Error(`git ${stream} 超过 ${maxBuffer} bytes`);
+      }
+    };
+    child.stdout?.on("data", (chunk: Buffer) => append(stdout, chunk, "stdout"));
+    child.stderr?.on("data", (chunk: Buffer) => append(stderr, chunk, "stderr"));
+    const killGroup = () => {
+      try {
+        if (detached && child.pid) process.kill(-child.pid, "SIGKILL");
+        else child.kill("SIGKILL");
+      } catch {
+        // 进程可能恰好已经退出。
+      }
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killGroup();
+    }, options.timeoutMs);
+    timer.unref?.();
+    child.once("error", (error) => {
+      spawnError = error;
+    });
+    child.once("close", (status, signal) => {
+      clearTimeout(timer);
+      resolveResult({
+        status: (spawnError || overflow || timedOut) ? null : status,
+        signal,
+        timedOut,
+        stdout: Buffer.concat(stdout).toString("utf-8"),
+        stderr: Buffer.concat(stderr).toString("utf-8"),
+        ...((spawnError ?? overflow) ? { error: spawnError ?? overflow } : {}),
+      });
+    });
+  });
 }
 
 export class TaskService {
@@ -2227,6 +2320,29 @@ export class TaskService {
     const root = this.artifactRoot(id);
     const checks = reanchor(items, (artifact) =>
       root ? readArtifact(root, artifact)?.content : undefined);
+    return { items, checks, reply: this.annotationReply(task, items) };
+  }
+
+  /** 工作台轮询专用异步读侧。先按 artifact 去重读取，再用同一份快照
+   * 重锚定，避免 N 条代码批注触发 N 次完整 Git diff。 */
+  async listAnnotationsAsync(id: string): Promise<{
+    items: Annotation[];
+    checks: AnchorCheck[];
+    reply?: { texts: string[]; truncated: boolean };
+  }> {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    const items = this.annotations(task).visible();
+    const root = this.artifactRoot(id);
+    const contents = new Map<string, string | undefined>();
+    if (root) {
+      await Promise.all([...new Set(items.map((item) => item.artifact))]
+        .map(async (artifact) => {
+          contents.set(artifact,
+            (await readArtifactAsync(root, artifact))?.content);
+        }));
+    }
+    const checks = reanchor(items, (artifact) => contents.get(artifact));
     return { items, checks, reply: this.annotationReply(task, items) };
   }
 
@@ -6118,20 +6234,20 @@ export class TaskService {
   /** 读取真正准备传输的 Git 现场。PASS 收据只在 clean worktree 上签发，
    * 因而稳定态的 fingerprint 实际由 HEAD + 空 status 唯一确定；运行中
    * 仍把完整 status 纳入哈希，恢复时不会复用半截 attempt。 */
-  private prePushRevision(task: TaskState): PrePushRevision {
+  private async prePushRevision(task: TaskState): Promise<PrePushRevision> {
     if (!task.cwd) throw new Error("任务没有代码工作区，不能执行推送前验证");
-    const head = runSafeWorktreeGit(
-      task.cwd, ["rev-parse", "--verify", "HEAD"]);
+    const head = await runSafeWorktreeGitAsync(
+      task.cwd, ["rev-parse", "--verify", "HEAD"], { timeoutMs: 30_000 });
     const sha = String(head.stdout ?? "").trim();
     if (head.status !== 0 || !sha) {
       throw new Error(`推送前读取 HEAD 失败: ${String(head.stderr ?? "")}`);
     }
-    const status = runSafeWorktreeGit(
+    const status = await runSafeWorktreeGitAsync(
       task.cwd, [
         "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", ".",
         ":(exclude).mae-flow.json", ":(exclude).mae-flow-*",
         ":(exclude).mae-flow-work/**", ":(exclude).codecheckcli/**",
-      ]);
+      ], { timeoutMs: 30_000 });
     if (status.status !== 0) {
       throw new Error(`推送前读取工作区失败: ${String(status.stderr ?? "")}`);
     }
@@ -6143,14 +6259,14 @@ export class TaskService {
     };
   }
 
-  private prePushWorktreeClean(task: TaskState): boolean {
+  private async prePushWorktreeClean(task: TaskState): Promise<boolean> {
     if (!task.cwd) return false;
-    const status = runSafeWorktreeGit(
+    const status = await runSafeWorktreeGitAsync(
       task.cwd, [
         "status", "--porcelain=v1", "--untracked-files=all", "--", ".",
         ":(exclude).mae-flow.json", ":(exclude).mae-flow-*",
         ":(exclude).mae-flow-work/**", ":(exclude).codecheckcli/**",
-      ]);
+      ], { timeoutMs: 30_000 });
     return status.status === 0 && !String(status.stdout ?? "").trim();
   }
 
@@ -6315,6 +6431,19 @@ export class TaskService {
     task.container = container;
     const abortController = new AbortController();
     task.prepushAbort = abortController;
+    let infrastructureFailure = "";
+    let resolveInfrastructure!: () => void;
+    const infrastructureFailed = new Promise<void>((resolveFailure) => {
+      resolveInfrastructure = resolveFailure;
+    });
+    const failInfrastructure = (detail: string) => {
+      if (infrastructureFailure) return;
+      infrastructureFailure = detail;
+      resolveInfrastructure();
+      // 先发布结构化失败再中止容器；waitForTurn 即使同时收到 interrupted，
+      // 也会以下面的 infrastructureFailure 事实为准。
+      abortController.abort();
+    };
     const interrupted = new Promise<Outcome>((resolve) => {
       const finish = () => resolve({
         status: "session_ended",
@@ -6325,8 +6454,26 @@ export class TaskService {
       else abortController.signal.addEventListener("abort", finish, { once: true });
     });
     const waitForTurn = (turn: Promise<Outcome>) =>
-      Promise.race([turn, interrupted]);
+      Promise.race([
+        turn,
+        interrupted,
+        infrastructureFailed.then((): Outcome => ({
+          status: "session_ended",
+          reason: "prepush_infrastructure_failure",
+          detail: infrastructureFailure,
+        })),
+      ]);
     let driver: CloudSession | undefined;
+    const configuredAttemptTimeout = Number(
+      this.options.prepush?.attemptTimeoutMs ?? 30 * 60 * 1_000,
+    );
+    const attemptTimeoutMs = Number.isFinite(configuredAttemptTimeout)
+        && configuredAttemptTimeout > 0
+      ? configuredAttemptTimeout : 30 * 60 * 1_000;
+    const attemptTimer = setTimeout(() => failInfrastructure(
+      `推送前验证超过 ${Math.ceil(attemptTimeoutMs / 60_000)} 分钟，已终止本轮`,
+    ), attemptTimeoutMs);
+    attemptTimer.unref?.();
     const withExecution = (result: PrePushRunResult): PrePushRunResult => {
       const metadata = container.metadata;
       if (!metadata) return result;
@@ -6385,7 +6532,7 @@ export class TaskService {
         );
         return withExecution({
           status: "infrastructure_failure",
-          sha: this.prePushRevision(task).sha,
+          sha: (await this.prePushRevision(task)).sha,
           message: preflight.detail,
         });
       }
@@ -6422,8 +6569,18 @@ export class TaskService {
         )}`,
         onTokenUsage: (sample) => this.recordTaskTokenUsage(task, sample),
         bashOperations: {
-          exec: (command, dir, execOptions) =>
-            container.exec(command, dir, execOptions),
+          exec: async (command, dir, execOptions) => {
+            try {
+              return await container.exec(command, dir, execOptions);
+            } catch (error) {
+              if (error instanceof TaskContainerUnavailableError) {
+                failInfrastructure(
+                  `推送前容器不可用（${error.kind}）：${error.message}`,
+                );
+              }
+              throw error;
+            }
+          },
         },
         afterFileMutation: (path) => {
           repairContainerMutationOwnership({
@@ -6441,10 +6598,20 @@ export class TaskService {
       task.driver = driver;
       let outcome = await waitForTurn(driver.start(prePushMission(request)));
       for (let correction = 0; correction < 3; correction += 1) {
+        if (infrastructureFailure) {
+          await driver.abort().catch((error) => this.options.log?.(
+            `任务 ${task.summary.id} prepush 基础设施熔断后会话中止失败: ${String(error)}`,
+          ));
+          return withExecution({
+            status: "infrastructure_failure",
+            sha: (await this.prePushRevision(task)).sha,
+            message: infrastructureFailure,
+          });
+        }
         if (outcome.status === "session_ended") {
           return withExecution({
             status: "infrastructure_failure",
-            sha: this.prePushRevision(task).sha,
+            sha: (await this.prePushRevision(task)).sha,
             message: outcome.detail ?? outcome.reason ?? "推送前会话异常结束",
           });
         }
@@ -6452,7 +6619,7 @@ export class TaskService {
         if (report && report.status !== "passed") {
           return withExecution({
             status: report.status,
-            sha: this.prePushRevision(task).sha,
+            sha: (await this.prePushRevision(task)).sha,
             message: report.summary,
             report,
           });
@@ -6460,11 +6627,11 @@ export class TaskService {
         const evidence = report
           ? verifyPrePushEvidence(eventLog.replay(), report)
           : "收口缺少合法的 <prepush-result> 结构";
-        const dirty = !this.prePushWorktreeClean(task);
+        const dirty = !await this.prePushWorktreeClean(task);
         if (report && !evidence && !dirty) {
           return withExecution({
             status: "passed",
-            sha: this.prePushRevision(task).sha,
+            sha: (await this.prePushRevision(task)).sha,
             message: report.summary,
             report,
           });
@@ -6472,7 +6639,7 @@ export class TaskService {
         if (correction === 2) {
           return withExecution({
             status: "code_failure",
-            sha: this.prePushRevision(task).sha,
+            sha: (await this.prePushRevision(task)).sha,
             message: [evidence, dirty ? "工作区仍有未提交业务改动" : ""]
               .filter(Boolean).join("；"),
           });
@@ -6486,6 +6653,7 @@ export class TaskService {
       }
       throw new Error("推送前验证会话超过收口预算");
     } finally {
+      clearTimeout(attemptTimer);
       if (driver && task.driver === driver) task.driver = undefined;
       if (task.prepushAbort === abortController) task.prepushAbort = undefined;
       driver?.dispose();
@@ -6503,7 +6671,7 @@ export class TaskService {
     epoch: number,
   ): Promise<boolean> {
     const at = new Date().toISOString();
-    const initialRevision = this.prePushRevision(task);
+    const initialRevision = await this.prePushRevision(task);
     let state = restorePrePushVerification(
       task.summary.delivery?.prepush, initialRevision, at);
     this.setPrePushState(task, state);
@@ -6552,7 +6720,7 @@ export class TaskService {
     } catch (error) {
       result = {
         status: "infrastructure_failure",
-        sha: this.prePushRevision(task).sha,
+        sha: (await this.prePushRevision(task)).sha,
         message: `推送前验证执行失败: ${String(error)}`,
       };
     } finally {
@@ -6560,7 +6728,7 @@ export class TaskService {
     }
     if (!this.current(task, epoch)) return false;
 
-    const finalRevision = this.prePushRevision(task);
+    const finalRevision = await this.prePushRevision(task);
     if (state.sha !== finalRevision.sha
         || state.workspace_fingerprint !== finalRevision.workspace_fingerprint) {
       state = observePrePushRevision(
@@ -6575,7 +6743,7 @@ export class TaskService {
         message: `验证结果绑定 ${result.sha.slice(0, 12)}，但当前 HEAD 是 `
           + `${finalRevision.sha.slice(0, 12)}，拒绝复用陈旧结论`,
       };
-    } else if (result.status === "passed" && !this.prePushWorktreeClean(task)) {
+    } else if (result.status === "passed" && !await this.prePushWorktreeClean(task)) {
       result = {
         status: "code_failure",
         sha: finalRevision.sha,
@@ -6665,7 +6833,7 @@ export class TaskService {
       if (!await this.preparePush(task, branch, baseline, epoch)) return;
       if (!this.current(task, epoch)) return;
       const previous = task.summary.delivery;
-      const pushReceipt = this.pushFromHost(task, branch);
+      const pushReceipt = await this.pushFromHost(task, branch);
       const sha = pushReceipt.sha;
       if (previous) previous.git_push = pushReceipt;
       else task.summary.delivery = { git_push: pushReceipt };
@@ -8170,7 +8338,7 @@ export class TaskService {
   }
 
   /** Host Git 动作使用的短生命周期 helper。目录/脚本仅活在一次
-   * clone 或 push 的同步调用窗口，绝不进入 agentDir，也不写进仓库
+   * clone 或 push 的受控调用窗口，绝不进入 agentDir，也不写进仓库
    * config；调用方必须 finally cleanupHostGitCredential。 */
   private prepareHostGitCredential(
     credential: { username: string; password: string },
@@ -8359,7 +8527,10 @@ export class TaskService {
 
   /** Agent 会话已释放后由宿主完成唯一一次传输，并立刻从远端反查 SHA。
    * 返回值既是 TaskSummary 现场，也是 `pipeline record` 的内核收据。 */
-  private pushFromHost(task: TaskState, branch: string): GitPushReceipt {
+  private async pushFromHost(
+    task: TaskState,
+    branch: string,
+  ): Promise<GitPushReceipt> {
     if (task.driver) {
       throw new Error("安全拒绝：Agent 会话仍在，不能执行宿主 Git 推送");
     }
@@ -8386,57 +8557,58 @@ export class TaskService {
       gitView = createSafeGitView(task.cwd);
       const transportGit = (
         args: string[], extraEnv?: NodeJS.ProcessEnv,
-      ) => spawnSync(
-        "git", [...sandbox.args, ...args], {
-          encoding: "utf-8",
+      ) => runGitProcess([...sandbox.args, ...args], {
+          timeoutMs: 30_000,
           env: { ...sandbox.env, ...extraEnv },
         });
-      const worktreeGit = (args: string[]) => spawnSync(
-        "git", [...sandbox.args, ...args], {
+      const worktreeGit = (args: string[]) => runGitProcess(
+        [...sandbox.args, ...args], {
           cwd: task.cwd,
-          encoding: "utf-8",
+          timeoutMs: 30_000,
           env: gitView!.environment(sandbox.env),
         });
-      const checked = transportGit(["check-ref-format", "--branch", branch]);
+      const checked = await transportGit(["check-ref-format", "--branch", branch]);
       if (checked.status !== 0) {
         throw new Error(`分支名不合法，拒绝推送: ${branch}`);
       }
       // 只从工作区读取要交付的对象/HEAD；传输在新建 bare 仓中进行，
       // 因而工作区 hooks、origin、url.*、protocol.*、helper 全部不生效。
-      const head = worktreeGit(["rev-parse", "--verify", "HEAD"]);
+      const head = await worktreeGit(["rev-parse", "--verify", "HEAD"]);
       const sha = String(head.stdout ?? "").trim();
       if (head.status !== 0 || !sha) {
         throw new Error(`读取待推送 HEAD 失败: ${String(head.stderr ?? "")}`);
       }
       const objects = gitView.objectDirectory;
       const staging = join(sandbox.dir, "transport.git");
-      const initialized = transportGit(["init", "--quiet", "--bare", staging]);
+      const initialized = await transportGit(["init", "--quiet", "--bare", staging]);
       if (initialized.status !== 0) {
         throw new Error(`创建宿主传输仓失败: ${String(initialized.stderr ?? "")}`);
       }
       const objectEnv = { GIT_ALTERNATE_OBJECT_DIRECTORIES: objects };
-      const objectCheck = transportGit([
+      const objectCheck = await transportGit([
         `--git-dir=${staging}`, "cat-file", "-e", `${sha}^{commit}`,
       ], objectEnv);
       if (objectCheck.status !== 0) {
         throw new Error("待推送 HEAD 不是可读取的提交对象");
       }
-      const pushed = spawnSync("git", [
+      const pushed = await runGitProcess([
         ...sandbox.args, `--git-dir=${staging}`, "push", "--no-verify",
         "--porcelain", remoteUrl, `${sha}:${ref}`,
       ], {
-        encoding: "utf-8",
+        timeoutMs: 5 * 60_000,
         env: { ...sandbox.env, ...objectEnv },
       });
       if (pushed.status !== 0) {
-        const stderrText = String(pushed.stderr ?? pushed.stdout);
+        const stderrText = pushed.timedOut
+          ? "超过 5 分钟，已终止 git/ssh 进程组"
+          : String(pushed.stderr || pushed.stdout || pushed.error);
         throw new Error(`宿主推送失败: ${stderrText}`);
       }
-      const verified = spawnSync("git", [
+      const verified = await runGitProcess([
         ...sandbox.args, `--git-dir=${staging}`,
         "ls-remote", "--heads", remoteUrl, ref,
       ], {
-        encoding: "utf-8",
+        timeoutMs: 60_000,
         env: sandbox.env,
       });
       const remoteSha = String(verified.stdout ?? "").trim().split(/\s+/)[0];

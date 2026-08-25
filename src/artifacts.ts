@@ -25,11 +25,13 @@ import {
   statSync,
 } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
-import { runSafeWorktreeGit } from "./safeGit.ts";
+import { runSafeWorktreeGit, runSafeWorktreeGitAsync } from "./safeGit.ts";
 
 const WORK_DIR = ".mae-flow-work";
 /** 单个产物最多回传这么多字节:一个巨型 diff 不能把页面拖死。 */
 const MAX_BYTES = 512 * 1024;
+const MAX_UNTRACKED_DIFF_FILES = 50;
+const UNTRACKED_DIFF_CONCURRENCY = 4;
 const TRUNCATED_NOTE =
   "\n\n…(内容超过 512 KB,只回传前 512 KB;完整内容见工作区文件)";
 /** Git 工作区差异的固定标识:它是"虚拟产物",不对应磁盘上某个文件。 */
@@ -169,6 +171,22 @@ function git(cwd: string, args: string[]): string | undefined {
   }
 }
 
+async function gitAsync(cwd: string, args: string[]): Promise<string | undefined> {
+  try {
+    const hardened = args[0] === "diff"
+      ? ["diff", "--no-ext-diff", "--no-textconv", ...args.slice(1)]
+      : args;
+    const run = await runSafeWorktreeGitAsync(cwd, hardened, {
+      maxBuffer: 16 * 1024 * 1024,
+      timeoutMs: 10_000,
+    });
+    if (run.error || run.status !== 0) return undefined;
+    return run.stdout;
+  } catch {
+    return undefined;
+  }
+}
+
 /** 当前工作区分支。detached HEAD 仍给出短提交，避免把真实状态误报成
  * “未知分支”。 */
 function currentBranch(cwd: string): string | undefined {
@@ -176,6 +194,14 @@ function currentBranch(cwd: string): string | undefined {
     ?.trim();
   if (branch) return branch;
   const head = git(cwd, ["rev-parse", "--short", "HEAD"])?.trim();
+  return head ? `detached@${head}` : undefined;
+}
+
+async function currentBranchAsync(cwd: string): Promise<string | undefined> {
+  const branch = (await gitAsync(
+    cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"]))?.trim();
+  if (branch) return branch;
+  const head = (await gitAsync(cwd, ["rev-parse", "--short", "HEAD"]))?.trim();
   return head ? `detached@${head}` : undefined;
 }
 
@@ -190,6 +216,23 @@ function untrackedDiff(cwd: string, path: string): string | undefined {
     ], { timeoutMs: 10_000, maxBuffer: 16 * 1024 * 1024 });
     if (run.error || (run.status !== 0 && run.status !== 1)) return undefined;
     return (run.stdout ?? "").trim();
+  } catch {
+    return undefined;
+  }
+}
+
+async function untrackedDiffAsync(
+  cwd: string,
+  path: string,
+): Promise<string | undefined> {
+  try {
+    const run = await runSafeWorktreeGitAsync(cwd, [
+      "diff", "--no-ext-diff", "--no-textconv", "--no-index",
+      "--", "/dev/null", path,
+    ], { timeoutMs: 10_000, maxBuffer: 16 * 1024 * 1024 });
+    if (run.error && run.status !== 1) return undefined;
+    if (run.status !== 0 && run.status !== 1) return undefined;
+    return run.stdout.trim();
   } catch {
     return undefined;
   }
@@ -243,6 +286,52 @@ function taskBaseline(cwd: string): string | undefined {
   }
   return git(cwd, ["merge-base", "HEAD", "origin/HEAD"])?.trim()
     || undefined;
+}
+
+async function taskBaselineAsync(cwd: string): Promise<string | undefined> {
+  try {
+    const state = JSON.parse(readFileSync(join(cwd, ".mae-flow.json"), "utf-8"));
+    const recorded = [
+      state?.step_heads?.branch_create,
+      state?.step_heads?.workflow_select,
+    ].find((value) => typeof value === "string" && value.trim());
+    if (recorded
+        && await gitAsync(cwd, ["cat-file", "-e", `${recorded}^{commit}`])
+          !== undefined) {
+      return String(recorded);
+    }
+    const branch = String(state?.config?.["基线分支"] ?? "").trim();
+    if (branch) {
+      for (const ref of [branch, `origin/${branch}`]) {
+        const base = (await gitAsync(cwd, ["merge-base", "HEAD", ref]))?.trim();
+        if (base) return base;
+      }
+    }
+  } catch {
+    // 与同步旁路一致：旧现场继续尝试 Git 的远端默认分支。
+  }
+  return (await gitAsync(cwd, ["merge-base", "HEAD", "origin/HEAD"]))?.trim()
+    || undefined;
+}
+
+async function untrackedSnapshots(
+  cwd: string,
+  paths: string[],
+): Promise<string[]> {
+  const snapshots = paths.map((path) => `?? ${path}`);
+  const detailed = Math.min(paths.length, MAX_UNTRACKED_DIFF_FILES);
+  let next = 0;
+  const worker = async () => {
+    while (next < detailed) {
+      const index = next;
+      next += 1;
+      snapshots[index] = await untrackedDiffAsync(cwd, paths[index])
+        || snapshots[index];
+    }
+  };
+  await Promise.all(Array.from(
+    { length: Math.min(UNTRACKED_DIFF_CONCURRENCY, detailed) }, worker));
+  return snapshots;
 }
 
 function diffChunks(text: string): Array<{ path: string; text: string }> {
@@ -364,10 +453,80 @@ function collectDiff(
   return { text: sections.join("\n\n"), changed };
 }
 
+async function collectDiffAsync(
+  cwd: string,
+): Promise<{ text: string; changed: string[] } | undefined> {
+  const toplevel = (await gitAsync(cwd, ["rev-parse", "--show-toplevel"]))?.trim();
+  let sameRoot = false;
+  try {
+    sameRoot = !!toplevel && realpathSync(toplevel) === realpathSync(cwd);
+  } catch {
+    sameRoot = false;
+  }
+  if (!sameRoot) return undefined;
+  const status = await gitAsync(
+    cwd, ["status", "--porcelain", "--untracked-files=all"]);
+  if (status === undefined) return undefined;
+  const worktreeChanged = changedPaths(status);
+  const fullContext = "--unified=999999";
+  const untracked = status.split("\n")
+    .filter((line) => line.startsWith("??"))
+    .map((line) => line.slice(3).trim())
+    .filter((path) => path && !isFlowControlPath(path));
+  const baseline = await taskBaselineAsync(cwd);
+  const sections: string[] = [];
+  let trackedPaths: string[] = [];
+  if (baseline) {
+    const [aggregateText, committedText] = await Promise.all([
+      gitAsync(cwd, ["diff", fullContext, baseline, "--"]),
+      gitAsync(cwd, ["diff", "--name-only", baseline, "HEAD", "--"]),
+    ]);
+    const aggregate = (aggregateText ?? "").trim();
+    const committed = new Set((committedText ?? "")
+      .split("\n").filter(Boolean));
+    const statuses = statusEntries(status);
+    const grouped = new Map<ChangeOrigin, string[]>();
+    for (const chunk of diffChunks(aggregate)
+      .filter((item) => !isFlowControlPath(item.path))) {
+      trackedPaths.push(chunk.path);
+      const origin = originOf(chunk.path, committed, statuses);
+      grouped.set(origin, [...(grouped.get(origin) ?? []), chunk.text]);
+    }
+    for (const origin of ["committed", "committed_working", "staged",
+      "staged_working", "unstaged"] as ChangeOrigin[]) {
+      const chunks = grouped.get(origin);
+      if (chunks?.length) {
+        sections.push(`## ${ORIGIN_HEADING[origin]}\n\n${chunks.join("\n\n")}`);
+      }
+    }
+  } else {
+    const [stagedText, unstagedText] = await Promise.all([
+      gitAsync(cwd, ["diff", "--cached", fullContext]),
+      gitAsync(cwd, ["diff", fullContext]),
+    ]);
+    const staged = deliveryDiff((stagedText ?? "").trim());
+    const unstaged = deliveryDiff((unstagedText ?? "").trim());
+    if (staged) sections.push(`## ${ORIGIN_HEADING.staged}\n\n${staged}`);
+    if (unstaged) sections.push(`## ${ORIGIN_HEADING.unstaged}\n\n${unstaged}`);
+    trackedPaths = worktreeChanged.filter((path) => !untracked.includes(path));
+  }
+  if (untracked.length) {
+    const snapshots = await untrackedSnapshots(cwd, untracked);
+    sections.push(`## 未跟踪(untracked)\n\n${snapshots.join("\n\n")}`);
+  }
+  const changed = Array.from(new Set([...trackedPaths, ...untracked]));
+  return {
+    text: sections.length ? sections.join("\n\n") : "本任务暂无代码变更。",
+    changed,
+  };
+}
+
 /** 本任务变更的元信息。时间取"改动文件里最新的那个 mtime":
  * 工作区干净时退回目录时间,免得一个空 diff 长期霸占列表首位。 */
-function diffMeta(cwd: string): ArtifactMeta | undefined {
-  const diff = collectDiff(cwd);
+function diffMetaFromSnapshot(
+  cwd: string,
+  diff: { text: string; changed: string[] } | undefined,
+): ArtifactMeta | undefined {
   if (!diff) return undefined;
   let newest = 0;
   for (const path of diff.changed) {
@@ -391,6 +550,10 @@ function diffMeta(cwd: string): ArtifactMeta | undefined {
     bytes: Buffer.byteLength(diff.text, "utf-8"),
     modified_at: new Date(newest).toISOString(),
   };
+}
+
+function diffMeta(cwd: string): ArtifactMeta | undefined {
+  return diffMetaFromSnapshot(cwd, collectDiff(cwd));
 }
 
 /** 截断到字节上限。按字节切会把 UTF-8 多字节字符切一半,
@@ -449,6 +612,25 @@ export function listArtifacts(cwd: string): ArtifactMeta[] {
     right.modified_at.localeCompare(left.modified_at));
 }
 
+/** HTTP 读侧版本：Git 子进程不阻塞事件循环，编译产生大量未跟踪文件时
+ * 页面请求可以变慢，但健康检查、任务列表和其他人的工作台仍可响应。 */
+export async function listArtifactsAsync(cwd: string): Promise<ArtifactMeta[]> {
+  const items: ArtifactMeta[] = [];
+  try {
+    items.push(...collectDocs(cwd).map((doc) => doc.meta));
+  } catch {
+    // 文档一路塌了，Git 一路仍可返回。
+  }
+  try {
+    const diff = diffMetaFromSnapshot(cwd, await collectDiffAsync(cwd));
+    if (diff) items.push(diff);
+  } catch {
+    // 观测旁路 fail-open。
+  }
+  return items.sort((left, right) =>
+    right.modified_at.localeCompare(left.modified_at));
+}
+
 /**
  * 读一份产物。name 必须出现在 listArtifacts 的结果里,否则一律
  * undefined——白名单是这里唯一的安全边界。
@@ -476,6 +658,29 @@ export function readArtifact(
     const read = readCapped(doc.path);
     if (!read) return undefined;
     return { ...doc.meta, content: read.content, truncated: read.truncated };
+  } catch {
+    return undefined;
+  }
+}
+
+export async function readArtifactAsync(
+  cwd: string,
+  name: string,
+): Promise<ArtifactContent | undefined> {
+  const wanted = String(name ?? "").trim();
+  if (!wanted) return undefined;
+  if (wanted !== DIFF_NAME) return readArtifact(cwd, wanted);
+  try {
+    const diff = await collectDiffAsync(cwd);
+    const meta = diffMetaFromSnapshot(cwd, diff);
+    if (!meta || !diff) return undefined;
+    const { content, truncated } = cap(diff.text);
+    return {
+      ...meta,
+      content,
+      truncated,
+      branch: await currentBranchAsync(cwd),
+    };
   } catch {
     return undefined;
   }

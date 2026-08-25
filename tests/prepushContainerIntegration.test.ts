@@ -284,6 +284,70 @@ test("native prepush 环境预检失败时不启动模型、不盲探网络也�
   }
 });
 
+test("native prepush 容器基础设施错误立即熔断，不让模型循环重试", async () => {
+  const platform = new FakeGitPlatform();
+  platform.initBare(sourceRepo(),
+    mkdtempSync(join(tmpdir(), "mfc-prepush-circuit-platform-")));
+  await platform.start();
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-prepush-circuit-data-"));
+  const retryScenes = Array.from({ length: 20 }, (_, index): Scene => ({
+    tool: { name: "bash", input: { command: `echo retry-${index}` } },
+  }));
+  const model = new ScriptedModelServer([
+    ...codingScenes(),
+    ...retryScenes,
+    { text: "不应在基础设施故障后继续到这里。" },
+  ], "scripted-v1", {
+    linear: true,
+    beforeScene: managedFlowFixture(dataDir, {
+      branch: "master_bot_REQ_CONTAINER", ticket: "REQ_CONTAINER",
+    }),
+  });
+  await model.start();
+  const containers = new FakeTaskContainerHarness();
+  containers.executionUnavailable = "inspect_unavailable";
+  const service = new TaskService({
+    dataDir,
+    provider: "maeflow",
+    model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    host: {
+      kernelRoot: KERNEL_ROOT,
+      repoPath: platform.barePath,
+      python: "python3",
+    },
+    delivery: {
+      platformUrl: platform.baseUrl,
+      pollIntervalMs: 100,
+      pollTimeoutMs: 500,
+    },
+    prepush: { enabled: true, attemptTimeoutMs: 5_000 },
+    isolation: {
+      image: "fixture/build-toolchain:test",
+      containerFactory: containers.factory,
+    },
+  });
+  try {
+    const id = service.create("REQ_CONTAINER：容器故障必须熔断", {
+      ticket: "REQ_CONTAINER",
+    }).id;
+    await until(() => service.get(id)?.delivery?.prepush?.state
+      === "environment_error", "容器故障按基础设施失败收口");
+    assert.match(String(service.get(id)?.detail ?? ""),
+      /inspect_unavailable|容器不可用/);
+    assert.equal(model.requests.length, codingScenes().length + 1,
+      "第一次结构化容器错误后不得再发模型请求");
+    const attempt = containers.records.find((record) =>
+      record.name.endsWith("-prepush"));
+    assert.equal(attempt?.stopped, true);
+    assert.equal(platform.mergeRequests.length, 0);
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+    await platform.stop();
+  }
+});
+
 test("暂停 native prepush 后销毁旧容器，恢复会新建 attempt 并重跑", async () => {
   const platform = new FakeGitPlatform();
   platform.initBare(sourceRepo(),

@@ -10,7 +10,10 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runSafeWorktreeGit } from "../src/safeGit.ts";
+import {
+  runSafeWorktreeGit,
+  runSafeWorktreeGitAsync,
+} from "../src/safeGit.ts";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf-8" }).trim();
@@ -88,4 +91,19 @@ test("安全 Git 代理不读取 clean/smudge 配置，也拒绝外部 objects a
   writeFileSync(join(info, "alternates"), `${outside}\n`);
   assert.throws(() => runSafeWorktreeGit(cwd, ["rev-parse", "HEAD"]),
     /alternates 不允许/);
+});
+
+test("异步安全 Git 等待子进程时不阻塞事件循环", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "mfc-safe-git-async-"));
+  git(cwd, "init", "--quiet");
+  let timerFired = false;
+  const run = runSafeWorktreeGitAsync(cwd, ["pause"], {
+    configs: [["alias.pause", "!sleep 0.15"]],
+    timeoutMs: 2_000,
+  });
+  setTimeout(() => { timerFired = true; }, 20);
+  const result = await run;
+  assert.equal(result.status, 0, String(result.stderr));
+  assert.equal(timerFired, true,
+    "Git 子进程运行期间 Node 定时器和 HTTP 回调必须仍可执行");
 });
