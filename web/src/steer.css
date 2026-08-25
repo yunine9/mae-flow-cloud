@@ -26,14 +26,14 @@
 }
 
 .steer-head > div strong {
-  font-size: 14px;
-  font-weight: 650;
+  font-size: 16px;
+  font-weight: 700;
   color: var(--text-strong);
 }
 
 .steer-head > div span {
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 12.5px;
   line-height: 1.45;
 }
 
@@ -44,9 +44,9 @@
   background: var(--surface-muted);
   border: 1px solid var(--line);
   border-radius: 999px;
-  font-size: 9.5px;
+  font-size: 11.5px;
   font-style: normal;
-  font-weight: 650;
+  font-weight: 700;
   white-space: nowrap;
 }
 
@@ -92,10 +92,10 @@
   display: block;
 }
 
-.collaboration-tabs strong { font-size: 11.5px; }
+.collaboration-tabs strong { font-size: 13.5px; }
 .collaboration-tabs small {
   margin-top: 2px;
-  font-size: 9.5px;
+  font-size: 11.5px;
   line-height: 1.35;
   color: var(--muted);
 }
@@ -103,7 +103,7 @@
 .steer-copy {
   margin: -2px 0 2px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 13px;
   line-height: 1.5;
 }
 
@@ -112,7 +112,7 @@
   box-sizing: border-box;
   resize: vertical;
   font: inherit;
-  font-size: 13px;
+  font-size: 15px;
   line-height: 1.6;
   padding: 11px 12px;
   color: var(--text);
@@ -150,18 +150,18 @@
 .steer-actions > div small {
   max-width: 360px;
   color: var(--danger);
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.4;
 }
 
 .steer-hint {
-  font-size: 12px;
+  font-size: 14px;
   color: var(--muted);
 }
 
 .steer-send {
   font: inherit;
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 600;
   padding: 8px 14px;
   color: #fff;
@@ -199,7 +199,7 @@
   align-items: baseline;
   gap: 8px;
   padding: 5px 8px;
-  font-size: 11.5px;
+  font-size: 13.5px;
   line-height: 1.5;
   background: var(--surface-soft);
   border-radius: 7px;
@@ -207,7 +207,7 @@
 
 .steer-log-state {
   flex: none;
-  font-weight: 650;
+  font-weight: 700;
   padding: 1px 7px;
   border-radius: 999px;
 }
@@ -244,20 +244,20 @@
   padding-left: 9px;
   border-left: 2px solid var(--line);
   color: var(--text);
-  font-size: 11px;
+  font-size: 13px;
   line-height: 1.6;
   overflow-wrap: anywhere;
 }
 
 .steer-said em {
   font-style: normal;
-  font-weight: 650;
-  font-size: 10px;
+  font-weight: 700;
+  font-size: 12px;
   color: var(--muted);
 }
 
 /* "读到了但还没说话"是一句解释,不是内容,弱化处理。 */
-.steer-said.quiet { color: var(--muted); font-size: 10.5px; }
+.steer-said.quiet { color: var(--muted); font-size: 12.5px; }
 
 /* 旁路助手：状态、对话、工具结果都在一个视觉层级里。用户无需到 SSE
    猜它有没有执行；SSE 只承担完整现场与排障。 */
@@ -287,12 +287,12 @@
   background: var(--muted);
 }
 
-.assistant-state strong { font-size: 11.5px; }
+.assistant-state strong { font-size: 13.5px; }
 .assistant-state > span {
   flex: 1;
   max-width: 72%;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.45;
   text-align: right;
   overflow-wrap: anywhere;
@@ -327,11 +327,11 @@
 
 .assistant-handoff.changed i { background: var(--attention); }
 .assistant-handoff.blocked i { background: var(--danger); }
-.assistant-handoff strong { font-size: 11px; }
+.assistant-handoff strong { font-size: 13px; }
 .assistant-handoff p {
   margin: 4px 0 0 14px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.5;
 }
 
@@ -339,7 +339,7 @@
 .assistant-handoff summary {
   color: var(--muted);
   cursor: pointer;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .assistant-handoff ul {
@@ -351,8 +351,8 @@
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 7px;
-  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 9.5px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
   line-height: 1.55;
 }
 
@@ -387,12 +387,12 @@
   margin-bottom: 4px;
 }
 
-.assistant-conversation article strong { font-size: 10px; }
-.assistant-conversation article time { color: var(--muted); font-size: 9px; }
+.assistant-conversation article strong { font-size: 12px; }
+.assistant-conversation article time { color: var(--muted); font-size: 11px; }
 .assistant-conversation article p {
   margin: 0;
   color: var(--text);
-  font-size: 11px;
+  font-size: 13px;
   line-height: 1.65;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -414,8 +414,8 @@
   padding: 1px 2px 4px;
 }
 
-.assistant-tools > header strong { font-size: 10.5px; }
-.assistant-tools > header span { color: var(--muted); font-size: 9.5px; }
+.assistant-tools > header strong { font-size: 12.5px; }
+.assistant-tools > header span { color: var(--muted); font-size: 11.5px; }
 .assistant-tools details {
   overflow: hidden;
   background: var(--surface);
@@ -438,11 +438,11 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-size: 10.5px;
+  font-size: 12.5px;
   white-space: nowrap;
 }
 
-.assistant-tools summary span { color: var(--muted); font-size: 9.5px; }
+.assistant-tools summary span { color: var(--muted); font-size: 11.5px; }
 .assistant-tools summary i.passed { background: var(--success); }
 .assistant-tools summary i.failed { background: var(--danger); }
 .assistant-tools summary i.running { background: var(--active); }
@@ -454,7 +454,7 @@
   color: var(--muted);
   background: var(--surface-soft);
   border-top: 1px solid var(--line);
-  font-size: 9.5px;
+  font-size: 11.5px;
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -470,7 +470,7 @@
   border: 1px solid var(--line-strong);
   border-radius: 9px;
   font: inherit;
-  font-size: 12px;
+  font-size: 14px;
   cursor: pointer;
 }
 
@@ -487,21 +487,21 @@
   box-shadow: var(--shadow-sm);
 }
 .ws-collaboration-view .steer-head > div { gap: 4px; }
-.ws-collaboration-view .steer-head > div strong { font-size: 17px; }
-.ws-collaboration-view .steer-head > div span { font-size: 11.5px; }
-.ws-collaboration-view .steer-head > em { padding: 5px 10px; font-size: 10px; }
+.ws-collaboration-view .steer-head > div strong { font-size: 19px; }
+.ws-collaboration-view .steer-head > div span { font-size: 13.5px; }
+.ws-collaboration-view .steer-head > em { padding: 5px 10px; font-size: 12px; }
 .ws-collaboration-view .collaboration-tabs { gap: 7px; padding: 5px; }
 .ws-collaboration-view .collaboration-tabs button { min-height: 52px; padding: 9px 12px; }
-.ws-collaboration-view .collaboration-tabs strong { font-size: 12.5px; }
-.ws-collaboration-view .collaboration-tabs small { font-size: 10.5px; }
-.ws-collaboration-view .steer-copy { font-size: 12px; }
-.ws-collaboration-view .steer-input { min-height: 108px; font-size: 13.5px; }
+.ws-collaboration-view .collaboration-tabs strong { font-size: 14.5px; }
+.ws-collaboration-view .collaboration-tabs small { font-size: 12.5px; }
+.ws-collaboration-view .steer-copy { font-size: 14px; }
+.ws-collaboration-view .steer-input { min-height: 108px; font-size: 15.5px; }
 .ws-collaboration-view .assistant-state,
 .ws-collaboration-view .assistant-handoff { padding: 11px 13px; }
 .ws-collaboration-view .assistant-state strong,
-.ws-collaboration-view .assistant-handoff strong { font-size: 12px; }
+.ws-collaboration-view .assistant-handoff strong { font-size: 14px; }
 .ws-collaboration-view .assistant-state > span,
-.ws-collaboration-view .assistant-handoff p { font-size: 10.5px; }
+.ws-collaboration-view .assistant-handoff p { font-size: 12.5px; }
 .ws-collaboration-view .assistant-conversation {
   max-height: min(480px, 52vh);
   padding: 7px;
@@ -512,8 +512,8 @@
   padding: 12px 14px;
   border-radius: 11px;
 }
-.ws-collaboration-view .assistant-conversation article strong { font-size: 10.5px; }
-.ws-collaboration-view .assistant-conversation article p { font-size: 12.5px; line-height: 1.72; }
+.ws-collaboration-view .assistant-conversation article strong { font-size: 12.5px; }
+.ws-collaboration-view .assistant-conversation article p { font-size: 14.5px; line-height: 1.72; }
 .ws-collaboration-view .assistant-tools {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 7px;
@@ -521,7 +521,7 @@
 }
 .ws-collaboration-view .assistant-tools > header { grid-column: 1 / -1; padding-bottom: 5px; }
 .ws-collaboration-view .assistant-tools summary { min-height: 40px; padding: 8px 10px; }
-.ws-collaboration-view .assistant-tools pre { max-height: 260px; font-size: 10.5px; }
+.ws-collaboration-view .assistant-tools pre { max-height: 260px; font-size: 12.5px; }
 .ws-collaboration-view .steer-send,
 .ws-collaboration-view .assistant-return { min-height: 38px; padding-left: 16px; padding-right: 16px; }
 

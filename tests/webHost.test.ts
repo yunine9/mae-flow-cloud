@@ -52,6 +52,7 @@ test("配 webRoot:index 与资产按类型出文件,API 与穿越各归各位", 
   mkdirSync(join(webRoot, "assets"));
   writeFileSync(join(webRoot, "index.html"), "<title>正式前端</title>");
   writeFileSync(join(webRoot, "assets", "app.js"), "console.log(1)");
+  writeFileSync(join(webRoot, "assets", "inter.woff2"), "font-data");
   writeFileSync(join(webRoot, "..", "secret.txt"), "不该被读到");
   const { base, close } = await startServer(webRoot);
   try {
@@ -72,6 +73,13 @@ test("配 webRoot:index 与资产按类型出文件,API 与穿越各归各位", 
       "text/javascript; charset=utf-8");
     // 带 hash 的资产反过来可以长期缓存:改了内容就是新文件名。
     assert.match(asset.headers.get("cache-control") ?? "", /immutable/);
+
+    // 字体随 Linux 服务端的前端构建发布，由 Windows 浏览器下载使用；
+    // 必须声明字体类型，不能依赖浏览器容忍 application/octet-stream。
+    const font = await fetch(base + "/assets/inter.woff2");
+    assert.equal(font.status, 200);
+    assert.equal(font.headers.get("content-type"), "font/woff2");
+    assert.match(font.headers.get("cache-control") ?? "", /immutable/);
 
     // API 路由优先于静态文件,不被前端接管。
     const api = await fetch(base + "/tasks");
