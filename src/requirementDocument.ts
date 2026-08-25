@@ -1,0 +1,117 @@
+/**
+ * 用户直接提供的 Markdown 需求文档。
+ *
+ * 小文档可以直接进首轮上下文；长文档必须完整落盘，让 Agent 按章节
+ * 读取，不能为了省上下文先让模型做摘要——摘要可能恰好丢掉验收约束。
+ */
+import {
+  closeSync,
+  constants,
+  mkdirSync,
+  openSync,
+  writeFileSync,
+} from "node:fs";
+import { join } from "node:path";
+
+export const MAX_REQUIREMENT_DOCUMENT_BYTES = 512 * 1024;
+export const INLINE_REQUIREMENT_DOCUMENT_BYTES = 32 * 1024;
+export const STORED_REQUIREMENT_DOCUMENT = "requirement-input.md";
+export const AGENT_REQUIREMENT_DOCUMENT = ".mae-flow-requirement.md";
+
+export interface RequirementDocumentMeta {
+  name: string;
+  bytes: number;
+  context_mode: "inline" | "file";
+}
+
+function normalizedName(name: string | undefined): string | undefined {
+  const value = name?.trim();
+  if (!value) return undefined;
+  if (value.length > 160 || /[/\\\0]/.test(value)
+      || !value.toLowerCase().endsWith(".md")) {
+    throw new Error("设计文档只支持文件名不超过 160 个字符的 .md 文件");
+  }
+  return value;
+}
+
+export function requirementDocumentMeta(
+  content: string,
+  uploadedName?: string,
+  maxBytes = MAX_REQUIREMENT_DOCUMENT_BYTES,
+): RequirementDocumentMeta | undefined {
+  const bytes = Buffer.byteLength(content, "utf-8");
+  if (bytes > maxBytes) {
+    throw new Error(`设计文档不能超过 ${Math.floor(maxBytes / 1024)} KiB；`
+      + "请拆成主设计文档与仓内参考资料");
+  }
+  const name = normalizedName(uploadedName);
+  if (!name && bytes <= INLINE_REQUIREMENT_DOCUMENT_BYTES) return undefined;
+  return {
+    name: name ?? "需求设计文档.md",
+    bytes,
+    context_mode: bytes > INLINE_REQUIREMENT_DOCUMENT_BYTES ? "file" : "inline",
+  };
+}
+
+/** O_NOFOLLOW 避免业务仓预埋同名软链，让宿主写出任务边界。 */
+function writeNoFollow(path: string, content: string): void {
+  const descriptor = openSync(path,
+    constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC
+      | (constants.O_NOFOLLOW ?? 0),
+    0o600);
+  try {
+    writeFileSync(descriptor, content, "utf-8");
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+export function storeRequirementDocument(
+  workspace: string,
+  content: string,
+  meta: RequirementDocumentMeta | undefined,
+): void {
+  if (meta?.context_mode !== "file") return;
+  mkdirSync(workspace, { recursive: true });
+  writeNoFollow(join(workspace, STORED_REQUIREMENT_DOCUMENT), content);
+}
+
+/** 把长文档放进 Agent 可读的工作区。返回的是 prompt/内核配置使用的
+ * 相对路径；短文档无需产生平台文件。 */
+export function materializeRequirementDocument(
+  workspace: string,
+  content: string,
+  meta: RequirementDocumentMeta | undefined,
+): string | undefined {
+  if (meta?.context_mode !== "file") return undefined;
+  writeNoFollow(join(workspace, AGENT_REQUIREMENT_DOCUMENT), content);
+  return AGENT_REQUIREMENT_DOCUMENT;
+}
+
+function headings(content: string): string[] {
+  return content.split(/\r?\n/)
+    .map((line) => line.match(/^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/)?.[1]?.trim())
+    .filter((line): line is string => Boolean(line))
+    .slice(0, 40);
+}
+
+export function requirementContext(
+  content: string,
+  meta: RequirementDocumentMeta | undefined,
+  readablePath?: string,
+): string {
+  if (meta?.context_mode !== "file") return content;
+  const outline = headings(content);
+  const preview = content.slice(0, 2_400).trimEnd();
+  return [
+    `用户提供了一份较长的 Markdown 设计文档（${meta.name}，`
+      + `${meta.bytes} 字节），完整原文保存在 ${readablePath
+        ?? AGENT_REQUIREMENT_DOCUMENT}。`,
+    "这份文件是需求原文，不是可选参考。先读取标题结构，再用 Read 的"
+      + " offset/limit 按章节分段阅读；不要一次回显全文，也不要只看开头。"
+      + "背景、范围、约束和验收标准都必须核对，后续需要时可再次读取原文。",
+    outline.length ? `文档标题提纲：\n${outline.map((item) => `- ${item}`).join("\n")}`
+      : "文档没有 Markdown 标题；请按段落分批读取完整文件。",
+    `开头预览（只用于定位，不代替全文）：\n${preview}`,
+  ].join("\n\n");
+}

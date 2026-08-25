@@ -327,6 +327,11 @@ export interface TaskSummary {
   id: string;
   title?: string;
   requirement: string;
+  requirement_document?: {
+    name: string;
+    bytes: number;
+    context_mode: "inline" | "file";
+  };
   entry_kind?: "requirement" | "dts";
   issue_context?: {
     source: "manual";
@@ -704,12 +709,14 @@ export async function createTask(
     repositorySkillCatalogToken?: string;
     selectedRepositorySkillIds?: string[];
     selectedRepositoryKnowledgeIds?: string[];
+    requirementDocumentName?: string;
   },
 ): Promise<void> {
   const response = await fetch("/tasks", {
     method: "POST",
     body: JSON.stringify({
       requirement,
+      requirement_document_name: extras?.requirementDocumentName,
       title: extras?.title?.trim() || undefined,
       account: account || undefined,
       repo: extras?.repo || undefined,

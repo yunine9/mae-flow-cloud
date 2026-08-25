@@ -989,6 +989,55 @@ svg {
 .launch-title-field { max-width: 680px; }
 .launch-title-field small,
 .requirement-field > small { color: var(--faint); font-size: 10px; line-height: 1.5; }
+.requirement-field {
+  padding: 12px; border: 1px solid transparent; border-radius: 11px;
+  transition: border-color var(--ease), background var(--ease), box-shadow var(--ease);
+}
+.requirement-field.is-dragging {
+  border-color: var(--accent); background: var(--accent-soft);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.requirement-field-head {
+  margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+}
+.requirement-field-head > label:first-child {
+  color: var(--muted); font-size: 11px; font-weight: 650;
+}
+.markdown-upload-action {
+  padding: 6px 9px; display: inline-flex; align-items: center; gap: 6px;
+  color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line));
+  border-radius: 8px; background: var(--surface); font-size: 9.5px;
+  font-weight: 700; cursor: pointer;
+}
+.markdown-upload-action:hover { background: var(--accent-soft); border-color: var(--accent); }
+.markdown-upload-action input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.markdown-upload-action svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.markdown-drop-hint {
+  margin-bottom: 9px; padding: 10px 12px; display: flex; align-items: center; gap: 10px;
+  color: var(--muted); border: 1px dashed var(--line-strong); border-radius: 9px;
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+}
+.markdown-drop-hint > svg { width: 22px; height: 22px; flex: none; fill: none; stroke: var(--accent); stroke-width: 1.45; stroke-linecap: round; stroke-linejoin: round; }
+.markdown-drop-hint > span { display: grid; gap: 2px; }
+.markdown-drop-hint strong { color: var(--text-strong); font-size: 10.5px; }
+.markdown-drop-hint small { color: var(--faint); font-size: 9px; }
+.markdown-file-state {
+  margin-top: 8px; padding: 8px 10px; display: grid;
+  grid-template-columns: auto minmax(0, auto) minmax(0, 1fr) auto;
+  align-items: center; gap: 8px; color: var(--muted); border-radius: 8px;
+  background: color-mix(in srgb, var(--success-soft) 72%, var(--surface));
+}
+.markdown-file-state > span { padding: 3px 5px; color: var(--success); border: 1px solid color-mix(in srgb, var(--success) 28%, transparent); border-radius: 5px; font: 800 8px ui-monospace, monospace; }
+.markdown-file-state strong { overflow: hidden; color: var(--text-strong); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.markdown-file-state small { overflow: hidden; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.markdown-file-state button { padding: 4px 6px; color: var(--muted); border: 0; background: transparent; font-size: 9px; cursor: pointer; }
+.markdown-file-state button:hover { color: var(--danger); }
+.markdown-upload-error { margin-top: 8px; color: var(--danger); font-size: 10px; }
+.requirement-source-label span { display: inline-flex; align-items: center; gap: 7px; }
+.requirement-source-label em {
+  padding: 2px 6px; color: var(--accent); border-radius: 999px;
+  background: var(--accent-soft); font-size: 8.5px; font-style: normal; font-weight: 700;
+}
 .launch-requirement-section textarea { min-height: 260px; resize: vertical; font-size: 12.5px; line-height: 1.65; }
 .launch-field-grid { margin-top: 12px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .launch-settings-grid { margin-top: 0; }
@@ -3567,6 +3616,11 @@ pre {
   .pulse-card { min-height: 82px; padding: 12px; }
   .pulse-card > strong { font-size: 24px; }
   .launch-panel { border-radius: var(--radius); }
+  .requirement-field { padding: 8px; }
+  .requirement-field-head { align-items: flex-start; flex-direction: column; }
+  .markdown-upload-action { width: 100%; justify-content: center; }
+  .markdown-file-state { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .markdown-file-state small { grid-column: 2 / -1; grid-row: 2; white-space: normal; }
   .task-overline { flex-wrap: wrap; }
   .task-title { font-size: 13px; }
   .task-progress { margin-top: 9px; }

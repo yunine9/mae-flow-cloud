@@ -500,8 +500,10 @@ export function TaskWorkspace({
             {materialView === "source" ? (
               <article className="requirement-source">
                 <div className="requirement-source-label">
-                  <span>{issueTask
-                    ? "用户提交的问题单完整内容" : "用户提交的完整内容"}</span>
+                  <span>{task.requirement_document?.name ?? (issueTask
+                    ? "用户提交的问题单完整内容" : "用户提交的完整内容")}
+                    {task.requirement_document?.context_mode === "file"
+                      && <em>Agent 分段读取</em>}</span>
                   <small>{task.requirement.split(/\r?\n/).length} 行 · {task.requirement.length} 字符</small>
                 </div>
                 {issueTask && task.issue_context && (

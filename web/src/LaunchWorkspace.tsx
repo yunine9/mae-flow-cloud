@@ -13,6 +13,8 @@ import {
 } from "./RepositorySkillPicker";
 
 type EntryKind = "requirement" | "dts";
+const MAX_MARKDOWN_BYTES = 512 * 1024;
+const INLINE_MARKDOWN_BYTES = 32 * 1024;
 type EnvironmentAccountDraft = {
   id: string;
   username: string;
@@ -50,6 +52,9 @@ export function LaunchWorkspace({
 }) {
   const [entryKind, setEntryKind] = useState<EntryKind>("requirement");
   const [requirement, setRequirement] = useState("");
+  const [requirementDocumentName, setRequirementDocumentName] = useState("");
+  const [documentError, setDocumentError] = useState("");
+  const [draggingDocument, setDraggingDocument] = useState(false);
   const [title, setTitle] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -135,6 +140,34 @@ export function LaunchWorkspace({
     }
   }
 
+  async function loadMarkdown(file: File | undefined) {
+    if (!file) return;
+    setDocumentError("");
+    if (!file.name.toLowerCase().endsWith(".md")) {
+      setDocumentError("仅支持 .md 格式的 Markdown 文档");
+      return;
+    }
+    if (file.size > MAX_MARKDOWN_BYTES) {
+      setDocumentError("文档不能超过 512 KiB；请拆成主设计文档与仓内参考资料");
+      return;
+    }
+    try {
+      const content = await file.text();
+      if (!content.trim()) {
+        setDocumentError("这个 Markdown 文件没有可用正文");
+        return;
+      }
+      if (content.includes("\0")) {
+        setDocumentError("文件包含二进制内容，请上传 UTF-8 编码的 Markdown 文档");
+        return;
+      }
+      setRequirement(content);
+      setRequirementDocumentName(file.name);
+    } catch {
+      setDocumentError("文件读取失败，请确认文件可访问后重试");
+    }
+  }
+
   function updateEnvironment(
     id: string,
     patch: Partial<EnvironmentDraft>,
@@ -207,6 +240,7 @@ export function LaunchWorkspace({
           selectedRepositoryKnowledgeIds:
             repositorySkillSelection.scanned
               ? repositorySkillSelection.selectedKnowledgeIds : undefined,
+          requirementDocumentName: requirementDocumentName || undefined,
         },
       );
       await onCreated();
@@ -316,21 +350,70 @@ export function LaunchWorkspace({
                     autoFocus required />
                   <small>用于任务卡、通知和团队总览，不会替代需求文档</small>
                 </label>
-                <label className="requirement-field">
-                  <span>{entryKind === "dts" ? "问题单描述" : "需求文档"}</span>
+                <div className={`requirement-field${draggingDocument ? " is-dragging" : ""}`}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "copy";
+                    setDraggingDocument(true);
+                  }}
+                  onDragLeave={(event) => {
+                    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                      setDraggingDocument(false);
+                    }
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    setDraggingDocument(false);
+                    void loadMarkdown(event.dataTransfer.files[0]);
+                  }}>
+                  <div className="requirement-field-head">
+                    <label htmlFor="launch-requirement">
+                      {entryKind === "dts" ? "问题单描述" : "需求文档"}
+                    </label>
+                    <label className="markdown-upload-action">
+                      <input type="file" accept=".md,text/markdown"
+                        onChange={(event) => {
+                          void loadMarkdown(event.target.files?.[0]);
+                          event.target.value = "";
+                        }} />
+                      <svg viewBox="0 0 20 20" aria-hidden><path d="M10 13V4m0 0L6.5 7.5M10 4l3.5 3.5M4 12.5v2.25A1.25 1.25 0 0 0 5.25 16h9.5A1.25 1.25 0 0 0 16 14.75V12.5" /></svg>
+                      选择 .md 文件
+                    </label>
+                  </div>
+                  <div className="markdown-drop-hint" aria-hidden>
+                    <svg viewBox="0 0 24 24"><path d="M7 18.5h10a4 4 0 0 0 .7-7.94A6 6 0 0 0 6.2 9.2 4.5 4.5 0 0 0 7 18.5Z" /><path d="m12 9-3 3m3-3 3 3m-3-3v6" /></svg>
+                    <span><strong>拖拽 Markdown 设计文档到这里</strong><small>仅支持 .md · 最大 512 KiB · 上传后仍可继续编辑正文</small></span>
+                  </div>
                   <textarea
+                    id="launch-requirement"
                     value={requirement}
-                    onChange={(event) => setRequirement(event.target.value)}
+                    onChange={(event) => {
+                      setRequirement(event.target.value);
+                      setDocumentError("");
+                      if (!event.target.value) setRequirementDocumentName("");
+                    }}
                     placeholder={entryKind === "dts"
                       ? "粘贴问题现象、复现条件、影响范围和已有排查结论；支持 Markdown"
                       : "粘贴完整需求说明、背景、范围和验收标准；支持 Markdown"}
                     rows={10}
                     required
                   />
+                  {requirementDocumentName && <div className="markdown-file-state">
+                    <span aria-hidden>MD</span>
+                    <strong title={requirementDocumentName}>{requirementDocumentName}</strong>
+                    <small>{new Blob([requirement]).size > INLINE_MARKDOWN_BYTES
+                      ? "长文档 · 原文完整保留，Agent 按章节分段读取"
+                      : "已载入 · 正文会完整交给 Agent"}</small>
+                    <button type="button" onClick={() => {
+                      setRequirement(""); setRequirementDocumentName("");
+                      setDocumentError("");
+                    }}>移除</button>
+                  </div>}
+                  {documentError && <div className="markdown-upload-error" role="alert">{documentError}</div>}
                   <small>{requirement
                     ? `${requirement.split(/\r?\n/).length} 行 · ${requirement.length} 字符，原文将完整保留`
                     : "这里是 Agent 实际接收的完整原文，不会被截成标题"}</small>
-                </label>
+                </div>
               </section>
 
               {options && (options.repo.enabled || options.ticket.enabled || options.baseline.enabled) && (

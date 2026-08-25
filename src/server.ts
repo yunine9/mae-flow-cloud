@@ -612,6 +612,8 @@ export function createTaskServer(
         // 单人/测试)沿用请求体里的账号。
         const account = viewer?.username
           ?? (body.account ? String(body.account) : undefined);
+        const requirementDocumentName = body.requirement_document_name === undefined
+          ? undefined : String(body.requirement_document_name);
         // 任务级可配(用户拍板):交付代码仓、交付方式(选项来自内核)、修复轮预算。
         const repo = body.repo === undefined ? undefined : String(body.repo);
         const repos = Array.isArray(body.repos)
@@ -683,6 +685,7 @@ export function createTaskServer(
           return json(response, 201, service.create(requirement,
             {
               title, account, repo, repos, entryKind, issueEnvironments,
+              requirementDocumentName,
               lane, ticket, baseline, model,
               repairRounds, repositorySkillCatalogToken,
               selectedRepositorySkillIds, selectedRepositoryKnowledgeIds,
