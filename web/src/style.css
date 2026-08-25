@@ -2328,6 +2328,24 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   min-width: 0; margin: 0; padding: 0; display: grid; border: 0;
 }
 .decision-attachment:disabled { opacity: .72; }
+.review-decision-guidance {
+  margin: 2px 20px 14px;
+  padding: 11px 13px;
+  display: grid;
+  gap: 3px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line));
+  border-radius: 9px;
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+.review-decision-guidance strong { font-size: 14px; }
+.review-decision-guidance.conflict {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: color-mix(in srgb, var(--danger) 25%, var(--line));
+}
 .question {
   min-width: 0;
   margin: 0;

@@ -14,7 +14,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readJson } from "../src/jsonBody.ts";
-import { appendFileSync, mkdtempSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -27,7 +27,7 @@ import {
   type Annotation,
 } from "../src/annotations.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
-import { TaskService } from "../src/taskService.ts";
+import { TaskControlError, TaskService } from "../src/taskService.ts";
 import { createTaskServer } from "../src/server.ts";
 import type { AddressInfo } from "node:net";
 import { LocalAuth } from "../src/auth.ts";
@@ -368,6 +368,73 @@ test("批注随决定提交:进 notes 不进 decision,选项记账不被污染",
     assert.equal(after.length, 1);
     assert.equal(after[0].status, "sent");
     assert.equal(after[0].sent_via, "decision");
+  } finally {
+    await model.stop();
+  }
+});
+
+test("未闭环检视意见不能随直接提交分支越过返工", async () => {
+  const kernelRoot = mkdtempSync(join(tmpdir(), "mfc-anno-kernel-"));
+  mkdirSync(join(kernelRoot, "flow"));
+  writeFileSync(join(kernelRoot, "flow", "flow.json"), JSON.stringify({
+    steps: {
+      inspect: {
+        approval_subject: { kind: "worktree" },
+        choices: ["continue", "revise"],
+        choice_answers: {
+          continue: ["代码无需调整，继续提交"],
+          revise: ["需要调整代码（按检视意见返工）"],
+        },
+        next: { continue: "commit", revise: "rework" },
+      },
+      commit: {},
+      rework: { allow_source_edit: true },
+    },
+  }));
+  const model = new ScriptedModelServer([{
+    tool: { name: "AskUserQuestion", input: { questions: [{
+      question: "这轮代码通过吗?",
+      options: ["代码无需调整，继续提交", "需要调整代码（按检视意见返工）"],
+    }] } },
+  }]);
+  await model.start();
+  const service = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-anno-open-review-")),
+    provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+  });
+  try {
+    const id = service.create("检视意见必须闭环").id;
+    await until(
+      () => service.get(id)?.status === "waiting_for_human", "任务等人");
+    const note = service.addAnnotation(id, {
+      author: "liaoxiang", artifact: "未提交改动", file: "SmsHandler.java",
+      line: 23, anchor: "retry(3)", note: "这里只重试网关错误", kind: "code",
+    });
+
+    // 会话已经用无宿主模式举卡；这里只给决定层接上一个最小内核契约，
+    // 避免为了验证分支联动而启动仓库、容器和完整 Mae-Flow 流程。
+    const internal = (service as any).tasks.get(id);
+    internal.summary.waiting.step = "inspect";
+    (service.options as any).host = { kernelRoot, repoPath: "/unused" };
+    const waiting = service.get(id)!.waiting!;
+    assert.equal(
+      waiting.choice_effects?.find((item) => item.key === "revise")
+        ?.allows_source_edit,
+      true,
+    );
+
+    await assert.rejects(service.decide(id, {
+      state_version: waiting.state_version,
+      decision: "代码无需调整，继续提交",
+      annotation_ids: [note.id],
+    }), (error) => error instanceof TaskControlError
+      && /当前检视意见未闭环.*建议选择.*需要调整代码/.test(error.message));
+
+    assert.equal(service.get(id)?.status, "waiting_for_human",
+      "矛盾决定不能消费等待卡");
+    assert.equal(service.listAnnotations(id).items[0].status, "draft",
+      "被拒绝后批注仍须保持未提交");
   } finally {
     await model.stop();
   }

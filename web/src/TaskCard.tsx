@@ -383,6 +383,25 @@ export function WaitingCard({
   const [conflict, setConflict] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const questions = task.waiting?.question?.questions ?? [];
+  const choiceEffects = task.waiting?.choice_effects ?? [];
+  const feedbackAnswers = new Set(choiceEffects
+    .filter((effect) => effect.handles_feedback)
+    .flatMap((effect) => effect.answers));
+  const closingAnswers = new Set(choiceEffects
+    .filter((effect) => effect.closes_feedback)
+    .flatMap((effect) => effect.answers));
+  const allChoiceAnswers = new Set(choiceEffects.flatMap((effect) => effect.answers));
+  const feedbackOption = questions.flatMap((item) => {
+    const options = item.options ?? [];
+    if (!options.some((option) => allChoiceAnswers.has(option))) return [];
+    const exact = options.find((option) => feedbackAnswers.has(option));
+    if (exact) return [exact];
+    const nonClosing = options.filter((option) => !closingAnswers.has(option));
+    return [nonClosing.find((option) =>
+      /需要.*(?:调整|修改)|返工|补充/.test(option)) ?? nonClosing[0]].filter(Boolean);
+  })[0];
+  const feedbackLabel = feedbackOption?.replace(/[（(].*$/, "") ?? "需要调整";
+  const attachmentCount = annotationIds?.length ?? 0;
 
   const answerOf = (question: string) =>
     customOpen[question] && custom[question]?.trim()
@@ -390,12 +409,52 @@ export function WaitingCard({
       : picked[question];
   const optional = (question: string) =>
     /可忽略|若上题|如无|可跳过|可不填/.test(question);
+  const reviewChoiceConflict = attachmentCount > 0 && questions.some((item) => {
+    const options = item.options ?? [];
+    if (!options.some((option) => allChoiceAnswers.has(option))) return false;
+    const answer = answerOf(item.question);
+    return Boolean(answer) && closingAnswers.has(answer);
+  });
+  const selectedReviewAnswer = questions
+    .filter((item) => (item.options ?? []).some((option) =>
+      allChoiceAnswers.has(option)))
+    .map((item) => answerOf(item.question))
+    .find(Boolean);
+  const isReviewDecision = choiceEffects.some((effect) =>
+    effect.closes_feedback);
   const ready = questions.every(
     (item) => optional(item.question) || answerOf(item.question),
   ) && !repositorySkillSelection?.scanning
     && (!repositorySkillSelection?.scanned
       || !!repositorySkillSelection.catalogToken)
+    && !reviewChoiceConflict
     && !submitting;
+
+  const annotationKey = annotationIds?.join("\0") ?? "";
+  const choiceKey = [...feedbackAnswers, ...closingAnswers].join("\0");
+  useEffect(() => {
+    if (!attachmentCount || !choiceEffects.some((effect) =>
+      effect.closes_feedback)) return;
+    setPicked((current) => {
+      let changed = false;
+      const next = { ...current };
+      for (const item of questions) {
+        if (current[item.question] || customOpen[item.question]) continue;
+        const options = item.options ?? [];
+        if (!options.some((option) => allChoiceAnswers.has(option))) continue;
+        const revision = options.find((option) => feedbackAnswers.has(option))
+          ?? options.find((option) =>
+            !closingAnswers.has(option)
+            && /需要.*(?:调整|修改)|返工|补充/.test(option))
+          ?? options.find((option) => !closingAnswers.has(option));
+        if (revision) {
+          next[item.question] = revision;
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [task.waiting?.waiting_id, annotationKey, choiceKey]);
 
   function pickOption(question: string, option: string) {
     setPicked({ ...picked, [question]: option });
@@ -474,6 +533,10 @@ export function WaitingCard({
           const customActive =
             !!customOpen[item.question] && !!custom[item.question]?.trim();
           const skippable = optional(item.question);
+          const reviewQuestion = options.some((option) =>
+            allChoiceAnswers.has(option));
+          const hasAdjustmentOption = reviewQuestion && options.some((option) =>
+            !closingAnswers.has(option));
           return (
             <fieldset className="question" key={item.question}>
               <legend>
@@ -489,9 +552,20 @@ export function WaitingCard({
                 {options.map((option) => {
                   const chosen = picked[item.question] === option;
                   const split = option.match(/^([^（(]+)[（(](.+)[）)]\s*$/);
+                  const effect = choiceEffects.find((candidate) =>
+                    candidate.answers.includes(option));
+                  const inferredAdjustment = reviewQuestion
+                    && !closingAnswers.has(option);
+                  const consequence = effect?.closes_feedback
+                    ? "将关闭本轮检视并进入下一步"
+                    : effect?.handles_feedback && effect.allows_source_edit
+                      ? "将进入返工，处理意见后重新检视"
+                      : effect?.handles_feedback || inferredAdjustment
+                        ? "将留在本轮，处理意见后重新检视"
+                        : "";
                   const [title, hint] = split
                     ? [split[1].trim(), split[2].trim()]
-                    : [option, ""];
+                    : [option, consequence];
                   return (
                     <button
                       type="button"
@@ -509,7 +583,7 @@ export function WaitingCard({
                     </button>
                   );
                 })}
-                {!customOpen[item.question] && (
+                {!hasAdjustmentOption && !customOpen[item.question] && (
                   <button
                     type="button"
                     className="option custom-entry"
@@ -549,18 +623,37 @@ export function WaitingCard({
         </fieldset>
       )}
 
+      {attachmentCount > 0 && isReviewDecision && (
+        <div className={`review-decision-guidance${
+          reviewChoiceConflict ? " conflict" : ""
+        }`} role={reviewChoiceConflict ? "alert" : "status"}>
+          <strong>当前有 {attachmentCount} 条检视意见未闭环</strong>
+          <span>{!feedbackOption
+            ? "当前卡片缺少调整选项，请用“自定义答复”明确要求继续调整。"
+            : reviewChoiceConflict
+            ? `建议选择“${feedbackLabel}”。当前选项会关闭本轮检视，不会处理这些意见。`
+            : selectedReviewAnswer === feedbackOption
+              ? `已选择“${feedbackLabel}”，提交后会继续处理这些意见。`
+              : `建议选择“${feedbackLabel}”，提交后会继续处理这些意见。`}</span>
+        </div>
+      )}
+
       <footer className="decision-footer">
         <div className="decision-notes">
           {!notesOpen ? (
             <button type="button" onClick={() => setNotesOpen(true)}>
-              + 添加整卡备注
+              {isReviewDecision ? "+ 补充检视说明" : "+ 添加整卡备注"}
             </button>
           ) : (
             <label>
-              <span>决策备注（可选）</span>
+              <span>{isReviewDecision
+                ? "检视说明（可选，不改变上方分支）"
+                : "决策备注（可选）"}</span>
               <input
                 type="text"
-                placeholder="随本次决定一起记录"
+                placeholder={isReviewDecision
+                  ? "补充修改原因或处理要求；流程走向以上方选项为准"
+                  : "随本次决定一起记录"}
                 value={notes}
                 autoFocus
                 onChange={(change) => setNotes(change.target.value)}

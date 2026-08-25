@@ -40,7 +40,12 @@ import {
 } from "./annotations.ts";
 import { readArtifact, resolveArtifactRoot } from "./artifacts.ts";
 import { KernelHost } from "./kernelHost.ts";
-import { workflowChoices, workflowLabel } from "./kernelChoices.ts";
+import {
+  matchesStepChoice,
+  stepChoiceEffects,
+  workflowChoices,
+  workflowLabel,
+} from "./kernelChoices.ts";
 import { buildRepoMap } from "./repoMap.ts";
 import { collectKnowledge } from "./knowledgeBlocks.ts";
 import {
@@ -387,7 +392,17 @@ export interface TaskSummary {
   status: TaskStatus;
   /** 读侧统一投影：只解释当前事实，不参与流程迁移或门禁。 */
   focus?: TaskFocus;
-  waiting?: WaitingRecord;
+  waiting?: WaitingRecord & {
+    /** 只读投影：选项会关闭检视，还是进入/留在意见处理步骤。前端据此
+     * 提示未闭环意见，不能在 TS 里手写 build_review 分支表。 */
+    choice_effects?: Array<{
+      key: string;
+      answers: string[];
+      allows_source_edit: boolean;
+      handles_feedback: boolean;
+      closes_feedback: boolean;
+    }>;
+  };
   detail?: string;
   created_at: string;
   /** 任务运营时间:updated_at 是任意任务事实最近变更,last_progress_at
@@ -1887,6 +1902,10 @@ export class TaskService {
     const record = task.notifyRecord;
     const progress = this.taskProgress(task);
     const summary = task.summary;
+    const choiceEffects = stepChoiceEffects(
+      this.options.host?.kernelRoot,
+      summary.waiting?.step,
+    );
     const projected = {
       ...summary,
       title: summary.title ?? taskTitle(summary.requirement),
@@ -1902,6 +1921,18 @@ export class TaskService {
         : undefined,
       progress,
       token_usage: tokenUsageSnapshot(task.tokenUsage),
+      waiting: summary.waiting && choiceEffects.length
+        ? {
+            ...summary.waiting,
+            choice_effects: choiceEffects.map((effect) => ({
+              key: effect.key,
+              answers: effect.answers,
+              allows_source_edit: effect.allowsSourceEdit,
+              handles_feedback: effect.handlesFeedback,
+              closes_feedback: effect.closesFeedback,
+            })),
+          }
+        : summary.waiting,
       knowledge_usage: includeKnowledgeUsage
         ? knowledgeUsageSnapshot({
             workspace: task.summary.workspace,
@@ -4028,6 +4059,37 @@ export class TaskService {
     // notes 是自由正文,本来就是给"为什么打回"用的。
     const picked = input.annotation_ids?.length
       ? this.pickDrafts(task, input.annotation_ids) : [];
+    // 待修改批注与“确认关闭检视”是矛盾事实。结构化返工从内核
+    // next → clear_hint/allow_source_edit 推导；Spec/Story 等原步修改则
+    // 以 confirmation_answers 识别关闭答案。Cloud 不认识任何步骤名。
+    const effects = stepChoiceEffects(
+      this.options.host?.kernelRoot,
+      waiting.step,
+    );
+    const closingEffects = effects.filter((effect) => effect.closesFeedback);
+    const submitted = Object.keys(answers).length
+      ? Object.values(answers) : [decision];
+    if (picked.length && closingEffects.length
+        && submitted.some((answer) => closingEffects.some((effect) =>
+          matchesStepChoice(effect, answer)))) {
+      const menuQuestions = Array.isArray(waiting.question?.questions)
+        ? waiting.question.questions as Array<{ options?: string[] }> : [];
+      const menuOptions = menuQuestions
+        .flatMap((question) => question.options ?? []);
+      const handled = effects.filter((effect) => effect.handlesFeedback)
+        .flatMap((effect) => effect.answers)
+        .find((answer) => menuOptions.includes(answer));
+      const nonClosing = menuOptions.filter((option) =>
+        !closingEffects.some((effect) => matchesStepChoice(effect, option)));
+      const recommended = handled
+        ?? nonClosing.find((option) => /需要.*(?:调整|修改)|返工|补充/.test(option))
+        ?? nonClosing[0]
+        ?? "需要调整";
+      throw new TaskControlError(
+        `当前检视意见未闭环：本次附带了 ${picked.length} 条待处理批注。`
+        + `建议选择“${recommended}”；若确认本轮无需调整，请先取消附带批注。`,
+      );
+    }
     const notes = picked.length
       ? [input.notes, renderAnnotations(picked, this.ticketOf(task))]
         .filter(Boolean).join("\n\n")

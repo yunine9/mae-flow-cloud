@@ -18,9 +18,8 @@ export function AttachedNotes({
   onToggle,
   onLocate,
 }: {
-  /** 勾上才随本次决定送出。默认勾上,但必须由人决定——"哪个选项算打回"
-   * 是内核的判定(choice_key → 分支),TS 侧抄一份就越了红线;而不勾时
-   * 批注不会丢,它跨检视点活着,下一个决策点还会浮出来。 */
+  /** 勾上才随本次决定送出。默认勾上；决定卡会读取内核分支契约，
+   * 联动真正的返工选项。不勾时批注不会丢，它跨检视点继续保留。 */
   attached: boolean;
   onToggle: (next: boolean) => void;
   items: Annotation[];
@@ -36,7 +35,7 @@ export function AttachedNotes({
         <input type="checkbox" checked={attached}
                onChange={(event) => onToggle(event.target.checked)} />
         <span>
-          提交本次决定时附带 {items.length} 条批注
+          将 {items.length} 条未闭环检视意见随本次决定提交
           {!attached && "（本次不提交，批注仍会保留）"}
         </span>
       </label>

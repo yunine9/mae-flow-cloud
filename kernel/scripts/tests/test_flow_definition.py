@@ -53,3 +53,47 @@ class BranchFallbackTests(unittest.TestCase):
                          flow["steps"]["build"]["next_default"])
         for sid in ("branch_create", "build_commit"):
             self.assertEqual("full", flow["steps"][sid]["next_default"])
+
+
+class ReviewChoiceContractTests(unittest.TestCase):
+    """人工检视的按钮必须说清楚：继续会提交，修改会进入可写步骤。"""
+
+    def _flow(self):
+        import json as _json
+        import io as _io
+        with _io.open(os.path.join(ROOT, "flow", "flow.json"),
+                      encoding="utf-8") as stream:
+            return _json.load(stream)
+
+    def test_review_revise_branch_lands_on_source_edit_step(self):
+        flow = self._flow()
+        for review in ("build_review", "quality_review"):
+            step = flow["steps"][review]
+            revise = step["next"]["revise"]
+            self.assertTrue(
+                flow["steps"][revise].get("allow_source_edit"),
+                "%s 的返工选项没有进入可修改源码的步骤" % review)
+            self.assertIn("返工", step["choice_answers"]["revise"][0])
+            self.assertIn("提交", step["choice_answers"]["continue"][0])
+
+    def test_old_review_answers_remain_accepted_for_live_waiting_cards(self):
+        flow = self._flow()
+        self.assertIn(
+            "我已认真检视并完成自验证，继续",
+            flow["steps"]["build_review"]["choice_answers"]["continue"])
+        self.assertIn(
+            "需要调整代码",
+            flow["steps"]["build_review"]["choice_answers"]["revise"])
+
+    def test_all_artifact_and_worktree_approvals_name_the_close_effect(self):
+        """端到端检视都要让宿主识别“这句话会关闭本轮意见”。"""
+        flow = self._flow()
+        reviewed = [step for step in flow["steps"].values()
+                    if step.get("approval_subject")]
+        self.assertTrue(reviewed)
+        for step in reviewed:
+            if step.get("confirmation_answers"):
+                self.assertIn("无需", step["confirmation_answers"][0])
+            else:
+                closing = step["choice_answers"]["continue"][0]
+                self.assertTrue("无需" in closing or "无需调整" in closing)

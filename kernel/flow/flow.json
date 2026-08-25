@@ -241,6 +241,7 @@
         "artifacts": ["spec"]
       },
       "confirmation_answers": [
+        "Spec 无需再调整，确认生成 Story",
         "Spec 内容已确认，生成 Story"
       ],
       "evidence": [
@@ -272,6 +273,7 @@
         "artifacts": ["story", "implementation"]
       },
       "confirmation_answers": [
+        "Story 与实施附录无需再调整，确认进入编码",
         "Story 与实施附录已确认，进入编码实现"
       ],
       "evidence": [
@@ -325,6 +327,7 @@
         "artifacts": ["spec"]
       },
       "confirmation_answers": [
+        "修改范围无需再调整，确认进入编码",
         "确认范围并继续"
       ],
       "evidence": [
@@ -342,6 +345,7 @@
         "artifacts": ["spec"]
       },
       "confirmation_answers": [
+        "修改范围无需再调整，确认进入编码",
         "确认范围并继续"
       ],
       "evidence": [
@@ -458,9 +462,11 @@
       ],
       "choice_answers": {
         "continue": [
+          "代码无需调整，继续提交",
           "我已认真检视并完成自验证，继续"
         ],
         "revise": [
+          "需要调整代码（按检视意见返工）",
           "需要调整代码"
         ]
       },
@@ -501,9 +507,11 @@
       ],
       "choice_answers": {
         "continue": [
+          "质量改动无需调整，继续提交",
           "我已检视本轮质量改动，继续提交"
         ],
         "revise": [
+          "需要调整质量改动（按检视意见返工）",
           "需要调整质量改动"
         ]
       },

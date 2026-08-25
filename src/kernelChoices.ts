@@ -31,6 +31,20 @@ export interface WorkflowChoice {
   acks?: number;
 }
 
+/** 某个人工选项会把内核带到哪里。Cloud 只消费 flow 的审批主题、确认
+ * 答案、分支与目标步骤语义，不认识 build_review / Story 等阶段名，也
+ * 不另抄一张“哪个按钮算返工”的表。 */
+export interface StepChoiceEffect {
+  key: string;
+  answers: string[];
+  nextStep?: string;
+  allowsSourceEdit: boolean;
+  /** 该选择会留在/进入一个用于落实检视意见的步骤。 */
+  handlesFeedback: boolean;
+  /** 该选择会关闭当前检视并继续，不应携带未闭环意见。 */
+  closesFeedback: boolean;
+}
+
 /** 目录里还带着"能不能给新单选"这一位。下单表单要的是能选的那批,
  * 修复环要的恰恰是**不给新单选**的那个(review)——所以缓存存全量,
  * 各取所需,不必为此再问内核第二遍。 */
@@ -39,6 +53,7 @@ interface WorkflowEntry extends WorkflowChoice {
 }
 
 const cache = new Map<string, WorkflowEntry[]>();
+const effectCache = new Map<string, StepChoiceEffect[]>();
 
 /** 首选:问内核要机读目录。python 不在/命令老(旧快照没有 --json)都
  * 只是拿不到,不是错误——静静退回兜底。 */
@@ -122,4 +137,75 @@ export function workflowLabel(
   key: string,
 ): string {
   return allWorkflows(kernelRoot).find((item) => item.key === key)?.label ?? "";
+}
+
+/** 读取一步的选项效果。拿不到契约就回空数组：界面不替内核猜分支，
+ * 服务端也保持旧行为；拿得到时，附带待修改批注就能与真正的可写返工
+ * 分支联动。 */
+export function stepChoiceEffects(
+  kernelRoot: string | undefined,
+  stepId: string | undefined,
+): StepChoiceEffect[] {
+  if (!kernelRoot || !stepId) return [];
+  const cacheKey = `${kernelRoot}\0${stepId}`;
+  const cached = effectCache.get(cacheKey);
+  if (cached) return cached;
+  let effects: StepChoiceEffect[] = [];
+  try {
+    const path = join(kernelRoot, "flow", "flow.json");
+    if (!existsSync(path)) return [];
+    const flow = JSON.parse(readFileSync(path, "utf-8"));
+    const steps = (flow?.steps ?? {}) as Record<string, Record<string, any>>;
+    const step = steps[stepId] ?? {};
+    const answers = (step.choice_answers ?? {}) as Record<string, unknown[]>;
+    const next = step.next && typeof step.next === "object"
+      ? step.next as Record<string, unknown> : {};
+    const reviewsFeedback = Boolean(step.approval_subject);
+    effects = ((step.choices ?? []) as unknown[]).map((rawKey) => {
+      const key = String(rawKey);
+      const nextStep = next[key] === undefined ? undefined : String(next[key]);
+      const target = nextStep ? steps[nextStep] : undefined;
+      const handlesFeedback = reviewsFeedback && Boolean(
+        target?.clear_hint || target?.allow_source_edit);
+      return {
+        key,
+        answers: Array.isArray(answers[key])
+          ? answers[key].map(String).filter(Boolean) : [],
+        ...(nextStep ? { nextStep } : {}),
+        allowsSourceEdit: Boolean(target?.allow_source_edit),
+        handlesFeedback,
+        closesFeedback: reviewsFeedback && !handlesFeedback,
+      };
+    }).filter((effect) => effect.key && effect.answers.length);
+    // Spec/Story/轻量范围检视在原步骤内修改材料，只有“确认答案”是
+    // 内核契约；其余回答会让 Agent 留在本步继续处理。把确认建模成关闭
+    // 效果，界面再从真实问题卡的其他选项中推荐“需要调整”。
+    if (!effects.length && reviewsFeedback
+        && Array.isArray(step.confirmation_answers)) {
+      const nextStep = typeof step.next === "string" ? step.next : undefined;
+      effects = [{
+        key: "confirm",
+        answers: step.confirmation_answers.map(String).filter(Boolean),
+        ...(nextStep ? { nextStep } : {}),
+        allowsSourceEdit: Boolean(nextStep && steps[nextStep]?.allow_source_edit),
+        handlesFeedback: false,
+        closesFeedback: true,
+      }];
+    }
+  } catch {
+    effects = [];
+  }
+  effectCache.set(cacheKey, effects);
+  return effects;
+}
+
+/** 精确匹配内核给出的 choice key 或选项原文。trim 只吸收表单空白，
+ * 不做模糊包含，避免把“无需修改”误认成“需要修改”。 */
+export function matchesStepChoice(
+  effect: StepChoiceEffect,
+  answer: string,
+): boolean {
+  const normalized = answer.trim();
+  return normalized === effect.key
+    || effect.answers.some((candidate) => candidate.trim() === normalized);
 }

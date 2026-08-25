@@ -390,6 +390,15 @@ export interface TaskSummary {
     question?: { questions?: WaitingQuestion[] };
     /** 提问前模型的最后一段话:"如上表"这类指代的落点。 */
     context?: string;
+    /** 由服务端读取内核 flow 投影；前端据此识别关闭检视与继续处理意见
+     * 的选项，不维护 build_review 等阶段表。 */
+    choice_effects?: Array<{
+      key: string;
+      answers: string[];
+      allows_source_edit: boolean;
+      handles_feedback: boolean;
+      closes_feedback: boolean;
+    }>;
   };
   notify?: { delivered: boolean; attempts: number; last_error?: string };
   delivery?: {
