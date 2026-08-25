@@ -229,7 +229,9 @@ export function inspectDeveloperAssistantAvailability(
 }
 
 function gitOutput(cwd: string, args: string[], label: string): string {
-  const result = runSafeWorktreeGit(cwd, args);
+  // 同步调用必须有上限(2026-08-25 卡死事故的纪律):接管/交还是人在
+  // 页面上点出来的请求路径,大仓 status/diff 无界同步跑就是整站冻结。
+  const result = runSafeWorktreeGit(cwd, args, { timeoutMs: 30_000 });
   if (result.status !== 0) {
     throw new Error(`${label}失败：${String(result.stderr ?? "").trim()}`);
   }

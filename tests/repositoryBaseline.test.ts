@@ -73,21 +73,21 @@ async function until(probe: () => boolean, what: string): Promise<void> {
   }
 }
 
-test("本地路径与 URL 形式仓库都在 clone 阶段检出任务基线", () => {
+test("本地路径与 URL 形式仓库都在 clone 阶段检出任务基线", async () => {
   const repository = branchedRepository("transport");
   const taskService = service(
     mkdtempSync(join(tmpdir(), "mfc-baseline-transport-data-")), {}, 0);
   const sources = [repository, pathToFileURL(repository).toString()];
   for (const [index, source] of sources.entries()) {
     const root = mkdtempSync(join(tmpdir(), "mfc-baseline-checkout-"));
-    const cwd = (taskService as any).cloneRepo(
+    const cwd = await (taskService as any).cloneRepo(
       root, undefined, undefined, source, "stable", `repo-${index}`,
     ) as string;
     assert.equal(git(cwd, "branch", "--show-current"), "stable");
     assert.equal(readFileSync(join(cwd, "branch.txt"), "utf-8"), "stable\n");
   }
 
-  assert.throws(() => (taskService as any).cloneRepo(
+  await assert.rejects(() => (taskService as any).cloneRepo(
     mkdtempSync(join(tmpdir(), "mfc-baseline-missing-")),
     undefined, undefined, repository, "does-not-exist", "repo",
   ), /仓库克隆失败：代码仓基线「does-not-exist」不存在或不可访问/);
@@ -159,12 +159,15 @@ test("跨仓只读分析的每个仓都检出同一任务基线", async () => {
     const cwdB = join(analysisRoot, `2-${basename(repositoryB)}`);
     await until(() => {
       try {
+        // cloneRepo 异步化后,clone 完成与 pushurl 配置写入之间事件循环
+        // 会跑本轮询——就绪条件必须等到 cloneRepo 的最后一步(pushurl)。
         return git(cwdA, "branch", "--show-current") === "stable"
-          && git(cwdB, "branch", "--show-current") === "stable";
+          && git(cwdB, "branch", "--show-current") === "stable"
+          && git(cwdB, "config", "--get", "remote.origin.pushurl") !== "";
       } catch {
         return false;
       }
-    }, "两个分析仓检出 stable");
+    }, "两个分析仓检出 stable 且只读配置就位");
     assert.equal(readFileSync(join(cwdA, "branch.txt"), "utf-8"), "stable\n");
     assert.equal(readFileSync(join(cwdB, "branch.txt"), "utf-8"), "stable\n");
     assert.equal(git(cwdA, "config", "--get", "remote.origin.pushurl"),
@@ -180,7 +183,7 @@ test("跨仓只读分析的每个仓都检出同一任务基线", async () => {
   }
 });
 
-test("恢复已有工作区不重新 checkout baseline，不覆盖进行中的任务分支", () => {
+test("恢复已有工作区不重新 checkout baseline，不覆盖进行中的任务分支", async () => {
   const repository = branchedRepository("recovery");
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-baseline-recovery-data-"));
   const serviceA = service(dataDir, {}, 0);
@@ -190,7 +193,7 @@ test("恢复已有工作区不重新 checkout baseline，不覆盖进行中的�
     ticket: "REQ-BASELINE-3",
     baseline: "stable",
   });
-  const cwd = (serviceA as any).cloneRepo(
+  const cwd = await (serviceA as any).cloneRepo(
     created.workspace, undefined, undefined, repository, "stable",
   ) as string;
   git(cwd, "checkout", "--quiet", "-b", "stable_dev_REQ-BASELINE-3");

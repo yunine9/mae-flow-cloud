@@ -137,8 +137,8 @@ test("路由:登录者改自己的令牌,响应只带掩码,明文不出网", as
 /** 带 Basic 鉴权的 dumb-HTTP git 服务器:真 git 协议、真 401。
  * 凭据不对不发码——克隆成功本身就是"helper 真被 git 调了"的证明。
  *
- * 必须开在子进程:cloneRepo 用 spawnSync,会把本进程事件循环卡住;
- * 服务器同进程的话 git 永远等不到响应,直接死锁(实测挂死 3 分钟)。 */
+ * 开在子进程仍是对的:cloneRepo 现已异步(2026-08-25 卡死事故后改),
+ * 但独立进程的服务器不依赖本进程事件循环,测试对实现细节更免疫。 */
 async function serveBareRepo(bare: string, expectAuth: string) {
   const script = join(mkdtempSync(join(tmpdir(), "mfc-gt-srv-")), "srv.mjs");
   const seen = join(dirname(script), "auth-seen.log");

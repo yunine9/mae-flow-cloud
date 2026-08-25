@@ -60,6 +60,9 @@ function listFiles(root: string, budget: () => boolean): string[] {
   try {
     const result = runSafeWorktreeGit(root, ["ls-files"], {
       maxBuffer: 32 * 1024 * 1024,
+      // 同步调用必须有上限(2026-08-25 卡死事故的纪律):ls-files 只读
+      // 索引通常亚秒,但无界的同步子进程一次意外就是整站冻结。
+      timeoutMs: 30_000,
     });
     if (result.status !== 0) throw new Error("not a git repository");
     return String(result.stdout ?? "").split("\n").filter(Boolean);

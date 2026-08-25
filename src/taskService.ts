@@ -1017,6 +1017,13 @@ export interface DecisionSubmission {
   selected_repository_knowledge_ids?: string[];
 }
 
+/** 脏路径给人看的形态:前几条点名,余量说总数——三万个产物文件不能
+ * 整版倒进 detail,但"哪个目录在渗产物"必须一眼可见。 */
+function describeDirtyPaths(paths: string[]): string {
+  const shown = paths.slice(0, 5).join("、");
+  return paths.length > 5 ? `${shown} 等 ${paths.length} 个路径` : shown;
+}
+
 interface AsyncGitResult {
   status: number | null;
   stdout: string;
@@ -5459,14 +5466,17 @@ export class TaskService {
           const prepared = gitIdentity
             ? this.prepareHostGitSandbox(gitIdentity) : undefined;
           try {
-            (task.summary.repositories ?? []).forEach((repository, index) => {
+            // for...of 而不是 forEach:cloneRepo 已异步,forEach 不等
+            // async 回调,凭据会在克隆进行中被 finally 清掉。
+            const repositories = task.summary.repositories ?? [];
+            for (const [index, repository] of repositories.entries()) {
               // readonly:分析现场推送硬禁用(没有内核门禁兜底,禁令
               // 不能只写在 prompt 里)。
-              this.cloneRepo(analysisRoot, prepared, gitIdentity,
+              await this.cloneRepo(analysisRoot, prepared, gitIdentity,
                 repository, task.summary.baseline,
                 `${index + 1}-${basename(repository).replace(/\.git$/, "") || "repo"}`,
                 true);
-            });
+            }
           } finally {
             this.cleanupHostGitCredential(prepared);
           }
@@ -5552,7 +5562,7 @@ export class TaskService {
           const prepared = gitIdentity
             ? this.prepareHostGitSandbox(gitIdentity) : undefined;
           try {
-            cwd = this.cloneRepo(workspace, prepared, gitIdentity,
+            cwd = await this.cloneRepo(workspace, prepared, gitIdentity,
               task.summary.repo_url, task.summary.baseline);
           } finally {
             this.cleanupHostGitCredential(prepared);
@@ -6259,15 +6269,28 @@ export class TaskService {
     };
   }
 
-  private async prePushWorktreeClean(task: TaskState): Promise<boolean> {
-    if (!task.cwd) return false;
+  /** 脏路径清单(空数组=clean)。为什么要路径不只要布尔(2026-08-25
+   * 内网事故复盘):构建在同挂载工作区里落产物时,"工作区仍有未提交
+   * 业务改动"这句既没告诉模型该清什么,也没告诉人该 gitignore 什么,
+   * 每一轮验证都在同一处失败还说不出原因。git 读不到时返回哨兵行——
+   * 判 dirty 并把原因说出来,不许把"读不到"伪装成"干净"。 */
+  private async prePushDirtyPaths(task: TaskState): Promise<string[]> {
+    if (!task.cwd) return ["(任务没有代码工作区)"];
     const status = await runSafeWorktreeGitAsync(
       task.cwd, [
         "status", "--porcelain=v1", "--untracked-files=all", "--", ".",
         ":(exclude).mae-flow.json", ":(exclude).mae-flow-*",
         ":(exclude).mae-flow-work/**", ":(exclude).codecheckcli/**",
       ], { timeoutMs: 30_000 });
-    return status.status === 0 && !String(status.stdout ?? "").trim();
+    if (status.status !== 0) {
+      return [`(git status 读取失败: ${
+        String(status.stderr ?? status.error ?? "").trim().slice(0, 200)})`];
+    }
+    // porcelain v1:两位状态 + 空格 + 路径;改名行取箭头右侧。
+    return String(status.stdout ?? "").split("\n")
+      .map((line) => line.trimEnd())
+      .filter(Boolean)
+      .map((line) => line.slice(3).split(" -> ").pop() ?? line);
   }
 
   private setPrePushState(
@@ -6627,7 +6650,8 @@ export class TaskService {
         const evidence = report
           ? verifyPrePushEvidence(eventLog.replay(), report)
           : "收口缺少合法的 <prepush-result> 结构";
-        const dirty = !await this.prePushWorktreeClean(task);
+        const dirtyPaths = await this.prePushDirtyPaths(task);
+        const dirty = dirtyPaths.length > 0;
         if (report && !evidence && !dirty) {
           return withExecution({
             status: "passed",
@@ -6640,14 +6664,21 @@ export class TaskService {
           return withExecution({
             status: "code_failure",
             sha: (await this.prePushRevision(task)).sha,
-            message: [evidence, dirty ? "工作区仍有未提交业务改动" : ""]
-              .filter(Boolean).join("；"),
+            message: [evidence, dirty
+              ? `工作区仍有未提交业务改动(${describeDirtyPaths(dirtyPaths)})`
+                + "；若是构建产物,请在仓库 .gitignore 它们或把构建输出挪出"
+                + "工作区,否则每轮推送前验证都会在这里失败"
+              : ""].filter(Boolean).join("；"),
           });
         }
         outcome = await waitForTurn(driver.continueWith([
           "推送前验证尚不能签发 PASS，请在当前专项会话继续处理。",
           evidence,
-          dirty ? "git status 仍有业务改动：请提交后重新执行编译与 UT。" : "",
+          dirty
+            ? `git status 仍有业务改动(${describeDirtyPaths(dirtyPaths)})：`
+              + "属于本单的改动请提交；构建产物请清理出工作区或恢复原状，"
+              + "再重新执行编译与 UT。"
+            : "",
           "不要只重写结论；两项命令必须在最后一次代码修改后真实成功。",
         ].filter(Boolean).join("\n")));
       }
@@ -6743,12 +6774,16 @@ export class TaskService {
         message: `验证结果绑定 ${result.sha.slice(0, 12)}，但当前 HEAD 是 `
           + `${finalRevision.sha.slice(0, 12)}，拒绝复用陈旧结论`,
       };
-    } else if (result.status === "passed" && !await this.prePushWorktreeClean(task)) {
-      result = {
-        status: "code_failure",
-        sha: finalRevision.sha,
-        message: "编译与 UT 虽已执行，但工作区仍有未提交业务改动",
-      };
+    } else if (result.status === "passed") {
+      const dirtyPaths = await this.prePushDirtyPaths(task);
+      if (dirtyPaths.length) {
+        result = {
+          status: "code_failure",
+          sha: finalRevision.sha,
+          message: "编译与 UT 虽已执行，但工作区仍有未提交业务改动"
+            + `(${describeDirtyPaths(dirtyPaths)})`,
+        };
+      }
     }
     state = recordPrePushReport(
       state, attemptId, this.prePushDomainReport(result),
@@ -7171,7 +7206,7 @@ export class TaskService {
         return; // dispatched/halted 都已各自收口
       }
       if (candidate.kind === "conflict") {
-        if (this.dispatchConflictRepair(task, sha, max, epoch)) return;
+        if (await this.dispatchConflictRepair(task, sha, max, epoch)) return;
         continue;
       }
       await this.dispatchCiRepair(task, sha,
@@ -7488,7 +7523,7 @@ export class TaskService {
               return; // dispatched/halted 都已各自收口
             }
             if (candidate.kind === "conflict") {
-              if (this.dispatchConflictRepair(task, sha, max, epoch)) return;
+              if (await this.dispatchConflictRepair(task, sha, max, epoch)) return;
               continue;
             }
             await this.dispatchCiRepair(task, sha,
@@ -7657,12 +7692,12 @@ export class TaskService {
    * 工作区**,让 agent 在真实冲突上下文里解,而不是凭描述想象
    * (内网框架里最值得抄的一条)。merge 干净=没有真冲突,交回统一的
    * host push 链，不烧会话。刹车=同 SHA 不二修。 */
-  private dispatchConflictRepair(
+  private async dispatchConflictRepair(
     task: TaskState,
     sha: string,
     max: number | undefined,
     epoch: number,
-  ): boolean {
+  ): Promise<boolean> {
     if (!this.current(task, epoch)) return true;
     const delivery = task.summary.delivery!;
     const target = delivery.target_branch;
@@ -7731,18 +7766,22 @@ export class TaskService {
     // 因而 Agent 写入的 fsmonitor、filter、merge driver、url.insteadOf 与
     // credential helper 都不可能在带宿主权限/短期令牌的进程里执行。
     const worktreeEnv = gitView.environment(sandbox.env);
-    const git = (...args: string[]) => spawnSync(
-      "git", [...worktreeArgs, ...args], {
-        cwd, encoding: "utf-8", env: worktreeEnv,
+    // 异步 + 预算(2026-08-25 卡死事故同病类):fetch 走网络、merge
+    // 碰大仓索引,同步执行会把事件循环冻住整段时间。
+    const git = (...args: string[]) => runGitProcess(
+      [...worktreeArgs, ...args], {
+        cwd, env: worktreeEnv,
+        timeoutMs: args[0] === "fetch" || args[0] === "merge"
+          ? 5 * 60_000 : 30_000,
       });
     try {
-      const targetCheck = git("check-ref-format", "--branch", target);
+      const targetCheck = await git("check-ref-format", "--branch", target);
       if (targetCheck.status !== 0) {
         task.summary.detail = `冲突修复准备失败:目标分支名不合法 ${target}`;
         this.persist(task);
         return true;
       }
-      const fetched = git(
+      const fetched = await git(
         "fetch", "--no-tags", "--no-recurse-submodules", remoteUrl,
         `+refs/heads/${target}:refs/remotes/origin/${target}`);
       if (fetched.status !== 0) {
@@ -7752,11 +7791,11 @@ export class TaskService {
         return true; // 环境问题不硬闯,留痕等人(或下一轮监控重试)
       }
       const beforeMerge = String(
-        git("rev-parse", "HEAD").stdout || "").trim();
-      const merged = git("merge", "--no-edit", `origin/${target}`);
+        (await git("rev-parse", "HEAD")).stdout || "").trim();
+      const merged = await git("merge", "--no-edit", `origin/${target}`);
       if (merged.status === 0) {
         const afterMerge = String(
-          git("rev-parse", "HEAD").stdout || "").trim();
+          (await git("rev-parse", "HEAD")).stdout || "").trim();
         if (beforeMerge && afterMerge === beforeMerge) {
           // 新提交已经包含目标分支，但平台的 conflict gate 可能还没刷新。
           // 这不是“修复会话没有提交”：不写 last_sha、不退出监控，让
@@ -7774,14 +7813,14 @@ export class TaskService {
         setImmediate(() => void this.tryDeliver(task, epoch));
         return true;
       }
-      const conflicted = String(git(
+      const conflicted = String((await git(
         "diff", "--no-ext-diff", "--no-textconv",
-        "--name-only", "--diff-filter=U").stdout || "")
+        "--name-only", "--diff-filter=U")).stdout || "")
         .trim().split("\n").filter(Boolean);
       if (!conflicted.length) {
         // merge 失败却没有冲突文件 = 环境怪状(本地脏文件之类),
         // 别把 agent 派进一个说不清的现场。
-        git("merge", "--abort");
+        await git("merge", "--abort");
         task.summary.detail = "merge 失败但无冲突文件,请人工:"
           + `${String(merged.stderr || "").slice(0, 300)}`;
         this.persist(task);
@@ -7811,7 +7850,7 @@ export class TaskService {
           writeFileSync(targetPath, readFileSync(source), { mode: 0o600 });
         }
       } catch (error) {
-        git("merge", "--abort");
+        await git("merge", "--abort");
         task.summary.detail = `冲突现场安全落盘失败: ${String(error)}`;
         this.persist(task);
         return true;
@@ -8814,7 +8853,7 @@ export class TaskService {
    * 非 git 目录降级复制并剔除旧现场(.mae-flow-work 不跨任务串场)。
    * identity = commit 署名:令牌只管推送鉴权,"commit 是谁的"平台按
    * commit email 映射——两码事,都得写。 */
-  private cloneRepo(
+  private async cloneRepo(
     workspace: string,
     /** 带个人令牌时必须传加固沙箱(prepareHostGitSandbox),不能只给
      * helper 路径——见下面 useCredential 分支的注释。 */
@@ -8831,7 +8870,7 @@ export class TaskService {
      * 嘱咐——pushurl 指向不存在的路径 + 不登记 credential helper,
      * 模型真去 push 只会得到一个诚实的失败。 */
     readonly = false,
-  ): string {
+  ): Promise<string> {
     // 任务级仓(正式下单)> 部署 --repo(仅单仓试跑);都没有就如实失败，
     // 不猜一个仓出来。任务仓记在 summary，重启续跑仍使用同一地址。
     const source = repoUrl ?? this.effectiveDefaultRepo();
@@ -8870,8 +8909,11 @@ export class TaskService {
       // HOME/全局/系统配置全部换成空的,改道的配置来源就不存在了;
       // 顺带关掉 ext 传输、仓库 hooks 与交互式 askpass。
       const hardened = useCredential ? sandbox! : undefined;
-      const cloned = spawnSync(
-        "git",
+      // 异步 + 预算(2026-08-25 卡死事故的同病类):同步克隆内网大仓
+      // 会把整个事件循环冻住几分钟——每发起一单,全站页面/SSE/审批
+      // 全部无响应。runGitProcess 超时杀整个进程组,ssh/credential
+      // 子进程不残留。
+      const cloned = await runGitProcess(
         [
           ...(hardened
             ? [...hardened.args,
@@ -8883,7 +8925,7 @@ export class TaskService {
           "--", source, target,
         ],
         {
-          encoding: "utf-8",
+          timeoutMs: 30 * 60_000,
           // 子进程没有终端,git 想问密码只会把任务挂死——明令禁问,
           // 缺凭据就地失败,错误如实上浮(不卡死红线)。
           env: hardened
@@ -8891,7 +8933,9 @@ export class TaskService {
             : { ...process.env, GIT_TERMINAL_PROMPT: "0" },
         });
       if (cloned.status !== 0) {
-        const detail = String(cloned.stderr || "").trim().slice(0, 500);
+        const detail = cloned.timedOut
+          ? "克隆超过 30 分钟已终止"
+          : String(cloned.stderr || cloned.error || "").trim().slice(0, 500);
         if (checkoutBaseline) {
           throw new Error(
             `仓库克隆失败：代码仓基线「${checkoutBaseline}」不存在或不可访问`
@@ -8910,19 +8954,19 @@ export class TaskService {
     // 走到传输层就死,与是否配了 helper 无关(本地路径克隆连凭据都
     // 不需要,所以只拦 helper 拦不住)。fetch/log/grep 一概不受影响。
     if (readonly && existsSync(join(target, ".git"))) {
-      spawnSync("git",
+      await runGitProcess(
         ["config", "remote.origin.pushurl", "/dev/null/mae-flow-readonly"],
-        { cwd: target, encoding: "utf-8" });
+        { cwd: target, timeoutMs: 30_000 });
     }
     // 署名与传输方式无关(本地路径克隆的演练也该署对名):配了就写,
     // 邮箱没填只写名字——平台认领靠邮箱,表单里已经把话说明白。
     // 会话重建复用旧克隆,署名改动生效边界=下一次新克隆。
     if (identity && existsSync(join(target, ".git"))) {
-      spawnSync("git", ["config", "user.name", identity.username],
-        { cwd: target, encoding: "utf-8" });
+      await runGitProcess(["config", "user.name", identity.username],
+        { cwd: target, timeoutMs: 30_000 });
       if (identity.email) {
-        spawnSync("git", ["config", "user.email", identity.email],
-          { cwd: target, encoding: "utf-8" });
+        await runGitProcess(["config", "user.email", identity.email],
+          { cwd: target, timeoutMs: 30_000 });
       }
     }
     return target;

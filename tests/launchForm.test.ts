@@ -292,7 +292,7 @@ test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队
     /不是多仓需求分析单/);
 });
 
-test("分析现场只读:真 push 必须在传输层死掉,不靠 prompt 嘱咐", () => {
+test("分析现场只读:真 push 必须在传输层死掉,不靠 prompt 嘱咐", async () => {
   // 分析会话没有内核 preTool 门禁兜底,"禁止推送"若只是开场白的一句
   // 话,模型犯浑就真推上去了。用真仓验证:readonly 克隆后 push 失败,
   // 普通克隆(交付任务)push 照常。
@@ -308,7 +308,7 @@ test("分析现场只读:真 push 必须在传输层死掉,不靠 prompt 嘱咐"
     modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
     host: { kernelRoot: "/tmp" },
   });
-  const guarded = (service as any).cloneRepo(
+  const guarded = await (service as any).cloneRepo(
     join(dataDir, "ws1"), undefined, undefined, origin,
     undefined, "1-origin", true);
   execFileSync("git", ["-C", guarded, "commit", "-q", "--allow-empty",
@@ -318,7 +318,7 @@ test("分析现场只读:真 push 必须在传输层死掉,不靠 prompt 嘱咐"
   assert.throws(() => execFileSync(
     "git", ["-C", guarded, "push", "-q", "origin", "master"],
     { stdio: "pipe" }), "只读分析现场的 push 必须失败");
-  const normal = (service as any).cloneRepo(
+  const normal = await (service as any).cloneRepo(
     join(dataDir, "ws2"), undefined, undefined, origin, undefined, "repo");
   execFileSync("git", ["-C", normal, "commit", "-q", "--allow-empty",
     "-m", "deliver"], { env: { ...process.env,

