@@ -76,9 +76,11 @@ test("投递失败:有限退避后成功;首败期间不阻塞", async () => {
 
 test("端到端:任务进入等待即通知;通知死透不改流程,页面可见事实", async () => {
   const SCRIPT: Scene[] = [
-    { tool: { name: "AskUserQuestion",
-              input: { questions: [{ question: "通过吗?",
-                                     options: ["通过", "打回"] }] } } },
+    { tool: { name: "AskUserQuestion", input: { questions: [
+      { question: "兼容旧接口吗?", options: ["兼容", "不兼容"] },
+      { question: "需要灰度吗?", options: ["需要", "不需要"] },
+      { question: "灰度观察多久?", options: ["30 分钟", "2 小时"] },
+    ] } } },
     { text: "收口" },
   ];
   const luban = new FakeLubanServer();
@@ -106,6 +108,11 @@ test("端到端:任务进入等待即通知;通知死透不改流程,页面可�
       () => notifier.list()[0],
       "待办通知入账",
     );
+    assert.match(waitingNotice.text, /共 3 个问题/);
+    assert.match(waitingNotice.text, /问题 1：兼容旧接口吗/);
+    assert.match(waitingNotice.text, /问题 2：需要灰度吗/);
+    assert.match(waitingNotice.text, /问题 3：灰度观察多久/);
+    assert.match(waitingNotice.text, /选项：1\. 30 分钟；2\. 2 小时/);
     assert.equal(
       waitingNotice.link,
       `http://127.0.0.1:8787/work/${created.id}`,
@@ -121,7 +128,11 @@ test("端到端:任务进入等待即通知;通知死透不改流程,页面可�
     assert.match(failed.notify!.last_error, /HTTP 500/);
     await service.decide(created.id, {
       state_version: waiting.waiting!.state_version,
-      decision: "通过",
+      answers: {
+        "兼容旧接口吗?": "兼容",
+        "需要灰度吗?": "不需要",
+        "灰度观察多久?": "30 分钟",
+      },
     });
     const done = await until(() => {
       const task = service.get(created.id)!;

@@ -20,7 +20,9 @@ import {
   questionsOf,
   renderLubanDetail,
   renderLubanHelp,
+  renderLubanQuestionPrompt,
   renderLubanTaskList,
+  type LubanApprovalQuestion,
 } from "./lubanApprovalView.ts";
 
 export interface LubanApprovalService {
@@ -74,6 +76,11 @@ interface ConversationCursor {
   at: number;
   entries: BoundApproval[];
   selected?: BoundApproval;
+  /** 多题卡只在短期会话里保存未交卷草稿；waiting/stateVersion 仍是
+   * 真相锚点，全部题答完后才一次性写入 TaskService。 */
+  questionIndex?: number;
+  answers?: Record<string, string>;
+  answerNotes?: Record<string, string>;
 }
 
 const CACHE_TTL_MS = 10 * 60_000;
@@ -258,6 +265,35 @@ export class LubanApprovalGateway {
     };
   }
 
+  private sameBinding(left: BoundApproval | undefined, right: BoundApproval): boolean {
+    return !!left && left.taskId === right.taskId
+      && left.waitingId === right.waitingId
+      && left.stateVersion === right.stateVersion
+      && left.code === right.code;
+  }
+
+  /** 激活一张卡。重复查看同一版本时保留已经逐题收集的草稿；换卡或
+   * 状态版本变化时从第一题重新开始。 */
+  private activate(account: string, task: TaskSummary): ConversationCursor {
+    const binding = this.bind(task);
+    const existing = this.cursors.get(account);
+    if (existing && this.sameBinding(existing.selected, binding)) {
+      existing.at = this.now();
+      existing.entries = [binding];
+      existing.selected = binding;
+      existing.questionIndex ??= 0;
+      existing.answers ??= {};
+      existing.answerNotes ??= {};
+      return existing;
+    }
+    const cursor: ConversationCursor = {
+      at: this.now(), entries: [binding], selected: binding,
+      questionIndex: 0, answers: {}, answerNotes: {},
+    };
+    this.cursors.set(account, cursor);
+    return cursor;
+  }
+
   private taskFor(account: string, binding: BoundApproval): TaskSummary | undefined {
     return this.pending(account).find((task) => task.id === binding.taskId
       && task.waiting!.waiting_id === binding.waitingId
@@ -305,10 +341,7 @@ export class LubanApprovalGateway {
       return { status: 200, text: "当前没有待审批事项。" };
     }
     if (pending.length === 1) {
-      const binding = this.bind(pending[0]);
-      this.cursors.set(account, {
-        at: this.now(), entries: [binding], selected: binding,
-      });
+      this.activate(account, pending[0]);
       return this.renderDetail(pending[0]);
     }
     const shown = pending.slice(0, 5);
@@ -320,15 +353,21 @@ export class LubanApprovalGateway {
   private detail(account: string, code: string): LubanPluginReply {
     const task = this.find(account, code);
     if (!task) return this.stale(account);
-    const binding = this.bind(task);
-    this.cursors.set(account, {
-      at: this.now(), entries: [binding], selected: binding,
-    });
+    this.activate(account, task);
     return this.renderDetail(task);
   }
 
   private renderDetail(task: TaskSummary): LubanPluginReply {
-    return { status: 200, text: renderLubanDetail(task, this.approvalCode(task)) };
+    const binding = this.bind(task);
+    const cursor = task.luban_account
+      ? this.cursors.get(task.luban_account) : undefined;
+    const currentQuestion = this.sameBinding(cursor?.selected, binding)
+      ? cursor?.questionIndex ?? 0 : 0;
+    return {
+      status: 200,
+      text: renderLubanDetail(
+        task, this.approvalCode(task), currentQuestion),
+    };
   }
 
   private async choose(
@@ -340,14 +379,13 @@ export class LubanApprovalGateway {
     const task = this.find(account, code);
     if (!task) return this.stale(account);
     const questions = questionsOf(task.waiting!);
-    if (questions.length !== 1) {
-      return { status: 400, text: "该事项包含多项问题，请在电脑端处理，避免答案错配。" };
-    }
-    const option = questions[0].options[optionNumber - 1];
+    const cursor = this.activate(account, task);
+    const index = cursor.questionIndex ?? 0;
+    const option = questions[index]?.options[optionNumber - 1];
     if (!option) {
-      return { status: 400, text: `选项序号无效，请发送：mae-flow 详情 ${this.approvalCode(task)}` };
+      return { status: 400, text: `当前问题的选项序号无效，请发送：mae-flow 详情 ${this.approvalCode(task)}` };
     }
-    return await this.submit(task, option, notes);
+    return await this.recordAnswer(account, task, option, notes);
   }
 
   private async reply(
@@ -357,12 +395,9 @@ export class LubanApprovalGateway {
   ): Promise<LubanPluginReply> {
     const task = this.find(account, code);
     if (!task) return this.stale(account);
-    const questions = questionsOf(task.waiting!);
-    if (questions.length !== 1 || questions[0].options.length) {
-      return { status: 400, text: `该事项应按选项提交，请发送：mae-flow 详情 ${this.approvalCode(task)}` };
-    }
     if (!answer) return { status: 400, text: "答复不能为空" };
-    return await this.submit(task, answer);
+    this.activate(account, task);
+    return await this.answerCurrentQuestion(account, task, answer);
   }
 
   private async chooseByMeaning(
@@ -374,21 +409,23 @@ export class LubanApprovalGateway {
     const task = this.find(account, code);
     if (!task) return this.stale(account);
     const questions = questionsOf(task.waiting!);
-    if (questions.length !== 1) {
-      return { status: 400, text: "该事项不是单题审批，请先查看详情并在电脑端处理。" };
+    const cursor = this.activate(account, task);
+    const question = questions[cursor.questionIndex ?? 0];
+    if (!question?.options.length) {
+      return { status: 400, text: "当前问题没有可匹配的选项，请直接回复具体答复。" };
     }
     const negativePattern = /打回|退回|修改|拒绝|不通过/;
     const positivePattern = /通过|确认|同意|接受|批准|继续/;
     // “不通过”同时含“通过”；正向快捷命令必须排除所有负向词。
     // 边界选项宁可要求用户按序号选择，也不能自作聪明选反。
-    const matches = questions[0].options.filter((option) => positive
+    const matches = question.options.filter((option) => positive
       ? positivePattern.test(option) && !negativePattern.test(option)
       : negativePattern.test(option));
     if (matches.length !== 1) {
       return { status: 400, text: "无法安全判断你指的是哪个选项，请发送："
         + `mae-flow 详情 ${this.approvalCode(task)}，再用“mae-flow 选择 审批码 序号”。` };
     }
-    return await this.submit(task, matches[0], notes);
+    return await this.recordAnswer(account, task, matches[0], notes);
   }
 
   private async answerFromCursor(
@@ -411,62 +448,262 @@ export class LubanApprovalGateway {
       }
       const task = this.taskFor(account, binding);
       if (!task) return this.stale(account);
-      cursor.selected = binding;
-      cursor.at = this.now();
+      this.activate(account, task);
       return this.renderDetail(task);
     }
     const task = this.taskFor(account, cursor.selected);
     if (!task) return this.stale(account);
+    const navigation = this.navigateQuestions(account, task, answer);
+    if (navigation) return navigation;
+    return await this.answerCurrentQuestion(account, task, answer);
+  }
+
+  private navigateQuestions(
+    account: string,
+    task: TaskSummary,
+    command: string,
+  ): LubanPluginReply | undefined {
     const questions = questionsOf(task.waiting!);
-    if (questions.length !== 1) {
-      return { status: 400, text: "该事项包含多项问题，请在电脑端处理，避免答案错配。" };
+    if (questions.length <= 1) return undefined;
+    const cursor = this.activate(account, task);
+    if (/^(?:重答上一题|返回上一题)$/.test(command)) {
+      const current = cursor.questionIndex ?? 0;
+      if (current === 0) {
+        return {
+          status: 200,
+          text: "当前已经是第一题。\n\n"
+            + renderLubanQuestionPrompt(questions[0], 0, questions.length),
+        };
+      }
+      const target = current - 1;
+      const previous = questions[target];
+      delete cursor.answers![previous.question];
+      delete cursor.answerNotes![previous.question];
+      cursor.questionIndex = target;
+      cursor.at = this.now();
+      return {
+        status: 200,
+        text: `已撤销问题 ${target + 1} 的原答案，请重新回答。\n\n`
+          + renderLubanQuestionPrompt(previous, target, questions.length),
+      };
+    }
+    if (/^(?:重答全部问题|从头重答)$/.test(command)) {
+      cursor.questionIndex = 0;
+      cursor.answers = {};
+      cursor.answerNotes = {};
+      cursor.at = this.now();
+      return {
+        status: 200,
+        text: "已清空本次尚未提交的答案，从第一题重新开始。\n\n"
+          + renderLubanQuestionPrompt(questions[0], 0, questions.length),
+      };
+    }
+    return undefined;
+  }
+
+  /** 把一条纯文本安全映射到当前问题。数字只解释为当前题的选项序号；
+   * 自然语言沿用单题时的保守映射，拿不准就明确提示、绝不猜测提交。 */
+  private interpretAnswer(
+    question: LubanApprovalQuestion,
+    raw: string,
+  ): { answer?: string; note?: string; error?: string } {
+    const answer = raw.trim();
+    if (!answer) return { error: "答复不能为空" };
+    const free = answer.match(/^(?:自由回复|自由答复|自定义答复|其他)[：:]\s*([\s\S]+)$/);
+    if (free) {
+      const content = free[1].trim();
+      return content ? { answer: content } : {
+        error: "“自由回复：”后面还没有内容，请写明你的答案或修改要求。",
+      };
     }
     const number = Number(answer);
     if (Number.isInteger(number) && String(number) === answer.trim()) {
-      const option = questions[0].options[number - 1];
-      if (!option) return { status: 400, text: "选项序号无效，请按详情中的序号回复。" };
-      return await this.submit(task, option);
+      if (!question.options.length) return { answer };
+      const option = question.options[number - 1];
+      return option
+        ? { answer: option }
+        : { error: "当前问题的选项序号无效，请按提示中的序号回复。" };
     }
-    if (!questions[0].options.length) return await this.submit(task, answer);
+    if (!question.options.length) return { answer };
 
-    const exact = questions[0].options.find((option) => option === answer);
-    if (exact) return await this.submit(task, exact);
-    const negative = questions[0].options.filter((option) =>
-      /打回|退回|修改|拒绝|不通过|调整|补充/.test(option));
-    const positive = questions[0].options.filter((option) =>
+    const exact = question.options.find((option) => option === answer);
+    if (exact) return { answer: exact };
+    const numbered = answer.match(/^(\d+)(?:\s*[：:]\s*|\s+)([\s\S]+)$/);
+    if (numbered) {
+      const option = question.options[Number(numbered[1]) - 1];
+      if (!option) {
+        return { error: "当前问题的选项序号无效，请按提示中的序号回复。" };
+      }
+      return { answer: option, note: numbered[2].trim() };
+    }
+    const negative = question.options.filter((option) =>
+      /打回|退回|修改|拒绝|不通过|调整|补充|^(?:不|无需|无须|否)/.test(option));
+    const positive = question.options.filter((option) =>
       /通过|确认|同意|接受|批准|继续/.test(option)
       && !/打回|退回|修改|拒绝|不通过/.test(option));
-    const negativeIntent = /打回|退回|拒绝|不通过|不行|不对|有问题|请.{0,8}(?:改|补充|调整)|改成|需要修改|需要补充|需要调整/;
+    const negativeIntent = /打回|退回|拒绝|不通过|不行|不对|不要|不用|无需|无须|有问题|请.{0,8}(?:改|补充|调整)|改成|需要修改|需要补充|需要调整/;
     const positiveIntent = /通过|确认|同意|接受|批准|继续|可以|没问题|好的?|\bok\b|\byes\b/i;
+    if (negativeIntent.test(answer) && negative.length === 1) {
+      return { answer: negative[0], note: answer };
+    }
+    // “我选兼容并补充…”这类自由回复先按最长选项原文匹配；最长优先
+    // 避免“不兼容”同时命中“兼容”时选反，原话仍作为说明完整保留。
+    const mentioned = question.options
+      .filter((option) => answer.includes(option))
+      .sort((left, right) => right.length - left.length);
+    if (mentioned.length
+        && (mentioned.length === 1 || mentioned[0].length > mentioned[1].length)) {
+      return { answer: mentioned[0], note: answer };
+    }
     if (positiveIntent.test(answer) && !negativeIntent.test(answer)
         && positive.length === 1) {
-      return await this.submit(task, positive[0]);
+      return { answer: positive[0], note: answer };
     }
-    if (negative.length === 1) {
-      // 自然语言修改意见既保留原文，又提交卡片已有的“修改/退回”选项，
-      // 避免内核把一段自由文本误当成未知选项而重新追问。
-      return await this.submit(task, negative[0], answer);
+    // 选项题里的任意自然语言可能是“选择某项的说明”，也可能是明确要
+    // 跳出选项。判不清就不记、不交；让用户用序号或显式自由回复消歧。
+    return {
+      error: "没有把这句话唯一对应到某个选项，因此尚未记录。"
+        + "请选择选项序号；如果选项都不合适，请回复“自由回复：你的答案或修改要求”。",
+    };
+  }
+
+  private async answerCurrentQuestion(
+    account: string,
+    task: TaskSummary,
+    raw: string,
+  ): Promise<LubanPluginReply> {
+    const questions = questionsOf(task.waiting!);
+    const cursor = this.activate(account, task);
+    const batch = await this.answerBatch(account, task, raw);
+    if (batch) return batch;
+    const question = questions[cursor.questionIndex ?? 0];
+    if (!question) {
+      return { status: 400, text: "当前待办没有可读取的问题，请回到电脑端处理。" };
     }
-    // Web 本就允许自定义回答；没有唯一安全的选项映射时保持用户原意，
-    // 不让插件或 Cloud 猜测一个可能相反的决定。
-    return await this.submit(task, answer);
+    const interpreted = this.interpretAnswer(question, raw);
+    if (!interpreted.answer) {
+      return { status: 400, text: interpreted.error ?? "答复无法识别" };
+    }
+    return await this.recordAnswer(
+      account, task, interpreted.answer, interpreted.note);
+  }
+
+  /** 全部剩余问题都是选择题时，支持 `1/2/1` 一次答完。只接受纯数字
+   * 加分隔符且题数必须完全匹配；不满足时明确报错，不把它误当自由文本。 */
+  private async answerBatch(
+    account: string,
+    task: TaskSummary,
+    raw: string,
+  ): Promise<LubanPluginReply | undefined> {
+    const text = raw.trim();
+    if (!/^\d+(?:\s*[/,，、]\s*\d+)+$/.test(text)) return undefined;
+    const cursor = this.activate(account, task);
+    const questions = questionsOf(task.waiting!);
+    const index = cursor.questionIndex ?? 0;
+    const remaining = questions.slice(index);
+    const numbers = text.split(/\s*[/,，、]\s*/).map(Number);
+    if (remaining.length <= 1) return undefined;
+    if (numbers.length !== remaining.length) {
+      return {
+        status: 400,
+        text: `当前还剩 ${remaining.length} 个问题，请依次填写 ${remaining.length} 个选项序号，`
+          + `例如：${remaining.map(() => "1").join("/")}`,
+      };
+    }
+    if (remaining.some((question) => !question.options.length)) {
+      return {
+        status: 400,
+        text: "剩余问题中包含开放题，不能批量填写序号；请按当前问题逐题回复。",
+      };
+    }
+    const selected: string[] = [];
+    for (let offset = 0; offset < remaining.length; offset += 1) {
+      const question = remaining[offset];
+      const option = question.options[numbers[offset] - 1];
+      if (!option) {
+        return {
+          status: 400,
+          text: `问题 ${index + offset + 1} 的选项序号 ${numbers[offset]} 无效，`
+            + "请核对详情后重试。",
+        };
+      }
+      selected.push(option);
+    }
+    for (let offset = 0; offset < remaining.length; offset += 1) {
+      const question = remaining[offset];
+      cursor.answers![question.question] = selected[offset];
+      delete cursor.answerNotes![question.question];
+    }
+    cursor.at = this.now();
+    return await this.submit(task, undefined, "", { ...cursor.answers });
+  }
+
+  /** 多题卡逐题收集、整卡提交。HumanGate 的原子决定语义不变：中间
+   * 回复只形成短期草稿，最后一题完成后 answers 才一次性交给服务。 */
+  private async recordAnswer(
+    account: string,
+    task: TaskSummary,
+    answer: string,
+    note?: string,
+  ): Promise<LubanPluginReply> {
+    const questions = questionsOf(task.waiting!);
+    const cursor = this.activate(account, task);
+    const index = cursor.questionIndex ?? 0;
+    const question = questions[index];
+    if (!question) {
+      return { status: 400, text: "当前待办没有可读取的问题，请回到电脑端处理。" };
+    }
+    cursor.answers![question.question] = answer;
+    if (note?.trim()) cursor.answerNotes![question.question] = note.trim();
+    else delete cursor.answerNotes![question.question];
+    cursor.at = this.now();
+
+    if (questions.length === 1) return await this.submit(task, answer, note);
+    if (index + 1 < questions.length) {
+      cursor.questionIndex = index + 1;
+      const shown = answer.length > 120 ? answer.slice(0, 119) + "…" : answer;
+      return {
+        status: 200,
+        text: `已记录问题 ${index + 1}/${questions.length}：${shown}`
+          + (note?.trim()
+            ? `\n具体意见已保留：${note.trim().slice(0, 240)}` : "")
+          + "\n状态：尚未提交（完成全部问题后统一生效）\n\n"
+          + renderLubanQuestionPrompt(
+            questions[index + 1], index + 1, questions.length),
+      };
+    }
+
+    const notes = questions.flatMap((item, questionIndex) => {
+      const detail = cursor.answerNotes![item.question];
+      return detail
+        ? [`问题 ${questionIndex + 1}「${item.question}」：${detail}`]
+        : [];
+    }).join("\n");
+    return await this.submit(task, undefined, notes, { ...cursor.answers });
   }
 
   private async submit(
     task: TaskSummary,
-    decision: string,
+    decision?: string,
     notes?: string,
+    answers?: Record<string, string>,
   ): Promise<LubanPluginReply> {
     try {
       const result = await this.service.decide(task.id, {
         state_version: task.waiting!.state_version,
-        decision,
+        ...(answers ? { answers } : { decision }),
         notes: notes ? `小鲁班手机审批：${notes}` : "小鲁班手机审批",
       });
       if (task.luban_account) this.cursors.delete(task.luban_account);
+      const submitted = answers
+        ? `共 ${Object.keys(answers).length} 个问题`
+        : decision;
       return {
         status: 200,
-        text: `已提交：${task.id} · ${decision}\n当前状态：${result.status}`,
+        text: `已提交：${task.id} · ${submitted}`
+          + (answers ? "\n全部答案已按问题分别提交。" : "")
+          + (notes ? "\n具体意见已一并保留。" : "")
+          + `\n当前状态：${result.status}`,
       };
     } catch (error) {
       const message = String(error);

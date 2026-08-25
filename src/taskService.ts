@@ -54,7 +54,11 @@ import {
   type RequirementDocumentMeta,
 } from "./requirementDocument.ts";
 import { readJson } from "./jsonBody.ts";
-import type { Notifier, NotifyRecord } from "./notifier.ts";
+import type {
+  Notifier,
+  NotifyQuestion,
+  NotifyRecord,
+} from "./notifier.ts";
 import { EventLog } from "./semanticEvents.ts";
 import {
   buildActivity, readActivityEvents, type ActivityView,
@@ -7562,6 +7566,7 @@ export class TaskService {
     const questions =
       ((waiting.question as any)?.questions ?? []) as Array<{
         question?: string;
+        options?: string[];
       }>;
     this.bypass(task, "待办通知", notifier
       .notifyWaiting({
@@ -7572,7 +7577,11 @@ export class TaskService {
           : undefined,
         account,
         step: waiting.step,
-        summary: String(questions[0]?.question ?? "需要你确认"),
+        questions: questions.map((item): NotifyQuestion => ({
+          question: String(item.question ?? ""),
+          options: Array.isArray(item.options) ? item.options.map(String) : [],
+        })),
+        summary: "需要你确认",
         link: personalTaskLink(
           this.notificationLinkBase(),
           account,

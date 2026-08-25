@@ -29,6 +29,44 @@ export interface NotifyRecord {
   last_error: string;
 }
 
+export interface NotifyQuestion {
+  question: string;
+  options?: string[];
+}
+
+/** 把一张待办里的全部问题定稿进通知正文。问题和选项保留结构直到
+ * 通知边界再转成文本，避免上游先压成 questions[0] 后永久丢题。 */
+function waitingSummary(input: {
+  summary?: string;
+  questions?: NotifyQuestion[];
+}): string {
+  const questions = (input.questions ?? []).flatMap((item): NotifyQuestion[] => {
+    const question = String(item?.question ?? "").trim();
+    if (!question) return [];
+    const options = Array.isArray(item.options)
+      ? item.options.map(String).map((value) => value.trim()).filter(Boolean)
+      : [];
+    return [{ question, options }];
+  });
+  if (!questions.length) return input.summary?.trim() || "需要你确认";
+  if (questions.length === 1) {
+    const item = questions[0];
+    return item.question + (item.options?.length
+      ? `\n选项：${item.options.map((option, index) => `${index + 1}. ${option}`).join("；")}`
+      : "");
+  }
+  return [
+    `共 ${questions.length} 个问题：`,
+    ...questions.flatMap((item, index) => [
+      `问题 ${index + 1}：${item.question}`,
+      ...(item.options?.length
+        ? [`选项：${item.options.map((option, optionIndex) =>
+            `${optionIndex + 1}. ${option}`).join("；")}`]
+        : []),
+    ]),
+  ].join("\n");
+}
+
 export interface NotifierOptions {
   /** 小鲁班投递端点(真件=内网地址,演示=FakeLubanServer)。 */
   endpoint: string;
@@ -90,23 +128,41 @@ export class Notifier {
     subject?: string;
     account: string;
     step: string;
-    summary: string;
+    /** 旧调用方可直接给摘要；正常待办应传结构化 questions，避免丢题。 */
+    summary?: string;
+    questions?: NotifyQuestion[];
     link: string;
   }): Promise<NotifyRecord> {
     const existing = this.records.get(input.waitingId);
     if (existing) return existing;
+    const summary = waitingSummary(input);
+    const questions = (input.questions ?? []).filter((item) =>
+      String(item?.question ?? "").trim());
+    const batchExample = questions.length > 1
+      && questions.every((item) => Array.isArray(item.options)
+        && item.options.some((option) => String(option).trim()))
+      ? Array.from({ length: questions.length }, () => "1").join("/")
+      : "";
     const record: NotifyRecord = {
       waiting_id: input.waitingId,
       task_id: input.taskId,
       account: input.account,
       step: input.step,
-      summary: input.summary,
+      summary,
       link: input.link,
       text:
         `【Mae-Flow】${input.subject?.trim() || `任务 ${input.taskId}`} 等你决定` +
-        `(${input.step || "当前步骤"}):${input.summary}` +
+        `(${input.step || "当前步骤"}):\n${summary}` +
         (this.options.mobileApproval
-          ? "\n手机处理：打开“Mae-Flow 待审批”插件查看完整事项，随后直接回复序号或意见"
+          ? "\n手机处理："
+            + "\n1. 打开“Mae-Flow 待审批”插件并发送“待审批”"
+            + "\n2. 选项合适：回复序号"
+            + "\n3. 选项不合适：回复“自由回复：你的答案或修改要求”"
+            + "\n多题会逐题提示，全部答完后统一提交"
+            + (batchExample
+              ? `\n快捷回复：全是选项题，可一次发送“${batchExample}”`
+                + "（仅为格式示例，请按实际选项填写）"
+              : "")
           : ""),
       attempts: 0,
       delivered: false,
