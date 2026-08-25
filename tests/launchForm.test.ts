@@ -461,10 +461,11 @@ test("消费:任务级代码仓压过部署仓,克隆的就是下单填的那个
     await new Promise((tick) => setTimeout(tick, 100));
   }
   const task = service.get(id)!;
-  // 此剧本只验证 clone，不执行内核 init；clone 成功后必须由终态硬门禁
-  // 如实停下，不能用模型的一句“完成”伪造 completed。
+  // 此剧本只验证 clone，不推进内核；宿主会机械 init 到 config_confirm，
+  // 模型的一句“完成”仍必须被终态硬门禁如实打回。
   assert.equal(task.status, "failed");
-  assert.match(task.detail ?? "", /状态文件不存在|尚未初始化/);
+  assert.match(task.detail ?? "",
+    /config_confirm|尚未到 terminal|状态文件不存在|尚未初始化/);
   assert.equal(task.repo_url, repoB);
   // 克隆目录名与 origin 都指向下单填的仓,不是部署仓
   const clone = join(task.workspace, basename(repoB));
