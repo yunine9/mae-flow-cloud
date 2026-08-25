@@ -1,6 +1,10 @@
 import { useId, type ReactNode } from "react";
+import { ActivityDiagram } from "./ActivityDiagram";
 import { ClassDiagram, ClassDiagramLegend } from "./ClassDiagram";
+import { TopologyDiagram } from "./TopologyDiagram";
+import { inspectActivity, looksLikeActivity } from "./activityModel";
 import { looksLikeClassDiagram, parseClassDiagram } from "./classModel";
+import { inspectTopology, looksLikeTopology } from "./topologyModel";
 
 interface Participant {
   alias: string;
@@ -297,7 +301,14 @@ export function PlantUml({ source }: { source: string }) {
   // 时序图还落款"时序图 · 内置渲染"——类图那边怎么修都不会上屏。
   const classes = looksLikeClassDiagram(source)
     ? parseClassDiagram(source) : undefined;
-  const model = classes ? undefined : parseSequence(source);
+  const activityLike = !classes && looksLikeActivity(source);
+  const activityResult = activityLike ? inspectActivity(source) : undefined;
+  const topologyLike = !classes && !activityLike && looksLikeTopology(source);
+  const topologyResult = topologyLike ? inspectTopology(source) : undefined;
+  // 检测到活动图但解析不完整时不能再拿它去碰运气匹配时序图；否则陌生
+  // 语法可能被另一种解析器吞掉，页面反而画出一张语义错误的图。
+  const model = classes || activityLike || topologyLike
+    ? undefined : parseSequence(source);
   return (
     <figure className="plantuml-figure">
       {model ? (
@@ -307,14 +318,29 @@ export function PlantUml({ source }: { source: string }) {
           <ClassDiagram model={classes} />
           <ClassDiagramLegend />
         </>
+      ) : activityResult?.model ? (
+        <ActivityDiagram model={activityResult.model} />
+      ) : topologyResult?.model ? (
+        <TopologyDiagram model={topologyResult.model} />
       ) : (
         <div className="plantuml-unsupported">
           <strong>这段 PlantUML 暂时无法安全绘制</strong>
-          <span>已保留源码，避免把不支持的语法画错。</span>
+          <span>{activityResult?.issue
+            ? `检测到活动图，但第 ${activityResult.issue.line} 行${activityResult.issue.message}。已保留源码。`
+            : topologyResult?.issue
+              ? `检测到架构图，但第 ${topologyResult.issue.line} 行${topologyResult.issue.message}。已保留源码。`
+              : "已保留源码，避免把不支持的语法画错。"}</span>
         </div>
       )}
       <figcaption>{model ? "时序图 · 内置渲染"
-        : classes ? "类图 · 内置渲染" : "PlantUML 源码"}</figcaption>
+        : classes ? "类图 · 内置渲染"
+          : activityResult?.model ? "活动图 · 内置渲染"
+            : topologyResult?.model
+              ? `${topologyResult.model.view === "component" ? "组件/开发视图"
+                : topologyResult.model.view === "deployment" ? "部署/物理视图"
+                  : topologyResult.model.view === "usecase" ? "用例/场景视图"
+                    : "状态视图"} · 内置渲染`
+              : "PlantUML 源码"}</figcaption>
       <details className="plantuml-source">
         <summary>查看 PlantUML 源码</summary>
         <pre><code>{source}</code></pre>

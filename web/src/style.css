@@ -5222,6 +5222,63 @@ pre {
 .puml-frame-divider { stroke: var(--line-strong); stroke-width: .7; stroke-dasharray: 4 4; }
 .puml-keyword { fill: var(--muted); font-size: 9px; font-weight: 650 !important; }
 .puml-frame-label { fill: var(--muted); font-size: 9.5px; }
+.puml-flow { fill: none; stroke: var(--text); stroke-width: .9; }
+.puml-activity { fill: var(--surface); stroke: var(--text); stroke-width: .8; }
+.puml-activity-text, .puml-decision-text {
+  fill: var(--text-strong); font-size: 10.5px; font-weight: 500 !important;
+}
+.puml-decision { fill: var(--surface); stroke: var(--text); stroke-width: .8; }
+.puml-branch-label { fill: var(--muted); font-size: 9.5px; font-weight: 650 !important; }
+.puml-start, .puml-stop-inner, .puml-merge { fill: var(--text); stroke: none; }
+.puml-stop-outer { fill: var(--surface); stroke: var(--text); stroke-width: 1.2; }
+.puml-partition {
+  fill: color-mix(in srgb, var(--accent-soft) 28%, transparent);
+  stroke: color-mix(in srgb, var(--accent) 42%, var(--line-strong));
+  stroke-width: .7;
+}
+.puml-partition-tab {
+  fill: color-mix(in srgb, var(--accent-soft) 72%, var(--surface));
+  stroke: color-mix(in srgb, var(--accent) 42%, var(--line-strong));
+  stroke-width: .7;
+}
+.puml-partition-title, .puml-activity-title {
+  fill: var(--text-strong); font-size: 10px; font-weight: 700 !important;
+}
+.puml-activity-title { font-size: 13px; }
+.puml-note-link { stroke: var(--attention); stroke-width: .7; stroke-dasharray: 3 3; }
+.topology-edge { fill: none; stroke: var(--text); stroke-width: .9; }
+.topology-edge.dashed { stroke-dasharray: 5 4; }
+.topology-edge-label {
+  fill: var(--muted); stroke: var(--surface); stroke-width: 5px; paint-order: stroke;
+  font-size: 9.5px;
+}
+.topology-node rect, .topology-node ellipse {
+  fill: var(--surface); stroke: var(--text); stroke-width: .8;
+}
+.topology-kind-component rect, .topology-kind-package rect,
+.topology-kind-interface rect {
+  fill: color-mix(in srgb, var(--accent-soft) 34%, var(--surface));
+}
+.topology-kind-node rect, .topology-kind-cloud rect { stroke-dasharray: 4 3; }
+.topology-kind-database rect, .topology-kind-storage rect,
+.topology-kind-queue rect {
+  fill: color-mix(in srgb, var(--purple-soft) 36%, var(--surface));
+}
+.topology-kind-usecase ellipse {
+  fill: color-mix(in srgb, var(--accent-soft) 30%, var(--surface));
+}
+.topology-kind { fill: var(--muted); font-size: 8px; font-weight: 700 !important; }
+.topology-label { fill: var(--text-strong); font-size: 10.5px; font-weight: 600 !important; }
+.topology-group { fill: var(--faint); font-size: 8px; }
+.topology-actor circle, .topology-actor path {
+  fill: var(--surface); stroke: var(--text); stroke-width: 1.1;
+}
+.topology-actor path { fill: none; }
+.topology-actor text { fill: var(--text-strong); font-size: 10.5px; font-weight: 600 !important; }
+.topology-start circle { fill: var(--text); stroke: none; }
+.topology-end circle { fill: var(--surface); stroke: var(--text); stroke-width: 1.2; }
+.topology-end .topology-end-inner { fill: var(--text); stroke: none; }
+.topology-title { fill: var(--text-strong); font-size: 13px; font-weight: 700 !important; }
 
 /* ---- 团队运营 V1：行动优先于状态计数 ---- */
 .ops-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
