@@ -69,20 +69,24 @@ class FakeApprovalService implements LubanApprovalService {
 
   async decide(id: string, input: {
     state_version: number;
-    decision?: string;
-    answers?: Record<string, string>;
-    notes?: string;
+    selected_options?: Record<string, string>;
+    free_responses?: Record<string, string>;
+    comment?: string;
   }): Promise<TaskSummary> {
     const found = this.tasks.find((item) => item.id === id)!;
     if (found.status !== "waiting_for_human" || !found.waiting
         || found.waiting.state_version !== input.state_version) {
       throw new Error("任务状态已变化");
     }
+    const answers = {
+      ...input.selected_options,
+      ...input.free_responses,
+    };
+    const values = Object.values(answers);
     this.calls.push({
       id,
-      ...(input.decision !== undefined ? { decision: input.decision } : {}),
-      ...(input.answers ? { answers: input.answers } : {}),
-      notes: input.notes,
+      ...(values.length === 1 ? { decision: values[0] } : { answers }),
+      notes: input.comment,
     });
     found.status = "running";
     found.waiting = undefined;
@@ -129,7 +133,7 @@ test("唯一待办首次查询直接展示完整详情，裸序号提交当前�
   assert.doesNotMatch(listed.text, /不能泄露/);
   assert.match(listed.text, /编译与 UT 已通过/);
   assert.match(listed.text, /1\. 通过/);
-  assert.match(listed.text, /选项合适：回复序号/);
+  assert.match(listed.text, /直接选择：回复序号/);
 
   const code = codeOf(listed.text);
   const detail = await callback(entry, {
@@ -371,8 +375,9 @@ test("多题澄清按当前题逐题记录，全部答完后一次提交", async
   const code = codeOf(listed.text);
   assert.match(listed.text, /共 3 个问题/);
   assert.match(listed.text, /兼容旧接口吗/);
-  assert.match(listed.text, /需要灰度吗/);
-  assert.match(listed.text, /灰度观察时长/);
+  assert.doesNotMatch(listed.text, /需要灰度吗/,
+    "多题卡首次只显示当前一题");
+  assert.doesNotMatch(listed.text, /灰度观察时长/);
 
   const first = await callback(entry, {
     message_id: "many-choose", sender: "alice", content: "1",
@@ -416,7 +421,8 @@ test("多题澄清按当前题逐题记录，全部答完后一次提交", async
     content: `mae-flow 回复 ${code} 30 分钟`,
   });
   assert.equal(third.status, 200);
-  assert.match(third.text, /已提交.*共 3 个问题/);
+  assert.match(third.text, /已提交，Agent 已继续/);
+  assert.match(third.text, /已处理 3 个问题/);
   assert.deepEqual(service.calls, [{
     id: "task-many",
     answers: {
@@ -428,7 +434,7 @@ test("多题澄清按当前题逐题记录，全部答完后一次提交", async
   }]);
 });
 
-test("全选项多题可一次回复序号，自由回复会回显并保留原话", async () => {
+test("全选项多题可一次回复序号，补充说明与流程选项分离", async () => {
   const batchService = new FakeApprovalService([task(
     "task-batch", "alice", "批量选择",
     waiting("task-batch", [
@@ -446,7 +452,7 @@ test("全选项多题可一次回复序号，自由回复会回显并保留原�
     message_id: "batch-answer", sender: "alice", content: "1/2/1",
   });
   assert.equal(batch.status, 200);
-  assert.match(batch.text, /全部答案已按问题分别提交/);
+  assert.match(batch.text, /已处理 3 个问题/);
   assert.deepEqual(batchService.calls[0].answers, {
     "兼容旧接口吗？": "兼容",
     "需要灰度吗？": "不需要",
@@ -464,7 +470,7 @@ test("全选项多题可一次回复序号，自由回复会回显并保留原�
   const freeDetail = await callback(freeEntry, {
     message_id: "free-list", sender: "alice", content: "待审批",
   });
-  assert.match(freeDetail.text, /选项不合适：回复“自由回复/);
+  assert.match(freeDetail.text, /选择并说明：回复“序号：你的说明”/);
   const freeFirst = await callback(freeEntry, {
     message_id: "free-first", sender: "alice",
     content: "我选兼容，但只保证 2.3 以上版本",
@@ -476,7 +482,7 @@ test("全选项多题可一次回复序号，自由回复会回显并保留原�
     content: "2: 当前流量太小，暂不灰度",
   });
   assert.equal(freeSecond.status, 200);
-  assert.match(freeSecond.text, /具体意见已一并保留/);
+  assert.match(freeSecond.text, /具体说明已一并保留/);
   assert.deepEqual(freeService.calls[0].answers, {
     "兼容策略？": "兼容",
     "灰度策略？": "不需要",
@@ -505,13 +511,9 @@ test("全选项多题可一次回复序号，自由回复会回显并保留原�
     message_id: "custom-explicit", sender: "alice",
     content: "自由回复：先做最小灰度验证，再根据数据决定方案",
   });
-  assert.equal(explicitCustom.status, 200);
-  assert.match(explicitCustom.text, /先做最小灰度验证/);
-  assert.equal(
-    customService.calls[0].decision,
-    "先做最小灰度验证，再根据数据决定方案",
-    "选项都不合适时应按自由答案提交，不能擅自猜成某个选项",
-  );
+  assert.equal(explicitCustom.status, 400);
+  assert.match(explicitCustom.text, /自由说明不能代替流程选项/);
+  assert.equal(customService.calls.length, 0);
 });
 
 test("通过快捷命令绝不把“不通过”当成正向选项", async () => {
@@ -582,10 +584,12 @@ test("启用手机入口后，待办通知说明会话式审批方式", async ()
   const notifier = new Notifier({
     endpoint: "http://127.0.0.1:1/unused",
     mobileApproval: true,
+    approvalCode: () => "A1B2C3D4E5",
     backoffMs: [],
   });
   const record = await notifier.notifyWaiting({
-    waitingId: "waiting-1", taskId: "task-1", account: "alice",
+    waitingId: "waiting-1", stateVersion: 1,
+    taskId: "task-1", account: "alice",
     subject: "问题单 DTS20260824001（task-1）", step: "build_review",
     questions: [
       { question: "Diff 通过吗？", options: ["通过", "打回"] },
@@ -593,12 +597,10 @@ test("启用手机入口后，待办通知说明会话式审批方式", async ()
     ],
     link: "http://intranet/work/task-1",
   });
-  assert.match(record.text, /Mae-Flow 待审批/);
   assert.match(record.text, /问题单 DTS20260824001/);
   assert.match(record.text, /Diff 通过吗/);
-  assert.match(record.text, /需要灰度吗/);
-  assert.match(record.text, /逐题提示/);
-  assert.match(record.text, /选项不合适：回复“自由回复/);
-  assert.match(record.text, /全部答完后统一提交/);
-  assert.match(record.text, /快捷回复.*1\/1/);
+  assert.doesNotMatch(record.text, /需要灰度吗/);
+  assert.doesNotMatch(record.text, /build_review/);
+  assert.match(record.text, /代码变更检视/);
+  assert.match(record.text, /mae-flow 选择 A1B2C3D4E5 <序号>/);
 });

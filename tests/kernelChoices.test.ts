@@ -8,6 +8,7 @@ import { join } from "node:path";
 import {
   matchesStepChoice,
   stepChoiceEffects,
+  stepReviewSurface,
 } from "../src/kernelChoices.ts";
 import { KERNEL_ROOT } from "./kernelFixture.ts";
 
@@ -74,6 +75,20 @@ test("原步骤内调整的材料检视以 confirmation_answers 识别关闭答�
 test("步骤契约缺失时返回空，不由 Cloud 猜返工分支", () => {
   assert.deepEqual(stepChoiceEffects(kernelFixture(), "unknown_step"), []);
   assert.deepEqual(stepChoiceEffects(undefined, "arbitrary_human_check"), []);
+});
+
+test("推荐证据面只读 approval_subject 类型，不维护步骤名表", () => {
+  const root = kernelFixture();
+  assert.equal(stepReviewSurface(root, "arbitrary_human_check"), "diff");
+
+  const flowPath = join(root, "flow", "flow.json");
+  const flow = JSON.parse(readFileSync(flowPath, "utf-8"));
+  flow.steps.some_new_review = {
+    approval_subject: { kind: "artifacts", artifacts: ["spec"] },
+  };
+  writeFileSync(flowPath, JSON.stringify(flow));
+  assert.equal(stepReviewSurface(root, "some_new_review"), "doc");
+  assert.equal(stepReviewSurface(root, "unknown_step"), undefined);
 });
 
 test("收编内核的所有材料/代码检视点都有统一关闭语义", () => {

@@ -15,6 +15,41 @@ import {
 type EntryKind = "requirement" | "dts";
 const MAX_MARKDOWN_BYTES = 512 * 1024;
 const INLINE_MARKDOWN_BYTES = 32 * 1024;
+const LAUNCH_DRAFT_VERSION = 1;
+type LaunchDraft = {
+  version: 1;
+  updatedAt: string;
+  entryKind: EntryKind;
+  title: string;
+  requirement: string;
+  requirementDocumentName: string;
+  repos: string[];
+  ticket: string;
+  baseline: string;
+  lane: string;
+  repairRounds: string;
+  advancedOpen: boolean;
+};
+type LaunchPreferences = {
+  recentRepos: string[];
+  entryKind?: EntryKind;
+  baseline?: string;
+  lane?: string;
+  repairRounds?: string;
+};
+
+function storageKey(kind: "draft" | "preferences", account: string): string {
+  return `mae-flow:launch:${kind}:${account}`;
+}
+
+function readStored<T>(key: string): T | undefined {
+  try {
+    const value = localStorage.getItem(key);
+    return value ? JSON.parse(value) as T : undefined;
+  } catch {
+    return undefined;
+  }
+}
 type EnvironmentAccountDraft = {
   id: string;
   username: string;
@@ -50,12 +85,21 @@ export function LaunchWorkspace({
   onCreated: () => Promise<void>;
   onClose: () => void;
 }) {
-  const [entryKind, setEntryKind] = useState<EntryKind>("requirement");
-  const [requirement, setRequirement] = useState("");
-  const [requirementDocumentName, setRequirementDocumentName] = useState("");
+  const [restoredDraft] = useState(() =>
+    readStored<LaunchDraft>(storageKey("draft", session.username)));
+  const [savedPreferences] = useState(() =>
+    readStored<LaunchPreferences>(storageKey("preferences", session.username)));
+  const validDraft = restoredDraft?.version === LAUNCH_DRAFT_VERSION
+    ? restoredDraft : undefined;
+  const [entryKind, setEntryKind] = useState<EntryKind>(
+    validDraft?.entryKind ?? savedPreferences?.entryKind ?? "requirement");
+  const [requirement, setRequirement] = useState(
+    validDraft?.requirement ?? "");
+  const [requirementDocumentName, setRequirementDocumentName] = useState(
+    validDraft?.requirementDocumentName ?? "");
   const [documentError, setDocumentError] = useState("");
   const [draggingDocument, setDraggingDocument] = useState(false);
-  const [title, setTitle] = useState("");
+  const [title, setTitle] = useState(validDraft?.title ?? "");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [optionsLoading, setOptionsLoading] = useState(true);
@@ -63,15 +107,25 @@ export function LaunchWorkspace({
   // 任务级可填项(2026-08-18 重定口径):交付仓**必填**、交付方式、修复轮
   // 预算。模型不给选——管理员统一配一个,这里只显示"这单用谁跑"。
   const [options, setOptions] = useState<LaunchOptions | null>(null);
-  const [repos, setRepos] = useState([""]);
+  const [repos, setRepos] = useState(validDraft?.repos?.length
+    ? validDraft.repos
+    : savedPreferences?.recentRepos?.[0]
+      ? [savedPreferences.recentRepos[0]] : [""]);
   // 单号/基线分支:内核配置确认要的两项事实,下单一并收齐——
   // 不让模型开工后再逐项来问(用户 2026-08-19 拍板,基线默认 master)。
-  const [ticket, setTicket] = useState("");
-  const [baseline, setBaseline] = useState("");
+  const [ticket, setTicket] = useState(validDraft?.ticket ?? "");
+  const [baseline, setBaseline] = useState(
+    validDraft?.baseline ?? savedPreferences?.baseline ?? "");
   // 交付方式下单就定(用户拍板:不让 agent 再问一遍);选项与默认值
   // 都来自内核,空串=等 options 到了再取第一项。
-  const [lane, setLane] = useState("");
-  const [repairRounds, setRepairRounds] = useState("");
+  const [lane, setLane] = useState(
+    validDraft?.lane ?? savedPreferences?.lane ?? "");
+  const [repairRounds, setRepairRounds] = useState(
+    validDraft?.repairRounds ?? savedPreferences?.repairRounds ?? "");
+  const [advancedOpen, setAdvancedOpen] = useState(
+    validDraft?.advancedOpen ?? false);
+  const [draftSavedAt, setDraftSavedAt] = useState(
+    validDraft?.updatedAt ?? "");
   const [issueEnvironments, setIssueEnvironments] =
     useState<EnvironmentDraft[]>([]);
   const [repositorySkillSelection, setRepositorySkillSelection] =
@@ -92,6 +146,34 @@ export function LaunchWorkspace({
     });
     return () => { alive = false; };
   }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const draft: LaunchDraft = {
+        version: LAUNCH_DRAFT_VERSION,
+        updatedAt: new Date().toISOString(),
+        entryKind,
+        title,
+        requirement,
+        requirementDocumentName,
+        repos,
+        ticket,
+        baseline,
+        lane,
+        repairRounds,
+        advancedOpen,
+      };
+      try {
+        localStorage.setItem(storageKey("draft", session.username),
+          JSON.stringify(draft));
+        setDraftSavedAt(draft.updatedAt);
+      } catch {
+        // 草稿是体验增强；浏览器禁用存储时不阻止发起任务。
+      }
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [entryKind, title, requirement, requirementDocumentName, repos, ticket,
+    baseline, lane, repairRounds, advancedOpen, session.username]);
 
   useEffect(() => {
     const previous = document.body.style.overflow;
@@ -243,6 +325,24 @@ export function LaunchWorkspace({
           requirementDocumentName: requirementDocumentName || undefined,
         },
       );
+      const usedRepos = repos.map((item) => item.trim()).filter(Boolean);
+      const recentRepos = [...new Set([
+        ...usedRepos,
+        ...(savedPreferences?.recentRepos ?? []),
+      ])].slice(0, 5);
+      try {
+        localStorage.setItem(storageKey("preferences", session.username),
+          JSON.stringify({
+            recentRepos,
+            entryKind,
+            baseline: baseline.trim(),
+            lane: lane || options?.workflows[0]?.label,
+            repairRounds,
+          } satisfies LaunchPreferences));
+        localStorage.removeItem(storageKey("draft", session.username));
+      } catch {
+        // 不影响已经成功创建的任务。
+      }
       await onCreated();
       onClose();
     } catch (reason) {
@@ -314,6 +414,21 @@ export function LaunchWorkspace({
                 <strong>{entryKind === "dts" ? "填写问题单信息" : "填写任务信息"}</strong></div>
               <small><i aria-hidden /> 必填项请一次填完整</small>
             </div>
+            {(title.trim() || requirement.trim() || repos.some((repo) => repo.trim()))
+              && draftSavedAt && <div className="launch-draft-state" role="status">
+                <span>草稿已自动保存 · {new Date(draftSavedAt).toLocaleTimeString([], {
+                  hour: "2-digit", minute: "2-digit",
+                })}</span>
+                <button type="button" onClick={() => {
+                  setTitle("");
+                  setRequirement("");
+                  setRequirementDocumentName("");
+                  setRepos([""]);
+                  setTicket("");
+                  setError("");
+                  try { localStorage.removeItem(storageKey("draft", session.username)); } catch { /* noop */ }
+                }}>清空草稿</button>
+              </div>}
 
             {optionsLoading && <div className="launch-loading">正在读取任务配置…</div>}
             {optionsError && <div className="launch-blockers" role="alert"><strong>暂时无法发起</strong><p>{optionsError}</p></div>}
@@ -435,6 +550,7 @@ export function LaunchWorkspace({
                             <input type="text" value={value}
                               onChange={(event) => changeRepository(index, event.target.value)}
                               placeholder="https://codehub…/team/project.git"
+                              list="launch-recent-repositories"
                               spellCheck={false}
                               required={options.repo.required} />
                             {entryKind !== "dts" && repos.length > 1 && <button type="button"
@@ -454,9 +570,14 @@ export function LaunchWorkspace({
                           ? `已选择 ${repos.length} 个仓库；系统会先分析职责、接口与开发依赖，人工确认后再拆分交付。`
                           : "一个仓库就是只有一个交付节点的需求；需要跨仓时继续添加。"}
                       </small>
+                      <datalist id="launch-recent-repositories">
+                        {(savedPreferences?.recentRepos ?? []).map((repo) => (
+                          <option key={repo} value={repo} />
+                        ))}
+                      </datalist>
                     </div>
                   )}
-                  <div className="launch-field-grid">
+                  {(advancedOpen || entryKind === "dts") && <div className="launch-field-grid">
                     {options.ticket.enabled && (
                       <label className="account-field">
                         <span>{entryKind === "dts" ? "DTS 问题单号" : "需求/问题单号"}
@@ -469,7 +590,7 @@ export function LaunchWorkspace({
                           required={entryKind === "dts" || options.ticket.required} />
                       </label>
                     )}
-                    {options.baseline.enabled && (
+                    {advancedOpen && options.baseline.enabled && (
                       <label className="account-field">
                         <span>基线分支</span>
                         <input type="text" value={baseline}
@@ -477,9 +598,16 @@ export function LaunchWorkspace({
                           placeholder={`默认 ${options.baseline.default}`} spellCheck={false} />
                       </label>
                     )}
-                  </div>
+                  </div>}
                 </section>
               )}
+              <button type="button" className="launch-advanced-toggle"
+                aria-expanded={advancedOpen}
+                onClick={() => setAdvancedOpen((open) => !open)}>
+                <span><strong>高级设置</strong><small>基线、仓内知识与 Skill、交付方式、修复预算及 DTS 环境</small></span>
+                <i aria-hidden>{advancedOpen ? "收起" : "展开"}</i>
+              </button>
+              {advancedOpen && <>
               {entryKind === "dts" && (
                 <section className="launch-form-section issue-environments-section">
                   <div className="launch-section-head"><i>03</i><div>
@@ -606,6 +734,7 @@ export function LaunchWorkspace({
                   )}
                 </div>
               </section>
+              </>}
 
               {error && <div className="composer-error" role="alert">{error}</div>}
               <footer className="launch-submit-bar">

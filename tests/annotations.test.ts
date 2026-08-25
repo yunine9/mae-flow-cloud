@@ -427,9 +427,8 @@ test("未闭环检视意见不能随直接提交分支越过返工", async () =>
     await assert.rejects(service.decide(id, {
       state_version: waiting.state_version,
       decision: "代码无需调整，继续提交",
-      annotation_ids: [note.id],
     }), (error) => error instanceof TaskControlError
-      && /当前检视意见未闭环.*建议选择.*需要调整代码/.test(error.message));
+      && /仍有 1 条检视意见未闭环.*建议选择.*需要调整代码/.test(error.message));
 
     assert.equal(service.get(id)?.status, "waiting_for_human",
       "矛盾决定不能消费等待卡");

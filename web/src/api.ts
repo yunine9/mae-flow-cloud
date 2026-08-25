@@ -84,14 +84,45 @@ export interface AuthUser {
   moonlight?: boolean;
 }
 
-/** 切换月光模式。开启时服务端会把当前已在等的卡就地代答,
- * swept=清了几张。 */
+export interface MoonlightPreview {
+  waiting: number;
+  eligible: number;
+  blocked_annotations: number;
+  blocked_other: number;
+}
+
+export async function getMoonlightPreview(): Promise<MoonlightPreview> {
+  const response = await fetch("/auth/me/moonlight-preview");
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+/** 默认只影响后续节点；当前待办必须在用户看过预览后显式提交。 */
 export async function putMoonlight(
   on: boolean,
-): Promise<{ moonlight: boolean; swept: number }> {
+  includeCurrent = false,
+  expectedEligible?: number,
+): Promise<{ moonlight: boolean; swept: number } & MoonlightPreview> {
   const response = await fetch("/auth/me/moonlight", {
     method: "PUT",
-    body: JSON.stringify({ on }),
+    body: JSON.stringify({
+      on,
+      include_current: includeCurrent,
+      expected_eligible: expectedEligible,
+    }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function putTaskApprovalMode(
+  taskId: string,
+  mode: "inherit" | "manual" | "moonlight",
+  includeCurrent = false,
+): Promise<{ task: TaskSummary; swept: number; blocked_annotations: number }> {
+  const response = await fetch(`/tasks/${taskId}/moonlight`, {
+    method: "PUT",
+    body: JSON.stringify({ mode, include_current: includeCurrent }),
   });
   if (!response.ok) throw new Error(await errorText(response));
   return response.json();
@@ -359,6 +390,7 @@ export interface TaskSummary {
    * 页面据此如实说明,别让人对着 404 的代码差异发愣。 */
   workspace_reclaimed_at?: string;
   luban_account?: string;
+  approval_mode?: "inherit" | "manual" | "moonlight";
   repo_url?: string;
   repositories?: string[];
   /** 下单或 Chain 方案确认时选中的仓内 Skill；每个子任务只继承自己仓。 */
@@ -369,6 +401,9 @@ export interface TaskSummary {
   knowledge_usage?: TaskKnowledgeUsage;
   /** 仓内 Skill 与代码交付使用同一基线。 */
   baseline?: string;
+  /** 新任务复用时沿用的交付方式与修复预算。 */
+  lane?: string;
+  repair_rounds?: number;
   /** 业务需求/问题单号；与平台内部 task-xx 分开显示。 */
   ticket?: string;
   requirement_graph?: {
@@ -390,6 +425,7 @@ export interface TaskSummary {
     question?: { questions?: WaitingQuestion[] };
     /** 提问前模型的最后一段话:"如上表"这类指代的落点。 */
     context?: string;
+    recommended_view?: "source" | "doc" | "chain" | "diff";
     /** 由服务端读取内核 flow 投影；前端据此识别关闭检视与继续处理意见
      * 的选项，不维护 build_review 等阶段表。 */
     choice_effects?: Array<{
@@ -490,6 +526,12 @@ export interface SemanticEvent {
 
 export async function listTasks(): Promise<TaskSummary[]> {
   const response = await fetch("/tasks");
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function getTask(taskId: string): Promise<TaskSummary> {
+  const response = await fetch(`/tasks/${encodeURIComponent(taskId)}`);
   if (!response.ok) throw new Error(await errorText(response));
   return response.json();
 }
@@ -751,14 +793,13 @@ export async function createTask(
   if (!response.ok) throw new Error(await errorText(response));
 }
 
-/** 提交决定。409 = 先到决定已生效,把服务端的话原样带给调用方。
- * answers 的值是自由字符串——点选项和自定义答复走同一条通路;
- * notes 是整卡备注,非空才随身。 */
+/** 提交决定。结构化选项与自由说明分开，服务端统一查询未闭环批注。 */
 export async function decide(
   taskId: string,
   stateVersion: number,
-  answers: Record<string, string>,
-  notes?: string,
+  selectedOptions: Record<string, string>,
+  freeResponses: Record<string, string>,
+  comment?: string,
   /** 随这次决定一起提交的批注:圈过的几处就是"需要修改"的理由。
    * 渲染由服务端做——清单格式和那四条护栏只该有一份。 */
   annotationIds?: string[],
@@ -774,8 +815,9 @@ export async function decide(
     method: "POST",
     body: JSON.stringify({
       state_version: stateVersion,
-      answers,
-      notes: notes?.trim() || undefined,
+      selected_options: selectedOptions,
+      free_responses: freeResponses,
+      comment: comment?.trim() || undefined,
       annotation_ids: annotationIds?.length ? annotationIds : undefined,
       repository_skill_catalog_token: repositorySkills?.catalogToken,
       selected_repository_skill_ids: repositorySkills?.selectedIds,

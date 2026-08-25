@@ -54,6 +54,7 @@ interface WorkflowEntry extends WorkflowChoice {
 
 const cache = new Map<string, WorkflowEntry[]>();
 const effectCache = new Map<string, StepChoiceEffect[]>();
+const surfaceCache = new Map<string, "doc" | "diff" | undefined>();
 
 /** 首选:问内核要机读目录。python 不在/命令老(旧快照没有 --json)都
  * 只是拿不到,不是错误——静静退回兜底。 */
@@ -197,6 +198,31 @@ export function stepChoiceEffects(
   }
   effectCache.set(cacheKey, effects);
   return effects;
+}
+
+/** 人工检视应先打开哪类证据。映射只消费内核 approval_subject 的类型，
+ * 不认识任何步骤 id：artifacts 看过程文档，worktree 看代码变更。 */
+export function stepReviewSurface(
+  kernelRoot: string | undefined,
+  stepId: string | undefined,
+): "doc" | "diff" | undefined {
+  if (!kernelRoot || !stepId) return undefined;
+  const cacheKey = `${kernelRoot}\0${stepId}`;
+  if (surfaceCache.has(cacheKey)) return surfaceCache.get(cacheKey);
+  let surface: "doc" | "diff" | undefined;
+  try {
+    const path = join(kernelRoot, "flow", "flow.json");
+    if (existsSync(path)) {
+      const flow = JSON.parse(readFileSync(path, "utf-8"));
+      const subject = flow?.steps?.[stepId]?.approval_subject;
+      if (subject?.kind === "worktree") surface = "diff";
+      else if (subject?.kind === "artifacts") surface = "doc";
+    }
+  } catch {
+    surface = undefined;
+  }
+  surfaceCache.set(cacheKey, surface);
+  return surface;
 }
 
 /** 精确匹配内核给出的 choice key 或选项原文。trim 只吸收表单空白，

@@ -268,21 +268,37 @@ export function createTaskServer(
           return json(response, 200,
             options.auth.sessionView(result.user.username));
         }
-        if (request.method === "GET" && parts[1] === "me") {
+        if (request.method === "GET" && parts[1] === "me"
+            && parts.length === 2) {
           if (!viewer) return json(response, 401, { error: "尚未登录" });
           return json(response, 200,
             options.auth!.sessionView(viewer.username));
         }
-        // 月光模式(免审批):默认关;开=本人任务的人工节点由系统代答
-        // 直行,且对已经在等的卡立刻生效;关=之后的节点恢复审批。
+        if (request.method === "GET" && parts[1] === "me"
+            && parts[2] === "moonlight-preview") {
+          if (!viewer) return json(response, 401, { error: "尚未登录" });
+          return json(response, 200,
+            service.previewMoonlight(viewer.username));
+        }
+        // 月光模式默认只影响后续节点。当前待办必须由调用方展示预览后
+        // 显式带 include_current，且数量没有在确认期间发生变化。
         if (request.method === "PUT" && parts[1] === "me"
             && parts[2] === "moonlight") {
           if (!viewer) return json(response, 401, { error: "尚未登录" });
           const body = await readBody(request);
           const on = body.on === true;
+          const preview = service.previewMoonlight(viewer.username);
+          const includeCurrent = on && body.include_current === true;
+          if (includeCurrent && Number(body.expected_eligible) !== preview.eligible) {
+            return json(response, 409, {
+              error: "待办数量已变化，请重新预览后确认",
+              ...preview,
+            });
+          }
           options.auth!.setMoonlight(viewer.username, on);
-          const swept = on ? service.sweepMoonlight(viewer.username) : 0;
-          return json(response, 200, { moonlight: on, swept });
+          const swept = includeCurrent
+            ? service.sweepMoonlight(viewer.username) : 0;
+          return json(response, 200, { moonlight: on, swept, ...preview });
         }
         // 个人 Git 令牌:谁登录改谁的,写完只回掩码(只写不读)。
         if (request.method === "PUT" && parts[1] === "me"
@@ -729,6 +745,14 @@ export function createTaskServer(
           const body = await readBody(request);
           const task = await service.decide(id, {
             state_version: Number(body.state_version),
+            selected_options: body.selected_options
+              && typeof body.selected_options === "object"
+              ? body.selected_options : undefined,
+            free_responses: body.free_responses
+              && typeof body.free_responses === "object"
+              ? body.free_responses : undefined,
+            comment: body.comment !== undefined
+              ? String(body.comment) : undefined,
             decision: body.decision !== undefined
               ? String(body.decision) : undefined,
             answers: body.answers && typeof body.answers === "object"
@@ -747,6 +771,23 @@ export function createTaskServer(
                 ? body.selected_repository_knowledge_ids.map(String) : undefined,
           });
           return json(response, 200, task);
+        }
+        if (request.method === "PUT" && parts[2] === "moonlight") {
+          const target = service.get(id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          if (!canOperate(viewer, target.luban_account, !!options.auth)) {
+            return json(response, 403, { error: "只能调整分配给自己的任务" });
+          }
+          const body = await readBody(request);
+          const mode = String(body.mode ?? "inherit");
+          if (!(["inherit", "manual", "moonlight"] as string[]).includes(mode)) {
+            return json(response, 400, { error: "任务审批方式无效" });
+          }
+          return json(response, 200, service.setTaskApprovalMode(
+            id,
+            mode as "inherit" | "manual" | "moonlight",
+            body.include_current === true,
+          ));
         }
         // 多仓需求图的结构化确认:平台自己的按钮,不依赖模型把
         // 「确认并生成任务」的选项原文写对(魔法字符串漂了会静默丢单,

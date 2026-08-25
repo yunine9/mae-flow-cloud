@@ -2,8 +2,8 @@
  * 两种"现成答案"的自动交卷(都走人工决定同一条通路,内核台账不缺账):
  * - 交付方式预答:下单就选好,内核举卡时对得上就交卷——送达用户早给的
  *   答案,不是宿主代做判断;对不上退回真等人;
- * - 月光模式(免审批):默认关;开=本人任务的卡一律代答直行,且对
- *   已在等的卡立刻清场;关=之后恢复审批。
+ * - 月光模式(免审批):默认关；开启后影响后续节点，当前待办只有在
+ *   预览并二次确认后才处理；有检视意见的任务永不自动放行。
  *
  * 假件说假话的教训(2026-08-18 内网实战):这里原来假的卡问"请选择本单
  * 的工作流车道",选项"快速车道/慢速车道"——内核压根没有这套词。用例
@@ -156,32 +156,26 @@ test("恢复:老单带着旧版自造的交付方式,清除留痕而不是永远
   await model.stop();
 });
 
-test("选项卡上交自造词:放行但留明账(内核随后不认账时能对上因果)", async () => {
+test("选项卡上交自造词:服务端拒绝自由文本冒充流程分支", async () => {
   // 内网实战:有人绕开界面直接打接口,交了个自造的 "approve",真正的
   // 选择写在备注里 → 内核按选项原文对账,判"没有检测到本步骤的真实选项
   // 回答",报错落在几步之后的 done 上,现场看着像流程卡死。
   // 宿主不替内核判定(界面允许自定义答复,那是合法用法),只把因果记明白。
-  const logs: string[] = [];
   const model = new ScriptedModelServer([REVIEW_CARD, { text: "收口。" }]);
   await model.start();
   const service = new TaskService({
     dataDir: mkdtempSync(join(tmpdir(), "mfc-offmenu-")),
     provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
-    log: (line) => logs.push(line),
   });
   const id = service.create("自造词演练").id;
   await settle(service, id, ["waiting_for_human"]);
-  await service.decide(id, {
+  await assert.rejects(service.decide(id, {
     state_version: service.get(id)!.waiting!.state_version,
     decision: "approve",
     notes: "其实我想选通过",
-  });
-  assert.equal(await settle(service, id, ["completed", "failed"]), "completed",
-    "只是提醒,不拦——拦下去就是在 TS 侧复刻内核判定");
-  const warned = logs.filter((line) => line.includes("不在选项原文里"));
-  assert.equal(warned.length, 1, `没留下明账,日志:\n${logs.join("\n")}`);
-  assert.match(warned[0], /通过 \/ 打回/, "要把本卡的选项一并写出来");
+  }), /必须选择卡片中的结构化选项/);
+  assert.equal(service.get(id)!.status, "waiting_for_human");
   await model.stop();
 });
 
@@ -204,8 +198,62 @@ test("月光关着:非车道卡真等人;月光开着:代答直行,答复带复�
   assert.equal(service.sweepMoonlight("liao"), 1);
   assert.equal(await settle(service, id, ["completed", "failed"]),
     "completed");
-  assert.match(allSeen(model), /月光模式代答/);
+  assert.match(allSeen(model), /月光模式选择:通过/);
   assert.match(allSeen(model), /事后人工复盘/);
+  await model.stop();
+});
+
+test("存在未闭环检视意见时，月光模式预览和清场都拒绝自动放行", async () => {
+  let moonlight = false;
+  const model = new ScriptedModelServer([REVIEW_CARD, { text: "收口。" }]);
+  await model.start();
+  const service = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-moon-annotations-")),
+    provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    moonlight: () => moonlight,
+  });
+  const id = service.create("带检视意见的月光单", { account: "liao" }).id;
+  await settle(service, id, ["waiting_for_human"]);
+  service.addAnnotation(id, {
+    author: "liao", artifact: "未提交改动", file: "src/a.ts",
+    line: 3, anchor: "return true", note: "这里需要校验权限", kind: "code",
+  });
+
+  moonlight = true;
+  assert.deepEqual(service.previewMoonlight("liao"), {
+    waiting: 1,
+    eligible: 0,
+    blocked_annotations: 1,
+    blocked_other: 0,
+  });
+  assert.equal(service.sweepMoonlight("liao"), 0);
+  assert.equal(service.get(id)!.status, "waiting_for_human");
+  await model.stop();
+});
+
+test("任务级审批方式可以覆盖个人月光模式", async () => {
+  let moonlight = false;
+  const model = new ScriptedModelServer([REVIEW_CARD, { text: "收口。" }]);
+  await model.start();
+  const service = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-task-moonlight-")),
+    provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    moonlight: () => moonlight,
+  });
+  const id = service.create("任务级审批方式", { account: "liao" }).id;
+  await settle(service, id, ["waiting_for_human"]);
+
+  service.setTaskApprovalMode(id, "manual");
+  moonlight = true;
+  assert.equal(service.sweepMoonlight("liao"), 0,
+    "本任务逐步确认应压过个人月光模式");
+  assert.equal(service.get(id)!.status, "waiting_for_human");
+
+  const result = service.setTaskApprovalMode(id, "moonlight", true);
+  assert.equal(result.swept, 1);
+  assert.equal(await settle(service, id, ["completed"]), "completed");
   await model.stop();
 });
 
@@ -237,7 +285,7 @@ test("月光开着到达的卡直接放行;别人的任务不受影响", async (
   await other.stop();
 });
 
-test("路由:开关落账、开启即清场、/auth/me 回显;账号库重启后记得住", async () => {
+test("路由:开关默认仅影响后续，确认后处理当前待办，重启后记得住", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-moon-http-"));
   const auth = new LocalAuth(join(dataDir, "auth.json"));
   auth.bootstrapAdmin("admin", "admin-password-1");
@@ -263,11 +311,26 @@ test("路由:开关落账、开启即清场、/auth/me 回显;账号库重启后
     const id = service.create("路由月光单", { account: "dev" }).id;
     await settle(service, id, ["waiting_for_human"]);
 
+    const preview = await fetch(`${base}/auth/me/moonlight-preview`, {
+      headers: { cookie },
+    }).then((r) => readJson(r));
+    assert.equal(preview.eligible, 1);
+
     const on = await fetch(`${base}/auth/me/moonlight`, {
       method: "PUT", headers: { cookie },
       body: JSON.stringify({ on: true }),
     }).then((r) => readJson(r));
-    assert.deepEqual(on, { moonlight: true, swept: 1 }, "开启即清场");
+    assert.equal(on.moonlight, true);
+    assert.equal(on.swept, 0, "默认只影响后续节点");
+    assert.equal(service.get(id)!.status, "waiting_for_human");
+
+    const sweep = await fetch(`${base}/auth/me/moonlight`, {
+      method: "PUT", headers: { cookie },
+      body: JSON.stringify({
+        on: true, include_current: true, expected_eligible: 1,
+      }),
+    }).then((r) => readJson(r));
+    assert.equal(sweep.swept, 1, "看过预览并确认后才处理当前待办");
     assert.equal(await settle(service, id, ["completed"]), "completed");
 
     const me = await fetch(`${base}/auth/me`, { headers: { cookie } })

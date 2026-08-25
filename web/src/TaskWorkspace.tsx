@@ -39,6 +39,7 @@ import {
   readArtifact,
   repairStopped,
   requestCommitterReview,
+  putTaskApprovalMode,
   statusText,
   type AnchorCheck,
   type Annotation,
@@ -118,11 +119,14 @@ export function TaskWorkspace({
   onClose: () => void;
   onOpenTask?: (taskId: string) => void;
 }) {
+  // 旧任务、纯会话和非内核提问没有 approval_subject 元数据；此时需求
+  // 原文是唯一保证存在的证据，不能默认打开一个空的过程文档面板。
+  const recommendedMaterialView = task.waiting?.recommended_view ?? "source";
   const [items, setItems] = useState<ArtifactMeta[]>();
   const [unavailable, setUnavailable] = useState("");
   const [active, setActive] = useState("");
   const [materialView, setMaterialView] =
-    useState<"source" | "doc" | "chain" | "diff">("doc");
+    useState<"source" | "doc" | "chain" | "diff">(recommendedMaterialView);
   const [content, setContent] = useState("");
   const [branch, setBranch] = useState("");
   const [loading, setLoading] = useState(false);
@@ -131,7 +135,6 @@ export function TaskWorkspace({
   const [reply, setReply] =
     useState<{ texts: string[]; truncated: boolean } | undefined>();
   const [notesPulse, setNotesPulse] = useState(0);
-  const [attachNotes, setAttachNotes] = useState(true);
   const [livePulse, setLivePulse] = useState(0);
   const [committers, setCommitters] = useState<Array<{ username: string }>>([]);
   const [reviewer, setReviewer] = useState("");
@@ -143,6 +146,8 @@ export function TaskWorkspace({
   const [controlBusy, setControlBusy] =
     useState<"pause" | "resume" | "cancel" | "">("");
   const [controlError, setControlError] = useState("");
+  const [approvalBusy, setApprovalBusy] = useState(false);
+  const [approvalNote, setApprovalNote] = useState("");
   const [cancelArmed, setCancelArmed] = useState(false);
   const [chainSkillPicker, setChainSkillPicker] =
     useState<RepositorySkillPickerState>(EMPTY_REPOSITORY_SKILL_PICKER_STATE);
@@ -151,10 +156,24 @@ export function TaskWorkspace({
   );
 
   useEffect(() => {
-    setMaterialView("doc");
+    setMaterialView(task.waiting?.recommended_view ?? "source");
     setWorkspaceView(task.status === "paused" ? "collaboration" : "materials");
     setChainSkillPicker(EMPTY_REPOSITORY_SKILL_PICKER_STATE);
   }, [task.id]);
+
+  useEffect(() => {
+    const recommended = task.waiting?.recommended_view;
+    if (!recommended || task.status === "paused") return;
+    setWorkspaceView("materials");
+    setMaterialView(recommended);
+    if (recommended === "diff") {
+      const first = items?.find((item) => item.kind === "diff");
+      if (first) setActive(first.name);
+    } else if (recommended === "doc") {
+      const first = items?.find((item) => item.kind === "doc");
+      if (first) setActive(first.name);
+    }
+  }, [task.waiting?.waiting_id, task.waiting?.recommended_view]);
 
   useEffect(() => {
     if (task.status === "paused") setWorkspaceView("collaboration");
@@ -249,9 +268,13 @@ export function TaskWorkspace({
       setItems(result.items);
       // 列表可能随任务轮询/状态切换重新读取。默认项只用于首次进入；
       // 用户已经切到工作区变更时绝不能被后台刷新拽回最近文档。
-      setActive((current) => result.items?.some((item) => item.name === current)
-        ? current
-        : result.items?.[0]?.name ?? "");
+      setActive((current) => {
+        if (result.items?.some((item) => item.name === current)) return current;
+        const preferredKind = task.waiting?.recommended_view === "diff"
+          ? "diff" : "doc";
+        return result.items?.find((item) => item.kind === preferredKind)?.name
+          ?? result.items?.[0]?.name ?? "";
+      });
     });
     return () => { alive = false; };
   }, [task.id, livePulse]);
@@ -285,7 +308,9 @@ export function TaskWorkspace({
   }, [task.id, task.status, notesPulse, livePulse]);
 
   const drafts = notes.filter((item) => item.status === "draft");
-  const draftIds = drafts.map((item) => item.id);
+  const unresolvedNotes = notes.filter((item) =>
+    item.status === "draft" || item.status === "sent");
+  const unresolvedIds = unresolvedNotes.map((item) => item.id);
 
   /** 回到被圈的那一行:换页签→等它渲染出来→滚过去并闪一下。
    * 改批注前人几乎总要再看一眼上下文,只报"第 23 行"等于让他自己找。
@@ -358,6 +383,35 @@ export function TaskWorkspace({
     }
   }
 
+  async function changeTaskApprovalMode(
+    mode: "inherit" | "manual" | "moonlight",
+  ) {
+    if (approvalBusy) return;
+    let includeCurrent = false;
+    if (mode === "moonlight" && task.status === "waiting_for_human") {
+      const unresolved = notes.filter((item) =>
+        item.status === "draft" || item.status === "sent").length;
+      includeCurrent = unresolved === 0 && window.confirm(
+        "任务级月光模式默认仅对本任务的后续节点生效。\n\n"
+        + "选择“确定”同时处理当前待办；选择“取消”保留当前待办。",
+      );
+    }
+    setApprovalBusy(true);
+    setApprovalNote("");
+    try {
+      const result = await putTaskApprovalMode(task.id, mode, includeCurrent);
+      setApprovalNote(result.blocked_annotations > 0
+        ? `本任务已有 ${result.blocked_annotations} 条检视意见，当前待办仍需人工处理`
+        : result.swept > 0 ? "当前待办已提交，Agent 已继续"
+          : "已更新本任务审批方式");
+      await onChanged();
+    } catch (reason) {
+      setApprovalNote(reason instanceof Error ? reason.message : "审批方式更新失败");
+    } finally {
+      setApprovalBusy(false);
+    }
+  }
+
   return (
     <section
       className="workspace-overlay"
@@ -366,7 +420,8 @@ export function TaskWorkspace({
       aria-labelledby="task-workspace-title"
     >
       <header className="ws-head">
-        <button type="button" className="ws-back" onClick={onClose} autoFocus>
+        <button type="button" className="ws-back" aria-label="返回列表"
+          onClick={onClose} autoFocus>
           <svg viewBox="0 0 20 20" aria-hidden><path d="m12.5 5-5 5 5 5" /></svg>
           <span>返回列表</span>
         </button>
@@ -386,6 +441,16 @@ export function TaskWorkspace({
         </div>
         {controllable && (
           <div className="ws-head-controls" aria-label="任务控制">
+            <select aria-label="本任务审批方式"
+              value={task.approval_mode ?? "inherit"}
+              disabled={approvalBusy}
+              title="仅调整本任务，可覆盖个人的全局月光模式"
+              onChange={(event) => void changeTaskApprovalMode(
+                event.target.value as "inherit" | "manual" | "moonlight") }>
+              <option value="inherit">审批：继承个人设置</option>
+              <option value="manual">审批：本任务逐步确认</option>
+              <option value="moonlight">审批：本任务月光模式</option>
+            </select>
             {task.status === "paused" ? (
               <button type="button" className="primary" disabled={!!controlBusy}
                 title="沿用当前工作区和流程进度继续执行"
@@ -422,6 +487,8 @@ export function TaskWorkspace({
           </div>
         )}
       </header>
+
+      {approvalNote && <div className="utility-note" role="status">{approvalNote}</div>}
 
       <div className={`ws-progress${task.progress ? "" : " is-fallback"}`
         + `${health?.needs_attention ? " attention" : ""}`}>
@@ -672,7 +739,7 @@ export function TaskWorkspace({
             <WaitingCard
               task={task}
               onDecided={() => { setNotesPulse((tick) => tick + 1); onChanged(); }}
-              annotationIds={attachNotes ? draftIds : undefined}
+              annotationIds={unresolvedIds}
               repositorySkillSelection={chainReview
                 ? chainSkillPicker.selection : undefined}
               attachment={
@@ -688,8 +755,7 @@ export function TaskWorkspace({
                       onStateChange={setChainSkillPicker}
                     />
                   )}
-                  <AttachedNotes items={drafts} attached={attachNotes}
-                                 onToggle={setAttachNotes} onLocate={locate} />
+                  <AttachedNotes items={unresolvedNotes} onLocate={locate} />
                 </>
               }
             />

@@ -13,6 +13,7 @@
 
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { humanApprovalStage } from "./lubanApprovalView.ts";
 
 export interface NotifyRecord {
   /** 幂等键:待办通知=waiting_id;收口通知=taskId:outcome:状态。 */
@@ -89,6 +90,13 @@ export interface NotifierOptions {
   backoffMs?: number[];
   /** 已启用小鲁班插件回调时，在待办通知里告诉用户手机入口。 */
   mobileApproval?: boolean;
+  /** 为当前 waiting 生成短期审批码。密钥留在实现闭包中，不进通知器。 */
+  approvalCode?: (input: {
+    account: string;
+    taskId: string;
+    waitingId: string;
+    stateVersion: number;
+  }) => string;
   log?: (message: string) => void;
 }
 
@@ -135,6 +143,7 @@ export class Notifier {
   /** 投递一张待办。同 waiting_id 幂等——恢复重放不重复通知。 */
   async notifyWaiting(input: {
     waitingId: string;
+    stateVersion?: number;
     taskId: string;
     /** 面向人的任务称呼；DTS 可带问题单号，缺席时保持旧文案。 */
     subject?: string;
@@ -147,14 +156,23 @@ export class Notifier {
   }): Promise<NotifyRecord> {
     const existing = this.records.get(input.waitingId);
     if (existing) return existing;
-    const summary = waitingSummary(input);
+    const summary = waitingSummary({
+      ...input,
+      questions: this.options.mobileApproval
+        ? input.questions?.slice(0, 1) : input.questions,
+    });
     const questions = (input.questions ?? []).filter((item) =>
       String(item?.question ?? "").trim());
-    const batchExample = questions.length > 1
-      && questions.every((item) => Array.isArray(item.options)
-        && item.options.some((option) => String(option).trim()))
-      ? Array.from({ length: questions.length }, () => "1").join("/")
+    const approvalCode = this.options.mobileApproval
+      && this.options.approvalCode && input.stateVersion !== undefined
+      ? this.options.approvalCode({
+          account: input.account,
+          taskId: input.taskId,
+          waitingId: input.waitingId,
+          stateVersion: input.stateVersion,
+        })
       : "";
+    const stage = humanApprovalStage(input.step);
     const record: NotifyRecord = {
       waiting_id: input.waitingId,
       task_id: input.taskId,
@@ -164,17 +182,16 @@ export class Notifier {
       link: input.link,
       text:
         `【Mae-Flow】${input.subject?.trim() || `任务 ${input.taskId}`} 等你决定` +
-        `(${input.step || "当前步骤"}):\n${summary}` +
+        `\n阶段：${stage}\n${summary}` +
         (this.options.mobileApproval
-          ? "\n手机处理："
-            + "\n1. 打开“Mae-Flow 待审批”插件并发送“待审批”"
-            + "\n2. 选项合适：回复序号"
-            + "\n3. 选项不合适：回复“自由回复：你的答案或修改要求”"
-            + "\n多题会逐题提示，全部答完后统一提交"
-            + (batchExample
-              ? `\n快捷回复：全是选项题，可一次发送“${batchExample}”`
-                + "（仅为格式示例，请按实际选项填写）"
-              : "")
+          ? approvalCode
+            ? `\n手机直接回复：mae-flow 选择 ${approvalCode} <序号>`
+              + "\n如需说明：mae-flow 选择 " + approvalCode
+              + " <序号> <补充说明>"
+              + (questions.length > 1
+                ? `\n本卡共 ${questions.length} 个问题，提交后继续显示下一题。`
+                : "")
+            : "\n手机处理：打开 Mae-Flow 插件并发送“待审批”"
           : ""),
       attempts: 0,
       delivered: false,
@@ -205,7 +222,7 @@ export class Notifier {
       step: input.status,
       summary: input.summary,
       link: input.link,
-      text: `【Mae-Flow】任务 ${input.taskId} ${input.summary}`,
+      text: `【Mae-Flow】${input.summary}\n任务 ${input.taskId}`,
       attempts: 0,
       delivered: false,
       last_error: "",

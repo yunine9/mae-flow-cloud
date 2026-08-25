@@ -43,6 +43,7 @@ import { KernelHost } from "./kernelHost.ts";
 import {
   matchesStepChoice,
   stepChoiceEffects,
+  stepReviewSurface,
   workflowChoices,
   workflowLabel,
 } from "./kernelChoices.ts";
@@ -393,6 +394,8 @@ export interface TaskSummary {
   /** 读侧统一投影：只解释当前事实，不参与流程迁移或门禁。 */
   focus?: TaskFocus;
   waiting?: WaitingRecord & {
+    /** 推荐先看的证据面，由内核 approval_subject 或 Cloud 原生分析类型投影。 */
+    recommended_view?: "source" | "doc" | "chain" | "diff";
     /** 只读投影：选项会关闭检视，还是进入/留在意见处理步骤。前端据此
      * 提示未闭环意见，不能在 TS 里手写 build_review 分支表。 */
     choice_effects?: Array<{
@@ -421,6 +424,9 @@ export interface TaskSummary {
   workspace_reclaimed_at?: string;
   /** 小鲁班通知账号(任务创建时填写,主 spec §5.1)。 */
   luban_account?: string;
+  /** 单任务审批方式。缺席=继承个人设置；manual 可压过全局月光模式，
+   * moonlight 仅放行本任务。 */
+  approval_mode?: "inherit" | "manual" | "moonlight";
   /** 下单时填的交付代码仓;缺席=部署仓(--repo)。记在任务上:
    * 重启续跑同仓不漂移,MR/流水线请求也带它给平台适配层。 */
   repo_url?: string;
@@ -981,6 +987,25 @@ interface RepositorySkillCatalogTicket {
 export interface RepositorySkillCatalogResponse {
   catalog_token: string;
   repositories: RepositorySkillCatalog[];
+}
+
+/** 所有审批入口共用的决定契约。
+ *
+ * selected_options 只承载内核选项原文；free_responses 承载开放题答案或
+ * 选择题的补充说明，永远不参与流程分支匹配。decision/answers/notes 仅
+ * 保留给旧调用方兼容，进入 HumanGate 前仍会执行同样的菜单校验。 */
+export interface DecisionSubmission {
+  state_version: number;
+  selected_options?: Record<string, string>;
+  free_responses?: Record<string, string>;
+  comment?: string;
+  decision?: string;
+  answers?: Record<string, string>;
+  notes?: string;
+  annotation_ids?: string[];
+  repository_skill_catalog_token?: string;
+  selected_repository_skill_ids?: string[];
+  selected_repository_knowledge_ids?: string[];
 }
 
 export class TaskService {
@@ -1906,6 +1931,15 @@ export class TaskService {
       this.options.host?.kernelRoot,
       summary.waiting?.step,
     );
+    const recommendedView: "source" | "doc" | "chain" | "diff" | undefined =
+      this.isRequirementAnalysis(task)
+      ? "chain"
+      : this.isIssueTriage(task)
+        ? "doc"
+        : stepReviewSurface(
+            this.options.host?.kernelRoot,
+            summary.waiting?.step,
+          );
     const projected = {
       ...summary,
       title: summary.title ?? taskTitle(summary.requirement),
@@ -1921,18 +1955,21 @@ export class TaskService {
         : undefined,
       progress,
       token_usage: tokenUsageSnapshot(task.tokenUsage),
-      waiting: summary.waiting && choiceEffects.length
+      waiting: summary.waiting
         ? {
             ...summary.waiting,
-            choice_effects: choiceEffects.map((effect) => ({
-              key: effect.key,
-              answers: effect.answers,
-              allows_source_edit: effect.allowsSourceEdit,
-              handles_feedback: effect.handlesFeedback,
-              closes_feedback: effect.closesFeedback,
-            })),
+            ...(recommendedView ? { recommended_view: recommendedView } : {}),
+            ...(choiceEffects.length ? {
+              choice_effects: choiceEffects.map((effect) => ({
+                key: effect.key,
+                answers: effect.answers,
+                allows_source_edit: effect.allowsSourceEdit,
+                handles_feedback: effect.handlesFeedback,
+                closes_feedback: effect.closesFeedback,
+              })),
+            } : {}),
           }
-        : summary.waiting,
+        : undefined,
       knowledge_usage: includeKnowledgeUsage
         ? knowledgeUsageSnapshot({
             workspace: task.summary.workspace,
@@ -3964,24 +4001,125 @@ export class TaskService {
     this.bypass(undefined, "任务泵", this.pump());
   }
 
-  /** Web 决定:先到生效;冲突抛 StateConflictError 由 API 层变 409。
-   * 多问题卡必须给 answers(问题→选项);单问题卡给 decision 即可。 */
+  private normalizeDecisionSubmission(
+    waiting: WaitingRecord,
+    input: DecisionSubmission,
+  ): {
+    decision: string;
+    answers: Record<string, string>;
+    notes?: string;
+  } {
+    const questions = (((waiting.question as {
+      questions?: unknown;
+    } | undefined)?.questions) ?? []) as Array<{
+      question?: unknown;
+      options?: unknown;
+    }>;
+    const menu = questions.map((item) => ({
+      question: String(item?.question ?? "").trim(),
+      options: Array.isArray(item?.options)
+        ? item.options.map(String).map((value) => value.trim()).filter(Boolean)
+        : [],
+    })).filter((item) => item.question);
+    const usesStructuredContract = input.selected_options !== undefined
+      || input.free_responses !== undefined
+      || input.comment !== undefined;
+    const answers: Record<string, string> = {};
+    const notes = [input.comment, input.notes]
+      .map((value) => String(value ?? "").trim()).filter(Boolean);
+
+    if (usesStructuredContract) {
+      const selected = input.selected_options ?? {};
+      const free = input.free_responses ?? {};
+      const known = new Set(menu.map((item) => item.question));
+      for (const key of [...Object.keys(selected), ...Object.keys(free)]) {
+        if (!known.has(key)) {
+          throw new TaskControlError(`决定包含未知问题：${key}`);
+        }
+      }
+      for (const item of menu) {
+        const selectedOption = String(selected[item.question] ?? "").trim();
+        const freeResponse = String(free[item.question] ?? "").trim();
+        const optional = /可忽略|若上题|如无|可跳过|可不填/.test(item.question);
+        if (item.options.length) {
+          if (selectedOption) {
+            if (!item.options.includes(selectedOption)) {
+              throw new TaskControlError(
+                `“${item.question}”必须选择卡片中的结构化选项，不能把自由说明当作流程分支`,
+              );
+            }
+            answers[item.question] = selectedOption;
+          }
+          if (freeResponse) {
+            notes.push(`问题“${item.question}”的补充说明：${freeResponse}`);
+          }
+          if (!selectedOption && !optional) {
+            throw new TaskControlError(`“${item.question}”尚未选择结构化选项`);
+          }
+        } else {
+          if (selectedOption) {
+            throw new TaskControlError(`“${item.question}”是开放题，不接受结构化选项`);
+          }
+          if (freeResponse) answers[item.question] = freeResponse;
+          if (!freeResponse && !optional) {
+            throw new TaskControlError(`“${item.question}”尚未填写开放题答案`);
+          }
+        }
+      }
+    } else if (input.answers && Object.keys(input.answers).length) {
+      Object.assign(answers, input.answers);
+      for (const item of menu) {
+        const value = String(answers[item.question] ?? "").trim();
+        if (value && item.options.length && !item.options.includes(value)) {
+          throw new TaskControlError(
+            `“${item.question}”必须选择卡片中的结构化选项；自由说明请使用 comment`,
+          );
+        }
+      }
+    }
+
+    let decision = String(
+      input.decision ?? Object.values(answers).join("\n"),
+    ).trim();
+    if (!usesStructuredContract && menu.length > 1) {
+      for (const item of menu) {
+        if (/可忽略|若上题|如无|可跳过|可不填/.test(item.question)) continue;
+        if (!String(answers[item.question] ?? "").trim()) {
+          throw new TaskControlError(`“${item.question}”尚未填写决定`);
+        }
+      }
+    }
+    if (!Object.keys(answers).length && decision && menu.length === 1
+        && menu[0].options.length && !menu[0].options.includes(decision)) {
+      throw new TaskControlError(
+        `“${menu[0].question}”必须选择卡片中的结构化选项；自由说明请使用 comment`,
+      );
+    }
+    if (!decision && Object.keys(answers).length) {
+      decision = Object.values(answers).join("\n").trim();
+    }
+    if (!decision) {
+      throw new NotFoundError(
+        "决定不能为空：选择题请提交 selected_options，开放题请提交 free_responses",
+      );
+    }
+    return {
+      decision,
+      answers,
+      notes: notes.length ? notes.join("\n\n") : undefined,
+    };
+  }
+
+  private unresolvedAnnotations(task: TaskState): Annotation[] {
+    return this.annotations(task).visible().filter((item) =>
+      item.status === "draft" || item.status === "sent");
+  }
+
+  /** 所有入口的决定都在这里收口：先到生效；选项、自由说明与服务端
+   * 查询到的未闭环批注明确分离。 */
   async decide(
     id: string,
-    input: {
-      state_version: number;
-      decision?: string;
-      answers?: Record<string, string>;
-      notes?: string;
-      /** 随这次决定一起提交的批注:圈过的几处就是"需要修改"的理由,
-       * 不用人再复述一遍。 */
-      annotation_ids?: string[];
-      /** Chain 检视卡上可在同一次决定里调整按仓 Skill。服务端先把
-       * 选择绑定到父分析单并落盘，再生成子任务；这不是第二张审批卡。 */
-      repository_skill_catalog_token?: string;
-      selected_repository_skill_ids?: string[];
-      selected_repository_knowledge_ids?: string[];
-    },
+    input: DecisionSubmission,
   ): Promise<TaskSummary> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
@@ -3989,12 +4127,8 @@ export class TaskService {
     if (task.summary.status !== "waiting_for_human" || !waiting) {
       throw new NotFoundError(`任务 ${id} 当前没有待人工决定`);
     }
-    const answers = input.answers ?? {};
-    const decision = String(
-      input.decision ?? Object.values(answers).join("\n"));
-    if (!decision.trim()) {
-      throw new NotFoundError("决定不能为空:给 decision 或 answers");
-    }
+    const normalized = this.normalizeDecisionSubmission(waiting, input);
+    const { answers, decision } = normalized;
     // 多仓确认的顺序纪律:图的体检放在决定落袋**之前**(图不完整就报
     // 错,决定不消费,agent 继续等,用户看得到原因);建任务放在落袋
     // **之后**(乐观锁 409 时不许先把子任务生出来)。字符串匹配只是
@@ -4052,13 +4186,6 @@ export class TaskService {
       // 后父会话会立刻收口，重启也只能从 task.json 恢复这份选择。
       this.persist(task);
     }
-    this.warnOffMenuAnswer(task, waiting, Object.keys(answers).length
-      ? Object.values(answers) : [decision]);
-    // 批注进 notes 而不是 decision:内核按选项标签给这次选择记账
-    // (choice receipts),往 decision 里塞正文会让它对不上原选项。
-    // notes 是自由正文,本来就是给"为什么打回"用的。
-    const picked = input.annotation_ids?.length
-      ? this.pickDrafts(task, input.annotation_ids) : [];
     // 待修改批注与“确认关闭检视”是矛盾事实。结构化返工从内核
     // next → clear_hint/allow_source_edit 推导；Spec/Story 等原步修改则
     // 以 confirmation_answers 识别关闭答案。Cloud 不认识任何步骤名。
@@ -4069,9 +4196,13 @@ export class TaskService {
     const closingEffects = effects.filter((effect) => effect.closesFeedback);
     const submitted = Object.keys(answers).length
       ? Object.values(answers) : [decision];
-    if (picked.length && closingEffects.length
-        && submitted.some((answer) => closingEffects.some((effect) =>
-          matchesStepChoice(effect, answer)))) {
+    const closesFeedback = closingEffects.length > 0
+      && submitted.some((answer) => closingEffects.some((effect) =>
+        matchesStepChoice(effect, answer)));
+    const handlesFeedback = effects.some((effect) => effect.handlesFeedback
+      && submitted.some((answer) => matchesStepChoice(effect, answer)));
+    const unresolved = this.unresolvedAnnotations(task);
+    if (unresolved.length && closesFeedback) {
       const menuQuestions = Array.isArray(waiting.question?.questions)
         ? waiting.question.questions as Array<{ options?: string[] }> : [];
       const menuOptions = menuQuestions
@@ -4086,14 +4217,22 @@ export class TaskService {
         ?? nonClosing[0]
         ?? "需要调整";
       throw new TaskControlError(
-        `当前检视意见未闭环：本次附带了 ${picked.length} 条待处理批注。`
-        + `建议选择“${recommended}”；若确认本轮无需调整，请先取消附带批注。`,
+        `当前仍有 ${unresolved.length} 条检视意见未闭环，不能继续放行。`
+        + `建议选择“${recommended}”继续处理；若意见已经落实，请先逐条确认通过或移除。`,
       );
     }
+    // 服务端自己取任务当前全部草稿，手机端/月光模式不再因为没携带 id
+    // 而漏掉意见。显式 ids 只兼容普通非返工卡的旧提交方式。
+    const drafts = this.annotations(task).drafts();
+    const picked = handlesFeedback
+      ? drafts
+      : input.annotation_ids?.length
+        ? this.pickDrafts(task, input.annotation_ids) : [];
+    // 批注与自由说明都进 notes，不污染内核用于 choice receipt 的选项。
     const notes = picked.length
-      ? [input.notes, renderAnnotations(picked, this.ticketOf(task))]
+      ? [normalized.notes, renderAnnotations(picked, this.ticketOf(task))]
         .filter(Boolean).join("\n\n")
-      : input.notes;
+      : normalized.notes;
     const resolved = task.humanGate.resolve(waiting.waiting_id, {
       stateVersion: input.state_version,
       decision,
@@ -7785,6 +7924,13 @@ export class TaskService {
     setImmediate(() => this.bypass(undefined, "任务泵", this.pump()));
   }
 
+  private moonlightEnabledFor(task: TaskState, force = false): boolean {
+    if (task.summary.approval_mode === "manual") return false;
+    if (task.summary.approval_mode === "moonlight") return true;
+    if (force) return true;
+    return this.options.moonlight?.(task.summary.luban_account) ?? false;
+  }
+
   /** 人工节点的"现成答案":有则自动交卷,没有才真等人。两个来源:
    * - **下单预选(交付方式)**:内核仍举卡(流程规则归内核,宿主不删
    *   它的问题),但答案用户下单时已给——卡上出现了用户选定的那个
@@ -7793,7 +7939,7 @@ export class TaskService {
    * - **月光模式**:用户显式开启免审批,其余问题一律代答"预授权放行,
    *   按最稳妥判断继续,理由写明供复盘"。
    * 混合卡(既有交付方式又有别的问题)只在月光开着时整卡交,否则等人。 */
-  private autoAnswerFor(task: TaskState): {
+  private autoAnswerFor(task: TaskState, forceMoonlight = false): {
     why: string;
     answers: Record<string, string>;
     notes: string;
@@ -7812,9 +7958,8 @@ export class TaskService {
         && graph.repositories.every((repository) => repository.task_id)) {
       const answers: Record<string, string> = {};
       for (const item of questions) {
-        answers[String(item.question ?? "")] =
-          "跨仓方案已确认,各仓交付任务已由平台生成并自动调度,不归本"
-          + "会话跟进。分析工作到此为止:请立即收尾结束,不要再提问。";
+        answers[String(item.question ?? "")] = item.options?.[0]
+          ?? "跨仓方案已确认，各仓交付任务已生成；分析会话请收尾结束。";
       }
       return {
         why: "分析单已确认拆单,父会话不再举卡",
@@ -7822,8 +7967,12 @@ export class TaskService {
         notes: "系统自动交卷(分析已确认,子任务各有检视闸),非人工答复",
       };
     }
-    const moonlight =
-      this.options.moonlight?.(task.summary.luban_account) ?? false;
+    const moonlight = this.moonlightEnabledFor(task, forceMoonlight);
+    const hasUnresolvedAnnotations = this.unresolvedAnnotations(task).length > 0;
+    const effects = stepChoiceEffects(
+      this.options.host?.kernelRoot,
+      waiting.step,
+    );
     const lane = task.summary.lane;
     const reasons = new Set<string>();
     const answers: Record<string, string> = {};
@@ -7841,11 +7990,20 @@ export class TaskService {
         answers[text] = preselected;
         reasons.add(`下单预选交付方式:${lane}`);
       } else if (moonlight) {
-        answers[text] =
-          "【月光模式代答】用户已开启免审批预授权:按工程上最稳妥的" +
-          "判断替用户选择并继续推进,拿不准的选保守项;把你的选择和" +
-          "理由写清楚,供事后人工复盘。";
-        reasons.add("月光模式免审批");
+        // 有检视意见时绝不自动放行；开放题也必须由人明确填写。月光只
+        // 能提交真实选项，不能再拿一段自由文本冒充内核分支值。
+        if (hasUnresolvedAnnotations || !(item.options?.length)) {
+          return undefined;
+        }
+        const closing = effects.filter((effect) => effect.closesFeedback);
+        const chosen = item.options.find((option) => closing.some((effect) =>
+          matchesStepChoice(effect, option)))
+          ?? item.options.find((option) =>
+            /通过|确认|同意|接受|批准|继续|无需|无须/.test(option)
+            && !/不通过|打回|退回|拒绝|修改|调整|返工/.test(option))
+          ?? item.options[0];
+        answers[text] = chosen;
+        reasons.add(`月光模式选择:${chosen}`);
       } else {
         // 答不上,整卡留给人。但有一种"答不上"必须留明账:问题**正文**
         // 里带着用户选的交付方式,选项里却没有——十有八九是模型自造了
@@ -7864,40 +8022,9 @@ export class TaskService {
     return {
       why: [...reasons].join(" + "),
       answers,
-      notes: `系统自动交卷(${[...reasons].join(";")}),非人工现场答复`,
+      notes: `系统自动交卷(${[...reasons].join(";")}),非人工现场答复；`
+        + "已提交结构化选项，供事后人工复盘",
     };
-  }
-
-  /** 选项卡上交了"不在菜单里"的答复:**记一条明账,不拦**。
-   *
-   * 内核按选项原文对账(choice receipts),交上去的词不在选项里,它就
-   * 判"没有检测到本步骤的真实选项回答"——报错落在几步之后的 done 上,
-   * 现场看起来像流程卡死。内网实测吃过:有人绕开界面直接打接口,交了
-   * 个自造的 "approve",真正的选择写在备注里,内核当然不认。
-   *
-   * 为什么只警告不拦:界面本来就允许"自定义答复"(打回、补充要求),
-   * 那是合法用法;判定哪种自由文本算数是内核的事,宿主不许替它判——
-   * 拦下去就是在 TS 侧复刻判定。这里只负责让因果在同一处可见。 */
-  private warnOffMenuAnswer(
-    task: TaskState,
-    waiting: { question?: unknown },
-    values: string[],
-  ): void {
-    const questions = ((waiting.question as any)?.questions ?? []) as Array<{
-      options?: string[];
-    }>;
-    const menu = questions.flatMap((item) => item.options ?? []);
-    if (!menu.length) return;   // 开放题:本来就没有菜单
-    const offMenu = values.filter((value) => {
-      const text = value.trim();
-      return text && !menu.some((option) =>
-        option === text || option.includes(text) || text.includes(option));
-    });
-    if (!offMenu.length) return;
-    this.options.log?.(
-      `任务 ${task.summary.id} 的答复不在选项原文里(${offMenu.join(" / ")});`
-      + `本卡选项:${menu.join(" / ")}。若内核随后报"没有检测到本步骤的`
-      + `真实选项回答",原因就在这里——交回选项原文即可。`);
   }
 
   /** 自动交卷:走人工决定同一条通路(decide),内核台账、事件、
@@ -7909,13 +8036,24 @@ export class TaskService {
     const waiting = task.summary.waiting;
     if (task.summary.status !== "waiting_for_human" || !waiting) return;
     try {
-      const single = Object.values(auto.answers);
+      const questions = (((waiting.question as any)?.questions ?? []) as Array<{
+        question?: string;
+        options?: string[];
+      }>);
+      const selectedOptions: Record<string, string> = {};
+      const freeResponses: Record<string, string> = {};
+      for (const question of questions) {
+        const key = String(question.question ?? "");
+        const answer = auto.answers[key];
+        if (!answer) continue;
+        if (question.options?.includes(answer)) selectedOptions[key] = answer;
+        else freeResponses[key] = answer;
+      }
       await this.decide(task.summary.id, {
         state_version: waiting.state_version,
-        ...(single.length === 1
-          ? { decision: single[0] }
-          : { answers: auto.answers }),
-        notes: auto.notes,
+        selected_options: selectedOptions,
+        free_responses: freeResponses,
+        comment: auto.notes,
       });
     } catch (error) {
       this.options.log?.(
@@ -7923,8 +8061,62 @@ export class TaskService {
     }
   }
 
-  /** 月光模式开启的即时清场:把该用户当前所有等人的卡就地代答——
-   * "随时开启"就该对已经在等的卡立刻生效,不是只管以后的。 */
+  previewMoonlight(account: string): {
+    waiting: number;
+    eligible: number;
+    blocked_annotations: number;
+    blocked_other: number;
+  } {
+    let waiting = 0;
+    let eligible = 0;
+    let blockedAnnotations = 0;
+    for (const task of this.tasks.values()) {
+      if (task.summary.status !== "waiting_for_human"
+          || task.summary.luban_account !== account) continue;
+      waiting += 1;
+      if (this.unresolvedAnnotations(task).length) {
+        blockedAnnotations += 1;
+        continue;
+      }
+      if (this.autoAnswerFor(task, true)) eligible += 1;
+    }
+    return {
+      waiting,
+      eligible,
+      blocked_annotations: blockedAnnotations,
+      blocked_other: waiting - eligible - blockedAnnotations,
+    };
+  }
+
+  setTaskApprovalMode(
+    id: string,
+    mode: "inherit" | "manual" | "moonlight",
+    includeCurrent = false,
+  ): { task: TaskSummary; swept: number; blocked_annotations: number } {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    task.summary.approval_mode = mode === "inherit" ? undefined : mode;
+    this.persist(task);
+    const blockedAnnotations = this.unresolvedAnnotations(task).length;
+    let swept = 0;
+    if (mode === "moonlight" && includeCurrent
+        && task.summary.status === "waiting_for_human"
+        && !blockedAnnotations) {
+      const auto = this.autoAnswerFor(task);
+      if (auto) {
+        swept = 1;
+        void this.autoDecide(task, auto);
+      }
+    }
+    return {
+      task: { ...task.summary },
+      swept,
+      blocked_annotations: blockedAnnotations,
+    };
+  }
+
+  /** 仅在调用方明确选择“同时处理当前待办”后清场。默认启用月光模式
+   * 不会调用这里，因此只影响后续节点。 */
   sweepMoonlight(account: string): number {
     let swept = 0;
     for (const task of this.tasks.values()) {
@@ -7954,10 +8146,11 @@ export class TaskService {
     this.bypass(task, "待办通知", notifier
       .notifyWaiting({
         waitingId: waiting.waiting_id,
+        stateVersion: waiting.state_version,
         taskId: task.summary.id,
         subject: task.summary.entry_kind === "dts"
-          ? `问题单 ${task.summary.ticket ?? task.summary.id}（${task.summary.id}）`
-          : undefined,
+          ? `问题单 ${task.summary.ticket ?? task.summary.id} · ${task.summary.title ?? task.summary.requirement}`
+          : task.summary.title ?? task.summary.requirement,
         account,
         step: waiting.step,
         questions: questions.map((item): NotifyQuestion => ({

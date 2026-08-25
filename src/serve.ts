@@ -30,6 +30,7 @@ import { createTaskServer } from "./server.ts";
 import { FakeLubanServer, Notifier } from "./notifier.ts";
 import {
   loadLubanPluginToken,
+  lubanApprovalCode,
   LubanApprovalGateway,
 } from "./lubanApproval.ts";
 import { FakeGitPlatform } from "./gitPlatform.ts";
@@ -548,6 +549,9 @@ async function main(): Promise<void> {
       headers: lubanHeaders,
       fake: lubanIsFake,
       mobileApproval: !!lubanPluginToken,
+      approvalCode: lubanPluginToken
+        ? (input) => lubanApprovalCode({ token: lubanPluginToken, ...input })
+        : undefined,
       // 发起人的通知令牌:普通任务提醒是自己发给自己；主动邀请检视时，
       // 用责任人的令牌向所选 Committer 工号发送，不要求收件人配令牌。
       personalToken: (account) => auth.lubanToken(account),

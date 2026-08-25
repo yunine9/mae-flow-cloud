@@ -403,10 +403,7 @@ export function WaitingCard({
   const feedbackLabel = feedbackOption?.replace(/[（(].*$/, "") ?? "需要调整";
   const attachmentCount = annotationIds?.length ?? 0;
 
-  const answerOf = (question: string) =>
-    customOpen[question] && custom[question]?.trim()
-      ? custom[question].trim()
-      : picked[question];
+  const answerOf = (question: string) => picked[question] ?? "";
   const optional = (question: string) =>
     /可忽略|若上题|如无|可跳过|可不填/.test(question);
   const reviewChoiceConflict = attachmentCount > 0 && questions.some((item) => {
@@ -422,9 +419,13 @@ export function WaitingCard({
     .find(Boolean);
   const isReviewDecision = choiceEffects.some((effect) =>
     effect.closes_feedback);
-  const ready = questions.every(
-    (item) => optional(item.question) || answerOf(item.question),
-  ) && !repositorySkillSelection?.scanning
+  const ready = questions.every((item) => {
+    const options = item.options ?? [];
+    const answered = options.length
+      ? picked[item.question]
+      : custom[item.question]?.trim();
+    return optional(item.question) || Boolean(answered);
+  }) && !repositorySkillSelection?.scanning
     && (!repositorySkillSelection?.scanned
       || !!repositorySkillSelection.catalogToken)
     && !reviewChoiceConflict
@@ -439,7 +440,7 @@ export function WaitingCard({
       let changed = false;
       const next = { ...current };
       for (const item of questions) {
-        if (current[item.question] || customOpen[item.question]) continue;
+        if (current[item.question]) continue;
         const options = item.options ?? [];
         if (!options.some((option) => allChoiceAnswers.has(option))) continue;
         const revision = options.find((option) => feedbackAnswers.has(option))
@@ -458,23 +459,25 @@ export function WaitingCard({
 
   function pickOption(question: string, option: string) {
     setPicked({ ...picked, [question]: option });
-    setCustomOpen({ ...customOpen, [question]: false });
-    setCustom({ ...custom, [question]: "" });
   }
 
   function openCustom(question: string) {
     setCustomOpen({ ...customOpen, [question]: true });
-    setPicked({ ...picked, [question]: "" });
   }
 
   async function submit() {
     if (!ready || submitting) return;
-    const answers: Record<string, string> = {};
+    const selectedOptions: Record<string, string> = {};
+    const freeResponses: Record<string, string> = {};
     for (const item of questions) {
-      const answer = answerOf(item.question);
-      if (answer) answers[item.question] = answer;
+      const options = item.options ?? [];
+      if (options.length && picked[item.question]) {
+        selectedOptions[item.question] = picked[item.question];
+      }
+      const explanation = custom[item.question]?.trim();
+      if (explanation) freeResponses[item.question] = explanation;
     }
-    const confirmsChain = Object.values(answers).some((answer) =>
+    const confirmsChain = Object.values(selectedOptions).some((answer) =>
       answer.includes("确认并生成任务"));
     const repositorySkills = confirmsChain
       && repositorySkillSelection?.scanned
@@ -493,7 +496,8 @@ export function WaitingCard({
       const result = await decide(
         task.id,
         task.waiting!.state_version,
-        answers,
+        selectedOptions,
+        freeResponses,
         notes,
         annotationIds,
         repositorySkills,
@@ -535,8 +539,6 @@ export function WaitingCard({
           const skippable = optional(item.question);
           const reviewQuestion = options.some((option) =>
             allChoiceAnswers.has(option));
-          const hasAdjustmentOption = reviewQuestion && options.some((option) =>
-            !closingAnswers.has(option));
           return (
             <fieldset className="question" key={item.question}>
               <legend>
@@ -583,17 +585,19 @@ export function WaitingCard({
                     </button>
                   );
                 })}
-                {!hasAdjustmentOption && !customOpen[item.question] && (
+                {!customOpen[item.question] && (
                   <button
                     type="button"
                     className="option custom-entry"
                     onClick={() => openCustom(item.question)}
                   >
-                    <span className="radio" />
-                    <span className="option-body">
-                      <span className="option-title">自定义答复</span>
-                      <span className="option-hint">输入精确的修改点或决策内容</span>
-                    </span>
+                      <span className="radio" />
+                      <span className="option-body">
+                        <span className="option-title">{options.length ? "补充说明" : "填写答复"}</span>
+                        <span className="option-hint">{options.length
+                          ? "说明会随决定提交，但不会改变所选流程分支"
+                          : "填写本题的具体答案"}</span>
+                      </span>
                   </button>
                 )}
               </div>
@@ -601,7 +605,9 @@ export function WaitingCard({
                 <div className="custom-answer">
                   <textarea
                     className={`custom-input${customActive ? " picked" : ""}`}
-                    placeholder="写下你的自定义答复…"
+                    placeholder={options.length
+                      ? "补充原因、修改点或约束…"
+                      : "写下你的答复…"}
                     value={custom[item.question] ?? ""}
                     autoFocus
                     onChange={(change) => setCustom({
@@ -609,7 +615,9 @@ export function WaitingCard({
                       [item.question]: change.target.value,
                     })}
                   />
-                  <span>这段文字将作为本题的最终答案提交。</span>
+                  <span>{options.length
+                    ? "这段文字仅作为补充说明；流程走向以上方选项为准。"
+                    : "这段文字将作为开放题答案提交。"}</span>
                 </div>
               )}
             </fieldset>

@@ -14,4 +14,8 @@ const theme = queryTheme === "light" || queryTheme === "dark"
     : matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 document.documentElement.dataset.theme = theme;
 
+let savedDensity: string | null = null;
+try { savedDensity = localStorage.getItem("mae-flow-density"); } catch { /* 私密模式也能用 */ }
+document.documentElement.dataset.density = savedDensity === "compact" ? "compact" : "comfortable";
+
 createRoot(document.getElementById("root")!).render(<App />);

@@ -29,9 +29,9 @@ export interface LubanApprovalService {
   list(): TaskSummary[];
   decide(id: string, input: {
     state_version: number;
-    decision?: string;
-    answers?: Record<string, string>;
-    notes?: string;
+    selected_options?: Record<string, string>;
+    free_responses?: Record<string, string>;
+    comment?: string;
   }): Promise<TaskSummary>;
 }
 
@@ -107,6 +107,19 @@ export function loadLubanPluginToken(path: string): string {
 
 function normalizeCode(value: string): string {
   return value.replace(/[^a-z0-9]/gi, "").toUpperCase();
+}
+
+export function lubanApprovalCode(input: {
+  token: string;
+  account?: string;
+  taskId: string;
+  waitingId: string;
+  stateVersion: number;
+}): string {
+  return createHmac("sha256", input.token).update([
+    "approval", input.account, input.taskId,
+    input.waitingId, input.stateVersion,
+  ].join("\0"), "utf-8").digest("hex").slice(0, 10).toUpperCase();
 }
 
 function parseEnvelope(rawBody: string): LubanPluginEnvelope {
@@ -269,10 +282,13 @@ export class LubanApprovalGateway {
 
   private approvalCode(task: TaskSummary): string {
     const waiting = task.waiting!;
-    return createHmac("sha256", this.options.token).update([
-      "approval", task.luban_account, task.id,
-      waiting.waiting_id, waiting.state_version,
-    ].join("\0"), "utf-8").digest("hex").slice(0, 10).toUpperCase();
+    return lubanApprovalCode({
+      token: this.options.token,
+      account: task.luban_account,
+      taskId: task.id,
+      waitingId: waiting.waiting_id,
+      stateVersion: waiting.state_version,
+    });
   }
 
   private find(account: string, code: string): TaskSummary | undefined {
@@ -537,9 +553,16 @@ export class LubanApprovalGateway {
     const free = answer.match(/^(?:自由回复|自由答复|自定义答复|其他)[：:]\s*([\s\S]+)$/);
     if (free) {
       const content = free[1].trim();
-      return content ? { answer: content } : {
+      if (!content) return {
         error: "“自由回复：”后面还没有内容，请写明你的答案或修改要求。",
       };
+      if (question.options.length) {
+        return {
+          error: "自由说明不能代替流程选项。请先选择序号；如需补充原因，"
+            + "可回复“序号：说明”，例如“2：请补充异常场景”。",
+        };
+      }
+      return { answer: content };
     }
     const number = Number(answer);
     if (Number.isInteger(number) && String(number) === answer.trim()) {
@@ -585,10 +608,10 @@ export class LubanApprovalGateway {
       return { answer: positive[0], note: answer };
     }
     // 选项题里的任意自然语言可能是“选择某项的说明”，也可能是明确要
-    // 跳出选项。判不清就不记、不交；让用户用序号或显式自由回复消歧。
+    // 跳出选项。判不清就不记、不交；必须先落到结构化选项。
     return {
       error: "没有把这句话唯一对应到某个选项，因此尚未记录。"
-        + "请选择选项序号；如果选项都不合适，请回复“自由回复：你的答案或修改要求”。",
+        + "请选择选项序号；如需补充说明，请回复“序号：你的说明”。",
     };
   }
 
@@ -714,26 +737,40 @@ export class LubanApprovalGateway {
     answers?: Record<string, string>,
   ): Promise<LubanPluginReply> {
     try {
-      const result = await this.service.decide(task.id, {
+      const selectedOptions: Record<string, string> = {};
+      const freeResponses: Record<string, string> = {};
+      const questions = questionsOf(task.waiting!);
+      const submittedAnswers = answers ?? (questions[0] && decision !== undefined
+        ? { [questions[0].question]: decision } : {});
+      for (const question of questions) {
+        const answer = submittedAnswers[question.question];
+        if (!answer) continue;
+        if (question.options.includes(answer)) {
+          selectedOptions[question.question] = answer;
+        } else {
+          freeResponses[question.question] = answer;
+        }
+      }
+      await this.service.decide(task.id, {
         state_version: task.waiting!.state_version,
-        ...(answers ? { answers } : { decision }),
-        notes: notes ? `小鲁班手机审批：${notes}` : "小鲁班手机审批",
+        selected_options: selectedOptions,
+        free_responses: freeResponses,
+        comment: notes ? `小鲁班手机审批：${notes}` : "小鲁班手机审批",
       });
       if (task.luban_account) this.cursors.delete(task.luban_account);
-      const submitted = answers
-        ? `共 ${Object.keys(answers).length} 个问题`
-        : decision;
       return {
         status: 200,
-        text: `已提交：${task.id} · ${submitted}`
-          + (answers ? "\n全部答案已按问题分别提交。" : "")
-          + (notes ? "\n具体意见已一并保留。" : "")
-          + `\n当前状态：${result.status}`,
+        text: "已提交，Agent 已继续。"
+          + (answers ? `\n已处理 ${Object.keys(answers).length} 个问题。` : "")
+          + (notes ? "\n具体说明已一并保留。" : ""),
       };
     } catch (error) {
       const message = String(error);
       if (/状态已变化|没有待人工决定|不存在|版本不匹配/.test(message)) {
         return this.stale(task.luban_account);
+      }
+      if (/检视意见未闭环|必须选择卡片中的结构化选项|自由说明/.test(message)) {
+        return { status: 409, text: message.replace(/^\w*Error:\s*/, "") };
       }
       this.options.log?.(`任务 ${task.id} 手机审批提交失败: ${message}`);
       return { status: 500, text: "审批没有提交成功，请稍后重试或回到电脑端处理。" };

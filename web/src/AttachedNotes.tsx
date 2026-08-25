@@ -14,14 +14,8 @@ const INLINE_MAX = 5;
 
 export function AttachedNotes({
   items,
-  attached,
-  onToggle,
   onLocate,
 }: {
-  /** 勾上才随本次决定送出。默认勾上；决定卡会读取内核分支契约，
-   * 联动真正的返工选项。不勾时批注不会丢，它跨检视点继续保留。 */
-  attached: boolean;
-  onToggle: (next: boolean) => void;
   items: Annotation[];
   onLocate: (item: Annotation) => void;
 }) {
@@ -31,14 +25,11 @@ export function AttachedNotes({
 
   return (
     <div className="annot-attached">
-      <label className="annot-attached-head">
-        <input type="checkbox" checked={attached}
-               onChange={(event) => onToggle(event.target.checked)} />
+      <div className="annot-attached-head">
         <span>
-          将 {items.length} 条未闭环检视意见随本次决定提交
-          {!attached && "（本次不提交，批注仍会保留）"}
+          服务端已发现 {items.length} 条未闭环检视意见；选择返工时会全部提交，选择放行时将被拦截
         </span>
-      </label>
+      </div>
       <ul className="annot-attached-list">
         {shown.map((item) => (
           <li key={item.id}>

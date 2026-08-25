@@ -4,7 +4,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  createUser, deleteUser, getKnowledgeInsights, getLaunchOptions, getSession, listMyReviews, listTasks, listUsers,
+  createUser, deleteUser, getKnowledgeInsights, getLaunchOptions, getSession, getTask, listMyReviews, listTasks, listUsers,
   login, logout, putCommitter, resetUserPassword,
   type AuthUser, type TaskStatus, type TaskSummary,
   type ReviewRequest, type TeamKnowledgeInsights, type UserRole,
@@ -16,7 +16,7 @@ import { TaskWorkspace } from "./TaskWorkspace";
 import { SettingsBoard } from "./SettingsView";
 import { GitTokenCard } from "./GitTokenCard";
 import { LubanTokenCard } from "./LubanTokenCard";
-import { putMoonlight } from "./api";
+import { getMoonlightPreview, putMoonlight } from "./api";
 import { byUrgency } from "./taskTime";
 import {
   byTeamAttention,
@@ -40,6 +40,7 @@ import { KnowledgeFlywheel } from "./KnowledgeFlywheel";
 
 type View = "team" | "mine" | "profile" | "history" | "users" | "settings";
 type Theme = "light" | "dark";
+type Density = "comfortable" | "compact";
 type MineScope = "all" | "waiting" | "intervention" | "active" | "delivered";
 type TaskKindScope = "all" | "requirement" | "dts";
 
@@ -81,9 +82,7 @@ function initialView(user: AuthUser): View {
   return "mine";
 }
 
-/** 月光模式(免审批)开关:默认关;开=本人任务的人工节点自动放行
- * (已在等的卡立刻清场),关=之后恢复审批。状态是服务端事实,
- * 界面只呈现与切换。 */
+/** 月光模式默认只影响后续节点；当前待办先预览，再由用户决定是否处理。 */
 function MoonlightToggle({
   session,
   onChanged,
@@ -98,12 +97,28 @@ function MoonlightToggle({
     if (next === on || busy) return;
     setBusy(true);
     try {
-      const result = await putMoonlight(next);
+      let includeCurrent = false;
+      let expectedEligible: number | undefined;
+      if (next) {
+        const preview = await getMoonlightPreview();
+        expectedEligible = preview.eligible;
+        if (preview.eligible > 0) {
+          includeCurrent = window.confirm(
+            `月光模式默认仅对后续节点生效。\n\n当前有 ${preview.eligible} 项可自动处理`
+            + (preview.blocked_annotations > 0
+              ? `，另有 ${preview.blocked_annotations} 项因存在检视意见不会自动放行` : "")
+            + "。\n\n选择“确定”同时处理当前待办；选择“取消”仅对后续节点生效。",
+          );
+        }
+      }
+      const result = await putMoonlight(next, includeCurrent, expectedEligible);
       setOn(result.moonlight);
       setNote(result.moonlight
         ? (result.swept > 0
-            ? `已自动放行 ${result.swept} 项正在等待的确认`
-            : "已启用自动放行，执行过程不再等待逐项确认")
+            ? `已启用，并处理 ${result.swept} 项当前待办`
+            : result.blocked_annotations > 0
+              ? `已对后续节点生效；${result.blocked_annotations} 项含检视意见的待办仍需人工处理`
+              : "已对后续节点生效，当前待办保持不变")
         : "已恢复逐步确认，后续人工节点会等待你拍板");
       await onChanged(result.moonlight);
     } catch (cause) {
@@ -147,6 +162,22 @@ function ThemeSwitch({ theme, onChange }: {
     </span>
     <span className="theme-switch-copy"><strong>{light ? "云昼主题" : "深夜主题"}</strong><small>{light ? "明亮 · 柔和" : "沉浸 · 专注"}</small></span>
     <span className="theme-switch-track" aria-hidden><i /></span>
+  </button>;
+}
+
+function DensitySwitch({ density, onChange }: {
+  density: Density;
+  onChange: (density: Density) => void;
+}) {
+  const compact = density === "compact";
+  return <button type="button" className="density-switch"
+    onClick={() => onChange(compact ? "comfortable" : "compact")}
+    title={compact ? "切换到舒适密度" : "切换到紧凑密度"}
+    aria-label={compact ? "当前为紧凑密度，切换到舒适密度" : "当前为舒适密度，切换到紧凑密度"}>
+    <span className="density-switch-icon" aria-hidden>
+      <svg viewBox="0 0 20 20"><path d={compact ? "M4 5.5h12M4 10h12M4 14.5h12" : "M4 4.5h12M4 10h12M4 15.5h12"} /></svg>
+    </span>
+    <span className="density-switch-copy"><strong>{compact ? "紧凑密度" : "舒适密度"}</strong><small>{compact ? "适合高信息量浏览" : "更易读的默认字号"}</small></span>
   </button>;
 }
 
@@ -219,6 +250,8 @@ const DELIVERED_STATUSES: TaskStatus[] = ["await_merge", "completed"];
 export function App() {
   const [theme, setTheme] = useState<Theme>(() =>
     document.documentElement.dataset.theme === "light" ? "light" : "dark");
+  const [density, setDensity] = useState<Density>(() =>
+    document.documentElement.dataset.density === "compact" ? "compact" : "comfortable");
   const [session, setSession] = useState<AuthUser | null>();
   const [view, setView] = useState<View>("team");
   const [mineScope, setMineScope] = useState<MineScope>("all");
@@ -381,8 +414,24 @@ export function App() {
   useEffect(() => {
     if (!artifactTaskId) return;
     const latest = tasks.find((task) => task.id === artifactTaskId);
-    if (latest) setArtifactTaskSnapshot(latest);
+    if (latest) setArtifactTaskSnapshot((current) => current?.id === latest.id
+      ? {
+          ...current,
+          ...latest,
+          knowledge_usage: current.knowledge_usage,
+        }
+      : latest);
   }, [tasks, artifactTaskId]);
+
+  // 列表轮询保持轻量；只有真正打开工作台时才读取知识足迹和完整收据。
+  useEffect(() => {
+    if (!artifactTaskId) return;
+    let alive = true;
+    void getTask(artifactTaskId).then((detail) => {
+      if (alive) setArtifactTaskSnapshot(detail);
+    }).catch(() => undefined);
+    return () => { alive = false; };
+  }, [artifactTaskId]);
 
   const assignedToMe = session
     ? tasks.filter((task) => responsibleOf(task) === session.username)
@@ -415,6 +464,12 @@ export function App() {
     document.documentElement.dataset.theme = next;
     setTheme(next);
     try { localStorage.setItem("mae-flow-theme", next); } catch { /* 仍保留本次选择 */ }
+  }
+
+  function changeDensity(next: Density) {
+    document.documentElement.dataset.density = next;
+    setDensity(next);
+    try { localStorage.setItem("mae-flow-density", next); } catch { /* 仍保留本次选择 */ }
   }
 
   function patchSession(patch: Partial<AuthUser>) {
@@ -458,9 +513,9 @@ export function App() {
       : mineScope === "active" ? "自动推进中"
         : mineScope === "delivered" ? "等待合入与最近完成" : "当前任务";
   const artifactTask = artifactTaskId
-    ? tasks.find((task) => task.id === artifactTaskId)
-      ?? (artifactTaskSnapshot?.id === artifactTaskId
-        ? artifactTaskSnapshot : undefined)
+    ? artifactTaskSnapshot?.id === artifactTaskId
+      ? artifactTaskSnapshot
+      : tasks.find((task) => task.id === artifactTaskId)
     : undefined;
   const openArtifacts = (task: TaskSummary) => {
     setArtifactTaskSnapshot(task);
@@ -515,13 +570,14 @@ export function App() {
         </>}
       </nav>
       <div className="sidebar-bottom">
+        <DensitySwitch density={density} onChange={changeDensity} />
         <ThemeSwitch theme={theme} onChange={changeTheme} />
         <div className="sidebar-foot session-foot"><span className="account-avatar" aria-hidden>{session.username.slice(0, 1).toUpperCase()}</span><span className="sidebar-account"><strong>{session.username}</strong><small>{session.role === "admin" ? "管理员" : "开发成员"}</small></span><button type="button" className="logout-button" onClick={signOut} title="退出登录" aria-label="退出登录"><svg viewBox="0 0 20 20"><path d="M8 4H4.75A1.25 1.25 0 0 0 3.5 5.25v9.5A1.25 1.25 0 0 0 4.75 16H8M12.5 6.5 16 10l-3.5 3.5M7 10h9" /></svg></button></div>
       </div>
     </aside>
 
     <div className="workspace">
-      <header className="workspace-header"><div><div className="eyebrow">MAE-FLOW CLOUD</div><h1>{header.title}</h1><p className={view === "mine" ? "header-context-line" : undefined}>{view === "mine" && <span className="header-user-context">{session.username}</span>}<span>{header.description}</span></p></div><div className="workspace-header-actions"><TaskSyncIndicator state={taskSync} onRetry={refresh} />{relevantWaiting > 0 && view !== "history" && view !== "users" && view !== "settings" && <div className="header-attention"><span className="attention-pulse" aria-hidden /><span><strong>{relevantWaiting}</strong>{view === "mine" ? " 项需要我处理" : " 项工作等待决策"}</span></div>}{view === "mine" && session.role !== "admin" && <div className="header-launch-gate"><button type="button" className="header-launch" disabled={!launchEntry.enabled} title={launchEntry.title} aria-label={launchEntry.ariaLabel} onClick={() => launchEntry.enabled && setLaunchOpen(true)}><svg viewBox="0 0 20 20" aria-hidden>{launchEntry.enabled ? <path d="M10 4v12M4 10h12" /> : <><rect x="5" y="8.5" width="10" height="8" rx="1.5" /><path d="M7.5 8.5V6.75a2.5 2.5 0 0 1 5 0V8.5" /></>}</svg><span>发起新任务</span></button>{launchEntry.helper && (launchEntry.action ? <button type="button" className="header-unlock" title={launchEntry.title} onClick={() => launchEntry.action === "profile" ? setView("profile") : void refreshLaunchGate(true)}>{launchEntry.helper}<svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg></button> : <span className="header-unlock is-status" title={launchEntry.title}>{launchEntry.helper}</span>)}</div>}</div></header>
+      <header className="workspace-header"><div><div className="eyebrow">MAE-FLOW CLOUD</div><h1>{header.title}</h1><p className={view === "mine" ? "header-context-line" : undefined}>{view === "mine" && <span className="header-user-context">{session.username}</span>}<span>{header.description}</span></p></div><div className="workspace-header-actions"><TaskSyncIndicator state={taskSync} onRetry={refresh} />{relevantWaiting > 0 && view !== "history" && view !== "users" && view !== "settings" && <div className="header-attention"><span className="attention-pulse" aria-hidden /><span><strong>{relevantWaiting}</strong>{view === "mine" ? " 项需要我处理" : " 项工作等待决策"}</span></div>}{view === "mine" && session.role !== "admin" && <div className="header-launch-gate"><button type="button" className="header-launch" disabled={!launchEntry.enabled} title={launchEntry.title} aria-label={launchEntry.ariaLabel} onClick={() => { if (launchEntry.enabled) setLaunchOpen(true); }}><svg viewBox="0 0 20 20" aria-hidden>{launchEntry.enabled ? <path d="M10 4v12M4 10h12" /> : <><rect x="5" y="8.5" width="10" height="8" rx="1.5" /><path d="M7.5 8.5V6.75a2.5 2.5 0 0 1 5 0V8.5" /></>}</svg><span>发起新任务</span></button>{launchEntry.helper && (launchEntry.action ? <button type="button" className="header-unlock" title={launchEntry.title} onClick={() => launchEntry.action === "profile" ? setView("profile") : void refreshLaunchGate(true)}>{launchEntry.helper}<svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg></button> : <span className="header-unlock is-status" title={launchEntry.title}>{launchEntry.helper}</span>)}</div>}</div></header>
       <main className="workspace-main">
         {view === "team" && <TeamDashboard
           tasks={tasks}
@@ -535,6 +591,13 @@ export function App() {
         />}
 
         {view === "mine" && <>
+          <PersonalActionInbox
+            waiting={myWaiting}
+            intervention={myIntervention}
+            reviews={pendingReviews}
+            tasks={tasks}
+            onOpen={openArtifacts}
+          />
           <section className="personal-pulse four" aria-label="我的任务摘要">
             <button type="button" className={`personal-stat personal-action attention${mineScope === "waiting" ? " selected" : ""}`} aria-pressed={mineScope === "waiting"} onClick={() => setMineScope((current) => current === "waiting" ? "all" : "waiting")}><span>待我核对 <i aria-hidden>→</i></span><strong>{myWaiting.length}</strong></button>
             <button type="button" className={`personal-stat personal-action danger${mineScope === "intervention" ? " selected" : ""}`} aria-pressed={mineScope === "intervention"} onClick={() => setMineScope((current) => current === "intervention" ? "all" : "intervention")}><span>需要介入 / 已暂停 <i aria-hidden>→</i></span><strong>{myIntervention.length}</strong></button>
@@ -580,7 +643,8 @@ export function App() {
         {view === "settings" && session.role === "admin" && <SettingsBoard />}
       </main>
     </div>
-    {launchOpen && <LaunchWorkspace session={session} onCreated={refresh} onClose={() => setLaunchOpen(false)} />}
+    {launchOpen && <LaunchWorkspace session={session}
+      onCreated={refresh} onClose={() => setLaunchOpen(false)} />}
     {artifactTask && <TaskWorkspace
       task={artifactTask}
       viewerUsername={session.username}
@@ -596,6 +660,85 @@ export function App() {
       }}
     />}
   </div>;
+}
+
+function PersonalActionInbox({
+  waiting,
+  intervention,
+  reviews,
+  tasks,
+  onOpen,
+}: {
+  waiting: TaskSummary[];
+  intervention: TaskSummary[];
+  reviews: ReviewRequest[];
+  tasks: TaskSummary[];
+  onOpen: (task: TaskSummary) => void;
+}) {
+  const seen = new Set<string>();
+  const items: Array<{
+    key: string;
+    task?: TaskSummary;
+    kicker: string;
+    title: string;
+    detail: string;
+    action: string;
+  }> = [];
+  for (const task of waiting) {
+    if (seen.has(task.id)) continue;
+    seen.add(task.id);
+    items.push({
+      key: `decision:${task.id}`,
+      task,
+      kicker: "等待你的决定",
+      title: task.title ?? task.requirement,
+      detail: task.focus?.next_action ?? task.waiting?.step ?? "查看材料并完成当前确认",
+      action: "立即处理",
+    });
+  }
+  for (const review of reviews) {
+    const task = tasks.find((item) => item.id === review.task_id);
+    if (!task) continue;
+    items.push({
+      key: `review:${review.id}`,
+      task,
+      kicker: "Committer 检视",
+      title: review.task_title,
+      detail: `${review.requester} 邀请你检视代码与交付材料`,
+      action: "开始检视",
+    });
+  }
+  for (const task of intervention) {
+    if (seen.has(task.id)) continue;
+    seen.add(task.id);
+    items.push({
+      key: `intervention:${task.id}`,
+      task,
+      kicker: task.status === "paused" ? "任务已暂停" : "需要人工介入",
+      title: task.title ?? task.requirement,
+      detail: task.focus?.next_action ?? task.detail ?? "查看现场并决定下一步",
+      action: "查看现场",
+    });
+  }
+  const shown = items.slice(0, 3);
+  return <section className="personal-action-inbox" aria-labelledby="personal-action-title">
+    <div className="personal-action-head">
+      <div><span className="section-kicker">NEXT ACTION</span>
+        <h2 id="personal-action-title">我现在最应该做什么</h2></div>
+      <span>{items.length ? `${items.length} 项待处理` : "当前已清空"}</span>
+    </div>
+    {shown.length ? <div className="personal-action-list">{shown.map((item, index) => (
+      <article key={item.key} className={index === 0 ? "primary" : ""}>
+        <span className="personal-action-rank">{String(index + 1).padStart(2, "0")}</span>
+        <div><small>{item.kicker}</small><strong>{item.title}</strong><p>{item.detail}</p></div>
+        <button type="button" disabled={!item.task}
+          onClick={() => item.task && onOpen(item.task)}>{item.action}</button>
+      </article>
+    ))}</div> : <div className="personal-action-clear">
+      <span aria-hidden>✓</span><div><strong>当前没有需要你处理的事项</strong>
+        <p>Agent 正在继续推进；新的确认、检视或异常会优先出现在这里。</p></div>
+    </div>}
+  </section>;
 }
 
 function CommitterInbox({
