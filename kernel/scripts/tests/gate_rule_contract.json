@@ -8,7 +8,7 @@
     "           因此它的出路必须写在自己的拦截文案里，并被 evidence 关键词证实。",
     "tier 是瘦身分层:A=底线(继续拦) B=流程督促(降级/迁移) C=模式定义(仅特定模式生效)。",
     "escape 取值: permit | comply | user-terminal | cli:<子命令>",
-    "2026-08-07 瘦身:删除 10 条流程督促规则(本步不许改源码/写规格/写需求文档、分支命名、worktree、comet init、手建 openspec 目录)。它们拦的都是可逆动作，真正的把关在 done 的证据检查;UT 步的测试边界与编译未完成不许提交保留为底线。"
+    "2026-08-07 曾把步骤级源码写入误当可逆流程督促退役；2026-08-25 内网 grill 实战证明 done/commit 兜底太晚，现恢复为 flow.json allow_source_edit 驱动的绝对阶段门禁。规格/需求文档、分支命名等其余可逆督促仍保持退役。"
   ],
   "rules": {
     "bash-wrapped-git": {
@@ -201,6 +201,20 @@
       "tier": "A",
       "escape": "permit",
       "why": "同 edit-before-workflow(sed -i/重定向写源码绕不过同一条头部纪律)"
+    },
+    "edit-outside-source-step": {
+      "kind": "absolute",
+      "tier": "A",
+      "escape": "comply",
+      "evidence": "进入内核明确允许写源码",
+      "why": "flow.json 当前步骤未授权源码写入时必须机械阻断；过程文档照常可写，用户主动接管走 Cloud 开发助手交还协议"
+    },
+    "bash-outside-source-step": {
+      "kind": "absolute",
+      "tier": "A",
+      "escape": "comply",
+      "evidence": "进入内核明确允许写源码",
+      "why": "同 edit-outside-source-step，禁止用 sed/重定向等 Bash 写入绕过阶段授权"
     },
     "edit-ut-preempt": {
       "kind": "advisory",

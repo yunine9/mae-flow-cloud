@@ -10,6 +10,7 @@ import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskService } from "../src/taskService.ts";
 import { FakeTaskContainerHarness } from "./support/fakeTaskContainer.ts";
+import { managedFlowFixture } from "./support/managedFlowFixture.ts";
 
 const KERNEL_ROOT = (() => {
   const found = discoverKernelRoot(process.cwd());
@@ -38,18 +39,7 @@ const REAL_DOCKER = REAL_IMAGE ? await dockerAvailable() : false;
 function codingScenes(): Scene[] {
   return [
     { tool: { name: "bash", input: { command:
-      "git config user.email bot@test && git config user.name bot && "
-      + "git checkout --quiet -b master_bot_REQ_CONTAINER && "
-      + "echo first > feature.txt && git add feature.txt && "
-      + "git commit --quiet -m 'feat: container fixture' && "
-      + `cat > .mae-flow.json <<'EOF'
-{"schema_version":2,"current":"end","revision":1,
- "execution_contract":{"schema":"mae-flow-execution/1","host":"cloud",
-   "compile":"pipeline","ut_write":"agent","ut_run":"pipeline",
-   "codecheck":"pipeline","git_push":"host"},
- "config":{"分支名":"master_bot_REQ_CONTAINER","基线分支":"master",
-   "单号":"REQ_CONTAINER"},"choices":{},"history":[]}
-EOF` } } },
+      "echo first > feature.txt" } } },
     { text: "编码提交完成。" },
   ];
 }
@@ -121,15 +111,21 @@ test("取消 native prepush 会销毁 attempt 容器且绝不继续 host push", 
     mkdtempSync(join(tmpdir(), "mfc-prepush-container-platform-")));
   await platform.start();
   const hold = "echo __MFC_HOLD__";
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-prepush-container-data-"));
   const model = new ScriptedModelServer([
     ...codingScenes(),
     { tool: { name: "bash", input: { command: hold } } },
     { text: "不应在取消后走到这里。" },
-  ], "scripted-v1", { linear: true });
+  ], "scripted-v1", {
+    linear: true,
+    beforeScene: managedFlowFixture(dataDir, {
+      branch: "master_bot_REQ_CONTAINER", ticket: "REQ_CONTAINER",
+    }),
+  });
   await model.start();
   const containers = new FakeTaskContainerHarness();
   const service = new TaskService({
-    dataDir: mkdtempSync(join(tmpdir(), "mfc-prepush-container-data-")),
+    dataDir,
     provider: "maeflow",
     model: "scripted-v1",
     modelsJson: model.modelsJson(),
@@ -178,11 +174,17 @@ test("native prepush 未配置隔离镜像时按基础设施失败收口，不�
   platform.initBare(sourceRepo(),
     mkdtempSync(join(tmpdir(), "mfc-prepush-no-isolation-platform-")));
   await platform.start();
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-prepush-no-isolation-data-"));
   const model = new ScriptedModelServer(codingScenes(),
-    "scripted-v1", { linear: true });
+    "scripted-v1", {
+      linear: true,
+      beforeScene: managedFlowFixture(dataDir, {
+        branch: "master_bot_REQ_CONTAINER", ticket: "REQ_CONTAINER",
+      }),
+    });
   await model.start();
   const service = new TaskService({
-    dataDir: mkdtempSync(join(tmpdir(), "mfc-prepush-no-isolation-data-")),
+    dataDir,
     provider: "maeflow",
     model: "scripted-v1",
     modelsJson: model.modelsJson(),
@@ -223,13 +225,19 @@ test("native prepush 环境预检失败时不启动模型、不盲探网络也�
   platform.initBare(sourceRepo(),
     mkdtempSync(join(tmpdir(), "mfc-prepush-preflight-platform-")));
   await platform.start();
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-prepush-preflight-data-"));
   const model = new ScriptedModelServer(codingScenes(),
-    "scripted-v1", { linear: true });
+    "scripted-v1", {
+      linear: true,
+      beforeScene: managedFlowFixture(dataDir, {
+        branch: "master_bot_REQ_CONTAINER", ticket: "REQ_CONTAINER",
+      }),
+    });
   await model.start();
   const containers = new FakeTaskContainerHarness();
   containers.preflightFailure = "Maven 实际使用的不是 JDK 21";
   const service = new TaskService({
-    dataDir: mkdtempSync(join(tmpdir(), "mfc-prepush-preflight-data-")),
+    dataDir,
     provider: "maeflow",
     model: "scripted-v1",
     modelsJson: model.modelsJson(),
@@ -284,14 +292,20 @@ test("暂停 native prepush 后销毁旧容器，恢复会新建 attempt 并重�
   const hold = "echo __MFC_HOLD__";
   const compile = `node -e "console.log('compile ok')"`;
   const unitTest = `node -e "console.log('unit test ok')"`;
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-prepush-resume-data-"));
   const model = new ScriptedModelServer([
     ...codingScenes(),
     { tool: { name: "bash", input: { command: hold } } },
-  ], "scripted-v1", { linear: true });
+  ], "scripted-v1", {
+    linear: true,
+    beforeScene: managedFlowFixture(dataDir, {
+      branch: "master_bot_REQ_CONTAINER", ticket: "REQ_CONTAINER",
+    }),
+  });
   await model.start();
   const containers = new FakeTaskContainerHarness();
   const service = new TaskService({
-    dataDir: mkdtempSync(join(tmpdir(), "mfc-prepush-resume-data-")),
+    dataDir,
     provider: "maeflow",
     model: "scripted-v1",
     modelsJson: model.modelsJson(),
@@ -381,6 +395,7 @@ test("真实 Docker：普通任务与 native prepush 均在统一镜像执行并
       'java -cp "$scratch" Check',
     ].join(" && ");
     const unitTest = "node -e \"if (1 + 1 !== 2) process.exit(1); console.log('ut ok')\"";
+    const dataDir = mkdtempSync(join(scratch, "mfc-real-prepush-data-"));
     const model = new ScriptedModelServer([
       ...codingScenes(),
       { tool: { name: "bash", input: { command: compile } } },
@@ -396,9 +411,13 @@ test("真实 Docker：普通任务与 native prepush 均在统一镜像执行并
         }),
         "</prepush-result>",
       ].join("\n") },
-    ], "scripted-v1", { linear: true });
+    ], "scripted-v1", {
+      linear: true,
+      beforeScene: managedFlowFixture(dataDir, {
+        branch: "master_bot_REQ_CONTAINER", ticket: "REQ_CONTAINER",
+      }),
+    });
     await model.start();
-    const dataDir = mkdtempSync(join(scratch, "mfc-real-prepush-data-"));
     const service = new TaskService({
       dataDir,
       provider: "maeflow",

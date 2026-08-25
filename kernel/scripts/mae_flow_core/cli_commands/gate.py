@@ -115,6 +115,7 @@ def _gate_edit(flow, st, sid, step, intent, jdie):
         is_source=api._is_source_path(p, st, flow),
         tests_only_patterns=test_patterns if step.get("tests_only") else (),
         source_unlocked=source_unlocked_for(st, sid),
+        allow_source_edit=bool(step.get("allow_source_edit")),
         workflow_chosen=workflow_chosen(st),
         **_ut_preempt_facts(step, p, pm, test_patterns),
     ))
@@ -304,6 +305,7 @@ def _gate_bash_writes(flow, st, sid, step, intent, jdie):
         tests_only_patterns=patterns,
         source_unlocked=source_unlocked,
         bad_test_sources=tuple(bad),
+        allow_source_edit=bool(step.get("allow_source_edit")),
         workflow_chosen=workflow_chosen(st),
     ))
     if decision.kind == "absolute":

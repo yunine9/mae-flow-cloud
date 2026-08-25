@@ -1,0 +1,160 @@
+/**
+ * Cloud 托管启动红线：模型第一条工具调用之前，宿主必须已经完成
+ * Mae-Flow init/current。需求文案是否含“交付/开发/修改”不得影响它。
+ */
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, join } from "node:path";
+import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
+import { KernelHost } from "../src/kernelHost.ts";
+import { ScriptedModelServer } from "../src/scriptedModel.ts";
+import { TaskService } from "../src/taskService.ts";
+
+const GIT_ENV = {
+  ...process.env,
+  GIT_AUTHOR_NAME: "managed-startup-test",
+  GIT_AUTHOR_EMAIL: "managed-startup@example.com",
+  GIT_COMMITTER_NAME: "managed-startup-test",
+  GIT_COMMITTER_EMAIL: "managed-startup@example.com",
+};
+
+function repository(root: string): string {
+  const path = join(root, "plain-requirement-repo");
+  execFileSync("git", ["init", "-q", "-b", "master", path]);
+  writeFileSync(join(path, "main.ts"), "export const colour = 'red';\n");
+  execFileSync("git", ["-C", path, "add", "main.ts"], { env: GIT_ENV });
+  execFileSync("git", ["-C", path, "commit", "-qm", "initial"], {
+    env: GIT_ENV,
+  });
+  return path;
+}
+
+async function until(
+  probe: () => boolean,
+  what: string,
+  timeoutMs = 30_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (probe()) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`等待超时：${what}`);
+}
+
+test("普通措辞也先机械 init/current，模型首个 Edit 在配置阶段被拒绝", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-managed-startup-"));
+  const repo = repository(dataDir);
+  const kernelRoot = discoverKernelRoot(process.cwd());
+  assert.ok(kernelRoot, "发布件必须包含 vendored Mae-Flow 内核");
+  const model = new ScriptedModelServer([
+    { text: "我先直接修改按钮颜色。", tool: { name: "edit", input: {
+      path: "main.ts",
+      edits: [{
+        oldText: "export const colour = 'red';",
+        newText: "export const colour = 'blue';",
+      }],
+    } } },
+    { text: "收到门禁反馈，停止修改并回到当前流程。" },
+  ]);
+  await model.start();
+  const service = new TaskService({
+    dataDir,
+    provider: "maeflow",
+    model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    host: { kernelRoot, repoPath: repo, python: "python3" },
+  });
+  try {
+    const task = service.create("把首页按钮改成蓝色", {
+      account: "dev",
+      lane: "局部修改",
+      ticket: "REQ-MANAGED-STARTUP",
+    });
+    const cwd = join(task.workspace, basename(repo));
+    await until(() => {
+      const path = join(task.workspace, "events.jsonl");
+      if (!existsSync(path)) return false;
+      return readFileSync(path, "utf-8").split("\n").some((line) => {
+        if (!line) return false;
+        const event = JSON.parse(line);
+        return event.kind === "tool_finished"
+          && event.payload?.name === "Edit";
+      });
+    }, "首个 Edit 被内核裁决");
+
+    const state = JSON.parse(readFileSync(
+      join(cwd, ".mae-flow.json"), "utf-8"));
+    assert.equal(state.current, "config_confirm",
+      "模型入场时必须已经脱离 INACTIVE");
+    assert.equal(readFileSync(join(cwd, "main.ts"), "utf-8"),
+      "export const colour = 'red';\n",
+      "配置确认前的首个源码修改不能落盘");
+    const events = readFileSync(join(task.workspace, "events.jsonl"), "utf-8");
+    assert.match(events, /交付方式尚未选定|配置确认/,
+      "模型必须收到可行动的内核拒绝原因");
+    const firstRequest = JSON.stringify(model.requests[0] ?? {});
+    assert.match(firstRequest, /config_confirm|配置确认/,
+      "第一轮上下文必须直接包含 current，而不是只叫模型自行 init");
+  } finally {
+    await service.shutdown();
+    await model.stop();
+  }
+});
+
+test("vendored Cloud Hook 在 grill 阶段同时拒绝 Edit 与 Bash 写源码", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mfc-managed-grill-"));
+  const repo = repository(root);
+  const vendored = join(process.cwd(), "kernel");
+  assert.ok(existsSync(join(vendored, "hooks", "dispatch.py")),
+    "Cloud 发布快照必须包含可执行 Hook");
+  writeFileSync(join(repo, ".mae-flow.json"), JSON.stringify({
+    current: "grill",
+    config: { "单号": "REQ-GRILL-GATE", "基线分支": "master" },
+    choices: { workflow: "full" },
+    history: [{ step: "workflow_select", result: "done" }],
+    started: "2026-08-25 10:00:00",
+  }));
+  const host = new KernelHost({
+    kernelRoot: vendored,
+    workspace: repo,
+    transcriptPath: join(root, "transcript.jsonl"),
+    taskId: "managed-grill",
+    python: "python3",
+  });
+  const guidance = await host.bootstrapManaged("继续梳理需求边界");
+  assert.match(guidance, /grill|需求澄清|需求质询/);
+
+  const edit = await host.preTool({
+    eventId: 1, taskId: "managed-grill", sessionId: "main", ts: "",
+    kind: "tool_requested",
+    payload: {
+      call_id: "edit-grill", name: "Edit",
+      input: { path: "main.ts", edits: [{ oldText: "red", newText: "blue" }] },
+    },
+  });
+  assert.equal(edit?.action, "deny");
+  assert.match(edit?.reason ?? "", /当前步骤 grill.*禁止修改源码/s);
+
+  const bash = await host.preTool({
+    eventId: 2, taskId: "managed-grill", sessionId: "main", ts: "",
+    kind: "tool_requested",
+    payload: {
+      call_id: "bash-grill", name: "Bash",
+      input: { command: "sed -i s/red/blue/ main.ts" },
+    },
+  });
+  assert.equal(bash?.action, "deny");
+  assert.match(bash?.reason ?? "", /当前步骤 grill.*Bash.*源码/s);
+  assert.equal(readFileSync(join(repo, "main.ts"), "utf-8"),
+    "export const colour = 'red';\n");
+});

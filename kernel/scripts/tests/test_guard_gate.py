@@ -55,8 +55,8 @@ class EditGateTests(unittest.TestCase):
                          (tests_only.kind, tests_only.rule))
         self.assertIn("unlock source", tests_only.message)
 
-    def test_process_nudges_no_longer_block_editing(self):
-        """本步不许改源码/写规格/写需求文档已退役:可逆动作交给 done 的证据检查。"""
+    def test_legal_source_step_and_process_documents_remain_writable(self):
+        """合法编码步可写源码；文档与过程产物不受源码阶段闸影响。"""
         for label, context in (
                 ("specs", self.context(
                     path="openspec/specs/api/spec.md",
@@ -94,6 +94,26 @@ class EditGateTests(unittest.TestCase):
         self.assertEqual("allow", decide_edit(self.context(
             path="src/main.py", match_path="src/main.py",
             is_source=True, workflow_chosen=True)).kind)
+
+    def test_grill_and_review_steps_cannot_edit_source(self):
+        """flow.json 未显式授权写源码的阶段必须机械阻断，而非靠提示词。"""
+        for step in ("grill", "story", "build_review", "delivery_review"):
+            with self.subTest(step=step):
+                denied = decide_edit(self.context(
+                    path="src/main.py", match_path="src/main.py",
+                    step=step, is_source=True, workflow_chosen=True,
+                    allow_source_edit=False))
+                self.assertEqual(
+                    ("absolute", "edit-outside-source-step"),
+                    (denied.kind, denied.rule))
+                self.assertIn("current", denied.message)
+        self.assertEqual("allow", decide_edit(self.context(
+            path=".mae-flow-work/REQ/grill.md",
+            match_path=".mae-flow-work/REQ/grill.md", step="grill",
+            is_source=False, allow_source_edit=False)).kind)
+        self.assertEqual("allow", decide_edit(self.context(
+            path="src/main.py", match_path="src/main.py", step="build",
+            is_source=True, allow_source_edit=True)).kind)
 
     def test_new_test_file_in_compile_step_advises_not_blocks(self):
         """编码步手写 UT 是抢跑白费(2026-08-20 云端实锤):只提醒不拦。
@@ -152,21 +172,32 @@ class BashWriteGateTests(unittest.TestCase):
         self.assertEqual("absolute", internal.kind)
         self.assertIn("流程状态", internal.message)
 
-    def test_process_nudges_no_longer_block_bash_writes(self):
-        """经 Bash 写需求/规格/源码的流程督促已退役——且门禁已看不见这些信号。
+    def test_non_source_bash_writes_remain_available(self):
+        """经 Bash 写需求/规格过程件不受源码阶段闸影响。
 
-        这些督促曾经靠 hits_requirement / hits_specs_truth / source_tokens /
-        allow_source_edit 判定。退役后字段还挂在 context 上空转了一段时间,
-        现已删除:退役从"传进去也不拦"升级为"根本无法表达"。
+        旧字段 hits_requirement / hits_specs_truth / source_tokens 等已经退役；
+        allow_source_edit 则是 flow.json 的当前步骤授权，必须由活跃 Gate 消费。
         """
         retired = {"hits_requirement", "hits_specs_truth", "source_tokens",
-                   "allow_source_edit", "allow_specs_write",
+                   "allow_specs_write",
                    "strong_write", "weak_write"}
         self.assertEqual(
             set(), retired & set(BashWriteContext.__dataclass_fields__))
         # 仍可表达的那一例:只有源码 offenders、没有 tests_only 时不拦
         self.assertEqual("allow", decide_bash_write(self.context(
             offenders=("src/main.py",))).kind)
+
+    def test_grill_cannot_write_source_through_bash(self):
+        denied = decide_bash_write(self.context(
+            command="sed -i s/red/blue/ src/main.py", writeish=True,
+            step="grill", offenders=("src/main.py",),
+            allow_source_edit=False, workflow_chosen=True))
+        self.assertEqual(
+            ("absolute", "bash-outside-source-step"),
+            (denied.kind, denied.rule))
+        self.assertEqual("allow", decide_bash_write(self.context(
+            command="sed -n 1,80p src/main.py", step="grill",
+            allow_source_edit=False)).kind)
 
     def test_pipeline_record_is_not_a_self_service_green_light(self):
         """流水线事实只收宿主递的:会话自己登记=自己给自己发绿灯。

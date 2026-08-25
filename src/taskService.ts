@@ -1684,6 +1684,11 @@ export class TaskService {
         "ccache --version",
         "git --version",
         "python3 --version",
+        // Cloud 的真正第一步不是“Python 能启动”，而是托管任务能在同一
+        // 容器挂载/用户下完成 init，并在 config_confirm 拒绝源码写入。
+        // 过去自检全绿但 init 失败后 INACTIVE 继续放行，正是因为只测了
+        // 文件可读，从未打过这条真实入口。
+        'if test -n "${MFC_KERNEL_ROOT:-}"; then flow_probe="$scratch/managed-flow"; mkdir -p "$flow_probe"; cd "$flow_probe"; git init -q; git config user.name mfc-probe; git config user.email mfc-probe@localhost; printf \'export const probe = 1;\\n\' > main.ts; git add main.ts; git commit -qm initial; printf \'%s\\n\' \'{"execution_contract":{"schema":"mae-flow-execution/1","host":"cloud","compile":"pipeline","ut_write":"agent","ut_run":"pipeline","codecheck":"pipeline","git_push":"host"},"UT生成方式":"仓内写法"}\' > .mae-flow-order.json; MAE_FLOW_HOST=cloud python3 "$MFC_KERNEL_ROOT/scripts/mae-flow.py" init > init.log; test -s .mae-flow.json; MAE_FLOW_HOST=cloud python3 "$MFC_KERNEL_ROOT/scripts/mae-flow.py" current > current.log; grep -q \'config_confirm\\|配置确认\' current.log; if MAE_FLOW_HOST=cloud python3 "$MFC_KERNEL_ROOT/scripts/mae-flow.py" gate edit main.ts > gate.log 2>&1; then echo \'managed flow edit gate unexpectedly allowed source write\' >&2; exit 41; fi; grep -q \'交付方式尚未选定\' gate.log; cd "$OLDPWD"; fi',
         'printf \'class MfcSelfCheck { public static void main(String[] a) { System.out.print("java-ok"); } }\\n\' > "$scratch/MfcSelfCheck.java"',
         'javac -d "$scratch" "$scratch/MfcSelfCheck.java"',
         'java -cp "$scratch" MfcSelfCheck',
@@ -1710,6 +1715,9 @@ export class TaskService {
         + "C/C++ 完成编译执行，Maven/npm/ccache/XDG 缓存均可写；"
         + "Node 18+/npm 9+、Git、Python 工具及 profile/CA/可选平台 CLI"
         + `${kernelRoot ? "、Mae-Flow 内核挂载" : ""}权限通过`;
+      if (kernelRoot) {
+        detail += "；容器内托管任务 init/current 与配置阶段源码写入拦截通过";
+      }
     } catch (error) {
       failure = error;
     } finally {
@@ -4914,6 +4922,7 @@ export class TaskService {
         this.hardenAgentGitBoundary(agentDir, cwd);
         const activeRepository = task.summary.repo_url
           ?? this.effectiveDefaultRepo();
+        const reviewLane = this.reviewRoundLane(task);
         if (activeRepository) {
           const materialized = materializeRepositorySkills({
             selected: task.summary.repository_skills,
@@ -4976,7 +4985,6 @@ export class TaskService {
           // ({基线分支}_{工号}_{单号}),沿用就派生出同一个 MR 分支,
           // review 的 branch_create 于是原地冻结 HEAD 当增量基点,不另建。
           // 问不到内核选项原文就退回本单原交付方式(fail-open 到老路)。
-          const reviewLane = this.reviewRoundLane(task);
           const lane = reviewLane || task.summary.lane;
           if (lane) order["交付方式"] = lane;
           // 跨仓拆单的方案文档:拆单时落在任务 workspace 根,这里带进
@@ -5044,7 +5052,23 @@ export class TaskService {
           task.summary.requirement_document,
           requirementPath,
         );
-        const guidance = await kernel.bootstrap(requirementForAgent);
+        const repairKernelOwnership = () => {
+          if (!this.options.isolation) return;
+          repairContainerKernelOwnership({
+            workspace: cwd,
+            user: this.options.isolation.user,
+          });
+        };
+        // Cloud 已经明确创建了交付任务：宿主先机械 init/current，再让
+        // 模型入场。不能把“第一步是否执行 init”交给模型概率，更不能
+        // 在 INACTIVE 全放行窗口里让它先写代码。检视意见是内核定义的
+        // 新 review 轮，允许从上一轮 terminal 机械滚动；CI/冲突轻修
+        // 维持既有轻量语义，不擅自重开完整流程。
+        const guidance = await kernel.bootstrapManaged(
+          requirementForAgent,
+          { rolloverTerminal: Boolean(reviewLane) },
+        );
+        repairKernelOwnership();
         if (!this.current(task, epoch)) return;
         prompt = guidance
           ? `${requirementForAgent}\n\n${guidance}`
@@ -5078,13 +5102,6 @@ export class TaskService {
               : "",
           ].filter(Boolean).join("\n\n");
         }
-        const repairKernelOwnership = () => {
-          if (!this.options.isolation) return;
-          repairContainerKernelOwnership({
-            workspace: cwd,
-            user: this.options.isolation.user,
-          });
-        };
         hostHooks = {
           preTool: async (event) => {
             const result = await kernel.preTool(event);

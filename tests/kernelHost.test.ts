@@ -16,6 +16,7 @@ import {
   existsSync,
   mkdtempSync,
   mkdirSync,
+  rmSync,
   writeFileSync,
   readFileSync,
 } from "node:fs";
@@ -42,6 +43,45 @@ function stubKernel(): string {
     "with open(path, 'a') as f:",
     "    f.write(line + '\\n')",
     "",
+  ].join("\n"));
+  return root;
+}
+
+function managedStubKernel(failInit = false): string {
+  const root = mkdtempSync(join(tmpdir(), "mfc-managed-kernel-"));
+  mkdirSync(join(root, "hooks"), { recursive: true });
+  mkdirSync(join(root, "scripts"), { recursive: true });
+  mkdirSync(join(root, "flow"), { recursive: true });
+  writeFileSync(join(root, "flow", "flow.json"), JSON.stringify({
+    start: "config_confirm",
+    steps: {
+      config_confirm: { terminal: false },
+      end: { terminal: true },
+    },
+  }));
+  const log = join(root, "managed.log");
+  writeFileSync(join(root, "hooks", "dispatch.py"), [
+    "import os, sys",
+    `path = ${JSON.stringify(log)}`,
+    "with open(path, 'a') as f: f.write('hook:' + sys.argv[1] + '\\n')",
+  ].join("\n"));
+  writeFileSync(join(root, "scripts", "mae-flow.py"), [
+    "import json, os, sys",
+    `log = ${JSON.stringify(log)}`,
+    "command = sys.argv[1] if len(sys.argv) > 1 else ''",
+    "with open(log, 'a') as f: f.write('cli:' + command + '\\n')",
+    ...(failInit ? [
+      "if command == 'init':",
+      "    sys.stderr.write('fixture init failed')",
+      "    raise SystemExit(2)",
+    ] : [
+      "if command == 'init':",
+      "    with open('.mae-flow.json', 'w') as f:",
+      "        json.dump({'current': 'config_confirm'}, f)",
+    ]),
+    "if command == 'current':",
+    "    if not os.path.exists('.mae-flow.json'): raise SystemExit(2)",
+    "    print('CURRENT: 先确认配置，不要修改源码')",
   ].join("\n"));
   return root;
 }
@@ -83,6 +123,55 @@ test("合成载荷:pre/post 两侧 tool_use_id 同源,生命周期可精确对�
   assert.equal(pre?.payload.tool_use_id, "call_A");
   assert.equal(post?.payload.tool_use_id, "call_A");
   assert.equal(pre?.payload.tool_use_id, post?.payload.tool_use_id);
+});
+
+test("Cloud 托管启动:普通需求也机械 init，再把 current 交给模型", async () => {
+  const workspace = gitWorkspace("mfc-managed-start-");
+  const root = managedStubKernel();
+  const host = new KernelHost({
+    kernelRoot: root,
+    workspace,
+    transcriptPath: join(workspace, "transcript.jsonl"),
+    taskId: "managed-1",
+  });
+  const guidance = await host.bootstrapManaged("把首页按钮改成蓝色");
+  assert.match(guidance, /CURRENT: 先确认配置/);
+  assert.equal(JSON.parse(readFileSync(
+    join(workspace, ".mae-flow.json"), "utf-8")).current, "config_confirm");
+  assert.deepEqual(readFileSync(join(root, "managed.log"), "utf-8")
+    .trim().split("\n"), [
+    "cli:init",
+    "hook:sessionstart",
+    "hook:userprompt",
+    "cli:current",
+  ], "模型启动前必须先有状态，需求原话随后进入 ACTIVE 台账");
+
+  rmSync(join(workspace, ".mae-flow.json"));
+  const verdict = await host.preTool({
+    eventId: 2, taskId: "managed-1", sessionId: "main", ts: "",
+    kind: "tool_requested",
+    payload: {
+      call_id: "edit-1", name: "Edit",
+      input: { path: "src/main.ts", old_string: "1", new_string: "2" },
+    },
+  });
+  assert.equal(verdict?.action, "deny");
+  assert.match(verdict?.reason ?? "", /INACTIVE 状态修改代码/);
+});
+
+test("Cloud 托管启动:init 失败时拒绝创建可工作的 Agent 现场", async () => {
+  const workspace = gitWorkspace("mfc-managed-fail-");
+  const host = new KernelHost({
+    kernelRoot: managedStubKernel(true),
+    workspace,
+    transcriptPath: join(workspace, "transcript.jsonl"),
+    taskId: "managed-fail",
+  });
+  await assert.rejects(
+    () => host.bootstrapManaged("修复一个问题"),
+    /内核 init 登记失败.*fixture init failed/,
+  );
+  assert.equal(existsSync(join(workspace, ".mae-flow.json")), false);
 });
 
 test("内核进程不可用时授权与证据都 fail-closed", async () => {

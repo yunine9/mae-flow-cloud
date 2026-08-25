@@ -28,6 +28,7 @@ import type {
   PrePushRunner,
 } from "../src/prepushAgent.ts";
 import { FakeTaskContainerHarness } from "./support/fakeTaskContainer.ts";
+import { managedFlowFixture } from "./support/managedFlowFixture.ts";
 
 const KERNEL_ROOT = (() => {
   const found = discoverKernelRoot(process.cwd());
@@ -53,24 +54,11 @@ function sourceRepo(): string {
 }
 
 function deliveryScenes(breakTransport = false, authoritativeRepo?: string): Scene[] {
-  const breakPush = breakTransport
-    ? `mv '${authoritativeRepo}' '${authoritativeRepo}.offline' && `
-    : "";
+  void breakTransport;
+  void authoritativeRepo;
   return [
     { tool: { name: "bash", input: { command:
-      breakPush
-      + "git config user.email bot@test && git config user.name bot && "
-      + "git checkout --quiet -b master_bot_REQ_PREPUSH && "
-      + "echo first > feature.txt && git add . && "
-      + 'git commit --quiet -m "feat: prepush fixture" && '
-      + `cat > .mae-flow.json <<'EOF'
-{"schema_version":2,"current":"end","revision":1,
- "execution_contract":{"schema":"mae-flow-execution/1","host":"cloud",
-   "compile":"pipeline","ut_write":"agent","ut_run":"pipeline",
-   "codecheck":"pipeline","git_push":"host"},
- "config":{"分支名":"master_bot_REQ_PREPUSH","基线分支":"master",
-   "单号":"REQ_PREPUSH"},"choices":{},"history":[]}
-EOF` } } },
+      "echo first > feature.txt" } } },
     { text: "已提交，等待宿主交付。" },
   ];
 }
@@ -100,10 +88,11 @@ function serviceWithRunner(
   platform: FakeGitPlatform,
   model: ScriptedModelServer,
   runner: PrePushRunner,
+  dataDir: string,
   timing: { pollIntervalMs?: number; pollTimeoutMs?: number } = {},
 ): TaskService {
   return new TaskService({
-    dataDir: mkdtempSync(join(tmpdir(), "mfc-prepush-data-")),
+    dataDir,
     provider: "maeflow",
     model: "scripted-v1",
     modelsJson: model.modelsJson(),
@@ -126,8 +115,14 @@ test("每个新 SHA 都先经过 prepush，流水线修复产生的新提交不�
   platform.initBare(sourceRepo(), mkdtempSync(join(tmpdir(), "mfc-prepush-p-")));
   platform.statusQueue.push("failed");
   await platform.start();
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-prepush-data-"));
   const model = new ScriptedModelServer(
-    [...deliveryScenes(), ...repairScenes()], "scripted-v1", { linear: true });
+    [...deliveryScenes(), ...repairScenes()], "scripted-v1", {
+      linear: true,
+      beforeScene: managedFlowFixture(dataDir, {
+        branch: "master_bot_REQ_PREPUSH", ticket: "REQ_PREPUSH",
+      }),
+    });
   await model.start();
   const calls: PrePushRunRequest[] = [];
   const service = serviceWithRunner(platform, model, async (request) => {
@@ -137,7 +132,7 @@ test("每个新 SHA 都先经过 prepush，流水线修复产生的新提交不�
       sha: request.sha,
       message: "fixture compile and unit tests passed",
     };
-  });
+  }, dataDir);
   try {
     const id = service.create("REQ_PREPUSH：两版代码都要预检", {
       ticket: "REQ_PREPUSH",
@@ -167,8 +162,14 @@ test("prepush 已通过后 host push 网络重试同一 SHA 不重复调用 Agen
   const platform = new FakeGitPlatform();
   platform.initBare(sourceRepo(), mkdtempSync(join(tmpdir(), "mfc-prepush-p-")));
   await platform.start();
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-prepush-data-"));
   const model = new ScriptedModelServer(
-    deliveryScenes(true, platform.barePath));
+    deliveryScenes(true, platform.barePath), "scripted-v1", {
+      beforeScene: managedFlowFixture(dataDir, {
+        branch: "master_bot_REQ_PREPUSH", ticket: "REQ_PREPUSH",
+        takeRepositoryOffline: platform.barePath,
+      }),
+    });
   await model.start();
   const calls: PrePushRunRequest[] = [];
   const service = serviceWithRunner(platform, model, async (request) => {
@@ -178,7 +179,7 @@ test("prepush 已通过后 host push 网络重试同一 SHA 不重复调用 Agen
       sha: request.sha,
       message: "fixture compile and unit tests passed",
     };
-  }, { pollIntervalMs: 800, pollTimeoutMs: 10_000 });
+  }, dataDir, { pollIntervalMs: 800, pollTimeoutMs: 10_000 });
   try {
     const id = service.create("REQ_PREPUSH：传输抖动复用预检", {
       ticket: "REQ_PREPUSH",
@@ -212,7 +213,12 @@ test("prepush 代码验证失败时禁止 push、MR 与流水线", async () => {
   const platform = new FakeGitPlatform();
   platform.initBare(sourceRepo(), mkdtempSync(join(tmpdir(), "mfc-prepush-p-")));
   await platform.start();
-  const model = new ScriptedModelServer(deliveryScenes());
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-prepush-data-"));
+  const model = new ScriptedModelServer(deliveryScenes(), "scripted-v1", {
+    beforeScene: managedFlowFixture(dataDir, {
+      branch: "master_bot_REQ_PREPUSH", ticket: "REQ_PREPUSH",
+    }),
+  });
   await model.start();
   let calls = 0;
   const service = serviceWithRunner(platform, model, async (request) => {
@@ -222,7 +228,7 @@ test("prepush 代码验证失败时禁止 push、MR 与流水线", async () => {
       sha: request.sha,
       message: "compile failed in prepush fixture",
     };
-  }, { pollIntervalMs: 100, pollTimeoutMs: 250 });
+  }, dataDir, { pollIntervalMs: 100, pollTimeoutMs: 250 });
   try {
     const id = service.create("REQ_PREPUSH：红灯禁止传输", {
       ticket: "REQ_PREPUSH",
@@ -272,12 +278,18 @@ test("原生 prepush 会话修复提交后把 PASS 收据绑定最终 HEAD", asy
       "</prepush-result>",
     ].join("\n") },
   ];
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-prepush-data-"));
   const model = new ScriptedModelServer(
-    [...deliveryScenes(), ...prepushScenes], "scripted-v1", { linear: true });
+    [...deliveryScenes(), ...prepushScenes], "scripted-v1", {
+      linear: true,
+      beforeScene: managedFlowFixture(dataDir, {
+        branch: "master_bot_REQ_PREPUSH", ticket: "REQ_PREPUSH",
+      }),
+    });
   await model.start();
   const containers = new FakeTaskContainerHarness();
   const service = new TaskService({
-    dataDir: mkdtempSync(join(tmpdir(), "mfc-prepush-data-")),
+    dataDir,
     provider: "maeflow",
     model: "scripted-v1",
     modelsJson: model.modelsJson(),

@@ -27,6 +27,7 @@ import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskService } from "../src/taskService.ts";
 import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
 import { workflowChoices, workflowLabel } from "../src/kernelChoices.ts";
+import { managedFlowFixture } from "./support/managedFlowFixture.ts";
 
 const KERNEL_ROOT = (() => {
   const found = discoverKernelRoot(process.cwd());
@@ -50,22 +51,11 @@ function makeSourceRepo(): string {
   return dir;
 }
 
-/** 首跑剧本:预焙提交+伪造内核终态；推送统一由宿主在会话释放后做。 */
+/** 首跑 Agent 只改业务文件；测试宿主负责阶段与提交。 */
 function walkScript(): Scene[] {
   return [
     { tool: { name: "bash", input: { command:
-        "git config user.email bot@test && git config user.name bot && " +
-        "git checkout --quiet -b master_bot_REQ9 && " +
-        "echo change > a.txt && git add . && " +
-        'git commit --quiet -m "feat: REQ9" && ' +
-        `cat > .mae-flow.json <<'EOF'
-{"schema_version": 2, "current": "end", "revision": 1,
- "execution_contract": {"schema": "mae-flow-execution/1", "host": "cloud",
-   "compile": "pipeline", "ut_write": "agent", "ut_run": "pipeline",
-   "codecheck": "pipeline", "git_push": "host"},
- "config": {"分支名": "master_bot_REQ9", "基线分支": "master",
-            "单号": "REQ9"}, "choices": {}, "history": []}
-EOF` } } },
+        "echo change > a.txt" } } },
     { text: "交付完成。" },
   ];
 }
@@ -82,6 +72,13 @@ function buildService(
             python: "python3" },
     delivery: { platformUrl: platform.baseUrl, pollIntervalMs: 120,
                 ...deliveryExtra },
+  });
+}
+
+function mrModel(script: Scene[], dataDir: string): ScriptedModelServer {
+  return new ScriptedModelServer(script, "scripted-v1", {
+    linear: true,
+    beforeScene: managedFlowFixture(dataDir),
   });
 }
 
@@ -108,7 +105,8 @@ test("检视优先于 CI;回复发布并标已解决(显式开代 resolve);CI �
   platform.artifacts.push(
     { name: "build_101.log", text: "BUILD FAILURE: 编译失败详情全文" });
   await platform.start();
-  const model = new ScriptedModelServer([
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-"));
+  const model = mrModel([
     ...walkScript(),
     // 检视修复会话:只写回复,不改代码(检视意见是解释类)
     { tool: { name: "bash", input: { command:
@@ -121,9 +119,8 @@ EOF` } } },
     { tool: { name: "bash", input: { command:
         "echo fixed >> a.txt && git add . && git commit --quiet -m fix" } } },
     { text: "流水线问题已修并提交。" },
-  ], "scripted-v1", { linear: true });
+  ], dataDir);
   await model.start();
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-"));
   // 代 resolve 是显式开关(默认关,报告 D3:resolve 归检视人);
   // 这条用例验证开了之后回复+标已解决一气呵成、检视门禁当轮清掉。
   const service = buildService(platform, dataDir, model.modelsJson(),
@@ -190,7 +187,8 @@ test("默认只回复不代 resolve:已答复=等检视人确认,检视人点掉
     author: "李四", body: "变量名建议改成 templateVars",
   });
   await platform.start();
-  const model = new ScriptedModelServer([
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-ro-"));
+  const model = mrModel([
     ...walkScript(),
     // 检视修复会话:解释类回复,不改代码
     { tool: { name: "bash", input: { command:
@@ -199,9 +197,8 @@ test("默认只回复不代 resolve:已答复=等检视人确认,检视人点掉
 命名保持与现有模块一致,暂不改;后续统一重命名时一起处理。
 EOF` } } },
     { text: "检视意见已答复。" },
-  ], "scripted-v1", { linear: true });
+  ], dataDir);
   await model.start();
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-ro-"));
   const service = buildService(platform, dataDir, model.modelsJson());
   try {
     const id = service.create("交付 REQ9:回复不代点").id;
@@ -235,9 +232,9 @@ test("等人门禁:挂起等待不派 agent,说清卡在哪;人批完合入收�
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
   platform.humanGates.approvers_passed = false; // 等审批
   await platform.start();
-  const model = new ScriptedModelServer(walkScript());
-  await model.start();
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-wait-"));
+  const model = mrModel(walkScript(), dataDir);
+  await model.start();
   const service = buildService(platform, dataDir, model.modelsJson());
   try {
     const id = service.create("交付 REQ9:等审批").id;
@@ -262,7 +259,8 @@ test("冲突门禁:宿主 merge 造真实冲突标记,会话在真冲突上解,�
   const source = makeSourceRepo();
   platform.initBare(source, mkdtempSync(join(tmpdir(), "mfc-p-")));
   await platform.start();
-  const model = new ScriptedModelServer([
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-cf-"));
+  const model = mrModel([
     ...walkScript(),
     // 冲突修复会话:确认标记在,解掉,完成合并提交；宿主随后推送
     { tool: { name: "bash", input: { command:
@@ -270,9 +268,8 @@ test("冲突门禁:宿主 merge 造真实冲突标记,会话在真冲突上解,�
         + "printf 'change\\nupstream\\n' > a.txt && git add a.txt "
         + "&& git commit --quiet --no-edit" } } },
     { text: "冲突已解并完成合并提交。" },
-  ], "scripted-v1", { linear: true });
+  ], dataDir);
   await model.start();
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-cf-"));
   const service = buildService(platform, dataDir, model.modelsJson());
   try {
     const id = service.create("交付 REQ9:解冲突").id;
@@ -358,16 +355,16 @@ test("内网真实门禁集(19 项):质量红要派修复,受保护分支挂人�
     non_ff_passed: true,
   });
   await platform.start();
-  const model = new ScriptedModelServer([
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-19-"));
+  const model = mrModel([
     ...walkScript(),
     // 质量修复会话:改代码并提交，宿主随后推送
     { tool: { name: "bash", input: { command:
         "echo quality-fixed >> a.txt && git add . "
         + "&& git commit --quiet -m fix-quality" } } },
     { text: "质量问题已修并提交。" },
-  ], "scripted-v1", { linear: true });
+  ], dataDir);
   await model.start();
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-19-"));
   const service = buildService(platform, dataDir, model.modelsJson());
   try {
     const id = service.create("交付 REQ9:真实门禁集").id;
@@ -414,13 +411,13 @@ test("日志只详细到一维时:失败维度逐项点名,不许修完细的那
     "    规则: G.FUN.01-CPP 函数功能要单一",
   ].join("\n");
   await platform.start();
-  const model = new ScriptedModelServer([
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-dims-"));
+  const model = mrModel([
     ...walkScript(),
     { text: "CodeCheck 已修;COMPILE 这一维日志与 ../pipeline/ 均无失败原文,"
         + "不猜改——请补 build log 通道。" },
-  ], "scripted-v1", { linear: true });
+  ], dataDir);
   await model.start();
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-dims-"));
   const service = buildService(platform, dataDir, model.modelsJson());
   try {
     const id = service.create("交付 REQ9:逐项维度").id;
@@ -466,14 +463,14 @@ test("失败详情只是个链接:使命明说无证据,不许假装'平台原�
     "FAILED stage=CodeCCP2.0 job=CodeCCP2.0  detail: "
     + "https://codeccp.tool.corp/tasks/44944736";
   await platform.start();
-  const model = new ScriptedModelServer([
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-blind-"));
+  const model = mrModel([
     ...walkScript(),
     // 修复会话按证据纪律行事:无据不猜改,写诊断收口(不提交)。
     { text: "平台未提供失败日志,无法自证定位;诊断:请补适配层 log 原文"
         + "与 pipeline_artifacts 端点,补齐后重跑。" },
-  ], "scripted-v1", { linear: true });
+  ], dataDir);
   await model.start();
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-blind-"));
   const service = buildService(platform, dataDir, model.modelsJson());
   try {
     const id = service.create("交付 REQ9:无证据修复").id;
@@ -518,7 +515,8 @@ test("检视意见开的是真 review 单:下单事实换交付方式,修完这�
     author: "李四", body: "这里的空指针要判一下",
   });
   await platform.start();
-  const model = new ScriptedModelServer([
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-revorder-"));
+  const model = mrModel([
     ...walkScript(),
     { tool: { name: "bash", input: { command:
         `cat > ../review_replies.md <<'EOF'
@@ -529,9 +527,8 @@ EOF` } } },
     { tool: { name: "bash", input: { command:
         "echo fixed >> a.txt && git add . && git commit --quiet -m fix" } } },
     { text: "流水线问题已修并提交。" },
-  ], "scripted-v1", { linear: true });
+  ], dataDir);
   await model.start();
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-revorder-"));
   const service = buildService(platform, dataDir, model.modelsJson(),
     { resolveDiscussions: true });
   try {
@@ -591,9 +588,9 @@ test("MR 被关闭 → 如实 failed 请人工,不硬修", async () => {
   const platform = new FakeGitPlatform();
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
   await platform.start();
-  const model = new ScriptedModelServer(walkScript());
-  await model.start();
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-closed-"));
+  const model = mrModel(walkScript(), dataDir);
+  await model.start();
   const service = buildService(platform, dataDir, model.modelsJson());
   try {
     const id = service.create("交付 REQ9:被关单").id;

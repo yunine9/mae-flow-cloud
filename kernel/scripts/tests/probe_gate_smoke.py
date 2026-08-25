@@ -110,8 +110,13 @@ def main():
           r.stdout + r.stderr)
     root = make_repo(base, "g2", "open")
     r = gate(root, "edit", "src/foo.c")
-    check("open 步改源码放行(本步不许改源码属流程督促,已退役)",
-          r.returncode == 0, r.stdout + r.stderr)
+    check("open 步改源码被步骤级红线阻断",
+          r.returncode == 2 and "当前步骤 open" in (r.stdout + r.stderr),
+          r.stdout + r.stderr)
+    r = gate(root, "bash", "sed -i s/a/b/ src/foo.c")
+    check("open 步不能用 Bash 绕过源码红线",
+          r.returncode == 2 and "当前步骤 open" in (r.stdout + r.stderr),
+          r.stdout + r.stderr)
     r = gate(root, "edit", "openspec/changes/probe-x/change.md")
     check("open 步写 change.md 放行", r.returncode == 0, r.stdout + r.stderr)
     root = make_repo(base, "g3", "domain_archive")

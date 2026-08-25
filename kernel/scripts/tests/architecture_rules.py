@@ -871,10 +871,8 @@ def dead_gate_context_fields(root):
     """Gate context fields carried into a decision that no decision reads.
 
     The inverse of ``hook_token_evidence_violations``: not a reader without a
-    writer, but a *writer without a reader*. ``perms_line`` printed
-    "禁止: 修改源码" on 29 steps off ``allow_source_edit`` while no gate rule
-    ever read it — a prohibition that never held, and on the three tests_only
-    steps the same field made the line claim the opposite of what the gate did.
+    writer, but a *writer without a reader*. ``allow_source_edit`` once became
+    such a field: current rendered a scope that the active Hook never enforced.
     A field the caller computes and passes for nobody is either a retired rule's
     residue or an unenforced promise; both are lies about what the gate does.
     """

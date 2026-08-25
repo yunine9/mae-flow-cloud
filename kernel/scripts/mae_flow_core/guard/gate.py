@@ -23,9 +23,12 @@ class EditGateContext:
     is_source: bool
     tests_only_patterns: tuple
     source_unlocked: bool
+    # flow.json 是活跃流程唯一的步骤授权源。只有当前步骤明确声明
+    # allow_source_edit，主流程 Agent 才能写源码；过程文档不受此限。
+    allow_source_edit: bool = True
     # 交付方式(choices.workflow)是否已选定。它必然发生在配置确认之后,
-    # 是"流程头部已走完"的单一干净信号。默认 True:老调用点/流程中段
-    # 行为不变——逐步的"本步不许改源码"是退役决定,这里只封头部。
+    # 是"流程头部已走完"的单一干净信号。默认 True 只为纯函数旧调用点
+    # 兼容；生产路径同时传 allow_source_edit，按当前步骤继续收紧。
     workflow_chosen: bool = True
     # UT 抢跑提醒的三个事实:编码步(证据含 COMPILE agent)、新建文件、
     # 命中测试路径。默认全 False:老调用点不触发提醒,行为不变。
@@ -45,6 +48,7 @@ class BashWriteContext:
     tests_only_patterns: tuple
     source_unlocked: bool
     bad_test_sources: tuple
+    allow_source_edit: bool = True
     workflow_chosen: bool = True
 
 
@@ -120,6 +124,14 @@ def _source_edit_decision(context):
     match_path = context.match_path
     if not context.is_source:
         return None
+    if not context.allow_source_edit:
+        return _absolute(
+            "当前步骤 %s 只允许分析、澄清或维护本步过程产物，禁止修改源码。"
+            "请执行 current 完成本步；进入内核明确允许写源码的编码/返工步骤后"
+            "再修改。用户主动使用 Cloud 开发助手接管现场时，由宿主在交还时"
+            "登记介入事实，不得让主流程 Agent 在这里越过阶段。"
+            % (context.step or "?"),
+            rule="edit-outside-source-step")
     if (
         context.tests_only_patterns
         and not context.source_unlocked
@@ -264,6 +276,12 @@ def _bash_absolute_decision(context):
 
 
 def _bash_source_decision(context):
+    if context.offenders and not context.allow_source_edit:
+        return _absolute(
+            "当前步骤 %s 禁止经 Bash 修改源码(命中: %s)。请执行 current "
+            "完成本步；进入内核明确允许写源码的编码/返工步骤后再修改。"
+            % (context.step or "?", "、".join(context.offenders[:3])),
+            rule="bash-outside-source-step")
     if (
         context.offenders
         and context.tests_only_patterns

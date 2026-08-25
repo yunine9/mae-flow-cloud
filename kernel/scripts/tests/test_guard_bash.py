@@ -123,9 +123,8 @@ class CommitBeforeBranchExistsTests(unittest.TestCase):
 
     实战(无人值守):跑到 workflow_select(第 3 步)时,模型把整个需求写完、提交、
     推送——三个提交全落在基线分支 sim_liaoxiang_base 上,branch_create 压根没跑过。
-    没人拦是因为提交分支检查对启动阶段的四个步骤显式开了天窗,而"build 之前
-    不许写源码"这件事门禁从来不执行(allow_source_edit 没有任何判据读它)。
-    提交这一关是最后的拦阻点,不能也开天窗。
+    当时提交分支检查对启动阶段的四个步骤显式开了天窗。步骤级源码 Gate
+    现已恢复，但提交这一关仍是独立的最后拦阻点，不能也开天窗。
     """
 
     def _context(self, step, current, wanted):

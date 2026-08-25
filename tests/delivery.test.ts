@@ -23,6 +23,7 @@ import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskService } from "../src/taskService.ts";
 import { RuntimeSettings } from "../src/settings.ts";
 import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
+import { managedFlowFixture } from "./support/managedFlowFixture.ts";
 
 // bootstrap 会真跑内核(INACTIVE 全放行),所以内核必须真找得到——
 // worktree 里 cwd()/../mae-flow 不存在,手写路径曾让整批用例超时。
@@ -60,29 +61,12 @@ function makeSourceRepo(knowledge?: Record<string, string>): string {
   return dir;
 }
 
-/** 剧本只在克隆里预焙一笔提交并伪造内核状态收轮。Agent 不 push；
- * allowHostPush=false 时把测试裸仓模拟成离线，专门验证**权威地址**真实
- * 不可达的留痕。改 origin 已不再能影响宿主，不能拿它冒充基础设施故障。 */
-function walkScript(allowHostPush: boolean, authoritativeRepo?: string): Scene[] {
-  const breakTransport = allowHostPush
-    ? ""
-    : `mv ${shellQuote(authoritativeRepo ?? "/nonexistent/source")} `
-      + `${shellQuote(`${authoritativeRepo ?? "/nonexistent/source"}.offline`)} && `;
+/** Agent 只改业务文件；分支、提交和测试终态由 managedFlowFixture 作为
+ * 受信任宿主事实准备，绝不再让假模型覆盖内核状态。 */
+function walkScript(_allowHostPush = true, _authoritativeRepo?: string): Scene[] {
   return [
     { tool: { name: "bash", input: { command:
-        breakTransport +
-        "git config user.email bot@test && git config user.name bot && " +
-        "git checkout --quiet -b master_bot_REQ9 && " +
-        "echo change > a.txt && git add . && " +
-        'git commit --quiet -m "feat: REQ9" && ' +
-        `cat > .mae-flow.json <<'EOF'
-{"schema_version": 2, "current": "end", "revision": 1,
- "execution_contract": {"schema": "mae-flow-execution/1", "host": "cloud",
-   "compile": "pipeline", "ut_write": "agent", "ut_run": "pipeline",
-   "codecheck": "pipeline", "git_push": "host"},
- "config": {"分支名": "master_bot_REQ9", "基线分支": "master",
-            "单号": "REQ9"}, "choices": {}, "history": []}
-EOF` } } },
+        "echo change > a.txt" } } },
     { text: "交付完成。" },
   ];
 }
@@ -92,18 +76,7 @@ EOF` } } },
 function externalWaitScript(): Scene[] {
   return [
     { tool: { name: "bash", input: { command:
-        "git config user.email bot@test && git config user.name bot && " +
-        "git checkout --quiet -b master_bot_REQ9 && " +
-        "echo change > a.txt && git add . && " +
-        'git commit --quiet -m "feat: REQ9" && ' +
-        `cat > .mae-flow.json <<'EOF'
-{"schema_version": 2, "current": "external_verify", "revision": 1,
- "execution_contract": {"schema": "mae-flow-execution/1", "host": "cloud",
-   "compile": "pipeline", "ut_write": "agent", "ut_run": "pipeline",
-   "codecheck": "pipeline", "git_push": "host"},
- "config": {"分支名": "master_bot_REQ9", "基线分支": "master",
-            "单号": "REQ9"}, "choices": {}, "history": []}
-EOF` } } },
+        "echo change > a.txt" } } },
     { text: "已到宿主流水线等待点。" },
   ];
 }
@@ -133,6 +106,19 @@ function buildService(
   });
 }
 
+function deliveryModel(
+  script: Scene[],
+  dataDir: string,
+  options: { linear?: boolean; terminalStep?: "end" | "external_verify" } = {},
+): ScriptedModelServer {
+  return new ScriptedModelServer(script, "scripted-v1", {
+    linear: options.linear,
+    beforeScene: managedFlowFixture(dataDir, {
+      terminalStep: options.terminalStep,
+    }),
+  });
+}
+
 async function until(
   probe: () => boolean,
   what: string,
@@ -158,7 +144,12 @@ async function runTask(
 ) {
   const model = new ScriptedModelServer(
     [...walkScript(push, platform.barePath), ...extraScenes],
-    "scripted-v1", { linear });
+    "scripted-v1", {
+      linear,
+      beforeScene: managedFlowFixture(dataDir, {
+        ...(!push ? { takeRepositoryOffline: platform.barePath } : {}),
+      }),
+    });
   await model.start();
   const service = buildService(
     platform, dataDir, model.modelsJson(), poll, settings);
@@ -233,10 +224,7 @@ test("宿主 Git 边界:不执行 Agent hook,不信 origin/ext 改道", async ()
   chmodSync(extHelper, 0o700);
   const hostile: Scene[] = [
     { tool: { name: "bash", input: { command:
-        "git config user.email bot@test && git config user.name bot && "
-        + "git checkout --quiet -b master_bot_REQ9 && "
-        + "echo change > a.txt && git add . && "
-        + 'git commit --quiet -m "feat: REQ9" && '
+        "echo change > a.txt && "
         + "mkdir -p .git/hooks && "
         + `printf '#!/bin/sh\\nprintf compromised > %s\\nexit 1\\n' `
         + `${shellQuote(hookMarker)} > .git/hooks/pre-push && `
@@ -246,22 +234,16 @@ test("宿主 Git 边界:不执行 Agent hook,不信 origin/ext 改道", async ()
         + `git remote set-url origin ${shellQuote(attacker)} && `
         + "git config protocol.ext.allow always && "
         + `git config ${shellQuote(`url.ext::${extHelper}.insteadOf`)} `
-        + `${shellQuote(attacker)} && `
-        + `cat > .mae-flow.json <<'EOF'
-{"schema_version": 2, "current": "external_verify", "revision": 1,
- "execution_contract": {"schema": "mae-flow-execution/1", "host": "cloud",
-   "compile": "pipeline", "ut_write": "agent", "ut_run": "pipeline",
-   "codecheck": "pipeline", "git_push": "host"},
- "config": {"分支名": "master_bot_REQ9", "基线分支": "master",
-            "单号": "REQ9"}, "choices": {}, "history": []}
-EOF` } } },
+        + `${shellQuote(attacker)}` } } },
     { text: "代码已提交，等待宿主交付。" },
   ];
-  const model = new ScriptedModelServer(hostile);
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-deliver-"));
+  const model = new ScriptedModelServer(hostile, "scripted-v1", {
+    beforeScene: managedFlowFixture(dataDir, { terminalStep: "external_verify" }),
+  });
   await model.start();
   try {
-    const service = buildService(platform,
-      mkdtempSync(join(tmpdir(), "mfc-deliver-")), model.modelsJson());
+    const service = buildService(platform, dataDir, model.modelsJson());
     const created = service.create("交付 REQ9:宿主 Git 信任边界",
       { ticket: "REQ9" });
     await until(() => service.get(created.id)!.status === "await_merge",
@@ -365,10 +347,12 @@ test("external_verify 是宿主等待点：不催办 Agent，直接触发并核�
   const platform = new FakeGitPlatform();
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
   await platform.start();
-  const model = new ScriptedModelServer(externalWaitScript());
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-deliver-"));
+  const model = new ScriptedModelServer(externalWaitScript(), "scripted-v1", {
+    beforeScene: managedFlowFixture(dataDir, { terminalStep: "external_verify" }),
+  });
   await model.start();
   try {
-    const dataDir = mkdtempSync(join(tmpdir(), "mfc-deliver-"));
     const service = buildService(platform, dataDir, model.modelsJson());
     const created = service.create("交付 REQ9:宿主等待点", { ticket: "REQ9" });
     await until(() => service.get(created.id)!.status === "await_merge",
@@ -388,10 +372,11 @@ test("旧 SHA 总体绿但 HEAD 已变化 → 先 STALE，再由宿主推新 HEA
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
   platform.nextPipelineStatus = "running";
   await platform.start();
-  const model = new ScriptedModelServer(externalWaitScript());
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-deliver-"));
+  const model = deliveryModel(externalWaitScript(), dataDir,
+    { terminalStep: "external_verify" });
   await model.start();
   try {
-    const dataDir = mkdtempSync(join(tmpdir(), "mfc-deliver-"));
     const service = buildService(platform, dataDir, model.modelsJson(),
       { pollIntervalMs: 100 });
     const created = service.create("交付 REQ9:旧结果不背书新 HEAD",
@@ -666,9 +651,9 @@ test("交付服务是部署基础设施:固定地址跑通交付", async () => {
   const platform = new FakeGitPlatform();
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
   await platform.start();
-  const model = new ScriptedModelServer(walkScript(true));
-  await model.start();
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-deliver-"));
+  const model = deliveryModel(walkScript(true), dataDir);
+  await model.start();
   const service = new TaskService({
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
@@ -705,10 +690,11 @@ test("交付请求带任务归属人身份头:MR 发起人=本人的原料到位
   const platform = new FakeGitPlatform();
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
   await platform.start();
-  const model = new ScriptedModelServer(walkScript(true));
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-deliver-"));
+  const model = deliveryModel(walkScript(true), dataDir);
   await model.start();
   const service = new TaskService({
-    dataDir: mkdtempSync(join(tmpdir(), "mfc-deliver-")),
+    dataDir,
     provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
     host: {
@@ -744,11 +730,11 @@ test("修复环:红→专职会话修复→推新提交→新流水线绿→等�
   platform.statusQueue.push("failed");        // 第一跑红,之后默认绿
   platform.nextPipelineLog = "BUILD FAILURE: NotifyServiceTest 断言失败";
   await platform.start();
-  const model = new ScriptedModelServer(
-    [...walkScript(true), ...repairScenes(true)],
-    "scripted-v1", { linear: true });
-  await model.start();
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-deliver-"));
+  const model = deliveryModel(
+    [...walkScript(true), ...repairScenes(true)],
+    dataDir, { linear: true });
+  await model.start();
   const service = buildService(platform, dataDir, model.modelsJson(),
     { repairRounds: 2 });
   try {
@@ -791,13 +777,13 @@ test("修复环:会话没新提交 → 带诊断停下,主动喊人", async () =
   await platform.start();
   const luban = new FakeLubanServer();
   await luban.start();
-  const model = new ScriptedModelServer([
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-deliver-"));
+  const model = deliveryModel([
     ...walkScript(true),
     { text: "诊断:流水线要求 sonar.yaml,需在质量平台为本仓开通配置;"
         + "配好后重跑即可。这不是本仓代码能修的,我不做无关改动。" },
-  ], "scripted-v1", { linear: true });
+  ], dataDir, { linear: true });
   await model.start();
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-deliver-"));
   const service = new TaskService({
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
@@ -844,13 +830,13 @@ test("停机后的回程票:人工办完外部事项,重跑续推到绿灯收口
   // halted,MR 闭环改造后不烧(同 SHA 直接按上次结果裁),队列只需一个红。
   platform.statusQueue.push("failed");
   await platform.start();
-  const model = new ScriptedModelServer([
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-deliver-"));
+  const model = deliveryModel([
     ...walkScript(true),
     { text: "诊断:需要在质量平台配 sonar.yaml,不是代码问题。" },
     { text: "外部配置已就绪,续推收口。" },        // 重跑的重建会话
-  ], "scripted-v1", { linear: true });
+  ], dataDir, { linear: true });
   await model.start();
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-deliver-"));
   const service = buildService(platform, dataDir, model.modelsJson());
   try {
     const id = service.create("交付 REQ9:停机重跑").id;
@@ -882,12 +868,12 @@ test("修复环默认不限轮:三连红一路修到绿,没有人为断头", asy
   platform.statusQueue.push("failed", "failed", "failed");
   platform.nextPipelineLog = "BUILD FAILURE: 覆盖率 62% 未达标";
   await platform.start();
-  const model = new ScriptedModelServer(
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-deliver-"));
+  const model = deliveryModel(
     [...walkScript(true), ...repairScenes(true),
      ...repairScenes(true), ...repairScenes(true)],
-    "scripted-v1", { linear: true });
+    dataDir, { linear: true });
   await model.start();
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-deliver-"));
   const service = buildService(platform, dataDir, model.modelsJson());
   try {
     const id = service.create("交付 REQ9:不限轮修复").id;
@@ -911,8 +897,8 @@ test("修复环默认不限轮:三连红一路修到绿,没有人为断头", asy
     // 知识块:失败日志里的"覆盖率"召唤出对应那篇,前端那篇不该到场
     assert.match(seen, /禁止用 @Generated 排除/, "命中的知识块要进开场白");
     assert.ok(!seen.includes("组件一律函数式"), "没命中的不占上下文");
-    // 仓库地图同场证明:开场白里有地图标题
-    assert.match(seen, /仓库地图/, "地图该在会话开场");
+    // 本夹具只有 README/a.txt/知识 Markdown，没有可提取符号的源码；
+    // 空地图按产品契约不上桌，不能用这条交付测试强造一张假地图。
   } finally {
     await model.stop();
     await platform.stop();
@@ -924,11 +910,11 @@ test("修复环:轮数预算耗尽 → 如实停下请人工", async () => {
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
   platform.statusQueue.push("failed", "failed");
   await platform.start();
-  const model = new ScriptedModelServer(
-    [...walkScript(true), ...repairScenes(true)],
-    "scripted-v1", { linear: true });
-  await model.start();
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-deliver-"));
+  const model = deliveryModel(
+    [...walkScript(true), ...repairScenes(true)],
+    dataDir, { linear: true });
+  await model.start();
   const service = buildService(platform, dataDir, model.modelsJson(),
     { repairRounds: 1 });
   try {
@@ -951,11 +937,11 @@ test("Cloud 固有执行契约进每次会话开场,修复会话也不例外", a
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
   platform.statusQueue.push("failed");
   await platform.start();
-  const model = new ScriptedModelServer(
-    [...walkScript(true), ...repairScenes(true)],
-    "scripted-v1", { linear: true });
-  await model.start();
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-deliver-"));
+  const model = deliveryModel(
+    [...walkScript(true), ...repairScenes(true)],
+    dataDir, { linear: true });
+  await model.start();
   const service = new TaskService({
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),

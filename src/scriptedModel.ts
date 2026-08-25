@@ -14,6 +14,25 @@ export interface Scene {
   tool?: { name: string; input: Record<string, unknown> };
 }
 
+export interface ScriptedSceneContext {
+  request: Record<string, any>;
+  index: number;
+  requestNumber: number;
+}
+
+export interface ScriptedModelOptions {
+  linear?: boolean;
+  /**
+   * Test-fixture hook that runs before a scripted response is emitted.
+   *
+   * This is deliberately outside the model/tool path: orchestration tests can
+   * prepare an authoritative platform/kernel fixture without teaching the fake
+   * Agent to overwrite protected state. Production never constructs this
+   * server, and ordinary scripted tests leave it unset.
+   */
+  beforeScene?: (context: ScriptedSceneContext) => void | Promise<void>;
+}
+
 type Block = Record<string, unknown>;
 
 function countToolResults(messages: Array<Record<string, any>>): number {
@@ -55,7 +74,7 @@ export class ScriptedModelServer {
      * 选幕——那是单会话剧本的形状,新会话会从第 0 幕重演;修复环这类
      * "多会话接力"的剧本必须顺演,不然第二个会话拿到的是第一幕
      * (实测:修复会话跑去 checkout -b,报 branch already exists)。 */
-    readonly options: { linear?: boolean } = {},
+    readonly options: ScriptedModelOptions = {},
   ) {}
 
   /** 让接下来 times 次请求以网关错误告终(测超限自愈这类失败路径)。 */
@@ -87,7 +106,7 @@ export class ScriptedModelServer {
     this.server = createServer((request, response) => {
       const chunks: Buffer[] = [];
       request.on("data", (chunk) => chunks.push(chunk as Buffer));
-      request.on("end", () => {
+      request.on("end", () => void (async () => {
         let body: Record<string, any>;
         try {
           body = JSON.parse(Buffer.concat(chunks).toString("utf-8") || "{}");
@@ -113,12 +132,29 @@ export class ScriptedModelServer {
             ? this.requests.length - 1
             : countToolResults(body.messages),
           this.script.length - 1);
+        try {
+          await this.options.beforeScene?.({
+            request: body,
+            index,
+            requestNumber: this.requests.length,
+          });
+        } catch (error) {
+          response.writeHead(500, { "content-type": "application/json" })
+            .end(JSON.stringify({
+              type: "error",
+              error: {
+                type: "scripted_fixture_error",
+                message: String(error),
+              },
+            }));
+          return;
+        }
         const scene = this.script[index];
         const blocks = sceneBlocks(scene, index);
         const stopReason = scene.tool ? "tool_use" : "end_turn";
         if (body.stream) this.stream(response, blocks, stopReason);
         else this.plain(response, blocks, stopReason);
-      });
+      })());
     });
     await new Promise<void>((resolve) =>
       this.server!.listen(0, "127.0.0.1", resolve));

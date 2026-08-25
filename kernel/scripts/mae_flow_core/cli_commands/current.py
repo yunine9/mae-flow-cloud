@@ -21,13 +21,10 @@ from mae_flow_core.cli_commands.user_intervention import render_user_interventio
 def perms_line(step):
     """本步的写入范围提示——只陈述真实成立的事。
 
-    历史上这行说了两处不作数的话:①「禁止: 修改源码」——allow_source_edit 在 guard 里
-    没有任何判据读它,29 个步骤每步都打印一条谁都不执行的禁令;②对 rf_ut/tw_ut/verify_ut
-    三步打印「允许: 修改源码」,而这三步 tests_only=True,Edit Gate 实际只放测试路径——
-    说反了。另外每步都提醒「禁止编辑 .comet.yaml」,那是退役机制留下的沉积。
-
-    现在的口径:tests_only 是门禁真会拦的,照实说并给出逃生口;allow_* 是步骤意图,
-    因此这行叫「写入范围」而不是「禁止 X」。
+    allow_source_edit 与 tests_only 都由活跃 Edit/Bash Gate 直接执行：前者决定
+    当前步骤能否碰源码，后者在允许写入的 UT 步进一步收窄到测试路径。
+    提示与机器裁决必须来自同一个 step 定义，不能再出现“页面写着禁止、
+    Hook 却放行”的两套语义。
     """
     if step.get("tests_only"):
         scope = ("只写测试路径(门禁拦源码;UT 暴露的源码缺陷经用户裁决后 "

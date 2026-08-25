@@ -737,6 +737,57 @@ class RuntimeAndStateTests(unittest.TestCase):
             self.assertIn("config_confirm", current.stdout)
             self.assertNotIn("普通开发模式", current.stdout)
 
+    def test_active_hook_enforces_flow_step_source_write_scope(self):
+        """真实 dispatch/CLI 路径必须消费 flow.json allow_source_edit。
+
+        这条专门防 4875f1e 型回归：纯函数有阶段模型，但活跃 Hook 只走
+        gate edit/bash，导致 grill 已选 workflow 后仍可直接改业务源码。
+        """
+        with tempfile.TemporaryDirectory() as td:
+            subprocess.run(["git", "init", "-q"], cwd=td, check=True)
+            source = os.path.join(td, "service.cpp")
+            with open(source, "w", encoding="utf-8") as stream:
+                stream.write("int value = 1;\n")
+            subprocess.run(["git", "add", "service.cpp"], cwd=td, check=True)
+            env = dict(os.environ)
+            env["GIT_AUTHOR_NAME"] = env["GIT_COMMITTER_NAME"] = "test"
+            env["GIT_AUTHOR_EMAIL"] = env["GIT_COMMITTER_EMAIL"] = (
+                "test@example.com")
+            subprocess.run(
+                ["git", "commit", "-qm", "base"], cwd=td, env=env,
+                check=True)
+            state_path = os.path.join(td, ".mae-flow.json")
+
+            def set_step(step):
+                save_versioned_json(state_path, {
+                    "current": step,
+                    "config": {"单号": "REQ-GATE", "基线分支": "master"},
+                    "choices": {"workflow": "full"},
+                    "history": [{"step": "workflow_select", "result": "done"}],
+                    "started": "2026-08-25 10:00:00",
+                }, "flow", project_root=td)
+
+            def gate(*arguments):
+                child_env = dict(env)
+                child_env["PYTHONPYCACHEPREFIX"] = os.path.join(td, "pycache")
+                return subprocess.run(
+                    [sys.executable, os.path.join(
+                        ROOT, "scripts", "mae-flow.py"), "gate", *arguments],
+                    cwd=td, text=True, capture_output=True, env=child_env,
+                    timeout=15)
+
+            set_step("grill")
+            edit = gate("edit", source)
+            self.assertEqual(2, edit.returncode, edit.stderr)
+            self.assertIn("当前步骤 grill", edit.stderr)
+            bash = gate("bash", "sed -i s/1/2/ service.cpp")
+            self.assertEqual(2, bash.returncode, bash.stderr)
+            self.assertIn("当前步骤 grill", bash.stderr)
+
+            set_step("build")
+            self.assertEqual(0, gate("edit", source).returncode,
+                             "编码步骤的显式授权不得被误伤")
+
     def test_statusline_uses_repository_boundary_and_runtime_precedence(self):
         with tempfile.TemporaryDirectory() as td:
             parent = os.path.join(td, "parent")

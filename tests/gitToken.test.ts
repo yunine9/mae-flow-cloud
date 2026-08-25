@@ -237,7 +237,9 @@ test("消费:宿主 clone 短暂鉴权;Agent 会话无凭据/config helper;缺�
     });
     const id = service.create("验证个人令牌注入", { account: "zhang" }).id;
     assert.equal(await settle(service, id), "failed");
-    assert.match(service.get(id)!.detail ?? "", /状态文件不存在|尚未初始化/);
+    assert.match(service.get(id)!.detail ?? "",
+      /config_confirm|尚未到 terminal|状态文件不存在|尚未初始化/,
+      "托管任务会在模型入场前机械 init；提前收嘴应停在配置确认而非 INACTIVE");
     assert.ok(remote.authSeen().some((auth) => auth === expectAuth),
       "git 没带上 helper 给的凭据");
 

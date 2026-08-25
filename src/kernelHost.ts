@@ -14,6 +14,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { SemanticEvent } from "./semanticEvents.ts";
 import type { GateDecision } from "./gateService.ts";
@@ -41,6 +42,9 @@ interface DispatchResult {
 
 export class KernelHost {
   private chain: Promise<unknown> = Promise.resolve();
+  /** Cloud 托管任务已经完成机械启动握手。普通本地插件不经过这里，
+   * INACTIVE 仍保持自由开发语义。 */
+  private managed = false;
 
   constructor(readonly options: KernelHostOptions) {}
 
@@ -60,9 +64,68 @@ export class KernelHost {
       .join("\n");
   }
 
+  /** Cloud 明确创建的是交付任务，不再让模型从需求措辞猜“要不要 init”。
+   *
+   * 新工作区由宿主先机械执行 init；已有在途状态只读取 current。检视
+   * 修复是内核定义的新交付轮，调用方可显式允许把 terminal 滚到新轮。
+   * 任一步失败都发生在模型会话创建之前，不能落入 INACTIVE 继续改码。 */
+  async bootstrapManaged(
+    requirement: string,
+    options: { rolloverTerminal?: boolean } = {},
+  ): Promise<string> {
+    this.managed = true;
+    this.requirement = requirement;
+    const before = this.flowState();
+    if (!before || (before.terminal && options.rolloverTerminal)) {
+      const initialized = await this.spawnCli("init", ["init"]);
+      this.requireSuccess("init", initialized);
+    }
+    const active = this.flowState();
+    if (!active) {
+      throw new Error("内核 init 返回成功但未生成 .mae-flow.json，拒绝启动 Agent");
+    }
+    if (active.terminal && options.rolloverTerminal) {
+      throw new Error("内核 init 未能从终态开启检视修复新轮，拒绝启动 Agent");
+    }
+
+    // 状态先存在，再发 Hook 生命周期和需求原话。这样 userprompt 直接进
+    // ACTIVE 台账，不再依赖“观察模型执行 init 后补发”的脆弱接缝。
+    const started = await this.dispatch("sessionstart", {});
+    this.requireSuccess("sessionstart", started);
+    const prompted = await this.dispatch("userprompt", { prompt: requirement });
+    this.requireSuccess("userprompt", prompted);
+    this.requirementCaptured = true;
+    const current = await this.spawnCli("current", ["current"]);
+    this.requireSuccess("current", current);
+    return [started.stdout, prompted.stdout, current.stdout]
+      .map((text) => text.trim())
+      .filter(Boolean)
+      .join("\n");
+  }
+
   /** pretooluse:exit 2 → deny,打回文案原样给模型(exit 2+stderr 同构)。 */
   async preTool(event: SemanticEvent): Promise<GateDecision | undefined> {
     const payload = event.payload as Record<string, any>;
+    let managedStateProblem = "";
+    if (this.managed) {
+      try {
+        if (!this.flowState()) managedStateProblem = "内核状态不存在";
+      } catch (error) {
+        managedStateProblem = String(error);
+      }
+    }
+    if (managedStateProblem) {
+      const tool = String(payload.name ?? "");
+      if (["Edit", "Write", "MultiEdit", "Bash", "Task", "Agent"]
+          .includes(tool)) {
+        return {
+          action: "deny",
+          reason: `Cloud 托管任务的内核状态缺失或不可读（${managedStateProblem}），`
+            + "已阻止继续执行。"
+            + "请停止重试并查看任务启动诊断；不得在 INACTIVE 状态修改代码。",
+        };
+      }
+    }
     // tool_use_id 必须随 pretooluse 进内核:Agent 生命周期观察以它为
     // invocation_id,posttooluse 按同一 id 精确对账。缺了它内核只能
     // 自造 id + 按"当前步同类开放启动恰一条"兜底——同类子 Agent 并行
@@ -167,6 +230,28 @@ export class KernelHost {
     };
   }
 
+  private flowState(): { current: string; terminal: boolean } | undefined {
+    const statePath = join(this.options.workspace, ".mae-flow.json");
+    if (!existsSync(statePath)) return undefined;
+    let state: Record<string, any>;
+    try {
+      state = JSON.parse(readFileSync(statePath, "utf-8"));
+    } catch (error) {
+      throw new Error(`内核状态文件不可读，拒绝启动 Agent: ${String(error)}`);
+    }
+    const current = typeof state.current === "string" ? state.current : "";
+    if (!current) throw new Error("内核状态缺少 current，拒绝启动 Agent");
+    let terminal = current === "end";
+    try {
+      const flow = JSON.parse(readFileSync(
+        join(this.options.kernelRoot, "flow", "flow.json"), "utf-8"));
+      terminal = Boolean(flow?.steps?.[current]?.terminal);
+    } catch {
+      // 兼容测试桩与旧快照；现行主流程唯一终态就是 end。
+    }
+    return { current, terminal };
+  }
+
   /** 基础设施故障重试:超时/起不来才重试,内核**答了**(退 0 或退 2)
    * 就是它的裁决,一次都不重试。
    *
@@ -211,6 +296,70 @@ export class KernelHost {
     // 失败不断链:fail-open 由调用方语义决定,串行化必须继续。
     this.chain = run.catch(() => undefined);
     return run;
+  }
+
+  /** 执行受信任的内核 CLI。仍使用安全 Git 视图，避免业务仓写入的
+   * fsmonitor/filter/config 在宿主 init/current 期间获得执行机会。 */
+  private spawnCli(label: string, args: string[]): Promise<DispatchResult> {
+    const { kernelRoot, workspace } = this.options;
+    let gitView: ReturnType<typeof createSafeGitView>;
+    try {
+      gitView = createSafeGitView(workspace);
+    } catch (error) {
+      return Promise.resolve({
+        code: 1,
+        stdout: "",
+        stderr: String(error),
+        infraError: `内核 ${label} 无法建立安全 Git 视图: ${String(error)}`,
+      });
+    }
+    return new Promise((resolve) => {
+      let closed = false;
+      const finish = (result: DispatchResult) => {
+        if (closed) return;
+        closed = true;
+        gitView.cleanup();
+        resolve(result);
+      };
+      const child = spawn(
+        this.options.python ?? "python3",
+        [join(kernelRoot, "scripts", "mae-flow.py"), ...args],
+        {
+          cwd: workspace,
+          stdio: ["ignore", "pipe", "pipe"],
+          env: gitView.environment(),
+        },
+      );
+      let stdout = "";
+      let stderr = "";
+      let infraError = "";
+      child.stdout.setEncoding("utf-8");
+      child.stderr.setEncoding("utf-8");
+      child.stdout.on("data", (chunk: string) => (stdout += chunk));
+      child.stderr.on("data", (chunk: string) => (stderr += chunk));
+      const timer = setTimeout(() => {
+        infraError = `内核 ${label} 超时`;
+        child.kill("SIGKILL");
+      }, this.options.timeoutMs ?? 30_000);
+      child.on("close", (code) => {
+        clearTimeout(timer);
+        finish({
+          code: code ?? (infraError ? 1 : 0),
+          stdout,
+          stderr,
+          infraError: infraError || undefined,
+        });
+      });
+      child.on("error", (error) => {
+        clearTimeout(timer);
+        finish({
+          code: 1,
+          stdout,
+          stderr: String(error),
+          infraError: `内核 ${label} 启动失败: ${String(error)}`,
+        });
+      });
+    });
   }
 
   private spawnDispatch(

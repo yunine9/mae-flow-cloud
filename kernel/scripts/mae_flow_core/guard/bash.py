@@ -84,8 +84,8 @@ def decide_commit_branch(context):
     显式跳过,理由是"工作分支还没建"。可跳过的后果是这四步里的提交一律无人阻挡,
     而它们只有一个去处:基线分支。实战撞到了:无人值守跑到 workflow_select(第 3 步)
     时,模型把整个需求写完、提交、推送,三个提交全落在 sim_liaoxiang_base 上,
-    branch_create 压根没跑过。而"build 之前不许写源码"这件事门禁从来不执行
-    (allow_source_edit 没有任何判据读它),提交这一关是最后的拦阻点。
+    branch_create 压根没跑过。如今步骤级源码 Gate 已恢复，这里仍保留独立的
+    分支提交边界：多层防线不能依赖上游永不失效。
 
     不需要按步骤开天窗:分支名还没定时 wanted_branch 为空,本来就放行;
     定了之后 current==wanted 才放行,这正是我们要的。

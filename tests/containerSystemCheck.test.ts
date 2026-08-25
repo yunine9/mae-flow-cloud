@@ -48,6 +48,12 @@ test("部署自检真实走统一容器并验证三类工具链，结束后销�
             assert.match(command, /ca-bundle\.crt/);
             assert.match(command, /codehub-cli spes/);
             assert.match(command, /MFC_KERNEL_ROOT/);
+            assert.match(command, /mae-flow\.py" init/,
+              "自检必须走 Cloud 托管任务的真实机械 init");
+            assert.match(command, /mae-flow\.py" current/);
+            assert.match(command, /gate edit main\.ts/,
+              "自检必须证明配置阶段源码写入会被内核拒绝");
+            assert.match(command, /managed flow edit gate unexpectedly allowed/);
             assert.match(command, /passwd_home/);
             assert.match(command, /Java version: 21/,
               "不能只看 java -version，必须核对 Maven 实际使用的 JVM");
@@ -76,6 +82,7 @@ test("部署自检真实走统一容器并验证三类工具链，结束后销�
   const prepush = checked.items.find((item) => item.key === "prepush");
   assert.equal(container?.status, "ok");
   assert.match(container?.detail ?? "", /真实启动/);
+  assert.match(container?.detail ?? "", /托管任务 init\/current/);
   assert.equal(prepush?.status, "ok");
   assert.match(prepush?.detail ?? "", /构建槽位 2/);
   assert.deepEqual(calls, ["start", "exec", "stop"]);
