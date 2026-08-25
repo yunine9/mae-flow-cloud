@@ -58,7 +58,12 @@ import {
   renderDecision,
   type WaitingRecord,
 } from "./humanGate.ts";
-import { CloudSession, type Outcome } from "./sessionDriver.ts";
+import {
+  CloudSession,
+  isDeliveryApproval,
+  isDeliveryRequestWaiting,
+  type Outcome,
+} from "./sessionDriver.ts";
 import {
   TaskContainer,
   sweepManagedTaskContainers,
@@ -375,12 +380,16 @@ export interface TaskSummary {
   /** 确认 Chain 方案后生成的普通仓库交付任务关系。 */
   parent_task_id?: string;
   blocked_by?: string[];
+  /** 任务类型:issue=问题处理(every-skill 的 9 步流程,云端旁路,
+   * 不走内核);缺省/requirement=需求交付(内核流程)。两个类型的
+   * 分叉都在 launch()/settleTurn(),真相只在这一个字段上。 */
+  task_type?: "requirement" | "issue";
   /** 交付方式(用户拍板:下单就选好,不让 agent 来问)。取值是**内核
    * flow.json 里 workflow_select 的选项原文**(完整开发/已定位问题修复/
    * 局部修改/处理评审意见),不是宿主自造的词——自造过一次,结果是
    * 卡来了永远对不上、用户在流程里被重复问一遍(2026-08-18 内网实测)。
    * 内核仍会举卡(流程规则是内核的,宿主不删它的问题),对得上就自动
-   * 交卷(预答,不是代判)。 */
+   * 交卷(预答,不是代判)。issue 任务没有 lane——它不进内核流程。 */
   lane?: string;
   /** 需求/问题单号(REQ/DTS)。下单就给(用户 2026-08-19 拍板),
    * 开场当事实喂给模型——配置确认不再为它开口问。 */
@@ -842,6 +851,17 @@ interface TaskState {
   lastCompactAt?: number;
   /** 恢复标记:launch 走重建会话路径(不重克隆、内核 current 续跑)。 */
   resume?: boolean;
+  /** 问题处理流程的交付申请台账(随 task.json 落盘):approved 后
+   * settle 收口才真正推送+建 MR——进程死在"批准与会话收口之间"也不丢
+   * 这份决定,重建会话收口时照它交付。branch 由申请卡带入,是宿主
+   * push 的唯一分支来源。 */
+  deliveryRequest?: {
+    branch: string;
+    summary: string;
+    state: "pending" | "approved" | "rejected";
+    decidedAt?: string;
+    decision?: string;
+  };
   /** 恢复期收到的人工决定:重建会话就绪后由 driver 补登记再续跑。 */
   pendingResume?: WaitingRecord;
   /** 已由内核接纳且严格写入 task.json 的用户介入 id；只供崩溃重放。 */
@@ -1807,6 +1827,12 @@ export class TaskService {
       && !task.summary.parent_task_id;
   }
 
+  /** 问题处理任务(every-skill 流程):克隆仓但不建 KernelHost,
+   * 收口/恢复/完成判定都不走内核。全部分叉认这一个字段。 */
+  private isIssueFlow(task: TaskState): boolean {
+    return task.summary.task_type === "issue";
+  }
+
   /** Agent 写结构化投影，Markdown 仍是给人检视的正文。读失败只是不展示图。 */
   private refreshRequirementGraph(task: TaskState): void {
     if (!this.isRequirementAnalysis(task) || !task.cwd) return;
@@ -2533,6 +2559,8 @@ export class TaskService {
       account?: string;
       repo?: string;
       repos?: string[];
+      /** 问题处理任务(every-skill 流程):不走内核,单仓+问题单号必填。 */
+      taskType?: "requirement" | "issue";
       lane?: string;
       /** 需求/问题单号(REQ/DTS):内核配置确认的"单号"项,下单就给,
        * 不让模型开工后再来问一遍(用户 2026-08-19 拍板)。 */
@@ -2561,18 +2589,24 @@ export class TaskService {
     if (explicitTitle && explicitTitle.length > 80) {
       throw new Error("任务名称不能超过 80 个字符");
     }
+    const isIssue = options.taskType === "issue";
     // 交付方式:选项是内核的领地,现读它的 flow.json 校验
     // (2026-08-18 修正:此前 TS 侧自造"快速/慢速",与内核的
     // full/hotfix/tweak/review 对不上,预选永远匹配不上内核举的卡,
     // 用户下单答过一次、页面上还要再答一次)。读不到内核定义时不校验
-    // ——宁可放行也不拿一套猜出来的选项挡人。
+    // ——宁可放行也不拿一套猜出来的选项挡人。问题处理任务没有 lane
+    // (不进内核流程),传了也不认。
     const laneChoices = workflowChoices(this.options.host?.kernelRoot)
       .map((item) => item.label);
-    const requestedLane = options.lane?.trim() || undefined;
+    const requestedLane = !isIssue
+      ? options.lane?.trim() || undefined : undefined;
     if (requestedLane !== undefined && laneChoices.length
         && !laneChoices.includes(requestedLane)) {
       throw new Error(
         `交付方式只能是 ${laneChoices.join("/")},收到: ${requestedLane}`);
+    }
+    if (isIssue && options.lane?.trim()) {
+      throw new Error("问题处理任务不适用交付方式(那是内核流程的选项)");
     }
     // 单号/基线分支:内核配置确认要的两项事实,下单就收齐(和交付方式
     // 同一逻辑:能在表单上一次给完的,不让模型开工后逐项来问)。单号
@@ -2583,8 +2617,12 @@ export class TaskService {
     if (ticket && /\s/.test(ticket)) {
       throw new Error("单号不能含空白字符");
     }
-    if (!ticket && this.options.host && !this.options.host.repoPath) {
-      throw new Error("请填写需求/问题单号(REQ/DTS)——分支名和提交信息都要用它");
+    if (!ticket && (isIssue
+        || (this.options.host && !this.options.host.repoPath))) {
+      throw new Error(
+        isIssue
+          ? "请填写问题单号(如 DTS)——问题处理流程的分支名、提交信息和 MR 都要挂它"
+          : "请填写需求/问题单号(REQ/DTS)——分支名和提交信息都要用它");
     }
     const baseline = (options.baseline ?? "").trim()
       || (this.options.host ? "master" : undefined);
@@ -2601,10 +2639,19 @@ export class TaskService {
     // 地方——宁可当场拒绝,也不替人猜他要交到哪儿。
     // 唯一豁免:部署显式用 `--repo` 钉死了单仓(演示/试跑/测试的
     // harness 形态,那是命令行不是产品面)。生产按 `--kernel-mode`
-    // 不带 `--repo` 起,于是每单都必须写明。
-    if (!repo && this.options.host && !this.options.host.repoPath) {
+    // 不带 `--repo` 起,于是每单都必须写明。问题处理任务不吃豁免:
+    // 表单上"涉及的代码仓"就是它的全部现场,缺了没法开工。
+    if (!repo && (isIssue
+        || (this.options.host && !this.options.host.repoPath))) {
       throw new Error(
-        "请填写交付代码仓——本部署不设默认仓,每单都要写明交到哪个仓");
+        isIssue
+          ? "请填写涉及的代码仓——问题处理要在该仓建分支、修复并提 MR"
+          : "请填写交付代码仓——本部署不设默认仓,每单都要写明交到哪个仓");
+    }
+    if (isIssue && repositories.length > 1) {
+      throw new Error(
+        `问题处理任务第一期只支持一个代码仓,收到 ${repositories.length} 个;`
+        + "跨仓问题请分开下单");
     }
     for (const candidate of repositories) {
       if (!this.options.host) {
@@ -2707,9 +2754,11 @@ export class TaskService {
         : undefined,
       parent_task_id: options.parentTaskId,
       blocked_by: options.blockedBy?.length ? [...options.blockedBy] : undefined,
+      task_type: isIssue ? "issue" : undefined,
       // 用户拍板:交付方式下单就定,不让 agent 再问一遍。默认取内核
       // 选项里的第一项(通常是"完整开发"),读不到内核就不预选。
-      lane: requestedLane ?? laneChoices[0],
+      // 问题处理任务没有 lane——它不进内核流程。
+      lane: isIssue ? undefined : requestedLane ?? laneChoices[0],
       ticket,
       baseline,
       model_choice: options.model,
@@ -2736,6 +2785,7 @@ export class TaskService {
         summary: task.summary,
         cwd: task.cwd,
         mission: task.mission,
+        delivery_request: task.deliveryRequest,
         assistant_handoff: task.pendingAssistantHandoff,
         applied_developer_intervention_id:
           task.appliedDeveloperInterventionId,
@@ -2819,6 +2869,13 @@ export class TaskService {
           humanGate: new HumanGate(join(workspace, "waiting.json")),
           cwd: typeof saved.cwd === "string" ? saved.cwd : undefined,
           resume: true,
+          deliveryRequest:
+            saved.delivery_request
+            && typeof saved.delivery_request.branch === "string"
+            && ["pending", "approved", "rejected"].includes(
+              saved.delivery_request.state)
+              ? saved.delivery_request
+              : undefined,
           mission: typeof saved.mission === "string"
             ? saved.mission : undefined,
           pendingAssistantHandoff:
@@ -3427,6 +3484,22 @@ export class TaskService {
       answers: Object.keys(answers).length ? answers : undefined,
       notes,
     });
+    // 交付申请(RequestDelivery)的决定:把分支与结论记进任务台账,
+    // 随 task.json 落盘。approved ≠ 立即推送——push 的硬前提是 Agent
+    // 会话已释放(pushFromHost 见会话即安全拒绝),真正推送在 settle
+    // 收口做;这里只记牢决定,进程死在"批准与收口之间"也不丢。
+    if (isDeliveryRequestWaiting(waiting)) {
+      const approved = [decision, ...Object.values(answers)]
+        .some(isDeliveryApproval);
+      task.deliveryRequest = {
+        branch: String((waiting.question as any)?.branch ?? "").trim(),
+        summary: String((waiting.question as any)?.summary ?? "").trim(),
+        state: approved ? "approved" : "rejected",
+        decidedAt: new Date().toISOString(),
+        decision,
+      };
+      this.persist(task);
+    }
     // 决定已经落袋(waiting.json 写完),批注才算送出去。
     if (picked.length) {
       this.annotations(task).markSent(picked.map((item) => item.id), "decision");
@@ -4294,7 +4367,10 @@ export class TaskService {
   private completionAttestation(
     task: TaskState,
   ): KernelCompletionAttestation | undefined {
-    if (!this.options.host || this.isRequirementAnalysis(task)) return undefined;
+    if (!this.options.host || this.isRequirementAnalysis(task)
+        || this.isIssueFlow(task)) {
+      return undefined;
+    }
     return inspectKernelCompletion(
       task.cwd,
       this.options.host.kernelRoot,
@@ -4492,6 +4568,10 @@ export class TaskService {
       let cwd = workspace;
       let prompt = task.summary.requirement;
       let hostHooks;
+      /** 问题处理任务物化到工作区的技能根(含 Go 工具二进制);其他任务
+       * 用部署级 <dataDir>/skills。Agent 的 bash 世界(容器或宿主)只挂
+       * 得到工作区,技能若留在 dataDir 里就成了看得见摸不着的提示词。 */
+      let skillsDir = join(this.options.dataDir, "skills");
       let repositorySkillPaths: string[] = [];
       let loadedRepositorySkillNames: string[] = [];
       let repositorySkillResources: Array<KnowledgeResourceRef & {
@@ -4581,6 +4661,58 @@ export class TaskService {
               : "",
             undeliveredInterrupts(workspace).length
               ? "重启前用户还补充了：\n\n"
+                + undeliveredInterrupts(workspace).join("\n\n")
+              : "",
+          ].filter(Boolean).join("\n\n");
+        }
+      } else if (this.options.host && this.isIssueFlow(task)) {
+        // 问题处理任务(every-skill 流程,用户 2026-08-24 拍板不走内核):
+        // 克隆可写仓,但不建 KernelHost、不写 .mae-flow-order.json——
+        // 流程规则由技能(playbook 等)承载,人工闸门走 AskUserQuestion
+        // 审批卡,收口走 RequestDelivery 工具由宿主推送+建 MR。断点复用
+        // 与交付单同一套:cwd 落 task.json,重启按 savedCwd 续;waiting
+        // 决定幂等重放;deliveryRequest 台账跨重启不丢。
+        if (resuming) {
+          cwd = savedCwd!;
+        } else {
+          const prepared = gitIdentity
+            ? this.prepareHostGitSandbox(gitIdentity) : undefined;
+          try {
+            cwd = this.cloneRepo(workspace, prepared, gitIdentity,
+              task.summary.repo_url, task.summary.baseline);
+          } finally {
+            this.cleanupHostGitCredential(prepared);
+          }
+        }
+        task.cwd = cwd;
+        this.hardenAgentGitBoundary(agentDir, cwd);
+        // 技能物化:serve 播种的 <dataDir>/skills-dts 整目录拷进任务
+        // 工作区(幂等:已存在不动——重启续跑时保留,凭证配置不重拷)。
+        // 会话装载与工具执行共用这一份:pi 从这里读 SKILL.md,bash 从
+        // 这里跑 Go 二进制;config.toml 的内网凭据只落在本机工作区,
+        // 不进代码仓、不进 git。
+        const issueSkills = join(workspace, "skills-dts");
+        const seedRoot = join(this.options.dataDir, "skills-dts");
+        if (!existsSync(issueSkills) && existsSync(seedRoot)) {
+          cpSync(seedRoot, issueSkills, { recursive: true });
+        }
+        if (existsSync(issueSkills)) skillsDir = issueSkills;
+        prompt = this.issueFlowPrompt(task, cwd, gitIdentity);
+        if (resuming) {
+          prompt = [
+            prompt,
+            task.deliveryRequest?.state === "approved"
+              ? "交付申请已被用户通过:不要再调用 RequestDelivery、不要再"
+                + "改动代码,直接写收口总结结束本回合——宿主随后推送分支"
+                + "并创建 MR。"
+              : "服务重启后继续问题处理;分支、提交与对齐结论都在工作区,"
+                + "先查看现状(git status / git log)再继续,不要从头推翻。",
+            task.pendingResume
+              ? "用户对上一个待办的答复如下,连同批注一起处理:\n\n"
+                + renderDecision(task.pendingResume)
+              : "",
+            undeliveredInterrupts(workspace).length
+              ? "重启前用户还补充了:\n\n"
                 + undeliveredInterrupts(workspace).join("\n\n")
               : "",
           ].filter(Boolean).join("\n\n");
@@ -4779,7 +4911,10 @@ export class TaskService {
       }
       // 普通编码会话仍按 Cloud 执行契约轻量推进；编译/UT 被挪到 push
       // 前的独立专项会话，不回填成内核步骤，也不把模型自述当质量证据。
-      if (this.options.host && !requirementAnalysis) {
+      // 问题处理任务不适用:它的质量口径忠实 every-skill 原流程(无自动
+      // 编译/UT,人工验证把关),契约段在 issueFlowPrompt 里另写。
+      if (this.options.host && !requirementAnalysis
+          && !this.isIssueFlow(task)) {
         const utGenerationMethod = availableUtGenerationMethod(
           this.options.dataDir, loadedRepositorySkillNames);
         prompt = `${prompt}\n\nCloud 执行契约(宿主事实):当前编码会话只负责代码与单元测试的编写。`
@@ -4905,12 +5040,16 @@ export class TaskService {
         agentDir,
         // 宿主级 skill:<数据目录>/skills 放一次,每个任务都带
         // (团队的 UT 写法指南在内网,老宿主靠手动集成进子 agent)。
-        hostSkillsDir: join(this.options.dataDir, "skills"),
+        // 问题处理任务换成物化到工作区的 skills-dts(见 launch 分支)。
+        hostSkillsDir: skillsDir,
         repositorySkillPaths,
         repositorySkillResources,
         repositoryKnowledge,
         knowledgeTrace: this.knowledgeTrace(task, cwd),
         currentStep: () => this.readProgress(task)?.step ?? "",
+        // 问题处理流程的收口工具:RequestDelivery 举卡申请交付,
+        // 批准后由 settle 收口推送——Agent 全程不碰凭据。
+        allowDeliveryRequest: this.isIssueFlow(task),
         // 上下文撑爆时自愈压缩用的锚:与主动压缩同一个内核现场,
         // 摘要围绕"当前步骤+已确认配置"组织,不由云端编造。
         compactAnchor: () => this.kernelAnchor(task),
@@ -7355,7 +7494,12 @@ export class TaskService {
       ?? this.effectiveDefaultRepo();
     if (!configuredRemote) throw new Error("任务没有权威代码仓地址，拒绝推送");
     validateRepositoryAddress(configuredRemote);
-    if (/^[a-z][a-z\d+.-]*:/i.test(configuredRemote)
+    // Windows 盘符路径(C:\…)长得像 "scheme:" 会撞上下面的协议白名单
+    // 正则——先按本地路径放行(2026-08-25 开发者模式通了 symlink 后,
+    // 本机 Windows 首次真跑宿主推送时在这里被误杀)。
+    const windowsDrive = /^[a-z]:[\\/]/i.test(configuredRemote);
+    if (!windowsDrive
+        && /^[a-z][a-z\d+.-]*:/i.test(configuredRemote)
         && !/^(?:https?|file):\/\//i.test(configuredRemote)) {
       throw new Error("代码仓传输协议不受支持，宿主只允许 HTTPS 或本地仓");
     }
@@ -7436,6 +7580,57 @@ export class TaskService {
       gitView?.cleanup();
       this.cleanupHostGitCredential(sandbox);
     }
+  }
+
+  /** 问题处理任务的首条 prompt(every-skill 流程的云端形态)。
+   *
+   * 与内核交付单的根本差异:没有内核开工引导、没有下单事实文件,
+   * 流程规则全部由这里+技能(playbook/create-branch/grill-question/
+   * commit/fetch-logs/build-deploy)承载。事实段照交付单的口径收齐
+   * (单号/基线/工号),模型开工后不许再问;Cloud 执行契约是问题处理
+   * 特供版:无自动编译/UT,人工验证把关,Agent 不 push、收口走
+   * RequestDelivery。 */
+  private issueFlowPrompt(
+    task: TaskState,
+    cwd: string,
+    gitIdentity?: { username: string; email?: string },
+  ): string {
+    const facts: string[] = [];
+    if (task.summary.ticket) facts.push(`问题单号:${task.summary.ticket}`);
+    if (task.summary.baseline) {
+      facts.push(`基线分支:${task.summary.baseline}`);
+    }
+    const badge = gitIdentity?.username ?? task.summary.luban_account;
+    if (badge) facts.push(`工号(git 用户名):${badge}`);
+    const convention = this.effectiveCommitConvention();
+    return [
+      `处理问题单 ${task.summary.ticket ?? task.summary.id}。问题描述:`,
+      "",
+      task.summary.requirement,
+      "",
+      "这是「问题处理」任务,走 playbook 技能定义的修复交付路线",
+      "(建分支 → 拉日志(可选) → 四项对齐(人工闸门) → 修复 → 提交",
+      " → 换库部署(可选,人工验证) → 申请交付)。已装载的技能:",
+      "playbook(路线图)、create-branch、grill-question、commit、",
+      "fetch-logs、build-deploy——开工先读 playbook。",
+      "",
+      `代码仓已克隆在当前工作目录(${basename(cwd)}),基线分支已检出。`,
+      "",
+      facts.length ? `下单事实(不要再向用户询问):${facts.join(";")}` : "",
+      "",
+      "Cloud 执行契约(问题处理版,宿主事实):本流程没有自动编译/",
+      "UT/CodeCheck 门禁——质量口径是对齐闸门确认的验证方式+人工验证;",
+      "不要编造编译或测试结果。不要读取或索要个人 Git 令牌,不要执行",
+      "git push 或创建 MR:修复提交落在分支上之后,调用 RequestDelivery",
+      "工具申请交付(带分支名与变更摘要),用户通过后由宿主统一推送",
+      "并创建 MR;被退回则按意见继续修改。",
+      convention
+        ? `提交信息规范(平台钩子会按它校验,不合规直接拒收 push):${convention}`
+        : "提交信息格式:[单号][类型] 描述(类型限 feat|fix|refactor|test|chore|docs|style)。",
+      "",
+      "现在开始:读 playbook 技能,按其路线推进;需要用户决定的地方",
+      "一律用 AskUserQuestion 工具举卡,不要在正文里自问自答。",
+    ].filter((line) => line !== undefined).join("\n");
   }
 
   private requirementAnalysisPrompt(task: TaskState, cwd: string): string {
@@ -7839,6 +8034,12 @@ export class TaskService {
         // 回合结束≠流程走完:模型可能提前收嘴(run3 实测停在
         // delivery_review)。内核 current 不在终态且催办还有效时,
         // 同一会话催办续跑,而不是把半截流程标成 completed。
+        // 问题处理任务不看内核(没有 .mae-flow.json,读了只会把每单
+        // 都误判成"尚未 init")——收口分叉到它自己的一套。
+        if (this.isIssueFlow(task)) {
+          await this.settleIssueTurn(task, epoch);
+          break;
+        }
         const stalled = this.stalledStep(task);
         if (stalled && task.nudgedStep !== stalled) {
           // 换了步骤才重置预算；同一步第二次 end_turn 不能因为“已经催过”
@@ -7954,6 +8155,143 @@ export class TaskService {
         this.persist(task);
         this.notifyOutcome(task);
         break;
+    }
+  }
+
+  /** 问题处理任务的回合收口(与内核交付单分叉):真相不在
+   * .mae-flow.json,在交付申请台账里——申请通过才交付,没申请就
+   * 收嘴则与内核 stalledStep 同款催办,催完仍无交付事实就如实失败
+   * (最后发言就是给人的诊断,修复不了的单不该装作完成)。 */
+  private async settleIssueTurn(
+    task: TaskState,
+    epoch: number,
+  ): Promise<void> {
+    if (task.pauseRequested || task.summary.status === "pausing") {
+      await this.finishPause(task, "running");
+      return;
+    }
+    if (task.deliveryRequest?.state !== "approved" && task.driver
+        && (task.nudgeCount ?? 0) < 5) {
+      task.nudgeCount = (task.nudgeCount ?? 0) + 1;
+      this.options.log?.(
+        `任务 ${task.summary.id} 催办续跑(问题处理未收口,第 ${task.nudgeCount} 次)`);
+      await this.settle(task, task.driver.continueWith(
+        "问题处理流程尚未收口:修复完成并经用户验证后,调用 "
+        + "RequestDelivery 工具申请交付(不要自己 push);若判断本单无法"
+        + "用代码修复,先用 AskUserQuestion 与用户确认处置方式。"
+        + "不要只写总结就结束。"), epoch);
+      return;
+    }
+    // 会话释放是宿主 push 的硬前提(与内核交付路径同款:先落最后发言,
+    // 再 dispose,再串行停净容器——异步残留会跟推送抢同一个工作区)。
+    task.lastReply = task.driver?.finalReply();
+    task.driver?.dispose();
+    task.driver = undefined;
+    const completedContainer = task.container;
+    await (completedContainer?.stop() ?? Promise.resolve());
+    if (task.container === completedContainer) task.container = undefined;
+    task.mission = undefined;
+    if (!this.current(task, epoch)) return;
+    if (task.deliveryRequest?.state === "approved") {
+      await this.tryDeliverIssue(task, epoch);
+      return;
+    }
+    task.summary.status = "failed";
+    task.summary.detail = "问题处理未收口:未申请交付即结束。"
+      + (task.lastReply
+        ? `最后发言(诊断):\n${task.lastReply.slice(0, 600)}` : "");
+    this.persist(task);
+    this.notifyOutcome(task);
+  }
+
+  /** 问题处理任务的宿主交付(忠实原流程:无 prepush 验证、不触发
+   * 流水线——质量把关在对齐与人工验证两道闸门,已随申请通过;MR 创建
+   * 即收口,合入归平台与人)。失败如实 failed 并写明原因,人工可重跑
+   * (重跑会重建会话,交付申请台账仍在,收口即再次尝试交付)。 */
+  private async tryDeliverIssue(
+    task: TaskState,
+    epoch: number,
+  ): Promise<void> {
+    const branch = task.deliveryRequest?.branch ?? "";
+    if (!branch) {
+      task.summary.status = "failed";
+      task.summary.detail = "交付申请缺分支名,无法推送";
+      this.persist(task);
+      this.notifyOutcome(task);
+      return;
+    }
+    const baseline = task.summary.baseline ?? "master";
+    try {
+      const pushReceipt = this.pushFromHost(task, branch);
+      task.summary.delivery = {
+        ...task.summary.delivery,
+        git_push: pushReceipt,
+      };
+      // push 已发生先落账:即使随后 MR 接口抖动,重跑也不会重复推错 SHA。
+      this.persist(task);
+      const platformUrl = this.effectivePlatformUrl();
+      if (!platformUrl) {
+        // 推送已成但没配平台:如实说,不装作完成。
+        task.summary.status = "failed";
+        task.summary.detail = `分支已推送(${branch}@`
+          + `${pushReceipt.sha.slice(0, 12)}),但未配置交付平台,MR 未创建`;
+        this.persist(task);
+        this.notifyOutcome(task);
+        return;
+      }
+      const mrRequest = {
+        repo: task.summary.repo_url ?? this.effectiveDefaultRepo(),
+        source_branch: branch,
+        target_branch: baseline,
+        title: `${task.summary.ticket ?? branch}: `
+          + `${task.summary.title ?? taskTitle(task.summary.requirement)}`,
+        dts_no: task.summary.ticket ?? "",
+      };
+      const mrKey = `mr:${branch}->${baseline}`;
+      const mrStarted = new Date().toISOString();
+      const ledger = (action: Omit<ExternalAction, "taskId">) =>
+        this.bypass(task, "投影动作", this.options.projection?.recordAction(
+          { taskId: task.summary.id, ...action }));
+      ledger({ idemKey: mrKey, kind: "mr_create", request: mrRequest,
+               sha: pushReceipt.sha, startedAt: mrStarted });
+      const mr = await fetch(`${platformUrl}/mr`, {
+        method: "POST",
+        headers: this.platformIdentity(task),
+        body: JSON.stringify(mrRequest),
+      }).then((r) => {
+        if (!r.ok) throw new Error(`MR 创建失败 HTTP ${r.status}`);
+        return readJson(r);
+      });
+      if (!this.current(task, epoch)) return;
+      ledger({ idemKey: mrKey, kind: "mr_create", request: mrRequest,
+               sha: pushReceipt.sha, startedAt: mrStarted, result: mr,
+               finishedAt: new Date().toISOString() });
+      task.summary.delivery = {
+        ...task.summary.delivery,
+        mr_url: mr.url,
+        ...(mr.id !== undefined ? { mr_id: mr.id } : {}),
+        source_branch: branch,
+        target_branch: baseline,
+        mr_state: "已创建",
+      };
+      task.summary.status = "completed";
+      task.summary.detail = `MR 已创建,等待平台合入:${mr.url}`;
+      this.persist(task);
+      this.notifyOutcome(task);
+      this.options.log?.(
+        `任务 ${task.summary.id} 问题处理交付完成: MR ${mr.url}`);
+    } catch (error) {
+      if (!this.current(task, epoch)) return;
+      task.summary.status = "failed";
+      task.summary.detail = `交付动作失败:${String(error)}`;
+      task.summary.delivery = {
+        ...task.summary.delivery,
+        skipped: String(error),
+      };
+      this.persist(task);
+      this.notifyOutcome(task);
+      this.options.log?.(
+        `任务 ${task.summary.id} 问题处理交付失败: ${String(error)}`);
     }
   }
 }

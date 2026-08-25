@@ -1,0 +1,20 @@
+# fetch-logs 配置文件（模板，凭据已清空）
+# 请根据实际情况修改以下配置项
+# 注意: login_user(sopuser) / su_user(ossuser) / log_base(/var/log/oss/MAE) 为固定值，无需配置
+
+# 目标服务器 IP 列表（必填，至少一个）
+# 单台服务器: hosts = ["60.14.46.16"]
+# 多台服务器: hosts = ["60.14.46.16", "60.14.46.17", "60.14.46.18"]
+# hosts = ["60.14.46.16"]
+
+# 服务器密码，sopuser/ossuser 共用（必填）
+# password = ""
+
+# 需要抓取日志的服务名列表（必填，至少一个）。
+# 抓取 /var/log/oss/MAE/<服务名> 下的全部内容
+# services = ["TranFmaWebsite"]
+
+# 本地保存目录（默认 local-logs，位于 exe 同目录下）
+# 可为相对路径（相对 exe 目录），也可为绝对路径
+# 产出解压后的日志目录: <服务名>_<拉取时间戳>/（中间 zip 自动解压并删除）
+local_dir = "local-logs"

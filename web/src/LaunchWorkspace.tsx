@@ -11,6 +11,10 @@ import {
   type RepositorySkillSelection,
 } from "./RepositorySkillPicker";
 
+/** 启动页的两个页签:需求开发=内核交付流程(原样);问题处理=
+ * every-skill 修复流程(不走内核,收口由宿主推送+建 MR)。 */
+type LaunchMode = "requirement" | "issue";
+
 export function LaunchWorkspace({
   session,
   onCreated,
@@ -20,6 +24,7 @@ export function LaunchWorkspace({
   onCreated: () => Promise<void>;
   onClose: () => void;
 }) {
+  const [mode, setMode] = useState<LaunchMode>("requirement");
   const [requirement, setRequirement] = useState("");
   const [title, setTitle] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -35,11 +40,12 @@ export function LaunchWorkspace({
   const [ticket, setTicket] = useState("");
   const [baseline, setBaseline] = useState("");
   // 交付方式下单就定(用户拍板:不让 agent 再问一遍);选项与默认值
-  // 都来自内核,空串=等 options 到了再取第一项。
+  // 都来自内核,空串=等 options 到了再取第一项。问题处理页签不用它。
   const [lane, setLane] = useState("");
   const [repairRounds, setRepairRounds] = useState("");
   const [repositorySkillSelection, setRepositorySkillSelection] =
     useState<RepositorySkillSelection>(EMPTY_REPOSITORY_SKILL_SELECTION);
+  const isIssue = mode === "issue";
   // 配置没配齐不让下单:缺项来自后端(服务级+个人级),前端只负责
   // 摆在明面上。后端同样硬拦——绕过界面打接口一样被 409 挡住。
   const blockers = options?.blockers ?? [];
@@ -110,21 +116,25 @@ export function LaunchWorkspace({
           title: title.trim(),
           repo: repos[0]?.trim() || undefined,
           repos: repos.map((item) => item.trim()).filter(Boolean),
+          taskType: isIssue ? "issue" : undefined,
           // select 虽然会视觉显示第一项，但用户没手动切换时 state 仍是
-          // 空串；提交必须使用屏幕上真正显示的默认项。
-          lane: lane || options?.workflows[0]?.label,
+          // 空串；提交必须使用屏幕上真正显示的默认项。问题处理没有
+          // 交付方式(不进内核流程),也不适用交付修复轮预算。
+          lane: isIssue ? undefined : lane || options?.workflows[0]?.label,
           ticket: ticket.trim() || undefined,
           baseline: baseline.trim() || undefined,
-          repairRounds: repairRounds.trim() === ""
-            ? undefined : Number(repairRounds),
-          repositorySkillCatalogToken:
-            repositorySkillSelection.scanned
+          repairRounds: isIssue
+            ? undefined
+            : repairRounds.trim() === ""
+              ? undefined : Number(repairRounds),
+          repositorySkillCatalogToken: !isIssue
+            && repositorySkillSelection.scanned
               ? repositorySkillSelection.catalogToken : undefined,
-          selectedRepositorySkillIds:
-            repositorySkillSelection.scanned
+          selectedRepositorySkillIds: !isIssue
+            && repositorySkillSelection.scanned
               ? repositorySkillSelection.selectedIds : undefined,
-          selectedRepositoryKnowledgeIds:
-            repositorySkillSelection.scanned
+          selectedRepositoryKnowledgeIds: !isIssue
+            && repositorySkillSelection.scanned
               ? repositorySkillSelection.selectedKnowledgeIds : undefined,
         },
       );
@@ -160,20 +170,52 @@ export function LaunchWorkspace({
       <main className="launch-workspace-body">
         <section className="launch-panel" aria-labelledby="launch-title">
           <aside className="launch-copy">
-            <span className="section-kicker">CREATE WORK</span>
-            <h2 id="launch-title">描述要交付的结果</h2>
-            <p>任务会自动归入你的工作台，人工节点也会回到你的待核对列表。</p>
-            <ol className="launch-guide" aria-label="创建任务步骤">
-              <li><i>1</i><span><strong>说清结果</strong><small>描述完成标准，不必编排 Agent 步骤</small></span></li>
-              <li><i>2</i><span><strong>圈定范围</strong><small>填写一个或多个相关代码仓</small></span></li>
-              <li><i>3</i><span><strong>确认执行</strong><small>负责人和交付方式一次选好</small></span></li>
-            </ol>
-            <small className="launch-copy-foot">提交后可在“我的工作”持续跟进和控制任务。</small>
+            <div className="launch-tabs" role="tablist" aria-label="任务类型">
+              <button type="button" role="tab"
+                aria-selected={mode === "requirement"}
+                className={`launch-tab${mode === "requirement" ? " active" : ""}`}
+                onClick={() => setMode("requirement")}>
+                <strong>需求开发</strong>
+                <small>内核交付流程</small>
+              </button>
+              <button type="button" role="tab"
+                aria-selected={mode === "issue"}
+                className={`launch-tab issue${mode === "issue" ? " active" : ""}`}
+                onClick={() => setMode("issue")}>
+                <strong>问题处理</strong>
+                <small>修复到 MR</small>
+              </button>
+            </div>
+            {isIssue ? (
+              <>
+                <span className="section-kicker">HANDLE ISSUE</span>
+                <h2 id="launch-title">处理一张问题单</h2>
+                <p>从问题现象到修复 MR：对齐与验证两道人工闸门都会回到你的待办，推送与 MR 由平台代劳。</p>
+                <ol className="launch-guide" aria-label="创建任务步骤">
+                  <li><i>1</i><span><strong>说清问题</strong><small>现象、影响与线索，原文完整交给 Agent</small></span></li>
+                  <li><i>2</i><span><strong>圈定现场</strong><small>问题单号、涉及的代码仓与基线分支</small></span></li>
+                  <li><i>3</i><span><strong>确认交付</strong><small>修复验证通过后审批交付申请</small></span></li>
+                </ol>
+                <small className="launch-copy-foot">流程按问题处理路线图推进：建分支→对齐→修复→提交→验证→申请交付。</small>
+              </>
+            ) : (
+              <>
+                <span className="section-kicker">CREATE WORK</span>
+                <h2 id="launch-title">描述要交付的结果</h2>
+                <p>任务会自动归入你的工作台，人工节点也会回到你的待核对列表。</p>
+                <ol className="launch-guide" aria-label="创建任务步骤">
+                  <li><i>1</i><span><strong>说清结果</strong><small>描述完成标准，不必编排 Agent 步骤</small></span></li>
+                  <li><i>2</i><span><strong>圈定范围</strong><small>填写一个或多个相关代码仓</small></span></li>
+                  <li><i>3</i><span><strong>确认执行</strong><small>负责人和交付方式一次选好</small></span></li>
+                </ol>
+                <small className="launch-copy-foot">提交后可在“我的工作”持续跟进和控制任务。</small>
+              </>
+            )}
           </aside>
 
           <div className="launch-form-shell">
             <div className="launch-form-intro">
-              <div><span>NEW DELIVERY</span><strong>填写任务信息</strong></div>
+              <div><span>{isIssue ? "NEW ISSUE FIX" : "NEW DELIVERY"}</span><strong>{isIssue ? "填写问题单信息" : "填写任务信息"}</strong></div>
               <small><i aria-hidden /> 必填项请一次填完整</small>
             </div>
 
@@ -198,128 +240,205 @@ export function LaunchWorkspace({
                 <p>个人凭据只能由本人在“个人设置”配置，密钥不会回显。</p>
               </div>
             )}
+            {isIssue && !optionsLoading && options && !options.repo.enabled && (
+              <div className="launch-blockers" role="alert">
+                <div className="launch-blocker-head">
+                  <span aria-hidden>!</span>
+                  <div><strong>问题处理需要接代码仓的部署</strong><small>当前服务未开启内核模式(代码仓克隆能力)</small></div>
+                </div>
+                <p>需求开发页签在当前部署下仍可发起纯会话任务;问题处理要在能克隆代码仓的部署上运行。</p>
+              </div>
+            )}
 
             <form className="composer launch-composer" onSubmit={submit}>
-              <section className="launch-form-section launch-requirement-section">
-                <div className="launch-section-head"><i>01</i><div><strong>任务与需求</strong><small>名称用于快速识别，需求文档完整交给 Agent</small></div><em>必填</em></div>
-                <label className="account-field launch-title-field">
-                  <span>任务名称</span>
-                  <input type="text" value={title} maxLength={80}
-                    onChange={(event) => setTitle(event.target.value)}
-                    placeholder="例如：修复通知模板变量缺失"
-                    autoFocus required />
-                  <small>用于任务卡、通知和团队总览，不会替代需求文档</small>
-                </label>
-                <label className="requirement-field">
-                  <span>需求文档</span>
-                  <textarea
-                    value={requirement}
-                    onChange={(event) => setRequirement(event.target.value)}
-                    placeholder="粘贴完整需求说明、背景、范围和验收标准；支持 Markdown"
-                    rows={10}
-                    required
-                  />
-                  <small>{requirement
-                    ? `${requirement.split(/\r?\n/).length} 行 · ${requirement.length} 字符，原文将完整保留`
-                    : "这里是 Agent 实际接收的完整原文，不会被截成标题"}</small>
-                </label>
-              </section>
-
-              {options && (options.repo.enabled || options.ticket.enabled || options.baseline.enabled) && (
-                <section className="launch-form-section">
-                  <div className="launch-section-head"><i>02</i><div><strong>交付定位</strong><small>Agent 据此进入正确仓库和分支</small></div></div>
-                  {options.repo.enabled && (
-                    <div className="repo-field">
-                      <div className="repo-field-title">
-                        <span>涉及代码仓{options.repo.required ? "（至少一个）" : ""}</span>
-                        <small>单仓与多仓使用同一条需求交付流程</small>
-                      </div>
-                      <div className="repo-list">
-                        {repos.map((value, index) => (
-                          <div className="repo-row" key={index}>
-                            <span>{String(index + 1).padStart(2, "0")}</span>
-                            <input type="text" value={value}
-                              onChange={(event) => changeRepository(index, event.target.value)}
-                              placeholder="https://codehub…/team/project.git"
-                              spellCheck={false}
-                              required={options.repo.required} />
-                            {repos.length > 1 && <button type="button"
-                              aria-label={`移除第 ${index + 1} 个仓库`}
-                              onClick={() => removeRepository(index)}>×</button>}
-                          </div>
-                        ))}
-                      </div>
-                      <button type="button" className="repo-add"
-                        onClick={addRepository}>
-                        <span>＋</span> 添加代码仓
-                      </button>
-                      <small className="repo-field-note">
-                        {repos.length > 1
-                          ? `已选择 ${repos.length} 个仓库；系统会先分析职责、接口与开发依赖，人工确认后再拆分交付。`
-                          : "一个仓库就是只有一个交付节点的需求；需要跨仓时继续添加。"}
-                      </small>
-                    </div>
-                  )}
-                  <div className="launch-field-grid">
-                    {options.ticket.enabled && (
+              {isIssue ? (
+                <>
+                  <section className="launch-form-section launch-requirement-section">
+                    <div className="launch-section-head"><i>01</i><div><strong>问题单</strong><small>单号与描述完整交给 Agent,分支与提交都挂这个号</small></div><em>必填</em></div>
+                    <label className="account-field launch-title-field">
+                      <span>任务名称</span>
+                      <input type="text" value={title} maxLength={80}
+                        onChange={(event) => setTitle(event.target.value)}
+                        placeholder="例如：修复登录超时偶发崩溃"
+                        autoFocus required />
+                      <small>用于任务卡、通知和团队总览，不会替代问题描述</small>
+                    </label>
+                    <div className="launch-field-grid">
                       <label className="account-field">
-                        <span>需求/问题单号{options.ticket.required ? "（必填）" : ""}</span>
+                        <span>问题单号（必填）</span>
                         <input type="text" value={ticket}
                           onChange={(event) => setTicket(event.target.value)}
-                          placeholder="REQ2026xxxx / DTS2026xxxx" spellCheck={false}
-                          required={options.ticket.required} />
+                          placeholder="DTS2026xxxx" spellCheck={false} required />
+                        <small>分支名、提交信息与 MR 都挂它</small>
                       </label>
-                    )}
-                    {options.baseline.enabled && (
                       <label className="account-field">
                         <span>基线分支</span>
                         <input type="text" value={baseline}
                           onChange={(event) => changeBaseline(event.target.value)}
-                          placeholder={`默认 ${options.baseline.default}`} spellCheck={false} />
+                          placeholder={`默认 ${options?.baseline.default ?? "master"}`} spellCheck={false} />
                       </label>
-                    )}
-                  </div>
-                </section>
-              )}
-              {options?.repo.enabled && (
-                <RepositorySkillPicker
-                  key={JSON.stringify([repos, baseline])}
-                  repositories={repos}
-                  baseline={baseline}
-                  onSelectionChange={setRepositorySkillSelection}
-                />
-              )}
-              <section className="launch-form-section">
-                <div className="launch-section-head"><i>03</i><div><strong>执行设置</strong><small>选定交付方式和修复预算;任务自动归属你本人</small></div></div>
-                <div className="launch-field-grid launch-settings-grid">
-                  {(options?.workflows.length ?? 0) > 0 && (
-                    <label className="account-field">
-                      <span>交付方式</span>
-                      <select className="launch-model-select"
-                        value={lane || options!.workflows[0].label}
-                        onChange={(event) => setLane(event.target.value)}>
-                        {options!.workflows.map((item) => (
-                          <option key={item.key} value={item.label}>
-                            {item.label}
-                            {item.steps !== undefined
-                              ? `（${item.steps} 步 · 拍板 ${item.acks} 次）` : ""}
-                          </option>
-                        ))}
-                      </select>
+                    </div>
+                    <label className="requirement-field">
+                      <span>问题描述</span>
+                      <textarea
+                        value={requirement}
+                        onChange={(event) => setRequirement(event.target.value)}
+                        placeholder="问题现象、影响范围、发生场景、已知线索(日志片段/复现步骤);支持 Markdown"
+                        rows={10}
+                        required
+                      />
+                      <small>{requirement
+                        ? `${requirement.split(/\r?\n/).length} 行 · ${requirement.length} 字符，原文将完整保留`
+                        : "这里是 Agent 实际接收的完整原文，不会被截成标题"}</small>
                     </label>
-                  )}
-                  {options && (
-                    <label className="account-field repair-field">
-                      <span>修复轮预算</span>
-                      <input type="text" inputMode="numeric" value={repairRounds}
-                        onChange={(event) => setRepairRounds(event.target.value)}
-                        placeholder={options.repair_rounds !== undefined
-                          ? `默认 ${options.repair_rounds}（0=关）`
-                          : "默认不限轮（0=关）"} />
+                  </section>
+                  <section className="launch-form-section">
+                    <div className="launch-section-head"><i>02</i><div><strong>修复现场</strong><small>问题处理第一期支持单仓</small></div></div>
+                    <div className="repo-field">
+                      <div className="repo-field-title">
+                        <span>涉及代码仓（一个）</span>
+                        <small>修复分支建在这个仓里</small>
+                      </div>
+                      <div className="repo-list">
+                        <div className="repo-row">
+                          <span>01</span>
+                          <input type="text" value={repos[0] ?? ""}
+                            onChange={(event) => changeRepository(0, event.target.value)}
+                            placeholder="https://codehub…/team/project.git"
+                            spellCheck={false}
+                            required />
+                        </div>
+                      </div>
+                      <small className="repo-field-note">
+                        跨仓问题请分开下单;每个仓一张单、一个 MR。
+                      </small>
+                    </div>
+                  </section>
+                </>
+              ) : (
+                <>
+                  <section className="launch-form-section launch-requirement-section">
+                    <div className="launch-section-head"><i>01</i><div><strong>任务与需求</strong><small>名称用于快速识别，需求文档完整交给 Agent</small></div><em>必填</em></div>
+                    <label className="account-field launch-title-field">
+                      <span>任务名称</span>
+                      <input type="text" value={title} maxLength={80}
+                        onChange={(event) => setTitle(event.target.value)}
+                        placeholder="例如：修复通知模板变量缺失"
+                        autoFocus required />
+                      <small>用于任务卡、通知和团队总览，不会替代需求文档</small>
                     </label>
+                    <label className="requirement-field">
+                      <span>需求文档</span>
+                      <textarea
+                        value={requirement}
+                        onChange={(event) => setRequirement(event.target.value)}
+                        placeholder="粘贴完整需求说明、背景、范围和验收标准；支持 Markdown"
+                        rows={10}
+                        required
+                      />
+                      <small>{requirement
+                        ? `${requirement.split(/\r?\n/).length} 行 · ${requirement.length} 字符，原文将完整保留`
+                        : "这里是 Agent 实际接收的完整原文，不会被截成标题"}</small>
+                    </label>
+                  </section>
+
+                  {options && (options.repo.enabled || options.ticket.enabled || options.baseline.enabled) && (
+                    <section className="launch-form-section">
+                      <div className="launch-section-head"><i>02</i><div><strong>交付定位</strong><small>Agent 据此进入正确仓库和分支</small></div></div>
+                      {options.repo.enabled && (
+                        <div className="repo-field">
+                          <div className="repo-field-title">
+                            <span>涉及代码仓{options.repo.required ? "（至少一个）" : ""}</span>
+                            <small>单仓与多仓使用同一条需求交付流程</small>
+                          </div>
+                          <div className="repo-list">
+                            {repos.map((value, index) => (
+                              <div className="repo-row" key={index}>
+                                <span>{String(index + 1).padStart(2, "0")}</span>
+                                <input type="text" value={value}
+                                  onChange={(event) => changeRepository(index, event.target.value)}
+                                  placeholder="https://codehub…/team/project.git"
+                                  spellCheck={false}
+                                  required={options.repo.required} />
+                                {repos.length > 1 && <button type="button"
+                                  aria-label={`移除第 ${index + 1} 个仓库`}
+                                  onClick={() => removeRepository(index)}>×</button>}
+                              </div>
+                            ))}
+                          </div>
+                          <button type="button" className="repo-add"
+                            onClick={addRepository}>
+                            <span>＋</span> 添加代码仓
+                          </button>
+                          <small className="repo-field-note">
+                            {repos.length > 1
+                              ? `已选择 ${repos.length} 个仓库；系统会先分析职责、接口与开发依赖，人工确认后再拆分交付。`
+                              : "一个仓库就是只有一个交付节点的需求；需要跨仓时继续添加。"}
+                          </small>
+                        </div>
+                      )}
+                      <div className="launch-field-grid">
+                        {options.ticket.enabled && (
+                          <label className="account-field">
+                            <span>需求/问题单号{options.ticket.required ? "（必填）" : ""}</span>
+                            <input type="text" value={ticket}
+                              onChange={(event) => setTicket(event.target.value)}
+                              placeholder="REQ2026xxxx / DTS2026xxxx" spellCheck={false}
+                              required={options.ticket.required} />
+                          </label>
+                        )}
+                        {options.baseline.enabled && (
+                          <label className="account-field">
+                            <span>基线分支</span>
+                            <input type="text" value={baseline}
+                              onChange={(event) => changeBaseline(event.target.value)}
+                              placeholder={`默认 ${options.baseline.default}`} spellCheck={false} />
+                          </label>
+                        )}
+                      </div>
+                    </section>
                   )}
-                </div>
-              </section>
+                  {options?.repo.enabled && (
+                    <RepositorySkillPicker
+                      key={JSON.stringify([repos, baseline])}
+                      repositories={repos}
+                      baseline={baseline}
+                      onSelectionChange={setRepositorySkillSelection}
+                    />
+                  )}
+                  <section className="launch-form-section">
+                    <div className="launch-section-head"><i>03</i><div><strong>执行设置</strong><small>选定交付方式和修复预算;任务自动归属你本人</small></div></div>
+                    <div className="launch-field-grid launch-settings-grid">
+                      {(options?.workflows.length ?? 0) > 0 && (
+                        <label className="account-field">
+                          <span>交付方式</span>
+                          <select className="launch-model-select"
+                            value={lane || options!.workflows[0].label}
+                            onChange={(event) => setLane(event.target.value)}>
+                            {options!.workflows.map((item) => (
+                              <option key={item.key} value={item.label}>
+                                {item.label}
+                                {item.steps !== undefined
+                                  ? `（${item.steps} 步 · 拍板 ${item.acks} 次）` : ""}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
+                      {options && (
+                        <label className="account-field repair-field">
+                          <span>修复轮预算</span>
+                          <input type="text" inputMode="numeric" value={repairRounds}
+                            onChange={(event) => setRepairRounds(event.target.value)}
+                            placeholder={options.repair_rounds !== undefined
+                              ? `默认 ${options.repair_rounds}（0=关）`
+                              : "默认不限轮（0=关）"} />
+                        </label>
+                      )}
+                    </div>
+                  </section>
+                </>
+              )}
 
               {error && <div className="composer-error" role="alert">{error}</div>}
               <footer className="launch-submit-bar">
@@ -331,7 +450,9 @@ export function LaunchWorkspace({
                   ? "请先处理上方配置项"
                   : repositorySkillSelection.scanning
                     ? "读取完成后可确认选择并启动"
-                    : "任务创建后会自动进入你的工作台"}</small></div>
+                    : isIssue
+                      ? "问题处理任务会按修复路线图推进,两道闸门回到你的待办"
+                      : "任务创建后会自动进入你的工作台"}</small></div>
                 <button type="submit" disabled={submitting || blocked
                   || repositorySkillSelection.scanning}>
                   <span>{submitting

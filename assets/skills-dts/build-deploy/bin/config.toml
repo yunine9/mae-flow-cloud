@@ -1,0 +1,20 @@
+# build-deploy 配置文件（模板，凭据已清空）
+# 请根据实际情况修改以下配置项
+# 注意: 路径必须使用单引号包裹，否则 Windows 路径中的反斜杠会被当作转义符
+# 例如 \t 会被解释为 TAB 字符，导致路径错误
+# 正确: project_path = 'D:\Data\IdeaProjects\Fars\FarsWebsite'
+# 错误: project_path = "D:\Data\IdeaProjects\Fars\FarsWebsite"
+# project_path = 'D:\Data\IdeaProjects\Fars\FarsWebsite'
+
+# 服务器密码，sopuser/ossadm/ossuser 共用（必填）
+# password = ""
+
+# 是否同时更新 lib 目录（默认 false）
+# 绝大多数场景只需更新 webapps，仅当 pom.xml 依赖版本变更时设为 true
+include_lib = false
+
+# 目标服务器 IP 列表（必填，至少一个）
+# 单台服务器: hosts = ["141.71.88.205"]
+# 多台服务器: hosts = ["141.71.88.205", "141.71.88.206", "141.71.88.207"]
+# 程序会构建一次，然后依次部署到每台服务器
+# hosts = ["141.71.88.205"]

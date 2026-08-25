@@ -86,6 +86,9 @@ export function TaskCard({
         <span className="task-status-rail" aria-hidden />
         <span className="task-summary-body">
           <span className="task-overline">
+            {task.task_type === "issue" && (
+              <span className="task-type-badge issue" title="问题处理流程(every-skill):不走内核,收口由宿主推送并建 MR">问题处理</span>
+            )}
             {task.ticket && <span className="task-ticket">{task.ticket}</span>}
             <span className="task-id" title="平台内部编号">{task.id}</span>
             <span className={`pill ${task.status}${decisionMode === "signal" && task.status === "waiting_for_human" ? " team-signal" : ""}`}>

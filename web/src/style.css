@@ -871,6 +871,38 @@ svg {
     radial-gradient(circle at 100% 0, rgba(119, 119, 236, .28), transparent 48%),
     linear-gradient(145deg, #171e2c, #111722);
 }
+/* 页签(需求开发/问题处理):启动页的任务类型选择。激活态沿用紫调
+ * 强调色;问题处理页签激活时左栏氛围切到琥珀色,列表徽章同色系。 */
+.launch-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 24px;
+}
+.launch-tab {
+  padding: 10px 12px 9px;
+  display: grid;
+  gap: 3px;
+  text-align: left;
+  color: #8d97a8;
+  background: rgba(255, 255, 255, .03);
+  border: 1px solid rgba(141, 141, 243, .16);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: border-color .15s ease, background .15s ease, color .15s ease;
+}
+.launch-tab:hover { color: #c6cede; border-color: rgba(141, 141, 243, .34); }
+.launch-tab strong { font-size: 12.5px; }
+.launch-tab small { font-size: 9.5px; color: inherit; opacity: .72; }
+.launch-tab.active {
+  color: #e6ebf3;
+  background: linear-gradient(150deg, rgba(119, 119, 236, .26), rgba(119, 119, 236, .08));
+  border-color: rgba(141, 141, 243, .62);
+}
+.launch-tab.issue.active {
+  background: linear-gradient(150deg, rgba(224, 158, 76, .24), rgba(224, 158, 76, .07));
+  border-color: rgba(224, 158, 76, .58);
+}
 .launch-copy .section-kicker { color: #8d8df3; }
 .launch-copy h2 { margin-top: 9px; color: #fff; font-size: 23px; line-height: 1.25; }
 .launch-copy > p { margin: 11px 0 0; color: #9da8b9; font-size: 12px; line-height: 1.75; }
@@ -1434,6 +1466,20 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   color: var(--accent);
   font: 750 10.5px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   letter-spacing: .02em;
+}
+/* 任务类型徽章:问题处理(琥珀色系,与启动页 issue 页签同调);
+ * 需求开发是缺省类型,不占视觉位。 */
+.task-type-badge {
+  padding: 2px 7px 1px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: .04em;
+}
+.task-type-badge.issue {
+  color: #d99a4e;
+  background: rgba(224, 158, 76, .13);
+  border: 1px solid rgba(224, 158, 76, .34);
 }
 .task-created {
   margin-left: auto;

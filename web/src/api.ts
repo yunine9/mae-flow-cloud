@@ -359,6 +359,8 @@ export interface TaskSummary {
   baseline?: string;
   /** 业务需求/问题单号；与平台内部 task-xx 分开显示。 */
   ticket?: string;
+  /** 任务类型:issue=问题处理(every-skill 流程);缺席=需求交付。 */
+  task_type?: "requirement" | "issue";
   requirement_graph?: {
     stage: "analysis" | "confirmed";
     repositories: Array<{
@@ -663,6 +665,8 @@ export async function createTask(
     title?: string;
     repo?: string;
     repos?: string[];
+    /** issue=问题处理(every-skill 流程,不走内核);缺省 requirement。 */
+    taskType?: "requirement" | "issue";
     lane?: string;
     ticket?: string;
     baseline?: string;
@@ -681,6 +685,7 @@ export async function createTask(
       account: account || undefined,
       repo: extras?.repo || undefined,
       repos: extras?.repos?.length ? extras.repos : undefined,
+      task_type: extras?.taskType,
       // 空白等于没选，由服务端使用内核第一项；不要把 "" 伪装成
       // 一个需要校验的交付方式。
       lane: extras?.lane?.trim() || undefined,

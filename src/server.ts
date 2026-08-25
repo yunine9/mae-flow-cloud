@@ -616,6 +616,17 @@ export function createTaskServer(
         const repo = body.repo === undefined ? undefined : String(body.repo);
         const repos = Array.isArray(body.repos)
           ? body.repos.map(String) : undefined;
+        // 任务类型:issue=问题处理(every-skill 流程,不走内核)。
+        // 除这两个词以外的值一律拒绝——静默当 requirement 会把用户
+        // 以为走新流程的单悄悄送进内核交付。
+        const rawTaskType = body.task_type === undefined
+          ? undefined : String(body.task_type);
+        if (rawTaskType !== undefined
+            && !["requirement", "issue"].includes(rawTaskType)) {
+          return json(response, 400, {
+            error: `task_type 只能是 requirement/issue,收到: ${rawTaskType}`,
+          });
+        }
         // 兼容旧前端：select 显示了默认项但可能提交空串。空白就是
         // “未指定”，交给 TaskService 采用内核默认交付方式。
         const lane = body.lane === undefined
@@ -660,7 +671,9 @@ export function createTaskServer(
         try {
           return json(response, 201, service.create(requirement,
             {
-              title, account, repo, repos, lane, ticket, baseline, model,
+              title, account, repo, repos,
+              taskType: rawTaskType as "requirement" | "issue" | undefined,
+              lane, ticket, baseline, model,
               repairRounds, repositorySkillCatalogToken,
               selectedRepositorySkillIds, selectedRepositoryKnowledgeIds,
             }));

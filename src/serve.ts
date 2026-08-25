@@ -9,6 +9,8 @@
 
 import {
   appendFileSync,
+  chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -150,6 +152,36 @@ function declaresContextWindow(
   }
 }
 
+/** 问题处理任务(task_type=issue)的技能根:仓库资产 assets/skills-dts
+ * 播种到 <dataDir>/skills-dts。只在目标不存在时播种——管理员往
+ * config.toml 里填的内网凭据/服务器地址是现场配置,升级不许覆盖;
+ * 要重置就显式删目录再启动。config.toml 可能含密码,落盘后尽量
+ * 收紧到 0600(Windows 上是尽力而为,不因此失败)。 */
+function seedIssueSkills(dataDir: string): void {
+  const source = join(REPO_ROOT, "assets", "skills-dts");
+  const target = join(dataDir, "skills-dts");
+  if (!existsSync(source)) return; // 资产缺席(裁剪部署)不拦启动
+  if (existsSync(target)) return;
+  cpSync(source, target, { recursive: true });
+  const hardened: string[] = [];
+  for (const name of ["fetch-logs", "build-deploy"]) {
+    const config = join(target, name, "bin", "config.toml");
+    if (existsSync(config)) {
+      try {
+        chmodSync(config, 0o600);
+        hardened.push(name);
+      } catch {
+        // chmod 失败(如文件系统不支持)不拦启动;密码文件权限只能
+        // 靠部署手册兜底。
+      }
+    }
+  }
+  console.log(`[serve] 问题处理技能已播种: ${target}`
+    + (hardened.length
+      ? `(内网工具配置 ${hardened.join("/")} 请填 bin/config.toml,已 0600)`
+      : ""));
+}
+
 async function main(): Promise<void> {
   // 云端服务默认静音内核桌面弹窗:该被叫的是控制台前的人,不是跑服务的
   // 那台机器。内核默认开弹窗,是为"人坐在终端旁"的单机场景设计的;放到
@@ -186,6 +218,7 @@ async function main(): Promise<void> {
   }
   const dataDir = resolve(flag("--data") ?? join(REPO_ROOT, ".tasks"));
   mkdirSync(dataDir, { recursive: true });
+  seedIssueSkills(dataDir);
   // 独占锁必须在碰这个目录的任何东西之前拿到:实例身份就是 dataDir
   // 指纹,起服会按它清扫"本实例"的遗留容器——第二个实例起来的瞬间
   // 就会杀掉第一个正在跑的编译/prepush 容器。这不是抢资源,是踩现场。

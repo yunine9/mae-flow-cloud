@@ -129,6 +129,43 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
 见 `docs/luban-mobile-approval-handoff.md`；内网 Agent 可直接按其中的
 部署、字段映射、联调与验收清单执行。
 
+## 问题处理流程(task_type=issue,2026-08-24)
+
+启动页左侧有「需求开发 / 问题处理」两个页签。问题处理是 every-skill
+(华为 DTS 问题单修复插件)的云端形态:**不走内核**——流程规则由技能
+与首条 prompt 承载,断点复用任务生命周期全套(事件日志/waiting 幂等
+重放/重建会话),交付申请的决定随 task.json 落盘,进程死在"批准与
+收口之间"也不丢。
+
+- **下单**:问题单号(必填)+问题描述+单个代码仓+基线分支;单号贯穿
+  分支名(`<基线>_<工号>_<单号>`)、提交信息与 MR。
+- **流程**(playbook 技能路线图):建分支→拉日志(可选)→四项对齐
+  (现象/根因/方案/验证方式,**人工闸门**=AskUserQuestion 审批卡)→
+  修复→格式化提交→换库部署(可选,内网工具)→人工验证(**人工闸门**)
+  →RequestDelivery 工具申请交付(**人工闸门**)→宿主推送+建 MR。
+- **质量口径忠实原插件**(用户拍板):没有自动编译/UT/CodeCheck 门禁,
+  把关在对齐确认的验证方式+部署后人工验证;Agent 不亲手 push、不建
+  MR——凭据不进 Agent 视野,申请通过后会话收口,宿主统一推送并建 MR
+  (不触发权威流水线,MR 创建即 completed,合入归平台)。
+- **技能资产**:`assets/skills-dts/`(playbook/create-branch/
+  grill-question/commit/fetch-logs/build-deploy,含拉日志与换库部署的
+  Go 工具二进制)。serve 启动时播种到 `<dataDir>/skills-dts`(只在
+  不存在时,管理员填的 config.toml 内网凭据不被升级覆盖);问题处理
+  任务启动时整目录物化到工作区 `skills-dts/`——Agent 的 bash 世界只挂
+  得到工作区,二进制必须跟着进来。grill-question 已重写为自包含
+  (原版转调缺失的 vendor 技能);submit-mr 不迁移(宿主收口取代,
+  MCP token 问题一并绕开)。
+- **内网件现状**:DTS 拿单 MCP 未接(单号+描述由表单手输);fetch-logs/
+  build-deploy 二进制随技能就位,`bin/config.toml`(0600)填好 hosts/
+  password/services 即可用,配置缺失或连不上时技能指示如实报告停下
+  等人,不编造结果。
+- **边界(诚实清单)**:第一期单仓(多仓明拒);催办用尽仍未申请交付
+  =任务 failed,最后发言作为诊断带给人;交付动作(push/MR)失败如实
+  failed 可重跑(重跑重建会话,已批准的交付申请台账仍在,收口即再次
+  交付);端到端测试 `tests/issueFlow.test.ts` 的两条宿主链用例在
+  目录符号链接不可用的机器上(未开开发者模式的 Windows)显式 skip
+  并注明原因——那台机器上 delivery 等既有交付用例同样跑不动。
+
 ## 已知边界(诚实清单)
 
 - **"serve 反复挂、一点错误输出都没有"的真凶(2026-08-18,内网实战)**:

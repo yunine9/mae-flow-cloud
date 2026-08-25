@@ -73,7 +73,25 @@ export function answersOf(
   return { 最终确认: record.decision };
 }
 
-const HOST_TOOLS = new Set(["AskUserQuestion", "Task"]);
+const HOST_TOOLS = new Set(["AskUserQuestion", "Task", "RequestDelivery"]);
+
+/** 问题处理流程的交付申请协议(工具/待办卡/决定三方共用,词面钉死):
+ * RequestDelivery 举的卡以 kind 锚定身份,选项原文决定"通过/退回"。
+ * 写成常量是因为三处要一字不差——卡片文案漂了,决定就对不上号
+ * (与 lane 预答同一个教训)。 */
+export const DELIVERY_REQUEST_KIND = "delivery_request";
+export const DELIVERY_APPROVE_OPTION = "通过并交付";
+export const DELIVERY_REJECT_OPTION = "退回修改";
+
+export function isDeliveryRequestWaiting(
+  waiting: { question?: Record<string, any> } | undefined,
+): boolean {
+  return waiting?.question?.kind === DELIVERY_REQUEST_KIND;
+}
+
+export function isDeliveryApproval(text: string): boolean {
+  return text.includes(DELIVERY_APPROVE_OPTION);
+}
 
 export interface Outcome {
   status: "turn_finished" | "waiting_for_human" | "session_ended";
@@ -107,6 +125,11 @@ export interface CloudSessionOptions {
   allowHumanQuestions?: boolean;
   /** 专项旁路会话可关闭 Task，避免一个轻量助手再扩散出子 Agent 树。 */
   allowSubagents?: boolean;
+  /** 问题处理任务(task_type=issue)注入 RequestDelivery 工具:Agent
+   * 不亲手 push,修复+人工验证完成后举卡申请交付,通过后由宿主收口
+   * 推送并建 MR。子 Agent 内该工具被 refusal 顶替(交付申请是主会话
+   * 的职责,与提问同级)。 */
+  allowDeliveryRequest?: boolean;
   /** 同一任务事件账里的会话身份；缺省 main，旁路助手使用独立身份。 */
   sessionId?: string;
   currentStep?: () => string;
@@ -236,6 +259,7 @@ export class CloudSession {
       customTools: [
         ...(options.allowHumanQuestions === false ? [] : [driver.askTool()]),
         ...(options.allowSubagents === false ? [] : [driver.dispatchTool()]),
+        ...(options.allowDeliveryRequest ? [driver.requestDeliveryTool()] : []),
       ],
     });
     options.transcript.mainSessionId = driver.sessionId;
@@ -588,10 +612,14 @@ export class CloudSession {
     // 宿主代演的工具结果由 driver 登记;pi 的回声按 hostAnswered 丢弃。
     // answers 是结构化回答(问题→选项):内核 ack 的"整份背书"判定看的是
     // 结构不是措辞——键是配置项名的只代表单项,独立确认题才能替整份背书。
+    // 交付申请卡走同一条回注路:名字/输入按 kind 还原,事件里不能把
+    // RequestDelivery 记成 AskUserQuestion(transcript 按 call_id join,
+    // 名字错了审计里就是两张皮)。
+    const delivery = isDeliveryRequestWaiting(waiting);
     const finished = this.emit("tool_finished", this.sessionId, {
       call_id: waiting.call_id,
-      name: "AskUserQuestion",
-      input: waiting.question,
+      name: delivery ? "RequestDelivery" : "AskUserQuestion",
+      input: delivery ? (waiting.question?.tool_input ?? waiting.question) : waiting.question,
       is_error: false,
       result: renderDecision(record),
       answers: answersOf(record, waiting),
@@ -1074,6 +1102,105 @@ export class CloudSession {
     });
   }
 
+  // ---- 交付申请(问题处理流程;与人工节点同机制) ----
+
+  private requestDeliveryTool() {
+    const driver = this;
+    return defineTool({
+      name: "RequestDelivery",
+      label: "Request Delivery",
+      description:
+        "问题处理任务的交付申请:修复已提交到工作区分支、人工验证已通过后调用。" +
+        "宿主将推送该分支并创建 MR——不要自己执行 git push,也不要用 bash 碰远端。" +
+        "申请被退回时,按退回意见继续修改后可再次申请。",
+      parameters: Type.Object({
+        branch: Type.String({
+          description: "承载修复提交的工作分支名,如 master_e12345_DTS2026080101",
+        }),
+        summary: Type.String({
+          description: "变更摘要:问题单号、改动内容、验证方式与结果",
+        }),
+      }),
+      async execute(toolCallId: string, params: any) {
+        const callId = String(toolCallId);
+        const input = {
+          branch: String(params?.branch ?? "").trim(),
+          summary: String(params?.summary ?? "").trim(),
+        };
+        if (!input.branch || /\s/.test(input.branch)) {
+          throw new Error("branch 必须是不含空白的分支名");
+        }
+        driver.emit("tool_requested", driver.sessionId, {
+          call_id: callId, name: "RequestDelivery", input,
+        });
+        // 卡片走 AskUserQuestion 同款形状(questions+options),前端
+        // 审批卡零改动渲染;kind 锚定身份,decide 据此驱动宿主收口。
+        const record = driver.options.humanGate.createWaiting({
+          taskId: driver.options.taskId,
+          step: driver.options.currentStep?.() || "问题处理·交付申请",
+          callId,
+          questionInput: {
+            kind: DELIVERY_REQUEST_KIND,
+            tool_input: input,
+            branch: input.branch,
+            summary: input.summary,
+            questions: [{
+              question: `交付申请:推送分支 ${input.branch} 并创建 MR,是否通过?`,
+              options: [DELIVERY_APPROVE_OPTION, DELIVERY_REJECT_OPTION],
+            }],
+          },
+          context: driver.lastAssistantText.get(driver.sessionId),
+        });
+        // 重建会话重放同一工具调用:waiting 以 call_id 幂等,已决定的
+        // 按原答案回放,不再举新卡(与 askTool 同款纪律)。
+        if (record.status === "resolved") {
+          const finished = driver.emit("tool_finished", driver.sessionId, {
+            call_id: callId,
+            name: "RequestDelivery",
+            input,
+            is_error: false,
+            result: renderDecision(record),
+          });
+          driver.kernelBypass(driver.options.hostHooks?.postTool?.(finished));
+          driver.hostAnswered.add(callId);
+          driver.options.log?.(
+            `任务 ${driver.options.taskId} 重放已决定的交付申请 ${record.waiting_id}`);
+          return {
+            content: [{ type: "text", text: renderDecision(record) }],
+            details: {},
+          };
+        }
+        if (record.status === "superseded") {
+          const text = "这张交付申请已因用户接管代码现场而失效。"
+            + "请重新确认现场;仍需交付时基于最新分支再次申请。";
+          const finished = driver.emit("tool_finished", driver.sessionId, {
+            call_id: callId,
+            name: "RequestDelivery",
+            input,
+            is_error: true,
+            result: text,
+          });
+          driver.kernelBypass(driver.options.hostHooks?.postTool?.(finished));
+          driver.hostAnswered.add(callId);
+          return { content: [{ type: "text", text }], details: {}, isError: true };
+        }
+        driver.waitingRecord = record;
+        const decision = new Promise<string>((resolve) =>
+          driver.decisionResolvers.set(callId, resolve));
+        driver.waitingSignal.resolve({
+          status: "waiting_for_human", waiting: { ...record },
+        });
+        const answer = await decision; // 挂起点:决定到达前 pi 停在这里
+        const text = isDeliveryApproval(answer)
+          ? "交付申请已通过。本回合结束后宿主将推送分支并创建 MR;"
+            + "请写收口总结(对齐结论、改动清单、验证口径),不要再改动代码。"
+          : "交付申请被退回:" + answer
+            + "。按退回意见继续修改,完成并经用户确认后再申请。";
+        return { content: [{ type: "text", text }], details: {} };
+      },
+    });
+  }
+
   // ---- 子 Agent(§6 平行会话;同进程) ----
 
   private dispatchTool() {
@@ -1159,6 +1286,11 @@ export class CloudSession {
           "AskUserQuestion", "Ask User Question", refusal),
         this.refusalTool(childId, "Task",
           "Task", "Dispatch Agent", refusal),
+        // 交付申请是主会话的职责:子 Agent 只做任务卡范围内的事,
+        // 谁也不许替主会话把还没对齐现场的单推出去。
+        this.refusalTool(childId, "RequestDelivery",
+          "RequestDelivery", "Request Delivery",
+          "子 Agent 不得申请交付;把结果报告给主会话,由主会话决定。"),
       ],
     });
     this.childSessions.set(childId, child);
