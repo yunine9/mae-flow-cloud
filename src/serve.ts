@@ -34,6 +34,7 @@ import {
   LubanApprovalGateway,
 } from "./lubanApproval.ts";
 import { FakeGitPlatform } from "./gitPlatform.ts";
+import { createGoEnvironmentAdapter } from "./issueEnvironmentGoAdapter.ts";
 import { PgProjection } from "./projection.ts";
 import type { GateDecision } from "./gateService.ts";
 import { LocalAuth } from "./auth.ts";
@@ -543,6 +544,26 @@ async function main(): Promise<void> {
       + (commitConvention.length > 60 ? "…" : ""));
   }
 
+  // 问题单环境适配器(拉日志/换库):assets/ops-tools 里的 Go 工具在场
+  // 就接上——凭据由任务保险箱解密后经环境变量注入子进程,工具与密码都
+  // 不进任务工作区(见 src/issueEnvironmentGoAdapter.ts 头注释)。
+  // workspaceOf 拿的是任务工作区根,适配器自己在里面找代码克隆。
+  let issueServiceRef: TaskService | undefined;
+  const goToolsDir = join(REPO_ROOT, "assets", "ops-tools");
+  const issueEnvironmentAdapter
+    = existsSync(join(goToolsDir, process.platform === "win32"
+        ? "fetch-logs.exe" : "fetch-logs-linux-amd64"))
+      ? createGoEnvironmentAdapter({
+          toolsDir: goToolsDir,
+          workspaceOf: (taskId) => issueServiceRef?.get(taskId)?.workspace,
+          log: (message) => console.log(`  ${message}`),
+        })
+      : undefined;
+  if (issueEnvironmentAdapter) {
+    console.log("[serve] 问题单环境适配器已接线:拉日志+换库"
+      + `(工具目录 ${goToolsDir})`);
+  }
+
   const service = new TaskService({
     dataDir, provider, model, modelsJson, maxConcurrent, settings,
     // 个人 Git 令牌(界面只写不读):任务启动时按归属人取,经
@@ -582,8 +603,10 @@ async function main(): Promise<void> {
     // 正式部署建议固定 public-url；未配置时，服务会从已登录用户的
     // 实际请求 Host 学到内网入口，绝不再默认写死 127.0.0.1。
     linkBase: publicUrl,
+    issueEnvironmentAdapter,
     log: (message) => console.log(`  [task] ${message}`),
   });
+  issueServiceRef = service; // 适配器的 workspaceOf 从这里回查
   // 先清理本 dataDir 实例上次崩溃遗留的 coding/prepush/system-check
   // 容器，再恢复任务。顺序不能反：recover 一旦入队就可能撞上旧容器。
   const swept = await service.sweepOrphanContainers();
