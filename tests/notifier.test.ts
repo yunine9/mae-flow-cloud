@@ -54,6 +54,26 @@ test("投递成功:待办事实与审批链接送达账号;同待办幂等", asy
   }
 });
 
+test("清空重跑会同时清除旧通知审批上下文", async () => {
+  const notifier = new Notifier({
+    endpoint: "http://127.0.0.1:1/unused",
+    mobileApproval: true,
+    approvalCode: () => "A1B2C3D4E5",
+    backoffMs: [],
+  });
+  await notifier.notifyWaiting({
+    waitingId: "T-purge:c1", stateVersion: 1,
+    taskId: "T-purge", account: "alice", step: "delivery_review",
+    questions: [{ question: "Diff 通过吗？", options: ["通过", "打回"] }],
+    link: "http://x/tasks/T-purge",
+  });
+  assert.equal(notifier.latestApproval("alice")?.waitingId, "T-purge:c1");
+
+  notifier.purgeTask("T-purge");
+
+  assert.equal(notifier.latestApproval("alice"), undefined);
+});
+
 test("投递失败:有限退避后成功;首败期间不阻塞", async () => {
   const luban = new FakeLubanServer();
   await luban.start();

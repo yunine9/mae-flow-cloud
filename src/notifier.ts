@@ -35,6 +35,17 @@ export interface NotifyQuestion {
   options?: string[];
 }
 
+/** 最近一张待办通知携带的审批真相锚。它只用于让“唯一待办 + 裸回复”
+ * 少一次查询；真正提交前 Gateway 仍会重新核对账号、waiting 与版本。 */
+export interface LubanApprovalNotification {
+  account: string;
+  taskId: string;
+  waitingId: string;
+  stateVersion: number;
+  code: string;
+  notifiedAt: number;
+}
+
 /** 把一张待办里的全部问题定稿进通知正文。问题和选项保留结构直到
  * 通知边界再转成文本，避免上游先压成 questions[0] 后永久丢题。 */
 function waitingSummary(input: {
@@ -102,11 +113,18 @@ export interface NotifierOptions {
 
 export class Notifier {
   private records = new Map<string, NotifyRecord>();
+  private latestApprovals = new Map<string, LubanApprovalNotification>();
 
   constructor(readonly options: NotifierOptions) {}
 
   list(): NotifyRecord[] {
     return [...this.records.values()];
+  }
+
+  /** 手机回调读最近通知的短期绑定。返回副本，调用方不能改通知器状态。 */
+  latestApproval(account: string): LubanApprovalNotification | undefined {
+    const found = this.latestApprovals.get(account);
+    return found ? { ...found } : undefined;
   }
 
   /** 原位重跑或彻底删除后，旧任务通知不能继续占用幂等键。投递中的
@@ -117,6 +135,9 @@ export class Notifier {
       if (record.task_id !== taskId) continue;
       this.records.delete(id);
       removed += 1;
+    }
+    for (const [account, binding] of this.latestApprovals) {
+      if (binding.taskId === taskId) this.latestApprovals.delete(account);
     }
     return removed;
   }
@@ -185,7 +206,8 @@ export class Notifier {
         `\n阶段：${stage}\n${summary}` +
         (this.options.mobileApproval
           ? approvalCode
-            ? `\n手机直接回复：mae-flow 选择 ${approvalCode} <序号>`
+            ? "\n只有这一项待办时，可直接回复选项序号，例如：1"
+              + `\n多项待办或无上下文时：mae-flow 选择 ${approvalCode} <序号>`
               + "\n如需说明：mae-flow 选择 " + approvalCode
               + " <序号> <补充说明>"
               + (questions.length > 1
@@ -198,6 +220,16 @@ export class Notifier {
       last_error: "",
     };
     this.records.set(input.waitingId, record);
+    if (approvalCode && input.stateVersion !== undefined) {
+      this.latestApprovals.set(input.account, {
+        account: input.account,
+        taskId: input.taskId,
+        waitingId: input.waitingId,
+        stateVersion: input.stateVersion,
+        code: approvalCode,
+        notifiedAt: Date.now(),
+      });
+    }
     // 投递在后台走,不阻塞流程:通知只是提醒,待办本体在 Web。
     void this.deliver(record);
     return record;

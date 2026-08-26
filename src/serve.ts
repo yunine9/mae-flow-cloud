@@ -565,6 +565,19 @@ async function main(): Promise<void> {
       + `(工具目录 ${goToolsDir})`);
   }
 
+  const notifier = new Notifier({
+    endpoint: lubanEndpoint,
+    headers: lubanHeaders,
+    fake: lubanIsFake,
+    mobileApproval: !!lubanPluginToken,
+    approvalCode: lubanPluginToken
+      ? (input) => lubanApprovalCode({ token: lubanPluginToken, ...input })
+      : undefined,
+    // 发起人的通知令牌:普通任务提醒是自己发给自己；主动邀请检视时，
+    // 用责任人的令牌向所选 Committer 工号发送，不要求收件人配令牌。
+    personalToken: (account) => auth.lubanToken(account),
+  });
+
   const service = new TaskService({
     dataDir, provider, model, modelsJson, maxConcurrent, settings,
     // 个人 Git 令牌(界面只写不读):任务启动时按归属人取,经
@@ -591,18 +604,7 @@ async function main(): Promise<void> {
           network: isolateNetwork,
         }
       : undefined,
-    notifier: new Notifier({
-      endpoint: lubanEndpoint,
-      headers: lubanHeaders,
-      fake: lubanIsFake,
-      mobileApproval: !!lubanPluginToken,
-      approvalCode: lubanPluginToken
-        ? (input) => lubanApprovalCode({ token: lubanPluginToken, ...input })
-        : undefined,
-      // 发起人的通知令牌:普通任务提醒是自己发给自己；主动邀请检视时，
-      // 用责任人的令牌向所选 Committer 工号发送，不要求收件人配令牌。
-      personalToken: (account) => auth.lubanToken(account),
-    }),
+    notifier,
     projection,
     // 正式部署建议固定 public-url；未配置时，服务会从已登录用户的
     // 实际请求 Host 学到内网入口，绝不再默认写死 127.0.0.1。
@@ -628,6 +630,7 @@ async function main(): Promise<void> {
     ? new LubanApprovalGateway(service, {
         token: lubanPluginToken,
         accountEnabled: (account) => !!auth.sessionView(account),
+        recentNotification: (account) => notifier.latestApproval(account),
         log: (message) => console.log(`  [luban-plugin] ${message}`),
       })
     : undefined;
