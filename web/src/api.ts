@@ -1369,6 +1369,21 @@ export function putModelsSettings(body: {
   return putSettings("models", body);
 }
 
+/** 模型网关连通性测试:发送一条真实问答请求,返回网络连通/模型问答
+ * 两项结论。字段留空 = 服务端沿用已存配置(密钥不回传明文)。 */
+export async function postModelsCheck(body: {
+  url?: string;
+  api_key?: string;
+  model?: string;
+}): Promise<SystemCheckResult> {
+  const response = await fetch("/settings/models/check", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
 export async function readArtifact(
   taskId: string,
   name: string,

@@ -3385,6 +3385,19 @@ pre {
 .user-create-form select { appearance: auto; }
 .form-message { grid-column: 1 / -1; font-size: 13.5px; }
 .form-message.success { padding: 9px 11px; color: var(--success); background: var(--success-soft); border-radius: 8px; }
+/* 设置卡里"保存 + 测试连通"并排;第二个按钮降为线框,主次分明 */
+.settings-form-actions { display: flex; gap: 10px; align-items: center; }
+.settings-form-actions button + button {
+  background: transparent; color: var(--text); border: 1px solid var(--line);
+}
+.settings-form-actions button + button:hover { background: var(--surface-soft); border-color: var(--accent); }
+/* 连通性测试的提示与结果区块横跨表单整行,不挤半列 */
+.settings-form .settings-form-actions,
+.settings-form > .knob-note,
+.settings-form > .check-summary,
+.settings-form > .system-check-grid,
+.settings-form > .settings-loading { grid-column: 1 / -1; }
+.settings-form > .system-check-grid { grid-template-columns: 1fr; margin-top: 4px; }
 .user-list-card { padding: 24px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-xs); }
 .user-list-card .section-head h2 { margin: 6px 0 0; color: var(--text-strong); font-size: 21px; }
 .section-note { margin: 6px 0 0; color: var(--muted); font-size: var(--font-size-assist); }

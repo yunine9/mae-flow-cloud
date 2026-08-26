@@ -12,6 +12,7 @@ import { useEffect, useState } from "react";
 import {
   getSettings,
   getSystemCheck,
+  postModelsCheck,
   putModelsSettings,
   putRuntimeSettings,
   type SettingsView as Settings,
@@ -29,6 +30,14 @@ function Feedback({ message }: { message: Message }) {
   if (!message) return null;
   return <div className={`form-message ${message.kind}`} role="status">
     {message.text}</div>;
+}
+
+/** 自检/连通性测试共用的结论网格:状态色 + 明细 + 建议一句话。 */
+function CheckItems({ result }: { result: SystemCheckResult }) {
+  return <div className="system-check-grid">{result.items.map((item) => <article className={`system-check-item ${item.status}`} key={item.key}>
+    <span className="check-icon" aria-hidden>{item.status === "ok" ? "✓" : item.status === "error" ? "!" : "·"}</span>
+    <div><strong>{item.label}</strong><p>{item.detail}</p>{item.suggestion && <small>{item.suggestion}</small>}</div>
+  </article>)}</div>;
 }
 
 function SystemCheckCard() {
@@ -56,10 +65,7 @@ function SystemCheckCard() {
     </div>
     {error && <div className="form-message error">{error}</div>}
     {!result && !error && <div className="settings-loading">正在检查服务…</div>}
-    {result && <div className="system-check-grid">{result.items.map((item) => <article className={`system-check-item ${item.status}`} key={item.key}>
-      <span className="check-icon" aria-hidden>{item.status === "ok" ? "✓" : item.status === "error" ? "!" : "·"}</span>
-      <div><strong>{item.label}</strong><p>{item.detail}</p>{item.suggestion && <small>{item.suggestion}</small>}</div>
-    </article>)}</div>}
+    {result && <CheckItems result={result} />}
   </section>;
 }
 
@@ -156,6 +162,9 @@ function ModelsCard({ view, onSaved }: {
   const [model, setModel] = useState(models.model ?? defaults.model ?? "");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useMessage();
+  const [testing, setTesting] = useState(false);
+  const [checkResult, setCheckResult] = useState<SystemCheckResult>();
+  const [checkError, setCheckError] = useState("");
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -168,10 +177,25 @@ function ModelsCard({ view, onSaved }: {
       }));
       setApiKey("");
       setMessage({ kind: "success",
-        text: "已保存；下一个新任务使用新配置，运行中的任务不受影响。" });
+        text: "已保存；下一个新任务使用新配置，运行中的任务不受影响。可点「测试连通」验证。" });
     } catch (error) {
       setMessage({ kind: "error", text: String((error as Error).message ?? error) });
     } finally { setBusy(false); }
+  }
+
+  // 测的是当前表单值(未保存也能测);密钥留空时服务端沿用已存的,
+  // 与保存的合并口径一致——界面永远不回填明文。
+  async function runCheck() {
+    setTesting(true); setCheckError(""); setCheckResult(undefined);
+    try {
+      setCheckResult(await postModelsCheck({
+        url: url.trim() || undefined,
+        api_key: apiKey.trim() || undefined,
+        model: model.trim() || undefined,
+      }));
+    } catch (cause) {
+      setCheckError(String((cause as Error).message ?? cause));
+    } finally { setTesting(false); }
   }
 
   return <div className="user-create-card settings-card">
@@ -213,8 +237,23 @@ function ModelsCard({ view, onSaved }: {
           placeholder="例如：glm-5.1"
           onChange={(event) => setModel(event.target.value)} />
       </label>
-      <button type="submit" disabled={busy}>{busy ? "正在保存…" : "保存模型配置"}</button>
+      <div className="settings-form-actions">
+        <button type="submit" disabled={busy || testing}>
+          {busy ? "正在保存…" : "保存模型配置"}</button>
+        <button type="button" disabled={busy || testing} onClick={() => void runCheck()}>
+          {testing ? "测试中…" : "测试连通"}</button>
+      </div>
+      <small className="knob-note">测试使用当前表单值向网关发送一条极小请求（密钥留空时沿用已保存的）。</small>
       <Feedback message={message} />
+      {checkError && <div className="form-message error">{checkError}</div>}
+      {testing && !checkResult && !checkError
+        && <div className="settings-loading">正在连通网关并等待模型回复…</div>}
+      {checkResult && <>
+        <span className={`check-summary ${checkResult.overall}`}>
+          <i aria-hidden />{checkResult.overall === "ok"
+            ? "网络与模型问答均正常" : "存在问题，见下方明细"}</span>
+        <CheckItems result={checkResult} />
+      </>}
     </form>
   </div>;
 }

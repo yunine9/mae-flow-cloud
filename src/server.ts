@@ -61,6 +61,11 @@ import {
 } from "./auth.ts";
 import { SettingsError } from "./settings.ts";
 import {
+  checkModelGateway,
+  GatewayCheckError,
+  resolveGatewayTarget,
+} from "./modelGatewayCheck.ts";
+import {
   AnnotationError,
   AnnotationPermissionError,
 } from "./annotations.ts";
@@ -469,8 +474,19 @@ export function createTaskServer(
             settings.updateModels(await readBody(request));
             return json(response, 200, settingsView());
           }
+          // 模型网关连通性测试:表单草稿优先,留空回落已存配置/部署
+          // 默认(密钥"留空=沿用"与保存同口径)。与部署自检的分工:
+          // 自检只读不外发;这里管理员主动发起一次真实外发请求。
+          if (request.method === "POST" && parts[1] === "models"
+              && parts[2] === "check") {
+            const body = await readBody(request);
+            const target = resolveGatewayTarget(body, settings.models(),
+              service.options.modelsJson as Record<string, unknown> | undefined);
+            return json(response, 200, await checkModelGateway(target));
+          }
         } catch (error) {
-          if (error instanceof SettingsError) {
+          if (error instanceof SettingsError
+              || error instanceof GatewayCheckError) {
             return json(response, 400, { error: error.message });
           }
           throw error;
