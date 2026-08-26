@@ -68,6 +68,8 @@ export interface ArtifactMeta {
   kind: "doc" | "diff";
   bytes: number;
   modified_at: string;
+  /** 差异产物包含的真实文件数；文档产物不提供。 */
+  file_count?: number;
 }
 
 export interface ArtifactContent extends ArtifactMeta {
@@ -605,6 +607,7 @@ function diffMetaFromSnapshot(
     kind: "diff",
     bytes: Buffer.byteLength(diff.text, "utf-8"),
     modified_at: new Date(newest).toISOString(),
+    file_count: diff.changed.length,
   };
 }
 

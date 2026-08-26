@@ -114,6 +114,7 @@ test("未提交改动:已暂存/未暂存/未跟踪都在快照里", () => {
   assert.ok(diff, `未提交改动没出现: ${names(items).join(" | ")}`);
   assert.equal(diff!.kind, "diff");
   assert.equal(diff!.label, "本任务变更");
+  assert.equal(diff!.file_count, 3);
   assert.ok(diff!.bytes > 0);
 
   const snapshot = readArtifact(cwd, DIFF_NAME);
@@ -135,7 +136,9 @@ test("异步工作台读侧与原有差异快照语义一致", async () => {
   writeFileSync(join(cwd, "untracked.txt"), "异步路径未跟踪\n");
 
   const items = await listArtifactsAsync(cwd);
-  assert.ok(items.some((item) => item.name === DIFF_NAME));
+  const diff = items.find((item) => item.name === DIFF_NAME);
+  assert.ok(diff);
+  assert.equal(diff.file_count, 2);
   assert.ok(items.some((item) => item.name.endsWith("/spec.md")));
   const snapshot = await readArtifactAsync(cwd, DIFF_NAME);
   assert.match(String(snapshot?.content), /异步路径修改/);

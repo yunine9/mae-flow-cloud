@@ -1413,6 +1413,8 @@ export interface ArtifactMeta {
   kind: "doc" | "diff";
   bytes: number;
   modified_at: string;
+  /** 差异产物包含的真实文件数；文档产物不提供。 */
+  file_count?: number;
 }
 
 export async function listArtifacts(

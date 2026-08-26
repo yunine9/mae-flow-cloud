@@ -342,6 +342,14 @@ export function TaskWorkspace({
   const activeMeta = items?.find((item) => item.name === active);
   const documents = items?.filter((item) => item.kind === "doc") ?? [];
   const changes = items?.filter((item) => item.kind === "diff") ?? [];
+  // 服务端只生成一份聚合 diff，因此 changes.length 几乎永远是 1，
+  // 它表示“产物份数”而不是用户关心的“变更文件数”。旧服务尚未提供
+  // file_count 时保留原回退，避免滚动升级期间把入口误判为空。
+  const changeCountKnown = changes.every((item) =>
+    typeof item.file_count === "number");
+  const changeFileCount = changeCountKnown
+    ? changes.reduce((sum, item) => sum + (item.file_count ?? 0), 0)
+    : changes.length;
   const hasRequirementGraph = (task.requirement_graph?.repositories.length ?? 0) > 1;
   const issueTask = task.entry_kind === "dts";
   const materialHeading = materialView === "source"
@@ -517,8 +525,8 @@ export function TaskWorkspace({
                 <span>仓间依赖</span><i>{task.requirement_graph!.dependencies.length}</i>
               </button>}
               <button className={materialView === "diff" ? "on" : ""}
-                onClick={() => { setMaterialView("diff"); if (changes[0]) setActive(changes[0].name); }} disabled={!changes.length}>
-                <span>工作区变更</span><i>{changes.length}</i>
+                onClick={() => { setMaterialView("diff"); if (changes[0]) setActive(changes[0].name); }} disabled={!changeFileCount}>
+                <span>工作区变更</span><i>{changeFileCount}</i>
               </button>
             </div>
           </div>
