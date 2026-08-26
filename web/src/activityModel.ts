@@ -210,7 +210,10 @@ function walk(items: ActivityItem[]): ActivityItem[] {
 export function looksLikeActivity(source: string): boolean {
   return source.replace(/\r\n?/g, "\n").split("\n").some((raw) => {
     const line = raw.trim();
-    return /^(?:start|stop|end)$/i.test(line) || /^:.*;$/s.test(line)
+    // bare `end` 同时是时序图 alt/opt/loop/par/group 的闭合符，不能独自
+    // 作为活动图证据。活动图内部仍把 end 当 stop 解析；合法且受支持的
+    // 活动图还会有 start、动作、partition 或 if 等明确证据。
+    return /^(?:start|stop)$/i.test(line) || /^:.*;$/s.test(line)
       || PARTITION_LINE.test(line) || IF_LINE.test(line);
   });
 }
