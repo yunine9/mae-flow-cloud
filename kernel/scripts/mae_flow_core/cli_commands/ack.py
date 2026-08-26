@@ -252,18 +252,45 @@ def _implicit_ack_verified(step, st):
     wanted = " / ".join(step.get("confirmation_answers", []))
     actual = " / ".join(dict.fromkeys(value for item in rows for value in
         _trusted_answer_values(item.get("text", ""))))
-    why = (_out_of_scope_ack_reason(st) if not rows else "") or (
+    stale = _stale_subject_answers(st) if not rows else []
+    why = (_out_of_scope_ack_reason(st) if not rows and not stale else "") or (
         ("用户在确认卡上选择了修改/打回(%s)。按用户意见修订后重新用 "
          "AskUserQuestion 出卡确认;不能直接 done,也不要原样重复提问。"
          % (actual or "无")) if refused_card else
         ("已捕获当前步骤答案「%s」，但未匹配标准确认按钮「%s」。"
          "不要猜 --choice 或重复询问；按 current 输出原样展示标准按钮。"
          % (actual or "无", wanted or "肯定")) if rows else
+        ("用户确认过一次,但确认之后审批内容(%s)发生了变化,旧确认自动"
+         "失效——这不是没回答,是内容变了。展示变化后的当前内容并重新"
+         "取得一次决定即可;不需要重新解释,更不要重做已完成的工作。"
+         "若变化来自你在确认后的修改,以后先定稿再询问,避免二次打扰。"
+         % _subject_display_paths(st)) if stale else
         ("尚未捕获到本步骤的%s选择。正常情况下直接使用 AskUserQuestion 让用户点选即可，"
          "done 会自动读取结果；只有宿主确实没有回传按钮结果时，才让用户发送一次标准选项。"
          % (("「" + wanted + "」") if wanted else "肯定")))
     count = _ack_failure(st, why)
     return False, why + _ack_retry_guidance(count)
+
+
+def _subject_display_paths(st):
+    paths = ((st or {}).get("approval_subject") or {}).get("paths") or []
+    return "、".join(paths) if paths else "检视内容"
+
+
+def _stale_subject_answers(st):
+    """有印章但对不上当前内容的答案:用户确认之后审批产物又变了。
+    没有这个判别,印章过滤后的空账本会报"尚未捕获到选择",把"内容变了
+    该重看"误诊成"没回答过"(2026-08-26 定位 story 二次确认问题时补)。"""
+    subject = (st or {}).get("approval_subject") or {}
+    if not subject.get("sha256"):
+        return []
+    sid = st.get("current", "")
+    entered = api._step_entered_at(st)
+    return [item for item in _all_ack_messages()
+            if item.get("at", "") >= entered
+            and (not item.get("step") or item.get("step") == sid)
+            and item.get("approval_subject_sha256")
+            and item.get("approval_subject_sha256") != subject.get("sha256")]
 
 def _choice_verified(step, st, choice, ack_cursor=None):
     """Bind --choice to the concrete answer returned by Claude Code/CodeAgent."""
