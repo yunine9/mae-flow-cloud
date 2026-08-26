@@ -726,7 +726,7 @@ triggers: 覆盖率, coverage, jacoco
   "max-concurrent": 2,
   "workspace-retention-days": 14,
   "isolate-image": "registry.intra/mae-flow/task-builder@sha256:<digest>",
-  "isolate-memory": "8g", "isolate-cpus": "2", "isolate-pids": 512,
+  "isolate-memory": "8g", "isolate-cpus": "8", "isolate-pids": 512,
   "isolate-network": "bridge",
   "isolate-cache-root": "/var/cache/mae-flow-cloud/build",
   "build-slots": 1
@@ -745,7 +745,7 @@ triggers: 覆盖率, coverage, jacoco
 | data / port / web | .tasks / 8787 / web-dist | 现场目录、端口、前端 |
 | isolate-image | 无(内核模式必填) | 统一任务构建镜像 |
 | isolate-volume | 无 | 部署只读配置/CA 等额外挂载(可重复) |
-| isolate-memory / isolate-cpus / isolate-pids | 8g / 2 / 512 | 每个任务容器的资源上限 |
+| isolate-memory / isolate-cpus / isolate-pids | 8g / 8 / 512 | 每个任务容器的资源上限；`isolate-cpus` 是可用上限，不是预留核数 |
 | isolate-network | bridge | 任务容器网络；拒绝 host/container 模式 |
 | isolate-cache-root | `<data>/build-cache` | 按仓库哈希隔离的 Maven/npm/ccache/XDG 缓存 |
 | isolate-user | **Linux:服务进程 uid:gid**;root 守护形态必须显式给数字 uid:gid;其他平台:镜像内非 root 用户 | Linux 普通服务账号不配时按自己的 uid:gid 跑。root 守护进程必须显式给非 root 数字 uid:gid；Cloud 在容器启动前把实际代码工作区和分仓缓存安全交给该用户，不修改任务台账与凭据目录 |
@@ -840,7 +840,7 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
   --provider <网关名> --model glm-5.1 \
   --repo <内网仓地址> --platform <MR/流水线网关地址> \
   --isolate-image <统一任务构建镜像@sha256:digest> \
-  --isolate-memory 8g --isolate-cpus 2 --isolate-pids 512 \
+  --isolate-memory 8g --isolate-cpus 8 --isolate-pids 512 \
   --isolate-cache-root /var/cache/mae-flow-cloud/build \
   --build-slots 1 \
   --pg postgresql://<用户>@<PG地址>/<库名> \
@@ -966,7 +966,7 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
     --kernel-mode --platform <MR/流水线网关地址> \
     --pg postgresql://<用户>@<PG地址>/<库名> \
     --isolate-image <统一任务构建镜像@sha256:digest> \
-    --isolate-memory 8g --isolate-cpus 2 --isolate-pids 512 \
+    --isolate-memory 8g --isolate-cpus 8 --isolate-pids 512 \
     --isolate-cache-root /var/cache/mae-flow-cloud/build \
     --build-slots 1 \
     --data /var/lib/mae-flow-cloud --port 8787

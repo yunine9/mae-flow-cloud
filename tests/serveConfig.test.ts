@@ -91,6 +91,19 @@ test("--isolate-user 拒绝 root uid/gid，不能把容器隔离变成 root 执�
   }
 });
 
+test("任务容器默认可用 8 核，并在启动日志报告宿主可用 CPU", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-container-cpus-"));
+  const result = await run([
+    "--data", join(dir, "tasks"),
+    "--port", "0",
+    "--isolate-image", "fixture/builder:test",
+    "--isolate-user", "1000:1000",
+  ], (line) => line.startsWith("[serve] http://127.0.0.1:"));
+  assert.equal(result.code, 0, result.output);
+  assert.match(result.output, /memory=8g,cpus=8,pids=512/);
+  assert.match(result.output, /host-available-cpus=\d+/);
+});
+
 test("SIGTERM 走优雅关闭并明确承诺业务状态不变", async () => {
   const dir = mkdtempSync(join(tmpdir(), "mfc-graceful-stop-"));
   const result = await run([
