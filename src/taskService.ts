@@ -1517,15 +1517,18 @@ export class TaskService {
     task: TaskState,
   ): Promise<TaskCommandContainer> {
     if (task.container) return task.container;
+    const epoch = task.controlEpoch;
     // waiting 状态先落盘、旧容器后完成 TERM→KILL→rm。人在这个窗口内
     // 立即审批时，续跑不能与旧实例回收争抢同一个容器名。
     await task.containerRelease;
+    if (!this.current(task, epoch)) {
+      throw new Error("任务容器等待回收期间任务已暂停或取消，拒绝重新创建");
+    }
     if (task.container) return task.container;
     if (!task.containerReopen) {
       // 重开是异步的,期间用户完全可能按下暂停/取消——那条路径刚
       // 停完容器就把 task.container 置空,我们再挂一个上去就是无主
       // 泄漏。拿 epoch 当凭证:换了就地自毁,不往任务上挂。
-      const epoch = task.controlEpoch;
       task.containerReopen = this.startCodingContainer(task)
         .then(async (container) => {
           if (!this.current(task, epoch)) {

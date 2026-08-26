@@ -125,6 +125,42 @@ test("释放后第一条 Bash 把容器重新开起来,挂载与限额和第一�
   await service.shutdown();
 });
 
+test("快速审批撞上容器回收时,第一条 Bash 等旧实例删净再重开", async () => {
+  let releaseStop!: () => void;
+  let markStopStarted!: () => void;
+  const stopGate = new Promise<void>((resolve) => { releaseStop = resolve; });
+  const stopStarted = new Promise<void>((resolve) => { markStopStarted = resolve; });
+  let creations = 0;
+  const service: any = newService(() => {
+    creations += 1;
+    const first = creations === 1;
+    return {
+      start: async () => undefined,
+      exec: async () => ({ exitCode: 0 }),
+      stop: async () => {
+        if (!first) return;
+        markStopStarted();
+        await stopGate;
+      },
+    };
+  });
+  const { task } = await runningTask(service);
+
+  const releasing = service.releaseIdleContainer(task, "等待人工决定");
+  await stopStarted;
+  const reopening = service.activeTaskContainer(task);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(creations, 1,
+    "旧容器仍在回收时不得创建同名新实例");
+
+  releaseStop();
+  await releasing;
+  const reopened = await reopening;
+  assert.equal(creations, 2);
+  assert.equal(task.container, reopened);
+  await service.shutdown();
+});
+
 test("一个回合里并发的多条 Bash 只开一个容器", async () => {
   let creations = 0;
   const containers = new FakeTaskContainerHarness();
