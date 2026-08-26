@@ -165,7 +165,7 @@ test("恢复重放同一提问 ID:已失效的旧卡返回工具错误,不再次
   const gate = new HumanGate(join(workspace, "waiting.json"));
   const stale = gate.createWaiting({
     taskId: "task-1",
-    step: "build_review",
+    step: "delivery_review",
     callId: "scripted-0",
     questionInput: { questions: [{
       question: "旧代码可以继续吗?", options: ["继续", "修改"],

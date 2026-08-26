@@ -891,7 +891,7 @@ test("修复环默认不限轮:三连红一路修到绿,没有人为断头", asy
     assert.match(seen, /先分诊再动手/);
     assert.match(seen, /定位先于修改/, "定位这一步必须写死在使命里");
     assert.match(seen, /定位依据/, "定位要交依据,不许凭猜改");
-    assert.match(seen, /专职子 agent/);
+    assert.match(seen, /专职质量子 agent/);
     assert.match(seen, /诊断出口/);
     assert.match(seen, /上一轮修复后流水线仍红/);
     // 知识块:失败日志里的"覆盖率"召唤出对应那篇,前端那篇不该到场
@@ -961,7 +961,7 @@ test("Cloud 固有执行契约进每次会话开场,修复会话也不例外", a
     // 首跑会话(请求 0)与修复会话(请求 2)的开场都带环境事实
     assert.match(firstUser(0), /Cloud 执行契约/);
     assert.match(firstUser(2), /Cloud 执行契约/);
-    assert.match(firstUser(2), /UT skill 只用于指导编写或修改测试/);
+    assert.match(firstUser(2), /不构成任何交付证据/);
     assert.match(firstUser(2), /不要编造命令、结果、数量或绿灯/);
     assert.match(firstUser(2), /唯一的使命/, "修复使命也在场");
   } finally {

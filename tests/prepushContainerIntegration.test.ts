@@ -105,6 +105,37 @@ test("构建缓存按仓库哈希分区并拒绝自定义挂载覆盖", () => {
   ]), /不能覆盖平台的分仓缓存目录/);
 });
 
+test("宿主身份 MAE_FLOW_HOST 跟进任务容器，云端 --auto 确认路径不失效", () => {
+  // run8b 实测:漏传时容器里的内核 current 按本地宿主渲染,领域归档在
+  // 云端又弹人工卡。宿主进程声明的身份必须原样进入容器环境。
+  const cacheRoot = mkdtempSync(join(tmpdir(), "mfc-hostenv-cache-"));
+  const cwd = mkdtempSync(join(tmpdir(), "mfc-hostenv-ws-"));
+  const service = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-hostenv-data-")),
+    provider: "fixture",
+    model: "fixture",
+    modelsJson: {},
+    isolation: { image: "fixture/build-toolchain:test", cacheRoot },
+  });
+  const previous = process.env.MAE_FLOW_HOST;
+  try {
+    process.env.MAE_FLOW_HOST = "cloud";
+    const withHost = (service as any).taskContainerMounts({
+      cwd, summary: { id: "t", repo_url: "https://code.example/team/a.git" },
+    }, []) as { environment: NodeJS.ProcessEnv };
+    assert.equal(withHost.environment.MAE_FLOW_HOST, "cloud");
+    delete process.env.MAE_FLOW_HOST;
+    const withoutHost = (service as any).taskContainerMounts({
+      cwd, summary: { id: "t", repo_url: "https://code.example/team/a.git" },
+    }, []) as { environment: NodeJS.ProcessEnv };
+    assert.equal(withoutHost.environment.MAE_FLOW_HOST, undefined,
+      "宿主没声明身份时不得伪造 cloud 环境");
+  } finally {
+    if (previous === undefined) delete process.env.MAE_FLOW_HOST;
+    else process.env.MAE_FLOW_HOST = previous;
+  }
+});
+
 test("取消 native prepush 会销毁 attempt 容器且绝不继续 host push", async () => {
   const platform = new FakeGitPlatform();
   platform.initBare(sourceRepo(),

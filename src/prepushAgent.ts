@@ -358,7 +358,7 @@ export function prePushMission(request: PrePushRunRequest): string {
   const buildGuidance = prePushBuildGuidance(request.workspace);
   return [
     "你是 Cloud 的推送前验证与修复 Agent。这是独立专项会话，不在 Mae-Flow 内核流程中。",
-    "不要执行 current、done、agent-task、AskUserQuestion，也不要读取或修改 .mae-flow 状态。",
+    "不要执行 current、done、AskUserQuestion，也不要读取或修改 .mae-flow 状态。",
     `任务：${request.taskId}；待验证 HEAD：${request.sha}；目标分支：${request.branch}`,
     `需求背景：${request.requirement}`,
     "",

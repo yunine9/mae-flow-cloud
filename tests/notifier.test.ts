@@ -33,13 +33,13 @@ test("投递成功:待办事实与审批链接送达账号;同待办幂等", asy
     const notifier = new Notifier({ endpoint: luban.endpoint });
     const first = await notifier.notifyWaiting({
       waitingId: "T-1:c1", taskId: "T-1", account: "liaoxiang",
-      step: "build_review", summary: "Diff 通过吗?",
+      step: "delivery_review", summary: "Diff 通过吗?",
       link: "http://x/tasks/T-1",
     });
     await until(() => (first.delivered ? true : undefined), "投递完成");
     const again = await notifier.notifyWaiting({
       waitingId: "T-1:c1", taskId: "T-1", account: "liaoxiang",
-      step: "build_review", summary: "重复投递不应发生",
+      step: "delivery_review", summary: "重复投递不应发生",
       link: "http://x/tasks/T-1",
     });
     assert.equal(again, first);

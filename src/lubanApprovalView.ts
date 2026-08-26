@@ -37,7 +37,6 @@ function taskLabel(task: TaskSummary): string {
 export function humanApprovalStage(step: string | undefined): string {
   const normalized = String(step ?? "").trim();
   const known: Record<string, string> = {
-    build_review: "代码变更检视",
     spec_review: "方案确认",
     story_review: "需求确认",
     workflow_select: "交付方式确认",

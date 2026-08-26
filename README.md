@@ -137,6 +137,26 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
 
 ## 已知边界(诚实清单)
 
+- **2026-08-25 编排瘦身的云端适配(run8b 实测整链通过)**:内核编码段
+  44→21 步后,cloud 侧同步清理了死步骤引用(build_review/verify_*/
+  rf_* 等)、tests_only 可用性分支、EXPECTED_STEPS 相关提示词;开场
+  「Cloud 执行契约」从"禁止编码会话编译"改为"容器内自由编译自测,
+  本地结果不构成交付证据"。run8b(glm-5.1+真容器,REQ2026082601)
+  实测:文档段 9 张卡照旧,build 期模型自由跑 `mvn test` 零拦截,
+  一次提交收口,prepush 第 1 轮过,MR+流水线三维核销到 await_merge。
+  过程中的 16 次工具报错全是护栏按设计工作(commit 规范、单 Bash 单
+  commit、上一单现场文件保护),模型均自愈,无卡死。
+  **顺手逮住并修掉**:容器透传环境白名单漏了 `MAE_FLOW_HOST`,容器内
+  内核 current 按"本地宿主"渲染,云端确认类步骤的 `--auto` 路径失效
+  (run8b 里领域归档又弹了人工卡)。已把宿主身份注入任务容器环境并
+  加回归测试;run9(REQ2026082602)复验通过:归档/清单零人工卡
+  (9→7 张),且预置 java-autout 宿主 skill 后,知识足迹记录到模型在
+  build 步 `read` 了 SKILL.md,写出的测试严格按 skill 的三段式命名
+  ——skill 消费链路(此前 autout 未被消费的问题)由 build.md 的
+  「写测试前先读 UT生成方式 指向的 skill」锚定修复。run9 还顺带
+  验证了 `--resume` 任务级恢复:超时停在 verifying 后续跑,直达
+  await_merge,流水线三维核销。
+
 - **"serve 反复挂、一点错误输出都没有"的真凶(2026-08-18,内网实战)**:
   死法不是内存也不是端口,是**没人接的 Promise rejection**——Node 从 15
   起默认因此终止进程(本机 v24.17 实测:`void Promise.reject(...)` 直接
@@ -180,8 +200,10 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
   收口"要真模型的大会话才成立,假件裁不了**(pi 对小会话一律拒压),
   等真模型试跑现场验。
 
-- **Cloud 固有执行契约(2026-08-21 收口)**:普通编码会话仍只负责代码与
-  UT 编写，不在 Mae-Flow 阶段内执行编译。每个执行仓的
+- **Cloud 固有执行契约(2026-08-21 收口;2026-08-25 编排瘦身勘误:
+  编码会话不再被禁止编译——内核编码段收敛为宽 build 步,agent 可在
+  隔离容器里自由编译/跑 UT 自查,但本地结果不构成任何交付证据,真验收
+  仍是下述 prepush + 绑 SHA 流水线 + MR 检视三道)**:每个执行仓的
   `.mae-flow-order.json` 都显式写入 `execution_contract`
   （`schema=mae-flow-execution/1`、`host=cloud`）：最终编译/UT
   运行/CodeCheck=`pipeline`，UT 编写=`agent`，并记录本次真正可用的

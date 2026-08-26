@@ -402,7 +402,7 @@ export interface TaskSummary {
     /** 推荐先看的证据面，由内核 approval_subject 或 Cloud 原生分析类型投影。 */
     recommended_view?: "source" | "doc" | "chain" | "diff";
     /** 只读投影：选项会关闭检视，还是进入/留在意见处理步骤。前端据此
-     * 提示未闭环意见，不能在 TS 里手写 build_review 分支表。 */
+     * 提示未闭环意见，不能在 TS 里手写内核步骤分支表。 */
     choice_effects?: Array<{
       key: string;
       answers: string[];
@@ -1556,7 +1556,13 @@ export class TaskService {
     workspace?: string,
   ): { volumes: string[]; environment: NodeJS.ProcessEnv } {
     const isolation = this.options.isolation;
-    const environment = { ...(isolation?.environment ?? {}) };
+    const environment: NodeJS.ProcessEnv = { ...(isolation?.environment ?? {}) };
+    // 宿主身份必须跟进容器:内核靠 MAE_FLOW_HOST 区分"用户是否坐在终端
+    // 前",漏传时容器里的 current 按本地宿主渲染,云端确认类步骤的
+    // --auto 路径整个失效(run8b 实测:领域归档在云端又弹了人工卡)。
+    if (process.env.MAE_FLOW_HOST && !environment.MAE_FLOW_HOST) {
+      environment.MAE_FLOW_HOST = process.env.MAE_FLOW_HOST;
+    }
     if (!isolation?.cacheRoot) return { volumes, environment };
 
     const cppSdkDestination = workspace
@@ -2227,8 +2233,7 @@ export class TaskService {
       const currentIndex = currentByClass >= 0
         ? currentByClass : phases.indexOf(currentPhase);
       if (phases.length === 0 || currentIndex < 0) return undefined;
-      const milestone = ["build", "build_rework"].includes(
-        String(pulse.step ?? ""))
+      const milestone = String(pulse.step ?? "") === "build"
         ? latestBuildMilestone(milestoneText) : undefined;
       const progress: TaskProgress = {
         phases,
@@ -5792,22 +5797,25 @@ export class TaskService {
             : []),
         ].filter(Boolean).join("\n\n");
       }
-      // 普通编码会话仍按 Cloud 执行契约轻量推进；编译/UT 被挪到 push
-      // 前的独立专项会话，不回填成内核步骤，也不把模型自述当质量证据。
+      // 2026-08-25 编排瘦身:编码期不再禁止编译/自测——用户给了容器
+      // 构建环境,就让 agent 自由用起来验证自己;但本地绿不构成交付
+      // 证据,真验收固定三道(prepush 专项会话、绑 SHA 的权威流水线、
+      // MR 检视),这个口径必须开场钉死,防模型拿自测结果顶账。
       if (this.options.host && !analysisOnly) {
         const utGenerationMethod = availableUtGenerationMethod(
           this.options.dataDir, loadedRepositorySkillNames);
-        prompt = `${prompt}\n\nCloud 执行契约(宿主事实):当前编码会话只负责代码与单元测试的编写。`
-          + `每次 push 前，Cloud 会另起不受内核步骤束缚的专项 Agent 在`
-          + `服务器完成编译、UT 与必要修复；CodeCheck 和最终复核仍由绑定`
-          + `提交 SHA 的权威流水线执行。可用的 UT 编写方式是「${utGenerationMethod}」;`
-          + `已装载的 UT skill 只用于指导编写或修改测试，不负责运行测试，`
-          + `也不能证明测试通过。不要在当前编码会话调用编译、测试运行、CodeCheck`
-          + `或相关构建修复能力，不要编造命令、结果、数量或绿灯。`
-          + `完成实现与 UT 编写后按内核流程提交；不要读取或索要个人`
-          + `Git 令牌，也不要 push，Agent 会话释放后由 Cloud 宿主统一`
-          + `推送并复核远端 SHA。流水线失败时，`
-          + `只依据该次流水线证据定位并修复。`;
+        prompt = `${prompt}\n\nCloud 执行契约(宿主事实):你的 Bash 在隔离容器中执行,`
+          + `容器里可以自由编译、运行单测来验证自己的改动——有构建链就`
+          + `尽管用,没有就如实说明留给流水线,不要为编译环境卡住。`
+          + `这些本地结果只用于自查,**不构成任何交付证据**。真验收有三道:`
+          + `每次 push 前 Cloud 另起专项 Agent 在构建容器完成编译、UT 与`
+          + `必要修复;权威流水线绑提交 SHA 复核(编译、UT 运行、CodeCheck);`
+          + `MR 检视人裁决。可用的 UT 编写方式是「${utGenerationMethod}」,`
+          + `写测试前先按它读取对应 skill 或仓内写法。不要编造命令、结果、`
+          + `数量或绿灯。完成实现与 UT 编写后按内核流程提交;不要读取或`
+          + `索要个人 Git 令牌,也不要 push,Agent 会话释放后由 Cloud 宿主`
+          + `统一推送并复核远端 SHA。流水线失败时,只依据该次流水线证据`
+          + `定位并修复。`;
       }
       if (!analysisOnly && loadedRepositorySkillNames.length) {
         prompt = `${prompt}\n\n本单已启用仓库自带 Skill：`
@@ -7344,17 +7352,17 @@ export class TaskService {
       + `并写明定位依据(日志里的哪一行、堆栈的哪一帧、覆盖率报告的`
       + `哪个类)。依据说不出来就说明还没定位到,继续查,不许凭猜改;`
       + `日志指向的位置与真正的病根不一致时,以病根为准并说明推断链。`,
-      // 内核在 external_verify 不签发质量任务卡(EXPECTED_STEPS 里
-      // COMPILE/UT/CODECHECK 只挂在各自的验证步)。原文让它"派专职子
-      // agent",模型照做就撞三连死路:拿旧卡被拦 → 按提示 agent-task ut
-      // 被"当前步骤不允许生成"打回 → current 说在等流水线,来回空转。
-      // 交付后的流水线修复轮里,改代码这件事由本会话自己做。
+      // 2026-08-25 编排瘦身后,内核在交付主流程里不再签发
+      // COMPILE/UT/CODECHECK 质量任务卡(卡只留给 standalone 工具单)。
+      // 历史教训仍然成立:原文让它"派专职子 agent",模型照做就撞死路
+      // (拿不到卡 → agent-task 被打回 → 来回空转)。修复轮里改代码
+      // 这件事由本会话自己做。
       `- 按类分头修:编译类、UT/覆盖率类、检视类各修各的,互不搅和。`
-      + `**本轮不要派 COMPILE/UT/CODECHECK 专职子 agent**——那些任务卡`
-      + `只在对应的验证步签发,交付后的流水线修复轮拿不到卡,派了必被`
-      + `内核拦回,白烧回合。补测试、改代码都由你自己动手(UT 的写法`
-      + `照常按已装载的 UT skill 走);确需并行时只派不带任务卡的通用`
-      + `子 agent,并把定位到的文件与依据一并交给它,别让它从头再查。`,
+      + `**本轮不要找内核要 COMPILE/UT/CODECHECK 任务卡或派专职质量子`
+      + ` agent**——交付流程里没有那些卡,要了也拿不到,白烧回合。`
+      + `补测试、改代码都由你自己动手(UT 的写法照常按已装载的`
+      + ` UT skill 走);确需并行时只派不带任务卡的通用子 agent,`
+      + `并把定位到的文件与依据一并交给它,别让它从头再查。`,
       `- 修复纪律:补覆盖率要写真测试,不许凑数骗指标;CodeCheck 修问题`
       + `本身,不许加抑制注释糊弄;编译告警要消除,不是关闭告警。`,
       `- 全部修完凑成一次提交。不要读取或索要个人 Git 令牌，`
@@ -7585,7 +7593,7 @@ export class TaskService {
    *
    * 内核对这段早有designed的路,而且是机读契约:workflow_select 的
    * choices 里有 review,但 new_order_choices 没有它(「review 仅限
-   * 已交付单」)。走这条路修复要重新过 rf_codecheck/rf_ut/delivery_review,
+   * 已交付单」)。走这条路修复要重新过 build/delivery_review,
    * push 之后还自动进 external_verify 复验——修复本身也要流水线判绿
    * 才算数。
    *
@@ -7680,8 +7688,8 @@ export class TaskService {
         + `格式严格如下,每条以方括号 id 单独一行开头:`,
         `  [${discussions[0].id}]`,
         `  <这条的回复:改了什么/为什么不改,一两句讲清>`,
-        `- 提交按内核 build_commit 步的指引做,不要自己另起一套；`
-        + `不要读取或索要个人 Git 令牌,也不要 push,`
+        `- 改动在 build 步收口前如实 commit(按 current 的指引),`
+        + `不要自己另起一套；不要读取或索要个人 Git 令牌,也不要 push,`
         + `Cloud 宿主会在会话释放后统一推送。`,
         `- 全部是解释、没有代码改动也是正常结局:照样按 current 走完,`
         + `在对应步骤如实说明本轮无代码改动,不要为了凑步骤改代码。`,

@@ -35,9 +35,9 @@ function coreFixture(root: string): { repo: string; kernel: string } {
   mkdirSync(join(kernel, "scripts"), { recursive: true });
   writeFileSync(join(kernel, "flow", "flow.json"), JSON.stringify({
     steps: {
-      build: { title: "编码实现", allow_source_edit: true },
-      build_review: {
-        title: "用户检视代码",
+      build: { title: "自由实现与定稿", allow_source_edit: true },
+      delivery_review: {
+        title: "交付清单确认",
         user_ack: true,
         approval_subject: { kind: "worktree" },
       },
@@ -51,7 +51,7 @@ function coreFixture(root: string): { repo: string; kernel: string } {
     "facts=json.load(open(sys.argv[sys.argv.index('--file')+1], encoding='utf-8'))",
     "state=json.load(open('.mae-flow.json', encoding='utf-8'))",
     "old=state['current']",
-    "target={'build_review':'build_rework','build_commit':'build_rework','build_agent_review':'build_rework','quality_review':'quality_rework','quality_commit':'quality_rework','external_verify':'quality_recompile'}.get(old, old)",
+    "target={'delivery_review':'build','external_verify':'build'}.get(old, old)",
     "state['user_intervention']=facts",
     "state['current']=target",
     "json.dump(state, open('.mae-flow.json','w',encoding='utf-8'), ensure_ascii=False)",
@@ -222,7 +222,7 @@ test("开发助手:用户可跨流程位置接管，并把变更/命令结果一
     }).tasks.get(reviewId)!;
     reviewTask.cwd = repo;
     writeFileSync(join(repo, ".mae-flow.json"), JSON.stringify({
-      current: "build_review", revision: 4,
+      current: "delivery_review", revision: 4,
       approval_subject: { id: "subject-a" },
     }));
     const reviewAvailability = service.developerAssistant(reviewId).availability;
@@ -241,7 +241,7 @@ test("开发助手:用户可跨流程位置接管，并把变更/命令结果一
     };
     reviewState.summary.waiting = reviewState.humanGate.createWaiting({
       taskId: reviewId,
-      step: "build_review",
+      step: "delivery_review",
       callId: "review-card",
       questionInput: {
         questions: [{
@@ -266,8 +266,8 @@ test("开发助手:用户可跨流程位置接管，并把变更/命令结果一
       ?.status, "superseded",
       "旧卡只标记失效，不能伪造一份通过或打回答案");
     assert.equal(JSON.parse(readFileSync(
-      join(repo, ".mae-flow.json"), "utf-8")).current, "build_rework",
-    "内核应直接退回返工，不回放已经失效的旧审批答案");
+      join(repo, ".mae-flow.json"), "utf-8")).current, "build",
+    "内核应把介入改代码退回 build，不回放已经失效的旧审批答案");
 
     const verifyingId = service.create("流水线阶段由用户接管").id;
     await service.pause(verifyingId, "alice");
@@ -301,7 +301,7 @@ test("开发助手:用户可跨流程位置接管，并把变更/命令结果一
     assert.equal(verifyingResumed.delivery?.mr_url, "https://code.example/mr/1",
       "旧流水线事实作废，但现有 MR 身份应保留供后续更新");
     assert.equal(JSON.parse(readFileSync(
-      join(repo, ".mae-flow.json"), "utf-8")).current, "quality_recompile");
+      join(repo, ".mae-flow.json"), "utf-8")).current, "build");
 
     const ordinaryId = service.create("普通暂停恢复不能重放旧介入").id;
     await service.pause(ordinaryId, "alice");

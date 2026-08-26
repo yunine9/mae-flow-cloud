@@ -33,7 +33,7 @@ function waiting(
 ): WaitingRecord {
   return {
     waiting_id: `${taskId}:call-1`, task_id: taskId,
-    step: "build_review", call_id: "call-1",
+    step: "delivery_review", call_id: "call-1",
     question: { questions }, context: "编译与 UT 已通过，请核对本轮改动。",
     state_version: version, status: "waiting", decision: "", notes: "",
     created_at: "2026-08-23T00:00:00.000Z", resolved_at: "", reminders: 0,
@@ -590,7 +590,7 @@ test("启用手机入口后，待办通知说明会话式审批方式", async ()
   const record = await notifier.notifyWaiting({
     waitingId: "waiting-1", stateVersion: 1,
     taskId: "task-1", account: "alice",
-    subject: "问题单 DTS20260824001（task-1）", step: "build_review",
+    subject: "问题单 DTS20260824001（task-1）", step: "spec_review",
     questions: [
       { question: "Diff 通过吗？", options: ["通过", "打回"] },
       { question: "需要灰度吗？", options: ["需要", "不需要"] },
@@ -600,7 +600,7 @@ test("启用手机入口后，待办通知说明会话式审批方式", async ()
   assert.match(record.text, /问题单 DTS20260824001/);
   assert.match(record.text, /Diff 通过吗/);
   assert.doesNotMatch(record.text, /需要灰度吗/);
-  assert.doesNotMatch(record.text, /build_review/);
-  assert.match(record.text, /代码变更检视/);
+  assert.doesNotMatch(record.text, /spec_review/);
+  assert.match(record.text, /方案确认/);
   assert.match(record.text, /mae-flow 选择 A1B2C3D4E5 <序号>/);
 });

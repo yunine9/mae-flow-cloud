@@ -71,7 +71,7 @@ test("用户接管只作废旧待办，不伪造通过或打回答案", () => {
   const dir = mkdtempSync(join(tmpdir(), "mfc-"));
   const gate = new HumanGate(join(dir, "waiting.json"));
   const waiting = gate.createWaiting({
-    taskId: "T-1", step: "build_review", callId: "c2",
+    taskId: "T-1", step: "delivery_review", callId: "c2",
     questionInput: { q: "代码通过吗" },
   });
   const closed = gate.supersede(waiting.waiting_id, {
