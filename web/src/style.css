@@ -5795,6 +5795,10 @@ pre {
 .knowledge-shelf-main strong { font-size: var(--font-size-body); }
 .knowledge-shelf-main p { margin: 2px 0 0; color: var(--muted); font-size: var(--font-size-assist); line-height: 1.45; }
 .knowledge-shelf-badge { margin-left: 8px; padding: 1px 6px; color: var(--danger, #c33); border: 1px solid currentColor; border-radius: 4px; font-size: var(--font-size-assist); font-weight: 600; vertical-align: middle; }
+.knowledge-shelf-badge.signal-low-consumption { color: var(--warn, #b80); }
+.knowledge-shelf-badge.signal-high-friction { color: var(--danger, #c33); }
+.knowledge-shelf-effect { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 5px; color: var(--faint); font-size: var(--font-size-assist); font-variant-numeric: tabular-nums; }
+.knowledge-shelf-effect .attention { color: var(--danger, #c33); }
 .knowledge-shelf-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; flex-shrink: 0; color: var(--faint); font-size: var(--font-size-assist); font-variant-numeric: tabular-nums; }
 .knowledge-shelf-warnings { padding: 8px 16px 12px; border-top: 1px dashed var(--line); color: var(--danger, #c33); font-size: var(--font-size-assist); }
 .knowledge-shelf-warnings p { margin: 2px 0; }

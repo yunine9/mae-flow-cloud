@@ -734,6 +734,21 @@ export interface KnowledgeRecommendation {
 
 /** 团队 Skill 货架条目:部署数据目录 skills/ 里当前生效的资产身份。
  * 正文不进接口;digest 是版本锚。 */
+/** 货架条目的效果账(飞轮第 3 步):消费率 × prepush 一次过对照。
+ * 只是相关性观察,不构成对任何任务或 skill 的裁决。 */
+export interface HostSkillEffect {
+  provided_tasks: number;
+  accessed_tasks: number;
+  access_events: number;
+  repair_tasks: number;
+  prepush_measured: number;
+  prepush_first_pass: number;
+  baseline_measured: number;
+  baseline_first_pass: number;
+  signal?: "low-consumption" | "high-friction";
+  signal_evidence?: string;
+}
+
 export interface HostSkillShelfEntry {
   name: string;
   description: string;
@@ -743,6 +758,7 @@ export interface HostSkillShelfEntry {
   bytes: number;
   /** false = pi 装载器不认(缺 name/description 等),放了也不进会话。 */
   loadable: boolean;
+  effect?: HostSkillEffect;
 }
 
 export interface HostSkillShelf {

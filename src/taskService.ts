@@ -133,12 +133,16 @@ import {
   type TaskKnowledgeUsage,
 } from "./knowledgeTrace.ts";
 import {
+  buildHostSkillEffects,
   buildTeamKnowledgeInsights,
+  type HostSkillEffect,
+  type KnowledgeInsightTask,
   type TeamKnowledgeInsights,
 } from "./knowledgeInsights.ts";
 import {
   listHostSkillShelf,
   type HostSkillShelf,
+  type HostSkillShelfEntry,
 } from "./hostSkillShelf.ts";
 import {
   createPrePushGateContract,
@@ -1773,10 +1777,32 @@ export class TaskService {
   knowledgeInsights(): TeamKnowledgeInsights & { host_skills: HostSkillShelf } {
     // 货架(部署态资产)与足迹(消费聚合)同口径一次给全:足迹只看得见
     // 被任务带过的资源,放坏了的 skill 在足迹里隐形,货架把它照出来。
+    const projected = [...this.tasks.values()]
+      .map((task) => this.project(task, true));
     return {
-      ...buildTeamKnowledgeInsights([...this.tasks.values()]
-        .map((task) => this.project(task, true))),
-      host_skills: listHostSkillShelf(this.options.dataDir),
+      ...buildTeamKnowledgeInsights(projected),
+      host_skills: this.decorateHostSkillShelf(projected),
+    };
+  }
+
+  /** 货架 + 效果账(飞轮第 3 步):每个条目带消费率与 prepush 一次过
+   * 对照,低消费/高摩擦亮修订信号。/skills 管理接口与知识效能页共用
+   * 这一份,数字口径不许有两套。 */
+  hostSkillShelf(): HostSkillShelf {
+    return this.decorateHostSkillShelf([...this.tasks.values()]
+      .map((task) => this.project(task, true)));
+  }
+
+  private decorateHostSkillShelf(tasks: KnowledgeInsightTask[]): HostSkillShelf
+      & { skills: Array<HostSkillShelfEntry & { effect?: HostSkillEffect }> } {
+    const shelf = listHostSkillShelf(this.options.dataDir);
+    const effects = buildHostSkillEffects(tasks);
+    return {
+      ...shelf,
+      skills: shelf.skills.map((skill) => ({
+        ...skill,
+        effect: effects.get(skill.name),
+      })),
     };
   }
 

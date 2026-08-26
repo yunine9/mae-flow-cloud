@@ -70,7 +70,6 @@ import {
   AnnotationPermissionError,
 } from "./annotations.ts";
 import type { LubanApprovalGateway } from "./lubanApproval.ts";
-import { listHostSkillShelf } from "./hostSkillShelf.ts";
 import {
   SkillLibraryError,
   listSkillOperations,
@@ -594,7 +593,7 @@ export function createTaskServer(
         const dataDir = service.options.dataDir;
         if (request.method === "GET" && parts.length === 1) {
           return json(response, 200, {
-            ...listHostSkillShelf(dataDir),
+            ...service.hostSkillShelf(),
             operations: listSkillOperations(dataDir),
           });
         }

@@ -213,7 +213,25 @@ function SkillLibraryPanel({ fallback, admin }: {
         <div className="knowledge-shelf-main">
           <strong>{skill.name}</strong>
           {!skill.loadable && <span className="knowledge-shelf-badge" title="pi 装载器未接受,任何会话都不会带上它;检查 SKILL.md frontmatter 的 name/description">不可装载</span>}
+          {skill.effect?.signal && <span
+            className={`knowledge-shelf-badge signal-${skill.effect.signal}`}
+            title={skill.effect.signal_evidence}>
+            {skill.effect.signal === "low-consumption" ? "待修订 · 没人读" : "待修订 · 读了仍返修"}
+          </span>}
           <p>{skill.description || "(没有描述——模型靠描述判断何时读取,建议补上)"}</p>
+          {skill.effect && skill.effect.provided_tasks > 0 && <div className="knowledge-shelf-effect">
+            <span>装载 {skill.effect.provided_tasks} 单</span>
+            <span>读取 {skill.effect.accessed_tasks} 单
+              （{Math.round(skill.effect.accessed_tasks / skill.effect.provided_tasks * 100)}%）</span>
+            {skill.effect.prepush_measured > 0 && <span
+              title="读过该 skill 的任务中,推送前验证首轮一次通过的比例">
+              读后一次过 {skill.effect.prepush_first_pass}/{skill.effect.prepush_measured}</span>}
+            {skill.effect.baseline_measured > 0 && <span
+              title="未读该 skill 的任务对照(相关性参考,不代表因果)">
+              未读对照 {skill.effect.baseline_first_pass}/{skill.effect.baseline_measured}</span>}
+            {skill.effect.repair_tasks > 0 && <span className="attention">
+              读后返修 {skill.effect.repair_tasks} 单</span>}
+          </div>}
         </div>
         <div className="knowledge-shelf-meta">
           <span title={`SKILL.md 内容 sha256:${skill.digest}`}>版本 {skill.digest.slice(0, 8)}</span>
