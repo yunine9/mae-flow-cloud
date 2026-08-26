@@ -1,8 +1,8 @@
 /**
- * 管理员默认看团队全局，开发默认直达我的工作；
+ * 管理员默认看团队全局，开发默认直达我的需求；
  * 登录身份决定任务归属与操作权限，任务事实仍来自服务端。
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import {
   createUser, deleteUser, getKnowledgeInsights, getLaunchOptions, getSession, getTask, listMyReviews, listTasks, listUsers,
   login, logout, putCommitter, resetUserPassword,
@@ -38,11 +38,15 @@ import {
 import { startVisiblePolling } from "./visiblePolling";
 import { KnowledgeFlywheel } from "./KnowledgeFlywheel";
 
-type View = "team" | "mine" | "profile" | "history" | "users" | "settings";
+// 问题处理页独立分包(懒加载):问题流与需求流互不拖累,改哪边都不
+// 用动另一边的构建产物。
+const IssueBoard = lazy(() =>
+  import("./issues/IssueBoard").then((module) => ({ default: module.IssueBoard })));
+
+type View = "team" | "mine" | "issues" | "profile" | "history" | "users" | "settings";
 type Theme = "light" | "dark";
 type Density = "comfortable" | "compact";
 type MineScope = "all" | "waiting" | "intervention" | "active" | "delivered";
-type TaskKindScope = "all" | "requirement" | "dts";
 
 interface WorkspaceRoute {
   taskId: string;
@@ -239,6 +243,7 @@ function PersonalSettingsPage({
 function NavIcon({ name }: { name: View }) {
   if (name === "team") return <svg viewBox="0 0 24 24" aria-hidden><path d="M4.75 19.25V11.5h4v7.75h-4Zm5.75 0V4.75h4v14.5h-4Zm5.75 0V8h4v11.25h-4Z" /></svg>;
   if (name === "mine") return <svg viewBox="0 0 24 24" aria-hidden><circle cx="12" cy="8" r="3.25" /><path d="M5.5 19.25c.65-3.45 2.82-5.25 6.5-5.25s5.85 1.8 6.5 5.25" /></svg>;
+  if (name === "issues") return <svg viewBox="0 0 24 24" aria-hidden><path d="M12 4.75 20 18.5H4L12 4.75Z" /><path d="M12 10v4M12 16.4v.2" /></svg>;
   if (name === "profile") return <svg viewBox="0 0 24 24" aria-hidden><circle cx="9" cy="8" r="3" /><path d="M3.75 18.5c.55-3.15 2.3-4.75 5.25-4.75s4.7 1.6 5.25 4.75" /><circle cx="17.5" cy="15.5" r="2.25" /><path d="M17.5 11.75v1.5M17.5 17.75v1.5M13.75 15.5h1.5M19.75 15.5h1.5" /></svg>;
   if (name === "users") return <svg viewBox="0 0 24 24" aria-hidden><circle cx="9" cy="8" r="3" /><path d="M3.75 18.5c.55-3.15 2.3-4.75 5.25-4.75s4.7 1.6 5.25 4.75M16.5 7.5h4M18.5 5.5v4" /></svg>;
   if (name === "settings") return <svg viewBox="0 0 24 24" aria-hidden><circle cx="12" cy="12" r="3" /><path d="M12 4.5v2M12 17.5v2M4.5 12h2M17.5 12h2M6.7 6.7l1.4 1.4M15.9 15.9l1.4 1.4M6.7 17.3l1.4-1.4M15.9 8.1l1.4-1.4" /></svg>;
@@ -255,7 +260,6 @@ export function App() {
   const [session, setSession] = useState<AuthUser | null>();
   const [view, setView] = useState<View>("team");
   const [mineScope, setMineScope] = useState<MineScope>("all");
-  const [taskKindScope, setTaskKindScope] = useState<TaskKindScope>("all");
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [teamUsers, setTeamUsers] = useState<AuthUser[]>([]);
   const [knowledgeInsights, setKnowledgeInsights] = useState<TeamKnowledgeInsights>();
@@ -443,7 +447,7 @@ export function App() {
   if (session === null) return <LoginScreen onAuthenticated={(user) => {
     launchGateRequest.current += 1;
     setLaunchGate({ kind: "checking" });
-    setSession(user); setMineScope("all"); setTaskKindScope("all");
+    setSession(user); setMineScope("all");
     setView(initialView(user));
   }} />;
 
@@ -453,7 +457,6 @@ export function App() {
     setKnowledgeInsights(undefined);
     setKnowledgeInsightsError("");
     setMineScope("all");
-    setTaskKindScope("all");
     setTaskSync({ kind: "loading" });
     launchGateRequest.current += 1;
     setLaunchGate({ kind: "checking" });
@@ -499,15 +502,7 @@ export function App() {
     : mineScope === "intervention" ? myIntervention
       : mineScope === "active" ? myActive
         : mineScope === "delivered" ? myDelivered : myCurrent;
-  const matchesTaskKind = (task: TaskSummary) => taskKindScope === "all"
-    || (taskKindScope === "dts"
-      ? task.entry_kind === "dts" : task.entry_kind !== "dts");
-  const visibleMyWork = scopedMyWork.filter(matchesTaskKind);
-  const kindCounts = {
-    all: scopedMyWork.length,
-    requirement: scopedMyWork.filter((task) => task.entry_kind !== "dts").length,
-    dts: scopedMyWork.filter((task) => task.entry_kind === "dts").length,
-  };
+  const visibleMyWork = scopedMyWork;
   const myWorkTitle = mineScope === "waiting" ? "待我核对"
     : mineScope === "intervention" ? "需要介入 / 已暂停"
       : mineScope === "active" ? "自动推进中"
@@ -539,7 +534,8 @@ export function App() {
     team: session.role === "admin"
       ? { title: "团队总览", description: "看团队推进、负责人和阻塞风险；需要兜底时打开任务的过程工作台处置(暂停/恢复/决定)。" }
       : { title: "团队动态", description: "只读了解团队正在推进什么；你的待办与操作始终留在个人工作台。" },
-    mine: { title: "我的工作", description: "从发起到交付，集中推进你的每一项任务。" },
+    mine: { title: "我的需求", description: "从发起到交付，集中推进你的每一项需求任务。" },
+    issues: { title: "问题处理", description: "我的问题研究与 DTS 问题单处理：先定位，后补单，非问题也是合法结论。" },
     profile: { title: "个人设置", description: "集中管理任务审批方式、CodeHub 提交身份和小鲁班通知。" },
     history: { title: "交付历史", description: "回看任务与交付记录；未启用历史投影时仍可浏览当前任务现场。" },
     users: { title: "账号管理", description: "创建本地账号并分配管理员或开发权限。" },
@@ -562,7 +558,8 @@ export function App() {
           <NavButton view="settings" current={view} onSelect={setView} label="服务设置" />
         </> : <>
           <span className="nav-section-label">个人工作台</span>
-          <NavButton view="mine" current={view} onSelect={setView} label="我的工作" badge={myWaiting.length + pendingReviews.length} personal />
+          <NavButton view="mine" current={view} onSelect={setView} label="我的需求" badge={myWaiting.length + pendingReviews.length} personal />
+          <NavButton view="issues" current={view} onSelect={setView} label="问题处理" />
           <NavButton view="profile" current={view} onSelect={setView} label="个人设置" />
           <span className="nav-section-label team-context">团队信息</span>
           <NavButton view="team" current={view} onSelect={setView} label="团队动态" badge={waitingCount} />
@@ -611,22 +608,12 @@ export function App() {
           />}
           <section className="task-section current-work-section" aria-labelledby="current-work-title">
             <div className="section-head"><div><span className="section-kicker">{mineScope === "all" ? "CURRENT WORK" : "FOCUSED WORK"}</span><h2 id="current-work-title">{myWorkTitle}</h2></div><div className="current-work-counts">{mineScope === "all" && myWaiting.length > 0 && <span className="section-count attention">{myWaiting.length} 项待核对</span>}{mineScope === "all" && myIntervention.length > 0 && <span className="section-count danger">{myIntervention.length} 项需介入</span>}<span className="section-count">{mineScope === "all" ? `共 ${visibleMyWork.length} 项` : `筛选出 ${visibleMyWork.length} 项`}</span></div></div>
-            <div className="task-kind-tabs" role="tablist" aria-label="按任务类型筛选">
-              {(["all", "requirement", "dts"] as const).map((kind) => (
-                <button type="button" role="tab" key={kind}
-                  aria-selected={taskKindScope === kind}
-                  className={`${taskKindScope === kind ? "on" : ""} ${kind}`}
-                  onClick={() => setTaskKindScope(kind)}>
-                  <span>{kind === "all" ? "全部" : kind === "requirement" ? "需求" : "问题单"}</span>
-                  <i>{kindCounts[kind]}</i>
-                </button>
-              ))}
-            </div>
-            {visibleMyWork.length === 0 && <div className="review-clear current-work-empty"><span aria-hidden>✓</span><div><strong>{taskKindScope !== "all" ? `当前没有${taskKindScope === "dts" ? "问题单" : "需求"}任务` : mineScope === "all" ? "当前没有进行中的任务" : `没有${myWorkTitle}的任务`}</strong><p>{taskKindScope !== "all" ? "切换到“全部”可查看其他类型任务。" : mineScope === "all" ? "新任务启动后会出现在这里；需要你核对的任务会自动排在最前。" : "再次点击上方已选中的摘要卡，可恢复查看全部当前任务。"}</p></div></div>}
+            {visibleMyWork.length === 0 && <div className="review-clear current-work-empty"><span aria-hidden>✓</span><div><strong>{mineScope === "all" ? "当前没有进行中的任务" : `没有${myWorkTitle}的任务`}</strong><p>{mineScope === "all" ? "新任务启动后会出现在这里；需要你核对的任务会自动排在最前。" : "再次点击上方已选中的摘要卡，可恢复查看全部当前任务。"}</p></div></div>}
             <div className="task-list current-work-list">{visibleMyWork.map((task) => <TaskCard key={task.id} task={task} onChanged={refresh} focused={task.id === targetTaskId} canOperate onOpenArtifacts={() => openArtifacts(task)} />)}</div>
           </section>
           {mineScope === "all" && myDelivered.length > 0 && <TaskGroup kicker="DELIVERY" title="等待合入与最近完成" tasks={myDelivered} onChanged={refresh} onOpenArtifacts={openArtifacts} targetTaskId={targetTaskId} />}
         </>}
+        {view === "issues" && session.role !== "admin" && <Suspense fallback={<div className="issue-board-loading">问题处理页加载中…</div>}><IssueBoard viewer={session} /></Suspense>}
         {view === "profile" && session.role !== "admin" && <PersonalSettingsPage
           session={session}
           onSessionPatch={patchSession}
@@ -875,7 +862,7 @@ function UsersBoard({ me }: { me: string }) {
           <div className="user-row">
             <span className="user-cell"><i>{user.username.slice(0, 1).toUpperCase()}</i><strong>{user.username}</strong></span>
             <span><em className={`role-chip ${user.role}`}>{user.role === "admin" ? "管理员" : "开发成员"}</em></span>
-            <span className="user-entry">{user.role === "admin" ? "团队总览" : "我的工作"}</span>
+            <span className="user-entry">{user.role === "admin" ? "团队总览" : "我的需求"}</span>
             <span><button type="button" className={`committer-toggle${user.committer ? " on" : ""}`} aria-pressed={!!user.committer} onClick={() => void toggleCommitter(user)}><i aria-hidden />{user.committer ? "已加入" : "加入名单"}</button></span>
             <span className="user-actions">
               <button type="button" className="user-action" onClick={() => {

@@ -28,9 +28,6 @@ function capReply(text: string): string {
 }
 
 function taskLabel(task: TaskSummary): string {
-  if (task.entry_kind === "dts") {
-    return `问题单 ${task.ticket ?? task.id} · ${task.id}`;
-  }
   return task.ticket ? `需求 ${task.ticket} · ${task.id}` : task.id;
 }
 

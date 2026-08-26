@@ -363,13 +363,6 @@ export interface TaskSummary {
     bytes: number;
     context_mode: "inline" | "file";
   };
-  entry_kind?: "requirement" | "dts";
-  issue_context?: {
-    source: "manual";
-    stage: "triage" | "delivery";
-    environments: IssueEnvironmentRef[];
-    adapter: { logs: boolean; deploy: boolean; rollback: boolean };
-  };
   status: TaskStatus;
   /** 服务端对现有事实的唯一扫读解释；旧后端缺席时界面安全降级。 */
   focus?: {
@@ -469,30 +462,6 @@ export interface TaskSummary {
     at: string;
     paused_from?: TaskStatus;
   };
-}
-
-export interface IssueEnvironmentRef {
-  id: string;
-  name: string;
-  purpose: "logs" | "deploy" | "both";
-  protocol: "ssh";
-  host: string;
-  port: number;
-  accounts: Array<{
-    username: string;
-    credential_state: "stored";
-  }>;
-  /** 兼容短暂存在过的单账号任务现场。 */
-  username?: string;
-  credential_state?: "stored";
-}
-
-export interface IssueEnvironmentInput {
-  name: string;
-  purpose: "logs" | "deploy" | "both";
-  host: string;
-  port?: number;
-  accounts: Array<{ username: string; password: string }>;
 }
 
 /** 历史条目(服务端 projection.ts 的 TaskHistoryEntry 镜像)。 */
@@ -750,8 +719,6 @@ export async function createTask(
     title?: string;
     repo?: string;
     repos?: string[];
-    entryKind?: "requirement" | "dts";
-    issueEnvironments?: IssueEnvironmentInput[];
     lane?: string;
     ticket?: string;
     baseline?: string;
@@ -772,9 +739,6 @@ export async function createTask(
       account: account || undefined,
       repo: extras?.repo || undefined,
       repos: extras?.repos?.length ? extras.repos : undefined,
-      entry_kind: extras?.entryKind,
-      issue_environments: extras?.entryKind === "dts"
-        ? extras.issueEnvironments ?? [] : undefined,
       // 空白等于没选，由服务端使用内核第一项；不要把 "" 伪装成
       // 一个需要校验的交付方式。
       lane: extras?.lane?.trim() || undefined,
@@ -1356,4 +1320,193 @@ export async function readArtifact(
     kind: String(body.kind ?? "doc"),
     branch: body.branch ? String(body.branch) : undefined,
   };
+}
+
+// ---- 问题流(与需求任务平行的独立会话域) ----
+
+export type IssueStatus =
+  | "queued"
+  | "running"
+  | "waiting_user"
+  | "idle"
+  | "interrupted"
+  | "archived"
+  | "canceled"
+  | "failed";
+
+export const ISSUE_STATUS_TEXT: Record<IssueStatus, string> = {
+  queued: "排队启动中",
+  running: "AI 处理中",
+  waiting_user: "等你答复",
+  idle: "等你继续",
+  interrupted: "重启中断,可续聊",
+  archived: "已归档",
+  canceled: "已取消",
+  failed: "出错了",
+};
+
+export type IssueStage =
+  | "registered"
+  | "ticket_fetched"
+  | "logs_fetched"
+  | "analyzing"
+  | "aligning"
+  | "implementing"
+  | "committing"
+  | "deploying"
+  | "verifying"
+  | "submitting_mr"
+  | "concluded";
+
+export const ISSUE_STAGE_TEXT: Record<IssueStage, string> = {
+  registered: "已登记",
+  ticket_fetched: "拿单",
+  logs_fetched: "拉日志",
+  analyzing: "分析问题现象",
+  aligning: "对齐方案",
+  implementing: "编码实现",
+  committing: "提交变更",
+  deploying: "换库部署",
+  verifying: "验证",
+  submitting_mr: "提交 MR",
+  concluded: "已出结论",
+};
+
+export interface IssueSummary {
+  id: string;
+  account: string;
+  created_at: string;
+  updated_at: string;
+  title: string;
+  description: string;
+  source: "manual" | "dts";
+  ticket?: string;
+  repo_url?: string;
+  status: IssueStatus;
+  stage: IssueStage;
+  stage_note: string;
+  conclusion?: {
+    kind: "non_issue" | "fixed" | "delivered";
+    summary: string;
+    at: string;
+  };
+  push?: { branch: string; sha: string; at: string };
+  mr?: { branch: string; title: string; url?: string; iid?: string; at: string };
+  error?: string;
+  last_reply?: string;
+}
+
+export interface IssueWaitingCard {
+  waiting_id: string;
+  state_version: number;
+  question: { questions?: Array<{ question: string; options: string[] }> };
+  context?: string;
+  created_at: string;
+}
+
+export interface IssueDetail extends IssueSummary {
+  waiting?: IssueWaitingCard;
+  messages: Array<{ role: "user" | "assistant" | "decision"; text: string; ts: string }>;
+  has_analysis: boolean;
+}
+
+export interface DtsTicketBrief {
+  ticket: string;
+  title: string;
+  status?: string;
+}
+
+export interface IssueEnvironmentForm {
+  name?: string;
+  hosts: string[];
+  port?: number;
+  password: string;
+}
+
+async function issueFetch(
+  path: string,
+  init?: RequestInit,
+): Promise<any> {
+  const response = await fetch(path, init);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(String(body.error ?? `HTTP ${response.status}`));
+  }
+  return response.json();
+}
+
+export function listIssues(): Promise<IssueSummary[]> {
+  return issueFetch("/issues").then((body) => body.issues ?? []);
+}
+
+export function getIssue(id: string): Promise<IssueDetail> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}`);
+}
+
+export function createIssue(input: {
+  title: string;
+  description?: string;
+  source?: "manual" | "dts";
+  ticket?: string;
+  repo_url?: string;
+  baseline?: string;
+  environment?: IssueEnvironmentForm;
+}): Promise<IssueSummary> {
+  return issueFetch("/issues", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function replyIssue(id: string, text: string): Promise<IssueSummary> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/reply`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+}
+
+export function answerIssue(id: string, input: {
+  state_version: number;
+  decision: string;
+  notes?: string;
+}): Promise<IssueSummary> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/decision`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function steerIssue(id: string, text: string): Promise<IssueSummary> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/interrupt`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+}
+
+export function bindIssueTicket(id: string, ticket: string): Promise<IssueSummary> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/ticket`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ticket }),
+  });
+}
+
+export function controlIssue(id: string, input: {
+  action: "cancel" | "archive";
+  kind?: "non_issue" | "fixed" | "delivered";
+  summary?: string;
+}): Promise<IssueSummary> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/control`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function listDtsTickets(): Promise<DtsTicketBrief[]> {
+  return issueFetch("/issues/dts").then((body) => body.tickets ?? []);
 }

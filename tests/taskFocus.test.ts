@@ -67,21 +67,3 @@ test("任务焦点:运行态使用内核同源步骤，不自造流程阶段", (
   assert.equal(result.headline, "Agent 正在推进：实现订单校验");
   assert.equal(result.kind, "machine");
 });
-
-test("任务焦点:DTS 诊断与内核交接不会伪装成普通编码", () => {
-  const triage = projectTaskFocus({
-    status: "running",
-    entry_kind: "dts",
-    issue_context: { stage: "triage" },
-  });
-  assert.match(triage.headline, /日志、代码与问题根因/);
-  assert.match(triage.next_action, /请你确认/);
-
-  const handoff = projectTaskFocus({
-    status: "queued",
-    entry_kind: "dts",
-    issue_context: { stage: "delivery" },
-  });
-  assert.match(handoff.headline, /等待代码修复接管/);
-  assert.match(handoff.next_action, /Mae-Flow 问题修复/);
-});

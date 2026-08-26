@@ -64,6 +64,7 @@ import {
   AnnotationPermissionError,
 } from "./annotations.ts";
 import type { LubanApprovalGateway } from "./lubanApproval.ts";
+import { handleIssueRoutes } from "./issueFlow/routes.ts";
 
 /** 正式前端静态文件的最小类型表:Vite 产物就这几种。 */
 const MIME: Record<string, string> = {
@@ -157,6 +158,7 @@ export function createTaskServer(
     webRoot?: string;
     auth?: LocalAuth;
     lubanApproval?: LubanApprovalGateway;
+    issueFlow?: import("./issueFlow/service.ts").IssueFlowService;
   } = {},
 ): Server {
   return createServer(async (request, response) => {
@@ -475,6 +477,17 @@ export function createTaskServer(
         return json(response, 404, { error: "未知设置接口" });
       }
 
+      // 问题流 API(/issues/*):独立于任务命名空间;未启用时由路由
+      // 自己 404。必须先于静态托管兜底(非 /tasks 的 GET 会被接管)。
+      if (parts[0] === "issues") {
+        const handled = await handleIssueRoutes(request, response, parts, {
+          issueFlow: options.issueFlow,
+          viewer: viewer ?? undefined,
+          authEnabled: Boolean(options.auth),
+        });
+        if (handled) return;
+      }
+
       // 下单表单的数据源:模型清单与当前默认。登录即可看(不是密钥,
       // 只有名字);选项从当前生效的 models.json 来,设置层热改即时反映。
       // 必须先于静态托管兜底(和 /history 一样,非 /tasks 的 GET 会被接管)。
@@ -638,28 +651,6 @@ export function createTaskServer(
         const repo = body.repo === undefined ? undefined : String(body.repo);
         const repos = Array.isArray(body.repos)
           ? body.repos.map(String) : undefined;
-        const entryKind = body.entry_kind === undefined
-          ? undefined : String(body.entry_kind) as "requirement" | "dts";
-        const issueEnvironments = Array.isArray(body.issue_environments)
-          ? body.issue_environments.map((item: Record<string, unknown>) => ({
-              name: String(item?.name ?? ""),
-              purpose: String(item?.purpose ?? "") as "logs" | "deploy" | "both",
-              host: String(item?.host ?? ""),
-              port: item?.port === undefined || item?.port === ""
-                ? undefined : Number(item.port),
-              accounts: Array.isArray(item?.accounts)
-                ? item.accounts.map((account: Record<string, unknown>) => ({
-                    username: String(account?.username ?? ""),
-                    password: String(account?.password ?? ""),
-                  }))
-                : undefined,
-              // 兼容上一版已打开但尚未刷新的表单。
-              username: item?.username === undefined
-                ? undefined : String(item.username),
-              password: item?.password === undefined
-                ? undefined : String(item.password),
-            }))
-          : undefined;
         // 兼容旧前端：select 显示了默认项但可能提交空串。空白就是
         // “未指定”，交给 TaskService 采用内核默认交付方式。
         const lane = body.lane === undefined
@@ -704,7 +695,7 @@ export function createTaskServer(
         try {
           return json(response, 201, service.create(requirement,
             {
-              title, account, repo, repos, entryKind, issueEnvironments,
+              title, account, repo, repos,
               requirementDocumentName,
               lane, ticket, baseline, model,
               repairRounds, repositorySkillCatalogToken,

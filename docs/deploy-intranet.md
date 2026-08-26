@@ -711,6 +711,11 @@ Skill 需要补说明。该台账是 fail-open 观测旁路，不能替代质量
   "luban": "<通知端点>",
   "luban-header": ["Authorization: Bearer <密钥>"],
   "luban-plugin-token-file": "/etc/mae-flow-cloud/luban-plugin.token",
+  "dts-mcp-url": "<DTS MCP 网关地址(问题流拉单/查单)>",
+  "codehub-mcp-url": "<Codehub MCP 网关地址(问题流提 MR)>",
+  "mcp-token-file": "/etc/mae-flow-cloud/mcp-token",
+  "issue-max-turns": 2,
+  "issue-only": false,
   "pg": "postgresql://...",
   "data": "/var/lib/mae-flow-cloud", "port": 8787,
   "poll-interval": 30, "poll-timeout": 1800,
@@ -722,6 +727,15 @@ Skill 需要补说明。该台账是 fail-open 观测旁路，不能替代质量
   "isolate-cache-root": "/var/cache/mae-flow-cloud/build",
   "build-slots": 1
 }
+```
+
+问题流的 MCP token(DTS 与 Codehub 共用):
+
+```bash
+install -m 600 /dev/null /etc/mae-flow-cloud/mcp-token
+# 写入 x-auth-token 的值;两个网关地址配进 serve.json 后,
+# 「问题处理」页的拉单与 AI 的查单/提MR 即接线。未配置时对应
+# 能力如实报"未配置",不影响需求主链。
 ```
 
 | 键(=flag 去 `--`) | 默认 | 说明 |

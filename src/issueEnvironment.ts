@@ -1,9 +1,10 @@
 /**
- * DTS 问题单的环境接缝。
+ * 环境凭据保险箱:需求/问题两个会话域共享的加密存储。
  *
- * 第一版只负责两件事：
- * 1. 把任务级 SSH 凭据放进宿主专用加密文件，任务/模型/API 只看引用；
- * 2. 定义日志、换库、回滚三项适配能力，内网实现无需侵入 TaskService。
+ * 只做一件事:把 SSH 凭据放进宿主专用加密文件,任务/模型/API 只看
+ * 引用。消费方是问题流 v2(src/issueFlow/,playbook 的 fetch-logs/
+ * build-deploy 二进制由宿主工具以环境变量喂密码);旧 DTS triage 流
+ * 的适配器接口已随该流程一并下线。
  */
 
 import {
@@ -71,48 +72,6 @@ export interface IssueEnvironmentCredential {
   password: string;
 }
 
-export interface IssueEnvironmentAdapterRequest {
-  task_id: string;
-  ticket: string;
-  requirement: string;
-  environment: IssueEnvironmentRef;
-  /** 同一环境的全部账号。适配器根据内部 SOP 选择需要的身份，Cloud
-   * 和 Agent 都不猜 sopuser/ossuser/ossadm 分别该执行什么。 */
-  credentials: IssueEnvironmentCredential[];
-  /** 单账号适配器兼容口；新实现应使用 credentials。 */
-  credential: IssueEnvironmentCredential;
-  signal: AbortSignal;
-}
-
-export interface IssueLogResult {
-  content: string;
-  source?: string;
-  collected_at?: string;
-}
-
-export interface IssueDeploymentReceipt {
-  receipt_id: string;
-  environment_id: string;
-  status: "deployed" | "rolled_back";
-  at: string;
-  summary?: string;
-}
-
-/**
- * 内网只需实现这个接口。Cloud 不知道 ssh/scp/专有换库命令的细节，
- * Agent 也永远拿不到 password；适配器输出才会作为普通现场材料入仓。
- */
-export interface IssueEnvironmentAdapter {
-  fetchLogs?(request: IssueEnvironmentAdapterRequest): Promise<IssueLogResult>;
-  deployCandidate?(request: IssueEnvironmentAdapterRequest & {
-    repository: string;
-    sha: string;
-  }): Promise<IssueDeploymentReceipt>;
-  rollback?(request: IssueEnvironmentAdapterRequest & {
-    deployment: IssueDeploymentReceipt;
-  }): Promise<IssueDeploymentReceipt>;
-}
-
 interface StoredIssueEnvironment extends Omit<IssueEnvironmentRef, "accounts"> {
   accounts: IssueEnvironmentCredential[];
 }
@@ -152,9 +111,9 @@ function normalize(
     if (!(["logs", "deploy", "both"] as const).includes(purpose)) {
       throw new Error(`第 ${index + 1} 组环境用途不合法`);
     }
-    if (purpose === "both") {
-      throw new Error("请分别配置日志环境和换库环境，不使用混合环境");
-    }
+    // "both"(单一共用环境)只有问题流 v2 会提交:playbook 的
+    // fetch-logs/build-deploy 本来就共用同一套地址与密码。旧 DTS
+    // 双入口已下线,这条限制随之放开;单环境一密码是更朴素的事实。
     const port = input.port === undefined || input.port === null
       ? 22 : Number(input.port);
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
@@ -395,6 +354,8 @@ export class IssueEnvironmentVault {
   }
 
   private validTaskId(taskId: string): void {
-    if (!/^task-\d+$/.test(taskId)) throw new Error("任务编号格式不合法");
+    // 问题流 v2 的会话(issue-N)与需求任务(task-N)共用这个保险箱
+    // 的存储区:文件名前缀互不碰撞,加密与清理纪律完全一致。
+    if (!/^(?:task|issue)-\d+$/.test(taskId)) throw new Error("任务编号格式不合法");
   }
 }
