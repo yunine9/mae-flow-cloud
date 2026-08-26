@@ -2322,6 +2322,32 @@ export class TaskService {
     return join(this.tasks.get(id)!.summary.workspace, "events.jsonl");
   }
 
+  /** 最新一轮推送前验证的事件日志路径(轮号最大者)。还没有任何轮目录
+   * 时返回 undefined——SSE 端每拍重解析,等它出现;换轮(修复后新
+   * HEAD 再验)时路径变化,SSE 端据此重置偏移从头放新一轮。
+   * 用户点名的可观测性缺口:prepush 会话的事件一直落在轮目录里,
+   * 但没有任何接口流出去,页面只有粗粒度 state。 */
+  prePushEventLogPath(id: string): string | undefined {
+    const task = this.tasks.get(id);
+    if (!task) return undefined;
+    const root = join(task.summary.workspace, "prepush");
+    let best: { round: number; dir: string } | undefined;
+    try {
+      for (const entry of readdirSync(root, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const match = /^round-(\d+)-/.exec(entry.name);
+        if (!match) continue;
+        const round = Number(match[1]);
+        if (!best || round > best.round) {
+          best = { round, dir: join(root, entry.name) };
+        }
+      }
+    } catch {
+      return undefined; // prepush/ 还没建:本任务尚未走到推送前验证
+    }
+    return best ? join(best.dir, "events.jsonl") : undefined;
+  }
+
   /** 行为摘要(只读旁路):事件流折叠成"此刻在干嘛/干了什么/有什么
    * 值得看"。每次现算,不留第二份状态;10~20 人规模下逐行读一遍
    * 事件账本毫无压力,先别上缓存。 */

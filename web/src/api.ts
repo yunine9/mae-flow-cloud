@@ -1195,6 +1195,21 @@ export function tailEvents(
   return () => source.close();
 }
 
+/** 推送前验证的实时事件流:换轮(修复后新 HEAD 再验)由服务端切文件
+ * 并从头重放新一轮,前端只管渲染。 */
+export function tailPrepushEvents(
+  taskId: string,
+  onEvent: (event: SemanticEvent) => void,
+  onState?: (state: SseConnectionState) => void,
+): () => void {
+  onState?.("connecting");
+  const source = new EventSource(`/tasks/${taskId}/prepush/events`);
+  source.onopen = () => onState?.("live");
+  source.onmessage = (message) => onEvent(JSON.parse(message.data));
+  source.onerror = () => onState?.("reconnecting");
+  return () => source.close();
+}
+
 /** 行为摘要(服务端 src/activity.ts 的镜像):前端不二次解读。 */
 export interface ActivitySegment {
   start: string;

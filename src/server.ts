@@ -21,6 +21,7 @@
  *   POST /tasks/:id/annotations/:annId/verify           → 裁决:确认通过(只裁自己的)
  *   POST /tasks/:id/annotations/:annId/reopen           → 裁决:返工,退回草稿再送一轮
  *   GET  /tasks/:id/events                              → SSE:重放事件日志后持续跟进
+ *   GET  /tasks/:id/prepush/events                      → SSE:推送前验证实时事件(换轮自动切新)
  *   GET  /tasks/:id/timeline                            → 人话交付时间线(只读现场)
  *   GET  /tasks/:id/activity                            → 行为摘要:此刻在干嘛/分段折叠/异常信号
  *   GET  /tasks/:id/artifacts[/:name]                   → 检视产物清单/内容(只读现场)
@@ -769,6 +770,8 @@ export function createTaskServer(
             selected_repository_knowledge_ids:
               Array.isArray(body.selected_repository_knowledge_ids)
                 ? body.selected_repository_knowledge_ids.map(String) : undefined,
+            delivery_paths: Array.isArray(body.delivery_paths)
+              ? body.delivery_paths.map(String) : undefined,
           });
           return json(response, 200, task);
         }
@@ -837,6 +840,12 @@ export function createTaskServer(
         }
         if (request.method === "GET" && parts[2] === "events") {
           return streamEvents(service, id, response);
+        }
+        // 推送前验证的实时事件流(用户点名:编译过程、执行命令必须
+        // 看得见)。轮目录由服务端每拍重解析,换轮自动从头放新一轮。
+        if (request.method === "GET" && parts[2] === "prepush"
+            && parts[3] === "events") {
+          return streamPrepushEvents(service, id, response);
         }
         if (parts[2] === "developer-assistant") {
           const target = service.get(id);
@@ -1133,21 +1142,48 @@ function streamEvents(
   id: string,
   response: import("node:http").ServerResponse,
 ): void {
+  streamJsonlAsSse(service, id, response, () => service.eventLogPath(id));
+}
+
+/** 推送前验证事件流:路径每拍重解析——修复轮产生新 HEAD 会开新一轮
+ * 目录,路径一变就从头放新一轮,客户端不用自己发现换轮。 */
+function streamPrepushEvents(
+  service: TaskService,
+  id: string,
+  response: import("node:http").ServerResponse,
+): void {
+  streamJsonlAsSse(service, id, response,
+    () => service.prePushEventLogPath(id));
+}
+
+function streamJsonlAsSse(
+  service: TaskService,
+  id: string,
+  response: import("node:http").ServerResponse,
+  resolvePath: () => string | undefined,
+): void {
   if (!service.get(id)) {
     return json(response, 404, { error: `任务 ${id} 不存在` });
   }
-  const path = service.eventLogPath(id);
   response.writeHead(200, {
     "content-type": "text/event-stream",
     "cache-control": "no-cache",
   });
+  let activePath: string | undefined;
   let offset = 0;
   let carry = Buffer.alloc(0);
   let closed = false;
   response.on("close", () => (closed = true));
   const push = () => {
     if (closed) return;
-    if (existsSync(path) && statSync(path).size > offset) {
+    const path = resolvePath();
+    if (path !== activePath) {
+      // 换文件(prepush 换轮)= 新的一份日志,从头放;半行缓存作废。
+      activePath = path;
+      offset = 0;
+      carry = Buffer.alloc(0);
+    }
+    if (path && existsSync(path) && statSync(path).size > offset) {
       const fd = openSync(path, "r");
       let read = 0;
       let chunk: Buffer;
