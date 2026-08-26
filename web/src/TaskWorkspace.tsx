@@ -40,8 +40,6 @@ import {
   readArtifact,
   repairStopped,
   requestCommitterReview,
-  putPushConfirmation,
-  putTaskApprovalMode,
   statusText,
   type AnchorCheck,
   type Annotation,
@@ -102,91 +100,6 @@ function assistantUnavailableReason(task: TaskSummary): string {
   return "代码现场就绪后即可使用";
 }
 
-/** 任务设置统一入口(用户拍板:设置不许东一块西一块):审批方式与
- * push 前确认收进同一个面板。暂停/取消是动作不是设置,留在旁边的
- * 按钮位。状态以服务端镜像为准,提交后靠既有轮询回读,不本地推断。 */
-function TaskSettingsMenu({
-  task,
-  approvalBusy,
-  approvalNote,
-  onApprovalChange,
-  onChanged,
-}: {
-  task: TaskSummary;
-  approvalBusy: boolean;
-  approvalNote: string;
-  onApprovalChange: (mode: "inherit" | "manual" | "moonlight") => void;
-  onChanged: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [pushBusy, setPushBusy] = useState(false);
-  const [pushError, setPushError] = useState("");
-  const pushOn = !!task.push_confirmation;
-  // 确认点已过(已推送/终态):只读展示,不再可改。
-  const pushPassed = ["await_merge", "completed", "failed", "canceled"]
-    .includes(task.status);
-  return <div className="ws-settings">
-    <button type="button"
-      className={`ws-settings-button${open ? " open" : ""}`}
-      aria-expanded={open} aria-haspopup="true"
-      title="任务设置:审批方式、push 前人工确认"
-      onClick={() => setOpen((current) => !current)}>
-      <svg viewBox="0 0 20 20" aria-hidden>
-        <path d="M10 12.9a2.9 2.9 0 1 0 0-5.8 2.9 2.9 0 0 0 0 5.8Zm6.2-2.9c0 .4 0 .8-.1 1.2l1.8 1.4-1.5 2.6-2.1-.8c-.6.5-1.3.9-2 1.2l-.3 2.2h-3l-.3-2.2a6.4 6.4 0 0 1-2-1.2l-2.1.8-1.5-2.6 1.8-1.4a6.6 6.6 0 0 1 0-2.4L3.1 7.4l1.5-2.6 2.1.8c.6-.5 1.3-.9 2-1.2l.3-2.2h3l.3 2.2c.7.3 1.4.7 2 1.2l2.1-.8 1.5 2.6-1.8 1.4c.1.4.1.8.1 1.2Z" />
-      </svg>
-      <span>设置</span>
-      {pushOn && <i className="ws-settings-dot" aria-hidden
-        title="已开启 push 前人工确认" />}
-    </button>
-    {open && <>
-      <div className="ws-settings-backdrop" onClick={() => setOpen(false)} />
-      <div className="ws-settings-panel" aria-label="任务设置">
-        <strong>任务设置</strong>
-        <div className="ws-settings-item">
-          <div className="ws-settings-copy">
-            <span>审批方式</span>
-            <small>遇到人工节点时,是停下等你确认,还是继续执行事后复盘;仅影响本任务,可覆盖个人的全局月光模式。</small>
-          </div>
-          <select aria-label="本任务审批方式"
-            value={task.approval_mode ?? "inherit"}
-            disabled={approvalBusy}
-            onChange={(event) => onApprovalChange(
-              event.target.value as "inherit" | "manual" | "moonlight")}>
-            <option value="inherit">继承个人设置</option>
-            <option value="manual">本任务逐步确认</option>
-            <option value="moonlight">本任务月光模式</option>
-          </select>
-        </div>
-        <label className="ws-settings-item">
-          <div className="ws-settings-copy">
-            <span>push 前人工确认交付清单</span>
-            <small>{pushPassed
-              ? (pushOn ? "本任务已按确认后的清单推送。" : "确认点已经过去,本任务不能再开。")
-              : "推送前展示交付文件清单等你确认;确认或按清单返工后才推送。"}</small>
-          </div>
-          <input type="checkbox" checked={pushOn}
-            disabled={pushBusy || pushPassed}
-            onChange={async (event) => {
-              const next = event.target.checked;
-              setPushBusy(true);
-              setPushError("");
-              try {
-                await putPushConfirmation(task.id, next);
-                onChanged();
-              } catch (cause) {
-                setPushError(String((cause as Error).message ?? cause));
-              } finally {
-                setPushBusy(false);
-              }
-            }} />
-        </label>
-        {(approvalNote || pushError) && <p className="ws-settings-note"
-          role="status">{pushError || approvalNote}</p>}
-      </div>
-    </>}
-  </div>;
-}
-
 export function TaskWorkspace({
   task,
   viewerUsername,
@@ -233,8 +146,6 @@ export function TaskWorkspace({
   const [controlBusy, setControlBusy] =
     useState<"pause" | "resume" | "cancel" | "">("");
   const [controlError, setControlError] = useState("");
-  const [approvalBusy, setApprovalBusy] = useState(false);
-  const [approvalNote, setApprovalNote] = useState("");
   const [cancelArmed, setCancelArmed] = useState(false);
   const [chainSkillPicker, setChainSkillPicker] =
     useState<RepositorySkillPickerState>(EMPTY_REPOSITORY_SKILL_PICKER_STATE);
@@ -477,35 +388,6 @@ export function TaskWorkspace({
     }
   }
 
-  async function changeTaskApprovalMode(
-    mode: "inherit" | "manual" | "moonlight",
-  ) {
-    if (approvalBusy) return;
-    let includeCurrent = false;
-    if (mode === "moonlight" && task.status === "waiting_for_human") {
-      const unresolved = notes.filter((item) =>
-        item.status === "draft" || item.status === "sent").length;
-      includeCurrent = unresolved === 0 && window.confirm(
-        "任务级月光模式默认仅对本任务的后续节点生效。\n\n"
-        + "选择“确定”同时处理当前待办；选择“取消”保留当前待办。",
-      );
-    }
-    setApprovalBusy(true);
-    setApprovalNote("");
-    try {
-      const result = await putTaskApprovalMode(task.id, mode, includeCurrent);
-      setApprovalNote(result.blocked_annotations > 0
-        ? `本任务已有 ${result.blocked_annotations} 条检视意见，当前待办仍需人工处理`
-        : result.swept > 0 ? "当前待办已提交，Agent 已继续"
-          : "已更新本任务审批方式");
-      await onChanged();
-    } catch (reason) {
-      setApprovalNote(reason instanceof Error ? reason.message : "审批方式更新失败");
-    } finally {
-      setApprovalBusy(false);
-    }
-  }
-
   return (
     <section
       className="workspace-overlay"
@@ -535,11 +417,6 @@ export function TaskWorkspace({
         </div>
         {controllable && (
           <div className="ws-head-controls" aria-label="任务控制">
-            <TaskSettingsMenu task={task}
-              approvalBusy={approvalBusy}
-              approvalNote={approvalNote}
-              onApprovalChange={(mode) => void changeTaskApprovalMode(mode)}
-              onChanged={onChanged} />
             {task.status === "paused" ? (
               <button type="button" className="primary" disabled={!!controlBusy}
                 title="沿用当前工作区和流程进度继续执行"

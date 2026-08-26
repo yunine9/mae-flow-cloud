@@ -698,6 +698,10 @@ export interface TaskServiceOptions {
    * LocalAuth.moonlightEnabled)。开着时该用户任务的人工节点由
    * 系统代答放行,答复里写明预授权与复盘要求;随时可开可关。 */
   moonlight?: (account?: string) => boolean;
+  /** push 前人工确认(交付清单过目)查询口:与 moonlight 同纪律,
+   * 按任务归属人现读现判(serve 接 LocalAuth.pushConfirmationEnabled,
+   * 真人缺省即开)。任务级显式设置(setPushConfirmation)优先于它。 */
+  pushConfirmation?: (account?: string) => boolean;
   log?: (message: string) => void;
 }
 
@@ -7100,7 +7104,8 @@ export class TaskService {
     }
   }
 
-  /** push 前人工确认闸(任务级开关,默认关=直接放行)。
+  /** push 前人工确认闸。要不要举卡:任务级显式设置优先,否则按归属
+   * 人的个人默认现读现判(真人缺省即开;无账号链路不举卡)。
    * 已确认的清单严格绑 HEAD:prepush 修复产生新提交后不判死,而是
    * 作废旧卡、按新快照重新举卡——机器把 delta 摆到人面前,而不是
    * failed 了喊人来猜。同 HEAD 的卡按 call_id 幂等,重启不重复出卡。 */
@@ -7108,7 +7113,10 @@ export class TaskService {
     task: TaskState,
     branch: string,
   ): Promise<boolean> {
-    if (!task.summary.push_confirmation || !task.cwd) return true;
+    const required = task.summary.push_confirmation
+      ?? this.options.pushConfirmation?.(task.summary.luban_account)
+      ?? false;
+    if (!required || !task.cwd) return true;
     const snapshot = await deliveryChangeSnapshot(task.cwd);
     if (!snapshot?.baseline) {
       this.markVerificationStalled(task,

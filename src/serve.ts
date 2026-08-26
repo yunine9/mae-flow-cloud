@@ -614,6 +614,8 @@ async function main(): Promise<void> {
     gitCredential: (account) => auth.gitCredential(account),
     // 月光模式:每张卡到达时现读——开着的直行,关了的恢复审批。
     moonlight: (account) => auth.moonlightEnabled(account),
+    // push 前清单过目:同样现读个人默认(真人缺省即开)。
+    pushConfirmation: (account) => auth.pushConfirmationEnabled(account),
     compactEveryEvents: compactEvery,
     contract: demoContract,
     host,

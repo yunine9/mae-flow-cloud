@@ -315,6 +315,16 @@ export function createTaskServer(
             ? service.sweepMoonlight(viewer.username) : 0;
           return json(response, 200, { moonlight: on, swept, ...preview });
         }
+        // push 前清单过目的个人默认(缺省即开):谁登录改谁的。
+        // 关掉不撤已举的卡——那张卡按当时意愿举的,点确认即走。
+        if (request.method === "PUT" && parts[1] === "me"
+            && parts[2] === "push-confirmation") {
+          if (!viewer) return json(response, 401, { error: "尚未登录" });
+          const body = await readBody(request);
+          options.auth!.setPushConfirmation(viewer.username, body.on === true);
+          return json(response, 200,
+            options.auth!.sessionView(viewer.username));
+        }
         // 个人 Git 令牌:谁登录改谁的,写完只回掩码(只写不读)。
         if (request.method === "PUT" && parts[1] === "me"
             && parts[2] === "git-token") {

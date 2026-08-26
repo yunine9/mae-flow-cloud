@@ -82,6 +82,8 @@ export interface AuthUser {
   luban_token_hint?: string;
   /** 月光模式(免审批):开着时本人任务的人工节点自动放行。 */
   moonlight?: boolean;
+  /** push 前清单过目的个人默认。缺省即开:只有显式 false 是关。 */
+  push_confirmation?: boolean;
 }
 
 export interface MoonlightPreview {
@@ -110,6 +112,18 @@ export async function putMoonlight(
       include_current: includeCurrent,
       expected_eligible: expectedEligible,
     }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+/** push 前清单过目的个人默认(缺省即开)。 */
+export async function putPersonalPushConfirmation(
+  on: boolean,
+): Promise<AuthUser> {
+  const response = await fetch("/auth/me/push-confirmation", {
+    method: "PUT",
+    body: JSON.stringify({ on }),
   });
   if (!response.ok) throw new Error(await errorText(response));
   return response.json();

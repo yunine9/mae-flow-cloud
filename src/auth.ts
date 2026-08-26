@@ -36,6 +36,7 @@ export interface AuthSessionUser extends AuthUser {
   git_email?: string;
   luban_token_hint?: string;
   moonlight: boolean;
+  push_confirmation: boolean;
 }
 
 interface StoredUser extends AuthUser {
@@ -57,6 +58,11 @@ interface StoredUser extends AuthUser {
   /** 月光模式(免审批):开着时本人任务的人工节点由系统代答放行,
    * 事后复盘。随时可开可关,是持续状态不是下单时的一次性选择。 */
   moonlight?: boolean;
+  /** push 前人工确认(交付清单过目):与 moonlight 合成"人工介入
+   * 程度"的两个正交轴——月光管过程节点停不停,这个管交付内容出门
+   * 前给不给人看。个人级默认、**缺省即开**(用户 2026-08-26 拍板:
+   * 默认开启、不做任务粒度),所以只落盘显式的 false。 */
+  push_confirmation?: boolean;
 }
 
 interface UserFile {
@@ -314,6 +320,26 @@ export class LocalAuth {
     return !!stored?.moonlight && !stored.disabled;
   }
 
+  /** push 前人工确认默认值(缺省即开,只落盘显式的关)。改动即时
+   * 生效于本人后续到达推送点的任务;已经在等确认的卡不撤——那张卡
+   * 是按当时的意愿举的,点一下"确认按清单推送"就走,不存在悬死。 */
+  setPushConfirmation(username: string, on: boolean): void {
+    const stored = this.users.get(username);
+    if (!stored) throw new Error(`账号 ${username} 不存在`);
+    if (on) delete stored.push_confirmation;
+    else stored.push_confirmation = false;
+    this.persist();
+  }
+
+  /** 无账号(未接登录的部署、probe/pilot 演练链)不默认举卡——
+   * 那些链路没有"人"在场,默认开只会卡死自动化;默认开只对真人。 */
+  pushConfirmationEnabled(username: string | undefined): boolean {
+    if (!username) return false;
+    const stored = this.users.get(username);
+    if (!stored || stored.disabled) return false;
+    return stored.push_confirmation !== false;
+  }
+
   /** 登录与 /auth/me 共用同一份本人视图，避免登录响应漏字段后让前端
    * 误以为个人配置丢失。只按传入账号读取，不接受客户端指定目标用户。 */
   sessionView(username: string): AuthSessionUser | undefined {
@@ -324,6 +350,7 @@ export class LocalAuth {
       ...this.gitProfile(username),
       luban_token_hint: this.lubanTokenHint(username),
       moonlight: this.moonlightEnabled(username),
+      push_confirmation: this.pushConfirmationEnabled(username),
     };
   }
 
