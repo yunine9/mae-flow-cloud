@@ -48,6 +48,8 @@ test("投递成功:待办事实与审批链接送达账号;同待办幂等", asy
     assert.equal(message.account, "liaoxiang");
     assert.match(message.text, /等你决定/);
     assert.match(message.text, /Diff 通过吗/);
+    assert.match(message.text, /先输入“\/mfc”激活 Mae-Flow 插件/);
+    assert.match(message.text, /未激活时，直接回复本消息不会进入 Mae-Flow/);
     assert.equal(message.link, "http://x/tasks/T-1");
   } finally {
     await luban.stop();
@@ -99,7 +101,8 @@ test("配置确认通知带出被确认内容；缺内容时禁止裸序号审�
   assert.match(complete.text, /需求单：REQ-20260826-01/);
   assert.match(complete.text, /基线：master/);
   assert.match(complete.text, /交付方式：完整开发 full/);
-  assert.match(complete.text, /可直接回复选项序号/);
+  assert.match(complete.text,
+    /先输入“\/mfc”激活 Mae-Flow 插件[\s\S]*插件激活后，只有这一项待办时，可回复选项序号/);
   assert.equal(notifier.latestApproval("alice")?.waitingId,
     "T-config:complete");
 
@@ -235,6 +238,22 @@ test("收口通知:完成/交付说人话送达;同任务同状态幂等", async
     assert.match(message.text, /任务 T-2/);
     assert.match(message.text, /等待合入/);
     assert.match(message.text, /http:\/\/git\/mr\/1/);
+    assert.match(message.text, /先输入“\/mfc”激活 Mae-Flow 插件/);
+  } finally {
+    await luban.stop();
+  }
+});
+
+test("通知连通测试也带 /mfc 激活说明", async () => {
+  const luban = new FakeLubanServer();
+  await luban.start();
+  try {
+    const notifier = new Notifier({ endpoint: luban.endpoint });
+    const result = await notifier.testDelivery("liaoxiang");
+    assert.equal(result.ok, true);
+    assert.equal(luban.messages.length, 1);
+    assert.match(String(luban.messages[0].text),
+      /先输入“\/mfc”激活 Mae-Flow 插件/);
   } finally {
     await luban.stop();
   }

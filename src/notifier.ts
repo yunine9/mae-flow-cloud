@@ -36,6 +36,13 @@ export interface NotifyQuestion {
 }
 
 const MAX_NOTIFICATION_CONTEXT_CHARS = 2_400;
+const LUBAN_PLUGIN_ACTIVATION_NOTICE =
+  "手机端操作：先输入“/mfc”激活 Mae-Flow 插件；"
+  + "未激活时，直接回复本消息不会进入 Mae-Flow。";
+
+function withPluginActivationNotice(text: string): string {
+  return `${text}\n${LUBAN_PLUGIN_ACTIVATION_NOTICE}`;
+}
 
 function notificationContext(value: string | undefined): string {
   const normalized = String(value ?? "").replace(/\r\n/g, "\n").trim();
@@ -240,20 +247,23 @@ export class Notifier {
       summary,
       link: input.link,
       text:
-        `【Mae-Flow】${input.subject?.trim() || `任务 ${input.taskId}`} 等你决定` +
-        `\n阶段：${stage}\n${summary}` +
+        withPluginActivationNotice(
+          `【Mae-Flow】${input.subject?.trim() || `任务 ${input.taskId}`} 等你决定`
+            + `\n阶段：${stage}\n${summary}`,
+        ) +
         (this.options.mobileApproval
           ? missingRequiredContext
-            ? "\n本通知缺少被确认内容，已禁止裸序号审批；请打开任务链接核对后处理。"
+            ? "\n插件激活后，本通知仍缺少被确认内容，已禁止裸序号审批；"
+              + "请打开任务链接核对后处理。"
             : approvalCode
-            ? "\n只有这一项待办时，可直接回复选项序号，例如：1"
+            ? "\n插件激活后，只有这一项待办时，可回复选项序号，例如：1"
               + `\n多项待办或无上下文时：mae-flow 选择 ${approvalCode} <序号>`
               + "\n如需说明：mae-flow 选择 " + approvalCode
               + " <序号> <补充说明>"
               + (questions.length > 1
                 ? `\n本卡共 ${questions.length} 个问题，提交后继续显示下一题。`
                 : "")
-            : "\n手机处理：打开 Mae-Flow 插件并发送“待审批”"
+            : "\n插件激活后，发送“mae-flow 待审批”查看当前待办。"
           : ""),
       attempts: 0,
       delivered: false,
@@ -294,7 +304,8 @@ export class Notifier {
       step: input.status,
       summary: input.summary,
       link: input.link,
-      text: `【Mae-Flow】${input.summary}\n任务 ${input.taskId}`,
+      text: withPluginActivationNotice(
+        `【Mae-Flow】${input.summary}\n任务 ${input.taskId}`),
       attempts: 0,
       delivered: false,
       last_error: "",
@@ -321,7 +332,8 @@ export class Notifier {
       step: "committer_review",
       summary: input.summary,
       link: input.link,
-      text: `【Mae-Flow】任务 ${input.taskId} 邀请你检视：${input.summary}`,
+      text: withPluginActivationNotice(
+        `【Mae-Flow】任务 ${input.taskId} 邀请你检视：${input.summary}`),
       attempts: 0,
       delivered: false,
       last_error: "",
@@ -350,7 +362,8 @@ export class Notifier {
         headers: { "content-type": "application/json", ...headers },
         body: JSON.stringify({
           account,
-          text: "Mae-Flow 通知连通测试:看到这条即配置生效",
+          text: withPluginActivationNotice(
+            "Mae-Flow 通知连通测试:看到这条即配置生效"),
           link: "",
         }),
       });

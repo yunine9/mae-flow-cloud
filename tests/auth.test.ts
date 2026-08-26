@@ -435,7 +435,9 @@ test("Committer 检视:管理员只配名单,仅任务责任人主动邀请后�
     assert.deepEqual(tokenLookups, ["alice"],
       "用责任人的发送 Token 投给 Committer 工号，收件人无需配置 Token");
     assert.equal(luban.messages[0].text,
-      `【Mae-Flow】任务 ${created.id} 邀请你检视：实现订单检索`);
+      `【Mae-Flow】任务 ${created.id} 邀请你检视：实现订单检索\n`
+      + "手机端操作：先输入“/mfc”激活 Mae-Flow 插件；"
+      + "未激活时，直接回复本消息不会进入 Mae-Flow。");
     assert.equal(luban.messages[0].link,
       `http://mae-flow.intra:8787/work/${created.id}/review/${review.id}`,
       "未配置 public-url 时按浏览器实际访问的内网 Origin 生成链接");
