@@ -21,17 +21,21 @@ import type { ModelsSettings } from "./settings.ts";
 
 export class GatewayCheckError extends Error {}
 
+/** 表单支持的两种接口格式(pi 的 json 通路还有十种,测试只承诺这两种)。 */
+export type GatewayApi = "openai-completions" | "anthropic-messages";
+
 export interface GatewayTarget {
   baseUrl: string;
   apiKey: string;
   model: string;
+  api: GatewayApi;
 }
 
 /** 表单草稿 > 管理页已存配置 > 部署 --models 兜底。密钥与 updateModels
  * 同口径:留空=沿用已存,界面永远不回填明文。三层拼完仍缺项就如实
  * 拒绝——测试打不出去的配置,报"没得测"比编造假结果诚实。 */
 export function resolveGatewayTarget(
-  body: { url?: unknown; api_key?: unknown; model?: unknown },
+  body: { url?: unknown; api_key?: unknown; model?: unknown; api?: unknown },
   stored: ModelsSettings | undefined,
   deployment: Record<string, unknown> | undefined,
 ): GatewayTarget {
@@ -54,6 +58,16 @@ export function resolveGatewayTarget(
   const model = String(body.model ?? "").trim()
     || String(stored?.model ?? "").trim()
     || String(deploymentSpec.models?.[0]?.id ?? "").trim();
+  // 格式与表单默认同源:没说就 OpenAI Chat;已存/部署层带着什么就照用。
+  const api = body.api !== undefined && String(body.api).trim()
+    ? String(body.api)
+    : String(storedSpec.api ?? deploymentSpec.api ?? "").trim()
+      || "openai-completions";
+  if (api !== "openai-completions" && api !== "anthropic-messages") {
+    throw new GatewayCheckError(
+      `测试连通暂只支持 OpenAI Chat 与 Anthropic Messages 两种接口格式`
+      + `(当前配置是 ${api});其余格式请用网关侧手段验证`);
+  }
   if (!baseUrl || !apiKey || !model) {
     throw new GatewayCheckError(
       "还没有可测试的模型网关配置:请先填写网关地址、API Key 和模型名称(或先保存)");
@@ -63,7 +77,7 @@ export function resolveGatewayTarget(
   } catch {
     throw new GatewayCheckError(`模型网关地址不是合法 URL: ${baseUrl}`);
   }
-  return { baseUrl, apiKey, model };
+  return { baseUrl, apiKey, model, api: api as GatewayApi };
 }
 
 /** fetch 的失败原因散落在 cause 链的 code/name/message 里,undici 各版本
@@ -108,6 +122,7 @@ function networkFailure(error: unknown): SystemCheckItem {
 }
 
 function chatItem(
+  api: GatewayApi,
   status: number,
   bodyText: string,
   elapsedMs: number,
@@ -124,7 +139,7 @@ function chatItem(
     }
   })();
   if (status === 200) {
-    const reply = extractReply(bodyText);
+    const reply = extractReply(api, bodyText);
     if (!reply) {
       return { key: "chat", label: "模型问答", status: "warning",
         detail: "网关返回 200,但回复里没有文本内容",
@@ -142,7 +157,8 @@ function chatItem(
   if (status === 404) {
     return { key: "chat", label: "模型问答", status: "error",
       detail: "网关返回 404:接口路径不存在",
-      suggestion: `测试请求发往 ${endpoint};确认网关地址指向 Anthropic Messages 兼容前缀` };
+      suggestion: `按 ${WIRE[api].label} 格式,测试请求发往 ${endpoint};`
+        + "确认网关地址与所选接口格式匹配" };
   }
   if (status === 400) {
     return { key: "chat", label: "模型问答", status: "error",
@@ -166,19 +182,45 @@ function chatItem(
     suggestion: "网络与密钥大概率没问题;核对网关对该接口的支持程度" };
 }
 
-function extractReply(bodyText: string): string {
+function extractReply(api: GatewayApi, bodyText: string): string {
   try {
     const parsed = JSON.parse(bodyText) as {
-      content?: Array<{ type?: string; text?: unknown }> };
-    return (parsed.content ?? [])
-      .filter((block) => block?.type === "text")
-      .map((block) => String(block.text ?? ""))
-      .join(" ")
-      .trim();
+      content?: Array<{ type?: string; text?: unknown }>;
+      choices?: Array<{ message?: { content?: unknown } }>;
+    };
+    if (api === "anthropic-messages") {
+      return (parsed.content ?? [])
+        .filter((block) => block?.type === "text")
+        .map((block) => String(block.text ?? ""))
+        .join(" ")
+        .trim();
+    }
+    return String(parsed.choices?.[0]?.message?.content ?? "").trim();
   } catch {
     return "";
   }
 }
+
+/** 每种格式与 pi 生产流量同款:同一路径拼接、同一鉴权头、同一消息体。 */
+const WIRE: Record<GatewayApi, {
+  path: string;
+  headers: (apiKey: string) => Record<string, string>;
+  label: string;
+}> = {
+  "anthropic-messages": {
+    path: "/v1/messages",
+    headers: (apiKey) => ({
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+    }),
+    label: "Anthropic Messages",
+  },
+  "openai-completions": {
+    path: "/chat/completions",
+    headers: (apiKey) => ({ authorization: `Bearer ${apiKey}` }),
+    label: "OpenAI Chat",
+  },
+};
 
 /** 一次真实请求,两项结论。网络项看"有没有 HTTP 响应",问答项看
  * "响应说了什么"——同一发请求,不重复打网关。 */
@@ -186,11 +228,11 @@ export async function checkModelGateway(
   target: GatewayTarget,
   timeoutMs = 15_000,
 ): Promise<SystemCheckResult> {
-  const endpoint = `${target.baseUrl.replace(/\/+$/, "")}/v1/messages`;
+  const wire = WIRE[target.api];
+  const endpoint = `${target.baseUrl.replace(/\/+$/, "")}${wire.path}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const startedAt = Date.now();
-  let status = 0;
   let bodyText = "";
   let network: SystemCheckItem;
   let chat: SystemCheckItem | undefined;
@@ -200,8 +242,7 @@ export async function checkModelGateway(
       signal: controller.signal,
       headers: {
         "content-type": "application/json",
-        "x-api-key": target.apiKey,
-        "anthropic-version": "2023-06-01",
+        ...wire.headers(target.apiKey),
       },
       body: JSON.stringify({
         model: target.model,
@@ -213,12 +254,12 @@ export async function checkModelGateway(
         stream: false,
       }),
     });
-    status = response.status;
+    const status = response.status;
     bodyText = await response.text();
     const elapsed = Date.now() - startedAt;
     network = { key: "network", label: "网络连通", status: "ok",
       detail: `网关可达,已收到 HTTP 响应(${elapsed}ms)` };
-    chat = chatItem(status, bodyText, elapsed, endpoint);
+    chat = chatItem(target.api, status, bodyText, elapsed, endpoint);
   } catch (error) {
     if (controller.signal.aborted) {
       network = { key: "network", label: "网络连通", status: "error",

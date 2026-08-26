@@ -32,13 +32,36 @@ test("模型密钥只写不读:视图永远掩码,明文只进 0600 的文件", 
   const view = JSON.stringify(settings.view());
   assert.ok(!view.includes("sk-live-abcd4321"), "apiKey 明文漏进视图");
   assert.match(view, /••••4321/);
-  // 明文在文件里(权限 600),消费点读得到
+  // 明文在文件里(权限 600),消费点读得到;接口格式默认 OpenAI Chat
+  // (2026-08-26 拍板),显式选了才写 Anthropic。
   const provider = (settings.models().json as any).providers.maeflow;
-  assert.equal(provider.api, "anthropic-messages", "三项表单应转换为内部模型协议");
+  assert.equal(provider.api, "openai-completions",
+    "三项表单未指定格式时应落默认 OpenAI Chat");
+  assert.equal(settings.view().models.api, "openai-completions",
+    "视图要回显接口格式给表单");
   assert.equal(provider.models[0].id, "glm-5.1");
   settings.updateModels({ url: "http://gw-v2", api_key: "", model: "glm-5.2" });
   assert.equal((settings.models().json as any).providers.maeflow.apiKey,
     "sk-live-abcd4321", "编辑时 API Key 留空应保留原密钥");
+  assert.equal((settings.models().json as any).providers.maeflow.api,
+    "openai-completions", "未送 api 字段时沿用已存格式");
+});
+
+test("接口格式:显式 Anthropic 可选,非法值当场拒绝", () => {
+  const settings = store();
+  settings.updateModels({
+    url: "http://gw", api_key: "sk-1", model: "m-1",
+    api: "anthropic-messages",
+  });
+  assert.equal((settings.models().json as any).providers.maeflow.api,
+    "anthropic-messages");
+  // 已存 Anthropic 的配置,表单没送 api 再存一次:不惊扰老格式
+  settings.updateModels({ url: "http://gw", api_key: "", model: "m-2" });
+  assert.equal((settings.models().json as any).providers.maeflow.api,
+    "anthropic-messages", "老配置的格式在无 api 字段保存时保留");
+  assert.throws(() => settings.updateModels({
+    url: "http://gw", api_key: "sk-1", model: "m-1", api: "google-generative-ai",
+  }), /接口格式只能是/);
 });
 
 test("数值校验:无限等待没有语法;models 必须真实存在才能选", () => {

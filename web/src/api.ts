@@ -1297,6 +1297,9 @@ export interface SettingsView {
     provider?: string;
     model?: string;
     url?: string;
+    /** 接口格式(openai-completions | anthropic-messages);未配置过时
+     * 由表单默认值接手。 */
+    api?: string;
     key_hint?: string;
     providers: Array<{ name: string; models: string[]; key_hint?: string }>;
   };
@@ -1365,6 +1368,7 @@ export function putModelsSettings(body: {
   url: string;
   api_key: string;
   model?: string;
+  api?: string;
 }): Promise<SettingsView> {
   return putSettings("models", body);
 }
@@ -1375,6 +1379,7 @@ export async function postModelsCheck(body: {
   url?: string;
   api_key?: string;
   model?: string;
+  api?: string;
 }): Promise<SystemCheckResult> {
   const response = await fetch("/settings/models/check", {
     method: "POST",

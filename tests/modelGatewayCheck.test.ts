@@ -55,32 +55,50 @@ test("resolveGatewayTarget:草稿优先,留空回落已存,全空才拒绝", () 
     json: { providers: { maeflow: {
       baseUrl: "http://stored.example",
       apiKey: "stored-key",
+      api: "anthropic-messages",
       models: [{ id: "stored-model" }],
     } } },
   };
   // 草稿全覆盖
   assert.deepEqual(
-    resolveGatewayTarget(
-      { url: "http://draft.example", api_key: "draft-key", model: "draft-model" },
-      stored, undefined),
-    { baseUrl: "http://draft.example", apiKey: "draft-key", model: "draft-model" });
-  // 密钥留空=沿用已存(界面不回填明文,保存与测试同一口径)
+    resolveGatewayTarget({
+      url: "http://draft.example", api_key: "draft-key",
+      model: "draft-model", api: "openai-completions",
+    }, stored, undefined),
+    { baseUrl: "http://draft.example", apiKey: "draft-key",
+      model: "draft-model", api: "openai-completions" });
+  // 密钥留空=沿用已存;api 没送也沿用已存(界面不回填,保存测试同口径)
   assert.deepEqual(
     resolveGatewayTarget({ url: "http://draft.example" }, stored, undefined),
-    { baseUrl: "http://draft.example", apiKey: "stored-key", model: "stored-model" });
-  // 没草稿没已存,部署 --models 兜底
+    { baseUrl: "http://draft.example", apiKey: "stored-key",
+      model: "stored-model", api: "anthropic-messages" });
+  // 没草稿没已存,部署 --models 兜底;api 也跟着部署层走
+  assert.deepEqual(
+    resolveGatewayTarget({}, undefined,
+      { providers: { deploy: {
+        baseUrl: "http://deploy.example", apiKey: "deploy-key",
+        api: "anthropic-messages", models: [{ id: "deploy-model" }],
+      } } }),
+    { baseUrl: "http://deploy.example", apiKey: "deploy-key",
+      model: "deploy-model", api: "anthropic-messages" });
+  // 三层全空:格式落默认 OpenAI Chat(与表单默认一致)
   assert.deepEqual(
     resolveGatewayTarget({}, undefined,
       { providers: { deploy: {
         baseUrl: "http://deploy.example", apiKey: "deploy-key",
         models: [{ id: "deploy-model" }],
       } } }),
-    { baseUrl: "http://deploy.example", apiKey: "deploy-key", model: "deploy-model" });
+    { baseUrl: "http://deploy.example", apiKey: "deploy-key",
+      model: "deploy-model", api: "openai-completions" });
   // 三层都拼不齐:如实报"没得测",不编结果
   assert.throws(() => resolveGatewayTarget({}, undefined, undefined),
     GatewayCheckError);
   assert.throws(() => resolveGatewayTarget({ url: "notaurl", api_key: "k",
     model: "m" }, undefined, undefined), GatewayCheckError);
+  // 表单外的格式(pi 还有十种)测试不承诺,直说而不是乱测
+  assert.throws(() => resolveGatewayTarget({
+    url: "http://x", api_key: "k", model: "m", api: "google-generative-ai",
+  }, undefined, undefined), /暂只支持/);
 });
 
 test("checkModelGateway:健康网关——网络通 + 问答正常", async () => {
@@ -90,6 +108,7 @@ test("checkModelGateway:健康网关——网络通 + 问答正常", async () =>
   try {
     const result = await checkModelGateway({
       baseUrl: gateway.baseUrl, apiKey: "scripted", model: "scripted-v1",
+      api: "anthropic-messages",
     });
     assert.equal(result.overall, "ok");
     assert.equal(item(result, "network").status, "ok");
@@ -101,11 +120,54 @@ test("checkModelGateway:健康网关——网络通 + 问答正常", async () =>
   }
 });
 
+test("checkModelGateway:OpenAI Chat——/chat/completions + Bearer 鉴权", async () => {
+  // 真 OpenAI 形状的网关:校验路径与鉴权头,回 choices 结构。
+  const seen: Array<{ path: string; auth: string; body: any }> = [];
+  const server: Server = createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk) => chunks.push(chunk as Buffer));
+    request.on("end", () => {
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf-8") || "{}");
+      seen.push({
+        path: request.url ?? "",
+        auth: String(request.headers.authorization ?? ""),
+        body,
+      });
+      if (request.url !== "/chat/completions") {
+        response.writeHead(404).end();
+        return;
+      }
+      response.writeHead(200, { "content-type": "application/json" })
+        .end(JSON.stringify({
+          choices: [{ message: { role: "assistant", content: "正常" } }],
+        }));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  try {
+    const result = await checkModelGateway({
+      baseUrl: base, apiKey: "sk-openai", model: "glm-5.1",
+      api: "openai-completions",
+    });
+    assert.equal(result.overall, "ok");
+    assert.equal(seen[0].path, "/chat/completions",
+      "OpenAI Chat 格式必须打到 chat/completions");
+    assert.equal(seen[0].auth, "Bearer sk-openai",
+      "OpenAI Chat 格式用 Bearer 鉴权");
+    assert.equal(seen[0].body.model, "glm-5.1");
+    assert.match(item(result, "chat").detail, /正常/);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
 test("checkModelGateway:401——网络通,密钥被拒并指向密钥", async () => {
   const gateway = await statusServer(401);
   try {
     const result = await checkModelGateway({
       baseUrl: gateway.baseUrl, apiKey: "wrong", model: "any",
+      api: "anthropic-messages",
     });
     assert.equal(result.overall, "error");
     assert.equal(item(result, "network").status, "ok");
@@ -123,6 +185,7 @@ test("checkModelGateway:404——指向 Anthropic 兼容路径的建议", async 
   try {
     const result = await checkModelGateway({
       baseUrl: gateway.baseUrl, apiKey: "k", model: "any",
+      api: "anthropic-messages",
     });
     const chat = item(result, "chat");
     assert.equal(chat.status, "error");
@@ -140,6 +203,7 @@ test("checkModelGateway:端口不通——网络项分类报错,问答跳过", a
   await probe.close();
   const result = await checkModelGateway({
     baseUrl: deadBase, apiKey: "k", model: "any",
+      api: "anthropic-messages",
   });
   assert.equal(result.overall, "error");
   const network = item(result, "network");
@@ -156,6 +220,7 @@ test("checkModelGateway:400——透出网关原文,建议核对模型名", asyn
   try {
     const result = await checkModelGateway({
       baseUrl: gateway.baseUrl, apiKey: "k", model: "no-such-model",
+      api: "anthropic-messages",
     });
     const chat = item(result, "chat");
     assert.equal(chat.status, "error");

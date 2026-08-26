@@ -157,6 +157,9 @@ function ModelsCard({ view, onSaved }: {
 }) {
   const models = view.models;
   const defaults = view.defaults.models;
+  // 接口格式默认 OpenAI Chat(用户拍板 2026-08-26);已存配置回显原格式。
+  const [apiFormat, setApiFormat] = useState(
+    models.api ?? "openai-completions");
   const [url, setUrl] = useState(models.url ?? defaults.url ?? "");
   const [apiKey, setApiKey] = useState("");
   const [model, setModel] = useState(models.model ?? defaults.model ?? "");
@@ -174,6 +177,7 @@ function ModelsCard({ view, onSaved }: {
         url: url.trim(),
         api_key: apiKey.trim(),
         model: model.trim(),
+        api: apiFormat,
       }));
       setApiKey("");
       setMessage({ kind: "success",
@@ -192,6 +196,7 @@ function ModelsCard({ view, onSaved }: {
         url: url.trim() || undefined,
         api_key: apiKey.trim() || undefined,
         model: model.trim() || undefined,
+        api: apiFormat,
       }));
     } catch (cause) {
       setCheckError(String((cause as Error).message ?? cause));
@@ -216,9 +221,15 @@ function ModelsCard({ view, onSaved }: {
       <label className="span-2">
         <span>模型网关地址</span>
         <input value={url} type="url" required spellCheck={false}
-          placeholder="例如：https://model-gateway.internal/api/anthropic"
+          placeholder={apiFormat === "anthropic-messages"
+            ? "例如：https://model-gateway.internal/api/anthropic"
+            : "例如：https://model-gateway.internal/v1"}
           onChange={(event) => setUrl(event.target.value)} />
-        <small className="knob-note">当前接入 Anthropic Messages 兼容接口。</small>
+        <small className="knob-note">
+          {apiFormat === "anthropic-messages"
+            ? "Anthropic Messages 兼容接口(请求发往 地址/v1/messages)。"
+            : "OpenAI Chat 兼容接口(请求发往 地址/chat/completions)。"}
+        </small>
       </label>
       <label className="span-2">
         <span>API Key</span>
@@ -231,11 +242,20 @@ function ModelsCard({ view, onSaved }: {
               : "请输入模型网关 API Key"}
           onChange={(event) => setApiKey(event.target.value)} />
       </label>
-      <label className="span-2">
+      <label>
         <span>模型名称</span>
         <input value={model} required spellCheck={false}
           placeholder="例如：glm-5.1"
           onChange={(event) => setModel(event.target.value)} />
+      </label>
+      <label>
+        <span>接口格式</span>
+        <select value={apiFormat}
+          onChange={(event) => setApiFormat(event.target.value)}>
+          <option value="openai-completions">OpenAI Chat</option>
+          <option value="anthropic-messages">Anthropic</option>
+        </select>
+        <small className="knob-note">按网关实际提供的接口协议选择</small>
       </label>
       <div className="settings-form-actions">
         <button type="submit" disabled={busy || testing}>
