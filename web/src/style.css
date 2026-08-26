@@ -5591,6 +5591,20 @@ pre {
 .knowledge-opportunity-empty small { color: var(--muted); font-size: var(--font-size-assist); line-height: 1.4; }
 .knowledge-flywheel-note { padding: 10px 20px; color: var(--faint); border-top: 1px solid var(--line); background: var(--surface-soft); font-size: var(--font-size-assist); line-height: 1.5; }
 .knowledge-flywheel-note span { margin-right: 6px; padding: 2px 5px; color: var(--accent); border-radius: 4px; background: var(--accent-soft); font-weight: 700; }
+
+/* 团队 Skill 货架:部署态资产清单,与足迹排行并列的静态面 */
+.knowledge-shelf { margin: 0 20px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.knowledge-shelf .knowledge-panel-head { padding: 12px 16px 8px; }
+.knowledge-shelf-empty { padding: 14px 16px 16px; color: var(--muted); font-size: var(--font-size-assist); line-height: 1.5; }
+.knowledge-shelf-row { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding: 10px 16px; border-top: 1px solid var(--line); }
+.knowledge-shelf-row.broken { background: color-mix(in srgb, var(--danger, #c33) 6%, transparent); }
+.knowledge-shelf-main { min-width: 0; }
+.knowledge-shelf-main strong { font-size: var(--font-size-body); }
+.knowledge-shelf-main p { margin: 2px 0 0; color: var(--muted); font-size: var(--font-size-assist); line-height: 1.45; }
+.knowledge-shelf-badge { margin-left: 8px; padding: 1px 6px; color: var(--danger, #c33); border: 1px solid currentColor; border-radius: 4px; font-size: var(--font-size-assist); font-weight: 600; vertical-align: middle; }
+.knowledge-shelf-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; flex-shrink: 0; color: var(--faint); font-size: var(--font-size-assist); font-variant-numeric: tabular-nums; }
+.knowledge-shelf-warnings { padding: 8px 16px 12px; border-top: 1px dashed var(--line); color: var(--danger, #c33); font-size: var(--font-size-assist); }
+.knowledge-shelf-warnings p { margin: 2px 0; }
 .knowledge-flywheel-empty, .knowledge-flywheel-error { margin: 20px; min-height: 110px; padding: 20px; display: flex; align-items: center; gap: 13px; border: 1px dashed var(--line-strong); border-radius: 11px; background: var(--surface-soft); }
 .knowledge-flywheel-empty > span { width: 36px; height: 36px; display: grid; place-items: center; flex: none; color: var(--accent); border-radius: 50%; background: var(--accent-soft); }
 .knowledge-flywheel-empty > div { display: grid; gap: 4px; }

@@ -39,9 +39,11 @@ import {
   type SentVia,
 } from "./annotations.ts";
 import {
+  deliveryChangeSnapshot,
   readArtifact,
   readArtifactAsync,
   resolveArtifactRoot,
+  type DeliveryChangeSnapshot,
 } from "./artifacts.ts";
 import { KernelHost } from "./kernelHost.ts";
 import {
@@ -134,6 +136,10 @@ import {
   buildTeamKnowledgeInsights,
   type TeamKnowledgeInsights,
 } from "./knowledgeInsights.ts";
+import {
+  listHostSkillShelf,
+  type HostSkillShelf,
+} from "./hostSkillShelf.ts";
 import {
   createPrePushGateContract,
   parsePrePushAgentReport,
@@ -539,6 +545,19 @@ export interface TaskSummary {
       replied_ids?: string;
       diagnosis?: string;
     };
+  };
+  /** 人工在代码检视卡上勾选的远端交付文件集合。requested 表示已经
+   * 作为返工要求发给 Agent；confirmed 表示它与当时 HEAD 的文件集合
+   * 完全一致。push 前还会重新核对，不能靠陈旧前端状态放行。 */
+  delivery_selection?: {
+    paths: string[];
+    observed_paths: string[];
+    excluded_paths: string[];
+    status: "requested" | "confirmed";
+    waiting_id: string;
+    head: string;
+    baseline?: string;
+    updated_at: string;
   };
   /** 从现场看板的 panel-pulse.js/panel.html 读取的进度摘要。 */
   progress?: TaskProgress;
@@ -1015,6 +1034,9 @@ export interface DecisionSubmission {
   repository_skill_catalog_token?: string;
   selected_repository_skill_ids?: string[];
   selected_repository_knowledge_ids?: string[];
+  /** 代码检视时用户勾选的最终交付文件。字段缺席表示该入口没有修改
+   * 清单；空数组有业务含义，不能折叠成 undefined。 */
+  delivery_paths?: string[];
 }
 
 /** 脏路径给人看的形态:前几条点名,余量说总数——三万个产物文件不能
@@ -1022,6 +1044,40 @@ export interface DecisionSubmission {
 function describeDirtyPaths(paths: string[]): string {
   const shown = paths.slice(0, 5).join("、");
   return paths.length > 5 ? `${shown} 等 ${paths.length} 个路径` : shown;
+}
+
+function normalizedDeliveryPaths(values: string[]): string[] {
+  const paths = values.map((value) => String(value).trim()
+    .replace(/\\/g, "/").replace(/^(?:\.\/)+/, "")).filter(Boolean);
+  for (const path of paths) {
+    if (path.startsWith("/") || path === ".." || path.startsWith("../")
+        || path.includes("/../") || /[\0\r\n]/.test(path)) {
+      throw new TaskControlError(`交付清单包含不安全路径：${path}`);
+    }
+  }
+  return [...new Set(paths)].sort((left, right) => left.localeCompare(right));
+}
+
+function samePaths(left: string[], right: string[]): boolean {
+  return left.length === right.length
+    && left.every((path, index) => path === right[index]);
+}
+
+function deliverySelectionNote(
+  paths: string[],
+  excluded: string[],
+): string {
+  const limit = 300;
+  const selected = paths.slice(0, limit).map((path) => `- ${path}`);
+  if (paths.length > limit) selected.push(`- …其余 ${paths.length - limit} 个文件`);
+  return [
+    "<delivery-selection schema=\"mae-flow-delivery-selection/1\" mode=\"allowlist\">",
+    `用户通过文件勾选器确认：只交付以下 ${paths.length} 个文件。`,
+    ...(selected.length ? selected : ["- （不交付任何文件）"]),
+    `当前另有 ${excluded.length} 个文件未勾选；它们不得进入提交。`,
+    "若当前 commit 与该清单不一致，请调整暂存/提交后重新进入代码检视；不要自行扩大清单。",
+    "</delivery-selection>",
+  ].join("\n");
 }
 
 interface AsyncGitResult {
@@ -1687,9 +1743,14 @@ export class TaskService {
 
   /** 团队知识运营读模型。独立接口按需计算，避免把所有任务足迹塞进
    * 1.5 秒一次的任务列表轮询。任何建议都不参与流程或质量裁决。 */
-  knowledgeInsights(): TeamKnowledgeInsights {
-    return buildTeamKnowledgeInsights([...this.tasks.values()]
-      .map((task) => this.project(task, true)));
+  knowledgeInsights(): TeamKnowledgeInsights & { host_skills: HostSkillShelf } {
+    // 货架(部署态资产)与足迹(消费聚合)同口径一次给全:足迹只看得见
+    // 被任务带过的资源,放坏了的 skill 在足迹里隐形,货架把它照出来。
+    return {
+      ...buildTeamKnowledgeInsights([...this.tasks.values()]
+        .map((task) => this.project(task, true))),
+      host_skills: listHostSkillShelf(this.options.dataDir),
+    };
   }
 
   get(id: string): TaskSummary | undefined {
@@ -4248,6 +4309,77 @@ export class TaskService {
       item.status === "draft" || item.status === "sent");
   }
 
+  private async deliverySelectionForDecision(
+    task: TaskState,
+    waiting: WaitingRecord,
+    input: DecisionSubmission,
+    closesFeedback: boolean,
+  ): Promise<{
+    record: NonNullable<TaskSummary["delivery_selection"]>;
+    note: string;
+  } | undefined> {
+    const explicit = input.delivery_paths !== undefined;
+    const previous = task.summary.delivery_selection;
+    const values = explicit
+      ? input.delivery_paths!
+      : previous?.status === "requested" ? previous.paths : undefined;
+    if (values === undefined) return undefined;
+    const surface = stepReviewSurface(
+      this.options.host?.kernelRoot,
+      waiting.step,
+    );
+    if (surface !== "diff") {
+      if (explicit) {
+        throw new TaskControlError("只有代码变更检视可以提交交付文件清单");
+      }
+      return undefined;
+    }
+    if (!task.cwd) {
+      throw new TaskControlError("代码现场尚未就绪，不能确认交付文件");
+    }
+    const snapshot = await deliveryChangeSnapshot(task.cwd);
+    if (!snapshot?.baseline) {
+      throw new TaskControlError("无法读取任务基线，暂不能确认交付文件");
+    }
+    const paths = normalizedDeliveryPaths(values);
+    const visible = new Set(snapshot.workspace_paths);
+    const unknown = paths.filter((path) => !visible.has(path));
+    if (unknown.length) {
+      throw new StateConflictError(
+        `工作区变更已经更新，清单中的 ${describeDirtyPaths(unknown)} 已不在当前现场，请刷新后重新勾选`,
+      );
+    }
+    const committed = normalizedDeliveryPaths(snapshot.committed_paths);
+    const excluded = snapshot.workspace_paths.filter((path) =>
+      !paths.includes(path));
+    if (closesFeedback && !samePaths(paths, committed)) {
+      const mustRemove = committed.filter((path) => !paths.includes(path));
+      const mustAdd = paths.filter((path) => !committed.includes(path));
+      const differences = [
+        mustRemove.length
+          ? `当前 commit 仍包含未勾选文件：${describeDirtyPaths(mustRemove)}` : "",
+        mustAdd.length
+          ? `勾选文件尚未进入 commit：${describeDirtyPaths(mustAdd)}` : "",
+      ].filter(Boolean).join("；");
+      throw new TaskControlError(
+        `${differences}。不能按“通过”放行；请选择调整选项，让 Agent 按清单整理提交后重新检视。`,
+      );
+    }
+    return {
+      record: {
+        paths,
+        observed_paths: snapshot.workspace_paths,
+        excluded_paths: excluded,
+        status: closesFeedback ? "confirmed" : "requested",
+        waiting_id: waiting.waiting_id,
+        head: snapshot.head,
+        baseline: snapshot.baseline,
+        updated_at: new Date().toISOString(),
+      },
+      note: deliverySelectionNote(paths, excluded),
+    };
+  }
+
   /** 所有入口的决定都在这里收口：先到生效；选项、自由说明与服务端
    * 查询到的未闭环批注明确分离。 */
   async decide(
@@ -4334,6 +4466,8 @@ export class TaskService {
         matchesStepChoice(effect, answer)));
     const handlesFeedback = effects.some((effect) => effect.handlesFeedback
       && submitted.some((answer) => matchesStepChoice(effect, answer)));
+    const deliverySelection = await this.deliverySelectionForDecision(
+      task, waiting, input, closesFeedback);
     const unresolved = this.unresolvedAnnotations(task);
     if (unresolved.length && closesFeedback) {
       const menuQuestions = Array.isArray(waiting.question?.questions)
@@ -4362,16 +4496,20 @@ export class TaskService {
       : input.annotation_ids?.length
         ? this.pickDrafts(task, input.annotation_ids) : [];
     // 批注与自由说明都进 notes，不污染内核用于 choice receipt 的选项。
-    const notes = picked.length
-      ? [normalized.notes, renderAnnotations(picked, this.ticketOf(task))]
-        .filter(Boolean).join("\n\n")
-      : normalized.notes;
+    const notes = [
+      normalized.notes,
+      deliverySelection?.note,
+      picked.length ? renderAnnotations(picked, this.ticketOf(task)) : undefined,
+    ].filter(Boolean).join("\n\n") || undefined;
     const resolved = task.humanGate.resolve(waiting.waiting_id, {
       stateVersion: input.state_version,
       decision,
       answers: Object.keys(answers).length ? answers : undefined,
       notes,
     });
+    if (deliverySelection) {
+      task.summary.delivery_selection = deliverySelection.record;
+    }
     // 决定已经落袋(waiting.json 写完),批注才算送出去。
     if (picked.length) {
       this.annotations(task).markSent(picked.map((item) => item.id), "decision");
@@ -6850,6 +6988,43 @@ export class TaskService {
     }
   }
 
+  private async deliverySelectionAllowsPush(task: TaskState): Promise<boolean> {
+    const selection = task.summary.delivery_selection;
+    if (!selection) return true;
+    let reason = "";
+    if (selection.status !== "confirmed") {
+      reason = "交付文件清单仍在等待 Agent 整理并重新确认";
+    } else if (!task.cwd) {
+      reason = "代码现场不可用，无法复核交付文件清单";
+    } else {
+      const snapshot = await deliveryChangeSnapshot(task.cwd);
+      if (!snapshot?.baseline) {
+        reason = "任务基线不可读，无法复核交付文件清单";
+      } else {
+        const current = normalizedDeliveryPaths(snapshot.committed_paths);
+        const expected = normalizedDeliveryPaths(selection.paths);
+        if (!samePaths(current, expected)) {
+          const unexpected = current.filter((path) => !expected.includes(path));
+          const missing = expected.filter((path) => !current.includes(path));
+          reason = [
+            unexpected.length
+              ? `新增了未确认文件 ${describeDirtyPaths(unexpected)}` : "",
+            missing.length
+              ? `已确认文件不再提交 ${describeDirtyPaths(missing)}` : "",
+          ].filter(Boolean).join("；") || "提交文件集合已经变化";
+        }
+      }
+    }
+    if (!reason) return true;
+    const detail = `交付清单复核失败：${reason}。已阻止 push，请重新进入代码检视确认。`;
+    task.summary.status = "failed";
+    task.summary.detail = detail;
+    task.summary.delivery = { ...task.summary.delivery, skipped: detail };
+    this.persist(task);
+    this.options.log?.(`任务 ${task.summary.id} ${detail}`);
+    return false;
+  }
+
   /** Git 交付(§10):任务收轮并释放 Agent 后,由宿主推送并反查远端
    * SHA，再建 MR——不信任务自己的说法，也不让 Agent 接触 token。
    * MR 成功≠完成:流水线过了才"等待合入",否则停在"验证中"。
@@ -6885,8 +7060,12 @@ export class TaskService {
         }
         return;
       }
+      if (!await this.deliverySelectionAllowsPush(task)) return;
       if (!await this.preparePush(task, branch, baseline, epoch)) return;
       if (!this.current(task, epoch)) return;
+      // prepush Agent 允许修复并产生新 commit；它收口后必须再核一遍，
+      // 否则审批时的白名单可能被最后一轮修复悄悄扩大。
+      if (!await this.deliverySelectionAllowsPush(task)) return;
       const previous = task.summary.delivery;
       const pushReceipt = await this.pushFromHost(task, branch);
       const sha = pushReceipt.sha;
