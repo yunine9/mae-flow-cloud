@@ -34,8 +34,9 @@ def verify_completion_task(kind, report, state, ports):
     task = _task_for(state, kind)
     if not task:
         return rejected(
-            "未生成 harness 任务卡。主 agent 必须先执行 python \"%s\" "
-            "agent-task %s。" % (ports.script_path(), kind.lower()))
+            "未生成 harness 任务卡。standalone 独立任务先执行 python \"%s\" "
+            "action status 获取当前任务卡;主流程已不签发 %s 任务卡。"
+            % (ports.script_path(), kind))
     if task.get("step") != state.get("current"):
         return rejected("任务卡属于旧步骤,禁止拿旧配置执行当前任务。", task)
     return accepted(task)
@@ -45,6 +46,8 @@ def _dispatch_missing_message(kind, script_path, state):
     ticket = str((state.get("config") or {}).get("单号", "单号") or "单号")
     commands = {
         "STORY": "role-task story-generate",
+        "REVIEWER": "role-task story-review",
+        "GRILL": "action status",
         "GRILL_PREP": (
             'role-task grill-critic --stage prep --document '
             '".mae-flow-work/grill-prep-%s.md"' % ticket),
@@ -52,15 +55,9 @@ def _dispatch_missing_message(kind, script_path, state):
             'role-task grill-critic --stage final --document '
             '".mae-flow-work/%s/grill.md"' % ticket),
     }
-    if kind == "REVIEWER":
-        command = (
-            "role-task story-review"
-            if state.get("current") == "story"
-            else "role-task code-review")
-    elif kind == "GRILL":
-        command = "action status"
-    else:
-        command = commands.get(kind, "agent-task " + kind.lower())
+    # UT/CODECHECK 卡只存在于 standalone 独立任务(2026-08-25 编排瘦身):
+    # 主流程编码期写测试/修规范是主 Agent 份内事,不签卡也不必派专项 Agent。
+    command = commands.get(kind, "action status")
     remedy = 'python "%s" %s' % (script_path, command)
     return (
         "[mae-flow] 派发前拦截:%s 尚无本步任务卡。先执行 %s,再按其输出话术派发。"

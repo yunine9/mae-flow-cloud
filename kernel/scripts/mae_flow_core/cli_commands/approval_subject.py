@@ -71,11 +71,6 @@ def _artifact_payload(root, state, spec):
 
 
 def _review_base(state, step_id):
-    if step_id == "quality_review":
-        base = str(((state or {}).get("quality_review") or {}).get(
-            "entered_head", ""))
-        if base:
-            return base
     return str((state or {}).get("implementation_base_head", "") or "HEAD")
 
 
@@ -134,7 +129,16 @@ def subject_matches(root, state, step_id, step):
         return False, "无法重新核对审批内容: " + str(exc)
     if stored.get("step") != step_id or not stored.get("sha256"):
         if current:
+            # 2026-08-26 单次确认修复:缺卡不再打回重问。模型天然
+            # "产物定稿即刻询问",而卡历史上要到首次 done 才生成,第一份
+            # 答案因无印章被验真过滤,用户被原样重问一遍(spec/story 双
+            # 确认,run8b/run9 双跑必现)。现在答案捕获钩子会按捕获瞬间
+            # 的内容现算指纹盖章,这里补绑同一算法的卡后放行——共识交给
+            # ack 验真裁决:只有"印章 sha == 此刻内容 sha"的答案作数。
+            # 跳过询问直接 done 仍被 ack 缺失拦住;内容变更走下方分支
+            # 照旧强制重新展示。防线没有降级,只是绑定时刻不再打人。
             state["approval_subject"] = current
+            return True, ""
         return False, (
             "绑定当前内容的新审批卡已自动生成；直接重新展示并取得一次决定，"
             "无需重新解释或重做已经完成的工作")

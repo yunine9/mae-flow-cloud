@@ -128,14 +128,13 @@ class CurrentRenderingTests(unittest.TestCase):
         state = {"execution_contract": {
             **explicit_cloud_contract(), "source": "order",
         }}
-        self.assertNotIn("agent-task compile", _step_md_text("build", state))
+        self.assertNotIn("agent-task", _step_md_text("build", state))
         self.assertNotIn(
             "UT运行命令", _step_md_text("config_confirm", state))
 
-    def test_local_retains_compile_and_ut_run_instructions(self):
+    def test_local_retains_ut_run_instructions(self):
         state = {
             "execution_contract": resolve_execution_contract({}, "local")}
-        self.assertIn("agent-task compile", _step_md_text("build", state))
         self.assertIn(
             "UT运行命令", _step_md_text("config_confirm", state))
 

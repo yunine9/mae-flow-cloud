@@ -21,7 +21,6 @@ class EditGateContext:
     step: str
     inside_plugin: bool
     is_source: bool
-    tests_only_patterns: tuple
     source_unlocked: bool
     # flow.json 是活跃流程唯一的步骤授权源。只有当前步骤明确声明
     # allow_source_edit，主流程 Agent 才能写源码；过程文档不受此限。
@@ -30,11 +29,6 @@ class EditGateContext:
     # 是"流程头部已走完"的单一干净信号。默认 True 只为纯函数旧调用点
     # 兼容；生产路径同时传 allow_source_edit，按当前步骤继续收紧。
     workflow_chosen: bool = True
-    # UT 抢跑提醒的三个事实:编码步(证据含 COMPILE agent)、新建文件、
-    # 命中测试路径。默认全 False:老调用点不触发提醒,行为不变。
-    compile_step: bool = False
-    new_file: bool = False
-    is_test_path: bool = False
 
 
 @dataclass(frozen=True)
@@ -45,9 +39,7 @@ class BashWriteContext:
     hits_internal_state: bool
     step: str
     offenders: tuple
-    tests_only_patterns: tuple
     source_unlocked: bool
-    bad_test_sources: tuple
     allow_source_edit: bool = True
     workflow_chosen: bool = True
 
@@ -129,7 +121,6 @@ def _flow_head_decision(context):
 
 
 def _source_edit_decision(context):
-    match_path = context.match_path
     if not context.is_source:
         return None
     if not context.allow_source_edit:
@@ -140,45 +131,7 @@ def _source_edit_decision(context):
             "登记介入事实，不得让主流程 Agent 在这里越过阶段。"
             % (context.step or "?"),
             rule="edit-outside-source-step")
-    if (
-        context.tests_only_patterns
-        and not context.source_unlocked
-        and not any(
-            re.search(pattern, match_path, re.I)
-            for pattern in context.tests_only_patterns)
-    ):
-        return _block(
-            "edit-tests-only",
-            "当前步骤 %s 仅允许写测试路径(当前生效规则: %s)。"
-            "UT 暴露的疑似源码缺陷不是死路:自查确认后带报告呈用户裁决,"
-            "用户判定确为代码缺陷时先执行 messages 取得回答 ID，再执行 "
-            "python \".mae-flow-work/bin/mae-flow.py\" unlock source "
-            "--reason <裁决结论> "
-            "--message-id <ID> 解锁本步修复;"
-            "禁止未经用户裁决自行改源码。"
-            % (context.step, "|".join(context.tests_only_patterns)),
-        )
     return None
-
-
-def _ut_preempt_advisory(context):
-    """编码步新建测试文件:放行,但提醒这是抢跑白费。
-
-    2026-08-20 云端实战:模型在 build 步写完源码顺手开写 UT。流程语义上
-    这不越闸(build_review 的检视卡照弹,verify_ut 只认 UT 子 agent 的
-    分批证据),但主会话手写的 UT 一行不计证据,到了 verify_ut 仍由
-    子 agent 重做——纯烧 token。只提醒不拦:编码中**修改已有**测试是
-    合法的(重构本来就会弄坏旧测试),所以只盯"新建";真有先建测试
-    骨架的正当场景,advisory 也不挡路。"""
-    if not (context.compile_step and context.new_file
-            and context.is_test_path):
-        return None
-    return GateDecision(
-        "advisory", rule="edit-ut-preempt",
-        message="检测到在编码步新建测试文件。UT 由 verify_ut 步的 UT 子 "
-                "agent 按任务卡分批生成,现在手写的测试不计任何证据,到了 "
-                "verify_ut 仍会由子 agent 重做——纯属浪费。请专注本步交付"
-                "源码,测试交给后续流程。")
 
 
 def decide_edit(context):
@@ -188,7 +141,6 @@ def decide_edit(context):
         _repository_edit_decision,
         _flow_head_decision,
         _source_edit_decision,
-        _ut_preempt_advisory,
     ):
         decision = evaluator(context)
         if decision is not None:
@@ -291,22 +243,6 @@ def _bash_source_decision(context):
             "完成本步；进入内核明确允许写源码的编码/返工步骤后再修改。"
             % (context.step or "?", "、".join(context.offenders[:3])),
             rule="bash-outside-source-step")
-    if (
-        context.offenders
-        and context.tests_only_patterns
-        and not context.source_unlocked
-        and context.bad_test_sources
-    ):
-        return _block(
-            "bash-tests-only",
-            "当前步骤 %s 仅允许写测试路径(当前生效规则: %s);"
-            "命中非测试源码: %s。经用户裁决确为代码缺陷时用 unlock source 解锁。"
-            % (
-                context.step,
-                "|".join(context.tests_only_patterns),
-                "、".join(context.bad_test_sources[:3]),
-            ),
-        )
     return None
 
 

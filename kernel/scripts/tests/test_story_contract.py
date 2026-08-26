@@ -143,13 +143,13 @@ class StoryContractTests(unittest.TestCase):
         self.assertIn("role-task story-generate", story)
         self.assertIn("role-task story-review", story)
         self.assertIn("主 Agent", build)
-        self.assertIn("agent-task compile", build)
-        self.assertIn("compile-agent", build)
+        # 2026-08-25 编排瘦身:编译由主 Agent 自由完成,任务卡命令已退役
+        self.assertNotIn("agent-task", build)
         self.assertNotIn("role-task cp-implement", build)
 
     def test_quality_agents_can_invoke_every_skill_required_by_their_task_card(self):
         for name in (
-                "compile-agent.md", "codecheck-fix-agent.md",
+                "codecheck-fix-agent.md",
                 "ut-generator-agent.md"):
             frontmatter = read("agents/" + name).split("---", 2)[1]
             tools = next(
@@ -157,12 +157,12 @@ class StoryContractTests(unittest.TestCase):
                 if line.startswith("tools:"))
             self.assertIn("Skill", tools, name)
 
-    def test_only_six_approved_agents_remain(self):
+    def test_only_five_approved_agents_remain(self):
+        # 2026-08-25 编排瘦身:compile-agent 退役,编译由主 Agent 自由完成。
         expected = {
             "grill-critic-agent.md",
             "story-generator-agent.md",
             "craft-reviewer-agent.md",
-            "compile-agent.md",
             "codecheck-fix-agent.md",
             "ut-generator-agent.md",
         }
@@ -172,14 +172,11 @@ class StoryContractTests(unittest.TestCase):
         }
         self.assertEqual(expected, actual)
 
-    def test_main_agent_implements_once_and_compile_agent_is_mandatory(self):
+    def test_main_agent_implements_once_with_free_compilation(self):
         build = read("flow/steps/build.md")
-        compile_agent = read("agents/compile-agent.md")
         self.assertIn("一次完成需求涉及的全部生产代码", build)
         self.assertIn("设计承载的代码不外包", build)
-        self.assertIn("compile-agent", build)
-        self.assertIn("编译方式", compile_agent)
-        self.assertIn("Skill", compile_agent)
+        self.assertIn("编译方式", build)
         self.assertNotIn("role-task task-analysis", build)
         self.assertNotIn("role-task craft-plan", build)
 

@@ -39,7 +39,6 @@ REQUIRED_ROLE_CAPABILITIES = {
     ("design-provenance:lean-story-review", "Design Reviewer"),
     ("role:craft-reviewer-agent", "CODE Reviewer"),
     ("role:story-generator-agent", "test-design agent"),
-    ("role:compile-agent", "compile agent"),
     ("role:codecheck-fix-agent", "CodeCheck fixer"),
     ("role:ut-generator-agent", "UT generator"),
 }

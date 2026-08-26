@@ -25,44 +25,15 @@ class Spec2CodeWorkflowTests(unittest.TestCase):
         self.assertEqual("story", steps["design"]["next"])
         self.assertEqual("story", steps["story_ask"]["next"])
 
-    def test_all_workflows_use_one_implementation_and_precommit_review(self):
+    def test_all_workflows_share_the_wide_build_step(self):
+        """2026-08-25 编排瘦身:四条工作流共用宽 build 步,直通交付收口。"""
         steps = self.flow["steps"]
         self.assertEqual("build", steps["hf_open"]["next"])
         self.assertEqual("build", steps["tw_open"]["next"])
         self.assertEqual("build", steps["rf_triage"]["next"])
-        self.assertEqual({
-            "disabled": "build_review",
-            "enabled": "build_agent_review",
-        }, steps["build"]["next"])
-        self.assertEqual("build_review", steps["build_agent_review"]["next"])
-        self.assertEqual("build_commit", steps["build_review"]["next"]["continue"])
-        self.assertEqual("build_rework", steps["build_review"]["next"]["revise"])
-        self.assertEqual("build_review", steps["build_rework"]["next"])
-
-    def test_quality_changes_share_one_review_and_commit_corridor(self):
-        steps = self.flow["steps"]
-        # 精简与规范修复各自的编译节点回到质量链，不再各拉一轮人工检视;
-        # UT 之后统一检视一次。
-        self.assertEqual(
-            "verify_codecheck", steps["verify_post_ponytail_compile"]["next"])
-        self.assertEqual(
-            "verify_ut", steps["verify_codecheck_compile"]["next"])
-        self.assertEqual(
-            "quality_review", steps["quality_recompile"]["next"])
-        self.assertEqual(
-            "quality_commit", steps["quality_review"]["next"]["continue"])
-        self.assertEqual(
-            "quality_rework", steps["quality_review"]["next"]["revise"])
-        self.assertEqual(
-            {
-                "verify_codecheck", "tw_codecheck", "rf_codecheck",
-                "verify_spec", "tw_verify", "domain_archive",
-            },
-            set(steps["quality_commit"]["dynamic_next"]),
-        )
-        self.assertTrue(steps["quality_review"]["skip_in_moonlight"])
-        self.assertEqual(
-            "continue", steps["quality_review"]["moonlight_choice"])
+        self.assertEqual("domain_archive", steps["build"]["next"])
+        self.assertTrue(steps["build"]["allow_source_edit"])
+        self.assertEqual([], steps["build"]["evidence"])
 
     def test_story_loop_binds_local_spec_grill_and_story(self):
         steps = self.flow["steps"]
@@ -80,13 +51,7 @@ class Spec2CodeWorkflowTests(unittest.TestCase):
 
     def test_other_workflow_entries_remain_unchanged(self):
         steps = self.flow["steps"]
-        self.assertEqual("code_reviewer_ask", steps["workflow_select"]["next"])
-        reviewer = steps["code_reviewer_ask"]
-        self.assertEqual("code_reviewer", reviewer["choice_key"])
-        self.assertEqual({"disabled", "enabled"}, set(reviewer["choices"]))
-        self.assertEqual("branch_create", reviewer["next"])
-        self.assertTrue(reviewer["skip_in_moonlight"])
-        self.assertEqual("enabled", reviewer["moonlight_choice"])
+        self.assertEqual("branch_create", steps["workflow_select"]["next"])
         self.assertEqual("hf_open", steps["branch_create"]["next"]["hotfix"])
         self.assertEqual("tw_open", steps["branch_create"]["next"]["tweak"])
         self.assertEqual("rf_triage", steps["branch_create"]["next"]["review"])

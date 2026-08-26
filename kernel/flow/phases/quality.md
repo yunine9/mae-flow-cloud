@@ -1,14 +1,21 @@
+# Quality
+
 ## Objective
-Assess the complete constructed change with the selected expensive quality capabilities.
+
+Quality is verified at the exits, not choreographed mid-flow: the construction step's exit checklist, host pre-push verification, the authoritative pipeline bound to the delivery SHA, and human review on the merge request.
 
 ## Inspect
-Read the cumulative UT handoff, full diff, selected capabilities, prior attempts, environment revision, and unresolved risks.
+
+Read the exit checklist conclusions, pre-push verification results, and pipeline obligations for the current SHA.
 
 ## Stop for the user
-Stop for a reviewer tradeoff, an irreversible risk, or when the user chooses a retry after a meaningful change.
+
+Stop when a pipeline dimension stays red after bounded repair attempts, or when review feedback requires a decision the Agent cannot make.
 
 ## Outputs
-Record each selected expensive capability at most once, its outcome, remaining risks, and delivery readiness.
+
+Pipeline obligations (compile, UT, CodeCheck) settled for the exact delivery SHA; review feedback answered item by item.
 
 ## Next
-Proceed to Delivery after quality is complete. The next meaningful action is the next selected capability not yet attempted.
+
+Delivery completes when the pipeline is green on the delivered SHA and the merge request is approved by its human reviewers.

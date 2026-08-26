@@ -9,12 +9,13 @@ from mae_flow_core.workflow.build_milestones import (
 )
 
 from .shared import (
-    STATE_PATH, hashlib, json, os, read_bytes, read_text, time, update_json,
+    STATE_PATH, hashlib, json, os, read_bytes, read_text, safe_read_json,
+    time, update_json,
 )
 from .wiring import api
 
 
-_BUILD_STEPS = frozenset(("build", "build_rework"))
+_BUILD_STEPS = frozenset(("build",))
 
 
 def _ledger_path():
@@ -58,7 +59,7 @@ def _print_events(data, as_json=False):
 def cmd_build_milestone(_flow, state, args):
     """Record or show milestones without participating in workflow evidence."""
     if args.action == "show":
-        raw, error = api.safe_read_json(_ledger_path())
+        raw, error = safe_read_json(_ledger_path())
         if error:
             api.die("build milestone 台账不可读: " + error
                     + "；请先执行 doctor 检查旁路状态。", 2)
@@ -66,7 +67,7 @@ def cmd_build_milestone(_flow, state, args):
         return
     if state.get("current") not in _BUILD_STEPS:
         api.die(
-            "build milestone 只记录 build/build_rework 内的实现过程；"
+            "build milestone 只记录 build 步内的实现过程；"
             "它不是推进命令，也不能替代 done；请按 current 给出的当前步骤动作继续。", 2)
     path, tasks = _implementation(state)
     task = select_task(tasks, args.task)

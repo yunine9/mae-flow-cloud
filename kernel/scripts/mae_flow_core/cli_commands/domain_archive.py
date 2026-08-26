@@ -227,8 +227,9 @@ def _apply(state, args, root, package):
     require_fresh(
         record.get("input_sha256"), _fresh_digest(root, package, entries))
     if getattr(args, "moonlight_auto", False):
-        if not bool(((state or {}).get("moonlight") or {}).get("enabled")):
-            raise ValueError("--moonlight-auto 只允许在月光宝盒运行中使用")
+        from mae_flow_core import host_env
+        if not host_env.unattended_confirm_allowed(state):
+            raise ValueError("--auto 只允许在月光宝盒或云端宿主运行中使用")
         receipt = {"mode": "moonlight-auto"}
     else:
         ok, answer, receipt, error = api._authorization_message(

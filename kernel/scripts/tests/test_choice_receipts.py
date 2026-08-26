@@ -57,7 +57,7 @@ class ChoiceReceiptTests(unittest.TestCase):
 
         self.assertEqual(0, captured.returncode, captured.stderr)
         self.assertEqual(0, advanced.returncode, advanced.stderr)
-        self.assertEqual("code_reviewer_ask", state["current"])
+        self.assertEqual("branch_create", state["current"])
 
     def test_askuser_token_without_selected_answer_cannot_authorize_choice(self):
         step = {

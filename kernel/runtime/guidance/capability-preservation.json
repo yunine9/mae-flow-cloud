@@ -367,11 +367,12 @@
       "status": "thin-replacement"
     },
     {
-      "source": "role:compile-agent",
+      "source": "design-provenance:2026-08-25-choreography-slim",
       "capability": "compile agent",
       "new_home": "configured opaque Build capability after production cutover",
       "semantic_tests": [],
-      "status": "migration-only"
+      "status": "migration-only",
+      "notes": "compile-agent 已退役:编译由主 Agent 在宽 build 步自由完成,出口验收在 prepush+权威流水线。"
     },
     {
       "source": "role:codecheck-fix-agent",
@@ -397,6 +398,14 @@
         "flow/phases/story.md",
         "flow/steps/story.md"
       ]
+    },
+    "2026-08-25-choreography-slim": {
+      "description": "编码段编排瘦身:任务卡/质量小循环/四步验证退役,compile-agent 一并退役;编译由主 Agent 在宽 build 步自由完成,出口验收在 prepush+权威流水线+MR 检视。",
+      "sources": [
+        "flow/steps/build.md",
+        "flow/phases/construction.md",
+        "flow/phases/quality.md"
+      ]
     }
   },
   "dormant_capability_packs": {
@@ -408,6 +417,7 @@
     "review-fix": "receiving-code-review 实质已进 rf_triage 与两个返工步;systematic-debugging 进编码基准",
     "tweak-build": "systematic-debugging 进编码基准;ponytail 纪律由其本步注入",
     "tweak-open": "comet 小改规则与 OpenSpec 变更创建均已退役;tw_open 用本地 Spec",
-    "verify": "comet 验证状态机已退役(要求写 .comet.yaml,与 Edit Gate 绝对拦截直接冲突);requesting-code-review 指挥 verify 阶段再派审查子代理,违反预检只跑一轮;openspec-verify-change 的规格符合实质已换成 verify_spec 的逐条对齐矩阵;verification-before-completion 的证据铁律已压缩进 verify_spec/tw_verify 正文与 guidance/quality.md"
+    "verify": "comet 验证状态机已退役(要求写 .comet.yaml,与 Edit Gate 绝对拦截直接冲突);requesting-code-review 指挥 verify 阶段再派审查子代理,违反预检只跑一轮;openspec-verify-change 的规格符合实质已换成 verify_spec 的逐条对齐矩阵;verification-before-completion 的证据铁律已压缩进 verify_spec/tw_verify 正文与 guidance/quality.md",
+    "ponytail-review": "2026-08-25 编排瘦身:编码段编排步骤退役,方法论精华已蒸馏进 flow/steps/build.md 的出门清单;完整规则按需由模型自行读取,不再逐步内嵌注入。"
   }
 }

@@ -3,29 +3,17 @@
 import time
 
 
+# 2026-08-25 编排瘦身:编码段只剩宽 build 步,编译/规范/UT/规格自查都发生
+# 在其中,defer 语义按 kind 记录、按 build 一步归属。
 QUALITY_STEPS = {
     "build": "compile",
-    "build_rework": "compile",
-    "verify_post_ponytail_compile": "compile",
-    "verify_codecheck_compile": "compile",
-    "quality_recompile": "compile",
-    "verify_recompile": "compile",
-    "rf_codecheck": "codecheck",
-    "tw_codecheck": "codecheck",
-    "verify_codecheck": "codecheck",
-    "rf_ut": "ut",
-    "tw_ut": "ut",
-    "verify_ut": "ut",
-    "verify_spec": "comet",
-    "verify_comet": "comet",   # 旧节点名,在途状态兼容
-    "tw_verify": "comet",
 }
 
 REPAIR_ENTRY = {
-    "review": "build_rework",
-    "tweak": "build_rework",
-    "full": "quality_recompile",
-    "hotfix": "quality_recompile",
+    "review": "build",
+    "tweak": "build",
+    "full": "build",
+    "hotfix": "build",
 }
 
 

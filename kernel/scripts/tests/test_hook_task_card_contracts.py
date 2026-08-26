@@ -79,11 +79,8 @@ class TaskCardContractTests(unittest.TestCase):
         missing = verify_completion_task(
             "UT", "", self.state, self.ports())
         self.assertFalse(missing.accepted)
-        self.assertEqual(
-            "未生成 harness 任务卡。主 agent 必须先执行 python "
-            '"/repo/scripts/mae-flow.py" agent-task ut。',
-            missing.reason,
-        )
+        self.assertIn("未生成 harness 任务卡", missing.reason)
+        self.assertIn("主流程已不签发 UT 任务卡", missing.reason)
 
         wrong_step = dict(self.state)
         wrong_step["current"] = "verify_ut"
@@ -103,7 +100,7 @@ class TaskCardContractTests(unittest.TestCase):
         """
         state = dict(self.state)
         state["current"] = "external_verify"
-        state["agent_tasks"] = {"UT": {"step": "verify_ut", "head": HEAD}}
+        state["agent_tasks"] = {"UT": {"step": "standalone_ut", "head": HEAD}}
         decision = verify_dispatch_task("UT", state, self.ports())
         self.assertFalse(decision.accepted)
         self.assertIn("不签发 UT 任务卡", decision.reason)
@@ -112,10 +109,11 @@ class TaskCardContractTests(unittest.TestCase):
         self.assertNotIn("生成当前步骤的新任务卡", decision.reason,
                          "不许再把会话支去走死路")
 
-        # 本步确实签发这类卡时,原来的指引一字不变(verify_ut 允许 UT 卡)。
+        # 本步确实签发这类卡时,旧卡换新卡的指引照旧(standalone_ut 签 UT 卡)。
         live = dict(self.state)
-        live["current"] = "verify_ut"
-        live["agent_tasks"] = {"UT": {"step": "rf_ut", "head": HEAD}}
+        live["current"] = "standalone_ut"
+        live["agent_tasks"] = {"UT": {"step": "standalone_codecheck",
+                                      "head": HEAD}}
         usual = verify_dispatch_task("UT", live, self.ports())
         self.assertFalse(usual.accepted)
         self.assertIn("生成当前步骤的新任务卡", usual.reason)
@@ -260,7 +258,8 @@ class TaskCardContractTests(unittest.TestCase):
         )
         self.assertFalse(missing.accepted)
         self.assertIn("尚无本步任务卡", missing.reason)
-        self.assertIn("agent-task compile", missing.reason)
+        # 主流程 COMPILE 卡已退役,恢复指引不再指向已删除的 agent-task 命令。
+        self.assertNotIn("agent-task", missing.reason)
 
         changed = verify_dispatch_task(
             "COMPILE",

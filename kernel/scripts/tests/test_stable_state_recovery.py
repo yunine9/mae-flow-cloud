@@ -71,7 +71,7 @@ class StableStateRecoveryTests(unittest.TestCase):
         recovered = recover_lean_flow(self.lean(Phase.QUALITY)).state
         encoded = repr(recovered)
 
-        self.assertEqual("verify_ponytail", recovered["current"])
+        self.assertEqual("build", recovered["current"])
         self.assertEqual("REQ-42", recovered["config"]["单号"])
         self.assertEqual("main", recovered["config"]["基线分支"])
         self.assertEqual(["notes.txt"], recovered["initial_dirty"])

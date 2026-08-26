@@ -217,10 +217,6 @@ def cmd_doctor(flow, st, args):
             print(f"⚠ 用户风险放行: {kind}（当前步骤/任务卡/HEAD 有效；其他证据不受影响）")
         else:
             print(f"❌ 用户风险放行已失效: {kind}（{why}）")
-    if step.get("tests_only"):
-        head, why = api._ensure_step_entry_head(flow, st, sid)
-        print(("✅" if head else "❌") + " UT 步骤入口 HEAD: "
-              + ((head[:12] + "（旧状态已自动恢复或原本存在）") if head else why))
     fails = api.check_evidence(step, st)
     if fails:
         print("❌ 当前步证据未满足:")
@@ -247,13 +243,6 @@ def cmd_doctor(flow, st, args):
     if uses_pipeline(st, host_env.host_kind()):
         print("✅ 验证环境: %s（只读，由部署执行契约决定）" %
               validation_environment(st, host_env.host_kind()))
-    if step.get("tests_only"):
-        tp = api._test_patterns(st)
-        if tp:
-            print("✅ 测试路径硬边界: " + " | ".join(tp))
-        else:
-            print("⚠ 测试路径未配置:当前使用内置保守规则硬拦非测试源码;"
-                  "非标准测试目录请在 .mae-flow-defaults.json 补「测试路径」")
     sp = api._configured_source_patterns(st)
     print(("✅" if sp else "ℹ") + " 私有源码路径: "
           + (" | ".join(sp) if sp else "未配置（使用跨仓扩展名、构建文件和通用目录规则）"))

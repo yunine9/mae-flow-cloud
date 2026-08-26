@@ -137,7 +137,7 @@ class ActiveHookEventAdapter(HookQualityExecutionMixin):
                 verify_dispatch_task(kind, state, self.task_card_ports())
                 if kind in (
                     "STORY", "REVIEWER",
-                    "COMPILE", "CODECHECK", "UT",
+                    "CODECHECK", "UT",
                     "GRILL", "GRILL_PREP", "GRILL_FINAL",
                 )
                 else None

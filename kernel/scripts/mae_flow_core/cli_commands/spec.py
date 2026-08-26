@@ -1,7 +1,7 @@
 """CLI responsibilities extracted from the historical entrypoint."""
 
 from .shared import (
-    DEFAULTS_PATH, DEFAULT_TEST_PATS, GATE_PERMITS_PATH, GATE_STRIKES_PATH,
+    DEFAULTS_PATH, GATE_PERMITS_PATH, GATE_STRIKES_PATH,
     SPEC_PHASES, SPEC_REGISTER_FIELDS, json, load_json, os, re, specengine, sys,
     time, update_json,
 )
@@ -15,7 +15,6 @@ _USER_GIT_AUTHORIZATION_RULES = {
     "bash-foreign-openspec",
     "bash-specs",
     "bash-source",
-    "bash-tests-only",
     "bash-wipe-worktree",
     "bash-git-revert-user-authorization",
 }
@@ -48,16 +47,8 @@ def _test_patterns(st):
         valid.append(pattern)
     return valid
 
-def _effective_test_patterns(st):
-    """tests_only 永远有机器边界：仓库配置优先，缺失时使用保守内置规则。
-
-    非标准测试目录应落进 .mae-flow-defaults.json；不能因为团队尚未配置就退化为
-    「UT agent 可以写任意源码」。误拦有 unlock 裁决出口，但 current/doctor 会提示先修长期配置。
-    """
-    return DEFAULT_TEST_PATS + _test_patterns(st)
-
 def _business_source_changed_since_step(st, sid):
-    """找出某 tests_only 步骤入口后发生的非测试源码变化（提交和工作区都算）。"""
+    """找出某步骤入口后发生的非测试源码变化(提交和工作区都算;月光 defer 用)。"""
     head = (st.get("step_heads", {}) or {}).get(sid, "")
     if not head:
         return None, (f"缺少步骤 {sid} 的入口 HEAD（可能是旧版在途状态）"

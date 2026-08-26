@@ -138,60 +138,6 @@ class CloudKeepsWorkerLedger(unittest.TestCase):
             self.assertFalse(result.passed)
             self.assertIn("AskUserQuestion", result.reason)
 
-    def test_ut_session_requires_external_complete(self):
-        """外置的是 UT 运行，不是编写批；只有明确收口后才能登记义务。"""
-        with _CloudEnv(host_env.CLOUD):
-            for state in (_state("generate"), _state("final"),
-                          _state("external")):
-                result = _quality_rules().ut_session_complete({}, state)
-                self.assertFalse(result.passed, state)
-                self.assertIn("尚未全部完成", result.reason)
-
-            result = _quality_rules().ut_session_complete(
-                {}, _state("external", complete=True))
-            self.assertTrue(result.passed, result.reason)
-            self.assertIn("流水线", result.reason)
-
-    def test_agent_or_no_source_released_in_cloud(self):
-        """有源码改动时 agent_or_no_source 落到 agent_ran,同样放行。"""
-        with _CloudEnv(host_env.CLOUD):
-            result = _agent_rules().agent_or_no_source(
-                {"agent": "COMPILE"}, _state())
-            self.assertTrue(result.passed, result.reason)
-
-
-class CloudDelegatesCodecheckToPipeline(unittest.TestCase):
-    def test_review_codecheck_passes_in_cloud_without_scan(self):
-        """云端不做本地 CodeCheck:工具是内网 npm 件,装不上时只剩安装
-        空撞和 TOOL_ERROR 噪声(task-1 实锤);交由流水线,lightcheck 照常。"""
-        from mae_flow_core.quality.evidence import QualityEvidenceRules
-
-        class _Ports(object):
-            def business_changed_files(self, _state):
-                return ["service/src/A.java"], ""
-
-        with _CloudEnv(host_env.CLOUD):
-            result = QualityEvidenceRules(_Ports()).review_codecheck(
-                {}, {"current": "verify_codecheck"})
-            self.assertTrue(result.passed, result.reason)
-            self.assertIn("流水线", result.reason)
-
-    def test_review_codecheck_still_gates_locally(self):
-        from mae_flow_core.quality.evidence import QualityEvidenceRules
-
-        class _Ports(object):
-            def business_changed_files(self, _state):
-                return ["service/src/A.java"], ""
-
-            def risk_acceptance(self, _kind, _state):
-                return False, ""
-
-        with _CloudEnv(None):
-            result = QualityEvidenceRules(_Ports()).review_codecheck(
-                {}, {"current": "verify_codecheck"})
-            self.assertFalse(result.passed)
-            self.assertIn("机器首检", result.reason)
-
 
 class TestsNeverPopDesktop(unittest.TestCase):
     def test_desktop_popup_refuses_to_fire_under_test_runner(self):
@@ -210,13 +156,6 @@ class LocalHostUnchanged(unittest.TestCase):
         with _CloudEnv(None):
             result = _agent_rules().agent_ran({"agent": "UT"}, _state())
             self.assertFalse(result.passed)
-
-    def test_ut_batches_still_gate_locally(self):
-        with _CloudEnv(None):
-            result = _quality_rules().ut_session_complete({}, _state())
-            self.assertFalse(result.passed)
-            self.assertIn("尚未全部完成", result.reason)
-
 
 if __name__ == "__main__":
     unittest.main()

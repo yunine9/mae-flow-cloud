@@ -4,19 +4,24 @@
     "grill-critic-agent",
     "story-generator-agent",
     "craft-reviewer-agent",
-    "compile-agent",
     "codecheck-fix-agent",
     "ut-generator-agent"
   ],
   "removed_agents": [
     "test-design-agent",
     "cp-task-analyst-agent",
-    "cp-implementer-agent"
+    "cp-implementer-agent",
+    "compile-agent"
   ],
   "preserved_cli_commands": [
-    ["lightcheck", "--quiet"],
-    ["action", "status"],
-    ["agent-task", "compile"]
+    [
+      "lightcheck",
+      "--quiet"
+    ],
+    [
+      "action",
+      "status"
+    ]
   ],
   "preserved_resources": [
     "skills/mae-flow/assets/CHAIN-TEMPLATE.md",

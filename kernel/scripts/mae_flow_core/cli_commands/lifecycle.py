@@ -132,7 +132,7 @@ def cmd_goto(flow, st, args):
     if args.step == "config_confirm":
         st.pop("branch_resolution", None)
     if args.step in {
-            "config_confirm", "workflow_select", "code_reviewer_ask",
+            "config_confirm", "workflow_select",
             "branch_create", "grill_ask",
             "grill", "open", "design", "story_ask", "story",
             "hf_open", "tw_open", "rf_triage",
@@ -177,16 +177,8 @@ def cmd_unlock(flow, st, args):
     }
     st["history"].append({"step": sid, "result": "unlock:" + args.what, "note": args.reason, "at": now})
     api.save_state(st)
-    if step.get("tests_only"):
-        target = step.get("source_change_recheck", "")
-        print(f"[mae-flow] 已解锁本步({sid})的源码修改(仅本步有效,推进后自动失效)。"
-              "修复后保持改动未提交并执行 done。"
-              + (f"harness 检测到被测源码变化后会自动回流到 {target}，"
-                 "先编译、统一检视并提交，再从 CodeCheck 重跑；不允许就地提交或推送。" if target else
-                 "旧 UT 证据会因源码变化失效，必须重跑验证。"))
-    else:
-        print("[mae-flow] 本仓未启用测试路径收紧,无需实际解锁;裁决已留痕。"
-              "修复源码后保持未提交并执行 done，由状态机安排编译、检视、提交和 UT 收尾。")
+    print(f"[mae-flow] 已解锁本步({sid})的源码修改(仅本步有效,推进后自动失效);"
+          "裁决已留痕。修复并自查后按本步指引继续,推送前验证与权威流水线会复验。")
 
 _MAX_LISTED_DIRTY = 40
 

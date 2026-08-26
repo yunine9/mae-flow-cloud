@@ -21,20 +21,11 @@
       "_gate_commit_candidates": 11,
       "_gate_bash_writes": 23
     },
-    "scripts/mae_flow_core/cli_commands/agent_task.py": {
-      "cmd_agent_task": 56,
-      "_store_agent_task": 14
-    },
-    "scripts/mae_flow_core/cli_commands/codecheck_commands.py": {
-      "cmd_codecheck_scan": 31,
-      "cmd_codecheck_scope": 10,
-      "cmd_codecheck_record": 13
-    },
+    "scripts/mae_flow_core/cli_commands/codecheck_commands.py": {},
     "scripts/mae_flow_core/cli_commands/moonlight_commands.py": {
       "cmd_moonlight": 50,
       "_moonlight_blocked": 4,
       "_moonlight_push_failed": 4,
-      "_moonlight_unlock_source": 4,
       "_moonlight_finalize": 5
     },
     "scripts/mae_flow_core/cli_commands/dispatch.py": {

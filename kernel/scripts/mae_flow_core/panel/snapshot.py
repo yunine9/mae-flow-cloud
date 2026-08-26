@@ -277,11 +277,6 @@ def _evidence(state):
     external = snapshot_external(state)
     if external:
         out["external"] = external
-    ponytail = attempts.get("ponytail")
-    if isinstance(ponytail, dict):
-        # 有尝试记录≠检查通过;通过与否由步骤是否走完判定(展示层据 step 判)
-        out["ponytail"] = {"name": "代码精简", "rounds": ponytail.get("count", 0),
-                           "step": "verify_ponytail"}
     if ut_session:
         batches = ut_session.get("batches") or []
         out["ut"] = {

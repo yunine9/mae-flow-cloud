@@ -24,29 +24,6 @@ class OwnershipDecision:
     advisories: tuple = ()
 
 
-def decide_compile_task_commit(step, task, completed=False):
-    """Close the issued-COMPILE/pre-completion commit window.
-
-    Only the real lifecycle-plus-execution fact (or an explicit user risk
-    acceptance) may open it. The former Hook token path is gone: nothing has
-    issued a COMPILE token since agent returns stopped being parsed, so
-    keeping it as an alternative gate only hid which fact actually decided.
-    """
-    if completed:
-        return None
-    if (
-            not isinstance(task, dict)
-            or task.get("step") != step):
-        return None
-    return GateDecision(
-        "block",
-        "bash-compile-task-pending",
-        "当前步骤的编译任务已签发，但尚未同时观察到 Agent 正常返回和"
-        "对应输入上的真实成功执行。先完成当前 COMPILE 任务；compile-agent 的"
-        "直接修复保持未提交，随后由主流程按正常候选规则提交。",
-    )
-
-
 def _compile_side_effect_block(facts):
     all_paths = tuple(dict.fromkeys(facts.compile_side_effects))
     staged = tuple(dict.fromkeys(facts.staged_compile_side_effects))

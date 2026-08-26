@@ -19,13 +19,14 @@ from mae_flow_core.moonlight import (  # noqa: E402
 
 
 class MoonlightPolicyTests(unittest.TestCase):
-    def test_unified_recompile_is_a_compile_quality_step(self):
-        self.assertEqual("compile", step_kind("quality_recompile"))
-        self.assertFalse(can_hard_block("quality_recompile"))
+    def test_wide_build_is_the_only_quality_step(self):
+        self.assertEqual("compile", step_kind("build"))
+        self.assertTrue(can_hard_block("build"))
+        self.assertFalse(can_hard_block("push"))
 
-    def test_full_repairs_enter_the_unified_quality_corridor(self):
-        self.assertEqual("quality_recompile", REPAIR_ENTRY["full"])
-        self.assertEqual("quality_recompile", REPAIR_ENTRY["hotfix"])
+    def test_all_repairs_enter_the_wide_build_step(self):
+        for workflow in ("full", "hotfix", "tweak", "review"):
+            self.assertEqual("build", REPAIR_ENTRY[workflow], workflow)
 
 
 if __name__ == "__main__":

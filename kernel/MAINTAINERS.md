@@ -4,6 +4,21 @@
 重构后的模块边界、依赖方向和扩展步骤见
 [docs/refactor-architecture.md](docs/refactor-architecture.md)。
 
+## 2026-08-25 编排瘦身勘误（读本手册前必读）
+
+编码段的逐步编排已整体退役：四条工作流的编码段收敛为一个宽 `build` 步（自由改源码/测试/
+自行编译，零证据编排），直通 domain_archive → delivery_review → push → external_verify。
+出口验收不变且从严：推送前真实编译+UT、权威流水线绑 SHA 核销、MR 人工检视。
+
+因此本手册后文凡描述以下机器的段落均为**历史记载**，不再是生产行为：
+compile-agent 与 COMPILE 任务卡、中途人工代码检视（build_review/craft-reviewer）、
+质量小循环（quality_*）、四步验证（verify_ponytail/verify_codecheck/verify_ut/verify_spec/
+verify_comet）、tw_/rf_ 质量链、`tests_only`/`source_change_*` 步骤属性、`unlock source`、
+主流程 COMPILE/UT/CODECHECK 任务卡与 `agent-task` 命令。任务卡机制仅存于独立 UT/CodeCheck
+工具单（standalone）。在途旧状态由 load_state 的退役桥映射回 build（见
+`cli_commands/state_config.py` 的 `_RETIRED_CHOREOGRAPHY`）。回溯锚点:
+`before-flow-slim-20260825`。当前红线以 `scripts/tests/test_flow_liveness.py` 为准。
+
 ## 2026-08-04 稳定恢复后的权威边界
 
 当前生产实现以 `d32ccfb` 的稳定流程为底座，只接受小步减法式演进。后续文档若仍描述独立 Test Blueprint、

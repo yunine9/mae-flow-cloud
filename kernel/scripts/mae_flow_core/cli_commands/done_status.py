@@ -4,14 +4,13 @@ from .shared import (
     WORKFLOW_LABELS, json, os, sys, time, workflow_completion,
     workflow_transitions,
 )
-from .quality_routing import (
-    _changed_file_paths,
-    _done_route_quality_changes,
-    _done_save_die,
-    _done_transition_to_recheck,
-)
 from .wiring import api
 from mae_flow_core.cli_commands.approval_subject import subject_matches
+
+
+def _done_save_die(st, message):
+    api.save_state(st)
+    api.die(message, 2)
 
 def _done_pending_config(step, st, args, sid):
     review = st.get("config_review") if sid == "config_confirm" else None
@@ -53,13 +52,14 @@ def _done_validate_choice_and_ack(step, st, args, sid):
     if step.get("approval_subject") and not api._moonlight(st):
         previous_subject = dict(st.get("approval_subject") or {})
         ok, why = subject_matches(os.getcwd(), st, sid, step)
+        # subject_matches rotates a missing/stale subject in-memory.  Persist
+        # every rotation — including the first-bind pass-through path (2026-08-26
+        # 单次确认修复) — so the ledger filter and any later card render see the
+        # same bound identifier; no Agent loop through current/reasoning is
+        # needed merely to mint another identifier.
+        if st.get("approval_subject") != previous_subject:
+            api.save_state(st)
         if not ok:
-            # subject_matches rotates a missing/stale subject in-memory.  Save
-            # it before returning the recoverable error so the next human card
-            # is already bound to the new stable content; no Agent loop through
-            # current/reasoning is needed merely to mint another identifier.
-            if st.get("approval_subject") != previous_subject:
-                api.save_state(st)
             api.die(why, 2)
     error = workflow_completion.choice_error(step, args.choice)
     if error:
@@ -98,74 +98,11 @@ def _done_guard_branch(st, sid):
             st.get("config", {}).get("单号", ""), st)
     want = st.get("config", {}).get("分支名", "")
     if sid not in (
-            "config_confirm", "workflow_select",
-            "code_reviewer_ask", "branch_create") and want:
+            "config_confirm", "workflow_select", "branch_create") and want:
         cur = api.sh("git branch --show-current")
         if cur != want:
             _done_save_die(
                 st, f"当前分支 {cur or '未知'} != 本单约定分支 {want}。先切回正确分支，禁止在别的分支推进。")
-
-def _done_quality_rework(st, sid):
-    if sid != "quality_rework":
-        return
-    context = st.get("quality_review") or {}
-    dirty = api._blocking_dirty_source_paths(st, api.FLOW)
-    business = [
-        path for path in dirty
-        if not api._is_test_file(path, st) and not api._is_build_path(path)
-    ]
-    if not dirty:
-        return
-    origin = context.get("origin", "")
-    if business and origin == "ut-test":
-        origin = "ut-source"
-        resume, rework = "verify_codecheck", "quality_recompile"
-    else:
-        resume = context.get("resume", "")
-        rework = context.get("rework", "")
-    st["quality_review"] = workflow_transitions.quality_review_context(
-        origin, dirty, api.sh("git rev-parse --verify HEAD"),
-        resume=resume, rework=rework)
-
-
-def _done_quality_review_recovery(flow, st, sid, step):
-    """Repair migrated/morning entries that lack the semantic review cursor."""
-    if step.get("next") != "quality_review":
-        return False
-    context = st.get("quality_review")
-    valid_context = isinstance(context, dict) and all(
-        context.get(key) for key in (
-            "origin", "resume", "rework", "changed_files"))
-    entry, migrate_err = api._ensure_step_entry_head(flow, st, sid)
-    if migrate_err:
-        _done_save_die(
-            st, "无法恢复质量步骤入口 HEAD:" + migrate_err
-            + "。请执行 current 查看唯一恢复动作，禁止重复运行 done。")
-    changed, why = api._source_changed_since(entry, st)
-    if why:
-        _done_save_die(
-            st, "无法核对质量步骤产生的改动:" + why
-            + "。请保留现场并交维护人修复状态，不要重跑质量 Agent。")
-    if changed:
-        st["quality_review"] = workflow_transitions.quality_review_context(
-            (context.get("origin") if valid_context else
-             str(step.get("quality_review_origin") or "ut-source")),
-            _changed_file_paths(changed),
-            api.sh("git rev-parse --verify HEAD"),
-            resume=(context.get("resume", "") if valid_context else
-                    str(step.get("quality_review_resume") or "")),
-            rework=(context.get("rework", "") if valid_context else
-                    str(step.get("quality_review_rework") or "")))
-        return False
-    resume = str(step.get("quality_review_resume") or "")
-    if not resume:
-        _done_save_die(
-            st, "质量步骤没有待检视改动，也没有声明恢复节点；"
-            "流程定义不完整，已停止一次，禁止猜测跳转。")
-    return _done_transition_to_recheck(
-        flow, st, sid, resume, [], "兼容恢复：本步没有产生质量改动",
-        "[mae-flow] 本步没有待检视 diff，已跳过空检视并恢复到 %s。\n"
-        % resume)
 
 def _done_require_evidence(step, st, args, sid):
     fails = api.check_evidence(step, st)
@@ -214,11 +151,6 @@ def cmd_done(flow, st, args):
     _done_resolve_moonlight_branch(flow, st, sid)
     api._done_prepare_external_verification(step, st, sid)
     _done_require_evidence(step, st, args, sid)
-    if _done_route_quality_changes(flow, st, sid, step):
-        return
-    _done_quality_rework(st, sid)
-    if _done_quality_review_recovery(flow, st, sid, step):
-        return
     _done_finalize(flow, st, args, sid, step)
 
 def cmd_skip(flow, st, args):
@@ -234,7 +166,7 @@ def cmd_skip(flow, st, args):
     if kinds:
         # 整步跳过会把本步**全部**检查一起扔掉;而 accept-risk 只放行拿不到的
         # 那一份证据,其余照查。实战撞过:UT 证据取不到,连试 6 次后用户被引到
-        # "整步跳过 verify_ut"——UT 的其他机器检查也一起没了,代价大得多。
+        # 整步跳过——该步其他机器检查也一起没了,代价大得多。
         api.die(
             "别整步跳过:本步有更精确的出口。拿不到的只是 %s 的执行证据时,"
             "把实际跑过的结果摆给用户,取得同意后逐个执行 "
@@ -247,11 +179,7 @@ def cmd_skip(flow, st, args):
 def _step_agent_kinds(step):
     kinds = set()
     for spec in step.get("evidence", []):
-        typ = spec.get("type")
-        if typ == "review_codecheck":
-            kinds.add("CODECHECK")
-            kinds.add("CODECHECK_TOOL")
-        elif typ in ("agent_ran", "agent_or_no_source", "review_agent_or_no_code") and spec.get("agent"):
+        if spec.get("type") == "agent_ran" and spec.get("agent"):
             kinds.add(str(spec["agent"]).upper())
     return kinds
 
@@ -277,20 +205,8 @@ def cmd_accept_risk(flow, st, args):
     if not ok:
         api.die("accept-risk 授权验真失败:" + why, 2)
     task = (st.get("agent_tasks", {}) or {}).get(kind, {})
-    precommit_compile = bool(
-        kind == "COMPILE" and task.get("precommit_review"))
-    compile_task_snapshot = bool(
-        kind == "COMPILE"
-        and isinstance(task, dict)
-        and task.get("step") == sid
-        and task.get("head"))
     dirty = api._blocking_dirty_source_paths(st, flow)
-    if dirty and not compile_task_snapshot:
-        if kind == "COMPILE":
-            api.die(
-                "编译风险确认尚未绑定当前整体源码快照；请重新执行 "
-                "agent-task compile，按新任务卡完成编译或重新确认风险。"
-                "不要在用户检视前提交代码。", 2)
+    if dirty:
         api.die("风险确认必须绑定稳定代码版本，但仍有未提交源码/测试/构建文件: " + "、".join(dirty[:8])
             + "。先按本单规范提交，再向用户展示风险并重新确认。", 2)
     now = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -299,27 +215,6 @@ def cmd_accept_risk(flow, st, args):
            "task_sha256": task.get("sha256", ""), "reason": args.reason,
            "authorization": authorization_receipt,
            "unchanged_initial_dirty": inherited_dirty}
-    if compile_task_snapshot:
-        task_head = task.get("head", "")
-        if (
-                not task_head
-                or api.argv_out([
-                    "git", "cat-file", "-t", task_head]) != "commit"):
-            api.die("编译风险确认无法绑定任务卡源码基线，请重新签发 COMPILE 任务卡。", 2)
-        current_snapshot = api._source_snapshot_since(
-            task_head, st, flow)
-        if precommit_compile:
-            issued_snapshot = task.get("source_snapshot")
-            if (
-                    not isinstance(issued_snapshot, dict)
-                    or current_snapshot != issued_snapshot):
-                api.die("编译风险确认使用的 COMPILE 任务卡已过期；"
-                        "代码变化后请重新执行 agent-task compile，"
-                        "完成整体编译或重新确认风险。", 2)
-        rec.update({
-            "task_issuance_id": task.get("issuance_id", ""),
-            "source_snapshot": current_snapshot,
-        })
     st.setdefault("risk_acceptances", {})[kind] = rec
     st.setdefault("history", []).append(
         {"step": sid, "result": "accept-risk:" + kind, "note": args.reason, "at": now})
@@ -388,7 +283,6 @@ def cmd_steps(flow, st, args):
     current = st.get("current") if st else None
     active_wf = (st.get("choices", {}) or {}).get("workflow") if st else None
     ask_labels = {
-        "code_reviewer_ask": "独立 CODE Reviewer",
         "grill_ask": "需求质询", "grill": "需求质询",
         "story_ask": "STORY", "story": "STORY",
     }
@@ -398,7 +292,7 @@ def cmd_steps(flow, st, args):
         for sid in _workflow_chain(flow, wf):
             step = flow["steps"][sid]
             tags = []
-            if sid in ("code_reviewer_ask", "grill_ask", "story_ask"):
+            if sid in ("grill_ask", "story_ask"):
                 tags.append("可选环节:%s(流程内询问决定)" % ask_labels[sid])
             elif sid in ("grill", "story"):
                 tags.append("随「%s」询问可选" % ask_labels[sid])

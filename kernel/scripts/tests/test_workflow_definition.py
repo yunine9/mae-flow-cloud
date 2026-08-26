@@ -40,12 +40,10 @@ class WorkflowTransitionTests(unittest.TestCase):
 
     def test_transition_targets_includes_declared_dynamic_edges_once(self):
         self.assertEqual(
-            ("normal", "compile", "recompile", "morning"),
+            ("normal", "morning"),
             transition_targets(
                 {
                     "next": "normal",
-                    "source_change_next": "compile",
-                    "source_change_recheck": "recompile",
                     "dynamic_next": ["morning", "normal"],
                 }
             ),
@@ -158,7 +156,8 @@ class WorkflowTransitionTests(unittest.TestCase):
             chain = workflow_chain(flow, workflow)
             with self.subTest(workflow=workflow):
                 self.assertEqual("end", chain[-1])
-                for tail in ("build_review", "delivery_review", "push"):
+                for tail in ("build", "domain_archive",
+                             "delivery_review", "push"):
                     self.assertIn(tail, chain)
 
     def test_workflow_cost_reports_own_steps_not_a_false_skip_list(self):
@@ -173,15 +172,14 @@ class WorkflowTransitionTests(unittest.TestCase):
         tweak = workflow_cost(flow, "tweak")
         self.assertGreater(full["steps"], tweak["steps"])
         self.assertGreaterEqual(full["acks"], tweak["acks"])
-        # 轻档自己的验证步骤必须出现在"本道特有"里,用户才看得见它要验证
-        joined = "".join(tweak["unique"])
-        self.assertIn("规范检查", joined)
-        self.assertIn("单元测试", joined)
+        # 轻档自己的范围确认必须出现在"本道特有"里
+        self.assertIn("局部修改", "".join(tweak["unique"]))
         # 四条道共有的步骤(编码、推送)不算任何一条道"特有"
         for workflow in ("full", "hotfix", "tweak", "review"):
             titles = "".join(workflow_cost(flow, workflow)["unique"])
             with self.subTest(workflow=workflow):
                 self.assertNotIn("推送分支", titles)
+                self.assertNotIn("自由实现与定稿", titles)
 
     def test_workflow_chain_stops_at_first_cycle(self):
         flow = {

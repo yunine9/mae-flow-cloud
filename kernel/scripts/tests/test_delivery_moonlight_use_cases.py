@@ -19,7 +19,6 @@ from mae_flow_core.application.delivery.moonlight import (  # noqa: E402
     record_deferred_quality,
     record_push_failure,
     repair_moonlight,
-    unlock_moonlight_source,
 )
 from mae_flow_core.application.delivery.moonlight_branch import (  # noqa: E402
     MoonlightBranchFacts,
@@ -317,16 +316,8 @@ class MoonlightUseCaseTests(unittest.TestCase):
         self.assertEqual(
             ["persist", "ensure", "changes"], calls)
 
-    def test_unlock_and_repair_blocker_preserve_current_step(self):
+    def test_repair_blocker_preserves_current_step(self):
         state = self.state()
-        result = unlock_moonlight_source(
-            state,
-            tests_only=True,
-            reason="failing case proves source contract mismatch",
-            now="now",
-        )
-        self.assertEqual("source", self.updated(result)["unlock"]["scope"])
-
         state["moonlight"]["hard_blocked"] = {
             "issue": "ML-001",
         }
@@ -335,9 +326,9 @@ class MoonlightUseCaseTests(unittest.TestCase):
             "kind": "blocker",
         }]
         result = repair_moonlight(
-            state, repair_target="build_rework", head="head", now="later")
+            state, repair_target="build", head="head", now="later")
         updated = self.updated(result)
-        self.assertEqual("verify_ut", updated["current"])
+        self.assertEqual(state["current"], updated["current"])
         self.assertEqual(2, updated["moonlight"]["cycle"])
 
     def test_finalize_disables_moonlight_and_targets_archive(self):

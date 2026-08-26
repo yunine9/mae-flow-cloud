@@ -32,6 +32,16 @@ def user_on_this_machine():
     return host_kind() != CLOUD
 
 
+def unattended_confirm_allowed(state):
+    """归档/交付清单自动确认的许可:月光宝盒或云端宿主。
+
+    云端没有"坐在终端前的用户",中途单问确认只会把任务挂起数小时;
+    真正的人工裁决在工作台批注与 MR 检视(2026-08-25 编排瘦身)。"""
+    if bool(((state or {}).get("moonlight") or {}).get("enabled")):
+        return True
+    return host_kind() == CLOUD
+
+
 def worker_agent_ledger_gates():
     """Whether real worker lifecycle facts are enforced.
 

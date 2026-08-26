@@ -28,23 +28,14 @@ ENV_OFF = "MAE_FLOW_NO_NOTIFY"
 # 阶段名是给人看的,说人话:描述这一段在干什么,不用流程内部代号
 # ("质量"对用户是黑话,"验证"才是这一段实际发生的事)。
 PHASES = {
-    "启动": ("config_confirm", "workflow_select", "code_reviewer_ask",
-             "branch_create"),
+    "启动": ("config_confirm", "workflow_select", "branch_create"),
     "澄清需求": ("grill", "grill_ask", "rf_triage"),
     "定规格": ("open", "hf_open", "tw_open", "design", "archive",
                "archive_confirm"),
     "写设计": ("story", "story_ask"),
-    "写代码": ("build", "build_agent_review", "build_review", "build_rework",
-               "build_commit"),
-    "验证": ("verify_comet", "verify_ponytail", "verify_post_ponytail_compile",
-             "verify_codecheck", "verify_codecheck_compile", "verify_recompile",
-             "verify_ut", "verify_spec", "quality_review", "quality_rework",
-             "quality_recompile", "quality_commit",
-             "tw_codecheck", "tw_ut", "tw_verify",
-             "rf_codecheck", "rf_ut", "rf_verify"),
-    # domain_archive(领域知识归档)跑在 verify_spec 之后、最终检视之前。
-    # 它曾按名字被归进「定规格」,于是阶段轨道走到这一步会从「验证」倒退
-    # 两格——用户看到的"进度条不对"就是这么来的。
+    # 2026-08-25 编排瘦身:实现/精简/规范/测试/规格自查全部发生在宽 build
+    # 步里,验证从独立阶段变成 build 的一部分+出口(流水线)的职责。
+    "写代码": ("build",),
     "交付": ("domain_archive", "delivery_review", "push", "external_verify",
              "moonlight_review", "end"),
 }

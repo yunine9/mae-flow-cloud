@@ -22,9 +22,11 @@ from mae_flow_core.quality.task_cards import (  # noqa: E402
 
 class QualityTaskCardTests(unittest.TestCase):
     def test_allowed_steps_are_case_insensitive_by_kind(self):
-        self.assertTrue(task_allowed("compile", "build"))
-        self.assertTrue(task_allowed("UT", "rf_verify"))
-        self.assertFalse(task_allowed("CODECHECK", "build"))
+        # 2026-08-25 编排瘦身:任务卡仅存于 standalone 独立任务。
+        self.assertTrue(task_allowed("ut", "standalone_ut"))
+        self.assertTrue(task_allowed("CODECHECK", "standalone_codecheck"))
+        self.assertFalse(task_allowed("COMPILE", "build"))
+        self.assertFalse(task_allowed("UT", "build"))
 
     def test_document_preserves_lines_without_a_return_receipt(self):
         document = TaskCardDocument(["# card", "line"])

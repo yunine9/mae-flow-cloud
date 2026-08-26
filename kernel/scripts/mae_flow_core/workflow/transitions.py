@@ -1,35 +1,6 @@
 """Pure transition policy for Mae-Flow workflow definitions."""
 
 
-_QUALITY_REVIEW_ROUTES = {
-    "ponytail-source": ("verify_codecheck", "quality_recompile"),
-    "codecheck-source": ("verify_codecheck", "quality_recompile"),
-    "ut-source": ("verify_codecheck", "quality_recompile"),
-    "ut-test": ("verify_spec", "verify_ut"),
-}
-
-
-def quality_review_context(
-        origin, changed_files, entered_head, resume="", rework=""):
-    """Create the semantic quality-review cursor without content digests."""
-    if origin not in _QUALITY_REVIEW_ROUTES:
-        raise ValueError("unknown quality review origin: %s" % origin)
-    default_resume, default_rework = _QUALITY_REVIEW_ROUTES[origin]
-    resume = str(resume or default_resume)
-    rework = str(rework or default_rework)
-    files = tuple(dict.fromkeys(
-        str(path) for path in changed_files if str(path).strip()))
-    if not files:
-        raise ValueError("quality review requires changed files")
-    return {
-        "origin": origin,
-        "resume": resume,
-        "rework": rework,
-        "changed_files": list(files),
-        "entered_head": str(entered_head or ""),
-    }
-
-
 def _state_value(state, dotted_path):
     value = state
     for part in str(dotted_path or "").split("."):
@@ -52,12 +23,6 @@ def transition_targets(step):
             append(target, declared=True)
     elif nxt:
         append(nxt)
-    # 每一种"改了源码就换步"的声明都是真实转移边。漏登记的后果不是运行期出错
-    # (done 直接改 current)，而是图校验、活性红线和环分析全都看不见那条边。
-    for key in ("source_change_next", "source_change_recheck",
-                "late_source_change_next"):
-        if key in step:
-            append(step.get(key), declared=True)
     dynamic = step.get("dynamic_next")
     if isinstance(dynamic, (list, tuple)):
         for target in dynamic:
@@ -99,11 +64,8 @@ def resolved_next(flow, state, step_id):
 def workflow_chain(flow, workflow):
     """某条交付方式的完整步骤链(展示用:可选环节一律取"做"的那支)。
 
-    坑:分叉不只按 workflow 分。build 是按 code_reviewer 分叉的
-    ({disabled,enabled}),原来一律拿 workflow 去查那张表,查不到就 None,
-    链条在「编码实现」处直接断——四条道的验证与交付整段(build_review 到
-    push/end)从来没被打印过,而 `steps` 命令存在的理由正是"选档前看得见
-    全貌"。非 workflow 的分叉按 next_default 取,与"取完整形态"一致。
+    非 workflow 的分叉(如历史上的 code_reviewer)按 next_default 取,
+    与"取完整形态"一致;2026-08-25 编排瘦身后主链已无此类分叉,守则保留。
     """
     chain = []
     step_id = flow["start"]

@@ -94,7 +94,7 @@ class LeanMigrationCliTests(unittest.TestCase):
         with open(self.state_path, encoding="utf-8") as stream:
             stable = json.load(stream)
         self.assertEqual(2, stable["schema_version"])
-        self.assertEqual("verify_ponytail", stable["current"])
+        self.assertEqual("build", stable["current"])
         serialized = repr(stable).lower()
         for forbidden in ("token", "digest", "receipt", "agent_tasks"):
             self.assertNotIn(forbidden, serialized)

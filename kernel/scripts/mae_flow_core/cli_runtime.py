@@ -30,8 +30,8 @@ from .cli_commands import done_status as _done_status
 from .cli_commands import gate_permit_state as _gate_permit_state
 from .cli_commands import spec as _spec
 from .cli_commands import gate as _gate
-from .cli_commands import agent_task as _agent_task
 from .cli_commands import role_task as _role_task
+from .cli_commands import task_files as _task_files
 from .cli_commands import codecheck_commands as _codecheck_commands
 from .cli_commands import pipeline_commands as _pipeline_commands
 from .cli_commands import build_milestones as _build_milestones
@@ -120,6 +120,7 @@ _COMMAND_MODULES = (
     _current,
     _user_intervention,
     _standalone_core,
+    _task_files,
     _standalone_commands,
     _direct_reentry,
     _init_capability,
@@ -129,7 +130,6 @@ _COMMAND_MODULES = (
     _gate_permit_state,
     _spec,
     _gate,
-    _agent_task,
     _role_task,
     _codecheck_commands,
     _pipeline_commands,

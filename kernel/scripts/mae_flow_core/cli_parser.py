@@ -21,9 +21,9 @@ class MFParser(argparse.ArgumentParser):
             '  python "%s" done [--choice 值] [--set 键=值]\n'
             '  python "%s" init\n'
             "其余子命令: status|panel|doctor|report|envcheck|skip|goto|unlock|allow|spec|template|"
-            "agent-task|lightcheck|accept-risk|moonlight|action|messages|config-review|requirement-record|"
-            "story-localize|local-spec|domain-docs|domain-archive|manifest|codecheck-scan|"
-            "codecheck-scope|codecheck-record|approve-exemption|pipeline|milestone|intervention|"
+            "lightcheck|accept-risk|moonlight|action|messages|config-review|requirement-record|"
+            "story-localize|local-spec|domain-docs|domain-archive|manifest|"
+            "pipeline|milestone|intervention|"
             "migrate-flow|exit"
             "(用法见 current/exit 指令)。\n"
             "注意:子命令不带连字符(是 current 不是 --current);"
@@ -115,7 +115,7 @@ def build_parser():
     moonlight = sub.add_parser("moonlight")
     moonlight.add_argument("action", choices=[
         "on", "continue", "off", "report", "push-failed",
-        "unlock-source", "defer", "blocked", "repair", "finalize"])
+        "defer", "blocked", "repair", "finalize"])
     moonlight.add_argument("--reason")
     moonlight.add_argument("--ack")
     exit_cmd = sub.add_parser("exit")
@@ -235,7 +235,7 @@ def build_parser():
     archive_apply_choice = archive_apply.add_mutually_exclusive_group(
         required=True)
     archive_apply_choice.add_argument("--message-id")
-    archive_apply_choice.add_argument("--moonlight-auto", action="store_true")
+    archive_apply_choice.add_argument("--auto", "--moonlight-auto", dest="moonlight_auto", action="store_true")
     manifest = sub.add_parser("manifest")
     manifest_actions = manifest.add_subparsers(
         dest="manifest_action", required=True)
@@ -252,10 +252,7 @@ def build_parser():
     manifest_confirm_choice = manifest_confirm.add_mutually_exclusive_group(
         required=True)
     manifest_confirm_choice.add_argument("--message-id")
-    manifest_confirm_choice.add_argument("--moonlight-auto", action="store_true")
-    task = sub.add_parser("agent-task")
-    task.add_argument("kind", choices=["compile", "codecheck", "ut"])
-    task.add_argument("--scope", help="批次/单告警范围说明；写入受指纹保护的任务卡")
+    manifest_confirm_choice.add_argument("--auto", "--moonlight-auto", dest="moonlight_auto", action="store_true")
     milestone = sub.add_parser(
         "milestone", help="记录 implementation.md 任务的观察进度（不参与门禁）")
     milestone_actions = milestone.add_subparsers(dest="action", required=True)
@@ -269,7 +266,6 @@ def build_parser():
     milestone_show.set_defaults(task="", reason="")
     role_task = sub.add_parser("role-task")
     role_task.add_argument("role", choices=[
-        "code-review",
         "story-generate",
         "story-review",
         "grill-critic",
@@ -281,20 +277,6 @@ def build_parser():
     lightcheck.add_argument(
         "--quiet", action="store_true",
         help="CLEAN/安全降级时静默；仅发现高置信问题才提示")
-    sub.add_parser("codecheck-scan")
-    codecheck_scope = sub.add_parser("codecheck-scope")
-    codecheck_scope.add_argument(
-        "--include", default="",
-        help="用户确认涉及本次修改的候选编号，逗号分隔，如 W1,W3")
-    codecheck_scope.add_argument(
-        "--none", action="store_true",
-        help="用户确认所有疑似范围外候选均不涉及本次修改")
-    codecheck_scope.add_argument("--message-id", required=True)
-    record = sub.add_parser("codecheck-record")
-    record.add_argument("--count", required=True, type=int)
-    record.add_argument("--diagnostic", required=True)
-    record.add_argument("--reason", required=True)
-    record.add_argument("--message-id", required=True)
     pipeline = sub.add_parser("pipeline")
     pipeline_actions = pipeline.add_subparsers(dest="action", required=True)
     pipeline_record = pipeline_actions.add_parser("record")
@@ -302,11 +284,6 @@ def build_parser():
         "--file", required=True,
         help="平台事实 JSON(云端宿主写):{sha, status, source?, url?}")
     pipeline_actions.add_parser("show")
-    exemption = sub.add_parser("approve-exemption")
-    exemption.add_argument("--rule", required=True)
-    exemption.add_argument("--file", required=True)
-    exemption.add_argument("--reason", required=True)
-    exemption.add_argument("--message-id", required=True)
     return parser
 
 

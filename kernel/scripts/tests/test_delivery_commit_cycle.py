@@ -84,34 +84,6 @@ class DeliveryCommitCycleTests(unittest.TestCase):
         self.assertFalse(leaked.passed)
         self.assertIn("新增未提交", leaked.reason)
 
-    def test_quality_review_requires_every_reviewed_path_committed_and_clean(self):
-        state = {
-            "current": "quality_commit",
-            "config": {"单号": "REQ-1"},
-            "step_heads": {"quality_commit": "base-head"},
-            "quality_review": {
-                "changed_files": ["src/a.cpp", "tests/a_test.cpp"],
-            },
-        }
-        missing = rules(
-            committed=("src/a.cpp",),
-        ).quality_review_committed({}, state)
-        dirty = rules(
-            committed=("src/a.cpp", "tests/a_test.cpp"),
-            dirty=("tests/a_test.cpp",),
-        ).quality_review_committed({}, state)
-        clean = rules(
-            committed=("src/a.cpp", "tests/a_test.cpp"),
-        ).quality_review_committed({}, state)
-        extra = rules(
-            committed=("src/a.cpp", "tests/a_test.cpp", "src/extra.cpp"),
-        ).quality_review_committed({}, state)
-        self.assertFalse(missing.passed)
-        self.assertFalse(dirty.passed)
-        self.assertFalse(extra.passed)
-        self.assertTrue(clean.passed)
-
-
 if __name__ == "__main__":
     unittest.main()
 

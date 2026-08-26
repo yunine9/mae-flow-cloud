@@ -27,7 +27,6 @@ class EditGateTests(unittest.TestCase):
             "step": "build",
             "inside_plugin": False,
             "is_source": False,
-            "tests_only_patterns": (),
             "source_unlocked": False,
         }
         values.update(overrides)
@@ -49,15 +48,6 @@ class EditGateTests(unittest.TestCase):
                     inside_plugin=path.startswith("/plugin/")))
                 self.assertEqual("absolute", result.kind)
                 self.assertIn(fragment, result.message)
-
-    def test_ut_step_still_blocks_editing_product_code(self):
-        """瘦身保留项:改产品代码让测试变绿是破坏信任，不是可逆的流程瑕疵。"""
-        tests_only = decide_edit(self.context(
-            path="src/main.py", match_path="src/main.py",
-            is_source=True, tests_only_patterns=(r"(^|/)tests/",)))
-        self.assertEqual(("block", "edit-tests-only"),
-                         (tests_only.kind, tests_only.rule))
-        self.assertIn("unlock source", tests_only.message)
 
     def test_legal_source_step_and_process_documents_remain_writable(self):
         """合法编码步可写源码；文档与过程产物不受源码阶段闸影响。"""
@@ -101,7 +91,7 @@ class EditGateTests(unittest.TestCase):
 
     def test_grill_and_review_steps_cannot_edit_source(self):
         """flow.json 未显式授权写源码的阶段必须机械阻断，而非靠提示词。"""
-        for step in ("grill", "story", "build_review", "delivery_review"):
+        for step in ("grill", "story", "open", "external_verify"):
             with self.subTest(step=step):
                 denied = decide_edit(self.context(
                     path="src/main.py", match_path="src/main.py",
@@ -119,29 +109,14 @@ class EditGateTests(unittest.TestCase):
             path="src/main.py", match_path="src/main.py", step="build",
             is_source=True, allow_source_edit=True)).kind)
 
-    def test_new_test_file_in_compile_step_advises_not_blocks(self):
-        """编码步手写 UT 是抢跑白费(2026-08-20 云端实锤):只提醒不拦。
-        修改已有测试合法(重构会弄坏旧测试),非测试新文件不提醒。"""
-        preempt = decide_edit(self.context(
-            path="tests/test_new.py", match_path="tests/test_new.py",
-            is_source=True, compile_step=True, new_file=True,
-            is_test_path=True))
-        self.assertEqual(("advisory", "edit-ut-preempt"),
-                         (preempt.kind, preempt.rule))
-        self.assertIn("不计任何证据", preempt.message)
-        # 三个事实缺任何一个都不提醒:改已有测试/新建普通源码/非编码步。
-        for label, overrides in (
-                ("existing-test", dict(new_file=False, is_test_path=True,
-                                       compile_step=True)),
-                ("new-source", dict(new_file=True, is_test_path=False,
-                                    compile_step=True)),
-                ("not-compile-step", dict(new_file=True, is_test_path=True,
-                                          compile_step=False)),
-        ):
-            with self.subTest(case=label):
-                self.assertEqual("allow", decide_edit(self.context(
-                    path="src/x.py", match_path="src/x.py",
-                    is_source=True, **overrides)).kind)
+    def test_build_step_tests_are_free(self):
+        """2026-08-25 编排瘦身:UT 随实现自由编写,新建/修改测试都干净放行,
+        不再有 tests_only 拦截或抢跑提醒。"""
+        for path in ("tests/test_new.py", "tests/test_old.py", "src/x.py"):
+            with self.subTest(path=path):
+                self.assertEqual(("allow", "", ""), tuple(decide_edit(
+                    self.context(path=path, match_path=path,
+                                 is_source=True))))
 
     def test_allowed_edit_has_no_rule_or_message(self):
         self.assertEqual(
@@ -159,9 +134,7 @@ class BashWriteGateTests(unittest.TestCase):
             "hits_internal_state": False,
             "step": "build",
             "offenders": (),
-            "tests_only_patterns": (),
             "source_unlocked": False,
-            "bad_test_sources": (),
         }
         values.update(overrides)
         return BashWriteContext(**values)
@@ -183,11 +156,11 @@ class BashWriteGateTests(unittest.TestCase):
         allow_source_edit 则是 flow.json 的当前步骤授权，必须由活跃 Gate 消费。
         """
         retired = {"hits_requirement", "hits_specs_truth", "source_tokens",
-                   "allow_specs_write",
-                   "strong_write", "weak_write"}
+                   "allow_specs_write", "strong_write", "weak_write",
+                   "tests_only_patterns", "bad_test_sources"}
         self.assertEqual(
             set(), retired & set(BashWriteContext.__dataclass_fields__))
-        # 仍可表达的那一例:只有源码 offenders、没有 tests_only 时不拦
+        # 源码 offenders 在授权写码的步骤不拦
         self.assertEqual("allow", decide_bash_write(self.context(
             offenders=("src/main.py",))).kind)
 
@@ -247,15 +220,6 @@ class BashWriteGateTests(unittest.TestCase):
         # 没碰源码的命令(纯读/写文档)头部照常放行。
         self.assertEqual("allow", decide_bash_write(self.context(
             command="cat src/main.py", workflow_chosen=False)).kind)
-
-    def test_ut_step_still_blocks_bash_writes_to_product_code(self):
-        result = decide_bash_write(self.context(
-            offenders=("src/main.py",),
-            tests_only_patterns=(r"(^|/)tests/",),
-            bad_test_sources=("src/main.py",),
-        ))
-        self.assertEqual(("block", "bash-tests-only"),
-                         (result.kind, result.rule))
 
 
 if __name__ == "__main__":

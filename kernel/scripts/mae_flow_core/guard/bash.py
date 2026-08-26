@@ -70,7 +70,7 @@ def _pre_commit_format(context):
             "commit message「%s」不符合 [%s][feat|fix]描述 格式。"
             "类型只有 feat 与 fix 两种:**单元测试提交也用它们**"
             "(新增能力配套的测试写 feat,修缺陷配套的测试写 fix)。"
-            "无人值守八条线里这条拦截出现最多,原因几乎都是在 verify_ut 步骤"
+            "无人值守八条线里这条拦截出现最多,原因几乎都是在补测试时"
             "顺手写了 [test]——那不是格式笔误,是类型表里根本没有的值。"
             % (message, context.ticket),
         )
@@ -80,7 +80,7 @@ def _pre_commit_format(context):
 def decide_commit_branch(context):
     """分支名一旦定下来,就不许在别的分支上提交——尤其不许提交在基线分支上。
 
-    原来对 config_confirm/workflow_select/code_reviewer_ask/branch_create 四步
+    原来对 config_confirm/workflow_select/branch_create 等头部步骤
     显式跳过,理由是"工作分支还没建"。可跳过的后果是这四步里的提交一律无人阻挡,
     而它们只有一个去处:基线分支。实战撞到了:无人值守跑到 workflow_select(第 3 步)
     时,模型把整个需求写完、提交、推送,三个提交全落在 sim_liaoxiang_base 上,

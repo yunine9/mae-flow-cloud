@@ -3,7 +3,7 @@
 from .shared import (
     BashGateContext, BashWriteContext, EditGateContext, HERE, OwnershipFacts,
     STATE_PATH, WRITEISH_STRONG, WRITEISH_WEAK, decide_bash_write,
-    decide_commit_branch, decide_compile_task_commit, decide_edit,
+    decide_commit_branch, decide_edit,
     decide_ownership, decide_post_commit, decide_pre_commit, git_intent,
     guard_intent, os, re, replace, source_unlocked_for, sys, time,
     workflow_chosen,
@@ -88,24 +88,11 @@ def _redirect_targets(c):
         out.append(t)
     return out
 
-def _ut_preempt_facts(step, p, pm, test_patterns):
-    """UT 抢跑提醒的三个事实(纯计算,裁决在 guard 侧的 decide_edit)。"""
-    return dict(
-        compile_step=any(
-            isinstance(item, dict) and item.get("agent") == "COMPILE"
-            for item in step.get("evidence") or ()),
-        new_file=not os.path.exists(p),
-        is_test_path=any(
-            re.search(pattern, pm, re.I) for pattern in test_patterns),
-    )
-
-
 def _gate_edit(flow, st, sid, step, intent, jdie):
     p = intent.subject
     rel = api._repo_rel_for_match(p)
     pm = rel if rel is not None else p
     plugin_root = api.norm(os.path.abspath(os.path.join(HERE, ".."))).lower()
-    test_patterns = tuple(api._effective_test_patterns(st))
     decision = decide_edit(EditGateContext(
         path=p,
         match_path=pm,
@@ -113,11 +100,9 @@ def _gate_edit(flow, st, sid, step, intent, jdie):
         inside_plugin=api.norm(os.path.abspath(p)).lower().startswith(
             plugin_root + "/"),
         is_source=api._is_source_path(p, st, flow),
-        tests_only_patterns=test_patterns if step.get("tests_only") else (),
         source_unlocked=source_unlocked_for(st, sid),
         allow_source_edit=bool(step.get("allow_source_edit")),
         workflow_chosen=workflow_chosen(st),
-        **_ut_preempt_facts(step, p, pm, test_patterns),
     ))
     if decision.kind == "absolute":
         _die_decision(decision)
@@ -162,36 +147,6 @@ def _enforce_commit_ownership(decision, jdie, st=None):
     for message in decision.advisories:
         print(message, file=sys.stderr)
         _keep_advisory(st, "commit-ownership", message)
-
-
-def _gate_compile_task_window(st):
-    """Close the commit window while an issued COMPILE task is unproven.
-
-    "Proven" is the Agent's real lifecycle return plus a real successful
-    execution on the current inputs. The retired COMPILE Hook token has no
-    writer left, so it must not take part in the decision.
-    """
-    task = (st.get("agent_tasks", {}) or {}).get("COMPILE")
-    completed = False
-    if isinstance(task, dict):
-        step = st.get("current", "")
-        try:
-            completed = bool(
-                api._finished_agent_observation(
-                    "COMPILE", step, api._step_entered_at(st))
-                and successful_quality_execution(
-                    STATE_PATH, "COMPILE", step,
-                    quality_input_snapshot(st, "COMPILE", step)))
-        except (TypeError, ValueError):
-            completed = False
-    risk_accepted, _risk_why = api._risk_acceptance("COMPILE", st)
-    decision = decide_compile_task_commit(
-        st.get("current", ""),
-        task,
-        completed=completed or risk_accepted,
-    )
-    if decision:
-        _die_decision(decision)
 
 
 def _gate_confirmed_manifest_candidates(st, candidate_snapshot):
@@ -282,16 +237,7 @@ def _gate_bash_writes(flow, st, sid, step, intent, jdie):
     redirect_sources = [t for t in redirects if api._is_source_path(t, st, flow)]
     offenders = list(dict.fromkeys(
         redirect_sources + (source_toks if strong_write else [])))
-    patterns = (
-        tuple(api._effective_test_patterns(st))
-        if step.get("tests_only") else ())
     source_unlocked = source_unlocked_for(st, sid)
-    bad = [
-        path for path in offenders
-        if not any(re.search(
-            pattern, (api._repo_rel_for_match(path) or path), re.I)
-            for pattern in patterns)
-    ] if patterns and not source_unlocked else []
     decision = decide_bash_write(BashWriteContext(
         command=c,
         tokens=tuple(toks),
@@ -303,9 +249,7 @@ def _gate_bash_writes(flow, st, sid, step, intent, jdie):
             r"(?:plugin-resources|repository-skills|host-skills)(?:/|$))"),
         step=sid or "",
         offenders=tuple(offenders),
-        tests_only_patterns=patterns,
         source_unlocked=source_unlocked,
-        bad_test_sources=tuple(bad),
         allow_source_edit=bool(step.get("allow_source_edit")),
         workflow_chosen=workflow_chosen(st),
     ))
@@ -386,10 +330,6 @@ def _gate_head_actions(actions, st, jdie):
         action for action in actions
         if action.operation == "revert"
     ]
-    if commit_present or revert_actions:
-        # Issued COMPILE is a transient child-task boundary. It must win
-        # before format/branch rules that create strikes.
-        _gate_compile_task_window(st)
     if revert_actions:
         target = revert_actions[-1].commit or "非精确提交"
         jdie(
@@ -476,7 +416,7 @@ def cmd_gate(flow, st, args):
         if (message_present and wanted
                 and sid not in (
                     "config_confirm", "workflow_select",
-                    "code_reviewer_ask", "branch_create")):
+                    "branch_create")):
             context = replace(
                 context,
                 current_branch=api.sh("git branch --show-current"),

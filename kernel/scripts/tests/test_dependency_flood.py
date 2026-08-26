@@ -56,24 +56,6 @@ DELIVERY = (
 )
 
 
-class TaskCardFloodTests(unittest.TestCase):
-    def test_dependency_paths_never_enter_a_card(self):
-        from mae_flow_core.cli_commands.role_task import _skip_in_card
-        for path in FLOOD + ARTIFACTS:
-            # 卡片内嵌的是文件**内容**,把 .jar/.class 的字节塞进去纯属灌水
-            self.assertTrue(_skip_in_card(path), "该排除: %s" % path)
-
-    def test_delivery_paths_still_enter(self):
-        from mae_flow_core.cli_commands.role_task import _skip_in_card
-        for path in DELIVERY:
-            self.assertFalse(_skip_in_card(path), "不该排除: %s" % path)
-
-    def test_card_caps_untracked_files(self):
-        from mae_flow_core.cli_commands import role_task
-        self.assertLessEqual(role_task._MAX_UNTRACKED_FILES, 100,
-                             "上限要小到卡片还能读")
-
-
 class PanelFloodTests(unittest.TestCase):
     def test_panel_skips_dependency_dirs(self):
         from mae_flow_core.panel.snapshot import _dependency_path
