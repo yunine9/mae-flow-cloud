@@ -1698,7 +1698,8 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   background: var(--surface); color: var(--text-strong); font-size: var(--font-size-assist); cursor: pointer;
 }
 .issue-bind-hint { color: var(--faint); font-size: var(--font-size-dense); }
-.issue-session-error { padding: 9px 13px; border-radius: 9px; background: rgba(214, 69, 69, .08); color: #d64545; font-size: var(--font-size-assist); }
+.issue-session-error { padding: 9px 13px; border-radius: 9px; background: rgba(214, 69, 69, .08); color: #d64545; font-size: var(--font-size-assist); display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+.issue-session-error .issue-error-action { border: 0; background: none; color: inherit; cursor: pointer; text-decoration: underline; font-weight: 700; padding: 0; font-size: inherit; }
 .issue-session-mr { padding: 9px 13px; border-radius: 9px; background: color-mix(in srgb, var(--accent) 7%, transparent); color: var(--accent); font-size: var(--font-size-assist); }
 .issue-session-mr a { color: inherit; }
 .issue-thread {

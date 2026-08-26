@@ -27,7 +27,10 @@ import {
 import { startVisiblePolling } from "../visiblePolling";
 import { formatLocalDateTime } from "../time";
 
-export function IssueBoard({ viewer }: { viewer: AuthUser }) {
+export function IssueBoard({ viewer, onNavigateProfile }: {
+  viewer: AuthUser;
+  onNavigateProfile?: () => void;
+}) {
   const [issues, setIssues] = useState<IssueSummary[]>([]);
   const [openId, setOpenId] = useState("");
   const [detail, setDetail] = useState<IssueDetail | undefined>();
@@ -70,6 +73,7 @@ export function IssueBoard({ viewer }: { viewer: AuthUser }) {
       onChanged={(next) => setDetail(next)}
       onListRefresh={refreshList}
       onError={setError}
+      onNavigateProfile={onNavigateProfile}
     />;
   }
 
@@ -375,12 +379,14 @@ function IssueSessionView({
   onChanged,
   onListRefresh,
   onError,
+  onNavigateProfile,
 }: {
   detail: IssueDetail;
   onBack: () => void;
   onChanged: (detail: IssueDetail) => void;
   onListRefresh: () => void;
   onError: (message: string) => void;
+  onNavigateProfile?: () => void;
 }) {
   const [replyText, setReplyText] = useState("");
   const [steerText, setSteerText] = useState("");
@@ -446,7 +452,14 @@ function IssueSessionView({
       </div>
     </div>
 
-    {detail.error && <div className="issue-session-error">{detail.error}</div>}
+    {detail.error && <div className="issue-session-error" role="alert">
+      <span>{detail.error}</span>
+      {/* 「Git 令牌」是后端认证类报错的锚点(issueGit.ts),命中即给
+          一键跳转;其余错误只展示原文。 */}
+      {onNavigateProfile && detail.error.includes("Git 令牌")
+        && <button type="button" className="issue-error-action"
+          onClick={onNavigateProfile}>去个人设置配置令牌</button>}
+    </div>}
     {detail.mr && <div className="issue-session-mr">
       MR:{detail.mr.url
         ? <a href={detail.mr.url} target="_blank" rel="noreferrer">{detail.mr.url}</a>

@@ -147,6 +147,43 @@ export function validateRepoUrl(raw: string): string {
   throw new Error("问题流只接受 HTTPS 或本地代码仓地址(不支持 ssh/git 协议)");
 }
 
+/** 认证类失败 → "去哪配令牌"的引导;非认证失败返回 undefined 由调用方
+ * 保留 git 原文,不吞事实。文案里的「Git 令牌」是前端识别"可跳个人
+ * 设置"的锚点,改字时前端锚点要跟着改。
+ *
+ * 问题流 failed 是终态(不能续聊),引导说"重新发起"而不是"发消息重试"。 */
+function authFailureHint(
+  verb: string,
+  credential: GitCredential | undefined,
+  stderr: string,
+): string | undefined {
+  const fatal = stderr.split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line.startsWith("fatal:")) ?? "";
+  const tail = fatal ? `(${fatal})` : "";
+  if (!credential
+      && /could not read Username|terminal prompts disabled|read askpass/i.test(stderr)) {
+    return `${verb}需要 Git 凭据,当前账号还没有配置 Git 令牌:`
+      + "请到「个人设置 → Git 令牌」填写代码平台的 HTTPS 密码或访问令牌"
+      + "(Git 用户名 = 登录账号名),保存后重新发起问题分析。" + tail;
+  }
+  if (/Authentication failed|HTTP 403|status[ :=]403/i.test(stderr)) {
+    return `代码仓拒绝了 Git 凭据:请到「个人设置 → Git 令牌」核对令牌内容`
+      + `(当前按登录账号「${credential?.username ?? "(未配置)"}」认证,Git 用户名 = 登录账号名),`
+      + "保存后重新发起问题分析。" + tail;
+  }
+  return undefined;
+}
+
+/** 克隆失败 → 人话:认证类给引导,其余保留 git 原文。 */
+export function cloneFailureMessage(
+  credential: GitCredential | undefined,
+  stderr: string,
+): string {
+  return authFailureHint("克隆代码仓", credential, stderr)
+    ?? `克隆代码仓失败: ${stderr.trim().slice(0, 500)}`;
+}
+
 /** 克隆到 targetDir,并加固:origin URL 去 userinfo、pushurl 指向
  * /dev/null(Agent 可读可提交,但推不动;宿主推送走显式 URL)。 */
 export async function cloneRepository(options: {
@@ -165,7 +202,7 @@ export async function cloneRepository(options: {
       "--", url, options.targetDir,
     ], { env: sandbox.env, timeoutMs: 30 * 60_000 });
     if (outcome.code !== 0) {
-      throw new Error(`克隆代码仓失败: ${outcome.stderr.trim().slice(0, 500)}`);
+      throw new Error(cloneFailureMessage(options.credential, outcome.stderr));
     }
     await hardenCloneAsync(options.targetDir);
   } finally {
@@ -269,8 +306,9 @@ export async function pushFromIssueWorkspace(options: {
       "--porcelain", remoteUrl, `${sha}:${ref}`,
     ], { env: { ...sandbox.env, ...objectEnv }, timeoutMs: 5 * 60_000 });
     if (pushed.code !== 0) {
-      throw new Error(`宿主推送失败: `
-        + `${pushed.stderr.trim() || pushed.stdout.trim()}`.slice(0, 500));
+      const raw = `${pushed.stderr.trim() || pushed.stdout.trim()}`;
+      throw new Error(authFailureHint("推送代码", options.credential, raw)
+        ?? `宿主推送失败: ${raw.slice(0, 500)}`);
     }
     const verified = await runGit([
       ...sandbox.args, `--git-dir=${staging}`,

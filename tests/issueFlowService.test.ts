@@ -19,6 +19,38 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
+import { cloneFailureMessage } from "../src/issueFlow/issueGit.ts";
+
+test("克隆认证失败说人话:引导去个人设置配令牌,其余保留 git 原文", () => {
+  // 内网实测原文:沙箱拒绝 askpass → git 要不到用户名
+  const realStderr = [
+    "error: unable to read askpass response from",
+    " '/home/y/code/mae-flow-cloud/.tasks/.runtime/issue-git/operation-x/reject-askpass.sh'",
+    "fatal: could not read Username for 'https://szv-y.codehub.huawei.com':",
+    " terminal prompts disabled",
+  ].join("\n");
+  const missing = cloneFailureMessage(undefined, realStderr);
+  assert.match(missing, /Git 令牌/, "必须给出去哪配的引导");
+  assert.match(missing, /个人设置/);
+  assert.match(missing, /重新发起/, "failed 是终态,引导只能是重新发起");
+  assert.match(missing, /could not read Username/, "关键事实不吞");
+  assert.ok(!missing.includes("askpass"), "沙箱内部路径不该再吓人");
+
+  // 已配凭据但被平台拒绝 → 引导核对,并报出实际认证账号
+  const rejected = cloneFailureMessage(
+    { username: "y00965296", password: "wrong" },
+    "fatal: Authentication failed for 'https://szv-y.codehub.huawei.com/a.git/'",
+  );
+  assert.match(rejected, /拒绝/);
+  assert.match(rejected, /y00965296/);
+  assert.match(rejected, /Git 令牌/);
+
+  // 非认证错误:保留 git 原文,不乱引导
+  const other = cloneFailureMessage(undefined,
+    "fatal: repository 'https://git/x.git/' not found");
+  assert.match(other, /not found/);
+  assert.ok(!other.includes("Git 令牌"));
+});
 import { TaskService } from "../src/taskService.ts";
 import { createGoOpsTools } from "../src/issueFlow/opsTools.ts";
 import {
