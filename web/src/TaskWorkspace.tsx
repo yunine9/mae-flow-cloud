@@ -315,7 +315,10 @@ export function TaskWorkspace({
   const drafts = notes.filter((item) => item.status === "draft");
   const unresolvedNotes = notes.filter((item) =>
     item.status === "draft" || item.status === "sent");
-  const unresolvedIds = unresolvedNotes.map((item) => item.id);
+  // sent 仍是“未闭环”，要继续展示并阻止误放行；但它已经主动送给
+  // Agent，不能再冒充本次决定要附带的草稿。两组 ID 混用会让决定接口
+  // 按 draft 校验时拒绝整次提交，连人刚写的补充说明也一起被挡住。
+  const draftIds = drafts.map((item) => item.id);
 
   /** 回到被圈的那一行:换页签→等它渲染出来→滚过去并闪一下。
    * 改批注前人几乎总要再看一眼上下文,只报"第 23 行"等于让他自己找。
@@ -722,7 +725,8 @@ export function TaskWorkspace({
             <WaitingCard
               task={task}
               onDecided={() => { setNotesPulse((tick) => tick + 1); onChanged(); }}
-              annotationIds={unresolvedIds}
+              annotationIds={draftIds}
+              unresolvedAnnotationCount={unresolvedNotes.length}
               repositorySkillSelection={chainReview
                 ? chainSkillPicker.selection : undefined}
               deliverySelection={task.waiting?.recommended_view === "diff"

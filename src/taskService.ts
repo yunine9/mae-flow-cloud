@@ -2742,6 +2742,23 @@ export class TaskService {
     return picked;
   }
 
+  /** 决定卡与“主动送批注”不是同一种提交语义。
+   *
+   * 页面打开后，批注可能先通过插话通道从 draft 变成 sent；随后提交的
+   * 决定仍携带旧 ID。它已经送达，不该重复发送，更不能因此拦住本次新写
+   * 的补充说明。存在但已 sent/verified/dropped 的条目幂等跳过；真正不
+   * 存在的 ID 仍拒绝，避免把跨任务或损坏的引用静默吞掉。 */
+  private pickDecisionDrafts(task: TaskState, ids: string[]): Annotation[] {
+    const wanted = new Set(ids);
+    const items = this.annotations(task).list();
+    const found = new Set(items.map((item) => item.id));
+    if ([...wanted].some((id) => !found.has(id))) {
+      throw new NotFoundError("有批注不存在，请刷新后重试");
+    }
+    return items.filter((item) =>
+      item.status === "draft" && wanted.has(item.id));
+  }
+
   /** MR/流水线连接是部署基础设施，管理员页面只读自检、不暴露地址。 */
   private effectivePlatformUrl(): string | undefined {
     return this.options.delivery?.platformUrl;
@@ -4641,7 +4658,7 @@ export class TaskService {
     const picked = handlesFeedback
       ? drafts
       : input.annotation_ids?.length
-        ? this.pickDrafts(task, input.annotation_ids) : [];
+        ? this.pickDecisionDrafts(task, input.annotation_ids) : [];
     // 批注与自由说明都进 notes，不污染内核用于 choice receipt 的选项。
     const notes = [
       normalized.notes,

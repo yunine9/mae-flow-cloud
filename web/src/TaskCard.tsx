@@ -362,14 +362,17 @@ export function WaitingCard({
   task,
   onDecided,
   annotationIds,
+  unresolvedAnnotationCount,
   attachment,
   repositorySkillSelection,
   deliverySelection,
 }: {
   task: TaskSummary;
   onDecided: () => void;
-  /** 待提交批注:提交审批时可作为修改说明一并带上。 */
+  /** 本次仍待发送的 draft 批注；sent 已经送达，不能重复附带。 */
   annotationIds?: string[];
+  /** 尚未闭环的 draft + sent 数量，用于检视引导和关闭分支门禁提示。 */
+  unresolvedAnnotationCount?: number;
   /** 批注块。挂在提交按钮正上方而不是卡片外面:选项标签是内核的
    * (它按标签给这次选择记账,前端改写会让记下的选择对不上用户点的),
    * 所以"这次会带上哪几处"只能摆在人按下提交的那一眼里。 */
@@ -405,7 +408,8 @@ export function WaitingCard({
       /需要.*(?:调整|修改)|返工|补充/.test(option)) ?? nonClosing[0]].filter(Boolean);
   })[0];
   const feedbackLabel = feedbackOption?.replace(/[（(].*$/, "") ?? "需要调整";
-  const attachmentCount = annotationIds?.length ?? 0;
+  const attachmentCount = unresolvedAnnotationCount
+    ?? annotationIds?.length ?? 0;
   const requiresDeliverySelection = task.waiting?.recommended_view === "diff";
   const deliverySelectionChanged = !!deliverySelection
     && (deliverySelection.selectedPaths.length
