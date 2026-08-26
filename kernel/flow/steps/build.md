@@ -16,6 +16,12 @@
   **最不确定、风险最高的块提前**。每块收尾过一遍四项自查:命名与邻居一致;
   无重复 helper;错误路径与模块惯例一致;暴露给后续块的接口签名定稿。
   块与块之间不 done、不询问用户;编译时机自定(随块编译或最后统编都行)。
+- **编译自检派通用子 Agent**:编译尽量不在自己上下文里跑——完整构建日志会淹掉
+  你正在写的代码现场。用 Task 派一个通用子 Agent(subagent_type 如
+  `build-verify-agent`,不要用 compile-agent 等保留名,那些卡已退役),工单写清:
+  按仓库真实构建入口增量编译(存在 `.mae-flow-work/build-notes.md` 时优先按它,
+  没有就自己发现并顺手写入该文件),只回传结论与前几条错误原文,不改任何文件、
+  不做 git。失败由你自己修——子 Agent 没有你的实现上下文。
   开始某块执行 `python "{MAEFLOW_PATH}" milestone start --task <编号>`,
   完成用 complete、卡住用 block(带 --reason)——append-only 观察事件,
   只喂云端进度展示,不参与任何门禁。
