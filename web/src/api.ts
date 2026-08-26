@@ -759,6 +759,8 @@ export interface HostSkillShelfEntry {
   /** false = pi 装载器不认(缺 name/description 等),放了也不进会话。 */
   loadable: boolean;
   effect?: HostSkillEffect;
+  /** 待裁决的修订候选数(沉淀环起草、尚未采纳/丢弃的草稿)。 */
+  candidates?: number;
 }
 
 export interface HostSkillShelf {
@@ -847,6 +849,70 @@ export async function rollbackSkill(
     });
   if (!response.ok) throw new Error(await errorText(response));
   return response.json();
+}
+
+/** 修订候选(沉淀环):agent 从任务现场起草的 SKILL.md 草稿。 */
+export interface SkillCandidateRecord {
+  id: string;
+  directory: string;
+  created_at: string;
+  operator: string;
+  status: "drafted" | "adopted" | "discarded";
+  evidence_tasks: string[];
+  adopted_at?: string;
+  adopted_by?: string;
+}
+
+export async function distillSkill(
+  directory: string,
+): Promise<SkillCandidateRecord> {
+  const response = await fetch(
+    `/skills/${encodeURIComponent(directory)}/distill`, { method: "POST" });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function listSkillCandidates(
+  directory: string,
+): Promise<SkillCandidateRecord[]> {
+  const response = await fetch(
+    `/skills/${encodeURIComponent(directory)}/candidates`);
+  if (!response.ok) throw new Error(await errorText(response));
+  return (await response.json()).candidates ?? [];
+}
+
+export async function getSkillCandidate(
+  directory: string,
+  id: string,
+): Promise<{
+  record: SkillCandidateRecord;
+  skill: string;
+  notes: string;
+  evidence: string;
+}> {
+  const response = await fetch(`/skills/${encodeURIComponent(directory)}`
+    + `/candidates/${encodeURIComponent(id)}`);
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function adoptSkillCandidate(
+  directory: string,
+  id: string,
+): Promise<SkillOperationRecord> {
+  const response = await fetch(`/skills/${encodeURIComponent(directory)}`
+    + `/candidates/${encodeURIComponent(id)}/adopt`, { method: "POST" });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function discardSkillCandidate(
+  directory: string,
+  id: string,
+): Promise<void> {
+  const response = await fetch(`/skills/${encodeURIComponent(directory)}`
+    + `/candidates/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (!response.ok) throw new Error(await errorText(response));
 }
 
 export interface TeamKnowledgeInsights {

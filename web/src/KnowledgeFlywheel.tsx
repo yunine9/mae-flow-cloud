@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  adoptSkillCandidate,
+  discardSkillCandidate,
+  distillSkill,
+  getSkillCandidate,
   getSkillLibrary,
+  listSkillCandidates,
   listSkillVersions,
   offlineSkill,
   rollbackSkill,
@@ -8,6 +13,7 @@ import {
   type HostSkillShelf,
   type KnowledgeInsightResource,
   type KnowledgeKind,
+  type SkillCandidateRecord,
   type SkillOperationRecord,
   type SkillUploadFile,
   type SkillVersionRecord,
@@ -125,6 +131,12 @@ function SkillLibraryPanel({ fallback, admin }: {
   const [confirmOffline, setConfirmOffline] = useState("");
   const [versionsFor, setVersionsFor] = useState("");
   const [versions, setVersions] = useState<SkillVersionRecord[]>();
+  const [candidatesFor, setCandidatesFor] = useState("");
+  const [candidates, setCandidates] = useState<SkillCandidateRecord[]>();
+  const [candidateOpen, setCandidateOpen] = useState("");
+  const [candidateDetail, setCandidateDetail] =
+    useState<{ skill: string; notes: string; evidence: string }>();
+  const [distilling, setDistilling] = useState(false);
   const [showOperations, setShowOperations] = useState(false);
   const newInputRef = useRef<HTMLInputElement>(null);
   const updateInputRef = useRef<HTMLInputElement>(null);
@@ -144,6 +156,7 @@ function SkillLibraryPanel({ fallback, admin }: {
       await work();
       await refresh();
       if (versionsFor) setVersions(await listSkillVersions(versionsFor));
+      if (candidatesFor) setCandidates(await listSkillCandidates(candidatesFor));
     } catch (cause) {
       setError(String(cause instanceof Error ? cause.message : cause));
     } finally {
@@ -249,6 +262,18 @@ function SkillLibraryPanel({ fallback, admin }: {
             try { setVersions(await listSkillVersions(directory)); }
             catch (cause) { setError(String(cause instanceof Error ? cause.message : cause)); }
           })()}>{versionsFor === directory ? "收起历史" : "历史版本"}</button>
+          <button type="button" disabled={busy} onClick={() => void (async () => {
+            if (candidatesFor === directory) {
+              setCandidatesFor(""); setCandidates(undefined);
+              setCandidateOpen(""); setCandidateDetail(undefined);
+              return;
+            }
+            setCandidatesFor(directory); setCandidates(undefined);
+            setCandidateOpen(""); setCandidateDetail(undefined);
+            try { setCandidates(await listSkillCandidates(directory)); }
+            catch (cause) { setError(String(cause instanceof Error ? cause.message : cause)); }
+          })()}>{candidatesFor === directory ? "收起候选"
+            : `修订候选${skill.candidates ? `(${skill.candidates})` : ""}`}</button>
           {confirmOffline === directory
             ? <button type="button" className="danger" disabled={busy}
               onClick={() => { setConfirmOffline(""); void run(() => offlineSkill(directory)); }}>确认下线?</button>
@@ -263,6 +288,53 @@ function SkillLibraryPanel({ fallback, admin }: {
             <span>{version.operator} · {latest(version.archived_at).replace("最近 ", "")}</span>
             <button type="button" disabled={busy}
               onClick={() => void run(() => rollbackSkill(directory, version.version_id))}>回退到此版</button>
+          </div>)}
+        </div>}
+        {candidatesFor === directory && <div className="knowledge-shelf-versions">
+          <div className="knowledge-shelf-version">
+            <span>沉淀环:从读过该 skill 的任务现场起草修订稿,采纳前不影响任何任务。</span>
+            <button type="button" disabled={busy || distilling}
+              onClick={() => void (async () => {
+                setDistilling(true); setError("");
+                try {
+                  await distillSkill(directory);
+                  await refresh();
+                  setCandidates(await listSkillCandidates(directory));
+                } catch (cause) {
+                  setError(String(cause instanceof Error ? cause.message : cause));
+                } finally { setDistilling(false); }
+              })()}>{distilling ? "起草中…(约一分钟)" : "起草修订稿"}</button>
+          </div>
+          {!candidates && <small>读取候选…</small>}
+          {candidates && candidates.length === 0 && <small>还没有修订候选。</small>}
+          {candidates?.map((candidate) => <div key={candidate.id}>
+            <div className="knowledge-shelf-version">
+              <span>{candidate.status === "drafted" ? "待裁决" : candidate.status === "adopted" ? "已采纳" : "已丢弃"} · {candidate.operator} 起草 · 证据 {candidate.evidence_tasks.length} 单</span>
+              <span>{latest(candidate.created_at).replace("最近 ", "")}</span>
+              <button type="button" disabled={busy} onClick={() => void (async () => {
+                if (candidateOpen === candidate.id) {
+                  setCandidateOpen(""); setCandidateDetail(undefined); return;
+                }
+                setCandidateOpen(candidate.id); setCandidateDetail(undefined);
+                try { setCandidateDetail(await getSkillCandidate(directory, candidate.id)); }
+                catch (cause) { setError(String(cause instanceof Error ? cause.message : cause)); }
+              })()}>{candidateOpen === candidate.id ? "收起" : "查看"}</button>
+              {candidate.status === "drafted" && <>
+                <button type="button" disabled={busy}
+                  onClick={() => void run(() => adoptSkillCandidate(directory, candidate.id))}>采纳上架</button>
+                <button type="button" disabled={busy}
+                  onClick={() => void run(() => discardSkillCandidate(directory, candidate.id))}>丢弃</button>
+              </>}
+            </div>
+            {candidateOpen === candidate.id && <div className="knowledge-shelf-candidate">
+              {!candidateDetail && <small>读取草稿…</small>}
+              {candidateDetail && <>
+                <p>修订说明:{candidateDetail.notes || "(无)"}</p>
+                <pre>{candidateDetail.skill}</pre>
+                <details><summary>起草依据的现场证据</summary>
+                  <pre>{candidateDetail.evidence || "(无)"}</pre></details>
+              </>}
+            </div>}
           </div>)}
         </div>}
       </article>;

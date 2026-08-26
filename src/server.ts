@@ -9,6 +9,10 @@
  *   PUT  /skills/:dir          {files:[{path,content_base64}]} → 上传/更新(管理员)
  *   DELETE /skills/:dir                                 → 下线并归档(管理员)
  *   POST /skills/:dir/rollback {version}                → 回退归档版本(管理员)
+ *   POST /skills/:dir/distill                           → 从任务现场起草修订稿(管理员)
+ *   GET  /skills/:dir/candidates[/:id]                  → 修订候选列表/详情
+ *   POST /skills/:dir/candidates/:id/adopt              → 采纳候选,走上架闸(管理员)
+ *   DELETE /skills/:dir/candidates/:id                  → 丢弃候选(管理员)
  *   GET  /tasks/:id                                     → 详情(含待办)
  *   POST /tasks/:id/decision   {state_version,decision,notes?}
  *        → 200;版本冲突/已被抢先 → 409 "任务状态已变化"(先到决定生效)
@@ -78,6 +82,13 @@ import {
   rollbackHostSkill,
   uploadHostSkill,
 } from "./hostSkillLibrary.ts";
+import {
+  SkillDistillError,
+  adoptSkillCandidate,
+  discardSkillCandidate,
+  listSkillCandidates,
+  readSkillCandidate,
+} from "./skillDistiller.ts";
 
 /** 正式前端静态文件的最小类型表:Vite 产物就这几种。 */
 const MIME: Record<string, string> = {
@@ -605,6 +616,21 @@ export function createTaskServer(
                 dataDir, decodeURIComponent(parts[1])),
             });
           }
+          // 修订候选(沉淀环):读=登录即可(检视草稿是团队的事),
+          // 起草/采纳/丢弃归管理员——采纳复用资产库同一道上架闸。
+          if (request.method === "GET" && parts.length === 3
+              && parts[2] === "candidates") {
+            return json(response, 200, {
+              candidates: listSkillCandidates(
+                dataDir, decodeURIComponent(parts[1])),
+            });
+          }
+          if (request.method === "GET" && parts.length === 4
+              && parts[2] === "candidates") {
+            return json(response, 200, readSkillCandidate(
+              dataDir, decodeURIComponent(parts[1]),
+              decodeURIComponent(parts[3])));
+          }
           if (options.auth && viewer?.role !== "admin") {
             return json(response, 403,
               { error: "只有管理员可以管理团队 Skill" });
@@ -627,9 +653,30 @@ export function createTaskServer(
               dataDir, decodeURIComponent(parts[1]),
               String(body.version ?? ""), operator));
           }
+          if (request.method === "POST" && parts.length === 3
+              && parts[2] === "distill") {
+            return json(response, 200, await service.distillSkillDraft(
+              decodeURIComponent(parts[1]), operator));
+          }
+          if (request.method === "POST" && parts.length === 5
+              && parts[2] === "candidates" && parts[4] === "adopt") {
+            return json(response, 200, await adoptSkillCandidate(
+              dataDir, decodeURIComponent(parts[1]),
+              decodeURIComponent(parts[3]), operator));
+          }
+          if (request.method === "DELETE" && parts.length === 4
+              && parts[2] === "candidates") {
+            discardSkillCandidate(dataDir,
+              decodeURIComponent(parts[1]), decodeURIComponent(parts[3]));
+            return json(response, 200, { ok: true });
+          }
         } catch (error) {
-          if (error instanceof SkillLibraryError) {
+          if (error instanceof SkillLibraryError
+              || error instanceof SkillDistillError) {
             return json(response, 400, { error: error.message });
+          }
+          if (error instanceof TaskControlError) {
+            return json(response, 409, { error: error.message });
           }
           throw error;
         }

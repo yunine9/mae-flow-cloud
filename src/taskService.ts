@@ -145,6 +145,21 @@ import {
   type HostSkillShelfEntry,
 } from "./hostSkillShelf.ts";
 import {
+  buildDistillPrompt,
+  collectSkillEvidence,
+  draftWithModel,
+  listSkillCandidates,
+  parseDraft,
+  saveSkillCandidate,
+  type SkillCandidateRecord,
+} from "./skillDistiller.ts";
+
+/** 货架条目在读侧的完整形态:资产事实+效果账+待裁决候选数。 */
+export type DecoratedHostSkillShelf = HostSkillShelf & {
+  skills: Array<HostSkillShelfEntry
+    & { effect?: HostSkillEffect; candidates: number }>;
+};
+import {
   createPrePushGateContract,
   parsePrePushAgentReport,
   prePushMission,
@@ -949,6 +964,9 @@ interface TaskState {
   containerWorkspace?: string;
   /** 重开动作的防重入:一个回合里并发的多条 Bash 只该开一个容器。 */
   containerReopen?: Promise<TaskCommandContainer>;
+  /** 等人时主动回收的完成屏障。任务状态会先公布 waiting，用户可能
+   * 立刻审批；续跑的第一条 Bash 必须等旧容器确认删除后才能同名重开。 */
+  containerRelease?: Promise<void>;
   /** 合入监控环的防重入锁(内存态):一任务只挂一环。 */
   mergeWatchActive?: boolean;
   /** 流水线证据核销重试的防重入锁。纯宿主 timer，不占 Agent 会话。 */
@@ -1465,16 +1483,27 @@ export class TaskService {
     why: string,
   ): Promise<void> {
     const container = task.container;
-    if (!container) return;
+    if (!container) {
+      await task.containerRelease;
+      return;
+    }
     task.container = undefined;
+    const release = (async () => {
+      try {
+        await container.stop();
+        this.options.log?.(
+          `任务 ${task.summary.id} ${why},已释放闲置任务容器`);
+      } catch (error) {
+        this.options.log?.(
+          `任务 ${task.summary.id} ${why}释放容器失败(下次执行会重新开): `
+          + String(error));
+      }
+    })();
+    task.containerRelease = release;
     try {
-      await container.stop();
-      this.options.log?.(
-        `任务 ${task.summary.id} ${why},已释放闲置任务容器`);
-    } catch (error) {
-      this.options.log?.(
-        `任务 ${task.summary.id} ${why}释放容器失败(下次执行会重新开): `
-        + String(error));
+      await release;
+    } finally {
+      if (task.containerRelease === release) task.containerRelease = undefined;
     }
   }
 
@@ -1487,6 +1516,10 @@ export class TaskService {
   private async activeTaskContainer(
     task: TaskState,
   ): Promise<TaskCommandContainer> {
+    if (task.container) return task.container;
+    // waiting 状态先落盘、旧容器后完成 TERM→KILL→rm。人在这个窗口内
+    // 立即审批时，续跑不能与旧实例回收争抢同一个容器名。
+    await task.containerRelease;
     if (task.container) return task.container;
     if (!task.containerReopen) {
       // 重开是异步的,期间用户完全可能按下暂停/取消——那条路径刚
@@ -1788,23 +1821,88 @@ export class TaskService {
   /** 货架 + 效果账(飞轮第 3 步):每个条目带消费率与 prepush 一次过
    * 对照,低消费/高摩擦亮修订信号。/skills 管理接口与知识效能页共用
    * 这一份,数字口径不许有两套。 */
-  hostSkillShelf(): HostSkillShelf {
+  hostSkillShelf(): DecoratedHostSkillShelf {
     return this.decorateHostSkillShelf([...this.tasks.values()]
       .map((task) => this.project(task, true)));
   }
 
-  private decorateHostSkillShelf(tasks: KnowledgeInsightTask[]): HostSkillShelf
-      & { skills: Array<HostSkillShelfEntry & { effect?: HostSkillEffect }> } {
+  private decorateHostSkillShelf(
+    tasks: KnowledgeInsightTask[],
+  ): DecoratedHostSkillShelf {
     const shelf = listHostSkillShelf(this.options.dataDir);
     const effects = buildHostSkillEffects(tasks);
     return {
       ...shelf,
-      skills: shelf.skills.map((skill) => ({
-        ...skill,
-        effect: effects.get(skill.name),
-      })),
+      skills: shelf.skills.map((skill) => {
+        const directory = skill.path.includes("/")
+          ? skill.path.split("/")[0] : undefined;
+        return {
+          ...skill,
+          effect: effects.get(skill.name),
+          candidates: directory
+            ? listSkillCandidates(this.options.dataDir, directory)
+              .filter((item) => item.status === "drafted").length
+            : 0,
+        };
+      }),
     };
   }
+
+  /** 沉淀环(roadmap §9):从读过该 skill 的任务现场起草修订稿,
+   * 落候选区等管理员裁决。旁路纪律:单发模型调用带硬超时,同一时刻
+   * 只跑一份,失败如实报错;绝不自动上架。 */
+  async distillSkillDraft(
+    directory: string,
+    operator: string,
+  ): Promise<SkillCandidateRecord> {
+    if (this.distillActive) {
+      throw new TaskControlError("已有一份修订稿在起草中,请稍候");
+    }
+    const shelf = listHostSkillShelf(this.options.dataDir);
+    const entry = shelf.skills.find((skill) =>
+      skill.path.split("/")[0] === directory);
+    if (!entry) {
+      throw new TaskControlError(`货架上没有这个 skill: ${directory}`);
+    }
+    const active = this.activeModelChoice();
+    if (!active) {
+      throw new TaskControlError("模型网关未配置,无法起草(管理页 → 模型网关)");
+    }
+    const projected = [...this.tasks.values()]
+      .map((task) => this.project(task, true));
+    const evidence = collectSkillEvidence(projected, entry.name);
+    if (!evidence.taskIds.length) {
+      throw new TaskControlError(
+        "还没有任务真正读过这个 skill,证据不足以起草——先让它被用起来");
+    }
+    const skillContent = readFileSync(
+      join(this.options.dataDir, "skills", ...entry.path.split("/")), "utf-8");
+    const prompt = buildDistillPrompt({
+      skillName: entry.name,
+      skillContent,
+      effect: buildHostSkillEffects(projected).get(entry.name),
+      evidenceText: evidence.text,
+    });
+    this.distillActive = true;
+    try {
+      const raw = await draftWithModel({
+        modelsJson: this.activeModelsJson(),
+        provider: active.provider,
+        model: active.model,
+        system: prompt.system,
+        user: prompt.user,
+      });
+      const draft = parseDraft(raw);
+      return saveSkillCandidate(this.options.dataDir, directory, {
+        skill: draft.skill,
+        notes: draft.notes,
+        evidence: evidence.text,
+      }, evidence.taskIds, operator);
+    } finally {
+      this.distillActive = false;
+    }
+  }
+  private distillActive = false;
 
   get(id: string): TaskSummary | undefined {
     const task = this.tasks.get(id);

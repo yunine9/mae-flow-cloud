@@ -132,7 +132,7 @@ function looksTextual(content: Buffer): boolean {
   return !content.subarray(0, 8192).includes(0);
 }
 
-function scanForSecrets(path: string, content: Buffer): void {
+export function scanForSecrets(path: string, content: Buffer): void {
   if (FORBIDDEN_FILENAMES.test(path)) {
     throw new SkillLibraryError(
       `文件名即密钥容器,skill 是权限全开的公开指南,不能收: ${path}`);
