@@ -591,6 +591,7 @@ export function App() {
         />}
 
         {view === "knowledge" && <KnowledgeFlywheel
+          admin={session.role === "admin"}
           insights={knowledgeInsights}
           loading={knowledgeInsightsLoading}
           error={knowledgeInsightsError}

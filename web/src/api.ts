@@ -737,6 +737,88 @@ export interface HostSkillShelf {
   warnings: string[];
 }
 
+/** 资产库操作留痕(谁/何时/什么动作/什么指纹),服务端逐条记录。 */
+export interface SkillOperationRecord {
+  at: string;
+  operator: string;
+  action: "upload" | "update" | "offline" | "rollback";
+  directory: string;
+  skill_digest?: string;
+  package_digest?: string;
+  files?: number;
+  bytes?: number;
+  detail?: string;
+}
+
+export interface SkillVersionRecord {
+  version_id: string;
+  archived_at: string;
+  action: string;
+  operator: string;
+  skill_digest: string;
+  package_digest: string;
+  files: number;
+  bytes: number;
+}
+
+export interface SkillUploadFile {
+  path: string;
+  content_base64: string;
+}
+
+/** 货架 + 留痕一次取齐(管理面自刷新用,与 knowledge-insights 解耦)。 */
+export async function getSkillLibrary(): Promise<
+  HostSkillShelf & { operations: SkillOperationRecord[] }
+> {
+  const response = await fetch("/skills");
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function uploadSkill(
+  directory: string,
+  files: SkillUploadFile[],
+): Promise<SkillOperationRecord> {
+  const response = await fetch(`/skills/${encodeURIComponent(directory)}`, {
+    method: "PUT",
+    body: JSON.stringify({ files }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function offlineSkill(
+  directory: string,
+): Promise<SkillOperationRecord> {
+  const response = await fetch(`/skills/${encodeURIComponent(directory)}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function listSkillVersions(
+  directory: string,
+): Promise<SkillVersionRecord[]> {
+  const response = await fetch(
+    `/skills/${encodeURIComponent(directory)}/versions`);
+  if (!response.ok) throw new Error(await errorText(response));
+  return (await response.json()).versions ?? [];
+}
+
+export async function rollbackSkill(
+  directory: string,
+  version: string,
+): Promise<SkillOperationRecord> {
+  const response = await fetch(
+    `/skills/${encodeURIComponent(directory)}/rollback`, {
+      method: "POST",
+      body: JSON.stringify({ version }),
+    });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
 export interface TeamKnowledgeInsights {
   generated_at: string;
   summary: {

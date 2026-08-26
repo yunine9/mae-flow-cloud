@@ -117,7 +117,9 @@ function validatePackage(
   }
 }
 
-function packageDigest(root: string): string {
+/** 整包指纹(路径+内容序):快照对拍与管理面版本痕共用同一算法,
+ * 两边各算一套的话"同 digest"就不再意味着"同内容"。 */
+export function packageDigest(root: string): string {
   const hash = createHash("sha256");
   const visit = (current: string): void => {
     const entries = readdirSync(current, { withFileTypes: true })
