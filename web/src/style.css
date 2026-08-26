@@ -6439,26 +6439,27 @@ body, .sidebar, .identity-bar, .launch-copy, .user-create-copy,
   .personal-action-list article > button { grid-column: 2; width: 100%; }
 }
 
-/* ---- 问题处理视图专属色调:淡红 ----
-   需求开发=淡紫(默认 --accent 族),问题处理进入时整体切淡红:
-   按钮/徽标/选中态/链接全部跟走,侧边栏选中条同步,让"在哪个流程
-   里"一眼可辨。覆盖块放文件末尾,同名变量按就近+后写优先。 */
+/* ---- 问题处理视图专属色调:玫瑰红(低饱和暖红) ----
+   需求开发=淡紫(默认 --accent 族),问题处理进入时整体切红系。
+   第一版 #d05a5a(饱和 55% 纯红)实测刺眼——纯红是唤起度最高的
+   颜色,大面积做主题色让人持续警觉。收敛为低饱和玫瑰/陶土调
+   (~40%),大面积底色洗成近中性暖白,语义错误红不受影响。 */
 body[data-view="issues"] {
-  --accent: #d05a5a;
-  --accent-hover: #bc4747;
-  --accent-soft: #fdeeee;
-  --active: #cb5252;
-  --active-soft: #fdecec;
+  --accent: #c06b66;
+  --accent-hover: #a85b56;
+  --accent-soft: #f6ebe9;
+  --active: #bb6863;
+  --active-soft: #f7efed;
 }
 body[data-theme="dark"][data-view="issues"] {
-  --accent: #e98181;
-  --accent-hover: #f09797;
-  --accent-soft: rgba(231, 108, 108, .16);
-  --active: #df7f7f;
-  --active-soft: rgba(227, 106, 106, .14);
+  --accent: #d9928c;
+  --accent-hover: #e2a39d;
+  --accent-soft: rgba(217, 146, 140, .14);
+  --active: #d48b85;
+  --active-soft: rgba(212, 139, 133, .12);
 }
 /* 侧边栏选中条:硬编码紫,按视图分区覆盖(含窄屏的下划线形态)。 */
-body[data-view="issues"] .nav-item.on { box-shadow: inset 3px 0 #d05a5a; }
+body[data-view="issues"] .nav-item.on { box-shadow: inset 3px 0 #c87873; }
 @media (max-width: 1080px) {
-  body[data-view="issues"] .nav-item.on { box-shadow: inset 0 -2px #d05a5a; }
+  body[data-view="issues"] .nav-item.on { box-shadow: inset 0 -2px #c87873; }
 }
