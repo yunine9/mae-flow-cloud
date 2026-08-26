@@ -304,8 +304,11 @@ test("真二进制冒烟:平台选择+真实 spawn,连必拒端口拿到诚实�
     ? "fetch-logs.exe"
     : process.arch === "arm64"
       ? "fetch-logs-linux-arm64" : "fetch-logs-linux-amd64";
-  if (!existsSync(join(toolsDir, binary))) {
-    // 纪律:没条件(裁剪部署)显式 skip,不静默当过。
+  if (!existsSync(join(toolsDir, binary))
+      || (process.platform !== "win32" && process.platform !== "linux")) {
+    // 纪律:没条件显式 skip,不静默当过——二进制被裁剪部署拿掉,或本机
+    // 平台(如 macOS 开发机)根本运行不了 linux ELF,都算没条件。
+    console.log(`[skip] 真二进制冒烟:${process.platform} 无可执行的 ops-tools 二进制`);
     return;
   }
   const adapter = createGoEnvironmentAdapter({
