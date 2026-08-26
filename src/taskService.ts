@@ -2645,7 +2645,8 @@ export class TaskService {
     }, attemptTimeoutMs);
     timer.unref?.();
     try {
-      let outcome = await driver.start(warmupMission(request));
+      let outcome = await driver.start(warmupMission(
+        request, Math.round(attemptTimeoutMs / 60_000)));
       for (let correction = 0; correction < 2; correction += 1) {
         if (timedOut) {
           return {

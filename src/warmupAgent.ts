@@ -39,7 +39,10 @@ const STATUSES: readonly WarmupStatus[] = [
   "passed", "failed", "infrastructure_failure",
 ];
 
-export function warmupMission(request: WarmupRunRequest): string {
+export function warmupMission(
+  request: WarmupRunRequest,
+  budgetMinutes?: number,
+): string {
   return [
     "# 环境预热编译任务",
     "",
@@ -48,19 +51,34 @@ export function warmupMission(request: WarmupRunRequest): string {
     "",
     "1. **验证基线在本环境能编译**:按仓库真实构建入口(pom/gradle/",
     "   package.json/CMake/Makefile/CI 脚本自己找)只做编译,不跑 UT。",
+    "   刚克隆的仓不需要 clean——直接编译,别浪费一次全量。",
     "2. **焐热构建缓存**:正常编译即达成,依赖会进按仓持久缓存,",
     "   后续增量编译因此变快——不要为省时间跳过依赖解析。",
+    "   前端仓(如 website/)的依赖安装也是预热的一部分:它就是",
+    "   JS 仓最重的一步,必须先于 Maven 编译完成。",
     `3. **沉淀构建入口**:把验证过的编译命令与注意事项写入 ${WARMUP_NOTES_PATH}`,
-    "   (Markdown,一条命令一行,注明在仓库根还是子模块执行),",
-    "   编码期的构建自检子 Agent 和推送前验证都会先读它。",
+    "   (Markdown,一条命令一行,注明执行目录),编码期的构建自检",
+    "   子 Agent 和推送前验证都会先读它。样例:",
+    "   ```",
+    "   - 全量编译(仓库根): mvn clean compile",
+    "   - 增量编译(仓库根): mvn compile   # 日常自检用这条",
+    "   - 注意: website/ 需先 npm install --legacy-peer-deps,Maven 不代劳",
+    "   ```",
     "",
     "红线:",
-    `- 除 ${WARMUP_NOTES_PATH} 外**不修改、不创建任何文件**;构建产物由构建工具自然产生,不算你改的。`,
+    `- 除 ${WARMUP_NOTES_PATH} 外**不修改、不创建任何文件**;依赖安装与构建产物由构建工具自然产生,不算你改的。`,
     "- **不执行任何 git 写操作**(add/commit/checkout/restore/clean 都不许;只读命令可用)。",
     "- 基线代码红了**不许修**——那是环境或上游的问题,如实报告就是你的交付。",
     "",
     "失败分类:命令缺失、依赖仓/网络/证书/磁盘问题报 infrastructure_failure;",
     "代码本身编译错误报 failed 并附前几条错误原文(带文件路径)。",
+    ...(budgetMinutes
+      ? [
+          "",
+          `墙钟预算约 ${budgetMinutes} 分钟:大仓优先保证编译主链路走通,`
+          + "时间紧就少探索多编译;预算内完不成如实收口,别硬撑。",
+        ]
+      : []),
     "",
     "收尾时输出(必须是最后一条回复,JSON 单行):",
     '<warmup-result>{"status":"passed|failed|infrastructure_failure",'
