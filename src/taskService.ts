@@ -7224,7 +7224,16 @@ export class TaskService {
     const extras = snapshot.workspace_paths
       .filter((path) => !committed.includes(path));
     const limit = 200;
+    // 这张卡的使命必须自己说清(实锤:用户对着文件名清单找不到勾选、
+    // 也不知道确认之后还有编译闸),不能指望人读产品文档。
     const context = [
+      "**这是推送前最后一道人工确认**:核对本次交付的文件清单。",
+      "勾选在「检视材料 → 本任务变更」的文件树里,每行左侧一个勾选框,"
+      + "默认全选;发现不该交付的文件就取消勾选并选「需要调整代码」,"
+      + "Agent 整理提交后会重新请你确认。",
+      "确认后宿主才执行推送前编译与 UT;若修复产生新提交,会按新清单"
+      + "重新请你确认;全部通过后才推送并创建 MR。",
+      "",
       `即将向分支 ${branch} 推送以下 ${committed.length} 个文件`
       + `(基线 ${snapshot.baseline.slice(0, 12)} → HEAD ${snapshot.head.slice(0, 12)}):`,
       ...committed.slice(0, limit).map((path) => `- ${path}`),

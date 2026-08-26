@@ -380,6 +380,7 @@ export function WaitingCard({
   attachment,
   repositorySkillSelection,
   deliverySelection,
+  onLocateDelivery,
 }: {
   task: TaskSummary;
   onDecided: () => void;
@@ -395,6 +396,9 @@ export function WaitingCard({
   repositorySkillSelection?: RepositorySkillSelection;
   /** 代码检视里的文件级交付清单；由工作区变更面板的真实勾选产生。 */
   deliverySelection?: GitDiffSelection;
+  /** 跳到勾选面板(工作台的「本任务变更」)。列表页没有勾选面板,
+   * 不传即不渲跳转钮。 */
+  onLocateDelivery?: () => void;
 }) {
   const [picked, setPicked] = useState<Record<string, string>>({});
   const [custom, setCustom] = useState<Record<string, string>>({});
@@ -684,12 +688,20 @@ export function WaitingCard({
           deliverySelectionChanged ? " changed" : ""}`} role="status">
           <strong>{deliverySelection
             ? `交付文件 ${deliverySelection.selectedPaths.length} / ${deliverySelection.allPaths.length}`
-            : "正在读取交付文件清单"}</strong>
+            : "交付清单待勾选核对"}</strong>
           <span>{!deliverySelection
-            ? "清单读取完成后才可提交决定。"
+            /* 原文案"正在读取…"是误导:没在读,是勾选面板还没打开过。
+               必须说清勾选在哪,不然人对着这张卡干等(实锤)。 */
+            ? "勾选框在「本任务变更」文件树每行左侧,默认全选;打开核对后这里才能提交。"
             : deliverySelectionChanged
               ? "勾选与当前 commit 不同；请选择调整分支，Agent 整理后会再次请你确认。"
               : "勾选与当前 commit 一致；提交通过后，服务端会在 push 前再次复核。"}</span>
+          {onLocateDelivery && (
+            <button type="button" className="delivery-locate"
+              onClick={onLocateDelivery}>
+              {deliverySelection ? "回到勾选面板" : "去勾选核对"}
+            </button>
+          )}
         </div>
       )}
 

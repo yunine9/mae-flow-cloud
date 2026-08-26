@@ -2436,6 +2436,22 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   line-height: 1.55;
 }
 .delivery-decision-guidance strong { color: inherit; font-size: 14px; }
+.delivery-decision-guidance .delivery-locate {
+  margin-top: 6px;
+  justify-self: start;
+  padding: 6px 12px;
+  color: inherit;
+  border: 1px solid currentColor;
+  border-radius: 7px;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.delivery-decision-guidance .delivery-locate:hover {
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
 .delivery-decision-guidance.changed {
   color: var(--attention);
   background: var(--attention-soft);

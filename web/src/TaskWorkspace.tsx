@@ -731,6 +731,14 @@ export function TaskWorkspace({
                 ? chainSkillPicker.selection : undefined}
               deliverySelection={task.waiting?.recommended_view === "diff"
                 ? deliverySelection : undefined}
+              onLocateDelivery={task.waiting?.recommended_view === "diff"
+                ? () => {
+                    setWorkspaceView("materials");
+                    setMaterialView("diff");
+                    const first = items?.find((item) => item.kind === "diff");
+                    if (first) setActive(first.name);
+                  }
+                : undefined}
               attachment={
                 <>
                   {chainReview && (
