@@ -25,6 +25,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import {
+  deliveryChangeSnapshot,
   DIFF_NAME,
   listArtifacts,
   listArtifactsAsync,
@@ -228,6 +229,29 @@ test("任务基线到当前工作区:提交后的文件不消失,再次修改会
   assert.match(content, /已经提交的任务代码/);
   assert.match(content, /## 已提交后又修改\(committed-working\)/);
   assert.match(content, /提交后又修改/);
+});
+
+test("交付文件快照区分工作区可见项与 HEAD 真正会推送的文件", async () => {
+  const cwd = makeSite({ git: true });
+  const run = (...args: string[]) =>
+    execFileSync("git", ["-C", cwd, ...args], { encoding: "utf-8" });
+  const baseline = run("rev-parse", "HEAD").trim();
+  writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify({
+    step_heads: { branch_create: baseline },
+  }));
+  mkdirSync(join(cwd, "src"), { recursive: true });
+  writeFileSync(join(cwd, "src", "feature.ts"), "export const ready = true;\n");
+  run("add", "src/feature.ts");
+  run("commit", "--quiet", "-m", "feature");
+  mkdirSync(join(cwd, "target", "classes"), { recursive: true });
+  writeFileSync(join(cwd, "target", "classes", "Feature.class"), "bytecode");
+
+  const snapshot = await deliveryChangeSnapshot(cwd);
+  assert.deepEqual(snapshot?.committed_paths, ["src/feature.ts"]);
+  assert.deepEqual(snapshot?.workspace_paths,
+    ["src/feature.ts", "target/classes/Feature.class"]);
+  assert.equal(snapshot?.baseline, baseline);
+  assert.equal(snapshot?.head, run("rev-parse", "HEAD").trim());
 });
 
 test("本任务没有代码变更时如实说明,而不是假装没这项", () => {

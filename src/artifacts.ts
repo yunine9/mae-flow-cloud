@@ -78,6 +78,16 @@ export interface ArtifactContent extends ArtifactMeta {
   truncated?: boolean;
 }
 
+/** 用户确认交付文件时使用的权威 Git 快照。workspace_paths 是工作区里
+ * 当前可见的全部业务变更；committed_paths 才是 push HEAD 真正会带走
+ * 的文件。两者分开，前端才能如实区分“看得见”和“会提交”。 */
+export interface DeliveryChangeSnapshot {
+  baseline?: string;
+  head: string;
+  workspace_paths: string[];
+  committed_paths: string[];
+}
+
 interface DocEntry {
   meta: ArtifactMeta;
   /** 集合内部保存的绝对路径:读取只走这里,不由 name 拼。 */
@@ -312,6 +322,48 @@ async function taskBaselineAsync(cwd: string): Promise<string | undefined> {
   }
   return (await gitAsync(cwd, ["merge-base", "HEAD", "origin/HEAD"]))?.trim()
     || undefined;
+}
+
+function uniqueBusinessPaths(paths: string[]): string[] {
+  return [...new Set(paths.map((path) => path.trim()).filter((path) =>
+    path && !isFlowControlPath(path)))].sort((left, right) =>
+      left.localeCompare(right));
+}
+
+/** 提交清单的服务端事实来源。只调用安全 Git 读侧，不接受调用方传入
+ * revision/path 参与命令拼装；基线缺席时无法证明 HEAD 哪些改动属于
+ * 本任务，因此 committed_paths 保守返回空数组。 */
+export async function deliveryChangeSnapshot(
+  cwd: string,
+): Promise<DeliveryChangeSnapshot | undefined> {
+  const toplevel = (await gitAsync(cwd, ["rev-parse", "--show-toplevel"]))?.trim();
+  let sameRoot = false;
+  try {
+    sameRoot = !!toplevel && realpathSync(toplevel) === realpathSync(cwd);
+  } catch {
+    sameRoot = false;
+  }
+  if (!sameRoot) return undefined;
+  const [headText, status, baseline] = await Promise.all([
+    gitAsync(cwd, ["rev-parse", "--verify", "HEAD"]),
+    gitAsync(cwd, ["status", "--porcelain", "--untracked-files=all"]),
+    taskBaselineAsync(cwd),
+  ]);
+  const head = String(headText ?? "").trim();
+  if (!head || status === undefined) return undefined;
+  const committedText = baseline
+    ? await gitAsync(cwd, ["diff", "--name-only", baseline, "HEAD", "--"])
+    : undefined;
+  const committed = uniqueBusinessPaths((committedText ?? "").split("\n"));
+  return {
+    ...(baseline ? { baseline } : {}),
+    head,
+    workspace_paths: uniqueBusinessPaths([
+      ...committed,
+      ...changedPaths(status),
+    ]),
+    committed_paths: committed,
+  };
 }
 
 async function untrackedSnapshots(

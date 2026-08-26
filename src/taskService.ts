@@ -43,7 +43,6 @@ import {
   readArtifact,
   readArtifactAsync,
   resolveArtifactRoot,
-  type DeliveryChangeSnapshot,
 } from "./artifacts.ts";
 import { KernelHost } from "./kernelHost.ts";
 import {
