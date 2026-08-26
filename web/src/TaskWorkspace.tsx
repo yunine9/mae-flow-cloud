@@ -22,7 +22,7 @@ import { PrepushStatus } from "./PrepushStatus";
 import { PrepushLiveLog, prepushActive } from "./PrepushLiveLog";
 import { TokenUsage } from "./TokenUsage";
 import { KnowledgeFootprint } from "./KnowledgeFootprint";
-import { WarmupPanel } from "./WarmupPanel";
+import { WarmupPanel, WarmupStrip } from "./WarmupPanel";
 import { taskHealthFacts } from "./taskHealth";
 import { relativeTime } from "./time";
 import { startVisiblePolling } from "./visiblePolling";
@@ -475,6 +475,7 @@ export function TaskWorkspace({
             {relativeTime(health.last_progress_at) || "暂无记录"}</span>
         </>} />
       </div>
+      <WarmupStrip task={task} onOpen={() => setWorkspaceView("execution")} />
       <PrepushStatus prepush={task.delivery?.prepush} placement="workspace" />
       {task.delivery?.prepush && <PrepushLiveLog
         taskId={task.id}

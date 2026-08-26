@@ -7,6 +7,35 @@
 import { PrepushLiveLog } from "./PrepushLiveLog";
 import { tailWarmupEvents, type TaskSummary } from "./api";
 
+/** 工作台头部的一行灯:任何视图下都能看到预热进展(用户点名),
+ * 详情仍在执行现场的完整面板;点击直达。 */
+export function WarmupStrip({
+  task,
+  onOpen,
+}: {
+  task: TaskSummary;
+  onOpen?: () => void;
+}) {
+  const receipt = task.baseline_build;
+  if (!receipt) return null;
+  const text = receipt.status === "running"
+    ? `环境预热:正在编译基线 ${receipt.sha.slice(0, 12)},焐热构建缓存`
+    : receipt.status === "passed"
+      ? "环境预热:基线编译通过,构建缓存已就绪"
+      : receipt.status === "failed"
+        ? "环境预热:基线编译失败——环境或上游问题,与本单增量无关"
+        : "环境预热:未完成(基础设施问题),不代表基线编译失败";
+  return (
+    <button type="button" className={`warmup-strip is-${receipt.status}`}
+      onClick={onOpen} disabled={!onOpen}
+      title="查看预热详情(执行现场)">
+      <i aria-hidden />
+      <span>{text}</span>
+      {onOpen && <em>详情 ›</em>}
+    </button>
+  );
+}
+
 export function WarmupPanel({ task }: { task: TaskSummary }) {
   const receipt = task.baseline_build;
   if (!receipt) return null;

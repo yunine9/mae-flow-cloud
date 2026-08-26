@@ -5799,6 +5799,45 @@ pre {
 
 /* 推送前验证实时过程:命令与输出尾巴,全量在轮目录 bash 日志 */
 /* ---- 环境预热编译:进展要清楚可见,失败要说清是环境的锅 ---- */
+.warmup-strip {
+  margin: 0 0 8px;
+  padding: 7px 12px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+  font: inherit;
+  font-size: var(--font-size-assist);
+  text-align: left;
+  cursor: pointer;
+}
+.warmup-strip:disabled { cursor: default; }
+.warmup-strip i {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 999px;
+  background: var(--muted);
+}
+.warmup-strip.is-running i {
+  background: var(--accent);
+  animation: warmup-pulse 1.2s ease-in-out infinite;
+}
+.warmup-strip.is-passed i { background: var(--success); }
+.warmup-strip.is-failed {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: var(--danger-soft);
+}
+.warmup-strip.is-failed i { background: var(--danger); }
+.warmup-strip.is-infrastructure_failure i { background: var(--attention); }
+.warmup-strip span { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.warmup-strip em { font-style: normal; font-weight: 600; white-space: nowrap; }
+
 .warmup-panel {
   padding: 10px 13px;
   display: flex;
