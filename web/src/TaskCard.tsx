@@ -256,7 +256,24 @@ export function TaskCard({
           )}
           {showDecisionForm && canOperate && !chainReview
             && task.status === "waiting_for_human" && task.waiting && (
-            <WaitingCard task={task} onDecided={onChanged} />
+            task.waiting.recommended_view === "diff" ? (
+              /* 交付清单必须对着真实 diff 勾选,而勾选面板只在工作台的
+                 「本任务变更」里。列表页若直接渲决策表单,提交键会永远
+                 停在"正在读取交付文件清单"(push 确认卡实锤死锁),
+                 所以这里只给入口不给表单。 */
+              <div className="chain-review-entry">
+                <span>DELIVERY REVIEW</span>
+                <strong>交付文件清单等待核对</strong>
+                <p>请到任务工作台对照工作区变更逐文件勾选，再提交决定。</p>
+                {onOpenArtifacts && (
+                  <button type="button" onClick={onOpenArtifacts}>
+                    检视变更并确认清单
+                  </button>
+                )}
+              </div>
+            ) : (
+              <WaitingCard task={task} onDecided={onChanged} />
+            )
           )}
           {showDecisionForm && !canOperate && task.status === "waiting_for_human" && (
             <div className="read-only-notice">
