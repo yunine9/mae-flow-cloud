@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
   diffReviewRows,
@@ -28,11 +29,6 @@ const stageName: Record<ChangeStage, string> = {
   unstaged: "未暂存",
   untracked: "未跟踪",
 };
-
-const stageOrder: ChangeStage[] = [
-  "committed", "committed_working", "staged", "staged_working",
-  "unstaged", "untracked",
-];
 
 function fileKind(path: string): FileKind {
   const lower = path.toLowerCase();
@@ -100,9 +96,71 @@ function parseChanges(text: string): ChangedFile[] {
   return files;
 }
 
-function shortPath(path: string): string {
-  const parts = path.split("/");
-  return parts.length > 2 ? `…/${parts.slice(-2).join("/")}` : path;
+interface ChangeDirectory {
+  name: string;
+  path: string;
+  directories: ChangeDirectory[];
+  files: ChangedFile[];
+  count: number;
+}
+
+function changeTree(files: ChangedFile[]): ChangeDirectory {
+  type MutableDirectory = Omit<ChangeDirectory, "directories"> & {
+    children: Map<string, MutableDirectory>;
+  };
+  const root: MutableDirectory = {
+    name: "", path: "", children: new Map(), files: [], count: 0,
+  };
+  for (const file of files) {
+    const parts = file.path.split("/").filter(Boolean);
+    let directory = root;
+    for (const name of parts.slice(0, -1)) {
+      const path = directory.path ? `${directory.path}/${name}` : name;
+      let child = directory.children.get(name);
+      if (!child) {
+        child = { name, path, children: new Map(), files: [], count: 0 };
+        directory.children.set(name, child);
+      }
+      directory = child;
+    }
+    directory.files.push(file);
+  }
+  const freeze = (directory: MutableDirectory): ChangeDirectory => {
+    const directories = [...directory.children.values()]
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .map(freeze);
+    const ownFiles = [...directory.files].sort((left, right) =>
+      left.path.localeCompare(right.path));
+    return {
+      name: directory.name,
+      path: directory.path,
+      directories,
+      files: ownFiles,
+      count: ownFiles.length + directories.reduce((sum, item) =>
+        sum + item.count, 0),
+    };
+  };
+  return freeze(root);
+}
+
+function directoryPaths(directory: ChangeDirectory): string[] {
+  return directory.directories.flatMap((child) => [
+    child.path,
+    ...directoryPaths(child),
+  ]);
+}
+
+function descendantFiles(directory: ChangeDirectory): ChangedFile[] {
+  return [
+    ...directory.files,
+    ...directory.directories.flatMap(descendantFiles),
+  ];
+}
+
+export interface GitDiffSelection {
+  selectedPaths: string[];
+  committedPaths: string[];
+  allPaths: string[];
 }
 
 type ReviewEntry = DiffReviewRow | {
@@ -172,21 +230,134 @@ function DiffCellView({ cell }: { cell?: DiffCell }) {
   );
 }
 
-export function GitDiff({ text, branch }: { text: string; branch?: string }) {
+export function GitDiff({
+  text,
+  branch,
+  hideKey,
+  selectable = false,
+  selectionKey = "",
+  initialSelectedPaths,
+  onSelectionChange,
+}: {
+  text: string;
+  branch?: string;
+  /** 每任务保存自己的视图隐藏项；隐藏不参与 Git 或交付判断。 */
+  hideKey?: string;
+  /** 仅代码检视待办开放交付勾选。 */
+  selectable?: boolean;
+  selectionKey?: string;
+  initialSelectedPaths?: string[];
+  onSelectionChange?: (selection: GitDiffSelection) => void;
+}) {
   const files = useMemo(() => parseChanges(text), [text]);
   const [selected, setSelected] = useState(files[0]?.key ?? "");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [showAll, setShowAll] = useState(false);
   const [focused, setFocused] = useState(false);
+  const [collapsedDirectories, setCollapsedDirectories] =
+    useState<Set<string>>(new Set());
+  const [hiddenPaths, setHiddenPaths] = useState<Set<string>>(new Set());
+  const [deliveryPaths, setDeliveryPaths] = useState<Set<string>>(new Set());
+  const [activeSelectionKey, setActiveSelectionKey] = useState("");
+  const initializedSelection = useRef("");
+  const initializedDirectories = useRef<Set<string>>(new Set());
   const [pathTip, setPathTip] = useState<{
     path: string;
     left: number;
     top: number;
   }>();
+  const hiddenStorageKey = hideKey
+    ? `mae-flow:hidden-change-files:${hideKey}` : "";
+  const visibleFiles = useMemo(
+    () => files.filter((file) => !hiddenPaths.has(file.path)),
+    [files, hiddenPaths],
+  );
+  const tree = useMemo(() => changeTree(visibleFiles), [visibleFiles]);
+  const allDirectories = useMemo(() => directoryPaths(tree), [tree]);
+  const committedPaths = useMemo(() => files
+    .filter((file) => file.stage === "committed"
+      || file.stage === "committed_working")
+    .map((file) => file.path).sort((left, right) => left.localeCompare(right)),
+  [files]);
+
   useEffect(() => {
-    if (!files.some((file) => file.key === selected)) setSelected(files[0]?.key ?? "");
-  }, [files, selected]);
-  const active = files.find((file) => file.key === selected) ?? files[0];
+    if (!hiddenStorageKey || typeof window === "undefined") {
+      setHiddenPaths(new Set());
+      return;
+    }
+    try {
+      const saved = JSON.parse(localStorage.getItem(hiddenStorageKey) ?? "[]");
+      setHiddenPaths(new Set(Array.isArray(saved) ? saved.map(String) : []));
+    } catch {
+      setHiddenPaths(new Set());
+    }
+  }, [hiddenStorageKey]);
+
+  useEffect(() => {
+    if (!hiddenStorageKey || typeof window === "undefined") return;
+    localStorage.setItem(hiddenStorageKey, JSON.stringify([...hiddenPaths]));
+  }, [hiddenPaths, hiddenStorageKey]);
+
+  useEffect(() => {
+    const available = new Set(files.map((file) => file.path));
+    setHiddenPaths((current) => {
+      const next = new Set([...current].filter((path) => available.has(path)));
+      return next.size === current.size ? current : next;
+    });
+  }, [files.map((file) => file.path).join("\0")]);
+
+  useEffect(() => {
+    const known = initializedDirectories.current;
+    const added = allDirectories.filter((path) => !known.has(path));
+    if (added.length) {
+      setCollapsedDirectories((current) => new Set([...current, ...added]));
+    }
+    initializedDirectories.current = new Set(allDirectories);
+  }, [allDirectories.join("\0")]);
+
+  useEffect(() => {
+    if (!selectable || !files.length) {
+      if (!selectable) {
+        initializedSelection.current = "";
+        setActiveSelectionKey("");
+      }
+      return;
+    }
+    const key = selectionKey || "delivery";
+    const available = new Set(files.map((file) => file.path));
+    if (initializedSelection.current !== key) {
+      const initial = initialSelectedPaths ?? committedPaths;
+      setDeliveryPaths(new Set(initial.filter((path) => available.has(path))));
+      initializedSelection.current = key;
+      setActiveSelectionKey(key);
+      return;
+    }
+    setDeliveryPaths((current) => new Set(
+      [...current].filter((path) => available.has(path)),
+    ));
+  }, [selectable, selectionKey, files.map((file) => file.path).join("\0")]);
+
+  useEffect(() => {
+    const key = selectionKey || "delivery";
+    if (!selectable || activeSelectionKey !== key) return;
+    onSelectionChange?.({
+      selectedPaths: [...deliveryPaths].sort((left, right) =>
+        left.localeCompare(right)),
+      committedPaths,
+      allPaths: files.map((file) => file.path).sort((left, right) =>
+        left.localeCompare(right)),
+    });
+  }, [selectable, selectionKey, activeSelectionKey,
+    [...deliveryPaths].sort().join("\0"), committedPaths.join("\0"),
+    files.map((file) => file.path).join("\0")]);
+
+  useEffect(() => {
+    if (!visibleFiles.some((file) => file.key === selected)) {
+      setSelected(visibleFiles[0]?.key ?? "");
+    }
+  }, [visibleFiles, selected]);
+  const active = visibleFiles.find((file) => file.key === selected)
+    ?? visibleFiles[0];
   useEffect(() => {
     setExpanded(new Set());
     setShowAll(false);
@@ -209,6 +380,138 @@ export function GitDiff({ text, branch }: { text: string; branch?: string }) {
   const deletions = files.reduce((sum, file) => sum + file.deletions, 0);
   const kinds = Array.from(new Set(files.map((file) => file.kind)));
   const branchLabel = branch || "分支未知";
+  const selectedDeliveryCount = deliveryPaths.size;
+  const selectionChanged = selectable
+    && (selectedDeliveryCount !== committedPaths.length
+      || committedPaths.some((path) => !deliveryPaths.has(path)));
+
+  function toggleDelivery(paths: string[]) {
+    if (!selectable) return;
+    setDeliveryPaths((current) => {
+      const next = new Set(current);
+      const add = paths.some((path) => !next.has(path));
+      for (const path of paths) {
+        if (add) next.add(path);
+        else next.delete(path);
+      }
+      return next;
+    });
+  }
+
+  function hideFiles(paths: string[]) {
+    setHiddenPaths((current) => new Set([...current, ...paths]));
+  }
+
+  function renderFile(file: ChangedFile, depth: number, overview: boolean) {
+    const included = deliveryPaths.has(file.path);
+    return (
+      <div className={`change-tree-file${file.key === active?.key ? " on" : ""}`}
+        key={file.key} style={{ "--tree-depth": depth } as CSSProperties}>
+        {selectable && (
+          <button type="button" className={`delivery-check${included ? " checked" : ""}`}
+            aria-pressed={included}
+            aria-label={`${included ? "不提交" : "提交"} ${file.path}`}
+            title={included ? "从交付清单移除" : "加入交付清单"}
+            onClick={() => toggleDelivery([file.path])}>
+            <svg viewBox="0 0 16 16" aria-hidden><path d="m3.5 8 3 3 6-6" /></svg>
+          </button>
+        )}
+        <button type="button" className="change-tree-file-main" title={file.path}
+          onClick={() => {
+            setSelected(file.key);
+            if (overview) setFocused(true);
+          }}
+          onPointerEnter={(event) => {
+            const box = event.currentTarget.getBoundingClientRect();
+            setPathTip({ path: file.path, left: box.right + 9,
+              top: box.top + box.height / 2 });
+          }}
+          onPointerLeave={() => setPathTip(undefined)}
+          onFocus={(event) => {
+            const box = event.currentTarget.getBoundingClientRect();
+            setPathTip({ path: file.path, left: box.right + 9,
+              top: box.top + box.height / 2 });
+          }}
+          onBlur={() => setPathTip(undefined)}>
+          <span className={`file-kind kind-${file.kind}`}>{file.kind.slice(0, 1)}</span>
+          <span className="change-file-name"><strong>{file.path.split("/").at(-1)}</strong>
+            <small>{stageName[file.stage]} · {file.kind}</small></span>
+          {(file.additions > 0 || file.deletions > 0) && (
+            <i><em>+{file.additions}</em> <del>−{file.deletions}</del></i>
+          )}
+        </button>
+        <button type="button" className="change-hide" title="从当前视图隐藏；不改变交付清单"
+          aria-label={`隐藏 ${file.path}`} onClick={() => hideFiles([file.path])}>
+          <svg viewBox="0 0 18 18" aria-hidden><path d="M2.5 9s2.4-4 6.5-4 6.5 4 6.5 4-2.4 4-6.5 4-6.5-4-6.5-4Z" /><path d="m3 3 12 12" /></svg>
+        </button>
+      </div>
+    );
+  }
+
+  function renderDirectory(
+    directory: ChangeDirectory,
+    depth: number,
+    overview: boolean,
+  ): ReactNode {
+    const descendants = descendantFiles(directory);
+    const paths = descendants.map((file) => file.path);
+    const included = paths.filter((path) => deliveryPaths.has(path)).length;
+    const collapsed = collapsedDirectories.has(directory.path);
+    return (
+      <div className="change-tree-directory" key={directory.path}>
+        <div className="change-tree-directory-row"
+          style={{ "--tree-depth": depth } as CSSProperties}>
+          {selectable && (
+            <button type="button"
+              className={`delivery-check${included === paths.length ? " checked" : ""}${
+                included > 0 && included < paths.length ? " partial" : ""}`}
+              aria-pressed={included === paths.length}
+              aria-label={`${included === paths.length ? "不提交" : "提交"}目录 ${directory.path}`}
+              onClick={() => toggleDelivery(paths)}>
+              <svg viewBox="0 0 16 16" aria-hidden><path d="m3.5 8 3 3 6-6" /></svg>
+            </button>
+          )}
+          <button type="button" className="change-directory-main"
+            aria-expanded={!collapsed}
+            onClick={() => setCollapsedDirectories((current) => {
+              const next = new Set(current);
+              if (next.has(directory.path)) next.delete(directory.path);
+              else next.add(directory.path);
+              return next;
+            })}>
+            <svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg>
+            <span aria-hidden>▰</span><strong>{directory.name}</strong><i>{directory.count}</i>
+          </button>
+          <button type="button" className="change-hide"
+            title="隐藏整个目录；不改变交付清单"
+            aria-label={`隐藏目录 ${directory.path}`}
+            onClick={() => hideFiles(paths)}>
+            <svg viewBox="0 0 18 18" aria-hidden><path d="M2.5 9s2.4-4 6.5-4 6.5 4 6.5 4-2.4 4-6.5 4-6.5-4-6.5-4Z" /><path d="m3 3 12 12" /></svg>
+          </button>
+        </div>
+        {!collapsed && (
+          <div className="change-tree-children">
+            {directory.directories.map((child) =>
+              renderDirectory(child, depth + 1, overview))}
+            {directory.files.map((file) => renderFile(file, depth + 1, overview))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function renderTree(overview: boolean) {
+    return (
+      <div className={`change-tree${overview ? " overview" : ""}`}>
+        {tree.directories.map((directory) =>
+          renderDirectory(directory, 0, overview))}
+        {tree.files.map((file) => renderFile(file, 0, overview))}
+        {!visibleFiles.length && (
+          <div className="change-tree-empty">全部变更已从视图隐藏</div>
+        )}
+      </div>
+    );
+  }
 
   if (!files.length) {
     return <div className="worktree-clean"><strong>暂无代码变更</strong><span>{text}</span></div>;
@@ -263,35 +566,33 @@ export function GitDiff({ text, branch }: { text: string; branch?: string }) {
         </header>
       )}
 
+      {(selectable || hiddenPaths.size > 0) && (
+        <div className={`delivery-selection-bar${selectionChanged ? " changed" : ""}`}>
+          {selectable && <div><strong>交付清单：已勾选 {selectedDeliveryCount} / {files.length}</strong>
+            <span>{selectionChanged
+              ? "清单与当前 commit 不同，提交“需要调整”后由 Agent 整理并重新检视"
+              : "当前勾选与 commit 一致；最终 push 前服务端会再次核对"}</span></div>}
+          <div>
+            {selectable && <>
+              <button type="button" onClick={() =>
+                setDeliveryPaths(new Set(files.map((file) => file.path)))}>全选</button>
+              <button type="button" onClick={() => setDeliveryPaths(new Set())}>清空</button>
+            </>}
+            {hiddenPaths.size > 0 && <button type="button"
+              title="隐藏只影响浏览，不影响上面的交付勾选"
+              onClick={() => setHiddenPaths(new Set())}>
+              恢复 {hiddenPaths.size} 个隐藏项
+            </button>}
+          </div>
+          {hiddenPaths.size > 0 && <small>隐藏仅整理视图，不会自动排除提交。</small>}
+        </div>
+      )}
+
       {focused ? (
       <div className="git-change-browser">
         <nav className="change-files" aria-label="变更文件">
-          {stageOrder.map((group) => {
-            const grouped = files.filter((file) => file.stage === group);
-            if (!grouped.length) return null;
-            return (
-              <div className="change-file-group" key={group}>
-                <div className="change-file-group-head"><span>{stageName[group]}</span><i>{grouped.length}</i></div>
-                {grouped.map((file) => (
-                  <button key={file.key} className={file.key === active?.key ? "on" : ""} onClick={() => setSelected(file.key)} title={file.path}
-                    onPointerEnter={(event) => {
-                      const box = event.currentTarget.getBoundingClientRect();
-                      setPathTip({ path: file.path, left: box.right + 9, top: box.top + box.height / 2 });
-                    }}
-                    onPointerLeave={() => setPathTip(undefined)}
-                    onFocus={(event) => {
-                      const box = event.currentTarget.getBoundingClientRect();
-                      setPathTip({ path: file.path, left: box.right + 9, top: box.top + box.height / 2 });
-                    }}
-                    onBlur={() => setPathTip(undefined)}>
-                    <span className={`file-kind kind-${file.kind}`}>{file.kind.slice(0, 1)}</span>
-                    <span className="change-file-name"><strong>{shortPath(file.path)}</strong><small>{file.kind}</small></span>
-                    {(file.additions > 0 || file.deletions > 0) && <i><em>+{file.additions}</em> <del>−{file.deletions}</del></i>}
-                  </button>
-                ))}
-              </div>
-            );
-          })}
+          <div className="change-tree-caption"><span>按目录</span><i>{visibleFiles.length}</i></div>
+          {renderTree(false)}
         </nav>
 
         <section className="change-file-detail">
@@ -352,27 +653,7 @@ export function GitDiff({ text, branch }: { text: string; branch?: string }) {
               <span>点击文件直接进入宽屏双栏视图；工作台只保留变更概览。</span>
             </div>
           </div>
-          <div className="change-overview-files">
-            {files.map((file) => (
-              <button type="button" key={file.key} title={file.path}
-                onClick={() => { setSelected(file.key); setFocused(true); }}
-                onPointerEnter={(event) => {
-                  const box = event.currentTarget.getBoundingClientRect();
-                  setPathTip({ path: file.path, left: box.right + 9, top: box.top + box.height / 2 });
-                }}
-                onPointerLeave={() => setPathTip(undefined)}>
-                <span className={`file-kind kind-${file.kind}`}>{file.kind.slice(0, 1)}</span>
-                <span className="change-overview-name">
-                  <strong>{shortPath(file.path)}</strong>
-                  <small>{stageName[file.stage]} · {file.kind}</small>
-                </span>
-                <span className="change-overview-stats">
-                  <em>+{file.additions}</em><del>−{file.deletions}</del>
-                </span>
-                <svg className="change-overview-arrow" viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg>
-              </button>
-            ))}
-          </div>
+          {renderTree(true)}
         </section>
       )}
       {pathTip && createPortal(

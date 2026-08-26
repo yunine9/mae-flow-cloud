@@ -3,7 +3,10 @@ import type {
   GateContract,
   GateDecision,
 } from "./gateService.ts";
-import { prePushBuildGuidance } from "./prepushBuildPlaybook.ts";
+import {
+  prePushBuildGuidance,
+  type PrePushExecutionBudget,
+} from "./prepushBuildPlaybook.ts";
 import type { PrePushExecutionAttestation } from "./prePushVerification.ts";
 
 export type PrePushFailureKind = "code_failure" | "infrastructure_failure";
@@ -354,11 +357,22 @@ function normalizeCommand(command: string): string {
   return String(command ?? "").replace(/\s+/g, " ").trim();
 }
 
-export function prePushMission(request: PrePushRunRequest): string {
+export function prePushMission(
+  request: PrePushRunRequest,
+  executionBudget?: PrePushExecutionBudget,
+): string {
   const buildGuidance = prePushBuildGuidance(request.workspace);
+  const budgetGuidance = executionBudget
+    ? "平台执行预算：整轮最多 "
+      + `${Math.ceil(executionBudget.attemptTimeoutMs / 60_000)} 分钟；`
+      + "Maven/CMake/Make/Gradle/npm 等重型构建单条至少获得 "
+      + `${Math.ceil(executionBudget.buildCommandTimeoutMs / 60_000)} 分钟。`
+      + "不要自行用 600 秒之类的短 timeout 截断已知慢编译；平台会提升"
+      + "过短的重型构建 timeout，整轮硬上限仍负责终止真正卡死的任务。"
+    : "";
   return [
     "你是 Cloud 的推送前验证与修复 Agent。这是独立专项会话，不在 Mae-Flow 内核流程中。",
-    "不要执行 current、done、agent-task、AskUserQuestion，也不要读取或修改 .mae-flow 状态。",
+    "不要执行 current、done、AskUserQuestion，也不要读取或修改 .mae-flow 状态。",
     `任务：${request.taskId}；待验证 HEAD：${request.sha}；目标分支：${request.branch}`,
     `需求背景：${request.requirement}`,
     "",
@@ -367,10 +381,13 @@ export function prePushMission(request: PrePushRunRequest): string {
     "但不要顺手重构无关代码。代码修改使用 Edit/Write 工具，不要用 shell 文本替换伪装修改。",
     "如有修改，按仓库现有提交规范提交到本地 HEAD；禁止 push、改 remote、读取或写入任何凭据，",
     "Cloud 会在会话释放并复核后注入短期凭据、统一推送。禁止递归强删；clean 请走构建工具生命周期。",
+    "平台现场文件(.mae-flow* / openspec/config.yaml 等)不归你管：它们已被平台登记忽略，",
+    "即使仍显示为未跟踪也不要提交、删除，更不要为它们修改用户的 .gitignore——那是用户的文件。",
     "依赖下载、工具缺失、磁盘/网络/权限等不是改代码能解决的问题，归类为 infrastructure_failure，",
     "写清缺什么后停止，不要为了制造绿灯篡改测试、关闭检查或编造执行结果。",
     "",
     buildGuidance,
+    budgetGuidance,
     "",
     // 原文要求"与实际 Bash 调用完全一致",但模型实际发的是带 cd 前缀和
     // 退出码后缀的长命令,做不到逐字节回抄——这条契约把闸卡死过(实测)。

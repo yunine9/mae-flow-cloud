@@ -16,6 +16,7 @@ import {
   statSync,
 } from "node:fs";
 import type { TaskSummary } from "./taskService.ts";
+import type { LubanApprovalNotification } from "./notifier.ts";
 import {
   questionsOf,
   renderLubanDetail,
@@ -50,6 +51,11 @@ export interface LubanPluginReply {
 export interface LubanApprovalGatewayOptions {
   token: string;
   accountEnabled: (account: string) => boolean;
+  /** 出站通知留下的真相锚：让唯一待办可直接回复序号，同时不把裸数字
+   * 猜到另一张卡。多待办仍要求审批码。 */
+  recentNotification?: (
+    account: string,
+  ) => LubanApprovalNotification | undefined;
   now?: () => number;
   log?: (message: string) => void;
 }
@@ -217,14 +223,18 @@ export class LubanApprovalGateway {
         if (cached.digest !== digest) {
           throw new CallbackError(409, "message_id 已被其他请求使用");
         }
-        return { ...cached.reply, replayed: true };
+        const reply = { ...cached.reply, replayed: true };
+        this.logReceipt(envelope, reply);
+        return reply;
       }
       const running = this.inflight.get(envelope.message_id);
       if (running) {
         if (running.digest !== digest) {
           throw new CallbackError(409, "message_id 已被其他请求使用");
         }
-        return { ...(await running.promise), replayed: true };
+        const reply = { ...(await running.promise), replayed: true };
+        this.logReceipt(envelope, reply);
+        return reply;
       }
       const promise = this.execute(envelope).then((reply) => {
         this.replies.set(envelope.message_id, {
@@ -235,7 +245,9 @@ export class LubanApprovalGateway {
         this.inflight.delete(envelope.message_id);
       });
       this.inflight.set(envelope.message_id, { digest, promise });
-      return await promise;
+      const reply = await promise;
+      this.logReceipt(envelope, reply);
+      return reply;
     } catch (error) {
       if (error instanceof CallbackError) {
         return { status: error.status, text: error.message };
@@ -247,6 +259,19 @@ export class LubanApprovalGateway {
 
   private now(): number {
     return this.options.now?.() ?? Date.now();
+  }
+
+  /** 只记入站确实到达和处理结果，不记录用户正文、Token 或完整消息 ID。 */
+  private logReceipt(
+    envelope: LubanPluginEnvelope,
+    reply: LubanPluginReply,
+  ): void {
+    const message = createHash("sha256")
+      .update(envelope.message_id, "utf-8").digest("hex").slice(0, 10);
+    this.options.log?.(
+      `小鲁班审批回调已处理: sender=${envelope.sender},message=${message},`
+        + `status=${reply.status}${reply.replayed ? ",replayed=true" : ""}`,
+    );
   }
 
   private verify(input: {
@@ -476,6 +501,28 @@ export class LubanApprovalGateway {
     const cursor = this.cursors.get(account);
     if (!cursor || cursor.at < this.now() - CACHE_TTL_MS) {
       this.cursors.delete(account);
+      const notified = this.options.recentNotification?.(account);
+      if (notified && notified.notifiedAt >= this.now() - CACHE_TTL_MS) {
+        const pending = this.pending(account);
+        if (pending.length > 1) {
+          return {
+            status: 400,
+            text: `你当前有 ${pending.length} 项待审批，裸序号无法确认是哪一项。`
+              + `请回复：mae-flow 选择 ${notified.code} <序号>`
+              + "，或发送：mae-flow 待审批",
+          };
+        }
+        const binding: BoundApproval = {
+          taskId: notified.taskId,
+          waitingId: notified.waitingId,
+          stateVersion: notified.stateVersion,
+          code: normalizeCode(notified.code),
+        };
+        const task = this.taskFor(account, binding);
+        if (!task) return this.stale(account);
+        this.activate(account, task);
+        return await this.answerCurrentQuestion(account, task, answer);
+      }
       return {
         status: 400,
         text: "没有找到你正在处理的审批，请先发送：mae-flow 待审批",

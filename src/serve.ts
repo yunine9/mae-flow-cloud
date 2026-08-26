@@ -461,23 +461,37 @@ async function main(): Promise<void> {
   // 手机审批是入站回调，与上面的出站通知令牌是两套身份。Token 只从
   // 0600 文件读，不允许塞进命令行或 JSON 配置的明文字段。
   const lubanPluginTokenFile = flag("--luban-plugin-token-file");
+  // Token 只让 Cloud 的接收端点就绪；真实小鲁班是否会把回复送进来是
+  // 另一项部署事实。未完成端到端验收时绝不能在通知里承诺“直接回复”。
+  const lubanPluginReplies = has("--luban-plugin-replies");
   let lubanPluginToken: string | undefined;
   if (lubanPluginTokenFile) {
     try {
       lubanPluginToken = loadLubanPluginToken(
         resolve(lubanPluginTokenFile));
-      console.log("[serve] 小鲁班手机审批回调已启用: "
+      console.log("[serve] 小鲁班 Cloud 回调端点已就绪: "
         + "/integrations/luban/plugin");
     } catch (error) {
       console.error(`[serve] 小鲁班插件 Token 无效，拒绝启动: ${String(error)}`);
       process.exit(2);
     }
   }
+  if (lubanPluginReplies && !lubanPluginToken) {
+    console.error("[serve] --luban-plugin-replies 需要同时配置 "
+      + "--luban-plugin-token-file；只有真实入站插件验收通过后才能开启");
+    process.exit(2);
+  }
+  if (lubanPluginToken && !lubanPluginReplies) {
+    console.log("[serve] 小鲁班回调端点已就绪，但尚未声明入站回复已接通；"
+      + "通知不会提示直接回复序号");
+  } else if (lubanPluginReplies) {
+    console.log("[serve] 小鲁班入站回复已由部署显式启用；通知将提供手机审批指令");
+  }
 
   // 统一任务执行面:普通编码/修复/子 Agent/推送前编译与 UT 的 Bash
   // 全部进入同一类加固容器。Cloud 控制面、Git 凭据、MR/通知仍留宿主。
   const isolateImage = flag("--isolate-image");
-  const isolateMemory = flag("--isolate-memory") ?? "3g";
+  const isolateMemory = flag("--isolate-memory") ?? "8g";
   const isolateCpus = flag("--isolate-cpus") ?? "2";
   const isolatePids = Number(flag("--isolate-pids") ?? "512");
   const isolateNetwork = flag("--isolate-network") ?? "bridge";
@@ -486,6 +500,12 @@ async function main(): Promise<void> {
     flag("--isolate-cache-root") ?? join(dataDir, "build-cache"),
   );
   const buildSlots = Number(flag("--build-slots") ?? "1");
+  const prepushAttemptTimeoutValue = flag("--prepush-attempt-timeout-minutes");
+  const prepushAttemptTimeoutMinutes = prepushAttemptTimeoutValue !== undefined
+    ? Number(prepushAttemptTimeoutValue) : undefined;
+  const prepushBuildTimeoutValue = flag("--prepush-build-timeout-minutes");
+  const prepushBuildTimeoutMinutes = prepushBuildTimeoutValue !== undefined
+    ? Number(prepushBuildTimeoutValue) : undefined;
   // 现场保留期:终态任务过期后回收克隆等重货,台账原样留下。
   // 以前一条回收策略都没有,dataDir 只涨不消(2026-08-22 查出来的)。
   const retentionDays = Number(
@@ -502,6 +522,15 @@ async function main(): Promise<void> {
   if (!Number.isInteger(buildSlots) || buildSlots <= 0) {
     console.error("[serve] --build-slots 必须是正整数,拒绝启动");
     process.exit(2);
+  }
+  for (const [name, value] of [
+    ["--prepush-attempt-timeout-minutes", prepushAttemptTimeoutMinutes],
+    ["--prepush-build-timeout-minutes", prepushBuildTimeoutMinutes],
+  ] as const) {
+    if (value !== undefined && (!Number.isFinite(value) || value <= 0)) {
+      console.error(`[serve] ${name} 必须是正数,拒绝启动`);
+      process.exit(2);
+    }
   }
   if (/^(?:host|container(?::.*)?)$/i.test(isolateNetwork)) {
     console.error("[serve] --isolate-network 不能使用 host/container 模式,拒绝启动");
@@ -659,6 +688,23 @@ async function main(): Promise<void> {
       + "「问题处理」全功能可用");
   }
 
+  // issue-only 下假小鲁班起不来时 endpoint 缺席:通知器整个不接
+  // (notifier 是可选项),不让它变成问题流的启动依赖。
+  const notifier = lubanEndpoint
+    ? new Notifier({
+        endpoint: lubanEndpoint,
+        headers: lubanHeaders,
+        fake: lubanIsFake,
+        mobileApproval: lubanPluginReplies,
+        approvalCode: lubanPluginReplies && lubanPluginToken
+          ? (input) => lubanApprovalCode({ token: lubanPluginToken, ...input })
+          : undefined,
+        // 发起人的通知令牌:普通任务提醒是自己发给自己；主动邀请检视时，
+        // 用责任人的令牌向所选 Committer 工号发送，不要求收件人配令牌。
+        personalToken: (account) => auth.lubanToken(account),
+      })
+    : undefined;
+
   const service = new TaskService({
     dataDir, provider, model, modelsJson, maxConcurrent, settings,
     ...(issueOnly ? { requirementDisabled: true } : {}),
@@ -671,7 +717,14 @@ async function main(): Promise<void> {
     contract: demoContract,
     host,
     delivery,
-    prepush: host ? { enabled: true, buildSlots } : undefined,
+    prepush: host ? {
+      enabled: true,
+      buildSlots,
+      ...(prepushAttemptTimeoutMinutes !== undefined
+        ? { attemptTimeoutMs: prepushAttemptTimeoutMinutes * 60_000 } : {}),
+      ...(prepushBuildTimeoutMinutes !== undefined
+        ? { buildCommandTimeoutMs: prepushBuildTimeoutMinutes * 60_000 } : {}),
+    } : undefined,
     workspaceRetentionDays: retentionDays,
     commitConvention,
     isolation: isolateImage
@@ -686,22 +739,7 @@ async function main(): Promise<void> {
           network: isolateNetwork,
         }
       : undefined,
-    // issue-only 下假小鲁班起不来时 endpoint 缺席:通知器整个不接
-    // (notifier 是可选项),不让它变成问题流的启动依赖。
-    ...(lubanEndpoint ? {
-      notifier: new Notifier({
-        endpoint: lubanEndpoint,
-        headers: lubanHeaders,
-        fake: lubanIsFake,
-        mobileApproval: !!lubanPluginToken,
-        approvalCode: lubanPluginToken
-          ? (input) => lubanApprovalCode({ token: lubanPluginToken, ...input })
-          : undefined,
-        // 发起人的通知令牌:普通任务提醒是自己发给自己；主动邀请检视时，
-        // 用责任人的令牌向所选 Committer 工号发送，不要求收件人配令牌。
-        personalToken: (account) => auth.lubanToken(account),
-      }),
-    } : {}),
+    ...(notifier ? { notifier } : {}),
     projection,
     // 正式部署建议固定 public-url；未配置时，服务会从已登录用户的
     // 实际请求 Host 学到内网入口，绝不再默认写死 127.0.0.1。
@@ -725,6 +763,9 @@ async function main(): Promise<void> {
     ? new LubanApprovalGateway(service, {
         token: lubanPluginToken,
         accountEnabled: (account) => !!auth.sessionView(account),
+        ...(notifier ? {
+          recentNotification: (account) => notifier.latestApproval(account),
+        } : {}),
         log: (message) => console.log(`  [luban-plugin] ${message}`),
       })
     : undefined;

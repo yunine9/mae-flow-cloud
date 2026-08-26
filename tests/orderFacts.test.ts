@@ -153,9 +153,18 @@ test("下单事实:三项配置免问、Q2 不出、tweak 免卡入链、改选�
       "工号": "cloudbot", "交付方式": "局部修改",
     });
     if (existsSync(join(repoDir, ".git", "info"))) {
-      assert.match(
-        readFileSync(join(repoDir, ".git", "info", "exclude"), "utf-8"),
-        /\.mae-flow-order\.json/, "现场文件必须挡在交付提交之外");
+      const exclude = readFileSync(
+        join(repoDir, ".git", "info", "exclude"), "utf-8");
+      assert.match(exclude, /\.mae-flow-order\.json/,
+        "现场文件必须挡在交付提交之外");
+      // 内核会话产物同样是平台关切(run9 实锤:openspec/config.yaml 漏登
+      // 记,prepush 修复 Agent 把它提交进了用户的 .gitignore 随 MR 推走)。
+      for (const artifact of [
+        ".mae-flow.json.exited", ".mae-flow-work/", "openspec/config.yaml",
+      ]) {
+        assert.ok(exclude.includes(artifact),
+          `内核会话产物 ${artifact} 必须在平台 exclude 里,不能指望用户仓的 .gitignore`);
+      }
     }
     const state = JSON.parse(
       readFileSync(join(repoDir, ".mae-flow.json"), "utf-8"));

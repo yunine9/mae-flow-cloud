@@ -34,7 +34,6 @@ function taskLabel(task: TaskSummary): string {
 export function humanApprovalStage(step: string | undefined): string {
   const normalized = String(step ?? "").trim();
   const known: Record<string, string> = {
-    build_review: "代码变更检视",
     spec_review: "方案确认",
     story_review: "需求确认",
     workflow_select: "交付方式确认",
@@ -64,8 +63,9 @@ export function questionsOf(waiting: WaitingRecord): LubanApprovalQuestion[] {
 export function renderLubanHelp(): string {
   return [
     "Mae-Flow 手机审批指令：",
-    "收到通知后，可直接回复“mae-flow 选择 <审批码> <序号>”",
-    "已打开当前待办时，直接回复序号即可",
+    "只有一项待办时，收到通知可直接回复选项序号",
+    "多项待办时，请使用“mae-flow 选择 <审批码> <序号>”",
+    "已打开当前待办时，也可直接回复序号",
     "补充说明请回复“序号：说明”，说明不会改变流程选项",
     "mae-flow 待审批（查看当前待办）",
     "多题卡会逐题记录，全部答完后一次提交",

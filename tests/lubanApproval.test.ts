@@ -13,6 +13,7 @@ import type { AddressInfo } from "node:net";
 import type { WaitingRecord } from "../src/humanGate.ts";
 import {
   loadLubanPluginToken,
+  lubanApprovalCode,
   LubanApprovalGateway,
   type LubanApprovalService,
 } from "../src/lubanApproval.ts";
@@ -33,7 +34,7 @@ function waiting(
 ): WaitingRecord {
   return {
     waiting_id: `${taskId}:call-1`, task_id: taskId,
-    step: "build_review", call_id: "call-1",
+    step: "delivery_review", call_id: "call-1",
     question: { questions }, context: "编译与 UT 已通过，请核对本轮改动。",
     state_version: version, status: "waiting", decision: "", notes: "",
     created_at: "2026-08-23T00:00:00.000Z", resolved_at: "", reminders: 0,
@@ -162,6 +163,85 @@ test("唯一待办首次查询直接展示完整详情，裸序号提交当前�
   });
   assert.equal(stale.status, 409);
   assert.match(stale.text, /已更新|已过期/);
+});
+
+test("唯一待办的通知就是审批上下文：无需先查待审批，直接回复序号", async () => {
+  const service = new FakeApprovalService([
+    task("task-notified", "alice", "支付接口修复"),
+  ]);
+  const notifier = new Notifier({
+    endpoint: "http://127.0.0.1:1/unused",
+    mobileApproval: true,
+    approvalCode: (input) => lubanApprovalCode({ token: TOKEN, ...input }),
+    backoffMs: [],
+  });
+  const notice = await notifier.notifyWaiting({
+    waitingId: service.tasks[0].waiting!.waiting_id,
+    stateVersion: service.tasks[0].waiting!.state_version,
+    taskId: service.tasks[0].id,
+    subject: service.tasks[0].title,
+    account: "alice",
+    step: service.tasks[0].waiting!.step,
+    questions: (service.tasks[0].waiting!.question as any).questions,
+    link: "http://intranet/work/task-notified",
+  });
+  assert.match(notice.text, /直接回复选项序号/);
+
+  const entry = new LubanApprovalGateway(service, {
+    token: TOKEN,
+    accountEnabled: () => true,
+    recentNotification: (account) => notifier.latestApproval(account),
+  });
+  const chosen = await callback(entry, {
+    message_id: "notification-bare-choice", sender: "alice", content: "2",
+  });
+
+  assert.equal(chosen.status, 200);
+  assert.deepEqual(service.calls, [{
+    id: "task-notified", decision: "打回", notes: "小鲁班手机审批",
+  }]);
+});
+
+test("通知后的裸序号仍核对版本，多待办时拒绝猜任务", async () => {
+  const first = task("task-first", "alice", "第一项");
+  const second = task("task-second", "alice", "第二项");
+  const service = new FakeApprovalService([first, second]);
+  const notifier = new Notifier({
+    endpoint: "http://127.0.0.1:1/unused",
+    mobileApproval: true,
+    approvalCode: (input) => lubanApprovalCode({ token: TOKEN, ...input }),
+    backoffMs: [],
+  });
+  await notifier.notifyWaiting({
+    waitingId: first.waiting!.waiting_id,
+    stateVersion: first.waiting!.state_version,
+    taskId: first.id,
+    account: "alice",
+    step: first.waiting!.step,
+    questions: (first.waiting!.question as any).questions,
+    link: "http://intranet/work/task-first",
+  });
+  const entry = new LubanApprovalGateway(service, {
+    token: TOKEN,
+    accountEnabled: () => true,
+    recentNotification: (account) => notifier.latestApproval(account),
+  });
+
+  const ambiguous = await callback(entry, {
+    message_id: "notification-ambiguous", sender: "alice", content: "1",
+  });
+  assert.equal(ambiguous.status, 400);
+  assert.match(ambiguous.text, /2 项待审批|审批码/);
+  assert.equal(service.calls.length, 0);
+
+  second.status = "running";
+  first.waiting!.state_version += 1;
+  const stale = await callback(entry, {
+    message_id: "notification-stale", sender: "alice", content: "1",
+  });
+  assert.equal(stale.status, 409);
+  assert.match(stale.text, /已更新|已过期/);
+  assert.equal(service.calls.length, 0);
 });
 
 test("多项待办先用裸序号选任务，再用裸序号审批", async () => {
@@ -516,7 +596,12 @@ test("HTTP 回调复用主服务端口且不需要浏览器 Cookie", async () =>
     dataDir, provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0,
   });
   const approvalService = new FakeApprovalService([task("task-1", "alice", "支付修复")]);
-  const entry = gateway(approvalService);
+  const logs: string[] = [];
+  const entry = new LubanApprovalGateway(approvalService, {
+    token: TOKEN,
+    accountEnabled: () => true,
+    log: (message) => logs.push(message),
+  });
   const server = createTaskServer(taskService, { lubanApproval: entry });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -535,6 +620,11 @@ test("HTTP 回调复用主服务端口且不需要浏览器 Cookie", async () =>
     assert.equal(response.status, 200);
     const result = await response.json() as { text: string };
     assert.match(result.text, /支付修复/);
+    assert.equal(logs.length, 1);
+    assert.match(logs[0], /sender=alice/);
+    assert.match(logs[0], /status=200/);
+    assert.doesNotMatch(logs[0], /http-1|mae-flow 待审批|test-luban-plugin-token/,
+      "回调审计不能记录消息原文、原始 ID 或 Token");
 
     const unsigned = await fetch(`${base}/integrations/luban/plugin`, {
       method: "POST", body: rawBody,
@@ -565,7 +655,7 @@ test("启用手机入口后，待办通知说明会话式审批方式", async ()
   const record = await notifier.notifyWaiting({
     waitingId: "waiting-1", stateVersion: 1,
     taskId: "task-1", account: "alice",
-    subject: "问题单 DTS20260824001（task-1）", step: "build_review",
+    subject: "问题单 DTS20260824001（task-1）", step: "spec_review",
     questions: [
       { question: "Diff 通过吗？", options: ["通过", "打回"] },
       { question: "需要灰度吗？", options: ["需要", "不需要"] },
@@ -575,7 +665,8 @@ test("启用手机入口后，待办通知说明会话式审批方式", async ()
   assert.match(record.text, /问题单 DTS20260824001/);
   assert.match(record.text, /Diff 通过吗/);
   assert.doesNotMatch(record.text, /需要灰度吗/);
-  assert.doesNotMatch(record.text, /build_review/);
-  assert.match(record.text, /代码变更检视/);
-  assert.match(record.text, /mae-flow 选择 A1B2C3D4E5 <序号>/);
+  assert.doesNotMatch(record.text, /spec_review/);
+  assert.match(record.text, /方案确认/);
+  assert.match(record.text, /直接回复选项序号/);
+  assert.match(record.text, /多项待办或无上下文时：mae-flow 选择 A1B2C3D4E5 <序号>/);
 });

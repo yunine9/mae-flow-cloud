@@ -43,7 +43,8 @@ import { KnowledgeFlywheel } from "./KnowledgeFlywheel";
 const IssueBoard = lazy(() =>
   import("./issues/IssueBoard").then((module) => ({ default: module.IssueBoard })));
 
-type View = "team" | "mine" | "issues" | "profile" | "history" | "users" | "settings";
+type View = "team" | "mine" | "issues" | "profile" | "history" | "users"
+  | "settings" | "knowledge";
 type Theme = "light" | "dark";
 type Density = "comfortable" | "compact";
 type MineScope = "all" | "waiting" | "intervention" | "active" | "delivered";
@@ -538,6 +539,7 @@ export function App() {
     issues: { title: "问题处理", description: "我的问题研究与 DTS 问题单处理：先定位，后补单，非问题也是合法结论。" },
     profile: { title: "个人设置", description: "集中管理任务审批方式、CodeHub 提交身份和小鲁班通知。" },
     history: { title: "交付历史", description: "回看任务与交付记录；未启用历史投影时仍可浏览当前任务现场。" },
+    knowledge: { title: "团队知识", description: "Skill 货架与知识效能：看当前生效的团队资产、真实消费足迹和值得沉淀的方向。" },
     users: { title: "账号管理", description: "创建本地账号并分配管理员或开发权限。" },
     settings: { title: "服务设置", description: "集中管理模型网关和团队运行策略；部署链路在此只读自检。" },
   }[view];
@@ -552,6 +554,7 @@ export function App() {
         {session.role === "admin" ? <>
           <span className="nav-section-label">管理视角</span>
           <NavButton view="team" current={view} onSelect={setView} label="团队总览" badge={waitingCount} />
+          <NavButton view="knowledge" current={view} onSelect={setView} label="团队知识" />
           <NavButton view="history" current={view} onSelect={setView} label="交付历史" />
           <span className="nav-section-label admin-tools">系统管理</span>
           <NavButton view="users" current={view} onSelect={setView} label="账号管理" />
@@ -563,6 +566,7 @@ export function App() {
           <NavButton view="profile" current={view} onSelect={setView} label="个人设置" />
           <span className="nav-section-label team-context">团队信息</span>
           <NavButton view="team" current={view} onSelect={setView} label="团队动态" badge={waitingCount} />
+          <NavButton view="knowledge" current={view} onSelect={setView} label="团队知识" />
           <NavButton view="history" current={view} onSelect={setView} label="交付历史" />
         </>}
       </nav>
@@ -579,12 +583,19 @@ export function App() {
         {view === "team" && <TeamDashboard
           tasks={tasks}
           users={teamUsers}
-          knowledgeInsights={knowledgeInsights}
-          knowledgeInsightsLoading={knowledgeInsightsLoading}
-          knowledgeInsightsError={knowledgeInsightsError}
-          onRefreshKnowledge={refreshKnowledgeInsights}
           onChanged={refresh}
           onOpenArtifacts={openArtifacts}
+        />}
+
+        {view === "knowledge" && <KnowledgeFlywheel
+          insights={knowledgeInsights}
+          loading={knowledgeInsightsLoading}
+          error={knowledgeInsightsError}
+          onRetry={refreshKnowledgeInsights}
+          onOpenTask={(taskId) => {
+            const target = tasks.find((task) => task.id === taskId);
+            if (target) openArtifacts(target);
+          }}
         />}
 
         {view === "mine" && <>
@@ -908,19 +919,11 @@ function riskReason(task: TaskSummary): string {
 function TeamDashboard({
   tasks,
   users,
-  knowledgeInsights,
-  knowledgeInsightsLoading,
-  knowledgeInsightsError,
-  onRefreshKnowledge,
   onChanged,
   onOpenArtifacts,
 }: {
   tasks: TaskSummary[];
   users: AuthUser[];
-  knowledgeInsights?: TeamKnowledgeInsights;
-  knowledgeInsightsLoading: boolean;
-  knowledgeInsightsError: string;
-  onRefreshKnowledge: () => void;
   onChanged: () => void;
   onOpenArtifacts: (task: TaskSummary) => void;
 }) {
@@ -978,17 +981,6 @@ function TeamDashboard({
     </section>}
 
     <PhaseFunnel tasks={tasks} />
-
-    <KnowledgeFlywheel
-      insights={knowledgeInsights}
-      loading={knowledgeInsightsLoading}
-      error={knowledgeInsightsError}
-      onRetry={onRefreshKnowledge}
-      onOpenTask={(taskId) => {
-        const target = tasks.find((task) => task.id === taskId);
-        if (target) onOpenArtifacts(target);
-      }}
-    />
 
     <section className="task-section" id="team-queue" ref={queueRef} aria-labelledby="team-queue-title">
       <div className="section-head"><div><span className="section-kicker">TEAM QUEUE</span><h2 id="team-queue-title">团队任务明细</h2></div><span className="section-count">{visible.length} / {tasks.length} 项</span></div>

@@ -293,6 +293,15 @@ openssl rand -hex 32 > /etc/mae-flow-cloud/luban-plugin.token
 # serve.json: "luban-plugin-token-file": "/etc/mae-flow-cloud/luban-plugin.token"
 ```
 
+上面只表示 Cloud 回调端点已就绪，不表示小鲁班已经会把回复送进来。插件或
+入站桥完成真实端到端验收后，才在 `serve.json` 增加：
+
+```json
+{ "luban-plugin-replies": true }
+```
+
+未打开这个开关时，出站通知仍正常发送，但不会宣称“直接回复 1”可用。
+
 小鲁班真实插件的回调形状、验签方式尚未拿到，因此部署桥负责把它转换成
 Cloud 的稳定内部契约；如果插件本身可按该契约发出，也可直接注册 Cloud
 地址。**不要为了接未知协议在 Cloud 里堆字段猜测。**
@@ -310,10 +319,11 @@ Token 不对、工号不存在或正文不合法就拒绝；同 message_id 重�
 这个 Token 只是防止其他内网请求伪装成小鲁班回调，不是用户的个人发送
 Token，也不需要每个人配置。
 
-正常使用只需两步：打开“Mae-Flow 待审批”插件后查询待办；唯一待办会直接
-显示完整详情，随后直接回复 `1`、`2`、`确认` 或具体修改意见。若同一账号有
-多项待办，先回复任务序号查看详情，再回复选项序号。插件/桥必须把同一用户
-的后续裸消息继续转发给 Cloud。多题卡会在每次回复后明确显示“已记录、尚未
+已启用 `luban-plugin-replies` 时，账号只有一项待办的通知会直接显示审批
+上下文、当前问题和选项，无需先查询“待审批”，
+回复 `1`、`2`、`确认` 或具体修改意见即可。若同一账号有多项待办，裸序号会
+被安全拒绝；应使用通知里的审批码，或打开“Mae-Flow 待审批”插件后先选任务。
+插件/桥必须把同一用户的后续裸消息继续转发给 Cloud。多题卡会在每次回复后明确显示“已记录、尚未
 提交”并提示下一题，全部答完后才统一生效。选项不合适时回复
 `自由回复：答案或修改要求`，Cloud 会回显选择结果并确认原话已保留；无法
 唯一判断的普通自然语言不会被猜成某个选项，而是明确提示用户消歧。全是选择题时可用
@@ -716,13 +726,14 @@ Skill 需要补说明。该台账是 fail-open 观测旁路，不能替代质量
   "mcp-token-file": "/etc/mae-flow-cloud/mcp-token",
   "issue-max-turns": 2,
   "issue-only": false,
+  "luban-plugin-replies": false,
   "pg": "postgresql://...",
   "data": "/var/lib/mae-flow-cloud", "port": 8787,
   "poll-interval": 30, "poll-timeout": 1800,
   "max-concurrent": 2,
   "workspace-retention-days": 14,
   "isolate-image": "registry.intra/mae-flow/task-builder@sha256:<digest>",
-  "isolate-memory": "3g", "isolate-cpus": "2", "isolate-pids": 512,
+  "isolate-memory": "8g", "isolate-cpus": "2", "isolate-pids": 512,
   "isolate-network": "bridge",
   "isolate-cache-root": "/var/cache/mae-flow-cloud/build",
   "build-slots": 1
@@ -744,16 +755,19 @@ install -m 600 /dev/null /etc/mae-flow-cloud/mcp-token
 | repo | 无(纯会话演练) | 内核模式的目标仓 |
 | platform / fake-platform | 无 | 交付平台地址 / 本地假件 |
 | luban / luban-header | 假小鲁班 | 通知端点与鉴权头(可重复) |
-| luban-plugin-token-file | 无 | 启用手机纯文本审批；0600、至少 32 字节的固定回调 Token 文件 |
+| luban-plugin-token-file | 无 | 准备 Cloud 手机审批回调端点；0600、至少 32 字节的固定 Token 文件，不代表小鲁班入站已接通 |
+| luban-plugin-replies | false | 真实小鲁班插件/入站桥端到端验收通过后才设 true；控制通知是否承诺可直接回复 |
 | pg | 无 | 投影(纯旁路) |
 | data / port / web | .tasks / 8787 / web-dist | 现场目录、端口、前端 |
 | isolate-image | 无(内核模式必填) | 统一任务构建镜像 |
 | isolate-volume | 无 | 部署只读配置/CA 等额外挂载(可重复) |
-| isolate-memory / isolate-cpus / isolate-pids | 3g / 2 / 512 | 每个任务容器的资源上限 |
+| isolate-memory / isolate-cpus / isolate-pids | 8g / 2 / 512 | 每个任务容器的资源上限 |
 | isolate-network | bridge | 任务容器网络；拒绝 host/container 模式 |
 | isolate-cache-root | `<data>/build-cache` | 按仓库哈希隔离的 Maven/npm/ccache/XDG 缓存 |
 | isolate-user | **Linux:服务进程 uid:gid**;root 守护形态必须显式给数字 uid:gid;其他平台:镜像内非 root 用户 | Linux 普通服务账号不配时按自己的 uid:gid 跑。root 守护进程必须显式给非 root 数字 uid:gid；Cloud 在容器启动前把实际代码工作区和分仓缓存安全交给该用户，不修改任务台账与凭据目录 |
 | build-slots | 1 | 同时运行的 prepush 重构建数，独立于普通 Agent 并发 |
+| prepush-attempt-timeout-minutes | 普通仓 30 / C++ 仓 60 | 单轮 prepush 的总墙钟预算；只在代表仓实测确实更慢时覆盖 |
+| prepush-build-timeout-minutes | 普通仓 20 / C++ 仓 45 | Maven/CMake/Make/Gradle/npm 等单条重构建预算；Agent 填得更短时由平台自动提升，总预算仍是硬上限 |
 | repair-rounds | 不限 | 修复环手刹:数字=上限,0=关;不配=修到绿/出诊断为止 |
 | poll-interval / poll-timeout | 10 / 1800(秒) | 流水线轮询节奏与预算 |
 | max-concurrent | 2 | 并发任务数 |
@@ -842,7 +856,7 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
   --provider <网关名> --model glm-5.1 \
   --repo <内网仓地址> --platform <MR/流水线网关地址> \
   --isolate-image <统一任务构建镜像@sha256:digest> \
-  --isolate-memory 3g --isolate-cpus 2 --isolate-pids 512 \
+  --isolate-memory 8g --isolate-cpus 2 --isolate-pids 512 \
   --isolate-cache-root /var/cache/mae-flow-cloud/build \
   --build-slots 1 \
   --pg postgresql://<用户>@<PG地址>/<库名> \
@@ -881,11 +895,19 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
   所有任务 Bash 进入容器；缺镜像、Daemon、加固项、工具链或清理证明时
   都明确失败，不允许回宿主。默认只读根、cap-drop ALL、
   no-new-privileges、PID 512、bridge 网络、HOME 与 `/tmp` tmpfs；`/tmp`
-  显式保留 exec 以兼容 Maven Jansi/JNA/native。资源默认 3g/2 CPU，可按
-  代表仓实测上调；`--build-slots` 控制重构建并发，避免一台机器被多单
+  显式保留 exec 以兼容 Maven Jansi/JNA/native。资源默认 8g/2 CPU，可按
+  代表仓实测调整；`--build-slots` 控制重构建并发，避免一台机器被多单
   Maven/C++ 同时打满。镜像构建与内部 CA/Maven settings 的只读挂载见
   `deploy/build-image/README.md`。镜像 `Config.User` 为空/root/0 或显式
   `--isolate-user root/0` 会拒绝运行；不要用 root 绕过目录权限。
+- **慢构建预算由平台兜底**:普通仓默认整轮 30 分钟/单条重构建 20 分钟；
+  检出 C++ 信号后自动放宽到 60/45 分钟。即使 Agent 给 Maven 全量编译
+  填了 `timeout: 600`，容器实际仍至少获得平台预算；普通探查命令不被
+  无谓放宽。若代表仓的完整冷构建 P95 仍超过默认值，用
+  `--prepush-attempt-timeout-minutes` 与 `--prepush-build-timeout-minutes`
+  显式上调（例如 120/100）。单命令预算会自动限制在整轮预算以下，给
+  结果整理与容器清理留余量；真正耗尽时当次命令立即明确收口，不再靠
+  下一条 Bash 触发二次错误。
 - **构建环境先于模型验明**:管理页「部署自检」会在真实任务身份下核对
   passwd HOME、Maven 实际使用的 JDK 21、该 JDK cacerts、显式挂载的
   settings、五类缓存和 C++ 仓父子拓扑。正式任务每次进入推送前验证时还会
@@ -961,7 +983,7 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
     --kernel-mode --platform <MR/流水线网关地址> \
     --pg postgresql://<用户>@<PG地址>/<库名> \
     --isolate-image <统一任务构建镜像@sha256:digest> \
-    --isolate-memory 3g --isolate-cpus 2 --isolate-pids 512 \
+    --isolate-memory 8g --isolate-cpus 2 --isolate-pids 512 \
     --isolate-cache-root /var/cache/mae-flow-cloud/build \
     --build-slots 1 \
     --data /var/lib/mae-flow-cloud --port 8787

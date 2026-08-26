@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import type {
+  HostSkillShelf,
   KnowledgeInsightResource,
   KnowledgeKind,
   TeamKnowledgeInsights,
@@ -51,6 +52,34 @@ function ResourceRow({ resource }: { resource: KnowledgeInsightResource }) {
   </article>;
 }
 
+/** 货架与足迹互补:足迹只看得见被任务带过的资源,放坏了的 skill 在
+ * 足迹里隐形,货架把"现在生效的是什么"照出来——包括不可装载的。 */
+function HostSkillShelfPanel({ shelf }: { shelf: HostSkillShelf }) {
+  return <div className="knowledge-shelf" aria-label="团队 Skill 货架">
+    <div className="knowledge-panel-head">
+      <div><strong>团队 Skill 货架</strong><small>部署数据目录 skills/ 里当前生效的资产;每个新任务自动装载。</small></div>
+      <span>{shelf.skills.length} 项</span>
+    </div>
+    {!shelf.root_exists && <div className="knowledge-shelf-empty">本部署尚未放置团队 Skill(数据目录下无 skills/)。放入后新任务即自动装载,无需重启。</div>}
+    {shelf.root_exists && shelf.skills.length === 0 && <div className="knowledge-shelf-empty">skills/ 目录是空的——放入含 SKILL.md 的技能包后,新任务即自动装载。</div>}
+    {shelf.skills.map((skill) => <article className={`knowledge-shelf-row${skill.loadable ? "" : " broken"}`} key={skill.path}>
+      <div className="knowledge-shelf-main">
+        <strong>{skill.name}</strong>
+        {!skill.loadable && <span className="knowledge-shelf-badge" title="pi 装载器未接受,任何会话都不会带上它;检查 SKILL.md frontmatter 的 name/description">不可装载</span>}
+        <p>{skill.description || "(没有描述——模型靠描述判断何时读取,建议补上)"}</p>
+      </div>
+      <div className="knowledge-shelf-meta">
+        <span title={`SKILL.md 内容 sha256:${skill.digest}`}>版本 {skill.digest.slice(0, 8)}</span>
+        <span>{skill.path}</span>
+        <time dateTime={skill.updated_at}>{latest(skill.updated_at).replace("最近 ", "更新 ")}</time>
+      </div>
+    </article>)}
+    {shelf.warnings.length > 0 && <div className="knowledge-shelf-warnings" role="note">
+      {shelf.warnings.map((warning) => <p key={warning}>⚠ {warning}</p>)}
+    </div>}
+  </div>;
+}
+
 export function KnowledgeFlywheel({
   insights,
   loading,
@@ -96,6 +125,8 @@ export function KnowledgeFlywheel({
     {error && !insights && <div className="knowledge-flywheel-error" role="alert"><strong>知识效能暂时不可用</strong><span>{error}</span><button type="button" onClick={onRetry}>重新读取</button></div>}
     {loading && !insights && <div className="knowledge-flywheel-loading" aria-label="正在统计知识效能"><i /><i /><i /></div>}
     {insights && insights.summary.tracked_tasks === 0 && <div className="knowledge-flywheel-empty"><span aria-hidden>◎</span><div><strong>知识飞轮正在等待第一批数据</strong><p>新任务开始选择或读取业务知识后，这里会自动出现使用趋势和改进建议；旧任务不会被猜测补数。</p></div></div>}
+
+    {insights?.host_skills && <HostSkillShelfPanel shelf={insights.host_skills} />}
 
     {insights && insights.summary.tracked_tasks > 0 && <>
       <div className="knowledge-flywheel-metrics" aria-label="知识效能摘要">

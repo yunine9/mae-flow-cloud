@@ -70,7 +70,7 @@ test("阶段轨迹/审批卡与决定/台账成败:读成人话且按时间正�
           decision: "确认以上全部配置", notes: "工号已核对" } },
     ],
     state: {
-      current: "verify_ut",
+      current: "build",
       history: [
         { step: "config_confirm", result: "done", note: "",
           at: "2026-08-15 10:06:00" },
@@ -83,7 +83,7 @@ test("阶段轨迹/审批卡与决定/台账成败:读成人话且按时间正�
         { kind: "COMPILE", step: "build", succeeded: true,
           command: "mvn -pl notify-service -am compile -q",
           at: "2026-08-15 10:10:00" },
-        { kind: "UT", step: "verify_ut", succeeded: false,
+        { kind: "UT", step: "build", succeeded: false,
           command: "mvn -pl notify-service -am test",
           at: "2026-08-15 10:30:00" },
       ],

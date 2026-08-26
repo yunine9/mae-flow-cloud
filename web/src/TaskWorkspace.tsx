@@ -12,13 +12,14 @@
 
 import { useEffect, useState } from "react";
 import { Markdown } from "./markdown";
-import { GitDiff } from "./GitDiff";
+import { GitDiff, type GitDiffSelection } from "./GitDiff";
 import { SteerBox } from "./SteerBox";
 import { Annotatable } from "./Annotatable";
 import { AnnotationPanel } from "./AnnotationPanel";
 import { AttachedNotes } from "./AttachedNotes";
 import { RequirementGraph } from "./RequirementGraph";
 import { PrepushStatus } from "./PrepushStatus";
+import { PrepushLiveLog, prepushActive } from "./PrepushLiveLog";
 import { TokenUsage } from "./TokenUsage";
 import { KnowledgeFootprint } from "./KnowledgeFootprint";
 import { taskHealthFacts } from "./taskHealth";
@@ -39,6 +40,7 @@ import {
   readArtifact,
   repairStopped,
   requestCommitterReview,
+  putPushConfirmation,
   putTaskApprovalMode,
   statusText,
   type AnchorCheck,
@@ -100,6 +102,46 @@ function assistantUnavailableReason(task: TaskSummary): string {
   return "代码现场就绪后即可使用";
 }
 
+/** push 前人工确认开关:确认点已过(已推送/终态)只读展示不可开。
+ * 状态以服务端镜像为准,提交后靠既有轮询回读,不本地推断。 */
+function PushConfirmationToggle({
+  task,
+  onChanged,
+}: {
+  task: TaskSummary;
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const on = !!task.push_confirmation;
+  const passed = ["await_merge", "completed", "failed", "canceled"]
+    .includes(task.status);
+  if (passed && !on) return null;
+  return <label className={`push-confirm-toggle${on ? " on" : ""}`}
+    title="开着时,Cloud 会在推送前展示交付文件清单等你确认;确认或按清单返工后才推送">
+    <input
+      type="checkbox"
+      checked={on}
+      disabled={busy || passed}
+      onChange={async (event) => {
+        const next = event.target.checked;
+        setBusy(true);
+        setError("");
+        try {
+          await putPushConfirmation(task.id, next);
+          onChanged();
+        } catch (cause) {
+          setError(String((cause as Error).message ?? cause));
+        } finally {
+          setBusy(false);
+        }
+      }}
+    />
+    <span>push 前人工确认交付清单</span>
+    {error && <em className="push-confirm-error">{error}</em>}
+  </label>;
+}
+
 export function TaskWorkspace({
   task,
   viewerUsername,
@@ -151,6 +193,8 @@ export function TaskWorkspace({
   const [cancelArmed, setCancelArmed] = useState(false);
   const [chainSkillPicker, setChainSkillPicker] =
     useState<RepositorySkillPickerState>(EMPTY_REPOSITORY_SKILL_PICKER_STATE);
+  const [deliverySelection, setDeliverySelection] =
+    useState<GitDiffSelection>();
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>(
     task.status === "paused" ? "collaboration" : "materials",
   );
@@ -159,7 +203,12 @@ export function TaskWorkspace({
     setMaterialView(task.waiting?.recommended_view ?? "source");
     setWorkspaceView(task.status === "paused" ? "collaboration" : "materials");
     setChainSkillPicker(EMPTY_REPOSITORY_SKILL_PICKER_STATE);
+    setDeliverySelection(undefined);
   }, [task.id]);
+
+  useEffect(() => {
+    setDeliverySelection(undefined);
+  }, [task.waiting?.waiting_id]);
 
   useEffect(() => {
     const recommended = task.waiting?.recommended_view;
@@ -495,6 +544,11 @@ export function TaskWorkspace({
         </>} />
       </div>
       <PrepushStatus prepush={task.delivery?.prepush} placement="workspace" />
+      <PushConfirmationToggle task={task} onChanged={onChanged} />
+      {task.delivery?.prepush && <PrepushLiveLog
+        taskId={task.id}
+        active={prepushActive(task.delivery.prepush.state)}
+      />}
 
       <nav className="ws-workspace-nav" aria-label="任务工作台视图">
         {([
@@ -589,7 +643,14 @@ export function TaskWorkspace({
                 onAdded={() => setNotesPulse((tick) => tick + 1)}
               >
                 {materialView === "diff"
-                  ? <GitDiff text={content} branch={branch} />
+                  ? <GitDiff text={content} branch={branch}
+                      hideKey={task.id}
+                      selectable={canOperate
+                        && task.waiting?.recommended_view === "diff"}
+                      selectionKey={task.waiting?.waiting_id}
+                      initialSelectedPaths={task.delivery_selection?.status === "requested"
+                        ? task.delivery_selection.paths : undefined}
+                      onSelectionChange={setDeliverySelection} />
                   : <Markdown text={content} />}
               </Annotatable>
               )}
@@ -716,6 +777,8 @@ export function TaskWorkspace({
               annotationIds={unresolvedIds}
               repositorySkillSelection={chainReview
                 ? chainSkillPicker.selection : undefined}
+              deliverySelection={task.waiting?.recommended_view === "diff"
+                ? deliverySelection : undefined}
               attachment={
                 <>
                   {chainReview && (

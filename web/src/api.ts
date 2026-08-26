@@ -115,6 +115,20 @@ export async function putMoonlight(
   return response.json();
 }
 
+/** push 前人工确认开关。已推送后再开会 409,如实提示。 */
+export async function putPushConfirmation(
+  taskId: string,
+  on: boolean,
+): Promise<TaskSummary> {
+  const response = await fetch(
+    `/tasks/${encodeURIComponent(taskId)}/push-confirmation`, {
+      method: "PUT",
+      body: JSON.stringify({ on }),
+    });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
 export async function putTaskApprovalMode(
   taskId: string,
   mode: "inherit" | "manual" | "moonlight",
@@ -455,6 +469,18 @@ export interface TaskSummary {
       failure?: string;
     };
   };
+  delivery_selection?: {
+    paths: string[];
+    observed_paths: string[];
+    excluded_paths: string[];
+    status: "requested" | "confirmed";
+    waiting_id: string;
+    head: string;
+    baseline?: string;
+    updated_at: string;
+  };
+  /** push 前人工确认交付清单(任务级开关,默认关)。 */
+  push_confirmation?: boolean;
   progress?: TaskProgress;
   control?: {
     last_action: "pause" | "resume" | "cancel";
@@ -661,6 +687,25 @@ export interface KnowledgeRecommendation {
   task_ids?: string[];
 }
 
+/** 团队 Skill 货架条目:部署数据目录 skills/ 里当前生效的资产身份。
+ * 正文不进接口;digest 是版本锚。 */
+export interface HostSkillShelfEntry {
+  name: string;
+  description: string;
+  digest: string;
+  updated_at: string;
+  path: string;
+  bytes: number;
+  /** false = pi 装载器不认(缺 name/description 等),放了也不进会话。 */
+  loadable: boolean;
+}
+
+export interface HostSkillShelf {
+  root_exists: boolean;
+  skills: HostSkillShelfEntry[];
+  warnings: string[];
+}
+
 export interface TeamKnowledgeInsights {
   generated_at: string;
   summary: {
@@ -674,6 +719,8 @@ export interface TeamKnowledgeInsights {
   };
   resources: KnowledgeInsightResource[];
   recommendations: KnowledgeRecommendation[];
+  /** 团队 Skill 货架(旧服务端没有该字段,前端按缺席兼容)。 */
+  host_skills?: HostSkillShelf;
 }
 
 /** 已经由服务端目录令牌验证、记在任务上的仓内 Skill。Chain 检视页
@@ -774,6 +821,8 @@ export async function decide(
     selectedIds: string[];
     selectedKnowledgeIds: string[];
   },
+  /** 代码检视勾选的最终交付文件；空数组表示明确不选任何文件。 */
+  deliveryPaths?: string[],
 ): Promise<{ conflict?: string }> {
   const response = await fetch(`/tasks/${taskId}/decision`, {
     method: "POST",
@@ -787,6 +836,7 @@ export async function decide(
       selected_repository_skill_ids: repositorySkills?.selectedIds,
       selected_repository_knowledge_ids:
         repositorySkills?.selectedKnowledgeIds,
+      delivery_paths: deliveryPaths,
     }),
   });
   if (response.status === 409) {
@@ -882,7 +932,7 @@ export interface DeveloperAssistantToolRun {
 
 export interface DeveloperAssistantAvailability {
   available: boolean;
-  code: "edit_window" | "user_override" | "approval_pending" | "tests_only" | "host_wait"
+  code: "edit_window" | "user_override" | "approval_pending" | "host_wait"
     | "not_editable" | "core_unavailable" | "session_only";
   mode: "edit" | "unavailable";
   reason: string;
@@ -1119,6 +1169,21 @@ export function tailEvents(
 ): () => void {
   onState?.("connecting");
   const source = new EventSource(`/tasks/${taskId}/events`);
+  source.onopen = () => onState?.("live");
+  source.onmessage = (message) => onEvent(JSON.parse(message.data));
+  source.onerror = () => onState?.("reconnecting");
+  return () => source.close();
+}
+
+/** 推送前验证的实时事件流:换轮(修复后新 HEAD 再验)由服务端切文件
+ * 并从头重放新一轮,前端只管渲染。 */
+export function tailPrepushEvents(
+  taskId: string,
+  onEvent: (event: SemanticEvent) => void,
+  onState?: (state: SseConnectionState) => void,
+): () => void {
+  onState?.("connecting");
+  const source = new EventSource(`/tasks/${taskId}/prepush/events`);
   source.onopen = () => onState?.("live");
   source.onmessage = (message) => onEvent(JSON.parse(message.data));
   source.onerror = () => onState?.("reconnecting");

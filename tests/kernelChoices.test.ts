@@ -96,7 +96,9 @@ test("收编内核的所有材料/代码检视点都有统一关闭语义", () =
     join(KERNEL_ROOT, "flow", "flow.json"), "utf-8"));
   const reviewed = Object.entries(flow.steps as Record<string, any>)
     .filter(([, step]) => step.approval_subject);
-  assert.ok(reviewed.length >= 6, "Spec、Story、轻量范围、编码和质量检视不能漏");
+  // 2026-08-25 编排瘦身:编码/质量段的中途检视点已整体退役,材料检视
+  // (需求、Story、hotfix/tweak 开卡)仍必须齐全且语义统一。
+  assert.ok(reviewed.length >= 4, "需求、Story、轻量开卡的材料检视不能漏");
   for (const [stepId, step] of reviewed) {
     const effects = stepChoiceEffects(KERNEL_ROOT, stepId);
     assert.ok(effects.some((effect) => effect.closesFeedback),

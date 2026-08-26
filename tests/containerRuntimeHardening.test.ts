@@ -10,6 +10,7 @@ import {
   type DockerStreamProcess,
   TASK_CONTAINER_HOME,
   TaskContainer,
+  TaskContainerExecTimeoutError,
   TaskContainerUnavailableError,
   dockerAvailable,
   sweepManagedTaskContainers,
@@ -433,7 +434,9 @@ test("timeout 销毁整个容器：TERM→KILL→rm 后才杀本机 exec，且 s
       onData: () => undefined,
       timeout: 0.005,
     }),
-    /timeout:0\.005/,
+    (error: unknown) => error instanceof TaskContainerExecTimeoutError
+      && error.timeoutSeconds === 0.005
+      && /timeout:0\.005/.test(error.message),
   );
   assert.equal(subject.state, "stopped");
   assert.equal(runner.exists, false, "timeout 返回前必须确认容器已删除");
@@ -448,7 +451,9 @@ test("timeout 销毁整个容器：TERM→KILL→rm 后才杀本机 exec，且 s
   assert.equal(runner.commands.length, before, "重复 stop 不应再次访问 Docker");
   await assert.rejects(
     subject.exec("true", runner.workspace, { onData: () => undefined }),
-    /未运行/,
+    (error: unknown) => error instanceof TaskContainerUnavailableError
+      && error.kind === "stopped"
+      && /未运行/.test(error.message),
   );
 });
 

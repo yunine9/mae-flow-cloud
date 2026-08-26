@@ -33,13 +33,13 @@ test("投递成功:待办事实与审批链接送达账号;同待办幂等", asy
     const notifier = new Notifier({ endpoint: luban.endpoint });
     const first = await notifier.notifyWaiting({
       waitingId: "T-1:c1", taskId: "T-1", account: "liaoxiang",
-      step: "build_review", summary: "Diff 通过吗?",
+      step: "delivery_review", summary: "Diff 通过吗?",
       link: "http://x/tasks/T-1",
     });
     await until(() => (first.delivered ? true : undefined), "投递完成");
     const again = await notifier.notifyWaiting({
       waitingId: "T-1:c1", taskId: "T-1", account: "liaoxiang",
-      step: "build_review", summary: "重复投递不应发生",
+      step: "delivery_review", summary: "重复投递不应发生",
       link: "http://x/tasks/T-1",
     });
     assert.equal(again, first);
@@ -52,6 +52,71 @@ test("投递成功:待办事实与审批链接送达账号;同待办幂等", asy
   } finally {
     await luban.stop();
   }
+});
+
+test("清空重跑会同时清除旧通知审批上下文", async () => {
+  const notifier = new Notifier({
+    endpoint: "http://127.0.0.1:1/unused",
+    mobileApproval: true,
+    approvalCode: () => "A1B2C3D4E5",
+    backoffMs: [],
+  });
+  await notifier.notifyWaiting({
+    waitingId: "T-purge:c1", stateVersion: 1,
+    taskId: "T-purge", account: "alice", step: "delivery_review",
+    questions: [{ question: "Diff 通过吗？", options: ["通过", "打回"] }],
+    link: "http://x/tasks/T-purge",
+  });
+  assert.equal(notifier.latestApproval("alice")?.waitingId, "T-purge:c1");
+
+  notifier.purgeTask("T-purge");
+
+  assert.equal(notifier.latestApproval("alice"), undefined);
+});
+
+test("配置确认通知带出被确认内容；缺内容时禁止裸序号审批", async () => {
+  const notifier = new Notifier({
+    endpoint: "http://127.0.0.1:1/unused",
+    mobileApproval: true,
+    approvalCode: () => "A1B2C3D4E5",
+    backoffMs: [],
+  });
+  const complete = await notifier.notifyWaiting({
+    waitingId: "T-config:complete", stateVersion: 1,
+    taskId: "T-config", account: "alice", step: "config_confirm",
+    context: [
+      "需求单：REQ-20260826-01",
+      "基线：master",
+      "交付方式：完整开发 full",
+    ].join("\n"),
+    questions: [{
+      question: "上述完整配置是否正确？",
+      options: ["确认以上全部配置", "需要修改"],
+    }],
+    link: "http://x/work/T-config",
+  });
+  assert.match(complete.text, /待确认内容：/);
+  assert.match(complete.text, /需求单：REQ-20260826-01/);
+  assert.match(complete.text, /基线：master/);
+  assert.match(complete.text, /交付方式：完整开发 full/);
+  assert.match(complete.text, /可直接回复选项序号/);
+  assert.equal(notifier.latestApproval("alice")?.waitingId,
+    "T-config:complete");
+
+  const missing = await notifier.notifyWaiting({
+    waitingId: "T-config:missing", stateVersion: 1,
+    taskId: "T-config-2", account: "bob", step: "config_confirm",
+    questions: [{
+      question: "上述完整配置是否正确？",
+      options: ["确认以上全部配置", "需要修改"],
+    }],
+    link: "http://x/work/T-config-2",
+  });
+  assert.match(missing.text, /被确认的具体内容没有随审批卡提供/);
+  assert.match(missing.text, /已禁止裸序号审批/);
+  assert.doesNotMatch(missing.text, /可直接回复选项序号/);
+  assert.equal(notifier.latestApproval("bob"), undefined,
+    "缺少被确认内容时不能建立裸回复审批上下文");
 });
 
 test("投递失败:有限退避后成功;首败期间不阻塞", async () => {
@@ -76,7 +141,8 @@ test("投递失败:有限退避后成功;首败期间不阻塞", async () => {
 
 test("端到端:任务进入等待即通知;通知死透不改流程,页面可见事实", async () => {
   const SCRIPT: Scene[] = [
-    { tool: { name: "AskUserQuestion", input: { questions: [
+    { text: "待确认配置：兼容旧接口；灰度关闭；观察窗口 30 分钟。",
+      tool: { name: "AskUserQuestion", input: { questions: [
       { question: "兼容旧接口吗?", options: ["兼容", "不兼容"] },
       { question: "需要灰度吗?", options: ["需要", "不需要"] },
       { question: "灰度观察多久?", options: ["30 分钟", "2 小时"] },
@@ -108,6 +174,8 @@ test("端到端:任务进入等待即通知;通知死透不改流程,页面可�
       () => notifier.list()[0],
       "待办通知入账",
     );
+    assert.match(waitingNotice.text,
+      /待确认内容：\n待确认配置：兼容旧接口；灰度关闭；观察窗口 30 分钟/);
     assert.match(waitingNotice.text, /共 3 个问题/);
     assert.match(waitingNotice.text, /问题 1：兼容旧接口吗/);
     assert.match(waitingNotice.text, /问题 2：需要灰度吗/);

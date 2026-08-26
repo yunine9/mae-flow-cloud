@@ -76,7 +76,7 @@ async function main(): Promise<number> {
     transcript: new TranscriptStore(mainPath, "main"),
     gate: new GateService({ workspace: out, contract: demoContract }),
     humanGate,
-    currentStep: () => "build_review",
+    currentStep: () => "build",
     log: (message) => console.log(`  [pi] ${message}`),
   });
 

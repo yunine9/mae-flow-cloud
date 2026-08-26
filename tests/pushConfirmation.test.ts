@@ -1,0 +1,176 @@
+/**
+ * push 前人工确认(commit 前人工介入的云端落点):
+ * 瘦身后的主链没有中途检视卡,想在交付前亲眼核对清单的人从这里看。
+ * 契约:默认关零打扰;开着时宿主在 push 前挂云端原生 diff 卡,同 HEAD
+ * 幂等;确认(默认全清单)绑 HEAD 放行;prepush/修复产生新 HEAD 不判死
+ * 而是重新举卡;返工开修复会话并携带清单契约;月光不代答这张卡。
+ */
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { ScriptedModelServer } from "../src/scriptedModel.ts";
+import { TaskControlError, TaskService } from "../src/taskService.ts";
+
+async function until<T>(probe: () => T | undefined, what: string): Promise<T> {
+  const deadline = Date.now() + 20_000;
+  for (;;) {
+    const value = probe();
+    if (value !== undefined) return value;
+    if (Date.now() > deadline) throw new Error(`等待超时:${what}`);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  }
+}
+
+function repository() {
+  const cwd = mkdtempSync(join(tmpdir(), "mfc-push-confirm-"));
+  const git = (...args: string[]) => execFileSync(
+    "git", ["-C", cwd, ...args], { encoding: "utf-8" }).trim();
+  git("init", "--quiet", "-b", "master");
+  git("config", "user.name", "bot");
+  git("config", "user.email", "bot@test");
+  writeFileSync(join(cwd, "README.md"), "baseline\n");
+  git("add", "README.md");
+  git("commit", "--quiet", "-m", "baseline");
+  const baseline = git("rev-parse", "HEAD");
+  mkdirSync(join(cwd, "src"));
+  writeFileSync(join(cwd, "src", "feature.ts"), "export const value = 1;\n");
+  git("add", "src/feature.ts");
+  git("commit", "--quiet", "-m", "task result");
+  writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify({
+    step_heads: { branch_create: baseline },
+  }));
+  return { cwd, git };
+}
+
+async function verifyingTask() {
+  const model = new ScriptedModelServer([
+    { text: "编码完成。" }, { text: "返工完成。" }, { text: "备用。" },
+  ]);
+  await model.start();
+  const service = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-push-confirm-data-")),
+    provider: "maeflow",
+    model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+  });
+  const id = service.create("push 前确认演练").id;
+  await until(() => service.get(id)?.status === "completed"
+    ? true : undefined, "首轮会话收口");
+  const repo = repository();
+  const internal = (service as any).tasks.get(id);
+  internal.cwd = repo.cwd;
+  internal.summary.status = "verifying";
+  return { service, model, id, internal, repo };
+}
+
+test("默认关零打扰;开着时出卡且同 HEAD 幂等,确认默认全清单并绑 HEAD", async () => {
+  const { service, model, id, internal, repo } = await verifyingTask();
+  try {
+    const gate = () => (service as any)
+      .pushConfirmationSatisfied(internal, "master_bot_REQ1");
+    assert.equal(await gate(), true, "开关默认关,闸门必须放行");
+
+    internal.summary.push_confirmation = true;
+    assert.equal(await gate(), false, "开着且未确认,必须拦下出卡");
+    const waiting = service.get(id)!.waiting!;
+    assert.equal(waiting.step, "cloud_push_confirm");
+    assert.equal(service.get(id)!.status, "waiting_for_human");
+    assert.equal(waiting.recommended_view, "diff",
+      "云端原生卡要给 diff 检视面,勾选 UI 才会开放");
+    assert.match(String(waiting.context), /src\/feature\.ts/);
+    const options = (waiting.question as any).questions[0].options as string[];
+    assert.ok(options.some((option) => option.includes("确认按清单推送")));
+    assert.ok(options.some((option) => option.includes("按清单返工")));
+
+    assert.equal(await gate(), false);
+    assert.equal(service.get(id)!.waiting!.waiting_id, waiting.waiting_id,
+      "同 HEAD 不重复出卡(call_id 幂等,重启也只有一张)");
+
+    await service.decide(id, {
+      state_version: waiting.state_version,
+      selected_options: {
+        [(waiting.question as any).questions[0].question]: "确认按清单推送",
+      },
+    });
+    const summary = service.get(id)!;
+    assert.equal(summary.waiting, undefined);
+    assert.equal(summary.delivery_selection?.status, "confirmed");
+    assert.deepEqual(summary.delivery_selection?.paths, ["src/feature.ts"],
+      "没显式勾选=按当前 commit 全量确认");
+    assert.equal(summary.delivery_selection?.head,
+      repo.git("rev-parse", "HEAD"));
+    assert.equal(await gate(), true, "已确认且 HEAD 未变,放行");
+
+    // prepush/修复产生新提交:不判死,作废旧确认、按新快照重新举卡。
+    writeFileSync(join(repo.cwd, "src", "fix.ts"), "export const fix = 1;\n");
+    repo.git("add", "src/fix.ts");
+    repo.git("commit", "--quiet", "-m", "prepush fix");
+    internal.summary.status = "verifying";
+    assert.equal(await gate(), false, "HEAD 变了必须重新确认");
+    const renewed = service.get(id)!.waiting!;
+    assert.notEqual(renewed.waiting_id, waiting.waiting_id);
+    assert.match(String(renewed.context), /src\/fix\.ts/);
+  } finally {
+    await model.stop();
+  }
+});
+
+test("返工开修复会话并携带清单契约;月光不代答确认卡", async () => {
+  const { service, model, id, internal, repo } = await verifyingTask();
+  try {
+    internal.summary.push_confirmation = true;
+    writeFileSync(join(repo.cwd, "src", "extra.ts"), "export const x = 1;\n");
+    repo.git("add", "src/extra.ts");
+    repo.git("commit", "--quiet", "-m", "extra file");
+    await (service as any).pushConfirmationSatisfied(internal, "master_bot_REQ1");
+    const waiting = service.get(id)!.waiting!;
+
+    assert.equal((service as any).autoAnswerFor(internal, true), undefined,
+      "月光免审批不得代答用户显式要求的 push 前确认卡");
+
+    await service.decide(id, {
+      state_version: waiting.state_version,
+      selected_options: {
+        [(waiting.question as any).questions[0].question]:
+          "需要调整代码（按清单返工）",
+      },
+      delivery_paths: ["src/feature.ts"],
+      notes: "extra.ts 是误提交,移出去",
+    });
+    const summary = service.get(id)!;
+    assert.equal(summary.delivery_selection?.status, "requested");
+    assert.deepEqual(summary.delivery_selection?.paths, ["src/feature.ts"]);
+    assert.equal(summary.status, "queued", "返工走修复会话,不是原地卡死");
+    assert.match(String(internal.mission), /mae-flow-delivery-selection\/1/);
+    assert.match(String(internal.mission), /只交付以下 1 个文件/);
+    assert.match(String(internal.mission), /extra\.ts 是误提交/);
+  } finally {
+    await model.stop();
+  }
+});
+
+test("开关的边界:已推送后不能再开;等卡时关掉=作废卡继续推", async () => {
+  const { service, model, id, internal, repo } = await verifyingTask();
+  try {
+    internal.summary.status = "await_merge";
+    assert.throws(() => service.setPushConfirmation(id, true),
+      (error) => error instanceof TaskControlError
+        && /确认点已经过去/.test(error.message));
+
+    internal.summary.status = "verifying";
+    service.setPushConfirmation(id, true);
+    await (service as any).pushConfirmationSatisfied(internal, "master_bot_REQ1");
+    assert.equal(service.get(id)!.status, "waiting_for_human");
+    void repo;
+    const off = service.setPushConfirmation(id, false);
+    assert.equal(off.push_confirmation, undefined);
+    assert.equal(off.waiting, undefined, "人说不看了,卡必须作废");
+    assert.equal(off.status, "verifying", "关掉开关要继续推,不许悬在等待");
+  } finally {
+    await model.stop();
+  }
+});

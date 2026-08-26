@@ -29,7 +29,6 @@ export type DeveloperAssistantAvailabilityCode =
   | "edit_window"
   | "user_override"
   | "approval_pending"
-  | "tests_only"
   | "host_wait"
   | "not_editable"
   | "core_unavailable"
@@ -201,7 +200,7 @@ export function inspectDeveloperAssistantAvailability(
     if (!step) throw new Error(`内核步骤 ${stepId} 不在流程定义中`);
     const title = String(step.title ?? "").trim() || undefined;
     const core = coreCheckpoint(state, stepId, title);
-    if (step.allow_source_edit === true && !step.tests_only
+    if (step.allow_source_edit === true
         && !step.user_ack && !step.approval_subject && !step.host_wait) {
       return {
         available: true,

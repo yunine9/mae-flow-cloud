@@ -33,6 +33,7 @@ import {
   type EventFilter,
 } from "./eventView";
 import type { RepositorySkillSelection } from "./RepositorySkillPicker";
+import type { GitDiffSelection } from "./GitDiff";
 import { PrepushStatus } from "./PrepushStatus";
 import { TokenUsage } from "./TokenUsage";
 import { startVisiblePolling } from "./visiblePolling";
@@ -360,6 +361,7 @@ export function WaitingCard({
   annotationIds,
   attachment,
   repositorySkillSelection,
+  deliverySelection,
 }: {
   task: TaskSummary;
   onDecided: () => void;
@@ -371,6 +373,8 @@ export function WaitingCard({
   attachment?: ReactNode;
   /** 仅 Chain 的“确认并生成任务”消费；未扫描/需要修改都不发送。 */
   repositorySkillSelection?: RepositorySkillSelection;
+  /** 代码检视里的文件级交付清单；由工作区变更面板的真实勾选产生。 */
+  deliverySelection?: GitDiffSelection;
 }) {
   const [picked, setPicked] = useState<Record<string, string>>({});
   const [custom, setCustom] = useState<Record<string, string>>({});
@@ -399,11 +403,18 @@ export function WaitingCard({
   })[0];
   const feedbackLabel = feedbackOption?.replace(/[（(].*$/, "") ?? "需要调整";
   const attachmentCount = annotationIds?.length ?? 0;
+  const requiresDeliverySelection = task.waiting?.recommended_view === "diff";
+  const deliverySelectionChanged = !!deliverySelection
+    && (deliverySelection.selectedPaths.length
+      !== deliverySelection.committedPaths.length
+      || deliverySelection.committedPaths.some((path) =>
+        !deliverySelection.selectedPaths.includes(path)));
 
   const answerOf = (question: string) => picked[question] ?? "";
   const optional = (question: string) =>
     /可忽略|若上题|如无|可跳过|可不填/.test(question);
-  const reviewChoiceConflict = attachmentCount > 0 && questions.some((item) => {
+  const reviewChoiceConflict = (attachmentCount > 0 || deliverySelectionChanged)
+    && questions.some((item) => {
     const options = item.options ?? [];
     if (!options.some((option) => allChoiceAnswers.has(option))) return false;
     const answer = answerOf(item.question);
@@ -422,7 +433,8 @@ export function WaitingCard({
       ? picked[item.question]
       : custom[item.question]?.trim();
     return optional(item.question) || Boolean(answered);
-  }) && !repositorySkillSelection?.scanning
+  }) && (!requiresDeliverySelection || !!deliverySelection)
+    && !repositorySkillSelection?.scanning
     && (!repositorySkillSelection?.scanned
       || !!repositorySkillSelection.catalogToken)
     && !reviewChoiceConflict
@@ -431,7 +443,8 @@ export function WaitingCard({
   const annotationKey = annotationIds?.join("\0") ?? "";
   const choiceKey = [...feedbackAnswers, ...closingAnswers].join("\0");
   useEffect(() => {
-    if (!attachmentCount || !choiceEffects.some((effect) =>
+    if ((!attachmentCount && !deliverySelectionChanged)
+        || !choiceEffects.some((effect) =>
       effect.closes_feedback)) return;
     setPicked((current) => {
       let changed = false;
@@ -452,7 +465,8 @@ export function WaitingCard({
       }
       return changed ? next : current;
     });
-  }, [task.waiting?.waiting_id, annotationKey, choiceKey]);
+  }, [task.waiting?.waiting_id, annotationKey, choiceKey,
+    deliverySelectionChanged]);
 
   function pickOption(question: string, option: string) {
     setPicked({ ...picked, [question]: option });
@@ -498,6 +512,7 @@ export function WaitingCard({
         notes,
         annotationIds,
         repositorySkills,
+        requiresDeliverySelection ? deliverySelection?.selectedPaths : undefined,
       );
       if (result.conflict) setConflict(result.conflict);
       onDecided();
@@ -640,6 +655,20 @@ export function WaitingCard({
             : selectedReviewAnswer === feedbackOption
               ? `已选择“${feedbackLabel}”，提交后会继续处理这些意见。`
               : `建议选择“${feedbackLabel}”，提交后会继续处理这些意见。`}</span>
+        </div>
+      )}
+
+      {requiresDeliverySelection && (
+        <div className={`delivery-decision-guidance${
+          deliverySelectionChanged ? " changed" : ""}`} role="status">
+          <strong>{deliverySelection
+            ? `交付文件 ${deliverySelection.selectedPaths.length} / ${deliverySelection.allPaths.length}`
+            : "正在读取交付文件清单"}</strong>
+          <span>{!deliverySelection
+            ? "清单读取完成后才可提交决定。"
+            : deliverySelectionChanged
+              ? "勾选与当前 commit 不同；请选择调整分支，Agent 整理后会再次请你确认。"
+              : "勾选与当前 commit 一致；提交通过后，服务端会在 push 前再次复核。"}</span>
         </div>
       )}
 

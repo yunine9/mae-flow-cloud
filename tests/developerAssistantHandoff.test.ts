@@ -36,19 +36,14 @@ function fixture(): { root: string; repo: string; kernel: string } {
   mkdirSync(join(kernel, "flow"), { recursive: true });
   writeFileSync(join(kernel, "flow", "flow.json"), JSON.stringify({
     steps: {
-      build: { title: "编码实现", allow_source_edit: true },
-      build_review: {
-        title: "用户检视代码",
+      build: { title: "自由实现与定稿", allow_source_edit: true },
+      delivery_review: {
+        title: "交付清单确认",
         user_ack: true,
         approval_subject: { kind: "worktree" },
       },
-      verify_ut: {
-        title: "补充单元测试",
-        allow_source_edit: true,
-        tests_only: true,
-      },
       external_verify: { title: "等待流水线", host_wait: true },
-      build_commit: { title: "精确提交" },
+      push: { title: "推送" },
     },
   }));
   git(repo, "init", "-q");
@@ -73,7 +68,7 @@ test("开发助手把内核位置当上下文，不阻止用户主动接管", ()
   );
 
   for (const current of [
-    "build_review", "verify_ut", "external_verify", "build_commit",
+    "delivery_review", "external_verify", "push",
   ] as const) {
     writeFileSync(join(repo, ".mae-flow.json"), JSON.stringify({
       current, revision: 8,
@@ -174,7 +169,7 @@ test("多轮助手不因 revision 变化吞掉第一轮修改", () => {
   const finished = finishDeveloperAssistantHandoff(
     first, captureDeveloperAssistantWorktree(repo));
   writeFileSync(join(repo, ".mae-flow.json"), JSON.stringify({
-    current: "build_review", revision: 99,
+    current: "delivery_review", revision: 99,
   }));
   const second = beginDeveloperAssistantHandoff(finished,
     inspectDeveloperAssistantAvailability(repo, kernel),
