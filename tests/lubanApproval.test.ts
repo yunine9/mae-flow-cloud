@@ -621,7 +621,12 @@ test("HTTP 回调复用主服务端口且不需要浏览器 Cookie", async () =>
     dataDir, provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0,
   });
   const approvalService = new FakeApprovalService([task("task-1", "alice", "支付修复")]);
-  const entry = gateway(approvalService);
+  const logs: string[] = [];
+  const entry = new LubanApprovalGateway(approvalService, {
+    token: TOKEN,
+    accountEnabled: () => true,
+    log: (message) => logs.push(message),
+  });
   const server = createTaskServer(taskService, { lubanApproval: entry });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -640,6 +645,11 @@ test("HTTP 回调复用主服务端口且不需要浏览器 Cookie", async () =>
     assert.equal(response.status, 200);
     const result = await response.json() as { text: string };
     assert.match(result.text, /支付修复/);
+    assert.equal(logs.length, 1);
+    assert.match(logs[0], /sender=alice/);
+    assert.match(logs[0], /status=200/);
+    assert.doesNotMatch(logs[0], /http-1|mae-flow 待审批|test-luban-plugin-token/,
+      "回调审计不能记录消息原文、原始 ID 或 Token");
 
     const unsigned = await fetch(`${base}/integrations/luban/plugin`, {
       method: "POST", body: rawBody,

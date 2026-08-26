@@ -427,17 +427,31 @@ async function main(): Promise<void> {
   // 手机审批是入站回调，与上面的出站通知令牌是两套身份。Token 只从
   // 0600 文件读，不允许塞进命令行或 JSON 配置的明文字段。
   const lubanPluginTokenFile = flag("--luban-plugin-token-file");
+  // Token 只让 Cloud 的接收端点就绪；真实小鲁班是否会把回复送进来是
+  // 另一项部署事实。未完成端到端验收时绝不能在通知里承诺“直接回复”。
+  const lubanPluginReplies = has("--luban-plugin-replies");
   let lubanPluginToken: string | undefined;
   if (lubanPluginTokenFile) {
     try {
       lubanPluginToken = loadLubanPluginToken(
         resolve(lubanPluginTokenFile));
-      console.log("[serve] 小鲁班手机审批回调已启用: "
+      console.log("[serve] 小鲁班 Cloud 回调端点已就绪: "
         + "/integrations/luban/plugin");
     } catch (error) {
       console.error(`[serve] 小鲁班插件 Token 无效，拒绝启动: ${String(error)}`);
       process.exit(2);
     }
+  }
+  if (lubanPluginReplies && !lubanPluginToken) {
+    console.error("[serve] --luban-plugin-replies 需要同时配置 "
+      + "--luban-plugin-token-file；只有真实入站插件验收通过后才能开启");
+    process.exit(2);
+  }
+  if (lubanPluginToken && !lubanPluginReplies) {
+    console.log("[serve] 小鲁班回调端点已就绪，但尚未声明入站回复已接通；"
+      + "通知不会提示直接回复序号");
+  } else if (lubanPluginReplies) {
+    console.log("[serve] 小鲁班入站回复已由部署显式启用；通知将提供手机审批指令");
   }
 
   // 统一任务执行面:普通编码/修复/子 Agent/推送前编译与 UT 的 Bash
@@ -584,8 +598,8 @@ async function main(): Promise<void> {
     endpoint: lubanEndpoint,
     headers: lubanHeaders,
     fake: lubanIsFake,
-    mobileApproval: !!lubanPluginToken,
-    approvalCode: lubanPluginToken
+    mobileApproval: lubanPluginReplies,
+    approvalCode: lubanPluginReplies && lubanPluginToken
       ? (input) => lubanApprovalCode({ token: lubanPluginToken, ...input })
       : undefined,
     // 发起人的通知令牌:普通任务提醒是自己发给自己；主动邀请检视时，

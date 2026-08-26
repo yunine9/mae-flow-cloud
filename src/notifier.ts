@@ -35,6 +35,43 @@ export interface NotifyQuestion {
   options?: string[];
 }
 
+const MAX_NOTIFICATION_CONTEXT_CHARS = 2_400;
+
+function notificationContext(value: string | undefined): string {
+  const normalized = String(value ?? "").replace(/\r\n/g, "\n").trim();
+  if (normalized.length <= MAX_NOTIFICATION_CONTEXT_CHARS) return normalized;
+  return normalized.slice(0, MAX_NOTIFICATION_CONTEXT_CHARS - 18)
+    + "\n…内容较长，已截断";
+}
+
+function questionDependsOnContext(question: string): boolean {
+  return /上述|以上|如下|前述|完整配置|该配置|这些配置/.test(question);
+}
+
+function renderQuestionSummary(
+  questions: NotifyQuestion[],
+  fallback: string | undefined,
+): string {
+  if (!questions.length) return fallback?.trim() || "需要你确认";
+  if (questions.length === 1) {
+    const item = questions[0];
+    return item.question + (item.options?.length
+      ? `\n选项：${item.options.map((option, index) =>
+          `${index + 1}. ${option}`).join("；")}`
+      : "");
+  }
+  return [
+    `共 ${questions.length} 个问题：`,
+    ...questions.flatMap((item, index) => [
+      `问题 ${index + 1}：${item.question}`,
+      ...(item.options?.length
+        ? [`选项：${item.options.map((option, optionIndex) =>
+            `${optionIndex + 1}. ${option}`).join("；")}`]
+        : []),
+    ]),
+  ].join("\n");
+}
+
 /** 最近一张待办通知携带的审批真相锚。它只用于让“唯一待办 + 裸回复”
  * 少一次查询；真正提交前 Gateway 仍会重新核对账号、waiting 与版本。 */
 export interface LubanApprovalNotification {
@@ -50,6 +87,7 @@ export interface LubanApprovalNotification {
  * 通知边界再转成文本，避免上游先压成 questions[0] 后永久丢题。 */
 function waitingSummary(input: {
   summary?: string;
+  context?: string;
   questions?: NotifyQuestion[];
 }): string {
   const questions = (input.questions ?? []).flatMap((item): NotifyQuestion[] => {
@@ -60,22 +98,16 @@ function waitingSummary(input: {
       : [];
     return [{ question, options }];
   });
-  if (!questions.length) return input.summary?.trim() || "需要你确认";
-  if (questions.length === 1) {
-    const item = questions[0];
-    return item.question + (item.options?.length
-      ? `\n选项：${item.options.map((option, index) => `${index + 1}. ${option}`).join("；")}`
-      : "");
-  }
+  const context = notificationContext(input.context);
+  const questionSummary = renderQuestionSummary(questions, input.summary);
+  const missingRequiredContext = !context
+    && questions.some((item) => questionDependsOnContext(item.question));
   return [
-    `共 ${questions.length} 个问题：`,
-    ...questions.flatMap((item, index) => [
-      `问题 ${index + 1}：${item.question}`,
-      ...(item.options?.length
-        ? [`选项：${item.options.map((option, optionIndex) =>
-            `${optionIndex + 1}. ${option}`).join("；")}`]
-        : []),
-    ]),
+    ...(context ? ["待确认内容：", context] : []),
+    ...(missingRequiredContext
+      ? ["⚠ 被确认的具体内容没有随审批卡提供，不能只看选项安全决定。"]
+      : []),
+    questionSummary,
   ].join("\n");
 }
 
@@ -99,7 +131,7 @@ export interface NotifierOptions {
   fake?: boolean;
   /** 有限退避重试的间隔(毫秒);长度即最大重试次数。 */
   backoffMs?: number[];
-  /** 已启用小鲁班插件回调时，在待办通知里告诉用户手机入口。 */
+  /** 小鲁班真实入站回复已完成端到端验收时，才在通知里承诺手机入口。 */
   mobileApproval?: boolean;
   /** 为当前 waiting 生成短期审批码。密钥留在实现闭包中，不进通知器。 */
   approvalCode?: (input: {
@@ -172,19 +204,25 @@ export class Notifier {
     step: string;
     /** 旧调用方可直接给摘要；正常待办应传结构化 questions，避免丢题。 */
     summary?: string;
+    /** 提问前展示给用户的材料。“上述配置是否正确”所指的具体内容在这里。 */
+    context?: string;
     questions?: NotifyQuestion[];
     link: string;
   }): Promise<NotifyRecord> {
     const existing = this.records.get(input.waitingId);
     if (existing) return existing;
+    const visibleQuestions = this.options.mobileApproval
+      ? input.questions?.slice(0, 1) : input.questions;
     const summary = waitingSummary({
       ...input,
-      questions: this.options.mobileApproval
-        ? input.questions?.slice(0, 1) : input.questions,
+      questions: visibleQuestions,
     });
     const questions = (input.questions ?? []).filter((item) =>
       String(item?.question ?? "").trim());
-    const approvalCode = this.options.mobileApproval
+    const missingRequiredContext = !notificationContext(input.context)
+      && (visibleQuestions ?? []).some((item) =>
+        questionDependsOnContext(String(item?.question ?? "")));
+    const approvalCode = this.options.mobileApproval && !missingRequiredContext
       && this.options.approvalCode && input.stateVersion !== undefined
       ? this.options.approvalCode({
           account: input.account,
@@ -205,7 +243,9 @@ export class Notifier {
         `【Mae-Flow】${input.subject?.trim() || `任务 ${input.taskId}`} 等你决定` +
         `\n阶段：${stage}\n${summary}` +
         (this.options.mobileApproval
-          ? approvalCode
+          ? missingRequiredContext
+            ? "\n本通知缺少被确认内容，已禁止裸序号审批；请打开任务链接核对后处理。"
+            : approvalCode
             ? "\n只有这一项待办时，可直接回复选项序号，例如：1"
               + `\n多项待办或无上下文时：mae-flow 选择 ${approvalCode} <序号>`
               + "\n如需说明：mae-flow 选择 " + approvalCode

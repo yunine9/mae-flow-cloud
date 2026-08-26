@@ -66,6 +66,18 @@ test("配置文件坏了拒绝启动,不静默忽略", async () => {
   assert.notEqual(missing.code, 0);
 });
 
+test("小鲁班回复能力不能只凭文案开启，必须同时准备回调 Token", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-luban-replies-"));
+  const result = await run([
+    "--luban-plugin-replies",
+    "--data", join(dir, "tasks"),
+    "--port", "0",
+  ], () => false, 15_000);
+  assert.equal(result.code, 2);
+  assert.match(result.output, /需要同时配置.*luban-plugin-token-file/);
+  assert.match(result.output, /真实入站插件验收通过后/);
+});
+
 test("--isolate-user 拒绝 root uid/gid，不能把容器隔离变成 root 执行", async () => {
   for (const user of ["root", "root:root", "0", "0:0", "10001:0"]) {
     const dir = mkdtempSync(join(tmpdir(), "mfc-root-user-"));

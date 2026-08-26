@@ -223,14 +223,18 @@ export class LubanApprovalGateway {
         if (cached.digest !== digest) {
           throw new CallbackError(409, "message_id 已被其他请求使用");
         }
-        return { ...cached.reply, replayed: true };
+        const reply = { ...cached.reply, replayed: true };
+        this.logReceipt(envelope, reply);
+        return reply;
       }
       const running = this.inflight.get(envelope.message_id);
       if (running) {
         if (running.digest !== digest) {
           throw new CallbackError(409, "message_id 已被其他请求使用");
         }
-        return { ...(await running.promise), replayed: true };
+        const reply = { ...(await running.promise), replayed: true };
+        this.logReceipt(envelope, reply);
+        return reply;
       }
       const promise = this.execute(envelope).then((reply) => {
         this.replies.set(envelope.message_id, {
@@ -241,7 +245,9 @@ export class LubanApprovalGateway {
         this.inflight.delete(envelope.message_id);
       });
       this.inflight.set(envelope.message_id, { digest, promise });
-      return await promise;
+      const reply = await promise;
+      this.logReceipt(envelope, reply);
+      return reply;
     } catch (error) {
       if (error instanceof CallbackError) {
         return { status: error.status, text: error.message };
@@ -253,6 +259,19 @@ export class LubanApprovalGateway {
 
   private now(): number {
     return this.options.now?.() ?? Date.now();
+  }
+
+  /** 只记入站确实到达和处理结果，不记录用户正文、Token 或完整消息 ID。 */
+  private logReceipt(
+    envelope: LubanPluginEnvelope,
+    reply: LubanPluginReply,
+  ): void {
+    const message = createHash("sha256")
+      .update(envelope.message_id, "utf-8").digest("hex").slice(0, 10);
+    this.options.log?.(
+      `小鲁班审批回调已处理: sender=${envelope.sender},message=${message},`
+        + `status=${reply.status}${reply.replayed ? ",replayed=true" : ""}`,
+    );
   }
 
   private verify(input: {

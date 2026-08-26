@@ -293,6 +293,15 @@ openssl rand -hex 32 > /etc/mae-flow-cloud/luban-plugin.token
 # serve.json: "luban-plugin-token-file": "/etc/mae-flow-cloud/luban-plugin.token"
 ```
 
+上面只表示 Cloud 回调端点已就绪，不表示小鲁班已经会把回复送进来。插件或
+入站桥完成真实端到端验收后，才在 `serve.json` 增加：
+
+```json
+{ "luban-plugin-replies": true }
+```
+
+未打开这个开关时，出站通知仍正常发送，但不会宣称“直接回复 1”可用。
+
 小鲁班真实插件的回调形状、验签方式尚未拿到，因此部署桥负责把它转换成
 Cloud 的稳定内部契约；如果插件本身可按该契约发出，也可直接注册 Cloud
 地址。**不要为了接未知协议在 Cloud 里堆字段猜测。**
@@ -310,7 +319,8 @@ Token 不对、工号不存在或正文不合法就拒绝；同 message_id 重�
 这个 Token 只是防止其他内网请求伪装成小鲁班回调，不是用户的个人发送
 Token，也不需要每个人配置。
 
-账号只有一项待办时，通知会直接显示当前问题和选项，无需先查询“待审批”，
+已启用 `luban-plugin-replies` 时，账号只有一项待办的通知会直接显示审批
+上下文、当前问题和选项，无需先查询“待审批”，
 回复 `1`、`2`、`确认` 或具体修改意见即可。若同一账号有多项待办，裸序号会
 被安全拒绝；应使用通知里的审批码，或打开“Mae-Flow 待审批”插件后先选任务。
 插件/桥必须把同一用户的后续裸消息继续转发给 Cloud。多题卡会在每次回复后明确显示“已记录、尚未
@@ -711,6 +721,7 @@ Skill 需要补说明。该台账是 fail-open 观测旁路，不能替代质量
   "luban": "<通知端点>",
   "luban-header": ["Authorization: Bearer <密钥>"],
   "luban-plugin-token-file": "/etc/mae-flow-cloud/luban-plugin.token",
+  "luban-plugin-replies": false,
   "pg": "postgresql://...",
   "data": "/var/lib/mae-flow-cloud", "port": 8787,
   "poll-interval": 30, "poll-timeout": 1800,
@@ -730,7 +741,8 @@ Skill 需要补说明。该台账是 fail-open 观测旁路，不能替代质量
 | repo | 无(纯会话演练) | 内核模式的目标仓 |
 | platform / fake-platform | 无 | 交付平台地址 / 本地假件 |
 | luban / luban-header | 假小鲁班 | 通知端点与鉴权头(可重复) |
-| luban-plugin-token-file | 无 | 启用手机纯文本审批；0600、至少 32 字节的固定回调 Token 文件 |
+| luban-plugin-token-file | 无 | 准备 Cloud 手机审批回调端点；0600、至少 32 字节的固定 Token 文件，不代表小鲁班入站已接通 |
+| luban-plugin-replies | false | 真实小鲁班插件/入站桥端到端验收通过后才设 true；控制通知是否承诺可直接回复 |
 | pg | 无 | 投影(纯旁路) |
 | data / port / web | .tasks / 8787 / web-dist | 现场目录、端口、前端 |
 | isolate-image | 无(内核模式必填) | 统一任务构建镜像 |
