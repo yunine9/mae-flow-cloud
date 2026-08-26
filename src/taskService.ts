@@ -8594,7 +8594,12 @@ export class TaskService {
       ?? this.effectiveDefaultRepo();
     if (!configuredRemote) throw new Error("任务没有权威代码仓地址，拒绝推送");
     validateRepositoryAddress(configuredRemote);
-    if (/^[a-z][a-z\d+.-]*:/i.test(configuredRemote)
+    // Windows 盘符路径(C:\…)长得像 "scheme:" 会撞上下面的协议白名单
+    // 正则——先按本地路径放行(2026-08-25 开发者模式通了 symlink 后,
+    // 本机 Windows 首次真跑宿主推送时在这里被误杀)。
+    const windowsDrive = /^[a-z]:[\\/]/i.test(configuredRemote);
+    if (!windowsDrive
+        && /^[a-z][a-z\d+.-]*:/i.test(configuredRemote)
         && !/^(?:https?|file):\/\//i.test(configuredRemote)) {
       throw new Error("代码仓传输协议不受支持，宿主只允许 HTTPS 或本地仓");
     }

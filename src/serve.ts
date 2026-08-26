@@ -16,6 +16,7 @@ import {
   rmSync,
   statSync,
 } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AddressInfo } from "node:net";
@@ -34,6 +35,7 @@ import {
   LubanApprovalGateway,
 } from "./lubanApproval.ts";
 import { FakeGitPlatform } from "./gitPlatform.ts";
+import { createGoEnvironmentAdapter } from "./issueEnvironmentGoAdapter.ts";
 import { PgProjection } from "./projection.ts";
 import type { GateDecision } from "./gateService.ts";
 import { LocalAuth } from "./auth.ts";
@@ -104,6 +106,30 @@ function flag(name: string): string | undefined {
 function has(name: string): boolean {
   return process.argv.includes(name)
     || CONFIG[name.replace(/^--/, "")] === true;
+}
+
+/** 内核解释器选择:MAE_FLOW_PYTHON 显式指定 > 启动时真跑一次探测。
+ * Windows 的 python3 常是应用商店的执行别名桩——`--version` 有回显、
+ * 真执行却无输出直接失败(2026-08-25 本机实测 rc=49),内核 dispatch
+ * 挂上去整条链都起不来。坏桩回落到 python;都探测不动就保留缺省值,
+ * 内核链失败会带着原始报错如实报告,不静默换解释器。 */
+function resolveKernelPython(): string {
+  const override = process.env.MAE_FLOW_PYTHON;
+  if (override?.trim()) return override.trim();
+  const candidates = process.platform === "win32"
+    ? ["python3", "python"] : ["python3"];
+  for (const candidate of candidates) {
+    try {
+      const probe = spawnSync(candidate, ["-c", "print(1)"],
+        { encoding: "utf-8", timeout: 15_000 });
+      if (probe.status === 0 && probe.stdout.toString().trim() === "1") {
+        return candidate;
+      }
+    } catch {
+      // 超时/找不到都继续试下一个候选。
+    }
+  }
+  return "python3";
 }
 
 /** 可重复参数(如 --isolate-volume a:b --isolate-volume c:d);
@@ -309,11 +335,12 @@ async function main(): Promise<void> {
         ? repoFlag : resolve(repoFlag))
     : undefined;
   let host = kernelMode
-    ? { kernelRoot: kernelRoot!, repoPath, python: "python3" }
+    ? { kernelRoot: kernelRoot!, repoPath, python: resolveKernelPython() }
     : undefined;
   if (host) {
     console.log(`[serve] 内核模式:内核 ${host.kernelRoot}`
-      + `,代码仓 ${repoPath ?? "(下单时逐单填写)"}`);
+      + `,代码仓 ${repoPath ?? "(下单时逐单填写)"}`
+      + `,内核 python: ${host.python}`);
   } else if (kernelRoot) {
     console.log("[serve] 内核在场但未开内核模式:演示形态。"
       + "正式部署请加 --kernel-mode；--repo 仅用于钉死单仓的试跑");
@@ -518,6 +545,26 @@ async function main(): Promise<void> {
       + (commitConvention.length > 60 ? "…" : ""));
   }
 
+  // 问题单环境适配器(拉日志/换库):assets/ops-tools 里的 Go 工具在场
+  // 就接上——凭据由任务保险箱解密后经环境变量注入子进程,工具与密码都
+  // 不进任务工作区(见 src/issueEnvironmentGoAdapter.ts 头注释)。
+  // workspaceOf 拿的是任务工作区根,适配器自己在里面找代码克隆。
+  let issueServiceRef: TaskService | undefined;
+  const goToolsDir = join(REPO_ROOT, "assets", "ops-tools");
+  const issueEnvironmentAdapter
+    = existsSync(join(goToolsDir, process.platform === "win32"
+        ? "fetch-logs.exe" : "fetch-logs-linux-amd64"))
+      ? createGoEnvironmentAdapter({
+          toolsDir: goToolsDir,
+          workspaceOf: (taskId) => issueServiceRef?.get(taskId)?.workspace,
+          log: (message) => console.log(`  ${message}`),
+        })
+      : undefined;
+  if (issueEnvironmentAdapter) {
+    console.log("[serve] 问题单环境适配器已接线:拉日志+换库"
+      + `(工具目录 ${goToolsDir})`);
+  }
+
   const service = new TaskService({
     dataDir, provider, model, modelsJson, maxConcurrent, settings,
     // 个人 Git 令牌(界面只写不读):任务启动时按归属人取,经
@@ -560,8 +607,10 @@ async function main(): Promise<void> {
     // 正式部署建议固定 public-url；未配置时，服务会从已登录用户的
     // 实际请求 Host 学到内网入口，绝不再默认写死 127.0.0.1。
     linkBase: publicUrl,
+    issueEnvironmentAdapter,
     log: (message) => console.log(`  [task] ${message}`),
   });
+  issueServiceRef = service; // 适配器的 workspaceOf 从这里回查
   // 先清理本 dataDir 实例上次崩溃遗留的 coding/prepush/system-check
   // 容器，再恢复任务。顺序不能反：recover 一旦入队就可能撞上旧容器。
   const swept = await service.sweepOrphanContainers();

@@ -7,6 +7,21 @@ Mae-Flow 云端服务:Pi(pi-mono coding agent)**进程内**集成 + Mae-Flow 内
 - [宿主适配层详设](../mae-flow/docs/superpowers/specs/2026-08-14-cloud-host-adapter-design.md)
 - [DTS 问题单最小流程](docs/dts-issue-flow.md)
 
+## 问题单环境适配器(拉日志+换库,已内置)
+
+`docs/dts-issue-flow.md` 定义的 `IssueEnvironmentAdapter` 插座,本仓
+用 every-skill 的两个 Go 工具(`assets/ops-tools/`)接上了:
+serve 启动时工具在场即自动接线。凭据从任务保险箱解密后**经环境变量**
+注入子进程(`FETCH_LOGS_PASSWORD`/`BUILD_DEPLOY_PASSWORD`),工具
+二进制、日志产物、密码都不进任务工作区,Agent 只见日志文本与部署
+回执。约定:环境名=服务名;fetch-logs 仅支持 22 端口;deployCandidate
+以任务工作区里含 `deployment/pom.xml` 的克隆目录为 project_path,
+成功以工具的「部署完成」哨兵为准(退出码 0 无哨兵不算成功);
+rollback 未实现(工具只有部署前自动备份,无一键回滚,能力位缺席
+比假装可回滚诚实)。换库当前无流程调用方(main 流程按文档顺序后续
+接入目标确认/回执/回滚 UI)。原子能力单测:
+`tests/issueEnvironmentGoAdapter.test.ts`(含真二进制冒烟)。
+
 ## 三条铁的边界
 
 1. **内核唯一权威**。流程规则、门禁契约、证据判定只在
