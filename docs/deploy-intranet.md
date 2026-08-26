@@ -740,6 +740,8 @@ Skill 需要补说明。该台账是 fail-open 观测旁路，不能替代质量
 | isolate-cache-root | `<data>/build-cache` | 按仓库哈希隔离的 Maven/npm/ccache/XDG 缓存 |
 | isolate-user | **Linux:服务进程 uid:gid**;root 守护形态必须显式给数字 uid:gid;其他平台:镜像内非 root 用户 | Linux 普通服务账号不配时按自己的 uid:gid 跑。root 守护进程必须显式给非 root 数字 uid:gid；Cloud 在容器启动前把实际代码工作区和分仓缓存安全交给该用户，不修改任务台账与凭据目录 |
 | build-slots | 1 | 同时运行的 prepush 重构建数，独立于普通 Agent 并发 |
+| prepush-attempt-timeout-minutes | 普通仓 30 / C++ 仓 60 | 单轮 prepush 的总墙钟预算；只在代表仓实测确实更慢时覆盖 |
+| prepush-build-timeout-minutes | 普通仓 20 / C++ 仓 45 | Maven/CMake/Make/Gradle/npm 等单条重构建预算；Agent 填得更短时由平台自动提升，总预算仍是硬上限 |
 | repair-rounds | 不限 | 修复环手刹:数字=上限,0=关;不配=修到绿/出诊断为止 |
 | poll-interval / poll-timeout | 10 / 1800(秒) | 流水线轮询节奏与预算 |
 | max-concurrent | 2 | 并发任务数 |
@@ -872,6 +874,14 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
   Maven/C++ 同时打满。镜像构建与内部 CA/Maven settings 的只读挂载见
   `deploy/build-image/README.md`。镜像 `Config.User` 为空/root/0 或显式
   `--isolate-user root/0` 会拒绝运行；不要用 root 绕过目录权限。
+- **慢构建预算由平台兜底**:普通仓默认整轮 30 分钟/单条重构建 20 分钟；
+  检出 C++ 信号后自动放宽到 60/45 分钟。即使 Agent 给 Maven 全量编译
+  填了 `timeout: 600`，容器实际仍至少获得平台预算；普通探查命令不被
+  无谓放宽。若代表仓的完整冷构建 P95 仍超过默认值，用
+  `--prepush-attempt-timeout-minutes` 与 `--prepush-build-timeout-minutes`
+  显式上调（例如 120/100）。单命令预算会自动限制在整轮预算以下，给
+  结果整理与容器清理留余量；真正耗尽时当次命令立即明确收口，不再靠
+  下一条 Bash 触发二次错误。
 - **构建环境先于模型验明**:管理页「部署自检」会在真实任务身份下核对
   passwd HOME、Maven 实际使用的 JDK 21、该 JDK cacerts、显式挂载的
   settings、五类缓存和 C++ 仓父子拓扑。正式任务每次进入推送前验证时还会

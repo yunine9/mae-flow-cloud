@@ -101,6 +101,18 @@ export class TaskContainerUnavailableError extends Error {
   }
 }
 
+/**
+ * 命令自己的墙钟预算耗尽。容器会按隔离契约被完整销毁，但“已停止”只是
+ * 清理结果，不是根因；调用方应在第一次异常上按验证超时收口。
+ */
+export class TaskContainerExecTimeoutError extends Error {
+  constructor(readonly timeoutSeconds: number) {
+    // Pi 的 Bash tool 依赖此前缀渲染统一的超时文案，结构化类型则供宿主熔断。
+    super(`timeout:${timeoutSeconds}`);
+    this.name = "TaskContainerExecTimeoutError";
+  }
+}
+
 class DockerCliRunner implements DockerRunner {
   command(
     args: readonly string[],
@@ -772,7 +784,7 @@ export class TaskContainer {
         this.activeProcesses.delete(process);
       }
       if (outcome.kind === "abort") throw new Error("aborted");
-      throw new Error(`timeout:${options.timeout}`);
+      throw new TaskContainerExecTimeoutError(options.timeout!);
     }
 
     this.activeProcesses.delete(process);

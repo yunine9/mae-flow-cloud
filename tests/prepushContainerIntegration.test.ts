@@ -315,6 +315,90 @@ test("native prepush 环境预检失败时不启动模型、不盲探网络也�
   }
 });
 
+test("native prepush 自动放宽慢构建预算并在首次超时时收口", async () => {
+  const source = sourceRepo();
+  writeFileSync(join(source, "pom.xml"), [
+    "<project>",
+    "  <properties><DT_run>true</DT_run></properties>",
+    "</project>",
+    "",
+  ].join("\n"));
+  writeFileSync(join(source, "CMakeLists.txt"), "project(native_fixture)\n");
+  git(source, "add", ".");
+  git(source, "commit", "--quiet", "-m", "add native build");
+
+  const platform = new FakeGitPlatform();
+  platform.initBare(source,
+    mkdtempSync(join(tmpdir(), "mfc-prepush-timeout-platform-")));
+  await platform.start();
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-prepush-timeout-data-"));
+  const compile = "mvn compile -DDT_test=UT -DDT_run=true";
+  const retryScenes = Array.from({ length: 20 }, (_, index): Scene => ({
+    tool: { name: "bash", input: { command: `echo timeout-retry-${index}` } },
+  }));
+  const model = new ScriptedModelServer([
+    ...codingScenes(),
+    { tool: { name: "bash", input: { command: compile, timeout: 600 } } },
+    ...retryScenes,
+    { text: "不应在构建超时后继续到这里。" },
+  ], "scripted-v1", {
+    linear: true,
+    beforeScene: managedFlowFixture(dataDir, {
+      branch: "master_bot_REQ_CONTAINER", ticket: "REQ_CONTAINER",
+    }),
+  });
+  await model.start();
+  const containers = new FakeTaskContainerHarness();
+  containers.executionTimeoutSeconds = 600;
+  const service = new TaskService({
+    dataDir,
+    provider: "maeflow",
+    model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    host: {
+      kernelRoot: KERNEL_ROOT,
+      repoPath: platform.barePath,
+      python: "python3",
+    },
+    delivery: {
+      platformUrl: platform.baseUrl,
+      pollIntervalMs: 100,
+      pollTimeoutMs: 500,
+    },
+    prepush: { enabled: true },
+    isolation: {
+      image: "fixture/build-toolchain:test",
+      containerFactory: containers.factory,
+    },
+  });
+  try {
+    const id = service.create("REQ_CONTAINER：慢 native 构建使用平台预算", {
+      ticket: "REQ_CONTAINER",
+    }).id;
+    await until(() => service.get(id)?.delivery?.prepush?.state
+      === "environment_error", "慢构建超时按首次结构化异常收口");
+    assert.match(String(service.get(id)?.detail ?? ""), /45 分钟/);
+    assert.match(String(service.get(id)?.detail ?? ""),
+      /验证预算耗尽，不代表代码编译失败/);
+    assert.equal(model.requests.length, codingScenes().length + 1,
+      "首次构建超时后不得等下一条 Bash 才熔断");
+    const attempt = containers.records.find((record) =>
+      record.name.endsWith("-prepush"));
+    assert.ok(attempt, "应创建独立 prepush 容器");
+    const compileIndex = attempt.commands.indexOf(compile);
+    assert.notEqual(compileIndex, -1, "应执行 Maven 构建命令");
+    assert.equal(attempt.commandTimeouts[compileIndex], 45 * 60,
+      "C++ 仓里 Agent 的 600 秒必须提升为平台的 45 分钟构建预算");
+    assert.equal(attempt.stopped, true);
+    assert.equal(platform.mergeRequests.length, 0);
+    assert.equal(platform.pipelines.length, 0);
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+    await platform.stop();
+  }
+});
+
 test("native prepush 容器基础设施错误立即熔断，不让模型循环重试", async () => {
   const platform = new FakeGitPlatform();
   platform.initBare(sourceRepo(),

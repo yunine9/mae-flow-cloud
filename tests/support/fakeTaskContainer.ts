@@ -4,7 +4,10 @@ import type {
   TaskContainerFactory,
   TaskContainerFactoryInput,
 } from "../../src/taskService.ts";
-import { TaskContainerUnavailableError } from "../../src/containerRuntime.ts";
+import {
+  TaskContainerExecTimeoutError,
+  TaskContainerUnavailableError,
+} from "../../src/containerRuntime.ts";
 import { PRE_PUSH_ENVIRONMENT_SUCCESS_MARKER } from
   "../../src/prepushEnvironment.ts";
 
@@ -15,6 +18,7 @@ export interface FakeContainerRecord {
   stopped: boolean;
   stopCalls: number;
   commands: string[];
+  commandTimeouts: Array<number | undefined>;
 }
 
 /** Docker daemon 不应成为编排单测的前提。这一后端仍真实执行普通的
@@ -26,6 +30,8 @@ export class FakeTaskContainerHarness {
   preflightFailure?: string;
   /** 环境预检通过后的执行面故障，用于证明宿主会熔断而不是让模型重试。 */
   executionUnavailable?: "missing" | "stopped" | "inspect_unavailable";
+  /** 模拟真实容器在第一次业务命令上耗尽墙钟预算。 */
+  executionTimeoutSeconds?: number;
 
   readonly factory: TaskContainerFactory = (
     input: TaskContainerFactoryInput,
@@ -37,6 +43,7 @@ export class FakeTaskContainerHarness {
       stopped: false,
       stopCalls: 0,
       commands: [],
+      commandTimeouts: [],
     };
     this.records.push(record);
     const children = new Set<ChildProcess>();
@@ -52,6 +59,7 @@ export class FakeTaskContainerHarness {
           throw new Error(`fake container ${record.name} is not running`);
         }
         record.commands.push(command);
+        record.commandTimeouts.push(options.timeout);
         this.events.push(`exec:${record.name}:${command}`);
         if (command.includes(PRE_PUSH_ENVIRONMENT_SUCCESS_MARKER)) {
           if (this.preflightFailure) {
@@ -67,6 +75,12 @@ export class FakeTaskContainerHarness {
           throw new TaskContainerUnavailableError(
             this.executionUnavailable,
             `simulated ${this.executionUnavailable}`,
+          );
+        }
+        if (this.executionTimeoutSeconds !== undefined) {
+          record.stopped = true;
+          throw new TaskContainerExecTimeoutError(
+            options.timeout ?? this.executionTimeoutSeconds,
           );
         }
         if (command.includes("__MFC_HOLD__")) {

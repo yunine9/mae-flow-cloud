@@ -452,6 +452,12 @@ async function main(): Promise<void> {
     flag("--isolate-cache-root") ?? join(dataDir, "build-cache"),
   );
   const buildSlots = Number(flag("--build-slots") ?? "1");
+  const prepushAttemptTimeoutValue = flag("--prepush-attempt-timeout-minutes");
+  const prepushAttemptTimeoutMinutes = prepushAttemptTimeoutValue !== undefined
+    ? Number(prepushAttemptTimeoutValue) : undefined;
+  const prepushBuildTimeoutValue = flag("--prepush-build-timeout-minutes");
+  const prepushBuildTimeoutMinutes = prepushBuildTimeoutValue !== undefined
+    ? Number(prepushBuildTimeoutValue) : undefined;
   // 现场保留期:终态任务过期后回收克隆等重货,台账原样留下。
   // 以前一条回收策略都没有,dataDir 只涨不消(2026-08-22 查出来的)。
   const retentionDays = Number(
@@ -468,6 +474,15 @@ async function main(): Promise<void> {
   if (!Number.isInteger(buildSlots) || buildSlots <= 0) {
     console.error("[serve] --build-slots 必须是正整数,拒绝启动");
     process.exit(2);
+  }
+  for (const [name, value] of [
+    ["--prepush-attempt-timeout-minutes", prepushAttemptTimeoutMinutes],
+    ["--prepush-build-timeout-minutes", prepushBuildTimeoutMinutes],
+  ] as const) {
+    if (value !== undefined && (!Number.isFinite(value) || value <= 0)) {
+      console.error(`[serve] ${name} 必须是正数,拒绝启动`);
+      process.exit(2);
+    }
   }
   if (/^(?:host|container(?::.*)?)$/i.test(isolateNetwork)) {
     console.error("[serve] --isolate-network 不能使用 host/container 模式,拒绝启动");
@@ -589,7 +604,14 @@ async function main(): Promise<void> {
     contract: demoContract,
     host,
     delivery,
-    prepush: host ? { enabled: true, buildSlots } : undefined,
+    prepush: host ? {
+      enabled: true,
+      buildSlots,
+      ...(prepushAttemptTimeoutMinutes !== undefined
+        ? { attemptTimeoutMs: prepushAttemptTimeoutMinutes * 60_000 } : {}),
+      ...(prepushBuildTimeoutMinutes !== undefined
+        ? { buildCommandTimeoutMs: prepushBuildTimeoutMinutes * 60_000 } : {}),
+    } : undefined,
     workspaceRetentionDays: retentionDays,
     commitConvention,
     isolation: isolateImage

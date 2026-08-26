@@ -85,6 +85,7 @@ import {
 import { CloudSession, type Outcome } from "./sessionDriver.ts";
 import {
   TaskContainer,
+  TaskContainerExecTimeoutError,
   TaskContainerUnavailableError,
   sweepManagedTaskContainers,
   taskContainerInstance,
@@ -149,7 +150,11 @@ import {
   type PrePushRunResult,
   type PrePushRunner,
 } from "./prepushAgent.ts";
-import { detectPrePushBuildProfile } from "./prepushBuildPlaybook.ts";
+import {
+  detectPrePushBuildProfile,
+  prePushCommandTimeoutSeconds,
+  resolvePrePushExecutionBudget,
+} from "./prepushBuildPlaybook.ts";
 import {
   hasContainerVolumeDestination,
   inspectPrePushEnvironment,
@@ -614,9 +619,13 @@ export interface TaskServiceOptions {
      * 避免同一台内网宿主被多个 Maven/C++ 进程瞬间打满。 */
     buildSlots?: number;
     /** 单次 prepush Agent 的墙钟预算。命令各自有 timeout 仍不够：模型可
-     * 在多个失败命令之间无限换策略。默认 30 分钟，超时按基础设施失败
-     * 收口并销毁 attempt 容器。 */
+     * 在多个失败命令之间无限换策略。普通仓默认 30 分钟，含 C++ 的仓库
+     * 默认 60 分钟；超时明确收口并销毁 attempt 容器。 */
     attemptTimeoutMs?: number;
+    /** Maven/CMake/Make 等重型构建的单命令预算。模型给出的更短 timeout
+     * 会被提升到这里，避免已知慢仓被随手填的 600 秒截断。普通仓默认
+     * 20 分钟，含 C++ 的仓库默认 45 分钟。 */
+    buildCommandTimeoutMs?: number;
   };
   /** DTS 日志/换库/回滚的部署适配器。缺席时问题单仍可按手填材料完成
    * 诊断和代码交付，绝不能因为尚未接内部环境系统而卡死。 */
@@ -6531,6 +6540,11 @@ export class TaskService {
         + "已拒绝回退宿主机",
       );
     }
+    const profile = detectPrePushBuildProfile(task.cwd);
+    const executionBudget = resolvePrePushExecutionBudget(profile, {
+      attemptTimeoutMs: this.options.prepush?.attemptTimeoutMs,
+      buildCommandTimeoutMs: this.options.prepush?.buildCommandTimeoutMs,
+    });
 
     // 正常收口路径会在 tryDeliver 前串行停净普通编码容器；恢复/异常
     // 路径也在这里再兜一次。绝不能让两个容器同时写同一工作区。
@@ -6670,12 +6684,7 @@ export class TaskService {
         })),
       ]);
     let driver: CloudSession | undefined;
-    const configuredAttemptTimeout = Number(
-      this.options.prepush?.attemptTimeoutMs ?? 30 * 60 * 1_000,
-    );
-    const attemptTimeoutMs = Number.isFinite(configuredAttemptTimeout)
-        && configuredAttemptTimeout > 0
-      ? configuredAttemptTimeout : 30 * 60 * 1_000;
+    const attemptTimeoutMs = executionBudget.attemptTimeoutMs;
     const attemptTimer = setTimeout(() => failInfrastructure(
       `推送前验证超过 ${Math.ceil(attemptTimeoutMs / 60_000)} 分钟，已终止本轮`,
     ), attemptTimeoutMs);
@@ -6712,7 +6721,6 @@ export class TaskService {
       // 先验证确定性的本地环境事实，再花模型额度。settings、Maven 实际
       // JDK、JVM cacerts、缓存或 C++ 拓扑不对时直接给出基础设施结论，
       // 不让 Agent curl 盲探几分钟后才猜到部署缺项。
-      const profile = detectPrePushBuildProfile(task.cwd);
       const preflightCommand = prePushEnvironmentCommand({
         profile,
         requireMavenSettings: hasContainerVolumeDestination(
@@ -6777,9 +6785,22 @@ export class TaskService {
         bashOperations: {
           exec: async (command, dir, execOptions) => {
             try {
-              return await container.exec(command, dir, execOptions);
+              const timeout = prePushCommandTimeoutSeconds(
+                command,
+                execOptions.timeout,
+                executionBudget,
+              );
+              return await container.exec(command, dir, {
+                ...execOptions,
+                timeout,
+              });
             } catch (error) {
-              if (error instanceof TaskContainerUnavailableError) {
+              if (error instanceof TaskContainerExecTimeoutError) {
+                failInfrastructure(
+                  `推送前构建命令运行 ${Math.ceil(error.timeoutSeconds / 60)} 分钟`
+                    + "仍未完成，已安全停止本轮；这是验证预算耗尽，不代表代码编译失败",
+                );
+              } else if (error instanceof TaskContainerUnavailableError) {
                 failInfrastructure(
                   `推送前容器不可用（${error.kind}）：${error.message}`,
                 );
@@ -6802,7 +6823,10 @@ export class TaskService {
         throw new Error("任务已停止，推送前 Agent 不再启动");
       }
       task.driver = driver;
-      let outcome = await waitForTurn(driver.start(prePushMission(request)));
+      let outcome = await waitForTurn(driver.start(prePushMission(
+        request,
+        executionBudget,
+      )));
       for (let correction = 0; correction < 3; correction += 1) {
         if (infrastructureFailure) {
           await driver.abort().catch((error) => this.options.log?.(

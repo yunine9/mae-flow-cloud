@@ -11,8 +11,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   detectPrePushBuildProfile,
+  isPrePushBuildCommand,
   prePushBuildGuidance,
+  prePushCommandTimeoutSeconds,
   renderPrePushBuildGuidance,
+  resolvePrePushExecutionBudget,
 } from "../src/prepushBuildPlaybook.ts";
 import { prePushMission } from "../src/prepushAgent.ts";
 
@@ -115,6 +118,56 @@ test("build playbook: 混合仓保留全部维度并让 Skill/仓库事实优先
   assert.match(guidance, /一次 Maven 生命周期覆盖时不要重复构建/);
 });
 
+test("build budget: 慢 native 构建不再被 Agent 的 600 秒截断", () => {
+  const nativeProfile = {
+    stacks: ["cpp" as const],
+    maven: true,
+    maven_command: "mvn" as const,
+    repository_guides: [],
+    selected_skill_snapshot: false,
+    signals: ["pom.xml:native/DT"],
+  };
+  const budget = resolvePrePushExecutionBudget(nativeProfile);
+  assert.equal(budget.attemptTimeoutMs, 60 * 60_000);
+  assert.equal(budget.buildCommandTimeoutMs, 45 * 60_000);
+  assert.equal(prePushCommandTimeoutSeconds(
+    "cd service && mvn compile -DDT_test=UT -DDT_run=true",
+    600,
+    budget,
+  ), 45 * 60);
+  assert.equal(prePushCommandTimeoutSeconds(
+    "git status --short",
+    60,
+    budget,
+  ), 60, "普通探查仍尊重短 timeout");
+  assert.equal(prePushCommandTimeoutSeconds(
+    "cmake --build build --target probe",
+    undefined,
+    budget,
+  ), 45 * 60);
+  assert.equal(isPrePushBuildCommand("mvn --version"), false);
+  assert.equal(isPrePushBuildCommand("./gradlew test"), true);
+});
+
+test("build budget: 部署覆盖仍给整轮清理和收口留余量", () => {
+  const profile = {
+    stacks: ["java" as const],
+    maven: true,
+    maven_command: "mvn" as const,
+    repository_guides: [],
+    selected_skill_snapshot: false,
+    signals: ["pom.xml:java"],
+  };
+  const budget = resolvePrePushExecutionBudget(profile, {
+    attemptTimeoutMs: 20 * 60_000,
+    buildCommandTimeoutMs: 30 * 60_000,
+  });
+  assert.equal(budget.attemptTimeoutMs, 20 * 60_000);
+  assert.equal(budget.buildCommandTimeoutMs, 18 * 60_000,
+    "短整轮按 10% 安全余量截住单命令预算");
+  assert.equal(prePushCommandTimeoutSeconds("mvn test", 3600, budget), 18 * 60);
+});
+
 test("build playbook: 安全地忽略符号链接，不建议泄露凭据或关闭 SSL", (t) => {
   const repo = repository({});
   t.after(repo.cleanup);
@@ -154,10 +207,16 @@ test("build playbook: 实际注入预推送 Agent mission，而非仅停留在�
     requirement: "验证构建经验接线",
     branch: "feature/playbook",
     baseline: "main",
+  }, {
+    attemptTimeoutMs: 60 * 60_000,
+    buildCommandTimeoutMs: 45 * 60_000,
   });
   assert.match(mission, /内网推送前构建参考/);
   assert.match(mission, /pom\/package.*真实可执行入口/);
   assert.match(mission, /mvn package -DskipTests/);
   assert.match(mission, /mvn test/);
   assert.match(mission, /内网经验只在仓库材料没有说明时兜底/);
+  assert.match(mission, /整轮最多 60 分钟/);
+  assert.match(mission, /重型构建单条至少获得 45 分钟/);
+  assert.match(mission, /不要自行用 600 秒/);
 });

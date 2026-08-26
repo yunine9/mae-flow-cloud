@@ -25,6 +25,103 @@ export interface PrePushBuildProfile {
   signals: string[];
 }
 
+export interface PrePushExecutionBudget {
+  /** 整个专项 Agent 的墙钟上限。 */
+  attemptTimeoutMs: number;
+  /** 被识别为重型构建的单条命令至少获得的墙钟预算。 */
+  buildCommandTimeoutMs: number;
+}
+
+export interface PrePushExecutionBudgetOptions {
+  attemptTimeoutMs?: number;
+  buildCommandTimeoutMs?: number;
+}
+
+const MINUTE_MS = 60_000;
+const DEFAULT_ATTEMPT_TIMEOUT_MS = 30 * MINUTE_MS;
+const DEFAULT_NATIVE_ATTEMPT_TIMEOUT_MS = 60 * MINUTE_MS;
+const DEFAULT_BUILD_COMMAND_TIMEOUT_MS = 20 * MINUTE_MS;
+const DEFAULT_NATIVE_BUILD_COMMAND_TIMEOUT_MS = 45 * MINUTE_MS;
+const MAX_ATTEMPT_SAFETY_MARGIN_MS = 5 * MINUTE_MS;
+
+function positiveBudget(value: number | undefined, fallback: number): number {
+  return Number.isFinite(value) && Number(value) > 0 ? Number(value) : fallback;
+}
+
+/**
+ * 慢 native 仓不能沿用普通 Java 仓的墙钟预算。这里由平台给出默认值，
+ * 部署仍可按代表仓的 P95 显式覆盖；无论怎样都给整轮留出清理和收口余量。
+ */
+export function resolvePrePushExecutionBudget(
+  profile: PrePushBuildProfile,
+  options: PrePushExecutionBudgetOptions = {},
+): PrePushExecutionBudget {
+  const native = profile.stacks.includes("cpp");
+  const attemptTimeoutMs = positiveBudget(
+    options.attemptTimeoutMs,
+    native ? DEFAULT_NATIVE_ATTEMPT_TIMEOUT_MS : DEFAULT_ATTEMPT_TIMEOUT_MS,
+  );
+  const requestedBuildTimeoutMs = positiveBudget(
+    options.buildCommandTimeoutMs,
+    native
+      ? DEFAULT_NATIVE_BUILD_COMMAND_TIMEOUT_MS
+      : DEFAULT_BUILD_COMMAND_TIMEOUT_MS,
+  );
+  const safetyMarginMs = Math.min(
+    MAX_ATTEMPT_SAFETY_MARGIN_MS,
+    Math.max(1_000, Math.floor(attemptTimeoutMs / 10)),
+  );
+  const buildCeilingMs = Math.max(1_000, attemptTimeoutMs - safetyMarginMs);
+  return {
+    attemptTimeoutMs,
+    buildCommandTimeoutMs: Math.min(requestedBuildTimeoutMs, buildCeilingMs),
+  };
+}
+
+/**
+ * 只识别明确进入构建/测试生命周期的命令。普通只读探查不能因为仓库含
+ * C++ 就被放宽到几十分钟；反过来，命令带 cd/env/重定向也不能漏识别。
+ */
+export function isPrePushBuildCommand(command: string): boolean {
+  const value = command.toLowerCase();
+  const maven = /(?:^|[\s;&|()])(?:mvn|\.\/mvnw)(?:\s|$)/.test(value)
+    && /(?:^|\s)(?:compile|test|package|verify|install)(?:\s|$)/.test(value);
+  const gradle = /(?:^|[\s;&|()])(?:gradle|\.\/gradlew)(?:\s|$)/.test(value)
+    && /(?:^|\s)(?:assemble|build|check|test)(?:\s|$)/.test(value);
+  const cmake = /(?:^|[\s;&|()])cmake\s+[^;&|\n]*--build(?:\s|$)/.test(value);
+  const nativeRunner = /(?:^|[\s;&|()])(?:make|gmake|ninja|ctest)(?:\s|$)/
+    .test(value);
+  const packageRunner = /(?:^|[\s;&|()])(?:npm|pnpm|yarn)\s+(?:run\s+)?(?:build|test|check)(?:\s|$)/
+    .test(value);
+  const otherRunner = /(?:^|[\s;&|()])(?:cargo\s+(?:build|test)|go\s+test)(?:\s|$)/
+    .test(value);
+  return maven || gradle || cmake || nativeRunner || packageRunner || otherRunner;
+}
+
+/**
+ * 模型可以建议 timeout，但不能用一个随手填的 600 秒截断平台已知的慢构建。
+ * 重型命令的 timeout 被抬到平台下限，并限制在整轮预算的安全余量内。
+ */
+export function prePushCommandTimeoutSeconds(
+  command: string,
+  requested: number | undefined,
+  budget: PrePushExecutionBudget,
+): number | undefined {
+  if (!isPrePushBuildCommand(command)) return requested;
+  if (requested !== undefined
+      && (!Number.isFinite(requested) || requested <= 0)) return requested;
+  const floor = Math.max(1, Math.ceil(budget.buildCommandTimeoutMs / 1_000));
+  const safetyMarginMs = Math.min(
+    MAX_ATTEMPT_SAFETY_MARGIN_MS,
+    Math.max(1_000, Math.floor(budget.attemptTimeoutMs / 10)),
+  );
+  const ceiling = Math.max(
+    1,
+    Math.floor((budget.attemptTimeoutMs - safetyMarginMs) / 1_000),
+  );
+  return Math.min(Math.max(requested ?? floor, floor), ceiling);
+}
+
 const MAX_TEXT_BYTES = 512 * 1024;
 
 function safeFixedPath(workspace: string, relativePath: string): string | undefined {
