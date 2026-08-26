@@ -52,7 +52,6 @@ import {
   workflowChoices,
   workflowLabel,
 } from "./kernelChoices.ts";
-import { buildRepoMap } from "./repoMap.ts";
 import { collectKnowledge } from "./knowledgeBlocks.ts";
 import {
   AGENT_REQUIREMENT_DOCUMENT,
@@ -6206,13 +6205,7 @@ export class TaskService {
           + `选项**(系统会替用户选中含「${task.summary.lane}」的那一`
           + `项)。禁止自造"是/否"确认卡,禁止替用户改选。`;
       }
-      // 仓库地图(加餐):大仓里模型乱 grep 烧轮次,开场先给一张按被
-      // 引用程度排序的路标。只在内核模式生成(有真克隆才有仓可画);
-      // 每次会话都重画——修复/重建会话面对的是改动后的工作区,旧图作废。
-      // fail-open:空地图不上桌,带预算绝不拖住启动(不卡死红线)。
       if (!analysisOnly && this.options.host) {
-        const repoMap = buildRepoMap(cwd);
-        if (repoMap.markdown) prompt = `${prompt}\n\n${repoMap.markdown}`;
         // 仓里的知识块:命中触发词才注入(知识在仓不在平台,换个仓
         // 就是换套知识)。匹配语料 = 需求原文 + 本轮失败详情——修复
         // 会话该被日志里的关键词(如 flyway/覆盖率)召唤出对应规矩。
