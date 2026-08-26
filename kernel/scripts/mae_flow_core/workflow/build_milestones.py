@@ -31,19 +31,25 @@ def _task_sort_key(value):
 
 def implementation_tasks(text):
     """Extract stable task ids without imposing a second document format."""
-    found = {}
+    # 有标题的清单行(- [ ] 1. 标题)必须压过文件行提及的"任务 N"占位:
+    # 原来先见者胜,第 1 节的文件行总在任务清单之前扫到,真标题永远
+    # 抢不到位——云端进度只能显示"任务 2",没人知道在干什么
+    # (2026-08-26 用户点名的易用性问题)。
+    titled = {}
+    placeholder = {}
     for raw in str(text or "").splitlines():
         line = raw.strip()
         checkbox = _CHECKBOX.match(line)
         if checkbox:
-            found.setdefault(
+            titled.setdefault(
                 checkbox.group("id"), checkbox.group("title").strip())
             continue
         for match in _TASK.finditer(line):
             task_id = match.group("id")
-            # The implementation template assigns file rows to "任务 N" and
-            # does not require a second checkbox list. Keep that id canonical.
-            found.setdefault(task_id, "任务 " + task_id)
+            # The implementation template assigns file rows to "任务 N";
+            # keep the id canonical even without a checklist.
+            placeholder.setdefault(task_id, "任务 " + task_id)
+    found = {**placeholder, **titled}
     return tuple(
         ImplementationTask(task_id, title)
         for task_id, title in sorted(
