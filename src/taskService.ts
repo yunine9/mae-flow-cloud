@@ -7224,15 +7224,19 @@ export class TaskService {
     const extras = snapshot.workspace_paths
       .filter((path) => !committed.includes(path));
     const limit = 200;
-    // 这张卡的使命必须自己说清(实锤:用户对着文件名清单找不到勾选、
-    // 也不知道确认之后还有编译闸),不能指望人读产品文档。
+    // 这张卡的使命必须自己说清,而且重心是"请检视代码"——编排瘦身后
+    // 云端不再中途单开代码检视步,这里就是人审代码的地方;只说"核对
+    // 清单"会让人以为对对文件名就行(实锤:用户不知道该在这里审代码,
+    // 也找不到勾选、不知道确认之后还有编译闸)。
     const context = [
-      "**这是推送前最后一道人工确认**:核对本次交付的文件清单。",
-      "勾选在「检视材料 → 本任务变更」的文件树里,每行左侧一个勾选框,"
-      + "默认全选;发现不该交付的文件就取消勾选并选「需要调整代码」,"
-      + "Agent 整理提交后会重新请你确认。",
-      "确认后宿主才执行推送前编译与 UT;若修复产生新提交,会按新清单"
-      + "重新请你确认;全部通过后才推送并创建 MR。",
+      "**这是推送前最后一道人工确认:请检视代码。**",
+      "本任务从基线到 HEAD 的全部代码与文档增量都在「检视材料 → "
+      + "本任务变更」——请逐文件检视 diff,发现问题可直接在代码行上留批注,"
+      + "并选「需要调整代码」让 Agent 修改。",
+      "顺带核对交付清单:文件树每行左侧的勾选框默认全选,不该交付的文件"
+      + "取消勾选,Agent 整理提交后会重新请你确认。",
+      "检视通过后宿主才执行推送前编译与 UT;若修复产生新提交,会按新增量"
+      + "重新请你检视;全部通过后才推送并创建 MR。",
       "",
       `即将向分支 ${branch} 推送以下 ${committed.length} 个文件`
       + `(基线 ${snapshot.baseline.slice(0, 12)} → HEAD ${snapshot.head.slice(0, 12)}):`,
@@ -7248,7 +7252,7 @@ export class TaskService {
       step: CLOUD_PUSH_CONFIRM_STEP,
       callId,
       questionInput: { questions: [{
-        question: `推送前确认:本次交付 ${committed.length} 个文件到 ${branch},清单是否正确?`,
+        question: `推送前检视:请检视本次代码增量(${committed.length} 个文件 → ${branch}),是否通过并按清单推送?`,
         options: [PUSH_CONFIRM_ACCEPT, PUSH_CONFIRM_REWORK],
       }] },
       context,

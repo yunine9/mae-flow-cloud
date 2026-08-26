@@ -263,11 +263,11 @@ export function TaskCard({
                  所以这里只给入口不给表单。 */
               <div className="chain-review-entry">
                 <span>DELIVERY REVIEW</span>
-                <strong>交付文件清单等待核对</strong>
-                <p>请到任务工作台对照工作区变更逐文件勾选，再提交决定。</p>
+                <strong>推送前请检视代码</strong>
+                <p>本次全部代码增量等待你检视;请到任务工作台逐文件检视 diff,核对交付清单后提交决定。</p>
                 {onOpenArtifacts && (
                   <button type="button" onClick={onOpenArtifacts}>
-                    检视变更并确认清单
+                    去检视代码
                   </button>
                 )}
               </div>
@@ -688,18 +688,20 @@ export function WaitingCard({
           deliverySelectionChanged ? " changed" : ""}`} role="status">
           <strong>{deliverySelection
             ? `交付文件 ${deliverySelection.selectedPaths.length} / ${deliverySelection.allPaths.length}`
-            : "交付清单待勾选核对"}</strong>
+            : "代码待检视"}</strong>
           <span>{!deliverySelection
-            /* 原文案"正在读取…"是误导:没在读,是勾选面板还没打开过。
-               必须说清勾选在哪,不然人对着这张卡干等(实锤)。 */
-            ? "勾选框在「本任务变更」文件树每行左侧,默认全选;打开核对后这里才能提交。"
+            /* 重心是"请检视代码":这里就是编排瘦身后唯一的人审代码点,
+               只提清单会让人以为对对文件名就行。原文案"正在读取…"是
+               误导:没在读,是检视面板还没打开过(实锤用户干等)。 */
+            ? "本任务全部代码增量在「本任务变更」——请逐文件检视 diff;"
+              + "勾选框默认全选,检视后这里才能提交。"
             : deliverySelectionChanged
               ? "勾选与当前 commit 不同；请选择调整分支，Agent 整理后会再次请你确认。"
               : "勾选与当前 commit 一致；提交通过后，服务端会在 push 前再次复核。"}</span>
           {onLocateDelivery && (
             <button type="button" className="delivery-locate"
               onClick={onLocateDelivery}>
-              {deliverySelection ? "回到勾选面板" : "去勾选核对"}
+              {deliverySelection ? "回到代码检视" : "去检视代码"}
             </button>
           )}
         </div>
