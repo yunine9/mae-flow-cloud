@@ -6,20 +6,16 @@ import {
   type DiffCell,
   type DiffReviewRow,
 } from "./diffLines";
-
-type ChangeStage = "committed" | "committed_working" | "staged"
-  | "staged_working" | "unstaged" | "untracked";
-type FileKind = "代码" | "文档" | "测试" | "配置" | "其他";
-
-interface ChangedFile {
-  key: string;
-  path: string;
-  stage: ChangeStage;
-  kind: FileKind;
-  lines: string[];
-  additions: number;
-  deletions: number;
-}
+import {
+  changeTree,
+  compactDirectory,
+  descendantFiles,
+  displayDirectoryPaths,
+  parseChanges,
+  type ChangedFile,
+  type ChangeDirectory,
+  type ChangeStage,
+} from "./gitDiffTree";
 
 const stageName: Record<ChangeStage, string> = {
   committed: "已提交",
@@ -29,133 +25,6 @@ const stageName: Record<ChangeStage, string> = {
   unstaged: "未暂存",
   untracked: "未跟踪",
 };
-
-function fileKind(path: string): FileKind {
-  const lower = path.toLowerCase();
-  const name = lower.split("/").at(-1) ?? lower;
-  if (/(^|\/)(test|tests|__tests__)\//.test(lower)
-    || /(?:test|spec)\.[^.]+$/.test(name)) return "测试";
-  if (/\.(?:md|mdx|rst|adoc|txt|docx?|pdf)$/.test(lower)
-    || /(^|\/)(?:readme|changelog|license)(?:\.|$)/.test(lower)) return "文档";
-  if (/\.(?:json|ya?ml|toml|ini|conf|xml|properties|lock)$/.test(lower)
-    || /(?:^|\/)(?:\.gitignore|dockerfile|makefile)$/.test(lower)) return "配置";
-  if (/\.(?:[cm]?[jt]sx?|py|java|kt|kts|go|rs|rb|php|swift|scala|cs|c|cc|cpp|h|hpp|sh|sql|vue|svelte|css|scss|less|html)$/.test(lower)) return "代码";
-  return "其他";
-}
-
-function parseChanges(text: string): ChangedFile[] {
-  const files: ChangedFile[] = [];
-  let stage: ChangeStage = "unstaged";
-  let current: { path: string; stage: ChangeStage; lines: string[] } | undefined;
-
-  const finish = () => {
-    if (!current) return;
-    const additions = current.lines.filter((line) => /^\+[^+]/.test(line)).length;
-    const deletions = current.lines.filter((line) => /^-[^-]/.test(line)).length;
-    files.push({
-      ...current,
-      key: `${current.stage}:${current.path}`,
-      kind: fileKind(current.path),
-      additions,
-      deletions,
-    });
-    current = undefined;
-  };
-
-  for (const line of text.split("\n")) {
-    if (/^## 已提交后又修改/.test(line)) { finish(); stage = "committed_working"; continue; }
-    if (/^## 已提交/.test(line)) { finish(); stage = "committed"; continue; }
-    if (/^## 已暂存后又修改/.test(line)) { finish(); stage = "staged_working"; continue; }
-    if (/^## 已暂存/.test(line)) { finish(); stage = "staged"; continue; }
-    if (/^## 未暂存/.test(line)) { finish(); stage = "unstaged"; continue; }
-    if (/^## 未跟踪/.test(line)) { finish(); stage = "untracked"; continue; }
-    const header = line.match(/^diff --git a\/(.+?) b\/(.+)$/);
-    if (header) {
-      finish();
-      current = { path: header[2], stage, lines: [line] };
-      continue;
-    }
-    const untracked = line.match(/^\?\?\s+(.+)$/);
-    if (untracked) {
-      finish();
-      const path = untracked[1];
-      files.push({
-        key: `untracked:${path}`,
-        path,
-        stage: "untracked",
-        kind: fileKind(path),
-        lines: [line],
-        additions: 0,
-        deletions: 0,
-      });
-      continue;
-    }
-    if (current) current.lines.push(line);
-  }
-  finish();
-  return files;
-}
-
-interface ChangeDirectory {
-  name: string;
-  path: string;
-  directories: ChangeDirectory[];
-  files: ChangedFile[];
-  count: number;
-}
-
-function changeTree(files: ChangedFile[]): ChangeDirectory {
-  type MutableDirectory = Omit<ChangeDirectory, "directories"> & {
-    children: Map<string, MutableDirectory>;
-  };
-  const root: MutableDirectory = {
-    name: "", path: "", children: new Map(), files: [], count: 0,
-  };
-  for (const file of files) {
-    const parts = file.path.split("/").filter(Boolean);
-    let directory = root;
-    for (const name of parts.slice(0, -1)) {
-      const path = directory.path ? `${directory.path}/${name}` : name;
-      let child = directory.children.get(name);
-      if (!child) {
-        child = { name, path, children: new Map(), files: [], count: 0 };
-        directory.children.set(name, child);
-      }
-      directory = child;
-    }
-    directory.files.push(file);
-  }
-  const freeze = (directory: MutableDirectory): ChangeDirectory => {
-    const directories = [...directory.children.values()]
-      .sort((left, right) => left.name.localeCompare(right.name))
-      .map(freeze);
-    const ownFiles = [...directory.files].sort((left, right) =>
-      left.path.localeCompare(right.path));
-    return {
-      name: directory.name,
-      path: directory.path,
-      directories,
-      files: ownFiles,
-      count: ownFiles.length + directories.reduce((sum, item) =>
-        sum + item.count, 0),
-    };
-  };
-  return freeze(root);
-}
-
-function directoryPaths(directory: ChangeDirectory): string[] {
-  return directory.directories.flatMap((child) => [
-    child.path,
-    ...directoryPaths(child),
-  ]);
-}
-
-function descendantFiles(directory: ChangeDirectory): ChangedFile[] {
-  return [
-    ...directory.files,
-    ...directory.directories.flatMap(descendantFiles),
-  ];
-}
 
 export interface GitDiffSelection {
   selectedPaths: string[];
@@ -273,7 +142,7 @@ export function GitDiff({
     [files, hiddenPaths],
   );
   const tree = useMemo(() => changeTree(visibleFiles), [visibleFiles]);
-  const allDirectories = useMemo(() => directoryPaths(tree), [tree]);
+  const allDirectories = useMemo(() => displayDirectoryPaths(tree), [tree]);
   const committedPaths = useMemo(() => files
     .filter((file) => file.stage === "committed"
       || file.stage === "committed_working")
@@ -381,6 +250,8 @@ export function GitDiff({
   const kinds = Array.from(new Set(files.map((file) => file.kind)));
   const branchLabel = branch || "分支未知";
   const selectedDeliveryCount = deliveryPaths.size;
+  const hasCollapsedDirectories = allDirectories.some((path) =>
+    collapsedDirectories.has(path));
   const selectionChanged = selectable
     && (selectedDeliveryCount !== committedPaths.length
       || committedPaths.some((path) => !deliveryPaths.has(path)));
@@ -435,10 +306,11 @@ export function GitDiff({
           onBlur={() => setPathTip(undefined)}>
           <span className={`file-kind kind-${file.kind}`}>{file.kind.slice(0, 1)}</span>
           <span className="change-file-name"><strong>{file.path.split("/").at(-1)}</strong>
-            <small>{stageName[file.stage]} · {file.kind}</small></span>
-          {(file.additions > 0 || file.deletions > 0) && (
-            <i><em>+{file.additions}</em> <del>−{file.deletions}</del></i>
-          )}
+            <small><span>{stageName[file.stage]} · {file.kind}</span>
+              {(file.additions > 0 || file.deletions > 0) && (
+                <i className="change-file-stats"><em>+{file.additions}</em>
+                  <del>−{file.deletions}</del></i>
+              )}</small></span>
         </button>
         <button type="button" className="change-hide" title="从当前视图隐藏；不改变交付清单"
           aria-label={`隐藏 ${file.path}`} onClick={() => hideFiles([file.path])}>
@@ -453,6 +325,8 @@ export function GitDiff({
     depth: number,
     overview: boolean,
   ): ReactNode {
+    const compacted = compactDirectory(directory);
+    directory = compacted.directory;
     const descendants = descendantFiles(directory);
     const paths = descendants.map((file) => file.path);
     const included = paths.filter((path) => deliveryPaths.has(path)).length;
@@ -472,6 +346,7 @@ export function GitDiff({
             </button>
           )}
           <button type="button" className="change-directory-main"
+            title={directory.path}
             aria-expanded={!collapsed}
             onClick={() => setCollapsedDirectories((current) => {
               const next = new Set(current);
@@ -480,7 +355,7 @@ export function GitDiff({
               return next;
             })}>
             <svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg>
-            <span aria-hidden>▰</span><strong>{directory.name}</strong><i>{directory.count}</i>
+            <span aria-hidden>▰</span><strong>{compacted.label}</strong><i>{directory.count}</i>
           </button>
           <button type="button" className="change-hide"
             title="隐藏整个目录；不改变交付清单"
@@ -591,7 +466,23 @@ export function GitDiff({
       {focused ? (
       <div className="git-change-browser">
         <nav className="change-files" aria-label="变更文件">
-          <div className="change-tree-caption"><span>按目录</span><i>{visibleFiles.length}</i></div>
+          <div className="change-tree-caption"><span>按目录</span><div>
+            <i>{visibleFiles.length}</i>
+            {allDirectories.length > 0 && (
+              <button type="button"
+                aria-label={hasCollapsedDirectories ? "展开全部目录" : "折叠全部目录"}
+                title={hasCollapsedDirectories ? "展开全部目录" : "折叠全部目录"}
+                onClick={() => setCollapsedDirectories(hasCollapsedDirectories
+                  ? new Set() : new Set(allDirectories))}>
+                <svg viewBox="0 0 16 16" aria-hidden>
+                  {hasCollapsedDirectories
+                    ? <><path d="m4 3 4 4 4-4" /><path d="m4 9 4 4 4-4" /></>
+                    : <><path d="m4 7 4-4 4 4" /><path d="m4 13 4-4 4 4" /></>}
+                </svg>
+                {hasCollapsedDirectories ? "全部展开" : "全部折叠"}
+              </button>
+            )}
+          </div></div>
           {renderTree(false)}
         </nav>
 

@@ -5108,11 +5108,40 @@ pre {
   letter-spacing: .08em;
 }
 .change-tree-caption i { font-style: normal; }
+.change-tree-caption > div { display: flex; align-items: center; gap: 7px; }
+.change-tree-caption button {
+  height: 24px;
+  padding: 0 7px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  font-size: var(--font-size-assist);
+  font-weight: 700;
+  cursor: pointer;
+}
+.change-tree-caption button:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.change-tree-caption button svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+}
 .change-tree-directory-row,
 .change-tree-file {
+  position: relative;
   min-width: 0;
   min-height: 42px;
-  padding-left: calc(5px + var(--tree-depth, 0) * 14px);
+  padding-left: calc(5px + var(--tree-depth, 0) * 12px);
+  padding-right: 4px;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -5163,19 +5192,22 @@ pre {
   min-height: 40px;
   flex: 1;
   display: grid;
-  grid-template-columns: 24px minmax(0, 1fr) auto;
+  grid-template-columns: 24px minmax(0, 1fr);
   align-items: center;
   gap: 7px;
   text-align: left;
 }
-.change-tree-file-main > i {
+.change-file-stats {
+  display: inline-flex;
+  gap: 4px;
+  flex: none;
   color: var(--muted);
   font: 600 var(--font-size-assist) var(--font-mono);
   font-style: normal;
   white-space: nowrap;
 }
-.change-tree-file-main em { color: var(--success); font-style: normal; }
-.change-tree-file-main del { color: var(--danger); text-decoration: none; }
+.change-file-stats em { color: var(--success); font-style: normal; }
+.change-file-stats del { color: var(--danger); text-decoration: none; }
 .delivery-check {
   width: 20px;
   height: 20px;
@@ -5192,14 +5224,20 @@ pre {
 .delivery-check.partial::after { width: 8px; height: 2px; content: ""; background: var(--accent); border-radius: 2px; }
 .delivery-check svg { width: 13px; fill: none; stroke: currentColor; stroke-width: 2; }
 .change-hide {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  z-index: 1;
   width: 27px;
   height: 27px;
-  flex: none;
   display: grid;
   place-items: center;
+  transform: translateY(-50%);
   opacity: 0;
   color: var(--muted);
+  background: var(--surface);
   border-radius: 5px;
+  box-shadow: var(--shadow-xs);
 }
 .change-tree-directory-row:hover .change-hide,
 .change-tree-file:hover .change-hide,
@@ -5212,7 +5250,7 @@ pre {
 .git-change-browser {
   min-height: 440px;
   display: grid;
-  grid-template-columns: 228px minmax(0, 1fr);
+  grid-template-columns: clamp(264px, 24vw, 340px) minmax(0, 1fr);
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -5277,7 +5315,7 @@ pre {
 .git-change-view.is-focused .git-change-browser {
   flex: 1;
   min-height: 0;
-  grid-template-columns: 276px minmax(0, 1fr);
+  grid-template-columns: clamp(300px, 24vw, 380px) minmax(0, 1fr);
   border: 0;
   border-radius: 0;
 }
@@ -5331,7 +5369,20 @@ pre {
 .kind-测试 { color: var(--attention); background: var(--attention-soft); }
 .change-file-name { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .change-file-name strong { overflow: hidden; color: var(--text-strong); font-family: var(--font-mono); font-size: var(--font-size-assist); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.change-file-name small { color: var(--muted); font-size: var(--font-size-assist); }
+.change-file-name small {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--font-size-assist);
+}
+.change-file-name small > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .change-file-group button > i { font-family: var(--font-mono); font-size: var(--font-size-assist); font-style: normal; white-space: nowrap; }
 .change-file-group em { color: var(--success); font-style: normal; }
 .change-file-group del { color: var(--danger); text-decoration: none; }
