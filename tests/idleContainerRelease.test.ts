@@ -1,14 +1,9 @@
 /**
- * 等人期间释放任务容器的语义契约。
+ * 人工等待期间保留任务容器的语义契约。
  *
- * 要解决的真问题:一张审批卡挂一晚上,8g 内存和 pids 名额就被占一
- * 晚上;10~20 人共用一台机器时这会把后面排队的单堵死。
- *
- * 但"省资源"不能换来任何一条静默降级,所以下面这些判据一条都不能少:
- * - 真等人才释放,自动交卷不做"停了再开"的无用功;
- * - 释放只影响容器,会话(pi 停在工具调用里)必须原封不动;
- * - 重开必须用同一套挂载/限额/label,不能悄悄换隔离参数;
- * - 释放失败只记不抛(旁路 fail-open),重开失败必须抛(不许回宿主)。
+ * 等待是活会话的一部分，不能为了资源优化擅自把 HOME、/tmp 和容器身份
+ * 换掉。真等待和自动交卷都必须保留原实例；只有异常缺失时的防御性重建
+ * 才创建新容器，且仍不允许回退宿主执行。
  */
 
 import { test } from "node:test";
@@ -32,7 +27,7 @@ function newService(containerFactory: any, log?: (message: string) => void) {
 }
 
 /** 造一个"已在跑、容器已起"的任务,不经过真会话。 */
-async function runningTask(service: any, requirement = "等人释放容器") {
+async function runningTask(service: any, requirement = "等人保留容器") {
   const created = service.create(requirement);
   const task = service.tasks.get(created.id);
   task.containerWorkspace = created.workspace;
@@ -57,7 +52,7 @@ function waitingRecord(taskId: string, questions: unknown[]) {
   };
 }
 
-test("真·等人时释放容器,但会话句柄原封不动", async () => {
+test("真·等人时会话与原容器都保持不动", async () => {
   const containers = new FakeTaskContainerHarness();
   const service: any = newService(containers.factory);
   const { created, task } = await runningTask(service);
@@ -68,6 +63,7 @@ test("真·等人时释放容器,但会话句柄原封不动", async () => {
     dispose: () => undefined,
   };
   task.driver = driver;
+  const original = task.container;
 
   await service.settleTurn(task, Promise.resolve({
     status: "waiting_for_human",
@@ -76,9 +72,9 @@ test("真·等人时释放容器,但会话句柄原封不动", async () => {
   }));
 
   assert.equal(service.get(created.id)?.status, "waiting_for_human");
-  assert.equal(containers.records[0]?.stopped, true, "等人期间容器必须停掉");
-  assert.equal(task.container, undefined);
-  assert.equal(task.driver, driver, "释放容器不能顺手把会话也拆了");
+  assert.equal(containers.records[0]?.stopped, false, "等人期间不得回收容器");
+  assert.equal(task.container, original, "审批前后必须还是同一个容器实例");
+  assert.equal(task.driver, driver, "等待人工不能拆掉会话");
   await service.shutdown();
 });
 
@@ -101,7 +97,7 @@ test("自动交卷不释放容器:马上就要接着跑,别做停了再开的无
   await service.shutdown();
 });
 
-test("释放后第一条 Bash 把容器重新开起来,挂载与限额和第一次一致", async () => {
+test("活会话异常缺失容器时防御性重建,挂载与限额保持一致", async () => {
   const seen: TaskContainerFactoryInput[] = [];
   const containers = new FakeTaskContainerHarness();
   const service: any = newService((input: TaskContainerFactoryInput) => {
@@ -110,8 +106,8 @@ test("释放后第一条 Bash 把容器重新开起来,挂载与限额和第一�
   });
   const { task } = await runningTask(service);
 
-  await service.releaseIdleContainer(task, "等待人工决定");
-  assert.equal(task.container, undefined);
+  await task.container.stop();
+  task.container = undefined;
 
   const reopened = await service.activeTaskContainer(task);
   assert.equal(task.container, reopened);
@@ -121,43 +117,7 @@ test("释放后第一条 Bash 把容器重新开起来,挂载与限额和第一�
       volumes: seen[1].volumes, labels: seen[1].options.labels },
     { name: seen[0].name, workspace: seen[0].workspace, limits: seen[0].limits,
       volumes: seen[0].volumes, labels: seen[0].options.labels },
-    "重开必须用同一套隔离参数,不能悄悄换掉");
-  await service.shutdown();
-});
-
-test("快速审批撞上容器回收时,第一条 Bash 等旧实例删净再重开", async () => {
-  let releaseStop!: () => void;
-  let markStopStarted!: () => void;
-  const stopGate = new Promise<void>((resolve) => { releaseStop = resolve; });
-  const stopStarted = new Promise<void>((resolve) => { markStopStarted = resolve; });
-  let creations = 0;
-  const service: any = newService(() => {
-    creations += 1;
-    const first = creations === 1;
-    return {
-      start: async () => undefined,
-      exec: async () => ({ exitCode: 0 }),
-      stop: async () => {
-        if (!first) return;
-        markStopStarted();
-        await stopGate;
-      },
-    };
-  });
-  const { task } = await runningTask(service);
-
-  const releasing = service.releaseIdleContainer(task, "等待人工决定");
-  await stopStarted;
-  const reopening = service.activeTaskContainer(task);
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.equal(creations, 1,
-    "旧容器仍在回收时不得创建同名新实例");
-
-  releaseStop();
-  await releasing;
-  const reopened = await reopening;
-  assert.equal(creations, 2);
-  assert.equal(task.container, reopened);
+    "防御性重建不能悄悄换掉隔离参数");
   await service.shutdown();
 });
 
@@ -169,7 +129,8 @@ test("一个回合里并发的多条 Bash 只开一个容器", async () => {
     return containers.factory(input);
   });
   const { task } = await runningTask(service);
-  await service.releaseIdleContainer(task, "等待人工决定");
+  await task.container.stop();
+  task.container = undefined;
   creations = 0;
 
   const all = await Promise.all([
@@ -186,7 +147,8 @@ test("重开落定时任务已被暂停/取消,新容器就地回收不挂到任
   const containers = new FakeTaskContainerHarness();
   const service: any = newService(containers.factory);
   const { task } = await runningTask(service);
-  await service.releaseIdleContainer(task, "等待人工决定");
+  await task.container.stop();
+  task.container = undefined;
 
   const pending = service.activeTaskContainer(task);
   task.controlEpoch += 1;          // 用户此刻按下暂停
@@ -194,23 +156,6 @@ test("重开落定时任务已被暂停/取消,新容器就地回收不挂到任
   assert.equal(task.container, undefined, "暂停后不许把容器挂回任务");
   assert.equal(containers.records.at(-1)?.stopped, true, "落单的容器必须自毁");
   await service.shutdown();
-});
-
-test("释放失败只记不抛(旁路 fail-open),容器句柄照样清掉", async () => {
-  const logs: string[] = [];
-  const service: any = newService(
-    () => ({
-      start: async () => undefined,
-      exec: async () => ({ exitCode: 0 }),
-      stop: async () => { throw new Error("docker daemon 抽风"); },
-    }),
-    (message) => logs.push(message));
-  const { task } = await runningTask(service);
-
-  await service.releaseIdleContainer(task, "等待人工决定");
-  assert.equal(task.container, undefined);
-  assert.match(logs.join("\n"), /释放容器失败.*下次执行会重新开/);
-  await service.shutdown().catch(() => undefined);
 });
 
 test("重开失败必须抛给这条 Bash,绝不落回宿主执行", async () => {
@@ -228,7 +173,8 @@ test("重开失败必须抛给这条 Bash,绝不落回宿主执行", async () =>
     };
   });
   const { task } = await runningTask(service);
-  await service.releaseIdleContainer(task, "等待人工决定");
+  await task.container.stop();
+  task.container = undefined;
 
   await assert.rejects(service.activeTaskContainer(task), /镜像拉不到/);
   assert.equal(task.container, undefined);

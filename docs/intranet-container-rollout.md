@@ -29,7 +29,7 @@
 | 内核模式强制隔离 | `src/serve.ts:467` 未配 `--isolate-image` 拒绝启动 | `tests/serveConfig.test.ts` |
 | 实例互斥 | `src/instanceLock.ts` | 两个真 serve 进程 + 真 SIGTERM / kill -9 |
 | Linux 容器 uid | `resolveContainerUser()` | `tests/containerUser.test.ts` |
-| 等人期间释放容器 | `releaseIdleContainer()` / `activeTaskContainer()` | `tests/idleContainerRelease.test.ts` + 并发实战 |
+| 等人期间保留原容器 | `settleTurn()` / `activeTaskContainer()` | `tests/idleContainerRelease.test.ts` |
 | Clone/技能发现凭据边界 | `prepareHostGitSandbox` 接管 | `tests/cloneCredentialBoundary.test.ts` |
 
 ## 内网还欠的(按依赖排序,前一项不成后一项做不了)
@@ -110,7 +110,7 @@
    bug——不许在没有隔离的情况下跑多人生产。
 3. **Linux 上容器默认按服务进程自己的 uid:gid 跑**(不再用镜像里的 10001),
    服务以 root 运行则拒绝启动。只在配了隔离时生效。
-4. **等人审批期间会停掉容器**,答复到达后原地重开。只在配了隔离时生效。
+4. **等人审批期间保留原容器**,答复到达后在同一执行环境继续。只在配了隔离时生效。
 5. **clone 与仓库技能发现改走加固沙箱**(空 HOME、空全局 git 配置)。
    这条**不配容器也生效**,但风险有界:push 和 ls-remote 早就在用同一套沙箱,
    所以内网只要 push 成功过,clone 就不会因为它挂。且它只在用户配了个人

@@ -955,18 +955,13 @@ interface TaskState {
    * 对"推不动"无效);累计上限防对话式空转。 */
   nudgedStep?: string;
   nudgeCount?: number;
-  /** 任务专属容器(隔离模式):随任务起,随收口停。等人期间会被释放,
-   * 此时为 undefined 而会话仍活着——下一条 Bash 到来时按 containerWorkspace
-   * 重新开。 */
+  /** 任务专属容器(隔离模式):随任务起,随收口停。人工等待期间保持
+   * 原实例不动，保证 Agent 的 HOME、/tmp 与执行环境连续。 */
   container?: TaskCommandContainer;
-  /** 容器该挂哪个目录。需求理解单挂 repositories/,普通单挂仓根;
-   * 释放后重开必须挂回同一个,不能靠猜。 */
+  /** 容器该挂哪个目录。需求理解单挂 repositories/,普通单挂仓根。 */
   containerWorkspace?: string;
-  /** 重开动作的防重入:一个回合里并发的多条 Bash 只该开一个容器。 */
+  /** 防御性重建的防重入:一个回合里并发的多条 Bash 只开一个容器。 */
   containerReopen?: Promise<TaskCommandContainer>;
-  /** 等人时主动回收的完成屏障。任务状态会先公布 waiting，用户可能
-   * 立刻审批；续跑的第一条 Bash 必须等旧容器确认删除后才能同名重开。 */
-  containerRelease?: Promise<void>;
   /** 合入监控环的防重入锁(内存态):一任务只挂一环。 */
   mergeWatchActive?: boolean;
   /** 流水线证据核销重试的防重入锁。纯宿主 timer，不占 Agent 会话。 */
@@ -1395,9 +1390,8 @@ export class TaskService {
   /**
    * 起一个普通编码任务容器并等它就绪。
    *
-   * 抽出来是因为它现在有两个调用点:会话开场,以及等人期间释放后
-   * 第一条 Bash 到来时重新开。两处必须用同一套挂载、限额与 label,
-   * 否则"释放再开"会悄悄换掉隔离参数。
+   * 抽出来让会话开场与活会话缺失容器时的防御性重建共用同一套挂载、
+   * 限额与 label，不能在恢复路径上悄悄换掉隔离参数。
    */
   private async startCodingContainer(
     task: TaskState,
@@ -1467,48 +1461,8 @@ export class TaskService {
   }
 
   /**
-   * 等人期间把闲置容器还给机器。
-   *
-   * 一张审批卡挂一晚上,容器就占一晚上内存和 pids 名额——10~20 人
-   * 共用一台机器时这是真的会把后面的单堵死。释放是安全的:每条
-   * Bash 都是独立 docker exec,本来就不依赖上一条留下的 shell 状态;
-   * 工作区是 bind mount,改动都在宿主盘上。丢的只有 HOME 与 /tmp
-   * 两个 tmpfs,以及上一轮遗留的后台进程——后者本就活不过会话。
-   *
-   * 释放属于旁路,失败只记不抛(不卡死红线);真正 fail-closed 的是
-   * 重新开:开不起来就拒绝执行命令,绝不落回宿主。
-   */
-  private async releaseIdleContainer(
-    task: TaskState,
-    why: string,
-  ): Promise<void> {
-    const container = task.container;
-    if (!container) {
-      await task.containerRelease;
-      return;
-    }
-    task.container = undefined;
-    const release = (async () => {
-      try {
-        await container.stop();
-        this.options.log?.(
-          `任务 ${task.summary.id} ${why},已释放闲置任务容器`);
-      } catch (error) {
-        this.options.log?.(
-          `任务 ${task.summary.id} ${why}释放容器失败(下次执行会重新开): `
-          + String(error));
-      }
-    })();
-    task.containerRelease = release;
-    try {
-      await release;
-    } finally {
-      if (task.containerRelease === release) task.containerRelease = undefined;
-    }
-  }
-
-  /**
-   * 取得可用的任务容器:还在就直接用,等人期间被释放过就重新开。
+   * 取得可用的任务容器:正常会话始终复用原实例；句柄异常缺失时才
+   * 防御性重建。人工等待本身绝不走这里的重建分支。
    *
    * 开不起来一律抛给调用方 → 变成这条 Bash 的执行失败。这里绝不
    * 能退回宿主执行:那是"要隔离就真隔离"红线的正面。
@@ -1518,13 +1472,6 @@ export class TaskService {
   ): Promise<TaskCommandContainer> {
     if (task.container) return task.container;
     const epoch = task.controlEpoch;
-    // waiting 状态先落盘、旧容器后完成 TERM→KILL→rm。人在这个窗口内
-    // 立即审批时，续跑不能与旧实例回收争抢同一个容器名。
-    await task.containerRelease;
-    if (!this.current(task, epoch)) {
-      throw new Error("任务容器等待回收期间任务已暂停或取消，拒绝重新创建");
-    }
-    if (task.container) return task.container;
     if (!task.containerReopen) {
       // 重开是异步的,期间用户完全可能按下暂停/取消——那条路径刚
       // 停完容器就把 task.container 置空,我们再挂一个上去就是无主
@@ -6285,8 +6232,8 @@ export class TaskService {
       // 容器隔离:bash 进任务专属容器(工作区同路径挂载),
       // 起不来直接抛=任务 failed——静默降级回宿主是假隔离。
       if (this.options.isolation) {
-        // 工作区记在任务上:等人期间容器会被释放,重新开时得知道
-        // 当时挂的是哪个目录(需求理解单的 cwd 是 repositories/)。
+        // 工作区记在任务上:防御性重建必须挂回同一个目录，需求理解单
+        // 的 cwd 是 repositories/，普通任务则是仓库根。
         task.containerWorkspace = cwd;
         task.container = await this.startCodingContainer(task);
         if (!this.current(task, epoch)) {
@@ -9729,10 +9676,8 @@ export class TaskService {
           // 自动交卷=马上就要接着跑,别做"停了再开"的无用功。
           setImmediate(() => void this.autoDecide(task, auto));
         } else {
-          // 真·等人:一张卡可能挂一晚上,容器不该陪着占内存和 pids
-          // 名额。会话仍活着(pi 停在工具调用里),答复到达后第一条
-          // Bash 会把容器重新开起来。
-          await this.releaseIdleContainer(task, "等待人工决定");
+          // 真·等人时会话与容器是一个连续执行现场。8g 是上限而非预占；
+          // 为省空闲资源销毁容器会丢 HOME、/tmp，并让续跑撞上重建竞态。
           this.notifyWaiting(task);
         }
         break;
