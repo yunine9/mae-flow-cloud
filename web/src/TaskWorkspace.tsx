@@ -488,7 +488,7 @@ export function TaskWorkspace({
               ? `${notes.length} 条批注` : "圈选原文、协作检视"],
           ["collaboration", "开发协作", collaborationVisible
             ? "补充主任务或主动接管" : assistantUnavailableReason(task)],
-          ["execution", "执行现场", task.focus?.headline ?? "心流与原始事件"],
+          ["execution", "执行现场", task.focus?.headline ?? "原始 SSE 事件流"],
         ] as Array<[WorkspaceView, string, string]>).map(([view, label, hint]) => (
           <button type="button" role="tab" key={view}
             aria-selected={workspaceView === view}
@@ -629,11 +629,11 @@ export function TaskWorkspace({
           </> : workspaceView === "execution" ? <>
             <div className="ws-pane-head">
               <div><span>LIVE EXECUTION</span><strong>执行现场</strong></div>
-              <small>日常看心流，需要取证时切原始 SSE</small>
+              <small>SSE 原始事件实时跟随；可按类型筛选</small>
             </div>
             <div className="ws-primary-scroll ws-execution-view">
-              <KnowledgeFootprint usage={task.knowledge_usage} />
               <ExecutionPanel task={task} defaultOpen />
+              <KnowledgeFootprint usage={task.knowledge_usage} />
             </div>
           </> : <>
             <div className="ws-pane-head">

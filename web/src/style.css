@@ -2720,33 +2720,7 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .utility-panel.is-open .utility-toggle > i { transform: rotate(225deg); }
 .utility-panel[open] summary,
 .utility-panel.is-open .utility-toggle { border-bottom: 1px solid var(--line); }
-.execution-tabs {
-  padding: 8px 10px 0; display: flex; gap: 5px;
-  background: var(--surface-soft);
-}
-.execution-tabs button {
-  padding: 7px 11px; color: var(--muted); border: 1px solid transparent;
-  border-bottom: 0; border-radius: 7px 7px 0 0; background: transparent;
-  font: inherit; font-size: var(--font-size-assist); cursor: pointer;
-}
-.execution-tabs button:hover { color: var(--text-strong); }
-.execution-tabs button.active {
-  color: var(--text-strong); border-color: var(--line); background: var(--surface);
-  font-weight: 700;
-}
 .execution-body { min-width: 0; }
-.activity-current {
-  padding: 11px 13px; display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center;
-  gap: 7px; color: var(--muted); font-size: var(--font-size-assist);
-  border-bottom: 1px solid var(--line); background: var(--surface-soft);
-}
-.activity-current strong { color: var(--text-strong); font-size: 13px; }
-.activity-current .activity-alert-badge { margin-left: auto; }
-.activity-current-label {
-  padding: 2px 6px; color: var(--accent); border-radius: 999px;
-  background: var(--accent-soft); font-size: var(--font-size-assist); font-weight: 700;
-}
 .event-live-state {
   padding: 8px 12px; display: flex; align-items: center; gap: 7px;
   color: var(--success); background: var(--surface-soft); font-size: var(--font-size-assist);
@@ -2966,8 +2940,6 @@ pre {
 .event-record-empty { padding: 11px; color: var(--muted); font-size: var(--font-size-assist); }
 @media (max-width: 680px) {
   .event-record dl > div { grid-template-columns: 1fr; gap: 3px; }
-  .activity-current { grid-template-columns: auto minmax(0, 1fr); }
-  .activity-current .activity-alert-badge { margin-left: 0; }
   .event-filters { overflow-x: auto; }
   .event-filters button { flex: none; }
   .event-value-expand > summary { flex-direction: column; }
@@ -3974,119 +3946,6 @@ pre {
   word-break: break-word;
 }
 
-/* ---- 执行心流:原始流人盯不过来,这里只看折叠段与异常信号 ---- */
-.activity-alert-badge {
-  margin-left: 8px;
-  padding: 1px 7px;
-  font-style: normal;
-  font-size: var(--font-size-assist);
-  color: var(--attention);
-  background: var(--attention-soft);
-  border-radius: 999px;
-}
-.activity-alerts {
-  padding: 10px 13px 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.activity-alert {
-  padding: 8px 11px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  border: 1px solid var(--attention);
-  border-radius: 8px;
-  background: var(--attention-soft);
-}
-.activity-alert strong { font-size: 13.5px; color: var(--text-strong); }
-.activity-alert span { font-size: var(--font-size-assist); color: var(--muted); word-break: break-all; }
-.activity-alert time { font-size: var(--font-size-assist); color: var(--muted); }
-.activity-segments {
-  margin: 0;
-  padding: 10px 13px;
-  max-height: 420px;      /* detail 改成折行后行数会多,给足再滚 */
-  overflow-y: auto;
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
-}
-/* 时间不再独占一列:窄侧栏里"图标+时间+正文"三列会把正文挤成一条缝。
-   时间挪进正文行首,正文拿满整行宽度。 */
-.activity-segment {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
-  gap: 8px;
-  align-items: start;
-}
-.activity-segment i {
-  margin-top: 1px;        /* 与正文首行基线对齐(align-items 改 start 后需要) */
-  width: 18px;
-  height: 18px;
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-style: normal;
-  font-size: var(--font-size-assist);
-  line-height: 1;
-  color: var(--muted);
-  border: 1px solid var(--line);
-  border-radius: 5px;
-  background: var(--surface-soft);
-}
-.activity-segment.edit i,
-.activity-segment.bash i { color: var(--accent); border-color: var(--accent-soft); }
-/* 人自己捎的话在动作流里要认得出来:这一条不是它干的,是你说的。 */
-.activity-segment.steer i {
-  color: var(--attention);
-  border-color: var(--attention);
-  background: var(--attention-soft);
-}
-.activity-segment.steer .activity-segment-body strong { color: var(--attention); }
-.activity-segment.has-error i { color: var(--danger); border-color: var(--danger); background: var(--danger-soft); }
-.activity-segment time {
-  margin-right: 6px;
-  color: var(--muted);
-  font-size: var(--font-size-assist);
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-.activity-segment-body { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.activity-segment-body strong {
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--text-strong);
-  font-weight: 600;
-}
-.activity-segment.has-error .activity-segment-body strong { color: var(--danger); }
-/* detail 原来是单行 + 省略号,而服务端一条 detail 可能是四条命令拼起来
-   的三百多字——一行装不下,省略号后面全看不见,等于白记(用户原话:
-   "有截断很难受")。这里改成整段折行:面板本来就是可滚动区域,信息
-   密度换来的是真能读。 */
-.activity-segment-body span {
-  font-size: var(--font-size-assist);
-  line-height: 1.55;
-  color: var(--muted);
-  white-space: normal;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-.activity-segment-body strong { overflow-wrap: anywhere; }
-.activity-truncated, .activity-foot {
-  font-size: var(--font-size-assist);
-  color: var(--muted);
-}
-.activity-foot {
-  padding: 0 13px 10px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
 /* ---- 暂停跟随:人往回翻的时候,别把他拽回最新 ---- */
 /* 按钮而不是自动恢复:什么时候回到最新是人的决定,不是滚动位置的推论。 */
 .follow-resume {
@@ -4872,7 +4731,6 @@ pre {
 .knowledge-footprint-events article > span { color: var(--accent); }
 .knowledge-footprint-events small { text-align: right; }
 .ws-execution-view .execution-panel { box-shadow: var(--shadow-xs); }
-.ws-execution-view .execution-panel .activity-segments { max-height: min(560px, 62vh); }
 .ws-execution-view .execution-panel .event-stream { max-height: min(640px, 68vh); }
 .ws-insights-view { background: var(--page); }
 .ws-insights-grid {
@@ -6139,7 +5997,6 @@ pre {
 .ws-decision .submit-decision { min-height: 44px; padding-left: 18px; padding-right: 18px; font-size: 15px; }
 .ws-decision .task-utilities { margin-top: 2px; }
 .ws-decision .utility-panel { box-shadow: var(--shadow-xs); }
-.ws-decision .execution-panel .activity-segments { max-height: min(300px, 34vh); }
 .ws-decision .execution-panel .event-stream { max-height: min(360px, 40vh); }
 .ws-usage-summary {
   min-height: 38px;

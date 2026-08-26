@@ -7,7 +7,6 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Markdown } from "./markdown";
 import {
   decide,
-  fetchActivity,
   listActions,
   rerunTaskFromStart,
   listTimeline,
@@ -15,7 +14,6 @@ import {
   repairStopped,
   statusText,
   tailEvents,
-  type ActivityView,
   type ExternalAction,
   type SemanticEvent,
   type SseConnectionState,
@@ -36,7 +34,6 @@ import type { RepositorySkillSelection } from "./RepositorySkillPicker";
 import type { GitDiffSelection } from "./GitDiff";
 import { PrepushStatus } from "./PrepushStatus";
 import { TokenUsage } from "./TokenUsage";
-import { startVisiblePolling } from "./visiblePolling";
 import {
   formatLocalClock,
   formatLocalDateTime,
@@ -1010,20 +1007,6 @@ function CostBreakdown({ entries }: { entries: TimelineEntry[] }) {
   );
 }
 
-/** 心流的持续时间:分钟级就够,精确到秒反而制造焦虑。 */
-function sinceText(iso?: string): string {
-  if (!iso) return "";
-  const ms = Date.now() - instantMs(iso);
-  if (!Number.isFinite(ms) || ms < 0) return "";
-  if (ms < 60_000) return "刚刚开始";
-  return `已持续 ${Math.round(ms / 60_000)} 分钟`;
-}
-
-const SEGMENT_ICON: Record<string, string> = {
-  read: "读", edit: "改", bash: "跑", tool: "具",
-  talk: "说", agent: "派", ask: "决", steer: "嘱",
-};
-
 /** 贴底跟随,但**人一往上翻就撒手**。判据见 follow.ts(纯函数,有用例)。 */
 function useStickyBottom<T extends HTMLElement>(count: number) {
   const ref = useRef<T>(null);
@@ -1073,96 +1056,6 @@ function FollowPaused({ behind, onResume }: {
     <button type="button" className="follow-resume" onClick={onResume}>
       {behind > 0 ? `↓ ${behind} 条新的` : "↓ 回到最新"}
     </button>
-  );
-}
-
-/** 行为摘要:原始 SSE 人盯不过来(用户原话"一直在刷"),这里呈现
- * 服务端折叠好的心流——此刻在干嘛、干了什么、有什么值得看一眼。
- * 前端不二次解读,条目全部来自 /activity 镜像;在跑时轮询跟进。 */
-function ActivityFlow({ task }: { task: TaskSummary }) {
-  const [view, setView] = useState<ActivityView>();
-  const [unavailable, setUnavailable] = useState("");
-  const running = task.status === "running";
-  const follow = useStickyBottom<HTMLOListElement>(view?.segments.length ?? 0);
-
-  useEffect(() => {
-    let alive = true;
-    async function load() {
-      const result = await fetchActivity(task.id);
-      if (!alive) return;
-      setUnavailable(result.unavailable ?? "");
-      if (result.view) setView(result.view);
-    }
-    // 在跑才有心流可追；隐藏页签停轮询，回来立即补一次。停了页面上
-    // 留最后一份摘要即可，不空转请求。
-    if (!running) {
-      void load();
-      return () => { alive = false; };
-    }
-    const stop = startVisiblePolling(() => void load(), 5000, document);
-    return () => { alive = false; stop(); };
-  }, [task.id, running]);
-
-  if (unavailable) {
-    return <div className="utility-note">心流摘要暂不可用，可切换到原始事件查看现场。</div>;
-  }
-  if (!view || (!view.segments.length && !view.alerts.length)) {
-    return <div className="utility-note">还没有可折叠的执行动作；原始事件仍会完整保留。</div>;
-  }
-  const alerts = view.alerts;
-
-  return (
-    <div className="activity-panel-body">
-      <div className="activity-current">
-        <span className="activity-current-label">此刻</span>
-        <strong>{view.now || (running ? "Agent 正在准备下一步" : "本轮执行已经收口")}</strong>
-        {view.now && <span>{sinceText(view.now_since)}</span>}
-        {alerts.length > 0 && (
-          <em className="activity-alert-badge">{alerts.length} 个信号</em>
-        )}
-      </div>
-      {alerts.length > 0 && (
-        <div className="activity-alerts">
-          {alerts.map((alert, index) => (
-            <div key={index} className="activity-alert">
-              <strong>{alert.title}</strong>
-              {alert.detail && <span>{alert.detail}</span>}
-              <time dateTime={alert.ts}>{formatLocalClock(alert.ts)}</time>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <ol ref={follow.ref} className="activity-segments"
-          onScroll={follow.onScroll}>
-        {view.truncated && (
-          <li className="activity-truncated">更早的动作已折叠,只保留最近部分。</li>
-        )}
-        {view.segments.map((segment, index) => (
-          <li key={index}
-              className={`activity-segment ${segment.kind}${segment.errors ? " has-error" : ""}`}>
-            <i aria-hidden>{SEGMENT_ICON[segment.kind] ?? "·"}</i>
-            <span className="activity-segment-body">
-              <strong>
-                <time dateTime={segment.start}
-                      title={formatLocalDateTime(segment.start, { seconds: true })}>
-                  {formatLocalClock(segment.start)}
-                </time>
-                {segment.title}
-              </strong>
-              {segment.detail && <span>{segment.detail}</span>}
-            </span>
-          </li>
-        ))}
-      </ol>
-      <div className="activity-foot">
-        {follow.paused && (
-          <FollowPaused behind={follow.behind} onResume={follow.toBottom} />
-        )}
-        共 {view.events_seen} 条原始事件,折叠为 {view.segments.length} 段;
-        原始内容可切换到「原始事件」查看。
-      </div>
-    </div>
   );
 }
 
@@ -1263,8 +1156,9 @@ function EventTail({ taskId, active }: { taskId: string; active: boolean }) {
   );
 }
 
-/** 同一份事件账的两种读法：心流用于日常扫读，SSE 用于完整取证。
- * 两者不再平铺成重复面板；切到原始事件时才建立实时连接。 */
+/** 执行现场=原始 SSE 事件流,一种读法(2026-08-26 用户拍板:心流
+ * 摘要定位不清晰,干掉;筛选器 + 贴底跟随已足够扫读与取证)。
+ * 展开才建立实时连接。 */
 export function ExecutionPanel({
   task,
   defaultOpen = false,
@@ -1273,15 +1167,10 @@ export function ExecutionPanel({
   defaultOpen?: boolean;
 }) {
   const [expanded, setExpanded] = useState(defaultOpen);
-  const [mode, setMode] = useState<"flow" | "events">("flow");
 
   useEffect(() => {
     setExpanded(defaultOpen);
   }, [task.id, defaultOpen]);
-
-  useEffect(() => {
-    setMode("flow");
-  }, [task.id]);
 
   return (
     <section className={`utility-panel execution-panel${expanded ? " is-open" : ""}`}>
@@ -1290,27 +1179,15 @@ export function ExecutionPanel({
         onClick={() => setExpanded((current) => !current)}>
         <span>
           <strong>执行现场</strong>
-          <small>{task.focus?.headline
-            ?? "心流摘要与 SSE 原始事件共用同一份现场记录"}</small>
+          <small>{task.focus?.headline ?? "SSE 原始事件流,实时跟随"}</small>
         </span>
         <i aria-hidden />
       </button>
-      {expanded && <>
-        <div className="execution-tabs" role="tablist" aria-label="执行现场视图">
-          <button type="button" role="tab" aria-selected={mode === "flow"}
-            className={mode === "flow" ? "active" : ""}
-            onClick={() => setMode("flow")}>执行心流</button>
-          <button type="button" role="tab" aria-selected={mode === "events"}
-            className={mode === "events" ? "active" : ""}
-            onClick={() => setMode("events")}>原始事件 · SSE</button>
-        </div>
+      {expanded && (
         <div className="execution-body">
-          <div hidden={mode !== "flow"}><ActivityFlow task={task} /></div>
-          <div hidden={mode !== "events"}>
-            <EventTail taskId={task.id} active={mode === "events"} />
-          </div>
+          <EventTail taskId={task.id} active={expanded} />
         </div>
-      </>}
+      )}
     </section>
   );
 }

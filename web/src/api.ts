@@ -1406,48 +1406,6 @@ export function tailPrepushEvents(
   return () => source.close();
 }
 
-/** 行为摘要(服务端 src/activity.ts 的镜像):前端不二次解读。 */
-export interface ActivitySegment {
-  start: string;
-  end: string;
-  kind: "read" | "edit" | "bash" | "tool" | "talk" | "agent" | "ask";
-  title: string;
-  detail?: string;
-  count: number;
-  errors: number;
-}
-
-export interface ActivityAlert {
-  kind: "repeat-failure" | "file-churn" | "reread-loop" | "gate-block" | "stall";
-  title: string;
-  detail?: string;
-  ts: string;
-}
-
-export interface ActivityView {
-  now: string;
-  now_since?: string;
-  segments: ActivitySegment[];
-  alerts: ActivityAlert[];
-  events_seen: number;
-  truncated: boolean;
-}
-
-export async function fetchActivity(
-  taskId: string,
-): Promise<{ view?: ActivityView; unavailable?: string }> {
-  const response = await fetch(`/tasks/${taskId}/activity`);
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    return {
-      unavailable: response.status === 404
-        ? "行为摘要接口尚未就绪(服务重启后可用)。"
-        : String(body.error ?? `HTTP ${response.status}`),
-    };
-  }
-  return { view: await response.json() };
-}
-
 /** 交付时间线条目(服务端 src/timeline.ts 的镜像)。 */
 export interface TimelineEntry {
   ts: string;
