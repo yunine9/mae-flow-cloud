@@ -5683,9 +5683,16 @@ export class TaskService {
             const excludePath = join(infoDir, "exclude");
             const current = existsSync(excludePath)
               ? readFileSync(excludePath, "utf-8") : "";
+            // 内核会话产物也在此登记——不能指望业务仓的 .gitignore 认识
+            // mae-flow(run9 实测:openspec/config.yaml 不在忽略里,prepush
+            // 修复 Agent 为了收干净工作区,把它提交进了**用户的 .gitignore**
+            // 并随 MR 推走,平台关切污染了用户仓)。
             const missing = [
               ".mae-flow-order.json", ".mae-flow-chain.md", ".mae-flow-issue.md",
               AGENT_REQUIREMENT_DOCUMENT,
+              ".mae-flow.json", ".mae-flow.json.exited",
+              ".mae-flow-history.jsonl", ".mae-flow-work/",
+              "openspec/config.yaml",
             ]
               .filter((entry) => !current.includes(entry));
             if (missing.length) {
