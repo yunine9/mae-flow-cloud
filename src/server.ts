@@ -792,6 +792,25 @@ export function createTaskServer(
             body.include_current === true,
           ));
         }
+        // push 前人工确认交付清单(任务级开关)。默认关;开着时宿主
+        // 在推送前挂云端原生 diff 卡。
+        if (request.method === "PUT" && parts[2] === "push-confirmation") {
+          const target = service.get(id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          if (!canOperate(viewer, target.luban_account, !!options.auth)) {
+            return json(response, 403, { error: "只能调整分配给自己的任务" });
+          }
+          const body = await readBody(request);
+          try {
+            return json(response, 200,
+              service.setPushConfirmation(id, body.on === true));
+          } catch (error) {
+            if (error instanceof TaskControlError) {
+              return json(response, 409, { error: error.message });
+            }
+            throw error;
+          }
+        }
         // 多仓需求图的结构化确认:平台自己的按钮,不依赖模型把
         // 「确认并生成任务」的选项原文写对(魔法字符串漂了会静默丢单,
         // 车道双问同款教训)。幂等:已生成的仓不重复建。

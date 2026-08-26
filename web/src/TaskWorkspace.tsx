@@ -40,6 +40,7 @@ import {
   readArtifact,
   repairStopped,
   requestCommitterReview,
+  putPushConfirmation,
   putTaskApprovalMode,
   statusText,
   type AnchorCheck,
@@ -99,6 +100,46 @@ function assistantUnavailableReason(task: TaskSummary): string {
     return "任务已经停止；重跑并进入可编辑阶段后开放";
   }
   return "代码现场就绪后即可使用";
+}
+
+/** push 前人工确认开关:确认点已过(已推送/终态)只读展示不可开。
+ * 状态以服务端镜像为准,提交后靠既有轮询回读,不本地推断。 */
+function PushConfirmationToggle({
+  task,
+  onChanged,
+}: {
+  task: TaskSummary;
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const on = !!task.push_confirmation;
+  const passed = ["await_merge", "completed", "failed", "canceled"]
+    .includes(task.status);
+  if (passed && !on) return null;
+  return <label className={`push-confirm-toggle${on ? " on" : ""}`}
+    title="开着时,Cloud 会在推送前展示交付文件清单等你确认;确认或按清单返工后才推送">
+    <input
+      type="checkbox"
+      checked={on}
+      disabled={busy || passed}
+      onChange={async (event) => {
+        const next = event.target.checked;
+        setBusy(true);
+        setError("");
+        try {
+          await putPushConfirmation(task.id, next);
+          onChanged();
+        } catch (cause) {
+          setError(String((cause as Error).message ?? cause));
+        } finally {
+          setBusy(false);
+        }
+      }}
+    />
+    <span>push 前人工确认交付清单</span>
+    {error && <em className="push-confirm-error">{error}</em>}
+  </label>;
 }
 
 export function TaskWorkspace({
@@ -508,6 +549,7 @@ export function TaskWorkspace({
         </>} />
       </div>
       <PrepushStatus prepush={task.delivery?.prepush} placement="workspace" />
+      <PushConfirmationToggle task={task} onChanged={onChanged} />
       {task.delivery?.prepush && <PrepushLiveLog
         taskId={task.id}
         active={prepushActive(task.delivery.prepush.state)}

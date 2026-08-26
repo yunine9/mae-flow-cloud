@@ -115,6 +115,20 @@ export async function putMoonlight(
   return response.json();
 }
 
+/** push 前人工确认开关。已推送后再开会 409,如实提示。 */
+export async function putPushConfirmation(
+  taskId: string,
+  on: boolean,
+): Promise<TaskSummary> {
+  const response = await fetch(
+    `/tasks/${encodeURIComponent(taskId)}/push-confirmation`, {
+      method: "PUT",
+      body: JSON.stringify({ on }),
+    });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
 export async function putTaskApprovalMode(
   taskId: string,
   mode: "inherit" | "manual" | "moonlight",
@@ -472,6 +486,8 @@ export interface TaskSummary {
     baseline?: string;
     updated_at: string;
   };
+  /** push 前人工确认交付清单(任务级开关,默认关)。 */
+  push_confirmation?: boolean;
   progress?: TaskProgress;
   control?: {
     last_action: "pause" | "resume" | "cancel";

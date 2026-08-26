@@ -563,6 +563,11 @@ export interface TaskSummary {
     baseline?: string;
     updated_at: string;
   };
+  /** push 前人工确认交付清单(默认关,任务级开关)。开着时宿主在推送
+   * 前挂云端原生 diff 卡:确认→按白名单推送;返工→带清单契约的修复
+   * 会话整理提交后重新确认。这是宿主对自己动作(push)设的闸,不碰
+   * 内核流程——瘦身后的主链没有中途检视卡,想看最后一眼的人从这里看。 */
+  push_confirmation?: boolean;
   /** 从现场看板的 panel-pulse.js/panel.html 读取的进度摘要。 */
   progress?: TaskProgress;
   /** 人工控制台账。paused_from 是恢复时的扳道锚点：等待决定、流水线
@@ -1069,6 +1074,16 @@ function normalizedDeliveryPaths(values: string[]): string[] {
 function samePaths(left: string[], right: string[]): boolean {
   return left.length === right.length
     && left.every((path, index) => path === right[index]);
+}
+
+/** push 前确认卡的云端原生步骤名与选项原文。步骤不在内核流程里,
+ * stepReviewSurface 对未知步骤默认给 "diff",勾选 UI 自动开放。 */
+const CLOUD_PUSH_CONFIRM_STEP = "cloud_push_confirm";
+const PUSH_CONFIRM_ACCEPT = "确认按清单推送";
+const PUSH_CONFIRM_REWORK = "需要调整代码（按清单返工）";
+
+function pushConfirmCallId(head: string): string {
+  return `push-confirm-${head.slice(0, 12)}`;
 }
 
 function deliverySelectionNote(
@@ -2111,10 +2126,13 @@ export class TaskService {
       ? "chain"
       : this.isIssueTriage(task)
         ? "doc"
-        : stepReviewSurface(
-            this.options.host?.kernelRoot,
-            summary.waiting?.step,
-          );
+        // 云端原生步骤的检视面由云端自己钉死,不搭内核映射的兜底便车。
+        : summary.waiting?.step === CLOUD_PUSH_CONFIRM_STEP
+          ? "diff"
+          : stepReviewSurface(
+              this.options.host?.kernelRoot,
+              summary.waiting?.step,
+            );
     const projected = {
       ...summary,
       title: summary.title ?? taskTitle(summary.requirement),
@@ -4348,6 +4366,10 @@ export class TaskService {
     waiting: WaitingRecord,
     input: DecisionSubmission,
     closesFeedback: boolean,
+    /** push 前确认卡:没显式勾选就按"当前 commit 全量"确认——确认
+     * 全量本来就不需要白名单裁剪,但仍落 selection 记录绑 HEAD,
+     * 修复轮扩大集合时才有对照物重新举卡。 */
+    defaultToCommitted = false,
   ): Promise<{
     record: NonNullable<TaskSummary["delivery_selection"]>;
     note: string;
@@ -4356,12 +4378,15 @@ export class TaskService {
     const previous = task.summary.delivery_selection;
     const values = explicit
       ? input.delivery_paths!
-      : previous?.status === "requested" ? previous.paths : undefined;
+      : previous?.status === "requested" ? previous.paths
+        : defaultToCommitted ? "committed" as const : undefined;
     if (values === undefined) return undefined;
-    const surface = stepReviewSurface(
-      this.options.host?.kernelRoot,
-      waiting.step,
-    );
+    const surface = waiting.step === CLOUD_PUSH_CONFIRM_STEP
+      ? "diff"
+      : stepReviewSurface(
+          this.options.host?.kernelRoot,
+          waiting.step,
+        );
     if (surface !== "diff") {
       if (explicit) {
         throw new TaskControlError("只有代码变更检视可以提交交付文件清单");
@@ -4375,7 +4400,8 @@ export class TaskService {
     if (!snapshot?.baseline) {
       throw new TaskControlError("无法读取任务基线，暂不能确认交付文件");
     }
-    const paths = normalizedDeliveryPaths(values);
+    const paths = normalizedDeliveryPaths(
+      values === "committed" ? snapshot.committed_paths : values);
     const visible = new Set(snapshot.workspace_paths);
     const unknown = paths.filter((path) => !visible.has(path));
     if (unknown.length) {
@@ -4500,10 +4526,19 @@ export class TaskService {
         matchesStepChoice(effect, answer)));
     const handlesFeedback = effects.some((effect) => effect.handlesFeedback
       && submitted.some((answer) => matchesStepChoice(effect, answer)));
+    // push 前确认卡是云端原生步骤(不在内核流程里,effects 为空),
+    // 关闭语义由选项原文判定;确认视同关闭检视——未闭环批注同样拦。
+    const pushConfirmCard = waiting.step === CLOUD_PUSH_CONFIRM_STEP;
+    const confirmingPush = pushConfirmCard
+      && submitted.some((answer) => answer.includes(PUSH_CONFIRM_ACCEPT));
     const deliverySelection = await this.deliverySelectionForDecision(
-      task, waiting, input, closesFeedback);
+      task, waiting, input, closesFeedback || confirmingPush, pushConfirmCard);
+    if (pushConfirmCard && !deliverySelection) {
+      throw new TaskControlError(
+        "push 前确认必须基于当前变更快照,请刷新后重试");
+    }
     const unresolved = this.unresolvedAnnotations(task);
-    if (unresolved.length && closesFeedback) {
+    if (unresolved.length && (closesFeedback || confirmingPush)) {
       const menuQuestions = Array.isArray(waiting.question?.questions)
         ? waiting.question.questions as Array<{ options?: string[] }> : [];
       const menuOptions = menuQuestions
@@ -4583,6 +4618,34 @@ export class TaskService {
           task.driver.resumeWithDecision(resolved).then(() => undefined));
       }
       await this.finishIssueTriage(task);
+      return { ...task.summary };
+    }
+    // push 前确认卡:没有会话停在 AskUserQuestion 里等这份决定(卡由
+    // 宿主在 push 路径上自己挂的),所以不回注会话、更不重建会话——
+    // 确认就接着推,返工就开一只带清单契约的修复会话整理提交。
+    if (pushConfirmCard) {
+      task.summary.waiting = undefined;
+      if (confirmingPush) {
+        task.summary.status = "verifying";
+        task.summary.detail = "交付清单已确认,继续推送";
+        this.persist(task);
+        this.bypass(task, "push 确认续推",
+          this.tryDeliver(task, task.controlEpoch));
+      } else {
+        const record = task.summary.delivery_selection!;
+        this.enqueueRepair(task, [
+          "用户在 push 前确认交付清单时要求按清单返工,整理提交是你此刻唯一的使命:",
+          deliverySelection?.note ?? "",
+          "- 把不在清单里却已进入提交的文件从提交中移出(git rm --cached 或重排提交);",
+          "  文件本身要不要保留在工作区,按它的性质与用户意见判断,不确定就保留并说明。",
+          "- 清单内缺失的文件补进提交;不许为凑清单制造空改动。",
+          ...(normalized.notes?.trim()
+            ? [`- 用户补充意见(最高优先):${normalized.notes.trim()}`] : []),
+          "- 整理完按仓库提交规范收口(单条 Bash 只做一个 commit);",
+          `  完成后系统会按新 HEAD 重新验证并再次请用户确认(当前清单 ${record.paths.length} 个文件)。`,
+        ].filter(Boolean).join("\n"),
+        "按交付清单整理提交中");
+      }
       return { ...task.summary };
     }
     task.summary.waiting = undefined;
@@ -7037,6 +7100,67 @@ export class TaskService {
     }
   }
 
+  /** push 前人工确认闸(任务级开关,默认关=直接放行)。
+   * 已确认的清单严格绑 HEAD:prepush 修复产生新提交后不判死,而是
+   * 作废旧卡、按新快照重新举卡——机器把 delta 摆到人面前,而不是
+   * failed 了喊人来猜。同 HEAD 的卡按 call_id 幂等,重启不重复出卡。 */
+  private async pushConfirmationSatisfied(
+    task: TaskState,
+    branch: string,
+  ): Promise<boolean> {
+    if (!task.summary.push_confirmation || !task.cwd) return true;
+    const snapshot = await deliveryChangeSnapshot(task.cwd);
+    if (!snapshot?.baseline) {
+      this.markVerificationStalled(task,
+        "开启了 push 前人工确认,但任务基线不可读,无法生成交付清单");
+      return false;
+    }
+    const selection = task.summary.delivery_selection;
+    if (selection?.status === "confirmed" && selection.head === snapshot.head) {
+      return true;
+    }
+    const callId = pushConfirmCallId(snapshot.head);
+    const waiting = task.summary.waiting;
+    if (waiting?.step === CLOUD_PUSH_CONFIRM_STEP) {
+      if (waiting.call_id === callId) return false; // 同 HEAD 的卡已在等人
+      task.humanGate.supersede(waiting.waiting_id, {
+        stateVersion: waiting.state_version,
+        notes: "HEAD 已变化,旧确认卡作废,按新快照重新确认",
+      });
+    }
+    const committed = snapshot.committed_paths;
+    const extras = snapshot.workspace_paths
+      .filter((path) => !committed.includes(path));
+    const limit = 200;
+    const context = [
+      `即将向分支 ${branch} 推送以下 ${committed.length} 个文件`
+      + `(基线 ${snapshot.baseline.slice(0, 12)} → HEAD ${snapshot.head.slice(0, 12)}):`,
+      ...committed.slice(0, limit).map((path) => `- ${path}`),
+      ...(committed.length > limit
+        ? [`- …其余 ${committed.length - limit} 个文件`] : []),
+      ...(extras.length ? [
+        `另有 ${extras.length} 个工作区文件不在本次提交中(未跟踪/未暂存),`
+        + "不会被推送。"] : []),
+    ].join("\n");
+    task.summary.waiting = task.humanGate.createWaiting({
+      taskId: task.summary.id,
+      step: CLOUD_PUSH_CONFIRM_STEP,
+      callId,
+      questionInput: { questions: [{
+        question: `推送前确认:本次交付 ${committed.length} 个文件到 ${branch},清单是否正确?`,
+        options: [PUSH_CONFIRM_ACCEPT, PUSH_CONFIRM_REWORK],
+      }] },
+      context,
+    });
+    task.summary.status = "waiting_for_human";
+    task.summary.detail = "push 前人工确认:请核对交付文件清单";
+    this.persist(task);
+    this.notifyWaiting(task);
+    this.options.log?.(
+      `任务 ${task.summary.id} push 前确认卡已生成(HEAD ${snapshot.head.slice(0, 12)})`);
+    return false;
+  }
+
   private async deliverySelectionAllowsPush(task: TaskState): Promise<boolean> {
     const selection = task.summary.delivery_selection;
     if (!selection) return true;
@@ -7109,11 +7233,14 @@ export class TaskService {
         }
         return;
       }
+      if (!await this.pushConfirmationSatisfied(task, branch)) return;
       if (!await this.deliverySelectionAllowsPush(task)) return;
       if (!await this.preparePush(task, branch, baseline, epoch)) return;
       if (!this.current(task, epoch)) return;
       // prepush Agent 允许修复并产生新 commit；它收口后必须再核一遍，
-      // 否则审批时的白名单可能被最后一轮修复悄悄扩大。
+      // 否则审批时的白名单可能被最后一轮修复悄悄扩大。开着 push 前
+      // 确认时,HEAD 变化不判死而是重新举卡让人看 delta。
+      if (!await this.pushConfirmationSatisfied(task, branch)) return;
       if (!await this.deliverySelectionAllowsPush(task)) return;
       const previous = task.summary.delivery;
       const pushReceipt = await this.pushFromHost(task, branch);
@@ -8405,6 +8532,9 @@ export class TaskService {
       options?: string[];
     }>;
     if (!waiting || questions.length === 0) return undefined;
+    // push 前确认卡是用户**显式开启**的"我要亲自看一眼",月光免审批
+    // 不得代答它——两者都是用户意志,更具体的那个赢。
+    if (waiting.step === CLOUD_PUSH_CONFIRM_STEP) return undefined;
     // 分析单已确认拆单完毕,父会话再举的任何卡都不该到人(内网实锤:
     // task-5 确认后模型"好心"又举卡让人检视 task-6 的事——子任务有
     // 自己的检视闸,父单的活到确认就结束了)。整卡代答,催它收尾。
@@ -8543,6 +8673,35 @@ export class TaskService {
     };
   }
 
+  /** push 前人工确认开关。已推送(await_merge/终态)后再开没有意义,
+   * 如实拒绝;关掉时若正卡在确认卡上,作废卡并续推——人说不用看了,
+   * 机器不能还举着卡等。 */
+  setPushConfirmation(id: string, on: boolean): TaskSummary {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    const status = task.summary.status;
+    if (on && ["await_merge", "completed", "failed", "canceled"]
+      .includes(status)) {
+      throw new TaskControlError(
+        `任务已${status === "await_merge" ? "推送" : "收口"},push 前确认点已经过去`);
+    }
+    task.summary.push_confirmation = on || undefined;
+    const waiting = task.summary.waiting;
+    if (!on && waiting?.step === CLOUD_PUSH_CONFIRM_STEP) {
+      task.humanGate.supersede(waiting.waiting_id, {
+        stateVersion: waiting.state_version,
+        notes: "用户关闭 push 前确认,卡作废,继续推送",
+      });
+      task.summary.waiting = undefined;
+      task.summary.status = "verifying";
+      task.summary.detail = "已关闭 push 前确认,继续推送";
+      this.bypass(task, "关闭确认续推",
+        this.tryDeliver(task, task.controlEpoch));
+    }
+    this.persist(task);
+    return { ...task.summary };
+  }
+
   setTaskApprovalMode(
     id: string,
     mode: "inherit" | "manual" | "moonlight",
@@ -8608,6 +8767,7 @@ export class TaskService {
           : task.summary.title ?? task.summary.requirement,
         account,
         step: waiting.step,
+        context: waiting.context,
         questions: questions.map((item): NotifyQuestion => ({
           question: String(item.question ?? ""),
           options: Array.isArray(item.options) ? item.options.map(String) : [],

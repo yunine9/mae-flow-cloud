@@ -5769,6 +5769,13 @@ pre {
 .knowledge-flywheel-note { padding: 10px 20px; color: var(--faint); border-top: 1px solid var(--line); background: var(--surface-soft); font-size: var(--font-size-assist); line-height: 1.5; }
 .knowledge-flywheel-note span { margin-right: 6px; padding: 2px 5px; color: var(--accent); border-radius: 4px; background: var(--accent-soft); font-weight: 700; }
 
+/* push 前人工确认开关 */
+.push-confirm-toggle { display: inline-flex; align-items: center; gap: 6px; margin: 6px 0 0; color: var(--muted); font-size: var(--font-size-assist); cursor: pointer; user-select: none; }
+.push-confirm-toggle.on { color: var(--accent); }
+.push-confirm-toggle input { accent-color: var(--accent); }
+.push-confirm-toggle input:disabled + span { opacity: 0.6; }
+.push-confirm-error { margin-left: 8px; color: var(--danger); font-style: normal; }
+
 /* 推送前验证实时过程:命令与输出尾巴,全量在轮目录 bash 日志 */
 .prepush-live { margin: 8px 0 0; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); overflow: hidden; }
 .prepush-live-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 12px; border-bottom: 1px solid var(--line); background: var(--surface-soft); font-size: var(--font-size-assist); }
