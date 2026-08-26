@@ -6438,3 +6438,27 @@ body, .sidebar, .identity-bar, .launch-copy, .user-create-copy,
   .personal-action-list article { grid-template-columns: 28px minmax(0, 1fr); }
   .personal-action-list article > button { grid-column: 2; width: 100%; }
 }
+
+/* ---- 问题处理视图专属色调:淡红 ----
+   需求开发=淡紫(默认 --accent 族),问题处理进入时整体切淡红:
+   按钮/徽标/选中态/链接全部跟走,侧边栏选中条同步,让"在哪个流程
+   里"一眼可辨。覆盖块放文件末尾,同名变量按就近+后写优先。 */
+body[data-view="issues"] {
+  --accent: #d05a5a;
+  --accent-hover: #bc4747;
+  --accent-soft: #fdeeee;
+  --active: #cb5252;
+  --active-soft: #fdecec;
+}
+body[data-theme="dark"][data-view="issues"] {
+  --accent: #e98181;
+  --accent-hover: #f09797;
+  --accent-soft: rgba(231, 108, 108, .16);
+  --active: #df7f7f;
+  --active-soft: rgba(227, 106, 106, .14);
+}
+/* 侧边栏选中条:硬编码紫,按视图分区覆盖(含窄屏的下划线形态)。 */
+body[data-view="issues"] .nav-item.on { box-shadow: inset 3px 0 #d05a5a; }
+@media (max-width: 1080px) {
+  body[data-view="issues"] .nav-item.on { box-shadow: inset 0 -2px #d05a5a; }
+}

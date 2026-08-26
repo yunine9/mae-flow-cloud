@@ -464,6 +464,13 @@ export function App() {
     setSession(null);
   }
 
+  // 视图打标:问题处理(issues)用淡红主题,与需求流的淡紫视觉分区
+  // (body 级 data-view,CSS 变量作用域覆盖,见 style.css 尾部)。
+  useEffect(() => {
+    document.body.dataset.view = view;
+    return () => { delete document.body.dataset.view; };
+  }, [view]);
+
   function changeTheme(next: Theme) {
     document.documentElement.dataset.theme = next;
     setTheme(next);
