@@ -5824,6 +5824,12 @@ pre {
 .knowledge-shelf-version { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 4px 0; color: var(--muted); font-size: var(--font-size-assist); font-variant-numeric: tabular-nums; }
 .knowledge-shelf-version button { padding: 2px 10px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: var(--ink); font-size: var(--font-size-assist); cursor: pointer; }
 .knowledge-shelf-version button:disabled { opacity: .5; cursor: default; }
+.knowledge-rank-group { margin-bottom: 10px; }
+.knowledge-rank-group-head { display: flex; align-items: baseline; gap: 10px; padding: 8px 4px 4px; border-bottom: 1px solid var(--line); }
+.knowledge-rank-group-head strong { font-size: var(--font-size-assist); letter-spacing: .02em; }
+.knowledge-rank-group-head small { color: var(--faint); font-size: var(--font-size-assist); }
+.knowledge-rank-group-head span { margin-left: auto; color: var(--faint); font-size: var(--font-size-assist); font-variant-numeric: tabular-nums; }
+.knowledge-rank-thin { margin-left: 6px; padding: 0 5px; color: var(--faint); border: 1px solid var(--line); border-radius: 4px; font-size: var(--font-size-assist); font-style: normal; font-weight: 400; vertical-align: middle; }
 .knowledge-shelf-candidate { margin: 4px 0 8px; padding: 8px 10px; border: 1px dashed var(--line); border-radius: 8px; }
 .knowledge-shelf-candidate p { margin: 0 0 6px; color: var(--muted); font-size: var(--font-size-assist); line-height: 1.5; }
 .knowledge-shelf-candidate pre { margin: 0; padding: 8px 10px; max-height: 320px; overflow: auto; border-radius: 6px; background: color-mix(in srgb, var(--ink, #000) 5%, transparent); color: var(--text); font-size: var(--font-size-assist); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }

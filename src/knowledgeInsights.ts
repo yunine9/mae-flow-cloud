@@ -23,6 +23,9 @@ export interface KnowledgeInsightResource {
   kind: KnowledgeKind;
   name: string;
   path: string;
+  /** 可读性:选中资源带仓内扫描的描述,自发读取的文档带观测时抽的
+   * 首标题摘要。没有它,排行里就只剩文件名,人没法判断值不值得读。 */
+  description?: string;
   repository?: string;
   provided_tasks: number;
   selected_tasks: number;
@@ -331,6 +334,9 @@ export function buildTeamKnowledgeInsights(
         attention_tasks: 0,
       };
       item.name = resource.name || item.name;
+      if (!item.description && resource.description) {
+        item.description = resource.description;
+      }
       item.provided_tasks += 1;
       if (resource.selected) item.selected_tasks += 1;
       if (resource.loaded_count > 0) item.loaded_tasks += 1;

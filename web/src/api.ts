@@ -709,6 +709,8 @@ export interface KnowledgeInsightResource {
   kind: KnowledgeKind;
   name: string;
   path: string;
+  /** 可读性:选中资源=仓内扫描的描述;自发读取=观测时抽的首标题摘要。 */
+  description?: string;
   repository?: string;
   provided_tasks: number;
   selected_tasks: number;

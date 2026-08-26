@@ -217,3 +217,23 @@ test("货架效果账:消费率、prepush 一次过对照与修订信号", async
   assert.equal(flaky.signal, "high-friction");
   assert.equal(flaky.repair_tasks, 2);
 });
+
+test("聚合保留资源描述:可读性字段不许在聚合层丢失", () => {
+  const result = buildTeamKnowledgeInsights([{
+    id: "t1",
+    status: "completed",
+    knowledge_usage: {
+      summary: { resources: 1, loaded: 1, used: 1, skills_used: 0,
+        selected_unused: 0 },
+      resources: [{
+        id: "doc-1", kind: "document", name: "订单对接",
+        path: "docs/orders.md",
+        repository: "https://code.example/team/orders.git",
+        description: "订单域的对接说明与重试口径",
+        state: "used", available_count: 1, loaded_count: 1, read_count: 2,
+      }],
+      events: [],
+    },
+  }]);
+  assert.equal(result.resources[0].description, "订单域的对接说明与重试口径");
+});

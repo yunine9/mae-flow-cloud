@@ -86,6 +86,7 @@ export class KnowledgeTrace {
   private resources = new Map<string, KnowledgeResourceRef>();
   private directories: Array<{ directory: string; resource: KnowledgeResourceRef }> = [];
   private emitted = new Set<string>();
+  private summaries = new Map<string, string | undefined>();
 
   constructor(
     readonly file: string,
@@ -109,6 +110,28 @@ export class KnowledgeTrace {
     return parts.slice(-3).join("/");
   }
 
+  /** 自发被读的文档只有文件名,排行里毫无可读性(用户 2026-08-26 点名)。
+   * 观测那一刻顺手抽首个标题+首段当摘要:读一次、缓存、失败算了——
+   * 观测旁路的纪律,绝不为一行摘要拖住任何工具调用。 */
+  private summarize(absolute: string): string | undefined {
+    if (this.summaries.has(absolute)) return this.summaries.get(absolute);
+    let summary: string | undefined;
+    try {
+      const lines = readFileSync(absolute, "utf-8").slice(0, 4096)
+        .split("\n").map((line) => line.trim());
+      const heading = lines.find((line) => /^#{1,3}\s+\S/.test(line))
+        ?.replace(/^#+\s*/, "");
+      const body = lines.find((line) => line && !/^[#<|\-!\[]/.test(line)
+        && line !== heading);
+      summary = [heading, body].filter(Boolean).join(" — ")
+        .slice(0, 120) || undefined;
+    } catch {
+      summary = undefined;
+    }
+    this.summaries.set(absolute, summary);
+    return summary;
+  }
+
   private resourceFor(path: string): KnowledgeResourceRef | undefined {
     const absolute = resolve(path);
     const exact = this.resources.get(absolute);
@@ -127,6 +150,7 @@ export class KnowledgeTrace {
       kind: rules ? "rules" : "document",
       name: rules ? basename : safeName(rel),
       path: rel,
+      description: this.summarize(absolute),
     };
   }
 

@@ -42,20 +42,25 @@ function latest(value?: string): string {
   })}`;
 }
 
+const MIN_SAMPLE_TASKS = 3;
+
 function ResourceRow({ resource }: { resource: KnowledgeInsightResource }) {
   const reach = resource.provided_tasks > 0
     ? Math.round(resource.accessed_tasks / resource.provided_tasks * 100) : 0;
+  const thin = resource.provided_tasks < MIN_SAMPLE_TASKS;
   return <article className={`knowledge-rank kind-${resource.kind}`}>
     <span className="knowledge-rank-kind">{KIND_LABEL[resource.kind]}</span>
     <div className="knowledge-rank-main">
-      <strong title={resource.name}>{resource.name}</strong>
-      <span title={`${resource.repository ?? ""} · ${resource.path}`}>
-        {repositoryName(resource.repository)} · {resource.path}
+      <strong title={resource.path}>{resource.name}
+        {thin && <em className="knowledge-rank-thin" title={`只在 ${resource.provided_tasks} 个任务里出现过,消费率还说明不了问题`}>样本不足</em>}
+      </strong>
+      <span title={`${resource.repository ?? "团队级"} · ${resource.path}`}>
+        {resource.description || resource.path}
       </span>
     </div>
     <div className="knowledge-rank-reach" title={`${resource.provided_tasks} 个任务可用，${resource.accessed_tasks} 个主动访问`}>
       <span><i style={{ width: `${reach}%` }} /></span>
-      <small>{resource.accessed_tasks}/{resource.provided_tasks} 任务访问</small>
+      <small>{resource.accessed_tasks}/{resource.provided_tasks} 任务访问（{reach}%）</small>
     </div>
     <div className="knowledge-rank-outcome">
       <strong>{resource.access_events}</strong><small>访问</small>
@@ -64,6 +69,29 @@ function ResourceRow({ resource }: { resource: KnowledgeInsightResource }) {
     </div>
     <time dateTime={resource.last_used_at}>{latest(resource.last_used_at)}</time>
   </article>;
+}
+
+/** 一个分组一个榜:仓库级资源只在本仓任务里被消费,跨仓比绝对量
+ * 比的是流量不是价值(用户 2026-08-26 点名),所以按仓分组、组内按
+ * 消费率排,样本不足的沉底标注。 */
+function ResourceGroup({ title, note, items }: {
+  title: string;
+  note?: string;
+  items: KnowledgeInsightResource[];
+}) {
+  const [showAll, setShowAll] = useState(false);
+  const visible = showAll ? items : items.slice(0, 5);
+  return <div className="knowledge-rank-group">
+    <div className="knowledge-rank-group-head">
+      <strong>{title}</strong>
+      {note && <small>{note}</small>}
+      <span>{items.length} 项</span>
+    </div>
+    {visible.map((item) => <ResourceRow key={item.key} resource={item} />)}
+    {items.length > 5 && <button type="button" className="knowledge-show-all"
+      onClick={() => setShowAll((current) => !current)}>
+      {showAll ? "收起" : `展开全部 ${items.length} 项`}</button>}
+  </div>;
 }
 
 const OPERATION_LABEL: Record<SkillOperationRecord["action"], string> = {
@@ -382,17 +410,41 @@ export function KnowledgeFlywheel({
   admin?: boolean;
 }) {
   const [kind, setKind] = useState<"all" | KnowledgeKind>("all");
-  const [repository, setRepository] = useState("all");
-  const [showAll, setShowAll] = useState(false);
-  const repositories = useMemo(() => [...new Set(
-    (insights?.resources ?? []).map((item) => item.repository)
-      .filter((item): item is string => !!item),
-  )].sort(), [insights]);
-  const filtered = useMemo(() => (insights?.resources ?? []).filter((item) =>
-    (kind === "all" || item.kind === kind)
-      && (repository === "all" || item.repository === repository)),
-  [insights, kind, repository]);
-  const visible = showAll ? filtered : filtered.slice(0, 6);
+  // 分组代替跨仓混排:团队级(跨仓资产)一组在前,其余按仓一组一个榜。
+  // 组内排序:消费率(读取/装载)优先,样本不足(<3 单)沉底;绝对量只做
+  // 次级键——谁的仓单多谁霸榜的老毛病由此消除。
+  const groups = useMemo(() => {
+    const filtered = (insights?.resources ?? [])
+      .filter((item) => kind === "all" || item.kind === kind);
+    const byRepo = new Map<string, KnowledgeInsightResource[]>();
+    for (const item of filtered) {
+      const key = item.repository ?? "";
+      const list = byRepo.get(key) ?? [];
+      list.push(item);
+      byRepo.set(key, list);
+    }
+    const rate = (item: KnowledgeInsightResource) => item.provided_tasks > 0
+      ? item.accessed_tasks / item.provided_tasks : 0;
+    const sortGroup = (list: KnowledgeInsightResource[]) => [...list]
+      .sort((left, right) => {
+        const leftThin = left.provided_tasks < MIN_SAMPLE_TASKS;
+        const rightThin = right.provided_tasks < MIN_SAMPLE_TASKS;
+        if (leftThin !== rightThin) return leftThin ? 1 : -1;
+        return rate(right) - rate(left)
+          || right.accessed_tasks - left.accessed_tasks
+          || left.name.localeCompare(right.name);
+      });
+    return [...byRepo.entries()]
+      .map(([repo, list]) => ({
+        repo,
+        items: sortGroup(list),
+        activity: list.reduce((sum, item) => sum + item.accessed_tasks, 0),
+      }))
+      .sort((left, right) => (left.repo === "" ? -1 : right.repo === "" ? 1
+        : right.activity - left.activity
+          || left.repo.localeCompare(right.repo)));
+  }, [insights, kind]);
+  const total = groups.reduce((sum, group) => sum + group.items.length, 0);
 
   return <section className="knowledge-flywheel" aria-labelledby="knowledge-flywheel-title">
     <header className="knowledge-flywheel-head">
@@ -426,18 +478,20 @@ export function KnowledgeFlywheel({
 
       <div className="knowledge-flywheel-body">
         <div className="knowledge-ranking">
-          <div className="knowledge-panel-head"><div><strong>知识使用排行</strong><small>访问表示 Agent 主动读取或检索，不把“被提供”冒充“已使用”。</small></div><span>{filtered.length} 项</span></div>
+          <div className="knowledge-panel-head"><div><strong>知识使用排行</strong><small>访问表示 Agent 主动读取或检索，不把“被提供”冒充“已使用”；各仓单独排行，不与其他仓比较。</small></div><span>{total} 项</span></div>
           <div className="knowledge-filterbar">
             <div role="group" aria-label="按知识类型筛选">
-              {(["all", "rules", "document", "skill"] as const).map((value) => <button type="button" key={value} className={kind === value ? "on" : ""} aria-pressed={kind === value} onClick={() => { setKind(value); setShowAll(false); }}>{value === "all" ? "全部" : KIND_LABEL[value]}</button>)}
+              {(["all", "rules", "document", "skill"] as const).map((value) => <button type="button" key={value} className={kind === value ? "on" : ""} aria-pressed={kind === value} onClick={() => setKind(value)}>{value === "all" ? "全部" : KIND_LABEL[value]}</button>)}
             </div>
-            {repositories.length > 1 && <select aria-label="按仓库筛选知识" value={repository} onChange={(event) => { setRepository(event.target.value); setShowAll(false); }}><option value="all">全部仓库</option>{repositories.map((item) => <option value={item} key={item}>{repositoryName(item)}</option>)}</select>}
           </div>
           <div className="knowledge-ranking-list">
-            {visible.map((item) => <ResourceRow key={item.key} resource={item} />)}
-            {filtered.length === 0 && <div className="knowledge-ranking-empty">当前筛选下还没有知识使用记录。</div>}
+            {groups.map((group) => <ResourceGroup
+              key={group.repo || "__team__"}
+              title={group.repo ? repositoryName(group.repo) : "团队级资产（跨仓）"}
+              note={group.repo ? "组内按消费率排,受本仓单量影响,不跨仓比较" : undefined}
+              items={group.items} />)}
+            {total === 0 && <div className="knowledge-ranking-empty">当前筛选下还没有知识使用记录。</div>}
           </div>
-          {filtered.length > 6 && <button type="button" className="knowledge-show-all" onClick={() => setShowAll((current) => !current)}>{showAll ? "收起" : `查看全部 ${filtered.length} 项`}</button>}
         </div>
 
         <aside className="knowledge-opportunities">
