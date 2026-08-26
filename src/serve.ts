@@ -38,12 +38,9 @@ import { FakeGitPlatform } from "./gitPlatform.ts";
 import { IssueFlowService } from "./issueFlow/service.ts";
 import { createGoOpsTools } from "./issueFlow/opsTools.ts";
 import {
-  McpCodehubGateway,
   McpDtsGateway,
   McpGateway,
-  UnconfiguredCodehubGateway,
   UnconfiguredDtsGateway,
-  type CodehubGateway,
   type DtsGateway,
 } from "./issueFlow/gateways.ts";
 import { PgProjection } from "./projection.ts";
@@ -614,7 +611,6 @@ async function main(): Promise<void> {
   // 【遗留】DTS MCP 的 URL/工具名待用户提供后对拍;没配就 fail-loud,
   // 页面拉单会如实报"网关未配置",不静默降级。
   const dtsMcpUrl = flag("--dts-mcp-url");
-  const codehubMcpUrl = flag("--codehub-mcp-url");
   const mcpTokenFile = flag("--mcp-token-file")
     ?? (existsSync("/etc/mae-flow-cloud/mcp-token")
       ? "/etc/mae-flow-cloud/mcp-token" : undefined);
@@ -629,26 +625,18 @@ async function main(): Promise<void> {
       process.exit(2);
     }
   }
-  if ((dtsMcpUrl || codehubMcpUrl) && !mcpToken) {
+  if (dtsMcpUrl && !mcpToken) {
     console.error("[serve] 配置了 MCP 网关地址但没有 token:"
       + "请配置 --mcp-token-file(正式服务器为 /etc/mae-flow-cloud/mcp-token)");
     process.exit(2);
   }
   let issueDts: DtsGateway | undefined;
-  let issueCodehub: CodehubGateway | undefined;
   if (dtsMcpUrl && mcpToken) {
     issueDts = new McpDtsGateway(new McpGateway({
       url: dtsMcpUrl, token: mcpToken,
       log: (message) => console.log(`  [issue-dts] ${message}`),
     }));
     console.log(`[serve] 问题流 DTS 网关: ${dtsMcpUrl}`);
-  }
-  if (codehubMcpUrl && mcpToken) {
-    issueCodehub = new McpCodehubGateway(new McpGateway({
-      url: codehubMcpUrl, token: mcpToken,
-      log: (message) => console.log(`  [issue-codehub] ${message}`),
-    }));
-    console.log(`[serve] 问题流 Codehub 网关: ${codehubMcpUrl}`);
   }
   // 运维工具(拉日志/换库):在场即接上,凭据由保险箱解密后经环境
   // 变量注入子进程(见 src/issueFlow/opsTools.ts)。
@@ -664,7 +652,8 @@ async function main(): Promise<void> {
         })
       : undefined,
     dts: issueDts ?? new UnconfiguredDtsGateway(),
-    codehub: issueCodehub ?? new UnconfiguredCodehubGateway(),
+    // MR 与需求交付共用同一交付平台适配层(--platform)。
+    ...(platformUrl ? { platformUrl } : {}),
     maxConcurrentTurns: Number(flag("--issue-max-turns") ?? "2"),
     ...(isolateImage
       ? {

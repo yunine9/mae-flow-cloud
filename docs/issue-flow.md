@@ -53,8 +53,8 @@
 
 工具(会话内):`report_stage` / `fetch_logs`(宿主跑 fetch-logs 二进制,
 产物落工作区,Agent grep 真实文件)/ `build_deploy`(宿主跑 build-deploy,
-成功哨兵校验)/ `dts_get_ticket` / `push_branch` / `create_mr`(Codehub
-MCP:get_codehub_host → get_project_info → create → 超时判重)。
+成功哨兵校验)/ `dts_get_ticket` / `push_branch` / `create_mr`(经公共
+mrClient → 交付平台适配层 → codehub CLI,单号自动关联)。
 
 技能(每次会话物化到 `skills/`,改编自 playbook):issue-playbook(路线
 图)、issue-research(研究方法与非问题出口)、issue-delivery(分支/提交
@@ -66,14 +66,17 @@ MCP:get_codehub_host → get_project_info → create → 超时判重)。
 ```json
 {
   "dts-mcp-url": "<DTS MCP 网关地址>",
-  "codehub-mcp-url": "<Codehub MCP 网关地址>",
   "mcp-token-file": "/etc/mae-flow-cloud/mcp-token",
   "issue-max-turns": 2
 }
 ```
 
-- token 文件权限 600;两个网关共用同一个 token(用户口径)。任一网关
-  未配置时对应能力 fail-loud(页面/工具如实报"未配置",不静默降级)。
+- token 文件权限 600。DTS 网关未配置时拉单/查单 fail-loud(如实报
+  "未配置",不静默降级)。
+- **MR 不走 MCP**:问题流与需求交付共用同一个交付平台适配层
+  (`--platform`,src/platformAdapter.ts → codehub CLI),公共客户端
+  在 src/mrClient.ts——同格式、同身份头(x-mfc-git-token)、同单号
+  关联(dts_no → --e2e-issues)。
 - 拉日志/换库依赖 `assets/ops-tools` 二进制在场(linux 产物带执行位)。
 
 ## 问题流专用部署(--issue-only):需求依赖不阻塞问题流
@@ -107,8 +110,6 @@ task-/issue- 前缀互不碰撞)与 assets/ops-tools 二进制(改由问题流�
 
 - 【遗留,待用户提供后接线】DTS MCP 的工具名与返回形状未对拍:
   `src/issueFlow/gateways.ts` 的解析留了显式缝,形状不符会如实报错。
-- Codehub MCP 的 create 超时判重逻辑按 playbook 记录实现,未经真网关
-  对拍。
 - 问题 MR 不接平台的流水线修复环/合入监视(CodeHub 门禁仍是外部权威);
   后续可加只读展示。
 - 崩溃恢复是摘要式(重启后按 issue.json + issue-analysis.md 重播种),

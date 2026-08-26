@@ -204,23 +204,44 @@ test("单号门禁:未绑定单号时 push_branch 被机械拒绝", async () => 
   }
 });
 
-test("宿主推送:绑定单号后,推送走宿主且分支名受校验", async () => {
+test("宿主推送与提 MR:门禁、真推送、公共 mrClient(与需求交付同格式)", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-push-"));
   const origin = bareOrigin(dataDir);
   const branch = "master_dev_DTS2026082001317";
+  // 假交付平台:记录请求形状,回 MR 链接——与适配层 POST /mr 同构。
+  const seen: Array<{ headers: Record<string, string>; body: any }> = [];
+  const platform = createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk) => chunks.push(chunk as Buffer));
+    request.on("end", () => {
+      seen.push({
+        headers: request.headers as Record<string, string>,
+        body: JSON.parse(Buffer.concat(chunks).toString("utf-8") || "{}"),
+      });
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        url: `http://codehub.test/mr/1024`, id: 1024,
+      }));
+    });
+  });
+  await new Promise<void>((resolve) => platform.listen(0, "127.0.0.1", resolve));
+  const platformUrl = `http://127.0.0.1:${(platform.address() as { port: number }).port}`;
   const script: Scene[] = [
     { tool: { name: "bash", input: { command:
       `cd repo && git checkout -q -b ${branch} && `
       + "git -c user.name=test -c user.email=t@e commit -q --allow-empty "
       + "-m '[DTS2026082001317][fix] 修复登录超时'" } } },
     { tool: { name: "push_branch", input: { branch } } },
-    { text: "已推送,可提 MR。" },
+    { tool: { name: "create_mr", input: {} } },
+    { text: "已推送并提 MR。" },
   ];
   const model = new ScriptedModelServer(script);
   await model.start();
   const service = new IssueFlowService({
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
+    platformUrl,
+    gitCredential: () => ({ username: "dev", password: "git-token" }),
   });
   try {
     const created = service.create({
@@ -235,8 +256,9 @@ test("宿主推送:绑定单号后,推送走宿主且分支名受校验", async 
       const issue = service.get(created.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
       return issue.status === "idle" ? issue : undefined;
-    }, "推送回合收口");
-    const push = service.get(created.id).push;
+    }, "推送+提MR回合收口");
+    const final = service.get(created.id);
+    const push = final.push;
     assert.ok(push, "推送应记录在案");
     assert.equal(push.branch, branch);
     // 远端真实状态(不信任务自述):裸仓里分支应指向同一 SHA。
@@ -251,11 +273,21 @@ test("宿主推送:绑定单号后,推送走宿主且分支名受校验", async 
         "config", "--get", "remote.origin.pushurl"],
       { encoding: "utf-8" });
     assert.match(pushurl.stdout, /\/dev\/null/);
-    // 分支名门禁:非 master_工号_单号 形状的分支拒绝。
-    assert.equal(service.get(created.id).push?.branch, branch);
+    // MR:走公共客户端,单号关联与身份头同需求交付一个格式。
+    assert.ok(final.mr, "MR 应记录在案");
+    assert.equal(final.mr!.url, "http://codehub.test/mr/1024");
+    assert.equal(final.mr!.iid, "1024");
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].body.source_branch, branch);
+    assert.equal(seen[0].body.target_branch, "master");
+    assert.equal(seen[0].body.dts_no, "DTS2026082001317", "单号要走 dts_no 关联");
+    assert.match(String(seen[0].body.title), /^\[DTS2026082001317\]/);
+    assert.equal(seen[0].headers["x-mfc-git-user"], "dev");
+    assert.equal(seen[0].headers["x-mfc-git-token"], "git-token");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
+    await new Promise<void>((resolve) => platform.close(() => resolve()));
   }
 });
 

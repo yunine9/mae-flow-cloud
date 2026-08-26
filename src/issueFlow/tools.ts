@@ -16,12 +16,13 @@ import {
   type IssueSessionState,
 } from "./state.ts";
 import type { IssueOpsTools } from "./opsTools.ts";
-import type { DtsGateway, CodehubGateway } from "./gateways.ts";
+import type { DtsGateway } from "./gateways.ts";
 import {
   currentBranch,
   pushFromIssueWorkspace,
   type GitCredential,
 } from "./issueGit.ts";
+import { createMergeRequest } from "../mrClient.ts";
 
 export interface IssueToolContext {
   /** 活状态引用(服务持有,工具直接读)。 */
@@ -34,7 +35,8 @@ export interface IssueToolContext {
   persist(): void;
   ops?: IssueOpsTools;
   dts?: DtsGateway;
-  codehub?: CodehubGateway;
+  /** 交付平台适配层地址(--platform);MR 创建走公共 mrClient。 */
+  platformUrl?: string;
   /** 宿主侧解密后的环境密码;未配置环境时为 undefined。 */
   environmentPassword?(): string | undefined;
   gitCredential?(): GitCredential | undefined;
@@ -218,12 +220,11 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     name: "create_mr",
     label: "Create Merge Request",
     description:
-      "在 CodeHub 上为已推送的修复分支创建合并请求(不改合并——合入由"
-      + "用户在门禁通过后决定)。前置:已绑定单号、分支已 push_branch。"
-      + "title 缺省 [单号] 会话标题。",
+      "为已推送的修复分支创建合并请求(经交付平台适配层调 codehub CLI;"
+      + "单号自动关联,合入由用户在门禁通过后决定)。前置:已绑定单号、"
+      + "分支已 push_branch。title 缺省 [单号] 会话标题。",
     parameters: Type.Object({
       title: Type.Optional(Type.String({ description: "MR 标题;缺省 [单号] 问题标题" })),
-      description: Type.Optional(Type.String({ description: "MR 描述:改了什么、验证结果" })),
       target_branch: Type.Optional(Type.String({
         description: "目标分支,缺省 master",
       })),
@@ -233,86 +234,38 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       if (!state.ticket) {
         fail("单号门禁:会话尚未绑定 DTS 单号,不能创建 MR");
       }
-      if (!ctx.codehub) fail("Codehub 网关未配置(部署需 --codehub-mcp-url)");
       if (!state.push) {
         fail("分支还没有推送记录:请先调用 push_branch,再创建 MR");
       }
-      const branch = state.push.branch;
+      const platformUrl = ctx.platformUrl;
+      if (!platformUrl) {
+        fail("交付平台未配置(部署需 --platform 接适配层),无法创建 MR");
+      }
+      if (!state.repo_url) fail("会话没有权威代码仓地址,拒绝创建 MR");
       const target = String(params.target_branch ?? "").trim() || "master";
       const title = String(params.title ?? "").trim()
         || `[${state.ticket}] ${state.title}`;
-      const description = String(params.description ?? "").trim()
-        || `${state.title}\n\n(由问题会话生成,详见 issue-analysis.md)`;
-      const call = (tool: string, args: Record<string, unknown>, timeoutMs?: number) =>
-        ctx.codehub!.call(tool, args, timeoutMs);
-      const text = (result: unknown) => ctx.codehub!.text(result);
-
-      const hostResult = await call("get_codehub_host", { git_url: state.repo_url });
-      const codehubHost = text(hostResult).trim().split("\n")[0];
-      if (!codehubHost) fail("get_codehub_host 未返回可用 host");
-      const projectResult = await call("get_project_info", {
-        codehub_host: codehubHost, git_url: state.repo_url,
-      });
-      const projectText = text(projectResult);
-      const projectId = Number(/"?project_id"?\s*[:=]\s*(\d+)/.exec(projectText)?.[1] ?? 0);
-      if (!projectId) {
-        fail(`get_project_info 未解析出 project_id: ${projectText.slice(0, 200)}`);
-      }
-      const mrArgs = {
-        codehub_host: codehubHost,
-        project_id: projectId,
-        source_branch: branch,
-        target_branch: target,
+      const receipt = await createMergeRequest({
+        platformUrl,
+        repo: state.repo_url,
+        sourceBranch: state.push.branch,
+        targetBranch: target,
         title,
-        description,
-        issue_nums: state.ticket,
-      };
-      // CodeHub 网关 create 超时短(~5s):超时≠失败,先判重再定论。
-      let created: unknown;
-      try {
-        created = await call("create_merge_request", mrArgs, 15_000);
-      } catch {
-        created = undefined;
-      }
-      let mrUrl = created === undefined ? "" : extractUrl(text(created));
-      let iid = created === undefined ? "" : extractIid(text(created));
-      if (!mrUrl) {
-        const listed = await call("list_merge_requests", {
-          codehub_host: codehubHost, project_id: projectId,
-        }).catch(() => undefined);
-        const listedText = listed === undefined ? "" : text(listed);
-        mrUrl = extractUrl(listedText, branch);
-        iid = extractIid(listedText);
-      }
-      if (!mrUrl) fail("MR 创建失败且判重未找到已存在的 MR——请把上述报错呈现给用户");
+        dtsNo: state.ticket,
+        credential: ctx.gitCredential?.(),
+      });
       state.mr = {
-        branch, title, url: mrUrl,
-        ...(iid ? { iid } : {}),
+        branch: state.push.branch,
+        title,
+        url: receipt.url,
+        ...(receipt.id !== undefined ? { iid: String(receipt.id) } : {}),
         at: new Date().toISOString(),
       };
       ctx.persist();
-      return ok(`MR 已创建: ${mrUrl}\n(source ${branch} → ${target},`
+      return ok(`MR 已创建: ${receipt.url}\n(source ${state.push.branch} → ${target},`
         + `关联单号 ${state.ticket})。合入由用户在门禁通过后决定。`);
     },
   }));
 
   return tools;
-}
-
-function extractUrl(text: string, branch?: string): string {
-  const match = /https?:\/\/[^\s"'\\]+\/merge_requests\/\d+/.exec(text);
-  if (match) return match[0];
-  if (branch) {
-    const row = text.split("\n").find((line) => line.includes(branch)
-      && /https?:\/\//.test(line));
-    const inRow = row ? /https?:\/\/[^\s"'\\]+/.exec(row) : undefined;
-    if (inRow) return inRow[0];
-  }
-  return "";
-}
-
-function extractIid(text: string): string {
-  return /"(?:iid|number)"\s*:\s*"?(\d+)/.exec(text)?.[1]
-    ?? /merge_requests\/(\d+)/.exec(text)?.[1]
-    ?? "";
 }

@@ -194,6 +194,7 @@ import {
   reclaimWorkspace,
 } from "./workspaceReclaim.ts";
 import { projectTaskFocus, type TaskFocus } from "./taskFocus.ts";
+import { createMergeRequest } from "./mrClient.ts";
 import {
   DEVELOPER_ASSISTANT_SESSION,
   appendDeveloperAssistantMessage,
@@ -7096,17 +7097,21 @@ export class TaskService {
       const mrStarted = new Date().toISOString();
       ledger({ idemKey: mrKey, kind: "mr_create", request: mrRequest,
                sha, startedAt: mrStarted });
-      const mr = await fetch(`${platformUrl}/mr`, {
-        method: "POST",
-        headers: this.platformIdentity(task),
-        body: JSON.stringify(mrRequest),
-      }).then((r) => {
-        if (!r.ok) throw new Error(`MR 创建失败 HTTP ${r.status}`);
-        return readJson(r);
+      // MR 创建走公共客户端(与问题流共用同一格式):适配层负责
+      // codehub CLI、单号关联与输出抽取,这里只递身份与事实。
+      const mr = await createMergeRequest({
+        platformUrl,
+        repo: mrRequest.repo ?? pushReceipt.url ?? undefined,
+        sourceBranch: branch,
+        targetBranch: baseline,
+        title: mrRequest.title,
+        ...(mrRequest.dts_no ? { dtsNo: mrRequest.dts_no } : {}),
+        credential: this.options.gitCredential?.(task.summary.luban_account),
       });
       if (!this.current(task, epoch)) return;
       ledger({ idemKey: mrKey, kind: "mr_create", request: mrRequest,
-               sha, startedAt: mrStarted, result: mr,
+               sha, startedAt: mrStarted,
+               result: { url: mr.url, id: mr.id },
                finishedAt: new Date().toISOString() });
       const runKey = `pipeline:${sha}`;
       const runStarted = new Date().toISOString();

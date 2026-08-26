@@ -722,7 +722,6 @@ Skill 需要补说明。该台账是 fail-open 观测旁路，不能替代质量
   "luban-header": ["Authorization: Bearer <密钥>"],
   "luban-plugin-token-file": "/etc/mae-flow-cloud/luban-plugin.token",
   "dts-mcp-url": "<DTS MCP 网关地址(问题流拉单/查单)>",
-  "codehub-mcp-url": "<Codehub MCP 网关地址(问题流提 MR)>",
   "mcp-token-file": "/etc/mae-flow-cloud/mcp-token",
   "issue-max-turns": 2,
   "issue-only": false,
@@ -740,7 +739,7 @@ Skill 需要补说明。该台账是 fail-open 观测旁路，不能替代质量
 }
 ```
 
-问题流的 MCP token(DTS 与 Codehub 共用):
+问题流的 MCP token(仅 DTS 网关用;提 MR 复用上方 --platform 适配层):
 
 ```bash
 install -m 600 /dev/null /etc/mae-flow-cloud/mcp-token

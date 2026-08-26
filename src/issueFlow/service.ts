@@ -40,7 +40,7 @@ import {
   type GitCredential,
 } from "./issueGit.ts";
 import type { IssueOpsTools } from "./opsTools.ts";
-import type { DtsGateway, CodehubGateway } from "./gateways.ts";
+import type { DtsGateway } from "./gateways.ts";
 import { createIssueTools, type IssueToolContext } from "./tools.ts";
 import { issueOpeningPrompt, issueResumePrompt, materializeIssueSkills } from "./prompt.ts";
 
@@ -93,7 +93,8 @@ export interface IssueFlowOptions {
     (GitCredential & { email?: string }) | undefined;
   opsTools?: IssueOpsTools;
   dts?: DtsGateway;
-  codehub?: CodehubGateway;
+  /** 交付平台适配层(--platform):MR 创建与需求交付共用同一端点。 */
+  platformUrl?: string;
   vault?: IssueEnvironmentVault;
   maxConcurrentTurns?: number;
   isolation?: IssueIsolation;
@@ -458,7 +459,7 @@ export class IssueFlowService {
       persist: () => saveState(live.root, live.state),
       ops: this.options.opsTools,
       dts: this.options.dts,
-      codehub: this.options.codehub,
+      platformUrl: this.options.platformUrl,
       environmentPassword: () => {
         const ref = live.state.environment?.credential_ref;
         return ref

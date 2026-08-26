@@ -265,25 +265,6 @@ export class McpDtsGateway implements DtsGateway {
   }
 }
 
-// ---- Codehub MR 网关 ----
-
-export interface CodehubGateway {
-  call(tool: string, args: Record<string, unknown>, timeoutMs?: number): Promise<unknown>;
-  text(result: unknown): string;
-}
-
-export class McpCodehubGateway implements CodehubGateway {
-  constructor(private readonly gateway: McpGateway) {}
-  call(tool: string, args: Record<string, unknown>, timeoutMs?: number) {
-    // CodeHub 网关对 create 的超时较短(约 5s,skill 实战记录),
-    // 缺省预算给到 30s,由调用方按需收紧。
-    return this.gateway.call(tool, args, timeoutMs ?? 30_000);
-  }
-  text(result: unknown): string {
-    return mcpResultText(result);
-  }
-}
-
 // ---- 未配置网关:fail-loud 的占位 ----
 
 export class UnconfiguredDtsGateway implements DtsGateway {
@@ -300,16 +281,3 @@ export class UnconfiguredDtsGateway implements DtsGateway {
   }
 }
 
-export class UnconfiguredCodehubGateway implements CodehubGateway {
-  readonly reason: string;
-  constructor(reason = "Codehub MCP 网关未配置(启动需 --codehub-mcp-url;"
-    + "与 DTS 共用 --mcp-token-file 的 token)") {
-    this.reason = reason;
-  }
-  async call(_tool: string, _args: Record<string, unknown>): Promise<unknown> {
-    throw new McpGatewayError(this.reason);
-  }
-  text(): string {
-    return this.reason;
-  }
-}
