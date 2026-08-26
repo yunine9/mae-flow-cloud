@@ -206,6 +206,16 @@ export function TaskCard({
               </span>
             </div>
           )}
+          {task.baseline_build?.status === "failed" && (
+            <div className="alert">
+              <strong>基线编译失败(环境预热)</strong>
+              <span>
+                环境或上游问题,与本单增量无关;详情在工作台执行现场。
+                {task.baseline_build.detail
+                  ? ` ${task.baseline_build.detail.slice(0, 160)}` : ""}
+              </span>
+            </div>
+          )}
           {repairStopped(task) && (
             <div className="alert">
               <strong>

@@ -74,10 +74,17 @@ function linesOf(event: SemanticEvent): LiveLine[] {
 export function PrepushLiveLog({
   taskId,
   active,
+  source = tailPrepushEvents,
+  title = "验证过程",
+  emptyText = "等待验证 Agent 的第一条命令……",
 }: {
   taskId: string;
   /** 验证是否进行中:进行中订阅;结束后不再订阅但保留已收现场。 */
   active: boolean;
+  /** 事件源(默认 prepush;环境预热等同构流复用本组件时替换)。 */
+  source?: typeof tailPrepushEvents;
+  title?: string;
+  emptyText?: string;
 }) {
   const [lines, setLines] = useState<LiveLine[]>([]);
   const [state, setState] = useState<SseConnectionState>("connecting");
@@ -87,7 +94,7 @@ export function PrepushLiveLog({
     if (!active) return;
     seen.current = new Set();
     setLines([]);
-    return tailPrepushEvents(taskId, (event) => {
+    return source(taskId, (event) => {
       // EventSource 断线重连时服务端整文件重放:按事件锚去重。
       const anchor = `${event.sessionId ?? "main"}:${event.eventId}`;
       if (seen.current.has(anchor)) return;
@@ -105,7 +112,7 @@ export function PrepushLiveLog({
   if (!active && lines.length === 0) return null;
   return <div className="prepush-live" aria-label="推送前验证实时过程">
     <div className="prepush-live-head">
-      <strong>验证过程</strong>
+      <strong>{title}</strong>
       {active
         ? <span className={`prepush-live-state is-${state}`}>{
           state === "live" ? "实时"
@@ -114,7 +121,7 @@ export function PrepushLiveLog({
     </div>
     <div className="prepush-live-body" ref={scroller}>
       {lines.length === 0
-        && <p className="prepush-live-empty">等待验证 Agent 的第一条命令……</p>}
+        && <p className="prepush-live-empty">{emptyText}</p>}
       {lines.map((line) => <pre
         key={line.key} className={`line-${line.kind}`}>{line.text}</pre>)}
     </div>

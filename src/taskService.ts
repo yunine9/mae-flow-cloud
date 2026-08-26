@@ -169,6 +169,13 @@ import {
   type PrePushRunner,
 } from "./prepushAgent.ts";
 import {
+  parseWarmupReport,
+  warmupMission,
+  type WarmupRunRequest,
+  type WarmupRunResult,
+  type WarmupRunner,
+} from "./warmupAgent.ts";
+import {
   detectPrePushBuildProfile,
   prePushCommandTimeoutSeconds,
   resolvePrePushExecutionBudget,
@@ -449,6 +456,18 @@ export interface TaskSummary {
   /** 模型提供方真实上报的任务级累计与最近一分钟吞吐。主/子/prepush
    * Agent 统一计入；缺席表示网关没有可靠 usage，绝不按字符数估算。 */
   token_usage?: TaskTokenUsage;
+  /** 环境预热编译(观测旁路,fail-open):现场就绪后专职会话在编码
+   * 容器里编译基线——验环境+焐缓存+沉淀构建入口。收据绑起跑 SHA,
+   * 基线红=环境/上游的锅;结果绝不构成交付证据(核销在 prepush+
+   * 流水线)。 */
+  baseline_build?: {
+    status: "running" | "passed" | "failed" | "infrastructure_failure";
+    sha: string;
+    detail?: string;
+    build_command?: string;
+    started_at: string;
+    finished_at?: string;
+  };
   workspace: string;
   /** 现场被回收的时刻(ISO)。有值 = 克隆等重货已删,台账还在。
    * 它还是一道闸:恢复时**不许再拿内核状态重新裁决这单**——原件已经
@@ -631,6 +650,16 @@ export interface TaskServiceOptions {
      * (报告 D3):平台文化是"回复归作者,resolve 归检视人",代点
      * 是越权。平台/团队明确允许代点的部署再打开。 */
     resolveDiscussions?: boolean;
+  };
+  /** 环境预热编译专员(观测旁路)。**缺席即不启用**——serve/pilot 在
+   * 隔离模式下显式开启;隐式默认开曾把 prepushIntegration 的 linear
+   * 剧本搅乱(预热会话偷吃场景),测试形态必须零意外会话。runner 是
+   * 测试注入口,生产走编码容器里的独立 Pi 会话。 */
+  warmup?: {
+    enabled?: boolean;
+    runner?: WarmupRunner;
+    /** 专员会话墙钟预算,超时如实记 infrastructure_failure(默认 25 分钟)。 */
+    attemptTimeoutMs?: number;
   };
   /** 推送前的 Cloud-native 编译/UT Agent。生产 serve 默认启用；测试、
    * pilot 或渐进部署不配时保持旧交付路径。runner 是窄测试/私有执行器
@@ -966,6 +995,8 @@ interface TaskState {
   /** 流水线证据核销重试的防重入锁。纯宿主 timer，不占 Agent 会话。 */
   evidenceRetryActive?: boolean;
   deliveryRecoveryActive?: boolean;
+  /** 环境预热的防重入锁(内存态):一任务只跑一个预热专员。 */
+  warmupActive?: boolean;
   /** 所有 push 入口共享同一个异步准备动作；避免恢复轮询与会话收口
    * 同时撞进来，为同一 HEAD 启两个编译 Agent。 */
   prepushActive?: Promise<boolean>;
@@ -2449,6 +2480,200 @@ export class TaskService {
       return undefined; // prepush/ 还没建:本任务尚未走到推送前验证
     }
     return best ? join(best.dir, "events.jsonl") : undefined;
+  }
+
+  warmupEventLogPath(id: string): string | undefined {
+    const task = this.tasks.get(id);
+    if (!task) return undefined;
+    const path = join(task.summary.workspace, "warmup", "events.jsonl");
+    return existsSync(path) ? path : undefined;
+  }
+
+  /** 环境预热编译(观测旁路,fail-open):现场就绪即后台开跑,与主
+   * Agent 的需求澄清并行——那段时间没人动代码,墙钟是免费的。任何
+   * 失败只记账+留日志,绝不影响任务状态;"不许卡死"红线下它连等待
+   * 都不引入。 */
+  private startBaselineWarmup(task: TaskState, epoch: number): void {
+    try {
+      const configured = this.options.warmup;
+      if (!configured || configured.enabled === false) return;
+      // 原生路径要真容器;测试注入 runner 时放行。
+      if (!configured.runner && !this.options.isolation) return;
+      if (this.isRequirementAnalysis(task)) return; // 分析单没有可编译的仓
+      if (!task.cwd || task.warmupActive) return;
+      // 收过口的收据不重跑(重启恢复同理:缓存已经热了);
+      // "running" 而无 finished_at 是崩溃残留,重跑并覆盖。
+      if (task.summary.baseline_build?.finished_at) return;
+      task.warmupActive = true;
+      void this.performBaselineWarmup(task, epoch)
+        .catch((error) => this.options.log?.(
+          `任务 ${task.summary.id} 环境预热异常(fail-open): ${String(error)}`))
+        .finally(() => { task.warmupActive = false; });
+    } catch (error) {
+      this.options.log?.(
+        `任务 ${task.summary.id} 环境预热启动失败(fail-open): ${String(error)}`);
+    }
+  }
+
+  private async performBaselineWarmup(
+    task: TaskState,
+    epoch: number,
+  ): Promise<void> {
+    const head = await runSafeWorktreeGitAsync(
+      task.cwd!, ["rev-parse", "--verify", "HEAD"], { timeoutMs: 30_000 });
+    const sha = String(head.stdout ?? "").trim();
+    const startedAt = new Date().toISOString();
+    if (head.status !== 0 || !sha) {
+      task.summary.baseline_build = {
+        status: "infrastructure_failure", sha: "",
+        detail: `读取基线 HEAD 失败: ${String(head.stderr ?? "").slice(0, 200)}`,
+        started_at: startedAt, finished_at: new Date().toISOString(),
+      };
+      this.persist(task);
+      return;
+    }
+    task.summary.baseline_build = {
+      status: "running", sha, started_at: startedAt,
+    };
+    this.persist(task);
+    this.options.log?.(
+      `任务 ${task.summary.id} 环境预热开跑(基线 ${sha.slice(0, 12)})`);
+    const request: WarmupRunRequest = {
+      taskId: task.summary.id, workspace: task.cwd!, sha,
+    };
+    let result: WarmupRunResult;
+    try {
+      result = await (this.options.warmup?.runner
+        ? this.options.warmup.runner(request)
+        : this.runCloudWarmupAgent(task, request));
+    } catch (error) {
+      result = {
+        status: "infrastructure_failure",
+        message: String(
+          error instanceof Error ? error.message : error).slice(0, 300),
+      };
+    }
+    if (!this.tasks.has(task.summary.id)) return;
+    task.summary.baseline_build = {
+      status: result.status,
+      sha,
+      ...(result.message ? { detail: result.message.slice(0, 600) } : {}),
+      ...(result.build_command
+        ? { build_command: result.build_command } : {}),
+      started_at: startedAt,
+      finished_at: new Date().toISOString(),
+    };
+    this.persist(task);
+    void epoch; // 收据不锁 epoch:会话重建了,预热事实照样成立。
+    this.options.log?.(
+      `任务 ${task.summary.id} 环境预热收口: ${result.status}`
+      + (result.message ? ` — ${result.message.slice(0, 120)}` : ""));
+  }
+
+  /** 预热原生执行器:编码容器里的独立 Pi 会话。与 prepush 同构但更简
+   * ——不修复、不建容器、不产证据。同一容器两个会话不违反"两个容器
+   * 不写同一工作区";此刻主 Agent 还在需求澄清,工作区没人写。 */
+  private async runCloudWarmupAgent(
+    task: TaskState,
+    request: WarmupRunRequest,
+  ): Promise<WarmupRunResult> {
+    if (!task.cwd) throw new Error("环境预热缺少代码工作区");
+    const agentDir = join(task.summary.workspace, "pi-agent");
+    mkdirSync(agentDir, { recursive: true });
+    this.hardenAgentGitBoundary(agentDir, task.cwd);
+    const modelOverride = this.options.settings?.models() ?? {};
+    writeFileSync(join(agentDir, "models.json"),
+      JSON.stringify(modelOverride.json ?? this.options.modelsJson));
+    const runRoot = join(task.summary.workspace, "warmup");
+    mkdirSync(runRoot, { recursive: true });
+    const eventLog = new EventLog(join(runRoot, "events.jsonl"));
+    const transcript = new TranscriptStore(
+      join(runRoot, "transcript.jsonl"), "main");
+    const attemptTimeoutMs =
+      this.options.warmup?.attemptTimeoutMs ?? 25 * 60_000;
+    let timedOut = false;
+    const driver = await CloudSession.create({
+      taskId: `${task.summary.id}:warmup`,
+      workspace: task.cwd,
+      agentDir,
+      hostSkillsDir: join(this.options.dataDir, "skills"),
+      repositorySkillPaths: [],
+      repositorySkillResources: [],
+      repositoryKnowledge: [],
+      knowledgeTrace: this.knowledgeTrace(task, task.cwd),
+      provider: task.summary.model_choice?.provider
+        ?? modelOverride.provider ?? this.options.provider,
+      model: task.summary.model_choice?.model
+        ?? modelOverride.model ?? this.options.model,
+      eventLog,
+      transcript,
+      gate: new GateService({
+        contract: createPrePushGateContract(this.options.contract),
+        workspace: task.cwd,
+        cwd: task.cwd,
+        log: this.options.log,
+        failClosed: Boolean(this.options.host),
+      }),
+      humanGate: task.humanGate,
+      allowHumanQuestions: false,
+      sessionId: "warmup",
+      currentStep: () => "环境预热编译",
+      compactAnchor: () =>
+        `环境预热编译任务(基线 ${request.sha.slice(0, 12)})`,
+      onTokenUsage: (sample) => this.recordTaskTokenUsage(task, sample),
+      bashOperations: this.options.isolation
+        ? {
+            exec: async (command, dir, execOptions) =>
+              (await this.activeTaskContainer(task))
+                .exec(command, dir, execOptions),
+          }
+        : undefined,
+      afterFileMutation: this.options.isolation
+        ? (path) => {
+          repairContainerMutationOwnership({
+            workspace: task.cwd!,
+            path,
+            user: this.options.isolation?.user,
+          });
+        }
+        : undefined,
+      log: this.options.log,
+    });
+    const timer = setTimeout(() => {
+      timedOut = true;
+      void driver.abort().catch(() => undefined);
+    }, attemptTimeoutMs);
+    timer.unref?.();
+    try {
+      let outcome = await driver.start(warmupMission(request));
+      for (let correction = 0; correction < 2; correction += 1) {
+        if (timedOut) {
+          return {
+            status: "infrastructure_failure",
+            message: `环境预热超过 ${Math.ceil(attemptTimeoutMs / 60_000)} `
+              + "分钟预算,已安全停止;不代表基线编译失败",
+          };
+        }
+        if (outcome.status === "session_ended") {
+          return {
+            status: "infrastructure_failure",
+            message: outcome.detail ?? outcome.reason ?? "预热会话异常结束",
+          };
+        }
+        const report = parseWarmupReport(driver.finalReply());
+        if (report) return report;
+        // 报告缺失只是格式问题,给一次补交机会,别把整轮预热判死。
+        outcome = await driver.continueWith(
+          "预热尚未收口:请按任务说明输出单行 JSON 的 <warmup-result> 结构。");
+      }
+      return {
+        status: "infrastructure_failure",
+        message: "预热会话未产出合法的 <warmup-result> 报告",
+      };
+    } finally {
+      clearTimeout(timer);
+      driver.dispose();
+    }
   }
 
   /** 行为摘要(只读旁路):事件流折叠成"此刻在干嘛/干了什么/有什么
@@ -6322,6 +6547,8 @@ export class TaskService {
         await this.finishPause(task, "running");
         return;
       }
+      // 环境预热与主 Agent 并行:此刻它在需求澄清,没人动代码。
+      this.startBaselineWarmup(task, epoch);
       // 重建会话:恢复期收到的决定先补登记(tool_result 与崩溃前的
       // tool_use 行 join,答案进内核台账),再从内核 current 续跑。
       // 内核模式下克隆丢失=现场没了,决定无处可注,只能从头来。

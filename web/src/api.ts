@@ -414,6 +414,16 @@ export interface TaskSummary {
   last_progress_at?: string;
   completed_at?: string;
   token_usage?: TaskTokenUsage;
+  /** 环境预热编译收据(服务端镜像):基线红=环境/上游的锅,与本单
+   * 增量无关;不构成任何交付证据。 */
+  baseline_build?: {
+    status: "running" | "passed" | "failed" | "infrastructure_failure";
+    sha: string;
+    detail?: string;
+    build_command?: string;
+    started_at: string;
+    finished_at?: string;
+  };
   /** 现场被回收的时刻。有值 = 代码克隆等大件已删,过程记录/证据/批注仍在。
    * 页面据此如实说明,别让人对着 404 的代码差异发愣。 */
   workspace_reclaimed_at?: string;
@@ -1393,6 +1403,20 @@ export function tailEvents(
 
 /** 推送前验证的实时事件流:换轮(修复后新 HEAD 再验)由服务端切文件
  * 并从头重放新一轮,前端只管渲染。 */
+/** 环境预热编译的实时事件流,与 prepush 同一套 SSE 语义。 */
+export function tailWarmupEvents(
+  taskId: string,
+  onEvent: (event: SemanticEvent) => void,
+  onState?: (state: SseConnectionState) => void,
+): () => void {
+  onState?.("connecting");
+  const source = new EventSource(`/tasks/${taskId}/warmup/events`);
+  source.onopen = () => onState?.("live");
+  source.onmessage = (message) => onEvent(JSON.parse(message.data));
+  source.onerror = () => onState?.("reconnecting");
+  return () => source.close();
+}
+
 export function tailPrepushEvents(
   taskId: string,
   onEvent: (event: SemanticEvent) => void,

@@ -22,6 +22,7 @@ import { PrepushStatus } from "./PrepushStatus";
 import { PrepushLiveLog, prepushActive } from "./PrepushLiveLog";
 import { TokenUsage } from "./TokenUsage";
 import { KnowledgeFootprint } from "./KnowledgeFootprint";
+import { WarmupPanel } from "./WarmupPanel";
 import { taskHealthFacts } from "./taskHealth";
 import { relativeTime } from "./time";
 import { startVisiblePolling } from "./visiblePolling";
@@ -632,6 +633,7 @@ export function TaskWorkspace({
               <small>SSE 原始事件实时跟随；可按类型筛选</small>
             </div>
             <div className="ws-primary-scroll ws-execution-view">
+              <WarmupPanel task={task} />
               <ExecutionPanel task={task} defaultOpen />
               <KnowledgeFootprint usage={task.knowledge_usage} />
             </div>

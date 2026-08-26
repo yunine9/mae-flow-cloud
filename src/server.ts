@@ -31,6 +31,7 @@
  *   POST /tasks/:id/annotations/:annId/reopen           → 裁决:返工,退回草稿再送一轮
  *   GET  /tasks/:id/events                              → SSE:重放事件日志后持续跟进
  *   GET  /tasks/:id/prepush/events                      → SSE:推送前验证实时事件(换轮自动切新)
+ *   GET  /tasks/:id/warmup/events                       → SSE:环境预热编译实时事件
  *   GET  /tasks/:id/timeline                            → 人话交付时间线(只读现场)
  *   GET  /tasks/:id/activity                            → 行为摘要:此刻在干嘛/分段折叠/异常信号
  *   GET  /tasks/:id/artifacts[/:name]                   → 检视产物清单/内容(只读现场)
@@ -986,6 +987,12 @@ export function createTaskServer(
         if (request.method === "GET" && parts[2] === "prepush"
             && parts[3] === "events") {
           return streamPrepushEvents(service, id, response);
+        }
+        // 环境预热编译的实时事件流(用户点名:预热进展必须清楚可见)。
+        if (request.method === "GET" && parts[2] === "warmup"
+            && parts[3] === "events") {
+          return streamJsonlAsSse(service, id, response,
+            () => service.warmupEventLogPath(id));
         }
         if (parts[2] === "developer-assistant") {
           const target = service.get(id);

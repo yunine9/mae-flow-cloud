@@ -631,6 +631,8 @@ async function main(): Promise<void> {
     contract: demoContract,
     host,
     delivery,
+    // 环境预热编译:隔离模式显式开启(缺席即关,测试形态零意外会话)。
+    warmup: host && isolateImage ? { enabled: true } : undefined,
     prepush: host ? {
       enabled: true,
       buildSlots,

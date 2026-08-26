@@ -5798,6 +5798,52 @@ pre {
 /* push 前人工确认开关 */
 
 /* 推送前验证实时过程:命令与输出尾巴,全量在轮目录 bash 日志 */
+/* ---- 环境预热编译:进展要清楚可见,失败要说清是环境的锅 ---- */
+.warmup-panel {
+  padding: 10px 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  font-size: 13px;
+}
+.warmup-panel header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+.warmup-panel header strong { color: var(--text-strong); font-size: 13.5px; }
+.warmup-panel header i {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 999px;
+  background: var(--muted);
+}
+.warmup-panel.is-running header i {
+  background: var(--accent);
+  animation: warmup-pulse 1.2s ease-in-out infinite;
+}
+.warmup-panel.is-passed header i { background: var(--success); }
+.warmup-panel.is-failed { border-color: var(--danger); }
+.warmup-panel.is-failed header i { background: var(--danger); }
+.warmup-panel.is-failed header span { color: var(--danger); }
+.warmup-panel.is-infrastructure_failure header i { background: var(--attention); }
+@keyframes warmup-pulse { 50% { opacity: 0.35; } }
+.warmup-detail {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-size-assist);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.warmup-command { margin: 0; color: var(--muted); font-size: var(--font-size-assist); }
+.warmup-command code { color: var(--text-strong); overflow-wrap: anywhere; }
+
 .prepush-live { margin: 8px 0 0; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); overflow: hidden; }
 .prepush-live-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 12px; border-bottom: 1px solid var(--line); background: var(--surface-soft); font-size: var(--font-size-assist); }
 .prepush-live-state { color: var(--muted); }

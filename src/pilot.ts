@@ -107,6 +107,8 @@ async function main(): Promise<number> {
     // ——于是 push 前的编译+UT **一次都没跑过**,而试跑照样收口 await_merge,
     // 看不出少了一环(2026-08-21 首次整链试跑实测:全部 bash 日志里
     // 连一次 mvn 都没有)。试跑器必须和真服务同形,否则它证明不了什么。
+    // 试跑器与真服务同形:隔离模式下预热同样开跑,真模型顺带验它。
+    warmup: flag("--isolate-image") ? { enabled: true } : undefined,
     prepush: { enabled: true, buildSlots: Number(flag("--build-slots", "1")) },
     compactEveryEvents: Number(flag("--compact-every", "150")),
     isolation: flag("--isolate-image")
