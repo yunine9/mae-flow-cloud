@@ -448,7 +448,9 @@ test("timeout 销毁整个容器：TERM→KILL→rm 后才杀本机 exec，且 s
   assert.equal(runner.commands.length, before, "重复 stop 不应再次访问 Docker");
   await assert.rejects(
     subject.exec("true", runner.workspace, { onData: () => undefined }),
-    /未运行/,
+    (error: unknown) => error instanceof TaskContainerUnavailableError
+      && error.kind === "stopped"
+      && /未运行/.test(error.message),
   );
 });
 

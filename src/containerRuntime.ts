@@ -684,7 +684,13 @@ export class TaskContainer {
     },
   ): Promise<{ exitCode: number | null }> {
     if (this.lifecycle !== "running" || !this.containerId) {
-      throw new Error(`容器 ${this.name} 未运行，不能执行命令`);
+      // 这里发生在 assertRunning() 之前，也必须使用同一份结构化错误契约。
+      // timeout/Abort 会销毁容器并把 lifecycle 置为 stopped；若仍抛普通
+      // Error，prepush 只能把它交还模型，模型随后会在已死容器上无限重试。
+      throw new TaskContainerUnavailableError(
+        this.lifecycle === "running" ? "missing" : "stopped",
+        `容器 ${this.name} 未运行（lifecycle=${this.lifecycle}），不能执行命令`,
+      );
     }
     const exactCwd = resolve(cwd);
     let realCwd: string;
