@@ -32,7 +32,7 @@ test("部署自检真实走统一容器并验证三类工具链，结束后销�
       volumes: [
         `${settingsPath}:/etc/mae-flow/maven/settings.xml:ro`,
       ],
-      memory: "3g",
+      memory: "8g",
       cpus: "2",
       pidsLimit: 512,
       containerFactory: (created) => {
@@ -99,7 +99,7 @@ test("部署自检真实走统一容器并验证三类工具链，结束后销�
     `${settingsPath}:/etc/mae-flow/maven/settings.xml:ro`));
   assert.equal(input?.options.environment?.MFC_KERNEL_ROOT, kernelRoot);
   assert.equal(input?.options.environment?.MFC_EXPECT_MAVEN_SETTINGS, "1");
-  assert.equal(input?.limits.memory, "3g");
+  assert.equal(input?.limits.memory, "8g");
   assert.equal(input?.limits.pidsLimit, 512);
   assert.equal(input?.options.labels?.["com.mae-flow-cloud.role"], "system-check");
   assert.match(input?.options.labels?.["com.mae-flow-cloud.instance"] ?? "",
@@ -160,7 +160,7 @@ test("真实 Docker 部署自检：统一镜像内编译 Java/C++ 并检查 JS �
         volumes: [
           `${settingsPath}:/etc/mae-flow/maven/settings.xml:ro`,
         ],
-        memory: "3g",
+        memory: "8g",
         cpus: "2",
         pidsLimit: 512,
       },

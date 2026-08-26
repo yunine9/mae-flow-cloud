@@ -443,7 +443,7 @@ async function main(): Promise<void> {
   // 统一任务执行面:普通编码/修复/子 Agent/推送前编译与 UT 的 Bash
   // 全部进入同一类加固容器。Cloud 控制面、Git 凭据、MR/通知仍留宿主。
   const isolateImage = flag("--isolate-image");
-  const isolateMemory = flag("--isolate-memory") ?? "3g";
+  const isolateMemory = flag("--isolate-memory") ?? "8g";
   const isolateCpus = flag("--isolate-cpus") ?? "2";
   const isolatePids = Number(flag("--isolate-pids") ?? "512");
   const isolateNetwork = flag("--isolate-network") ?? "bridge";

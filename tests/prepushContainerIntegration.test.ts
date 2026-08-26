@@ -610,7 +610,7 @@ test("真实 Docker：普通任务与 native prepush 均在统一镜像执行并
       isolation: {
         image: REAL_IMAGE!,
         cacheRoot: join(dataDir, "cache"),
-        memory: "3g",
+        memory: "8g",
         cpus: "2",
         pidsLimit: 512,
       },

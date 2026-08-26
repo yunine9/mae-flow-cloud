@@ -372,7 +372,7 @@ Hook 载荷(sessionstart/userprompt/pretooluse/posttooluse)喂给内核的
     macOS/Windows 保持镜像默认——那边 Docker 在 VM 边界做 uid 映射,
     套本机 uid 反而撞上 VM 里不存在的用户。**这条本机验不了真故障**
     (Colima 是 VM),判据按 platform 参数化进了单测。
-  - **等人期间释放容器已闭合**:一张审批卡挂一晚上,3g 内存和 pids 名额
+  - **等人期间释放容器已闭合**:一张审批卡挂一晚上,8g 内存和 pids 名额
     就占一晚上,10~20 人共用一台机器时会把后面排队的单堵死。现在真等人
     时停容器、会话原样留着(pi 停在工具调用里),答复到达后第一条 Bash
     重新开同一套挂载/限额/label。自动交卷不做"停了再开"的无用功。
