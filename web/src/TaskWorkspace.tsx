@@ -22,7 +22,7 @@ import { PrepushStatus } from "./PrepushStatus";
 import { PrepushLiveLog, prepushActive } from "./PrepushLiveLog";
 import { TokenUsage } from "./TokenUsage";
 import { KnowledgeFootprint } from "./KnowledgeFootprint";
-import { WarmupPanel, WarmupStrip } from "./WarmupPanel";
+import { WarmupPanel, WarmupBadge } from "./WarmupPanel";
 import { taskHealthFacts } from "./taskHealth";
 import { relativeTime } from "./time";
 import { startVisiblePolling } from "./visiblePolling";
@@ -424,6 +424,7 @@ export function TaskWorkspace({
               <i aria-hidden />{statusText(task)}
             </span>
             <WaitBadge task={task} personal={canOperate} />
+            <WarmupBadge task={task} />
           </div>
           <strong id="task-workspace-title">{task.title ?? task.requirement}</strong>
         </div>
@@ -475,7 +476,6 @@ export function TaskWorkspace({
             {relativeTime(health.last_progress_at) || "暂无记录"}</span>
         </>} />
       </div>
-      <WarmupStrip task={task} onOpen={() => setWorkspaceView("execution")} />
       <PrepushStatus prepush={task.delivery?.prepush} placement="workspace" />
       {task.delivery?.prepush && <PrepushLiveLog
         taskId={task.id}
