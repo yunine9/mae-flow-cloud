@@ -444,6 +444,13 @@ export function App() {
   // 管理员不再有个人待办:归属人=下单人是硬规则,无主任务只可能来自
   // 无鉴权的老现场,团队总览里照常可见、可打开兜底处置。
 
+  // 视图打标:问题处理(issues)用淡红主题,与需求流的淡紫视觉分区
+  // (body 级 data-view,CSS 变量作用域覆盖,见 style.css 尾部)。
+  useEffect(() => {
+    document.body.dataset.view = view;
+    return () => { delete document.body.dataset.view; };
+  }, [view]);
+
   if (session === undefined) return <LoadingScreen />;
   if (session === null) return <LoginScreen onAuthenticated={(user) => {
     launchGateRequest.current += 1;
@@ -463,13 +470,6 @@ export function App() {
     setLaunchGate({ kind: "checking" });
     setSession(null);
   }
-
-  // 视图打标:问题处理(issues)用淡红主题,与需求流的淡紫视觉分区
-  // (body 级 data-view,CSS 变量作用域覆盖,见 style.css 尾部)。
-  useEffect(() => {
-    document.body.dataset.view = view;
-    return () => { delete document.body.dataset.view; };
-  }, [view]);
 
   function changeTheme(next: Theme) {
     document.documentElement.dataset.theme = next;
