@@ -245,16 +245,14 @@ function tracked(task: KnowledgeInsightTask): boolean {
     || task.business_modules !== undefined;
 }
 
-/** 团队页只统计能跨任务复用的资产。任务中读过的需求附件、过程文档
- * 即使恰好落在 docs/ 下，也仍是任务上下文，不能因为一次 read 就自动
- * 晋升成团队知识。业务模块文档以后必须经过显式发布/定范围后再进入
- * 这里。业务模块知识只有经过 Owner 显式发布且带 module scope，才具备
- * 稳定复用身份；普通任务文档即使同名也继续排除。 */
+/** 团队页只统计有正式团队/模块身份的资产。任务文档与仓库项目规则
+ * 都属于各自现场，不能因为一次 read 就晋升成团队知识。业务模块知识
+ * 只有经过 Owner 显式发布且带 module scope，才具备稳定复用身份。 */
 function reusableResource(resource: {
   kind: KnowledgeKind;
   scope?: string;
 }): boolean {
-  return resource.kind === "rules" || resource.kind === "skill"
+  return resource.kind === "skill"
     || (resource.kind === "document" && resource.scope === "module");
 }
 
@@ -281,7 +279,7 @@ function recommendations(
       title: "返工或关注任务缺少主动知识访问",
       evidence: `${frictionWithoutAccess.length} 个任务出现修复或人工关注信号，`
         + "但没有观察到 Agent 主动读取业务知识。",
-      action: "回看这些任务的共同问题，判断应补充仓库文档、项目规则还是专项 Skill。",
+      action: "回看共同问题：仓库现场可补参考资料或项目规则；跨任务共识应由 Owner 提炼为模块知识或团队 Skill。",
       task_ids: frictionWithoutAccess.slice(0, 8),
     });
   }

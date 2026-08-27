@@ -530,7 +530,7 @@ export function KnowledgeFlywheel({
   onOpenTask: (taskId: string) => void;
   admin?: boolean;
 }) {
-  const [kind, setKind] = useState<"all" | "rules" | "document" | "skill">("all");
+  const [kind, setKind] = useState<"all" | "document" | "skill">("all");
   // 分组代替跨仓混排:团队级(跨仓资产)一组在前,其余按仓一组一个榜。
   // 组内排序:消费率(读取/装载)优先,样本不足(<3 单)沉底;绝对量只做
   // 次级键——谁的仓单多谁霸榜的老毛病由此消除。
@@ -589,7 +589,7 @@ export function KnowledgeFlywheel({
 
     {error && !insights && <div className="knowledge-flywheel-error" role="alert"><strong>知识效能暂时不可用</strong><span>{error}</span><button type="button" onClick={onRetry}>重新读取</button></div>}
     {loading && !insights && <div className="knowledge-flywheel-loading" aria-label="正在统计知识效能"><i /><i /><i /></div>}
-    {insights && insights.summary.tracked_tasks === 0 && <div className="knowledge-flywheel-empty"><span aria-hidden>◎</span><div><strong>知识飞轮正在等待第一批数据</strong><p>可复用规则、模块知识或 Skill 被新任务装载、读取后，这里会出现使用趋势；任务自己的文档不会进入团队统计。</p></div></div>}
+    {insights && insights.summary.tracked_tasks === 0 && <div className="knowledge-flywheel-empty"><span aria-hidden>◎</span><div><strong>知识飞轮正在等待第一批数据</strong><p>正式模块知识或 Skill 被新任务装载、读取后，这里会出现使用趋势；任务文档和仓库项目规则不会进入团队统计。</p></div></div>}
 
     <BusinessModuleLibrary admin={admin} />
     <SkillLibraryPanel fallback={insights?.host_skills} admin={admin} />
@@ -604,10 +604,10 @@ export function KnowledgeFlywheel({
 
       <div className="knowledge-flywheel-body">
         <div className="knowledge-ranking">
-          <div className="knowledge-panel-head"><div><strong>可复用资产使用</strong><small>访问表示 Agent 主动读取规则、模块知识或 Skill，不把任务文档和“被提供”冒充团队知识；各范围单独排行。</small></div><span>{total} 项</span></div>
+          <div className="knowledge-panel-head"><div><strong>可复用资产使用</strong><small>这里只统计正式模块知识与 Skill 的真实消费；仓库项目规则和任务文档仍留在各自现场。</small></div><span>{total} 项</span></div>
           <div className="knowledge-filterbar">
             <div role="group" aria-label="按知识类型筛选">
-              {(["all", "rules", "document", "skill"] as const).map((value) => <button type="button" key={value} className={kind === value ? "on" : ""} aria-pressed={kind === value} onClick={() => setKind(value)}>{value === "all" ? "全部" : KIND_LABEL[value]}</button>)}
+              {(["all", "document", "skill"] as const).map((value) => <button type="button" key={value} className={kind === value ? "on" : ""} aria-pressed={kind === value} onClick={() => setKind(value)}>{value === "all" ? "全部" : KIND_LABEL[value]}</button>)}
             </div>
           </div>
           <div className="knowledge-ranking-list">
@@ -635,7 +635,7 @@ export function KnowledgeFlywheel({
           </div>
         </aside>
       </div>
-      <footer className="knowledge-flywheel-note"><span>口径</span>任务需求、附件与过程文档只留在单任务现场；可复用资产的“提供、加载、主动访问”分开统计，交付结果只做相关性参考。</footer>
+      <footer className="knowledge-flywheel-note"><span>口径</span>任务需求、附件与过程文档只留在单任务现场，项目规则只属于相关仓库；团队页只统计正式模块知识和 Skill，交付结果仅作相关性参考。</footer>
     </>}
   </section>;
 }

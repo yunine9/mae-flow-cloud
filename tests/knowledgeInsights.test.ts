@@ -81,8 +81,8 @@ test("团队知识聚合按仓库/类型/路径合并并关联交付结果", () 
 test("飞轮给出覆盖缺口、选而未用和正向沉淀建议", () => {
   const unused = usage({ id: "skill", kind: "skill", name: "发布助手",
     path: ".cac/skills/release/SKILL.md", selected: true, reads: 0 });
-  const proven = usage({ id: "rules", kind: "rules", name: "AGENTS.md",
-    path: "AGENTS.md", reads: 1 });
+  const proven = usage({ id: "repository-skill", kind: "skill", name: "交付检查",
+    path: ".agents/skills/release/SKILL.md", reads: 1 });
   const tasks: KnowledgeInsightTask[] = [
     { id: "gap", status: "paused", repository_skills: [], knowledge_usage: {
       summary: { resources: 0, loaded: 0, used: 0, skills_used: 0, selected_unused: 0 },
@@ -114,9 +114,9 @@ test("小样本只展示事实，不强行生成资源优劣结论", () => {
   assert.deepEqual(result.recommendations, []);
 });
 
-test("只有显式发布的模块文档进入团队飞轮，任务自己的 docs 继续排除", () => {
+test("只有正式模块文档进入团队飞轮，任务 docs 与项目规则继续留在仓库现场", () => {
   const moduleUsage: TaskKnowledgeUsage = {
-    summary: { resources: 2, loaded: 0, used: 2, skills_used: 0, selected_unused: 0 },
+    summary: { resources: 3, loaded: 0, used: 3, skills_used: 0, selected_unused: 0 },
     resources: [{
       id: "module:orders:state:v3", kind: "document", name: "订单状态机",
       path: ".mae-flow-work/business-modules/orders/state.md",
@@ -127,6 +127,10 @@ test("只有显式发布的模块文档进入团队飞轮，任务自己的 docs
       id: "observed:task-doc", kind: "document", name: "本需求设计",
       path: "docs/requirement.md", state: "used",
       available_count: 0, loaded_count: 0, read_count: 1,
+    }, {
+      id: "rules:orders", kind: "rules", name: "AGENTS.md",
+      path: "AGENTS.md", repository: "https://code.example/orders.git",
+      state: "used", available_count: 1, loaded_count: 1, read_count: 2,
     }],
     events: [],
   };
@@ -139,6 +143,8 @@ test("只有显式发布的模块文档进入团队飞轮，任务自己的 docs
   assert.equal(result.resources[0].scope, "module");
   assert.equal(result.resources[0].module_name, "订单域");
   assert.ok(!result.resources.some((item) => item.name === "本需求设计"));
+  assert.ok(!result.resources.some((item) => item.kind === "rules"),
+    "项目规则可以留在本单足迹，但绝不能出现在团队资产聚合中");
 });
 
 test("团队知识效能使用独立只读 HTTP 接口", async () => {
