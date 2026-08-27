@@ -448,7 +448,10 @@ export function WaitingCard({
   const answerOf = (question: string) => picked[question] ?? "";
   const optional = (question: string) =>
     /可忽略|若上题|如无|可跳过|可不填/.test(question);
-  const reviewChoiceConflict = (attachmentCount > 0 || deliverySelectionChanged)
+  // 勾选与 commit 不同不再算冲突(2026-08-28 用户拍板易用性):服务端
+  // 会按勾选机械整理提交并直推,"通过"就是一键走完。只有未闭环批注
+  // 仍然拦"通过"——那是真有意见没处理。
+  const reviewChoiceConflict = attachmentCount > 0
     && questions.some((item) => {
     const options = item.options ?? [];
     if (!options.some((option) => allChoiceAnswers.has(option))) return false;
@@ -478,7 +481,9 @@ export function WaitingCard({
   const annotationKey = annotationIds?.join("\0") ?? "";
   const choiceKey = [...feedbackAnswers, ...closingAnswers].join("\0");
   useEffect(() => {
-    if ((!attachmentCount && !deliverySelectionChanged)
+    // 只有未闭环批注才把默认选项扳向"需要调整";纯勾选差异不劫持
+    // 用户的选择(它已经能一键"通过"机械整理直推)。
+    if (!attachmentCount
         || !choiceEffects.some((effect) =>
       effect.closes_feedback)) return;
     setPicked((current) => {
@@ -706,7 +711,13 @@ export function WaitingCard({
             ? "本任务全部代码增量在「本任务变更」——请逐文件检视 diff;"
               + "勾选框默认全选,检视后这里才能提交。"
             : deliverySelectionChanged
-              ? "勾选与当前 commit 不同；请选择调整分支，Agent 整理后会再次请你确认。"
+              ? `勾选与当前 commit 不同（剔除 ${deliverySelection!.committedPaths
+                  .filter((path) => !deliverySelection!.selectedPaths
+                    .includes(path)).length} 个、补入 ${deliverySelection!
+                  .selectedPaths.filter((path) => !deliverySelection!
+                    .committedPaths.includes(path)).length} 个）。`
+                + "提交“通过”即可：Cloud 自动整理提交并直推——剔除的内容"
+                + `保留在工作区，不重新编译，由流水线裁决。想让 Agent 重新整理可选“${feedbackLabel}”。`
               : "勾选与当前 commit 一致；提交通过后，服务端会在 push 前再次复核。"}</span>
           {onLocateDelivery && (
             <button type="button" className="delivery-locate"
