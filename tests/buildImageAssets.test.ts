@@ -40,6 +40,9 @@ test("build image: 工具链版本明确且最终以非 root builder 运行", ()
   assert.match(dockerfile, /codehub-cli spes/);
   assert.match(dockerfile, /HOME=\/home\/mae-flow/);
   assert.match(dockerfile, /MAVEN_CONFIG=\/home\/mae-flow\/\.m2/);
+  assert.match(dockerfile, /TMPDIR=\/tmp(?:\s|$)/m,
+    "TMPDIR 必须指向 tmpfs 根；流水线覆盖 entrypoint 时不能依赖预建子目录");
+  assert.doesNotMatch(dockerfile, /TMPDIR=\/tmp\/[A-Za-z0-9._-]+/);
   assert.doesNotMatch(dockerfile, /\/home\/builder/);
   assert.match(dockerfile, /passwd_home/);
   assert.match(dockerfile, /Java version: 21/,

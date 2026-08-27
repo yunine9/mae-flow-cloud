@@ -61,8 +61,7 @@ RUN groupadd --gid "${BUILDER_GID}" builder \
       /cache/xdg \
       /etc/mae-flow/ca \
       /etc/mae-flow/maven \
-      /home/mae-flow/.m2 \
-      /tmp/mae-flow-build
+      /home/mae-flow/.m2
 
 COPY entrypoint.sh /usr/local/bin/mae-flow-build-entrypoint
 # 内部基础镜像常以 root 自测，容易把 0750 的 CLI/profile/CA 带进最终
@@ -109,7 +108,7 @@ ENV HOME=/home/mae-flow \
     CCACHE_COMPRESS=true \
     CCACHE_MAXSIZE=5G \
     XDG_CACHE_HOME=/cache/xdg \
-    TMPDIR=/tmp/mae-flow-build
+    TMPDIR=/tmp
 
 WORKDIR /workspace
 USER builder:builder

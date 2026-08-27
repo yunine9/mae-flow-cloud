@@ -24,9 +24,10 @@ Cloud 把镜像当作 `mae-flow-task-builder/1` 使用。任何内部基础镜�
 - 镜像不预建 `/cpp_sdk_repository`，也不放仓名软链接。Cloud 按仓库隔离
   SDK 缓存并挂到代码仓同级的 `cpp_sdk_repository`，代码仓保持
   `<任务目录>/<仓名>` 的真实父子拓扑。
-- `/tmp/mae-flow-build` 由 entrypoint 在每个短命 tmpfs 中重建，不依赖
-  镜像层残留。宿主 `/tmp` 可以且建议保持 `noexec`；只有任务容器自己的
-  `/tmp` 需要 `exec`，用于 Maven Jansi/JNA/native 临时库。
+- `TMPDIR` 固定指向 `/tmp`，不依赖 entrypoint 预建子目录。流水线运行器
+  即使覆盖镜像 entrypoint、并把 `/tmp` 重新挂成空 tmpfs，构建工具也不会
+  拿到一个不存在的临时目录。宿主 `/tmp` 可以且建议保持 `noexec`；只有
+  任务容器自己的 `/tmp` 需要 `exec`，用于 Maven Jansi/JNA/native 临时库。
 
 镜像带 `com.mae-flow.builder.contract=mae-flow-task-builder/1` 标签仅用于
 识别；真正的放行依据是管理页「部署自检」启动真实非 root 容器后的行为
