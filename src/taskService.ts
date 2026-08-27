@@ -2502,6 +2502,11 @@ export class TaskService {
       if (!configured.runner && !this.options.isolation) return;
       if (this.isRequirementAnalysis(task)) return; // 分析单没有可编译的仓
       if (!task.cwd || task.warmupActive) return;
+      // 恢复续跑的单不预热:Agent 可能已经在写代码,此时编译的是
+      // 半成品,报出来的"基线红"是冤案(内网实锤:恢复单把 Agent
+      // 在写的 ProbeTestService 编了,报基线缺 import)。缓存反正
+      // 已在此前的编译里焐热,恢复场景预热没有增量价值。
+      if (task.resume) return;
       // 收过口的收据不重跑(重启恢复同理:缓存已经热了);
       // "running" 而无 finished_at 是崩溃残留,重跑并覆盖。
       if (task.summary.baseline_build?.finished_at) return;
@@ -2531,6 +2536,16 @@ export class TaskService {
         started_at: startedAt, finished_at: new Date().toISOString(),
       };
       this.persist(task);
+      return;
+    }
+    // 工作区已有业务改动 = 这不再是基线,预热收据会把半成品的编译错
+    // 扣到"环境/上游"头上——宁可不预热,不出冤案。不落收据:没跑
+    // 就是没跑,不伪装成基础设施故障。
+    const dirty = await this.prePushDirtyPaths(task);
+    if (dirty.length) {
+      this.options.log?.(
+        `任务 ${task.summary.id} 工作区已有改动(${dirty.length} 处),`
+        + "跳过基线预热——预热只评判基线代码");
       return;
     }
     task.summary.baseline_build = {

@@ -114,6 +114,36 @@ test("runner 抛错按基础设施故障记账,任务照常", async () => {
   }
 });
 
+test("恢复续跑与脏工作区都不预热:预热只评判基线,不出冤案", async () => {
+  // 内网实锤:恢复单的预热把 Agent 写了一半的类编了,报"基线缺
+  // import"——责任切分反向误导。
+  const { service, model, id, internal, repo } = await completedTask();
+  try {
+    let calls = 0;
+    (service as any).options.warmup = {
+      runner: async () => {
+        calls += 1;
+        return { status: "passed", message: "不该跑到这" };
+      },
+    };
+    internal.resume = true;
+    (service as any).startBaselineWarmup(internal, 0);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.equal(calls, 0, "恢复续跑不预热");
+    assert.equal(service.get(id)?.baseline_build, undefined);
+
+    internal.resume = false;
+    writeFileSync(join(repo.cwd, "wip.java"), "class Wip {}\n");
+    (service as any).startBaselineWarmup(internal, 0);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    assert.equal(calls, 0, "脏工作区不预热——那不再是基线");
+    assert.equal(service.get(id)?.baseline_build, undefined,
+      "没跑就是没跑,不落收据不伪装");
+  } finally {
+    await model.stop();
+  }
+});
+
 test("使命写清三件事与红线;报告解析只认合法结构、后写者胜", () => {
   const mission = warmupMission({
     taskId: "t1", workspace: "/tmp/repo", sha: "a".repeat(40),
