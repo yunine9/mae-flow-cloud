@@ -5,6 +5,7 @@
  */
 
 import { useState } from "react";
+import { createPortal } from "react-dom";
 import { PrepushLiveLog } from "./PrepushLiveLog";
 import { tailWarmupEvents, type TaskSummary } from "./api";
 
@@ -31,7 +32,10 @@ export function WarmupBadge({ task }: { task: TaskSummary }) {
         onClick={() => setOpen(true)} title={`环境预热:${full}`}>
         <i aria-hidden />{short}
       </button>
-      {open && (
+      {/* portal 到 body:浮层若留在头部 DOM 里,任一祖先(sticky/
+          transform)造出层叠上下文就会把它困在低层级(实锤:提到
+          z-400 仍被进度条盖住)。 */}
+      {open && createPortal(
         <div className="warmup-overlay" role="dialog" aria-modal="true"
           aria-label="环境预热编译详情"
           onClick={(event) => {
@@ -45,7 +49,8 @@ export function WarmupBadge({ task }: { task: TaskSummary }) {
             </header>
             <WarmupPanel task={task} />
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   );

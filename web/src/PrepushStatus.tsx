@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { createPortal } from "react-dom";
 import {
   skipPrepushVerification,
   type PrepushVerification,
@@ -23,8 +24,10 @@ function viewOf(state: string): PrepushView {
     case "queued":
       return {
         phase: "preparing",
-        label: "准备",
-        detail: "已进入验证队列，Cloud 将在推送前启动专项验证 Agent。",
+        // "排队"必须说破(实锤:用户对着"准备"以为卡死了)——同一
+        // 时刻只放行有限个重型构建,等的是编译槽位,不是出了故障。
+        label: "排队中",
+        detail: "已进入验证队列，等待编译槽位释放(同一时刻仅运行有限个重型构建，前面的构建结束后自动开始)。",
         tone: "neutral",
         busy: true,
       };
@@ -139,7 +142,8 @@ export function PrepushBadge({
         title={`推送前验证:${prepush.message?.trim() || view.detail}`}>
         <i aria-hidden />{label}
       </button>
-      {open && (
+      {/* portal 到 body,同预热浮层:逃出头部祖先的层叠上下文。 */}
+      {open && createPortal(
         <div className="warmup-overlay" role="dialog" aria-modal="true"
           aria-label="推送前验证详情"
           onClick={(event) => {
@@ -193,7 +197,8 @@ export function PrepushBadge({
               </div>
             )}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   );
