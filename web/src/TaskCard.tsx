@@ -74,7 +74,7 @@ export function TaskCard({
   return (
     <article
       id={`task-${task.id}`}
-      className={`task-card task-kind-${task.entry_kind === "dts" ? "dts" : "requirement"} status-${task.status}${expanded ? " expanded" : ""}${focused ? " focused" : ""}`}
+      className={`task-card status-${task.status}${expanded ? " expanded" : ""}${focused ? " focused" : ""}`}
     >
       <button
         type="button"
@@ -86,9 +86,6 @@ export function TaskCard({
         <span className="task-summary-body">
           <span className="task-overline">
             {task.ticket && <span className="task-ticket">{task.ticket}</span>}
-            {task.entry_kind === "dts" && (
-              <span className="task-entry-kind">DTS 修复</span>
-            )}
             <span className="task-id" title="平台内部编号">{task.id}</span>
             <span className={`pill ${task.status}${decisionMode === "signal" && task.status === "waiting_for_human" ? " team-signal" : ""}`}>
               <i aria-hidden />

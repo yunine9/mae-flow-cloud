@@ -7,7 +7,7 @@ import type {
 
 const KIND = {
   rules: "项目规则",
-  document: "业务文档",
+  document: "参考资料",
   skill: "Skill",
 } as const;
 
@@ -56,8 +56,10 @@ export function KnowledgeFootprint({
       item.kind === "skill" && !item.repository) },
     { title: "仓库 Skill", items: resources.filter((item) =>
       item.kind === "skill" && item.repository) },
-    { title: "业务文档", items: resources.filter((item) =>
-      item.kind === "document") },
+    { title: "业务模块知识", items: resources.filter((item) =>
+      item.kind === "document" && item.scope === "module") },
+    { title: "本单参考资料", items: resources.filter((item) =>
+      item.kind === "document" && item.scope !== "module") },
     { title: "项目规则", items: resources.filter((item) =>
       item.kind === "rules") },
   ].filter((group) => group.items.length > 0);
@@ -68,7 +70,7 @@ export function KnowledgeFootprint({
         <div>
           <span>KNOWLEDGE FOOTPRINT</span>
           <strong id="knowledge-footprint-title">本单知识足迹</strong>
-          <p>记录 Agent 实际加载、阅读和检索过的业务知识，不参与流程门禁。</p>
+          <p>记录 Agent 实际加载、阅读和检索过的参考资料与模块知识，不参与流程门禁。</p>
         </div>
         <div className="knowledge-footprint-stats" aria-label="知识消费摘要">
           <span><strong>{usage?.summary.used ?? 0}</strong><small>已消费</small></span>
@@ -130,7 +132,8 @@ export function KnowledgeFootprint({
         <div className="knowledge-footprint-resources">
           {consumed.slice(0, 8).map((item) => (
             <article key={item.id} className={`knowledge-resource kind-${item.kind}`}>
-              <span>{KIND[item.kind]}</span>
+              <span>{item.kind === "document" && item.scope === "module"
+                ? "模块知识" : KIND[item.kind]}</span>
               <strong title={item.name}>{item.name}</strong>
               <code title={item.path}>{item.path}</code>
               <small>{item.read_count > 0
@@ -141,7 +144,7 @@ export function KnowledgeFootprint({
         </div>
       ) : (
         <div className="knowledge-footprint-empty">
-          尚无已消费知识；项目规则、手选文档或 Skill 被加载/读取后会在这里出现。
+          尚无已消费知识；项目规则、参考资料、模块知识或 Skill 被加载/读取后会在这里出现。
         </div>
       )}
 

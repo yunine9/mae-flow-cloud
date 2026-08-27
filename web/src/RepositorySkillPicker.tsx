@@ -298,7 +298,7 @@ export function RepositorySkillPicker({
       <div className="repository-skills-head">
         <i aria-hidden>＋</i>
         <div>
-          <strong id={`repository-skills-title-${presentation}`}>业务知识与 Skill（可选）</strong>
+          <strong id={`repository-skills-title-${presentation}`}>仓内参考资料与 Skill（可选）</strong>
           <small>{presentation === "decision"
             ? "按仓选择，确认后下发给对应交付子任务"
             : "开局补齐业务上下文，运行中自动留下消费足迹"}</small>
@@ -311,7 +311,7 @@ export function RepositorySkillPicker({
       <div className="repository-skills-toolbar">
         <p>
           项目规则（<code>AGENTS.md</code>/<code>CLAUDE.md</code>）自动生效；
-          可从 <code>docs</code> 选择本单重点知识，也可选择四类标准目录下的 Skill。
+          可从 <code>docs</code> 选择本单参考资料，也可选择四类标准目录下的 Skill。
           Agent 自行判断何时使用，平台只记录事实，不把知识消费变成流程门禁。
         </p>
         <div>
@@ -333,7 +333,7 @@ export function RepositorySkillPicker({
 
       {!hasRepository && (
         <div className="repository-skills-empty">
-          先填写代码仓，再按需读取仓内知识；不读取也可继续。
+          先填写代码仓，再按需读取仓内参考资料；不读取也可继续。
         </div>
       )}
       {!catalog && !scanError
@@ -353,7 +353,7 @@ export function RepositorySkillPicker({
       )}
       {catalog && catalog.repositories.length === 0 && (
         <div className="repository-skills-empty">
-          这些仓库没有可展示的业务知识或 Skill，不影响继续提交。
+          这些仓库没有可展示的参考资料或 Skill，不影响继续提交。
         </div>
       )}
       {catalog && catalog.repositories.length > 0 && (
@@ -427,7 +427,7 @@ export function RepositorySkillPicker({
                       });
                     }}>
                     <summary className="repository-resource-title">
-                      <strong>业务知识</strong>
+                      <strong>参考资料</strong>
                       <small>{repository.knowledge.length} 项 · 选中文档开局加载</small>
                     </summary>
                     <div className="repository-skill-list repository-knowledge-list">
@@ -528,7 +528,7 @@ export function RepositorySkillPicker({
       )}
       {catalog && selectedKnowledgeIds.size >= MAX_SELECTED_KNOWLEDGE && (
         <div className="repository-skills-limit" role="status">
-          每个任务最多加载 {MAX_SELECTED_KNOWLEDGE} 篇重点知识；项目规则不计入上限。
+          每个任务最多加载 {MAX_SELECTED_KNOWLEDGE} 篇参考资料；项目规则不计入上限。
         </div>
       )}
     </section>

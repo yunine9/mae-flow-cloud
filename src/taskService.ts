@@ -120,6 +120,14 @@ import {
   type SelectedRepositoryKnowledge,
   validRepositoryKnowledgePath,
 } from "./repositoryKnowledgeRuntime.ts";
+import { listBusinessModules } from "./businessModuleLibrary.ts";
+import {
+  materializeBusinessModuleKnowledge,
+  copyBusinessModuleSnapshots,
+  snapshotBusinessModules,
+  type MaterializedBusinessModuleKnowledge,
+  type SelectedBusinessModule,
+} from "./businessModuleRuntime.ts";
 import {
   discoverRepositorySkills,
   type RepositorySkillCatalog,
@@ -499,9 +507,13 @@ export interface TaskSummary {
    * 新任务明确不加载仓内 Skill；字段缺席仅用于兼容旧任务此前的全量
    * 自动加载。Skill 是建议上下文，不是流程步骤或完成证据。 */
   repository_skills?: SelectedRepositorySkill[];
-  /** 用户在下单时明确选择为“本单重点知识”的 docs 文档。正文会在
+  /** 用户在下单时明确选择为“本单参考资料”的 docs 文档。正文会在
    * 会话开局进入上下文；它和 Skill 一样是辅助材料，不是内核证据。 */
   repository_knowledge?: SelectedRepositoryKnowledge[];
+  /** 用户下单时明确选择的业务模块及不可变知识快照。只把标题、摘要、
+   * 适用场景和任务内路径目录交给 Agent，正文必须按需读取；模块后来
+   * 更新不会改写运行中或历史任务。 */
+  business_modules?: SelectedBusinessModule[];
   /** 任务详情读侧投影：提供/加载/阅读的宿主事实，不参与任务落盘。 */
   knowledge_usage?: TaskKnowledgeUsage;
   /** 多仓时由 Chain 产物投影；单仓时是一个节点的退化图。 */
@@ -2326,6 +2338,7 @@ export class TaskService {
             workspace: task.summary.workspace,
             selectedKnowledge: summary.repository_knowledge,
             selectedSkills: summary.repository_skills,
+            businessModules: summary.business_modules,
           })
         : undefined,
     };
@@ -3100,6 +3113,17 @@ export class TaskService {
      * 老老实实问人)。 */
     workflows: Array<
       { key: string; label: string; steps?: number; acks?: number }>;
+    /** 显式发布的业务模块目录。这里只给下单所需摘要，不含知识正文。 */
+    business_modules: Array<{
+      id: string;
+      name: string;
+      description: string;
+      owner: string;
+      repositories: string[];
+      revision: number;
+      assets: number;
+      updated_at: string;
+    }>;
     /** 服务级缺的配置(管理员去补)。非空=不给下单。 */
     blockers: Array<{ key: string; label: string; where: "admin" | "me" }>;
     /** 本部署要不要这两把个人令牌(由形态决定,见下方注释)。 */
@@ -3108,6 +3132,29 @@ export class TaskService {
     const active = this.activeModelChoice();
     const blockers: Array<
       { key: string; label: string; where: "admin" | "me" }> = [];
+    let businessModules: Array<{
+      id: string; name: string; description: string; owner: string;
+      repositories: string[]; revision: number; assets: number;
+      updated_at: string;
+    }> = [];
+    try {
+      businessModules = listBusinessModules(this.options.dataDir).modules
+        .filter((module) => module.status === "active")
+        .map((module) => ({
+          id: module.id,
+          name: module.name,
+          description: module.description,
+          owner: module.owner,
+          repositories: module.repositories,
+          revision: module.revision,
+          assets: module.assets.filter((asset) =>
+            asset.status === "published").length,
+          updated_at: module.updated_at,
+        }));
+    } catch (error) {
+      // 模块知识是可选上下文；目录损坏要告警，但不能让所有人无法下单。
+      this.options.log?.(`[business-modules] 下单目录读取失败(fail-open): ${error}`);
+    }
     // 每条缺项**只在它真会咬人时才拦**:纯会话形态(不接代码仓)拦
     // Git 令牌毫无道理,没接通知端点拦通知令牌也一样——一刀切的门禁
     // 会把用不上那件东西的部署一起挡在门外。
@@ -3129,6 +3176,7 @@ export class TaskService {
       ticket: { enabled: !!this.options.host, required: !!this.options.host },
       baseline: { enabled: !!this.options.host, default: "master" },
       workflows: workflowChoices(this.options.host?.kernelRoot),
+      business_modules: businessModules,
       blockers,
       needs: {
         // 个人令牌该不该要,由部署形态决定(同上:只拦真会咬人的)。
@@ -3431,6 +3479,12 @@ export class TaskService {
       selectedRepositoryKnowledgeIds?: string[];
       repositorySkills?: SelectedRepositorySkill[];
       repositoryKnowledge?: SelectedRepositoryKnowledge[];
+      /** 普通下单只提交正式模块 ID；服务端在创建现场时固定当时的已发布
+       * 资产版本与正文快照，浏览器不能自报内容。 */
+      selectedBusinessModuleIds?: string[];
+      /** 仅供跨仓拆单：从父任务复制已经固定的模块版本与正文。 */
+      businessModules?: SelectedBusinessModule[];
+      businessModuleSourceWorkspace?: string;
       /** 仅供旧跨仓父任务拆单：旧现场没有 repository_skills 字段时，
        * 子任务必须继续保留 undefined，让物化器走旧版全量加载兼容；
        * 不能与新下单的“明确未选择”空数组混为一谈。 */
@@ -3584,7 +3638,24 @@ export class TaskService {
     const workspace = join(this.options.dataDir, id);
     mkdirSync(workspace, { recursive: true });
     let issueEnvironments: IssueEnvironmentRef[] = [];
+    let businessModules: SelectedBusinessModule[] = [];
     try {
+      if (options.businessModules !== undefined) {
+        if (!options.businessModuleSourceWorkspace) {
+          throw new Error("复制业务模块快照时缺少父任务现场");
+        }
+        businessModules = copyBusinessModuleSnapshots({
+          selected: options.businessModules,
+          sourceTaskWorkspace: options.businessModuleSourceWorkspace,
+          targetTaskWorkspace: workspace,
+        });
+      } else {
+        businessModules = snapshotBusinessModules({
+          dataDir: this.options.dataDir,
+          taskWorkspace: workspace,
+          moduleIds: options.selectedBusinessModuleIds,
+        });
+      }
       storeRequirementDocument(workspace, requirement, requirementDocument);
       if (entryKind === "dts") {
         issueEnvironments = this.issueEnvironmentVault.store(
@@ -3626,6 +3697,7 @@ export class TaskService {
       repositories: repositories.length ? repositories : undefined,
       repository_skills: repositorySkills,
       repository_knowledge: repositoryKnowledge,
+      business_modules: businessModules.length ? businessModules : undefined,
       requirement_graph: repositories.length
         ? {
             stage: repositories.length > 1 ? "analysis" : "confirmed",
@@ -4313,6 +4385,8 @@ export class TaskService {
         : source.repository_skills!.map((item) => ({ ...item })),
       repositoryKnowledge: (source.repository_knowledge ?? [])
         .map((item) => ({ ...item })),
+      selectedBusinessModuleIds: (source.business_modules ?? [])
+        .map((module) => module.id),
       preserveUndefinedRepositorySkills,
       reuseTaskId: id,
       deferQueue: true,
@@ -4590,6 +4664,12 @@ export class TaskService {
               (skill) => skill.repository === repository.url),
         repositoryKnowledge: (task.summary.repository_knowledge ?? [])
           .filter((item) => item.repository === repository.url),
+        businessModules: (task.summary.business_modules ?? [])
+          .map((module) => ({
+            ...module,
+            assets: module.assets.map((asset) => ({ ...asset })),
+          })),
+        businessModuleSourceWorkspace: task.summary.workspace,
         preserveUndefinedRepositorySkills,
       });
       // 方案文档放子任务 workspace 根(不删现场,重启/重建都在);
@@ -5429,8 +5509,23 @@ export class TaskService {
     const workspace = task.summary.workspace;
     let driver: CloudSession | undefined;
     let container: TaskCommandContainer | undefined;
+    let businessModuleKnowledge: MaterializedBusinessModuleKnowledge = {
+      entries: [], warnings: [],
+    };
     try {
       if (!task.cwd) throw new Error("开发助手缺少代码工作区");
+      // 必须在容器 start 之前物化：root 宿主会在 start 前把整棵 bind
+      // 工作区交给非 root 容器用户。若反过来，0440 的模块正文会在容器
+      // 启动后由 root 新建，Agent 的 Read/Grep 反而读不到。
+      businessModuleKnowledge = materializeBusinessModuleKnowledge({
+        selected: task.summary.business_modules,
+        taskWorkspace: workspace,
+        runtimeWorkspace: task.cwd,
+      });
+      for (const warning of businessModuleKnowledge.warnings) {
+        this.options.log?.(
+          `[developer-assistant-business-module] 任务 ${task.summary.id}: ${warning}`);
+      }
       task.containerWorkspace = task.cwd;
       container = await this.startCodingContainer(task, { gitReadOnly: true });
       if (!this.current(task, epoch) || task.summary.status !== "paused") {
@@ -5487,7 +5582,6 @@ export class TaskService {
             `[developer-assistant-knowledge] 任务 ${task.summary.id}: ${warning}`);
         }
       }
-
       const eventLog = new EventLog(
         join(workspace, "events.jsonl"),
         (event) => this.bypass(
@@ -5503,6 +5597,7 @@ export class TaskService {
         repositorySkillPaths,
         repositorySkillResources,
         repositoryKnowledge,
+        businessModuleKnowledge,
         knowledgeTrace: this.knowledgeTrace(task, task.cwd),
         provider: task.summary.model_choice?.provider
           ?? modelOverride.provider ?? this.options.provider,
@@ -6319,6 +6414,9 @@ export class TaskService {
         actual_path: string;
       }> = [];
       let repositoryKnowledge: MaterializedKnowledgeEntry[] = [];
+      let businessModuleKnowledge: MaterializedBusinessModuleKnowledge = {
+        entries: [], warnings: [],
+      };
       task.cwd = cwd;
       if (this.options.host && analysisOnly) {
         const analysisRoot = resuming ? savedCwd! : join(workspace, "repositories");
@@ -6669,6 +6767,15 @@ export class TaskService {
             : []),
         ].filter(Boolean).join("\n\n");
       }
+      businessModuleKnowledge = materializeBusinessModuleKnowledge({
+        selected: task.summary.business_modules,
+        taskWorkspace: workspace,
+        runtimeWorkspace: cwd,
+      });
+      for (const warning of businessModuleKnowledge.warnings) {
+        this.options.log?.(
+          `[business-module-knowledge] 任务 ${task.summary.id}: ${warning}`);
+      }
       // 2026-08-25 编排瘦身:编码期不再禁止编译/自测——用户给了容器
       // 构建环境,就让 agent 自由用起来验证自己;但本地绿不构成交付
       // 证据,真验收固定三道(prepush 专项会话、绑 SHA 的权威流水线、
@@ -6799,6 +6906,7 @@ export class TaskService {
         repositorySkillPaths,
         repositorySkillResources,
         repositoryKnowledge,
+        businessModuleKnowledge,
         knowledgeTrace: this.knowledgeTrace(task, cwd),
         currentStep: () => this.currentStepLabel(task),
         // 上下文撑爆时自愈压缩用的锚:与主动压缩同一个内核现场,

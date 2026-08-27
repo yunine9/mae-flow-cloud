@@ -27,6 +27,10 @@ export interface KnowledgeInsightResource {
    * 首标题摘要。没有它,排行里就只剩文件名,人没法判断值不值得读。 */
   description?: string;
   repository?: string;
+  scope?: "task" | "repository" | "team" | "module";
+  module_id?: string;
+  module_name?: string;
+  asset_version?: number;
   provided_tasks: number;
   selected_tasks: number;
   loaded_tasks: number;
@@ -69,6 +73,7 @@ export interface KnowledgeInsightTask {
   status: string;
   repository_skills?: unknown[];
   repository_knowledge?: unknown[];
+  business_modules?: unknown[];
   knowledge_usage?: TaskKnowledgeUsage;
   focus?: { needs_attention?: boolean };
   delivery?: {
@@ -208,7 +213,13 @@ function resourceKey(resource: {
   kind: KnowledgeKind;
   path: string;
   repository?: string;
+  scope?: string;
+  module_id?: string;
 }): string {
+  if (resource.scope === "module") {
+    return ["module", resource.module_id ?? "", resource.kind, resource.path]
+      .join("\0");
+  }
   return [resource.repository ?? "", resource.kind, resource.path].join("\0");
 }
 
@@ -230,19 +241,26 @@ function needsAttention(task: KnowledgeInsightTask): boolean {
 function tracked(task: KnowledgeInsightTask): boolean {
   return !!task.knowledge_usage
     || task.repository_knowledge !== undefined
-    || task.repository_skills !== undefined;
+    || task.repository_skills !== undefined
+    || task.business_modules !== undefined;
 }
 
 /** 团队页只统计能跨任务复用的资产。任务中读过的需求附件、过程文档
  * 即使恰好落在 docs/ 下，也仍是任务上下文，不能因为一次 read 就自动
  * 晋升成团队知识。业务模块文档以后必须经过显式发布/定范围后再进入
- * 这里；在那之前只有项目规则与 Skill 具备稳定的复用身份。 */
-function reusableResource(resource: { kind: KnowledgeKind }): boolean {
-  return resource.kind === "rules" || resource.kind === "skill";
+ * 这里。业务模块知识只有经过 Owner 显式发布且带 module scope，才具备
+ * 稳定复用身份；普通任务文档即使同名也继续排除。 */
+function reusableResource(resource: {
+  kind: KnowledgeKind;
+  scope?: string;
+}): boolean {
+  return resource.kind === "rules" || resource.kind === "skill"
+    || (resource.kind === "document" && resource.scope === "module");
 }
 
 function teamTracked(task: KnowledgeInsightTask): boolean {
   return task.repository_skills !== undefined
+    || (task.business_modules?.length ?? 0) > 0
     || (task.knowledge_usage?.resources.some(reusableResource) ?? false);
 }
 
@@ -338,6 +356,11 @@ export function buildTeamKnowledgeInsights(
         name: resource.name,
         path: resource.path,
         repository: resource.repository,
+        ...(resource.scope ? { scope: resource.scope } : {}),
+        ...(resource.module_id ? { module_id: resource.module_id } : {}),
+        ...(resource.module_name ? { module_name: resource.module_name } : {}),
+        ...(resource.asset_version !== undefined
+          ? { asset_version: resource.asset_version } : {}),
         provided_tasks: 0,
         selected_tasks: 0,
         loaded_tasks: 0,

@@ -438,8 +438,10 @@ export interface TaskSummary {
   repositories?: string[];
   /** 下单或 Chain 方案确认时选中的仓内 Skill；每个子任务只继承自己仓。 */
   repository_skills?: SelectedRepositorySkill[];
-  /** 本单开局明确加载的 docs 业务知识；规则文件无需手选。 */
+  /** 本单开局明确加载的仓内 docs 参考资料；规则文件无需手选。 */
   repository_knowledge?: SelectedRepositoryKnowledge[];
+  /** 创建任务时固定的业务模块与知识版本；正文不进入任务摘要。 */
+  business_modules?: SelectedBusinessModule[];
   /** Cloud 的知识消费观测，不参与内核裁决。 */
   knowledge_usage?: TaskKnowledgeUsage;
   /** 仓内 Skill 与代码交付使用同一基线。 */
@@ -627,6 +629,158 @@ export interface LaunchOptions {
    * 给人掂量快慢;算不出时缺席,只显示名字。 */
   workflows: Array<
     { key: string; label: string; steps?: number; acks?: number }>;
+  /** 已发布的可选业务模块摘要；知识正文不会随目录接口返回。 */
+  business_modules: BusinessModuleLaunchOption[];
+}
+
+export interface BusinessModuleLaunchOption {
+  id: string;
+  name: string;
+  description: string;
+  owner: string;
+  repositories: string[];
+  revision: number;
+  assets: number;
+  updated_at: string;
+}
+
+export interface BusinessKnowledgeAsset {
+  id: string;
+  title: string;
+  summary: string;
+  when_to_use: string;
+  status: "published" | "archived";
+  version: number;
+  digest: string;
+  bytes: number;
+  updated_at: string;
+  updated_by: string;
+}
+
+export interface BusinessModule {
+  id: string;
+  name: string;
+  description: string;
+  owner: string;
+  maintainers: string[];
+  repositories: string[];
+  status: "active" | "archived";
+  revision: number;
+  assets: BusinessKnowledgeAsset[];
+  created_at: string;
+  created_by: string;
+  updated_at: string;
+  updated_by: string;
+  can_manage: boolean;
+}
+
+export interface SelectedBusinessModule {
+  id: string;
+  name: string;
+  description: string;
+  owner: string;
+  revision: number;
+  assets: Array<{
+    id: string;
+    title: string;
+    summary: string;
+    when_to_use: string;
+    version: number;
+    digest: string;
+    bytes: number;
+    snapshot_path: string;
+  }>;
+}
+
+export interface BusinessModuleOperation {
+  at: string;
+  operator: string;
+  action: "create" | "update" | "archive" | "publish_asset" | "archive_asset";
+  module_id: string;
+  asset_id?: string;
+  version?: number;
+  detail?: string;
+}
+
+export interface BusinessModuleCatalog {
+  modules: BusinessModule[];
+  warnings: string[];
+  operations: BusinessModuleOperation[];
+}
+
+export async function getBusinessModules(): Promise<BusinessModuleCatalog> {
+  const response = await fetch("/business-modules");
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function createBusinessModule(input: {
+  id: string;
+  name: string;
+  description: string;
+  owner: string;
+  maintainers: string[];
+  repositories: string[];
+}): Promise<BusinessModule> {
+  const response = await fetch("/business-modules", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function updateBusinessModule(
+  id: string,
+  patch: Partial<Pick<BusinessModule,
+    "name" | "description" | "owner" | "maintainers" | "repositories" | "status">>,
+): Promise<BusinessModule> {
+  const response = await fetch(`/business-modules/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    body: JSON.stringify(patch),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function getBusinessKnowledgeAsset(
+  moduleId: string,
+  assetId: string,
+): Promise<{
+  module_id: string;
+  module_name: string;
+  asset: BusinessKnowledgeAsset;
+  content: string;
+}> {
+  const response = await fetch(`/business-modules/${encodeURIComponent(moduleId)}`
+    + `/assets/${encodeURIComponent(assetId)}`);
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function publishBusinessKnowledgeAsset(
+  moduleId: string,
+  assetId: string,
+  input: Pick<BusinessKnowledgeAsset, "title" | "summary" | "when_to_use">
+    & { content: string },
+): Promise<BusinessModule> {
+  const response = await fetch(`/business-modules/${encodeURIComponent(moduleId)}`
+    + `/assets/${encodeURIComponent(assetId)}`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function archiveBusinessKnowledgeAsset(
+  moduleId: string,
+  assetId: string,
+): Promise<BusinessModule> {
+  const response = await fetch(`/business-modules/${encodeURIComponent(moduleId)}`
+    + `/assets/${encodeURIComponent(assetId)}`, { method: "DELETE" });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
 }
 
 export async function getLaunchOptions(): Promise<LaunchOptions> {
@@ -680,6 +834,10 @@ export interface TaskKnowledgeResource {
   description?: string;
   digest?: string;
   selected?: boolean;
+  scope?: "task" | "repository" | "team" | "module";
+  module_id?: string;
+  module_name?: string;
+  asset_version?: number;
   state: "available" | "loaded" | "used";
   available_count: number;
   loaded_count: number;
@@ -704,6 +862,10 @@ export interface TaskKnowledgeUsage {
     path: string;
     repository?: string;
     selected?: boolean;
+    scope?: "task" | "repository" | "team" | "module";
+    module_id?: string;
+    module_name?: string;
+    asset_version?: number;
     ts: string;
     session_id: string;
     session_role: "main" | "subagent" | "prepush" | "developer-assistant" | "warmup";
@@ -727,6 +889,10 @@ export interface KnowledgeInsightResource {
   /** 可读性:选中资源=仓内扫描的描述;自发读取=观测时抽的首标题摘要。 */
   description?: string;
   repository?: string;
+  scope?: "task" | "repository" | "team" | "module";
+  module_id?: string;
+  module_name?: string;
+  asset_version?: number;
   provided_tasks: number;
   selected_tasks: number;
   loaded_tasks: number;
@@ -1081,6 +1247,7 @@ export async function createTask(
     repositorySkillCatalogToken?: string;
     selectedRepositorySkillIds?: string[];
     selectedRepositoryKnowledgeIds?: string[];
+    selectedBusinessModuleIds?: string[];
     requirementDocumentName?: string;
   },
 ): Promise<void> {
@@ -1109,6 +1276,7 @@ export async function createTask(
         extras?.selectedRepositorySkillIds,
       selected_repository_knowledge_ids:
         extras?.selectedRepositoryKnowledgeIds,
+      selected_business_module_ids: extras?.selectedBusinessModuleIds,
     }),
   });
   if (!response.ok) throw new Error(await errorText(response));

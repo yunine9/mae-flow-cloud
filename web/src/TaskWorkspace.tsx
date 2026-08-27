@@ -354,10 +354,8 @@ export function TaskWorkspace({
     ? changes.reduce((sum, item) => sum + (item.file_count ?? 0), 0)
     : changes.length;
   const hasRequirementGraph = (task.requirement_graph?.repositories.length ?? 0) > 1;
-  const issueTask = task.entry_kind === "dts";
   const materialHeading = materialView === "source"
-    ? { kicker: issueTask ? "ISSUE SOURCE" : "REQUEST SOURCE",
-        title: issueTask ? "问题单原文" : "需求原文" }
+    ? { kicker: "REQUEST SOURCE", title: "需求原文" }
     : materialView === "chain"
     ? { kicker: "CHAIN OVERVIEW", title: "仓间依赖" }
     : materialView === "diff"
@@ -415,9 +413,6 @@ export function TaskWorkspace({
         <div className="ws-identity">
           <div className="ws-identity-line">
             {task.ticket && <span className="ws-business-id">{task.ticket}</span>}
-            {issueTask && <span className="ws-issue-stage">
-              {task.issue_context?.stage === "triage" ? "根因诊断" : "修复交付"}
-            </span>}
             <code title="平台内部编号">{task.id}</code>
             <span className={`pill ${task.status}`}>
               <i aria-hidden />{statusText(task)}
@@ -514,7 +509,7 @@ export function TaskWorkspace({
             <div className="ws-source-switch" aria-label="材料类型">
               <button className={materialView === "source" ? "on" : ""}
                 onClick={() => setMaterialView("source")}>
-                <span>{issueTask ? "问题单原文" : "需求原文"}</span><i>原始</i>
+                <span>需求原文</span><i>原始</i>
               </button>
               <button className={materialView === "doc" ? "on" : ""}
                 onClick={() => { setMaterialView("doc"); if (documents[0]) setActive(documents[0].name); }}>
@@ -543,32 +538,11 @@ export function TaskWorkspace({
             {materialView === "source" ? (
               <article className="requirement-source">
                 <div className="requirement-source-label">
-                  <span>{task.requirement_document?.name ?? (issueTask
-                    ? "用户提交的问题单完整内容" : "用户提交的完整内容")}
+                  <span>{task.requirement_document?.name ?? "用户提交的完整内容"}
                     {task.requirement_document?.context_mode === "file"
                       && <em>Agent 分段读取</em>}</span>
                   <small>{task.requirement.split(/\r?\n/).length} 行 · {task.requirement.length} 字符</small>
                 </div>
-                {issueTask && task.issue_context && (
-                  <div className="issue-context-summary">
-                    <header><strong>环境接入</strong><span>
-                      {[task.issue_context.adapter.logs ? "日志" : "",
-                        task.issue_context.adapter.deploy ? "换库" : "",
-                        task.issue_context.adapter.rollback ? "回滚" : ""]
-                        .filter(Boolean).join(" / ") || "尚未接入适配器"}
-                    </span></header>
-                    {task.issue_context.environments.length ? (
-                      <ul>{task.issue_context.environments.map((environment) => (
-                        <li key={environment.id}><strong>{environment.name}</strong>
-                          <span>{environment.purpose === "logs" ? "日志"
-                            : environment.purpose === "deploy" ? "换库" : "日志 + 换库"}</span>
-                          <code>{environment.host}:{environment.port}</code>
-                          <em>{environment.accounts?.map((account) => account.username)
-                            .join(" / ") || environment.username || "凭据已保管"}</em></li>
-                      ))}</ul>
-                    ) : <p>本单未填写环境，先依据问题描述与代码完成诊断。</p>}
-                  </div>
-                )}
                 <Markdown text={task.requirement} />
               </article>
             ) : materialView === "chain" ? (

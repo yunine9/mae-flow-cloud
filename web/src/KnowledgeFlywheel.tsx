@@ -26,10 +26,11 @@ import {
   type SkillVersionRecord,
   type TeamKnowledgeInsights,
 } from "./api";
+import { BusinessModuleLibrary } from "./BusinessModuleLibrary";
 
 const KIND_LABEL: Record<KnowledgeKind, string> = {
   rules: "项目规则",
-  document: "业务文档",
+  document: "模块知识",
   skill: "Skill",
 };
 
@@ -529,17 +530,18 @@ export function KnowledgeFlywheel({
   onOpenTask: (taskId: string) => void;
   admin?: boolean;
 }) {
-  const [kind, setKind] = useState<"all" | "rules" | "skill">("all");
+  const [kind, setKind] = useState<"all" | "rules" | "document" | "skill">("all");
   // 分组代替跨仓混排:团队级(跨仓资产)一组在前,其余按仓一组一个榜。
   // 组内排序:消费率(读取/装载)优先,样本不足(<3 单)沉底;绝对量只做
   // 次级键——谁的仓单多谁霸榜的老毛病由此消除。
   const groups = useMemo(() => {
     const filtered = (insights?.resources ?? [])
-      .filter((item) => item.kind !== "document")
       .filter((item) => kind === "all" || item.kind === kind);
     const byRepo = new Map<string, KnowledgeInsightResource[]>();
     for (const item of filtered) {
-      const key = item.repository ?? "";
+      const key = item.scope === "module"
+        ? `module:${item.module_id ?? item.module_name ?? "unknown"}`
+        : item.repository ?? "";
       const list = byRepo.get(key) ?? [];
       list.push(item);
       byRepo.set(key, list);
@@ -562,6 +564,8 @@ export function KnowledgeFlywheel({
         activity: list.reduce((sum, item) => sum + item.accessed_tasks, 0),
       }))
       .sort((left, right) => (left.repo === "" ? -1 : right.repo === "" ? 1
+        : left.repo.startsWith("module:") && !right.repo.startsWith("module:") ? -1
+        : right.repo.startsWith("module:") && !left.repo.startsWith("module:") ? 1
         : right.activity - left.activity
           || left.repo.localeCompare(right.repo)));
   }, [insights, kind]);
@@ -585,8 +589,9 @@ export function KnowledgeFlywheel({
 
     {error && !insights && <div className="knowledge-flywheel-error" role="alert"><strong>知识效能暂时不可用</strong><span>{error}</span><button type="button" onClick={onRetry}>重新读取</button></div>}
     {loading && !insights && <div className="knowledge-flywheel-loading" aria-label="正在统计知识效能"><i /><i /><i /></div>}
-    {insights && insights.summary.tracked_tasks === 0 && <div className="knowledge-flywheel-empty"><span aria-hidden>◎</span><div><strong>知识飞轮正在等待第一批数据</strong><p>可复用规则或 Skill 被新任务装载、读取后，这里会出现使用趋势；任务自己的文档不会进入团队统计。</p></div></div>}
+    {insights && insights.summary.tracked_tasks === 0 && <div className="knowledge-flywheel-empty"><span aria-hidden>◎</span><div><strong>知识飞轮正在等待第一批数据</strong><p>可复用规则、模块知识或 Skill 被新任务装载、读取后，这里会出现使用趋势；任务自己的文档不会进入团队统计。</p></div></div>}
 
+    <BusinessModuleLibrary admin={admin} />
     <SkillLibraryPanel fallback={insights?.host_skills} admin={admin} />
 
     {insights && insights.summary.tracked_tasks > 0 && <>
@@ -599,17 +604,21 @@ export function KnowledgeFlywheel({
 
       <div className="knowledge-flywheel-body">
         <div className="knowledge-ranking">
-          <div className="knowledge-panel-head"><div><strong>可复用资产使用</strong><small>访问表示 Agent 主动读取规则或 Skill，不把任务文档和“被提供”冒充团队知识；各仓单独排行。</small></div><span>{total} 项</span></div>
+          <div className="knowledge-panel-head"><div><strong>可复用资产使用</strong><small>访问表示 Agent 主动读取规则、模块知识或 Skill，不把任务文档和“被提供”冒充团队知识；各范围单独排行。</small></div><span>{total} 项</span></div>
           <div className="knowledge-filterbar">
             <div role="group" aria-label="按知识类型筛选">
-              {(["all", "rules", "skill"] as const).map((value) => <button type="button" key={value} className={kind === value ? "on" : ""} aria-pressed={kind === value} onClick={() => setKind(value)}>{value === "all" ? "全部" : KIND_LABEL[value]}</button>)}
+              {(["all", "rules", "document", "skill"] as const).map((value) => <button type="button" key={value} className={kind === value ? "on" : ""} aria-pressed={kind === value} onClick={() => setKind(value)}>{value === "all" ? "全部" : KIND_LABEL[value]}</button>)}
             </div>
           </div>
           <div className="knowledge-ranking-list">
             {groups.map((group) => <ResourceGroup
               key={group.repo || "__team__"}
-              title={group.repo ? repositoryName(group.repo) : "团队级资产（跨仓）"}
-              note={group.repo ? "组内按消费率排,受本仓单量影响,不跨仓比较" : undefined}
+              title={group.repo.startsWith("module:")
+                ? `业务模块 · ${group.items[0]?.module_name ?? group.repo.slice(7)}`
+                : group.repo ? repositoryName(group.repo) : "团队级资产（跨仓）"}
+              note={group.repo.startsWith("module:")
+                ? "Owner 显式发布的模块知识，按任务真实读取统计"
+                : group.repo ? "组内按消费率排,受本仓单量影响,不跨仓比较" : undefined}
               items={group.items} />)}
             {total === 0 && <div className="knowledge-ranking-empty">当前筛选下还没有知识使用记录。</div>}
           </div>

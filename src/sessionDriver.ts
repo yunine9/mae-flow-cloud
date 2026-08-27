@@ -47,6 +47,7 @@ import {
   type KnowledgeResourceRef,
 } from "./knowledgeTrace.ts";
 import type { MaterializedKnowledgeEntry } from "./repositoryKnowledgeRuntime.ts";
+import type { MaterializedBusinessModuleKnowledge } from "./businessModuleRuntime.ts";
 
 /** pi 工具名 → 内核工具词汇表。不认识的原样透传(错认比不认更危险)。 */
 const TOOL_NAME_MAP: Record<string, string> = {
@@ -136,6 +137,9 @@ export interface CloudSessionOptions {
   /** 用户在下单时选定、已经过安全物化的重点知识。正文作为项目上下文
    * 注入一次；主/子/恢复会话共用，失败只影响观测与上下文，不碰内核。 */
   repositoryKnowledge?: MaterializedKnowledgeEntry[];
+  /** 创建任务时固定的业务模块知识。只把目录 INDEX.md 注入上下文；
+   * 正文保留为工作区文件，由 Agent 使用 Read/Grep 按需读取。 */
+  businessModuleKnowledge?: MaterializedBusinessModuleKnowledge;
   knowledgeTrace?: KnowledgeTrace;
   /** 上下文超限自愈用的锚点提供者(通常是内核现场 current/config)。
    * 不给就用需求原话兜底——锚永远来自权威,不由云端编造。 */
@@ -697,6 +701,20 @@ export class CloudSession {
     ])];
     const knowledgeEntries = (this.options.repositoryKnowledge ?? [])
       .filter((item) => existsSync(item.path) && statSync(item.path).isFile());
+    const businessModuleKnowledge = this.options.businessModuleKnowledge;
+    const moduleKnowledgeEntries = (businessModuleKnowledge?.entries ?? [])
+      .filter((item) => {
+        try {
+          return existsSync(item.path) && statSync(item.path).isFile();
+        } catch {
+          return false;
+        }
+      });
+    const moduleIndexPath = businessModuleKnowledge?.index_path;
+    const moduleIndex = moduleIndexPath && existsSync(moduleIndexPath)
+      && statSync(moduleIndexPath).isFile()
+      ? { path: moduleIndexPath, content: readFileSync(moduleIndexPath, "utf-8") }
+      : undefined;
     for (const item of knowledgeEntries) {
       this.options.knowledgeTrace?.register(item.path, {
         id: item.id,
@@ -708,6 +726,24 @@ export class CloudSession {
         digest: item.digest,
         selected: true,
       });
+    }
+    for (const item of moduleKnowledgeEntries) {
+      const resource: KnowledgeResourceRef = {
+        id: item.id,
+        kind: "document",
+        name: item.title,
+        path: item.relative_path,
+        description: item.summary,
+        digest: item.digest,
+        selected: true,
+        scope: "module",
+        module_id: item.module_id,
+        module_name: item.module_name,
+        asset_version: item.version,
+      };
+      this.options.knowledgeTrace?.register(item.path, resource);
+      this.options.knowledgeTrace?.record(
+        "available", config.sessionId, resource);
     }
     for (const item of this.options.repositorySkillResources ?? []) {
       this.options.knowledgeTrace?.register(item.actual_path, {
@@ -756,6 +792,7 @@ export class CloudSession {
             path: item.path,
             content: readFileSync(item.path, "utf-8"),
           })),
+          ...(moduleIndex ? [moduleIndex] : []),
         ],
       }),
       extensionFactories: [
@@ -800,6 +837,9 @@ export class CloudSession {
         "available", config.sessionId, resource);
     }
     for (const file of loader.getAgentsFiles().agentsFiles) {
+      if (moduleIndexPath && resolve(file.path) === resolve(moduleIndexPath)) {
+        continue;
+      }
       const selected = knowledgeEntries.find(
         (item) => resolve(item.path) === resolve(file.path));
       const withinWorkspace = resolve(file.path).startsWith(`${resolve(workspace)}${sep}`)

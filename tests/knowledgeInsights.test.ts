@@ -114,6 +114,33 @@ test("小样本只展示事实，不强行生成资源优劣结论", () => {
   assert.deepEqual(result.recommendations, []);
 });
 
+test("只有显式发布的模块文档进入团队飞轮，任务自己的 docs 继续排除", () => {
+  const moduleUsage: TaskKnowledgeUsage = {
+    summary: { resources: 2, loaded: 0, used: 2, skills_used: 0, selected_unused: 0 },
+    resources: [{
+      id: "module:orders:state:v3", kind: "document", name: "订单状态机",
+      path: ".mae-flow-work/business-modules/orders/state.md",
+      scope: "module", module_id: "orders", module_name: "订单域",
+      asset_version: 3, selected: true, state: "used",
+      available_count: 1, loaded_count: 0, read_count: 2,
+    }, {
+      id: "observed:task-doc", kind: "document", name: "本需求设计",
+      path: "docs/requirement.md", state: "used",
+      available_count: 0, loaded_count: 0, read_count: 1,
+    }],
+    events: [],
+  };
+  const result = buildTeamKnowledgeInsights([{
+    id: "task-module", status: "completed", business_modules: [{}],
+    knowledge_usage: moduleUsage,
+  }]);
+  assert.equal(result.resources.length, 1);
+  assert.equal(result.resources[0].name, "订单状态机");
+  assert.equal(result.resources[0].scope, "module");
+  assert.equal(result.resources[0].module_name, "订单域");
+  assert.ok(!result.resources.some((item) => item.name === "本需求设计"));
+});
+
 test("团队知识效能使用独立只读 HTTP 接口", async () => {
   const expected = buildTeamKnowledgeInsights([],
     new Date("2026-08-24T09:00:00Z"));
