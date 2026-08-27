@@ -2265,6 +2265,103 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-pane-tabs button.on { color: var(--accent); background: var(--surface); box-shadow: var(--shadow-xs); }
 .issue-pane-tabs button i { font-style: normal; color: var(--faint); margin-left: 4px; }
 
+/* 会话材料页签:DTS 单据 / 工作区变更(含快速修改)/ 拉取日志 */
+.issue-materials { display: grid; gap: 14px; align-content: start; }
+.issue-materials-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.issue-materials-toolbar button {
+  min-height: 30px; padding: 0 12px; border: 1px solid var(--line);
+  border-radius: 8px; background: var(--surface-muted); color: var(--text-strong);
+  font-size: var(--font-size-assist); cursor: pointer;
+}
+.issue-materials-toolbar button:disabled { opacity: .5; cursor: not-allowed; }
+.issue-materials-push {
+  padding: 2px 10px; border-radius: 999px; font-size: var(--font-size-dense);
+  background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent);
+}
+.issue-materials-note { color: #b7791f; font-size: var(--font-size-assist); }
+.issue-materials-warning {
+  margin: 0; padding: 6px 10px; border-radius: 8px;
+  background: rgba(183, 121, 31, .1); color: #b7791f;
+  font-size: var(--font-size-assist);
+}
+.issue-materials-empty { margin: 4px 0 0; color: var(--faint); font-size: var(--font-size-assist); }
+.issue-materials-block {
+  display: grid; gap: 8px; padding: 12px 14px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--surface-muted);
+}
+.issue-materials-block h4 { margin: 0; font-size: var(--font-size-assist); color: var(--muted); }
+.issue-materials-dts-head { display: flex; gap: 12px; flex-wrap: wrap; margin: 0; align-items: baseline; }
+.issue-materials-dts-head span { color: var(--muted); font-size: var(--font-size-dense); }
+.issue-materials-dts-head a { color: var(--accent); }
+.issue-materials-files { display: grid; gap: 4px; }
+.issue-materials-file {
+  display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px;
+  padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface); color: var(--text-strong);
+  font: var(--font-size-assist) var(--font-mono); cursor: pointer; text-align: left;
+}
+.issue-materials-file:hover { border-color: var(--accent); }
+.issue-materials-file.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.issue-materials-file .p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.issue-materials-file .num { display: grid; gap: 2px; justify-items: end; font-family: var(--font-mono); }
+.issue-materials-file .num em { font-style: normal; }
+.issue-materials-file .num em:first-child { color: #2f9e44; }
+.issue-materials-file .num em:last-child { color: #d64545; }
+.issue-materials-file .st {
+  padding: 1px 6px; border-radius: 6px; font-size: var(--font-size-dense);
+  background: var(--surface-muted); color: var(--muted); white-space: nowrap;
+}
+.issue-materials-editor { display: grid; gap: 8px; margin-top: 4px; }
+.issue-materials-editor-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.issue-materials-editor-bar strong {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font: 600 var(--font-size-assist) var(--font-mono); color: var(--text-strong);
+}
+.issue-materials-editor-bar button {
+  min-height: 28px; padding: 0 12px; border: 1px solid var(--line);
+  border-radius: 7px; background: var(--surface); color: var(--text-strong);
+  font-size: var(--font-size-assist); cursor: pointer;
+}
+.issue-materials-editor-bar button.primary {
+  background: var(--accent); border-color: var(--accent); color: #fff;
+}
+.issue-materials-editor-bar button:disabled { opacity: .5; cursor: not-allowed; }
+.issue-materials-editor textarea {
+  min-height: 260px; max-height: 480px; padding: 10px 12px; resize: vertical;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface); color: var(--text-strong);
+  font: var(--font-size-assist) var(--font-mono); line-height: 1.55;
+}
+.issue-materials-diff {
+  margin: 0; max-height: 320px; overflow: auto; padding: 10px 12px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--surface);
+  font: var(--font-size-dense) var(--font-mono); line-height: 1.5;
+  color: var(--muted); white-space: pre; word-break: break-all;
+}
+.issue-materials-edits { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.issue-materials-edits li {
+  display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: baseline;
+  font-size: var(--font-size-dense); color: var(--faint);
+}
+.issue-materials-edits .p { color: var(--muted); font-family: var(--font-mono); }
+
+/* 现场页签:原始事件流,只陈列不解读 */
+.issue-events { display: grid; gap: 10px; align-content: start; }
+.issue-events-list {
+  display: grid; gap: 3px; max-height: 70vh; overflow: auto;
+  font: var(--font-size-dense) var(--font-mono);
+}
+.issue-events-row {
+  display: grid; grid-template-columns: auto auto 1fr; gap: 10px;
+  align-items: baseline; padding: 4px 8px; border-radius: 6px;
+  background: var(--surface-muted);
+}
+.issue-events-row .ts { color: var(--faint); }
+.issue-events-row .kind { color: var(--accent); font-weight: 700; }
+.issue-events-row .payload {
+  color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
 /* 结论文档正文:复用消息区滚动容器,内部换成 markdown 排版 */
 .issue-thread.issue-doc { gap: 12px; }
 .issue-doc-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--faint); font-size: var(--font-size-dense); }

@@ -63,6 +63,17 @@ import {
 } from "./issueGit.ts";
 import type { IssueOpsTools } from "./opsTools.ts";
 import type { DtsGateway, DtsTicketDetail } from "./gateways.ts";
+import {
+  listLogs,
+  listManualEdits,
+  listWorkspaceChanges,
+  readLog,
+  readWorkspaceFile,
+  recentEvents,
+  recordManualEdit,
+  workspaceFileDiff,
+  writeWorkspaceFile,
+} from "./materials.ts";
 import { createIssueTools, expectedBranch, GATE_OPTIONS, type IssueToolContext } from "./tools.ts";
 import {
   buildIssueTimeline,
@@ -1365,6 +1376,49 @@ export class IssueFlowService {
       throw new IssueControlError("DTS 网关未配置(部署需 --dts-mcp-url 与 token)");
     }
     return this.options.dts.proxyFile(path);
+  }
+
+  // ---- 会话材料(交付材料页签;全部只读旁路 + 快速修改唯一写口) ----
+
+  listMaterials(id: string) {
+    const live = this.require(id);
+    return {
+      ticket: live.state.ticket,
+      push: live.state.push,
+      analysis_available: existsSync(join(live.root, "issue-analysis.md")),
+      changes: listWorkspaceChanges(join(live.root, "repo")),
+      logs: listLogs(live.root),
+      manual_edits: listManualEdits(live.root),
+    };
+  }
+
+  readWorkspaceFile(id: string, rel: string) {
+    return readWorkspaceFile(join(this.require(id).root, "repo"), rel);
+  }
+
+  /** 快速修改:写工作区文件并入人工台账(会话私有账本,不进语义事件)。 */
+  saveWorkspaceFile(id: string, rel: string, content: string) {
+    const live = this.require(id);
+    const result = writeWorkspaceFile(join(live.root, "repo"), rel, content);
+    recordManualEdit(live.root, rel, result.size);
+    this.log(`[issue-flow] ${live.id} 人工修改 ${rel}(${result.size}B)`);
+    return result;
+  }
+
+  workspaceFileDiff(id: string, rel: string) {
+    return workspaceFileDiff(join(this.require(id).root, "repo"), rel);
+  }
+
+  listIssueLogs(id: string) {
+    return listLogs(this.require(id).root);
+  }
+
+  readIssueLog(id: string, name: string) {
+    return readLog(this.require(id).root, name);
+  }
+
+  recentEvents(id: string, limit?: number) {
+    return recentEvents(this.require(id).root, limit);
   }
 
   // ---- 关停 ----
