@@ -5964,6 +5964,11 @@ pre {
 .prepush-live-state.is-reconnecting { color: var(--danger); }
 .prepush-live-body { max-height: 260px; overflow-y: auto; padding: 8px 12px; font-family: var(--mono, ui-monospace, monospace); font-size: var(--font-size-assist); line-height: 1.5; }
 .prepush-live-body pre { margin: 0; white-space: pre-wrap; word-break: break-all; }
+.prepush-live-body time {
+  color: var(--muted);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
 .prepush-live-body .line-cmd { color: var(--accent); font-weight: 600; margin-top: 6px; }
 .prepush-live-body .line-out { color: var(--muted); }
 .prepush-live-body .line-err { color: var(--danger); }

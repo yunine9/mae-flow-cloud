@@ -18,6 +18,17 @@ interface LiveLine {
   key: string;
   kind: "cmd" | "out" | "err" | "note";
   text: string;
+  /** 命令与消息行带时刻(用户点名);输出尾行属于上一条命令,不重复。 */
+  time?: string;
+}
+
+function timeOf(ts: string): string | undefined {
+  const date = new Date(ts);
+  return Number.isNaN(date.getTime())
+    ? undefined
+    : date.toLocaleTimeString([], {
+        hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+      });
 }
 
 function clip(value: string, limit: number): string {
@@ -35,18 +46,19 @@ function linesOf(event: SemanticEvent): LiveLine[] {
     text?: unknown;
   };
   const key = `${event.sessionId ?? "main"}:${event.eventId}`;
+  const time = timeOf(event.ts);
   switch (event.kind) {
     case "tool_requested": {
       const name = String(payload.name ?? "");
       if (/^bash$/i.test(name)) {
         return [{
-          key, kind: "cmd",
+          key, kind: "cmd", time,
           text: `$ ${clip(String(payload.input?.command ?? ""), 600)}`,
         }];
       }
       if (/^(edit|write)$/i.test(name)) {
         const path = payload.input?.path ?? payload.input?.file_path ?? "";
-        return [{ key, kind: "note", text: `✎ 修改 ${clip(String(path), 200)}` }];
+        return [{ key, kind: "note", time, text: `✎ 修改 ${clip(String(path), 200)}` }];
       }
       return [];
     }
@@ -64,7 +76,7 @@ function linesOf(event: SemanticEvent): LiveLine[] {
     case "assistant_message": {
       const text = String(payload.text ?? "").trim();
       return text
-        ? [{ key, kind: "note", text: clip(text, 300) }] : [];
+        ? [{ key, kind: "note", time, text: clip(text, 300) }] : [];
     }
     default:
       return [];
@@ -123,7 +135,8 @@ export function PrepushLiveLog({
       {lines.length === 0
         && <p className="prepush-live-empty">{emptyText}</p>}
       {lines.map((line) => <pre
-        key={line.key} className={`line-${line.kind}`}>{line.text}</pre>)}
+        key={line.key} className={`line-${line.kind}`}>
+        {line.time && <time>{line.time} </time>}{line.text}</pre>)}
     </div>
   </div>;
 }
