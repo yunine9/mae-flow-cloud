@@ -27,6 +27,7 @@ import {
   listSkillSubmissions,
   listSkillVersions,
   offlineHostSkill,
+  readHostSkillDocument,
   rejectSkillSubmission,
   rollbackHostSkill,
   submitHostSkill,
@@ -55,6 +56,12 @@ test("上传→货架可见且权限归一;更新归档旧版;回退按版本痕
   assert.equal(shelf.skills[0].loadable, true, "收进来的必须是装载器认的");
   assert.equal(shelf.skills[0].digest, first.skill_digest,
     "货架指纹与留痕指纹必须同源");
+  const detail = readHostSkillDocument(dataDir, "java-autout");
+  assert.equal(detail.content, skillMd("单测写法 v1"));
+  assert.equal(detail.digest, first.skill_digest);
+  assert.equal(detail.path, "java-autout/SKILL.md");
+  assert.throws(() => readHostSkillDocument(dataDir, "../escape"),
+    SkillLibraryError, "查看入口与写入口共用目录边界");
 
   // 权限显式归一:文件 0644/目录 0755,不看上传时 umask 的脸色。
   const live = join(dataDir, "skills", "java-autout");
@@ -221,6 +228,11 @@ test("路由权限:登录才可读,写只归管理员;留痕带操作人", async
     assert.equal(view.skills.length, 1, "开发者看得见货架与留痕");
     assert.equal(view.operations[0].operator, "boss",
       "留痕记录的是真实操作人,不是前端自报");
+    const document = await (await fetch(`${base}/skills/route-demo`,
+      { headers: { cookie: dev } })).json() as { content: string; path: string };
+    assert.match(document.content, /路由演练/,
+      "登录成员应能从名称打开实际 SKILL.md");
+    assert.equal(document.path, "route-demo/SKILL.md");
 
     const badUpload = await fetch(`${base}/skills/route-demo`, {
       method: "PUT", headers: { cookie: boss },

@@ -5,6 +5,7 @@ import {
   discardSkillCandidate,
   distillSkill,
   getSkillCandidate,
+  getSkillDocument,
   getSkillLibrary,
   listSkillCandidates,
   listSkillSubmissions,
@@ -14,6 +15,7 @@ import {
   rollbackSkill,
   submitSkill,
   uploadSkill,
+  type HostSkillDocument,
   type HostSkillShelf,
   type KnowledgeInsightResource,
   type KnowledgeKind,
@@ -174,6 +176,9 @@ function SkillLibraryPanel({ fallback, admin }: {
     useState<{ skill: string; notes: string; evidence: string }>();
   const [distilling, setDistilling] = useState(false);
   const [showOperations, setShowOperations] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [documentFor, setDocumentFor] = useState("");
+  const [document, setDocument] = useState<HostSkillDocument>();
   const [submissions, setSubmissions] = useState<SkillSubmissionRecord[]>([]);
   const [submitNote, setSubmitNote] = useState("");
   const [rejectFor, setRejectFor] = useState("");
@@ -220,6 +225,23 @@ function SkillLibraryPanel({ fallback, admin }: {
     if (!uploadName && encoded.folder) setUploadName(encoded.folder);
   };
 
+  const toggleDocument = async (directory: string) => {
+    if (documentFor === directory) {
+      setDocumentFor("");
+      setDocument(undefined);
+      return;
+    }
+    setDocumentFor(directory);
+    setDocument(undefined);
+    setError("");
+    try {
+      setDocument(await getSkillDocument(directory));
+    } catch (cause) {
+      setError(String(cause instanceof Error ? cause.message : cause));
+      setDocumentFor("");
+    }
+  };
+
   if (!shelf && !admin) return null;
 
   return <div className="knowledge-shelf" aria-label="团队 Skill 资产库">
@@ -229,14 +251,19 @@ function SkillLibraryPanel({ fallback, admin }: {
         <span>{shelf?.skills.length ?? 0} 项</span>
         {/* 人人可提交(2026-08-27 用户拍板):开发者走待审区,管理员
             审核后上架;管理员自己上架照旧直达。 */}
-        <button type="button" className="knowledge-shelf-action primary"
+        {expanded && <button type="button" className="knowledge-shelf-action primary"
           onClick={() => { setUploadOpen((open) => !open); setPending(undefined); setUploadName(""); setSubmitNote(""); }}>
           {uploadOpen ? (admin ? "收起上架" : "收起提交")
             : (admin ? "上架 Skill" : "提交 Skill")}
+        </button>}
+        <button type="button" className="knowledge-shelf-toggle"
+          aria-expanded={expanded} onClick={() => setExpanded((open) => !open)}>
+          {expanded ? "收起" : "展开"}<i aria-hidden />
         </button>
       </div>
     </div>
 
+    {expanded && <div className="knowledge-shelf-body">
     {error && <div className="knowledge-shelf-error" role="alert">{error}</div>}
     {submitNote && <div className="knowledge-shelf-empty" role="status">{submitNote}</div>}
 
@@ -332,7 +359,10 @@ function SkillLibraryPanel({ fallback, admin }: {
       const directory = directoryOf(skill);
       return <article className={`knowledge-shelf-row${skill.loadable ? "" : " broken"}`} key={skill.path}>
         <div className="knowledge-shelf-main">
-          <strong>{skill.name}</strong>
+          {directory ? <button type="button" className="knowledge-shelf-name"
+            aria-expanded={documentFor === directory}
+            onClick={() => void toggleDocument(directory)}>{skill.name}</button>
+            : <strong>{skill.name}</strong>}
           {!skill.loadable && <span className="knowledge-shelf-badge" title="pi 装载器未接受,任何会话都不会带上它;检查 SKILL.md frontmatter 的 name/description">不可装载</span>}
           {skill.effect?.signal && <span
             className={`knowledge-shelf-badge signal-${skill.effect.signal}`}
@@ -387,6 +417,15 @@ function SkillLibraryPanel({ fallback, admin }: {
               onClick={() => { setConfirmOffline(""); void run(() => offlineSkill(directory)); }}>确认下线?</button>
             : <button type="button" disabled={busy}
               onClick={() => setConfirmOffline(directory)}>下线</button>}
+        </div>}
+        {directory && documentFor === directory && <div
+          className="knowledge-shelf-document" aria-label={`${skill.name} 内容`}>
+          <header>
+            <span><strong>SKILL.md</strong><small>{skill.path}</small></span>
+            <button type="button" onClick={() => void toggleDocument(directory)}>收起</button>
+          </header>
+          {!document && <p>正在读取内容…</p>}
+          {document && <pre>{document.content}</pre>}
         </div>}
         {versionsFor === directory && <div className="knowledge-shelf-versions">
           {!versions && <small>读取版本痕…</small>}
@@ -471,6 +510,7 @@ function SkillLibraryPanel({ fallback, admin }: {
         <time dateTime={operation.at}>{latest(operation.at).replace("最近 ", "")}</time>
       </div>)}
     </div>}
+    </div>}
   </div>;
 }
 
@@ -489,12 +529,13 @@ export function KnowledgeFlywheel({
   onOpenTask: (taskId: string) => void;
   admin?: boolean;
 }) {
-  const [kind, setKind] = useState<"all" | KnowledgeKind>("all");
+  const [kind, setKind] = useState<"all" | "rules" | "skill">("all");
   // 分组代替跨仓混排:团队级(跨仓资产)一组在前,其余按仓一组一个榜。
   // 组内排序:消费率(读取/装载)优先,样本不足(<3 单)沉底;绝对量只做
   // 次级键——谁的仓单多谁霸榜的老毛病由此消除。
   const groups = useMemo(() => {
     const filtered = (insights?.resources ?? [])
+      .filter((item) => item.kind !== "document")
       .filter((item) => kind === "all" || item.kind === kind);
     const byRepo = new Map<string, KnowledgeInsightResource[]>();
     for (const item of filtered) {
@@ -530,7 +571,7 @@ export function KnowledgeFlywheel({
     <header className="knowledge-flywheel-head">
       <div className="knowledge-flywheel-title">
         <span className="knowledge-flywheel-icon" aria-hidden>知</span>
-        <div><span className="section-kicker">KNOWLEDGE FLYWHEEL</span><h2 id="knowledge-flywheel-title">团队知识效能</h2><p>从“提供”到“主动访问”再到交付结果，发现值得沉淀和需要补齐的业务知识。</p></div>
+        <div><span className="section-kicker">KNOWLEDGE FLYWHEEL</span><h2 id="knowledge-flywheel-title">团队知识效能</h2><p>只观察经过沉淀、能跨任务复用的团队资产；任务需求文档留在各自现场。</p></div>
       </div>
       <div className="knowledge-flywheel-refresh">
         {insights && <small>更新于 {latest(insights.generated_at).replace("最近 ", "")}</small>}
@@ -544,7 +585,7 @@ export function KnowledgeFlywheel({
 
     {error && !insights && <div className="knowledge-flywheel-error" role="alert"><strong>知识效能暂时不可用</strong><span>{error}</span><button type="button" onClick={onRetry}>重新读取</button></div>}
     {loading && !insights && <div className="knowledge-flywheel-loading" aria-label="正在统计知识效能"><i /><i /><i /></div>}
-    {insights && insights.summary.tracked_tasks === 0 && <div className="knowledge-flywheel-empty"><span aria-hidden>◎</span><div><strong>知识飞轮正在等待第一批数据</strong><p>新任务开始选择或读取业务知识后，这里会自动出现使用趋势和改进建议；旧任务不会被猜测补数。</p></div></div>}
+    {insights && insights.summary.tracked_tasks === 0 && <div className="knowledge-flywheel-empty"><span aria-hidden>◎</span><div><strong>知识飞轮正在等待第一批数据</strong><p>可复用规则或 Skill 被新任务装载、读取后，这里会出现使用趋势；任务自己的文档不会进入团队统计。</p></div></div>}
 
     <SkillLibraryPanel fallback={insights?.host_skills} admin={admin} />
 
@@ -552,16 +593,16 @@ export function KnowledgeFlywheel({
       <div className="knowledge-flywheel-metrics" aria-label="知识效能摘要">
         <div><span>已追踪任务</span><strong>{insights.summary.tracked_tasks}</strong><small>采用新知识口径</small></div>
         <div><span>主动访问率</span><strong>{insights.summary.access_rate}<em>%</em></strong><small>{insights.summary.accessed_tasks} 个任务真正读取</small></div>
-        <div><span>活跃知识</span><strong>{insights.summary.active_resources}</strong><small>共识别 {insights.summary.unique_resources} 项</small></div>
+        <div><span>活跃资产</span><strong>{insights.summary.active_resources}</strong><small>共识别 {insights.summary.unique_resources} 项</small></div>
         <div className={insights.summary.opportunities ? "attention" : "positive"}><span>改进机会</span><strong>{insights.summary.opportunities}</strong><small>{insights.summary.selected_unused} 项选而未用</small></div>
       </div>
 
       <div className="knowledge-flywheel-body">
         <div className="knowledge-ranking">
-          <div className="knowledge-panel-head"><div><strong>知识使用排行</strong><small>访问表示 Agent 主动读取或检索，不把“被提供”冒充“已使用”；各仓单独排行，不与其他仓比较。</small></div><span>{total} 项</span></div>
+          <div className="knowledge-panel-head"><div><strong>可复用资产使用</strong><small>访问表示 Agent 主动读取规则或 Skill，不把任务文档和“被提供”冒充团队知识；各仓单独排行。</small></div><span>{total} 项</span></div>
           <div className="knowledge-filterbar">
             <div role="group" aria-label="按知识类型筛选">
-              {(["all", "rules", "document", "skill"] as const).map((value) => <button type="button" key={value} className={kind === value ? "on" : ""} aria-pressed={kind === value} onClick={() => setKind(value)}>{value === "all" ? "全部" : KIND_LABEL[value]}</button>)}
+              {(["all", "rules", "skill"] as const).map((value) => <button type="button" key={value} className={kind === value ? "on" : ""} aria-pressed={kind === value} onClick={() => setKind(value)}>{value === "all" ? "全部" : KIND_LABEL[value]}</button>)}
             </div>
           </div>
           <div className="knowledge-ranking-list">
@@ -585,7 +626,7 @@ export function KnowledgeFlywheel({
           </div>
         </aside>
       </div>
-      <footer className="knowledge-flywheel-note"><span>口径</span>“提供、加载、主动访问”分开统计；交付与修复只做相关性参考，不代表某份知识直接导致成功或失败。</footer>
+      <footer className="knowledge-flywheel-note"><span>口径</span>任务需求、附件与过程文档只留在单任务现场；可复用资产的“提供、加载、主动访问”分开统计，交付结果只做相关性参考。</footer>
     </>}
   </section>;
 }

@@ -6041,6 +6041,10 @@ pre {
 .knowledge-shelf-warnings { padding: 8px 16px 12px; border-top: 1px dashed var(--line); color: var(--danger, #c33); font-size: var(--font-size-assist); }
 .knowledge-shelf-warnings p { margin: 2px 0; }
 .knowledge-shelf-head-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.knowledge-shelf-toggle { display: inline-flex; align-items: center; gap: 7px; padding: 4px 8px; border: 0; background: transparent; color: var(--muted); font-size: var(--font-size-assist); cursor: pointer; }
+.knowledge-shelf-toggle:hover { color: var(--text-strong); }
+.knowledge-shelf-toggle i { width: 7px; height: 7px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg) translateY(-2px); transition: transform .16s ease; }
+.knowledge-shelf-toggle[aria-expanded="true"] i { transform: rotate(225deg) translate(-1px, -1px); }
 .knowledge-shelf-action { padding: 4px 12px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: var(--ink); font-size: var(--font-size-assist); cursor: pointer; }
 .knowledge-shelf-action.primary { border-color: var(--accent, #4a7dff); color: var(--accent, #4a7dff); font-weight: 600; }
 .knowledge-shelf-action:disabled { opacity: .5; cursor: default; }
@@ -6057,6 +6061,15 @@ pre {
 .knowledge-shelf-actions button:hover:not(:disabled) { color: var(--ink); border-color: var(--ink); }
 .knowledge-shelf-actions button.danger { color: var(--danger, #c33); border-color: currentColor; font-weight: 600; }
 .knowledge-shelf-actions button:disabled { opacity: .5; cursor: default; }
+.knowledge-shelf-name { padding: 0; border: 0; background: transparent; color: var(--text-strong); font: inherit; font-size: var(--font-size-body); font-weight: 700; text-align: left; cursor: pointer; }
+.knowledge-shelf-name:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.knowledge-shelf-document { flex-basis: 100%; min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); }
+.knowledge-shelf-document header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+.knowledge-shelf-document header span { min-width: 0; display: flex; align-items: baseline; gap: 10px; }
+.knowledge-shelf-document header small { overflow: hidden; color: var(--faint); font-size: var(--font-size-assist); text-overflow: ellipsis; white-space: nowrap; }
+.knowledge-shelf-document header button { padding: 2px 8px; border: 0; background: transparent; color: var(--muted); font-size: var(--font-size-assist); cursor: pointer; }
+.knowledge-shelf-document p { margin: 0; padding: 14px; color: var(--muted); font-size: var(--font-size-assist); }
+.knowledge-shelf-document pre { max-height: 440px; margin: 0; padding: 12px 14px; overflow: auto; color: var(--text); font-family: var(--mono, ui-monospace, monospace); font-size: var(--font-size-assist); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
 .knowledge-shelf-versions { flex-basis: 100%; padding: 6px 0 2px; }
 .knowledge-shelf-versions small { color: var(--faint); font-size: var(--font-size-assist); }
 .knowledge-shelf-version { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 4px 0; color: var(--muted); font-size: var(--font-size-assist); font-variant-numeric: tabular-nums; }

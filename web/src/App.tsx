@@ -420,7 +420,7 @@ export function App() {
   // 知识聚合要读取多份任务足迹，独立低频刷新，不能跟 1.5 秒任务心跳
   // 绑在一起。开发成员也能看团队只读视图，和现有任务可见性一致。
   useEffect(() => {
-    if (!session || view !== "team") return;
+    if (!session || view !== "knowledge") return;
     refreshKnowledgeInsights();
     const timer = window.setInterval(refreshKnowledgeInsights, 60_000);
     return () => window.clearInterval(timer);

@@ -233,6 +233,19 @@ function tracked(task: KnowledgeInsightTask): boolean {
     || task.repository_skills !== undefined;
 }
 
+/** 团队页只统计能跨任务复用的资产。任务中读过的需求附件、过程文档
+ * 即使恰好落在 docs/ 下，也仍是任务上下文，不能因为一次 read 就自动
+ * 晋升成团队知识。业务模块文档以后必须经过显式发布/定范围后再进入
+ * 这里；在那之前只有项目规则与 Skill 具备稳定的复用身份。 */
+function reusableResource(resource: { kind: KnowledgeKind }): boolean {
+  return resource.kind === "rules" || resource.kind === "skill";
+}
+
+function teamTracked(task: KnowledgeInsightTask): boolean {
+  return task.repository_skills !== undefined
+    || (task.knowledge_usage?.resources.some(reusableResource) ?? false);
+}
+
 function percent(part: number, total: number): number {
   return total > 0 ? Math.round((part / total) * 100) : 0;
 }
@@ -304,19 +317,20 @@ export function buildTeamKnowledgeInsights(
   tasks: KnowledgeInsightTask[],
   now = new Date(),
 ): TeamKnowledgeInsights {
-  const observed = tasks.filter(tracked);
+  const observed = tasks.filter(teamTracked);
   const aggregate = new Map<string, KnowledgeInsightResource>();
   const taskAccess = new Set<string>();
   const frictionWithoutAccess: string[] = [];
 
   for (const task of observed) {
     const usage = task.knowledge_usage;
-    const accessed = usage?.resources.some((item) => item.read_count > 0) ?? false;
+    const reusable = (usage?.resources ?? []).filter(reusableResource);
+    const accessed = reusable.some((item) => item.read_count > 0);
     if (accessed) taskAccess.add(task.id);
     if (!accessed && (repaired(task) || needsAttention(task))) {
       frictionWithoutAccess.push(task.id);
     }
-    for (const resource of usage?.resources ?? []) {
+    for (const resource of reusable) {
       const key = resourceKey(resource);
       const item = aggregate.get(key) ?? {
         key,

@@ -832,11 +832,27 @@ export interface SkillUploadFile {
   content_base64: string;
 }
 
+export interface HostSkillDocument {
+  directory: string;
+  path: string;
+  content: string;
+  digest: string;
+  bytes: number;
+}
+
 /** 货架 + 留痕一次取齐(管理面自刷新用,与 knowledge-insights 解耦)。 */
 export async function getSkillLibrary(): Promise<
   HostSkillShelf & { operations: SkillOperationRecord[] }
 > {
   const response = await fetch("/skills");
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function getSkillDocument(
+  directory: string,
+): Promise<HostSkillDocument> {
+  const response = await fetch(`/skills/${encodeURIComponent(directory)}`);
   if (!response.ok) throw new Error(await errorText(response));
   return response.json();
 }

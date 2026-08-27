@@ -89,6 +89,7 @@ import {
   listSkillSubmissions,
   listSkillVersions,
   offlineHostSkill,
+  readHostSkillDocument,
   rejectSkillSubmission,
   rollbackHostSkill,
   submitHostSkill,
@@ -650,6 +651,10 @@ export function createTaskServer(
               && parts[1] === "submissions") {
             return json(response, 200,
               { submissions: listSkillSubmissions(dataDir) });
+          }
+          if (request.method === "GET" && parts.length === 2) {
+            return json(response, 200, readHostSkillDocument(
+              dataDir, decodeURIComponent(parts[1])));
           }
           if (request.method === "POST" && parts.length === 3
               && parts[2] === "submissions") {

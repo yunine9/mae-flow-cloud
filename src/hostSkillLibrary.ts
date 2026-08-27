@@ -70,6 +70,14 @@ export interface SkillUploadFile {
   content_base64: string;
 }
 
+export interface HostSkillDocument {
+  directory: string;
+  path: string;
+  content: string;
+  digest: string;
+  bytes: number;
+}
+
 export interface SkillVersionRecord {
   version_id: string;
   archived_at: string;
@@ -145,6 +153,33 @@ function assertDirectoryName(directory: string): void {
   if (RESERVED_DIRECTORY_NAMES.has(directory)) {
     throw new SkillLibraryError(`目录名与接口保留字冲突: ${directory}`);
   }
+}
+
+/** 货架详情只开放当前生效包的根 SKILL.md。目录名先走与写入口相同的
+ * 白名单，且 lstat 拒绝目录/文件软链接；浏览器永远拿不到数据目录的
+ * 绝对路径，也不能借查看入口遍历宿主文件。 */
+export function readHostSkillDocument(
+  dataDir: string,
+  directory: string,
+): HostSkillDocument {
+  assertDirectoryName(directory);
+  const packageRoot = join(dataDir, LIVE_DIR, directory);
+  const file = join(packageRoot, "SKILL.md");
+  if (!existsSync(packageRoot) || !lstatSync(packageRoot).isDirectory()
+      || !existsSync(file) || !lstatSync(file).isFile()) {
+    throw new SkillLibraryError(`没有这个生效中的 skill: ${directory}`);
+  }
+  const raw = readFileSync(file);
+  if (raw.byteLength > MAX_SKILL_BYTES) {
+    throw new SkillLibraryError("SKILL.md 超过 128 KiB，拒绝展示");
+  }
+  return {
+    directory,
+    path: `${directory}/SKILL.md`,
+    content: raw.toString("utf-8"),
+    digest: sha256(raw),
+    bytes: raw.byteLength,
+  };
 }
 
 function assertPackagePath(path: string): void {
