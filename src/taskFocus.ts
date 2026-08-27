@@ -31,6 +31,8 @@ interface FocusTask {
   entry_kind?: "requirement" | "dts";
   issue_context?: { stage?: "triage" | "delivery" };
   detail?: string;
+  /** 执行队列位次(1 起,投影字段):排队真相必须压过陈旧 detail。 */
+  queue_position?: number;
   blocked_by?: string[];
   waiting?: { question?: { questions?: unknown[] } };
   progress?: {
@@ -205,8 +207,13 @@ export function projectTaskFocus(task: FocusTask): TaskFocus {
     }
     return focus(
       "machine",
-      task.detail?.trim() || "任务正在执行队列中等待",
-      "获得执行资源后自动开始",
+      // 排队真相压过 detail:重跑后 detail 是"人工重跑…",拿它当标题
+      // 会让排队的单看起来像在推进(实锤:并发 2 跑 3 单,用户找不到
+      // 哪单在排队)。
+      task.queue_position
+        ? `排队等待执行资源(第 ${task.queue_position} 位)`
+        : "任务正在执行队列中等待",
+      task.detail?.trim() || "获得执行资源后自动开始",
       "platform",
       30,
     );

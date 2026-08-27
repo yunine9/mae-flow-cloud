@@ -85,3 +85,18 @@ test("任务焦点:DTS 诊断与内核交接不会伪装成普通编码", () => 
   assert.match(handoff.headline, /等待代码修复接管/);
   assert.match(handoff.next_action, /Mae-Flow 问题修复/);
 });
+
+test("任务焦点:排队真相压过陈旧 detail,并报出位次", () => {
+  // 实锤:并发 2 跑 3 单,重跑后的排队单拿 detail("人工重跑…")当
+  // 标题,三单看起来都在推进,没人知道谁在排队。
+  const queued = projectTaskFocus({
+    status: "queued",
+    queue_position: 1,
+    detail: "人工重跑,续接内核当前步骤",
+  });
+  assert.equal(queued.headline, "排队等待执行资源(第 1 位)");
+  assert.equal(queued.next_action, "人工重跑,续接内核当前步骤");
+
+  const noPosition = projectTaskFocus({ status: "queued" });
+  assert.equal(noPosition.headline, "任务正在执行队列中等待");
+});

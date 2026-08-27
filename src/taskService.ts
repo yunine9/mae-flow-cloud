@@ -432,6 +432,9 @@ export interface TaskSummary {
     adapter: { logs: boolean; deploy: boolean; rollback: boolean };
   };
   status: TaskStatus;
+  /** 执行队列位次(1 起,读侧投影,不落盘):排队的单必须能回答
+   * "排到哪了",否则陈旧 detail 会让它看起来像在推进。 */
+  queue_position?: number;
   /** 读侧统一投影：只解释当前事实，不参与流程迁移或门禁。 */
   focus?: TaskFocus;
   waiting?: WaitingRecord & {
@@ -2242,8 +2245,12 @@ export class TaskService {
               this.options.host?.kernelRoot,
               summary.waiting?.step,
             );
+    // 排队位次投影:status=queued 时人第一想知道的是"排到哪了"。
+    const queueIndex = summary.status === "queued"
+      ? this.queue.indexOf(summary.id) : -1;
     const projected = {
       ...summary,
+      ...(queueIndex >= 0 ? { queue_position: queueIndex + 1 } : {}),
       title: summary.title ?? taskTitle(summary.requirement),
       updated_at: summary.updated_at ?? summary.created_at,
       last_progress_at: summary.last_progress_at

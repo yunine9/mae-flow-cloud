@@ -414,6 +414,8 @@ export interface TaskSummary {
   last_progress_at?: string;
   completed_at?: string;
   token_usage?: TaskTokenUsage;
+  /** 执行队列位次(1 起,服务端投影):排队的单要能回答"排到哪了"。 */
+  queue_position?: number;
   /** 环境预热编译收据(服务端镜像):基线红=环境/上游的锅,与本单
    * 增量无关;不构成任何交付证据。 */
   baseline_build?: {
