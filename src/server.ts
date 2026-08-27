@@ -1117,6 +1117,17 @@ export function createTaskServer(
           }
           return json(response, 200, service.retry(id));
         }
+        // 推送前验证失败停机后,人可拍板跳过本地验证,直推流水线裁决。
+        if (request.method === "POST" && parts[2] === "prepush"
+            && parts[3] === "skip") {
+          const target = service.get(id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          if (!canOperate(viewer, target.luban_account, !!options.auth)) {
+            return json(response, 403, { error: "只能操作分配给自己的任务" });
+          }
+          return json(response, 200,
+            await service.skipPrePushVerification(id));
+        }
         // 从头重跑会原位覆盖旧任务及其审计现场。管理员不替开发者发起
         // 或冒用其代码身份；鉴权部署下只能由任务本人执行。
         if (request.method === "POST" && parts[2] === "rerun") {

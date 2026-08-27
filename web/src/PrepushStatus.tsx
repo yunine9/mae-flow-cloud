@@ -1,5 +1,9 @@
 import { useState } from "react";
-import type { PrepushVerification, TaskSummary } from "./api";
+import {
+  skipPrepushVerification,
+  type PrepushVerification,
+  type TaskSummary,
+} from "./api";
 import { PrepushLiveLog, prepushActive } from "./PrepushLiveLog";
 import { formatLocalDateTime } from "./time";
 
@@ -79,6 +83,13 @@ function viewOf(state: string): PrepushView {
         detail: "编译与 UT 已通过，Cloud 可以推送这个 SHA。",
         tone: "success",
       };
+    case "user_skipped":
+      return {
+        phase: "environment",
+        label: "已跳过·流水线裁决",
+        detail: "用户选择跳过本地验证；编译与 UT 由权威流水线裁决。",
+        tone: "neutral",
+      };
     default:
       return {
         phase: "unknown",
@@ -98,10 +109,23 @@ function shortSha(sha: string): string {
 /** 工作台头部的小胶囊(与预热同款):头部只放一行式信号,状态卡与
  * 实时日志进浮层/执行现场——头部堆叠是各功能局部最优抢地盘的结果,
  * 2026-08-27 用户拍板立规矩收敛。样式复用 warmup-badge/overlay。 */
-export function PrepushBadge({ task }: { task: TaskSummary }) {
+export function PrepushBadge({
+  task,
+  canOperate = false,
+  onChanged,
+}: {
+  task: TaskSummary;
+  canOperate?: boolean;
+  onChanged?: () => void;
+}) {
   const [open, setOpen] = useState(false);
+  const [skipArmed, setSkipArmed] = useState(false);
+  const [skipBusy, setSkipBusy] = useState(false);
+  const [skipError, setSkipError] = useState("");
   const prepush = task.delivery?.prepush;
   if (!prepush) return null;
+  const skippable = canOperate
+    && ["blocked", "environment_error"].includes(prepush.state);
   const view = viewOf(prepush.state);
   const cls = view.tone === "success" ? "is-passed"
     : view.tone === "danger" ? "is-failed"
@@ -130,6 +154,44 @@ export function PrepushBadge({ task }: { task: TaskSummary }) {
             <PrepushStatus prepush={prepush} placement="workspace" />
             <PrepushLiveLog taskId={task.id}
               active={prepushActive(prepush.state)} />
+            {skippable && (
+              /* 失败停机后的人工出路:本地验证只是省流水线的前闸,
+                 权威裁决在绑 SHA 流水线。跳过绑当下 HEAD,新提交即失效。 */
+              <div className="prepush-skip">
+                <p>
+                  本地验证已失败停机。你可以跳过本地验证直接推送——
+                  编译与 UT 交由权威流水线裁决;若代码真编译不过,
+                  会消耗一条流水线后进入流水线修复环。
+                </p>
+                {skipError && <p className="prepush-skip-error">{skipError}</p>}
+                {!skipArmed ? (
+                  <button type="button" onClick={() => setSkipArmed(true)}>
+                    跳过本地验证,直接推送流水线
+                  </button>
+                ) : (
+                  <span className="prepush-skip-confirm">
+                    <em>确定?跳过只对当前 HEAD 有效。</em>
+                    <button type="button" disabled={skipBusy}
+                      onClick={() => {
+                        setSkipBusy(true);
+                        setSkipError("");
+                        void skipPrepushVerification(task.id)
+                          .then(() => { setOpen(false); onChanged?.(); })
+                          .catch((reason) => setSkipError(reason instanceof Error
+                            ? reason.message : String(reason)))
+                          .finally(() => {
+                            setSkipBusy(false);
+                            setSkipArmed(false);
+                          });
+                      }}>
+                      {skipBusy ? "提交中…" : "确认跳过"}
+                    </button>
+                    <button type="button" disabled={skipBusy}
+                      onClick={() => setSkipArmed(false)}>返回</button>
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}

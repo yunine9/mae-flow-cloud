@@ -20,7 +20,10 @@ export type PrePushStateName =
   | "repairing"
   | "passed"
   | "blocked"
-  | "environment_error";
+  | "environment_error"
+  /** 用户显式拍板跳过本地验证:绑跳过时刻的 HEAD;编译与 UT 交由
+   * 权威流水线裁决。不是收据——getReusablePushReceipt 只认 passed。 */
+  | "user_skipped";
 
 export type PrePushCheck = "compile" | "unit_test";
 /** 领域侧归因；与 runner 的终止 status（code_failure 等）刻意分名。 */
@@ -198,7 +201,7 @@ function assertRevision(revision: PrePushRevision): void {
   required(revision.workspace_fingerprint, "pre-push workspace_fingerprint");
 }
 
-function sameRevision(
+export function sameRevision(
   state: Pick<PrePushVerificationState, "sha" | "workspace_fingerprint">,
   revision: PrePushRevision,
 ): boolean {

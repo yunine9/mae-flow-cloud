@@ -5841,10 +5841,36 @@ pre {
   animation: warmup-pulse 1.2s ease-in-out infinite;
 }
 .execution-prepush { display: flex; flex-direction: column; gap: 0; }
+.prepush-skip {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--attention);
+  border-radius: 9px;
+  background: var(--attention-soft);
+  font-size: var(--font-size-assist);
+  color: var(--muted);
+}
+.prepush-skip p { margin: 0 0 8px; line-height: 1.55; }
+.prepush-skip-error { color: var(--danger); }
+.prepush-skip button {
+  padding: 6px 12px;
+  color: var(--attention);
+  border: 1px solid var(--attention);
+  border-radius: 7px;
+  background: transparent;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.prepush-skip button:disabled { opacity: .6; cursor: default; }
+.prepush-skip-confirm { display: inline-flex; align-items: center; gap: 8px; }
+.prepush-skip-confirm em { font-style: normal; color: var(--text-strong); }
 .warmup-overlay {
   position: fixed;
   inset: 0;
-  z-index: 60;
+  /* 工作台遮罩自己就是 z-60,浮层同值会被后来的 sticky 兄弟压住
+     (实锤:与进度条重叠)。这里必须显著高于工作台内一切层级。 */
+  z-index: 400;
   display: flex;
   align-items: flex-start;
   justify-content: center;

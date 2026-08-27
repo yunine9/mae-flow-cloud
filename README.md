@@ -167,6 +167,12 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
   UT;④仅注入 runner 的单测裁过(收据/幂等/fail-open),真模型+真容器
   整链尚未跑过——下次 pilot 顺带验。前端在工作台执行现场有实时预热
   面板(SSE),列表页只在基线红时亮牌。
+  同批补的两个实战修正:预热/prepush 会话对 `.mae-flow-work/`
+  `build-notes.md` 精确豁免读写(其余内核现场照拦,组合走私有测试钉);
+  **推送前验证失败停机后,人可显式拍板跳过本地验证直推流水线裁决**
+  (POST /tasks/:id/prepush/skip,仅 blocked/environment_error 可跳,
+  绑拍板时刻 HEAD,新提交即失效;这是 fail-closed 停下后的人工出路,
+  不是自动降级——权威裁决始终在绑 SHA 流水线)。
 
 - **2026-08-25 编排瘦身的云端适配(run8b 实测整链通过)**:内核编码段
   44→21 步后,cloud 侧同步清理了死步骤引用(build_review/verify_*/

@@ -194,6 +194,7 @@ import {
   recordPrePushReport,
   retryPrePushVerification,
   restorePrePushVerification,
+  sameRevision,
   type PrePushExecutionAttestation,
   type PrePushReport,
   type PrePushRevision,
@@ -3997,6 +3998,40 @@ export class TaskService {
    * 流水线。停机重跑=人工背书"外部的事我办完了/值得再试":清掉
    * 停机账本,同 SHA 也给全新的修复机会(halted 的 last_sha 刹车
    * 挡的是"机器无人看管地空转",不该挡人工明确授权的再来一次)。 */
+  /** 用户显式跳过推送前验证(仅失败停机后可用)。本地验证是省流水线
+   * 的前闸,不是权威——权威裁决在绑 SHA 流水线,所以这是"fail-closed
+   * 停下后由人接手"的合法出路,不是自动降级。跳过绑当下 HEAD:之后
+   * 出现新提交,跳过即失效,重新走真验证(旧拍板不背书新代码)。 */
+  async skipPrePushVerification(id: string): Promise<TaskSummary> {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    if (task.prepushActive) {
+      throw new TaskControlError("推送前验证正在进行中,不能跳过");
+    }
+    const prepush = task.summary.delivery?.prepush;
+    if (!prepush
+        || !["blocked", "environment_error"].includes(prepush.state)) {
+      throw new TaskControlError(
+        "只有推送前验证失败停机后才能跳过;当前没有可跳过的失败验证");
+    }
+    if (!task.cwd) {
+      throw new TaskControlError("代码现场不可用,无法绑定跳过时刻的 HEAD");
+    }
+    const revision = await this.prePushRevision(task);
+    this.setPrePushState(task, {
+      ...prepush,
+      state: "user_skipped",
+      sha: revision.sha,
+      workspace_fingerprint: revision.workspace_fingerprint,
+      message: "用户选择跳过本地验证,编译与 UT 交由权威流水线裁决",
+      updated_at: new Date().toISOString(),
+    });
+    this.persist(task);
+    // 复用「重跑续推」的恢复链路续接交付;交付环走到 preparePush 时
+    // 命中同 HEAD 的跳过放行,不再起验证 Agent。
+    return this.retry(id);
+  }
+
   retry(id: string): TaskSummary {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
@@ -7407,6 +7442,19 @@ export class TaskService {
   ): Promise<boolean> {
     if (!this.options.prepush?.enabled) return true;
     if (task.prepushActive) return task.prepushActive;
+    // 用户显式拍板跳过本地验证:绑 HEAD 放行,交由权威流水线裁决。
+    // HEAD 变了(修复/新提交)跳过即失效,重新走真验证——旧拍板不
+    // 背书新代码,与收据同一条纪律。
+    const skipped = task.summary.delivery?.prepush;
+    if (skipped?.state === "user_skipped") {
+      const revision = await this.prePushRevision(task);
+      if (sameRevision(skipped, revision)) {
+        this.options.log?.(
+          `任务 ${task.summary.id} 按用户决定跳过推送前验证`
+          + `(HEAD ${revision.sha.slice(0, 12)}),交由流水线裁决`);
+        return true;
+      }
+    }
     const running = this.performPrePush(task, branch, baseline, epoch);
     task.prepushActive = running;
     try {

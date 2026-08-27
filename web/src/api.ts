@@ -1403,6 +1403,16 @@ export function tailEvents(
 
 /** 推送前验证的实时事件流:换轮(修复后新 HEAD 再验)由服务端切文件
  * 并从头重放新一轮,前端只管渲染。 */
+/** 推送前验证失败停机后,人拍板跳过本地验证、直推流水线裁决。 */
+export async function skipPrepushVerification(taskId: string): Promise<void> {
+  const response = await fetch(
+    `/tasks/${encodeURIComponent(taskId)}/prepush/skip`, { method: "POST" });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(String(body.error ?? `HTTP ${response.status}`));
+  }
+}
+
 /** 环境预热编译的实时事件流,与 prepush 同一套 SSE 语义。 */
 export function tailWarmupEvents(
   taskId: string,

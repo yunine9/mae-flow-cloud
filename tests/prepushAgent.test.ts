@@ -156,6 +156,28 @@ test("prepush gate: 放行构建、UT、本地提交和只读 Git", () => {
   }
 });
 
+test("prepush gate: build-notes 精确豁免,组合走私照拦", () => {
+  // 构建入口沉淀是预热/prepush 共用工作件,不是内核现场(实锤:
+  // 预热写入曾被拦报"沙箱限制")。
+  for (const [tool, value] of [
+    ["Write", ".mae-flow-work/build-notes.md"],
+    ["Read", ".mae-flow-work/build-notes.md"],
+    ["Bash", "cat > .mae-flow-work/build-notes.md <<'EOF'\n- 增量编译: mvn compile\nEOF"],
+    ["Bash", "tail -20 .mae-flow-work/build-notes.md"],
+  ] as const) {
+    assert.equal(prePushSecurityDecision(tool, value), undefined, value);
+  }
+  // 同一条命令夹带其他内核现场路径:豁免不放行。
+  for (const [tool, value] of [
+    ["Bash", "cp .mae-flow.json .mae-flow-work/build-notes.md"],
+    ["Bash", "cat .mae-flow-work/story.md > .mae-flow-work/build-notes.md"],
+    ["Write", ".mae-flow-work/notes-extra.md"],
+  ] as const) {
+    assert.equal(
+      prePushSecurityDecision(tool, value)?.action, "deny", value);
+  }
+});
+
 test("prepush gate: 拦住 push、remote 与凭据改写", () => {
   for (const command of [
     "git push origin HEAD",

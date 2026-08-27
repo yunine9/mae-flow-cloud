@@ -425,7 +425,8 @@ export function TaskWorkspace({
             </span>
             <WaitBadge task={task} personal={canOperate} />
             <WarmupBadge task={task} />
-            <PrepushBadge task={task} />
+            <PrepushBadge task={task} canOperate={canOperate}
+              onChanged={onChanged} />
           </div>
           <strong id="task-workspace-title">{task.title ?? task.requirement}</strong>
         </div>
