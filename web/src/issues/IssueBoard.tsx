@@ -13,19 +13,25 @@ import {
   type AuthUser,
   type DtsTicketBrief,
   type IssueDetail,
+  type IssueStage,
   type IssueSummary,
+  type IssueTimeline,
   answerIssue,
   bindIssueTicket,
   controlIssue,
   createIssue,
   getIssue,
+  getIssueAnalysis,
+  getIssueTimeline,
   listDtsTickets,
   listIssues,
   replyIssue,
   steerIssue,
 } from "../api";
+import { Markdown } from "../markdown";
+import { formatWait } from "../taskTime";
 import { startVisiblePolling } from "../visiblePolling";
-import { formatLocalDateTime } from "../time";
+import { formatLocalClock, formatLocalDateTime } from "../time";
 
 export function IssueBoard({ viewer, onNavigateProfile }: {
   viewer: AuthUser;
@@ -393,6 +399,8 @@ function IssueSessionView({
   const [answer, setAnswer] = useState("");
   const [ticket, setTicket] = useState("");
   const [busy, setBusy] = useState(false);
+  // 主面板双页签:对话是默认;结论文档(issue-analysis.md)按需再取。
+  const [tab, setTab] = useState<"chat" | "doc">("chat");
   const threadRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -489,19 +497,34 @@ function IssueSessionView({
       已推送 {detail.push.branch} @ {detail.push.sha.slice(0, 12)}
     </div>}
 
-    <div className="issue-thread" ref={threadRef}>
-      {detail.messages.map((message, index) => <div
-        key={`${message.ts}-${index}`}
-        className={`issue-message role-${message.role}`}>
-        <span className="issue-message-role">
-          {message.role === "user" ? "我" : message.role === "assistant" ? "AI" : "决定"}
-        </span>
-        <div className="issue-message-body">{message.text}</div>
-      </div>)}
-      {detail.messages.length === 0 && <p className="issue-thread-empty">
-        会话刚建立,AI 正在启动首轮研究。
-      </p>}
-    </div>
+    <IssueCostPanel id={detail.id} />
+
+    {tab === "chat"
+      ? <>
+          <IssuePaneTabs tab="chat" hasAnalysis={detail.has_analysis} onPick={setTab} />
+          <div className="issue-thread" ref={threadRef}>
+            {detail.messages.map((message, index) => <div
+              key={`${message.ts}-${index}`}
+              className={`issue-message role-${message.role}`}>
+              <span className="issue-message-role">
+                {message.role === "user"
+                  ? "我" : message.role === "assistant" ? "AI" : "决定"}
+              </span>
+              <div className="issue-message-body">{message.text}</div>
+            </div>)}
+            {detail.messages.length === 0 && <p className="issue-thread-empty">
+              会话刚建立,AI 正在启动首轮研究。
+            </p>}
+          </div>
+        </>
+      : <>
+          <IssuePaneTabs tab="doc" hasAnalysis={detail.has_analysis} onPick={setTab} />
+          {/* 结论文档按 updated_at 缓存:文档可能被 AI 续写,状态一动就该重读。 */}
+          <IssueConclusionDoc
+            id={detail.id}
+            updatedAt={detail.updated_at}
+          />
+        </>}
 
     {waiting && <div className="issue-waiting">
       <strong>AI 的提问(等你的答复)</strong>
@@ -568,10 +591,181 @@ function IssueSessionView({
               void run(() => controlIssue(detail.id, { action: "cancel" }));
             }
           }}>取消</button>
-        {detail.has_analysis && <span className="issue-analysis-flag">
-          结论文档 issue-analysis.md 已产出
-        </span>}
+        {detail.has_analysis && <button type="button" className="issue-analysis-flag"
+          title="查看结论文档"
+          onClick={() => setTab("doc")}>
+          结论文档 issue-analysis.md 已产出 →
+        </button>}
       </div>
     </div>
   </div>;
+}
+
+/** 对话 / 结论文档 的轻量页签(默认对话;文档按需再取)。 */
+function IssuePaneTabs({
+  tab,
+  hasAnalysis,
+  onPick,
+}: {
+  tab: "chat" | "doc";
+  hasAnalysis: boolean;
+  onPick: (tab: "chat" | "doc") => void;
+}) {
+  return <div className="issue-pane-tabs" role="tablist"
+    aria-label="会话内容视图">
+    <button type="button" role="tab" aria-selected={tab === "chat"}
+      className={tab === "chat" ? "on" : ""}
+      onClick={() => onPick("chat")}>对话</button>
+    <button type="button" role="tab" aria-selected={tab === "doc"}
+      className={tab === "doc" ? "on" : ""}
+      onClick={() => onPick("doc")}>
+      结论文档{!hasAnalysis && <i>(未生成)</i>}
+    </button>
+  </div>;
+}
+
+/** 结论文档(issue-analysis.md):激活页签时才取;状态一动(updated_at
+ * 变化)自动重读,让 AI 续写的内容能贴着节奏刷新。 */
+function IssueConclusionDoc({ id, updatedAt }: { id: string; updatedAt: string }) {
+  const [docKey, setDocKey] = useState("");
+  const [content, setContent] = useState("");
+  const [note, setNote] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const result = await getIssueAnalysis(id);
+      if (result.unavailable) {
+        setNote(result.unavailable);
+        setContent("");
+      } else {
+        setNote("");
+        setContent(result.content ?? "");
+      }
+      // 只在拿到响应后记账:半路失败下次仍会重试。
+      setDocKey(updatedAt);
+    } catch (reason) {
+      setNote(String(reason instanceof Error ? reason.message : reason));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (docKey !== updatedAt) void load();
+    // docKey 有意不在依赖里:刷新按钮要的是无视缓存的重取。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [updatedAt]);
+
+  return <div className="issue-thread issue-doc">
+    {loading && <p className="issue-thread-empty">正在读取结论文档…</p>}
+    {!loading && note && <div className="issue-doc-empty">
+      <strong>还没有结论文档</strong>
+      <p>{note}——AI 研究中会把结论写入 issue-analysis.md,生成后这里直接可读。</p>
+    </div>}
+    {!loading && !note && content && <>
+      <div className="issue-doc-toolbar">
+        <span>研究现场落盘的 markdown · 即写即读</span>
+        <button type="button" onClick={() => void load()}>刷新</button>
+      </div>
+      <article className="issue-doc-body">
+        <Markdown text={content} />
+      </article>
+    </>}
+  </div>;
+}
+
+/** 耗时与卡点:问题域版的 CostBreakdown。服务端(sessionView.ts)已经
+ * 把消息账与转移账归纳成结论,前端只呈现,不再二次解读;展开才查,
+ * 视觉分量压低——它是仪表,不是流水账。 */
+function IssueCostPanel({ id }: { id: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const [timeline, setTimeline] = useState<IssueTimeline | undefined>();
+  const [note, setNote] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const result = await getIssueTimeline(id);
+      setNote(result.unavailable ?? "");
+      setTimeline(result.timeline);
+    } catch (reason) {
+      setNote(String(reason instanceof Error ? reason.message : reason));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function toggle() {
+    const next = !expanded;
+    setExpanded(next);
+    if (next && !timeline) void load();
+  }
+
+  const share = timeline?.human_wait_share ?? 0;
+  const waits = timeline?.longest_waits ?? [];
+  const events = (timeline?.events ?? []).slice(-12).reverse();
+
+  return <section className={`issue-tl${expanded ? " is-open" : ""}`}>
+    <button type="button" className="issue-tl-toggle" aria-expanded={expanded}
+      onClick={toggle}>
+      <span>
+        <strong>耗时与卡点</strong>
+        <small>时间去哪了 · 卡在谁身上</small>
+      </span>
+      <i aria-hidden />
+    </button>
+    {expanded && <div className="issue-tl-body">
+      {loading && <div className="issue-tl-note">正在读取会话账本…</div>}
+      {!loading && note && <div className="issue-tl-note">{note}</div>}
+      {!loading && timeline && <>
+        <div className="issue-tl-metrics">
+          <div><span>总耗时</span><strong>{formatWait(timeline.span.ms)}</strong></div>
+          <div><span>等人工</span><strong>{share}%</strong></div>
+          <div><span>决策次数</span><strong>{timeline.decisions}</strong></div>
+        </div>
+        <div className="issue-tl-bar"
+          role="img"
+          aria-label={`人等待占 ${share}%`}>
+          <span style={{ width: `${share}%` }} />
+        </div>
+        {(timeline.blocker || timeline.span.start) && <div className="issue-tl-blocker">
+          {timeline.blocker
+            ? <>当前卡点:{timeline.blocker}</>
+            : <>时间区间 {formatLocalClock(timeline.span.start)}
+              → {formatLocalClock(timeline.span.end)}(当前没有等待中的问题卡)</>}
+        </div>}
+        {waits.length > 0 && <ol className="issue-tl-waits">
+          {waits.map((wait, index) => <li key={index}
+            className={wait.open_ended ? "open" : ""}>
+            <span className="issue-tl-rank">{String(index + 1).padStart(2, "0")}</span>
+            <span className="issue-tl-question">{wait.question}</span>
+            <span className="issue-tl-ms">
+              {formatWait(wait.ms)}{wait.open_ended ? "(仍在等)" : ""}
+            </span>
+          </li>)}
+        </ol>}
+        {events.length > 0 && <ul className="issue-tl-events">
+          {events.map((event, index) => <li key={index}
+            className={`kind-${event.kind}`}>
+            <time dateTime={event.ts}>{formatLocalClock(event.ts)}</time>
+            {event.kind === "stage" && <em className={`src-${event.source}`}>
+              {event.source === "platform" ? "平台" : "AI 上报"}
+            </em>}
+            <span>{event.kind === "stage"
+              ? `阶段:${STAGE(event)}${event.detail ? ` · ${event.detail}` : ""}`
+              : event.title}</span>
+          </li>)}
+        </ul>}
+      </>}
+    </div>}
+  </section>;
+}
+
+/** 阶段事件标题出人话:标题是词表键(如 verify),认得就翻,不认识的
+ * (未来词表扩充前的旧现场)原样示人——前端不猜。 */
+function STAGE(event: { title: string }): string {
+  return ISSUE_STAGE_TEXT[event.title as IssueStage] ?? event.title;
 }

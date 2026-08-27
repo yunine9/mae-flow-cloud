@@ -21,6 +21,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
+import {
+  buildIssueTimeline,
+} from "../src/issueFlow/sessionView.ts";
+import {
+  handleIssueRoutes,
+} from "../src/issueFlow/routes.ts";
 import { cloneFailureMessage } from "../src/issueFlow/issueGit.ts";
 import { loadState } from "../src/issueFlow/state.ts";
 
@@ -81,6 +87,189 @@ test("克隆认证失败说人话:引导去个人设置配令牌,其余保留 gi
     "fatal: repository 'https://git/x.git/' not found");
   assert.match(other, /not found/);
   assert.ok(!other.includes("Git 令牌"));
+});
+
+/** 走一遍真路由(/issues/*),拿到 {status, body}——视图旁路的端到端
+ * 断言都用它,免得测试里养一个 HTTP 服务器。 */
+function issueGet(
+  parts: string[],
+  service?: IssueFlowService,
+): Promise<{ status: number; body: Record<string, any> }> {
+  return new Promise((resolve, reject) => {
+    let status = 0;
+    void handleIssueRoutes(
+      { method: "GET" } as any,
+      {
+        writeHead: (code: number) => {
+          status = code;
+        },
+        end: (payload?: string) => {
+          try {
+            resolve({
+              status,
+              body: JSON.parse(payload ?? "{}"),
+            });
+          } catch (error) {
+            reject(error);
+          }
+        },
+      } as any,
+      parts,
+      { issueFlow: service, authEnabled: false },
+    ).catch(reject);
+  });
+}
+
+test("问题时间线归纳(纯函数):AI 陈述→人开口配成等待段,连续 AI 消息并作一段", () => {
+  const timeline = buildIssueTimeline({
+    state: {
+      created_at: "2026-08-26T08:00:00Z",
+      updated_at: "2026-08-26T09:00:00Z",
+      status: "idle",
+      stage_note: "",
+      transitions: [
+        { at: "2026-08-26T08:10:00Z", source: "agent",
+          stage: "locate_root", note: "初步定位" },
+        { at: "2026-08-26T08:40:00Z", source: "platform",
+          stage: "submit_mr", note: "推送成功" },
+      ],
+    },
+    messages: [
+      { role: "user", text: "播放器偶发黑屏", ts: "2026-08-26T08:00:00Z" },
+      { role: "assistant", text: "先查日志与代码", ts: "2026-08-26T08:05:00Z" },
+      { role: "assistant", text: "需要确认:现象必现还是偶发?",
+        ts: "2026-08-26T08:06:00Z" },
+      { role: "decision", text: "用户决定: 必现", ts: "2026-08-26T08:16:00Z" },
+      { role: "assistant", text: "结论为非问题", ts: "2026-08-26T08:30:00Z" },
+    ],
+  });
+  // 尾部 assistant 后没有回应,状态也不是 waiting_user:不算等待段。
+  assert.equal(timeline.human_waits.length, 1);
+  const wait = timeline.human_waits[0];
+  assert.equal(wait.start, "2026-08-26T08:05:00Z",
+    "等待起点取连续 AI 陈述的首条");
+  assert.equal(wait.end, "2026-08-26T08:16:00Z");
+  assert.equal(wait.ms, 11 * 60_000);
+  assert.match(wait.question, /偶发\?$/,
+    "问句节选取末条 AI 消息(人作答前看到的最后一句话)");
+  assert.equal(wait.open_ended, undefined);
+
+  assert.equal(timeline.decisions, 1, "decision 角色消息计一次决策");
+  assert.equal(timeline.human_wait_ms, 11 * 60_000);
+  assert.equal(timeline.longest_waits.length, 1);
+  // 区间 = 开场 08:00 → 最近活动(updated_at 09:00);占比四舍五入
+  assert.equal(timeline.span.ms, 60 * 60_000);
+  assert.equal(timeline.human_wait_share, 18);
+
+  // 关键事件 = 结论节选 + 决策 + 阶段切换(带来源标记),按时间正序
+  assert.deepEqual(timeline.events.map((event) => event.kind),
+    ["assistant", "assistant", "stage", "decision", "assistant", "stage"]);
+  const stageAgent = timeline.events.find((event) =>
+    event.kind === "stage")!;
+  assert.equal(stageAgent.source, "agent");
+  assert.equal(stageAgent.detail, "初步定位");
+  const stagePlatform = timeline.events.at(-1)!;
+  assert.equal(stagePlatform.source, "platform");
+});
+
+test("问题时间线归纳(纯函数):waiting_user 未决段以 now 封口;坏数据一律空表不炸", () => {
+  const timeline = buildIssueTimeline({
+    state: {
+      status: "waiting_user",
+      created_at: "2026-08-26T08:00:00Z",
+      updated_at: "2026-08-26T08:20:00Z",
+      stage_note: "等你确认换库方案",
+    },
+    messages: [{ role: "assistant", text: "是否同意切换数据库?",
+      ts: "2026-08-26T08:15:00Z" }],
+    waiting: { created_at: "2026-08-26T08:14:00Z" },
+    now: "2026-08-26T08:24:00Z",
+  });
+  assert.equal(timeline.human_waits.length, 1);
+  const wait = timeline.human_waits[0];
+  assert.equal(wait.open_ended, true, "问题卡还开着就是此刻仍在等");
+  assert.equal(wait.start, "2026-08-26T08:14:00Z",
+    "卡片 created_at 是权威起点,不退回 AI 消息时间");
+  assert.equal(wait.end, undefined);
+  assert.equal(wait.ms, 10 * 60_000);
+  assert.equal(timeline.human_wait_ms, 10 * 60_000);
+  // 未决等待以 now 封口 → 区间同样延伸到 now(08:00→08:24)
+  assert.equal(timeline.span.ms, 24 * 60_000);
+  assert.ok(timeline.span.end.startsWith("2026-08-26T08:24"),
+    "区间终点字符串与毫秒数同一口径(延伸到 now)");
+  assert.equal(timeline.human_wait_share, 42);
+  assert.match(timeline.blocker, /切换数据库/, "卡点=还在等的问句");
+  assert.deepEqual(timeline.longest_waits, [wait]);
+  // 无 stage 的转移账条目不上关键事件墙
+  assert.deepEqual(timeline.events.map((event) => event.kind),
+    ["assistant"]);
+
+  // 极端输入:空对象 → 空形状,绝不抛错(fail-open 红线)
+  assert.deepEqual(buildIssueTimeline({}), {
+    span: { start: "", end: "", ms: 0 },
+    human_waits: [],
+    human_wait_ms: 0,
+    human_wait_share: 0,
+    longest_waits: [],
+    decisions: 0,
+    blocker: "",
+    events: [],
+  });
+
+  // 坏时间戳:配不成对的等待放弃、坏时刻的事件缺席,区间归零
+  const odd = buildIssueTimeline({
+    state: { created_at: "不是时间", updated_at: "", status: "idle" },
+    messages: [
+      { role: "assistant", text: "", ts: "昨天" },
+      { role: "user", text: "哦", ts: "明天吧" },
+    ],
+  });
+  assert.equal(odd.human_waits.length, 0);
+  assert.equal(odd.events.length, 0);
+  assert.equal(odd.span.ms, 0);
+});
+
+test("视图旁路路由:文档缺失是 200 {unavailable};残缺现场时间线 fail-open", () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-view-"));
+  mkdirSync(join(dataDir, "issues", "issue-1"), { recursive: true });
+  writeFileSync(join(dataDir, "issues", "issue-1", "issue.json"), JSON.stringify({
+    id: "issue-1", account: "dev",
+    created_at: "2026-08-26T08:00:00Z",
+    updated_at: "2026-08-26T09:00:00Z",
+    title: "t", description: "", source: "manual",
+    status: "interrupted", stage: "locate_root", stage_note: "",
+    stage_at: "2026-08-26T09:00:00Z",
+    // 没有 stage 的转移条目不上关键事件墙
+    transitions: [{ at: "2026-08-26T08:30:00Z", source: "agent",
+      note: "只是备注,不是阶段切换" }],
+  }));
+  // 半行 JSON(写入方还在写)必须被跳过,不能让视图接口 5xx。
+  writeFileSync(join(dataDir, "issues", "issue-1", "events.jsonl"),
+    '{"kind":"user_mess\n'
+    + JSON.stringify({ kind: "user_message", ts: "2026-08-26T08:00:00Z",
+      payload: { text: "开场" } }) + "\n");
+  const service = new IssueFlowService({
+    dataDir, provider: "p", model: "m", modelsJson: {},
+  });
+  return (async () => {
+    try {
+      const analysis = await issueGet(["issues", "issue-1", "analysis"], service);
+      assert.equal(analysis.status, 200,
+        "问题号存在但文档缺失=200 {unavailable},不是 404");
+      assert.equal(analysis.body.unavailable, "尚未生成结论文档");
+
+      const timeline = await issueGet(
+        ["issues", "issue-1", "timeline"], service);
+      assert.equal(timeline.status, 200);
+      assert.deepEqual(timeline.body.human_waits, []);
+      assert.equal(timeline.body.decisions, 0);
+      assert.deepEqual(timeline.body.events, [],
+        "无 stage 的转移与残行都不上关键事件");
+      assert.ok(timeline.body.span.start.includes("2026-08-26"));
+    } finally {
+      await service.shutdown().catch(() => undefined);
+    }
+  })();
 });
 import { TaskService } from "../src/taskService.ts";
 import { createGoOpsTools } from "../src/issueFlow/opsTools.ts";
@@ -205,6 +394,31 @@ test("问题会话多轮闭环:研究→提问卡→作答→非问题归档(无
     }, "续聊回合收口", 10_000).then((issue) => {
       assert.notEqual(issue.status, "failed", issue.error);
     });
+
+    // 视图旁路(真路由形状):多轮闭环完成后,「耗时与卡点」与结论文档
+    // 都应能直接出结论——等待段配对、决策计数、issue-analysis.md 全文。
+    const timelineResponse = await issueGet(
+      ["issues", created.id, "timeline"], service);
+    assert.equal(timelineResponse.status, 200);
+    assert.ok(timelineResponse.body.human_waits.length >= 1,
+      `研究→提问→作答的多轮应配出至少一段人等待(实际 ${
+        JSON.stringify(timelineResponse.body.human_waits)})`);
+    assert.ok(timelineResponse.body.decisions >= 1, "用户决定要计入决策次数");
+    assert.ok((timelineResponse.body.events ?? []).some(
+      (event: Record<string, unknown>) => event.kind === "decision"),
+    "关键事件里要有用户决策条目");
+    assert.ok(typeof timelineResponse.body.span?.ms === "number"
+      && timelineResponse.body.span.ms >= 0,
+    "耗时区间必须是有限的非负毫秒数");
+    const analysisResponse = await issueGet(
+      ["issues", created.id, "analysis"], service);
+    assert.equal(analysisResponse.status, 200,
+      "文档存在时 analysis 必须是 200,不是 404");
+    assert.match(String(analysisResponse.body.content), /非问题/,
+      "issue-analysis.md 的内容应原样可读");
+    // 问题号未知才是 404;文档缺失的对照路在下方独立测试里钉死。
+    assert.equal((await issueGet(
+      ["issues", "issue-999", "analysis"], service)).status, 404);
 
     const archived = service.control(created.id, {
       action: "archive", kind: "non_issue", summary: "误报,时钟漂移",

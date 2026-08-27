@@ -5,6 +5,20 @@
  * 归属校验"只有本人(或管理员只读)能碰自己的问题会话"。SSE 事件
  * 尾随与任务侧同款(300ms 轮询 + 字节偏移增量),只是终态判定换成
  * 问题域的状态集。
+ *
+ *   GET  /issues                      → 我的会话列表
+ *   POST /issues                      → 登记(201 摘要)
+ *   GET  /issues/dts                  → DTS 名下问题单(拉单)
+ *   GET  /issues/:id                  → 详情(状态 + 消息 + 问题卡)
+ *   GET  /issues/:id/timeline         → 耗时与卡点(纯函数归纳,只读)
+ *   GET  /issues/:id/analysis         → 结论文档 issue-analysis.md
+ *                                      (缺失为 200 {unavailable},不 404)
+ *   GET  /issues/:id/events           → SSE:事件流尾随
+ *   POST /issues/:id/reply            → 续聊
+ *   POST /issues/:id/decision         → 问题卡作答
+ *   POST /issues/:id/interrupt        → 插话
+ *   POST /issues/:id/ticket           → 绑定单号
+ *   POST /issues/:id/control          → 归档/取消
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -196,6 +210,19 @@ export async function handleIssueRoutes(
 
     if (method === "GET" && parts.length === 2) {
       return done(200, issueFlow.get(id));
+    }
+
+    // 耗时与卡点(只读):消息账 + 转移账归纳成"时间去哪了、卡在谁身上"。
+    // 归纳是纯函数(sessionView.ts),路由只负责门禁与投影——口径同
+    // 需求侧 /tasks/:id/timeline:能看会话就能看它经历了什么。
+    if (method === "GET" && parts[2] === "timeline" && parts.length === 3) {
+      return done(200, issueFlow.timeline(id));
+    }
+
+    // 结论文档 issue-analysis.md(只读):404 只发生在问题号未知;
+    // 文档还没生成为 200 {unavailable},前端据此出空态而不是报错。
+    if (method === "GET" && parts[2] === "analysis" && parts.length === 3) {
+      return done(200, issueFlow.analysis(id));
     }
 
     if (method === "GET" && parts[2] === "events" && parts.length === 3) {

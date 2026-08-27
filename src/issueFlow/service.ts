@@ -12,8 +12,18 @@
  * interrupted,用户发一句消息即从现场续聊。
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  readSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { join, resolve, sep } from "node:path";
 import { CloudSession, type Outcome } from "../sessionDriver.ts";
 import { EventLog } from "../semanticEvents.ts";
 import { TranscriptStore } from "../transcriptStore.ts";
@@ -43,6 +53,10 @@ import {
 import type { IssueOpsTools } from "./opsTools.ts";
 import type { DtsGateway } from "./gateways.ts";
 import { createIssueTools, type IssueToolContext } from "./tools.ts";
+import {
+  buildIssueTimeline,
+  type IssueSessionTimeline,
+} from "./sessionView.ts";
 import { issueOpeningPrompt, issueResumePrompt, materializeIssueSkills } from "./prompt.ts";
 
 export class IssueNotFoundError extends Error {
@@ -119,6 +133,60 @@ export interface IssueMessage {
 }
 
 const TICKET_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+
+/** 结论文档回传上限:一个巨型文档不能把页面拖死。 */
+const ANALYSIS_MAX_BYTES = 512 * 1024;
+const ANALYSIS_TRUNCATED_NOTE =
+  "\n\n…(内容超过 512 KB,只回传前 512 KB;完整内容见会话工作区文件)";
+
+/** 结论文档按字节帽读取。这是 artifacts.ts 里 cap/readCapped 的十行
+ * 本地副本——问题流与需求流互不 import,不为一顶帽子引入跨域耦合。
+ * 按字节切会把 UTF-8 多字节字符切一半,末尾的替换符直接抹掉——宁可
+ * 少一个字,不给用户看乱码。 */
+function capAnalysisText(text: string): {
+  content: string;
+  truncated: boolean;
+} {
+  if (Buffer.byteLength(text, "utf-8") <= ANALYSIS_MAX_BYTES) {
+    return { content: text, truncated: false };
+  }
+  const clipped = Buffer.from(text, "utf-8")
+    .subarray(0, ANALYSIS_MAX_BYTES)
+    .toString("utf-8")
+    .replace(/\uFFFD+$/, "");
+  return { content: clipped + ANALYSIS_TRUNCATED_NOTE, truncated: true };
+}
+
+/** 读会话根目录的 issue-analysis.md。白名单即边界:文件名是服务自己
+ * 的固定常量,不掺任何输入;读之前再核对解析后的路径仍在会话现场之
+ * 下(双保险,与需求侧 artifacts.ts 同款纪律),越界一律 undefined。 */
+function readAnalysisFile(
+  root: string,
+): { content: string; truncated: boolean } | undefined {
+  const path = join(root, "issue-analysis.md");
+  if (!existsSync(path)) return undefined;
+  const boundary = resolve(root);
+  if (!resolve(path).startsWith(boundary + sep)) return undefined;
+  try {
+    const info = statSync(path);
+    if (info.size <= ANALYSIS_MAX_BYTES) {
+      return capAnalysisText(readFileSync(path, "utf-8"));
+    }
+    const handle = openSync(path, "r");
+    try {
+      const buffer = Buffer.alloc(ANALYSIS_MAX_BYTES);
+      const read = readSync(handle, buffer, 0, ANALYSIS_MAX_BYTES, 0);
+      const content = buffer.subarray(0, read).toString("utf-8")
+        .replace(/\uFFFD+$/, "");
+      return { content: content + ANALYSIS_TRUNCATED_NOTE, truncated: true };
+    } finally {
+      closeSync(handle);
+    }
+  } catch {
+    // 文件在读取途中消失或不可读:当"还没生成",别让页面报错。
+    return undefined;
+  }
+}
 
 export class IssueFlowService {
   private readonly options: IssueFlowOptions;
@@ -228,6 +296,35 @@ export class IssueFlowService {
 
   eventLogPath(id: string): string {
     return join(this.require(id).root, "events.jsonl");
+  }
+
+  // ---- 视图旁路:耗时与卡点 + 结论文档(只读,fail-open) ----
+
+  /** 「耗时与卡点」视图:纯函数归纳(见 sessionView.ts),这里只负责
+   * 把消息账、状态与在等的问题卡喂给它——面板没有自己的真相。 */
+  timeline(id: string): IssueSessionTimeline {
+    const live = this.require(id);
+    return buildIssueTimeline({
+      state: live.state,
+      messages: this.messages(id),
+      waiting: live.humanGate.pending()[0],
+    });
+  }
+
+  /** 结论文档(issue-analysis.md):404 只发生在问题号未知;文档缺失
+   * 返回 {unavailable}——那是"还没生成",不是"没有这个接口"。 */
+  analysis(id: string): {
+    content?: string;
+    truncated?: boolean;
+    unavailable?: string;
+  } {
+    const live = this.require(id);
+    const read = readAnalysisFile(live.root);
+    if (!read) return { unavailable: "尚未生成结论文档" };
+    return {
+      content: read.content,
+      ...(read.truncated ? { truncated: true } : {}),
+    };
   }
 
   // ---- 登记 ----

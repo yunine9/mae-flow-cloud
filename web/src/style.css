@@ -1749,7 +1749,86 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-composer-row { display: flex; gap: 8px; align-items: flex-end; }
 .issue-composer-actions { display: flex; align-items: center; gap: 8px; }
 .issue-composer-actions .danger { color: #d64545; border-color: rgba(214, 69, 69, .35); }
-.issue-analysis-flag { margin-left: auto; color: #16856a; font-size: var(--font-size-dense); }
+.issue-analysis-flag {
+  margin-left: auto;
+  border: 0;
+  background: none;
+  color: #16856a;
+  font-size: var(--font-size-dense);
+  cursor: pointer;
+}
+.issue-analysis-flag:hover { text-decoration: underline; }
+
+/* ---- 问题会话的视图旁路:耗时与卡点(issue-tl-*)----
+   与任务侧 utility-panel/cost 同一精神,视觉分量压得更低:
+   它是仪表,不是流水账;展开才查(fetch-on-expand)。 */
+.issue-tl {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-muted);
+}
+.issue-tl-toggle {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  width: 100%; padding: 9px 13px; border: 0; background: none; cursor: pointer;
+  font: inherit; text-align: left;
+}
+.issue-tl-toggle > span { display: grid; gap: 1px; }
+.issue-tl-toggle strong { color: var(--text-strong); font-size: 13px; }
+.issue-tl-toggle small { color: var(--faint); font-size: var(--font-size-dense); }
+/* 折叠箭头:开合各转 90°,不引图标库(与 utility-panel 的 i 同思路) */
+.issue-tl-toggle i { width: 7px; height: 7px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: rotate(45deg); transition: transform .15s; }
+.issue-tl.is-open .issue-tl-toggle i { transform: rotate(-135deg); }
+.issue-tl-body { padding: 4px 13px 11px; display: grid; gap: 9px; }
+.issue-tl-note { color: var(--faint); font-size: var(--font-size-assist); }
+.issue-tl-metrics { display: flex; flex-wrap: wrap; gap: 8px; }
+.issue-tl-metrics div {
+  display: grid; gap: 0; padding: 5px 11px; border: 1px solid var(--line);
+  border-radius: 8px; background: var(--surface);
+}
+.issue-tl-metrics span { color: var(--faint); font-size: var(--font-size-dense); }
+.issue-tl-metrics strong { color: var(--text-strong); font-size: var(--font-size-assist); font-variant-numeric: tabular-nums; }
+/* 人等待占比条:同任务侧 cost-bar 的口径,等待段用 attention 色 */
+.issue-tl-bar { height: 6px; border-radius: 4px; overflow: hidden; background: var(--surface); border: 1px solid var(--line); }
+.issue-tl-bar span { display: block; height: 100%; min-width: 0; background: var(--attention); }
+.issue-tl-blocker { padding: 7px 11px; border-radius: 8px; background: rgba(183, 121, 31, .08); color: #b7791f; font-size: var(--font-size-assist); overflow-wrap: anywhere; }
+.issue-tl-waits { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.issue-tl-waits li { display: flex; align-items: baseline; gap: 8px; font-size: var(--font-size-assist); }
+.issue-tl-rank { color: var(--faint); font-family: var(--font-mono); font-size: var(--font-size-dense); }
+.issue-tl-question { flex: 1; min-width: 0; color: var(--text-strong); overflow-wrap: anywhere; }
+.issue-tl-ms { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.issue-tl-waits li.open .issue-tl-ms { color: #b7791f; font-weight: 700; }
+.issue-tl-events { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.issue-tl-events li { display: flex; align-items: baseline; gap: 8px; font-size: var(--font-size-dense); color: var(--muted); }
+.issue-tl-events time { color: var(--faint); font-family: var(--font-mono); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.issue-tl-events li.kind-stage em { flex: none; padding: 0 6px; border-radius: 999px; font-style: normal; font-weight: 700; background: rgba(101, 91, 216, .12); color: #4540b8; }
+.issue-tl-events li.kind-stage em.src-platform { background: #e3f4ea; color: #217a46; }
+.issue-tl-events li span { min-width: 0; overflow-wrap: anywhere; }
+
+/* 对话 / 结论文档 页签:与登记页的 issue-register-tabs 同款轻页签 */
+.issue-pane-tabs { display: inline-flex; gap: 4px; align-self: start; padding: 4px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-muted); }
+.issue-pane-tabs button {
+  min-height: 28px; padding: 0 14px; border: 0; border-radius: 7px;
+  background: transparent; color: var(--muted); font-size: var(--font-size-assist); cursor: pointer;
+}
+.issue-pane-tabs button:hover { color: var(--text-strong); }
+.issue-pane-tabs button.on { color: var(--accent); background: var(--surface); box-shadow: var(--shadow-xs); }
+.issue-pane-tabs button i { font-style: normal; color: var(--faint); margin-left: 4px; }
+
+/* 结论文档正文:复用消息区滚动容器,内部换成 markdown 排版 */
+.issue-thread.issue-doc { gap: 12px; }
+.issue-doc-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--faint); font-size: var(--font-size-dense); }
+.issue-doc-toolbar button {
+  min-height: 26px; padding: 0 12px; border: 1px solid var(--line); border-radius: 7px;
+  background: var(--surface); color: var(--text-strong); font-size: var(--font-size-dense); cursor: pointer;
+}
+/* 文档未生成的空态:中性灰,不借成功绿(没文档不是好事也不是坏事) */
+.issue-doc-empty {
+  padding: 18px; border: 1px dashed var(--line); border-radius: 11px;
+  display: grid; gap: 4px;
+}
+.issue-doc-empty strong { color: var(--text-strong); font-size: var(--font-size-assist); }
+.issue-doc-empty p { margin: 0; color: var(--faint); font-size: var(--font-size-assist); }
+.issue-doc-body { color: var(--text-strong); font-size: var(--font-size-assist); line-height: 1.75; overflow-wrap: anywhere; }
 .task-created {
   margin-left: auto;
   color: var(--faint);

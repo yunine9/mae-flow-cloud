@@ -1773,3 +1773,67 @@ export function controlIssue(id: string, input: {
 export function listDtsTickets(): Promise<DtsTicketBrief[]> {
   return issueFetch("/issues/dts").then((body) => body.tickets ?? []);
 }
+
+// ---- 问题会话的视图旁路(服务端 src/issueFlow/sessionView.ts 的镜像) ----
+
+/** 一段"等人"的时长:closed = 有下一条人话封口;open_ended = 问题卡
+ * 还开着,ms 以查询时刻截止。 */
+export interface IssueTimelineWait {
+  start: string;
+  end?: string;
+  ms: number;
+  open_ended?: boolean;
+  question: string;
+}
+
+/** 关键事件(消息节选级别,不是整段聊天):assistant=结论文节选、
+ * decision=用户决策节选、stage=阶段切换(source 标记 AI 上报/平台事实)。 */
+export interface IssueTimelineEvent {
+  ts: string;
+  kind: "assistant" | "decision" | "stage";
+  source?: string;
+  title: string;
+  detail?: string;
+}
+
+/** 「耗时与卡点」视图:问题域的消息账 + 转移账归纳结论。 */
+export interface IssueTimeline {
+  span: { start: string; end: string; ms: number };
+  human_waits: IssueTimelineWait[];
+  human_wait_ms: number;
+  human_wait_share: number;
+  longest_waits: IssueTimelineWait[];
+  decisions: number;
+  blocker: string;
+  events: IssueTimelineEvent[];
+}
+
+/** 时间线接口尚未就绪(旧进程)时把解释带回,不假装"什么都没发生"。 */
+export async function getIssueTimeline(
+  id: string,
+): Promise<{ timeline?: IssueTimeline; unavailable?: string }> {
+  const response = await fetch(`/issues/${encodeURIComponent(id)}/timeline`);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    return { unavailable: String(body.error ?? `HTTP ${response.status}`) };
+  }
+  return { timeline: await response.json() };
+}
+
+/** 结论文档(issue-analysis.md)。缺失为 200 {unavailable},404 只在
+ * 问题号未知时出现。 */
+export async function getIssueAnalysis(
+  id: string,
+): Promise<{ content?: string; truncated?: boolean; unavailable?: string }> {
+  const response = await fetch(`/issues/${encodeURIComponent(id)}/analysis`);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    return { unavailable: String(body.error ?? `HTTP ${response.status}`) };
+  }
+  const body = await response.json();
+  return {
+    content: body.content ? String(body.content) : undefined,
+    truncated: body.truncated === true ? true : undefined,
+    unavailable: body.unavailable ? String(body.unavailable) : undefined,
+  };
+}
