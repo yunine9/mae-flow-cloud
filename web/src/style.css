@@ -4727,6 +4727,25 @@ pre {
 .knowledge-ut-method strong { color: var(--accent); }
 .knowledge-ut-method.is-fallback { border-style: dashed; color: var(--muted); }
 .knowledge-ut-method.is-fallback strong { color: var(--text); }
+.knowledge-catalog-group { padding: 6px 15px 8px; }
+.knowledge-catalog-group > strong {
+  display: flex; align-items: center; gap: 6px;
+  color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .08em;
+}
+.knowledge-catalog-group > strong i { font-style: normal; font-weight: 500; }
+.knowledge-catalog-group article {
+  display: flex; align-items: baseline; gap: 10px; padding: 3px 0;
+  font-size: var(--font-size-assist);
+}
+.knowledge-catalog-group article b { color: var(--text-strong); flex-shrink: 0; }
+.knowledge-catalog-group article > span {
+  color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;
+}
+.knowledge-catalog-group article small { flex-shrink: 0; }
+.knowledge-catalog-group article small.is-read { color: var(--accent); font-weight: 700; }
+.knowledge-catalog-group article small.is-loaded { color: var(--text); }
+.knowledge-catalog-group article small.is-idle { color: var(--faint, var(--muted)); }
+.knowledge-catalog-group > small { color: var(--faint, var(--muted)); }
 .knowledge-footprint-empty {
   margin: 0 14px 14px; padding: 11px; color: var(--muted);
   border: 1px dashed var(--line-strong); border-radius: 9px;

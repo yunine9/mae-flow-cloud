@@ -52,6 +52,17 @@ export function KnowledgeFootprint({
   const availableOnly = usage?.resources.filter((item) =>
     item.kind === "skill" && item.available_count > 0
     && item.loaded_count === 0 && item.read_count === 0) ?? [];
+  const resources = usage?.resources ?? [];
+  const catalog = [
+    { title: "团队 Skill", items: resources.filter((item) =>
+      item.kind === "skill" && !item.repository) },
+    { title: "仓库 Skill", items: resources.filter((item) =>
+      item.kind === "skill" && item.repository) },
+    { title: "业务文档", items: resources.filter((item) =>
+      item.kind === "document") },
+    { title: "项目规则", items: resources.filter((item) =>
+      item.kind === "rules") },
+  ].filter((group) => group.items.length > 0);
   return (
     <section className="knowledge-footprint" aria-labelledby="knowledge-footprint-title">
       <header>
@@ -104,6 +115,42 @@ export function KnowledgeFootprint({
           {availableOnly.length > 4 ? " 等" : ""}）——已在模型眼前，
           Agent 判断与当前工作无关时不读；装载记录在下方消费明细里。
         </div>
+      )}
+
+      {catalog.length > 0 && (
+        /* 本单可用能力清单(用户点名"在哪显示可用的 skill 和知识"):
+           账本里本来就有 available/loaded 记录,只是没展示过。默认
+           折叠——每单可用集是下单勾选+货架+规则的有界小清单,真正
+           海量的是仓库全量知识,那是下单勾选器的事,不进任务视图。 */
+        <details className="knowledge-footprint-events knowledge-catalog">
+          <summary>
+            本单可用能力清单
+            <span>{catalog.reduce((sum, group) =>
+              sum + group.items.length, 0)} 项</span>
+          </summary>
+          <div>
+            {catalog.map((group) => (
+              <div key={group.title} className="knowledge-catalog-group">
+                <strong>{group.title}<i>{group.items.length}</i></strong>
+                {group.items.slice(0, 20).map((item) => (
+                  <article key={item.id}>
+                    <b title={item.path}>{item.name}</b>
+                    <span title={item.description ?? ""}>
+                      {item.description || item.path}</span>
+                    <small className={item.read_count > 0 ? "is-read"
+                      : item.loaded_count > 0 ? "is-loaded" : "is-idle"}>
+                      {item.read_count > 0 ? `读取 ${item.read_count} 次`
+                        : item.loaded_count > 0 ? "开局已加载" : "可用未读"}
+                    </small>
+                  </article>
+                ))}
+                {group.items.length > 20 && (
+                  <small>…其余 {group.items.length - 20} 项见消费明细</small>
+                )}
+              </div>
+            ))}
+          </div>
+        </details>
       )}
 
       {!!usage?.events.length && (
