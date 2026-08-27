@@ -25,6 +25,7 @@ import { repairContainerMutationOwnership } from "../containerOwnership.ts";
 import {
   isTerminal,
   loadState,
+  recordTransition,
   saveState,
   summarize,
   type IssueConclusionKind,
@@ -630,6 +631,9 @@ export class IssueFlowService {
       throw new IssueControlError("单号只能是字母数字下划线连字符");
     }
     live.state.ticket = value;
+    recordTransition(live.state, {
+      source: "platform", note: `单号已绑定 ${value}(用户操作)`,
+    });
     saveState(live.root, live.state);
     this.log(`[issue-flow] ${id} 绑定单号 ${value}`);
     if (live.driver && live.state.status === "running") {
@@ -666,8 +670,11 @@ export class IssueFlowService {
         at: now,
       };
       live.state.status = "archived";
-      live.state.stage = "concluded";
+      live.state.stage = "done";
       live.state.stage_at = now;
+      recordTransition(live.state, {
+        source: "platform", stage: "done", note: "会话已归档收口(用户操作)",
+      });
     }
     saveState(live.root, live.state);
     void live.driver?.abort().catch(() => undefined);

@@ -11,8 +11,10 @@ import {
 } from "node:child_process";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
+  writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -20,6 +22,35 @@ import { join } from "node:path";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
 import { cloneFailureMessage } from "../src/issueFlow/issueGit.ts";
+import { loadState } from "../src/issueFlow/state.ts";
+
+test("旧词表阶段读取时迁移:在途问题不因换词表而丢阶段", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-issue-stage-"));
+  const base = {
+    id: "is-1", account: "dev", created_at: "2026-08-26T00:00:00Z",
+    updated_at: "2026-08-26T00:00:00Z", title: "t", description: "d",
+    source: "manual", status: "idle", stage_note: "", stage_at: "2026-08-26T00:00:00Z",
+  };
+  // 2026-08-27 换词表前的在途落盘形状(旧键直接写进 issue.json)
+  const cases: Array<[string, string]> = [
+    ["analyzing", "locate_root"],
+    ["concluded", "done"],
+    ["submitting_mr", "submit_mr"],
+    ["deploying", "switch_db"],
+  ];
+  for (const [legacy, expected] of cases) {
+    mkdirSync(join(dir, legacy), { recursive: true });
+    writeFileSync(join(dir, legacy, "issue.json"),
+      JSON.stringify({ ...base, stage: legacy }));
+    assert.equal(loadState(join(dir, legacy))?.stage, expected,
+      `旧阶段 ${legacy} 应迁移到 ${expected}`);
+  }
+  // 完全不认识的值:回到已登记,显示层不猜
+  mkdirSync(join(dir, "strange"), { recursive: true });
+  writeFileSync(join(dir, "strange", "issue.json"),
+    JSON.stringify({ ...base, stage: "什么玩意" }));
+  assert.equal(loadState(join(dir, "strange"))?.stage, "registered");
+});
 
 test("克隆认证失败说人话:引导去个人设置配令牌,其余保留 git 原文", () => {
   // 内网实测原文:沙箱拒绝 askpass → git 要不到用户名
@@ -96,7 +127,7 @@ test("问题会话多轮闭环:研究→提问卡→作答→非问题归档(无
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
     { tool: { name: "report_stage",
-      input: { stage: "analyzing", note: "从日志与代码初步定位" } } },
+      input: { stage: "locate_root", note: "从日志与代码初步定位" } } },
     { tool: { name: "bash", input: { command:
       "printf '# 根因分析\\n\\n结论:非问题(测试环境时钟漂移导致的误报)。\\n' > issue-analysis.md" } } },
     { tool: { name: "AskUserQuestion", input: { questions: [{
@@ -104,7 +135,7 @@ test("问题会话多轮闭环:研究→提问卡→作答→非问题归档(无
       options: ["确认归档", "继续研究"],
     }] } } },
     { tool: { name: "report_stage",
-      input: { stage: "concluded", note: "非问题:误报" } } },
+      input: { stage: "done", note: "非问题:误报" } } },
     { text: "研究完成:结论为非问题,证据已写入 issue-analysis.md,建议归档。" },
   ];
   const model = new ScriptedModelServer(script);
@@ -137,7 +168,7 @@ test("问题会话多轮闭环:研究→提问卡→作答→非问题归档(无
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
       return issue.status === "waiting_user" ? issue : undefined;
     }, "根因确认问题卡");
-    assert.equal(waiting.stage, "analyzing");
+    assert.equal(waiting.stage, "locate_root");
     assert.ok(waiting.waiting, "问题卡应来自 AskUserQuestion");
     assert.ok(waiting.has_analysis, "结论文档应已产出");
 
@@ -158,7 +189,7 @@ test("问题会话多轮闭环:研究→提问卡→作答→非问题归档(无
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
       return issue.status === "idle" ? issue : undefined;
     }, "作答后回合收口");
-    assert.equal(idle.stage, "concluded", "作答后应继续推进到结论阶段");
+    assert.equal(idle.stage, "done", "作答后应继续推进到结论阶段");
     assert.ok(idle.messages.some((message) =>
       message.role === "user" && message.text.includes("黑屏")),
     "开场问题应作为用户消息入账");
@@ -180,6 +211,16 @@ test("问题会话多轮闭环:研究→提问卡→作答→非问题归档(无
     });
     assert.equal(archived.status, "archived");
     assert.equal(archived.conclusion?.kind, "non_issue");
+    // 阶段转移账:agent 声明与平台事实同账,归档是最后一条平台事实。
+    const sources = archived.transitions?.map((entry) => entry.source) ?? [];
+    assert.ok(sources.includes("agent"), "agent 阶段声明要入转移账");
+    assert.ok(sources.includes("platform"), "平台动作要入转移账");
+    assert.equal(archived.transitions?.at(-1)?.stage, "done");
+    assert.deepEqual(
+      archived.transitions
+        ?.filter((entry) => entry.source === "agent")
+        .map((entry) => entry.stage),
+      ["locate_root", "done"]);
     assert.equal(existsSync(
       join(dataDir, ".issue-environments", `${created.id}.json`)), false,
     "归档后环境凭据必须清理");

@@ -1432,29 +1432,27 @@ export const ISSUE_STATUS_TEXT: Record<IssueStatus, string> = {
 
 export type IssueStage =
   | "registered"
-  | "ticket_fetched"
-  | "logs_fetched"
-  | "analyzing"
-  | "aligning"
-  | "implementing"
-  | "committing"
-  | "deploying"
-  | "verifying"
-  | "submitting_mr"
-  | "concluded";
+  | "fetch_detail"
+  | "align_issue"
+  | "locate_root"
+  | "align_solution"
+  | "modify_code"
+  | "switch_db"
+  | "verify"
+  | "submit_mr"
+  | "done";
 
 export const ISSUE_STAGE_TEXT: Record<IssueStage, string> = {
   registered: "已登记",
-  ticket_fetched: "拿单",
-  logs_fetched: "拉日志",
-  analyzing: "分析问题现象",
-  aligning: "对齐方案",
-  implementing: "编码实现",
-  committing: "提交变更",
-  deploying: "换库部署",
-  verifying: "验证",
-  submitting_mr: "提交 MR",
-  concluded: "已出结论",
+  fetch_detail: "获取 DTS 详情",
+  align_issue: "对齐问题",
+  locate_root: "分析根因",
+  align_solution: "对齐方案",
+  modify_code: "实施修改",
+  switch_db: "换库",
+  verify: "验证",
+  submit_mr: "提交 MR",
+  done: "结束",
 };
 
 export interface IssueSummary {
@@ -1477,6 +1475,10 @@ export interface IssueSummary {
   };
   push?: { branch: string; sha: string; at: string };
   mr?: { branch: string; title: string; url?: string; iid?: string; at: string };
+  /** 阶段转移审计:agent 声明与 platform 机械事实同账。 */
+  transitions?: Array<{
+    at: string; source: "agent" | "platform"; stage?: IssueStage; note: string;
+  }>;
   error?: string;
   last_reply?: string;
 }

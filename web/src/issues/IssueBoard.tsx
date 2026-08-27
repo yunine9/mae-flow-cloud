@@ -452,6 +452,11 @@ function IssueSessionView({
       </div>
     </div>
 
+    {detail.stage === "done" && detail.status === "idle"
+      && <div className="issue-done-hint">
+        AI 已给出结论——点下方「归档收口」正式关闭;若要继续追问也可以,
+        AI 会把阶段从「结束」切回对应环节。
+      </div>}
     {detail.error && <div className="issue-session-error" role="alert">
       <span>{detail.error}</span>
       {/* 「Git 令牌」是后端认证类报错的锚点(issueGit.ts),命中即给

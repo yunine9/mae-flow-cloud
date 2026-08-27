@@ -34,36 +34,60 @@ export type IssueStatus =
   | "canceled"
   | "failed";
 
-/** Agent 上报的处理阶段(枚举宽松,note 承载细节)。 */
+/** Agent 上报的处理阶段(2026-08-27 用户拍板的词表)。流程动态:阶段
+ * 可跳过、可回退(用户推翻结论继续查是正当的),平台只校验词表不排
+ * 顺序。done ≠ 归档——它只表达"AI 已给出结论",正式收口走归档。 */
 export const ISSUE_STAGES = [
-  "registered",      // 已登记,尚未开工
-  "ticket_fetched",  // 拿到问题单详情
-  "logs_fetched",    // 日志已拉取
-  "analyzing",       // 分析问题现象/根因
-  "aligning",        // 与用户对齐方案(通常伴随 waiting_user)
-  "implementing",    // 编码实现
-  "committing",      // 提交变更
-  "deploying",       // 换库部署
-  "verifying",       // 验证中(含等用户验证结果)
-  "submitting_mr",   // 提交 MR
-  "concluded",       // 已出结论(非问题/待归档)
+  "registered",     // 已登记,尚未开工(平台写入,Agent 不上报)
+  "fetch_detail",   // 获取 DTS 详情
+  "align_issue",    // 对齐问题
+  "locate_root",    // 分析根因
+  "align_solution", // 对齐方案
+  "modify_code",    // 实施修改
+  "switch_db",      // 换库
+  "verify",         // 验证
+  "submit_mr",      // 提交 MR
+  "done",           // 结束(AI 已给出结论;收口归档是另一个动作)
 ] as const;
 
 export type IssueStage = (typeof ISSUE_STAGES)[number];
 
 export const STAGE_LABELS: Record<IssueStage, string> = {
   registered: "已登记",
-  ticket_fetched: "拿单",
-  logs_fetched: "拉日志",
-  analyzing: "分析问题现象",
-  aligning: "对齐方案",
-  implementing: "编码实现",
-  committing: "提交变更",
-  deploying: "换库部署",
-  verifying: "验证",
-  submitting_mr: "提交 MR",
-  concluded: "已出结论",
+  fetch_detail: "获取 DTS 详情",
+  align_issue: "对齐问题",
+  locate_root: "分析根因",
+  align_solution: "对齐方案",
+  modify_code: "实施修改",
+  switch_db: "换库",
+  verify: "验证",
+  submit_mr: "提交 MR",
+  done: "结束",
 };
+
+/** 2026-08-27 换词表前的旧值 → 新值。只在做读取迁移用,新代码不产旧值。 */
+const LEGACY_STAGES: Record<string, IssueStage> = {
+  ticket_fetched: "fetch_detail",
+  logs_fetched: "locate_root",
+  analyzing: "locate_root",
+  aligning: "align_solution",
+  implementing: "modify_code",
+  committing: "modify_code",
+  deploying: "switch_db",
+  verifying: "verify",
+  submitting_mr: "submit_mr",
+  concluded: "done",
+};
+
+/** 阶段转移日志:Agent 声明(source=agent)与平台机械事实(source=
+ * platform,如推送成功/建 MR/绑单号)同账收记,各是各的真相——显示层
+ * 只认 state.stage,这里只服务审计与排障("为什么卡在对齐方案三小时")。 */
+export interface StageTransition {
+  at: string;
+  source: "agent" | "platform";
+  stage?: IssueStage;
+  note: string;
+}
 
 export type IssueConclusionKind =
   | "non_issue"   // 非问题(误报/需求误解/无法复现)
@@ -116,6 +140,8 @@ export interface IssueSessionState {
   stage: IssueStage;
   stage_note: string;
   stage_at: string;
+  /** 阶段转移审计日志(Agent 声明 + 平台机械事实)。只增不改。 */
+  transitions?: StageTransition[];
   conclusion?: IssueConclusion;
   push?: IssuePushRecord;
   mr?: IssueMrRecord;
@@ -137,7 +163,13 @@ export function summarize(state: IssueSessionState): IssueSummary {
 export function loadState(root: string): IssueSessionState | undefined {
   const path = join(root, "issue.json");
   if (!existsSync(path)) return undefined;
-  return JSON.parse(readFileSync(path, "utf-8")) as IssueSessionState;
+  const state = JSON.parse(readFileSync(path, "utf-8")) as IssueSessionState;
+  // 旧词表迁移:在途问题带着旧阶段键落盘过,读进来就换成新键,
+  // 不让显示层到处兜旧值。
+  if (state.stage && !validStage(state.stage)) {
+    state.stage = LEGACY_STAGES[state.stage] ?? "registered";
+  }
+  return state;
 }
 
 /** 状态落盘:临时文件 + rename 保原子(与 waiting.json 同款纪律)。 */
@@ -159,4 +191,12 @@ export function validStage(value: string): IssueStage | undefined {
   return (ISSUE_STAGES as readonly string[]).includes(value)
     ? value as IssueStage
     : undefined;
+}
+
+/** 追加一条转移日志(只增不改;调用方负责随 saveState 落盘)。 */
+export function recordTransition(
+  state: IssueSessionState,
+  entry: Omit<StageTransition, "at">,
+): void {
+  (state.transitions ??= []).push({ at: new Date().toISOString(), ...entry });
 }

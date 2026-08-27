@@ -13,6 +13,9 @@ import { join } from "node:path";
 import { existsSync } from "node:fs";
 import {
   ISSUE_STAGES,
+  STAGE_LABELS,
+  recordTransition,
+  validStage,
   type IssueSessionState,
 } from "./state.ts";
 import type { IssueOpsTools } from "./opsTools.ts";
@@ -62,8 +65,14 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     name: "report_stage",
     label: "Report Stage",
     description:
-      "向平台上报当前处理阶段。每进入新环节(拿单/拉日志/分析/对齐/编码/"
-      + "提交/换库/验证/提MR/出结论)调用一次,note 用一句话说明现场。"
+      "向平台上报当前处理阶段——状态条全靠它,每进入新环节调用一次,"
+      + "note 用一句话说明现场。阶段含义:fetch_detail=获取 DTS 详情"
+      + "(仅绑定了单号才有)/ align_issue=与用户对齐问题现象"
+      + "/ locate_root=分析根因 / align_solution=对齐修复方案"
+      + "/ modify_code=实施修改 / switch_db=换库 / verify=验证"
+      + "/ submit_mr=提交 MR / done=已给出结论(非问题也走它)。"
+      + "阶段可跳过、可回退:用户推翻结论继续查,就从 done 切回去。"
+      + "done 只是'AI 已出结论',正式收口由用户归档。"
       + `合法阶段: ${ISSUE_STAGES.join(" / ")}`,
     parameters: Type.Object({
       stage: Type.Union(ISSUE_STAGES.map((stage) => Type.Literal(stage)), {
@@ -72,11 +81,17 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       note: Type.String({ description: "一句话现场说明(做了什么/发现了什么)" }),
     }),
     async execute(_toolCallId: string, params: any) {
+      if (!validStage(String(params.stage))) {
+        fail(`非法阶段: ${params.stage}。合法值: ${ISSUE_STAGES.join(" / ")}`);
+      }
       ctx.state.stage = params.stage;
       ctx.state.stage_note = String(params.note ?? "");
       ctx.state.stage_at = new Date().toISOString();
+      recordTransition(ctx.state, {
+        source: "agent", stage: params.stage, note: String(params.note ?? ""),
+      });
       ctx.persist();
-      return ok(`阶段已更新为 ${params.stage}:${params.note}`);
+      return ok(`阶段已更新为 ${STAGE_LABELS[params.stage]}:${params.note}`);
     },
   }));
 
@@ -112,6 +127,10 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         password,
         localDir,
       });
+      recordTransition(ctx.state, {
+        source: "platform",
+        note: `日志已拉取:${result.summary.split("\n")[0]}`,
+      });
       return ok(result.summary);
     },
   }));
@@ -146,6 +165,10 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         password,
         includeLib: Boolean(params.include_lib),
       });
+      recordTransition(ctx.state, {
+        source: "platform",
+        note: `换库部署完成:${result.summary.split("\n")[0]}`,
+      });
       return ok(result.summary
         + "\n部署完成——请用 AskUserQuestion 请用户在环境上验证,等结果再继续。");
     },
@@ -166,6 +189,10 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       const ticket = String(params.ticket ?? "").trim() || ctx.state.ticket;
       if (!ticket) fail("没有单号:请提供 ticket 参数,或请用户先绑定单号");
       const detail = await ctx.dts.detail(ticket);
+      recordTransition(ctx.state, {
+        source: "platform",
+        note: `DTS 单 ${detail.ticket} 详情已获取`,
+      });
       return ok(`问题单 ${detail.ticket} 详情:\n${detail.content}`);
     },
   }));
@@ -211,6 +238,10 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         sha: receipt.sha,
         at: new Date().toISOString(),
       };
+      recordTransition(state, {
+        source: "platform",
+        note: `分支已推送 ${receipt.branch} @ ${receipt.sha.slice(0, 12)}`,
+      });
       ctx.persist();
       return ok(`已推送 ${receipt.branch} @ ${receipt.sha.slice(0, 12)}`);
     },
@@ -261,6 +292,10 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         ...(receipt.id !== undefined ? { iid: String(receipt.id) } : {}),
         at: new Date().toISOString(),
       };
+      recordTransition(state, {
+        source: "platform",
+        note: `MR 已创建: ${receipt.url}`,
+      });
       ctx.persist();
       return ok(`MR 已创建: ${receipt.url}\n(source ${state.push.branch} → ${target},`
         + `关联单号 ${state.ticket})。合入由用户在门禁通过后决定。`);
