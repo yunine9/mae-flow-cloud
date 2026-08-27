@@ -158,18 +158,19 @@ export function PrepushBadge({
             <PrepushLiveLog taskId={task.id}
               active={prepushActive(prepush.state)} />
             {canOperate && prepushActive(prepush.state) && (
-              /* 主动停止(用户点名):停止≠放行,本轮如实收口成失败
-                 停机,之后跳过/重跑两条出路才亮起来。 */
+              /* 停止并直推(用户拍板:"把停止变为停止并直推流水线"):
+                 两步一次点完——中止本轮、如实收口停机账,随即走跳过
+                 链路绑 HEAD 直推,编译与 UT 交由权威流水线裁决。 */
               <div className="prepush-rerun">
                 {stopNote && <p className="prepush-skip-error">{stopNote}</p>}
                 {!stopArmed ? (
                   <button type="button" disabled={stopBusy}
                     onClick={() => setStopArmed(true)}>
-                    停止本轮编译
+                    停止编译,直推流水线
                   </button>
                 ) : (
                   <>
-                    <em>确定?本轮会收口成失败停机,之后可重跑或跳过直推流水线。</em>
+                    <em>确定?中止本轮编译后直接推送当前 HEAD,编译与 UT 由权威流水线裁决;若代码真编译不过,会消耗一条流水线后进入流水线修复环。</em>
                     <button type="button" disabled={stopBusy}
                       onClick={() => {
                         setStopBusy(true);
@@ -183,13 +184,13 @@ export function PrepushBadge({
                             setStopArmed(false);
                           });
                       }}>
-                      {stopBusy ? "停止中…" : "确认停止"}
+                      {stopBusy ? "停止中…" : "确认停止并直推"}
                     </button>
                     <button type="button" disabled={stopBusy}
                       onClick={() => setStopArmed(false)}>返回</button>
                   </>
                 )}
-                <small>中止编译 Agent 与构建容器;已推进的修复提交保留在工作区。</small>
+                <small>中止编译 Agent 与构建容器,已推进的修复提交保留;停止瞬间恰好编译通过的按通过继续。</small>
               </div>
             )}
             {canOperate && prepush.state !== "passed" && (

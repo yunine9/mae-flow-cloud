@@ -33,7 +33,7 @@
  *   GET  /tasks/:id/prepush/events                      → SSE:推送前验证实时事件(换轮自动切新)
  *   POST /tasks/:id/prepush/skip                        → 失败停机后人工拍板跳过,直推流水线裁决
  *   POST /tasks/:id/prepush/retry                       → 人工重跑推送前编译(僵尸现场出路/活性探针)
- *   POST /tasks/:id/prepush/stop                        → 主动停止在途编译,如实收口成失败停机
+ *   POST /tasks/:id/prepush/stop                        → 停止在途编译并直推流水线(绑 HEAD 跳过)
  *   GET  /tasks/:id/warmup/events                       → SSE:环境预热编译实时事件
  *   GET  /tasks/:id/timeline                            → 人话交付时间线(只读现场)
  *   GET  /tasks/:id/activity                            → 行为摘要:此刻在干嘛/分段折叠/异常信号
@@ -1142,7 +1142,7 @@ export function createTaskServer(
           }
           return json(response, 200, await service.retryPrePush(id));
         }
-        // 主动停止在途的推送前编译:如实收口成失败停机,跳过/重跑随即可用。
+        // 停止在途的推送前编译并直推流水线:收口停机账后立刻绑 HEAD 跳过。
         if (request.method === "POST" && parts[2] === "prepush"
             && parts[3] === "stop") {
           const target = service.get(id);

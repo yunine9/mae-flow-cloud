@@ -4,8 +4,9 @@
  * 而「重跑续推」按 verifying 在途拒绝——人对着僵尸现场没有任何出路。
  * 契约:真在跑(prepushActive)拒绝并明说,兼作活性探针;passed 不许
  * 重跑(那是绕收据);僵尸现场接受后由交付链的 recovered 转移收口旧
- * attempt 并起新轮。另验:编译槽位排队真相要写进 prepush.message,
- * 不能只活在任务 detail 里(实锤被当成卡死)。
+ * attempt 并起新轮。停止是合并语义(用户拍板"把停止变为停止并直推
+ * 流水线"):中止收口后立刻绑 HEAD 跳过续跑。另验:编译槽位排队真相
+ * 要写进 prepush.message,不能只活在任务 detail 里(实锤被当成卡死)。
  */
 
 import { test } from "node:test";
@@ -149,7 +150,7 @@ test("真在跑拒绝(活性探针);passed/无现场/状态不符都拒", async 
   }
 });
 
-test("主动停止:排队中的轮出队并如实收口成失败停机,runner 不执行", async () => {
+test("停止并直推:排队中的轮出队收口,随即绑 HEAD 跳过续跑", async () => {
   const { service, model, id, internal, repo } = await taskWithRepo();
   try {
     const head = repo.git("rev-parse", "HEAD");
@@ -177,14 +178,22 @@ test("主动停止:排队中的轮出队并如实收口成失败停机,runner �
     await until(() => internal.prepushActive ? true : undefined, "在途锁挂上");
 
     const summary = await service.stopPrePush(id);
-    assert.equal(await pending, false, "被停止的轮不许放行");
+    assert.equal(await pending, false, "被停止的轮本身不许放行");
     assert.equal(ran, 0, "排队即停,runner 不许执行");
-    assert.equal(summary.status, "failed");
+    // 合并语义:停机账落完立刻走跳过链路——绑当下 HEAD 的
+    // user_skipped,任务回队续跑,交付走到 preparePush 时放行给流水线。
     const prepush = internal.summary.delivery.prepush;
-    assert.equal(prepush.state, "environment_error");
-    assert.match(prepush.message, /用户停止/);
+    assert.equal(prepush.state, "user_skipped");
+    assert.equal(prepush.sha, head, "跳过必须绑停止拍板时刻的 HEAD");
     assert.equal(prepush.active_attempt, undefined);
+    // retry 落队后任务泵立刻接手,queued 窗口极短——只断言"在续跑",
+    // 不钉具体瞬时状态。
+    assert.ok(["queued", "running", "completed"].includes(summary.status),
+      `跳过后任务应回队续跑而不是躺平,实际 ${summary.status}`);
     (service as any).activePrePushBuilds = 0;
+    // 续跑会话收口,别让后台泵在测试退出后裸奔。
+    await until(() => service.get(id)?.status === "completed"
+      ? true : undefined, "停止并直推后的续跑收口");
   } finally {
     await model.stop();
   }

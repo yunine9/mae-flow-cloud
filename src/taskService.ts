@@ -4124,11 +4124,15 @@ export class TaskService {
     return this.project(task);
   }
 
-  /** 用户主动停止在途的推送前编译(2026-08-27 用户点名)。停止不是
-   * 放行:本轮如实收口成失败停机,跳过/重跑两条出路随即可用——与
-   * "fail-closed 停下让人接手"同一条纪律。在跑的走 prepushAbort 中止
-   * 会话与容器;还在排编译槽位队的直接出队,这条路不经过 runner 收口,
-   * 得在这里如实补账,否则留下 preparing 僵尸。 */
+  /** 用户主动停止在途的推送前编译并直推流水线(2026-08-27 用户拍板:
+   * "把停止变为停止并直推流水线")。语义是两步一次点完:先中止本轮
+   * (在跑的走 prepushAbort;还在排编译槽位队的直接出队——这条路不
+   * 经过 runner 收口,得在这里如实补账,否则留下 preparing 僵尸),
+   * 收口成失败停机后立刻走跳过链路(绑当下 HEAD 的 user_skipped,
+   * 编译与 UT 交由权威流水线裁决,任务自动续跑)。不是静默放行:
+   * 停机账、跳过拍板都如实落在现场里。两个例外:本轮在停止瞬间已经
+   * 通过的,按通过继续推,不冤枉它;暂停中的任务只停不推——暂停是
+   * 用户更早的明确指令,不许被顺手续跑。 */
   async stopPrePush(id: string): Promise<TaskSummary> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
@@ -4158,17 +4162,28 @@ export class TaskService {
         ...prepush,
         state: "environment_error",
         active_attempt: undefined,
-        message: "用户停止了本轮推送前编译;可重跑,或跳过直推流水线裁决",
+        message: "用户停止了本轮推送前编译,直推流水线裁决",
         updated_at: new Date().toISOString(),
       });
     }
-    if (!["failed", "paused", "pausing", "canceled"]
-      .includes(task.summary.status)) {
-      task.summary.status = "failed";
-      task.summary.detail = "推送前编译已由用户停止";
+    // 停止瞬间恰好收口通过的:交付链已按收据继续推,别再动它。
+    const closedState = task.summary.delivery?.prepush?.state;
+    if (closedState === "passed") {
+      this.persist(task);
+      return this.project(task);
     }
+    if (["paused", "pausing", "canceled"].includes(task.summary.status)) {
+      // 暂停/取消是用户更早的明确指令,只停编译,不顺手续跑去推。
+      task.summary.detail = "推送前编译已由用户停止";
+      this.persist(task);
+      return this.project(task);
+    }
+    task.summary.status = "failed";
+    task.summary.detail = "推送前编译已由用户停止,转直推流水线";
     this.persist(task);
-    return this.project(task);
+    // 停止并直推:失败停机后立刻走既有跳过链路(绑 HEAD 的
+    // user_skipped + retry 续跑),语义与人分两步点完全一致。
+    return this.skipPrePushVerification(id);
   }
 
   retry(id: string): TaskSummary {

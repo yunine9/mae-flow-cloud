@@ -1429,8 +1429,9 @@ export async function retryPrepushVerification(taskId: string): Promise<void> {
   }
 }
 
-/** 主动停止在途的推送前编译。停止≠放行:本轮如实收口成失败停机,
- * 之后跳过/重跑两条出路才可用。 */
+/** 停止在途的推送前编译并直推流水线(用户拍板的合并语义):中止本轮、
+ * 如实收口停机账,随即绑当下 HEAD 跳过,编译与 UT 交由权威流水线裁决。
+ * 停止瞬间恰好通过的按通过继续;暂停中的任务只停不推。 */
 export async function stopPrepushVerification(taskId: string): Promise<void> {
   const response = await fetch(
     `/tasks/${encodeURIComponent(taskId)}/prepush/stop`, { method: "POST" });
