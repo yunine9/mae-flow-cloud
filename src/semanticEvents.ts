@@ -18,6 +18,7 @@ export type SemanticEventKind =
   | "user_message"
   | "assistant_message"
   | "tool_requested"
+  | "tool_output"
   | "tool_finished"
   | "agent_spawned"
   | "agent_finished"
@@ -40,6 +41,7 @@ const REQUIRED_PAYLOAD: Record<SemanticEventKind, readonly string[]> = {
   user_message: ["text"],
   assistant_message: ["text"],
   tool_requested: ["call_id", "name", "input"],
+  tool_output: ["name", "text", "log_path"],
   tool_finished: ["call_id", "name", "input", "is_error", "result"],
   agent_spawned: [
     "call_id", "agent_type", "description", "prompt", "child_session_id"],

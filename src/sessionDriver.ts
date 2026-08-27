@@ -109,6 +109,9 @@ export interface CloudSessionOptions {
   allowHumanQuestions?: boolean;
   /** 专项旁路会话可关闭 Task，避免一个轻量助手再扩散出子 Agent 树。 */
   allowSubagents?: boolean;
+  /** 编译专项会话把长 Bash 的 stdout 节流写入事件账，供独立 SSE 实时
+   * 展示。普通编码会话默认关闭，避免把高频输出灌进主事件账。 */
+  streamBashOutput?: boolean;
   /** 同一任务事件账里的会话身份；缺省 main，旁路助手使用独立身份。 */
   sessionId?: string;
   currentStep?: () => string;
@@ -884,6 +887,15 @@ export class CloudSession {
             taskId: this.options.taskId,
             sessionId: config.sessionId,
             log: this.options.log,
+            onOutput: this.options.streamBashOutput
+              ? ({ text, relativePath }) => {
+                  this.emit("tool_output", config.sessionId, {
+                    name: "Bash",
+                    text,
+                    log_path: relativePath,
+                  });
+                }
+              : undefined,
           },
         )]
       : [];

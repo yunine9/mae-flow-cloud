@@ -2695,6 +2695,7 @@ export class TaskService {
       }),
       humanGate: task.humanGate,
       allowHumanQuestions: false,
+      streamBashOutput: true,
       sessionId: "warmup",
       currentStep: () => "环境预热编译",
       compactAnchor: () =>
@@ -7579,6 +7580,7 @@ export class TaskService {
         }),
         humanGate: task.humanGate,
         allowHumanQuestions: false,
+        streamBashOutput: true,
         sessionId: `prepush-${request.round}`,
         currentStep: () => this.currentStepLabel(task),
         compactAnchor: () => `推送前验证任务: ${requirementContext(

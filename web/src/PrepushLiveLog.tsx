@@ -62,6 +62,16 @@ function linesOf(event: SemanticEvent): LiveLine[] {
       }
       return [];
     }
+    case "tool_output": {
+      if (!/^bash$/i.test(String(payload.name ?? ""))) return [];
+      const output = clip(String(payload.text ?? "").replace(/\r/g, "\n"), 8_000)
+        .split("\n").filter((line) => line.length).slice(-80);
+      return output.map((line, index) => ({
+        key: `${key}:${index}`,
+        kind: "out" as const,
+        text: line,
+      }));
+    }
     case "tool_finished": {
       if (!/^bash$/i.test(String(payload.name ?? ""))) return [];
       // 全量输出在轮目录的 bash 日志里;这里给结尾片段够定位即可。
