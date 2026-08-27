@@ -27,7 +27,7 @@ import {
 } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
 import {
   AnnotationStore,
@@ -596,7 +596,9 @@ export interface TaskSummary {
     loop?: {
       round: number;
       max?: number;
-      state: "repairing" | "green" | "exhausted" | "halted";
+      /** repairing 只表示修复 Agent 本身正在运行；会话收口后进入
+       * verifying，覆盖新 SHA 的 prepush、push 与权威流水线验证。 */
+      state: "repairing" | "verifying" | "green" | "exhausted" | "halted";
       /** 最近一次派的修复类型:回程(settle 后)按它走收尾动作。 */
       kind?: "ci" | "review" | "conflict";
       failure?: string;
@@ -1028,6 +1030,10 @@ interface TaskState {
    * 已返回给调用方的 turn Promise 收口；这条信号用于结束宿主等待，
    * 容器销毁仍是进程树终止的安全边界。 */
   prepushAbort?: AbortController;
+  /** 本轮 prepush 由 Edit/Write 明确产生的路径。只活在进程内，用来
+   * 证明修复提交的每个文件都有 Agent 主动修改来源；构建命令生成后被
+   * `git add .` 卷入的产物没有这条来源，不能拿到 PASS。 */
+  prepushAuthoredPaths?: Set<string>;
   /** 上次主动压缩时的事件水位(事件量是上下文增长的诚实代理)。 */
   lastCompactAt?: number;
   /** 恢复标记:launch 走重建会话路径(不重克隆、内核 current 续跑)。 */
@@ -2660,6 +2666,8 @@ export class TaskService {
     const agentDir = join(task.summary.workspace, "pi-agent");
     mkdirSync(agentDir, { recursive: true });
     this.hardenAgentGitBoundary(agentDir, task.cwd);
+    // 同 prepush:build-notes 目录宿主预建,Agent 只写放行的那个文件。
+    mkdirSync(join(task.cwd, ".mae-flow-work"), { recursive: true });
     const modelOverride = this.options.settings?.models() ?? {};
     writeFileSync(join(agentDir, "models.json"),
       JSON.stringify(modelOverride.json ?? this.options.modelsJson));
@@ -3894,6 +3902,10 @@ export class TaskService {
           controlEpoch: 0,
         };
         this.tasks.set(summary.id, task);
+        // 旧版本把 repairing 一直保留到流水线最终绿灯。若修复使命已经
+        // 消费完，真实当前动作其实是 prepush/流水线验证；恢复时同步
+        // 校正，不能让重新部署后的老任务继续同时显示两种当前阶段。
+        if (this.enterRepairVerification(task)) this.persist(task);
         const assistantSnapshot = readDeveloperAssistant(workspace);
         if (assistantSnapshot.handoff?.id
             && assistantSnapshot.handoff.state !== "returned"
@@ -7291,6 +7303,31 @@ export class TaskService {
       .filter((path) => !sanctioned.has(path));
   }
 
+  /** prepush 是“验证与小范围修复”会话，不是第二个不受控的开发入口。
+   * 它最终提交的每个路径都必须能追溯到本轮成功的 Edit/Write；Bash 构建
+   * 自然生成的文件不会登记，因此即使 Agent 用 `git add .` 把现场洗成
+   * clean，也无法绕过这道校验。这里不猜扩展名/目录名，适用于任意语言。 */
+  private async prePushUnattributedCommitPaths(
+    task: TaskState,
+    initialSha: string,
+    finalSha: string,
+  ): Promise<string[]> {
+    if (!task.cwd || initialSha === finalSha) return [];
+    const changed = await runSafeWorktreeGitAsync(task.cwd, [
+      "diff", "--name-only", "-z", initialSha, finalSha, "--",
+    ], { timeoutMs: 30_000 });
+    if (changed.status !== 0) {
+      return [`(无法核验 prepush 提交来源: ${String(
+        changed.stderr ?? changed.error ?? "Git diff 失败",
+      ).trim().slice(0, 200)})`];
+    }
+    const authored = task.prepushAuthoredPaths ?? new Set<string>();
+    return String(changed.stdout ?? "").split("\0")
+      .map((path) => path.trim())
+      .filter(Boolean)
+      .filter((path) => !authored.has(path.replace(/\\/g, "/")));
+  }
+
   private setPrePushState(
     task: TaskState,
     state: PrePushVerificationState,
@@ -7366,6 +7403,9 @@ export class TaskService {
     const agentDir = join(task.summary.workspace, "pi-agent");
     mkdirSync(agentDir, { recursive: true });
     this.hardenAgentGitBoundary(agentDir, task.cwd);
+    // build-notes 的目录由宿主预建:安全层只放行那一个文件,mkdir
+    // .mae-flow-work 本身会被拦——使命让写、闸不让建目录,Agent 没出路。
+    mkdirSync(join(task.cwd, ".mae-flow-work"), { recursive: true });
     const modelOverride = this.options.settings?.models() ?? {};
     writeFileSync(join(agentDir, "models.json"),
       JSON.stringify(modelOverride.json ?? this.options.modelsJson));
@@ -7622,6 +7662,14 @@ export class TaskService {
             path,
             user: isolation.user,
           });
+          // 只有文件工具成功落盘并完成属主修复后才登记。Bash 构建产生
+          // 的文件不会经过这里，后续即使被 `git add .` 提交也会被宿主
+          // 的提交来源校验拦下。
+          const authored = relative(resolve(task.cwd!), resolve(path))
+            .replace(/\\/g, "/");
+          if (authored && authored !== ".." && !authored.startsWith("../")) {
+            task.prepushAuthoredPaths?.add(authored);
+          }
         },
         log: this.options.log,
       });
@@ -7634,6 +7682,7 @@ export class TaskService {
         request,
         executionBudget,
       )));
+      let previousUnattributed = "";
       for (let correction = 0; correction < 3; correction += 1) {
         if (infrastructureFailure) {
           await driver.abort().catch((error) => this.options.log?.(
@@ -7666,15 +7715,24 @@ export class TaskService {
           : "收口缺少合法的 <prepush-result> 结构";
         const dirtyPaths = await this.prePushDirtyPaths(task);
         const dirty = dirtyPaths.length > 0;
-        if (report && !evidence && !dirty) {
+        const finalSha = (await this.prePushRevision(task)).sha;
+        const unattributedPaths = await this.prePushUnattributedCommitPaths(
+          task, request.sha, finalSha);
+        const unattributedKey = unattributedPaths.join("\0");
+        const repeatedUnattributed = Boolean(unattributedKey)
+          && unattributedKey === previousUnattributed;
+        if (unattributedKey) previousUnattributed = unattributedKey;
+        if (report && !evidence && !dirty && !unattributedPaths.length) {
           return withExecution({
             status: "passed",
-            sha: (await this.prePushRevision(task)).sha,
+            sha: finalSha,
             message: report.summary,
             report,
           });
         }
-        if (correction === 2) {
+        // 同一批无来源文件只允许纠正一次。第二次原样出现说明 Agent 没有
+        // 理解/无法执行清理，继续烧模型和重跑编译不会产生新信息。
+        if (correction === 2 || repeatedUnattributed) {
           return withExecution({
             status: "code_failure",
             sha: (await this.prePushRevision(task)).sha,
@@ -7682,6 +7740,10 @@ export class TaskService {
               ? `工作区仍有未提交业务改动(${describeDirtyPaths(dirtyPaths)})`
                 + "；若是构建产物,请在仓库 .gitignore 它们或把构建输出挪出"
                 + "工作区,否则每轮推送前验证都会在这里失败"
+              : "", unattributedPaths.length
+              ? "prepush 修复提交包含没有 Edit/Write 来源的路径("
+                + `${describeDirtyPaths(unattributedPaths)})；拒绝把 Bash 构建`
+                + "产生后被 git add 卷入的文件当成业务代码"
               : ""].filter(Boolean).join("；"),
           });
         }
@@ -7692,6 +7754,13 @@ export class TaskService {
             ? `git status 仍有业务改动(${describeDirtyPaths(dirtyPaths)})：`
               + "属于本单的改动请提交；构建产物请清理出工作区或恢复原状，"
               + "再重新执行编译与 UT。"
+            : "",
+          unattributedPaths.length
+            ? `最终提交含有未通过 Edit/Write 明确修改的路径(`
+              + `${describeDirtyPaths(unattributedPaths)})。这通常是 git add . `
+              + "把编译产物卷进了提交：请从提交中移除这些路径并清理现场；"
+              + "业务源码必须用 Edit/Write 修改后再提交。本轮已登记路径："
+              + `${describeDirtyPaths([...(task.prepushAuthoredPaths ?? [])]) || "无"}。`
             : "",
           "不要只重写结论；两项命令必须在最后一次代码修改后真实成功。",
         ].filter(Boolean).join("\n")));
@@ -7758,6 +7827,9 @@ export class TaskService {
       releaseBuildSlot?.();
       return false;
     }
+    // 每个 attempt 独立记账；自定义 runner 若改变 HEAD，也必须通过宿主
+    // 可观测的文件工具登记来源，否则其新增提交同样不能绕过交付边界。
+    task.prepushAuthoredPaths = new Set<string>();
     try {
       result = await (this.options.prepush?.runner
         ?? ((input) => this.runCloudPrePushAgent(
@@ -7789,16 +7861,29 @@ export class TaskService {
           + `${finalRevision.sha.slice(0, 12)}，拒绝复用陈旧结论`,
       };
     } else if (result.status === "passed") {
-      const dirtyPaths = await this.prePushDirtyPaths(task);
-      if (dirtyPaths.length) {
+      const unattributedPaths = await this.prePushUnattributedCommitPaths(
+        task, initialRevision.sha, finalRevision.sha);
+      if (unattributedPaths.length) {
         result = {
           status: "code_failure",
           sha: finalRevision.sha,
-          message: "编译与 UT 虽已执行，但工作区仍有未提交业务改动"
-            + `(${describeDirtyPaths(dirtyPaths)})`,
+          message: "推送前修复提交包含没有 Edit/Write 来源的路径("
+            + `${describeDirtyPaths(unattributedPaths)})；已阻止把构建命令`
+            + "产生后被 Git 批量暂存的文件推给用户确认",
         };
+      } else {
+        const dirtyPaths = await this.prePushDirtyPaths(task);
+        if (dirtyPaths.length) {
+          result = {
+            status: "code_failure",
+            sha: finalRevision.sha,
+            message: "编译与 UT 虽已执行，但工作区仍有未提交业务改动"
+              + `(${describeDirtyPaths(dirtyPaths)})`,
+          };
+        }
       }
     }
+    delete task.prepushAuthoredPaths;
     state = recordPrePushReport(
       state, attemptId, this.prePushDomainReport(result),
       new Date().toISOString());
@@ -7986,6 +8071,10 @@ export class TaskService {
   private async tryDeliver(task: TaskState, epoch: number): Promise<void> {
     // 多仓父任务只负责需求理解和人工检视，不产生分支/MR。
     if (this.isRequirementAnalysis(task)) return;
+    // settle 在调用交付前已经释放修复会话并清空 mission。此刻开始处理
+    // 的是修复结果验证，不再是“Agent 正在修复”；prepush 可能耗时很长，
+    // 这条转换必须在任何外部 I/O 之前持久化，重启和页面才能同一口径。
+    if (this.enterRepairVerification(task)) this.persist(task);
     // 平台地址由部署固定注入；每次交付动作使用同一条基础设施链路。
     const platformUrl = this.effectivePlatformUrl();
     if (!platformUrl || !this.options.host || !task.cwd) {
@@ -8146,6 +8235,23 @@ export class TaskService {
       }
       this.options.log?.(`任务 ${task.summary.id} 交付失败: ${String(error)}`);
     }
+  }
+
+  /** 修复会话 → 修复结果验证的唯一状态交接。
+   *
+   * mission 仍在表示专职修复 Agent 尚未完成，绝不能提前切；没有 mission
+   * 且任务仍在活动交付态时，repairing 已经是旧版遗留或刚收口的陈旧值。
+   * 返回是否发生转换，由调用方在自己的原子边界持久化。 */
+  private enterRepairVerification(task: TaskState): boolean {
+    const loop = task.summary.delivery?.loop;
+    if (loop?.state !== "repairing" || task.mission) return false;
+    if (!["queued", "running", "pausing", "verifying"]
+      .includes(task.summary.status)) return false;
+    loop.state = "verifying";
+    task.summary.detail = task.summary.delivery?.prepush
+      ? "修复会话已完成，正在验证修复后的提交"
+      : "修复会话已完成，等待验证修复后的提交";
+    return true;
   }
 
   /** 流水线异步收敛:轮询 status?sha= 直到终态或预算耗尽。

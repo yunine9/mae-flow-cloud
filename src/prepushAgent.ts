@@ -109,7 +109,12 @@ export function prePushSecurityDecision(
   const sansBuildNotes = sansExclusionIdioms.replace(
     /[^\s'"`;&|]*\.mae-flow-work[\\/]build-notes\.md/gi, " ");
   if (kernelStatePath.test(sansBuildNotes) && !readonlySkillSnapshot) {
-    return DENY("推送前编译会话不能读取或修改 Mae-Flow 内核现场。");
+    // 这套安全层被 prepush/预热/开发助手多个专项会话复用,文案不许
+    // 自称"推送前编译会话"(预热 Agent 撞到过张冠李戴的拒绝);出路
+    // 必须写明——构建入口沉淀那一个文件是放行的,别的换路也没用。
+    return DENY("本专项会话不能读取或修改 Mae-Flow 内核现场(.mae-flow*)。"
+      + "构建入口沉淀请只写 .mae-flow-work/build-notes.md(该文件已放行,"
+      + "目录由宿主预建);其余 .mae-flow 路径不要再尝试其他写法访问。");
   }
 
   // 文件工具和 Bash 都不能伸手碰宿主运行时模型/API Key 或常见凭据。
@@ -154,6 +159,17 @@ export function prePushSecurityDecision(
   const shellSegments = source.split(/(?:&&|\|\||[;\n])/);
   for (const segment of shellSegments) {
     if (!/\bgit\b/i.test(segment)) continue;
+    // prepush 的修复只能显式暂存由 Edit/Write 登记的源码。`git add .`
+    // / -A / -u 和 `commit -a` 会把构建命令的副产物一起卷进 HEAD；在
+    // 命令发生时就给确定反馈，不要等整轮编译结束才让 Agent 猜哪里错。
+    if (/\bgit\b[\s\S]*\badd\b[\s\S]*(?:^|\s)(?:\.|-A|--all|-u|--update)(?:\s|$)/i
+      .test(segment)
+      || /\bgit\b[\s\S]*\bcommit\b[\s\S]*(?:^|\s)(?:--all\b|-[a-z]*a[a-z]*\b)/i
+        .test(segment)) {
+      return DENY("推送前修复禁止批量暂存或 commit -a；请只对本轮通过 "
+        + "Edit/Write 明确修改的源码路径执行 git add，再提交。构建产物应"
+        + "清理，不能靠提交它们来让 git status 变干净。");
+    }
     if (/\bgit\b[\s\S]*\bclone\b/i.test(segment)) {
       return DENY("禁止在推送前验证会话中重新克隆仓库；请使用 Cloud 已准备好的工作区。");
     }
@@ -235,7 +251,9 @@ export function prePushSecurityDecision(
     }
   }
   if (/\bfind\b[^;&|\n]*\s-delete\b/i.test(source)) {
-    return DENY("禁止使用 find -delete 批量删除工作区内容。");
+    return DENY("禁止使用 find -delete 批量删除工作区内容;要清理构建"
+      + "产物,请对产物目录整体使用 rm -rf（target/、build/ 等白名单"
+      + "路径已放行）或走构建工具的 clean 生命周期。");
   }
 
   return undefined;
@@ -426,7 +444,13 @@ export function prePushMission(
     "然后重新执行编译和 UT，直至两项都通过。可以自由检查源码、测试、pom/build/CMake/package 配置，",
     "但不要顺手重构无关代码。代码修改使用 Edit/Write 工具，不要用 shell 文本替换伪装修改。",
     "如有修改，按仓库现有提交规范提交到本地 HEAD；禁止 push、改 remote、读取或写入任何凭据，",
-    "Cloud 会在会话释放并复核后注入短期凭据、统一推送。禁止递归强删；clean 请走构建工具生命周期。",
+    // 这句话必须与 prePushSecurityDecision 的 rm 白名单同一口径:之前
+    // 写成一刀切"禁止递归强删",与 playbook"删掉陈旧 CMake 生成目录"
+    // 正面打架,听话的模型永远修不好陈旧 configure。
+    "Cloud 会在会话释放并复核后注入短期凭据、统一推送。清理构建产物可以直接"
+      + " rm -rf 产物目录（target/、build/、cmake-build*、CMakeFiles、"
+      + "CMakeCache.txt、node_modules，相对路径）；除这些产物目录外禁止递归强删，"
+      + "clean 请走构建工具生命周期。",
     "平台现场文件(.mae-flow* / openspec/config.yaml 等)不归你管：它们已被平台登记忽略，",
     "即使仍显示为未跟踪也不要提交、删除，更不要为它们修改用户的 .gitignore——那是用户的文件。",
     "依赖下载、工具缺失、磁盘/网络/权限等不是改代码能解决的问题，归类为 infrastructure_failure，",

@@ -167,12 +167,15 @@ def _gate_confirmed_manifest_candidates(st, candidate_snapshot):
         for path in candidate_snapshot.get("paths", ())
     }
     if actual != expected:
+        # 指路必须指向真正能改清单的命令:manifest show 只读,曾把修复
+        # Agent 指进空门原地打转(排查实锤)。
         _die_rule(
             "bash-delivery-manifest-files",
             "待提交文件必须精确等于用户确认的交付清单。缺少: %s；夹带: %s。"
             "用 manifest show 核对清单，再用 git add / git restore --staged "
-            "把暂存内容调整到与清单一致；确实需要改清单本身时，重新 "
-            "manifest show 并取得用户确认。"
+            "把暂存内容调整到与清单一致；清单本身需要变(新增/剔除文件)时，"
+            "用 manifest set --file <路径>... --target <检视产物> 重设并"
+            "重新取得用户确认——show 只能看不能改。"
             % ("、".join(sorted(expected - actual)) or "无",
                "、".join(sorted(actual - expected)) or "无"))
 
@@ -184,9 +187,13 @@ def _gate_confirmed_manifest_add(st, add_paths):
     if not add_paths or not manifest:
         return
     if not manifest.get("confirmed"):
+        # 与 commit 侧同一条规则必须给同样完整的出路(add 先于 commit
+        # 被撞到,原来只有一句"不行")。
         _die_rule(
             "bash-delivery-manifest-unconfirmed",
-            "交付清单尚未由用户确认，不能暂存交付文件。")
+            "交付清单尚未由用户确认，不能暂存交付文件。先执行 manifest "
+            "show，收到用户回答后使用 manifest confirm --message-id "
+            "<消息ID>，再按清单精确 git add。")
     allowed = {
         api._repo_path_identity(path) for path in manifest.get("files", ())
     }
@@ -200,7 +207,9 @@ def _gate_confirmed_manifest_add(st, add_paths):
             "git add 只能包含用户确认清单中的精确文件: "
             + "、".join(outside)
             + "。执行 manifest show 核对清单后只暂存其中的文件；"
-            "这些文件确实属于本次交付时，重新 manifest show 取得用户确认。")
+            "这些文件确实属于本次交付时，用 manifest set --file <路径>... "
+            "--target <检视产物> 把它们纳入清单并重新取得用户确认"
+            "——show 只能看不能改。")
 
 
 def _gate_commit_candidates(c, st, jdie):
@@ -411,10 +420,11 @@ def cmd_gate(flow, st, args):
             _die_decision(pre)
         if pre.kind == "block":
             jdie(pre.rule, pre.message)
-        if (message_present and wanted
-                and sid not in (
-                    "config_confirm", "workflow_select",
-                    "branch_create")):
+        # 不给头部步骤开天窗:decide_commit_branch 的 docstring 记载过
+        # 实锤——无人值守跑到 workflow_select 时模型把三个提交全落在
+        # 基线分支上,恰恰因为这里曾按步骤跳过。分支名还没定时纯函数
+        # 本来就放行(wanted 为空),不需要任何步骤白名单。
+        if message_present and wanted:
             context = replace(
                 context,
                 current_branch=api.sh("git branch --show-current"),

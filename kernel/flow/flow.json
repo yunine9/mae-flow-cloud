@@ -346,7 +346,6 @@
   },
   "external_verify": {
    "title": "等待权威流水线",
-   "host_wait": true,
    "evidence": [
     {
      "type": "pipeline_obligations_passed"

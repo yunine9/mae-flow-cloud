@@ -148,16 +148,6 @@ function flags(name: string): string[] {
   return Array.isArray(fromFile) ? fromFile.map(String) : [];
 }
 
-function demoContract(
-  _tool: string,
-  value: string,
-): GateDecision | undefined {
-  if (value.includes("rm -rf")) {
-    return { action: "deny", reason: "危险命令被 mae-flow 门禁打回" };
-  }
-  return undefined;
-}
-
 /** 选中的模型有没有声明上下文窗口(pi 的 models.json 原样透传,
  * contextWindow 是它自己的字段)。读不动一律当"没声明"——这只是
  * 一句启动提醒,不许因为配置形状意外把服务拦下。 */
@@ -628,7 +618,11 @@ async function main(): Promise<void> {
     // push 前清单过目:同样现读个人默认(真人缺省即开)。
     pushConfirmation: (account) => auth.pushConfirmationEnabled(account),
     compactEveryEvents: compactEvery,
-    contract: demoContract,
+    // 2026-08-28 摘除 demoContract:那是阶段一的演示桩("rm -rf"裸子串
+    // 一律拒),却一直接在生产兜底位——prepush 构建产物删除白名单放行后
+    // 被它照拒,死循环还收口成 code_failure 冤枉代码。危险命令的真裁决
+    // 在内核 gate(bash-recursive-delete 等)与 prepush 安全层,宿主不再
+    // 叠一层无出路的子串匹配。
     host,
     delivery,
     // 环境预热编译:隔离模式显式开启(缺席即关,测试形态零意外会话)。

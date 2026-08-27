@@ -32,14 +32,18 @@ def red_state():
 
 
 class ExternalRepairAuthorizationTests(unittest.TestCase):
-    def test_red_issues_failed_sha_bound_window_and_filters_carryover(self):
+    def test_red_issues_window_and_filters_carryover(self):
         state = red_state()
         issue_repair_authorization(
             state, PipelineDecision("RED", "UT failed", {}),
             head=HEAD, at="2026-08-20 12:00:00",
             dirty_paths=("pre-red.txt",))
         self.assertTrue(active_repair_authorization(state, HEAD)[0])
-        self.assertFalse(active_repair_authorization(state, "b" * 40)[0])
+        # 2026-08-28 勘误:窗口不再绑当前 HEAD——第一笔修复提交后 HEAD
+        # 前移,窗口保持打开允许补提交("一个 RED 只配一次提交"曾把漏
+        # 提交文件的 Agent 摔进按旧清单判定的交付清单闸)。生命期由
+        # 登记在案的 RED 判决决定,见 test_non_red_clears_window。
+        self.assertTrue(active_repair_authorization(state, "b" * 40)[0])
         self.assertEqual(
             ("src/fix.py", "tests/test_fix.py"),
             eligible_repair_paths(state, HEAD, (
@@ -47,6 +51,26 @@ class ExternalRepairAuthorizationTests(unittest.TestCase):
                 "tests/test_fix.py", ".mae-flow.json",
                 "docs/review/internal.md")),
         )
+
+    def test_reregistering_same_red_keeps_original_baseline(self):
+        """宿主轮询对同一 SHA 重复登记 RED 不许重取 baseline_dirty:
+        Agent 改到一半的文件会被划成"登记前已有改动"永久排除,修完
+        反被判"没有真实修复"(排查实锤的吞修复死角)。"""
+        state = red_state()
+        issue_repair_authorization(
+            state, PipelineDecision("RED", "UT failed", {}),
+            head=HEAD, at="12:00", dirty_paths=("pre-red.txt",))
+        issue_repair_authorization(
+            state, PipelineDecision("RED", "UT failed", {}),
+            head=HEAD, at="12:05",
+            dirty_paths=("pre-red.txt", "src/fix.py"))
+        self.assertEqual(
+            ["pre-red.txt"],
+            state["external_repair_authorization"]["baseline_dirty"])
+        self.assertIn(
+            "src/fix.py",
+            eligible_repair_paths(state, HEAD, (
+                "pre-red.txt", "src/fix.py")))
 
     def test_non_red_clears_window(self):
         state = red_state()

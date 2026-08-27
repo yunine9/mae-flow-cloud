@@ -143,14 +143,23 @@ export class KernelHost {
     if (result.infraError || (result.code !== 0 && result.code !== 2)) {
       const detail = result.infraError
         ?? (result.stdout + "\n" + result.stderr).trim();
+      // 宿主自己已带预算重试过(INFRA_ATTEMPTS);对 Agent 必须说明
+      // "别再试了",否则每次重试都白烧三轮 dispatch 再拒,无限空转。
       return {
         action: "deny",
-        reason: `内核门禁不可用，已安全拒绝本次工具调用: ${detail}`,
+        reason: `内核门禁不可用，已安全拒绝本次工具调用: ${detail}。`
+          + "宿主已重试过,请停止重试同类调用,把这次门禁故障如实写进"
+          + "收口发言,交由人工处理。",
       };
     }
     if (result.code === 2) {
       const reason = (result.stdout + "\n" + result.stderr).trim();
-      return { action: "deny", reason: reason || "被 mae-flow 门禁打回" };
+      // 兜底句原来是零信息量的"被打回":内核没给原因时至少要给出路。
+      return {
+        action: "deny",
+        reason: reason || "被 mae-flow 门禁打回(内核未附原因)。请不要"
+          + "原样重试;执行 current 查看本步指引,或换合规路径。",
+      };
     }
     return undefined;
   }

@@ -246,7 +246,10 @@ def print_current(flow, st):
         print(notices, end="")
     ul = st.get("unlock") or {}
     if ul.get("step") == sid:
-        print(f"🔓 本步源码修改已解锁(用户裁决: {ul.get('reason', '')};推进后自动失效)")
+        # 措辞不许暗示"没解锁的步骤是锁的"——步骤级源码闸已退役,
+        # 交付链内改码本就自由;unlock 的实际效力只在流程头部。
+        print(f"🔓 用户裁决已留痕: {ul.get('reason', '')}"
+              "(流程头部的源码限制因此放行;推进后失效)")
     for kind, rec in sorted((st.get("risk_acceptances", {}) or {}).items()):
         if rec.get("step") != sid:
             continue

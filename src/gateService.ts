@@ -101,9 +101,13 @@ export class GateService {
       const mode = this.failClosed ? "closed" : "open";
       this.log(`gate fail-${mode}: ${String(error)}`);
       if (!this.failClosed) return ALLOW;
+      // "请稍后重试"是循环邀请函:同一个确定性异常会一直在,Agent 会
+      // 无预算空转(红线:凡引入等待必须带预算或出路)。出路只有一条
+      // ——如实停下让人接手。
       return {
         action: "deny",
-        reason: "任务安全门禁暂时不可用，本次工具调用已阻止；请稍后重试或联系管理员。",
+        reason: "任务安全门禁暂时不可用，本次工具调用已阻止。请**停止重试**"
+          + "同类调用，把这次门禁故障如实写进收口发言，交由人工处理。",
       };
     }
   }
@@ -138,9 +142,15 @@ export class GateService {
         ? paths.find((path) => !this.insideWorkspace(path))
         : undefined;
       if (escaped) {
+        // realTarget 解析失败(NUL/Windows 形态/符号链环/权限)也走到这:
+        // 路径可能其实在工作区内。文案必须把两种情况都说了并给出边界,
+        // 否则 Agent 会换等价写法反复撞同一堵墙。
         return {
           action: "deny",
-          reason: `文件工具只能访问当前任务的工作区，已阻止越界路径: ${escaped}`,
+          reason: `文件工具只能访问当前任务的工作区（${this.workspace}），`
+            + `已阻止: ${escaped}。若该路径确实在工作区内,说明它无法被安全`
+            + "解析(特殊字符/符号链接),请改用工作区内的相对普通路径;"
+            + "不要反复变换写法重试。",
         };
       }
       const secret = paths.find(
