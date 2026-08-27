@@ -1,20 +1,25 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   adoptSkillCandidate,
+  approveSkillSubmission,
   discardSkillCandidate,
   distillSkill,
   getSkillCandidate,
   getSkillLibrary,
   listSkillCandidates,
+  listSkillSubmissions,
   listSkillVersions,
   offlineSkill,
+  rejectSkillSubmission,
   rollbackSkill,
+  submitSkill,
   uploadSkill,
   type HostSkillShelf,
   type KnowledgeInsightResource,
   type KnowledgeKind,
   type SkillCandidateRecord,
   type SkillOperationRecord,
+  type SkillSubmissionRecord,
   type SkillUploadFile,
   type SkillVersionRecord,
   type TeamKnowledgeInsights,
@@ -99,6 +104,9 @@ const OPERATION_LABEL: Record<SkillOperationRecord["action"], string> = {
   update: "更新",
   offline: "下线",
   rollback: "回退",
+  submit: "提交待审",
+  approve: "审核通过",
+  reject: "驳回",
 };
 
 /** 浏览器文件 → 上传载荷。目录选择时剥掉首段(那是所选文件夹名,
@@ -166,13 +174,21 @@ function SkillLibraryPanel({ fallback, admin }: {
     useState<{ skill: string; notes: string; evidence: string }>();
   const [distilling, setDistilling] = useState(false);
   const [showOperations, setShowOperations] = useState(false);
+  const [submissions, setSubmissions] = useState<SkillSubmissionRecord[]>([]);
+  const [submitNote, setSubmitNote] = useState("");
+  const [rejectFor, setRejectFor] = useState("");
+  const [rejectReason, setRejectReason] = useState("");
   const newInputRef = useRef<HTMLInputElement>(null);
   const updateInputRef = useRef<HTMLInputElement>(null);
   const updateTargetRef = useRef("");
 
-  const refresh = () => getSkillLibrary()
-    .then((data) => { setLibrary(data); setError(""); })
-    .catch((cause) => setError(String(cause instanceof Error ? cause.message : cause)));
+  const refresh = () => Promise.all([
+    getSkillLibrary()
+      .then((data) => { setLibrary(data); setError(""); })
+      .catch((cause) => setError(String(cause instanceof Error ? cause.message : cause))),
+    // 提交台账是团队可见的;拉不到不挡货架(fail-open)。
+    listSkillSubmissions().then(setSubmissions).catch(() => undefined),
+  ]);
   useEffect(() => { void refresh(); }, []);
 
   const shelf: HostSkillShelf | undefined = library ?? fallback;
@@ -211,17 +227,21 @@ function SkillLibraryPanel({ fallback, admin }: {
       <div><strong>团队 Skill 资产库</strong><small>当前生效的团队资产;每个新任务自动装载,上架/下线即时生效,无需重启。</small></div>
       <div className="knowledge-shelf-head-actions">
         <span>{shelf?.skills.length ?? 0} 项</span>
-        {admin && <button type="button" className="knowledge-shelf-action primary"
-          onClick={() => { setUploadOpen((open) => !open); setPending(undefined); setUploadName(""); }}>
-          {uploadOpen ? "收起上架" : "上架 Skill"}
-        </button>}
+        {/* 人人可提交(2026-08-27 用户拍板):开发者走待审区,管理员
+            审核后上架;管理员自己上架照旧直达。 */}
+        <button type="button" className="knowledge-shelf-action primary"
+          onClick={() => { setUploadOpen((open) => !open); setPending(undefined); setUploadName(""); setSubmitNote(""); }}>
+          {uploadOpen ? (admin ? "收起上架" : "收起提交")
+            : (admin ? "上架 Skill" : "提交 Skill")}
+        </button>
       </div>
     </div>
 
     {error && <div className="knowledge-shelf-error" role="alert">{error}</div>}
+    {submitNote && <div className="knowledge-shelf-empty" role="status">{submitNote}</div>}
 
-    {admin && uploadOpen && <div className="knowledge-shelf-upload">
-      <p>选含 SKILL.md 的技能包目录(frontmatter 需有 name/description)。上传前服务端会做密钥掩码扫描——skill 权限全开,令牌/密码一律拒收。</p>
+    {uploadOpen && <div className="knowledge-shelf-upload">
+      <p>选含 SKILL.md 的技能包目录(frontmatter 需有 name/description)。上传前服务端会做密钥掩码扫描——skill 权限全开,令牌/密码一律拒收。{admin ? "" : "提交后由管理员审核,通过即上架。"}</p>
       <div className="knowledge-shelf-upload-row">
         <input type="text" placeholder="目录名,如 java-autout" value={uploadName}
           onChange={(event) => setUploadName(event.target.value.trim())} />
@@ -229,10 +249,17 @@ function SkillLibraryPanel({ fallback, admin }: {
         <button type="button" disabled={busy || !pending || !uploadName}
           className="knowledge-shelf-action primary"
           onClick={() => pending && void run(async () => {
-            await uploadSkill(uploadName, pending.files);
+            if (admin) {
+              await uploadSkill(uploadName, pending.files);
+            } else {
+              const record = await submitSkill(uploadName, pending.files);
+              setSubmitNote(`已提交待审(${record.directory}/${record.id},`
+                + `${record.files} 个文件)。管理员审核通过后即上架生效。`);
+            }
             setPending(undefined); setUploadOpen(false);
           })}>
-          {busy ? "上架中" : `确认上架${pending ? `(${pending.files.length} 个文件)` : ""}`}
+          {busy ? (admin ? "上架中" : "提交中")
+            : `${admin ? "确认上架" : "提交审核"}${pending ? `(${pending.files.length} 个文件)` : ""}`}
         </button>
       </div>
       {pending && <small>
@@ -244,6 +271,59 @@ function SkillLibraryPanel({ fallback, admin }: {
         {...({ webkitdirectory: "" } as object)}
         onChange={(event) => { void pickFiles(event.target.files); event.target.value = ""; }} />
     </div>}
+
+    {submissions.length > 0 && (
+      /* 待审区:提交/裁决是团队可见的台账(被驳回的人要看得到原因)。
+         管理员在这里通过或驳回;通过走与上架同一道验收闸,不是盖章
+         放行。 */
+      <div className="knowledge-shelf-submissions" aria-label="Skill 待审提交">
+        {submissions.slice(0, 12).map((item) => (
+          <div key={`${item.directory}-${item.id}`}
+            className={`knowledge-shelf-operation submission-${item.status}`}>
+            <span className={`op-${item.status === "pending" ? "submit"
+              : item.status === "approved" ? "approve" : "reject"}`}>
+              {item.status === "pending" ? "待审核"
+                : item.status === "approved" ? "已上架" : "已驳回"}
+            </span>
+            <strong>{item.directory}</strong>
+            <span>{item.operator} 提交 · {item.files} 个文件</span>
+            {item.reject_reason && <span>原因:{item.reject_reason}</span>}
+            {item.status !== "pending" && item.decided_by
+              && <span>{item.decided_by} 裁决</span>}
+            <time dateTime={item.created_at}>
+              {latest(item.created_at).replace("最近 ", "")}</time>
+            {admin && item.status === "pending" && (
+              rejectFor === `${item.directory}/${item.id}` ? (
+                <span className="knowledge-shelf-submission-actions">
+                  <input type="text" placeholder="驳回原因(可留空)"
+                    value={rejectReason}
+                    onChange={(event) => setRejectReason(event.target.value)} />
+                  <button type="button" disabled={busy}
+                    onClick={() => void run(async () => {
+                      await rejectSkillSubmission(
+                        item.directory, item.id, rejectReason);
+                      setRejectFor(""); setRejectReason("");
+                    })}>确认驳回</button>
+                  <button type="button" disabled={busy}
+                    onClick={() => { setRejectFor(""); setRejectReason(""); }}>
+                    返回</button>
+                </span>
+              ) : (
+                <span className="knowledge-shelf-submission-actions">
+                  <button type="button" disabled={busy}
+                    className="knowledge-shelf-action primary"
+                    onClick={() => void run(() => approveSkillSubmission(
+                      item.directory, item.id))}>通过并上架</button>
+                  <button type="button" disabled={busy}
+                    onClick={() => setRejectFor(`${item.directory}/${item.id}`)}>
+                    驳回</button>
+                </span>
+              )
+            )}
+          </div>
+        ))}
+      </div>
+    )}
 
     {shelf && !shelf.root_exists && !admin && <div className="knowledge-shelf-empty">本部署尚未放置团队 Skill。管理员上架后,新任务即自动装载。</div>}
     {shelf && (shelf.root_exists || admin) && shelf.skills.length === 0 && <div className="knowledge-shelf-empty">货架是空的——{admin ? "点「上架 Skill」传入含 SKILL.md 的技能包,新任务即自动装载。" : "管理员上架后,新任务即自动装载。"}</div>}

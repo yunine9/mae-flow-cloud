@@ -22,10 +22,14 @@ import { TaskService } from "../src/taskService.ts";
 import { createTaskServer } from "../src/server.ts";
 import {
   SkillLibraryError,
+  approveSkillSubmission,
   listSkillOperations,
+  listSkillSubmissions,
   listSkillVersions,
   offlineHostSkill,
+  rejectSkillSubmission,
   rollbackHostSkill,
+  submitHostSkill,
   uploadHostSkill,
 } from "../src/hostSkillLibrary.ts";
 import { listHostSkillShelf } from "../src/hostSkillShelf.ts";
@@ -242,4 +246,74 @@ test("路由权限:登录才可读,写只归管理员;留痕带操作人", async
   } finally {
     server.close();
   }
+});
+
+test("包内路径放开中文(实锤:references/0010_如何使用Kernel.md 被拒);点开头与遍历照拒", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-skill-lib-cjk-"));
+  const record = await uploadHostSkill(dataDir, "java-autout", [
+    { path: "SKILL.md", content_base64: encode(skillMd("单测写法")) },
+    // 内网真实被拒的路径原样收录,防回归。
+    { path: "references/0010_如何使用Kernel.md", content_base64: encode("内核用法\n") },
+  ], "admin-a");
+  assert.equal(record.files, 2);
+  assert.ok(existsSync(join(
+    dataDir, "skills", "java-autout", "references", "0010_如何使用Kernel.md")));
+
+  // 目录名保持 ASCII(进 URL/配置/prompt),中文目录名仍拒。
+  await assert.rejects(uploadHostSkill(dataDir, "中文目录", [
+    { path: "SKILL.md", content_base64: encode(skillMd("x")) },
+  ], "admin-a"), SkillLibraryError);
+  // 点开头(.env)与 ".." 遍历依旧没门。
+  await assert.rejects(uploadHostSkill(dataDir, "java-autout", [
+    { path: "SKILL.md", content_base64: encode(skillMd("x")) },
+    { path: "refs/.env", content_base64: encode("A=1\n") },
+  ], "admin-a"), SkillLibraryError);
+  await assert.rejects(uploadHostSkill(dataDir, "java-autout", [
+    { path: "SKILL.md", content_base64: encode(skillMd("x")) },
+    { path: "../escape.md", content_base64: encode("x\n") },
+  ], "admin-a"), SkillLibraryError);
+});
+
+test("提交待审:验收闸同上架,通过才上架,驳回留痕,不许二次裁决", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-skill-sub-"));
+  // 不合格的包(缺 SKILL.md)连待审区都进不去。
+  await assert.rejects(submitHostSkill(dataDir, "java-autout", [
+    { path: "notes.md", content_base64: encode("没有 SKILL.md\n") },
+  ], "dev-a"), SkillLibraryError);
+
+  const submitted = await submitHostSkill(dataDir, "java-autout", [
+    { path: "SKILL.md", content_base64: encode(skillMd("开发者提交的写法")) },
+  ], "dev-a");
+  assert.equal(submitted.status, "pending");
+  assert.equal(listHostSkillShelf(dataDir).skills.length, 0,
+    "提交≠上架,货架必须还是空的");
+
+  // 审核通过 → 上架生效,提交人/审核人都留痕。
+  const approved = await approveSkillSubmission(
+    dataDir, "java-autout", submitted.id, "admin-b");
+  assert.equal(approved.action, "upload");
+  assert.equal(listHostSkillShelf(dataDir).skills.length, 1);
+  const trail = listSkillOperations(dataDir).map((op) => op.action);
+  assert.ok(trail.includes("submit") && trail.includes("approve"));
+  // 已裁决的不许再裁。
+  await assert.rejects(approveSkillSubmission(
+    dataDir, "java-autout", submitted.id, "admin-b"), SkillLibraryError);
+
+  // 第二份提交走驳回:货架不动,原因留痕。
+  const second = await submitHostSkill(dataDir, "java-autout", [
+    { path: "SKILL.md", content_base64: encode(skillMd("另一版写法")) },
+  ], "dev-c");
+  const rejected = await rejectSkillSubmission(
+    dataDir, "java-autout", second.id, "admin-b", "描述不够具体");
+  assert.equal(rejected.status, "rejected");
+  assert.equal(rejected.reject_reason, "描述不够具体");
+  assert.equal(listSkillSubmissions(dataDir)
+    .filter((item) => item.status === "pending").length, 0);
+  await assert.rejects(rejectSkillSubmission(
+    dataDir, "java-autout", second.id, "admin-b"), SkillLibraryError);
+
+  // 与 /skills/:dir 子路由撞名的目录名不许当 skill 目录。
+  await assert.rejects(submitHostSkill(dataDir, "submissions", [
+    { path: "SKILL.md", content_base64: encode(skillMd("x")) },
+  ], "dev-a"), SkillLibraryError);
 });

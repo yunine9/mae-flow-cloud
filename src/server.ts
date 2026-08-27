@@ -7,6 +7,10 @@
  *   GET  /skills                                        → Skill 货架 + 操作留痕
  *   GET  /skills/:dir/versions                          → 归档版本痕(可回退点)
  *   PUT  /skills/:dir          {files:[{path,content_base64}]} → 上传/更新(管理员)
+ *   GET  /skills/submissions                            → 待审/已裁决提交台账(登录即可)
+ *   POST /skills/:dir/submissions {files:[…]}           → 开发者提交待审(登录即可,同一道验收闸)
+ *   POST /skills/:dir/submissions/:id/approve           → 审核通过并上架(管理员)
+ *   POST /skills/:dir/submissions/:id/reject {reason?}  → 驳回留痕(管理员)
  *   DELETE /skills/:dir                                 → 下线并归档(管理员)
  *   POST /skills/:dir/rollback {version}                → 回退归档版本(管理员)
  *   POST /skills/:dir/distill                           → 从任务现场起草修订稿(管理员)
@@ -80,10 +84,14 @@ import {
 import type { LubanApprovalGateway } from "./lubanApproval.ts";
 import {
   SkillLibraryError,
+  approveSkillSubmission,
   listSkillOperations,
+  listSkillSubmissions,
   listSkillVersions,
   offlineHostSkill,
+  rejectSkillSubmission,
   rollbackHostSkill,
+  submitHostSkill,
   uploadHostSkill,
 } from "./hostSkillLibrary.ts";
 import {
@@ -635,6 +643,22 @@ export function createTaskServer(
               dataDir, decodeURIComponent(parts[1]),
               decodeURIComponent(parts[3])));
           }
+          // 提交待审(2026-08-27 用户拍板:人人可提交,管理员审核
+          // 上架)。提交走与上架同一道完整验收闸;读列表登录即可
+          // ——谁提交了什么、裁决结果如何是团队可见的台账。
+          if (request.method === "GET" && parts.length === 2
+              && parts[1] === "submissions") {
+            return json(response, 200,
+              { submissions: listSkillSubmissions(dataDir) });
+          }
+          if (request.method === "POST" && parts.length === 3
+              && parts[2] === "submissions") {
+            const body = await readBody(request);
+            return json(response, 200, await submitHostSkill(
+              dataDir, decodeURIComponent(parts[1]),
+              Array.isArray(body.files) ? body.files : [],
+              viewer?.username ?? "本地部署"));
+          }
           if (options.auth && viewer?.role !== "admin") {
             return json(response, 403,
               { error: "只有管理员可以管理团队 Skill" });
@@ -673,6 +697,20 @@ export function createTaskServer(
             discardSkillCandidate(dataDir,
               decodeURIComponent(parts[1]), decodeURIComponent(parts[3]));
             return json(response, 200, { ok: true });
+          }
+          if (request.method === "POST" && parts.length === 5
+              && parts[2] === "submissions" && parts[4] === "approve") {
+            return json(response, 200, await approveSkillSubmission(
+              dataDir, decodeURIComponent(parts[1]),
+              decodeURIComponent(parts[3]), operator));
+          }
+          if (request.method === "POST" && parts.length === 5
+              && parts[2] === "submissions" && parts[4] === "reject") {
+            const body = await readBody(request);
+            return json(response, 200, await rejectSkillSubmission(
+              dataDir, decodeURIComponent(parts[1]),
+              decodeURIComponent(parts[3]), operator,
+              typeof body.reason === "string" ? body.reason : undefined));
           }
         } catch (error) {
           if (error instanceof SkillLibraryError

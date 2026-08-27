@@ -6057,6 +6057,15 @@ pre {
 .knowledge-shelf-operation time { margin-left: auto; color: var(--faint); }
 .knowledge-shelf-operation .op-offline { color: var(--danger, #c33); }
 .knowledge-shelf-operation .op-rollback { color: var(--warn, #b80); }
+.knowledge-shelf-operation .op-submit { color: var(--warn, #b80); font-weight: 700; }
+.knowledge-shelf-operation .op-approve { color: var(--ok, #2a7); font-weight: 700; }
+.knowledge-shelf-operation .op-reject { color: var(--danger, #c33); font-weight: 700; }
+.knowledge-shelf-submissions { padding: 6px 16px 10px; border-top: 1px dashed var(--line); }
+.knowledge-shelf-submission-actions { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
+.knowledge-shelf-submission-actions input { padding: 3px 8px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: var(--text); font-size: var(--font-size-assist); }
+.knowledge-shelf-submission-actions button { padding: 3px 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: var(--text); font-size: var(--font-size-assist); cursor: pointer; }
+.knowledge-shelf-submission-actions button:disabled { opacity: .6; cursor: default; }
+.knowledge-shelf-submissions time { margin-left: 0; }
 .knowledge-flywheel-empty, .knowledge-flywheel-error { margin: 20px; min-height: 110px; padding: 20px; display: flex; align-items: center; gap: 13px; border: 1px dashed var(--line-strong); border-radius: 11px; background: var(--surface-soft); }
 .knowledge-flywheel-empty > span { width: 36px; height: 36px; display: grid; place-items: center; flex: none; color: var(--accent); border-radius: 50%; background: var(--accent-soft); }
 .knowledge-flywheel-empty > div { display: grid; gap: 4px; }

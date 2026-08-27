@@ -24,6 +24,7 @@ import { createHash } from "node:crypto";
 import {
   appendFileSync,
   chmodSync,
+  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -48,11 +49,18 @@ const MAX_VERSIONS_PER_SKILL = 20;
 const LIVE_DIR = "skills";
 const VERSIONS_DIR = "skill-versions";
 const STAGING_DIR = "skill-staging";
+const SUBMISSIONS_DIR = "skill-submissions";
 const OPERATIONS_LOG = "skill-operations.jsonl";
+/** 与 /skills/:dir 子路由撞名的目录名不许当 skill 目录用。 */
+const RESERVED_DIRECTORY_NAMES = new Set(["submissions"]);
 
-/** 目录名与包内路径段共用同一形态:字母数字开头,不给点开头的文件
- * 留门(.env/.git 这类东西不该出现在公开指南里)。 */
+/** 目录名保持 ASCII:它进 URL 路径、「UT生成方式」配置值和开场
+ * prompt,放开 Unicode 的收益扛不住编码歧义的风险。 */
 const SEGMENT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
+/** 包内文件名放开到 Unicode 字母数字(实锤:references/
+ * 0010_如何使用Kernel.md 被拒——中文团队的参考资料本来就叫中文名)。
+ * 首字符必须是字母/数字:点开头(.env/.git)与 ".." 遍历依旧没门。 */
+const PACKAGE_SEGMENT_PATTERN = /^[\p{L}\p{N}][\p{L}\p{N}._-]{0,79}$/u;
 
 export class SkillLibraryError extends Error {}
 
@@ -77,13 +85,33 @@ export interface SkillVersionRecord {
 export interface SkillOperationRecord {
   at: string;
   operator: string;
-  action: "upload" | "update" | "offline" | "rollback";
+  action: "upload" | "update" | "offline" | "rollback"
+    | "submit" | "approve" | "reject";
   directory: string;
   skill_digest?: string;
   package_digest?: string;
   files?: number;
   bytes?: number;
   detail?: string;
+}
+
+/** 开发者提交的待审包(2026-08-27 用户拍板:人人可提交,管理员审核
+ * 上架)。提交时就走完整验收闸(路径/密钥/装载器),不合格的包连
+ * 待审区都进不去;审核通过时再走一遍同一道闸(与回退同纪律:
+ * "理论上验收过"不配跳过闸门)。 */
+export interface SkillSubmissionRecord {
+  id: string;
+  directory: string;
+  operator: string;
+  created_at: string;
+  status: "pending" | "approved" | "rejected";
+  skill_digest: string;
+  package_digest: string;
+  files: number;
+  bytes: number;
+  decided_at?: string;
+  decided_by?: string;
+  reject_reason?: string;
 }
 
 /** 疑似密钥的形态清单。宁可错杀让人改个写法,不可放一个真令牌进
@@ -114,6 +142,9 @@ function assertDirectoryName(directory: string): void {
     throw new SkillLibraryError(
       `目录名不合法(字母数字开头,仅限字母数字与 . _ -): ${directory}`);
   }
+  if (RESERVED_DIRECTORY_NAMES.has(directory)) {
+    throw new SkillLibraryError(`目录名与接口保留字冲突: ${directory}`);
+  }
 }
 
 function assertPackagePath(path: string): void {
@@ -122,8 +153,10 @@ function assertPackagePath(path: string): void {
     throw new SkillLibraryError(`包内路径超过 ${MAX_DEPTH} 层: ${path}`);
   }
   for (const segment of segments) {
-    if (!SEGMENT_PATTERN.test(segment)) {
-      throw new SkillLibraryError(`包内路径段不合法: ${path}`);
+    if (!PACKAGE_SEGMENT_PATTERN.test(segment)) {
+      throw new SkillLibraryError(
+        `包内路径段不合法(须以字母/数字开头,可含中文,`
+        + `不收点开头与空格): ${path}`);
     }
   }
 }
@@ -379,28 +412,229 @@ export function uploadHostSkill(
     }
     const stagingRoot = stageDirectory(dataDir, directory);
     try {
-      const seen = new Set<string>();
-      for (const file of files) {
-        const path = String(file.path ?? "");
-        assertPackagePath(path);
-        if (seen.has(path)) {
-          throw new SkillLibraryError(`包内路径重复: ${path}`);
-        }
-        seen.add(path);
-        const content = Buffer.from(String(file.content_base64 ?? ""), "base64");
-        scanForSecrets(path, content);
-        const target = join(stagingRoot, directory, ...path.split("/"));
-        mkdirSync(dirname(target), { recursive: true });
-        writeFileSync(target, content);
-      }
-      normalizePermissions(join(stagingRoot, directory));
-      const staged = validateStaged(stagingRoot, directory);
+      const staged = materializeToStaging(stagingRoot, directory, files);
       const exists = existsSync(join(dataDir, LIVE_DIR, directory));
       return installStaged(dataDir, stagingRoot, directory, operator,
         exists ? "update" : "upload", staged);
     } finally {
       rmSync(stagingRoot, { recursive: true, force: true });
     }
+  });
+}
+
+/** 上传载荷 → 暂存目录 + 完整验收(路径/密钥/预算/装载器)。上架与
+ * 提交待审共用同一道闸:待审区也是可读区,不合格的包一步都不许进。 */
+function materializeToStaging(
+  stagingRoot: string,
+  directory: string,
+  files: SkillUploadFile[],
+): ReturnType<typeof validateStaged> {
+  const seen = new Set<string>();
+  for (const file of files) {
+    const path = String(file.path ?? "");
+    assertPackagePath(path);
+    if (seen.has(path)) {
+      throw new SkillLibraryError(`包内路径重复: ${path}`);
+    }
+    seen.add(path);
+    const content = Buffer.from(String(file.content_base64 ?? ""), "base64");
+    scanForSecrets(path, content);
+    const target = join(stagingRoot, directory, ...path.split("/"));
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, content);
+  }
+  normalizePermissions(join(stagingRoot, directory));
+  return validateStaged(stagingRoot, directory);
+}
+
+function submissionRoot(dataDir: string, directory: string): string {
+  return join(dataDir, SUBMISSIONS_DIR, directory);
+}
+
+function writeSubmissionRecord(
+  dataDir: string,
+  record: SkillSubmissionRecord,
+): void {
+  writeFileSync(
+    join(submissionRoot(dataDir, record.directory), record.id,
+      "submission.json"),
+    JSON.stringify(record), { mode: 0o644 });
+}
+
+/** 开发者提交待审包:验收全过才进待审区,绝不自动上架。 */
+export function submitHostSkill(
+  dataDir: string,
+  directory: string,
+  files: SkillUploadFile[],
+  operator: string,
+): Promise<SkillSubmissionRecord> {
+  return serialized(() => {
+    assertDirectoryName(directory);
+    if (!Array.isArray(files) || files.length === 0) {
+      throw new SkillLibraryError("提交内容为空");
+    }
+    if (files.length > MAX_FILES) {
+      throw new SkillLibraryError(`包内文件数超过 ${MAX_FILES}`);
+    }
+    const stagingRoot = stageDirectory(dataDir, directory);
+    try {
+      const staged = materializeToStaging(stagingRoot, directory, files);
+      const stamp = new Date().toISOString().replace(/[-:.]/g, "");
+      let id = stamp;
+      for (let seq = 1;
+        existsSync(join(submissionRoot(dataDir, directory), id)); seq += 1) {
+        id = `${stamp}${seq}`;
+      }
+      const home = join(submissionRoot(dataDir, directory), id);
+      mkdirSync(home, { recursive: true });
+      renameSync(join(stagingRoot, directory), join(home, "package"));
+      const record: SkillSubmissionRecord = {
+        id,
+        directory,
+        operator,
+        created_at: new Date().toISOString(),
+        status: "pending",
+        skill_digest: staged.skillDigest,
+        package_digest: staged.packageDigestValue,
+        files: staged.files,
+        bytes: staged.bytes,
+      };
+      writeSubmissionRecord(dataDir, record);
+      appendOperation(dataDir, {
+        at: record.created_at,
+        operator,
+        action: "submit",
+        directory,
+        skill_digest: record.skill_digest,
+        package_digest: record.package_digest,
+        files: record.files,
+        bytes: record.bytes,
+        detail: `提交待审 ${id}`,
+      });
+      return record;
+    } finally {
+      rmSync(stagingRoot, { recursive: true, force: true });
+    }
+  });
+}
+
+/** 全部提交记录(含已裁决的:审核史也是台账)。读侧 fail-open。 */
+export function listSkillSubmissions(
+  dataDir: string,
+): SkillSubmissionRecord[] {
+  const root = join(dataDir, SUBMISSIONS_DIR);
+  if (!existsSync(root)) return [];
+  const records: SkillSubmissionRecord[] = [];
+  for (const dir of readdirSync(root, { withFileTypes: true })) {
+    if (!dir.isDirectory()) continue;
+    for (const entry of readdirSync(join(root, dir.name),
+      { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      try {
+        records.push(JSON.parse(readFileSync(
+          join(root, dir.name, entry.name, "submission.json"), "utf-8")));
+      } catch {
+        // 坏记录跳过:待审区读侧不硬崩。
+      }
+    }
+  }
+  return records.sort((left, right) => right.id.localeCompare(left.id));
+}
+
+function readSubmission(
+  dataDir: string,
+  directory: string,
+  id: string,
+): SkillSubmissionRecord {
+  const path = join(submissionRoot(dataDir, directory), id, "submission.json");
+  if (!existsSync(path)) {
+    throw new SkillLibraryError(`没有这份提交: ${directory}/${id}`);
+  }
+  return JSON.parse(readFileSync(path, "utf-8"));
+}
+
+/** 审核通过 → 上架。重走完整验收(与回退同纪律),操作留痕记提交人
+ * 与审核人两个名字。 */
+export function approveSkillSubmission(
+  dataDir: string,
+  directory: string,
+  id: string,
+  approver: string,
+): Promise<SkillOperationRecord> {
+  return serialized(() => {
+    assertDirectoryName(directory);
+    const record = readSubmission(dataDir, directory, id);
+    if (record.status !== "pending") {
+      throw new SkillLibraryError(
+        `提交 ${id} 已经裁决过(${record.status}),不能重复审核`);
+    }
+    const stagingRoot = stageDirectory(dataDir, directory);
+    try {
+      cpSync(join(submissionRoot(dataDir, directory), id, "package"),
+        join(stagingRoot, directory), { recursive: true });
+      normalizePermissions(join(stagingRoot, directory));
+      const staged = validateStaged(stagingRoot, directory);
+      const exists = existsSync(join(dataDir, LIVE_DIR, directory));
+      const installed = installStaged(dataDir, stagingRoot, directory,
+        approver, exists ? "update" : "upload", staged,
+        `审核通过 ${record.operator} 的提交 ${id}`);
+      const decided: SkillSubmissionRecord = {
+        ...record,
+        status: "approved",
+        decided_at: new Date().toISOString(),
+        decided_by: approver,
+      };
+      writeSubmissionRecord(dataDir, decided);
+      appendOperation(dataDir, {
+        at: decided.decided_at!,
+        operator: approver,
+        action: "approve",
+        directory,
+        skill_digest: record.skill_digest,
+        package_digest: record.package_digest,
+        detail: `通过 ${record.operator} 的提交 ${id}`,
+      });
+      return installed;
+    } finally {
+      rmSync(stagingRoot, { recursive: true, force: true });
+    }
+  });
+}
+
+/** 驳回:包留在待审区做台账,只改状态、记原因。 */
+export function rejectSkillSubmission(
+  dataDir: string,
+  directory: string,
+  id: string,
+  approver: string,
+  reason?: string,
+): Promise<SkillSubmissionRecord> {
+  return serialized(() => {
+    assertDirectoryName(directory);
+    const record = readSubmission(dataDir, directory, id);
+    if (record.status !== "pending") {
+      throw new SkillLibraryError(
+        `提交 ${id} 已经裁决过(${record.status}),不能重复审核`);
+    }
+    const decided: SkillSubmissionRecord = {
+      ...record,
+      status: "rejected",
+      decided_at: new Date().toISOString(),
+      decided_by: approver,
+      ...(reason?.trim() ? { reject_reason: reason.trim() } : {}),
+    };
+    writeSubmissionRecord(dataDir, decided);
+    appendOperation(dataDir, {
+      at: decided.decided_at!,
+      operator: approver,
+      action: "reject",
+      directory,
+      skill_digest: record.skill_digest,
+      package_digest: record.package_digest,
+      detail: `驳回 ${record.operator} 的提交 ${id}`
+        + (decided.reject_reason ? `:${decided.reject_reason}` : ""),
+    });
+    return decided;
   });
 }
 

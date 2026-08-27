@@ -790,13 +790,30 @@ export interface HostSkillShelf {
 export interface SkillOperationRecord {
   at: string;
   operator: string;
-  action: "upload" | "update" | "offline" | "rollback";
+  action: "upload" | "update" | "offline" | "rollback"
+    | "submit" | "approve" | "reject";
   directory: string;
   skill_digest?: string;
   package_digest?: string;
   files?: number;
   bytes?: number;
   detail?: string;
+}
+
+/** 开发者提交的待审 skill 包:人人可提交,管理员审核上架。 */
+export interface SkillSubmissionRecord {
+  id: string;
+  directory: string;
+  operator: string;
+  created_at: string;
+  status: "pending" | "approved" | "rejected";
+  skill_digest: string;
+  package_digest: string;
+  files: number;
+  bytes: number;
+  decided_at?: string;
+  decided_by?: string;
+  reject_reason?: string;
 }
 
 export interface SkillVersionRecord {
@@ -832,6 +849,52 @@ export async function uploadSkill(
     method: "PUT",
     body: JSON.stringify({ files }),
   });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+/** 开发者提交待审:与上架同一道验收闸,通过后进待审区等管理员裁决。 */
+export async function submitSkill(
+  directory: string,
+  files: SkillUploadFile[],
+): Promise<SkillSubmissionRecord> {
+  const response = await fetch(
+    `/skills/${encodeURIComponent(directory)}/submissions`, {
+      method: "POST",
+      body: JSON.stringify({ files }),
+    });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function listSkillSubmissions(): Promise<SkillSubmissionRecord[]> {
+  const response = await fetch("/skills/submissions");
+  if (!response.ok) throw new Error(await errorText(response));
+  return (await response.json()).submissions ?? [];
+}
+
+export async function approveSkillSubmission(
+  directory: string,
+  id: string,
+): Promise<SkillOperationRecord> {
+  const response = await fetch(
+    `/skills/${encodeURIComponent(directory)}/submissions/`
+    + `${encodeURIComponent(id)}/approve`, { method: "POST" });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function rejectSkillSubmission(
+  directory: string,
+  id: string,
+  reason?: string,
+): Promise<SkillSubmissionRecord> {
+  const response = await fetch(
+    `/skills/${encodeURIComponent(directory)}/submissions/`
+    + `${encodeURIComponent(id)}/reject`, {
+      method: "POST",
+      body: JSON.stringify({ reason: reason ?? "" }),
+    });
   if (!response.ok) throw new Error(await errorText(response));
   return response.json();
 }
