@@ -7667,10 +7667,22 @@ export class TaskService {
           : "收口缺少合法的 <prepush-result> 结构";
         const finalSha = (await this.prePushRevision(task)).sha;
         if (report && !evidence) {
+          // 未提交文件只提示不拦截(用户拍板"不能卡死"):push 只传
+          // HEAD,它们进不了交付;但把清单如实写进收据——产物该
+          // .gitignore 的提出来让用户加规则(留着别删,增量编译要用),
+          // 万一里面混着漏提交的业务改动,人在推送确认时能看见。
+          const leftover = await this.prePushDirtyPaths(task);
+          const leftoverNote = leftover.length
+            ? `。工作区尚有未提交/未跟踪文件(${describeDirtyPaths(leftover)}`
+              + ")——push 只传 HEAD,它们不进交付,也不影响通过。构建产物"
+              + "请保留勿删;想让它们以后不再列出,让 Agent 把路径补进仓库 "
+              + ".gitignore 随单交付即可(普通代码改动,MR 检视可见)。"
+              + "若其中有本单业务改动,请在推送确认时核对是否遗漏。"
+            : "";
           return withExecution({
             status: "passed",
             sha: finalSha,
-            message: report.summary,
+            message: report.summary + leftoverNote,
             report,
           });
         }

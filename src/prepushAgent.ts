@@ -435,10 +435,13 @@ export function prePushMission(
     "如有修改，按仓库现有提交规范提交到本地 HEAD；禁止 push、改 remote、读取或写入任何凭据，",
     // 这句话必须与 prePushSecurityDecision 的 rm 白名单同一口径:之前
     // 写成一刀切"禁止递归强删",与 playbook"删掉陈旧 CMake 生成目录"
-    // 正面打架,听话的模型永远修不好陈旧 configure。
-    "Cloud 会在会话释放并复核后注入短期凭据、统一推送。清理构建产物可以直接"
-      + " rm -rf 产物目录（target/、build/、cmake-build*、CMakeFiles、"
-      + "CMakeCache.txt、node_modules，相对路径）；除这些产物目录外禁止递归强删，"
+    // 正面打架,听话的模型永远修不好陈旧 configure。同时定调:删产物
+    // 是修理动作不是例行卫生——增量编译全靠这些目录跨轮存活。
+    "Cloud 会在会话释放并复核后注入短期凭据、统一推送。构建产物默认**留在"
+      + "工作区不要删**（增量编译靠它们跨轮加速，git status 不为空不影响"
+      + "通过）；只在确有必要时（如陈旧 CMakeCache 指向旧路径）才 rm -rf "
+      + "产物目录（target/、build/、cmake-build*、CMakeFiles、CMakeCache.txt、"
+      + "node_modules，相对路径，白名单放行）；除产物目录外禁止递归强删，"
       + "clean 请走构建工具生命周期。",
     "平台现场文件(.mae-flow* / openspec/config.yaml 等)不归你管：它们已被平台登记忽略，",
     "即使仍显示为未跟踪也不要提交、删除，更不要为它们修改用户的 .gitignore——那是用户的文件。",
