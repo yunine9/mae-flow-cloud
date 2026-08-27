@@ -4988,10 +4988,12 @@ export class TaskService {
   }
 
   /** 按用户确认的清单机械整理提交(用户拍板:剔除/补入是机械活,
-   * 不打回 Agent,也不重编)。剔除=回退到基线版本(基线没有的 git rm,
-   * 内容仍留在上一个提交的历史里可找回);补入=git add 工作区已有
-   * 改动。整理后绑新 HEAD 记 user_skipped:本地编译未复验的事实
-   * 如实留痕,权威裁决在绑 SHA 流水线。 */
+   * 不打回 Agent,也不重编)。剔除≠销毁(用户点名"直接回退太极端"):
+   * 只把改动请出提交与索引,工作区内容原样保留——基线里有的先按
+   * 基线版本入索引、提交后再把原内容写回工作区(变成未暂存改动);
+   * 基线里没有的 git rm --cached,文件原地变回未跟踪。补入=git add
+   * 工作区已有改动。整理后绑新 HEAD 记 user_skipped:本地编译未复验
+   * 的事实如实留痕,权威裁决在绑 SHA 流水线。 */
   private async applyDeliverySelectionAdjustment(
     task: TaskState,
     baseline: string,
@@ -5013,13 +5015,16 @@ export class TaskService {
       }
       return result;
     };
+    const preserved = new Map<string, Buffer>();
     for (const path of remove) {
+      const absolute = join(cwd, path);
       const inBaseline = await runSafeWorktreeGitAsync(cwd,
         ["cat-file", "-e", `${baseline}:${path}`], { timeoutMs: 30_000 });
       if (inBaseline.status === 0) {
-        await run(["checkout", baseline, "--", path], `回退 ${path}`);
+        if (existsSync(absolute)) preserved.set(path, readFileSync(absolute));
+        await run(["checkout", baseline, "--", path], `回退提交内容 ${path}`);
       } else {
-        await run(["rm", "-f", "-q", "--", path], `移除 ${path}`);
+        await run(["rm", "--cached", "-q", "--", path], `移出索引 ${path}`);
       }
     }
     if (add.length) await run(["add", "--", ...add], "补入勾选文件");
@@ -5032,6 +5037,12 @@ export class TaskService {
       ].filter(Boolean).join("、");
       await run(["commit", "-m",
         `chore: 按推送前人工确认整理交付清单——${summary}`], "整理提交");
+    }
+    // 提交落定后把被剔除文件的原内容写回工作区:改动只是"不交付",
+    // 不是"被销毁";它们成为未暂存改动留在现场,脏区检查放行已确认
+    // 剔除的路径(prePushDirtyPaths 同口径)。
+    for (const [path, content] of preserved) {
+      writeFileSync(join(cwd, path), content);
     }
     const at = new Date().toISOString();
     const revision = await this.prePushRevision(task);
@@ -7158,10 +7169,16 @@ export class TaskService {
         String(status.stderr ?? status.error ?? "").trim().slice(0, 200)})`];
     }
     // porcelain v1:两位状态 + 空格 + 路径;改名行取箭头右侧。
+    // 用户在推送确认时拍板剔除的文件是"确认不交付"的改动,留在工作区
+    // 不算脏账——不放行的话,后续每一轮 prepush 都会被它们绊倒。
+    const sanctioned = new Set(
+      task.summary.delivery_selection?.status === "confirmed"
+        ? task.summary.delivery_selection.excluded_paths : []);
     return String(status.stdout ?? "").split("\n")
       .map((line) => line.trimEnd())
       .filter(Boolean)
-      .map((line) => line.slice(3).split(" -> ").pop() ?? line);
+      .map((line) => line.slice(3).split(" -> ").pop() ?? line)
+      .filter((path) => !sanctioned.has(path));
   }
 
   private setPrePushState(

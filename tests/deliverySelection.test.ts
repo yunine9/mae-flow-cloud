@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedModelServer } from "../src/scriptedModel.ts";
@@ -122,10 +122,16 @@ test("未跟踪编译产物可不勾选，确认清单只绑定 HEAD 会推送�
 });
 
 test("勾选与 commit 不同也能直接通过:宿主机械整理提交并绑用户跳过直推", async () => {
-  // 用户拍板(2026-08-28):清单调整是机械活,不打回 Agent 也不重编。
+  // 用户拍板(2026-08-28):清单调整是机械活,不打回 Agent 也不重编;
+  // 且剔除≠销毁——退出提交,工作区内容原样保留。
   const repo = repository({ commitArtifact: true });
-  const { service, model, id } = await waitingService(repo);
+  const { service, model, id, internal } = await waitingService(repo);
   try {
+    // 基线里就有的文件被改过并已提交——剔除它时最容易被"直接回退"
+    // 误伤,专门验内容保留。
+    writeFileSync(join(repo.cwd, "README.md"), "baseline\nagent 补的注记\n");
+    repo.git("add", "README.md");
+    repo.git("commit", "--quiet", "-m", "agent touches readme");
     const before = repo.git("rev-parse", "HEAD");
     const waiting = service.get(id)!.waiting!;
     await service.decide(id, {
@@ -137,8 +143,7 @@ test("勾选与 commit 不同也能直接通过:宿主机械整理提交并绑�
     assert.equal(selection?.status, "confirmed");
     assert.deepEqual(selection?.paths, ["src/feature.ts"]);
 
-    // 宿主补了整理提交:未勾选的产物退出 commit(历史里仍可找回),
-    // 清单绑定的是新 HEAD。
+    // 宿主补了整理提交:未勾选的退出 commit,清单绑定新 HEAD。
     const after = repo.git("rev-parse", "HEAD");
     assert.notEqual(after, before, "整理必须落成新提交,不许改写历史");
     assert.equal(selection?.head, after);
@@ -146,7 +151,23 @@ test("勾选与 commit 不同也能直接通过:宿主机械整理提交并绑�
       /按推送前人工确认整理交付清单/);
     assert.equal(
       repo.git("ls-files", "--", "target/classes/Feature.class"), "",
-      "被剔除的产物必须退出提交与索引");
+      "被剔除的新增产物必须退出索引");
+    assert.equal(repo.git("show", "HEAD:README.md"), "baseline",
+      "交付的 README 必须是基线内容");
+
+    // 剔除≠销毁:两个被剔除文件的内容都还在工作区。
+    assert.ok(existsSync(join(repo.cwd, "target/classes/Feature.class")),
+      "新增产物退出索引后文件仍在现场");
+    assert.equal(
+      readFileSync(join(repo.cwd, "README.md"), "utf-8"),
+      "baseline\nagent 补的注记\n",
+      "被剔除的改动保留为未暂存内容,不许物理回退");
+
+    // 已确认剔除的路径不算脏账,后续 prepush 轮不被它们绊倒。
+    const dirty = await (service as any).prePushDirtyPaths(internal);
+    assert.ok(!dirty.includes("README.md")
+      && !dirty.includes("target/classes/Feature.class"),
+      `拍板剔除的路径不应出现在脏区: ${dirty.join(", ")}`);
 
     // 不重编:新 HEAD 绑用户跳过,编译与 UT 交流水线裁决,账留痕。
     const prepush = service.get(id)?.delivery?.prepush;
