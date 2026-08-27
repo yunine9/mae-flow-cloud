@@ -573,7 +573,7 @@ export function App() {
     mine: { title: "我的工作", description: "从发起到交付，集中推进你的每一项任务。" },
     profile: { title: "个人设置", description: "集中管理任务审批方式、CodeHub 提交身份和小鲁班通知。" },
     history: { title: "交付历史", description: "回看任务与交付记录；未启用历史投影时仍可浏览当前任务现场。" },
-    business: { title: "业务版图", description: "定义业务边界、责任人与关联仓库；每个模块在自己的上下文里持续管理可复用知识。" },
+    business: { title: "业务版图", description: "用模块组织领域概念、规则、流程和边界，并在业务语境中持续管理知识；责任人与仓库是治理信息。" },
     knowledge: { title: "团队知识", description: "管理 Skill 资产并观察模块知识的真实消费足迹，找到值得沉淀和需要改进的方向。" },
     wishes: { title: "许愿墙", description: "汇聚真实诉求和使用问题；每一个声音都应该被看见、被回应、被闭环。" },
     users: { title: "账号管理", description: "创建本地账号并分配管理员或开发权限。" },

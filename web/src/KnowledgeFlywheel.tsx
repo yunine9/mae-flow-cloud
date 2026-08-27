@@ -14,6 +14,7 @@ import {
   rejectSkillSubmission,
   rollbackSkill,
   submitSkill,
+  updateSkillLanguages,
   uploadSkill,
   type HostSkillDocument,
   type HostSkillShelf,
@@ -26,6 +27,12 @@ import {
   type SkillVersionRecord,
   type TeamKnowledgeInsights,
 } from "./api";
+import {
+  KnowledgeLanguageFilter,
+  KnowledgeLanguagePicker,
+  KnowledgeLanguageTags,
+  matchesKnowledgeLanguage,
+} from "./KnowledgeLanguages";
 
 const KIND_LABEL: Record<KnowledgeKind, string> = {
   rules: "项目规则",
@@ -164,6 +171,7 @@ function SkillLibraryPanel({ fallback, admin }: {
   const [busy, setBusy] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadName, setUploadName] = useState("");
+  const [uploadLanguages, setUploadLanguages] = useState<string[]>(["agnostic"]);
   const [pending, setPending] = useState<{
     files: SkillUploadFile[]; skipped: string[] }>();
   const [confirmOffline, setConfirmOffline] = useState("");
@@ -183,9 +191,13 @@ function SkillLibraryPanel({ fallback, admin }: {
   const [submitNote, setSubmitNote] = useState("");
   const [rejectFor, setRejectFor] = useState("");
   const [rejectReason, setRejectReason] = useState("");
+  const [languageFilter, setLanguageFilter] = useState("all");
+  const [languageEditorFor, setLanguageEditorFor] = useState("");
+  const [languageDraft, setLanguageDraft] = useState<string[]>([]);
   const newInputRef = useRef<HTMLInputElement>(null);
   const updateInputRef = useRef<HTMLInputElement>(null);
   const updateTargetRef = useRef("");
+  const updateLanguagesRef = useRef<string[]>([]);
 
   const refresh = () => Promise.all([
     getSkillLibrary()
@@ -218,12 +230,25 @@ function SkillLibraryPanel({ fallback, admin }: {
     const encoded = await encodeUpload(list);
     if (target) {
       // 行内更新:目录已定,选完即提交。
-      await run(() => uploadSkill(target, encoded.files));
+      await run(() => uploadSkill(
+        target, encoded.files, updateLanguagesRef.current));
       return;
     }
     setPending({ files: encoded.files, skipped: encoded.skipped });
     if (!uploadName && encoded.folder) setUploadName(encoded.folder);
   };
+
+  const languageCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const skill of shelf?.skills ?? []) {
+      for (const language of skill.languages) {
+        counts.set(language, (counts.get(language) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }, [shelf]);
+  const visibleSkills = shelf?.skills.filter((skill) =>
+    matchesKnowledgeLanguage(skill.languages, languageFilter)) ?? [];
 
   const toggleDocument = async (directory: string) => {
     if (documentFor === directory) {
@@ -252,7 +277,7 @@ function SkillLibraryPanel({ fallback, admin }: {
         {/* 人人可提交(2026-08-27 用户拍板):开发者走待审区,管理员
             审核后上架;管理员自己上架照旧直达。 */}
         {expanded && <button type="button" className="knowledge-shelf-action primary"
-          onClick={() => { setUploadOpen((open) => !open); setPending(undefined); setUploadName(""); setSubmitNote(""); }}>
+          onClick={() => { setUploadOpen((open) => !open); setPending(undefined); setUploadName(""); setUploadLanguages(["agnostic"]); setSubmitNote(""); }}>
           {uploadOpen ? (admin ? "收起上架" : "收起提交")
             : (admin ? "上架 Skill" : "提交 Skill")}
         </button>}
@@ -269,17 +294,24 @@ function SkillLibraryPanel({ fallback, admin }: {
 
     {uploadOpen && <div className="knowledge-shelf-upload">
       <p>选含 SKILL.md 的技能包目录(frontmatter 需有 name/description)。上传前服务端会做密钥掩码扫描——skill 权限全开,令牌/密码一律拒收。{admin ? "" : "提交后由管理员审核,通过即上架。"}</p>
+      <div className="knowledge-shelf-language-field">
+        <span><strong>适用语言（可多选）</strong><small>描述编码、构建和测试语境；跨业务的纯技术 Skill 也可以只标语言。</small></span>
+        <KnowledgeLanguagePicker value={uploadLanguages}
+          onChange={setUploadLanguages} />
+      </div>
       <div className="knowledge-shelf-upload-row">
         <input type="text" placeholder="目录名,如 java-autout" value={uploadName}
           onChange={(event) => setUploadName(event.target.value.trim())} />
         <button type="button" onClick={() => newInputRef.current?.click()}>选技能包目录</button>
-        <button type="button" disabled={busy || !pending || !uploadName}
+        <button type="button" disabled={busy || !pending || !uploadName
+          || !uploadLanguages.length}
           className="knowledge-shelf-action primary"
           onClick={() => pending && void run(async () => {
             if (admin) {
-              await uploadSkill(uploadName, pending.files);
+              await uploadSkill(uploadName, pending.files, uploadLanguages);
             } else {
-              const record = await submitSkill(uploadName, pending.files);
+              const record = await submitSkill(
+                uploadName, pending.files, uploadLanguages);
               setSubmitNote(`已提交待审(${record.directory}/${record.id},`
                 + `${record.files} 个文件)。管理员审核通过后即上架生效。`);
             }
@@ -314,6 +346,7 @@ function SkillLibraryPanel({ fallback, admin }: {
             </span>
             <strong>{item.directory}</strong>
             <span>{item.operator} 提交 · {item.files} 个文件</span>
+            <KnowledgeLanguageTags languages={item.languages ?? []} />
             {item.reject_reason && <span>原因:{item.reject_reason}</span>}
             {item.status !== "pending" && item.decided_by
               && <span>{item.decided_by} 裁决</span>}
@@ -355,7 +388,15 @@ function SkillLibraryPanel({ fallback, admin }: {
     {shelf && !shelf.root_exists && !admin && <div className="knowledge-shelf-empty">本部署尚未放置团队 Skill。管理员上架后,新任务即自动装载。</div>}
     {shelf && (shelf.root_exists || admin) && shelf.skills.length === 0 && <div className="knowledge-shelf-empty">货架是空的——{admin ? "点「上架 Skill」传入含 SKILL.md 的技能包,新任务即自动装载。" : "管理员上架后,新任务即自动装载。"}</div>}
 
-    {shelf?.skills.map((skill) => {
+    {!!shelf?.skills.length && <div className="knowledge-shelf-dimension-bar">
+      <span><strong>按工程语境查看</strong><small>语言是 Skill 的适用维度，不代表业务归属。</small></span>
+      <KnowledgeLanguageFilter value={languageFilter}
+        onChange={setLanguageFilter} counts={languageCounts} />
+    </div>}
+    {!!shelf?.skills.length && !visibleSkills.length
+      && <div className="knowledge-shelf-empty">当前工程语境下没有 Skill；可切换语言或为现有 Skill 补标。</div>}
+
+    {visibleSkills.map((skill) => {
       const directory = directoryOf(skill);
       return <article className={`knowledge-shelf-row${skill.loadable ? "" : " broken"}`} key={skill.path}>
         <div className="knowledge-shelf-main">
@@ -370,6 +411,7 @@ function SkillLibraryPanel({ fallback, admin }: {
             {skill.effect.signal === "low-consumption" ? "待修订 · 没人读" : "待修订 · 读了仍返修"}
           </span>}
           <p>{skill.description || "(没有描述——模型靠描述判断何时读取,建议补上)"}</p>
+          <KnowledgeLanguageTags languages={skill.languages} />
           {skill.effect && skill.effect.provided_tasks > 0 && <div className="knowledge-shelf-effect">
             <span>装载 {skill.effect.provided_tasks} 单</span>
             <span>读取 {skill.effect.accessed_tasks} 单
@@ -392,8 +434,18 @@ function SkillLibraryPanel({ fallback, admin }: {
         {admin && directory && <div className="knowledge-shelf-actions">
           <button type="button" disabled={busy} onClick={() => {
             updateTargetRef.current = directory;
+            updateLanguagesRef.current = skill.languages;
             updateInputRef.current?.click();
           }}>更新</button>
+          <button type="button" disabled={busy} onClick={() => {
+            if (languageEditorFor === directory) {
+              setLanguageEditorFor("");
+              return;
+            }
+            setLanguageEditorFor(directory);
+            setLanguageDraft(skill.languages.length
+              ? [...skill.languages] : ["agnostic"]);
+          }}>{languageEditorFor === directory ? "取消语言" : "语言"}</button>
           <button type="button" disabled={busy} onClick={() => void (async () => {
             if (versionsFor === directory) { setVersionsFor(""); setVersions(undefined); return; }
             setVersionsFor(directory); setVersions(undefined);
@@ -418,6 +470,18 @@ function SkillLibraryPanel({ fallback, admin }: {
             : <button type="button" disabled={busy}
               onClick={() => setConfirmOffline(directory)}>下线</button>}
         </div>}
+        {directory && languageEditorFor === directory
+          && <div className="knowledge-shelf-language-editor">
+            <span><strong>调整适用语言</strong><small>会形成新版本，历史版本和已发起任务不受影响。</small></span>
+            <KnowledgeLanguagePicker value={languageDraft}
+              onChange={setLanguageDraft} />
+            <button type="button" className="knowledge-shelf-action primary"
+              disabled={busy || !languageDraft.length}
+              onClick={() => void run(async () => {
+                await updateSkillLanguages(directory, languageDraft);
+                setLanguageEditorFor("");
+              })}>保存语言</button>
+          </div>}
         {directory && documentFor === directory && <div
           className="knowledge-shelf-document" aria-label={`${skill.name} 内容`}>
           <header>

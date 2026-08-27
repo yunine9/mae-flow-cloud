@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   archiveBusinessKnowledgeAsset,
   createBusinessModule,
@@ -12,6 +12,12 @@ import {
   type BusinessModule,
   type BusinessModuleCatalog,
 } from "./api";
+import {
+  KnowledgeLanguageFilter,
+  KnowledgeLanguagePicker,
+  KnowledgeLanguageTags,
+  matchesKnowledgeLanguage,
+} from "./KnowledgeLanguages";
 
 function lines(value: string): string[] {
   return value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean);
@@ -57,7 +63,7 @@ function ModuleEditor({ module, admin, users, onSaved, onCancel }: {
         </select> : <input value={owner} disabled title="只有管理员可以转移责任人" />}
       </label>
     </div>
-    <label><span>模块说明</span><textarea rows={2} value={description}
+    <label><span>业务语义说明</span><textarea rows={2} value={description}
       onChange={(event) => setDescription(event.target.value)} required /></label>
     <label><span>维护者账号</span><input value={maintainers}
       onChange={(event) => setMaintainers(event.target.value)}
@@ -90,6 +96,8 @@ function AssetEditor({ module, asset, initialContent, onSaved, onCancel }: {
   const [title, setTitle] = useState(asset?.title ?? "");
   const [summary, setSummary] = useState(asset?.summary ?? "");
   const [whenToUse, setWhenToUse] = useState(asset?.when_to_use ?? "");
+  const [languages, setLanguages] = useState(
+    asset?.languages ?? ["agnostic"]);
   const [content, setContent] = useState(initialContent ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -98,7 +106,7 @@ function AssetEditor({ module, asset, initialContent, onSaved, onCancel }: {
     setBusy(true); setError("");
     try {
       onSaved(await publishBusinessKnowledgeAsset(module.id, id, {
-        title, summary, when_to_use: whenToUse, content,
+        title, summary, when_to_use: whenToUse, languages, content,
       }));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "知识发布失败");
@@ -115,6 +123,11 @@ function AssetEditor({ module, asset, initialContent, onSaved, onCancel }: {
       onChange={(event) => setSummary(event.target.value)} required /></label>
     <label><span>什么时候应该读</span><textarea rows={2} value={whenToUse}
       onChange={(event) => setWhenToUse(event.target.value)} required /></label>
+    <div className="business-asset-language-field">
+      <span>适用语言（可多选）</span>
+      <small>这是工程实现语境，不改变知识所属的业务模块；跨语言内容请选择多项。</small>
+      <KnowledgeLanguagePicker value={languages} onChange={setLanguages} />
+    </div>
     <label><span>知识正文（Markdown）</span><textarea className="business-asset-content"
       rows={12} value={content}
       onChange={(event) => setContent(event.target.value)} required /></label>
@@ -122,7 +135,7 @@ function AssetEditor({ module, asset, initialContent, onSaved, onCancel }: {
     {error && <p className="business-module-error" role="alert">{error}</p>}
     <div className="business-module-form-actions">
       <button type="button" onClick={onCancel}>取消</button>
-      <button type="submit" className="primary" disabled={busy}>
+      <button type="submit" className="primary" disabled={busy || !languages.length}>
         {busy ? "发布中…" : asset ? `发布 v${asset.version + 1}` : "发布知识"}
       </button>
     </div>
@@ -147,6 +160,20 @@ export function BusinessModuleLibrary({ admin }: { admin: boolean }) {
     maintainers: "", repositories: "",
   });
   const [createBusy, setCreateBusy] = useState(false);
+  const [languageFilter, setLanguageFilter] = useState("all");
+
+  const languageCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const module of catalog?.modules ?? []) {
+      for (const asset of module.assets.filter((item) =>
+        item.status === "published")) {
+        for (const language of asset.languages) {
+          counts.set(language, (counts.get(language) ?? 0) + 1);
+        }
+      }
+    }
+    return counts;
+  }, [catalog]);
 
   const refresh = async () => {
     setLoading(true); setError("");
@@ -193,7 +220,7 @@ export function BusinessModuleLibrary({ admin }: { admin: boolean }) {
     <header className="business-module-library-head">
       <div><span className="section-kicker">BUSINESS LANDSCAPE</span>
         <h3 id="business-module-library-title">业务模块与模块知识</h3>
-        <p>模块定义团队的业务边界和责任归属；知识跟随模块管理，由 Owner 持续维护。</p>
+        <p>模块沉淀领域概念、规则、流程和边界；Owner 与维护者负责治理，知识可再按工程语言交叉查看。</p>
       </div>
       <div><span>{catalog?.modules.filter((item) => item.status === "active").length ?? 0} 个启用</span>
         {admin && <button type="button" className="primary"
@@ -205,11 +232,17 @@ export function BusinessModuleLibrary({ admin }: { admin: boolean }) {
     </header>
 
     <div className="business-module-flow" aria-label="业务模块使用方式">
-      <div><i>1</i><span><strong>定义模块</strong><small>边界、Owner、维护者和关联仓库</small></span></div>
+      <div><i>1</i><span><strong>描述业务语义</strong><small>领域概念、规则、流程与边界</small></span></div>
       <b aria-hidden>→</b>
-      <div><i>2</i><span><strong>维护模块知识</strong><small>在模块内发布、更新和归档知识</small></span></div>
+      <div><i>2</i><span><strong>治理模块知识</strong><small>Owner 组织发布、更新和归档</small></span></div>
       <b aria-hidden>→</b>
       <div><i>3</i><span><strong>任务按需使用</strong><small>发起时关联范围并固定当时版本</small></span></div>
+    </div>
+
+    <div className="business-module-dimension-bar">
+      <span><strong>业务语义 × 工程语境</strong><small>模块是主归属，语言用于交叉筛选，不另造一套知识目录。</small></span>
+      <KnowledgeLanguageFilter value={languageFilter}
+        onChange={setLanguageFilter} counts={languageCounts} />
     </div>
 
     {createOpen && <form className="business-module-create" onSubmit={async (event) => {
@@ -245,9 +278,9 @@ export function BusinessModuleLibrary({ admin }: { admin: boolean }) {
       <label><span>模块名称</span><input value={create.name}
         onChange={(event) => setCreate({ ...create, name: event.target.value })}
         placeholder="例如 支付核心" required /></label>
-      <label><span>模块说明</span><textarea rows={2} value={create.description}
+      <label><span>业务语义说明</span><textarea rows={2} value={create.description}
         onChange={(event) => setCreate({ ...create, description: event.target.value })}
-        placeholder="说清职责边界和适用范围" required /></label>
+        placeholder="说清领域概念、核心规则、流程和边界" required /></label>
       <div className="business-module-form-grid">
         <label><span>维护者账号（可选）</span><input value={create.maintainers}
           onChange={(event) => setCreate({ ...create, maintainers: event.target.value })}
@@ -273,7 +306,10 @@ export function BusinessModuleLibrary({ admin }: { admin: boolean }) {
     <div className="business-module-list">
       {(catalog?.modules ?? []).map((module) => {
         const open = expanded === module.id;
-        const liveAssets = module.assets.filter((asset) => asset.status === "published");
+        const allLiveAssets = module.assets.filter((asset) =>
+          asset.status === "published");
+        const liveAssets = allLiveAssets.filter((asset) =>
+          matchesKnowledgeLanguage(asset.languages, languageFilter));
         return <article key={module.id} className={`business-module-card status-${module.status}`}>
           <button type="button" className="business-module-card-head"
             aria-expanded={open} onClick={() => setExpanded(open ? "" : module.id)}>
@@ -281,7 +317,8 @@ export function BusinessModuleLibrary({ admin }: { admin: boolean }) {
             <span><span><strong>{module.name}</strong><code>{module.id}</code>
               {module.status === "archived" && <em>已归档</em>}</span>
               <small>{module.description}</small>
-              <span className="business-module-card-meta">Owner {module.owner} · {liveAssets.length} 项知识 · revision {module.revision}</span>
+              <span className="business-module-card-meta">Owner {module.owner} · {allLiveAssets.length} 项知识{
+                languageFilter !== "all" ? `（当前筛选 ${liveAssets.length} 项）` : ""} · revision {module.revision}</span>
             </span>
             <i aria-hidden>{open ? "收起" : "展开"}</i>
           </button>
@@ -320,6 +357,7 @@ export function BusinessModuleLibrary({ admin }: { admin: boolean }) {
                   <span><strong>{asset.title}</strong><code>v{asset.version}</code></span>
                   <small>{asset.summary}</small>
                   <em>何时读：{asset.when_to_use}</em>
+                  <KnowledgeLanguageTags languages={asset.languages} />
                 </button>
                 {module.can_manage && <div>
                   <button type="button" onClick={() => void openAsset(module, asset, true)}>更新</button>
@@ -330,7 +368,10 @@ export function BusinessModuleLibrary({ admin }: { admin: boolean }) {
                   }}>归档</button>
                 </div>}
               </div>)}
-              {!liveAssets.length && <div className="business-asset-empty">还没有已发布知识。Owner 可以从一份明确、可复用的 Markdown 开始。</div>}
+              {!liveAssets.length && <div className="business-asset-empty">{
+                allLiveAssets.length
+                  ? "当前工程语境下没有知识；可切换语言或为现有知识补标。"
+                  : "还没有已发布知识。Owner 可以从一份明确、可复用的 Markdown 开始。"}</div>}
             </div>
             {document?.moduleId === module.id && <div className="business-asset-document">
               <header><strong>{document.title}</strong><button type="button"

@@ -37,6 +37,10 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
 import { packageDigest } from "./hostSkillRuntime.ts";
+import {
+  readSkillLanguages,
+  writeSkillLanguages,
+} from "./knowledgeLanguages.ts";
 
 /** 与快照器同预算:管理面收下的包必须是运行时装得动的包。 */
 const MAX_SKILL_BYTES = 128 * 1024;
@@ -117,6 +121,7 @@ export interface SkillSubmissionRecord {
   package_digest: string;
   files: number;
   bytes: number;
+  languages: string[];
   decided_at?: string;
   decided_by?: string;
   reject_reason?: string;
@@ -340,6 +345,7 @@ function validateStaged(stagingRoot: string, directory: string): {
   packageDigestValue: string;
   files: number;
   bytes: number;
+  languages: string[];
 } {
   const packageRoot = join(stagingRoot, directory);
   const skillFile = join(packageRoot, "SKILL.md");
@@ -349,6 +355,13 @@ function validateStaged(stagingRoot: string, directory: string): {
   const skillContent = readFileSync(skillFile);
   if (skillContent.byteLength > MAX_SKILL_BYTES) {
     throw new SkillLibraryError("SKILL.md 超过 128 KiB");
+  }
+  let languages: string[];
+  try {
+    languages = readSkillLanguages(skillContent.toString("utf-8"));
+  } catch (error) {
+    throw new SkillLibraryError(
+      error instanceof Error ? error.message : String(error));
   }
   const { files, bytes } = packageStats(packageRoot);
   if (files > MAX_FILES) {
@@ -377,6 +390,7 @@ function validateStaged(stagingRoot: string, directory: string): {
     packageDigestValue: packageDigest(packageRoot),
     files,
     bytes,
+    languages,
   };
 }
 
@@ -430,12 +444,32 @@ function stageDirectory(dataDir: string, directory: string): string {
   return root;
 }
 
+/** 复制已验收包时仍逐项拒绝软链接；生效位可能被部署侧人工碰过，
+ * “曾经安全”不能当作当前安全。 */
+function copyOrdinaryDirectory(from: string, to: string): void {
+  if (lstatSync(from).isSymbolicLink() || !lstatSync(from).isDirectory()) {
+    throw new SkillLibraryError("Skill 包路径不是普通目录");
+  }
+  mkdirSync(to, { recursive: true });
+  for (const entry of readdirSync(from, { withFileTypes: true })) {
+    const source = join(from, entry.name);
+    const target = join(to, entry.name);
+    if (lstatSync(source).isSymbolicLink()) {
+      throw new SkillLibraryError(`Skill 包包含软链接: ${entry.name}`);
+    }
+    if (entry.isDirectory()) copyOrdinaryDirectory(source, target);
+    else if (entry.isFile()) writeFileSync(target, readFileSync(source));
+    else throw new SkillLibraryError(`Skill 包包含非常规文件: ${entry.name}`);
+  }
+}
+
 /** 上传/更新一个 skill 包。任何一步失败都不碰生效位,暂存整目录清掉。 */
 export function uploadHostSkill(
   dataDir: string,
   directory: string,
   files: SkillUploadFile[],
   operator: string,
+  languages?: string[],
 ): Promise<SkillOperationRecord> {
   return serialized(() => {
     assertDirectoryName(directory);
@@ -447,10 +481,52 @@ export function uploadHostSkill(
     }
     const stagingRoot = stageDirectory(dataDir, directory);
     try {
-      const staged = materializeToStaging(stagingRoot, directory, files);
+      const staged = materializeToStaging(
+        stagingRoot, directory, files, languages);
       const exists = existsSync(join(dataDir, LIVE_DIR, directory));
       return installStaged(dataDir, stagingRoot, directory, operator,
         exists ? "update" : "upload", staged);
+    } finally {
+      rmSync(stagingRoot, { recursive: true, force: true });
+    }
+  });
+}
+
+/** 只调整语言维度也走完整的版本纪律：复制当前包、改 frontmatter、
+ * 重验、归档旧版、原子换入。正文与配套文件一个都不能被 UI 丢掉。 */
+export function updateHostSkillLanguages(
+  dataDir: string,
+  directory: string,
+  languages: string[],
+  operator: string,
+): Promise<SkillOperationRecord> {
+  return serialized(() => {
+    assertDirectoryName(directory);
+    const live = join(dataDir, LIVE_DIR, directory);
+    if (!existsSync(live)) {
+      throw new SkillLibraryError(`没有这个生效中的 skill: ${directory}`);
+    }
+    const stagingRoot = stageDirectory(dataDir, directory);
+    try {
+      copyOrdinaryDirectory(live, join(stagingRoot, directory));
+      const skillFile = join(stagingRoot, directory, "SKILL.md");
+      let tagged: string;
+      try {
+        tagged = writeSkillLanguages(
+          readFileSync(skillFile, "utf-8"), languages);
+      } catch (error) {
+        throw new SkillLibraryError(
+          error instanceof Error ? error.message : String(error));
+      }
+      const content = Buffer.from(tagged, "utf-8");
+      scanForSecrets("SKILL.md", content);
+      writeFileSync(skillFile, content);
+      normalizePermissions(join(stagingRoot, directory));
+      const staged = validateStaged(stagingRoot, directory);
+      const selected = readSkillLanguages(tagged);
+      return installStaged(dataDir, stagingRoot, directory, operator,
+        "update", staged,
+        `更新适用语言：${selected.length ? selected.join(", ") : "未标注"}`);
     } finally {
       rmSync(stagingRoot, { recursive: true, force: true });
     }
@@ -463,6 +539,7 @@ function materializeToStaging(
   stagingRoot: string,
   directory: string,
   files: SkillUploadFile[],
+  languages?: string[],
 ): ReturnType<typeof validateStaged> {
   const seen = new Set<string>();
   for (const file of files) {
@@ -477,6 +554,23 @@ function materializeToStaging(
     const target = join(stagingRoot, directory, ...path.split("/"));
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, content);
+  }
+  if (languages !== undefined) {
+    const skillFile = join(stagingRoot, directory, "SKILL.md");
+    if (!existsSync(skillFile)) {
+      throw new SkillLibraryError("包根目录必须有 SKILL.md");
+    }
+    try {
+      const tagged = writeSkillLanguages(
+        readFileSync(skillFile, "utf-8"), languages);
+      const buffer = Buffer.from(tagged, "utf-8");
+      scanForSecrets("SKILL.md", buffer);
+      writeFileSync(skillFile, buffer);
+    } catch (error) {
+      if (error instanceof SkillLibraryError) throw error;
+      throw new SkillLibraryError(
+        error instanceof Error ? error.message : String(error));
+    }
   }
   normalizePermissions(join(stagingRoot, directory));
   return validateStaged(stagingRoot, directory);
@@ -502,6 +596,7 @@ export function submitHostSkill(
   directory: string,
   files: SkillUploadFile[],
   operator: string,
+  languages?: string[],
 ): Promise<SkillSubmissionRecord> {
   return serialized(() => {
     assertDirectoryName(directory);
@@ -513,7 +608,8 @@ export function submitHostSkill(
     }
     const stagingRoot = stageDirectory(dataDir, directory);
     try {
-      const staged = materializeToStaging(stagingRoot, directory, files);
+      const staged = materializeToStaging(
+        stagingRoot, directory, files, languages);
       const stamp = new Date().toISOString().replace(/[-:.]/g, "");
       let id = stamp;
       for (let seq = 1;
@@ -533,6 +629,7 @@ export function submitHostSkill(
         package_digest: staged.packageDigestValue,
         files: staged.files,
         bytes: staged.bytes,
+        languages: staged.languages,
       };
       writeSubmissionRecord(dataDir, record);
       appendOperation(dataDir, {
@@ -718,19 +815,7 @@ export function rollbackHostSkill(
     }
     const stagingRoot = stageDirectory(dataDir, directory);
     try {
-      const copy = (from: string, to: string): void => {
-        mkdirSync(to, { recursive: true });
-        for (const entry of readdirSync(from, { withFileTypes: true })) {
-          const source = join(from, entry.name);
-          const target = join(to, entry.name);
-          if (lstatSync(source).isSymbolicLink()) {
-            throw new SkillLibraryError(`归档版本包含软链接: ${entry.name}`);
-          }
-          if (entry.isDirectory()) copy(source, target);
-          else writeFileSync(target, readFileSync(source));
-        }
-      };
-      copy(versionDir, join(stagingRoot, directory));
+      copyOrdinaryDirectory(versionDir, join(stagingRoot, directory));
       normalizePermissions(join(stagingRoot, directory));
       const staged = validateStaged(stagingRoot, directory);
       return installStaged(dataDir, stagingRoot, directory, operator,

@@ -5969,7 +5969,7 @@ pre {
 .prepush-live-body .line-note { color: var(--faint); font-style: italic; }
 .prepush-live-empty { color: var(--faint); font-style: italic; }
 
-/* 业务版图：模块是治理实体，知识是模块内部资产，不再挤在知识效能页。 */
+/* 业务版图：模块组织业务语义与领域知识，Owner/仓库只是治理信息。 */
 .business-module-library { margin: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 18px; background: var(--surface); box-shadow: var(--shadow-sm); }
 .business-module-library-head { padding: 21px 24px; display: flex; align-items: center; justify-content: space-between; gap: 18px; border-bottom: 1px solid var(--line); background: linear-gradient(135deg, color-mix(in srgb, var(--accent-soft) 55%, var(--surface)), var(--surface)); }
 .business-module-library-head > div:first-child { min-width: 0; }
@@ -5984,6 +5984,10 @@ pre {
 .business-module-flow strong { color: var(--text-strong); font-size: 13px; }
 .business-module-flow small { overflow: hidden; color: var(--muted); font-size: var(--font-size-assist); text-overflow: ellipsis; white-space: nowrap; }
 .business-module-flow b { color: var(--faint); font-size: 16px; font-weight: 500; }
+.business-module-dimension-bar { margin: 0 16px 12px; padding: 10px 12px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-soft); }
+.business-module-dimension-bar > span { min-width: 0; display: grid; gap: 2px; }
+.business-module-dimension-bar > span strong { color: var(--text-strong); font-size: 13px; }
+.business-module-dimension-bar > span small { color: var(--muted); font-size: var(--font-size-assist); }
 .business-module-library button { font: inherit; cursor: pointer; }
 .business-module-library-head button, .business-module-managebar button,
 .business-module-form-actions button, .business-asset-row > div button {
@@ -6044,6 +6048,18 @@ pre {
 .business-asset-row > div { display: flex; gap: 6px; flex: none; }
 .business-asset-empty { padding: 18px; color: var(--muted); border-top: 1px solid var(--line); font-size: 13px; text-align: center; }
 .business-asset-content { font-family: var(--font-mono); }
+.business-asset-language-field { display: grid; gap: 6px; }
+.business-asset-language-field > span { color: var(--muted); font-size: 13px; font-weight: 700; }
+.business-asset-language-field > small { color: var(--faint); font-size: var(--font-size-assist); }
+.knowledge-language-picker { display: flex; flex-wrap: wrap; gap: 6px; }
+.knowledge-language-picker button { padding: 4px 9px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; background: var(--surface); font-size: var(--font-size-assist); cursor: pointer; }
+.knowledge-language-picker button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); font-weight: 700; }
+.knowledge-language-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+.knowledge-language-tags em { padding: 1px 6px; color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 36%, var(--line)); border-radius: 999px; background: var(--accent-soft); font-size: 11px; font-style: normal; font-weight: 650; line-height: 1.5; }
+.knowledge-language-empty { display: inline-block; margin-top: 3px; color: var(--faint); font-size: 11px; }
+.knowledge-language-filter { display: flex; align-items: center; gap: 8px; flex: none; }
+.knowledge-language-filter > span { color: var(--muted); font-size: var(--font-size-assist); font-weight: 700; }
+.knowledge-language-filter select { min-height: 32px; padding: 4px 28px 4px 9px; color: var(--text); border: 1px solid var(--line); border-radius: 7px; background: var(--surface); font: inherit; font-size: var(--font-size-assist); }
 .business-asset-document { overflow: hidden; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-soft); }
 .business-asset-document header { padding: 8px 11px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); }
 .business-asset-document header strong { color: var(--text-strong); font-size: 13px; }
@@ -6081,6 +6097,19 @@ pre {
 .knowledge-shelf-upload-row input[type="text"] { flex: 1 1 180px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); font-size: var(--font-size-assist); }
 .knowledge-shelf-upload-row button { padding: 5px 12px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: var(--ink); font-size: var(--font-size-assist); cursor: pointer; }
 .knowledge-shelf-upload-row button:disabled { opacity: .5; cursor: default; }
+.knowledge-shelf-language-field { margin: 0 0 10px; padding: 9px 10px; display: grid; gap: 7px; border-radius: 7px; background: var(--surface-soft); }
+.knowledge-shelf-language-field > span { display: grid; gap: 2px; }
+.knowledge-shelf-language-field strong { color: var(--text-strong); font-size: var(--font-size-assist); }
+.knowledge-shelf-language-field small { margin: 0; color: var(--faint); font-size: var(--font-size-assist); }
+.knowledge-shelf-dimension-bar { padding: 8px 16px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-top: 1px solid var(--line); background: var(--surface-soft); }
+.knowledge-shelf-dimension-bar > span { display: grid; gap: 1px; }
+.knowledge-shelf-dimension-bar > span strong { color: var(--text-strong); font-size: var(--font-size-assist); }
+.knowledge-shelf-dimension-bar > span small { color: var(--faint); font-size: var(--font-size-assist); }
+.knowledge-shelf-language-editor { flex-basis: 100%; padding: 10px; display: grid; gap: 8px; border: 1px dashed var(--line); border-radius: 8px; background: var(--surface-soft); }
+.knowledge-shelf-language-editor > span { display: grid; gap: 2px; }
+.knowledge-shelf-language-editor > span strong { color: var(--text-strong); font-size: var(--font-size-assist); }
+.knowledge-shelf-language-editor > span small { color: var(--faint); font-size: var(--font-size-assist); }
+.knowledge-shelf-language-editor > button { justify-self: start; }
 .knowledge-shelf-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .knowledge-shelf-actions button { padding: 3px 10px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: var(--muted); font-size: var(--font-size-assist); cursor: pointer; white-space: nowrap; }
 .knowledge-shelf-actions button:hover:not(:disabled) { color: var(--ink); border-color: var(--ink); }
@@ -6216,6 +6245,8 @@ pre {
   .business-module-library-head > div:last-child { width: 100%; flex-wrap: wrap; }
   .business-module-flow { grid-template-columns: 1fr; }
   .business-module-flow > b { display: none; }
+  .business-module-dimension-bar, .knowledge-shelf-dimension-bar { align-items: stretch; flex-direction: column; }
+  .knowledge-language-filter { justify-content: space-between; }
   .business-module-card-body { padding-left: 16px; }
   .business-asset-row { align-items: stretch; flex-direction: column; }
   .business-asset-row > div { justify-content: flex-end; }

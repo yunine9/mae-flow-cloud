@@ -734,6 +734,7 @@ export interface BusinessKnowledgeAsset {
   title: string;
   summary: string;
   when_to_use: string;
+  languages: string[];
   status: "published" | "archived";
   version: number;
   digest: string;
@@ -770,6 +771,7 @@ export interface SelectedBusinessModule {
     title: string;
     summary: string;
     when_to_use: string;
+    languages: string[];
     version: number;
     digest: string;
     bytes: number;
@@ -847,7 +849,7 @@ export async function publishBusinessKnowledgeAsset(
   moduleId: string,
   assetId: string,
   input: Pick<BusinessKnowledgeAsset, "title" | "summary" | "when_to_use">
-    & { content: string },
+    & { languages: string[]; content: string },
 ): Promise<BusinessModule> {
   const response = await fetch(`/business-modules/${encodeURIComponent(moduleId)}`
     + `/assets/${encodeURIComponent(assetId)}`, {
@@ -1020,6 +1022,7 @@ export interface HostSkillEffect {
 export interface HostSkillShelfEntry {
   name: string;
   description: string;
+  languages: string[];
   digest: string;
   updated_at: string;
   path: string;
@@ -1062,6 +1065,7 @@ export interface SkillSubmissionRecord {
   package_digest: string;
   files: number;
   bytes: number;
+  languages?: string[];
   decided_at?: string;
   decided_by?: string;
   reject_reason?: string;
@@ -1111,10 +1115,11 @@ export async function getSkillDocument(
 export async function uploadSkill(
   directory: string,
   files: SkillUploadFile[],
+  languages?: string[],
 ): Promise<SkillOperationRecord> {
   const response = await fetch(`/skills/${encodeURIComponent(directory)}`, {
     method: "PUT",
-    body: JSON.stringify({ files }),
+    body: JSON.stringify({ files, languages }),
   });
   if (!response.ok) throw new Error(await errorText(response));
   return response.json();
@@ -1124,11 +1129,25 @@ export async function uploadSkill(
 export async function submitSkill(
   directory: string,
   files: SkillUploadFile[],
+  languages?: string[],
 ): Promise<SkillSubmissionRecord> {
   const response = await fetch(
     `/skills/${encodeURIComponent(directory)}/submissions`, {
       method: "POST",
-      body: JSON.stringify({ files }),
+      body: JSON.stringify({ files, languages }),
+    });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function updateSkillLanguages(
+  directory: string,
+  languages: string[],
+): Promise<SkillOperationRecord> {
+  const response = await fetch(
+    `/skills/${encodeURIComponent(directory)}/languages`, {
+      method: "PATCH",
+      body: JSON.stringify({ languages }),
     });
   if (!response.ok) throw new Error(await errorText(response));
   return response.json();

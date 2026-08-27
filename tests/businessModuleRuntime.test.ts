@@ -41,12 +41,14 @@ test("任务固定发布版本；上下文只注入目录，正文留给 Read/Gr
     id: "state-machine", title: "订单状态机",
     summary: "订单状态迁移与幂等约束",
     when_to_use: "新增状态、修改履约回调或补偿逻辑时",
+    languages: ["java", "cpp"],
     content: "# 订单状态机\n\nV1_ONLY_SECRET_BODY\n",
   }, "owner-a");
   const selected = snapshotBusinessModules({
     dataDir, taskWorkspace, moduleIds: ["orders"],
   });
   assert.equal(selected[0].assets[0].version, 1);
+  assert.deepEqual(selected[0].assets[0].languages, ["java", "cpp"]);
 
   publishBusinessKnowledgeAsset(dataDir, "orders", {
     id: "state-machine", title: "订单状态机",
@@ -64,6 +66,7 @@ test("任务固定发布版本；上下文只注入目录，正文留给 Read/Gr
   const index = readFileSync(materialized.index_path!, "utf-8");
   assert.match(index, /订单状态机/);
   assert.match(index, /什么时候|何时读取|新增状态/);
+  assert.match(index, /工程语境：Java \/ C\+\+/);
   assert.doesNotMatch(index, /V1_ONLY_SECRET_BODY|V2_NEW_BODY/,
     "索引不能偷渡知识正文进系统上下文");
 
@@ -116,7 +119,8 @@ test("真实 Pi 请求只含模块索引，不含未读取的模块正文", asyn
       index_path: indexPath, warnings: [], entries: [{
         id: "module:orders:state:v1", module_id: "orders",
         module_name: "订单域", module_owner: "owner-a", title: "订单状态机",
-        summary: "状态迁移约束", when_to_use: "修改订单状态时", version: 1,
+        summary: "状态迁移约束", when_to_use: "修改订单状态时",
+        languages: ["java"], version: 1,
         digest: "digest", relative_path: ".mae-flow-work/business-modules/orders/state.md",
         path: bodyPath,
       }],

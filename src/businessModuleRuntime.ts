@@ -22,6 +22,7 @@ import {
   readBusinessKnowledgeAsset,
   readBusinessModule,
 } from "./businessModuleLibrary.ts";
+import { knowledgeLanguageLabel } from "./knowledgeLanguages.ts";
 
 const SNAPSHOT_DIR = "business-module-snapshot";
 const RUNTIME_DIR = ".mae-flow-work/business-modules";
@@ -34,6 +35,7 @@ export interface SelectedBusinessKnowledgeAsset {
   title: string;
   summary: string;
   when_to_use: string;
+  languages: string[];
   version: number;
   digest: string;
   bytes: number;
@@ -57,6 +59,7 @@ export interface MaterializedBusinessKnowledgeEntry {
   title: string;
   summary: string;
   when_to_use: string;
+  languages: string[];
   version: number;
   digest: string;
   relative_path: string;
@@ -150,6 +153,7 @@ export function snapshotBusinessModules(options: {
         title: asset.title,
         summary: asset.summary,
         when_to_use: asset.when_to_use,
+        languages: [...asset.languages],
         version: asset.version,
         digest: asset.digest,
         bytes: asset.bytes,
@@ -246,6 +250,9 @@ function indexMarkdown(
         `- **${item.title}**（v${item.version}）`,
         `  - 摘要：${item.summary}`,
         `  - 何时读取：${item.when_to_use}`,
+        ...((item.languages ?? []).length
+          ? [`  - 工程语境：${item.languages.map(
+            knowledgeLanguageLabel).join(" / ")}`] : []),
         `  - 路径：\`${item.relative_path}\``,
       );
     }
@@ -301,6 +308,7 @@ export function materializeBusinessModuleKnowledge(options: {
           title: asset.title,
           summary: asset.summary,
           when_to_use: asset.when_to_use,
+          languages: [...(asset.languages ?? [])],
           version: asset.version,
           digest: asset.digest,
           relative_path: relativePath,

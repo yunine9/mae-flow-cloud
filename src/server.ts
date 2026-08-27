@@ -105,6 +105,7 @@ import {
   rejectSkillSubmission,
   rollbackHostSkill,
   submitHostSkill,
+  updateHostSkillLanguages,
   uploadHostSkill,
 } from "./hostSkillLibrary.ts";
 import {
@@ -849,6 +850,9 @@ export function createTaskServer(
                 title: String(body.title ?? ""),
                 summary: String(body.summary ?? ""),
                 when_to_use: String(body.when_to_use ?? ""),
+                languages: body.languages === undefined
+                  ? undefined : Array.isArray(body.languages)
+                    ? body.languages.map(String) : [],
                 content: String(body.content ?? ""),
               }, operator)));
           }
@@ -922,10 +926,14 @@ export function createTaskServer(
           if (request.method === "POST" && parts.length === 3
               && parts[2] === "submissions") {
             const body = await readBody(request);
+            if (body.languages !== undefined && !Array.isArray(body.languages)) {
+              throw new SkillLibraryError("适用语言必须是数组");
+            }
             return json(response, 200, await submitHostSkill(
               dataDir, decodeURIComponent(parts[1]),
               Array.isArray(body.files) ? body.files : [],
-              viewer?.username ?? "本地部署"));
+              viewer?.username ?? "本地部署",
+              body.languages?.map(String)));
           }
           if (options.auth && viewer?.role !== "admin") {
             return json(response, 403,
@@ -934,9 +942,23 @@ export function createTaskServer(
           const operator = viewer?.username ?? "本地部署";
           if (request.method === "PUT" && parts.length === 2) {
             const body = await readBody(request);
+            if (body.languages !== undefined && !Array.isArray(body.languages)) {
+              throw new SkillLibraryError("适用语言必须是数组");
+            }
             return json(response, 200, await uploadHostSkill(
               dataDir, decodeURIComponent(parts[1]),
-              Array.isArray(body.files) ? body.files : [], operator));
+              Array.isArray(body.files) ? body.files : [], operator,
+              body.languages?.map(String)));
+          }
+          if (request.method === "PATCH" && parts.length === 3
+              && parts[2] === "languages") {
+            const body = await readBody(request);
+            if (!Array.isArray(body.languages)) {
+              throw new SkillLibraryError("适用语言必须是数组");
+            }
+            return json(response, 200, await updateHostSkillLanguages(
+              dataDir, decodeURIComponent(parts[1]),
+              body.languages.map(String), operator));
           }
           if (request.method === "DELETE" && parts.length === 2) {
             return json(response, 200, await offlineHostSkill(

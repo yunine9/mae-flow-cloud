@@ -41,9 +41,12 @@ test("业务模块由管理员指定 Owner；知识正文按版本发布且归�
     title: "支付发布清单",
     summary: "支付服务上线前的固定检查项",
     when_to_use: "修改支付链路、渠道配置或账务逻辑时",
+    languages: ["Java", "C++"],
     content: "# 支付发布清单\n\n第一版正文。\n",
   }, "owner-a");
   assert.equal(v1.assets[0].version, 1);
+  assert.deepEqual(v1.assets[0].languages, ["java", "cpp"],
+    "业务模块与工程语言是可交叉的两个维度");
   const v2 = publishBusinessKnowledgeAsset(dataDir, created.id, {
     id: "release-checklist",
     title: "支付发布清单",
@@ -52,6 +55,8 @@ test("业务模块由管理员指定 Owner；知识正文按版本发布且归�
     content: "# 支付发布清单\n\n第二版正文。\n",
   }, "owner-a");
   assert.equal(v2.assets[0].version, 2);
+  assert.deepEqual(v2.assets[0].languages, ["java", "cpp"],
+    "旧客户端更新正文时不能静默抹掉已有语言标签");
   assert.match(readBusinessKnowledgeAsset(
     dataDir, created.id, "release-checklist").content, /第二版/);
   assert.match(readBusinessKnowledgeAsset(
@@ -64,6 +69,10 @@ test("业务模块由管理员指定 Owner；知识正文按版本发布且归�
     dataDir, created.id, "release-checklist", 1).content, /第一版/,
   "归档只停止新任务选用，历史版本仍可追溯");
   assert.equal(listBusinessModules(dataDir).operations.length, 4);
+  assert.throws(() => publishBusinessKnowledgeAsset(dataDir, created.id, {
+    id: "bad-language", title: "坏标签", summary: "摘要",
+    when_to_use: "任何时候", languages: ["agnostic", "java"], content: "正文",
+  }, "owner-a"), /语言无关.*具体语言/);
   assert.throws(() => createBusinessModule(dataDir, {
     id: "../escape", name: "坏模块", description: "越界",
     owner: "owner-a",
@@ -118,10 +127,14 @@ test("HTTP 权限：admin 创建/转移 Owner；Owner 管资产；其他开发�
     assert.equal(deniedAsset.status, 403);
     const published = await fetch(`${base}/business-modules/pay/assets/rules`, {
       method: "PUT", headers: { cookie: owner }, body: JSON.stringify({
-        title: "规则", summary: "摘要", when_to_use: "改支付时", content: "正文",
+        title: "规则", summary: "摘要", when_to_use: "改支付时",
+        languages: ["js"], content: "正文",
       }),
     });
     assert.equal(published.status, 200);
+    const publishedView = await published.json() as {
+      assets: Array<{ languages: string[] }> };
+    assert.deepEqual(publishedView.assets[0].languages, ["javascript"]);
     const readable = await fetch(`${base}/business-modules/pay/assets/rules`,
       { headers: { cookie: viewer } });
     assert.equal(readable.status, 200);

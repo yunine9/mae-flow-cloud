@@ -17,6 +17,7 @@ import {
 } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
+import { readSkillLanguages } from "./knowledgeLanguages.ts";
 
 /** 与宿主 Skill 快照(hostSkillRuntime)同深度上限:货架照见的范围
  * 不应超过运行时真会去装的范围。 */
@@ -25,6 +26,8 @@ const MAX_DEPTH = 8;
 export interface HostSkillShelfEntry {
   name: string;
   description: string;
+  /** SKILL.md frontmatter 声明的工程实现语境。 */
+  languages: string[];
   /** SKILL.md 正文 sha256:版本指纹,页面对拍与后续留痕的锚。 */
   digest: string;
   /** SKILL.md 的 mtime(ISO)。 */
@@ -120,12 +123,20 @@ export function listHostSkillShelf(dataDir: string): HostSkillShelf {
       warnings.push(`不可装载(pi 装载器未接受,检查 frontmatter 的 `
         + `name/description): ${relative(root, file)}`);
     }
+    let languages: string[] = [];
+    try {
+      languages = readSkillLanguages(text);
+    } catch (error) {
+      warnings.push(`语言标签无效: ${relative(root, file)} — ${
+        error instanceof Error ? error.message : String(error)}`);
+    }
     skills.push({
       name: loaded?.name
         || fallbackFrontmatter(text, "name")
         || directory || relative(root, file),
       description: loaded?.description
         || fallbackFrontmatter(text, "description"),
+      languages,
       digest: sha256(content),
       updated_at: mtime.toISOString(),
       path: relative(root, file).split(sep).join("/"),

@@ -31,6 +31,7 @@ import {
   rejectSkillSubmission,
   rollbackHostSkill,
   submitHostSkill,
+  updateHostSkillLanguages,
   uploadHostSkill,
 } from "../src/hostSkillLibrary.ts";
 import { listHostSkillShelf } from "../src/hostSkillShelf.ts";
@@ -91,6 +92,34 @@ test("上传→货架可见且权限归一;更新归档旧版;回退按版本痕
   assert.deepEqual(operations.map((item) => item.action),
     ["rollback", "update", "upload"], "留痕逐条且新在前");
   assert.equal(operations[0].operator, "admin-a");
+});
+
+test("Skill 语言是可多选工程语境；改标签形成版本且回退能完整复原", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-skill-languages-"));
+  await uploadHostSkill(dataDir, "mixed-build", [
+    { path: "SKILL.md", content_base64: encode(skillMd("混合仓构建")) },
+    { path: "references/build.md", content_base64: encode("构建说明\n") },
+  ], "admin-a", ["C++", "js"]);
+  assert.deepEqual(listHostSkillShelf(dataDir).skills[0].languages,
+    ["cpp", "javascript"]);
+  assert.match(readHostSkillDocument(dataDir, "mixed-build").content,
+    /languages: \[cpp, javascript\]/,
+    "语言写进 Skill 包自身，提交审核、归档和回退共享同一份元数据");
+
+  await updateHostSkillLanguages(
+    dataDir, "mixed-build", ["java"], "admin-b");
+  assert.deepEqual(listHostSkillShelf(dataDir).skills[0].languages, ["java"]);
+  assert.ok(existsSync(join(dataDir, "skills", "mixed-build",
+    "references", "build.md")), "只改语言不能丢掉包内配套文件");
+  const old = listSkillVersions(dataDir, "mixed-build")[0];
+  await rollbackHostSkill(
+    dataDir, "mixed-build", old.version_id, "admin-a");
+  assert.deepEqual(listHostSkillShelf(dataDir).skills[0].languages,
+    ["cpp", "javascript"]);
+
+  await assert.rejects(updateHostSkillLanguages(
+    dataDir, "mixed-build", ["agnostic", "java"], "admin-a"),
+  /语言无关.*具体语言/);
 });
 
 test("fail-closed:密钥、密钥容器文件名、坏 frontmatter、路径越界都拒收且不落盘", async () => {
@@ -208,7 +237,7 @@ test("路由权限:登录才可读,写只归管理员;留痕带操作人", async
       "货架不是公开页,登录才可读");
     const dev = await login("dev", "developer-pass-1");
     const boss = await login("boss", "administrator-pass");
-    const payload = JSON.stringify({ files: [
+    const payload = JSON.stringify({ languages: ["cpp"], files: [
       { path: "SKILL.md", content_base64: encode(skillMd("路由演练")) },
     ] });
     const denied = await fetch(`${base}/skills/route-demo`, {
@@ -222,10 +251,11 @@ test("路由权限:登录才可读,写只归管理员;留痕带操作人", async
 
     const view = await (await fetch(`${base}/skills`,
       { headers: { cookie: dev } })).json() as {
-        skills: unknown[];
+        skills: Array<{ languages: string[] }>;
         operations: Array<{ operator: string }>;
       };
     assert.equal(view.skills.length, 1, "开发者看得见货架与留痕");
+    assert.deepEqual(view.skills[0].languages, ["cpp"]);
     assert.equal(view.operations[0].operator, "boss",
       "留痕记录的是真实操作人,不是前端自报");
     const document = await (await fetch(`${base}/skills/route-demo`,
@@ -233,6 +263,17 @@ test("路由权限:登录才可读,写只归管理员;留痕带操作人", async
     assert.match(document.content, /路由演练/,
       "登录成员应能从名称打开实际 SKILL.md");
     assert.equal(document.path, "route-demo/SKILL.md");
+
+    const retagged = await fetch(`${base}/skills/route-demo/languages`, {
+      method: "PATCH", headers: { cookie: boss },
+      body: JSON.stringify({ languages: ["java", "js"] }),
+    });
+    assert.equal(retagged.status, 200);
+    const retaggedShelf = await (await fetch(`${base}/skills`,
+      { headers: { cookie: dev } })).json() as {
+        skills: Array<{ languages: string[] }> };
+    assert.deepEqual(retaggedShelf.skills[0].languages,
+      ["java", "javascript"]);
 
     const badUpload = await fetch(`${base}/skills/route-demo`, {
       method: "PUT", headers: { cookie: boss },
@@ -249,7 +290,8 @@ test("路由权限:登录才可读,写只归管理员;留痕带操作人", async
       { headers: { cookie: dev } })).json() as {
         versions: Array<{ version_id: string }>;
       };
-    assert.equal(versions.versions.length, 1);
+    assert.equal(versions.versions.length, 2,
+      "改语言与下线都形成可回退版本");
     const rollback = await fetch(`${base}/skills/route-demo/rollback`, {
       method: "POST", headers: { cookie: boss },
       body: JSON.stringify({ version: versions.versions[0].version_id }),

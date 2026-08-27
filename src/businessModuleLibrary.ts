@@ -19,6 +19,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { normalizeKnowledgeLanguages } from "./knowledgeLanguages.ts";
 
 const ROOT = "business-modules";
 const OPERATIONS = "business-module-operations.jsonl";
@@ -38,6 +39,8 @@ export interface BusinessKnowledgeAsset {
   title: string;
   summary: string;
   when_to_use: string;
+  /** 工程实现语境；空数组只表示尚未补标的历史资产。 */
+  languages: string[];
   status: BusinessKnowledgeAssetStatus;
   version: number;
   digest: string;
@@ -160,7 +163,15 @@ function parseModule(value: unknown): BusinessModule {
       || !["active", "archived"].includes(module.status)) {
     throw new BusinessModuleError("业务模块元数据损坏");
   }
-  return module;
+  return {
+    ...module,
+    assets: module.assets.map((asset) => ({
+      ...asset,
+      // 旧资产没有该字段时保持可读，等待 Owner 在下次更新时补标。
+      languages: Array.isArray(asset.languages)
+        ? normalizeKnowledgeLanguages(asset.languages) : [],
+    })),
+  };
 }
 
 function writeModule(dataDir: string, module: BusinessModule): void {
@@ -368,6 +379,7 @@ export function publishBusinessKnowledgeAsset(
     title: string;
     summary: string;
     when_to_use: string;
+    languages?: string[];
     content: string;
   },
   operator: string,
@@ -389,11 +401,21 @@ export function publishBusinessKnowledgeAsset(
     throw new BusinessModuleError(`每个模块最多发布 ${MAX_ASSETS} 项知识`);
   }
   const now = new Date().toISOString();
+  let languages: string[];
+  try {
+    languages = input.languages === undefined
+      ? previous?.languages ?? []
+      : normalizeKnowledgeLanguages(input.languages);
+  } catch (error) {
+    throw new BusinessModuleError(
+      error instanceof Error ? error.message : String(error));
+  }
   const asset: BusinessKnowledgeAsset = {
     id: assetId,
     title: required(input.title, "资产标题", 120),
     summary: required(input.summary, "资产摘要", 500),
     when_to_use: required(input.when_to_use, "适用场景", 500),
+    languages,
     status: "published",
     version: (previous?.version ?? 0) + 1,
     digest: digest(content),
