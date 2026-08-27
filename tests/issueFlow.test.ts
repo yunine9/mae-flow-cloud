@@ -13,10 +13,39 @@ import {
   existsSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IssueEnvironmentVault } from "../src/issueEnvironment.ts";
+import {
+  materializeIssueSkills,
+  SKILL_SOURCE_DIR,
+} from "../src/issueFlow/prompt.ts";
+
+test("技能源目录:标准 skill 形态齐全,物化幂等且内容一致", () => {
+  const expected = [
+    "issue-delivery", "issue-ops", "issue-playbook", "issue-research",
+  ];
+  const workspace = mkdtempSync(join(tmpdir(), "mfc-issue-skills-"));
+  const first = materializeIssueSkills(workspace);
+  assert.deepEqual(first.map((path) => path.split("/").at(-2)), expected,
+    "四个改编技能必须齐装;少一个等于 Agent 少一条行为规矩");
+  for (const path of first) {
+    const body = readFileSync(path, "utf-8");
+    assert.match(body, /^---\nname: [^\n]+\ndescription: [^\n]+\n/,
+      "SKILL.md 必须带 name+description frontmatter(pi 靠它进系统提示词)");
+  }
+  const second = materializeIssueSkills(workspace);
+  assert.deepEqual(first, second, "幂等重写:路径稳定,重复物化不漂移");
+  for (const name of expected) {
+    assert.equal(
+      readFileSync(join(workspace, "skills", name, "SKILL.md"), "utf-8"),
+      readFileSync(join(SKILL_SOURCE_DIR, name, "SKILL.md"), "utf-8"),
+      `${name} 物化内容必须与仓内源文件逐字节一致`);
+  }
+  assert.equal(readdirSync(join(workspace, "skills")).length, expected.length);
+});
 
 test("环境保险箱:API 引用无密码、宿主可解密、文件不是明文", () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-vault-"));
