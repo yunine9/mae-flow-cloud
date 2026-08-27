@@ -4727,7 +4727,19 @@ pre {
 .knowledge-ut-method strong { color: var(--accent); }
 .knowledge-ut-method.is-fallback { border-style: dashed; color: var(--muted); }
 .knowledge-ut-method.is-fallback strong { color: var(--text); }
-.knowledge-catalog-group { padding: 6px 15px 8px; }
+.knowledge-catalog-badge {
+  padding: 2px 10px; border: 1px solid var(--line-strong); border-radius: 999px;
+  background: var(--surface); color: var(--muted);
+  font-size: var(--font-size-assist); font-weight: 700; cursor: pointer;
+  align-self: center;
+}
+.knowledge-catalog-badge:hover { color: var(--text); border-color: var(--text); }
+.knowledge-catalog-note {
+  margin: 0 0 8px; color: var(--muted); font-size: var(--font-size-assist);
+  line-height: 1.55;
+}
+.knowledge-catalog-body { max-height: 50vh; overflow: auto; }
+.knowledge-catalog-group { padding: 6px 0 8px; }
 .knowledge-catalog-group > strong {
   display: flex; align-items: center; gap: 6px;
   color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .08em;
