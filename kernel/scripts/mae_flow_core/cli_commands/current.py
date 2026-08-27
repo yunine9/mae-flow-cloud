@@ -21,14 +21,12 @@ from mae_flow_core.cli_commands.user_intervention import render_user_interventio
 def perms_line(step):
     """本步的写入范围提示——只陈述真实成立的事。
 
-    allow_source_edit 由活跃 Edit/Bash Gate 直接执行:它决定当前步骤能否碰源码。
-    提示与机器裁决必须来自同一个 step 定义，不能再出现“页面写着禁止、
-    Hook 却放行”的两套语义。
+    步骤级源码授权 2026-08-28 退役(用户拍板"编码阶段自由"):交付链
+    内编辑自由,完整性由头部纪律/绝对保护/提交侧范围闸把守。提示与
+    机器裁决保持同一套语义——闸不拦的事,这里绝不再吓人(实锤:流水线
+    修复 Agent 被"仅本步产物"一句话困在 external_verify 原地打转)。
     """
-    if step.get("allow_source_edit"):
-        scope = "源码与测试"
-    else:
-        scope = "仅本步指令内的产物"
+    scope = "源码与测试"
     if step.get("allow_specs_write"):
         scope += " + docs/specs/ 领域真相源"
     return "写入范围: " + scope

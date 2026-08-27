@@ -112,7 +112,7 @@ test("普通措辞也先机械 init/current，模型首个 Edit 在配置阶段�
   }
 });
 
-test("vendored Cloud Hook 在 grill 阶段同时拒绝 Edit 与 Bash 写源码", async () => {
+test("vendored Cloud Hook 在 grill 阶段放行 Edit 与 Bash 写源码(步骤级源码闸已退役)", async () => {
   const root = mkdtempSync(join(tmpdir(), "mfc-managed-grill-"));
   const repo = repository(root);
   mkdirSync(join(root, "pipeline"));
@@ -180,8 +180,11 @@ test("vendored Cloud Hook 在 grill 阶段同时拒绝 Edit 与 Bash 写源码",
       input: { path: "main.ts", edits: [{ oldText: "red", newText: "blue" }] },
     },
   });
-  assert.equal(edit?.action, "deny");
-  assert.match(edit?.reason ?? "", /当前步骤 grill.*禁止修改源码/s);
+  // 步骤级"本步禁改源码"2026-08-28 随内核 8863f99 退役(编码阶段自由):
+  // workflow 已选定后 grill 改码放行——之前流水线修复 Agent 就是被这条
+  // 拦成"能提交不能编辑"。头部纪律(上一个用例)与只读资源保护不动。
+  assert.equal(edit, undefined,
+    "workflow 已选定,grill 改源码必须放行");
 
   const bash = await host.preTool({
     eventId: 2, taskId: "managed-grill", sessionId: "main", ts: "",
@@ -191,8 +194,6 @@ test("vendored Cloud Hook 在 grill 阶段同时拒绝 Edit 与 Bash 写源码",
       input: { command: "sed -i s/red/blue/ main.ts" },
     },
   });
-  assert.equal(bash?.action, "deny");
-  assert.match(bash?.reason ?? "", /当前步骤 grill.*Bash.*源码/s);
-  assert.equal(readFileSync(join(repo, "main.ts"), "utf-8"),
-    "export const colour = 'red';\n");
+  assert.equal(bash, undefined,
+    "Bash 写源码与 Edit 是同一条自由");
 });

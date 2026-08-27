@@ -22,12 +22,10 @@ class EditGateContext:
     inside_plugin: bool
     is_source: bool
     source_unlocked: bool
-    # flow.json 是活跃流程唯一的步骤授权源。只有当前步骤明确声明
-    # allow_source_edit，主流程 Agent 才能写源码；过程文档不受此限。
-    allow_source_edit: bool = True
     # 交付方式(choices.workflow)是否已选定。它必然发生在配置确认之后,
-    # 是"流程头部已走完"的单一干净信号。默认 True 只为纯函数旧调用点
-    # 兼容；生产路径同时传 allow_source_edit，按当前步骤继续收紧。
+    # 是"流程头部已走完"的单一干净信号;选定之后源码编辑全放开
+    # (allow_source_edit 步骤级授权已随 2026-08-28 退役整体拆除,
+    # 残留检测会咬没有读方的字段——不留"页面写禁止、闸放行"的两套话)。
     workflow_chosen: bool = True
 
 
@@ -40,7 +38,6 @@ class BashWriteContext:
     step: str
     offenders: tuple
     source_unlocked: bool
-    allow_source_edit: bool = True
     workflow_chosen: bool = True
 
 
@@ -121,16 +118,14 @@ def _flow_head_decision(context):
 
 
 def _source_edit_decision(context):
-    if not context.is_source:
-        return None
-    if not context.allow_source_edit:
-        return _absolute(
-            "当前步骤 %s 只允许分析、澄清或维护本步过程产物，禁止修改源码。"
-            "请执行 current 完成本步；进入内核明确允许写源码的编码/返工步骤后"
-            "再修改。用户主动使用 Cloud 开发助手接管现场时，由宿主在交还时"
-            "登记介入事实，不得让主流程 Agent 在这里越过阶段。"
-            % (context.step or "?"),
-            rule="edit-outside-source-step")
+    """步骤级"本步禁改源码"已整体退役(2026-08-28 用户拍板"编码阶段
+    自由,这种门禁都放开")。实锤:流水线 RED 修复窗口里,内核给
+    commit/add 签了精确范围授权(external_repair_gate),edit 闸却按
+    external_verify 的 allow_source_edit=False 把改码拦死——修复
+    Agent"能提交不能编辑",只能在夹缝里乱撞。交付链内的编辑自由交还
+    给 Agent;完整性由三道不动的闸把守:头部纪律(_flow_head_decision,
+    配置未定禁写)、绝对保护(流程状态文件)、提交侧范围闸(修复窗口
+    精确提交/交付清单)——拦"交付什么",不拦"改什么"。"""
     return None
 
 
@@ -237,12 +232,9 @@ def _bash_absolute_decision(context):
 
 
 def _bash_source_decision(context):
-    if context.offenders and not context.allow_source_edit:
-        return _absolute(
-            "当前步骤 %s 禁止经 Bash 修改源码(命中: %s)。请执行 current "
-            "完成本步；进入内核明确允许写源码的编码/返工步骤后再修改。"
-            % (context.step or "?", "、".join(context.offenders[:3])),
-            rule="bash-outside-source-step")
+    """与 _source_edit_decision 同批退役(2026-08-28 用户拍板"编码
+    阶段自由"):交付链内 Bash 写源码不再按步骤拦——sed -i/重定向与
+    Edit 是同一条自由。头部纪律(配置未定禁写)与绝对保护照旧。"""
     return None
 
 

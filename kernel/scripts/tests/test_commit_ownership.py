@@ -1236,17 +1236,26 @@ class CommitOwnershipTests(unittest.TestCase):
         self.assertNotEqual(0, expanded.returncode, output)
         self.assertIn(extra, output)
 
-    def test_source_write_outside_authorized_step_is_blocked(self):
-        """flow.json 未授权写源码的步骤(如 config_confirm)机械阻断 Bash 写码。"""
+    def test_source_write_before_workflow_chosen_is_blocked(self):
+        """步骤级源码闸已退役(2026-08-28 用户拍板"编码阶段自由"),
+        仅存的机械阻断是头部纪律:交付方式未选定时 Bash 写码打回;
+        选定之后同一命令放行(交付链内编辑自由)。"""
         source = "src/main.py"
         write(self.repo, source, "value = 1\n")
-        mf.save_state(self.state(current="config_confirm"))
+        head_state = self.state(current="config_confirm")
+        head_state["choices"] = {}
+        mf.save_state(head_state)
         command = "sed -i 's/value/other/' " + source
 
         blocked = self.gate_bash(command)
 
         self.assertNotEqual(0, blocked.returncode)
-        self.assertIn("禁止经 Bash 修改源码", blocked.stdout + blocked.stderr)
+        self.assertIn("交付方式尚未选定", blocked.stdout + blocked.stderr)
+
+        mf.save_state(self.state(current="config_confirm"))
+        allowed = self.gate_bash(command)
+        self.assertEqual(
+            0, allowed.returncode, allowed.stdout + allowed.stderr)
 
     def test_user_external_current_delivery_needs_no_agent_provenance(self):
         current = "openspec/changes/current-change/change.md"

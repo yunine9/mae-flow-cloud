@@ -737,11 +737,14 @@ class RuntimeAndStateTests(unittest.TestCase):
             self.assertIn("config_confirm", current.stdout)
             self.assertNotIn("普通开发模式", current.stdout)
 
-    def test_active_hook_enforces_flow_step_source_write_scope(self):
-        """真实 dispatch/CLI 路径必须消费 flow.json allow_source_edit。
+    def test_active_hook_source_writes_free_after_workflow_chosen(self):
+        """真实 dispatch/CLI 路径钉住步骤级源码闸的退役口径。
 
-        这条专门防 4875f1e 型回归：纯函数有阶段模型，但活跃 Hook 只走
-        gate edit/bash，导致 grill 已选 workflow 后仍可直接改业务源码。
+        步骤级"本步禁改源码"2026-08-28 整体退役(用户拍板"编码阶段
+        自由";实锤:流水线 RED 修复窗口 commit/add 有授权、edit 闸却
+        拦死改码)。这条测试从"grill 必拦"翻面成"grill 必放",继续走
+        真子进程——防的还是 4875f1e 型两套语义:纯函数改了口径,活跃
+        Hook 却没跟上。只读资源的绝对保护不随退役松动。
         """
         with tempfile.TemporaryDirectory() as td:
             subprocess.run(["git", "init", "-q"], cwd=td, check=True)
@@ -778,15 +781,17 @@ class RuntimeAndStateTests(unittest.TestCase):
 
             set_step("grill")
             edit = gate("edit", source)
-            self.assertEqual(2, edit.returncode, edit.stderr)
-            self.assertIn("当前步骤 grill", edit.stderr)
+            self.assertEqual(0, edit.returncode,
+                             "workflow 已选定,grill 改源码不得再拦:%s"
+                             % edit.stderr)
             bash = gate("bash", "sed -i s/1/2/ service.cpp")
-            self.assertEqual(2, bash.returncode, bash.stderr)
-            self.assertIn("当前步骤 grill", bash.stderr)
+            self.assertEqual(0, bash.returncode,
+                             "Bash 写源码与 Edit 同一条自由:%s"
+                             % bash.stderr)
 
             set_step("build")
             self.assertEqual(0, gate("edit", source).returncode,
-                             "编码步骤的显式授权不得被误伤")
+                             "编码步骤照常放行")
             resource = os.path.join(
                 td, ".mae-flow-work", "host-skills", "snapshot", "SKILL.md")
             os.makedirs(os.path.dirname(resource), exist_ok=True)

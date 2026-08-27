@@ -32,7 +32,6 @@ class Spec2CodeWorkflowTests(unittest.TestCase):
         self.assertEqual("build", steps["tw_open"]["next"])
         self.assertEqual("build", steps["rf_triage"]["next"])
         self.assertEqual("domain_archive", steps["build"]["next"])
-        self.assertTrue(steps["build"]["allow_source_edit"])
         self.assertEqual([], steps["build"]["evidence"])
 
     def test_story_loop_binds_local_spec_grill_and_story(self):

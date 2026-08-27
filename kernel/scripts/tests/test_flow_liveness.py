@@ -97,9 +97,9 @@ class FlowLivenessTests(unittest.TestCase):
                 self.assertNotIn("story", transition_targets(step))
 
     def test_build_is_wide_and_free(self):
-        """宽 build 步:自由改源码,零证据编排,直通交付收口。"""
+        """宽 build 步:零证据编排,直通交付收口(改码自由已是全链默认,
+        allow_source_edit 字段随步骤级源码闸退役)。"""
         build = FLOW["steps"]["build"]
-        self.assertTrue(build.get("allow_source_edit"))
         self.assertEqual([], list(build.get("evidence", [])))
         self.assertEqual("domain_archive", build["next"])
 

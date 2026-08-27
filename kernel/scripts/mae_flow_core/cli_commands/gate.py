@@ -101,7 +101,6 @@ def _gate_edit(flow, st, sid, step, intent, jdie):
             plugin_root + "/"),
         is_source=api._is_source_path(p, st, flow),
         source_unlocked=source_unlocked_for(st, sid),
-        allow_source_edit=bool(step.get("allow_source_edit")),
         workflow_chosen=workflow_chosen(st),
     ))
     if decision.kind == "absolute":
@@ -250,7 +249,6 @@ def _gate_bash_writes(flow, st, sid, step, intent, jdie):
         step=sid or "",
         offenders=tuple(offenders),
         source_unlocked=source_unlocked,
-        allow_source_edit=bool(step.get("allow_source_edit")),
         workflow_chosen=workflow_chosen(st),
     ))
     if decision.kind == "absolute":
