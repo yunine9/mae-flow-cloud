@@ -1685,6 +1685,22 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 /* 会话页骨架:纵向自然流(头部/英雄轨/折叠条/双栏),页面级滚动;
    双栏内部各自成 flex 保证右栏 footer 可以钉底。 */
 .issue-session { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+/* 全屏会话工作台(workspace-overlay 同款壳):头部钉顶,现场体独占
+   滚动——横屏信息面积优先,少一层页面级干扰。 */
+.issue-workspace { padding: 0 16px 16px; }
+.issue-workspace > .issue-session-head {
+  padding: 14px 4px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.issue-workspace-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 12px;
+}
 .issue-session-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .issue-back {
   padding: 7px 12px; border: 1px solid var(--line); border-radius: 8px;
@@ -1801,7 +1817,8 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
    order 提到内容之上——决策永远第一眼可见。 */
 .issue-two-pane {
   display: grid;
-  grid-template-columns: minmax(0, 1.55fr) minmax(320px, .95fr);
+  /* 全屏工作台下横屏拉满:左栏证据占比再放大,右栏保证决策卡可读宽 */
+  grid-template-columns: minmax(0, 1.75fr) minmax(340px, .9fr);
   gap: 12px;
   align-items: stretch;
 }

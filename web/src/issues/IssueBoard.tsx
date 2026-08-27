@@ -459,6 +459,21 @@ function IssueSessionView({
     setPickedTab(undefined);
   }, [detail.id]);
 
+  useEffect(() => {
+    // 会话视图是全屏工作台(与任务侧 workspace-overlay 同款):锁页面
+    // 滚动,Escape 直接回到列表——现场面积优先,少一次瞄准返回钮。
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onBack();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = previous;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [onBack]);
+
   async function perform(action: () => Promise<unknown>): Promise<boolean> {
     if (busy) return false;
     setBusy(true);
@@ -505,10 +520,13 @@ function IssueSessionView({
     }
   }
 
-  return <div className="issue-session">
+  // 全屏工作台(与任务侧 workspace-overlay 同款):头部之外全部进
+  // 可滚动的现场体,横屏下信息面积拉满。
+  return <section className="workspace-overlay issue-workspace" role="dialog"
+    aria-modal="true" aria-label={`问题会话:${detail.title}`}>
     <div className="issue-session-head">
       <button type="button" className="issue-back" onClick={onBack}>
-        ← 返回我的问题
+        ← 返回我的问题(Esc)
       </button>
       <div className="issue-session-title">
         <strong>{detail.title}</strong>
@@ -537,6 +555,7 @@ function IssueSessionView({
       </div>
     </div>
 
+    <div className="issue-workspace-body">
     {/* 阶段英雄轨:独立整行(旅程线),压在耗时折叠条之上 */}
     <IssueJourneyTrail trail={trail} />
 
@@ -607,7 +626,8 @@ function IssueSessionView({
         onOpenDoc={() => setPickedTab("doc")}
       />
     </div>
-  </div>;
+    </div>
+  </section>;
 }
 
 /** 阶段英雄轨:旅程线(dates = transitions 账,走过才画)。
