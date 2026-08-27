@@ -58,6 +58,7 @@ export function statusText(task: {
       return `流水线修复中(第 ${loop.round}${
         loop.max !== undefined ? `/${loop.max}` : ""} 轮)`;
     }
+    if (loop.state === "verifying") return "修复结果验证中";
     if (loop.state === "halted") return "自动修复已停,需人工";
     if (loop.state === "exhausted") return "修复预算用完,需人工";
   }
@@ -584,7 +585,7 @@ export interface TaskSummary {
     loop?: {
       round: number;
       max?: number;
-      state: "repairing" | "green" | "exhausted" | "halted";
+      state: "repairing" | "verifying" | "green" | "exhausted" | "halted";
       diagnosis?: string;
       /** 流水线失败的平台原文(摘要)。刹车告警必须连它一起亮:诊断是
        * 会话的收口发言,可能在聊别的事(内网实锤:最后一轮会话在补文档

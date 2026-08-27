@@ -159,17 +159,6 @@ export function prePushSecurityDecision(
   const shellSegments = source.split(/(?:&&|\|\||[;\n])/);
   for (const segment of shellSegments) {
     if (!/\bgit\b/i.test(segment)) continue;
-    // prepush 的修复只能显式暂存由 Edit/Write 登记的源码。`git add .`
-    // / -A / -u 和 `commit -a` 会把构建命令的副产物一起卷进 HEAD；在
-    // 命令发生时就给确定反馈，不要等整轮编译结束才让 Agent 猜哪里错。
-    if (/\bgit\b[\s\S]*\badd\b[\s\S]*(?:^|\s)(?:\.|-A|--all|-u|--update)(?:\s|$)/i
-      .test(segment)
-      || /\bgit\b[\s\S]*\bcommit\b[\s\S]*(?:^|\s)(?:--all\b|-[a-z]*a[a-z]*\b)/i
-        .test(segment)) {
-      return DENY("推送前修复禁止批量暂存或 commit -a；请只对本轮通过 "
-        + "Edit/Write 明确修改的源码路径执行 git add，再提交。构建产物应"
-        + "清理，不能靠提交它们来让 git status 变干净。");
-    }
     if (/\bgit\b[\s\S]*\bclone\b/i.test(segment)) {
       return DENY("禁止在推送前验证会话中重新克隆仓库；请使用 Cloud 已准备好的工作区。");
     }
@@ -462,7 +451,9 @@ export function prePushMission(
     // 原文要求"与实际 Bash 调用完全一致",但模型实际发的是带 cd 前缀和
     // 退出码后缀的长命令,做不到逐字节回抄——这条契约把闸卡死过(实测)。
     // 现在只要求写真正执行的那一段构建命令,宿主按包含匹配核对。
-    "收口前确认 git status 没有应提交的业务改动。最后一段必须严格输出下面结构"
+    "收口前确认本轮业务代码修改已经提交到 HEAD。编译产物可以留在工作区："
+      + "Cloud push 只传 HEAD，不要求 git status 为空；不要为了清空状态把"
+      + "编译产物提交进去。最后一段必须严格输出下面结构"
       + "（command 写你真正执行的那段构建命令原文，如 `mvn test`；不必带 cd 前缀"
       + "和 echo 退出码后缀，但**不能写没跑过的命令**，宿主会回执行记录核对）：",
     "<prepush-result>",

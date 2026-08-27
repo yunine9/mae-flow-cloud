@@ -252,11 +252,9 @@ test("prepush 代码验证失败时禁止 push、MR 与流水线", async () => {
   }
 });
 
-test("prepush 说通过但构建把产物落进了工作区:判失败并点名路径", async () => {
-  // 2026-08-25 内网事故的直接复刻:构建容器与宿主挂同一工作区,
-  // ant copy 之类把产物灌进 worktree。此时"通过"不能签——但原来的
-  // 失败话术只有一句"工作区仍有未提交业务改动",既没告诉模型该清什么,
-  // 也没告诉人该 gitignore 什么,每一轮都在同一处失败还说不出原因。
+test("prepush 通过后允许构建产物留在工作区，push 仍只传 HEAD", async () => {
+  // git push 传提交对象而不是工作区。构建自然留下未跟踪产物时，不能
+  // 为追求空 status 拒绝 PASS，更不能诱导 Agent 把产物提交进去。
   const platform = new FakeGitPlatform();
   platform.initBare(sourceRepo(), mkdtempSync(join(tmpdir(), "mfc-prepush-p-")));
   await platform.start();
@@ -277,15 +275,13 @@ test("prepush 说通过但构建把产物落进了工作区:判失败并点名�
     const id = service.create("REQ_DIRTY：产物渗进工作区", {
       ticket: "REQ_DIRTY",
     }).id;
-    await until(() => JSON.stringify(
-      service.get(id)!.delivery?.prepush ?? {},
-    ).includes("未提交业务改动"), "dirty 判定落进 prepush 现场");
-    const prepush = JSON.stringify(service.get(id)!.delivery?.prepush);
-    assert.match(prepush, /build\/lib\.o/,
-      "失败必须点名具体路径——不点名,模型和人都只能猜");
+    await until(() => service.get(id)!.status === "await_merge",
+      "工作区有编译产物仍完成交付");
     assert.equal(git(platform.barePath, "branch", "--list",
-      "master_bot_REQ_DIRTY"), "", "工作区不干净绝不允许 push");
-    assert.equal(platform.mergeRequests.length, 0, "也不得创建 MR");
+      "master_bot_REQ_DIRTY"), "master_bot_REQ_DIRTY");
+    assert.equal(platform.mergeRequests.length, 1);
+    assert.equal(existsSync(join((service as any).tasks.get(id).cwd,
+      "build", "lib.o")), true, "push 不应要求删除本地构建产物");
   } finally {
     await model.stop();
     await platform.stop();

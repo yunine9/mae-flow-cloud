@@ -10,12 +10,13 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskService, type TaskSummary } from "../src/taskService.ts";
 import { HumanGate } from "../src/humanGate.ts";
+import { PRE_PUSH_STATE_SCHEMA } from "../src/prePushVerification.ts";
 
 async function until<T>(
   probe: () => T | undefined,
@@ -41,6 +42,46 @@ const LIFE_A: Scene[] = [
 const LIFE_B: Scene[] = [
   { text: "已收到用户答复,继续并完成任务。" },
 ];
+
+test("恢复老任务时把已结束修复的 repairing 校正为 verifying", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-recover-repair-phase-"));
+  const workspace = join(dataDir, "task-1");
+  const taskPath = join(workspace, "task.json");
+  const summary: TaskSummary = {
+    id: "task-1",
+    requirement: "恢复修复后的 prepush",
+    workspace,
+    status: "verifying",
+    created_at: "2026-08-27T00:00:00.000Z",
+    delivery: {
+      loop: { round: 3, kind: "ci", state: "repairing" },
+      prepush: {
+        schema: PRE_PUSH_STATE_SCHEMA,
+        state: "preparing",
+        round: 4,
+        message: "正在准备编译",
+        sha: "abc123",
+        workspace_fingerprint: "old-task",
+        updated_at: "2026-08-27T01:00:00.000Z",
+        checks: {
+          compile: { state: "pending" },
+          unit_test: { state: "pending" },
+        },
+      },
+    },
+  };
+  mkdirSync(workspace, { recursive: true });
+  writeFileSync(taskPath, JSON.stringify({ summary }, null, 2));
+
+  const service = new TaskService({
+    dataDir, provider: "maeflow", model: "scripted-v1", modelsJson: {},
+  });
+  assert.equal(service.recover().restored, 1);
+  const restored = service.get("task-1")!;
+  assert.equal(restored.delivery?.loop?.state, "verifying");
+  assert.equal(restored.focus?.headline, "正在准备编译");
+  assert.match(restored.detail ?? "", /修复会话已完成/);
+});
 
 test("恢复:等待人工的任务跨进程存活,决定走重建会话续跑", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-recover-"));

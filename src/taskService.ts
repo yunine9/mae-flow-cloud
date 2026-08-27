@@ -27,7 +27,7 @@ import {
 } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
 import {
   AnnotationStore,
@@ -1030,10 +1030,6 @@ interface TaskState {
    * 已返回给调用方的 turn Promise 收口；这条信号用于结束宿主等待，
    * 容器销毁仍是进程树终止的安全边界。 */
   prepushAbort?: AbortController;
-  /** 本轮 prepush 由 Edit/Write 明确产生的路径。只活在进程内，用来
-   * 证明修复提交的每个文件都有 Agent 主动修改来源；构建命令生成后被
-   * `git add .` 卷入的产物没有这条来源，不能拿到 PASS。 */
-  prepushAuthoredPaths?: Set<string>;
   /** 上次主动压缩时的事件水位(事件量是上下文增长的诚实代理)。 */
   lastCompactAt?: number;
   /** 恢复标记:launch 走重建会话路径(不重克隆、内核 current 续跑)。 */
@@ -7245,9 +7241,9 @@ export class TaskService {
     await this.pipelineVerdict(task, sha, status, log, checks, epoch);
   }
 
-  /** 读取真正准备传输的 Git 现场。PASS 收据只在 clean worktree 上签发，
-   * 因而稳定态的 fingerprint 实际由 HEAD + 空 status 唯一确定；运行中
-   * 仍把完整 status 纳入哈希，恢复时不会复用半截 attempt。 */
+  /** 读取真正准备传输的 Git 提交。git push 只传 HEAD 可达对象，工作区
+   * 的未提交/未跟踪文件不会进入远端；PASS 因此只绑定 SHA，不再用
+   * `git status` 把编译产物误当成 push 阻断条件。 */
   private async prePushRevision(task: TaskState): Promise<PrePushRevision> {
     if (!task.cwd) throw new Error("任务没有代码工作区，不能执行推送前验证");
     const head = await runSafeWorktreeGitAsync(
@@ -7256,20 +7252,10 @@ export class TaskService {
     if (head.status !== 0 || !sha) {
       throw new Error(`推送前读取 HEAD 失败: ${String(head.stderr ?? "")}`);
     }
-    const status = await runSafeWorktreeGitAsync(
-      task.cwd, [
-        "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", ".",
-        ":(exclude).mae-flow.json", ":(exclude).mae-flow-*",
-        ":(exclude).mae-flow-work/**", ":(exclude).codecheckcli/**",
-      ], { timeoutMs: 30_000 });
-    if (status.status !== 0) {
-      throw new Error(`推送前读取工作区失败: ${String(status.stderr ?? "")}`);
-    }
     return {
       sha,
       workspace_fingerprint: createHash("sha256")
-        .update(sha).update("\0").update(String(status.stdout ?? ""))
-        .digest("hex"),
+        .update(sha).digest("hex"),
     };
   }
 
@@ -7301,31 +7287,6 @@ export class TaskService {
       .filter(Boolean)
       .map((line) => line.slice(3).split(" -> ").pop() ?? line)
       .filter((path) => !sanctioned.has(path));
-  }
-
-  /** prepush 是“验证与小范围修复”会话，不是第二个不受控的开发入口。
-   * 它最终提交的每个路径都必须能追溯到本轮成功的 Edit/Write；Bash 构建
-   * 自然生成的文件不会登记，因此即使 Agent 用 `git add .` 把现场洗成
-   * clean，也无法绕过这道校验。这里不猜扩展名/目录名，适用于任意语言。 */
-  private async prePushUnattributedCommitPaths(
-    task: TaskState,
-    initialSha: string,
-    finalSha: string,
-  ): Promise<string[]> {
-    if (!task.cwd || initialSha === finalSha) return [];
-    const changed = await runSafeWorktreeGitAsync(task.cwd, [
-      "diff", "--name-only", "-z", initialSha, finalSha, "--",
-    ], { timeoutMs: 30_000 });
-    if (changed.status !== 0) {
-      return [`(无法核验 prepush 提交来源: ${String(
-        changed.stderr ?? changed.error ?? "Git diff 失败",
-      ).trim().slice(0, 200)})`];
-    }
-    const authored = task.prepushAuthoredPaths ?? new Set<string>();
-    return String(changed.stdout ?? "").split("\0")
-      .map((path) => path.trim())
-      .filter(Boolean)
-      .filter((path) => !authored.has(path.replace(/\\/g, "/")));
   }
 
   private setPrePushState(
@@ -7662,14 +7623,6 @@ export class TaskService {
             path,
             user: isolation.user,
           });
-          // 只有文件工具成功落盘并完成属主修复后才登记。Bash 构建产生
-          // 的文件不会经过这里，后续即使被 `git add .` 提交也会被宿主
-          // 的提交来源校验拦下。
-          const authored = relative(resolve(task.cwd!), resolve(path))
-            .replace(/\\/g, "/");
-          if (authored && authored !== ".." && !authored.startsWith("../")) {
-            task.prepushAuthoredPaths?.add(authored);
-          }
         },
         log: this.options.log,
       });
@@ -7682,7 +7635,6 @@ export class TaskService {
         request,
         executionBudget,
       )));
-      let previousUnattributed = "";
       for (let correction = 0; correction < 3; correction += 1) {
         if (infrastructureFailure) {
           await driver.abort().catch((error) => this.options.log?.(
@@ -7713,16 +7665,8 @@ export class TaskService {
         const evidence = report
           ? verifyPrePushEvidence(eventLog.replay(), report)
           : "收口缺少合法的 <prepush-result> 结构";
-        const dirtyPaths = await this.prePushDirtyPaths(task);
-        const dirty = dirtyPaths.length > 0;
         const finalSha = (await this.prePushRevision(task)).sha;
-        const unattributedPaths = await this.prePushUnattributedCommitPaths(
-          task, request.sha, finalSha);
-        const unattributedKey = unattributedPaths.join("\0");
-        const repeatedUnattributed = Boolean(unattributedKey)
-          && unattributedKey === previousUnattributed;
-        if (unattributedKey) previousUnattributed = unattributedKey;
-        if (report && !evidence && !dirty && !unattributedPaths.length) {
+        if (report && !evidence) {
           return withExecution({
             status: "passed",
             sha: finalSha,
@@ -7730,38 +7674,16 @@ export class TaskService {
             report,
           });
         }
-        // 同一批无来源文件只允许纠正一次。第二次原样出现说明 Agent 没有
-        // 理解/无法执行清理，继续烧模型和重跑编译不会产生新信息。
-        if (correction === 2 || repeatedUnattributed) {
+        if (correction === 2) {
           return withExecution({
             status: "code_failure",
             sha: (await this.prePushRevision(task)).sha,
-            message: [evidence, dirty
-              ? `工作区仍有未提交业务改动(${describeDirtyPaths(dirtyPaths)})`
-                + "；若是构建产物,请在仓库 .gitignore 它们或把构建输出挪出"
-                + "工作区,否则每轮推送前验证都会在这里失败"
-              : "", unattributedPaths.length
-              ? "prepush 修复提交包含没有 Edit/Write 来源的路径("
-                + `${describeDirtyPaths(unattributedPaths)})；拒绝把 Bash 构建`
-                + "产生后被 git add 卷入的文件当成业务代码"
-              : ""].filter(Boolean).join("；"),
+            message: evidence,
           });
         }
         outcome = await waitForTurn(driver.continueWith([
           "推送前验证尚不能签发 PASS，请在当前专项会话继续处理。",
           evidence,
-          dirty
-            ? `git status 仍有业务改动(${describeDirtyPaths(dirtyPaths)})：`
-              + "属于本单的改动请提交；构建产物请清理出工作区或恢复原状，"
-              + "再重新执行编译与 UT。"
-            : "",
-          unattributedPaths.length
-            ? `最终提交含有未通过 Edit/Write 明确修改的路径(`
-              + `${describeDirtyPaths(unattributedPaths)})。这通常是 git add . `
-              + "把编译产物卷进了提交：请从提交中移除这些路径并清理现场；"
-              + "业务源码必须用 Edit/Write 修改后再提交。本轮已登记路径："
-              + `${describeDirtyPaths([...(task.prepushAuthoredPaths ?? [])]) || "无"}。`
-            : "",
           "不要只重写结论；两项命令必须在最后一次代码修改后真实成功。",
         ].filter(Boolean).join("\n")));
       }
@@ -7827,9 +7749,6 @@ export class TaskService {
       releaseBuildSlot?.();
       return false;
     }
-    // 每个 attempt 独立记账；自定义 runner 若改变 HEAD，也必须通过宿主
-    // 可观测的文件工具登记来源，否则其新增提交同样不能绕过交付边界。
-    task.prepushAuthoredPaths = new Set<string>();
     try {
       result = await (this.options.prepush?.runner
         ?? ((input) => this.runCloudPrePushAgent(
@@ -7860,30 +7779,7 @@ export class TaskService {
         message: `验证结果绑定 ${result.sha.slice(0, 12)}，但当前 HEAD 是 `
           + `${finalRevision.sha.slice(0, 12)}，拒绝复用陈旧结论`,
       };
-    } else if (result.status === "passed") {
-      const unattributedPaths = await this.prePushUnattributedCommitPaths(
-        task, initialRevision.sha, finalRevision.sha);
-      if (unattributedPaths.length) {
-        result = {
-          status: "code_failure",
-          sha: finalRevision.sha,
-          message: "推送前修复提交包含没有 Edit/Write 来源的路径("
-            + `${describeDirtyPaths(unattributedPaths)})；已阻止把构建命令`
-            + "产生后被 Git 批量暂存的文件推给用户确认",
-        };
-      } else {
-        const dirtyPaths = await this.prePushDirtyPaths(task);
-        if (dirtyPaths.length) {
-          result = {
-            status: "code_failure",
-            sha: finalRevision.sha,
-            message: "编译与 UT 虽已执行，但工作区仍有未提交业务改动"
-              + `(${describeDirtyPaths(dirtyPaths)})`,
-          };
-        }
-      }
     }
-    delete task.prepushAuthoredPaths;
     state = recordPrePushReport(
       state, attemptId, this.prePushDomainReport(result),
       new Date().toISOString());

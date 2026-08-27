@@ -135,9 +135,15 @@ test("交付范围确认只在 prepush 收敛后执行", async () => {
   const { service, model, internal } = await verifyingTask();
   try {
     const order: string[] = [];
+    internal.summary.delivery = {
+      loop: { round: 2, kind: "ci", state: "repairing" },
+    };
+    internal.mission = undefined;
     (service as any).options.host = {};
     (service as any).effectivePlatformUrl = () => "https://git.example.test";
     (service as any).preparePush = async () => {
+      assert.equal(internal.summary.delivery.loop.state, "verifying",
+        "修复会话收口后必须先退出 repairing 再进入 prepush");
       order.push("prepush");
       return true;
     };
@@ -153,6 +159,7 @@ test("交付范围确认只在 prepush 收敛后执行", async () => {
     await (service as any).tryDeliver(internal, internal.controlEpoch);
     assert.deepEqual(order, ["prepush", "confirm"],
       "不得在 prepush 之前先举一次确认卡");
+    assert.equal(internal.summary.delivery.loop.state, "verifying");
   } finally {
     await model.stop();
   }
