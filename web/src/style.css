@@ -1623,7 +1623,7 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-field { display: grid; gap: 5px; font-size: var(--font-size-assist); color: var(--muted); }
 .issue-field.wide { grid-column: 1 / -1; }
 .issue-field i { font-style: normal; color: var(--faint); }
-.issue-field input, .issue-field textarea, .issue-env-fields input, .issue-waiting-free input, .issue-bind input, .issue-composer-row input, .issue-composer-row textarea {
+.issue-field input, .issue-field textarea, .issue-env-fields input, .issue-bind input {
   padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
   background: var(--surface-muted); color: var(--text-strong); font: inherit; width: 100%;
 }
@@ -1634,7 +1634,7 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 }
 .issue-env-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px; }
 .issue-form-actions { grid-column: 1 / -1; display: flex; align-items: center; gap: 14px; }
-.issue-form-actions .primary, .issue-dts-toolbar .primary, .issue-composer-row .primary {
+.issue-form-actions .primary, .issue-dts-toolbar .primary {
   min-height: 36px; padding: 0 18px; border: 0; border-radius: 9px;
   background: var(--accent); color: #fff; font-size: var(--font-size-assist);
   font-weight: 700; cursor: pointer;
@@ -1682,7 +1682,9 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-title { color: var(--text-strong); font-size: var(--font-size-main); }
 .issue-card-foot { display: flex; gap: 12px; color: var(--faint); font-size: var(--font-size-dense); }
 .issue-conclusion { color: #16856a; }
-.issue-session { display: grid; gap: 12px; grid-template-rows: auto auto auto 1fr auto; min-height: 0; height: 100%; }
+/* 会话页骨架:纵向自然流(头部/英雄轨/折叠条/双栏),页面级滚动;
+   双栏内部各自成 flex 保证右栏 footer 可以钉底。 */
+.issue-session { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
 .issue-session-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .issue-back {
   padding: 7px 12px; border: 1px solid var(--line); border-radius: 8px;
@@ -1693,30 +1695,75 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-session-ticket { display: flex; align-items: center; gap: 8px; }
 .issue-bind { display: flex; gap: 6px; }
 .issue-bind input { width: 180px; }
-.issue-bind button, .issue-waiting-free button, .issue-composer-actions button {
+.issue-bind button {
   min-height: 32px; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px;
   background: var(--surface); color: var(--text-strong); font-size: var(--font-size-assist); cursor: pointer;
 }
 .issue-bind-hint { color: var(--faint); font-size: var(--font-size-dense); }
 .issue-session-error { padding: 9px 13px; border-radius: 9px; background: rgba(214, 69, 69, .08); color: #d64545; font-size: var(--font-size-assist); display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
 .issue-session-error .issue-error-action { border: 0; background: none; color: inherit; cursor: pointer; text-decoration: underline; font-weight: 700; padding: 0; font-size: inherit; }
-/* done ≠ 归档:阶段到"结束"只是 AI 出了结论,引导用户收口而非误以为已关闭 */
-.issue-done-hint { padding: 9px 13px; border-radius: 9px; background: var(--success-soft); color: var(--success); font-size: var(--font-size-assist); }
-/* 阶段轨迹(流程上方的动态状态显示):按转移账实际发生顺序画,
-   紫点=AI 上报,绿点=平台事实;末位高亮为当前阶段 */
-.stage-trail { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.stage-node {
-  position: relative; padding: 3px 11px 3px 21px; border-radius: 999px;
-  background: var(--surface-soft); color: var(--muted);
-  font-size: var(--font-size-assist); font-weight: 600;
+/* ---- 阶段英雄轨(issue-journey):升级自 pill 版 stage-trail ----
+   问题阶段是动态的,这是一条"旅程线"而非"计划线":只画走过的节点,
+   不补未来占位(对比任务侧固定七段)。结构抄任务工作台 hero 进度条
+   (task-phase-track 节点栈 + ws-progress 的 nth-child 渐变调色对):
+   点在上、词签在下,节点间 4px 圆角连条紫→蓝→青→绿循环;末位即当前
+   ——点放大描白边带双光晕,词签加粗。来源(AI 上报/平台事实)保留在
+   title 悬浮里,不再参与配色叙事。 */
+.stage-trail.issue-journey {
+  flex: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(76px, 1fr));
+  padding: 6px 2px 0;
 }
-.stage-node::before {
-  content: ""; position: absolute; left: 9px; top: 50%; transform: translateY(-50%);
-  width: 6px; height: 6px; border-radius: 50%;
+.issue-jnode {
+  position: relative;
+  min-width: 0;
+  display: grid;
+  justify-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: var(--font-size-dense);
+  font-weight: 600;
 }
-.stage-node.source-agent::before { background: #655bd8; }
-.stage-node.source-platform::before { background: #2e9e63; }
-.stage-node.current { background: rgba(101, 91, 216, .12); color: #4540b8; font-weight: 800; }
+/* 已走过的圆点:填节点相位色,一圈 surface 白边保证压在连条上也清爽 */
+.issue-jnode > i {
+  position: relative;
+  z-index: 2;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--phase-color);
+  box-shadow: 0 0 0 2px var(--surface);
+}
+/* 连条只存在于"走过的两节点之间":颜色表达的是已经发生的事 */
+.issue-jnode:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  top: 3px;
+  left: 50%;
+  width: 100%;
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--phase-color), var(--phase-next));
+}
+.issue-jnode:nth-child(1) { --phase-color: #7b61d9; --phase-next: #5978e8; }
+.issue-jnode:nth-child(2) { --phase-color: #5978e8; --phase-next: #318fcf; }
+.issue-jnode:nth-child(3) { --phase-color: #318fcf; --phase-next: #20a99a; }
+.issue-jnode:nth-child(4) { --phase-color: #20a99a; --phase-next: #65ae62; }
+.issue-jnode:nth-child(5) { --phase-color: #65ae62; --phase-next: #d49b37; }
+.issue-jnode:nth-child(6) { --phase-color: #d49b37; --phase-next: #df6b7c; }
+.issue-jnode:nth-child(n + 7) { --phase-color: #df6b7c; --phase-next: #df6b7c; }
+.issue-jnode.current { color: var(--phase-color); font-weight: 800; font-size: var(--font-size-assist); }
+.issue-jnode.current > i {
+  width: 14px;
+  height: 14px;
+  margin-top: -2px;
+  border: 3px solid var(--surface);
+  background: var(--phase-color);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--phase-color) 24%, transparent),
+              0 4px 12px color-mix(in srgb, var(--phase-color) 30%, transparent);
+}
 .issue-session-mr { padding: 9px 13px; border-radius: 9px; background: color-mix(in srgb, var(--accent) 7%, transparent); color: var(--accent); font-size: var(--font-size-assist); }
 .issue-session-mr a { color: inherit; }
 .issue-thread {
@@ -1734,21 +1781,241 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   white-space: pre-wrap; word-break: break-word; line-height: 1.6;
 }
 .issue-message.role-user .issue-message-body { background: color-mix(in srgb, var(--accent) 6%, var(--surface)); }
-.issue-waiting { padding: 13px 15px; border: 1px solid rgba(183, 121, 31, .35); border-radius: 12px; background: rgba(183, 121, 31, .06); display: grid; gap: 10px; }
-.issue-waiting > strong { color: #b7791f; font-size: var(--font-size-assist); }
-.issue-waiting-context { margin: 0; color: var(--muted); font-size: var(--font-size-assist); }
-.issue-question p { margin: 0 0 8px; color: var(--text-strong); font-size: var(--font-size-assist); font-weight: 600; }
-.issue-question-options { display: flex; gap: 8px; flex-wrap: wrap; }
-.issue-question-options button {
-  padding: 7px 14px; border: 1px solid var(--line); border-radius: 999px;
-  background: var(--surface); color: var(--text-strong); font-size: var(--font-size-assist); cursor: pointer;
+/* ---- 决策-centric 双栏骨架 ----
+   左栏 = 内容(页签 + 对话/文档),右栏 = NEXT ACTION 常驻栏。
+   配比与任务工作台 ws-body 同源(minmax(0,1.55fr) / minmax(320px,.95fr)),
+   保证两种"宽左窄右"的会话页长得像一家人;<1100px 单列栈,右栏靠
+   order 提到内容之上——决策永远第一眼可见。 */
+.issue-two-pane {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(320px, .95fr);
+  gap: 12px;
+  align-items: stretch;
 }
-.issue-question-options button:hover { border-color: var(--accent); color: var(--accent); }
-.issue-waiting-free { display: flex; gap: 8px; }
-.issue-composer { display: grid; gap: 8px; }
-.issue-composer-row { display: flex; gap: 8px; align-items: flex-end; }
-.issue-composer-actions { display: flex; align-items: center; gap: 8px; }
-.issue-composer-actions .danger { color: #d64545; border-color: rgba(214, 69, 69, .35); }
+.issue-main-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+/* 消息流/文档在左栏内吃满余量(自身仍是滚动容器) */
+.issue-main-pane > .issue-thread { flex: 1; }
+/* 右栏 NEXT ACTION 常驻栏:flex 列让 body 吃满余量、footer 钉底 */
+.issue-rail {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-muted);
+  overflow: hidden;
+}
+/* kicker 沿用 ws-pane-head 的语汇(accent 大写 + 宽字距);issues 视图
+   的 accent 已被 data-view 重映射为陶土色,var() 直接继承 */
+.issue-rail-head {
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.issue-rail-head > span {
+  color: var(--accent);
+  font-size: var(--font-size-assist);
+  font-weight: 700;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+}
+.issue-rail-body {
+  flex: 1;
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  padding: 12px;
+  overflow-y: auto;
+}
+@media (max-width: 1100px) {
+  .issue-two-pane { grid-template-columns: 1fr; }
+  /* 单列时右栏不再吃视口高度,自然展开不内滚 */
+  .issue-rail { order: -1; max-height: none; }
+}
+
+/* 栏内状态卡:五态共用一张素卡,绿/脉冲只用语义 token 点缀 */
+.issue-rail-card {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface);
+  font-size: var(--font-size-assist);
+}
+.issue-rail-card strong { display: flex; align-items: center; gap: 8px; color: var(--text-strong); }
+.issue-rail-card p { margin: 0; color: var(--muted); line-height: 1.55; }
+.issue-rail-card small { color: var(--faint); line-height: 1.5; }
+/* done ≠ 归档的收口引导从顶部横幅迁到这里:成功绿只洗这一张卡的底 */
+.issue-rail-card.is-done {
+  border-color: color-mix(in srgb, var(--success) 24%, var(--line));
+  background: var(--success-soft);
+}
+.issue-rail-card.is-done strong,
+.issue-rail-card.is-done p { color: var(--success); }
+.issue-rail-primary {
+  min-height: 34px; padding: 0 16px; border: 0; border-radius: 9px;
+  background: var(--accent); color: #fff; font-size: var(--font-size-assist);
+  font-weight: 700; cursor: pointer;
+}
+.issue-rail-primary:disabled { opacity: .55; cursor: not-allowed; }
+/* 运行中呼吸点:活着的会话要有一眼可见的生命体征 */
+.issue-rail-pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: issueRailPulse 1.6s ease-in-out infinite;
+}
+@keyframes issueRailPulse {
+  0%, 100% { opacity: .35; transform: scale(.85); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+/* 栏内输入行:插话单行、续聊三行 textarea;提交在 success 后清空 */
+.issue-rail-input {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  width: 100%;
+}
+.issue-rail-input input, .issue-rail-input textarea {
+  width: 100%; padding: 8px 10px; border: 1px solid var(--line);
+  border-radius: 8px; background: var(--surface-muted);
+  color: var(--text-strong); font: inherit; resize: vertical;
+}
+.issue-rail-input > button {
+  flex: none; min-height: 30px; padding: 0 13px; border: 1px solid var(--line);
+  border-radius: 8px; background: var(--surface); color: var(--text-strong);
+  font-size: var(--font-size-dense); cursor: pointer;
+}
+.issue-rail-input > button.primary {
+  border: 0; background: var(--accent); color: #fff; font-weight: 700;
+}
+.issue-rail-input > button:disabled { opacity: .55; cursor: not-allowed; }
+
+/* 栏脚:归档/取消钉底(自旧 composer-actions 整体迁入),结论文档
+   快捷键也落在这里;m-left:auto 在新上下文里没有意义,归零。 */
+.issue-rail-foot {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+.issue-rail-foot .issue-analysis-flag { margin-left: 0; }
+.issue-rail-actions { display: flex; gap: 8px; }
+.issue-rail-actions button {
+  flex: 1;
+  min-height: 32px; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface); color: var(--text-strong);
+  font-size: var(--font-size-assist); cursor: pointer;
+}
+.issue-rail-actions button:disabled { opacity: .5; cursor: not-allowed; }
+.issue-rail-actions .danger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--line));
+}
+
+/* 决策卡(WaitingCard anatomy 的问题域移植):白卡 + 琥珀对角线洗头 +
+   计数 pill;问题/选项/圆点直接复用全局 .question/.option/.radio 族,
+   这里只做栏宽适配与卡片外壳。 */
+.issue-decision {
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--attention) 24%, var(--line));
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
+}
+.issue-decision-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px 15px;
+  background:
+    linear-gradient(100deg, var(--attention-soft), transparent 68%),
+    var(--surface);
+  border-bottom: 1px solid color-mix(in srgb, var(--attention) 18%, var(--line));
+}
+.issue-decision-head .decision-kicker {
+  color: var(--attention);
+  font-weight: 700;
+  letter-spacing: .13em;
+}
+.issue-decision-count {
+  padding: 2px 9px;
+  border: 1px solid color-mix(in srgb, var(--attention) 22%, var(--line));
+  border-radius: 999px;
+  color: var(--attention);
+  background: var(--surface);
+  font-size: var(--font-size-dense);
+  font-weight: 700;
+  white-space: nowrap;
+}
+/* 决策背景:agent 的一段话,markdown 直读,超高内滚(同 waiting-context 口径) */
+.issue-decision-context {
+  margin: 12px 14px 2px;
+  padding: 11px 13px;
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font-size: var(--font-size-assist);
+  line-height: 1.65;
+}
+/* 栏宽比任务侧窄:.question 默认留白偏松,横向收到 15px */
+.issue-decision > .question { padding: 13px 15px; }
+.issue-decision-note { margin: 12px 15px 0; color: var(--muted); font-size: var(--font-size-assist); }
+.issue-decision-notes-toggle {
+  margin: 12px 15px 0;
+  justify-self: start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: var(--font-size-assist);
+  cursor: pointer;
+}
+.issue-decision-notes-toggle:hover { color: var(--accent); }
+.issue-decision-notes { margin: 12px 15px 0; }
+.issue-decision-submit {
+  display: flex;
+  margin-top: 13px;
+  padding: 12px 15px 15px;
+  border-top: 1px solid var(--line);
+  background: var(--surface-soft);
+}
+.issue-decision-submit > button {
+  flex: 1;
+  min-height: 36px; padding: 0 18px; border: 0; border-radius: 9px;
+  background: var(--accent); color: #fff; font-size: var(--font-size-assist);
+  font-weight: 700; cursor: pointer;
+}
+.issue-decision-submit > button:disabled { opacity: .55; cursor: not-allowed; }
+
+/* 对话长文折叠:>600 字先给前 280 字,展开钮贴在同一段气泡里 */
+.issue-message-expand {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
 .issue-analysis-flag {
   margin-left: auto;
   border: 0;

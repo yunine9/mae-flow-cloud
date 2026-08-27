@@ -3,7 +3,9 @@
  *
  * 与"我的需求"完全隔离:独立分包、独立轮询、独立 API 命名空间。
  * 页面两块:上方登记(DTS 拉单/手工登记),下方"我的问题"会话列表;
- * 点开进入会话详情(消息流 + 问题卡作答 + 阶段显示 + 归档)。
+ * 点开进入会话详情——决策-centric 双栏:顶部阶段英雄轨 + 耗时卡点折叠条,
+ * 左栏是内容(对话/结论文档页签),右栏常驻 NEXT ACTION(待答复/运行中/
+ * 空闲/被打断/已出结论 五态互斥)+ 底部固死的归档与取消。
  * 前端不推断状态:一切文案来自 /issues API 镜像。
  */
 import { useEffect, useRef, useState } from "react";
@@ -32,6 +34,7 @@ import { Markdown } from "../markdown";
 import { formatWait } from "../taskTime";
 import { startVisiblePolling } from "../visiblePolling";
 import { formatLocalClock, formatLocalDateTime } from "../time";
+import { IssueRail, RailInput } from "./IssueRail";
 
 export function IssueBoard({ viewer, onNavigateProfile }: {
   viewer: AuthUser;
@@ -394,13 +397,11 @@ function IssueSessionView({
   onError: (message: string) => void;
   onNavigateProfile?: () => void;
 }) {
-  const [replyText, setReplyText] = useState("");
-  const [steerText, setSteerText] = useState("");
-  const [answer, setAnswer] = useState("");
   const [ticket, setTicket] = useState("");
   const [busy, setBusy] = useState(false);
-  // 主面板双页签:对话是默认;结论文档(issue-analysis.md)按需再取。
-  const [tab, setTab] = useState<"chat" | "doc">("chat");
+  // 左栏页签:默认"有结论文档先看结论",用户手选优先(换会话才重置);
+  // undefined 表示尚未手选,渲染时按当前 has_analysis 兜底。
+  const [pickedTab, setPickedTab] = useState<"chat" | "doc" | undefined>(undefined);
   const threadRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -409,27 +410,56 @@ function IssueSessionView({
     if (thread) thread.scrollTop = thread.scrollHeight;
   }, [detail.messages.length]);
 
-  async function run(action: () => Promise<unknown>) {
-    if (busy) return;
+  useEffect(() => {
+    // 换一个会话就丢弃手选页签,回到默认入口。
+    setPickedTab(undefined);
+  }, [detail.id]);
+
+  async function perform(action: () => Promise<unknown>): Promise<boolean> {
+    if (busy) return false;
     setBusy(true);
     try {
       await action();
       const next = await getIssue(detail.id);
       onChanged(next);
       onListRefresh();
+      return true;
     } catch (reason) {
       onError(String(reason instanceof Error ? reason.message : reason));
+      return false;
     } finally {
       setBusy(false);
     }
   }
 
-  const waiting = detail.waiting;
-  const questions = waiting?.question?.questions ?? [];
-  const canChat = detail.status === "idle" || detail.status === "interrupted";
-  // 阶段轨迹:按转移账实际发生的顺序画,不预设流程。节点 = 有 stage 的
-  // 转移(agent 声明 + 平台事实),末位即当前;无转移(刚登记)不渲染。
+  const tab = pickedTab ?? (detail.has_analysis ? "doc" : "chat");
+  // 决策卡只在 status 与 waiting 同账时出现;轮询半拍(状态已翻、卡未清)
+  // 不画,避免旧 state_version 提交。
+  const waiting = detail.status === "waiting_user" ? detail.waiting : undefined;
+  // 阶段轨迹:按转移账实际发生顺序画——问题阶段是动态的,这是一条
+  // "旅程线"而非"计划线":只画走过的节点,不补未来占位。
   const trail = (detail.transitions ?? []).filter((entry) => entry.stage);
+
+  async function answer(decision: string, notes?: string): Promise<boolean> {
+    if (!waiting) return false;
+    return perform(() => answerIssue(detail.id, {
+      state_version: waiting.state_version,
+      decision,
+      ...(notes ? { notes } : {}),
+    }));
+  }
+  const sendReply = (text: string) => perform(() => replyIssue(detail.id, text));
+  const sendSteer = (text: string) => perform(() => steerIssue(detail.id, text));
+  function archive() {
+    if (window.confirm("归档后 会话收口不可续聊,凭据将清理。确认归档?")) {
+      void perform(() => controlIssue(detail.id, { action: "archive" }));
+    }
+  }
+  function cancelSession() {
+    if (window.confirm("取消将终止会话并清理现场,确认?")) {
+      void perform(() => controlIssue(detail.id, { action: "cancel" }));
+    }
+  }
 
   return <div className="issue-session">
     <div className="issue-session-head">
@@ -446,17 +476,6 @@ function IssueSessionView({
           {detail.stage_note ? ` · ${detail.stage_note}` : ""}
         </span>
       </div>
-      {trail.length > 0 && <nav className="stage-trail" aria-label="处理阶段轨迹">
-        {trail.map((entry, index) => {
-          const last = index === trail.length - 1;
-          return <span
-            key={`${entry.at}-${index}`}
-            className={`stage-node source-${entry.source}${last ? " current" : ""}`}
-            title={`${entry.source === "agent" ? "AI 上报" : "平台事实"} · ${entry.note}`}>
-            {entry.stage ? ISSUE_STAGE_TEXT[entry.stage] : entry.note}
-          </span>;
-        })}
-      </nav>}
       <div className="issue-session-ticket">
         {detail.ticket
           ? <span className="issue-ticket">{detail.ticket}</span>
@@ -464,7 +483,7 @@ function IssueSessionView({
               <input value={ticket} placeholder="绑定 DTS 单号"
                 onChange={(event) => setTicket(event.target.value)} />
               <button type="button" disabled={!ticket.trim() || busy}
-                onClick={() => run(() => bindIssueTicket(detail.id, ticket.trim()))}>
+                onClick={() => perform(() => bindIssueTicket(detail.id, ticket.trim()))}>
                 绑定
               </button>
             </span>}
@@ -474,11 +493,10 @@ function IssueSessionView({
       </div>
     </div>
 
-    {detail.stage === "done" && detail.status === "idle"
-      && <div className="issue-done-hint">
-        AI 已给出结论——点下方「归档收口」正式关闭;若要继续追问也可以,
-        AI 会把阶段从「结束」切回对应环节。
-      </div>}
+    {/* 阶段英雄轨:独立整行(旅程线),压在耗时折叠条之上 */}
+    <IssueJourneyTrail trail={trail} />
+
+    {/* done ≠ 归档的引导迁到右栏绿卡;顶部横幅随之删除(决策-centric)。 */}
     {detail.error && <div className="issue-session-error" role="alert">
       <span>{detail.error}</span>
       {/* 「Git 令牌」是后端认证类报错的锚点(issueGit.ts),命中即给
@@ -499,109 +517,94 @@ function IssueSessionView({
 
     <IssueCostPanel id={detail.id} />
 
-    {tab === "chat"
-      ? <>
-          <IssuePaneTabs tab="chat" hasAnalysis={detail.has_analysis} onPick={setTab} />
-          <div className="issue-thread" ref={threadRef}>
-            {detail.messages.map((message, index) => <div
-              key={`${message.ts}-${index}`}
-              className={`issue-message role-${message.role}`}>
-              <span className="issue-message-role">
-                {message.role === "user"
-                  ? "我" : message.role === "assistant" ? "AI" : "决定"}
-              </span>
-              <div className="issue-message-body">{message.text}</div>
-            </div>)}
-            {detail.messages.length === 0 && <p className="issue-thread-empty">
-              会话刚建立,AI 正在启动首轮研究。
-            </p>}
-          </div>
-        </>
-      : <>
-          <IssuePaneTabs tab="doc" hasAnalysis={detail.has_analysis} onPick={setTab} />
-          {/* 结论文档按 updated_at 缓存:文档可能被 AI 续写,状态一动就该重读。 */}
-          <IssueConclusionDoc
-            id={detail.id}
-            updatedAt={detail.updated_at}
-          />
-        </>}
-
-    {waiting && <div className="issue-waiting">
-      <strong>AI 的提问(等你的答复)</strong>
-      {waiting.context && <p className="issue-waiting-context">{waiting.context}</p>}
-      {questions.map((question, index) => <div key={index} className="issue-question">
-        <p>{question.question}</p>
-        <div className="issue-question-options">
-          {question.options.map((option) => <button key={option} type="button"
-            disabled={busy}
-            onClick={() => run(() => answerIssue(detail.id, {
-              state_version: waiting.state_version,
-              decision: option,
-            }))}>{option}</button>)}
-        </div>
-      </div>)}
-      <div className="issue-waiting-free">
-        <input value={answer} placeholder="或自由作答"
-          onChange={(event) => setAnswer(event.target.value)} />
-        <button type="button" disabled={!answer.trim() || busy}
-          onClick={() => run(async () => {
-            await answerIssue(detail.id, {
-              state_version: waiting.state_version,
-              decision: answer.trim(),
-            });
-            setAnswer("");
-          })}>提交答复</button>
-      </div>
-    </div>}
-
-    <div className="issue-composer">
-      {detail.status === "running" && <div className="issue-composer-row">
-        <input value={steerText} placeholder="会话运行中——插话(当前工具调用完成后送达)"
-          onChange={(event) => setSteerText(event.target.value)} />
-        <button type="button" disabled={!steerText.trim() || busy}
-          onClick={() => run(async () => {
-            await steerIssue(detail.id, steerText.trim());
-            setSteerText("");
-          })}>插话</button>
-      </div>}
-      {canChat && <div className="issue-composer-row">
-        <textarea rows={2} value={replyText}
-          placeholder={detail.status === "interrupted"
-            ? "服务重启打断了会话——发消息即可从现场续聊"
-            : "继续对话:补充信息、调整方向,或让 AI 继续"}
-          onChange={(event) => setReplyText(event.target.value)} />
-        <button type="button" className="primary" disabled={!replyText.trim() || busy}
-          onClick={() => run(async () => {
-            await replyIssue(detail.id, replyText.trim());
-            setReplyText("");
-          })}>发送</button>
-      </div>}
-      <div className="issue-composer-actions">
-        <button type="button" disabled={busy || ["archived", "canceled", "failed"]
-          .includes(detail.status)}
-          onClick={() => {
-            if (window.confirm("归档后 会话收口不可续聊,凭据将清理。确认归档?")) {
-              void run(() => controlIssue(detail.id, { action: "archive" }));
-            }
-          }}>归档收口</button>
-        <button type="button" className="danger" disabled={busy
-          || ["archived", "canceled", "failed"].includes(detail.status)}
-          onClick={() => {
-            if (window.confirm("取消将终止会话并清理现场,确认?")) {
-              void run(() => controlIssue(detail.id, { action: "cancel" }));
-            }
-          }}>取消</button>
-        {detail.has_analysis && <button type="button" className="issue-analysis-flag"
-          title="查看结论文档"
-          onClick={() => setTab("doc")}>
-          结论文档 issue-analysis.md 已产出 →
-        </button>}
-      </div>
+    {/* 决策-centric 双栏:左=内容(页签),右=下一步动作。窄屏单列时
+        右栏靠 order 提到内容之上,见 style.css 的 1100px 断点。 */}
+    <div className="issue-two-pane">
+      <section className="issue-main-pane" aria-label="会话内容">
+        <IssuePaneTabs tab={tab} hasAnalysis={detail.has_analysis}
+          onPick={(next) => setPickedTab(next)} />
+        {tab === "chat"
+          ? <div className="issue-thread" ref={threadRef}>
+              {detail.messages.map((message, index) => <div
+                key={`${message.ts}-${index}`}
+                className={`issue-message role-${message.role}`}>
+                <span className="issue-message-role">
+                  {message.role === "user"
+                    ? "我" : message.role === "assistant" ? "AI" : "决定"}
+                </span>
+                <FoldableMessageBody text={message.text} />
+              </div>)}
+              {detail.messages.length === 0 && <p className="issue-thread-empty">
+                会话刚建立,AI 正在启动首轮研究。
+              </p>}
+              {/* stage=done 时右栏被归档卡占据,续聊入口退回对话流末尾,
+                  与右栏"左侧对话页签发言"的引导文案互相印证。 */}
+              {!waiting && detail.stage === "done" && detail.status === "idle"
+                && <RailInput kind="reply" disabled={busy}
+                  placeholder="继续追问:补充信息、调整方向,或让 AI 继续"
+                  actionLabel="发送" submit={sendReply} />}
+            </div>
+          : <>
+              {/* 结论文档按 updated_at 缓存:文档可能被 AI 续写,状态一动就该重读。 */}
+              <IssueConclusionDoc id={detail.id} updatedAt={detail.updated_at} />
+            </>}
+      </section>
+      <IssueRail
+        detail={detail}
+        busy={busy}
+        onAnswer={answer}
+        onReply={sendReply}
+        onSteer={sendSteer}
+        onArchive={archive}
+        onCancel={cancelSession}
+        onOpenDoc={() => setPickedTab("doc")}
+      />
     </div>
   </div>;
 }
 
-/** 对话 / 结论文档 的轻量页签(默认对话;文档按需再取)。 */
+/** 阶段英雄轨:旅程线(dates = transitions 账,走过才画)。
+ * 节点是"点在上、词签在下"的小栈,节点间连条渐变着色(调色对抄自
+ * ws-progress 的 nth-child);末位为当前节点——点放大描白边带双光晕,
+ * 词签加粗。来源(AI 上报/平台事实)保留在 title 悬浮里,不参与配色。 */
+function IssueJourneyTrail({ trail }: {
+  trail: NonNullable<IssueDetail["transitions"]>;
+}) {
+  if (trail.length === 0) return null;
+  return <nav className="stage-trail issue-journey" aria-label="处理阶段轨迹">
+    {trail.map((entry, index) => {
+      const last = index === trail.length - 1;
+      return <span
+        key={`${entry.at}-${index}`}
+        className={`issue-jnode${last ? " current" : ""}`}
+        data-source={entry.source}
+        title={`${entry.source === "agent" ? "AI 上报" : "平台事实"} · ${entry.note}`}>
+        <i aria-hidden />
+        <b>{entry.stage ? ISSUE_STAGE_TEXT[entry.stage] : entry.note}</b>
+      </span>;
+    })}
+  </nav>;
+}
+
+/** 对话长文折叠:>600 字的消息先展示前 280 字 + 展开按钮,防止一段长
+ * 日志把整个时间线顶走(口径参考任务侧 EventValue 的 details 折叠)。 */
+function FoldableMessageBody({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const folded = text.length > 600;
+  if (!folded) {
+    return <div className="issue-message-body">{text}</div>;
+  }
+  return <div className="issue-message-body is-folded">
+    {open ? text : `${text.slice(0, 280)}…`}
+    <button type="button" className="issue-message-expand"
+      onClick={() => setOpen((value) => !value)}>
+      {open ? "收起" : `展开全部 ${text.length} 字`}
+    </button>
+  </div>;
+}
+
+/** 对话 / 结论文档 的轻量页签(左栏头;默认口在 IssueSessionView 里定:
+ * 有结论文档先看结论,手选保持到换会话)。 */
 function IssuePaneTabs({
   tab,
   hasAnalysis,
