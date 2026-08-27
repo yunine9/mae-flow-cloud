@@ -337,6 +337,7 @@ export function renderPrePushBuildGuidance(profile: PrePushBuildProfile): string
       "C++ 定向 UT 可按仓库支持使用 `-DDT_COV_INCLUDES=\"*ModuleName*\"` 或 `-DDT_COV_EXCLUDES=\"*ModuleName*\"`；先缩小修复反馈环，收口前再覆盖仓库要求范围。",
       `C++ 只需验证编译时去掉 DT 参数：\`${mvn} compile\` 即可；SDK 与 CMake 依赖由 Maven 插件自动拉取，一般无需手动安装。`,
       "svc_profile、SDK 等若由 Maven 生成或拉取，不要手工 export/伪造；工具链或专用依赖确实缺失时报告 infrastructure_failure。",
+      "C++ 修复循环的增量入口（mcde 源码实锤）：生成目录已存在且构建配置未变时，`source <仓库根>/build/svc_profile.sh && cd <仓库根>/target/build && make -j<按 cpu.max>` 直接驱动已生成的 Makefile——绕开 Maven 插件的重新生成（插件每次调用都会刷 svc_profile/配置头的时间戳，必然全量）。收口仍用 mvn+DT 全口径命令，增量结果不顶账。",
       "C++ 增量的两级现实：①工作区里的生成目录跨轮持久，构建系统若按时间戳增量则天然生效——绝不无谓 clean；②对象级缓存靠 ccache，平台已在容器环境注入 CMAKE_C/CXX_COMPILER_LAUNCHER=ccache 与 CCACHE_BASEDIR（跨任务路径相对化），CMake 重新 configure 时自动接上。编译收口后跑 `ccache -s` 核对命中/文件数并写进收口摘要：缓存文件数在涨说明已接上（首轮全 miss 属正常，是在灌缓存）；仍是 0 个文件且 target 下存在早于本轮的 CMakeCache.txt，说明旧 configure 缓存没带 launcher——删掉该 CMake 生成目录让插件重新 configure（一次性全量，换来后续对象级命中），并把这个决定写进收口摘要。除此之外不要为接 ccache 硬改仓库工具链。",
     );
   }
