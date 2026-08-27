@@ -17,6 +17,7 @@ import {
   statSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { availableParallelism } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AddressInfo } from "node:net";
@@ -489,7 +490,8 @@ async function main(): Promise<void> {
   // 全部进入同一类加固容器。Cloud 控制面、Git 凭据、MR/通知仍留宿主。
   const isolateImage = flag("--isolate-image");
   const isolateMemory = flag("--isolate-memory") ?? "8g";
-  const isolateCpus = flag("--isolate-cpus") ?? "2";
+  const isolateCpus = flag("--isolate-cpus") ?? "8";
+  const hostAvailableCpus = availableParallelism();
   const isolatePids = Number(flag("--isolate-pids") ?? "512");
   const isolateNetwork = flag("--isolate-network") ?? "bridge";
   const isolateUser = flag("--isolate-user");
@@ -514,6 +516,10 @@ async function main(): Promise<void> {
   }
   if (!Number.isInteger(isolatePids) || isolatePids <= 0) {
     console.error("[serve] --isolate-pids 必须是正整数,拒绝启动");
+    process.exit(2);
+  }
+  if (!Number.isFinite(Number(isolateCpus)) || Number(isolateCpus) <= 0) {
+    console.error("[serve] --isolate-cpus 必须是正数,拒绝启动");
     process.exit(2);
   }
   if (!Number.isInteger(buildSlots) || buildSlots <= 0) {
@@ -556,7 +562,12 @@ async function main(): Promise<void> {
   if (isolateImage) {
     console.log(`[serve] 统一任务容器: ${isolateImage}`
       + `;memory=${isolateMemory},cpus=${isolateCpus},pids=${isolatePids}`
-      + `,network=${isolateNetwork},build-slots=${buildSlots}`);
+      + `,network=${isolateNetwork},build-slots=${buildSlots}`
+      + `,host-available-cpus=${hostAvailableCpus}`);
+    if (Number(isolateCpus) > hostAvailableCpus) {
+      console.warn(`[serve] 容器 CPU 上限 ${isolateCpus} 超过服务可用的`
+        + ` ${hostAvailableCpus} 个逻辑 CPU；不会获得额外算力，建议按宿主调整`);
+    }
     console.log(`[serve] 任务容器用户: ${containerUser.user ?? "镜像默认"}`
       + `(${containerUser.reason})`);
     console.log(`[serve] 分仓构建缓存: ${isolateCacheRoot}`);
@@ -702,10 +713,14 @@ async function main(): Promise<void> {
     gitCredential: (account) => auth.gitCredential(account),
     // 月光模式:每张卡到达时现读——开着的直行,关了的恢复审批。
     moonlight: (account) => auth.moonlightEnabled(account),
+    // push 前清单过目:同样现读个人默认(真人缺省即开)。
+    pushConfirmation: (account) => auth.pushConfirmationEnabled(account),
     compactEveryEvents: compactEvery,
     contract: demoContract,
     host,
     delivery,
+    // 环境预热编译:隔离模式显式开启(缺席即关,测试形态零意外会话)。
+    warmup: host && isolateImage ? { enabled: true } : undefined,
     prepush: host ? {
       enabled: true,
       buildSlots,

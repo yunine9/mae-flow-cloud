@@ -52,7 +52,6 @@ import {
   workflowChoices,
   workflowLabel,
 } from "./kernelChoices.ts";
-import { buildRepoMap } from "./repoMap.ts";
 import { collectKnowledge } from "./knowledgeBlocks.ts";
 import {
   AGENT_REQUIREMENT_DOCUMENT,
@@ -133,13 +132,32 @@ import {
   type TaskKnowledgeUsage,
 } from "./knowledgeTrace.ts";
 import {
+  buildHostSkillEffects,
   buildTeamKnowledgeInsights,
+  type HostSkillEffect,
+  type KnowledgeInsightTask,
   type TeamKnowledgeInsights,
 } from "./knowledgeInsights.ts";
 import {
   listHostSkillShelf,
   type HostSkillShelf,
+  type HostSkillShelfEntry,
 } from "./hostSkillShelf.ts";
+import {
+  buildDistillPrompt,
+  collectSkillEvidence,
+  draftWithModel,
+  listSkillCandidates,
+  parseDraft,
+  saveSkillCandidate,
+  type SkillCandidateRecord,
+} from "./skillDistiller.ts";
+
+/** 货架条目在读侧的完整形态:资产事实+效果账+待裁决候选数。 */
+export type DecoratedHostSkillShelf = HostSkillShelf & {
+  skills: Array<HostSkillShelfEntry
+    & { effect?: HostSkillEffect; candidates: number }>;
+};
 import {
   createPrePushGateContract,
   parsePrePushAgentReport,
@@ -150,6 +168,13 @@ import {
   type PrePushRunResult,
   type PrePushRunner,
 } from "./prepushAgent.ts";
+import {
+  parseWarmupReport,
+  warmupMission,
+  type WarmupRunRequest,
+  type WarmupRunResult,
+  type WarmupRunner,
+} from "./warmupAgent.ts";
 import {
   detectPrePushBuildProfile,
   prePushCommandTimeoutSeconds,
@@ -169,6 +194,7 @@ import {
   recordPrePushReport,
   retryPrePushVerification,
   restorePrePushVerification,
+  sameRevision,
   type PrePushExecutionAttestation,
   type PrePushReport,
   type PrePushRevision,
@@ -392,6 +418,9 @@ export interface TaskSummary {
    * 完整保留用于界面查看；这个字段决定 Agent 是否直接内联全文。 */
   requirement_document?: RequirementDocumentMeta;
   status: TaskStatus;
+  /** 执行队列位次(1 起,读侧投影,不落盘):排队的单必须能回答
+   * "排到哪了",否则陈旧 detail 会让它看起来像在推进。 */
+  queue_position?: number;
   /** 读侧统一投影：只解释当前事实，不参与流程迁移或门禁。 */
   focus?: TaskFocus;
   waiting?: WaitingRecord & {
@@ -417,6 +446,18 @@ export interface TaskSummary {
   /** 模型提供方真实上报的任务级累计与最近一分钟吞吐。主/子/prepush
    * Agent 统一计入；缺席表示网关没有可靠 usage，绝不按字符数估算。 */
   token_usage?: TaskTokenUsage;
+  /** 环境预热编译(观测旁路,fail-open):现场就绪后专职会话在编码
+   * 容器里编译基线——验环境+焐缓存+沉淀构建入口。收据绑起跑 SHA,
+   * 基线红=环境/上游的锅;结果绝不构成交付证据(核销在 prepush+
+   * 流水线)。 */
+  baseline_build?: {
+    status: "running" | "passed" | "failed" | "infrastructure_failure";
+    sha: string;
+    detail?: string;
+    build_command?: string;
+    started_at: string;
+    finished_at?: string;
+  };
   workspace: string;
   /** 现场被回收的时刻(ISO)。有值 = 克隆等重货已删,台账还在。
    * 它还是一道闸:恢复时**不许再拿内核状态重新裁决这单**——原件已经
@@ -604,6 +645,16 @@ export interface TaskServiceOptions {
      * 是越权。平台/团队明确允许代点的部署再打开。 */
     resolveDiscussions?: boolean;
   };
+  /** 环境预热编译专员(观测旁路)。**缺席即不启用**——serve/pilot 在
+   * 隔离模式下显式开启;隐式默认开曾把 prepushIntegration 的 linear
+   * 剧本搅乱(预热会话偷吃场景),测试形态必须零意外会话。runner 是
+   * 测试注入口,生产走编码容器里的独立 Pi 会话。 */
+  warmup?: {
+    enabled?: boolean;
+    runner?: WarmupRunner;
+    /** 专员会话墙钟预算,超时如实记 infrastructure_failure(默认 25 分钟)。 */
+    attemptTimeoutMs?: number;
+  };
   /** 推送前的 Cloud-native 编译/UT Agent。生产 serve 默认启用；测试、
    * pilot 或渐进部署不配时保持旧交付路径。runner 是窄测试/私有执行器
    * 注入口，缺席时使用独立 Pi 会话，明确不挂 Mae-Flow Hooks。 */
@@ -687,6 +738,10 @@ export interface TaskServiceOptions {
    * LocalAuth.moonlightEnabled)。开着时该用户任务的人工节点由
    * 系统代答放行,答复里写明预授权与复盘要求;随时可开可关。 */
   moonlight?: (account?: string) => boolean;
+  /** push 前人工确认(交付清单过目)查询口:与 moonlight 同纪律,
+   * 按任务归属人现读现判(serve 接 LocalAuth.pushConfirmationEnabled,
+   * 真人缺省即开)。任务级显式设置(setPushConfirmation)优先于它。 */
+  pushConfirmation?: (account?: string) => boolean;
   log?: (message: string) => void;
 }
 
@@ -921,20 +976,20 @@ interface TaskState {
    * 对"推不动"无效);累计上限防对话式空转。 */
   nudgedStep?: string;
   nudgeCount?: number;
-  /** 任务专属容器(隔离模式):随任务起,随收口停。等人期间会被释放,
-   * 此时为 undefined 而会话仍活着——下一条 Bash 到来时按 containerWorkspace
-   * 重新开。 */
+  /** 任务专属容器(隔离模式):随任务起,随收口停。人工等待期间保持
+   * 原实例不动，保证 Agent 的 HOME、/tmp 与执行环境连续。 */
   container?: TaskCommandContainer;
-  /** 容器该挂哪个目录。需求理解单挂 repositories/,普通单挂仓根;
-   * 释放后重开必须挂回同一个,不能靠猜。 */
+  /** 容器该挂哪个目录。需求理解单挂 repositories/,普通单挂仓根。 */
   containerWorkspace?: string;
-  /** 重开动作的防重入:一个回合里并发的多条 Bash 只该开一个容器。 */
+  /** 防御性重建的防重入:一个回合里并发的多条 Bash 只开一个容器。 */
   containerReopen?: Promise<TaskCommandContainer>;
   /** 合入监控环的防重入锁(内存态):一任务只挂一环。 */
   mergeWatchActive?: boolean;
   /** 流水线证据核销重试的防重入锁。纯宿主 timer，不占 Agent 会话。 */
   evidenceRetryActive?: boolean;
   deliveryRecoveryActive?: boolean;
+  /** 环境预热的防重入锁(内存态):一任务只跑一个预热专员。 */
+  warmupActive?: boolean;
   /** 所有 push 入口共享同一个异步准备动作；避免恢复轮询与会话收口
    * 同时撞进来，为同一 HEAD 启两个编译 Agent。 */
   prepushActive?: Promise<boolean>;
@@ -1356,9 +1411,8 @@ export class TaskService {
   /**
    * 起一个普通编码任务容器并等它就绪。
    *
-   * 抽出来是因为它现在有两个调用点:会话开场,以及等人期间释放后
-   * 第一条 Bash 到来时重新开。两处必须用同一套挂载、限额与 label,
-   * 否则"释放再开"会悄悄换掉隔离参数。
+   * 抽出来让会话开场与活会话缺失容器时的防御性重建共用同一套挂载、
+   * 限额与 label，不能在恢复路径上悄悄换掉隔离参数。
    */
   private async startCodingContainer(
     task: TaskState,
@@ -1428,37 +1482,8 @@ export class TaskService {
   }
 
   /**
-   * 等人期间把闲置容器还给机器。
-   *
-   * 一张审批卡挂一晚上,容器就占一晚上内存和 pids 名额——10~20 人
-   * 共用一台机器时这是真的会把后面的单堵死。释放是安全的:每条
-   * Bash 都是独立 docker exec,本来就不依赖上一条留下的 shell 状态;
-   * 工作区是 bind mount,改动都在宿主盘上。丢的只有 HOME 与 /tmp
-   * 两个 tmpfs,以及上一轮遗留的后台进程——后者本就活不过会话。
-   *
-   * 释放属于旁路,失败只记不抛(不卡死红线);真正 fail-closed 的是
-   * 重新开:开不起来就拒绝执行命令,绝不落回宿主。
-   */
-  private async releaseIdleContainer(
-    task: TaskState,
-    why: string,
-  ): Promise<void> {
-    const container = task.container;
-    if (!container) return;
-    task.container = undefined;
-    try {
-      await container.stop();
-      this.options.log?.(
-        `任务 ${task.summary.id} ${why},已释放闲置任务容器`);
-    } catch (error) {
-      this.options.log?.(
-        `任务 ${task.summary.id} ${why}释放容器失败(下次执行会重新开): `
-        + String(error));
-    }
-  }
-
-  /**
-   * 取得可用的任务容器:还在就直接用,等人期间被释放过就重新开。
+   * 取得可用的任务容器:正常会话始终复用原实例；句柄异常缺失时才
+   * 防御性重建。人工等待本身绝不走这里的重建分支。
    *
    * 开不起来一律抛给调用方 → 变成这条 Bash 的执行失败。这里绝不
    * 能退回宿主执行:那是"要隔离就真隔离"红线的正面。
@@ -1467,11 +1492,11 @@ export class TaskService {
     task: TaskState,
   ): Promise<TaskCommandContainer> {
     if (task.container) return task.container;
+    const epoch = task.controlEpoch;
     if (!task.containerReopen) {
       // 重开是异步的,期间用户完全可能按下暂停/取消——那条路径刚
       // 停完容器就把 task.container 置空,我们再挂一个上去就是无主
       // 泄漏。拿 epoch 当凭证:换了就地自毁,不往任务上挂。
-      const epoch = task.controlEpoch;
       task.containerReopen = this.startCodingContainer(task)
         .then(async (container) => {
           if (!this.current(task, epoch)) {
@@ -1756,12 +1781,99 @@ export class TaskService {
   knowledgeInsights(): TeamKnowledgeInsights & { host_skills: HostSkillShelf } {
     // 货架(部署态资产)与足迹(消费聚合)同口径一次给全:足迹只看得见
     // 被任务带过的资源,放坏了的 skill 在足迹里隐形,货架把它照出来。
+    const projected = [...this.tasks.values()]
+      .map((task) => this.project(task, true));
     return {
-      ...buildTeamKnowledgeInsights([...this.tasks.values()]
-        .map((task) => this.project(task, true))),
-      host_skills: listHostSkillShelf(this.options.dataDir),
+      ...buildTeamKnowledgeInsights(projected),
+      host_skills: this.decorateHostSkillShelf(projected),
     };
   }
+
+  /** 货架 + 效果账(飞轮第 3 步):每个条目带消费率与 prepush 一次过
+   * 对照,低消费/高摩擦亮修订信号。/skills 管理接口与知识效能页共用
+   * 这一份,数字口径不许有两套。 */
+  hostSkillShelf(): DecoratedHostSkillShelf {
+    return this.decorateHostSkillShelf([...this.tasks.values()]
+      .map((task) => this.project(task, true)));
+  }
+
+  private decorateHostSkillShelf(
+    tasks: KnowledgeInsightTask[],
+  ): DecoratedHostSkillShelf {
+    const shelf = listHostSkillShelf(this.options.dataDir);
+    const effects = buildHostSkillEffects(tasks);
+    return {
+      ...shelf,
+      skills: shelf.skills.map((skill) => {
+        const directory = skill.path.includes("/")
+          ? skill.path.split("/")[0] : undefined;
+        return {
+          ...skill,
+          effect: effects.get(skill.name),
+          candidates: directory
+            ? listSkillCandidates(this.options.dataDir, directory)
+              .filter((item) => item.status === "drafted").length
+            : 0,
+        };
+      }),
+    };
+  }
+
+  /** 沉淀环(roadmap §9):从读过该 skill 的任务现场起草修订稿,
+   * 落候选区等管理员裁决。旁路纪律:单发模型调用带硬超时,同一时刻
+   * 只跑一份,失败如实报错;绝不自动上架。 */
+  async distillSkillDraft(
+    directory: string,
+    operator: string,
+  ): Promise<SkillCandidateRecord> {
+    if (this.distillActive) {
+      throw new TaskControlError("已有一份修订稿在起草中,请稍候");
+    }
+    const shelf = listHostSkillShelf(this.options.dataDir);
+    const entry = shelf.skills.find((skill) =>
+      skill.path.split("/")[0] === directory);
+    if (!entry) {
+      throw new TaskControlError(`货架上没有这个 skill: ${directory}`);
+    }
+    const active = this.activeModelChoice();
+    if (!active) {
+      throw new TaskControlError("模型网关未配置,无法起草(管理页 → 模型网关)");
+    }
+    const projected = [...this.tasks.values()]
+      .map((task) => this.project(task, true));
+    const evidence = collectSkillEvidence(projected, entry.name);
+    if (!evidence.taskIds.length) {
+      throw new TaskControlError(
+        "还没有任务真正读过这个 skill,证据不足以起草——先让它被用起来");
+    }
+    const skillContent = readFileSync(
+      join(this.options.dataDir, "skills", ...entry.path.split("/")), "utf-8");
+    const prompt = buildDistillPrompt({
+      skillName: entry.name,
+      skillContent,
+      effect: buildHostSkillEffects(projected).get(entry.name),
+      evidenceText: evidence.text,
+    });
+    this.distillActive = true;
+    try {
+      const raw = await draftWithModel({
+        modelsJson: this.activeModelsJson(),
+        provider: active.provider,
+        model: active.model,
+        system: prompt.system,
+        user: prompt.user,
+      });
+      const draft = parseDraft(raw);
+      return saveSkillCandidate(this.options.dataDir, directory, {
+        skill: draft.skill,
+        notes: draft.notes,
+        evidence: evidence.text,
+      }, evidence.taskIds, operator);
+    } finally {
+      this.distillActive = false;
+    }
+  }
+  private distillActive = false;
 
   get(id: string): TaskSummary | undefined {
     const task = this.tasks.get(id);
@@ -2118,8 +2230,12 @@ export class TaskService {
             this.options.host?.kernelRoot,
             summary.waiting?.step,
           );
+    // 排队位次投影:status=queued 时人第一想知道的是"排到哪了"。
+    const queueIndex = summary.status === "queued"
+      ? this.queue.indexOf(summary.id) : -1;
     const projected = {
       ...summary,
+      ...(queueIndex >= 0 ? { queue_position: queueIndex + 1 } : {}),
       title: summary.title ?? taskTitle(summary.requirement),
       updated_at: summary.updated_at ?? summary.created_at,
       last_progress_at: summary.last_progress_at
@@ -2316,6 +2432,216 @@ export class TaskService {
       return undefined; // prepush/ 还没建:本任务尚未走到推送前验证
     }
     return best ? join(best.dir, "events.jsonl") : undefined;
+  }
+
+  warmupEventLogPath(id: string): string | undefined {
+    const task = this.tasks.get(id);
+    if (!task) return undefined;
+    const path = join(task.summary.workspace, "warmup", "events.jsonl");
+    return existsSync(path) ? path : undefined;
+  }
+
+  /** 环境预热编译(观测旁路,fail-open):现场就绪即后台开跑,与主
+   * Agent 的需求澄清并行——那段时间没人动代码,墙钟是免费的。任何
+   * 失败只记账+留日志,绝不影响任务状态;"不许卡死"红线下它连等待
+   * 都不引入。 */
+  private startBaselineWarmup(task: TaskState, epoch: number): void {
+    try {
+      const configured = this.options.warmup;
+      if (!configured || configured.enabled === false) return;
+      // 原生路径要真容器;测试注入 runner 时放行。
+      if (!configured.runner && !this.options.isolation) return;
+      if (this.isRequirementAnalysis(task)) return; // 分析单没有可编译的仓
+      if (!task.cwd || task.warmupActive) return;
+      // 恢复续跑的单不预热:Agent 可能已经在写代码,此时编译的是
+      // 半成品,报出来的"基线红"是冤案(内网实锤:恢复单把 Agent
+      // 在写的 ProbeTestService 编了,报基线缺 import)。缓存反正
+      // 已在此前的编译里焐热,恢复场景预热没有增量价值。
+      if (task.resume) return;
+      // 收过口的收据不重跑(重启恢复同理:缓存已经热了);
+      // "running" 而无 finished_at 是崩溃残留,重跑并覆盖。
+      if (task.summary.baseline_build?.finished_at) return;
+      task.warmupActive = true;
+      void this.performBaselineWarmup(task, epoch)
+        .catch((error) => this.options.log?.(
+          `任务 ${task.summary.id} 环境预热异常(fail-open): ${String(error)}`))
+        .finally(() => { task.warmupActive = false; });
+    } catch (error) {
+      this.options.log?.(
+        `任务 ${task.summary.id} 环境预热启动失败(fail-open): ${String(error)}`);
+    }
+  }
+
+  private async performBaselineWarmup(
+    task: TaskState,
+    epoch: number,
+  ): Promise<void> {
+    const head = await runSafeWorktreeGitAsync(
+      task.cwd!, ["rev-parse", "--verify", "HEAD"], { timeoutMs: 30_000 });
+    const sha = String(head.stdout ?? "").trim();
+    const startedAt = new Date().toISOString();
+    if (head.status !== 0 || !sha) {
+      task.summary.baseline_build = {
+        status: "infrastructure_failure", sha: "",
+        detail: `读取基线 HEAD 失败: ${String(head.stderr ?? "").slice(0, 200)}`,
+        started_at: startedAt, finished_at: new Date().toISOString(),
+      };
+      this.persist(task);
+      return;
+    }
+    // 工作区已有业务改动 = 这不再是基线,预热收据会把半成品的编译错
+    // 扣到"环境/上游"头上——宁可不预热,不出冤案。不落收据:没跑
+    // 就是没跑,不伪装成基础设施故障。
+    const dirty = await this.prePushDirtyPaths(task);
+    if (dirty.length) {
+      this.options.log?.(
+        `任务 ${task.summary.id} 工作区已有改动(${dirty.length} 处),`
+        + "跳过基线预热——预热只评判基线代码");
+      return;
+    }
+    task.summary.baseline_build = {
+      status: "running", sha, started_at: startedAt,
+    };
+    this.persist(task);
+    this.options.log?.(
+      `任务 ${task.summary.id} 环境预热开跑(基线 ${sha.slice(0, 12)})`);
+    const request: WarmupRunRequest = {
+      taskId: task.summary.id, workspace: task.cwd!, sha,
+    };
+    let result: WarmupRunResult;
+    try {
+      result = await (this.options.warmup?.runner
+        ? this.options.warmup.runner(request)
+        : this.runCloudWarmupAgent(task, request));
+    } catch (error) {
+      result = {
+        status: "infrastructure_failure",
+        message: String(
+          error instanceof Error ? error.message : error).slice(0, 300),
+      };
+    }
+    if (!this.tasks.has(task.summary.id)) return;
+    task.summary.baseline_build = {
+      status: result.status,
+      sha,
+      ...(result.message ? { detail: result.message.slice(0, 600) } : {}),
+      ...(result.build_command
+        ? { build_command: result.build_command } : {}),
+      started_at: startedAt,
+      finished_at: new Date().toISOString(),
+    };
+    this.persist(task);
+    void epoch; // 收据不锁 epoch:会话重建了,预热事实照样成立。
+    this.options.log?.(
+      `任务 ${task.summary.id} 环境预热收口: ${result.status}`
+      + (result.message ? ` — ${result.message.slice(0, 120)}` : ""));
+  }
+
+  /** 预热原生执行器:编码容器里的独立 Pi 会话。与 prepush 同构但更简
+   * ——不修复、不建容器、不产证据。同一容器两个会话不违反"两个容器
+   * 不写同一工作区";此刻主 Agent 还在需求澄清,工作区没人写。 */
+  private async runCloudWarmupAgent(
+    task: TaskState,
+    request: WarmupRunRequest,
+  ): Promise<WarmupRunResult> {
+    if (!task.cwd) throw new Error("环境预热缺少代码工作区");
+    const agentDir = join(task.summary.workspace, "pi-agent");
+    mkdirSync(agentDir, { recursive: true });
+    this.hardenAgentGitBoundary(agentDir, task.cwd);
+    const modelOverride = this.options.settings?.models() ?? {};
+    writeFileSync(join(agentDir, "models.json"),
+      JSON.stringify(modelOverride.json ?? this.options.modelsJson));
+    const runRoot = join(task.summary.workspace, "warmup");
+    mkdirSync(runRoot, { recursive: true });
+    const eventLog = new EventLog(join(runRoot, "events.jsonl"));
+    const transcript = new TranscriptStore(
+      join(runRoot, "transcript.jsonl"), "main");
+    const attemptTimeoutMs =
+      this.options.warmup?.attemptTimeoutMs ?? 25 * 60_000;
+    let timedOut = false;
+    const driver = await CloudSession.create({
+      taskId: `${task.summary.id}:warmup`,
+      workspace: task.cwd,
+      agentDir,
+      hostSkillsDir: join(this.options.dataDir, "skills"),
+      repositorySkillPaths: [],
+      repositorySkillResources: [],
+      repositoryKnowledge: [],
+      knowledgeTrace: this.knowledgeTrace(task, task.cwd),
+      provider: task.summary.model_choice?.provider
+        ?? modelOverride.provider ?? this.options.provider,
+      model: task.summary.model_choice?.model
+        ?? modelOverride.model ?? this.options.model,
+      eventLog,
+      transcript,
+      gate: new GateService({
+        contract: createPrePushGateContract(this.options.contract),
+        workspace: task.cwd,
+        cwd: task.cwd,
+        log: this.options.log,
+        failClosed: Boolean(this.options.host),
+      }),
+      humanGate: task.humanGate,
+      allowHumanQuestions: false,
+      sessionId: "warmup",
+      currentStep: () => "环境预热编译",
+      compactAnchor: () =>
+        `环境预热编译任务(基线 ${request.sha.slice(0, 12)})`,
+      onTokenUsage: (sample) => this.recordTaskTokenUsage(task, sample),
+      bashOperations: this.options.isolation
+        ? {
+            exec: async (command, dir, execOptions) =>
+              (await this.activeTaskContainer(task))
+                .exec(command, dir, execOptions),
+          }
+        : undefined,
+      afterFileMutation: this.options.isolation
+        ? (path) => {
+          repairContainerMutationOwnership({
+            workspace: task.cwd!,
+            path,
+            user: this.options.isolation?.user,
+          });
+        }
+        : undefined,
+      log: this.options.log,
+    });
+    const timer = setTimeout(() => {
+      timedOut = true;
+      void driver.abort().catch(() => undefined);
+    }, attemptTimeoutMs);
+    timer.unref?.();
+    try {
+      let outcome = await driver.start(warmupMission(
+        request, Math.round(attemptTimeoutMs / 60_000)));
+      for (let correction = 0; correction < 2; correction += 1) {
+        if (timedOut) {
+          return {
+            status: "infrastructure_failure",
+            message: `环境预热超过 ${Math.ceil(attemptTimeoutMs / 60_000)} `
+              + "分钟预算,已安全停止;不代表基线编译失败",
+          };
+        }
+        if (outcome.status === "session_ended") {
+          return {
+            status: "infrastructure_failure",
+            message: outcome.detail ?? outcome.reason ?? "预热会话异常结束",
+          };
+        }
+        const report = parseWarmupReport(driver.finalReply());
+        if (report) return report;
+        // 报告缺失只是格式问题,给一次补交机会,别把整轮预热判死。
+        outcome = await driver.continueWith(
+          "预热尚未收口:请按任务说明输出单行 JSON 的 <warmup-result> 结构。");
+      }
+      return {
+        status: "infrastructure_failure",
+        message: "预热会话未产出合法的 <warmup-result> 报告",
+      };
+    } finally {
+      clearTimeout(timer);
+      driver.dispose();
+    }
   }
 
   /** 行为摘要(只读旁路):事件流折叠成"此刻在干嘛/干了什么/有什么
@@ -2606,6 +2932,23 @@ export class TaskService {
       throw new NotFoundError("有批注不存在或已经送出去了");
     }
     return picked;
+  }
+
+  /** 决定卡与“主动送批注”不是同一种提交语义。
+   *
+   * 页面打开后，批注可能先通过插话通道从 draft 变成 sent；随后提交的
+   * 决定仍携带旧 ID。它已经送达，不该重复发送，更不能因此拦住本次新写
+   * 的补充说明。存在但已 sent/verified/dropped 的条目幂等跳过；真正不
+   * 存在的 ID 仍拒绝，避免把跨任务或损坏的引用静默吞掉。 */
+  private pickDecisionDrafts(task: TaskState, ids: string[]): Annotation[] {
+    const wanted = new Set(ids);
+    const items = this.annotations(task).list();
+    const found = new Set(items.map((item) => item.id));
+    if ([...wanted].some((id) => !found.has(id))) {
+      throw new NotFoundError("有批注不存在，请刷新后重试");
+    }
+    return items.filter((item) =>
+      item.status === "draft" && wanted.has(item.id));
   }
 
   /** MR/流水线连接是部署基础设施，管理员页面只读自检、不暴露地址。 */
@@ -3583,6 +3926,40 @@ export class TaskService {
    * 流水线。停机重跑=人工背书"外部的事我办完了/值得再试":清掉
    * 停机账本,同 SHA 也给全新的修复机会(halted 的 last_sha 刹车
    * 挡的是"机器无人看管地空转",不该挡人工明确授权的再来一次)。 */
+  /** 用户显式跳过推送前验证(仅失败停机后可用)。本地验证是省流水线
+   * 的前闸,不是权威——权威裁决在绑 SHA 流水线,所以这是"fail-closed
+   * 停下后由人接手"的合法出路,不是自动降级。跳过绑当下 HEAD:之后
+   * 出现新提交,跳过即失效,重新走真验证(旧拍板不背书新代码)。 */
+  async skipPrePushVerification(id: string): Promise<TaskSummary> {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    if (task.prepushActive) {
+      throw new TaskControlError("推送前验证正在进行中,不能跳过");
+    }
+    const prepush = task.summary.delivery?.prepush;
+    if (!prepush
+        || !["blocked", "environment_error"].includes(prepush.state)) {
+      throw new TaskControlError(
+        "只有推送前验证失败停机后才能跳过;当前没有可跳过的失败验证");
+    }
+    if (!task.cwd) {
+      throw new TaskControlError("代码现场不可用,无法绑定跳过时刻的 HEAD");
+    }
+    const revision = await this.prePushRevision(task);
+    this.setPrePushState(task, {
+      ...prepush,
+      state: "user_skipped",
+      sha: revision.sha,
+      workspace_fingerprint: revision.workspace_fingerprint,
+      message: "用户选择跳过本地验证,编译与 UT 交由权威流水线裁决",
+      updated_at: new Date().toISOString(),
+    });
+    this.persist(task);
+    // 复用「重跑续推」的恢复链路续接交付;交付环走到 preparePush 时
+    // 命中同 HEAD 的跳过放行,不再起验证 Agent。
+    return this.retry(id);
+  }
+
   retry(id: string): TaskSummary {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
@@ -4388,7 +4765,7 @@ export class TaskService {
     const picked = handlesFeedback
       ? drafts
       : input.annotation_ids?.length
-        ? this.pickDrafts(task, input.annotation_ids) : [];
+        ? this.pickDecisionDrafts(task, input.annotation_ids) : [];
     // 批注与自由说明都进 notes，不污染内核用于 choice receipt 的选项。
     const notes = [
       normalized.notes,
@@ -5909,13 +6286,7 @@ export class TaskService {
           + `选项**(系统会替用户选中含「${task.summary.lane}」的那一`
           + `项)。禁止自造"是/否"确认卡,禁止替用户改选。`;
       }
-      // 仓库地图(加餐):大仓里模型乱 grep 烧轮次,开场先给一张按被
-      // 引用程度排序的路标。只在内核模式生成(有真克隆才有仓可画);
-      // 每次会话都重画——修复/重建会话面对的是改动后的工作区,旧图作废。
-      // fail-open:空地图不上桌,带预算绝不拖住启动(不卡死红线)。
       if (!analysisOnly && this.options.host) {
-        const repoMap = buildRepoMap(cwd);
-        if (repoMap.markdown) prompt = `${prompt}\n\n${repoMap.markdown}`;
         // 仓里的知识块:命中触发词才注入(知识在仓不在平台,换个仓
         // 就是换套知识)。匹配语料 = 需求原文 + 本轮失败详情——修复
         // 会话该被日志里的关键词(如 flyway/覆盖率)召唤出对应规矩。
@@ -5952,8 +6323,8 @@ export class TaskService {
       // 容器隔离:bash 进任务专属容器(工作区同路径挂载),
       // 起不来直接抛=任务 failed——静默降级回宿主是假隔离。
       if (this.options.isolation) {
-        // 工作区记在任务上:等人期间容器会被释放,重新开时得知道
-        // 当时挂的是哪个目录(需求理解单的 cwd 是 repositories/)。
+        // 工作区记在任务上:防御性重建必须挂回同一个目录，需求理解单
+        // 的 cwd 是 repositories/，普通任务则是仓库根。
         task.containerWorkspace = cwd;
         task.container = await this.startCodingContainer(task);
         if (!this.current(task, epoch)) {
@@ -6032,6 +6403,8 @@ export class TaskService {
         await this.finishPause(task, "running");
         return;
       }
+      // 环境预热与主 Agent 并行:此刻它在需求澄清,没人动代码。
+      this.startBaselineWarmup(task, epoch);
       // 重建会话:恢复期收到的决定先补登记(tool_result 与崩溃前的
       // tool_use 行 join,答案进内核台账),再从内核 current 续跑。
       // 内核模式下克隆丢失=现场没了,决定无处可注,只能从头来。
@@ -6889,6 +7262,19 @@ export class TaskService {
   ): Promise<boolean> {
     if (!this.options.prepush?.enabled) return true;
     if (task.prepushActive) return task.prepushActive;
+    // 用户显式拍板跳过本地验证:绑 HEAD 放行,交由权威流水线裁决。
+    // HEAD 变了(修复/新提交)跳过即失效,重新走真验证——旧拍板不
+    // 背书新代码,与收据同一条纪律。
+    const skipped = task.summary.delivery?.prepush;
+    if (skipped?.state === "user_skipped") {
+      const revision = await this.prePushRevision(task);
+      if (sameRevision(skipped, revision)) {
+        this.options.log?.(
+          `任务 ${task.summary.id} 按用户决定跳过推送前验证`
+          + `(HEAD ${revision.sha.slice(0, 12)}),交由流水线裁决`);
+        return true;
+      }
+    }
     const running = this.performPrePush(task, branch, baseline, epoch);
     task.prepushActive = running;
     try {
@@ -6898,7 +7284,8 @@ export class TaskService {
     }
   }
 
-  /** push 前人工确认闸(任务级开关,默认关=直接放行)。
+  /** push 前人工确认闸。要不要举卡:任务级显式设置优先,否则按归属
+   * 人的个人默认现读现判(真人缺省即开;无账号链路不举卡)。
    * 已确认的清单严格绑 HEAD:prepush 修复产生新提交后不判死,而是
    * 作废旧卡、按新快照重新举卡——机器把 delta 摆到人面前,而不是
    * failed 了喊人来猜。同 HEAD 的卡按 call_id 幂等,重启不重复出卡。 */
@@ -6906,7 +7293,10 @@ export class TaskService {
     task: TaskState,
     branch: string,
   ): Promise<boolean> {
-    if (!task.summary.push_confirmation || !task.cwd) return true;
+    const required = task.summary.push_confirmation
+      ?? this.options.pushConfirmation?.(task.summary.luban_account)
+      ?? false;
+    if (!required || !task.cwd) return true;
     const snapshot = await deliveryChangeSnapshot(task.cwd);
     if (!snapshot?.baseline) {
       this.markVerificationStalled(task,
@@ -6930,7 +7320,20 @@ export class TaskService {
     const extras = snapshot.workspace_paths
       .filter((path) => !committed.includes(path));
     const limit = 200;
+    // 这张卡的使命必须自己说清,而且重心是"请检视代码"——编排瘦身后
+    // 云端不再中途单开代码检视步,这里就是人审代码的地方;只说"核对
+    // 清单"会让人以为对对文件名就行(实锤:用户不知道该在这里审代码,
+    // 也找不到勾选、不知道确认之后还有编译闸)。
     const context = [
+      "**这是推送前最后一道人工确认:请检视代码。**",
+      "本任务从基线到 HEAD 的全部代码与文档增量都在「检视材料 → "
+      + "本任务变更」——请逐文件检视 diff,发现问题可直接在代码行上留批注,"
+      + "并选「需要调整代码」让 Agent 修改。",
+      "顺带核对交付清单:文件树每行左侧的勾选框默认全选,不该交付的文件"
+      + "取消勾选,Agent 整理提交后会重新请你确认。",
+      "检视通过后宿主才执行推送前编译与 UT;若修复产生新提交,会按新增量"
+      + "重新请你检视;全部通过后才推送并创建 MR。",
+      "",
       `即将向分支 ${branch} 推送以下 ${committed.length} 个文件`
       + `(基线 ${snapshot.baseline.slice(0, 12)} → HEAD ${snapshot.head.slice(0, 12)}):`,
       ...committed.slice(0, limit).map((path) => `- ${path}`),
@@ -6945,7 +7348,7 @@ export class TaskService {
       step: CLOUD_PUSH_CONFIRM_STEP,
       callId,
       questionInput: { questions: [{
-        question: `推送前确认:本次交付 ${committed.length} 个文件到 ${branch},清单是否正确?`,
+        question: `推送前检视:请检视本次代码增量(${committed.length} 个文件 → ${branch}),是否通过并按清单推送?`,
         options: [PUSH_CONFIRM_ACCEPT, PUSH_CONFIRM_REWORK],
       }] },
       context,
@@ -9261,10 +9664,8 @@ export class TaskService {
           // 自动交卷=马上就要接着跑,别做"停了再开"的无用功。
           setImmediate(() => void this.autoDecide(task, auto));
         } else {
-          // 真·等人:一张卡可能挂一晚上,容器不该陪着占内存和 pids
-          // 名额。会话仍活着(pi 停在工具调用里),答复到达后第一条
-          // Bash 会把容器重新开起来。
-          await this.releaseIdleContainer(task, "等待人工决定");
+          // 真·等人时会话与容器是一个连续执行现场。8g 是上限而非预占；
+          // 为省空闲资源销毁容器会丢 HOME、/tmp，并让续跑撞上重建竞态。
           this.notifyWaiting(task);
         }
         break;

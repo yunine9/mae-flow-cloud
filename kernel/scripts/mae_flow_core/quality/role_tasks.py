@@ -2,7 +2,6 @@
 
 
 ROLE_STEPS = {
-    "code-review": {"build_agent_review"},
     "story-generate": {"story"},
     "story-review": {"story"},
     "grill-critic": {"grill"},

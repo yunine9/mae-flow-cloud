@@ -141,7 +141,6 @@ for f in ("scripts/mae-flow.py", "scripts/comet_compat.py", "hooks/dispatch.py",
           "scripts/tests/test_compile_wait_instructions.py",
           "scripts/tests/test_stable_recovery_contract.py",
           "scripts/tests/test_agent_observations.py",
-          "scripts/tests/test_quality_task_inputs.py",
           "scripts/tests/test_project_resources.py",
           "scripts/tests/test_local_spec.py",
           "scripts/tests/test_behavior_baseline.py",
@@ -160,7 +159,6 @@ for f in ("scripts/mae-flow.py", "scripts/comet_compat.py", "hooks/dispatch.py",
           "scripts/tests/test_quality_codecheck_use_cases.py",
           "scripts/tests/test_quality_codecheck_state.py",
           "scripts/tests/test_quality_task_card_use_cases.py",
-          "scripts/tests/test_quality_evidence.py",
           "scripts/tests/test_delivery_models.py",
           "scripts/tests/test_delivery_standalone_use_cases.py",
           "scripts/tests/test_delivery_moonlight_use_cases.py",
@@ -249,34 +247,27 @@ if flow:
     unreg = used - set(mf.EVIDENCE)
     check("证据类型全部注册", not unreg, str(unreg))
 
-    # 4.5 review-fix 使用统一实现/编译/检视链，再进入专属质量链
-    check("review-fix 复用整体实现和质量链",
-          steps["rf_triage"].get("next") == "build"
-          and steps["build_review"]["next"]["continue"] == "build_commit"
-          and steps["build_commit"]["next"]["review"] == "rf_codecheck"
-          and steps["rf_codecheck"].get("next") == "rf_ut"
-          and steps["rf_ut"].get("next") == "domain_archive")
+    # 4.5 编排瘦身后的流程契约(2026-08-25):编码段=宽 build 步,
+    # 出口验收在 prepush+权威流水线+MR 检视;结构性红线在
+    # tests/test_flow_liveness.py,此处只保留冒烟级别的锚点。
     compatibility_entries = set(flow.get("compatibility_entries", ()))
     actual_ack_steps = {
         sid for sid, step in steps.items()
         if step.get("user_ack") and sid not in compatibility_entries}
-    check("人工确认只保留真实选择、代码检视和不可逆决策",
+    check("人工确认只保留真实选择与不可逆决策",
           actual_ack_steps == {
-              "config_confirm", "workflow_select", "code_reviewer_ask",
+              "config_confirm", "workflow_select",
               "open", "story", "hf_open", "tw_open",
-              "build_review", "quality_review",
           }, str(sorted(actual_ack_steps)))
-    check("所有工作流直接进入整体编码",
+    check("所有工作流直接进入宽 build 步",
           steps.get("hf_open", {}).get("next") == "build"
           and steps.get("tw_open", {}).get("next") == "build"
-          and steps.get("rf_triage", {}).get("next") == "build")
-    check("整体编码强制编译并停靠用户代码检视",
-          any(e.get("agent") == "COMPILE" for e in steps.get("build", {}).get("evidence", []))
-          and steps.get("build", {}).get("next", {}).get("disabled") == "build_review"
-          and steps.get("build", {}).get("next", {}).get("enabled") == "build_agent_review"
-          and steps.get("build_agent_review", {}).get("next") == "build_review"
-          and steps.get("build_review", {}).get("next", {}).get("continue") == "build_commit"
-          and steps.get("build_review", {}).get("next", {}).get("revise") == "build_rework")
+          and steps.get("rf_triage", {}).get("next") == "build"
+          and steps.get("story", {}).get("next") == "build")
+    check("宽 build 步自由且零编排",
+          steps.get("build", {}).get("allow_source_edit") is True
+          and steps.get("build", {}).get("evidence") == []
+          and steps.get("build", {}).get("next") == "domain_archive")
     check("完整开发固定执行 Grill、本地 Spec 和 Story",
           steps.get("branch_create", {}).get("next", {}).get("full") == "grill"
           and steps.get("grill", {}).get("next") == "open"
@@ -290,54 +281,26 @@ if flow:
           and "local-spec validate" in step_text("open")
           and "唯一一次确认" in step_text("open")
           and "候选题为 0" in step_text("grill")
-          and "只向用户裁决一次" in step_text("verify_spec")
-          and "只向用户确认一次" in step_text("domain_archive")
-          and "domain-archive apply --message-id" in step_text("domain_archive"))
-    check("review UT 只接受 PASS",
-          steps.get("rf_ut", {}).get("evidence", [{}])[0].get("statuses") == ["PASS"])
-    check("review UT 改源码后回流统一编译检视并恢复 CodeCheck",
-          steps.get("rf_ut", {}).get("source_change_recheck") == "quality_recompile"
-          and steps.get("rf_ut", {}).get("quality_review_resume") == "rf_codecheck")
-    check("主流程 UT 改源码后回流统一编译检视且不重跑 Ponytail",
-          steps.get("verify_ut", {}).get("source_change_recheck") == "quality_recompile"
-          and steps.get("quality_recompile", {}).get("next") == "quality_review"
-          and steps.get("verify_ut", {}).get("quality_review_resume") == "verify_codecheck")
-    check("小改流程在统一实现提交后进入规范检查和 UT",
-          steps.get("build_commit", {}).get("next", {}).get("tweak") == "tw_codecheck"
-          and steps.get("tw_codecheck", {}).get("next") == "tw_ut"
-          and steps.get("tw_ut", {}).get("next") == "tw_verify")
-    check("三条质量链均在最终推送前生成精确交付清单",
-          steps.get("verify_spec", {}).get("next") == "domain_archive"
-          and steps.get("tw_verify", {}).get("next") == "domain_archive"
-          and steps.get("rf_ut", {}).get("next") == "domain_archive"
-          and steps.get("domain_archive", {}).get("next") == "delivery_review"
-          and not steps.get("delivery_review", {}).get("skip_in_moonlight")
+          and "domain-archive apply" in step_text("domain_archive"))
+    check("build 步文档给出出门清单与真实出口",
+          "出门清单" in step_text("build")
+          and "推送前" in step_text("build")
+          and "流水线" in step_text("build"))
+    check("交付收口链完整且带证据",
+          steps.get("domain_archive", {}).get("next") == "delivery_review"
+          and steps.get("delivery_review", {}).get("next") == "push"
           and any(
               item.get("type") == "delivery_manifest_committed"
-              for item in steps.get("delivery_review", {}).get("evidence", [])))
-    check("小改规范检查不可直接跳过", not steps.get("tw_codecheck", {}).get("skippable"))
-    check("精简改源码后重新编译并直接继续质量链(检视延后到 UT 之后)",
-          steps.get("verify_ponytail", {}).get("source_change_next") == "verify_post_ponytail_compile"
-          and steps.get("verify_ponytail", {}).get("source_change_defer_review") is True
-          and steps.get("verify_post_ponytail_compile", {}).get("next") == "verify_codecheck")
-    check("规范修复改源码后重新编译并继续 UT(检视同样延后)",
-          steps.get("verify_codecheck", {}).get("source_change_next") == "verify_codecheck_compile"
-          and steps.get("verify_codecheck", {}).get("source_change_defer_review") is True
-          and steps.get("verify_codecheck_compile", {}).get("next") == "verify_ut")
-    check("质量链末尾只保留一次统一人工检视",
-          steps.get("verify_ut", {}).get("test_change_review_resume") == "verify_spec"
-          and steps.get("quality_review", {}).get("next", {}).get("continue") == "quality_commit")
-    check("三条流程共用 CodeCheck 机器协议",
-          all(steps.get(x, {}).get("evidence", [{}])[0].get("type") == "review_codecheck"
-              for x in ("verify_codecheck", "tw_codecheck", "rf_codecheck")))
-    # 稳定恢复流程的业务 Spec 是本地过程件。旧 OpenSpec 的
-    # spec_validate 只服务 change.md，不能继续冒充本地 Spec 校验。
-    open_evidence = steps.get("open", {}).get("evidence", [])
+              for item in steps.get("delivery_review", {}).get("evidence", []))
+          and any(
+              item.get("type") == "pipeline_obligations_passed"
+              for item in steps.get("external_verify", {}).get("evidence", [])))
     check("本地 Spec 校验与 Grill 输入链在位",
-          any(e.get("type") == "local_spec_valid" for e in open_evidence)
+          any(e.get("type") == "local_spec_valid"
+              for e in steps.get("open", {}).get("evidence", []))
           and any(
               ".mae-flow-work/{单号}/grill.md" in e.get("any", [])
-              for e in open_evidence)
+              for e in steps.get("open", {}).get("evidence", []))
           and "local-spec validate" in step_text("open")
           and steps.get("open", {}).get("next") == "story")
 
@@ -390,168 +353,6 @@ if flow:
         os.unlink(codecheck_json)
 
     mf.FLOW = flow
-    with _TmpDir() as td:
-        old_cwd = os.getcwd()
-        old_run_codecheck = mf._run_codecheck
-        try:
-            os.chdir(td)
-            subprocess.run(["git", "init", "-q"], check=True)
-            subprocess.run(["git", "config", "user.email", "mae-flow@test.invalid"], check=True)
-            subprocess.run(["git", "config", "user.name", "MAE Flow Test"], check=True)
-            os.makedirs("src", exist_ok=True)
-            open("src/Foo.cpp", "w", encoding="utf-8").write("int value = 1;\n")
-            subprocess.run(["git", "add", "src/Foo.cpp"], check=True)
-            subprocess.run(["git", "commit", "-qm", "base"], check=True)
-            base = mf.sh("git rev-parse HEAD")
-            open("src/Foo.cpp", "a", encoding="utf-8").write("int changed = 2;\n")
-            subprocess.run(["git", "add", "src/Foo.cpp"], check=True)
-            subprocess.run(["git", "commit", "-qm", "change"], check=True)
-            head = mf.sh("git rev-parse HEAD")
-            state = {
-                "current": "verify_codecheck",
-                "config": {"单号": "REQ1", "基线分支": base},
-                "quality": {"codecheck_scan": {
-                    "step": "verify_codecheck", "head": head, "count": 0,
-                    "files": ["src/Foo.cpp"], "pairs": [], "commands": ["fullcheck"]}},
-            }
-            calls = {"count": 0}
-
-            def fake_codecheck(_files, *_args):
-                calls["count"] += 1
-                return ({
-                    "total": 1,
-                    "pairs": [("R.ONE", "src/Foo.cpp", None)],
-                    "commands": ["codecheck fullcheck -f src/Foo.cpp"],
-                }, "")
-
-            mf._run_codecheck = fake_codecheck
-            zero_ok, _ = mf.ev_codecheck_clean({}, state)
-            check("CodeCheck 机器首检零告警且源码未变时 done 直接复用",
-                  zero_ok and calls["count"] == 0)
-
-            advisory_state = {
-                "current": "verify_codecheck",
-                "config": {"单号": "REQ1", "基线分支": base},
-                "quality": {"codecheck_scan": {
-                    "step": "verify_codecheck", "head": head, "count": None,
-                    "status": "TOOL_ERROR", "files": ["src/Foo.cpp"],
-                    "error": "未知输出格式"}},
-            }
-            tool_issue_ok, _ = mf.ev_review_codecheck({}, advisory_state)
-            open("src/Foo.cpp", "a", encoding="utf-8").write(
-                "int changed_after_tool_issue = 4;\n")
-            stale_tool_issue_ok, _ = mf.ev_review_codecheck({}, advisory_state)
-            open("src/Foo.cpp", "w", encoding="utf-8").write(
-                "int value = 1;\nint changed = 2;\n")
-            check("CodeCheck 工具故障留痕可继续但源码变化会使其失效",
-                  tool_issue_ok and not stale_tool_issue_ok)
-
-            classified, candidates = (
-                mf._classify_codecheck_with_repository_facts({
-                "total": 2,
-                "pairs": [
-                    ("R.NEAR", "src/Foo.cpp", 2),
-                    ("R.FAR", "src/Foo.cpp", 100),
-                ],
-                "commands": ["codecheck fullcheck -f src/Foo.cpp"],
-                }, state, ["src/Foo.cpp"]))
-            check("CodeCheck 行窗口只做预分类而不再静默丢弃候选",
-                  classified["total"] == 1
-                  and classified["pairs"][0][0] == "R.NEAR"
-                  and candidates == [("R.FAR", "src/Foo.cpp", 100)])
-
-            now = time.strftime("%Y-%m-%d %H:%M:%S")
-            scope_state = {
-                "current": "verify_codecheck", "started": now, "history": [],
-                "config": {"单号": "REQ1", "基线分支": base},
-                "quality": {"codecheck_scan": {
-                    "step": "verify_codecheck", "head": head,
-                    "count": 1, "raw_count": 2,
-                    "files": ["src/Foo.cpp"],
-                    "pairs": [("R.NEAR", "src/Foo.cpp", 2)],
-                    "commands": ["codecheck fullcheck -f src/Foo.cpp"],
-                    "scope_candidates": [{
-                        "id": "W1", "rule": "R.FAR",
-                        "file": "src/Foo.cpp", "line": 100,
-                    }],
-                    "scope_pending": True, "stock_excluded": 0,
-                }},
-            }
-            pending_ok, pending_why = mf.ev_review_codecheck({}, scope_state)
-            pending_task_blocked = False
-            try:
-                mf.cmd_agent_task(flow, scope_state, types.SimpleNamespace(
-                    kind="codecheck", scope=None))
-            except SystemExit as exc:
-                pending_task_blocked = exc.code == 2
-            mf.save_state(scope_state)
-            scope_ack = "W1 涉及本次修改"
-            with open(mf.STATE_PATH + ".usermsg", "w", encoding="utf-8") as f:
-                json.dump([{"id": "codecheck-scope-answer",
-                            "text": scope_ack,
-                            "step": "verify_codecheck", "at": now}],
-                          f, ensure_ascii=False)
-            mf.cmd_codecheck_scope(flow, scope_state, types.SimpleNamespace(
-                include="W1", none=False,
-                message_id="codecheck-scope-answer"))
-            reviewed = mf.load_state()["quality"]["codecheck_scan"]
-            check("疑似范围外告警未经用户确认不能推进或派修复",
-                  not pending_ok and "尚未经用户确认" in pending_why
-                  and pending_task_blocked)
-            check("用户确认涉及后候选会进入修复范围并绑定消息收据",
-                  reviewed["count"] == 2 and reviewed["stock_excluded"] == 0
-                  and not reviewed["scope_pending"]
-                  and reviewed["scope_review"]["included"] == ["W1"]
-                  and reviewed["scope_review"]["authorization"][
-                      "message_id"] == "codecheck-scope-answer"
-                  and "用户确认涉及" in reviewed["scope_reasons"][-1]["reason"])
-
-            moon_scope_state = {
-                "current": "verify_codecheck", "started": now, "history": [],
-                "config": {"单号": "REQ1", "基线分支": base},
-                "moonlight": {"enabled": True},
-            }
-            mf._run_codecheck = lambda _files, *_args: ({
-                "total": 2,
-                "pairs": [
-                    ("R.NEAR", "src/Foo.cpp", 2),
-                    ("R.FAR", "src/Foo.cpp", 100),
-                ],
-                "commands": ["codecheck fullcheck -f src/Foo.cpp"],
-            }, "")
-            mf.cmd_codecheck_scan(
-                flow, moon_scope_state, types.SimpleNamespace())
-            moon_scan = mf.load_state()["quality"]["codecheck_scan"]
-            check("月光模式将疑似范围外告警保守全量计入而不等待用户",
-                  moon_scan["count"] == 2 and moon_scan["stock_excluded"] == 0
-                  and not moon_scan["scope_pending"]
-                  and not moon_scan["scope_candidates"])
-
-            mf._run_codecheck = fake_codecheck
-            state["quality"]["codecheck_scan"]["count"] = 1
-            first_ok, _ = mf.ev_codecheck_clean({}, state)
-            second_ok, _ = mf.ev_codecheck_clean({}, state)
-            check("CodeCheck done 复核结果绑定 HEAD 缓存避免失败重试再跑",
-                  not first_ok and not second_ok and calls["count"] == 1
-                  and state.get("quality", {}).get("codecheck_verify", {}).get("count") == 1)
-
-            open("src/Foo.cpp", "a", encoding="utf-8").write("int dirty_after_verify = 3;\n")
-            changed_ok, _ = mf.ev_codecheck_clean({}, state)
-            check("CodeCheck done 复核缓存遇源码变化立即失效",
-                  not changed_ok and calls["count"] == 2)
-            open("src/Foo.cpp", "w", encoding="utf-8").write(
-                "int value = 1;\nint changed = 2;\n")
-            state["quality"].pop("codecheck_verify", None)
-            state["quality"]["codecheck_scan"].update({"count": 0, "manual": True})
-            mf._run_codecheck = lambda _files, *_args: (
-                calls.__setitem__("count", calls["count"] + 1)
-                or {"total": 0, "pairs": [], "commands": ["fullcheck"]}, "")
-            manual_ok, _ = mf.ev_codecheck_clean({}, state)
-            check("人工登记零告警不会冒充机器首检缓存",
-                  manual_ok and calls["count"] == 3)
-        finally:
-            mf._run_codecheck = old_run_codecheck
-            os.chdir(old_cwd)
 
     source_cases = {
         "include/Foo.hpp": True,
@@ -584,7 +385,7 @@ if flow:
               "转规格轮次(已确认)") == 1)
     check("配置只能在声明步骤写入",
           mf._allowed_set_keys(steps["config_confirm"]) >= {"基线分支", "分支名", "编译方式"}
-          and not mf._allowed_set_keys(steps["verify_codecheck"]))
+          and not mf._allowed_set_keys(steps["push"]))
     check("Git 分支与 change 名使用原生 ref 规则严格校验",
           not mf._validate_config_value("基线分支", "main")
           and not mf._validate_config_value("基线分支", "origin/main")
@@ -844,33 +645,9 @@ if flow:
                 flow, mf.load_state(),
                 types.SimpleNamespace(
                     ack=None, choice="full", set=None))
-            reviewer_choice_state = mf.load_state()
-            with open(
-                    mf.STATE_PATH + ".usermsg",
-                    "w",
-                    encoding="utf-8") as f:
-                json.dump([{
-                    "text": json.dumps({
-                        "answers": {
-                            "是否启用独立 CODE Reviewer":
-                                "不需要 Agent 预检，我直接检视",
-                        },
-                    }, ensure_ascii=False),
-                    "step": "code_reviewer_ask",
-                    # 必须是"进入本步之后"捕获的时间戳。复用上一步的 decision_at
-                    # 会在跨整秒时早于 _step_entered_at,被判旧轮失效 —— 那是
-                    # fixture 的时间竞态,不是流程缺陷。
-                    "at": time.strftime("%Y-%m-%d %H:%M:%S"),
-                }], f, ensure_ascii=False)
-            mf.cmd_done(
-                flow, reviewer_choice_state,
-                types.SimpleNamespace(
-                    ack=None, choice="disabled", set=None))
             check("普通流程选择点一次按钮即可推进",
                   mf.load_state().get("current") == "branch_create"
-                  and mf.load_state().get("choices", {}).get("workflow") == "full"
-                  and mf.load_state().get("choices", {}).get(
-                      "code_reviewer") == "disabled")
+                  and mf.load_state().get("choices", {}).get("workflow") == "full")
 
             scope_state = {
                 "current": "hf_open", "config": {}, "choices": {},
@@ -908,25 +685,6 @@ if flow:
                   and not flow["steps"]["story_ask"].get("user_ack")
                   and flow["steps"]["design"].get("next") == "story")
 
-            os.makedirs(".mae-flow-work/REQ1", exist_ok=True)
-            open(".mae-flow-work/REQ1/review.md", "w", encoding="utf-8").write(
-                "| # | 意见 | 定性 | 裁决 |\n"
-                "|---|---|---|---|\n"
-                "| 1 | 空指针 | 属实 | 转规格轮次(已确认) |\n"
-                "| 2 | 行为变化 | 属实 | 修复(已确认) |\n")
-            rf_state = {
-                "current": "rf_triage", "config": {"单号": "REQ1"},
-                "choices": {"workflow": "review"}, "history": [], "started": now,
-                "review_triage_transfer_count": 1,
-                "review_triage_statuses": mf._review_statuses(
-                    "| # | 意见 | 定性 | 裁决 |\n"
-                    "|---|---|---|---|\n"
-                    "| 1 | 空指针 | 属实 | 修复(已确认) |\n"
-                    "| 2 | 行为变化 | 属实 | 转规格轮次(已确认) |\n"),
-            }
-            rf_ok, rf_why = mf.ev_review_fix_committed({}, rf_state)
-            check("评审意见交换身份但总数不变仍会被 ASKUSER 闸拦截",
-                  not rf_ok and "1" in rf_why and "AskUserQuestion" in rf_why)
         finally:
             os.chdir(old_cwd)
 
@@ -1490,13 +1248,13 @@ if flow:
                   and os.path.isfile(mf.STATE_PATH) and not os.path.exists(mf.STATE_PATH + ".tokens"))
 
             # 晚阶段退出后直接改过源码：恢复时不得回到原步骤继续吃旧证据。
-            restored["current"] = "verify_ut"
+            restored["current"] = "external_verify"
             restored["choices"] = {"workflow": "full"}
             restored["quality"] = {"codecheck_scan": {"total": 0}}
             restored["agent_tasks"] = {"UT": {"head": rec["head"]}}
             mf.save_state(restored)
             with open(mf.STATE_PATH + ".usermsg", "w", encoding="utf-8") as f:
-                json.dump([{"text": "确认再次退出", "step": "verify_ut", "at": now}], f,
+                json.dump([{"text": "确认再次退出", "step": "external_verify", "at": now}], f,
                           ensure_ascii=False)
             mf.cmd_exit(flow, restored, types.SimpleNamespace(ack="确认再次退出", reason="临时直接修复"))
             open("keep.cpp", "a", encoding="utf-8").write("int changed = 2;\n")
@@ -1504,8 +1262,8 @@ if flow:
             rec2["direct_messages"] = [{"text": "重新接回 mae-flow"}]
             mf._write_json_atomic(mf.EXIT_PATH, rec2)
             resumed2 = mf._resume_direct_mode("重新接回 mae-flow")
-            check("退出期间改过源码会回退质量链并废弃旧证据",
-                  resumed2.get("current") == "verify_recompile"
+            check("退出期间改过源码会回退宽 build 步并废弃旧证据",
+                  resumed2.get("current") == "build"
                   and "quality" not in resumed2 and "agent_tasks" not in resumed2
                   and not os.path.exists(mf.STATE_PATH + ".tokens"))
 
@@ -1526,8 +1284,8 @@ if flow:
             rec3["direct_messages"] = [{"text": "重新接回 mae-flow"}]
             mf._write_json_atomic(mf.EXIT_PATH, rec3)
             resumed3 = mf._resume_direct_mode("重新接回 mae-flow")
-            check("最终检视期间 Direct 改码会回退完整质量链",
-                  resumed3.get("current") == "verify_recompile")
+            check("最终检视期间 Direct 改码会回退宽 build 步",
+                  resumed3.get("current") == "build")
         finally:
             os.chdir(old_cwd)
 
@@ -1871,12 +1629,12 @@ if flow:
             subprocess.run(["git", "commit", "-qm", "fixture"], check=True)
             now = time.strftime("%Y-%m-%d %H:%M:%S")
             risk_ack = "确认承担UT结果未被harness核实的风险并继续"
-            risk_state = {"current": "rf_ut", "config": {}, "choices": {"workflow": "review"},
+            risk_state = {"current": "build", "config": {}, "choices": {"workflow": "review"},
                           "history": [], "started": now}
             mf.save_state(risk_state)
             with open(mf.STATE_PATH + ".usermsg", "w", encoding="utf-8") as f:
                 json.dump([{"id": "risk-ut", "text": risk_ack,
-                            "step": "rf_ut", "at": now}], f, ensure_ascii=False)
+                            "step": "build", "at": now}], f, ensure_ascii=False)
             fake_blocked = False
             try:
                 mf.cmd_accept_risk(flow, risk_state, types.SimpleNamespace(
@@ -1885,55 +1643,10 @@ if flow:
             except SystemExit as exc:
                 fake_blocked = exc.code == 2
             check("Agent 令牌风险放行必须匹配用户真实原话", fake_blocked)
-            mf.cmd_accept_risk(flow, risk_state, types.SimpleNamespace(
-                agent="ut", reason="UT 结果未被 harness 核实",
-                message_id="risk-ut"))
-            risk_state = mf.load_state()
-            risk_ok, _ = mf.ev_agent_ran({"agent": "UT", "statuses": ["PASS"]}, risk_state)
-            check("用户确认可只放行当前步骤的 UT 令牌", risk_ok
-                  and not os.path.exists(mf.STATE_PATH + ".tokens")
-                  and any(h.get("result") == "accept-risk:UT" for h in risk_state["history"]))
-            wrong_kind = False
-            try:
-                mf.cmd_accept_risk(flow, risk_state, types.SimpleNamespace(
-                    agent="compile", reason="编译未核实",
-                    message_id="risk-ut"))
-            except SystemExit as exc:
-                wrong_kind = exc.code == 2
-            check("风险放行不能预授权本步骤不需要的令牌", wrong_kind)
-            open("src/test/FooTest.cpp", "a", encoding="utf-8").write("int changed = 2;\n")
-            fresh, fresh_why = mf.ev_agent_ran({"agent": "UT", "statuses": ["PASS"]}, risk_state)
-            check("代码变化后用户风险放行立即失效",
-                  not fresh and "风险确认后代码发生变化" in fresh_why)
-            open("src/test/FooTest.cpp", "w", encoding="utf-8").write("int test_value = 1;\n")
-            mf.advance(flow, risk_state, "rf_ut", flow["steps"]["rf_ut"], "done")
-            check("进入下一步后用户风险放行不再保留",
-                  "risk_acceptances" not in mf.load_state())
+            # 2026-08-25 编排瘦身:主流程不再索要 UT/COMPILE 令牌,
+            # accept-risk 的放行/失效/过期机制由 STORY/GRILL 等仍在用的
+            # agent_ran 证据共享,详细覆盖在单元测试。
 
-            # CodeCheck 是建议型工具：真实尝试/令牌有留痕即可，不因工具自身
-            # 结果不稳定在 done 再跑第三遍。
-            cc_ack = "确认承担CodeCheck修复Agent令牌缺失风险并继续"
-            cc_state = {"current": "rf_codecheck",
-                        "config": {"单号": "REQ-CODECHECK"},
-                        "choices": {"workflow": "review"}, "history": [], "started": now,
-                        "quality": {"codecheck_scan": {"step": "rf_codecheck", "count": 1}}}
-            mf.save_state(cc_state)
-            with open(mf.STATE_PATH + ".usermsg", "w", encoding="utf-8") as f:
-                json.dump([{"id": "risk-codecheck", "text": cc_ack,
-                            "step": "rf_codecheck", "at": now}],
-                          f, ensure_ascii=False)
-            mf.cmd_accept_risk(flow, cc_state, types.SimpleNamespace(
-                agent="codecheck", reason="CodeCheck 修复 Agent 令牌未签发",
-                message_id="risk-codecheck"))
-            cc_state = mf.load_state()
-            old_clean = mf.ev_codecheck_clean
-            try:
-                mf.ev_codecheck_clean = lambda _spec, _st: (False, "现场复核仍有 1 条告警")
-                cc_ok, cc_why = mf.ev_review_codecheck({}, cc_state)
-            finally:
-                mf.ev_codecheck_clean = old_clean
-            check("CodeCheck 已留痕后不在 done 重复现场长跑",
-                  cc_ok and not cc_why)
         finally:
             os.chdir(old_cwd)
 
@@ -2060,17 +1773,8 @@ if flow:
                   mf.load_state().get("current") == "config_confirm"
                   and not (mf.load_state().get("moonlight") or {}).get("hard_blocked"))
 
-            quality_state = mf.load_state()
-            quality_state["current"] = "rf_codecheck"
-            mf.save_state(quality_state)
-            wrong_blocked = False
-            try:
-                mf.cmd_moonlight(flow, quality_state, types.SimpleNamespace(
-                    action="blocked", ack=None,
-                    reason="规范检查失败但不想继续处理，尝试直接停止整个流程"))
-            except SystemExit as exc:
-                wrong_blocked = exc.code == 2
-            check("质量失败不能滥用硬阻塞出口而应走defer", wrong_blocked)
+            # 2026-08-25 编排瘦身:build 是唯一质量步且按设计允许硬阻塞
+            # (需求/依赖阻塞),"质量步不能 blocked"的旧断言随编排退役。
 
             archive_now = time.strftime("%Y-%m-%d %H:%M:%S")
             archive_state = {
@@ -2116,7 +1820,7 @@ if flow:
             snapshot = os.path.join(".mae-flow-work", "exited", "fixture")
             os.makedirs(snapshot)
             direct_state = {
-                "current": "rf_codecheck", "config": {"单号": "REQMOON0"},
+                "current": "build", "config": {"单号": "REQMOON0"},
                 "choices": {"workflow": "review"}, "history": [],
                 "started": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "agent_tasks": {"CODECHECK": {"old": True}},
@@ -2132,7 +1836,7 @@ if flow:
                 action="continue", ack="月光宝盒", reason=None))
             resumed = mf.load_state()
             check("普通开发模式可由用户明确切换到月光宝盒",
-                  mf._moonlight(resumed) and resumed.get("current") == "rf_codecheck"
+                  mf._moonlight(resumed) and resumed.get("current") == "build"
                   and "切换月光宝盒继续做" in (resumed.get("moonlight") or {}).get("request", "")
                   and "agent_tasks" not in resumed and not os.path.exists(mf.EXIT_PATH))
 
@@ -2146,12 +1850,12 @@ if flow:
             subprocess.run(["git", "commit", "-qm", "fixture"], check=True)
             now = time.strftime("%Y-%m-%d %H:%M:%S")
             ml_state = {
-                "current": "rf_codecheck", "config": {"单号": "REQMOON1"},
+                "current": "build", "config": {"单号": "REQMOON1"},
                 "choices": {"workflow": "review"}, "history": [], "started": now,
             }
             mf.save_state(ml_state)
             with open(mf.STATE_PATH + ".usermsg", "w", encoding="utf-8") as f:
-                json.dump([{"text": "不要开启月光宝盒", "step": "rf_codecheck",
+                json.dump([{"text": "不要开启月光宝盒", "step": "build",
                             "at": now}], f, ensure_ascii=False)
             negative_moonlight_blocked = False
             try:
@@ -2162,7 +1866,7 @@ if flow:
             check("在途流程的月光宝盒否定原话不会开启无人值守",
                   negative_moonlight_blocked and not mf._moonlight(mf.load_state()))
             with open(mf.STATE_PATH + ".usermsg", "w", encoding="utf-8") as f:
-                json.dump([{"text": "开启月光宝盒继续开发", "step": "rf_codecheck", "at": now}],
+                json.dump([{"text": "开启月光宝盒继续开发", "step": "build", "at": now}],
                           f, ensure_ascii=False)
             mf.cmd_moonlight(flow, ml_state, types.SimpleNamespace(
                 action="on", ack="月光宝盒", reason=None))
@@ -2172,35 +1876,23 @@ if flow:
                   mf._moonlight(ml_state) and ask_ok)
 
             defer_reason = "CodeCheck仍有1条环境相关告警，已复查并尝试修复两次，继续会重复消耗"
-            mf.cmd_moonlight(flow, ml_state, types.SimpleNamespace(
-                action="defer", ack=None, reason=defer_reason))
+            # build defer 的实现完成边界(实现清单全勾+改动已提交)在夹具里
+            # 没有材料;边界本身由单元测试覆盖,这里只演练 defer 登记链路。
+            old_boundary = mf._moonlight_build_defer_boundary
+            mf._moonlight_build_defer_boundary = lambda _st: (True, "")
+            try:
+                mf.cmd_moonlight(flow, ml_state, types.SimpleNamespace(
+                    action="defer", ack=None, reason=defer_reason))
+            finally:
+                mf._moonlight_build_defer_boundary = old_boundary
             deferred = mf.load_state()
             unresolved = mf._moonlight_unresolved(deferred)
             check("月光宝盒质量失败留痕后继续而不伪装通过",
-                  deferred.get("current") == "rf_ut"
+                  deferred.get("current") == "domain_archive"
                   and len(unresolved) == 1
-                  and unresolved[0].get("kind") == "codecheck"
+                  and unresolved[0].get("kind") == "compile"
                   and os.path.isfile(mf.MOONLIGHT_REPORT_PATH))
-
-            # UT 发现源码缺陷可用夜间自查结论解锁，仍由 done 自动回流质量链。
-            mf.cmd_moonlight(flow, deferred, types.SimpleNamespace(
-                action="unlock-source", ack=None,
-                reason="失败用例TestA与规格场景A冲突，最小复现确认断言无误，倾向源码缺陷"))
-            unlocked = mf.load_state()
-            check("月光宝盒可记录UT自查后解锁源码修复",
-                  (unlocked.get("unlock") or {}).get("moonlight") is True
-                  and (unlocked.get("unlock") or {}).get("step") == "rf_ut")
-
-            # 模拟 UT 已尽力但仍有遗留。月光会自动处理领域归档；这里只验证
-            # 归档所需外部文件不可写时，仍可登记真实硬阻塞并安全停机。
-            unlocked.pop("unlock", None)
-            mf.save_state(unlocked)
-            mf.cmd_moonlight(flow, unlocked, types.SimpleNamespace(
-                action="defer", ack=None,
-                reason="UT仍有1个历史环境失败，已重跑并排除本次代码逻辑问题，记录后继续领域归档"))
-            archive_waiting = mf.load_state()
-            check("评审月光轮继续到领域归档",
-                  archive_waiting.get("current") == "domain_archive")
+            archive_waiting = deferred
             mf.cmd_moonlight(flow, archive_waiting, types.SimpleNamespace(
                 action="blocked", ack=None,
                 reason="领域索引文件只读，无法安全写入归档结果"))
@@ -2235,7 +1927,7 @@ if flow:
                 action="repair", ack=None, reason=None))
             env_repair = mf.load_state()
             check("旧版环境遗留不再把修复轮送回已删除的 setup",
-                  env_repair.get("current") == "build_rework"
+                  env_repair.get("current") == "build"
                   and not (env_repair.get("moonlight") or {}).get("repair_after_environment"))
 
             # 这里是在同一个临时仓库中构造另一条晨间修复分支，不是拿生产中的
@@ -2248,9 +1940,10 @@ if flow:
                 action="repair", ack=None, reason=None))
             repairing = mf.load_state()
             check("月光宝盒按报告从工作流编译入口开启修复轮",
-                  repairing.get("current") == "build_rework"
+                  repairing.get("current") == "build"
                   and (repairing.get("moonlight") or {}).get("cycle") == 2
                   and "agent_tasks" not in repairing and "quality" not in repairing)
+            mf._moonlight_resolve_kind(repairing, "compile")
             mf._moonlight_resolve_kind(repairing, "codecheck")
             mf._moonlight_resolve_kind(repairing, "ut")
             repairing["current"] = "moonlight_review"
@@ -2264,12 +1957,12 @@ if flow:
 
             # full/tweak/hotfix 同样不能在夜间越过需要用户确认的领域归档。
             full_state = {
-                "current": "verify_spec", "config": {"单号": "REQMOON2", "CHANGE_NAME": "moon"},
+                "current": "build", "config": {"单号": "REQMOON2", "CHANGE_NAME": "moon"},
                 "choices": {"workflow": "full"}, "history": [], "started": now,
                 "moonlight": {"enabled": True, "activated_at": now, "cycle": 1, "issues": []},
             }
             mf.save_state(full_state)
-            mf.advance(flow, full_state, "verify_spec", flow["steps"]["verify_spec"], "done")
+            mf.advance(flow, full_state, "build", flow["steps"]["build"], "done")
             full_archive = mf.load_state()
             check("完整开发月光轮停在领域归档",
                   full_archive.get("current") == "domain_archive")
@@ -2660,25 +2353,12 @@ guard_bash_src = open(
         ROOT, "scripts", "mae_flow_core", "guard", "bash.py"),
     encoding="utf-8",
 ).read()
-check("tests_only 缺配置时仍有默认硬边界",
-      "def _effective_test_patterns" in mf_src
-      and mf_src.count("_effective_test_patterns(st)") >= 2
-      and mf_src.count('step.get("tests_only")') >= 2)
-check("UT 被测源码变更由 done 自动回流",
-      "source_change_recheck" in mf_src and "source-recheck:" in mf_src)
-check("旧版 UT 在途状态可安全恢复入口 HEAD",
-      "def _ensure_step_entry_head" in mf_src and "recover-step-head" in mf_src
-      and "禁止拿当前 HEAD 补位" in mf_src)
-check("CodeCheck 解析失败有绑定现场的恢复入口",
-      "def cmd_codecheck_record" in mf_src and "diagnostic_sha256" in mf_src
-      and "代码一变自动失效" in quality_codecheck_src)
-check("CodeCheck 三个步骤都先首检再决定是否派 Agent",
-      'st["current"] not in ("verify_codecheck", "tw_codecheck", "rf_codecheck")' in mf_src
-      and {
-          "verify_codecheck",
-          "tw_codecheck",
-          "rf_codecheck",
-      } <= TASK_CARD_EXPECTED_STEPS["CODECHECK"])
+# 2026-08-25 编排瘦身:tests_only 边界、UT 源码回流、CodeCheck 步骤首检
+# 均随编码段编排退役;standalone 独立任务的卡与收据由单元测试覆盖。
+check("任务卡仅存于 standalone 独立任务",
+      TASK_CARD_EXPECTED_STEPS.get("CODECHECK") == {"standalone_codecheck"}
+      and TASK_CARD_EXPECTED_STEPS.get("UT") == {"standalone_ut"}
+      and "COMPILE" not in TASK_CARD_EXPECTED_STEPS)
 check("Bash 任意解释器不能直碰流程状态文件",
       "禁止经 Bash " in guard_bash_src
       and "直接访问；查看请执行" in guard_bash_src

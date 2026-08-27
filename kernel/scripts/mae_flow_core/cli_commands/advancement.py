@@ -11,7 +11,6 @@ from .wiring import api
 from mae_flow_core.orchestration.work_package import ensure_work_package
 from mae_flow_core import host_env
 from mae_flow_core.panel import notify
-from mae_flow_core.quality.attempts import begin_attempt
 from mae_flow_core.workflow.build_scope import (
     build_scope_hint,
     maven_modules,
@@ -30,24 +29,7 @@ def _bounded_next(st, sid, nxt):
             f"步骤 {sid} 缺少可解析的下一步。语义恢复上下文未建立，"
             "已停止本次推进；请执行 current 查看恢复指令，禁止重复运行同一命令。",
             2)
-    if nxt != "verify_ponytail":
-        return nxt
-    attempt = begin_attempt(
-        st, "ponytail", api.sh("git rev-parse --verify HEAD"), limit=1)
-    if not attempt.exhausted:
-        return nxt
-    st["history"].append({
-        "step": sid,
-        "result": "ponytail:max-one-round",
-        "note": "Ponytail 已执行一轮，后续源码返工直接从 CodeCheck 恢复",
-        "at": time.strftime("%Y-%m-%d %H:%M:%S"),
-    })
-    return "verify_codecheck"
-
-
-def _clear_completed_review(st, sid):
-    if sid == "quality_commit":
-        st.pop("quality_review", None)
+    return nxt
 
 
 def _host_transition_target(st, sid, target):
@@ -127,11 +109,6 @@ def advance(flow, st, sid, step, tag, note=""):
             api.die("无法记录评审意见处理基点 HEAD,拒绝进入本轮修改；"
                     "请先执行 doctor 检查 Git 状态。", 2)
         st["review_base_head"] = base
-    # 兼容旧版已经停在 rf_verify 的在途单：按 history 自动恢复返工前 HEAD。
-    if sid == "rf_verify" and st.get("choices", {}).get("workflow") == "review":
-        _, err = api._ensure_review_base(st)
-        if err:
-            api.die(err, 2)
     if sid == "rf_triage":
         review_doc = os.path.join(ensure_work_package(
             os.getcwd(), st.get("config", {}).get("单号", "")).root,
@@ -169,7 +146,6 @@ def advance(flow, st, sid, step, tag, note=""):
         ml["pushed_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
         ml["pushed_head"] = api.sh("git rev-parse --verify HEAD")
     st["current"] = nxt
-    _clear_completed_review(st, sid)
     if nxt:
         current_head = api.sh("git rev-parse --verify HEAD")
         st.setdefault("step_heads", {})[nxt] = current_head

@@ -14,6 +14,22 @@ from mae_flow_core import host_env
 from mae_flow_core.orchestration.work_package import ensure_work_package
 from mae_flow_core.workflow.execution_contract import effective_config_keys
 
+# 2026-08-25 编排瘦身的一次性退役桥(参照 lean-v3 退役先例):除本表外,
+# 没有任何活的命令、迁移、hook 或证据规则还认识这些旧步骤名。
+_RETIRED_CHOREOGRAPHY = {
+    "code_reviewer_ask": "branch_create",
+    "build_agent_review": "build", "build_rework": "build",
+    "build_review": "build", "build_commit": "build",
+    "quality_recompile": "build", "quality_review": "build",
+    "quality_rework": "build", "quality_commit": "build",
+    "verify_ponytail": "build", "verify_post_ponytail_compile": "build",
+    "verify_recompile": "build", "verify_codecheck": "build",
+    "verify_codecheck_compile": "build", "verify_ut": "build",
+    "verify_spec": "build", "verify_comet": "build",
+    "tw_codecheck": "build", "tw_ut": "build", "tw_verify": "build",
+    "rf_codecheck": "build", "rf_ut": "build", "rf_verify": "build",
+}
+
 def find_project_root(start=None):
     """从 start(默认 cwd)向上定位项目根,消除"模型 cd 进子目录后调用"的错位:
     每层先找已有 .mae-flow.json 或退出标记，再判断 .git / .mae-flow-work / openspec 项目边界；
@@ -40,6 +56,17 @@ def load_state():
             "type": "remove-project-setup", "from": "env_setup",
             "to": "config_confirm", "at": time.strftime("%Y-%m-%d %H:%M:%S"),
         })
+        save_state(st)
+    # 2026-08-25 编排瘦身:编码段的编排步骤(检视/精确提交/质量小循环/四步
+    # 验证)整体退役,出口验收改由 prepush+权威流水线+MR 检视承担。停在这些
+    # 步骤上的在途状态落回宽 build 步继续干;code_reviewer_ask 落回分支创建。
+    retired = _RETIRED_CHOREOGRAPHY.get(st.get("current", ""))
+    if retired:
+        st.setdefault("migrations", []).append({
+            "type": "retire-build-choreography", "from": st["current"],
+            "to": retired, "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        })
+        st["current"] = retired
         save_state(st)
     return st
 

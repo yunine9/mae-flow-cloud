@@ -1,755 +1,372 @@
 {
-  "start": "config_confirm",
-  "state_file": ".mae-flow.json",
-  "compatibility_entries": [
-    "archive",
-    "archive_confirm",
-    "design",
-    "grill_ask",
-    "rf_verify",
-    "story_ask",
-    "verify_comet",
-    "verify_recompile"
-  ],
-  "source_patterns": [
-    "(^|/)(service|src|include|lib|app|modules?)/"
-  ],
-  "specs_truth": "(^|/)(?:docs/specs|openspec/specs)/",
-  "steps": {
-    "config_confirm": {
-      "title": "配置确认",
-      "user_ack": true,
-      "require_sets": [
-        "工号",
-        "基线分支",
-        "单号",
-        "单号类型",
-        "需求文档",
-        "编译方式",
-        "UT生成方式",
-        "UT运行命令"
-      ],
-      "next": "workflow_select"
-    },
-    "workflow_select": {
-      "title": "交付方式选择",
-      "user_ack": true,
-      "choice_key": "workflow",
-      "choices": [
-        "full",
-        "hotfix",
-        "tweak",
-        "review"
-      ],
-      "new_order_choices": [
-        "full",
-        "hotfix",
-        "tweak"
-      ],
-      "choice_answers": {
-        "full": [
-          "完整开发"
-        ],
-        "hotfix": [
-          "已定位问题修复"
-        ],
-        "tweak": [
-          "局部修改"
-        ],
-        "review": [
-          "处理评审意见"
-        ]
-      },
-      "next": "code_reviewer_ask"
-    },
-    "code_reviewer_ask": {
-      "title": "独立 CODE Reviewer 选择",
-      "user_ack": true,
-      "choice_key": "code_reviewer",
-      "choices": [
-        "disabled",
-        "enabled"
-      ],
-      "choice_answers": {
-        "disabled": [
-          "不需要 Agent 预检，我直接检视"
-        ],
-        "enabled": [
-          "需要，人工检视前先由 Agent 预检"
-        ]
-      },
-      "next": "branch_create",
-      "skip_in_moonlight": true,
-      "moonlight_choice": "enabled"
-    },
-    "branch_create": {
-      "title": "创建工作分支",
-      "evidence": [
-        {
-          "type": "branch_ok"
-        }
-      ],
-      "next_by": "workflow",
-      "next": {
-        "full": "grill",
-        "hotfix": "hf_open",
-        "tweak": "tw_open",
-        "review": "rf_triage"
-      },
-      "next_default": "full"
-    },
-    "rf_triage": {
-      "title": "处理评审意见 — 意见裁决",
-      "evidence": [
-        {
-          "type": "glob",
-          "any": [
-            ".mae-flow-work/{单号}/review.md"
-          ]
-        },
-        {
-          "type": "content_free",
-          "file": ".mae-flow-work/{单号}/review.md",
-          "patterns": [
-            "待裁决"
-          ],
-          "note": "裁决未闭环:文档残留「待裁决」。每条意见须经 AskUserQuestion 拿用户确认后改为 修复(已确认)/反驳(已确认)/转规格轮次(已确认)"
-        },
-        {
-          "type": "agent_ran",
-          "agent": "ASKUSER"
-        }
-      ],
-      "next": "build"
-    },
-    "rf_codecheck": {
-      "title": "处理评审意见 — 规范检查",
-      "allow_source_edit": true,
-      "source_change_next": "quality_recompile",
-      "quality_review_origin": "codecheck-source",
-      "quality_review_resume": "rf_codecheck",
-      "quality_review_rework": "quality_recompile",
-      "evidence": [
-        {
-          "type": "review_codecheck"
-        }
-      ],
-      "next": "rf_ut"
-    },
-    "rf_ut": {
-      "title": "处理评审意见 — 增量单元测试",
-      "allow_source_edit": true,
-      "tests_only": true,
-      "source_change_recheck": "quality_recompile",
-      "quality_review_origin": "ut-source",
-      "quality_review_resume": "rf_codecheck",
-      "quality_review_rework": "quality_recompile",
-      "test_change_review_origin": "ut-test",
-      "test_change_review_resume": "domain_archive",
-      "test_change_review_rework": "rf_ut",
-      "evidence": [
-        {
-          "type": "agent_or_no_source",
-          "agent": "UT",
-          "statuses": [
-            "PASS"
-          ]
-        },
-        {
-          "type": "ut_session_complete"
-        }
-      ],
-      "next": "domain_archive"
-    },
-    "rf_verify": {
-      "title": "处理评审意见 — 旧版验证迁移",
-      "next": "build"
-    },
-    "grill_ask": {
-      "title": "需求澄清询问",
-      "user_ack": true,
-      "choice_key": "grill",
-      "choices": [
-        "yes",
-        "no"
-      ],
-      "choice_answers": {
-        "yes": [
-          "做需求质询",
-          "做质询"
-        ],
-        "no": [
-          "跳过需求质询",
-          "跳过"
-        ]
-      },
-      "next": {
-        "yes": "grill",
-        "no": "open"
-      }
-    },
-    "grill": {
-      "title": "需求澄清(逐题拍板)",
-      "evidence": [
-        {
-          "type": "glob",
-          "any": [
-            ".mae-flow-work/{单号}/grill-prep.md"
-          ]
-        },
-        {
-          "type": "content_free",
-          "file": ".mae-flow-work/{单号}/grill-prep.md",
-          "patterns": [
-            "待填",
-            "\\{\\{"
-          ],
-          "note": "备课工作表未填完:残留「待填」或「{{占位}}」。8 维每维必须替换掉全部 {{…}} 占位——给出实质结论(有缺口→候选题四要素齐全 / 不适用→具体依据),禁止快速划过某一维后重试"
-        },
-        {
-          "type": "glob",
-          "any": [
-            ".mae-flow-work/{单号}/decisions.md"
-          ]
-        },
-        {
-          "type": "glob",
-          "any": [
-            ".mae-flow-work/{单号}/grill.md"
-          ]
-        },
-        {
-          "type": "agent_ran",
-          "agent": "ASKUSER"
-        },
-        {
-          "type": "agent_ran",
-          "agent": "GRILL_PREP"
-        },
-        {
-          "type": "agent_ran",
-          "agent": "GRILL_FINAL"
-        }
-      ],
-      "next": "open"
-    },
-    "open": {
-      "title": "本地 Spec 确认",
-      "user_ack": true,
-      "approval_subject": {
-        "kind": "artifacts",
-        "artifacts": ["spec"]
-      },
-      "confirmation_answers": [
-        "Spec 无需再调整，确认生成 Story",
-        "Spec 内容已确认，生成 Story"
-      ],
-      "evidence": [
-        {
-          "type": "local_spec_valid"
-        },
-        {
-          "type": "glob",
-          "any": [
-            ".mae-flow-work/{单号}/grill.md"
-          ]
-        }
-      ],
-      "next": "story"
-    },
-    "design": {
-      "title": "旧版方案设计恢复入口",
-      "next": "story"
-    },
-    "story_ask": {
-      "title": "旧版 Story 选择恢复入口",
-      "next": "story"
-    },
-    "story": {
-      "title": "Story 与实施附录生成及一次设计检视",
-      "user_ack": true,
-      "approval_subject": {
-        "kind": "artifacts",
-        "artifacts": ["story", "implementation"]
-      },
-      "confirmation_answers": [
-        "Story 与实施附录无需再调整，确认进入编码",
-        "Story 与实施附录已确认，进入编码实现"
-      ],
-      "evidence": [
-        {
-          "type": "glob",
-          "any": [
-            ".mae-flow-work/{单号}/story.md"
-          ]
-        },
-        {
-          "type": "glob",
-          "any": [
-            ".mae-flow-work/{单号}/implementation.md"
-          ]
-        },
-        {
-          "type": "agent_ran",
-          "agent": "STORY",
-          "statuses": [
-            "DONE"
-          ]
-        },
-        {
-          "type": "agent_ran",
-          "agent": "REVIEWER"
-        },
-        {
-          "type": "content_free",
-          "file": ".mae-flow-work/{单号}/story.md",
-          "patterns": [
-            "待确认"
-          ],
-          "note": "Story 仍有待确认内容；先展示给用户拍板，再完成本步骤唯一一次确认。"
-        },
-        {
-          "type": "content_free",
-          "file": ".mae-flow-work/{单号}/implementation.md",
-          "patterns": [
-            "待确认"
-          ],
-          "note": "实施附录仍有待确认内容；先展示给用户拍板，再完成本步骤唯一一次确认。"
-        }
-      ],
-      "next": "build"
-    },
-    "hf_open": {
-      "title": "已定位问题修复 — 确认修改范围",
-      "user_ack": true,
-      "approval_subject": {
-        "kind": "artifacts",
-        "artifacts": ["spec"]
-      },
-      "confirmation_answers": [
-        "修改范围无需再调整，确认进入编码",
-        "确认范围并继续"
-      ],
-      "evidence": [
-        {
-          "type": "local_spec_valid"
-        }
-      ],
-      "next": "build"
-    },
-    "tw_open": {
-      "title": "局部修改 — 确认修改范围",
-      "user_ack": true,
-      "approval_subject": {
-        "kind": "artifacts",
-        "artifacts": ["spec"]
-      },
-      "confirmation_answers": [
-        "修改范围无需再调整，确认进入编码",
-        "确认范围并继续"
-      ],
-      "evidence": [
-        {
-          "type": "local_spec_valid"
-        }
-      ],
-      "next": "build"
-    },
-    "tw_codecheck": {
-      "title": "小改 — 规范检查",
-      "allow_source_edit": true,
-      "source_change_next": "quality_recompile",
-      "quality_review_origin": "codecheck-source",
-      "quality_review_resume": "tw_codecheck",
-      "quality_review_rework": "quality_recompile",
-      "evidence": [
-        {
-          "type": "review_codecheck"
-        }
-      ],
-      "next": "tw_ut"
-    },
-    "tw_ut": {
-      "title": "小改 — 单元测试",
-      "allow_source_edit": true,
-      "tests_only": true,
-      "source_change_recheck": "quality_recompile",
-      "quality_review_origin": "ut-source",
-      "quality_review_resume": "tw_codecheck",
-      "quality_review_rework": "quality_recompile",
-      "test_change_review_origin": "ut-test",
-      "test_change_review_resume": "tw_verify",
-      "test_change_review_rework": "tw_ut",
-      "evidence": [
-        {
-          "type": "agent_or_no_source",
-          "agent": "UT",
-          "statuses": [
-            "PASS"
-          ]
-        },
-        {
-          "type": "ut_session_complete"
-        }
-      ],
-      "next": "tw_verify"
-    },
-    "tw_verify": {
-      "title": "小改 — 对照需求检查",
-      "evidence": [
-        {
-          "type": "verification_passed"
-        }
-      ],
-      "next": "domain_archive"
-    },
-    "build": {
-      "title": "编码实现",
-      "clear_hint": true,
-      "allow_source_edit": true,
-      "evidence": [
-        {
-          "type": "agent_or_no_source",
-          "agent": "COMPILE",
-          "statuses": [
-            "OK"
-          ]
-        }
-      ],
-      "next_by": "code_reviewer",
-      "next": {
-        "disabled": "build_review",
-        "enabled": "build_agent_review"
-      },
-      "next_default": "enabled"
-    },
-    "build_agent_review": {
-      "title": "编码完成 — 可选 Agent 预检",
-      "evidence": [
-        {
-          "type": "agent_ran",
-          "agent": "REVIEWER",
-          "stage_role": "code-review"
-        }
-      ],
-      "next": "build_review"
-    },
-    "build_rework": {
-      "title": "按用户意见调整代码",
-      "clear_hint": true,
-      "allow_source_edit": true,
-      "evidence": [
-        {
-          "type": "agent_or_no_source",
-          "agent": "COMPILE",
-          "statuses": [
-            "OK"
-          ]
-        }
-      ],
-      "next": "build_review"
-    },
-    "build_review": {
-      "title": "编码完成 — 用户检视代码",
-      "user_ack": true,
-      "approval_subject": {
-        "kind": "worktree"
-      },
-      "choice_key": "build_review_decision",
-      "choices": [
-        "continue",
-        "revise"
-      ],
-      "choice_answers": {
-        "continue": [
-          "代码无需调整，继续提交",
-          "我已认真检视并完成自验证，继续"
-        ],
-        "revise": [
-          "需要调整代码（按检视意见返工）",
-          "需要调整代码"
-        ]
-      },
-      "evidence": [],
-      "next": {
-        "continue": "build_commit",
-        "revise": "build_rework"
-      },
-      "skip_in_moonlight": true,
-      "moonlight_choice": "continue"
-    },
-    "build_commit": {
-      "title": "用户检视通过 — 精确提交",
-      "evidence": [
-        {
-          "type": "commit_tagged_after_entry"
-        }
-      ],
-      "next_by": "workflow",
-      "next": {
-        "full": "verify_ponytail",
-        "hotfix": "verify_ponytail",
-        "tweak": "tw_codecheck",
-        "review": "rf_codecheck"
-      },
-      "next_default": "full"
-    },
-    "quality_review": {
-      "title": "质量改动 — 用户统一检视",
-      "user_ack": true,
-      "approval_subject": {
-        "kind": "worktree"
-      },
-      "choice_key": "quality_review_decision",
-      "choices": [
-        "continue",
-        "revise"
-      ],
-      "choice_answers": {
-        "continue": [
-          "质量改动无需调整，继续提交",
-          "我已检视本轮质量改动，继续提交"
-        ],
-        "revise": [
-          "需要调整质量改动（按检视意见返工）",
-          "需要调整质量改动"
-        ]
-      },
-      "evidence": [],
-      "next": {
-        "continue": "quality_commit",
-        "revise": "quality_rework"
-      },
-      "skip_in_moonlight": true,
-      "moonlight_choice": "continue"
-    },
-    "quality_rework": {
-      "title": "按用户意见调整质量改动",
-      "clear_hint": true,
-      "allow_source_edit": true,
-      "dynamic_next": [
-        "quality_recompile",
-        "verify_ut"
-      ],
-      "next_from_state": "quality_review.rework"
-    },
-    "quality_recompile": {
-      "title": "质量源码改动 — 重新编译",
-      "allow_source_edit": true,
-      "allow_dirty_compile": true,
-      "evidence": [
-        {
-          "type": "agent_or_no_source",
-          "agent": "COMPILE",
-          "statuses": [
-            "OK"
-          ],
-          "scope": "step"
-        }
-      ],
-      "next": "quality_review",
-      "quality_review_origin": "ut-source",
-      "quality_review_resume": "verify_codecheck",
-      "quality_review_rework": "quality_recompile"
-    },
-    "quality_commit": {
-      "title": "质量改动检视通过 — 精确提交",
-      "evidence": [
-        {
-          "type": "quality_review_committed"
-        }
-      ],
-      "dynamic_next": [
-        "verify_codecheck",
-        "tw_codecheck",
-        "rf_codecheck",
-        "verify_spec",
-        "tw_verify",
-        "domain_archive"
-      ],
-      "next_from_state": "quality_review.resume"
-    },
-    "verify_ponytail": {
-      "title": "验证 1/4 — 代码精简(先删)",
-      "clear_hint": true,
-      "allow_source_edit": true,
-      "source_change_next": "verify_post_ponytail_compile",
-      "next": "verify_codecheck",
-      "source_change_defer_review": true
-    },
-    "verify_post_ponytail_compile": {
-      "title": "验证 — 精简后重新编译",
-      "allow_source_edit": true,
-      "allow_dirty_compile": true,
-      "evidence": [
-        {
-          "type": "agent_or_no_source",
-          "agent": "COMPILE",
-          "statuses": [
-            "OK"
-          ],
-          "scope": "step"
-        }
-      ],
-      "next": "verify_codecheck"
-    },
-    "verify_recompile": {
-      "title": "验证回流 — 重新编译",
-      "allow_source_edit": true,
-      "allow_dirty_compile": true,
-      "evidence": [
-        {
-          "type": "agent_or_no_source",
-          "agent": "COMPILE",
-          "statuses": [
-            "OK"
-          ],
-          "scope": "step"
-        }
-      ],
-      "next": "quality_review",
-      "quality_review_origin": "ut-source",
-      "quality_review_resume": "verify_codecheck",
-      "quality_review_rework": "quality_recompile"
-    },
-    "verify_codecheck": {
-      "title": "验证 2/4 — 规范检查(代码定稿)",
-      "allow_source_edit": true,
-      "source_change_next": "verify_codecheck_compile",
-      "evidence": [
-        {
-          "type": "review_codecheck"
-        }
-      ],
-      "next": "verify_ut",
-      "source_change_defer_review": true
-    },
-    "verify_codecheck_compile": {
-      "title": "验证 — 规范修复后重新编译",
-      "allow_source_edit": true,
-      "allow_dirty_compile": true,
-      "evidence": [
-        {
-          "type": "agent_or_no_source",
-          "agent": "COMPILE",
-          "statuses": [
-            "OK"
-          ],
-          "scope": "step"
-        }
-      ],
-      "next": "verify_ut"
-    },
-    "verify_ut": {
-      "title": "验证 3/4 — 补充单元测试",
-      "allow_source_edit": true,
-      "tests_only": true,
-      "source_change_recheck": "quality_recompile",
-      "quality_review_origin": "ut-source",
-      "quality_review_resume": "verify_codecheck",
-      "quality_review_rework": "quality_recompile",
-      "test_change_review_origin": "ut-test",
-      "test_change_review_resume": "verify_spec",
-      "test_change_review_rework": "verify_ut",
-      "evidence": [
-        {
-          "type": "agent_or_no_source",
-          "agent": "UT",
-          "statuses": [
-            "PASS"
-          ]
-        },
-        {
-          "type": "ut_session_complete"
-        }
-      ],
-      "next": "verify_spec"
-    },
-    "verify_spec": {
-      "title": "验证 4/4 — 规格符合性",
-      "evidence": [
-        {
-          "type": "verification_passed"
-        }
-      ],
-      "next": "domain_archive",
-      "late_source_change_next": "quality_recompile",
-      "quality_review_origin": "ut-source",
-      "quality_review_resume": "verify_codecheck",
-      "quality_review_rework": "quality_recompile"
-    },
-    "domain_archive": {
-      "title": "领域知识归档",
-      "allow_specs_write": true,
-      "evidence": [
-        {
-          "type": "domain_archive_complete"
-        }
-      ],
-      "next": "delivery_review",
-      "late_source_change_next": "quality_recompile",
-      "quality_review_origin": "ut-source",
-      "quality_review_resume": "verify_codecheck",
-      "quality_review_rework": "quality_recompile"
-    },
-    "delivery_review": {
-      "title": "最终代码增量检视",
-      "evidence": [
-        {
-          "type": "delivery_manifest_committed"
-        }
-      ],
-      "next": "push",
-      "late_source_change_next": "quality_recompile",
-      "quality_review_origin": "ut-source",
-      "quality_review_resume": "verify_codecheck",
-      "quality_review_rework": "quality_recompile"
-    },
-    "archive_confirm": {
-      "title": "旧规格定稿确认恢复",
-      "next": "domain_archive"
-    },
-    "archive": {
-      "title": "旧规格定稿恢复",
-      "next": "domain_archive"
-    },
-    "push": {
-      "title": "推送分支",
-      "dynamic_next": [
-        "moonlight_review",
-        "external_verify"
-      ],
-      "evidence": [
-        {
-          "type": "pushed"
-        }
-      ],
-      "next": "end"
-    },
-    "external_verify": {
-      "title": "等待权威流水线",
-      "host_wait": true,
-      "evidence": [
-        {
-          "type": "pipeline_obligations_passed"
-        }
-      ],
-      "dynamic_next": [
-        "moonlight_review"
-      ],
-      "next": "end"
-    },
-    "moonlight_review": {
-      "title": "月光宝盒 — 等待早晨检查",
-      "next": "end"
-    },
-    "end": {
-      "title": "交付完成",
-      "terminal": true
-    },
-    "verify_comet": {
-      "title": "验证 4/4 — 规格符合性(旧节点名，仅作恢复入口)",
-      "next": "verify_spec"
+ "start": "config_confirm",
+ "state_file": ".mae-flow.json",
+ "compatibility_entries": [
+  "archive",
+  "archive_confirm",
+  "design",
+  "grill_ask",
+  "story_ask"
+ ],
+ "source_patterns": [
+  "(^|/)(service|src|include|lib|app|modules?)/"
+ ],
+ "specs_truth": "(^|/)(?:docs/specs|openspec/specs)/",
+ "steps": {
+  "config_confirm": {
+   "title": "配置确认",
+   "user_ack": true,
+   "require_sets": [
+    "工号",
+    "基线分支",
+    "单号",
+    "单号类型",
+    "需求文档",
+    "编译方式",
+    "UT生成方式",
+    "UT运行命令"
+   ],
+   "next": "workflow_select"
+  },
+  "workflow_select": {
+   "title": "交付方式选择",
+   "user_ack": true,
+   "choice_key": "workflow",
+   "choices": [
+    "full",
+    "hotfix",
+    "tweak",
+    "review"
+   ],
+   "new_order_choices": [
+    "full",
+    "hotfix",
+    "tweak"
+   ],
+   "choice_answers": {
+    "full": [
+     "完整开发"
+    ],
+    "hotfix": [
+     "已定位问题修复"
+    ],
+    "tweak": [
+     "局部修改"
+    ],
+    "review": [
+     "处理评审意见"
+    ]
+   },
+   "next": "branch_create"
+  },
+  "branch_create": {
+   "title": "创建工作分支",
+   "evidence": [
+    {
+     "type": "branch_ok"
     }
+   ],
+   "next_by": "workflow",
+   "next": {
+    "full": "grill",
+    "hotfix": "hf_open",
+    "tweak": "tw_open",
+    "review": "rf_triage"
+   },
+   "next_default": "full"
+  },
+  "rf_triage": {
+   "title": "处理评审意见 — 意见裁决",
+   "evidence": [
+    {
+     "type": "glob",
+     "any": [
+      ".mae-flow-work/{单号}/review.md"
+     ]
+    },
+    {
+     "type": "content_free",
+     "file": ".mae-flow-work/{单号}/review.md",
+     "patterns": [
+      "待裁决"
+     ],
+     "note": "裁决未闭环:文档残留「待裁决」。每条意见须经 AskUserQuestion 拿用户确认后改为 修复(已确认)/反驳(已确认)/转规格轮次(已确认)"
+    },
+    {
+     "type": "agent_ran",
+     "agent": "ASKUSER"
+    }
+   ],
+   "next": "build"
+  },
+  "grill_ask": {
+   "title": "需求澄清询问",
+   "user_ack": true,
+   "choice_key": "grill",
+   "choices": [
+    "yes",
+    "no"
+   ],
+   "choice_answers": {
+    "yes": [
+     "做需求质询",
+     "做质询"
+    ],
+    "no": [
+     "跳过需求质询",
+     "跳过"
+    ]
+   },
+   "next": {
+    "yes": "grill",
+    "no": "open"
+   }
+  },
+  "grill": {
+   "title": "需求澄清(逐题拍板)",
+   "evidence": [
+    {
+     "type": "glob",
+     "any": [
+      ".mae-flow-work/{单号}/grill-prep.md"
+     ]
+    },
+    {
+     "type": "content_free",
+     "file": ".mae-flow-work/{单号}/grill-prep.md",
+     "patterns": [
+      "待填",
+      "\\{\\{"
+     ],
+     "note": "备课工作表未填完:残留「待填」或「{{占位}}」。8 维每维必须替换掉全部 {{…}} 占位——给出实质结论(有缺口→候选题四要素齐全 / 不适用→具体依据),禁止快速划过某一维后重试"
+    },
+    {
+     "type": "glob",
+     "any": [
+      ".mae-flow-work/{单号}/decisions.md"
+     ]
+    },
+    {
+     "type": "glob",
+     "any": [
+      ".mae-flow-work/{单号}/grill.md"
+     ]
+    },
+    {
+     "type": "agent_ran",
+     "agent": "ASKUSER"
+    },
+    {
+     "type": "agent_ran",
+     "agent": "GRILL_PREP"
+    },
+    {
+     "type": "agent_ran",
+     "agent": "GRILL_FINAL"
+    }
+   ],
+   "next": "open"
+  },
+  "open": {
+   "title": "本地 Spec 确认",
+   "user_ack": true,
+   "approval_subject": {
+    "kind": "artifacts",
+    "artifacts": [
+     "spec"
+    ]
+   },
+   "confirmation_answers": [
+    "Spec 无需再调整，确认生成 Story",
+    "Spec 内容已确认，生成 Story"
+   ],
+   "evidence": [
+    {
+     "type": "local_spec_valid"
+    },
+    {
+     "type": "glob",
+     "any": [
+      ".mae-flow-work/{单号}/grill.md"
+     ]
+    }
+   ],
+   "next": "story"
+  },
+  "design": {
+   "title": "旧版方案设计恢复入口",
+   "next": "story"
+  },
+  "story_ask": {
+   "title": "旧版 Story 选择恢复入口",
+   "next": "story"
+  },
+  "story": {
+   "title": "Story 与实施附录生成及一次设计检视",
+   "user_ack": true,
+   "approval_subject": {
+    "kind": "artifacts",
+    "artifacts": [
+     "story",
+     "implementation"
+    ]
+   },
+   "confirmation_answers": [
+    "Story 与实施附录无需再调整，确认进入编码",
+    "Story 与实施附录已确认，进入编码实现"
+   ],
+   "evidence": [
+    {
+     "type": "glob",
+     "any": [
+      ".mae-flow-work/{单号}/story.md"
+     ]
+    },
+    {
+     "type": "glob",
+     "any": [
+      ".mae-flow-work/{单号}/implementation.md"
+     ]
+    },
+    {
+     "type": "agent_ran",
+     "agent": "STORY",
+     "statuses": [
+      "DONE"
+     ]
+    },
+    {
+     "type": "agent_ran",
+     "agent": "REVIEWER"
+    },
+    {
+     "type": "content_free",
+     "file": ".mae-flow-work/{单号}/story.md",
+     "patterns": [
+      "待确认"
+     ],
+     "note": "Story 仍有待确认内容；先展示给用户拍板，再完成本步骤唯一一次确认。"
+    },
+    {
+     "type": "content_free",
+     "file": ".mae-flow-work/{单号}/implementation.md",
+     "patterns": [
+      "待确认"
+     ],
+     "note": "实施附录仍有待确认内容；先展示给用户拍板，再完成本步骤唯一一次确认。"
+    }
+   ],
+   "next": "build"
+  },
+  "hf_open": {
+   "title": "已定位问题修复 — 确认修改范围",
+   "user_ack": true,
+   "approval_subject": {
+    "kind": "artifacts",
+    "artifacts": [
+     "spec"
+    ]
+   },
+   "confirmation_answers": [
+    "修改范围无需再调整，确认进入编码",
+    "确认范围并继续"
+   ],
+   "evidence": [
+    {
+     "type": "local_spec_valid"
+    }
+   ],
+   "next": "build"
+  },
+  "tw_open": {
+   "title": "局部修改 — 确认修改范围",
+   "user_ack": true,
+   "approval_subject": {
+    "kind": "artifacts",
+    "artifacts": [
+     "spec"
+    ]
+   },
+   "confirmation_answers": [
+    "修改范围无需再调整，确认进入编码",
+    "确认范围并继续"
+   ],
+   "evidence": [
+    {
+     "type": "local_spec_valid"
+    }
+   ],
+   "next": "build"
+  },
+  "build": {
+   "title": "自由实现与定稿",
+   "clear_hint": true,
+   "allow_source_edit": true,
+   "evidence": [],
+   "next": "domain_archive"
+  },
+  "domain_archive": {
+   "title": "领域知识归档",
+   "allow_specs_write": true,
+   "evidence": [
+    {
+     "type": "domain_archive_complete"
+    }
+   ],
+   "next": "delivery_review",
+   "allow_source_edit": true
+  },
+  "delivery_review": {
+   "title": "最终代码增量检视",
+   "evidence": [
+    {
+     "type": "delivery_manifest_committed"
+    }
+   ],
+   "next": "push",
+   "allow_source_edit": true
+  },
+  "archive_confirm": {
+   "title": "旧规格定稿确认恢复",
+   "next": "domain_archive"
+  },
+  "archive": {
+   "title": "旧规格定稿恢复",
+   "next": "domain_archive"
+  },
+  "push": {
+   "title": "推送分支",
+   "dynamic_next": [
+    "moonlight_review",
+    "external_verify"
+   ],
+   "evidence": [
+    {
+     "type": "pushed"
+    }
+   ],
+   "next": "end"
+  },
+  "external_verify": {
+   "title": "等待权威流水线",
+   "host_wait": true,
+   "evidence": [
+    {
+     "type": "pipeline_obligations_passed"
+    }
+   ],
+   "dynamic_next": [
+    "moonlight_review"
+   ],
+   "next": "end"
+  },
+  "moonlight_review": {
+   "title": "月光宝盒 — 等待早晨检查",
+   "next": "end"
+  },
+  "end": {
+   "title": "交付完成",
+   "terminal": true
   }
+ }
 }

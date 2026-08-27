@@ -33,12 +33,6 @@ def render_command(command_id, context=None):
             "migrate-flow", "--confirm", "--message-id",
             _required(context, "message_id"),
         ],
-        "compile_task": lambda: [
-            "agent-task", "compile", "--scope",
-            _required(context, "scope"),
-        ],
-        "codecheck_task": lambda: ["agent-task", "codecheck"],
-        "ut_task": lambda: ["agent-task", "ut"],
     }
     try:
         argv = builders[command_id]()
@@ -57,5 +51,5 @@ def catalog_ids():
     return (
         "current", "messages", "local_spec_init", "local_spec_validate",
         "manifest_set", "manifest_confirm",
-        "migrate_confirm", "compile_task", "codecheck_task", "ut_task",
+        "migrate_confirm",
     )

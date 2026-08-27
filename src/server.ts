@@ -4,6 +4,15 @@
  *   POST /tasks                {requirement}            → 201 摘要
  *   GET  /tasks                                         → 列表
  *   GET  /knowledge-insights                            → 团队知识效能(只读)
+ *   GET  /skills                                        → Skill 货架 + 操作留痕
+ *   GET  /skills/:dir/versions                          → 归档版本痕(可回退点)
+ *   PUT  /skills/:dir          {files:[{path,content_base64}]} → 上传/更新(管理员)
+ *   DELETE /skills/:dir                                 → 下线并归档(管理员)
+ *   POST /skills/:dir/rollback {version}                → 回退归档版本(管理员)
+ *   POST /skills/:dir/distill                           → 从任务现场起草修订稿(管理员)
+ *   GET  /skills/:dir/candidates[/:id]                  → 修订候选列表/详情
+ *   POST /skills/:dir/candidates/:id/adopt              → 采纳候选,走上架闸(管理员)
+ *   DELETE /skills/:dir/candidates/:id                  → 丢弃候选(管理员)
  *   GET  /tasks/:id                                     → 详情(含待办)
  *   POST /tasks/:id/decision   {state_version,decision,notes?}
  *        → 200;版本冲突/已被抢先 → 409 "任务状态已变化"(先到决定生效)
@@ -22,6 +31,7 @@
  *   POST /tasks/:id/annotations/:annId/reopen           → 裁决:返工,退回草稿再送一轮
  *   GET  /tasks/:id/events                              → SSE:重放事件日志后持续跟进
  *   GET  /tasks/:id/prepush/events                      → SSE:推送前验证实时事件(换轮自动切新)
+ *   GET  /tasks/:id/warmup/events                       → SSE:环境预热编译实时事件
  *   GET  /tasks/:id/timeline                            → 人话交付时间线(只读现场)
  *   GET  /tasks/:id/activity                            → 行为摘要:此刻在干嘛/分段折叠/异常信号
  *   GET  /tasks/:id/artifacts[/:name]                   → 检视产物清单/内容(只读现场)
@@ -71,6 +81,21 @@ import {
 } from "./annotations.ts";
 import type { LubanApprovalGateway } from "./lubanApproval.ts";
 import { handleIssueRoutes } from "./issueFlow/routes.ts";
+import {
+  SkillLibraryError,
+  listSkillOperations,
+  listSkillVersions,
+  offlineHostSkill,
+  rollbackHostSkill,
+  uploadHostSkill,
+} from "./hostSkillLibrary.ts";
+import {
+  SkillDistillError,
+  adoptSkillCandidate,
+  discardSkillCandidate,
+  listSkillCandidates,
+  readSkillCandidate,
+} from "./skillDistiller.ts";
 
 /** 正式前端静态文件的最小类型表:Vite 产物就这几种。 */
 const MIME: Record<string, string> = {
@@ -307,6 +332,16 @@ export function createTaskServer(
           const swept = includeCurrent
             ? service.sweepMoonlight(viewer.username) : 0;
           return json(response, 200, { moonlight: on, swept, ...preview });
+        }
+        // push 前清单过目的个人默认(缺省即开):谁登录改谁的。
+        // 关掉不撤已举的卡——那张卡按当时意愿举的,点确认即走。
+        if (request.method === "PUT" && parts[1] === "me"
+            && parts[2] === "push-confirmation") {
+          if (!viewer) return json(response, 401, { error: "尚未登录" });
+          const body = await readBody(request);
+          options.auth!.setPushConfirmation(viewer.username, body.on === true);
+          return json(response, 200,
+            options.auth!.sessionView(viewer.username));
         }
         // 个人 Git 令牌:谁登录改谁的,写完只回掩码(只写不读)。
         if (request.method === "PUT" && parts[1] === "me"
@@ -557,7 +592,8 @@ export function createTaskServer(
       const protectedRoute =
         url.pathname === "/history" || parts[0] === "tasks"
         || url.pathname === "/knowledge-insights"
-        || parts[0] === "reviews" || parts[0] === "repository-skills";
+        || parts[0] === "reviews" || parts[0] === "repository-skills"
+        || parts[0] === "skills";
       // 兼容已经发出去的旧通知。/tasks/:id 是 JSON API，但旧链接若由
       // 浏览器作为页面打开，应带人去新的任务工作台；程序 fetch 默认
       // Accept: */*，仍拿原来的 JSON，不改变 API 契约。
@@ -589,6 +625,92 @@ export function createTaskServer(
       // 会被当成前端资源并返回 404。只读口径与团队任务可见性一致。
       if (request.method === "GET" && url.pathname === "/knowledge-insights") {
         return json(response, 200, service.knowledgeInsights());
+      }
+      // 团队 Skill 资产库(货架的写半边):读与货架同口径(登录即可),
+      // 写只归管理员,操作人逐条进留痕。写进数据目录即对下一单生效,
+      // 快照器每任务从源重造——这里不用通知任何运行时组件。
+      // GET 也必须先于静态托管兜底,否则会被当前端资源接管。
+      if (parts[0] === "skills") {
+        const dataDir = service.options.dataDir;
+        if (request.method === "GET" && parts.length === 1) {
+          return json(response, 200, {
+            ...service.hostSkillShelf(),
+            operations: listSkillOperations(dataDir),
+          });
+        }
+        try {
+          if (request.method === "GET" && parts.length === 3
+              && parts[2] === "versions") {
+            return json(response, 200, {
+              versions: listSkillVersions(
+                dataDir, decodeURIComponent(parts[1])),
+            });
+          }
+          // 修订候选(沉淀环):读=登录即可(检视草稿是团队的事),
+          // 起草/采纳/丢弃归管理员——采纳复用资产库同一道上架闸。
+          if (request.method === "GET" && parts.length === 3
+              && parts[2] === "candidates") {
+            return json(response, 200, {
+              candidates: listSkillCandidates(
+                dataDir, decodeURIComponent(parts[1])),
+            });
+          }
+          if (request.method === "GET" && parts.length === 4
+              && parts[2] === "candidates") {
+            return json(response, 200, readSkillCandidate(
+              dataDir, decodeURIComponent(parts[1]),
+              decodeURIComponent(parts[3])));
+          }
+          if (options.auth && viewer?.role !== "admin") {
+            return json(response, 403,
+              { error: "只有管理员可以管理团队 Skill" });
+          }
+          const operator = viewer?.username ?? "本地部署";
+          if (request.method === "PUT" && parts.length === 2) {
+            const body = await readBody(request);
+            return json(response, 200, await uploadHostSkill(
+              dataDir, decodeURIComponent(parts[1]),
+              Array.isArray(body.files) ? body.files : [], operator));
+          }
+          if (request.method === "DELETE" && parts.length === 2) {
+            return json(response, 200, await offlineHostSkill(
+              dataDir, decodeURIComponent(parts[1]), operator));
+          }
+          if (request.method === "POST" && parts.length === 3
+              && parts[2] === "rollback") {
+            const body = await readBody(request);
+            return json(response, 200, await rollbackHostSkill(
+              dataDir, decodeURIComponent(parts[1]),
+              String(body.version ?? ""), operator));
+          }
+          if (request.method === "POST" && parts.length === 3
+              && parts[2] === "distill") {
+            return json(response, 200, await service.distillSkillDraft(
+              decodeURIComponent(parts[1]), operator));
+          }
+          if (request.method === "POST" && parts.length === 5
+              && parts[2] === "candidates" && parts[4] === "adopt") {
+            return json(response, 200, await adoptSkillCandidate(
+              dataDir, decodeURIComponent(parts[1]),
+              decodeURIComponent(parts[3]), operator));
+          }
+          if (request.method === "DELETE" && parts.length === 4
+              && parts[2] === "candidates") {
+            discardSkillCandidate(dataDir,
+              decodeURIComponent(parts[1]), decodeURIComponent(parts[3]));
+            return json(response, 200, { ok: true });
+          }
+        } catch (error) {
+          if (error instanceof SkillLibraryError
+              || error instanceof SkillDistillError) {
+            return json(response, 400, { error: error.message });
+          }
+          if (error instanceof TaskControlError) {
+            return json(response, 409, { error: error.message });
+          }
+          throw error;
+        }
+        return json(response, 404, { error: "未知 Skill 资产接口" });
       }
       // Committer 的个人检视收件箱。名单只决定“还能不能被新邀请”，
       // 已经发给本人的邀请即使后来移出名单也仍应可见、可完成。
@@ -873,6 +995,12 @@ export function createTaskServer(
             && parts[3] === "events") {
           return streamPrepushEvents(service, id, response);
         }
+        // 环境预热编译的实时事件流(用户点名:预热进展必须清楚可见)。
+        if (request.method === "GET" && parts[2] === "warmup"
+            && parts[3] === "events") {
+          return streamJsonlAsSse(service, id, response,
+            () => service.warmupEventLogPath(id));
+        }
         if (parts[2] === "developer-assistant") {
           const target = service.get(id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
@@ -995,6 +1123,17 @@ export function createTaskServer(
             return json(response, 403, { error: "只能重跑分配给自己的任务" });
           }
           return json(response, 200, service.retry(id));
+        }
+        // 推送前验证失败停机后,人可拍板跳过本地验证,直推流水线裁决。
+        if (request.method === "POST" && parts[2] === "prepush"
+            && parts[3] === "skip") {
+          const target = service.get(id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          if (!canOperate(viewer, target.luban_account, !!options.auth)) {
+            return json(response, 403, { error: "只能操作分配给自己的任务" });
+          }
+          return json(response, 200,
+            await service.skipPrePushVerification(id));
         }
         // 从头重跑会原位覆盖旧任务及其审计现场。管理员不替开发者发起
         // 或冒用其代码身份；鉴权部署下只能由任务本人执行。

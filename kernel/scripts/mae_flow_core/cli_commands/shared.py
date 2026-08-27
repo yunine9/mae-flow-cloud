@@ -73,12 +73,10 @@ from mae_flow_core.application.delivery.moonlight import (
     record_blocker,
     record_push_failure,
     repair_moonlight,
-    unlock_moonlight_source,
     validate_blocker,
     validate_finalize,
     validate_finalize_step,
     validate_push_failure,
-    validate_unlock_source,
 )
 from mae_flow_core.application.delivery.moonlight_branch import (
     MoonlightBranchFacts,
@@ -125,7 +123,6 @@ from mae_flow_core.guard.permits import (
 )
 from mae_flow_core.guard.ownership import (
     OwnershipFacts,
-    decide_compile_task_commit,
     decide_ownership,
 )
 from mae_flow_core.guard.bash import (

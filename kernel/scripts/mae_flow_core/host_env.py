@@ -32,6 +32,16 @@ def user_on_this_machine():
     return host_kind() != CLOUD
 
 
+def unattended_confirm_allowed(state):
+    """归档/交付清单自动确认的许可:月光宝盒或云端宿主。
+
+    云端没有"坐在终端前的用户",中途单问确认只会把任务挂起数小时;
+    真正的人工裁决在工作台批注与 MR 检视(2026-08-25 编排瘦身)。"""
+    if bool(((state or {}).get("moonlight") or {}).get("enabled")):
+        return True
+    return host_kind() == CLOUD
+
+
 def worker_agent_ledger_gates():
     """Whether real worker lifecycle facts are enforced.
 
@@ -77,6 +87,12 @@ def build_runs_locally(state=None):
     注意这不等于"跳过验证":跳过的是**本地这一次执行**,验证反而更
     权威了——流水线跑的是团队公认的那套构建。契约据此不再要求本地
     执行证据,但删代码换通过之类的作弊守卫(净产出、诚实报告)照旧。
+
+    2026-08-26 勘误:上面"宿主没有构建链"的前提已随统一构建镜像失效
+    ——编码会话与推送前验证共用带完整工具链和按仓持久缓存的任务容器,
+    Agent 可以也应该随手增量编译自检(实测曾因 SKILL.md 旧禁令整单
+    零编译)。本函数的**结论不变**:自检只是 Agent 的自我反馈,COMPILE
+    证据核销仍在推送前验证与绑 SHA 流水线,不收 Agent 自述的绿灯。
     """
     return _runs_locally(state, "compile")
 

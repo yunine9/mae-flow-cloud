@@ -153,6 +153,38 @@ test("返工开修复会话并携带清单契约;月光不代答确认卡", asyn
   }
 });
 
+test("个人默认(缺省即开)驱动闸门:没有任务级设置也举卡", async () => {
+  const { service, model, id, internal } = await verifyingTask();
+  try {
+    // serve 接的是 LocalAuth.pushConfirmationEnabled;这里直接注入
+    // 同签名回调,契约一致:按归属人现读现判。
+    (service as any).options.pushConfirmation = () => true;
+    const gate = () => (service as any)
+      .pushConfirmationSatisfied(internal, "master_bot_REQ1");
+    assert.equal(await gate(), false, "个人默认开=真人任务必须举卡");
+    assert.equal(service.get(id)!.waiting!.step, "cloud_push_confirm");
+  } finally {
+    await model.stop();
+  }
+});
+
+test("LocalAuth 个人默认:真人缺省即开,显式关才关;无账号不举卡", async () => {
+  const { LocalAuth } = await import("../src/auth.ts");
+  const { mkdtempSync } = await import("node:fs");
+  const auth = new LocalAuth(
+    join(mkdtempSync(join(tmpdir(), "mfc-push-auth-")), "auth.json"));
+  auth.bootstrapAdmin("boss", "administrator-pass");
+  auth.createUser("dev", "developer-pass-1", "developer");
+  assert.equal(auth.pushConfirmationEnabled("dev"), true,
+    "用户拍板:push 前确认默认开启");
+  auth.setPushConfirmation("dev", false);
+  assert.equal(auth.pushConfirmationEnabled("dev"), false);
+  auth.setPushConfirmation("dev", true);
+  assert.equal(auth.pushConfirmationEnabled("dev"), true);
+  assert.equal(auth.pushConfirmationEnabled(undefined), false,
+    "无账号链路(probe/pilot/未接登录)不举卡,自动化不被卡死");
+});
+
 test("开关的边界:已推送后不能再开;等卡时关掉=作废卡继续推", async () => {
   const { service, model, id, internal, repo } = await verifyingTask();
   try {

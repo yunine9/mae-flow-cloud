@@ -156,6 +156,51 @@ test("prepush gate: 放行构建、UT、本地提交和只读 Git", () => {
   }
 });
 
+test("prepush gate: build-notes 精确豁免,组合走私照拦", () => {
+  // 构建入口沉淀是预热/prepush 共用工作件,不是内核现场(实锤:
+  // 预热写入曾被拦报"沙箱限制")。
+  for (const [tool, value] of [
+    ["Write", ".mae-flow-work/build-notes.md"],
+    ["Read", ".mae-flow-work/build-notes.md"],
+    ["Bash", "cat > .mae-flow-work/build-notes.md <<'EOF'\n- 增量编译: mvn compile\nEOF"],
+    ["Bash", "tail -20 .mae-flow-work/build-notes.md"],
+  ] as const) {
+    assert.equal(prePushSecurityDecision(tool, value), undefined, value);
+  }
+  // 同一条命令夹带其他内核现场路径:豁免不放行。
+  for (const [tool, value] of [
+    ["Bash", "cp .mae-flow.json .mae-flow-work/build-notes.md"],
+    ["Bash", "cat .mae-flow-work/story.md > .mae-flow-work/build-notes.md"],
+    ["Write", ".mae-flow-work/notes-extra.md"],
+  ] as const) {
+    assert.equal(
+      prePushSecurityDecision(tool, value)?.action, "deny", value);
+  }
+});
+
+test("prepush gate: 排除语法提到内核现场不算访问(内网误杀实锤)", () => {
+  for (const command of [
+    // 内网日志原样的两条被误杀命令。
+    'cd /data/x/SONFrontendService && grep -r "freq.one2n\\|freq.n2one" '
+    + '--include="*.java" . 2>/dev/null | grep -v ".mae-flow-work" | grep -v "target/"',
+    "find . -path ./.mae-flow-work -prune -o \\( -name \"*.java\" \\) -print "
+    + '| xargs grep -l "freq" 2>/dev/null',
+    'grep -r foo --exclude-dir=.mae-flow-work .',
+    'git grep foo -- . ":(exclude).mae-flow-work"',
+  ]) {
+    assert.equal(prePushSecurityDecision("Bash", command), undefined, command);
+  }
+  // 正向引用不受排除豁免影响,照样拒。
+  for (const command of [
+    "cat .mae-flow.json",
+    "grep foo .mae-flow-work/story.md",
+    'grep -v ".mae-flow-work" x | tee .mae-flow-work/story.md',
+  ]) {
+    assert.equal(
+      prePushSecurityDecision("Bash", command)?.action, "deny", command);
+  }
+});
+
 test("prepush gate: 拦住 push、remote 与凭据改写", () => {
   for (const command of [
     "git push origin HEAD",

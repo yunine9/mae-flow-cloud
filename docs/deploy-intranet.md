@@ -301,6 +301,9 @@ openssl rand -hex 32 > /etc/mae-flow-cloud/luban-plugin.token
 ```
 
 未打开这个开关时，出站通知仍正常发送，但不会宣称“直接回复 1”可用。
+无论消息属于待办、收口、检视邀请还是连通测试，正文都会带固定前置说明：
+手机端先输入 `/mfc` 激活 Mae-Flow 插件；未激活时，直接回复普通通知不会
+进入 Mae-Flow。
 
 小鲁班真实插件的回调形状、验签方式尚未拿到，因此部署桥负责把它转换成
 Cloud 的稳定内部契约；如果插件本身可按该契约发出，也可直接注册 Cloud
@@ -321,7 +324,7 @@ Token，也不需要每个人配置。
 
 已启用 `luban-plugin-replies` 时，账号只有一项待办的通知会直接显示审批
 上下文、当前问题和选项，无需先查询“待审批”，
-回复 `1`、`2`、`确认` 或具体修改意见即可。若同一账号有多项待办，裸序号会
+先输入 `/mfc` 激活插件，再回复 `1`、`2`、`确认` 或具体修改意见即可。若同一账号有多项待办，裸序号会
 被安全拒绝；应使用通知里的审批码，或打开“Mae-Flow 待审批”插件后先选任务。
 插件/桥必须把同一用户的后续裸消息继续转发给 Cloud。多题卡会在每次回复后明确显示“已记录、尚未
 提交”并提示下一题，全部答完后才统一生效。选项不合适时回复
@@ -673,37 +676,32 @@ Skill 需要补说明。该台账是 fail-open 观测旁路，不能替代质量
 改完不必重启服务:下一个任务重新读取目录并选择后生效；运行中的任务使用
 已冻结快照，不会被仓库里随后发生的 Skill 改动半路换掉。
 
-## 会话开场自带的两样东西(不用配,零依赖)
+## 会话开场自带的仓内知识(不用配,零依赖)
 
-内核模式下每次会话(首跑/修复/重建)开场白里会多两块材料。它们是
-**上下文材料不是判定**:错了顶多慢,不影响门禁裁决,任何一步炸了
+内核模式下每次会话(首跑/修复/重建)开场白里会按需附带仓内知识。
+它是**上下文材料不是判定**:错了顶多慢,不影响门禁裁决,读取失败
 就不上桌,任务照跑。
 
-1. **仓库地图**:按"被引用扇入"排序的文件+符号清单,让模型在大仓里
-   先看骨架再找代码,不用全仓乱 grep。正则近似(不引 tree-sitter,
-   内网 WSL 上原生构建是负担),带三道预算帽(1500 文件/单文件
-   200KB/3 秒)与 12000 字符输出帽,超了在地图尾部明说截断。
-   **无需配置**,也没有开关——地图为空时它自己不出现。
-2. **知识块**:交付仓里的 `.mae-flow/knowledge/*.md`,命中触发词才
-   注入。知识跟着仓走,平台不做知识库、不做配置面——换个仓就是换套
-   知识。格式:
+**知识块**:交付仓里的 `.mae-flow/knowledge/*.md`,命中触发词才
+注入。知识跟着仓走,平台不做知识库、不做配置面——换个仓就是换套
+知识。格式:
 
-   ```markdown
-   ---
-   triggers: 覆盖率, coverage, jacoco
-   ---
-   覆盖率补齐要写真断言;本仓禁止用 @Generated 排除类。
-   ```
+```markdown
+---
+triggers: 覆盖率, coverage, jacoco
+---
+覆盖率补齐要写真断言;本仓禁止用 @Generated 排除类。
+```
 
-   - `triggers` 为空或整个头部缺失 = **常驻知识**(每次都注入),
-     团队通用规范放这类,不用硬编一个假触发词;
-   - 匹配语料 = 需求原文 + **本轮流水线失败详情**:所以红灯日志里
-     出现"覆盖率"时,上面这篇会自动到修复会话手上;
-   - 大小写不敏感、按子串匹配(中文没有词边界),宁可多注入一篇也
-     不漏;注入总量 8000 字符封顶,超了明说截断。
+- `triggers` 为空或整个头部缺失 = **常驻知识**(每次都注入),
+  团队通用规范放这类,不用硬编一个假触发词;
+- 匹配语料 = 需求原文 + **本轮流水线失败详情**:所以红灯日志里
+  出现"覆盖率"时,上面这篇会自动到修复会话手上;
+- 大小写不敏感、按子串匹配(中文没有词边界),宁可多注入一篇也
+  不漏;注入总量 8000 字符封顶,超了明说截断。
 
-   建议起手就放两三篇:本仓的构建/测试怪癖、CodeCheck 的历史包袱、
-   哪些目录碰不得。这是团队经验沉淀的地方,人人可提 MR 补充。
+建议起手就放两三篇:本仓的构建/测试怪癖、CodeCheck 的历史包袱、
+哪些目录碰不得。这是团队经验沉淀的地方,人人可提 MR 补充。
 
 ## 配置面全集(--config 一个文件收口)
 
@@ -732,7 +730,7 @@ Skill 需要补说明。该台账是 fail-open 观测旁路，不能替代质量
   "max-concurrent": 2,
   "workspace-retention-days": 14,
   "isolate-image": "registry.intra/mae-flow/task-builder@sha256:<digest>",
-  "isolate-memory": "8g", "isolate-cpus": "2", "isolate-pids": 512,
+  "isolate-memory": "8g", "isolate-cpus": "8", "isolate-pids": 512,
   "isolate-network": "bridge",
   "isolate-cache-root": "/var/cache/mae-flow-cloud/build",
   "build-slots": 1
@@ -755,12 +753,12 @@ install -m 600 /dev/null /etc/mae-flow-cloud/mcp-token
 | platform / fake-platform | 无 | 交付平台地址 / 本地假件 |
 | luban / luban-header | 假小鲁班 | 通知端点与鉴权头(可重复) |
 | luban-plugin-token-file | 无 | 准备 Cloud 手机审批回调端点；0600、至少 32 字节的固定 Token 文件，不代表小鲁班入站已接通 |
-| luban-plugin-replies | false | 真实小鲁班插件/入站桥端到端验收通过后才设 true；控制通知是否承诺可直接回复 |
+| luban-plugin-replies | false | 真实小鲁班插件/入站桥端到端验收通过后才设 true；控制通知是否承诺 `/mfc` 激活后可回复 |
 | pg | 无 | 投影(纯旁路) |
 | data / port / web | .tasks / 8787 / web-dist | 现场目录、端口、前端 |
 | isolate-image | 无(内核模式必填) | 统一任务构建镜像 |
 | isolate-volume | 无 | 部署只读配置/CA 等额外挂载(可重复) |
-| isolate-memory / isolate-cpus / isolate-pids | 8g / 2 / 512 | 每个任务容器的资源上限 |
+| isolate-memory / isolate-cpus / isolate-pids | 8g / 8 / 512 | 每个任务容器的资源上限；`isolate-cpus` 是可用上限，不是预留核数 |
 | isolate-network | bridge | 任务容器网络；拒绝 host/container 模式 |
 | isolate-cache-root | `<data>/build-cache` | 按仓库哈希隔离的 Maven/npm/ccache/XDG 缓存 |
 | isolate-user | **Linux:服务进程 uid:gid**;root 守护形态必须显式给数字 uid:gid;其他平台:镜像内非 root 用户 | Linux 普通服务账号不配时按自己的 uid:gid 跑。root 守护进程必须显式给非 root 数字 uid:gid；Cloud 在容器启动前把实际代码工作区和分仓缓存安全交给该用户，不修改任务台账与凭据目录 |
@@ -855,7 +853,7 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
   --provider <网关名> --model glm-5.1 \
   --repo <内网仓地址> --platform <MR/流水线网关地址> \
   --isolate-image <统一任务构建镜像@sha256:digest> \
-  --isolate-memory 8g --isolate-cpus 2 --isolate-pids 512 \
+  --isolate-memory 8g --isolate-cpus 8 --isolate-pids 512 \
   --isolate-cache-root /var/cache/mae-flow-cloud/build \
   --build-slots 1 \
   --pg postgresql://<用户>@<PG地址>/<库名> \
@@ -959,10 +957,9 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
   正在跑的编译/prepush 容器清掉。进程被 `kill -9` 后留下的锁由下次启动
   自动接管，不需要手工清理；确实要手工清时先确认对方真的没了，再删这个
   文件。**跨机共享同一个数据目录不受支持**（NFS 之类），会被直接拒绝。
-- **等审批的任务不占容器**:人挂在审批卡上时任务容器会被释放，答复到
-  达后自动重新开。日志里能看到「已释放闲置任务容器」和「任务容器已重新
-  开起」。这意味着容器里 `/tmp` 与 HOME 的临时文件跨审批不保留——需要留
-  存的东西写进工作区。
+- **等审批时保留原任务容器**:Agent 会话与 HOME、`/tmp`、工作区保持同一
+  执行现场，答复到达后直接继续，不做 stop/rm/run。`8g` 是单容器内存上限
+  而非预分配；暂停、取消、终态、服务关闭和编码转 prepush 时仍会正常回收。
 - 守护用 systemd `Restart=on-failure` 即可,恢复逻辑在服务内部。
   单元文件样例:
 
@@ -982,7 +979,7 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
     --kernel-mode --platform <MR/流水线网关地址> \
     --pg postgresql://<用户>@<PG地址>/<库名> \
     --isolate-image <统一任务构建镜像@sha256:digest> \
-    --isolate-memory 8g --isolate-cpus 2 --isolate-pids 512 \
+    --isolate-memory 8g --isolate-cpus 8 --isolate-pids 512 \
     --isolate-cache-root /var/cache/mae-flow-cloud/build \
     --build-slots 1 \
     --data /var/lib/mae-flow-cloud --port 8787

@@ -178,18 +178,6 @@
       "escape": "permit",
       "why": "提交到错分支的恢复成本高"
     },
-    "edit-tests-only": {
-      "kind": "permit",
-      "tier": "A",
-      "escape": "permit",
-      "why": "改产品代码让测试变绿属破坏信任，不是可逆的流程瑕疵;出口是用户裁决后 unlock source"
-    },
-    "bash-tests-only": {
-      "kind": "permit",
-      "tier": "A",
-      "escape": "permit",
-      "why": "同 edit-tests-only"
-    },
     "edit-before-workflow": {
       "kind": "permit",
       "tier": "A",
@@ -222,18 +210,6 @@
       "escape": "comply",
       "evidence": "请 Read",
       "why": "plugin、仓库和宿主 Skill/模板均以任务内快照交给 Agent；允许读取但禁止覆盖或删除，避免同一会话破坏后续指令资源"
-    },
-    "edit-ut-preempt": {
-      "kind": "advisory",
-      "tier": "B",
-      "escape": "comply",
-      "why": "编码步新建测试文件是抢跑白费:UT 由 verify_ut 的子 agent 分批生成,主会话手写不计证据(2026-08-20 云端实锤,纯烧 token)。不拦只提醒——修改已有测试是合法的(重构会弄坏旧测试),先建骨架也不该被挡"
-    },
-    "bash-compile-task-pending": {
-      "kind": "permit",
-      "tier": "A",
-      "escape": "permit",
-      "why": "编译未完成就提交，回退要 reset/amend;已修复为真实证据放行，不再死锁"
     },
     "bash-build-output-artifacts": {
       "kind": "permit",

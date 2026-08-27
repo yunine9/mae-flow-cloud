@@ -6,9 +6,8 @@ from .shared import (
     activate_moonlight, atomic_write_json, atomic_write_text, defer_moonlight_quality,
     disable_moonlight, finalize_moonlight, json, load_json, os, prepare_project, re,
     read_text, record_blocker, record_push_failure, repair_moonlight,
-    thaw_delivery_payload, time, unlock_moonlight_source, validate_blocker,
+    thaw_delivery_payload, time, validate_blocker,
     validate_finalize, validate_finalize_step, validate_push_failure,
-    validate_unlock_source,
 )
 from .wiring import api
 
@@ -255,22 +254,6 @@ def _moonlight_push_failed(flow, st, args):
     )
     _apply_moonlight_result(flow, st, result)
 
-def _moonlight_unlock_source(flow, st, args):
-    sid = st["current"]
-    tests_only = bool(
-        flow["steps"].get(sid, {}).get("tests_only"))
-    validation = validate_unlock_source(
-        tests_only, args.reason or "")
-    if validation.exit_code:
-        api.die(validation.stderr[0], validation.exit_code)
-    result = unlock_moonlight_source(
-        st,
-        tests_only=tests_only,
-        reason=args.reason or "",
-        now=time.strftime("%Y-%m-%d %H:%M:%S"),
-    )
-    _apply_moonlight_result(flow, st, result)
-
 def _moonlight_finalize(flow, st, args):
     step_validation = validate_finalize_step(st)
     if step_validation.exit_code:
@@ -414,20 +397,16 @@ def cmd_moonlight(flow, st, args):
         return _moonlight_blocked(flow, st, args)
     if action == "push-failed":
         return _moonlight_push_failed(flow, st, args)
-    if action == "unlock-source":
-        return _moonlight_unlock_source(flow, st, args)
     if action == "defer":
         sid = st["current"]
         kind = api._moonlight_step_kind(sid)
         reason = args.reason or ""
-        recheck = flow["steps"].get(
-            sid, {}).get("source_change_recheck")
         result = defer_moonlight_quality(
             st,
             kind=kind,
             reason=reason,
             rejection=_moonlight_latest_rejection(kind),
-            recheck=recheck or "",
+            recheck="",
             ports=MoonlightDeferPorts(
                 build_boundary=lambda: (
                     _moonlight_build_defer_boundary(st)),

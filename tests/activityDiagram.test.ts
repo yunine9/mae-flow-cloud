@@ -43,6 +43,17 @@ partition "DB+import 交叉冲突检测" {
 stop
 @enduml`;
 
+const ACTOR_SEQUENCE_WITH_END = `@startuml
+actor user
+participant system
+user -> system: request
+alt success
+  system --> user: done
+else failed
+  system --> user: retry
+end
+@enduml`;
+
 function flatten(items: ActivityItem[]): ActivityItem[] {
   return items.flatMap((item) => item.kind === "partition"
     ? [item, ...flatten(item.items)]
@@ -81,6 +92,29 @@ test("story 活动图走活动图组件，关键步骤、分区和图注都进�
   assert.match(html, /loadDbFreqMap（含neKey）/);
   assert.match(html, /probe\.validation\.freq\.db\.conflict/);
   assert.doesNotMatch(html, /暂时无法安全绘制/);
+});
+
+test("actor + alt/end 是时序图，bare end 不能把它误判成活动图", () => {
+  assert.equal(looksLikeActivity(ACTOR_SEQUENCE_WITH_END), false);
+  const html = renderToStaticMarkup(React.createElement(PlantUml, {
+    source: ACTOR_SEQUENCE_WITH_END,
+  }));
+  assert.match(html, /aria-label="PlantUML 时序图"/);
+  assert.match(html, /时序图 · 内置渲染/);
+  assert.doesNotMatch(html, /检测到活动图/);
+  assert.doesNotMatch(html, /暂时无法安全绘制/);
+});
+
+test("活动图仍可用 end 作为 stop，只是不拿 end 单独判图型", () => {
+  const source = `@startuml
+start
+:执行校验;
+end
+@enduml`;
+  assert.equal(looksLikeActivity(source), true);
+  const model = parseActivity(source);
+  assert.deepEqual(model?.items.map((item) => item.kind),
+    ["start", "action", "stop"]);
 });
 
 test("活动图不认识的语法明确给出行号，不静默丢掉后继续画", () => {

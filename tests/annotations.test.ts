@@ -505,6 +505,59 @@ test("批注 HTTP 面:圈注→清单带进展→送出走插话通道", async (
   }
 });
 
+test("批注已主动送达后，检视决定的补充说明仍可提交且不重复送批注", async () => {
+  const question = "这轮检视怎么处理?";
+  const model = new ScriptedModelServer([
+    { text: "先检查实现",
+      tool: { name: "bash", input: { command: "sleep 2; echo CHECKED" } } },
+    { tool: { name: "AskUserQuestion", input: { questions: [{
+      question, options: ["继续调整", "确认通过"],
+    }] } } },
+    { text: "收到新的补充要求。" },
+  ]);
+  await model.start();
+  const service = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-anno-sent-decision-")),
+    provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+  });
+  try {
+    const id = service.create("主动批注后继续检视").id;
+    await until(() => model.requests.length >= 1, "模型开跑");
+    const note = service.addAnnotation(id, {
+      author: "liaoxiang", artifact: "未提交改动", file: "SmsHandler.java",
+      line: 23, anchor: "retry(3)", note: "这里只重试网关错误", kind: "code",
+    });
+    await service.sendAnnotations(id, [note.id]);
+    const sentAt = service.listAnnotations(id).items[0].sent_at;
+    assert.ok(sentAt, "主动送达后应记录 sent_at");
+
+    await until(
+      () => service.get(id)?.status === "waiting_for_human", "任务进入检视");
+    const waiting = service.get(id)!.waiting!;
+    await service.decide(id, {
+      state_version: waiting.state_version,
+      selected_options: { [question]: "继续调整" },
+      comment: "另外，请补一条失败指标埋点",
+      // 模拟旧页面或并发刷新仍携带 sent ID；决定接口必须幂等跳过。
+      annotation_ids: [note.id],
+    });
+    await until(() => service.get(id)?.status === "completed", "任务收口");
+
+    const seen = model.requests
+      .flatMap((request) => (request as any).messages ?? [])
+      .map((message: any) => JSON.stringify(message.content ?? ""))
+      .join("\n");
+    assert.match(seen, /另外，请补一条失败指标埋点/,
+      "新补充说明必须进入 Agent 上下文");
+    const after = service.listAnnotations(id).items[0];
+    assert.equal(after.status, "sent");
+    assert.equal(after.sent_at, sentAt, "已经送达的批注不能被决定重复发送");
+  } finally {
+    await model.stop();
+  }
+});
+
 test("重锚定:缩进不同也算命中——两边必须一把尺子量", () => {
   // 实测事故:锚点是渲染时抓的(空白已折叠),文件里是原始缩进,
   // 直接 includes 一条带缩进的代码永远找不到,于是三条批注全被误报成

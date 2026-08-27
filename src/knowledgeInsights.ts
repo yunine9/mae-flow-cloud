@@ -23,6 +23,9 @@ export interface KnowledgeInsightResource {
   kind: KnowledgeKind;
   name: string;
   path: string;
+  /** 可读性:选中资源带仓内扫描的描述,自发读取的文档带观测时抽的
+   * 首标题摘要。没有它,排行里就只剩文件名,人没法判断值不值得读。 */
+  description?: string;
   repository?: string;
   provided_tasks: number;
   selected_tasks: number;
@@ -74,7 +77,131 @@ export interface KnowledgeInsightTask {
       kind?: string;
       state?: string;
     };
+    prepush?: {
+      state?: string;
+      round?: number;
+    };
   };
+}
+
+/** 货架条目的效果账:消费率 × prepush 一次过对照。只做相关性观察,
+ * 不评价内核裁决——read 过的单一次过率明显低于没 read 的,是"内容
+ * 可能误导"的修订信号,不是判决书。 */
+export interface HostSkillEffect {
+  /** 足迹里出现过该 skill(available)的追踪任务数。 */
+  provided_tasks: number;
+  /** 真 read 过的任务数——货架消费率的分子。 */
+  accessed_tasks: number;
+  access_events: number;
+  /** read 过且随后出现修复信号的任务数。 */
+  repair_tasks: number;
+  /** read 过且 prepush 有结论(passed/首轮失败)的任务数。 */
+  prepush_measured: number;
+  /** 其中首轮一次通过的。 */
+  prepush_first_pass: number;
+  /** 对照组:没 read 该 skill 但 prepush 有结论的追踪任务。 */
+  baseline_measured: number;
+  baseline_first_pass: number;
+  /** 修订信号:low-consumption=上架没人读(描述可能没写清);
+   * high-friction=读了仍频繁修复(内容可能过期或误导)。 */
+  signal?: "low-consumption" | "high-friction";
+  signal_evidence?: string;
+}
+
+/** 宿主 skill 在足迹里的形态(sessionDriver 注册规则):kind=skill、
+ * 无 repository、path 落在任务内快照目录。path 带版本 key 会随内容
+ * 变化,name(pi 装载名,与货架同源)才是跨版本的稳定关联键。 */
+function hostSkillName(resource: {
+  kind: KnowledgeKind;
+  repository?: string;
+  path: string;
+  name: string;
+}): string | undefined {
+  if (resource.kind !== "skill" || resource.repository) return undefined;
+  return resource.path.startsWith(".mae-flow-work/host-skills/")
+      || resource.path.startsWith("宿主技能/")
+    ? resource.name : undefined;
+}
+
+/** prepush 结论口径:passed 且首轮=一次过;repairing/blocked=首轮
+ * 没过(在修或停了都改变不了首轮失败的事实);environment_error 与
+ * preparing 不计入——基础设施故障和没跑完不算任何 skill 的账。 */
+function prepushVerdict(task: KnowledgeInsightTask): {
+  measured: boolean;
+  firstPass: boolean;
+} {
+  const prepush = task.delivery?.prepush;
+  const round = prepush?.round ?? 0;
+  if (prepush?.state === "passed") {
+    return { measured: true, firstPass: round <= 1 };
+  }
+  if ((prepush?.state === "repairing" || prepush?.state === "blocked")
+      && round >= 1) {
+    return { measured: true, firstPass: false };
+  }
+  return { measured: false, firstPass: false };
+}
+
+/** 按货架关联键(skill 名)聚合效果账。 */
+export function buildHostSkillEffects(
+  tasks: KnowledgeInsightTask[],
+): Map<string, HostSkillEffect> {
+  const effects = new Map<string, HostSkillEffect>();
+  let totalMeasured = 0;
+  let totalFirstPass = 0;
+  const seed = (name: string): HostSkillEffect => {
+    const existing = effects.get(name);
+    if (existing) return existing;
+    const fresh: HostSkillEffect = {
+      provided_tasks: 0, accessed_tasks: 0, access_events: 0,
+      repair_tasks: 0, prepush_measured: 0, prepush_first_pass: 0,
+      baseline_measured: 0, baseline_first_pass: 0,
+    };
+    effects.set(name, fresh);
+    return fresh;
+  };
+  for (const task of tasks.filter(tracked)) {
+    const verdict = prepushVerdict(task);
+    if (verdict.measured) {
+      totalMeasured += 1;
+      if (verdict.firstPass) totalFirstPass += 1;
+    }
+    const seen = new Set<string>();
+    for (const resource of task.knowledge_usage?.resources ?? []) {
+      const name = hostSkillName(resource);
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      const effect = seed(name);
+      effect.provided_tasks += 1;
+      if (resource.read_count > 0) {
+        effect.accessed_tasks += 1;
+        effect.access_events += resource.read_count;
+        if (repaired(task)) effect.repair_tasks += 1;
+        if (verdict.measured) {
+          effect.prepush_measured += 1;
+          if (verdict.firstPass) effect.prepush_first_pass += 1;
+        }
+      }
+    }
+  }
+  for (const effect of effects.values()) {
+    effect.baseline_measured = totalMeasured - effect.prepush_measured;
+    effect.baseline_first_pass = totalFirstPass - effect.prepush_first_pass;
+    if (effect.provided_tasks >= 3 && effect.accessed_tasks === 0) {
+      effect.signal = "low-consumption";
+      effect.signal_evidence = `${effect.provided_tasks} 个任务装载,无一主动读取`
+        + `——描述可能没写清何时该用,或内容已无人需要`;
+    } else if (effect.accessed_tasks >= 2
+        // 严格多数才亮牌:2 读 1 修这种半对半的小样本不贴"待修订",
+        // 通用排行的 needs-review 建议(≥半数)仍会提示复核。
+        && effect.repair_tasks * 2 > effect.accessed_tasks) {
+      effect.signal = "high-friction";
+      effect.signal_evidence = `${effect.accessed_tasks} 个任务读取,`
+        + `${effect.repair_tasks} 个随后出现修复信号——内容可能过期或误导`
+        + `(相关性提示,不是判决)`;
+    }
+  }
+  return effects;
 }
 
 function resourceKey(resource: {
@@ -207,6 +334,9 @@ export function buildTeamKnowledgeInsights(
         attention_tasks: 0,
       };
       item.name = resource.name || item.name;
+      if (!item.description && resource.description) {
+        item.description = resource.description;
+      }
       item.provided_tasks += 1;
       if (resource.selected) item.selected_tasks += 1;
       if (resource.loaded_count > 0) item.loaded_tasks += 1;

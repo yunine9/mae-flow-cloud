@@ -37,7 +37,6 @@ def forbidden_wait_primitives(content):
 class CompileWaitInstructionTests(unittest.TestCase):
     def test_compile_agents_use_one_synchronous_build_action(self):
         for relative in (
-                "agents/compile-agent.md",
                 "agents/codecheck-fix-agent.md",
                 "agents/ut-generator-agent.md"):
             with self.subTest(relative=relative):

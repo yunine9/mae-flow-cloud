@@ -130,3 +130,110 @@ test("团队知识效能使用独立只读 HTTP 接口", async () => {
       error ? reject(error) : resolve()));
   }
 });
+
+/** 飞轮第 3 步:货架效果账。宿主 skill 按 name 跨版本关联(path 带
+ * 版本 key 不能当键);prepush 口径:passed 首轮=一次过,repairing/
+ * blocked=首轮失败,environment_error 不计任何 skill 的账。 */
+function hostSkillTask(options: {
+  id: string;
+  skills: Array<{ name: string; reads: number }>;
+  prepush?: { state: string; round: number };
+  repairRound?: number;
+}): KnowledgeInsightTask {
+  return {
+    id: options.id,
+    status: "completed",
+    knowledge_usage: {
+      summary: {
+        resources: options.skills.length,
+        loaded: 0,
+        used: options.skills.filter((item) => item.reads > 0).length,
+        skills_used: options.skills.filter((item) => item.reads > 0).length,
+        selected_unused: 0,
+      },
+      resources: options.skills.map((skill) => ({
+        id: `skill:${skill.name}`,
+        kind: "skill" as const,
+        name: skill.name,
+        path: `.mae-flow-work/host-skills/deadbeef1234/SKILL.md`,
+        state: skill.reads > 0 ? "used" as const : "available" as const,
+        available_count: 1,
+        loaded_count: 0,
+        read_count: skill.reads,
+      })),
+      events: [],
+    },
+    delivery: {
+      ...(options.prepush ? { prepush: options.prepush } : {}),
+      ...(options.repairRound ? { loop: { round: options.repairRound } } : {}),
+    },
+  };
+}
+
+test("货架效果账:消费率、prepush 一次过对照与修订信号", async () => {
+  const { buildHostSkillEffects } = await import("../src/knowledgeInsights.ts");
+  const effects = buildHostSkillEffects([
+    // java-autout:读了且首轮一次过。
+    hostSkillTask({ id: "t1", skills: [{ name: "java-autout", reads: 2 }],
+      prepush: { state: "passed", round: 1 } }),
+    // 读了,修了三轮才过,且有修复环记录。
+    hostSkillTask({ id: "t2", skills: [{ name: "java-autout", reads: 1 }],
+      prepush: { state: "passed", round: 3 }, repairRound: 1 }),
+    // 没读但一次过:进对照组。
+    hostSkillTask({ id: "t3", skills: [{ name: "java-autout", reads: 0 }],
+      prepush: { state: "passed", round: 1 } }),
+    // 基础设施故障:不计任何账。
+    hostSkillTask({ id: "t4", skills: [{ name: "java-autout", reads: 0 }],
+      prepush: { state: "environment_error", round: 1 } }),
+    // ghost 上架 3 单无人读:低消费信号。
+    hostSkillTask({ id: "t5", skills: [{ name: "ghost", reads: 0 }] }),
+    hostSkillTask({ id: "t6", skills: [{ name: "ghost", reads: 0 }] }),
+    hostSkillTask({ id: "t7", skills: [{ name: "ghost", reads: 0 }] }),
+    // flaky 读 2 单全返修:高摩擦信号。
+    hostSkillTask({ id: "t8", skills: [{ name: "flaky", reads: 1 }],
+      prepush: { state: "blocked", round: 2 }, repairRound: 2 }),
+    hostSkillTask({ id: "t9", skills: [{ name: "flaky", reads: 1 }],
+      repairRound: 1 }),
+  ]);
+
+  const autout = effects.get("java-autout")!;
+  assert.equal(autout.provided_tasks, 4);
+  assert.equal(autout.accessed_tasks, 2);
+  assert.equal(autout.access_events, 3);
+  assert.equal(autout.repair_tasks, 1);
+  assert.deepEqual(
+    [autout.prepush_first_pass, autout.prepush_measured], [1, 2],
+    "读过的:t1 一次过,t2 三轮过;t4 环境故障不计账");
+  assert.deepEqual(
+    [autout.baseline_first_pass, autout.baseline_measured], [1, 2],
+    "对照组=没读它但有结论的:t3 一次过 + t8(blocked=首轮失败)");
+  assert.equal(autout.signal, undefined, "有人读且不高摩擦,不出信号");
+
+  const ghost = effects.get("ghost")!;
+  assert.equal(ghost.signal, "low-consumption");
+  assert.match(String(ghost.signal_evidence), /3 个任务装载/);
+
+  const flaky = effects.get("flaky")!;
+  assert.equal(flaky.signal, "high-friction");
+  assert.equal(flaky.repair_tasks, 2);
+});
+
+test("聚合保留资源描述:可读性字段不许在聚合层丢失", () => {
+  const result = buildTeamKnowledgeInsights([{
+    id: "t1",
+    status: "completed",
+    knowledge_usage: {
+      summary: { resources: 1, loaded: 1, used: 1, skills_used: 0,
+        selected_unused: 0 },
+      resources: [{
+        id: "doc-1", kind: "document", name: "订单对接",
+        path: "docs/orders.md",
+        repository: "https://code.example/team/orders.git",
+        description: "订单域的对接说明与重试口径",
+        state: "used", available_count: 1, loaded_count: 1, read_count: 2,
+      }],
+      events: [],
+    },
+  }]);
+  assert.equal(result.resources[0].description, "订单域的对接说明与重试口径");
+});

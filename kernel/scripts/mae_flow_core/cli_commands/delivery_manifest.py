@@ -213,8 +213,9 @@ def confirm_delivery_manifest(
     if manifest.get("confirmed") is True:
         return state
     if moonlight_auto:
-        if not bool(((state or {}).get("moonlight") or {}).get("enabled")):
-            raise ValueError("--moonlight-auto 只允许在月光宝盒运行中使用")
+        from mae_flow_core import host_env
+        if not host_env.unattended_confirm_allowed(state):
+            raise ValueError("--auto 只允许在月光宝盒或云端宿主运行中使用")
         confirmation = {"mode": "moonlight-auto"}
     else:
         ok, answer, receipt, error = command_api._authorization_message(
@@ -304,6 +305,6 @@ def cmd_delivery_manifest(state, args):
         api.die(str(exc), 2)
     if updated is not state:
         api.save_state(updated)
-    label = "月光宝盒自动确认" if args.moonlight_auto else "用户确认"
+    label = "无人值守自动确认" if args.moonlight_auto else "用户确认"
     print("[mae-flow] 交付清单已由%s；只允许暂存并提交上述精确文件。" % label)
     return updated.get("delivery_manifest")

@@ -419,6 +419,9 @@ function IssueSessionView({
   const waiting = detail.waiting;
   const questions = waiting?.question?.questions ?? [];
   const canChat = detail.status === "idle" || detail.status === "interrupted";
+  // 阶段轨迹:按转移账实际发生的顺序画,不预设流程。节点 = 有 stage 的
+  // 转移(agent 声明 + 平台事实),末位即当前;无转移(刚登记)不渲染。
+  const trail = (detail.transitions ?? []).filter((entry) => entry.stage);
 
   return <div className="issue-session">
     <div className="issue-session-head">
@@ -435,6 +438,17 @@ function IssueSessionView({
           {detail.stage_note ? ` · ${detail.stage_note}` : ""}
         </span>
       </div>
+      {trail.length > 0 && <nav className="stage-trail" aria-label="处理阶段轨迹">
+        {trail.map((entry, index) => {
+          const last = index === trail.length - 1;
+          return <span
+            key={`${entry.at}-${index}`}
+            className={`stage-node source-${entry.source}${last ? " current" : ""}`}
+            title={`${entry.source === "agent" ? "AI 上报" : "平台事实"} · ${entry.note}`}>
+            {entry.stage ? ISSUE_STAGE_TEXT[entry.stage] : entry.note}
+          </span>;
+        })}
+      </nav>}
       <div className="issue-session-ticket">
         {detail.ticket
           ? <span className="issue-ticket">{detail.ticket}</span>

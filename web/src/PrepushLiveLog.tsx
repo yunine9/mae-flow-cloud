@@ -18,6 +18,17 @@ interface LiveLine {
   key: string;
   kind: "cmd" | "out" | "err" | "note";
   text: string;
+  /** 命令与消息行带时刻(用户点名);输出尾行属于上一条命令,不重复。 */
+  time?: string;
+}
+
+function timeOf(ts: string): string | undefined {
+  const date = new Date(ts);
+  return Number.isNaN(date.getTime())
+    ? undefined
+    : date.toLocaleTimeString([], {
+        hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+      });
 }
 
 function clip(value: string, limit: number): string {
@@ -35,18 +46,19 @@ function linesOf(event: SemanticEvent): LiveLine[] {
     text?: unknown;
   };
   const key = `${event.sessionId ?? "main"}:${event.eventId}`;
+  const time = timeOf(event.ts);
   switch (event.kind) {
     case "tool_requested": {
       const name = String(payload.name ?? "");
       if (/^bash$/i.test(name)) {
         return [{
-          key, kind: "cmd",
+          key, kind: "cmd", time,
           text: `$ ${clip(String(payload.input?.command ?? ""), 600)}`,
         }];
       }
       if (/^(edit|write)$/i.test(name)) {
         const path = payload.input?.path ?? payload.input?.file_path ?? "";
-        return [{ key, kind: "note", text: `✎ 修改 ${clip(String(path), 200)}` }];
+        return [{ key, kind: "note", time, text: `✎ 修改 ${clip(String(path), 200)}` }];
       }
       return [];
     }
@@ -64,7 +76,7 @@ function linesOf(event: SemanticEvent): LiveLine[] {
     case "assistant_message": {
       const text = String(payload.text ?? "").trim();
       return text
-        ? [{ key, kind: "note", text: clip(text, 300) }] : [];
+        ? [{ key, kind: "note", time, text: clip(text, 300) }] : [];
     }
     default:
       return [];
@@ -74,10 +86,17 @@ function linesOf(event: SemanticEvent): LiveLine[] {
 export function PrepushLiveLog({
   taskId,
   active,
+  source = tailPrepushEvents,
+  title = "编译过程",
+  emptyText = "等待编译 Agent 的第一条命令……",
 }: {
   taskId: string;
   /** 验证是否进行中:进行中订阅;结束后不再订阅但保留已收现场。 */
   active: boolean;
+  /** 事件源(默认 prepush;环境预热等同构流复用本组件时替换)。 */
+  source?: typeof tailPrepushEvents;
+  title?: string;
+  emptyText?: string;
 }) {
   const [lines, setLines] = useState<LiveLine[]>([]);
   const [state, setState] = useState<SseConnectionState>("connecting");
@@ -87,7 +106,7 @@ export function PrepushLiveLog({
     if (!active) return;
     seen.current = new Set();
     setLines([]);
-    return tailPrepushEvents(taskId, (event) => {
+    return source(taskId, (event) => {
       // EventSource 断线重连时服务端整文件重放:按事件锚去重。
       const anchor = `${event.sessionId ?? "main"}:${event.eventId}`;
       if (seen.current.has(anchor)) return;
@@ -103,9 +122,9 @@ export function PrepushLiveLog({
     if (node) node.scrollTop = node.scrollHeight;
   }, [lines]);
   if (!active && lines.length === 0) return null;
-  return <div className="prepush-live" aria-label="推送前验证实时过程">
+  return <div className="prepush-live" aria-label="推送前编译实时过程">
     <div className="prepush-live-head">
-      <strong>验证过程</strong>
+      <strong>{title}</strong>
       {active
         ? <span className={`prepush-live-state is-${state}`}>{
           state === "live" ? "实时"
@@ -114,9 +133,10 @@ export function PrepushLiveLog({
     </div>
     <div className="prepush-live-body" ref={scroller}>
       {lines.length === 0
-        && <p className="prepush-live-empty">等待验证 Agent 的第一条命令……</p>}
+        && <p className="prepush-live-empty">{emptyText}</p>}
       {lines.map((line) => <pre
-        key={line.key} className={`line-${line.kind}`}>{line.text}</pre>)}
+        key={line.key} className={`line-${line.kind}`}>
+        {line.time && <time>{line.time} </time>}{line.text}</pre>)}
     </div>
   </div>;
 }

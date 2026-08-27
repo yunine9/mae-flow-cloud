@@ -21,15 +21,11 @@ from mae_flow_core.cli_commands.user_intervention import render_user_interventio
 def perms_line(step):
     """本步的写入范围提示——只陈述真实成立的事。
 
-    allow_source_edit 与 tests_only 都由活跃 Edit/Bash Gate 直接执行：前者决定
-    当前步骤能否碰源码，后者在允许写入的 UT 步进一步收窄到测试路径。
+    allow_source_edit 由活跃 Edit/Bash Gate 直接执行:它决定当前步骤能否碰源码。
     提示与机器裁决必须来自同一个 step 定义，不能再出现“页面写着禁止、
     Hook 却放行”的两套语义。
     """
-    if step.get("tests_only"):
-        scope = ("只写测试路径(门禁拦源码;UT 暴露的源码缺陷经用户裁决后 "
-                 "unlock source 再改)")
-    elif step.get("allow_source_edit"):
+    if step.get("allow_source_edit"):
         scope = "源码与测试"
     else:
         scope = "仅本步指令内的产物"
@@ -53,27 +49,9 @@ def _active_change_count():
     from mae_flow_core import specengine
     return len(specengine._list_active_changes(os.getcwd()))
 
-def _quality_rounds(st):
-    """质量检视已经回环几轮:数历史里 quality_review 判了几次"要调整"。"""
-    return sum(
-        1 for item in (st or {}).get("history", []) or []
-        if isinstance(item, dict) and item.get("step") == "quality_review"
-        and "revise" in str(item.get("result", "")))
-
-
 def _sentinel_lines(sid, st):
     """在建区残留诊断。阶段错位这一整类随 v3 消失(阶段与流程同源,不可能不一致)。"""
     out = []
-    # 质量回环没有上限,转到不再有新问题为止——可它每轮都要重编、复验,
-    # 是全流程最贵的循环之一。第三轮起提醒收敛,与 CodeCheck 的两轮上限同口径:
-    # 剩下的不是不修,是记成遗留交给下一单,别在这儿逐轮打磨。
-    if sid == "quality_review":
-        rounds = _quality_rounds(st)
-        if rounds >= 2:
-            out.append(
-                "⚠ 本步已回环 %d 轮。第 3 轮起请收敛:只处理会让交付不可用的"
-                "问题;其余写进最终交付说明记为遗留,选「继续提交」推进——"
-                "每多转一轮都要重编译加复验,代价比遗留本身大。" % rounds)
     return out
     n = _active_change_count()
     if n > 1:
@@ -91,7 +69,7 @@ def _resolved_next(flow, st, sid):
     return workflow_transitions.resolved_next(flow, st, sid)
 
 def _ensure_step_entry_head(flow, st, sid):
-    """为旧版在途 tests_only 步骤恢复入口 HEAD。
+    """为旧版在途质量步骤恢复入口 HEAD(月光 defer 仍用)。
 
     新版 advance 会直接记录精确 HEAD。旧状态只能从“上一阶段进入当前步骤”的历史时间反推，
     使用该时间之前最后一个 commit；时间同秒时最多多包含一笔旧改动，只会多验，不会漏验。
@@ -119,9 +97,7 @@ def _ensure_step_entry_head(flow, st, sid):
     return base, ""
 
 def _with_lightcheck_prompt(sid, text):
-    if sid not in (
-            "build", "build_rework", "verify_ponytail",
-            "verify_ut", "rf_ut", "tw_ut"):
+    if sid != "build":
         return text
     prompt = (
         "\n\n──── 轻量编码预防（建议层，不新增门禁） ────\n"
@@ -173,16 +149,6 @@ def _step_md_text(sid, st):
     if not os.path.exists(md):
         return None
     txt = read_text(md).rstrip()
-    if (sid in {"verify_codecheck", "rf_codecheck", "tw_codecheck"}
-            and not host_env.codecheck_runs_locally(st)):
-        txt = (
-            "本机不执行 CodeCheck，也不安装或启动 codecheck-fix-agent；"
-            "内置 lightcheck 仍照常运行。\n\n"
-            "直接执行 `python \"{MAEFLOW_PATH}\" done`。内核会把 "
-            "CODECHECK 记为待权威流水线核销，而不是伪装成已通过。"
-            "流水线若报告 CodeCheck 问题，宿主会启动轻量修复 Agent，"
-            "集中修复并以新 SHA 重跑，不新增人工确认。"
-        )
     conditions = {
         "LOCAL_COMPILE": host_env.build_runs_locally(st),
         "PIPELINE_COMPILE": not host_env.build_runs_locally(st),
@@ -192,6 +158,10 @@ def _step_md_text(sid, st):
         "PIPELINE_CODECHECK": not host_env.codecheck_runs_locally(st),
         "LOCAL_PUSH": host_env.git_push_runs_locally(st),
         "HOST_PUSH": not host_env.git_push_runs_locally(st),
+        # 云端宿主没有"坐在终端前的用户":确认类指令走自动路径,
+        # 人工裁决在工作台批注与 MR 检视(2026-08-25 编排瘦身)。
+        "CLOUD_HOST": not host_env.user_on_this_machine(),
+        "LOCAL_HOST": host_env.user_on_this_machine(),
     }
     for name, enabled in conditions.items():
         pattern = r"\{\{#%s\}\}(.*?)\{\{/%s\}\}" % (name, name)
@@ -214,48 +184,6 @@ def _step_md_text(sid, st):
             api.die("插件内嵌能力包损坏，当前步骤不能可靠执行: %s。"
                 "请升级/重装 Mae-Flow；流程状态尚未推进。" % exc, 2)
     return subst(_with_lightcheck_prompt(sid, txt), st)
-
-def _review_receipt_lines(st, step):
-    """展示待用户检视的完整未提交增量。"""
-    quality = st.get("quality_review") or {}
-    base = str(
-        quality.get("entered_head")
-        or st.get("implementation_base_head", "")
-        or "HEAD")
-    head = api.sh("git rev-parse --verify HEAD")
-    if not head:
-        return ["❌ 无法读取当前 Git 状态。"]
-    files = api.argv_out([
-        "git", "-c", "core.quotepath=false", "status", "--short",
-        "--untracked-files=all",
-    ]).splitlines()
-    stat = api.argv_out([
-        "git", "-c", "core.quotepath=false", "diff", "--shortstat",
-        base,
-    ])
-    lines = [
-        "🔎 待人工检视的完整未提交增量",
-        f"  基点: {base[:10]}  当前 HEAD: {head[:10]}",
-        "  文件:",
-    ]
-    expected = set(quality.get("changed_files") or ())
-    if expected:
-        lines.append("  改动来源: " + str(quality.get("origin", "未知")))
-        lines.append("  提交后恢复: " + str(quality.get("resume", "未知")))
-    shown = files
-    unexpected = [
-        item for item in files
-        if expected and item.split(None, 1)[-1] not in expected
-    ]
-    if unexpected:
-        lines.append("  ⚠ 检视上下文外新增文件也必须一并核对，返回调整后再提交")
-    lines += ["    " + item for item in shown[:80]] or ["    （没有未提交差异）"]
-    if len(shown) > 80:
-        lines.append(f"    …另有 {len(shown) - 80} 个文件")
-    if stat:
-        lines.append("  统计: " + stat)
-    lines.append(f"  完整差异命令: git diff {base}")
-    return lines
 
 def _defaults():
     """读仓库预设 .mae-flow-defaults.json。解析失败必须可见(fail-open 但可观测,不静默吞)。"""
@@ -318,8 +246,6 @@ def print_current(flow, st):
         STATE_PATH, sid, api._step_entered_at(st)))
     if notices:
         print(notices, end="")
-    if sid in {"build_review", "quality_review"}:
-        print("\n".join(_review_receipt_lines(st, step)))
     ul = st.get("unlock") or {}
     if ul.get("step") == sid:
         print(f"🔓 本步源码修改已解锁(用户裁决: {ul.get('reason', '')};推进后自动失效)")
@@ -331,20 +257,6 @@ def print_current(flow, st):
             print(f"⚠ 用户已承担 {kind} 令牌缺失风险，本步按放行继续；其他证据仍会检查。")
         else:
             print(f"⚠ {kind} 风险放行已失效: {why}；需要重新取证或重新让用户确认。")
-    if step.get("tests_only"):
-        if not (st.get("step_heads", {}) or {}).get(sid):
-            head, why = _ensure_step_entry_head(flow, st, sid)
-            if head:
-                print(f"♻ 已从旧版流程历史恢复本步入口 HEAD: {head[:9]}（只会扩大重验范围，不会漏验）")
-            else:
-                print("❌ 旧版 UT 入口 HEAD 无法自动恢复: " + why + "；done 将安全拒绝，禁止拿当前 HEAD 补位")
-        tp = api._test_patterns(st)
-        if tp:
-            print("🛡 UT 写入边界:使用仓库配置的测试路径硬拦非测试源码: " + " | ".join(tp))
-        else:
-            print("⚠ UT 写入边界:仓库未配置「测试路径」，当前使用内置保守规则硬拦非测试源码。"
-                  "若本仓测试目录不符合 tests/、test/、src/test/、*_test.*、*Test.java，"
-                  "请先在 .mae-flow-defaults.json 配置「测试路径」，禁止用 unlock 把长期目录差异当单次源码缺陷处理。")
     if step.get("clear_hint"):
         print("💡 会话卫生:本步开始前若会话已较长,建议 /clear 后说「继续」——状态在磁盘,进度不丢,防长上下文行为漂移。")
     if sid == "config_confirm" and not api._moonlight(st):
@@ -382,12 +294,6 @@ def print_current(flow, st):
         print(f"python \"{os.path.abspath(sys.argv[0])}\" moonlight defer "
               "--reason \"<遗留现象、已尝试修复、当前风险>\"")
         print("该命令会把问题写入晨间报告并继续下一阶段，不会把失败伪装成通过。")
-    if api._moonlight(st) and step.get("tests_only"):
-        print("UT 若经自查后明确指向被测源码缺陷，不需要等用户：先执行")
-        print(f"python \"{os.path.abspath(sys.argv[0])}\" moonlight unlock-source "
-              "--reason \"<失败用例、规格依据、自查结论>\"")
-        print("再修源码并执行 done；状态机会先回流编译，再自动完成质量检视提交，"
-              "然后从 CodeCheck 继续，不重跑 Ponytail。")
     if api._moonlight(st) and sid == "push":
         print("push 若因认证、网络或冲突在有限重试后仍失败，禁止询问或谎报成功；执行：")
         print(f"python \"{os.path.abspath(sys.argv[0])}\" moonlight push-failed "

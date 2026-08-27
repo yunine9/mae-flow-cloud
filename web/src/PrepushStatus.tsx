@@ -1,4 +1,11 @@
-import type { PrepushVerification } from "./api";
+import { useState } from "react";
+import {
+  skipPrepushVerification,
+  type PrepushVerification,
+  type TaskSummary,
+} from "./api";
+import { OverlayDialog } from "./WarmupPanel";
+import { PrepushLiveLog, prepushActive } from "./PrepushLiveLog";
 import { formatLocalDateTime } from "./time";
 
 type PrepushTone = "active" | "repair" | "danger" | "success" | "neutral";
@@ -17,8 +24,10 @@ function viewOf(state: string): PrepushView {
     case "queued":
       return {
         phase: "preparing",
-        label: "准备",
-        detail: "已进入验证队列，Cloud 将在推送前启动专项验证 Agent。",
+        // "排队"必须说破(实锤:用户对着"准备"以为卡死了)——同一
+        // 时刻只放行有限个重型构建,等的是编译槽位,不是出了故障。
+        label: "排队中",
+        detail: "已进入验证队列，等待编译槽位释放(同一时刻仅运行有限个重型构建，前面的构建结束后自动开始)。",
         tone: "neutral",
         busy: true,
       };
@@ -59,7 +68,7 @@ function viewOf(state: string): PrepushView {
     case "blocked":
       return {
         phase: "environment",
-        label: "验证未通过",
+        label: "编译未通过",
         detail: "编译或 UT 尚未修复完成，本次推送已停止。",
         tone: "danger",
       };
@@ -77,11 +86,18 @@ function viewOf(state: string): PrepushView {
         detail: "编译与 UT 已通过，Cloud 可以推送这个 SHA。",
         tone: "success",
       };
+    case "user_skipped":
+      return {
+        phase: "environment",
+        label: "已跳过·流水线裁决",
+        detail: "用户选择跳过本地验证；编译与 UT 由权威流水线裁决。",
+        tone: "neutral",
+      };
     default:
       return {
         phase: "unknown",
-        label: "推送前验证",
-        detail: "Cloud 正在处理这次推送前验证。",
+        label: "推送前编译",
+        detail: "Cloud 正在处理这次推送前编译。",
         tone: "neutral",
         busy: true,
         generic: true,
@@ -91,6 +107,91 @@ function viewOf(state: string): PrepushView {
 
 function shortSha(sha: string): string {
   return sha.length > 12 ? sha.slice(0, 12) : sha;
+}
+
+/** 工作台头部的小胶囊(与预热同款):头部只放一行式信号,状态卡与
+ * 实时日志进浮层/执行现场——头部堆叠是各功能局部最优抢地盘的结果,
+ * 2026-08-27 用户拍板立规矩收敛。样式复用 warmup-badge/overlay。 */
+export function PrepushBadge({
+  task,
+  canOperate = false,
+  onChanged,
+}: {
+  task: TaskSummary;
+  canOperate?: boolean;
+  onChanged?: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [skipArmed, setSkipArmed] = useState(false);
+  const [skipBusy, setSkipBusy] = useState(false);
+  const [skipError, setSkipError] = useState("");
+  const prepush = task.delivery?.prepush;
+  if (!prepush) return null;
+  const skippable = canOperate
+    && ["blocked", "environment_error"].includes(prepush.state);
+  const view = viewOf(prepush.state);
+  const cls = view.tone === "success" ? "is-passed"
+    : view.tone === "danger" ? "is-failed"
+      : view.tone === "repair" ? "is-repair" : "is-running";
+  const label = view.phase === "passed" ? "编译通过"
+    : view.generic ? "推送前编译"
+      : view.phase === "compiling" ? "编译中"
+        : prepush.state === "user_skipped" ? view.label : `编译·${view.label}`;
+  return (
+    <>
+      <button type="button" className={`warmup-badge ${cls}`}
+        onClick={() => setOpen(true)}
+        title={`推送前编译:${prepush.message?.trim() || view.detail}`}>
+        <i aria-hidden />{label}
+      </button>
+      {open && (
+        <OverlayDialog ariaLabel="推送前编译详情" title="推送前编译"
+          onClose={() => setOpen(false)}>
+          <PrepushStatus prepush={prepush} placement="workspace" />
+            <PrepushLiveLog taskId={task.id}
+              active={prepushActive(prepush.state)} />
+            {skippable && (
+              /* 失败停机后的人工出路:本地验证只是省流水线的前闸,
+                 权威裁决在绑 SHA 流水线。跳过绑当下 HEAD,新提交即失效。 */
+              <div className="prepush-skip">
+                <p>
+                  本地编译已失败停机。你可以跳过本地编译直接推送——
+                  编译与 UT 交由权威流水线裁决;若代码真编译不过,
+                  会消耗一条流水线后进入流水线修复环。
+                </p>
+                {skipError && <p className="prepush-skip-error">{skipError}</p>}
+                {!skipArmed ? (
+                  <button type="button" onClick={() => setSkipArmed(true)}>
+                    跳过本地编译,直接推送流水线
+                  </button>
+                ) : (
+                  <span className="prepush-skip-confirm">
+                    <em>确定?跳过只对当前 HEAD 有效。</em>
+                    <button type="button" disabled={skipBusy}
+                      onClick={() => {
+                        setSkipBusy(true);
+                        setSkipError("");
+                        void skipPrepushVerification(task.id)
+                          .then(() => { setOpen(false); onChanged?.(); })
+                          .catch((reason) => setSkipError(reason instanceof Error
+                            ? reason.message : String(reason)))
+                          .finally(() => {
+                            setSkipBusy(false);
+                            setSkipArmed(false);
+                          });
+                      }}>
+                      {skipBusy ? "提交中…" : "确认跳过"}
+                    </button>
+                    <button type="button" disabled={skipBusy}
+                      onClick={() => setSkipArmed(false)}>返回</button>
+                  </span>
+                )}
+              </div>
+            )}
+        </OverlayDialog>
+      )}
+    </>
+  );
 }
 
 /** 推送前快速验证只补充平台状态，不覆盖内核的任务状态。 */
@@ -103,7 +204,7 @@ export function PrepushStatus({
 }) {
   if (!prepush) return null;
   const view = viewOf(prepush.state);
-  const title = view.generic ? view.label : `推送前验证 · ${view.label}`;
+  const title = view.generic ? view.label : `推送前编译 · ${view.label}`;
   const detail = prepush.message?.trim() || view.detail;
   const titleHint = prepush.updated_at
     ? `${title}（更新于 ${formatLocalDateTime(prepush.updated_at, { seconds: true })}）`

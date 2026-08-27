@@ -227,39 +227,6 @@ class DeliveryEvidenceRules:
                 + "、".join(pending[:8]))
         return self.commit_tagged_after_entry(spec, state)
 
-    def quality_review_committed(self, spec, state):
-        context = state.get("quality_review") or {}
-        files = list(context.get("changed_files") or ())
-        if not files:
-            return EvidenceResult(
-                False, "质量检视上下文没有精确修改文件，禁止空提交推进")
-        step = state.get("current", "")
-        base = (state.get("step_heads", {}) or {}).get(step, "")
-        if not base:
-            return EvidenceResult(
-                False, "缺少质量提交入口 HEAD，无法核对检视后的提交")
-        committed = set(self.ports.argv_output([
-            "git", "diff", "--name-only", base, "HEAD", "--",
-        ]).splitlines())
-        missing = [path for path in files if path not in committed]
-        if missing:
-            return EvidenceResult(
-                False, "用户检视的质量改动仍未全部提交: "
-                + "、".join(missing[:8]))
-        extra = [path for path in committed if path not in set(files)]
-        if extra:
-            return EvidenceResult(
-                False, "质量提交夹带了用户未检视的文件: "
-                + "、".join(extra[:8])
-                + "。请撤销该提交，回到完整 diff 检视后按精确清单重提")
-        dirty = set(self.ports.dirty_paths())
-        pending = [path for path in files if path in dirty]
-        if pending:
-            return EvidenceResult(
-                False, "质量提交后仍有检视文件处于未提交/暂存状态: "
-                + "、".join(pending[:8]))
-        return self.commit_tagged_after_entry(spec, state)
-
     def _push_head_result(self, state):
         current = self.ports.shell_output(
             "git branch --show-current")
@@ -393,46 +360,3 @@ class DeliveryEvidenceRules:
             if result is not None:
                 return result
         return EvidenceResult(True, "")
-
-    def review_fix_committed(self, spec, state):
-        path = (
-            self.ports.review_document(state)
-            if self.ports.review_document is not None
-            else ".mae-flow-work/%s/review.md" % (
-                state.get("config", {}).get("单号", "")))
-        try:
-            text = self.ports.read_text_replace(path)
-        except OSError:
-            return EvidenceResult(
-                False, "评审裁决文档不存在: " + path)
-        baseline_rows = state.get("review_triage_statuses")
-        current_rows = review_statuses(text)
-        newly_transferred = []
-        if isinstance(baseline_rows, dict):
-            newly_transferred = [
-                identity for identity, status in current_rows.items()
-                if status == "转规格轮次(已确认)"
-                and baseline_rows.get(identity) != "转规格轮次(已确认)"
-            ]
-        else:
-            baseline = state.get("review_triage_transfer_count")
-            transfers = review_status_count(
-                text, "转规格轮次(已确认)")
-            if isinstance(baseline, int) and transfers > baseline:
-                newly_transferred = [
-                    "旧状态新增%d条" % (transfers - baseline)]
-        if newly_transferred:
-            asked = legacy_result(self.ports.agent_ran(
-                {"agent": "ASKUSER"}, state))
-            if not asked.passed:
-                return EvidenceResult(
-                    False,
-                    "返工阶段把以下意见新改成了「转规格轮次(已确认)」: "
-                    + "、".join(newly_transferred[:8])
-                    + "；但本步没有真实 AskUserQuestion 用户裁决。"
-                    "修复中改变既有裁决必须先向用户展示代码证据与行为影响，"
-                    "再由用户确认；" + asked.reason,
-                )
-        if not review_has_confirmed_fix(text):
-            return EvidenceResult(True, "")
-        return self.commit_tagged_after_entry(spec, state)

@@ -19,7 +19,7 @@ SAFE_BOUNDARY_BY_PHASE = {
     "spec": "open",
     "story": "story",
     "construction": "build",
-    "quality": "verify_ponytail",
+    "quality": "build",
     "delivery": "delivery_review",
 }
 

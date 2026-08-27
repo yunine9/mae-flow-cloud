@@ -64,7 +64,7 @@ class StableRecoveryContractTests(unittest.TestCase):
             "独立编译步骤",
             "git commit",
         )
-        for name in ("design.md", "story_ask.md", "rf_verify.md"):
+        for name in ("design.md", "story_ask.md"):
             with self.subTest(name=name):
                 with open(
                         os.path.join(ROOT, "flow", "steps", name),

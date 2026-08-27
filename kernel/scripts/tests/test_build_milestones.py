@@ -30,6 +30,18 @@ class BuildMilestoneTests(unittest.TestCase):
         self.assertEqual(["1", "2"], [item.task_id for item in tasks])
         self.assertEqual("实现入口", select_task(tasks, "1").title)
 
+    def test_titled_checklist_overrides_placeholder_even_when_later(self):
+        """文件行(任务 N)在前、任务清单在后是模板的真实顺序;真标题
+        必须压过占位,否则云端进度只显示"任务 2"(2026-08-26 用户点名)。"""
+        tasks = implementation_tasks(
+            "- `src/a.py` — 修改。任务 1\n"
+            "- `src/b_test.py` — 新建。任务 2\n"
+            "- [ ] 1. TextUtil 新增脱敏并接入三渠道\n"
+            "- [ ] 2. 脱敏行为全量用例\n")
+        self.assertEqual(
+            "TextUtil 新增脱敏并接入三渠道", select_task(tasks, "1").title)
+        self.assertEqual("脱敏行为全量用例", select_task(tasks, "2").title)
+
     def test_event_binds_revision_document_and_worktree(self):
         task = implementation_tasks("- [ ] 1. 实现入口")[0]
         event = build_event(

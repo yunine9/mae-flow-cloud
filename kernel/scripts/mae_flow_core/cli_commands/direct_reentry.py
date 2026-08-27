@@ -242,25 +242,19 @@ def _resume_direct_mode(ack="", message_id=""):
         p[:-len("(未提交)")] if p.endswith("(未提交)") else p, st)
         for p in (changed or []))
     old_step = st.get("current", "")
-    workflow = (st.get("choices", {}) or {}).get("workflow", "")
     target = old_step
     if source_changed:
-        if workflow == "review" and old_step in (
-                "rf_codecheck", "rf_ut", "delivery_review", "push", "end"):
-            target = "build"
-        elif workflow == "tweak" and old_step in (
-                "tw_codecheck", "tw_ut", "tw_verify",
-                "delivery_review", "archive_confirm", "archive", "push", "end"):
-            target = "build_rework"
-        elif old_step in ("verify_ponytail", "verify_post_ponytail_compile", "verify_recompile",
-                          "verify_codecheck", "verify_codecheck_compile",
-                          "verify_ut", "verify_spec", "verify_comet",
-                          "delivery_review", "archive_confirm", "archive", "push", "end"):
+        # 2026-08-25 编排瘦身:任何工作流,退出期间改过源码就退回宽 build
+        # 步重新收口;定稿阶段的 spec 归档要先正规重开,不能带着已定稿
+        # 的规格回去改代码。
+        if old_step in ("domain_archive", "delivery_review", "archive_confirm",
+                        "archive", "push", "external_verify",
+                        "moonlight_review", "end"):
             if api._spec_phase(st) == "archive":
                 ok, why = _reopen_spec_archive(st)
                 if not ok:
                     api.die("源码已变化且交付处于定稿阶段，但正规回退失败；尚未重新启用：" + why, 2)
-            target = "verify_recompile"
+            target = "build"
 
     for path in api._state_sidecars():
         if os.path.exists(path):

@@ -16,7 +16,11 @@ import { TaskWorkspace } from "./TaskWorkspace";
 import { SettingsBoard } from "./SettingsView";
 import { GitTokenCard } from "./GitTokenCard";
 import { LubanTokenCard } from "./LubanTokenCard";
-import { getMoonlightPreview, putMoonlight } from "./api";
+import {
+  getMoonlightPreview,
+  putMoonlight,
+  putPersonalPushConfirmation,
+} from "./api";
 import { byUrgency } from "./taskTime";
 import {
   byTeamAttention,
@@ -87,65 +91,98 @@ function initialView(user: AuthUser): View {
   return "mine";
 }
 
-/** 月光模式默认只影响后续节点；当前待办先预览，再由用户决定是否处理。 */
-function MoonlightToggle({
+/** 人工介入程度(用户拍板:一个旋钮说清,不做任务粒度设置)。
+ * 两个正交轴合成四档:月光管"过程节点停不停",push 前确认管
+ * "交付清单出门前给不给人过目"。月光转开仍走预览/是否处理当前
+ * 待办的既有流程;push 默认开,只落显式的关。 */
+const INTERVENTION_PRESETS = [
+  { key: "full", moonlight: false, push: true, title: "全程把关",
+    hint: "过程节点等你拍板,推送前清单也过目（默认）" },
+  { key: "process", moonlight: false, push: false, title: "逐步确认",
+    hint: "过程节点等你拍板,交付信任三道门禁" },
+  { key: "delivery", moonlight: true, push: true, title: "只看交付",
+    hint: "过程自动放行,但推送前清单要过目" },
+  { key: "auto", moonlight: true, push: false, title: "全自动",
+    hint: "不中断执行,完成后统一复盘" },
+] as const;
+
+function InterventionSetting({
   session,
   onChanged,
 }: {
   session: AuthUser;
-  onChanged: (moonlight: boolean) => Promise<void>;
+  onChanged: (patch: Partial<AuthUser>) => Promise<void>;
 }) {
-  const [on, setOn] = useState(!!session.moonlight);
+  const [moon, setMoon] = useState(!!session.moonlight);
+  const [push, setPush] = useState(session.push_confirmation !== false);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
-  async function select(next: boolean) {
-    if (next === on || busy) return;
+  const current = INTERVENTION_PRESETS
+    .find((preset) => preset.moonlight === moon && preset.push === push)!;
+  async function select(preset: typeof INTERVENTION_PRESETS[number]) {
+    if (busy || preset.key === current.key) return;
     setBusy(true);
     try {
-      let includeCurrent = false;
-      let expectedEligible: number | undefined;
-      if (next) {
-        const preview = await getMoonlightPreview();
-        expectedEligible = preview.eligible;
-        if (preview.eligible > 0) {
-          includeCurrent = window.confirm(
-            `月光模式默认仅对后续节点生效。\n\n当前有 ${preview.eligible} 项可自动处理`
-            + (preview.blocked_annotations > 0
-              ? `，另有 ${preview.blocked_annotations} 项因存在检视意见不会自动放行` : "")
-            + "。\n\n选择“确定”同时处理当前待办；选择“取消”仅对后续节点生效。",
-          );
+      const notes: string[] = [];
+      let nextMoon = moon;
+      let nextPush = push;
+      if (preset.moonlight !== moon) {
+        let includeCurrent = false;
+        let expectedEligible: number | undefined;
+        if (preset.moonlight) {
+          const preview = await getMoonlightPreview();
+          expectedEligible = preview.eligible;
+          if (preview.eligible > 0) {
+            includeCurrent = window.confirm(
+              `过程自动放行默认仅对后续节点生效。\n\n当前有 ${preview.eligible} 项可自动处理`
+              + (preview.blocked_annotations > 0
+                ? `，另有 ${preview.blocked_annotations} 项因存在检视意见不会自动放行` : "")
+              + "。\n\n选择“确定”同时处理当前待办；选择“取消”仅对后续节点生效。",
+            );
+          }
         }
+        const result = await putMoonlight(
+          preset.moonlight, includeCurrent, expectedEligible);
+        nextMoon = result.moonlight;
+        setMoon(result.moonlight);
+        notes.push(result.moonlight
+          ? (result.swept > 0
+              ? `过程节点已自动放行，并处理 ${result.swept} 项当前待办`
+              : result.blocked_annotations > 0
+                ? `过程节点对后续生效；${result.blocked_annotations} 项含检视意见的待办仍需人工处理`
+                : "过程节点对后续生效，当前待办保持不变")
+          : "过程节点恢复等你拍板");
       }
-      const result = await putMoonlight(next, includeCurrent, expectedEligible);
-      setOn(result.moonlight);
-      setNote(result.moonlight
-        ? (result.swept > 0
-            ? `已启用，并处理 ${result.swept} 项当前待办`
-            : result.blocked_annotations > 0
-              ? `已对后续节点生效；${result.blocked_annotations} 项含检视意见的待办仍需人工处理`
-              : "已对后续节点生效，当前待办保持不变")
-        : "已恢复逐步确认，后续人工节点会等待你拍板");
-      await onChanged(result.moonlight);
+      if (preset.push !== push) {
+        const user = await putPersonalPushConfirmation(preset.push);
+        nextPush = user.push_confirmation !== false;
+        setPush(nextPush);
+        notes.push(nextPush
+          ? "后续任务推送前会展示交付清单等你确认"
+          : "后续任务推送不再等待清单确认；已在等确认的任务点一下确认即可");
+      }
+      setNote(notes.join("；"));
+      await onChanged({ moonlight: nextMoon, push_confirmation: nextPush });
     } catch (cause) {
       setNote(String((cause as Error).message ?? cause));
     } finally { setBusy(false); }
   }
-  return <section className={`approval-setting${on ? " is-auto" : ""}`} aria-labelledby="approval-setting-title">
+  return <section className={`approval-setting${moon ? " is-auto" : ""}`} aria-labelledby="approval-setting-title">
     <header className="approval-setting-head">
       <span className="approval-setting-icon" aria-hidden><svg viewBox="0 0 20 20"><path d="M15.5 12.5A6.5 6.5 0 0 1 7.5 4.5a6.5 6.5 0 1 0 8 8Z" /></svg></span>
-      <div><span className="section-kicker">APPROVAL MODE</span><h2 id="approval-setting-title">任务审批方式</h2></div>
-      <span className="approval-setting-state">当前：{on ? "自动放行" : "逐步确认"}</span>
+      <div><span className="section-kicker">HUMAN INTERVENTION</span><h2 id="approval-setting-title">人工介入程度</h2></div>
+      <span className="approval-setting-state">当前：{current.title}</span>
     </header>
-    <p className="approval-setting-summary">决定 Agent 遇到人工节点时，是停下来等你确认，还是继续执行并在事后复盘。</p>
-    <div className="approval-options" role="group" aria-label="任务审批方式">
-      <button type="button" className={!on ? "on" : ""} disabled={busy}
-        onClick={() => void select(false)}>
-        <i aria-hidden>✓</i><span><strong>逐步确认</strong><small>关键节点等待你拍板，控制更稳妥</small></span>
-      </button>
-      <button type="button" className={on ? "on" : ""} disabled={busy}
-        onClick={() => void select(true)}>
-        <i aria-hidden><svg viewBox="0 0 20 20"><path d="M15.5 12.5A6.5 6.5 0 0 1 7.5 4.5a6.5 6.5 0 1 0 8 8Z" /></svg></i><span><strong>月光模式 · 自动放行</strong><small>不中断执行，完成后统一复盘</small></span>
-      </button>
+    <p className="approval-setting-summary">一处设定,所有任务生效:过程节点(需求澄清、方案确认)停不停,推送前交付清单看不看。真验收三道门禁(推送前编译自测、流水线绑 SHA、MR 人工合入)始终在,与此无关。</p>
+    <div className="approval-options" role="group" aria-label="人工介入程度">
+      {INTERVENTION_PRESETS.map((preset) => <button type="button" key={preset.key}
+        className={current.key === preset.key ? "on" : ""} disabled={busy}
+        onClick={() => void select(preset)}>
+        <i aria-hidden>{preset.moonlight
+          ? <svg viewBox="0 0 20 20"><path d="M15.5 12.5A6.5 6.5 0 0 1 7.5 4.5a6.5 6.5 0 1 0 8 8Z" /></svg>
+          : "✓"}</i>
+        <span><strong>{preset.title}</strong><small>{preset.hint}</small></span>
+      </button>)}
     </div>
     {note && <p className="approval-setting-note" role="status">{note}</p>}
   </section>;
@@ -224,8 +261,8 @@ function PersonalSettingsPage({
   onTasksChanged: () => Promise<void>;
 }) {
   return <div className="personal-settings-page">
-    <MoonlightToggle session={session} onChanged={async (moonlight) => {
-      onSessionPatch({ moonlight });
+    <InterventionSetting session={session} onChanged={async (patch) => {
+      onSessionPatch(patch);
       await onTasksChanged();
     }} />
     <section className="personal-connections" aria-labelledby="personal-connections-title">
@@ -595,6 +632,7 @@ export function App() {
         />}
 
         {view === "knowledge" && <KnowledgeFlywheel
+          admin={session.role === "admin"}
           insights={knowledgeInsights}
           loading={knowledgeInsightsLoading}
           error={knowledgeInsightsError}

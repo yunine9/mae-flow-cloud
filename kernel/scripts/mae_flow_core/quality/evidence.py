@@ -40,47 +40,6 @@ class QualityEvidenceRules:
         changed, error = self.ports.source_changed_since(head, state)
         return not error and not changed, changed, error
 
-    def ut_session_complete(self, _spec, state):
-        files, error = self.ports.business_changed_files(state)
-        if error:
-            return EvidenceResult(False, error)
-        if not files:
-            return EvidenceResult(True, "")
-        # 批次记账靠"上一批 agent 返回了"来推进,而那份返回证据正是用户已经
-        # 接受风险的那一份。宿主取不到子会话记录时,这里会形成死循环:
-        # 派 agent → 无证据 → 批次不前进 → done 拒 → 再派 agent…
-        # 用户接受风险后仍被同一份缺失证据的衍生记账挡住,等于 accept-risk 无效,
-        # 只剩"整步跳过"这条最差的路(把本步其余所有检查一起扔掉)。
-        # 实战撞过:限流后新开 session 续跑,连撞 6 次,最终整步跳过。
-        accepted, _why = self.ports.risk_acceptance("UT", state)
-        if accepted:
-            return EvidenceResult(True, "")
-        session = state.get("ut_session") or {}
-        expected_phase = (
-            "external" if not host_env.unit_tests_run_locally(state)
-            else "final")
-        if expected_phase == "external" and session.get("output_missing"):
-            return EvidenceResult(
-                False,
-                "UT 编写 Agent 已返回，但没有可核对的测试产物：既没有"
-                "inspected_existing 审计收据，也没有新增/修改测试文件。"
-                "已有测试充分时应真实读取并复用；存在缺口时才补测试。"
-                "Skill 只出现在提示词里不算完成。",
-            )
-        if (session.get("step") != state.get("current")
-                or session.get("phase") != expected_phase
-                or (expected_phase == "external"
-                    and not session.get("complete"))):
-            return EvidenceResult(
-                False, "UT 自适应生成批尚未全部完成；按 current 继续下一批，"
-                + ("全部编写批完成后由权威流水线执行，不再签发本地运行批。"
-                   if expected_phase == "external" else
-                   "最后必须签发并完成全量收口批。")
-                + _ut_loop_hint(session))
-        if expected_phase == "external":
-            return EvidenceResult(True, "UT 编写批已完成；UT 运行等待权威流水线")
-        return legacy_result(self.ports.agent_ran({"agent": "UT"}, state))
-
     def pipeline_obligations_passed(self, _spec, state):
         passed, reason = obligations_passed(state, self.ports.git_head())
         if passed:
@@ -252,36 +211,6 @@ class QualityEvidenceRules:
             )
         return EvidenceResult(True, "")
 
-    def codecheck_clean(self, _spec, state):
-        files, error = self.ports.business_changed_files(state)
-        if error:
-            return EvidenceResult(False, error)
-        if not files:
-            self.ports.append_event(state, "verify.empty", {
-                "head": self.ports.git_head(),
-                "reason": "no-business-code-files",
-            })
-            return EvidenceResult(True, "")
-        cached = self._scan_cache_result(state, files)
-        if cached is not None:
-            return cached
-        if self.ports.exemption_path is not None:
-            exemption = self.ports.exemption_path(state)
-        else:
-            exemption = ".mae-flow-work/%s/codecheck-exemptions.md" % (
-                state["config"].get("单号", ""))
-        verified = self._verified_result(state, files)
-        if verified is None:
-            failure, verified = self._execute_verification(
-                state, files)
-            if failure is not None:
-                return failure
-        total, pairs = verified
-        if total == 0:
-            return EvidenceResult(True, "")
-        return self._exemption_result(
-            state, exemption, total, pairs)
-
     def _review_scan_result(self, state, scan):
         if scan.get("scope_pending"):
             return EvidenceResult(
@@ -357,49 +286,3 @@ class QualityEvidenceRules:
         # 令牌早已没有写入方(不再解析 Agent 自报状态),该分支恒不可达;真实的
         # 源码新鲜度由 review_codecheck 的机器复核负责。
         return result if not result.passed else EvidenceResult(True, "")
-
-    def review_codecheck(self, _spec, state):
-        # 云端:CodeCheck 交由流水线核对(工具是内网 npm 件,云端装不上,
-        # 本地扫描只剩安装空撞和 TOOL_ERROR 噪声)。lightcheck 不走这里,
-        # 照常;本地 CLI 照常。
-        if not host_env.codecheck_runs_locally():
-            return EvidenceResult(True, "云端宿主:CodeCheck 交由流水线核对")
-        scan = (state.get("quality", {}) or {}).get(
-            "codecheck_scan", {})
-        files, error = self.ports.business_changed_files(state)
-        if error and scan.get("step") != state.get("current"):
-            return EvidenceResult(False, error)
-        if files == []:
-            return EvidenceResult(True, "")
-        accepted, _why = self.ports.risk_acceptance(
-            "CODECHECK_TOOL", state)
-        if accepted:
-            return EvidenceResult(True, "")
-        if scan.get("step") != state.get("current"):
-            return EvidenceResult(
-                False,
-                "尚未执行本步的机器首检。先运行 current 输出的 codecheck-scan 命令，"
-                "禁止主会话自行修复",
-            )
-        result = self._review_scan_result(state, scan)
-        if result is not None:
-            return result
-        return self._review_agent_result(state)
-
-
-def _ut_loop_hint(session):
-    """同一批反复签发却never前进,就该说出真相,而不是让人再派一轮。
-
-    宿主拿不到子会话记录时,批次记账永远推不动;此时正确的出路是 accept-risk
-    (它现在会一并放行批次记账),不是整步跳过——跳过会把本步其余检查一起扔掉。
-    """
-    issued = int((session or {}).get("issued", 0) or 0)
-    if issued < 3:
-        return ""
-    return (
-        "\n⚠ 同一批已签发 %d 次仍未前进:批次推进依赖"
-        "「上一批 Agent 真实返回」这份证据,宿主取不到子会话记录时它永远不会成立"
-        "(限流后新开 session 续跑最容易撞上)。不要再派下一轮:"
-        "把实际跑过的 UT 结果摆给用户,取得同意后执行 accept-risk ut"
-        "——它会一并放行批次记账;整步跳过会把本步其余检查一起扔掉,别用。"
-        % issued)

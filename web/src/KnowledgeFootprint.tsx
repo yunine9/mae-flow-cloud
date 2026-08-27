@@ -19,7 +19,7 @@ const ACTION: Record<KnowledgeAction, string> = {
 const ROLE = {
   main: "主 Agent",
   subagent: "子 Agent",
-  prepush: "推送前验证",
+  prepush: "推送前编译",
   "developer-assistant": "开发助手",
 } as const;
 

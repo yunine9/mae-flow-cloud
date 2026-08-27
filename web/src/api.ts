@@ -82,6 +82,8 @@ export interface AuthUser {
   luban_token_hint?: string;
   /** 月光模式(免审批):开着时本人任务的人工节点自动放行。 */
   moonlight?: boolean;
+  /** push 前清单过目的个人默认。缺省即开:只有显式 false 是关。 */
+  push_confirmation?: boolean;
 }
 
 export interface MoonlightPreview {
@@ -110,6 +112,18 @@ export async function putMoonlight(
       include_current: includeCurrent,
       expected_eligible: expectedEligible,
     }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+/** push 前清单过目的个人默认(缺省即开)。 */
+export async function putPersonalPushConfirmation(
+  on: boolean,
+): Promise<AuthUser> {
+  const response = await fetch("/auth/me/push-confirmation", {
+    method: "PUT",
+    body: JSON.stringify({ on }),
   });
   if (!response.ok) throw new Error(await errorText(response));
   return response.json();
@@ -393,6 +407,18 @@ export interface TaskSummary {
   last_progress_at?: string;
   completed_at?: string;
   token_usage?: TaskTokenUsage;
+  /** 执行队列位次(1 起,服务端投影):排队的单要能回答"排到哪了"。 */
+  queue_position?: number;
+  /** 环境预热编译收据(服务端镜像):基线红=环境/上游的锅,与本单
+   * 增量无关;不构成任何交付证据。 */
+  baseline_build?: {
+    status: "running" | "passed" | "failed" | "infrastructure_failure";
+    sha: string;
+    detail?: string;
+    build_command?: string;
+    started_at: string;
+    finished_at?: string;
+  };
   /** 现场被回收的时刻。有值 = 代码克隆等大件已删,过程记录/证据/批注仍在。
    * 页面据此如实说明,别让人对着 404 的代码差异发愣。 */
   workspace_reclaimed_at?: string;
@@ -664,6 +690,8 @@ export interface KnowledgeInsightResource {
   kind: KnowledgeKind;
   name: string;
   path: string;
+  /** 可读性:选中资源=仓内扫描的描述;自发读取=观测时抽的首标题摘要。 */
+  description?: string;
   repository?: string;
   provided_tasks: number;
   selected_tasks: number;
@@ -689,6 +717,21 @@ export interface KnowledgeRecommendation {
 
 /** 团队 Skill 货架条目:部署数据目录 skills/ 里当前生效的资产身份。
  * 正文不进接口;digest 是版本锚。 */
+/** 货架条目的效果账(飞轮第 3 步):消费率 × prepush 一次过对照。
+ * 只是相关性观察,不构成对任何任务或 skill 的裁决。 */
+export interface HostSkillEffect {
+  provided_tasks: number;
+  accessed_tasks: number;
+  access_events: number;
+  repair_tasks: number;
+  prepush_measured: number;
+  prepush_first_pass: number;
+  baseline_measured: number;
+  baseline_first_pass: number;
+  signal?: "low-consumption" | "high-friction";
+  signal_evidence?: string;
+}
+
 export interface HostSkillShelfEntry {
   name: string;
   description: string;
@@ -698,12 +741,161 @@ export interface HostSkillShelfEntry {
   bytes: number;
   /** false = pi 装载器不认(缺 name/description 等),放了也不进会话。 */
   loadable: boolean;
+  effect?: HostSkillEffect;
+  /** 待裁决的修订候选数(沉淀环起草、尚未采纳/丢弃的草稿)。 */
+  candidates?: number;
 }
 
 export interface HostSkillShelf {
   root_exists: boolean;
   skills: HostSkillShelfEntry[];
   warnings: string[];
+}
+
+/** 资产库操作留痕(谁/何时/什么动作/什么指纹),服务端逐条记录。 */
+export interface SkillOperationRecord {
+  at: string;
+  operator: string;
+  action: "upload" | "update" | "offline" | "rollback";
+  directory: string;
+  skill_digest?: string;
+  package_digest?: string;
+  files?: number;
+  bytes?: number;
+  detail?: string;
+}
+
+export interface SkillVersionRecord {
+  version_id: string;
+  archived_at: string;
+  action: string;
+  operator: string;
+  skill_digest: string;
+  package_digest: string;
+  files: number;
+  bytes: number;
+}
+
+export interface SkillUploadFile {
+  path: string;
+  content_base64: string;
+}
+
+/** 货架 + 留痕一次取齐(管理面自刷新用,与 knowledge-insights 解耦)。 */
+export async function getSkillLibrary(): Promise<
+  HostSkillShelf & { operations: SkillOperationRecord[] }
+> {
+  const response = await fetch("/skills");
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function uploadSkill(
+  directory: string,
+  files: SkillUploadFile[],
+): Promise<SkillOperationRecord> {
+  const response = await fetch(`/skills/${encodeURIComponent(directory)}`, {
+    method: "PUT",
+    body: JSON.stringify({ files }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function offlineSkill(
+  directory: string,
+): Promise<SkillOperationRecord> {
+  const response = await fetch(`/skills/${encodeURIComponent(directory)}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function listSkillVersions(
+  directory: string,
+): Promise<SkillVersionRecord[]> {
+  const response = await fetch(
+    `/skills/${encodeURIComponent(directory)}/versions`);
+  if (!response.ok) throw new Error(await errorText(response));
+  return (await response.json()).versions ?? [];
+}
+
+export async function rollbackSkill(
+  directory: string,
+  version: string,
+): Promise<SkillOperationRecord> {
+  const response = await fetch(
+    `/skills/${encodeURIComponent(directory)}/rollback`, {
+      method: "POST",
+      body: JSON.stringify({ version }),
+    });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+/** 修订候选(沉淀环):agent 从任务现场起草的 SKILL.md 草稿。 */
+export interface SkillCandidateRecord {
+  id: string;
+  directory: string;
+  created_at: string;
+  operator: string;
+  status: "drafted" | "adopted" | "discarded";
+  evidence_tasks: string[];
+  adopted_at?: string;
+  adopted_by?: string;
+}
+
+export async function distillSkill(
+  directory: string,
+): Promise<SkillCandidateRecord> {
+  const response = await fetch(
+    `/skills/${encodeURIComponent(directory)}/distill`, { method: "POST" });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function listSkillCandidates(
+  directory: string,
+): Promise<SkillCandidateRecord[]> {
+  const response = await fetch(
+    `/skills/${encodeURIComponent(directory)}/candidates`);
+  if (!response.ok) throw new Error(await errorText(response));
+  return (await response.json()).candidates ?? [];
+}
+
+export async function getSkillCandidate(
+  directory: string,
+  id: string,
+): Promise<{
+  record: SkillCandidateRecord;
+  skill: string;
+  notes: string;
+  evidence: string;
+}> {
+  const response = await fetch(`/skills/${encodeURIComponent(directory)}`
+    + `/candidates/${encodeURIComponent(id)}`);
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function adoptSkillCandidate(
+  directory: string,
+  id: string,
+): Promise<SkillOperationRecord> {
+  const response = await fetch(`/skills/${encodeURIComponent(directory)}`
+    + `/candidates/${encodeURIComponent(id)}/adopt`, { method: "POST" });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function discardSkillCandidate(
+  directory: string,
+  id: string,
+): Promise<void> {
+  const response = await fetch(`/skills/${encodeURIComponent(directory)}`
+    + `/candidates/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (!response.ok) throw new Error(await errorText(response));
 }
 
 export interface TeamKnowledgeInsights {
@@ -1177,6 +1369,30 @@ export function tailEvents(
 
 /** 推送前验证的实时事件流:换轮(修复后新 HEAD 再验)由服务端切文件
  * 并从头重放新一轮,前端只管渲染。 */
+/** 推送前验证失败停机后,人拍板跳过本地验证、直推流水线裁决。 */
+export async function skipPrepushVerification(taskId: string): Promise<void> {
+  const response = await fetch(
+    `/tasks/${encodeURIComponent(taskId)}/prepush/skip`, { method: "POST" });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(String(body.error ?? `HTTP ${response.status}`));
+  }
+}
+
+/** 环境预热编译的实时事件流,与 prepush 同一套 SSE 语义。 */
+export function tailWarmupEvents(
+  taskId: string,
+  onEvent: (event: SemanticEvent) => void,
+  onState?: (state: SseConnectionState) => void,
+): () => void {
+  onState?.("connecting");
+  const source = new EventSource(`/tasks/${taskId}/warmup/events`);
+  source.onopen = () => onState?.("live");
+  source.onmessage = (message) => onEvent(JSON.parse(message.data));
+  source.onerror = () => onState?.("reconnecting");
+  return () => source.close();
+}
+
 export function tailPrepushEvents(
   taskId: string,
   onEvent: (event: SemanticEvent) => void,
@@ -1188,48 +1404,6 @@ export function tailPrepushEvents(
   source.onmessage = (message) => onEvent(JSON.parse(message.data));
   source.onerror = () => onState?.("reconnecting");
   return () => source.close();
-}
-
-/** 行为摘要(服务端 src/activity.ts 的镜像):前端不二次解读。 */
-export interface ActivitySegment {
-  start: string;
-  end: string;
-  kind: "read" | "edit" | "bash" | "tool" | "talk" | "agent" | "ask";
-  title: string;
-  detail?: string;
-  count: number;
-  errors: number;
-}
-
-export interface ActivityAlert {
-  kind: "repeat-failure" | "file-churn" | "reread-loop" | "gate-block" | "stall";
-  title: string;
-  detail?: string;
-  ts: string;
-}
-
-export interface ActivityView {
-  now: string;
-  now_since?: string;
-  segments: ActivitySegment[];
-  alerts: ActivityAlert[];
-  events_seen: number;
-  truncated: boolean;
-}
-
-export async function fetchActivity(
-  taskId: string,
-): Promise<{ view?: ActivityView; unavailable?: string }> {
-  const response = await fetch(`/tasks/${taskId}/activity`);
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    return {
-      unavailable: response.status === 404
-        ? "行为摘要接口尚未就绪(服务重启后可用)。"
-        : String(body.error ?? `HTTP ${response.status}`),
-    };
-  }
-  return { view: await response.json() };
 }
 
 /** 交付时间线条目(服务端 src/timeline.ts 的镜像)。 */
@@ -1265,6 +1439,8 @@ export interface ArtifactMeta {
   kind: "doc" | "diff";
   bytes: number;
   modified_at: string;
+  /** 差异产物包含的真实文件数；文档产物不提供。 */
+  file_count?: number;
 }
 
 export async function listArtifacts(

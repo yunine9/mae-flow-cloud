@@ -12,18 +12,11 @@ from .state_config import _is_source_path
 
 
 SCHEMA = "mae-flow-user-intervention/1"
-_LATE_FULL = {
-    "verify_spec", "verify_comet", "domain_archive", "delivery_review",
-    "archive_confirm", "archive", "push", "external_verify",
-    "moonlight_review", "end",
-}
-_LATE_REVIEW = {
+# 2026-08-25 编排瘦身:编码段只剩宽 build 步,任何工作流的晚期代码介入
+# 都退回 build 重新收口(出口验收在 prepush+流水线+MR,不再有质量小循环)。
+_LATE = {
     "domain_archive", "delivery_review", "archive_confirm", "archive",
     "push", "external_verify", "moonlight_review", "end",
-}
-_LATE_TWEAK = {
-    "tw_verify", "domain_archive", "delivery_review", "archive_confirm",
-    "archive", "push", "external_verify", "moonlight_review", "end",
 }
 _EVIDENCE_SIDECARS = (
     ".tokens", ".agent-evidence", ".agent-observations",
@@ -76,15 +69,8 @@ def intervention_target(state, changed, paths, paths_truncated=False,
     current = str(state.get("current", "") or "")
     if not changed:
         return current
-    if current in ("build", "build_rework"):
+    if current == "build":
         return current
-    if current in ("build_review", "build_commit", "build_agent_review"):
-        # 用户已经用旁路助手实际改过代码，这个动作本身就是对旧检视
-        # 对象的“需要调整”。直接进入返工承接现场，禁止把旧卡答案
-        # 回放给一张内容已经变化的新卡，否则审批对象绑定会必然打回。
-        return "build_rework"
-    if current in ("quality_review", "quality_commit"):
-        return "quality_rework"
 
     tests = [path for path in paths if _is_test_file(path, state)]
     sources = [
@@ -99,33 +85,18 @@ def intervention_target(state, changed, paths, paths_truncated=False,
     documents = [path for path in paths if _is_document_path(path)]
     # Missing path detail is a diagnostic loss, not a reason to reject the
     # user's workspace.  Conservatively treat it as source work and rewind.
-    source_changed = (bool(sources) or bool(unknown) or paths_truncated
-                      or (not paths and not derived_only))
-    test_changed = bool(tests)
-    workflow = (state.get("choices", {}) or {}).get("workflow", "")
+    code_changed = (bool(sources) or bool(unknown) or bool(tests)
+                    or paths_truncated
+                    or (not paths and not derived_only))
 
-    if documents and not source_changed and not test_changed:
+    if documents and not code_changed:
         if current in ("archive_confirm", "archive"):
             return "domain_archive"
         if current in _DOC_FINAL:
             return "delivery_review"
         return current
-
-    if test_changed and not source_changed:
-        if workflow == "review" and current in _LATE_REVIEW:
-            return "rf_ut"
-        if workflow == "tweak" and current in _LATE_TWEAK:
-            return "tw_ut"
-        if current in _LATE_FULL:
-            return "verify_ut"
-        return current
-    if source_changed:
-        if workflow == "review" and current in _LATE_REVIEW:
-            return "build"
-        if workflow == "tweak" and current in _LATE_TWEAK:
-            return "build_rework"
-        if current in _LATE_FULL:
-            return "quality_recompile"
+    if code_changed and current in _LATE:
+        return "build"
     return current
 
 
@@ -185,8 +156,6 @@ def cmd_user_intervention(flow, state, args):
 
     if changed:
         _clear_stale_evidence(state)
-        if target not in ("quality_review", "quality_rework"):
-            state.pop("quality_review", None)
     state["current"] = target
     state["user_intervention"] = {
         "id": intervention_id,

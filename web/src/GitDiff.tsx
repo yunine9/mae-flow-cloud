@@ -6,20 +6,27 @@ import {
   type DiffCell,
   type DiffReviewRow,
 } from "./diffLines";
-
-type ChangeStage = "committed" | "committed_working" | "staged"
-  | "staged_working" | "unstaged" | "untracked";
-type FileKind = "代码" | "文档" | "测试" | "配置" | "其他";
-
-interface ChangedFile {
-  key: string;
-  path: string;
-  stage: ChangeStage;
-  kind: FileKind;
-  lines: string[];
-  additions: number;
-  deletions: number;
-}
+import {
+  changeTree,
+  compactDirectory,
+  descendantFiles,
+  displayDirectoryPaths,
+  parseChanges,
+  type ChangedFile,
+  type ChangeDirectory,
+  type ChangeStage,
+} from "./gitDiffTree";
+import {
+  DEFAULT_DIFF_FONT_SIZE,
+  DEFAULT_DIFF_SPLIT,
+  DEFAULT_TREE_PANEL_WIDTH,
+  MAX_DIFF_FONT_SIZE,
+  MIN_DIFF_FONT_SIZE,
+  clampDiffFontSize,
+  clampDiffSplit,
+  clampTreePanelWidth,
+  diffSplitFromPointer,
+} from "./gitDiffLayout";
 
 const stageName: Record<ChangeStage, string> = {
   committed: "已提交",
@@ -30,131 +37,14 @@ const stageName: Record<ChangeStage, string> = {
   untracked: "未跟踪",
 };
 
-function fileKind(path: string): FileKind {
-  const lower = path.toLowerCase();
-  const name = lower.split("/").at(-1) ?? lower;
-  if (/(^|\/)(test|tests|__tests__)\//.test(lower)
-    || /(?:test|spec)\.[^.]+$/.test(name)) return "测试";
-  if (/\.(?:md|mdx|rst|adoc|txt|docx?|pdf)$/.test(lower)
-    || /(^|\/)(?:readme|changelog|license)(?:\.|$)/.test(lower)) return "文档";
-  if (/\.(?:json|ya?ml|toml|ini|conf|xml|properties|lock)$/.test(lower)
-    || /(?:^|\/)(?:\.gitignore|dockerfile|makefile)$/.test(lower)) return "配置";
-  if (/\.(?:[cm]?[jt]sx?|py|java|kt|kts|go|rs|rb|php|swift|scala|cs|c|cc|cpp|h|hpp|sh|sql|vue|svelte|css|scss|less|html)$/.test(lower)) return "代码";
-  return "其他";
-}
-
-function parseChanges(text: string): ChangedFile[] {
-  const files: ChangedFile[] = [];
-  let stage: ChangeStage = "unstaged";
-  let current: { path: string; stage: ChangeStage; lines: string[] } | undefined;
-
-  const finish = () => {
-    if (!current) return;
-    const additions = current.lines.filter((line) => /^\+[^+]/.test(line)).length;
-    const deletions = current.lines.filter((line) => /^-[^-]/.test(line)).length;
-    files.push({
-      ...current,
-      key: `${current.stage}:${current.path}`,
-      kind: fileKind(current.path),
-      additions,
-      deletions,
-    });
-    current = undefined;
-  };
-
-  for (const line of text.split("\n")) {
-    if (/^## 已提交后又修改/.test(line)) { finish(); stage = "committed_working"; continue; }
-    if (/^## 已提交/.test(line)) { finish(); stage = "committed"; continue; }
-    if (/^## 已暂存后又修改/.test(line)) { finish(); stage = "staged_working"; continue; }
-    if (/^## 已暂存/.test(line)) { finish(); stage = "staged"; continue; }
-    if (/^## 未暂存/.test(line)) { finish(); stage = "unstaged"; continue; }
-    if (/^## 未跟踪/.test(line)) { finish(); stage = "untracked"; continue; }
-    const header = line.match(/^diff --git a\/(.+?) b\/(.+)$/);
-    if (header) {
-      finish();
-      current = { path: header[2], stage, lines: [line] };
-      continue;
-    }
-    const untracked = line.match(/^\?\?\s+(.+)$/);
-    if (untracked) {
-      finish();
-      const path = untracked[1];
-      files.push({
-        key: `untracked:${path}`,
-        path,
-        stage: "untracked",
-        kind: fileKind(path),
-        lines: [line],
-        additions: 0,
-        deletions: 0,
-      });
-      continue;
-    }
-    if (current) current.lines.push(line);
+function storedNumber(key: string, fallback: number): number {
+  if (typeof window === "undefined") return fallback;
+  try {
+    const value = Number(localStorage.getItem(key));
+    return Number.isFinite(value) && value > 0 ? value : fallback;
+  } catch {
+    return fallback;
   }
-  finish();
-  return files;
-}
-
-interface ChangeDirectory {
-  name: string;
-  path: string;
-  directories: ChangeDirectory[];
-  files: ChangedFile[];
-  count: number;
-}
-
-function changeTree(files: ChangedFile[]): ChangeDirectory {
-  type MutableDirectory = Omit<ChangeDirectory, "directories"> & {
-    children: Map<string, MutableDirectory>;
-  };
-  const root: MutableDirectory = {
-    name: "", path: "", children: new Map(), files: [], count: 0,
-  };
-  for (const file of files) {
-    const parts = file.path.split("/").filter(Boolean);
-    let directory = root;
-    for (const name of parts.slice(0, -1)) {
-      const path = directory.path ? `${directory.path}/${name}` : name;
-      let child = directory.children.get(name);
-      if (!child) {
-        child = { name, path, children: new Map(), files: [], count: 0 };
-        directory.children.set(name, child);
-      }
-      directory = child;
-    }
-    directory.files.push(file);
-  }
-  const freeze = (directory: MutableDirectory): ChangeDirectory => {
-    const directories = [...directory.children.values()]
-      .sort((left, right) => left.name.localeCompare(right.name))
-      .map(freeze);
-    const ownFiles = [...directory.files].sort((left, right) =>
-      left.path.localeCompare(right.path));
-    return {
-      name: directory.name,
-      path: directory.path,
-      directories,
-      files: ownFiles,
-      count: ownFiles.length + directories.reduce((sum, item) =>
-        sum + item.count, 0),
-    };
-  };
-  return freeze(root);
-}
-
-function directoryPaths(directory: ChangeDirectory): string[] {
-  return directory.directories.flatMap((child) => [
-    child.path,
-    ...directoryPaths(child),
-  ]);
-}
-
-function descendantFiles(directory: ChangeDirectory): ChangedFile[] {
-  return [
-    ...directory.files,
-    ...directory.directories.flatMap(descendantFiles),
-  ];
 }
 
 export interface GitDiffSelection {
@@ -254,6 +144,14 @@ export function GitDiff({
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [showAll, setShowAll] = useState(false);
   const [focused, setFocused] = useState(false);
+  const [treePanelWidth, setTreePanelWidth] = useState(() =>
+    clampTreePanelWidth(storedNumber("mae-flow:git-tree-width",
+      DEFAULT_TREE_PANEL_WIDTH), 2000));
+  const [diffSplit, setDiffSplit] = useState(() =>
+    clampDiffSplit(storedNumber("mae-flow:git-diff-split", DEFAULT_DIFF_SPLIT)));
+  const [diffFontSize, setDiffFontSize] = useState(() =>
+    clampDiffFontSize(storedNumber("mae-flow:git-diff-font-size",
+      DEFAULT_DIFF_FONT_SIZE)));
   const [collapsedDirectories, setCollapsedDirectories] =
     useState<Set<string>>(new Set());
   const [hiddenPaths, setHiddenPaths] = useState<Set<string>>(new Set());
@@ -261,6 +159,8 @@ export function GitDiff({
   const [activeSelectionKey, setActiveSelectionKey] = useState("");
   const initializedSelection = useRef("");
   const initializedDirectories = useRef<Set<string>>(new Set());
+  const gitBrowser = useRef<HTMLDivElement>(null);
+  const diffCanvas = useRef<HTMLDivElement>(null);
   const [pathTip, setPathTip] = useState<{
     path: string;
     left: number;
@@ -273,7 +173,7 @@ export function GitDiff({
     [files, hiddenPaths],
   );
   const tree = useMemo(() => changeTree(visibleFiles), [visibleFiles]);
-  const allDirectories = useMemo(() => directoryPaths(tree), [tree]);
+  const allDirectories = useMemo(() => displayDirectoryPaths(tree), [tree]);
   const committedPaths = useMemo(() => files
     .filter((file) => file.stage === "committed"
       || file.stage === "committed_working")
@@ -297,6 +197,29 @@ export function GitDiff({
     if (!hiddenStorageKey || typeof window === "undefined") return;
     localStorage.setItem(hiddenStorageKey, JSON.stringify([...hiddenPaths]));
   }, [hiddenPaths, hiddenStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      localStorage.setItem("mae-flow:git-tree-width", String(treePanelWidth));
+      localStorage.setItem("mae-flow:git-diff-split", String(diffSplit));
+      localStorage.setItem("mae-flow:git-diff-font-size", String(diffFontSize));
+    } catch {
+      // 阅读偏好写不进去不影响代码检视。
+    }
+  }, [treePanelWidth, diffSplit, diffFontSize]);
+
+  useEffect(() => {
+    if (!focused || typeof window === "undefined") return;
+    const fitTreePanel = () => {
+      const width = gitBrowser.current?.getBoundingClientRect().width;
+      if (width) setTreePanelWidth((current) =>
+        clampTreePanelWidth(current, width));
+    };
+    fitTreePanel();
+    window.addEventListener("resize", fitTreePanel);
+    return () => window.removeEventListener("resize", fitTreePanel);
+  }, [focused]);
 
   useEffect(() => {
     const available = new Set(files.map((file) => file.path));
@@ -381,6 +304,8 @@ export function GitDiff({
   const kinds = Array.from(new Set(files.map((file) => file.kind)));
   const branchLabel = branch || "分支未知";
   const selectedDeliveryCount = deliveryPaths.size;
+  const hasCollapsedDirectories = allDirectories.some((path) =>
+    collapsedDirectories.has(path));
   const selectionChanged = selectable
     && (selectedDeliveryCount !== committedPaths.length
       || committedPaths.some((path) => !deliveryPaths.has(path)));
@@ -400,6 +325,18 @@ export function GitDiff({
 
   function hideFiles(paths: string[]) {
     setHiddenPaths((current) => new Set([...current, ...paths]));
+  }
+
+  function resizeTreePanel(clientX: number) {
+    const box = gitBrowser.current?.getBoundingClientRect();
+    if (!box) return;
+    setTreePanelWidth(clampTreePanelWidth(clientX - box.left, box.width));
+  }
+
+  function resizeDiffColumns(clientX: number) {
+    const box = diffCanvas.current?.getBoundingClientRect();
+    if (!box) return;
+    setDiffSplit(diffSplitFromPointer(clientX, box.left, box.width));
   }
 
   function renderFile(file: ChangedFile, depth: number, overview: boolean) {
@@ -435,10 +372,11 @@ export function GitDiff({
           onBlur={() => setPathTip(undefined)}>
           <span className={`file-kind kind-${file.kind}`}>{file.kind.slice(0, 1)}</span>
           <span className="change-file-name"><strong>{file.path.split("/").at(-1)}</strong>
-            <small>{stageName[file.stage]} · {file.kind}</small></span>
-          {(file.additions > 0 || file.deletions > 0) && (
-            <i><em>+{file.additions}</em> <del>−{file.deletions}</del></i>
-          )}
+            <small><span>{stageName[file.stage]} · {file.kind}</span>
+              {(file.additions > 0 || file.deletions > 0) && (
+                <i className="change-file-stats"><em>+{file.additions}</em>
+                  <del>−{file.deletions}</del></i>
+              )}</small></span>
         </button>
         <button type="button" className="change-hide" title="从当前视图隐藏；不改变交付清单"
           aria-label={`隐藏 ${file.path}`} onClick={() => hideFiles([file.path])}>
@@ -453,6 +391,8 @@ export function GitDiff({
     depth: number,
     overview: boolean,
   ): ReactNode {
+    const compacted = compactDirectory(directory);
+    directory = compacted.directory;
     const descendants = descendantFiles(directory);
     const paths = descendants.map((file) => file.path);
     const included = paths.filter((path) => deliveryPaths.has(path)).length;
@@ -472,6 +412,7 @@ export function GitDiff({
             </button>
           )}
           <button type="button" className="change-directory-main"
+            title={directory.path}
             aria-expanded={!collapsed}
             onClick={() => setCollapsedDirectories((current) => {
               const next = new Set(current);
@@ -480,7 +421,7 @@ export function GitDiff({
               return next;
             })}>
             <svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg>
-            <span aria-hidden>▰</span><strong>{directory.name}</strong><i>{directory.count}</i>
+            <span aria-hidden>▰</span><strong>{compacted.label}</strong><i>{directory.count}</i>
           </button>
           <button type="button" className="change-hide"
             title="隐藏整个目录；不改变交付清单"
@@ -589,17 +530,77 @@ export function GitDiff({
       )}
 
       {focused ? (
-      <div className="git-change-browser">
+      <div className="git-change-browser" ref={gitBrowser}
+        style={{ "--change-tree-width": `${treePanelWidth}px` } as CSSProperties}>
         <nav className="change-files" aria-label="变更文件">
-          <div className="change-tree-caption"><span>按目录</span><i>{visibleFiles.length}</i></div>
+          <div className="change-tree-caption"><span>按目录</span><div>
+            <i>{visibleFiles.length}</i>
+            {allDirectories.length > 0 && (
+              <button type="button"
+                aria-label={hasCollapsedDirectories ? "展开全部目录" : "折叠全部目录"}
+                title={hasCollapsedDirectories ? "展开全部目录" : "折叠全部目录"}
+                onClick={() => setCollapsedDirectories(hasCollapsedDirectories
+                  ? new Set() : new Set(allDirectories))}>
+                <svg viewBox="0 0 16 16" aria-hidden>
+                  {hasCollapsedDirectories
+                    ? <><path d="m4 3 4 4 4-4" /><path d="m4 9 4 4 4-4" /></>
+                    : <><path d="m4 7 4-4 4 4" /><path d="m4 13 4-4 4 4" /></>}
+                </svg>
+                {hasCollapsedDirectories ? "全部展开" : "全部折叠"}
+              </button>
+            )}
+          </div></div>
           {renderTree(false)}
         </nav>
+
+        <div className="change-panel-resizer" role="separator" tabIndex={0}
+          aria-label="调整目录树宽度" aria-orientation="vertical"
+          aria-valuemin={240} aria-valuemax={560} aria-valuenow={treePanelWidth}
+          title="左右拖动调整目录树；双击恢复默认"
+          onDoubleClick={() => setTreePanelWidth(DEFAULT_TREE_PANEL_WIDTH)}
+          onKeyDown={(event) => {
+            if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+            event.preventDefault();
+            const width = gitBrowser.current?.getBoundingClientRect().width ?? 1200;
+            setTreePanelWidth(clampTreePanelWidth(
+              treePanelWidth + (event.key === "ArrowLeft" ? -16 : 16), width));
+          }}
+          onPointerDown={(event) => {
+            event.preventDefault();
+            event.currentTarget.setPointerCapture(event.pointerId);
+            resizeTreePanel(event.clientX);
+          }}
+          onPointerMove={(event) => {
+            if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+              resizeTreePanel(event.clientX);
+            }
+          }}
+          onPointerUp={(event) => event.currentTarget.releasePointerCapture(event.pointerId)}>
+          <span aria-hidden />
+        </div>
 
         <section className="change-file-detail">
           <header>
             <div><strong title={active?.path}>{active?.path}</strong><span>{active && `${stageName[active.stage]} · ${active.kind}${lineCount ? ` · ${lineCount} 行` : ""}`}</span></div>
             <div className="change-detail-actions">
               {active && (active.additions > 0 || active.deletions > 0) && <small><b>+{active.additions}</b> <i>−{active.deletions}</i></small>}
+              <div className="diff-font-zoom" aria-label="Git 字号">
+                <button type="button" aria-label="缩小 Git 字号"
+                  disabled={diffFontSize <= MIN_DIFF_FONT_SIZE}
+                  onClick={() => setDiffFontSize(clampDiffFontSize(diffFontSize - 1))}>
+                  A−
+                </button>
+                <button type="button" className="diff-font-reset"
+                  title="恢复默认 Git 字号"
+                  onClick={() => setDiffFontSize(DEFAULT_DIFF_FONT_SIZE)}>
+                  {Math.round((diffFontSize / DEFAULT_DIFF_FONT_SIZE) * 100)}%
+                </button>
+                <button type="button" aria-label="放大 Git 字号"
+                  disabled={diffFontSize >= MAX_DIFF_FONT_SIZE}
+                  onClick={() => setDiffFontSize(clampDiffFontSize(diffFontSize + 1))}>
+                  A+
+                </button>
+              </div>
               {canFold && (
                 <button type="button" onClick={() => {
                   setShowAll((value) => !value);
@@ -613,9 +614,12 @@ export function GitDiff({
           ) : (
             // data-file / data-l 是批注的锚:批注层用事件委托认它们,
             // 不需要 GitDiff 知道批注这回事(内核面板也是这么分层的)。
-            <div className="ws-diff diff-review" data-file={active?.path}>
-              <div className="diff-review-head"><span>变更前</span><span>变更后</span></div>
-              <div className="diff-review-body">
+            <div className="ws-diff diff-review" data-file={active?.path}
+              style={{ "--git-diff-font-size": `${diffFontSize}px` } as CSSProperties}>
+              <div className="diff-review-canvas" ref={diffCanvas}
+                style={{ "--diff-before-width": `${diffSplit}%` } as CSSProperties}>
+                <div className="diff-review-head"><span>变更前</span><span>变更后</span></div>
+                <div className="diff-review-body">
                 {folded.entries.map((row, index) => {
                   if (row.type === "fold") {
                     return (
@@ -637,6 +641,33 @@ export function GitDiff({
                     </div>
                   );
                 })}
+                </div>
+                <div className="diff-column-resizer" role="separator" tabIndex={0}
+                  aria-label="调整变更前后宽度" aria-orientation="vertical"
+                  aria-valuemin={25} aria-valuemax={75}
+                  aria-valuenow={Math.round(diffSplit)}
+                  title="左右拖动调整变更前后宽度；双击恢复对半"
+                  onDoubleClick={() => setDiffSplit(DEFAULT_DIFF_SPLIT)}
+                  onKeyDown={(event) => {
+                    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+                    event.preventDefault();
+                    setDiffSplit(clampDiffSplit(
+                      diffSplit + (event.key === "ArrowLeft" ? -2 : 2)));
+                  }}
+                  onPointerDown={(event) => {
+                    event.preventDefault();
+                    event.currentTarget.setPointerCapture(event.pointerId);
+                    resizeDiffColumns(event.clientX);
+                  }}
+                  onPointerMove={(event) => {
+                    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                      resizeDiffColumns(event.clientX);
+                    }
+                  }}
+                  onPointerUp={(event) =>
+                    event.currentTarget.releasePointerCapture(event.pointerId)}>
+                  <span aria-hidden />
+                </div>
               </div>
             </div>
           )}

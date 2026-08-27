@@ -104,6 +104,34 @@ class ApprovalSubjectTests(unittest.TestCase):
         third = build_subject(self.root, state, "build_review", step)
         self.assertEqual(first["sha256"], third["sha256"])
 
+    def test_first_bind_passes_without_forcing_a_second_confirmation(self):
+        """2026-08-26 单次确认修复:缺卡时补绑当前内容后放行,不再打回
+        重问——共识由 ack 验真按"印章 sha == 此刻内容 sha"裁决;
+        run8b/run9 双跑里 spec/story 必现的背靠背双确认由此消除。"""
+        folder = os.path.join(self.root, ".mae-flow-work", "REQ-1")
+        os.makedirs(folder)
+        with open(os.path.join(folder, "spec.md"), "w",
+                  encoding="utf-8") as out:
+            out.write("v1\n")
+        state = {"config": {"单号": "REQ-1"}}
+        step = {"approval_subject": {
+            "kind": "artifacts", "artifacts": ["spec"]}}
+        ok, reason = subject_matches(self.root, state, "open", step)
+        self.assertEqual((True, ""), (ok, reason))
+        bound = state.get("approval_subject") or {}
+        self.assertEqual("open", bound.get("step"))
+        self.assertEqual(
+            build_subject(self.root, state, "open", step)["sha256"],
+            bound.get("sha256"),
+            "补绑的卡必须与此刻内容同指纹,ack 印章过滤才有对账对象")
+        # 放行只发生一次绑定;内容随后变化仍走"作废重展示"老路径。
+        with open(os.path.join(folder, "spec.md"), "w",
+                  encoding="utf-8") as out:
+            out.write("v2\n")
+        ok, reason = subject_matches(self.root, state, "open", step)
+        self.assertFalse(ok)
+        self.assertIn("旧决定已自动失效", reason)
+
     def test_stale_subject_is_rotated_without_agent_rework(self):
         state = {"implementation_base_head": self.head}
         step = {"approval_subject": {"kind": "worktree"}}

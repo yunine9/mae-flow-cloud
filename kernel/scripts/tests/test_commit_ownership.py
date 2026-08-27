@@ -18,7 +18,6 @@ sys.path.insert(0, os.path.join(ROOT, "scripts"))
 from mae_flow_core import cli_runtime as mf
 from mae_flow_core.cli_commands import git_ownership
 from mae_flow_core.guard.ownership import OwnershipFacts, decide_ownership
-from mae_flow_core.guard.ownership import decide_compile_task_commit
 with open(
         os.path.join(ROOT, "flow", "flow.json"),
         encoding="utf-8") as flow_stream:
@@ -151,17 +150,6 @@ class CommitOwnershipTests(unittest.TestCase):
 
         self.assertNotEqual(0, blocked.returncode)
         self.assertIn("精确暂存", blocked.stdout + blocked.stderr)
-
-    def test_digest_free_compile_task_uses_real_lifecycle_execution_fact(self):
-        task = {"step": "build", "task_files": ["src/a.cpp"]}
-
-        pending = decide_compile_task_commit(
-            "build", task, completed=False)
-        complete = decide_compile_task_commit(
-            "build", task, completed=True)
-
-        self.assertEqual("bash-compile-task-pending", pending.rule)
-        self.assertIsNone(complete)
 
     def mark_initial(self, state, path):
         state["initial_dirty"].append(path)
@@ -384,69 +372,6 @@ class CommitOwnershipTests(unittest.TestCase):
 
         self.assertEqual([generated], compile_side_effects)
         self.assertEqual("bash-compile-side-effects", decision.block.rule)
-
-    def test_new_configuration_cannot_commit_before_compile_completion(self):
-        self.assert_compile_commit_lifecycle(
-            "config/generated.properties",
-            tracked=False,
-        )
-
-    def test_tracked_configuration_cannot_commit_before_compile_completion(self):
-        self.assert_compile_commit_lifecycle(
-            "config/runtime.properties",
-            tracked=True,
-        )
-
-    def test_tracked_repo_defaults_cannot_commit_as_a_compile_side_effect(self):
-        self.assert_compile_commit_lifecycle(
-            ".mae-flow-defaults.json",
-            tracked=True,
-        )
-
-    def test_pending_compile_blocks_git_global_options_and_git_exe(self):
-        self.save_pending_compile()
-        original_head = git(self.repo, "rev-parse", "HEAD")
-        commands = (
-            'git -c user.name=Fixture commit -m "[REQ123][fix]compile"',
-            'git -C . commit -m "[REQ123][fix]compile"',
-            'git --no-pager commit -m "[REQ123][fix]compile"',
-            'git.exe commit -m "[REQ123][fix]compile"',
-            "git diff --cached | git commit -F -",
-            'git commit -m "[REQ123][fix]part one; part two"',
-            'git \\\ncommit -m "[REQ123][fix]continued"',
-            'git\\\n commit -m "[REQ123][fix]continued"',
-        )
-
-        for command in commands:
-            with self.subTest(command=command):
-                result = self.gate_bash(command)
-                output = result.stdout + result.stderr
-                self.assertNotEqual(0, result.returncode, output)
-                self.assertIn("先完成当前 COMPILE 任务", output)
-                self.assertEqual(
-                    original_head, git(self.repo, "rev-parse", "HEAD"))
-                self.assertFalse(os.path.exists(
-                    os.path.join(
-                        self.repo, ".mae-flow.json.gate-strikes")))
-                self.assertFalse(os.path.exists(
-                    os.path.join(
-                        self.repo, ".mae-flow.json.gate-permits")))
-
-    def test_pending_compile_precedes_commit_format_and_branch_strikes(self):
-        state = self.state()
-        state["config"]["分支名"] = "expected-feature"
-        self.save_pending_compile(state)
-
-        result = self.gate_bash("git commit -m malformed")
-
-        output = result.stdout + result.stderr
-        self.assertNotEqual(0, result.returncode, output)
-        self.assertIn("先完成当前 COMPILE 任务", output)
-        self.assertNotIn("commit message", output)
-        self.assertFalse(os.path.exists(
-            os.path.join(self.repo, ".mae-flow.json.gate-strikes")))
-        self.assertFalse(os.path.exists(
-            os.path.join(self.repo, ".mae-flow.json.gate-permits")))
 
     def test_valid_compile_risk_receipt_closes_pending_commit_window(self):
         path = "src/repair.cpp"
@@ -847,7 +772,7 @@ class CommitOwnershipTests(unittest.TestCase):
 
         pending = self.gate_bash(command)
         self.assertIn(
-            "先完成当前 COMPILE 任务",
+            "高置信临时编译产物或显式 force-add",
             pending.stdout + pending.stderr,
         )
         self.mark_compile_completed(state)
@@ -1311,22 +1236,17 @@ class CommitOwnershipTests(unittest.TestCase):
         self.assertNotEqual(0, expanded.returncode, output)
         self.assertIn(extra, output)
 
-    def test_non_git_source_write_needs_no_permit_after_slimming(self):
-        """本步不许改源码已退役:改源码是可逆动作，把关在 done 的证据检查。"""
+    def test_source_write_outside_authorized_step_is_blocked(self):
+        """flow.json 未授权写源码的步骤(如 config_confirm)机械阻断 Bash 写码。"""
         source = "src/main.py"
         write(self.repo, source, "value = 1\n")
         mf.save_state(self.state(current="config_confirm"))
         command = "sed -i 's/value/other/' " + source
 
-        allowed = self.gate_bash(command)
+        blocked = self.gate_bash(command)
 
-        self.assertEqual(
-            0,
-            allowed.returncode,
-            allowed.stdout + allowed.stderr,
-        )
-        self.assertFalse(os.path.exists(
-            os.path.join(self.repo, ".mae-flow.json.gate-strikes")))
+        self.assertNotEqual(0, blocked.returncode)
+        self.assertIn("禁止经 Bash 修改源码", blocked.stdout + blocked.stderr)
 
     def test_user_external_current_delivery_needs_no_agent_provenance(self):
         current = "openspec/changes/current-change/change.md"

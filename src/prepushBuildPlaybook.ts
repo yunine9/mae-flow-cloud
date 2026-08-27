@@ -293,15 +293,24 @@ export function renderPrePushBuildGuidance(profile: PrePushBuildProfile): string
     lines.push(`优先检查的仓库入口：${profile.repository_guides.join("、")}。`);
   }
 
+  if (profile.maven) {
+    lines.push(
+      "内网 MAE 仓的统一事实：C++/Java/JS 都以 Maven 为唯一编译入口，各仓私有依赖与环境变量（svc_profile、SDK、DT 参数）由 Maven 插件自动生成和管理——不要绕开它手搓构建，也不要手工 export 它该生成的东西。",
+    );
+  }
   lines.push(
-    "基础设施预检：Java/C++ Maven 构建需要 JDK 21 与 Maven；前端需要仓库兼容的 Node/npm（部署基线为 Node 18/npm 9）；C++ 还需要 GCC/G++、binutils、bison、flex、ccache。缺失、版本不兼容、制品仓 TLS/网络/权限或磁盘问题归类 infrastructure_failure，不要通过改业务代码伪装修复。",
+    "基础设施预检：Java/C++ Maven 构建需要 JDK 21 与 Maven；前端需要仓库兼容的 Node/npm（部署基线为 Node 18/npm 9）；C++ 还需要 GCC/G++、binutils、bison、flex、ccache。缺失、版本不兼容、制品仓 TLS/网络/权限或磁盘问题归类 infrastructure_failure，不要通过改业务代码伪装修复。低版本 JDK 的典型症状是 UnsupportedClassVersionError——那是环境问题，不是代码问题。",
     "平台已经负责 Maven/npm 镜像、证书信任与凭据。不要克隆新副本、注入令牌、改全局 Git/Maven/npm 配置，也不要关闭 TLS/SSL 校验；遇到证书或鉴权故障只记录证据并报告基础设施失败。",
+    `增量优先：非首次构建用不带 clean 的 \`${mvn} compile\`（内网实测 C++ 仓 3 分钟→18 秒）；刚克隆的仓上 clean 没有意义，别浪费一次全量。`,
+    "长构建不要用管道直连截尾（如 `mvn compile | tail -80`）——tail 要等命令退出才输出，进行中一个字都看不到，超时被杀连诊断都留不下。先落文件再看尾巴：`mvn compile > build.log 2>&1; tail -80 build.log`。",
+    "并行度以容器配额为准，不要信 nproc：容器 CPU 是 CFS 配额不是绑核，nproc 虚报宿主全部核数，-j 超过配额会因限流不升反降（内网实锤：-j16 挤 8 核配额比干净 8 路还慢）。真实配额看 `cat /sys/fs/cgroup/cpu.max`（如 800000 100000 = 8 核），构建自带并行参数时按它设 -j。",
   );
 
   if (profile.stacks.includes("java")) {
     lines.push(
-      `Java：编译/打包检查默认用 \`${mvn} package -DskipTests\`，UT 再单独用 \`${mvn} test\`。不要先跑一次带测试的 package 又重复跑 test；仓库脚本、pom 或已选择 Skill 明确给出其他入口时以仓库事实为准。`,
+      `Java：编译/打包检查默认用 \`${mvn} package -DskipTests\`，UT 再单独用 \`${mvn} test\`。不要先跑一次带测试的 package 又重复跑 test；只需验证编译时 \`${mvn} compile\` 就够。仓库脚本、pom 或已选择 Skill 明确给出其他入口时以仓库事实为准。`,
       "Java 定向 UT 可用 `-Dtest=ClassName`、`-Dtest=ClassName#method`、通配符及 `-pl <module>`；修复循环先跑受影响测试，收口前仍按仓库要求跑完整范围。",
+      "Java UT 缺 native 系统库（如 SQLite）属环境问题：报 infrastructure_failure 并点名缺哪个库，不要改业务代码绕。",
     );
   }
 
@@ -312,6 +321,7 @@ export function renderPrePushBuildGuidance(profile: PrePushBuildProfile): string
       : "website/node_modules 未发现；按仓库锁文件和脚本安装依赖";
     lines.push(
       `JS/前端：${installState}。检测到 ${packageManager}；优先遵循锁文件/仓库脚本，npm 无更明确入口时才在 website 使用 \`npm install --legacy-peer-deps\`。`,
+      "依赖安装必须先于任何 Maven 编译——Maven 的 antrun 插件只调用 `npm run build`，不负责 install，漏了这步编译必失败。依赖版本冲突时先找项目的 install.sh 或仓库指定的 Node 版本，不要盲目改锁文件。",
       `JS/前端由 Maven 编排时优先增量 \`${mvn} compile\`。不要无脑执行 Maven clean，它可能删除 website/node_modules；只有仓库明确要求且已规划重新安装依赖时才 clean。`,
       "UT 必须从 package scripts、pom 或 CI 找到真实入口；不要把前端 build 冒充 UT。仓库明确要求产物构建时，才使用其 `npm run build-prod <version>` 等脚本。",
     );
@@ -322,6 +332,7 @@ export function renderPrePushBuildGuidance(profile: PrePushBuildProfile): string
       `C++/native：优先从 Maven 插件进入。当前内网经验的候选命令是 \`${mvn} compile -DDT_test=UT -DDT_run=true\`；首次完整基线或确认生成物陈旧时才考虑 \`${mvn} clean compile -DDT_test=UT -DDT_run=true\`。这只是候选，必须先核对 pom、仓库脚本与插件说明。`,
       "必须从输出确认 UT 进程确实执行并产生用例/结果摘要，不能只看 Maven BUILD SUCCESS 就把它记作 UT。若 DT 参数只生成或编译测试，则继续使用仓库生成目录中的 ctest --output-on-failure 或仓库专用 runner，最终上报真正执行测试的命令。",
       "C++ 定向 UT 可按仓库支持使用 `-DDT_COV_INCLUDES=\"*ModuleName*\"` 或 `-DDT_COV_EXCLUDES=\"*ModuleName*\"`；先缩小修复反馈环，收口前再覆盖仓库要求范围。",
+      `C++ 只需验证编译时去掉 DT 参数：\`${mvn} compile\` 即可；SDK 与 CMake 依赖由 Maven 插件自动拉取，一般无需手动安装。`,
       "svc_profile、SDK 等若由 Maven 生成或拉取，不要手工 export/伪造；工具链或专用依赖确实缺失时报告 infrastructure_failure。",
     );
   }

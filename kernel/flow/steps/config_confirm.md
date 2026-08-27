@@ -11,8 +11,6 @@
    用户选"需要修改"则改对应值并重新 `config-review`，旧确认自动失效。
 
 完整开发固定执行 Interactive Grill、生成本地 Spec 与本地 Story，不再询问是否跳过或是否入库。
-`code_reviewer_ask` 是紧接着的独立一问卡（是否启用只读 CODE Reviewer），它有自己的步骤，
-不塞进上面那张卡。
 
 **仓库预设**：current 输出若带「仓库预设(.mae-flow-defaults.json)」块（团队提交进仓的恒定项，
 如构建与 UT 约定），直接以其值预填进入确认展示，不再重新推断。
@@ -30,8 +28,8 @@
 {{#LOCAL_COMPILE}}
 - **编译方式**（build-fix skill | mvn 命令 | 其他）：按仓库构建体系推断候选，用户拍板。
   C++/CMake/mcde 仓用 build-fix（随插件提供，无需安装或 reload）；Java/Maven 仓给明确的 mvn 命令；
-  其余请用户给一条能跑通的命令。**这是全流程唯一编译路由**：compile-agent、codecheck 与 UT
-  的编译验证全按它执行，任何 agent 现场另猜编译命令都是违规。多模块 Java 仓另见下方「编译范围」。
+  其余请用户给一条能跑通的命令。**这是全流程唯一编译路由**：编码期的自行编译验证与推送前
+  验证全按它执行，任何 agent 现场另猜编译命令都是违规。多模块 Java 仓另见下方「编译范围」。
 {{/LOCAL_COMPILE}}
 - **UT 编写方式（内部配置键 `UT生成方式`）**：自动推断后进确认单（C++/mcde→插件自带 AutoUT skill；Java/Maven→插件自带
   java-autout skill；其余→参考仓内写法）。这些能力随插件安装，无需单独安装或 reload。

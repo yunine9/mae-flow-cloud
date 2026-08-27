@@ -89,8 +89,27 @@ export function prePushSecurityDecision(
   const kernelStatePath = /(?:^|[\\/\s'"`=])\.mae-flow(?:\.json|-[^\\/\s'"`;&|]+|[\\/])(?:$|[\s'"`;&|\\/])/i;
   const readonlySkillSnapshot = kind === "read"
     && /(?:^|[\\/])\.mae-flow-work[\\/](?:repository|host)-skills[\\/]/i.test(source);
-  if (kernelStatePath.test(source) && !readonlySkillSnapshot) {
-    return DENY("推送前验证会话不能读取或修改 Mae-Flow 内核现场。");
+  // "为了避开内核现场而提到它"不是访问(实锤:grep -v ".mae-flow-work"、
+  // find -path ./.mae-flow-work -prune 被误杀,Agent 搜索业务代码全被拒)。
+  // 先抹掉排除语法里的提及再查;正向引用(cat/重定向/参数路径)不在
+  // 这些形态里,照样拒。
+  const sansExclusionIdioms = source
+    // grep -v / --invert-match "<含 .mae-flow 的模式>"
+    .replace(/(?:^|\s)(?:-v|--invert-match)\s+(['"]?)[^\s'"|;&]*\.mae-flow[^\s'"|;&]*\1/gi, " ")
+    // grep --exclude / --exclude-dir=<...>
+    .replace(/--exclude(?:-dir)?=(['"]?)[^\s'"|;&]*\.mae-flow[^\s'"|;&]*\1/gi, " ")
+    // find [-not|!] -path <...> [-prune]
+    .replace(/(?:(?:-not|!)\s+)?-path\s+(['"]?)[^\s'"|;&]*\.mae-flow[^\s'"|;&]*\1(?:\s+-prune)?/gi, " ")
+    // git pathspec :(exclude)<...>
+    .replace(/:\(exclude\)[^\s'"|;&]*\.mae-flow[^\s'"|;&]*/gi, " ");
+  // build-notes 是预热/prepush 共用的构建入口沉淀,不是内核现场:
+  // 精确豁免这一个文件(读写皆可,实锤:预热写入被拦报"沙箱限制")。
+  // 豁免方式是"抹掉它再查"——同一条命令若还夹带其他 .mae-flow 路径,
+  // 照样拒,不给组合走私留门。
+  const sansBuildNotes = sansExclusionIdioms.replace(
+    /[^\s'"`;&|]*\.mae-flow-work[\\/]build-notes\.md/gi, " ");
+  if (kernelStatePath.test(sansBuildNotes) && !readonlySkillSnapshot) {
+    return DENY("推送前编译会话不能读取或修改 Mae-Flow 内核现场。");
   }
 
   // 文件工具和 Bash 都不能伸手碰宿主运行时模型/API Key 或常见凭据。

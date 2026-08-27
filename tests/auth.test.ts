@@ -83,6 +83,8 @@ test("个人配置:退出重登与账号库重载后仍在,且不同用户严格
       git_email: "alice@example.com",
       luban_token_hint: "••••cret",
       moonlight: true,
+      // push 前清单过目:真人缺省即开(2026-08-26 拍板)。
+      push_confirmation: true,
     });
     assert.doesNotMatch(alice.text,
       /alice-codehub-secret|alice-luban-secret|bob-codehub-secret|bob@example/,
@@ -105,6 +107,7 @@ test("个人配置:退出重登与账号库重载后仍在,且不同用户严格
       git_email: "bob@example.com",
       luban_token_hint: "••••cret",
       moonlight: false,
+      push_confirmation: true,
     });
     assert.equal(bobView.git_email, "bob@example.com");
     assert.notEqual(bobView.git_email, aliceView.git_email);
@@ -435,7 +438,9 @@ test("Committer 检视:管理员只配名单,仅任务责任人主动邀请后�
     assert.deepEqual(tokenLookups, ["alice"],
       "用责任人的发送 Token 投给 Committer 工号，收件人无需配置 Token");
     assert.equal(luban.messages[0].text,
-      `【Mae-Flow】任务 ${created.id} 邀请你检视：实现订单检索`);
+      `【Mae-Flow】任务 ${created.id} 邀请你检视：实现订单检索\n`
+      + "手机端操作：先输入“/mfc”激活 Mae-Flow 插件；"
+      + "未激活时，直接回复本消息不会进入 Mae-Flow。");
     assert.equal(luban.messages[0].link,
       `http://mae-flow.intra:8787/work/${created.id}/review/${review.id}`,
       "未配置 public-url 时按浏览器实际访问的内网 Origin 生成链接");

@@ -4,27 +4,12 @@ from dataclasses import dataclass, field
 import hashlib
 
 
+# 2026-08-25 编排瘦身:主流程不再签发 COMPILE/CODECHECK/UT 任务卡
+# (编码段只剩宽 build 步,编译/规范/测试由主 Agent 自由完成,出口验收在
+# prepush+权威流水线+MR 检视)。任务卡仅存于 standalone 独立任务。
 EXPECTED_STEPS = {
-    "COMPILE": {
-        "build",
-        "build_rework",
-        "verify_recompile",
-        "verify_post_ponytail_compile",
-        "verify_codecheck_compile",
-        "quality_recompile",
-    },
-    "CODECHECK": {
-        "verify_codecheck",
-        "tw_codecheck",
-        "rf_codecheck",
-        "rf_verify",
-    },
-    "UT": {
-        "verify_ut",
-        "rf_ut",
-        "tw_ut",
-        "rf_verify",
-    },
+    "CODECHECK": {"standalone_codecheck"},
+    "UT": {"standalone_ut"},
 }
 
 

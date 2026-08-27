@@ -18,10 +18,10 @@ import { Annotatable } from "./Annotatable";
 import { AnnotationPanel } from "./AnnotationPanel";
 import { AttachedNotes } from "./AttachedNotes";
 import { RequirementGraph } from "./RequirementGraph";
-import { PrepushStatus } from "./PrepushStatus";
-import { PrepushLiveLog, prepushActive } from "./PrepushLiveLog";
+import { PrepushBadge } from "./PrepushStatus";
 import { TokenUsage } from "./TokenUsage";
 import { KnowledgeFootprint } from "./KnowledgeFootprint";
+import { WarmupPanel, WarmupBadge } from "./WarmupPanel";
 import { taskHealthFacts } from "./taskHealth";
 import { relativeTime } from "./time";
 import { startVisiblePolling } from "./visiblePolling";
@@ -40,8 +40,6 @@ import {
   readArtifact,
   repairStopped,
   requestCommitterReview,
-  putPushConfirmation,
-  putTaskApprovalMode,
   statusText,
   type AnchorCheck,
   type Annotation,
@@ -102,46 +100,6 @@ function assistantUnavailableReason(task: TaskSummary): string {
   return "代码现场就绪后即可使用";
 }
 
-/** push 前人工确认开关:确认点已过(已推送/终态)只读展示不可开。
- * 状态以服务端镜像为准,提交后靠既有轮询回读,不本地推断。 */
-function PushConfirmationToggle({
-  task,
-  onChanged,
-}: {
-  task: TaskSummary;
-  onChanged: () => void;
-}) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const on = !!task.push_confirmation;
-  const passed = ["await_merge", "completed", "failed", "canceled"]
-    .includes(task.status);
-  if (passed && !on) return null;
-  return <label className={`push-confirm-toggle${on ? " on" : ""}`}
-    title="开着时,Cloud 会在推送前展示交付文件清单等你确认;确认或按清单返工后才推送">
-    <input
-      type="checkbox"
-      checked={on}
-      disabled={busy || passed}
-      onChange={async (event) => {
-        const next = event.target.checked;
-        setBusy(true);
-        setError("");
-        try {
-          await putPushConfirmation(task.id, next);
-          onChanged();
-        } catch (cause) {
-          setError(String((cause as Error).message ?? cause));
-        } finally {
-          setBusy(false);
-        }
-      }}
-    />
-    <span>push 前人工确认交付清单</span>
-    {error && <em className="push-confirm-error">{error}</em>}
-  </label>;
-}
-
 export function TaskWorkspace({
   task,
   viewerUsername,
@@ -188,8 +146,6 @@ export function TaskWorkspace({
   const [controlBusy, setControlBusy] =
     useState<"pause" | "resume" | "cancel" | "">("");
   const [controlError, setControlError] = useState("");
-  const [approvalBusy, setApprovalBusy] = useState(false);
-  const [approvalNote, setApprovalNote] = useState("");
   const [cancelArmed, setCancelArmed] = useState(false);
   const [chainSkillPicker, setChainSkillPicker] =
     useState<RepositorySkillPickerState>(EMPTY_REPOSITORY_SKILL_PICKER_STATE);
@@ -359,7 +315,10 @@ export function TaskWorkspace({
   const drafts = notes.filter((item) => item.status === "draft");
   const unresolvedNotes = notes.filter((item) =>
     item.status === "draft" || item.status === "sent");
-  const unresolvedIds = unresolvedNotes.map((item) => item.id);
+  // sent 仍是“未闭环”，要继续展示并阻止误放行；但它已经主动送给
+  // Agent，不能再冒充本次决定要附带的草稿。两组 ID 混用会让决定接口
+  // 按 draft 校验时拒绝整次提交，连人刚写的补充说明也一起被挡住。
+  const draftIds = drafts.map((item) => item.id);
 
   /** 回到被圈的那一行:换页签→等它渲染出来→滚过去并闪一下。
    * 改批注前人几乎总要再看一眼上下文,只报"第 23 行"等于让他自己找。
@@ -386,6 +345,14 @@ export function TaskWorkspace({
   const activeMeta = items?.find((item) => item.name === active);
   const documents = items?.filter((item) => item.kind === "doc") ?? [];
   const changes = items?.filter((item) => item.kind === "diff") ?? [];
+  // 服务端只生成一份聚合 diff，因此 changes.length 几乎永远是 1，
+  // 它表示“产物份数”而不是用户关心的“变更文件数”。旧服务尚未提供
+  // file_count 时保留原回退，避免滚动升级期间把入口误判为空。
+  const changeCountKnown = changes.every((item) =>
+    typeof item.file_count === "number");
+  const changeFileCount = changeCountKnown
+    ? changes.reduce((sum, item) => sum + (item.file_count ?? 0), 0)
+    : changes.length;
   const hasRequirementGraph = (task.requirement_graph?.repositories.length ?? 0) > 1;
   const materialHeading = materialView === "source"
     ? { kicker: "REQUEST SOURCE", title: "需求原文" }
@@ -430,35 +397,6 @@ export function TaskWorkspace({
     }
   }
 
-  async function changeTaskApprovalMode(
-    mode: "inherit" | "manual" | "moonlight",
-  ) {
-    if (approvalBusy) return;
-    let includeCurrent = false;
-    if (mode === "moonlight" && task.status === "waiting_for_human") {
-      const unresolved = notes.filter((item) =>
-        item.status === "draft" || item.status === "sent").length;
-      includeCurrent = unresolved === 0 && window.confirm(
-        "任务级月光模式默认仅对本任务的后续节点生效。\n\n"
-        + "选择“确定”同时处理当前待办；选择“取消”保留当前待办。",
-      );
-    }
-    setApprovalBusy(true);
-    setApprovalNote("");
-    try {
-      const result = await putTaskApprovalMode(task.id, mode, includeCurrent);
-      setApprovalNote(result.blocked_annotations > 0
-        ? `本任务已有 ${result.blocked_annotations} 条检视意见，当前待办仍需人工处理`
-        : result.swept > 0 ? "当前待办已提交，Agent 已继续"
-          : "已更新本任务审批方式");
-      await onChanged();
-    } catch (reason) {
-      setApprovalNote(reason instanceof Error ? reason.message : "审批方式更新失败");
-    } finally {
-      setApprovalBusy(false);
-    }
-  }
-
   return (
     <section
       className="workspace-overlay"
@@ -480,21 +418,14 @@ export function TaskWorkspace({
               <i aria-hidden />{statusText(task)}
             </span>
             <WaitBadge task={task} personal={canOperate} />
+            <WarmupBadge task={task} />
+            <PrepushBadge task={task} canOperate={canOperate}
+              onChanged={onChanged} />
           </div>
           <strong id="task-workspace-title">{task.title ?? task.requirement}</strong>
         </div>
         {controllable && (
           <div className="ws-head-controls" aria-label="任务控制">
-            <select aria-label="本任务审批方式"
-              value={task.approval_mode ?? "inherit"}
-              disabled={approvalBusy}
-              title="仅调整本任务，可覆盖个人的全局月光模式"
-              onChange={(event) => void changeTaskApprovalMode(
-                event.target.value as "inherit" | "manual" | "moonlight") }>
-              <option value="inherit">审批：继承个人设置</option>
-              <option value="manual">审批：本任务逐步确认</option>
-              <option value="moonlight">审批：本任务月光模式</option>
-            </select>
             {task.status === "paused" ? (
               <button type="button" className="primary" disabled={!!controlBusy}
                 title="沿用当前工作区和流程进度继续执行"
@@ -532,8 +463,6 @@ export function TaskWorkspace({
         )}
       </header>
 
-      {approvalNote && <div className="utility-note" role="status">{approvalNote}</div>}
-
       <div className={`ws-progress${task.progress ? "" : " is-fallback"}`
         + `${health?.needs_attention ? " attention" : ""}`}>
         <TaskProgress progress={visibleProgress} showDetailedStep context={health && <>
@@ -543,13 +472,6 @@ export function TaskWorkspace({
             {relativeTime(health.last_progress_at) || "暂无记录"}</span>
         </>} />
       </div>
-      <PrepushStatus prepush={task.delivery?.prepush} placement="workspace" />
-      <PushConfirmationToggle task={task} onChanged={onChanged} />
-      {task.delivery?.prepush && <PrepushLiveLog
-        taskId={task.id}
-        active={prepushActive(task.delivery.prepush.state)}
-      />}
-
       <nav className="ws-workspace-nav" aria-label="任务工作台视图">
         {([
           ["materials", "交付材料", "文档、依赖与代码变更"],
@@ -558,7 +480,7 @@ export function TaskWorkspace({
               ? `${notes.length} 条批注` : "圈选原文、协作检视"],
           ["collaboration", "开发协作", collaborationVisible
             ? "补充主任务或主动接管" : assistantUnavailableReason(task)],
-          ["execution", "执行现场", task.focus?.headline ?? "心流与原始事件"],
+          ["execution", "执行现场", task.focus?.headline ?? "原始 SSE 事件流"],
         ] as Array<[WorkspaceView, string, string]>).map(([view, label, hint]) => (
           <button type="button" role="tab" key={view}
             aria-selected={workspaceView === view}
@@ -598,8 +520,8 @@ export function TaskWorkspace({
                 <span>仓间依赖</span><i>{task.requirement_graph!.dependencies.length}</i>
               </button>}
               <button className={materialView === "diff" ? "on" : ""}
-                onClick={() => { setMaterialView("diff"); if (changes[0]) setActive(changes[0].name); }} disabled={!changes.length}>
-                <span>工作区变更</span><i>{changes.length}</i>
+                onClick={() => { setMaterialView("diff"); if (changes[0]) setActive(changes[0].name); }} disabled={!changeFileCount}>
+                <span>工作区变更</span><i>{changeFileCount}</i>
               </button>
             </div>
           </div>
@@ -678,11 +600,12 @@ export function TaskWorkspace({
           </> : workspaceView === "execution" ? <>
             <div className="ws-pane-head">
               <div><span>LIVE EXECUTION</span><strong>执行现场</strong></div>
-              <small>日常看心流，需要取证时切原始 SSE</small>
+              <small>SSE 原始事件实时跟随；可按类型筛选</small>
             </div>
             <div className="ws-primary-scroll ws-execution-view">
-              <KnowledgeFootprint usage={task.knowledge_usage} />
+              <WarmupPanel task={task} />
               <ExecutionPanel task={task} defaultOpen />
+              <KnowledgeFootprint usage={task.knowledge_usage} />
             </div>
           </> : <>
             <div className="ws-pane-head">
@@ -774,11 +697,20 @@ export function TaskWorkspace({
             <WaitingCard
               task={task}
               onDecided={() => { setNotesPulse((tick) => tick + 1); onChanged(); }}
-              annotationIds={unresolvedIds}
+              annotationIds={draftIds}
+              unresolvedAnnotationCount={unresolvedNotes.length}
               repositorySkillSelection={chainReview
                 ? chainSkillPicker.selection : undefined}
               deliverySelection={task.waiting?.recommended_view === "diff"
                 ? deliverySelection : undefined}
+              onLocateDelivery={task.waiting?.recommended_view === "diff"
+                ? () => {
+                    setWorkspaceView("materials");
+                    setMaterialView("diff");
+                    const first = items?.find((item) => item.kind === "diff");
+                    if (first) setActive(first.name);
+                  }
+                : undefined}
               attachment={
                 <>
                   {chainReview && (

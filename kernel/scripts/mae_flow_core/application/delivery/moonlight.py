@@ -283,44 +283,6 @@ def validate_push_failure(state, reason):
     return _result()
 
 
-def unlock_moonlight_source(state, tests_only, reason, now):
-    """Record the UT diagnosis that permits a source repair."""
-    validation = validate_unlock_source(tests_only, reason)
-    if validation.exit_code:
-        return validation
-    reason = (reason or "").strip()
-    updated = deepcopy(state)
-    current = updated.get("current", "")
-    updated["unlock"] = {
-        "scope": "source",
-        "step": current,
-        "at": now,
-        "reason": reason,
-        "moonlight": True,
-    }
-    _history(
-        updated, current, "moonlight:unlock-source", reason, now)
-    return _result(
-        effects=(_state_effect(updated),),
-        stdout=(
-            "[mae-flow] 月光宝盒已记录 UT 自查结论并解锁本步源码修复。"
-            "修复后提交，再执行 done；harness 会自动回流完整质量链。",
-        ),
-    )
-
-
-def validate_unlock_source(tests_only, reason):
-    if not tests_only:
-        return _failure(
-            "moonlight unlock-source 只允许在 UT 步骤使用。")
-    reason = (reason or "").strip()
-    if len(reason) < 12:
-        return _failure(
-            "unlock-source 必须写清失败用例、规格依据和自查结论，"
-            "不能只写“源码有问题”。")
-    return _result()
-
-
 def record_deferred_quality(
         state, kind, reason, rejection, head, now):
     """Record one superseding quality issue before normal advancement."""

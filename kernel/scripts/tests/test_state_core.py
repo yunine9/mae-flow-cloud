@@ -95,7 +95,7 @@ class RuntimeAndStateTests(unittest.TestCase):
         output = result.stdout.decode("cp936", errors="replace")
         self.assertEqual(0, result.returncode, output)
         self.assertIn("当前步骤", output)
-        self.assertIn("编码实现", output)
+        self.assertIn("自由实现与定稿", output)
         for mojibake in ("鈺", "褰", "姝"):
             self.assertNotIn(mojibake, output)
 

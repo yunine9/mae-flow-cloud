@@ -70,7 +70,9 @@ class CommandPromptAgreementTests(unittest.TestCase):
 
     def test_every_runnable_operational_resource_command_parses(self):
         commands = list(resource_commands())
-        self.assertGreater(len(commands), 30)
+        # 2026-08-25 编排瘦身删掉 23 个步骤文档,可执行命令样本随之变少;
+        # 门槛只防"扫描器失明",不是命令数指标。
+        self.assertGreater(len(commands), 15)
         for resource, command in commands:
             with self.subTest(resource=resource, command=command):
                 try:

@@ -29,10 +29,10 @@ _RETIRED_BATCH_TARGETS = {
     "rf_pace": "build",
     "tw_change": "build",
     "tw_compile": "build",
-    "tw_review": "build_review",
+    "tw_review": "build",
     "rf_fix": "build",
     "rf_compile": "build",
-    "rf_review": "build_review",
+    "rf_review": "build",
 }
 
 

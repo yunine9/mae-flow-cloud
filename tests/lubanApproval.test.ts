@@ -165,7 +165,7 @@ test("唯一待办首次查询直接展示完整详情，裸序号提交当前�
   assert.match(stale.text, /已更新|已过期/);
 });
 
-test("唯一待办的通知就是审批上下文：无需先查待审批，直接回复序号", async () => {
+test("唯一待办通知建立审批上下文：先 /mfc 激活再回复序号", async () => {
   const service = new FakeApprovalService([
     task("task-notified", "alice", "支付接口修复"),
   ]);
@@ -185,7 +185,8 @@ test("唯一待办的通知就是审批上下文：无需先查待审批，直�
     questions: (service.tasks[0].waiting!.question as any).questions,
     link: "http://intranet/work/task-notified",
   });
-  assert.match(notice.text, /直接回复选项序号/);
+  assert.match(notice.text,
+    /先输入“\/mfc”激活 Mae-Flow 插件[\s\S]*插件激活后，只有这一项待办时，可回复选项序号/);
 
   const entry = new LubanApprovalGateway(service, {
     token: TOKEN,
@@ -667,6 +668,7 @@ test("启用手机入口后，待办通知说明会话式审批方式", async ()
   assert.doesNotMatch(record.text, /需要灰度吗/);
   assert.doesNotMatch(record.text, /spec_review/);
   assert.match(record.text, /方案确认/);
-  assert.match(record.text, /直接回复选项序号/);
+  assert.match(record.text, /先输入“\/mfc”激活 Mae-Flow 插件/);
+  assert.match(record.text, /插件激活后，只有这一项待办时，可回复选项序号/);
   assert.match(record.text, /多项待办或无上下文时：mae-flow 选择 A1B2C3D4E5 <序号>/);
 });

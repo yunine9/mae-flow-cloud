@@ -53,3 +53,28 @@ test("坏足迹行和不可写观测旁路不会影响任务读侧", () => {
   writeFileSync(join(root, "knowledge-events.jsonl"), "bad json\n");
   assert.equal(knowledgeUsageSnapshot({ workspace: root }), undefined);
 });
+
+test("自发读取的文档带首标题摘要:排行可读性来自观测那一刻", () => {
+  const root = mkdtempSync(join(tmpdir(), "mfc-knowledge-summary-"));
+  const repo = join(root, "repo");
+  mkdirSync(join(repo, "docs"), { recursive: true });
+  writeFileSync(join(repo, "docs", "gateway.md"),
+    "<!-- 头注 -->\n\n# 支付网关对接指南\n\n所有渠道必须走统一网关重试与对账。\n\n## 细节\n");
+  // 没有标题也没有正文头的文件:摘要缺席,不许编。
+  writeFileSync(join(repo, "docs", "raw.md"), "| a | b |\n|---|---|\n");
+  const trace = new KnowledgeTrace(
+    join(root, "knowledge-events.jsonl"), "task-1", repo,
+    () => "build", undefined,
+  );
+  trace.observeTool("main", "Read", {
+    file_path: join(repo, "docs", "gateway.md") }, false);
+  trace.observeTool("main", "Read", {
+    file_path: join(repo, "docs", "raw.md") }, false);
+
+  const usage = knowledgeUsageSnapshot({ workspace: root })!;
+  const guide = usage.resources.find((item) => item.path === "docs/gateway.md")!;
+  assert.equal(guide.description,
+    "支付网关对接指南 — 所有渠道必须走统一网关重试与对账。");
+  const raw = usage.resources.find((item) => item.path === "docs/raw.md")!;
+  assert.equal(raw.description, undefined, "抽不出摘要就空着,不拿表格行凑数");
+});

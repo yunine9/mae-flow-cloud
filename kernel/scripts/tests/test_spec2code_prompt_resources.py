@@ -93,9 +93,9 @@ class Spec2CodePromptResourceTests(unittest.TestCase):
         build = read("flow/steps/build.md")
         self.assertIn("分块纪律", build)
         self.assertIn("implementation.md", build)
-        self.assertIn("不编译、不 done、不询问用户", build)
+        self.assertIn("不 done、不询问用户", build)
         self.assertIn("跨块漂移", build)
-        # 反回退:仍然是一步、一次编译、无批次文档
+        # 反回退:仍然是一步、无批次文档
         self.assertIn("一次完成需求涉及的全部生产代码", build)
         self.assertIn("不要拆开发批次", build)
         # 子 Agent 边界(主会话模式):设计不外包;只读侦察与机械扇出是仅有的
@@ -194,16 +194,15 @@ class Spec2CodePromptResourceTests(unittest.TestCase):
         self.assertIn("卡住就停，不要猜", build)
         self.assertIn("不做试探性修改", build)
 
-    def test_both_rework_steps_carry_review_reception_discipline(self):
-        """用户提意见后的返工此前没有"先核实、可反驳"环节,是真空白。"""
-        for name in ("build_rework.md", "quality_rework.md"):
-            with self.subTest(name=name):
-                text = read("flow/steps/%s" % name)
-                self.assertIn("receiving-code-review", text)
-                self.assertIn("有不懂的条目就先全部停下", text)
-                self.assertIn("带依据反驳", text)
-                self.assertIn("一次一项", text)
-                self.assertIn("表演式回应", text)
+    def test_review_reception_discipline_survives_in_guidance(self):
+        """检视接收纪律不随 rework 步骤退役:guidance/review.md 保留完整口径,
+        build.md 指向它(2026-08-25 编排瘦身)。"""
+        guidance = read("runtime/guidance/review.md")
+        self.assertIn("reject an unsupported finding with technical evidence",
+                      guidance)
+        self.assertIn("root cause", guidance)
+        build = read("flow/steps/build.md")
+        self.assertIn("guidance/review.md", build)
 
     def test_every_capability_pack_is_injected_by_some_step(self):
         """有资产无人读:pack 定义完整、vendor 完整,但没有步骤 {{...}} 它。
@@ -298,21 +297,19 @@ class Spec2CodePromptResourceTests(unittest.TestCase):
         text = read("agents/ut-generator-agent.md")
         self.assertIn("禁止重新发明测试场景", text)
 
-    def test_build_prompt_is_one_whole_change_with_optional_precheck(self):
+    def test_build_prompt_is_one_whole_change(self):
         build = read("flow/steps/build.md")
         self.assertIn("spec.md", build)
         self.assertIn("story.md", build)
-        self.assertIn("agent-task compile", build)
         self.assertNotIn("CP", build)
-        review = read("flow/steps/build_agent_review.md")
-        self.assertIn("role-task code-review", review)
-        self.assertIn("不代替用户人工检视", review)
+        # 编排退役后不得再指向已删除的任务卡命令
+        self.assertNotIn("agent-task", build)
 
     def test_compile_risk_recovery_has_no_retired_cp_or_commit_first_hint(self):
         text = read("scripts/mae_flow_core/cli_commands/done_status.py")
         self.assertNotIn("分段编译风险确认", text)
         self.assertNotIn("精确提交当前修复，再执行 done", text)
-        self.assertIn("重新执行 agent-task compile", text)
+        self.assertNotIn("agent-task compile", text)
 
     def test_live_operator_docs_have_no_checkpoint_or_story_commit_protocol(self):
         operator_docs = "\n".join(read(path) for path in (
