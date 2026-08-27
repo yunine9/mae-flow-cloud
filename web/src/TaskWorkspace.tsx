@@ -631,7 +631,8 @@ export function TaskWorkspace({
             <div className="ws-primary-scroll ws-execution-view">
               <WarmupPanel task={task} />
               <ExecutionPanel task={task} defaultOpen />
-              <KnowledgeFootprint usage={task.knowledge_usage} />
+              <KnowledgeFootprint usage={task.knowledge_usage}
+                utMethod={task.ut_generation_method} />
             </div>
           </> : <>
             <div className="ws-pane-head">

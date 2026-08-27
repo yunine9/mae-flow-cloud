@@ -472,6 +472,12 @@ export interface TaskSummary {
     started_at: string;
     finished_at?: string;
   };
+  /** 下单事实里的「UT生成方式」镜像。实锤(2026-08-27 内网):这个值
+   * 原来只活在工作区 .mae-flow.json,内网按 task.json 排查 UT skill
+   * 为什么没被消费,四个人对着空气找。等于"仓内既有写法"= 没指向
+   * 任何团队 Skill(货架为空或命名没命中 UT 模式),skill 不被读是
+   * 正确行为不是 bug——这句话必须能在界面上看到。 */
+  ut_generation_method?: string;
   workspace: string;
   /** 现场被回收的时刻(ISO)。有值 = 克隆等重货已删,台账还在。
    * 它还是一道闸:恢复时**不许再拿内核状态重新裁决这单**——原件已经
@@ -1750,6 +1756,15 @@ export class TaskService {
       this.activePrePushBuilds += 1;
       waiter.task.summary.detail = `已获得推送前构建资源（`
         + `${this.activePrePushBuilds}/${slots} 使用中）`;
+      // 出队时把排队文案换掉,否则整轮编译期间气泡都还挂着"排队等待"。
+      const granted = waiter.task.summary.delivery?.prepush;
+      if (granted?.state === "preparing") {
+        this.setPrePushState(waiter.task, {
+          ...granted,
+          message: "已获得编译槽位，正在启动推送前编译",
+          updated_at: new Date().toISOString(),
+        });
+      }
       this.persist(waiter.task);
       waiter.resolve(this.releasePrePushBuildSlot());
     }
@@ -1768,6 +1783,17 @@ export class TaskService {
     }
     task.summary.detail = `等待推送前构建资源（${this.activePrePushBuilds}/`
       + `${slots} 使用中，按任务顺序排队）`;
+    // 排队真相也要进 prepush 现场:气泡读的是 prepush.message 不是任务
+    // detail,不写这里用户看到的就是一动不动的"准备"(实锤被当成卡死)。
+    const waiting = task.summary.delivery?.prepush;
+    if (waiting?.state === "preparing") {
+      this.setPrePushState(task, {
+        ...waiting,
+        message: `排队等待编译槽位（${this.activePrePushBuilds}/${slots} `
+          + "使用中，前面的构建结束后自动开始）",
+        updated_at: new Date().toISOString(),
+      });
+    }
     this.persist(task);
     return new Promise((resolve) => {
       this.prePushBuildQueue.push({ task, epoch, resolve });
@@ -4054,6 +4080,97 @@ export class TaskService {
     return this.retry(id);
   }
 
+  /** 用户显式重跑推送前编译。实锤场景(2026-08-27 内网):部署重启杀掉
+   * 在途编译轮后,任务停在 verifying、prepush 停在 preparing,而
+   * 「重跑续推」按 verifying 在途拒绝——人对着僵尸现场没有任何出路。
+   * 这个口子同时是活性探针:真在跑时 prepushActive 挡住并明说
+   * "正在进行",人立刻知道不是卡死。只动 prepush,不重排内核会话。 */
+  async retryPrePush(id: string): Promise<TaskSummary> {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    if (task.prepushActive) {
+      throw new TaskControlError(
+        "推送前编译正在进行中(本进程内有在途轮),不是卡死;"
+        + "等本轮收口或失败停机后再重跑");
+    }
+    if (task.driver || task.container) {
+      throw new TaskControlError(
+        "任务的执行资源尚未释放(会话或容器仍在),不能重跑推送前编译");
+    }
+    const prepush = task.summary.delivery?.prepush;
+    if (!prepush) {
+      throw new TaskControlError("该任务还没有推送前编译现场,无可重跑");
+    }
+    if (prepush.state === "passed") {
+      throw new TaskControlError(
+        "推送前编译已通过,收据仍绑定当前 HEAD,无需重跑");
+    }
+    if (!task.cwd) {
+      throw new TaskControlError("代码现场不可用,无法重跑推送前编译");
+    }
+    if (!["verifying", "failed"].includes(task.summary.status)) {
+      throw new TaskControlError(
+        `任务状态是 ${task.summary.status},只有 verifying/failed 的任务`
+        + "能重跑推送前编译");
+    }
+    const epoch = task.controlEpoch;
+    task.summary.status = "verifying";
+    task.summary.detail = "人工重跑推送前编译";
+    this.persist(task);
+    // 交付链自己会收口僵尸 attempt(restore 的 recovered 转移)并起新轮;
+    // 这里只负责把链路重新踢活。
+    this.bypass(task, "推送前编译人工重跑",
+      this.resumePrePushVerification(task, epoch));
+    return this.project(task);
+  }
+
+  /** 用户主动停止在途的推送前编译(2026-08-27 用户点名)。停止不是
+   * 放行:本轮如实收口成失败停机,跳过/重跑两条出路随即可用——与
+   * "fail-closed 停下让人接手"同一条纪律。在跑的走 prepushAbort 中止
+   * 会话与容器;还在排编译槽位队的直接出队,这条路不经过 runner 收口,
+   * 得在这里如实补账,否则留下 preparing 僵尸。 */
+  async stopPrePush(id: string): Promise<TaskSummary> {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    const active = task.prepushActive;
+    if (!active) {
+      throw new TaskControlError(
+        "当前没有在途的推送前编译;失败停机后请用重跑或跳过");
+    }
+    // 中止要反复补刀直到本轮真正收口:prepushAbort 在拿到编译槽位后
+    // 才创建、排队 waiter 也是晚注册的,单发 abort 会打空(竞态)。
+    // 这个等待有出路——attempt 预算兜底,绝不会无限等。
+    const closed = active.then(() => true, () => true);
+    for (;;) {
+      this.removePrePushBuildWaiter(task);
+      task.prepushAbort?.abort();
+      const done = await Promise.race([
+        closed,
+        new Promise<false>((tick) => setTimeout(() => tick(false), 200)),
+      ]);
+      if (done) break;
+    }
+    const prepush = task.summary.delivery?.prepush;
+    if (prepush && !["passed", "blocked", "environment_error", "user_skipped"]
+      .includes(prepush.state)) {
+      // 排队被打断的路径没有 runner 报告,补一笔如实的停机账。
+      this.setPrePushState(task, {
+        ...prepush,
+        state: "environment_error",
+        active_attempt: undefined,
+        message: "用户停止了本轮推送前编译;可重跑,或跳过直推流水线裁决",
+        updated_at: new Date().toISOString(),
+      });
+    }
+    if (!["failed", "paused", "pausing", "canceled"]
+      .includes(task.summary.status)) {
+      task.summary.status = "failed";
+      task.summary.detail = "推送前编译已由用户停止";
+    }
+    this.persist(task);
+    return this.project(task);
+  }
+
   retry(id: string): TaskSummary {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
@@ -6242,6 +6359,20 @@ export class TaskService {
         try {
           const utGenerationMethod = availableUtGenerationMethod(
             this.options.dataDir, loadedRepositorySkillNames);
+          // 镜像到任务台账:让"UT skill 有没有被指向"在界面可查,
+          // 不用翻工作区内核文件。回退仓内写法且货架非空时点名说破
+          // ——skill 上架了但命名没命中 UT 模式,是最隐蔽的一种失配。
+          task.summary.ut_generation_method = utGenerationMethod;
+          if (utGenerationMethod === "仓内既有写法") {
+            const shelf = hostSkillNames(this.options.dataDir);
+            if (shelf.length) {
+              this.options.log?.(
+                `[ut-skill] 任务 ${task.summary.id}:货架有 Skill`
+                + `(${shelf.join("、")})但没有命中 UT 命名模式,`
+                + "「UT生成方式」回退为仓内既有写法;若这里面有 UT skill,"
+                + "请改名为形如 java-autout/autout/xx-ut 的名字再上架");
+            }
+          }
           const order: Record<string, unknown> = {
             execution_contract: { ...CLOUD_EXECUTION_CONTRACT },
             "UT生成方式": utGenerationMethod,
@@ -6423,6 +6554,7 @@ export class TaskService {
       if (this.options.host && !analysisOnly) {
         const utGenerationMethod = availableUtGenerationMethod(
           this.options.dataDir, loadedRepositorySkillNames);
+        task.summary.ut_generation_method = utGenerationMethod;
         prompt = `${prompt}\n\nCloud 执行契约(宿主事实):你的 Bash 在隔离容器中执行,`
           + `容器里可以自由编译、运行单测来验证自己的改动——有构建链就`
           + `尽管用,没有就如实说明留给流水线,不要为编译环境卡住。`

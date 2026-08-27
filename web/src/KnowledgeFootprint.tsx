@@ -37,8 +37,12 @@ function time(value: string): string {
 
 export function KnowledgeFootprint({
   usage,
+  utMethod,
 }: {
   usage?: TaskKnowledgeUsage;
+  /** 下单事实「UT生成方式」镜像:是否指向团队 Skill 在这一行说破
+   * (实锤:内网对着 task.json 排查 skill 为何没被消费,无处可查)。 */
+  utMethod?: string;
 }) {
   const consumed = usage?.resources.filter((item) =>
     item.loaded_count > 0 || item.read_count > 0) ?? [];
@@ -57,6 +61,16 @@ export function KnowledgeFootprint({
           <span><strong>{usage?.events.length ?? 0}</strong><small>足迹事件</small></span>
         </div>
       </header>
+
+      {utMethod && (
+        <p className={`knowledge-ut-method${
+          utMethod === "仓内既有写法" ? " is-fallback" : ""}`}>
+          UT 生成方式:<strong>「{utMethod}」</strong>
+          {utMethod === "仓内既有写法"
+            ? "——本单未指向任何团队 UT Skill(货架为空或命名未命中 UT 模式),Agent 不读 UT skill 属正确行为。"
+            : "——写测试前 Agent 会先读取该 Skill 正文。"}
+        </p>
+      )}
 
       {consumed.length ? (
         <div className="knowledge-footprint-resources">

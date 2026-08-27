@@ -1,6 +1,8 @@
 import { useState } from "react";
 import {
+  retryPrepushVerification,
   skipPrepushVerification,
+  stopPrepushVerification,
   type PrepushVerification,
   type TaskSummary,
 } from "./api";
@@ -125,6 +127,11 @@ export function PrepushBadge({
   const [skipArmed, setSkipArmed] = useState(false);
   const [skipBusy, setSkipBusy] = useState(false);
   const [skipError, setSkipError] = useState("");
+  const [retryBusy, setRetryBusy] = useState(false);
+  const [retryNote, setRetryNote] = useState("");
+  const [stopArmed, setStopArmed] = useState(false);
+  const [stopBusy, setStopBusy] = useState(false);
+  const [stopNote, setStopNote] = useState("");
   const prepush = task.delivery?.prepush;
   if (!prepush) return null;
   const skippable = canOperate
@@ -150,6 +157,62 @@ export function PrepushBadge({
           <PrepushStatus prepush={prepush} placement="workspace" />
             <PrepushLiveLog taskId={task.id}
               active={prepushActive(prepush.state)} />
+            {canOperate && prepushActive(prepush.state) && (
+              /* 主动停止(用户点名):停止≠放行,本轮如实收口成失败
+                 停机,之后跳过/重跑两条出路才亮起来。 */
+              <div className="prepush-rerun">
+                {stopNote && <p className="prepush-skip-error">{stopNote}</p>}
+                {!stopArmed ? (
+                  <button type="button" disabled={stopBusy}
+                    onClick={() => setStopArmed(true)}>
+                    停止本轮编译
+                  </button>
+                ) : (
+                  <>
+                    <em>确定?本轮会收口成失败停机,之后可重跑或跳过直推流水线。</em>
+                    <button type="button" disabled={stopBusy}
+                      onClick={() => {
+                        setStopBusy(true);
+                        setStopNote("");
+                        void stopPrepushVerification(task.id)
+                          .then(() => { setOpen(false); onChanged?.(); })
+                          .catch((reason) => setStopNote(reason instanceof Error
+                            ? reason.message : String(reason)))
+                          .finally(() => {
+                            setStopBusy(false);
+                            setStopArmed(false);
+                          });
+                      }}>
+                      {stopBusy ? "停止中…" : "确认停止"}
+                    </button>
+                    <button type="button" disabled={stopBusy}
+                      onClick={() => setStopArmed(false)}>返回</button>
+                  </>
+                )}
+                <small>中止编译 Agent 与构建容器;已推进的修复提交保留在工作区。</small>
+              </div>
+            )}
+            {canOperate && prepush.state !== "passed" && (
+              /* 人工重跑兼活性探针(实锤:部署重启杀掉在途轮后,现场
+                 停在"准备"没人能回答活着没有)。真在跑时服务端会拒绝
+                 并明说"正在进行"——那句拒绝本身就是答案。 */
+              <div className="prepush-rerun">
+                {retryNote && <p className="prepush-skip-error">{retryNote}</p>}
+                <button type="button" disabled={retryBusy}
+                  onClick={() => {
+                    setRetryBusy(true);
+                    setRetryNote("");
+                    void retryPrepushVerification(task.id)
+                      .then(() => { setOpen(false); onChanged?.(); })
+                      .catch((reason) => setRetryNote(reason instanceof Error
+                        ? reason.message : String(reason)))
+                      .finally(() => setRetryBusy(false));
+                  }}>
+                  {retryBusy ? "提交中…" : "重跑推送前编译"}
+                </button>
+                <small>失败停机或重启后卡住时用;正在编译时服务端会拒绝并说明。</small>
+              </div>
+            )}
             {skippable && (
               /* 失败停机后的人工出路:本地验证只是省流水线的前闸,
                  权威裁决在绑 SHA 流水线。跳过绑当下 HEAD,新提交即失效。 */

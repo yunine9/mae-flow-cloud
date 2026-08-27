@@ -426,6 +426,9 @@ export interface TaskSummary {
     started_at: string;
     finished_at?: string;
   };
+  /** 下单事实「UT生成方式」的镜像。"仓内既有写法"= 没指向团队 Skill,
+   * skill 不被读取是正确行为——这句话要在界面上说破,别让人翻内核文件。 */
+  ut_generation_method?: string;
   /** 现场被回收的时刻。有值 = 代码克隆等大件已删,过程记录/证据/批注仍在。
    * 页面据此如实说明,别让人对着 404 的代码差异发愣。 */
   workspace_reclaimed_at?: string;
@@ -1409,6 +1412,28 @@ export function tailEvents(
 export async function skipPrepushVerification(taskId: string): Promise<void> {
   const response = await fetch(
     `/tasks/${encodeURIComponent(taskId)}/prepush/skip`, { method: "POST" });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(String(body.error ?? `HTTP ${response.status}`));
+  }
+}
+
+/** 人工重跑推送前编译:僵尸现场(重启杀掉在途轮)的出路;真在跑时
+ * 服务端拒绝并明说"正在进行",等于一次活性探测。 */
+export async function retryPrepushVerification(taskId: string): Promise<void> {
+  const response = await fetch(
+    `/tasks/${encodeURIComponent(taskId)}/prepush/retry`, { method: "POST" });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(String(body.error ?? `HTTP ${response.status}`));
+  }
+}
+
+/** 主动停止在途的推送前编译。停止≠放行:本轮如实收口成失败停机,
+ * 之后跳过/重跑两条出路才可用。 */
+export async function stopPrepushVerification(taskId: string): Promise<void> {
+  const response = await fetch(
+    `/tasks/${encodeURIComponent(taskId)}/prepush/stop`, { method: "POST" });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     throw new Error(String(body.error ?? `HTTP ${response.status}`));

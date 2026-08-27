@@ -31,6 +31,9 @@
  *   POST /tasks/:id/annotations/:annId/reopen           → 裁决:返工,退回草稿再送一轮
  *   GET  /tasks/:id/events                              → SSE:重放事件日志后持续跟进
  *   GET  /tasks/:id/prepush/events                      → SSE:推送前验证实时事件(换轮自动切新)
+ *   POST /tasks/:id/prepush/skip                        → 失败停机后人工拍板跳过,直推流水线裁决
+ *   POST /tasks/:id/prepush/retry                       → 人工重跑推送前编译(僵尸现场出路/活性探针)
+ *   POST /tasks/:id/prepush/stop                        → 主动停止在途编译,如实收口成失败停机
  *   GET  /tasks/:id/warmup/events                       → SSE:环境预热编译实时事件
  *   GET  /tasks/:id/timeline                            → 人话交付时间线(只读现场)
  *   GET  /tasks/:id/activity                            → 行为摘要:此刻在干嘛/分段折叠/异常信号
@@ -1127,6 +1130,27 @@ export function createTaskServer(
           }
           return json(response, 200,
             await service.skipPrePushVerification(id));
+        }
+        // 人工重跑推送前编译:重启杀掉在途轮留下的僵尸现场,或失败停机
+        // 后想再来一轮。真在跑时服务端拒绝并明说,兼作活性探针。
+        if (request.method === "POST" && parts[2] === "prepush"
+            && parts[3] === "retry") {
+          const target = service.get(id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          if (!canOperate(viewer, target.luban_account, !!options.auth)) {
+            return json(response, 403, { error: "只能操作分配给自己的任务" });
+          }
+          return json(response, 200, await service.retryPrePush(id));
+        }
+        // 主动停止在途的推送前编译:如实收口成失败停机,跳过/重跑随即可用。
+        if (request.method === "POST" && parts[2] === "prepush"
+            && parts[3] === "stop") {
+          const target = service.get(id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          if (!canOperate(viewer, target.luban_account, !!options.auth)) {
+            return json(response, 403, { error: "只能操作分配给自己的任务" });
+          }
+          return json(response, 200, await service.stopPrePush(id));
         }
         // 从头重跑会原位覆盖旧任务及其审计现场。管理员不替开发者发起
         // 或冒用其代码身份；鉴权部署下只能由任务本人执行。

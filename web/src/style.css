@@ -4719,6 +4719,14 @@ pre {
 .knowledge-resource > strong { color: var(--text-strong); font-size: var(--font-size-assist); }
 .knowledge-resource > code { color: var(--accent); font-size: var(--font-size-assist); }
 .knowledge-resource > small { color: var(--muted); font-size: var(--font-size-assist); }
+.knowledge-ut-method {
+  margin: 0 14px 12px; padding: 9px 11px; border-radius: 9px;
+  border: 1px solid var(--line); background: var(--surface-soft);
+  color: var(--text); font-size: var(--font-size-assist);
+}
+.knowledge-ut-method strong { color: var(--accent); }
+.knowledge-ut-method.is-fallback { border-style: dashed; color: var(--muted); }
+.knowledge-ut-method.is-fallback strong { color: var(--text); }
 .knowledge-footprint-empty {
   margin: 0 14px 14px; padding: 11px; color: var(--muted);
   border: 1px dashed var(--line-strong); border-radius: 9px;
@@ -5840,6 +5848,23 @@ pre {
   background: var(--attention);
   animation: warmup-pulse 1.2s ease-in-out infinite;
 }
+.prepush-rerun {
+  margin-top: 10px;
+  padding: 10px 12px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 9px;
+  background: var(--surface-soft);
+  font-size: var(--font-size-assist);
+  color: var(--muted);
+}
+.prepush-rerun button {
+  padding: 5px 12px; border: 1px solid var(--line-strong); border-radius: 7px;
+  background: var(--surface); color: var(--text); font-weight: 700;
+  cursor: pointer;
+}
+.prepush-rerun button:disabled { opacity: .6; cursor: default; }
+.prepush-rerun p { flex-basis: 100%; margin: 0; }
 .prepush-skip {
   margin-top: 10px;
   padding: 10px 12px;
