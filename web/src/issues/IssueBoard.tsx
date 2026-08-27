@@ -8,7 +8,7 @@
  * 空闲/被打断/已出结论 五态互斥)+ 底部固死的归档与取消。
  * 前端不推断状态:一切文案来自 /issues API 镜像。
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ISSUE_STAGE_TEXT,
   ISSUE_STATUS_TEXT,
@@ -18,6 +18,7 @@ import {
   type IssueStage,
   type IssueSummary,
   type IssueTimeline,
+  type SemanticEvent,
   answerIssue,
   bindIssueTicket,
   controlIssue,
@@ -29,6 +30,7 @@ import {
   listIssues,
   replyIssue,
   steerIssue,
+  tailIssueEvents,
 } from "../api";
 import { Markdown } from "../markdown";
 import { formatWait } from "../taskTime";
@@ -44,6 +46,8 @@ export function IssueBoard({ viewer, onNavigateProfile }: {
   const [openId, setOpenId] = useState("");
   const [detail, setDetail] = useState<IssueDetail | undefined>();
   const [error, setError] = useState("");
+  // SSE 事件账(按 eventId 去重累积):会话线程的实时源。
+  const [liveEvents, setLiveEvents] = useState<SemanticEvent[]>([]);
 
   const refreshList = () => {
     void listIssues().then(setIssues).catch(() => undefined);
@@ -54,6 +58,7 @@ export function IssueBoard({ viewer, onNavigateProfile }: {
   useEffect(() => {
     if (!openId) {
       setDetail(undefined);
+      setLiveEvents([]);
       return;
     }
     let alive = true;
@@ -70,14 +75,47 @@ export function IssueBoard({ viewer, onNavigateProfile }: {
     };
   }, [openId]);
 
+  // 会话线程改走 SSE:服务端从头重放 events.jsonl 再 300ms 增量跟进,
+  // AI 回复生成完的瞬间即到;连接前/断连时回落到 detail.messages。
+  // 终态(archived/canceled/failed)服务端会收口 SSE,前端跟着停,
+  // 免得 EventSource 自动重连空转。
+  const live = !!openId && !!detail
+    && !["archived", "canceled", "failed"].includes(detail.status);
+  useEffect(() => {
+    if (!live || !openId) return;
+    return tailIssueEvents(openId, (event) => {
+      setLiveEvents((previous) => previous.some((item) => (
+        item.eventId === event.eventId && item.sessionId === event.sessionId))
+        ? previous
+        : [...previous, event]);
+    });
+  }, [live, openId]);
+
+  const liveMessages = useMemo(
+    () => issueThreadFromEvents(liveEvents), [liveEvents]);
+  // 运行中的"活着"指示:工具动静一有就说,纯生成期给一句诚实的"处理中"。
+  const activity = useMemo(() => {
+    if (detail?.status !== "running") return "";
+    const last = liveEvents[liveEvents.length - 1];
+    if (!last) return "";
+    if (last.kind === "tool_requested") {
+      const name = String(last.payload?.name ?? "");
+      return name ? `正在执行 ${name}…` : "";
+    }
+    return "AI 正在处理…";
+  }, [detail?.status, liveEvents]);
+
+  // 详情轮询降为兜底:SSE 管消息新鲜度,这里只刷状态/阶段/待办卡。
   useEffect(() => startVisiblePolling(() => {
     if (!openId) return;
     void getIssue(openId).then(setDetail).catch(() => undefined);
-  }, 2000, document), [openId]);
+  }, 10000, document), [openId]);
 
   if (openId && detail) {
     return <IssueSessionView
       detail={detail}
+      messages={liveMessages.length ? liveMessages : detail.messages}
+      activity={activity}
       onBack={() => { setOpenId(""); setDetail(undefined); }}
       onChanged={(next) => setDetail(next)}
       onListRefresh={refreshList}
@@ -384,6 +422,8 @@ function DtsRegister({
 
 function IssueSessionView({
   detail,
+  messages,
+  activity,
   onBack,
   onChanged,
   onListRefresh,
@@ -391,6 +431,10 @@ function IssueSessionView({
   onNavigateProfile,
 }: {
   detail: IssueDetail;
+  /** 会话线程:SSE 直播投影优先,断连兜底 detail.messages。 */
+  messages: IssueDetail["messages"];
+  /** 运行中的活动指示(工具名/处理中);空串不渲染。 */
+  activity: string;
   onBack: () => void;
   onChanged: (detail: IssueDetail) => void;
   onListRefresh: () => void;
@@ -405,10 +449,10 @@ function IssueSessionView({
   const threadRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    // 消息流贴底:详情刷新后滚到最新一条。
+    // 消息流贴底:线程有新内容(SSE 直播或详情兜底)就滚到最新。
     const thread = threadRef.current;
     if (thread) thread.scrollTop = thread.scrollHeight;
-  }, [detail.messages.length]);
+  }, [messages.length, activity]);
 
   useEffect(() => {
     // 换一个会话就丢弃手选页签,回到默认入口。
@@ -525,7 +569,7 @@ function IssueSessionView({
           onPick={(next) => setPickedTab(next)} />
         {tab === "chat"
           ? <div className="issue-thread" ref={threadRef}>
-              {detail.messages.map((message, index) => <div
+              {messages.map((message, index) => <div
                 key={`${message.ts}-${index}`}
                 className={`issue-message role-${message.role}`}>
                 <span className="issue-message-role">
@@ -534,8 +578,11 @@ function IssueSessionView({
                 </span>
                 <FoldableMessageBody text={message.text} />
               </div>)}
-              {detail.messages.length === 0 && <p className="issue-thread-empty">
+              {messages.length === 0 && !activity && <p className="issue-thread-empty">
                 会话刚建立,AI 正在启动首轮研究。
+              </p>}
+              {activity && <p className="issue-activity" role="status">
+                <i aria-hidden />{activity}
               </p>}
               {/* stage=done 时右栏被归档卡占据,续聊入口退回对话流末尾,
                   与右栏"左侧对话页签发言"的引导文案互相印证。 */}
@@ -771,4 +818,32 @@ function IssueCostPanel({ id }: { id: string }) {
  * (未来词表扩充前的旧现场)原样示人——前端不猜。 */
 function STAGE(event: { title: string }): string {
   return ISSUE_STAGE_TEXT[event.title as IssueStage] ?? event.title;
+}
+
+/** 事件账 → 会话线程投影:与后端 service.messages 同一规则
+ * (user/assistant/decision 三类,尾部 300 条截断)。SSE 重放给的是
+ * 全量事件,这里照抄后端口径,长会话内存可控。 */
+function issueThreadFromEvents(
+  events: SemanticEvent[],
+): IssueDetail["messages"] {
+  const messages: IssueDetail["messages"] = [];
+  for (const event of events) {
+    const payload = event.payload ?? {};
+    if (event.kind === "user_message") {
+      messages.push({
+        role: "user", text: String(payload.text ?? ""), ts: String(event.ts ?? ""),
+      });
+    } else if (event.kind === "assistant_message") {
+      messages.push({
+        role: "assistant", text: String(payload.text ?? ""), ts: String(event.ts ?? ""),
+      });
+    } else if (event.kind === "human_decision") {
+      messages.push({
+        role: "decision",
+        text: `用户决定: ${String(payload.decision ?? "")}`,
+        ts: String(event.ts ?? ""),
+      });
+    }
+  }
+  return messages.slice(-300);
 }

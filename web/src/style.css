@@ -1771,6 +1771,19 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-muted);
 }
 .issue-thread-empty { color: var(--faint); font-size: var(--font-size-assist); }
+/* 运行中的活动指示:SSE 工具动静的"活着"信号,小圆点呼吸。 */
+.issue-activity {
+  display: flex; align-items: center; gap: 7px;
+  color: var(--faint); font-size: var(--font-size-assist); padding: 2px 4px;
+}
+.issue-activity i {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--accent);
+  animation: issue-activity-pulse 1.6s ease-in-out infinite;
+}
+@keyframes issue-activity-pulse {
+  0%, 100% { opacity: .25; }
+  50% { opacity: 1; }
+}
 .issue-message { display: grid; grid-template-columns: 44px 1fr; gap: 10px; }
 .issue-message-role { color: var(--faint); font-size: var(--font-size-dense); padding-top: 3px; }
 .issue-message.role-assistant .issue-message-role { color: var(--accent); font-weight: 700; }
