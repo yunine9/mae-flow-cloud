@@ -18,7 +18,7 @@ import { Annotatable } from "./Annotatable";
 import { AnnotationPanel } from "./AnnotationPanel";
 import { AttachedNotes } from "./AttachedNotes";
 import { RequirementGraph } from "./RequirementGraph";
-import { PrepushStatus } from "./PrepushStatus";
+import { PrepushStatus, PrepushBadge } from "./PrepushStatus";
 import { PrepushLiveLog, prepushActive } from "./PrepushLiveLog";
 import { TokenUsage } from "./TokenUsage";
 import { KnowledgeFootprint } from "./KnowledgeFootprint";
@@ -425,6 +425,7 @@ export function TaskWorkspace({
             </span>
             <WaitBadge task={task} personal={canOperate} />
             <WarmupBadge task={task} />
+            <PrepushBadge task={task} />
           </div>
           <strong id="task-workspace-title">{task.title ?? task.requirement}</strong>
         </div>
@@ -476,12 +477,6 @@ export function TaskWorkspace({
             {relativeTime(health.last_progress_at) || "暂无记录"}</span>
         </>} />
       </div>
-      <PrepushStatus prepush={task.delivery?.prepush} placement="workspace" />
-      {task.delivery?.prepush && <PrepushLiveLog
-        taskId={task.id}
-        active={prepushActive(task.delivery.prepush.state)}
-      />}
-
       <nav className="ws-workspace-nav" aria-label="任务工作台视图">
         {([
           ["materials", "交付材料", "文档、依赖与代码变更"],
@@ -635,6 +630,14 @@ export function TaskWorkspace({
             </div>
             <div className="ws-primary-scroll ws-execution-view">
               <WarmupPanel task={task} />
+              {task.delivery?.prepush && (
+                <div className="execution-prepush">
+                  <PrepushStatus prepush={task.delivery.prepush}
+                    placement="workspace" />
+                  <PrepushLiveLog taskId={task.id}
+                    active={prepushActive(task.delivery.prepush.state)} />
+                </div>
+              )}
               <ExecutionPanel task={task} defaultOpen />
               <KnowledgeFootprint usage={task.knowledge_usage} />
             </div>

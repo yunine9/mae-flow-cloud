@@ -1,4 +1,6 @@
-import type { PrepushVerification } from "./api";
+import { useState } from "react";
+import type { PrepushVerification, TaskSummary } from "./api";
+import { PrepushLiveLog, prepushActive } from "./PrepushLiveLog";
 import { formatLocalDateTime } from "./time";
 
 type PrepushTone = "active" | "repair" | "danger" | "success" | "neutral";
@@ -91,6 +93,48 @@ function viewOf(state: string): PrepushView {
 
 function shortSha(sha: string): string {
   return sha.length > 12 ? sha.slice(0, 12) : sha;
+}
+
+/** 工作台头部的小胶囊(与预热同款):头部只放一行式信号,状态卡与
+ * 实时日志进浮层/执行现场——头部堆叠是各功能局部最优抢地盘的结果,
+ * 2026-08-27 用户拍板立规矩收敛。样式复用 warmup-badge/overlay。 */
+export function PrepushBadge({ task }: { task: TaskSummary }) {
+  const [open, setOpen] = useState(false);
+  const prepush = task.delivery?.prepush;
+  if (!prepush) return null;
+  const view = viewOf(prepush.state);
+  const cls = view.tone === "success" ? "is-passed"
+    : view.tone === "danger" ? "is-failed"
+      : view.tone === "repair" ? "is-repair" : "is-running";
+  const label = view.phase === "passed" ? "验证通过"
+    : view.generic ? "推送前验证" : `验证·${view.label}`;
+  return (
+    <>
+      <button type="button" className={`warmup-badge ${cls}`}
+        onClick={() => setOpen(true)}
+        title={`推送前验证:${prepush.message?.trim() || view.detail}`}>
+        <i aria-hidden />{label}
+      </button>
+      {open && (
+        <div className="warmup-overlay" role="dialog" aria-modal="true"
+          aria-label="推送前验证详情"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) setOpen(false);
+          }}>
+          <div className="warmup-dialog">
+            <header>
+              <strong>推送前验证</strong>
+              <button type="button" aria-label="关闭"
+                onClick={() => setOpen(false)}>×</button>
+            </header>
+            <PrepushStatus prepush={prepush} placement="workspace" />
+            <PrepushLiveLog taskId={task.id}
+              active={prepushActive(prepush.state)} />
+          </div>
+        </div>
+      )}
+    </>
+  );
 }
 
 /** 推送前快速验证只补充平台状态，不覆盖内核的任务状态。 */

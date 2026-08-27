@@ -5831,6 +5831,16 @@ pre {
 }
 .warmup-badge.is-failed i { background: var(--danger); }
 .warmup-badge.is-infrastructure_failure i { background: var(--attention); }
+.warmup-badge.is-repair {
+  color: var(--attention);
+  border-color: var(--attention);
+  background: var(--attention-soft);
+}
+.warmup-badge.is-repair i {
+  background: var(--attention);
+  animation: warmup-pulse 1.2s ease-in-out infinite;
+}
+.execution-prepush { display: flex; flex-direction: column; gap: 0; }
 .warmup-overlay {
   position: fixed;
   inset: 0;
