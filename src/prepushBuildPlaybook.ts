@@ -302,6 +302,7 @@ export function renderPrePushBuildGuidance(profile: PrePushBuildProfile): string
     "基础设施预检：Java/C++ Maven 构建需要 JDK 21 与 Maven；前端需要仓库兼容的 Node/npm（部署基线为 Node 18/npm 9）；C++ 还需要 GCC/G++、binutils、bison、flex、ccache。缺失、版本不兼容、制品仓 TLS/网络/权限或磁盘问题归类 infrastructure_failure，不要通过改业务代码伪装修复。低版本 JDK 的典型症状是 UnsupportedClassVersionError——那是环境问题，不是代码问题。",
     "平台已经负责 Maven/npm 镜像、证书信任与凭据。不要克隆新副本、注入令牌、改全局 Git/Maven/npm 配置，也不要关闭 TLS/SSL 校验；遇到证书或鉴权故障只记录证据并报告基础设施失败。",
     `增量优先：非首次构建用不带 clean 的 \`${mvn} compile\`（内网实测 C++ 仓 3 分钟→18 秒）；刚克隆的仓上 clean 没有意义，别浪费一次全量。`,
+    "长构建不要用管道直连截尾（如 `mvn compile | tail -80`）——tail 要等命令退出才输出，进行中一个字都看不到，超时被杀连诊断都留不下。先落文件再看尾巴：`mvn compile > build.log 2>&1; tail -80 build.log`。",
   );
 
   if (profile.stacks.includes("java")) {
