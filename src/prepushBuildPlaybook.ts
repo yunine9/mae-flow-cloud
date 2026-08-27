@@ -306,6 +306,7 @@ export function renderPrePushBuildGuidance(profile: PrePushBuildProfile): string
     "并行度以容器配额为准，不要信 nproc：容器 CPU 是 CFS 配额不是绑核，nproc 虚报宿主全部核数，-j 超过配额会因限流不升反降（内网实锤：-j16 挤 8 核配额比干净 8 路还慢）。真实配额看 `cat /sys/fs/cgroup/cpu.max`（如 800000 100000 = 8 核），构建自带并行参数时按它设 -j。",
     "平台持久缓存事实（同一个仓的所有轮次共享，换容器不丢）：/cache/maven（已由 MAVEN_OPTS 注入 -Dmaven.repo.local=/cache/maven/repository）、/cache/npm（npm_config_cache）、/cache/ccache（CCACHE_DIR）、仓库同级 cpp_sdk_repository；工作区内的构建产物（target/、build/ 等）同样跨轮持久。$HOME 与 /tmp 是易失的，写进去的东西下一轮就没。",
     "构建慢先核对缓存真被吃到（内网实锤：每轮重拉依赖+全量编译）：Maven 若在重新下载依赖，多半是仓库包装脚本 export MAVEN_OPTS 把平台注入覆盖了——把 `-Dmaven.repo.local=/cache/maven/repository` 显式追加到 mvn 命令行（命令行 -D 优先级最高），并把“谁覆盖了缓存配置”写进收口摘要，这是平台要修的线索。",
+    "同一容器里修完代码重编还在“Downloading”？先看下载的是什么：集中在 maven-metadata.xml 与 -SNAPSHOT 工件的，是 Maven 的 SNAPSHOT 更新策略在每次构建重查远端，不是缓存失效；修复循环内的重编可加 `-nsu`（--no-snapshot-updates）省掉重复检查，但收口前的最后一次编译不要加，保持与流水线同口径。下载的是 release 版工件才说明本地仓真没命中，按上一条排查。",
   );
 
   if (profile.stacks.includes("java")) {
@@ -336,7 +337,7 @@ export function renderPrePushBuildGuidance(profile: PrePushBuildProfile): string
       "C++ 定向 UT 可按仓库支持使用 `-DDT_COV_INCLUDES=\"*ModuleName*\"` 或 `-DDT_COV_EXCLUDES=\"*ModuleName*\"`；先缩小修复反馈环，收口前再覆盖仓库要求范围。",
       `C++ 只需验证编译时去掉 DT 参数：\`${mvn} compile\` 即可；SDK 与 CMake 依赖由 Maven 插件自动拉取，一般无需手动安装。`,
       "svc_profile、SDK 等若由 Maven 生成或拉取，不要手工 export/伪造；工具链或专用依赖确实缺失时报告 infrastructure_failure。",
-      "C++ 增量的两级现实：①工作区里的生成目录跨轮持久，构建系统若按时间戳增量则天然生效——绝不 clean；②对象级缓存靠 ccache，编译收口后跑 `ccache -s` 看命中率，命中为零说明编译器调用没走 ccache（需要 PATH 里的 ccache masquerade、CMAKE_C/CXX_COMPILER_LAUNCHER=ccache，或 Maven 插件自身支持注入）。不要为接 ccache 硬改仓库工具链——把 `ccache -s` 的证据和判断写进收口摘要报给平台。",
+      "C++ 增量的两级现实：①工作区里的生成目录跨轮持久，构建系统若按时间戳增量则天然生效——绝不无谓 clean；②对象级缓存靠 ccache，平台已在容器环境注入 CMAKE_C/CXX_COMPILER_LAUNCHER=ccache 与 CCACHE_BASEDIR（跨任务路径相对化），CMake 重新 configure 时自动接上。编译收口后跑 `ccache -s` 核对命中/文件数并写进收口摘要：缓存文件数在涨说明已接上（首轮全 miss 属正常，是在灌缓存）；仍是 0 个文件且 target 下存在早于本轮的 CMakeCache.txt，说明旧 configure 缓存没带 launcher——删掉该 CMake 生成目录让插件重新 configure（一次性全量，换来后续对象级命中），并把这个决定写进收口摘要。除此之外不要为接 ccache 硬改仓库工具链。",
     );
   }
 

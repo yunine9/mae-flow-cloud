@@ -91,6 +91,14 @@ test("构建缓存按仓库哈希分区并拒绝自定义挂载覆盖", () => {
   assert.equal(first.environment.CCACHE_DIR, "/cache/ccache");
   assert.match(String(first.environment.MAVEN_OPTS),
     /maven\.repo\.local=\/cache\/maven\/repository/);
+  // ccache 必须真接线(内网实锤:只给 CCACHE_DIR 时缓存 0 文件,
+  // 编译器从没被包过):CMake launcher 注入 + 跨任务路径相对化。
+  assert.equal(first.environment.CMAKE_C_COMPILER_LAUNCHER, "ccache");
+  assert.equal(first.environment.CMAKE_CXX_COMPILER_LAUNCHER, "ccache");
+  assert.equal(first.environment.CCACHE_NOHASHDIR, "1");
+  assert.equal(first.environment.CCACHE_BASEDIR,
+    join(workspaceRoot, "RepoA"),
+    "BASEDIR 取任务目录:克隆与 cpp_sdk_repository 都在其下,相对布局跨任务恒定");
   const cppSdk = first.volumes.find((volume) =>
     volume.split(":")[1]?.endsWith("/cpp_sdk_repository"));
   assert.ok(cppSdk, "C++ SDK 缓存必须作为代码仓同级目录挂载");

@@ -1717,6 +1717,21 @@ export class TaskService {
         npm_config_cache: "/cache/npm",
         CCACHE_DIR: "/cache/ccache",
         XDG_CACHE_HOME: "/cache/xdg",
+        // ccache 真正接线(内网五项取证实锤:装了、CCACHE_DIR 也对,
+        // 但缓存 0 文件——编译器从没被包过,C++ 每轮全量冷编)。CMake
+        // 在 configure 时认这两个环境变量;部署基线镜像必装 ccache
+        // (playbook 基础设施预检同款清单),对 Java/JS 构建惰性无害。
+        CMAKE_C_COMPILER_LAUNCHER: "ccache",
+        CMAKE_CXX_COMPILER_LAUNCHER: "ccache",
+        // 跨任务也要命中:不同任务克隆路径不同(task-N/仓名),按绝对
+        // 路径做 key 永远 miss。以任务目录为基准做相对化——克隆与
+        // cpp_sdk_repository 都在其下,相对布局跨任务恒定。
+        ...(workspace
+          ? { CCACHE_BASEDIR: dirname(resolve(workspace)) } : {}),
+        CCACHE_NOHASHDIR: "1",
+        // 30w 行 C++ 仓一轮对象 5.7G(内网实测),默认 5G 上限会被
+        // 自己的下一轮淘汰光;分仓缓存目录彼此隔离,放大到 20G。
+        CCACHE_MAXSIZE: "20G",
       },
     };
   }
