@@ -1406,6 +1406,21 @@ export function tailPrepushEvents(
   return () => source.close();
 }
 
+/** 问题会话的实时事件流:服务端从头重放 events.jsonl 后持续跟进
+ * (300ms 增量),与任务侧 /tasks/:id/events 同一套 SSE 语义。 */
+export function tailIssueEvents(
+  issueId: string,
+  onEvent: (event: SemanticEvent) => void,
+  onState?: (state: SseConnectionState) => void,
+): () => void {
+  onState?.("connecting");
+  const source = new EventSource(`/issues/${encodeURIComponent(issueId)}/events`);
+  source.onopen = () => onState?.("live");
+  source.onmessage = (message) => onEvent(JSON.parse(message.data));
+  source.onerror = () => onState?.("reconnecting");
+  return () => source.close();
+}
+
 /** 交付时间线条目(服务端 src/timeline.ts 的镜像)。 */
 export interface TimelineEntry {
   ts: string;
