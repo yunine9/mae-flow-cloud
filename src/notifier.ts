@@ -7,6 +7,11 @@
  *    投递结果,页面能看到"通知没送到"这个事实(标红的依据);
  * 3. 同一张待办不重复生成通知记录,重试只累计次数。
  *
+ * 文案可模板化(部署级配置,{占位符} 词汇表见
+ * docs/luban-notification-templates.md);但 /mfc 激活提示与手机审批
+ * 指令由代码追加,不归模板管——那是"每条消息说清激活前置"的承诺,
+ * 交给配置等于允许被人不小心删掉。
+ *
  * 真小鲁班就绪时:换 endpoint 地址与鉴权头,本文件其余零改动;
  * FakeLubanServer 只在测试与演示里出场。
  */
@@ -33,6 +38,68 @@ export interface NotifyRecord {
 export interface NotifyQuestion {
   question: string;
   options?: string[];
+}
+
+/** 可自定义文案的三类通知(部署级配置;正文模板,占位符套值)。 */
+export interface NotificationTemplates {
+  /** 待办通知(WAITING_FOR_HUMAN)。 */
+  waiting?: string;
+  /** 收口通知(完成/交付/失败)。 */
+  outcome?: string;
+  /** Committer 检视邀请。 */
+  review?: string;
+}
+
+/** 各类别占位符白名单。构造期校验:模板里出现表外名字=配错,
+ * 当场点名并拒绝启动(部署配置语义,同适配层"引用了 {x} 但没有值")。
+ * 运行期不存在"没有值"——每个占位符在渲染点都有定义好的字符串
+ * (subject 缺席回落"任务 {task_id}",link 永远有值),不会渲染一半。 */
+const TEMPLATE_VARIABLES: Record<keyof NotificationTemplates, string[]> = {
+  waiting: ["task_id", "subject", "step", "stage", "summary", "account", "link"],
+  outcome: ["task_id", "status", "summary", "account", "link"],
+  review: ["task_id", "summary", "account", "sender_account", "link"],
+};
+
+/** 默认模板=引入模板机制前的固定文案,一字不差:不配置就是零变化。 */
+const DEFAULT_TEMPLATES: Required<NotificationTemplates> = {
+  waiting: "【Mae-Flow】{subject} 等你决定\n阶段：{stage}\n{summary}",
+  outcome: "【Mae-Flow】{summary}\n任务 {task_id}",
+  review: "【Mae-Flow】任务 {task_id} 邀请你检视：{summary}",
+};
+
+/** 合并默认值并校验占位符。写错变量名的模板投出去,用户看到的
+ * 是一串 {task_i} 原文——比启动失败更晚被发现也更难排查,所以
+ * 宁可起不来,也不带着错模板起服。 */
+function resolveTemplates(
+  templates: NotificationTemplates | undefined,
+): Required<NotificationTemplates> {
+  const merged: Required<NotificationTemplates> = {
+    ...DEFAULT_TEMPLATES,
+    ...templates,
+  };
+  const kinds = Object.keys(TEMPLATE_VARIABLES) as Array<
+    keyof NotificationTemplates
+  >;
+  for (const kind of kinds) {
+    const allowed = TEMPLATE_VARIABLES[kind];
+    for (const match of merged[kind].matchAll(/\{(\w+)\}/g)) {
+      const name = match[1];
+      if (!allowed.includes(name)) {
+        throw new Error(
+          `通知模板 ${kind} 引用了不可用的占位符 {${name}};`
+          + `可用: ${allowed.map((item) => `{${item}}`).join(" ")}`);
+      }
+    }
+  }
+  return merged;
+}
+
+/** 套值。构造期已过白名单校验,这里的 values 必然覆盖模板里的名字。 */
+function renderTemplate(
+  template: string,
+  values: Record<string, string>,
+): string {
+  return template.replace(/\{(\w+)\}/g, (_whole, name: string) => values[name]);
 }
 
 const MAX_NOTIFICATION_CONTEXT_CHARS = 2_400;
@@ -147,14 +214,21 @@ export interface NotifierOptions {
     waitingId: string;
     stateVersion: number;
   }) => string;
+  /** 文案模板(可选):三类通知各一条。占位符词汇表与配置方法见
+   * docs/luban-notification-templates.md;配错(表外占位符)构造期
+   * 拒绝。只管正文,激活提示与手机审批指令永远由代码追加。 */
+  templates?: NotificationTemplates;
   log?: (message: string) => void;
 }
 
 export class Notifier {
   private records = new Map<string, NotifyRecord>();
   private latestApprovals = new Map<string, LubanApprovalNotification>();
+  private readonly templates: Required<NotificationTemplates>;
 
-  constructor(readonly options: NotifierOptions) {}
+  constructor(readonly options: NotifierOptions) {
+    this.templates = resolveTemplates(options.templates);
+  }
 
   list(): NotifyRecord[] {
     return [...this.records.values()];
@@ -239,6 +313,7 @@ export class Notifier {
         })
       : "";
     const stage = humanApprovalStage(input.step);
+    const subject = input.subject?.trim() || `任务 ${input.taskId}`;
     const record: NotifyRecord = {
       waiting_id: input.waitingId,
       task_id: input.taskId,
@@ -247,10 +322,15 @@ export class Notifier {
       summary,
       link: input.link,
       text:
-        withPluginActivationNotice(
-          `【Mae-Flow】${input.subject?.trim() || `任务 ${input.taskId}`} 等你决定`
-            + `\n阶段：${stage}\n${summary}`,
-        ) +
+        withPluginActivationNotice(renderTemplate(this.templates.waiting, {
+          task_id: input.taskId,
+          subject,
+          step: input.step,
+          stage,
+          summary,
+          account: input.account,
+          link: input.link,
+        })) +
         (this.options.mobileApproval
           ? missingRequiredContext
             ? "\n插件激活后，本通知仍缺少被确认内容，已禁止裸序号审批；"
@@ -304,8 +384,13 @@ export class Notifier {
       step: input.status,
       summary: input.summary,
       link: input.link,
-      text: withPluginActivationNotice(
-        `【Mae-Flow】${input.summary}\n任务 ${input.taskId}`),
+      text: withPluginActivationNotice(renderTemplate(this.templates.outcome, {
+        task_id: input.taskId,
+        status: input.status,
+        summary: input.summary,
+        account: input.account,
+        link: input.link,
+      })),
       attempts: 0,
       delivered: false,
       last_error: "",
@@ -332,8 +417,13 @@ export class Notifier {
       step: "committer_review",
       summary: input.summary,
       link: input.link,
-      text: withPluginActivationNotice(
-        `【Mae-Flow】任务 ${input.taskId} 邀请你检视：${input.summary}`),
+      text: withPluginActivationNotice(renderTemplate(this.templates.review, {
+        task_id: input.taskId,
+        summary: input.summary,
+        account: input.account,
+        sender_account: input.senderAccount,
+        link: input.link,
+      })),
       attempts: 0,
       delivered: false,
       last_error: "",

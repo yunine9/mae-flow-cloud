@@ -151,6 +151,10 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
 见 `docs/luban-mobile-approval-handoff.md`；内网 Agent 可直接按其中的
 部署、字段映射、联调与验收清单执行。
 
+通知正文可按部署自定义(三个模板键,`{占位符}` 按类别白名单,配错
+拒绝启动;激活提示与手机审批指令不随模板走)。词汇表与用法见
+`docs/luban-notification-templates.md`。
+
 ## 已知边界(诚实清单)
 
 - **环境预热编译(2026-08-26 新增,真模型未验)**:现场就绪即在编码

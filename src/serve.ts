@@ -456,6 +456,13 @@ async function main(): Promise<void> {
     }
     lubanHeaders[header.slice(0, at).trim()] = header.slice(at + 1).trim();
   }
+  // 通知文案模板(可选):三类通知各一条,占位符词汇表与示例见
+  // docs/luban-notification-templates.md。配错(表外占位符)在 Notifier
+  // 构造期点名并拒绝启动——部署配置语义;通知运行期仍是旁路 fail-open,
+  // 两件事不冲突:错模板一次也别投出去。
+  const lubanTemplateWaiting = flag("--luban-template-waiting");
+  const lubanTemplateOutcome = flag("--luban-template-outcome");
+  const lubanTemplateReview = flag("--luban-template-review");
   // 手机审批是入站回调，与上面的出站通知令牌是两套身份。Token 只从
   // 0600 文件读，不允许塞进命令行或 JSON 配置的明文字段。
   const lubanPluginTokenFile = flag("--luban-plugin-token-file");
@@ -702,6 +709,18 @@ async function main(): Promise<void> {
         // 发起人的通知令牌:普通任务提醒是自己发给自己；主动邀请检视时，
         // 用责任人的令牌向所选 Committer 工号发送，不要求收件人配令牌。
         personalToken: (account) => auth.lubanToken(account),
+        ...(lubanTemplateWaiting || lubanTemplateOutcome || lubanTemplateReview
+          ? {
+              templates: {
+                ...(lubanTemplateWaiting
+                  ? { waiting: lubanTemplateWaiting } : {}),
+                ...(lubanTemplateOutcome
+                  ? { outcome: lubanTemplateOutcome } : {}),
+                ...(lubanTemplateReview
+                  ? { review: lubanTemplateReview } : {}),
+              },
+            }
+          : {}),
       })
     : undefined;
 

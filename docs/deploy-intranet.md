@@ -268,6 +268,11 @@ npm run serve -- ... --luban http://127.0.0.1:8791
 早先设想的"小鲁班 MCP / 拉群 CLI 艾特"两条候选就此作废——真件是
 上面这个 HTTP 接口,已实测送达。
 
+通知**正文**可按部署自定义(值班群口吻、前缀规范等):三个模板键
+`luban-template-waiting/-outcome/-review`,`{占位符}` 套值;`/mfc`
+激活提示与手机审批指令由代码追加,模板删不掉。词汇表与示例见
+[`docs/luban-notification-templates.md`](./luban-notification-templates.md)。
+
 ### 手机纯文本审批:小鲁班插件回调
 
 内网 Agent/运维请优先按独立交接单
@@ -754,6 +759,7 @@ install -m 600 /dev/null /etc/mae-flow-cloud/mcp-token
 | luban / luban-header | 假小鲁班 | 通知端点与鉴权头(可重复) |
 | luban-plugin-token-file | 无 | 准备 Cloud 手机审批回调端点；0600、至少 32 字节的固定 Token 文件，不代表小鲁班入站已接通 |
 | luban-plugin-replies | false | 真实小鲁班插件/入站桥端到端验收通过后才设 true；控制通知是否承诺 `/mfc` 激活后可回复 |
+| luban-template-waiting / -outcome / -review | 内置默认文案 | 通知正文模板，`{占位符}` 按类别白名单，词汇表与用法见 [`docs/luban-notification-templates.md`](./luban-notification-templates.md)；配错占位符拒绝启动 |
 | pg | 无 | 投影(纯旁路) |
 | data / port / web | .tasks / 8787 / web-dist | 现场目录、端口、前端 |
 | isolate-image | 无(内核模式必填) | 统一任务构建镜像 |
