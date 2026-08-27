@@ -304,6 +304,8 @@ export function renderPrePushBuildGuidance(profile: PrePushBuildProfile): string
     `增量优先：非首次构建用不带 clean 的 \`${mvn} compile\`（内网实测 C++ 仓 3 分钟→18 秒）；刚克隆的仓上 clean 没有意义，别浪费一次全量。`,
     "长构建不要用管道直连截尾（如 `mvn compile | tail -80`）——tail 要等命令退出才输出，进行中一个字都看不到，超时被杀连诊断都留不下。先落文件再看尾巴：`mvn compile > build.log 2>&1; tail -80 build.log`。",
     "并行度以容器配额为准，不要信 nproc：容器 CPU 是 CFS 配额不是绑核，nproc 虚报宿主全部核数，-j 超过配额会因限流不升反降（内网实锤：-j16 挤 8 核配额比干净 8 路还慢）。真实配额看 `cat /sys/fs/cgroup/cpu.max`（如 800000 100000 = 8 核），构建自带并行参数时按它设 -j。",
+    "平台持久缓存事实（同一个仓的所有轮次共享，换容器不丢）：/cache/maven（已由 MAVEN_OPTS 注入 -Dmaven.repo.local=/cache/maven/repository）、/cache/npm（npm_config_cache）、/cache/ccache（CCACHE_DIR）、仓库同级 cpp_sdk_repository；工作区内的构建产物（target/、build/ 等）同样跨轮持久。$HOME 与 /tmp 是易失的，写进去的东西下一轮就没。",
+    "构建慢先核对缓存真被吃到（内网实锤：每轮重拉依赖+全量编译）：Maven 若在重新下载依赖，多半是仓库包装脚本 export MAVEN_OPTS 把平台注入覆盖了——把 `-Dmaven.repo.local=/cache/maven/repository` 显式追加到 mvn 命令行（命令行 -D 优先级最高），并把“谁覆盖了缓存配置”写进收口摘要，这是平台要修的线索。",
   );
 
   if (profile.stacks.includes("java")) {
@@ -334,6 +336,7 @@ export function renderPrePushBuildGuidance(profile: PrePushBuildProfile): string
       "C++ 定向 UT 可按仓库支持使用 `-DDT_COV_INCLUDES=\"*ModuleName*\"` 或 `-DDT_COV_EXCLUDES=\"*ModuleName*\"`；先缩小修复反馈环，收口前再覆盖仓库要求范围。",
       `C++ 只需验证编译时去掉 DT 参数：\`${mvn} compile\` 即可；SDK 与 CMake 依赖由 Maven 插件自动拉取，一般无需手动安装。`,
       "svc_profile、SDK 等若由 Maven 生成或拉取，不要手工 export/伪造；工具链或专用依赖确实缺失时报告 infrastructure_failure。",
+      "C++ 增量的两级现实：①工作区里的生成目录跨轮持久，构建系统若按时间戳增量则天然生效——绝不 clean；②对象级缓存靠 ccache，编译收口后跑 `ccache -s` 看命中率，命中为零说明编译器调用没走 ccache（需要 PATH 里的 ccache masquerade、CMAKE_C/CXX_COMPILER_LAUNCHER=ccache，或 Maven 插件自身支持注入）。不要为接 ccache 硬改仓库工具链——把 `ccache -s` 的证据和判断写进收口摘要报给平台。",
     );
   }
 
