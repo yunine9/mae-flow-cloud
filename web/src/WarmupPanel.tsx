@@ -27,11 +27,20 @@ export function OverlayDialog({
   const dragFrom = useRef<{
     px: number; py: number; ox: number; oy: number;
   } | null>(null);
+  // "点背景关闭"必须按下与松开都落在背景上。实锤:拖右下角 resize 时
+  // 按下在弹窗、松手滑到背景,浏览器把合成 click 派发到共同祖先(背景
+  // 层),整个浮层被误关——用户拖大窗口,窗口没了。
+  const pressedBackdrop = useRef(false);
   return createPortal(
     <div className="warmup-overlay" role="dialog" aria-modal="true"
       aria-label={ariaLabel}
-      onClick={(event) => {
-        if (event.target === event.currentTarget) onClose();
+      onPointerDown={(event) => {
+        pressedBackdrop.current = event.target === event.currentTarget;
+      }}
+      onPointerUp={(event) => {
+        const pressed = pressedBackdrop.current;
+        pressedBackdrop.current = false;
+        if (pressed && event.target === event.currentTarget) onClose();
       }}>
       <div className="warmup-dialog"
         style={{ transform: `translate(${offset.x}px, ${offset.y}px)` }}>
