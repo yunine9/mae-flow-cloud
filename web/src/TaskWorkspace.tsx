@@ -18,8 +18,7 @@ import { Annotatable } from "./Annotatable";
 import { AnnotationPanel } from "./AnnotationPanel";
 import { AttachedNotes } from "./AttachedNotes";
 import { RequirementGraph } from "./RequirementGraph";
-import { PrepushStatus, PrepushBadge } from "./PrepushStatus";
-import { PrepushLiveLog, prepushActive } from "./PrepushLiveLog";
+import { PrepushBadge } from "./PrepushStatus";
 import { TokenUsage } from "./TokenUsage";
 import { KnowledgeFootprint } from "./KnowledgeFootprint";
 import { WarmupPanel, WarmupBadge } from "./WarmupPanel";
@@ -631,14 +630,6 @@ export function TaskWorkspace({
             </div>
             <div className="ws-primary-scroll ws-execution-view">
               <WarmupPanel task={task} />
-              {task.delivery?.prepush && (
-                <div className="execution-prepush">
-                  <PrepushStatus prepush={task.delivery.prepush}
-                    placement="workspace" />
-                  <PrepushLiveLog taskId={task.id}
-                    active={prepushActive(task.delivery.prepush.state)} />
-                </div>
-              )}
               <ExecutionPanel task={task} defaultOpen />
               <KnowledgeFootprint usage={task.knowledge_usage} />
             </div>
