@@ -86,6 +86,91 @@ export interface AuthUser {
   push_confirmation?: boolean;
 }
 
+export type WishKind = "wish" | "issue";
+export type WishStatus = "open" | "accepted" | "done" | "declined";
+
+export interface WishWallImage {
+  id: string;
+  mime_type: "image/png" | "image/jpeg" | "image/webp" | "image/gif";
+  bytes: number;
+  url: string;
+}
+
+export interface WishWallItem {
+  id: string;
+  kind: WishKind;
+  title: string;
+  detail?: string;
+  author: string;
+  created_at: string;
+  status: WishStatus;
+  decision_note?: string;
+  decided_by?: string;
+  decided_at?: string;
+  images: WishWallImage[];
+  votes: number;
+  viewer_voted: boolean;
+  can_delete: boolean;
+  can_manage: boolean;
+}
+
+export interface WishImageUpload {
+  mime_type: string;
+  content_base64: string;
+}
+
+export async function listWishes(): Promise<WishWallItem[]> {
+  const response = await fetch("/wishes");
+  if (!response.ok) throw new Error(await errorText(response));
+  return (await response.json() as { wishes: WishWallItem[] }).wishes;
+}
+
+export async function createWish(input: {
+  kind: WishKind;
+  title: string;
+  detail?: string;
+  images: WishImageUpload[];
+}): Promise<WishWallItem> {
+  const response = await fetch("/wishes", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function setWishVote(
+  id: string,
+  voted: boolean,
+): Promise<WishWallItem> {
+  const response = await fetch(`/wishes/${encodeURIComponent(id)}/vote`, {
+    method: "POST",
+    body: JSON.stringify({ voted }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function setWishStatus(
+  id: string,
+  status: WishStatus,
+  note?: string,
+): Promise<WishWallItem> {
+  const response = await fetch(`/wishes/${encodeURIComponent(id)}/status`, {
+    method: "PATCH",
+    body: JSON.stringify({ status, note }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function deleteWish(id: string): Promise<void> {
+  const response = await fetch(`/wishes/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+}
+
 export interface MoonlightPreview {
   waiting: number;
   eligible: number;

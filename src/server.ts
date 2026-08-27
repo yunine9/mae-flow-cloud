@@ -85,6 +85,14 @@ import {
   AnnotationError,
   AnnotationPermissionError,
 } from "./annotations.ts";
+import {
+  WishWallError,
+  WishWallNotFoundError,
+  WishWallPermissionError,
+  WishWallStore,
+  type WishRecord,
+  type WishStatus,
+} from "./wishWall.ts";
 import type { LubanApprovalGateway } from "./lubanApproval.ts";
 import {
   SkillLibraryError,
@@ -129,17 +137,33 @@ const MIME: Record<string, string> = {
   ".map": "application/json",
 };
 
-function readBody(request: import("node:http").IncomingMessage): Promise<any> {
+class RequestBodyTooLargeError extends Error {}
+
+function readBody(
+  request: import("node:http").IncomingMessage,
+  limit = Number.POSITIVE_INFINITY,
+): Promise<any> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    request.on("data", (chunk) => chunks.push(chunk as Buffer));
+    let size = 0;
+    let tooLarge = false;
+    request.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > limit) tooLarge = true;
+      else chunks.push(chunk);
+    });
     request.on("end", () => {
+      if (tooLarge) {
+        reject(new RequestBodyTooLargeError("请求内容过大"));
+        return;
+      }
       try {
         resolve(JSON.parse(Buffer.concat(chunks).toString("utf-8") || "{}"));
       } catch (error) {
         reject(error);
       }
     });
+    request.on("error", reject);
   });
 }
 
@@ -212,6 +236,7 @@ export function createTaskServer(
     lubanApproval?: LubanApprovalGateway;
   } = {},
 ): Server {
+  const wishWall = new WishWallStore(join(service.options.dataDir, "wish-wall"));
   return createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://localhost");
     const parts = url.pathname.split("/").filter(Boolean);
@@ -591,7 +616,8 @@ export function createTaskServer(
         url.pathname === "/history" || parts[0] === "tasks"
         || url.pathname === "/knowledge-insights"
         || parts[0] === "reviews" || parts[0] === "repository-skills"
-        || parts[0] === "skills" || parts[0] === "business-modules";
+        || parts[0] === "skills" || parts[0] === "business-modules"
+        || parts[0] === "wishes";
       // 兼容已经发出去的旧通知。/tasks/:id 是 JSON API，但旧链接若由
       // 浏览器作为页面打开，应带人去新的任务工作台；程序 fetch 默认
       // Accept: */*，仍拿原来的 JSON，不改变 API 契约。
@@ -623,6 +649,88 @@ export function createTaskServer(
       // 会被当成前端资源并返回 404。只读口径与团队任务可见性一致。
       if (request.method === "GET" && url.pathname === "/knowledge-insights") {
         return json(response, 200, service.knowledgeInsights());
+      }
+      // 许愿墙是团队公共入口，但不是公共互联网资源：正文和截图都要求
+      // 登录。每个人可发布、点赞和移除自己的内容；管理员负责明确接纳
+      // 与闭环，拒绝必须说明原因。
+      if (parts[0] === "wishes") {
+        const operator = viewer?.username ?? "本地用户";
+        const admin = !options.auth || viewer?.role === "admin";
+        const present = (record: WishRecord) => {
+          const { voters, images, ...rest } = record;
+          return {
+            ...rest,
+            images: images.map((image) => ({
+              ...image,
+              url: `/wishes/images/${encodeURIComponent(image.id)}`,
+            })),
+            votes: voters.length,
+            viewer_voted: voters.includes(operator),
+            can_delete: admin || record.author === operator,
+            can_manage: admin,
+          };
+        };
+        try {
+          if (request.method === "GET" && parts.length === 1) {
+            return json(response, 200, { wishes: wishWall.list().map(present) });
+          }
+          if (request.method === "POST" && parts.length === 1) {
+            // 4 * 5 MB 图片经 Base64 后约 27 MB；业务总量另由 store 卡在
+            // 12 MB，这里 30 MB 是传输保险丝，避免恶意正文撑爆进程。
+            const body = await readBody(request, 30 * 1024 * 1024);
+            return json(response, 201, present(wishWall.create({
+              kind: body.kind,
+              title: body.title,
+              detail: body.detail,
+              images: body.images,
+            }, operator)));
+          }
+          if (request.method === "GET" && parts.length === 3
+              && parts[1] === "images") {
+            const image = wishWall.readImage(decodeURIComponent(parts[2]));
+            response.writeHead(200, {
+              "content-type": image.mime_type,
+              "content-length": image.data.length,
+              "content-disposition": "inline",
+              "x-content-type-options": "nosniff",
+              "cache-control": "private, max-age=86400",
+            });
+            return response.end(image.data);
+          }
+          if (request.method === "POST" && parts.length === 3
+              && parts[2] === "vote") {
+            const body = await readBody(request);
+            return json(response, 200, present(wishWall.setVote(
+              decodeURIComponent(parts[1]), operator, Boolean(body.voted))));
+          }
+          if (request.method === "PATCH" && parts.length === 3
+              && parts[2] === "status") {
+            if (!admin) {
+              return json(response, 403,
+                { error: "只有管理员可以接纳、暂不接纳或闭环" });
+            }
+            const body = await readBody(request);
+            return json(response, 200, present(wishWall.setStatus(
+              decodeURIComponent(parts[1]), String(body.status) as WishStatus,
+              operator, body.note)));
+          }
+          if (request.method === "DELETE" && parts.length === 2) {
+            wishWall.delete(decodeURIComponent(parts[1]), operator, admin);
+            return json(response, 200, { ok: true });
+          }
+        } catch (error) {
+          if (error instanceof WishWallNotFoundError) {
+            return json(response, 404, { error: error.message });
+          }
+          if (error instanceof WishWallPermissionError) {
+            return json(response, 403, { error: error.message });
+          }
+          if (error instanceof WishWallError) {
+            return json(response, 400, { error: error.message });
+          }
+          throw error;
+        }
+        return json(response, 404, { error: "未知许愿墙接口" });
       }
       // 业务模块是一等知识范围：管理员建模块/转移 Owner，Owner 与维护
       // 者管理本模块资产；团队成员可读目录与正文。它不从任务 docs 或
@@ -1450,6 +1558,9 @@ export function createTaskServer(
       }
       return json(response, 404, { error: "未知路径" });
     } catch (error) {
+      if (error instanceof RequestBodyTooLargeError) {
+        return json(response, 413, { error: error.message });
+      }
       if (error instanceof StateConflictError) {
         // 先到决定生效:后到的提交必须知道自己没生效,不能静默吞掉。
         return json(response, 409, { error: `任务状态已变化: ${error.message}` });
