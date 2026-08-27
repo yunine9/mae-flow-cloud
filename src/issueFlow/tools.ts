@@ -5,6 +5,15 @@
  * 工具语义与结果文本。"提 MR 前必须有单号"在这里是机械门禁——
  * push_branch / create_mr 查不到绑定单号直接拒绝,提示词管不住的
  * 侥幸在工具层过不去。
+ *
+ * 固定流程(2026-08-27 拍板)在工具层叠加两件事:
+ * - 阶段门禁:每个工具只在所属阶段开放,越权调用直接拒绝(双层
+ *   门禁的权威层;提示词里的"本阶段工具清单"只是引导层);
+ * - 阶段推进:机械可判的推进(拉单成功/UT 通过)由工具直接记账,
+ *   人工闸(报告确认/结论/环境验证)由工具举闸——raiseGate 写进
+ *   issue.json,Agent 对它只读,推不动。
+ *
+ * 自由探索模式保持原有工具集(report_stage + 五工具)零改动。
  */
 
 import { defineTool } from "@earendil-works/pi-coding-agent";
@@ -14,8 +23,14 @@ import { existsSync } from "node:fs";
 import {
   ISSUE_STAGES,
   STAGE_LABELS,
+  FIXED_STAGE_LABELS,
+  fixedAdvance,
+  fixedStageIndex,
+  fixedStages,
+  raiseGate,
   recordTransition,
   validStage,
+  type FixedStage,
   type IssueSessionState,
 } from "./state.ts";
 import type { IssueOpsTools } from "./opsTools.ts";
@@ -43,6 +58,10 @@ export interface IssueToolContext {
   /** 宿主侧解密后的环境密码;未配置环境时为 undefined。 */
   environmentPassword?(): string | undefined;
   gitCredential?(): GitCredential | undefined;
+  /** 固定流程:create_mr 成功后由服务启动流水线监看(触发+轮询)。 */
+  onMrCreated?(): void;
+  /** 固定流程:进入新阶段的宿主收口钩子(prep_repo 的建分支/推进)。 */
+  onStageEntered?(stage: FixedStage): Promise<void>;
   log?: (message: string) => void;
 }
 
@@ -58,42 +77,91 @@ export function expectedBranch(state: IssueSessionState): string {
   return `master_${state.account}_${state.ticket}`;
 }
 
+/** 闸门问题卡的选项文案(服务端 resolveGate 按这些前缀分派,改字两
+ * 处要同步——选项前缀是匹配锚)。 */
+export const GATE_OPTIONS = {
+  analysis_confirm: ["确认报告,开始问题修改", "有补充意见(填写补充说明)"],
+  conclude: ["确认是问题,挂起等提单", "确认非问题,闭环归档", "有补充意见(填写补充说明)"],
+  env_verify: ["验证通过", "验证发现问题(填写补充说明)"],
+} as const;
+
+/** 分析报告的既定落点(prompt 行为契约要求 Agent 维护它,闸门以它
+ * 为门票——报告不在场就举闸等于让用户对着空气确认)。 */
+function analysisReportPath(ctx: IssueToolContext): string {
+  return join(ctx.workspace, "issue-analysis.md");
+}
+
 export function createIssueTools(ctx: IssueToolContext): unknown[] {
   const tools: unknown[] = [];
+  const state = ctx.state;
+  const fixed = state.mode === "fixed";
+  const scenario = state.scenario;
 
-  tools.push(defineTool({
-    name: "report_stage",
-    label: "Report Stage",
-    description:
-      "向平台上报当前处理阶段——状态条全靠它,每进入新环节调用一次,"
-      + "note 用一句话说明现场。阶段含义:fetch_detail=获取 DTS 详情"
-      + "(仅绑定了单号才有)/ align_issue=与用户对齐问题现象"
-      + "/ locate_root=分析根因 / align_solution=对齐修复方案"
-      + "/ modify_code=实施修改 / switch_db=换库 / verify=验证"
-      + "/ submit_mr=提交 MR / done=问题闭环=已给出结论,界面显示「问题闭环」(非问题也走它)。"
-      + "阶段可跳过、可回退:用户推翻结论继续查,就从 done 切回去。"
-      + "done 只是'AI 已出结论',正式收口由用户归档,两者不是一回事。"
-      + `合法阶段: ${ISSUE_STAGES.join(" / ")}`,
-    parameters: Type.Object({
-      stage: Type.Union(ISSUE_STAGES.map((stage) => Type.Literal(stage)), {
-        description: "当前阶段",
+  // ---- 阶段门禁(固定流程专属;自由模式直接放行) ----
+
+  const stageLabel = (): string =>
+    scenario ? FIXED_STAGE_LABELS[scenario][state.stage as FixedStage] ?? String(state.stage)
+      : STAGE_LABELS[state.stage as keyof typeof STAGE_LABELS] ?? String(state.stage);
+
+  const gateStage = (tool: string, allowed: FixedStage[]): void => {
+    if (!fixed || !scenario) return;
+    if (!allowed.includes(state.stage as FixedStage)) {
+      fail(`阶段门禁:${tool} 在当前阶段「${stageLabel()}」不开放。`
+        + `允许的阶段:${allowed
+          .map((stage) => FIXED_STAGE_LABELS[scenario][stage])
+          .join(" / ")}。固定流程的阶段由平台推进,请先完成本阶段工作`);
+    }
+  };
+
+  const gateStageFrom = (tool: string, minimum: FixedStage): void => {
+    if (!fixed || !scenario) return;
+    const current = fixedStageIndex(scenario, state.stage);
+    const min = fixedStageIndex(scenario, minimum);
+    if (min < 0 || current < min) {
+      fail(`阶段门禁:${tool} 要到「${FIXED_STAGE_LABELS[scenario][minimum]}」`
+        + `阶段才开放(当前「${stageLabel()}」)`);
+    }
+  };
+
+  // ---- 自由探索:阶段自报工具(fixed 模式不注册——阶段真相在宿主) ----
+
+  if (!fixed) {
+    tools.push(defineTool({
+      name: "report_stage",
+      label: "Report Stage",
+      description:
+        "向平台上报当前处理阶段——状态条全靠它,每进入新环节调用一次,"
+        + "note 用一句话说明现场。阶段含义:fetch_detail=获取 DTS 详情"
+        + "(仅绑定了单号才有)/ align_issue=与用户对齐问题现象"
+        + "/ locate_root=分析根因 / align_solution=对齐修复方案"
+        + "/ modify_code=实施修改 / switch_db=换库 / verify=验证"
+        + "/ submit_mr=提交 MR / done=问题闭环=已给出结论,界面显示「问题闭环」(非问题也走它)。"
+        + "阶段可跳过、可回退:用户推翻结论继续查,就从 done 切回去。"
+        + "done 只是'AI 已出结论',正式收口由用户归档,两者不是一回事。"
+        + `合法阶段: ${ISSUE_STAGES.join(" / ")}`,
+      parameters: Type.Object({
+        stage: Type.Union(ISSUE_STAGES.map((stage) => Type.Literal(stage)), {
+          description: "当前阶段",
+        }),
+        note: Type.String({ description: "一句话现场说明(做了什么/发现了什么)" }),
       }),
-      note: Type.String({ description: "一句话现场说明(做了什么/发现了什么)" }),
-    }),
-    async execute(_toolCallId: string, params: any) {
-      if (!validStage(String(params.stage))) {
-        fail(`非法阶段: ${params.stage}。合法值: ${ISSUE_STAGES.join(" / ")}`);
-      }
-      ctx.state.stage = params.stage;
-      ctx.state.stage_note = String(params.note ?? "");
-      ctx.state.stage_at = new Date().toISOString();
-      recordTransition(ctx.state, {
-        source: "agent", stage: params.stage, note: String(params.note ?? ""),
-      });
-      ctx.persist();
-      return ok(`阶段已更新为 ${STAGE_LABELS[params.stage]}:${params.note}`);
-    },
-  }));
+      async execute(_toolCallId: string, params: any) {
+        if (!validStage(String(params.stage))) {
+          fail(`非法阶段: ${params.stage}。合法值: ${ISSUE_STAGES.join(" / ")}`);
+        }
+        ctx.state.stage = params.stage;
+        ctx.state.stage_note = String(params.note ?? "");
+        ctx.state.stage_at = new Date().toISOString();
+        recordTransition(ctx.state, {
+          source: "agent", stage: params.stage, note: String(params.note ?? ""),
+        });
+        ctx.persist();
+        return ok(`阶段已更新为 ${STAGE_LABELS[params.stage as keyof typeof STAGE_LABELS]}:${params.note}`);
+      },
+    }));
+  }
+
+  // ---- 运维:拉日志(两模式共用;fixed 自问题分析阶段起开放,含回退轮) ----
 
   tools.push(defineTool({
     name: "fetch_logs",
@@ -106,11 +174,12 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       services: Type.Array(Type.String(), {
         description: "服务名列表(如 TranFmaWebsite),抓 /var/log/oss/MAE/<服务名> 全部内容",
       }),
-      hosts: Type.Array(Type.String(), {
+      hosts: Type.Optional(Type.Array(Type.String(), {
         description: "网管服务器 IP(可多台串行抓取);缺省用会话环境配置",
-      }),
+      })),
     }),
     async execute(_toolCallId: string, params: any) {
+      gateStageFrom("fetch_logs", "analyze");
       if (!ctx.ops) fail("宿主未部署运维工具(assets/ops-tools),无法拉日志");
       const password = ctx.environmentPassword?.();
       if (!password) {
@@ -131,9 +200,12 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         source: "platform",
         note: `日志已拉取:${result.summary.split("\n")[0]}`,
       });
+      ctx.persist();
       return ok(result.summary);
     },
   }));
+
+  // ---- 运维:换库部署(fixed 仅换库验证阶段;成功即举环境验证闸) ----
 
   tools.push(defineTool({
     name: "build_deploy",
@@ -141,16 +213,18 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     description:
       "把工作区代码仓(含 deployment/pom.xml)构建并部署到网管服务器,"
       + "自动备份当前版本。仅页面/前后端改动不要加 include_lib;"
-      + "仅当 pom.xml 依赖版本变更时才加。部署后必须停下等用户验证。",
+      + "仅当 pom.xml 依赖版本变更时才加。部署后平台会举验证卡,"
+      + "必须停下等用户在真实环境验证。",
     parameters: Type.Object({
-      hosts: Type.Array(Type.String(), {
+      hosts: Type.Optional(Type.Array(Type.String(), {
         description: "目标服务器 IP(可多台);缺省用会话环境配置",
-      }),
+      })),
       include_lib: Type.Boolean({
         description: "同时更新 lib 目录;仅 pom.xml 依赖变更时为 true",
       }),
     }),
     async execute(_toolCallId: string, params: any) {
+      gateStage("build_deploy", ["deploy_verify"]);
       if (!ctx.ops) fail("宿主未部署运维工具(assets/ops-tools),无法换库");
       const password = ctx.environmentPassword?.();
       if (!password) fail("本会话未配置网管环境,无法换库部署");
@@ -169,10 +243,26 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         source: "platform",
         note: `换库部署完成:${result.summary.split("\n")[0]}`,
       });
+      if (fixed) {
+        raiseGate(
+          ctx.state,
+          "env_verify",
+          "换库部署已完成,请在目标环境验证问题是否修复",
+          [...GATE_OPTIONS.env_verify],
+          undefined,
+          result.summary.split("\n")[0],
+        );
+        ctx.persist();
+        return ok(result.summary
+          + "\n平台已举出验证卡,请结束本回合等待用户验证结果——不要自行继续。");
+      }
+      ctx.persist();
       return ok(result.summary
         + "\n部署完成——请用 AskUserQuestion 请用户在环境上验证,等结果再继续。");
     },
   }));
+
+  // ---- DTS 查单(fixed 仅首阶段;成功即机械推进到拉代码仓) ----
 
   tools.push(defineTool({
     name: "dts_get_ticket",
@@ -185,6 +275,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       ticket: Type.Optional(Type.String({ description: "DTS 问题单号;缺省用会话绑定单号" })),
     }),
     async execute(_toolCallId: string, params: any) {
+      gateStage("dts_get_ticket", ["dts_info"]);
       if (!ctx.dts) fail("DTS 网关未配置,无法查单(部署需 --dts-mcp-url)");
       const ticket = String(params.ticket ?? "").trim() || ctx.state.ticket;
       if (!ticket) fail("没有单号:请提供 ticket 参数,或请用户先绑定单号");
@@ -193,9 +284,21 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         source: "platform",
         note: `DTS 单 ${detail.ticket} 详情已获取`,
       });
-      return ok(`问题单 ${detail.ticket} 详情:\n${detail.content}`);
+      if (fixed && scenario) {
+        fixedAdvance(ctx.state, "prep_repo",
+          `DTS 详情已获取(单据 ${detail.ticket}),进入拉取代码仓阶段`);
+        // 宿主收口:克隆在场就建分支并直接推进到问题分析(通常回合
+        // 开始前平台已克隆好,这一钩子让阶段机在一回合内顺滑走完)。
+        await ctx.onStageEntered?.("prep_repo");
+      }
+      ctx.persist();
+      return ok(`问题单 ${detail.ticket} 详情:\n${detail.content}`
+        + (fixed ? "\n\n平台已推进到「拉取代码仓」阶段:平台将完成克隆与建分支,"
+          + "克隆就绪后请基于单据详情开展问题分析。" : ""));
     },
   }));
+
+  // ---- 推送(fixed 自问题修改阶段起;机械单号门禁两模式同在) ----
 
   tools.push(defineTool({
     name: "push_branch",
@@ -210,6 +313,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       })),
     }),
     async execute(_toolCallId: string, params: any) {
+      gateStageFrom("push_branch", "fix");
       const state = ctx.state;
       if (!state.ticket) {
         fail("单号门禁:会话尚未绑定 DTS 单号。请请用户在页面「绑定单号」后重试"
@@ -247,6 +351,8 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     },
   }));
 
+  // ---- MR 创建(fixed 仅提交MR·跑绿阶段,且必须先过 UT 闸) ----
+
   tools.push(defineTool({
     name: "create_mr",
     label: "Create Merge Request",
@@ -261,9 +367,14 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       })),
     }),
     async execute(_toolCallId: string, params: any) {
+      gateStage("create_mr", ["mr_green"]);
       const state = ctx.state;
       if (!state.ticket) {
         fail("单号门禁:会话尚未绑定 DTS 单号,不能创建 MR");
+      }
+      if (fixed && state.ut?.passed !== true) {
+        fail("UT 门禁:还没有 report_ut 上报通过记录,不能创建 MR。"
+          + "请先在 UT 验证阶段跑完单测并用 report_ut 上报结果");
       }
       if (!state.push) {
         fail("分支还没有推送记录:请先调用 push_branch,再创建 MR");
@@ -297,10 +408,148 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         note: `MR 已创建: ${receipt.url}`,
       });
       ctx.persist();
+      if (fixed) ctx.onMrCreated?.();
       return ok(`MR 已创建: ${receipt.url}\n(source ${state.push.branch} → ${target},`
-        + `关联单号 ${state.ticket})。合入由用户在门禁通过后决定。`);
+        + `关联单号 ${state.ticket})。${fixed
+          ? "平台已启动流水线监看:请结束本回合,等待流水线结果(红了平台会带回失败项让你修)。"
+          : "合入由用户在门禁通过后决定。"}`);
     },
   }));
 
+  // ---- 以下三个工具仅固定流程注册 ----
+
+  if (fixed && scenario) {
+    // 提交分析报告:人工闸的入口(有单=报告确认;无单=结论确认)
+    tools.push(defineTool({
+      name: "submit_analysis",
+      label: "Submit Analysis Report",
+      description:
+        "宣布问题分析完成并提交分析报告(工作区根目录的 issue-analysis.md)。"
+        + "调用前报告必须已写好——平台以文件在场为门票。提交后平台举确认卡"
+        + "等用户过目:有单场景确认后进入问题修改;无单场景需给 conclusion"
+        + "(issue=是问题/non_issue=非问题)由用户定夺挂起或闭环。"
+        + "提交后请结束回合等待用户。",
+      parameters: Type.Object({
+        conclusion: Type.Optional(Type.Union(
+          [Type.Literal("issue"), Type.Literal("non_issue")],
+          { description: "分析结论(无单场景必填):issue=是问题 / non_issue=非问题" },
+        )),
+        summary: Type.String({
+          description: "一段话结论摘要:现象-根因-方案(或非问题的判定依据),会展示给用户",
+        }),
+      }),
+      async execute(_toolCallId: string, params: any) {
+        gateStage("submit_analysis", ["analyze"]);
+        const report = analysisReportPath(ctx);
+        if (!existsSync(report)) {
+          fail(`分析报告还没落盘:请先把报告写到工作区根目录 issue-analysis.md`
+            + `(现象-根因-方案三段),再提交`);
+        }
+        const summary = String(params.summary ?? "").trim();
+        if (!summary) fail("summary 不能为空:给用户看的结论摘要");
+        if (scenario === "no_ticket"
+            && params.conclusion !== "issue" && params.conclusion !== "non_issue") {
+          fail("无单场景必须给 conclusion(issue=是问题 / non_issue=非问题)");
+        }
+        const proposal = {
+          ...(params.conclusion ? { conclusion: params.conclusion } : {}),
+          summary,
+          report,
+        };
+        if (scenario === "no_ticket") {
+          // 无单场景:结论的确认本身就是「确定结论」节点——先推进再举闸,
+          // 进度条上用户看到的就是"正在等确认"。
+          fixedAdvance(ctx.state, "conclude",
+            `分析结论:${params.conclusion === "non_issue" ? "非问题" : "是问题"},等待用户确认`);
+          raiseGate(
+            ctx.state, "conclude",
+            `分析结论:${params.conclusion === "non_issue" ? "非问题" : "是问题"}——${summary}`,
+            [...GATE_OPTIONS.conclude],
+            proposal,
+          );
+        } else {
+          raiseGate(
+            ctx.state, "analysis_confirm",
+            `问题分析报告已产出(${summary}),请查阅 issue-analysis.md 后确认`,
+            [...GATE_OPTIONS.analysis_confirm],
+            proposal,
+          );
+        }
+        ctx.persist();
+        return ok("分析报告已提交,平台已举确认卡。请结束本回合,等待用户确认"
+          + (scenario === "no_ticket" ? "(用户将决定挂起等提单还是闭环归档)。" : "后进入问题修改。"));
+      },
+    }));
+
+    // UT 上报:拦"上报"不拦"真相"(硬验证在阶段6流水线,UT 也在其中)
+    tools.push(defineTool({
+      name: "report_ut",
+      label: "Report UT Result",
+      description:
+        "上报 UT 验证结果(在代码仓里实际跑的单测)。passed=true 才会推进到"
+        + "提交 MR 阶段;失败就留在本阶段继续修,修完重跑重报。"
+        + "summary 带通过率与关键失败(如有),log_path 指向工作区内的测试报告/日志。",
+      parameters: Type.Object({
+        passed: Type.Boolean({ description: "本轮单测是否全部通过" }),
+        summary: Type.String({ description: "一段话结果:跑了什么/通过率/关键失败" }),
+        log_path: Type.Optional(Type.String({
+          description: "测试输出落点(工作区内相对路径),供用户查证",
+        })),
+      }),
+      async execute(_toolCallId: string, params: any) {
+        gateStage("report_ut", ["ut"]);
+        const round = ctx.state.round ?? 1;
+        ctx.state.ut = {
+          passed: params.passed === true,
+          summary: String(params.summary ?? ""),
+          ...(params.log_path ? { log_path: String(params.log_path) } : {}),
+          round,
+          at: new Date().toISOString(),
+        };
+        recordTransition(ctx.state, {
+          source: "agent",
+          note: `UT 上报(第 ${round} 轮):${params.passed === true ? "通过" : "未通过"}`
+            + ` — ${String(params.summary ?? "").split("\n")[0]}`,
+        });
+        if (params.passed === true) {
+          fixedAdvance(ctx.state, "mr_green",
+            `UT 通过(第 ${round} 轮),进入提交 MR·跑绿阶段`);
+          ctx.persist();
+          return ok("UT 通过已记账,平台已推进到「提交 MR·跑绿」阶段:"
+            + "请推送修复分支(push_branch)并创建 MR(create_mr),"
+            + "创建后平台会监看流水线。");
+        }
+        ctx.persist();
+        return ok("UT 未通过已记账——继续留在 UT 验证阶段:请修复后重跑,"
+          + "通过后再用 report_ut 重新上报。");
+      },
+    }));
+
+    // 修改完成自报(fix → ut 的软推进;其余推进都是机械的)
+    tools.push(defineTool({
+      name: "complete_stage",
+      label: "Complete Current Stage",
+      description:
+        "宣布「问题修改」阶段完成,平台推进到 UT 验证阶段。只在这一处"
+        + "允许自报推进:代码改完、自检通过再调;改没完不要调。",
+      parameters: Type.Object({
+        note: Type.String({ description: "一句话:改了什么(文件/要点)" }),
+      }),
+      async execute(_toolCallId: string, params: any) {
+        gateStage("complete_stage", ["fix"]);
+        fixedAdvance(ctx.state, "ut",
+          `问题修改完成:${String(params.note ?? "").split("\n")[0]}`);
+        ctx.persist();
+        return ok("平台已推进到「UT 验证」阶段:请运行单元测试,"
+          + "结束后用 report_ut 上报结果(passed=true 才能进 MR)。");
+      },
+    }));
+  }
+
+  // 给模型的固定流程阶段速查(描述里说明,方便宿主提示词引用)
+  if (fixed && scenario) {
+    ctx.log?.(`[issue-tools] 固定流程工具集就绪(${scenario} 场景,`
+      + `${fixedStages(scenario).length} 阶段;report_stage 已由平台接管)`);
+  }
   return tools;
 }

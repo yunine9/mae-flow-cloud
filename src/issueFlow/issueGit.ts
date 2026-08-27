@@ -249,6 +249,49 @@ export async function currentBranch(repoDir: string): Promise<string> {
   }
 }
 
+/** 宿主侧确定性建分支(固定流程阶段2/转正时用)。分支名规范
+ * master_工号_单号 由调用方拼好;这里只负责"分支已在且已检出"这个
+ * 终态:已检出=幂等通过;分支存在未检出=切过去;不存在=从起点建。
+ * 绝不 reset 已有分支——已有提交意味着有轮次在现场,覆盖是事故。 */
+export async function ensureBranch(options: {
+  dataDir: string;
+  repoDir: string;
+  branch: string;
+  /** 建分支起点;缺省当前 HEAD。 */
+  startPoint?: string;
+}): Promise<void> {
+  if (!existsSync(join(options.repoDir, ".git"))) {
+    throw new Error(`代码克隆不存在: ${options.repoDir}`);
+  }
+  const format = await runGit(
+    ["check-ref-format", "--branch", options.branch],
+    { env: process.env, timeoutMs: 10_000 });
+  if (format.code !== 0) throw new Error(`分支名不合法: ${options.branch}`);
+  const sandbox = prepareSandbox(options.dataDir, undefined);
+  try {
+    const current = await runGit(
+      [...sandbox.args, "branch", "--show-current"],
+      { cwd: options.repoDir, env: sandbox.env, timeoutMs: 10_000 });
+    if (current.code === 0 && current.stdout.trim() === options.branch) return;
+    const checkout = await runGit([
+      ...sandbox.args, "checkout", "--quiet", options.branch,
+    ], { cwd: options.repoDir, env: sandbox.env, timeoutMs: 60_000 });
+    if (checkout.code === 0) return;
+    // 分支不存在:从起点(缺省 HEAD)建。已存在但切换失败(如脏工作
+    // 区冲突)会走到这里再失败一次,原文带回去让人看。
+    const create = await runGit([
+      ...sandbox.args, "checkout", "--quiet", "-b", options.branch,
+      ...(options.startPoint ? [options.startPoint] : []),
+    ], { cwd: options.repoDir, env: sandbox.env, timeoutMs: 60_000 });
+    if (create.code !== 0) {
+      throw new Error(
+        `建分支失败(${options.branch}): ${(create.stderr || checkout.stderr).trim().slice(0, 400)}`);
+    }
+  } finally {
+    sandbox.cleanup();
+  }
+}
+
 export interface PushReceipt {
   branch: string;
   sha: string;

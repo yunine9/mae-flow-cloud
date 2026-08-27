@@ -39,8 +39,9 @@ import { FakeGitPlatform } from "./gitPlatform.ts";
 import { IssueFlowService } from "./issueFlow/service.ts";
 import { createGoOpsTools } from "./issueFlow/opsTools.ts";
 import {
-  McpDtsGateway,
   McpGateway,
+  McpDtsGateway,
+  MockDtsGateway,
   UnconfiguredDtsGateway,
   type DtsGateway,
 } from "./issueFlow/gateways.ts";
@@ -628,7 +629,15 @@ async function main(): Promise<void> {
   // --mcp-token-file 覆盖)——命令行/JSON 配置里不许出现明文密钥。
   // 【遗留】DTS MCP 的 URL/工具名待用户提供后对拍;没配就 fail-loud,
   // 页面拉单会如实报"网关未配置",不静默降级。
+  // --dts-mock:过渡期假单据(真实网关完整实现在位,等 URL 即通),
+  // 供外部环境跑通全流程;与 --dts-mcp-url 互斥。
+  const dtsMock = has("--dts-mock");
   const dtsMcpUrl = flag("--dts-mcp-url");
+  if (dtsMock && dtsMcpUrl) {
+    console.error("[serve] --dts-mock 与 --dts-mcp-url 互斥:"
+      + "前者是过渡期假单据,后者是真网关,别同时配");
+    process.exit(2);
+  }
   const mcpTokenFile = flag("--mcp-token-file")
     ?? (existsSync("/etc/mae-flow-cloud/mcp-token")
       ? "/etc/mae-flow-cloud/mcp-token" : undefined);
@@ -649,7 +658,11 @@ async function main(): Promise<void> {
     process.exit(2);
   }
   let issueDts: DtsGateway | undefined;
-  if (dtsMcpUrl && mcpToken) {
+  if (dtsMock) {
+    issueDts = new MockDtsGateway((message) => console.log(`  [issue-dts] ${message}`));
+    console.log("[serve] 问题流 DTS 网关: MOCK(--dts-mock,单据 DTS-2026-1001~1005,"
+      + "仅供外部环境测试,别接真数据)");
+  } else if (dtsMcpUrl && mcpToken) {
     issueDts = new McpDtsGateway(new McpGateway({
       url: dtsMcpUrl, token: mcpToken,
       log: (message) => console.log(`  [issue-dts] ${message}`),
@@ -661,6 +674,8 @@ async function main(): Promise<void> {
   const goToolsDir = join(REPO_ROOT, "assets", "ops-tools");
   const issueFlow = new IssueFlowService({
     dataDir, provider, model, modelsJson, settings,
+    // 探索方式烙印(个人设置,缺省固定流程):create 时读一次烙进会话。
+    issueFlowMode: (account) => auth.issueFlowMode(account),
     gitCredential: (account) => auth.gitCredential(account),
     opsTools: existsSync(join(goToolsDir, process.platform === "win32"
       ? "fetch-logs.exe" : "fetch-logs-linux-amd64"))

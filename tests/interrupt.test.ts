@@ -102,16 +102,23 @@ test("插话:发送即打断,话一定送到模型", async () => {
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
   });
-  const id = service.create("给手机号打码").id;
+  // 收尾必须进 finally:断言一旦失败,model.stop() 被跳过,假模型
+  // 服务的监听句柄就吊住事件循环——测试子进程退不出去,整个套件就地
+  // 挂死且永不超时(2026-08-27 实测挂 46 分钟那种)。失败也要干净退场。
+  try {
+    const id = service.create("给手机号打码").id;
 
-  // 等模型真的开跑再插话:此刻它正卡在那条慢命令上。
-  await until(() => model.requests.length >= 1, "模型收到第一轮请求");
-  const summary = await service.interrupt(id, "插一句:掩码要保留后四位");
-  assert.equal(summary.id, id);
+    // 等模型真的开跑再插话:此刻它正卡在那条慢命令上。
+    await until(() => model.requests.length >= 1, "模型收到第一轮请求");
+    const summary = await service.interrupt(id, "插一句:掩码要保留后四位");
+    assert.equal(summary.id, id);
 
-  await until(() => service.get(id)?.status === "completed", "任务收口");
-  assert.match(userTexts(model), /掩码要保留后四位/);
-  await model.stop();
+    await until(() => service.get(id)?.status === "completed", "任务收口");
+    assert.match(userTexts(model), /掩码要保留后四位/);
+  } finally {
+    await service.shutdown();
+    await model.stop();
+  }
 });
 
 test("插话:回合已收口时发出的也不丢(宿主取回来补发)", async () => {
@@ -122,28 +129,32 @@ test("插话:回合已收口时发出的也不丢(宿主取回来补发)", async
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
   });
-  const id = service.create("给手机号打码").id;
+  try {
+    const id = service.create("给手机号打码").id;
 
-  // 不等窗口,开跑就插:撞上直送还是撞上间隙由赛跑决定,这里不假装
-  // 能控制它——钉的是"无论哪条路,话都得送到"。间隙那条路本身由上面
-  // 那条确定性用例单独钉死。
-  await until(() => service.get(id) !== undefined, "任务已建");
-  let sent = false;
-  for (let attempt = 0; attempt < 200 && !sent; attempt += 1) {
-    try {
-      await service.interrupt(id, "插一句:掩码要保留后四位");
-      sent = true;
-    } catch {
-      // 任务还没进 running,或者已经收口了——前者重试,后者退出。
-      if (service.get(id)?.status === "completed") break;
-      await new Promise((resolve) => setTimeout(resolve, 10));
+    // 不等窗口,开跑就插:撞上直送还是撞上间隙由赛跑决定,这里不假装
+    // 能控制它——钉的是"无论哪条路,话都得送到"。间隙那条路本身由上面
+    // 那条确定性用例单独钉死。
+    await until(() => service.get(id) !== undefined, "任务已建");
+    let sent = false;
+    for (let attempt = 0; attempt < 200 && !sent; attempt += 1) {
+      try {
+        await service.interrupt(id, "插一句:掩码要保留后四位");
+        sent = true;
+      } catch {
+        // 任务还没进 running,或者已经收口了——前者重试,后者退出。
+        if (service.get(id)?.status === "completed") break;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
     }
-  }
-  assert.ok(sent, "插话应当在任务运行期间被接受");
+    assert.ok(sent, "插话应当在任务运行期间被接受");
 
-  await until(() => service.get(id)?.status === "completed", "任务收口");
-  assert.match(userTexts(model), /掩码要保留后四位/);
-  await model.stop();
+    await until(() => service.get(id)?.status === "completed", "任务收口");
+    assert.match(userTexts(model), /掩码要保留后四位/);
+  } finally {
+    await service.shutdown();
+    await model.stop();
+  }
 });
 
 test("插话:等人决定时走决定卡,不许开第二个入口", async () => {
@@ -154,24 +165,28 @@ test("插话:等人决定时走决定卡,不许开第二个入口", async () => 
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
   });
-  const id = service.create("给手机号打码").id;
-  await until(
-    () => service.get(id)?.status === "waiting_for_human", "任务等人");
+  try {
+    const id = service.create("给手机号打码").id;
+    await until(
+      () => service.get(id)?.status === "waiting_for_human", "任务等人");
 
-  // 同一件事有两个入口,内核台账上却只认决定那一个——这里必须拒。
-  await assert.rejects(
-    () => service.interrupt(id, "顺便说一句"),
-    /决定卡/);
+    // 同一件事有两个入口,内核台账上却只认决定那一个——这里必须拒。
+    await assert.rejects(
+      () => service.interrupt(id, "顺便说一句"),
+      /决定卡/);
 
-  const waiting = service.get(id)!.waiting!;
-  await service.decide(id, {
-    state_version: waiting.state_version, decision: "通过",
-  });
-  await until(() => service.get(id)?.status === "completed", "任务收口");
+    const waiting = service.get(id)!.waiting!;
+    await service.decide(id, {
+      state_version: waiting.state_version, decision: "通过",
+    });
+    await until(() => service.get(id)?.status === "completed", "任务收口");
 
-  // 收口之后也没有会话可插:如实拒绝,不假装收下。
-  await assert.rejects(() => service.interrupt(id, "马后炮"), /没有在跑的会话/);
-  await model.stop();
+    // 收口之后也没有会话可插:如实拒绝,不假装收下。
+    await assert.rejects(() => service.interrupt(id, "马后炮"), /没有在跑的会话/);
+  } finally {
+    await service.shutdown();
+    await model.stop();
+  }
 });
 
 test("插话:空内容与不存在的任务如实拒绝", async () => {
@@ -182,11 +197,15 @@ test("插话:空内容与不存在的任务如实拒绝", async () => {
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
   });
-  const id = service.create("给手机号打码").id;
-  await assert.rejects(() => service.interrupt(id, "   "), /不能为空/);
-  await assert.rejects(() => service.interrupt("task-404", "在吗"), /不存在/);
-  await until(() => service.get(id)?.status === "completed", "任务收口");
-  await model.stop();
+  try {
+    const id = service.create("给手机号打码").id;
+    await assert.rejects(() => service.interrupt(id, "   "), /不能为空/);
+    await assert.rejects(() => service.interrupt("task-404", "在吗"), /不存在/);
+    await until(() => service.get(id)?.status === "completed", "任务收口");
+  } finally {
+    await service.shutdown();
+    await model.stop();
+  }
 });
 
 test("插话回执:发过什么、读到没有,都要能查", async () => {
@@ -199,29 +218,38 @@ test("插话回执:发过什么、读到没有,都要能查", async () => {
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
   });
-  const id = service.create("给手机号打码").id;
-  await until(() => model.requests.length >= 1, "模型开跑");
+  try {
+    const id = service.create("给手机号打码").id;
+    await until(() => model.requests.length >= 1, "模型开跑");
 
-  assert.deepEqual(service.listInterrupts(id), [], "没发过就是空的");
-  await service.interrupt(id, "掩码保留后四位");
-  const logged = service.listInterrupts(id);
-  assert.equal(logged.length, 1);
-  assert.equal(logged[0].text, "掩码保留后四位");
+    assert.deepEqual(service.listInterrupts(id), [], "没发过就是空的");
+    await service.interrupt(id, "掩码保留后四位");
+    const logged = service.listInterrupts(id);
+    assert.equal(logged.length, 1);
+    assert.equal(logged[0].text, "掩码保留后四位");
 
-  assert.deepEqual(logged[0].said, [], "还没说下文就是空的,不许硬凑");
+    assert.deepEqual(logged[0].said, [], "还没说下文就是空的,不许硬凑");
 
-  await until(() => service.get(id)?.status === "completed", "任务收口");
-  // 收口之后队列必然空了 = 已读取
-  const done = service.listInterrupts(id)[0];
-  assert.equal(done.delivered, true);
+    await until(() => service.get(id)?.status === "completed", "任务收口");
+    // 收口之后队列必然空了 = 已读取。落账和收口同拍完成,但立即读会
+    // 踩到"已送达未落账"的中间态——那是读的竞态,不是契约破坏,轮询掉。
+    await until(() => service.listInterrupts(id)[0]?.delivered === true,
+                "插话回执落账");
+    await until(() => (service.listInterrupts(id)[0]?.said?.length ?? 0) > 0,
+                "下文落账");
+    const done = service.listInterrupts(id)[0];
+    assert.equal(done.delivered, true);
 
-  // "有时我是问了个问题…我看不到 agent 的回复"(用户 2026-08-22 原话):
-  // 只报"已读取"而不给下文,提问就永远没有答案。这里给的是时间顺序上的
-  // 下文——刻意不叫"回复",宿主证明不了哪一段是在答你。
-  assert.deepEqual(done.said.map((item) => item.text),
-    ["收到,按你说的办,完成。"]);
-  // 边界:你开口之前它说过的话,不许算到你这条账上。
-  assert.ok(!done.said.some((item) => item.text.includes("先看一眼现场")),
-    "第一幕的说明发生在插话之前,不是你说完之后的下文");
-  await model.stop();
+    // "有时我是问了个问题…我看不到 agent 的回复"(用户 2026-08-22 原话):
+    // 只报"已读取"而不给下文,提问就永远没有答案。这里给的是时间顺序上的
+    // 下文——刻意不叫"回复",宿主证明不了哪一段是在答你。
+    assert.deepEqual(done.said.map((item) => item.text),
+      ["收到,按你说的办,完成。"]);
+    // 边界:你开口之前它说过的话,不许算到你这条账上。
+    assert.ok(!done.said.some((item) => item.text.includes("先看一眼现场")),
+      "第一幕的说明发生在插话之前,不是你说完之后的下文");
+  } finally {
+    await service.shutdown();
+    await model.stop();
+  }
 });

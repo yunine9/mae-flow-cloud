@@ -10,27 +10,30 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ISSUE_STAGE_TEXT,
   ISSUE_STATUS_TEXT,
-  type AuthUser,
-  type DtsTicketBrief,
-  type IssueDetail,
-  type IssueStage,
-  type IssueSummary,
-  type IssueTimeline,
-  type SemanticEvent,
-  answerIssue,
+  associateIssueTicket,
   bindIssueTicket,
+  answerIssue,
   controlIssue,
   createIssue,
+  fixedStageList,
   getIssue,
   getIssueAnalysis,
   getIssueTimeline,
+  issueStageText,
   listDtsTickets,
   listIssues,
   replyIssue,
   steerIssue,
   tailIssueEvents,
+  type AuthUser,
+  type DtsTicketBrief,
+  type DtsTicketDetail,
+  type IssueDetail,
+  type IssueStageState,
+  type IssueSummary,
+  type IssueTimeline,
+  type SemanticEvent,
 } from "../api";
 import { Markdown } from "../markdown";
 import { formatWait } from "../taskTime";
@@ -121,6 +124,7 @@ export function IssueBoard({ viewer, onNavigateProfile }: {
       onListRefresh={refreshList}
       onError={setError}
       onNavigateProfile={onNavigateProfile}
+      onOpenIssue={(id) => { setOpenId(id); setLiveEvents([]); }}
     />;
   }
 
@@ -170,7 +174,9 @@ function IssueCard({ issue, onOpen }: { issue: IssueSummary; onOpen: () => void 
         {ISSUE_STATUS_TEXT[issue.status]}
       </span>
       <span className="issue-stage">
-        {ISSUE_STAGE_TEXT[issue.stage]}
+        {issueStageText(issue)}
+        {issue.mode === "fixed" && issue.round && issue.round > 1
+          ? ` · 第 ${issue.round} 轮` : ""}
         {issue.stage_note ? ` · ${issue.stage_note}` : ""}
       </span>
       {issue.ticket
@@ -183,7 +189,9 @@ function IssueCard({ issue, onOpen }: { issue: IssueSummary; onOpen: () => void 
       <span>{formatLocalDateTime(issue.updated_at)}</span>
       {issue.conclusion && <span className="issue-conclusion">
         {issue.conclusion.kind === "non_issue" ? "非问题"
-          : issue.conclusion.kind === "delivered" ? "已提 MR" : "已修复"}
+          : issue.conclusion.kind === "delivered" ? "已提 MR"
+          : issue.conclusion.kind === "converted" ? "已转正"
+          : issue.conclusion.kind === "issue" ? "问题成立" : "已修复"}
       </span>}
     </div>
   </button>;
@@ -233,10 +241,13 @@ function ManualRegister({
   const [description, setDescription] = useState("");
   const [ticket, setTicket] = useState("");
   const [repoUrl, setRepoUrl] = useState("");
+  const [moduleName, setModuleName] = useState("");
   const [envOpen, setEnvOpen] = useState(false);
   const [envHosts, setEnvHosts] = useState("");
   const [envPassword, setEnvPassword] = useState("");
   const [busy, setBusy] = useState(false);
+  // 探索方式(个人设置,缺省固定流程):只影响本次登记的会话形态。
+  const fixed = viewer.issue_flow !== "free";
   const draftKey = `mae-flow:issue:draft:${viewer.username}`;
   useEffect(() => {
     try {
@@ -245,23 +256,29 @@ function ManualRegister({
         setTitle(saved.title ?? "");
         setDescription(saved.description ?? "");
         setRepoUrl(saved.repoUrl ?? "");
+        setModuleName(saved.moduleName ?? "");
       }
     } catch { /* 草稿是旁路,坏了就坏了吧 */ }
   }, [draftKey]);
   useEffect(() => {
     const timer = window.setTimeout(() => {
       try {
-        localStorage.setItem(draftKey, JSON.stringify({ title, description, repoUrl }));
+        localStorage.setItem(draftKey, JSON.stringify({ title, description, repoUrl, moduleName }));
       } catch { /* 同上 */ }
     }, 400);
     return () => window.clearTimeout(timer);
-  }, [draftKey, title, description, repoUrl]);
+  }, [draftKey, title, description, repoUrl, moduleName]);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     if (busy) return;
     if (!title.trim()) {
       onError("问题标题必填——一句话说清现象");
+      return;
+    }
+    if (fixed && !repoUrl.trim()) {
+      onError("固定流程在登记时就要确定代码仓(拉取代码仓是必经节点)——"
+        + "填代码仓地址,或到「个人设置」切回自由探索");
       return;
     }
     setBusy(true);
@@ -277,10 +294,11 @@ function ManualRegister({
         description: description.trim() || undefined,
         ticket: ticket.trim() || undefined,
         repo_url: repoUrl.trim() || undefined,
+        ...(moduleName.trim() ? { module: moduleName.trim() } : {}),
         ...(environment ? { environment } : {}),
       });
       setTitle(""); setDescription(""); setTicket("");
-      setEnvHosts(""); setEnvPassword("");
+      setModuleName(""); setEnvHosts(""); setEnvPassword("");
       onCreated(created);
     } catch (reason) {
       onError(String(reason instanceof Error ? reason.message : reason));
@@ -302,14 +320,22 @@ function ManualRegister({
         onChange={(event) => setDescription(event.target.value)} />
     </label>
     <label className="issue-field">
-      <span>DTS 单号 <i>可后补</i></span>
-      <input value={ticket} placeholder="先研究后提单可留空"
+      <span>DTS 单号 <i>{fixed ? "无单场景可留空" : "可后补"}</i></span>
+      <input value={ticket} placeholder={fixed
+        ? "测试/开发自行定位可留空;结论后可关联转正"
+        : "先研究后提单可留空"}
         onChange={(event) => setTicket(event.target.value)} />
     </label>
     <label className="issue-field">
-      <span>代码仓地址 <i>可选</i></span>
+      <span>代码仓地址 <i>{fixed ? "必填" : "可选"}</i></span>
       <input value={repoUrl} placeholder="https://codehub.../repo.git"
         onChange={(event) => setRepoUrl(event.target.value)} />
+    </label>
+    <label className="issue-field">
+      <span>业务模块 <i>可选</i></span>
+      <input value={moduleName} maxLength={60}
+        placeholder="如:媒体中心(仅展示与报告引用)"
+        onChange={(event) => setModuleName(event.target.value)} />
     </label>
     <div className="issue-field wide">
       <button type="button" className="issue-env-toggle"
@@ -332,10 +358,13 @@ function ManualRegister({
     </div>
     <div className="issue-form-actions">
       <button type="submit" className="primary" disabled={busy}>
-        {busy ? "登记中…" : "登记并开始研究"}
+        {busy ? "登记中…" : "登记并开始处理"}
       </button>
       <span className="issue-form-hint">
-        登记后 AI 先做只读研究;非问题也是合法结论,不强制走编码。
+        {fixed
+          ? "固定流程:有单走七阶段,无单先定位出结论(是问题→挂起,关联单号后转正继续)。"
+          : "自由探索:AI 先做只读研究;非问题也是合法结论,不强制走编码。"}
+        (探索方式在「个人设置」切换)
       </span>
     </div>
   </form>;
@@ -353,8 +382,13 @@ function DtsRegister({
   const [tickets, setTickets] = useState<DtsTicketBrief[] | undefined>();
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState("");
+  const [repoUrl, setRepoUrl] = useState("");
+  const [moduleName, setModuleName] = useState("");
+  const [envHosts, setEnvHosts] = useState("");
+  const [envPassword, setEnvPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
+  const fixed = viewer.issue_flow !== "free";
 
   async function load() {
     setLoading(true);
@@ -371,14 +405,24 @@ function DtsRegister({
 
   async function launch() {
     if (!selected || busy) return;
+    if (fixed && !repoUrl.trim()) {
+      onError("固定流程在登记时就要确定代码仓——填代码仓地址后再发起");
+      return;
+    }
     const ticket = tickets?.find((item) => item.ticket === selected);
     setBusy(true);
     try {
+      const hosts = envHosts.split(/[,，\s]+/).map((host) => host.trim()).filter(Boolean);
+      const environment = hosts.length && envPassword
+        ? { hosts, password: envPassword } : undefined;
       const created = await createIssue({
         title: ticket?.title || selected,
         source: "dts",
         ticket: selected,
         description: ticket?.title || undefined,
+        repo_url: repoUrl.trim() || undefined,
+        ...(moduleName.trim() ? { module: moduleName.trim() } : {}),
+        ...(environment ? { environment } : {}),
       });
       onCreated(created);
     } catch (reason) {
@@ -417,6 +461,31 @@ function DtsRegister({
     {tickets && tickets.length === 0 && <p className="issue-dts-hint">
       你的名下当前没有问题单。
     </p>}
+    {/* 登记即定仓与模块(固定流程的有单七阶段从拉单详情开始,仓在阶段2
+        就要克隆);网管环境换库验证要用,登记时一并带上。 */}
+    <div className="issue-dts-fields">
+      <label className="issue-field">
+        <span>代码仓地址 <i>{fixed ? "必填" : "可选"}</i></span>
+        <input value={repoUrl} placeholder="https://codehub.../repo.git"
+          onChange={(event) => setRepoUrl(event.target.value)} />
+      </label>
+      <label className="issue-field">
+        <span>业务模块 <i>可选</i></span>
+        <input value={moduleName} maxLength={60}
+          placeholder="如:媒体中心(仅展示与报告引用)"
+          onChange={(event) => setModuleName(event.target.value)} />
+      </label>
+      <label className="issue-field">
+        <span>网管服务器(可多个,逗号分隔;换库验证用)<i>可选</i></span>
+        <input value={envHosts} placeholder="60.14.46.16, 60.14.46.17"
+          onChange={(event) => setEnvHosts(event.target.value)} />
+      </label>
+      <label className="issue-field">
+        <span>共用密码(sopuser/ossuser/ossadm)<i>可选</i></span>
+        <input type="password" value={envPassword} autoComplete="new-password"
+          onChange={(event) => setEnvPassword(event.target.value)} />
+      </label>
+    </div>
   </div>;
 }
 
@@ -429,6 +498,7 @@ function IssueSessionView({
   onListRefresh,
   onError,
   onNavigateProfile,
+  onOpenIssue,
 }: {
   detail: IssueDetail;
   /** 会话线程:SSE 直播投影优先,断连兜底 detail.messages。 */
@@ -440,6 +510,8 @@ function IssueSessionView({
   onListRefresh: () => void;
   onError: (message: string) => void;
   onNavigateProfile?: () => void;
+  /** 转正等场景直接跳到另一个会话(如新生的有单会话)。 */
+  onOpenIssue: (id: string) => void;
 }) {
   const [ticket, setTicket] = useState("");
   const [busy, setBusy] = useState(false);
@@ -492,9 +564,19 @@ function IssueSessionView({
   }
 
   const tab = pickedTab ?? (detail.has_analysis ? "doc" : "chat");
-  // 决策卡只在 status 与 waiting 同账时出现;轮询半拍(状态已翻、卡未清)
-  // 不画,避免旧 state_version 提交。
-  const waiting = detail.status === "waiting_user" ? detail.waiting : undefined;
+  // 等待卡两源:平台闸(固定流程的人工硬闸)优先,Agent 问题卡兜底;
+  // 决策卡只在 status=waiting_user 且卡在场时画,轮询半拍不画。
+  const gateCard = detail.status === "waiting_user" && detail.gate
+    ? {
+        waiting_id: detail.gate.id,
+        state_version: detail.gate.state_version,
+        question: detail.gate.question,
+        context: detail.gate.context,
+        created_at: detail.gate.created_at,
+      }
+    : undefined;
+  const waiting = gateCard
+    ?? (detail.status === "waiting_user" ? detail.waiting : undefined);
   // 阶段轨迹:按转移账实际发生顺序画——问题阶段是动态的,这是一条
   // "旅程线"而非"计划线":只画走过的节点,不补未来占位。
   const trail = (detail.transitions ?? []).filter((entry) => entry.stage);
@@ -509,6 +591,29 @@ function IssueSessionView({
   }
   const sendReply = (text: string) => perform(() => replyIssue(detail.id, text));
   const sendSteer = (text: string) => perform(() => steerIssue(detail.id, text));
+  /** 挂起会话关联单号转正:两段式(校验过目 → 确认),转正后跳新会话。
+   * 不走 perform:需要把 API 结果(单据详情/新会话)交回关联卡。 */
+  async function associate(ticket: string, confirm: boolean):
+      Promise<{ ticket_detail?: DtsTicketDetail; converted?: IssueSummary }> {
+    if (busy) return {};
+    setBusy(true);
+    try {
+      const result = await associateIssueTicket(detail.id, { ticket, confirm });
+      if (result.converted) {
+        onListRefresh();
+        onOpenIssue(result.converted.id);
+      } else {
+        const next = await getIssue(detail.id);
+        onChanged(next);
+      }
+      return result;
+    } catch (reason) {
+      onError(String(reason instanceof Error ? reason.message : reason));
+      return {};
+    } finally {
+      setBusy(false);
+    }
+  }
   function archive() {
     if (window.confirm("归档后 会话收口不可续聊,凭据将清理。确认归档?")) {
       void perform(() => controlIssue(detail.id, { action: "archive" }));
@@ -533,29 +638,43 @@ function IssueSessionView({
         <span className={`issue-status status-${detail.status}`}>
           {ISSUE_STATUS_TEXT[detail.status]}
         </span>
+        <span className={`issue-mode mode-${detail.mode ?? "free"}`}>
+          {detail.mode === "fixed" ? "固定流程" : "自由探索"}
+        </span>
         <span className="issue-stage">
-          {ISSUE_STAGE_TEXT[detail.stage]}
+          {issueStageText(detail)}
+          {detail.mode === "fixed" && detail.round && detail.round > 1
+            ? `(第 ${detail.round} 轮)` : ""}
           {detail.stage_note ? ` · ${detail.stage_note}` : ""}
         </span>
       </div>
       <div className="issue-session-ticket">
         {detail.ticket
           ? <span className="issue-ticket">{detail.ticket}</span>
-          : <span className="issue-bind">
-              <input value={ticket} placeholder="绑定 DTS 单号"
-                onChange={(event) => setTicket(event.target.value)} />
-              <button type="button" disabled={!ticket.trim() || busy}
-                onClick={() => perform(() => bindIssueTicket(detail.id, ticket.trim()))}>
-                绑定
-              </button>
-            </span>}
+          : detail.mode === "fixed"
+            // 固定流程没有"中途绑单":无单会话走结论→挂起→关联转正。
+            ? <span className="issue-ticket empty">无单场景</span>
+            : <span className="issue-bind">
+                <input value={ticket} placeholder="绑定 DTS 单号"
+                  onChange={(event) => setTicket(event.target.value)} />
+                <button type="button" disabled={!ticket.trim() || busy}
+                  onClick={() => perform(() => bindIssueTicket(detail.id, ticket.trim()))}>
+                  绑定
+                </button>
+              </span>}
         <span className="issue-bind-hint" title="推送与提 MR 的门票是单号;研究阶段不需要">
-          {detail.ticket ? "" : "提 MR 前必须绑定单号"}
+          {detail.ticket ? "" : detail.mode === "fixed"
+            ? "结论为问题时挂起,关联单号后转正"
+            : "提 MR 前必须绑定单号"}
         </span>
       </div>
     </div>
 
     <div className="issue-workspace-body">
+    {/* 固定流程:阶段进度条(计划线,含继承/待重做态);自由模式仍是
+        旅程线(走过的才画)。两条线各自独立,不互相替代。 */}
+    {detail.mode === "fixed"
+      && <IssueFixedProgress issue={detail} />}
     {/* 阶段英雄轨:独立整行(旅程线),压在耗时折叠条之上 */}
     <IssueJourneyTrail trail={trail} />
 
@@ -618,16 +737,51 @@ function IssueSessionView({
       <IssueRail
         detail={detail}
         busy={busy}
+        waiting={waiting}
         onAnswer={answer}
         onReply={sendReply}
         onSteer={sendSteer}
         onArchive={archive}
         onCancel={cancelSession}
         onOpenDoc={() => setPickedTab("doc")}
+        onAssociate={associate}
       />
     </div>
     </div>
   </section>;
+}
+
+/** 固定流程的阶段进度条(计划线):按 scenario 的阶段序列画节点,
+ * stage_states 决定形态(pending 空心/in_progress 亮/done 实/redo 警示
+ * /inherited 弱化+标"继承");轮次>1 加轮次徽标(验证回退的重走记号)。 */
+function IssueFixedProgress({ issue }: { issue: IssueSummary }) {
+  const stages = fixedStageList(issue.scenario);
+  const states = issue.stage_states ?? [];
+  const labels: Record<IssueStageState, string> = {
+    pending: "未开始",
+    in_progress: "进行中",
+    done: "已完成",
+    inherited: "已继承",
+    redo: "待重做",
+  };
+  return <nav className="issue-fixed-progress" aria-label="固定流程阶段">
+    {(issue.round ?? 1) > 1
+      && <span className="issue-round-badge">第 {issue.round} 轮</span>}
+    {stages.map((stage, index) => {
+      const state = states[index] ?? "pending";
+      const current = state === "in_progress";
+      return <span key={stage}
+        className={`issue-fixed-step state-${state}${current ? " current" : ""}`}
+        title={`${labels[state]}${current ? "(当前)" : ""}`}>
+        <i className="issue-fixed-dot" aria-hidden />
+        <span className="issue-fixed-name">
+          {issueStageText({ mode: "fixed", scenario: issue.scenario, stage })}
+        </span>
+        {state === "inherited" && <em className="issue-fixed-tag">继承</em>}
+        {state === "redo" && <em className="issue-fixed-tag">重做</em>}
+      </span>;
+    })}
+  </nav>;
 }
 
 /** 阶段英雄轨:旅程线(dates = transitions 账,走过才画)。
@@ -647,7 +801,7 @@ function IssueJourneyTrail({ trail }: {
         data-source={entry.source}
         title={`${entry.source === "agent" ? "AI 上报" : "平台事实"} · ${entry.note}`}>
         <i aria-hidden />
-        <b>{entry.stage ? ISSUE_STAGE_TEXT[entry.stage] : entry.note}</b>
+        <b>{entry.stage ? issueStageText({ stage: entry.stage }) : entry.note}</b>
       </span>;
     })}
   </nav>;
@@ -837,7 +991,7 @@ function IssueCostPanel({ id }: { id: string }) {
 /** 阶段事件标题出人话:标题是词表键(如 verify),认得就翻,不认识的
  * (未来词表扩充前的旧现场)原样示人——前端不猜。 */
 function STAGE(event: { title: string }): string {
-  return ISSUE_STAGE_TEXT[event.title as IssueStage] ?? event.title;
+  return issueStageText({ stage: event.title as never });
 }
 
 /** 事件账 → 会话线程投影:与后端 service.messages 同一规则

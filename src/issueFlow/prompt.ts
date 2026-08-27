@@ -22,7 +22,12 @@ import {
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { IssueSessionState } from "./state.ts";
-import { STAGE_LABELS } from "./state.ts";
+import {
+  FIXED_STAGE_LABELS,
+  STAGE_LABELS,
+  fixedStages,
+  type FixedStage,
+} from "./state.ts";
 
 /** 技能源目录:标准 skill 目录,每个子目录一个 SKILL.md(测试对源断言用)。 */
 export const SKILL_SOURCE_DIR = resolve(
@@ -64,6 +69,107 @@ function envLine(state: IssueSessionState): string {
   return `网管环境「${state.environment.name}」: ${state.environment.hosts.join(", ")}`;
 }
 
+/** 阶段名(自由/固定两套词表都认)。 */
+export function stageLabelOf(state: IssueSessionState): string {
+  if (state.mode === "fixed" && state.scenario) {
+    return FIXED_STAGE_LABELS[state.scenario][state.stage as FixedStage]
+      ?? String(state.stage);
+  }
+  return STAGE_LABELS[state.stage as keyof typeof STAGE_LABELS]
+    ?? String(state.stage);
+}
+
+// ---- 固定流程(2026-08-27 拍板:宿主权威阶段机,Agent 只在阶段内干活) ----
+
+/** 各阶段的目标与可用工具(提示词的引导层;权威层在工具 execute 门禁)。 */
+const FIXED_STAGE_BRIEFS: Record<FixedStage, { goal: string; tools: string }> = {
+  dts_info:
+    { goal: "调 dts_get_ticket 拉全单据详情,通读现象与处理历史", tools: "dts_get_ticket" },
+  prep_repo:
+    { goal: "等待平台克隆代码仓并建分支(宿主代劳,克隆就绪后平台会自动进入下一阶段)",
+      tools: "(本阶段由平台推进,无 Agent 工具)" },
+  analyze:
+    { goal: "对齐现象-根因-方案,产出 issue-analysis.md,然后 submit_analysis 提交"
+      + "(无单场景 submit_analysis 需带结论 issue/non_issue)",
+      tools: "fetch_logs、dts 单据内容回读对话、submit_analysis" },
+  fix:
+    { goal: "按已确认的方案实施修复;改完自检通过后 complete_stage 自报完成",
+      tools: "fetch_logs(补证据)、bash 改码、complete_stage" },
+  ut:
+    { goal: "在代码仓里跑单元测试;全绿后 report_ut(passed=true)上报",
+      tools: "bash 跑测、report_ut" },
+  mr_green:
+    { goal: "push_branch 推送修复分支,create_mr 建 MR(须先有 UT 通过记录);"
+      + "平台监看流水线,红了会带回失败项,修完同分支再推,直到全绿",
+      tools: "push_branch、create_mr" },
+  deploy_verify:
+    { goal: "调 build_deploy 换库部署;部署完成平台举验证卡,停下等用户真实验证",
+      tools: "build_deploy" },
+  conclude:
+    { goal: "submit_analysis 提交结论(是问题/非问题)——本场景没有修改与交付环节",
+      tools: "fetch_logs、submit_analysis" },
+};
+
+export function issueFixedOpeningPrompt(state: IssueSessionState): string {
+  const scenario = state.scenario ?? "ticket";
+  const stages = fixedStages(scenario).map((stage) =>
+    FIXED_STAGE_LABELS[scenario][stage]).join(" → ");
+  const current = state.stage as FixedStage;
+  const brief = FIXED_STAGE_BRIEFS[current];
+  const inheritedNote = state.converted_from
+    ? `\n- 本会话由 ${state.converted_from} 转正而来:分析报告(issue-analysis.md)已继承,`
+      + "前三个阶段视为已完成,直接从「问题修改」开始——先读报告再动手,不要重新分析。"
+    : "";
+  return [
+    "你是本问题会话的处理 Agent。本会话走**固定流程**:阶段由平台推进与把关,"
+      + "你只在当前阶段内干活。研究方法参考技能 issue-research/issue-ops,交付参考 issue-delivery。",
+    "",
+    "## 问题事实",
+    `- 标题: ${state.title}`,
+    `- 描述: ${state.description || "(无补充描述)"}`,
+    `- 单号: ${state.ticket ?? "(无单号场景:测试/开发自行定位,结论后由用户决定挂起提单或闭环)"}`,
+    `- 工号: ${state.account}`,
+    `- 代码仓: ${state.repo_url ?? "(未登记)"}(已克隆到 repo/)`
+      + (scenario === "ticket" && state.ticket
+        ? `,修复分支 ${`master_${state.account}_${state.ticket}`} 由平台创建` : ""),
+    `- ${envLine(state)}`,
+    inheritedNote,
+    "",
+    `## 阶段路线(${scenario === "ticket" ? "有单七阶段" : "无单三节点"})`,
+    stages,
+    "",
+    "## 阶段机契约(平台机械执行,说了算)",
+    "1. 阶段真相在平台:你能用哪些工具由当前阶段决定,越权调用会被直接拒绝。",
+    `2. 当前阶段「${FIXED_STAGE_LABELS[scenario][current]}」:${brief.goal}。可用工具:${brief.tools}。`,
+    "3. 两个人工闸:分析报告确认(有单)/结论确认(无单)、换库后环境验证——"
+      + "平台举卡等用户,你不要替用户猜结果,举卡后立即结束回合。",
+    "4. UT 全绿才能建 MR;MR 建后平台监看流水线,红了会带回失败项让你修,"
+      + "同分支修复再推,直到全绿自动进入换库验证。",
+    "5. 用户环境验证不通过会整体回退到「问题分析」重走(轮次+1),这是正常节奏不是事故。",
+    "6. 秘密边界:环境密码与各 token 由平台保管,不向用户索要、不猜测、不讨论。",
+    "7. 持续维护 issue-analysis.md(现象-根因-方案),它是本会话的核心交付物。",
+    "",
+    "现在开始:先复述你对问题现象的理解与当前阶段要做的事,然后推进。"
+      + (scenario === "ticket" && current === "dts_info"
+        ? "第一步固定是 dts_get_ticket 拉单据详情。" : ""),
+  ].filter(Boolean).join("\n");
+}
+
+/** 固定流程的平台推进通知(continueWith 注入):带上下文的阶段交接词。 */
+export function fixedAdvanceNotice(
+  state: IssueSessionState,
+  message: string,
+): string {
+  const scenario = state.scenario ?? "ticket";
+  const current = state.stage as FixedStage;
+  const brief = FIXED_STAGE_BRIEFS[current];
+  return [
+    `平台通知: ${message}`,
+    `当前阶段「${FIXED_STAGE_LABELS[scenario][current]}」: ${brief.goal}`,
+    `可用工具: ${brief.tools}`,
+  ].join("\n");
+}
+
 export function issueOpeningPrompt(state: IssueSessionState): string {
   return [
     "你是本问题会话的研究与处理 Agent。工作方式见技能 issue-playbook(路线图)、"
@@ -96,10 +202,10 @@ export function issueResumePrompt(
 ): string {
   return [
     "服务重启/续聊后继续同一问题会话。已有现场(不要从头推翻,先读 "
-    + "issue-analysis.md 与 skills/ 提示,再继续):",
+      + "issue-analysis.md 与 skills/ 提示,再继续):",
     `- 标题: ${state.title}`,
     `- 单号: ${state.ticket ?? "(未绑定)"}`,
-    `- 最近阶段: ${STAGE_LABELS[state.stage]}(${state.stage_note || "无说明"})`,
+    `- 最近阶段: ${stageLabelOf(state)}(${state.stage_note || "无说明"})`,
     state.push ? `- 已推送: ${state.push.branch} @ ${state.push.sha.slice(0, 12)}` : "",
     state.mr ? `- 已建 MR: ${state.mr.url}` : "",
     "",

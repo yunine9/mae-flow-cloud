@@ -14,6 +14,7 @@
 
 import {
   closeSync,
+  cpSync,
   existsSync,
   mkdirSync,
   openSync,
@@ -33,12 +34,21 @@ import { IssueEnvironmentVault } from "../issueEnvironment.ts";
 import { TaskContainer, taskContainerInstance } from "../containerRuntime.ts";
 import { repairContainerMutationOwnership } from "../containerOwnership.ts";
 import {
+  fixedAdvance,
+  fixedComplete,
+  fixedRollback,
+  fixedStageIndex,
+  fixedStages,
+  initStageStates,
   isTerminal,
   loadState,
   recordTransition,
   saveState,
   summarize,
+  type FixedStage,
   type IssueConclusionKind,
+  type IssueFlowMode,
+  type IssueScenario,
   type IssueSource,
   type IssueStage,
   type IssueStatus,
@@ -47,17 +57,30 @@ import {
 } from "./state.ts";
 import {
   cloneRepository,
+  ensureBranch,
   validateRepoUrl,
   type GitCredential,
 } from "./issueGit.ts";
 import type { IssueOpsTools } from "./opsTools.ts";
-import type { DtsGateway } from "./gateways.ts";
-import { createIssueTools, type IssueToolContext } from "./tools.ts";
+import type { DtsGateway, DtsTicketDetail } from "./gateways.ts";
+import { createIssueTools, expectedBranch, GATE_OPTIONS, type IssueToolContext } from "./tools.ts";
 import {
   buildIssueTimeline,
   type IssueSessionTimeline,
 } from "./sessionView.ts";
-import { issueOpeningPrompt, issueResumePrompt, materializeIssueSkills } from "./prompt.ts";
+import {
+  fixedAdvanceNotice,
+  issueFixedOpeningPrompt,
+  issueOpeningPrompt,
+  issueResumePrompt,
+  materializeIssueSkills,
+} from "./prompt.ts";
+import {
+  describePipelineRun,
+  getPipelineStatus,
+  triggerPipeline,
+  type PipelineRun,
+} from "../pipelineClient.ts";
 
 export class IssueNotFoundError extends Error {
   constructor(id: string) {
@@ -83,6 +106,10 @@ export interface IssueCreateInput {
   ticket?: string;
   repoUrl?: string;
   baseline?: string;
+  /** 业务模块自由文本标签(仅展示/报告引用,不承载判定)。 */
+  module?: string;
+  /** 显式指定模式(转正建新会话用);缺省走 issueFlowMode 回调。 */
+  mode?: IssueFlowMode;
   environment?: IssueEnvironmentInput;
 }
 
@@ -103,7 +130,13 @@ export interface IssueFlowOptions {
   modelsJson: Record<string, unknown>;
   settings?: {
     models(): { json?: Record<string, unknown>; provider?: string; model?: string };
+    /** 流水线监看的轮询节奏(与需求侧同一份运行参数)。 */
+    runtime?(): { poll_interval_s?: number; poll_timeout_s?: number };
   };
+  /** 探索方式烙印(个人设置,缺省固定流程)。回调缺席按自由模式——
+   * 这是裸构造(测试/旧部署)的兼容缺省;正式接线在 serve 层,那里的
+   * auth.issueFlowMode 对真人缺省返回 fixed。 */
+  issueFlowMode?: (account: string) => IssueFlowMode;
   gitCredential?: (account: string) =>
     (GitCredential & { email?: string }) | undefined;
   opsTools?: IssueOpsTools;
@@ -221,10 +254,17 @@ export class IssueFlowService {
         saveState(root, state);
         interrupted += 1;
       }
-      this.live.set(state.id, {
+      const live: LiveIssue = {
         id: state.id, root, state,
         humanGate: new HumanGate(join(root, "waiting.json")),
-      });
+      };
+      this.live.set(state.id, live);
+      // 流水线监看续表:deadline 还是原来那张(重启不白送预算);
+      // watching=false 的(终态/耗尽)不重挂。
+      if (state.mode === "fixed" && state.pipeline?.watching) {
+        this.log(`[issue-flow] ${state.id} 恢复流水线监看 @ ${state.pipeline.sha.slice(0, 12)}`);
+        void this.watchPipeline(live, state.pipeline.sha);
+      }
     }
     if (interrupted) {
       this.log(`[issue-flow] 恢复: ${interrupted} 个问题会话标记为已中断(可续聊)`);
@@ -342,6 +382,15 @@ export class IssueFlowService {
     }
     const repoUrl = input.repoUrl?.trim() || undefined;
     if (repoUrl) validateRepoUrl(repoUrl);
+    const mode: IssueFlowMode =
+      input.mode ?? this.options.issueFlowMode?.(account) ?? "free";
+    const scenario: IssueScenario | undefined =
+      mode === "fixed" ? (ticket ? "ticket" : "no_ticket") : undefined;
+    if (mode === "fixed" && !repoUrl) {
+      throw new IssueControlError(
+        "固定流程在登记时就要确定代码仓(阶段1拉取代码仓是必经节点),请填写代码仓地址;"
+          + "自由探索模式才允许登记后再补");
+    }
     let environment;
     let environmentPassword: string | undefined;
     if (input.environment) {
@@ -377,6 +426,9 @@ export class IssueFlowService {
       environment.credential_ref = refs[0]?.id ?? "";
     }
     const now = new Date().toISOString();
+    const firstStage: FixedStage | "registered" = scenario
+      ? fixedStages(scenario)[0]
+      : "registered";
     const state: IssueSessionState = {
       id,
       account,
@@ -388,18 +440,37 @@ export class IssueFlowService {
       ...(ticket ? { ticket } : {}),
       ...(repoUrl ? { repo_url: repoUrl } : {}),
       ...(input.baseline?.trim() ? { baseline: input.baseline.trim() } : {}),
+      ...(input.module?.trim() ? { module: input.module.trim() } : {}),
       ...(environment ? { environment } : {}),
+      // 模式一律烙印落盘(free 也记):审计要看"当时是什么模式",
+      // 旧现场缺字段读作自由(兼容),不等于新会话不记。
+      mode,
+      ...(scenario
+        ? {
+          scenario,
+          round: 1,
+          stage_states: initStageStates(scenario, 0),
+        }
+        : {}),
       status: "queued",
-      stage: "registered",
-      stage_note: "已登记,准备开始首轮研究",
+      stage: firstStage,
+      stage_note: mode === "fixed"
+        ? "已登记,固定流程启动"
+        : "已登记,准备开始首轮研究",
       stage_at: now,
     };
+    if (mode === "fixed" && scenario) {
+      recordTransition(state, {
+        source: "platform", stage: firstStage,
+        note: `固定流程会话已登记(${scenario === "ticket" ? "有单七阶段" : "无单三节点"})`,
+      });
+    }
     saveState(root, state);
     this.live.set(id, {
       id, root, state,
       humanGate: new HumanGate(join(root, "waiting.json")),
     });
-    this.log(`[issue-flow] ${id} 已登记(${ticket ?? "无单号"}): ${title}`);
+    this.log(`[issue-flow] ${id} 已登记(${ticket ?? "无单号"},${mode === "fixed" ? "固定流程" : "自由探索"}): ${title}`);
     void this.pump();
     return summarize(state);
   }
@@ -415,7 +486,7 @@ export class IssueFlowService {
 
   // ---- 会话驱动 ----
 
-  /** 并发额度:同时进行的回合数(等待用户/闲置的会话不占额度)。 */
+  /** 并发额度:同时进行的回合数(等待用户/闲置/挂起的会话不占额度)。 */
   private async pump(): Promise<void> {
     for (const live of this.live.values()) {
       if (this.turning.size >= (this.options.maxConcurrentTurns ?? 2)) break;
@@ -425,13 +496,51 @@ export class IssueFlowService {
       saveState(live.root, live.state);
       void this.runTurn(live, async () => {
         await this.ensureCloned(live);
+        await this.enterFixedStage(live, live.state.stage as FixedStage);
         const driver = await this.openDriver(live);
-        return driver.start(issueOpeningPrompt(live.state));
+        return driver.start(live.state.mode === "fixed"
+          ? issueFixedOpeningPrompt(live.state)
+          : issueOpeningPrompt(live.state));
       }).finally(() => {
         this.turning.delete(live.id);
         void this.pump();
       });
     }
+  }
+
+  /** 固定流程的阶段进入钩子:prep_repo 在克隆就绪后由平台收口(有单
+   * 场景还要宿主建分支——分支名规范烧着单号,交给 Agent 起名会漂)。
+   * 克隆失败按回合异常走 failed(free/fixed 同语义)。 */
+  private async enterFixedStage(
+    live: LiveIssue,
+    stage: FixedStage,
+  ): Promise<void> {
+    const { state } = live;
+    if (state.mode !== "fixed" || !state.scenario || stage !== "prep_repo") {
+      return;
+    }
+    if (!state.repo_url) {
+      throw new Error("固定流程缺少代码仓地址(登记时校验过,这里是防御)");
+    }
+    const repoDir = join(live.root, "repo");
+    if (!existsSync(join(repoDir, ".git"))) {
+      await this.ensureCloned(live);
+    }
+    const branch = state.scenario === "ticket" && state.ticket
+      ? expectedBranch(state)
+      : undefined;
+    if (branch) {
+      await ensureBranch({
+        dataDir: this.options.dataDir,
+        repoDir,
+        branch,
+        ...(state.baseline ? { startPoint: state.baseline } : {}),
+      });
+    }
+    fixedAdvance(state, "analyze", branch
+      ? `代码仓已克隆,修复分支 ${branch} 已创建`
+      : "代码仓已克隆(无单场景不建分支)");
+    saveState(live.root, live.state);
   }
 
   /** 单回合执行骨架:统一失败收口,绝不把异常闷成悬挂状态。 */
@@ -461,18 +570,25 @@ export class IssueFlowService {
     if (outcome.status === "waiting_for_human") {
       state.status = "waiting_user";
     } else if (outcome.status === "turn_finished") {
-      // 撞在回合间隙的插话可能没送进模型——收口前补发一次。
-      const late = live.driver?.takeUndeliveredSteers() ?? [];
-      if (late.length) {
-        this.log(`[issue-flow] ${live.id} 补发未送达插话 ${late.length} 条`);
-        live.state.status = "running";
-        saveState(live.root, live.state);
-        void this.runTurn(live, async () =>
-          live.driver!.continueWith(late.join("\n\n")));
-        return;
+      // 平台闸在场:回合定格等用户,闸比一切优先(补发插话让位——
+      // 闸挂起时 steer 本就进不来)。
+      if (state.gate) {
+        state.status = "waiting_user";
+        state.last_reply = live.driver?.finalReply() ?? state.last_reply;
+      } else {
+        // 撞在回合间隙的插话可能没送进模型——收口前补发一次。
+        const late = live.driver?.takeUndeliveredSteers() ?? [];
+        if (late.length) {
+          this.log(`[issue-flow] ${live.id} 补发未送达插话 ${late.length} 条`);
+          live.state.status = "running";
+          saveState(live.root, live.state);
+          void this.runTurn(live, async () =>
+            live.driver!.continueWith(late.join("\n\n")));
+          return;
+        }
+        state.status = "idle";
+        state.last_reply = live.driver?.finalReply() ?? state.last_reply;
       }
-      state.status = "idle";
-      state.last_reply = live.driver?.finalReply() ?? state.last_reply;
     } else {
       state.status = "failed";
       state.error = outcome.detail ?? outcome.reason ?? "会话异常结束";
@@ -566,6 +682,12 @@ export class IssueFlowService {
       },
       gitCredential: () =>
         this.options.gitCredential?.(live.state.account),
+      // 固定流程的宿主钩子:MR 建成→启动流水线监看;进入新阶段→
+      // 平台侧收口(prep_repo 的建分支/推进在这里做)。
+      onMrCreated: () => service.armPipelineWatch(live),
+      onStageEntered: async (stage) => {
+        await service.enterFixedStage(live, stage);
+      },
       log: (message) => this.log(message),
     };
     live.toolContext = context;
@@ -641,6 +763,15 @@ export class IssueFlowService {
       throw new IssueControlError(
         `当前状态 ${live.state.status} 没有等待中的问题卡`);
     }
+    // 平台闸(固定流程的人工硬闸)优先于 Agent 问题卡:闸在 state 里,
+    // 分派语义在服务,不进模型。
+    if (live.state.gate) {
+      return this.resolveGate(live, {
+        stateVersion: input.state_version,
+        decision: input.decision,
+        ...(input.notes !== undefined ? { notes: input.notes } : {}),
+      });
+    }
     const waiting = live.humanGate.pending()[0];
     if (!waiting) throw new IssueControlError("盘上没有等待中的问题卡(状态不一致)");
     const record = live.humanGate.resolve(waiting.waiting_id, {
@@ -673,11 +804,143 @@ export class IssueFlowService {
     return summarize(live.state);
   }
 
+  // ---- 固定流程:平台闸的裁决与阶段机联动 ----
+
+  /** 平台闸作答分派。决策文本是闸门选项原文(前端决策卡不改动地
+   * 传回),按 GATE_OPTIONS 的前缀锚匹配;notes 是用户的补充说明。 */
+  private resolveGate(live: LiveIssue, input: {
+    stateVersion: number;
+    decision: string;
+    notes?: string;
+  }): IssueSummary {
+    const { state } = live;
+    const gate = state.gate!;
+    if (input.stateVersion !== gate.state_version) {
+      throw new IssueControlError("问题卡状态已变化,请刷新后重试");
+    }
+    if (this.turning.has(live.id)) {
+      throw new IssueControlError("会话正在处理上一条输入,稍候再试");
+    }
+    const decision = input.decision ?? "";
+    const notes = input.notes?.trim() ?? "";
+    const supplement = notes ? `\n用户补充说明: ${notes}` : "";
+    delete state.gate;
+    recordTransition(state, {
+      source: "platform",
+      note: `用户作答(${gate.kind}): ${decision.split("\n")[0]}${notes ? `;补充: ${notes.split("\n")[0]}` : ""}`,
+    });
+
+    const startTurn = (message: string) => {
+      this.turning.add(live.id);
+      state.status = "running";
+      saveState(live.root, state);
+      void this.runTurn(live, async () => {
+        await this.ensureContainer(live);
+        if (live.driver) return live.driver.continueWith(message);
+        const driver = await this.openDriver(live);
+        return driver.startResume(issueResumePrompt(state, message));
+      }).finally(() => {
+        this.turning.delete(live.id);
+        void this.pump();
+      });
+    };
+
+    if (gate.kind === "analysis_confirm") {
+      if (decision.startsWith(GATE_OPTIONS.analysis_confirm[0])) {
+        fixedAdvance(state, "fix", "用户确认分析报告,进入问题修改");
+        saveState(live.root, state);
+        startTurn(fixedAdvanceNotice(state,
+          `用户已确认问题分析报告,进入「问题修改」阶段。${supplement}`
+            + "请按已确认的方案实施修复,完成后调用 complete_stage。"));
+        return summarize(state);
+      }
+      // 有补充意见:留在分析阶段继续完善,改完重新提交。
+      state.stage_note = "用户对分析报告有补充意见,继续分析";
+      saveState(live.root, state);
+      startTurn(
+        `用户对分析报告提出补充意见,仍在「问题分析」阶段:${decision}${supplement}\n`
+          + "请按意见完善 issue-analysis.md 后重新 submit_analysis 提交。");
+      return summarize(state);
+    }
+
+    if (gate.kind === "conclude") {
+      if (decision.includes("确认非问题")) {
+        // 确认非问题:闭环归档(非问题也留报告,测试拿去留痕)。
+        const now = new Date().toISOString();
+        fixedComplete(state, "结论:非问题,已闭环归档");
+        state.conclusion = {
+          kind: "non_issue",
+          summary: gate.proposal?.summary
+            ? `${gate.proposal.summary}${notes ? `;${notes}` : ""}`
+            : decision,
+          at: now,
+        };
+        state.status = "archived";
+        saveState(live.root, state);
+        this.releaseDriver(live);
+        this.stopContainer(live);
+        this.vault.remove(live.id);
+        this.log(`[issue-flow] ${live.id} 结论非问题,已闭环归档`);
+        return summarize(state);
+      }
+      if (decision.includes("确认是问题")) {
+        // 确认是问题:挂起等用户关联 DTS 单号(关联即转正)。
+        fixedComplete(state, "结论:是问题,挂起等待关联单号");
+        state.status = "suspended";
+        state.stage_note = "结论为「是问题」——请关联 DTS 单号转正,或直接归档";
+        saveState(live.root, state);
+        this.releaseDriver(live);
+        this.stopContainer(live);
+        this.log(`[issue-flow] ${live.id} 结论是问题,已挂起待关联单号`);
+        return summarize(state);
+      }
+      // 有补充意见:回到分析阶段继续查证(结论节点没走完,重置回未开始)。
+      const concludeIndex = state.scenario
+        ? fixedStageIndex(state.scenario, "conclude") : -1;
+      if (concludeIndex >= 0
+          && (state.stage_states?.[concludeIndex] ?? "pending") !== "pending") {
+        (state.stage_states ??= [])[concludeIndex] = "pending";
+      }
+      fixedAdvance(state, "analyze", "用户对结论有补充意见,继续分析");
+      saveState(live.root, state);
+      startTurn(
+        `用户对分析结论提出意见,回到「问题分析」阶段:${decision}${supplement}\n`
+          + "请继续查证,完善 issue-analysis.md 后重新 submit_analysis 提交结论。");
+      return summarize(state);
+    }
+
+    // env_verify:换库验证的裁决
+    if (decision.startsWith("验证通过")) {
+      fixedComplete(state, "用户环境验证通过,待归档收口");
+      state.status = "idle";
+      state.stage_note = "环境验证通过——确认 MR 合入后可归档收口";
+      saveState(live.root, state);
+      return summarize(state);
+    }
+    if (decision.includes("验证发现问题")) {
+      const reason = notes || decision;
+      fixedRollback(state, `用户环境验证发现问题:${reason.split("\n")[0]}`);
+      saveState(live.root, state);
+      startTurn(fixedAdvanceNotice(state,
+        `用户在环境验证发现问题,已回退到「问题分析」阶段(第 ${state.round} 轮)。`
+          + `${supplement || `\n用户描述: ${reason}`}\n`
+          + "请带着新一轮的现场重新分析(前几轮的修复在分支上,不要推倒重来),"
+          + "分析完成后重新 submit_analysis。"));
+      return summarize(state);
+    }
+    throw new IssueControlError(
+      `无法识别的验证答复:「${decision.slice(0, 40)}」,请通过问题卡的选项作答`);
+  }
+
   reply(id: string, text: string): IssueSummary {
     const live = this.require(id);
     const status = live.state.status;
     if (status === "waiting_user") {
       throw new IssueControlError("会话在等你对问题卡的答复,请回答问题卡而不是发消息");
+    }
+    if (status === "suspended") {
+      throw new IssueControlError(
+        "会话挂起中(结论已是问题):请在右侧关联 DTS 单号转正,或直接归档收口");
     }
     if (status === "queued") {
       throw new IssueControlError("首轮研究还在排队启动,请稍候再发消息");
@@ -727,6 +990,11 @@ export class IssueFlowService {
     if (!TICKET_PATTERN.test(value)) {
       throw new IssueControlError("单号只能是字母数字下划线连字符");
     }
+    if (live.state.mode === "fixed") {
+      throw new IssueControlError(
+        "固定流程的会话不直接绑定单号:无单场景结论后挂起,经「关联单号」校验 DTS "
+          + "存在后转正为新会话(带分析报告进入问题修改)");
+    }
     live.state.ticket = value;
     recordTransition(live.state, {
       source: "platform", note: `单号已绑定 ${value}(用户操作)`,
@@ -758,7 +1026,8 @@ export class IssueFlowService {
       live.state.status = "canceled";
     } else {
       const kind = input.kind
-        ?? (live.state.mr ? "delivered"
+        ?? (live.state.status === "suspended" ? "issue"
+          : live.state.mr ? "delivered"
           : live.state.push ? "fixed" : "non_issue");
       live.state.conclusion = {
         kind,
@@ -767,11 +1036,17 @@ export class IssueFlowService {
         at: now,
       };
       live.state.status = "archived";
-      live.state.stage = "done";
-      live.state.stage_at = now;
-      recordTransition(live.state, {
-        source: "platform", stage: "done", note: "会话已归档收口(用户操作)",
-      });
+      // 固定流程留在自己的词表里(进度条按 scenario 对齐);自由模式
+      // 沿用 done。
+      if (live.state.mode === "fixed" && live.state.scenario) {
+        fixedComplete(live.state, "会话已归档收口(用户操作)");
+      } else {
+        live.state.stage = "done";
+        live.state.stage_at = now;
+        recordTransition(live.state, {
+          source: "platform", stage: "done", note: "会话已归档收口(用户操作)",
+        });
+      }
     }
     saveState(live.root, live.state);
     void live.driver?.abort().catch(() => undefined);
@@ -780,6 +1055,293 @@ export class IssueFlowService {
     this.vault.remove(live.id);
     this.log(`[issue-flow] ${id} ${input.action === "cancel" ? "取消" : "归档"}`);
     return summarize(live.state);
+  }
+
+  // ---- 固定流程:流水线监看(阶段6,MR 全绿才放行换库) ----
+
+  private pipelineKnobs(): { pollMs: number; budgetMs: number } {
+    const knobs = this.options.settings?.runtime?.() ?? {};
+    return {
+      pollMs: Math.max(1_000, (knobs.poll_interval_s ?? 10) * 1000),
+      budgetMs: Math.max(60_000, (knobs.poll_timeout_s ?? 1_800) * 1000),
+    };
+  }
+
+  /** MR 建成即挂表监看:触发流水线 → 轮询到终态。绿→自动进换库验证;
+   * 红→携失败项开回合让 AI 修(同分支再推,MR 自动跟新提交)。幂等:
+   * 同 SHA 在盯则跳过(MR 幂等重建会重复触发本钩子)。 */
+  armPipelineWatch(live: LiveIssue): void {
+    const state = live.state;
+    const platformUrl = this.options.platformUrl;
+    if (!platformUrl || !state.push || state.mode !== "fixed") return;
+    const sha = state.push.sha;
+    if (state.pipeline?.watching && state.pipeline.sha === sha) return;
+    const now = Date.now();
+    const { budgetMs } = this.pipelineKnobs();
+    state.pipeline = {
+      sha,
+      status: "running",
+      watching: true,
+      started_at: new Date(now).toISOString(),
+      deadline: new Date(now + budgetMs).toISOString(),
+      round: state.round ?? 1,
+    };
+    recordTransition(state, {
+      source: "platform",
+      note: `流水线监看已启动 @ ${sha.slice(0, 12)}`,
+    });
+    saveState(live.root, state);
+    void this.watchPipeline(live, sha);
+  }
+
+  private async watchPipeline(live: LiveIssue, sha: string): Promise<void> {
+    const { state } = live;
+    const platformUrl = this.options.platformUrl;
+    if (!platformUrl) return;
+    const { pollMs } = this.pipelineKnobs();
+    const call = () => ({
+      platformUrl,
+      sha,
+      ...(state.repo_url ? { repo: state.repo_url } : {}),
+      credential: this.options.gitCredential?.(state.account),
+    });
+    // 触发(假件必须显式触发;真件幂等无害)。触发响应可能已是终态。
+    try {
+      const first = await triggerPipeline(call());
+      if (first.status !== "running") {
+        this.settlePipeline(live, sha, first);
+        return;
+      }
+    } catch (error) {
+      // 触发失败不弃看:适配层可能已因建 MR 自动触发,状态查询照走。
+      this.log(`[issue-flow] ${live.id} 流水线触发失败(继续查状态): ${String(error)}`);
+    }
+    while (
+      state.pipeline?.sha === sha
+      && state.pipeline.watching
+      && !isTerminal(state.status)
+      && Date.now() < Date.parse(state.pipeline.deadline)
+    ) {
+      await new Promise<void>((done) => {
+        const timer = setTimeout(done, pollMs);
+        timer.unref?.();
+      });
+      if (state.pipeline?.sha !== sha || !state.pipeline.watching) return;
+      try {
+        const status = await getPipelineStatus(call());
+        const terminal = status.runs.findLast((run) => run.status !== "running");
+        if (terminal) {
+          this.settlePipeline(live, sha, terminal);
+          return;
+        }
+      } catch (error) {
+        this.log(`[issue-flow] ${live.id} 流水线查询失败(继续轮): ${String(error)}`);
+      }
+    }
+    // 预算耗尽:如实停表,不阻塞会话——用户可人工查看后发消息继续。
+    if (state.pipeline?.sha === sha && state.pipeline.watching) {
+      state.pipeline.watching = false;
+      state.pipeline.last_error = "轮询预算耗尽,请人工查看流水线";
+      state.stage_note = "流水线轮询预算耗尽——请人工查看 MR/流水线,再发消息继续";
+      saveState(live.root, state);
+      this.log(`[issue-flow] ${live.id} 流水线监看预算耗尽 @ ${sha.slice(0, 12)}`);
+    }
+  }
+
+  private settlePipeline(
+    live: LiveIssue,
+    sha: string,
+    run: PipelineRun,
+  ): void {
+    const { state } = live;
+    if (state.pipeline?.sha !== sha) return;
+    state.pipeline.status = run.status;
+    state.pipeline.watching = false;
+    if (run.checks) state.pipeline.checks = run.checks;
+    if (run.status === "success") {
+      recordTransition(state, {
+        source: "platform", note: `流水线全绿 @ ${sha.slice(0, 12)}`,
+      });
+      fixedAdvance(state, "deploy_verify", "流水线全绿,进入换库环境验证");
+      saveState(live.root, state);
+      this.startPlatformTurn(live, fixedAdvanceNotice(state,
+        `流水线已全绿${state.mr ? `(MR: ${state.mr.url})` : ""},进入「换库环境验证」阶段。`
+          + "请调用 build_deploy 部署到网管环境;部署完成后平台会举验证卡,等用户真实验证。"));
+    } else {
+      recordTransition(state, {
+        source: "platform", note: `流水线失败 @ ${sha.slice(0, 12)}`,
+      });
+      saveState(live.root, state);
+      this.startPlatformTurn(live,
+        `平台通知: 流水线未通过(仍在「提交 MR·跑绿」阶段)。\n${describePipelineRun(run)}\n`
+          + "请修复后同分支 push_branch 再 create_mr(同一 MR 会自动跟新提交),平台会重新监看。");
+    }
+  }
+
+  /** 平台侧开回合(闸门裁决/流水线结果的交接词)。会话正忙(等用户/
+   * 运行中/终态)时不抢方向盘:通知挂到 stage_note,续聊提示词会带上。 */
+  private startPlatformTurn(live: LiveIssue, message: string): void {
+    const { state } = live;
+    if (isTerminal(state.status) || this.turning.has(live.id)
+        || state.status === "waiting_user") {
+      state.stage_note = message.split("\n")[0].slice(0, 120);
+      saveState(live.root, state);
+      return;
+    }
+    this.turning.add(live.id);
+    state.status = "running";
+    saveState(live.root, state);
+    void this.runTurn(live, async () => {
+      await this.ensureContainer(live);
+      if (live.driver) return live.driver.continueWith(message);
+      const driver = await this.openDriver(live);
+      return driver.startResume(issueResumePrompt(state, message));
+    }).finally(() => {
+      this.turning.delete(live.id);
+      void this.pump();
+    });
+  }
+
+  // ---- 无单挂起 → 关联单号转正(2026-08-27 拍板) ----
+
+  /** 两段式:不带 confirm → 只做 DTS 存在性校验并把单据详情给用户
+   * 过目;带 confirm → 转正:新会话继承工作区与分析报告直接进「问题
+   * 修改」,旧会话归档(结论 converted)。同用户+同单号至多一个活跃
+   * 会话。转正后不可逆——单号是新会话的身份(分支名/MR/台账都带)。 */
+  async associate(id: string, input: {
+    ticket: string;
+    confirm?: boolean;
+  }): Promise<{ ticket_detail?: DtsTicketDetail; converted?: IssueSummary }> {
+    const live = this.require(id);
+    const { state } = live;
+    if (state.mode !== "fixed" || state.scenario !== "no_ticket") {
+      throw new IssueControlError("只有无单固定流程的挂起会话才能关联转正");
+    }
+    if (state.status !== "suspended") {
+      throw new IssueControlError(
+        `当前状态 ${state.status} 不能关联转正(要走完问题分析并确认是问题、挂起后再来)`);
+    }
+    const ticket = input.ticket?.trim() ?? "";
+    if (!TICKET_PATTERN.test(ticket)) {
+      throw new IssueControlError("单号只能是字母数字下划线连字符");
+    }
+    if (!this.options.dts) {
+      throw new IssueControlError(
+        "DTS 网关未配置,无法校验单号(部署需 --dts-mcp-url 或 --dts-mock)");
+    }
+    const clash = [...this.live.values()].find((item) =>
+      item.id !== id
+      && item.state.account === state.account
+      && item.state.ticket === ticket
+      && !isTerminal(item.state.status));
+    if (clash) {
+      throw new IssueControlError(
+        `单号 ${ticket} 已有活跃会话 ${clash.id},同一单号不能重复关联`);
+    }
+    let detail: DtsTicketDetail;
+    try {
+      detail = await this.options.dts.detail(ticket);
+    } catch (error) {
+      throw new IssueControlError(
+        `DTS 校验未通过: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (!input.confirm) {
+      return { ticket_detail: detail };
+    }
+
+    // ---- 转正:新会话继承现场 ----
+    const newId = this.nextId();
+    const newRoot = join(this.issuesRoot, newId);
+    mkdirSync(newRoot, { recursive: true });
+    // 工作区复制:repo/ 整目录 + 分析报告(skills 由 openDriver 重物化,
+    // local-logs 不带——新一轮要拉新日志)。
+    if (existsSync(join(live.root, "repo"))) {
+      cpSync(join(live.root, "repo"), join(newRoot, "repo"), { recursive: true });
+    }
+    if (existsSync(join(live.root, "issue-analysis.md"))) {
+      cpSync(join(live.root, "issue-analysis.md"),
+        join(newRoot, "issue-analysis.md"));
+    }
+    // 环境凭据:解出旧密码,给新会话存一份自己的(vault 按会话 id 隔离;
+    // 先复制后销毁旧的,顺序不能反)。
+    let environment = state.environment ? { ...state.environment } : undefined;
+    if (environment) {
+      const password = this.vault.credential(
+        id, state.environment!.credential_ref, "sopuser")?.password;
+      if (password) {
+        const refs = this.vault.store(newId, [{
+          name: environment.name,
+          purpose: "both",
+          host: environment.hosts[0],
+          port: environment.port,
+          accounts: ["sopuser", "ossuser", "ossadm"].map((username) =>
+            ({ username, password })),
+        }]);
+        environment = { ...environment, credential_ref: refs[0]?.id ?? "" };
+      } else {
+        environment = undefined;
+      }
+    }
+    const now = new Date().toISOString();
+    const converted: IssueSessionState = {
+      id: newId,
+      account: state.account,
+      created_at: now,
+      updated_at: now,
+      title: state.title,
+      description: state.description,
+      source: "dts",
+      ticket,
+      ...(state.repo_url ? { repo_url: state.repo_url } : {}),
+      ...(state.baseline ? { baseline: state.baseline } : {}),
+      ...(state.module ? { module: state.module } : {}),
+      ...(environment ? { environment } : {}),
+      mode: "fixed",
+      scenario: "ticket",
+      round: 1,
+      stage_states: initStageStates("ticket", 3),
+      converted_from: id,
+      status: "queued",
+      stage: "fix",
+      stage_note: `转正自 ${id}:分析报告已继承,直接进入问题修改`,
+      stage_at: now,
+      transitions: [],
+    };
+    recordTransition(converted, {
+      source: "platform", stage: "fix",
+      note: `由 ${id} 关联单号 ${ticket} 转正,分析报告已继承`,
+    });
+    if (converted.repo_url && existsSync(join(newRoot, "repo", ".git"))) {
+      await ensureBranch({
+        dataDir: this.options.dataDir,
+        repoDir: join(newRoot, "repo"),
+        branch: expectedBranch(converted),
+        ...(converted.baseline ? { startPoint: converted.baseline } : {}),
+      });
+    }
+    saveState(newRoot, converted);
+    this.live.set(newId, {
+      id: newId, root: newRoot, state: converted,
+      humanGate: new HumanGate(join(newRoot, "waiting.json")),
+    });
+    // 旧会话收口(不经 control:结论与链接有专属语义)。
+    state.conclusion = {
+      kind: "converted",
+      summary: `已关联单号 ${ticket},转正为 ${newId}`,
+      at: now,
+    };
+    state.converted_to = newId;
+    state.status = "archived";
+    recordTransition(state, {
+      source: "platform", note: `关联单号 ${ticket} 转正为 ${newId},本会话收口`,
+    });
+    saveState(live.root, state);
+    this.releaseDriver(live);
+    this.stopContainer(live);
+    this.vault.remove(id);
+    this.log(`[issue-flow] ${id} 关联 ${ticket} 转正为 ${newId}`);
+    void this.pump();
+    return { converted: summarize(converted) };
   }
 
   // ---- DTS 拉单(页面列表用) ----

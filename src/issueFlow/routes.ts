@@ -178,6 +178,7 @@ export async function handleIssueRoutes(
         ...(body.ticket ? { ticket: String(body.ticket) } : {}),
         ...(body.repo_url ? { repoUrl: String(body.repo_url) } : {}),
         ...(body.baseline ? { baseline: String(body.baseline) } : {}),
+        ...(body.module ? { module: String(body.module) } : {}),
         ...(body.environment ? {
           environment: {
             name: body.environment.name === undefined
@@ -271,13 +272,30 @@ export async function handleIssueRoutes(
       return done(200, issueFlow.bindTicket(id, String(body.ticket ?? "")));
     }
 
+    // 挂起会话关联 DTS 单号转正(固定流程无单场景的收口动作)。
+    // 两段式:不带 confirm=校验单号存在并回详情过目;带 confirm=转正
+    // 生成新会话(继承分析报告,直接进问题修改)。
+    if (method === "POST" && parts[2] === "associate" && parts.length === 3) {
+      if (viewer?.role === "admin" || !brief || !own(brief.account)) {
+        return done(403, { error: "只有归属人能关联单号转正" });
+      }
+      const body = await readBody(request);
+      const result = await issueFlow.associate(id, {
+        ticket: String(body.ticket ?? ""),
+        ...(body.confirm === true ? { confirm: true } : {}),
+      });
+      return done(200, result);
+    }
+
     if (method === "POST" && parts[2] === "control" && parts.length === 3) {
       if (viewer?.role === "admin" || !brief || !own(brief.account)) {
         return done(403, { error: "只有归属人能操作会话" });
       }
       const body = await readBody(request);
-      const kind = ["non_issue", "fixed", "delivered"].includes(String(body.kind))
-        ? String(body.kind) as "non_issue" | "fixed" | "delivered" : undefined;
+      const kind = ["non_issue", "fixed", "delivered", "issue", "converted"]
+        .includes(String(body.kind))
+        ? String(body.kind) as "non_issue" | "fixed" | "delivered"
+          | "issue" | "converted" : undefined;
       return done(200, issueFlow.control(id, {
         action: body.action === "cancel" ? "cancel" : "archive",
         ...(kind ? { kind } : {}),

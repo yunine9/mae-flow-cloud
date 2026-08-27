@@ -84,6 +84,9 @@ export interface AuthUser {
   moonlight?: boolean;
   /** push 前清单过目的个人默认。缺省即开:只有显式 false 是关。 */
   push_confirmation?: boolean;
+  /** 问题处理探索方式:"fixed" 固定流程(缺省)/"free" 自由探索。
+   * 只烙印新会话,进行中会话不迁移。 */
+  issue_flow?: "fixed" | "free";
 }
 
 export interface MoonlightPreview {
@@ -124,6 +127,19 @@ export async function putPersonalPushConfirmation(
   const response = await fetch("/auth/me/push-confirmation", {
     method: "PUT",
     body: JSON.stringify({ on }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+/** 问题处理探索方式(固定流程/自由探索)。缺省固定流程;只影响
+ * 新建的问题会话。 */
+export async function putIssueFlowMode(
+  mode: "fixed" | "free",
+): Promise<AuthUser> {
+  const response = await fetch("/auth/me/issue-flow", {
+    method: "PUT",
+    body: JSON.stringify({ mode }),
   });
   if (!response.ok) throw new Error(await errorText(response));
   return response.json();
@@ -1606,6 +1622,7 @@ export type IssueStatus =
   | "waiting_user"
   | "idle"
   | "interrupted"
+  | "suspended"
   | "archived"
   | "canceled"
   | "failed";
@@ -1616,6 +1633,7 @@ export const ISSUE_STATUS_TEXT: Record<IssueStatus, string> = {
   waiting_user: "等你答复",
   idle: "等你继续",
   interrupted: "重启中断,可续聊",
+  suspended: "挂起(待关联单号)",
   archived: "已归档",
   canceled: "已取消",
   failed: "出错了",
@@ -1646,6 +1664,89 @@ export const ISSUE_STAGE_TEXT: Record<IssueStage, string> = {
   done: "问题闭环",
 };
 
+// ---- 固定流程(2026-08-27 拍板;自由探索那套词表原样保留) ----
+
+export type IssueFlowMode = "fixed" | "free";
+export type IssueScenario = "ticket" | "no_ticket";
+export type FixedIssueStage =
+  | "dts_info"
+  | "prep_repo"
+  | "analyze"
+  | "fix"
+  | "ut"
+  | "mr_green"
+  | "deploy_verify"
+  | "conclude";
+
+export type AnyIssueStage = IssueStage | FixedIssueStage;
+
+export const FIXED_TICKET_STAGES: FixedIssueStage[] = [
+  "dts_info", "prep_repo", "analyze", "fix", "ut", "mr_green", "deploy_verify",
+];
+export const FIXED_NO_TICKET_STAGES: FixedIssueStage[] = [
+  "prep_repo", "analyze", "conclude",
+];
+
+const FIXED_STAGE_TEXT: Record<FixedIssueStage, string> = {
+  dts_info: "获取 DTS 单信息",
+  prep_repo: "拉取代码仓",
+  analyze: "问题分析",
+  fix: "问题修改",
+  ut: "UT 验证",
+  mr_green: "提交 MR·跑绿",
+  deploy_verify: "换库环境验证",
+  conclude: "确定结论",
+};
+
+/** 按会话模式取阶段中文名(fixed 词表/自由词表各认各的;对不上
+ * (旧现场/异键)原样示人——前端不猜)。 */
+export function issueStageText(issue: {
+  mode?: IssueFlowMode;
+  scenario?: IssueScenario;
+  stage: AnyIssueStage;
+}): string {
+  return FIXED_STAGE_TEXT[issue.stage as FixedIssueStage]
+    ?? ISSUE_STAGE_TEXT[issue.stage as IssueStage]
+    ?? String(issue.stage);
+}
+
+/** 固定流程场景的阶段序列(进度条用)。 */
+export function fixedStageList(
+  scenario: IssueScenario | undefined,
+): FixedIssueStage[] {
+  return scenario === "no_ticket"
+    ? FIXED_NO_TICKET_STAGES : FIXED_TICKET_STAGES;
+}
+
+/** 单阶段执行状态:inherited=转正继承,redo=验证回退待重做。 */
+export type IssueStageState =
+  | "pending"
+  | "in_progress"
+  | "done"
+  | "inherited"
+  | "redo";
+
+/** 平台问题卡(固定流程的人工硬闸):形状与 Agent 问题卡同构,
+ * IssueDecisionCard 直接复用渲染。 */
+export type IssueGateKind =
+  | "analysis_confirm"
+  | "conclude"
+  | "env_verify";
+
+export interface IssueGateCard {
+  id: string;
+  kind: IssueGateKind;
+  state_version: number;
+  question: { questions?: Array<{ question: string; options: string[] }> };
+  context?: string;
+  proposal?: {
+    conclusion?: "issue" | "non_issue";
+    summary?: string;
+    report?: string;
+  };
+  created_at: string;
+}
+
 export interface IssueSummary {
   id: string;
   account: string;
@@ -1656,11 +1757,29 @@ export interface IssueSummary {
   source: "manual" | "dts";
   ticket?: string;
   repo_url?: string;
+  module?: string;
+  mode?: IssueFlowMode;
+  scenario?: IssueScenario;
+  stage_states?: IssueStageState[];
+  round?: number;
+  gate?: IssueGateCard;
+  ut?: { passed: boolean; summary: string; log_path?: string; round: number; at: string };
+  pipeline?: {
+    sha: string;
+    status: "running" | "success" | "failed";
+    watching: boolean;
+    started_at: string;
+    deadline: string;
+    last_error?: string;
+    round: number;
+  };
+  converted_from?: string;
+  converted_to?: string;
   status: IssueStatus;
-  stage: IssueStage;
+  stage: AnyIssueStage;
   stage_note: string;
   conclusion?: {
-    kind: "non_issue" | "fixed" | "delivered";
+    kind: "non_issue" | "fixed" | "delivered" | "issue" | "converted";
     summary: string;
     at: string;
   };
@@ -1668,7 +1787,7 @@ export interface IssueSummary {
   mr?: { branch: string; title: string; url?: string; iid?: string; at: string };
   /** 阶段转移审计:agent 声明与 platform 机械事实同账。 */
   transitions?: Array<{
-    at: string; source: "agent" | "platform"; stage?: IssueStage; note: string;
+    at: string; source: "agent" | "platform"; stage?: AnyIssueStage; note: string;
   }>;
   error?: string;
   last_reply?: string;
@@ -1728,6 +1847,7 @@ export function createIssue(input: {
   ticket?: string;
   repo_url?: string;
   baseline?: string;
+  module?: string;
   environment?: IssueEnvironmentForm;
 }): Promise<IssueSummary> {
   return issueFetch("/issues", {
@@ -1773,9 +1893,29 @@ export function bindIssueTicket(id: string, ticket: string): Promise<IssueSummar
   });
 }
 
+/** 挂起会话关联 DTS 单号转正(固定流程无单场景的收口)。两段式:
+ * 不带 confirm → 校验单号存在并回单据详情过目;带 confirm → 转正生成
+ * 新会话(继承分析报告直接进问题修改),返回 converted。 */
+export function associateIssueTicket(id: string, input: {
+  ticket: string;
+  confirm?: boolean;
+}): Promise<{ ticket_detail?: DtsTicketDetail; converted?: IssueSummary }> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/associate`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export interface DtsTicketDetail {
+  ticket: string;
+  title: string;
+  content: string;
+}
+
 export function controlIssue(id: string, input: {
   action: "cancel" | "archive";
-  kind?: "non_issue" | "fixed" | "delivered";
+  kind?: "non_issue" | "fixed" | "delivered" | "issue" | "converted";
   summary?: string;
 }): Promise<IssueSummary> {
   return issueFetch(`/issues/${encodeURIComponent(id)}/control`, {

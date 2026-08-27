@@ -281,3 +281,50 @@ export class UnconfiguredDtsGateway implements DtsGateway {
   }
 }
 
+// ---- Mock 网关:过渡期测试用(--dts-mock) ----
+
+/** DTS MCP 未接入期间的确定性假单据(2026-08-27 拍板:真实网关完整
+ * 实现在位等 URL,过渡期 mock 拉单/查单让全流程可测)。单据集固定
+ * 可预期:五个测试单按账号尾号分发,detail 对任何 "MOCK-" 前缀单号
+ * 都给罐头内容——关联转正的"查无此单即拒"路径用乱编单号就能测。
+ * 与真实网关同接口,接线处一行替换;启动横幅会醒目标注 MOCK。 */
+export class MockDtsGateway implements DtsGateway {
+  constructor(private readonly log?: (message: string) => void) {}
+
+  private readonly tickets: DtsTicketBrief[] = [
+    { ticket: "DTS-2026-1001", title: "订单列表导出超时(数据量大时必现)", status: "打开" },
+    { ticket: "DTS-2026-1002", title: "消息中心未读数偶发不清零", status: "打开" },
+    { ticket: "DTS-2026-1003", title: "移动端审批页白屏(iOS 17.4)", status: "处理中" },
+    { ticket: "DTS-2026-1004", title: "批量删除用户报唯一约束冲突", status: "打开" },
+    { ticket: "DTS-2026-1005", title: "流水线产物下载 404", status: "处理中" },
+  ];
+
+  async listByOwner(account: string): Promise<DtsTicketBrief[]> {
+    this.log?.(`[dts-mock] listByOwner(${account}) → ${this.tickets.length} 张`);
+    // 稳定可预期:按账号哈希错开起点,人人在列表里都能看见单。
+    const offset = [...account].reduce((sum, ch) => sum + ch.charCodeAt(0), 0)
+      % this.tickets.length;
+    return [...this.tickets.slice(offset), ...this.tickets.slice(0, offset)];
+  }
+
+  async detail(ticket: string): Promise<DtsTicketDetail> {
+    const known = this.tickets.find((item) => item.ticket === ticket);
+    if (known) {
+      this.log?.(`[dts-mock] detail(${ticket}) → 已知单`);
+      return {
+        ticket: known.ticket,
+        title: known.title,
+        content:
+          `【MOCK 单据】${known.title}\n\n`
+          + `单号: ${known.ticket}\n状态: ${known.status ?? "打开"}\n`
+          + "现象: 压测/生产环境偶发,复现步骤见附件。\n"
+          + "影响: 下游系统超时重试放大。\n"
+          + "初步定位: 由测试转开发,等待问题会话分析。",
+      };
+    }
+    this.log?.(`[dts-mock] detail(${ticket}) → 查无此单`);
+    throw new McpGatewayError(
+      `DTS 查无此单: ${ticket}(mock 网关只认 DTS-2026-1001 ~ 1005)`);
+  }
+}
+
