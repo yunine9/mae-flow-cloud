@@ -14,6 +14,7 @@ import {
   ISSUE_STATUS_TEXT,
   type AuthUser,
   type DtsTicketBrief,
+  type DtsTicketDetail,
   type IssueDetail,
   type IssueStage,
   type IssueSummary,
@@ -23,6 +24,7 @@ import {
   bindIssueTicket,
   controlIssue,
   createIssue,
+  getDtsTicketDetail,
   getIssue,
   getIssueAnalysis,
   getIssueTimeline,
@@ -341,6 +343,23 @@ function ManualRegister({
   </form>;
 }
 
+/** 将 DTS 描述中的 <img src="https://dts-xxx/..."> 或 <img src="/v1/nfs/...">
+ *  重写为本地代理 URL /issues/dts-file?path=...,避免跨域无 cookie 问题。 */
+function resolveDtsImages(html: string | undefined): string {
+  if (!html) return "";
+  // 匹配绝对路径: src="https://dts-szv.clouddragon.huawei.com/v1/nfs/..."
+  html = html.replace(
+    /(<img\s[^>]*src=")https?:\/\/[^/"]*(\/[^"]*)(")/gi,
+    `$1/issues/dts-file?path=$2$3`,
+  );
+  // 兜底匹配相对路径: src="/v1/nfs/..."
+  html = html.replace(
+    /(<img\s[^>]*src=")(\/v1\/[^"]*)(")/gi,
+    `$1/issues/dts-file?path=$2$3`,
+  );
+  return html;
+}
+
 function DtsRegister({
   viewer,
   onCreated,
@@ -356,9 +375,29 @@ function DtsRegister({
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
 
+  // 模糊搜索:单号/标题/版本,大小写不敏感。
+  const [query, setQuery] = useState("");
+  const filtered = useMemo(() => {
+    if (!tickets) return undefined;
+    const q = query.trim().toLowerCase();
+    if (!q) return tickets;
+    return tickets.filter((t) =>
+      t.ticket.toLowerCase().includes(q)
+      || t.title.toLowerCase().includes(q)
+      || (t.version && t.version.toLowerCase().includes(q))
+    );
+  }, [tickets, query]);
+
+  // 展开详情:同一张单只拉一次(缓存),失败不影响列表已有字段展示。
+  const [expandedTicket, setExpandedTicket] = useState<string | null>(null);
+  const [detailCache, setDetailCache] = useState<Record<string, DtsTicketDetail>>({});
+  const [detailLoading, setDetailLoading] = useState(false);
+
   async function load() {
     setLoading(true);
     setNote("");
+    setQuery("");
+    setExpandedTicket(null);
     try {
       setTickets(await listDtsTickets());
     } catch (reason) {
@@ -366,6 +405,25 @@ function DtsRegister({
       setNote(String(reason instanceof Error ? reason.message : reason));
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function toggleExpand(ticketNo: string) {
+    if (expandedTicket === ticketNo) {
+      setExpandedTicket(null);
+      return;
+    }
+    setExpandedTicket(ticketNo);
+    if (!detailCache[ticketNo]) {
+      setDetailLoading(true);
+      try {
+        const detail = await getDtsTicketDetail(ticketNo);
+        setDetailCache((prev) => ({ ...prev, [ticketNo]: detail }));
+      } catch {
+        // 详情获取失败不影响展示列表中已有的字段
+      } finally {
+        setDetailLoading(false);
+      }
     }
   }
 
@@ -401,19 +459,80 @@ function DtsRegister({
       </button>
       {note && <span className="issue-dts-note">{note}</span>}
     </div>
-    {tickets && tickets.length > 0 && <div className="issue-dts-list" role="table">
-      {tickets.map((ticket) => <label key={ticket.ticket}
-        className={`issue-dts-row${selected === ticket.ticket ? " on" : ""}`}>
-        <input type="checkbox" checked={selected === ticket.ticket}
-          onChange={(event) => setSelected(event.target.checked ? ticket.ticket : "")} />
-        <span className="issue-dts-ticket">{ticket.ticket}</span>
-        <span className="issue-dts-title">{ticket.title || "(无标题)"}</span>
-        {ticket.status && <span className="issue-dts-status">{ticket.status}</span>}
-      </label>)}
-      <p className="issue-dts-hint">
-        勾选要发起的问题单(当前一次一张,批量处理即将开放)。
-      </p>
-    </div>}
+    {tickets && tickets.length > 0 && <>
+      <div className="issue-dts-search">
+        <input
+          type="search"
+          value={query}
+          placeholder="搜索问题单号、标题、版本…"
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        {query && <span className="issue-dts-search-count">
+          {filtered?.length ?? 0} / {tickets.length} 条
+        </span>}
+      </div>
+      <div className="issue-dts-list" role="table">
+        {filtered && filtered.length > 0
+          ? filtered.map((ticket) => {
+            const isExpanded = expandedTicket === ticket.ticket;
+            const detail = detailCache[ticket.ticket];
+            return <div key={ticket.ticket}
+              className={`issue-dts-row${selected === ticket.ticket ? " on" : ""}${isExpanded ? " expanded" : ""}`}>
+              <label className="issue-dts-row-main">
+                <input type="checkbox" checked={selected === ticket.ticket}
+                  onChange={(event) => setSelected(event.target.checked ? ticket.ticket : "")} />
+                <span className="issue-dts-ticket">{ticket.ticket}</span>
+                <span className="issue-dts-title">{ticket.title || "(无标题)"}</span>
+                {ticket.status && <span className="issue-dts-status">{ticket.status}</span>}
+                <button type="button" className="issue-dts-expand"
+                  aria-expanded={isExpanded}
+                  onClick={(e) => { e.preventDefault(); toggleExpand(ticket.ticket); }}>
+                  {isExpanded ? "▼" : "▶"}
+                </button>
+              </label>
+              {isExpanded && <div className="issue-dts-detail">
+                {detailLoading && <span className="issue-dts-detail-loading">加载详情…</span>}
+                <dl className="issue-dts-detail-fields">
+                  <div>
+                    <dt>问题级别</dt>
+                    <dd>{detail?.severity || ticket.severity || "—"}</dd>
+                  </div>
+                  <div>
+                    <dt>问题版本</dt>
+                    <dd>{detail?.version || ticket.version || "—"}</dd>
+                  </div>
+                  <div>
+                    <dt>问题链接</dt>
+                    <dd>{(detail?.url || ticket.url)
+                      ? <a href={detail?.url || ticket.url} target="_blank" rel="noreferrer">
+                          {detail?.url || ticket.url}
+                        </a>
+                      : "—"}</dd>
+                  </div>
+                  <div>
+                    <dt>提单人</dt>
+                    <dd>{detail?.submitter || ticket.submitter || "—"}</dd>
+                  </div>
+                  <div>
+                    <dt>问题描述</dt>
+                    <dd className="issue-dts-detail-html"
+                      dangerouslySetInnerHTML={{
+                        __html: resolveDtsImages(detail?.description || ticket.description)
+                          || "(暂无描述)",
+                      }}
+                    />
+                  </div>
+                </dl>
+              </div>}
+            </div>;
+          })
+          : <p className="issue-dts-hint">没有匹配的问题单。</p>
+        }
+        <p className="issue-dts-hint">
+          勾选要发起的问题单(当前一次一张,批量处理即将开放)。
+        </p>
+      </div>
+    </>}
     {tickets && tickets.length === 0 && <p className="issue-dts-hint">
       你的名下当前没有问题单。
     </p>}

@@ -1692,6 +1692,22 @@ export interface DtsTicketBrief {
   ticket: string;
   title: string;
   status?: string;
+  version?: string;
+  severity?: string;
+  submitter?: string;
+  url?: string;
+  description?: string;
+}
+
+/** 单张问题单详情(页签展开用):列表字段优先,详情接口补齐描述全文。 */
+export interface DtsTicketDetail {
+  ticket: string;
+  title: string;
+  description?: string;
+  severity?: string;
+  version?: string;
+  url?: string;
+  submitter?: string;
 }
 
 export interface IssueEnvironmentForm {
@@ -1787,6 +1803,10 @@ export function controlIssue(id: string, input: {
 
 export function listDtsTickets(): Promise<DtsTicketBrief[]> {
   return issueFetch("/issues/dts").then((body) => body.tickets ?? []);
+}
+
+export function getDtsTicketDetail(ticket: string): Promise<DtsTicketDetail> {
+  return issueFetch(`/issues/dts/${encodeURIComponent(ticket)}`);
 }
 
 // ---- 问题会话的视图旁路(服务端 src/issueFlow/sessionView.ts 的镜像) ----

@@ -791,6 +791,20 @@ export class IssueFlowService {
     return this.options.dts.listByOwner(account);
   }
 
+  async getDtsDetail(ticket: string) {
+    if (!this.options.dts) {
+      throw new IssueControlError("DTS 网关未配置(部署需 --dts-mcp-url 与 token)");
+    }
+    return this.options.dts.detail(ticket);
+  }
+
+  async proxyDtsFile(path: string) {
+    if (!this.options.dts) {
+      throw new IssueControlError("DTS 网关未配置(部署需 --dts-mcp-url 与 token)");
+    }
+    return this.options.dts.proxyFile(path);
+  }
+
   // ---- 关停 ----
 
   async shutdown(): Promise<void> {
