@@ -189,6 +189,7 @@ import {
   PRE_PUSH_EXECUTION_SCHEMA,
   attestPrePushExecution,
   beginPrePushAttempt,
+  createPrePushVerification,
   getReusablePushReceipt,
   observePrePushRevision,
   recordPrePushReport,
@@ -4937,17 +4938,39 @@ export class TaskService {
     const excluded = snapshot.workspace_paths.filter((path) =>
       !paths.includes(path));
     if (closesFeedback && !samePaths(paths, committed)) {
+      // 用户拍板(2026-08-28):清单调整是机械活——宿主直接按勾选
+      // 整理提交并放行,不再打回 Agent 重新检视,也不触发重新编译;
+      // 新 HEAD 绑用户跳过语义,编译与 UT 交由权威流水线裁决(与
+      // "停止并直推"同一条出路,拍板与未复验的事实都如实留痕)。
       const mustRemove = committed.filter((path) => !paths.includes(path));
       const mustAdd = paths.filter((path) => !committed.includes(path));
-      const differences = [
-        mustRemove.length
-          ? `当前 commit 仍包含未勾选文件：${describeDirtyPaths(mustRemove)}` : "",
-        mustAdd.length
-          ? `勾选文件尚未进入 commit：${describeDirtyPaths(mustAdd)}` : "",
-      ].filter(Boolean).join("；");
-      throw new TaskControlError(
-        `${differences}。不能按“通过”放行；请选择调整选项，让 Agent 按清单整理提交后重新检视。`,
-      );
+      await this.applyDeliverySelectionAdjustment(
+        task, snapshot.baseline, mustRemove, mustAdd);
+      const adjusted = await deliveryChangeSnapshot(task.cwd);
+      if (!adjusted?.baseline) {
+        throw new TaskControlError("清单整理提交后读取现场失败,请重试");
+      }
+      const adjustedExcluded = adjusted.workspace_paths.filter((path) =>
+        !paths.includes(path));
+      const actions = [
+        mustRemove.length ? `剔除 ${describeDirtyPaths(mustRemove)}` : "",
+        mustAdd.length ? `补入 ${describeDirtyPaths(mustAdd)}` : "",
+      ].filter(Boolean).join(";");
+      return {
+        record: {
+          paths,
+          observed_paths: adjusted.workspace_paths,
+          excluded_paths: adjustedExcluded,
+          status: "confirmed",
+          waiting_id: waiting.waiting_id,
+          head: adjusted.head,
+          baseline: adjusted.baseline,
+          updated_at: new Date().toISOString(),
+        },
+        note: `${deliverySelectionNote(paths, adjustedExcluded)}\n`
+          + `(宿主已按确认清单机械整理提交:${actions};`
+          + "本地编译未复验,由权威流水线裁决)",
+      };
     }
     return {
       record: {
@@ -4962,6 +4985,64 @@ export class TaskService {
       },
       note: deliverySelectionNote(paths, excluded),
     };
+  }
+
+  /** 按用户确认的清单机械整理提交(用户拍板:剔除/补入是机械活,
+   * 不打回 Agent,也不重编)。剔除=回退到基线版本(基线没有的 git rm,
+   * 内容仍留在上一个提交的历史里可找回);补入=git add 工作区已有
+   * 改动。整理后绑新 HEAD 记 user_skipped:本地编译未复验的事实
+   * 如实留痕,权威裁决在绑 SHA 流水线。 */
+  private async applyDeliverySelectionAdjustment(
+    task: TaskState,
+    baseline: string,
+    remove: string[],
+    add: string[],
+  ): Promise<void> {
+    const cwd = task.cwd!;
+    const run = async (args: string[], what: string) => {
+      const result = await runSafeWorktreeGitAsync(cwd, args, {
+        timeoutMs: 60_000,
+        configs: [
+          ["user.name", "mae-flow-cloud"],
+          ["user.email", "cloud@mae-flow.local"],
+        ],
+      });
+      if (result.status !== 0) {
+        throw new TaskControlError(`按清单${what}失败: `
+          + String(result.stderr || result.error || "").slice(0, 300));
+      }
+      return result;
+    };
+    for (const path of remove) {
+      const inBaseline = await runSafeWorktreeGitAsync(cwd,
+        ["cat-file", "-e", `${baseline}:${path}`], { timeoutMs: 30_000 });
+      if (inBaseline.status === 0) {
+        await run(["checkout", baseline, "--", path], `回退 ${path}`);
+      } else {
+        await run(["rm", "-f", "-q", "--", path], `移除 ${path}`);
+      }
+    }
+    if (add.length) await run(["add", "--", ...add], "补入勾选文件");
+    const staged = await runSafeWorktreeGitAsync(cwd,
+      ["diff", "--cached", "--quiet"], { timeoutMs: 30_000 });
+    if (staged.status !== 0) {
+      const summary = [
+        remove.length ? `剔除 ${remove.length} 个未勾选文件` : "",
+        add.length ? `补入 ${add.length} 个勾选文件` : "",
+      ].filter(Boolean).join("、");
+      await run(["commit", "-m",
+        `chore: 按推送前人工确认整理交付清单——${summary}`], "整理提交");
+    }
+    const at = new Date().toISOString();
+    const revision = await this.prePushRevision(task);
+    this.setPrePushState(task, {
+      ...createPrePushVerification(revision, at),
+      state: "user_skipped",
+      message: "用户确认调整交付清单后直推;本地编译未复验,"
+        + "编译与 UT 交由权威流水线裁决",
+      updated_at: at,
+    });
+    this.persist(task);
   }
 
   /** 所有入口的决定都在这里收口：先到生效；选项、自由说明与服务端

@@ -332,6 +332,7 @@ export function renderPrePushBuildGuidance(profile: PrePushBuildProfile): string
 
   if (profile.stacks.includes("cpp")) {
     lines.push(
+      "C++ 动手前先看能力目录里有没有构建类 skill（如 mae-remote-build）：有就先读它——里面是团队蒸馏过的真实命令与增量/全量时机，比自行摸索准确得多；skill 与本手册冲突时以 skill 为准（它更贴仓库事实）。",
       `C++/native：优先从 Maven 插件进入。当前内网经验的候选命令是 \`${mvn} compile -DDT_test=UT -DDT_run=true\`；首次完整基线或确认生成物陈旧时才考虑 \`${mvn} clean compile -DDT_test=UT -DDT_run=true\`。这只是候选，必须先核对 pom、仓库脚本与插件说明。`,
       "必须从输出确认 UT 进程确实执行并产生用例/结果摘要，不能只看 Maven BUILD SUCCESS 就把它记作 UT。若 DT 参数只生成或编译测试，则继续使用仓库生成目录中的 ctest --output-on-failure 或仓库专用 runner，最终上报真正执行测试的命令。",
       "C++ 定向 UT 可按仓库支持使用 `-DDT_COV_INCLUDES=\"*ModuleName*\"` 或 `-DDT_COV_EXCLUDES=\"*ModuleName*\"`；先缩小修复反馈环，收口前再覆盖仓库要求范围。",

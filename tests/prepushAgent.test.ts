@@ -252,13 +252,29 @@ test("prepush gate: 拦住宿主秘密和危险删除，不误伤仓库 skill", 
     ["Bash", "echo $MODEL_API_KEY"],
     ["Bash", "printenv ACCESS_TOKEN"],
     ["Bash", "env | sort"],
-    ["Bash", "rm -rf build"],
     ["Bash", "sudo rm -fr target"],
     ["Bash", "git clean -fdx"],
     ["Bash", "git reset --hard HEAD"],
     ["Bash", "find . -type f -delete"],
+    // 产物豁免不外溢:源码/内核现场/上级路径/变量参数照拒。
+    ["Bash", "rm -rf src"],
+    ["Bash", "rm -rf target ../other"],
+    ["Bash", "rm -rf /workspace/target"],
+    ["Bash", "rm -rf ${SUB_DIR}/build"],
+    ["Bash", "rm -rf target src/main"],
   ]) {
     assert.equal(prePushSecurityDecision(tool, value)?.action, "deny", `${tool}: ${value}`);
+  }
+  // 构建产物的批量清理是正当动作(内网实锤:playbook 教删陈旧 CMake
+  // 生成目录,门禁不许一刀切拦死)。
+  for (const command of [
+    "rm -rf build",
+    "rm -rf target/build",
+    "rm -rf website/node_modules",
+    "rm -rf target/build/CMakeFiles target/build/CMakeCache.txt",
+    "rm -rf cmake-build-debug",
+  ]) {
+    assert.equal(prePushSecurityDecision("Bash", command), undefined, command);
   }
   assert.equal(prePushSecurityDecision("Read", ".claude/skills/java/SKILL.md"), undefined);
   assert.equal(prePushSecurityDecision("Read", ".codex/skills/test/SKILL.md"), undefined);

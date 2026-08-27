@@ -217,13 +217,21 @@ export function prePushSecurityDecision(
   }
 
   // clean 生命周期交给真实构建工具；Agent 不需要原始递归强删能力。
+  // 例外(内网实锤:playbook 教它删陈旧 CMake 生成目录,门禁却一刀切
+  // 拦所有 rm -rf,自相矛盾):目标**全部**是公认构建产物路径时放行。
+  // 判不了的(变量/反引号/绝对路径/..)一律按拒处理,fail-closed。
   // 同时拦住 find -delete，防止工作区被不可恢复地批量清空。
-  const rmCommands = source.match(/\brm\s+[^;&|\n]*/gi) ?? [];
+  const rmCommands = source.match(/(?:\bsudo\s+)?\brm\s+[^;&|\n]*/gi) ?? [];
   for (const command of rmCommands) {
     const hasRecursive = /(?:^|\s)-(?!-)[^\s]*[rR][^\s]*|--recursive\b/.test(command);
     const hasForce = /(?:^|\s)-(?!-)[^\s]*f[^\s]*|--force\b/.test(command);
-    if (hasRecursive && hasForce) {
-      return DENY("禁止递归强制删除；请使用仓库构建工具的 clean 生命周期。");
+    // sudo 不享受产物豁免:正常构建清理从不需要提权。
+    const viaSudo = /^\s*sudo\b/i.test(command);
+    if (hasRecursive && hasForce
+        && (viaSudo || !rmTargetsAreBuildArtifacts(command))) {
+      return DENY("递归强制删除仅放行构建产物目录（target/、build/、"
+        + "cmake-build*、CMakeFiles、CMakeCache.txt、node_modules 及其"
+        + "子路径，相对路径）；其余请使用仓库构建工具的 clean 生命周期。");
     }
   }
   if (/\bfind\b[^;&|\n]*\s-delete\b/i.test(source)) {
@@ -231,6 +239,25 @@ export function prePushSecurityDecision(
   }
 
   return undefined;
+}
+
+/** 递归强删的白名单判定:rm 的每个非选项参数都必须是公认的构建产物
+ * 路径。相对路径、无 ..、无 shell 展开(变量/反引号/引号内命令替换)
+ * 才有资格判;有一个参数判不了或不在名单,整条按拒。 */
+function rmTargetsAreBuildArtifacts(rmCommand: string): boolean {
+  if (/[`$]/.test(rmCommand)) return false;
+  const targets = rmCommand
+    .replace(/^\s*rm\s+/i, "")
+    .split(/\s+/)
+    .map((token) => token.replace(/^["']|["']$/g, ""))
+    .filter((token) => token && token !== "--" && !token.startsWith("-"));
+  if (!targets.length) return false;
+  const artifact = /^(?:\.\/)?(?:[\w.@+-]+\/)*(?:target|build|out|cmake-build[^/]*|CMakeFiles|node_modules)(?:\/[\w.@+*/-]*)?$|^(?:\.\/)?(?:[\w.@+-]+\/)*CMakeCache\.txt$/;
+  return targets.every((target) =>
+    !target.startsWith("/")
+    && !target.startsWith("~")
+    && !/(?:^|\/)\.\.(?:\/|$)/.test(target)
+    && artifact.test(target));
 }
 
 export function parsePrePushAgentReport(text: string): PrePushAgentReport | undefined {
