@@ -62,7 +62,7 @@ export const STAGE_LABELS: Record<IssueStage, string> = {
   switch_db: "换库",
   verify: "验证",
   submit_mr: "提交 MR",
-  done: "结束",
+  done: "问题闭环",
 };
 
 /** 2026-08-27 换词表前的旧值 → 新值。只在做读取迁移用,新代码不产旧值。 */

@@ -70,9 +70,9 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       + "(仅绑定了单号才有)/ align_issue=与用户对齐问题现象"
       + "/ locate_root=分析根因 / align_solution=对齐修复方案"
       + "/ modify_code=实施修改 / switch_db=换库 / verify=验证"
-      + "/ submit_mr=提交 MR / done=已给出结论(非问题也走它)。"
+      + "/ submit_mr=提交 MR / done=问题闭环=已给出结论,界面显示「问题闭环」(非问题也走它)。"
       + "阶段可跳过、可回退:用户推翻结论继续查,就从 done 切回去。"
-      + "done 只是'AI 已出结论',正式收口由用户归档。"
+      + "done 只是'AI 已出结论',正式收口由用户归档,两者不是一回事。"
       + `合法阶段: ${ISSUE_STAGES.join(" / ")}`,
     parameters: Type.Object({
       stage: Type.Union(ISSUE_STAGES.map((stage) => Type.Literal(stage)), {

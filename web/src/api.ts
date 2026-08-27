@@ -1643,7 +1643,7 @@ export const ISSUE_STAGE_TEXT: Record<IssueStage, string> = {
   switch_db: "换库",
   verify: "验证",
   submit_mr: "提交 MR",
-  done: "结束",
+  done: "问题闭环",
 };
 
 export interface IssueSummary {

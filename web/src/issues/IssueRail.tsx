@@ -41,7 +41,7 @@ export function IssueRail({ detail, busy, onAnswer, onReply,
           disabled={busy}
           onClick={onArchive}>归档收口</button>
         {/* 承旧 issue-done-hint 的引导文案;追问入口在左侧对话页签。 */}
-        <small>要继续追问就在左侧对话页签发言,AI 会把阶段从「结束」切回对应环节。</small>
+        <small>要继续追问就在左侧对话页签发言,把阶段从「问题闭环」切回对应环节即可。</small>
       </div>}
       {!waiting && !doneIdle && detail.status === "running" && <div className="issue-rail-card is-running">
         <strong><i className="issue-rail-pulse" aria-hidden />AI 正在推进</strong>
