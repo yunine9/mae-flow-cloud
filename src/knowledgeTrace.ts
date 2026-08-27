@@ -29,7 +29,7 @@ export interface KnowledgeTraceEvent extends KnowledgeResourceRef {
   ts: string;
   task_id: string;
   session_id: string;
-  session_role: "main" | "subagent" | "prepush" | "developer-assistant";
+  session_role: "main" | "subagent" | "prepush" | "developer-assistant" | "warmup";
   step?: string;
   action: KnowledgeAction;
   observed_path?: string;
@@ -69,6 +69,9 @@ function contained(root: string, target: string): boolean {
 function roleOf(sessionId: string): KnowledgeTraceEvent["session_role"] {
   if (sessionId.startsWith("child-")) return "subagent";
   if (sessionId.includes("prepush")) return "prepush";
+  // 预热会话 sessionId 就叫 "warmup";原来漏了这行,预热的 skill 消费
+  // 会被记成"主 Agent",排查时对不上号(实锤用户找不到消费在哪)。
+  if (sessionId.includes("warmup")) return "warmup";
   if (sessionId.includes("developer-assistant")) return "developer-assistant";
   return "main";
 }

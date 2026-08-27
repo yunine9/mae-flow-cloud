@@ -20,6 +20,7 @@ const ROLE = {
   main: "主 Agent",
   subagent: "子 Agent",
   prepush: "推送前编译",
+  warmup: "预热编译",
   "developer-assistant": "开发助手",
 } as const;
 
@@ -46,6 +47,11 @@ export function KnowledgeFootprint({
 }) {
   const consumed = usage?.resources.filter((item) =>
     item.loaded_count > 0 || item.read_count > 0) ?? [];
+  // "装载了但没被读"要能看见(实锤:用户排查 skill 为何没消费,界面上
+  // 一片空白——其实是进了能力目录、Agent 判断无关没读,两回事)。
+  const availableOnly = usage?.resources.filter((item) =>
+    item.kind === "skill" && item.available_count > 0
+    && item.loaded_count === 0 && item.read_count === 0) ?? [];
   return (
     <section className="knowledge-footprint" aria-labelledby="knowledge-footprint-title">
       <header>
@@ -88,6 +94,15 @@ export function KnowledgeFootprint({
       ) : (
         <div className="knowledge-footprint-empty">
           尚无已消费知识；项目规则、手选文档或 Skill 被加载/读取后会在这里出现。
+        </div>
+      )}
+
+      {availableOnly.length > 0 && (
+        <div className="knowledge-footprint-empty">
+          另有 {availableOnly.length} 个 Skill 已进入能力目录但未被读取
+          （{availableOnly.slice(0, 4).map((item) => item.name).join("、")}
+          {availableOnly.length > 4 ? " 等" : ""}）——已在模型眼前，
+          Agent 判断与当前工作无关时不读；装载记录在下方消费明细里。
         </div>
       )}
 

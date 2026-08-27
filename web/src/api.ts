@@ -706,7 +706,7 @@ export interface TaskKnowledgeUsage {
     selected?: boolean;
     ts: string;
     session_id: string;
-    session_role: "main" | "subagent" | "prepush" | "developer-assistant";
+    session_role: "main" | "subagent" | "prepush" | "developer-assistant" | "warmup";
     step?: string;
     action: KnowledgeAction;
     observed_path?: string;
