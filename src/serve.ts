@@ -77,18 +77,28 @@ const DEMO_SCRIPT: Scene[] = [
  * 参数不必动文件。文件坏了直接拒启,不静默忽略:带着一半配置起服,
  * 比不起服更害人(你以为切了真件,其实还在假件上)。
  *
+ * 不带 --config 时自动装载 /etc/mae-flow-cloud/serve.json(存在才装):
+ * 服务器裸起即得全量配置,排障临时参数走命令行覆盖。
+ *
  * 为什么不用环境变量堆:十几个 MAE_FLOW_* 散在 systemd 单元里没法
  * review;一个 JSON 文件即配置面清单,git 里能 diff(密钥除外——
  * apiKey 类仍走 secrets.env / models.json,权限 600,永不进仓)。
  */
 const CONFIG: Record<string, unknown> = (() => {
   const index = process.argv.indexOf("--config");
-  if (index < 0) return {};
-  const path = process.argv[index + 1];
-  if (!path) {
+  // 显式 --config 给路径;不给则自动装载部署侧固定位置的 serve.json——
+  // 内网服务器 npm run serve 裸起即得全量配置,systemd 单元不必再拼一串
+  // 参数。自动路径不存在不算错(视为无配置文件);显式给了 --config 却
+  // 缺值/读不到才是错,照旧拒启。
+  const DEFAULT_CONFIG_PATH = "/etc/mae-flow-cloud/serve.json";
+  if (index >= 0 && !process.argv[index + 1]) {
     console.error("[serve] --config 需要文件路径");
     process.exit(2);
   }
+  const path = index >= 0
+    ? process.argv[index + 1]
+    : (existsSync(DEFAULT_CONFIG_PATH) ? DEFAULT_CONFIG_PATH : undefined);
+  if (!path) return {};
   try {
     const parsed = JSON.parse(readFileSync(path, "utf-8"));
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
@@ -641,32 +651,44 @@ async function main(): Promise<void> {
   const mcpTokenFile = flag("--mcp-token-file")
     ?? (existsSync("/etc/mae-flow-cloud/mcp-token")
       ? "/etc/mae-flow-cloud/mcp-token" : undefined);
-  let mcpToken: string | undefined;
+  // token 不在启动时读定值——只校验文件在场且非空(fail-fast),之后
+  // 每次请求经闭包重读文件。token 在网关侧轮换后服务不用重启;运行时
+  // 文件被删/不可读则降级为不带头,让网关 401 显形而不是拖垮整个进程。
+  let mcpTokenProvider: (() => string) | undefined;
   if (mcpTokenFile) {
     try {
-      mcpToken = readFileSync(mcpTokenFile, "utf-8").trim();
-      if (!mcpToken) throw new Error("token 文件为空");
-      console.log(`[serve] MCP token 已装载: ${mcpTokenFile}`);
+      const initial = readFileSync(mcpTokenFile, "utf-8").trim();
+      if (!initial) throw new Error("token 文件为空");
+      console.log(`[serve] MCP token 文件(动态读取): ${mcpTokenFile}`);
     } catch (error) {
       console.error(`[serve] MCP token 读取失败,拒绝启动: ${String(error)}`);
       process.exit(2);
     }
+    mcpTokenProvider = () => {
+      try {
+        return readFileSync(mcpTokenFile, "utf-8").trim();
+      } catch {
+        return "";
+      }
+    };
   }
-  if (dtsMcpUrl && !mcpToken) {
+  if (dtsMcpUrl && !mcpTokenProvider) {
     console.error("[serve] 配置了 MCP 网关地址但没有 token:"
       + "请配置 --mcp-token-file(正式服务器为 /etc/mae-flow-cloud/mcp-token)");
     process.exit(2);
   }
   let issueDts: DtsGateway | undefined;
+  let mcpGateway: McpGateway | undefined;
   if (dtsMock) {
     issueDts = new MockDtsGateway((message) => console.log(`  [issue-dts] ${message}`));
     console.log("[serve] 问题流 DTS 网关: MOCK(--dts-mock,单据 DTS-2026-1001~1005,"
       + "仅供外部环境测试,别接真数据)");
-  } else if (dtsMcpUrl && mcpToken) {
-    issueDts = new McpDtsGateway(new McpGateway({
-      url: dtsMcpUrl, token: mcpToken,
+  } else if (dtsMcpUrl && mcpTokenProvider) {
+    mcpGateway = new McpGateway({
+      url: dtsMcpUrl, tokenProvider: mcpTokenProvider,
       log: (message) => console.log(`  [issue-dts] ${message}`),
-    }));
+    });
+    issueDts = new McpDtsGateway(mcpGateway);
     console.log(`[serve] 问题流 DTS 网关: ${dtsMcpUrl}`);
   }
   // 运维工具(拉日志/换库):在场即接上,凭据由保险箱解密后经环境
@@ -841,7 +863,7 @@ async function main(): Promise<void> {
   // 内网是明文 http(会话 cookie 可被同网段嗅探,正式部署前加反代
   // TLS);工作机合盖=全员断线,它是工作站不是服务器。
   const server = createTaskServer(service, {
-    webRoot, auth, lubanApproval, issueFlow,
+    webRoot, auth, lubanApproval, issueFlow, mcpGateway,
   });
   let terminating = false;
   const terminate = async (signal: "SIGTERM" | "SIGINT") => {

@@ -190,6 +190,7 @@ export function createTaskServer(
     auth?: LocalAuth;
     lubanApproval?: LubanApprovalGateway;
     issueFlow?: import("./issueFlow/service.ts").IssueFlowService;
+    mcpGateway?: import("./issueFlow/gateways.ts").McpGateway;
   } = {},
 ): Server {
   return createServer(async (request, response) => {
@@ -545,6 +546,22 @@ export function createTaskServer(
           throw error;
         }
         return json(response, 404, { error: "未知设置接口" });
+      }
+
+      // MCP 网关健康检查(GET /mcp-health):握手 + tools/list,一次
+      // 验证连通性、token 有效性与工具清单(inputSchema 原样带回——
+      // 华为网关 arg0/arg1 的参数映射就靠它对拍)。无鉴权:探活端点
+      // 只暴露工具名与 schema,不含 token 也不含单据数据。网关没配
+      // 返回 200+ok:false(服务活着,MCP 未启用不是故障);连不上才 502。
+      if (request.method === "GET" && url.pathname === "/mcp-health") {
+        if (!options.mcpGateway) {
+          return json(response, 200, {
+            ok: false,
+            error: "MCP 网关未配置(需 --dts-mcp-url 与 --mcp-token-file)",
+          });
+        }
+        const result = await options.mcpGateway.healthCheck();
+        return json(response, result.ok ? 200 : 502, result);
       }
 
       // 问题流 API(/issues/*):独立于任务命名空间;未启用时由路由

@@ -9,6 +9,8 @@
  *   GET  /issues                      → 我的会话列表
  *   POST /issues                      → 登记(201 摘要)
  *   GET  /issues/dts                  → DTS 名下问题单(拉单)
+ *   GET  /issues/dts/:ticket          → 单张问题单详情(拉单页签展开用)
+ *   GET  /issues/dts-file?path=…      → 描述内嵌图代理(后端带回二进制)
  *   GET  /issues/:id                  → 详情(状态 + 消息 + 问题卡)
  *   GET  /issues/:id/timeline         → 耗时与卡点(纯函数归纳,只读)
  *   GET  /issues/:id/analysis         → 结论文档 issue-analysis.md
@@ -200,6 +202,44 @@ export async function handleIssueRoutes(
       }
       const tickets = await issueFlow.listDts(String(viewer?.username ?? ""));
       return done(200, { tickets });
+    }
+
+    // 单张问题单详情(页签展开用):登录即可查本人名下任意单。
+    if (method === "GET" && parts[1] === "dts" && parts.length === 3) {
+      if (viewer?.role === "admin") {
+        return done(403, { error: "管理员不处理问题单" });
+      }
+      const ticket = decodeURIComponent(parts[2]);
+      if (!ticket) return done(400, { error: "缺少问题单号" });
+      const detail = await issueFlow.getDtsDetail(ticket);
+      return done(200, detail);
+    }
+
+    // DTS 文件代理(GET /issues/dts-file?path=/v1/nfs/...):描述内嵌
+    // 图的浏览器直连跨域且无 cookie,由后端带同源 token 回取二进制。
+    // path 只收站内绝对路径(/开头),不成为任意外链跳板。
+    if (method === "GET" && parts[1] === "dts-file" && parts.length === 2) {
+      if (viewer?.role === "admin") {
+        return done(403, { error: "管理员不处理问题单" });
+      }
+      const path = String(
+        new URL(request.url ?? "", "http://x").searchParams.get("path") ?? "");
+      if (!path || !path.startsWith("/")) {
+        return done(400, { error: "缺少合法 path 参数(须为站内绝对路径)" });
+      }
+      try {
+        const file = await issueFlow.proxyDtsFile(path);
+        response.writeHead(200, {
+          "content-type": file.contentType,
+          "cache-control": "public, max-age=86400",
+        });
+        response.end(file.data);
+      } catch (reason) {
+        return done(502, {
+          error: String(reason instanceof Error ? reason.message : reason),
+        });
+      }
+      return true;
     }
 
     const id = parts[1];

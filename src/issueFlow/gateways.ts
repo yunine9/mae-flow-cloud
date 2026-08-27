@@ -18,7 +18,11 @@
 
 export interface McpGatewayConfig {
   url: string;
-  token: string;
+  /** 静态 token(与 tokenProvider 二选一)。 */
+  token?: string;
+  /** 动态 token 读取函数:每次请求调用,token 文件轮换后无需重启。
+   * 优先级:tokenProvider > token;都未提供时请求不携带 x-auth-token。 */
+  tokenProvider?: () => string;
   /** 能力 → 工具名。真实工具名待 DTS 集成时对拍;缺省给常用名。 */
   toolNames?: Record<string, string>;
   log?: (message: string) => void;
@@ -48,13 +52,39 @@ export class McpGateway {
     return this.config.toolNames?.[capability] ?? fallback;
   }
 
+  /** 用 MCP 网关同源 token 请求 DTS 域的文件(如问题单描述里的图片),
+   * 返回二进制与 MIME。描述内嵌图是内网地址且无 cookie 可带,浏览器
+   * 直连必跨域失败——由后端代理一次,AI 会话页才有完整现场。 */
+  async fetchWithAuth(url: string): Promise<{ data: Buffer; contentType: string }> {
+    const headers: Record<string, string> = {};
+    const token = this.currentToken();
+    if (token) headers["x-auth-token"] = token;
+    const response = await this.fetchImpl(url, { headers });
+    if (!response.ok) {
+      throw new McpGatewayError(
+        `DTS 文件代理 HTTP ${response.status}: ${url}`);
+    }
+    const contentType = response.headers.get("content-type")
+      ?? "application/octet-stream";
+    const arrayBuf = await response.arrayBuffer();
+    return { data: Buffer.from(arrayBuf), contentType };
+  }
+
+  // token 每次请求现取现用:provider 在场优先,文件轮换后无需重启;
+  // 为空时不设头(而非报错),无认证网关也能走同一条路。
+  private currentToken(): string | undefined {
+    if (this.config.tokenProvider) return this.config.tokenProvider();
+    return this.config.token;
+  }
+
   private headers(): Record<string, string> {
     const headers: Record<string, string> = {
       "content-type": "application/json",
       // streamable HTTP 觅音:两种响应形态都要声明可收。
       accept: "application/json, text/event-stream",
-      "x-auth-token": this.config.token,
     };
+    const token = this.currentToken();
+    if (token) headers["x-auth-token"] = token;
     if (this.mcpSessionId) headers["mcp-session-id"] = this.mcpSessionId;
     return headers;
   }
@@ -163,9 +193,21 @@ export class McpGateway {
     args: Record<string, unknown>,
     timeoutMs = 60_000,
   ): Promise<unknown> {
+    // 华为 MCP 网关把 Java 方法参数映射成 arg0/arg1/... 且不保留参数
+    // 名(实测:命名参数传过去被丢弃为 null,见 docs/mcp-dynamic-token-
+    // and-healthcheck.md),所以按 Object.entries 的声明顺序补一份
+    // argN;原始命名参数同时保留——标准 MCP 网关忽略 argN 不受影响。
+    // **顺序敏感**:调用方必须按工具文档的参数顺序传参(JS 对象保持
+    // 插入序),排错位等于传错值。
+    const argN: Record<string, unknown> = {};
+    const entries = Object.entries(args);
+    for (let i = 0; i < entries.length; i++) {
+      argN[`arg${i}`] = entries[i][1];
+    }
+    const arguments_ = { ...args, ...argN };
     try {
       await this.ensureReady();
-      return await this.rpc("tools/call", { name: tool, arguments: args }, timeoutMs);
+      return await this.rpc("tools/call", { name: tool, arguments: arguments_ }, timeoutMs);
     } catch (error) {
       const message = String((error as Error)?.message ?? error);
       const sessionLost = /404|session|expired|not found/i.test(message);
@@ -173,7 +215,47 @@ export class McpGateway {
       this.ready = false;
       this.mcpSessionId = undefined;
       await this.ensureReady();
-      return await this.rpc("tools/call", { name: tool, arguments: args }, timeoutMs);
+      return await this.rpc("tools/call", { name: tool, arguments: arguments_ }, timeoutMs);
+    }
+  }
+
+  /** 健康检查:握手 + tools/list。失败返回 ok:false 而不抛异常——健康
+   * 检查的语义是"如实报告网关状态",不是把故障再炸一次给路由层。
+   * inputSchema 原样带回,华为网关的 arg0/arg1 形状要靠它对拍。
+   * tokenSource 按此刻实际取没取到 token 区分:provider 配了但文件刚
+   * 被删空,要显形为 未配置,不能谎报动态读取正常。 */
+  async healthCheck(timeoutMs = 15_000): Promise<{
+    ok: boolean;
+    tools?: Array<{ name: string; description?: string; inputSchema?: unknown }>;
+    error?: string;
+    tokenSource?: string;
+  }> {
+    const tokenSourceOf = () => this.currentToken()
+      ? (this.config.tokenProvider ? "动态文件读取" : "启动时固定")
+      : "未配置";
+    try {
+      await this.ensureReady();
+      const result = await this.rpc("tools/list", {}, timeoutMs) as {
+        tools?: Array<{ name?: string; description?: string; inputSchema?: unknown }>;
+      };
+      return {
+        ok: true,
+        tools: (result.tools ?? [])
+          .filter((t): t is { name: string; description?: string; inputSchema?: unknown } =>
+            Boolean(t.name))
+          .map((t) => ({
+            name: t.name,
+            description: t.description,
+            inputSchema: t.inputSchema,
+          })),
+        tokenSource: tokenSourceOf(),
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        error: String((error as Error)?.message ?? error),
+        tokenSource: tokenSourceOf(),
+      };
     }
   }
 }
@@ -205,17 +287,31 @@ export interface DtsTicketBrief {
   ticket: string;
   title: string;
   status?: string;
+  /** B 版本(DTS 字段 sProdBNoName);R 版本不用。 */
+  version?: string;
+  severity?: string;
+  submitter?: string;
+  url?: string;
+  description?: string;
 }
 
 export interface DtsTicketDetail {
   ticket: string;
   title: string;
   content: string;
+  /** 完整描述(batchQueryTicket 的 detailDesc,HTML)。 */
+  description?: string;
+  severity?: string;
+  version?: string;
+  url?: string;
+  submitter?: string;
 }
 
 export interface DtsGateway {
   listByOwner(account: string): Promise<DtsTicketBrief[]>;
   detail(ticket: string): Promise<DtsTicketDetail>;
+  /** DTS 域文件(描述内嵌图等)按单据同源凭据代理回取。 */
+  proxyFile(path: string): Promise<{ data: Buffer; contentType: string }>;
 }
 
 /** 从网关文本里尽力解出单据列表。真实形状待 DTS 对拍(遗留),
@@ -240,6 +336,12 @@ function parseTicketList(raw: string): DtsTicketBrief[] {
       ticket: String(record.ticket ?? record.id ?? record["单号"] ?? ""),
       title: String(record.title ?? record.subject ?? record["标题"] ?? ""),
       status: record.status === undefined ? undefined : String(record.status),
+      version: record.version === undefined ? undefined : String(record.version),
+      severity: record.severity === undefined ? undefined : String(record.severity),
+      submitter: record.submitter === undefined ? undefined : String(record.submitter),
+      url: record.url === undefined ? undefined : String(record.url),
+      description: record.description === undefined
+        ? undefined : String(record.description),
     };
   }).filter((item) => item.ticket);
 }
@@ -247,21 +349,136 @@ function parseTicketList(raw: string): DtsTicketBrief[] {
 export class McpDtsGateway implements DtsGateway {
   constructor(private readonly gateway: McpGateway) {}
 
+  /** DTS 文件域域名(描述内嵌图的 host)。与 MCP 网关不是一域,当前
+   * 内网部署只有这一个文件域,先写死;多环境再升配置。 */
+  private static readonly DTS_FILE_ORIGIN =
+    "https://dts-szv.clouddragon.huawei.com";
+
+  async proxyFile(path: string): Promise<{ data: Buffer; contentType: string }> {
+    return this.gateway.fetchWithAuth(
+      `${McpDtsGateway.DTS_FILE_ORIGIN}${path}`);
+  }
+
   async listByOwner(account: string): Promise<DtsTicketBrief[]> {
+    // 工具名与参数形状按真实 DTS 网关对拍落地(占位名 list_issues 在
+    // 真实网关不存在):listByVersionAndHead 共 14 参按声明顺序映射
+    // arg0-arg13;查本人名下用 otherConditions.currentHandler 精确
+    // 匹配(EqualName),pageIndex/pageSize 是前两个位置参数。
     const result = await this.gateway.call(
-      this.gateway.toolName("list", "list_issues"),
-      { owner: account, assignee: account },
+      this.gateway.toolName("list", "listByVersionAndHead"),
+      {
+        pageIndex: 1,
+        pageSize: 200,
+        pbiId: "",
+        productType: "PBI",
+        filterId: "",
+        workBenchViewId: "",
+        brief: "",
+        dtsNos: [],
+        dtsStatus: [],
+        severity: [],
+        convertAttachment: false,
+        fields: [],
+        otherConditions: [{
+          fieldName: "currentHandler",
+          operator: "EqualName",
+          value: [account],
+        }],
+        orderBy: [],
+      },
     );
-    return parseTicketList(mcpResultText(result));
+    const raw = mcpResultText(result);
+    // 真实返回形状 {"status":"success","result":{"datas":[...]}}(单号
+    // 在 dtsBizNo/简要描述在 briefDesc/状态名在 dtsStatusName);解不动
+    // 时退回通用解析器如实报错——契约再变也不静默给空列表。
+    try {
+      const parsed = JSON.parse(raw);
+      const datas = (parsed as {
+        status?: string;
+        result?: { datas?: Array<Record<string, unknown>> };
+      })?.result?.datas;
+      if ((parsed as { status?: string })?.status === "success"
+          && Array.isArray(datas)) {
+        return datas.map((item) => ({
+          ticket: String(item.dtsBizNo ?? ""),
+          title: String(item.briefDesc ?? ""),
+          status: item.dtsStatusName === undefined
+            ? undefined : String(item.dtsStatusName),
+          version: item.sProdBNoName !== undefined
+            ? String(item.sProdBNoName) : undefined,
+          severity: item.serverityNoName !== undefined
+            ? String(item.serverityNoName) : undefined,
+          submitter: item.creator !== undefined
+            ? String(item.creator) : undefined,
+          url: item.outerLinkUrl !== undefined
+            ? String(item.outerLinkUrl) : undefined,
+          description: item.briefDesc !== undefined
+            ? String(item.briefDesc) : undefined,
+        })).filter((item) => item.ticket);
+      }
+    } catch {
+      // 非 JSON 形状走 fallback。
+    }
+    return parseTicketList(raw);
   }
 
   async detail(ticket: string): Promise<DtsTicketDetail> {
+    // batchQueryTicket 按单号批量查详情(arg0=dtsNos, arg1=fields,
+    // arg2=attachmentView),取第一条作详情;标题从 briefDesc 补上——
+    // 原实现永远是空串。解不动时把原文整块带回,不编造。
     const result = await this.gateway.call(
-      this.gateway.toolName("detail", "get_issue_detail"),
-      { ticket, issue_id: ticket },
+      this.gateway.toolName("detail", "batchQueryTicket"),
+      {
+        dtsNos: [ticket],
+        fields: [],
+        attachmentView: false,
+      },
     );
-    const text = mcpResultText(result);
-    return { ticket, title: "", content: text };
+    const raw = mcpResultText(result);
+    try {
+      const parsed = JSON.parse(raw) as {
+        status?: string;
+        result?: { datas?: Array<Record<string, unknown>> };
+      };
+      if (parsed?.status === "success") {
+        const first = parsed.result?.datas?.[0];
+        if (first) {
+          const outerLink = first.outerLinkUrl !== undefined
+            ? String(first.outerLinkUrl) : undefined;
+          // 描述优先 detailDesc(完整 HTML),退回 briefDesc;里面 <img>
+          // 的站内相对路径(/v1/nfs/...)要用 DTS 域补全成绝对地址,
+          // 交给前端再重写为代理 URL。
+          let description = first.detailDesc !== undefined
+            ? String(first.detailDesc)
+            : String(first.briefDesc ?? "");
+          if (outerLink) {
+            try {
+              const dtsOrigin = new URL(outerLink).origin;
+              description = description.replace(
+                /(<img\s[^>]*src=")(\/[^"]*)(")/gi,
+                `$1${dtsOrigin}$2$3`,
+              );
+            } catch { /* URL 解析失败则不处理 */ }
+          }
+          return {
+            ticket: String(first.dtsBizNo ?? ticket),
+            title: String(first.briefDesc ?? ""),
+            content: raw,
+            description,
+            severity: first.serverityNoName !== undefined
+              ? String(first.serverityNoName) : undefined,
+            version: first.sProdBNoName !== undefined
+              ? String(first.sProdBNoName) : undefined,
+            url: outerLink,
+            submitter: first.creator !== undefined
+              ? String(first.creator) : undefined,
+          };
+        }
+      }
+    } catch {
+      // 非 JSON 形状走 fallback。
+    }
+    return { ticket, title: "", content: raw };
   }
 }
 
@@ -277,6 +494,9 @@ export class UnconfiguredDtsGateway implements DtsGateway {
     throw new McpGatewayError(this.reason);
   }
   async detail(_ticket: string): Promise<DtsTicketDetail> {
+    throw new McpGatewayError(this.reason);
+  }
+  async proxyFile(_path: string): Promise<{ data: Buffer; contentType: string }> {
     throw new McpGatewayError(this.reason);
   }
 }
@@ -325,6 +545,11 @@ export class MockDtsGateway implements DtsGateway {
     this.log?.(`[dts-mock] detail(${ticket}) → 查无此单`);
     throw new McpGatewayError(
       `DTS 查无此单: ${ticket}(mock 网关只认 DTS-2026-1001 ~ 1005)`);
+  }
+
+  /** mock 没有真实 DTS 域可代理——罐头单据不带内嵌图,如实报错。 */
+  async proxyFile(_path: string): Promise<{ data: Buffer; contentType: string }> {
+    throw new McpGatewayError("mock 网关没有可代理的 DTS 域文件(描述不含内嵌图)");
   }
 }
 
