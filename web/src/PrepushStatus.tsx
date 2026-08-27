@@ -124,19 +124,24 @@ export function PrepushBadge({
   onChanged?: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [skipArmed, setSkipArmed] = useState(false);
-  const [skipBusy, setSkipBusy] = useState(false);
-  const [skipError, setSkipError] = useState("");
-  const [retryBusy, setRetryBusy] = useState(false);
-  const [retryNote, setRetryNote] = useState("");
-  const [stopArmed, setStopArmed] = useState(false);
-  const [stopBusy, setStopBusy] = useState(false);
-  const [stopNote, setStopNote] = useState("");
+  const [confirming, setConfirming] = useState<"stop" | "skip" | "">("");
+  const [busy, setBusy] = useState<"stop" | "skip" | "retry" | "">("");
+  const [actionError, setActionError] = useState("");
   const prepush = task.delivery?.prepush;
   if (!prepush) return null;
   const skippable = canOperate
     && ["blocked", "environment_error"].includes(prepush.state);
   const view = viewOf(prepush.state);
+  const perform = (kind: "stop" | "skip" | "retry",
+    call: (id: string) => Promise<unknown>) => {
+    setBusy(kind);
+    setActionError("");
+    void call(task.id)
+      .then(() => { setOpen(false); onChanged?.(); })
+      .catch((reason) => setActionError(reason instanceof Error
+        ? reason.message : String(reason)))
+      .finally(() => { setBusy(""); setConfirming(""); });
+  };
   const cls = view.tone === "success" ? "is-passed"
     : view.tone === "danger" ? "is-failed"
       : view.tone === "repair" ? "is-repair" : "is-running";
@@ -157,98 +162,69 @@ export function PrepushBadge({
           <PrepushStatus prepush={prepush} placement="workspace" />
             <PrepushLiveLog taskId={task.id}
               active={prepushActive(prepush.state)} />
-            {canOperate && prepushActive(prepush.state) && (
-              /* 停止并直推(用户拍板:"把停止变为停止并直推流水线"):
-                 两步一次点完——中止本轮、如实收口停机账,随即走跳过
-                 链路绑 HEAD 直推,编译与 UT 交由权威流水线裁决。 */
-              <div className="prepush-rerun">
-                {stopNote && <p className="prepush-skip-error">{stopNote}</p>}
-                {!stopArmed ? (
-                  <button type="button" disabled={stopBusy}
-                    onClick={() => setStopArmed(true)}>
-                    停止编译,直推流水线
-                  </button>
-                ) : (
-                  <>
-                    <em>确定?中止本轮编译后直接推送当前 HEAD,编译与 UT 由权威流水线裁决;若代码真编译不过,会消耗一条流水线后进入流水线修复环。</em>
-                    <button type="button" disabled={stopBusy}
-                      onClick={() => {
-                        setStopBusy(true);
-                        setStopNote("");
-                        void stopPrepushVerification(task.id)
-                          .then(() => { setOpen(false); onChanged?.(); })
-                          .catch((reason) => setStopNote(reason instanceof Error
-                            ? reason.message : String(reason)))
-                          .finally(() => {
-                            setStopBusy(false);
-                            setStopArmed(false);
-                          });
-                      }}>
-                      {stopBusy ? "停止中…" : "确认停止并直推"}
-                    </button>
-                    <button type="button" disabled={stopBusy}
-                      onClick={() => setStopArmed(false)}>返回</button>
-                  </>
-                )}
-                <small>中止编译 Agent 与构建容器,已推进的修复提交保留;停止瞬间恰好编译通过的按通过继续。</small>
-              </div>
-            )}
             {canOperate && prepush.state !== "passed" && (
-              /* 人工重跑兼活性探针(实锤:部署重启杀掉在途轮后,现场
-                 停在"准备"没人能回答活着没有)。真在跑时服务端会拒绝
-                 并明说"正在进行"——那句拒绝本身就是答案。 */
-              <div className="prepush-rerun">
-                {retryNote && <p className="prepush-skip-error">{retryNote}</p>}
-                <button type="button" disabled={retryBusy}
-                  onClick={() => {
-                    setRetryBusy(true);
-                    setRetryNote("");
-                    void retryPrepushVerification(task.id)
-                      .then(() => { setOpen(false); onChanged?.(); })
-                      .catch((reason) => setRetryNote(reason instanceof Error
-                        ? reason.message : String(reason)))
-                      .finally(() => setRetryBusy(false));
-                  }}>
-                  {retryBusy ? "提交中…" : "重跑推送前编译"}
-                </button>
-                <small>失败停机或重启后卡住时用;正在编译时服务端会拒绝并说明。</small>
-              </div>
-            )}
-            {skippable && (
-              /* 失败停机后的人工出路:本地验证只是省流水线的前闸,
-                 权威裁决在绑 SHA 流水线。跳过绑当下 HEAD,新提交即失效。 */
-              <div className="prepush-skip">
-                <p>
-                  本地编译已失败停机。你可以跳过本地编译直接推送——
-                  编译与 UT 交由权威流水线裁决;若代码真编译不过,
-                  会消耗一条流水线后进入流水线修复环。
-                </p>
-                {skipError && <p className="prepush-skip-error">{skipError}</p>}
-                {!skipArmed ? (
-                  <button type="button" onClick={() => setSkipArmed(true)}>
-                    跳过本地编译,直接推送流水线
-                  </button>
-                ) : (
-                  <span className="prepush-skip-confirm">
-                    <em>确定?跳过只对当前 HEAD 有效。</em>
-                    <button type="button" disabled={skipBusy}
-                      onClick={() => {
-                        setSkipBusy(true);
-                        setSkipError("");
-                        void skipPrepushVerification(task.id)
-                          .then(() => { setOpen(false); onChanged?.(); })
-                          .catch((reason) => setSkipError(reason instanceof Error
-                            ? reason.message : String(reason)))
-                          .finally(() => {
-                            setSkipBusy(false);
-                            setSkipArmed(false);
-                          });
-                      }}>
-                      {skipBusy ? "提交中…" : "确认跳过"}
+              /* 统一操作栏(2026-08-28 用户点名重designed:三个叠放的
+                 虚线盒子太丑)。语义分色的胶囊按钮 + 一条内联确认条:
+                 停止/跳过要确认(拍板即产生外部动作),重跑直点(兼
+                 活性探针,真在跑时服务端拒绝并明说"正在进行")。 */
+              <div className="prepush-actions">
+                <span className="prepush-actions-label">人工操作</span>
+                {actionError && (
+                  <p className="prepush-actions-error">{actionError}</p>
+                )}
+                {confirming === "stop" ? (
+                  <div className="prepush-actions-confirm">
+                    <span>中止本轮编译,直接推送当前 HEAD 交流水线裁决;
+                      若编译不过会消耗一条流水线进入修复环。已推进的
+                      修复提交保留。</span>
+                    <button type="button" className="prepush-action-btn is-danger"
+                      disabled={busy === "stop"}
+                      onClick={() => perform("stop", stopPrepushVerification)}>
+                      {busy === "stop" ? "停止中…" : "确认停止并直推"}
                     </button>
-                    <button type="button" disabled={skipBusy}
-                      onClick={() => setSkipArmed(false)}>返回</button>
-                  </span>
+                    <button type="button" className="prepush-action-btn"
+                      disabled={busy === "stop"}
+                      onClick={() => setConfirming("")}>取消</button>
+                  </div>
+                ) : confirming === "skip" ? (
+                  <div className="prepush-actions-confirm">
+                    <span>跳过本地编译直接推送,编译与 UT 交由权威流水线
+                      裁决。跳过只绑当前 HEAD,新提交后自动失效。</span>
+                    <button type="button" className="prepush-action-btn is-warn"
+                      disabled={busy === "skip"}
+                      onClick={() => perform("skip", skipPrepushVerification)}>
+                      {busy === "skip" ? "提交中…" : "确认跳过"}
+                    </button>
+                    <button type="button" className="prepush-action-btn"
+                      disabled={busy === "skip"}
+                      onClick={() => setConfirming("")}>取消</button>
+                  </div>
+                ) : (
+                  <div className="prepush-actions-row">
+                    {prepushActive(prepush.state) && (
+                      <button type="button"
+                        className="prepush-action-btn is-danger"
+                        disabled={Boolean(busy)}
+                        onClick={() => setConfirming("stop")}
+                        title="中止本轮编译并直推流水线裁决">
+                        ⏹ 停止并直推流水线
+                      </button>
+                    )}
+                    {skippable && (
+                      <button type="button" className="prepush-action-btn is-warn"
+                        disabled={Boolean(busy)}
+                        onClick={() => setConfirming("skip")}
+                        title="跳过本地编译,由权威流水线裁决(绑当前 HEAD)">
+                        ⤼ 跳过,直推流水线
+                      </button>
+                    )}
+                    <button type="button" className="prepush-action-btn"
+                      disabled={Boolean(busy)}
+                      onClick={() => perform("retry", retryPrepushVerification)}
+                      title="失败停机或重启后卡住时用;正在编译时服务端会拒绝并说明,这句拒绝即是活性答案">
+                      {busy === "retry" ? "提交中…" : "↻ 重跑编译"}
+                    </button>
+                  </div>
                 )}
               </div>
             )}

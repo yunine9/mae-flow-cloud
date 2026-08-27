@@ -5848,47 +5848,70 @@ pre {
   background: var(--attention);
   animation: warmup-pulse 1.2s ease-in-out infinite;
 }
-.prepush-rerun {
-  margin-top: 10px;
-  padding: 10px 12px;
-  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
-  border: 1px dashed var(--line-strong);
-  border-radius: 9px;
-  background: var(--surface-soft);
+/* 推送前编译浮层的统一操作栏(用户点名重设计:叠放的虚线盒子太丑)。
+   分隔线+小标签定场,胶囊按钮按语义分色(危险=停止/警示=跳过/
+   中性=重跑),确认收进一条内联确认条,不再层层叠盒子。 */
+.prepush-actions {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   font-size: var(--font-size-assist);
+}
+.prepush-actions-label {
   color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .12em;
 }
-.prepush-rerun button {
-  padding: 5px 12px; border: 1px solid var(--line-strong); border-radius: 7px;
-  background: var(--surface); color: var(--text); font-weight: 700;
-  cursor: pointer;
-}
-.prepush-rerun button:disabled { opacity: .6; cursor: default; }
-.prepush-rerun p { flex-basis: 100%; margin: 0; }
-.prepush-skip {
-  margin-top: 10px;
-  padding: 10px 12px;
-  border: 1px solid var(--attention);
-  border-radius: 9px;
-  background: var(--attention-soft);
-  font-size: var(--font-size-assist);
-  color: var(--muted);
-}
-.prepush-skip p { margin: 0 0 8px; line-height: 1.55; }
-.prepush-skip-error { color: var(--danger); }
-.prepush-skip button {
-  padding: 6px 12px;
-  color: var(--attention);
-  border: 1px solid var(--attention);
-  border-radius: 7px;
-  background: transparent;
+.prepush-actions-error { margin: 0; color: var(--danger, #c33); }
+.prepush-actions-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.prepush-action-btn {
+  padding: 6px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
   font: inherit;
+  font-size: var(--font-size-assist);
   font-weight: 600;
+  line-height: 1.2;
   cursor: pointer;
+  transition: background .12s ease, border-color .12s ease, color .12s ease;
 }
-.prepush-skip button:disabled { opacity: .6; cursor: default; }
-.prepush-skip-confirm { display: inline-flex; align-items: center; gap: 8px; }
-.prepush-skip-confirm em { font-style: normal; color: var(--text-strong); }
+.prepush-action-btn:hover:not(:disabled) { background: var(--surface-soft); border-color: var(--text); }
+.prepush-action-btn:disabled { opacity: .55; cursor: default; }
+.prepush-action-btn.is-danger {
+  color: var(--danger, #c33);
+  border-color: color-mix(in srgb, var(--danger, #c33) 45%, transparent);
+}
+.prepush-action-btn.is-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger, #c33) 8%, var(--surface));
+  border-color: var(--danger, #c33);
+}
+.prepush-action-btn.is-warn {
+  color: var(--attention);
+  border-color: color-mix(in srgb, var(--attention) 45%, transparent);
+}
+.prepush-action-btn.is-warn:hover:not(:disabled) {
+  background: var(--attention-soft);
+  border-color: var(--attention);
+}
+.prepush-actions-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  color: var(--text);
+  line-height: 1.55;
+}
+.prepush-actions-confirm > span { flex: 1 1 260px; }
 .warmup-overlay {
   position: fixed;
   inset: 0;
