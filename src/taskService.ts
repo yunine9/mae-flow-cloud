@@ -129,6 +129,17 @@ import {
   type SelectedBusinessModule,
 } from "./businessModuleRuntime.ts";
 import {
+  resolveRepositoryProfiles,
+  type RepositoryProfile,
+} from "./repositoryProfiles.ts";
+import {
+  copyEngineeringKnowledgeSnapshots,
+  materializeEngineeringKnowledge,
+  publishedEngineeringKnowledge,
+  snapshotEngineeringKnowledge,
+  type SelectedEngineeringKnowledge,
+} from "./engineeringKnowledgeRuntime.ts";
+import {
   discoverRepositorySkills,
   type RepositorySkillCatalog,
   type RepositorySkillDescriptor,
@@ -503,6 +514,8 @@ export interface TaskSummary {
   repo_url?: string;
   /** 需求影响的全部仓库。repo_url 保留为单仓交付兼容字段。 */
   repositories?: string[];
+  /** 首次人工确认的仓库技术画像在下单时固定，后续修改只影响新任务。 */
+  repository_profiles?: RepositoryProfile[];
   /** 用户在下单时从各业务仓能力目录中明确选中的 Skill。空数组表示
    * 新任务明确不加载仓内 Skill；字段缺席仅用于兼容旧任务此前的全量
    * 自动加载。Skill 是建议上下文，不是流程步骤或完成证据。 */
@@ -514,6 +527,8 @@ export interface TaskSummary {
    * 适用场景和任务内路径目录交给 Agent，正文必须按需读取；模块后来
    * 更新不会改写运行中或历史任务。 */
   business_modules?: SelectedBusinessModule[];
+  /** 下单时匹配/选择并固定的团队工程知识（Skill 由团队 Skill 货架承载）。 */
+  engineering_knowledge?: SelectedEngineeringKnowledge[];
   /** 任务详情读侧投影：提供/加载/阅读的宿主事实，不参与任务落盘。 */
   knowledge_usage?: TaskKnowledgeUsage;
   /** 多仓时由 Chain 产物投影；单仓时是一个节点的退化图。 */
@@ -2342,6 +2357,7 @@ export class TaskService {
             selectedKnowledge: summary.repository_knowledge,
             selectedSkills: summary.repository_skills,
             businessModules: summary.business_modules,
+            engineeringKnowledge: summary.engineering_knowledge,
           })
         : undefined,
     };
@@ -2680,6 +2696,13 @@ export class TaskService {
       workspace: task.cwd,
       agentDir,
       hostSkillsDir: join(this.options.dataDir, "skills"),
+      knowledgeContext: {
+        repositories: task.summary.repositories ?? [],
+        technologies: [...new Set((task.summary.repository_profiles ?? [])
+          .flatMap((profile) => profile.technologies))],
+        businessModuleIds: (task.summary.business_modules ?? [])
+          .map((module) => module.id),
+      },
       repositorySkillPaths: [],
       repositorySkillResources: [],
       repositoryKnowledge: [],
@@ -3130,6 +3153,12 @@ export class TaskService {
       assets: number;
       updated_at: string;
     }>;
+    engineering_knowledge: Array<{
+      id: string; title: string; summary: string; when_to_use: string;
+      form: "document" | "rule" | "example";
+      business_module_ids: string[]; repositories: string[];
+      technologies: string[];
+    }>;
     /** 服务级缺的配置(管理员去补)。非空=不给下单。 */
     blockers: Array<{ key: string; label: string; where: "admin" | "me" }>;
     /** 本部署要不要这两把个人令牌(由形态决定,见下方注释)。 */
@@ -3143,6 +3172,8 @@ export class TaskService {
       repositories: string[]; revision: number; assets: number;
       updated_at: string;
     }> = [];
+    let engineeringKnowledge: ReturnType<typeof publishedEngineeringKnowledge>
+      = [];
     try {
       businessModules = listBusinessModules(this.options.dataDir).modules
         .filter((module) => module.status === "active")
@@ -3160,6 +3191,12 @@ export class TaskService {
     } catch (error) {
       // 模块知识是可选上下文；目录损坏要告警，但不能让所有人无法下单。
       this.options.log?.(`[business-modules] 下单目录读取失败(fail-open): ${error}`);
+    }
+    try {
+      engineeringKnowledge = publishedEngineeringKnowledge(this.options.dataDir);
+    } catch (error) {
+      this.options.log?.(
+        `[engineering-knowledge] 下单目录读取失败(fail-open): ${String(error)}`);
     }
     // 每条缺项**只在它真会咬人时才拦**:纯会话形态(不接代码仓)拦
     // Git 令牌毫无道理,没接通知端点拦通知令牌也一样——一刀切的门禁
@@ -3183,6 +3220,17 @@ export class TaskService {
       baseline: { enabled: !!this.options.host, default: "master" },
       workflows: workflowChoices(this.options.host?.kernelRoot),
       business_modules: businessModules,
+      engineering_knowledge: engineeringKnowledge
+        .map((item) => ({
+          id: item.id,
+          title: item.title,
+          summary: item.summary,
+          when_to_use: item.when_to_use,
+          form: item.form as "document" | "rule" | "example",
+          business_module_ids: item.business_module_ids,
+          repositories: item.repositories,
+          technologies: item.technologies,
+        })),
       blockers,
       needs: {
         // 个人令牌该不该要,由部署形态决定(同上:只拦真会咬人的)。
@@ -3488,6 +3536,12 @@ export class TaskService {
       /** 普通下单只提交正式模块 ID；服务端在创建现场时固定当时的已发布
        * 资产版本与正文快照，浏览器不能自报内容。 */
       selectedBusinessModuleIds?: string[];
+      /** 前端首次人工确认并由服务端验过的技术画像；知识旁路字段。 */
+      repositoryProfiles?: RepositoryProfile[];
+      selectedEngineeringKnowledgeIds?: string[];
+      /** 仅供跨仓拆单复制父任务已固定版本。 */
+      engineeringKnowledge?: SelectedEngineeringKnowledge[];
+      engineeringKnowledgeSourceWorkspace?: string;
       /** 仅供跨仓拆单：从父任务复制已经固定的模块版本与正文。 */
       businessModules?: SelectedBusinessModule[];
       businessModuleSourceWorkspace?: string;
@@ -3645,6 +3699,7 @@ export class TaskService {
     mkdirSync(workspace, { recursive: true });
     let issueEnvironments: IssueEnvironmentRef[] = [];
     let businessModules: SelectedBusinessModule[] = [];
+    let engineeringKnowledge: SelectedEngineeringKnowledge[] = [];
     try {
       if (options.businessModules !== undefined) {
         if (!options.businessModuleSourceWorkspace) {
@@ -3654,13 +3709,45 @@ export class TaskService {
           selected: options.businessModules,
           sourceTaskWorkspace: options.businessModuleSourceWorkspace,
           targetTaskWorkspace: workspace,
+          repositories,
         });
       } else {
         businessModules = snapshotBusinessModules({
           dataDir: this.options.dataDir,
           taskWorkspace: workspace,
           moduleIds: options.selectedBusinessModuleIds,
+          repositories,
         });
+      }
+      try {
+        if (options.engineeringKnowledge !== undefined) {
+          if (!options.engineeringKnowledgeSourceWorkspace) {
+            throw new Error("复制团队工程知识快照时缺少父任务现场");
+          }
+          engineeringKnowledge = copyEngineeringKnowledgeSnapshots({
+            selected: options.engineeringKnowledge,
+            sourceTaskWorkspace: options.engineeringKnowledgeSourceWorkspace,
+            targetTaskWorkspace: workspace,
+            repository: repositories.length === 1 ? repositories[0] : undefined,
+          });
+        } else {
+          const profileTechnologies = [...new Set((options.repositoryProfiles
+            ?? resolveRepositoryProfiles(this.options.dataDir, repositories)
+              .flatMap((item) => item.profile ? [item.profile] : []))
+            .flatMap((profile) => profile.technologies))];
+          engineeringKnowledge = snapshotEngineeringKnowledge({
+            dataDir: this.options.dataDir,
+            taskWorkspace: workspace,
+            repositories,
+            technologies: profileTechnologies,
+            businessModuleIds: businessModules.map((module) => module.id),
+            selectedIds: options.selectedEngineeringKnowledgeIds,
+          });
+        }
+      } catch (error) {
+        engineeringKnowledge = [];
+        this.options.log?.(
+          `[engineering-knowledge] 任务 ${id} 快照失败，已退化为无团队工程知识（不影响下单）：${String(error)}`);
       }
       storeRequirementDocument(workspace, requirement, requirementDocument);
       if (entryKind === "dts") {
@@ -3672,6 +3759,17 @@ export class TaskService {
     } catch (error) {
       rmSync(workspace, { recursive: true, force: true });
       throw error;
+    }
+    let repositoryProfiles = options.repositoryProfiles ?? [];
+    if (options.repositoryProfiles === undefined && repositories.length) {
+      try {
+        repositoryProfiles = resolveRepositoryProfiles(
+          this.options.dataDir, repositories)
+          .flatMap((item) => item.profile ? [{ ...item.profile }] : []);
+      } catch (error) {
+        this.options.log?.(
+          `[repository-profiles] 任务 ${id} 读取失败，已退化为按仓库匹配（不影响下单）：${String(error)}`);
+      }
     }
     const summary: TaskSummary = {
       id,
@@ -3701,9 +3799,17 @@ export class TaskService {
       luban_account: options.account || undefined,
       repo_url: repo,
       repositories: repositories.length ? repositories : undefined,
+      repository_profiles: repositories.length
+        ? repositoryProfiles
+          .filter((profile) => repositories.some((repository) =>
+            repository.replace(/\/+$/, "").replace(/\.git$/i, "").toLowerCase()
+            === profile.repository.replace(/\/+$/, "").replace(/\.git$/i, "").toLowerCase()))
+        : undefined,
       repository_skills: repositorySkills,
       repository_knowledge: repositoryKnowledge,
       business_modules: businessModules.length ? businessModules : undefined,
+      engineering_knowledge: engineeringKnowledge.length
+        ? engineeringKnowledge : undefined,
       requirement_graph: repositories.length
         ? {
             stage: repositories.length > 1 ? "analysis" : "confirmed",
@@ -4397,6 +4503,9 @@ export class TaskService {
         .map((item) => ({ ...item })),
       selectedBusinessModuleIds: (source.business_modules ?? [])
         .map((module) => module.id),
+      repositoryProfiles: source.repository_profiles?.map((item) => ({ ...item })),
+      selectedEngineeringKnowledgeIds: (source.engineering_knowledge ?? [])
+        .map((item) => item.id),
       preserveUndefinedRepositorySkills,
       reuseTaskId: id,
       deferQueue: true,
@@ -4680,6 +4789,10 @@ export class TaskService {
             assets: module.assets.map((asset) => ({ ...asset })),
           })),
         businessModuleSourceWorkspace: task.summary.workspace,
+        repositoryProfiles: (task.summary.repository_profiles ?? [])
+          .filter((profile) => profile.repository === repository.url),
+        engineeringKnowledge: task.summary.engineering_knowledge,
+        engineeringKnowledgeSourceWorkspace: task.summary.workspace,
         preserveUndefinedRepositorySkills,
       });
       // 方案文档放子任务 workspace 根(不删现场,重启/重建都在);
@@ -5520,8 +5633,10 @@ export class TaskService {
     let driver: CloudSession | undefined;
     let container: TaskCommandContainer | undefined;
     let businessModuleKnowledge: MaterializedBusinessModuleKnowledge = {
-      entries: [], warnings: [],
+      entries: [], skill_paths: [], warnings: [],
     };
+    let engineeringKnowledge: ReturnType<typeof materializeEngineeringKnowledge>
+      = { entries: [], warnings: [] };
     try {
       if (!task.cwd) throw new Error("开发助手缺少代码工作区");
       // 必须在容器 start 之前物化：root 宿主会在 start 前把整棵 bind
@@ -5535,6 +5650,15 @@ export class TaskService {
       for (const warning of businessModuleKnowledge.warnings) {
         this.options.log?.(
           `[developer-assistant-business-module] 任务 ${task.summary.id}: ${warning}`);
+      }
+      engineeringKnowledge = materializeEngineeringKnowledge({
+        selected: task.summary.engineering_knowledge,
+        taskWorkspace: workspace,
+        runtimeWorkspace: task.cwd,
+      });
+      for (const warning of engineeringKnowledge.warnings) {
+        this.options.log?.(
+          `[developer-assistant-engineering-knowledge] 任务 ${task.summary.id}: ${warning}`);
       }
       task.containerWorkspace = task.cwd;
       container = await this.startCodingContainer(task, { gitReadOnly: true });
@@ -5604,10 +5728,18 @@ export class TaskService {
         workspace: task.cwd,
         agentDir,
         hostSkillsDir: join(this.options.dataDir, "skills"),
+        knowledgeContext: {
+          repositories: task.summary.repositories ?? [],
+          technologies: [...new Set((task.summary.repository_profiles ?? [])
+            .flatMap((profile) => profile.technologies))],
+          businessModuleIds: (task.summary.business_modules ?? [])
+            .map((module) => module.id),
+        },
         repositorySkillPaths,
         repositorySkillResources,
         repositoryKnowledge,
         businessModuleKnowledge,
+        engineeringKnowledge,
         knowledgeTrace: this.knowledgeTrace(task, task.cwd),
         provider: task.summary.model_choice?.provider
           ?? modelOverride.provider ?? this.options.provider,
@@ -6425,8 +6557,10 @@ export class TaskService {
       }> = [];
       let repositoryKnowledge: MaterializedKnowledgeEntry[] = [];
       let businessModuleKnowledge: MaterializedBusinessModuleKnowledge = {
-        entries: [], warnings: [],
+        entries: [], skill_paths: [], warnings: [],
       };
+      let engineeringKnowledge: ReturnType<typeof materializeEngineeringKnowledge>
+        = { entries: [], warnings: [] };
       task.cwd = cwd;
       if (this.options.host && analysisOnly) {
         const analysisRoot = resuming ? savedCwd! : join(workspace, "repositories");
@@ -6786,6 +6920,15 @@ export class TaskService {
         this.options.log?.(
           `[business-module-knowledge] 任务 ${task.summary.id}: ${warning}`);
       }
+      engineeringKnowledge = materializeEngineeringKnowledge({
+        selected: task.summary.engineering_knowledge,
+        taskWorkspace: workspace,
+        runtimeWorkspace: cwd,
+      });
+      for (const warning of engineeringKnowledge.warnings) {
+        this.options.log?.(
+          `[engineering-knowledge] 任务 ${task.summary.id}: ${warning}`);
+      }
       // 2026-08-25 编排瘦身:编码期不再禁止编译/自测——用户给了容器
       // 构建环境,就让 agent 自由用起来验证自己;但本地绿不构成交付
       // 证据,真验收固定三道(prepush 专项会话、绑 SHA 的权威流水线、
@@ -6913,10 +7056,18 @@ export class TaskService {
         // 宿主级 skill:<数据目录>/skills 放一次,每个任务都带
         // (团队的 UT 写法指南在内网,老宿主靠手动集成进子 agent)。
         hostSkillsDir: join(this.options.dataDir, "skills"),
+        knowledgeContext: {
+          repositories: task.summary.repositories ?? [],
+          technologies: [...new Set((task.summary.repository_profiles ?? [])
+            .flatMap((profile) => profile.technologies))],
+          businessModuleIds: (task.summary.business_modules ?? [])
+            .map((module) => module.id),
+        },
         repositorySkillPaths,
         repositorySkillResources,
         repositoryKnowledge,
         businessModuleKnowledge,
+        engineeringKnowledge,
         knowledgeTrace: this.knowledgeTrace(task, cwd),
         currentStep: () => this.currentStepLabel(task),
         // 上下文撑爆时自愈压缩用的锚:与主动压缩同一个内核现场,
@@ -7562,6 +7713,13 @@ export class TaskService {
         workspace: task.cwd,
         agentDir,
         hostSkillsDir: join(this.options.dataDir, "skills"),
+        knowledgeContext: {
+          repositories: task.summary.repositories ?? [],
+          technologies: [...new Set((task.summary.repository_profiles ?? [])
+            .flatMap((profile) => profile.technologies))],
+          businessModuleIds: (task.summary.business_modules ?? [])
+            .map((module) => module.id),
+        },
         repositorySkillPaths,
         repositorySkillResources,
         repositoryKnowledge,

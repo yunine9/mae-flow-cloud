@@ -140,7 +140,8 @@ export function RepositorySkillPicker({
     if (!normalizedRepositories.length || selection.scanning) return;
     const preserve = wantedSkills();
     const preserveKnowledge = wantedKnowledge();
-    const firstScan = !catalog && initialKnowledge.length === 0;
+    const firstScan = !catalog && initialKnowledge.length === 0
+      && initialSkills.length === 0;
     const version = ++scanVersion.current;
     scanAbort.current?.abort();
     const controller = new AbortController();
@@ -171,7 +172,9 @@ export function RepositorySkillPicker({
       const nextIds = result.repositories.flatMap((repository) =>
         repository.skills
           .filter((skill) => skill.selectable
-            && preserve.has(resourceKey(repository.repository, skill.relative_path)))
+            && (preserve.has(resourceKey(
+              repository.repository, skill.relative_path))
+              || (presentation === "launch" && firstScan)))
           .map((skill) => skill.id))
         .slice(0, MAX_SELECTED_SKILLS);
       const selectableKnowledge = result.repositories.flatMap((repository) =>
@@ -182,7 +185,7 @@ export function RepositorySkillPicker({
             repository.knowledge.some((entry) => entry.id === item.id))
             ?.repository ?? "",
           item.relative_path,
-        )) || (presentation === "launch" && firstScan && item.recommended));
+        )) || (presentation === "launch" && firstScan));
       let selectedBytes = 0;
       const nextKnowledgeIds: string[] = [];
       for (const item of wantedKnowledgeItems) {
@@ -298,21 +301,22 @@ export function RepositorySkillPicker({
       <div className="repository-skills-head">
         <i aria-hidden>＋</i>
         <div>
-          <strong id={`repository-skills-title-${presentation}`}>仓内参考资料与 Skill（可选）</strong>
+          <strong id={`repository-skills-title-${presentation}`}>代码仓自带知识与 Skill</strong>
           <small>{presentation === "decision"
             ? "按仓选择，确认后下发给对应交付子任务"
-            : "开局补齐业务上下文，运行中自动留下消费足迹"}</small>
+            : "扫描后默认勾选已入库资产；可逐项取消，运行中留下消费足迹"}</small>
         </div>
         <em>{(initialSkills.length + initialKnowledge.length) > 0 && !catalog
           ? `当前 ${initialSkills.length + initialKnowledge.length} 项`
-          : "按需选择"}</em>
+          : "默认选中 · 可调整"}</em>
       </div>
 
       <div className="repository-skills-toolbar">
         <p>
           项目规则（<code>AGENTS.md</code>/<code>CLAUDE.md</code>）自动生效；
-          可从 <code>docs</code> 选择本单参考资料，也可选择四类标准目录下的 Skill。
-          Agent 自行判断何时使用，平台只记录事实，不把知识消费变成流程门禁。
+          可从 <code>docs</code> 选择本单参考资料，也可选择标准目录下的 Skill。
+          首次扫描默认勾选全部可用项；勾选 Skill 只让 Agent 看见能力说明，
+          不会把全部正文直接塞进上下文，Agent 仍按描述判断何时读取。
         </p>
         <div>
           {catalog && (
@@ -333,7 +337,7 @@ export function RepositorySkillPicker({
 
       {!hasRepository && (
         <div className="repository-skills-empty">
-          先填写代码仓，再按需读取仓内参考资料；不读取也可继续。
+          先填写代码仓，再读取仓内资产；读取成功后默认勾选，不读取也可继续。
         </div>
       )}
       {!catalog && !scanError

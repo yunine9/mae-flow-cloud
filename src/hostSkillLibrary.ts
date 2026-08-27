@@ -38,9 +38,11 @@ import { dirname, join, resolve } from "node:path";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
 import { packageDigest } from "./hostSkillRuntime.ts";
 import {
-  readSkillLanguages,
-  writeSkillLanguages,
-} from "./knowledgeLanguages.ts";
+  normalizeKnowledgeAssetMetadata,
+  readSkillKnowledgeMetadata,
+  writeSkillKnowledgeMetadata,
+  type KnowledgeAssetMetadata,
+} from "./knowledgeAssetModel.ts";
 
 /** 与快照器同预算:管理面收下的包必须是运行时装得动的包。 */
 const MAX_SKILL_BYTES = 128 * 1024;
@@ -121,7 +123,10 @@ export interface SkillSubmissionRecord {
   package_digest: string;
   files: number;
   bytes: number;
-  languages: string[];
+  nature: KnowledgeAssetMetadata["nature"];
+  business_module_ids: string[];
+  repositories: string[];
+  technologies: string[];
   decided_at?: string;
   decided_by?: string;
   reject_reason?: string;
@@ -345,7 +350,10 @@ function validateStaged(stagingRoot: string, directory: string): {
   packageDigestValue: string;
   files: number;
   bytes: number;
-  languages: string[];
+  nature: KnowledgeAssetMetadata["nature"];
+  businessModuleIds: string[];
+  repositories: string[];
+  technologies: string[];
 } {
   const packageRoot = join(stagingRoot, directory);
   const skillFile = join(packageRoot, "SKILL.md");
@@ -356,9 +364,9 @@ function validateStaged(stagingRoot: string, directory: string): {
   if (skillContent.byteLength > MAX_SKILL_BYTES) {
     throw new SkillLibraryError("SKILL.md 超过 128 KiB");
   }
-  let languages: string[];
+  let metadata: KnowledgeAssetMetadata;
   try {
-    languages = readSkillLanguages(skillContent.toString("utf-8"));
+    metadata = readSkillKnowledgeMetadata(skillContent.toString("utf-8"));
   } catch (error) {
     throw new SkillLibraryError(
       error instanceof Error ? error.message : String(error));
@@ -390,7 +398,10 @@ function validateStaged(stagingRoot: string, directory: string): {
     packageDigestValue: packageDigest(packageRoot),
     files,
     bytes,
-    languages,
+    nature: metadata.nature,
+    businessModuleIds: metadata.business_module_ids,
+    repositories: metadata.repositories,
+    technologies: metadata.technologies,
   };
 }
 
@@ -469,7 +480,7 @@ export function uploadHostSkill(
   directory: string,
   files: SkillUploadFile[],
   operator: string,
-  languages?: string[],
+  metadata?: Partial<KnowledgeAssetMetadata>,
 ): Promise<SkillOperationRecord> {
   return serialized(() => {
     assertDirectoryName(directory);
@@ -482,7 +493,7 @@ export function uploadHostSkill(
     const stagingRoot = stageDirectory(dataDir, directory);
     try {
       const staged = materializeToStaging(
-        stagingRoot, directory, files, languages);
+        stagingRoot, directory, files, metadata);
       const exists = existsSync(join(dataDir, LIVE_DIR, directory));
       return installStaged(dataDir, stagingRoot, directory, operator,
         exists ? "update" : "upload", staged);
@@ -492,12 +503,11 @@ export function uploadHostSkill(
   });
 }
 
-/** 只调整语言维度也走完整的版本纪律：复制当前包、改 frontmatter、
- * 重验、归档旧版、原子换入。正文与配套文件一个都不能被 UI 丢掉。 */
-export function updateHostSkillLanguages(
+/** 调整知识属性也走完整版本纪律；正文与配套文件一个都不能被 UI 丢掉。 */
+export function updateHostSkillKnowledgeMetadata(
   dataDir: string,
   directory: string,
-  languages: string[],
+  metadata: Partial<KnowledgeAssetMetadata>,
   operator: string,
 ): Promise<SkillOperationRecord> {
   return serialized(() => {
@@ -512,8 +522,8 @@ export function updateHostSkillLanguages(
       const skillFile = join(stagingRoot, directory, "SKILL.md");
       let tagged: string;
       try {
-        tagged = writeSkillLanguages(
-          readFileSync(skillFile, "utf-8"), languages);
+        tagged = writeSkillKnowledgeMetadata(
+          readFileSync(skillFile, "utf-8"), metadata as KnowledgeAssetMetadata);
       } catch (error) {
         throw new SkillLibraryError(
           error instanceof Error ? error.message : String(error));
@@ -523,14 +533,40 @@ export function updateHostSkillLanguages(
       writeFileSync(skillFile, content);
       normalizePermissions(join(stagingRoot, directory));
       const staged = validateStaged(stagingRoot, directory);
-      const selected = readSkillLanguages(tagged);
+      const selected = readSkillKnowledgeMetadata(tagged);
       return installStaged(dataDir, stagingRoot, directory, operator,
         "update", staged,
-        `更新适用语言：${selected.length ? selected.join(", ") : "未标注"}`);
+        `更新知识属性：${selected.nature}`);
     } finally {
       rmSync(stagingRoot, { recursive: true, force: true });
     }
   });
+}
+
+/** 兼容已经发布的语言编辑接口；新模型统一写 technologies。 */
+export function updateHostSkillLanguages(
+  dataDir: string,
+  directory: string,
+  languages: string[],
+  operator: string,
+): Promise<SkillOperationRecord> {
+  const current = readHostSkillDocument(dataDir, directory);
+  const previous = readSkillKnowledgeMetadata(current.content);
+  let normalized: KnowledgeAssetMetadata;
+  try {
+    normalized = normalizeKnowledgeAssetMetadata({
+      nature: previous.nature === "unclassified" ? "engineering" : previous.nature,
+      form: "skill",
+      business_module_ids: previous.business_module_ids,
+      repositories: previous.repositories,
+      technologies: languages,
+    }, { fixedForm: "skill" });
+  } catch (error) {
+    throw new SkillLibraryError(
+      error instanceof Error ? error.message : String(error));
+  }
+  return updateHostSkillKnowledgeMetadata(
+    dataDir, directory, normalized, operator);
 }
 
 /** 上传载荷 → 暂存目录 + 完整验收(路径/密钥/预算/装载器)。上架与
@@ -539,7 +575,7 @@ function materializeToStaging(
   stagingRoot: string,
   directory: string,
   files: SkillUploadFile[],
-  languages?: string[],
+  metadata?: Partial<KnowledgeAssetMetadata>,
 ): ReturnType<typeof validateStaged> {
   const seen = new Set<string>();
   for (const file of files) {
@@ -555,14 +591,14 @@ function materializeToStaging(
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, content);
   }
-  if (languages !== undefined) {
+  if (metadata !== undefined) {
     const skillFile = join(stagingRoot, directory, "SKILL.md");
     if (!existsSync(skillFile)) {
       throw new SkillLibraryError("包根目录必须有 SKILL.md");
     }
     try {
-      const tagged = writeSkillLanguages(
-        readFileSync(skillFile, "utf-8"), languages);
+      const tagged = writeSkillKnowledgeMetadata(
+        readFileSync(skillFile, "utf-8"), metadata as KnowledgeAssetMetadata);
       const buffer = Buffer.from(tagged, "utf-8");
       scanForSecrets("SKILL.md", buffer);
       writeFileSync(skillFile, buffer);
@@ -596,7 +632,7 @@ export function submitHostSkill(
   directory: string,
   files: SkillUploadFile[],
   operator: string,
-  languages?: string[],
+  metadata?: Partial<KnowledgeAssetMetadata>,
 ): Promise<SkillSubmissionRecord> {
   return serialized(() => {
     assertDirectoryName(directory);
@@ -609,7 +645,7 @@ export function submitHostSkill(
     const stagingRoot = stageDirectory(dataDir, directory);
     try {
       const staged = materializeToStaging(
-        stagingRoot, directory, files, languages);
+        stagingRoot, directory, files, metadata);
       const stamp = new Date().toISOString().replace(/[-:.]/g, "");
       let id = stamp;
       for (let seq = 1;
@@ -629,7 +665,10 @@ export function submitHostSkill(
         package_digest: staged.packageDigestValue,
         files: staged.files,
         bytes: staged.bytes,
-        languages: staged.languages,
+        nature: staged.nature,
+        business_module_ids: staged.businessModuleIds,
+        repositories: staged.repositories,
+        technologies: staged.technologies,
       };
       writeSubmissionRecord(dataDir, record);
       appendOperation(dataDir, {

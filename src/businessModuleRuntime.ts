@@ -22,7 +22,10 @@ import {
   readBusinessKnowledgeAsset,
   readBusinessModule,
 } from "./businessModuleLibrary.ts";
-import { knowledgeLanguageLabel } from "./knowledgeLanguages.ts";
+import {
+  repositoryIdentity,
+  type KnowledgeForm,
+} from "./knowledgeAssetModel.ts";
 
 const SNAPSHOT_DIR = "business-module-snapshot";
 const RUNTIME_DIR = ".mae-flow-work/business-modules";
@@ -35,7 +38,8 @@ export interface SelectedBusinessKnowledgeAsset {
   title: string;
   summary: string;
   when_to_use: string;
-  languages: string[];
+  form: KnowledgeForm;
+  repositories: string[];
   version: number;
   digest: string;
   bytes: number;
@@ -59,7 +63,8 @@ export interface MaterializedBusinessKnowledgeEntry {
   title: string;
   summary: string;
   when_to_use: string;
-  languages: string[];
+  form: KnowledgeForm;
+  repositories: string[];
   version: number;
   digest: string;
   relative_path: string;
@@ -68,6 +73,7 @@ export interface MaterializedBusinessKnowledgeEntry {
 
 export interface MaterializedBusinessModuleKnowledge {
   entries: MaterializedBusinessKnowledgeEntry[];
+  skill_paths: string[];
   index_path?: string;
   warnings: string[];
 }
@@ -110,6 +116,7 @@ export function snapshotBusinessModules(options: {
   dataDir: string;
   taskWorkspace: string;
   moduleIds?: string[];
+  repositories?: string[];
 }): SelectedBusinessModule[] {
   const ids = [...new Set((options.moduleIds ?? [])
     .map((item) => item.trim()).filter(Boolean))];
@@ -119,6 +126,8 @@ export function snapshotBusinessModules(options: {
   const selected: SelectedBusinessModule[] = [];
   let assetCount = 0;
   let totalBytes = 0;
+  const taskRepositories = new Set((options.repositories ?? [])
+    .map(repositoryIdentity));
   for (const id of ids) {
     const module = readBusinessModule(options.dataDir, id);
     if (module.status !== "active") {
@@ -126,7 +135,9 @@ export function snapshotBusinessModules(options: {
     }
     const assets: SelectedBusinessKnowledgeAsset[] = [];
     for (const asset of module.assets.filter((item) =>
-      item.status === "published")) {
+      item.status === "published" && (!item.repositories.length
+        || item.repositories.some((repository) =>
+          taskRepositories.has(repositoryIdentity(repository)))))) {
       assetCount += 1;
       totalBytes += asset.bytes;
       if (assetCount > MAX_ASSETS || totalBytes > MAX_TOTAL_BYTES) {
@@ -153,7 +164,8 @@ export function snapshotBusinessModules(options: {
         title: asset.title,
         summary: asset.summary,
         when_to_use: asset.when_to_use,
-        languages: [...asset.languages],
+        form: asset.form,
+        repositories: [...asset.repositories],
         version: asset.version,
         digest: asset.digest,
         bytes: asset.bytes,
@@ -179,15 +191,20 @@ export function copyBusinessModuleSnapshots(options: {
   selected: SelectedBusinessModule[];
   sourceTaskWorkspace: string;
   targetTaskWorkspace: string;
+  repositories?: string[];
 }): SelectedBusinessModule[] {
   if (options.selected.length > MAX_MODULES) {
     throw new BusinessModuleError(`每个任务最多选择 ${MAX_MODULES} 个业务模块`);
   }
   let assetCount = 0;
   let totalBytes = 0;
+  const taskRepositories = new Set((options.repositories ?? [])
+    .map(repositoryIdentity));
   const copied = options.selected.map((module) => ({
     ...module,
-    assets: module.assets.map((asset) => {
+    assets: module.assets.filter((asset) => !taskRepositories.size
+      || !asset.repositories.length || asset.repositories.some((repository) =>
+        taskRepositories.has(repositoryIdentity(repository)))).map((asset) => {
       assetCount += 1;
       totalBytes += asset.bytes;
       if (assetCount > MAX_ASSETS || totalBytes > MAX_TOTAL_BYTES) {
@@ -250,9 +267,9 @@ function indexMarkdown(
         `- **${item.title}**（v${item.version}）`,
         `  - 摘要：${item.summary}`,
         `  - 何时读取：${item.when_to_use}`,
-        ...((item.languages ?? []).length
-          ? [`  - 工程语境：${item.languages.map(
-            knowledgeLanguageLabel).join(" / ")}`] : []),
+        `  - 形态：${item.form}`,
+        ...(item.repositories.length
+          ? [`  - 适用仓库：${item.repositories.join(" / ")}`] : []),
         `  - 路径：\`${item.relative_path}\``,
       );
     }
@@ -267,7 +284,7 @@ export function materializeBusinessModuleKnowledge(options: {
   runtimeWorkspace: string;
 }): MaterializedBusinessModuleKnowledge {
   const modules = options.selected ?? [];
-  if (!modules.length) return { entries: [], warnings: [] };
+  if (!modules.length) return { entries: [], skill_paths: [], warnings: [] };
   const runtimeRoot = resolve(options.runtimeWorkspace, RUNTIME_DIR);
   const warnings: string[] = [];
   const entries: MaterializedBusinessKnowledgeEntry[] = [];
@@ -276,7 +293,7 @@ export function materializeBusinessModuleKnowledge(options: {
     rmSync(runtimeRoot, { recursive: true, force: true });
     mkdirSync(runtimeRoot, { recursive: true, mode: 0o750 });
   } catch (error) {
-    return { entries: [], warnings: [`业务模块知识目录准备失败：${String(error)}`] };
+    return { entries: [], skill_paths: [], warnings: [`业务模块知识目录准备失败：${String(error)}`] };
   }
   for (const module of modules.slice(0, MAX_MODULES)) {
     for (const asset of module.assets) {
@@ -292,13 +309,25 @@ export function materializeBusinessModuleKnowledge(options: {
         if (content.byteLength !== asset.bytes || sha256(content) !== asset.digest) {
           throw new Error("任务快照与发布指纹不一致");
         }
-        const relativePath = `${RUNTIME_DIR}/${module.id}/${asset.id}.md`;
+        const relativePath = asset.form === "skill"
+          ? `${RUNTIME_DIR}/${module.id}/${asset.id}/SKILL.md`
+          : `${RUNTIME_DIR}/${module.id}/${asset.id}.md`;
         const destination = resolve(options.runtimeWorkspace, relativePath);
         if (!contained(runtimeRoot, destination)) {
           throw new Error("运行时路径越出模块知识目录");
         }
         mkdirSync(dirname(destination), { recursive: true, mode: 0o750 });
-        writeFileSync(destination, content, { mode: 0o440 });
+        const output = asset.form === "skill"
+          ? Buffer.from([
+              "---",
+              `name: ${module.id}-${asset.id}`,
+              `description: ${JSON.stringify(asset.summary.replace(/[\r\n]+/g, " "))}`,
+              "---",
+              "",
+              content.toString("utf-8"),
+            ].join("\n"), "utf-8")
+          : content;
+        writeFileSync(destination, output, { mode: 0o440 });
         chmodSync(destination, 0o440);
         entries.push({
           id: `module:${module.id}:${asset.id}:v${asset.version}`,
@@ -308,7 +337,8 @@ export function materializeBusinessModuleKnowledge(options: {
           title: asset.title,
           summary: asset.summary,
           when_to_use: asset.when_to_use,
-          languages: [...(asset.languages ?? [])],
+          form: asset.form ?? "document",
+          repositories: [...(asset.repositories ?? [])],
           version: asset.version,
           digest: asset.digest,
           relative_path: relativePath,
@@ -326,9 +356,12 @@ export function materializeBusinessModuleKnowledge(options: {
       encoding: "utf-8", mode: 0o440,
     });
     chmodSync(indexPath, 0o440);
-    return { entries, index_path: indexPath, warnings };
+    return { entries, skill_paths: entries.filter((item) =>
+      item.form === "skill").map((item) => item.path),
+      index_path: indexPath, warnings };
   } catch (error) {
     warnings.push(`业务模块知识目录写入失败：${String(error)}`);
-    return { entries, warnings };
+    return { entries, skill_paths: entries.filter((item) =>
+      item.form === "skill").map((item) => item.path), warnings };
   }
 }

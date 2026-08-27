@@ -10,6 +10,12 @@ import {
   RepositorySkillPicker,
   type RepositorySkillSelection,
 } from "./RepositorySkillPicker";
+import {
+  asRepositoryProfiles,
+  RepositoryTechnologyPicker,
+  type RepositoryTechnologyDraft,
+} from "./RepositoryTechnologyPicker";
+import { KnowledgeLanguageTags } from "./KnowledgeLanguages";
 
 const MAX_MARKDOWN_BYTES = 512 * 1024;
 const INLINE_MARKDOWN_BYTES = 32 * 1024;
@@ -49,7 +55,7 @@ function readStored<T>(key: string): T | undefined {
 }
 
 function repositoryIdentity(value: string): string {
-  return value.trim().replace(/\/+$/, "").replace(/\.git$/i, "");
+  return value.trim().replace(/\/+$/, "").replace(/\.git$/i, "").toLowerCase();
 }
 export function LaunchWorkspace({
   session,
@@ -105,6 +111,12 @@ export function LaunchWorkspace({
     validDraft?.updatedAt ?? "");
   const [repositorySkillSelection, setRepositorySkillSelection] =
     useState<RepositorySkillSelection>(EMPTY_REPOSITORY_SKILL_SELECTION);
+  const [repositoryTechnologies, setRepositoryTechnologies] =
+    useState<RepositoryTechnologyDraft[]>([]);
+  const [selectedEngineeringKnowledgeIds, setSelectedEngineeringKnowledgeIds] =
+    useState<string[]>([]);
+  const [engineeringSelectionTouched, setEngineeringSelectionTouched] =
+    useState(false);
   // 配置没配齐不让下单:缺项来自后端(服务级+个人级),前端只负责
   // 摆在明面上。后端同样硬拦——绕过界面打接口一样被 409 挡住。
   const blockers = options?.blockers ?? [];
@@ -120,6 +132,18 @@ export function LaunchWorkspace({
         || left.name.localeCompare(right.name);
     });
   }, [options, repos]);
+  const matchingEngineeringKnowledge = useMemo(() => {
+    const repositorySet = new Set(repos.map(repositoryIdentity).filter(Boolean));
+    const technologies = new Set(repositoryTechnologies
+      .flatMap((item) => item.technologies));
+    return (options?.engineering_knowledge ?? []).filter((item) =>
+      (!item.repositories.length || item.repositories.some((repository) =>
+        repositorySet.has(repositoryIdentity(repository))))
+      && (!item.technologies.length || item.technologies.some((technology) =>
+        technologies.has(technology)))
+      && (!item.business_module_ids.length || item.business_module_ids.some((id) =>
+        selectedBusinessModuleIds.includes(id))));
+  }, [options, repos, repositoryTechnologies, selectedBusinessModuleIds]);
   const deliveryLocationVisible = !!options
     && (options.repo.enabled || options.ticket.enabled || options.baseline.enabled);
   const moduleSectionNumber = deliveryLocationVisible ? "03" : "02";
@@ -180,6 +204,17 @@ export function LaunchWorkspace({
       return current.filter((id) => available.has(id)).slice(0, 4);
     });
   }, [options]);
+
+  useEffect(() => {
+    if (!engineeringSelectionTouched) {
+      setSelectedEngineeringKnowledgeIds(
+        matchingEngineeringKnowledge.map((item) => item.id));
+      return;
+    }
+    const available = new Set(matchingEngineeringKnowledge.map((item) => item.id));
+    setSelectedEngineeringKnowledgeIds((current) =>
+      current.filter((id) => available.has(id)));
+  }, [matchingEngineeringKnowledge, engineeringSelectionTouched]);
 
   useEffect(() => {
     const previous = document.body.style.overflow;
@@ -279,6 +314,8 @@ export function LaunchWorkspace({
             repositorySkillSelection.scanned
               ? repositorySkillSelection.selectedKnowledgeIds : undefined,
           selectedBusinessModuleIds,
+          selectedEngineeringKnowledgeIds,
+          repositoryProfiles: asRepositoryProfiles(repositoryTechnologies),
           requirementDocumentName: requirementDocumentName || undefined,
         },
       );
@@ -502,6 +539,9 @@ export function LaunchWorkspace({
                           <option key={repo} value={repo} />
                         ))}
                       </datalist>
+                      <RepositoryTechnologyPicker repositories={repos}
+                        value={repositoryTechnologies}
+                        onChange={setRepositoryTechnologies} />
                     </div>
                   )}
                   {advancedOpen && <div className="launch-field-grid">
@@ -569,13 +609,47 @@ export function LaunchWorkspace({
                   </p>
                 </section>
               )}
-              <button type="button" className="launch-advanced-toggle"
-                aria-expanded={advancedOpen}
-                onClick={() => setAdvancedOpen((open) => !open)}>
-                <span><strong>高级设置</strong><small>基线、仓内参考资料与 Skill、交付方式及修复预算</small></span>
-                <i aria-hidden>{advancedOpen ? "收起" : "展开"}</i>
-              </button>
-              {advancedOpen && <>
+              {options && <section className="launch-form-section engineering-knowledge-picker">
+                <div className="launch-section-head"><i>知</i><div>
+                  <strong>团队工程知识</strong>
+                  <small>按仓库、首次确认的技术栈和业务模块上下文匹配</small>
+                </div><em>匹配项默认选中</em></div>
+                {matchingEngineeringKnowledge.length ? <div
+                  className="engineering-knowledge-options">
+                  {matchingEngineeringKnowledge.map((item) => {
+                    const selected = selectedEngineeringKnowledgeIds.includes(item.id);
+                    return <label key={item.id}
+                      className={`engineering-knowledge-option${selected ? " selected" : ""}`}>
+                      <input type="checkbox" checked={selected} onChange={() => {
+                        setEngineeringSelectionTouched(true);
+                        setSelectedEngineeringKnowledgeIds((current) => selected
+                          ? current.filter((id) => id !== item.id)
+                          : [...current, item.id]);
+                      }} />
+                      <span className="business-module-check" aria-hidden>
+                        {selected ? "✓" : ""}</span>
+                      <span><span><strong>{item.title}</strong>
+                        <em>{{ document: "文档", rule: "规则",
+                          example: "示例" }[item.form]}</em></span>
+                        <small>{item.summary}</small>
+                        <span className="engineering-knowledge-meta">
+                          {item.when_to_use}
+                          <KnowledgeLanguageTags languages={item.technologies}
+                            empty="技术无关" />
+                        </span>
+                      </span>
+                    </label>;
+                  })}
+                </div> : <div className="engineering-knowledge-empty">
+                  <strong>当前没有匹配的团队工程知识</strong>
+                  <span>{repositoryTechnologies.some((item) => item.confirmed)
+                    ? "仍会正常使用业务模块知识和代码仓自带知识。"
+                    : "首次确认仓库技术栈后会出现更准确的匹配；这不影响继续下单。"}</span>
+                </div>}
+                <p className="business-module-picker-note">
+                  默认选中表示本任务可使用；正文按形态加载或按需读取，不把“选中”变成流程门禁。
+                </p>
+              </section>}
               {options?.repo.enabled && (
                 <RepositorySkillPicker
                   key={JSON.stringify([repos, baseline])}
@@ -584,6 +658,13 @@ export function LaunchWorkspace({
                   onSelectionChange={setRepositorySkillSelection}
                 />
               )}
+              <button type="button" className="launch-advanced-toggle"
+                aria-expanded={advancedOpen}
+                onClick={() => setAdvancedOpen((open) => !open)}>
+                <span><strong>高级设置</strong><small>基线、交付方式及修复预算</small></span>
+                <i aria-hidden>{advancedOpen ? "收起" : "展开"}</i>
+              </button>
+              {advancedOpen && <>
               <section className="launch-form-section">
                 <div className="launch-section-head"><i>{executionSectionNumber}</i><div><strong>执行设置</strong><small>选定交付方式和修复预算;任务自动归属你本人</small></div></div>
                 <div className="launch-field-grid launch-settings-grid">

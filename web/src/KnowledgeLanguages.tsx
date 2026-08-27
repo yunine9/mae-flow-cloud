@@ -35,9 +35,11 @@ export function KnowledgeLanguageTags({ languages, empty = "未标注语言" }: 
 }
 
 /** 语言只是工程语境，可多选；选择“语言无关”时自动清掉具体语言。 */
-export function KnowledgeLanguagePicker({ value, onChange }: {
+export function KnowledgeLanguagePicker({ value, onChange,
+  includeAgnostic = true }: {
   value: string[];
   onChange: (value: string[]) => void;
+  includeAgnostic?: boolean;
 }) {
   const toggle = (id: string) => {
     if (value.includes(id)) {
@@ -50,9 +52,12 @@ export function KnowledgeLanguagePicker({ value, onChange }: {
     }
     onChange([...value.filter((item) => item !== "agnostic"), id]);
   };
+  const options = !includeAgnostic
+    ? KNOWLEDGE_LANGUAGE_OPTIONS.filter((item) => item.id !== "agnostic")
+    : KNOWLEDGE_LANGUAGE_OPTIONS;
   return <div className="knowledge-language-picker"
     role="group" aria-label="适用语言，可多选">
-    {KNOWLEDGE_LANGUAGE_OPTIONS.map((option) => <button type="button"
+    {options.map((option) => <button type="button"
       key={option.id} aria-pressed={value.includes(option.id)}
       onClick={() => toggle(option.id)}>{option.label}</button>)}
   </div>;

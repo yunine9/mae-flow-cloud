@@ -48,6 +48,7 @@ import {
 } from "./knowledgeTrace.ts";
 import type { MaterializedKnowledgeEntry } from "./repositoryKnowledgeRuntime.ts";
 import type { MaterializedBusinessModuleKnowledge } from "./businessModuleRuntime.ts";
+import type { MaterializedEngineeringKnowledge } from "./engineeringKnowledgeRuntime.ts";
 
 /** pi 工具名 → 内核工具词汇表。不认识的原样透传(错认比不认更危险)。 */
 const TOOL_NAME_MAP: Record<string, string> = {
@@ -130,6 +131,13 @@ export interface CloudSessionOptions {
    * 子 agent";云端子 Agent 照样有(Task 工具),缺的是自动装载——
    * pi 的 includeDefaults=false,不喂路径就一个 skill 都不装。 */
   hostSkillsDir?: string;
+  /** 用任务固定的模块/仓库/技术画像筛选团队 Skill。历史未标注 Skill
+   * 继续可用，避免模型迁移期间突然丢能力。 */
+  knowledgeContext?: {
+    repositories: string[];
+    technologies: string[];
+    businessModuleIds: string[];
+  };
   /** 本单明确选中的仓库 Skill。每项必须是一个存在的 SKILL.md 文件；
    * 不能传 skills 目录，否则同目录下未选择的 Skill 也会被 Pi 扫入。
    * 跨仓时可同时传多个仓各自的文件，主/子 Agent 共用同一 allowlist。 */
@@ -143,6 +151,8 @@ export interface CloudSessionOptions {
   /** 创建任务时固定的业务模块知识。只把目录 INDEX.md 注入上下文；
    * 正文保留为工作区文件，由 Agent 使用 Read/Grep 按需读取。 */
   businessModuleKnowledge?: MaterializedBusinessModuleKnowledge;
+  /** 已发布且与本任务仓库/技术栈匹配的团队工程文档、规则和示例。 */
+  engineeringKnowledge?: MaterializedEngineeringKnowledge;
   knowledgeTrace?: KnowledgeTrace;
   /** 上下文超限自愈用的锚点提供者(通常是内核现场 current/config)。
    * 不给就用需求原话兜底——锚永远来自权威,不由云端编造。 */
@@ -684,6 +694,7 @@ export class CloudSession {
       sourceRoot: this.options.hostSkillsDir,
       workspaceRoot: workspace,
       snapshotRoot: join(workspace, ".mae-flow-work", "host-skills"),
+      context: this.options.knowledgeContext,
     });
     for (const warning of hostSkills.warnings) {
       this.options.log?.(
@@ -701,8 +712,11 @@ export class CloudSession {
     const skillPaths = [...new Set([
       ...hostSkills.paths,
       ...repositorySkillPaths,
+      ...(this.options.businessModuleKnowledge?.skill_paths ?? []),
     ])];
     const knowledgeEntries = (this.options.repositoryKnowledge ?? [])
+      .filter((item) => existsSync(item.path) && statSync(item.path).isFile());
+    const engineeringKnowledgeEntries = (this.options.engineeringKnowledge?.entries ?? [])
       .filter((item) => existsSync(item.path) && statSync(item.path).isFile());
     const businessModuleKnowledge = this.options.businessModuleKnowledge;
     const moduleKnowledgeEntries = (businessModuleKnowledge?.entries ?? [])
@@ -730,10 +744,22 @@ export class CloudSession {
         selected: true,
       });
     }
+    for (const item of engineeringKnowledgeEntries) {
+      this.options.knowledgeTrace?.register(item.path, {
+        id: item.id,
+        kind: item.form === "rule" ? "rules" : "document",
+        name: item.title,
+        path: item.relative_path,
+        description: item.summary,
+        digest: item.digest,
+        selected: true,
+        scope: "team",
+      });
+    }
     for (const item of moduleKnowledgeEntries) {
       const resource: KnowledgeResourceRef = {
         id: item.id,
-        kind: "document",
+        kind: item.form === "skill" ? "skill" : "document",
         name: item.title,
         path: item.relative_path,
         description: item.summary,
@@ -795,6 +821,10 @@ export class CloudSession {
             path: item.path,
             content: readFileSync(item.path, "utf-8"),
           })),
+          ...engineeringKnowledgeEntries.map((item) => ({
+            path: item.path,
+            content: readFileSync(item.path, "utf-8"),
+          })),
           ...(moduleIndex ? [moduleIndex] : []),
         ],
       }),
@@ -812,8 +842,12 @@ export class CloudSession {
     const repositorySkillByPath = new Map(
       (this.options.repositorySkillResources ?? [])
         .map((item) => [resolve(item.actual_path), item] as const));
+    const moduleSkillByPath = new Map(moduleKnowledgeEntries
+      .filter((item) => item.form === "skill")
+      .map((item) => [resolve(item.path), item] as const));
     for (const skill of loader.getSkills().skills) {
       const known = repositorySkillByPath.get(resolve(skill.filePath));
+      const moduleKnown = moduleSkillByPath.get(resolve(skill.filePath));
       const displayPath = skill.filePath.includes(workspace)
         ? relative(workspace, skill.filePath).split(sep).join("/")
         : `宿主技能/${skill.name}/SKILL.md`;
@@ -828,6 +862,18 @@ export class CloudSession {
         description: known.description,
         digest: known.digest,
         selected: known.selected,
+      } : moduleKnown ? {
+        id: moduleKnown.id,
+        kind: "skill",
+        name: moduleKnown.title,
+        path: moduleKnown.relative_path,
+        description: moduleKnown.summary,
+        digest: moduleKnown.digest,
+        selected: true,
+        scope: "module",
+        module_id: moduleKnown.module_id,
+        module_name: moduleKnown.module_name,
+        asset_version: moduleKnown.version,
       } : {
         id: `skill:${skill.name}:${displayPath}`,
         kind: "skill",
@@ -845,9 +891,11 @@ export class CloudSession {
       }
       const selected = knowledgeEntries.find(
         (item) => resolve(item.path) === resolve(file.path));
+      const engineering = engineeringKnowledgeEntries.find(
+        (item) => resolve(item.path) === resolve(file.path));
       const withinWorkspace = resolve(file.path).startsWith(`${resolve(workspace)}${sep}`)
         || resolve(file.path) === resolve(workspace);
-      const display = selected?.relative_path
+      const display = selected?.relative_path ?? engineering?.relative_path
         ?? (withinWorkspace
           ? relative(workspace, file.path).split(sep).join("/")
           : file.path.split(sep).slice(-2).join("/"));
@@ -860,6 +908,15 @@ export class CloudSession {
         description: selected.description,
         digest: selected.digest,
         selected: true,
+      } : engineering ? {
+        id: engineering.id,
+        kind: engineering.form === "rule" ? "rules" : "document",
+        name: engineering.title,
+        path: engineering.relative_path,
+        description: engineering.summary,
+        digest: engineering.digest,
+        selected: true,
+        scope: "team",
       } : {
         id: `rules:${display}`,
         kind: "rules",
