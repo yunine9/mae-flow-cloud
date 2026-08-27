@@ -24,6 +24,10 @@ import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskService } from "../src/taskService.ts";
 import { createTaskServer } from "../src/server.ts";
 import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
+import {
+  createBusinessModule,
+  publishBusinessKnowledgeAsset,
+} from "../src/businessModuleLibrary.ts";
 
 const SCRIPT: Scene[] = [{ text: "完成。" }];
 
@@ -52,6 +56,38 @@ test("launch-options:生效模型来自 models.json,设置层压部署层", () =
   const after = service.launchOptions();
   assert.deepEqual(after.model, { provider: "c", model: "c-1" });
   assert.equal(after.repair_rounds, 0);
+});
+
+test("业务模块目录不返回正文；下单只交 ID，服务端固定当时版本", () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-lf-module-"));
+  createBusinessModule(dataDir, {
+    id: "orders", name: "订单域", description: "订单创建与履约",
+    owner: "owner-a", repositories: ["https://code.example/orders.git"],
+  }, "admin");
+  publishBusinessKnowledgeAsset(dataDir, "orders", {
+    id: "state", title: "状态机", summary: "状态迁移约束",
+    when_to_use: "改订单状态时", content: "MODULE_BODY_MUST_NOT_BE_IN_CATALOG",
+  }, "owner-a");
+  const service = new TaskService({
+    dataDir, provider: "a", model: "a-1", maxConcurrent: 0,
+    modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
+  });
+  const options = service.launchOptions();
+  assert.deepEqual(options.business_modules.map((item) => ({
+    id: item.id, owner: item.owner, assets: item.assets,
+  })), [{ id: "orders", owner: "owner-a", assets: 1 }]);
+  assert.doesNotMatch(JSON.stringify(options), /MODULE_BODY_MUST_NOT_BE_IN_CATALOG/);
+
+  const task = service.create("调整订单状态", {
+    selectedBusinessModuleIds: ["orders"],
+  });
+  assert.equal(task.business_modules?.[0].revision, 2);
+  assert.equal(task.business_modules?.[0].assets[0].version, 1);
+  assert.doesNotMatch(JSON.stringify(task), /MODULE_BODY_MUST_NOT_BE_IN_CATALOG/,
+    "任务摘要只存版本身份，不存正文");
+  assert.match(readFileSync(join(dataDir, task.id,
+    task.business_modules![0].assets[0].snapshot_path), "utf-8"),
+  /MODULE_BODY_MUST_NOT_BE_IN_CATALOG/);
 });
 
 test("模型默认自动派生:管理员只贴 models.json 也能直接用", () => {

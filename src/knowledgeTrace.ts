@@ -10,9 +10,11 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { SelectedRepositorySkill } from "./repositorySkillRuntime.ts";
 import type { SelectedRepositoryKnowledge } from "./repositoryKnowledgeRuntime.ts";
+import type { SelectedBusinessModule } from "./businessModuleRuntime.ts";
 
 export type KnowledgeKind = "rules" | "document" | "skill";
 export type KnowledgeAction = "available" | "loaded" | "read" | "searched";
+export type KnowledgeScope = "task" | "repository" | "team" | "module";
 
 export interface KnowledgeResourceRef {
   id: string;
@@ -23,13 +25,17 @@ export interface KnowledgeResourceRef {
   description?: string;
   digest?: string;
   selected?: boolean;
+  scope?: KnowledgeScope;
+  module_id?: string;
+  module_name?: string;
+  asset_version?: number;
 }
 
 export interface KnowledgeTraceEvent extends KnowledgeResourceRef {
   ts: string;
   task_id: string;
   session_id: string;
-  session_role: "main" | "subagent" | "prepush" | "developer-assistant";
+  session_role: "main" | "subagent" | "prepush" | "developer-assistant" | "warmup";
   step?: string;
   action: KnowledgeAction;
   observed_path?: string;
@@ -69,6 +75,9 @@ function contained(root: string, target: string): boolean {
 function roleOf(sessionId: string): KnowledgeTraceEvent["session_role"] {
   if (sessionId.startsWith("child-")) return "subagent";
   if (sessionId.includes("prepush")) return "prepush";
+  // 预热会话 sessionId 就叫 "warmup";原来漏了这行,预热的 skill 消费
+  // 会被记成"主 Agent",排查时对不上号(实锤用户找不到消费在哪)。
+  if (sessionId.includes("warmup")) return "warmup";
   if (sessionId.includes("developer-assistant")) return "developer-assistant";
   return "main";
 }
@@ -231,6 +240,7 @@ export function knowledgeUsageSnapshot(options: {
   workspace: string;
   selectedKnowledge?: SelectedRepositoryKnowledge[];
   selectedSkills?: SelectedRepositorySkill[];
+  businessModules?: SelectedBusinessModule[];
 }): TaskKnowledgeUsage | undefined {
   const events = parseEvents(resolve(options.workspace, "knowledge-events.jsonl"));
   const resources = new Map<string, TaskKnowledgeResource>();
@@ -254,6 +264,21 @@ export function knowledgeUsageSnapshot(options: {
     path: item.relative_path, repository: item.repository,
     description: item.description, digest: item.digest, selected: true,
   });
+  for (const module of options.businessModules ?? []) {
+    for (const asset of module.assets) seed({
+      id: `module:${module.id}:${asset.id}:v${asset.version}`,
+      kind: "document",
+      name: asset.title,
+      path: `.mae-flow-work/business-modules/${module.id}/${asset.id}.md`,
+      description: asset.summary,
+      digest: asset.digest,
+      selected: true,
+      scope: "module",
+      module_id: module.id,
+      module_name: module.name,
+      asset_version: asset.version,
+    });
+  }
   for (const event of events) {
     seed(event);
     const item = resources.get(event.id)!;

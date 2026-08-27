@@ -27,6 +27,10 @@ export interface KnowledgeInsightResource {
    * 首标题摘要。没有它,排行里就只剩文件名,人没法判断值不值得读。 */
   description?: string;
   repository?: string;
+  scope?: "task" | "repository" | "team" | "module";
+  module_id?: string;
+  module_name?: string;
+  asset_version?: number;
   provided_tasks: number;
   selected_tasks: number;
   loaded_tasks: number;
@@ -69,6 +73,7 @@ export interface KnowledgeInsightTask {
   status: string;
   repository_skills?: unknown[];
   repository_knowledge?: unknown[];
+  business_modules?: unknown[];
   knowledge_usage?: TaskKnowledgeUsage;
   focus?: { needs_attention?: boolean };
   delivery?: {
@@ -208,7 +213,13 @@ function resourceKey(resource: {
   kind: KnowledgeKind;
   path: string;
   repository?: string;
+  scope?: string;
+  module_id?: string;
 }): string {
+  if (resource.scope === "module") {
+    return ["module", resource.module_id ?? "", resource.kind, resource.path]
+      .join("\0");
+  }
   return [resource.repository ?? "", resource.kind, resource.path].join("\0");
 }
 
@@ -230,7 +241,25 @@ function needsAttention(task: KnowledgeInsightTask): boolean {
 function tracked(task: KnowledgeInsightTask): boolean {
   return !!task.knowledge_usage
     || task.repository_knowledge !== undefined
-    || task.repository_skills !== undefined;
+    || task.repository_skills !== undefined
+    || task.business_modules !== undefined;
+}
+
+/** 团队页只统计有正式团队/模块身份的资产。任务文档与仓库项目规则
+ * 都属于各自现场，不能因为一次 read 就晋升成团队知识。业务模块知识
+ * 只有经过 Owner 显式发布且带 module scope，才具备稳定复用身份。 */
+function reusableResource(resource: {
+  kind: KnowledgeKind;
+  scope?: string;
+}): boolean {
+  return resource.kind === "skill"
+    || (resource.kind === "document" && resource.scope === "module");
+}
+
+function teamTracked(task: KnowledgeInsightTask): boolean {
+  return task.repository_skills !== undefined
+    || (task.business_modules?.length ?? 0) > 0
+    || (task.knowledge_usage?.resources.some(reusableResource) ?? false);
 }
 
 function percent(part: number, total: number): number {
@@ -250,7 +279,7 @@ function recommendations(
       title: "返工或关注任务缺少主动知识访问",
       evidence: `${frictionWithoutAccess.length} 个任务出现修复或人工关注信号，`
         + "但没有观察到 Agent 主动读取业务知识。",
-      action: "回看这些任务的共同问题，判断应补充仓库文档、项目规则还是专项 Skill。",
+      action: "回看共同问题：仓库现场可补参考资料或项目规则；跨任务共识应由 Owner 提炼为模块知识或团队 Skill。",
       task_ids: frictionWithoutAccess.slice(0, 8),
     });
   }
@@ -304,19 +333,20 @@ export function buildTeamKnowledgeInsights(
   tasks: KnowledgeInsightTask[],
   now = new Date(),
 ): TeamKnowledgeInsights {
-  const observed = tasks.filter(tracked);
+  const observed = tasks.filter(teamTracked);
   const aggregate = new Map<string, KnowledgeInsightResource>();
   const taskAccess = new Set<string>();
   const frictionWithoutAccess: string[] = [];
 
   for (const task of observed) {
     const usage = task.knowledge_usage;
-    const accessed = usage?.resources.some((item) => item.read_count > 0) ?? false;
+    const reusable = (usage?.resources ?? []).filter(reusableResource);
+    const accessed = reusable.some((item) => item.read_count > 0);
     if (accessed) taskAccess.add(task.id);
     if (!accessed && (repaired(task) || needsAttention(task))) {
       frictionWithoutAccess.push(task.id);
     }
-    for (const resource of usage?.resources ?? []) {
+    for (const resource of reusable) {
       const key = resourceKey(resource);
       const item = aggregate.get(key) ?? {
         key,
@@ -324,6 +354,11 @@ export function buildTeamKnowledgeInsights(
         name: resource.name,
         path: resource.path,
         repository: resource.repository,
+        ...(resource.scope ? { scope: resource.scope } : {}),
+        ...(resource.module_id ? { module_id: resource.module_id } : {}),
+        ...(resource.module_name ? { module_name: resource.module_name } : {}),
+        ...(resource.asset_version !== undefined
+          ? { asset_version: resource.asset_version } : {}),
         provided_tasks: 0,
         selected_tasks: 0,
         loaded_tasks: 0,

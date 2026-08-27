@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedModelServer } from "../src/scriptedModel.ts";
@@ -121,19 +121,69 @@ test("未跟踪编译产物可不勾选，确认清单只绑定 HEAD 会推送�
   }
 });
 
-test("已在 commit 中但未勾选的文件不能直接放行，只能作为返工清单提交", async () => {
+test("勾选与 commit 不同也能直接通过:宿主机械整理提交并绑用户跳过直推", async () => {
+  // 用户拍板(2026-08-28):清单调整是机械活,不打回 Agent 也不重编;
+  // 且剔除≠销毁——退出提交,工作区内容原样保留。
+  const repo = repository({ commitArtifact: true });
+  const { service, model, id, internal } = await waitingService(repo);
+  try {
+    // 基线里就有的文件被改过并已提交——剔除它时最容易被"直接回退"
+    // 误伤,专门验内容保留。
+    writeFileSync(join(repo.cwd, "README.md"), "baseline\nagent 补的注记\n");
+    repo.git("add", "README.md");
+    repo.git("commit", "--quiet", "-m", "agent touches readme");
+    const before = repo.git("rev-parse", "HEAD");
+    const waiting = service.get(id)!.waiting!;
+    await service.decide(id, {
+      state_version: waiting.state_version,
+      selected_options: { "这轮代码通过吗？": "代码无需调整，继续提交" },
+      delivery_paths: ["src/feature.ts"],
+    });
+    const selection = service.get(id)?.delivery_selection;
+    assert.equal(selection?.status, "confirmed");
+    assert.deepEqual(selection?.paths, ["src/feature.ts"]);
+
+    // 宿主补了整理提交:未勾选的退出 commit,清单绑定新 HEAD。
+    const after = repo.git("rev-parse", "HEAD");
+    assert.notEqual(after, before, "整理必须落成新提交,不许改写历史");
+    assert.equal(selection?.head, after);
+    assert.match(repo.git("log", "-1", "--format=%s"),
+      /按推送前人工确认整理交付清单/);
+    assert.equal(
+      repo.git("ls-files", "--", "target/classes/Feature.class"), "",
+      "被剔除的新增产物必须退出索引");
+    assert.equal(repo.git("show", "HEAD:README.md"), "baseline",
+      "交付的 README 必须是基线内容");
+
+    // 剔除≠销毁:两个被剔除文件的内容都还在工作区。
+    assert.ok(existsSync(join(repo.cwd, "target/classes/Feature.class")),
+      "新增产物退出索引后文件仍在现场");
+    assert.equal(
+      readFileSync(join(repo.cwd, "README.md"), "utf-8"),
+      "baseline\nagent 补的注记\n",
+      "被剔除的改动保留为未暂存内容,不许物理回退");
+
+    // 已确认剔除的路径不算脏账,后续 prepush 轮不被它们绊倒。
+    const dirty = await (service as any).prePushDirtyPaths(internal);
+    assert.ok(!dirty.includes("README.md")
+      && !dirty.includes("target/classes/Feature.class"),
+      `拍板剔除的路径不应出现在脏区: ${dirty.join(", ")}`);
+
+    // 不重编:新 HEAD 绑用户跳过,编译与 UT 交流水线裁决,账留痕。
+    const prepush = service.get(id)?.delivery?.prepush;
+    assert.equal(prepush?.state, "user_skipped");
+    assert.equal(prepush?.sha, after);
+    assert.match(prepush?.message ?? "", /流水线裁决/);
+  } finally {
+    await model.stop();
+  }
+});
+
+test("选“需要调整”仍走返工:清单以 requested 进入 Agent 上下文", async () => {
   const repo = repository({ commitArtifact: true });
   const { service, model, id } = await waitingService(repo);
   try {
     const waiting = service.get(id)!.waiting!;
-    await assert.rejects(service.decide(id, {
-      state_version: waiting.state_version,
-      selected_options: { "这轮代码通过吗？": "代码无需调整，继续提交" },
-      delivery_paths: ["src/feature.ts"],
-    }), (error) => error instanceof TaskControlError
-      && /当前 commit 仍包含未勾选文件.*Feature\.class/.test(error.message));
-    assert.equal(service.get(id)?.status, "waiting_for_human");
-
     await service.decide(id, {
       state_version: waiting.state_version,
       selected_options: { "这轮代码通过吗？": "需要调整代码（按清单返工）" },

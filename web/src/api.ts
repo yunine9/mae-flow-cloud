@@ -435,6 +435,9 @@ export interface TaskSummary {
     started_at: string;
     finished_at?: string;
   };
+  /** 下单事实「UT生成方式」的镜像。"仓内既有写法"= 没指向团队 Skill,
+   * skill 不被读取是正确行为——这句话要在界面上说破,别让人翻内核文件。 */
+  ut_generation_method?: string;
   /** 现场被回收的时刻。有值 = 代码克隆等大件已删,过程记录/证据/批注仍在。
    * 页面据此如实说明,别让人对着 404 的代码差异发愣。 */
   workspace_reclaimed_at?: string;
@@ -444,8 +447,10 @@ export interface TaskSummary {
   repositories?: string[];
   /** 下单或 Chain 方案确认时选中的仓内 Skill；每个子任务只继承自己仓。 */
   repository_skills?: SelectedRepositorySkill[];
-  /** 本单开局明确加载的 docs 业务知识；规则文件无需手选。 */
+  /** 本单开局明确加载的仓内 docs 参考资料；规则文件无需手选。 */
   repository_knowledge?: SelectedRepositoryKnowledge[];
+  /** 创建任务时固定的业务模块与知识版本；正文不进入任务摘要。 */
+  business_modules?: SelectedBusinessModule[];
   /** Cloud 的知识消费观测，不参与内核裁决。 */
   knowledge_usage?: TaskKnowledgeUsage;
   /** 仓内 Skill 与代码交付使用同一基线。 */
@@ -521,7 +526,7 @@ export interface TaskSummary {
     baseline?: string;
     updated_at: string;
   };
-  /** push 前人工确认交付清单(任务级开关,默认关)。 */
+  /** push 前人工确认交付范围(任务级显式开关,缺省继承个人设置)。 */
   push_confirmation?: boolean;
   progress?: TaskProgress;
   control?: {
@@ -609,6 +614,158 @@ export interface LaunchOptions {
    * 给人掂量快慢;算不出时缺席,只显示名字。 */
   workflows: Array<
     { key: string; label: string; steps?: number; acks?: number }>;
+  /** 已发布的可选业务模块摘要；知识正文不会随目录接口返回。 */
+  business_modules: BusinessModuleLaunchOption[];
+}
+
+export interface BusinessModuleLaunchOption {
+  id: string;
+  name: string;
+  description: string;
+  owner: string;
+  repositories: string[];
+  revision: number;
+  assets: number;
+  updated_at: string;
+}
+
+export interface BusinessKnowledgeAsset {
+  id: string;
+  title: string;
+  summary: string;
+  when_to_use: string;
+  status: "published" | "archived";
+  version: number;
+  digest: string;
+  bytes: number;
+  updated_at: string;
+  updated_by: string;
+}
+
+export interface BusinessModule {
+  id: string;
+  name: string;
+  description: string;
+  owner: string;
+  maintainers: string[];
+  repositories: string[];
+  status: "active" | "archived";
+  revision: number;
+  assets: BusinessKnowledgeAsset[];
+  created_at: string;
+  created_by: string;
+  updated_at: string;
+  updated_by: string;
+  can_manage: boolean;
+}
+
+export interface SelectedBusinessModule {
+  id: string;
+  name: string;
+  description: string;
+  owner: string;
+  revision: number;
+  assets: Array<{
+    id: string;
+    title: string;
+    summary: string;
+    when_to_use: string;
+    version: number;
+    digest: string;
+    bytes: number;
+    snapshot_path: string;
+  }>;
+}
+
+export interface BusinessModuleOperation {
+  at: string;
+  operator: string;
+  action: "create" | "update" | "archive" | "publish_asset" | "archive_asset";
+  module_id: string;
+  asset_id?: string;
+  version?: number;
+  detail?: string;
+}
+
+export interface BusinessModuleCatalog {
+  modules: BusinessModule[];
+  warnings: string[];
+  operations: BusinessModuleOperation[];
+}
+
+export async function getBusinessModules(): Promise<BusinessModuleCatalog> {
+  const response = await fetch("/business-modules");
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function createBusinessModule(input: {
+  id: string;
+  name: string;
+  description: string;
+  owner: string;
+  maintainers: string[];
+  repositories: string[];
+}): Promise<BusinessModule> {
+  const response = await fetch("/business-modules", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function updateBusinessModule(
+  id: string,
+  patch: Partial<Pick<BusinessModule,
+    "name" | "description" | "owner" | "maintainers" | "repositories" | "status">>,
+): Promise<BusinessModule> {
+  const response = await fetch(`/business-modules/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    body: JSON.stringify(patch),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function getBusinessKnowledgeAsset(
+  moduleId: string,
+  assetId: string,
+): Promise<{
+  module_id: string;
+  module_name: string;
+  asset: BusinessKnowledgeAsset;
+  content: string;
+}> {
+  const response = await fetch(`/business-modules/${encodeURIComponent(moduleId)}`
+    + `/assets/${encodeURIComponent(assetId)}`);
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function publishBusinessKnowledgeAsset(
+  moduleId: string,
+  assetId: string,
+  input: Pick<BusinessKnowledgeAsset, "title" | "summary" | "when_to_use">
+    & { content: string },
+): Promise<BusinessModule> {
+  const response = await fetch(`/business-modules/${encodeURIComponent(moduleId)}`
+    + `/assets/${encodeURIComponent(assetId)}`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function archiveBusinessKnowledgeAsset(
+  moduleId: string,
+  assetId: string,
+): Promise<BusinessModule> {
+  const response = await fetch(`/business-modules/${encodeURIComponent(moduleId)}`
+    + `/assets/${encodeURIComponent(assetId)}`, { method: "DELETE" });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
 }
 
 export async function getLaunchOptions(): Promise<LaunchOptions> {
@@ -662,6 +819,10 @@ export interface TaskKnowledgeResource {
   description?: string;
   digest?: string;
   selected?: boolean;
+  scope?: "task" | "repository" | "team" | "module";
+  module_id?: string;
+  module_name?: string;
+  asset_version?: number;
   state: "available" | "loaded" | "used";
   available_count: number;
   loaded_count: number;
@@ -686,9 +847,13 @@ export interface TaskKnowledgeUsage {
     path: string;
     repository?: string;
     selected?: boolean;
+    scope?: "task" | "repository" | "team" | "module";
+    module_id?: string;
+    module_name?: string;
+    asset_version?: number;
     ts: string;
     session_id: string;
-    session_role: "main" | "subagent" | "prepush" | "developer-assistant";
+    session_role: "main" | "subagent" | "prepush" | "developer-assistant" | "warmup";
     step?: string;
     action: KnowledgeAction;
     observed_path?: string;
@@ -709,6 +874,10 @@ export interface KnowledgeInsightResource {
   /** 可读性:选中资源=仓内扫描的描述;自发读取=观测时抽的首标题摘要。 */
   description?: string;
   repository?: string;
+  scope?: "task" | "repository" | "team" | "module";
+  module_id?: string;
+  module_name?: string;
+  asset_version?: number;
   provided_tasks: number;
   selected_tasks: number;
   loaded_tasks: number;
@@ -772,13 +941,30 @@ export interface HostSkillShelf {
 export interface SkillOperationRecord {
   at: string;
   operator: string;
-  action: "upload" | "update" | "offline" | "rollback";
+  action: "upload" | "update" | "offline" | "rollback"
+    | "submit" | "approve" | "reject";
   directory: string;
   skill_digest?: string;
   package_digest?: string;
   files?: number;
   bytes?: number;
   detail?: string;
+}
+
+/** 开发者提交的待审 skill 包:人人可提交,管理员审核上架。 */
+export interface SkillSubmissionRecord {
+  id: string;
+  directory: string;
+  operator: string;
+  created_at: string;
+  status: "pending" | "approved" | "rejected";
+  skill_digest: string;
+  package_digest: string;
+  files: number;
+  bytes: number;
+  decided_at?: string;
+  decided_by?: string;
+  reject_reason?: string;
 }
 
 export interface SkillVersionRecord {
@@ -797,11 +983,27 @@ export interface SkillUploadFile {
   content_base64: string;
 }
 
+export interface HostSkillDocument {
+  directory: string;
+  path: string;
+  content: string;
+  digest: string;
+  bytes: number;
+}
+
 /** 货架 + 留痕一次取齐(管理面自刷新用,与 knowledge-insights 解耦)。 */
 export async function getSkillLibrary(): Promise<
   HostSkillShelf & { operations: SkillOperationRecord[] }
 > {
   const response = await fetch("/skills");
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function getSkillDocument(
+  directory: string,
+): Promise<HostSkillDocument> {
+  const response = await fetch(`/skills/${encodeURIComponent(directory)}`);
   if (!response.ok) throw new Error(await errorText(response));
   return response.json();
 }
@@ -814,6 +1016,52 @@ export async function uploadSkill(
     method: "PUT",
     body: JSON.stringify({ files }),
   });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+/** 开发者提交待审:与上架同一道验收闸,通过后进待审区等管理员裁决。 */
+export async function submitSkill(
+  directory: string,
+  files: SkillUploadFile[],
+): Promise<SkillSubmissionRecord> {
+  const response = await fetch(
+    `/skills/${encodeURIComponent(directory)}/submissions`, {
+      method: "POST",
+      body: JSON.stringify({ files }),
+    });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function listSkillSubmissions(): Promise<SkillSubmissionRecord[]> {
+  const response = await fetch("/skills/submissions");
+  if (!response.ok) throw new Error(await errorText(response));
+  return (await response.json()).submissions ?? [];
+}
+
+export async function approveSkillSubmission(
+  directory: string,
+  id: string,
+): Promise<SkillOperationRecord> {
+  const response = await fetch(
+    `/skills/${encodeURIComponent(directory)}/submissions/`
+    + `${encodeURIComponent(id)}/approve`, { method: "POST" });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function rejectSkillSubmission(
+  directory: string,
+  id: string,
+  reason?: string,
+): Promise<SkillSubmissionRecord> {
+  const response = await fetch(
+    `/skills/${encodeURIComponent(directory)}/submissions/`
+    + `${encodeURIComponent(id)}/reject`, {
+      method: "POST",
+      body: JSON.stringify({ reason: reason ?? "" }),
+    });
   if (!response.ok) throw new Error(await errorText(response));
   return response.json();
 }
@@ -982,6 +1230,7 @@ export async function createTask(
     repositorySkillCatalogToken?: string;
     selectedRepositorySkillIds?: string[];
     selectedRepositoryKnowledgeIds?: string[];
+    selectedBusinessModuleIds?: string[];
     requirementDocumentName?: string;
   },
 ): Promise<void> {
@@ -1007,6 +1256,7 @@ export async function createTask(
         extras?.selectedRepositorySkillIds,
       selected_repository_knowledge_ids:
         extras?.selectedRepositoryKnowledgeIds,
+      selected_business_module_ids: extras?.selectedBusinessModuleIds,
     }),
   });
   if (!response.ok) throw new Error(await errorText(response));
@@ -1389,6 +1639,29 @@ export function tailEvents(
 export async function skipPrepushVerification(taskId: string): Promise<void> {
   const response = await fetch(
     `/tasks/${encodeURIComponent(taskId)}/prepush/skip`, { method: "POST" });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(String(body.error ?? `HTTP ${response.status}`));
+  }
+}
+
+/** 人工重跑推送前编译:僵尸现场(重启杀掉在途轮)的出路;真在跑时
+ * 服务端拒绝并明说"正在进行",等于一次活性探测。 */
+export async function retryPrepushVerification(taskId: string): Promise<void> {
+  const response = await fetch(
+    `/tasks/${encodeURIComponent(taskId)}/prepush/retry`, { method: "POST" });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(String(body.error ?? `HTTP ${response.status}`));
+  }
+}
+
+/** 停止在途的推送前编译并直推流水线(用户拍板的合并语义):中止本轮、
+ * 如实收口停机账,随即绑当下 HEAD 跳过,编译与 UT 交由权威流水线裁决。
+ * 停止瞬间恰好通过的按通过继续;暂停中的任务只停不推。 */
+export async function stopPrepushVerification(taskId: string): Promise<void> {
+  const response = await fetch(
+    `/tasks/${encodeURIComponent(taskId)}/prepush/stop`, { method: "POST" });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     throw new Error(String(body.error ?? `HTTP ${response.status}`));

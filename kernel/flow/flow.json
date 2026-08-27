@@ -301,7 +301,6 @@
   "build": {
    "title": "自由实现与定稿",
    "clear_hint": true,
-   "allow_source_edit": true,
    "evidence": [],
    "next": "domain_archive"
   },
@@ -313,8 +312,7 @@
      "type": "domain_archive_complete"
     }
    ],
-   "next": "delivery_review",
-   "allow_source_edit": true
+   "next": "delivery_review"
   },
   "delivery_review": {
    "title": "最终代码增量检视",
@@ -323,8 +321,7 @@
      "type": "delivery_manifest_committed"
     }
    ],
-   "next": "push",
-   "allow_source_edit": true
+   "next": "push"
   },
   "archive_confirm": {
    "title": "旧规格定稿确认恢复",

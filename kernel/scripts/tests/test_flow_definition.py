@@ -70,9 +70,11 @@ class ReviewChoiceContractTests(unittest.TestCase):
         for review in ("build_review", "quality_review"):
             step = flow["steps"][review]
             revise = step["next"]["revise"]
-            self.assertTrue(
-                flow["steps"][revise].get("allow_source_edit"),
-                "%s 的返工选项没有进入可修改源码的步骤" % review)
+            # allow_source_edit 已随步骤级源码闸退役(2026-08-28,
+            # 交付链内编辑自由),返工只需落在真实步骤上。
+            self.assertIn(
+                revise, flow["steps"],
+                "%s 的返工选项指向了不存在的步骤" % review)
             self.assertIn("返工", step["choice_answers"]["revise"][0])
             self.assertIn("提交", step["choice_answers"]["continue"][0])
 

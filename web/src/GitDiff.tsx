@@ -511,7 +511,9 @@ export function GitDiff({
         <div className={`delivery-selection-bar${selectionChanged ? " changed" : ""}`}>
           {selectable && <div><strong>交付清单：已勾选 {selectedDeliveryCount} / {files.length}</strong>
             <span>{selectionChanged
-              ? "清单与当前 commit 不同，提交“需要调整”后由 Agent 整理并重新检视"
+              ? "清单与当前 commit 不同。直接提交“通过”即可：Cloud 会按你的勾选"
+                + "整理提交——剔除的退出提交但内容保留在工作区，补勾的纳入——"
+                + "并直推，不重新编译，编译与 UT 由权威流水线裁决。"
               : "当前勾选与 commit 一致；最终 push 前服务端会再次核对"}</span></div>}
           <div>
             {selectable && <>

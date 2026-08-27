@@ -98,11 +98,11 @@ function initialView(user: AuthUser): View {
  * 待办的既有流程;push 默认开,只落显式的关。 */
 const INTERVENTION_PRESETS = [
   { key: "full", moonlight: false, push: true, title: "全程把关",
-    hint: "过程节点等你拍板,推送前清单也过目（默认）" },
+    hint: "过程节点等你拍板,验证后确认最终交付范围（默认）" },
   { key: "process", moonlight: false, push: false, title: "逐步确认",
     hint: "过程节点等你拍板,交付信任三道门禁" },
   { key: "delivery", moonlight: true, push: true, title: "只看交付",
-    hint: "过程自动放行,但推送前清单要过目" },
+    hint: "过程自动放行,验证后确认最终交付范围" },
   { key: "auto", moonlight: true, push: false, title: "全自动",
     hint: "不中断执行,完成后统一复盘" },
 ] as const;
@@ -159,7 +159,7 @@ function InterventionSetting({
         nextPush = user.push_confirmation !== false;
         setPush(nextPush);
         notes.push(nextPush
-          ? "后续任务推送前会展示交付清单等你确认"
+          ? "后续任务会在推送前验证完成后展示最终交付范围"
           : "后续任务推送不再等待清单确认；已在等确认的任务点一下确认即可");
       }
       setNote(notes.join("；"));
@@ -174,7 +174,7 @@ function InterventionSetting({
       <div><span className="section-kicker">HUMAN INTERVENTION</span><h2 id="approval-setting-title">人工介入程度</h2></div>
       <span className="approval-setting-state">当前：{current.title}</span>
     </header>
-    <p className="approval-setting-summary">一处设定,所有任务生效:过程节点(需求澄清、方案确认)停不停,推送前交付清单看不看。真验收三道门禁(推送前编译自测、流水线绑 SHA、MR 人工合入)始终在,与此无关。</p>
+    <p className="approval-setting-summary">一处设定,所有任务生效:过程节点(需求澄清、方案确认)停不停,推送前验证完成后是否确认最终交付范围。同一文件集合内的自动修复不会重复询问；交付范围变化时会重新确认。流水线绑 SHA、MR 人工合入等门禁始终生效。</p>
     <div className="approval-options" role="group" aria-label="人工介入程度">
       {INTERVENTION_PRESETS.map((preset) => <button type="button" key={preset.key}
         className={current.key === preset.key ? "on" : ""} disabled={busy}
@@ -476,7 +476,7 @@ export function App() {
   // 知识聚合要读取多份任务足迹，独立低频刷新，不能跟 1.5 秒任务心跳
   // 绑在一起。开发成员也能看团队只读视图，和现有任务可见性一致。
   useEffect(() => {
-    if (!session || view !== "team") return;
+    if (!session || view !== "knowledge") return;
     refreshKnowledgeInsights();
     const timer = window.setInterval(refreshKnowledgeInsights, 60_000);
     return () => window.clearInterval(timer);
@@ -635,7 +635,7 @@ export function App() {
     issues: { title: "问题处理", description: "我的问题研究与 DTS 问题单处理：先定位，后补单，非问题也是合法结论。" },
     profile: { title: "个人设置", description: "集中管理任务审批方式、CodeHub 提交身份和小鲁班通知。" },
     history: { title: "交付历史", description: "回看任务与交付记录；未启用历史投影时仍可浏览当前任务现场。" },
-    knowledge: { title: "团队知识", description: "Skill 货架与知识效能：看当前生效的团队资产、真实消费足迹和值得沉淀的方向。" },
+    knowledge: { title: "团队知识", description: "业务模块、Skill 货架与知识效能：看当前生效的团队资产、真实消费足迹和值得沉淀的方向。" },
     users: { title: "账号管理", description: "创建本地账号并分配管理员或开发权限。" },
     settings: { title: "服务设置", description: "集中管理模型网关和团队运行策略；部署链路在此只读自检。" },
   }[view];

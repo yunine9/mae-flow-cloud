@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   createTask,
   getLaunchOptions,
@@ -29,6 +29,7 @@ type LaunchDraft = {
   lane: string;
   repairRounds: string;
   advancedOpen: boolean;
+  selectedBusinessModuleIds?: string[];
 };
 type LaunchPreferences = {
   recentRepos: string[];
@@ -50,6 +51,9 @@ function readStored<T>(key: string): T | undefined {
   }
 }
 
+function repositoryIdentity(value: string): string {
+  return value.trim().replace(/\/+$/, "").replace(/\.git$/i, "");
+}
 export function LaunchWorkspace({
   session,
   onCreated,
@@ -64,6 +68,7 @@ export function LaunchWorkspace({
   const [savedPreferences] = useState(() =>
     readStored<LaunchPreferences>(storageKey("preferences", session.username)));
   const validDraft = restoredDraft?.version === LAUNCH_DRAFT_VERSION
+      && (restoredDraft as LaunchDraft & { entryKind?: string }).entryKind !== "dts"
     ? restoredDraft : undefined;
   const [requirement, setRequirement] = useState(
     validDraft?.requirement ?? "");
@@ -96,6 +101,9 @@ export function LaunchWorkspace({
     validDraft?.repairRounds ?? savedPreferences?.repairRounds ?? "");
   const [advancedOpen, setAdvancedOpen] = useState(
     validDraft?.advancedOpen ?? false);
+  const [selectedBusinessModuleIds, setSelectedBusinessModuleIds] = useState(
+    validDraft?.selectedBusinessModuleIds ?? []);
+  const [moduleSelectionNotice, setModuleSelectionNotice] = useState("");
   const [draftSavedAt, setDraftSavedAt] = useState(
     validDraft?.updatedAt ?? "");
   const [repositorySkillSelection, setRepositorySkillSelection] =
@@ -104,6 +112,23 @@ export function LaunchWorkspace({
   // 摆在明面上。后端同样硬拦——绕过界面打接口一样被 409 挡住。
   const blockers = options?.blockers ?? [];
   const blocked = optionsLoading || blockers.length > 0 || !!optionsError;
+  const businessModules = useMemo(() => {
+    const wantedRepos = new Set(repos.map(repositoryIdentity).filter(Boolean));
+    return [...(options?.business_modules ?? [])].sort((left, right) => {
+      const leftMatch = left.repositories.some((repo) =>
+        wantedRepos.has(repositoryIdentity(repo)));
+      const rightMatch = right.repositories.some((repo) =>
+        wantedRepos.has(repositoryIdentity(repo)));
+      return Number(rightMatch) - Number(leftMatch)
+        || left.name.localeCompare(right.name);
+    });
+  }, [options, repos]);
+  const deliveryLocationVisible = !!options
+    && (options.repo.enabled || options.ticket.enabled || options.baseline.enabled);
+  const moduleSectionNumber = deliveryLocationVisible ? "03" : "02";
+  const executionSectionNumber = String(2
+    + Number(deliveryLocationVisible)
+    + Number(businessModules.length > 0)).padStart(2, "0");
 
   useEffect(() => {
     let alive = true;
@@ -131,6 +156,7 @@ export function LaunchWorkspace({
         lane,
         repairRounds,
         advancedOpen,
+        selectedBusinessModuleIds,
       };
       try {
         localStorage.setItem(storageKey("draft", session.username),
@@ -142,7 +168,21 @@ export function LaunchWorkspace({
     }, 300);
     return () => window.clearTimeout(timer);
   }, [title, requirement, requirementDocumentName, repos, ticket,
-    baseline, lane, repairRounds, advancedOpen, session.username]);
+    baseline, lane, repairRounds, advancedOpen, selectedBusinessModuleIds,
+    session.username]);
+
+  useEffect(() => {
+    if (!options) return;
+    const available = new Set(options.business_modules.map((item) => item.id));
+    setSelectedBusinessModuleIds((current) => {
+      const removed = current.filter((id) => !available.has(id));
+      if (removed.length) {
+        setModuleSelectionNotice(
+          `草稿中的 ${removed.length} 个业务模块已归档或不可用，已从本次任务移除。`);
+      }
+      return current.filter((id) => available.has(id)).slice(0, 4);
+    });
+  }, [options]);
 
   useEffect(() => {
     const previous = document.body.style.overflow;
@@ -241,6 +281,7 @@ export function LaunchWorkspace({
           selectedRepositoryKnowledgeIds:
             repositorySkillSelection.scanned
               ? repositorySkillSelection.selectedKnowledgeIds : undefined,
+          selectedBusinessModuleIds,
           requirementDocumentName: requirementDocumentName || undefined,
         },
       );
@@ -321,6 +362,7 @@ export function LaunchWorkspace({
                   setRequirementDocumentName("");
                   setRepos([""]);
                   setTicket("");
+                  setSelectedBusinessModuleIds([]);
                   setError("");
                   try { localStorage.removeItem(storageKey("draft", session.username)); } catch { /* noop */ }
                 }}>清空草稿</button>
@@ -423,7 +465,7 @@ export function LaunchWorkspace({
                 </div>
               </section>
 
-              {options && (options.repo.enabled || options.ticket.enabled || options.baseline.enabled) && (
+              {options && deliveryLocationVisible && (
                 <section className="launch-form-section">
                   <div className="launch-section-head"><i>02</i><div><strong>交付定位</strong><small>Agent 据此进入正确仓库和分支</small></div></div>
                   {options.repo.enabled && (
@@ -486,10 +528,52 @@ export function LaunchWorkspace({
                   </div>}
                 </section>
               )}
+              {options && businessModules.length > 0 && (
+                <section className="launch-form-section business-module-picker">
+                  <div className="launch-section-head"><i>{moduleSectionNumber}</i><div>
+                    <strong>业务模块</strong>
+                    <small>选中后固定本次发布版本，只把知识目录交给 Agent，正文按需读取</small>
+                  </div><em>可选 · 最多 4 个</em></div>
+                  <div className="business-module-picker-list">
+                    {businessModules.map((module) => {
+                      const selectedIndex = selectedBusinessModuleIds.indexOf(module.id);
+                      const selected = selectedIndex >= 0;
+                      const recommended = module.repositories.some((repo) =>
+                        repos.some((item) => repositoryIdentity(item)
+                          === repositoryIdentity(repo)));
+                      const disabled = !selected && selectedBusinessModuleIds.length >= 4;
+                      return <label key={module.id}
+                        className={`business-module-option${selected ? " selected" : ""}${disabled ? " disabled" : ""}`}>
+                        <input type="checkbox" checked={selected} disabled={disabled}
+                          onChange={() => setSelectedBusinessModuleIds((current) =>
+                            selected
+                              ? current.filter((id) => id !== module.id)
+                              : [...current, module.id])} />
+                        <span className="business-module-check" aria-hidden>{selected ? "✓" : ""}</span>
+                        <span className="business-module-option-copy">
+                          <span><strong>{module.name}</strong>
+                            {selectedIndex === 0 && <em>主模块</em>}
+                            {recommended && <em className="recommended">仓库匹配</em>}
+                          </span>
+                          <small>{module.description}</small>
+                          <span className="business-module-meta">
+                            Owner {module.owner} · {module.assets} 项知识 · revision {module.revision}
+                          </span>
+                        </span>
+                      </label>;
+                    })}
+                  </div>
+                  {moduleSelectionNotice && <p className="business-module-picker-notice"
+                    role="status">{moduleSelectionNotice}</p>}
+                  <p className="business-module-picker-note">
+                    不选择也能正常发起；第一项作为主模块展示，最多再关联 3 个相关模块。系统不会因仓库匹配而自动勾选。
+                  </p>
+                </section>
+              )}
               <button type="button" className="launch-advanced-toggle"
                 aria-expanded={advancedOpen}
                 onClick={() => setAdvancedOpen((open) => !open)}>
-                <span><strong>高级设置</strong><small>基线、仓内知识与 Skill、交付方式与修复预算</small></span>
+                <span><strong>高级设置</strong><small>基线、仓内参考资料与 Skill、交付方式及修复预算</small></span>
                 <i aria-hidden>{advancedOpen ? "收起" : "展开"}</i>
               </button>
               {advancedOpen && <>
@@ -502,7 +586,7 @@ export function LaunchWorkspace({
                 />
               )}
               <section className="launch-form-section">
-                <div className="launch-section-head"><i>03</i><div><strong>执行设置</strong><small>选定交付方式和修复预算;任务自动归属你本人</small></div></div>
+                <div className="launch-section-head"><i>{executionSectionNumber}</i><div><strong>执行设置</strong><small>选定交付方式和修复预算;任务自动归属你本人</small></div></div>
                 <div className="launch-field-grid launch-settings-grid">
                   {(options?.workflows.length ?? 0) > 0 && (
                     <label className="account-field">

@@ -190,20 +190,6 @@
       "escape": "permit",
       "why": "同 edit-before-workflow(sed -i/重定向写源码绕不过同一条头部纪律)"
     },
-    "edit-outside-source-step": {
-      "kind": "absolute",
-      "tier": "A",
-      "escape": "comply",
-      "evidence": "进入内核明确允许写源码",
-      "why": "flow.json 当前步骤未授权源码写入时必须机械阻断；过程文档照常可写，用户主动接管走 Cloud 开发助手交还协议"
-    },
-    "bash-outside-source-step": {
-      "kind": "absolute",
-      "tier": "A",
-      "escape": "comply",
-      "evidence": "进入内核明确允许写源码",
-      "why": "同 edit-outside-source-step，禁止用 sed/重定向等 Bash 写入绕过阶段授权"
-    },
     "edit-readonly-resource": {
       "kind": "absolute",
       "tier": "A",

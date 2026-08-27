@@ -4,9 +4,17 @@
  *   POST /tasks                {requirement}            → 201 摘要
  *   GET  /tasks                                         → 列表
  *   GET  /knowledge-insights                            → 团队知识效能(只读)
+ *   GET  /business-modules                              → 业务模块、Owner 与知识目录
+ *   POST /business-modules                              → 管理员创建并指定 Owner
+ *   PUT  /business-modules/:id                          → 管理模块(转移 Owner 仅管理员)
+ *   GET/PUT/DELETE /business-modules/:id/assets/:asset  → 查看/发布/归档模块知识
  *   GET  /skills                                        → Skill 货架 + 操作留痕
  *   GET  /skills/:dir/versions                          → 归档版本痕(可回退点)
  *   PUT  /skills/:dir          {files:[{path,content_base64}]} → 上传/更新(管理员)
+ *   GET  /skills/submissions                            → 待审/已裁决提交台账(登录即可)
+ *   POST /skills/:dir/submissions {files:[…]}           → 开发者提交待审(登录即可,同一道验收闸)
+ *   POST /skills/:dir/submissions/:id/approve           → 审核通过并上架(管理员)
+ *   POST /skills/:dir/submissions/:id/reject {reason?}  → 驳回留痕(管理员)
  *   DELETE /skills/:dir                                 → 下线并归档(管理员)
  *   POST /skills/:dir/rollback {version}                → 回退归档版本(管理员)
  *   POST /skills/:dir/distill                           → 从任务现场起草修订稿(管理员)
@@ -31,6 +39,9 @@
  *   POST /tasks/:id/annotations/:annId/reopen           → 裁决:返工,退回草稿再送一轮
  *   GET  /tasks/:id/events                              → SSE:重放事件日志后持续跟进
  *   GET  /tasks/:id/prepush/events                      → SSE:推送前验证实时事件(换轮自动切新)
+ *   POST /tasks/:id/prepush/skip                        → 失败停机后人工拍板跳过,直推流水线裁决
+ *   POST /tasks/:id/prepush/retry                       → 人工重跑推送前编译(僵尸现场出路/活性探针)
+ *   POST /tasks/:id/prepush/stop                        → 停止在途编译并直推流水线(绑 HEAD 跳过)
  *   GET  /tasks/:id/warmup/events                       → SSE:环境预热编译实时事件
  *   GET  /tasks/:id/timeline                            → 人话交付时间线(只读现场)
  *   GET  /tasks/:id/activity                            → 行为摘要:此刻在干嘛/分段折叠/异常信号
@@ -83,10 +94,15 @@ import type { LubanApprovalGateway } from "./lubanApproval.ts";
 import { handleIssueRoutes } from "./issueFlow/routes.ts";
 import {
   SkillLibraryError,
+  approveSkillSubmission,
   listSkillOperations,
+  listSkillSubmissions,
   listSkillVersions,
   offlineHostSkill,
+  readHostSkillDocument,
+  rejectSkillSubmission,
   rollbackHostSkill,
+  submitHostSkill,
   uploadHostSkill,
 } from "./hostSkillLibrary.ts";
 import {
@@ -96,6 +112,17 @@ import {
   listSkillCandidates,
   readSkillCandidate,
 } from "./skillDistiller.ts";
+import {
+  BusinessModuleError,
+  archiveBusinessKnowledgeAsset,
+  canManageBusinessModule,
+  createBusinessModule,
+  listBusinessModules,
+  publishBusinessKnowledgeAsset,
+  readBusinessKnowledgeAsset,
+  readBusinessModule,
+  updateBusinessModule,
+} from "./businessModuleLibrary.ts";
 
 /** 正式前端静态文件的最小类型表:Vite 产物就这几种。 */
 const MIME: Record<string, string> = {
@@ -628,7 +655,7 @@ export function createTaskServer(
         url.pathname === "/history" || parts[0] === "tasks"
         || url.pathname === "/knowledge-insights"
         || parts[0] === "reviews" || parts[0] === "repository-skills"
-        || parts[0] === "skills";
+        || parts[0] === "skills" || parts[0] === "business-modules";
       // 兼容已经发出去的旧通知。/tasks/:id 是 JSON API，但旧链接若由
       // 浏览器作为页面打开，应带人去新的任务工作台；程序 fetch 默认
       // Accept: */*，仍拿原来的 JSON，不改变 API 契约。
@@ -660,6 +687,141 @@ export function createTaskServer(
       // 会被当成前端资源并返回 404。只读口径与团队任务可见性一致。
       if (request.method === "GET" && url.pathname === "/knowledge-insights") {
         return json(response, 200, service.knowledgeInsights());
+      }
+      // 业务模块是一等知识范围：管理员建模块/转移 Owner，Owner 与维护
+      // 者管理本模块资产；团队成员可读目录与正文。它不从任务 docs 或
+      // 仓库目录自动推断。
+      if (parts[0] === "business-modules") {
+        const dataDir = service.options.dataDir;
+        const operator = viewer?.username ?? "本地部署";
+        const admin = !options.auth || viewer?.role === "admin";
+        const existingUsers = () => new Set(
+          options.auth?.listUsers().map((user) => user.username) ?? [operator]);
+        const assertMembers = (owner: string, maintainers: string[]) => {
+          if (!options.auth) return;
+          const users = existingUsers();
+          for (const username of [owner, ...maintainers]) {
+            if (!users.has(username)) {
+              throw new BusinessModuleError(`账号 ${username} 不存在`);
+            }
+          }
+        };
+        const view = (module: ReturnType<typeof readBusinessModule>) => ({
+          ...module,
+          can_manage: canManageBusinessModule(
+            module, viewer?.username, admin),
+        });
+        try {
+          if (request.method === "GET" && parts.length === 1) {
+            const catalog = listBusinessModules(dataDir);
+            return json(response, 200, {
+              ...catalog,
+              modules: catalog.modules.map(view),
+            });
+          }
+          if (request.method === "POST" && parts.length === 1) {
+            if (!admin) {
+              return json(response, 403,
+                { error: "只有管理员可以创建业务模块" });
+            }
+            const body = await readBody(request);
+            const owner = String(body.owner ?? "");
+            const maintainers = Array.isArray(body.maintainers)
+              ? body.maintainers.map(String) : [];
+            assertMembers(owner, maintainers);
+            return json(response, 201, view(createBusinessModule(dataDir, {
+              id: String(body.id ?? ""),
+              name: String(body.name ?? ""),
+              description: String(body.description ?? ""),
+              owner,
+              maintainers,
+              repositories: Array.isArray(body.repositories)
+                ? body.repositories.map(String) : [],
+            }, operator)));
+          }
+          if (request.method === "GET" && parts.length === 2) {
+            return json(response, 200,
+              view(readBusinessModule(dataDir, decodeURIComponent(parts[1]))));
+          }
+          if (request.method === "PUT" && parts.length === 2) {
+            const current = readBusinessModule(
+              dataDir, decodeURIComponent(parts[1]));
+            if (!canManageBusinessModule(
+                current, viewer?.username, admin)) {
+              return json(response, 403,
+                { error: "只有模块 Owner、维护者或管理员可以修改模块" });
+            }
+            const body = await readBody(request);
+            if (body.status !== undefined
+                && String(body.status) !== current.status && !admin) {
+              return json(response, 403,
+                { error: "只有管理员可以归档或重新启用业务模块" });
+            }
+            const owner = body.owner === undefined
+              ? current.owner : String(body.owner);
+            const maintainers = body.maintainers === undefined
+              ? current.maintainers
+              : Array.isArray(body.maintainers)
+                ? body.maintainers.map(String) : [];
+            assertMembers(owner, maintainers);
+            return json(response, 200, view(updateBusinessModule(
+              dataDir, current.id, {
+                name: body.name === undefined ? undefined : String(body.name),
+                description: body.description === undefined
+                  ? undefined : String(body.description),
+                owner,
+                maintainers,
+                repositories: body.repositories === undefined
+                  ? undefined : Array.isArray(body.repositories)
+                    ? body.repositories.map(String) : [],
+                status: body.status === undefined
+                  ? undefined : String(body.status) as "active" | "archived",
+              }, operator, admin)));
+          }
+          if (request.method === "GET" && parts.length === 4
+              && parts[2] === "assets") {
+            return json(response, 200, readBusinessKnowledgeAsset(
+              dataDir, decodeURIComponent(parts[1]),
+              decodeURIComponent(parts[3])));
+          }
+          if (request.method === "PUT" && parts.length === 4
+              && parts[2] === "assets") {
+            const current = readBusinessModule(
+              dataDir, decodeURIComponent(parts[1]));
+            if (!canManageBusinessModule(
+                current, viewer?.username, admin)) {
+              return json(response, 403,
+                { error: "只有模块 Owner、维护者或管理员可以发布知识" });
+            }
+            const body = await readBody(request);
+            return json(response, 200, view(publishBusinessKnowledgeAsset(
+              dataDir, current.id, {
+                id: decodeURIComponent(parts[3]),
+                title: String(body.title ?? ""),
+                summary: String(body.summary ?? ""),
+                when_to_use: String(body.when_to_use ?? ""),
+                content: String(body.content ?? ""),
+              }, operator)));
+          }
+          if (request.method === "DELETE" && parts.length === 4
+              && parts[2] === "assets") {
+            const current = readBusinessModule(
+              dataDir, decodeURIComponent(parts[1]));
+            if (!canManageBusinessModule(
+                current, viewer?.username, admin)) {
+              return json(response, 403,
+                { error: "只有模块 Owner、维护者或管理员可以归档知识" });
+            }
+            return json(response, 200, view(archiveBusinessKnowledgeAsset(
+              dataDir, current.id, decodeURIComponent(parts[3]), operator)));
+          }
+        } catch (error) {
+          if (error instanceof BusinessModuleError) {
+            return json(response, 400, { error: error.message });
+          }
+          throw error;
+        }
+        return json(response, 404, { error: "未知业务模块接口" });
       }
       // 团队 Skill 资产库(货架的写半边):读与货架同口径(登录即可),
       // 写只归管理员,操作人逐条进留痕。写进数据目录即对下一单生效,
@@ -695,6 +857,26 @@ export function createTaskServer(
             return json(response, 200, readSkillCandidate(
               dataDir, decodeURIComponent(parts[1]),
               decodeURIComponent(parts[3])));
+          }
+          // 提交待审(2026-08-27 用户拍板:人人可提交,管理员审核
+          // 上架)。提交走与上架同一道完整验收闸;读列表登录即可
+          // ——谁提交了什么、裁决结果如何是团队可见的台账。
+          if (request.method === "GET" && parts.length === 2
+              && parts[1] === "submissions") {
+            return json(response, 200,
+              { submissions: listSkillSubmissions(dataDir) });
+          }
+          if (request.method === "GET" && parts.length === 2) {
+            return json(response, 200, readHostSkillDocument(
+              dataDir, decodeURIComponent(parts[1])));
+          }
+          if (request.method === "POST" && parts.length === 3
+              && parts[2] === "submissions") {
+            const body = await readBody(request);
+            return json(response, 200, await submitHostSkill(
+              dataDir, decodeURIComponent(parts[1]),
+              Array.isArray(body.files) ? body.files : [],
+              viewer?.username ?? "本地部署"));
           }
           if (options.auth && viewer?.role !== "admin") {
             return json(response, 403,
@@ -734,6 +916,20 @@ export function createTaskServer(
             discardSkillCandidate(dataDir,
               decodeURIComponent(parts[1]), decodeURIComponent(parts[3]));
             return json(response, 200, { ok: true });
+          }
+          if (request.method === "POST" && parts.length === 5
+              && parts[2] === "submissions" && parts[4] === "approve") {
+            return json(response, 200, await approveSkillSubmission(
+              dataDir, decodeURIComponent(parts[1]),
+              decodeURIComponent(parts[3]), operator));
+          }
+          if (request.method === "POST" && parts.length === 5
+              && parts[2] === "submissions" && parts[4] === "reject") {
+            const body = await readBody(request);
+            return json(response, 200, await rejectSkillSubmission(
+              dataDir, decodeURIComponent(parts[1]),
+              decodeURIComponent(parts[3]), operator,
+              typeof body.reason === "string" ? body.reason : undefined));
           }
         } catch (error) {
           if (error instanceof SkillLibraryError
@@ -852,6 +1048,9 @@ export function createTaskServer(
         const selectedRepositoryKnowledgeIds =
           Array.isArray(body.selected_repository_knowledge_ids)
             ? body.selected_repository_knowledge_ids.map(String) : undefined;
+        const selectedBusinessModuleIds =
+          Array.isArray(body.selected_business_module_ids)
+            ? body.selected_business_module_ids.map(String) : undefined;
         // 配置没配齐不给下单(用户拍板)。前端会把缺项摆在明面上,
         // 但拦必须在后端——绕过界面直接打接口的一样要被拦住,
         // 否则任务会带着缺失的令牌一路跑到推送/通知那步才炸。
@@ -874,6 +1073,7 @@ export function createTaskServer(
               lane, ticket, baseline, model,
               repairRounds, repositorySkillCatalogToken,
               selectedRepositorySkillIds, selectedRepositoryKnowledgeIds,
+              selectedBusinessModuleIds,
             }));
         } catch (error) {
           return json(response, 400, { error: String(error) });
@@ -956,8 +1156,8 @@ export function createTaskServer(
             body.include_current === true,
           ));
         }
-        // push 前人工确认交付清单(任务级开关)。默认关;开着时宿主
-        // 在推送前挂云端原生 diff 卡。
+        // push 前人工确认交付范围(任务级显式开关)。未显式设置时按
+        // 个人默认；开着时宿主在 prepush 收敛后挂云端原生 diff 卡。
         if (request.method === "PUT" && parts[2] === "push-confirmation") {
           const target = service.get(id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
@@ -1169,6 +1369,27 @@ export function createTaskServer(
           }
           return json(response, 200,
             await service.skipPrePushVerification(id));
+        }
+        // 人工重跑推送前编译:重启杀掉在途轮留下的僵尸现场,或失败停机
+        // 后想再来一轮。真在跑时服务端拒绝并明说,兼作活性探针。
+        if (request.method === "POST" && parts[2] === "prepush"
+            && parts[3] === "retry") {
+          const target = service.get(id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          if (!canOperate(viewer, target.luban_account, !!options.auth)) {
+            return json(response, 403, { error: "只能操作分配给自己的任务" });
+          }
+          return json(response, 200, await service.retryPrePush(id));
+        }
+        // 停止在途的推送前编译并直推流水线:收口停机账后立刻绑 HEAD 跳过。
+        if (request.method === "POST" && parts[2] === "prepush"
+            && parts[3] === "stop") {
+          const target = service.get(id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          if (!canOperate(viewer, target.luban_account, !!options.auth)) {
+            return json(response, 403, { error: "只能操作分配给自己的任务" });
+          }
+          return json(response, 200, await service.stopPrePush(id));
         }
         // 从头重跑会原位覆盖旧任务及其审计现场。管理员不替开发者发起
         // 或冒用其代码身份；鉴权部署下只能由任务本人执行。

@@ -48,10 +48,10 @@ function usage(options: {
 test("团队知识聚合按仓库/类型/路径合并并关联交付结果", () => {
   const tasks: KnowledgeInsightTask[] = [
     { id: "task-1", status: "completed", repository_skills: [],
-      knowledge_usage: usage({ id: "v1", name: "订单构建", path: "docs/build.md", reads: 2 }) },
+      knowledge_usage: usage({ id: "v1", kind: "skill", name: "订单构建", path: ".agents/skills/build/SKILL.md", reads: 2 }) },
     { id: "task-2", status: "verifying", repository_skills: [],
       delivery: { loop: { round: 1, kind: "ci", state: "repairing" } },
-      knowledge_usage: usage({ id: "v2", name: "订单构建指南", path: "docs/build.md", reads: 1 }) },
+      knowledge_usage: usage({ id: "v2", kind: "skill", name: "订单构建指南", path: ".agents/skills/build/SKILL.md", reads: 1 }) },
     { id: "legacy", status: "completed" },
   ];
   const result = buildTeamKnowledgeInsights(tasks, new Date("2026-08-24T09:00:00Z"));
@@ -59,10 +59,10 @@ test("团队知识聚合按仓库/类型/路径合并并关联交付结果", () 
   assert.equal(result.summary.access_rate, 100);
   assert.equal(result.resources.length, 1);
   assert.deepEqual(result.resources[0], {
-    key: "https://code.example/team/orders.git\0document\0docs/build.md",
-    kind: "document",
+    key: "https://code.example/team/orders.git\0skill\0.agents/skills/build/SKILL.md",
+    kind: "skill",
     name: "订单构建指南",
-    path: "docs/build.md",
+    path: ".agents/skills/build/SKILL.md",
     repository: "https://code.example/team/orders.git",
     provided_tasks: 2,
     selected_tasks: 0,
@@ -81,8 +81,8 @@ test("团队知识聚合按仓库/类型/路径合并并关联交付结果", () 
 test("飞轮给出覆盖缺口、选而未用和正向沉淀建议", () => {
   const unused = usage({ id: "skill", kind: "skill", name: "发布助手",
     path: ".cac/skills/release/SKILL.md", selected: true, reads: 0 });
-  const proven = usage({ id: "rules", kind: "rules", name: "AGENTS.md",
-    path: "AGENTS.md", reads: 1 });
+  const proven = usage({ id: "repository-skill", kind: "skill", name: "交付检查",
+    path: ".agents/skills/release/SKILL.md", reads: 1 });
   const tasks: KnowledgeInsightTask[] = [
     { id: "gap", status: "paused", repository_skills: [], knowledge_usage: {
       summary: { resources: 0, loaded: 0, used: 0, skills_used: 0, selected_unused: 0 },
@@ -112,6 +112,39 @@ test("小样本只展示事实，不强行生成资源优劣结论", () => {
   }]);
   assert.equal(result.summary.opportunities, 0);
   assert.deepEqual(result.recommendations, []);
+});
+
+test("只有正式模块文档进入团队飞轮，任务 docs 与项目规则继续留在仓库现场", () => {
+  const moduleUsage: TaskKnowledgeUsage = {
+    summary: { resources: 3, loaded: 0, used: 3, skills_used: 0, selected_unused: 0 },
+    resources: [{
+      id: "module:orders:state:v3", kind: "document", name: "订单状态机",
+      path: ".mae-flow-work/business-modules/orders/state.md",
+      scope: "module", module_id: "orders", module_name: "订单域",
+      asset_version: 3, selected: true, state: "used",
+      available_count: 1, loaded_count: 0, read_count: 2,
+    }, {
+      id: "observed:task-doc", kind: "document", name: "本需求设计",
+      path: "docs/requirement.md", state: "used",
+      available_count: 0, loaded_count: 0, read_count: 1,
+    }, {
+      id: "rules:orders", kind: "rules", name: "AGENTS.md",
+      path: "AGENTS.md", repository: "https://code.example/orders.git",
+      state: "used", available_count: 1, loaded_count: 1, read_count: 2,
+    }],
+    events: [],
+  };
+  const result = buildTeamKnowledgeInsights([{
+    id: "task-module", status: "completed", business_modules: [{}],
+    knowledge_usage: moduleUsage,
+  }]);
+  assert.equal(result.resources.length, 1);
+  assert.equal(result.resources[0].name, "订单状态机");
+  assert.equal(result.resources[0].scope, "module");
+  assert.equal(result.resources[0].module_name, "订单域");
+  assert.ok(!result.resources.some((item) => item.name === "本需求设计"));
+  assert.ok(!result.resources.some((item) => item.kind === "rules"),
+    "项目规则可以留在本单足迹，但绝不能出现在团队资产聚合中");
 });
 
 test("团队知识效能使用独立只读 HTTP 接口", async () => {
@@ -218,7 +251,23 @@ test("货架效果账:消费率、prepush 一次过对照与修订信号", async
   assert.equal(flaky.repair_tasks, 2);
 });
 
-test("聚合保留资源描述:可读性字段不许在聚合层丢失", () => {
+test("任务自己的 document 不进入团队知识聚合", () => {
+  const result = buildTeamKnowledgeInsights([{
+    id: "requirement-task",
+    status: "completed",
+    repository_knowledge: [{}],
+    knowledge_usage: usage({
+      id: "requirement", kind: "document", name: "REQ-1001 需求说明",
+      path: "docs/REQ-1001.md", reads: 3,
+    }),
+  }]);
+  assert.equal(result.summary.tracked_tasks, 0,
+    "只有任务文档的单不应稀释团队知识使用率");
+  assert.deepEqual(result.resources, []);
+  assert.deepEqual(result.recommendations, []);
+});
+
+test("聚合保留可复用资源描述:可读性字段不许在聚合层丢失", () => {
   const result = buildTeamKnowledgeInsights([{
     id: "t1",
     status: "completed",
@@ -226,8 +275,8 @@ test("聚合保留资源描述:可读性字段不许在聚合层丢失", () => {
       summary: { resources: 1, loaded: 1, used: 1, skills_used: 0,
         selected_unused: 0 },
       resources: [{
-        id: "doc-1", kind: "document", name: "订单对接",
-        path: "docs/orders.md",
+        id: "skill-1", kind: "skill", name: "订单对接",
+        path: ".agents/skills/orders/SKILL.md",
         repository: "https://code.example/team/orders.git",
         description: "订单域的对接说明与重试口径",
         state: "used", available_count: 1, loaded_count: 1, read_count: 2,

@@ -97,14 +97,15 @@ def main():
     check("build 步新建测试文件放行且无提醒", r.returncode == 0,
           r.stdout + r.stderr)
     root = make_repo(base, "g2", "open")
+    # 步骤级"本步禁改源码"2026-08-28 整体退役(编码阶段自由):
+    # workflow 已选定后 open/grill 等中段步骤改码一律放行,
+    # 完整性由头部纪律/绝对保护/提交侧范围闸把守。
     r = gate(root, "edit", "src/foo.c")
-    check("open 步改源码被步骤级红线阻断",
-          r.returncode == 2 and "当前步骤 open" in (r.stdout + r.stderr),
-          r.stdout + r.stderr)
+    check("open 步改源码放行(步骤级红线已退役)",
+          r.returncode == 0, r.stdout + r.stderr)
     r = gate(root, "bash", "sed -i s/a/b/ src/foo.c")
-    check("open 步不能用 Bash 绕过源码红线",
-          r.returncode == 2 and "当前步骤 open" in (r.stdout + r.stderr),
-          r.stdout + r.stderr)
+    check("open 步 Bash 写源码同一条自由",
+          r.returncode == 0, r.stdout + r.stderr)
     r = gate(root, "edit", "openspec/changes/probe-x/change.md")
     check("open 步写 change.md 放行", r.returncode == 0, r.stdout + r.stderr)
     root = make_repo(base, "g3", "domain_archive")

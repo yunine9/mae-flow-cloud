@@ -265,8 +265,7 @@ if flow:
           and steps.get("rf_triage", {}).get("next") == "build"
           and steps.get("story", {}).get("next") == "build")
     check("宽 build 步自由且零编排",
-          steps.get("build", {}).get("allow_source_edit") is True
-          and steps.get("build", {}).get("evidence") == []
+          steps.get("build", {}).get("evidence") == []
           and steps.get("build", {}).get("next") == "domain_archive")
     check("完整开发固定执行 Grill、本地 Spec 和 Story",
           steps.get("branch_create", {}).get("next", {}).get("full") == "grill"
