@@ -5969,14 +5969,21 @@ pre {
 .prepush-live-body .line-note { color: var(--faint); font-style: italic; }
 .prepush-live-empty { color: var(--faint); font-style: italic; }
 
-/* 团队知识资产：业务模块在上，Skill 货架保持折叠。 */
-.business-module-library { margin: 16px 20px 14px; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
-.business-module-library-head { padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; gap: 18px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--accent-soft) 24%, var(--surface)); }
+/* 业务版图：模块是治理实体，知识是模块内部资产，不再挤在知识效能页。 */
+.business-module-library { margin: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 18px; background: var(--surface); box-shadow: var(--shadow-sm); }
+.business-module-library-head { padding: 21px 24px; display: flex; align-items: center; justify-content: space-between; gap: 18px; border-bottom: 1px solid var(--line); background: linear-gradient(135deg, color-mix(in srgb, var(--accent-soft) 55%, var(--surface)), var(--surface)); }
 .business-module-library-head > div:first-child { min-width: 0; }
-.business-module-library-head h3 { margin: 3px 0 3px; color: var(--text-strong); font-size: 16px; }
-.business-module-library-head p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+.business-module-library-head h3 { margin: 5px 0 4px; color: var(--text-strong); font-size: 21px; letter-spacing: -.025em; }
+.business-module-library-head p { margin: 0; color: var(--muted); font-size: var(--font-size-body); line-height: 1.55; }
 .business-module-library-head > div:last-child { display: flex; align-items: center; gap: 8px; flex: none; }
 .business-module-library-head > div:last-child > span { color: var(--faint); font-size: var(--font-size-assist); }
+.business-module-flow { padding: 16px 24px; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 13px; border-bottom: 1px solid var(--line); background: var(--surface-soft); }
+.business-module-flow > div { min-width: 0; display: flex; align-items: center; gap: 10px; }
+.business-module-flow i { width: 30px; height: 30px; flex: 0 0 30px; display: grid; place-items: center; border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line)); border-radius: 9px; color: var(--accent); background: var(--accent-soft); font-size: 12px; font-style: normal; font-weight: 800; }
+.business-module-flow span { min-width: 0; display: grid; gap: 2px; }
+.business-module-flow strong { color: var(--text-strong); font-size: 13px; }
+.business-module-flow small { overflow: hidden; color: var(--muted); font-size: var(--font-size-assist); text-overflow: ellipsis; white-space: nowrap; }
+.business-module-flow b { color: var(--faint); font-size: 16px; font-weight: 500; }
 .business-module-library button { font: inherit; cursor: pointer; }
 .business-module-library-head button, .business-module-managebar button,
 .business-module-form-actions button, .business-asset-row > div button {
@@ -6187,6 +6194,9 @@ pre {
 }
 
 @media (max-width: 760px) {
+  /* 顶栏已有七个一级入口；进入横向顶栏形态后只保留图标和可访问名称。 */
+  .sidebar-nav .nav-item span:not(.nav-badge) { display: none; }
+  .sidebar-nav .nav-item { padding-left: 9px; padding-right: 9px; }
   .ops-grid, .personal-pulse.four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .task-kind-tabs { width: 100%; grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .knowledge-flywheel-head { align-items: flex-start; flex-direction: column; gap: 12px; }
@@ -6204,6 +6214,8 @@ pre {
   .business-module-picker-list, .business-module-form-grid { grid-template-columns: 1fr; }
   .business-module-library-head { align-items: flex-start; flex-direction: column; }
   .business-module-library-head > div:last-child { width: 100%; flex-wrap: wrap; }
+  .business-module-flow { grid-template-columns: 1fr; }
+  .business-module-flow > b { display: none; }
   .business-module-card-body { padding-left: 16px; }
   .business-asset-row { align-items: stretch; flex-direction: column; }
   .business-asset-row > div { justify-content: flex-end; }
@@ -6954,9 +6966,8 @@ body, .sidebar, .identity-bar, .launch-copy, .user-create-copy,
   .wish-composer-foot { flex-wrap: wrap; }.wish-paste-hint { min-width: 250px; }.wish-card-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 620px) {
-  /* 许愿墙让顶栏多一个团队入口；六枚图标仍要在 360px 级窄屏同屏，
-     不能把主题按钮挤出画布造成整页横向滚动。 */
-  .sidebar .nav-item { padding-left: 7px; padding-right: 7px; }
+  /* 团队入口增至七枚；窄屏保持同屏，不能挤出整页横向滚动。 */
+  .sidebar .nav-item { padding-left: 5px; padding-right: 5px; }
   .wish-wall { gap: 17px; }.wish-hero { padding: 22px; border-radius: 17px; }.wish-hero-copy h2 { font-size: 26px; }.wish-hero-copy > p { font-size: 14px; }.wish-hero-orbit { display: none; }.wish-hero-stats { margin-top: 17px; }
   .wish-composer { padding: 18px; border-radius: 15px; }.wish-composer-head { align-items: flex-start; flex-direction: column; }.wish-kind-toggle { width: 100%; box-sizing: border-box; }.wish-kind-toggle button { flex: 1; padding: 0 7px; }.wish-image-drafts { grid-template-columns: repeat(2, minmax(0, 1fr)); }.wish-paste-hint { order: 3; min-width: 100%; line-height: 1.55; }.wish-submit { margin-left: auto; }
   .wish-board-toolbar { align-items: flex-start; flex-direction: column; }.wish-filters { width: 100%; }.wish-filters > div { flex: 1; }.wish-filters button { flex: 1; padding: 0 8px; }.wish-filters select { max-width: 120px; }

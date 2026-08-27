@@ -26,7 +26,6 @@ import {
   type SkillVersionRecord,
   type TeamKnowledgeInsights,
 } from "./api";
-import { BusinessModuleLibrary } from "./BusinessModuleLibrary";
 
 const KIND_LABEL: Record<KnowledgeKind, string> = {
   rules: "项目规则",
@@ -591,7 +590,6 @@ export function KnowledgeFlywheel({
     {loading && !insights && <div className="knowledge-flywheel-loading" aria-label="正在统计知识效能"><i /><i /><i /></div>}
     {insights && insights.summary.tracked_tasks === 0 && <div className="knowledge-flywheel-empty"><span aria-hidden>◎</span><div><strong>知识飞轮正在等待第一批数据</strong><p>正式模块知识或 Skill 被新任务装载、读取后，这里会出现使用趋势；任务文档和仓库项目规则不会进入团队统计。</p></div></div>}
 
-    <BusinessModuleLibrary admin={admin} />
     <SkillLibraryPanel fallback={insights?.host_skills} admin={admin} />
 
     {insights && insights.summary.tracked_tasks > 0 && <>

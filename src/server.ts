@@ -236,7 +236,11 @@ export function createTaskServer(
     lubanApproval?: LubanApprovalGateway;
   } = {},
 ): Server {
-  const wishWall = new WishWallStore(join(service.options.dataDir, "wish-wall"));
+  // 许愿墙按路由首次使用时才要求完整 TaskService 数据目录。知识效能等
+  // 独立只读接口会用最小服务替身，旁路能力不能在起服阶段反向绑死它们。
+  let wishWall: WishWallStore | undefined;
+  const getWishWall = () => wishWall ??= new WishWallStore(
+    join(service.options.dataDir, "wish-wall"));
   return createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://localhost");
     const parts = url.pathname.split("/").filter(Boolean);
@@ -672,13 +676,14 @@ export function createTaskServer(
         };
         try {
           if (request.method === "GET" && parts.length === 1) {
-            return json(response, 200, { wishes: wishWall.list().map(present) });
+            return json(response, 200,
+              { wishes: getWishWall().list().map(present) });
           }
           if (request.method === "POST" && parts.length === 1) {
             // 4 * 5 MB 图片经 Base64 后约 27 MB；业务总量另由 store 卡在
             // 12 MB，这里 30 MB 是传输保险丝，避免恶意正文撑爆进程。
             const body = await readBody(request, 30 * 1024 * 1024);
-            return json(response, 201, present(wishWall.create({
+            return json(response, 201, present(getWishWall().create({
               kind: body.kind,
               title: body.title,
               detail: body.detail,
@@ -687,7 +692,7 @@ export function createTaskServer(
           }
           if (request.method === "GET" && parts.length === 3
               && parts[1] === "images") {
-            const image = wishWall.readImage(decodeURIComponent(parts[2]));
+            const image = getWishWall().readImage(decodeURIComponent(parts[2]));
             response.writeHead(200, {
               "content-type": image.mime_type,
               "content-length": image.data.length,
@@ -700,7 +705,7 @@ export function createTaskServer(
           if (request.method === "POST" && parts.length === 3
               && parts[2] === "vote") {
             const body = await readBody(request);
-            return json(response, 200, present(wishWall.setVote(
+            return json(response, 200, present(getWishWall().setVote(
               decodeURIComponent(parts[1]), operator, Boolean(body.voted))));
           }
           if (request.method === "PATCH" && parts.length === 3
@@ -710,12 +715,12 @@ export function createTaskServer(
                 { error: "只有管理员可以接纳、暂不接纳或闭环" });
             }
             const body = await readBody(request);
-            return json(response, 200, present(wishWall.setStatus(
+            return json(response, 200, present(getWishWall().setStatus(
               decodeURIComponent(parts[1]), String(body.status) as WishStatus,
               operator, body.note)));
           }
           if (request.method === "DELETE" && parts.length === 2) {
-            wishWall.delete(decodeURIComponent(parts[1]), operator, admin);
+            getWishWall().delete(decodeURIComponent(parts[1]), operator, admin);
             return json(response, 200, { ok: true });
           }
         } catch (error) {

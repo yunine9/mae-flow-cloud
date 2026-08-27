@@ -530,8 +530,8 @@ export function LaunchWorkspace({
               {options && businessModules.length > 0 && (
                 <section className="launch-form-section business-module-picker">
                   <div className="launch-section-head"><i>{moduleSectionNumber}</i><div>
-                    <strong>业务模块</strong>
-                    <small>选中后固定本次发布版本，只把知识目录交给 Agent，正文按需读取</small>
+                    <strong>业务范围</strong>
+                    <small>关联本次任务涉及的业务模块，并固定各模块当时的知识版本</small>
                   </div><em>可选 · 最多 4 个</em></div>
                   <div className="business-module-picker-list">
                     {businessModules.map((module) => {
@@ -565,7 +565,7 @@ export function LaunchWorkspace({
                   {moduleSelectionNotice && <p className="business-module-picker-notice"
                     role="status">{moduleSelectionNotice}</p>}
                   <p className="business-module-picker-note">
-                    不选择也能正常发起；第一项作为主模块展示，最多再关联 3 个相关模块。系统不会因仓库匹配而自动勾选。
+                    不选择也能正常发起；第一项作为主业务模块，最多再关联 3 个相关模块。系统只推荐仓库匹配项，不会替你勾选。
                   </p>
                 </section>
               )}

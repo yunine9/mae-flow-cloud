@@ -191,9 +191,9 @@ export function BusinessModuleLibrary({ admin }: { admin: boolean }) {
 
   return <section className="business-module-library" aria-labelledby="business-module-library-title">
     <header className="business-module-library-head">
-      <div><span className="section-kicker">BUSINESS MODULES</span>
-        <h3 id="business-module-library-title">业务模块知识库</h3>
-        <p>模块 Owner 维护可复用知识；任务自己的需求和过程文档不会自动进入这里。</p>
+      <div><span className="section-kicker">BUSINESS LANDSCAPE</span>
+        <h3 id="business-module-library-title">业务模块与模块知识</h3>
+        <p>模块定义团队的业务边界和责任归属；知识跟随模块管理，由 Owner 持续维护。</p>
       </div>
       <div><span>{catalog?.modules.filter((item) => item.status === "active").length ?? 0} 个启用</span>
         {admin && <button type="button" className="primary"
@@ -203,6 +203,14 @@ export function BusinessModuleLibrary({ admin }: { admin: boolean }) {
           {loading ? "读取中…" : "刷新"}</button>
       </div>
     </header>
+
+    <div className="business-module-flow" aria-label="业务模块使用方式">
+      <div><i>1</i><span><strong>定义模块</strong><small>边界、Owner、维护者和关联仓库</small></span></div>
+      <b aria-hidden>→</b>
+      <div><i>2</i><span><strong>维护模块知识</strong><small>在模块内发布、更新和归档知识</small></span></div>
+      <b aria-hidden>→</b>
+      <div><i>3</i><span><strong>任务按需使用</strong><small>发起时关联范围并固定当时版本</small></span></div>
+    </div>
 
     {createOpen && <form className="business-module-create" onSubmit={async (event) => {
       event.preventDefault(); setCreateBusy(true); setError("");
@@ -259,7 +267,7 @@ export function BusinessModuleLibrary({ admin }: { admin: boolean }) {
     {!!catalog?.warnings.length && <p className="business-module-warning">
       {catalog.warnings.join("；")}</p>}
     {!loading && !catalog?.modules.length && <div className="business-module-empty">
-      <strong>还没有业务模块</strong><span>由管理员创建并指定责任人后，Owner 再发布模块知识。</span>
+      <strong>还没有业务模块</strong><span>由管理员创建并指定责任人；Owner 随后在模块内维护知识。</span>
     </div>}
 
     <div className="business-module-list">
