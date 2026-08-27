@@ -710,7 +710,8 @@ triggers: 覆盖率, coverage, jacoco
 
 ## 配置面全集(--config 一个文件收口)
 
-`npm run serve -- --config /etc/mae-flow-cloud/serve.json`。文件键 =
+`npm run serve`(不带参数)会自动装载 `/etc/mae-flow-cloud/serve.json`
+(存在才装);也可 `--config <路径>` 显式指定别的文件。文件键 =
 去掉 `--` 的 flag 名;命令行永远压过文件(排障临时改参数不必动文件);
 **文件坏了拒绝启动**,不静默忽略——带着一半配置起服,比不起服更害人。
 密钥(模型 apiKey、通知鉴权头)所在文件一律权限 600,永不进仓。
