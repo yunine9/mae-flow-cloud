@@ -1,10 +1,10 @@
 import { useState } from "react";
-import { createPortal } from "react-dom";
 import {
   skipPrepushVerification,
   type PrepushVerification,
   type TaskSummary,
 } from "./api";
+import { OverlayDialog } from "./WarmupPanel";
 import { PrepushLiveLog, prepushActive } from "./PrepushLiveLog";
 import { formatLocalDateTime } from "./time";
 
@@ -68,7 +68,7 @@ function viewOf(state: string): PrepushView {
     case "blocked":
       return {
         phase: "environment",
-        label: "验证未通过",
+        label: "编译未通过",
         detail: "编译或 UT 尚未修复完成，本次推送已停止。",
         tone: "danger",
       };
@@ -96,8 +96,8 @@ function viewOf(state: string): PrepushView {
     default:
       return {
         phase: "unknown",
-        label: "推送前验证",
-        detail: "Cloud 正在处理这次推送前验证。",
+        label: "推送前编译",
+        detail: "Cloud 正在处理这次推送前编译。",
         tone: "neutral",
         busy: true,
         generic: true,
@@ -133,29 +133,21 @@ export function PrepushBadge({
   const cls = view.tone === "success" ? "is-passed"
     : view.tone === "danger" ? "is-failed"
       : view.tone === "repair" ? "is-repair" : "is-running";
-  const label = view.phase === "passed" ? "验证通过"
-    : view.generic ? "推送前验证" : `验证·${view.label}`;
+  const label = view.phase === "passed" ? "编译通过"
+    : view.generic ? "推送前编译"
+      : view.phase === "compiling" ? "编译中"
+        : prepush.state === "user_skipped" ? view.label : `编译·${view.label}`;
   return (
     <>
       <button type="button" className={`warmup-badge ${cls}`}
         onClick={() => setOpen(true)}
-        title={`推送前验证:${prepush.message?.trim() || view.detail}`}>
+        title={`推送前编译:${prepush.message?.trim() || view.detail}`}>
         <i aria-hidden />{label}
       </button>
-      {/* portal 到 body,同预热浮层:逃出头部祖先的层叠上下文。 */}
-      {open && createPortal(
-        <div className="warmup-overlay" role="dialog" aria-modal="true"
-          aria-label="推送前验证详情"
-          onClick={(event) => {
-            if (event.target === event.currentTarget) setOpen(false);
-          }}>
-          <div className="warmup-dialog">
-            <header>
-              <strong>推送前验证</strong>
-              <button type="button" aria-label="关闭"
-                onClick={() => setOpen(false)}>×</button>
-            </header>
-            <PrepushStatus prepush={prepush} placement="workspace" />
+      {open && (
+        <OverlayDialog ariaLabel="推送前编译详情" title="推送前编译"
+          onClose={() => setOpen(false)}>
+          <PrepushStatus prepush={prepush} placement="workspace" />
             <PrepushLiveLog taskId={task.id}
               active={prepushActive(prepush.state)} />
             {skippable && (
@@ -163,14 +155,14 @@ export function PrepushBadge({
                  权威裁决在绑 SHA 流水线。跳过绑当下 HEAD,新提交即失效。 */
               <div className="prepush-skip">
                 <p>
-                  本地验证已失败停机。你可以跳过本地验证直接推送——
+                  本地编译已失败停机。你可以跳过本地编译直接推送——
                   编译与 UT 交由权威流水线裁决;若代码真编译不过,
                   会消耗一条流水线后进入流水线修复环。
                 </p>
                 {skipError && <p className="prepush-skip-error">{skipError}</p>}
                 {!skipArmed ? (
                   <button type="button" onClick={() => setSkipArmed(true)}>
-                    跳过本地验证,直接推送流水线
+                    跳过本地编译,直接推送流水线
                   </button>
                 ) : (
                   <span className="prepush-skip-confirm">
@@ -196,9 +188,7 @@ export function PrepushBadge({
                 )}
               </div>
             )}
-          </div>
-        </div>,
-        document.body,
+        </OverlayDialog>
       )}
     </>
   );
@@ -214,7 +204,7 @@ export function PrepushStatus({
 }) {
   if (!prepush) return null;
   const view = viewOf(prepush.state);
-  const title = view.generic ? view.label : `推送前验证 · ${view.label}`;
+  const title = view.generic ? view.label : `推送前编译 · ${view.label}`;
   const detail = prepush.message?.trim() || view.detail;
   const titleHint = prepush.updated_at
     ? `${title}（更新于 ${formatLocalDateTime(prepush.updated_at, { seconds: true })}）`

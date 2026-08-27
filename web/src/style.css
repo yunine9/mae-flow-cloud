@@ -5840,7 +5840,6 @@ pre {
   background: var(--attention);
   animation: warmup-pulse 1.2s ease-in-out infinite;
 }
-.execution-prepush { display: flex; flex-direction: column; gap: 0; }
 .prepush-skip {
   margin-top: 10px;
   padding: 10px 12px;
@@ -5880,7 +5879,11 @@ pre {
 .warmup-dialog {
   width: min(760px, 100%);
   max-height: 82vh;
-  overflow-y: auto;
+  min-width: 360px;
+  min-height: 200px;
+  /* 用户点名"能拖拽放大":右下角原生 resize,标题栏拖动在组件里。 */
+  resize: both;
+  overflow: auto;
   padding: 14px 16px 16px;
   border: 1px solid var(--line);
   border-radius: 13px;
@@ -5892,6 +5895,9 @@ pre {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  cursor: move;
+  user-select: none;
+  touch-action: none;
 }
 .warmup-dialog > header strong { font-size: 15px; color: var(--text-strong); }
 .warmup-dialog > header button {

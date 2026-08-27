@@ -4,10 +4,64 @@
  * 必须说清责任:基线红=环境或上游的锅,与本单增量无关。
  */
 
-import { useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { PrepushLiveLog } from "./PrepushLiveLog";
 import { tailWarmupEvents, type TaskSummary } from "./api";
+
+/** 可拖拽、可缩放的浮层(用户点名"能支持拖拽放大不"):标题栏拖动
+ * 移动,右下角原生 resize 拉大;portal 到 body 逃出祖先层叠上下文
+ * (实锤:留在头部 DOM 里 z-index 再高也被 sticky 进度条盖)。 */
+export function OverlayDialog({
+  ariaLabel,
+  title,
+  onClose,
+  children,
+}: {
+  ariaLabel: string;
+  title: string;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const dragFrom = useRef<{
+    px: number; py: number; ox: number; oy: number;
+  } | null>(null);
+  return createPortal(
+    <div className="warmup-overlay" role="dialog" aria-modal="true"
+      aria-label={ariaLabel}
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}>
+      <div className="warmup-dialog"
+        style={{ transform: `translate(${offset.x}px, ${offset.y}px)` }}>
+        <header className="warmup-dialog-drag"
+          onPointerDown={(event) => {
+            if ((event.target as HTMLElement).closest("button")) return;
+            dragFrom.current = {
+              px: event.clientX, py: event.clientY,
+              ox: offset.x, oy: offset.y,
+            };
+            event.currentTarget.setPointerCapture(event.pointerId);
+          }}
+          onPointerMove={(event) => {
+            const from = dragFrom.current;
+            if (!from) return;
+            setOffset({
+              x: from.ox + event.clientX - from.px,
+              y: from.oy + event.clientY - from.py,
+            });
+          }}
+          onPointerUp={() => { dragFrom.current = null; }}>
+          <strong>{title}</strong>
+          <button type="button" aria-label="关闭" onClick={onClose}>×</button>
+        </header>
+        {children}
+      </div>
+    </div>,
+    document.body,
+  );
+}
 
 /** 工作台头部的小标志:头部寸土寸金(用户拍板),平时只占一枚小胶囊,
  * 点开浮层看完整面板(实时命令流也在浮层里)。刻意不绑 Escape——
@@ -32,25 +86,11 @@ export function WarmupBadge({ task }: { task: TaskSummary }) {
         onClick={() => setOpen(true)} title={`环境预热:${full}`}>
         <i aria-hidden />{short}
       </button>
-      {/* portal 到 body:浮层若留在头部 DOM 里,任一祖先(sticky/
-          transform)造出层叠上下文就会把它困在低层级(实锤:提到
-          z-400 仍被进度条盖住)。 */}
-      {open && createPortal(
-        <div className="warmup-overlay" role="dialog" aria-modal="true"
-          aria-label="环境预热编译详情"
-          onClick={(event) => {
-            if (event.target === event.currentTarget) setOpen(false);
-          }}>
-          <div className="warmup-dialog">
-            <header>
-              <strong>环境预热编译</strong>
-              <button type="button" aria-label="关闭"
-                onClick={() => setOpen(false)}>×</button>
-            </header>
-            <WarmupPanel task={task} />
-          </div>
-        </div>,
-        document.body,
+      {open && (
+        <OverlayDialog ariaLabel="环境预热编译详情" title="环境预热编译"
+          onClose={() => setOpen(false)}>
+          <WarmupPanel task={task} />
+        </OverlayDialog>
       )}
     </>
   );

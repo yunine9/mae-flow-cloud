@@ -147,7 +147,7 @@ test("DTS 最小闭环:Cloud 诊断举卡，确认后同任务切入内核 hotfi
     }, "DTS 根因确认卡");
     assert.deepEqual(waiting.progress?.phases, [
       "问题受理", "证据与根因分析", "人工确认", "代码修复",
-      "推送前验证", "流水线与合入", "完成",
+      "推送前编译", "流水线与合入", "完成",
     ]);
     assert.equal(waiting.progress?.current_phase, "人工确认");
     assert.equal(waiting.progress?.step, "等待确认诊断问题");

@@ -178,6 +178,29 @@ test("prepush gate: build-notes 精确豁免,组合走私照拦", () => {
   }
 });
 
+test("prepush gate: 排除语法提到内核现场不算访问(内网误杀实锤)", () => {
+  for (const command of [
+    // 内网日志原样的两条被误杀命令。
+    'cd /data/x/SONFrontendService && grep -r "freq.one2n\\|freq.n2one" '
+    + '--include="*.java" . 2>/dev/null | grep -v ".mae-flow-work" | grep -v "target/"',
+    "find . -path ./.mae-flow-work -prune -o \\( -name \"*.java\" \\) -print "
+    + '| xargs grep -l "freq" 2>/dev/null',
+    'grep -r foo --exclude-dir=.mae-flow-work .',
+    'git grep foo -- . ":(exclude).mae-flow-work"',
+  ]) {
+    assert.equal(prePushSecurityDecision("Bash", command), undefined, command);
+  }
+  // 正向引用不受排除豁免影响,照样拒。
+  for (const command of [
+    "cat .mae-flow.json",
+    "grep foo .mae-flow-work/story.md",
+    'grep -v ".mae-flow-work" x | tee .mae-flow-work/story.md',
+  ]) {
+    assert.equal(
+      prePushSecurityDecision("Bash", command)?.action, "deny", command);
+  }
+});
+
 test("prepush gate: 拦住 push、remote 与凭据改写", () => {
   for (const command of [
     "git push origin HEAD",

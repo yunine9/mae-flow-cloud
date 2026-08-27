@@ -75,8 +75,8 @@ export function PrepushLiveLog({
   taskId,
   active,
   source = tailPrepushEvents,
-  title = "验证过程",
-  emptyText = "等待验证 Agent 的第一条命令……",
+  title = "编译过程",
+  emptyText = "等待编译 Agent 的第一条命令……",
 }: {
   taskId: string;
   /** 验证是否进行中:进行中订阅;结束后不再订阅但保留已收现场。 */
@@ -110,7 +110,7 @@ export function PrepushLiveLog({
     if (node) node.scrollTop = node.scrollHeight;
   }, [lines]);
   if (!active && lines.length === 0) return null;
-  return <div className="prepush-live" aria-label="推送前验证实时过程">
+  return <div className="prepush-live" aria-label="推送前编译实时过程">
     <div className="prepush-live-head">
       <strong>{title}</strong>
       {active

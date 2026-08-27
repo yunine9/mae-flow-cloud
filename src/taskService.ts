@@ -2319,7 +2319,7 @@ export class TaskService {
     if (task.summary.entry_kind !== "dts") return kernel;
     const phases = [
       "问题受理", "证据与根因分析", "人工确认", "代码修复",
-      "推送前验证", "流水线与合入", "完成",
+      "推送前编译", "流水线与合入", "完成",
     ];
     const { status, issue_context: issue, delivery } = task.summary;
     let current = 3;

@@ -265,7 +265,7 @@ function SkillLibraryPanel({ fallback, admin }: {
             <span>读取 {skill.effect.accessed_tasks} 单
               （{Math.round(skill.effect.accessed_tasks / skill.effect.provided_tasks * 100)}%）</span>
             {skill.effect.prepush_measured > 0 && <span
-              title="读过该 skill 的任务中,推送前验证首轮一次通过的比例">
+              title="读过该 skill 的任务中,推送前编译首轮一次通过的比例">
               读后一次过 {skill.effect.prepush_first_pass}/{skill.effect.prepush_measured}</span>}
             {skill.effect.baseline_measured > 0 && <span
               title="未读该 skill 的任务对照(相关性参考,不代表因果)">
