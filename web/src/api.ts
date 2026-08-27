@@ -517,7 +517,7 @@ export interface TaskSummary {
     baseline?: string;
     updated_at: string;
   };
-  /** push 前人工确认交付清单(任务级开关,默认关)。 */
+  /** push 前人工确认交付范围(任务级显式开关,缺省继承个人设置)。 */
   push_confirmation?: boolean;
   progress?: TaskProgress;
   control?: {

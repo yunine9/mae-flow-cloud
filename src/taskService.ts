@@ -611,8 +611,9 @@ export interface TaskSummary {
     };
   };
   /** 人工在代码检视卡上勾选的远端交付文件集合。requested 表示已经
-   * 作为返工要求发给 Agent；confirmed 表示它与当时 HEAD 的文件集合
-   * 完全一致。push 前还会重新核对，不能靠陈旧前端状态放行。 */
+   * 作为返工要求发给 Agent；confirmed 表示用户授权了这组文件进入
+   * 远端。head 只保留确认发生时的审计锚，不把流水线修复后的每个新
+   * SHA 都误当成一份新清单；push 前仍按实时文件集合严格复核。 */
   delivery_selection?: {
     paths: string[];
     observed_paths: string[];
@@ -623,10 +624,10 @@ export interface TaskSummary {
     baseline?: string;
     updated_at: string;
   };
-  /** push 前人工确认交付清单(默认关,任务级开关)。开着时宿主在推送
-   * 前挂云端原生 diff 卡:确认→按白名单推送;返工→带清单契约的修复
-   * 会话整理提交后重新确认。这是宿主对自己动作(push)设的闸,不碰
-   * 内核流程——瘦身后的主链没有中途检视卡,想看最后一眼的人从这里看。 */
+  /** push 前人工确认交付范围(任务级显式开关;缺省由个人设置决定)。
+   * 开着时宿主在 prepush 收敛后挂云端原生 diff 卡:确认→按白名单
+   * 推送;返工→带清单契约的修复会话整理提交后重新确认。这是宿主对
+   * 自己动作(push)设的闸,不碰内核流程。 */
   push_confirmation?: boolean;
   /** 从现场看板的 panel-pulse.js/panel.html 读取的进度摘要。 */
   progress?: TaskProgress;
@@ -4971,9 +4972,9 @@ export class TaskService {
     waiting: WaitingRecord,
     input: DecisionSubmission,
     closesFeedback: boolean,
-    /** push 前确认卡:没显式勾选就按"当前 commit 全量"确认——确认
-     * 全量本来就不需要白名单裁剪,但仍落 selection 记录绑 HEAD,
-     * 修复轮扩大集合时才有对照物重新举卡。 */
+    /** push 前确认卡:没显式勾选就按"当前 commit 全量"确认。记录里
+     * 的 HEAD 用于审计；真正授权的是路径集合，后续修复只要不增删或
+     * 重命名交付文件，就不重复举卡。 */
     defaultToCommitted = false,
   ): Promise<{
     record: NonNullable<TaskSummary["delivery_selection"]>;
@@ -7856,9 +7857,9 @@ export class TaskService {
 
   /** push 前人工确认闸。要不要举卡:任务级显式设置优先,否则按归属
    * 人的个人默认现读现判(真人缺省即开;无账号链路不举卡)。
-   * 已确认的清单严格绑 HEAD:prepush 修复产生新提交后不判死,而是
-   * 作废旧卡、按新快照重新举卡——机器把 delta 摆到人面前,而不是
-   * failed 了喊人来猜。同 HEAD 的卡按 call_id 幂等,重启不重复出卡。 */
+   * 人确认的是交付文件集合，不是每个中间 SHA：流水线修复只修改这
+   * 组文件时直接复用；新增、删除或重命名交付文件才重新举卡。等待卡
+   * 仍按 call_id 幂等,重启不重复出卡。 */
   private async pushConfirmationSatisfied(
     task: TaskState,
     branch: string,
@@ -7873,8 +7874,16 @@ export class TaskService {
         "开启了 push 前人工确认,但任务基线不可读,无法生成交付清单");
       return false;
     }
+    const committed = normalizedDeliveryPaths(snapshot.committed_paths);
     const selection = task.summary.delivery_selection;
-    if (selection?.status === "confirmed" && selection.head === snapshot.head) {
+    if (selection?.status === "confirmed"
+        && samePaths(normalizedDeliveryPaths(selection.paths), committed)) {
+      if (selection.head !== snapshot.head) {
+        this.options.log?.(
+          `任务 ${task.summary.id} HEAD 已从 ${selection.head.slice(0, 12)} `
+          + `更新到 ${snapshot.head.slice(0, 12)}，交付文件集合未变，复用人工确认`,
+        );
+      }
       return true;
     }
     const callId = pushConfirmCallId(snapshot.head);
@@ -7883,26 +7892,25 @@ export class TaskService {
       if (waiting.call_id === callId) return false; // 同 HEAD 的卡已在等人
       task.humanGate.supersede(waiting.waiting_id, {
         stateVersion: waiting.state_version,
-        notes: "HEAD 已变化,旧确认卡作废,按新快照重新确认",
+        notes: "交付文件集合已变化,旧确认卡作废,按最新范围重新确认",
       });
     }
-    const committed = snapshot.committed_paths;
     const extras = snapshot.workspace_paths
       .filter((path) => !committed.includes(path));
     const limit = 200;
-    // 这张卡的使命必须自己说清,而且重心是"请检视代码"——编排瘦身后
-    // 云端不再中途单开代码检视步,这里就是人审代码的地方;只说"核对
-    // 清单"会让人以为对对文件名就行(实锤:用户不知道该在这里审代码,
-    // 也找不到勾选、不知道确认之后还有编译闸)。
+    // 只在 prepush 收敛后举这一张卡。它既让人检视最终代码，也把
+    // 文件集合固化成宿主可机械核验的授权边界；后续自动修复留在这个
+    // 边界内就不中断，越界才重新问人。
     const context = [
-      "**这是推送前最后一道人工确认:请检视代码。**",
+      "**这是推送前的最终交付范围确认：请检视代码。**",
       "本任务从基线到 HEAD 的全部代码与文档增量都在「检视材料 → "
       + "本任务变更」——请逐文件检视 diff,发现问题可直接在代码行上留批注,"
       + "并选「需要调整代码」让 Agent 修改。",
-      "顺带核对交付清单:文件树每行左侧的勾选框默认全选,不该交付的文件"
+      "核对交付清单:文件树每行左侧的勾选框默认全选,不该交付的文件"
       + "取消勾选,Agent 整理提交后会重新请你确认。",
-      "检视通过后宿主才执行推送前编译与 UT;若修复产生新提交,会按新增量"
-      + "重新请你检视;全部通过后才推送并创建 MR。",
+      "确认后，流水线自动修复可以继续修改已确认文件而不重复打扰；若新增、"
+      + "删除或重命名交付文件，系统会按最新范围重新请你确认。",
+      "确认通过后宿主才会推送并创建 MR。",
       "",
       `即将向分支 ${branch} 推送以下 ${committed.length} 个文件`
       + `(基线 ${snapshot.baseline.slice(0, 12)} → HEAD ${snapshot.head.slice(0, 12)}):`,
@@ -7918,13 +7926,13 @@ export class TaskService {
       step: CLOUD_PUSH_CONFIRM_STEP,
       callId,
       questionInput: { questions: [{
-        question: `推送前检视:请检视本次代码增量(${committed.length} 个文件 → ${branch}),是否通过并按清单推送?`,
+        question: `交付范围确认:请检视本次代码增量(${committed.length} 个文件 → ${branch}),是否通过并按清单推送?`,
         options: [PUSH_CONFIRM_ACCEPT, PUSH_CONFIRM_REWORK],
       }] },
       context,
     });
     task.summary.status = "waiting_for_human";
-    task.summary.detail = "push 前人工确认:请核对交付文件清单";
+    task.summary.detail = "等待确认最终交付范围";
     this.persist(task);
     this.notifyWaiting(task);
     this.options.log?.(
@@ -8004,13 +8012,11 @@ export class TaskService {
         }
         return;
       }
-      if (!await this.pushConfirmationSatisfied(task, branch)) return;
-      if (!await this.deliverySelectionAllowsPush(task)) return;
       if (!await this.preparePush(task, branch, baseline, epoch)) return;
       if (!this.current(task, epoch)) return;
-      // prepush Agent 允许修复并产生新 commit；它收口后必须再核一遍，
-      // 否则审批时的白名单可能被最后一轮修复悄悄扩大。开着 push 前
-      // 确认时,HEAD 变化不判死而是重新举卡让人看 delta。
+      // 人工只看 prepush 收敛后的最终范围，避免“刚确认就因验证修复
+      // 换了 HEAD 又确认一次”。之后仍由实时路径复核守住白名单；若
+      // 自动修复越界增删/重命名文件，下一次续推会重新举卡。
       if (!await this.pushConfirmationSatisfied(task, branch)) return;
       if (!await this.deliverySelectionAllowsPush(task)) return;
       const previous = task.summary.delivery;

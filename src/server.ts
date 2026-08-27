@@ -1114,8 +1114,8 @@ export function createTaskServer(
             body.include_current === true,
           ));
         }
-        // push 前人工确认交付清单(任务级开关)。默认关;开着时宿主
-        // 在推送前挂云端原生 diff 卡。
+        // push 前人工确认交付范围(任务级显式开关)。未显式设置时按
+        // 个人默认；开着时宿主在 prepush 收敛后挂云端原生 diff 卡。
         if (request.method === "PUT" && parts[2] === "push-confirmation") {
           const target = service.get(id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });

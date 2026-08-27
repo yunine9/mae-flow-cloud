@@ -92,11 +92,11 @@ function initialView(user: AuthUser): View {
  * 待办的既有流程;push 默认开,只落显式的关。 */
 const INTERVENTION_PRESETS = [
   { key: "full", moonlight: false, push: true, title: "全程把关",
-    hint: "过程节点等你拍板,推送前清单也过目（默认）" },
+    hint: "过程节点等你拍板,验证后确认最终交付范围（默认）" },
   { key: "process", moonlight: false, push: false, title: "逐步确认",
     hint: "过程节点等你拍板,交付信任三道门禁" },
   { key: "delivery", moonlight: true, push: true, title: "只看交付",
-    hint: "过程自动放行,但推送前清单要过目" },
+    hint: "过程自动放行,验证后确认最终交付范围" },
   { key: "auto", moonlight: true, push: false, title: "全自动",
     hint: "不中断执行,完成后统一复盘" },
 ] as const;
@@ -153,7 +153,7 @@ function InterventionSetting({
         nextPush = user.push_confirmation !== false;
         setPush(nextPush);
         notes.push(nextPush
-          ? "后续任务推送前会展示交付清单等你确认"
+          ? "后续任务会在推送前验证完成后展示最终交付范围"
           : "后续任务推送不再等待清单确认；已在等确认的任务点一下确认即可");
       }
       setNote(notes.join("；"));
@@ -168,7 +168,7 @@ function InterventionSetting({
       <div><span className="section-kicker">HUMAN INTERVENTION</span><h2 id="approval-setting-title">人工介入程度</h2></div>
       <span className="approval-setting-state">当前：{current.title}</span>
     </header>
-    <p className="approval-setting-summary">一处设定,所有任务生效:过程节点(需求澄清、方案确认)停不停,推送前交付清单看不看。真验收三道门禁(推送前编译自测、流水线绑 SHA、MR 人工合入)始终在,与此无关。</p>
+    <p className="approval-setting-summary">一处设定,所有任务生效:过程节点(需求澄清、方案确认)停不停,推送前验证完成后是否确认最终交付范围。同一文件集合内的自动修复不会重复询问；交付范围变化时会重新确认。流水线绑 SHA、MR 人工合入等门禁始终生效。</p>
     <div className="approval-options" role="group" aria-label="人工介入程度">
       {INTERVENTION_PRESETS.map((preset) => <button type="button" key={preset.key}
         className={current.key === preset.key ? "on" : ""} disabled={busy}

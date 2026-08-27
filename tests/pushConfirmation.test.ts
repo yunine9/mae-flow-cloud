@@ -1,9 +1,9 @@
 /**
  * push 前人工确认(commit 前人工介入的云端落点):
  * 瘦身后的主链没有中途检视卡,想在交付前亲眼核对清单的人从这里看。
- * 契约:默认关零打扰;开着时宿主在 push 前挂云端原生 diff 卡,同 HEAD
- * 幂等;确认(默认全清单)绑 HEAD 放行;prepush/修复产生新 HEAD 不判死
- * 而是重新举卡;返工开修复会话并携带清单契约;月光不代答这张卡。
+ * 契约:默认关零打扰;开着时宿主在 prepush 收敛后挂云端原生 diff 卡;
+ * 确认授权文件集合，同文件修复产生新 HEAD 自动续推，增删/重命名文件
+ * 才重新举卡；返工开修复会话并携带清单契约；月光不代答这张卡。
  */
 
 import { test } from "node:test";
@@ -41,6 +41,7 @@ function repository() {
   git("add", "src/feature.ts");
   git("commit", "--quiet", "-m", "task result");
   writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify({
+    config: { "分支名": "feature", "基线分支": "master" },
     step_heads: { branch_create: baseline },
   }));
   return { cwd, git };
@@ -67,7 +68,7 @@ async function verifyingTask() {
   return { service, model, id, internal, repo };
 }
 
-test("默认关零打扰;开着时出卡且同 HEAD 幂等,确认默认全清单并绑 HEAD", async () => {
+test("确认绑定文件集合:同文件修复自动续推,新增文件才重新确认", async () => {
   const { service, model, id, internal, repo } = await verifyingTask();
   try {
     const gate = () => (service as any)
@@ -105,15 +106,53 @@ test("默认关零打扰;开着时出卡且同 HEAD 幂等,确认默认全清单
       repo.git("rev-parse", "HEAD"));
     assert.equal(await gate(), true, "已确认且 HEAD 未变,放行");
 
-    // prepush/修复产生新提交:不判死,作废旧确认、按新快照重新举卡。
+    // 流水线自动修复已确认文件：HEAD 变化但交付边界没变，不应打断人。
+    writeFileSync(join(repo.cwd, "src", "feature.ts"),
+      "export const value = 2;\n");
+    repo.git("add", "src/feature.ts");
+    repo.git("commit", "--quiet", "-m", "repair confirmed file");
+    internal.summary.status = "verifying";
+    assert.equal(await gate(), true, "同一文件集合的新 HEAD 应复用确认");
+    assert.equal(service.get(id)!.waiting, undefined);
+    assert.notEqual(summary.delivery_selection?.head,
+      repo.git("rev-parse", "HEAD"), "确认时 HEAD 只作审计锚，不伪造二次确认");
+
+    // 修复越过已确认边界新增文件：必须按最新范围重新举卡。
     writeFileSync(join(repo.cwd, "src", "fix.ts"), "export const fix = 1;\n");
     repo.git("add", "src/fix.ts");
     repo.git("commit", "--quiet", "-m", "prepush fix");
     internal.summary.status = "verifying";
-    assert.equal(await gate(), false, "HEAD 变了必须重新确认");
+    assert.equal(await gate(), false, "交付文件集合变化必须重新确认");
     const renewed = service.get(id)!.waiting!;
     assert.notEqual(renewed.waiting_id, waiting.waiting_id);
     assert.match(String(renewed.context), /src\/fix\.ts/);
+  } finally {
+    await model.stop();
+  }
+});
+
+test("交付范围确认只在 prepush 收敛后执行", async () => {
+  const { service, model, internal } = await verifyingTask();
+  try {
+    const order: string[] = [];
+    (service as any).options.host = {};
+    (service as any).effectivePlatformUrl = () => "https://git.example.test";
+    (service as any).preparePush = async () => {
+      order.push("prepush");
+      return true;
+    };
+    (service as any).pushConfirmationSatisfied = async () => {
+      order.push("confirm");
+      return false;
+    };
+    (service as any).deliverySelectionAllowsPush = async () => {
+      order.push("selection");
+      return true;
+    };
+
+    await (service as any).tryDeliver(internal, internal.controlEpoch);
+    assert.deepEqual(order, ["prepush", "confirm"],
+      "不得在 prepush 之前先举一次确认卡");
   } finally {
     await model.stop();
   }
