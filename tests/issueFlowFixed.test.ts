@@ -721,7 +721,7 @@ test("MockDtsGateway:确定性单据集,已知单给罐头详情,未知单 fail-
   const gateway = new MockDtsGateway();
   assert.equal(gateway.mock, true, "模拟网关必须自带 DEV 标记(列表 API 挂徽标用)");
   const list = await gateway.listByOwner("y00965296");
-  assert.equal(list.length, 5, "五个测试单");
+  assert.equal(list.length, 6, "六个测试单");
   assert.ok(list.every((item) => item.title.startsWith("【DEV·模拟】")),
     "标题打 DEV 标,列表里一眼认出模拟单");
   assert.ok(list.every((item) => item.ticket.startsWith("DTS-2026-")));
@@ -729,6 +729,9 @@ test("MockDtsGateway:确定性单据集,已知单给罐头详情,未知单 fail-
   assert.match(detail.content, /MOCK 单据/);
   assert.ok(detail.title.length > 0);
   await assert.rejects(() => gateway.detail("DTS-0000"), /查无此单/);
+  const flying = await gateway.detail("DTS-2026-1006");
+  assert.match(flying.content, /开局飞跑/);
+  assert.match(flying.content, /行军动画/, "自带现象描述的单子用原文,不走罐头模板");
 });
 
 test("pipelineClient 公共客户端:触发/查询/契约校验/checks 解析", async () => {

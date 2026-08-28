@@ -508,7 +508,7 @@ export class UnconfiguredDtsGateway implements DtsGateway {
 
 /** DTS MCP 未接入期间的确定性假单据(2026-08-27 拍板:真实网关完整
  * 实现在位等 URL,过渡期 mock 拉单/查单让全流程可测)。单据集固定
- * 可预期:五个测试单按账号尾号分发,detail 对任何 "MOCK-" 前缀单号
+ * 可预期:六个测试单按账号尾号分发,detail 对任何 "MOCK-" 前缀单号
  * 都给罐头内容——关联转正的"查无此单即拒"路径用乱编单号就能测。
  * 与真实网关同接口,接线处一行替换;启动横幅会醒目标注 MOCK。 */
 export class MockDtsGateway implements DtsGateway {
@@ -516,12 +516,25 @@ export class MockDtsGateway implements DtsGateway {
 
   constructor(private readonly log?: (message: string) => void) {}
 
-  private readonly tickets: DtsTicketBrief[] = [
+  /** content 在位则原样作为详情正文(自带现象描述的单子),缺省走罐头模板。 */
+  private readonly tickets: Array<DtsTicketBrief & { content?: string }> = [
     { ticket: "DTS-2026-1001", title: "【DEV·模拟】订单列表导出超时(数据量大时必现)", status: "打开" },
     { ticket: "DTS-2026-1002", title: "【DEV·模拟】消息中心未读数偶发不清零", status: "打开" },
     { ticket: "DTS-2026-1003", title: "【DEV·模拟】移动端审批页白屏(iOS 17.4)", status: "处理中" },
     { ticket: "DTS-2026-1004", title: "【DEV·模拟】批量删除用户报唯一约束冲突", status: "打开" },
     { ticket: "DTS-2026-1005", title: "【DEV·模拟】流水线产物下载 404", status: "处理中" },
+    {
+      ticket: "DTS-2026-1006",
+      title: "【DEV·模拟】开局飞跑",
+      status: "打开",
+      content:
+        "【MOCK 单据】开局飞跑\n\n"
+        + "单号: DTS-2026-1006\n状态: 打开\n"
+        + "现象: 开局在点击行军之后,第一次的时候会徒步到自己的首都;"
+        + "联网模式下只有在用户打开浏览器的时候,才会播放行军动画,"
+        + "会影响游戏的整体一致性。\n"
+        + "影响: 联网/离线两种模式下开局表现不一致,破坏整体体验一致性。",
+    },
   ];
 
   async listByOwner(account: string): Promise<DtsTicketBrief[]> {
@@ -536,6 +549,13 @@ export class MockDtsGateway implements DtsGateway {
     const known = this.tickets.find((item) => item.ticket === ticket);
     if (known) {
       this.log?.(`[dts-mock] detail(${ticket}) → 已知单`);
+      if (known.content) {
+        return {
+          ticket: known.ticket,
+          title: known.title,
+          content: known.content,
+        };
+      }
       return {
         ticket: known.ticket,
         title: known.title,
@@ -549,7 +569,7 @@ export class MockDtsGateway implements DtsGateway {
     }
     this.log?.(`[dts-mock] detail(${ticket}) → 查无此单`);
     throw new McpGatewayError(
-      `DTS 查无此单: ${ticket}(mock 网关只认 DTS-2026-1001 ~ 1005)`);
+      `DTS 查无此单: ${ticket}(mock 网关只认 DTS-2026-1001 ~ 1006)`);
   }
 
   /** mock 没有真实 DTS 域可代理——罐头单据不带内嵌图,如实报错。 */
