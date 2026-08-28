@@ -513,6 +513,12 @@ function dtsNoCandidates(query: string): string[] {
       && /\d/.test(token));
 }
 
+/** 拉单只接"开发人员实施修改"状态的单:其他状态(新建/关闭/挂起等)
+ * 不可发起,列表直接不展示(本地拉取与远程补查同规)。 */
+const DTS_ACTIONABLE_STATUS = "开发人员实施修改";
+const isActionableDts = (t: { status?: string }): boolean =>
+  t.status === DTS_ACTIONABLE_STATUS;
+
 function DtsRegister({
   viewer,
   onCreated,
@@ -548,23 +554,26 @@ function DtsRegister({
   // 版本下拉多选框的展开态;点面板外或 Esc 关闭。
   const [versionOpen, setVersionOpen] = useState(false);
   const versionBoxRef = useRef<HTMLDivElement | null>(null);
+  // 可发起的单 = 状态为"开发人员实施修改"的;其余状态不展示。
+  const actionable = useMemo(() =>
+    tickets?.filter(isActionableDts) ?? undefined, [tickets]);
   const fuzzyMatches = useMemo(() => {
-    if (!tickets) return undefined;
+    if (!actionable) return undefined;
     const q = query.trim().toLowerCase();
-    if (!q) return tickets;
-    return tickets.filter((t) =>
+    if (!q) return actionable;
+    return actionable.filter((t) =>
       t.ticket.toLowerCase().includes(q)
       || t.title.toLowerCase().includes(q)
       || (t.version && t.version.toLowerCase().includes(q))
     );
-  }, [tickets, query]);
+  }, [actionable, query]);
 
-  // 版本过滤:拉取后把所有单的版本汇总去重,按 R 版降序、R 同比 C 版。
+  // 版本过滤:把可发起单的版本汇总去重,按 R 版降序、R 同比 C 版。
   const versions = useMemo(() => {
     const set = new Set<string>();
-    tickets?.forEach((t) => { if (t.version) set.add(t.version); });
+    actionable?.forEach((t) => { if (t.version) set.add(t.version); });
     return sortDtsVersionsDesc([...set]);
-  }, [tickets]);
+  }, [actionable]);
 
   // 默认勾选最高 R/C 版本(列表已降序):R/C 相同的多个版本串视为
   // 并列最高,一并勾选;拉到单就先看最新一版,之后勾选/取消全由用户
@@ -638,12 +647,14 @@ function DtsRegister({
   }, [query, tickets, fuzzyEmpty]);
 
   // 列表 = 本地命中(版本过滤后) + 远程补查命中(去重);清空搜索框时
-  // 远程结果随 effect 复位消失,恢复展示名下全部问题单。
+  // 远程结果随 effect 复位消失,恢复展示名下全部问题单。远程命中的单
+  // 也只展示可发起状态;被状态挡下的汇总一条提示,不让用户以为单号不存在。
   const remoteTickets = remote.tickets;
+  const hiddenRemote = remoteTickets.filter((t) => !isActionableDts(t));
   const display = useMemo(() => {
     const list = versionFiltered ?? [];
     const extra = remoteTickets.filter((r) =>
-      !list.some((item) => item.ticket === r.ticket));
+      isActionableDts(r) && !list.some((item) => item.ticket === r.ticket));
     return [...list, ...extra];
   }, [versionFiltered, remoteTickets]);
 
@@ -797,9 +808,13 @@ function DtsRegister({
         {remote.loading
           ? <span className="issue-dts-search-count remote">远程查单中…</span>
           : (query || selectedVersions.length > 0) && <span className="issue-dts-search-count">
-              {display.length} / {tickets.length} 条
+              {display.length} / {actionable?.length ?? 0} 条
             </span>}
       </div>
+      {hiddenRemote.length > 0 && <div className="issue-dts-note">
+        {hiddenRemote.map((t) => t.ticket).join("、")} 存在,但状态不是
+        "{DTS_ACTIONABLE_STATUS}",不在可拉取范围。
+      </div>}
       <div className="issue-dts-list" role="table">
         {display.length > 0
           ? display.map((ticket) => {
@@ -869,6 +884,10 @@ function DtsRegister({
     {tickets && tickets.length === 0 && <p className="issue-dts-hint">
       你的名下当前没有问题单。
     </p>}
+    {tickets && tickets.length > 0 && (actionable?.length ?? 0) === 0
+      && <p className="issue-dts-hint">
+        名下问题单里没有"{DTS_ACTIONABLE_STATUS}"状态的——其他状态不可发起。
+      </p>}
     <CredentialGate viewer={viewer} needRepo={touchRemoteRepo}
       onNavigateProfile={onNavigateProfile} />
     {/* 登记即定仓与模块(固定流程的有单七阶段从拉单详情开始,仓在阶段2
