@@ -172,14 +172,17 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
   `pipeline_status`/`pipeline_artifacts` 支持 **candidates 降级链**
   (首成功赢,全败聚合上报)与 **contract 直通**(命令输出即宿主契约);
   checks 扩展 stage/tool/details(缺陷:规则/文件/行号/描述),修复
-  使命注入结构化失败明细;③**取数脚本进仓=内网实测稳定版的收编**
+  使命注入结构化失败明细;③**取数脚本进仓=内网现用版的收编**
   (deploy/adapter-tools/pipeline-status.sh / pipeline-artifacts.sh:
   按 sha 直查 pipelines+quality CLI+reviewtips+MCP SSE 构建日志,
   逻辑零改动,只加 sha/pipeline_id 回显、checks 的 tool/details、
-  地址环境变量化)——勘误×2:上一版把桥脚本当"/etc 配置产物"不进仓
+  地址环境变量化)——勘误×3:上一版把桥脚本当"/etc 配置产物"不进仓
   导致 artifacts 链空转一个月;我按报告猜写的三个脚本(标准
-  streamable-HTTP MCP)与内网真实形态(自定义 SSE 客户端)不符,已删,
-  真件为准;④SuperChecker 类**不可修工具前置分诊**(serve
+  streamable-HTTP MCP)与内网真实形态(自定义 SSE 客户端)不符,已删;
+  **收编件曾被误称"实测稳定版"——它来自修复环不稳的这一侧,其
+  `codehub-y/api/v4` 取数路来路未证,且与能力核对报告钉的 /api/v3
+  形状相互矛盾(2026-08-28 用户点破),哪条是 toolkit 稳定跑的路
+  待其源码仲裁,在那之前 v4 这条按"嫌疑人"对待**;④SuperChecker 类**不可修工具前置分诊**(serve
   `--unfixable-tools`,全体命中且有 tool 证据才不派修复,拿不准照常派;
   内网工具→维度映射表里 SuperChecker 归 CODECHECK,名单可直接用)。
   边界如实记:脚本依赖内网部署件 mcp_sse_client.py(在
