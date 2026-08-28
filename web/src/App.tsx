@@ -564,6 +564,10 @@ export function App() {
   // 谁能提交决定:管理员或任务归属人。工作台与列表共用这一个口径。
   const canOperate = (task: TaskSummary) =>
     session.role === "admin" || responsibleOf(task) === session.username;
+  const canCollaborate = (task: TaskSummary) => canOperate(task)
+    || (task.requirement_graph?.stage === "analysis"
+      && task.requirement_graph.repositories.some((repository) =>
+        repository.assignee === session.username));
   const header = {
     team: session.role === "admin"
       ? { title: "团队总览", description: "看团队推进、负责人和阻塞风险；需要兜底时打开任务的过程工作台处置(暂停/恢复/决定)。" }
@@ -689,6 +693,7 @@ export function App() {
       task={artifactTask}
       viewerUsername={session.username}
       canOperate={canOperate(artifactTask)}
+      canCollaborate={canCollaborate(artifactTask)}
       canRequestReview={responsibleOf(artifactTask) === session.username}
       reviewAssignment={myReviews.find((review) =>
         review.task_id === artifactTask.id && review.status === "pending")}

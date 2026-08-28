@@ -22,6 +22,7 @@ import { Notifier } from "../src/notifier.ts";
 import { RuntimeSettings } from "../src/settings.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskService } from "../src/taskService.ts";
+import { EventLog } from "../src/semanticEvents.ts";
 import { createTaskServer } from "../src/server.ts";
 import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
 import {
@@ -273,6 +274,10 @@ test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队
     dataDir, provider: "a", model: "a-1", maxConcurrent: 0,
     modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
     host: { kernelRoot: "/tmp" },
+    collaborationAssigneeReadiness: (account) => account === "alice"
+      || account === "bob"
+      ? { ready: true, missing: [] }
+      : { ready: false, missing: ["CodeHub Token"] },
   });
   const parent = service.create("跨仓交付", {
     title: "跨仓订单状态交付",
@@ -296,12 +301,20 @@ test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队
     dependencies: [{ from: "api", to: "web", reason: "等待接口可用" }],
   }));
   state.cwd = root;
+  assert.throws(() => service.assignRequirementRepositories(parent.id, {
+    api: "alice", web: "charlie",
+  }), /charlie.*CodeHub Token/, "个人设置不完整的人不能接仓库任务");
+  service.assignRequirementRepositories(parent.id, {
+    api: "alice", web: "bob",
+  });
   (service as any).createRepositoryDeliveries(state);
   const graph = service.get(parent.id)!.requirement_graph!;
   const apiTask = service.get(graph.repositories[0].task_id!)!;
   const webTask = service.get(graph.repositories[1].task_id!)!;
   assert.equal(graph.stage, "confirmed");
   assert.equal(apiTask.parent_task_id, parent.id);
+  assert.equal(apiTask.luban_account, "alice");
+  assert.equal(webTask.luban_account, "bob");
   assert.deepEqual(apiTask.blocked_by, undefined);
   assert.deepEqual(webTask.blocked_by, [apiTask.id]);
   // 方案正文落工作区文件而非内联进需求(整份方案进 prompt 会被模型
@@ -314,6 +327,53 @@ test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队
     "人工检视过的 Chain 正文随子任务落盘,配置阶段经需求文档被读");
   assert.equal(apiTask.title, "跨仓订单状态交付 · api");
   assert.equal(webTask.title, "跨仓订单状态交付 · web");
+
+  // 上游完成后，下游启动前拿到真实交接：实际提交文件、责任人和 AI
+  // 收口说明都来自上游现场，不再只看最初 Chain 计划。
+  const upstreamCwd = join(dataDir, "upstream-real-delivery");
+  mkdirSync(upstreamCwd, { recursive: true });
+  execFileSync("git", ["init", "-q", "-b", "master", upstreamCwd]);
+  writeFileSync(join(upstreamCwd, "api.ts"), "export const version = 1;\n");
+  execFileSync("git", ["-C", upstreamCwd, "add", "api.ts"]);
+  execFileSync("git", ["-C", upstreamCwd, "commit", "-q", "-m", "base"], {
+    env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t",
+      GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" },
+  });
+  const baseline = execFileSync("git", ["-C", upstreamCwd, "rev-parse", "HEAD"],
+    { encoding: "utf-8" }).trim();
+  writeFileSync(join(upstreamCwd, ".mae-flow.json"), JSON.stringify({
+    step_heads: { branch_create: baseline },
+  }));
+  writeFileSync(join(upstreamCwd, "api.ts"), "export const version = 2;\n");
+  execFileSync("git", ["-C", upstreamCwd, "add", "api.ts"]);
+  execFileSync("git", ["-C", upstreamCwd, "commit", "-q", "-m", "change api"], {
+    env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t",
+      GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" },
+  });
+  const apiState = (service as any).tasks.get(apiTask.id);
+  apiState.cwd = upstreamCwd;
+  new EventLog(join(apiState.summary.workspace, "events.jsonl")).append({
+    eventId: 1, taskId: apiTask.id, sessionId: "main",
+    ts: new Date().toISOString(), kind: "assistant_message",
+    payload: { text: "接口字段 version 已升级，前端需要按新契约消费。" },
+  });
+  const downstreamCwd = join(dataDir, "downstream-start");
+  mkdirSync(downstreamCwd, { recursive: true });
+  assert.equal(await (service as any).materializeDependencyHandoff(
+    (service as any).tasks.get(webTask.id), downstreamCwd), true);
+  const handoff = readFileSync(
+    join(downstreamCwd, ".mae-flow-dependencies.md"), "utf-8");
+  assert.match(handoff, /责任人：alice/);
+  assert.match(handoff, /api\.ts/);
+  assert.match(handoff, /version 已升级/);
+
+  const update = await service.publishCrossRepositoryUpdate(
+    apiTask.id, "alice", "version 字段改成字符串，请下游核对兼容性");
+  assert.deepEqual(update.target_task_ids, [webTask.id]);
+  assert.match(service.get(parent.id)!.cross_repository_updates![0].text,
+    /改成字符串/);
+  assert.equal(service.get(webTask.id)!.cross_repository_updates?.[0].id,
+    update.id, "分工后的影响必须回流大任务并复制给直接下游");
 
   // 可重入:部分仓已有 task_id 时重跑,不许重复建任务(第 N 个仓
   // create 抛错/中途重启后的重试路径)。

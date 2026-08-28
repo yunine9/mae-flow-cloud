@@ -68,6 +68,7 @@ import {
   DEFAULT_WORKSPACE_RETENTION_DAYS,
   NotFoundError,
   TaskControlError,
+  type RequirementGraph,
   type TaskService,
 } from "./taskService.ts";
 import { buildTimeline } from "./timeline.ts";
@@ -299,6 +300,15 @@ export function createTaskServer(
     lubanApproval?: LubanApprovalGateway;
   } = {},
 ): Server {
+  // TaskService 也可由测试、pilot 或嵌入式调用方直接构造。只要 HTTP
+  // 边界接了账号库，就补上同一份委派就绪校验，避免绕过 serve.ts
+  // 时“候选列表说未就绪，提交接口却放行”的双重真相。
+  if (options.auth && !service.options.collaborationAssigneeReadiness) {
+    service.options.collaborationAssigneeReadiness = (account) =>
+      options.auth!.collaborationAssignees(service.launchOptions().needs)
+        .find((candidate) => candidate.username === account)
+        ?? { ready: false, missing: ["账号不存在或不是可用开发账号"] };
+  }
   // 许愿墙按路由首次使用时才要求完整 TaskService 数据目录。知识效能等
   // 独立只读接口会用最小服务替身，旁路能力不能在起服阶段反向绑死它们。
   let wishWall: WishWallStore | undefined;
@@ -558,6 +568,13 @@ export function createTaskServer(
           if (!viewer) return json(response, 401, { error: "尚未登录" });
           return json(response, 200,
             options.auth?.listUsers().filter((user) => user.committer) ?? []);
+        }
+        // 跨仓分工候选：所有登录者都可读，但只给“是否就绪+缺项”，
+        // 不给 token hint、邮箱或管理员账号。服务形态决定哪些配置必需。
+        if (request.method === "GET" && parts[1] === "collaboration-assignees") {
+          if (!viewer) return json(response, 401, { error: "尚未登录" });
+          return json(response, 200, options.auth?.collaborationAssignees(
+            service.launchOptions().needs) ?? []);
         }
         return json(response, 404, { error: "未知身份接口" });
       }
@@ -1523,6 +1540,13 @@ export function createTaskServer(
             selected_repository_skill_ids:
               Array.isArray(body.selected_repository_skill_ids)
                 ? body.selected_repository_skill_ids.map(String) : undefined,
+            repository_assignees: body.repository_assignees
+              && typeof body.repository_assignees === "object"
+              && !Array.isArray(body.repository_assignees)
+              ? Object.fromEntries(Object.entries(body.repository_assignees)
+                  .map(([repositoryId, account]) =>
+                    [repositoryId, String(account)]))
+              : undefined,
             delivery_paths: Array.isArray(body.delivery_paths)
               ? body.delivery_paths.map(String) : undefined,
           });
@@ -1544,6 +1568,25 @@ export function createTaskServer(
             mode as "inherit" | "manual" | "moonlight",
             body.include_current === true,
           ));
+        }
+        // 拆分前先保存逐仓分工，受邀人即可进入同一主任务协作现场。
+        // 最终确认仍只有主任务责任人能提交，协作者不能代拍板。
+        if (request.method === "PUT" && parts[2] === "repository-assignees") {
+          const target = service.get(id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          if (!canOperate(viewer, target.luban_account, !!options.auth)) {
+            return json(response, 403, { error: "只有主任务责任人可以保存分工" });
+          }
+          const body = await readBody(request);
+          const assignments = body.repository_assignees
+            && typeof body.repository_assignees === "object"
+            && !Array.isArray(body.repository_assignees)
+            ? Object.fromEntries(Object.entries(body.repository_assignees)
+                .map(([repositoryId, account]) =>
+                  [repositoryId, String(account)]))
+            : {};
+          return json(response, 200,
+            service.assignRequirementRepositories(id, assignments));
         }
         // push 前人工确认交付范围(任务级显式开关)。未显式设置时按
         // 个人默认；开着时宿主在 prepush 收敛后挂云端原生 diff 卡。
@@ -1580,6 +1623,13 @@ export function createTaskServer(
               ? undefined : String(body.repository_skill_catalog_token),
             selected_ids: Array.isArray(body.selected_repository_skill_ids)
               ? body.selected_repository_skill_ids.map(String) : undefined,
+            repository_assignees: body.repository_assignees
+              && typeof body.repository_assignees === "object"
+              && !Array.isArray(body.repository_assignees)
+              ? Object.fromEntries(Object.entries(body.repository_assignees)
+                  .map(([repositoryId, account]) =>
+                    [repositoryId, String(account)]))
+              : undefined,
           }));
         }
         // Committer 检视必须由该单责任人主动发起。管理员只维护名单，
@@ -1679,8 +1729,8 @@ export function createTaskServer(
           }
           // 送达 = 在指挥这一单,权限同决定;圈注不需要这个门槛。
           if (request.method === "POST" && parts[3] === "send") {
-            if (!canOperate(viewer, target.luban_account, !!options.auth)) {
-              return json(response, 403, { error: "只能给分配给自己的任务送批注" });
+            if (!canCollaborate(viewer, target, !!options.auth)) {
+              return json(response, 403, { error: "只有任务责任人或受邀协作者可以送批注" });
             }
             const body = await readBody(request);
             const ids = Array.isArray(body.ids) ? body.ids.map(String) : undefined;
@@ -1720,12 +1770,26 @@ export function createTaskServer(
         if (request.method === "POST" && parts[2] === "interrupt") {
           const target = service.get(id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
-          if (!canOperate(viewer, target.luban_account, !!options.auth)) {
-            return json(response, 403, { error: "只能给分配给自己的任务插话" });
+          if (!canCollaborate(viewer, target, !!options.auth)) {
+            return json(response, 403, { error: "只有任务责任人或受邀协作者可以参与讨论" });
           }
           const body = await readBody(request);
-          const task = await service.interrupt(id, String(body.text ?? ""));
+          const task = await service.interrupt(
+            id, String(body.text ?? ""), viewer?.username);
           return json(response, 200, task);
+        }
+        if (request.method === "POST" && parts[2] === "cross-repository-update") {
+          const target = service.get(id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          if (!canOperate(viewer, target.luban_account, !!options.auth)) {
+            return json(response, 403, { error: "只有当前子任务责任人可以同步跨仓影响" });
+          }
+          const body = await readBody(request);
+          return json(response, 201, await service.publishCrossRepositoryUpdate(
+            id,
+            viewer?.username ?? target.luban_account ?? "本地用户",
+            String(body.text ?? ""),
+          ));
         }
         if (request.method === "POST"
             && ["pause", "resume", "cancel"].includes(parts[2])) {
@@ -1918,6 +1982,17 @@ function canOperate(
   if (!authEnabled) return true;
   return viewer?.role === "admin"
     || (!!viewer && !!taskAccount && viewer.username === taskAccount);
+}
+
+function canCollaborate(
+  viewer: AuthUser | undefined,
+  task: { luban_account?: string; requirement_graph?: RequirementGraph },
+  authEnabled: boolean,
+): boolean {
+  if (canOperate(viewer, task.luban_account, authEnabled)) return true;
+  if (!viewer || task.requirement_graph?.stage !== "analysis") return false;
+  return task.requirement_graph.repositories.some((repository) =>
+    repository.assignee === viewer.username);
 }
 
 function sessionCookie(

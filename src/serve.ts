@@ -645,6 +645,15 @@ async function main(): Promise<void> {
     moonlight: (account) => auth.moonlightEnabled(account),
     // push 前清单过目:同样现读个人默认(真人缺省即开)。
     pushConfirmation: (account) => auth.pushConfirmationEnabled(account),
+    collaborationAssigneeReadiness: (account) => {
+      const needs = {
+        git_token: !!host,
+        luban_token: notifier.needsPersonalToken(),
+      };
+      return auth.collaborationAssignees(needs)
+        .find((candidate) => candidate.username === account)
+        ?? { ready: false, missing: ["账号不存在或不是可用开发账号"] };
+    },
     compactEveryEvents: compactEvery,
     // 2026-08-28 摘除 demoContract:那是阶段一的演示桩("rm -rf"裸子串
     // 一律拒),却一直接在生产兜底位——prepush 构建产物删除白名单放行后

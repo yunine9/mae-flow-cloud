@@ -334,6 +334,8 @@ export interface RequirementRepository {
   name: string;
   url: string;
   responsibility?: string;
+  /** 人工委派的逐仓责任人。只保存稳定账号名，个人凭据仍按启动时现取。 */
+  assignee?: string;
   task_id?: string;
 }
 
@@ -449,6 +451,17 @@ export interface RequirementGraph {
   dependencies: RequirementDependency[];
 }
 
+export interface CrossRepositoryUpdate {
+  id: string;
+  parent_task_id: string;
+  source_task_id: string;
+  source_repository?: string;
+  author: string;
+  text: string;
+  target_task_ids: string[];
+  created_at: string;
+}
+
 export interface TaskSummary {
   id: string;
   /** 扫读标题:需求原文仍完整保留在 requirement。旧任务缺席时由读侧
@@ -549,6 +562,8 @@ export interface TaskSummary {
   /** 确认 Chain 方案后生成的普通仓库交付任务关系。 */
   parent_task_id?: string;
   blocked_by?: string[];
+  /** 分工后的接口/契约变化回流主任务，并复制给直接相关上下游子任务。 */
+  cross_repository_updates?: CrossRepositoryUpdate[];
   /** 交付方式(用户拍板:下单就选好,不让 agent 来问)。取值是**内核
    * flow.json 里 workflow_select 的选项原文**(完整开发/已定位问题修复/
    * 局部修改/处理评审意见),不是宿主自造的词——自造过一次,结果是
@@ -810,6 +825,11 @@ export interface TaskServiceOptions {
    * 按任务归属人现读现判(serve 接 LocalAuth.pushConfirmationEnabled,
    * 真人缺省即开)。任务级显式设置(setPushConfirmation)优先于它。 */
   pushConfirmation?: (account?: string) => boolean;
+  /** 跨仓委派的服务端就绪校验。生产接 LocalAuth 的窄视图；测试/纯
+   * 会话形态可缺席，保持既有 TaskService 单元测试不依赖账号库。 */
+  collaborationAssigneeReadiness?: (
+    account: string,
+  ) => { ready: boolean; missing: string[] };
   log?: (message: string) => void;
 }
 
@@ -1163,6 +1183,8 @@ export interface DecisionSubmission {
   annotation_ids?: string[];
   repository_skill_catalog_token?: string;
   selected_repository_skill_ids?: string[];
+  /** Chain 确认与逐仓委派同一次乐观锁提交，键是需求图 repository.id。 */
+  repository_assignees?: Record<string, string>;
   /** 代码检视时用户勾选的最终交付文件。字段缺席表示该入口没有修改
    * 清单；空数组有业务含义，不能折叠成 undefined。 */
   delivery_paths?: string[];
@@ -2500,11 +2522,16 @@ export class TaskService {
       const expected = task.summary.repositories ?? [];
       const repositories = Array.isArray(parsed.repositories)
         ? parsed.repositories.filter((item) => item && expected.includes(item.url))
-            .map((item) => ({
-              ...item,
-              task_id: task.summary.requirement_graph?.repositories
-                .find((known) => known.id === item.id)?.task_id,
-            }))
+            .map((item) => {
+              const known = task.summary.requirement_graph?.repositories
+                .find((candidate) => candidate.id === item.id
+                  || candidate.url === item.url);
+              return {
+                ...item,
+                assignee: known?.assignee,
+                task_id: known?.task_id,
+              };
+            })
         : [];
       if (repositories.length !== expected.length) return;
       const ids = new Set(repositories.map((item) => item.id));
@@ -4839,6 +4866,125 @@ export class TaskService {
     return { graph, order, incoming: prerequisites };
   }
 
+  /** 人工分工是主任务契约的一部分，不是 create 子任务时临时拼的参数。
+   * 全量提交避免半张图新、半张图旧；就绪校验失败时一项都不落盘。 */
+  assignRequirementRepositories(
+    id: string,
+    assignments: Record<string, string>,
+  ): TaskSummary {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    if (!this.isRequirementAnalysis(task)) {
+      throw new NotFoundError("只有跨仓需求主任务可以委派逐仓责任人");
+    }
+    this.refreshRequirementGraph(task);
+    const graph = task.summary.requirement_graph;
+    if (!graph || graph.repositories.length < 2) {
+      throw new NotFoundError("需求图尚未生成，暂不能分工");
+    }
+    if (graph.stage === "confirmed"
+        || graph.repositories.some((repository) => repository.task_id)) {
+      throw new TaskControlError("仓库任务已经生成，责任人不能在主任务上改派");
+    }
+    const ids = new Set(graph.repositories.map((repository) => repository.id));
+    const submitted = Object.keys(assignments);
+    const unknown = submitted.filter((repositoryId) => !ids.has(repositoryId));
+    const missingRepositories = [...ids].filter((repositoryId) =>
+      !Object.prototype.hasOwnProperty.call(assignments, repositoryId));
+    if (unknown.length || missingRepositories.length) {
+      throw new TaskControlError("请为需求图中的每个仓库完整选择责任人后再保存");
+    }
+    const normalized = new Map<string, string>();
+    for (const repository of graph.repositories) {
+      const account = String(assignments[repository.id] ?? "").trim();
+      if (!account) {
+        throw new TaskControlError(`仓库 ${repository.name} 尚未选择责任人`);
+      }
+      const readiness = this.options.collaborationAssigneeReadiness?.(account);
+      if (readiness && !readiness.ready) {
+        throw new TaskControlError(
+          `${account} 的个人设置尚未就绪：${readiness.missing.join("、")}`,
+        );
+      }
+      normalized.set(repository.id, account);
+    }
+    for (const repository of graph.repositories) {
+      repository.assignee = normalized.get(repository.id)!;
+    }
+    this.persist(task);
+    return { ...task.summary };
+  }
+
+  /** 子任务发现跨仓影响时回流大任务，并把同一条结构化消息投给依赖图
+   * 上直接相邻的上下游。运行中的 Agent 立即 steer；排队/暂停/等人
+   * 的任务由 launch/decision 注入，消息先落盘所以不会因会话状态丢失。 */
+  async publishCrossRepositoryUpdate(
+    id: string,
+    author: string,
+    text: string,
+  ): Promise<CrossRepositoryUpdate> {
+    const source = this.tasks.get(id);
+    if (!source) throw new NotFoundError(`任务 ${id} 不存在`);
+    const message = text.trim();
+    if (!message) throw new TaskControlError("请写清楚发生了什么变化或哪里不确定");
+    if (message.length > 8_000) {
+      throw new TaskControlError("单条跨仓同步不能超过 8000 字");
+    }
+    const parentId = source.summary.parent_task_id;
+    const parent = parentId ? this.tasks.get(parentId) : undefined;
+    const graph = parent?.summary.requirement_graph;
+    if (!parent || !graph) {
+      throw new NotFoundError("该任务不隶属于可协作的跨仓大任务");
+    }
+    const sourceRepository = graph.repositories.find((repository) =>
+      repository.task_id === source.summary.id);
+    if (!sourceRepository) throw new NotFoundError("主任务中找不到当前仓库节点");
+    const relatedRepositoryIds = new Set(graph.dependencies.flatMap((edge) => {
+      if (edge.from === sourceRepository.id) return [edge.to];
+      if (edge.to === sourceRepository.id) return [edge.from];
+      return [];
+    }));
+    const targetTaskIds = graph.repositories
+      .filter((repository) => relatedRepositoryIds.has(repository.id)
+        && repository.task_id && repository.task_id !== source.summary.id)
+      .map((repository) => repository.task_id!);
+    const update: CrossRepositoryUpdate = {
+      id: `cross-${randomUUID()}`,
+      parent_task_id: parentId!,
+      source_task_id: source.summary.id,
+      source_repository: sourceRepository.name,
+      author,
+      text: message,
+      target_task_ids: targetTaskIds,
+      created_at: new Date().toISOString(),
+    };
+    parent.summary.cross_repository_updates = [
+      ...(parent.summary.cross_repository_updates ?? []), update,
+    ].slice(-100);
+    this.persist(parent);
+    for (const targetId of targetTaskIds) {
+      const target = this.tasks.get(targetId);
+      if (!target) continue;
+      target.summary.cross_repository_updates = [
+        ...(target.summary.cross_repository_updates ?? []), update,
+      ].slice(-30);
+      this.persist(target);
+      if (target.summary.status === "running" && target.driver) {
+        const delivered = [
+          `[跨仓影响同步 · ${author} · ${sourceRepository.name}]`,
+          message,
+          "请立即核对它是否影响当前仓的接口、设计或实现；有冲突就举卡，",
+          "并把结论回报跨仓主任务，不要静默猜测。",
+        ].join("\n");
+        await target.driver.steer(delivered).catch((cause) => {
+          this.options.log?.(
+            `[cross-repo-update] ${update.id} 即时投递 ${targetId} 失败，已落盘待后续注入: ${cause}`);
+        });
+      }
+    }
+    return update;
+  }
+
   /** 人工确认 Chain 产物后，把图上的节点落成现有普通任务。
    * 可重入:已有 task_id 的仓跳过(第 N 个仓 create 抛错或中途重启后
    * 重试,不许把前面的仓再建一遍);每建一个就 persist——task_id 只写
@@ -4878,7 +5024,7 @@ export class TaskService {
       const child = this.create(requirement, {
         title: taskTitle(
           `${task.summary.title ?? taskTitle(task.summary.requirement)} · ${repository.name}`),
-        account: task.summary.luban_account,
+        account: repository.assignee ?? task.summary.luban_account,
         repo: repository.url,
         lane: task.summary.lane,
         ticket: task.summary.ticket,
@@ -4926,6 +5072,78 @@ export class TaskService {
     this.persist(task);
   }
 
+  /** 有依赖的子任务启动时，把“上游实际交付”而非最初计划交给它。
+   * 这是 Cloud 编排上下文，不是内核步骤/完成证据；读取失败 fail-open，
+   * 但文件一旦生成就进入 prompt 硬要求，避免接口已经变了下游还按旧
+   * Chain 猜。 */
+  private async materializeDependencyHandoff(
+    task: TaskState,
+    cwd: string,
+  ): Promise<boolean> {
+    const blockers = task.summary.blocked_by ?? [];
+    if (!blockers.length) return false;
+    const parent = task.summary.parent_task_id
+      ? this.tasks.get(task.summary.parent_task_id) : undefined;
+    const graph = parent?.summary.requirement_graph;
+    const currentRepository = graph?.repositories.find((repository) =>
+      repository.task_id === task.summary.id);
+    const sections: string[] = [];
+    for (const blockerId of blockers) {
+      const predecessor = this.tasks.get(blockerId);
+      if (!predecessor) continue;
+      const predecessorRepository = graph?.repositories.find((repository) =>
+        repository.task_id === blockerId);
+      const edge = currentRepository && predecessorRepository
+        ? graph?.dependencies.find((candidate) =>
+            candidate.from === currentRepository.id
+            && candidate.to === predecessorRepository.id)
+        : undefined;
+      const snapshot = predecessor.cwd && existsSync(predecessor.cwd)
+        ? await deliveryChangeSnapshot(predecessor.cwd).catch(() => undefined)
+        : undefined;
+      let assistantSummary = "";
+      try {
+        const messages = new EventLog(join(
+          predecessor.summary.workspace, "events.jsonl")).replay()
+          .filter((event) => event.kind === "assistant_message"
+            && String(event.sessionId ?? "main") === "main")
+          .map((event) => String(event.payload?.text ?? "").trim())
+          .filter(Boolean);
+        assistantSummary = messages.slice(-2).join("\n\n").slice(0, 3500);
+      } catch {
+        // 交接的其他事实仍可用，事件旁路损坏不拦下游启动。
+      }
+      const delivery = predecessor.summary.delivery;
+      sections.push([
+        `## ${predecessorRepository?.name ?? predecessor.summary.repo_url ?? blockerId}`,
+        `- 前置任务：${blockerId}`,
+        `- 责任人：${predecessor.summary.luban_account ?? "未记录"}`,
+        `- 当前状态：${predecessor.summary.status}`,
+        edge?.reason ? `- 依赖原因：${edge.reason}` : "",
+        delivery?.sha ? `- 交付 SHA：${delivery.sha}` : "",
+        delivery?.mr_url ? `- 合并请求：${delivery.mr_url}` : "",
+        snapshot?.committed_paths.length
+          ? `- 实际改动文件：\n${snapshot.committed_paths
+              .map((path) => `  - ${path}`).join("\n")}`
+          : "- 实际改动文件：现场未提供可证明的提交清单，请不要据此猜接口未变",
+        assistantSummary
+          ? `\n### 上游 AI 收口说明\n\n${assistantSummary}` : "",
+      ].filter(Boolean).join("\n"));
+    }
+    if (!sections.length) return false;
+    writeFileSync(join(cwd, ".mae-flow-dependencies.md"), [
+      "# 跨仓前置交接（平台生成）",
+      "",
+      "以下内容来自前置仓的真实交付现场，优先用于核对最初 Chain 契约。",
+      "开始设计或修改接口前必须阅读；若实际交付与 Chain 文档、当前仓实现",
+      "不一致，停止猜测并向责任人举卡，把冲突回报跨仓主任务。",
+      "",
+      ...sections,
+      "",
+    ].join("\n"));
+    return true;
+  }
+
   /** 需求图面板不是第二套审批:分析会话正在等人时,这颗结构化按钮
    * 先消费当前 HumanGate 决定、恢复同一会话,再幂等生成各仓普通任务。
    * 这样不会出现“子任务已经生成,父分析单却还在等确认”的双状态。
@@ -4935,6 +5153,7 @@ export class TaskService {
     skillSelection?: {
       catalog_token?: string;
       selected_ids?: string[];
+      repository_assignees?: Record<string, string>;
     },
   ): Promise<TaskSummary> {
     const task = this.tasks.get(id);
@@ -4962,6 +5181,7 @@ export class TaskService {
         decision: "确认并生成任务",
         repository_skill_catalog_token: skillSelection?.catalog_token,
         selected_repository_skill_ids: skillSelection?.selected_ids,
+        repository_assignees: skillSelection?.repository_assignees,
         // 收尾令随决定送达:确认后父会话再举卡会被系统代答赶下台
         // (autoAnswerFor 的分析单兜底),但第一选择是它自己别举。
         notes: "各仓交付任务由平台自动生成与调度,不归本会话跟进;"
@@ -4974,6 +5194,9 @@ export class TaskService {
     }
     if (!["completed", "failed", "canceled"].includes(task.summary.status)) {
       throw new NotFoundError("需求分析尚未进入人工检视，暂不能确认方案");
+    }
+    if (skillSelection?.repository_assignees) {
+      this.assignRequirementRepositories(id, skillSelection.repository_assignees);
     }
     this.createRepositoryDeliveries(task);
     this.bypass(undefined, "任务泵", this.pump());
@@ -5387,7 +5610,20 @@ export class TaskService {
     const confirmingGraph = this.isRequirementAnalysis(task)
       && Object.values(answers).concat(decision).some((answer) =>
         answer.includes("确认并生成任务"));
-    if (confirmingGraph) this.requirementGraphPlan(task);
+    if (input.repository_assignees && !confirmingGraph) {
+      throw new NotFoundError("逐仓责任人只能随“确认并生成任务”提交");
+    }
+    if (confirmingGraph) {
+      this.requirementGraphPlan(task);
+      if (input.repository_assignees) {
+        if (waiting.state_version !== input.state_version
+            || waiting.status !== "waiting") {
+          throw new StateConflictError(
+            `任务状态已变化:待办 ${waiting.waiting_id} 版本不匹配`);
+        }
+        this.assignRequirementRepositories(id, input.repository_assignees);
+      }
+    }
     const confirmingIssue = this.isIssueTriage(task)
       && Object.values(answers).concat(decision).some((answer) =>
         answer.includes("确认根因与修改方案"));
@@ -5487,6 +5723,12 @@ export class TaskService {
     // 批注与自由说明都进 notes，不污染内核用于 choice receipt 的选项。
     const notes = [
       normalized.notes,
+      task.summary.cross_repository_updates?.length
+        ? "跨仓协作最新同步（需核对后继续）：\n"
+          + task.summary.cross_repository_updates.slice(-5)
+            .map((update) => `- ${update.source_repository ?? update.source_task_id}`
+              + ` / ${update.author}：${update.text}`).join("\n")
+        : undefined,
       deliverySelection?.note,
       picked.length ? renderAnnotations(picked, this.ticketOf(task)) : undefined,
     ].filter(Boolean).join("\n\n") || undefined;
@@ -5601,7 +5843,11 @@ export class TaskService {
    *   由 settle 在回合收口时取回来补发。人说过的话被系统吞掉,比慢
    *   一拍严重得多。
    */
-  async interrupt(id: string, text: string): Promise<TaskSummary> {
+  async interrupt(
+    id: string,
+    text: string,
+    actor?: string,
+  ): Promise<TaskSummary> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     const message = text.trim();
@@ -5613,7 +5859,8 @@ export class TaskService {
       throw new NotFoundError(
         `任务 ${id} 当前是 ${task.summary.status},没有在跑的会话可插话`);
     }
-    await task.driver.steer(message);
+    const delivered = actor ? `[跨仓协作 · ${actor}] ${message}` : message;
+    await task.driver.steer(delivered);
     this.options.log?.(`任务 ${id} 已插话(本轮工具调用结束后送达)`);
     return { ...task.summary };
   }
@@ -6939,6 +7186,7 @@ export class TaskService {
       };
       let engineeringKnowledge: ReturnType<typeof materializeEngineeringKnowledge>
         = { entries: [], warnings: [] };
+      let hasDependencyHandoff = false;
       task.cwd = cwd;
       if (this.options.host && analysisOnly) {
         const analysisRoot = resuming ? savedCwd! : join(workspace, "repositories");
@@ -7044,6 +7292,12 @@ export class TaskService {
         requirementPath = materializeRequirementDocument(
           cwd, task.summary.requirement, task.summary.requirement_document);
         this.hardenAgentGitBoundary(agentDir, cwd);
+        try {
+          hasDependencyHandoff = await this.materializeDependencyHandoff(task, cwd);
+        } catch (cause) {
+          this.options.log?.(
+            `[cross-repo-handoff] 任务 ${task.summary.id} 交接生成失败(fail-open): ${cause}`);
+        }
         const activeRepository = task.summary.repo_url
           ?? this.effectiveDefaultRepo();
         const reviewLane = this.reviewRoundLane(task);
@@ -7154,7 +7408,8 @@ export class TaskService {
             // 修复 Agent 为了收干净工作区,把它提交进了**用户的 .gitignore**
             // 并随 MR 推走,平台关切污染了用户仓)。
             const missing = [
-              ".mae-flow-order.json", ".mae-flow-chain.md", ".mae-flow-issue.md",
+              ".mae-flow-order.json", ".mae-flow-chain.md",
+              ".mae-flow-dependencies.md", ".mae-flow-issue.md",
               AGENT_REQUIREMENT_DOCUMENT,
               ".mae-flow.json", ".mae-flow.json.exited",
               ".mae-flow-history.jsonl", ".mae-flow-work/",
@@ -7308,6 +7563,20 @@ export class TaskService {
           + `索要个人 Git 令牌,也不要 push,Agent 会话释放后由 Cloud 宿主`
           + `统一推送并复核远端 SHA。流水线失败时,只依据该次流水线证据`
           + `定位并修复。`;
+      }
+      if (hasDependencyHandoff) {
+        prompt = `${prompt}\n\n本任务有跨仓前置交付。开始设计、改接口或实现前，`
+          + `必须先读取 .mae-flow-dependencies.md，并用它核对最初 Chain 契约。`
+          + `发现上游实际交付、当前实现或契约互相冲突时，停止猜测并举卡，`
+          + `明确写出受影响的仓库、接口与需要谁确认；不要自行发明兼容方案。`;
+      }
+      if (!analysisOnly && task.summary.cross_repository_updates?.length) {
+        prompt = `${prompt}\n\n跨仓主任务在分工后又收到以下影响同步。逐条核对它们`
+          + `是否改变当前仓的接口、设计或实现；有冲突就举卡并回报主任务，`
+          + `不要静默猜测：\n`
+          + task.summary.cross_repository_updates.slice(-10)
+            .map((update) => `- [${update.source_repository ?? update.source_task_id}`
+              + ` / ${update.author}] ${update.text}`).join("\n");
       }
       if (!analysisOnly && loadedRepositorySkillNames.length) {
         prompt = `${prompt}\n\n本单已启用仓库自带 Skill：`

@@ -62,13 +62,16 @@ function toolState(state: string): string {
 
 export function SteerBox({
   task,
+  steerOnly = false,
   onChanged,
 }: {
   task: TaskSummary;
+  /** 跨仓分析主任务是共享讨论室，没有可编辑的单仓代码现场。 */
+  steerOnly?: boolean;
   onChanged?: () => void;
 }) {
   const [mode, setMode] = useState<CollaborationMode>(
-    task.status === "running" ? "steer" : "assistant",
+    steerOnly || task.status === "running" ? "steer" : "assistant",
   );
   const [steerText, setSteerText] = useState("");
   const [assistantText, setAssistantText] = useState("");
@@ -88,9 +91,9 @@ export function SteerBox({
   useEffect(() => { onChangedRef.current = onChanged; }, [onChanged]);
 
   useEffect(() => {
-    setMode(task.status === "running" ? "steer" : "assistant");
+    setMode(steerOnly || task.status === "running" ? "steer" : "assistant");
     conversationPinned.current = true;
-  }, [task.id]);
+  }, [task.id, steerOnly]);
 
   const lastMessageId = assistant.messages.at(-1)?.id;
   useEffect(() => {
@@ -224,7 +227,9 @@ export function SteerBox({
       <div className="steer-head">
         <div>
           <strong>开发协作</strong>
-          <span>既能补充主任务，也能直接处理代码现场</span>
+          <span>{steerOnly
+            ? "主责人与各仓责任人在这里共同澄清，再由主责人拍板分工"
+            : "既能补充主任务，也能直接处理代码现场"}</span>
         </div>
         <em className={takeoverActive ? "active"
           : assistantAvailable ? "available" : "unavailable"}>
@@ -241,15 +246,15 @@ export function SteerBox({
           <strong>补充给主任务</strong>
           <small>不打断，忙完这步就会看到</small>
         </button>
-        <button type="button" role="tab" aria-selected={mode === "assistant"}
+        {!steerOnly && <button type="button" role="tab" aria-selected={mode === "assistant"}
           className={mode === "assistant" ? "active" : ""}
           onClick={() => setMode("assistant")}>
           <strong>开发助手</strong>
           <small>你主动接管现场，直接查代码、跑命令、修改</small>
-        </button>
+        </button>}
       </div>
 
-      {mode === "steer" ? (
+      {mode === "steer" || steerOnly ? (
         <>
           <p className="steer-copy">
             想到什么随时捎给主任务。当前命令不会被掐断，模型读到后会继续按 Mae-Flow 流程推进。
@@ -258,7 +263,11 @@ export function SteerBox({
             value={steerText} disabled={!canSteer || steerBusy}
             placeholder={canSteer
               ? "例如：掩码保留后四位，不要处理区号"
-              : "主任务暂停时，请切到“开发助手”直接处理代码现场"}
+              : steerOnly && task.status === "waiting_for_human"
+                ? "方案正在等主责人确认；请在材料上圈批注，意见会随最终决定送给 AI"
+                : steerOnly
+                  ? "主任务当前未运行，暂不能追加给 AI"
+                  : "主任务暂停时，请切到“开发助手”直接处理代码现场"}
             rows={3} onChange={(event) => {
               setSteerText(event.target.value);
               if (sent) setSent(false);

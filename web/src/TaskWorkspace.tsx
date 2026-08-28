@@ -21,6 +21,7 @@ import { RequirementGraph } from "./RequirementGraph";
 import { PrepushBadge } from "./PrepushStatus";
 import { TokenUsage } from "./TokenUsage";
 import { KnowledgeFootprint } from "./KnowledgeFootprint";
+import { CrossRepositorySync } from "./CrossRepositorySync";
 import { WarmupPanel, WarmupBadge } from "./WarmupPanel";
 import { taskHealthFacts } from "./taskHealth";
 import { relativeTime } from "./time";
@@ -30,6 +31,11 @@ import {
   RepositorySkillPicker,
   type RepositorySkillPickerState,
 } from "./RepositorySkillPicker";
+import {
+  EMPTY_REPOSITORY_ASSIGNEE_SELECTION,
+  RepositoryAssigneePicker,
+  type RepositoryAssigneeSelection,
+} from "./RepositoryAssigneePicker";
 import {
   completeReview,
   controlTask,
@@ -104,6 +110,7 @@ export function TaskWorkspace({
   task,
   viewerUsername,
   canOperate,
+  canCollaborate,
   canRequestReview,
   reviewAssignment,
   onChanged,
@@ -113,6 +120,8 @@ export function TaskWorkspace({
   task: TaskSummary;
   viewerUsername: string;
   canOperate: boolean;
+  /** 主任务责任人或已被逐仓分工邀请的协作者。最终决定仍看 canOperate。 */
+  canCollaborate: boolean;
   canRequestReview: boolean;
   reviewAssignment?: ReviewRequest;
   onChanged: () => void;
@@ -149,6 +158,8 @@ export function TaskWorkspace({
   const [cancelArmed, setCancelArmed] = useState(false);
   const [chainSkillPicker, setChainSkillPicker] =
     useState<RepositorySkillPickerState>(EMPTY_REPOSITORY_SKILL_PICKER_STATE);
+  const [repositoryAssignees, setRepositoryAssignees] =
+    useState<RepositoryAssigneeSelection>(EMPTY_REPOSITORY_ASSIGNEE_SELECTION);
   const [deliverySelection, setDeliverySelection] =
     useState<GitDiffSelection>();
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>(
@@ -159,6 +170,7 @@ export function TaskWorkspace({
     setMaterialView(task.waiting?.recommended_view ?? "source");
     setWorkspaceView(task.status === "paused" ? "collaboration" : "materials");
     setChainSkillPicker(EMPTY_REPOSITORY_SKILL_PICKER_STATE);
+    setRepositoryAssignees(EMPTY_REPOSITORY_ASSIGNEE_SELECTION);
     setDeliverySelection(undefined);
   }, [task.id]);
 
@@ -362,7 +374,7 @@ export function TaskWorkspace({
       ? { kicker: "WORKTREE CHANGES", title: "工作区变更" }
       : { kicker: "WORK DOCUMENTS", title: "过程文档" };
   const waiting = task.status === "waiting_for_human" && task.waiting;
-  const collaborationVisible = canOperate && [
+  const collaborationVisible = canCollaborate && [
     "running", "pausing", "paused", "waiting_for_human", "verifying",
   ].includes(task.status);
   const chainReview = !!waiting
@@ -448,6 +460,10 @@ export function TaskWorkspace({
               onChanged={onChanged} />
           </div>
           <strong id="task-workspace-title">{task.title ?? task.requirement}</strong>
+          {task.parent_task_id && <button type="button" className="ws-parent-task"
+            onClick={() => onOpenTask?.(task.parent_task_id!)}>
+            <span>隶属跨仓大任务</span><code>{task.parent_task_id}</code>
+          </button>}
         </div>
         {controllable && (
           <div className="ws-head-controls" aria-label="任务控制">
@@ -587,8 +603,20 @@ export function TaskWorkspace({
                 <Markdown text={task.requirement} />
               </article>
             ) : materialView === "chain" ? (
-              <RequirementGraph task={task} onOpenTask={onOpenTask}
-              />
+              <>
+                <RequirementGraph task={task} onOpenTask={onOpenTask} />
+                {!chainReview && canOperate
+                  && task.requirement_graph?.stage === "analysis" && (
+                  <RepositoryAssigneePicker
+                    taskId={task.id}
+                    repositories={task.requirement_graph.repositories}
+                    defaultAssignee={task.luban_account}
+                    selection={repositoryAssignees}
+                    onSelectionChange={setRepositoryAssignees}
+                    onSaved={onChanged}
+                  />
+                )}
+              </>
             ) : <>
               {unavailable && <div className="utility-note">{unavailable}</div>}
               {!unavailable && !items && <div className="utility-note">正在读取现场…</div>}
@@ -626,10 +654,18 @@ export function TaskWorkspace({
             </div>
             <div className="ws-primary-scroll ws-collaboration-view">
               {collaborationVisible ? (
-                <SteerBox task={task} onChanged={() => {
-                  setLivePulse((value) => value + 1);
-                  onChanged();
-                }} />
+                <>
+                  {task.parent_task_id && <CrossRepositorySync
+                    taskId={task.id}
+                    updates={task.cross_repository_updates}
+                    onChanged={onChanged} />}
+                  <SteerBox task={task}
+                    steerOnly={task.requirement_graph?.stage === "analysis"}
+                    onChanged={() => {
+                    setLivePulse((value) => value + 1);
+                    onChanged();
+                  }} />
+                </>
               ) : (
                 <section className="ws-view-empty" aria-label="开发助手状态">
                   <span aria-hidden>›_</span>
@@ -751,6 +787,8 @@ export function TaskWorkspace({
               unresolvedAnnotationCount={unresolvedNotes.length}
               repositorySkillSelection={chainReview
                 ? chainSkillPicker.selection : undefined}
+              repositoryAssigneeSelection={chainReview
+                ? repositoryAssignees : undefined}
               deliverySelection={task.waiting?.recommended_view === "diff"
                 ? deliverySelection : undefined}
               onLocateDelivery={task.waiting?.recommended_view === "diff"
@@ -764,14 +802,24 @@ export function TaskWorkspace({
               attachment={
                 <>
                   {chainReview && (
-                    <RepositorySkillPicker
-                      repositories={chainRepositories}
-                      baseline={task.baseline}
-                      initialSkills={task.repository_skills}
-                      presentation="decision"
-                      state={chainSkillPicker}
-                      onStateChange={setChainSkillPicker}
-                    />
+                    <>
+                      <RepositoryAssigneePicker
+                        taskId={task.id}
+                        repositories={task.requirement_graph!.repositories}
+                        defaultAssignee={task.luban_account}
+                        selection={repositoryAssignees}
+                        onSelectionChange={setRepositoryAssignees}
+                        onSaved={onChanged}
+                      />
+                      <RepositorySkillPicker
+                        repositories={chainRepositories}
+                        baseline={task.baseline}
+                        initialSkills={task.repository_skills}
+                        presentation="decision"
+                        state={chainSkillPicker}
+                        onStateChange={setChainSkillPicker}
+                      />
+                    </>
                   )}
                   <AttachedNotes items={unresolvedNotes} onLocate={locate} />
                 </>

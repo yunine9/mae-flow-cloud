@@ -87,6 +87,12 @@ export interface AuthUser {
   push_confirmation?: boolean;
 }
 
+export interface CollaborationAssignee {
+  username: string;
+  ready: boolean;
+  missing: string[];
+}
+
 export type WishKind = "wish" | "issue";
 export type WishStatus = "open" | "accepted" | "done" | "declined";
 
@@ -304,6 +310,12 @@ export async function listUsers(): Promise<AuthUser[]> {
   return response.json();
 }
 
+export async function listCollaborationAssignees(): Promise<CollaborationAssignee[]> {
+  const response = await fetch("/auth/collaboration-assignees");
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
 export async function createUser(
   username: string,
   password: string,
@@ -360,9 +372,26 @@ export async function putCommitter(
  * 随后幂等生成各仓交付；不是独立于审批卡之外的第二套状态。 */
 export async function confirmRequirementGraph(
   taskId: string,
+  repositoryAssignees?: Record<string, string>,
 ): Promise<TaskSummary> {
   const response = await fetch(
-    `/tasks/${encodeURIComponent(taskId)}/graph/confirm`, { method: "POST" });
+    `/tasks/${encodeURIComponent(taskId)}/graph/confirm`, {
+      method: "POST",
+      body: JSON.stringify({ repository_assignees: repositoryAssignees }),
+    });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function putRepositoryAssignees(
+  taskId: string,
+  repositoryAssignees: Record<string, string>,
+): Promise<TaskSummary> {
+  const response = await fetch(
+    `/tasks/${encodeURIComponent(taskId)}/repository-assignees`, {
+      method: "PUT",
+      body: JSON.stringify({ repository_assignees: repositoryAssignees }),
+    });
   if (!response.ok) throw new Error(await errorText(response));
   return response.json();
 }
@@ -542,13 +571,15 @@ export interface TaskSummary {
   requirement_graph?: {
     stage: "analysis" | "confirmed";
     repositories: Array<{
-      id: string; name: string; url: string; responsibility?: string; task_id?: string;
+      id: string; name: string; url: string; responsibility?: string;
+      assignee?: string; task_id?: string;
     }>;
     /** `from 依赖 to`：from 等待 to，to 是前置仓库。 */
     dependencies: Array<{ from: string; to: string; reason?: string }>;
   };
   parent_task_id?: string;
   blocked_by?: string[];
+  cross_repository_updates?: CrossRepositoryUpdate[];
   waiting?: {
     waiting_id: string;
     state_version: number;
@@ -614,6 +645,17 @@ export interface TaskSummary {
     at: string;
     paused_from?: TaskStatus;
   };
+}
+
+export interface CrossRepositoryUpdate {
+  id: string;
+  parent_task_id: string;
+  source_task_id: string;
+  source_repository?: string;
+  author: string;
+  text: string;
+  target_task_ids: string[];
+  created_at: string;
 }
 
 export interface IssueEnvironmentRef {
@@ -1532,6 +1574,8 @@ export async function decide(
     catalogToken: string;
     selectedIds: string[];
   },
+  /** Chain 图上的逐仓责任人；只在“确认并生成任务”时发送。 */
+  repositoryAssignees?: Record<string, string>,
   /** 代码检视勾选的最终交付文件；空数组表示明确不选任何文件。 */
   deliveryPaths?: string[],
 ): Promise<{ conflict?: string }> {
@@ -1545,6 +1589,7 @@ export async function decide(
       annotation_ids: annotationIds?.length ? annotationIds : undefined,
       repository_skill_catalog_token: repositorySkills?.catalogToken,
       selected_repository_skill_ids: repositorySkills?.selectedIds,
+      repository_assignees: repositoryAssignees,
       delivery_paths: deliveryPaths,
     }),
   });
@@ -1620,6 +1665,19 @@ export async function interruptTask(
     return { error: String(body.error ?? `HTTP ${response.status}`) };
   }
   return {};
+}
+
+export async function publishCrossRepositoryUpdate(
+  taskId: string,
+  text: string,
+): Promise<CrossRepositoryUpdate> {
+  const response = await fetch(
+    `/tasks/${encodeURIComponent(taskId)}/cross-repository-update`, {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
 }
 
 export interface DeveloperAssistantMessage {

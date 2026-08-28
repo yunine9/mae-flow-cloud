@@ -12,8 +12,8 @@ export function RequirementGraph({
   task: TaskSummary;
   onOpenTask?: (taskId: string) => void;
 }) {
-  const [expanded, setExpanded] = useState(true);
   const graph = task.requirement_graph;
+  const [expanded, setExpanded] = useState(graph?.stage === "analysis");
   if (!graph || graph.repositories.length < 2) return null;
   const remaining = new Set(graph.repositories.map((repository) => repository.id));
   const stages: typeof graph.repositories[] = [];
@@ -32,7 +32,7 @@ export function RequirementGraph({
     <summary>
       <div>
         <span>CHAIN OVERVIEW</span>
-        <strong id="requirement-graph-title">仓间开发依赖</strong>
+        <strong id="requirement-graph-title">跨仓大任务协作树</strong>
       </div>
       <small>{graph.repositories.length} 个仓库 · {graph.dependencies.length} 条硬依赖</small>
       <i className="requirement-toggle" aria-hidden />
@@ -54,6 +54,9 @@ export function RequirementGraph({
                   {repository.task_id && <button type="button"
                     onClick={() => onOpenTask?.(repository.task_id!)}>打开任务</button>}
                 </div>
+                <span className="repo-assignee">
+                  {repository.assignee ? `负责人 · ${repository.assignee}` : "负责人待确认"}
+                </span>
                 {repository.responsibility && <p>{repository.responsibility}</p>}
                 {parents.length > 0 && <span className="repo-prerequisite">
                   等待 {parents.map((edge) => repoName(edge.to, task)).join("、")}
@@ -70,6 +73,18 @@ export function RequirementGraph({
           {edge.reason && <small>{edge.reason}</small>}
         </div>)}
       </div>}
+      {(task.cross_repository_updates?.length ?? 0) > 0 && (
+        <details className="cross-repository-ledger">
+          <summary>分工后的跨仓影响 <b>{task.cross_repository_updates!.length}</b></summary>
+          <ol>{task.cross_repository_updates!.slice(-10).reverse().map((update) => (
+            <li key={update.id}>
+              <div><strong>{update.source_repository ?? update.source_task_id}</strong>
+                <span>{update.author}</span></div>
+              <p>{update.text}</p>
+            </li>
+          ))}</ol>
+        </details>
+      )}
       {task.status === "waiting_for_human" && <p className="requirement-graph-note">
         核对完成后，请在右侧决策卡统一选择“确认并生成任务”或“需要修改”。
       </p>}

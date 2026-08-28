@@ -31,6 +31,7 @@ import {
   type EventFilter,
 } from "./eventView";
 import type { RepositorySkillSelection } from "./RepositorySkillPicker";
+import type { RepositoryAssigneeSelection } from "./RepositoryAssigneePicker";
 import type { GitDiffSelection } from "./GitDiff";
 import { PrepushStatus } from "./PrepushStatus";
 import { TokenUsage } from "./TokenUsage";
@@ -124,6 +125,7 @@ export function TaskCard({
                 {task.requirement_graph!.repositories.map((repository) => (
                   <span key={repository.id} title={repository.url}>
                     <i aria-hidden />{repository.name}
+                    {repository.assignee && <b>· {repository.assignee}</b>}
                   </span>
                 ))}
               </span>
@@ -386,6 +388,7 @@ export function WaitingCard({
   unresolvedAnnotationCount,
   attachment,
   repositorySkillSelection,
+  repositoryAssigneeSelection,
   deliverySelection,
   onLocateDelivery,
 }: {
@@ -401,6 +404,8 @@ export function WaitingCard({
   attachment?: ReactNode;
   /** 仅 Chain 的“确认并生成任务”消费；未扫描/需要修改都不发送。 */
   repositorySkillSelection?: RepositorySkillSelection;
+  /** Chain 的逐仓分工；确认拆单前必须全部指向已就绪成员。 */
+  repositoryAssigneeSelection?: RepositoryAssigneeSelection;
   /** 代码检视里的文件级交付清单；由工作区变更面板的真实勾选产生。 */
   deliverySelection?: GitDiffSelection;
   /** 跳到勾选面板(工作台的「本任务变更」)。列表页没有勾选面板,
@@ -445,6 +450,8 @@ export function WaitingCard({
   const answerOf = (question: string) => picked[question] ?? "";
   const optional = (question: string) =>
     /可忽略|若上题|如无|可跳过|可不填/.test(question);
+  const confirmsChainChoice = Object.values(picked).some((answer) =>
+    answer.includes("确认并生成任务"));
   // 勾选与 commit 不同不再算冲突(2026-08-28 用户拍板易用性):服务端
   // 会按勾选机械整理提交并直推,"通过"就是一键走完。只有未闭环批注
   // 仍然拦"通过"——那是真有意见没处理。
@@ -472,6 +479,8 @@ export function WaitingCard({
     && !repositorySkillSelection?.scanning
     && (!repositorySkillSelection?.scanned
       || !!repositorySkillSelection.catalogToken)
+    && (!confirmsChainChoice || !repositoryAssigneeSelection
+      || repositoryAssigneeSelection.ready)
     && !reviewChoiceConflict
     && !submitting;
 
@@ -547,6 +556,7 @@ export function WaitingCard({
         notes,
         annotationIds,
         repositorySkills,
+        confirmsChain ? repositoryAssigneeSelection?.assignments : undefined,
         requiresDeliverySelection ? deliverySelection?.selectedPaths : undefined,
       );
       if (result.conflict) setConflict(result.conflict);

@@ -50,6 +50,7 @@ test("个人配置:退出重登与账号库重载后仍在,且不同用户严格
   original.setMoonlight("alice", true);
   original.setGitToken("bob", "bob-codehub-secret", "bob@example.com");
   original.setLubanToken("bob", "bob-luban-secret");
+  original.createUser("carol", "carol-password-123", "developer");
 
   // 用新的 LocalAuth 模拟服务重启，证明事实来自账号文件而非前端内存。
   const auth = new LocalAuth(file);
@@ -124,6 +125,24 @@ test("个人配置:退出重登与账号库重载后仍在,且不同用户严格
     });
     assert.equal(users.status, 403,
       "普通开发不能借账号管理接口读取其他用户信息");
+
+    const candidates = await fetch(`${base}/auth/collaboration-assignees`, {
+      headers: { cookie: bob.cookie },
+    });
+    assert.equal(candidates.status, 200);
+    const candidateText = await candidates.text();
+    const candidateRows = JSON.parse(candidateText) as Array<{
+      username: string; ready: boolean; missing: string[];
+    }>;
+    assert.deepEqual(candidateRows.find((row) => row.username === "alice"), {
+      username: "alice", ready: true, missing: [],
+    });
+    assert.deepEqual(candidateRows.find((row) => row.username === "carol"), {
+      username: "carol", ready: true, missing: [],
+    }, "纯会话部署不需要 Git/通知令牌，不能造一道假门");
+    assert.doesNotMatch(candidateText,
+      /alice@example\.com|alice-codehub-secret|alice-luban-secret|cret/,
+      "委派候选接口只能暴露就绪状态，不能带邮箱或任何令牌提示");
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
