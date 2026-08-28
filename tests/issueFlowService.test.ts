@@ -379,10 +379,11 @@ test("问题会话多轮闭环:研究→提问卡→作答→非问题归档(无
       return issue.status === "idle" ? issue : undefined;
     }, "作答后回合收口");
     assert.equal(idle.stage, "done", "作答后应继续推进到结论阶段");
-    assert.ok(idle.messages.some((message) =>
+    const thread = service.messages(created.id);
+    assert.ok(thread.some((message) =>
       message.role === "user" && message.text.includes("黑屏")),
     "开场问题应作为用户消息入账");
-    assert.ok(idle.messages.some((message) => message.role === "decision"),
+    assert.ok(thread.some((message) => message.role === "decision"),
     "用户决定应入账");
 
     // 续聊通道:idle 后用户还能继续说话。
@@ -618,8 +619,7 @@ test("重启续聊:等待问题卡期间服务重启,作答仍能续上现场", 
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
       return issue.status === "idle" ? issue : undefined;
     }, "重启后作答复跑");
-    const detail = second.get(created.id);
-    assert.ok(detail.messages.some((message) =>
+    assert.ok(second.messages(created.id).some((message) =>
       message.role === "decision" && message.text.includes("偶发")),
     "决定应作为消息入账");
   } finally {

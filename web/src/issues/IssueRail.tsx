@@ -34,7 +34,7 @@ export function IssueRail({ detail, busy, waiting, onAnswer, onReply,
   onSteer: (text: string) => Promise<boolean>;
   onArchive: () => void;
   onCancel: () => void;
-  /** 打开左侧结论文档页签。 */
+  /** 打开材料页签的结论文档子视图。 */
   onOpenDoc: () => void;
   /** 挂起会话的关联单号转正(两段式);返回校验详情或转正结果。 */
   onAssociate: (ticket: string, confirm: boolean) =>
@@ -62,8 +62,11 @@ export function IssueRail({ detail, busy, waiting, onAnswer, onReply,
           <button type="button" className="issue-rail-primary"
             disabled={busy}
             onClick={onArchive}>归档收口</button>
-          {detail.mode !== "fixed"
-            && <small>要继续追问就在左侧对话页签发言,把阶段从「问题闭环」切回对应环节即可。</small>}
+          {/* 收口不锁门:归档前仍可续聊(对话页签已并入现场,发言口
+              收拢到右栏各态,这里是 done 态的那一个)。 */}
+          <RailInput kind="reply" disabled={busy}
+            placeholder="归档前还想补充或追问,在这里继续"
+            actionLabel="发送" submit={onReply} />
         </div>}
       {!waiting && detail.status !== "suspended" && !doneIdle
         && detail.status === "running" && <div className="issue-rail-card is-running">
@@ -198,8 +201,7 @@ function IssueAssociateCard({ busy, onAssociate }: {
 
 /** 栏内输入行:插话是单行 input,续聊是小 textarea;提交后清空的时机
  * 放在 success 之后(perform 返回 true),失败保字与旧行为一致。
- * 导出复用:done+idle 时右栏被归档卡占据,对话页签末尾的续聊入口
- * 也用同一行输入。 */
+ * 右栏各态(运行中插话/空闲续聊/被打断续聊/收口追问)共用同一形状。 */
 export function RailInput({ kind, placeholder, actionLabel, disabled, primary, submit }: {
   kind: "steer" | "reply";
   placeholder: string;

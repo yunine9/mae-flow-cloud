@@ -330,7 +330,6 @@ export class IssueFlowService {
 
   get(id: string): IssueSummary & {
     waiting?: WaitingRecord;
-    messages: IssueMessage[];
     has_analysis: boolean;
   } {
     const live = this.require(id);
@@ -338,12 +337,13 @@ export class IssueFlowService {
     return {
       ...summarize(live.state),
       waiting,
-      messages: this.messages(id),
       has_analysis: existsSync(join(live.root, "issue-analysis.md")),
     };
   }
 
-  /** 会话消息(事件账本投影):user/assistant/decision 三类,尾部截断。 */
+  /** 会话消息(事件账本投影):user/assistant/decision 三类,尾部截断。
+   * 唯一消费者是「耗时与卡点」视图(timeline);详情响应不携带它——
+   * 前端的对话内容直接来自现场页签的事件流。 */
   messages(id: string): IssueMessage[] {
     const live = this.require(id);
     const path = join(live.root, "events.jsonl");

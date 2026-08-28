@@ -4,8 +4,9 @@
  * 与"我的需求"完全隔离:独立分包、独立轮询、独立 API 命名空间。
  * 页面两块:上方登记(DTS 拉单/手工登记),下方"我的问题"会话列表;
  * 点开进入会话详情——决策-centric 双栏:顶部阶段英雄轨 + 耗时卡点折叠条,
- * 左栏是内容(对话/结论文档页签),右栏常驻 NEXT ACTION(待答复/运行中/
- * 空闲/被打断/已出结论 五态互斥)+ 底部固死的归档与取消。
+ * 左栏是内容(材料/现场 两页签:现场=执行事件直播,对话内容在「消息」
+ * 筛选;结论文档归入材料),右栏常驻 NEXT ACTION(待答复/运行中/
+ * 空闲/被打断/已出结论 五态互斥,发言入口都在这里)+ 底部固死的归档与取消。
  * 前端不推断状态:一切文案来自 /issues API 镜像。
  */
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -57,7 +58,7 @@ import { atBottom, backlog } from "../follow";
 import { formatWait } from "../taskTime";
 import { startVisiblePolling } from "../visiblePolling";
 import { formatLocalClock, formatLocalDateTime } from "../time";
-import { IssueRail, RailInput } from "./IssueRail";
+import { IssueRail } from "./IssueRail";
 
 export function IssueBoard({ viewer, onNavigateProfile }: {
   viewer: AuthUser;
@@ -67,19 +68,16 @@ export function IssueBoard({ viewer, onNavigateProfile }: {
   const [openId, setOpenId] = useState("");
   const [detail, setDetail] = useState<IssueDetail | undefined>();
   const [error, setError] = useState("");
-  // SSE 事件账(按 eventId 去重累积):会话线程的实时源。
-  const [liveEvents, setLiveEvents] = useState<SemanticEvent[]>([]);
 
   const refreshList = () => {
     void listIssues().then(setIssues).catch(() => undefined);
   };
   useEffect(() => startVisiblePolling(refreshList, 5000, document), []);
 
-  // 打开会话时跟读详情(消息流贴着 AI 的节奏走);列表照常低频轮询。
+  // 打开会话时跟读详情;列表照常低频轮询。
   useEffect(() => {
     if (!openId) {
       setDetail(undefined);
-      setLiveEvents([]);
       return;
     }
     let alive = true;
@@ -96,37 +94,7 @@ export function IssueBoard({ viewer, onNavigateProfile }: {
     };
   }, [openId]);
 
-  // 会话线程改走 SSE:服务端从头重放 events.jsonl 再 300ms 增量跟进,
-  // AI 回复生成完的瞬间即到;连接前/断连时回落到 detail.messages。
-  // 终态(archived/canceled/failed)服务端会收口 SSE,前端跟着停,
-  // 免得 EventSource 自动重连空转。
-  const live = !!openId && !!detail
-    && !["archived", "canceled", "failed"].includes(detail.status);
-  useEffect(() => {
-    if (!live || !openId) return;
-    return tailIssueEvents(openId, (event) => {
-      setLiveEvents((previous) => previous.some((item) => (
-        item.eventId === event.eventId && item.sessionId === event.sessionId))
-        ? previous
-        : [...previous, event]);
-    });
-  }, [live, openId]);
-
-  const liveMessages = useMemo(
-    () => issueThreadFromEvents(liveEvents), [liveEvents]);
-  // 运行中的"活着"指示:工具动静一有就说,纯生成期给一句诚实的"处理中"。
-  const activity = useMemo(() => {
-    if (detail?.status !== "running") return "";
-    const last = liveEvents[liveEvents.length - 1];
-    if (!last) return "";
-    if (last.kind === "tool_requested") {
-      const name = String(last.payload?.name ?? "");
-      return name ? `正在执行 ${name}…` : "";
-    }
-    return "AI 正在处理…";
-  }, [detail?.status, liveEvents]);
-
-  // 详情轮询降为兜底:SSE 管消息新鲜度,这里只刷状态/阶段/待办卡。
+  // 状态/阶段/待办卡的低频刷新;执行过程的实时跟随在现场页签自己订 SSE。
   useEffect(() => startVisiblePolling(() => {
     if (!openId) return;
     void getIssue(openId).then(setDetail).catch(() => undefined);
@@ -135,14 +103,12 @@ export function IssueBoard({ viewer, onNavigateProfile }: {
   if (openId && detail) {
     return <IssueSessionView
       detail={detail}
-      messages={liveMessages.length ? liveMessages : detail.messages}
-      activity={activity}
       onBack={() => { setOpenId(""); setDetail(undefined); }}
       onChanged={(next) => setDetail(next)}
       onListRefresh={refreshList}
       onError={setError}
       onNavigateProfile={onNavigateProfile}
-      onOpenIssue={(id) => { setOpenId(id); setLiveEvents([]); }}
+      onOpenIssue={(id) => setOpenId(id)}
     />;
   }
 
@@ -881,8 +847,6 @@ function DtsRegister({
 
 function IssueSessionView({
   detail,
-  messages,
-  activity,
   onBack,
   onChanged,
   onListRefresh,
@@ -891,10 +855,6 @@ function IssueSessionView({
   onOpenIssue,
 }: {
   detail: IssueDetail;
-  /** 会话线程:SSE 直播投影优先,断连兜底 detail.messages。 */
-  messages: IssueDetail["messages"];
-  /** 运行中的活动指示(工具名/处理中);空串不渲染。 */
-  activity: string;
   onBack: () => void;
   onChanged: (detail: IssueDetail) => void;
   onListRefresh: () => void;
@@ -905,21 +865,17 @@ function IssueSessionView({
 }) {
   const [ticket, setTicket] = useState("");
   const [busy, setBusy] = useState(false);
-  // 左栏页签:默认"有结论文档先看结论",用户手选优先(换会话才重置);
-  // undefined 表示尚未手选,渲染时按当前 has_analysis 兜底。
-  const [pickedTab, setPickedTab] = useState<
-    "chat" | "doc" | "materials" | "events" | undefined>(undefined);
-  const threadRef = useRef<HTMLDivElement | null>(null);
+  // 左栏页签:默认"现场"(AI 干活的直播面),用户手选优先;换会话重置。
+  // 发言不靠页签——右栏 NEXT ACTION 六态常驻输入,现场只管看。
+  const [tab, setTab] = useState<"materials" | "events">("events");
+  // 材料子视图提到会话层:右栏"结论文档已产出"要能一步跳到该子视图。
+  const [materialsView, setMaterialsView] = useState<
+    "dts" | "changes" | "logs" | "doc">("changes");
 
   useEffect(() => {
-    // 消息流贴底:线程有新内容(SSE 直播或详情兜底)就滚到最新。
-    const thread = threadRef.current;
-    if (thread) thread.scrollTop = thread.scrollHeight;
-  }, [messages.length, activity]);
-
-  useEffect(() => {
-    // 换一个会话就丢弃手选页签,回到默认入口。
-    setPickedTab(undefined);
+    // 换一个会话就丢弃手选页签与材料子视图,回到默认入口。
+    setTab("events");
+    setMaterialsView("changes");
   }, [detail.id]);
 
   useEffect(() => {
@@ -954,7 +910,6 @@ function IssueSessionView({
     }
   }
 
-  const tab = pickedTab ?? (detail.has_analysis ? "doc" : "chat");
   // 等待卡两源:平台闸(固定流程的人工硬闸)优先,Agent 问题卡兜底;
   // 决策卡只在 status=waiting_user 且卡在场时画,轮询半拍不画。
   const gateCard = detail.status === "waiting_user" && detail.gate
@@ -1066,12 +1021,12 @@ function IssueSessionView({
     </div>
 
     <div className="issue-workspace-body">
-    {/* 固定流程:阶段进度条(计划线,含继承/待重做态);自由模式仍是
-        旅程线(走过的才画)。两条线各自独立,不互相替代。 */}
+    {/* 固定流程:只留计划线——全阶段一条,走到哪亮到哪,当前阶段脉冲
+        呼吸(2026-08-28 拍板:固定流程下旅程线与计划线信息重复,省一行);
+        自由模式仍是旅程线(走过的才画——账实序是自由模式唯一真相)。 */}
     {detail.mode === "fixed"
-      && <IssueFixedProgress issue={detail} />}
-    {/* 阶段英雄轨:独立整行(旅程线),压在耗时折叠条之上 */}
-    <IssueJourneyTrail trail={trail} />
+      ? <IssueFixedProgress issue={detail} />
+      : <IssueJourneyTrail trail={trail} />}
 
     {/* done ≠ 归档的引导迁到右栏绿卡;顶部横幅随之删除(决策-centric)。 */}
     {detail.error && <div className="issue-session-error" role="alert">
@@ -1098,41 +1053,11 @@ function IssueSessionView({
         右栏靠 order 提到内容之上,见 style.css 的 1100px 断点。 */}
     <div className="issue-two-pane">
       <section className="issue-main-pane" aria-label="会话内容">
-        <IssuePaneTabs tab={tab} hasAnalysis={detail.has_analysis}
-          onPick={(next) => setPickedTab(next)} />
-        {tab === "chat"
-          ? <div className="issue-thread" ref={threadRef}>
-              {messages.map((message, index) => <div
-                key={`${message.ts}-${index}`}
-                className={`issue-message role-${message.role}`}>
-                <span className="issue-message-role">
-                  {message.role === "user"
-                    ? "我" : message.role === "assistant" ? "AI" : "决定"}
-                </span>
-                <FoldableMessageBody text={message.text} />
-              </div>)}
-              {messages.length === 0 && !activity && <p className="issue-thread-empty">
-                会话刚建立,AI 正在启动首轮研究。
-              </p>}
-              {activity && <p className="issue-activity" role="status">
-                <i aria-hidden />{activity}
-              </p>}
-              {/* stage=done 时右栏被归档卡占据,续聊入口退回对话流末尾,
-                  与右栏"左侧对话页签发言"的引导文案互相印证。 */}
-              {!waiting && detail.stage === "done" && detail.status === "idle"
-                && <RailInput kind="reply" disabled={busy}
-                  placeholder="继续追问:补充信息、调整方向,或让 AI 继续"
-                  actionLabel="发送" submit={sendReply} />}
-            </div>
-          : tab === "materials"
-            ? <IssueMaterialsPane detail={detail} busy={busy}
-                onNotifyAI={notifyAI} />
-            : tab === "events"
-              ? <IssueEventsPane id={detail.id} active={tab === "events"} />
-              : <>
-                  {/* 结论文档按 updated_at 缓存:文档可能被 AI 续写,状态一动就该重读。 */}
-                  <IssueConclusionDoc id={detail.id} updatedAt={detail.updated_at} />
-                </>}
+        <IssuePaneTabs tab={tab} onPick={setTab} />
+        {tab === "materials"
+          ? <IssueMaterialsPane detail={detail} busy={busy} view={materialsView}
+              onView={setMaterialsView} onNotifyAI={notifyAI} />
+          : <IssueEventsPane id={detail.id} active />}
       </section>
       <IssueRail
         detail={detail}
@@ -1143,7 +1068,7 @@ function IssueSessionView({
         onSteer={sendSteer}
         onArchive={archive}
         onCancel={cancelSession}
-        onOpenDoc={() => setPickedTab("doc")}
+        onOpenDoc={() => { setTab("materials"); setMaterialsView("doc"); }}
         onAssociate={associate}
       />
     </div>
@@ -1207,41 +1132,21 @@ function IssueJourneyTrail({ trail }: {
   </nav>;
 }
 
-/** 对话长文折叠:>600 字的消息先展示前 280 字 + 展开按钮,防止一段长
- * 日志把整个时间线顶走(口径参考任务侧 EventValue 的 details 折叠)。 */
-function FoldableMessageBody({ text }: { text: string }) {
-  const [open, setOpen] = useState(false);
-  const folded = text.length > 600;
-  if (!folded) {
-    return <div className="issue-message-body">{text}</div>;
-  }
-  return <div className="issue-message-body is-folded">
-    {open ? text : `${text.slice(0, 280)}…`}
-    <button type="button" className="issue-message-expand"
-      onClick={() => setOpen((value) => !value)}>
-      {open ? "收起" : `展开全部 ${text.length} 字`}
-    </button>
-  </div>;
-}
-
-/** 对话 / 结论文档 的轻量页签(左栏头;默认口在 IssueSessionView 里定:
- * 有结论文档先看结论,手选保持到换会话)。 */
-/** 页签栏:结构照搬任务工作台的 ws-workspace-nav(四格彩色卡 +
+/** 材料 / 现场 的页签栏(左栏头;默认口在 IssueSessionView 里定:
+ * 打开会话先看现场直播,手选保持到换会话)。对话不设页签——发言走
+ * 右栏 NEXT ACTION,对话内容本身就在现场的「消息」筛选里。 */
+/** 页签栏:结构照搬任务工作台的 ws-workspace-nav(彩色卡 +
  * 主副两行文案),视觉与需求侧完全一致。 */
 function IssuePaneTabs({
   tab,
-  hasAnalysis,
   onPick,
 }: {
-  tab: "chat" | "doc" | "materials" | "events";
-  hasAnalysis: boolean;
-  onPick: (tab: "chat" | "doc" | "materials" | "events") => void;
+  tab: "materials" | "events";
+  onPick: (tab: "materials" | "events") => void;
 }) {
   const views = [
-    ["chat", "对话", "多轮对话与插话"],
-    ["doc", "结论文档", hasAnalysis ? "issue-analysis.md" : "(未生成)"],
-    ["materials", "材料", "变更、日志与 DTS 单据"],
-    ["events", "现场", "SSE 原始事件实时跟随"],
+    ["materials", "材料", "DTS 单据、结论文档、工作区变更与拉取日志"],
+    ["events", "现场", "执行事件实时跟随,对话内容在「消息」筛选"],
   ] as const;
   return <nav className="ws-workspace-nav" aria-label="会话工作台视图">
     {views.map(([value, label, hint]) => (
@@ -1308,20 +1213,21 @@ function IssueConclusionDoc({ id, updatedAt }: { id: string; updatedAt: string }
   </div>;
 }
 
-/** 会话材料(材料页签):DTS 单据 / 工作区变更 / 拉取日志。结构照搬
- * 任务工作台交付材料页(ws-pane-head + ws-source-switch + ws-doc),
+/** 会话材料(材料页签):DTS 单据 / 结论文档 / 工作区变更 / 拉取日志。
+ * 结构照搬任务工作台交付材料页(ws-pane-head + ws-source-switch + ws-doc),
  * diff 用同一把 GitDiff 渲染。数据全部旁路:任何一块失败给空态。
  * 快速修改是问题流唯一的人工写口——只改 repo/ 内已有文件,保存入
- * 人工台账,"请 AI 复核"走现有插话/续聊通道。 */
-function IssueMaterialsPane({ detail, busy, onNotifyAI }: {
+ * 人工台账,"请 AI 复核"走现有插话/续聊通道。
+ * 子视图状态在会话层(右栏"结论文档已产出"要能一步跳进来)。 */
+function IssueMaterialsPane({ detail, busy, view, onView, onNotifyAI }: {
   detail: IssueDetail;
   busy: boolean;
+  view: "dts" | "changes" | "logs" | "doc";
+  onView: (view: "dts" | "changes" | "logs" | "doc") => void;
   onNotifyAI: (text: string) => Promise<boolean>;
 }) {
   const [data, setData] = useState<IssueMaterials>();
   const [note, setNote] = useState("");
-  // 材料子视图:与任务侧 ws-source-switch 同款三选。
-  const [view, setView] = useState<"changes" | "dts" | "logs">("changes");
   const [allDiff, setAllDiff] = useState("");
   // 快速修改:选中文件 → 编辑器;undefined 表示未选中。
   const [activeFile, setActiveFile] = useState<string>();
@@ -1402,15 +1308,19 @@ function IssueMaterialsPane({ detail, busy, onNotifyAI }: {
       <div><span>ISSUE MATERIALS</span><strong>会话材料</strong></div>
       <div className="ws-source-switch" aria-label="材料类型">
         <button className={view === "dts" ? "on" : ""}
-          disabled={!data?.ticket} onClick={() => setView("dts")}>
+          disabled={!data?.ticket} onClick={() => onView("dts")}>
           <span>DTS 单据</span><i>{data?.ticket ? "1" : "0"}</i>
         </button>
+        <button className={view === "doc" ? "on" : ""}
+          disabled={!detail.has_analysis} onClick={() => onView("doc")}>
+          <span>结论文档</span><i>{detail.has_analysis ? "1" : "0"}</i>
+        </button>
         <button className={view === "changes" ? "on" : ""}
-          onClick={() => setView("changes")}>
+          onClick={() => onView("changes")}>
           <span>工作区变更</span><i>{changes.length}</i>
         </button>
         <button className={view === "logs" ? "on" : ""}
-          onClick={() => setView("logs")}>
+          onClick={() => onView("logs")}>
           <span>拉取日志</span><i>{data?.logs.length ?? 0}</i>
         </button>
       </div>
@@ -1484,6 +1394,10 @@ function IssueMaterialsPane({ detail, busy, onNotifyAI }: {
         />
       </> : <div className="utility-note">正在读取单据详情…</div>}
     </div>}
+    {view === "doc" && <>
+      {/* 结论文档按 updated_at 缓存:文档可能被 AI 续写,状态一动就该重读。 */}
+      <IssueConclusionDoc id={detail.id} updatedAt={detail.updated_at} />
+    </>}
     {view === "logs" && <div className="ws-doc">
       {data && data.logs.length === 0 && <div className="utility-note">
         本会话还没有拉取过日志。
@@ -1826,32 +1740,4 @@ function IssueCostPanel({ id }: { id: string }) {
  * (未来词表扩充前的旧现场)原样示人——前端不猜。 */
 function STAGE(event: { title: string }): string {
   return issueStageText({ stage: event.title as never });
-}
-
-/** 事件账 → 会话线程投影:与后端 service.messages 同一规则
- * (user/assistant/decision 三类,尾部 300 条截断)。SSE 重放给的是
- * 全量事件,这里照抄后端口径,长会话内存可控。 */
-function issueThreadFromEvents(
-  events: SemanticEvent[],
-): IssueDetail["messages"] {
-  const messages: IssueDetail["messages"] = [];
-  for (const event of events) {
-    const payload = event.payload ?? {};
-    if (event.kind === "user_message") {
-      messages.push({
-        role: "user", text: String(payload.text ?? ""), ts: String(event.ts ?? ""),
-      });
-    } else if (event.kind === "assistant_message") {
-      messages.push({
-        role: "assistant", text: String(payload.text ?? ""), ts: String(event.ts ?? ""),
-      });
-    } else if (event.kind === "human_decision") {
-      messages.push({
-        role: "decision",
-        text: `用户决定: ${String(payload.decision ?? "")}`,
-        ts: String(event.ts ?? ""),
-      });
-    }
-  }
-  return messages.slice(-300);
 }

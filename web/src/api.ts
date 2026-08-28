@@ -2369,7 +2369,6 @@ export interface IssueWaitingCard {
 
 export interface IssueDetail extends IssueSummary {
   waiting?: IssueWaitingCard;
-  messages: Array<{ role: "user" | "assistant" | "decision"; text: string; ts: string }>;
   has_analysis: boolean;
 }
 
