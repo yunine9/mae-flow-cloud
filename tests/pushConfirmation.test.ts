@@ -320,3 +320,52 @@ test("开关的边界:已推送后不能再开;等卡时关掉=作废卡继续�
     await model.stop();
   }
 });
+
+test("卡键绑文件集合:等卡时 HEAD 演进不换卡;重举卡增量优先;有清单即举卡", async () => {
+  const { service, model, id, internal, repo } = await verifyingTask();
+  try {
+    const gate = () => (service as any)
+      .pushConfirmationSatisfied(internal, "master_bot_REQ1");
+    internal.summary.push_confirmation = true;
+    assert.equal(await gate(), false, "未确认先出卡");
+    const first = service.get(id)!.waiting!;
+
+    // 人还在看卡,流水线修复推进了 HEAD 但清单没变:卡不能被作废重发
+    // (老实现绑 HEAD,每个中间 commit 都轰一遍人——鸡毛当令箭)。
+    writeFileSync(join(repo.cwd, "src", "feature.ts"),
+      "export const value = 9;\n");
+    repo.git("add", "src/feature.ts");
+    repo.git("commit", "--quiet", "-m", "mid-review repair");
+    assert.equal(await gate(), false);
+    assert.equal(service.get(id)!.waiting!.waiting_id, first.waiting_id,
+      "同一文件集合,等待中的卡必须原地保留");
+
+    await service.decide(id, {
+      state_version: service.get(id)!.waiting!.state_version,
+      selected_options: {
+        [(first.question as any).questions[0].question]: "确认按清单推送",
+      },
+    });
+    assert.equal(service.get(id)!.delivery_selection?.status, "confirmed");
+
+    // 修复新增文件 → 重新举卡,正文先说增量,人不用整单重看。
+    writeFileSync(join(repo.cwd, "src", "fix.ts"), "export const fix = 1;\n");
+    repo.git("add", "src/fix.ts");
+    repo.git("commit", "--quiet", "-m", "repair adds file");
+    internal.summary.status = "verifying";
+    assert.equal(await gate(), false, "集合变化必须重新确认");
+    const renewed = service.get(id)!.waiting!;
+    assert.match(String(renewed.context), /较上次已确认的清单/);
+    assert.match(String(renewed.context), /新增 src\/fix\.ts/);
+    assert.match(String(renewed.context), /1 个文件与上次确认一致/);
+
+    // 任务级/个人默认都缺省,但用户已提交过清单:复核不一致时回到卡
+    // 上重新确认,而不是把任务判 failed(死胡同改出路)。
+    internal.summary.push_confirmation = undefined;
+    internal.summary.waiting = undefined;
+    assert.equal(await gate(), false, "有清单在管范围,缺省也要举卡");
+    assert.equal(service.get(id)!.waiting!.step, "cloud_push_confirm");
+  } finally {
+    await model.stop();
+  }
+});
