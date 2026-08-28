@@ -31,9 +31,11 @@ import {
   rejectSkillSubmission,
   rollbackHostSkill,
   submitHostSkill,
+  updateHostSkillKnowledgeMetadata,
   uploadHostSkill,
 } from "../src/hostSkillLibrary.ts";
 import { listHostSkillShelf } from "../src/hostSkillShelf.ts";
+import { createBusinessModule } from "../src/businessModuleLibrary.ts";
 
 const encode = (text: string) => Buffer.from(text, "utf-8").toString("base64");
 
@@ -91,6 +93,77 @@ test("上传→货架可见且权限归一;更新归档旧版;回退按版本痕
   assert.deepEqual(operations.map((item) => item.action),
     ["rollback", "update", "upload"], "留痕逐条且新在前");
   assert.equal(operations[0].operator, "admin-a");
+});
+
+test("Skill 是知识形态；性质与模块/仓库/技术作用域分离且版本可回退", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-skill-languages-"));
+  await uploadHostSkill(dataDir, "mixed-build", [
+    { path: "SKILL.md", content_base64: encode(skillMd("混合仓构建")) },
+    { path: "references/build.md", content_base64: encode("构建说明\n") },
+  ], "admin-a", {
+    nature: "engineering",
+    business_module_ids: [],
+    repositories: [],
+    technologies: ["C++", "js"],
+  });
+  const engineering = listHostSkillShelf(dataDir).skills[0];
+  assert.equal(engineering.nature, "engineering");
+  assert.equal(engineering.form, "skill");
+  assert.deepEqual(engineering.technologies,
+    ["cpp", "javascript"]);
+  assert.match(readHostSkillDocument(dataDir, "mixed-build").content,
+    /technologies: \[cpp, javascript\]/,
+    "技术作用域写进 Skill 包自身，提交审核、归档和回退共享元数据");
+
+  await updateHostSkillKnowledgeMetadata(dataDir, "mixed-build", {
+    nature: "engineering", business_module_ids: [], repositories: [],
+    technologies: ["java"],
+  }, "admin-b");
+  assert.deepEqual(listHostSkillShelf(dataDir).skills[0].technologies, ["java"]);
+  assert.ok(existsSync(join(dataDir, "skills", "mixed-build",
+    "references", "build.md")), "只改语言不能丢掉包内配套文件");
+  const old = listSkillVersions(dataDir, "mixed-build")[0];
+  await rollbackHostSkill(
+    dataDir, "mixed-build", old.version_id, "admin-a");
+  assert.deepEqual(listHostSkillShelf(dataDir).skills[0].technologies,
+    ["cpp", "javascript"]);
+
+  createBusinessModule(dataDir, {
+    id: "orders", name: "订单履约", description: "订单规则与履约流程",
+    owner: "admin-a", repositories: ["https://code.example/orders.git"],
+  }, "admin-a");
+  await uploadHostSkill(dataDir, "order-rules", [
+    { path: "SKILL.md", content_base64: encode(skillMd("订单规则")) },
+  ], "admin-a", {
+    nature: "business",
+    business_module_ids: ["orders"],
+    repositories: ["https://code.example/orders.git"],
+    technologies: [],
+  });
+  const business = listHostSkillShelf(dataDir).skills.find((item) =>
+    item.path.startsWith("order-rules/"));
+  assert.equal(business?.nature, "business");
+  assert.deepEqual(business?.business_module_ids, ["orders"]);
+  assert.deepEqual(business?.technologies, []);
+
+  await uploadHostSkill(dataDir, "coupled", [
+    { path: "SKILL.md", content_base64: encode(skillMd("耦合件")) },
+  ], "admin-a", {
+    nature: "engineering",
+    business_module_ids: ["orders"],
+    repositories: ["https://code.example/orders.git"],
+    technologies: ["java"],
+  });
+  const scoped = listHostSkillShelf(dataDir).skills.find((item) =>
+    item.path.startsWith("coupled/"));
+  assert.equal(scoped?.nature, "engineering",
+    "工程知识可带业务模块上下文和具体仓库，不因此变成业务知识");
+  await assert.rejects(uploadHostSkill(dataDir, "business-with-tech", [
+    { path: "SKILL.md", content_base64: encode(skillMd("业务实现混写")) },
+  ], "admin-a", {
+    nature: "business", business_module_ids: ["orders"], repositories: [],
+    technologies: ["java"],
+  }), /业务知识不能标工程技术栈.*拆出一项工程知识/);
 });
 
 test("fail-closed:密钥、密钥容器文件名、坏 frontmatter、路径越界都拒收且不落盘", async () => {
@@ -208,7 +281,9 @@ test("路由权限:登录才可读,写只归管理员;留痕带操作人", async
       "货架不是公开页,登录才可读");
     const dev = await login("dev", "developer-pass-1");
     const boss = await login("boss", "administrator-pass");
-    const payload = JSON.stringify({ files: [
+    const payload = JSON.stringify({
+      nature: "engineering", business_module_ids: [], repositories: [],
+      technologies: ["cpp"], files: [
       { path: "SKILL.md", content_base64: encode(skillMd("路由演练")) },
     ] });
     const denied = await fetch(`${base}/skills/route-demo`, {
@@ -222,10 +297,12 @@ test("路由权限:登录才可读,写只归管理员;留痕带操作人", async
 
     const view = await (await fetch(`${base}/skills`,
       { headers: { cookie: dev } })).json() as {
-        skills: unknown[];
+        skills: Array<{ nature: string; technologies: string[] }>;
         operations: Array<{ operator: string }>;
       };
     assert.equal(view.skills.length, 1, "开发者看得见货架与留痕");
+    assert.equal(view.skills[0].nature, "engineering");
+    assert.deepEqual(view.skills[0].technologies, ["cpp"]);
     assert.equal(view.operations[0].operator, "boss",
       "留痕记录的是真实操作人,不是前端自报");
     const document = await (await fetch(`${base}/skills/route-demo`,
@@ -233,6 +310,46 @@ test("路由权限:登录才可读,写只归管理员;留痕带操作人", async
     assert.match(document.content, /路由演练/,
       "登录成员应能从名称打开实际 SKILL.md");
     assert.equal(document.path, "route-demo/SKILL.md");
+
+    const retagged = await fetch(`${base}/skills/route-demo/classification`, {
+      method: "PATCH", headers: { cookie: boss },
+      body: JSON.stringify({ nature: "engineering",
+        business_module_ids: [], repositories: [],
+        technologies: ["java", "js"] }),
+    });
+    assert.equal(retagged.status, 200);
+    const retaggedShelf = await (await fetch(`${base}/skills`,
+      { headers: { cookie: dev } })).json() as {
+        skills: Array<{ technologies: string[] }> };
+    assert.deepEqual(retaggedShelf.skills[0].technologies,
+      ["java", "javascript"]);
+
+    const badLegacyTags = await fetch(`${base}/skills/route-demo/languages`, {
+      method: "PATCH", headers: { cookie: boss },
+      body: JSON.stringify({ languages: ["agnostic", "java"] }),
+    });
+    assert.equal(badLegacyTags.status, 400,
+      "旧语言接口也不能制造含混分类");
+
+    const coupled = await fetch(`${base}/skills/route-demo/classification`, {
+      method: "PATCH", headers: { cookie: boss },
+      body: JSON.stringify({ nature: "business",
+        business_module_ids: ["orders"], repositories: [],
+        technologies: ["java"] }),
+    });
+    assert.equal(coupled.status, 400);
+    assert.match(await coupled.text(), /业务知识不能标工程技术栈/);
+
+    const unknownModule = await fetch(
+      `${base}/skills/route-demo/classification`, {
+        method: "PATCH", headers: { cookie: boss },
+        body: JSON.stringify({ nature: "business",
+          business_module_ids: ["missing-module"], repositories: [],
+          technologies: [] }),
+      });
+    assert.equal(unknownModule.status, 400,
+      "业务型 Skill 不能挂到不存在的模块");
+    assert.match(await unknownModule.text(), /没有业务模块/);
 
     const badUpload = await fetch(`${base}/skills/route-demo`, {
       method: "PUT", headers: { cookie: boss },
@@ -249,7 +366,8 @@ test("路由权限:登录才可读,写只归管理员;留痕带操作人", async
       { headers: { cookie: dev } })).json() as {
         versions: Array<{ version_id: string }>;
       };
-    assert.equal(versions.versions.length, 1);
+    assert.equal(versions.versions.length, 2,
+      "改分类与下线都形成可回退版本");
     const rollback = await fetch(`${base}/skills/route-demo/rollback`, {
       method: "POST", headers: { cookie: boss },
       body: JSON.stringify({ version: versions.versions[0].version_id }),

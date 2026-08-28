@@ -13,6 +13,7 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
+import { StringDecoder } from "node:string_decoder";
 import {
   closeSync,
   constants,
@@ -34,6 +35,14 @@ const HEAD_MAX_BYTES = 8 * 1024;
 const HEAD_MAX_LINES = 200;
 const TAIL_MAX_BYTES = 32 * 1024;
 const TAIL_MAX_LINES = 800;
+const LIVE_MAX_CHARS = 4 * 1024;
+const LIVE_FLUSH_MS = 1_000;
+
+export interface WorkspaceBashOutputChunk {
+  command: string;
+  text: string;
+  relativePath: string;
+}
 
 export interface WorkspaceBashLogOptions {
   workspace: string;
@@ -44,6 +53,11 @@ export interface WorkspaceBashLogOptions {
   /** 仅供确定性单测；生产使用随机 nonce，避免并发命令争用文件。 */
   nonce?: () => string;
   log?: (message: string) => void;
+  /** 长命令尚未结束时的可观测性旁路。回调失败只关闭实时旁路，绝不
+   * 中断命令；完整原始输出仍以字节流持续写入 relativePath。 */
+  onOutput?: (chunk: WorkspaceBashOutputChunk) => void;
+  /** 仅供确定性单测；生产默认每秒最多追加一个事件。 */
+  liveFlushMs?: number;
 }
 
 function inside(parent: string, child: string): boolean {
@@ -244,6 +258,52 @@ export function withWorkspaceBashLogs(
       let overflow = false;
       let writeFailure: unknown;
       let previewFailure: unknown;
+      const liveDecoder = new StringDecoder("utf-8");
+      const liveFlushMs = Math.max(1, options.liveFlushMs ?? LIVE_FLUSH_MS);
+      let liveText = "";
+      let liveTimer: ReturnType<typeof setTimeout> | undefined;
+      let lastLiveFlush = 0;
+      let liveDisabled = !options.onOutput;
+
+      const flushLive = (): void => {
+        if (liveTimer) {
+          clearTimeout(liveTimer);
+          liveTimer = undefined;
+        }
+        if (liveDisabled || !liveText) return;
+        const text = liveText;
+        liveText = "";
+        lastLiveFlush = Date.now();
+        try {
+          options.onOutput?.({
+            command,
+            text,
+            relativePath: outputLog.relativePath,
+          });
+        } catch (error) {
+          // SSE/事件账只是观测旁路。它坏了不能把一次正常编译判失败。
+          liveDisabled = true;
+          options.log?.(
+            `Bash 实时输出旁路不可用 (${outputLog.relativePath}): ${String(error)}`,
+          );
+        }
+      };
+      const queueLiveText = (text: string): void => {
+        if (liveDisabled || !text) return;
+        liveText += text;
+        if (liveText.length > LIVE_MAX_CHARS) {
+          liveText = `[较早的实时输出已折叠]\n${liveText.slice(-LIVE_MAX_CHARS)}`;
+        }
+        const elapsed = Date.now() - lastLiveFlush;
+        if (lastLiveFlush === 0 || elapsed >= liveFlushMs) {
+          flushLive();
+          return;
+        }
+        if (!liveTimer) {
+          liveTimer = setTimeout(flushLive, liveFlushMs - elapsed);
+          liveTimer.unref?.();
+        }
+      };
 
       const forward = (data: Buffer): void => {
         if (!data.length || previewFailure) return;
@@ -263,6 +323,7 @@ export function withWorkspaceBashLogs(
             writeFailure = error;
           }
         }
+        queueLiveText(liveDecoder.write(data));
         if (overflow) {
           tail.append(data);
           return;
@@ -298,6 +359,9 @@ export function withWorkspaceBashLogs(
       } catch (error) {
         operationFailure = error;
       }
+
+      queueLiveText(liveDecoder.end());
+      flushLive();
 
       try {
         closeSync(outputLog.fd);

@@ -24,6 +24,10 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
+import {
+  knowledgeMatchesTask,
+  readSkillKnowledgeMetadata,
+} from "./knowledgeAssetModel.ts";
 
 const MAX_SKILL_BYTES = 128 * 1024;
 const MAX_PACKAGE_BYTES = 16 * 1024 * 1024;
@@ -246,6 +250,11 @@ export function materializeHostSkills(options: {
   sourceRoot?: string;
   workspaceRoot: string;
   snapshotRoot: string;
+  context?: {
+    repositories: string[];
+    technologies: string[];
+    businessModuleIds: string[];
+  };
 }): MaterializedHostSkills {
   const warnings: string[] = [];
   if (!options.sourceRoot || !existsSync(options.sourceRoot)) {
@@ -291,6 +300,14 @@ export function materializeHostSkills(options: {
       if (!stat.isFile()) throw new Error("SKILL.md 不是普通文件");
       if (stat.size > MAX_SKILL_BYTES) {
         throw new Error("SKILL.md 超过 128 KiB");
+      }
+      if (options.context) {
+        const metadata = readSkillKnowledgeMetadata(
+          readFileSync(sourceFile, "utf-8"));
+        if (metadata.nature !== "unclassified"
+            && !knowledgeMatchesTask(metadata, options.context)) {
+          continue;
+        }
       }
       validatePackage(
         sourceRoot, packageRoot, 0, { files: 0, bytes: 0 });

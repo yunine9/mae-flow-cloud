@@ -149,6 +149,7 @@ test("prepush gate: 放行构建、UT、本地提交和只读 Git", () => {
     "printenv JAVA_HOME",
     "git status --short",
     "git diff --check",
+    "git add . && git commit -m 'fix: compile'",
     "git add src test && git commit -m 'fix: compile'",
     "git remote -v",
   ]) {

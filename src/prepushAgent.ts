@@ -109,7 +109,12 @@ export function prePushSecurityDecision(
   const sansBuildNotes = sansExclusionIdioms.replace(
     /[^\s'"`;&|]*\.mae-flow-work[\\/]build-notes\.md/gi, " ");
   if (kernelStatePath.test(sansBuildNotes) && !readonlySkillSnapshot) {
-    return DENY("推送前编译会话不能读取或修改 Mae-Flow 内核现场。");
+    // 这套安全层被 prepush/预热/开发助手多个专项会话复用,文案不许
+    // 自称"推送前编译会话"(预热 Agent 撞到过张冠李戴的拒绝);出路
+    // 必须写明——构建入口沉淀那一个文件是放行的,别的换路也没用。
+    return DENY("本专项会话不能读取或修改 Mae-Flow 内核现场(.mae-flow*)。"
+      + "构建入口沉淀请只写 .mae-flow-work/build-notes.md(该文件已放行,"
+      + "目录由宿主预建);其余 .mae-flow 路径不要再尝试其他写法访问。");
   }
 
   // 文件工具和 Bash 都不能伸手碰宿主运行时模型/API Key 或常见凭据。
@@ -235,7 +240,9 @@ export function prePushSecurityDecision(
     }
   }
   if (/\bfind\b[^;&|\n]*\s-delete\b/i.test(source)) {
-    return DENY("禁止使用 find -delete 批量删除工作区内容。");
+    return DENY("禁止使用 find -delete 批量删除工作区内容;要清理构建"
+      + "产物,请对产物目录整体使用 rm -rf（target/、build/ 等白名单"
+      + "路径已放行）或走构建工具的 clean 生命周期。");
   }
 
   return undefined;
@@ -426,7 +433,16 @@ export function prePushMission(
     "然后重新执行编译和 UT，直至两项都通过。可以自由检查源码、测试、pom/build/CMake/package 配置，",
     "但不要顺手重构无关代码。代码修改使用 Edit/Write 工具，不要用 shell 文本替换伪装修改。",
     "如有修改，按仓库现有提交规范提交到本地 HEAD；禁止 push、改 remote、读取或写入任何凭据，",
-    "Cloud 会在会话释放并复核后注入短期凭据、统一推送。禁止递归强删；clean 请走构建工具生命周期。",
+    // 这句话必须与 prePushSecurityDecision 的 rm 白名单同一口径:之前
+    // 写成一刀切"禁止递归强删",与 playbook"删掉陈旧 CMake 生成目录"
+    // 正面打架,听话的模型永远修不好陈旧 configure。同时定调:删产物
+    // 是修理动作不是例行卫生——增量编译全靠这些目录跨轮存活。
+    "Cloud 会在会话释放并复核后注入短期凭据、统一推送。构建产物默认**留在"
+      + "工作区不要删**（增量编译靠它们跨轮加速，git status 不为空不影响"
+      + "通过）；只在确有必要时（如陈旧 CMakeCache 指向旧路径）才 rm -rf "
+      + "产物目录（target/、build/、cmake-build*、CMakeFiles、CMakeCache.txt、"
+      + "node_modules，相对路径，白名单放行）；除产物目录外禁止递归强删，"
+      + "clean 请走构建工具生命周期。",
     "平台现场文件(.mae-flow* / openspec/config.yaml 等)不归你管：它们已被平台登记忽略，",
     "即使仍显示为未跟踪也不要提交、删除，更不要为它们修改用户的 .gitignore——那是用户的文件。",
     "依赖下载、工具缺失、磁盘/网络/权限等不是改代码能解决的问题，归类为 infrastructure_failure，",
@@ -438,7 +454,9 @@ export function prePushMission(
     // 原文要求"与实际 Bash 调用完全一致",但模型实际发的是带 cd 前缀和
     // 退出码后缀的长命令,做不到逐字节回抄——这条契约把闸卡死过(实测)。
     // 现在只要求写真正执行的那一段构建命令,宿主按包含匹配核对。
-    "收口前确认 git status 没有应提交的业务改动。最后一段必须严格输出下面结构"
+    "收口前确认本轮业务代码修改已经提交到 HEAD。编译产物可以留在工作区："
+      + "Cloud push 只传 HEAD，不要求 git status 为空；不要为了清空状态把"
+      + "编译产物提交进去。最后一段必须严格输出下面结构"
       + "（command 写你真正执行的那段构建命令原文，如 `mvn test`；不必带 cd 前缀"
       + "和 echo 退出码后缀，但**不能写没跑过的命令**，宿主会回执行记录核对）：",
     "<prepush-result>",

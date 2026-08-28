@@ -9,18 +9,15 @@ import posixpath
 from ..foundation import git_intent
 from ..foundation.commit_message import valid_business_commit_message
 from ..foundation.source_paths import (
-    DOCUMENT_EXTENSIONS,
     normalize_path,
     repository_path_identity,
 )
-from ..orchestration import DeliveryPath, FlowState, Phase
+from ..orchestration import FlowState
 from .command_policy import dangerous_bash_result, recursive_delete_facts
 from .manifest import DeliveryManifest, authorize_delivery, compare_staged
 
 
 _ADOPTED_DIRTY = "delivery.adopted_dirty"
-_FOCUSED_SCOPE_APPROVED = "focused.scope_approved"
-_QUALITY_SOURCE_FIX_APPROVED = "quality.source_fix_approved"
 @dataclass(frozen=True)
 class SafetyDecision:
     allow: bool
@@ -36,7 +33,8 @@ class SafetyContext:
     commit_files: tuple = ()
     initial_dirty: tuple = ()
     current_dirty_fingerprints: tuple = ()
-    safe_write_targets: tuple = ()
+    # safe_write_targets 随 source_edit 闸退役一并拆除:它只为"哪些
+    # 路径豁免语义授权"服务,闸没了它就是没有读方的字段。
     task_owned_temp_dir: str = ""
 
 
@@ -152,35 +150,6 @@ def _is_protected_control(path):
     )
 
 
-def _is_local_work_package(path):
-    identity = repository_path_identity(path, case_insensitive=True)
-    return (
-        identity == ".mae-flow-work"
-        or identity.startswith(".mae-flow-work/")
-    )
-
-
-def _is_documentation(path):
-    return path.casefold().endswith(DOCUMENT_EXTENSIONS)
-
-
-def _has_decision(state, key):
-    return any(existing == key for existing, unused in state.decisions)
-
-
-def _source_edit_allowed(state):
-    if state.path == DeliveryPath.FOCUSED:
-        return _has_decision(state, _FOCUSED_SCOPE_APPROVED)
-    if state.path != DeliveryPath.FULL:
-        return False
-    if state.phase == Phase.CONSTRUCTION:
-        return True
-    return (
-        state.phase == Phase.QUALITY
-        and _has_decision(state, _QUALITY_SOURCE_FIX_APPROVED)
-    )
-
-
 def _edit_decision(context, tool, tool_input):
     targets = []
     try:
@@ -189,8 +158,10 @@ def _edit_decision(context, tool, tool_input):
             if relative:
                 targets.append(relative)
     except ValueError:
+        # 规则名随 source_edit 闸退役更正:这条拦的是"写目标无法安全
+        # 解析",不是源码阶段授权。
         return _block(
-            "source_edit",
+            "write_target",
             "Write targets must be unambiguous repository paths.",
         )
     if any(_is_protected_control(path) for path in targets):
@@ -198,27 +169,12 @@ def _edit_decision(context, tool, tool_input):
             "protected_control",
             "Mae-Flow control files cannot be edited by workflow tools.",
         )
-    safe_targets = set()
-    for path in context.safe_write_targets:
-        try:
-            relative = _relative_target(context, path)
-        except ValueError:
-            continue
-        if relative:
-            safe_targets.add(_write_identity(context, relative))
-    controlled_targets = tuple(
-        path for path in targets
-        if (
-            not _is_documentation(path)
-            and not _is_local_work_package(path)
-            and _write_identity(context, path) not in safe_targets
-        )
-    )
-    if controlled_targets and not _source_edit_allowed(context.state):
-        return _block(
-            "source_edit",
-            "Source edits require semantic authorization for this path and phase.",
-        )
+    # 步骤级/阶段级"源码编辑需要语义授权"已随 2026-08-28 退役整体拆除:
+    # 这里曾按 phase 拦源码编辑("Source edits require semantic
+    # authorization"),而它要求的授权 key(focused.scope_approved /
+    # quality.source_fix_approved)全仓从无签发方——"要求的出路实际
+    # 不存在"的教科书案例;lean kernel 一旦接线就会原地复现"能提交
+    # 不能编辑"事故。保留的只有绝对保护(控制文件)与路径可解析性检查。
     return None
 
 

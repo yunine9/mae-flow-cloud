@@ -90,6 +90,14 @@ import {
   AnnotationError,
   AnnotationPermissionError,
 } from "./annotations.ts";
+import {
+  WishWallError,
+  WishWallNotFoundError,
+  WishWallPermissionError,
+  WishWallStore,
+  type WishRecord,
+  type WishStatus,
+} from "./wishWall.ts";
 import type { LubanApprovalGateway } from "./lubanApproval.ts";
 import { handleIssueRoutes } from "./issueFlow/routes.ts";
 import {
@@ -103,6 +111,8 @@ import {
   rejectSkillSubmission,
   rollbackHostSkill,
   submitHostSkill,
+  updateHostSkillKnowledgeMetadata,
+  updateHostSkillLanguages,
   uploadHostSkill,
 } from "./hostSkillLibrary.ts";
 import {
@@ -123,6 +133,22 @@ import {
   readBusinessModule,
   updateBusinessModule,
 } from "./businessModuleLibrary.ts";
+import {
+  normalizeKnowledgeAssetMetadata,
+  type KnowledgeAssetMetadata,
+} from "./knowledgeAssetModel.ts";
+import {
+  RepositoryProfileError,
+  resolveRepositoryProfiles,
+  saveRepositoryProfile,
+} from "./repositoryProfiles.ts";
+import {
+  KnowledgeCandidateError,
+  createKnowledgeCandidate,
+  decideKnowledgeCandidate,
+  listKnowledgeCandidates as listTeamKnowledgeCandidates,
+  readKnowledgeCandidate as readTeamKnowledgeCandidate,
+} from "./knowledgeCandidates.ts";
 
 /** 正式前端静态文件的最小类型表:Vite 产物就这几种。 */
 const MIME: Record<string, string> = {
@@ -135,17 +161,33 @@ const MIME: Record<string, string> = {
   ".map": "application/json",
 };
 
-function readBody(request: import("node:http").IncomingMessage): Promise<any> {
+class RequestBodyTooLargeError extends Error {}
+
+function readBody(
+  request: import("node:http").IncomingMessage,
+  limit = Number.POSITIVE_INFINITY,
+): Promise<any> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    request.on("data", (chunk) => chunks.push(chunk as Buffer));
+    let size = 0;
+    let tooLarge = false;
+    request.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > limit) tooLarge = true;
+      else chunks.push(chunk);
+    });
     request.on("end", () => {
+      if (tooLarge) {
+        reject(new RequestBodyTooLargeError("请求内容过大"));
+        return;
+      }
       try {
         resolve(JSON.parse(Buffer.concat(chunks).toString("utf-8") || "{}"));
       } catch (error) {
         reject(error);
       }
     });
+    request.on("error", reject);
   });
 }
 
@@ -179,6 +221,49 @@ function json(
   const text = JSON.stringify(body);
   response.writeHead(status, { "content-type": "application/json" });
   response.end(text);
+}
+
+function skillMetadataFromBody(
+  dataDir: string,
+  body: any,
+): KnowledgeAssetMetadata {
+  const rawTechnologies = body.technologies ?? body.languages;
+  if (rawTechnologies !== undefined && !Array.isArray(rawTechnologies)) {
+    throw new SkillLibraryError("工程技术栈必须是数组");
+  }
+  if (body.business_module_ids !== undefined
+      && !Array.isArray(body.business_module_ids)) {
+    throw new SkillLibraryError("业务模块必须是数组");
+  }
+  if (body.repositories !== undefined && !Array.isArray(body.repositories)) {
+    throw new SkillLibraryError("适用仓库必须是数组");
+  }
+  try {
+    const technologies = rawTechnologies?.map(String) ?? [];
+    const metadata = normalizeKnowledgeAssetMetadata({
+      nature: body.nature ?? (body.skill_kind === "general"
+        ? undefined : body.skill_kind) ?? (technologies.length
+          ? "engineering" : undefined),
+      form: "skill",
+      business_module_ids: body.business_module_ids?.map(String) ?? [],
+      repositories: body.repositories?.map(String) ?? [],
+      technologies,
+    }, { fixedForm: "skill" });
+    for (const id of metadata.business_module_ids) {
+      const module = readBusinessModule(dataDir, id);
+      if (module.status !== "active") {
+        throw new SkillLibraryError(`业务模块 ${module.name} 已归档，不能关联新 Skill`);
+      }
+    }
+    return metadata;
+  } catch (error) {
+    if (error instanceof SkillLibraryError) throw error;
+    if (error instanceof BusinessModuleError) {
+      throw new SkillLibraryError(error.message);
+    }
+    throw new SkillLibraryError(
+      error instanceof Error ? error.message : String(error));
+  }
 }
 
 /** 从这次 HTTP 请求还原用户真正访问的站点。浏览器 Origin 最接近
@@ -220,6 +305,11 @@ export function createTaskServer(
     mcpGateway?: import("./issueFlow/gateways.ts").McpGateway;
   } = {},
 ): Server {
+  // 许愿墙按路由首次使用时才要求完整 TaskService 数据目录。知识效能等
+  // 独立只读接口会用最小服务替身，旁路能力不能在起服阶段反向绑死它们。
+  let wishWall: WishWallStore | undefined;
+  const getWishWall = () => wishWall ??= new WishWallStore(
+    join(service.options.dataDir, "wish-wall"));
   return createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://localhost");
     const parts = url.pathname.split("/").filter(Boolean);
@@ -655,7 +745,10 @@ export function createTaskServer(
         url.pathname === "/history" || parts[0] === "tasks"
         || url.pathname === "/knowledge-insights"
         || parts[0] === "reviews" || parts[0] === "repository-skills"
-        || parts[0] === "skills" || parts[0] === "business-modules";
+        || parts[0] === "skills" || parts[0] === "business-modules"
+        || parts[0] === "repository-profiles"
+        || parts[0] === "knowledge-candidates"
+        || parts[0] === "wishes";
       // 兼容已经发出去的旧通知。/tasks/:id 是 JSON API，但旧链接若由
       // 浏览器作为页面打开，应带人去新的任务工作台；程序 fetch 默认
       // Accept: */*，仍拿原来的 JSON，不改变 API 契约。
@@ -687,6 +780,217 @@ export function createTaskServer(
       // 会被当成前端资源并返回 404。只读口径与团队任务可见性一致。
       if (request.method === "GET" && url.pathname === "/knowledge-insights") {
         return json(response, 200, service.knowledgeInsights());
+      }
+      if (parts[0] === "repository-profiles") {
+        const operator = viewer?.username ?? "本地部署";
+        try {
+          if (request.method === "POST" && parts[1] === "resolve") {
+            const body = await readBody(request);
+            return json(response, 200, { repositories: resolveRepositoryProfiles(
+              service.options.dataDir,
+              Array.isArray(body.repositories)
+                ? body.repositories.map(String) : [],
+            ) });
+          }
+          if (request.method === "PUT" && parts.length === 1) {
+            const body = await readBody(request);
+            return json(response, 200, saveRepositoryProfile(
+              service.options.dataDir, {
+                repository: String(body.repository ?? ""),
+                technologies: Array.isArray(body.technologies)
+                  ? body.technologies.map(String) : [],
+                confirmed: body.confirmed !== false,
+              }, operator));
+          }
+        } catch (error) {
+          if (error instanceof RepositoryProfileError) {
+            return json(response, 400, { error: error.message });
+          }
+          throw error;
+        }
+        return json(response, 404, { error: "未知仓库技术画像接口" });
+      }
+      if (parts[0] === "knowledge-candidates") {
+        const operator = viewer?.username ?? "本地部署";
+        const admin = !options.auth || viewer?.role === "admin";
+        try {
+          if (request.method === "GET" && parts.length === 1) {
+            return json(response, 200,
+              { candidates: listTeamKnowledgeCandidates(service.options.dataDir) });
+          }
+          if (request.method === "GET" && parts.length === 2) {
+            return json(response, 200, readTeamKnowledgeCandidate(
+              service.options.dataDir, decodeURIComponent(parts[1])));
+          }
+          if (request.method === "POST" && parts.length === 3
+              && parts[2] === "publish") {
+            const candidate = readTeamKnowledgeCandidate(
+              service.options.dataDir, decodeURIComponent(parts[1]));
+            const body = await readBody(request);
+            if (candidate.nature === "business") {
+              const moduleId = String(body.module_id
+                ?? candidate.business_module_ids[0] ?? "");
+              const module = readBusinessModule(service.options.dataDir, moduleId);
+              if (!canManageBusinessModule(module, viewer?.username, admin)) {
+                return json(response, 403,
+                  { error: "只有模块 Owner、维护者或管理员可以发布这项业务知识" });
+              }
+              const assetId = String(body.asset_id ?? candidate.id);
+              publishBusinessKnowledgeAsset(service.options.dataDir, moduleId, {
+                id: assetId,
+                title: candidate.title,
+                summary: candidate.summary,
+                when_to_use: candidate.when_to_use,
+                form: candidate.form,
+                repositories: candidate.repositories,
+                content: candidate.content,
+              }, operator);
+              return json(response, 200, decideKnowledgeCandidate(
+                service.options.dataDir, candidate.id, "published", operator, {
+                  note: typeof body.note === "string" ? body.note : undefined,
+                  published_target: `business-modules/${moduleId}/${assetId}`,
+                }));
+            }
+            if (!admin) {
+              return json(response, 403,
+                { error: "只有管理员可以发布团队工程知识" });
+            }
+            if (candidate.form === "skill") {
+              const directory = String(body.directory ?? candidate.id);
+              const skill = [
+                "---",
+                `name: ${directory}`,
+                `description: ${JSON.stringify(candidate.summary)}`,
+                "---", "", `# ${candidate.title}`, "", candidate.content,
+              ].join("\n");
+              await uploadHostSkill(service.options.dataDir, directory, [{
+                path: "SKILL.md",
+                content_base64: Buffer.from(skill, "utf-8").toString("base64"),
+              }], operator, candidate);
+              return json(response, 200, decideKnowledgeCandidate(
+                service.options.dataDir, candidate.id, "published", operator, {
+                  note: typeof body.note === "string" ? body.note : undefined,
+                  published_target: `skills/${directory}`,
+                }));
+            }
+            return json(response, 200, decideKnowledgeCandidate(
+              service.options.dataDir, candidate.id, "published", operator, {
+                note: typeof body.note === "string" ? body.note : undefined,
+                published_target: `engineering-knowledge/${candidate.id}`,
+              }));
+          }
+          if (request.method === "POST" && parts.length === 3
+              && parts[2] === "reject") {
+            const candidate = readTeamKnowledgeCandidate(
+              service.options.dataDir, decodeURIComponent(parts[1]));
+            const canManageBusiness = candidate.nature === "business"
+              && candidate.business_module_ids.some((id) => {
+                try { return canManageBusinessModule(readBusinessModule(
+                  service.options.dataDir, id), viewer?.username, admin); }
+                catch { return false; }
+              });
+            if (!admin && !canManageBusiness) {
+              return json(response, 403,
+                { error: "只有对应模块维护者或管理员可以裁决这项知识" });
+            }
+            const body = await readBody(request);
+            return json(response, 200, decideKnowledgeCandidate(
+              service.options.dataDir, candidate.id, "rejected", operator, {
+                note: String(body.reason ?? ""),
+              }));
+          }
+        } catch (error) {
+          if (error instanceof KnowledgeCandidateError
+              || error instanceof BusinessModuleError
+              || error instanceof SkillLibraryError) {
+            return json(response, 400, { error: error.message });
+          }
+          throw error;
+        }
+        return json(response, 404, { error: "未知知识候选接口" });
+      }
+      // 许愿墙是团队公共入口，但不是公共互联网资源：正文和截图都要求
+      // 登录。每个人可发布、点赞和移除自己的内容；管理员负责明确接纳
+      // 与闭环，拒绝必须说明原因。
+      if (parts[0] === "wishes") {
+        const operator = viewer?.username ?? "本地用户";
+        const admin = !options.auth || viewer?.role === "admin";
+        const present = (record: WishRecord) => {
+          const { voters, images, ...rest } = record;
+          return {
+            ...rest,
+            images: images.map((image) => ({
+              ...image,
+              url: `/wishes/images/${encodeURIComponent(image.id)}`,
+            })),
+            votes: voters.length,
+            viewer_voted: voters.includes(operator),
+            can_delete: admin || record.author === operator,
+            can_manage: admin,
+          };
+        };
+        try {
+          if (request.method === "GET" && parts.length === 1) {
+            return json(response, 200,
+              { wishes: getWishWall().list().map(present) });
+          }
+          if (request.method === "POST" && parts.length === 1) {
+            // 4 * 5 MB 图片经 Base64 后约 27 MB；业务总量另由 store 卡在
+            // 12 MB，这里 30 MB 是传输保险丝，避免恶意正文撑爆进程。
+            const body = await readBody(request, 30 * 1024 * 1024);
+            return json(response, 201, present(getWishWall().create({
+              kind: body.kind,
+              title: body.title,
+              detail: body.detail,
+              images: body.images,
+            }, operator)));
+          }
+          if (request.method === "GET" && parts.length === 3
+              && parts[1] === "images") {
+            const image = getWishWall().readImage(decodeURIComponent(parts[2]));
+            response.writeHead(200, {
+              "content-type": image.mime_type,
+              "content-length": image.data.length,
+              "content-disposition": "inline",
+              "x-content-type-options": "nosniff",
+              "cache-control": "private, max-age=86400",
+            });
+            return response.end(image.data);
+          }
+          if (request.method === "POST" && parts.length === 3
+              && parts[2] === "vote") {
+            const body = await readBody(request);
+            return json(response, 200, present(getWishWall().setVote(
+              decodeURIComponent(parts[1]), operator, Boolean(body.voted))));
+          }
+          if (request.method === "PATCH" && parts.length === 3
+              && parts[2] === "status") {
+            if (!admin) {
+              return json(response, 403,
+                { error: "只有管理员可以接纳、暂不接纳或闭环" });
+            }
+            const body = await readBody(request);
+            return json(response, 200, present(getWishWall().setStatus(
+              decodeURIComponent(parts[1]), String(body.status) as WishStatus,
+              operator, body.note)));
+          }
+          if (request.method === "DELETE" && parts.length === 2) {
+            getWishWall().delete(decodeURIComponent(parts[1]), operator, admin);
+            return json(response, 200, { ok: true });
+          }
+        } catch (error) {
+          if (error instanceof WishWallNotFoundError) {
+            return json(response, 404, { error: error.message });
+          }
+          if (error instanceof WishWallPermissionError) {
+            return json(response, 403, { error: error.message });
+          }
+          if (error instanceof WishWallError) {
+            return json(response, 400, { error: error.message });
+          }
+          throw error;
+        }
+        return json(response, 404, { error: "未知许愿墙接口" });
       }
       // 业务模块是一等知识范围：管理员建模块/转移 Owner，Owner 与维护
       // 者管理本模块资产；团队成员可读目录与正文。它不从任务 docs 或
@@ -800,6 +1104,11 @@ export function createTaskServer(
                 title: String(body.title ?? ""),
                 summary: String(body.summary ?? ""),
                 when_to_use: String(body.when_to_use ?? ""),
+                form: body.form === undefined
+                  ? undefined : String(body.form) as KnowledgeAssetMetadata["form"],
+                repositories: body.repositories === undefined
+                  ? undefined : Array.isArray(body.repositories)
+                    ? body.repositories.map(String) : [],
                 content: String(body.content ?? ""),
               }, operator)));
           }
@@ -876,7 +1185,8 @@ export function createTaskServer(
             return json(response, 200, await submitHostSkill(
               dataDir, decodeURIComponent(parts[1]),
               Array.isArray(body.files) ? body.files : [],
-              viewer?.username ?? "本地部署"));
+              viewer?.username ?? "本地部署",
+              skillMetadataFromBody(dataDir, body)));
           }
           if (options.auth && viewer?.role !== "admin") {
             return json(response, 403,
@@ -887,7 +1197,25 @@ export function createTaskServer(
             const body = await readBody(request);
             return json(response, 200, await uploadHostSkill(
               dataDir, decodeURIComponent(parts[1]),
-              Array.isArray(body.files) ? body.files : [], operator));
+              Array.isArray(body.files) ? body.files : [], operator,
+              skillMetadataFromBody(dataDir, body)));
+          }
+          if (request.method === "PATCH" && parts.length === 3
+              && parts[2] === "classification") {
+            const body = await readBody(request);
+            return json(response, 200, await updateHostSkillKnowledgeMetadata(
+              dataDir, decodeURIComponent(parts[1]),
+              skillMetadataFromBody(dataDir, body), operator));
+          }
+          if (request.method === "PATCH" && parts.length === 3
+              && parts[2] === "languages") {
+            const body = await readBody(request);
+            if (!Array.isArray(body.languages)) {
+              throw new SkillLibraryError("适用语言必须是数组");
+            }
+            return json(response, 200, await updateHostSkillLanguages(
+              dataDir, decodeURIComponent(parts[1]),
+              body.languages.map(String), operator));
           }
           if (request.method === "DELETE" && parts.length === 2) {
             return json(response, 200, await offlineHostSkill(
@@ -1051,6 +1379,25 @@ export function createTaskServer(
         const selectedBusinessModuleIds =
           Array.isArray(body.selected_business_module_ids)
             ? body.selected_business_module_ids.map(String) : undefined;
+        const selectedEngineeringKnowledgeIds =
+          Array.isArray(body.selected_engineering_knowledge_ids)
+            ? body.selected_engineering_knowledge_ids.map(String) : undefined;
+        const repositoryProfiles = Array.isArray(body.repository_profiles)
+          ? body.repository_profiles.flatMap((item: Record<string, unknown>) => {
+              try {
+                return [saveRepositoryProfile(service.options.dataDir, {
+                  repository: String(item.repository ?? ""),
+                  technologies: Array.isArray(item.technologies)
+                    ? item.technologies.map(String) : [],
+                  confirmed: item.confirmed !== false,
+                }, account ?? "本地部署")];
+              } catch (error) {
+                // 知识匹配旁路不能卡下单；当前任务退化为按仓库匹配。
+                service.options.log?.(
+                  `仓库技术画像保存失败(不影响下单): ${String(error)}`);
+                return [];
+              }
+            }) : undefined;
         // 配置没配齐不给下单(用户拍板)。前端会把缺项摆在明面上,
         // 但拦必须在后端——绕过界面直接打接口的一样要被拦住,
         // 否则任务会带着缺失的令牌一路跑到推送/通知那步才炸。
@@ -1073,7 +1420,8 @@ export function createTaskServer(
               lane, ticket, baseline, model,
               repairRounds, repositorySkillCatalogToken,
               selectedRepositorySkillIds, selectedRepositoryKnowledgeIds,
-              selectedBusinessModuleIds,
+              selectedBusinessModuleIds, selectedEngineeringKnowledgeIds,
+              repositoryProfiles,
             }));
         } catch (error) {
           return json(response, 400, { error: String(error) });
@@ -1093,6 +1441,52 @@ export function createTaskServer(
           const task = service.get(id);
           if (!task) return json(response, 404, { error: `任务 ${id} 不存在` });
           return json(response, 200, task);
+        }
+        if (request.method === "POST" && parts.length === 3
+            && parts[2] === "knowledge-candidates") {
+          const target = service.get(id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          if (!canOperate(viewer, target.luban_account, !!options.auth)) {
+            return json(response, 403, { error: "只能从自己的任务沉淀知识" });
+          }
+          const body = await readBody(request);
+          const moduleIds = Array.isArray(body.business_module_ids)
+            ? body.business_module_ids.map(String) : [];
+          const availableModules = new Set(
+            (target.business_modules ?? []).map((module) => module.id));
+          if (moduleIds.some((moduleId: string) => !availableModules.has(moduleId))) {
+            return json(response, 400,
+              { error: "知识关联了本任务未选择的业务模块" });
+          }
+          const candidateRepositories = Array.isArray(body.repositories)
+            ? body.repositories.map(String) : [];
+          const availableRepositories = new Set(target.repositories ?? []);
+          if (candidateRepositories.some((repository: string) =>
+            !availableRepositories.has(repository))) {
+            return json(response, 400,
+              { error: "知识适用仓库不属于本任务" });
+          }
+          try {
+            return json(response, 201, createKnowledgeCandidate(
+              service.options.dataDir, {
+                source_task_id: id,
+                title: String(body.title ?? ""),
+                summary: String(body.summary ?? ""),
+                when_to_use: String(body.when_to_use ?? ""),
+                nature: String(body.nature ?? "") as KnowledgeAssetMetadata["nature"],
+                form: String(body.form ?? "") as KnowledgeAssetMetadata["form"],
+                business_module_ids: moduleIds,
+                repositories: candidateRepositories,
+                technologies: Array.isArray(body.technologies)
+                  ? body.technologies.map(String) : [],
+                content: String(body.content ?? ""),
+              }, viewer?.username ?? target.luban_account ?? "本地部署"));
+          } catch (error) {
+            if (error instanceof KnowledgeCandidateError) {
+              return json(response, 400, { error: error.message });
+            }
+            throw error;
+          }
         }
         if (request.method === "DELETE" && parts.length === 2) {
           if (viewer?.role !== "admin") {
@@ -1492,6 +1886,9 @@ export function createTaskServer(
       }
       return json(response, 404, { error: "未知路径" });
     } catch (error) {
+      if (error instanceof RequestBodyTooLargeError) {
+        return json(response, 413, { error: error.message });
+      }
       if (error instanceof StateConflictError) {
         // 先到决定生效:后到的提交必须知道自己没生效,不能静默吞掉。
         return json(response, 409, { error: `任务状态已变化: ${error.message}` });

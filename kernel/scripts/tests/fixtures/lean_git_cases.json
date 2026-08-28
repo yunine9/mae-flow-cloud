@@ -72,11 +72,11 @@
       "expected": {"allowed": false}
     },
     {
-      "case": "blocked_source_edit_before_confirmation",
+      "case": "allowed_source_edit_without_step_authorization",
       "operation_family": "source_edit",
       "command": {"argv": ["apply_patch", "src/a.cpp"]},
       "context": {"working_directory": "/repo", "task_owned_temp_dir": "/repo/.tmp/task-7", "source_edit_confirmed": false, "authorized_manifest": {"authorized": true, "files": ["src/a.cpp"]}, "preexisting_dirty_files": []},
-      "expected": {"allowed": false}
+      "expected": {"allowed": true}
     },
     {
       "case": "blocked_preexisting_dirty_file_smuggling",

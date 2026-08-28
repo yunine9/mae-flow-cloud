@@ -95,7 +95,7 @@ class CommitOwnershipTests(unittest.TestCase):
         }
         return state
 
-    def test_external_red_allows_one_exact_lightweight_repair_commit(self):
+    def test_external_red_allows_exact_repair_commits_until_reverdict(self):
         repair = "src/pipeline_fix.py"
         write(self.repo, repair, "fixed = True\n")
         mf.save_state(self.red_repair_state())
@@ -109,10 +109,18 @@ class CommitOwnershipTests(unittest.TestCase):
         self.assertEqual(0, allowed.returncode, allowed.stdout + allowed.stderr)
         git(self.repo, "add", "--", repair)
         git(self.repo, "commit", "-qm", "[REQ123][fix]pipeline repair")
-        # HEAD changed, so the failed-SHA capability consumed itself.  A later
-        # change falls back to the human manifest instead of silently widening.
+        # 2026-08-28 勘误:第一笔提交后窗口不再自毁("一个 RED 只配一次
+        # 提交"曾把漏提交文件的 Agent 摔进按旧清单判定的交付清单闸)。
+        # 补提交照走修复闸;窗口由宿主登记新判决时关闭(见下)。
         later = "src/later.py"
         write(self.repo, later, "later = True\n")
+        second = self.gate_bash(
+            'git add -- "%s" && git commit -m "[REQ123][fix]later"' % later)
+        self.assertEqual(0, second.returncode, second.stdout + second.stderr)
+        # 宿主对新 SHA 登记非 RED 判决 → 授权清除,回落人工清单闸。
+        closed = self.red_repair_state()
+        closed.pop("external_repair_authorization")
+        mf.save_state(closed)
         blocked = self.gate_bash(
             'git add -- "%s" && git commit -m "[REQ123][fix]later"' % later)
         self.assertNotEqual(0, blocked.returncode)

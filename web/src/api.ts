@@ -58,6 +58,7 @@ export function statusText(task: {
       return `流水线修复中(第 ${loop.round}${
         loop.max !== undefined ? `/${loop.max}` : ""} 轮)`;
     }
+    if (loop.state === "verifying") return "修复结果验证中";
     if (loop.state === "halted") return "自动修复已停,需人工";
     if (loop.state === "exhausted") return "修复预算用完,需人工";
   }
@@ -87,6 +88,91 @@ export interface AuthUser {
   /** 问题处理探索方式:"fixed" 固定流程(缺省)/"free" 自由探索。
    * 只烙印新会话,进行中会话不迁移。 */
   issue_flow?: "fixed" | "free";
+}
+
+export type WishKind = "wish" | "issue";
+export type WishStatus = "open" | "accepted" | "done" | "declined";
+
+export interface WishWallImage {
+  id: string;
+  mime_type: "image/png" | "image/jpeg" | "image/webp" | "image/gif";
+  bytes: number;
+  url: string;
+}
+
+export interface WishWallItem {
+  id: string;
+  kind: WishKind;
+  title: string;
+  detail?: string;
+  author: string;
+  created_at: string;
+  status: WishStatus;
+  decision_note?: string;
+  decided_by?: string;
+  decided_at?: string;
+  images: WishWallImage[];
+  votes: number;
+  viewer_voted: boolean;
+  can_delete: boolean;
+  can_manage: boolean;
+}
+
+export interface WishImageUpload {
+  mime_type: string;
+  content_base64: string;
+}
+
+export async function listWishes(): Promise<WishWallItem[]> {
+  const response = await fetch("/wishes");
+  if (!response.ok) throw new Error(await errorText(response));
+  return (await response.json() as { wishes: WishWallItem[] }).wishes;
+}
+
+export async function createWish(input: {
+  kind: WishKind;
+  title: string;
+  detail?: string;
+  images: WishImageUpload[];
+}): Promise<WishWallItem> {
+  const response = await fetch("/wishes", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function setWishVote(
+  id: string,
+  voted: boolean,
+): Promise<WishWallItem> {
+  const response = await fetch(`/wishes/${encodeURIComponent(id)}/vote`, {
+    method: "POST",
+    body: JSON.stringify({ voted }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function setWishStatus(
+  id: string,
+  status: WishStatus,
+  note?: string,
+): Promise<WishWallItem> {
+  const response = await fetch(`/wishes/${encodeURIComponent(id)}/status`, {
+    method: "PATCH",
+    body: JSON.stringify({ status, note }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function deleteWish(id: string): Promise<void> {
+  const response = await fetch(`/wishes/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) throw new Error(await errorText(response));
 }
 
 export interface MoonlightPreview {
@@ -445,12 +531,16 @@ export interface TaskSummary {
   approval_mode?: "inherit" | "manual" | "moonlight";
   repo_url?: string;
   repositories?: string[];
+  repository_profiles?: RepositoryProfile[];
   /** 下单或 Chain 方案确认时选中的仓内 Skill；每个子任务只继承自己仓。 */
   repository_skills?: SelectedRepositorySkill[];
   /** 本单开局明确加载的仓内 docs 参考资料；规则文件无需手选。 */
   repository_knowledge?: SelectedRepositoryKnowledge[];
   /** 创建任务时固定的业务模块与知识版本；正文不进入任务摘要。 */
   business_modules?: SelectedBusinessModule[];
+  engineering_knowledge?: Array<EngineeringKnowledgeLaunchOption & {
+    digest: string; bytes: number; snapshot_path: string;
+  }>;
   /** Cloud 的知识消费观测，不参与内核裁决。 */
   knowledge_usage?: TaskKnowledgeUsage;
   /** 仓内 Skill 与代码交付使用同一基线。 */
@@ -508,7 +598,7 @@ export interface TaskSummary {
     loop?: {
       round: number;
       max?: number;
-      state: "repairing" | "green" | "exhausted" | "halted";
+      state: "repairing" | "verifying" | "green" | "exhausted" | "halted";
       diagnosis?: string;
       /** 流水线失败的平台原文(摘要)。刹车告警必须连它一起亮:诊断是
        * 会话的收口发言,可能在聊别的事(内网实锤:最后一轮会话在补文档
@@ -585,6 +675,75 @@ export async function getKnowledgeInsights(): Promise<TeamKnowledgeInsights> {
   return response.json();
 }
 
+export interface KnowledgeCandidateRecord {
+  id: string;
+  source_task_id: string;
+  title: string;
+  summary: string;
+  when_to_use: string;
+  nature: Exclude<KnowledgeNature, "unclassified">;
+  form: KnowledgeForm;
+  business_module_ids: string[];
+  repositories: string[];
+  technologies: string[];
+  content: string;
+  digest: string;
+  bytes: number;
+  status: "pending" | "published" | "rejected";
+  submitted_at: string;
+  submitted_by: string;
+  decided_at?: string;
+  decided_by?: string;
+  decision_note?: string;
+  published_target?: string;
+}
+
+export async function createKnowledgeCandidate(taskId: string, input: {
+  title: string;
+  summary: string;
+  when_to_use: string;
+  nature: Exclude<KnowledgeNature, "unclassified">;
+  form: KnowledgeForm;
+  business_module_ids: string[];
+  repositories: string[];
+  technologies: string[];
+  content: string;
+}): Promise<KnowledgeCandidateRecord> {
+  const response = await fetch(`/tasks/${encodeURIComponent(taskId)}/knowledge-candidates`, {
+    method: "POST", body: JSON.stringify(input),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function listKnowledgeCandidates(): Promise<KnowledgeCandidateRecord[]> {
+  const response = await fetch("/knowledge-candidates");
+  if (!response.ok) throw new Error(await errorText(response));
+  return (await response.json()).candidates;
+}
+
+export async function publishKnowledgeCandidate(
+  id: string,
+  input: { module_id?: string; asset_id?: string; directory?: string; note?: string } = {},
+): Promise<KnowledgeCandidateRecord> {
+  const response = await fetch(`/knowledge-candidates/${encodeURIComponent(id)}/publish`, {
+    method: "POST", body: JSON.stringify(input),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function rejectKnowledgeCandidate(
+  id: string,
+  reason: string,
+): Promise<KnowledgeCandidateRecord> {
+  const response = await fetch(`/knowledge-candidates/${encodeURIComponent(id)}/reject`, {
+    method: "POST", body: JSON.stringify({ reason }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
 /** 下单表单的数据源:可选模型清单(≤1 个时不必展示下拉)与当前默认。 */
 export interface LaunchBlocker {
   key: string;
@@ -616,6 +775,50 @@ export interface LaunchOptions {
     { key: string; label: string; steps?: number; acks?: number }>;
   /** 已发布的可选业务模块摘要；知识正文不会随目录接口返回。 */
   business_modules: BusinessModuleLaunchOption[];
+  engineering_knowledge: EngineeringKnowledgeLaunchOption[];
+}
+
+export interface EngineeringKnowledgeLaunchOption {
+  id: string;
+  title: string;
+  summary: string;
+  when_to_use: string;
+  form: Exclude<KnowledgeForm, "skill">;
+  business_module_ids: string[];
+  repositories: string[];
+  technologies: string[];
+}
+
+export interface RepositoryProfile {
+  repository: string;
+  technologies: string[];
+  confirmed: boolean;
+  updated_at: string;
+  updated_by: string;
+}
+
+export async function resolveRepositoryProfiles(
+  repositories: string[],
+): Promise<Array<{ repository: string; profile?: RepositoryProfile }>> {
+  const response = await fetch("/repository-profiles/resolve", {
+    method: "POST",
+    body: JSON.stringify({ repositories }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return (await response.json()).repositories;
+}
+
+export async function saveRepositoryProfile(input: {
+  repository: string;
+  technologies: string[];
+  confirmed?: boolean;
+}): Promise<RepositoryProfile> {
+  const response = await fetch("/repository-profiles", {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
 }
 
 export interface BusinessModuleLaunchOption {
@@ -629,11 +832,16 @@ export interface BusinessModuleLaunchOption {
   updated_at: string;
 }
 
+export type KnowledgeNature = "business" | "engineering" | "unclassified";
+export type KnowledgeForm = "document" | "skill" | "rule" | "example";
+
 export interface BusinessKnowledgeAsset {
   id: string;
   title: string;
   summary: string;
   when_to_use: string;
+  form: KnowledgeForm;
+  repositories: string[];
   status: "published" | "archived";
   version: number;
   digest: string;
@@ -670,6 +878,8 @@ export interface SelectedBusinessModule {
     title: string;
     summary: string;
     when_to_use: string;
+    form: KnowledgeForm;
+    repositories: string[];
     version: number;
     digest: string;
     bytes: number;
@@ -747,7 +957,7 @@ export async function publishBusinessKnowledgeAsset(
   moduleId: string,
   assetId: string,
   input: Pick<BusinessKnowledgeAsset, "title" | "summary" | "when_to_use">
-    & { content: string },
+    & { form: KnowledgeForm; repositories: string[]; content: string },
 ): Promise<BusinessModule> {
   const response = await fetch(`/business-modules/${encodeURIComponent(moduleId)}`
     + `/assets/${encodeURIComponent(assetId)}`, {
@@ -920,6 +1130,11 @@ export interface HostSkillEffect {
 export interface HostSkillShelfEntry {
   name: string;
   description: string;
+  nature: KnowledgeNature;
+  form: "skill";
+  business_module_ids: string[];
+  repositories: string[];
+  technologies: string[];
   digest: string;
   updated_at: string;
   path: string;
@@ -935,6 +1150,13 @@ export interface HostSkillShelf {
   root_exists: boolean;
   skills: HostSkillShelfEntry[];
   warnings: string[];
+}
+
+export interface SkillKnowledgeMetadataInput {
+  nature: Exclude<KnowledgeNature, "unclassified">;
+  business_module_ids: string[];
+  repositories: string[];
+  technologies: string[];
 }
 
 /** 资产库操作留痕(谁/何时/什么动作/什么指纹),服务端逐条记录。 */
@@ -962,6 +1184,10 @@ export interface SkillSubmissionRecord {
   package_digest: string;
   files: number;
   bytes: number;
+  nature?: KnowledgeNature;
+  business_module_ids?: string[];
+  repositories?: string[];
+  technologies?: string[];
   decided_at?: string;
   decided_by?: string;
   reject_reason?: string;
@@ -1011,10 +1237,11 @@ export async function getSkillDocument(
 export async function uploadSkill(
   directory: string,
   files: SkillUploadFile[],
+  metadata?: SkillKnowledgeMetadataInput,
 ): Promise<SkillOperationRecord> {
   const response = await fetch(`/skills/${encodeURIComponent(directory)}`, {
     method: "PUT",
-    body: JSON.stringify({ files }),
+    body: JSON.stringify({ files, ...metadata }),
   });
   if (!response.ok) throw new Error(await errorText(response));
   return response.json();
@@ -1024,11 +1251,38 @@ export async function uploadSkill(
 export async function submitSkill(
   directory: string,
   files: SkillUploadFile[],
+  metadata?: SkillKnowledgeMetadataInput,
 ): Promise<SkillSubmissionRecord> {
   const response = await fetch(
     `/skills/${encodeURIComponent(directory)}/submissions`, {
       method: "POST",
-      body: JSON.stringify({ files }),
+      body: JSON.stringify({ files, ...metadata }),
+    });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function updateSkillLanguages(
+  directory: string,
+  languages: string[],
+): Promise<SkillOperationRecord> {
+  const response = await fetch(
+    `/skills/${encodeURIComponent(directory)}/languages`, {
+      method: "PATCH",
+      body: JSON.stringify({ languages }),
+    });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function updateSkillKnowledgeMetadata(
+  directory: string,
+  metadata: SkillKnowledgeMetadataInput,
+): Promise<SkillOperationRecord> {
+  const response = await fetch(
+    `/skills/${encodeURIComponent(directory)}/classification`, {
+      method: "PATCH",
+      body: JSON.stringify(metadata),
     });
   if (!response.ok) throw new Error(await errorText(response));
   return response.json();
@@ -1231,6 +1485,9 @@ export async function createTask(
     selectedRepositorySkillIds?: string[];
     selectedRepositoryKnowledgeIds?: string[];
     selectedBusinessModuleIds?: string[];
+    selectedEngineeringKnowledgeIds?: string[];
+    repositoryProfiles?: Array<Pick<RepositoryProfile,
+      "repository" | "technologies" | "confirmed">>;
     requirementDocumentName?: string;
   },
 ): Promise<void> {
@@ -1257,6 +1514,8 @@ export async function createTask(
       selected_repository_knowledge_ids:
         extras?.selectedRepositoryKnowledgeIds,
       selected_business_module_ids: extras?.selectedBusinessModuleIds,
+      selected_engineering_knowledge_ids: extras?.selectedEngineeringKnowledgeIds,
+      repository_profiles: extras?.repositoryProfiles,
     }),
   });
   if (!response.ok) throw new Error(await errorText(response));

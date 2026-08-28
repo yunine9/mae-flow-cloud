@@ -17,6 +17,10 @@ import {
 } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
+import {
+  readSkillKnowledgeMetadata,
+  type KnowledgeNature,
+} from "./knowledgeAssetModel.ts";
 
 /** 与宿主 Skill 快照(hostSkillRuntime)同深度上限:货架照见的范围
  * 不应超过运行时真会去装的范围。 */
@@ -25,6 +29,12 @@ const MAX_DEPTH = 8;
 export interface HostSkillShelfEntry {
   name: string;
   description: string;
+  /** Skill 只是形态；nature 才是业务/工程知识属性。 */
+  nature: KnowledgeNature;
+  form: "skill";
+  business_module_ids: string[];
+  repositories: string[];
+  technologies: string[];
   /** SKILL.md 正文 sha256:版本指纹,页面对拍与后续留痕的锚。 */
   digest: string;
   /** SKILL.md 的 mtime(ISO)。 */
@@ -120,12 +130,30 @@ export function listHostSkillShelf(dataDir: string): HostSkillShelf {
       warnings.push(`不可装载(pi 装载器未接受,检查 frontmatter 的 `
         + `name/description): ${relative(root, file)}`);
     }
+    let metadata = {
+      nature: "unclassified" as KnowledgeNature,
+      form: "skill" as const,
+      business_module_ids: [] as string[],
+      repositories: [] as string[],
+      technologies: [] as string[],
+    };
+    try {
+      metadata = { ...readSkillKnowledgeMetadata(text), form: "skill" };
+    } catch (error) {
+      warnings.push(`Skill 知识属性无效: ${relative(root, file)} — ${
+        error instanceof Error ? error.message : String(error)}`);
+    }
     skills.push({
       name: loaded?.name
         || fallbackFrontmatter(text, "name")
         || directory || relative(root, file),
       description: loaded?.description
         || fallbackFrontmatter(text, "description"),
+      nature: metadata.nature,
+      form: "skill",
+      business_module_ids: metadata.business_module_ids,
+      repositories: metadata.repositories,
+      technologies: metadata.technologies,
       digest: sha256(content),
       updated_at: mtime.toISOString(),
       path: relative(root, file).split(sep).join("/"),

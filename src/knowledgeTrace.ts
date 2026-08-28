@@ -11,6 +11,7 @@ import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { SelectedRepositorySkill } from "./repositorySkillRuntime.ts";
 import type { SelectedRepositoryKnowledge } from "./repositoryKnowledgeRuntime.ts";
 import type { SelectedBusinessModule } from "./businessModuleRuntime.ts";
+import type { SelectedEngineeringKnowledge } from "./engineeringKnowledgeRuntime.ts";
 
 export type KnowledgeKind = "rules" | "document" | "skill";
 export type KnowledgeAction = "available" | "loaded" | "read" | "searched";
@@ -241,6 +242,7 @@ export function knowledgeUsageSnapshot(options: {
   selectedKnowledge?: SelectedRepositoryKnowledge[];
   selectedSkills?: SelectedRepositorySkill[];
   businessModules?: SelectedBusinessModule[];
+  engineeringKnowledge?: SelectedEngineeringKnowledge[];
 }): TaskKnowledgeUsage | undefined {
   const events = parseEvents(resolve(options.workspace, "knowledge-events.jsonl"));
   const resources = new Map<string, TaskKnowledgeResource>();
@@ -267,9 +269,11 @@ export function knowledgeUsageSnapshot(options: {
   for (const module of options.businessModules ?? []) {
     for (const asset of module.assets) seed({
       id: `module:${module.id}:${asset.id}:v${asset.version}`,
-      kind: "document",
+      kind: asset.form === "skill" ? "skill" : "document",
       name: asset.title,
-      path: `.mae-flow-work/business-modules/${module.id}/${asset.id}.md`,
+      path: asset.form === "skill"
+        ? `.mae-flow-work/business-modules/${module.id}/${asset.id}/SKILL.md`
+        : `.mae-flow-work/business-modules/${module.id}/${asset.id}.md`,
       description: asset.summary,
       digest: asset.digest,
       selected: true,
@@ -279,6 +283,16 @@ export function knowledgeUsageSnapshot(options: {
       asset_version: asset.version,
     });
   }
+  for (const item of options.engineeringKnowledge ?? []) seed({
+    id: item.id,
+    kind: item.form === "rule" ? "rules" : "document",
+    name: item.title,
+    path: `.mae-flow-work/team-engineering-knowledge/${item.id}.md`,
+    description: item.summary,
+    digest: item.digest,
+    selected: true,
+    scope: "team",
+  });
   for (const event of events) {
     seed(event);
     const item = resources.get(event.id)!;

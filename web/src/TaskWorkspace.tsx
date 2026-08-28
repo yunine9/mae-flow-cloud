@@ -606,7 +606,15 @@ export function TaskWorkspace({
               <WarmupPanel task={task} />
               <ExecutionPanel task={task} defaultOpen />
               <KnowledgeFootprint usage={task.knowledge_usage}
-                utMethod={task.ut_generation_method} />
+                utMethod={task.ut_generation_method}
+                taskId={task.id} taskStatus={task.status}
+                repositories={task.repositories ?? []}
+                repositoryTechnologies={[...new Set(
+                  (task.repository_profiles ?? []).flatMap((item) =>
+                    item.technologies))]}
+                businessModules={(task.business_modules ?? []).map((module) => ({
+                  id: module.id, name: module.name,
+                }))} />
             </div>
           </> : <>
             <div className="ws-pane-head">

@@ -392,7 +392,12 @@ def repair_moonlight(state, repair_target, head, now):
     )
     updated["current"] = repair_target
     updated.setdefault("step_heads", {})[repair_target] = head
-    for key in ("unlock", "risk_acceptances", "agent_tasks", "quality"):
+    # delivery_manifest 必须一并清:上一轮 confirmed 清单若留着,第二轮
+    # build 里 git add 新修文件会撞"只能包含确认清单中的精确文件",
+    # 而唯一出路 manifest set 被旧清单的存在遮蔽(排查实锤的跨轮死角)。
+    # 新一轮增量到 delivery_review 时重新 set + confirm。
+    for key in ("unlock", "risk_acceptances", "agent_tasks", "quality",
+                "delivery_manifest"):
         updated.pop(key, None)
     return _result(
         effects=_effects(

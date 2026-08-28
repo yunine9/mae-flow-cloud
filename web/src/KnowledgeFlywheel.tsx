@@ -4,29 +4,49 @@ import {
   approveSkillSubmission,
   discardSkillCandidate,
   distillSkill,
+  getBusinessModules,
   getSkillCandidate,
   getSkillDocument,
   getSkillLibrary,
   listSkillCandidates,
   listSkillSubmissions,
   listSkillVersions,
+  listKnowledgeCandidates as listTaskKnowledgeCandidates,
   offlineSkill,
+  publishKnowledgeCandidate,
+  rejectKnowledgeCandidate,
   rejectSkillSubmission,
   rollbackSkill,
   submitSkill,
+  updateSkillKnowledgeMetadata,
   uploadSkill,
+  type BusinessModule,
   type HostSkillDocument,
   type HostSkillShelf,
   type KnowledgeInsightResource,
   type KnowledgeKind,
+  type KnowledgeCandidateRecord,
   type SkillCandidateRecord,
   type SkillOperationRecord,
   type SkillSubmissionRecord,
+  type SkillKnowledgeMetadataInput,
+  type KnowledgeNature,
   type SkillUploadFile,
   type SkillVersionRecord,
   type TeamKnowledgeInsights,
 } from "./api";
-import { BusinessModuleLibrary } from "./BusinessModuleLibrary";
+import {
+  KnowledgeLanguageFilter,
+  KnowledgeLanguageTags,
+  matchesKnowledgeLanguage,
+} from "./KnowledgeLanguages";
+import {
+  skillMetadataInput,
+  EMPTY_SKILL_METADATA,
+  SkillMetadataEditor,
+  SkillMetadataTags,
+  type SkillMetadataDraft,
+} from "./KnowledgeAssetMetadata";
 
 const KIND_LABEL: Record<KnowledgeKind, string> = {
   rules: "项目规则",
@@ -151,6 +171,23 @@ function directoryOf(skill: { path: string }): string | undefined {
   return segments.length > 1 ? segments[0] : undefined;
 }
 
+function editableMetadata(skill: {
+  nature: KnowledgeNature;
+  business_module_ids: string[];
+  repositories: string[];
+  technologies: string[];
+}): SkillMetadataDraft {
+  if (skill.nature === "unclassified") {
+    return { ...EMPTY_SKILL_METADATA };
+  }
+  return {
+    nature: skill.nature,
+    business_module_ids: [...skill.business_module_ids],
+    repositories: [...skill.repositories],
+    technologies: [...skill.technologies],
+  };
+}
+
 /** 货架与足迹互补:足迹只看得见被任务带过的资源,放坏了的 skill 在
  * 足迹里隐形,货架把"现在生效的是什么"照出来——包括不可装载的。
  * 管理员在同一张货架上换货:上传/更新/下线/回退,写进数据目录即对
@@ -165,6 +202,9 @@ function SkillLibraryPanel({ fallback, admin }: {
   const [busy, setBusy] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadName, setUploadName] = useState("");
+  const [uploadClassification, setUploadClassification] =
+    useState<SkillMetadataDraft>({ ...EMPTY_SKILL_METADATA });
+  const [businessModules, setBusinessModules] = useState<BusinessModule[]>([]);
   const [pending, setPending] = useState<{
     files: SkillUploadFile[]; skipped: string[] }>();
   const [confirmOffline, setConfirmOffline] = useState("");
@@ -184,9 +224,16 @@ function SkillLibraryPanel({ fallback, admin }: {
   const [submitNote, setSubmitNote] = useState("");
   const [rejectFor, setRejectFor] = useState("");
   const [rejectReason, setRejectReason] = useState("");
+  const [kindFilter, setKindFilter] = useState<"all" | KnowledgeNature>("all");
+  const [detailFilter, setDetailFilter] = useState("all");
+  const [metadataEditorFor, setMetadataEditorFor] = useState("");
+  const [metadataDraft, setMetadataDraft] =
+    useState<SkillMetadataDraft>({ ...EMPTY_SKILL_METADATA });
   const newInputRef = useRef<HTMLInputElement>(null);
   const updateInputRef = useRef<HTMLInputElement>(null);
   const updateTargetRef = useRef("");
+  const updateMetadataRef =
+    useRef<SkillKnowledgeMetadataInput | undefined>(undefined);
 
   const refresh = () => Promise.all([
     getSkillLibrary()
@@ -194,6 +241,8 @@ function SkillLibraryPanel({ fallback, admin }: {
       .catch((cause) => setError(String(cause instanceof Error ? cause.message : cause))),
     // 提交台账是团队可见的;拉不到不挡货架(fail-open)。
     listSkillSubmissions().then(setSubmissions).catch(() => undefined),
+    getBusinessModules().then((data) => setBusinessModules(data.modules))
+      .catch(() => undefined),
   ]);
   useEffect(() => { void refresh(); }, []);
 
@@ -219,12 +268,33 @@ function SkillLibraryPanel({ fallback, admin }: {
     const encoded = await encodeUpload(list);
     if (target) {
       // 行内更新:目录已定,选完即提交。
-      await run(() => uploadSkill(target, encoded.files));
+      await run(() => uploadSkill(
+        target, encoded.files, updateMetadataRef.current));
       return;
     }
     setPending({ files: encoded.files, skipped: encoded.skipped });
     if (!uploadName && encoded.folder) setUploadName(encoded.folder);
   };
+
+  const languageCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const skill of shelf?.skills ?? []) {
+      for (const language of skill.technologies) {
+        counts.set(language, (counts.get(language) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }, [shelf]);
+  const visibleSkills = shelf?.skills.filter((skill) => {
+    if (kindFilter !== "all" && skill.nature !== kindFilter) return false;
+    if (kindFilter === "business" && detailFilter !== "all") {
+      return skill.business_module_ids.includes(detailFilter);
+    }
+    if (kindFilter === "engineering") {
+      return matchesKnowledgeLanguage(skill.technologies, detailFilter);
+    }
+    return true;
+  }) ?? [];
 
   const toggleDocument = async (directory: string) => {
     if (documentFor === directory) {
@@ -245,15 +315,15 @@ function SkillLibraryPanel({ fallback, admin }: {
 
   if (!shelf && !admin) return null;
 
-  return <div className="knowledge-shelf" aria-label="团队 Skill 资产库">
+  return <div className="knowledge-shelf" aria-label="Skill 形态知识资产">
     <div className="knowledge-panel-head">
-      <div><strong>团队 Skill 资产库</strong><small>当前生效的团队资产;每个新任务自动装载,上架/下线即时生效,无需重启。</small></div>
+      <div><strong>知识资产 · Skill 形态</strong><small>按知识性质、仓库、技术栈和模块上下文匹配给新任务；上架/下线无需重启。</small></div>
       <div className="knowledge-shelf-head-actions">
         <span>{shelf?.skills.length ?? 0} 项</span>
         {/* 人人可提交(2026-08-27 用户拍板):开发者走待审区,管理员
             审核后上架;管理员自己上架照旧直达。 */}
         {expanded && <button type="button" className="knowledge-shelf-action primary"
-          onClick={() => { setUploadOpen((open) => !open); setPending(undefined); setUploadName(""); setSubmitNote(""); }}>
+          onClick={() => { setUploadOpen((open) => !open); setPending(undefined); setUploadName(""); setUploadClassification({ ...EMPTY_SKILL_METADATA }); setSubmitNote(""); }}>
           {uploadOpen ? (admin ? "收起上架" : "收起提交")
             : (admin ? "上架 Skill" : "提交 Skill")}
         </button>}
@@ -270,17 +340,23 @@ function SkillLibraryPanel({ fallback, admin }: {
 
     {uploadOpen && <div className="knowledge-shelf-upload">
       <p>选含 SKILL.md 的技能包目录(frontmatter 需有 name/description)。上传前服务端会做密钥掩码扫描——skill 权限全开,令牌/密码一律拒收。{admin ? "" : "提交后由管理员审核,通过即上架。"}</p>
+      <SkillMetadataEditor value={uploadClassification}
+        modules={businessModules} onChange={setUploadClassification} />
       <div className="knowledge-shelf-upload-row">
-        <input type="text" placeholder="目录名,如 java-autout" value={uploadName}
+        <input type="text" placeholder="目录名,如 order-rules" value={uploadName}
           onChange={(event) => setUploadName(event.target.value.trim())} />
         <button type="button" onClick={() => newInputRef.current?.click()}>选技能包目录</button>
-        <button type="button" disabled={busy || !pending || !uploadName}
+        <button type="button" disabled={busy || !pending || !uploadName
+          || !skillMetadataInput(uploadClassification)}
           className="knowledge-shelf-action primary"
           onClick={() => pending && void run(async () => {
+            const metadata = skillMetadataInput(uploadClassification);
+            if (!metadata) return;
             if (admin) {
-              await uploadSkill(uploadName, pending.files);
+              await uploadSkill(uploadName, pending.files, metadata);
             } else {
-              const record = await submitSkill(uploadName, pending.files);
+              const record = await submitSkill(
+                uploadName, pending.files, metadata);
               setSubmitNote(`已提交待审(${record.directory}/${record.id},`
                 + `${record.files} 个文件)。管理员审核通过后即上架生效。`);
             }
@@ -315,6 +391,10 @@ function SkillLibraryPanel({ fallback, admin }: {
             </span>
             <strong>{item.directory}</strong>
             <span>{item.operator} 提交 · {item.files} 个文件</span>
+            <SkillMetadataTags nature={item.nature ?? "unclassified"}
+              moduleIds={item.business_module_ids ?? []}
+              repositories={item.repositories ?? []}
+              technologies={item.technologies ?? []} modules={businessModules} />
             {item.reject_reason && <span>原因:{item.reject_reason}</span>}
             {item.status !== "pending" && item.decided_by
               && <span>{item.decided_by} 裁决</span>}
@@ -353,10 +433,39 @@ function SkillLibraryPanel({ fallback, admin }: {
       </div>
     )}
 
-    {shelf && !shelf.root_exists && !admin && <div className="knowledge-shelf-empty">本部署尚未放置团队 Skill。管理员上架后,新任务即自动装载。</div>}
+    {shelf && !shelf.root_exists && !admin && <div className="knowledge-shelf-empty">本部署尚未放置 Skill 形态知识。管理员上架后，匹配的新任务即可使用。</div>}
     {shelf && (shelf.root_exists || admin) && shelf.skills.length === 0 && <div className="knowledge-shelf-empty">货架是空的——{admin ? "点「上架 Skill」传入含 SKILL.md 的技能包,新任务即自动装载。" : "管理员上架后,新任务即自动装载。"}</div>}
 
-    {shelf?.skills.map((skill) => {
+    {!!shelf?.skills.length && <div className="knowledge-shelf-dimension-bar">
+      <span><strong>按知识性质查看</strong><small>Skill 是呈现形态；正文性质分业务知识与工程知识。</small></span>
+      <div className="skill-classification-filters">
+        <label><span>类型</span><select value={kindFilter}
+          onChange={(event) => {
+            setKindFilter(event.target.value as "all" | KnowledgeNature);
+            setDetailFilter("all");
+          }}>
+          <option value="all">全部性质</option>
+          <option value="business">业务知识</option>
+          <option value="engineering">工程知识</option>
+          <option value="unclassified">待补属性（历史）</option>
+        </select></label>
+        {kindFilter === "business" && <label><span>业务模块</span>
+          <select value={detailFilter}
+            onChange={(event) => setDetailFilter(event.target.value)}>
+            <option value="all">全部业务模块</option>
+            {businessModules.filter((module) => module.status === "active")
+              .map((module) => <option value={module.id} key={module.id}>
+                {module.name}</option>)}
+          </select></label>}
+        {kindFilter === "engineering" && <KnowledgeLanguageFilter
+          value={detailFilter} onChange={setDetailFilter}
+          counts={languageCounts} />}
+      </div>
+    </div>}
+    {!!shelf?.skills.length && !visibleSkills.length
+      && <div className="knowledge-shelf-empty">当前知识属性下没有 Skill；可切换筛选，或为历史资产补齐属性。</div>}
+
+    {visibleSkills.map((skill) => {
       const directory = directoryOf(skill);
       return <article className={`knowledge-shelf-row${skill.loadable ? "" : " broken"}`} key={skill.path}>
         <div className="knowledge-shelf-main">
@@ -371,6 +480,10 @@ function SkillLibraryPanel({ fallback, admin }: {
             {skill.effect.signal === "low-consumption" ? "待修订 · 没人读" : "待修订 · 读了仍返修"}
           </span>}
           <p>{skill.description || "(没有描述——模型靠描述判断何时读取,建议补上)"}</p>
+          <SkillMetadataTags nature={skill.nature}
+            moduleIds={skill.business_module_ids}
+            repositories={skill.repositories}
+            technologies={skill.technologies} modules={businessModules} />
           {skill.effect && skill.effect.provided_tasks > 0 && <div className="knowledge-shelf-effect">
             <span>装载 {skill.effect.provided_tasks} 单</span>
             <span>读取 {skill.effect.accessed_tasks} 单
@@ -393,8 +506,18 @@ function SkillLibraryPanel({ fallback, admin }: {
         {admin && directory && <div className="knowledge-shelf-actions">
           <button type="button" disabled={busy} onClick={() => {
             updateTargetRef.current = directory;
+            updateMetadataRef.current = skillMetadataInput(
+              editableMetadata(skill));
             updateInputRef.current?.click();
           }}>更新</button>
+          <button type="button" disabled={busy} onClick={() => {
+            if (metadataEditorFor === directory) {
+              setMetadataEditorFor("");
+              return;
+            }
+            setMetadataEditorFor(directory);
+            setMetadataDraft(editableMetadata(skill));
+          }}>{metadataEditorFor === directory ? "取消属性" : "知识属性"}</button>
           <button type="button" disabled={busy} onClick={() => void (async () => {
             if (versionsFor === directory) { setVersionsFor(""); setVersions(undefined); return; }
             setVersionsFor(directory); setVersions(undefined);
@@ -419,6 +542,20 @@ function SkillLibraryPanel({ fallback, admin }: {
             : <button type="button" disabled={busy}
               onClick={() => setConfirmOffline(directory)}>下线</button>}
         </div>}
+        {directory && metadataEditorFor === directory
+          && <div className="knowledge-shelf-classification-editor">
+            <span><strong>调整知识属性</strong><small>Skill 形态不变；修改会形成新版本，历史任务不受影响。</small></span>
+            <SkillMetadataEditor value={metadataDraft}
+              modules={businessModules} onChange={setMetadataDraft} />
+            <button type="button" className="knowledge-shelf-action primary"
+              disabled={busy || !skillMetadataInput(metadataDraft)}
+              onClick={() => void run(async () => {
+                const metadata = skillMetadataInput(metadataDraft);
+                if (!metadata) return;
+                await updateSkillKnowledgeMetadata(directory, metadata);
+                setMetadataEditorFor("");
+              })}>保存属性</button>
+          </div>}
         {directory && documentFor === directory && <div
           className="knowledge-shelf-document" aria-label={`${skill.name} 内容`}>
           <header>
@@ -515,6 +652,123 @@ function SkillLibraryPanel({ fallback, admin }: {
   </div>;
 }
 
+const FORM_LABEL = { document: "文档", skill: "Skill", rule: "规则",
+  example: "示例" } as const;
+
+function KnowledgeCandidatePanel({ admin, onOpenTask }: {
+  admin: boolean;
+  onOpenTask: (taskId: string) => void;
+}) {
+  const [candidates, setCandidates] = useState<KnowledgeCandidateRecord[]>([]);
+  const [modules, setModules] = useState<BusinessModule[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState("");
+  const [reasonFor, setReasonFor] = useState("");
+  const [reason, setReason] = useState("");
+  const [expanded, setExpanded] = useState(false);
+  const refresh = async () => {
+    setLoading(true); setError("");
+    try {
+      const [items, business] = await Promise.all([
+        listTaskKnowledgeCandidates(), getBusinessModules(),
+      ]);
+      setCandidates(items); setModules(business.modules);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "知识候选读取失败");
+    } finally { setLoading(false); }
+  };
+  useEffect(() => { void refresh(); }, []);
+  const pending = candidates.filter((item) => item.status === "pending");
+  const visible = expanded ? candidates : candidates.slice(0, 6);
+  const canManage = (candidate: KnowledgeCandidateRecord) => admin
+    || candidate.nature === "business" && candidate.business_module_ids.some((id) =>
+      modules.find((module) => module.id === id)?.can_manage);
+  const decide = async (candidate: KnowledgeCandidateRecord,
+    decision: "publish" | "reject") => {
+    setBusy(candidate.id); setError("");
+    try {
+      if (decision === "publish") {
+        await publishKnowledgeCandidate(candidate.id, {
+          module_id: candidate.nature === "business"
+            ? candidate.business_module_ids[0] : undefined,
+        });
+      } else {
+        await rejectKnowledgeCandidate(candidate.id, reason);
+        setReasonFor(""); setReason("");
+      }
+      await refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "知识候选处理失败");
+    } finally { setBusy(""); }
+  };
+  return <div className="knowledge-candidate-panel">
+    <div className="knowledge-panel-head">
+      <div><strong>任务沉淀候选</strong><small>
+        从“本任务知识”提交；审核发布后才进入后续任务推荐。</small></div>
+      <span>{pending.length} 项待审</span>
+    </div>
+    {error && <p className="business-module-error" role="alert">{error}</p>}
+    {loading && !candidates.length && <div className="knowledge-shelf-empty">
+      正在读取知识候选…</div>}
+    {!loading && !candidates.length && <div className="knowledge-shelf-empty">
+      还没有任务沉淀候选。开发者可在任务页提交，不会自动发布。</div>}
+    <div className="knowledge-candidate-list">
+      {visible.map((candidate) => <article key={candidate.id}
+        className={`status-${candidate.status}`}>
+        <header><span><strong>{candidate.title}</strong>
+          <small>{candidate.id} · {candidate.submitted_by}</small></span>
+          <em>{candidate.status === "pending" ? "待审核"
+            : candidate.status === "published" ? "已发布闭环" : "暂不接纳"}</em>
+        </header>
+        <p>{candidate.summary}</p>
+        <div className="skill-classification-tags">
+          <em className={`kind-${candidate.nature}`}>
+            {candidate.nature === "business" ? "业务知识" : "工程知识"}</em>
+          <em className="kind-form">{FORM_LABEL[candidate.form]}</em>
+          {candidate.business_module_ids.map((id) => <em
+            className="skill-module-tag" key={id}>
+            {modules.find((module) => module.id === id)?.name ?? id}</em>)}
+          {candidate.repositories.map((repository) => <em
+            className="skill-repository-tag" key={repository}>
+            {repositoryName(repository)}</em>)}
+          {candidate.nature === "engineering"
+            && <KnowledgeLanguageTags languages={candidate.technologies}
+              empty="技术无关" />}
+        </div>
+        <details><summary>查看正文与适用场景</summary>
+          <p><strong>何时使用：</strong>{candidate.when_to_use}</p>
+          <pre>{candidate.content}</pre></details>
+        <footer><button type="button"
+          onClick={() => onOpenTask(candidate.source_task_id)}>
+          来源 {candidate.source_task_id}</button>
+          {candidate.published_target && <span>
+            发布到 {candidate.published_target}</span>}
+          {candidate.decision_note && <span>
+            说明：{candidate.decision_note}</span>}
+          {candidate.status === "pending" && canManage(candidate) && <>
+            <button type="button" className="primary" disabled={!!busy}
+              onClick={() => void decide(candidate, "publish")}>
+              {busy === candidate.id ? "处理中…" : "接纳并发布"}</button>
+            <button type="button" disabled={!!busy}
+              onClick={() => setReasonFor(candidate.id)}>暂不接纳</button>
+          </>}
+        </footer>
+        {reasonFor === candidate.id && <div className="knowledge-candidate-reject">
+          <input value={reason} onChange={(event) => setReason(event.target.value)}
+            placeholder="必须说明原因，便于提交人修订" />
+          <button type="button" disabled={!reason.trim() || !!busy}
+            onClick={() => void decide(candidate, "reject")}>确认驳回</button>
+          <button type="button" onClick={() => setReasonFor("")}>取消</button>
+        </div>}
+      </article>)}
+    </div>
+    {candidates.length > 6 && <button type="button" className="knowledge-show-all"
+      onClick={() => setExpanded((value) => !value)}>
+      {expanded ? "收起" : `查看全部 ${candidates.length} 项`}</button>}
+  </div>;
+}
+
 export function KnowledgeFlywheel({
   insights,
   loading,
@@ -591,8 +845,8 @@ export function KnowledgeFlywheel({
     {loading && !insights && <div className="knowledge-flywheel-loading" aria-label="正在统计知识效能"><i /><i /><i /></div>}
     {insights && insights.summary.tracked_tasks === 0 && <div className="knowledge-flywheel-empty"><span aria-hidden>◎</span><div><strong>知识飞轮正在等待第一批数据</strong><p>正式模块知识或 Skill 被新任务装载、读取后，这里会出现使用趋势；任务文档和仓库项目规则不会进入团队统计。</p></div></div>}
 
-    <BusinessModuleLibrary admin={admin} />
     <SkillLibraryPanel fallback={insights?.host_skills} admin={admin} />
+    <KnowledgeCandidatePanel admin={admin} onOpenTask={onOpenTask} />
 
     {insights && insights.summary.tracked_tasks > 0 && <>
       <div className="knowledge-flywheel-metrics" aria-label="知识效能摘要">

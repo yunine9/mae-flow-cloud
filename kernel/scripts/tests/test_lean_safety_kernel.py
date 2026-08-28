@@ -169,46 +169,30 @@ class SourceEditAuthorizationTests(unittest.TestCase):
             {"targets": (target,)},
         )
 
-    def test_full_source_edits_require_construction_or_quality_fix_approval(self):
-        construction = self.decision(
-            _state(phase=Phase.CONSTRUCTION), "src/main.py")
-        story = self.decision(
-            _state(phase=Phase.STORY), "src/main.py")
-        quality = self.decision(
-            _state(phase=Phase.QUALITY), "src/main.py")
-        approved_quality = self.decision(
-            _state(
-                phase=Phase.QUALITY,
-                decisions=((
-                    "quality.source_fix_approved",
-                    "The user approved the diagnosed source fix.",
-                ),),
-            ),
-            "src/main.py",
+    def test_source_edits_are_free_in_every_phase_and_path(self):
+        """阶段级"源码编辑需要语义授权"已退役(2026-08-28,与步骤级源码
+        闸同批):它要求的授权 key(focused.scope_approved /
+        quality.source_fix_approved)全仓从无签发方——"要求的出路实际
+        不存在";lean kernel 接线即复现"能提交不能编辑"事故。任何
+        phase/path 下写源码与未知仓库文件一律放行,完整性由绝对保护
+        (控制文件)与提交/交付侧闸把守。"""
+        variants = (
+            {"phase": Phase.CONSTRUCTION},
+            {"phase": Phase.STORY},
+            {"phase": Phase.QUALITY},
+            {"phase": Phase.STARTUP},
+            {"path": DeliveryPath.FOCUSED},
         )
-
-        self.assertTrue(construction.allow)
-        self.assertEqual((False, "source_edit"), (story.allow, story.rule))
-        self.assertEqual((False, "source_edit"), (quality.allow, quality.rule))
-        self.assertTrue(approved_quality.allow)
-
-    def test_focused_source_edits_require_scope_approval(self):
-        unapproved = self.decision(
-            _state(path=DeliveryPath.FOCUSED), "src/main.py")
-        approved = self.decision(
-            _state(
-                path=DeliveryPath.FOCUSED,
-                decisions=((
-                    "focused.scope_approved",
-                    "The user approved the focused change scope.",
-                ),),
-            ),
-            "src/main.py",
+        targets = (
+            "src/main.py", "web/index.html", "web/site.css", "LICENSE",
+            "config/application.yaml", "tests/page.snapshot",
         )
-
-        self.assertEqual((False, "source_edit"), (
-            unapproved.allow, unapproved.rule))
-        self.assertTrue(approved.allow)
+        for facts in variants:
+            for target in targets:
+                with self.subTest(target=target, **{
+                        key: str(value) for key, value in facts.items()}):
+                    self.assertTrue(
+                        self.decision(_state(**facts), target).allow)
 
     def test_documentation_and_work_packages_are_allowed_outside_coding(self):
         startup = _state(phase=Phase.STARTUP)
@@ -220,85 +204,18 @@ class SourceEditAuthorizationTests(unittest.TestCase):
         self.assertTrue(documentation.allow)
         self.assertTrue(work_package.allow)
 
-    def test_unknown_repository_writes_are_scope_controlled(self):
-        targets = (
-            "web/index.html",
-            "web/site.css",
-            "LICENSE",
-            "config/application.yaml",
-            "tests/page.snapshot",
-        )
-        full_before = _state(phase=Phase.STORY)
-        full_after = _state(phase=Phase.CONSTRUCTION)
-        focused_before = _state(path=DeliveryPath.FOCUSED)
-        focused_after = _state(
-            path=DeliveryPath.FOCUSED,
-            decisions=((
-                "focused.scope_approved",
-                "The user approved the focused change scope.",
-            ),),
-        )
-
-        for target in targets:
-            with self.subTest(target=target):
-                full_blocked = self.decision(full_before, target)
-                focused_blocked = self.decision(focused_before, target)
-                self.assertEqual(
-                    (False, "source_edit"),
-                    (full_blocked.allow, full_blocked.rule),
-                )
-                self.assertTrue(self.decision(full_after, target).allow)
-                self.assertEqual(
-                    (False, "source_edit"),
-                    (focused_blocked.allow, focused_blocked.rule),
-                )
-                self.assertTrue(self.decision(focused_after, target).allow)
-
-    def test_adapter_can_explicitly_classify_a_non_source_target_as_safe(self):
-        safe = self.decision(
-            _state(phase=Phase.STARTUP),
-            "generated/cache.bin",
-            safe_write_targets=("generated/cache.bin",),
-        )
-        protected = self.decision(
-            _state(phase=Phase.CONSTRUCTION),
-            ".mae-flow.yml",
-            safe_write_targets=(".mae-flow.yml",),
-        )
-
-        self.assertTrue(safe.allow)
-        self.assertEqual(
-            (False, "protected_control"),
-            (protected.allow, protected.rule),
-        )
-
-    def test_safe_write_identity_follows_repository_path_style(self):
+    def test_windows_and_unc_write_targets_resolve_and_allow(self):
+        """safe_write_targets 随阶段闸退役拆除;Windows 盘符/UNC 形态的
+        写目标必须仍可解析并放行(路径解析逻辑与闸无关,不能陪葬)。"""
         startup = _state(phase=Phase.STARTUP)
-
-        posix_case_mismatch = self.decision(
-            startup,
-            "Generated/Cache.bin",
-            safe_write_targets=("generated/cache.bin",),
-        )
-        windows_drive_match = self.decision(
-            startup,
-            r"C:\WORK\REPO\Generated\Cache.bin",
-            repository_root=r"c:\work\repo",
-            safe_write_targets=("generated/cache.bin",),
-        )
-        windows_unc_match = self.decision(
-            startup,
-            r"\\SERVER\SHARE\REPO\Generated\Cache.bin",
-            repository_root=r"\\server\share\repo",
-            safe_write_targets=(r"generated\cache.bin",),
-        )
-
-        self.assertEqual(
-            (False, "source_edit"),
-            (posix_case_mismatch.allow, posix_case_mismatch.rule),
-        )
-        self.assertTrue(windows_drive_match.allow)
-        self.assertTrue(windows_unc_match.allow)
+        self.assertTrue(self.decision(
+            startup, "Generated/Cache.bin").allow)
+        self.assertTrue(self.decision(
+            startup, r"C:\WORK\REPO\Generated\Cache.bin",
+            repository_root=r"c:\work\repo").allow)
+        self.assertTrue(self.decision(
+            startup, r"\\SERVER\SHARE\REPO\Generated\Cache.bin",
+            repository_root=r"\\server\share\repo").allow)
 
     def test_protected_controls_precede_source_authorization(self):
         approved = _state(
@@ -325,11 +242,7 @@ class SourceEditAuthorizationTests(unittest.TestCase):
 
         for target in aliases:
             with self.subTest(target=target):
-                decision = self.decision(
-                    state,
-                    target,
-                    safe_write_targets=(target,),
-                )
+                decision = self.decision(state, target)
                 self.assertEqual(
                     (False, "protected_control"),
                     (decision.allow, decision.rule),
@@ -339,7 +252,6 @@ class SourceEditAuthorizationTests(unittest.TestCase):
             state,
             r"C:\work\repo\work\..\.MaE-Flow.YmL",
             repository_root=r"c:\work\repo",
-            safe_write_targets=(r"work\..\.MaE-Flow.YmL",),
         )
         self.assertEqual(
             (False, "protected_control"),
@@ -350,18 +262,15 @@ class SourceEditAuthorizationTests(unittest.TestCase):
             state,
             r"\work\repo\.mae-flow.yml",
             repository_root=r"C:\work\repo",
-            safe_write_targets=(r"\work\repo\.mae-flow.yml",),
         )
-        safe_alias = self.decision(
+        alias_outside_root = self.decision(
             state,
             "../repo/.mae-flow.yml",
-            safe_write_targets=("../repo/.mae-flow.yml",),
         )
         drive_relative = self.decision(
             state,
             r"C:.mae-flow.yml",
             repository_root=r"C:\work\repo",
-            safe_write_targets=(r"C:.mae-flow.yml",),
         )
 
         self.assertEqual(
@@ -370,10 +279,12 @@ class SourceEditAuthorizationTests(unittest.TestCase):
         )
         self.assertEqual(
             (False, "protected_control"),
-            (safe_alias.allow, safe_alias.rule),
+            (alias_outside_root.allow, alias_outside_root.rule),
         )
+        # 盘符相对路径解析不了:规则名已随 source_edit 闸退役更正为
+        # write_target(拦的是"写目标不可解析",不是阶段授权)。
         self.assertEqual(
-            (False, "source_edit"),
+            (False, "write_target"),
             (drive_relative.allow, drive_relative.rule),
         )
 

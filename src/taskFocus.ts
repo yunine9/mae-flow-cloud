@@ -165,7 +165,10 @@ export function projectTaskFocus(task: FocusTask): TaskFocus {
       60,
     );
   }
-  if (prepush && ["preparing", "repairing"].includes(prepush.state ?? "")) {
+  if (prepush && [
+    "queued", "preparing", "compiling", "testing", "unit_testing", "ut",
+    "repairing",
+  ].includes(prepush.state ?? "")) {
     return focus(
       "machine",
       prepush.message?.trim()

@@ -41,6 +41,19 @@ test("任务焦点:机器修复、平台验证与跨仓依赖不会冒充人工�
   assert.equal(dependency.needs_attention, false);
 });
 
+test("修复会话结束后以当前 prepush 为焦点，不再同时声称仍在修复", () => {
+  const task = {
+    status: "verifying" as const,
+    delivery: {
+      loop: { state: "verifying", round: 2 },
+      prepush: { state: "compiling", round: 3, message: "C++ 编译到 24%" },
+    },
+  };
+  const result = projectTaskFocus(task);
+  assert.equal(result.headline, "C++ 编译到 24%");
+  assert.equal(result.next_action, "两项通过后才会推送代码");
+});
+
 test("任务焦点:失败、暂停和预推送环境故障诚实进入关注队列", () => {
   const failed = projectTaskFocus({ status: "failed", detail: "模型网关不可用" });
   assert.equal(failed.kind, "blocked");

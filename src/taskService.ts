@@ -129,6 +129,17 @@ import {
   type SelectedBusinessModule,
 } from "./businessModuleRuntime.ts";
 import {
+  resolveRepositoryProfiles,
+  type RepositoryProfile,
+} from "./repositoryProfiles.ts";
+import {
+  copyEngineeringKnowledgeSnapshots,
+  materializeEngineeringKnowledge,
+  publishedEngineeringKnowledge,
+  snapshotEngineeringKnowledge,
+  type SelectedEngineeringKnowledge,
+} from "./engineeringKnowledgeRuntime.ts";
+import {
   discoverRepositorySkills,
   type RepositorySkillCatalog,
   type RepositorySkillDescriptor,
@@ -489,6 +500,8 @@ export interface TaskSummary {
   repo_url?: string;
   /** 需求影响的全部仓库。repo_url 保留为单仓交付兼容字段。 */
   repositories?: string[];
+  /** 首次人工确认的仓库技术画像在下单时固定，后续修改只影响新任务。 */
+  repository_profiles?: RepositoryProfile[];
   /** 用户在下单时从各业务仓能力目录中明确选中的 Skill。空数组表示
    * 新任务明确不加载仓内 Skill；字段缺席仅用于兼容旧任务此前的全量
    * 自动加载。Skill 是建议上下文，不是流程步骤或完成证据。 */
@@ -500,6 +513,8 @@ export interface TaskSummary {
    * 适用场景和任务内路径目录交给 Agent，正文必须按需读取；模块后来
    * 更新不会改写运行中或历史任务。 */
   business_modules?: SelectedBusinessModule[];
+  /** 下单时匹配/选择并固定的团队工程知识（Skill 由团队 Skill 货架承载）。 */
+  engineering_knowledge?: SelectedEngineeringKnowledge[];
   /** 任务详情读侧投影：提供/加载/阅读的宿主事实，不参与任务落盘。 */
   knowledge_usage?: TaskKnowledgeUsage;
   /** 多仓时由 Chain 产物投影；单仓时是一个节点的退化图。 */
@@ -582,7 +597,9 @@ export interface TaskSummary {
     loop?: {
       round: number;
       max?: number;
-      state: "repairing" | "green" | "exhausted" | "halted";
+      /** repairing 只表示修复 Agent 本身正在运行；会话收口后进入
+       * verifying，覆盖新 SHA 的 prepush、push 与权威流水线验证。 */
+      state: "repairing" | "verifying" | "green" | "exhausted" | "halted";
       /** 最近一次派的修复类型:回程(settle 后)按它走收尾动作。 */
       kind?: "ci" | "review" | "conflict";
       failure?: string;
@@ -2325,6 +2342,7 @@ export class TaskService {
             selectedKnowledge: summary.repository_knowledge,
             selectedSkills: summary.repository_skills,
             businessModules: summary.business_modules,
+            engineeringKnowledge: summary.engineering_knowledge,
           })
         : undefined,
     };
@@ -2604,6 +2622,8 @@ export class TaskService {
     const agentDir = join(task.summary.workspace, "pi-agent");
     mkdirSync(agentDir, { recursive: true });
     this.hardenAgentGitBoundary(agentDir, task.cwd);
+    // 同 prepush:build-notes 目录宿主预建,Agent 只写放行的那个文件。
+    mkdirSync(join(task.cwd, ".mae-flow-work"), { recursive: true });
     const modelOverride = this.options.settings?.models() ?? {};
     writeFileSync(join(agentDir, "models.json"),
       JSON.stringify(modelOverride.json ?? this.options.modelsJson));
@@ -2620,6 +2640,13 @@ export class TaskService {
       workspace: task.cwd,
       agentDir,
       hostSkillsDir: join(this.options.dataDir, "skills"),
+      knowledgeContext: {
+        repositories: task.summary.repositories ?? [],
+        technologies: [...new Set((task.summary.repository_profiles ?? [])
+          .flatMap((profile) => profile.technologies))],
+        businessModuleIds: (task.summary.business_modules ?? [])
+          .map((module) => module.id),
+      },
       repositorySkillPaths: [],
       repositorySkillResources: [],
       repositoryKnowledge: [],
@@ -2639,6 +2666,7 @@ export class TaskService {
       }),
       humanGate: task.humanGate,
       allowHumanQuestions: false,
+      streamBashOutput: true,
       sessionId: "warmup",
       currentStep: () => "环境预热编译",
       compactAnchor: () =>
@@ -3069,6 +3097,12 @@ export class TaskService {
       assets: number;
       updated_at: string;
     }>;
+    engineering_knowledge: Array<{
+      id: string; title: string; summary: string; when_to_use: string;
+      form: "document" | "rule" | "example";
+      business_module_ids: string[]; repositories: string[];
+      technologies: string[];
+    }>;
     /** 服务级缺的配置(管理员去补)。非空=不给下单。 */
     blockers: Array<{ key: string; label: string; where: "admin" | "me" }>;
     /** 本部署要不要这两把个人令牌(由形态决定,见下方注释)。 */
@@ -3082,6 +3116,8 @@ export class TaskService {
       repositories: string[]; revision: number; assets: number;
       updated_at: string;
     }> = [];
+    let engineeringKnowledge: ReturnType<typeof publishedEngineeringKnowledge>
+      = [];
     try {
       businessModules = listBusinessModules(this.options.dataDir).modules
         .filter((module) => module.status === "active")
@@ -3105,6 +3141,12 @@ export class TaskService {
         label: "本部署为问题流专用(--issue-only),需求流程未启用;"
           + "处理问题请前往「问题处理」页" });
     }
+    try {
+      engineeringKnowledge = publishedEngineeringKnowledge(this.options.dataDir);
+    } catch (error) {
+      this.options.log?.(
+        `[engineering-knowledge] 下单目录读取失败(fail-open): ${String(error)}`);
+    }
     // 每条缺项**只在它真会咬人时才拦**:纯会话形态(不接代码仓)拦
     // Git 令牌毫无道理,没接通知端点拦通知令牌也一样——一刀切的门禁
     // 会把用不上那件东西的部署一起挡在门外。
@@ -3127,6 +3169,17 @@ export class TaskService {
       baseline: { enabled: !!this.options.host, default: "master" },
       workflows: workflowChoices(this.options.host?.kernelRoot),
       business_modules: businessModules,
+      engineering_knowledge: engineeringKnowledge
+        .map((item) => ({
+          id: item.id,
+          title: item.title,
+          summary: item.summary,
+          when_to_use: item.when_to_use,
+          form: item.form as "document" | "rule" | "example",
+          business_module_ids: item.business_module_ids,
+          repositories: item.repositories,
+          technologies: item.technologies,
+        })),
       blockers,
       needs: {
         // 个人令牌该不该要,由部署形态决定(同上:只拦真会咬人的)。
@@ -3430,6 +3483,12 @@ export class TaskService {
       /** 普通下单只提交正式模块 ID；服务端在创建现场时固定当时的已发布
        * 资产版本与正文快照，浏览器不能自报内容。 */
       selectedBusinessModuleIds?: string[];
+      /** 前端首次人工确认并由服务端验过的技术画像；知识旁路字段。 */
+      repositoryProfiles?: RepositoryProfile[];
+      selectedEngineeringKnowledgeIds?: string[];
+      /** 仅供跨仓拆单复制父任务已固定版本。 */
+      engineeringKnowledge?: SelectedEngineeringKnowledge[];
+      engineeringKnowledgeSourceWorkspace?: string;
       /** 仅供跨仓拆单：从父任务复制已经固定的模块版本与正文。 */
       businessModules?: SelectedBusinessModule[];
       businessModuleSourceWorkspace?: string;
@@ -3574,6 +3633,7 @@ export class TaskService {
     const workspace = join(this.options.dataDir, id);
     mkdirSync(workspace, { recursive: true });
     let businessModules: SelectedBusinessModule[] = [];
+    let engineeringKnowledge: SelectedEngineeringKnowledge[] = [];
     try {
       if (options.businessModules !== undefined) {
         if (!options.businessModuleSourceWorkspace) {
@@ -3583,18 +3643,61 @@ export class TaskService {
           selected: options.businessModules,
           sourceTaskWorkspace: options.businessModuleSourceWorkspace,
           targetTaskWorkspace: workspace,
+          repositories,
         });
       } else {
         businessModules = snapshotBusinessModules({
           dataDir: this.options.dataDir,
           taskWorkspace: workspace,
           moduleIds: options.selectedBusinessModuleIds,
+          repositories,
         });
+      }
+      try {
+        if (options.engineeringKnowledge !== undefined) {
+          if (!options.engineeringKnowledgeSourceWorkspace) {
+            throw new Error("复制团队工程知识快照时缺少父任务现场");
+          }
+          engineeringKnowledge = copyEngineeringKnowledgeSnapshots({
+            selected: options.engineeringKnowledge,
+            sourceTaskWorkspace: options.engineeringKnowledgeSourceWorkspace,
+            targetTaskWorkspace: workspace,
+            repository: repositories.length === 1 ? repositories[0] : undefined,
+          });
+        } else {
+          const profileTechnologies = [...new Set((options.repositoryProfiles
+            ?? resolveRepositoryProfiles(this.options.dataDir, repositories)
+              .flatMap((item) => item.profile ? [item.profile] : []))
+            .flatMap((profile) => profile.technologies))];
+          engineeringKnowledge = snapshotEngineeringKnowledge({
+            dataDir: this.options.dataDir,
+            taskWorkspace: workspace,
+            repositories,
+            technologies: profileTechnologies,
+            businessModuleIds: businessModules.map((module) => module.id),
+            selectedIds: options.selectedEngineeringKnowledgeIds,
+          });
+        }
+      } catch (error) {
+        engineeringKnowledge = [];
+        this.options.log?.(
+          `[engineering-knowledge] 任务 ${id} 快照失败，已退化为无团队工程知识（不影响下单）：${String(error)}`);
       }
       storeRequirementDocument(workspace, requirement, requirementDocument);
     } catch (error) {
       rmSync(workspace, { recursive: true, force: true });
       throw error;
+    }
+    let repositoryProfiles = options.repositoryProfiles ?? [];
+    if (options.repositoryProfiles === undefined && repositories.length) {
+      try {
+        repositoryProfiles = resolveRepositoryProfiles(
+          this.options.dataDir, repositories)
+          .flatMap((item) => item.profile ? [{ ...item.profile }] : []);
+      } catch (error) {
+        this.options.log?.(
+          `[repository-profiles] 任务 ${id} 读取失败，已退化为按仓库匹配（不影响下单）：${String(error)}`);
+      }
     }
     const summary: TaskSummary = {
       id,
@@ -3611,9 +3714,17 @@ export class TaskService {
       luban_account: options.account || undefined,
       repo_url: repo,
       repositories: repositories.length ? repositories : undefined,
+      repository_profiles: repositories.length
+        ? repositoryProfiles
+          .filter((profile) => repositories.some((repository) =>
+            repository.replace(/\/+$/, "").replace(/\.git$/i, "").toLowerCase()
+            === profile.repository.replace(/\/+$/, "").replace(/\.git$/i, "").toLowerCase()))
+        : undefined,
       repository_skills: repositorySkills,
       repository_knowledge: repositoryKnowledge,
       business_modules: businessModules.length ? businessModules : undefined,
+      engineering_knowledge: engineeringKnowledge.length
+        ? engineeringKnowledge : undefined,
       requirement_graph: repositories.length
         ? {
             stage: repositories.length > 1 ? "analysis" : "confirmed",
@@ -3796,6 +3907,10 @@ export class TaskService {
           controlEpoch: 0,
         };
         this.tasks.set(summary.id, task);
+        // 旧版本把 repairing 一直保留到流水线最终绿灯。若修复使命已经
+        // 消费完，真实当前动作其实是 prepush/流水线验证；恢复时同步
+        // 校正，不能让重新部署后的老任务继续同时显示两种当前阶段。
+        if (this.enterRepairVerification(task)) this.persist(task);
         const assistantSnapshot = readDeveloperAssistant(workspace);
         if (assistantSnapshot.handoff?.id
             && assistantSnapshot.handoff.state !== "returned"
@@ -4285,6 +4400,9 @@ export class TaskService {
         .map((item) => ({ ...item })),
       selectedBusinessModuleIds: (source.business_modules ?? [])
         .map((module) => module.id),
+      repositoryProfiles: source.repository_profiles?.map((item) => ({ ...item })),
+      selectedEngineeringKnowledgeIds: (source.engineering_knowledge ?? [])
+        .map((item) => item.id),
       preserveUndefinedRepositorySkills,
       reuseTaskId: id,
       deferQueue: true,
@@ -4566,6 +4684,10 @@ export class TaskService {
             assets: module.assets.map((asset) => ({ ...asset })),
           })),
         businessModuleSourceWorkspace: task.summary.workspace,
+        repositoryProfiles: (task.summary.repository_profiles ?? [])
+          .filter((profile) => profile.repository === repository.url),
+        engineeringKnowledge: task.summary.engineering_knowledge,
+        engineeringKnowledgeSourceWorkspace: task.summary.workspace,
         preserveUndefinedRepositorySkills,
       });
       // 方案文档放子任务 workspace 根(不删现场,重启/重建都在);
@@ -5327,8 +5449,10 @@ export class TaskService {
     let driver: CloudSession | undefined;
     let container: TaskCommandContainer | undefined;
     let businessModuleKnowledge: MaterializedBusinessModuleKnowledge = {
-      entries: [], warnings: [],
+      entries: [], skill_paths: [], warnings: [],
     };
+    let engineeringKnowledge: ReturnType<typeof materializeEngineeringKnowledge>
+      = { entries: [], warnings: [] };
     try {
       if (!task.cwd) throw new Error("开发助手缺少代码工作区");
       // 必须在容器 start 之前物化：root 宿主会在 start 前把整棵 bind
@@ -5342,6 +5466,15 @@ export class TaskService {
       for (const warning of businessModuleKnowledge.warnings) {
         this.options.log?.(
           `[developer-assistant-business-module] 任务 ${task.summary.id}: ${warning}`);
+      }
+      engineeringKnowledge = materializeEngineeringKnowledge({
+        selected: task.summary.engineering_knowledge,
+        taskWorkspace: workspace,
+        runtimeWorkspace: task.cwd,
+      });
+      for (const warning of engineeringKnowledge.warnings) {
+        this.options.log?.(
+          `[developer-assistant-engineering-knowledge] 任务 ${task.summary.id}: ${warning}`);
       }
       task.containerWorkspace = task.cwd;
       container = await this.startCodingContainer(task, { gitReadOnly: true });
@@ -5411,10 +5544,18 @@ export class TaskService {
         workspace: task.cwd,
         agentDir,
         hostSkillsDir: join(this.options.dataDir, "skills"),
+        knowledgeContext: {
+          repositories: task.summary.repositories ?? [],
+          technologies: [...new Set((task.summary.repository_profiles ?? [])
+            .flatMap((profile) => profile.technologies))],
+          businessModuleIds: (task.summary.business_modules ?? [])
+            .map((module) => module.id),
+        },
         repositorySkillPaths,
         repositorySkillResources,
         repositoryKnowledge,
         businessModuleKnowledge,
+        engineeringKnowledge,
         knowledgeTrace: this.knowledgeTrace(task, task.cwd),
         provider: task.summary.model_choice?.provider
           ?? modelOverride.provider ?? this.options.provider,
@@ -6234,8 +6375,10 @@ export class TaskService {
       }> = [];
       let repositoryKnowledge: MaterializedKnowledgeEntry[] = [];
       let businessModuleKnowledge: MaterializedBusinessModuleKnowledge = {
-        entries: [], warnings: [],
+        entries: [], skill_paths: [], warnings: [],
       };
+      let engineeringKnowledge: ReturnType<typeof materializeEngineeringKnowledge>
+        = { entries: [], warnings: [] };
       task.cwd = cwd;
       if (this.options.host && analysisOnly) {
         const analysisRoot = resuming ? savedCwd! : join(workspace, "repositories");
@@ -6575,6 +6718,15 @@ export class TaskService {
         this.options.log?.(
           `[business-module-knowledge] 任务 ${task.summary.id}: ${warning}`);
       }
+      engineeringKnowledge = materializeEngineeringKnowledge({
+        selected: task.summary.engineering_knowledge,
+        taskWorkspace: workspace,
+        runtimeWorkspace: cwd,
+      });
+      for (const warning of engineeringKnowledge.warnings) {
+        this.options.log?.(
+          `[engineering-knowledge] 任务 ${task.summary.id}: ${warning}`);
+      }
       // 2026-08-25 编排瘦身:编码期不再禁止编译/自测——用户给了容器
       // 构建环境,就让 agent 自由用起来验证自己;但本地绿不构成交付
       // 证据,真验收固定三道(prepush 专项会话、绑 SHA 的权威流水线、
@@ -6702,10 +6854,18 @@ export class TaskService {
         // 宿主级 skill:<数据目录>/skills 放一次,每个任务都带
         // (团队的 UT 写法指南在内网,老宿主靠手动集成进子 agent)。
         hostSkillsDir: join(this.options.dataDir, "skills"),
+        knowledgeContext: {
+          repositories: task.summary.repositories ?? [],
+          technologies: [...new Set((task.summary.repository_profiles ?? [])
+            .flatMap((profile) => profile.technologies))],
+          businessModuleIds: (task.summary.business_modules ?? [])
+            .map((module) => module.id),
+        },
         repositorySkillPaths,
         repositorySkillResources,
         repositoryKnowledge,
         businessModuleKnowledge,
+        engineeringKnowledge,
         knowledgeTrace: this.knowledgeTrace(task, cwd),
         currentStep: () => this.currentStepLabel(task),
         // 上下文撑爆时自愈压缩用的锚:与主动压缩同一个内核现场,
@@ -7030,9 +7190,9 @@ export class TaskService {
     await this.pipelineVerdict(task, sha, status, log, checks, epoch);
   }
 
-  /** 读取真正准备传输的 Git 现场。PASS 收据只在 clean worktree 上签发，
-   * 因而稳定态的 fingerprint 实际由 HEAD + 空 status 唯一确定；运行中
-   * 仍把完整 status 纳入哈希，恢复时不会复用半截 attempt。 */
+  /** 读取真正准备传输的 Git 提交。git push 只传 HEAD 可达对象，工作区
+   * 的未提交/未跟踪文件不会进入远端；PASS 因此只绑定 SHA，不再用
+   * `git status` 把编译产物误当成 push 阻断条件。 */
   private async prePushRevision(task: TaskState): Promise<PrePushRevision> {
     if (!task.cwd) throw new Error("任务没有代码工作区，不能执行推送前验证");
     const head = await runSafeWorktreeGitAsync(
@@ -7041,20 +7201,10 @@ export class TaskService {
     if (head.status !== 0 || !sha) {
       throw new Error(`推送前读取 HEAD 失败: ${String(head.stderr ?? "")}`);
     }
-    const status = await runSafeWorktreeGitAsync(
-      task.cwd, [
-        "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", ".",
-        ":(exclude).mae-flow.json", ":(exclude).mae-flow-*",
-        ":(exclude).mae-flow-work/**", ":(exclude).codecheckcli/**",
-      ], { timeoutMs: 30_000 });
-    if (status.status !== 0) {
-      throw new Error(`推送前读取工作区失败: ${String(status.stderr ?? "")}`);
-    }
     return {
       sha,
       workspace_fingerprint: createHash("sha256")
-        .update(sha).update("\0").update(String(status.stdout ?? ""))
-        .digest("hex"),
+        .update(sha).digest("hex"),
     };
   }
 
@@ -7163,6 +7313,9 @@ export class TaskService {
     const agentDir = join(task.summary.workspace, "pi-agent");
     mkdirSync(agentDir, { recursive: true });
     this.hardenAgentGitBoundary(agentDir, task.cwd);
+    // build-notes 的目录由宿主预建:安全层只放行那一个文件,mkdir
+    // .mae-flow-work 本身会被拦——使命让写、闸不让建目录,Agent 没出路。
+    mkdirSync(join(task.cwd, ".mae-flow-work"), { recursive: true });
     const modelOverride = this.options.settings?.models() ?? {};
     writeFileSync(join(agentDir, "models.json"),
       JSON.stringify(modelOverride.json ?? this.options.modelsJson));
@@ -7358,6 +7511,13 @@ export class TaskService {
         workspace: task.cwd,
         agentDir,
         hostSkillsDir: join(this.options.dataDir, "skills"),
+        knowledgeContext: {
+          repositories: task.summary.repositories ?? [],
+          technologies: [...new Set((task.summary.repository_profiles ?? [])
+            .flatMap((profile) => profile.technologies))],
+          businessModuleIds: (task.summary.business_modules ?? [])
+            .map((module) => module.id),
+        },
         repositorySkillPaths,
         repositorySkillResources,
         repositoryKnowledge,
@@ -7377,6 +7537,7 @@ export class TaskService {
         }),
         humanGate: task.humanGate,
         allowHumanQuestions: false,
+        streamBashOutput: true,
         sessionId: `prepush-${request.round}`,
         currentStep: () => this.currentStepLabel(task),
         compactAnchor: () => `推送前验证任务: ${requirementContext(
@@ -7460,13 +7621,24 @@ export class TaskService {
         const evidence = report
           ? verifyPrePushEvidence(eventLog.replay(), report)
           : "收口缺少合法的 <prepush-result> 结构";
-        const dirtyPaths = await this.prePushDirtyPaths(task);
-        const dirty = dirtyPaths.length > 0;
-        if (report && !evidence && !dirty) {
+        const finalSha = (await this.prePushRevision(task)).sha;
+        if (report && !evidence) {
+          // 未提交文件只提示不拦截(用户拍板"不能卡死"):push 只传
+          // HEAD,它们进不了交付;但把清单如实写进收据——产物该
+          // .gitignore 的提出来让用户加规则(留着别删,增量编译要用),
+          // 万一里面混着漏提交的业务改动,人在推送确认时能看见。
+          const leftover = await this.prePushDirtyPaths(task);
+          const leftoverNote = leftover.length
+            ? `。工作区尚有未提交/未跟踪文件(${describeDirtyPaths(leftover)}`
+              + ")——push 只传 HEAD,它们不进交付,也不影响通过。构建产物"
+              + "请保留勿删;想让它们以后不再列出,让 Agent 把路径补进仓库 "
+              + ".gitignore 随单交付即可(普通代码改动,MR 检视可见)。"
+              + "若其中有本单业务改动,请在推送确认时核对是否遗漏。"
+            : "";
           return withExecution({
             status: "passed",
-            sha: (await this.prePushRevision(task)).sha,
-            message: report.summary,
+            sha: finalSha,
+            message: report.summary + leftoverNote,
             report,
           });
         }
@@ -7474,21 +7646,12 @@ export class TaskService {
           return withExecution({
             status: "code_failure",
             sha: (await this.prePushRevision(task)).sha,
-            message: [evidence, dirty
-              ? `工作区仍有未提交业务改动(${describeDirtyPaths(dirtyPaths)})`
-                + "；若是构建产物,请在仓库 .gitignore 它们或把构建输出挪出"
-                + "工作区,否则每轮推送前验证都会在这里失败"
-              : ""].filter(Boolean).join("；"),
+            message: evidence,
           });
         }
         outcome = await waitForTurn(driver.continueWith([
           "推送前验证尚不能签发 PASS，请在当前专项会话继续处理。",
           evidence,
-          dirty
-            ? `git status 仍有业务改动(${describeDirtyPaths(dirtyPaths)})：`
-              + "属于本单的改动请提交；构建产物请清理出工作区或恢复原状，"
-              + "再重新执行编译与 UT。"
-            : "",
           "不要只重写结论；两项命令必须在最后一次代码修改后真实成功。",
         ].filter(Boolean).join("\n")));
       }
@@ -7584,16 +7747,6 @@ export class TaskService {
         message: `验证结果绑定 ${result.sha.slice(0, 12)}，但当前 HEAD 是 `
           + `${finalRevision.sha.slice(0, 12)}，拒绝复用陈旧结论`,
       };
-    } else if (result.status === "passed") {
-      const dirtyPaths = await this.prePushDirtyPaths(task);
-      if (dirtyPaths.length) {
-        result = {
-          status: "code_failure",
-          sha: finalRevision.sha,
-          message: "编译与 UT 虽已执行，但工作区仍有未提交业务改动"
-            + `(${describeDirtyPaths(dirtyPaths)})`,
-        };
-      }
     }
     state = recordPrePushReport(
       state, attemptId, this.prePushDomainReport(result),
@@ -7782,6 +7935,10 @@ export class TaskService {
   private async tryDeliver(task: TaskState, epoch: number): Promise<void> {
     // 多仓父任务只负责需求理解和人工检视，不产生分支/MR。
     if (this.isRequirementAnalysis(task)) return;
+    // settle 在调用交付前已经释放修复会话并清空 mission。此刻开始处理
+    // 的是修复结果验证，不再是“Agent 正在修复”；prepush 可能耗时很长，
+    // 这条转换必须在任何外部 I/O 之前持久化，重启和页面才能同一口径。
+    if (this.enterRepairVerification(task)) this.persist(task);
     // 平台地址由部署固定注入；每次交付动作使用同一条基础设施链路。
     const platformUrl = this.effectivePlatformUrl();
     if (!platformUrl || !this.options.host || !task.cwd) {
@@ -7946,6 +8103,23 @@ export class TaskService {
       }
       this.options.log?.(`任务 ${task.summary.id} 交付失败: ${String(error)}`);
     }
+  }
+
+  /** 修复会话 → 修复结果验证的唯一状态交接。
+   *
+   * mission 仍在表示专职修复 Agent 尚未完成，绝不能提前切；没有 mission
+   * 且任务仍在活动交付态时，repairing 已经是旧版遗留或刚收口的陈旧值。
+   * 返回是否发生转换，由调用方在自己的原子边界持久化。 */
+  private enterRepairVerification(task: TaskState): boolean {
+    const loop = task.summary.delivery?.loop;
+    if (loop?.state !== "repairing" || task.mission) return false;
+    if (!["queued", "running", "pausing", "verifying"]
+      .includes(task.summary.status)) return false;
+    loop.state = "verifying";
+    task.summary.detail = task.summary.delivery?.prepush
+      ? "修复会话已完成，正在验证修复后的提交"
+      : "修复会话已完成，等待验证修复后的提交";
+    return true;
   }
 
   /** 流水线异步收敛:轮询 status?sha= 直到终态或预算耗尽。

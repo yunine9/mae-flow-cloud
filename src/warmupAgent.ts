@@ -67,6 +67,9 @@ export function warmupMission(
     "",
     "红线:",
     `- 除 ${WARMUP_NOTES_PATH} 外**不修改、不创建任何文件**;依赖安装与构建产物由构建工具自然产生,不算你改的。`,
+    // 下面这条 git 红线靠嘱咐不靠闸:预热复用 prepush 安全层,那层为了
+    // 让 prepush 能本地提交,刻意放行 add/commit。预热是 fail-open 观测
+    // 旁路,违背嘱咐最多弄脏工作区,不会污染交付(推送另有闸)。
     "- **不执行任何 git 写操作**(add/commit/checkout/restore/clean 都不许;只读命令可用)。",
     "- 基线代码红了**不许修**——那是环境或上游的问题,如实报告就是你的交付。",
     "",

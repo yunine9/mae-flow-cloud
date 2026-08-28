@@ -155,10 +155,11 @@ def cmd_goto(flow, st, args):
     api.print_current(flow, st)
 
 def cmd_unlock(flow, st, args):
-    """用户裁决通道:UT 揭出疑似代码缺陷、用户判定"确为代码缺陷,本单修"后,
-    解锁当前步的测试路径收紧(仅本步有效,done/goto 自动失效,历史留痕)。
-    不是绕过 gate 的后门:message-id 必须指向本步骤捕获的真实用户裁决;
-    未启用收紧的仓也可执行(裁决留痕,无实际解锁动作)。"""
+    """用户裁决通道。步骤级源码闸 2026-08-28 退役后,unlock source 的
+    实际效力只剩一种:流程头部(交付方式未选定)经用户裁决提前放行
+    源码修改;交付链内改码本就自由,此时执行只是留痕。仅本步有效,
+    done/goto 自动失效。不是绕过 gate 的后门:message-id 必须指向
+    本步骤捕获的真实用户裁决。"""
     if not args.reason:
         api.die("unlock 必须 --reason 说明裁决结论(如\"SUSPECTED_BUG#1 确认为代码缺陷\"),留痕供审计。", 2)
     ok, _authorization, authorization_receipt, why = (
@@ -177,8 +178,9 @@ def cmd_unlock(flow, st, args):
     }
     st["history"].append({"step": sid, "result": "unlock:" + args.what, "note": args.reason, "at": now})
     api.save_state(st)
-    print(f"[mae-flow] 已解锁本步({sid})的源码修改(仅本步有效,推进后自动失效);"
-          "裁决已留痕。修复并自查后按本步指引继续,推送前验证与权威流水线会复验。")
+    print(f"[mae-flow] 裁决已留痕(本步 {sid},推进后失效)。流程头部的"
+          "源码修改因此放行;交付链内改码本就自由,无需 unlock。"
+          "修复并自查后按本步指引继续,推送前验证与权威流水线会复验。")
 
 _MAX_LISTED_DIRTY = 40
 

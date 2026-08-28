@@ -19,6 +19,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import {
+  repositoryIdentity,
+  type KnowledgeForm,
+} from "./knowledgeAssetModel.ts";
 
 const ROOT = "business-modules";
 const OPERATIONS = "business-module-operations.jsonl";
@@ -38,6 +42,10 @@ export interface BusinessKnowledgeAsset {
   title: string;
   summary: string;
   when_to_use: string;
+  /** 业务是性质；这里仅记录呈现形态。 */
+  form: KnowledgeForm;
+  /** 空数组表示适用于模块关联的全部仓库。 */
+  repositories: string[];
   status: BusinessKnowledgeAssetStatus;
   version: number;
   digest: string;
@@ -160,7 +168,18 @@ function parseModule(value: unknown): BusinessModule {
       || !["active", "archived"].includes(module.status)) {
     throw new BusinessModuleError("业务模块元数据损坏");
   }
-  return module;
+  return {
+    ...module,
+    assets: module.assets.map((asset) => ({
+      ...asset,
+      // 兼容历史资产：旧 languages 不再参与业务知识归属或匹配。
+      form: ["document", "skill", "rule", "example"].includes(
+        String((asset as BusinessKnowledgeAsset).form ?? ""))
+        ? (asset as BusinessKnowledgeAsset).form : "document",
+      repositories: Array.isArray((asset as BusinessKnowledgeAsset).repositories)
+        ? repositories((asset as BusinessKnowledgeAsset).repositories) : [],
+    })),
+  };
 }
 
 function writeModule(dataDir: string, module: BusinessModule): void {
@@ -368,6 +387,8 @@ export function publishBusinessKnowledgeAsset(
     title: string;
     summary: string;
     when_to_use: string;
+    form?: KnowledgeForm;
+    repositories?: string[];
     content: string;
   },
   operator: string,
@@ -389,11 +410,26 @@ export function publishBusinessKnowledgeAsset(
     throw new BusinessModuleError(`每个模块最多发布 ${MAX_ASSETS} 项知识`);
   }
   const now = new Date().toISOString();
+  const form = input.form ?? previous?.form ?? "document";
+  if (!["document", "skill", "rule", "example"].includes(form)) {
+    throw new BusinessModuleError("知识形态只能是文档、Skill、规则或示例");
+  }
+  const applicableRepositories = input.repositories === undefined
+    ? previous?.repositories ?? [] : repositories(input.repositories);
+  const moduleRepositories = new Set(module.repositories.map(repositoryIdentity));
+  for (const repository of applicableRepositories) {
+    if (!moduleRepositories.has(repositoryIdentity(repository))) {
+      throw new BusinessModuleError(
+        `适用仓库 ${repository} 未关联到业务模块 ${module.name}`);
+    }
+  }
   const asset: BusinessKnowledgeAsset = {
     id: assetId,
     title: required(input.title, "资产标题", 120),
     summary: required(input.summary, "资产摘要", 500),
     when_to_use: required(input.when_to_use, "适用场景", 500),
+    form,
+    repositories: applicableRepositories,
     status: "published",
     version: (previous?.version ?? 0) + 1,
     digest: digest(content),

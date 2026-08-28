@@ -219,4 +219,6 @@ test("build playbook: 实际注入预推送 Agent mission，而非仅停留在�
   assert.match(mission, /整轮最多 60 分钟/);
   assert.match(mission, /重型构建单条至少获得 45 分钟/);
   assert.match(mission, /不要自行用 600 秒/);
+  assert.match(mission, /不要求 git status 为空/);
+  assert.match(mission, /不要为了清空状态把编译产物提交进去/);
 });

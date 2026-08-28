@@ -57,7 +57,7 @@ function ModuleEditor({ module, admin, users, onSaved, onCancel }: {
         </select> : <input value={owner} disabled title="只有管理员可以转移责任人" />}
       </label>
     </div>
-    <label><span>模块说明</span><textarea rows={2} value={description}
+    <label><span>业务语义说明</span><textarea rows={2} value={description}
       onChange={(event) => setDescription(event.target.value)} required /></label>
     <label><span>维护者账号</span><input value={maintainers}
       onChange={(event) => setMaintainers(event.target.value)}
@@ -90,6 +90,8 @@ function AssetEditor({ module, asset, initialContent, onSaved, onCancel }: {
   const [title, setTitle] = useState(asset?.title ?? "");
   const [summary, setSummary] = useState(asset?.summary ?? "");
   const [whenToUse, setWhenToUse] = useState(asset?.when_to_use ?? "");
+  const [form, setForm] = useState(asset?.form ?? "document");
+  const [repositories, setRepositories] = useState(asset?.repositories ?? []);
   const [content, setContent] = useState(initialContent ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -98,7 +100,7 @@ function AssetEditor({ module, asset, initialContent, onSaved, onCancel }: {
     setBusy(true); setError("");
     try {
       onSaved(await publishBusinessKnowledgeAsset(module.id, id, {
-        title, summary, when_to_use: whenToUse, content,
+        title, summary, when_to_use: whenToUse, form, repositories, content,
       }));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "知识发布失败");
@@ -115,6 +117,30 @@ function AssetEditor({ module, asset, initialContent, onSaved, onCancel }: {
       onChange={(event) => setSummary(event.target.value)} required /></label>
     <label><span>什么时候应该读</span><textarea rows={2} value={whenToUse}
       onChange={(event) => setWhenToUse(event.target.value)} required /></label>
+    <div className="business-module-form-grid">
+      <label><span>知识形态</span><select value={form}
+        onChange={(event) => setForm(event.target.value as typeof form)}>
+        <option value="document">文档</option>
+        <option value="skill">Skill</option>
+        <option value="rule">规则</option>
+        <option value="example">示例</option>
+      </select></label>
+      <div className="business-asset-language-field">
+        <span>适用代码仓（可选）</span>
+        <small>不选表示适用于该模块关联的全部仓库。</small>
+        {module.repositories.length ? <div className="skill-module-picker">
+          {module.repositories.map((repository) => <button type="button"
+            key={repository} title={repository}
+            aria-pressed={repositories.includes(repository)}
+            onClick={() => setRepositories((current) =>
+              current.includes(repository)
+                ? current.filter((item) => item !== repository)
+                : [...current, repository])}>
+            {repository.replace(/\/+$/, "").split("/").at(-1)
+              ?.replace(/\.git$/i, "") || repository}</button>)}
+        </div> : <small>模块尚未关联仓库，当前知识默认对模块内全部任务适用。</small>}
+      </div>
+    </div>
     <label><span>知识正文（Markdown）</span><textarea className="business-asset-content"
       rows={12} value={content}
       onChange={(event) => setContent(event.target.value)} required /></label>
@@ -191,9 +217,9 @@ export function BusinessModuleLibrary({ admin }: { admin: boolean }) {
 
   return <section className="business-module-library" aria-labelledby="business-module-library-title">
     <header className="business-module-library-head">
-      <div><span className="section-kicker">BUSINESS MODULES</span>
-        <h3 id="business-module-library-title">业务模块知识库</h3>
-        <p>模块 Owner 维护可复用知识；任务自己的需求和过程文档不会自动进入这里。</p>
+      <div><span className="section-kicker">BUSINESS LANDSCAPE</span>
+        <h3 id="business-module-library-title">业务模块与模块知识</h3>
+        <p>模块沉淀领域概念、规则、流程和边界；知识可用文档、Skill、规则或示例呈现，并可限定到模块内某些仓库。</p>
       </div>
       <div><span>{catalog?.modules.filter((item) => item.status === "active").length ?? 0} 个启用</span>
         {admin && <button type="button" className="primary"
@@ -203,6 +229,18 @@ export function BusinessModuleLibrary({ admin }: { admin: boolean }) {
           {loading ? "读取中…" : "刷新"}</button>
       </div>
     </header>
+
+    <div className="business-module-flow" aria-label="业务模块使用方式">
+      <div><i>1</i><span><strong>描述业务语义</strong><small>领域概念、规则、流程与边界</small></span></div>
+      <b aria-hidden>→</b>
+      <div><i>2</i><span><strong>治理模块知识</strong><small>Owner 组织发布、更新和归档</small></span></div>
+      <b aria-hidden>→</b>
+      <div><i>3</i><span><strong>任务按需使用</strong><small>发起时关联范围并固定当时版本</small></span></div>
+    </div>
+
+    <div className="business-module-dimension-bar">
+      <span><strong>业务性质 · 多种形态 · 仓库作用域</strong><small>业务知识不再挂语言标签；涉及实现方法的内容应单独沉淀为工程知识。</small></span>
+    </div>
 
     {createOpen && <form className="business-module-create" onSubmit={async (event) => {
       event.preventDefault(); setCreateBusy(true); setError("");
@@ -237,9 +275,9 @@ export function BusinessModuleLibrary({ admin }: { admin: boolean }) {
       <label><span>模块名称</span><input value={create.name}
         onChange={(event) => setCreate({ ...create, name: event.target.value })}
         placeholder="例如 支付核心" required /></label>
-      <label><span>模块说明</span><textarea rows={2} value={create.description}
+      <label><span>业务语义说明</span><textarea rows={2} value={create.description}
         onChange={(event) => setCreate({ ...create, description: event.target.value })}
-        placeholder="说清职责边界和适用范围" required /></label>
+        placeholder="说清领域概念、核心规则、流程和边界" required /></label>
       <div className="business-module-form-grid">
         <label><span>维护者账号（可选）</span><input value={create.maintainers}
           onChange={(event) => setCreate({ ...create, maintainers: event.target.value })}
@@ -259,13 +297,15 @@ export function BusinessModuleLibrary({ admin }: { admin: boolean }) {
     {!!catalog?.warnings.length && <p className="business-module-warning">
       {catalog.warnings.join("；")}</p>}
     {!loading && !catalog?.modules.length && <div className="business-module-empty">
-      <strong>还没有业务模块</strong><span>由管理员创建并指定责任人后，Owner 再发布模块知识。</span>
+      <strong>还没有业务模块</strong><span>由管理员创建并指定责任人；Owner 随后在模块内维护知识。</span>
     </div>}
 
     <div className="business-module-list">
       {(catalog?.modules ?? []).map((module) => {
         const open = expanded === module.id;
-        const liveAssets = module.assets.filter((asset) => asset.status === "published");
+        const allLiveAssets = module.assets.filter((asset) =>
+          asset.status === "published");
+        const liveAssets = allLiveAssets;
         return <article key={module.id} className={`business-module-card status-${module.status}`}>
           <button type="button" className="business-module-card-head"
             aria-expanded={open} onClick={() => setExpanded(open ? "" : module.id)}>
@@ -273,7 +313,7 @@ export function BusinessModuleLibrary({ admin }: { admin: boolean }) {
             <span><span><strong>{module.name}</strong><code>{module.id}</code>
               {module.status === "archived" && <em>已归档</em>}</span>
               <small>{module.description}</small>
-              <span className="business-module-card-meta">Owner {module.owner} · {liveAssets.length} 项知识 · revision {module.revision}</span>
+              <span className="business-module-card-meta">Owner {module.owner} · {allLiveAssets.length} 项知识 · revision {module.revision}</span>
             </span>
             <i aria-hidden>{open ? "收起" : "展开"}</i>
           </button>
@@ -312,6 +352,15 @@ export function BusinessModuleLibrary({ admin }: { admin: boolean }) {
                   <span><strong>{asset.title}</strong><code>v{asset.version}</code></span>
                   <small>{asset.summary}</small>
                   <em>何时读：{asset.when_to_use}</em>
+                  <span className="skill-classification-tags">
+                    <em className="kind-business">业务知识</em>
+                    <em className="kind-form">{{ document: "文档", skill: "Skill",
+                      rule: "规则", example: "示例" }[asset.form]}</em>
+                    {asset.repositories.map((repository) => <em
+                      className="skill-repository-tag" key={repository}>
+                      {repository.replace(/\/+$/, "").split("/").at(-1)
+                        ?.replace(/\.git$/i, "") || repository}</em>)}
+                  </span>
                 </button>
                 {module.can_manage && <div>
                   <button type="button" onClick={() => void openAsset(module, asset, true)}>更新</button>
@@ -322,7 +371,8 @@ export function BusinessModuleLibrary({ admin }: { admin: boolean }) {
                   }}>归档</button>
                 </div>}
               </div>)}
-              {!liveAssets.length && <div className="business-asset-empty">还没有已发布知识。Owner 可以从一份明确、可复用的 Markdown 开始。</div>}
+              {!liveAssets.length && <div className="business-asset-empty">
+                还没有已发布知识。Owner 可以从一项明确、可复用的知识开始。</div>}
             </div>
             {document?.moduleId === module.id && <div className="business-asset-document">
               <header><strong>{document.title}</strong><button type="button"

@@ -18,7 +18,8 @@ export function matchesEventFilter(
   if (filter === "messages") {
     return event.kind === "user_message" || event.kind === "assistant_message";
   }
-  return event.kind === "tool_requested" || event.kind === "tool_finished";
+  return event.kind === "tool_requested" || event.kind === "tool_output"
+    || event.kind === "tool_finished";
 }
 
 export function filterEvents<T extends FilterableEvent>(
