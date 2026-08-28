@@ -33,6 +33,11 @@ REPO_PATH="$1"
 SHA="$2"
 TOKEN="$3"
 
+# SSE MCP 客户端已随仓收编在本目录:缺省从脚本自身目录 import,
+# 显式设了 MFC_MCP_CLIENT_DIR(如沿用 ~/.config 旧部署)则以其为准。
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+export MFC_MCP_CLIENT_DIR="${MFC_MCP_CLIENT_DIR:-$SCRIPT_DIR}"
+
 exec python3 - "$REPO_PATH" "$SHA" "$TOKEN" << 'PYEOF'
 import json
 import os

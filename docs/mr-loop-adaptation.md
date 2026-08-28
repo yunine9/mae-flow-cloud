@@ -427,11 +427,17 @@ npm run adapter -- --config adapter.json --selftest
   },
   "pipeline_status": {
     // 2026-08-28 起支持降级链(candidates,首个成功赢,逐路记因,
-    // 全败聚合)。主路=仓内收编的内网实测脚本(按 sha 直查+quality+
-    // reviewtips+MCP 日志摘要,回显 sha/pipeline_id 供宿主防陈灯
-    // 核验);备路=REST 直查 pipelines 列表(脚本机器故障时至少知道
-    // 跑没跑完)。
+    // 全败聚合)。三候选完整复刻 toolkit 的分层(源码仲裁:稳定系统
+    // 主路=MCP 网关 actual_head_pipeline 带 is_valid 语义,CLI 降级,
+    // REST 不碰):①MCP 主路(contract 直通);②内网现用脚本(v4 按
+    // sha 直查+quality CLI+reviewtips+MCP SSE 日志摘要);③裸 REST
+    // v4(toolkit 未验过的嫌疑通路,只做最后兜底)。
     "candidates": [
+      { "command": ["python3",
+          "/opt/mae-flow-cloud/deploy/adapter-tools/pipeline-status-mcp.py",
+          "--repo", "{repo}", "--sha", "{sha}", "--mr", "{mr}",
+          "--token", "{token}"],
+        "contract": true },
       { "command": ["bash",
           "/opt/mae-flow-cloud/deploy/adapter-tools/pipeline-status.sh",
           "{repo_path}", "{sha}", "{token}"],
@@ -506,12 +512,19 @@ npm run adapter -- --config adapter.json --selftest
 **脚本进仓纪律(2026-08-28 勘误)**:取数编排脚本**必须进仓版本化**
 (deploy/adapter-tools/),不再当"/etc 下的配置产物"——上一版把它们
 排除在仓外,结果文档里设计了、现场谁也没写,`pipeline/artifacts`
-空转了一个月(对比报告差距③)。现版本 pipeline-status.sh /
-pipeline-artifacts.sh 是**内网实测稳定版的收编**(逻辑零改动,只加
-sha/pipeline_id 回显、checks 的 tool/details 字段、环境变量化地址),
-依赖两样内网部署件:`~/.config/mae-flow-cloud/mcp_sse_client.py`
-(SSE MCP 客户端,**待收编进仓**)与 `mcp-token` 文件。内网的动作只剩:
-放脚本、放客户端、填 adapter.json、跑 --selftest 对拍;不写代码。
+空转了一个月(对比报告差距③)。当前四件套:
+- `pipeline-status-mcp.py`:**主路,照 toolkit 源码仲裁的架构**
+  (MCP 网关 get_project_info → actual_head_pipeline(show_job,
+  含 is_valid)→ get_pipeline_quality 增益);
+- `mcp_http_client.py`:streamable-HTTP MCP 客户端(toolkit 主路
+  同款协议;`--list-tools` 打印网关工具 inputSchema,**内网先跑它
+  对拍参数形状**,get_project_info 的入参是照报告猜的);
+- `pipeline-status.sh` / `pipeline-artifacts.sh`:内网现用版收编
+  (v4 直查,降级第二候选;artifacts 仍是唯一材料通路);
+- `mcp_sse_client.py`:日志网关的旧式 SSE 客户端(原文收编,
+  __main__ 自测段的个人路径/真实 MR 已泛化)。
+仍需内网手放的只剩 `mcp-token` 文件(与可选的 w3token 文件)。
+内网动作:放脚本目录、填 adapter.json、跑两个 selftest 对拍;不写代码。
 
 **不可修工具前置分诊**:serve 配置加 `"unfixable-tools": ["SuperChecker"]`
 (或命令行 `--unfixable-tools SuperChecker`);CODECHECK 红灯全部来自

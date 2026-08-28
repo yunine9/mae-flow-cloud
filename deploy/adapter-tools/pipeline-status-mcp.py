@@ -1,0 +1,234 @@
+#!/usr/bin/env python3
+"""流水线状态 MCP 主路(adapter pipeline_status 降级链的第一候选)。
+
+toolkit 仲裁(2026-08-28 源码实证):稳定系统查流水线走 MCP 网关的
+get_merge_request_actual_head_pipeline(带 is_valid 语义)+
+get_pipeline_quality,CLI 降级,REST 不碰。本脚本照搬那条主路,输出
+宿主契约(adapter contract:true 直通):
+  {"runs":[{status, sha, is_valid, pipeline_id, web_url,
+            checks:[{dimension,status,job,stage,tool,url,details}]}]}
+
+失败即退非零并把原因给 stderr——adapter 降级链会接住(次候选=内网
+现用 v4 脚本,末候选=裸 REST)。宁可这一路诚实死,不猜。
+
+工具入参形状(project_id / merge_request_iid / show_job)按 toolkit
+对比报告钉;get_project_info 的入参未见原文,做了 {url}→{project_path}
+两种尝试——**内网先跑 mcp_http_client.py --list-tools 把 inputSchema
+带回来钉死**,对不上的在外网改。
+
+用法: pipeline-status-mcp.py --repo <url> --sha <sha> --mr <iid>
+      --token <t>(缺 --mr 时如实失败:主路按 MR 定位,别猜)
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+import urllib.parse
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from mcp_http_client import McpHttpClient, McpHttpError, load_secret  # noqa: E402
+import os  # noqa: E402
+
+RUN_STATUS = {
+    "success": "success", "passed": "success",
+    "failed": "failed", "error": "failed", "canceled": "failed",
+    "cancelled": "failed", "skipped": "failed",
+    "running": "running", "pending": "running", "created": "running",
+    "preparing": "running", "manual": "running", "scheduled": "running",
+    "waiting_for_resource": "running",
+}
+CHECK_STATUS = {
+    "success": "success", "passed": "success",
+    "failed": "failed", "error": "failed",
+    "running": "running", "pending": "pending", "created": "pending",
+    "canceled": "canceled", "cancelled": "canceled",
+    "skipped": "skipped", "manual": "not_run", "not_run": "not_run",
+}
+# 工具名→维度(与内网现用脚本同一张表,SuperChecker 归 CODECHECK)。
+TOOL_DIMENSION = {
+    "CloudBuild2.0": "COMPILE", "build2.0": "COMPILE",
+    "codecheck": "CODECHECK", "CodeCheck": "CODECHECK",
+    "CodeCheckForTest": "CODECHECK", "codechecktest": "CODECHECK",
+    "SuperChecker": "CODECHECK", "CPP_UT": "UT",
+}
+STATUS_PRIORITY = {"failed": 60, "running": 50, "pending": 40,
+                   "canceled": 30, "success": 20, "skipped": 10,
+                   "not_run": 5}
+JOB_DIMENSION_RULES = [
+    (re.compile(r"codecheck|codeccp|superchecker|lint", re.I), "CODECHECK"),
+    (re.compile(r"\but\b|unit[_-]?test|llt|coverage", re.I), "UT"),
+    (re.compile(r"build|compile|maven|cmake|package", re.I), "COMPILE"),
+]
+
+
+def log_err(message: str) -> None:
+    print(f"[pipeline-status-mcp] {message}", file=sys.stderr)
+
+
+def map_word(raw, table, what):
+    word = str(raw or "").strip().lower()
+    if word not in table:
+        raise McpHttpError(
+            f"{what} 状态词 \"{word}\" 不认识,拒绝猜——把映射补进脚本再跑")
+    return table[word]
+
+
+def project_identity(repo_url: str) -> str:
+    path = urllib.parse.urlsplit(repo_url).path.strip("/")
+    return path[:-4] if path.endswith(".git") else path
+
+
+def resolve_project_id(client: McpHttpClient, repo_url: str) -> str:
+    """toolkit: getProjectId = MCP get_project_info → CLI fallback。
+    入参形状未见原文,{url}→{project_path} 依次试;都不行如实失败。"""
+    attempts = [
+        {"url": repo_url},
+        {"project_path": project_identity(repo_url)},
+    ]
+    errors = []
+    for arguments in attempts:
+        try:
+            info = client.call_tool("get_project_info", arguments)
+            if isinstance(info, dict):
+                for key in ("project_id", "id"):
+                    if info.get(key) is not None:
+                        return str(info[key])
+            errors.append(f"{list(arguments)}: 响应里没有 project_id/id")
+        except McpHttpError as error:
+            errors.append(f"{list(arguments)}: {error}")
+    raise McpHttpError("get_project_info 全部尝试失败: " + "; ".join(errors))
+
+
+def merge_check(picked: dict, candidate: dict) -> None:
+    existing = picked.get(candidate["dimension"])
+    if existing is None or STATUS_PRIORITY.get(candidate["status"], 0) \
+            > STATUS_PRIORITY.get(existing["status"], 0):
+        picked[candidate["dimension"]] = candidate
+
+
+def checks_from_stages(stages) -> dict:
+    picked: dict = {}
+    for stage in stages or []:
+        stage_name = str(stage.get("name") or "")
+        for job in stage.get("jobs") or []:
+            name = str(job.get("name") or "")
+            dimension = TOOL_DIMENSION.get(name)
+            if not dimension:
+                for pattern, mapped in JOB_DIMENSION_RULES:
+                    if pattern.search(f"{stage_name} {name}"):
+                        dimension = mapped
+                        break
+            if not dimension:
+                continue
+            merge_check(picked, {
+                "dimension": dimension,
+                "status": map_word(job.get("status"), CHECK_STATUS,
+                                   f"job {name}"),
+                "job": name,
+                "tool": name,
+                **({"stage": stage_name} if stage_name else {}),
+                **({"url": str(job.get("web_url"))}
+                   if job.get("web_url") else {}),
+            })
+    return picked
+
+
+def enrich_from_quality(client, project_id, pipeline_id, picked) -> None:
+    """get_pipeline_quality → 逐工具状态与指标明细(增益路,失败不拦)。"""
+    try:
+        quality = client.call_tool("get_pipeline_quality", {
+            "project_id": project_id, "pipeline_id": pipeline_id})
+    except McpHttpError as error:
+        log_err(f"质量增益路失败(忽略): {error}")
+        return
+    rows = (quality or {}).get("codequality_check") \
+        if isinstance(quality, dict) else None
+    if not isinstance(rows, list):
+        rows = (quality or {}).get("checks") \
+            if isinstance(quality, dict) else None
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        tool = str(row.get("tool") or row.get("tool_name") or "")
+        dimension = TOOL_DIMENSION.get(tool)
+        if not dimension:
+            continue
+        raw_status = str(row.get("status") or "").lower()
+        candidate = {
+            "dimension": dimension,
+            "status": CHECK_STATUS.get(raw_status) or "pending",
+            "job": tool, "tool": tool,
+            **({"url": str(row.get("log_url"))}
+               if row.get("log_url") else {}),
+        }
+        details = []
+        for metric in row.get("metrics") or []:
+            field = metric.get("field")
+            if not field:
+                continue
+            details.append({
+                "message": f"{field}={metric.get('real', '')}"
+                           f"(期望{metric.get('expected', '')})"
+                           + ("[超限]" if metric.get("exceeded") else ""),
+                "tool": tool,
+            })
+        if details:
+            candidate["details"] = details[:50]
+        merge_check(picked, candidate)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--repo", required=True)
+    parser.add_argument("--sha", required=True)
+    parser.add_argument("--mr", default="")
+    parser.add_argument("--token", default="")
+    parser.add_argument("--w3token-file",
+                        default=os.environ.get("MFC_W3TOKEN_FILE", ""))
+    args = parser.parse_args()
+    if not args.mr:
+        # 主路按 MR 定位(actual_head_pipeline 的语义就是"MR 头上的
+        # 流水线");没有 MR 号时这一路诚实退场,降级链走 sha 直查候选。
+        log_err("缺 --mr:MCP 主路按 MR 定位,交给降级链的 sha 直查候选")
+        return 2
+    client = McpHttpClient(token=args.token,
+                           w3token=load_secret(args.w3token_file))
+    client.initialize()
+    project_id = resolve_project_id(client, args.repo)
+    pipeline = client.call_tool(
+        "get_merge_request_actual_head_pipeline",
+        {"project_id": project_id, "merge_request_iid": args.mr,
+         "show_job": True})
+    if not isinstance(pipeline, dict) or not pipeline:
+        # 平台明说没有流水线:空 runs,宿主继续等,不算这一路失败。
+        print(json.dumps({"runs": []}, ensure_ascii=False))
+        return 0
+    picked = checks_from_stages(pipeline.get("stages"))
+    pipeline_id = str(pipeline.get("id") or "")
+    if pipeline_id:
+        enrich_from_quality(client, project_id, pipeline_id, picked)
+    run = {
+        "status": map_word(pipeline.get("status"), RUN_STATUS, "pipeline"),
+        # is_valid 是这条主路的灵魂:false=MR 头上无有效流水线、挂的是
+        # 陈灯——原样回显,宿主 selectTerminalRun 机械拒收。
+        **({"is_valid": bool(pipeline.get("is_valid"))}
+           if "is_valid" in pipeline else {}),
+        **({"sha": str(pipeline.get("sha"))} if pipeline.get("sha") else {}),
+        **({"pipeline_id": pipeline_id} if pipeline_id else {}),
+        **({"web_url": str(pipeline.get("web_url"))}
+           if pipeline.get("web_url") else {}),
+        **({"checks": list(picked.values())} if picked else {}),
+    }
+    print(json.dumps({"runs": [run]}, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except McpHttpError as error:
+        log_err(str(error))
+        sys.exit(2)

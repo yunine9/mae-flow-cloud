@@ -180,9 +180,14 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
   导致 artifacts 链空转一个月;我按报告猜写的三个脚本(标准
   streamable-HTTP MCP)与内网真实形态(自定义 SSE 客户端)不符,已删;
   **收编件曾被误称"实测稳定版"——它来自修复环不稳的这一侧,其
-  `codehub-y/api/v4` 取数路来路未证,且与能力核对报告钉的 /api/v3
-  形状相互矛盾(2026-08-28 用户点破),哪条是 toolkit 稳定跑的路
-  待其源码仲裁,在那之前 v4 这条按"嫌疑人"对待**;④SuperChecker 类**不可修工具前置分诊**(serve
+  `codehub-y/api/v4` 取数路来路未证(2026-08-28 用户点破)。toolkit
+  源码仲裁已回:稳定系统主路=MCP 网关 actual_head_pipeline(带
+  is_valid),CLI 降级,REST 只建 MR 一处(v3);v4 是 CodeHub 的
+  GitLab 兼容层,toolkit 从没走过。已按仲裁重排:新增
+  pipeline-status-mcp.py(主路,streamable-HTTP 客户端
+  mcp_http_client.py 带 --list-tools 自描述对拍)做第一候选,现用
+  v4 脚本降为第二候选,裸 REST 第三;SSE 日志客户端 mcp_sse_client.py
+  原文收编(个人路径/真实 MR 已泛化)**;④SuperChecker 类**不可修工具前置分诊**(serve
   `--unfixable-tools`,全体命中且有 tool 证据才不派修复,拿不准照常派;
   内网工具→维度映射表里 SuperChecker 归 CODECHECK,名单可直接用)。
   边界如实记:脚本依赖内网部署件 mcp_sse_client.py(在
