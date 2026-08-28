@@ -7280,8 +7280,45 @@ body, .sidebar, .identity-bar, .launch-copy, .user-create-copy,
 .wish-form-message.error { color: var(--danger); }
 
 .wish-board { padding-top: 4px; }
-.wish-board-toolbar { margin-bottom: 16px; display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; }
-.wish-board-toolbar h2 { margin: 6px 0 0; color: var(--text-strong); font-size: 22px; letter-spacing: -.025em; }
+.wish-board-overview {
+  padding: 19px 21px;
+  display: grid;
+  grid-template-columns: minmax(250px, .8fr) minmax(520px, 1.35fr);
+  align-items: center;
+  gap: 24px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
+}
+.wish-board-heading h2 { margin: 6px 0 5px; color: var(--text-strong); font-size: 22px; letter-spacing: -.025em; }
+.wish-board-heading p { max-width: 450px; margin: 0; color: var(--muted); font-size: var(--font-size-assist); line-height: 1.55; }
+.wish-status-filters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.wish-status-filters button {
+  min-width: 0;
+  min-height: 48px;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--muted);
+  background: var(--surface-soft);
+  font: inherit;
+  font-size: var(--font-size-assist);
+  font-weight: 700;
+  cursor: pointer;
+}
+.wish-status-filters button strong { color: var(--text-strong); font-size: 17px; }
+.wish-status-filters button:hover { border-color: var(--line-strong); background: var(--surface-muted); }
+.wish-status-filters button.on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); background: var(--accent-soft); box-shadow: inset 3px 0 var(--accent); }
+.wish-status-filters button.on.is-done { color: var(--success); border-color: color-mix(in srgb, var(--success) 35%, var(--line)); background: var(--success-soft); box-shadow: inset 3px 0 var(--success); }
+.wish-status-filters button.on.is-declined { color: var(--muted); border-color: var(--line-strong); background: var(--surface-muted); box-shadow: inset 3px 0 var(--faint); }
+.wish-board-toolbar { margin: 10px 0 11px; display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.wish-result-count { color: var(--faint); font-size: var(--font-size-assist); }
+.wish-result-count strong { color: var(--text); }
 .wish-filters { display: flex; gap: 8px; }
 .wish-filters > div { padding: 3px; display: flex; gap: 2px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
 .wish-filters button { min-height: 31px; padding: 0 11px; border: 0; border-radius: 7px; color: var(--muted); background: transparent; font: inherit; font-size: var(--font-size-assist); font-weight: 700; cursor: pointer; }
@@ -7294,42 +7331,53 @@ body, .sidebar, .identity-bar, .launch-copy, .user-create-copy,
 .wish-loading-dot { width: 12px; height: 12px; border: 2px solid var(--line-strong); border-top-color: var(--accent); border-radius: 50%; animation: wishSpin .8s linear infinite; }
 @keyframes wishSpin { to { transform: rotate(360deg); } }
 .wish-empty > span { font-size: 34px; }.wish-empty strong { color: var(--text-strong); font-size: 16px; }.wish-empty p { margin: 0; font-size: var(--font-size-assist); }
-.wish-card-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 15px; }
-.wish-load-state + .wish-card-grid, .wish-empty + .wish-card-grid { margin-top: 15px; }
+.wish-card-list { display: grid; gap: 8px; }
+.wish-load-state + .wish-card-list, .wish-empty + .wish-card-list { margin-top: 15px; }
 .wish-card {
   --wish-tone: var(--accent);
   position: relative;
   min-width: 0;
-  padding: 22px 22px 17px;
+  min-height: 98px;
+  padding: 16px 17px;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 13px;
   overflow: hidden;
   border: 1px solid var(--line);
-  border-top: 3px solid color-mix(in srgb, var(--wish-tone) 62%, var(--line));
-  border-radius: 15px;
-  background: linear-gradient(160deg, color-mix(in srgb, var(--wish-tone) 5%, var(--surface)), var(--surface) 48%);
-  box-shadow: var(--shadow-xs);
-  transition: transform var(--ease), box-shadow var(--ease), border-color var(--ease);
+  border-radius: 13px;
+  background: var(--surface);
+  transition: box-shadow var(--ease), border-color var(--ease), background var(--ease);
 }
 .wish-card.issue { --wish-tone: var(--attention); }
-.wish-card.tone-1 { --wish-tone: #7a69d9; }.wish-card.issue.tone-1 { --wish-tone: #da7b60; }
-.wish-card.tone-2 { --wish-tone: #3c9a7e; }.wish-card.issue.tone-2 { --wish-tone: #d2923e; }
-.wish-card.tone-3 { --wish-tone: #a36cad; }.wish-card.issue.tone-3 { --wish-tone: #c75f70; }
-.wish-card:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--wish-tone) 30%, var(--line)); box-shadow: var(--shadow-sm); }
-.wish-card-pin { position: absolute; top: -4px; left: 50%; width: 29px; height: 7px; transform: translateX(-50%) rotate(-1deg); border-radius: 2px; background: color-mix(in srgb, var(--wish-tone) 48%, transparent); opacity: .55; }
-.wish-card > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.wish-card:hover { border-color: color-mix(in srgb, var(--wish-tone) 27%, var(--line)); box-shadow: var(--shadow-xs); }
+.wish-card.is-expanded { border-color: color-mix(in srgb, var(--wish-tone) 30%, var(--line)); background: linear-gradient(140deg, color-mix(in srgb, var(--wish-tone) 3%, var(--surface)), var(--surface) 35%); box-shadow: var(--shadow-xs); }
+.wish-card-mark { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 11px; background: color-mix(in srgb, var(--wish-tone) 10%, var(--surface-soft)); font-size: 18px; }
+.wish-card-body { min-width: 0; }
+.wish-card-body > header { display: flex; align-items: center; gap: 9px; }
 .wish-kind, .wish-status { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 800; }
 .wish-kind { color: var(--wish-tone); letter-spacing: .03em; }
+.wish-card-meta { min-width: 0; display: flex; align-items: center; gap: 6px; color: var(--faint); font-size: 11px; }
+.wish-card-meta strong { max-width: 130px; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+.wish-card-meta i { font-style: normal; }
 .wish-status { padding: 4px 8px; border-radius: 999px; color: var(--muted); background: var(--surface-muted); }
 .wish-status i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .wish-status.is-open { color: var(--attention); background: var(--attention-soft); }
 .wish-status.is-accepted { color: var(--accent); background: var(--accent-soft); }
 .wish-status.is-done { color: var(--success); background: var(--success-soft); }
 .wish-status.is-declined { color: var(--muted); background: var(--surface-muted); }
-.wish-card h3 { margin: 15px 0 8px; color: var(--text-strong); font-size: 18px; line-height: 1.45; letter-spacing: -.015em; overflow-wrap: anywhere; }
-.wish-card-detail { margin: 0 0 15px; color: var(--muted); font-size: var(--font-size-body); line-height: 1.72; white-space: pre-wrap; overflow-wrap: anywhere; }
-.wish-card-images { margin: 15px 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; overflow: hidden; border-radius: 10px; }
-.wish-card-images.count-1 { grid-template-columns: 1fr; }.wish-card-images.count-3 button:first-child { grid-row: span 2; }
-.wish-card-images button { min-width: 0; min-height: 96px; max-height: 210px; padding: 0; overflow: hidden; border: 0; background: var(--surface-muted); cursor: zoom-in; }
-.wish-card-images.count-1 button { height: 210px; }.wish-card-images img { width: 100%; height: 100%; display: block; object-fit: cover; transition: transform 220ms ease; }.wish-card-images button:hover img { transform: scale(1.025); }
+.wish-card h3 { margin: 6px 0 4px; color: var(--text-strong); font-size: 16px; line-height: 1.42; letter-spacing: -.01em; overflow-wrap: anywhere; }
+.wish-card-detail { margin: 0; display: -webkit-box; overflow: hidden; color: var(--muted); font-size: var(--font-size-assist); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.wish-image-count { margin-top: 6px; display: inline-block; color: var(--faint); font-size: 11px; }
+.wish-decision-preview { min-width: 0; margin: 7px 0 0; padding-left: 9px; display: flex; gap: 7px; overflow: hidden; border-left: 2px solid var(--accent); color: var(--muted); font-size: 11px; line-height: 1.45; white-space: nowrap; }
+.wish-decision-preview.is-done { border-left-color: var(--success); }.wish-decision-preview.is-declined { border-left-color: var(--faint); }
+.wish-decision-preview strong { flex: 0 0 auto; color: var(--text); }.wish-decision-preview span { overflow: hidden; text-overflow: ellipsis; }
+.wish-card-side { min-width: 265px; align-self: stretch; display: flex; flex-direction: column; align-items: flex-end; justify-content: space-between; gap: 13px; }
+.wish-card-expanded { grid-column: 2 / -1; min-width: 0; padding-top: 14px; border-top: 1px solid var(--line); }
+.wish-card-full-detail { margin: 0 0 13px; color: var(--muted); font-size: var(--font-size-body); line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.wish-card-images { margin: 0 0 15px; display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 180px)); gap: 7px; }
+.wish-card-images button { height: 120px; min-width: 0; padding: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-muted); cursor: zoom-in; }
+.wish-card-images img { width: 100%; height: 100%; display: block; object-fit: cover; transition: transform 220ms ease; }.wish-card-images button:hover img { transform: scale(1.025); }
 .wish-status-path { margin: 17px 0 2px; display: grid; grid-template-columns: auto 1fr auto 1fr auto; align-items: center; gap: 7px; color: var(--faint); }
 .wish-status-path span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; font-size: 11px; font-weight: 700; }
 .wish-status-path span i { width: 8px; height: 8px; border: 2px solid currentColor; border-radius: 50%; box-sizing: border-box; }
@@ -7338,10 +7386,7 @@ body, .sidebar, .identity-bar, .launch-copy, .user-create-copy,
 .wish-decision { margin: 14px 0 0; padding: 11px 13px; border: 0; border-left: 3px solid var(--accent); border-radius: 0 9px 9px 0; background: var(--accent-soft); }
 .wish-decision.is-done { border-left-color: var(--success); background: var(--success-soft); }.wish-decision.is-declined { border-left-color: var(--faint); background: var(--surface-muted); }
 .wish-decision > span { color: var(--muted); font-size: 11px; font-weight: 800; }.wish-decision p { margin: 4px 0; color: var(--text); font-size: var(--font-size-assist); line-height: 1.55; white-space: pre-wrap; }.wish-decision footer { color: var(--faint); font-size: 11px; }
-.wish-card-foot { margin-top: 17px; padding-top: 13px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); }
-.wish-author { min-width: 0; display: flex; align-items: center; gap: 8px; }.wish-author > i { width: 29px; height: 29px; flex: 0 0 29px; display: grid; place-items: center; border-radius: 9px; color: var(--wish-tone); background: color-mix(in srgb, var(--wish-tone) 12%, var(--surface)); font-size: 12px; font-style: normal; font-weight: 800; }
-.wish-author > span { min-width: 0; display: grid; }.wish-author strong { overflow: hidden; color: var(--text); font-size: 12px; text-overflow: ellipsis; }.wish-author small { color: var(--faint); font-size: 11px; }
-.wish-card-actions { display: flex; align-items: center; gap: 5px; }.wish-card-actions button { min-height: 30px; padding: 0 9px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); background: var(--surface); font: inherit; font-size: 12px; font-weight: 750; cursor: pointer; }.wish-card-actions button:hover { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }.wish-card-actions button:disabled { opacity: .55; cursor: wait; }
+.wish-card-actions { display: flex; align-items: center; justify-content: flex-end; gap: 5px; }.wish-card-actions button { min-height: 30px; padding: 0 9px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); background: var(--surface); font: inherit; font-size: 12px; font-weight: 750; white-space: nowrap; cursor: pointer; }.wish-card-actions button:hover { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }.wish-card-actions button:disabled { opacity: .55; cursor: wait; }
 .wish-vote span { margin-right: 4px; color: var(--accent); font-size: 16px; }.wish-vote.on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 34%, var(--line)); background: var(--accent-soft); }.wish-card-actions .wish-remove { width: 31px; padding: 0; letter-spacing: 1px; }
 
 .wish-lightbox, .wish-manage-backdrop { position: fixed; z-index: 1000; inset: 0; padding: 24px; display: grid; place-items: center; background: rgba(5, 8, 14, .77); backdrop-filter: blur(8px); }
@@ -7356,7 +7401,9 @@ body, .sidebar, .identity-bar, .launch-copy, .user-create-copy,
 
 @media (max-width: 840px) {
   .wish-hero { min-height: 0; padding: 27px; }.wish-hero-orbit { width: 120px; height: 120px; flex-basis: 120px; }.wish-hero-orbit i { width: 76px; height: 76px; font-size: 13px; }
-  .wish-composer-foot { flex-wrap: wrap; }.wish-paste-hint { min-width: 250px; }.wish-card-grid { grid-template-columns: 1fr; }
+  .wish-composer-foot { flex-wrap: wrap; }.wish-paste-hint { min-width: 250px; }
+  .wish-board-overview { grid-template-columns: 1fr; gap: 15px; }
+  .wish-card-side { min-width: 230px; }
 }
 @media (max-width: 620px) {
   /* 团队入口增至七枚；窄屏保持同屏，不能挤出整页横向滚动。 */
@@ -7364,7 +7411,7 @@ body, .sidebar, .identity-bar, .launch-copy, .user-create-copy,
   .wish-wall { gap: 17px; }.wish-hero { padding: 22px; border-radius: 17px; }.wish-hero-copy h2 { font-size: 26px; }.wish-hero-copy > p { font-size: 14px; }.wish-hero-orbit { display: none; }.wish-hero-stats { margin-top: 17px; }
   .wish-composer { padding: 18px; border-radius: 15px; }.wish-composer-head { align-items: flex-start; flex-direction: column; }.wish-kind-toggle { width: 100%; box-sizing: border-box; }.wish-kind-toggle button { flex: 1; padding: 0 7px; }.wish-image-drafts { grid-template-columns: repeat(2, minmax(0, 1fr)); }.wish-paste-hint { order: 3; min-width: 100%; line-height: 1.55; }.wish-submit { margin-left: auto; }
   .wish-board-toolbar { align-items: flex-start; flex-direction: column; }.wish-filters { width: 100%; }.wish-filters > div { flex: 1; }.wish-filters button { flex: 1; padding: 0 8px; }.wish-filters select { max-width: 120px; }
-  .wish-card { padding: 19px 16px 14px; }.wish-card-images.count-1 button { height: 180px; }.wish-status-path { gap: 4px; }.wish-status-path span { font-size: 10px; }.wish-card-foot { align-items: flex-end; }
+  .wish-card { padding: 15px; grid-template-columns: 38px minmax(0, 1fr); }.wish-card-mark { width: 36px; height: 36px; }.wish-card-side { grid-column: 2; min-width: 0; align-items: flex-start; }.wish-card-actions { justify-content: flex-start; flex-wrap: wrap; }.wish-card-expanded { grid-column: 2; }.wish-card-images { grid-template-columns: repeat(2, minmax(0, 1fr)); }.wish-status-path { gap: 4px; }.wish-status-path span { font-size: 10px; }
   .wish-manage-backdrop { padding: 12px; align-items: end; }.wish-manage-dialog { max-height: 88vh; padding: 19px; overflow: auto; border-radius: 16px 16px 8px 8px; }.wish-status-options { grid-template-columns: 1fr; }
 }
 
