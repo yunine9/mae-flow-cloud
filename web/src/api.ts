@@ -2328,6 +2328,8 @@ export interface IssueSummary {
   source: "manual" | "dts";
   ticket?: string;
   repo_url?: string;
+  /** 全部关联仓(彼此平等;与 repo_url 由服务端 dual-write 保持一致)。 */
+  repo_urls?: string[];
   module?: string;
   mode?: IssueFlowMode;
   scenario?: IssueScenario;
@@ -2344,6 +2346,8 @@ export interface IssueSummary {
     deadline: string;
     last_error?: string;
     round: number;
+    /** 终态落账的检查项(服务端 settlePipeline 存);失败项据此呈现。 */
+    checks?: Array<{ dimension: string; status: string; job?: string; url?: string }>;
   }>;
   converted_from?: string;
   converted_to?: string;

@@ -1974,8 +1974,78 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--phase-color) 24%, transparent),
               0 4px 12px color-mix(in srgb, var(--phase-color) 30%, transparent);
 }
-.issue-session-mr { padding: 9px 13px; border-radius: 9px; background: color-mix(in srgb, var(--accent) 7%, transparent); color: var(--accent); font-size: var(--font-size-assist); }
-.issue-session-mr a { color: inherit; }
+/* ---- 逐仓交付区(一仓一 MR):每个关联仓一张卡 ----
+   卡片信息架构:仓名 + 角色词(变更仓/未交付,口径=有无推送记录)+
+   流水线徽标(绿/红/运行中,只认 pipelines 该仓的 status),事实行是
+   MR 链接与分支、推送 SHA;失败时附 last_error 与失败项。 */
+.issue-repo-delivery {
+  display: grid;
+  gap: 8px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.issue-repo-delivery-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.issue-repo-delivery-head strong { font-size: var(--font-size-assist); }
+.issue-repo-delivery-head > span { color: var(--faint); font-size: var(--font-size-dense); }
+.issue-repo-delivery-head .issue-repo-converted { color: var(--muted); }
+.issue-repo-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 8px;
+}
+.issue-repo-card {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-muted);
+  font-size: var(--font-size-assist);
+}
+.issue-repo-card header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.issue-repo-name { font: 700 var(--font-size-assist) var(--font-mono); overflow-wrap: anywhere; }
+.issue-repo-role { padding: 1px 8px; border-radius: 999px; font-size: var(--font-size-dense); font-weight: 700; white-space: nowrap; }
+.issue-repo-role.delivered { color: var(--success); background: var(--success-soft); }
+.issue-repo-role.undelivered { color: var(--faint); border: 1px dashed var(--line); }
+.issue-repo-badge {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.issue-repo-badge i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.issue-repo-badge.success { color: var(--success); background: var(--success-soft); }
+.issue-repo-badge.failed { color: var(--danger); background: var(--danger-soft); }
+.issue-repo-badge.running { color: var(--active); background: var(--active-soft); }
+.issue-repo-badge.running i { animation: statusBlink 1.35s ease-in-out infinite; }
+.issue-repo-facts { display: flex; gap: 4px 14px; flex-wrap: wrap; color: var(--muted); overflow-wrap: anywhere; }
+.issue-repo-facts a { color: var(--accent); }
+.issue-repo-facts .empty { color: var(--faint); }
+.issue-repo-pipeline-error { display: grid; gap: 2px; color: var(--danger); overflow-wrap: anywhere; }
+/* 材料页签:工作区变更按仓分片的切换条(全部合并 = 旧视图)。 */
+.issue-diff-repo-switch { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.issue-diff-repo-switch button {
+  padding: 4px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: var(--font-size-assist);
+  font-weight: 600;
+  cursor: pointer;
+}
+.issue-diff-repo-switch button.on {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
 
 /* ---- 固定流程:阶段管道(计划线;固定模式下的唯一阶段条) ----
    视觉对齐需求工作台的 task-phase-track:节点在上、词签在下,细连线

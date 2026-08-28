@@ -57,6 +57,14 @@ import {
 } from "../eventView";
 import { atBottom, backlog } from "../follow";
 import { prepareDtsHtml } from "./dtsHtml";
+import {
+  repoDeliveryRows,
+  repoName,
+  repoPipelineBadge,
+  repoRole,
+  splitDiffByRepo,
+  type RepoDeliveryRow,
+} from "./perRepo";
 import { formatWait } from "../taskTime";
 import { startVisiblePolling } from "../visiblePolling";
 import { formatLocalClock, formatLocalDateTime } from "../time";
@@ -236,15 +244,25 @@ function IssueCard({ issue, active, onOpen }: {
           <path d="M6 3.5h6.5V10M12.25 3.75 5 11" />
         </svg>
       </button>
-      {issue.mrs?.[0]?.url && <a href={issue.mrs[0].url} target="_blank" rel="noreferrer">
-        <span>合入请求{issue.mrs.length > 1 ? ` · ${issue.mrs.length} 个` : ""}</span>
-        <svg viewBox="0 0 16 16" aria-hidden>
-          <path d="M6 3.5h6.5V10M12.25 3.75 5 11" />
-        </svg>
-      </a>}
+      {/* 多 MR 摘要:一仓一 MR,每个仓的 MR 各占一个链接(仓名 + iid),
+          不再只显首个;没拿到 url 的(创建中途)如实落回文本。 */}
+      {issue.mrs?.map((mr) => {
+        const label = `${repoName(mr.repo)}${mr.iid ? ` !${mr.iid}` : ""}`;
+        return mr.url
+          ? <a key={mr.repo} href={mr.url} target="_blank" rel="noreferrer"
+              title={`${mr.title}(分支 ${mr.branch})`}>
+              <span>MR · {label}</span>
+              <svg viewBox="0 0 16 16" aria-hidden>
+                <path d="M6 3.5h6.5V10M12.25 3.75 5 11" />
+              </svg>
+            </a>
+          : <span key={mr.repo} className="meta-fact"
+              title={mr.title}>MR · {label}(分支 {mr.branch})</span>;
+      })}
       {(issue.pushes?.length ?? 0) > 0 && <span className="meta-fact">
-        已推送 · {issue.pushes![0].branch}@{issue.pushes![0].sha.slice(0, 10)}
-        {issue.pushes!.length > 1 ? ` 等 ${issue.pushes!.length} 仓` : ""}</span>}
+        {issue.pushes!.length === 1
+          ? `已推送 · ${issue.pushes![0].branch}@${issue.pushes![0].sha.slice(0, 10)}`
+          : `已推送 · ${issue.pushes!.length} 个仓`}</span>}
       {issue.error && <span className="meta-fact">{issue.error.slice(0, 80)}</span>}
     </div>
 
@@ -1305,19 +1323,9 @@ function IssueSessionView({
         && <button type="button" className="issue-error-action"
           onClick={onNavigateProfile}>去个人设置配置令牌</button>}
     </div>}
-    {(detail.mrs?.length ?? 0) > 0 && <div className="issue-session-mr">
-      MR({detail.mrs!.length}):{detail.mrs!.map((mr, index) => <span
-        key={mr.url ?? index} className="issue-mr-item">
-        {mr.url
-          ? <a href={mr.url} target="_blank" rel="noreferrer">{mr.url}</a>
-          : mr.title}
-        (分支 {mr.branch})
-      </span>)}
-    </div>}
-    {(detail.pushes?.length ?? 0) > (detail.mrs?.length ?? 0) && <div className="issue-session-mr">
-      已推送 {detail.pushes!.length} 个仓:{detail.pushes!.map((push) =>
-        `${push.branch}@${push.sha.slice(0, 8)}`).join("、")}
-    </div>}
+    {/* 逐仓交付区:每个关联仓一张卡(仓名/角色/MR/分支/流水线状态)。
+        事实全部由 perRepo.ts 从 API 字段派生,组件只渲染。 */}
+    <IssueRepoDelivery detail={detail} />
 
     <IssueCostPanel id={detail.id} />
 
@@ -1347,6 +1355,64 @@ function IssueSessionView({
     </div>
     </div>
   </section>;
+}
+
+/** 逐仓交付区(一仓一 MR):每个关联仓一张卡——仓名/角色(变更仓·
+ * 未交付)/MR 链接与分支/流水线状态徽标(绿/红含失败项/运行中)。
+ * 角色与徽标的口径都出自 perRepo.ts(有推送记录=已交付;流水线只认
+ * pipelines 该仓的 status),前端不推断、不硬造状态。 */
+function IssueRepoDelivery({ detail }: { detail: IssueDetail }) {
+  const rows = useMemo(() => repoDeliveryRows(detail), [detail]);
+  if (rows.length === 0) return null;
+  return <section className="issue-repo-delivery" aria-label="逐仓交付">
+    <div className="issue-repo-delivery-head">
+      <strong>逐仓交付</strong>
+      <span>一仓一 MR:每个变更仓各自建分支、各自提 MR、各看流水线</span>
+      {/* 转正而来的会话:逐仓账不跨会话搬运,原会话的交付账留在原地——
+          这里如实指出去向,不把旧账伪装成本会话的事实。 */}
+      {detail.converted_from && <span className="issue-repo-converted">
+        转正自 {detail.converted_from}——原会话的逐仓交付账留在原会话
+      </span>}
+    </div>
+    <div className="issue-repo-cards">
+      {rows.map((row) => <RepoDeliveryCard key={row.repo} row={row} />)}
+    </div>
+  </section>;
+}
+
+function RepoDeliveryCard({ row }: { row: RepoDeliveryRow }) {
+  const badge = repoPipelineBadge(row);
+  const role = repoRole(row);
+  const mrLabel = row.mr
+    ? `${row.mr.iid ? `!${row.mr.iid} ` : ""}${row.mr.branch}`
+    : "";
+  return <article className="issue-repo-card">
+    <header>
+      <strong className="issue-repo-name" title={row.repo}>{row.name}</strong>
+      <span className={`issue-repo-role ${role.tone}`} title={role.title}>
+        {role.tag}</span>
+      {badge && <span className={`issue-repo-badge ${badge.tone}`}>
+        <i aria-hidden />{badge.label}</span>}
+    </header>
+    <div className="issue-repo-facts">
+      {row.mr && (row.mr.url
+        ? <a href={row.mr.url} target="_blank" rel="noreferrer"
+            title={row.mr.title}>MR {mrLabel}</a>
+        : <span title={row.mr.title}>MR {mrLabel}</span>)}
+      {row.push && <span>
+        已推送 {row.push.branch}@{row.push.sha.slice(0, 10)}</span>}
+      {!row.mr && !row.push && <span className="empty">
+        该仓还没有推送与 MR 记录</span>}
+    </div>
+    {/* last_error 不只跟 failed 走:轮询预算耗尽时 status 仍是 running、
+        但监看已停——两个字段都如实示人,不替服务端下结论。 */}
+    {(row.pipeline?.last_error || (row.pipeline?.failedChecks.length ?? 0) > 0)
+      && <div className="issue-repo-pipeline-error">
+        {row.pipeline?.last_error && <span>{row.pipeline.last_error}</span>}
+        {(row.pipeline?.failedChecks.length ?? 0) > 0
+          && <span>失败项:{row.pipeline!.failedChecks.join("、")}</span>}
+      </div>}
+  </article>;
 }
 
 /** 固定流程的阶段管道(计划线):视觉对齐需求工作台的 task-phase-track
@@ -1507,6 +1573,13 @@ function IssueMaterialsPane({ detail, busy, view, onView, onNotifyAI }: {
   const [data, setData] = useState<IssueMaterials>();
   const [note, setNote] = useState("");
   const [allDiff, setAllDiff] = useState("");
+  // 逐仓分片:聚合 diff 按服务端自己的分段标记(service.workspaceDiffAll
+  // 写入的「===== 仓库 <名> =====」)切成每仓一段;"" = 合并视图(缺省,
+  // 与旧版一致)。不带 path 的聚合接口一次拿全,前端只做切片渲染。
+  const [diffSections, setDiffSections] = useState<
+    Array<{ name: string; diff: string }>
+  >([]);
+  const [diffRepo, setDiffRepo] = useState("");
   // 快速修改:选中文件 → 编辑器;undefined 表示未选中。
   const [activeFile, setActiveFile] = useState<string>();
   const [content, setContent] = useState<string>();
@@ -1520,8 +1593,16 @@ function IssueMaterialsPane({ detail, busy, view, onView, onNotifyAI }: {
         getIssueMaterials(detail.id),
         getIssueFileDiff(detail.id),
       ]);
+      const sections = splitDiffByRepo(diff.diff);
       setData(materials);
       setAllDiff(diff.diff);
+      setDiffSections(sections);
+      // 手选的仓刷新后仍在清单里才保留;仓的改动清零了就回合并视图。
+      setDiffRepo((current) => current
+        && (sections.some((section) => section.name === current)
+          || materials.changes.some((change) =>
+            change.path.split(/[\\/]/)[0] === current))
+        ? current : "");
       setNote("");
     } catch (reason) {
       setNote(String(reason instanceof Error ? reason.message : reason));
@@ -1581,6 +1662,23 @@ function IssueMaterialsPane({ detail, busy, view, onView, onNotifyAI }: {
 
   const changes = data?.changes ?? [];
 
+  // 可切的仓 = diff 分段名 ∪ 变更清单路径首段(服务端 listMaterials 给
+  // 每条变更加 <仓名>/ 前缀)。两者都来自 API 输出,前端不猜仓清单。
+  const diffRepos = useMemo(() => {
+    const names: string[] = [];
+    for (const section of diffSections) {
+      if (section.name && !names.includes(section.name)) names.push(section.name);
+    }
+    for (const change of changes) {
+      const head = change.path.split(/[\\/]/)[0];
+      if (head && !names.includes(head)) names.push(head);
+    }
+    return names;
+  }, [diffSections, changes]);
+  const activeDiff = diffRepo
+    ? diffSections.find((section) => section.name === diffRepo)?.diff ?? ""
+    : allDiff;
+
   return <div className="issue-materials">
     <div className="ws-pane-head">
       <div><span>材料清单</span><strong>会话材料</strong></div>
@@ -1604,15 +1702,27 @@ function IssueMaterialsPane({ detail, busy, view, onView, onNotifyAI }: {
       </div>
     </div>
     {note && <div className="utility-note">{note}</div>}
-    {view === "changes" && <>
-      {detail.status === "running" && <div className="utility-note">
-        AI 正在运行:此刻的编辑可能被它覆盖,建议空闲/等待时再改。
-      </div>}
-      <div className="ws-doc">
-        {allDiff
-          ? <GitDiff text={allDiff} hideKey={detail.id} />
-          : <div className="utility-note">工作区当前没有改动。</div>}
-      </div>
+      {view === "changes" && <>
+        {detail.status === "running" && <div className="utility-note">
+          AI 正在运行:此刻的编辑可能被它覆盖,建议空闲/等待时再改。
+        </div>}
+        {diffRepos.length > 1 && <div className="issue-diff-repo-switch" role="group"
+            aria-label="按仓查看工作区变更">
+          <button type="button" className={diffRepo === "" ? "on" : ""}
+            onClick={() => setDiffRepo("")}>全部合并</button>
+          {diffRepos.map((name) => (
+            <button type="button" key={name}
+              className={diffRepo === name ? "on" : ""}
+              onClick={() => setDiffRepo(name)}>{name}</button>
+          ))}
+        </div>}
+        <div className="ws-doc">
+          {activeDiff
+            ? <GitDiff text={activeDiff} hideKey={detail.id} />
+            : <div className="utility-note">
+                {diffRepo ? "该仓当前没有可展示的改动。" : "工作区当前没有改动。"}
+              </div>}
+        </div>
       <div className="issue-materials-editor">
         <div className="issue-materials-editor-bar">
           <strong>快速修改</strong>
