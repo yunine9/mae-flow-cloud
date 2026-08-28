@@ -520,6 +520,33 @@ function resolveDtsImages(html: string | undefined): string {
   return html;
 }
 
+/** 从版本串里解 (R 版, C 版),如 "MAE-Access V100R025C10SPC210B002"
+ * → [25, 10]。解不出的返回 undefined(排序时垫底)。 */
+function dtsVersionKey(version: string): [number, number] | undefined {
+  const match = /R0*(\d+)C0*(\d+)/i.exec(version);
+  return match ? [Number(match[1]), Number(match[2])] : undefined;
+}
+
+/** 版本降序:先比 R 版,R 同再比 C 版;都解不出的按字典序垫底。 */
+function sortDtsVersionsDesc(versions: string[]): string[] {
+  return [...versions].sort((a, b) => {
+    const ka = dtsVersionKey(a);
+    const kb = dtsVersionKey(b);
+    if (ka && kb) return (kb[0] - ka[0]) || (kb[1] - ka[1]);
+    if (ka) return -1;
+    if (kb) return 1;
+    return a.localeCompare(b);
+  });
+}
+
+/** 输入是否像 DTS 单号(字母开头 + 含数字,总长 >=5),支持逗号/空格
+ * 分隔多个,如 "DTS2026082671269" 或 "DTS123,DTS456"。 */
+function dtsNoCandidates(query: string): string[] {
+  return query.split(/[,，、\s]+/).map((token) => token.trim())
+    .filter((token) => /^[A-Za-z][A-Za-z0-9_-]{4,}$/.test(token)
+      && /\d/.test(token));
+}
+
 function DtsRegister({
   viewer,
   onCreated,
@@ -547,9 +574,10 @@ function DtsRegister({
   const credentialBlocked = touchRemoteRepo
     && (!viewer.git_token_hint || !viewer.git_email);
 
-  // 模糊搜索:单号/标题/版本,大小写不敏感。
+  // 模糊搜索:单号/标题/版本,大小写不敏感;版本多选过滤叠加其上。
   const [query, setQuery] = useState("");
-  const filtered = useMemo(() => {
+  const [selectedVersions, setSelectedVersions] = useState<string[]>([]);
+  const fuzzyMatches = useMemo(() => {
     if (!tickets) return undefined;
     const q = query.trim().toLowerCase();
     if (!q) return tickets;
@@ -560,6 +588,78 @@ function DtsRegister({
     );
   }, [tickets, query]);
 
+  // 版本过滤:拉取后把所有单的版本汇总去重,按 R 版降序、R 同比 C 版;
+  // 不勾选 = 不过滤。
+  const versions = useMemo(() => {
+    const set = new Set<string>();
+    tickets?.forEach((t) => { if (t.version) set.add(t.version); });
+    return sortDtsVersionsDesc([...set]);
+  }, [tickets]);
+
+  const versionFiltered = useMemo(() => {
+    const list = fuzzyMatches;
+    if (!list) return undefined;
+    if (selectedVersions.length === 0) return list;
+    return list.filter((t) => t.version && selectedVersions.includes(t.version));
+  }, [fuzzyMatches, selectedVersions]);
+
+  // 远程查单:本地搜索为空且输入像 DTS 单号(字母开头+数字,长 >=5,
+  // 支持逗号分隔多个)时,自动远程查详情并作为结果入列。防抖 500ms +
+  // 序号守卫:慢响应回来时若输入已变则丢弃,不与本地搜索抢戏。
+  const [remote, setRemote] = useState<{ loading: boolean; tickets: DtsTicketBrief[] }>(
+    { loading: false, tickets: [] });
+  const remoteSeq = useRef(0);
+  const fuzzyEmpty = (fuzzyMatches?.length ?? 0) === 0;
+
+  useEffect(() => {
+    const q = query.trim();
+    const candidates = dtsNoCandidates(q);
+    if (!tickets || !q || candidates.length === 0 || !fuzzyEmpty) {
+      setRemote({ loading: false, tickets: [] });
+      return;
+    }
+    const seq = ++remoteSeq.current;
+    setRemote({ loading: true, tickets: [] });
+    const timer = setTimeout(async () => {
+      const results = await Promise.all(candidates.map((no) =>
+        getDtsTicketDetail(no)
+          .then((detail) => ({ no, detail }) as const)
+          .catch(() => undefined)));
+      if (remoteSeq.current !== seq) return;
+      const found = results.filter((item): item is { no: string; detail: DtsTicketDetail } =>
+        Boolean(item));
+      // 远程查到的单直接入详情缓存:展开零等待,不再二次请求。
+      setDetailCache((prev) => {
+        const next = { ...prev };
+        for (const { no, detail } of found) {
+          const key = detail.ticket || no;
+          if (!next[key]) next[key] = detail;
+        }
+        return next;
+      });
+      setRemote({ loading: false, tickets: found.map(({ no, detail }) => ({
+        ticket: detail.ticket || no,
+        title: detail.title,
+        severity: detail.severity,
+        version: detail.version,
+        url: detail.url,
+        description: detail.description,
+      })) });
+    }, 500);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, tickets, fuzzyEmpty]);
+
+  // 列表 = 本地命中(版本过滤后) + 远程补查命中(去重);清空搜索框时
+  // 远程结果随 effect 复位消失,恢复展示名下全部问题单。
+  const remoteTickets = remote.tickets;
+  const display = useMemo(() => {
+    const list = versionFiltered ?? [];
+    const extra = remoteTickets.filter((r) =>
+      !list.some((item) => item.ticket === r.ticket));
+    return [...list, ...extra];
+  }, [versionFiltered, remoteTickets]);
+
   // 展开详情:同一张单只拉一次(缓存),失败不影响列表已有字段展示。
   const [expandedTicket, setExpandedTicket] = useState<string | null>(null);
   const [detailCache, setDetailCache] = useState<Record<string, DtsTicketDetail>>({});
@@ -569,6 +669,7 @@ function DtsRegister({
     setLoading(true);
     setNote("");
     setQuery("");
+    setSelectedVersions([]);
     setExpandedTicket(null);
     try {
       setTickets(await listDtsTickets());
@@ -605,7 +706,9 @@ function DtsRegister({
       onError("固定流程在登记时就要确定代码仓——填代码仓地址后再发起");
       return;
     }
-    const ticket = tickets?.find((item) => item.ticket === selected);
+    // 远程补查的单也能发起:标题从远程详情里取。
+    const ticket = tickets?.find((item) => item.ticket === selected)
+      ?? remote.tickets.find((item) => item.ticket === selected);
     setBusy(true);
     try {
       const hosts = envHosts.split(/[,，\s]+/).map((host) => host.trim()).filter(Boolean);
@@ -643,20 +746,36 @@ function DtsRegister({
       {note && <span className="issue-dts-note">{note}</span>}
     </div>
     {tickets && tickets.length > 0 && <>
+      {versions.length > 0 && <div className="issue-dts-versions" role="group"
+        aria-label="按版本过滤">
+        <span className="issue-dts-versions-label">版本过滤</span>
+        {versions.map((version) => <label key={version}
+          className={`issue-dts-version-chip${selectedVersions.includes(version) ? " on" : ""}`}>
+          <input type="checkbox"
+            checked={selectedVersions.includes(version)}
+            onChange={(event) => setSelectedVersions((prev) => event.target.checked
+              ? [...prev, version]
+              : prev.filter((item) => item !== version))} />
+          <span>{version}</span>
+        </label>)}
+      </div>}
       <div className="issue-dts-search">
         <input
           type="search"
           value={query}
-          placeholder="搜索问题单号、标题、版本…"
+          placeholder="搜索单号、标题、版本;输入完整单号可远程查单"
           onChange={(e) => setQuery(e.target.value)}
         />
-        {query && <span className="issue-dts-search-count">
-          {filtered?.length ?? 0} / {tickets.length} 条
-        </span>}
+        {remote.loading
+          ? <span className="issue-dts-search-count remote">远程查单中…</span>
+          : (query || selectedVersions.length > 0) && <span className="issue-dts-search-count">
+              {display.length} / {tickets.length} 条
+            </span>}
       </div>
       <div className="issue-dts-list" role="table">
-        {filtered && filtered.length > 0
-          ? filtered.map((ticket) => {
+        {display.length > 0
+          ? display.map((ticket) => {
+            const isRemote = remote.tickets.some((item) => item.ticket === ticket.ticket);
             const isExpanded = expandedTicket === ticket.ticket;
             const detail = detailCache[ticket.ticket];
             return <div key={ticket.ticket}
@@ -665,6 +784,7 @@ function DtsRegister({
                 <input type="checkbox" checked={selected === ticket.ticket}
                   onChange={(event) => setSelected(event.target.checked ? ticket.ticket : "")} />
                 <span className="issue-dts-ticket">{ticket.ticket}</span>
+                {isRemote && <span className="issue-dts-remote">远程</span>}
                 <span className="issue-dts-title">{ticket.title || "(无标题)"}</span>
                 {ticket.status && <span className="issue-dts-status">{ticket.status}</span>}
                 <button type="button" className="issue-dts-expand"
@@ -709,7 +829,9 @@ function DtsRegister({
               </div>}
             </div>;
           })
-          : <p className="issue-dts-hint">没有匹配的问题单。</p>
+          : remote.loading
+            ? <p className="issue-dts-hint">远程查单中…</p>
+            : <p className="issue-dts-hint">没有匹配的问题单。</p>
         }
         <p className="issue-dts-hint">
           勾选要发起的问题单(当前一次一张,批量处理即将开放)。

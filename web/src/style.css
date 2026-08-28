@@ -1710,6 +1710,30 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 }
 .issue-dts-toolbar button:disabled { opacity: .5; cursor: not-allowed; }
 .issue-dts-note { color: #d64545; font-size: var(--font-size-assist); }
+/* 版本多选过滤:拉取后汇总去重的版本芯片,R/C 降序排列 */
+.issue-dts-versions {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin-top: 10px;
+}
+.issue-dts-versions-label { color: var(--faint); font-size: var(--font-size-assist); }
+.issue-dts-version-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px;
+  background: var(--surface-muted); color: var(--muted);
+  font-size: var(--font-size-dense); cursor: pointer; user-select: none;
+}
+.issue-dts-version-chip:hover { border-color: var(--accent); color: var(--text-strong); }
+.issue-dts-version-chip.on {
+  border-color: var(--accent); color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+}
+.issue-dts-version-chip input { margin: 0; }
+.issue-dts-search-count.remote { color: #b7791f; }
+.issue-dts-remote {
+  padding: 1px 6px; border-radius: 6px; font-size: var(--font-size-dense);
+  background: color-mix(in srgb, #3b83d5 12%, transparent); color: #3b83d5;
+  white-space: nowrap;
+}
 .issue-dts-search {
   display: flex; align-items: center; gap: 10px; margin-top: 10px;
 }
