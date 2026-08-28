@@ -61,6 +61,12 @@ test("开发助手门禁绕开流程命令限制，但保留内核/Git/凭据边
   assert.equal(decide("Bash", "git push origin HEAD")?.action, "deny");
   assert.equal(decide("Write", ".git/HEAD")?.action, "deny");
   assert.equal(decide("Edit", ".git/refs/heads/main")?.action, "deny");
+  assert.equal(decide("Write", ".claude/skills/central/SKILL.md")?.action,
+    "deny");
+  assert.equal(decide("Edit", ".cac/skills/central/SKILL.md")?.action,
+    "deny");
+  assert.notEqual(decide("Read", ".claude/skills/central/SKILL.md")?.action,
+    "deny", "平台目录允许按需只读");
   assert.equal(decide("Bash", "printf x > .git/HEAD")?.action, "deny");
   assert.equal(decide("Read", ".mae-flow.json")?.action, "deny");
   assert.equal(decide("Read", "../pi-agent/models.json")?.action, "deny");
@@ -106,6 +112,7 @@ test("开发助手对话可恢复，运行中断会留下用户可见状态", ()
   assert.match(mission, /不是 Mae-Flow 主流程 Agent/);
   assert.match(mission, /真实执行/);
   assert.match(mission, /跑一下相关 UT/);
+  assert.match(mission, /\.claude.*\.cac.*只读/s);
 });
 
 test("开发助手快照拒绝跟随软链，原子写只替换链接本身", () => {

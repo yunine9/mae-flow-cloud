@@ -152,6 +152,7 @@ test("使命写清三件事与红线;报告解析只认合法结构、后写者�
   assert.ok(mission.includes(WARMUP_NOTES_PATH),
     "构建入口沉淀路径必须写进使命——编码期子 Agent 与 prepush 靠它复用");
   assert.match(mission, /不执行任何 git 写操作/);
+  assert.match(mission, /\.claude.*\.cac.*只读/s);
   assert.match(mission, /warmup-result/);
 
   assert.equal(parseWarmupReport("没有报告"), undefined);

@@ -357,6 +357,20 @@ test("分析现场只读:真 push 必须在传输层死掉,不靠 prompt 嘱咐"
     { stdio: "pipe" }), "只读分析现场的 push 必须失败");
   const normal = await (service as any).cloneRepo(
     join(dataDir, "ws2"), undefined, undefined, origin, undefined, "repo");
+  const localExclude = readFileSync(
+    join(normal, ".git", "info", "exclude"), "utf-8");
+  for (const root of [
+    ".agents", ".pi", ".claude", ".cac", ".codex", ".cursor",
+    ".windsurf", ".gemini",
+  ]) {
+    assert.match(localExclude, new RegExp(`/${root.replace(".", "\\.")}/`),
+      `${root} 未登记为 clone 本地运行资产`);
+  }
+  mkdirSync(join(normal, ".claude", "skills", "central"), { recursive: true });
+  writeFileSync(join(normal, ".claude", "skills", "central", "SKILL.md"),
+    "center injected\n");
+  assert.doesNotThrow(() => execFileSync("git", ["-C", normal,
+    "check-ignore", "-q", ".claude/skills/central/SKILL.md"]));
   execFileSync("git", ["-C", normal, "commit", "-q", "--allow-empty",
     "-m", "deliver"], { env: { ...process.env,
       GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t",

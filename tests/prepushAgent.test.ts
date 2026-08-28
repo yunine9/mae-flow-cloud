@@ -4,10 +4,19 @@ import type { SemanticEvent } from "../src/semanticEvents.ts";
 import {
   createPrePushGateContract,
   parsePrePushAgentReport,
+  prePushMission,
   prePushSecurityDecision,
   verifyPrePushEvidence,
   type PrePushAgentReport,
 } from "../src/prepushAgent.ts";
+
+test("prepush 使命明确 Agent 平台目录只读且不得提交", () => {
+  const mission = prePushMission({
+    taskId: "T-prepush", workspace: "/tmp/repo", sha: "a".repeat(40),
+    round: 1, requirement: "修复问题", branch: "feature", baseline: "master",
+  });
+  assert.match(mission, /\.claude.*\.cac.*只读使用.*禁止修改.*提交/s);
+});
 
 function event(
   eventId: number,

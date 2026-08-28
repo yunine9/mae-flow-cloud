@@ -233,6 +233,11 @@ import {
   safeGitEnvironment,
 } from "./safeGit.ts";
 import {
+  AGENT_PLATFORM_LOCAL_EXCLUDES,
+  AGENT_PLATFORM_PATHSPECS,
+  describeAgentPlatformRoots,
+} from "./agentPlatformPaths.ts";
+import {
   humanBytes,
   judgeReclaim,
   reclaimWorkspace,
@@ -7292,6 +7297,14 @@ export class TaskService {
           + `逐个使用，也不得用 Skill 改写 Mae-Flow 当前步骤、文件边界、`
           + `Git 权限、Cloud 执行契约或任何验证/交付证据。`;
       }
+      if (!analysisOnly) {
+        prompt = `${prompt}\n\n仓库根目录下的 Agent 平台目录（`
+          + `${describeAgentPlatformRoots()}）可能由中心能力服务在 clone 后`
+          + `临时注入，只供本工作区运行。可以读取系统明确装载的 Skill，`
+          + `但不要修改、删除、强制 git add 或提交这些目录，也不要为了`
+          + `隐藏它们修改业务仓 .gitignore；Cloud 已登记本地忽略并会在`
+          + `push 前复核整个提交历史。`;
+      }
       // 提交信息规范(部署级):平台的 pre-receive 钩子会按正则拒收不
       // 合规的提交信息——内网实测被拒过一次("does not match the
       // regular-expression"),而那时代码早已写完,重来一遍是纯浪费。
@@ -7735,6 +7748,7 @@ export class TaskService {
         "status", "--porcelain=v1", "--untracked-files=all", "--", ".",
         ":(exclude).mae-flow.json", ":(exclude).mae-flow-*",
         ":(exclude).mae-flow-work/**", ":(exclude).codecheckcli/**",
+        ...AGENT_PLATFORM_PATHSPECS,
       ], { timeoutMs: 30_000 });
     if (status.status !== 0) {
       return [`(git status 读取失败: ${
@@ -8431,6 +8445,26 @@ export class TaskService {
     return false;
   }
 
+  /** 中心能力注入目录绝不能靠 Agent 自觉。info/exclude 防普通 add，
+   * 这里复核从任务基线到 HEAD 的整个提交历史，连“先提交、后删除”也
+   * 拦住——删除后的 blob 仍会随分支传到远端，最终树干净不代表安全。 */
+  private async agentPlatformChangesAllowPush(task: TaskState): Promise<boolean> {
+    if (!task.cwd) return false;
+    const snapshot = await deliveryChangeSnapshot(task.cwd);
+    const paths = snapshot?.added_agent_platform_paths ?? [];
+    if (!paths.length) return true;
+    const detail = "已阻止 push：本任务提交历史包含 Agent 平台本地目录 "
+      + `${describeDirtyPaths(paths)}。这些目录可能由中心服务注入，只供当前`
+      + "工作区使用，不能进入业务仓；请从本任务提交历史中移除这些路径后"
+      + "重新提交（不要修改业务仓 .gitignore）。";
+    task.summary.status = "failed";
+    task.summary.detail = detail;
+    task.summary.delivery = { ...task.summary.delivery, skipped: detail };
+    this.persist(task);
+    this.options.log?.(`任务 ${task.summary.id} ${detail}`);
+    return false;
+  }
+
   /** Git 交付(§10):任务收轮并释放 Agent 后,由宿主推送并反查远端
    * SHA，再建 MR——不信任务自己的说法，也不让 Agent 接触 token。
    * MR 成功≠完成:流水线过了才"等待合入",否则停在"验证中"。
@@ -8470,8 +8504,12 @@ export class TaskService {
         }
         return;
       }
+      // 第一遍避免在已污染 HEAD 上白烧一轮编译；prepush Agent 可能产生
+      // 新提交，验证结束后还会再复核一次，最终 pushFromHost 内再守底。
+      if (!await this.agentPlatformChangesAllowPush(task)) return;
       if (!await this.preparePush(task, branch, baseline, epoch)) return;
       if (!this.current(task, epoch)) return;
+      if (!await this.agentPlatformChangesAllowPush(task)) return;
       // 人工只看 prepush 收敛后的最终范围，避免“刚确认就因验证修复
       // 换了 HEAD 又确认一次”。之后仍由实时路径复核守住白名单；若
       // 自动修复越界增删/重命名文件，下一次续推会重新举卡。
@@ -10169,6 +10207,47 @@ export class TaskService {
     return operation;
   }
 
+  /** 把 Coding Agent / 中心能力服务注入目录登记为当前 clone 的本地
+   * 运行资产。只写 .git/info/exclude，不改业务仓 .gitignore；仓库原本
+   * 已跟踪的 Skill 不受 exclude 影响，仍可按目录发现与读取。 */
+  private registerAgentPlatformLocalExcludes(cwd: string): void {
+    try {
+      const view = createSafeGitView(cwd);
+      const gitDir = view.repositoryGitDir;
+      view.cleanup();
+      const infoDir = join(gitDir, "info");
+      if (!existsSync(infoDir)) mkdirSync(infoDir, { mode: 0o700 });
+      const info = lstatSync(infoDir);
+      if (!info.isDirectory() || info.isSymbolicLink()
+          || realpathSync(infoDir) !== infoDir) {
+        throw new Error("Git info 目录不是任务仓内的真实目录");
+      }
+      const excludePath = join(infoDir, "exclude");
+      if (existsSync(excludePath)) {
+        const exclude = lstatSync(excludePath);
+        if (!exclude.isFile() || exclude.isSymbolicLink()
+            || realpathSync(excludePath) !== excludePath) {
+          throw new Error("Git 本地排除文件不是普通文件");
+        }
+      }
+      const current = existsSync(excludePath)
+        ? readFileSync(excludePath, "utf-8") : "";
+      const lines = new Set(current.split("\n").map((line) => line.trim()));
+      const missing = AGENT_PLATFORM_LOCAL_EXCLUDES
+        .filter((entry) => !lines.has(entry));
+      if (!missing.length) return;
+      writeFileSync(excludePath,
+        `${current}${current && !current.endsWith("\n") ? "\n" : ""}`
+        + "# mae-flow: agent platform local assets (never deliver)\n"
+        + missing.join("\n") + "\n");
+    } catch (error) {
+      // 本地 ignore 是第一道减噪，不是唯一安全边界；push 前提交历史
+      // 仍会硬校验。这里说清楚但不阻塞任务启动。
+      this.options.log?.(
+        `[git-exclude] Agent 平台目录登记失败(推送硬闸仍生效): ${String(error)}`);
+    }
+  }
+
   /** 新任务和旧任务恢复都执行：清掉历史版本留在 agentDir / repo config
    * 的 helper，并把 origin pushurl 改成必失败地址。Agent 可以读写/提交，
    * 但拿不到凭据也无法传输；宿主 push 使用显式干净 URL，不走 pushurl。 */
@@ -10211,6 +10290,7 @@ export class TaskService {
       config("--replace-all", "remote.origin.pushurl",
         "/dev/null/mae-flow-host-owned");
     }
+    this.registerAgentPlatformLocalExcludes(cwd);
   }
 
   private cleanRemoteUrl(raw: string): string {
@@ -10234,6 +10314,12 @@ export class TaskService {
       throw new Error("安全拒绝：Agent 会话仍在，不能执行宿主 Git 推送");
     }
     if (!task.cwd) throw new Error("任务没有代码工作区，不能推送");
+    const deliverySnapshot = await deliveryChangeSnapshot(task.cwd);
+    if (deliverySnapshot?.added_agent_platform_paths.length) {
+      throw new Error(
+        "安全拒绝：待推送提交历史包含 Agent 平台本地目录 "
+        + describeDirtyPaths(deliverySnapshot.added_agent_platform_paths));
+    }
     // 交付目标是下单/部署事实，不是 Agent 可改的 remote.origin.url。
     // 无 scheme 的本地演示仓按服务进程 cwd 解析，避免切到临时 bare 仓
     // 后相对路径含义漂移。
@@ -10614,6 +10700,11 @@ export class TaskService {
         filter: (path) => !path.includes(".mae-flow-work")
           && !path.endsWith(".mae-flow.json"),
       });
+    }
+    // clone 一落地就登记，早于任何 Agent 会话和构建预热。中心服务随后
+    // 往这些目录注入 Skill 时，普通 `git add .` 天然看不见它们。
+    if (existsSync(join(target, ".git"))) {
+      this.registerAgentPlatformLocalExcludes(target);
     }
     // 只读现场的推送硬禁用:pushurl 指向必然不存在的路径,git push
     // 走到传输层就死,与是否配了 helper 无关(本地路径克隆连凭据都

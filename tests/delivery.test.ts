@@ -671,6 +671,8 @@ test("交付服务是部署基础设施:固定地址跑通交付", async () => {
         .filter((m: any) => m.role === "user")[0]?.content ?? "");
     assert.match(opening, /Cloud 执行契约/);
     assert.match(opening, /权威流水线/);
+    assert.match(opening, /\.claude.*\.cac.*本地忽略.*push 前复核/s,
+      "主 Agent 开场必须知道平台注入目录不属于交付");
   } finally {
     await model.stop();
     await platform.stop();
@@ -992,6 +994,35 @@ test("宿主 push 等待远端 Hook 时不阻塞 Node 事件循环", async () =>
     assert.match(receipt.sha, /^[a-f0-9]{40}$/);
     assert.equal(timerFired, true,
       "远端 Hook 很慢时定时器、HTTP 和 SSE 回调必须仍能执行");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+  }
+});
+
+test("宿主 push 硬拒本任务新提交的 Agent 平台注入目录", async () => {
+  const cwd = makeSourceRepo();
+  const baseline = git(cwd, "rev-parse", "HEAD");
+  writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify({
+    step_heads: { branch_create: baseline },
+  }));
+  mkdirSync(join(cwd, ".claude", "skills", "central"), { recursive: true });
+  writeFileSync(join(cwd, ".claude", "skills", "central", "SKILL.md"),
+    "center injected\n");
+  git(cwd, "add", "-f", ".claude/skills/central/SKILL.md");
+  git(cwd, "commit", "--quiet", "-m", "accidentally add injected skill");
+  const remote = mkdtempSync(join(tmpdir(), "mfc-platform-path-remote-"));
+  git(remote, "init", "--bare", "--quiet");
+  const service = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-platform-path-data-")),
+    provider: "fixture", model: "fixture", modelsJson: {},
+  });
+  try {
+    await assert.rejects(() => (service as any).pushFromHost({
+      cwd,
+      summary: { id: "task-platform-path", repo_url: remote },
+    }, "must-not-exist"), /Agent 平台本地目录.*\.claude/s);
+    assert.equal(git(remote, "branch", "--list", "must-not-exist"), "",
+      "硬闸命中后远端不能出现分支");
   } finally {
     await service.shutdown().catch(() => undefined);
   }

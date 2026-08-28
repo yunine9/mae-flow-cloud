@@ -10,6 +10,7 @@
  */
 
 import { prePushBuildGuidance } from "./prepushBuildPlaybook.ts";
+import { describeAgentPlatformRoots } from "./agentPlatformPaths.ts";
 
 export interface WarmupRunRequest {
   taskId: string;
@@ -71,6 +72,8 @@ export function warmupMission(
     // 让 prepush 能本地提交,刻意放行 add/commit。预热是 fail-open 观测
     // 旁路,违背嘱咐最多弄脏工作区,不会污染交付(推送另有闸)。
     "- **不执行任何 git 写操作**(add/commit/checkout/restore/clean 都不许;只读命令可用)。",
+    `- Agent 平台目录(${describeAgentPlatformRoots()})可能由中心服务临时注入，`
+      + "只读使用，不修改、不删除、不提交。",
     "- 基线代码红了**不许修**——那是环境或上游的问题,如实报告就是你的交付。",
     "",
     "失败分类:命令缺失、依赖仓/网络/证书/磁盘问题报 infrastructure_failure;",

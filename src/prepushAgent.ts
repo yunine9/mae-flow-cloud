@@ -8,6 +8,7 @@ import {
   type PrePushExecutionBudget,
 } from "./prepushBuildPlaybook.ts";
 import type { PrePushExecutionAttestation } from "./prePushVerification.ts";
+import { describeAgentPlatformRoots } from "./agentPlatformPaths.ts";
 
 export type PrePushFailureKind = "code_failure" | "infrastructure_failure";
 
@@ -445,6 +446,9 @@ export function prePushMission(
       + "clean 请走构建工具生命周期。",
     "平台现场文件(.mae-flow* / openspec/config.yaml 等)不归你管：它们已被平台登记忽略，",
     "即使仍显示为未跟踪也不要提交、删除，更不要为它们修改用户的 .gitignore——那是用户的文件。",
+    `Agent 平台目录(${describeAgentPlatformRoots()})也可能是中心服务 clone 后`
+      + "注入的本地 Skill/配置：只读使用，禁止修改、强制 add 或提交；"
+      + "Cloud 会在 push 前复核整个提交历史。",
     "依赖下载、工具缺失、磁盘/网络/权限等不是改代码能解决的问题，归类为 infrastructure_failure，",
     "写清缺什么后停止，不要为了制造绿灯篡改测试、关闭检查或编造执行结果。",
     "",
