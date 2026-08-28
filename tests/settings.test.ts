@@ -101,6 +101,14 @@ test("数值校验:无限等待没有语法;models 必须真实存在才能选",
     SettingsError);
   assert.throws(() => settings.updateRuntime({ poll_interval_s: "abc" }),
     SettingsError);
+  settings.updateRuntime({
+    build_cache_retention_days: 21,
+    build_cache_max_gb: 80,
+  });
+  assert.equal(settings.runtime().build_cache_retention_days, 21);
+  assert.equal(settings.runtime().build_cache_max_gb, 80);
+  assert.throws(() => settings.updateRuntime({ build_cache_max_gb: -1 }),
+    /构建缓存容量上限/);
   assert.throws(() => settings.updateModels({ provider: "gpt" }),
     /先提供 models.json/);
   assert.throws(() => settings.updateModels({
@@ -254,6 +262,22 @@ test("路由权限:admin 可读改,开发成员 403,密钥不出网", async () =
     assert.ok(model.requests.some((request: any) =>
       request.messages?.some((message: any) =>
         message.content?.some?.((block: any) => block.type === "image"))));
+
+    const deniedCache = await fetch(`${base}/settings/build-cache`, {
+      headers: { cookie: dev },
+    });
+    assert.equal(deniedCache.status, 403);
+    const cache = await fetch(`${base}/settings/build-cache`, {
+      headers: { cookie: admin },
+    });
+    assert.equal(cache.status, 200);
+    assert.equal((await cache.json() as { configured: boolean }).configured, false);
+    const reclaimed = await fetch(`${base}/settings/build-cache/reclaim`, {
+      method: "POST", headers: { cookie: admin },
+      body: JSON.stringify({ all_unused: true }),
+    });
+    assert.equal(reclaimed.status, 200);
+    assert.equal((await reclaimed.json() as { reclaimed: number }).reclaimed, 0);
 
     const bad = await fetch(`${base}/settings/runtime`, {
       method: "PUT", headers: { cookie: admin },

@@ -3477,6 +3477,7 @@ pre {
 /* 服务设置页:复用账号管理的卡片语言;密钥永远只见掩码(末4位)。 */
 .settings-form { grid-template-columns: 1fr; align-items: start; }
 .settings-form.runtime-settings-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.settings-form.build-cache-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .settings-form .span-2 { grid-column: 1 / -1; }
 .settings-form textarea {
   padding: 10px 12px; color: var(--text); background: var(--surface-soft);
@@ -3533,6 +3534,40 @@ pre {
 .settings-state.ok {
   color: var(--success); border-color: color-mix(in srgb, var(--success) 24%, transparent);
   background: color-mix(in srgb, var(--success-soft) 72%, transparent);
+}
+.build-cache-summary { margin-top: 18px; display: grid; gap: 4px; }
+.build-cache-summary strong { color: #fff; font-size: 25px; line-height: 1.1; }
+.build-cache-summary span { color: #d4dbea; font-size: 13.5px; }
+.build-cache-summary small { color: #8ea0b8; font-size: 12.5px; line-height: 1.5; }
+.build-cache-details { margin-top: 16px; color: #c8d1df; font-size: 13px; }
+.build-cache-details summary { width: fit-content; cursor: pointer; font-weight: 700; }
+.build-cache-details > div {
+  max-height: 220px; margin-top: 9px; overflow: auto;
+  border-top: 1px solid rgba(255, 255, 255, .1);
+}
+.build-cache-entry {
+  padding: 9px 0; display: flex; align-items: center;
+  justify-content: space-between; gap: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, .08);
+}
+.build-cache-entry span { min-width: 0; display: grid; gap: 2px; }
+.build-cache-entry strong {
+  overflow: hidden; color: #eef2f8; font-size: 12.5px;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.build-cache-entry small { color: #8ea0b8; font-size: 12px; }
+.build-cache-entry em {
+  flex: 0 0 auto; color: #aaaaff; font-size: 12px;
+  font-style: normal; font-weight: 700;
+}
+.build-cache-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.build-cache-actions button { flex: 1 1 180px; }
+.user-create-form .build-cache-actions button.secondary {
+  color: var(--danger); background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--danger) 34%, var(--line));
+}
+.user-create-form .build-cache-actions button.secondary:hover {
+  background: var(--danger-soft);
 }
 .secondary-button {
   padding: 10px 14px; color: var(--text-strong); background: var(--surface-soft);
@@ -3846,6 +3881,7 @@ pre {
   .login-brand { margin-bottom: 52px; }
   .user-create-form { grid-template-columns: 1fr; }
   .settings-form.runtime-settings-form { grid-template-columns: 1fr; }
+  .settings-form.build-cache-form { grid-template-columns: 1fr; }
   .user-create-form label:nth-child(3) { grid-column: auto; }
 }
 

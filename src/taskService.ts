@@ -238,6 +238,15 @@ import {
   reclaimWorkspace,
 } from "./workspaceReclaim.ts";
 import {
+  buildCacheKey,
+  cacheKeyFromPath,
+  inspectBuildCaches,
+  reclaimBuildCaches,
+  touchBuildCache,
+  type BuildCacheReclaimResult,
+  type BuildCacheStatus,
+} from "./buildCache.ts";
+import {
   IssueEnvironmentVault,
   type IssueEnvironmentAdapter,
   type IssueEnvironmentInput,
@@ -270,6 +279,9 @@ import {
 
 /** 现场保留期默认两周(用户 2026-08-22 拍板)。 */
 export const DEFAULT_WORKSPACE_RETENTION_DAYS = 14;
+/** 构建缓存比任务现场更值得复用，但也必须有自动止涨边界。 */
+export const DEFAULT_BUILD_CACHE_RETENTION_DAYS = 30;
+export const DEFAULT_BUILD_CACHE_MAX_GB = 100;
 
 export type TaskStatus =
   | "queued"
@@ -667,6 +679,10 @@ export interface TaskServiceOptions {
   /** 现场保留期(天)。终态任务过期后回收克隆等重货,台账原样留下;
    * 0 = 永不回收。部署值,可被管理页运行时设置压过。默认见 serve.ts。 */
   workspaceRetentionDays?: number;
+  /** 仓库级构建缓存连续未使用多少天后回收；0 = 不按时间回收。 */
+  buildCacheRetentionDays?: number;
+  /** 构建缓存总容量上限(GB)，超出后按最久未用优先回收；0 = 不限。 */
+  buildCacheMaxGb?: number;
   contract?: GateContract;
   /** 内核模式(阶段 1 纵向闭环):任务=克隆 repoPath → 内核 bootstrap
    * (sessionstart+userprompt 捕获需求、铺转发壳)→ 深层门禁与证据
@@ -1302,6 +1318,7 @@ export class TaskService {
     image: string;
     role: string;
     taskId: string;
+    cacheKeys: string[];
   }>();
   private shuttingDown = false;
   private shutdownPromise?: Promise<void>;
@@ -1312,6 +1329,8 @@ export class TaskService {
   /** 原位重跑与彻底删除共享同一把逐任务锁，防止两个破坏性请求在
    * projection await 期间都拿着旧 TaskState 继续执行。 */
   private historyMutationActive = new Set<string>();
+  /** 每次体积扫描都可能很重；自动回收与管理员手动回收不许重叠。 */
+  private buildCacheReclaimActive = false;
 
   constructor(readonly options: TaskServiceOptions) {
     this.reviews = new ReviewStore(join(options.dataDir, "reviews.jsonl"));
@@ -1452,11 +1471,18 @@ export class TaskService {
       },
     };
     this.activeContainers.add(tracked);
+    const cacheKeys = [...new Set(ownedInput.volumes
+      .map((volume) => volume.split(":")[0])
+      .map((source) => service.options.isolation?.cacheRoot
+        ? cacheKeyFromPath(service.options.isolation.cacheRoot, source)
+        : undefined)
+      .filter((key): key is string => !!key))];
     this.activeContainerContexts.set(tracked, {
       name: ownedInput.name,
       image: ownedInput.image,
       role: ownedInput.options.labels?.["com.mae-flow-cloud.role"] ?? "unknown",
       taskId: ownedInput.options.labels?.["com.mae-flow-cloud.task"] ?? "system",
+      cacheKeys,
     });
     return tracked;
   }
@@ -1725,8 +1751,7 @@ export class TaskService {
         );
       }
     }
-    const key = createHash("sha256").update(repository).digest("hex").slice(0, 20);
-    const cacheBase = join(resolve(isolation.cacheRoot), key);
+    const { base: cacheBase } = touchBuildCache(isolation.cacheRoot, repository);
     const caches = [
       ["maven", "/cache/maven"],
       ["npm", "/cache/npm"],
@@ -4152,6 +4177,81 @@ export class TaskService {
       ?? DEFAULT_WORKSPACE_RETENTION_DAYS;
     return Number.isFinite(value) && value >= 0
       ? value : DEFAULT_WORKSPACE_RETENTION_DAYS;
+  }
+
+  buildCacheRetentionDays(): number {
+    const runtime = this.options.settings?.runtime().build_cache_retention_days;
+    const value = runtime ?? this.options.buildCacheRetentionDays
+      ?? DEFAULT_BUILD_CACHE_RETENTION_DAYS;
+    return Number.isFinite(value) && value >= 0
+      ? value : DEFAULT_BUILD_CACHE_RETENTION_DAYS;
+  }
+
+  buildCacheMaxGb(): number {
+    const runtime = this.options.settings?.runtime().build_cache_max_gb;
+    const value = runtime ?? this.options.buildCacheMaxGb
+      ?? DEFAULT_BUILD_CACHE_MAX_GB;
+    return Number.isFinite(value) && value >= 0
+      ? value : DEFAULT_BUILD_CACHE_MAX_GB;
+  }
+
+  /**
+   * 真正占用缓存的容器 + 仍可能继续执行的任务共同构成租约。
+   * 后者覆盖服务刚恢复、任务已入队但容器尚未创建的窄竞态。
+   */
+  private activeBuildCacheKeys(): Set<string> {
+    const keys = new Set<string>();
+    for (const context of this.activeContainerContexts.values()) {
+      context.cacheKeys.forEach((key) => keys.add(key));
+    }
+    if (!this.options.isolation?.cacheRoot) return keys;
+    for (const task of this.tasks.values()) {
+      if (HARD_DELETE_STATUSES.includes(task.summary.status)) continue;
+      const repository = task.summary.repo_url
+        ?? this.effectiveDefaultRepo()
+        ?? task.cwd
+        ?? task.summary.id;
+      keys.add(buildCacheKey(repository));
+    }
+    return keys;
+  }
+
+  async buildCacheStatus(): Promise<BuildCacheStatus> {
+    return inspectBuildCaches({
+      cacheRoot: this.options.isolation?.cacheRoot,
+      activeKeys: this.activeBuildCacheKeys(),
+      retentionDays: this.buildCacheRetentionDays(),
+      maxBytes: this.buildCacheMaxGb() * 1024 ** 3,
+    });
+  }
+
+  async reclaimIdleBuildCaches(options: {
+    allUnused?: boolean;
+    now?: number;
+  } = {}): Promise<BuildCacheReclaimResult> {
+    if (this.buildCacheReclaimActive) {
+      throw new TaskControlError("构建缓存正在清理，请稍后重试");
+    }
+    this.buildCacheReclaimActive = true;
+    try {
+      const result = await reclaimBuildCaches({
+        cacheRoot: this.options.isolation?.cacheRoot,
+        activeKeys: () => this.activeBuildCacheKeys(),
+        retentionDays: this.buildCacheRetentionDays(),
+        maxBytes: this.buildCacheMaxGb() * 1024 ** 3,
+        allUnused: options.allUnused,
+        now: options.now,
+      });
+      if (result.reclaimed || result.failed.length || result.skipped_active) {
+        this.options.log?.(`[build-cache] 回收 ${result.reclaimed} 个分区，释放 `
+          + `${humanBytes(result.freed_bytes)}`
+          + `${result.skipped_active ? `，跳过占用中 ${result.skipped_active} 个` : ""}`
+          + `${result.failed.length ? `，失败 ${result.failed.length} 个` : ""}`);
+      }
+      return result;
+    } finally {
+      this.buildCacheReclaimActive = false;
+    }
   }
 
   /**

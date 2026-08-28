@@ -35,6 +35,10 @@ export interface RuntimeKnobs {
   /** 现场保留期(天):终态任务过期后回收克隆等重货,台账原样留下。
    * 0 = 永不回收。改了下一轮清理生效(每天扫一次)。 */
   workspace_retention_days?: number;
+  /** 仓库构建缓存连续未使用的保留期；0 = 不按时间回收。 */
+  build_cache_retention_days?: number;
+  /** 仓库构建缓存总容量上限(GB)；0 = 不设容量上限。 */
+  build_cache_max_gb?: number;
 }
 
 export interface ModelsSettings {
@@ -134,6 +138,14 @@ export class RuntimeSettings {
         knob(patch.workspace_retention_days, "现场保留期")
         ?? (("workspace_retention_days" in patch)
           ? undefined : this.runtime().workspace_retention_days),
+      build_cache_retention_days:
+        knob(patch.build_cache_retention_days, "构建缓存保留期")
+        ?? (("build_cache_retention_days" in patch)
+          ? undefined : this.runtime().build_cache_retention_days),
+      build_cache_max_gb:
+        knob(patch.build_cache_max_gb, "构建缓存容量上限")
+        ?? (("build_cache_max_gb" in patch)
+          ? undefined : this.runtime().build_cache_max_gb),
     };
     this.save({ ...this.load(), runtime: next });
   }

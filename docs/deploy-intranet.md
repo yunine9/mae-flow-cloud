@@ -705,6 +705,8 @@ MFC 管理的跨任务业务/工程知识只走上一节的任务知识索引，
   "poll-interval": 30, "poll-timeout": 1800,
   "max-concurrent": 2,
   "workspace-retention-days": 14,
+  "build-cache-retention-days": 30,
+  "build-cache-max-gb": 100,
   "isolate-image": "registry.intra/mae-flow/task-builder@sha256:<digest>",
   "isolate-memory": "8g", "isolate-cpus": "8", "isolate-pids": 512,
   "isolate-network": "bridge",
@@ -729,6 +731,8 @@ MFC 管理的跨任务业务/工程知识只走上一节的任务知识索引，
 | isolate-memory / isolate-cpus / isolate-pids | 8g / 8 / 512 | 每个任务容器的资源上限；`isolate-cpus` 是可用上限，不是预留核数 |
 | isolate-network | bridge | 任务容器网络；拒绝 host/container 模式 |
 | isolate-cache-root | `<data>/build-cache` | 按仓库哈希隔离的 Maven/npm/ccache/XDG 缓存 |
+| build-cache-retention-days | 30 | 仓库构建缓存从最后一次真实挂载起连续未使用多少天后自动回收；`0`=不按时间回收。正在运行或仍可能继续的任务一律保护 |
+| build-cache-max-gb | 100 | 构建缓存总量上限，超出后按最久未用优先回收；`0`=不限容量。扫描与删除使用异步 I/O，不阻塞服务请求 |
 | isolate-user | **Linux:服务进程 uid:gid**;root 守护形态必须显式给数字 uid:gid;其他平台:镜像内非 root 用户 | Linux 普通服务账号不配时按自己的 uid:gid 跑。root 守护进程必须显式给非 root 数字 uid:gid；Cloud 在容器启动前把实际代码工作区和分仓缓存安全交给该用户，不修改任务台账与凭据目录 |
 | build-slots | 1 | 同时运行的 prepush 重构建数，独立于普通 Agent 并发 |
 | prepush-attempt-timeout-minutes | 普通仓 30 / C++ 仓 60 | 单轮 prepush 的总墙钟预算；只在代表仓实测确实更慢时覆盖 |
@@ -745,7 +749,7 @@ MFC 管理的跨任务业务/工程知识只走上一节的任务知识索引，
 管理员登录 Web 后左侧「服务设置」页,可热改两类东西(存
 `<data>/settings.json`,权限 600,**压过部署值**):
 
-- **运行参数**:并发数、修复轮预算、轮询间隔/预算、现场保留期。生效边界如实:
+- **运行参数**:并发数、修复轮预算、轮询间隔/预算、现场保留期，以及构建缓存保留期/容量上限。生效边界如实:
   并发=下一次调度,修复轮/轮询=下一次红灯/下一轮轮询;页面直接显示
   当前服务默认值，留空即使用默认值，不要求管理员猜启动参数。
 - **模型网关**:网关地址、API Key、模型名称三项；服务端转换为任务

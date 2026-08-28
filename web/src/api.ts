@@ -2030,6 +2030,8 @@ export interface SettingsView {
     poll_interval_s?: number;
     poll_timeout_s?: number;
     workspace_retention_days?: number;
+    build_cache_retention_days?: number;
+    build_cache_max_gb?: number;
   };
   models: {
     configured: boolean;
@@ -2055,6 +2057,8 @@ export interface SettingsView {
       poll_interval_s: number;
       poll_timeout_s: number;
       workspace_retention_days: number;
+      build_cache_retention_days: number;
+      build_cache_max_gb: number;
     };
     models: {
       configured: boolean;
@@ -2093,6 +2097,48 @@ export async function getSystemCheck(): Promise<SystemCheckResult> {
 
 export async function getSettings(): Promise<SettingsView> {
   const response = await fetch("/settings");
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export interface BuildCacheEntry {
+  key: string;
+  repository_hint?: string;
+  last_used_at: string;
+  size_bytes: number;
+  active: boolean;
+  tracked: boolean;
+}
+
+export interface BuildCacheStatus {
+  configured: boolean;
+  root?: string;
+  caches: number;
+  active: number;
+  total_bytes: number;
+  entries: BuildCacheEntry[];
+  policy: { retention_days: number; max_bytes: number };
+}
+
+export interface BuildCacheReclaimResult {
+  reclaimed: number;
+  freed_bytes: number;
+  skipped_active: number;
+  failed: Array<{ key: string; error: string }>;
+  status: BuildCacheStatus;
+}
+
+export async function getBuildCacheStatus(): Promise<BuildCacheStatus> {
+  const response = await fetch("/settings/build-cache");
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function reclaimUnusedBuildCaches(): Promise<BuildCacheReclaimResult> {
+  const response = await fetch("/settings/build-cache/reclaim", {
+    method: "POST",
+    body: JSON.stringify({ all_unused: true }),
+  });
   if (!response.ok) throw new Error(await errorText(response));
   return response.json();
 }

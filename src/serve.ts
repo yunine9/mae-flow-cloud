@@ -24,6 +24,8 @@ import type { AddressInfo } from "node:net";
 import { ScriptedModelServer, type Scene } from "./scriptedModel.ts";
 import { discoverKernelRoot } from "./kernelDiscovery.ts";
 import {
+  DEFAULT_BUILD_CACHE_MAX_GB,
+  DEFAULT_BUILD_CACHE_RETENTION_DAYS,
   DEFAULT_WORKSPACE_RETENTION_DAYS,
   TaskService,
 } from "./taskService.ts";
@@ -474,9 +476,25 @@ async function main(): Promise<void> {
   // 以前一条回收策略都没有,dataDir 只涨不消(2026-08-22 查出来的)。
   const retentionDays = Number(
     flag("--workspace-retention-days") ?? String(DEFAULT_WORKSPACE_RETENTION_DAYS));
+  const buildCacheRetentionDays = Number(
+    flag("--build-cache-retention-days")
+      ?? String(DEFAULT_BUILD_CACHE_RETENTION_DAYS));
+  const buildCacheMaxGb = Number(
+    flag("--build-cache-max-gb") ?? String(DEFAULT_BUILD_CACHE_MAX_GB));
   if (!Number.isFinite(retentionDays) || retentionDays < 0) {
     console.error("[serve] --workspace-retention-days 必须是 ≥0 的数字"
       + "(0 = 永不回收),拒绝启动");
+    process.exit(2);
+  }
+  if (!Number.isFinite(buildCacheRetentionDays)
+      || buildCacheRetentionDays < 0) {
+    console.error("[serve] --build-cache-retention-days 必须是 ≥0 的数字"
+      + "(0 = 不按时间回收),拒绝启动");
+    process.exit(2);
+  }
+  if (!Number.isFinite(buildCacheMaxGb) || buildCacheMaxGb < 0) {
+    console.error("[serve] --build-cache-max-gb 必须是 ≥0 的数字"
+      + "(0 = 不限容量),拒绝启动");
     process.exit(2);
   }
   if (!Number.isInteger(isolatePids) || isolatePids <= 0) {
@@ -536,6 +554,8 @@ async function main(): Promise<void> {
     console.log(`[serve] 任务容器用户: ${containerUser.user ?? "镜像默认"}`
       + `(${containerUser.reason})`);
     console.log(`[serve] 分仓构建缓存: ${isolateCacheRoot}`);
+    console.log(`[serve] 构建缓存策略:连续 ${buildCacheRetentionDays} 天未使用回收，`
+      + `总量上限 ${buildCacheMaxGb > 0 ? `${buildCacheMaxGb}GB` : "不限"}`);
   }
 
   // 历史开关仅保留命令行兼容。内核的最终验证契约仍只有一种：三项
@@ -644,6 +664,8 @@ async function main(): Promise<void> {
         ? { buildCommandTimeoutMs: prepushBuildTimeoutMinutes * 60_000 } : {}),
     } : undefined,
     workspaceRetentionDays: retentionDays,
+    buildCacheRetentionDays,
+    buildCacheMaxGb,
     commitConvention,
     isolation: isolateImage
       ? {
@@ -687,10 +709,13 @@ async function main(): Promise<void> {
         log: (message) => console.log(`  [luban-plugin] ${message}`),
       })
     : undefined;
-  // 现场回收:启动扫一次(服务可能停了很久),之后每天一次。
-  // 纯旁路 fail-open——回收失败只是磁盘没省下来,不许它拖住服务。
-  // unref():这个定时器不该成为进程不肯退出的理由。
-  const sweepWorkspaces = () => {
+  // 现场与构建缓存回收:启动扫一次(服务可能停了很久),之后每天一次。
+  // 缓存体积扫描/递归删除全部异步，不能重演同步磁盘 I/O 拖死 HTTP。
+  // 纯旁路 fail-open；unref() 不成为进程不肯退出的理由。
+  let storageSweepActive = false;
+  const sweepStorage = async () => {
+    if (storageSweepActive) return;
+    storageSweepActive = true;
     try {
       const swept = service.reclaimIdleWorkspaces();
       if (swept.reclaimed) {
@@ -701,11 +726,23 @@ async function main(): Promise<void> {
     } catch (error) {
       console.log(`[serve] 现场回收失败(不影响服务): ${String(error)}`);
     }
+    try {
+      if (service.buildCacheRetentionDays() > 0 || service.buildCacheMaxGb() > 0) {
+        const swept = await service.reclaimIdleBuildCaches();
+        if (swept.reclaimed) {
+          console.log(`[serve] 构建缓存回收 ${swept.reclaimed} 个仓库分区，`
+            + `释放 ${humanBytes(swept.freed_bytes)}`);
+        }
+      }
+    } catch (error) {
+      console.log(`[serve] 构建缓存回收失败(不影响服务): ${String(error)}`);
+    } finally {
+      storageSweepActive = false;
+    }
   };
-  if (retentionDays > 0) {
-    sweepWorkspaces();
-    setInterval(sweepWorkspaces, 24 * 60 * 60_000).unref();
-  } else {
+  void sweepStorage();
+  setInterval(() => void sweepStorage(), 24 * 60 * 60_000).unref();
+  if (retentionDays === 0) {
     console.log("[serve] 现场保留期配置为 0:永不回收,dataDir 需自行看管");
   }
 

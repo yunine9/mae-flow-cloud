@@ -63,6 +63,8 @@ import {
 import { dirname, extname, join, resolve, sep } from "node:path";
 import { StateConflictError } from "./humanGate.ts";
 import {
+  DEFAULT_BUILD_CACHE_MAX_GB,
+  DEFAULT_BUILD_CACHE_RETENTION_DAYS,
   DEFAULT_WORKSPACE_RETENTION_DAYS,
   NotFoundError,
   TaskControlError,
@@ -601,6 +603,12 @@ export function createTaskServer(
                 workspace_retention_days:
                   service.options.workspaceRetentionDays
                     ?? DEFAULT_WORKSPACE_RETENTION_DAYS,
+                build_cache_retention_days:
+                  service.options.buildCacheRetentionDays
+                    ?? DEFAULT_BUILD_CACHE_RETENTION_DAYS,
+                build_cache_max_gb:
+                  service.options.buildCacheMaxGb
+                    ?? DEFAULT_BUILD_CACHE_MAX_GB,
               },
               models: {
                 configured: !!modelSpec.baseUrl && !!modelSpec.apiKey && !!model,
@@ -622,6 +630,16 @@ export function createTaskServer(
         try {
           if (request.method === "GET" && parts.length === 1) {
             return json(response, 200, settingsView());
+          }
+          if (request.method === "GET" && parts[1] === "build-cache") {
+            return json(response, 200, await service.buildCacheStatus());
+          }
+          if (request.method === "POST" && parts[1] === "build-cache"
+              && parts[2] === "reclaim") {
+            const body = await readBody(request);
+            return json(response, 200, await service.reclaimIdleBuildCaches({
+              allUnused: body.all_unused === true,
+            }));
           }
           if (request.method === "PUT" && parts[1] === "runtime") {
             settings.updateRuntime(await readBody(request));
