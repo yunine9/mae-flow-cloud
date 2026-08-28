@@ -1,12 +1,12 @@
 {
-  "//": "零构建仍要类型检查:tsx 直跑不看类型,写错字段名会静默变 undefined(实测踩过 task.delivery/task.summary.delivery)。npm run typecheck 是唯一用途,不产出文件。web/ 有自己的 tsconfig。",
+  "//": "零构建仍要类型检查:tsx 直跑不看类型,写错字段名会静默变 undefined(实测踩过 task.delivery/task.summary.delivery)。npm run typecheck 是唯一用途,不产出文件。web/ 有自己的 tsconfig。lib 带 DOM 不是根代码要用浏览器 API——契约测试(issueFlowContract)import web/src/api.ts 的镜像类型与服务端投影逐字段对账,而 api.ts 按 DOM fetch 书写(json(): any);根 lib 不带 DOM 时它在根程序里全线变 unknown 报错。",
   "compilerOptions": {
     "noEmit": true,
     "allowImportingTsExtensions": true,
     "module": "esnext",
     "moduleResolution": "bundler",
     "target": "es2022",
-    "lib": ["es2023"],
+    "lib": ["es2023", "DOM"],
     "skipLibCheck": true,
     "jsx": "react-jsx",
     "types": ["node"],

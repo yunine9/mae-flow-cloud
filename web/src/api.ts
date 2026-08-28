@@ -2344,6 +2344,17 @@ export interface IssueSummary {
   /** 全部关联仓(彼此平等;与 repo_url 由服务端 dual-write 保持一致)。 */
   repo_urls?: string[];
   module?: string;
+  /** 登记选定的业务模块 ID(module 标签的来源留痕)。 */
+  module_id?: string;
+  /** 登记基线(分支/tag 等起点说明;问题流登记表单未暴露)。 */
+  baseline?: string;
+  /** 登记时带的网管环境(地址列表与 vault 引用;密码只存服务端,永不上线)。 */
+  environment?: {
+    credential_ref: string;
+    name: string;
+    hosts: string[];
+    port: number;
+  };
   mode?: IssueFlowMode;
   scenario?: IssueScenario;
   stage_states?: IssueStageState[];
@@ -2367,6 +2378,12 @@ export interface IssueSummary {
   status: IssueStatus;
   stage: AnyIssueStage;
   stage_note: string;
+  /** 当前阶段的进入时刻(ISO)。 */
+  stage_at: string;
+  /** 网管环境是否已配置(服务端 summarize 派生)。 */
+  has_environment: boolean;
+  /** 本回合已用催办次数(服务端催办预算账;前端暂不消费)。 */
+  nudges?: number;
   conclusion?: {
     kind: "non_issue" | "fixed" | "delivered" | "issue" | "converted";
     summary: string;
@@ -2397,6 +2414,18 @@ export interface IssueWaitingCard {
    * env_needed 据此渲染专用环境表单,其余闸仍走通用选项卡。 */
   gate_kind?: IssueGateKind;
   gate_scope?: "logs" | "deploy";
+  /** 以下为服务端 humanGate 记录随线携带的内部账(卡片只渲染上面的
+   * 子集):契约测试(issueFlowContract)钉整卡形状,服务端加字段先
+   * 来这里补镜再让测试转绿。 */
+  task_id?: string;
+  step?: string;
+  call_id?: string;
+  status?: "waiting" | "resolved" | "superseded";
+  decision?: string;
+  answers?: Record<string, string>;
+  notes?: string;
+  resolved_at?: string;
+  reminders?: number;
 }
 
 export interface IssueDetail extends IssueSummary {
