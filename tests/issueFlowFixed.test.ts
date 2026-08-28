@@ -272,7 +272,7 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     // ② 确认报告 → 进问题修改;宿主在阶段2建好的分支应该在场。
     service.answer(created.id, {
       state_version: gate1.gate!.state_version,
-      decision: "确认报告,开始问题修改",
+      code: "confirm",
     });
     await until(() => {
       const issue = service.get(created.id);
@@ -307,7 +307,7 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     const shaBefore = service.get(created.id).pushes![0].sha;
     service.answer(created.id, {
       state_version: gate2.gate!.state_version,
-      decision: "验证发现问题(填写补充说明)",
+      code: "fail",
       notes: "并发场景仍偶发超时",
     });
     const gate3 = await until(() => {
@@ -325,7 +325,7 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     // ⑤ 二轮走完至验证通过:末阶段完成,待手动归档。
     service.answer(created.id, {
       state_version: gate3.gate!.state_version,
-      decision: "确认报告,开始问题修改",
+      code: "confirm",
     });
     const gate4 = await until(() => {
       const issue = service.get(created.id);
@@ -335,7 +335,7 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     }, "二轮:验证闸");
     service.answer(created.id, {
       state_version: gate4.gate!.state_version,
-      decision: "验证通过",
+      code: "pass",
     });
     const passed = await until(() => {
       const issue = service.get(created.id);
@@ -394,7 +394,7 @@ test("固定流程无单闭环:结论是问题→挂起;结论非问题→直接
     assert.equal(gate.gate?.proposal?.conclusion, "issue");
     service.answer(created.id, {
       state_version: gate.gate!.state_version,
-      decision: "确认是问题,挂起等提单",
+      code: "issue",
     });
     const suspended = await until(() => {
       const issue = service.get(created.id);
@@ -449,7 +449,7 @@ test("固定流程无单闭环:结论非问题,用户确认后自动归档", asy
     }, "非问题结论闸");
     service.answer(created.id, {
       state_version: gate.gate!.state_version,
-      decision: "确认非问题,闭环归档",
+      code: "non_issue",
     });
     const archived = await until(() => {
       const issue = service.get(created.id);
@@ -459,6 +459,84 @@ test("固定流程无单闭环:结论非问题,用户确认后自动归档", asy
     assert.equal(existsSync(
       join(dataDir, ".issue-environments", `${created.id}.json`)), false,
       "闭环即清理环境凭据");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
+test("举卡裁决协议化:闸卡带决策码,按码分派文案可变;旧文案不再是匹配键", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-verdict-"));
+  const origin = bareOrigin(dataDir);
+  const script: Scene[] = [
+    // 会话 A:拉仓 → 报告 → 举结论闸(顺序创建,不与 B 并发抢剧本)。
+    { tool: { name: "pull_repo", input: { url: origin } } },
+    { tool: { name: "bash", input: { command:
+      "printf '# 结论:非问题(时钟漂移误报)。\\n' > issue-analysis.md" } } },
+    { tool: { name: "submit_analysis",
+      input: { conclusion: "non_issue", summary: "时钟漂移误报" } } },
+    { text: "A 卡已举出。" },
+    // 会话 B:同样举结论闸;答旧文案回流分析(续跑回合收口:补充意见
+    // 回合未到出口,还有两次催办才落 idle)。
+    { tool: { name: "pull_repo", input: { url: origin } } },
+    { tool: { name: "bash", input: { command:
+      "printf '# 结论:非问题(时钟漂移误报)。\\n' > issue-analysis.md" } } },
+    { tool: { name: "submit_analysis",
+      input: { conclusion: "non_issue", summary: "时钟漂移误报" } } },
+    { text: "B 卡已举出。" },
+    { text: "B 按补充意见继续查证。" },
+    { text: "B 继续查证(催办一)。" },
+    { text: "B 继续查证(催办二)。" },
+  ];
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    issueFlowMode: () => "fixed",
+  });
+  try {
+    const concludeGate = async (title: string) => {
+      const created = service.create({ account: "dev", title, repoUrl: origin });
+      return until(() => {
+        const issue = service.get(created.id);
+        if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+        return issue.status === "waiting_user" && issue.gate?.kind === "conclude"
+          ? issue : undefined;
+      }, `${title} 结论闸`);
+    };
+    // 闸卡选项自带码+文案对:码表投影自 stageRegistry,举卡方不手写文案。
+    const gateA = await concludeGate("文案可变");
+    const options = gateA.gate!.question.questions[0].options;
+    assert.deepEqual(options.map((option) => option.code),
+      ["issue", "non_issue", "supplement"], "闸卡选项必须携带决策码");
+    assert.ok(options.every((option) => option.label.length > 0),
+      "每个码都要有给人看的文案");
+
+    // 改文案零协议后果:decision 传任意字(显示文案本就来自 API),
+    // 裁决只认 code——文案与裁决彻底解耦。
+    service.answer(gateA.id, {
+      state_version: gateA.gate!.state_version,
+      decision: "文案被改成了任意话,裁决不该看它",
+      code: "non_issue",
+    });
+    await until(() =>
+      service.get(gateA.id).status === "archived" ? 1 : undefined, "按码闭环");
+    assert.equal(service.get(gateA.id).conclusion?.kind, "non_issue");
+
+    // 旧文案不再是匹配键:只交文案不交码 → 不闭环,按补充意见回流分析。
+    const gateB = await concludeGate("旧文案失效");
+    service.answer(gateB.id, {
+      state_version: gateB.gate!.state_version,
+      decision: "确认非问题,闭环归档",
+    });
+    await until(() =>
+      service.get(gateB.id).status === "idle" ? 1 : undefined,
+      "无码答复按补充意见回流分析,续跑回合收口");
+    assert.notEqual(service.get(gateB.id).status, "archived",
+      "文本不是匹配键——旧命令式文案不触发任何裁决");
+    assert.match(JSON.stringify(model.requests), /确认非问题,闭环归档/,
+      "人话答复仍原样进续聊提示词(显示语义保留)");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
@@ -513,7 +591,7 @@ test("关联转正:两段式(校验过目→确认),工作区/报告/凭据继�
     }, "无单结论闸");
     service.answer(created.id, {
       state_version: gate.gate!.state_version,
-      decision: "确认是问题,挂起等提单",
+      code: "issue",
     });
     await until(() =>
       service.get(created.id).status === "suspended" ? 1 : undefined, "挂起");
@@ -575,7 +653,7 @@ test("关联转正:两段式(校验过目→确认),工作区/报告/凭据继�
     }, "第二个无单会话结论闸");
     service.answer(second.id, {
       state_version: gate2.gate!.state_version,
-      decision: "确认是问题,挂起等提单",
+      code: "issue",
     });
     await until(() =>
       service.get(second.id).status === "suspended" ? 1 : undefined, "第二个挂起");

@@ -95,17 +95,6 @@ export function expectedBranch(state: IssueSessionState): string {
   return `master_${state.account}_${state.ticket}`;
 }
 
-/** 闸门问题卡的选项文案(服务端 resolveGate 按这些前缀分派,改字两
- * 处要同步——选项前缀是匹配锚)。 */
-export const GATE_OPTIONS = {
-  analysis_confirm: ["确认报告,开始问题修改", "有补充意见(填写补充说明)"],
-  conclude: ["确认是问题,挂起等提单", "确认非问题,闭环归档", "有补充意见(填写补充说明)"],
-  env_verify: ["验证通过", "验证发现问题(填写补充说明)"],
-  // env_needed 在决策卡上渲染为专用表单(地址+密码),不走选项卡;
-  // 这个选项只是卡面占位,服务端作答口是 /environment。
-  env_needed: ["填写并继续"],
-} as const;
-
 /** 缺网管环境时的平台闸(拉日志/换库现场补配,2026-08-28):举闸后
  * 工具如实失败,让模型结束回合——不再让 AI 空口向用户要密码
  * (秘密纪律:密码只走 /environment 表单进 vault,不进对话)。 */
@@ -117,7 +106,6 @@ function raiseEnvNeededGate(
     ctx.state,
     "env_needed",
     "获取日志/换库需要网管服务器地址与密码",
-    [...GATE_OPTIONS.env_needed],
     undefined,
     undefined,
     scope,
@@ -386,7 +374,6 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
           ctx.state,
           "env_verify",
           "换库部署已完成,请在目标环境验证问题是否修复",
-          [...GATE_OPTIONS.env_verify],
           undefined,
           result.summary.split("\n")[0],
         );
@@ -685,14 +672,12 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
           raiseGate(
             ctx.state, "conclude",
             `分析结论:${params.conclusion === "non_issue" ? "非问题" : "是问题"}——${summary}`,
-            [...GATE_OPTIONS.conclude],
             proposal,
           );
         } else {
           raiseGate(
             ctx.state, "analysis_confirm",
             `问题分析报告已产出(${summary}),请查阅 issue-analysis.md 后确认`,
-            [...GATE_OPTIONS.analysis_confirm],
             proposal,
           );
         }

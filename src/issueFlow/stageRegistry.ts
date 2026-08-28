@@ -294,6 +294,82 @@ export function stageToolLine(stage: FixedStage): string {
     .join("、");
 }
 
+// ---- 举卡决策码(裁决协议:按码分派,文案只管显示) ----
+
+/** 闸卡的一个选项。code 是裁决协议(resolveGate 按 code 单点分派,
+ * 前端提交回传 code);label 只是给人看的文案——改文案零协议后果,
+ * 旧协议里文案前缀/包含就是匹配键,改一个字裁决静默 409(实锤债务)。 */
+export interface GateOption {
+  code: string;
+  label: string;
+}
+
+/** 每类闸的选项表(码+文案对)。raiseGate 举卡时整表投影进闸卡,
+ * resolveGate 按码裁决,前端渲染 label、提交 code——文案的定义地
+ * 只此一处,「改字两处要同步」的自警从此作废。 */
+export const GATE_OPTIONS: Record<IssueGateKind, readonly GateOption[]> = {
+  analysis_confirm: [
+    { code: "confirm", label: "确认报告,开始问题修改" },
+    { code: "supplement", label: "有补充意见(填写补充说明)" },
+  ],
+  conclude: [
+    { code: "issue", label: "确认是问题,挂起等提单" },
+    { code: "non_issue", label: "确认非问题,闭环归档" },
+    { code: "supplement", label: "有补充意见(填写补充说明)" },
+  ],
+  env_verify: [
+    { code: "pass", label: "验证通过" },
+    { code: "fail", label: "验证发现问题(填写补充说明)" },
+  ],
+  // env_needed 在决策卡上渲染为专用表单(地址+密码),作答口是
+  // /environment,不走选项裁决;这个选项只是卡面占位。
+  env_needed: [
+    { code: "fill", label: "填写并继续" },
+  ],
+};
+
+/** 码 → 文案(显示语义的还原:现场账与续聊提示词里永远是人话)。 */
+export function gateOptionLabel(kind: IssueGateKind, code: string): string {
+  const option = GATE_OPTIONS[kind]?.find((item) => item.code === code);
+  return option?.label ?? code;
+}
+
+/** 闸裁决的语义动作(与改造前的分支行为逐项对齐)。分派是纯函数:
+ * 只认 (kind, code),中文文案根本不是输入——文案怎么改都动不了它。 */
+export type GateVerdict =
+  | "advance"       // analysis_confirm+confirm:推进到 confirmTo
+  | "rework"        // 有补充意见/自由作答:留在或回流分析
+  | "suspend"       // conclude+issue:挂起待关联单号
+  | "archive"       // conclude+non_issue:闭环归档
+  | "pass"          // env_verify+pass:验证通过收尾
+  | "fail"          // env_verify+fail:验证不通过回退
+  | "unrecognized"; // 认不得的答复(仅 env_verify 打回,其余按补充意见)
+
+/** 决策码分派单点。语义钉死:
+ * - analysis_confirm:confirm 推进;其余(补充意见码/自由文本)一律
+ *   留在分析阶段完善重提——与旧 startsWith 前缀匹配的 else 分支一致;
+ * - conclude:issue 挂起 / non_issue 闭环;其余回流分析(旧的
+ *   includes 匹配同样认不得就回流);
+ * - env_verify:pass 收尾 / fail 回退;认不得的原样 409(旧语义:
+ *   验证闸不允许自由发挥)。 */
+export function gateVerdict(kind: IssueGateKind, code: string): GateVerdict {
+  switch (kind) {
+    case "analysis_confirm":
+      return code === "confirm" ? "advance" : "rework";
+    case "conclude":
+      if (code === "issue") return "suspend";
+      if (code === "non_issue") return "archive";
+      return "rework";
+    case "env_verify":
+      if (code === "pass") return "pass";
+      if (code === "fail") return "fail";
+      return "unrecognized";
+    case "env_needed":
+      // 作答口是配置表单;走到选项裁决即调用方违约,一律打回。
+      return "unrecognized";
+  }
+}
+
 // ---- 闸门裁决视角(resolveGate 的阶段分支查这里) ----
 
 export interface StageGateRoute {

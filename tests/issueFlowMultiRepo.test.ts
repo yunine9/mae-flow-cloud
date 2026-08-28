@@ -264,7 +264,7 @@ test("无单多仓端到端:模块带仓,AI 逐仓 pull_repo 落到 repo/<仓名
 
     service.answer(created.id, {
       state_version: gate.gate!.state_version,
-      decision: "确认是问题,挂起等提单",
+      code: "issue",
     });
     await until(() =>
       service.get(created.id).status === "suspended" ? 1 : undefined, "挂起");

@@ -147,9 +147,15 @@ export function validateRepoUrl(raw: string): string {
   throw new Error("问题流只接受 HTTPS 或本地代码仓地址(不支持 ssh/git 协议)");
 }
 
+/** 认证类失败的机器标记(协议,不是文案):错误文本以此打头,前端
+ * 「去个人设置配令牌」的跳转按钮认这个标记(web 侧镜像常量),人话
+ * 怎么改都不破坏跳转。旧锚是文案里嵌「Git 令牌」字样——改字=跳转
+ * 静默消失,正是本票要拆的文本匹配债务。 */
+export const GIT_AUTH_ERROR_TAG = "[git-auth]";
+
 /** 认证类失败 → "去哪配令牌"的引导;非认证失败返回 undefined 由调用方
- * 保留 git 原文,不吞事实。文案里的「Git 令牌」是前端识别"可跳个人
- * 设置"的锚点,改字时前端锚点要跟着改。
+ * 保留 git 原文,不吞事实。返回文本以 GIT_AUTH_ERROR_TAG 打头(前端
+ * 跳转锚),人话部分随意改。
  *
  * 问题流 failed 是终态(不能续聊),引导说"重新发起"而不是"发消息重试"。 */
 function authFailureHint(
@@ -163,12 +169,12 @@ function authFailureHint(
   const tail = fatal ? `(${fatal})` : "";
   if (!credential
       && /could not read Username|terminal prompts disabled|read askpass/i.test(stderr)) {
-    return `${verb}需要 Git 凭据,当前账号还没有配置 Git 令牌:`
+    return `${GIT_AUTH_ERROR_TAG}${verb}需要 Git 凭据,当前账号还没有配置 Git 令牌:`
       + "请到「个人设置 → Git 令牌」填写代码平台的 HTTPS 密码或访问令牌"
       + "(Git 用户名 = 登录账号名),保存后重新发起问题分析。" + tail;
   }
   if (/Authentication failed|HTTP 403|status[ :=]403/i.test(stderr)) {
-    return `代码仓拒绝了 Git 凭据:请到「个人设置 → Git 令牌」核对令牌内容`
+    return `${GIT_AUTH_ERROR_TAG}代码仓拒绝了 Git 凭据:请到「个人设置 → Git 令牌」核对令牌内容`
       + `(当前按登录账号「${credential?.username ?? "(未配置)"}」认证,Git 用户名 = 登录账号名),`
       + "保存后重新发起问题分析。" + tail;
   }

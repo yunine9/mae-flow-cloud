@@ -11,7 +11,7 @@
  */
 import { useState } from "react";
 import { issueStageText, type DtsTicketDetail, type IssueDetail,
-  type IssueGateKind } from "../api";
+  type IssueGateKind, type IssueGateOption } from "../api";
 import { IssueDecisionCard } from "./IssueDecisionCard";
 
 export function IssueRail({ detail, busy, waiting, onAnswer, onReply,
@@ -23,15 +23,17 @@ export function IssueRail({ detail, busy, waiting, onAnswer, onReply,
   waiting?: {
     waiting_id: string;
     state_version: number;
-    question: { questions?: Array<{ question: string; options: string[] }> };
+    question: { questions?: Array<{ question: string; options: IssueGateOption[] }> };
     context?: string;
     created_at: string;
     /** 平台闸专用:env_needed 闸在决策卡上渲染专用环境表单。 */
     gate_kind?: IssueGateKind;
     gate_scope?: "logs" | "deploy";
   };
-  /** 提交问题卡/平台闸答复;返回 true 表示成功。 */
-  onAnswer: (decision: string, notes?: string) => Promise<boolean>;
+  /** 提交问题卡/平台闸答复(decision=人话;code=平台闸决策码;
+   * answers=Agent 卡逐题作答);返回 true 表示成功。 */
+  onAnswer: (decision: string, code?: string,
+    answers?: Record<string, string>, notes?: string) => Promise<boolean>;
   /** 继续对话(idle/interrupted);返回 true 表示成功。 */
   onReply: (text: string) => Promise<boolean>;
   /** 运行中插话;返回 true 表示成功。 */

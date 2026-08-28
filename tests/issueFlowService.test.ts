@@ -28,7 +28,7 @@ import {
 import {
   handleIssueRoutes,
 } from "../src/issueFlow/routes.ts";
-import { cloneFailureMessage } from "../src/issueFlow/issueGit.ts";
+import { cloneFailureMessage, GIT_AUTH_ERROR_TAG } from "../src/issueFlow/issueGit.ts";
 import { loadState, type IssueSessionState } from "../src/issueFlow/state.ts";
 import { buildWorksiteRecord } from "../src/issueFlow/worksiteExport.ts";
 import type { SemanticEvent } from "../src/semanticEvents.ts";
@@ -70,6 +70,8 @@ test("克隆认证失败说人话:引导去个人设置配令牌,其余保留 gi
     " terminal prompts disabled",
   ].join("\n");
   const missing = cloneFailureMessage(undefined, realStderr);
+  assert.ok(missing.startsWith(GIT_AUTH_ERROR_TAG),
+    "认证类失败必须以机器标记打头——这是前端跳转锚(协议),人话改字不动它");
   assert.match(missing, /Git 令牌/, "必须给出去哪配的引导");
   assert.match(missing, /个人设置/);
   assert.match(missing, /重新发起/, "failed 是终态,引导只能是重新发起");
@@ -81,15 +83,17 @@ test("克隆认证失败说人话:引导去个人设置配令牌,其余保留 gi
     { username: "y00965296", password: "wrong" },
     "fatal: Authentication failed for 'https://szv-y.codehub.huawei.com/a.git/'",
   );
+  assert.ok(rejected.startsWith(GIT_AUTH_ERROR_TAG), "拒绝类同样带机器标记");
   assert.match(rejected, /拒绝/);
   assert.match(rejected, /y00965296/);
   assert.match(rejected, /Git 令牌/);
 
-  // 非认证错误:保留 git 原文,不乱引导
+  // 非认证错误:保留 git 原文,不乱引导(也不带跳转锚)
   const other = cloneFailureMessage(undefined,
     "fatal: repository 'https://git/x.git/' not found");
   assert.match(other, /not found/);
   assert.ok(!other.includes("Git 令牌"));
+  assert.ok(!other.includes(GIT_AUTH_ERROR_TAG));
 });
 
 /** 走一遍真路由(/issues/*),拿到 {status, body}——视图旁路的端到端
@@ -663,6 +667,55 @@ test("重启续聊:等待问题卡期间服务重启,作答仍能续上现场", 
   } finally {
     await first.shutdown().catch(() => undefined);
     await second?.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
+test("Agent 问题卡归码:投影派码(码+文案对),按码作答还原原文,AI 看到的仍是自己的措辞", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-agentcode-"));
+  const script: Scene[] = [
+    { tool: { name: "AskUserQuestion", input: { questions: [{
+      question: "现象是必现还是偶发?", options: ["必现", "偶发"],
+    }] } } },
+    { text: "已收到答复,继续分析。" },
+  ];
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+  });
+  try {
+    const created = service.create({ account: "dev", title: "归码还原" });
+    const waiting = await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user" ? issue : undefined;
+    }, "Agent 问题卡");
+    // 投影派码:选项是码+文案对,码按「题号-序号」机械派发(AskUserQuestion
+    // 的选项措辞是 Agent 现场自由给的,没有领域码表)。
+    const questions = (waiting.waiting!.question as {
+      questions: Array<{ options: Array<{ code: string; label: string }> }>;
+    }).questions;
+    assert.deepEqual(questions[0].options.map((option) => option.code),
+      ["opt-0-0", "opt-0-1"], "Agent 卡选项同样携带决策码");
+    assert.deepEqual(questions[0].options.map((option) => option.label),
+      ["必现", "偶发"], "文案仍是 Agent 的原话(只作显示)");
+
+    // 按码作答:decision 是前端显示文案,answers 携带码;服务端按自己的
+    // 码表还原原文再入账——协议与平台闸同构(码是裁决/传递的身份)。
+    service.answer(created.id, {
+      state_version: waiting.waiting!.state_version,
+      decision: "偶发",
+      answers: { "0": "opt-0-1" },
+    });
+    await until(() =>
+      service.get(created.id).status === "idle" ? 1 : undefined, "作答后收口");
+    const replay = JSON.stringify(model.requests.at(-1));
+    assert.match(replay, /偶发/, "AI 收到的是还原后的选项原文");
+    assert.doesNotMatch(replay, /opt-0-1/, "决策码是平台协议,不得漏进模型上下文");
+  } finally {
+    await service.shutdown().catch(() => undefined);
     await model.stop();
   }
 });

@@ -25,7 +25,9 @@ import {
   FIXED_TICKET_STAGES,
   fixedStageIndex,
   fixedStages,
+  GATE_OPTIONS,
   type FixedStage,
+  type GateOption,
 } from "./stageRegistry.ts";
 
 // 固定流程的阶段词表、路线与显示名的定义在阶段注册表(stageRegistry.ts,
@@ -198,7 +200,9 @@ export interface IssueGate {
   kind: IssueGateKind;
   /** 作答幂等基准:创建时的 transitions 长度,对不上即状态已变。 */
   state_version: number;
-  question: { questions: Array<{ question: string; options: string[] }> };
+  /** 选项携带码+文案对(出自 stageRegistry 的 GATE_OPTIONS):前端
+   * 渲染 label、提交 code,裁决按码单点分派——文案改字零协议后果。 */
+  question: { questions: Array<{ question: string; options: GateOption[] }> };
   context?: string;
   /** 仅 env_needed:闸为哪类动作而举(logs=拉日志 / deploy=换库部署)。 */
   scope?: IssueGateScope;
@@ -468,7 +472,8 @@ export function recordTransition(
 /** 平台举闸(固定流程的人工硬闸)。只记"闸在场",**不动状态**:
  * 回合可能还在收尾,waiting_user 由 settle 在回合终点定格——中途置位
  * 会让作答撞上"正在处理上一条输入"的竞态。Agent 对 issue.json 只读,
- * 推不动闸。 */
+ * 推不动闸。选项不接收参:码+文案对整表投影自 stageRegistry 的
+ * GATE_OPTIONS——举卡方自带文案的旧路已废,文案定义地只剩注册表。 */
 const GATE_NAMES: Record<IssueGateKind, string> = {
   analysis_confirm: "分析报告确认",
   conclude: "结论确认",
@@ -480,7 +485,6 @@ export function raiseGate(
   state: IssueSessionState,
   kind: IssueGateKind,
   question: string,
-  options: string[],
   proposal?: IssueGate["proposal"],
   context?: string,
   scope?: IssueGateScope,
@@ -489,7 +493,12 @@ export function raiseGate(
     id: `gate-${state.id}-${Date.now().toString(36)}`,
     kind,
     state_version: state.transitions?.length ?? 0,
-    question: { questions: [{ question, options }] },
+    question: {
+      questions: [{
+        question,
+        options: GATE_OPTIONS[kind].map((option) => ({ ...option })),
+      }],
+    },
     ...(proposal ? { proposal } : {}),
     ...(context ? { context } : {}),
     ...(scope ? { scope } : {}),

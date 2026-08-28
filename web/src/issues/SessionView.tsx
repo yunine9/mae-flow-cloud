@@ -9,6 +9,7 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import {
+  GIT_AUTH_ERROR_TAG,
   ISSUE_STATUS_TEXT,
   answerIssue,
   associateIssueTicket,
@@ -124,11 +125,20 @@ export function IssueSessionView({
   // "旅程线"而非"计划线":只画走过的节点,不补未来占位。
   const trail = (detail.transitions ?? []).filter((entry) => entry.stage);
 
-  async function answer(decision: string, notes?: string): Promise<boolean> {
+  /** 问题卡作答:decision=人话文本;code=平台闸决策码(裁决协议);
+   * answers=Agent 卡逐题作答(码或自由文本)。统一经 answerIssue 提交。 */
+  async function answer(
+    decision: string,
+    code?: string,
+    answers?: Record<string, string>,
+    notes?: string,
+  ): Promise<boolean> {
     if (!waiting) return false;
     return perform(() => answerIssue(detail.id, {
       state_version: waiting.state_version,
       decision,
+      ...(code ? { code } : {}),
+      ...(answers ? { answers } : {}),
       ...(notes ? { notes } : {}),
     }));
   }
@@ -248,9 +258,9 @@ export function IssueSessionView({
     {/* done ≠ 归档的引导迁到右栏绿卡;顶部横幅随之删除(决策-centric)。 */}
     {detail.error && <div className="issue-session-error" role="alert">
       <span>{detail.error}</span>
-      {/* 「Git 令牌」是后端认证类报错的锚点(issueGit.ts),命中即给
-          一键跳转;其余错误只展示原文。 */}
-      {onNavigateProfile && detail.error.includes("Git 令牌")
+      {/* 认证类报错带机器标记(issueGit.ts 的 GIT_AUTH_ERROR_TAG,常量
+          镜像在 api.ts):命中即给一键跳转;人话改字不影响识别。 */}
+      {onNavigateProfile && detail.error.includes(GIT_AUTH_ERROR_TAG)
         && <button type="button" className="issue-error-action"
           onClick={onNavigateProfile}>去个人设置配置令牌</button>}
     </div>}

@@ -2182,6 +2182,12 @@ export async function readArtifact(
 
 // ---- 问题流(与需求任务平行的独立会话域) ----
 
+/** 后端认证类报错的机器标记(src/issueFlow/issueGit.ts 的
+ * GIT_AUTH_ERROR_TAG 手工镜像,#10 契约护栏未做,双端要同步):
+ * 会话页的错误横幅命中它才给「去个人设置配置令牌」跳转——人话改字
+ * 不再破坏跳转(旧锚是文案里嵌「Git 令牌」字样)。 */
+export const GIT_AUTH_ERROR_TAG = "[git-auth]";
+
 export type IssueStatus =
   | "queued"
   | "running"
@@ -2302,11 +2308,18 @@ export type IssueGateKind =
   // 网管环境缺配置(拉日志/换库现场补配)仍由工具现场举。
   | "env_needed";
 
+/** 闸卡选项 = 决策码 + 文案对(服务端 src/issueFlow/stageRegistry.ts
+ * 的 GateOption 镜像):渲染 label,提交 code——文案改字零协议后果。 */
+export interface IssueGateOption {
+  code: string;
+  label: string;
+}
+
 export interface IssueGateCard {
   id: string;
   kind: IssueGateKind;
   state_version: number;
-  question: { questions?: Array<{ question: string; options: string[] }> };
+  question: { questions?: Array<{ question: string; options: IssueGateOption[] }> };
   context?: string;
   /** 仅 env_needed:闸为哪类动作而举(logs=拉日志 / deploy=换库部署)。 */
   scope?: "logs" | "deploy";
@@ -2374,7 +2387,10 @@ export interface IssueSummary {
 export interface IssueWaitingCard {
   waiting_id: string;
   state_version: number;
-  question: { questions?: Array<{ question: string; options: string[] }> };
+  /** 选项一律是码+文案对:平台闸的码出自服务端注册表码表,Agent 卡
+   * 的码由服务端投影时按题号/序号派发(opt-题-序)。渲染 label,
+   * 提交 code。 */
+  question: { questions?: Array<{ question: string; options: IssueGateOption[] }> };
   context?: string;
   created_at: string;
   /** 平台闸专用(会话视图从 detail.gate 带过来):闸的种类与用途面。
@@ -2468,9 +2484,14 @@ export function replyIssue(id: string, text: string): Promise<IssueSummary> {
   });
 }
 
+/** 问题卡作答:decision 是人话文本(显示/自由作答);平台闸另带决策码
+ * code(裁决按它分派,文案不是匹配键);Agent 卡带逐题作答 answers
+ * (键=题号,值=决策码或自由文本)。 */
 export function answerIssue(id: string, input: {
   state_version: number;
   decision: string;
+  code?: string;
+  answers?: Record<string, string>;
   notes?: string;
 }): Promise<IssueSummary> {
   return issueFetch(`/issues/${encodeURIComponent(id)}/decision`, {

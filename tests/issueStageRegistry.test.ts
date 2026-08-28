@@ -17,8 +17,10 @@ import {
   FIXED_STAGE_LABELS,
   FIXED_STAGE_SPECS,
   FIXED_TICKET_STAGES,
+  GATE_OPTIONS,
   STAGE_ROUTES,
   fixedStageLabel,
+  gateVerdict,
   registeredStageTools,
   stageAllowsTool,
   stageGateRoute,
@@ -110,6 +112,45 @@ test("阶段注册表:出口闸归属与裁决去向(确认推进/补充回流)"
     "验证闸属换库环境验证阶段");
   assert.equal(stageGateRoute("env_needed"), undefined,
     "环境闸不绑阶段(作答口是配置表单,不走选项裁决)");
+});
+
+test("举卡决策码:码表钉死(码+文案对),分派纯函数只认 (kind, code)", () => {
+  // 码表:每类闸的选项都有稳定码(协议)与人类文案(显示)。
+  assert.deepEqual(GATE_OPTIONS.analysis_confirm.map((option) => option.code),
+    ["confirm", "supplement"]);
+  assert.deepEqual(GATE_OPTIONS.conclude.map((option) => option.code),
+    ["issue", "non_issue", "supplement"]);
+  assert.deepEqual(GATE_OPTIONS.env_verify.map((option) => option.code),
+    ["pass", "fail"]);
+  assert.deepEqual(GATE_OPTIONS.env_needed.map((option) => option.code),
+    ["fill"]);
+  for (const [kind, options] of Object.entries(GATE_OPTIONS)) {
+    for (const option of options) {
+      assert.ok(option.label.length > 0, `${kind}/${option.code} 缺文案`);
+      // 码是协议 token:小写词,不含文案碎片——文案怎么改都碰不到它。
+      assert.match(option.code, /^[a-z_-]+$/, `${kind} 的码须是稳定 token`);
+    }
+    const codes = options.map((option) => option.code);
+    assert.equal(new Set(codes).size, codes.length, `${kind} 决策码不得重复`);
+  }
+
+  // 分派直测:每类闸每个码的裁决语义,与协议化之前的分支行为逐项一致。
+  assert.equal(gateVerdict("analysis_confirm", "confirm"), "advance");
+  assert.equal(gateVerdict("analysis_confirm", "supplement"), "rework");
+  assert.equal(gateVerdict("conclude", "issue"), "suspend");
+  assert.equal(gateVerdict("conclude", "non_issue"), "archive");
+  assert.equal(gateVerdict("conclude", "supplement"), "rework");
+  assert.equal(gateVerdict("env_verify", "pass"), "pass");
+  assert.equal(gateVerdict("env_verify", "fail"), "fail");
+  // 认不得的答复(自由作答/乱码):报告确认与结论按补充意见处理
+  // (旧协议里非确认文本的 else 分支语义),验证闸一律打回(旧 409)。
+  assert.equal(gateVerdict("analysis_confirm", "确认报告,开始问题修改"), "rework",
+    "旧文案只是普通文本,不再是匹配键");
+  assert.equal(gateVerdict("conclude", ""), "rework");
+  assert.equal(gateVerdict("env_verify", "确认非问题,闭环归档"), "unrecognized");
+  assert.equal(gateVerdict("env_verify", ""), "unrecognized");
+  // env_needed 的作答口是配置表单:走到选项裁决即调用方违约,一律打回。
+  assert.equal(gateVerdict("env_needed", "fill"), "unrecognized");
 });
 
 test("生成等价性对账:同一注册表生成的简报与门禁,工具清单完全一致", () => {

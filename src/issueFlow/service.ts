@@ -75,7 +75,7 @@ import {
 import { readBusinessModule } from "../businessModuleLibrary.ts";
 import type { IssueOpsTools } from "./opsTools.ts";
 import type { DtsGateway, DtsTicketDetail } from "./gateways.ts";
-import { createIssueTools, expectedBranch, GATE_OPTIONS, type IssueToolContext } from "./tools.ts";
+import { createIssueTools, expectedBranch, type IssueToolContext } from "./tools.ts";
 import {
   buildIssueTimeline,
   type IssueSessionTimeline,
@@ -88,13 +88,90 @@ import {
   issueResumePrompt,
   materializeIssueSkills,
 } from "./prompt.ts";
-import { fixedStageLabel, stageGateRoute } from "./stageRegistry.ts";
+import {
+  GATE_OPTIONS,
+  fixedStageLabel,
+  gateOptionLabel,
+  gateVerdict,
+  stageGateRoute,
+} from "./stageRegistry.ts";
 import {
   describePipelineRun,
   getPipelineStatus,
   triggerPipeline,
   type PipelineRun,
 } from "../pipelineClient.ts";
+
+// ---- 举卡作答的机器可读协议 ----
+
+/** Agent 问题卡(AskUserQuestion)选项的决策码:选项措辞是 Agent 现场
+ * 自由给的,没有领域码表可查,就按「题号-序号」机械派码(opt-0-1)。
+ * 投影时派码(前端渲染 label、提交 code),作答时按同一张码表把码
+ * 还原成选项原文——Agent 看到的永远是自己的措辞,行为零变化。 */
+function agentOptionCode(questionIndex: number, optionIndex: number): string {
+  return `opt-${questionIndex}-${optionIndex}`;
+}
+
+const AGENT_OPTION_CODE = /^opt-(\d+)-(\d+)$/;
+
+/** Agent 卡问题清单(AskUserQuestion 的原始形状;读不出来的当没有)。 */
+function agentCardQuestions(record: WaitingRecord): Array<{
+  question?: string;
+  options?: string[];
+}> {
+  return (record.question as { questions?: Array<{
+    question?: string;
+    options?: string[];
+  }> })?.questions ?? [];
+}
+
+/** 投影:给 Agent 卡的字符串选项派发决策码(get 的 waiting 出口)。
+ * 平台闸不走这里——它的码表就是 stageRegistry 的 GATE_OPTIONS,
+ * 举闸时已带码落盘。没有在等的卡原样返回 undefined。 */
+function withAgentOptionCodes(
+  record: WaitingRecord | undefined,
+): WaitingRecord | undefined {
+  if (!record) return undefined;
+  const questions = agentCardQuestions(record);
+  if (!questions.length) return record;
+  return {
+    ...record,
+    question: {
+      ...record.question,
+      questions: questions.map((item, questionIndex) => ({
+        ...item,
+        options: (item.options ?? []).map((option, optionIndex) => ({
+          code: agentOptionCode(questionIndex, optionIndex),
+          label: option,
+        })),
+      })),
+    },
+  };
+}
+
+/** Agent 卡作答的归码还原:answers(键=题号)里的决策码还原成选项
+ * 原文,自由作答原样保留,拼回与旧协议一致的换行合并 decision——
+ * humanGate 记录与 Agent 上下文看到的文本,与文字作答时代逐字节相同。
+ * 没带 answers(直调/自由文本旧形态)返回 undefined,由调用方透传
+ * decision。码对不上(卡已换)当自由作答,不静默吃掉用户的选择。 */
+function decodeAgentDecision(
+  record: WaitingRecord,
+  answers: Record<string, string> | undefined,
+): string | undefined {
+  if (!answers || !Object.keys(answers).length) return undefined;
+  const questions = agentCardQuestions(record);
+  const lines = questions.map((item, questionIndex) => {
+    const raw = answers[String(questionIndex)]?.trim() ?? "";
+    if (!raw) return "";
+    const match = AGENT_OPTION_CODE.exec(raw);
+    const option = match && Number(match[1]) === questionIndex
+      ? item.options?.[Number(match[2])]
+      : undefined;
+    return option ?? raw;
+  });
+  const joined = lines.filter(Boolean).join("\n");
+  return joined || undefined;
+}
 
 export class IssueNotFoundError extends Error {
   constructor(id: string) {
@@ -317,10 +394,11 @@ export class IssueFlowService {
     has_analysis: boolean;
   } {
     const live = this.require(id);
-    const waiting = live.humanGate.pending()[0];
     return {
       ...summarize(live.state),
-      waiting,
+      // Agent 卡选项投影时派决策码(前端认码不认文案);平台闸的卡
+      // 自带 GATE_OPTIONS 的码,原样在 state.gate 里。
+      waiting: withAgentOptionCodes(live.humanGate.pending()[0]),
       has_analysis: existsSync(join(live.root, "issue-analysis.md")),
     };
   }
@@ -985,9 +1063,14 @@ export class IssueFlowService {
 
   answer(id: string, input: {
     state_version: number;
-    decision: string;
-    notes?: string;
+    /** 人话答复:现场账与续聊提示词的显示/自由作答文本;闸卡按码作答
+     * 时可缺席(码能从注册表反查文案)。 */
+    decision?: string;
+    /** 平台闸的决策码(单题卡):裁决按它单点分派,文案不是匹配键。 */
+    code?: string;
+    /** Agent 问题卡逐题作答:键=题号,值=决策码或自由作答文本。 */
     answers?: Record<string, string>;
+    notes?: string;
   }): IssueSummary {
     const live = this.require(id);
     if (live.state.status !== "waiting_user") {
@@ -999,7 +1082,10 @@ export class IssueFlowService {
     if (live.state.gate) {
       return this.resolveGate(live, {
         stateVersion: input.state_version,
-        decision: input.decision,
+        decision: input.decision ?? "",
+        // 闸卡恒为单题:code 缺席时兼容逐题通道(同一提交协议)。
+        code: input.code?.trim()
+          || Object.values(input.answers ?? {}).find((value) => value.trim()),
         ...(input.notes !== undefined ? { notes: input.notes } : {}),
       });
     }
@@ -1007,8 +1093,9 @@ export class IssueFlowService {
     if (!waiting) throw new IssueControlError("盘上没有等待中的问题卡(状态不一致)");
     const record = live.humanGate.resolve(waiting.waiting_id, {
       stateVersion: input.state_version,
-      decision: input.decision,
-      ...(input.answers ? { answers: input.answers } : {}),
+      // 决策码还原成选项原文再入账:Agent 看到的文本与文字作答时代一致。
+      decision: decodeAgentDecision(waiting, input.answers)
+        ?? input.decision ?? "",
       ...(input.notes !== undefined ? { notes: input.notes } : {}),
     });
     if (this.turning.has(live.id)) {
@@ -1031,13 +1118,16 @@ export class IssueFlowService {
 
   // ---- 固定流程:平台闸的裁决与阶段机联动 ----
 
-  /** 平台闸作答分派。决策文本是闸门选项原文(前端决策卡不改动地
-   * 传回),按 GATE_OPTIONS 的前缀锚匹配;notes 是用户的补充说明。
+  /** 平台闸作答分派:按决策码单点分派(gateVerdict 纯函数,语义与
+   * 分派规则都住在 stageRegistry),中文文案不再是匹配键——改决策卡
+   * 文案零协议后果。decision 只进现场账与续聊提示词(显示语义):
+   * 按码作答时可缺席,从注册表码表反查人话;自由作答原样入账。
    * 确认后推进到哪、补充意见后回流到哪,是阶段知识,查阶段注册表
    * 的出口闸声明(stageGateRoute),不在裁决代码里写死。 */
   private resolveGate(live: LiveIssue, input: {
     stateVersion: number;
     decision: string;
+    code?: string;
     notes?: string;
   }): IssueSummary {
     const { state } = live;
@@ -1057,71 +1147,99 @@ export class IssueFlowService {
     const route = stageGateRoute(gate.kind);
     const stageName = (stage: FixedStage): string =>
       fixedStageLabel(state.scenario ?? "ticket", stage);
-    const decision = input.decision ?? "";
+    const code = input.code?.trim() ?? "";
+    // 显示语义的 decision:提交带了人话就原样用;只带码就从码表反查;
+    // 认不得的码原样示人(409 的现场账要能看到交上来的到底是什么)。
+    const decision = input.decision?.trim()
+      || (code ? gateOptionLabel(gate.kind, code) : "");
     const notes = input.notes?.trim() ?? "";
     const supplement = notes ? `\n用户补充说明: ${notes}` : "";
+    // 先裁决后动手:认不得的答复在状态未动前打回(不留下"闸已清、
+    // 转移已记"的半截账)。
+    const verdict = gateVerdict(gate.kind, code);
+    if (verdict === "unrecognized") {
+      throw new IssueControlError(
+        `无法识别的验证答复:「${decision.slice(0, 40)}」,请通过问题卡的选项作答`);
+    }
     delete state.gate;
     recordTransition(state, {
       source: "platform",
       note: `用户作答(${gate.kind}): ${decision.split("\n")[0]}${notes ? `;补充: ${notes.split("\n")[0]}` : ""}`,
     });
 
-    if (gate.kind === "analysis_confirm") {
-      if (decision.startsWith(GATE_OPTIONS.analysis_confirm[0])) {
-        const target = route?.confirmTo;
-        if (!target) {
-          throw new IssueControlError(
-            "阶段注册表缺少分析确认闸的推进目标(阶段配置错误)");
-        }
-        fixedAdvance(state, target,
-          `用户确认分析报告,进入${stageName(target)}`);
-        saveState(live.root, state);
-        this.continueTurn(live, fixedAdvanceNotice(state,
-          `用户已确认问题分析报告,进入「${stageName(target)}」阶段。${supplement}`
-            + "请按已确认的方案实施修复,完成后调用 complete_stage。"));
-        return summarize(state);
+    if (verdict === "advance") {
+      // analysis_confirm 确认:推进到注册表声明的 confirmTo。
+      const target = route?.confirmTo;
+      if (!target) {
+        throw new IssueControlError(
+          "阶段注册表缺少分析确认闸的推进目标(阶段配置错误)");
       }
-      // 有补充意见:留在分析阶段继续完善,改完重新提交。
-      state.stage_note = "用户对分析报告有补充意见,继续分析";
+      fixedAdvance(state, target,
+        `用户确认分析报告,进入${stageName(target)}`);
       saveState(live.root, state);
-      this.continueTurn(live,
-        `用户对分析报告提出补充意见,仍在「${stageName(state.stage as FixedStage)}」阶段:${decision}${supplement}\n`
-          + "请按意见完善 issue-analysis.md 后重新 submit_analysis 提交。");
+      this.continueTurn(live, fixedAdvanceNotice(state,
+        `用户已确认问题分析报告,进入「${stageName(target)}」阶段。${supplement}`
+          + "请按已确认的方案实施修复,完成后调用 complete_stage。"));
       return summarize(state);
     }
 
+    if (verdict === "archive") {
+      // conclude 确认非问题:闭环归档(非问题也留报告,测试拿去留痕)。
+      const now = new Date().toISOString();
+      fixedComplete(state, "结论:非问题,已闭环归档");
+      state.conclusion = {
+        kind: "non_issue",
+        summary: gate.proposal?.summary
+          ? `${gate.proposal.summary}${notes ? `;${notes}` : ""}`
+          : decision,
+        at: now,
+      };
+      state.status = "archived";
+      saveState(live.root, state);
+      this.releaseDriver(live);
+      this.stopContainer(live);
+      this.vault.remove(live.id);
+      this.log(`[issue-flow] ${live.id} 结论非问题,已闭环归档`);
+      return summarize(state);
+    }
+
+    if (verdict === "suspend") {
+      // conclude 确认是问题:挂起等用户关联 DTS 单号(关联即转正)。
+      fixedComplete(state, "结论:是问题,挂起等待关联单号");
+      state.status = "suspended";
+      state.stage_note = "结论为「是问题」——请关联 DTS 单号转正,或直接归档";
+      saveState(live.root, state);
+      this.releaseDriver(live);
+      this.stopContainer(live);
+      this.log(`[issue-flow] ${live.id} 结论是问题,已挂起待关联单号`);
+      return summarize(state);
+    }
+
+    if (verdict === "pass") {
+      // env_verify 通过:本阶段收尾,待手动归档。
+      fixedComplete(state, "用户环境验证通过,待归档收口");
+      state.status = "idle";
+      state.stage_note = "环境验证通过——确认 MR 合入后可归档收口";
+      saveState(live.root, state);
+      return summarize(state);
+    }
+
+    if (verdict === "fail") {
+      // env_verify 不通过:回退问题分析(轮次+1,回退细节在 fixedRollback)。
+      const reason = notes || decision;
+      fixedRollback(state, `用户环境验证发现问题:${reason.split("\n")[0]}`);
+      saveState(live.root, state);
+      this.continueTurn(live, fixedAdvanceNotice(state,
+        `用户在环境验证发现问题,已回退到「问题分析」阶段(第 ${state.round} 轮)。`
+          + `${supplement || `\n用户描述: ${reason}`}\n`
+          + "请带着新一轮的现场重新分析(前几轮的修复在分支上,不要推倒重来),"
+          + "分析完成后重新 submit_analysis。"));
+      return summarize(state);
+    }
+
+    // verdict === "rework":补充意见/自由作答。两类闸的去向不同——
+    // analysis_confirm 留在分析阶段完善重提;conclude 重置回分析继续查证。
     if (gate.kind === "conclude") {
-      if (decision.includes("确认非问题")) {
-        // 确认非问题:闭环归档(非问题也留报告,测试拿去留痕)。
-        const now = new Date().toISOString();
-        fixedComplete(state, "结论:非问题,已闭环归档");
-        state.conclusion = {
-          kind: "non_issue",
-          summary: gate.proposal?.summary
-            ? `${gate.proposal.summary}${notes ? `;${notes}` : ""}`
-            : decision,
-          at: now,
-        };
-        state.status = "archived";
-        saveState(live.root, state);
-        this.releaseDriver(live);
-        this.stopContainer(live);
-        this.vault.remove(live.id);
-        this.log(`[issue-flow] ${live.id} 结论非问题,已闭环归档`);
-        return summarize(state);
-      }
-      if (decision.includes("确认是问题")) {
-        // 确认是问题:挂起等用户关联 DTS 单号(关联即转正)。
-        fixedComplete(state, "结论:是问题,挂起等待关联单号");
-        state.status = "suspended";
-        state.stage_note = "结论为「是问题」——请关联 DTS 单号转正,或直接归档";
-        saveState(live.root, state);
-        this.releaseDriver(live);
-        this.stopContainer(live);
-        this.log(`[issue-flow] ${live.id} 结论是问题,已挂起待关联单号`);
-        return summarize(state);
-      }
-      // 有补充意见:回到分析阶段继续查证(结论节点没走完,重置回未开始)。
       const owner = route?.stage;
       if (!owner || !route?.reworkTo) {
         throw new IssueControlError(
@@ -1141,29 +1259,13 @@ export class IssueFlowService {
           + "请继续查证,完善 issue-analysis.md 后重新 submit_analysis 提交结论。");
       return summarize(state);
     }
-
-    // env_verify:换库验证的裁决(闸属 deploy_verify,见注册表;回退
-    // 目标在 fixedRollback 的阶段机操作里,不在裁决分支上写死)。
-    if (decision.startsWith("验证通过")) {
-      fixedComplete(state, "用户环境验证通过,待归档收口");
-      state.status = "idle";
-      state.stage_note = "环境验证通过——确认 MR 合入后可归档收口";
-      saveState(live.root, state);
-      return summarize(state);
-    }
-    if (decision.includes("验证发现问题")) {
-      const reason = notes || decision;
-      fixedRollback(state, `用户环境验证发现问题:${reason.split("\n")[0]}`);
-      saveState(live.root, state);
-      this.continueTurn(live, fixedAdvanceNotice(state,
-        `用户在环境验证发现问题,已回退到「问题分析」阶段(第 ${state.round} 轮)。`
-          + `${supplement || `\n用户描述: ${reason}`}\n`
-          + "请带着新一轮的现场重新分析(前几轮的修复在分支上,不要推倒重来),"
-          + "分析完成后重新 submit_analysis。"));
-      return summarize(state);
-    }
-    throw new IssueControlError(
-      `无法识别的验证答复:「${decision.slice(0, 40)}」,请通过问题卡的选项作答`);
+    // analysis_confirm 的补充意见:留在分析阶段继续完善,改完重新提交。
+    state.stage_note = "用户对分析报告有补充意见,继续分析";
+    saveState(live.root, state);
+    this.continueTurn(live,
+      `用户对分析报告提出补充意见,仍在「${stageName(state.stage as FixedStage)}」阶段:${decision}${supplement}\n`
+        + "请按意见完善 issue-analysis.md 后重新 submit_analysis 提交。");
+    return summarize(state);
   }
 
   reply(id: string, text: string): IssueSummary {

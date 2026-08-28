@@ -3,10 +3,13 @@
  *
  * 提交语义与旧版完全一致——同一个 answerIssue 接口、同一个 state_version。
  * 区别只在交互:旧版"点选项立即提交",这里改成"先选/先填,统一按提交",
- * 让多题卡片能一次看清再作答。decision 仍是单个字符串:多题答案按
- * humanGate.renderDecision 对 answers map 的同款口径以换行合并;补充说明
- * 走 notes 字段。后果提示(choice_effects)是任务侧的服务端能力,问题域
- * 没有对应账目,这里不伪造。
+ * 让多题卡片能一次看清再作答。协议上是"码+文案"双通道(举卡裁决协议化):
+ * 选项渲染 label(纯显示),提交回传 code(平台闸的裁决按它单点分派,
+ * Agent 卡由服务端把码还原成选项原文再交给 AI)——文案改字零协议后果。
+ * decision 仍是人话文本(显示/审计/自由作答);平台闸的 code 是单题卡
+ * 的所选项,Agent 卡的 answers 是逐题(码或自由文本)。补充说明走 notes。
+ * 后果提示(choice_effects)是任务侧的服务端能力,问题域没有对应账目,
+ * 这里不伪造。
  *
  * 例外是 env_needed 闸(2026-08-28):通用选项卡换成语义化表单(地址+
  * 端口+密码),提交走 onEnvironment(由会话视图接到 attachIssueEnvironment
@@ -120,9 +123,11 @@ function EnvNeededForm({ busy, onSubmit }: {
 function GenericDecisionCard({ waiting, busy, onAnswer }: {
   waiting: IssueWaitingCard;
   busy: boolean;
-  onAnswer: (decision: string, notes?: string) => Promise<boolean>;
+  onAnswer: (decision: string, code?: string,
+    answers?: Record<string, string>, notes?: string) => Promise<boolean>;
 }) {
   const questions = waiting.question?.questions ?? [];
+  // picked 存决策码(选项的身份是 code,文案只用于显示)。
   const [picked, setPicked] = useState<Record<number, string>>({});
   const [custom, setCustom] = useState<Record<number, string>>({});
   const [notesOpen, setNotesOpen] = useState(false);
@@ -140,11 +145,27 @@ function GenericDecisionCard({ waiting, busy, onAnswer }: {
 
   async function submit() {
     if (!ready || busy) return;
-    const decision = questions.map((item, index) => {
-      const own = item.options.length ? picked[index] : custom[index]?.trim();
-      return own ?? "";
-    }).filter(Boolean).join("\n");
-    const ok = await onAnswer(decision, notes.trim() || undefined);
+    const labels: string[] = [];
+    const answers: Record<string, string> = {};
+    let code: string | undefined;
+    questions.forEach((item, index) => {
+      if (item.options.length) {
+        const pickedCode = picked[index];
+        if (!pickedCode) return;
+        const option = item.options.find((candidate) =>
+          candidate.code === pickedCode);
+        if (option) labels.push(option.label);
+        answers[String(index)] = pickedCode;
+        code ??= pickedCode;
+      } else {
+        const own = custom[index]?.trim();
+        if (!own) return;
+        answers[String(index)] = own;
+        labels.push(own);
+      }
+    });
+    const ok = await onAnswer(
+      labels.join("\n"), code, answers, notes.trim() || undefined);
     if (ok) {
       setPicked({});
       setCustom({});
@@ -172,13 +193,13 @@ function GenericDecisionCard({ waiting, busy, onAnswer }: {
       {item.options.length > 0
         ? <div className="options cards">
             {item.options.map((option) => {
-              const chosen = picked[index] === option;
-              return <button type="button" key={option} role="radio"
+              const chosen = picked[index] === option.code;
+              return <button type="button" key={option.code} role="radio"
                 aria-checked={chosen}
                 className={`option${chosen ? " picked" : ""}`}
-                onClick={() => setPicked({ ...picked, [index]: option })}>
+                onClick={() => setPicked({ ...picked, [index]: option.code })}>
                 <span className={`radio${chosen ? " on" : ""}`} aria-hidden />
-                <span className="option-body"><span className="option-title">{option}</span></span>
+                <span className="option-body"><span className="option-title">{option.label}</span></span>
               </button>;
             })}
           </div>

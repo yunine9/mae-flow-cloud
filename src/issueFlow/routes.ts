@@ -412,6 +412,8 @@ export async function handleIssueRoutes(
       return done(200, issueFlow.answer(id, {
         state_version: Number(body.state_version),
         decision: String(body.decision ?? ""),
+        // 决策码(平台闸的裁决协议):与 decision 并行携带,文案不是匹配键。
+        ...(body.code !== undefined ? { code: String(body.code) } : {}),
         ...(answers ? { answers } : {}),
         ...(body.notes !== undefined ? { notes: String(body.notes) } : {}),
       }));
