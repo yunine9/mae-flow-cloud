@@ -56,6 +56,7 @@ import {
   type EventFilter,
 } from "../eventView";
 import { atBottom, backlog } from "../follow";
+import { prepareDtsHtml } from "./dtsHtml";
 import { formatWait } from "../taskTime";
 import { startVisiblePolling } from "../visiblePolling";
 import { formatLocalClock, formatLocalDateTime } from "../time";
@@ -571,30 +572,6 @@ function ManualRegister({
   </form>;
 }
 
-/** 将 DTS 描述中的 <img src="https://dts-xxx/..."> 或 <img src="/v1/nfs/...">
- *  重写为本地代理 URL /issues/dts-file?path=...,避免跨域无 cookie 问题。 */
-function resolveDtsImages(html: string | undefined): string {
-  if (!html) return "";
-  // path 整体 encodeURIComponent 后再进查询串:DTS 文件名里常见的
-  // 空格/中文/&/+/#/% 原样拼 URL 会截断参数或让整个请求解析失败。
-  // 只编码一次,服务端 searchParams.get 解回原路径再回取 DTS;
-  // DTS 原文里已编码过的段(%xx)会再转义成 %25xx,解一次恰好还原,
-  // 不会出现二次解码丢字。
-  const toProxy = (_m: string, lead: string, path: string, tail: string) =>
-    `${lead}/issues/dts-file?path=${encodeURIComponent(path)}${tail}`;
-  // 匹配绝对路径: src="https://dts-szv.clouddragon.huawei.com/v1/nfs/..."
-  html = html.replace(
-    /(<img\s[^>]*src=")https?:\/\/[^/"]*(\/[^"]*)(")/gi,
-    toProxy,
-  );
-  // 兜底匹配相对路径: src="/v1/nfs/..."
-  html = html.replace(
-    /(<img\s[^>]*src=")(\/v1\/[^"]*)(")/gi,
-    toProxy,
-  );
-  return html;
-}
-
 /** 从版本串里解 (R 版, C 版),如 "MAE-Access V100R025C10SPC210B002"
  * → [25, 10]。解不出的返回 undefined(排序时垫底)。 */
 function dtsVersionKey(version: string): [number, number] | undefined {
@@ -1047,7 +1024,7 @@ function DtsRegister({
                     <dt>问题描述</dt>
                     <dd className="issue-dts-detail-html"
                       dangerouslySetInnerHTML={{
-                        __html: resolveDtsImages(detail?.description || ticket.description)
+                        __html: prepareDtsHtml(detail?.description || ticket.description)
                           || "(暂无描述)",
                       }}
                     />
@@ -1689,7 +1666,7 @@ function IssueMaterialsPane({ detail, busy, view, onView, onNotifyAI }: {
         </p>
         <div className="issue-materials-html issue-dts-detail-html"
           dangerouslySetInnerHTML={{
-            __html: resolveDtsImages(dtsDetail.description || dtsDetail.content)
+            __html: prepareDtsHtml(dtsDetail.description || dtsDetail.content)
               || "(无描述)",
           }}
         />
