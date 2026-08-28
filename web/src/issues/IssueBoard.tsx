@@ -70,6 +70,12 @@ export function IssueBoard({ viewer, onNavigateProfile }: {
   const [detail, setDetail] = useState<IssueDetail | undefined>();
   const [error, setError] = useState("");
 
+  // 聚合徽章(与任务侧"当前任务"同款语义):待答复置前,需介入报警。
+  const waitingCount = issues.filter((issue) =>
+    issue.status === "waiting_user").length;
+  const interventionCount = issues.filter((issue) =>
+    issue.status === "failed" || issue.status === "interrupted").length;
+
   const refreshList = () => {
     void listIssues().then(setIssues).catch(() => undefined);
   };
@@ -138,7 +144,14 @@ export function IssueBoard({ viewer, onNavigateProfile }: {
           <span className="section-kicker">问题处理</span>
           <h2 id="issue-mine-title">我的问题</h2>
         </div>
-        <span className="section-count">共 {issues.length} 个</span>
+        {/* 聚合徽章与任务侧"当前任务"同款语义:待答复置前,需介入报警。 */}
+        <span className="current-work-counts">
+          {waitingCount > 0 && <span className="section-count attention">
+            {waitingCount} 项待答复</span>}
+          {interventionCount > 0 && <span className="section-count danger">
+            {interventionCount} 项需介入</span>}
+          <span className="section-count">共 {issues.length} 个</span>
+        </span>
       </div>
       {issues.length === 0
         ? <div className="review-clear current-work-empty"><span aria-hidden>✓</span><div>
@@ -146,10 +159,11 @@ export function IssueBoard({ viewer, onNavigateProfile }: {
             <p>从上方登记一个"我的问题",或从 DTS 拉取问题单发起处理;
             研究结论是非问题也可以直接归档收口。</p>
           </div></div>
-        : <div className="issue-list">
+        : <div className="task-list">
             {issues.map((issue) => <IssueCard
               key={issue.id}
               issue={issue}
+              active={openId === issue.id}
               onOpen={() => { setOpenId(issue.id); }}
             />)}
           </div>}
@@ -157,35 +171,114 @@ export function IssueBoard({ viewer, onNavigateProfile }: {
   </div>;
 }
 
-function IssueCard({ issue, onOpen }: { issue: IssueSummary; onOpen: () => void }) {
-  return <button type="button" className={`issue-card status-${issue.status}`}
-    onClick={onOpen}>
-    <div className="issue-card-head">
-      <span className={`issue-status status-${issue.status}`}>
-        {ISSUE_STATUS_TEXT[issue.status]}
+/** 问题列表卡:骨架/交互与任务侧 TaskCard 同款(状态轨 + overline +
+ * 焦点行 + 阶段进度 + meta 动作行 + 展开态),为将来"我的问题 × 当前
+ * 任务"混合列表留口子——两张卡共用 task-* 全局类,同列渲染视觉一致。
+ * 点击卡片=展开摘要;进会话走 meta 行「进入问题工作台」。
+ * 焦点行只复述 API 字段(stage/round/stage_note),前端不推断状态。 */
+function IssueCard({ issue, active, onOpen }: {
+  issue: IssueSummary;
+  active?: boolean;
+  onOpen: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const doneIdle = issue.status === "idle" && issue.stage === "done";
+  const stageLine = [
+    issueStageText(issue),
+    issue.mode === "fixed" && issue.round && issue.round > 1
+      ? ` · 第 ${issue.round} 轮` : "",
+    issue.stage_note ? ` · ${issue.stage_note}` : "",
+  ].join("");
+
+  return <article id={`issue-${issue.id}`}
+    className={`task-card issue-card-large status-${issue.status}`
+      + `${expanded ? " expanded" : ""}${active ? " focused" : ""}`}>
+    <button type="button" className="task-summary"
+      onClick={() => setExpanded((open) => !open)} aria-expanded={expanded}>
+      <span className="task-status-rail" aria-hidden />
+      <span className="task-summary-body">
+        <span className="task-overline">
+          {issue.ticket
+            ? <span className="task-ticket">{issue.ticket}</span>
+            : <span className="task-ticket empty">未绑单</span>}
+          <span className="task-id" title="会话编号">{issue.id}</span>
+          <span className={`pill ${issue.status}`}>
+            <i aria-hidden />{ISSUE_STATUS_TEXT[issue.status]}
+          </span>
+          {issue.status === "waiting_user" && <span className="task-created">
+            等你答复</span>}
+          <span className="task-created">{formatLocalDateTime(issue.updated_at)}</span>
+        </span>
+        <strong className="task-title">{issue.title}</strong>
+        <span className="task-ownership">
+          <span>处理人 · {issue.account}</span>
+          <span>{issue.source === "dts" ? "DTS 单" : "自研问题"}</span>
+        </span>
+        <span className={`task-focus task-focus-${issue.stage}`}>
+          <i aria-hidden />
+          <strong>{stageLine}</strong>
+          {issue.conclusion && <span>结论 · {issueConclusionText(issue)}</span>}
+        </span>
+        {issue.mode === "fixed" && <IssueFixedProgress issue={issue} />}
       </span>
-      <span className="issue-stage">
-        {issueStageText(issue)}
-        {issue.mode === "fixed" && issue.round && issue.round > 1
-          ? ` · 第 ${issue.round} 轮` : ""}
-        {issue.stage_note ? ` · ${issue.stage_note}` : ""}
+      <span className="task-chevron" aria-hidden>
+        <svg viewBox="0 0 20 20">
+          <path d="m7.5 5 5 5-5 5" />
+        </svg>
       </span>
-      {issue.ticket
-        ? <span className="issue-ticket">{issue.ticket}</span>
-        : <span className="issue-ticket empty">未绑单</span>}
+    </button>
+
+    <div className="task-meta">
+      <button type="button" className="panel-link" onClick={onOpen}>
+        <span>进入问题工作台</span>
+        <svg viewBox="0 0 16 16" aria-hidden>
+          <path d="M6 3.5h6.5V10M12.25 3.75 5 11" />
+        </svg>
+      </button>
+      {issue.mr?.url && <a href={issue.mr.url} target="_blank" rel="noreferrer">
+        <span>合入请求{issue.mr.iid ? ` · !${issue.mr.iid}` : ""}</span>
+        <svg viewBox="0 0 16 16" aria-hidden>
+          <path d="M6 3.5h6.5V10M12.25 3.75 5 11" />
+        </svg>
+      </a>}
+      {issue.push && <span className="meta-fact">
+        已推送 · {issue.push.branch}@{issue.push.sha.slice(0, 10)}</span>}
+      {issue.error && <span className="meta-fact">{issue.error.slice(0, 80)}</span>}
     </div>
-    <strong className="issue-title">{issue.title}</strong>
-    <div className="issue-card-foot">
-      <span>{issue.source === "dts" ? "DTS 单" : "自研问题"}</span>
-      <span>{formatLocalDateTime(issue.updated_at)}</span>
-      {issue.conclusion && <span className="issue-conclusion">
-        {issue.conclusion.kind === "non_issue" ? "非问题"
-          : issue.conclusion.kind === "delivered" ? "已提 MR"
-          : issue.conclusion.kind === "converted" ? "已转正"
-          : issue.conclusion.kind === "issue" ? "问题成立" : "已修复"}
-      </span>}
-    </div>
-  </button>;
+
+    {expanded && <div className="task-detail-body">
+      {issue.status === "failed" && issue.error && (
+        <div className="alert">
+          <strong>会话执行失败</strong>
+          <span>{issue.error}</span>
+        </div>
+      )}
+      {doneIdle && <div className="verify-waiting">
+        <strong>收口提醒</strong>
+        <span>结论已出——确认 MR 合入后在会话内归档收口。</span>
+      </div>}
+      {issue.status === "waiting_user" && <div className="verify-waiting">
+        <strong>等你处理</strong>
+        <span>进入问题工作台答复问题卡 / 平台闸,会话才会继续跑。</span>
+      </div>}
+      {issue.status === "interrupted" && <div className="verify-waiting">
+        <strong>服务重启打断</strong>
+        <span>进入问题工作台发一条消息即可续上现场。</span>
+      </div>}
+      <div className="task-utilities">
+        <IssueEventsPane id={issue.id} active={expanded} />
+        <IssueCostPanel id={issue.id} />
+      </div>
+    </div>}
+  </article>;
+}
+
+function issueConclusionText(issue: IssueSummary): string {
+  const kind = issue.conclusion?.kind;
+  return kind === "non_issue" ? "非问题"
+    : kind === "delivered" ? "已提 MR"
+    : kind === "converted" ? "已转正"
+    : kind === "issue" ? "问题成立" : "已修复";
 }
 
 /** 发起前置门禁条(与需求侧 /launch-options 个人缺项同款语义):这单

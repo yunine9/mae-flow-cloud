@@ -1716,6 +1716,11 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 }
 .issue-dts-toolbar button:disabled { opacity: .5; cursor: not-allowed; }
 .issue-dts-note { color: #d64545; font-size: var(--font-size-assist); }
+/* 问题列表卡(骨架复用 task-card 全局类):状态轨补问题域状态色,
+ * 任务侧没有的 waiting_user/suspended 在这里定义,不碰任务侧规则。 */
+.status-waiting_user .task-status-rail { background: var(--attention); }
+.status-suspended .task-status-rail { background: #3b83d5; }
+.issue-card-large .task-focus strong { font-weight: 600; }
 /* 版本下拉多选框:触发钮 + 复选面板(面板锚定在 wrapper 上) */
 .issue-dts-versions { position: relative; display: inline-flex; margin-top: 10px; }
 .issue-dts-version-trigger {
