@@ -26,7 +26,7 @@ import {
 } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import { CloudSession, type Outcome } from "../sessionDriver.ts";
-import { EventLog } from "../semanticEvents.ts";
+import { EventLog, type SemanticEvent } from "../semanticEvents.ts";
 import { TranscriptStore } from "../transcriptStore.ts";
 import { GateService } from "../gateService.ts";
 import { HumanGate, renderDecision, type WaitingRecord } from "../humanGate.ts";
@@ -47,6 +47,7 @@ import {
   raiseGate,
   recordTransition,
   saveState,
+  shouldNudgeFixed,
   summarize,
   IssueControlError,
   type FixedStage,
@@ -60,6 +61,10 @@ import {
   type IssueSummary,
   type IssueSessionState,
 } from "./state.ts";
+import {
+  buildWorksiteRecord,
+  type WorksiteRecord,
+} from "./worksiteExport.ts";
 import {
   cloneRepository,
   currentHead,
@@ -89,6 +94,7 @@ import {
 } from "./sessionView.ts";
 import {
   fixedAdvanceNotice,
+  fixedNudgeNotice,
   issueFixedOpeningPrompt,
   issueOpeningPrompt,
   issueResumePrompt,
@@ -191,6 +197,10 @@ export interface IssueMessage {
 }
 
 const TICKET_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+
+/** 催办续跑预算:每个用户/平台回合最多自动推回模型这么多次,再收嘴就
+ * 落 idle 交还人工——催办是纠偏不是永动机,连收嘴说明模型真不想干了。 */
+const NUDGE_BUDGET = 2;
 
 /** 结论文档回传上限:一个巨型文档不能把页面拖死。 */
 const ANALYSIS_MAX_BYTES = 512 * 1024;
@@ -393,6 +403,26 @@ export class IssueFlowService {
       content: read.content,
       ...(read.truncated ? { truncated: true } : {}),
     };
+  }
+
+  /** 现场记录导出:事件流逐字 + issue.json 台账 → 单文件 Markdown
+   * (人粗读 + 喂 AI 精读复盘,2026-08-28 拍板)。事件流读取容错:
+   * 半行/坏行跳过——导出是排障工具,不能自己是第一个炸点。 */
+  exportWorksite(id: string): WorksiteRecord {
+    const live = this.require(id);
+    const path = join(live.root, "events.jsonl");
+    const events: SemanticEvent[] = [];
+    if (existsSync(path)) {
+      for (const line of readFileSync(path, "utf-8").split("\n")) {
+        if (!line.trim()) continue;
+        try {
+          events.push(JSON.parse(line) as SemanticEvent);
+        } catch {
+          // 写入方可能还在写:宁缺毋炸,坏行跳过。
+        }
+      }
+    }
+    return buildWorksiteRecord({ state: live.state, events });
   }
 
   // ---- 登记 ----
@@ -762,8 +792,32 @@ export class IssueFlowService {
             live.driver!.continueWith(late.join("\n\n")));
           return;
         }
-        state.status = "idle";
-        state.last_reply = live.driver?.finalReply() ?? state.last_reply;
+        // 催办续跑(2026-08-28 拍板 A):模型提前收嘴不等于阶段完成,
+        // 阶段真相在平台——没走到出口就把阶段简报砸回去推它继续,
+        // 预算内自动续跑,耗尽才落 idle 交还人工。需求流同款机制的移植。
+        if (shouldNudgeFixed(state)) {
+          state.nudges = (state.nudges ?? 0) + 1;
+          if (state.nudges <= NUDGE_BUDGET) {
+            this.log(`[issue-flow] ${live.id} 模型提前收嘴,`
+              + `第 ${state.nudges}/${NUDGE_BUDGET} 次催办续跑(阶段 ${state.stage})`);
+            state.status = "running";
+            saveState(live.root, live.state);
+            void this.runTurn(live, async () => {
+              await this.ensureContainer(live);
+              return live.driver!.continueWith(
+                fixedNudgeNotice(state, state.nudges!, NUDGE_BUDGET));
+            });
+            return;
+          }
+          state.status = "idle";
+          state.stage_note = `模型连续 ${NUDGE_BUDGET} 次提前收嘴,已停机`
+            + "——发送「继续」或补充指示,平台才会再推进";
+          state.last_reply = live.driver?.finalReply() ?? state.last_reply;
+          this.log(`[issue-flow] ${live.id} 催办预算耗尽,转人工(阶段 ${state.stage})`);
+        } else {
+          state.status = "idle";
+          state.last_reply = live.driver?.finalReply() ?? state.last_reply;
+        }
       }
     } else {
       state.status = "failed";
@@ -944,6 +998,7 @@ export class IssueFlowService {
     }
     this.turning.add(live.id);
     live.state.status = "running";
+    live.state.nudges = 0;
     saveState(live.root, live.state);
     void this.runTurn(live, async () => {
       await this.ensureContainer(live);
@@ -998,6 +1053,7 @@ export class IssueFlowService {
     const startTurn = (message: string) => {
       this.turning.add(live.id);
       state.status = "running";
+      state.nudges = 0;
       saveState(live.root, state);
       void this.runTurn(live, async () => {
         await this.ensureContainer(live);
@@ -1120,6 +1176,7 @@ export class IssueFlowService {
     if (!content) throw new IssueControlError("消息内容不能为空");
     this.turning.add(live.id);
     live.state.status = "running";
+    live.state.nudges = 0;
     saveState(live.root, live.state);
     void this.runTurn(live, async () => {
       await this.ensureContainer(live);
@@ -1384,6 +1441,7 @@ export class IssueFlowService {
     }
     this.turning.add(live.id);
     state.status = "running";
+    state.nudges = 0;
     saveState(live.root, state);
     void this.runTurn(live, async () => {
       await this.ensureContainer(live);

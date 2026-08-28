@@ -1295,6 +1295,19 @@ function IssueSessionView({
             ? "结论为问题时挂起,关联单号后转正"
             : "提 MR 前必须绑定单号"}
         </span>
+        <button type="button" className="issue-export" disabled={busy}
+          title="导出现场记录(Markdown:人粗读 + AI 精读复盘)"
+          onClick={() => {
+            // 同源 GET 自带 cookie,download 属性强制落盘;文件名本地拼,
+            // 服务端 disposition 只对 curl/直连生效。
+            const anchor = document.createElement("a");
+            anchor.href = `/issues/${detail.id}/export`;
+            anchor.download = `${detail.id}-现场记录-`
+              + `${new Date().toISOString().slice(0, 10)}.md`;
+            document.body.appendChild(anchor);
+            anchor.click();
+            anchor.remove();
+          }}>导出现场记录</button>
       </div>
     </div>
 

@@ -21,6 +21,8 @@
  *   GET  /issues/:id/timeline         → 耗时与卡点(纯函数归纳,只读)
  *   GET  /issues/:id/analysis         → 结论文档 issue-analysis.md
  *                                      (缺失为 200 {unavailable},不 404)
+ *   GET  /issues/:id/export           → 现场记录导出(单文件 Markdown:
+ *                                      事件流逐字 + 台账,复盘用)
  *   GET  /issues/:id/events           → SSE:事件流尾随
  *   POST /issues/:id/reply            → 续聊
  *   POST /issues/:id/decision         → 问题卡作答
@@ -327,6 +329,20 @@ export async function handleIssueRoutes(
     // 文档还没生成为 200 {unavailable},前端据此出空态而不是报错。
     if (method === "GET" && parts[2] === "analysis" && parts.length === 3) {
       return done(200, issueFlow.analysis(id));
+    }
+
+    // 现场记录导出(GET /issues/:id/export):事件流逐字 + 台账 → 单文件
+    // Markdown,人粗读 + 喂 AI 复盘(2026-08-28 拍板)。内容不脱敏,
+    // 文件头自带传播提示;disposition 双文件名(ASCII 兜底 + UTF-8 中文)。
+    if (method === "GET" && parts[2] === "export" && parts.length === 3) {
+      const record = issueFlow.exportWorksite(id);
+      response.writeHead(200, {
+        "content-type": "text/markdown; charset=utf-8",
+        "content-disposition": `attachment; filename="${record.filenameAscii}"`
+          + `; filename*=UTF-8''${encodeURIComponent(record.filename)}`,
+      });
+      response.end(record.markdown);
+      return true;
     }
 
     if (method === "GET" && parts[2] === "events" && parts.length === 3) {

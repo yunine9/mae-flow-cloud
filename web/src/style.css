@@ -1896,6 +1896,13 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-session-title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; flex: 1; }
 .issue-session-title strong { font-size: 16px; }
 .issue-session-ticket { display: flex; align-items: center; gap: 8px; }
+.issue-export {
+  border: 1px solid var(--line); background: var(--surface); color: var(--text);
+  border-radius: 8px; padding: 6px 12px; cursor: pointer;
+  font-size: var(--font-size-assist); font-weight: 600;
+}
+.issue-export:hover { border-color: var(--accent); color: var(--accent); }
+.issue-export:disabled { opacity: .5; cursor: not-allowed; }
 .issue-bind { display: flex; gap: 6px; }
 .issue-bind input { width: 180px; }
 .issue-bind button {

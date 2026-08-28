@@ -29,7 +29,9 @@ import {
   handleIssueRoutes,
 } from "../src/issueFlow/routes.ts";
 import { cloneFailureMessage } from "../src/issueFlow/issueGit.ts";
-import { loadState } from "../src/issueFlow/state.ts";
+import { loadState, type IssueSessionState } from "../src/issueFlow/state.ts";
+import { buildWorksiteRecord } from "../src/issueFlow/worksiteExport.ts";
+import type { SemanticEvent } from "../src/semanticEvents.ts";
 
 test("旧词表阶段读取时迁移:在途问题不因换词表而丢阶段", () => {
   const dir = mkdtempSync(join(tmpdir(), "mfc-issue-stage-"));
@@ -819,4 +821,115 @@ test("网管环境配置路由(2026-08-28):POST /issues/:id/environment 密码�
     await service.shutdown().catch(() => undefined);
     await model.stop();
   }
+});
+
+test("现场记录导出·纯构建器:工具命令/结果/决策逐字保真,未知事件兜底", () => {
+  const state = {
+    id: "issue-9", account: "dev",
+    created_at: "2026-08-28T08:00:00Z", updated_at: "2026-08-28T09:00:00Z",
+    title: "超长标题验证", description: "", source: "manual",
+    status: "idle", stage: "locate_root", stage_note: "对照代码核对时序",
+    stage_at: "2026-08-28T09:00:00Z", ticket: "DTS-2026-1006",
+    transitions: [
+      { at: "2026-08-28T08:10:00Z", source: "agent", stage: "align_issue",
+        note: "对齐现象" },
+      { at: "2026-08-28T08:20:00Z", source: "platform", note: "单号已绑定" },
+    ],
+  } as unknown as IssueSessionState;
+  const events = [
+    { eventId: 1, taskId: "issue-9", sessionId: "s",
+      ts: "2026-08-28T08:00:00Z", kind: "session_started", payload: {} },
+    { eventId: 2, taskId: "issue-9", sessionId: "s",
+      ts: "2026-08-28T08:01:00Z", kind: "user_message",
+      payload: { text: "开场指令" } },
+    { eventId: 3, taskId: "issue-9", sessionId: "s",
+      ts: "2026-08-28T08:02:00Z", kind: "tool_requested",
+      payload: { call_id: "c1", name: "Bash",
+        input: { command: "grep -rn 网元树 src/" } } },
+    { eventId: 4, taskId: "issue-9", sessionId: "s",
+      ts: "2026-08-28T08:03:00Z", kind: "tool_finished",
+      payload: { call_id: "c1", name: "Bash", is_error: true,
+        result: "grep: no match" } },
+    { eventId: 5, taskId: "issue-9", sessionId: "s",
+      ts: "2026-08-28T08:04:00Z", kind: "human_decision",
+      payload: { decision: "确认根因", notes: "以日志为准" } },
+    { eventId: 6, taskId: "issue-9", sessionId: "s",
+      ts: "2026-08-28T08:05:00Z", kind: "mystery_kind", payload: { odd: 1 } },
+  ] as unknown as SemanticEvent[];
+  const record = buildWorksiteRecord(
+    { state, events, now: "2026-08-28T10:00:00Z" });
+  assert.match(record.filename, /^issue-9-现场记录-20260828\.md$/);
+  assert.match(record.markdown, /# 现场记录:超长标题验证/);
+  assert.match(record.markdown, /DTS-2026-1006/);
+  assert.match(record.markdown, /grep -rn 网元树 src\//, "工具命令逐字");
+  assert.match(record.markdown, /✗ 异常/, "失败工具要标异常");
+  assert.match(record.markdown, /确认根因/, "用户决策逐字");
+  assert.match(record.markdown, /mystery_kind/, "未知事件兜底不丢");
+  assert.match(record.markdown, /\[AI 上报\] 对齐问题/, "阶段转移入账");
+  assert.match(record.markdown, /\[平台\]/, "平台事实入账");
+});
+
+test("现场记录导出·路由:markdown 直出、坏行跳过、未知问题 404", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-export-"));
+  mkdirSync(join(dataDir, "issues", "issue-1"), { recursive: true });
+  writeFileSync(join(dataDir, "issues", "issue-1", "issue.json"), JSON.stringify({
+    id: "issue-1", account: "dev",
+    created_at: "2026-08-28T08:00:00Z", updated_at: "2026-08-28T09:00:00Z",
+    title: "t", description: "", source: "manual",
+    status: "idle", stage: "locate_root", stage_note: "",
+    stage_at: "2026-08-28T09:00:00Z",
+  }));
+  // 半行(写入方还在写)+ 好行:导出必须跳过坏行而不是 5xx。
+  writeFileSync(join(dataDir, "issues", "issue-1", "events.jsonl"),
+    '{"kind":"user_mess\n'
+    + JSON.stringify({ eventId: 2, kind: "user_message",
+      ts: "2026-08-28T08:00:00Z", payload: { text: "开场" } }) + "\n");
+  const service = new IssueFlowService({
+    dataDir, provider: "p", model: "m", modelsJson: {},
+  });
+  return (async () => {
+    try {
+      const captured = await new Promise<{
+        status: number; headers: Record<string, string>; body: string;
+      }>((resolve, reject) => {
+        let status = 0;
+        let headers: Record<string, string> = {};
+        void handleIssueRoutes(
+          { method: "GET" } as any,
+          {
+            writeHead: (code: number, heads: Record<string, string>) => {
+              status = code; headers = heads;
+            },
+            end: (payload?: string) => {
+              resolve({ status, headers, body: payload ?? "" });
+            },
+          } as any,
+          ["issues", "issue-1", "export"],
+          { issueFlow: service, authEnabled: false },
+        ).catch(reject);
+      });
+      assert.equal(captured.status, 200);
+      assert.match(captured.headers["content-type"] ?? "", /text\/markdown/);
+      assert.match(captured.headers["content-disposition"] ?? "", /attachment/);
+      assert.match(captured.body, /# 现场记录:t/);
+      assert.match(captured.body, /开场/, "好行入账");
+      assert.ok(!captured.body.includes("user_mess"), "坏行不入账");
+
+      const missing = await new Promise<{ status: number }>((resolve, reject) => {
+        let status = 0;
+        void handleIssueRoutes(
+          { method: "GET" } as any,
+          {
+            writeHead: (code: number) => { status = code; },
+            end: () => resolve({ status }),
+          } as any,
+          ["issues", "issue-404", "export"],
+          { issueFlow: service, authEnabled: false },
+        ).catch(reject);
+      });
+      assert.equal(missing.status, 404);
+    } finally {
+      await service.shutdown().catch(() => undefined);
+    }
+  })();
 });
