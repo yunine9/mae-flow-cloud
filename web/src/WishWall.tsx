@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   createWish,
   deleteWish,
@@ -11,8 +11,13 @@ import {
   type WishWallItem,
 } from "./api";
 import { formatLocalDateTime, relativeTime } from "./time";
+import {
+  nextWishImageDraftKey,
+  WISH_IMAGE_TYPES,
+  wishImageFilesFromClipboard,
+  wishPasteModifier,
+} from "./wishWallClipboard";
 
-const IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
 const IMAGE_LIMIT = 4;
 const IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 
@@ -98,11 +103,12 @@ export function WishWall({ viewer }: { viewer: { username: string; role: string 
 
   useEffect(() => { void refresh(); }, []);
 
-  function addFiles(files: File[]): void {
+  const addFiles = useCallback((files: File[]): number => {
     setComposerError("");
+    const current = imageRef.current;
     const accepted: ImageDraft[] = [];
     for (const file of files) {
-      if (!IMAGE_TYPES.includes(file.type)) {
+      if (!WISH_IMAGE_TYPES.includes(file.type as typeof WISH_IMAGE_TYPES[number])) {
         setComposerError("图片仅支持 PNG、JPG、WebP 或 GIF");
         continue;
       }
@@ -110,37 +116,46 @@ export function WishWall({ viewer }: { viewer: { username: string; role: string 
         setComposerError(`${file.name || "这张图片"} 超过 5 MB，请压缩后再试`);
         continue;
       }
-      if (images.length + accepted.length >= IMAGE_LIMIT) {
+      if (current.length + accepted.length >= IMAGE_LIMIT) {
         setComposerError(`一条最多放 ${IMAGE_LIMIT} 张图片`);
         break;
       }
       accepted.push({
-        key: `${file.name}-${file.size}-${file.lastModified}-${crypto.randomUUID()}`,
+        key: nextWishImageDraftKey(file),
         file,
         preview: URL.createObjectURL(file),
       });
     }
-    if (accepted.length) setImages((current) => [...current, ...accepted]);
-  }
+    if (accepted.length) {
+      const next = [...current, ...accepted];
+      imageRef.current = next;
+      setImages(next);
+    }
+    return accepted.length;
+  }, []);
 
   function removeImage(key: string): void {
     setImages((current) => {
       const found = current.find((image) => image.key === key);
       if (found) URL.revokeObjectURL(found.preview);
-      return current.filter((image) => image.key !== key);
+      const next = current.filter((image) => image.key !== key);
+      imageRef.current = next;
+      return next;
     });
   }
 
-  function handlePaste(event: React.ClipboardEvent): void {
-    const files = [...event.clipboardData.items]
-      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
-      .map((item) => item.getAsFile())
-      .filter((file): file is File => Boolean(file));
-    if (!files.length) return;
-    event.preventDefault();
-    addFiles(files);
-    setNotice(`已粘贴 ${files.length} 张图片`);
-  }
+  useEffect(() => {
+    const handlePaste = (event: ClipboardEvent) => {
+      if (!event.clipboardData) return;
+      const files = wishImageFilesFromClipboard(event.clipboardData);
+      if (!files.length) return;
+      event.preventDefault();
+      const added = addFiles(files);
+      if (added > 0) setNotice(`已粘贴 ${added} 张图片`);
+    };
+    document.addEventListener("paste", handlePaste);
+    return () => document.removeEventListener("paste", handlePaste);
+  }, [addFiles]);
 
   async function submit(event: React.FormEvent): Promise<void> {
     event.preventDefault();
@@ -156,6 +171,7 @@ export function WishWall({ viewer }: { viewer: { username: string; role: string 
         kind, title: title.trim(), detail: detail.trim() || undefined, images: uploads,
       });
       images.forEach((image) => URL.revokeObjectURL(image.preview));
+      imageRef.current = [];
       setImages([]); setTitle(""); setDetail("");
       setItems((current) => [created, ...current]);
       setNotice(kind === "issue" ? "问题已贴上墙，等一个明确回应 🧭" : "愿望已升空，等大家来点亮 ✨");
@@ -211,8 +227,9 @@ export function WishWall({ viewer }: { viewer: { username: string; role: string 
       : right.created_at.localeCompare(left.created_at)), [items, scope, sort]);
   const acceptedCount = items.filter((item) => item.status === "accepted").length;
   const doneCount = items.filter((item) => item.status === "done").length;
+  const pasteModifier = useMemo(() => wishPasteModifier(), []);
 
-  return <div className="wish-wall" onPaste={handlePaste}>
+  return <div className="wish-wall">
     <section className="wish-hero">
       <div className="wish-hero-copy">
         <span className="section-kicker">TEAM WISH WALL</span>
@@ -269,12 +286,12 @@ export function WishWall({ viewer }: { viewer: { username: string; role: string 
       </div>}
       <div className="wish-composer-foot">
         <label className="wish-image-picker">
-          <input type="file" accept={IMAGE_TYPES.join(",")} multiple onChange={(event) => {
+          <input type="file" accept={WISH_IMAGE_TYPES.join(",")} multiple onChange={(event) => {
             addFiles([...(event.target.files ?? [])]); event.target.value = "";
           }} />
           <span aria-hidden>▧</span> 添加图片
         </label>
-        <span className="wish-paste-hint"><kbd>⌘</kbd><kbd>V</kbd> 直接粘贴截图，也可拖到这里 · 最多 4 张</span>
+        <span className="wish-paste-hint"><kbd>{pasteModifier}</kbd><kbd>V</kbd> 直接粘贴截图，也可拖到这里 · 最多 4 张</span>
         <button className="wish-submit" type="submit" disabled={submitting}>
           {submitting ? "正在贴上墙…" : kind === "issue" ? "把问题贴上墙" : "发射这个愿望"}
           <span aria-hidden>↗</span>
