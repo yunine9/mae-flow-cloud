@@ -566,10 +566,21 @@ function DtsRegister({
     return sortDtsVersionsDesc([...set]);
   }, [tickets]);
 
-  // 默认勾选最高 R/C 版本(列表已降序,取第一个):拉到单就先看最新一版,
-  // 之后勾选/取消全由用户接管,这里不再插手。
+  // 默认勾选最高 R/C 版本(列表已降序):R/C 相同的多个版本串视为
+  // 并列最高,一并勾选;拉到单就先看最新一版,之后勾选/取消全由用户
+  // 接管,这里不再插手。
   useEffect(() => {
-    setSelectedVersions(versions.length > 0 ? [versions[0]] : []);
+    if (versions.length === 0) {
+      setSelectedVersions([]);
+      return;
+    }
+    const maxKey = dtsVersionKey(versions[0]);
+    setSelectedVersions(maxKey
+      ? versions.filter((version) => {
+          const key = dtsVersionKey(version);
+          return Boolean(key) && key![0] === maxKey[0] && key![1] === maxKey[1];
+        })
+      : [versions[0]]);
   }, [versions]);
 
   const versionFiltered = useMemo(() => {
