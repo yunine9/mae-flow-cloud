@@ -282,7 +282,7 @@ test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队
   const parent = service.create("跨仓交付", {
     title: "跨仓订单状态交付",
     repos: ["https://codehub/team/api.git", "https://codehub/team/web.git"],
-    ticket: "REQ-G3",
+    ticket: "REQ-G3", account: "owner",
   });
   const state = (service as any).tasks.get(parent.id);
   const root = join(dataDir, parent.id, "repositories");
@@ -301,6 +301,12 @@ test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队
     dependencies: [{ from: "api", to: "web", reason: "等待接口可用" }],
   }));
   state.cwd = root;
+  assert.throws(() => service.setRequirementCollaborators(parent.id,
+    ["alice", "charlie"]), /charlie.*CodeHub Token/,
+  "个人设置不完整的人不能受邀参与主任务");
+  assert.deepEqual(service.setRequirementCollaborators(parent.id,
+    ["alice", "bob", "alice", "owner"]).collaborators, ["alice", "bob"],
+  "共同开发者去重且不重复列出唯一主责任人");
   assert.throws(() => service.assignRequirementRepositories(parent.id, {
     api: "alice", web: "charlie",
   }), /charlie.*CodeHub Token/, "个人设置不完整的人不能接仓库任务");

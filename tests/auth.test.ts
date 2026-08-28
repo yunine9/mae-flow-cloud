@@ -199,6 +199,48 @@ test("HTTP 登录:开发看全部任务,创建归自己,不能操作别人任务
     assert.equal(list.status, 200, "开发可查看团队全部任务");
     assert.equal((await readJson(list) as unknown[]).length, 1);
 
+    // 这个权限测试用的是纯会话部署（按产品约束不能从 HTTP 下代码仓单），
+    // 因而直接种一张跨仓摘要，只验证多人协作的 HTTP 权限边界。
+    const cross = service.create("Bob 发起的跨仓主任务", { account: "bob" });
+    const crossState = (service as any).tasks.get(cross.id);
+    crossState.summary.repositories = [
+      "https://codehub/team/api.git", "https://codehub/team/web.git",
+    ];
+    crossState.summary.requirement_graph = {
+      stage: "analysis",
+      repositories: [
+        { id: "api", name: "api", url: "https://codehub/team/api.git" },
+        { id: "web", name: "web", url: "https://codehub/team/web.git" },
+      ],
+      dependencies: [],
+    };
+    const invite = await fetch(`${base}/tasks/${cross.id}/collaborators`, {
+      method: "PUT",
+      headers: { cookie: bob },
+      body: JSON.stringify({ collaborators: ["alice"] }),
+    });
+    assert.equal(invite.status, 200);
+    assert.deepEqual((await readJson(invite) as { collaborators: string[] })
+      .collaborators, ["alice"]);
+    crossState.summary.status = "running";
+    let steered = "";
+    crossState.driver = { steer: async (text: string) => { steered = text; } };
+    const collaborate = await fetch(`${base}/tasks/${cross.id}/interrupt`, {
+      method: "POST",
+      headers: { cookie: alice },
+      body: JSON.stringify({ text: "接口字段还需要一起确认" }),
+    });
+    assert.equal(collaborate.status, 200,
+      "受邀开发者可以进入同一个主任务和 AI 讨论");
+    assert.match(steered, /跨仓协作 · alice.*接口字段还需要一起确认/);
+    const collaboratorCannotInvite = await fetch(
+      `${base}/tasks/${cross.id}/collaborators`, {
+        method: "PUT", headers: { cookie: alice },
+        body: JSON.stringify({ collaborators: [] }),
+      });
+    assert.equal(collaboratorCannotInvite.status, 403,
+      "共同开发者不能改写主任务团队边界");
+
     const forbidden = await fetch(
       `${base}/tasks/${created.id}/decision`,
       {

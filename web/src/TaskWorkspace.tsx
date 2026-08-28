@@ -36,6 +36,7 @@ import {
   RepositoryAssigneePicker,
   type RepositoryAssigneeSelection,
 } from "./RepositoryAssigneePicker";
+import { RequirementTeamPicker } from "./RequirementTeamPicker";
 import {
   completeReview,
   controlTask,
@@ -606,16 +607,22 @@ export function TaskWorkspace({
               <>
                 <RequirementGraph task={task} onOpenTask={onOpenTask} />
                 {!chainReview && canOperate
-                  && task.requirement_graph?.stage === "analysis" && (
-                  <RepositoryAssigneePicker
-                    taskId={task.id}
-                    repositories={task.requirement_graph.repositories}
-                    defaultAssignee={task.luban_account}
-                    selection={repositoryAssignees}
-                    onSelectionChange={setRepositoryAssignees}
-                    onSaved={onChanged}
-                  />
-                )}
+                  && task.requirement_graph?.stage === "analysis" && <>
+                    <RequirementTeamPicker
+                      taskId={task.id}
+                      owner={task.luban_account}
+                      collaborators={task.collaborators}
+                      onSaved={onChanged}
+                    />
+                    <RepositoryAssigneePicker
+                      taskId={task.id}
+                      repositories={task.requirement_graph.repositories}
+                      defaultAssignee={task.luban_account}
+                      selection={repositoryAssignees}
+                      onSelectionChange={setRepositoryAssignees}
+                      onSaved={onChanged}
+                    />
+                  </>}
               </>
             ) : <>
               {unavailable && <div className="utility-note">{unavailable}</div>}
@@ -803,6 +810,12 @@ export function TaskWorkspace({
                 <>
                   {chainReview && (
                     <>
+                      <RequirementTeamPicker
+                        taskId={task.id}
+                        owner={task.luban_account}
+                        collaborators={task.collaborators}
+                        onSaved={onChanged}
+                      />
                       <RepositoryAssigneePicker
                         taskId={task.id}
                         repositories={task.requirement_graph!.repositories}

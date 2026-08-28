@@ -24,6 +24,7 @@
  *   GET  /tasks/:id                                     → 详情(含待办)
  *   POST /tasks/:id/decision   {state_version,decision,notes?}
  *        → 200;版本冲突/已被抢先 → 409 "任务状态已变化"(先到决定生效)
+ *   PUT  /tasks/:id/collaborators {collaborators[]}     → 跨仓主任务共同开发者
  *   POST /tasks/:id/interrupt  {text}                   → 200;跑动中插话(发送即打断)
  *   GET/POST /tasks/:id/developer-assistant             → 旁路开发助手现场/发起处理
  *   POST /tasks/:id/pause|resume|cancel                 → 200;任务控制
@@ -1569,6 +1570,20 @@ export function createTaskServer(
             body.include_current === true,
           ));
         }
+        // 主任务采用“一个主责任人 + 多位共同开发者”：大家都能参与
+        // 澄清和送意见，最终决定与任务控制仍只归主责任人。
+        if (request.method === "PUT" && parts[2] === "collaborators") {
+          const target = service.get(id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          if (!canOperate(viewer, target.luban_account, !!options.auth)) {
+            return json(response, 403, { error: "只有主任务责任人可以邀请共同开发者" });
+          }
+          const body = await readBody(request);
+          const collaborators = Array.isArray(body.collaborators)
+            ? body.collaborators.map(String) : [];
+          return json(response, 200,
+            service.setRequirementCollaborators(id, collaborators));
+        }
         // 拆分前先保存逐仓分工，受邀人即可进入同一主任务协作现场。
         // 最终确认仍只有主任务责任人能提交，协作者不能代拍板。
         if (request.method === "PUT" && parts[2] === "repository-assignees") {
@@ -1986,13 +2001,18 @@ function canOperate(
 
 function canCollaborate(
   viewer: AuthUser | undefined,
-  task: { luban_account?: string; requirement_graph?: RequirementGraph },
+  task: {
+    luban_account?: string;
+    collaborators?: string[];
+    requirement_graph?: RequirementGraph;
+  },
   authEnabled: boolean,
 ): boolean {
   if (canOperate(viewer, task.luban_account, authEnabled)) return true;
   if (!viewer || task.requirement_graph?.stage !== "analysis") return false;
-  return task.requirement_graph.repositories.some((repository) =>
-    repository.assignee === viewer.username);
+  return task.collaborators?.includes(viewer.username) === true
+    || task.requirement_graph.repositories.some((repository) =>
+      repository.assignee === viewer.username);
 }
 
 function sessionCookie(

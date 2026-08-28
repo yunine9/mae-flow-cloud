@@ -396,6 +396,19 @@ export async function putRepositoryAssignees(
   return response.json();
 }
 
+export async function putTaskCollaborators(
+  taskId: string,
+  collaborators: string[],
+): Promise<TaskSummary> {
+  const response = await fetch(
+    `/tasks/${encodeURIComponent(taskId)}/collaborators`, {
+      method: "PUT",
+      body: JSON.stringify({ collaborators }),
+    });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
 export async function requestCommitterReview(
   taskId: string,
   committer: string,
@@ -548,6 +561,8 @@ export interface TaskSummary {
    * 页面据此如实说明,别让人对着 404 的代码差异发愣。 */
   workspace_reclaimed_at?: string;
   luban_account?: string;
+  /** 跨仓主任务共同开发者；主责任人仍是唯一的 luban_account。 */
+  collaborators?: string[];
   approval_mode?: "inherit" | "manual" | "moonlight";
   repo_url?: string;
   repositories?: string[];

@@ -15,6 +15,11 @@ export function RequirementGraph({
   const graph = task.requirement_graph;
   const [expanded, setExpanded] = useState(graph?.stage === "analysis");
   if (!graph || graph.repositories.length < 2) return null;
+  const participantNames = [...new Set([
+    ...(task.collaborators ?? []),
+    ...graph.repositories.map((repository) => repository.assignee)
+      .filter((account): account is string => !!account),
+  ])].filter((account) => account !== task.luban_account);
   const remaining = new Set(graph.repositories.map((repository) => repository.id));
   const stages: typeof graph.repositories[] = [];
   while (remaining.size) {
@@ -38,6 +43,17 @@ export function RequirementGraph({
       <i className="requirement-toggle" aria-hidden />
     </summary>
     <div className="requirement-graph-body">
+      <div className="requirement-main-team">
+        <div><span>主任务团队</span>
+          <small>1 位主责任人 · {participantNames.length} 位共同开发者</small></div>
+        <div className="requirement-team-pills">
+          <strong>{task.luban_account ?? "本地主责任人"}<i>主责任人</i></strong>
+          {participantNames.map((account) => <span key={account}>{account}
+            <i>{task.collaborators?.includes(account) ? "共同开发" : "逐仓负责"}</i>
+          </span>)}
+          {participantNames.length === 0 && <em>尚未邀请共同开发者</em>}
+        </div>
+      </div>
       <div className="requirement-stages" aria-labelledby="requirement-graph-title">
         {stages.map((repositories, stage) => <div className="requirement-stage"
           key={repositories.map((repository) => repository.id).join("-")}>

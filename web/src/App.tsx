@@ -566,8 +566,9 @@ export function App() {
     session.role === "admin" || responsibleOf(task) === session.username;
   const canCollaborate = (task: TaskSummary) => canOperate(task)
     || (task.requirement_graph?.stage === "analysis"
-      && task.requirement_graph.repositories.some((repository) =>
-        repository.assignee === session.username));
+      && (task.collaborators?.includes(session.username) === true
+        || task.requirement_graph.repositories.some((repository) =>
+          repository.assignee === session.username)));
   const header = {
     team: session.role === "admin"
       ? { title: "团队总览", description: "看团队推进、负责人和阻塞风险；需要兜底时打开任务的过程工作台处置(暂停/恢复/决定)。" }

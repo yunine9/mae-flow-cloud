@@ -1457,6 +1457,16 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .requirement-toggle { width: 7px; height: 7px; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: rotate(45deg); transition: transform 140ms ease; }
 .requirement-graph:not([open]) .requirement-toggle { transform: rotate(-45deg); }
 .requirement-graph-body { padding: 11px 13px 12px; border-top: 1px solid var(--line); }
+.requirement-main-team { margin-bottom: 11px; padding: 1px 1px 10px; display: grid; gap: 8px; border-bottom: 1px solid var(--line); }
+.requirement-main-team > div:first-child { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.requirement-main-team > div:first-child span { color: var(--text-strong); font-size: 12.5px; font-weight: 800; }
+.requirement-main-team > div:first-child small { color: var(--muted); font-size: 11.5px; }
+.requirement-team-pills { display: flex; flex-wrap: wrap; gap: 6px; }
+.requirement-team-pills > strong, .requirement-team-pills > span { padding: 5px 8px; display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 999px; color: var(--text-strong); background: var(--surface-soft); font-size: 12px; }
+.requirement-team-pills > strong { border-color: color-mix(in srgb, var(--accent) 32%, var(--line)); background: var(--accent-soft); }
+.requirement-team-pills i { color: var(--muted); font-size: 10px; font-style: normal; font-weight: 650; }
+.requirement-team-pills > strong i { color: var(--accent); }
+.requirement-team-pills > em { padding: 5px 0; color: var(--faint); font-size: 11.5px; font-style: normal; }
 .requirement-stages { display: flex; align-items: stretch; gap: 26px; overflow-x: auto; padding: 1px 2px 7px; scrollbar-width: thin; }
 .requirement-stage { min-width: 170px; position: relative; display: grid; align-content: start; gap: 5px; }
 .requirement-stage:not(:last-child)::after { content: "→"; position: absolute; top: 38px; right: -19px; color: var(--accent); font-size: 17px; font-weight: 700; }
@@ -1479,6 +1489,31 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .requirement-edges > div > small { display: block; min-width: 0; padding-top: 8px; border-top: 1px solid var(--line); color: var(--text); font-size: 14px; line-height: 1.7; overflow: visible; overflow-wrap: anywhere; text-overflow: clip; white-space: normal; word-break: break-word; }
 .requirement-graph-note { margin: 8px 0 0; padding-top: 8px; border-top: 1px dashed var(--line); color: var(--muted); font-size: var(--font-size-assist); line-height: 1.5; }
 
+.requirement-team-picker { margin: 0 0 12px; overflow: hidden; border: 1px solid color-mix(in srgb, #2e9b77 32%, var(--line)); border-radius: 11px; background: var(--surface); }
+.requirement-team-picker > header { padding: 12px 13px; display: flex; align-items: end; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, #d9f4e9 45%, var(--surface)); }
+.requirement-team-picker > header > div { display: grid; gap: 2px; }
+.requirement-team-picker > header span { color: #16885d; font: 750 10.5px var(--font-mono); letter-spacing: .12em; }
+.requirement-team-picker > header strong { color: var(--text-strong); font-size: 15px; }
+.requirement-team-picker > header small { color: var(--muted); font-size: 12px; }
+.requirement-team-owner { margin: 10px 12px 0; padding: 9px 10px; display: grid; grid-template-columns: 29px minmax(0, 1fr); align-items: center; gap: 9px; border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line)); border-radius: 8px; background: var(--accent-soft); }
+.requirement-team-owner > i { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%; color: #fff; background: var(--accent); font-size: 11px; font-style: normal; font-weight: 800; }
+.requirement-team-owner > span { min-width: 0; display: grid; gap: 2px; }
+.requirement-team-owner strong { color: var(--text-strong); font-size: 13px; }
+.requirement-team-owner small { color: var(--muted); font-size: 11.5px; }
+.requirement-team-members { max-height: 250px; padding: 9px 12px 10px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; overflow-y: auto; }
+.requirement-team-members > p { grid-column: 1 / -1; margin: 4px 0; color: var(--muted); font-size: 12px; }
+.requirement-team-members > label { min-width: 0; padding: 8px 9px; display: grid; grid-template-columns: 17px minmax(0, 1fr); align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); cursor: pointer; }
+.requirement-team-members > label.selected { border-color: color-mix(in srgb, #2e9b77 45%, var(--line)); background: color-mix(in srgb, #d9f4e9 34%, var(--surface)); box-shadow: inset 3px 0 #2e9b77; }
+.requirement-team-members > label.unready:not(.selected) { opacity: .62; cursor: not-allowed; }
+.requirement-team-members input { accent-color: #16885d; }
+.requirement-team-members label > span { min-width: 0; display: grid; gap: 2px; }
+.requirement-team-members strong { color: var(--text-strong); font-size: 12.5px; }
+.requirement-team-members small { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.requirement-team-error { margin: 0 12px 8px; padding: 8px 10px; border-radius: 7px; color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, var(--surface)); font-size: 12px; }
+.requirement-team-picker > footer { padding: 10px 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); }
+.requirement-team-picker > footer p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.requirement-team-picker > footer button { flex: none; min-height: 34px; padding: 0 12px; border: 0; border-radius: 7px; color: #fff; background: #16885d; font-weight: 750; cursor: pointer; }
+.requirement-team-picker > footer button:disabled { opacity: .45; cursor: not-allowed; }
 .repository-assignees { margin: 0 0 12px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line)); border-radius: 11px; background: var(--surface); }
 .repository-assignees > header { padding: 12px 13px; display: flex; align-items: end; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--accent-soft) 52%, var(--surface)); }
 .repository-assignees > header > div { display: grid; gap: 2px; }
@@ -1525,6 +1560,9 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .cross-repository-ledger { margin-top: 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
 
 @media (max-width: 760px) {
+  .requirement-main-team > div:first-child { align-items: flex-start; flex-direction: column; gap: 3px; }
+  .requirement-team-members { grid-template-columns: 1fr; }
+  .requirement-team-picker > header, .requirement-team-picker > footer { align-items: stretch; flex-direction: column; }
   .repository-assignee-list > label { grid-template-columns: 1fr; }
   .repository-assignees > header, .repository-assignees > footer { align-items: stretch; flex-direction: column; }
 }
@@ -4764,8 +4802,13 @@ pre {
 .ws-doc .md-table { margin: 14px 0; font-size: 14px; }
 .ws-doc .md-table th, .ws-doc .md-table td { padding: 7px 9px; }
 .ws-doc > .requirement-graph,
+.ws-doc > .requirement-team-picker,
 .ws-doc > .repository-assignees { width: min(900px, 100%); margin: 0 auto; }
-.ws-doc > .requirement-graph + .repository-assignees { margin-top: 12px; }
+.ws-doc > .requirement-graph + .requirement-team-picker,
+.ws-doc > .requirement-team-picker + .repository-assignees { margin-top: 12px; }
+.ws-decision .requirement-team-members { grid-template-columns: 1fr; }
+.ws-decision .requirement-team-picker > header,
+.ws-decision .requirement-team-picker > footer { align-items: stretch; flex-direction: column; }
 .requirement-source { width: min(860px, 100%); margin: 0 auto; }
 .requirement-source-label {
   margin-bottom: 18px;

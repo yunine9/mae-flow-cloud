@@ -535,6 +535,9 @@ export interface TaskSummary {
   workspace_reclaimed_at?: string;
   /** 小鲁班通知账号(任务创建时填写,主 spec §5.1)。 */
   luban_account?: string;
+  /** 跨仓主任务的共同开发者。主责任人仍由 luban_account 唯一确定；
+   * 协作者可参与分析讨论与送出批注，但不能提交最终决定或控制任务。 */
+  collaborators?: string[];
   /** 单任务审批方式。缺席=继承个人设置；manual 可压过全局月光模式，
    * moonlight 仅放行本任务。 */
   approval_mode?: "inherit" | "manual" | "moonlight";
@@ -4864,6 +4867,45 @@ export class TaskService {
       ready.forEach((id) => { remaining.delete(id); order.push(id); });
     }
     return { graph, order, incoming: prerequisites };
+  }
+
+  /** 主任务采用“一个主责任人 + 多位共同开发者”。协作者参与澄清，
+   * 但最终确认和任务控制仍只有主责任人，避免多人同时改写结论。 */
+  setRequirementCollaborators(
+    id: string,
+    accounts: string[],
+  ): TaskSummary {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    if (!this.isRequirementAnalysis(task)) {
+      throw new NotFoundError("只有跨仓需求主任务可以邀请共同开发者");
+    }
+    this.refreshRequirementGraph(task);
+    const graph = task.summary.requirement_graph;
+    if (!graph || graph.repositories.length < 2) {
+      throw new NotFoundError("需求图尚未生成，暂不能邀请共同开发者");
+    }
+    if (graph.stage === "confirmed"
+        || graph.repositories.some((repository) => repository.task_id)) {
+      throw new TaskControlError("仓库任务已经生成，主任务协作成员不能再调整");
+    }
+    const owner = task.summary.luban_account;
+    const normalized = [...new Set(accounts.map((account) => account.trim())
+      .filter((account) => account && account !== owner))];
+    if (normalized.length > 20) {
+      throw new TaskControlError("一个跨仓主任务最多邀请 20 位共同开发者");
+    }
+    for (const account of normalized) {
+      const readiness = this.options.collaborationAssigneeReadiness?.(account);
+      if (readiness && !readiness.ready) {
+        throw new TaskControlError(
+          `${account} 的个人设置尚未就绪：${readiness.missing.join("、")}`,
+        );
+      }
+    }
+    task.summary.collaborators = normalized;
+    this.persist(task);
+    return { ...task.summary };
   }
 
   /** 人工分工是主任务契约的一部分，不是 create 子任务时临时拼的参数。
