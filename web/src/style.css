@@ -1931,7 +1931,7 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-session-mr { padding: 9px 13px; border-radius: 9px; background: color-mix(in srgb, var(--accent) 7%, transparent); color: var(--accent); font-size: var(--font-size-assist); }
 .issue-session-mr a { color: inherit; }
 
-/* ---- 固定流程:阶段进度条(计划线,与旅程线并存) ---- */
+/* ---- 固定流程:阶段进度条(计划线;固定模式下的唯一阶段条) ---- */
 .issue-fixed-progress {
   display: flex; flex-wrap: wrap; align-items: center; gap: 4px 18px;
   padding: 11px 14px;
@@ -1958,6 +1958,14 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-fixed-step.state-in_progress .issue-fixed-dot {
   background: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+  animation: issueStagePulse 1.6s ease-in-out infinite;
+}
+@keyframes issueStagePulse {
+  0%, 100% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent); }
+  50% { box-shadow: 0 0 0 8px color-mix(in srgb, var(--accent) 8%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .issue-fixed-step.state-in_progress .issue-fixed-dot { animation: none; }
 }
 .issue-fixed-step.state-done { color: var(--text-strong); }
 .issue-fixed-step.state-done .issue-fixed-dot { background: var(--success); }
@@ -2016,29 +2024,6 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-muted);
 }
 .issue-thread-empty { color: var(--faint); font-size: var(--font-size-assist); }
-/* 运行中的活动指示:SSE 工具动静的"活着"信号,小圆点呼吸。 */
-.issue-activity {
-  display: flex; align-items: center; gap: 7px;
-  color: var(--faint); font-size: var(--font-size-assist); padding: 2px 4px;
-}
-.issue-activity i {
-  width: 7px; height: 7px; border-radius: 50%; background: var(--accent);
-  animation: issue-activity-pulse 1.6s ease-in-out infinite;
-}
-@keyframes issue-activity-pulse {
-  0%, 100% { opacity: .25; }
-  50% { opacity: 1; }
-}
-.issue-message { display: grid; grid-template-columns: 44px 1fr; gap: 10px; }
-.issue-message-role { color: var(--faint); font-size: var(--font-size-dense); padding-top: 3px; }
-.issue-message.role-assistant .issue-message-role { color: var(--accent); font-weight: 700; }
-.issue-message.role-decision .issue-message-role { color: #16856a; font-weight: 700; }
-.issue-message-body {
-  padding: 9px 12px; border-radius: 10px; background: var(--surface);
-  border: 1px solid var(--line); color: var(--text-strong); font-size: var(--font-size-assist);
-  white-space: pre-wrap; word-break: break-word; line-height: 1.6;
-}
-.issue-message.role-user .issue-message-body { background: color-mix(in srgb, var(--accent) 6%, var(--surface)); }
 /* ---- 决策-centric 双栏骨架 ----
    左栏 = 内容(页签 + 对话/文档),右栏 = NEXT ACTION 常驻栏。
    配比与任务工作台 ws-body 同源(minmax(0,1.55fr) / minmax(320px,.95fr)),
@@ -2290,18 +2275,6 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 }
 .issue-decision-submit > button:disabled { opacity: .55; cursor: not-allowed; }
 
-/* 对话长文折叠:>600 字先给前 280 字,展开钮贴在同一段气泡里 */
-.issue-message-expand {
-  display: inline-block;
-  margin-left: 6px;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--accent);
-  font: inherit;
-  cursor: pointer;
-  text-decoration: underline;
-}
 .issue-analysis-flag {
   margin-left: auto;
   border: 0;
