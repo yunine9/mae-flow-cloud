@@ -8,7 +8,9 @@
  *
  * 固定流程(2026-08-27 拍板)在工具层叠加两件事:
  * - 阶段门禁:每个工具只在所属阶段开放,越权调用直接拒绝(双层
- *   门禁的权威层;提示词里的"本阶段工具清单"只是引导层);
+ *   门禁的权威层;提示词里的"本阶段工具清单"只是引导层)。例外是
+ *   工读类——fetch_logs 全程开放,dts_get_ticket 任意阶段可重查
+ *   (2026-08-28 拍板:作业自由,门只守流程出口与出厂动作);
  * - 阶段推进:机械可判的推进(拉单成功/UT 通过)由工具直接记账,
  *   人工闸(报告确认/结论/环境验证)由工具举闸——raiseGate 写进
  *   issue.json,Agent 对它只读,推不动。
@@ -198,7 +200,6 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       })),
     }),
     async execute(_toolCallId: string, params: any) {
-      gateStageFrom("fetch_logs", "analyze");
       if (!ctx.ops) fail("宿主未部署运维工具(assets/ops-tools),无法拉日志");
       const password = ctx.environmentPassword?.();
       if (!password) {
@@ -288,13 +289,14 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     label: "Get DTS Ticket",
     description:
       "按单号查 DTS 问题单详情(现象/影响/处理历史)。单号缺省用会话已"
-      + "绑定的单号。注意:绑定单号是用户动作——查到的单号要用于推送/提MR,"
-      + "需请用户在页面完成绑定。",
+      + "绑定的单号。任意阶段都可调用(重查单据不限阶段);首次在"
+      + "「获取单据信息」阶段调用时,平台会顺势推进到拉取代码仓。注意:"
+      + "绑定单号是用户动作——查到的单号要用于推送/提MR,需请用户在页面"
+      + "完成绑定。",
     parameters: Type.Object({
       ticket: Type.Optional(Type.String({ description: "DTS 问题单号;缺省用会话绑定单号" })),
     }),
     async execute(_toolCallId: string, params: any) {
-      gateStage("dts_get_ticket", ["dts_info"]);
       if (!ctx.dts) fail("DTS 网关未配置,无法查单(部署需 --dts-mcp-url)");
       const ticket = String(params.ticket ?? "").trim() || ctx.state.ticket;
       if (!ticket) fail("没有单号:请提供 ticket 参数,或请用户先绑定单号");
@@ -303,7 +305,10 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         source: "platform",
         note: `DTS 单 ${detail.ticket} 详情已获取`,
       });
-      if (fixed && scenario) {
+      // 首查(dts_info 阶段)顺势推进;后续阶段重查只回内容——
+      // fixedAdvance 会无条件置目标阶段,不设防会把阶段倒回 prep_repo。
+      const firstPull = fixed && scenario && state.stage === "dts_info";
+      if (firstPull) {
         fixedAdvance(ctx.state, "prep_repo",
           `DTS 详情已获取(单据 ${detail.ticket}),进入拉取代码仓阶段`);
         // 宿主收口:克隆在场就建分支并直接推进到问题分析(通常回合
@@ -312,7 +317,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       }
       ctx.persist();
       return ok(`问题单 ${detail.ticket} 详情:\n${detail.content}`
-        + (fixed ? "\n\n平台已推进到「拉取代码仓」阶段:平台将完成克隆与建分支,"
+        + (firstPull ? "\n\n平台已推进到「拉取代码仓」阶段:平台将完成克隆与建分支,"
           + "克隆就绪后请基于单据详情开展问题分析。" : ""));
     },
   }));

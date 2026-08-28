@@ -105,7 +105,7 @@ const FIXED_STAGE_BRIEFS: Record<FixedStage, { goal: string; tools: string }> = 
   analyze:
     { goal: "对齐现象-根因-方案,产出 issue-analysis.md,然后 submit_analysis 提交"
       + "(无单场景 submit_analysis 需带结论 issue/non_issue)",
-      tools: "fetch_logs、dts 单据内容回读对话、submit_analysis" },
+      tools: "fetch_logs、dts_get_ticket(需要时重查单据)、submit_analysis" },
   fix:
     { goal: "按已确认的方案实施修复;改完自检通过后 complete_stage 自报完成",
       tools: "fetch_logs(补证据)、bash 改码、complete_stage" },

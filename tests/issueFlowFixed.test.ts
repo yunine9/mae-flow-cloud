@@ -617,6 +617,45 @@ test("阶段门禁单点(免模型):工具只在所属阶段开放,UT 没过不�
     "自由模式保留 report_stage(零改动承诺)");
 });
 
+test("工读类放宽(2026-08-28):fetch_logs 全程可调,dts_get_ticket 重查不倒转阶段", async () => {
+  const base: IssueSessionState = {
+    id: "issue-1", account: "dev",
+    created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    title: "t", description: "", source: "dts", ticket: "DTS-2026-1001",
+    repo_url: "/tmp/x.git", mode: "fixed", scenario: "ticket", round: 1,
+    stage_states: ["pending", "pending", "done", "done", "in_progress", "pending", "pending"],
+    status: "idle", stage: "dts_info", stage_note: "", stage_at: new Date().toISOString(),
+  };
+  const ctx: IssueToolContext = {
+    state: base,
+    workspace: "/tmp/ws",
+    dataRoot: "/tmp/data",
+    persist: () => undefined,
+    dts: new MockDtsGateway(),
+  };
+  const tools = createIssueTools(ctx) as Array<{
+    name: string;
+    execute: (id: string, params: any) => Promise<unknown>;
+  }>;
+  const byName = (name: string) => {
+    const tool = tools.find((item) => item.name === name);
+    assert.ok(tool, `应注册 ${name}`);
+    return tool!;
+  };
+  // fetch_logs 在第一阶段(dts_info)不再被阶段门禁拦——放宽后会因
+  // 运维工具缺席而失败,而不是阶段门禁。
+  await assert.rejects(
+    () => byName("fetch_logs").execute("x", { services: ["TranFmaWebsite"] }),
+    (error: Error) => !/阶段门禁/.test(error.message),
+    "fetch_logs 应全程开放;此处缺席的是运维工具,不是阶段许可");
+  // dts_get_ticket 在 ut 阶段重查:内容照回,阶段不倒转,转移账留痕。
+  base.stage = "ut";
+  await byName("dts_get_ticket").execute("x", { ticket: "DTS-2026-1001" });
+  assert.equal(base.stage, "ut", "重查单据不得把阶段倒回 prep_repo");
+  assert.ok(base.transitions?.some((entry) =>
+    /详情已获取/.test(entry.note)), "重查要留转移账");
+});
+
 test("个人凭据前置门禁:这单会碰远端仓就先要令牌与邮箱,本地仓不拦", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-credgate-"));
   const origin = bareOrigin(dataDir);
