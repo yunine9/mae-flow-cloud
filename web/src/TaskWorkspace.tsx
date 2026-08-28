@@ -21,6 +21,7 @@ import { RequirementGraph } from "./RequirementGraph";
 import { PrepushBadge } from "./PrepushStatus";
 import { TokenUsage } from "./TokenUsage";
 import { KnowledgeFootprint } from "./KnowledgeFootprint";
+import { ExecutionPlanCard } from "./ExecutionPlanCard";
 import { CrossRepositorySync } from "./CrossRepositorySync";
 import { WarmupPanel, WarmupBadge } from "./WarmupPanel";
 import { taskHealthFacts } from "./taskHealth";
@@ -117,6 +118,7 @@ export function TaskWorkspace({
   onChanged,
   onClose,
   onOpenTask,
+  onExecutionPlanFeedback,
 }: {
   task: TaskSummary;
   viewerUsername: string;
@@ -128,6 +130,7 @@ export function TaskWorkspace({
   onChanged: () => void;
   onClose: () => void;
   onOpenTask?: (taskId: string) => void;
+  onExecutionPlanFeedback?: (draft: { title: string; detail: string }) => void;
 }) {
   // 旧任务、纯会话和非内核提问没有 approval_subject 元数据；此时需求
   // 原文是唯一保证存在的证据，不能默认打开一个空的过程文档面板。
@@ -538,7 +541,8 @@ export function TaskWorkspace({
               ? `${notes.length} 条批注` : "圈选原文、协作检视"],
           ["collaboration", "开发协作", collaborationVisible
             ? "补充主任务或主动接管" : assistantUnavailableReason(task)],
-          ["execution", "执行现场", task.focus?.headline ?? "原始 SSE 事件流"],
+          ["execution", "执行方案与现场", task.execution_plan?.strategy.title
+            ?? task.focus?.headline ?? "原始 SSE 事件流"],
         ] as Array<[WorkspaceView, string, string]>).map(([view, label, hint]) => (
           <button type="button" role="tab" key={view}
             aria-selected={workspaceView === view}
@@ -683,10 +687,14 @@ export function TaskWorkspace({
             </div>
           </> : workspaceView === "execution" ? <>
             <div className="ws-pane-head">
-              <div><span>LIVE EXECUTION</span><strong>执行现场</strong></div>
-              <small>SSE 原始事件实时跟随；可按类型筛选</small>
+              <div><span>PLAN & LIVE EXECUTION</span><strong>执行方案与现场</strong></div>
+              <small>先看本阶段怎么做，再按需查看实时事件</small>
             </div>
             <div className="ws-primary-scroll ws-execution-view">
+              {task.execution_plan && <ExecutionPlanCard
+                plan={task.execution_plan}
+                warning={task.execution_profile_warning}
+                onSuggest={onExecutionPlanFeedback} />}
               <WarmupPanel task={task} />
               <ExecutionPanel task={task} defaultOpen />
               <KnowledgeFootprint usage={task.knowledge_usage}

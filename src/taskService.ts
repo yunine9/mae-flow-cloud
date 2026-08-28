@@ -53,6 +53,18 @@ import {
   workflowLabel,
 } from "./kernelChoices.ts";
 import {
+  readCurrentExecutionPlan,
+  type ExecutionPlan,
+} from "./executionPlan.ts";
+import {
+  buildTaskExecutionProfile,
+  executionProfilePrompt,
+  materializeExecutionProfile,
+  normalizeTaskExecutionInstructions,
+  resolveRepositoryExecutionProfile,
+  type TaskExecutionProfile,
+} from "./executionProfile.ts";
+import {
   AGENT_REQUIREMENT_DOCUMENT,
   MAX_REQUIREMENT_DOCUMENT_BYTES,
   STORED_REQUIREMENT_DOCUMENT,
@@ -594,6 +606,14 @@ export interface TaskSummary {
   model_choice?: { provider: string; model: string };
   /** 下单时的修复轮预算;缺席=跟随服务当前默认。0=本单关掉修复环。 */
   repair_rounds?: number;
+  /** 各层执行偏好在下单/首次 clone 时解析并固定。它只能影响“怎么做”
+   * 的建议层，不能覆盖内核步骤、证据、人工决定或权限。 */
+  execution_profile?: TaskExecutionProfile;
+  /** 代码仓执行约定已完成首次解析；即使仓内没有配置或配置损坏，也要
+   * 固定这次结果，恢复/重跑不能从后来变化的仓库文件偷偷换方案。 */
+  execution_profile_repository_resolved?: boolean;
+  /** 可选执行补充无法采用时的可见降级说明；不阻塞任务。 */
+  execution_profile_warning?: string;
   /** 最近一张待办的通知投递事实(失败标红的依据,不影响流程)。 */
   notify?: Pick<NotifyRecord, "delivered" | "attempts" | "last_error">;
   /** Git 交付事实(§10):MR 链接/状态、流水线结果、或没交付的原因。
@@ -704,6 +724,8 @@ export interface TaskSummary {
   push_confirmation?: boolean;
   /** 从现场看板的 panel-pulse.js/panel.html 读取的进度摘要。 */
   progress?: TaskProgress;
+  /** 内核对当前阶段默认做法的只读解释；不参与状态迁移或完成裁决。 */
+  execution_plan?: ExecutionPlan;
   /** 人工控制台账。paused_from 是恢复时的扳道锚点：等待决定、流水线
    * 验证和普通执行的恢复方式不同，不能靠前端猜。 */
   control?: {
@@ -2415,6 +2437,13 @@ export class TaskService {
     const record = task.notifyRecord;
     const progress = this.taskProgress(task);
     const summary = task.summary;
+    const executionPlan = includeKnowledgeUsage
+      ? readCurrentExecutionPlan({
+          kernelRoot: this.options.host?.kernelRoot,
+          workspace: task.cwd ?? summary.workspace,
+          python: this.options.host?.python,
+        })
+      : undefined;
     const choiceEffects = stepChoiceEffects(
       this.options.host?.kernelRoot,
       summary.waiting?.step,
@@ -2449,6 +2478,7 @@ export class TaskService {
           }
         : undefined,
       progress,
+      execution_plan: executionPlan,
       token_usage: tokenUsageSnapshot(task.tokenUsage),
       waiting: summary.waiting
         ? {
@@ -3672,6 +3702,13 @@ export class TaskService {
       baseline?: string;
       model?: { provider: string; model: string };
       repairRounds?: number;
+      /** 任务级低优先级执行补充；详细需求仍放 requirement。 */
+      taskInstructions?: string;
+      /** 仅供跨仓拆单与原位重跑继承已经固定的分层快照。 */
+      executionProfile?: TaskExecutionProfile;
+      /** 仅供原位重跑继承“代码仓约定已解析”的事实。 */
+      executionProfileRepositoryResolved?: boolean;
+      executionProfileWarning?: string;
       /** 浏览器上传的原始文件名；正文仍由 requirement 统一承载。 */
       requirementDocumentName?: string;
       /** Chain 拆单内部会把原文与逐仓说明拼接，允许多一份原文大小的
@@ -3804,6 +3841,9 @@ export class TaskService {
             || options.repairRounds < 0)) {
       throw new Error("修复轮预算必须是 ≥0 的数字");
     }
+    // 先校验再分配 task id，避免一个超长输入白白消耗任务序号。
+    const taskInstructions = normalizeTaskExecutionInstructions(
+      options.taskInstructions);
     const directResources = options.repositorySkills !== undefined;
     const selectedResources = !options.preserveUndefinedRepositorySkills
         && !directResources
@@ -3835,6 +3875,16 @@ export class TaskService {
       throw new TaskControlError(`任务 ${id} 不能安全地原位重建`);
     }
     const workspace = join(this.options.dataDir, id);
+    const executionProfile = options.executionProfile
+      ? {
+          ...options.executionProfile,
+          layers: options.executionProfile.layers.map((layer) => ({ ...layer })),
+        }
+      : buildTaskExecutionProfile(
+          id,
+          taskInstructions,
+          this.options.settings?.executionPolicy().team_instructions,
+        );
     mkdirSync(workspace, { recursive: true });
     let issueEnvironments: IssueEnvironmentRef[] = [];
     let businessModules: SelectedBusinessModule[] = [];
@@ -3968,6 +4018,10 @@ export class TaskService {
       baseline,
       model_choice: options.model,
       repair_rounds: options.repairRounds,
+      execution_profile: executionProfile,
+      execution_profile_repository_resolved:
+        options.executionProfileRepositoryResolved,
+      execution_profile_warning: options.executionProfileWarning,
     };
     const task: TaskState = {
       summary,
@@ -4751,6 +4805,10 @@ export class TaskService {
       baseline: source.baseline,
       model: source.model_choice ? { ...source.model_choice } : undefined,
       repairRounds: source.repair_rounds,
+      executionProfile: source.execution_profile,
+      executionProfileRepositoryResolved:
+        source.execution_profile_repository_resolved,
+      executionProfileWarning: source.execution_profile_warning,
       requirementDocumentName: source.requirement_document?.name,
       internalRequirement: Boolean(source.parent_task_id),
       parentTaskId: source.parent_task_id,
@@ -5190,6 +5248,7 @@ export class TaskService {
         baseline: task.summary.baseline,
         model: task.summary.model_choice,
         repairRounds: task.summary.repair_rounds,
+        executionProfile: task.summary.execution_profile,
         parentTaskId: task.summary.id,
         internalRequirement: true,
         blockedBy: blockers,
@@ -7346,6 +7405,7 @@ export class TaskService {
       let engineeringKnowledge: ReturnType<typeof materializeEngineeringKnowledge>
         = { entries: [], warnings: [] };
       let hasDependencyHandoff = false;
+      let executionProfileMaterialized = !task.summary.execution_profile;
       task.cwd = cwd;
       if (this.options.host && analysisOnly) {
         const analysisRoot = resuming ? savedCwd! : join(workspace, "repositories");
@@ -7483,6 +7543,39 @@ export class TaskService {
           for (const warning of materialized.warnings) {
             this.options.log?.(`[repository-skill] 任务 ${task.summary.id}: ${warning}`);
           }
+        }
+        // 仓库可在受版本控制的 .mae-flow-defaults.json 里声明一条
+        // 「执行补充」。只在首次 clone 后读取一次，插入 team 与 task
+        // 之间并回写 task.json；之后恢复/重跑都沿用快照，不随仓库或
+        // 管理设置漂移。坏配置只明确降级，不阻塞任务。
+        if (!task.summary.execution_profile_repository_resolved) {
+          const repositoryProfile = resolveRepositoryExecutionProfile({
+            workspace: cwd,
+            repositoryId: activeRepository ?? task.summary.id,
+            profile: task.summary.execution_profile,
+          });
+          task.summary.execution_profile = repositoryProfile.profile;
+          task.summary.execution_profile_repository_resolved = true;
+          task.summary.execution_profile_warning = repositoryProfile.warning;
+          if (repositoryProfile.warning) {
+            this.options.log?.(
+              `[execution-profile] 任务 ${task.summary.id}: `
+              + repositoryProfile.warning);
+          }
+          this.persist(task);
+        }
+        executionProfileMaterialized = !task.summary.execution_profile;
+        // 执行偏好必须先于 bootstrapManaged 落地：bootstrap 会机械执行
+        // init/current，内核要在第一条阶段指令里就读到它。文件是下单时
+        // 固定的快照，不依赖 Cloud DB；失败不假装生效，后面会把同一份
+        // 内容作为显式 prompt 兜底并留下日志。
+        try {
+          materializeExecutionProfile(cwd, task.summary.execution_profile);
+          executionProfileMaterialized = true;
+        } catch (cause) {
+          this.options.log?.(
+            `[execution-profile] 任务 ${task.summary.id} 快照投影失败，`
+            + `已退回显式 prompt（不影响开工）：${cause}`);
         }
         // 下单事实(.mae-flow-order.json,内核契约):表单收齐的单号/
         // 基线分支/工号/交付方式机械交给内核——config-review 拿它补
@@ -7683,6 +7776,16 @@ export class TaskService {
                + undeliveredInterrupts(workspace).join("\n\n")]
             : []),
         ].filter(Boolean).join("\n\n");
+      }
+      const executionSupplement = executionProfilePrompt(
+        task.summary.execution_profile);
+      if (executionSupplement
+          && (analysisOnly || !this.options.host
+              || !executionProfileMaterialized)) {
+        prompt = `${prompt}\n\n${executionSupplement}`;
+      }
+      if (task.summary.execution_profile_warning) {
+        prompt = `${prompt}\n\n⚠ ${task.summary.execution_profile_warning}`;
       }
       businessModuleKnowledge = materializeBusinessModuleKnowledge({
         selected: task.summary.business_modules,

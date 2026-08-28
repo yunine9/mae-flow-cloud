@@ -39,7 +39,7 @@ import {
 } from "./launchGate";
 import { startVisiblePolling } from "./visiblePolling";
 import { KnowledgeFlywheel } from "./KnowledgeFlywheel";
-import { WishWall } from "./WishWall";
+import { WishWall, type WishWallDraft } from "./WishWall";
 import { BusinessModuleLibrary } from "./BusinessModuleLibrary";
 
 type View = "team" | "mine" | "profile" | "history" | "users" | "settings"
@@ -303,6 +303,7 @@ export function App() {
   const [artifactTaskId, setArtifactTaskId] = useState("");
   const [artifactTaskSnapshot, setArtifactTaskSnapshot] = useState<TaskSummary>();
   const [launchOpen, setLaunchOpen] = useState(false);
+  const [wishDraft, setWishDraft] = useState<WishWallDraft>();
   const [launchGate, setLaunchGate] = useState<LaunchGateState>({ kind: "checking" });
   const launchGateRequest = useRef(0);
   const [taskSync, setTaskSync] = useState<TaskSyncState>({ kind: "loading" });
@@ -641,7 +642,8 @@ export function App() {
           }}
         />}
 
-        {view === "wishes" && <WishWall viewer={session} />}
+        {view === "wishes" && <WishWall viewer={session} draft={wishDraft}
+          onDraftConsumed={() => setWishDraft(undefined)} />}
 
         {view === "business" && <BusinessModuleLibrary
           admin={session.role === "admin"} />}
@@ -703,6 +705,15 @@ export function App() {
       onOpenTask={(taskId) => {
         const related = tasks.find((task) => task.id === taskId);
         if (related) openArtifacts(related);
+      }}
+      onExecutionPlanFeedback={(draft) => {
+        setWishDraft({
+          key: `${artifactTask.id}:${artifactTask.execution_plan?.plan_revision ?? "plan"}:${Date.now()}`,
+          kind: "wish",
+          ...draft,
+        });
+        closeArtifacts();
+        setView("wishes");
       }}
     />}
   </div>;

@@ -512,6 +512,9 @@ test("下单即校验:不存在的模型、负预算、带密码的仓地址,当
     /没有模型/);
   assert.throws(() =>
     service.create("x", { repairRounds: -1 }), /≥0/);
+  assert.throws(() => service.create("x", {
+    taskInstructions: "过长".repeat(1001),
+  }), /不能超过 2000/);
   // 明文凭据拼 URL 是堵死的洞,下单口也不许开
   assert.throws(() =>
     service.create("x", { repo: "https://user:pass@codehub.corp/r.git" }),
@@ -542,6 +545,22 @@ test("下单即校验:不存在的模型、负预算、带密码的仓地址,当
     /未接内核模式/);
 });
 
+test("任务执行补充在下单时固定，不与需求正文或内核红线混为一体", () => {
+  const service = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-lf-profile-")),
+    provider: "a", model: "a-1", maxConcurrent: 0,
+    modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
+  });
+  const task = service.create("实现兼容旧数据的读取", {
+    taskInstructions: "  先核对线上旧格式\n不确定时明确说明  ",
+  });
+  assert.equal(task.requirement, "实现兼容旧数据的读取");
+  assert.equal(task.execution_profile?.layers[0].scope, "task");
+  assert.equal(task.execution_profile?.layers[0].instructions,
+    "先核对线上旧格式\n不确定时明确说明");
+  assert.match(task.execution_profile?.revision ?? "", /^[a-f0-9]{16}$/);
+});
+
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf-8" }).trim();
 }
@@ -560,6 +579,11 @@ function makeRepo(name: string): string {
 test("消费:任务级代码仓压过部署仓,克隆的就是下单填的那个", async () => {
   const repoA = makeRepo("aaa");
   const repoB = makeRepo("bbb");
+  writeFileSync(join(repoB, ".mae-flow-defaults.json"), JSON.stringify({
+    执行补充: "修改接口前先检查兼容调用方",
+  }));
+  git(repoB, "add", ".mae-flow-defaults.json");
+  git(repoB, "commit", "--quiet", "-m", "add repository execution preset");
   const kernelRoot = discoverKernelRoot(process.cwd());
   if (!kernelRoot) throw new Error("找不到内核(MAE_FLOW_HOME/../mae-flow/仓内 kernel/ 皆无)");
   const model = new ScriptedModelServer(SCRIPT);
@@ -584,6 +608,10 @@ test("消费:任务级代码仓压过部署仓,克隆的就是下单填的那个
   assert.match(task.detail ?? "",
     /config_confirm|尚未到 terminal|状态文件不存在|尚未初始化/);
   assert.equal(task.repo_url, repoB);
+  assert.equal(task.execution_profile?.layers.find(
+    (layer) => layer.scope === "repository")?.instructions,
+  "修改接口前先检查兼容调用方");
+  assert.equal(task.execution_profile_repository_resolved, true);
   // 克隆目录名与 origin 都指向下单填的仓,不是部署仓
   const clone = join(task.workspace, basename(repoB));
   assert.equal(git(clone, "remote", "get-url", "origin"), repoB);

@@ -31,6 +31,7 @@ type LaunchDraft = {
   baseline: string;
   lane: string;
   repairRounds: string;
+  taskInstructions?: string;
   selectedBusinessModuleIds?: string[];
 };
 type LaunchPreferences = {
@@ -101,6 +102,8 @@ export function LaunchWorkspace({
     validDraft?.lane ?? savedPreferences?.lane ?? "");
   const [repairRounds, setRepairRounds] = useState(
     validDraft?.repairRounds ?? savedPreferences?.repairRounds ?? "");
+  const [taskInstructions, setTaskInstructions] = useState(
+    validDraft?.taskInstructions ?? "");
   const [selectedBusinessModuleIds, setSelectedBusinessModuleIds] = useState(
     validDraft?.selectedBusinessModuleIds ?? []);
   const [moduleSelectionNotice, setModuleSelectionNotice] = useState("");
@@ -176,6 +179,7 @@ export function LaunchWorkspace({
         baseline,
         lane,
         repairRounds,
+        taskInstructions,
         selectedBusinessModuleIds,
       };
       try {
@@ -188,7 +192,7 @@ export function LaunchWorkspace({
     }, 300);
     return () => window.clearTimeout(timer);
   }, [title, requirement, requirementDocumentName, repos, ticket,
-    baseline, lane, repairRounds, selectedBusinessModuleIds,
+    baseline, lane, repairRounds, taskInstructions, selectedBusinessModuleIds,
     session.username]);
 
   useEffect(() => {
@@ -303,6 +307,7 @@ export function LaunchWorkspace({
           baseline: baseline.trim() || undefined,
           repairRounds: repairRounds.trim() === ""
             ? undefined : Number(repairRounds),
+          taskInstructions: taskInstructions.trim() || undefined,
           repositorySkillCatalogToken:
             repositorySkillSelection.scanned
               ? repositorySkillSelection.catalogToken : undefined,
@@ -604,6 +609,16 @@ export function LaunchWorkspace({
                         ? `沿用团队默认 ${options.repair_rounds}（0=关闭）`
                         : "沿用团队默认：不限轮（0=关闭）"} />
                     <small>留空沿用团队设置；只有需要限制或关闭自动修复时才填写。</small>
+                  </label>
+                  <label className="account-field task-instructions-field">
+                    <span>本任务执行补充（可选）</span>
+                    <textarea value={taskInstructions} maxLength={2000}
+                      onChange={(event) => setTaskInstructions(event.target.value)}
+                      placeholder="例如：先核对兼容旧数据的风险；接口命名尽量沿用现有模块；不确定时明确说明，不要猜。" />
+                    <small>
+                      只写关注点、先后偏好或协作要求，不必重复需求。它会随任务固定并进入每个阶段，但不能关闭质量验证、人工决定或交付权限。
+                    </small>
+                    <em>{taskInstructions.length}/2000</em>
                   </label>
                 </div>
               </section>}

@@ -254,6 +254,7 @@ def _gate_bash_writes(flow, st, sid, step, intent, jdie):
             intent,
             r"\.mae-flow(\.json|-history\.jsonl|-need-reload|-defaults\.json)"
             r"|\.mae-flow-work/(?:moonlight-report\.md|"
+            r"execution-profile\.json|"
             r"(?:plugin-resources|repository-skills|host-skills)(?:/|$))"),
         step=sid or "",
         offenders=tuple(offenders),

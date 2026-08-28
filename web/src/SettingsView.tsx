@@ -13,6 +13,7 @@ import {
   getBuildCacheStatus,
   getSettings,
   getSystemCheck,
+  putExecutionPolicySettings,
   putModelsSettings,
   putRuntimeSettings,
   putVisionSettings,
@@ -147,6 +148,58 @@ function RuntimeCard({ view, onSaved }: {
         note="终态任务过期后回收代码克隆等可再生的大件；过程记录、证据与批注永久保留。0 表示永不回收"
         value={retention} onChange={setRetention} />
       <button type="submit" disabled={busy}>{busy ? "正在保存…" : "保存运行参数"}</button>
+      <Feedback message={message} />
+    </form>
+  </div>;
+}
+
+function ExecutionPolicyCard({ view, onSaved }: {
+  view: Settings; onSaved: (next: Settings) => void;
+}) {
+  const [instructions, setInstructions] = useState(
+    view.execution_policy.team_instructions ?? "");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useMessage();
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setBusy(true); setMessage(null);
+    try {
+      onSaved(await putExecutionPolicySettings({
+        team_instructions: instructions.trim(),
+      }));
+      setMessage({
+        kind: "success",
+        text: instructions.trim()
+          ? "团队执行约定已保存；只影响之后新建的任务，运行中与历史任务保持原快照。"
+          : "团队执行约定已清空；之后新建的任务只使用平台默认与任务补充。",
+      });
+    } catch (error) {
+      setMessage({ kind: "error", text: String((error as Error).message ?? error) });
+    } finally { setBusy(false); }
+  }
+
+  return <div className="user-create-card settings-card execution-policy-card">
+    <div className="user-create-copy">
+      <span className="section-kicker">WORKFLOW POLICY</span>
+      <h2>团队执行约定</h2>
+      <p>把团队长期采用的关注点与协作习惯叠加在平台默认方案上。每个新任务都会固定当时版本，并在“执行方案”里说明来源。</p>
+    </div>
+    <form className="user-create-form settings-form execution-policy-form"
+      onSubmit={submit}>
+      <label>
+        <span>新任务默认补充</span>
+        <textarea rows={7} maxLength={2000} value={instructions}
+          placeholder="例如：涉及存量接口时先核对兼容性；不确定的外部行为明确说明，不要猜；公共契约变更必须点名影响方。"
+          onChange={(event) => setInstructions(event.target.value)} />
+        <small className="knob-note">
+          只调整关注点、先后顺序和协作方式；不能覆盖阶段、真实证据、人工决定或 Git/交付权限。留空表示不设置团队补充。
+        </small>
+        <em className="settings-char-count">{instructions.length}/2000</em>
+      </label>
+      <button type="submit" disabled={busy}>
+        {busy ? "正在保存…" : "保存团队执行约定"}
+      </button>
       <Feedback message={message} />
     </form>
   </div>;
@@ -481,6 +534,9 @@ export function SettingsBoard() {
       view={view} onSaved={setView} />
     <VisionModelsCard
       key={`v${view.models.vision.url}:${view.models.vision.model}:${view.models.vision.key_hint}`}
+      view={view} onSaved={setView} />
+    <ExecutionPolicyCard
+      key={`p${view.execution_policy.team_instructions ?? ""}`}
       view={view} onSaved={setView} />
     <RuntimeCard key={`r${JSON.stringify(view.runtime)}:${JSON.stringify(view.defaults.runtime)}`}
       view={view} onSaved={setView} />

@@ -26,6 +26,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { normalizeTeamExecutionInstructions } from "./executionProfile.ts";
 
 export interface RuntimeKnobs {
   max_concurrent?: number;
@@ -51,9 +52,15 @@ export interface ModelsSettings {
   vision?: { provider: string; model: string };
 }
 
+export interface ExecutionPolicySettings {
+  /** 新任务采用并固定；运行中与历史任务不漂移。 */
+  team_instructions?: string;
+}
+
 interface Stored {
   runtime?: RuntimeKnobs;
   models?: ModelsSettings;
+  execution_policy?: ExecutionPolicySettings;
 }
 
 export class SettingsError extends Error {}
@@ -119,6 +126,22 @@ export class RuntimeSettings {
 
   models(): ModelsSettings {
     return this.load().models ?? {};
+  }
+
+  executionPolicy(): ExecutionPolicySettings {
+    return this.load().execution_policy ?? {};
+  }
+
+  updateExecutionPolicy(patch: Record<string, unknown>): void {
+    const teamInstructions = "team_instructions" in patch
+      ? normalizeTeamExecutionInstructions(
+          patch.team_instructions == null
+            ? undefined : String(patch.team_instructions))
+      : this.executionPolicy().team_instructions;
+    this.save({
+      ...this.load(),
+      execution_policy: { team_instructions: teamInstructions },
+    });
   }
 
   updateRuntime(patch: Record<string, unknown>): void {
@@ -308,6 +331,7 @@ export class RuntimeSettings {
    * 谁在这个函数里返回明文,谁就在给未来的泄漏签字。 */
   view(): {
     runtime: RuntimeKnobs;
+    execution_policy: ExecutionPolicySettings;
     models: { configured: boolean; provider?: string; model?: string;
               url?: string; key_hint?: string;
               providers: Array<{ name: string; models: string[]; key_hint?: string }>;
@@ -333,6 +357,7 @@ export class RuntimeSettings {
     } | undefined)?.providers ?? {})[models.vision?.provider ?? ""];
     return {
       runtime: this.runtime(),
+      execution_policy: this.executionPolicy(),
       models: {
         configured: !!selectedSpec?.baseUrl && !!selectedSpec?.apiKey
           && !!models.model,

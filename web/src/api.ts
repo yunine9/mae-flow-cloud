@@ -510,6 +510,60 @@ export interface TaskTokenUsage {
   source: "provider";
 }
 
+export interface ExecutionPlan {
+  schema: "mae-flow-execution-plan/1";
+  plan_id: string;
+  plan_revision: string;
+  step: {
+    id: string;
+    title: string;
+    phase: string;
+    state_revision?: number;
+  };
+  strategy: {
+    id: string;
+    version: string;
+    title: string;
+    summary: string;
+    source: "platform_default";
+    selection_reason: string;
+  };
+  contract: {
+    human_decision: boolean;
+    evidence: Array<{ type: string; label: string }>;
+    outputs: string[];
+  };
+  activities: Array<{
+    title: string;
+    description: string;
+    required: boolean;
+  }>;
+  resources: Array<{
+    kind: "guidance" | "standard" | "agent" | "platform" | "knowledge"
+      | "skill" | "tool";
+    name: string;
+    ref?: string;
+    usage: "required" | "when_needed" | "on_demand";
+  }>;
+  knowledge: {
+    loading: "indexed_on_demand";
+    explanation: string;
+  };
+  customization: {
+    mode: "bounded";
+    customizable: string[];
+    locked: string[];
+    effective_source: "platform_default" | "platform_default+overrides";
+    profile_revision?: string;
+    layers: Array<{
+      scope: "team" | "business_module" | "repository" | "task";
+      source_id: string;
+      title: string;
+      instructions: string;
+    }>;
+  };
+}
+
 export interface TaskSummary {
   id: string;
   title?: string;
@@ -664,6 +718,10 @@ export interface TaskSummary {
   /** push 前人工确认交付范围(任务级显式开关,缺省继承个人设置)。 */
   push_confirmation?: boolean;
   progress?: TaskProgress;
+  /** 当前阶段采用什么做法的只读说明；状态与完成条件仍以内核为准。 */
+  execution_plan?: ExecutionPlan;
+  /** 可选执行补充未被采用时的明确降级说明。 */
+  execution_profile_warning?: string;
   control?: {
     last_action: "pause" | "resume" | "cancel";
     actor: string;
@@ -1543,6 +1601,7 @@ export async function createTask(
     baseline?: string;
     model?: { provider: string; model: string };
     repairRounds?: number;
+    taskInstructions?: string;
     repositorySkillCatalogToken?: string;
     selectedRepositorySkillIds?: string[];
     selectedBusinessModuleIds?: string[];
@@ -1571,6 +1630,7 @@ export async function createTask(
       baseline: extras?.baseline || undefined,
       model: extras?.model,
       repair_rounds: extras?.repairRounds,
+      task_instructions: extras?.taskInstructions?.trim() || undefined,
       repository_skill_catalog_token:
         extras?.repositorySkillCatalogToken || undefined,
       selected_repository_skill_ids:
@@ -2116,6 +2176,10 @@ export interface SettingsView {
     build_cache_retention_days?: number;
     build_cache_max_gb?: number;
   };
+  execution_policy: {
+    /** 只影响保存后新建任务；每单会固定快照。 */
+    team_instructions?: string;
+  };
   models: {
     configured: boolean;
     provider?: string;
@@ -2227,7 +2291,7 @@ export async function reclaimUnusedBuildCaches(): Promise<BuildCacheReclaimResul
 }
 
 async function putSettings(
-  section: "runtime" | "models" | "vision",
+  section: "runtime" | "models" | "vision" | "execution-policy",
   body: unknown,
 ): Promise<SettingsView> {
   const response = await fetch(`/settings/${section}`, {
@@ -2242,6 +2306,12 @@ export function putRuntimeSettings(
   body: Record<string, unknown>,
 ): Promise<SettingsView> {
   return putSettings("runtime", body);
+}
+
+export function putExecutionPolicySettings(body: {
+  team_instructions: string;
+}): Promise<SettingsView> {
+  return putSettings("execution-policy", body);
 }
 
 export function putModelsSettings(body: {

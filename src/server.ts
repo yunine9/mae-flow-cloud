@@ -663,6 +663,10 @@ export function createTaskServer(
             settings.updateRuntime(await readBody(request));
             return json(response, 200, settingsView());
           }
+          if (request.method === "PUT" && parts[1] === "execution-policy") {
+            settings.updateExecutionPolicy(await readBody(request));
+            return json(response, 200, settingsView());
+          }
           if (request.method === "PUT" && parts[1] === "models") {
             settings.updateModels(await readBody(request));
             return json(response, 200, settingsView());
@@ -1386,6 +1390,8 @@ export function createTaskServer(
         const repairRounds = body.repair_rounds === undefined
           || body.repair_rounds === null || body.repair_rounds === ""
           ? undefined : Number(body.repair_rounds);
+        const taskInstructions = body.task_instructions == null
+          ? undefined : String(body.task_instructions);
         const repositorySkillCatalogToken =
           body.repository_skill_catalog_token === undefined
             ? undefined : String(body.repository_skill_catalog_token);
@@ -1434,7 +1440,7 @@ export function createTaskServer(
               title, account, repo, repos, entryKind, issueEnvironments,
               requirementDocumentName,
               lane, ticket, baseline, model,
-              repairRounds, repositorySkillCatalogToken,
+              repairRounds, taskInstructions, repositorySkillCatalogToken,
               selectedRepositorySkillIds,
               selectedBusinessModuleIds, selectedEngineeringKnowledgeIds,
               repositoryProfiles,

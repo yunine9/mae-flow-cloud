@@ -21,6 +21,13 @@ import {
 const IMAGE_LIMIT = 4;
 const IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 
+export interface WishWallDraft {
+  key: string;
+  kind: WishKind;
+  title: string;
+  detail?: string;
+}
+
 interface ImageDraft {
   key: string;
   file: File;
@@ -66,13 +73,17 @@ function StatusPath({ item }: { item: WishWallItem }) {
   </div>;
 }
 
-export function WishWall({ viewer }: { viewer: { username: string; role: string } }) {
+export function WishWall({ viewer, draft, onDraftConsumed }: {
+  viewer: { username: string; role: string };
+  draft?: WishWallDraft;
+  onDraftConsumed?: () => void;
+}) {
   const [items, setItems] = useState<WishWallItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
-  const [kind, setKind] = useState<WishKind>("wish");
-  const [title, setTitle] = useState("");
-  const [detail, setDetail] = useState("");
+  const [kind, setKind] = useState<WishKind>(draft?.kind ?? "wish");
+  const [title, setTitle] = useState(draft?.title ?? "");
+  const [detail, setDetail] = useState(draft?.detail ?? "");
   const [images, setImages] = useState<ImageDraft[]>([]);
   const imageRef = useRef<ImageDraft[]>([]);
   const [composerError, setComposerError] = useState("");
@@ -92,6 +103,7 @@ export function WishWall({ viewer }: { viewer: { username: string; role: string 
   }>();
 
   useEffect(() => { imageRef.current = images; }, [images]);
+  useEffect(() => { if (draft) onDraftConsumed?.(); }, [draft?.key]);
   useEffect(() => () => {
     imageRef.current.forEach((image) => URL.revokeObjectURL(image.preview));
   }, []);
