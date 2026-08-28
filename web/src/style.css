@@ -1847,14 +1847,6 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 }
 .issue-dts-detail-html img { max-width: 100%; }
 .issue-dts-hint { margin: 6px 0 0; color: var(--faint); font-size: var(--font-size-assist); }
-.issue-list { display: grid; gap: 8px; }
-.issue-card {
-  display: grid; gap: 6px; padding: 12px 14px; text-align: left;
-  border: 1px solid var(--line); border-radius: 11px; background: var(--surface-muted);
-  cursor: pointer; font: inherit;
-}
-.issue-card:hover { border-color: var(--accent); }
-.issue-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .issue-status {
   padding: 2px 8px; border-radius: 999px; font-size: var(--font-size-dense);
   font-weight: 700; border: 1px solid var(--line); color: var(--muted); white-space: nowrap;
@@ -1866,12 +1858,6 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-stage { color: var(--muted); font-size: var(--font-size-dense); }
 .issue-ticket { padding: 1px 7px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent); font: 700 var(--font-size-dense) var(--font-mono); }
 .issue-ticket.empty { background: none; color: var(--faint); border: 1px dashed var(--line); }
-.issue-title { color: var(--text-strong); font-size: var(--font-size-main); }
-.issue-card-foot { display: flex; gap: 12px; color: var(--faint); font-size: var(--font-size-dense); }
-.issue-conclusion { color: #16856a; }
-/* 会话页骨架:纵向自然流(头部/英雄轨/折叠条/双栏),页面级滚动;
-   双栏内部各自成 flex 保证右栏 footer 可以钉底。 */
-.issue-session { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
 /* 全屏会话工作台(workspace-overlay 同款壳):头部钉顶,现场体独占
    滚动——横屏信息面积优先,少一层页面级干扰。 */
 .issue-workspace { padding: 0 16px 16px; }
@@ -2505,35 +2491,8 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-tl-events li.kind-stage em.src-platform { background: #e3f4ea; color: #217a46; }
 .issue-tl-events li span { min-width: 0; overflow-wrap: anywhere; }
 
-/* 对话 / 结论文档 页签:与登记页的 issue-register-tabs 同款轻页签 */
-.issue-pane-tabs { display: inline-flex; gap: 4px; align-self: start; padding: 4px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-muted); }
-.issue-pane-tabs button {
-  min-height: 28px; padding: 0 14px; border: 0; border-radius: 7px;
-  background: transparent; color: var(--muted); font-size: var(--font-size-assist); cursor: pointer;
-}
-.issue-pane-tabs button:hover { color: var(--text-strong); }
-.issue-pane-tabs button.on { color: var(--accent); background: var(--surface); box-shadow: var(--shadow-xs); }
-.issue-pane-tabs button i { font-style: normal; color: var(--faint); margin-left: 4px; }
-
 /* 会话材料页签:DTS 单据 / 工作区变更(含快速修改)/ 拉取日志 */
 .issue-materials { display: grid; gap: 14px; align-content: start; }
-.issue-materials-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.issue-materials-toolbar button {
-  min-height: 30px; padding: 0 12px; border: 1px solid var(--line);
-  border-radius: 8px; background: var(--surface-muted); color: var(--text-strong);
-  font-size: var(--font-size-assist); cursor: pointer;
-}
-.issue-materials-toolbar button:disabled { opacity: .5; cursor: not-allowed; }
-.issue-materials-push {
-  padding: 2px 10px; border-radius: 999px; font-size: var(--font-size-dense);
-  background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent);
-}
-.issue-materials-note { color: #b7791f; font-size: var(--font-size-assist); }
-.issue-materials-warning {
-  margin: 0; padding: 6px 10px; border-radius: 8px;
-  background: rgba(183, 121, 31, .1); color: #b7791f;
-  font-size: var(--font-size-assist);
-}
 .issue-materials-empty { margin: 4px 0 0; color: var(--faint); font-size: var(--font-size-assist); }
 .issue-materials-block {
   display: grid; gap: 8px; padding: 12px 14px;
@@ -2594,23 +2553,6 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   font-size: var(--font-size-dense); color: var(--faint);
 }
 .issue-materials-edits .p { color: var(--muted); font-family: var(--font-mono); }
-
-/* 现场页签:原始事件流,只陈列不解读 */
-.issue-events { display: grid; gap: 10px; align-content: start; }
-.issue-events-list {
-  display: grid; gap: 3px; max-height: 70vh; overflow: auto;
-  font: var(--font-size-dense) var(--font-mono);
-}
-.issue-events-row {
-  display: grid; grid-template-columns: auto auto 1fr; gap: 10px;
-  align-items: baseline; padding: 4px 8px; border-radius: 6px;
-  background: var(--surface-muted);
-}
-.issue-events-row .ts { color: var(--faint); }
-.issue-events-row .kind { color: var(--accent); font-weight: 700; }
-.issue-events-row .payload {
-  color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
 
 /* 结论文档正文:复用消息区滚动容器,内部换成 markdown 排版 */
 .issue-thread.issue-doc { gap: 12px; }
