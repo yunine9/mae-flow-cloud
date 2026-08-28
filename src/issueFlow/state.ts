@@ -19,6 +19,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { IssueControlError } from "./errors.ts";
 import { validateRepoUrl } from "./issueGit.ts";
 import {
   FIXED_NO_TICKET_STAGES,
@@ -303,10 +304,6 @@ export interface IssueSummary extends IssueSessionState {
 }
 
 // ---- 多仓工作区映射(克隆/工具/提示词共用,目录命名只写这一处) ----
-
-/** 宿主侧控制类错误(登记/作答/配置的校验打回):路由层据此回 409
- * 带人话,而不是当异常 500。真相只在这一处定义,service 转出复用。 */
-export class IssueControlError extends Error {}
 
 /** 一个问题会话最多拉取的代码仓数。模块库允许一个模块绑 20 个仓,
  * 但问题会话一轮克隆 8 个已是分析上限——再多说明该拆会话了。 */

@@ -49,7 +49,6 @@ import {
   saveState,
   shouldNudgeFixed,
   summarize,
-  IssueControlError,
   type FixedStage,
   type IssueConclusionKind,
   type IssueEnvironmentConfig,
@@ -74,6 +73,11 @@ import {
 } from "./issueGit.ts";
 import { readBusinessModule } from "../businessModuleLibrary.ts";
 import type { IssueOpsTools } from "./opsTools.ts";
+import {
+  DtsGatewayUnconfiguredError,
+  IssueControlError,
+  IssueNotFoundError,
+} from "./errors.ts";
 import type { DtsGateway, DtsTicketDetail } from "./gateways.ts";
 import { createIssueTools, expectedBranch, type IssueToolContext } from "./tools.ts";
 import {
@@ -172,16 +176,6 @@ function decodeAgentDecision(
   const joined = lines.filter(Boolean).join("\n");
   return joined || undefined;
 }
-
-export class IssueNotFoundError extends Error {
-  constructor(id: string) {
-    super(`问题会话 ${id} 不存在`);
-  }
-}
-
-/** 控制类错误在校验发生地(state.ts)定义;这里转出,路由层的既有
- * import 面不变。 */
-export { IssueControlError };
 
 export interface IssueEnvironmentInput {
   name?: string;
@@ -1567,7 +1561,7 @@ export class IssueFlowService {
       throw new IssueControlError("单号只能是字母数字下划线连字符");
     }
     if (!this.options.dts) {
-      throw new IssueControlError(
+      throw new DtsGatewayUnconfiguredError(
         "DTS 网关未配置,无法校验单号(部署需 --dts-mcp-url 或 --dts-mock)");
     }
     const clash = [...this.live.values()].find((item) =>
@@ -1579,13 +1573,10 @@ export class IssueFlowService {
       throw new IssueControlError(
         `单号 ${ticket} 已有活跃会话 ${clash.id},同一单号不能重复关联`);
     }
-    let detail: DtsTicketDetail;
-    try {
-      detail = await this.options.dts.detail(ticket);
-    } catch (error) {
-      throw new IssueControlError(
-        `DTS 校验未通过: ${error instanceof Error ? error.message : String(error)}`);
-    }
+    // 网关失败不再本地包成控制错误(#9 单点映射):网关查询失败
+    // (含查无此单)按 McpGatewayError 原样上抛,路由层统一译成 502,
+    // 与拉单/详情/图代理同一出口。
+    const detail = await this.options.dts.detail(ticket);
     if (!input.confirm) {
       return { ticket_detail: detail };
     }

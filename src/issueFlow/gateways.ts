@@ -16,6 +16,10 @@
  * 的 Mcp-Session-Id 在后续请求回带;会话过期按一次性重试处理。
  */
 
+// 错误类型住 errors.ts(#9 集中声明):本模块只负责抛,码由路由层的
+// toHttpError 单点译出。
+import { DtsGatewayUnconfiguredError, McpGatewayError } from "./errors.ts";
+
 export interface McpGatewayConfig {
   url: string;
   /** 静态 token(与 tokenProvider 二选一)。 */
@@ -28,8 +32,6 @@ export interface McpGatewayConfig {
   log?: (message: string) => void;
   fetchImpl?: typeof fetch;
 }
-
-export class McpGatewayError extends Error {}
 
 interface JsonRpcResponse {
   jsonrpc?: string;
@@ -494,13 +496,13 @@ export class UnconfiguredDtsGateway implements DtsGateway {
     this.reason = reason;
   }
   async listByOwner(_account: string): Promise<DtsTicketBrief[]> {
-    throw new McpGatewayError(this.reason);
+    throw new DtsGatewayUnconfiguredError(this.reason);
   }
   async detail(_ticket: string): Promise<DtsTicketDetail> {
-    throw new McpGatewayError(this.reason);
+    throw new DtsGatewayUnconfiguredError(this.reason);
   }
   async proxyFile(_path: string): Promise<{ data: Buffer; contentType: string }> {
-    throw new McpGatewayError(this.reason);
+    throw new DtsGatewayUnconfiguredError(this.reason);
   }
 }
 

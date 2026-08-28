@@ -37,9 +37,9 @@ import { closeSync, existsSync, openSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { IssueFlowService } from "./service.ts";
 import {
-  IssueControlError,
-  IssueNotFoundError,
-} from "./service.ts";
+  DtsGatewayUnconfiguredError,
+  toHttpError,
+} from "./errors.ts";
 import {
   listMaterials,
   readSessionWorkspaceFile,
@@ -50,7 +50,6 @@ import {
   sessionWorkspaceFileDiff,
 } from "./materials.ts";
 import type { DtsGateway } from "./gateways.ts";
-import { StateConflictError } from "../humanGate.ts";
 import { isTerminal } from "./state.ts";
 
 export interface IssueViewer {
@@ -152,11 +151,11 @@ function streamIssueEvents(
   push();
 }
 
-/** DTS 网关直连的缺席守卫:文案与原先 service 透传层一字不差
- * (错误映射统一是 #9 的事,这里不顺手改)。 */
+/** DTS 网关直连的缺席守卫:缺席即"未配置",是环境档(409),不是
+ * 上游故障——按 #9 的口径抛 DtsGatewayUnconfiguredError。 */
 function requireDts(dts: DtsGateway | undefined): DtsGateway {
   if (!dts) {
-    throw new IssueControlError(
+    throw new DtsGatewayUnconfiguredError(
       "DTS 网关未配置(部署需 --dts-mcp-url 与 token)");
   }
   return dts;
@@ -268,20 +267,15 @@ export async function handleIssueRoutes(
       if (!path || !path.startsWith("/")) {
         return done(400, { error: "缺少合法 path 参数(须为站内绝对路径)" });
       }
-      try {
-        // 直连 DTS 网关代理回取(收窄票 #7);缺配置的打回也在 try 里,
-        // 与原先透传层抛错同一落点(502)。
-        const file = await requireDts(routeOptions.dts).proxyFile(path);
-        response.writeHead(200, {
-          "content-type": file.contentType,
-          "cache-control": "public, max-age=86400",
-        });
-        response.end(file.data);
-      } catch (reason) {
-        return done(502, {
-          error: String(reason instanceof Error ? reason.message : reason),
-        });
-      }
+      // 直连 DTS 网关代理回取(收窄票 #7)。失败不再本地包 502(#9):
+      // 网关查询失败 502、未配置 409,与拉单/详情/关联转正同走尾部
+      // toHttpError 单点出码。
+      const file = await requireDts(routeOptions.dts).proxyFile(path);
+      response.writeHead(200, {
+        "content-type": file.contentType,
+        "cache-control": "public, max-age=86400",
+      });
+      response.end(file.data);
       return true;
     }
 
@@ -311,9 +305,11 @@ export async function handleIssueRoutes(
         return done(403, { error: "只能修改自己会话的工作区" });
       }
       const body = await readBody(request);
+      const rel = String(body.path ?? "");
+      // 会话定位在 try 外(#9):未知会话是 404 域错误族,不该被下面
+      // "写失败回 400"的本地兜底吞掉。
+      const session = issueFlow.session(id);
       try {
-        const rel = String(body.path ?? "");
-        const session = issueFlow.session(id);
         const result = saveSessionWorkspaceFile(
           session.state, session.root, rel, String(body.content ?? ""));
         routeOptions.log?.(
@@ -327,11 +323,13 @@ export async function handleIssueRoutes(
     }
     if (parts[2] === "materials" && parts.length === 4 && method === "GET") {
       const query = new URL(request.url ?? "/", "http://x").searchParams;
+      // 会话定位在 try 外(#9):未知会话按 404 出码,不被读类 fail-open
+      // 的 400 吞掉;材料读本身失败才回 400 带人话,页面给空态。
+      const session = issueFlow.session(id);
       try {
         if (parts[3] === "diff") {
           // 带 path = 单文件;不带 = 聚合 diff(对齐任务侧交付材料形态)。
           const path = query.get("path");
-          const session = issueFlow.session(id);
           return done(200, {
             diff: path
               ? sessionWorkspaceFileDiff(session.state, session.root, path)
@@ -339,19 +337,17 @@ export async function handleIssueRoutes(
           });
         }
         if (parts[3] === "file") {
-          const session = issueFlow.session(id);
           return done(200, readSessionWorkspaceFile(
             session.state, session.root, String(query.get("path") ?? "")));
         }
         if (parts[3] === "log") {
           return done(200, readLog(
-            issueFlow.session(id).root, String(query.get("name") ?? "")));
+            session.root, String(query.get("name") ?? "")));
         }
         if (parts[3] === "events") {
           const raw = Number(query.get("limit") ?? 200);
           const limit = Number.isFinite(raw) ? Math.min(Math.max(raw, 1), 1000) : 200;
-          const root = issueFlow.session(id).root;
-          return done(200, { events: recentEvents(root, limit) });
+          return done(200, { events: recentEvents(session.root, limit) });
         }
       } catch (reason) {
         return done(400, {
@@ -485,15 +481,11 @@ export async function handleIssueRoutes(
 
     return done(404, { error: "未知问题接口" });
   } catch (error) {
-    if (error instanceof IssueNotFoundError) {
-      return done(404, { error: error.message });
-    }
-    if (error instanceof IssueControlError) {
-      return done(409, { error: error.message });
-    }
-    if (error instanceof StateConflictError) {
-      return done(409, { error: "问题卡状态已变化(先到决定生效)" });
-    }
-    throw error;
+    // 单点映射(#9):域错误族 → 状态码 + 对外消息,错误族与口径见
+    // errors.ts 的映射表。未登记的失败原样上抛,交服务器兜底 500——
+    // 不猜码,也不在路径上各自包一层。
+    const mapped = toHttpError(error);
+    if (!mapped) throw error;
+    return done(mapped.status, { error: mapped.message });
   }
 }
