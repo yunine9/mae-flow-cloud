@@ -108,6 +108,21 @@ export function TaskCard({
               <span>下一步 · {task.focus.next_action}</span>
             </span>
           )}
+          {/* 收起态也要说清"为什么停/在等什么":原来失败原因和等待
+              项都藏在展开区,列表上只剩一颗红/灰 pill,任务看着像在
+              正常推进。一行摘要,点开看全文。 */}
+          {!expanded && task.status === "failed" && task.detail && (
+            <span className="task-key-line danger">{task.detail}</span>
+          )}
+          {!expanded && task.status === "verifying"
+            && (repairStopped(task) || task.delivery?.waiting_on) && (
+            <span className="task-key-line attention">
+              {repairStopped(task)
+                ? `自动修复已停，需要你介入：${task.delivery?.stalled
+                  ?? task.delivery?.loop?.diagnosis ?? task.detail ?? ""}`
+                : `正在等：${task.delivery!.waiting_on}`}
+            </span>
+          )}
           {(task.requirement_graph?.repositories.length ?? 0) > 1 && (
             <span className="task-chain-overview">
               <span className="task-graph-summary">
@@ -181,8 +196,12 @@ export function TaskCard({
         {task.delivery?.pipeline && (
           <span className="meta-fact">流水线 · {task.delivery.pipeline}</span>
         )}
+        {/* 百字诊断不塞 meta chip(最重要的原因不该用最弱的视觉级):
+            这里只留结论,全文在展开区的 alert 里。 */}
         {task.delivery?.skipped && (
-          <span className="meta-fact">交付 · {task.delivery.skipped}</span>
+          <span className="meta-fact" title={task.delivery.skipped}>
+            交付已阻止
+          </span>
         )}
         {task.luban_account && (
           <span className="meta-fact">责任人 · {responsibleOf(task)}</span>
@@ -195,6 +214,12 @@ export function TaskCard({
             <div className="alert">
               <strong>任务执行失败</strong>
               <span>{task.detail}</span>
+            </div>
+          )}
+          {task.delivery?.skipped && task.detail !== task.delivery.skipped && (
+            <div className="alert">
+              <strong>交付已阻止</strong>
+              <span>{task.delivery.skipped}</span>
             </div>
           )}
           {task.notify && !task.notify.delivered && task.notify.attempts > 0 && (
@@ -379,6 +404,15 @@ export function TaskProgress({
       })}
     </span>
   </span>;
+}
+
+/** 决策卡类型标题。只映射云端原生步骤(名字是本仓定的);内核步骤
+ * id 不猜译——猜错比不译更糟,通用标题足够,正文会说明这是什么决定。 */
+function waitingStepTitle(task: TaskSummary): string | undefined {
+  const step = task.waiting?.step ?? "";
+  if (step === "cloud_push_confirm") return "推送前确认：检视代码与交付范围";
+  if (task.waiting?.recommended_view === "diff") return "代码检视";
+  return undefined;
 }
 
 export function WaitingCard({
@@ -592,10 +626,15 @@ export function WaitingCard({
       <header className="decision-head">
         <div>
           <span className="decision-kicker">ACTION REQUIRED</span>
-          <h3 id={`decision-${task.id}`}>需要你的决策</h3>
-          {task.waiting?.step && <p>{task.waiting.step}</p>}
+          {/* 标题按卡类型说话,原始步骤 id(cloud_push_confirm 之类)
+              不再印给人看——认不出的类型就只保留通用标题,卡的正文
+              自会说明这是什么决定。 */}
+          <h3 id={`decision-${task.id}`}>{waitingStepTitle(task) ?? "需要你的决策"}</h3>
         </div>
-        <span className="decision-count">{questions.length} 个问题</span>
+        {/* 几乎恒为 1 题:徽标只在真有多题时才有信息量。 */}
+        {questions.length > 1 && (
+          <span className="decision-count">{questions.length} 个问题</span>
+        )}
       </header>
 
       {task.waiting?.context && (() => {
@@ -803,6 +842,9 @@ export function WaitingCard({
             </label>
           )}
         </div>
+        {/* 报错紧贴提交按钮上方(role=alert 读屏即播):原来渲在整卡
+            最底沿,长卡时落在视口外,人以为点了没反应。 */}
+        {conflict && <div className="alert" role="alert">{conflict}</div>}
         <button
           type="button"
           className="submit-decision"
@@ -815,7 +857,6 @@ export function WaitingCard({
           </svg>
         </button>
       </footer>
-      {conflict && <div className="alert">{conflict}</div>}
     </section>
   );
 }

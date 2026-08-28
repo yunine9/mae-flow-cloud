@@ -749,7 +749,8 @@ function PersonalActionInbox({
       task,
       kicker: "等待你的决定",
       title: task.title ?? task.requirement,
-      detail: task.focus?.next_action ?? task.waiting?.step ?? "查看材料并完成当前确认",
+      // 不拿原始步骤 id 当行动指引(cloud_push_confirm 对人是噪声)。
+      detail: task.focus?.next_action ?? "查看材料并完成当前确认",
       action: "立即处理",
     });
   }

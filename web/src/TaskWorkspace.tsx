@@ -796,8 +796,16 @@ export function TaskWorkspace({
         <aside className={`ws-decision${chainReview ? " has-chain-skills" : ""}`}
           aria-label="当前决策与关键操作">
           <div className="ws-pane-head ws-pane-head-side">
-            <div><span>NEXT ACTION</span><strong>{waiting ? "当前需要处理" : "当前无待办"}</strong></div>
-            <small>{waiting ? "完成后流程继续" : "无需处理"}</small>
+            {/* 右栏标题按阶段说实话:failed 时喊"无待办"是误导——
+                此刻的待办就是看失败原因、决定重跑还是接手。 */}
+            <div><span>NEXT ACTION</span><strong>{waiting ? "当前需要处理"
+              : task.status === "failed" ? "任务已失败"
+              : task.status === "verifying" ? "交付验证中"
+              : "当前无待办"}</strong></div>
+            <small>{waiting ? "完成后流程继续"
+              : task.status === "failed" ? "看原因，决定重跑或接手"
+              : task.status === "verifying" ? "流水线与自动修复由系统跟进"
+              : "无需处理"}</small>
           </div>
           {waiting && canOperate && (
             /* 批注挂在提交按钮正上方(WaitingCard 内部),不放卡片外面:
@@ -862,19 +870,22 @@ export function TaskWorkspace({
               你可以查看全部材料，但不能代为提交决定。
             </div>
           )}
-          {!waiting && (
-            <div className="ws-idle">
-              <strong>当前没有待你决定的事项</strong>
-              <p>
-                {task.status === "running"
-                  ? "模型正在推进；需要时可切到执行现场查看。"
-                  : "材料、协作和运行记录都在左侧主视图。"}
-              </p>
-              {canOperate && (task.status === "failed"
-                || task.status === "completed" || repairStopped(task)) && (
-                <RetryButton taskId={task.id} onDone={onChanged} />
+          {/* failed 的重点是"为什么失败":原因置顶,重跑按钮紧随其后,
+              不再先渲一段"当前没有待你决定的事项"把它压到最底。 */}
+          {task.status === "failed" && (
+            <>
+              {task.detail && (
+                <div className="alert">
+                  <strong>任务执行失败</strong>
+                  <span>{task.detail}</span>
+                </div>
               )}
-            </div>
+              {canOperate && !waiting && (
+                <div className="ws-failed-actions">
+                  <RetryButton taskId={task.id} onDone={onChanged} />
+                </div>
+              )}
+            </>
           )}
           {task.status === "canceled" && (
             <div className="task-canceled-note">
@@ -882,11 +893,37 @@ export function TaskWorkspace({
               <span>执行已停止；此前产生的文档、代码和过程记录仍可查看。</span>
             </div>
           )}
-          {task.status === "failed" && task.detail && (
-            <div className="alert">
-              <strong>任务执行失败</strong>
-              <span>{task.detail}</span>
-            </div>
+          {!waiting && task.status !== "failed" && task.status !== "canceled" && (
+            task.status === "verifying" ? (
+              /* 验证中右栏不再空转:此刻用户最想知道的是"卡在哪/等谁",
+                 waiting_on 有值就点名;修复停机时直接给重试入口。 */
+              <div className="ws-verify-focus">
+                <strong>交付验证进行中</strong>
+                {task.delivery?.waiting_on ? (
+                  <p className="ws-verify-focus-waiting">
+                    {task.delivery.waiting_on}
+                  </p>
+                ) : (
+                  <p>{task.detail
+                    || "流水线运行与自动修复由系统跟进；需要人时会在这里出卡。"}</p>
+                )}
+                {canOperate && repairStopped(task) && (
+                  <RetryButton taskId={task.id} onDone={onChanged} />
+                )}
+              </div>
+            ) : (
+              <div className="ws-idle">
+                <strong>当前没有待你决定的事项</strong>
+                <p>
+                  {task.status === "running"
+                    ? "模型正在推进；需要时可切到执行现场查看。"
+                    : "材料、协作和运行记录都在左侧主视图。"}
+                </p>
+                {canOperate && task.status === "completed" && (
+                  <RetryButton taskId={task.id} onDone={onChanged} />
+                )}
+              </div>
+            )
           )}
         </aside>
       </div>

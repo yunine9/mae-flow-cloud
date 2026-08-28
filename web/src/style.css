@@ -7843,3 +7843,48 @@ body, .sidebar, .identity-bar, .launch-copy, .user-create-copy,
   cursor: pointer;
 }
 .context-toggle:hover { background: var(--accent-soft); }
+
+/* 全工作台阶段审查轮(2026-08-29):右栏按阶段给重点。 */
+.ws-failed-actions { margin: 10px 14px 0; display: flex; }
+.ws-verify-focus {
+  margin: 12px 14px;
+  padding: 14px 16px;
+  display: grid;
+  gap: 7px;
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 10px;
+}
+.ws-verify-focus strong { color: var(--text-strong); font-size: 15px; }
+.ws-verify-focus p {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-size-assist);
+  line-height: 1.6;
+}
+.ws-verify-focus-waiting {
+  padding: 8px 11px;
+  color: var(--attention) !important;
+  background: var(--attention-soft);
+  border-radius: 8px;
+  font-weight: 600;
+}
+
+/* 列表页收起卡只保留主线:阶段轨道与 Token 遥测是详情级信息,
+   收起时隐藏——扫 20 张卡的场景里,它们把 focus 行淹了。 */
+.task-card:not(.expanded) .task-summary .task-phase-track,
+.task-card:not(.expanded) .task-summary .token-usage { display: none; }
+
+/* 收起卡的一行真话:失败原因/正在等什么。单行截断,点开看全文。 */
+.task-key-line {
+  display: block;
+  overflow: hidden;
+  max-width: 100%;
+  font-size: var(--font-size-assist);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-key-line.danger { color: var(--danger); }
+.task-key-line.attention { color: var(--attention); }
