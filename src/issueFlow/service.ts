@@ -402,8 +402,10 @@ export class IssueFlowService {
     const account = input.account?.trim();
     if (!account) throw new IssueControlError("缺少归属账号(工号)");
     const title = input.title?.trim() ?? "";
-    if (!title || title.length > 120) {
-      throw new IssueControlError("问题标题必填且不超过 120 字");
+    // 长度上限已按用户拍板(2026-08-28)去掉:标题只要求必填,长标题
+    // 由各消费面(列表卡/通知)自行单行截断;MR 标题遇平台限制再说。
+    if (!title) {
+      throw new IssueControlError("问题标题必填");
     }
     const ticket = input.ticket?.trim() || undefined;
     if (ticket && !TICKET_PATTERN.test(ticket)) {

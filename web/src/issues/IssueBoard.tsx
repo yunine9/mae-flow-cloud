@@ -470,7 +470,7 @@ function ManualRegister({
   return <form className="issue-form" onSubmit={submit}>
     <label className="issue-field wide">
       <span>问题标题 <i>必填</i></span>
-      <input value={title} maxLength={120} placeholder="一句话说清现象,如:播放器偶发黑屏"
+      <input value={title} placeholder="一句话说清现象,如:播放器偶发黑屏"
         onChange={(event) => setTitle(event.target.value)} />
     </label>
     <label className="issue-field wide">
