@@ -426,29 +426,38 @@ npm run adapter -- --config adapter.json --selftest
     "status": {"const": "running"}   // 交给宿主轮询 pipeline_status 收敛
   },
   "pipeline_status": {
-    // 2026-08-28 起支持降级链(candidates,首个成功赢)与 contract
-    // 直通(命令输出就是宿主契约,免逐字段抽取)。首选仓内编排脚本
-    // (deploy/adapter-tools/pipeline-status.py,stages+jobs 粒度、
-    // is_valid 过滤、sha 回显),REST 直调做备路。
+    // 2026-08-28 起支持降级链(candidates,首个成功赢,逐路记因,
+    // 全败聚合)。主路=仓内收编的内网实测脚本(按 sha 直查+quality+
+    // reviewtips+MCP 日志摘要,回显 sha/pipeline_id 供宿主防陈灯
+    // 核验);备路=REST 直查 pipelines 列表(脚本机器故障时至少知道
+    // 跑没跑完)。
     "candidates": [
-      { "command": ["python3",
-          "/opt/mae-flow-cloud/deploy/adapter-tools/pipeline-status.py",
-          "--sha", "{sha}", "--repo", "{repo}", "--token", "{token}"],
-        "contract": true },
-      { // 备路:actual_head_pipeline REST 直调。务必配 run_sha/is_valid
-        // 回显——MR 头上无有效流水线时平台挂旧分支的灯,宿主拿到回显
-        // 才能机械拒收陈灯(不配则只能信轮询参数,修复环会时好时坏)。
-        "command": ["curl", "-sf", "-H", "X-Auth-Token: {token}",
-          "https://<host>/api/v3/projects/{repo_path}/merge_requests/{mr}/actual_head_pipeline?show_job=true"],
+      { "command": ["bash",
+          "/opt/mae-flow-cloud/deploy/adapter-tools/pipeline-status.sh",
+          "{repo_path}", "{sha}", "{token}"],
+        "status": {"json": "status"}, "log": {"json": "fail_summary"},
+        "run_sha": {"json": "sha"}, "pipeline_id": {"json": "pipeline_id"},
+        "web_url": {"json": "web_url"},
+        "checks": {"json": "checks"},
+        "check_dimension": {"json": "dimension"},
+        "check_status": {"json": "status"}, "check_job": {"json": "job"},
+        "check_url": {"json": "url"}, "check_tool": {"json": "tool"},
+        "status_map": {"success": "success", "failed": "failed",
+                       "running": "running", "pending": "running",
+                       "created": "running", "manual": "running",
+                       "canceled": "failed", "skipped": "failed"}
+      },
+      { "command": ["curl", "-sf", "-H", "Private-Token: {token}",
+          "https://codehub-y.huawei.com/api/v4/projects/{repo_path}/pipelines?sha={sha}&per_page=5&order_by=id&sort=desc"],
         "runs": {"json": ""},
         "status": {"json": "status"},
         "run_sha": {"json": "sha"},
         "pipeline_id": {"json": "id"},
-        "is_valid": {"json": "is_valid"},
         "web_url": {"json": "web_url"},
         "status_map": {"success": "success", "failed": "failed",
                        "running": "running", "pending": "running",
-                       "canceled": "failed"}
+                       "created": "running", "manual": "running",
+                       "canceled": "failed", "skipped": "failed"}
       }
     ]
   },
@@ -484,23 +493,25 @@ npm run adapter -- --config adapter.json --selftest
   },
   // discussion_resolve 默认不配(D3:resolve 归检视人)。团队拍板要
   // 代点再配:PUT .../discussions/{id} -d '{"resolved":true}'
-  "pipeline_artifacts": {   // A6:完整日志+缺陷明细走 MCP 桥,先落盘再读
-    // 同样支持 candidates 降级链;桥脚本进仓版本化(见下)。
-    "command": ["python3",
-      "/opt/mae-flow-cloud/deploy/adapter-tools/mcp-log-bridge.py",
-      "--sha", "{sha}", "--repo", "{repo}",
-      "--out", "/var/mfc/artifacts/{sha}"],
-    "files_dir": "/var/mfc/artifacts/{sha}"
+  "pipeline_artifacts": {   // A6:quality JSON+reviewtips+构建日志原文
+    // 直接输出 [{name,text}] 数组(单条 ≤512KB,头少尾多截断)。
+    "command": ["bash",
+      "/opt/mae-flow-cloud/deploy/adapter-tools/pipeline-artifacts.sh",
+      "{repo_path}", "{sha}", "{token}"],
+    "fields": {"name": {"json": "name"}, "text": {"json": "text"}}
   }
 }
 ```
 
-**脚本进仓纪律(2026-08-28 勘误)**:pipeline-status / MCP 桥这类取数
-编排脚本**必须进仓版本化**(deploy/adapter-tools/),不再当"/etc 下的
-配置产物"——上一版把它们排除在仓外,结果文档里设计了、现场谁也没写,
-`pipeline/artifacts` 空转了一个月(2026-08-28 对比报告差距③)。
-内网的动作只剩:把仓里脚本放到位、填 adapter.json、跑 --selftest 对拍;
-不写一行代码。unresolved-discussions.sh 这类几行的 jq 过滤仍算配置产物。
+**脚本进仓纪律(2026-08-28 勘误)**:取数编排脚本**必须进仓版本化**
+(deploy/adapter-tools/),不再当"/etc 下的配置产物"——上一版把它们
+排除在仓外,结果文档里设计了、现场谁也没写,`pipeline/artifacts`
+空转了一个月(对比报告差距③)。现版本 pipeline-status.sh /
+pipeline-artifacts.sh 是**内网实测稳定版的收编**(逻辑零改动,只加
+sha/pipeline_id 回显、checks 的 tool/details 字段、环境变量化地址),
+依赖两样内网部署件:`~/.config/mae-flow-cloud/mcp_sse_client.py`
+(SSE MCP 客户端,**待收编进仓**)与 `mcp-token` 文件。内网的动作只剩:
+放脚本、放客户端、填 adapter.json、跑 --selftest 对拍;不写代码。
 
 **不可修工具前置分诊**:serve 配置加 `"unfixable-tools": ["SuperChecker"]`
 (或命令行 `--unfixable-tools SuperChecker`);CODECHECK 红灯全部来自
