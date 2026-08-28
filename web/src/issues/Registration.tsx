@@ -50,6 +50,33 @@ function CredentialGate({ viewer, needRepo, onNavigateProfile }: {
   </div>;
 }
 
+/** 多仓行编辑(两个登记页签共用):整表受控,可增删改,至少留一行。 */
+function RepoRows({ urls, onChange }: {
+  urls: string[];
+  onChange: (next: string[]) => void;
+}) {
+  return <>
+    <div className="issue-repo-rows">
+      {urls.map((url, index) => (
+        <div className="issue-repo-row" key={index}>
+          <input value={url} spellCheck={false}
+            placeholder="https://codehub.../repo.git"
+            onChange={(event) => onChange(urls.map(
+              (item, itemIndex) => itemIndex === index
+                ? event.target.value : item))} />
+          {urls.length > 1 && (
+            <button type="button" aria-label={`移除第 ${index + 1} 个仓库`}
+              onClick={() => onChange(urls.filter(
+                (_, itemIndex) => itemIndex !== index))}>×</button>
+          )}
+        </div>
+      ))}
+    </div>
+    <button type="button" className="issue-repo-add"
+      onClick={() => onChange([...urls, ""])}>＋ 添加代码仓</button>
+  </>;
+}
+
 export function IssueRegistration({
   viewer,
   issues,
@@ -261,24 +288,7 @@ function ManualRegister({
       <span>代码仓地址 <i>{fixed
         ? selectedModule?.repositories.length ? "模块带出,可增删改" : "可选,可后补(拉取代码仓阶段再定)"
         : "可选"}</i></span>
-      <div className="issue-repo-rows">
-        {repoUrls.map((url, index) => (
-          <div className="issue-repo-row" key={index}>
-            <input value={url} spellCheck={false}
-              placeholder="https://codehub.../repo.git"
-              onChange={(event) => setRepoUrls((current) => current.map(
-                (item, itemIndex) => itemIndex === index
-                  ? event.target.value : item))} />
-            {repoUrls.length > 1 && (
-              <button type="button" aria-label={`移除第 ${index + 1} 个仓库`}
-                onClick={() => setRepoUrls((current) => current.filter(
-                  (_, itemIndex) => itemIndex !== index))}>×</button>
-            )}
-          </div>
-        ))}
-      </div>
-      <button type="button" className="issue-repo-add"
-        onClick={() => setRepoUrls((current) => [...current, ""])}>＋ 添加代码仓</button>
+      <RepoRows urls={repoUrls} onChange={setRepoUrls} />
     </div>
     <div className="issue-field wide">
       <button type="button" className="issue-env-toggle"
@@ -339,9 +349,11 @@ function DtsRegister({
   const [loading, setLoading] = useState(false);
   // 批量发起(2026-08-28):勾选多张,逐张独立发起工作流。
   const [selected, setSelected] = useState<string[]>([]);
-  // 登记不再强制带仓:留空=发起后由「拉取代码仓」阶段的平台闸补定。
-  const [repoUrl, setRepoUrl] = useState("");
-  // 业务模块:与手工登记同款选择器(选中自动带出主仓);目录空回退自由文本。
+  // 多仓登记(与手工登记同款行编辑):登记不强制带仓,留空=发起后由
+  // 「拉取代码仓」阶段的平台闸补定。
+  const [repoUrls, setRepoUrls] = useState<string[]>([""]);
+  // 业务模块:与手工登记同款选择器(选中带出绑定的全部关联仓);目录
+  // 空回退自由文本。
   const [moduleId, setModuleId] = useState("");
   const [moduleName, setModuleName] = useState("");
   const [modules, setModules] = useState<BusinessModule[] | undefined>();
@@ -364,15 +376,18 @@ function DtsRegister({
   }, []);
   // 个人凭据前置门禁:只有真填了远端仓才要 Git 身份(登记不强制带仓,
   // 缺仓由拉取代码仓阶段的平台闸补定,与手工登记同语义)。
-  const touchRemoteRepo = /^https?:\/\//i.test(repoUrl.trim());
+  const touchRemoteRepo = repoUrls.some((url) => /^https?:\/\//i.test(url.trim()));
   const credentialBlocked = touchRemoteRepo
     && (!viewer.git_token_hint || !viewer.git_email);
 
-  /** 选模块即带仓(与手工登记 changeModule 同款):单仓字段取主仓。 */
+  /** 选模块即带仓(与手工登记 changeModule 同款):模块绑定的全部关联
+   * 仓整表带出(可增删改);清空模块回到单行。 */
   function changeModule(nextId: string) {
     setModuleId(nextId);
     const module = moduleCatalog.find((item) => item.id === nextId);
-    if (module?.repositories.length) setRepoUrl(module.repositories[0]);
+    setRepoUrls(nextId && module?.repositories.length
+      ? [...module.repositories]
+      : [""]);
   }
 
   // 模糊搜索:单号/标题/版本,大小写不敏感;版本多选过滤叠加其上。
@@ -568,6 +583,9 @@ function DtsRegister({
     const hosts = envHosts.split(/[,，\s]+/).map((host) => host.trim()).filter(Boolean);
     const environment = hosts.length && envPassword
       ? { hosts, password: envPassword } : undefined;
+    // 多仓口径与手工登记一致:去重去空后走 repo_urls(服务端
+    // normalizeIssueRepos 统一收口,repo_url 兼容别名由它派生)。
+    const repos = [...new Set(repoUrls.map((url) => url.trim()).filter(Boolean))];
     setBusy(true);
     const launched: string[] = [];
     const failures: string[] = [];
@@ -589,7 +607,7 @@ function DtsRegister({
             source: "dts",
             ticket: ticketNo,
             description: ticket?.title || undefined,
-            repo_url: repoUrl.trim() || undefined,
+            ...(repos.length ? { repo_urls: repos } : {}),
             ...(moduleId ? { module_id: moduleId } : {}),
             ...(!moduleId && moduleName.trim() ? { module: moduleName.trim() } : {}),
             ...(environment ? { environment } : {}),
@@ -763,16 +781,18 @@ function DtsRegister({
     <CredentialGate viewer={viewer} needRepo={touchRemoteRepo}
       onNavigateProfile={onNavigateProfile} />
     {/* 登记不卡仓(2026-08-28):仓可选,留空时由「拉取代码仓」阶段的
-        平台闸补定(AI 识别/填地址/跳过);业务模块选中即带出主仓;网管
-        环境换库验证要用,登记时一并带上(缺了也会在用时现场举闸补配)。 */}
+        平台闸补定(AI 识别/填地址/跳过);业务模块选中即带出绑定的全部
+        关联仓;网管环境换库验证要用,登记时一并带上(缺了也会在用时
+        现场举闸补配)。 */}
     <div className="issue-dts-fields">
       <label className="issue-field">
-        <span>代码仓地址 <i>{fixed ? "可选,可后补(拉取代码仓阶段再定)" : "可选"}</i></span>
-        <input value={repoUrl} placeholder="https://codehub.../repo.git"
-          onChange={(event) => setRepoUrl(event.target.value)} />
+        <span>代码仓地址 <i>{fixed
+          ? selectedModule?.repositories.length ? "模块带出,可增删改" : "可选,可后补(拉取代码仓阶段再定)"
+          : "可选"}</i></span>
+        <RepoRows urls={repoUrls} onChange={setRepoUrls} />
       </label>
       <label className="issue-field">
-        <span>业务模块 <i>可选{selectedModule ? "(已带出主仓)" : moduleCatalog.length ? "(选中自动带仓)" : ""}</i></span>
+        <span>业务模块 <i>可选{selectedModule ? "(已带出关联仓)" : moduleCatalog.length ? "(选中自动带仓)" : ""}</i></span>
         {moduleCatalog.length > 0
           ? <select value={moduleId}
               onChange={(event) => changeModule(event.target.value)}>
@@ -783,9 +803,12 @@ function DtsRegister({
                 </option>
               ))}
             </select>
-          : <input value={moduleName} maxLength={60}
+            : <input value={moduleName} maxLength={60}
               placeholder="如:媒体中心(仅展示与报告引用)"
               onChange={(event) => setModuleName(event.target.value)} />}
+        {selectedModule && !selectedModule.repositories.length && (
+          <small>该模块未绑定代码仓,请手动填写仓库地址</small>
+        )}
       </label>
       <label className="issue-field">
         <span>网管服务器(可多个,逗号分隔;换库验证用)<i>可选</i></span>
