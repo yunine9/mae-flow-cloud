@@ -22,7 +22,6 @@ import {
   getIssue,
   getIssueAnalysis,
   getIssueMaterials,
-  getIssueRawEvents,
   getIssueTimeline,
   getIssueWorkspaceFile,
   getIssueMaterialLog,
@@ -40,13 +39,21 @@ import {
   type DtsTicketDetail,
   type IssueDetail,
   type IssueMaterials,
-  type IssueRawEvent,
   type IssueStageState,
   type IssueSummary,
   type IssueTimeline,
   type SemanticEvent,
 } from "../api";
 import { Markdown } from "../markdown";
+import { GitDiff } from "../GitDiff";
+import {
+  eventFilterCounts,
+  eventWindow,
+  filterEvents,
+  isErrorEvent,
+  type EventFilter,
+} from "../eventView";
+import { atBottom, backlog } from "../follow";
 import { formatWait } from "../taskTime";
 import { startVisiblePolling } from "../visiblePolling";
 import { formatLocalClock, formatLocalDateTime } from "../time";
@@ -936,7 +943,7 @@ function IssueSessionView({
             ? <IssueMaterialsPane detail={detail} busy={busy}
                 onNotifyAI={notifyAI} />
             : tab === "events"
-              ? <IssueEventsPane id={detail.id} updatedAt={detail.updated_at} />
+              ? <IssueEventsPane id={detail.id} active={tab === "events"} />
               : <>
                   {/* 结论文档按 updated_at 缓存:文档可能被 AI 续写,状态一动就该重读。 */}
                   <IssueConclusionDoc id={detail.id} updatedAt={detail.updated_at} />
@@ -1034,6 +1041,8 @@ function FoldableMessageBody({ text }: { text: string }) {
 
 /** 对话 / 结论文档 的轻量页签(左栏头;默认口在 IssueSessionView 里定:
  * 有结论文档先看结论,手选保持到换会话)。 */
+/** 页签栏:结构照搬任务工作台的 ws-workspace-nav(四格彩色卡 +
+ * 主副两行文案),视觉与需求侧完全一致。 */
 function IssuePaneTabs({
   tab,
   hasAnalysis,
@@ -1043,23 +1052,23 @@ function IssuePaneTabs({
   hasAnalysis: boolean;
   onPick: (tab: "chat" | "doc" | "materials" | "events") => void;
 }) {
-  return <div className="issue-pane-tabs" role="tablist"
-    aria-label="会话内容视图">
-    <button type="button" role="tab" aria-selected={tab === "chat"}
-      className={tab === "chat" ? "on" : ""}
-      onClick={() => onPick("chat")}>对话</button>
-    <button type="button" role="tab" aria-selected={tab === "doc"}
-      className={tab === "doc" ? "on" : ""}
-      onClick={() => onPick("doc")}>
-      结论文档{!hasAnalysis && <i>(未生成)</i>}
-    </button>
-    <button type="button" role="tab" aria-selected={tab === "materials"}
-      className={tab === "materials" ? "on" : ""}
-      onClick={() => onPick("materials")}>材料</button>
-    <button type="button" role="tab" aria-selected={tab === "events"}
-      className={tab === "events" ? "on" : ""}
-      onClick={() => onPick("events")}>现场</button>
-  </div>;
+  const views = [
+    ["chat", "对话", "多轮对话与插话"],
+    ["doc", "结论文档", hasAnalysis ? "issue-analysis.md" : "(未生成)"],
+    ["materials", "材料", "变更、日志与 DTS 单据"],
+    ["events", "现场", "SSE 原始事件实时跟随"],
+  ] as const;
+  return <nav className="ws-workspace-nav" aria-label="会话工作台视图">
+    {views.map(([value, label, hint]) => (
+      <button type="button" key={value}
+        aria-selected={tab === value}
+        className={tab === value ? "active" : ""}
+        onClick={() => onPick(value)}>
+        <strong>{label}</strong>
+        <small>{hint}</small>
+      </button>
+    ))}
+  </nav>;
 }
 
 /** 结论文档(issue-analysis.md):激活页签时才取;状态一动(updated_at
@@ -1114,10 +1123,11 @@ function IssueConclusionDoc({ id, updatedAt }: { id: string; updatedAt: string }
   </div>;
 }
 
-/** 会话材料(交付材料页签):DTS 单据 / 工作区变更(含快速修改)/ 拉取
- * 日志。数据全部旁路:任何一块失败给空态,不拖垮会话。快速修改是
- * 问题流唯一的人工写口——只改 repo/ 内已有文件,保存入人工台账,
- * "请 AI 复核"按钮走现有插话/续聊通道把改动告知 AI。 */
+/** 会话材料(材料页签):DTS 单据 / 工作区变更 / 拉取日志。结构照搬
+ * 任务工作台交付材料页(ws-pane-head + ws-source-switch + ws-doc),
+ * diff 用同一把 GitDiff 渲染。数据全部旁路:任何一块失败给空态。
+ * 快速修改是问题流唯一的人工写口——只改 repo/ 内已有文件,保存入
+ * 人工台账,"请 AI 复核"走现有插话/续聊通道。 */
 function IssueMaterialsPane({ detail, busy, onNotifyAI }: {
   detail: IssueDetail;
   busy: boolean;
@@ -1125,45 +1135,42 @@ function IssueMaterialsPane({ detail, busy, onNotifyAI }: {
 }) {
   const [data, setData] = useState<IssueMaterials>();
   const [note, setNote] = useState("");
-  const [loading, setLoading] = useState(false);
-  // 变更文件 → diff/编辑器;undefined 表示未选中任何文件。
+  // 材料子视图:与任务侧 ws-source-switch 同款三选。
+  const [view, setView] = useState<"changes" | "dts" | "logs">("changes");
+  const [allDiff, setAllDiff] = useState("");
+  // 快速修改:选中文件 → 编辑器;undefined 表示未选中。
   const [activeFile, setActiveFile] = useState<string>();
-  const [diff, setDiff] = useState("");
   const [content, setContent] = useState<string>();
   const [saving, setSaving] = useState(false);
   const [dtsDetail, setDtsDetail] = useState<DtsTicketDetail>();
   const [logView, setLogView] = useState<{ name: string; content: string }>();
 
   async function load() {
-    setLoading(true);
     try {
-      setData(await getIssueMaterials(detail.id));
+      const [materials, diff] = await Promise.all([
+        getIssueMaterials(detail.id),
+        getIssueFileDiff(detail.id),
+      ]);
+      setData(materials);
+      setAllDiff(diff.diff);
       setNote("");
     } catch (reason) {
       setNote(String(reason instanceof Error ? reason.message : reason));
-    } finally {
-      setLoading(false);
     }
   }
 
   useEffect(() => {
     void load();
-    // 会话状态一动(AI 可能改了工作区)就刷新清单;id 变化由父层换页签兜底。
+    // 会话状态一动(AI 可能改了工作区)就刷新;id 变化由父层换页签兜底。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detail.updated_at]);
 
-  async function openFile(path: string) {
+  async function editFile(path: string) {
     setActiveFile(path);
-    setDiff("");
     setContent(undefined);
-    setLogView(undefined);
     try {
-      const [file, fileDiff] = await Promise.all([
-        getIssueWorkspaceFile(detail.id, path),
-        getIssueFileDiff(detail.id, path),
-      ]);
+      const file = await getIssueWorkspaceFile(detail.id, path);
       setContent(file.content);
-      setDiff(fileDiff.diff);
     } catch (reason) {
       setNote(String(reason instanceof Error ? reason.message : reason));
     }
@@ -1176,8 +1183,6 @@ function IssueMaterialsPane({ detail, busy, onNotifyAI }: {
       await saveIssueWorkspaceFile(detail.id, activeFile, content);
       setNote(`已保存 ${activeFile}。改动建议让 AI 复核一次。`);
       await load();
-      const fileDiff = await getIssueFileDiff(detail.id, activeFile);
-      setDiff(fileDiff.diff);
     } catch (reason) {
       setNote(String(reason instanceof Error ? reason.message : reason));
     } finally {
@@ -1189,114 +1194,115 @@ function IssueMaterialsPane({ detail, busy, onNotifyAI }: {
     try {
       const log = await getIssueMaterialLog(detail.id, name);
       setLogView({ name, content: log.content });
-      setActiveFile(undefined);
     } catch (reason) {
       setNote(String(reason instanceof Error ? reason.message : reason));
     }
   }
 
-  async function openDts() {
-    if (!data?.ticket || dtsDetail) return;
-    try {
-      setDtsDetail(await getDtsTicketDetail(data.ticket));
-    } catch (reason) {
-      setNote(String(reason instanceof Error ? reason.message : reason));
+  useEffect(() => {
+    if (view === "dts" && data?.ticket && !dtsDetail) {
+      getDtsTicketDetail(data.ticket)
+        .then(setDtsDetail)
+        .catch((reason) => {
+          setNote(String(reason instanceof Error ? reason.message : reason));
+        });
     }
-  }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, data?.ticket]);
+
+  const changes = data?.changes ?? [];
 
   return <div className="issue-materials">
-    <div className="issue-materials-toolbar">
-      <button type="button" onClick={load} disabled={loading}>
-        {loading ? "刷新中…" : "刷新材料"}
-      </button>
-      {data?.ticket && <button type="button" onClick={openDts}>
-        DTS 单据 {data.ticket}
-      </button>}
-      {data?.push && <span className="issue-materials-push"
-        title={`分支 ${data.push.branch} · ${data.push.at}`}>
-        已推送 {data.push.branch}@{data.push.sha.slice(0, 10)}
-      </span>}
-      {note && <span className="issue-materials-note">{note}</span>}
-    </div>
-    {dtsDetail && <section className="issue-materials-block">
-      <h4>DTS 单据</h4>
-      <p className="issue-materials-dts-head">
-        <strong>{dtsDetail.title || "(无标题)"}</strong>
-        {dtsDetail.severity && <span>级别:{dtsDetail.severity}</span>}
-        {dtsDetail.version && <span>版本:{dtsDetail.version}</span>}
-        {dtsDetail.submitter && <span>提单:{dtsDetail.submitter}</span>}
-        {dtsDetail.url && <a href={dtsDetail.url} target="_blank" rel="noreferrer">原始单</a>}
-      </p>
-      <div className="issue-materials-html issue-dts-detail-html"
-        dangerouslySetInnerHTML={{
-          __html: resolveDtsImages(dtsDetail.description || dtsDetail.content)
-            || "(无描述)",
-        }}
-      />
-    </section>}
-    <section className="issue-materials-block">
-      <h4>工作区变更{data ? `(${data.changes.length})` : ""}</h4>
-      {detail.status === "running" && <p className="issue-materials-warning">
-        AI 正在运行:此刻的编辑可能被它覆盖,建议空闲/等待时再改。
-      </p>}
-      {data && data.changes.length === 0 && <p className="issue-materials-empty">
-        工作区当前没有改动。
-      </p>}
-      <div className="issue-materials-files" role="list">
-        {data?.changes.map((change) => <button type="button" role="listitem"
-          key={change.path}
-          className={`issue-materials-file${activeFile === change.path ? " on" : ""}`}
-          onClick={() => openFile(change.path)}>
-          <span className={`st st-${change.status.replace(/\s/g, "")}`}>
-            {change.status}
-          </span>
-          <span className="p">{change.path}</span>
-          {(change.additions !== undefined || change.deletions !== undefined)
-            && <span className="num">
-              {change.additions !== undefined && <em>+{change.additions}</em>}
-              {change.deletions !== undefined && <em>-{change.deletions}</em>}
-            </span>}
-        </button>)}
+    <div className="ws-pane-head">
+      <div><span>ISSUE MATERIALS</span><strong>会话材料</strong></div>
+      <div className="ws-source-switch" aria-label="材料类型">
+        <button className={view === "dts" ? "on" : ""}
+          disabled={!data?.ticket} onClick={() => setView("dts")}>
+          <span>DTS 单据</span><i>{data?.ticket ? "1" : "0"}</i>
+        </button>
+        <button className={view === "changes" ? "on" : ""}
+          onClick={() => setView("changes")}>
+          <span>工作区变更</span><i>{changes.length}</i>
+        </button>
+        <button className={view === "logs" ? "on" : ""}
+          onClick={() => setView("logs")}>
+          <span>拉取日志</span><i>{data?.logs.length ?? 0}</i>
+        </button>
       </div>
-      {activeFile && <div className="issue-materials-editor">
+    </div>
+    {note && <div className="utility-note">{note}</div>}
+    {view === "changes" && <>
+      {detail.status === "running" && <div className="utility-note">
+        AI 正在运行:此刻的编辑可能被它覆盖,建议空闲/等待时再改。
+      </div>}
+      <div className="ws-doc">
+        {allDiff
+          ? <GitDiff text={allDiff} hideKey={detail.id} />
+          : <div className="utility-note">工作区当前没有改动。</div>}
+      </div>
+      <div className="issue-materials-editor">
         <div className="issue-materials-editor-bar">
-          <strong>{activeFile}</strong>
+          <strong>快速修改</strong>
+          <select value={activeFile ?? ""}
+            onChange={(event) => {
+              const path = event.target.value;
+              if (path) void editFile(path);
+            }}>
+            <option value="">选择要修改的文件…</option>
+            {changes.map((change) => <option key={change.path}
+              value={change.path}>{change.path}</option>)}
+          </select>
           <button type="button" className="primary" disabled={saving
-            || content === undefined} onClick={save}>
+            || !activeFile || content === undefined} onClick={save}>
             {saving ? "保存中…" : "保存修改"}
           </button>
-          <button type="button" disabled={busy || saving}
+          <button type="button" disabled={busy || saving || !activeFile}
             title="把这次人工改动告知 AI,请它复核后继续"
-            onClick={() => onNotifyAI(
+            onClick={() => activeFile && onNotifyAI(
               `[人工修改] 我直接改了 ${activeFile},请复核这份改动,与你的方案不一致时先说明再继续。`)}>
             请 AI 复核
           </button>
         </div>
-        {content !== undefined
+        {activeFile && (content !== undefined
           ? <textarea value={content} spellCheck={false}
               onChange={(event) => setContent(event.target.value)} />
-          : <p className="issue-materials-empty">读取中…</p>}
-        {diff && <pre className="issue-materials-diff">{diff}</pre>}
-      </div>}
-    </section>
-    <section className="issue-materials-block">
-      <h4>人工修改记录{data ? `(${data.manual_edits.length})` : ""}</h4>
-      {data && data.manual_edits.length === 0 && <p className="issue-materials-empty">
-        还没有人工改动——在上方变更列表点文件即可编辑。
-      </p>}
-      <ul className="issue-materials-edits">
-        {data?.manual_edits.slice().reverse().map((edit, index) => <li
-          key={`${edit.ts}-${index}`}>
-          <span>{new Date(edit.ts).toLocaleTimeString()}</span>
-          <span className="p">{edit.path}</span>
-        </li>)}
-      </ul>
-    </section>
-    <section className="issue-materials-block">
-      <h4>拉取日志{data ? `(${data.logs.length})` : ""}</h4>
-      {data && data.logs.length === 0 && <p className="issue-materials-empty">
+          : <p className="issue-materials-empty">读取中…</p>)}
+      </div>
+      <section className="issue-materials-block">
+        <h4>人工修改记录({data?.manual_edits.length ?? 0})</h4>
+        {data?.manual_edits.length === 0 && <p className="issue-materials-empty">
+          还没有人工改动——从上方选择文件编辑保存后会记在这里。
+        </p>}
+        <ul className="issue-materials-edits">
+          {data?.manual_edits.slice().reverse().map((edit, index) => <li
+            key={`${edit.ts}-${index}`}>
+            <span>{new Date(edit.ts).toLocaleTimeString()}</span>
+            <span className="p">{edit.path}</span>
+          </li>)}
+        </ul>
+      </section>
+    </>}
+    {view === "dts" && <div className="ws-doc">
+      {dtsDetail ? <>
+        <p className="issue-materials-dts-head">
+          <strong>{dtsDetail.title || "(无标题)"}</strong>
+          {dtsDetail.severity && <span>级别:{dtsDetail.severity}</span>}
+          {dtsDetail.version && <span>版本:{dtsDetail.version}</span>}
+          {dtsDetail.submitter && <span>提单:{dtsDetail.submitter}</span>}
+          {dtsDetail.url && <a href={dtsDetail.url} target="_blank" rel="noreferrer">原始单</a>}
+        </p>
+        <div className="issue-materials-html issue-dts-detail-html"
+          dangerouslySetInnerHTML={{
+            __html: resolveDtsImages(dtsDetail.description || dtsDetail.content)
+              || "(无描述)",
+          }}
+        />
+      </> : <div className="utility-note">正在读取单据详情…</div>}
+    </div>}
+    {view === "logs" && <div className="ws-doc">
+      {data && data.logs.length === 0 && <div className="utility-note">
         本会话还没有拉取过日志。
-      </p>}
+      </div>}
       <div className="issue-materials-files" role="list">
         {data?.logs.map((log) => <button type="button" role="listitem"
           key={log.name}
@@ -1307,51 +1313,240 @@ function IssueMaterialsPane({ detail, busy, onNotifyAI }: {
         </button>)}
       </div>
       {logView && <pre className="issue-materials-diff">{logView.content}</pre>}
-    </section>
+    </div>}
   </div>;
 }
 
-/** 现场(执行现场页签):原始事件流尾随。只陈列,不解读——阶段推断
- * 仍是宿主账本的事;数据与 SSE 直播同源(events.jsonl),按需取尾窗。 */
-function IssueEventsPane({ id, updatedAt }: { id: string; updatedAt: string }) {
-  const [events, setEvents] = useState<IssueRawEvent[]>();
-  const [note, setNote] = useState("");
+/** 现场(执行现场页签):结构照搬任务侧 EventTail——筛选器 + 贴底
+ * 跟随 + 色调标记,一种读法。数据源换成问题流的 SSE
+ * (tailIssueEvents),只陈列不解读。 */
+const ISSUE_EVENT_KIND_LABEL: Record<string, string> = {
+  session_started: "会话开始",
+  user_message: "用户指令",
+  assistant_message: "Agent 回复",
+  tool_requested: "调用工具",
+  tool_finished: "工具结果",
+  turn_finished: "本轮结束",
+  session_ended: "会话结束",
+  human_decision: "人工决策",
+  report_stage: "阶段上报",
+  task_status_changed: "状态变化",
+};
 
-  async function load() {
-    try {
-      const result = await getIssueRawEvents(id);
-      setEvents(result.events ?? []);
-      setNote("");
-    } catch (reason) {
-      setNote(String(reason instanceof Error ? reason.message : reason));
-    }
+const ISSUE_EVENT_FIELD_LABEL: Record<string, string> = {
+  text: "内容",
+  name: "工具",
+  input: "输入",
+  result: "结果",
+  reason: "原因",
+  answers: "答复",
+  is_error: "执行异常",
+  resume: "恢复会话",
+  call_id: "调用编号",
+  detail: "详情",
+};
+
+function issueEventTone(event: SemanticEvent): string {
+  if (isErrorEvent(event)) return "danger";
+  if (event.kind === "tool_finished" || event.kind === "turn_finished") {
+    return "success";
   }
+  if (event.kind === "assistant_message") return "agent";
+  if (event.kind === "user_message") return "user";
+  return "neutral";
+}
+
+function IssueEventValue({ value }: { value: unknown }) {
+  if (typeof value === "string") {
+    if (value.length > 480) {
+      return <details className="event-value-expand">
+        <summary>
+          <span>{value.slice(0, 180).trim()}…</span>
+          <small>展开完整内容 · {value.length} 字</small>
+        </summary>
+        <pre>{value}</pre>
+      </details>;
+    }
+    return <span className="event-value-text">{value || "（空）"}</span>;
+  }
+  if (typeof value === "boolean") {
+    return <code className="event-value-atom">{value ? "是" : "否"}</code>;
+  }
+  if (value === null || value === undefined || typeof value === "number") {
+    return <code className="event-value-atom">{String(value)}</code>;
+  }
+  const structured = JSON.stringify(value, null, 2);
+  return <details className="event-value-expand structured">
+    <summary>
+      <span>结构化内容</span>
+      <small>展开查看 · {structured.split("\n").length} 行</small>
+    </summary>
+    <pre>{structured}</pre>
+  </details>;
+}
+
+function IssueEventRecord({ event }: { event: SemanticEvent }) {
+  const fields = Object.entries(event.payload ?? {});
+  return (
+    <article className={`event-record ${issueEventTone(event)}`}>
+      <header>
+        <span className="event-record-dot" aria-hidden />
+        <strong>{ISSUE_EVENT_KIND_LABEL[event.kind] ?? event.kind}</strong>
+        <code>#{event.eventId}</code>
+        <time dateTime={event.ts}
+          title={formatLocalDateTime(event.ts, { seconds: true, year: true })}>
+          {formatLocalDateTime(event.ts, { seconds: true })}
+        </time>
+      </header>
+      {fields.length === 0 ? (
+        <div className="event-record-empty">本事件没有附加内容</div>
+      ) : (
+        <dl>
+          {fields.map(([field, value]) => (
+            <div key={field}>
+              <dt>{ISSUE_EVENT_FIELD_LABEL[field] ?? field}</dt>
+              <dd><IssueEventValue value={value} /></dd>
+            </div>
+          ))}
+        </dl>
+      )}
+    </article>
+  );
+}
+
+function IssueEventsPane({ id, active }: { id: string; active: boolean }) {
+  const PAGE_SIZE = 120;
+  const [events, setEvents] = useState<SemanticEvent[]>([]);
+  const [connection, setConnection] = useState<
+    "connecting" | "live" | "reconnecting">("connecting");
+  const [filter, setFilter] = useState<EventFilter>("all");
+  const [visibleLimit, setVisibleLimit] = useState(PAGE_SIZE);
+  const filtered = filterEvents(events, filter);
+  const visible = eventWindow(filtered, visibleLimit);
+  const counts = eventFilterCounts(events);
+  const follow = useIssueStickyBottom<HTMLDivElement>(filtered.length);
 
   useEffect(() => {
-    void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, updatedAt]);
+    setEvents([]);
+    setConnection("connecting");
+    setVisibleLimit(PAGE_SIZE);
+  }, [id]);
 
-  return <div className="issue-events">
-    <div className="issue-materials-toolbar">
-      <button type="button" onClick={load}>刷新</button>
-      {note && <span className="issue-materials-note">{note}</span>}
-    </div>
-    {events && events.length === 0 && <p className="issue-materials-empty">
-      还没有事件记录。
-    </p>}
-    <div className="issue-events-list">
-      {events?.slice().reverse().map((event, index) => <div
-        key={`${event.eventId ?? index}-${index}`} className="issue-events-row">
-        <span className="ts">{event.ts
-          ? new Date(event.ts).toLocaleTimeString() : "--:--:--"}</span>
-        <span className="kind">{event.kind}</span>
-        <span className="payload">
-          {JSON.stringify(event.payload ?? {}).slice(0, 220)}
+  useEffect(() => setVisibleLimit(PAGE_SIZE), [filter]);
+
+  useEffect(() => {
+    if (!active) return;
+    const stop = tailIssueEvents(id, (event: SemanticEvent) => {
+      setEvents((previous) => previous.some((item) => (
+        item.eventId === event.eventId
+      )) ? previous : [...previous, event]);
+    }, setConnection);
+    return stop;
+  }, [active, id]);
+
+  return (
+    <div className="event-panel-body">
+      <div className={`event-live-state ${connection}`}>
+        <i aria-hidden />
+        <span>{!active ? "实时连接已暂停"
+          : connection === "live" ? "实时接收中"
+            : connection === "reconnecting" ? "连接中断,正在自动重连"
+              : "正在连接问题现场"} · {events.length} 条
+          {follow.paused ? " · 已暂停跟随" : ""}
         </span>
-      </div>)}
+      </div>
+      <div className="event-filters" role="group" aria-label="筛选原始事件">
+        {([
+          ["all", "全部"],
+          ["messages", "消息"],
+          ["tools", "工具"],
+          ["errors", "异常"],
+        ] as Array<[EventFilter, string]>).map(([value, label]) => (
+          <button type="button" key={value}
+            className={filter === value ? "active" : ""}
+            aria-pressed={filter === value}
+            onClick={() => setFilter(value)}>
+            {label}<span>{counts[value]}</span>
+          </button>
+        ))}
+      </div>
+      {follow.paused && (
+        <div className="event-follow">
+          <span>已暂停跟随,你正在往回看——新事件仍在接收。</span>
+          <button type="button" className="follow-resume" onClick={follow.toBottom}>
+            {follow.behind > 0 ? `↓ ${follow.behind} 条新的` : "↓ 回到最新"}
+          </button>
+        </div>
+      )}
+      <div ref={follow.ref} className="event-stream"
+           onScroll={follow.onScroll}>
+        {visible.hidden > 0 && (
+          <button type="button" className="event-load-earlier"
+            onClick={() => setVisibleLimit((current) => current + PAGE_SIZE)}>
+            查看更早的 {Math.min(PAGE_SIZE, visible.hidden)} 条
+            <small>仍有 {visible.hidden} 条未挂载</small>
+          </button>
+        )}
+        {events.length === 0 && (
+          <div className="event-empty">
+            <span aria-hidden />
+            <strong>正在连接问题现场</strong>
+            <small>新的执行动作会实时出现在这里。</small>
+          </div>
+        )}
+        {events.length > 0 && filtered.length === 0 && (
+          <div className="event-empty filtered">
+            <strong>这个筛选下没有事件</strong>
+            <small>原始事件没有丢失,可以切回"全部"继续查看。</small>
+          </div>
+        )}
+        {visible.items.map((event) => (
+          <IssueEventRecord event={event} key={event.eventId} />
+        ))}
+      </div>
     </div>
-  </div>;
+  );
+}
+
+/** 贴底跟随(与任务侧 useStickyBottom 同语义,问题流本地实现):
+ * 用户往上翻就暂停跟随并计数积压,回底即清零。 */
+function useIssueStickyBottom<T extends HTMLElement>(count: number) {
+  const ref = useRef<T>(null);
+  const pinned = useRef(true);
+  const mark = useRef(count);
+  const [behind, setBehind] = useState(0);
+
+  useEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    if (pinned.current) {
+      node.scrollTo({ top: node.scrollHeight });
+      mark.current = count;
+      setBehind(0);
+    } else {
+      setBehind(backlog(count, mark.current));
+    }
+  }, [count]);
+
+  const onScroll = () => {
+    const node = ref.current;
+    if (!node) return;
+    const bottom = atBottom(node);
+    if (bottom === pinned.current) return;
+    pinned.current = bottom;
+    if (bottom) { mark.current = count; setBehind(0); }
+  };
+
+  const toBottom = () => {
+    const node = ref.current;
+    if (!node) return;
+    pinned.current = true;
+    mark.current = count;
+    setBehind(0);
+    node.scrollTo({ top: node.scrollHeight, behavior: "smooth" });
+  };
+
+  return { ref, behind, paused: !pinned.current, onScroll, toBottom };
 }
 
 /** 耗时与卡点:问题域版的 CostBreakdown。服务端(sessionView.ts)已经

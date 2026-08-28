@@ -288,8 +288,12 @@ export async function handleIssueRoutes(
       const query = new URL(request.url ?? "/", "http://x").searchParams;
       try {
         if (parts[3] === "diff") {
+          // 带 path = 单文件;不带 = 聚合 diff(对齐任务侧交付材料形态)。
+          const path = query.get("path");
           return done(200, {
-            diff: issueFlow.workspaceFileDiff(id, String(query.get("path") ?? "")),
+            diff: path
+              ? issueFlow.workspaceFileDiff(id, path)
+              : issueFlow.workspaceDiffAll(id),
           });
         }
         if (parts[3] === "file") {

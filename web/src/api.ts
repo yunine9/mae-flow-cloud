@@ -2523,9 +2523,10 @@ export function getIssueMaterials(id: string): Promise<IssueMaterials> {
 }
 
 export function getIssueFileDiff(
-  id: string, path: string,
+  id: string, path?: string,
 ): Promise<{ diff: string }> {
-  return issueFetch(`/issues/${encodeURIComponent(id)}/materials/diff?path=${encodeURIComponent(path)}`);
+  const query = path ? `?path=${encodeURIComponent(path)}` : "";
+  return issueFetch(`/issues/${encodeURIComponent(id)}/materials/diff${query}`);
 }
 
 export function getIssueWorkspaceFile(

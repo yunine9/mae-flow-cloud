@@ -151,6 +151,31 @@ export function listWorkspaceChanges(repoDir: string): WorkspaceChange[] {
   }
 }
 
+/** 聚合 diff(对 HEAD,未跟踪新文件补全文 diff)——对齐任务侧"服务端
+ * 只出一份聚合 diff"的形态,前端交给 GitDiff 渲染文件树。 */
+export function workspaceDiffAll(repoDir: string): string {
+  if (!existsSync(join(repoDir, ".git"))) return "";
+  const parts: string[] = [];
+  const tracked = gitRead(repoDir, ["diff", "HEAD"]);
+  if (tracked.trim()) parts.push(tracked.trim());
+  const status = gitRead(repoDir, ["status", "--porcelain=v1", "-uall"]);
+  for (const row of status.split("\n").filter(Boolean)) {
+    if (!row.slice(0, 2).includes("?")) continue;
+    const rel = row.slice(3).replace(/^"|"$/g, "");
+    const abs = insideRoot(repoDir, rel);
+    if (!abs || !existsSync(abs) || !statSync(abs).isFile()) continue;
+    try {
+      const body = readFileSync(abs, "utf-8")
+        .split("\n").map((line) => `+${line}`).join("\n");
+      parts.push(`diff --git a/${rel} b/${rel}\nnew file mode 100644\n`
+        + `--- /dev/null\n+++ b/${rel}\n${body}`);
+    } catch {
+      // 二进制等读不了的文件跳过,不拖垮整份聚合 diff。
+    }
+  }
+  return parts.join("\n").slice(0, READ_CAP_BYTES);
+}
+
 /** 单文件 diff(对 HEAD;新文件给全文 + 前缀)。 */
 export function workspaceFileDiff(repoDir: string, rel: string): string {
   const abs = insideRoot(repoDir, rel);

@@ -73,6 +73,7 @@ import {
   readWorkspaceFile,
   recentEvents,
   recordManualEdit,
+  workspaceDiffAll,
   workspaceFileDiff,
   writeWorkspaceFile,
 } from "./materials.ts";
@@ -1482,6 +1483,10 @@ export class IssueFlowService {
 
   workspaceFileDiff(id: string, rel: string) {
     return workspaceFileDiff(join(this.require(id).root, "repo"), rel);
+  }
+
+  workspaceDiffAll(id: string) {
+    return workspaceDiffAll(join(this.require(id).root, "repo"));
   }
 
   listIssueLogs(id: string) {
