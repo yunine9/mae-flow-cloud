@@ -14,6 +14,7 @@ import { PRE_PUSH_ENVIRONMENT_SUCCESS_MARKER } from
 export interface FakeContainerRecord {
   name: string;
   workspace: string;
+  volumes: string[];
   started: boolean;
   stopped: boolean;
   stopCalls: number;
@@ -39,6 +40,7 @@ export class FakeTaskContainerHarness {
     const record: FakeContainerRecord = {
       name: input.name,
       workspace: input.workspace,
+      volumes: [...input.volumes],
       started: false,
       stopped: false,
       stopCalls: 0,

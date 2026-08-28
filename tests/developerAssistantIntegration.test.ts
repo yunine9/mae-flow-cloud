@@ -123,6 +123,11 @@ test("开发助手:安全暂停主任务后执行真实命令，回复/工具结
     assert.equal(summary.status, "paused",
       "助手完成后主任务必须保持暂停，等待用户明确交还");
     assert.equal(existsSync(proof), true);
+    assert.ok(containers.records.length >= 2,
+      "主任务暂停后应为开发助手创建独立容器");
+    assert.equal(containers.records.at(-1)?.volumes.some((volume) =>
+      volume.split(":")[1] === join(summary.workspace, "pipeline")), false,
+    "真实开发助手入口不能继承流水线修复材料");
     assert.equal(readFileSync(proof, "utf-8"), "assistant-ok\n");
     assert.match(view.messages.at(-1)?.text ?? "", /命令执行成功/);
     assert.equal(view.tools.some((tool) => tool.name.toLowerCase() === "bash"

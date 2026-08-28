@@ -359,6 +359,9 @@ test("原生 prepush 会话修复提交后把 PASS 收据绑定最终 HEAD", asy
     const prepushContainer = containers.records.find((record) =>
       record.name.endsWith("-prepush"));
     assert.ok(prepushContainer, "prepush 必须使用任务级稳定名称的独立容器");
+    assert.equal(prepushContainer.volumes.some((volume) =>
+      volume.split(":")[1] === join(summary.workspace, "pipeline")), false,
+    "prepush 不参与流水线修复，不应继承 pipeline 材料挂载");
     assert.ok(prepushContainer.commands.includes(compile));
     assert.ok(prepushContainer.commands.includes(unitTest));
     assert.equal(prepushContainer.stopped, true,

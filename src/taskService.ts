@@ -1500,7 +1500,12 @@ export class TaskService {
    */
   private async startCodingContainer(
     task: TaskState,
-    safety: { gitReadOnly?: boolean } = {},
+    safety: {
+      gitReadOnly?: boolean;
+      /** 主任务的流水线修复会话需要通过 Bash 读取 ../pipeline/。默认
+       * 开启；开发助手等旁路角色必须显式关闭，不能顺手获得任务材料。 */
+      pipelineArtifacts?: boolean;
+    } = {},
   ): Promise<TaskCommandContainer> {
     const isolation = this.options.isolation;
     if (!isolation) throw new Error("未配置任务容器隔离");
@@ -1532,9 +1537,18 @@ export class TaskService {
         ]
       : [];
     const gitPath = join(cwd, ".git");
+    const pipelineArtifacts = resolve(task.summary.workspace, "pipeline");
+    const mountPipelineArtifacts = safety.pipelineArtifacts ?? true;
+    if (mountPipelineArtifacts) {
+      // 容器通常早于首轮权威流水线启动。bind 源必须现在就存在，后续
+      // mirrorPipelineArtifacts 只原地刷新内容，运行中的容器即可看到。
+      mkdirSync(pipelineArtifacts, { recursive: true });
+    }
     const mounts = this.taskContainerMounts(task, [
       ...hostMounts,
       ...(volumes ?? []),
+      ...(mountPipelineArtifacts
+        ? [`${pipelineArtifacts}:${pipelineArtifacts}:ro`] : []),
       ...(safety.gitReadOnly && existsSync(gitPath)
         ? [`${gitPath}:${gitPath}:ro`] : []),
     ]);
@@ -5875,7 +5889,12 @@ export class TaskService {
           `[developer-assistant-engineering-knowledge] 任务 ${task.summary.id}: ${warning}`);
       }
       task.containerWorkspace = task.cwd;
-      container = await this.startCodingContainer(task, { gitReadOnly: true });
+      container = await this.startCodingContainer(task, {
+        gitReadOnly: true,
+        // 开发助手只处理代码现场，不参与流水线修复；任务级 pipeline
+        // 材料不应因它复用 Coding 容器实现而越过角色边界。
+        pipelineArtifacts: false,
+      });
       if (!this.developerAssistantCurrent(task, epoch)) {
         throw new Error("开发助手启动期间任务状态已变化");
       }
@@ -9716,8 +9735,10 @@ export class TaskService {
   }
 
   /** 批2 落盘通道:拉平台的失败材料镜像到工作区外 pipeline/。
-   * 每轮先清空再重下(给 agent 的必须是最新一轮);平台不支持
-   * (404)或失败回空数组,修复照走摘要通道。 */
+   * 每轮先清空内容再重下(给 agent 的必须是最新一轮),但绝不删除
+   * pipeline 根目录——它是运行中 Coding 容器的只读 bind 源；替换根
+   * 目录会让容器继续看到旧 inode。平台不支持(404)或失败回空数组,
+   * 修复照走摘要通道。 */
   private async mirrorPipelineArtifacts(task: TaskState): Promise<string[]> {
     const platformUrl = this.effectivePlatformUrl();
     const sha = task.summary.delivery?.sha;
@@ -9734,16 +9755,27 @@ export class TaskService {
       const files = (Array.isArray(body.files) ? body.files : [])
         .filter((file: any) => typeof file?.name === "string"
           && typeof file?.text === "string");
-      if (!files.length) return [];
       const dir = join(task.summary.workspace, "pipeline");
-      rmSync(dir, { recursive: true, force: true });
       mkdirSync(dir, { recursive: true });
+      for (const entry of readdirSync(dir)) {
+        rmSync(join(dir, entry), { recursive: true, force: true });
+      }
+      // 成功查询但本轮没有材料，也必须把上一轮清空；否则修复会话会
+      // 在稳定挂载里读到旧 SHA 的日志，按错误现场继续改代码。
+      if (!files.length) return [];
       const written: string[] = [];
       for (const file of files) {
         // 路径穿越防线:文件名只留基名,别让平台字段写出目录外。
         const name = basename(String(file.name));
-        if (!name) continue;
-        writeFileSync(join(dir, name), String(file.text).slice(0, 512 * 1024));
+        if (!name || name === "." || name === "..") continue;
+        const target = join(dir, name);
+        const temporary = join(
+          dir, `.${name}.${process.pid}.${randomUUID()}.tmp`);
+        writeFileSync(temporary, String(file.text).slice(0, 512 * 1024), {
+          mode: 0o444,
+          flag: "wx",
+        });
+        renameSync(temporary, target);
         written.push(name);
       }
       return written;

@@ -8,7 +8,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TaskService, type TaskContainerFactoryInput } from "../src/taskService.ts";
@@ -75,6 +75,42 @@ test("真·等人时会话与原容器都保持不动", async () => {
   assert.equal(containers.records[0]?.stopped, false, "等人期间不得回收容器");
   assert.equal(task.container, original, "审批前后必须还是同一个容器实例");
   assert.equal(task.driver, driver, "等待人工不能拆掉会话");
+  await service.shutdown();
+});
+
+test("主 Coding 容器只读挂载稳定的 pipeline 材料目录", async () => {
+  const containers = new FakeTaskContainerHarness();
+  const service: any = newService(containers.factory);
+  const { created } = await runningTask(service);
+  const pipeline = join(created.workspace, "pipeline");
+
+  assert.equal(existsSync(pipeline), true,
+    "容器启动前必须创建 bind 源，后续流水线材料才能原地出现");
+  assert.ok(containers.records[0]?.volumes.includes(
+    `${pipeline}:${pipeline}:ro`),
+  "主任务只获得 pipeline 子目录，且必须只读");
+  assert.equal(containers.records[0]?.volumes.some((volume) =>
+    volume === `${created.workspace}:${created.workspace}`
+      || volume === `${created.workspace}:${created.workspace}:rw`), false,
+  "不得把含 task.json、pi-agent 等控制数据的整个任务目录额外挂入");
+  await service.shutdown();
+});
+
+test("开发助手容器不继承主任务的 pipeline 材料挂载", async () => {
+  const containers = new FakeTaskContainerHarness();
+  const service: any = newService(containers.factory);
+  const created = service.create("开发助手材料隔离");
+  const task = service.tasks.get(created.id);
+  task.containerWorkspace = created.workspace;
+  const container = await service.startCodingContainer(task, {
+    gitReadOnly: true,
+    pipelineArtifacts: false,
+  });
+
+  assert.equal(containers.records[0]?.volumes.some((volume) =>
+    volume.split(":")[1] === join(created.workspace, "pipeline")), false,
+  "旁路开发助手没有读取流水线失败材料的职责");
+  await container.stop();
   await service.shutdown();
 });
 
