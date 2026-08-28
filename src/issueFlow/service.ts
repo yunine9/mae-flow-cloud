@@ -100,6 +100,7 @@ import {
   issueResumePrompt,
   materializeIssueSkills,
 } from "./prompt.ts";
+import { fixedStageLabel, stageGateRoute } from "./stageRegistry.ts";
 import {
   describePipelineRun,
   getPipelineStatus,
@@ -1021,7 +1022,9 @@ export class IssueFlowService {
   // ---- 固定流程:平台闸的裁决与阶段机联动 ----
 
   /** 平台闸作答分派。决策文本是闸门选项原文(前端决策卡不改动地
-   * 传回),按 GATE_OPTIONS 的前缀锚匹配;notes 是用户的补充说明。 */
+   * 传回),按 GATE_OPTIONS 的前缀锚匹配;notes 是用户的补充说明。
+   * 确认后推进到哪、补充意见后回流到哪,是阶段知识,查阶段注册表
+   * 的出口闸声明(stageGateRoute),不在裁决代码里写死。 */
   private resolveGate(live: LiveIssue, input: {
     stateVersion: number;
     decision: string;
@@ -1041,6 +1044,9 @@ export class IssueFlowService {
       throw new IssueControlError(
         "网管环境请在问题卡的配置表单里填写服务器地址与共用密码后提交");
     }
+    const route = stageGateRoute(gate.kind);
+    const stageName = (stage: FixedStage): string =>
+      fixedStageLabel(state.scenario ?? "ticket", stage);
     const decision = input.decision ?? "";
     const notes = input.notes?.trim() ?? "";
     const supplement = notes ? `\n用户补充说明: ${notes}` : "";
@@ -1068,10 +1074,16 @@ export class IssueFlowService {
 
     if (gate.kind === "analysis_confirm") {
       if (decision.startsWith(GATE_OPTIONS.analysis_confirm[0])) {
-        fixedAdvance(state, "fix", "用户确认分析报告,进入问题修改");
+        const target = route?.confirmTo;
+        if (!target) {
+          throw new IssueControlError(
+            "阶段注册表缺少分析确认闸的推进目标(阶段配置错误)");
+        }
+        fixedAdvance(state, target,
+          `用户确认分析报告,进入${stageName(target)}`);
         saveState(live.root, state);
         startTurn(fixedAdvanceNotice(state,
-          `用户已确认问题分析报告,进入「问题修改」阶段。${supplement}`
+          `用户已确认问题分析报告,进入「${stageName(target)}」阶段。${supplement}`
             + "请按已确认的方案实施修复,完成后调用 complete_stage。"));
         return summarize(state);
       }
@@ -1079,7 +1091,7 @@ export class IssueFlowService {
       state.stage_note = "用户对分析报告有补充意见,继续分析";
       saveState(live.root, state);
       startTurn(
-        `用户对分析报告提出补充意见,仍在「问题分析」阶段:${decision}${supplement}\n`
+        `用户对分析报告提出补充意见,仍在「${stageName(state.stage as FixedStage)}」阶段:${decision}${supplement}\n`
           + "请按意见完善 issue-analysis.md 后重新 submit_analysis 提交。");
       return summarize(state);
     }
@@ -1116,21 +1128,28 @@ export class IssueFlowService {
         return summarize(state);
       }
       // 有补充意见:回到分析阶段继续查证(结论节点没走完,重置回未开始)。
-      const concludeIndex = state.scenario
-        ? fixedStageIndex(state.scenario, "conclude") : -1;
-      if (concludeIndex >= 0
-          && (state.stage_states?.[concludeIndex] ?? "pending") !== "pending") {
-        (state.stage_states ??= [])[concludeIndex] = "pending";
+      const owner = route?.stage;
+      if (!owner || !route?.reworkTo) {
+        throw new IssueControlError(
+          "阶段注册表缺少结论闸的归属阶段或回流目标(阶段配置错误)");
       }
-      fixedAdvance(state, "analyze", "用户对结论有补充意见,继续分析");
+      const ownerIndex = state.scenario
+        ? fixedStageIndex(state.scenario, owner) : -1;
+      if (ownerIndex >= 0
+          && (state.stage_states?.[ownerIndex] ?? "pending") !== "pending") {
+        (state.stage_states ??= [])[ownerIndex] = "pending";
+      }
+      const rework = route.reworkTo;
+      fixedAdvance(state, rework, "用户对结论有补充意见,继续分析");
       saveState(live.root, state);
       startTurn(
-        `用户对分析结论提出意见,回到「问题分析」阶段:${decision}${supplement}\n`
+        `用户对分析结论提出意见,回到「${stageName(rework)}」阶段:${decision}${supplement}\n`
           + "请继续查证,完善 issue-analysis.md 后重新 submit_analysis 提交结论。");
       return summarize(state);
     }
 
-    // env_verify:换库验证的裁决
+    // env_verify:换库验证的裁决(闸属 deploy_verify,见注册表;回退
+    // 目标在 fixedRollback 的阶段机操作里,不在裁决分支上写死)。
     if (decision.startsWith("验证通过")) {
       fixedComplete(state, "用户环境验证通过,待归档收口");
       state.status = "idle";

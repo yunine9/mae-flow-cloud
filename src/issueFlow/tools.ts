@@ -8,7 +8,8 @@
  *
  * 固定流程(2026-08-27 拍板)在工具层叠加两件事:
  * - 阶段门禁:每个工具只在所属阶段开放,越权调用直接拒绝(双层
- *   门禁的权威层;提示词里的"本阶段工具清单"只是引导层)。例外是
+ *   门禁的权威层;提示词里的"本阶段工具清单"是引导层,两层的白名单
+ *   同出阶段注册表 stageRegistry.ts,不会各说各话)。例外是
  *   工读类——fetch_logs 全程开放,dts_get_ticket 任意阶段可重查
  *   (2026-08-28 拍板:作业自由,门只守流程出口与出厂动作);
  * - 阶段推进:机械可判的推进(拉单成功/UT 通过)由工具直接记账,
@@ -27,7 +28,6 @@ import {
   STAGE_LABELS,
   FIXED_STAGE_LABELS,
   fixedAdvance,
-  fixedStageIndex,
   fixedStages,
   issueRepoWorkspaces,
   normalizeIssueRepos,
@@ -38,6 +38,10 @@ import {
   type IssueGateScope,
   type IssueSessionState,
 } from "./state.ts";
+import {
+  stageAllowsTool,
+  stagesAllowingTool,
+} from "./stageRegistry.ts";
 import { readBusinessModule, listBusinessModules } from "../businessModuleLibrary.ts";
 import type { IssueOpsTools } from "./opsTools.ts";
 import type { DtsGateway } from "./gateways.ts";
@@ -154,29 +158,22 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
   };
 
   // ---- 阶段门禁(固定流程专属;自由模式直接放行) ----
+  // 白名单查阶段注册表:每个阶段在注册表里声明自己开放哪些工具,
+  // 简报(引导层)读同一列——这里不再各自硬编码,越权拒绝时反查
+  // 注册表报出"允许的阶段"。
 
   const stageLabel = (): string =>
     scenario ? FIXED_STAGE_LABELS[scenario][state.stage as FixedStage] ?? String(state.stage)
       : STAGE_LABELS[state.stage as keyof typeof STAGE_LABELS] ?? String(state.stage);
 
-  const gateStage = (tool: string, allowed: FixedStage[]): void => {
+  const gateStage = (tool: string): void => {
     if (!fixed || !scenario) return;
-    if (!allowed.includes(state.stage as FixedStage)) {
-      fail(`阶段门禁:${tool} 在当前阶段「${stageLabel()}」不开放。`
-        + `允许的阶段:${allowed
-          .map((stage) => FIXED_STAGE_LABELS[scenario][stage])
-          .join(" / ")}。固定流程的阶段由平台推进,请先完成本阶段工作`);
-    }
-  };
-
-  const gateStageFrom = (tool: string, minimum: FixedStage): void => {
-    if (!fixed || !scenario) return;
-    const current = fixedStageIndex(scenario, state.stage);
-    const min = fixedStageIndex(scenario, minimum);
-    if (min < 0 || current < min) {
-      fail(`阶段门禁:${tool} 要到「${FIXED_STAGE_LABELS[scenario][minimum]}」`
-        + `阶段才开放(当前「${stageLabel()}」)`);
-    }
+    if (stageAllowsTool(scenario, state.stage as FixedStage, tool)) return;
+    const allowed = stagesAllowingTool(scenario, tool)
+      .map((stage) => FIXED_STAGE_LABELS[scenario][stage]);
+    fail(`阶段门禁:${tool} 在当前阶段「${stageLabel()}」不开放。`
+      + `允许的阶段:${allowed.length ? allowed.join(" / ") : "无(本场景流程不含该工具)"}`
+      + `。固定流程的阶段由平台推进,请先完成本阶段工作`);
   };
 
   // ---- 自由探索:阶段自报工具(fixed 模式不注册——阶段真相在宿主) ----
@@ -276,7 +273,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       }),
     }),
     async execute(_toolCallId: string, params: any) {
-      gateStage("lookup_modules", ["prep_repo", "analyze"]);
+      gateStage("lookup_modules");
       const keyword = String(params.keyword ?? "").trim().toLowerCase();
       if (!keyword) fail("keyword 不能为空:给一个模块名称/ID/说明的子串");
       const { modules } = listBusinessModules(ctx.dataRoot);
@@ -312,7 +309,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       }),
     }),
     async execute(_toolCallId: string, params: any) {
-      gateStageFrom("pull_repo", "prep_repo");
+      gateStage("pull_repo");
       const url = String(params.url ?? "").trim();
       if (!url) fail("url 不能为空:给要拉取的代码仓地址");
       const facts = await ctx.pullRepo(url);
@@ -365,7 +362,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       }),
     }),
     async execute(_toolCallId: string, params: any) {
-      gateStage("build_deploy", ["deploy_verify"]);
+      gateStage("build_deploy");
       if (!ctx.ops) fail("宿主未部署运维工具(assets/ops-tools),无法换库");
       const password = ctx.environmentPassword?.();
       if (!password) raiseEnvNeededGate(ctx, "deploy");
@@ -464,7 +461,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       })),
     }),
     async execute(_toolCallId: string, params: any) {
-      gateStageFrom("push_branch", "fix");
+      gateStage("push_branch");
       const state = ctx.state;
       if (!state.ticket) {
         fail("单号门禁:会话尚未绑定 DTS 单号。请请用户在页面「绑定单号」后重试"
@@ -524,7 +521,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       })),
     }),
     async execute(_toolCallId: string, params: any) {
-      gateStage("create_mr", ["mr_green"]);
+      gateStage("create_mr");
       const state = ctx.state;
       if (!state.ticket) {
         fail("单号门禁:会话尚未绑定 DTS 单号,不能创建 MR");
@@ -599,7 +596,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         }),
       }),
       async execute(_toolCallId: string, params: any) {
-        gateStageFrom("bind_module", "prep_repo");
+        gateStage("bind_module");
         const moduleId = String(params.module_id ?? "").trim();
         if (!moduleId) fail("module_id 不能为空:先 lookup_modules 检索拿到模块 id");
         let module;
@@ -663,7 +660,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         }),
       }),
       async execute(_toolCallId: string, params: any) {
-        gateStage("submit_analysis", ["analyze"]);
+        gateStage("submit_analysis");
         const report = analysisReportPath(ctx);
         if (!existsSync(report)) {
           fail(`分析报告还没落盘:请先把报告写到工作区根目录 issue-analysis.md`
@@ -721,7 +718,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         })),
       }),
       async execute(_toolCallId: string, params: any) {
-        gateStage("report_ut", ["ut"]);
+        gateStage("report_ut");
         const round = ctx.state.round ?? 1;
         ctx.state.ut = {
           passed: params.passed === true,
@@ -764,7 +761,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         note: Type.String({ description: "一句话:做了什么(文件/要点),或为何无需代码仓" }),
       }),
       async execute(_toolCallId: string, params: any) {
-        gateStage("complete_stage", ["prep_repo", "fix"]);
+        gateStage("complete_stage");
         const firstLine = String(params.note ?? "").split("\n")[0];
         if (state.stage === "prep_repo") {
           fixedAdvance(ctx.state, "analyze", `跳过拉取代码仓:${firstLine}`);

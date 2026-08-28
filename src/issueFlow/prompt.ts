@@ -28,7 +28,9 @@ import {
   STAGE_LABELS,
   fixedStages,
   type FixedStage,
+  type IssueScenario,
 } from "./state.ts";
+import { fixedStageSpec, stageToolLine } from "./stageRegistry.ts";
 
 /** 技能源目录:标准 skill 目录,每个子目录一个 SKILL.md(测试对源断言用)。 */
 export const SKILL_SOURCE_DIR = resolve(
@@ -108,60 +110,25 @@ export function stageLabelOf(state: IssueSessionState): string {
 
 // ---- 固定流程(2026-08-27 拍板:宿主权威阶段机,Agent 只在阶段内干活) ----
 
-/** 各阶段的目标/出口/可用工具(提示词的引导层;权威层在工具 execute 门禁)。
- * exit 是"到什么程度算完"的白纸黑字——模型停机的合法性只认出口动作。 */
-const FIXED_STAGE_BRIEFS: Record<FixedStage,
-  { goal: string; exit: string; tools: string }> = {
-  dts_info:
-    { goal: "调 dts_get_ticket 拉全单据详情,通读现象与处理历史",
-      exit: "dts_get_ticket 成功返回单据详情(平台自动推进到下一阶段)",
-      tools: "dts_get_ticket" },
-  prep_repo:
-    { goal: "把代码仓拉齐:lookup_modules 按单据里的业务关键词检索模块,"
-      + "命中就 bind_module 登记它的仓,再逐个 pull_repo 拉取(有单场景"
-      + "平台会顺带切好修复分支);检索不到就 AskUserQuestion 问用户要"
-      + "仓地址再 pull_repo。本单无需代码改动则 complete_stage 直接跳过",
-      exit: "要用的仓都 pull_repo 落地;无需代码仓则 complete_stage 跳过",
-      tools: "lookup_modules、bind_module、pull_repo、complete_stage(跳过)" },
-  analyze:
-    { goal: "对齐现象-根因-方案,产出 issue-analysis.md,然后 submit_analysis 提交"
-      + "(无单场景 submit_analysis 需带结论 issue/non_issue)。中途发现"
-      + "还缺仓,pull_repo 随时可补",
-      exit: "issue-analysis.md 完成 → submit_analysis 提交并等平台举卡",
-      tools: "fetch_logs、dts_get_ticket(重查)、pull_repo(补仓)、submit_analysis" },
-  fix:
-    { goal: "按已确认的方案实施修复(多仓问题在涉及的每个仓里改);"
-      + "改完自检通过后 complete_stage 自报完成",
-      exit: "所有涉及的仓改完且自检通过 → complete_stage 自报完成",
-      tools: "fetch_logs(补证据)、bash 改码、complete_stage" },
-  ut:
-    { goal: "在改过的代码仓里跑单元测试;全绿后 report_ut(passed=true)上报",
-      exit: "UT 全绿 → report_ut(passed=true) 上报",
-      tools: "bash 跑测、report_ut" },
-  mr_green:
-    { goal: "对**每个改过的仓**分别 push_branch + create_mr(一仓一 MR,"
-      + "仓参数别漏);平台逐仓监看流水线,红了会带回失败项,修完同分支"
-      + "再推,全部 MR 跑绿才进入下一阶段",
-      exit: "每个改过的仓都 push_branch + create_mr;之后可停等流水线,"
-        + "平台会带回结果(红=修,全绿=进下一阶段)",
-      tools: "push_branch、create_mr" },
-  deploy_verify:
-    { goal: "调 build_deploy 换库部署(多仓时用 repo 参数指定要部署的仓);"
-      + "部署完成平台举验证卡,停下等用户真实验证",
-      exit: "build_deploy 部署完成 → 平台举「环境验证」卡等用户",
-      tools: "build_deploy" },
-  conclude:
-    { goal: "submit_analysis 提交结论(是问题/非问题)——本场景没有修改与交付环节",
-      exit: "结论明确 → submit_analysis 提交并等平台举「结论确认」卡",
-      tools: "fetch_logs、submit_analysis" },
-};
+// 阶段简报(引导层)从阶段注册表生成:目标/出口/可用工具都是注册表的
+// 一行声明,与工具门禁(权威层)同源——这里不再手工复写工具清单,
+// 引导层说能用的与权威层放行的不会漂移。
+
+/** 固定流程的阶段简报渲染(开场词/交接词/催办词共用)。 */
+function fixedStageBriefLines(scenario: IssueScenario, stage: FixedStage): string[] {
+  const spec = fixedStageSpec(stage);
+  return [
+    `当前阶段「${FIXED_STAGE_LABELS[scenario][stage]}」: ${spec.goal}`,
+    `出口(到什么程度算完): ${spec.exit}`,
+    `可用工具: ${stageToolLine(stage)}`,
+  ];
+}
 
 export function issueFixedOpeningPrompt(state: IssueSessionState): string {
   const scenario = state.scenario ?? "ticket";
   const stages = fixedStages(scenario).map((stage) =>
     FIXED_STAGE_LABELS[scenario][stage]).join(" → ");
   const current = state.stage as FixedStage;
-  const brief = FIXED_STAGE_BRIEFS[current];
   const inheritedNote = state.converted_from
     ? `\n- 本会话由 ${state.converted_from} 转正而来:分析报告(issue-analysis.md)已继承,`
       + "前三个阶段视为已完成,直接从「问题修改」开始——先读报告再动手,不要重新分析。"
@@ -188,8 +155,8 @@ export function issueFixedOpeningPrompt(state: IssueSessionState): string {
     "",
     "## 阶段机契约(平台机械执行,说了算)",
     "1. 阶段真相在平台:你能用哪些工具由当前阶段决定,越权调用会被直接拒绝。",
-    `2. 当前阶段「${FIXED_STAGE_LABELS[scenario][current]}」:${brief.goal}。`
-      + `出口(到什么程度算完):${brief.exit}。可用工具:${brief.tools}。`,
+    `2. 当前阶段「${FIXED_STAGE_LABELS[scenario][current]}」:${fixedStageSpec(current).goal}。`
+      + `出口(到什么程度算完):${fixedStageSpec(current).exit}。可用工具:${stageToolLine(current)}。`,
     "3. 停机白名单——回合只允许停在这三处,其余情况必须继续调工具推进,"
     + "阶段性总结不是停机理由:①举卡等用户(AskUserQuestion 或平台闸);"
     + "②出口动作已调用、平台交接词已到位(含 MR 建完停等流水线);"
@@ -218,12 +185,9 @@ export function fixedAdvanceNotice(
 ): string {
   const scenario = state.scenario ?? "ticket";
   const current = state.stage as FixedStage;
-  const brief = FIXED_STAGE_BRIEFS[current];
   return [
     `平台通知: ${message}`,
-    `当前阶段「${FIXED_STAGE_LABELS[scenario][current]}」: ${brief.goal}`,
-    `出口(到什么程度算完): ${brief.exit}`,
-    `可用工具: ${brief.tools}`,
+    ...fixedStageBriefLines(scenario, current),
   ].join("\n");
 }
 
@@ -235,13 +199,10 @@ export function fixedNudgeNotice(
 ): string {
   const scenario = state.scenario ?? "ticket";
   const current = state.stage as FixedStage;
-  const brief = FIXED_STAGE_BRIEFS[current];
   return [
     `平台催办(第 ${attempt}/${budget} 次): 你在阶段未收口时结束了回合,`
     + "这不算完成——阶段真相在平台,没走到出口就是没完。",
-    `当前阶段「${FIXED_STAGE_LABELS[scenario][current]}」: ${brief.goal}`,
-    `出口(到什么程度算完): ${brief.exit}`,
-    `可用工具: ${brief.tools}`,
+    ...fixedStageBriefLines(scenario, current),
     "继续推进。除非举卡等用户或确需用户决策,不要停机;"
       + `再无故停机 ${budget - attempt + 1} 次平台将不再催办,转为等你人工指令。`,
   ].join("\n");

@@ -20,6 +20,24 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { validateRepoUrl } from "./issueGit.ts";
+import {
+  FIXED_NO_TICKET_STAGES,
+  FIXED_TICKET_STAGES,
+  fixedStageIndex,
+  fixedStages,
+  type FixedStage,
+} from "./stageRegistry.ts";
+
+// 固定流程的阶段词表、路线与显示名的定义在阶段注册表(stageRegistry.ts,
+// 阶段规则的唯一事实源);这里沿用它一贯的导出面,老消费方不用改 import。
+export {
+  FIXED_NO_TICKET_STAGES,
+  FIXED_TICKET_STAGES,
+  FIXED_STAGE_LABELS,
+  fixedStageIndex,
+  fixedStages,
+  type FixedStage,
+} from "./stageRegistry.ts";
 
 export type IssueSource = "manual" | "dts";
 
@@ -76,66 +94,10 @@ export const STAGE_LABELS: Record<IssueStage, string> = {
   done: "问题闭环",
 };
 
-// ---- 固定流程阶段词表(自由探索那套 ISSUE_STAGES 原样保留) ----
-
-/** 固定流程的阶段键。与自由词表刻意不同名:两套语义并存,UI 按
- * 会话模式选词表渲染,不互相污染。 */
-export const FIXED_TICKET_STAGES = [
-  "dts_info",      // 获取 DTS 单信息(工具拉详情,成功即机械推进)
-  "prep_repo",     // 拉取代码仓+创建分支(宿主代劳,机械推进)
-  "analyze",       // 问题分析:对齐现象-根因-方案,产出分析报告(submit_analysis 触发人工闸)
-  "fix",           // 问题修改(complete_stage 自报完成)
-  "ut",            // UT 验证(report_ut 上报,passed 才放行 MR)
-  "mr_green",      // 提交 MR+流水线跑绿(宿主监看,红→AI 修→再推)
-  "deploy_verify", // 换库环境验证(部署后平台闸等用户真实验证)
-] as const;
-
-/** 无单场景三节点:测试/开发自行定位用,结论"是问题"→挂起待关联。 */
-export const FIXED_NO_TICKET_STAGES = [
-  "prep_repo",     // 拉取代码仓(无单不建分支——分支名规范需要单号)
-  "analyze",       // 问题分析(同有单,产出报告)
-  "conclude",      // 确定结论(平台闸:是问题→挂起 / 非问题→闭环)
-] as const;
-
-export type FixedStage =
-  | (typeof FIXED_TICKET_STAGES)[number]
-  | (typeof FIXED_NO_TICKET_STAGES)[number];
+// ---- 固定流程阶段词表:定义与规则在阶段注册表(stageRegistry.ts) ----
 
 /** 自由/固定两套词表共用 state.stage 字段。 */
 export type AnyIssueStage = IssueStage | FixedStage;
-
-export const FIXED_STAGE_LABELS: Record<IssueScenario, Record<FixedStage, string>> = {
-  ticket: {
-    dts_info: "获取 DTS 单信息",
-    prep_repo: "拉取代码仓·建分支",
-    analyze: "问题分析",
-    fix: "问题修改",
-    ut: "UT 验证",
-    mr_green: "提交 MR·跑绿",
-    deploy_verify: "换库环境验证",
-    conclude: "确定结论",
-  },
-  no_ticket: {
-    dts_info: "获取 DTS 单信息",
-    prep_repo: "拉取代码仓",
-    analyze: "问题分析",
-    fix: "问题修改",
-    ut: "UT 验证",
-    mr_green: "提交 MR·跑绿",
-    deploy_verify: "换库环境验证",
-    conclude: "确定结论",
-  },
-};
-
-export function fixedStages(scenario: IssueScenario): readonly FixedStage[] {
-  return scenario === "ticket" ? FIXED_TICKET_STAGES : FIXED_NO_TICKET_STAGES;
-}
-
-export function fixedStageIndex(
-  scenario: IssueScenario, stage: AnyIssueStage,
-): number {
-  return fixedStages(scenario).indexOf(stage as FixedStage);
-}
 
 /** 固定流程单个阶段的执行状态(inherited=转正继承,redo=回退待重做)。 */
 export type StageState =
