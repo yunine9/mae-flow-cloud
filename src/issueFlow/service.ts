@@ -192,7 +192,8 @@ export interface IssueCreateInput {
   source?: IssueSource;
   ticket?: string;
   repoUrl?: string;
-  /** 多仓登记(模块带仓是常态):与 repoUrl 合并去重,首个=主仓。 */
+  /** 多仓登记(模块带仓是常态):与 repoUrl 合并去重;repo_url 兼容
+   * 别名取首个,仓彼此平等。 */
   repoUrls?: string[];
   baseline?: string;
   /** 业务模块自由文本标签(仅展示/报告引用,不承载判定)。 */

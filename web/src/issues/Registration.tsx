@@ -135,7 +135,7 @@ function ManualRegister({
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [ticket, setTicket] = useState("");
-  // 多仓登记:首个=主仓(交付仓),其余参考仓。选模块自动带出,可增删改。
+  // 多仓登记:关联仓彼此平等(CONTEXT.md 词表),选模块整表带出,可增删改。
   const [repoUrls, setRepoUrls] = useState<string[]>([""]);
   // 业务模块:目录非空时是选择器(无单必选),目录空/加载失败回退自由文本。
   const [moduleId, setModuleId] = useState("");

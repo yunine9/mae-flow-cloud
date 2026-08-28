@@ -2461,7 +2461,7 @@ export function createIssue(input: {
   source?: "manual" | "dts";
   ticket?: string;
   repo_url?: string;
-  /** 多仓登记(模块带仓是常态):首个=主仓(交付仓),其余参考仓。 */
+  /** 多仓登记(模块带仓是常态):全部关联仓彼此平等,哪些交付由 AI 裁决。 */
   repo_urls?: string[];
   baseline?: string;
   module?: string;

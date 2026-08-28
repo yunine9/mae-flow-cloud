@@ -310,7 +310,8 @@ export interface IssueSummary extends IssueSessionState {
 export const MAX_ISSUE_REPOS = 8;
 
 /** 登记仓清单:单仓(兼容字段)与多仓合并去重,逐个过协议校验。
- * 顺序即语义——首个是主仓(交付仓),其余是参考仓。登记(create)、
+ * 顺序即语义——首个即 repo_url 兼容别名(推送/部署的缺省目标),
+ * 仓彼此平等。登记(create)、
  * 闸门补填(resolveGate)与 Agent 绑模块(bind_module)三处共用同一
  * 把尺子,上限与协议规则不允许各自为政。 */
 export function normalizeIssueRepos(
@@ -371,15 +372,15 @@ export function loadState(root: string): IssueSessionState | undefined {
   if (state.stage && !validStage(state.stage)) {
     state.stage = LEGACY_STAGES[state.stage] ?? "registered";
   }
-  // 多仓迁移:repo_urls 是权威清单,repo_url 是主仓别名。老会话只有
-  // 单仓字段,读进来就补齐另一侧,消费方不用两头兜底。
+  // 多仓迁移:repo_urls 是权威清单,repo_url 是单仓时代的兼容别名。
+  // 老会话只有单仓字段,读进来就补齐另一侧,消费方不用两头兜底。
   if (state.repo_urls?.length) {
     state.repo_url ??= state.repo_urls[0];
   } else if (state.repo_url) {
     state.repo_urls = [state.repo_url];
   }
   // 推送/MR 账迁移:老会话的单数账(push/mr)读进来换成按仓数组
-  // (repo 用当时的主仓地址兜底),字段本身退役。
+  // (repo 用当时的首个仓地址兜底),字段本身退役。
   const legacyPush = (state as { push?: IssuePushRecord }).push;
   if (!state.pushes?.length && legacyPush) {
     state.pushes = [{
@@ -402,7 +403,8 @@ export function loadState(root: string): IssueSessionState | undefined {
   }
   delete (state as { push?: unknown }).push;
   delete (state as { mr?: unknown }).mr;
-  // 流水线账迁移:老单数 pipeline 读进来挂到当时主仓名下。
+  // 流水线账迁移:老单数 pipeline 读进来挂到当时首个仓(repo_url
+  // 兼容别名)名下。
   const legacyPipeline = (state as { pipeline?: IssuePipelineWatch }).pipeline;
   if (legacyPipeline && !state.pipelines) {
     state.pipelines = { [state.repo_url ?? ""]: legacyPipeline };

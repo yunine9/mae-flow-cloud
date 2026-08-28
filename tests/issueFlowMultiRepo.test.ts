@@ -1,8 +1,9 @@
 /**
  * 问题流多仓契约测试(模块带仓,2026-08-28):登记多仓 + 模块校验、
- * 克隆布局(主仓 repo/ + 参考仓 ref/<仓名>/)、无单固定流程多仓端到端
- * (提示词清单/阶段备注/转正继承)。单仓交付链路不因多仓而变:推送/
- * MR/部署默认仍作用主仓,repo 参数只扩不破。
+ * 克隆布局(关联仓彼此平等,平铺 repo/<仓名>/)、无单固定流程多仓
+ * 端到端(提示词清单/阶段备注/转正继承)。单仓交付链路不因多仓而变:
+ * 推送/MR/部署缺省作用于首个登记仓(repo_url 兼容别名),repo 参数
+ * 只扩不破。
  */
 
 import { test } from "node:test";
@@ -104,9 +105,10 @@ test("issue.json 读取迁移:repo_url 与 repo_urls 双向补齐;push/mr/pipeli
   }));
   const migrated = loadState(join(dir, "new"))!;
   assert.equal(migrated.repo_url, "https://code.test/x.git",
-    "新清单的主仓回写别名,展示层不用两头兜底");
+    "新清单的首仓回写 repo_url 别名,展示层不用两头兜底");
 
-  // 单数账迁移:push/mr/pipeline → pushes/mrs/pipelines(挂到主仓名下)。
+  // 单数账迁移:push/mr/pipeline → pushes/mrs/pipelines(挂到当时的
+  // 首个仓名下)。
   mkdirSync(join(dir, "ledger"), { recursive: true });
   writeFileSync(join(dir, "ledger", "issue.json"), JSON.stringify({
     ...base,

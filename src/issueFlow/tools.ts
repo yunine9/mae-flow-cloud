@@ -444,7 +444,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       repo: Type.Optional(Type.String({
         description:
           "目标代码仓地址;缺省首个登记仓。必须是会话登记过的仓"
-          + "(多仓分析时参考仓也能推,分支命名规则不变)",
+          + "(多仓分析时其余关联仓也能推,分支命名规则不变)",
       })),
     }),
     async execute(_toolCallId: string, params: any) {
