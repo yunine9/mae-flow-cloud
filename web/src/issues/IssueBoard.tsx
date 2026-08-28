@@ -2,7 +2,7 @@
  * 问题处理页(问题流 v2 的唯一入口)。
  *
  * 与"我的需求"完全隔离:独立分包、独立轮询、独立 API 命名空间。
- * 页面两块:上方登记(DTS 拉单/手工登记),下方"我的问题"会话列表;
+ * 页面两块:上方登记(手工登记/DTS 列表),下方"我的问题"会话列表;
  * 点开进入会话详情——决策-centric 双栏:顶部阶段英雄轨 + 耗时卡点折叠条,
  * 左栏是内容(材料/现场 两页签:现场=执行事件直播,对话内容在「消息」
  * 筛选;结论文档归入材料),右栏常驻 NEXT ACTION(待答复/运行中/
@@ -319,6 +319,8 @@ function IssueRegistration({
   onNavigateProfile?: () => void;
 }) {
   const [tab, setTab] = useState<"dts" | "manual">("manual");
+  // 两个子面板常驻(隐藏切换):DTS 列表、勾选与表单状态跨页签驻留,
+  // 首开「DTS 列表」自动拉取一次,之后靠「刷新」手动更新。
   return <section className="issue-section" aria-labelledby="issue-register-title">
     <div className="section-head">
       <div>
@@ -331,14 +333,18 @@ function IssueRegistration({
           onClick={() => setTab("manual")}>手工登记</button>
         <button type="button" role="tab" aria-selected={tab === "dts"}
           className={tab === "dts" ? "on" : ""}
-          onClick={() => setTab("dts")}>从 DTS 拉单</button>
+          onClick={() => setTab("dts")}>DTS 列表</button>
       </div>
     </div>
-    {tab === "manual"
-      ? <ManualRegister viewer={viewer} onCreated={onCreated} onError={onError}
-          onNavigateProfile={onNavigateProfile} />
-      : <DtsRegister viewer={viewer} issues={issues} onCreated={onCreated}
-          onError={onError} onNavigateProfile={onNavigateProfile} />}
+    <div hidden={tab !== "manual"}>
+      <ManualRegister viewer={viewer} onCreated={onCreated} onError={onError}
+        onNavigateProfile={onNavigateProfile} />
+    </div>
+    <div hidden={tab !== "dts"}>
+      <DtsRegister viewer={viewer} issues={issues} active={tab === "dts"}
+        onCreated={onCreated} onError={onError}
+        onNavigateProfile={onNavigateProfile} />
+    </div>
   </section>;
 }
 
@@ -617,6 +623,7 @@ const isActionableDts = (t: { status?: string }): boolean =>
 function DtsRegister({
   viewer,
   issues,
+  active,
   onCreated,
   onError,
   onNavigateProfile,
@@ -624,6 +631,8 @@ function DtsRegister({
   viewer: AuthUser;
   /** 我的会话列表:发起前按单查重(服务端 create 同样机械拦)。 */
   issues: IssueSummary[];
+  /** 页签是否激活:首次激活自动拉取一次名下问题单,之后手动刷新。 */
+  active: boolean;
   onCreated: (issue: IssueSummary) => void;
   onError: (message: string) => void;
   onNavigateProfile?: () => void;
@@ -824,6 +833,16 @@ function DtsRegister({
     }
   }
 
+  // 首次激活自动拉取:点开「DTS 列表」直接见列表,不再多一次点击;
+  // 之后列表靠「刷新」手动更新(面板常驻,换页签不清状态)。
+  const autoLoaded = useRef(false);
+  useEffect(() => {
+    if (!active || autoLoaded.current) return;
+    autoLoaded.current = true;
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active]);
+
   async function toggleExpand(ticketNo: string) {
     if (expandedTicket === ticketNo) {
       setExpandedTicket(null);
@@ -906,17 +925,24 @@ function DtsRegister({
       不是真实问题单;流程与真实模式完全一致。
     </p>}
     <div className="issue-dts-toolbar">
-      <button type="button" onClick={load} disabled={loading}>
-        {loading ? "拉取中…" : `拉取 ${viewer.username} 的问题单`}
-      </button>
+      <div className="issue-dts-toolbar-side">
+        <button type="button" className="issue-dts-refresh" onClick={load}
+          disabled={loading}
+          title="重新拉取名下问题单(勾选与搜索会重置)">
+          {loading ? (tickets === undefined ? "拉取中…" : "刷新中…") : "↻ 刷新"}
+        </button>
+        {note && <span className="issue-dts-note">{note}</span>}
+      </div>
       <button type="button" className="primary"
         disabled={!selected.length || busy || credentialBlocked}
         title={selected.length > 1 ? `将逐张发起 ${selected.length} 个独立工作流` : undefined}
         onClick={launch}>
         {busy ? "发起中…" : selected.length > 1 ? `发起处理(${selected.length} 张)` : "发起处理"}
       </button>
-      {note && <span className="issue-dts-note">{note}</span>}
     </div>
+    {tickets === undefined && loading && <p className="issue-dts-hint">
+      正在拉取 {viewer.username} 名下的问题单…
+    </p>}
     {tickets && tickets.length > 0 && <>
       {versions.length > 0 && <div className="issue-dts-versions" ref={versionBoxRef}>
         <button type="button"

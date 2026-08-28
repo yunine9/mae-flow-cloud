@@ -70,7 +70,7 @@ associate {ticket, confirm?}`。
 
 - 登记:「问题处理」页手工登记(有单填单号走七阶段,无单留空走三节点;
   固定流程必须填代码仓,业务模块是自由文本标签——模块→仓映射配置另
-  有团队在做),或从 DTS 拉单勾选发起。拉单页签只展示"开发人员实施
+  有团队在做),或从 DTS 列表页签勾选发起。该列表只展示"开发人员实施
   修改"状态的单(其他状态不可发起);支持单号/标题/版本模糊搜索与
   版本多选过滤(默认勾选最高 R/C 版),输入完整单号可自动远程补查;
   行内展开可查问题级别、问题版本(B版)、提单人、问题链接与描述全文
@@ -142,7 +142,7 @@ create_mr 仅 mr_green 且 UT 已过、push_branch 自 fix 起、fetch_logs
 格式 `[单号][类型] 描述`/推送/MR)、issue-ops(环境工具用法)。工号 =
 登录账号,不再从 $HOME 猜。
 
-## DTS 拉单页签(工具对拍与文件代理)
+## DTS 列表页签(工具对拍与文件代理)
 
 拉单/查单走宿主侧 McpGateway(streamable HTTP),工具名与返回形状已按
 真实华为网关对拍固化(`src/issueFlow/gateways.ts`):
@@ -192,7 +192,7 @@ create_mr 仅 mr_green 且 UT 已过、push_branch 自 fix 起、fetch_logs
 
 **材料页签**(`src/issueFlow/materials.ts`,路由 `/issues/:id/materials*`):
 
-- DTS 单据卡片:复用拉单页签的字段对拍与图片代理,会话绑了单号即可展开。
+- DTS 单据卡片:复用 DTS 列表页签的字段对拍与图片代理,会话绑了单号即可展开。
 - 结论文档:`issue-analysis.md` 即写即读,AI 续写后随状态自动重读;
   右栏"结论文档已产出"一键跳入该子视图。
 - 工作区变更:diff 对 HEAD(未提交改动 + 未跟踪新文件按全文 diff),
@@ -270,7 +270,7 @@ task-/issue- 前缀互不碰撞)与 assets/ops-tools 二进制(改由问题流�
 ## 已知边界(诚实清单)
 
 - 【2026-08-27 已落地】DTS 拉单(`listByVersionAndHead`)与查单
-  (`batchQueryTicket`)已按真实网关对拍并固化(见「DTS 拉单页签」
+  (`batchQueryTicket`)已按真实网关对拍并固化(见「DTS 列表页签」
   一节);解析保留通用 fallback(parseTicketList),形状再变时如实
   报错而非静默给空列表。外部环境无真网关时用 `--dts-mock`(确定性
   假单据)跑全流程。

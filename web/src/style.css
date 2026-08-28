@@ -1708,13 +1708,25 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   border-radius: 9px; background: color-mix(in srgb, var(--attention) 8%, var(--surface));
   color: var(--text-strong); font-size: var(--font-size-assist); line-height: 1.5;
 }
-.issue-dts-toolbar { display: flex; align-items: center; gap: 10px; }
+/* 工具条左右分工:左=维护动作(刷新)+结果消息,右=本面板唯一主行动
+   (发起处理)。两钮不再同排同级抢视线——刷新是安静的幽灵钮,发起是
+   陶土色实心钮,层级一眼可辨。 */
+.issue-dts-toolbar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; flex-wrap: wrap;
+}
+.issue-dts-toolbar-side { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .issue-dts-toolbar button {
   min-height: 32px; padding: 0 14px; border: 1px solid var(--line);
   border-radius: 8px; background: var(--surface-muted); color: var(--text-strong);
   font-size: var(--font-size-assist); cursor: pointer;
 }
 .issue-dts-toolbar button:disabled { opacity: .5; cursor: not-allowed; }
+.issue-dts-toolbar .issue-dts-refresh { color: var(--muted); }
+.issue-dts-toolbar .issue-dts-refresh:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+}
 .issue-dts-note { color: #d64545; font-size: var(--font-size-assist); }
 /* 问题列表卡(骨架复用 task-card 全局类):状态轨补问题域状态色,
  * 任务侧没有的 waiting_user/suspended 在这里定义,不碰任务侧规则。 */
@@ -2092,7 +2104,7 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   font-weight: 700; cursor: pointer; white-space: nowrap;
 }
 
-/* DTS 拉单页签的补登记字段(仓/模块/环境) */
+/* DTS 列表页签的补登记字段(仓/模块/环境) */
 .issue-dts-fields {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 10px; margin-top: 12px;
