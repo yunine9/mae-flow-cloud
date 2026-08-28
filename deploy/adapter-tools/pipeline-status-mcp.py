@@ -11,10 +11,9 @@ get_pipeline_quality,CLI 降级,REST 不碰。本脚本照搬那条主路,输出
 失败即退非零并把原因给 stderr——adapter 降级链会接住(次候选=内网
 现用 v4 脚本,末候选=裸 REST)。宁可这一路诚实死,不猜。
 
-工具入参形状(project_id / merge_request_iid / show_job)按 toolkit
-对比报告钉;get_project_info 的入参未见原文,做了 {url}→{project_path}
-两种尝试——**内网先跑 mcp_http_client.py --list-tools 把 inputSchema
-带回来钉死**,对不上的在外网改。
+工具入参已由 2026-08-28 内网 tools/list + 真红灯现场对拍：
+get_project_info 使用顶层 git_url；actual_head_pipeline 与
+get_pipeline_quality 的业务参数都嵌在 request。
 
 用法: pipeline-status-mcp.py --repo <url> --sha <sha> --mr <iid>
       --token <t>(缺 --mr 时如实失败:主路按 MR 定位,别猜)
@@ -25,11 +24,15 @@ import argparse
 import json
 import re
 import sys
-import urllib.parse
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from mcp_http_client import McpHttpClient, McpHttpError, load_secret  # noqa: E402
+from mcp_tool_contracts import (  # noqa: E402
+    actual_head_pipeline_arguments,
+    pipeline_quality_arguments,
+    project_info_arguments,
+)
 import os  # noqa: E402
 
 RUN_STATUS = {
@@ -76,30 +79,16 @@ def map_word(raw, table, what):
     return table[word]
 
 
-def project_identity(repo_url: str) -> str:
-    path = urllib.parse.urlsplit(repo_url).path.strip("/")
-    return path[:-4] if path.endswith(".git") else path
-
-
 def resolve_project_id(client: McpHttpClient, repo_url: str) -> str:
     """toolkit: getProjectId = MCP get_project_info → CLI fallback。
-    入参形状未见原文,{url}→{project_path} 依次试;都不行如实失败。"""
-    attempts = [
-        {"url": repo_url},
-        {"project_path": project_identity(repo_url)},
-    ]
-    errors = []
-    for arguments in attempts:
-        try:
-            info = client.call_tool("get_project_info", arguments)
-            if isinstance(info, dict):
-                for key in ("project_id", "id"):
-                    if info.get(key) is not None:
-                        return str(info[key])
-            errors.append(f"{list(arguments)}: 响应里没有 project_id/id")
-        except McpHttpError as error:
-            errors.append(f"{list(arguments)}: {error}")
-    raise McpHttpError("get_project_info 全部尝试失败: " + "; ".join(errors))
+    tools/list 已确认真实参数为顶层 git_url；失败就交给 adapter 下一候选。"""
+    info = client.call_tool(
+        "get_project_info", project_info_arguments(repo_url))
+    if isinstance(info, dict):
+        for key in ("project_id", "id"):
+            if info.get(key) is not None:
+                return str(info[key])
+    raise McpHttpError("get_project_info 响应里没有 project_id/id")
 
 
 def merge_check(picked: dict, candidate: dict) -> None:
@@ -136,11 +125,18 @@ def checks_from_stages(stages) -> dict:
     return picked
 
 
-def enrich_from_quality(client, project_id, pipeline_id, picked) -> None:
+def enrich_from_quality(
+    client,
+    project_id,
+    pipeline_id,
+    picked,
+) -> None:
     """get_pipeline_quality → 逐工具状态与指标明细(增益路,失败不拦)。"""
     try:
-        quality = client.call_tool("get_pipeline_quality", {
-            "project_id": project_id, "pipeline_id": pipeline_id})
+        quality = client.call_tool(
+            "get_pipeline_quality",
+            pipeline_quality_arguments(project_id, pipeline_id),
+        )
     except McpHttpError as error:
         log_err(f"质量增益路失败(忽略): {error}")
         return
@@ -200,8 +196,7 @@ def main() -> int:
     project_id = resolve_project_id(client, args.repo)
     pipeline = client.call_tool(
         "get_merge_request_actual_head_pipeline",
-        {"project_id": project_id, "merge_request_iid": args.mr,
-         "show_job": True})
+        actual_head_pipeline_arguments(project_id, args.mr, show_job=True))
     if not isinstance(pipeline, dict) or not pipeline:
         # 平台明说没有流水线:空 runs,宿主继续等,不算这一路失败。
         print(json.dumps({"runs": []}, ensure_ascii=False))

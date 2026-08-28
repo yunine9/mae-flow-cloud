@@ -113,7 +113,7 @@ JSON/正则抽字段。所以每个能力都要回答"有没有一条命令行�
 ```bash
 npm run adapter -- --config adapter.json --selftest \
   --repo <仓地址> --source-branch <工作分支> --target-branch <目标分支> \
-  --sha <一次真实提交> --mr <MR iid>
+  --sha <一次真实提交> --mr <MR iid> --mr-url <完整 MR URL>
 ```
 
 它会打印每个端点解析出的命令(令牌打码)和只读端点的一次真实调用

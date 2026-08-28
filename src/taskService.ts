@@ -10119,11 +10119,13 @@ export class TaskService {
     try {
       const repo = encodeURIComponent(
         task.summary.repo_url ?? this.effectiveDefaultRepo() ?? "");
-      const mrId = task.summary.delivery?.mr_id;
+      // artifacts 编排器是 MR-first，第四参契约是完整 MR URL（SSE 的
+      // query_mr_info 直接消费它），不是 status 主路使用的 MR iid。
+      const mrUrl = task.summary.delivery?.mr_url;
       const response = await fetch(
         `${platformUrl}/pipeline/artifacts?sha=${sha}&repo=${repo}`
-        + (mrId !== undefined
-          ? `&mr=${encodeURIComponent(String(mrId))}` : ""),
+        + (mrUrl
+          ? `&mr=${encodeURIComponent(mrUrl)}` : ""),
         { headers: this.platformIdentity(task) });
       if (response.status === 404) return [];
       if (!response.ok) throw new Error(`HTTP ${response.status}`);

@@ -153,9 +153,10 @@
 ]}
 ```
 
-- 适配层负责把你们那套(SSE 网关 → CloudBuild → zip/分页)封装成
-  "一次调用给我一组文本文件";**宿主不碰你们的认证与分页**;
-- 单个文件超 200KB 请适配层自行截断并在末尾标注"(已截断)";
+- 适配层负责把你们那套(SSE 网关 → CloudBuild → zip/有界日志窗口)
+  封装成"一次调用给我一组文本文件";**宿主不碰你们的认证与取数窗口**;
+- 单个文件按 512KB 预算截断；整包按 6MiB 预算，结构化错误优先，
+  被省略文件写入 `pipeline_artifacts_omitted.json`，不能静默消失;
 - 拿不到就回 `{"files": []}`,宿主降级用摘要通道,不报错。
 
 > 待确认 **Q4**:那个 SSE 网关(`10.244.150.123:9000/sse`)在试点机器上
@@ -513,14 +514,14 @@ npm run adapter -- --config adapter.json --selftest
 **脚本进仓纪律(2026-08-28 勘误)**:取数编排脚本**必须进仓版本化**
 (deploy/adapter-tools/),不再当"/etc 下的配置产物"——上一版把它们
 排除在仓外,结果文档里设计了、现场谁也没写,`pipeline/artifacts`
-空转了一个月(对比报告差距③)。当前五件套:
+空转了一个月(对比报告差距③)。当前版本化执行件:
 - `pipeline_log.py`:**toolkit「PipelineLog 编排器」的忠实移植**
   (2026-08-28 按用户带回的 7 系统全景图照抄)。8 个 Strategy 原名
   原序(pipeline-info / pipeline-detail / mergeable-state /
   pipeline-quality / build-logs / codecheck / coverage /
   ai-review-tips),落盘文件名照抄(pipeline_info.json、
   codecheck_detail.json、ai_review_tips.json……),三条降级链原样:
-  构建日志 SSE→build 网关 zip→分页,CodeCheck codeccp MCP→REST
+  构建日志 SSE→build 网关 zip→有界日志窗口,CodeCheck codeccp MCP→REST
   reviewtips→defect/list(taskId 出处未钉死,拿不到如实 skip)。
   每策略 fail-open,`pipeline_log_summary.json` 逐策略记 ok/failed
   与原因 + `guessed_args` 清单(离线烟测实证:全端点死掉仍 rc=0
@@ -529,10 +530,12 @@ npm run adapter -- --config adapter.json --selftest
   512KB/item 装箱输出,adapter 契约不变;
 - `pipeline-status-mcp.py`:status 主路(MCP get_project_info →
   actual_head_pipeline(show_job,含 is_valid)→ quality 增益);
-- `mcp_http_client.py`:streamable-HTTP MCP 客户端 + **六网关注册表**
+- `mcp_http_client.py`:streamable-HTTP MCP 客户端 + **五网关注册表**
   (codehub/build/codeccp/codecov/dts,`MFC_MCP_<名>_URL` 可覆盖;
   `--gateway <名> --list-tools` 打印工具 inputSchema,**内网先跑它
   对拍参数形状**——summary 里 guessed_args 列的就是待钉死项);
+- `mcp_tool_contracts.py`:status 与 artifacts 共用的真实 tools/list 参数
+  契约，防止两条链各写一套后再次漂移;
 - `pipeline-status.sh` / `mcp_sse_client.py`:内网现用版收编
   (v4 直查作 status 降级候选;SSE 客户端原文收编,__main__ 自测段
   的个人路径/真实 MR 已泛化)。

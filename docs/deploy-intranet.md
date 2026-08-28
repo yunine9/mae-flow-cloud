@@ -189,7 +189,8 @@ codehubcli 命令行,代码零改动。配置形状(权限 600,文件头注释�
 |---|---|---|
 | `POST /mr` | `{repo, source_branch, target_branch, title}` | `{url}`(MR 链接,展示用)`, id?`(iid,门禁/讨论查询带回) |
 | `POST /pipeline/trigger` | `{repo, sha}` | `{status: "success"\|"failed"\|"running", log?, checks?}` |
-| `GET /pipeline/status?sha=<sha>&repo=<url>` | — | `{runs: [{status, log?, checks?}]}`(取最后一个终态 run) |
+| `GET /pipeline/status?sha=<sha>&repo=<url>&mr=<iid>` | — | `{runs: [{status, log?, checks?}]}`(取最后一个终态 run) |
+| `GET /pipeline/artifacts?sha=<sha>&repo=<url>&mr=<完整 MR URL>` | — | `{files: [{name, text}]}`(失败材料；与 status 的 `mr` 形状不同) |
 
 可选的终态 `checks` 固定形状如下。`status` 可用
 `success/failed/running/pending/canceled/skipped/not_run`；部署适配层负责

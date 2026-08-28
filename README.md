@@ -197,18 +197,26 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
   **⑤(同日后续)artifacts 通路整体重写为 toolkit「PipelineLog
   编排器」忠实移植**(用户带回 7 系统全景图后拍板"照抄"):
   pipeline_log.py 里 8 个 Strategy 原名原序、落盘文件名照抄、三条
-  降级链原样(构建日志 SSE→build 网关 zip→分页;CodeCheck codeccp
+  降级链(构建日志 SSE→build 网关 zip→有界日志窗口;CodeCheck codeccp
   MCP→reviewtips→defect/list),新接结构化构建错误
   (get_build_error_info)、构建阶段(get_record_fullstages)、
   覆盖率差分(CodeCovDiffCoverageTool)、**行云** AI Review(纯
   REST;此前误写"星云",用户已正名)——上一段"覆盖率与 AI Review
-  暂未接"就此翻案;mcp_http_client.py 加六网关注册表。边界如实记:
-  streamable 网关各工具的**入参形状多处按表猜**(summary 的
-  guessed_args 逐条列出),SSE 主路之外的全部新增路都没在内网跑过,
-  `--gateway <名> --list-tools` 对拍是硬前置;离线烟测只证明了
-  fail-open(全端点死掉 rc=0 出合法 JSON + 逐策略失败原因),不证明
-  取数正确。toolkit 的 FSM/Monitor/Scheduler 不移植(流程权威在
-  内核);review/conflict 两条策略路由未照抄,待拍板。
+  暂未接"就此翻案;mcp_http_client.py 加五网关注册表。首次内网对拍
+  已完成:五网关 tools/list 钉死 CodeHub request 嵌套、Build 必填
+  group_id 与 CodeCov jobId;真红灯 MR 的 artifacts 首验按正确口径是
+  8 个 Strategy 中 6 路有材料:mergeable-state 因旧顶层参数失败，
+  coverage 的 `No data found` 也只算缺证据，不能冒充成功；quality 由
+  CLI、build log 由 SSE 降级兜住。现已按真实 schema 共用
+  mcp_tool_contracts.py 修正 status/artifacts 两条链，并修正宿主把完整
+  MR URL 交给 artifacts（status 仍使用 MR iid）。构建材料全空不再记
+  ok；长日志另存错误上下文，结构化错误优先装箱，总包限制 6MiB 并用
+  omission 清单明说省略项。但**修正后的真网关复验仍是硬前置**;
+  build MCP zip/日志窗口未被本次 SSE 成功现场实际踩到,
+  pipeline-status MCP 主候选也需单独真跑。summary 的 guessed_args 保留
+  为后续新增工具的诚实账,本次已确认调用不再列入。离线烟测只证明
+  fail-open,不冒充取数验证。toolkit 的 FSM/Monitor/Scheduler 不移植
+  (流程权威在内核);review/conflict 两条策略路由未照抄,待拍板。
 
 - **2026-08-28 "困死 Agent"专项排查批(四路审计驱动)**:
   ①**勘误**:此前"prepush 门禁放行构建产物 rm -rf(白名单)"在生产里

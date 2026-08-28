@@ -10,9 +10,11 @@
 #   pipeline_log_summary.json   每个策略 ok/failed + 原因(先看这个)
 #   pipeline_info.json / pipeline_detail.json / pipeline_quality.json
 #   mergeable_state.json / build_log_{rid}.txt / build_errors_{rid}.json
+#   build_error_excerpt_{rid}.txt(长日志中可定位错误的上下文)
 #   build_stages_{rid}.json / codecheck_detail.json
 #   coverage_diff_{jobId}.json + coverage_summary.json
 #   ai_review_tips.json(行云 AI Review,唯一纯 REST 通路)
+#   pipeline_artifacts_omitted.json(总包预算触发时的省略清单)
 #
 # adapter.json 用法(第 4 参 mr_url 可选,给了就走 MR-first 主路):
 #   "pipeline_artifacts": {

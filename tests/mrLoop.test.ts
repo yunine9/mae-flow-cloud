@@ -144,6 +144,11 @@ EOF` } } },
     const workspace = service.get(id)!.workspace;
     await until(() => existsSync(join(workspace, "pipeline", "build_101.log")),
       "失败材料镜像到 pipeline/");
+    const artifactsCall = platform.seenIdentity.find(
+      (request) => request.path === "/pipeline/artifacts");
+    assert.equal(new URLSearchParams(artifactsCall?.query).get("mr"),
+      platform.mergeRequests[0]?.url,
+    "artifacts 链必须拿完整 MR URL，不能把仅供 status 的 MR iid 当 URL");
     // CI 修复推新提交 → 新流水线绿 → 等待合入
     await until(() => service.get(id)!.status === "await_merge", "绿灯");
     // 平台合入 → 任务完成

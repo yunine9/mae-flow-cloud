@@ -33,7 +33,7 @@ class McpHttpError(RuntimeError):
     pass
 
 
-# 六网关注册表(toolkit 全景图实证,2026-08-28 用户带回;SSE 网关走
+# 五网关注册表(toolkit 全景图实证,2026-08-28 用户带回;SSE 网关走
 # mcp_sse_client.py 的旧式 SSE 协议,不在此表)。逐网关可用
 # MFC_MCP_<NAME>_URL 环境变量覆盖。
 GATEWAYS = {

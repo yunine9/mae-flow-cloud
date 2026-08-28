@@ -14,7 +14,7 @@ Strategy 执行顺序(toolkit 拓扑序的线性化):
   mergeable-state   codehub MCP mergeable_state → mergeable_state.json
   pipeline-quality  codehub MCP get_pipeline_quality → pipeline_quality.json
                     (降级: codehub-cli pipeline quality,toolkit 同款降级)
-  build-logs        SSE 下载 → build MCP zip → build MCP 分页;
+  build-logs        SSE 下载 → build MCP zip → build MCP 有界日志窗口;
                     同时采 get_build_error_info / get_record_fullstages
   codecheck         codeccp MCP query_mr_info → codecheck_detail.json
                     (降级①: REST reviewtips 按 codeccpJobId×toolType;
@@ -24,14 +24,14 @@ Strategy 执行顺序(toolkit 拓扑序的线性化):
   ai-review-tips    行云 AI Review 纯 REST(唯一非 MCP 通路)
 
 红线:每个 Strategy fail-open——单路失败只进 errors 清单,绝不拦别路、
-绝无无限等待(所有网络调用带超时,分页带页数预算)。最后写
+绝无无限等待(所有网络调用带超时)。最后写
 pipeline_log_summary.json 如实记录每个策略 ok/failed/skipped 与原因,
 修复 Agent 和人都能一眼看出哪路证据缺了、为什么缺。
 
-入参形状对拍纪律:标了「猜」的工具入参(get_pipeline_quality、
-get_build_log_url、get_record_log、CodeCovDiffCoverageTool 等)按
-toolkit 汇总表推断,内网跑 `mcp_http_client.py --gateway <名>
---list-tools` 打出 inputSchema 后,对不上的回外网钉死——内网不改代码。
+入参形状已于 2026-08-28 用五网关 tools/list 对拍：CodeHub 的
+get_project_info/get_pipeline_quality/mergeable_state 使用真实嵌套结构，
+Build 四个 record 工具统一携带 x_auth_groups 对应的 group_id，CodeCov
+沿用已确认的 jobId。后续新增工具仍必须先对拍，不能恢复猜写。
 
 令牌纪律:token/w3token 只进请求头,永不落盘、永不进日志;错误文本
 一律 redact。
@@ -48,7 +48,20 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from mcp_tool_contracts import (
+    actual_head_pipeline_arguments,
+    build_record_arguments,
+    coverage_arguments,
+    mergeable_state_arguments,
+    pipeline_quality_arguments,
+    project_info_arguments,
+)
+
 MAX_ITEM_BYTES = 512 * 1024
+# PlatformAdapter 的 CLI stdout 上限是 8 MiB。这里把整个 JSON 包控制在
+# 6 MiB 内，给 JSON 列表标点、UTF-8 与 Node 解码留余量；不能只限制
+# 单文件，否则十几份构建日志会让“每份都合法、整包直接 502”。
+MAX_BUNDLE_BYTES = 6 * 1024 * 1024
 
 CODEHUB_API = os.environ.get(
     'MFC_CODEHUB_API', 'https://codehub-y.huawei.com/api/v4')
@@ -69,6 +82,15 @@ CODECCP_REST = os.environ.get(
 
 # CodeCheck 类 reviewtips 遍历的工具维度(toolkit 同款清单)。
 REVIEWTIP_TOOL_TYPES = ['codecheck', 'build2.0', 'codechecktest', 'CPP_UT']
+
+# 原始日志最终要过单文件/总包预算。结构化 get_build_error_info 是首选，
+# 但网关不可用时仍要把散落在长日志中段的编译/链接/测试失败片段单独
+# 摘出来，不能只靠“头 15% + 尾 85%”碰运气。
+BUILD_ERROR_PATTERN = re.compile(
+    r'(?:fatal error|\berror:|undefined reference|collect2:|'
+    r'ld(?:\.lld)?: error|make(?:\[\d+\])?: \*\*\*|\[ERROR\]|'
+    r'killed signal|tests? failed|failures?!!!)',
+    re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +167,7 @@ class Context:
         with self.opener.open(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode('utf-8'))
 
-    # -- streamable-HTTP MCP(六网关注册表在 mcp_http_client.py) --
+    # -- streamable-HTTP MCP(五网关注册表在 mcp_http_client.py) --
     def mcp_call(self, gateway: str, tool: str, arguments: dict,
                  timeout: float = 60):
         sys.path.insert(0, self.client_dir)
@@ -230,12 +252,14 @@ def resolve_mr(data: PipelineData, ctx: Context) -> None:
         except Exception as error:
             ctx.log(f'project_id 反查失败: {error}')
     if data.project_id is None and data.mr_url:
-        # 兜底走 codehub MCP get_project_info;入参形状「猜」,
-        # 待 --list-tools 对拍钉死。
-        data.guessed.append('codehub.get_project_info({"url"})')
+        # 兜底走 codehub MCP get_project_info。真实 schema 要 git_url，
+        # 从 MR 页面地址机械去掉 /merge_request(s)/<iid> 得到仓库 URL。
         try:
-            project = ctx.mcp_call('codehub', 'get_project_info',
-                                   {'url': data.mr_url})
+            git_url = re.sub(
+                r'/(?:-/)?merge_requests?/\d+(?:[/?#].*)?$', '', data.mr_url)
+            project = ctx.mcp_call(
+                'codehub', 'get_project_info',
+                project_info_arguments(git_url))
             if isinstance(project, dict):
                 data.project_id = (project.get('id')
                                    or project.get('project_id'))
@@ -276,8 +300,8 @@ def strategy_pipeline_detail(data: PipelineData, ctx: Context) -> None:
         try:
             detail = ctx.mcp_call(
                 'codehub', 'get_merge_request_actual_head_pipeline',
-                {'project_id': data.project_id,
-                 'merge_request_iid': data.mr_iid, 'show_job': True})
+                actual_head_pipeline_arguments(
+                    data.project_id, data.mr_iid, show_job=True))
         except Exception as error:
             ctx.log(f'actual_head_pipeline 失败,转 REST 降级: {error}')
     if detail:
@@ -320,9 +344,9 @@ def strategy_mergeable_state(data: PipelineData, ctx: Context) -> None:
     """
     if data.project_id is None or data.mr_iid is None:
         raise RuntimeError('缺 project_id/mr_iid,无法查门禁')
-    state = ctx.mcp_call('codehub', 'get_merge_request_mergeable_state',
-                         {'project_id': data.project_id,
-                          'merge_request_iid': data.mr_iid})
+    state = ctx.mcp_call(
+        'codehub', 'get_merge_request_mergeable_state',
+        mergeable_state_arguments(data.project_id, data.mr_iid))
     if not state:
         raise RuntimeError('mergeable_state 返回空')
     ctx.write_json('mergeable_state.json', state)
@@ -336,13 +360,11 @@ def strategy_pipeline_quality(data: PipelineData, ctx: Context) -> None:
     """
     quality = None
     if data.pipeline_id is not None and data.project_id is not None:
-        # 入参形状「猜」:表里只说按 pipeline 查,字段名待 --list-tools。
-        data.guessed.append(
-            'codehub.get_pipeline_quality({"project_id","pipeline_id"})')
         try:
-            quality = ctx.mcp_call('codehub', 'get_pipeline_quality',
-                                   {'project_id': data.project_id,
-                                    'pipeline_id': data.pipeline_id})
+            quality = ctx.mcp_call(
+                'codehub', 'get_pipeline_quality',
+                pipeline_quality_arguments(
+                    data.project_id, data.pipeline_id))
         except Exception as error:
             ctx.log(f'get_pipeline_quality 失败,转 CLI 降级: {error}')
     if not quality and data.pipeline_id is not None:
@@ -370,18 +392,52 @@ def strategy_pipeline_quality(data: PipelineData, ctx: Context) -> None:
                     data.codeccp_job_id = match.group(1)
 
 
+def write_build_log(ctx: Context, rid: str, text: str, evidence: set) -> None:
+    """写完整日志，并把错误附近上下文另存为高优先级修复证据。"""
+    name = f'build_log_{rid}.txt'
+    ctx.write_text(name, text)
+    evidence.add(name)
+    lines = text.splitlines()
+    hit_indexes = [index for index, line in enumerate(lines)
+                   if BUILD_ERROR_PATTERN.search(line)][:200]
+    if not hit_indexes:
+        return
+    selected = set()
+    for index in hit_indexes:
+        selected.update(range(max(0, index - 3), min(len(lines), index + 6)))
+    excerpt_lines = []
+    previous = None
+    for index in sorted(selected):
+        if previous is not None and index > previous + 1:
+            excerpt_lines.append('... 中间无关日志省略 ...')
+        excerpt_lines.append(f'{index + 1}: {lines[index]}')
+        previous = index
+    excerpt = '\n'.join(excerpt_lines)
+    excerpt = _truncate_utf8_head_tail(
+        excerpt, 256 * 1024, head_ratio=0.5,
+        marker_template=(
+            '\n\n===== 错误片段过多，中间省略；原始 UTF-8 大小 '
+            '{size} bytes =====\n\n'))
+    ctx.write_text(f'build_error_excerpt_{rid}.txt', excerpt)
+
+
 def strategy_build_logs(data: PipelineData, ctx: Context) -> None:
     """构建日志三级降级 + 结构化错误 + 构建阶段(toolkit 原样)。
 
     ① SSE download_build_task_log(现网跑通的主路)
     ② build MCP get_build_log_url → 下载 zip → 解压
-    ③ build MCP get_record_log 分页(预算 50 页)
+    ③ build MCP get_record_log 默认有界窗口
     随每条 record 另采 get_build_error_info(结构化编译错误,Agent 最
     好用的一份)与 get_record_fullstages(哪个阶段挂的)。
     """
     if not data.record_ids:
         raise RuntimeError('pipeline_info 未给出 build2.0 record_ids')
+    if not data.x_auth_groups:
+        raise RuntimeError(
+            'pipeline_info 未给出 build2.0 x_auth_groups(group_id)')
+    group_id = data.x_auth_groups
     pending = list(data.record_ids)
+    repair_evidence = set()
     # ① SSE 批量下载
     if data.x_auth_groups:
         try:
@@ -389,18 +445,20 @@ def strategy_build_logs(data: PipelineData, ctx: Context) -> None:
                 data.record_ids, data.x_auth_groups, ctx.sse_token())
             for rid, content in logs:
                 if content:
-                    ctx.write_text(f'build_log_{rid}.txt', content)
+                    write_build_log(ctx, rid, content, repair_evidence)
                     if rid in pending:
                         pending.remove(rid)
         except Exception as error:
             ctx.log(f'SSE 构建日志失败,全部转 build 网关: {error}')
-    # ②③ build 网关降级(逐条,入参形状「猜」record_id/page)
+    # ②③ build 网关降级。tools/list 已确认 group_id 必填；旧实现还传了
+    # schema 不认识的 page。offset 返回契约尚无真样例，本轮先使用工具
+    # 自带的有界默认窗口，不能为了“分页”继续猜一套游标语义。
     for rid in pending:
-        data.guessed.append('build.get_build_log_url({"record_id"})')
         text = ''
         try:
-            answer = ctx.mcp_call('build', 'get_build_log_url',
-                                  {'record_id': rid})
+            answer = ctx.mcp_call(
+                'build', 'get_build_log_url',
+                build_record_arguments(rid, group_id))
             url_val = answer.get('url') if isinstance(answer, dict) else answer
             if isinstance(url_val, str) and url_val.startswith('http'):
                 import io
@@ -418,39 +476,40 @@ def strategy_build_logs(data: PipelineData, ctx: Context) -> None:
             ctx.log(f'build zip 降级 {rid} 失败: {error}')
         if not text.strip():
             try:
-                pages, page = [], 1
-                while page <= 50:   # 页数预算,绝无无限翻页
-                    chunk = ctx.mcp_call('build', 'get_record_log',
-                                         {'record_id': rid, 'page': page})
-                    piece = chunk.get('log') if isinstance(chunk, dict) \
-                        else chunk
-                    if not isinstance(piece, str) or not piece:
-                        break
-                    pages.append(piece)
-                    if isinstance(chunk, dict) and not chunk.get('has_more'):
-                        break
-                    page += 1
-                text = ''.join(pages)
+                chunk = ctx.mcp_call(
+                    'build', 'get_record_log',
+                    build_record_arguments(rid, group_id))
+                text = chunk.get('log') if isinstance(chunk, dict) else chunk
+                if not isinstance(text, str):
+                    text = ''
             except Exception as error:
-                ctx.log(f'build 分页降级 {rid} 失败: {error}')
+                ctx.log(f'build 日志窗口降级 {rid} 失败: {error}')
         if text.strip():
-            ctx.write_text(f'build_log_{rid}.txt', text)
+            write_build_log(ctx, rid, text, repair_evidence)
     # 结构化错误 + 阶段(增益,拿不到不算本策略失败)
     for rid in data.record_ids[:5]:
         try:
-            errors = ctx.mcp_call('build', 'get_build_error_info',
-                                  {'record_id': rid})
+            errors = ctx.mcp_call(
+                'build', 'get_build_error_info',
+                build_record_arguments(rid, group_id))
             if errors:
-                ctx.write_json(f'build_errors_{rid}.json', errors)
+                name = f'build_errors_{rid}.json'
+                ctx.write_json(name, errors)
+                repair_evidence.add(name)
         except Exception as error:
             ctx.log(f'get_build_error_info {rid} 失败: {error}')
         try:
-            stages = ctx.mcp_call('build', 'get_record_fullstages',
-                                  {'record_id': rid})
+            stages = ctx.mcp_call(
+                'build', 'get_record_fullstages',
+                build_record_arguments(rid, group_id))
             if stages:
                 ctx.write_json(f'build_stages_{rid}.json', stages)
         except Exception as error:
             ctx.log(f'get_record_fullstages {rid} 失败: {error}')
+    if not repair_evidence:
+        raise RuntimeError(
+            'SSE、Build 日志 URL/窗口及结构化编译错误均未拿到；'
+            '只有阶段信息不足以支撑 Agent 修复')
 
 
 def strategy_codecheck(data: PipelineData, ctx: Context) -> None:
@@ -512,20 +571,29 @@ def strategy_coverage(data: PipelineData, ctx: Context) -> None:
         raise RuntimeError('pipeline_info 未给出 utJobIds')
     summary = {}
     for ut_job in data.ut_job_ids[:5]:
-        data.guessed.append('codecov.CodeCovDiffCoverageTool({"jobId"})')
         try:
-            coverage = ctx.mcp_call('codecov', 'CodeCovDiffCoverageTool',
-                                    {'jobId': ut_job})
-            if coverage:
+            coverage = ctx.mcp_call(
+                'codecov', 'CodeCovDiffCoverageTool',
+                coverage_arguments(ut_job))
+            no_data = isinstance(coverage, str) \
+                and coverage.strip().lower() in {
+                    'no data', 'no data found', 'not found',
+                }
+            if coverage and not no_data:
                 ctx.write_json(f'coverage_diff_{ut_job}.json', coverage)
                 summary[str(ut_job)] = 'ok'
             else:
-                summary[str(ut_job)] = 'empty'
+                # 真网关会用字符串 "No data found" 正常返回。它只证明
+                # 调用成功，不构成覆盖率证据，不能因为 truthy 就记 ok。
+                if coverage:
+                    ctx.write_json(f'coverage_diff_{ut_job}.json', coverage)
+                summary[str(ut_job)] = (
+                    f'empty: {coverage}' if coverage else 'empty')
         except Exception as error:
             summary[str(ut_job)] = f'failed: {ctx.redact(error)[:120]}'
+    ctx.write_json('coverage_summary.json', summary)
     if not any(v == 'ok' for v in summary.values()):
         raise RuntimeError(f'覆盖率各 job 均未拿到: {summary}')
-    ctx.write_json('coverage_summary.json', summary)
 
 
 def strategy_ai_review_tips(data: PipelineData, ctx: Context) -> None:
@@ -712,23 +780,31 @@ def fit_json_item(name, obj, max_item_bytes=MAX_ITEM_BYTES):
     return fit_text_item(name, best_wrapper, max_item_bytes=max_item_bytes)
 
 
-def collect_items(project_path: str, sha: str, token: str,
-                  ref: str = '', mr_url: str = '',
-                  client_dir: str = '') -> list:
-    """编排采集 + 装箱:适配器 pipeline_artifacts 命令的完整实现。
-
-    「先采后修」的落地:编排器把证据落盘到临时 pipeline/ 目录,这里
-    再逐文件装箱成 [{name,text}] 交给宿主写进任务工作区——修复 Agent
-    只读这些本地文件,不再调任何外部 API。
-    """
-    import tempfile
-    out_dir = tempfile.mkdtemp(prefix='pipeline-log-')
-    run(project_path, sha, token, out_dir,
-        ref=ref, mr_url=mr_url, client_dir=client_dir)
+def collect_output_items(out_dir: str) -> list:
+    """把已采集目录按修复价值排序并装进受总预算约束的 JSON 包。"""
     items = []
-    # summary 放最前:Agent 先看哪路证据有、哪路缺、为什么缺。
-    names = sorted(os.listdir(out_dir),
-                   key=lambda n: (n != 'pipeline_log_summary.json', n))
+    omitted = []
+    used_bytes = 2  # JSON 列表的 []
+    # 先装“能直接定位修复”的结构化证据，再装原始大日志。这样即使
+    # 构建 record 很多触发总包预算，CodeCheck 文件/行号和结构化编译
+    # 错误也不会被按字母序排在一堆 build_log 后面挤掉。
+    def priority(name):
+        if name == 'pipeline_log_summary.json':
+            return 0
+        if (name == 'codecheck_detail.json'
+                or name.startswith(('build_errors_', 'build_error_excerpt_'))):
+            return 1
+        if name in {
+            'pipeline_quality.json', 'pipeline_detail.json',
+            'pipeline_info.json', 'mergeable_state.json',
+            'coverage_summary.json', 'ai_review_tips.json',
+        } or name.startswith(('coverage_diff_', 'build_stages_')):
+            return 2
+        if name.startswith('build_log_'):
+            return 3
+        return 2
+
+    names = sorted(os.listdir(out_dir), key=lambda n: (priority(n), n))
     for name in names:
         path = os.path.join(out_dir, name)
         try:
@@ -736,11 +812,48 @@ def collect_items(project_path: str, sha: str, token: str,
                 content = fh.read()
         except OSError:
             continue
+        item = None
         if name.endswith('.json'):
             try:
-                items.append(fit_json_item(name, json.loads(content)))
-                continue
+                item = fit_json_item(name, json.loads(content))
             except json.JSONDecodeError:
                 pass
-        items.append(fit_text_item(name, content))
+        if item is None:
+            item = fit_text_item(name, content)
+        item_bytes = _serialized_item_size(item) + (1 if items else 0)
+        if used_bytes + item_bytes > MAX_BUNDLE_BYTES - 64 * 1024:
+            omitted.append({
+                'name': name,
+                'reason': 'artifact 总包超过 6 MiB，保留结构化证据优先',
+                'original_utf8_bytes': _utf8_len(content),
+            })
+            continue
+        items.append(item)
+        used_bytes += item_bytes
+    if omitted:
+        manifest = fit_json_item('pipeline_artifacts_omitted.json', {
+            '_note': '以下文件未进入 Agent 本地镜像；不是平台没有生成。',
+            'files': omitted,
+        }, max_item_bytes=64 * 1024)
+        manifest_bytes = _serialized_item_size(manifest) + 1
+        if used_bytes + manifest_bytes > MAX_BUNDLE_BYTES:
+            raise RuntimeError('artifact 省略清单意外突破总包预算')
+        items.append(manifest)
     return items
+
+
+def collect_items(project_path: str, sha: str, token: str,
+                  ref: str = '', mr_url: str = '',
+                  client_dir: str = '') -> list:
+    """编排采集 + 装箱:适配器 pipeline_artifacts 命令的完整实现。
+
+    「先采后修」的落地:编排器把证据落盘到临时 pipeline/ 目录,这里
+    再逐文件装箱成 [{name,text}] 交给宿主写进任务工作区——修复 Agent
+    只读这些本地文件,不再调任何外部 API。临时目录随本次采集销毁，
+    不在 /tmp 长期堆积。
+    """
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix='pipeline-log-') as out_dir:
+        run(project_path, sha, token, out_dir,
+            ref=ref, mr_url=mr_url, client_dir=client_dir)
+        return collect_output_items(out_dir)

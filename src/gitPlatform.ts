@@ -121,6 +121,7 @@ export class FakeGitPlatform {
    * MR 发起人落到任务归属人,假件只记录不消费。 */
   readonly seenIdentity: Array<{
     path: string;
+    query: string;
     user?: string;
     token?: string;
   }> = [];
@@ -133,6 +134,7 @@ export class FakeGitPlatform {
         const url = new URL(request.url ?? "/", "http://localhost");
         this.seenIdentity.push({
           path: url.pathname,
+          query: url.search,
           user: request.headers["x-mfc-git-user"] as string | undefined,
           token: request.headers["x-mfc-git-token"] as string | undefined,
         });

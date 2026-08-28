@@ -9,7 +9,10 @@
  * 契约(与 docs/deploy-intranet.md 一字对应):
  *   POST /mr               {repo, source_branch, target_branch, title} → {url}
  *   POST /pipeline/trigger {repo, sha} → {status, log?, checks?}
- *   GET  /pipeline/status?sha=&repo=   → {runs: [{status, log?, checks?}]}
+ *   GET  /pipeline/status?sha=&repo=&mr=<iid>
+ *        → {runs: [{status, log?, checks?}]}
+ *   GET  /pipeline/artifacts?sha=&repo=&mr=<完整 MR URL>
+ *        → {files: [{name, text}]}
  *
  * 纪律(与本仓宪法一致):
  * - 诚实失败:CLI 缺失/非零退出/输出解析不出/状态映射不到,一律 502
@@ -58,6 +61,8 @@
  * }
  *
  * 占位符:{repo} {source_branch} {target_branch} {title} {sha} {mr}
+ *        注意:{mr} 在 status/gates/discussions 是 MR iid，在 artifacts
+ *        是完整 MR URL；两类命令是不同端点，不能共用对其形状的猜测。
  *        {repo_path}(从 {repo} 自动派生的 URL 编码项目路径,
  *          CodeHub REST 的 /projects/{路径}/ 直接用,不用手抄项目 id)
  *        {id} {body} {note_id}(检视回复链)
@@ -809,6 +814,9 @@ export class PlatformAdapter {
         return { status: 404,
                  payload: { error: "未配置 pipeline_artifacts" } };
       }
+      // 这里的 mr 契约是完整 MR URL。宿主 mirrorPipelineArtifacts 与
+      // pipeline-artifacts.sh 的第 4 参都按 MR-first 语义传递；不要改成
+      // status 主路使用的 iid，否则 query_mr_info 无法定位 MR。
       const values = this.values({
         sha: query.get("sha") ?? "",
         repo: query.get("repo") ?? "",
@@ -891,7 +899,10 @@ export class PlatformAdapter {
         + "无法机械拒收(2026-08-28 对比报告头号根因)");
     const probes: Array<[string, string, URLSearchParams]> = [
       ["GET /pipeline/status", "/pipeline/status",
-       new URLSearchParams({ sha: sample.sha ?? "", repo: sample.repo ?? "" })],
+       new URLSearchParams({
+         sha: sample.sha ?? "", repo: sample.repo ?? "",
+         mr: sample.mr ?? "",
+       })],
       ["GET /mr/gates", "/mr/gates", new URLSearchParams({
         repo: sample.repo ?? "",
         source_branch: sample.source_branch ?? "",
@@ -900,7 +911,10 @@ export class PlatformAdapter {
       ["GET /mr/discussions", "/mr/discussions", new URLSearchParams({
         repo: sample.repo ?? "", mr: sample.mr ?? "" })],
       ["GET /pipeline/artifacts", "/pipeline/artifacts",
-       new URLSearchParams({ sha: sample.sha ?? "", repo: sample.repo ?? "" })],
+       new URLSearchParams({
+         sha: sample.sha ?? "", repo: sample.repo ?? "",
+         mr: sample.mr_url ?? "",
+       })],
     ];
     for (const [label, path, query] of probes) {
       try {
@@ -996,6 +1010,7 @@ if (process.argv[1]?.endsWith("platformAdapter.ts")) {
         target_branch: argValue("--target-branch"),
         sha: argValue("--sha"),
         mr: argValue("--mr"),
+        mr_url: argValue("--mr-url"),
       }).then((report) => {
         console.log(report);
         process.exit(0);

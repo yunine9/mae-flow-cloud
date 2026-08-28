@@ -62,7 +62,8 @@
 - 报告拿回来后原样发给外网的 Claude,契约按报告迭代;
 - 如果内网模型填完了 adapter.json,让它顺手跑
   `npm run adapter -- --config adapter.json --selftest --repo <仓> \
-  --source-branch <分支> --target-branch <目标> --sha <SHA> --mr <iid>`
+  --source-branch <分支> --target-branch <目标> --sha <SHA> --mr <iid> \
+  --mr-url <完整 MR URL>`
   把输出也附进报告;
 - 内网模型能力弱,盯两件事就好:①它有没有偷懒不真调(报告里没有
   原始输出的项打回重做);②它有没有手痒改代码(git status 一眼看出)。
