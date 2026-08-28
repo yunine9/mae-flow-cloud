@@ -417,6 +417,8 @@ export function WaitingCard({
   const [customOpen, setCustomOpen] = useState<Record<string, boolean>>({});
   const [notes, setNotes] = useState("");
   const [notesOpen, setNotesOpen] = useState(false);
+  const [contextOpen, setContextOpen] = useState(false);
+  useEffect(() => setContextOpen(false), [task.waiting?.waiting_id]);
   const [conflict, setConflict] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const questions = task.waiting?.question?.questions ?? [];
@@ -596,12 +598,29 @@ export function WaitingCard({
         <span className="decision-count">{questions.length} 个问题</span>
       </header>
 
-      {task.waiting?.context && (
-        <div className="waiting-context">
-          <div className="context-label">决策背景</div>
-          <Markdown text={rewritePanelPath(task.waiting.context, task.id)} />
-        </div>
-      )}
+      {task.waiting?.context && (() => {
+        /* 长背景(推送确认的文件清单动辄上百行)默认折叠只露开头——
+           重点(要我做什么、较上次变了什么)在前几行,整版清单是
+           留档不是必读;需要时一键展开。 */
+        const contextText = rewritePanelPath(task.waiting.context, task.id);
+        const contextLines = contextText.split("\n").length;
+        const collapsible = contextLines > 16;
+        return (
+          <div className="waiting-context">
+            <div className="context-label">决策背景</div>
+            <div className={`waiting-context-body${
+              collapsible && !contextOpen ? " clamped" : ""}`}>
+              <Markdown text={contextText} />
+            </div>
+            {collapsible && (
+              <button type="button" className="context-toggle"
+                onClick={() => setContextOpen((value) => !value)}>
+                {contextOpen ? "收起背景" : `展开全部背景（共 ${contextLines} 行）`}
+              </button>
+            )}
+          </div>
+        );
+      })()}
 
       <div className="question-list">
         {questions.map((item, index) => {

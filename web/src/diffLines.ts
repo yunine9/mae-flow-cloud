@@ -41,6 +41,30 @@ export interface DiffCell {
   number: number;
   text: string;
   kind: DiffCellKind;
+  /** 行内真正变化的字符区间 [start, end)。只在删除/新增行按位置配对
+   * 且两侧行文本存在公共前后缀时给出——渲染层据此加 <mark>,让人一眼
+   * 看到"这行到底改了哪几个字"而不是逐字肉眼对比。锚定安全:mark 不
+   * 改变 textContent,批注取 [data-code] 原文不受影响。 */
+  emphasis?: [number, number];
+}
+
+/** 给配对的删除/新增行标注行内差异区间(公共前缀/后缀之外的中段)。
+ * 整行都不同(无公共部分)时不标——全行高亮等于没高亮。 */
+function markIntralineChange(removed: DiffCell, added: DiffCell): void {
+  const before = removed.text;
+  const after = added.text;
+  if (!before || !after || before === after) return;
+  const shortest = Math.min(before.length, after.length);
+  let prefix = 0;
+  while (prefix < shortest && before[prefix] === after[prefix]) prefix += 1;
+  let suffix = 0;
+  while (
+    suffix < shortest - prefix
+    && before[before.length - 1 - suffix] === after[after.length - 1 - suffix]
+  ) suffix += 1;
+  if (prefix === 0 && suffix === 0) return;
+  removed.emphasis = [prefix, before.length - suffix];
+  added.emphasis = [prefix, after.length - suffix];
 }
 
 export type DiffReviewRow =
@@ -64,6 +88,9 @@ export function diffReviewRows(lines: string[]): DiffReviewRow[] {
       const row: Extract<DiffReviewRow, { type: "line" }> = { type: "line" };
       if (removed[index]) row.old = removed[index];
       if (added[index]) row.next = added[index];
+      if (removed[index] && added[index]) {
+        markIntralineChange(removed[index], added[index]);
+      }
       rows.push(row);
     }
     removed = [];

@@ -7768,3 +7768,78 @@ body, .sidebar, .identity-bar, .launch-copy, .user-create-copy,
   .wish-hero-orbit, .wish-loading-dot { animation: none; }
   .wish-card, .wish-submit, .wish-card-images img { transition: none; }
 }
+
+/* ============================================================
+   检视面易用性轮(2026-08-29):词级 diff 高亮、文件树语义分组、
+   决策背景折叠。机制侧同轮把确认卡从"绑 HEAD"改为"绑文件集合"。
+   ============================================================ */
+
+/* 词级高亮:配对改动行里真正变化的字符段。颜色只加深底色不换字色,
+   保证暗底上的可读性;textContent 不变,批注锚定不受影响。 */
+.diff-cell code mark {
+  padding: 0 1px;
+  color: inherit;
+  background: transparent;
+  border-radius: 3px;
+}
+.diff-cell.added code mark { background: rgba(34, 197, 94, .32); }
+.diff-cell.removed code mark { background: rgba(239, 68, 68, .34); }
+
+/* 文件树语义分组:检视的重心是"将推送"的提交增量。 */
+.change-tree-group + .change-tree-group { margin-top: 10px; }
+.change-tree-group-head {
+  margin: 2px 0 4px;
+  padding: 5px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-radius: 7px;
+  font-size: var(--font-size-assist);
+}
+.change-tree-group-head strong { font-weight: 700; letter-spacing: .02em; }
+.change-tree-group-head i {
+  padding: 1px 8px;
+  font-style: normal;
+  font-weight: 700;
+  border-radius: 999px;
+}
+.change-tree-group-head.push {
+  color: var(--success);
+  background: var(--success-soft);
+}
+.change-tree-group-head.push i {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 14%, transparent);
+}
+.change-tree-group-head.local {
+  color: var(--muted);
+  background: var(--surface-muted);
+}
+.change-tree-group-head.local i {
+  color: var(--muted);
+  background: color-mix(in srgb, var(--muted) 14%, transparent);
+}
+
+/* 决策背景折叠:长清单默认只露开头,重点(要我做什么、较上次变了
+   什么)在前几行;展开后内滚,不再把整卡撑成一屏纪律条文。 */
+.waiting-context { max-height: none; overflow: visible; }
+.waiting-context-body.clamped {
+  max-height: 190px;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(180deg, #000 72%, transparent);
+  mask-image: linear-gradient(180deg, #000 72%, transparent);
+}
+.waiting-context-body:not(.clamped) { max-height: 440px; overflow-y: auto; }
+.context-toggle {
+  margin-top: 6px;
+  padding: 4px 10px;
+  color: var(--accent);
+  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line));
+  border-radius: 7px;
+  font-size: var(--font-size-assist);
+  font-weight: 600;
+  cursor: pointer;
+}
+.context-toggle:hover { background: var(--accent-soft); }
