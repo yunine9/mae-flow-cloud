@@ -6125,10 +6125,21 @@ export class TaskService {
       this.persist(task);
       if (prepushRunning) {
         // 编译可能持续数十分钟，暂停不能等 Maven/C++ 自己收口。换代使
-        // 在途结果失去回写权，再销毁整个 attempt 容器及进程树。
+        // 在途结果失去回写权，再销毁整个 attempt 容器及进程树。清理
+        // 最坏会经历多轮 Docker 超时；控制接口先返回 pausing，页面靠
+        // 状态轮询看到最终结果，不能让一次安全清理表现成按钮卡死。
         task.controlEpoch += 1;
         this.removePrePushBuildWaiter(task);
-        await this.finishPause(task, "running");
+        void this.finishPause(task, "running").catch((error) => {
+          this.options.log?.(
+            `任务 ${task.summary.id} 后台暂停收口异常: ${String(error)}`);
+          // cancel/其他控制动作已经换走状态时，旧暂停没有最终解释权。
+          if (task.summary.status !== "pausing") return;
+          task.summary.status = "failed";
+          task.summary.detail = `暂停失败，后台清理未能完成：${String(error)}`;
+          this.persist(task);
+          this.notifyOutcome(task);
+        });
       }
       return { ...task.summary };
     }

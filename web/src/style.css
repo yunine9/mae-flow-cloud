@@ -4464,6 +4464,40 @@ pre {
   font-weight: 600;
 }
 .ws-progress.is-fallback .task-phase-track { opacity: .88; }
+.task-control-feedback {
+  padding: 8px 22px; display: grid; gap: 7px; flex: none;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.task-control-state, .task-control-error {
+  min-height: 42px; padding: 8px 12px; display: grid;
+  grid-template-columns: 12px minmax(0, 1fr); align-items: center; gap: 10px;
+  border: 1px solid var(--line); border-radius: 9px;
+}
+.task-control-state > i {
+  width: 9px; height: 9px; border-radius: 50%; background: var(--muted);
+}
+.task-control-state.pending {
+  border-color: color-mix(in srgb, var(--attention) 32%, var(--line));
+  background: var(--attention-soft);
+}
+.task-control-state.pending > i {
+  background: var(--attention); animation: statusBlink 1.35s ease-in-out infinite;
+}
+.task-control-state.done {
+  border-color: color-mix(in srgb, var(--success) 28%, var(--line));
+  background: var(--success-soft);
+}
+.task-control-state.done > i { background: var(--success); }
+.task-control-state > span, .task-control-error > span {
+  min-width: 0; display: flex; align-items: baseline; gap: 9px;
+}
+.task-control-state strong, .task-control-error strong {
+  color: var(--text-strong); font-size: 13px; white-space: nowrap;
+}
+.task-control-state small, .task-control-error span {
+  color: var(--muted); font-size: var(--font-size-assist); line-height: 1.45;
+}
 .ws-workspace-nav {
   min-height: 58px;
   padding: 7px 22px;
@@ -6707,9 +6741,11 @@ pre {
 .ws-cancel-confirm button { height: 28px; padding: 0 8px; }
 .ws-cancel-confirm button:first-of-type { color: white; border-color: var(--danger); background: var(--danger); }
 .task-control-error {
-  padding: 10px 12px; color: var(--danger); border-radius: 8px;
-  background: var(--danger-weak); font-size: var(--font-size-assist);
+  grid-template-columns: auto minmax(0, 1fr); color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 28%, var(--line));
+  background: var(--danger-weak);
 }
+.task-control-error strong { color: var(--danger); }
 .task-canceled-note {
   padding: 14px 15px; display: grid; gap: 4px; color: var(--muted);
   border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft);

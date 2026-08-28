@@ -106,3 +106,25 @@ test("任务控制:执行中安全暂停后可续跑，取消后旧回调不能�
     await model.stop();
   }
 });
+
+test("推送前构建暂停先返回处理中，慢容器清理不阻塞控制请求", async () => {
+  const service = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-control-prepush-pause-")),
+    provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0,
+  });
+  const created = service.create("慢构建暂停反馈");
+  const task = (service as any).tasks.get(created.id);
+  task.summary.status = "running";
+  task.summary.delivery = { prepush: { active_attempt: { id: "attempt-1" } } };
+  let releaseStop!: () => void;
+  const stopGate = new Promise<void>((resolve) => { releaseStop = resolve; });
+  task.container = { stop: async () => stopGate };
+
+  const requested = await service.pause(created.id, "alice");
+  assert.equal(requested.status, "pausing",
+    "容器清理仍在等待时，控制请求应立即确认正在暂停");
+  assert.equal(service.get(created.id)?.status, "pausing");
+
+  releaseStop();
+  await until(() => service.get(created.id)?.status === "paused", "后台安全暂停收口");
+});

@@ -380,6 +380,27 @@ export function TaskWorkspace({
   ].includes(task.status);
   const health = taskHealthFacts(task, viewerUsername);
   const visibleProgress = workspaceProgress(task);
+  const pauseFeedback = task.status === "pausing"
+    ? {
+        state: "pending",
+        title: "正在安全暂停",
+        detail: task.detail
+          || "系统正在结束当前操作并保存现场；完成后会自动变为“已暂停”，无需重复点击。",
+      }
+    : task.status === "paused"
+      ? {
+          state: "done",
+          title: "已安全暂停",
+          detail: task.detail
+            || "现场和进度已经保留，需要继续时点击右上角“恢复”。",
+        }
+      : controlBusy === "pause"
+        ? {
+            state: "pending",
+            title: "暂停请求已提交",
+            detail: "正在登记暂停请求，随后会结束当前操作并保存现场。",
+          }
+        : undefined;
 
   async function runControl(action: "pause" | "resume" | "cancel") {
     if (controlBusy) return;
@@ -392,6 +413,10 @@ export function TaskWorkspace({
         setCancelArmed(false);
         await onChanged();
       }
+    } catch (reason) {
+      setControlError(reason instanceof Error
+        ? reason.message : `${action === "pause" ? "暂停" : action === "resume"
+          ? "恢复" : "取消"}请求失败，请重试`);
     } finally {
       setControlBusy("");
     }
@@ -472,6 +497,22 @@ export function TaskWorkspace({
             {relativeTime(health.last_progress_at) || "暂无记录"}</span>
         </>} />
       </div>
+      {(pauseFeedback || controlError) && (
+        <div className="task-control-feedback" aria-live="polite">
+          {pauseFeedback && (
+            <div className={`task-control-state ${pauseFeedback.state}`}
+              role="status">
+              <i aria-hidden />
+              <span><strong>{pauseFeedback.title}</strong>
+                <small>{pauseFeedback.detail}</small></span>
+            </div>
+          )}
+          {controlError && <div className="task-control-error" role="alert">
+            <strong>操作没有完成</strong>
+            <span>{controlError}</span>
+          </div>}
+        </div>
+      )}
       <nav className="ws-workspace-nav" aria-label="任务工作台视图">
         {([
           ["materials", "交付材料", "文档、依赖与代码变更"],
@@ -757,7 +798,6 @@ export function TaskWorkspace({
               )}
             </div>
           )}
-          {controlError && <div className="task-control-error">{controlError}</div>}
           {task.status === "canceled" && (
             <div className="task-canceled-note">
               <strong>任务已取消</strong>

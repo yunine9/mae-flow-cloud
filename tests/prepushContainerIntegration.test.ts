@@ -519,8 +519,11 @@ test("暂停 native prepush 后销毁旧容器，恢复会新建 attempt 并重�
     await until(() => containers.records.some((record) =>
       record.name.endsWith("-prepush") && record.commands.includes(hold)),
     "首个 prepush attempt 开始构建");
-    const paused = await service.pause(id, "tester");
-    assert.equal(paused.status, "paused");
+    const pauseRequested = await service.pause(id, "tester");
+    assert.ok(["pausing", "paused"].includes(pauseRequested.status),
+      "控制请求先确认已进入暂停流程，不等待容器清理完成");
+    await until(() => service.get(id)?.status === "paused",
+      "推送前构建后台安全暂停");
     const first = containers.records.find((record) =>
       record.name.endsWith("-prepush"));
     assert.ok(first?.stopped, "暂停必须终止在途构建容器");
