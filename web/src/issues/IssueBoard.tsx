@@ -559,6 +559,8 @@ function DtsRegister({
   onNavigateProfile?: () => void;
 }) {
   const [tickets, setTickets] = useState<DtsTicketBrief[] | undefined>();
+  // 外部开发模式(--dts-mock):单据为模拟数据,页签挂 DEV 徽标防误认。
+  const [dtsMock, setDtsMock] = useState(false);
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState("");
   const [repoUrl, setRepoUrl] = useState("");
@@ -672,7 +674,9 @@ function DtsRegister({
     setSelectedVersions([]);
     setExpandedTicket(null);
     try {
-      setTickets(await listDtsTickets());
+      const result = await listDtsTickets();
+      setTickets(result.tickets);
+      setDtsMock(result.mock);
     } catch (reason) {
       setTickets(undefined);
       setNote(String(reason instanceof Error ? reason.message : reason));
@@ -732,6 +736,10 @@ function DtsRegister({
   }
 
   return <div className="issue-dts">
+    {dtsMock && <p className="issue-dts-mock-banner" role="note">
+      DEV·模拟 DTS:外部开发模式,单据为本地模拟数据(--dts-mock),
+      不是真实问题单;流程与真实模式完全一致。
+    </p>}
     <div className="issue-dts-toolbar">
       <button type="button" onClick={load} disabled={loading}>
         {loading ? "拉取中…" : `拉取 ${viewer.username} 的问题单`}

@@ -210,7 +210,7 @@ export async function handleIssueRoutes(
         return done(403, { error: "管理员不处理问题单" });
       }
       const tickets = await issueFlow.listDts(String(viewer?.username ?? ""));
-      return done(200, { tickets });
+      return done(200, { tickets, mock: issueFlow.dtsMock });
     }
 
     // 单张问题单详情(页签展开用):登录即可查本人名下任意单。

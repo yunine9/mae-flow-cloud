@@ -685,8 +685,8 @@ async function main(): Promise<void> {
   let mcpGateway: McpGateway | undefined;
   if (dtsMock) {
     issueDts = new MockDtsGateway((message) => console.log(`  [issue-dts] ${message}`));
-    console.log("[serve] 问题流 DTS 网关: MOCK(--dts-mock,单据 DTS-2026-1001~1005,"
-      + "仅供外部环境测试,别接真数据)");
+    console.log("[serve] 问题流 DTS 网关: DEV·模拟(--dts-mock,外部开发模式,"
+      + "连不上真实 DTS;单据 DTS-2026-1001~1005 为模拟数据,页签有 DEV 标识)");
   } else if (dtsMcpUrl && mcpTokenProvider) {
     mcpGateway = new McpGateway({
       url: dtsMcpUrl, tokenProvider: mcpTokenProvider,

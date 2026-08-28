@@ -1702,6 +1702,12 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 }
 .issue-form-actions .primary:disabled, .issue-dts-toolbar .primary:disabled { opacity: .55; cursor: not-allowed; }
 .issue-form-hint { color: var(--faint); font-size: var(--font-size-assist); }
+.issue-dts-mock-banner {
+  margin: 0 0 10px; padding: 9px 12px;
+  border: 1px solid color-mix(in srgb, var(--attention) 45%, transparent);
+  border-radius: 9px; background: color-mix(in srgb, var(--attention) 8%, var(--surface));
+  color: var(--text-strong); font-size: var(--font-size-assist); line-height: 1.5;
+}
 .issue-dts-toolbar { display: flex; align-items: center; gap: 10px; }
 .issue-dts-toolbar button {
   min-height: 32px; padding: 0 14px; border: 1px solid var(--line);

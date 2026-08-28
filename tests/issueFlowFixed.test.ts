@@ -719,8 +719,11 @@ test("个人凭据前置门禁:这单会碰远端仓就先要令牌与邮箱,本
 
 test("MockDtsGateway:确定性单据集,已知单给罐头详情,未知单 fail-loud", async () => {
   const gateway = new MockDtsGateway();
+  assert.equal(gateway.mock, true, "模拟网关必须自带 DEV 标记(列表 API 挂徽标用)");
   const list = await gateway.listByOwner("y00965296");
   assert.equal(list.length, 5, "五个测试单");
+  assert.ok(list.every((item) => item.title.startsWith("【DEV·模拟】")),
+    "标题打 DEV 标,列表里一眼认出模拟单");
   assert.ok(list.every((item) => item.ticket.startsWith("DTS-2026-")));
   const detail = await gateway.detail("DTS-2026-1003");
   assert.match(detail.content, /MOCK 单据/);

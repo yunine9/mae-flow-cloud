@@ -1460,6 +1460,12 @@ export class IssueFlowService {
     return this.options.dts.listByOwner(account);
   }
 
+  /** 当前 DTS 是否为外部开发模式的模拟网关(--dts-mock)。前端据此
+   * 在拉单页签挂 DEV 徽标,模拟单不被误当真实单据。 */
+  get dtsMock(): boolean {
+    return this.options.dts?.mock === true;
+  }
+
   async getDtsDetail(ticket: string) {
     if (!this.options.dts) {
       throw new IssueControlError("DTS 网关未配置(部署需 --dts-mcp-url 与 token)");

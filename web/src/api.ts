@@ -2507,8 +2507,13 @@ export function controlIssue(id: string, input: {
   });
 }
 
-export function listDtsTickets(): Promise<DtsTicketBrief[]> {
-  return issueFetch("/issues/dts").then((body) => body.tickets ?? []);
+export async function listDtsTickets(): Promise<{
+  tickets: DtsTicketBrief[];
+  /** 外部开发模式(--dts-mock):单据为模拟数据,页面要挂 DEV 徽标。 */
+  mock: boolean;
+}> {
+  const body = await issueFetch("/issues/dts");
+  return { tickets: body.tickets ?? [], mock: body.mock === true };
 }
 
 export function getDtsTicketDetail(ticket: string): Promise<DtsTicketDetail> {

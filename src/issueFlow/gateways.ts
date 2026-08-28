@@ -312,6 +312,9 @@ export interface DtsGateway {
   detail(ticket: string): Promise<DtsTicketDetail>;
   /** DTS 域文件(描述内嵌图等)按单据同源凭据代理回取。 */
   proxyFile(path: string): Promise<{ data: Buffer; contentType: string }>;
+  /** 模拟网关标记:外部开发模式(--dts-mock)下为 true,列表 API
+   * 与前端页签据此挂 DEV 徽标,防止模拟单被当成真实单据。 */
+  readonly mock?: boolean;
 }
 
 /** 从网关文本里尽力解出单据列表。真实形状待 DTS 对拍(遗留),
@@ -509,14 +512,16 @@ export class UnconfiguredDtsGateway implements DtsGateway {
  * 都给罐头内容——关联转正的"查无此单即拒"路径用乱编单号就能测。
  * 与真实网关同接口,接线处一行替换;启动横幅会醒目标注 MOCK。 */
 export class MockDtsGateway implements DtsGateway {
+  readonly mock = true;
+
   constructor(private readonly log?: (message: string) => void) {}
 
   private readonly tickets: DtsTicketBrief[] = [
-    { ticket: "DTS-2026-1001", title: "订单列表导出超时(数据量大时必现)", status: "打开" },
-    { ticket: "DTS-2026-1002", title: "消息中心未读数偶发不清零", status: "打开" },
-    { ticket: "DTS-2026-1003", title: "移动端审批页白屏(iOS 17.4)", status: "处理中" },
-    { ticket: "DTS-2026-1004", title: "批量删除用户报唯一约束冲突", status: "打开" },
-    { ticket: "DTS-2026-1005", title: "流水线产物下载 404", status: "处理中" },
+    { ticket: "DTS-2026-1001", title: "【DEV·模拟】订单列表导出超时(数据量大时必现)", status: "打开" },
+    { ticket: "DTS-2026-1002", title: "【DEV·模拟】消息中心未读数偶发不清零", status: "打开" },
+    { ticket: "DTS-2026-1003", title: "【DEV·模拟】移动端审批页白屏(iOS 17.4)", status: "处理中" },
+    { ticket: "DTS-2026-1004", title: "【DEV·模拟】批量删除用户报唯一约束冲突", status: "打开" },
+    { ticket: "DTS-2026-1005", title: "【DEV·模拟】流水线产物下载 404", status: "处理中" },
   ];
 
   async listByOwner(account: string): Promise<DtsTicketBrief[]> {
