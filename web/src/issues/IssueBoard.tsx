@@ -545,6 +545,9 @@ function DtsRegister({
   // 模糊搜索:单号/标题/版本,大小写不敏感;版本多选过滤叠加其上。
   const [query, setQuery] = useState("");
   const [selectedVersions, setSelectedVersions] = useState<string[]>([]);
+  // 版本下拉多选框的展开态;点面板外或 Esc 关闭。
+  const [versionOpen, setVersionOpen] = useState(false);
+  const versionBoxRef = useRef<HTMLDivElement | null>(null);
   const fuzzyMatches = useMemo(() => {
     if (!tickets) return undefined;
     const q = query.trim().toLowerCase();
@@ -556,13 +559,18 @@ function DtsRegister({
     );
   }, [tickets, query]);
 
-  // 版本过滤:拉取后把所有单的版本汇总去重,按 R 版降序、R 同比 C 版;
-  // 不勾选 = 不过滤。
+  // 版本过滤:拉取后把所有单的版本汇总去重,按 R 版降序、R 同比 C 版。
   const versions = useMemo(() => {
     const set = new Set<string>();
     tickets?.forEach((t) => { if (t.version) set.add(t.version); });
     return sortDtsVersionsDesc([...set]);
   }, [tickets]);
+
+  // 默认勾选最高 R/C 版本(列表已降序,取第一个):拉到单就先看最新一版,
+  // 之后勾选/取消全由用户接管,这里不再插手。
+  useEffect(() => {
+    setSelectedVersions(versions.length > 0 ? [versions[0]] : []);
+  }, [versions]);
 
   const versionFiltered = useMemo(() => {
     const list = fuzzyMatches;
@@ -628,6 +636,25 @@ function DtsRegister({
     return [...list, ...extra];
   }, [versionFiltered, remoteTickets]);
 
+  // 版本下拉:点面板外或 Esc 收起。
+  useEffect(() => {
+    if (!versionOpen) return;
+    const onDoc = (event: MouseEvent) => {
+      if (!versionBoxRef.current?.contains(event.target as Node)) {
+        setVersionOpen(false);
+      }
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setVersionOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [versionOpen]);
+
   // 展开详情:同一张单只拉一次(缓存),失败不影响列表已有字段展示。
   const [expandedTicket, setExpandedTicket] = useState<string | null>(null);
   const [detailCache, setDetailCache] = useState<Record<string, DtsTicketDetail>>({});
@@ -638,6 +665,7 @@ function DtsRegister({
     setNote("");
     setQuery("");
     setSelectedVersions([]);
+    setVersionOpen(false);
     setExpandedTicket(null);
     try {
       const result = await listDtsTickets();
@@ -720,18 +748,33 @@ function DtsRegister({
       {note && <span className="issue-dts-note">{note}</span>}
     </div>
     {tickets && tickets.length > 0 && <>
-      {versions.length > 0 && <div className="issue-dts-versions" role="group"
-        aria-label="按版本过滤">
-        <span className="issue-dts-versions-label">版本过滤</span>
-        {versions.map((version) => <label key={version}
-          className={`issue-dts-version-chip${selectedVersions.includes(version) ? " on" : ""}`}>
-          <input type="checkbox"
-            checked={selectedVersions.includes(version)}
-            onChange={(event) => setSelectedVersions((prev) => event.target.checked
-              ? [...prev, version]
-              : prev.filter((item) => item !== version))} />
-          <span>{version}</span>
-        </label>)}
+      {versions.length > 0 && <div className="issue-dts-versions" ref={versionBoxRef}>
+        <button type="button"
+          className={`issue-dts-version-trigger${selectedVersions.length ? " on" : ""}`}
+          aria-expanded={versionOpen}
+          onClick={() => setVersionOpen((open) => !open)}>
+          <span>{selectedVersions.length
+            ? `版本过滤(已选 ${selectedVersions.length})` : "版本过滤(全部)"}</span>
+          <i aria-hidden>{versionOpen ? "▴" : "▾"}</i>
+        </button>
+        {selectedVersions.length > 0 && <button type="button"
+          className="issue-dts-version-clear"
+          onClick={() => setSelectedVersions([])}>清除</button>}
+        {versionOpen && <div className="issue-dts-version-menu" role="group"
+          aria-label="选择要过滤的版本">
+          {versions.map((version) => <label key={version}
+            className={`issue-dts-version-option${selectedVersions.includes(version) ? " on" : ""}`}>
+            <input type="checkbox"
+              checked={selectedVersions.includes(version)}
+              onChange={(event) => setSelectedVersions((prev) => event.target.checked
+                ? [...prev, version]
+                : prev.filter((item) => item !== version))} />
+            <span>{version}</span>
+          </label>)}
+          {selectedVersions.length > 0 && <button type="button"
+            className="issue-dts-version-clear-all"
+            onClick={() => setSelectedVersions([])}>清除全部筛选</button>}
+        </div>}
       </div>}
       <div className="issue-dts-search">
         <input
