@@ -575,15 +575,22 @@ function ManualRegister({
  *  重写为本地代理 URL /issues/dts-file?path=...,避免跨域无 cookie 问题。 */
 function resolveDtsImages(html: string | undefined): string {
   if (!html) return "";
+  // path 整体 encodeURIComponent 后再进查询串:DTS 文件名里常见的
+  // 空格/中文/&/+/#/% 原样拼 URL 会截断参数或让整个请求解析失败。
+  // 只编码一次,服务端 searchParams.get 解回原路径再回取 DTS;
+  // DTS 原文里已编码过的段(%xx)会再转义成 %25xx,解一次恰好还原,
+  // 不会出现二次解码丢字。
+  const toProxy = (_m: string, lead: string, path: string, tail: string) =>
+    `${lead}/issues/dts-file?path=${encodeURIComponent(path)}${tail}`;
   // 匹配绝对路径: src="https://dts-szv.clouddragon.huawei.com/v1/nfs/..."
   html = html.replace(
     /(<img\s[^>]*src=")https?:\/\/[^/"]*(\/[^"]*)(")/gi,
-    `$1/issues/dts-file?path=$2$3`,
+    toProxy,
   );
   // 兜底匹配相对路径: src="/v1/nfs/..."
   html = html.replace(
     /(<img\s[^>]*src=")(\/v1\/[^"]*)(")/gi,
-    `$1/issues/dts-file?path=$2$3`,
+    toProxy,
   );
   return html;
 }
