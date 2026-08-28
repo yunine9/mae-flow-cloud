@@ -24,6 +24,7 @@ import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
 import { createIssueTools, type IssueToolContext } from "../src/issueFlow/tools.ts";
 import { MockDtsGateway } from "../src/issueFlow/gateways.ts";
+import { createBusinessModule } from "../src/businessModuleLibrary.ts";
 import {
   FIXED_TICKET_STAGES,
   type IssueSessionState,
@@ -880,6 +881,326 @@ test("模式烙印:个人偏好回调决定缺省;显式入参可覆盖;裸服�
       account: "dev", title: "显式自由", mode: "free",
     });
     assert.equal(forced.mode, "free", "显式入参盖过回调");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
+test("登记不卡仓(2026-08-28):fixed DTS 无仓发起→repo_needed 闸;填地址/跳过/AI识别三条裁决 + 同单查重", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-repogate-"));
+  const origin = bareOrigin(dataDir);
+  // 线性剧本跨三个会话:每张单 = 首轮(拉单举闸)+ 裁决后的平台回合。
+  const script: Scene[] = [
+    // 会话 A(我来填写地址)。
+    { tool: { name: "dts_get_ticket", input: {} } },
+    { text: "等待用户确定代码仓。" },
+    { text: "代码仓已克隆,开始问题分析。" },
+    // 会话 B(无代码仓,跳过拉取)。
+    { tool: { name: "dts_get_ticket", input: {} } },
+    { text: "等待用户确定代码仓。" },
+    { text: "本单无代码改动,直接开始分析。" },
+    // 会话 C(AI 依据业务模块识别;先演一次手填失败再改选 AI)。
+    { tool: { name: "dts_get_ticket", input: {} } },
+    { text: "等待用户确定代码仓。" },
+    { text: "正在按业务模块识别代码仓。" },
+  ];
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    dts: new MockDtsGateway(),
+    issueFlowMode: () => "fixed",
+  });
+  try {
+    // ① 无仓登记不再抛(旧实现直接打回"登记时就要确定代码仓")。
+    const created = service.create({
+      account: "dev", title: "登录超时", ticket: TICKET, source: "dts",
+    });
+    assert.equal(created.repo_url, undefined);
+
+    // ② 同账号+同单号至多一个进行中的固定流程:第二张 fail-loud 到单。
+    assert.throws(() => service.create({
+      account: "dev", title: "重复发起", ticket: TICKET, source: "dts",
+    }), /已有进行中的问题会话/);
+
+    // 首轮:拉单机械推进 prep_repo,宿主无仓可拉 → 举 repo_needed 闸。
+    const gate = await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user" && issue.gate?.kind === "repo_needed"
+        ? issue : undefined;
+    }, "repo_needed 闸");
+    assert.equal(gate.stage, "prep_repo");
+    assert.deepEqual(gate.gate!.question.questions[0].options,
+      ["AI 依据业务模块识别", "我来填写代码仓地址", "无代码仓,跳过拉取"]);
+
+    // ③ 手填路径:地址随补充说明,平台校验→落 state→克隆→建分支→
+    //    直达问题分析(prep_repo done)。
+    service.answer(created.id, {
+      state_version: gate.gate!.state_version,
+      decision: "我来填写代码仓地址",
+      notes: origin,
+    });
+    const analyzed = await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.stage === "analyze" && issue.status === "idle"
+        ? issue : undefined;
+    }, "填地址后克隆并推进分析");
+    assert.deepEqual(analyzed.repo_urls, [origin]);
+    assert.equal(analyzed.stage_states?.[1], "done", "prep_repo 完成");
+    assert.equal(analyzed.stage_states?.[2], "in_progress", "分析进行中");
+    assert.ok(existsSync(join(dataDir, "issues", created.id, "repo", ".git")));
+    const branch = spawnSync("git",
+      ["-C", join(dataDir, "issues", created.id, "repo"), "branch", "--show-current"],
+      { encoding: "utf-8" });
+    assert.equal(branch.stdout.trim(), BRANCH, "宿主建分支照旧");
+    assert.ok(analyzed.transitions?.some((entry) =>
+      /用户填写代码仓 1 个/.test(entry.note)), "补填留转移账");
+
+    // ④ 跳过路径:无代码改动是合法形态,机械跳过拉取代码仓直达分析
+    //    (skip-span:prep_repo 记 done),repo 始终为空。
+    const second = service.create({
+      account: "dev", title: "纯配置问题", ticket: "DTS-2026-1002", source: "dts",
+    });
+    const gate2 = await until(() => {
+      const issue = service.get(second.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user" && issue.gate?.kind === "repo_needed"
+        ? issue : undefined;
+    }, "第二张的 repo_needed 闸");
+    service.answer(second.id, {
+      state_version: gate2.gate!.state_version,
+      decision: "无代码仓,跳过拉取",
+    });
+    const skipped = await until(() => {
+      const issue = service.get(second.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.stage === "analyze" && issue.status === "idle"
+        ? issue : undefined;
+    }, "跳过后直达分析");
+    assert.equal(skipped.repo_url, undefined, "跳过=无仓继续");
+    assert.equal(skipped.stage_states?.[1], "done", "prep_repo 记 done-skip");
+    assert.ok(existsSync(join(dataDir, "issues", second.id, "repo", ".git")) === false,
+      "跳过路径不克隆");
+
+    // ⑤ 手填校验失败:垃圾协议地址 → 原样再举同一张闸(带失败原因),
+    //    流程不炸、状态不变;随后改选 AI 识别,平台回合注入推断提示。
+    const third = service.create({
+      account: "dev", title: "接口超时", ticket: "DTS-2026-1003", source: "dts",
+    });
+    const gate3 = await until(() => {
+      const issue = service.get(third.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user" && issue.gate?.kind === "repo_needed"
+        ? issue : undefined;
+    }, "第三张的 repo_needed 闸");
+    service.answer(third.id, {
+      state_version: gate3.gate!.state_version,
+      decision: "我来填写代码仓地址",
+      notes: "ssh://git@codehub.test/x.git",
+    });
+    const refilled = await until(() => {
+      const issue = service.get(third.id);
+      return issue.gate?.kind === "repo_needed"
+        && issue.gate.state_version !== gate3.gate!.state_version
+        ? issue : undefined;
+    }, "失败后重举的 repo_needed 闸");
+    assert.match(refilled.gate!.context ?? "", /上一次填写未通过/,
+      "失败原因要进问题卡背景");
+    assert.equal(refilled.repo_url, undefined, "坏地址不落 state");
+    service.answer(third.id, {
+      state_version: refilled.gate!.state_version,
+      decision: "AI 依据业务模块识别",
+    });
+    await until(() =>
+      service.get(third.id).status === "idle" ? 1 : undefined, "AI 识别回合收口");
+    const aiTurn = model.requests.at(-1);
+    assert.match(JSON.stringify(aiTurn), /lookup_modules/,
+      "AI 识别的平台回合要注入 lookup_modules→bind_module 的推断提示");
+    assert.ok(service.get(third.id).transitions?.some((entry) =>
+      /用户作答\(repo_needed\): AI 依据业务模块识别/.test(entry.note)));
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
+test("业务模块映射(2026-08-28):prep_repo 阶段 bind_module 即克隆推进并清闸;lookup 未命中说无匹配;零仓模块打回", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-bindmod-"));
+  const origin = bareOrigin(dataDir);
+  createBusinessModule(dataDir, {
+    id: "media-core", name: "媒体核心", description: "播放与转码",
+    owner: "dev", repositories: [origin],
+  }, "tester");
+  createBusinessModule(dataDir, {
+    id: "empty-mod", name: "空模块", description: "没绑仓",
+    owner: "dev", repositories: [],
+  }, "tester");
+  const script: Scene[] = [
+    { tool: { name: "bind_module", input: { module_id: "media-core" } } },
+    { text: "模块已绑定,代码仓就绪,开始分析。" },
+  ];
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    issueFlowMode: () => "fixed",
+  });
+  try {
+    // 无单 + 无仓登记:首轮入口即 prep_repo,宿主举闸后 Agent 在同一
+    // 回合里 bind_module → 宿主钩子克隆建分支、推进问题分析、清闸。
+    const created = service.create({ account: "dev", title: "转码失败" });
+    assert.equal(created.scenario, "no_ticket");
+    const analyzed = await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.stage === "analyze" && issue.status === "idle"
+        ? issue : undefined;
+    }, "bind_module 后克隆并推进分析");
+    assert.equal(analyzed.module_id, "media-core");
+    assert.equal(analyzed.module, "媒体核心", "模块名由模块库派生");
+    assert.deepEqual(analyzed.repo_urls, [origin], "模块仓合并进会话");
+    assert.equal(analyzed.gate, undefined, "repo_needed 闸随绑定清掉");
+    assert.ok(existsSync(join(dataDir, "issues", created.id, "repo", ".git")));
+    assert.ok(analyzed.transitions?.some((entry) =>
+      /已绑定业务模块「媒体核心」/.test(entry.note)));
+
+    // 工具直调(免模型):检索命中/未命中、零仓模块打回、后期改绑不动阶段。
+    const state: IssueSessionState = {
+      id: "issue-x", account: "dev",
+      created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+      title: "t", description: "", source: "dts", ticket: TICKET,
+      mode: "fixed", scenario: "ticket", round: 1,
+      stage_states: FIXED_TICKET_STAGES.map(() => "pending"),
+      status: "idle", stage: "prep_repo", stage_note: "", stage_at: new Date().toISOString(),
+    };
+    let bound = 0;
+    const ctx: IssueToolContext = {
+      state, workspace: "/tmp/ws", dataRoot: dataDir,
+      persist: () => undefined,
+      onReposBound: async () => { bound += 1; },
+    };
+    const tools = createIssueTools(ctx) as Array<{
+      name: string;
+      execute: (id: string, params: any) => Promise<unknown>;
+    }>;
+    const byName = (name: string) => {
+      const tool = tools.find((item) => item.name === name);
+      assert.ok(tool, `应注册 ${name}`);
+      return tool!;
+    };
+    const textOf = (result: unknown) =>
+      (result as { content: Array<{ text: string }> }).content[0].text;
+    const hit = await byName("lookup_modules").execute("x", { keyword: "媒体" });
+    assert.match(textOf(hit), /media-core/);
+    assert.match(textOf(hit), /媒体核心/);
+    const miss = await byName("lookup_modules").execute("x", { keyword: "不存在的词" });
+    assert.match(textOf(miss), /无匹配业务模块/);
+    await assert.rejects(
+      () => byName("bind_module").execute("x", { module_id: "empty-mod" }),
+      /没有绑定代码仓/, "零仓模块必须打回,让模型转头去问用户");
+    await byName("bind_module").execute("x", { module_id: "media-core" });
+    assert.equal(bound, 1, "绑定要触发宿主收口钩子");
+    assert.deepEqual(state.repo_urls, [origin]);
+    state.stage = "fix";
+    await byName("bind_module").execute("x", { module_id: "media-core" });
+    assert.equal(state.stage, "fix", "后期的改绑只更新标签,不倒转阶段");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
+test("网管环境闸(2026-08-28):fetch_logs 缺环境举 env_needed(scope=logs);配置走 vault 不进 issue.json,配置后重试放行", async () => {
+  // 直调:env 缺席 → 举 env_needed 闸 + 工具如实失败(不再让 AI 空口
+  // 向用户要密码)。
+  const gateState: IssueSessionState = {
+    id: "issue-g", account: "dev",
+    created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    title: "t", description: "", source: "dts", ticket: TICKET,
+    repo_url: "/tmp/x.git", mode: "fixed", scenario: "ticket", round: 1,
+    stage_states: ["done", "done", "in_progress", "pending", "pending", "pending", "pending"],
+    status: "running", stage: "analyze", stage_note: "", stage_at: new Date().toISOString(),
+  };
+  const directCtx: IssueToolContext = {
+    state: gateState, workspace: "/tmp/ws", dataRoot: "/tmp/data",
+    persist: () => undefined,
+    ops: fakeOps,
+    environmentPassword: () => undefined,
+  };
+  const directTools = createIssueTools(directCtx) as Array<{
+    name: string;
+    execute: (id: string, params: any) => Promise<unknown>;
+  }>;
+  const fetchLogs = directTools.find((tool) => tool.name === "fetch_logs")!;
+  assert.ok(fetchLogs);
+  await assert.rejects(
+    () => fetchLogs.execute("x", { services: ["TranFmaWebsite"] }),
+    /已向用户发起网管环境配置请求/);
+  assert.equal(gateState.gate?.kind, "env_needed");
+  assert.equal(gateState.gate?.scope, "logs", "闸带用途面,决策卡据此给表单文案");
+
+  // 端到端:无环境发起 → fetch_logs 举闸 → attachEnvironment 配置
+  // (密码只进 vault)→ 清闸开平台回合 → 重试放行。
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-envgate-"));
+  const origin = bareOrigin(dataDir);
+  const script: Scene[] = [
+    { tool: { name: "fetch_logs", input: { services: ["TranFmaWebsite"] } } },
+    { text: "等待用户配置网管环境。" },
+    { tool: { name: "fetch_logs", input: { services: ["TranFmaWebsite"] } } },
+    { text: "环境已配置,日志已拉取。" },
+  ];
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    opsTools: fakeOps,
+    issueFlowMode: () => "fixed",
+  });
+  try {
+    const created = service.create({
+      account: "dev", title: "查服务日志", repoUrl: origin,
+    });
+    const waiting = await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user" && issue.gate?.kind === "env_needed"
+        ? issue : undefined;
+    }, "env_needed 闸");
+    assert.equal(waiting.gate?.scope, "logs");
+
+    // 配置入口(POST /issues/:id/environment 的服务本体):密码进 vault,
+    // 状态只有引用;闸清掉,平台开回合让 AI 重试。
+    const configured = service.attachEnvironment(created.id, {
+      hosts: ["10.0.0.8"], port: 22, password: "env-shared-secret",
+    });
+    assert.ok(configured.environment?.credential_ref, "状态里只有凭据引用");
+    assert.equal(configured.gate, undefined, "配置即清闸");
+    assert.ok(existsSync(join(dataDir, ".issue-environments", `${created.id}.json`)),
+      "密码落在 vault 加密文件");
+    const raw = readFileSync(join(dataDir, "issues", created.id, "issue.json"), "utf-8");
+    assert.ok(!raw.includes("env-shared-secret"), "issue.json 永远没有密码明文");
+
+    await until(() =>
+      service.get(created.id).status === "idle" ? 1 : undefined,
+    "配置后的平台回合收口");
+    // 现场账:第一次 fetch_logs 因缺环境失败,第二次放行。
+    const events = readFileSync(
+      join(dataDir, "issues", created.id, "events.jsonl"), "utf-8");
+    const fetches = events.split("\n").filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, any>)
+      .filter((event) => event.kind === "tool_finished"
+        && event.payload?.name === "fetch_logs");
+    assert.equal(fetches.length, 2);
+    assert.equal(fetches[0].payload.is_error, true, "缺环境时如实失败");
+    assert.notEqual(fetches[1].payload.is_error, true, "配置后重试放行");
+    // 秘密纪律:密码不进模型上下文。
+    assert.doesNotMatch(JSON.stringify(model.requests), /env-shared-secret/);
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();

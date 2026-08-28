@@ -24,6 +24,7 @@
  *   GET  /issues/:id/events           → SSE:事件流尾随
  *   POST /issues/:id/reply            → 续聊
  *   POST /issues/:id/decision         → 问题卡作答
+ *   POST /issues/:id/environment      → 网管环境配置(env_needed 闸的作答口)
  *   POST /issues/:id/interrupt        → 插话
  *   POST /issues/:id/ticket           → 绑定单号
  *   POST /issues/:id/control          → 归档/取消
@@ -355,6 +356,22 @@ export async function handleIssueRoutes(
         decision: String(body.decision ?? ""),
         ...(answers ? { answers } : {}),
         ...(body.notes !== undefined ? { notes: String(body.notes) } : {}),
+      }));
+    }
+
+    // 网管环境配置(env_needed 闸的作答口):登记时没配环境,拉日志/
+    // 换库现场举闸后在这里补地址与密码。密码只经此进 vault(与登记同
+    // 一条存储路径),状态/事件里永远只有引用——成功即清闸并开平台
+    // 回合让 Agent 重试。
+    if (method === "POST" && parts[2] === "environment" && parts.length === 3) {
+      if (viewer?.role === "admin" || !brief || !own(brief.account)) {
+        return done(403, { error: "只有归属人能配置网管环境" });
+      }
+      const body = await readBody(request);
+      return done(200, issueFlow.attachEnvironment(id, {
+        hosts: Array.isArray(body.hosts) ? body.hosts.map(String) : [],
+        ...(body.port !== undefined ? { port: Number(body.port) } : {}),
+        password: String(body.password ?? ""),
       }));
     }
 

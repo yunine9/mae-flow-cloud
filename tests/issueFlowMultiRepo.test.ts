@@ -107,7 +107,7 @@ test("issue.json 读取迁移:repo_url 与 repo_urls 双向补齐", () => {
     "新清单的主仓回写别名,展示层不用两头兜底");
 });
 
-test("登记校验:模块必须存在且在架;仓数有上限;fixed 无仓照旧拦截", () => {
+test("登记校验:模块必须存在且在架;仓数有上限;fixed 无仓放行(拉取代码仓阶段再定)", () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-mr-"));
   const origin = bareOriginAt(dataDir, "origin.git");
   const service = new IssueFlowService({
@@ -147,11 +147,11 @@ test("登记校验:模块必须存在且在架;仓数有上限;fixed 无仓照�
       }),
       /最多拉取/,
     );
-    // fixed 无仓:文案指向"选模块或填地址"。
-    assert.throws(
-      () => service.create({ account: "dev", title: "t" }),
-      /选择业务模块自动带出/,
-    );
+    // fixed 无仓(2026-08-28 拍板):登记放行——代码仓推迟到「拉取代码
+    // 仓」阶段由 repo_needed 闸补定,登记不再卡流程入口。
+    const deferred = service.create({ account: "dev", title: "无仓登记" });
+    assert.equal(deferred.repo_url, undefined, "无仓登记不再拦截");
+    assert.equal(deferred.scenario, "no_ticket");
     // 多仓去重:同址出现两次只落一份。
     const created = service.create({
       account: "dev", title: "重复仓登记",

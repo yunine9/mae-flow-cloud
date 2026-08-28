@@ -13,6 +13,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ISSUE_STATUS_TEXT,
   associateIssueTicket,
+  attachIssueEnvironment,
   bindIssueTicket,
   answerIssue,
   controlIssue,
@@ -123,6 +124,7 @@ export function IssueBoard({ viewer, onNavigateProfile }: {
     </div>}
     <IssueRegistration
       viewer={viewer}
+      issues={issues}
       onCreated={(created) => {
         refreshList();
         setOpenId(created.id);
@@ -133,7 +135,7 @@ export function IssueBoard({ viewer, onNavigateProfile }: {
     <section className="issue-section" aria-labelledby="issue-mine-title">
       <div className="section-head">
         <div>
-          <span className="section-kicker">MY ISSUES</span>
+          <span className="section-kicker">问题处理</span>
           <h2 id="issue-mine-title">我的问题</h2>
         </div>
         <span className="section-count">共 {issues.length} 个</span>
@@ -211,11 +213,14 @@ function CredentialGate({ viewer, needRepo, onNavigateProfile }: {
 
 function IssueRegistration({
   viewer,
+  issues,
   onCreated,
   onError,
   onNavigateProfile,
 }: {
   viewer: AuthUser;
+  /** 我的会话列表:DTS 批量发起的前端查重用(服务端同样机械拦)。 */
+  issues: IssueSummary[];
   onCreated: (issue: IssueSummary) => void;
   onError: (message: string) => void;
   onNavigateProfile?: () => void;
@@ -224,7 +229,7 @@ function IssueRegistration({
   return <section className="issue-section" aria-labelledby="issue-register-title">
     <div className="section-head">
       <div>
-        <span className="section-kicker">REGISTER</span>
+        <span className="section-kicker">发起会话</span>
         <h2 id="issue-register-title">登记问题</h2>
       </div>
       <div className="issue-register-tabs" role="tablist">
@@ -239,8 +244,8 @@ function IssueRegistration({
     {tab === "manual"
       ? <ManualRegister viewer={viewer} onCreated={onCreated} onError={onError}
           onNavigateProfile={onNavigateProfile} />
-      : <DtsRegister viewer={viewer} onCreated={onCreated} onError={onError}
-          onNavigateProfile={onNavigateProfile} />}
+      : <DtsRegister viewer={viewer} issues={issues} onCreated={onCreated}
+          onError={onError} onNavigateProfile={onNavigateProfile} />}
   </section>;
 }
 
@@ -308,11 +313,11 @@ function ManualRegister({
     return () => window.clearTimeout(timer);
   }, [draftKey, title, description, repoUrls, moduleId, moduleName]);
 
-  // 个人凭据前置门禁(2026-08-28 拍板,需求侧同款):这单会碰远端仓
-  // 就得先有 Git 身份。固定流程仓必填→恒需;自由探索按已填的 http 仓判。
-  // 服务端在 create 里机械拦,这里把拦截面提前到表单,少撞一次墙。
-  const touchRemoteRepo = fixed
-    || repoUrls.some((url) => /^https?:\/\//i.test(url.trim()));
+  // 个人凭据前置门禁(2026-08-28 拍板):这单填了远端仓就得先有 Git
+  // 身份。登记不再强制带仓(代码仓可推迟到「拉取代码仓」阶段由平台闸
+  // 补定),门只拦"真要碰远端"的登记;服务端在 create 里机械拦,这里
+  // 把拦截面提前到表单,少撞一次墙。
+  const touchRemoteRepo = repoUrls.some((url) => /^https?:\/\//i.test(url.trim()));
   const credentialBlocked = touchRemoteRepo
     && (!viewer.git_token_hint || !viewer.git_email);
 
@@ -339,11 +344,8 @@ function ManualRegister({
       return;
     }
     const repos = [...new Set(repoUrls.map((url) => url.trim()).filter(Boolean))];
-    if (fixed && !repos.length) {
-      onError("固定流程在登记时就要确定代码仓(拉取代码仓是必经节点)——"
-        + "选择业务模块自动带出,或填代码仓地址;也可到「个人设置」切回自由探索");
-      return;
-    }
+    // 固定流程不再强制登记带仓(2026-08-28):缺仓时平台会在「拉取代码
+    // 仓」阶段举卡让你补定(AI 识别/填地址/跳过三选一),这里不拦。
     setBusy(true);
     try {
       const hosts = envOpen
@@ -412,7 +414,7 @@ function ManualRegister({
     </label>
     <div className="issue-field">
       <span>代码仓地址 <i>{fixed
-        ? selectedModule?.repositories.length ? "模块带出,可增删改" : "至少一个"
+        ? selectedModule?.repositories.length ? "模块带出,可增删改" : "可选,可后补(拉取代码仓阶段再定)"
         : "可选"}</i></span>
       <div className="issue-repo-rows">
         {repoUrls.map((url, index) => (
@@ -521,11 +523,14 @@ const isActionableDts = (t: { status?: string }): boolean =>
 
 function DtsRegister({
   viewer,
+  issues,
   onCreated,
   onError,
   onNavigateProfile,
 }: {
   viewer: AuthUser;
+  /** 我的会话列表:发起前按单查重(服务端 create 同样机械拦)。 */
+  issues: IssueSummary[];
   onCreated: (issue: IssueSummary) => void;
   onError: (message: string) => void;
   onNavigateProfile?: () => void;
@@ -534,19 +539,43 @@ function DtsRegister({
   // 外部开发模式(--dts-mock):单据为模拟数据,页签挂 DEV 徽标防误认。
   const [dtsMock, setDtsMock] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [selected, setSelected] = useState("");
+  // 批量发起(2026-08-28):勾选多张,逐张独立发起工作流。
+  const [selected, setSelected] = useState<string[]>([]);
+  // 登记不再强制带仓:留空=发起后由「拉取代码仓」阶段的平台闸补定。
   const [repoUrl, setRepoUrl] = useState("");
+  // 业务模块:与手工登记同款选择器(选中自动带出主仓);目录空回退自由文本。
+  const [moduleId, setModuleId] = useState("");
   const [moduleName, setModuleName] = useState("");
+  const [modules, setModules] = useState<BusinessModule[] | undefined>();
   const [envHosts, setEnvHosts] = useState("");
   const [envPassword, setEnvPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
   const fixed = viewer.issue_flow !== "free";
-  // 个人凭据前置门禁:有单登记必碰仓(固定流程仓必填),同 ManualRegister。
-  const touchRemoteRepo = fixed
-    || /^https?:\/\//i.test(repoUrl.trim());
+  const moduleCatalog = useMemo(
+    () => (modules ?? []).filter((module) => module.status === "active"),
+    [modules]);
+  const selectedModule = moduleCatalog.find((module) => module.id === moduleId);
+  useEffect(() => {
+    let alive = true;
+    // 目录读不到按空处理:回退手填,不让模块库故障堵死问题发起。
+    getBusinessModules()
+      .then((catalog) => { if (alive) setModules(catalog.modules); })
+      .catch(() => { if (alive) setModules([]); });
+    return () => { alive = false; };
+  }, []);
+  // 个人凭据前置门禁:只有真填了远端仓才要 Git 身份(登记不强制带仓,
+  // 缺仓由拉取代码仓阶段的平台闸补定,与手工登记同语义)。
+  const touchRemoteRepo = /^https?:\/\//i.test(repoUrl.trim());
   const credentialBlocked = touchRemoteRepo
     && (!viewer.git_token_hint || !viewer.git_email);
+
+  /** 选模块即带仓(与手工登记 changeModule 同款):单仓字段取主仓。 */
+  function changeModule(nextId: string) {
+    setModuleId(nextId);
+    const module = moduleCatalog.find((item) => item.id === nextId);
+    if (module?.repositories.length) setRepoUrl(module.repositories[0]);
+  }
 
   // 模糊搜索:单号/标题/版本,大小写不敏感;版本多选过滤叠加其上。
   const [query, setQuery] = useState("");
@@ -686,6 +715,7 @@ function DtsRegister({
     setLoading(true);
     setNote("");
     setQuery("");
+    setSelected([]);
     setSelectedVersions([]);
     setVersionOpen(false);
     setExpandedTicket(null);
@@ -720,34 +750,60 @@ function DtsRegister({
     }
   }
 
+  /** 批量发起(2026-08-28):每单一个独立工作流,共享模块/环境/可选仓
+   * 等登记信息;逐张串行 create,单张失败不拖垮整批。已有进行中会话的
+   * 单跳过并计入失败(服务端 create 的同单查重也会兜一道)。结束后
+   * 一条汇总横幅:成功 N 张 + 失败 M 张(单号 → 原因);有成功的跳进
+   * 第一张的会话。 */
   async function launch() {
-    if (!selected || busy) return;
-    if (fixed && !repoUrl.trim()) {
-      onError("固定流程在登记时就要确定代码仓——填代码仓地址后再发起");
-      return;
-    }
-    // 远程补查的单也能发起:标题从远程详情里取。
-    const ticket = tickets?.find((item) => item.ticket === selected)
-      ?? remote.tickets.find((item) => item.ticket === selected);
+    if (!selected.length || busy) return;
+    const hosts = envHosts.split(/[,，\s]+/).map((host) => host.trim()).filter(Boolean);
+    const environment = hosts.length && envPassword
+      ? { hosts, password: envPassword } : undefined;
     setBusy(true);
+    const launched: string[] = [];
+    const failures: string[] = [];
+    let first: IssueSummary | undefined;
     try {
-      const hosts = envHosts.split(/[,，\s]+/).map((host) => host.trim()).filter(Boolean);
-      const environment = hosts.length && envPassword
-        ? { hosts, password: envPassword } : undefined;
-      const created = await createIssue({
-        title: ticket?.title || selected,
-        source: "dts",
-        ticket: selected,
-        description: ticket?.title || undefined,
-        repo_url: repoUrl.trim() || undefined,
-        ...(moduleName.trim() ? { module: moduleName.trim() } : {}),
-        ...(environment ? { environment } : {}),
-      });
-      onCreated(created);
-    } catch (reason) {
-      onError(String(reason instanceof Error ? reason.message : reason));
+      for (const ticketNo of selected) {
+        const clash = issues.find((item) => item.ticket === ticketNo
+          && !["archived", "canceled", "failed"].includes(item.status));
+        if (clash) {
+          failures.push(`${ticketNo} → 已有进行中的问题会话(${clash.id})`);
+          continue;
+        }
+        // 远程补查的单也能发起:标题从远程详情里取。
+        const ticket = tickets?.find((item) => item.ticket === ticketNo)
+          ?? remote.tickets.find((item) => item.ticket === ticketNo);
+        try {
+          const created = await createIssue({
+            title: ticket?.title || ticketNo,
+            source: "dts",
+            ticket: ticketNo,
+            description: ticket?.title || undefined,
+            repo_url: repoUrl.trim() || undefined,
+            ...(moduleId ? { module_id: moduleId } : {}),
+            ...(!moduleId && moduleName.trim() ? { module: moduleName.trim() } : {}),
+            ...(environment ? { environment } : {}),
+          });
+          launched.push(created.id);
+          first ??= created;
+        } catch (reason) {
+          failures.push(`${ticketNo} → ${
+            String(reason instanceof Error ? reason.message : reason)}`);
+        }
+      }
     } finally {
       setBusy(false);
+    }
+    if (first) onCreated(first);
+    if (failures.length) {
+      onError(`成功 ${launched.length} 张${launched.length ? `:${launched.join("、")}` : ""};`
+        + `失败 ${failures.length} 张:${failures.join(";")}`);
+    } else {
+      setNote(`成功发起 ${launched.length} 张:${launched.join("、")}`
+        + (selected.length > 1 ? "(每单一个独立工作流)" : ""));
+      setSelected([]);
     }
   }
 
@@ -761,11 +817,10 @@ function DtsRegister({
         {loading ? "拉取中…" : `拉取 ${viewer.username} 的问题单`}
       </button>
       <button type="button" className="primary"
-        disabled={!selected || busy || credentialBlocked}
-        title={tickets && tickets.length > 1 && selected
-          ? "当前版本一次只发起一张;批量处理即将开放" : undefined}
+        disabled={!selected.length || busy || credentialBlocked}
+        title={selected.length > 1 ? `将逐张发起 ${selected.length} 个独立工作流` : undefined}
         onClick={launch}>
-        {busy ? "发起中…" : "发起处理"}
+        {busy ? "发起中…" : selected.length > 1 ? `发起处理(${selected.length} 张)` : "发起处理"}
       </button>
       {note && <span className="issue-dts-note">{note}</span>}
     </div>
@@ -822,10 +877,12 @@ function DtsRegister({
             const isExpanded = expandedTicket === ticket.ticket;
             const detail = detailCache[ticket.ticket];
             return <div key={ticket.ticket}
-              className={`issue-dts-row${selected === ticket.ticket ? " on" : ""}${isExpanded ? " expanded" : ""}`}>
+              className={`issue-dts-row${selected.includes(ticket.ticket) ? " on" : ""}${isExpanded ? " expanded" : ""}`}>
               <label className="issue-dts-row-main">
-                <input type="checkbox" checked={selected === ticket.ticket}
-                  onChange={(event) => setSelected(event.target.checked ? ticket.ticket : "")} />
+                <input type="checkbox" checked={selected.includes(ticket.ticket)}
+                  onChange={(event) => setSelected((current) => event.target.checked
+                    ? [...current, ticket.ticket]
+                    : current.filter((item) => item !== ticket.ticket))} />
                 <span className="issue-dts-ticket">{ticket.ticket}</span>
                 {isRemote && <span className="issue-dts-remote">远程</span>}
                 <span className="issue-dts-title">{ticket.title || "(无标题)"}</span>
@@ -877,7 +934,7 @@ function DtsRegister({
             : <p className="issue-dts-hint">没有匹配的问题单。</p>
         }
         <p className="issue-dts-hint">
-          勾选要发起的问题单(当前一次一张,批量处理即将开放)。
+          勾选要发起的问题单(可多选,每单一个独立工作流)。
         </p>
       </div>
     </>}
@@ -890,19 +947,30 @@ function DtsRegister({
       </p>}
     <CredentialGate viewer={viewer} needRepo={touchRemoteRepo}
       onNavigateProfile={onNavigateProfile} />
-    {/* 登记即定仓与模块(固定流程的有单七阶段从拉单详情开始,仓在阶段2
-        就要克隆);网管环境换库验证要用,登记时一并带上。 */}
+    {/* 登记不卡仓(2026-08-28):仓可选,留空时由「拉取代码仓」阶段的
+        平台闸补定(AI 识别/填地址/跳过);业务模块选中即带出主仓;网管
+        环境换库验证要用,登记时一并带上(缺了也会在用时现场举闸补配)。 */}
     <div className="issue-dts-fields">
       <label className="issue-field">
-        <span>代码仓地址 <i>{fixed ? "必填" : "可选"}</i></span>
+        <span>代码仓地址 <i>{fixed ? "可选,可后补(拉取代码仓阶段再定)" : "可选"}</i></span>
         <input value={repoUrl} placeholder="https://codehub.../repo.git"
           onChange={(event) => setRepoUrl(event.target.value)} />
       </label>
       <label className="issue-field">
-        <span>业务模块 <i>可选</i></span>
-        <input value={moduleName} maxLength={60}
-          placeholder="如:媒体中心(仅展示与报告引用)"
-          onChange={(event) => setModuleName(event.target.value)} />
+        <span>业务模块 <i>可选{selectedModule ? "(已带出主仓)" : moduleCatalog.length ? "(选中自动带仓)" : ""}</i></span>
+        {moduleCatalog.length > 0
+          ? <select value={moduleId}
+              onChange={(event) => changeModule(event.target.value)}>
+              <option value="">不选择模块</option>
+              {moduleCatalog.map((module) => (
+                <option key={module.id} value={module.id}>
+                  {module.name}(绑 {module.repositories.length} 个仓)
+                </option>
+              ))}
+            </select>
+          : <input value={moduleName} maxLength={60}
+              placeholder="如:媒体中心(仅展示与报告引用)"
+              onChange={(event) => setModuleName(event.target.value)} />}
       </label>
       <label className="issue-field">
         <span>网管服务器(可多个,逗号分隔;换库验证用)<i>可选</i></span>
@@ -985,6 +1053,7 @@ function IssueSessionView({
 
   // 等待卡两源:平台闸(固定流程的人工硬闸)优先,Agent 问题卡兜底;
   // 决策卡只在 status=waiting_user 且卡在场时画,轮询半拍不画。
+  // gate_kind/scope 随卡带给决策卡:env_needed 在那里换专用环境表单。
   const gateCard = detail.status === "waiting_user" && detail.gate
     ? {
         waiting_id: detail.gate.id,
@@ -992,6 +1061,8 @@ function IssueSessionView({
         question: detail.gate.question,
         context: detail.gate.context,
         created_at: detail.gate.created_at,
+        gate_kind: detail.gate.kind,
+        gate_scope: detail.gate.scope,
       }
     : undefined;
   const waiting = gateCard
@@ -1008,6 +1079,13 @@ function IssueSessionView({
       ...(notes ? { notes } : {}),
     }));
   }
+  /** env_needed 闸的专用提交口(POST /issues/:id/environment):密码只在
+   * 这一次请求里过网、只进服务端 vault,成功后 perform 会带新详情回来。 */
+  const attachEnvironment = (input: {
+    hosts: string[];
+    port?: number;
+    password: string;
+  }) => perform(() => attachIssueEnvironment(detail.id, input));
   const sendReply = (text: string) => perform(() => replyIssue(detail.id, text));
   const sendSteer = (text: string) => perform(() => steerIssue(detail.id, text));
   /** 快速修改后请 AI 复核:运行中走插话,空闲走续聊——都走现有通道,
@@ -1143,15 +1221,17 @@ function IssueSessionView({
         onCancel={cancelSession}
         onOpenDoc={() => { setTab("materials"); setMaterialsView("doc"); }}
         onAssociate={associate}
+        onEnvironment={attachEnvironment}
       />
     </div>
     </div>
   </section>;
 }
 
-/** 固定流程的阶段进度条(计划线):按 scenario 的阶段序列画节点,
- * stage_states 决定形态(pending 空心/in_progress 亮/done 实/redo 警示
- * /inherited 弱化+标"继承");轮次>1 加轮次徽标(验证回退的重走记号)。 */
+/** 固定流程的阶段管道(计划线):视觉对齐需求工作台的 task-phase-track
+ * ——节点在上、词签在下、细连线串成一条管;走过的亮,当前阶段节点
+ * 放大呼吸。stage_states 决定形态(pending 空心/in_progress 亮/done 实
+ * /redo 警示/inherited 弱化+标"继承");轮次>1 加轮次徽标。 */
 function IssueFixedProgress({ issue }: { issue: IssueSummary }) {
   const stages = fixedStageList(issue.scenario);
   const states = issue.stage_states ?? [];
@@ -1164,21 +1244,25 @@ function IssueFixedProgress({ issue }: { issue: IssueSummary }) {
   };
   return <nav className="issue-fixed-progress" aria-label="固定流程阶段">
     {(issue.round ?? 1) > 1
-      && <span className="issue-round-badge">第 {issue.round} 轮</span>}
-    {stages.map((stage, index) => {
-      const state = states[index] ?? "pending";
-      const current = state === "in_progress";
-      return <span key={stage}
-        className={`issue-fixed-step state-${state}${current ? " current" : ""}`}
-        title={`${labels[state]}${current ? "(当前)" : ""}`}>
-        <i className="issue-fixed-dot" aria-hidden />
-        <span className="issue-fixed-name">
-          {issueStageText({ mode: "fixed", scenario: issue.scenario, stage })}
-        </span>
-        {state === "inherited" && <em className="issue-fixed-tag">继承</em>}
-        {state === "redo" && <em className="issue-fixed-tag">重做</em>}
-      </span>;
-    })}
+      && <div className="issue-fixed-head">
+        <span className="issue-round-badge">第 {issue.round} 轮</span>
+      </div>}
+    <span className="issue-fixed-track">
+      {stages.map((stage, index) => {
+        const state = states[index] ?? "pending";
+        const current = state === "in_progress";
+        const label = issueStageText({
+          mode: "fixed", scenario: issue.scenario, stage });
+        return <span key={stage}
+          className={`issue-fixed-step state-${state}${current ? " current" : ""}`}
+          title={`${label} · ${labels[state]}${current ? "(当前)" : ""}`}>
+          <i aria-hidden />
+          <span className="issue-fixed-name">{label}</span>
+          {state === "inherited" && <em className="issue-fixed-tag">继承</em>}
+          {state === "redo" && <em className="issue-fixed-tag">重做</em>}
+        </span>;
+      })}
+    </span>
   </nav>;
 }
 
@@ -1378,7 +1462,7 @@ function IssueMaterialsPane({ detail, busy, view, onView, onNotifyAI }: {
 
   return <div className="issue-materials">
     <div className="ws-pane-head">
-      <div><span>ISSUE MATERIALS</span><strong>会话材料</strong></div>
+      <div><span>材料清单</span><strong>会话材料</strong></div>
       <div className="ws-source-switch" aria-label="材料类型">
         <button className={view === "dts" ? "on" : ""}
           disabled={!data?.ticket} onClick={() => onView("dts")}>

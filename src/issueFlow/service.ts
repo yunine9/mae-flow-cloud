@@ -43,11 +43,15 @@ import {
   isTerminal,
   issueRepoWorkspaces,
   loadState,
+  normalizeIssueRepos,
+  raiseGate,
   recordTransition,
   saveState,
   summarize,
+  IssueControlError,
   type FixedStage,
   type IssueConclusionKind,
+  type IssueEnvironmentConfig,
   type IssueFlowMode,
   type IssueScenario,
   type IssueSource,
@@ -59,7 +63,6 @@ import {
 import {
   cloneRepository,
   ensureBranch,
-  validateRepoUrl,
   type GitCredential,
 } from "./issueGit.ts";
 import { readBusinessModule } from "../businessModuleLibrary.ts";
@@ -102,7 +105,9 @@ export class IssueNotFoundError extends Error {
   }
 }
 
-export class IssueControlError extends Error {}
+/** 控制类错误在校验发生地(state.ts)定义;这里转出,路由层的既有
+ * import 面不变。 */
+export { IssueControlError };
 
 export interface IssueEnvironmentInput {
   name?: string;
@@ -185,30 +190,11 @@ export interface IssueMessage {
 
 const TICKET_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
-/** 一个问题会话最多拉取的代码仓数。模块库允许一个模块绑 20 个仓,
- * 但问题会话一轮克隆 8 个已是分析上限——再多说明该拆会话了。 */
-const MAX_ISSUE_REPOS = 8;
-
-/** 登记仓清单:单仓(兼容字段)与多仓合并去重,逐个过协议校验。
- * 顺序即语义——首个是主仓(交付仓),其余是参考仓。 */
-function normalizeIssueRepos(
-  single: string | undefined,
-  list: string[] | undefined,
-): string[] {
-  const unique: string[] = [];
-  for (const raw of [single ?? "", ...(list ?? [])]) {
-    const url = raw.trim();
-    if (!url) continue;
-    const validated = validateRepoUrl(url);
-    if (!unique.includes(validated)) unique.push(validated);
-  }
-  if (unique.length > MAX_ISSUE_REPOS) {
-    throw new IssueControlError(
-      `一个问题会话最多拉取 ${MAX_ISSUE_REPOS} 个代码仓(当前 ${unique.length} 个);`
-        + "请精简模块绑定或分多次分析");
-  }
-  return unique;
-}
+/** repo_needed 闸的题面(enterFixedStage 举闸与 resolveGate 失败重举
+ * 共用一句话,改字两处要同步)。 */
+const REPO_NEEDED_QUESTION =
+  "拉取代码仓需要先确定代码仓:可让 AI 依据业务模块映射自动识别,"
+    + "或直接填写代码仓地址;本单无代码改动也可跳过拉取";
 
 /** 结论文档回传上限:一个巨型文档不能把页面拖死。 */
 const ANALYSIS_MAX_BYTES = 512 * 1024;
@@ -453,31 +439,28 @@ export class IssueFlowService {
     const repoUrls = !explicitRepos.length && moduleRepos?.length
       ? normalizeIssueRepos(undefined, moduleRepos)
       : explicitRepos;
-    if (mode === "fixed" && !repoUrls.length) {
-      throw new IssueControlError(
-        "固定流程在登记时就要确定代码仓(阶段1拉取代码仓是必经节点),"
-          + "请选择业务模块自动带出,或填写代码仓地址;自由探索模式才允许登记后再补");
+    // 同账号+同单号至多一个进行中的固定流程会话(2026-08-28 批量发起的
+    // 配套守卫):双发起 fail-loud 到具体单,而不是静默开出第二条平行
+    // 工作流(分支/MR/流水线监看都会打架)。与 associate() 的单号查重
+    // 同一口径。
+    if (mode === "fixed" && ticket) {
+      const clash = [...this.live.values()].find((item) =>
+        item.state.account === account
+        && item.state.ticket === ticket
+        && !isTerminal(item.state.status));
+      if (clash) {
+        throw new IssueControlError(
+          `该单号已有进行中的问题会话 ${clash.id},同一单号不能重复发起`);
+      }
     }
     // 个人凭据前置门禁(2026-08-28 拍板,需求侧 /launch-options 的同款
     // 语义收窄到"这单真的会碰远端仓"):克隆与推送都用发起人身份,
     // 没配令牌就让登记过门,失败发生在首轮回合准备期——那是终态,
     // 整单作废。门关在前面:file:// 本地仓与不碰仓的纯研究不拦
     // (拦了就是误伤),令牌在而邮箱缺同样拦(提交署名与平台归属
-    // 都按邮箱对人,缺了它推上去的提交是无主的)。
-    const remoteRepos = repoUrls.filter((url) => /^https?:\/\//i.test(url));
-    if (remoteRepos.length) {
-      const credential = this.options.gitCredential?.(account);
-      if (!credential) {
-        throw new IssueControlError(
-          "Git 令牌未配置(个人设置 → 个人接入):这单要拉取代码仓,"
-            + "克隆与推送都用你的身份——配好令牌后再发起");
-      }
-      if (!credential.email) {
-        throw new IssueControlError(
-          "个人邮箱未配置(个人设置 → 个人接入):Git 提交署名与平台"
-            + "归属都按邮箱对人——配好邮箱后再发起");
-      }
-    }
+    // 都按邮箱对人,缺了它推上去的提交是无主的)。无仓登记(代码仓
+    // 推迟到拉取代码仓阶段)自然不拦——闸门补填时会再过同一道检查。
+    this.requireGitIdentity(account, repoUrls);
     let environment;
     let environmentPassword: string | undefined;
     if (input.environment) {
@@ -499,18 +482,9 @@ export class IssueFlowService {
     const root = join(this.issuesRoot, id);
     mkdirSync(root, { recursive: true });
     if (environment && environmentPassword) {
-      // playbook 契约:三个账号共用一个密码。按旧形状存三套(sopuser/
-      // ossuser/ossadm 同密码),vault 校验与工具取密(sopuser)都不用特判。
-      const password = environmentPassword;
-      const refs = this.vault.store(id, [{
-        name: environment.name,
-        purpose: "both",
-        host: environment.hosts[0],
-        port: environment.port,
-        accounts: ["sopuser", "ossuser", "ossadm"].map((username) =>
-          ({ username, password })),
-      }]);
-      environment.credential_ref = refs[0]?.id ?? "";
+      // 与「问题卡环境表单」(attachEnvironment)同一条 vault 路径:
+      // 密码只进加密文件,issue.json 永远只有引用。
+      environment = this.storeEnvironment(id, input.environment!);
     }
     const now = new Date().toISOString();
     const firstStage: FixedStage | "registered" = scenario
@@ -574,6 +548,85 @@ export class IssueFlowService {
     return `issue-${max + 1}`;
   }
 
+  /** 个人凭据前置门禁的判定本体:这批仓里只要碰远端(http),发起人
+   * 就必须有 Git 令牌与署名邮箱。登记(create)与闸门补填(resolveGate
+   * 的 repo_needed 手填路)共用——同一道门不该有两套文案。 */
+  private requireGitIdentity(account: string, repoUrls: string[]): void {
+    const remoteRepos = repoUrls.filter((url) => /^https?:\/\//i.test(url));
+    if (!remoteRepos.length) return;
+    const credential = this.options.gitCredential?.(account);
+    if (!credential) {
+      throw new IssueControlError(
+        "Git 令牌未配置(个人设置 → 个人接入):这单要拉取代码仓,"
+          + "克隆与推送都用你的身份——配好令牌后再发起");
+    }
+    if (!credential.email) {
+      throw new IssueControlError(
+        "个人邮箱未配置(个人设置 → 个人接入):Git 提交署名与平台"
+          + "归属都按邮箱对人——配好邮箱后再发起");
+    }
+  }
+
+  /** 网管环境落盘的唯一路径:密码只进 vault(AES-GCM 按会话隔离的
+   * 加密文件),issue.json/事件/提示词永远只有 credential_ref。playbook
+   * 契约:三个账号共用一个密码,按旧形状存三套(sopuser/ossuser/
+   * ossadm 同密码),vault 校验与工具取密(sopuser)都不用特判。
+   * 登记与 POST /issues/:id/environment 共用,秘密纪律只有一份。 */
+  private storeEnvironment(
+    id: string,
+    input: IssueEnvironmentInput,
+  ): IssueEnvironmentConfig {
+    const hosts = input.hosts.map((host) => host.trim()).filter(Boolean);
+    if (!hosts.length) {
+      throw new IssueControlError("网管环境至少要有一个服务器地址");
+    }
+    const password = input.password;
+    if (!password?.trim()) {
+      throw new IssueControlError("配置了网管环境就必须填写共用密码");
+    }
+    const name = input.name?.trim() || hosts[0];
+    const port = input.port ?? 22;
+    const refs = this.vault.store(id, [{
+      name,
+      purpose: "both",
+      host: hosts[0],
+      port,
+      accounts: ["sopuser", "ossuser", "ossadm"].map((username) =>
+        ({ username, password })),
+    }]);
+    return { credential_ref: refs[0]?.id ?? "", name, hosts, port };
+  }
+
+  /** 网管环境配置(问题卡 env_needed 闸的作答口,POST
+   * /issues/:id/environment):登记时没配环境,拉日志/换库的工具现场
+   * 举闸后,用户在这里补地址与密码。密码进 vault 后即清闸并开平台
+   * 回合,让 Agent 重试刚才的操作。 */
+  attachEnvironment(
+    id: string,
+    input: IssueEnvironmentInput,
+  ): IssueSummary {
+    const live = this.require(id);
+    const { state } = live;
+    const environment = this.storeEnvironment(id, input);
+    state.environment = environment;
+    if (state.gate?.kind === "env_needed") {
+      // 闸清在 issue.json(与 answer() 的闸裁决同一纪律)。清闸后
+      // waiting_user 的理由消失,状态回落 idle,由平台回合接管。
+      delete state.gate;
+      if (state.status === "waiting_user") state.status = "idle";
+    }
+    recordTransition(state, {
+      source: "platform",
+      note: `网管环境已配置(${environment.hosts.join(", ")})`,
+    });
+    saveState(live.root, state);
+    this.log(`[issue-flow] ${id} 网管环境已配置(${environment.name})`);
+    this.startPlatformTurn(live,
+      "平台通知: 网管环境已配置(密码由平台保管,不进入对话)。"
+        + "请重试刚才的操作——拉日志用 fetch_logs,换库部署用 build_deploy。");
+    return summarize(state);
+  }
+
   // ---- 会话驱动 ----
 
   /** 并发额度:同时进行的回合数(等待用户/闲置/挂起的会话不占额度)。 */
@@ -600,7 +653,13 @@ export class IssueFlowService {
 
   /** 固定流程的阶段进入钩子:prep_repo 在克隆就绪后由平台收口(有单
    * 场景还要宿主建分支——分支名规范烧着单号,交给 Agent 起名会漂)。
-   * 克隆失败按回合异常走 failed(free/fixed 同语义)。 */
+   * 克隆失败按回合异常走 failed(free/fixed 同语义)。
+   *
+   * 2026-08-28 拍板:登记不再卡仓。进了 prep_repo 还没有仓时,宿主举
+   * repo_needed 闸(AI 识别/用户填地址/无代码仓跳过三选一),不抛异常
+   * ——闸只记"在场"不动状态,回合照常收口,waiting_user 由 settle 在
+   * 回合终点定格。pump 先跑的 ensureCloned 对空仓清单本来就 no-op,
+   * 这里是"空仓不克隆"的唯一裁决点,不存在双重克隆。 */
   private async enterFixedStage(
     live: LiveIssue,
     stage: FixedStage,
@@ -610,7 +669,10 @@ export class IssueFlowService {
       return;
     }
     if (!state.repo_urls?.length) {
-      throw new Error("固定流程缺少代码仓地址(登记时校验过,这里是防御)");
+      raiseGate(state, "repo_needed", REPO_NEEDED_QUESTION,
+        [...GATE_OPTIONS.repo_needed]);
+      saveState(live.root, state);
+      return;
     }
     const repoDir = join(live.root, "repo");
     if (!existsSync(join(repoDir, ".git"))) {
@@ -790,6 +852,25 @@ export class IssueFlowService {
       onStageEntered: async (stage) => {
         await service.enterFixedStage(live, stage);
       },
+      // Agent 侧绑定业务模块(bind_module)后的宿主收口:克隆→建分支→
+      // 推进问题分析;repo_needed 闸若在场一并清掉——仓已定,问题卡失效。
+      // 只在仍处 prep_repo 时做阶段推进:后期的改绑只更新模块标签,
+      // 不倒转阶段(fixedAdvance 无条件置目标阶段,不设防会拉回 analyze)。
+      onReposBound: async () => {
+        if (live.state.gate?.kind === "repo_needed") {
+          delete live.state.gate;
+          if (live.state.status === "waiting_user") {
+            live.state.status = "running";
+          }
+        }
+        if (live.state.stage !== "prep_repo") return;
+        await service.enterFixedStage(live, "prep_repo");
+        saveState(live.root, live.state);
+        // 回合多半还在跑(turning 在册),startPlatformTurn 会降级为
+        // stage_note;工具回执本身已告诉模型下一步,这里只是兜底开回合。
+        service.startPlatformTurn(live, fixedAdvanceNotice(live.state,
+          "业务模块已绑定,代码仓克隆就绪,已进入「问题分析」阶段,请开始分析。"));
+      },
       log: (message) => this.log(message),
     };
     live.toolContext = context;
@@ -923,6 +1004,12 @@ export class IssueFlowService {
     if (this.turning.has(live.id)) {
       throw new IssueControlError("会话正在处理上一条输入,稍候再试");
     }
+    if (gate.kind === "env_needed") {
+      // 环境闸的作答口是 POST /issues/:id/environment(问题卡上的专用
+      // 表单),不是选项卡:走错口不动状态,如实指路。
+      throw new IssueControlError(
+        "网管环境请在问题卡的配置表单里填写服务器地址与共用密码后提交");
+    }
     const decision = input.decision ?? "";
     const notes = input.notes?.trim() ?? "";
     const supplement = notes ? `\n用户补充说明: ${notes}` : "";
@@ -946,6 +1033,84 @@ export class IssueFlowService {
         void this.pump();
       });
     };
+
+    if (gate.kind === "repo_needed") {
+      // ① AI 依据业务模块识别:清闸后仍在 prep_repo 开平台回合,把
+      // lookup_modules → bind_module →(检索不中)AskUserQuestion 的
+      // 推断路径交给 Agent,绑定成功由宿主钩子(onReposBound)克隆推进。
+      if (decision.startsWith(GATE_OPTIONS.repo_needed[0])) {
+        saveState(live.root, state);
+        startTurn(
+          "用户选择由你依据业务模块自动识别代码仓,仍在「拉取代码仓」阶段。"
+            + "请先用 lookup_modules 按问题单描述里的业务关键词检索业务模块库:"
+            + "命中且绑定了代码仓的模块,调用 bind_module 绑定——平台会克隆代码仓"
+            + "并推进到问题分析;检索不到匹配模块,再用 AskUserQuestion 问用户"
+            + `要业务模块名称或直接要代码仓地址。${supplement}`);
+        return summarize(state);
+      }
+      // ② 用户填地址:URL 就在补充说明里(逗号/空白分隔,首个=主仓)。
+      // 校验与登记同一把尺(normalizeIssueRepos + 凭据前置门禁);不通过
+      // 不炸流程——原样再举同一张闸,带上失败原因让用户改。
+      if (decision.startsWith(GATE_OPTIONS.repo_needed[1])) {
+        const refill = (reason: string): IssueSummary => {
+          raiseGate(state, "repo_needed", REPO_NEEDED_QUESTION,
+            [...GATE_OPTIONS.repo_needed], undefined,
+            `上一次填写未通过:${reason};请重新填写代码仓地址,`
+              + "或改选 AI 识别/跳过拉取");
+          state.status = "waiting_user";
+          saveState(live.root, state);
+          return summarize(state);
+        };
+        const candidates = notes.split(/[\s,，、]+/).map((item) => item.trim())
+          .filter(Boolean);
+        if (!candidates.length) return refill("补充说明里没有代码仓地址");
+        let repos: string[];
+        try {
+          repos = normalizeIssueRepos(undefined, candidates);
+          this.requireGitIdentity(state.account, repos);
+        } catch (error) {
+          return refill(error instanceof Error ? error.message : String(error));
+        }
+        state.repo_url = repos[0];
+        state.repo_urls = repos;
+        recordTransition(state, {
+          source: "platform",
+          note: `用户填写代码仓 ${repos.length} 个,平台开始克隆`,
+        });
+        this.turning.add(live.id);
+        state.status = "running";
+        saveState(live.root, state);
+        void this.runTurn(live, async () => {
+          // 与首轮 pump 同序:克隆就绪→宿主建分支→推进问题分析,再交接。
+          await this.ensureContainer(live);
+          await this.ensureCloned(live);
+          await this.enterFixedStage(live, "prep_repo");
+          const message = fixedAdvanceNotice(state,
+            "代码仓已克隆,进入「问题分析」阶段,请开展分析。");
+          if (live.driver) return live.driver.continueWith(message);
+          const driver = await this.openDriver(live);
+          return driver.startResume(issueResumePrompt(state, message));
+        }).finally(() => {
+          this.turning.delete(live.id);
+          void this.pump();
+        });
+        return summarize(state);
+      }
+      // ③ 无代码仓跳过:无代码改动是合法形态,机械跳过拉取代码仓
+      // (skip-span:prep_repo 记 done)直达问题分析。
+      if (decision.startsWith(GATE_OPTIONS.repo_needed[2])) {
+        fixedAdvance(state, "analyze",
+          "用户确认本单无需代码仓,跳过拉取代码仓");
+        saveState(live.root, state);
+        startTurn(fixedAdvanceNotice(state,
+          "用户确认本单无代码改动,已跳过「拉取代码仓」进入「问题分析」。"
+            + "请基于单据详情开展分析;需要日志证据时调用 fetch_logs"
+            + "(缺网管环境平台会向用户发起配置请求)。"));
+        return summarize(state);
+      }
+      throw new IssueControlError(
+        `无法识别的代码仓答复:「${decision.slice(0, 40)}」,请通过问题卡的选项作答`);
+    }
 
     if (gate.kind === "analysis_confirm") {
       if (decision.startsWith(GATE_OPTIONS.analysis_confirm[0])) {

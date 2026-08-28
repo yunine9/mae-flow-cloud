@@ -17,6 +17,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
+import { EventEmitter } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
@@ -117,6 +118,39 @@ function issueGet(
       parts,
       { issueFlow: service, authEnabled: false },
     ).catch(reject);
+  });
+}
+
+/** POST 版(带 JSON 体):readBody 在 request 上挂 data/end 监听,
+ * 所以假请求得是个 EventEmitter。 */
+function issuePost(
+  parts: string[],
+  payload: unknown,
+  service?: IssueFlowService,
+): Promise<{ status: number; body: Record<string, any> }> {
+  return new Promise((resolve, reject) => {
+    const request = new EventEmitter() as any;
+    request.method = "POST";
+    let status = 0;
+    void handleIssueRoutes(
+      request,
+      {
+        writeHead: (code: number) => {
+          status = code;
+        },
+        end: (output?: string) => {
+          try {
+            resolve({ status, body: JSON.parse(output ?? "{}") });
+          } catch (error) {
+            reject(error);
+          }
+        },
+      } as any,
+      parts,
+      { issueFlow: service, authEnabled: false },
+    ).catch(reject);
+    request.emit("data", Buffer.from(JSON.stringify(payload)));
+    request.emit("end");
   });
 }
 
@@ -732,5 +766,55 @@ test("MCP 网关客户端:握手、token 头、工具调用与未配置 fail-lou
       /未配置/);
   } finally {
     await new Promise<void>((resolve) => fake.close(() => resolve()));
+  }
+});
+
+test("网管环境配置路由(2026-08-28):POST /issues/:id/environment 密码进 vault 不进 issue.json;缺地址/缺密码打回", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-envroute-"));
+  mkdirSync(join(dataDir, "issues", "issue-1"), { recursive: true });
+  writeFileSync(join(dataDir, "issues", "issue-1", "issue.json"), JSON.stringify({
+    id: "issue-1", account: "dev",
+    created_at: "2026-08-28T00:00:00Z", updated_at: "2026-08-28T00:00:00Z",
+    title: "t", description: "", source: "manual", mode: "fixed",
+    scenario: "no_ticket", status: "idle", stage: "analyze",
+    stage_note: "", stage_at: "2026-08-28T00:00:00Z",
+  }));
+  const script: Scene[] = [{ text: "环境已配置,重试日志。" }];
+  const model = new ScriptedModelServer(script);
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+  });
+  try {
+    // 校验打回:缺地址 / 缺密码都是 409 带人话,不产生任何落盘。
+    const noHosts = await issuePost(["issues", "issue-1", "environment"],
+      { hosts: [], password: "x" }, service);
+    assert.equal(noHosts.status, 409);
+    assert.match(noHosts.body.error, /至少要有一个服务器地址/);
+    const noPassword = await issuePost(["issues", "issue-1", "environment"],
+      { hosts: ["10.0.0.8"], password: "   " }, service);
+    assert.equal(noPassword.status, 409);
+    assert.match(noPassword.body.error, /共用密码/);
+
+    // 正常配置:状态只有 credential_ref,密码在 vault 加密文件里,
+    // issue.json 原文永远搜不到明文;随后平台回合照常收口。
+    const ok = await issuePost(["issues", "issue-1", "environment"],
+      { hosts: ["10.0.0.8", "10.0.0.9"], port: 2222,
+        password: "env-shared-secret" }, service);
+    assert.equal(ok.status, 200);
+    assert.ok(ok.body.environment?.credential_ref, "状态里只有凭据引用");
+    assert.equal(ok.body.gate ?? undefined, undefined, "没有闸在场就不凭空造闸");
+    assert.deepEqual(ok.body.environment?.hosts, ["10.0.0.8", "10.0.0.9"]);
+    assert.equal(ok.body.environment?.port, 2222);
+    assert.ok(existsSync(join(dataDir, ".issue-environments", "issue-1.json")),
+      "密码落在 vault 加密文件");
+    const raw = readFileSync(join(dataDir, "issues", "issue-1", "issue.json"), "utf-8");
+    assert.ok(!raw.includes("env-shared-secret"), "issue.json 永远没有密码明文");
+    await until(() => service.get("issue-1").status === "idle"
+      ? 1 : undefined, "配置后的平台回合收口");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
   }
 });

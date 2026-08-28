@@ -19,6 +19,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { validateRepoUrl } from "./issueGit.ts";
 
 export type IssueSource = "manual" | "dts";
 
@@ -219,7 +220,12 @@ export interface IssuePushRecord {
 export type IssueGateKind =
   | "analysis_confirm" // 报告确认:放行进入问题修改
   | "conclude"         // 无单结论:是问题→挂起 / 非问题→闭环
-  | "env_verify";      // 换库验证:通过→待归档 / 有问题→回退问题分析
+  | "env_verify"       // 换库验证:通过→待归档 / 有问题→回退问题分析
+  | "repo_needed"      // 拉取代码仓:AI 识别 / 用户填地址 / 无代码仓跳过(2026-08-28)
+  | "env_needed";      // 网管环境:拉日志/换库缺地址与密码时现场补配(2026-08-28)
+
+/** env_needed 闸的用途面:决策卡据此给表单文案,服务端清闸后提示重试。 */
+export type IssueGateScope = "logs" | "deploy";
 
 export interface IssueGate {
   id: string;
@@ -228,6 +234,8 @@ export interface IssueGate {
   state_version: number;
   question: { questions: Array<{ question: string; options: string[] }> };
   context?: string;
+  /** 仅 env_needed:闸为哪类动作而举(logs=拉日志 / deploy=换库部署)。 */
+  scope?: IssueGateScope;
   /** 机器可读提案(结论闸带 AI 的结论与摘要,用户过目后确认)。 */
   proposal?: {
     conclusion?: "issue" | "non_issue";
@@ -317,6 +325,37 @@ export interface IssueSummary extends IssueSessionState {
 }
 
 // ---- 多仓工作区映射(克隆/工具/提示词共用,目录命名只写这一处) ----
+
+/** 宿主侧控制类错误(登记/作答/配置的校验打回):路由层据此回 409
+ * 带人话,而不是当异常 500。真相只在这一处定义,service 转出复用。 */
+export class IssueControlError extends Error {}
+
+/** 一个问题会话最多拉取的代码仓数。模块库允许一个模块绑 20 个仓,
+ * 但问题会话一轮克隆 8 个已是分析上限——再多说明该拆会话了。 */
+export const MAX_ISSUE_REPOS = 8;
+
+/** 登记仓清单:单仓(兼容字段)与多仓合并去重,逐个过协议校验。
+ * 顺序即语义——首个是主仓(交付仓),其余是参考仓。登记(create)、
+ * 闸门补填(resolveGate)与 Agent 绑模块(bind_module)三处共用同一
+ * 把尺子,上限与协议规则不允许各自为政。 */
+export function normalizeIssueRepos(
+  single: string | undefined,
+  list: string[] | undefined,
+): string[] {
+  const unique: string[] = [];
+  for (const raw of [single ?? "", ...(list ?? [])]) {
+    const url = raw.trim();
+    if (!url) continue;
+    const validated = validateRepoUrl(url);
+    if (!unique.includes(validated)) unique.push(validated);
+  }
+  if (unique.length > MAX_ISSUE_REPOS) {
+    throw new IssueControlError(
+      `一个问题会话最多拉取 ${MAX_ISSUE_REPOS} 个代码仓(当前 ${unique.length} 个);`
+        + "请精简模块绑定或分多次分析");
+  }
+  return unique;
+}
 
 /** 会话登记仓 → 工作区克隆路径:主仓在 repo/(交付链路既定位置),
  * 参考仓在 ref/<仓名>/(只读分析)。仓目录名取地址末段去 .git,
@@ -410,6 +449,8 @@ const GATE_NAMES: Record<IssueGateKind, string> = {
   analysis_confirm: "分析报告确认",
   conclude: "结论确认",
   env_verify: "环境验证",
+  repo_needed: "代码仓确认",
+  env_needed: "网管环境配置",
 };
 
 export function raiseGate(
@@ -419,6 +460,7 @@ export function raiseGate(
   options: string[],
   proposal?: IssueGate["proposal"],
   context?: string,
+  scope?: IssueGateScope,
 ): void {
   state.gate = {
     id: `gate-${state.id}-${Date.now().toString(36)}`,
@@ -427,6 +469,7 @@ export function raiseGate(
     question: { questions: [{ question, options }] },
     ...(proposal ? { proposal } : {}),
     ...(context ? { context } : {}),
+    ...(scope ? { scope } : {}),
     created_at: new Date().toISOString(),
   };
   recordTransition(state, {

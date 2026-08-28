@@ -2297,7 +2297,11 @@ export type IssueStageState =
 export type IssueGateKind =
   | "analysis_confirm"
   | "conclude"
-  | "env_verify";
+  | "env_verify"
+  // 2026-08-28:拉取代码仓缺仓(AI 识别/填地址/跳过三选一)与网管
+  // 环境缺配置(拉日志/换库现场补配),闸都由工具/宿主现场举。
+  | "repo_needed"
+  | "env_needed";
 
 export interface IssueGateCard {
   id: string;
@@ -2305,6 +2309,8 @@ export interface IssueGateCard {
   state_version: number;
   question: { questions?: Array<{ question: string; options: string[] }> };
   context?: string;
+  /** 仅 env_needed:闸为哪类动作而举(logs=拉日志 / deploy=换库部署)。 */
+  scope?: "logs" | "deploy";
   proposal?: {
     conclusion?: "issue" | "non_issue";
     summary?: string;
@@ -2365,6 +2371,10 @@ export interface IssueWaitingCard {
   question: { questions?: Array<{ question: string; options: string[] }> };
   context?: string;
   created_at: string;
+  /** 平台闸专用(会话视图从 detail.gate 带过来):闸的种类与用途面。
+   * env_needed 据此渲染专用环境表单,其余闸仍走通用选项卡。 */
+  gate_kind?: IssueGateKind;
+  gate_scope?: "logs" | "deploy";
 }
 
 export interface IssueDetail extends IssueSummary {
@@ -2469,6 +2479,20 @@ export function steerIssue(id: string, text: string): Promise<IssueSummary> {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ text }),
+  });
+}
+
+/** 网管环境配置(env_needed 闸的作答口):登记时没配环境,拉日志/
+ * 换库现场举闸后在这里补地址与密码。密码只进服务端 vault,不落
+ * 状态/事件;成功即清闸,平台会开回合让 AI 重试刚才的操作。 */
+export function attachIssueEnvironment(
+  id: string,
+  input: IssueEnvironmentForm,
+): Promise<IssueSummary> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/environment`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
   });
 }
 

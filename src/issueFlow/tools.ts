@@ -30,12 +30,15 @@ import {
   fixedStageIndex,
   fixedStages,
   issueRepoWorkspaces,
+  normalizeIssueRepos,
   raiseGate,
   recordTransition,
   validStage,
   type FixedStage,
+  type IssueGateScope,
   type IssueSessionState,
 } from "./state.ts";
+import { readBusinessModule, listBusinessModules } from "../businessModuleLibrary.ts";
 import type { IssueOpsTools } from "./opsTools.ts";
 import type { DtsGateway } from "./gateways.ts";
 import {
@@ -65,6 +68,9 @@ export interface IssueToolContext {
   onMrCreated?(): void;
   /** 固定流程:进入新阶段的宿主收口钩子(prep_repo 的建分支/推进)。 */
   onStageEntered?(stage: FixedStage): Promise<void>;
+  /** 固定流程:bind_module 绑定业务模块后的宿主收口(克隆→建分支→
+   * 推进问题分析,顺带清掉在场 repo_needed 闸)。 */
+  onReposBound?(): Promise<void>;
   log?: (message: string) => void;
 }
 
@@ -86,7 +92,38 @@ export const GATE_OPTIONS = {
   analysis_confirm: ["确认报告,开始问题修改", "有补充意见(填写补充说明)"],
   conclude: ["确认是问题,挂起等提单", "确认非问题,闭环归档", "有补充意见(填写补充说明)"],
   env_verify: ["验证通过", "验证发现问题(填写补充说明)"],
+  // repo_needed 三条裁决路(2026-08-28):AI 识别走 lookup_modules→
+  // bind_module;手填的地址随 notes 交给服务端校验;跳过=无代码改动。
+  repo_needed: [
+    "AI 依据业务模块识别",
+    "我来填写代码仓地址",
+    "无代码仓,跳过拉取",
+  ],
+  // env_needed 在决策卡上渲染为专用表单(地址+密码),不走选项卡;
+  // 这个选项只是卡面占位,服务端作答口是 /environment。
+  env_needed: ["填写并继续"],
 } as const;
+
+/** 缺网管环境时的平台闸(拉日志/换库现场补配,2026-08-28):举闸后
+ * 工具如实失败,让模型结束回合——不再让 AI 空口向用户要密码
+ * (秘密纪律:密码只走 /environment 表单进 vault,不进对话)。 */
+function raiseEnvNeededGate(
+  ctx: IssueToolContext,
+  scope: IssueGateScope,
+): never {
+  raiseGate(
+    ctx.state,
+    "env_needed",
+    "获取日志/换库需要网管服务器地址与密码",
+    [...GATE_OPTIONS.env_needed],
+    undefined,
+    undefined,
+    scope,
+  );
+  ctx.persist();
+  fail("已向用户发起网管环境配置请求,等待填写"
+    + "(用户在问题卡提交后,平台会通知你重试刚才的操作)");
+}
 
 /** 分析报告的既定落点(prompt 行为契约要求 Agent 维护它,闸门以它
  * 为门票——报告不在场就举闸等于让用户对着空气确认)。 */
@@ -202,10 +239,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     async execute(_toolCallId: string, params: any) {
       if (!ctx.ops) fail("宿主未部署运维工具(assets/ops-tools),无法拉日志");
       const password = ctx.environmentPassword?.();
-      if (!password) {
-        fail("本会话未配置网管环境(地址+密码)。请向用户说明:需要在登记问题时"
-          + "填写网管环境;纯代码分析可继续,缺日志证据时明确提问");
-      }
+      if (!password) raiseEnvNeededGate(ctx, "logs");
       const hosts = (params.hosts as string[] | undefined)?.length
         ? params.hosts as string[]
         : ctx.state.environment?.hosts ?? [];
@@ -222,6 +256,45 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       });
       ctx.persist();
       return ok(result.summary);
+    },
+  }));
+
+  // ---- 业务模块库检索(两模式共用;fixed 限拉取代码仓/问题分析阶段) ----
+  // 把"问题单 → 业务模块 → 代码仓"的映射交给 Agent 现场查证:模块库
+  // 是宿主数据目录里的显式发布实体,工具只读目录、只回 id/名称/仓清单,
+  // 永不携带任何凭据。
+
+  tools.push(defineTool({
+    name: "lookup_modules",
+    label: "Look Up Business Modules",
+    description:
+      "按关键词检索业务模块库(模块名称/ID/说明包含即命中,大小写不敏感),"
+      + "返回命中的模块 ID、名称与绑定的代码仓清单。用于把问题单映射到业务模块:"
+      + "先检索,命中后(fixed 流程)用 bind_module 绑定;检索不到就如实告知并"
+      + "用 AskUserQuestion 问用户。",
+    parameters: Type.Object({
+      keyword: Type.String({
+        description: "检索词:模块名称/ID/说明的子串(如「媒体」「pay」)",
+      }),
+    }),
+    async execute(_toolCallId: string, params: any) {
+      gateStage("lookup_modules", ["prep_repo", "analyze"]);
+      const keyword = String(params.keyword ?? "").trim().toLowerCase();
+      if (!keyword) fail("keyword 不能为空:给一个模块名称/ID/说明的子串");
+      const { modules } = listBusinessModules(ctx.dataRoot);
+      const hits = modules.filter((module) =>
+        module.status === "active"
+        && (module.name.toLowerCase().includes(keyword)
+          || module.id.toLowerCase().includes(keyword)
+          || module.description.toLowerCase().includes(keyword)));
+      if (!hits.length) return ok("无匹配业务模块");
+      const lines = hits.map((module) => `- ${module.name}(id: ${module.id});`
+        + `代码仓 ${module.repositories.length} 个${module.repositories.length
+          ? `:\n    ${module.repositories.join("\n    ")}`
+          : "(该模块未绑定代码仓)"}`);
+      return ok(`命中 ${hits.length} 个业务模块:\n${lines.join("\n")}`
+        + (fixed ? "\n\n要绑定其中某个模块请调用 bind_module(带模块 id)。"
+          : "(自由探索模式仅供参考,不提供绑定)"));
     },
   }));
 
@@ -247,7 +320,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       gateStage("build_deploy", ["deploy_verify"]);
       if (!ctx.ops) fail("宿主未部署运维工具(assets/ops-tools),无法换库");
       const password = ctx.environmentPassword?.();
-      if (!password) fail("本会话未配置网管环境,无法换库部署");
+      if (!password) raiseEnvNeededGate(ctx, "deploy");
       const repoDir = join(ctx.workspace, "repo");
       if (!existsSync(join(repoDir, ".git"))) fail("代码克隆不存在,无法部署");
       const hosts = (params.hosts as string[] | undefined)?.length
@@ -451,6 +524,66 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
   // ---- 以下三个工具仅固定流程注册 ----
 
   if (fixed && scenario) {
+    // 绑定业务模块(拉取代码仓阶段的 AI 识别路):绑完宿主即克隆推进。
+    tools.push(defineTool({
+      name: "bind_module",
+      label: "Bind Business Module",
+      description:
+        "把会话绑定到业务模块,并按模块绑定的代码仓清单补齐本会话的代码仓"
+        + "(与已登记仓合并去重)。先 lookup_modules 检索再调用;绑定后平台"
+        + "自动克隆并推进到问题分析。重复调用=改绑(更新模块标签,已克隆的"
+        + "仓不动);模块没绑代码仓会失败,此时请用 AskUserQuestion 向用户"
+        + "要代码仓地址。",
+      parameters: Type.Object({
+        module_id: Type.String({
+          description: "业务模块 ID(lookup_modules 返回的 id)",
+        }),
+      }),
+      async execute(_toolCallId: string, params: any) {
+        gateStageFrom("bind_module", "prep_repo");
+        const moduleId = String(params.module_id ?? "").trim();
+        if (!moduleId) fail("module_id 不能为空:先 lookup_modules 检索拿到模块 id");
+        let module;
+        try {
+          module = readBusinessModule(ctx.dataRoot, moduleId);
+        } catch (error) {
+          fail(`业务模块 ${moduleId} 不存在或元数据不可读:`
+            + (error instanceof Error ? error.message : String(error))
+            + "。请用 lookup_modules 重新检索,或用 AskUserQuestion 问用户");
+        }
+        if (module.status !== "active") {
+          fail(`业务模块「${module.name}」已归档,不能绑定`);
+        }
+        if (!module.repositories.length) {
+          fail(`业务模块「${module.name}」没有绑定代码仓——请用 AskUserQuestion`
+            + "向用户要代码仓地址,由用户在平台闸或对话里提供");
+        }
+        // 模块仓与已登记仓合并去重(用户手填的在前=主仓语义不变),
+        // 与登记/闸门补填同一把尺;超上限整次打回,不留半绑定状态。
+        const merged = normalizeIssueRepos(undefined,
+          [...(state.repo_urls ?? []), ...module.repositories]);
+        const rebind = state.module_id === module.id;
+        state.module_id = module.id;
+        state.module = module.name;
+        state.repo_url = merged[0];
+        state.repo_urls = merged;
+        recordTransition(state, {
+          source: "platform",
+          note: rebind
+            ? `业务模块改绑为「${module.name}」(代码仓 ${merged.length} 个)`
+            : `已绑定业务模块「${module.name}」(代码仓 ${merged.length} 个)`,
+        });
+        ctx.persist();
+        // 宿主收口:克隆→建分支→推进问题分析;在场的 repo_needed 闸
+        // 由钩子清掉。回执告诉模型下一步(阶段已由平台推进)。
+        await ctx.onReposBound?.();
+        return ok(`已绑定业务模块「${module.name}」,会话代码仓 ${merged.length} 个。`
+          + (state.stage === "analyze"
+            ? "平台已克隆代码仓并推进到「问题分析」阶段,请开始分析。"
+            : "模块标签已更新,请继续当前阶段的工作。"));
+      },
+    }));
+
     // 提交分析报告:人工闸的入口(有单=报告确认;无单=结论确认)
     tools.push(defineTool({
       name: "submit_analysis",

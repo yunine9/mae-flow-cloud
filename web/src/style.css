@@ -1953,14 +1953,18 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-session-mr { padding: 9px 13px; border-radius: 9px; background: color-mix(in srgb, var(--accent) 7%, transparent); color: var(--accent); font-size: var(--font-size-assist); }
 .issue-session-mr a { color: inherit; }
 
-/* ---- 固定流程:阶段进度条(计划线;固定模式下的唯一阶段条) ---- */
+/* ---- 固定流程:阶段管道(计划线;固定模式下的唯一阶段条) ----
+   视觉对齐需求工作台的 task-phase-track:节点在上、词签在下,细连线
+   把阶段串成一条管;走过的亮(进线着色=已经发生的事),当前阶段节点
+   放大描白边、光晕呼吸。状态色:done=绿实心、当前=紫发光、redo=琥珀、
+   inherited=空心弱化,pending=默认空心。 */
 .issue-fixed-progress {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 18px;
-  padding: 11px 14px;
+  display: grid;
+  gap: 6px;
+  padding: 12px 16px 10px;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--surface);
-  font-size: var(--font-size-dense);
 }
 .issue-round-badge {
   padding: 2px 9px; border-radius: 999px; font-weight: 700;
@@ -1968,16 +1972,55 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   background: color-mix(in srgb, #d49b37 16%, transparent);
   border: 1px solid color-mix(in srgb, #d49b37 38%, transparent);
 }
+.issue-fixed-head { display: flex; align-items: center; gap: 8px; min-height: 1em; }
+.issue-fixed-track {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(64px, 1fr));
+}
 .issue-fixed-step {
-  display: inline-flex; align-items: center; gap: 6px;
+  position: relative;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
   color: var(--faint);
+  font-size: var(--font-size-dense);
+  line-height: 1.2;
+  text-align: center;
 }
-.issue-fixed-dot {
-  width: 9px; height: 9px; border-radius: 50%;
-  background: var(--line);
+.issue-fixed-step > i {
+  position: relative;
+  z-index: 2;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--surface);
 }
+/* 连线是"进线":画在本节点左侧,通到本节点的路走过才着色 */
+.issue-fixed-step:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  top: 3.5px;
+  left: 50%;
+  width: 100%;
+  height: 1.5px;
+  background: var(--line-strong);
+}
+.issue-fixed-step.state-done { color: var(--text-strong); }
+.issue-fixed-step.state-done > i { border-color: var(--success); background: var(--success); }
+.issue-fixed-step.state-done::before { background: var(--success); }
 .issue-fixed-step.state-in_progress { color: var(--accent); font-weight: 700; }
-.issue-fixed-step.state-in_progress .issue-fixed-dot {
+.issue-fixed-step.state-in_progress::before {
+  background: linear-gradient(90deg, var(--success), var(--accent));
+}
+.issue-fixed-step.state-in_progress > i {
+  width: 11px;
+  height: 11px;
+  margin-top: -1.5px;
+  border: 2px solid var(--surface);
   background: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
   animation: issueStagePulse 1.6s ease-in-out infinite;
@@ -1987,17 +2030,25 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   50% { box-shadow: 0 0 0 8px color-mix(in srgb, var(--accent) 8%, transparent); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .issue-fixed-step.state-in_progress .issue-fixed-dot { animation: none; }
+  .issue-fixed-step.state-in_progress > i { animation: none; }
 }
-.issue-fixed-step.state-done { color: var(--text-strong); }
-.issue-fixed-step.state-done .issue-fixed-dot { background: var(--success); }
 .issue-fixed-step.state-inherited { color: var(--muted); }
-.issue-fixed-step.state-inherited .issue-fixed-dot {
+.issue-fixed-step.state-inherited > i {
+  border-color: var(--muted);
   background: transparent;
-  border: 2px solid var(--muted);
+}
+.issue-fixed-step.state-inherited::before {
+  background: color-mix(in srgb, var(--muted) 55%, var(--line));
 }
 .issue-fixed-step.state-redo { color: #a8541f; }
-.issue-fixed-step.state-redo .issue-fixed-dot { background: #d49b37; }
+.issue-fixed-step.state-redo > i { border-color: #d49b37; background: #d49b37; }
+.issue-fixed-step.state-redo::before { background: #d49b37; }
+.issue-fixed-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .issue-fixed-tag {
   font-style: normal; font-size: 10px; line-height: 1;
   padding: 2px 5px; border-radius: 5px;
@@ -2296,6 +2347,14 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   font-weight: 700; cursor: pointer;
 }
 .issue-decision-submit > button:disabled { opacity: .55; cursor: not-allowed; }
+
+/* env_needed 闸的专用环境表单(地址/端口/密码):通用问题字段在
+   .issue-decision 已有样式,这里只管表单自身的间距与告警行。 */
+.issue-decision-env { display: grid; gap: 10px; padding: 13px 15px 0; }
+.issue-decision-env .issue-field { margin: 0; }
+.issue-decision-env .issue-decision-note { margin: 0; }
+.issue-decision-env .issue-decision-note[role="alert"] { color: #a8541f; }
+.issue-decision-env .issue-decision-submit { margin: 0 -15px 0; }
 
 .issue-analysis-flag {
   margin-left: auto;
@@ -5278,7 +5337,9 @@ pre {
   min-height: 58px;
   padding: 7px 22px;
   display: grid;
-  grid-template-columns: repeat(4, minmax(158px, 1fr));
+  /* 列数跟页签数走(auto-fit 把空轨道塌掉):任务侧四格铺满,问题流
+     两格也铺满——不为一格空白留半条死街。 */
+  grid-template-columns: repeat(auto-fit, minmax(158px, 1fr));
   align-items: stretch;
   gap: 6px;
   flex: none;

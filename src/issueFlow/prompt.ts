@@ -66,7 +66,10 @@ export function materializeIssueSkills(workspace: string): string[] {
 }
 
 function envLine(state: IssueSessionState): string {
-  if (!state.environment) return "未配置网管环境(不能拉日志/换库;纯代码分析可继续)。";
+  if (!state.environment) {
+    return "未配置网管环境——需要拉日志/换库时直接调工具,平台会向用户发起"
+      + "环境配置请求(密码只进平台,不经你手)。";
+  }
   return `网管环境「${state.environment.name}」: ${state.environment.hosts.join(", ")}`;
 }
 
@@ -110,8 +113,12 @@ const FIXED_STAGE_BRIEFS: Record<FixedStage, { goal: string; tools: string }> = 
   dts_info:
     { goal: "调 dts_get_ticket 拉全单据详情,通读现象与处理历史", tools: "dts_get_ticket" },
   prep_repo:
-    { goal: "等待平台克隆代码仓并建分支(宿主代劳,克隆就绪后平台会自动进入下一阶段)",
-      tools: "(本阶段由平台推进,无 Agent 工具)" },
+    { goal: "确定代码仓:登记时未带仓,平台已举「代码仓确认」卡等用户作答"
+      + "(填地址/AI 识别/跳过)。用户选 AI 识别后:用 lookup_modules 按问题单"
+      + "描述的业务关键词检索业务模块,命中且带仓就 bind_module 绑定——平台"
+      + "随即克隆并推进到问题分析;检索不到就 AskUserQuestion 问用户要业务"
+      + "模块或代码仓地址",
+      tools: "lookup_modules、bind_module" },
   analyze:
     { goal: "对齐现象-根因-方案,产出 issue-analysis.md,然后 submit_analysis 提交"
       + "(无单场景 submit_analysis 需带结论 issue/non_issue)",
@@ -166,8 +173,9 @@ export function issueFixedOpeningPrompt(state: IssueSessionState): string {
     "## 阶段机契约(平台机械执行,说了算)",
     "1. 阶段真相在平台:你能用哪些工具由当前阶段决定,越权调用会被直接拒绝。",
     `2. 当前阶段「${FIXED_STAGE_LABELS[scenario][current]}」:${brief.goal}。可用工具:${brief.tools}。`,
-    "3. 两个人工闸:分析报告确认(有单)/结论确认(无单)、换库后环境验证——"
-      + "平台举卡等用户,你不要替用户猜结果,举卡后立即结束回合。",
+    "3. 平台闸:代码仓确认(拉取代码仓阶段缺仓时)、分析报告确认(有单)"
+      + "/结论确认(无单)、网管环境配置(拉日志/换库缺环境时)、换库后"
+      + "环境验证——平台举卡等用户,你不要替用户猜结果,举卡后立即结束回合。",
     "4. UT 全绿才能建 MR;MR 建后平台监看流水线,红了会带回失败项让你修,"
       + "同分支修复再推,直到全绿自动进入换库验证。",
     "5. 用户环境验证不通过会整体回退到「问题分析」重走(轮次+1),这是正常节奏不是事故。",

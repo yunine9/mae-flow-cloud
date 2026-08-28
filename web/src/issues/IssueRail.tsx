@@ -10,11 +10,12 @@
  * DTS 单号转正:两段式(校验过目 → 确认转正),转正即跳新会话。
  */
 import { useState } from "react";
-import { issueStageText, type DtsTicketDetail, type IssueDetail } from "../api";
+import { issueStageText, type DtsTicketDetail, type IssueDetail,
+  type IssueGateKind } from "../api";
 import { IssueDecisionCard } from "./IssueDecisionCard";
 
 export function IssueRail({ detail, busy, waiting, onAnswer, onReply,
-  onSteer, onArchive, onCancel, onOpenDoc, onAssociate }: {
+  onSteer, onArchive, onCancel, onOpenDoc, onAssociate, onEnvironment }: {
   detail: IssueDetail;
   busy: boolean;
   /** 等待中的卡(平台闸优先,Agent 问题卡兜底;由会话视图统一裁决,
@@ -25,6 +26,9 @@ export function IssueRail({ detail, busy, waiting, onAnswer, onReply,
     question: { questions?: Array<{ question: string; options: string[] }> };
     context?: string;
     created_at: string;
+    /** 平台闸专用:env_needed 闸在决策卡上渲染专用环境表单。 */
+    gate_kind?: IssueGateKind;
+    gate_scope?: "logs" | "deploy";
   };
   /** 提交问题卡/平台闸答复;返回 true 表示成功。 */
   onAnswer: (decision: string, notes?: string) => Promise<boolean>;
@@ -39,6 +43,12 @@ export function IssueRail({ detail, busy, waiting, onAnswer, onReply,
   /** 挂起会话的关联单号转正(两段式);返回校验详情或转正结果。 */
   onAssociate: (ticket: string, confirm: boolean) =>
     Promise<{ ticket_detail?: DtsTicketDetail }>;
+  /** env_needed 闸的专用提交口(POST /issues/:id/environment)。 */
+  onEnvironment?: (input: {
+    hosts: string[];
+    port?: number;
+    password: string;
+  }) => Promise<boolean>;
 }) {
   // 收口态:自由模式=done+idle;固定模式=末阶段完成+idle(验证通过后)。
   const lastState = detail.stage_states?.[detail.stage_states.length - 1];
@@ -48,9 +58,10 @@ export function IssueRail({ detail, busy, waiting, onAnswer, onReply,
       : detail.stage === "done");
 
   return <aside className="issue-rail">
-    <div className="issue-rail-head"><span>Next Action</span></div>
+    <div className="issue-rail-head"><span>下一步</span></div>
     <div className="issue-rail-body">
-      {waiting && <IssueDecisionCard waiting={waiting} busy={busy} onAnswer={onAnswer} />}
+      {waiting && <IssueDecisionCard waiting={waiting} busy={busy}
+        onAnswer={onAnswer} onEnvironment={onEnvironment} />}
       {!waiting && detail.status === "suspended"
         && <IssueAssociateCard busy={busy} onAssociate={onAssociate} />}
       {!waiting && detail.status !== "suspended" && doneIdle
