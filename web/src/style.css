@@ -1019,17 +1019,6 @@ svg {
   font-size: 13px;
 }
 .launch-draft-state button { color: var(--accent); font-weight: 700; }
-.launch-advanced-toggle {
-  width: 100%; padding: 13px 15px; display: flex; align-items: center;
-  justify-content: space-between; gap: 16px; color: var(--text);
-  border: 1px dashed var(--line-strong); border-radius: 12px;
-  background: var(--surface-soft); text-align: left;
-}
-.launch-advanced-toggle:hover { border-color: var(--accent); background: var(--accent-soft); }
-.launch-advanced-toggle > span { display: grid; gap: 3px; }
-.launch-advanced-toggle strong { font-size: 14px; }
-.launch-advanced-toggle small { color: var(--muted); font-size: 13px; }
-.launch-advanced-toggle > i { color: var(--accent); font-size: 13px; font-style: normal; }
 .launch-loading { margin-bottom: 14px; padding: 13px 14px; color: var(--muted); border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); font-size: var(--font-size-assist); }
 .composer { padding: 22px 24px; }
 .composer label { display: block; }
@@ -1163,6 +1152,10 @@ svg {
 .launch-requirement-section textarea { min-height: 260px; resize: vertical; font-size: 14.5px; line-height: 1.65; }
 .launch-field-grid { margin-top: 12px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .launch-settings-grid { margin-top: 0; }
+.launch-settings-grid .repair-field > small {
+  margin-top: 6px; display: block; color: var(--muted);
+  font-size: var(--font-size-assist); line-height: 1.45;
+}
 .composer-actions {
   /* 字段可增可减(模型下拉只在多于一个模型时出现):弹性换行,
    * 按钮永远收尾。 */
