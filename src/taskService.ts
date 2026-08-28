@@ -247,6 +247,7 @@ import { projectTaskFocus, type TaskFocus } from "./taskFocus.ts";
 import {
   DEVELOPER_ASSISTANT_SESSION,
   appendDeveloperAssistantMessage,
+  developerAssistantConversation,
   developerAssistantGateContract,
   developerAssistantHandoffPrompt,
   developerAssistantMission,
@@ -1073,8 +1074,13 @@ interface TaskState {
   /** running 的暂停不截断当前工具，等 settle 的安全边界收口。 */
   pauseRequested?: boolean;
   /** 用户主动召唤的旁路开发助手。它只在主任务 paused 时运行，不参与
-   * 内核状态迁移；Promise 用于防重、恢复/关闭时确认资源收口。 */
+   * 内核状态迁移；Promise 只代表当前一轮，ready 时会话和容器继续保留。 */
   assistantActive?: Promise<void>;
+  /** 开发助手回合换代号。停止当前动作只终止旁路回合，不改主任务 epoch。 */
+  assistantEpoch?: number;
+  /** 暂停边界从 Pi 内存队列取回的主任务补充。恢复主会话前一直保留，
+   * listInterrupts 也据此如实维持“待读取”。 */
+  pendingMainSteers?: string[];
   /** 开发助手交还给重建主会话的一次性现场摘要。它不是内核证据；
    * 必须持久化，避免服务死在 resume→launch 之间把用户改动上下文丢掉。 */
   pendingAssistantHandoff?: string;
@@ -1600,6 +1606,7 @@ export class TaskService {
       for (const task of this.tasks.values()) {
         // 旧回调即使稍后返回，也不能在关机窗口改写业务状态。
         task.controlEpoch += 1;
+        task.assistantEpoch = (task.assistantEpoch ?? 0) + 1;
         task.pauseRequested = false;
         task.prepushAbort?.abort();
         task.prepushAbort = undefined;
@@ -2950,7 +2957,10 @@ export class TaskService {
   }> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
-    const pending = new Set(task.driver?.pendingSteers() ?? []);
+    const pending = new Set([
+      ...(task.driver?.pendingSteers() ?? []),
+      ...(task.pendingMainSteers ?? []),
+    ]);
     try {
       const rows: Array<{
         text: string; at: string; delivered: boolean;
@@ -3191,7 +3201,8 @@ export class TaskService {
      * 空数组=读不到内核定义,表单就别摆出选择(下单不预选,卡到时
      * 老老实实问人)。 */
     workflows: Array<
-      { key: string; label: string; steps?: number; acks?: number }>;
+      { key: string; label: string; description?: string;
+        steps?: number; acks?: number }>;
     /** 显式发布的业务模块目录。这里只给下单所需摘要，不含知识正文。 */
     business_modules: Array<{
       id: string;
@@ -3867,6 +3878,7 @@ export class TaskService {
         cwd: task.cwd,
         mission: task.mission,
         assistant_handoff: task.pendingAssistantHandoff,
+        pending_main_steers: task.pendingMainSteers,
         applied_developer_intervention_id:
           task.appliedDeveloperInterventionId,
         obsolete_developer_waiting: task.obsoleteDeveloperWaiting,
@@ -3967,6 +3979,9 @@ export class TaskService {
           pendingAssistantHandoff:
             typeof saved.assistant_handoff === "string"
               ? saved.assistant_handoff : undefined,
+          pendingMainSteers: Array.isArray(saved.pending_main_steers)
+            ? saved.pending_main_steers.map(String).filter(Boolean) : undefined,
+          assistantEpoch: 0,
           appliedDeveloperInterventionId:
             typeof saved.applied_developer_intervention_id === "string"
               ? saved.applied_developer_intervention_id : undefined,
@@ -4048,6 +4063,10 @@ export class TaskService {
             paused_from: summary.control?.paused_from ?? "running",
           };
           this.persist(task);
+        }
+        if (summary.status === "paused"
+            && readDeveloperAssistant(workspace).state === "acquiring") {
+          this.activatePendingDeveloperAssistant(task);
         }
         // 进程可死,轮询不死:重启前在等流水线的任务续轮
         // (锚是 delivery.sha,结果仍只认绑定版本)。
@@ -5486,7 +5505,8 @@ export class TaskService {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     let snapshot = readDeveloperAssistant(task.summary.workspace);
-    if (snapshot.state === "running" && !task.assistantActive) {
+    if (["working", "running"].includes(snapshot.state)
+        && !task.assistantActive) {
       snapshot = interruptDeveloperAssistant(task.summary.workspace);
     }
     const events = new EventLog(
@@ -5494,6 +5514,7 @@ export class TaskService {
     ).replay();
     return {
       ...snapshot,
+      messages: developerAssistantConversation(snapshot, events),
       tools: developerAssistantTools(events),
       availability: this.developerAssistantAvailability(task),
     };
@@ -5502,6 +5523,39 @@ export class TaskService {
   private developerAssistantAvailability(
     task: TaskState,
   ): DeveloperAssistantAvailability {
+    if (!this.options.isolation) {
+      return {
+        available: false,
+        code: "core_unavailable",
+        mode: "unavailable",
+        reason: "当前部署未启用任务隔离容器，开发接管不可用",
+      };
+    }
+    if (this.isRequirementAnalysis(task) || this.isIssueTriage(task)) {
+      return {
+        available: false,
+        code: "not_editable",
+        mode: "unavailable",
+        reason: "需求理解阶段请继续使用检视与批注；开发接管只处理具体代码仓任务",
+      };
+    }
+    if (!task.cwd || task.summary.workspace_reclaimed_at) {
+      return {
+        available: false,
+        code: "core_unavailable",
+        mode: "unavailable",
+        reason: "代码现场尚未就绪或已回收，暂不能接管",
+      };
+    }
+    if (["completed", "await_merge", "canceled", "failed"]
+        .includes(task.summary.status)) {
+      return {
+        available: false,
+        code: "not_editable",
+        mode: "unavailable",
+        reason: `任务当前是 ${task.summary.status}，没有可接管的活动代码现场`,
+      };
+    }
     return inspectDeveloperAssistantAvailability(
       task.cwd,
       this.options.host?.kernelRoot,
@@ -5509,9 +5563,9 @@ export class TaskService {
   }
 
   /**
-   * 开发助手只在主任务安全暂停后启动。它不挂 KernelHost，因此任意正常
-   * 构建/测试/检索命令不会被内核阶段门禁误拦；容器、工作区和凭据边界
-   * 仍由 GateService + developerAssistantGateContract 焊死。
+   * 用户发给开发接管会话的每条消息都先持久化。首次消息由服务端负责
+   * 安全暂停主任务，后续消息复用同一 Pi 会话；working 期间的新消息走
+   * steer，和本地 CLI 一样在当前工具结束后送达。
    */
   startDeveloperAssistant(
     id: string,
@@ -5525,29 +5579,92 @@ export class TaskService {
     if (message.length > 12_000) {
       throw new TaskControlError("开发助手单条要求不能超过 12000 字");
     }
-    if (task.summary.status !== "paused") {
-      throw new TaskControlError("请先暂停主任务，再让开发助手处理代码现场");
-    }
-    if (this.isRequirementAnalysis(task) || this.isIssueTriage(task)) {
-      throw new TaskControlError("需求理解阶段请继续使用检视与批注；开发助手只处理具体代码仓任务");
-    }
-    if (!task.cwd || task.summary.workspace_reclaimed_at) {
-      throw new TaskControlError("当前任务代码现场已不可用，不能启动开发助手");
-    }
-    if (!this.options.isolation) {
-      throw new TaskControlError(
-        "开发助手必须在任务容器中运行；当前部署未启用隔离镜像",
-      );
-    }
-    if (task.assistantActive || task.driver || task.container) {
-      throw new TaskControlError("开发助手或其他任务会话仍在运行，请等待本轮收口");
-    }
-
     const availability = this.developerAssistantAvailability(task);
     if (!availability.available) {
       throw new TaskControlError(availability.reason);
     }
-    const previous = readDeveloperAssistant(task.summary.workspace);
+    const workspace = task.summary.workspace;
+    let previous = readDeveloperAssistant(workspace);
+    if (["working", "running"].includes(previous.state)
+        && !task.assistantActive) {
+      previous = interruptDeveloperAssistant(
+        workspace, "上一轮开发会话已不在运行，本条指令将重建会话");
+    }
+    if (previous.state === "returning") {
+      throw new TaskControlError("开发现场正在交还主任务，请等待交还完成");
+    }
+
+    if (["working", "running"].includes(previous.state)) {
+      appendDeveloperAssistantMessage(workspace, "user", message, "working");
+      // 首轮容器/会话还在启动时先落盘；mission 会在会话
+      // 真正就绪后读到它。会话已就绪则直接 steer。
+      if (task.assistantActive && !task.driver) {
+        return this.developerAssistant(id);
+      }
+      if (!task.driver || !task.assistantActive) {
+        throw new TaskControlError("开发会话正在恢复，请稍后重试本条指令");
+      }
+      void task.driver.steer(message).catch((error) => {
+        const current = readDeveloperAssistant(workspace);
+        const state = task.assistantActive
+          && ["working", "running"].includes(current.state)
+          ? "working" : current.state;
+        appendDeveloperAssistantMessage(
+          workspace, "assistant", `追加指令未能送达：${String(error)}`,
+          state, String(error));
+      });
+      return this.developerAssistant(id);
+    }
+
+    if (previous.state === "acquiring") {
+      appendDeveloperAssistantMessage(workspace, "user", message, "acquiring");
+      return this.developerAssistant(id);
+    }
+
+    // 首次接管时，running / waiting_for_human 本来就可能占有主
+    // 会话和容器。它们是 pause 要在安全边界收好的正常资源，
+    // 不能当成开发助手残留而拒绝。
+    if (task.summary.status !== "paused") {
+      appendDeveloperAssistantMessage(workspace, "user", message, "acquiring");
+      this.options.log?.(`任务 ${id} 开发现场由 ${actor} 请求接管`);
+      void this.pause(id, actor).then(() => {
+        this.activatePendingDeveloperAssistant(task);
+      }).catch((error) => {
+        appendDeveloperAssistantMessage(
+          workspace, "assistant", `未能接管主现场：${String(error)}`,
+          "failed", String(error));
+      });
+      return this.developerAssistant(id);
+    }
+
+    if (task.driver && task.container) {
+      appendDeveloperAssistantMessage(workspace, "user", message, "working");
+      this.launchDeveloperAssistantTurn(task, message, true);
+      return this.developerAssistant(id);
+    }
+
+    if (task.driver || task.container) {
+      throw new TaskControlError("主任务正在进入安全暂停边界，请稍后重试");
+    }
+
+    appendDeveloperAssistantMessage(workspace, "user", message, "acquiring");
+    this.options.log?.(`任务 ${id} 开发现场由 ${actor} 请求接管`);
+    this.activatePendingDeveloperAssistant(task);
+    return this.developerAssistant(id);
+  }
+
+  private activatePendingDeveloperAssistant(task: TaskState): void {
+    const workspace = task.summary.workspace;
+    const previous = readDeveloperAssistant(workspace);
+    if (task.summary.status !== "paused" || previous.state !== "acquiring"
+        || task.assistantActive || task.driver || task.container) return;
+    const availability = this.developerAssistantAvailability(task);
+    if (!availability.available || !task.cwd) {
+      appendDeveloperAssistantMessage(
+        workspace, "assistant", availability.reason, "failed",
+        availability.reason);
+      return;
+    }
     let handoff: DeveloperAssistantHandoff | undefined;
     if (this.options.host && task.cwd) {
       let initial;
@@ -5558,7 +5675,7 @@ export class TaskService {
         // Git/哈希读取偶发失败时仍允许助手工作，恢复后由主 Agent
         // 重新读取 current 与工作区，避免把任务永久留在暂停态。
         this.options.log?.(
-          `任务 ${id} 开发助手起点摘要不可用，将在交还时刷新: ${String(error)}`,
+          `任务 ${task.summary.id} 开发助手起点摘要不可用，将在交还时刷新: ${String(error)}`,
         );
         initial = {
           sha: "unavailable",
@@ -5573,28 +5690,46 @@ export class TaskService {
         initial,
       );
     }
+    writeDeveloperAssistant(workspace, {
+      ...previous,
+      state: "working",
+      ...(handoff ? { handoff } : {}),
+    });
+    const latest = [...previous.messages].reverse()
+      .find((item) => item.role === "user")?.text ?? "继续检查当前现场";
+    this.launchDeveloperAssistantTurn(task, latest, false);
+  }
 
-    appendDeveloperAssistantMessage(
-      task.summary.workspace, "user", message, "running", undefined, handoff);
-    this.options.log?.(`任务 ${id} 开发助手由 ${actor} 发起`);
-    const epoch = task.controlEpoch;
-    const work = this.runDeveloperAssistant(task, epoch);
+  private launchDeveloperAssistantTurn(
+    task: TaskState,
+    message: string,
+    continued: boolean,
+  ): void {
+    if (task.assistantActive) {
+      throw new TaskControlError("开发助手仍在处理上一轮输入");
+    }
+    const epoch = (task.assistantEpoch ?? 0) + 1;
+    task.assistantEpoch = epoch;
+    const work = this.runDeveloperAssistant(task, epoch, message, continued);
     task.assistantActive = work;
     void work.catch((error) => {
-      this.options.log?.(`任务 ${id} 开发助手异常: ${String(error)}`);
+      this.options.log?.(
+        `任务 ${task.summary.id} 开发助手异常: ${String(error)}`);
     }).finally(() => {
       if (task.assistantActive === work) task.assistantActive = undefined;
     });
-    return this.developerAssistant(id);
   }
 
   private async runDeveloperAssistant(
     task: TaskState,
     epoch: number,
+    message: string,
+    continued: boolean,
   ): Promise<void> {
     const workspace = task.summary.workspace;
     let driver: CloudSession | undefined;
     let container: TaskCommandContainer | undefined;
+    let keepSession = false;
     let businessModuleKnowledge: MaterializedBusinessModuleKnowledge = {
       entries: [], skill_paths: [], warnings: [],
     };
@@ -5602,6 +5737,17 @@ export class TaskService {
       = { entries: [], warnings: [] };
     try {
       if (!task.cwd) throw new Error("开发助手缺少代码工作区");
+      if (continued) {
+        if (!task.driver || !task.container) {
+          throw new Error("开发会话资源已经释放，将在下一条指令时重建");
+        }
+        driver = task.driver;
+        container = task.container;
+        const outcome = await driver.continueWith(message);
+        await this.settleDeveloperAssistantTurn(task, epoch, driver, outcome);
+        keepSession = true;
+        return;
+      }
       // 必须在容器 start 之前物化：root 宿主会在 start 前把整棵 bind
       // 工作区交给非 root 容器用户。若反过来，0440 的模块正文会在容器
       // 启动后由 root 新建，Agent 的 Read/Grep 反而读不到。
@@ -5625,7 +5771,7 @@ export class TaskService {
       }
       task.containerWorkspace = task.cwd;
       container = await this.startCodingContainer(task, { gitReadOnly: true });
-      if (!this.current(task, epoch) || task.summary.status !== "paused") {
+      if (!this.developerAssistantCurrent(task, epoch)) {
         throw new Error("开发助手启动期间任务状态已变化");
       }
       task.container = container;
@@ -5737,7 +5883,7 @@ export class TaskService {
           : undefined,
         log: this.options.log,
       });
-      if (!this.current(task, epoch) || task.summary.status !== "paused") {
+      if (!this.developerAssistantCurrent(task, epoch)) {
         throw new Error("开发助手会话就绪前任务状态已变化");
       }
       task.driver = driver;
@@ -5751,22 +5897,11 @@ export class TaskService {
         snapshot.messages,
         this.developerAssistantAvailability(task),
       ));
-      if (!this.current(task, epoch)) {
-        interruptDeveloperAssistant(workspace, "任务控制操作中断了开发助手");
-        return;
-      }
-      if (outcome.status !== "turn_finished") {
-        throw new Error(outcome.detail ?? outcome.reason ?? "开发助手会话异常结束");
-      }
-      const reply = driver.finalReply().trim();
-      if (!reply) throw new Error("开发助手没有返回可展示的处理结果");
-      appendDeveloperAssistantMessage(
-        workspace, "assistant", reply, "completed");
+      await this.settleDeveloperAssistantTurn(task, epoch, driver, outcome);
+      keepSession = true;
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
-      if (!this.current(task, epoch)) {
-        interruptDeveloperAssistant(workspace, "任务控制操作中断了开发助手");
-      } else {
+      if (this.developerAssistantCurrent(task, epoch)) {
         appendDeveloperAssistantMessage(
           workspace,
           "assistant",
@@ -5776,6 +5911,7 @@ export class TaskService {
         );
       }
     } finally {
+      if (keepSession) return;
       if (driver && task.driver === driver) task.driver = undefined;
       driver?.dispose();
       if (container && task.container === container) task.container = undefined;
@@ -5788,8 +5924,149 @@ export class TaskService {
             workspace, "assistant", detail, "failed", detail);
         }
       }
-      this.finishDeveloperAssistantHandoff(task);
     }
+  }
+
+  private developerAssistantCurrent(task: TaskState, epoch: number): boolean {
+    return this.tasks.get(task.summary.id) === task
+      && task.assistantEpoch === epoch
+      && task.summary.status === "paused";
+  }
+
+  private async settleDeveloperAssistantTurn(
+    task: TaskState,
+    epoch: number,
+    driver: CloudSession,
+    first: Awaited<ReturnType<CloudSession["continueWith"]>>,
+  ): Promise<void> {
+    let outcome = first;
+    while (true) {
+      if (!this.developerAssistantCurrent(task, epoch)) return;
+      if (outcome.status !== "turn_finished") {
+        throw new Error(outcome.detail ?? outcome.reason
+          ?? "开发助手会话异常结束");
+      }
+      const late = driver.takeUndeliveredSteers();
+      if (late.length) {
+        outcome = await driver.continueWith(late.join("\n\n"));
+        continue;
+      }
+      const reply = driver.finalReply().trim();
+      if (!reply) throw new Error("开发助手没有返回可展示的处理结果");
+      appendDeveloperAssistantMessage(
+        task.summary.workspace, "assistant", reply, "ready");
+      return;
+    }
+  }
+
+  /** 停止当前开发动作但不交还主现场。下一条消息会在同一接管上下文里
+   * 懒重建会话，避免 Pi abort 后复用一个不确定的 session。 */
+  async stopDeveloperAssistant(
+    id: string,
+    actor: string,
+  ): Promise<DeveloperAssistantView> {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    const snapshot = readDeveloperAssistant(task.summary.workspace);
+    if (snapshot.state === "acquiring") {
+      appendDeveloperAssistantMessage(
+        task.summary.workspace, "assistant",
+        `已由 ${actor} 停止本次接管启动；主任务保持暂停，可以继续输入或交还。`,
+        "ready");
+      return this.developerAssistant(id);
+    }
+    if (!["working", "running"].includes(snapshot.state)) {
+      return this.developerAssistant(id);
+    }
+    task.assistantEpoch = (task.assistantEpoch ?? 0) + 1;
+    const driver = task.driver;
+    const container = task.container;
+    const cleanup = await Promise.allSettled([
+      driver?.abort() ?? Promise.resolve(),
+      container?.stop() ?? Promise.resolve(),
+    ]);
+    if (cleanup[0].status === "fulfilled" && task.driver === driver) {
+      task.driver = undefined;
+      driver?.dispose();
+    }
+    if (cleanup[1].status === "fulfilled" && task.container === container) {
+      task.container = undefined;
+    }
+    const failures = cleanup.flatMap((result, index) =>
+      result.status === "rejected"
+        ? [`${index === 0 ? "会话中止" : "容器回收"}: ${String(result.reason)}`]
+        : []);
+    if (failures.length) {
+      const detail = `停止当前开发动作时资源未能确认释放：${failures.join("；")}`;
+      appendDeveloperAssistantMessage(
+        task.summary.workspace, "assistant", detail, "failed", detail);
+      throw new TaskControlError(detail);
+    }
+    appendDeveloperAssistantMessage(
+      task.summary.workspace, "assistant",
+      `当前动作已由 ${actor} 停止。代码现场仍由你接管，可以继续输入下一条指令。`,
+      "ready");
+    return this.developerAssistant(id);
+  }
+
+  /** 显式退出 vibe-coding 接管：先停净旁路会话/容器，再冻结一次工作区
+   * 差异并走既有内核 reconcile，最后才允许主任务重建。 */
+  async returnDeveloperAssistant(
+    id: string,
+    actor: string,
+  ): Promise<TaskSummary> {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    if (task.summary.status !== "paused") {
+      throw new TaskControlError("只有已接管并暂停的主现场可以交还");
+    }
+    const snapshot = readDeveloperAssistant(task.summary.workspace);
+    if (["acquiring", "working", "running"].includes(snapshot.state)) {
+      throw new TaskControlError("开发助手仍在工作；请先停止当前动作再交还");
+    }
+    if (task.assistantActive) await task.assistantActive;
+    writeDeveloperAssistant(task.summary.workspace, {
+      ...readDeveloperAssistant(task.summary.workspace),
+      state: "returning",
+    });
+    task.assistantEpoch = (task.assistantEpoch ?? 0) + 1;
+    const driver = task.driver;
+    const container = task.container;
+    const cleanup = await Promise.allSettled([
+      driver?.abort() ?? Promise.resolve(),
+      container?.stop() ?? Promise.resolve(),
+    ]);
+    if (cleanup[0].status === "fulfilled" && task.driver === driver) {
+      task.driver = undefined;
+      driver?.dispose();
+    }
+    if (cleanup[1].status === "fulfilled" && task.container === container) {
+      task.container = undefined;
+    }
+    const failures = cleanup.flatMap((result, index) =>
+      result.status === "rejected"
+        ? [`${index === 0 ? "会话中止" : "容器回收"}: ${String(result.reason)}`]
+        : []);
+    if (failures.length) {
+      const detail = `交还前资源未能确认释放：${failures.join("；")}`;
+      writeDeveloperAssistant(task.summary.workspace, {
+        ...readDeveloperAssistant(task.summary.workspace),
+        state: "failed",
+        error: detail,
+      });
+      throw new TaskControlError(detail);
+    }
+    this.finishDeveloperAssistantHandoff(task);
+    writeDeveloperAssistant(task.summary.workspace, {
+      ...readDeveloperAssistant(task.summary.workspace),
+      state: "ready",
+    });
+    const resumed = this.resume(id, actor);
+    writeDeveloperAssistant(task.summary.workspace, {
+      ...readDeveloperAssistant(task.summary.workspace),
+      state: "idle",
+    });
+    return resumed;
   }
 
   private finishDeveloperAssistantHandoff(task: TaskState): void {
@@ -5870,9 +6147,13 @@ export class TaskService {
       throw new TaskControlError(
         `任务 ${id} 当前是 ${task.summary.status}，只有已暂停任务可以恢复`);
     }
-    if (task.assistantActive
-        || readDeveloperAssistant(task.summary.workspace).state === "running") {
-      throw new TaskControlError("开发助手仍在处理，请等待它返回后再交还主任务");
+    const assistantSnapshot = readDeveloperAssistant(task.summary.workspace);
+    if (task.assistantActive || task.driver || task.container
+        || ["acquiring", "working", "returning", "running"]
+          .includes(assistantSnapshot.state)
+        || assistantSnapshot.handoff?.state === "running") {
+      throw new TaskControlError(
+        "开发接管会话仍占有主现场，请从开发协作面板执行“交还主任务”");
     }
     const beforeSummary = JSON.parse(JSON.stringify(task.summary)) as TaskSummary;
     const beforeHandoffPrompt = task.pendingAssistantHandoff;
@@ -6193,6 +6474,7 @@ export class TaskService {
     task.summary.waiting = undefined;
     task.mission = undefined;
     task.pendingAssistantHandoff = undefined;
+    task.pendingMainSteers = undefined;
     interruptDeveloperAssistant(
       task.summary.workspace,
       `任务已由 ${actor} 取消，开发助手同时终止`,
@@ -6337,6 +6619,15 @@ export class TaskService {
     const container = task.container;
     const prepushAbort = task.prepushAbort;
     task.pauseRequested = false;
+    const undelivered = (driver as CloudSession | undefined)
+      ?.takeUndeliveredSteers?.() ?? [];
+    if (undelivered.length) {
+      task.pendingMainSteers = [...new Set([
+        ...(task.pendingMainSteers ?? []), ...undelivered,
+      ])];
+      this.options.log?.(
+        `任务 ${task.summary.id} 暂停前保全 ${undelivered.length} 条未送达补充`);
+    }
     prepushAbort?.abort();
     const cleanup = await Promise.allSettled([
       driver?.abort() ?? Promise.resolve(),
@@ -6386,6 +6677,7 @@ export class TaskService {
       paused_from: from,
     };
     this.persist(task);
+    this.activatePendingDeveloperAssistant(task);
   }
 
   private async pump(): Promise<void> {
@@ -6937,6 +7229,10 @@ export class TaskService {
       if (task.pendingAssistantHandoff) {
         prompt = `${prompt}\n\n${task.pendingAssistantHandoff}`;
       }
+      if (task.pendingMainSteers?.length) {
+        prompt = `${prompt}\n\n主任务在暂停前尚未读取的用户补充（按原始顺序优先处理）：\n`
+          + task.pendingMainSteers.map((text) => `- ${text}`).join("\n");
+      }
       // 专项使命(修复环)压轴:模型最后读到的最要紧。这里只用不清——
       // 修复会话跑一半被重启,使命要跟着 task.json 回来再喂一遍;
       // 清账在 settle 收口处,会话真做完了才算消费掉。
@@ -7054,8 +7350,9 @@ export class TaskService {
         : task.driver.start(prompt);
       // start/startResume 已同步把 prompt 交给会话；到这里才消费一次性
       // 交还摘要。若此前进程退出，task.json 仍保留它，下次不会丢。
-      if (task.pendingAssistantHandoff) {
+      if (task.pendingAssistantHandoff || task.pendingMainSteers?.length) {
         task.pendingAssistantHandoff = undefined;
+        task.pendingMainSteers = undefined;
         this.writeTaskState(task);
       }
       await this.settle(task, turn, epoch);

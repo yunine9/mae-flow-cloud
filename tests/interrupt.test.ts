@@ -12,7 +12,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
@@ -90,6 +90,84 @@ test("空档期插话会被 pi 悄悄收下不送——宿主必须取得回来"
                      "取走即归宿主,不能留在 pi 队列里被二次投递");
   } finally {
     session.dispose();
+    await model.stop();
+  }
+});
+
+test("插话与接管边界:暂停不得伪造已读，恢复后必须补送", async () => {
+  // 这是“补充给主任务”与“我接管主现场”正面相撞的边界：
+  // steer 刚进 Pi 内存队列，主会话就因接管被暂停。队列必须先取回
+  // 且持久化；否则旧会话一销毁，读侧还会错把“队列没了”当成“模型已读”。
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-steer-takeover-"));
+  const model = new ScriptedModelServer(SCRIPT);
+  await model.start();
+  const service = new TaskService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(), maxConcurrent: 0,
+  });
+  const id = service.create("接管前的补充不能丢").id;
+  const internal = (service as unknown as {
+    tasks: Map<string, {
+      cwd?: string;
+      driver?: CloudSession;
+      summary: { id: string; workspace: string; status: string };
+      humanGate: HumanGate;
+    }>;
+  }).tasks.get(id)!;
+  internal.cwd = internal.summary.workspace;
+  internal.summary.status = "running";
+  const agentDir = join(internal.summary.workspace, "pi-agent");
+  mkdirSync(agentDir, { recursive: true });
+  writeFileSync(join(agentDir, "models.json"),
+    JSON.stringify(model.modelsJson()));
+  internal.driver = await CloudSession.create({
+    taskId: id,
+    workspace: internal.summary.workspace,
+    agentDir,
+    provider: "maeflow",
+    model: "scripted-v1",
+    eventLog: new EventLog(join(internal.summary.workspace, "events.jsonl")),
+    transcript: new TranscriptStore(
+      join(internal.summary.workspace, "transcript.jsonl"), "main"),
+    gate: new GateService(),
+    humanGate: internal.humanGate,
+  });
+
+  try {
+    await service.interrupt(id, "这条补充必须在交还后继续处理");
+    assert.equal(service.listInterrupts(id)[0]?.delivered, false);
+    assert.equal((await service.pause(id, "alice")).status, "pausing");
+    await (service as unknown as {
+      finishPause(task: unknown, from: "running"): Promise<void>;
+    }).finishPause(internal, "running");
+
+    assert.equal(service.get(id)?.status, "paused");
+    assert.equal(service.listInterrupts(id)[0]?.delivered, false,
+      "旧主会话销毁后，取回的补充仍必须显示待读");
+    const saved = JSON.parse(readFileSync(
+      join(dataDir, id, "task.json"), "utf-8"));
+    assert.deepEqual(saved.pending_main_steers,
+      ["这条补充必须在交还后继续处理"]);
+
+    await service.shutdown();
+    const recovered = new TaskService({
+      dataDir, provider: "maeflow", model: "scripted-v1",
+      modelsJson: model.modelsJson(),
+    });
+    try {
+      assert.equal(recovered.recover().restored, 1);
+      assert.equal(recovered.listInterrupts(id)[0]?.delivered, false,
+        "服务重启也不得把待读补充变成假回执");
+      recovered.resume(id, "alice");
+      await until(() => recovered.get(id)?.status === "completed",
+        "主任务恢复并消费暂停前补充");
+      assert.match(userTexts(model), /这条补充必须在交还后继续处理/);
+      assert.equal(recovered.listInterrupts(id)[0]?.delivered, true);
+    } finally {
+      await recovered.shutdown();
+    }
+  } finally {
+    await service.shutdown().catch(() => undefined);
     await model.stop();
   }
 });

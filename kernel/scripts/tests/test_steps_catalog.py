@@ -60,6 +60,15 @@ class StepsCatalogTests(unittest.TestCase):
             self.assertEqual(item["answers"], answers[item["key"]])
             self.assertTrue(item["label"])
 
+    def test_descriptions_only_explain_when_to_choose_each_workflow(self):
+        descriptions = self.flow["steps"]["workflow_select"][
+            "choice_descriptions"]
+        for item in self.catalog["workflows"]:
+            self.assertEqual(item["description"], descriptions[item["key"]])
+            self.assertTrue(item["description"])
+            self.assertNotIn("步", item["description"])
+            self.assertNotIn("拍板", item["description"])
+
     def test_chain_is_the_real_chain_with_user_gates_marked(self):
         chains = {item["key"]: [step["id"] for step in item["steps"]]
                   for item in self.catalog["workflows"]}

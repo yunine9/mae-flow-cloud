@@ -18,7 +18,7 @@ import type {
 } from "./developerAssistantHandoff.ts";
 
 export const DEVELOPER_ASSISTANT_SESSION = "developer-assistant";
-const MAX_MESSAGES = 12;
+const MAX_MESSAGES = 60;
 const MAX_MESSAGE_CHARS = 12_000;
 const MAX_TOOL_RESULT_CHARS = 8_000;
 
@@ -30,7 +30,8 @@ export interface DeveloperAssistantMessage {
 }
 
 export interface DeveloperAssistantSnapshot {
-  state: "idle" | "running" | "completed" | "failed" | "interrupted";
+  state: "idle" | "acquiring" | "working" | "ready" | "returning"
+    | "running" | "completed" | "failed" | "interrupted";
   messages: DeveloperAssistantMessage[];
   handoff?: DeveloperAssistantHandoff;
   updated_at?: string;
@@ -93,7 +94,11 @@ export function readDeveloperAssistant(
     // lstat→read 的竞态也封住；正常快照始终是平台自己写的普通文件。
     descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
     const row = JSON.parse(readFileSync(descriptor, "utf-8")) as Record<string, unknown>;
-    const state = ["idle", "running", "completed", "failed", "interrupted"]
+    const state = [
+      "idle", "acquiring", "working", "ready", "returning",
+      // Legacy snapshots from the one-shot assistant remain readable.
+      "running", "completed", "failed", "interrupted",
+    ]
       .includes(String(row.state))
       ? String(row.state) as DeveloperAssistantSnapshot["state"] : "failed";
     const handoff = cleanHandoff(row.handoff);
@@ -183,12 +188,43 @@ export function interruptDeveloperAssistant(
   reason = "服务重启或任务控制操作中断了本轮开发助手",
 ): DeveloperAssistantSnapshot {
   const current = readDeveloperAssistant(workspace);
-  if (current.state !== "running") return current;
+  if (!["acquiring", "working", "returning", "running"]
+      .includes(current.state)) return current;
   return writeDeveloperAssistant(workspace, {
     ...current,
     state: "interrupted",
     error: reason,
   });
+}
+
+/**
+ * The persisted snapshot owns user input and crash recovery. Assistant text is
+ * additionally projected from the semantic event ledger so a long-running
+ * vibe-coding turn is visible before its final summary is written.
+ */
+export function developerAssistantConversation(
+  snapshot: DeveloperAssistantSnapshot,
+  events: SemanticEvent[],
+): DeveloperAssistantMessage[] {
+  const assistantEvents = events.filter((event) =>
+    event.sessionId === DEVELOPER_ASSISTANT_SESSION
+    && event.kind === "assistant_message"
+    && String(event.payload.text ?? "").trim());
+  const eventTexts = new Set(assistantEvents.map((event) =>
+    String(event.payload.text ?? "").trim()));
+  const persisted = snapshot.messages.filter((message) =>
+    message.role === "user" || !eventTexts.has(message.text.trim()));
+  const streamed = assistantEvents.map((event): DeveloperAssistantMessage => ({
+    id: `event-${event.eventId}`,
+    role: "assistant",
+    text: String(event.payload.text ?? "").trim().slice(0, MAX_MESSAGE_CHARS),
+    at: event.ts,
+  }));
+  return [...persisted, ...streamed]
+    // Array#sort is stable: equal-millisecond user messages retain their
+    // persisted conversation order instead of being shuffled by random ids.
+    .sort((left, right) => left.at.localeCompare(right.at))
+    .slice(-MAX_MESSAGES);
 }
 
 function shortJson(value: unknown, limit: number): string {
@@ -302,11 +338,12 @@ export function developerAssistantMission(
   messages: DeveloperAssistantMessage[],
   availability?: DeveloperAssistantAvailability,
 ): string {
-  const conversation = messages.slice(-6).map((message) =>
+  const conversation = messages.slice(-16).map((message) =>
     `${message.role === "user" ? "用户" : "开发助手"}：${message.text}`)
     .join("\n\n");
   return [
     "你是当前任务的自由开发助手，不是 Mae-Flow 主流程 Agent。",
+    "这是用户主动接管代码现场后的持续开发会话。每次用户输入都是同一场 CLI 式协作的下一轮，不要把它当成新的独立任务。",
     "你可以直接 Read / Edit / Write / Bash，按用户要求检查、运行命令并修改当前工作区。",
     "不要调用 mae-flow 命令，不要解释或推进流程阶段，不要创建人工审批卡。",
     "不要 git commit/push、切换分支、改远端或接触凭据；修改保留在工作区，稍后交还主 Agent。",

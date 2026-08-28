@@ -252,6 +252,11 @@ def _steps_catalog(flow, st):
                 "key": wf,
                 "label": WORKFLOW_LABELS[wf],
                 "for_new_orders": (wf in new_order) if new_order else True,
+                # 只说“什么情况选它”，不把步骤数、门禁数之类
+                # 内部编排语言倒给下单的人。
+                "description": str(
+                    (select.get("choice_descriptions", {}) or {}).get(wf, "")
+                ).strip(),
                 # 选项原文:卡上就该出现它,done --choice 也按它对账
                 "answers": list(
                     (flow.get("steps", {}).get("workflow_select", {})

@@ -9,15 +9,17 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  controlTask,
   getDeveloperAssistant,
   interruptTask,
   listInterrupts,
+  returnDeveloperAssistant,
   startDeveloperAssistant,
+  stopDeveloperAssistant,
   type DeveloperAssistantView,
   type InterruptRecord,
   type TaskSummary,
 } from "./api";
+import { atBottom } from "./follow";
 import { formatLocalDateTime } from "./time";
 import { startVisiblePolling } from "./visiblePolling";
 import "./steer.css";
@@ -37,9 +39,13 @@ const EMPTY_ASSISTANT: DeveloperAssistantView = {
 };
 
 const ASSISTANT_STATE: Record<DeveloperAssistantView["state"], string> = {
-  idle: "随时可用",
-  running: "正在处理",
-  completed: "本轮完成",
+  idle: "等待接管",
+  acquiring: "正在接管主现场",
+  working: "正在工作",
+  ready: "CLI 已就绪",
+  returning: "正在交还主任务",
+  running: "正在工作",
+  completed: "CLI 已就绪",
   failed: "本轮失败",
   interrupted: "已中断",
 };
@@ -64,23 +70,42 @@ export function SteerBox({
   const [mode, setMode] = useState<CollaborationMode>(
     task.status === "running" ? "steer" : "assistant",
   );
-  const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [steerText, setSteerText] = useState("");
+  const [assistantText, setAssistantText] = useState("");
+  const [steerBusy, setSteerBusy] = useState(false);
+  const [assistantRequestBusy, setAssistantRequestBusy] = useState(false);
   const [error, setError] = useState("");
   const [sent, setSent] = useState(false);
   const [history, setHistory] = useState<InterruptRecord[]>([]);
   const [assistant, setAssistant] =
     useState<DeveloperAssistantView>(EMPTY_ASSISTANT);
-  const [pendingAssistant, setPendingAssistant] = useState("");
-  const startingAssistant = useRef(false);
   const lastAssistantUpdate = useRef("");
+  const assistantPollSequence = useRef(0);
+  const conversationRef = useRef<HTMLDivElement>(null);
+  const conversationPinned = useRef(true);
   const onChangedRef = useRef(onChanged);
 
   useEffect(() => { onChangedRef.current = onChanged; }, [onChanged]);
 
   useEffect(() => {
     setMode(task.status === "running" ? "steer" : "assistant");
+    conversationPinned.current = true;
   }, [task.id]);
+
+  const lastMessageId = assistant.messages.at(-1)?.id;
+  useEffect(() => {
+    const node = conversationRef.current;
+    if (node && conversationPinned.current) {
+      node.scrollTo({ top: node.scrollHeight });
+    }
+  }, [lastMessageId]);
+
+  useEffect(() => {
+    if (["acquiring", "working", "ready", "returning", "running", "completed"]
+        .includes(assistant.state) || assistant.handoff?.state === "running") {
+      setMode("assistant");
+    }
+  }, [assistant.state, assistant.handoff?.state]);
 
   // 补充说明的「已读取」是模型上下文实际消费事实，不是假回执。
   useEffect(() => {
@@ -95,9 +120,11 @@ export function SteerBox({
   // 助手回复和工具结果分别来自快照与 SSE 正本。隐藏页不轮询。
   useEffect(() => {
     let alive = true;
-    const load = () => void getDeveloperAssistant(task.id)
+    const load = () => {
+      const sequence = ++assistantPollSequence.current;
+      void getDeveloperAssistant(task.id)
       .then((view) => {
-        if (!alive) return;
+        if (!alive || sequence !== assistantPollSequence.current) return;
         setAssistant(view);
         if (view.updated_at && view.updated_at !== lastAssistantUpdate.current) {
           if (["completed", "failed", "interrupted"].includes(view.state)) {
@@ -107,90 +134,90 @@ export function SteerBox({
         }
       })
       .catch((cause) => {
-        if (alive) setError(errorMessage(cause));
+        if (alive && sequence === assistantPollSequence.current) {
+          setError(errorMessage(cause));
+        }
       });
+    };
     const stop = startVisiblePolling(load, 1500, document);
     return () => { alive = false; stop(); };
   }, [task.id]);
 
-  // 用户无需自己理解暂停语义：在运行中的任务上发给助手，界面先请求
-  // 安全暂停；父组件刷新到 paused 后再真正启动，绝不并发写工作区。
-  useEffect(() => {
-    if (!pendingAssistant || task.status !== "paused"
-        || startingAssistant.current) return;
-    startingAssistant.current = true;
-    setBusy(true);
-    setError("");
-    void startDeveloperAssistant(task.id, pendingAssistant)
-      .then((view) => {
-        setAssistant(view);
-        setPendingAssistant("");
-        setText("");
-        onChangedRef.current?.();
-      })
-      .catch((cause) => {
-        setPendingAssistant("");
-        setError(errorMessage(cause));
-      })
-      .finally(() => {
-        startingAssistant.current = false;
-        setBusy(false);
-      });
-  }, [pendingAssistant, task.id, task.status]);
-
   async function sendSteer() {
-    const message = text.trim();
-    if (!message || busy) return;
-    setBusy(true);
+    const message = steerText.trim();
+    if (!message || steerBusy) return;
+    setSteerBusy(true);
     setError("");
     const result = await interruptTask(task.id, message);
-    setBusy(false);
+    setSteerBusy(false);
     if (result.error) {
       setError(result.error);
       return;
     }
-    setText("");
+    setSteerText("");
     setSent(true);
     onChangedRef.current?.();
   }
 
   async function sendAssistant() {
-    const message = text.trim();
-    if (!message || busy || assistant.state === "running") return;
+    const message = assistantText.trim();
+    if (!message || assistantRequestBusy) return;
     if (!assistant.availability.available) {
       setError(assistant.availability.reason);
       return;
     }
     setMode("assistant");
-    setPendingAssistant(message);
+    conversationPinned.current = true;
+    setAssistantRequestBusy(true);
     setError("");
-    if (task.status === "paused") return;
-    setBusy(true);
-    const result = await controlTask(task.id, "pause");
-    setBusy(false);
-    if (result.error) {
-      setPendingAssistant("");
-      setError(result.error);
-      return;
+    try {
+      const view = await startDeveloperAssistant(task.id, message);
+      setAssistant(view);
+      setAssistantText("");
+      onChangedRef.current?.();
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setAssistantRequestBusy(false);
     }
-    onChangedRef.current?.();
+  }
+
+  async function stopAssistant() {
+    if (assistantRequestBusy) return;
+    setAssistantRequestBusy(true);
+    setError("");
+    try {
+      setAssistant(await stopDeveloperAssistant(task.id));
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setAssistantRequestBusy(false);
+    }
   }
 
   async function resumeMainTask() {
-    if (busy || assistant.state === "running") return;
-    setBusy(true);
+    if (assistantRequestBusy) return;
+    setAssistantRequestBusy(true);
     setError("");
-    const result = await controlTask(task.id, "resume");
-    setBusy(false);
-    if (result.error) setError(result.error);
-    else onChangedRef.current?.();
+    try {
+      await returnDeveloperAssistant(task.id);
+      onChangedRef.current?.();
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setAssistantRequestBusy(false);
+    }
   }
 
-  const assistantBusy = assistant.state === "running" || !!pendingAssistant;
-  const canSteer = task.status === "running";
-  const waitingForPause = !!pendingAssistant && task.status !== "paused";
+  const assistantWorking = ["acquiring", "working", "returning", "running"]
+    .includes(assistant.state);
+  const takeoverActive = ["acquiring", "working", "ready", "returning", "running",
+    "completed"].includes(assistant.state)
+    || assistant.handoff?.state === "running";
+  const canSteer = task.status === "running" && !takeoverActive;
   const assistantAvailable = assistant.availability.available;
-  const handoffBlocked = assistant.handoff?.state === "running";
+  const canReturn = task.status === "paused"
+    && !["acquiring", "working", "returning", "running"].includes(assistant.state);
 
   return (
     <section className="steer" aria-label="开发协作">
@@ -199,15 +226,18 @@ export function SteerBox({
           <strong>开发协作</strong>
           <span>既能补充主任务，也能直接处理代码现场</span>
         </div>
-        <em className={assistantBusy ? "active" : ""}>
-          {assistantBusy ? "助手工作中" : "你随时掌控"}
+        <em className={takeoverActive ? "active"
+          : assistantAvailable ? "available" : "unavailable"}>
+          {takeoverActive ? "主现场由你接管"
+            : assistantAvailable ? "现在可接管" : "当前不可接管"}
         </em>
       </div>
 
       <div className="collaboration-tabs" role="tablist" aria-label="协作方式">
         <button type="button" role="tab" aria-selected={mode === "steer"}
           className={mode === "steer" ? "active" : ""}
-          onClick={() => setMode("steer")}>
+          disabled={takeoverActive}
+          onClick={() => { if (!takeoverActive) setMode("steer"); }}>
           <strong>补充给主任务</strong>
           <small>不打断，忙完这步就会看到</small>
         </button>
@@ -225,12 +255,12 @@ export function SteerBox({
             想到什么随时捎给主任务。当前命令不会被掐断，模型读到后会继续按 Mae-Flow 流程推进。
           </p>
           <textarea id={`steer-${task.id}`} className="steer-input"
-            value={text} disabled={!canSteer || busy}
+            value={steerText} disabled={!canSteer || steerBusy}
             placeholder={canSteer
               ? "例如：掩码保留后四位，不要处理区号"
               : "主任务暂停时，请切到“开发助手”直接处理代码现场"}
             rows={3} onChange={(event) => {
-              setText(event.target.value);
+              setSteerText(event.target.value);
               if (sent) setSent(false);
             }}
             onKeyDown={(event) => {
@@ -241,12 +271,12 @@ export function SteerBox({
             }} />
           <div className="steer-actions">
             <span className="steer-hint">
-              {sent && !text ? "已捎过去，待读取状态会在下方更新" : "⌘/Ctrl + Enter 发送"}
+              {sent && !steerText ? "已捎过去，待读取状态会在下方更新" : "⌘/Ctrl + Enter 发送"}
             </span>
             <button type="button" className="steer-send"
-              disabled={busy || !text.trim() || !canSteer}
+              disabled={steerBusy || !steerText.trim() || !canSteer}
               onClick={() => void sendSteer()}>
-              {busy ? "发送中…" : "发送补充"}
+              {steerBusy ? "发送中…" : "发送补充"}
             </button>
           </div>
           {history.length > 0 && (
@@ -278,26 +308,30 @@ export function SteerBox({
         </>
       ) : (
         <>
-          <div className={`assistant-state ${assistant.state}`}>
+          <div className={`assistant-state ${assistant.state}`
+            + `${assistantAvailable ? " available" : " unavailable"}`}>
             <div>
               <i aria-hidden />
-              <strong>{waitingForPause ? "正在安全暂停主任务" : ASSISTANT_STATE[assistant.state]}</strong>
+              <strong>{ASSISTANT_STATE[assistant.state]}</strong>
             </div>
             <span>
-              {waitingForPause
-                ? "当前操作收口后自动启动助手"
-                : !assistantAvailable
-                  ? assistant.availability.reason
-                  : task.status === "paused"
-                  ? "主任务保持暂停，不会和助手同时改代码"
-                  : "发送后会自动暂停主任务"}
+              {!assistantAvailable
+                ? assistant.availability.reason
+                : assistant.state === "acquiring"
+                  ? "正在收好主任务当前动作，消息已经可靠保存"
+                  : ["working", "running"].includes(assistant.state)
+                    ? "输出、工具和代码变化持续记录；可随时追加指令"
+                    : assistant.state === "returning"
+                      ? "正在释放开发会话并与内核核对现场"
+                      : takeoverActive
+                        ? "主任务保持暂停；继续输入，或明确交还主任务"
+                        : "发出第一条指令后自动安全接管主现场"}
             </span>
           </div>
 
           <p className="steer-copy assistant-copy">
-            像本地 CLI 一样直接说要做什么。助手可读写当前仓、运行构建与测试；
-            不替你推进 Mae-Flow，也不提交或推送。当前流程位置只作为上下文，
-            不限制你的介入；改动和执行结果会直接交还主任务。
+            这是一个持续的开发 CLI：接管一次后可多轮排查、修改和运行命令。
+            主任务在后台保持暂停；只有你点击“交还主任务”才退出本次接管。
           </p>
 
           {assistant.handoff && assistant.handoff.state !== "running" && (
@@ -328,7 +362,12 @@ export function SteerBox({
           )}
 
           {assistant.messages.length > 0 && (
-            <div className="assistant-conversation" aria-label="开发助手对话">
+            <div ref={conversationRef} className="assistant-conversation"
+              aria-label="开发助手对话" role="log" aria-live="polite"
+              aria-relevant="additions text"
+              onScroll={(event) => {
+                conversationPinned.current = atBottom(event.currentTarget);
+              }}>
               {assistant.messages.map((message) => (
                 <article key={message.id} className={message.role}>
                   <header>
@@ -362,11 +401,13 @@ export function SteerBox({
           )}
 
           <textarea id={`assistant-${task.id}`} className="steer-input"
-            value={text} disabled={busy || assistantBusy || !assistantAvailable}
+            value={assistantText}
+            disabled={assistantRequestBusy || !assistantAvailable
+              || assistant.state === "returning"}
             placeholder={assistantAvailable
               ? "例如：帮我定位这个空指针，跑一下相关 UT，能修就直接修"
               : assistant.availability.reason}
-            rows={4} onChange={(event) => setText(event.target.value)}
+            rows={4} onChange={(event) => setAssistantText(event.target.value)}
             onKeyDown={(event) => {
               if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
                 event.preventDefault();
@@ -376,22 +417,36 @@ export function SteerBox({
           <div className="steer-actions assistant-actions">
             <div>
               <span className="steer-hint">
-                {assistantBusy ? "回复和命令结果会实时出现在这里" : "⌘/Ctrl + Enter 交给助手"}
+                {assistantWorking
+                  ? "当前轮执行中；新输入会在安全边界追加给助手"
+                  : takeoverActive
+                    ? "CLI 已保持现场和上下文，继续输入下一步"
+                    : "⌘/Ctrl + Enter 接管主现场"}
               </span>
               {assistant.error && <small>{assistant.error}</small>}
             </div>
             <div className="assistant-buttons">
-              {task.status === "paused" && assistant.state !== "running" && (
+              {["acquiring", "working", "running"].includes(assistant.state) && (
                 <button type="button" className="assistant-return"
-                  disabled={busy || handoffBlocked}
+                  disabled={assistantRequestBusy}
+                  onClick={() => void stopAssistant()}>
+                  停止当前动作
+                </button>
+              )}
+              {canReturn && takeoverActive && (
+                <button type="button" className="assistant-return"
+                  disabled={assistantRequestBusy}
                   onClick={() => void resumeMainTask()}>
                   交还主任务
                 </button>
               )}
               <button type="button" className="steer-send"
-                disabled={busy || assistantBusy || !assistantAvailable || !text.trim()}
+                disabled={assistantRequestBusy || !assistantAvailable
+                  || assistant.state === "returning" || !assistantText.trim()}
                 onClick={() => void sendAssistant()}>
-                {waitingForPause ? "正在暂停…" : assistant.state === "running" ? "处理中…" : "让助手处理"}
+                {assistantRequestBusy ? "发送中…"
+                  : ["working", "running", "acquiring"].includes(assistant.state)
+                    ? "追加指令" : takeoverActive ? "继续" : "接管并执行"}
               </button>
             </div>
           </div>

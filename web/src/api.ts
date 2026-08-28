@@ -782,10 +782,11 @@ export interface LaunchOptions {
    * 前端一个字都不许另抄——抄了就会出现"页面说快速/慢速、内核只认
    * 完整开发/局部修改",于是下单选过的交付方式在流程里又被问一遍。
    * 空数组=读不到内核定义,那就不预选,老老实实等流程里问。 */
-  /** steps/acks:这条链多少步、要拍板几次——内核按 flow 现算,
-   * 给人掂量快慢;算不出时缺席,只显示名字。 */
+  /** description 只说适用场景；steps/acks 是内核目录的兼容字段，
+   * 下单页不用它们解释交付方式。 */
   workflows: Array<
-    { key: string; label: string; steps?: number; acks?: number }>;
+    { key: string; label: string; description?: string;
+      steps?: number; acks?: number }>;
   /** 已发布的可选业务模块摘要；知识正文不会随目录接口返回。 */
   business_modules: BusinessModuleLaunchOption[];
   engineering_knowledge: EngineeringKnowledgeLaunchOption[];
@@ -1662,7 +1663,8 @@ export interface DeveloperAssistantHandoff {
 }
 
 export interface DeveloperAssistantView {
-  state: "idle" | "running" | "completed" | "failed" | "interrupted";
+  state: "idle" | "acquiring" | "working" | "ready" | "returning"
+    | "running" | "completed" | "failed" | "interrupted";
   messages: DeveloperAssistantMessage[];
   tools: DeveloperAssistantToolRun[];
   availability: DeveloperAssistantAvailability;
@@ -1692,6 +1694,28 @@ export async function startDeveloperAssistant(
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ text }),
     },
+  );
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function stopDeveloperAssistant(
+  taskId: string,
+): Promise<DeveloperAssistantView> {
+  const response = await fetch(
+    `/tasks/${encodeURIComponent(taskId)}/developer-assistant/interrupt`,
+    { method: "POST" },
+  );
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function returnDeveloperAssistant(
+  taskId: string,
+): Promise<TaskSummary> {
+  const response = await fetch(
+    `/tasks/${encodeURIComponent(taskId)}/developer-assistant/return`,
+    { method: "POST" },
   );
   if (!response.ok) throw new Error(await errorText(response));
   return response.json();

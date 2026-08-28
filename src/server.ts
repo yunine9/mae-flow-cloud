@@ -1615,6 +1615,14 @@ export function createTaskServer(
               return json(response, 403,
                 { error: "只能为分配给自己的任务使用开发助手" });
             }
+            if (parts[3] === "interrupt") {
+              return json(response, 200, await service.stopDeveloperAssistant(
+                id, viewer?.username ?? "本地用户"));
+            }
+            if (parts[3] === "return") {
+              return json(response, 200, await service.returnDeveloperAssistant(
+                id, viewer?.username ?? "本地用户"));
+            }
             const body = await readBody(request);
             return json(response, 202, service.startDeveloperAssistant(
               id,

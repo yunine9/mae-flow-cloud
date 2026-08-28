@@ -572,20 +572,28 @@ export function LaunchWorkspace({
                 </div>
                 <div className="launch-field-grid launch-settings-grid">
                   {options.workflows.length > 0 && (
-                    <label className="account-field">
-                      <span>交付方式（必填）</span>
-                      <select className="launch-model-select"
-                        value={lane || options.workflows[0].label}
-                        onChange={(event) => setLane(event.target.value)} required>
+                    <fieldset className="delivery-mode-field">
+                      <legend><strong>交付方式</strong>
+                        <small>选最像你现在这件事的情况</small></legend>
+                      <div className="delivery-mode-options">
                         {options.workflows.map((item) => (
-                          <option key={item.key} value={item.label}>
-                            {item.label}
-                            {item.steps !== undefined
-                              ? `（${item.steps} 步 · 拍板 ${item.acks} 次）` : ""}
-                          </option>
+                          <label key={item.key}
+                            className={`delivery-mode-option${(lane
+                              || options.workflows[0].label) === item.label
+                              ? " selected" : ""}`}>
+                            <input type="radio" name="delivery-workflow"
+                              value={item.label}
+                              checked={(lane || options.workflows[0].label)
+                                === item.label}
+                              onChange={() => setLane(item.label)} required />
+                            <span className="delivery-mode-radio" aria-hidden />
+                            <span><strong>{item.label}</strong>
+                              {item.description
+                                && <small>{item.description}</small>}</span>
+                          </label>
                         ))}
-                      </select>
-                    </label>
+                      </div>
+                    </fieldset>
                   )}
                   <label className="account-field repair-field">
                     <span>修复轮预算（可选）</span>
