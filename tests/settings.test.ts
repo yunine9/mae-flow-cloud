@@ -41,6 +41,60 @@ test("模型密钥只写不读:视图永远掩码,明文只进 0600 的文件", 
     "sk-live-abcd4321", "编辑时 API Key 留空应保留原密钥");
 });
 
+test("图片识别角色独立保存，主模型与视觉模型互不覆盖", () => {
+  const settings = store();
+  settings.updateModels({
+    url: "http://main-gw", api_key: "main-secret-1111", model: "glm-main",
+  });
+  settings.updateVision({
+    url: "http://vision-gw/v1", api_key: "vision-secret-2222",
+    model: "glm-5.3-flash", api: "openai-completions",
+  });
+  let stored = settings.models() as any;
+  assert.equal(stored.provider, "maeflow");
+  assert.equal(stored.model, "glm-main");
+  assert.equal(stored.vision.provider, "maeflow-vision");
+  assert.deepEqual(stored.json.providers["maeflow-vision"].models[0].input,
+    ["text", "image"]);
+
+  settings.updateModels({
+    url: "http://main-gw-v2", api_key: "", model: "glm-main-v2",
+  });
+  stored = settings.models() as any;
+  assert.equal(stored.json.providers["maeflow-vision"].apiKey,
+    "vision-secret-2222", "修改主模型不能删掉视觉 provider");
+  const view = JSON.stringify(settings.view());
+  assert.doesNotMatch(view, /vision-secret-2222|main-secret-1111/);
+  assert.match(view, /••••2222/);
+});
+
+test("图片识别可复用部署 provider，保存后仍保留主模型与部署密钥", () => {
+  const settings = store();
+  const base = { providers: { glm: {
+    baseUrl: "http://shared-gw", api: "anthropic-messages",
+    apiKey: "deployment-secret-4444",
+    models: [{ id: "glm-main" },
+      { id: "glm-5.3-flash", input: ["text", "image"] }],
+  } } };
+  settings.updateVision({
+    url: "http://shared-gw", api_key: "", model: "glm-5.3-flash",
+    api: "anthropic-messages", base_json: base,
+    base_vision: { provider: "glm", model: "glm-5.3-flash" },
+  });
+  const stored = settings.models() as any;
+  assert.equal(stored.vision.provider, "glm");
+  assert.equal(stored.json.providers.glm.apiKey, "deployment-secret-4444");
+  assert.deepEqual(stored.json.providers.glm.models.map((item: any) => item.id),
+    ["glm-main", "glm-5.3-flash"]);
+  const service = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-set-shared-provider-")),
+    provider: "glm", model: "glm-main", modelsJson: base, settings,
+    vision: { provider: "glm", model: "glm-5.3-flash" },
+  });
+  assert.deepEqual(service.launchOptions().model,
+    { provider: "glm", model: "glm-main" });
+});
+
 test("数值校验:无限等待没有语法;models 必须真实存在才能选", () => {
   const settings = store();
   assert.throws(() => settings.updateRuntime({ repair_rounds: -1 }),
@@ -154,7 +208,7 @@ test("路由权限:admin 可读改,开发成员 403,密钥不出网", async () =
     };
     assert.ok(["ok", "warning", "error"].includes(checkBody.overall));
     assert.deepEqual(checkBody.items.map((item) => item.key),
-      ["data", "model", "notify", "link", "postgres", "git", "prepush",
+      ["data", "model", "vision", "notify", "link", "postgres", "git", "prepush",
        "container"]);
     assert.equal(checkBody.items.find((item) => item.key === "model")?.status,
       "ok");
@@ -176,6 +230,30 @@ test("路由权限:admin 可读改,开发成员 403,密钥不出网", async () =
       headers: { cookie: admin } }).then((r) => r.text());
     assert.ok(!body.includes("secret-9999"), "明文密钥出网了");
     assert.match(body, /••••9999/);
+
+    const visionPut = await fetch(`${base}/settings/vision`, {
+      method: "PUT", headers: { cookie: admin },
+      body: JSON.stringify({
+        url: model.baseUrl,
+        api_key: "vision-secret-3333",
+        model: "scripted-v1",
+        api: "anthropic-messages",
+      }),
+    });
+    assert.equal(visionPut.status, 200);
+    const visionView = await visionPut.text();
+    assert.doesNotMatch(visionView, /vision-secret-3333/);
+    assert.match(visionView, /••••3333/);
+    const visionTest = await fetch(`${base}/settings/vision/test`, {
+      method: "POST", headers: { cookie: admin },
+    });
+    assert.equal(visionTest.status, 200);
+    const visionTestBody = await visionTest.json() as { status: string };
+    assert.equal(visionTestBody.status, "failed",
+      "假模型没识别色块时必须判失败，不能只凭 HTTP 200 宣称就绪");
+    assert.ok(model.requests.some((request: any) =>
+      request.messages?.some((message: any) =>
+        message.content?.some?.((block: any) => block.type === "image"))));
 
     const bad = await fetch(`${base}/settings/runtime`, {
       method: "PUT", headers: { cookie: admin },

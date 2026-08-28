@@ -585,6 +585,9 @@ export function createTaskServer(
           const modelSpec = providers[provider] ?? {};
           const model = service.options.model
             || String(modelSpec.models?.[0]?.id ?? "");
+          const visionChoice = service.options.vision;
+          const visionSpec = visionChoice
+            ? providers[visionChoice.provider] ?? {} : {};
           return ({
             ...settings.view(),
             defaults: {
@@ -603,6 +606,15 @@ export function createTaskServer(
                 configured: !!modelSpec.baseUrl && !!modelSpec.apiKey && !!model,
                 url: modelSpec.baseUrl ? String(modelSpec.baseUrl) : undefined,
                 model: model || undefined,
+                vision: {
+                  configured: !!visionChoice?.model && !!visionSpec.baseUrl
+                    && !!visionSpec.apiKey,
+                  provider: visionChoice?.provider,
+                  model: visionChoice?.model,
+                  url: visionSpec.baseUrl
+                    ? String(visionSpec.baseUrl) : undefined,
+                  api: visionSpec.api ? String(visionSpec.api) : undefined,
+                },
               },
             },
           });
@@ -618,6 +630,19 @@ export function createTaskServer(
           if (request.method === "PUT" && parts[1] === "models") {
             settings.updateModels(await readBody(request));
             return json(response, 200, settingsView());
+          }
+          if (request.method === "PUT" && parts[1] === "vision") {
+            const body = await readBody(request);
+            settings.updateVision({
+              ...(body as Record<string, unknown>),
+              base_json: service.options.modelsJson,
+              base_vision: service.options.vision,
+            });
+            return json(response, 200, settingsView());
+          }
+          if (request.method === "POST" && parts[1] === "vision"
+              && parts[2] === "test") {
+            return json(response, 200, await service.testVisionCapability());
           }
         } catch (error) {
           if (error instanceof SettingsError) {

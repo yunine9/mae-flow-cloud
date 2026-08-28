@@ -3320,6 +3320,38 @@ pre {
   font: 13.5px/1.6 var(--font-mono);
 }
 .settings-form textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); outline: none; }
+.vision-settings-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.vision-settings-actions button { flex: 1 1 190px; }
+.user-create-form .vision-settings-actions button.secondary {
+  color: var(--accent); background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line));
+}
+.user-create-form .vision-settings-actions button.secondary:hover {
+  background: var(--accent-soft);
+}
+.vision-test-note { margin-top: -7px; color: var(--faint); font-size: 13px; }
+.vision-probe-result {
+  grid-column: 1 / -1; padding: 11px 13px; display: grid; gap: 4px;
+  border: 1px solid; border-radius: 9px; font-size: 13.5px;
+}
+.vision-probe-result.ready {
+  color: var(--success); background: var(--success-soft);
+  border-color: color-mix(in srgb, var(--success) 28%, transparent);
+}
+.vision-probe-result.failed {
+  color: var(--danger); background: var(--danger-soft);
+  border-color: color-mix(in srgb, var(--danger) 28%, transparent);
+}
+.vision-probe-result span, .vision-probe-result small {
+  color: inherit; overflow-wrap: anywhere; line-height: 1.55;
+}
+.vision-probe-result details { margin-top: 2px; }
+.vision-probe-result summary {
+  width: fit-content; cursor: pointer; font-weight: 700;
+}
+.vision-probe-result details small {
+  margin-top: 7px; display: block; white-space: pre-wrap;
+}
 .knob-note { color: var(--muted); font-size: var(--font-size-assist); }
 .setting-label-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .setting-label-row em {

@@ -49,6 +49,11 @@ import {
 import type { MaterializedBusinessModuleKnowledge } from "./businessModuleRuntime.ts";
 import type { MaterializedEngineeringKnowledge } from "./engineeringKnowledgeRuntime.ts";
 import { materializeTaskKnowledgeIndex } from "./taskKnowledgeIndex.ts";
+import {
+  createInspectImageTool,
+  createVisionToolState,
+  type VisionCapabilityConfig,
+} from "./visionCapability.ts";
 
 /** pi 工具名 → 内核工具词汇表。不认识的原样透传(错认比不认更危险)。 */
 const TOOL_NAME_MAP: Record<string, string> = {
@@ -56,7 +61,8 @@ const TOOL_NAME_MAP: Record<string, string> = {
   read: "Read",
   write: "Write",
   edit: "Edit",
-  };
+  inspect_image: "InspectImage",
+};
 
 /** 决定 → 结构化回答。显式 answers 优先;单问题卡由 decision 兜底
  * (问题文本作键,老宿主回传就是这个形状)。 */
@@ -156,6 +162,9 @@ export interface CloudSessionOptions {
   compactAnchor?: () => string;
   /** 模型提供方真实 usage 的旁路出口。统计失败不得影响会话。 */
   onTokenUsage?: (sample: ModelTokenUsageSample) => void;
+  /** 专用图片理解模型。只给主开发/修复会话配置；子 Agent 经同一
+   * openSession 继承，预热与 prepush 专项会话不隐式获得此能力。 */
+  vision?: VisionCapabilityConfig;
   log?: (message: string) => void;
 }
 
@@ -231,6 +240,7 @@ export class CloudSession {
   private childSessions = new Map<string, any>();
   private pendingKernel = new Set<Promise<void>>();
   private kernelFailures: string[] = [];
+  private readonly visionState = createVisionToolState();
   readonly sessionId: string;
 
   private constructor(private readonly options: CloudSessionOptions) {
@@ -919,6 +929,16 @@ export class CloudSession {
     const ownedFileTools = this.options.afterFileMutation
       ? this.ownedFileTools(workspace, this.options.afterFileMutation)
       : [];
+    const visionTools = this.options.vision
+      ? [createInspectImageTool({
+          runtime: this.modelRuntime,
+          workspace,
+          config: this.options.vision,
+          state: this.visionState,
+          sessionId: config.sessionId,
+          onTokenUsage: this.options.onTokenUsage,
+        })]
+      : [];
     const { session } = await createAgentSession({
       cwd: workspace,
       agentDir,
@@ -927,6 +947,7 @@ export class CloudSession {
       resourceLoader: loader,
       customTools: [
         ...(config.customTools as any[]),
+        ...visionTools,
         ...ownedFileTools,
         ...isolatedTools,
       ] as any,

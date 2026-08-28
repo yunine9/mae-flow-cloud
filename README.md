@@ -97,12 +97,19 @@ probe 现场留档在 `.probe/`,serve 的任务现场在 `.tasks/<task-id>/`
 本机挂了代理(Clash 等)时,curl 环回接口记得 `--noproxy '*'`;
 服务进程自身已强制环回直连,浏览器访问不受影响。
 
-## 接真模型(GLM-5.1)
+## 接真模型(GLM-5.1 + 图片理解)
 
 把任务 agent 目录的 `models.json` 里 `maeflow` provider 的 `baseUrl`
 换成真网关(OpenAI/Anthropic 兼容任一),剧本假模型退场,其余零改动。
 注意:环回地址永远直连(`sessionDriver.ensureLoopbackDirect`),
 内网代理会把 127.0.0.1 的请求劫走(实测 502)。
+
+图片理解是独立原子能力：在同一份 `models.json` 中增加一个明确声明
+`"input": ["text", "image"]` 的多模态模型，并用
+`--vision-provider <provider> --vision-model glm-5.3-flash` 绑定角色；也可
+直接在管理员「服务设置 → 图片识别」中填写并点击「测试识图能力」。主
+Agent 只在调用 `InspectImage` 时使用它，不会整段切换模型或把图片字节
+写入任务记录。
 
 ## 内核纵向闭环(阶段 1,已通)
 

@@ -42,6 +42,9 @@ export interface ModelsSettings {
   json?: Record<string, unknown>;
   provider?: string;
   model?: string;
+  /** 专用视觉模型的角色绑定。连接信息仍在同一份 models.json 中，
+   * 但它不参与主模型选择，也不会让主会话整段切模型。 */
+  vision?: { provider: string; model: string };
 }
 
 interface Stored {
@@ -64,6 +67,18 @@ function knob(value: unknown, name: string, min = 0): number | undefined {
     throw new SettingsError(`${name} 必须是 ≥${min} 的数字`);
   }
   return parsed;
+}
+
+function upsertModel(
+  models: Array<Record<string, any>> | undefined,
+  id: string,
+  value: Record<string, any>,
+): Array<Record<string, any>> {
+  const items = [...(models ?? [])];
+  const index = items.findIndex((item) => String(item?.id ?? "") === id);
+  if (index < 0) return [...items, value];
+  items[index] = value;
+  return items;
 }
 
 export class RuntimeSettings {
@@ -139,7 +154,9 @@ export class RuntimeSettings {
       const existingProviders = (current.json as {
         providers?: Record<string, any>;
       } | undefined)?.providers ?? {};
-      const provider = current.provider || Object.keys(existingProviders)[0]
+      const provider = current.provider
+        || Object.keys(existingProviders).find((name) =>
+          name !== current.vision?.provider)
         || "maeflow";
       const existing = existingProviders[provider] ?? {};
       const url = patch.url === undefined
@@ -159,14 +176,18 @@ export class RuntimeSettings {
       }
       const previousModel = (existing.models ?? []).find(
         (item: { id?: string }) => item?.id === model) ?? {};
-      const json = { providers: { [provider]: {
+      const configuredModels = upsertModel(existing.models, model,
+        { ...previousModel, id: model });
+      const json = { providers: { ...existingProviders, [provider]: {
         ...existing,
         baseUrl: url,
         api: existing.api ?? "anthropic-messages",
         apiKey,
-        models: [{ ...previousModel, id: model }],
+        models: configuredModels,
       } } };
-      this.save({ ...this.load(), models: { json, provider, model } });
+      this.save({ ...this.load(), models: {
+        ...current, json, provider, model,
+      } });
       return;
     }
     const json = patch.json === undefined
@@ -195,7 +216,80 @@ export class RuntimeSettings {
     if ((provider || model) && json === undefined && current.json === undefined) {
       throw new SettingsError("先提供 models.json 内容,再指定 provider/model");
     }
-    this.save({ ...this.load(), models: { json, provider, model } });
+    const providers = (json as { providers?: Record<string, any> } | undefined)
+      ?.providers ?? {};
+    const vision = current.vision
+      && providers[current.vision.provider]?.models?.some(
+        (item: { id?: string }) => item?.id === current.vision?.model)
+      ? current.vision : undefined;
+    this.save({ ...this.load(), models: { json, provider, model, vision } });
+  }
+
+  /** 图片识别模型独立角色配置。可与主模型共用 provider，也可使用独立
+   * provider；保存时保留其他模型/provider，API Key 留空表示保留。 */
+  updateVision(patch: {
+    url?: unknown;
+    api_key?: unknown;
+    model?: unknown;
+    api?: unknown;
+    /** 部署层 models.json 仅由服务端补入，浏览器不负责也看不到。 */
+    base_json?: unknown;
+    base_vision?: unknown;
+  }): void {
+    const current = this.models();
+    const sourceJson = current.json ?? patch.base_json;
+    const providers = (sourceJson as {
+      providers?: Record<string, any>;
+    } | undefined)?.providers ?? {};
+    const baseVision = patch.base_vision && typeof patch.base_vision === "object"
+      ? patch.base_vision as { provider?: unknown; model?: unknown } : undefined;
+    const provider = current.vision?.provider
+      || String(baseVision?.provider ?? "").trim() || "maeflow-vision";
+    const existing = providers[provider] ?? {};
+    const url = patch.url === undefined
+      ? String(existing.baseUrl ?? "").trim() : String(patch.url).trim();
+    const suppliedKey = patch.api_key === undefined
+      ? "" : String(patch.api_key).trim();
+    const apiKey = suppliedKey || String(existing.apiKey ?? "").trim();
+    const model = patch.model === undefined
+      ? String(current.vision?.model ?? baseVision?.model
+        ?? existing.models?.[0]?.id ?? "").trim()
+      : String(patch.model).trim();
+    const api = patch.api === undefined
+      ? String(existing.api ?? "openai-completions").trim()
+      : String(patch.api).trim();
+    const allowedApis = new Set([
+      "openai-completions", "openai-responses", "anthropic-messages",
+    ]);
+    if (!url || !apiKey || !model) {
+      throw new SettingsError("请完整填写图片识别网关地址、API Key 和模型名称");
+    }
+    try { void new URL(url); } catch {
+      throw new SettingsError(`图片识别网关地址不是合法 URL: ${url}`);
+    }
+    if (!allowedApis.has(api)) {
+      throw new SettingsError(`不支持的图片识别接口协议: ${api}`);
+    }
+    const previousModel = (existing.models ?? []).find(
+      (item: { id?: string }) => item?.id === model) ?? {};
+    const configuredModels = upsertModel(existing.models, model, {
+      ...previousModel,
+      id: model,
+      input: ["text", "image"],
+      reasoning: false,
+    });
+    const json = { providers: { ...providers, [provider]: {
+      ...existing,
+      baseUrl: url,
+      api,
+      apiKey,
+      models: configuredModels,
+    } } };
+    this.save({ ...this.load(), models: {
+      ...current,
+      json,
+      vision: { provider, model },
+    } });
   }
 
   /** 给界面的视图:密钥全部掩码。这里是"只写不读"的读半边——
@@ -204,7 +298,9 @@ export class RuntimeSettings {
     runtime: RuntimeKnobs;
     models: { configured: boolean; provider?: string; model?: string;
               url?: string; key_hint?: string;
-              providers: Array<{ name: string; models: string[]; key_hint?: string }> };
+              providers: Array<{ name: string; models: string[]; key_hint?: string }>;
+              vision: { configured: boolean; provider?: string; model?: string;
+                url?: string; api?: string; key_hint?: string } };
   } {
     const models = this.models();
     const providers = Object.entries(
@@ -220,6 +316,9 @@ export class RuntimeSettings {
     const selectedSpec = ((models.json as {
       providers?: Record<string, any>;
     } | undefined)?.providers ?? {})[selectedProvider ?? ""];
+    const visionSpec = ((models.json as {
+      providers?: Record<string, any>;
+    } | undefined)?.providers ?? {})[models.vision?.provider ?? ""];
     return {
       runtime: this.runtime(),
       models: {
@@ -232,6 +331,16 @@ export class RuntimeSettings {
         key_hint: selectedSpec?.apiKey
           ? mask(String(selectedSpec.apiKey)) : undefined,
         providers,
+        vision: {
+          configured: !!models.vision?.provider && !!models.vision?.model
+            && !!visionSpec?.baseUrl && !!visionSpec?.apiKey,
+          provider: models.vision?.provider,
+          model: models.vision?.model,
+          url: visionSpec?.baseUrl ? String(visionSpec.baseUrl) : undefined,
+          api: visionSpec?.api ? String(visionSpec.api) : undefined,
+          key_hint: visionSpec?.apiKey
+            ? mask(String(visionSpec.apiKey)) : undefined,
+        },
       },
     };
   }

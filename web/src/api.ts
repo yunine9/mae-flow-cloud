@@ -2014,6 +2014,14 @@ export interface SettingsView {
     url?: string;
     key_hint?: string;
     providers: Array<{ name: string; models: string[]; key_hint?: string }>;
+    vision: {
+      configured: boolean;
+      provider?: string;
+      model?: string;
+      url?: string;
+      api?: string;
+      key_hint?: string;
+    };
   };
   /** 未设置覆盖时实际采用的服务默认值，不让管理员猜启动参数。 */
   defaults: {
@@ -2028,6 +2036,13 @@ export interface SettingsView {
       configured: boolean;
       url?: string;
       model?: string;
+      vision: {
+        configured: boolean;
+        provider?: string;
+        model?: string;
+        url?: string;
+        api?: string;
+      };
     };
   };
 }
@@ -2059,7 +2074,7 @@ export async function getSettings(): Promise<SettingsView> {
 }
 
 async function putSettings(
-  section: "runtime" | "models",
+  section: "runtime" | "models" | "vision",
   body: unknown,
 ): Promise<SettingsView> {
   const response = await fetch(`/settings/${section}`, {
@@ -2082,6 +2097,30 @@ export function putModelsSettings(body: {
   model?: string;
 }): Promise<SettingsView> {
   return putSettings("models", body);
+}
+
+export function putVisionSettings(body: {
+  url: string;
+  api_key: string;
+  model: string;
+  api: string;
+}): Promise<SettingsView> {
+  return putSettings("vision", body);
+}
+
+export interface VisionProbeResult {
+  status: "ready" | "failed";
+  provider: string;
+  model: string;
+  latency_ms: number;
+  response?: string;
+  error?: string;
+}
+
+export async function testVisionCapability(): Promise<VisionProbeResult> {
+  const response = await fetch("/settings/vision/test", { method: "POST" });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
 }
 
 export async function readArtifact(

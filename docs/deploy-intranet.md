@@ -497,7 +497,10 @@ models.json 形状(key 只放服务器本地文件,权限 600,永不进仓):
       "baseUrl": "https://<内网网关>/api/anthropic",
       "api": "anthropic-messages",
       "apiKey": "<从凭证系统注入>",
-      "models": [{ "id": "glm-5.1", "contextWindow": 160000 }]
+      "models": [
+        { "id": "glm-5.1", "contextWindow": 160000 },
+        { "id": "glm-5.3-flash", "input": ["text", "image"], "reasoning": false }
+      ]
     }
   }
 }
@@ -690,6 +693,7 @@ MFC 管理的跨任务业务/工程知识只走上一节的任务知识索引，
 {
   "models": "/etc/mae-flow-cloud/models.json",
   "provider": "内网网关名", "model": "glm-5.1",
+  "vision-provider": "内网网关名", "vision-model": "glm-5.3-flash",
   "repo": "<内网仓地址>",
   "platform": "<MR/流水线适配层地址>",
   "luban": "<通知端点>",
@@ -712,6 +716,7 @@ MFC 管理的跨任务业务/工程知识只走上一节的任务知识索引，
 | 键(=flag 去 `--`) | 默认 | 说明 |
 | --- | --- | --- |
 | models / provider / model | 演示剧本 | 模型网关三件套 |
+| vision-provider / vision-model | 无 | 专用图片理解角色；必须同时配置，目标模型须在 models.json 声明 `input: ["text", "image"]` |
 | repo | 无(纯会话演练) | 内核模式的目标仓 |
 | platform / fake-platform | 无 | 交付平台地址 / 本地假件 |
 | luban / luban-header | 假小鲁班 | 通知端点与鉴权头(可重复) |
@@ -746,6 +751,10 @@ MFC 管理的跨任务业务/工程知识只走上一节的任务知识索引，
 - **模型网关**:网关地址、API Key、模型名称三项；服务端转换为任务
   运行时需要的配置，不在界面暴露 JSON/provider 概念。
   生效于下一个新会话,在跑的会话不换血。
+- **图片识别**:独立的多模态网关、协议与模型配置。主 Agent 不切换
+  模型；需要读取工作区截图、照片或图表时才调用 `InspectImage`，得到
+  受限的文字观察结果。保存后可用系统生成的红/绿/蓝色块图做一次真实
+  端到端测试；测试不读取业务图片，也不创建任务。
 
 小鲁班投递端点属于部署基础设施，只能通过部署配置维护；每位成员在
 「个人设置」中填写自己的小鲁班发送 Token。普通任务提醒发给本人；

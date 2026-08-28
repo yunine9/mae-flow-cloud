@@ -82,6 +82,11 @@ import {
 } from "./humanGate.ts";
 import { CloudSession, type Outcome } from "./sessionDriver.ts";
 import {
+  probeVisionCapability,
+  type VisionModelChoice,
+  type VisionProbeResult,
+} from "./visionCapability.ts";
+import {
   TaskContainer,
   TaskContainerExecTimeoutError,
   TaskContainerUnavailableError,
@@ -654,6 +659,9 @@ export interface TaskServiceOptions {
   model: string;
   /** 每个任务 agent 目录的 models.json 内容(生产=GLM 网关,演练=剧本假模型)。 */
   modelsJson: Record<string, unknown>;
+  /** 可选的专用视觉模型角色。模型定义位于同一份 models.json，主 Agent
+   * 仅通过 InspectImage Tool 调用它，不切换主会话模型。 */
+  vision?: VisionModelChoice;
   maxConcurrent?: number;
   /** 现场保留期(天)。终态任务过期后回收克隆等重货,台账原样留下;
    * 0 = 永不回收。部署值,可被管理页运行时设置压过。默认见 serve.ts。 */
@@ -2202,6 +2210,15 @@ export class TaskService {
           detail: "没有可用模型",
           suggestion: "管理页 → 模型网关：填写网关地址、API Key 和模型名称" });
 
+    const vision = this.activeVisionChoice();
+    items.push(vision
+      ? { key: "vision", label: "图片识别", status: "ok",
+          detail: `${vision.provider}/${vision.model} 已配置（未做实时调用）`,
+          suggestion: "可在管理页点击“测试识图能力”做真实端到端验证" }
+      : { key: "vision", label: "图片识别", status: "warning",
+          detail: "尚未配置专用图片识别模型",
+          suggestion: "管理页 → 图片识别：配置内部多模态模型网关；不影响纯文本任务" });
+
     const notify = this.options.notifier?.health();
     items.push(!notify?.configured
       ? { key: "notify", label: "消息通知", status: "warning",
@@ -3100,6 +3117,52 @@ export class TaskService {
   private activeModelsJson(): Record<string, unknown> {
     return (this.options.settings?.models().json ?? this.options.modelsJson
       ?? {}) as Record<string, unknown>;
+  }
+
+  /** 当前生效的视觉角色。角色必须指向 models.json 中明确声明支持图片
+   * 的模型；配置漂移时宁可不暴露 Tool，也不把图片误发给文本模型。 */
+  private activeVisionChoice(): VisionModelChoice | undefined {
+    const choice = this.options.settings?.models().vision ?? this.options.vision;
+    if (!choice?.provider || !choice?.model) return undefined;
+    const spec = (this.activeModelsJson() as {
+      providers?: Record<string, { models?: Array<{
+        id?: string; input?: string[];
+      }> }>;
+    }).providers?.[choice.provider]?.models?.find((item) =>
+      String(item?.id ?? "") === choice.model);
+    return Array.isArray(spec?.input) && spec.input.includes("image")
+      ? choice : undefined;
+  }
+
+  private taskVision(task: TaskState) {
+    const choice = this.activeVisionChoice();
+    return choice ? {
+      choice,
+      cacheDir: join(task.summary.workspace, "vision-cache"),
+      timeoutMs: 45_000,
+    } : undefined;
+  }
+
+  /** 管理页的一键实测：系统色块图 → 当前视觉模型角色 → 语义校验。
+   * 不创建任务、不读取业务图片、不修改配置。 */
+  async testVisionCapability(): Promise<VisionProbeResult> {
+    const choice = this.activeVisionChoice();
+    if (!choice) {
+      return {
+        status: "failed",
+        provider: this.options.settings?.models().vision?.provider
+          ?? this.options.vision?.provider ?? "",
+        model: this.options.settings?.models().vision?.model
+          ?? this.options.vision?.model ?? "",
+        latency_ms: 0,
+        error: "图片识别模型未完整配置，或模型未声明支持 image 输入",
+      };
+    }
+    return probeVisionCapability({
+      modelsJson: this.activeModelsJson(),
+      choice,
+      timeoutMs: 45_000,
+    });
   }
 
   /** 下单表单的数据源。
@@ -5658,6 +5721,7 @@ export class TaskService {
           AGENT_REQUIREMENT_DOCUMENT,
         )}`,
         onTokenUsage: (sample) => this.recordTaskTokenUsage(task, sample),
+        vision: this.taskVision(task),
         bashOperations: {
           exec: (command, dir, execOptions) =>
             container!.exec(command, dir, execOptions),
@@ -6914,6 +6978,7 @@ export class TaskService {
         // 摘要围绕"当前步骤+已确认配置"组织,不由云端编造。
         compactAnchor: () => this.kernelAnchor(task),
         onTokenUsage: (sample) => this.recordTaskTokenUsage(task, sample),
+        vision: this.taskVision(task),
         // 任务级选择 > 设置层默认 > 部署默认;任务级的记在 summary 上,
         // 重启续跑/会话重建都不漂移(设置层后来改了也不影响本单)。
         provider: task.summary.model_choice?.provider
