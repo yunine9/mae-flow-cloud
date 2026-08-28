@@ -27,8 +27,14 @@ import { MockDtsGateway } from "../src/issueFlow/gateways.ts";
 import { createBusinessModule } from "../src/businessModuleLibrary.ts";
 import {
   FIXED_TICKET_STAGES,
+  shouldNudgeFixed,
   type IssueSessionState,
 } from "../src/issueFlow/state.ts";
+import {
+  fixedNudgeNotice,
+  issueFixedOpeningPrompt,
+  issueOpeningPrompt,
+} from "../src/issueFlow/prompt.ts";
 import {
   getPipelineStatus,
   triggerPipeline,
@@ -470,10 +476,14 @@ test("关联转正:两段式(校验过目→确认),工作区/报告/凭据继�
     { tool: { name: "submit_analysis",
       input: { conclusion: "issue", summary: "是问题:死锁" } } },
     { text: "等用户确认。" },
-    // 转正新会话的首轮(直接在问题修改阶段干活)。
+    // 转正新会话的首轮(直接在问题修改阶段干活)。停机白名单生效后,
+    // 阶段未到出口的裸文本收轮会被催办——这里以问题卡合法停机。
     { tool: { name: "bash", input: { command:
       `cd repo/origin && git -c user.name=test -c user.email=t@e commit -q --allow-empty -m '[${TICKET}][fix] 修复死锁'` } } },
-    { text: "修复已就位(继承的分析报告在案)。" },
+    { tool: { name: "AskUserQuestion", input: { questions: [{
+      question: "修复已就位(继承的分析报告在案),继续跑 UT 验证?",
+      options: ["继续跑 UT", "先停"],
+    }] } } },
     // 第二个无单会话(查重用)。
     { tool: { name: "pull_repo", input: { url: origin } } },
     { tool: { name: "bash", input: { command:
@@ -546,12 +556,12 @@ test("关联转正:两段式(校验过目→确认),工作区/报告/凭据继�
     assert.equal(existsSync(
       join(dataDir, ".issue-environments", `${created.id}.json`)), false,
       "旧会话凭据在复制完成后销毁");
-    // 新会话首轮在问题修改阶段干活并收口。
+    // 新会话首轮在问题修改阶段干活,以问题卡合法停机(不再是裸文本收轮)。
     await until(() => {
       const issue = service.get(converted!.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
-      return issue.status === "idle" ? issue : undefined;
-    }, "转正会话首轮收口");
+      return issue.status === "waiting_user" ? issue : undefined;
+    }, "转正会话首轮以问题卡停机");
 
     // 单号唯一:第二个挂起会话再关联同单号 → 拒。
     const second = service.create({
@@ -1199,4 +1209,143 @@ test("网管环境闸(2026-08-28):fetch_logs 缺环境举 env_needed(scope=logs)
     await service.shutdown().catch(() => undefined);
     await model.stop();
   }
+});
+
+// ---- 催办续跑(2026-08-28 拍板 A+B):提前收嘴被推回阶段 ----
+
+/** 直调用最小固定会话状态。 */
+function fixedState(overrides: Partial<IssueSessionState> = {}): IssueSessionState {
+  const now = new Date().toISOString();
+  return {
+    id: "issue-nudge", account: "dev",
+    created_at: now, updated_at: now,
+    title: "t", description: "", source: "dts", ticket: TICKET,
+    repo_url: "/tmp/x.git", mode: "fixed", scenario: "ticket", round: 1,
+    stage_states: FIXED_TICKET_STAGES.map(() => "pending"),
+    status: "running", stage: "analyze", stage_note: "", stage_at: now,
+    ...overrides,
+  };
+}
+
+test("催办续跑:模型提前收嘴被推回阶段,催办词带阶段目标与出口,举卡才准停", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-nudge-"));
+  const origin = bareOrigin(dataDir);
+  const script: Scene[] = [
+    // 第 1 回合:拉仓(首仓落地推进问题分析)→ 写报告 → 提前收嘴(没举卡)。
+    { tool: { name: "pull_repo", input: { url: origin } } },
+    { tool: { name: "bash", input: { command:
+      "printf '# 分析\\n\\n现象已核实。\\n' > issue-analysis.md" } } },
+    { text: "先研究到这,稍后继续。" },
+    // 第 2 回合(平台催办):补交分析,举「结论确认」卡——合法停机。
+    { tool: { name: "submit_analysis",
+      input: { conclusion: "issue", summary: "根因=连接池耗尽" } } },
+    { text: "分析已提交,等确认。" },
+  ];
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    settings: fastPoll,
+    issueFlowMode: () => "fixed",
+  });
+  try {
+    const created = service.create({
+      account: "dev", title: "播放器偶发黑屏", mode: "fixed",
+      repoUrl: origin,
+    });
+    const waiting = await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user" && issue.gate?.kind === "conclude"
+        ? issue : undefined;
+    }, "催办后举结论卡");
+    // 剧本 5 幕 = 5 个请求:第 4 个请求的用户消息就是催办词。
+    assert.equal(model.requests.length, 5, "收嘴一次+催办一次,请求数要对得上");
+    const nudgeRequest = JSON.stringify(model.requests[3]);
+    assert.match(nudgeRequest, /平台催办\(第 1\/2 次\)/, "催办词要报次数");
+    assert.match(nudgeRequest, /当前阶段「问题分析」/, "催办要带上阶段定位");
+    assert.match(nudgeRequest, /出口\(到什么程度算完\)/, "催办要说清出口");
+    assert.equal(waiting.nudges, 1, "催办计数要入账");
+    assert.equal(waiting.stage, "conclude", "无单场景提交即推进结论节点");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
+test("催办预算:连续收嘴只催 2 次,耗尽转人工(idle+备注),不再无限续跑", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-nudge-out-"));
+  const origin = bareOrigin(dataDir);
+  const script: Scene[] = [
+    { tool: { name: "pull_repo", input: { url: origin } } },
+    { text: "先到这。" },
+    { text: "又停了。" },
+    { text: "还停。" },
+  ];
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    settings: fastPoll,
+    issueFlowMode: () => "fixed",
+  });
+  try {
+    const created = service.create({
+      account: "dev", title: "播放器偶发黑屏", mode: "fixed",
+      repoUrl: origin,
+    });
+    const parked = await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "idle" ? issue : undefined;
+    }, "催办耗尽落 idle");
+    assert.equal(model.requests.length, 4, "首轮+两次催办,共 4 个请求");
+    assert.match(JSON.stringify(model.requests[2]), /第 1\/2 次/);
+    assert.match(JSON.stringify(model.requests[3]), /第 2\/2 次/);
+    assert.equal(parked.nudges, 3, "第三次收嘴记账但不续跑");
+    assert.match(parked.stage_note, /提前收嘴/, "转人工要说人话");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
+test("催办谓词:阶段未收口必催;阶段收口/流水线在途/自由模式三种豁免", () => {
+  const now = new Date().toISOString();
+  // 分析阶段进行中:必催。
+  assert.equal(shouldNudgeFixed(fixedState()), true);
+  // 自由模式没有阶段真相,不催。
+  assert.equal(
+    shouldNudgeFixed(fixedState({ mode: "free", scenario: undefined })), false);
+  // 当前阶段已收口(如环境验证通过待归档):不催。
+  assert.equal(shouldNudgeFixed(fixedState({
+    stage: "deploy_verify",
+    stage_states: FIXED_TICKET_STAGES.map(() => "done"),
+  })), false);
+  // MR 已建、流水线在途:停等流水线是出口的一部分,不催。
+  assert.equal(shouldNudgeFixed(fixedState({
+    stage: "mr_green",
+    stage_states: FIXED_TICKET_STAGES.map((stage, index) =>
+      index < FIXED_TICKET_STAGES.indexOf("mr_green") ? "done" : "in_progress"),
+    mrs: [{ repo: "/tmp/x.git", branch: "master_dev_DTS1",
+      title: "[DTS1][fix] 修复", at: now }],
+    pipelines: { "/tmp/x.git": {
+      sha: "0123456789abcdef", status: "running", watching: true,
+      started_at: now, deadline: now, round: 1,
+    } },
+  })), false);
+});
+
+test("停机白名单与出口进了提示词(B):开局契约/自由契约/催办词三处", () => {
+  const opening = issueFixedOpeningPrompt(fixedState());
+  assert.match(opening, /停机白名单/, "开局契约要立停机规矩");
+  assert.match(opening, /出口\(到什么程度算完\)/, "当前阶段要给出出口");
+  assert.match(opening, /阶段性总结不是停机理由/);
+  const free = issueOpeningPrompt(fixedState({ mode: "free", scenario: undefined }));
+  assert.match(free, /停机纪律/);
+  const nudge = fixedNudgeNotice(fixedState(), 1, 2);
+  assert.match(nudge, /平台催办\(第 1\/2 次\)/);
+  assert.match(nudge, /出口\(到什么程度算完\)/);
 });

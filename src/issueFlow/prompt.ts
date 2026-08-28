@@ -108,39 +108,51 @@ export function stageLabelOf(state: IssueSessionState): string {
 
 // ---- 固定流程(2026-08-27 拍板:宿主权威阶段机,Agent 只在阶段内干活) ----
 
-/** 各阶段的目标与可用工具(提示词的引导层;权威层在工具 execute 门禁)。 */
-const FIXED_STAGE_BRIEFS: Record<FixedStage, { goal: string; tools: string }> = {
+/** 各阶段的目标/出口/可用工具(提示词的引导层;权威层在工具 execute 门禁)。
+ * exit 是"到什么程度算完"的白纸黑字——模型停机的合法性只认出口动作。 */
+const FIXED_STAGE_BRIEFS: Record<FixedStage,
+  { goal: string; exit: string; tools: string }> = {
   dts_info:
-    { goal: "调 dts_get_ticket 拉全单据详情,通读现象与处理历史", tools: "dts_get_ticket" },
+    { goal: "调 dts_get_ticket 拉全单据详情,通读现象与处理历史",
+      exit: "dts_get_ticket 成功返回单据详情(平台自动推进到下一阶段)",
+      tools: "dts_get_ticket" },
   prep_repo:
     { goal: "把代码仓拉齐:lookup_modules 按单据里的业务关键词检索模块,"
       + "命中就 bind_module 登记它的仓,再逐个 pull_repo 拉取(有单场景"
       + "平台会顺带切好修复分支);检索不到就 AskUserQuestion 问用户要"
       + "仓地址再 pull_repo。本单无需代码改动则 complete_stage 直接跳过",
+      exit: "要用的仓都 pull_repo 落地;无需代码仓则 complete_stage 跳过",
       tools: "lookup_modules、bind_module、pull_repo、complete_stage(跳过)" },
   analyze:
     { goal: "对齐现象-根因-方案,产出 issue-analysis.md,然后 submit_analysis 提交"
       + "(无单场景 submit_analysis 需带结论 issue/non_issue)。中途发现"
       + "还缺仓,pull_repo 随时可补",
+      exit: "issue-analysis.md 完成 → submit_analysis 提交并等平台举卡",
       tools: "fetch_logs、dts_get_ticket(重查)、pull_repo(补仓)、submit_analysis" },
   fix:
     { goal: "按已确认的方案实施修复(多仓问题在涉及的每个仓里改);"
       + "改完自检通过后 complete_stage 自报完成",
+      exit: "所有涉及的仓改完且自检通过 → complete_stage 自报完成",
       tools: "fetch_logs(补证据)、bash 改码、complete_stage" },
   ut:
     { goal: "在改过的代码仓里跑单元测试;全绿后 report_ut(passed=true)上报",
+      exit: "UT 全绿 → report_ut(passed=true) 上报",
       tools: "bash 跑测、report_ut" },
   mr_green:
     { goal: "对**每个改过的仓**分别 push_branch + create_mr(一仓一 MR,"
       + "仓参数别漏);平台逐仓监看流水线,红了会带回失败项,修完同分支"
       + "再推,全部 MR 跑绿才进入下一阶段",
+      exit: "每个改过的仓都 push_branch + create_mr;之后可停等流水线,"
+        + "平台会带回结果(红=修,全绿=进下一阶段)",
       tools: "push_branch、create_mr" },
   deploy_verify:
     { goal: "调 build_deploy 换库部署(多仓时用 repo 参数指定要部署的仓);"
       + "部署完成平台举验证卡,停下等用户真实验证",
+      exit: "build_deploy 部署完成 → 平台举「环境验证」卡等用户",
       tools: "build_deploy" },
   conclude:
     { goal: "submit_analysis 提交结论(是问题/非问题)——本场景没有修改与交付环节",
+      exit: "结论明确 → submit_analysis 提交并等平台举「结论确认」卡",
       tools: "fetch_logs、submit_analysis" },
 };
 
@@ -176,17 +188,22 @@ export function issueFixedOpeningPrompt(state: IssueSessionState): string {
     "",
     "## 阶段机契约(平台机械执行,说了算)",
     "1. 阶段真相在平台:你能用哪些工具由当前阶段决定,越权调用会被直接拒绝。",
-    `2. 当前阶段「${FIXED_STAGE_LABELS[scenario][current]}」:${brief.goal}。可用工具:${brief.tools}。`,
-    "3. 代码仓你自己拉(pull_repo):登记在册的仓也要你逐个调它落地——拉过才在场,"
+    `2. 当前阶段「${FIXED_STAGE_LABELS[scenario][current]}」:${brief.goal}。`
+      + `出口(到什么程度算完):${brief.exit}。可用工具:${brief.tools}。`,
+    "3. 停机白名单——回合只允许停在这三处,其余情况必须继续调工具推进,"
+    + "阶段性总结不是停机理由:①举卡等用户(AskUserQuestion 或平台闸);"
+    + "②出口动作已调用、平台交接词已到位(含 MR 建完停等流水线);"
+    + "③确需用户补充信息或决策才能继续。违反会收到平台催办,把你推回阶段。",
+    "4. 代码仓你自己拉(pull_repo):登记在册的仓也要你逐个调它落地——拉过才在场,"
       + "中途发现缺仓随时补。对哪些仓推送/提 MR 由你裁决:**改过的仓各自交付,一仓一 MR**。",
-    "4. 平台闸:分析报告确认(有单)/结论确认(无单)、网管环境配置"
+    "5. 平台闸:分析报告确认(有单)/结论确认(无单)、网管环境配置"
       + "(拉日志/换库缺环境时)、换库后环境验证——平台举卡等用户,你不要替"
       + "用户猜结果,举卡后立即结束回合。",
-    "5. UT 全绿才能建 MR;每个 MR 建后平台逐仓监看流水线,红了会带回失败项"
+    "6. UT 全绿才能建 MR;每个 MR 建后平台逐仓监看流水线,红了会带回失败项"
       + "让你修,同分支修复再推;**全部 MR 跑绿**才进入换库验证。",
-    "6. 用户环境验证不通过会整体回退到「问题分析」重走(轮次+1),这是正常节奏不是事故。",
-    "7. 秘密边界:环境密码与各 token 由平台保管,不向用户索要、不猜测、不讨论。",
-    "8. 持续维护 issue-analysis.md(现象-根因-方案),它是本会话的核心交付物。",
+    "7. 用户环境验证不通过会整体回退到「问题分析」重走(轮次+1),这是正常节奏不是事故。",
+    "8. 秘密边界:环境密码与各 token 由平台保管,不向用户索要、不猜测、不讨论。",
+    "9. 持续维护 issue-analysis.md(现象-根因-方案),它是本会话的核心交付物。",
     "",
     "现在开始:先复述你对问题现象的理解与当前阶段要做的事,然后推进。"
       + (scenario === "ticket" && current === "dts_info"
@@ -205,7 +222,28 @@ export function fixedAdvanceNotice(
   return [
     `平台通知: ${message}`,
     `当前阶段「${FIXED_STAGE_LABELS[scenario][current]}」: ${brief.goal}`,
+    `出口(到什么程度算完): ${brief.exit}`,
     `可用工具: ${brief.tools}`,
+  ].join("\n");
+}
+
+/** 催办续跑通知:模型在阶段未收口时提前收嘴,把阶段简报原样砸回去。 */
+export function fixedNudgeNotice(
+  state: IssueSessionState,
+  attempt: number,
+  budget: number,
+): string {
+  const scenario = state.scenario ?? "ticket";
+  const current = state.stage as FixedStage;
+  const brief = FIXED_STAGE_BRIEFS[current];
+  return [
+    `平台催办(第 ${attempt}/${budget} 次): 你在阶段未收口时结束了回合,`
+    + "这不算完成——阶段真相在平台,没走到出口就是没完。",
+    `当前阶段「${FIXED_STAGE_LABELS[scenario][current]}」: ${brief.goal}`,
+    `出口(到什么程度算完): ${brief.exit}`,
+    `可用工具: ${brief.tools}`,
+    "继续推进。除非举卡等用户或确需用户决策,不要停机;"
+      + `再无故停机 ${budget - attempt + 1} 次平台将不再催办,转为等你人工指令。`,
   ].join("\n");
 }
 
@@ -229,8 +267,11 @@ export function issueOpeningPrompt(state: IssueSessionState): string {
     "2. 人工闸门:对齐方案、部署后验证,必须 AskUserQuestion 停下等用户,绝不自作主张。",
     "3. 非问题是一等结论:研究判定非问题就出结论收口,不强制编码。",
     "4. 代码仓你自己拉(pull_repo)、自己管:改过的仓各自交付,一仓一 MR。",
-    "5. 秘密边界:环境密码与各 token 由平台保管,不向用户索要、不猜测、不讨论。",
-    "6. 结论文档持续维护 issue-analysis.md,它是本会话的核心交付物。",
+    "5. 停机纪律:研究中途不要输出阶段性总结后停机——要么继续查证,"
+      + "要么 AskUserQuestion 问,要么出结论(submit_analysis)。停机只属于"
+      + "举卡、结论收口、确需用户决策三种情况。",
+    "6. 秘密边界:环境密码与各 token 由平台保管,不向用户索要、不猜测、不讨论。",
+    "7. 结论文档持续维护 issue-analysis.md,它是本会话的核心交付物。",
     "",
     "现在开始:先复述你对问题现象的理解,给出研究计划(打算看什么、拉什么日志、"
     + "问用户什么),然后按计划推进。",

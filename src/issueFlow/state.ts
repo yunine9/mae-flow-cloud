@@ -325,6 +325,9 @@ export interface IssueSessionState {
   pushes?: IssuePushRecord[];
   /** MR 账(按仓,一仓一 MR):AI 的"上报"即 create_mr 的调用记录。 */
   mrs?: IssueMrRecord[];
+  /** 本回合已用催办次数(模型提前收嘴的自动续跑)。每个新回合起点清零;
+   * 落在状态里是为了重启后不重复催办。 */
+  nudges?: number;
   error?: string;
   last_reply?: string;
 }
@@ -457,6 +460,26 @@ export function saveState(root: string, state: IssueSessionState): void {
 
 export function isTerminal(status: IssueStatus): boolean {
   return status === "archived" || status === "canceled" || status === "failed";
+}
+
+/** 催办谓词(fixed 模式):回合正常收口时,流程还没走到"可以停"的程度吗?
+ * 三种情况算"可以停",不催:
+ * - 当前阶段已收口(stage_states 里本阶段 done——如环境验证通过待归档);
+ * - 流水线在途(MR 已建、平台还在监看——停等流水线是出口的一部分);
+ * - 自由模式(无阶段真相,停机合法性无从机械判定,不催)。
+ * 其余一律催:阶段没走完,模型收嘴就是提前收嘴。 */
+export function shouldNudgeFixed(state: IssueSessionState): boolean {
+  if (state.mode !== "fixed" || !state.scenario) return false;
+  const index = fixedStageIndex(state.scenario, state.stage as FixedStage);
+  if (index >= 0 && (state.stage_states?.[index] ?? "pending") === "done") {
+    return false;
+  }
+  const pipelines = Object.values(state.pipelines ?? {});
+  if ((state.mrs?.length ?? 0) > 0
+      && pipelines.some((watch) => watch.watching || watch.status === "running")) {
+    return false;
+  }
+  return true;
 }
 
 /** 阶段上报的宿主侧校验:自由/固定两套词表之外的值原样打回,不猜。 */

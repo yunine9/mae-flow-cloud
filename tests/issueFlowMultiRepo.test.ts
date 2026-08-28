@@ -204,8 +204,11 @@ test("无单多仓端到端:模块带仓,AI 逐仓 pull_repo 落到 repo/<仓名
     { tool: { name: "submit_analysis",
       input: { conclusion: "issue", summary: "是问题:接口超时" } } },
     { text: "等用户确认。" },
-    // 转正会话首轮(fix 阶段)。
-    { text: "继承分析报告,开始修复。" },
+    // 转正会话首轮(fix 阶段):停机白名单下以问题卡合法停机,不再裸文本收轮。
+    { tool: { name: "AskUserQuestion", input: { questions: [{
+      question: "已继承分析报告与多仓工作区,继续修复?",
+      options: ["继续", "先停"],
+    }] } } },
   ];
   const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
   await model.start();
@@ -285,8 +288,8 @@ test("无单多仓端到端:模块带仓,AI 逐仓 pull_repo 落到 repo/<仓名
     await until(() => {
       const issue = service.get(converted!.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
-      return issue.status === "idle" ? issue : undefined;
-    }, "转正会话首轮收口");
+      return issue.status === "waiting_user" ? issue : undefined;
+    }, "转正会话首轮以问题卡停机");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
