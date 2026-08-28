@@ -499,11 +499,12 @@ npm run adapter -- --config adapter.json --selftest
   },
   // discussion_resolve 默认不配(D3:resolve 归检视人)。团队拍板要
   // 代点再配:PUT .../discussions/{id} -d '{"resolved":true}'
-  "pipeline_artifacts": {   // A6:quality JSON+reviewtips+构建日志原文
+  "pipeline_artifacts": {   // A6:PipelineLog 编排器全量采证
     // 直接输出 [{name,text}] 数组(单条 ≤512KB,头少尾多截断)。
+    // 第 4 参 {mr} 可选:给了走 MR-first 主路,不给按 sha→ref 反查。
     "command": ["bash",
       "/opt/mae-flow-cloud/deploy/adapter-tools/pipeline-artifacts.sh",
-      "{repo_path}", "{sha}", "{token}"],
+      "{repo_path}", "{sha}", "{token}", "{mr}"],
     "fields": {"name": {"json": "name"}, "text": {"json": "text"}}
   }
 }
@@ -512,19 +513,39 @@ npm run adapter -- --config adapter.json --selftest
 **脚本进仓纪律(2026-08-28 勘误)**:取数编排脚本**必须进仓版本化**
 (deploy/adapter-tools/),不再当"/etc 下的配置产物"——上一版把它们
 排除在仓外,结果文档里设计了、现场谁也没写,`pipeline/artifacts`
-空转了一个月(对比报告差距③)。当前四件套:
-- `pipeline-status-mcp.py`:**主路,照 toolkit 源码仲裁的架构**
-  (MCP 网关 get_project_info → actual_head_pipeline(show_job,
-  含 is_valid)→ get_pipeline_quality 增益);
-- `mcp_http_client.py`:streamable-HTTP MCP 客户端(toolkit 主路
-  同款协议;`--list-tools` 打印网关工具 inputSchema,**内网先跑它
-  对拍参数形状**,get_project_info 的入参是照报告猜的);
-- `pipeline-status.sh` / `pipeline-artifacts.sh`:内网现用版收编
-  (v4 直查,降级第二候选;artifacts 仍是唯一材料通路);
-- `mcp_sse_client.py`:日志网关的旧式 SSE 客户端(原文收编,
-  __main__ 自测段的个人路径/真实 MR 已泛化)。
+空转了一个月(对比报告差距③)。当前五件套:
+- `pipeline_log.py`:**toolkit「PipelineLog 编排器」的忠实移植**
+  (2026-08-28 按用户带回的 7 系统全景图照抄)。8 个 Strategy 原名
+  原序(pipeline-info / pipeline-detail / mergeable-state /
+  pipeline-quality / build-logs / codecheck / coverage /
+  ai-review-tips),落盘文件名照抄(pipeline_info.json、
+  codecheck_detail.json、ai_review_tips.json……),三条降级链原样:
+  构建日志 SSE→build 网关 zip→分页,CodeCheck codeccp MCP→REST
+  reviewtips→defect/list(taskId 出处未钉死,拿不到如实 skip)。
+  每策略 fail-open,`pipeline_log_summary.json` 逐策略记 ok/failed
+  与原因 + `guessed_args` 清单(离线烟测实证:全端点死掉仍 rc=0
+  出合法 JSON)。行云 AI Review 是唯一纯 REST 通路;
+- `pipeline-artifacts.sh`:退化为薄壳——调编排器采集落盘,再按
+  512KB/item 装箱输出,adapter 契约不变;
+- `pipeline-status-mcp.py`:status 主路(MCP get_project_info →
+  actual_head_pipeline(show_job,含 is_valid)→ quality 增益);
+- `mcp_http_client.py`:streamable-HTTP MCP 客户端 + **六网关注册表**
+  (codehub/build/codeccp/codecov/dts,`MFC_MCP_<名>_URL` 可覆盖;
+  `--gateway <名> --list-tools` 打印工具 inputSchema,**内网先跑它
+  对拍参数形状**——summary 里 guessed_args 列的就是待钉死项);
+- `pipeline-status.sh` / `mcp_sse_client.py`:内网现用版收编
+  (v4 直查作 status 降级候选;SSE 客户端原文收编,__main__ 自测段
+  的个人路径/真实 MR 已泛化)。
 仍需内网手放的只剩 `mcp-token` 文件(与可选的 w3token 文件)。
-内网动作:放脚本目录、填 adapter.json、跑两个 selftest 对拍;不写代码。
+内网动作:放脚本目录、填 adapter.json、跑 selftest/--list-tools
+对拍;不写代码。
+
+**照抄边界(2026-08-28 拍板记录)**:toolkit 的 FSM/Scheduler/Monitor
+**不移植**——流程权威在内核,taskService 轮询+内核修复窗口就是对应
+物,不立第二个状态机。「先采后修」已是两边共同语义(证据先落盘,
+修复 Agent 只读本地文件)。toolkit 的检视意见(review_arrived)与
+冲突(conflict_arrived)两条策略路由涉及内核流程语义,未照抄,
+留待单独拍板。
 
 **不可修工具前置分诊**:serve 配置加 `"unfixable-tools": ["SuperChecker"]`
 (或命令行 `--unfixable-tools SuperChecker`);CODECHECK 红灯全部来自

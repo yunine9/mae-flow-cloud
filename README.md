@@ -194,6 +194,21 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
   ~/.config/mae-flow-cloud/,**待拿到原文收编进仓**)与 mcp-token;
   收编脚本的三处增量(回显/tool/details)未在真网关跑过,内网
   --selftest 对拍是硬前置;覆盖率差分与 AI Review Tips 暂未接(增益项)。
+  **⑤(同日后续)artifacts 通路整体重写为 toolkit「PipelineLog
+  编排器」忠实移植**(用户带回 7 系统全景图后拍板"照抄"):
+  pipeline_log.py 里 8 个 Strategy 原名原序、落盘文件名照抄、三条
+  降级链原样(构建日志 SSE→build 网关 zip→分页;CodeCheck codeccp
+  MCP→reviewtips→defect/list),新接结构化构建错误
+  (get_build_error_info)、构建阶段(get_record_fullstages)、
+  覆盖率差分(CodeCovDiffCoverageTool)、**行云** AI Review(纯
+  REST;此前误写"星云",用户已正名)——上一段"覆盖率与 AI Review
+  暂未接"就此翻案;mcp_http_client.py 加六网关注册表。边界如实记:
+  streamable 网关各工具的**入参形状多处按表猜**(summary 的
+  guessed_args 逐条列出),SSE 主路之外的全部新增路都没在内网跑过,
+  `--gateway <名> --list-tools` 对拍是硬前置;离线烟测只证明了
+  fail-open(全端点死掉 rc=0 出合法 JSON + 逐策略失败原因),不证明
+  取数正确。toolkit 的 FSM/Monitor/Scheduler 不移植(流程权威在
+  内核);review/conflict 两条策略路由未照抄,待拍板。
 
 - **2026-08-28 "困死 Agent"专项排查批(四路审计驱动)**:
   ①**勘误**:此前"prepush 门禁放行构建产物 rm -rf(白名单)"在生产里

@@ -33,9 +33,35 @@ class McpHttpError(RuntimeError):
     pass
 
 
+# 六网关注册表(toolkit 全景图实证,2026-08-28 用户带回;SSE 网关走
+# mcp_sse_client.py 的旧式 SSE 协议,不在此表)。逐网关可用
+# MFC_MCP_<NAME>_URL 环境变量覆盖。
+GATEWAYS = {
+    "codehub": "http://mcpgateway.his.huawei.com/mcp/"
+               "69dce0c73ac5640c0f61a8f0/1",
+    "build": "http://mcpgateway.his.huawei.com/mcp/"
+             "69dcd8343ac5640c0f61a8ed",
+    "codeccp": "http://mcpgateway.his.huawei.com/mcp/"
+               "6a729e7266279b6be17f9aa1/2000522391440105473",
+    "codecov": "http://mcpgateway.his.huawei.com/mcp/"
+               "6a03f7b5c1218e60a80b25fb",
+    "dts": "http://mcpgateway.his.huawei.com/mcp/"
+           "6a0ac03dc1218e60a80b2a59",
+}
+
+
+def gateway_url(name: str) -> str:
+    override = os.environ.get(f"MFC_MCP_{name.upper()}_URL", "").strip()
+    if override:
+        return override
+    if name not in GATEWAYS:
+        raise McpHttpError(f"未知 MCP 网关 {name}(注册表: "
+                           + "、".join(sorted(GATEWAYS)) + ")")
+    return GATEWAYS[name]
+
+
 DEFAULT_GATEWAY = os.environ.get(
-    "MFC_MCP_HTTP_URL",
-    "http://mcpgateway.his.huawei.com/mcp/69dce0c73ac5640c0f61a8f0/1")
+    "MFC_MCP_HTTP_URL", GATEWAYS["codehub"])
 
 
 class McpHttpClient:
@@ -153,13 +179,15 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--list-tools", action="store_true")
+    parser.add_argument("--gateway", default="codehub",
+                        help="注册表网关名: " + "、".join(sorted(GATEWAYS)))
     parser.add_argument("--url", default="")
     parser.add_argument("--token-file", default="")
     parser.add_argument("--w3token-file",
                         default=os.environ.get("MFC_W3TOKEN_FILE", ""))
     args = parser.parse_args()
     client = McpHttpClient(
-        url=args.url,
+        url=args.url or gateway_url(args.gateway),
         token=load_secret(args.token_file),
         w3token=load_secret(args.w3token_file))
     try:
