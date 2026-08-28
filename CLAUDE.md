@@ -82,3 +82,19 @@ python3 harness/run-report.py .pilot/<label>   # 试跑现场一键对拍
   docker context,活容器 exec 全灭,实测打死过一次续跑)。
 - 试跑现场在 .pilot/(不删现场是纪律,目录按 label 隔离);
   bigmodel 有 5 小时限额,429 的 detail 里带重置时间。
+
+## Agent skills
+
+### Issue tracker
+
+问题待办以 GitHub Issues 存在于 yunine9/mae-flow-cloud,用 gh CLI 读写。
+See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+默认五规范角色标签(needs-triage/needs-info/ready-for-agent/ready-for-human/wontfix)。
+See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+single-context:根 CONTEXT.md + docs/adr/。See `docs/agents/domain.md`.
