@@ -457,6 +457,26 @@ export class IssueFlowService {
         "固定流程在登记时就要确定代码仓(阶段1拉取代码仓是必经节点),"
           + "请选择业务模块自动带出,或填写代码仓地址;自由探索模式才允许登记后再补");
     }
+    // 个人凭据前置门禁(2026-08-28 拍板,需求侧 /launch-options 的同款
+    // 语义收窄到"这单真的会碰远端仓"):克隆与推送都用发起人身份,
+    // 没配令牌就让登记过门,失败发生在首轮回合准备期——那是终态,
+    // 整单作废。门关在前面:file:// 本地仓与不碰仓的纯研究不拦
+    // (拦了就是误伤),令牌在而邮箱缺同样拦(提交署名与平台归属
+    // 都按邮箱对人,缺了它推上去的提交是无主的)。
+    const remoteRepos = repoUrls.filter((url) => /^https?:\/\//i.test(url));
+    if (remoteRepos.length) {
+      const credential = this.options.gitCredential?.(account);
+      if (!credential) {
+        throw new IssueControlError(
+          "Git 令牌未配置(个人设置 → 个人接入):这单要拉取代码仓,"
+            + "克隆与推送都用你的身份——配好令牌后再发起");
+      }
+      if (!credential.email) {
+        throw new IssueControlError(
+          "个人邮箱未配置(个人设置 → 个人接入):Git 提交署名与平台"
+            + "归属都按邮箱对人——配好邮箱后再发起");
+      }
+    }
     let environment;
     let environmentPassword: string | undefined;
     if (input.environment) {

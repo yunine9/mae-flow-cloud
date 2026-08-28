@@ -617,6 +617,67 @@ test("阶段门禁单点(免模型):工具只在所属阶段开放,UT 没过不�
     "自由模式保留 report_stage(零改动承诺)");
 });
 
+test("个人凭据前置门禁:这单会碰远端仓就先要令牌与邮箱,本地仓不拦", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-credgate-"));
+  const origin = bareOrigin(dataDir);
+  const httpsRepo = "https://codehub.test/some/repo.git";
+  const script: Scene[] = [{ text: "ok" }];
+  const model = new ScriptedModelServer(script);
+  await model.start();
+  const base = {
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+  } as const;
+  const withCred = (email?: string) => ({
+    ...base,
+    ...(email === undefined
+      ? { gitCredential: () => ({ username: "dev", password: "tok" }) }
+      : { gitCredential: () => ({ username: "dev", password: "tok", email }) }),
+  });
+  let service: IssueFlowService | undefined;
+  try {
+    // 无凭据 + https 仓:登记直接拒,指路个人设置(门在发起前,不在克隆后)。
+    service = new IssueFlowService(base);
+    assert.throws(() => service!.create({
+      account: "dev", title: "登录超时", ticket: "DTS-2026-1001",
+      repoUrl: httpsRepo, mode: "fixed",
+    }), /Git 令牌未配置.*个人设置/);
+    // 自由探索同样拦:自由模式填了远端仓,克隆一样要用发起人身份。
+    assert.throws(() => service!.create({
+      account: "dev", title: "登录超时", repoUrl: httpsRepo, mode: "free",
+    }), /Git 令牌未配置/);
+    await service.shutdown();
+
+    // 令牌在而邮箱缺:提交署名无主,同样拦。
+    service = new IssueFlowService(withCred());
+    assert.throws(() => service!.create({
+      account: "dev", title: "登录超时", repoUrl: httpsRepo, mode: "fixed",
+    }), /个人邮箱未配置.*个人设置/);
+    await service.shutdown();
+
+    // 令牌+邮箱齐:登记放行(克隆成败是后面回合的事,门禁只管身份在场)。
+    service = new IssueFlowService(withCred("dev@example.com"));
+    const created = service.create({
+      account: "dev", title: "登录超时", repoUrl: httpsRepo, mode: "fixed",
+    });
+    assert.equal(created.mode, "fixed");
+
+    // file:///本地路径仓:不碰远端,无凭据也不拦(测试/裸仓形态)。
+    await service.shutdown();
+    service = new IssueFlowService(base);
+    const local = service.create({
+      account: "dev", title: "本地裸仓问题", repoUrl: origin, mode: "fixed",
+    });
+    assert.ok(local.id);
+    // 自由探索不填仓:纯研究形态,与凭据无关。
+    const pure = service.create({ account: "dev", title: "纯现象咨询", mode: "free" });
+    assert.ok(pure.id);
+  } finally {
+    await service?.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
 test("MockDtsGateway:确定性单据集,已知单给罐头详情,未知单 fail-loud", async () => {
   const gateway = new MockDtsGateway();
   const list = await gateway.listByOwner("y00965296");

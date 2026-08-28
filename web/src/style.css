@@ -1917,6 +1917,24 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   background: var(--surface-muted);
   border: 1px solid var(--line);
 }
+/* 发起前置门禁条(个人凭据缺项):黄底警示 + 一键跳个人设置 */
+.issue-credential-gate {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; flex-wrap: wrap;
+  padding: 10px 13px;
+  border: 1px solid color-mix(in srgb, #d49b37 45%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in srgb, #d49b37 10%, var(--surface));
+  color: #8a5a1f; font-size: var(--font-size-assist); line-height: 1.5;
+  margin-bottom: 10px;
+}
+.issue-credential-gate b { color: #a8541f; }
+.issue-credential-gate button {
+  min-height: 32px; padding: 0 14px; border: 0; border-radius: 8px;
+  background: #b97d2f; color: #fff; font: inherit; font-size: var(--font-size-dense);
+  font-weight: 700; cursor: pointer; white-space: nowrap;
+}
+
 /* DTS 拉单页签的补登记字段(仓/模块/环境) */
 .issue-dts-fields {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));

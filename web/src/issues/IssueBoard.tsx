@@ -142,6 +142,10 @@ export function IssueBoard({ viewer, onNavigateProfile }: {
   return <div className="issue-board">
     {error && <div className="issue-error" role="alert">
       <span>{error}</span>
+      {onNavigateProfile && /未配置/.test(error)
+        && <button type="button" onClick={onNavigateProfile}>
+          去个人设置配置
+        </button>}
       <button type="button" onClick={() => setError("")}>知道了</button>
     </div>}
     <IssueRegistration
@@ -151,6 +155,7 @@ export function IssueBoard({ viewer, onNavigateProfile }: {
         setOpenId(created.id);
       }}
       onError={setError}
+      onNavigateProfile={onNavigateProfile}
     />
     <section className="issue-section" aria-labelledby="issue-mine-title">
       <div className="section-head">
@@ -208,14 +213,39 @@ function IssueCard({ issue, onOpen }: { issue: IssueSummary; onOpen: () => void 
   </button>;
 }
 
+/** 发起前置门禁条(与需求侧 /launch-options 个人缺项同款语义):这单
+ * 会碰远端仓就得先有 Git 身份——令牌管克隆/推送,邮箱管提交署名与
+ * 平台归属。服务端 create 里机械拦(needRepo 判定同源),这里只把
+ * 拦截面提前到表单:按钮禁用 + 指路个人设置,配完回来即解锁。 */
+function CredentialGate({ viewer, needRepo, onNavigateProfile }: {
+  viewer: AuthUser;
+  needRepo: boolean;
+  onNavigateProfile?: () => void;
+}) {
+  if (!needRepo) return null;
+  const missing: string[] = [];
+  if (!viewer.git_token_hint) missing.push("Git 令牌");
+  else if (!viewer.git_email) missing.push("个人邮箱");
+  if (!missing.length) return null;
+  return <div className="issue-credential-gate" role="alert">
+    <span>发起前先配置<b>{missing.join(" 与 ")}</b>(个人设置 → 个人接入):
+      拉取代码仓与推送提交都用你的身份,配置完成即可发起。</span>
+    {onNavigateProfile && <button type="button" onClick={onNavigateProfile}>
+      去个人设置配置
+    </button>}
+  </div>;
+}
+
 function IssueRegistration({
   viewer,
   onCreated,
   onError,
+  onNavigateProfile,
 }: {
   viewer: AuthUser;
   onCreated: (issue: IssueSummary) => void;
   onError: (message: string) => void;
+  onNavigateProfile?: () => void;
 }) {
   const [tab, setTab] = useState<"dts" | "manual">("manual");
   return <section className="issue-section" aria-labelledby="issue-register-title">
@@ -234,8 +264,10 @@ function IssueRegistration({
       </div>
     </div>
     {tab === "manual"
-      ? <ManualRegister viewer={viewer} onCreated={onCreated} onError={onError} />
-      : <DtsRegister viewer={viewer} onCreated={onCreated} onError={onError} />}
+      ? <ManualRegister viewer={viewer} onCreated={onCreated} onError={onError}
+          onNavigateProfile={onNavigateProfile} />
+      : <DtsRegister viewer={viewer} onCreated={onCreated} onError={onError}
+          onNavigateProfile={onNavigateProfile} />}
   </section>;
 }
 
@@ -243,10 +275,12 @@ function ManualRegister({
   viewer,
   onCreated,
   onError,
+  onNavigateProfile,
 }: {
   viewer: AuthUser;
   onCreated: (issue: IssueSummary) => void;
   onError: (message: string) => void;
+  onNavigateProfile?: () => void;
 }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -300,6 +334,14 @@ function ManualRegister({
     }, 400);
     return () => window.clearTimeout(timer);
   }, [draftKey, title, description, repoUrls, moduleId, moduleName]);
+
+  // 个人凭据前置门禁(2026-08-28 拍板,需求侧同款):这单会碰远端仓
+  // 就得先有 Git 身份。固定流程仓必填→恒需;自由探索按已填的 http 仓判。
+  // 服务端在 create 里机械拦,这里把拦截面提前到表单,少撞一次墙。
+  const touchRemoteRepo = fixed
+    || repoUrls.some((url) => /^https?:\/\//i.test(url.trim()));
+  const credentialBlocked = touchRemoteRepo
+    && (!viewer.git_token_hint || !viewer.git_email);
 
   /** 选模块即带仓:用模块绑定整表替换仓库行(可删可改);清空模块回到单行。
    * 模块绑定可能过期,所以带出后仍然全部可编辑。 */
@@ -437,8 +479,11 @@ function ManualRegister({
         </label>
       </div>}
     </div>
+    <CredentialGate viewer={viewer} needRepo={touchRemoteRepo}
+      onNavigateProfile={onNavigateProfile} />
     <div className="issue-form-actions">
-      <button type="submit" className="primary" disabled={busy}>
+      <button type="submit" className="primary"
+        disabled={busy || credentialBlocked}>
         {busy ? "登记中…" : "登记并开始处理"}
       </button>
       <span className="issue-form-hint">
@@ -472,10 +517,12 @@ function DtsRegister({
   viewer,
   onCreated,
   onError,
+  onNavigateProfile,
 }: {
   viewer: AuthUser;
   onCreated: (issue: IssueSummary) => void;
   onError: (message: string) => void;
+  onNavigateProfile?: () => void;
 }) {
   const [tickets, setTickets] = useState<DtsTicketBrief[] | undefined>();
   const [loading, setLoading] = useState(false);
@@ -487,6 +534,11 @@ function DtsRegister({
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
   const fixed = viewer.issue_flow !== "free";
+  // 个人凭据前置门禁:有单登记必碰仓(固定流程仓必填),同 ManualRegister。
+  const touchRemoteRepo = fixed
+    || /^https?:\/\//i.test(repoUrl.trim());
+  const credentialBlocked = touchRemoteRepo
+    && (!viewer.git_token_hint || !viewer.git_email);
 
   // 模糊搜索:单号/标题/版本,大小写不敏感。
   const [query, setQuery] = useState("");
@@ -574,7 +626,8 @@ function DtsRegister({
       <button type="button" onClick={load} disabled={loading}>
         {loading ? "拉取中…" : `拉取 ${viewer.username} 的问题单`}
       </button>
-      <button type="button" className="primary" disabled={!selected || busy}
+      <button type="button" className="primary"
+        disabled={!selected || busy || credentialBlocked}
         title={tickets && tickets.length > 1 && selected
           ? "当前版本一次只发起一张;批量处理即将开放" : undefined}
         onClick={launch}>
@@ -659,6 +712,8 @@ function DtsRegister({
     {tickets && tickets.length === 0 && <p className="issue-dts-hint">
       你的名下当前没有问题单。
     </p>}
+    <CredentialGate viewer={viewer} needRepo={touchRemoteRepo}
+      onNavigateProfile={onNavigateProfile} />
     {/* 登记即定仓与模块(固定流程的有单七阶段从拉单详情开始,仓在阶段2
         就要克隆);网管环境换库验证要用,登记时一并带上。 */}
     <div className="issue-dts-fields">
