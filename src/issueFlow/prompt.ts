@@ -22,6 +22,7 @@ import {
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { IssueSessionState } from "./state.ts";
+import { issueRepoWorkspaces } from "./state.ts";
 import {
   FIXED_STAGE_LABELS,
   STAGE_LABELS,
@@ -67,6 +68,19 @@ export function materializeIssueSkills(workspace: string): string[] {
 function envLine(state: IssueSessionState): string {
   if (!state.environment) return "未配置网管环境(不能拉日志/换库;纯代码分析可继续)。";
   return `网管环境「${state.environment.name}」: ${state.environment.hosts.join(", ")}`;
+}
+
+/** 多仓清单块:主仓=交付仓(repo/),其余参考仓(ref/<仓名>/)。
+ * 路径相对会话工作区(Agent 的 cwd 就是工作区根);空清单返回空串,
+ * 由调用方给"未登记"文案。 */
+function repoLines(state: IssueSessionState): string {
+  const repos = issueRepoWorkspaces(state, "");
+  if (!repos.length) return "";
+  const lines = repos.map((repo, index) =>
+    `  - ${repo.url} → ${repo.dir}(${
+      index === 0 ? "交付仓:推送/MR/部署都在这里" : "参考仓:只读分析"
+    })`);
+  return `- 代码仓(${repos.length} 个,已克隆):\n${lines.join("\n")}`;
 }
 
 /** 阶段名(自由/固定两套词表都认)。 */
@@ -129,9 +143,10 @@ export function issueFixedOpeningPrompt(state: IssueSessionState): string {
     `- 描述: ${state.description || "(无补充描述)"}`,
     `- 单号: ${state.ticket ?? "(无单号场景:测试/开发自行定位,结论后由用户决定挂起提单或闭环)"}`,
     `- 工号: ${state.account}`,
-    `- 代码仓: ${state.repo_url ?? "(未登记)"}(已克隆到 repo/)`
-      + (scenario === "ticket" && state.ticket
-        ? `,修复分支 ${`master_${state.account}_${state.ticket}`} 由平台创建` : ""),
+    repoLines(state) || "- 代码仓: (未登记)",
+    ...(scenario === "ticket" && state.ticket
+      ? [`- 修复分支 master_${state.account}_${state.ticket} 由平台在主仓创建`]
+      : []),
     `- ${envLine(state)}`,
     inheritedNote,
     "",
@@ -180,7 +195,8 @@ export function issueOpeningPrompt(state: IssueSessionState): string {
     `- 描述: ${state.description || "(无补充描述)"}`,
     `- 单号: ${state.ticket ?? "(尚未绑定——先研究后补单是正常形态;推送/提MR前必须请用户在页面绑定)"}`,
     `- 工号: ${state.account}`,
-    `- 代码仓: ${state.repo_url ? `${state.repo_url}(已克隆到 repo/)` : "(未登记——需要读代码时请用户提供仓库地址,由用户在页面补充登记)"}`,
+    repoLines(state)
+      || "- 代码仓: (未登记——需要读代码时请用户提供仓库地址,由用户在页面补充登记)",
     `- ${envLine(state)}`,
     "",
     "## 行为契约",

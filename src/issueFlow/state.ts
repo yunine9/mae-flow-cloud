@@ -271,10 +271,16 @@ export interface IssueSessionState {
   source: IssueSource;
   /** 可空:先研究后补单是问题流的一等场景。绑定前推送/MR 被机械拒绝。 */
   ticket?: string;
+  /** 主仓(交付仓):推送/MR/部署链路的权威地址,克隆在 repo/。
+   * 与 repo_urls[0] 保持一致(dual-write),旧字段留给展示层与老会话。 */
   repo_url?: string;
+  /** 全部目标代码仓(首个=主仓):模块带仓的多仓分析是常态,主仓之外的
+   * 都是参考仓,克隆在 ref/<仓目录名>/ 供只读分析。 */
+  repo_urls?: string[];
   baseline?: string;
-  /** 业务模块自由文本标签(仅展示/报告引用;模块→仓映射配置另有团队
-   * 在做,接入前不承载任何判定)。 */
+  /** 业务模块:module_id 是登记时选定的一等实体(带出 repo_urls 的
+   * 来源留痕);module 是展示/报告用的名称标签,由模块名派生。 */
+  module_id?: string;
   module?: string;
   environment?: IssueEnvironmentConfig;
   /** 探索方式:创建时烙印,会话中途不换。缺省视为 free(兼容旧会话)。 */
@@ -310,6 +316,31 @@ export interface IssueSummary extends IssueSessionState {
   has_environment: boolean;
 }
 
+// ---- 多仓工作区映射(克隆/工具/提示词共用,目录命名只写这一处) ----
+
+/** 会话登记仓 → 工作区克隆路径:主仓在 repo/(交付链路既定位置),
+ * 参考仓在 ref/<仓名>/(只读分析)。仓目录名取地址末段去 .git,
+ * 重名追加序号。 */
+export function issueRepoWorkspaces(
+  state: IssueSessionState,
+  workspaceRoot: string,
+): Array<{ url: string; dir: string }> {
+  const repoUrls = state.repo_urls?.length
+    ? state.repo_urls
+    : state.repo_url ? [state.repo_url] : [];
+  const taken = new Set<string>();
+  return repoUrls.map((url, index) => {
+    if (index === 0) return { url, dir: join(workspaceRoot, "repo") };
+    const tail = url.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "";
+    const name = tail.replace(/\.git$/i, "") || "repo";
+    let candidate = name;
+    let serial = 2;
+    while (taken.has(candidate)) candidate = `${name}-${serial++}`;
+    taken.add(candidate);
+    return { url, dir: join(workspaceRoot, "ref", candidate) };
+  });
+}
+
 export function summarize(state: IssueSessionState): IssueSummary {
   return {
     ...state,
@@ -325,6 +356,13 @@ export function loadState(root: string): IssueSessionState | undefined {
   // 不让显示层到处兜旧值。固定/自由两套词表都认。
   if (state.stage && !validStage(state.stage)) {
     state.stage = LEGACY_STAGES[state.stage] ?? "registered";
+  }
+  // 多仓迁移:repo_urls 是权威清单,repo_url 是主仓别名。老会话只有
+  // 单仓字段,读进来就补齐另一侧,消费方不用两头兜底。
+  if (state.repo_urls?.length) {
+    state.repo_url ??= state.repo_urls[0];
+  } else if (state.repo_url) {
+    state.repo_urls = [state.repo_url];
   }
   return state;
 }

@@ -1630,10 +1630,23 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-field { display: grid; gap: 5px; font-size: var(--font-size-assist); color: var(--muted); }
 .issue-field.wide { grid-column: 1 / -1; }
 .issue-field i { font-style: normal; color: var(--faint); }
-.issue-field input, .issue-field textarea, .issue-env-fields input, .issue-bind input {
+.issue-field input, .issue-field select, .issue-field textarea, .issue-env-fields input, .issue-bind input {
   padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
   background: var(--surface-muted); color: var(--text-strong); font: inherit; width: 100%;
 }
+.issue-repo-rows { display: grid; gap: 6px; }
+.issue-repo-row { display: flex; gap: 6px; }
+.issue-repo-row button {
+  flex: none; width: 32px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface-muted); color: var(--muted); cursor: pointer;
+}
+.issue-repo-row button:hover { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+.issue-repo-add {
+  justify-self: start; padding: 6px 12px; border: 1px dashed var(--line);
+  border-radius: 8px; background: none; color: var(--muted);
+  font-size: var(--font-size-assist); cursor: pointer;
+}
+.issue-repo-add:hover { color: var(--text-strong); border-color: var(--line-strong); }
 .issue-env-toggle {
   justify-self: start; padding: 6px 12px; border: 1px dashed var(--line);
   border-radius: 8px; background: none; color: var(--muted);

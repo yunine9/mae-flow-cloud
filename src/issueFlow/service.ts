@@ -41,6 +41,7 @@ import {
   fixedStages,
   initStageStates,
   isTerminal,
+  issueRepoWorkspaces,
   loadState,
   recordTransition,
   saveState,
@@ -61,6 +62,7 @@ import {
   validateRepoUrl,
   type GitCredential,
 } from "./issueGit.ts";
+import { readBusinessModule } from "../businessModuleLibrary.ts";
 import type { IssueOpsTools } from "./opsTools.ts";
 import type { DtsGateway, DtsTicketDetail } from "./gateways.ts";
 import { createIssueTools, expectedBranch, GATE_OPTIONS, type IssueToolContext } from "./tools.ts";
@@ -105,9 +107,13 @@ export interface IssueCreateInput {
   source?: IssueSource;
   ticket?: string;
   repoUrl?: string;
+  /** 多仓登记(模块带仓是常态):与 repoUrl 合并去重,首个=主仓。 */
+  repoUrls?: string[];
   baseline?: string;
   /** 业务模块自由文本标签(仅展示/报告引用,不承载判定)。 */
   module?: string;
+  /** 登记选定的业务模块 ID:校验存在且 active,名称派生 module 标签。 */
+  moduleId?: string;
   /** 显式指定模式(转正建新会话用);缺省走 issueFlowMode 回调。 */
   mode?: IssueFlowMode;
   environment?: IssueEnvironmentInput;
@@ -166,6 +172,31 @@ export interface IssueMessage {
 }
 
 const TICKET_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+
+/** 一个问题会话最多拉取的代码仓数。模块库允许一个模块绑 20 个仓,
+ * 但问题会话一轮克隆 8 个已是分析上限——再多说明该拆会话了。 */
+const MAX_ISSUE_REPOS = 8;
+
+/** 登记仓清单:单仓(兼容字段)与多仓合并去重,逐个过协议校验。
+ * 顺序即语义——首个是主仓(交付仓),其余是参考仓。 */
+function normalizeIssueRepos(
+  single: string | undefined,
+  list: string[] | undefined,
+): string[] {
+  const unique: string[] = [];
+  for (const raw of [single ?? "", ...(list ?? [])]) {
+    const url = raw.trim();
+    if (!url) continue;
+    const validated = validateRepoUrl(url);
+    if (!unique.includes(validated)) unique.push(validated);
+  }
+  if (unique.length > MAX_ISSUE_REPOS) {
+    throw new IssueControlError(
+      `一个问题会话最多拉取 ${MAX_ISSUE_REPOS} 个代码仓(当前 ${unique.length} 个);`
+        + "请精简模块绑定或分多次分析");
+  }
+  return unique;
+}
 
 /** 结论文档回传上限:一个巨型文档不能把页面拖死。 */
 const ANALYSIS_MAX_BYTES = 512 * 1024;
@@ -380,16 +411,40 @@ export class IssueFlowService {
     if (ticket && !TICKET_PATTERN.test(ticket)) {
       throw new IssueControlError("单号只能是字母数字下划线连字符(如 DTS2026082001317)");
     }
-    const repoUrl = input.repoUrl?.trim() || undefined;
-    if (repoUrl) validateRepoUrl(repoUrl);
+    const explicitRepos = normalizeIssueRepos(input.repoUrl, input.repoUrls);
     const mode: IssueFlowMode =
       input.mode ?? this.options.issueFlowMode?.(account) ?? "free";
     const scenario: IssueScenario | undefined =
       mode === "fixed" ? (ticket ? "ticket" : "no_ticket") : undefined;
-    if (mode === "fixed" && !repoUrl) {
+    // 模块是一等实体:module_id 必须真实存在且在架,名称由模块库派生
+    // (前端传来的 module 文本在带 moduleId 时让位,标签不出现两个真相)。
+    let moduleName = input.module?.trim() || undefined;
+    let moduleRepos: string[] | undefined;
+    const moduleId = input.moduleId?.trim() || undefined;
+    if (moduleId) {
+      try {
+        const module = readBusinessModule(this.options.dataDir, moduleId);
+        if (module.status !== "active") {
+          throw new IssueControlError(
+            `业务模块「${module.name}」已归档,不能用于新问题会话`);
+        }
+        moduleName = module.name;
+        moduleRepos = module.repositories;
+      } catch (error) {
+        if (error instanceof IssueControlError) throw error;
+        throw new IssueControlError(
+          `业务模块 ${moduleId} 不存在或元数据不可读,请刷新模块列表后重试`);
+      }
+    }
+    // 模块带仓:只登记模块没给仓时,按模块绑定整表带出(同样过协议
+    // 校验与上限)。"选模块→带仓"在服务端同样成立,不是前端专属糖。
+    const repoUrls = !explicitRepos.length && moduleRepos?.length
+      ? normalizeIssueRepos(undefined, moduleRepos)
+      : explicitRepos;
+    if (mode === "fixed" && !repoUrls.length) {
       throw new IssueControlError(
-        "固定流程在登记时就要确定代码仓(阶段1拉取代码仓是必经节点),请填写代码仓地址;"
-          + "自由探索模式才允许登记后再补");
+        "固定流程在登记时就要确定代码仓(阶段1拉取代码仓是必经节点),"
+          + "请选择业务模块自动带出,或填写代码仓地址;自由探索模式才允许登记后再补");
     }
     let environment;
     let environmentPassword: string | undefined;
@@ -438,9 +493,12 @@ export class IssueFlowService {
       description: input.description?.trim() ?? "",
       source: input.source ?? "manual",
       ...(ticket ? { ticket } : {}),
-      ...(repoUrl ? { repo_url: repoUrl } : {}),
+      ...(repoUrls.length
+        ? { repo_url: repoUrls[0], repo_urls: repoUrls }
+        : {}),
       ...(input.baseline?.trim() ? { baseline: input.baseline.trim() } : {}),
-      ...(input.module?.trim() ? { module: input.module.trim() } : {}),
+      ...(moduleName ? { module: moduleName } : {}),
+      ...(moduleId ? { module_id: moduleId } : {}),
       ...(environment ? { environment } : {}),
       // 模式一律烙印落盘(free 也记):审计要看"当时是什么模式",
       // 旧现场缺字段读作自由(兼容),不等于新会话不记。
@@ -519,7 +577,7 @@ export class IssueFlowService {
     if (state.mode !== "fixed" || !state.scenario || stage !== "prep_repo") {
       return;
     }
-    if (!state.repo_url) {
+    if (!state.repo_urls?.length) {
       throw new Error("固定流程缺少代码仓地址(登记时校验过,这里是防御)");
     }
     const repoDir = join(live.root, "repo");
@@ -537,9 +595,12 @@ export class IssueFlowService {
         ...(state.baseline ? { startPoint: state.baseline } : {}),
       });
     }
+    const repoNote = state.repo_urls.length > 1
+      ? `${state.repo_urls.length} 个代码仓已克隆(主仓 repo/,参考仓 ref/)`
+      : "代码仓已克隆";
     fixedAdvance(state, "analyze", branch
-      ? `代码仓已克隆,修复分支 ${branch} 已创建`
-      : "代码仓已克隆(无单场景不建分支)");
+      ? `${repoNote},修复分支 ${branch} 已创建(在主仓)`
+      : `${repoNote}(无单场景不建分支)`);
     saveState(live.root, live.state);
   }
 
@@ -614,17 +675,26 @@ export class IssueFlowService {
 
   private async ensureCloned(live: LiveIssue): Promise<void> {
     const { state } = live;
-    if (!state.repo_url) return;
-    const repoDir = join(live.root, "repo");
-    if (existsSync(join(repoDir, ".git"))) return;
-    this.log(`[issue-flow] ${live.id} 克隆代码仓: ${state.repo_url}`);
-    await cloneRepository({
-      dataDir: this.options.dataDir,
-      targetDir: repoDir,
-      repoUrl: state.repo_url,
-      ...(state.baseline ? { baseline: state.baseline } : {}),
-      credential: this.options.gitCredential?.(state.account),
-    });
+    const repos = issueRepoWorkspaces(state, live.root);
+    if (!repos.length) return;
+    for (const [index, repo] of repos.entries()) {
+      if (existsSync(join(repo.dir, ".git"))) continue;
+      // baseline 是交付基线,只作用于主仓——参考仓跟自己的默认分支走,
+      // 不因别的仓没有同名分支而炸。
+      this.log(`[issue-flow] ${live.id} 克隆${index === 0 ? "主仓" : "参考仓"}: ${repo.url}`);
+      try {
+        await cloneRepository({
+          dataDir: this.options.dataDir,
+          targetDir: repo.dir,
+          repoUrl: repo.url,
+          ...(index === 0 && state.baseline ? { baseline: state.baseline } : {}),
+          credential: this.options.gitCredential?.(state.account),
+        });
+      } catch (error) {
+        throw new Error(`${index === 0 ? "主仓" : "参考仓"} ${repo.url}: `
+          + (error instanceof Error ? error.message : String(error)));
+      }
+    }
   }
 
   private modelChoice(): { provider: string; model: string; json: Record<string, unknown> } {
@@ -1253,10 +1323,13 @@ export class IssueFlowService {
     const newId = this.nextId();
     const newRoot = join(this.issuesRoot, newId);
     mkdirSync(newRoot, { recursive: true });
-    // 工作区复制:repo/ 整目录 + 分析报告(skills 由 openDriver 重物化,
-    // local-logs 不带——新一轮要拉新日志)。
+    // 工作区复制:repo/(主仓)+ ref/(参考仓)整目录 + 分析报告
+    // (skills 由 openDriver 重物化,local-logs 不带——新一轮要拉新日志)。
     if (existsSync(join(live.root, "repo"))) {
       cpSync(join(live.root, "repo"), join(newRoot, "repo"), { recursive: true });
+    }
+    if (existsSync(join(live.root, "ref"))) {
+      cpSync(join(live.root, "ref"), join(newRoot, "ref"), { recursive: true });
     }
     if (existsSync(join(live.root, "issue-analysis.md"))) {
       cpSync(join(live.root, "issue-analysis.md"),
@@ -1292,9 +1365,11 @@ export class IssueFlowService {
       description: state.description,
       source: "dts",
       ticket,
+      ...(state.repo_urls?.length ? { repo_urls: state.repo_urls } : {}),
       ...(state.repo_url ? { repo_url: state.repo_url } : {}),
       ...(state.baseline ? { baseline: state.baseline } : {}),
       ...(state.module ? { module: state.module } : {}),
+      ...(state.module_id ? { module_id: state.module_id } : {}),
       ...(environment ? { environment } : {}),
       mode: "fixed",
       scenario: "ticket",

@@ -2135,8 +2135,12 @@ export function createIssue(input: {
   source?: "manual" | "dts";
   ticket?: string;
   repo_url?: string;
+  /** 多仓登记(模块带仓是常态):首个=主仓(交付仓),其余参考仓。 */
+  repo_urls?: string[];
   baseline?: string;
   module?: string;
+  /** 登记选定的业务模块 ID:后端校验存在且 active,名称派生 module。 */
+  module_id?: string;
   environment?: IssueEnvironmentForm;
 }): Promise<IssueSummary> {
   return issueFetch("/issues", {

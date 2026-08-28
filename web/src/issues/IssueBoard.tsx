@@ -17,6 +17,7 @@ import {
   controlIssue,
   createIssue,
   fixedStageList,
+  getBusinessModules,
   getDtsTicketDetail,
   getIssue,
   getIssueAnalysis,
@@ -28,6 +29,7 @@ import {
   steerIssue,
   tailIssueEvents,
   type AuthUser,
+  type BusinessModule,
   type DtsTicketBrief,
   type DtsTicketDetail,
   type IssueDetail,
@@ -241,8 +243,12 @@ function ManualRegister({
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [ticket, setTicket] = useState("");
-  const [repoUrl, setRepoUrl] = useState("");
+  // 多仓登记:首个=主仓(交付仓),其余参考仓。选模块自动带出,可增删改。
+  const [repoUrls, setRepoUrls] = useState<string[]>([""]);
+  // 业务模块:目录非空时是选择器(无单必选),目录空/加载失败回退自由文本。
+  const [moduleId, setModuleId] = useState("");
   const [moduleName, setModuleName] = useState("");
+  const [modules, setModules] = useState<BusinessModule[] | undefined>();
   const [envOpen, setEnvOpen] = useState(false);
   const [envHosts, setEnvHosts] = useState("");
   const [envPassword, setEnvPassword] = useState("");
@@ -250,25 +256,52 @@ function ManualRegister({
   // 探索方式(个人设置,缺省固定流程):只影响本次登记的会话形态。
   const fixed = viewer.issue_flow !== "free";
   const draftKey = `mae-flow:issue:draft:${viewer.username}`;
+  const moduleCatalog = useMemo(
+    () => (modules ?? []).filter((module) => module.status === "active"),
+    [modules]);
+  const selectedModule = moduleCatalog.find((module) => module.id === moduleId);
+  useEffect(() => {
+    let alive = true;
+    // 目录读不到按空处理:回退手填仓,不让模块库故障堵死问题发起。
+    getBusinessModules()
+      .then((catalog) => { if (alive) setModules(catalog.modules); })
+      .catch(() => { if (alive) setModules([]); });
+    return () => { alive = false; };
+  }, []);
   useEffect(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(draftKey) ?? "null");
       if (saved) {
         setTitle(saved.title ?? "");
         setDescription(saved.description ?? "");
-        setRepoUrl(saved.repoUrl ?? "");
-        setModuleName(saved.moduleName ?? "");
+        setRepoUrls(Array.isArray(saved.repoUrls) && saved.repoUrls.length
+          ? saved.repoUrls.map(String)
+          : saved.repoUrl ? [String(saved.repoUrl)] : [""]);
+        setModuleId(typeof saved.moduleId === "string" ? saved.moduleId : "");
+        setModuleName(typeof saved.moduleName === "string" ? saved.moduleName : "");
       }
     } catch { /* 草稿是旁路,坏了就坏了吧 */ }
   }, [draftKey]);
   useEffect(() => {
     const timer = window.setTimeout(() => {
       try {
-        localStorage.setItem(draftKey, JSON.stringify({ title, description, repoUrl, moduleName }));
+        localStorage.setItem(draftKey, JSON.stringify({
+          title, description, repoUrls, moduleId, moduleName,
+        }));
       } catch { /* 同上 */ }
     }, 400);
     return () => window.clearTimeout(timer);
-  }, [draftKey, title, description, repoUrl, moduleName]);
+  }, [draftKey, title, description, repoUrls, moduleId, moduleName]);
+
+  /** 选模块即带仓:用模块绑定整表替换仓库行(可删可改);清空模块回到单行。
+   * 模块绑定可能过期,所以带出后仍然全部可编辑。 */
+  function changeModule(nextId: string) {
+    setModuleId(nextId);
+    const module = moduleCatalog.find((item) => item.id === nextId);
+    setRepoUrls(nextId && module?.repositories.length
+      ? [...module.repositories]
+      : [""]);
+  }
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -277,9 +310,15 @@ function ManualRegister({
       onError("问题标题必填——一句话说清现象");
       return;
     }
-    if (fixed && !repoUrl.trim()) {
+    if (fixed && !ticket.trim() && moduleCatalog.length > 0 && !moduleId) {
+      onError("无单场景必须先选业务模块——平台按模块绑定的代码仓拉取现场。"
+        + "模块不在列表?先到「知识飞轮 → 业务模块」登记,或填写单号按有单流程走");
+      return;
+    }
+    const repos = [...new Set(repoUrls.map((url) => url.trim()).filter(Boolean))];
+    if (fixed && !repos.length) {
       onError("固定流程在登记时就要确定代码仓(拉取代码仓是必经节点)——"
-        + "填代码仓地址,或到「个人设置」切回自由探索");
+        + "选择业务模块自动带出,或填代码仓地址;也可到「个人设置」切回自由探索");
       return;
     }
     setBusy(true);
@@ -294,12 +333,14 @@ function ManualRegister({
         title: title.trim(),
         description: description.trim() || undefined,
         ticket: ticket.trim() || undefined,
-        repo_url: repoUrl.trim() || undefined,
-        ...(moduleName.trim() ? { module: moduleName.trim() } : {}),
+        ...(repos.length ? { repo_urls: repos } : {}),
+        ...(moduleId ? { module_id: moduleId } : {}),
+        ...(!moduleId && moduleName.trim() ? { module: moduleName.trim() } : {}),
         ...(environment ? { environment } : {}),
       });
       setTitle(""); setDescription(""); setTicket("");
-      setModuleName(""); setEnvHosts(""); setEnvPassword("");
+      setRepoUrls([""]); setModuleId(""); setModuleName("");
+      setEnvHosts(""); setEnvPassword("");
       onCreated(created);
     } catch (reason) {
       onError(String(reason instanceof Error ? reason.message : reason));
@@ -328,16 +369,47 @@ function ManualRegister({
         onChange={(event) => setTicket(event.target.value)} />
     </label>
     <label className="issue-field">
-      <span>代码仓地址 <i>{fixed ? "必填" : "可选"}</i></span>
-      <input value={repoUrl} placeholder="https://codehub.../repo.git"
-        onChange={(event) => setRepoUrl(event.target.value)} />
+      <span>业务模块 <i>{fixed && moduleCatalog.length > 0 ? "无单必选" : "可选"}</i></span>
+      {moduleCatalog.length > 0
+        ? <select value={moduleId}
+            onChange={(event) => changeModule(event.target.value)}>
+            <option value="">不选择模块(手动填仓)</option>
+            {moduleCatalog.map((module) => (
+              <option key={module.id} value={module.id}>
+                {module.name}(绑 {module.repositories.length} 个仓)
+              </option>
+            ))}
+          </select>
+        : <input value={moduleName} maxLength={60}
+            placeholder="如:媒体中心(仅展示与报告引用)"
+            onChange={(event) => setModuleName(event.target.value)} />}
+      {selectedModule && !selectedModule.repositories.length && (
+        <small>该模块未绑定代码仓,请手动填写仓库地址</small>
+      )}
     </label>
-    <label className="issue-field">
-      <span>业务模块 <i>可选</i></span>
-      <input value={moduleName} maxLength={60}
-        placeholder="如:媒体中心(仅展示与报告引用)"
-        onChange={(event) => setModuleName(event.target.value)} />
-    </label>
+    <div className="issue-field">
+      <span>代码仓地址 <i>{fixed
+        ? selectedModule?.repositories.length ? "模块带出,可增删改" : "至少一个"
+        : "可选"}</i></span>
+      <div className="issue-repo-rows">
+        {repoUrls.map((url, index) => (
+          <div className="issue-repo-row" key={index}>
+            <input value={url} spellCheck={false}
+              placeholder="https://codehub.../repo.git"
+              onChange={(event) => setRepoUrls((current) => current.map(
+                (item, itemIndex) => itemIndex === index
+                  ? event.target.value : item))} />
+            {repoUrls.length > 1 && (
+              <button type="button" aria-label={`移除第 ${index + 1} 个仓库`}
+                onClick={() => setRepoUrls((current) => current.filter(
+                  (_, itemIndex) => itemIndex !== index))}>×</button>
+            )}
+          </div>
+        ))}
+      </div>
+      <button type="button" className="issue-repo-add"
+        onClick={() => setRepoUrls((current) => [...current, ""])}>＋ 添加代码仓</button>
+    </div>
     <div className="issue-field wide">
       <button type="button" className="issue-env-toggle"
         aria-expanded={envOpen}

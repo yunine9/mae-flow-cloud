@@ -27,6 +27,7 @@ import {
   fixedAdvance,
   fixedStageIndex,
   fixedStages,
+  issueRepoWorkspaces,
   raiseGate,
   recordTransition,
   validStage,
@@ -96,6 +97,24 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
   const state = ctx.state;
   const fixed = state.mode === "fixed";
   const scenario = state.scenario;
+
+  /** 会话仓定位:repo 参数(缺省主仓)→ 克隆目录 + 权威地址。
+   * 多仓会话主仓在 repo/,参考仓在 ref/<仓名>/;地址比对忽略 .git
+   * 后缀,没登记过的仓一律打回。 */
+  const locateRepo = (requested: string | undefined): { url: string; dir: string } => {
+    const repos = issueRepoWorkspaces(state, ctx.workspace);
+    if (!repos.length) fail("会话没有登记代码仓地址");
+    const wanted = requested?.trim();
+    if (!wanted) return repos[0];
+    const match = repos.find((repo) =>
+      repo.url === wanted
+      || repo.url.replace(/\.git$/i, "") === wanted.replace(/\.git$/i, ""));
+    if (!match) {
+      fail(`会话没有登记这个代码仓: ${wanted}。`
+        + `已登记: ${repos.map((repo) => repo.url).join(", ")}`);
+    }
+    return match;
+  };
 
   // ---- 阶段门禁(固定流程专属;自由模式直接放行) ----
 
@@ -311,6 +330,11 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       branch: Type.Optional(Type.String({
         description: "要推送的分支;缺省取代码仓当前分支",
       })),
+      repo: Type.Optional(Type.String({
+        description:
+          "目标代码仓地址;缺省主仓(交付仓)。必须是会话登记过的仓"
+          + "(多仓分析时参考仓也能推,分支命名规则不变)",
+      })),
     }),
     async execute(_toolCallId: string, params: any) {
       gateStageFrom("push_branch", "fix");
@@ -319,11 +343,10 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         fail("单号门禁:会话尚未绑定 DTS 单号。请请用户在页面「绑定单号」后重试"
           + "——推送与提 MR 都以单号为门票");
       }
-      const repoDir = join(ctx.workspace, "repo");
-      if (!existsSync(join(repoDir, ".git"))) fail("代码克隆不存在,无法推送");
-      if (!state.repo_url) fail("会话没有权威代码仓地址,拒绝推送");
+      const repo = locateRepo(params.repo);
+      if (!existsSync(join(repo.dir, ".git"))) fail("代码克隆不存在,无法推送");
       const branch = String(params.branch ?? "").trim()
-        || await currentBranch(repoDir);
+        || await currentBranch(repo.dir);
       if (!branch) fail("没有可推送的分支(缺 branch 参数且当前不在分支上)");
       const expected = expectedBranch(state);
       if (branch !== expected) {
@@ -332,8 +355,8 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       }
       const receipt = await pushFromIssueWorkspace({
         dataDir: ctx.dataRoot,
-        repoDir,
-        repoUrl: state.repo_url,
+        repoDir: repo.dir,
+        repoUrl: repo.url,
         branch,
         credential: ctx.gitCredential?.(),
       });
@@ -365,6 +388,9 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       target_branch: Type.Optional(Type.String({
         description: "目标分支,缺省 master",
       })),
+      repo: Type.Optional(Type.String({
+        description: "目标代码仓地址;缺省主仓(交付仓)。必须是会话登记过的仓",
+      })),
     }),
     async execute(_toolCallId: string, params: any) {
       gateStage("create_mr", ["mr_green"]);
@@ -387,9 +413,10 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       const target = String(params.target_branch ?? "").trim() || "master";
       const title = String(params.title ?? "").trim()
         || `[${state.ticket}] ${state.title}`;
+      const repo = locateRepo(params.repo);
       const receipt = await createMergeRequest({
         platformUrl,
-        repo: state.repo_url,
+        repo: repo.url,
         sourceBranch: state.push.branch,
         targetBranch: target,
         title,

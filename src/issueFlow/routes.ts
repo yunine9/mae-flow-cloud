@@ -179,8 +179,11 @@ export async function handleIssueRoutes(
         source: body.source === "dts" ? "dts" : "manual",
         ...(body.ticket ? { ticket: String(body.ticket) } : {}),
         ...(body.repo_url ? { repoUrl: String(body.repo_url) } : {}),
+        ...(Array.isArray(body.repo_urls)
+          ? { repoUrls: body.repo_urls.map(String) } : {}),
         ...(body.baseline ? { baseline: String(body.baseline) } : {}),
         ...(body.module ? { module: String(body.module) } : {}),
+        ...(body.module_id ? { moduleId: String(body.module_id) } : {}),
         ...(body.environment ? {
           environment: {
             name: body.environment.name === undefined
