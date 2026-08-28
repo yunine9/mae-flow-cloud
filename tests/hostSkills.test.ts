@@ -254,11 +254,17 @@ test("精确选择仓 A 的 Skill,不会顺带装载同目录仓 B Skill", async
   assert.ok(!seen.includes("REPO-B-MARKER"));
 });
 
-test("用户选择的业务文档开局进入 Pi 上下文并留下加载足迹", async () => {
+test("知识只以索引进入首轮；正文被 Agent 按需读取后才进入上下文", async () => {
   const workspace = mkdtempSync(join(tmpdir(), "mfc-repo-knowledge-"));
-  const knowledgePath = join(workspace, "selected-orders.md");
-  writeFileSync(knowledgePath, "# 订单知识\n\nORDER-KNOWLEDGE-MARKER\n");
-  const model = new ScriptedModelServer(SCRIPT);
+  const engineeringPath = join(workspace, "team-build.md");
+  writeFileSync(engineeringPath,
+    "# 团队构建知识\n\nENGINEERING-KNOWLEDGE-BODY-MARKER\n");
+  const model = new ScriptedModelServer([
+    { text: "索引显示团队构建知识相关，按需读取。", tool: {
+      name: "read", input: { path: engineeringPath },
+    } },
+    { text: "已读取所需正文，完成。" },
+  ]);
   await model.start();
   const agentDir = join(workspace, "pi-agent");
   mkdirSync(agentDir, { recursive: true });
@@ -271,17 +277,18 @@ test("用户选择的业务文档开局进入 Pi 上下文并留下加载足迹"
     model: "scripted-v1",
     eventLog: new EventLog(join(workspace, "events.jsonl")),
     transcript: new TranscriptStore(join(workspace, "transcript.jsonl"), "main"),
-    gate: new GateService(),
+    gate: new GateService({ workspace, cwd: workspace }),
     humanGate: new HumanGate(join(workspace, "waiting.json")),
-    repositoryKnowledge: [{
-      id: "knowledge-1",
-      repository: "orders",
-      title: "订单知识",
-      description: "订单领域约束",
-      relative_path: "docs/orders.md",
-      digest: "digest",
-      path: knowledgePath,
-    }],
+    engineeringKnowledge: { warnings: [], entries: [{
+      id: "engineering-1",
+      title: "团队构建知识",
+      summary: "仅在构建超时时参考",
+      when_to_use: "构建长时间无结果时",
+      form: "document",
+      business_module_ids: [], repositories: [], technologies: ["java"],
+      digest: "digest-2", bytes: 1,
+      relative_path: "team-build.md", path: engineeringPath,
+    }] },
     knowledgeTrace: new KnowledgeTrace(
       join(workspace, "knowledge-events.jsonl"),
       "T-repository-knowledge", workspace,
@@ -290,10 +297,21 @@ test("用户选择的业务文档开局进入 Pi 上下文并留下加载足迹"
   try {
     const outcome = await session.start("开始");
     assert.equal(outcome.status, "turn_finished", outcome.detail ?? "");
-    assert.match(JSON.stringify(model.requests), /ORDER-KNOWLEDGE-MARKER/);
+    const firstRequest = JSON.stringify(model.requests[0]);
+    assert.match(firstRequest, /本任务知识索引/);
+    assert.match(firstRequest, /仅在构建超时时参考/);
+    assert.doesNotMatch(firstRequest, /ENGINEERING-KNOWLEDGE-BODY-MARKER/,
+      "默认勾选不能把团队工程知识正文偷渡进首轮上下文");
+    assert.match(JSON.stringify(model.requests),
+      /ENGINEERING-KNOWLEDGE-BODY-MARKER/,
+      "Agent 主动 Read 后，对应正文才应进入后续请求");
     const usage = knowledgeUsageSnapshot({ workspace })!;
-    assert.ok(usage.events.some((event) => event.id === "knowledge-1"
-      && event.action === "loaded"));
+    assert.ok(usage.events.some((event) => event.id === "engineering-1"
+      && event.action === "available"));
+    assert.ok(usage.events.some((event) => event.id === "engineering-1"
+      && event.action === "read"));
+    assert.ok(!usage.events.some((event) => event.id === "engineering-1"
+      && event.action === "loaded"), "索引可见不能冒充正文已加载");
   } finally {
     session.dispose();
     await model.stop();

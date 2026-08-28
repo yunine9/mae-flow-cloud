@@ -91,7 +91,7 @@ test("飞轮给出覆盖缺口、选而未用和正向沉淀建议", () => {
     { id: "unused-1", status: "running", repository_skills: [{}], knowledge_usage: unused },
     { id: "unused-2", status: "running", repository_skills: [{}], knowledge_usage: unused },
     ...[1, 2, 3].map((index): KnowledgeInsightTask => ({
-      id: `done-${index}`, status: "completed", repository_knowledge: [],
+      id: `done-${index}`, status: "completed",
       knowledge_usage: proven,
     })),
   ];
@@ -107,7 +107,7 @@ test("飞轮给出覆盖缺口、选而未用和正向沉淀建议", () => {
 
 test("小样本只展示事实，不强行生成资源优劣结论", () => {
   const result = buildTeamKnowledgeInsights([{
-    id: "task-1", status: "running", repository_knowledge: [],
+    id: "task-1", status: "running",
     knowledge_usage: usage({ id: "one", name: "单次知识", path: "docs/one.md", reads: 1 }),
   }]);
   assert.equal(result.summary.opportunities, 0);
@@ -255,7 +255,6 @@ test("任务自己的 document 不进入团队知识聚合", () => {
   const result = buildTeamKnowledgeInsights([{
     id: "requirement-task",
     status: "completed",
-    repository_knowledge: [{}],
     knowledge_usage: usage({
       id: "requirement", kind: "document", name: "REQ-1001 需求说明",
       path: "docs/REQ-1001.md", reads: 3,

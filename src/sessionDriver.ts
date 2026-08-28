@@ -46,9 +46,9 @@ import {
   KnowledgeTrace,
   type KnowledgeResourceRef,
 } from "./knowledgeTrace.ts";
-import type { MaterializedKnowledgeEntry } from "./repositoryKnowledgeRuntime.ts";
 import type { MaterializedBusinessModuleKnowledge } from "./businessModuleRuntime.ts";
 import type { MaterializedEngineeringKnowledge } from "./engineeringKnowledgeRuntime.ts";
+import { materializeTaskKnowledgeIndex } from "./taskKnowledgeIndex.ts";
 
 /** pi 工具名 → 内核工具词汇表。不认识的原样透传(错认比不认更危险)。 */
 const TOOL_NAME_MAP: Record<string, string> = {
@@ -145,13 +145,10 @@ export interface CloudSessionOptions {
   /** 与 repositorySkillPaths 一一对应的业务身份，仅用于知识足迹归因；
    * 缺失时仍能按实际 Skill 文件记录，不影响装载。 */
   repositorySkillResources?: Array<KnowledgeResourceRef & { actual_path: string }>;
-  /** 用户在下单时选定、已经过安全物化的重点知识。正文作为项目上下文
-   * 注入一次；主/子/恢复会话共用，失败只影响观测与上下文，不碰内核。 */
-  repositoryKnowledge?: MaterializedKnowledgeEntry[];
-  /** 创建任务时固定的业务模块知识。只把目录 INDEX.md 注入上下文；
+  /** 创建任务时固定的业务模块知识。非 Skill 只进入统一轻量索引；
    * 正文保留为工作区文件，由 Agent 使用 Read/Grep 按需读取。 */
   businessModuleKnowledge?: MaterializedBusinessModuleKnowledge;
-  /** 已发布且与本任务仓库/技术栈匹配的团队工程文档、规则和示例。 */
+  /** 已发布且与本任务画像匹配的团队工程文档、规则和示例；正文按需读。 */
   engineeringKnowledge?: MaterializedEngineeringKnowledge;
   knowledgeTrace?: KnowledgeTrace;
   /** 上下文超限自愈用的锚点提供者(通常是内核现场 current/config)。
@@ -714,8 +711,6 @@ export class CloudSession {
       ...repositorySkillPaths,
       ...(this.options.businessModuleKnowledge?.skill_paths ?? []),
     ])];
-    const knowledgeEntries = (this.options.repositoryKnowledge ?? [])
-      .filter((item) => existsSync(item.path) && statSync(item.path).isFile());
     const engineeringKnowledgeEntries = (this.options.engineeringKnowledge?.entries ?? [])
       .filter((item) => existsSync(item.path) && statSync(item.path).isFile());
     const businessModuleKnowledge = this.options.businessModuleKnowledge;
@@ -727,25 +722,17 @@ export class CloudSession {
           return false;
         }
       });
-    const moduleIndexPath = businessModuleKnowledge?.index_path;
-    const moduleIndex = moduleIndexPath && existsSync(moduleIndexPath)
-      && statSync(moduleIndexPath).isFile()
-      ? { path: moduleIndexPath, content: readFileSync(moduleIndexPath, "utf-8") }
-      : undefined;
-    for (const item of knowledgeEntries) {
-      this.options.knowledgeTrace?.register(item.path, {
-        id: item.id,
-        kind: "document",
-        name: item.title,
-        path: item.relative_path,
-        repository: item.repository,
-        description: item.description,
-        digest: item.digest,
-        selected: true,
-      });
+    const knowledgeIndex = materializeTaskKnowledgeIndex({
+      workspace,
+      engineeringKnowledge: engineeringKnowledgeEntries,
+      businessKnowledge: moduleKnowledgeEntries,
+    });
+    for (const warning of knowledgeIndex.warnings) {
+      this.options.log?.(
+        `[task-knowledge-index] 任务 ${this.options.taskId}: ${warning}`);
     }
     for (const item of engineeringKnowledgeEntries) {
-      this.options.knowledgeTrace?.register(item.path, {
+      const resource: KnowledgeResourceRef = {
         id: item.id,
         kind: item.form === "rule" ? "rules" : "document",
         name: item.title,
@@ -754,7 +741,9 @@ export class CloudSession {
         digest: item.digest,
         selected: true,
         scope: "team",
-      });
+      };
+      this.options.knowledgeTrace?.register(item.path, resource);
+      this.options.knowledgeTrace?.record("available", config.sessionId, resource);
     }
     for (const item of moduleKnowledgeEntries) {
       const resource: KnowledgeResourceRef = {
@@ -811,21 +800,14 @@ export class CloudSession {
       // SDK 在该模式下的语义正是“只装显式路径”。
       noSkills: true,
       additionalSkillPaths: skillPaths,
-      // 重点知识不是 Skill：用户勾选意味着“本单开局就让 Agent 看见”，
-      // 因此作为项目上下文直接进入系统提示。原路径仍保留在任务记录中，
-      // 页面能说清是哪一仓哪一篇，不把快照哈希路径暴露给人。
+      // 平台管理的非 Skill 知识统一走轻量目录：默认勾选只表示“本任务
+      // 可用”，正文按需 Read。仓库自身资料不进入平台知识通路。
       agentsFilesOverride: (current) => ({
         agentsFiles: [
           ...current.agentsFiles,
-          ...knowledgeEntries.map((item) => ({
-            path: item.path,
-            content: readFileSync(item.path, "utf-8"),
-          })),
-          ...engineeringKnowledgeEntries.map((item) => ({
-            path: item.path,
-            content: readFileSync(item.path, "utf-8"),
-          })),
-          ...(moduleIndex ? [moduleIndex] : []),
+          ...(knowledgeIndex.path && knowledgeIndex.content
+            ? [{ path: knowledgeIndex.path, content: knowledgeIndex.content }]
+            : []),
         ],
       }),
       extensionFactories: [
@@ -886,38 +868,16 @@ export class CloudSession {
         "available", config.sessionId, resource);
     }
     for (const file of loader.getAgentsFiles().agentsFiles) {
-      if (moduleIndexPath && resolve(file.path) === resolve(moduleIndexPath)) {
+      if (knowledgeIndex.path
+          && resolve(file.path) === resolve(knowledgeIndex.path)) {
         continue;
       }
-      const selected = knowledgeEntries.find(
-        (item) => resolve(item.path) === resolve(file.path));
-      const engineering = engineeringKnowledgeEntries.find(
-        (item) => resolve(item.path) === resolve(file.path));
       const withinWorkspace = resolve(file.path).startsWith(`${resolve(workspace)}${sep}`)
         || resolve(file.path) === resolve(workspace);
-      const display = selected?.relative_path ?? engineering?.relative_path
-        ?? (withinWorkspace
-          ? relative(workspace, file.path).split(sep).join("/")
-          : file.path.split(sep).slice(-2).join("/"));
-      const resource: KnowledgeResourceRef = selected ? {
-        id: selected.id,
-        kind: "document",
-        name: selected.title,
-        path: selected.relative_path,
-        repository: selected.repository,
-        description: selected.description,
-        digest: selected.digest,
-        selected: true,
-      } : engineering ? {
-        id: engineering.id,
-        kind: engineering.form === "rule" ? "rules" : "document",
-        name: engineering.title,
-        path: engineering.relative_path,
-        description: engineering.summary,
-        digest: engineering.digest,
-        selected: true,
-        scope: "team",
-      } : {
+      const display = withinWorkspace
+        ? relative(workspace, file.path).split(sep).join("/")
+        : file.path.split(sep).slice(-2).join("/");
+      const resource: KnowledgeResourceRef = {
         id: `rules:${display}`,
         kind: "rules",
         name: display.split("/").at(-1) || "项目规则",

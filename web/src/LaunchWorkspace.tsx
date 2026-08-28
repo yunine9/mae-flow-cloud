@@ -310,9 +310,6 @@ export function LaunchWorkspace({
           selectedRepositorySkillIds:
             repositorySkillSelection.scanned
               ? repositorySkillSelection.selectedIds : undefined,
-          selectedRepositoryKnowledgeIds:
-            repositorySkillSelection.scanned
-              ? repositorySkillSelection.selectedKnowledgeIds : undefined,
           selectedBusinessModuleIds,
           selectedEngineeringKnowledgeIds,
           repositoryProfiles: asRepositoryProfiles(repositoryTechnologies),
@@ -643,11 +640,11 @@ export function LaunchWorkspace({
                 </div> : <div className="engineering-knowledge-empty">
                   <strong>当前没有匹配的团队工程知识</strong>
                   <span>{repositoryTechnologies.some((item) => item.confirmed)
-                    ? "仍会正常使用业务模块知识和代码仓自带知识。"
+                    ? "仍会正常使用业务模块知识和代码仓 Skill。"
                     : "首次确认仓库技术栈后会出现更准确的匹配；这不影响继续下单。"}</span>
                 </div>}
                 <p className="business-module-picker-note">
-                  默认选中表示本任务可使用；正文按形态加载或按需读取，不把“选中”变成流程门禁。
+                  默认选中只表示加入本任务知识索引；正文必须按需读取，不把“选中”冒充“已使用”，也不形成流程门禁。
                 </p>
               </section>}
               {options?.repo.enabled && (

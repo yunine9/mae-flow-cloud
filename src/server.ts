@@ -1331,9 +1331,6 @@ export function createTaskServer(
         const selectedRepositorySkillIds =
           Array.isArray(body.selected_repository_skill_ids)
             ? body.selected_repository_skill_ids.map(String) : undefined;
-        const selectedRepositoryKnowledgeIds =
-          Array.isArray(body.selected_repository_knowledge_ids)
-            ? body.selected_repository_knowledge_ids.map(String) : undefined;
         const selectedBusinessModuleIds =
           Array.isArray(body.selected_business_module_ids)
             ? body.selected_business_module_ids.map(String) : undefined;
@@ -1377,7 +1374,7 @@ export function createTaskServer(
               requirementDocumentName,
               lane, ticket, baseline, model,
               repairRounds, repositorySkillCatalogToken,
-              selectedRepositorySkillIds, selectedRepositoryKnowledgeIds,
+              selectedRepositorySkillIds,
               selectedBusinessModuleIds, selectedEngineeringKnowledgeIds,
               repositoryProfiles,
             }));
@@ -1483,9 +1480,6 @@ export function createTaskServer(
             selected_repository_skill_ids:
               Array.isArray(body.selected_repository_skill_ids)
                 ? body.selected_repository_skill_ids.map(String) : undefined,
-            selected_repository_knowledge_ids:
-              Array.isArray(body.selected_repository_knowledge_ids)
-                ? body.selected_repository_knowledge_ids.map(String) : undefined,
             delivery_paths: Array.isArray(body.delivery_paths)
               ? body.delivery_paths.map(String) : undefined,
           });
@@ -1543,9 +1537,6 @@ export function createTaskServer(
               ? undefined : String(body.repository_skill_catalog_token),
             selected_ids: Array.isArray(body.selected_repository_skill_ids)
               ? body.selected_repository_skill_ids.map(String) : undefined,
-            selected_knowledge_ids:
-              Array.isArray(body.selected_repository_knowledge_ids)
-                ? body.selected_repository_knowledge_ids.map(String) : undefined,
           }));
         }
         // Committer 检视必须由该单责任人主动发起。管理员只维护名单，

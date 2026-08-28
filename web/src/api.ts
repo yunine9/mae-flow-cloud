@@ -525,8 +525,6 @@ export interface TaskSummary {
   repository_profiles?: RepositoryProfile[];
   /** 下单或 Chain 方案确认时选中的仓内 Skill；每个子任务只继承自己仓。 */
   repository_skills?: SelectedRepositorySkill[];
-  /** 本单开局明确加载的仓内 docs 参考资料；规则文件无需手选。 */
-  repository_knowledge?: SelectedRepositoryKnowledge[];
   /** 创建任务时固定的业务模块与知识版本；正文不进入任务摘要。 */
   business_modules?: SelectedBusinessModule[];
   engineering_knowledge?: Array<EngineeringKnowledgeLaunchOption & {
@@ -1012,26 +1010,6 @@ export interface RepositorySkill {
   warning?: string;
 }
 
-export interface RepositoryKnowledge {
-  id: string;
-  title: string;
-  description: string;
-  relative_path: string;
-  kind: "rules" | "document";
-  digest: string;
-  bytes: number;
-  selectable: boolean;
-  recommended: boolean;
-  auto_load: boolean;
-  warning?: string;
-}
-
-export interface SelectedRepositoryKnowledge extends RepositoryKnowledge {
-  repository: string;
-  revision: string;
-  kind: "document";
-}
-
 export type KnowledgeKind = "rules" | "document" | "skill";
 export type KnowledgeAction = "available" | "loaded" | "read" | "searched";
 
@@ -1461,7 +1439,6 @@ export interface RepositorySkillCatalog {
     repository: string;
     revision: string;
     skills: RepositorySkill[];
-    knowledge: RepositoryKnowledge[];
     error?: string;
   }>;
 }
@@ -1500,7 +1477,6 @@ export async function createTask(
     repairRounds?: number;
     repositorySkillCatalogToken?: string;
     selectedRepositorySkillIds?: string[];
-    selectedRepositoryKnowledgeIds?: string[];
     selectedBusinessModuleIds?: string[];
     selectedEngineeringKnowledgeIds?: string[];
     repositoryProfiles?: Array<Pick<RepositoryProfile,
@@ -1531,8 +1507,6 @@ export async function createTask(
         extras?.repositorySkillCatalogToken || undefined,
       selected_repository_skill_ids:
         extras?.selectedRepositorySkillIds,
-      selected_repository_knowledge_ids:
-        extras?.selectedRepositoryKnowledgeIds,
       selected_business_module_ids: extras?.selectedBusinessModuleIds,
       selected_engineering_knowledge_ids: extras?.selectedEngineeringKnowledgeIds,
       repository_profiles: extras?.repositoryProfiles,
@@ -1556,7 +1530,6 @@ export async function decide(
   repositorySkills?: {
     catalogToken: string;
     selectedIds: string[];
-    selectedKnowledgeIds: string[];
   },
   /** 代码检视勾选的最终交付文件；空数组表示明确不选任何文件。 */
   deliveryPaths?: string[],
@@ -1571,8 +1544,6 @@ export async function decide(
       annotation_ids: annotationIds?.length ? annotationIds : undefined,
       repository_skill_catalog_token: repositorySkills?.catalogToken,
       selected_repository_skill_ids: repositorySkills?.selectedIds,
-      selected_repository_knowledge_ids:
-        repositorySkills?.selectedKnowledgeIds,
       delivery_paths: deliveryPaths,
     }),
   });

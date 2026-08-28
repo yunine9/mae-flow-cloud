@@ -8,15 +8,12 @@ import {
 import {
   scanRepositorySkills,
   type RepositorySkillCatalog,
-  type SelectedRepositoryKnowledge,
   type SelectedRepositorySkill,
 } from "./api";
 
 /** 与服务端 TaskService 的硬上限保持一致。页面先挡住，避免多仓全选后
  * 到“提交决定”才收到 400、让人回头猜该删哪些。 */
 const MAX_SELECTED_SKILLS = 20;
-const MAX_SELECTED_KNOWLEDGE = 12;
-const MAX_KNOWLEDGE_BYTES = 256 * 1024;
 
 export interface RepositorySkillSelection {
   /** false = 从未成功读取，本次提交不得覆盖任务原有选择。 */
@@ -24,14 +21,12 @@ export interface RepositorySkillSelection {
   scanning: boolean;
   catalogToken?: string;
   selectedIds: string[];
-  selectedKnowledgeIds: string[];
 }
 
 export const EMPTY_REPOSITORY_SKILL_SELECTION: RepositorySkillSelection = {
   scanned: false,
   scanning: false,
   selectedIds: [],
-  selectedKnowledgeIds: [],
 };
 
 export interface RepositorySkillPickerState {
@@ -59,7 +54,6 @@ export function RepositorySkillPicker({
   repositories,
   baseline,
   initialSkills = [],
-  initialKnowledge = [],
   onSelectionChange,
   presentation = "launch",
   state,
@@ -70,7 +64,6 @@ export function RepositorySkillPicker({
   /** Chain 检视时展示并沿用下单时已选项；重新读取后按仓+路径映射到
    * 新目录中的 id，仓库有新提交也不会仅因 revision 变化而悄悄丢选。 */
   initialSkills?: SelectedRepositorySkill[];
-  initialKnowledge?: SelectedRepositoryKnowledge[];
   onSelectionChange?: (selection: RepositorySkillSelection) => void;
   presentation?: "launch" | "decision";
   /** Chain 的“需要修改→再次检视”会暂时卸载决策卡；受控状态让已经
@@ -93,7 +86,6 @@ export function RepositorySkillPicker({
   const scanVersion = useRef(0);
   const scanAbort = useRef<AbortController | null>(null);
   const selectedIds = new Set(selection.selectedIds);
-  const selectedKnowledgeIds = new Set(selection.selectedKnowledgeIds);
 
   useEffect(() => {
     onSelectionChange?.(selection);
@@ -120,28 +112,10 @@ export function RepositorySkillPicker({
     return wanted;
   }
 
-  function wantedKnowledge(): Set<string> {
-    if (!catalog) {
-      return new Set(initialKnowledge.map((item) =>
-        resourceKey(item.repository, item.relative_path)));
-    }
-    const wanted = new Set<string>();
-    for (const repository of catalog.repositories) {
-      for (const item of repository.knowledge) {
-        if (selectedKnowledgeIds.has(item.id)) {
-          wanted.add(resourceKey(repository.repository, item.relative_path));
-        }
-      }
-    }
-    return wanted;
-  }
-
   async function scanSkills() {
     if (!normalizedRepositories.length || selection.scanning) return;
     const preserve = wantedSkills();
-    const preserveKnowledge = wantedKnowledge();
-    const firstScan = !catalog && initialKnowledge.length === 0
-      && initialSkills.length === 0;
+    const firstScan = !catalog && initialSkills.length === 0;
     const version = ++scanVersion.current;
     scanAbort.current?.abort();
     const controller = new AbortController();
@@ -153,7 +127,6 @@ export function RepositorySkillPicker({
         scanned: false,
         scanning: true,
         selectedIds: [],
-        selectedKnowledgeIds: [],
       },
     });
     try {
@@ -164,8 +137,6 @@ export function RepositorySkillPicker({
       );
       if (scanVersion.current !== version) return;
       setExpandedSections(new Set(result.repositories.flatMap((repository) => [
-        ...(repository.knowledge.length <= 6
-          ? [`${repository.repository}\0knowledge`] : []),
         ...(repository.skills.length <= 4
           ? [`${repository.repository}\0skills`] : []),
       ])));
@@ -177,23 +148,6 @@ export function RepositorySkillPicker({
               || (presentation === "launch" && firstScan)))
           .map((skill) => skill.id))
         .slice(0, MAX_SELECTED_SKILLS);
-      const selectableKnowledge = result.repositories.flatMap((repository) =>
-        repository.knowledge.filter((item) => item.selectable));
-      const wantedKnowledgeItems = selectableKnowledge.filter((item) =>
-        preserveKnowledge.has(resourceKey(
-          result.repositories.find((repository) =>
-            repository.knowledge.some((entry) => entry.id === item.id))
-            ?.repository ?? "",
-          item.relative_path,
-        )) || (presentation === "launch" && firstScan));
-      let selectedBytes = 0;
-      const nextKnowledgeIds: string[] = [];
-      for (const item of wantedKnowledgeItems) {
-        if (nextKnowledgeIds.length >= MAX_SELECTED_KNOWLEDGE
-            || selectedBytes + item.bytes > MAX_KNOWLEDGE_BYTES) continue;
-        nextKnowledgeIds.push(item.id);
-        selectedBytes += item.bytes;
-      }
       setPickerState({
         catalog: result,
         scanError: "",
@@ -202,7 +156,6 @@ export function RepositorySkillPicker({
           scanning: false,
           catalogToken: result.catalog_token,
           selectedIds: nextIds,
-          selectedKnowledgeIds: nextKnowledgeIds,
         },
       });
     } catch (reason) {
@@ -217,44 +170,11 @@ export function RepositorySkillPicker({
           scanned: false,
           scanning: false,
           selectedIds: [],
-          selectedKnowledgeIds: [],
         },
       });
     } finally {
       if (scanVersion.current === version) scanAbort.current = null;
     }
-  }
-
-  function updateKnowledge(
-    updater: (current: Set<string>) => Set<string>,
-  ) {
-    setPickerState((previous) => {
-      const next = updater(new Set(previous.selection.selectedKnowledgeIds));
-      return {
-        ...previous,
-        selection: {
-          ...previous.selection,
-          selectedKnowledgeIds: Array.from(next),
-        },
-      };
-    });
-  }
-
-  function toggleKnowledge(id: string, on: boolean) {
-    updateKnowledge((current) => {
-      const next = new Set(current);
-      if (!on) next.delete(id);
-      else {
-        const items = catalog?.repositories.flatMap((repository) =>
-          repository.knowledge) ?? [];
-        const bytes = items.filter((item) => next.has(item.id))
-          .reduce((sum, item) => sum + item.bytes, 0);
-        const item = items.find((candidate) => candidate.id === id);
-        if (item && next.size < MAX_SELECTED_KNOWLEDGE
-            && bytes + item.bytes <= MAX_KNOWLEDGE_BYTES) next.add(id);
-      }
-      return next;
-    });
   }
 
   function updateSelected(updater: (current: Set<string>) => Set<string>) {
@@ -292,7 +212,6 @@ export function RepositorySkillPicker({
 
   const atLimit = selectedIds.size >= MAX_SELECTED_SKILLS;
   const initialNames = initialSkills.map((skill) => skill.name);
-  const initialKnowledgeNames = initialKnowledge.map((item) => item.title);
   const hasRepository = normalizedRepositories.length > 0;
 
   return (
@@ -301,27 +220,25 @@ export function RepositorySkillPicker({
       <div className="repository-skills-head">
         <i aria-hidden>＋</i>
         <div>
-          <strong id={`repository-skills-title-${presentation}`}>代码仓自带知识与 Skill</strong>
+          <strong id={`repository-skills-title-${presentation}`}>代码仓 Skill</strong>
           <small>{presentation === "decision"
             ? "按仓选择，确认后下发给对应交付子任务"
-            : "扫描后默认勾选已入库资产；可逐项取消，运行中留下消费足迹"}</small>
+            : "扫描后默认勾选可用 Skill；可逐项取消，运行中留下消费足迹"}</small>
         </div>
-        <em>{(initialSkills.length + initialKnowledge.length) > 0 && !catalog
-          ? `当前 ${initialSkills.length + initialKnowledge.length} 项`
+        <em>{initialSkills.length > 0 && !catalog
+          ? `当前 ${initialSkills.length} 项`
           : "默认选中 · 可调整"}</em>
       </div>
 
       <div className="repository-skills-toolbar">
         <p>
-          项目规则（<code>AGENTS.md</code>/<code>CLAUDE.md</code>）自动生效；
-          可从 <code>docs</code> 选择本单参考资料，也可选择标准目录下的 Skill。
-          首次扫描默认勾选全部可用项；勾选 Skill 只让 Agent 看见能力说明，
-          不会把全部正文直接塞进上下文，Agent 仍按描述判断何时读取。
+          这里只选择标准目录下的 Skill。首次扫描默认勾选全部可用项；
+          Agent 先看名称和说明，相关时再读取 Skill 正文。
         </p>
         <div>
           {catalog && (
             <small className={atLimit ? "at-limit" : ""}>
-              知识 {selectedKnowledgeIds.size}/{MAX_SELECTED_KNOWLEDGE} · Skill {selectedIds.size}/{MAX_SELECTED_SKILLS}
+              Skill {selectedIds.size}/{MAX_SELECTED_SKILLS}
             </small>
           )}
           <button type="button" onClick={() => void scanSkills()}
@@ -330,22 +247,22 @@ export function RepositorySkillPicker({
               ? "正在读取…"
               : catalog || scanError
                 ? "重新读取"
-                : "读取知识与 Skill"}
+                : "读取 Skill"}
           </button>
         </div>
       </div>
 
       {!hasRepository && (
         <div className="repository-skills-empty">
-          先填写代码仓，再读取仓内资产；读取成功后默认勾选，不读取也可继续。
+          先填写代码仓，再读取仓内 Skill；读取成功后默认勾选，不读取也可继续。
         </div>
       )}
       {!catalog && !scanError
-        && (initialNames.length > 0 || initialKnowledgeNames.length > 0) && (
+        && initialNames.length > 0 && (
         <div className="repository-skills-current">
           <strong>将沿用发起任务时的选择</strong>
-          <span>{[...initialKnowledgeNames, ...initialNames].join("、")}</span>
-          <small>不重新读取就保持不变；读取后可按仓调整或全部清空。</small>
+          <span>{initialNames.join("、")}</span>
+          <small>不重新读取就保持不变；读取后可按仓调整 Skill。</small>
         </div>
       )}
       {scanError && (
@@ -357,7 +274,7 @@ export function RepositorySkillPicker({
       )}
       {catalog && catalog.repositories.length === 0 && (
         <div className="repository-skills-empty">
-          这些仓库没有可展示的参考资料或 Skill，不影响继续提交。
+          这些仓库没有可用的 Skill，不影响继续提交；Agent 仍会正常探索代码仓。
         </div>
       )}
       {catalog && catalog.repositories.length > 0 && (
@@ -410,68 +327,10 @@ export function RepositorySkillPicker({
                       : "本仓不会加载仓内能力，可重新读取，也可继续发起。"}
                   </div>
                 )}
-                {!repository.error && repository.skills.length === 0
-                  && repository.knowledge.length === 0 && (
+                {!repository.error && repository.skills.length === 0 && (
                   <div className="repository-skill-none">
-                    本仓未发现 docs 文档、项目规则或 Skill
+                    本仓未发现 Skill
                   </div>
-                )}
-                {repository.knowledge.length > 0 && (
-                  <details className="repository-knowledge-block"
-                    open={expandedSections.has(
-                      `${repository.repository}\0knowledge`)}
-                    onToggle={(event) => {
-                      const key = `${repository.repository}\0knowledge`;
-                      const open = event.currentTarget.open;
-                      setExpandedSections((current) => {
-                        if (current.has(key) === open) return current;
-                        const next = new Set(current);
-                        if (open) next.add(key); else next.delete(key);
-                        return next;
-                      });
-                    }}>
-                    <summary className="repository-resource-title">
-                      <strong>参考资料</strong>
-                      <small>{repository.knowledge.length} 项 · 选中文档开局加载</small>
-                    </summary>
-                    <div className="repository-skill-list repository-knowledge-list">
-                      {repository.knowledge.map((item) => {
-                        const selected = selectedKnowledgeIds.has(item.id);
-                        const knowledgeItems = catalog.repositories.flatMap(
-                          (entry) => entry.knowledge);
-                        const bytes = knowledgeItems
-                          .filter((entry) => selectedKnowledgeIds.has(entry.id))
-                          .reduce((sum, entry) => sum + entry.bytes, 0);
-                        const limitDisabled = !selected && (
-                          selectedKnowledgeIds.size >= MAX_SELECTED_KNOWLEDGE
-                          || bytes + item.bytes > MAX_KNOWLEDGE_BYTES);
-                        const disabled = !item.selectable || limitDisabled;
-                        return (
-                          <label key={item.id}
-                            className={`repository-skill-card repository-knowledge-card${
-                              disabled ? " disabled" : ""}${
-                              limitDisabled ? " limit-disabled" : ""}`}>
-                            <input type="checkbox"
-                              checked={item.auto_load || selected}
-                              disabled={disabled}
-                              onChange={(event) => toggleKnowledge(
-                                item.id, event.target.checked)} />
-                            <span className="repository-skill-check" aria-hidden />
-                            <span className="repository-skill-copy">
-                              <strong>{item.title}</strong>
-                              <span>{item.description}</span>
-                              <code title={item.relative_path}>{item.relative_path}</code>
-                              <small>{item.auto_load
-                                ? "项目规则 · 自动加载"
-                                : item.recommended
-                                  ? "项目规则提及 · 建议本单加载"
-                                  : `${Math.max(1, Math.ceil(item.bytes / 1024))} KiB`}</small>
-                            </span>
-                          </label>
-                        );
-                      })}
-                    </div>
-                  </details>
                 )}
                 {repository.skills.length > 0 && (
                   <details className="repository-skill-block"
@@ -528,11 +387,6 @@ export function RepositorySkillPicker({
       {catalog && atLimit && (
         <div className="repository-skills-limit" role="status">
           每个任务最多启用 {MAX_SELECTED_SKILLS} 项；先清空部分已选项，才能选择其他 Skill。
-        </div>
-      )}
-      {catalog && selectedKnowledgeIds.size >= MAX_SELECTED_KNOWLEDGE && (
-        <div className="repository-skills-limit" role="status">
-          每个任务最多加载 {MAX_SELECTED_KNOWLEDGE} 篇参考资料；项目规则不计入上限。
         </div>
       )}
     </section>

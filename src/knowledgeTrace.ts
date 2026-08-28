@@ -9,7 +9,6 @@ import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { SelectedRepositorySkill } from "./repositorySkillRuntime.ts";
-import type { SelectedRepositoryKnowledge } from "./repositoryKnowledgeRuntime.ts";
 import type { SelectedBusinessModule } from "./businessModuleRuntime.ts";
 import type { SelectedEngineeringKnowledge } from "./engineeringKnowledgeRuntime.ts";
 
@@ -239,7 +238,6 @@ function parseEvents(file: string): KnowledgeTraceEvent[] {
 /** 任务详情读侧投影。坏行跳过，知识观测永远 fail-open。 */
 export function knowledgeUsageSnapshot(options: {
   workspace: string;
-  selectedKnowledge?: SelectedRepositoryKnowledge[];
   selectedSkills?: SelectedRepositorySkill[];
   businessModules?: SelectedBusinessModule[];
   engineeringKnowledge?: SelectedEngineeringKnowledge[];
@@ -256,11 +254,6 @@ export function knowledgeUsageSnapshot(options: {
       read_count: 0,
     });
   };
-  for (const item of options.selectedKnowledge ?? []) seed({
-    id: item.id, kind: "document", name: item.title,
-    path: item.relative_path, repository: item.repository,
-    description: item.description, digest: item.digest, selected: true,
-  });
   for (const item of options.selectedSkills ?? []) seed({
     id: item.id, kind: "skill", name: item.name,
     path: item.relative_path, repository: item.repository,

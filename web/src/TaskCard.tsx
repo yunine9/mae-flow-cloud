@@ -534,8 +534,6 @@ export function WaitingCard({
           catalogToken: repositorySkillSelection.catalogToken,
           // 空数组有业务含义：明确清空父任务的预选，不能转成 undefined。
           selectedIds: repositorySkillSelection.selectedIds,
-          selectedKnowledgeIds:
-            repositorySkillSelection.selectedKnowledgeIds,
         }
       : undefined;
     setSubmitting(true);

@@ -133,7 +133,11 @@ test("真实 Pi 请求只含模块索引，不含未读取的模块正文", asyn
     const outcome = await session.start("开始");
     assert.equal(outcome.status, "turn_finished", outcome.detail ?? "");
     const request = JSON.stringify(model.requests);
-    assert.match(request, /INDEX_ONLY_MARKER/);
+    assert.match(request, /本任务知识索引/);
+    assert.match(request, /状态迁移约束/);
+    assert.match(request, /\.mae-flow-work\/business-modules\/orders\/state\.md/);
+    assert.doesNotMatch(request, /INDEX_ONLY_MARKER/,
+      "会话只使用统一索引，不再注入模块运行时生成的旧索引文件");
     assert.doesNotMatch(request, /MODULE_BODY_MUST_BE_READ_EXPLICITLY/);
     const usage = knowledgeUsageSnapshot({ workspace })!;
     const module = usage.resources.find((item) =>
