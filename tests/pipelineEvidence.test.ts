@@ -82,3 +82,28 @@ test("终态摘要按内容归维，不以一段文字替全部红灯背书", ()
   assert.deepEqual(result.availableDimensions, ["COMPILE"]);
   assert.deepEqual(result.missingDimensions, ["UT", "CODECHECK"]);
 });
+
+test("CodeCheck 状态明细必须带文件行号；只有页面 URL 仍算缺证据", () => {
+  const located = assessPipelineRepairEvidence({
+    checks: [{
+      dimension: "CODECHECK", status: "failed", job: "codecheck",
+      details: [{
+        file: "src/TextUtil.java", line: 22, rule: "ARCH-UTIL-02",
+        message: "Unicode 空白策略应迁出工具类",
+      }],
+    }],
+    artifacts: [],
+    failureSummary: "FAILED stage=CodeCheck",
+  });
+  assert.deepEqual(located.availableDimensions, ["CODECHECK"]);
+  assert.deepEqual(located.missingDimensions, []);
+
+  const urlOnly = assessPipelineRepairEvidence({
+    checks: [{ dimension: "CODECHECK", status: "failed", job: "codecheck" }],
+    artifacts: [],
+    failureSummary: "FAILED stage=CodeCCP2.0 job=CodeCCP2.0 detail: "
+      + "https://codecheck.intra.example/tasks/123",
+  });
+  assert.deepEqual(urlOnly.availableDimensions, []);
+  assert.deepEqual(urlOnly.missingDimensions, ["CODECHECK"]);
+});

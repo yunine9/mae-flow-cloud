@@ -116,6 +116,27 @@ probe 现场留档在 `.probe/`,serve 的任务现场在 `.tasks/<task-id>/`
 试跑现场一键对拍:`python3 harness/run-report.py .pilot/<label>`
 (审批卡/子 Agent 配对/质量台账/阶段轨迹读成 markdown,只读)。
 
+真模型试跑器也能注入可重复的流水线故障，不用等线上偶发红灯才验证
+修复回程。例如下面会让首轮 CodeCheck 红、修复后第二轮绿，并在首次
+交付清单里放一个明确排除的本地日志，专门检查修复 Agent 是否夹带：
+
+```bash
+npm run pilot -- --models .local/models.json --provider glm --model glm-5.1 \
+  --repo ../mae-flow-fieldtest-java --isolate-image mae-flow-task-builder:dev \
+  --lane '已定位问题修复' --push-confirm --seed-excluded build.log \
+  --pipeline-statuses failed,success \
+  --pipeline-failure-dimension CODECHECK \
+  --pipeline-failure-file notify-common/src/main/java/example/TextUtil.java \
+  --pipeline-failure-line 22 --pipeline-failure-rule ARCH-UTIL-02 \
+  --pipeline-log 'CODECHECK FAILED: example/TextUtil.java:22 ARCH-UTIL-02'
+```
+
+模糊现场用 `--pipeline-no-details` 注入“只有总体红灯/URL、没有文件行号”
+的真实坏形状；`--poll-timeout-s` 与 `--poll-interval-s` 只缩短试跑取证
+预算，不改变生产默认。试跑会继续穿过普通 `verifying`，只有到
+`await_merge`、终态，或明确的 `waiting_human/halted` 才收口；
+`--show-luban` 可把通知正文一并列入审计（包括手机端 `/mfc` 激活提示）。
+
 本机挂了代理(Clash 等)时,curl 环回接口记得 `--noproxy '*'`;
 服务进程自身已强制环回直连,浏览器访问不受影响。
 
