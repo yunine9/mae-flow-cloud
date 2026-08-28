@@ -1,0 +1,41 @@
+{
+  "_说明": [
+    "网关配置(照 toolkit 的六网关拓扑)。复制为 gateways.json 放同目录",
+    "或用 MFC_GATEWAYS 环境变量指定路径;权限 600(headers 里有鉴权头)。",
+    "token 永不写进本文件——写 token_file 路径,脚本运行时读。",
+    "headers 里的值支持 {token} / {w3token} 占位,分别从 token_file /",
+    "w3token_file 注入;哪个网关要哪种头照 toolkit 的实况填。"
+  ],
+  "token_file": "/etc/mae-flow-cloud/secrets/platform-token",
+  "w3token_file": "/etc/mae-flow-cloud/secrets/w3token",
+  "codehub_rest": {
+    "base_url": "https://<codehub-host>/api/v3",
+    "headers": { "X-Auth-Token": "{token}" }
+  },
+  "mcp": {
+    "_说明": "六个 MCP 网关(streamable HTTP)。url 填到 /mcp 端点。",
+    "sse":     { "url": "https://<sse-gateway>/mcp",
+                 "headers": { "X-Auth-Token": "{token}" } },
+    "codehub": { "url": "https://<codehub-gateway>/mcp",
+                 "headers": { "X-Auth-Token": "{token}" } },
+    "build":   { "url": "https://<build-gateway>/mcp",
+                 "headers": { "X-Auth-Token": "{token}" } },
+    "codecov": { "url": "https://<codecov-gateway>/mcp",
+                 "headers": { "X-Auth-Token": "{token}" } },
+    "codeccp": { "url": "https://<codeccp-gateway>/mcp",
+                 "headers": { "X-Auth-Token": "{token}" } },
+    "dts":     { "url": "https://<dts-gateway>/mcp",
+                 "headers": { "X-Auth-Token": "{token}" } }
+  },
+  "codeccp_rest": {
+    "reviewtips_url": "https://codeccp.tool.huawei.com/gateway/CodeCCP20Service/rest/codeccp20/reviewtips/json",
+    "defect_list_url": "https://codeccp.tool.huawei.com/gateway/CodeCCP20Service/rest/codeccp20/defect/list",
+    "headers": { "X-Auth-Token": "{token}" }
+  },
+  "ai_review_rest": {
+    "url": "https://xingyun.rnd.huawei.com/gateway/aisystemservice/ai-code-review/reviewTips/json",
+    "headers": { "X-Auth-Token": "{token}" }
+  },
+  "proxy": "",
+  "timeout_s": 60
+}

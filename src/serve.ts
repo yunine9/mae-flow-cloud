@@ -371,10 +371,19 @@ async function main(): Promise<void> {
   // ——内网既有框架的实证(能力核对报告 D3):resolve 归检视人,
   // 代点是越权;平台/团队明确允许的部署才加这个 flag。
   const resolveDiscussions = has("--resolve-discussions");
+  // --unfixable-tools(配置文件里写数组):CODECHECK 红灯全部来自这些
+  // 工具(如 SuperChecker)时不派修复会话,直接如实等人——修复 Agent
+  // 改代码解决不了平台侧告警,派了就是白烧一轮(2026-08-28 对比报告)。
+  const unfixableTools = flags("--unfixable-tools")
+    .flatMap((value) => value.split(","))
+    .map((tool) => tool.trim()).filter(Boolean);
   if (platformUrl) {
     delivery = { platformUrl, ...pace,
-                 ...(resolveDiscussions ? { resolveDiscussions } : {}) };
-    console.log(`[serve] 交付平台: ${platformUrl}`);
+                 ...(resolveDiscussions ? { resolveDiscussions } : {}),
+                 ...(unfixableTools.length ? { unfixableTools } : {}) };
+    console.log(`[serve] 交付平台: ${platformUrl}`
+      + (unfixableTools.length
+        ? `(不可修工具: ${unfixableTools.join("、")})` : ""));
   } else if (host && has("--fake-platform")) {
     // 假平台从 --repo 的本地仓灌裸仓;URL 仓/无仓没得灌,如实拒绝。
     if (!host.repoPath || /^(https?|ssh|git):\/\//i.test(host.repoPath)) {

@@ -426,15 +426,31 @@ npm run adapter -- --config adapter.json --selftest
     "status": {"const": "running"}   // 交给宿主轮询 pipeline_status 收敛
   },
   "pipeline_status": {
-    // actual_head_pipeline:注意 is_valid=false 时挂的是旧灯,不是
-    // 本次提交的结果——包一层 jq 只在 is_valid 且 sha 匹配时输出 run
-    "command": ["bash", "/etc/mae-flow-cloud/pipeline-status.sh",
-      "{sha}", "{token}"],
-    "status": {"json": "state"},
-    "log": {"json": "fail_summary"},
-    "status_map": {"success": "success", "failed": "failed",
-                   "running": "running", "pending": "running",
-                   "canceled": "failed"}
+    // 2026-08-28 起支持降级链(candidates,首个成功赢)与 contract
+    // 直通(命令输出就是宿主契约,免逐字段抽取)。首选仓内编排脚本
+    // (deploy/adapter-tools/pipeline-status.py,stages+jobs 粒度、
+    // is_valid 过滤、sha 回显),REST 直调做备路。
+    "candidates": [
+      { "command": ["python3",
+          "/opt/mae-flow-cloud/deploy/adapter-tools/pipeline-status.py",
+          "--sha", "{sha}", "--repo", "{repo}", "--token", "{token}"],
+        "contract": true },
+      { // 备路:actual_head_pipeline REST 直调。务必配 run_sha/is_valid
+        // 回显——MR 头上无有效流水线时平台挂旧分支的灯,宿主拿到回显
+        // 才能机械拒收陈灯(不配则只能信轮询参数,修复环会时好时坏)。
+        "command": ["curl", "-sf", "-H", "X-Auth-Token: {token}",
+          "https://<host>/api/v3/projects/{repo_path}/merge_requests/{mr}/actual_head_pipeline?show_job=true"],
+        "runs": {"json": ""},
+        "status": {"json": "status"},
+        "run_sha": {"json": "sha"},
+        "pipeline_id": {"json": "id"},
+        "is_valid": {"json": "is_valid"},
+        "web_url": {"json": "web_url"},
+        "status_map": {"success": "success", "failed": "failed",
+                       "running": "running", "pending": "running",
+                       "canceled": "failed"}
+      }
+    ]
   },
   "mr_gates": {   // B 节:mergeable_state 平铺布尔 + reason
     "command": ["curl", "-sf", "-H", "X-Auth-Token: {token}",
@@ -468,17 +484,28 @@ npm run adapter -- --config adapter.json --selftest
   },
   // discussion_resolve 默认不配(D3:resolve 归检视人)。团队拍板要
   // 代点再配:PUT .../discussions/{id} -d '{"resolved":true}'
-  "pipeline_artifacts": {   // A6:完整日志走 MCP 桥(§7),先落盘再读
-    "command": ["python3", "/etc/mae-flow-cloud/mcp-log-bridge.py",
-      "--sha", "{sha}", "--out", "/var/mfc/artifacts/{sha}"],
+  "pipeline_artifacts": {   // A6:完整日志+缺陷明细走 MCP 桥,先落盘再读
+    // 同样支持 candidates 降级链;桥脚本进仓版本化(见下)。
+    "command": ["python3",
+      "/opt/mae-flow-cloud/deploy/adapter-tools/mcp-log-bridge.py",
+      "--sha", "{sha}", "--repo", "{repo}",
+      "--out", "/var/mfc/artifacts/{sha}"],
     "files_dir": "/var/mfc/artifacts/{sha}"
   }
 }
 ```
 
-两个小脚本(pipeline-status.sh / unresolved-discussions.sh)和 MCP 桥
-都是**配置产物**——几十行、只做取数和过滤、不做判定,放 /etc 下随
-adapter.json 一起管,不进仓库、不算改代码。
+**脚本进仓纪律(2026-08-28 勘误)**:pipeline-status / MCP 桥这类取数
+编排脚本**必须进仓版本化**(deploy/adapter-tools/),不再当"/etc 下的
+配置产物"——上一版把它们排除在仓外,结果文档里设计了、现场谁也没写,
+`pipeline/artifacts` 空转了一个月(2026-08-28 对比报告差距③)。
+内网的动作只剩:把仓里脚本放到位、填 adapter.json、跑 --selftest 对拍;
+不写一行代码。unresolved-discussions.sh 这类几行的 jq 过滤仍算配置产物。
+
+**不可修工具前置分诊**:serve 配置加 `"unfixable-tools": ["SuperChecker"]`
+(或命令行 `--unfixable-tools SuperChecker`);CODECHECK 红灯全部来自
+名单内工具(需 checks 带 tool 证据,contract 脚本会给)时,宿主不派
+修复会话,直接如实挂"等人"——派了也是白烧一轮。判定拿不准照常派修。
 
 ### 试点必验清单(报告的三个缺口,都不是本仓代码能修的)
 

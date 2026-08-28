@@ -164,6 +164,27 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
 
 ## 已知边界(诚实清单)
 
+- **2026-08-28 流水线信息链对齐 toolkit(内网对比报告驱动,分三层)**:
+  修复环"时好时坏"的头号根因是**陈灯**——MR 头上无有效流水线时平台挂
+  旧分支的灯,而适配层返回里连 sha 都没有,宿主想核验都没材料。现在:
+  ①宿主机械核验(selectTerminalRun):run 回显 `sha`/`is_valid`,绑错
+  SHA 或 is_valid=false 一律拒收并写明"已拒陈灯",继续等;②适配层
+  `pipeline_status`/`pipeline_artifacts` 支持 **candidates 降级链**
+  (首成功赢,全败聚合上报)与 **contract 直通**(命令输出即宿主契约);
+  checks 扩展 stage/tool/details(缺陷:规则/文件/行号/描述),修复
+  使命注入结构化失败明细;③**取数编排脚本进仓**(deploy/adapter-tools/:
+  pipeline-status.py 三路降级+is_valid 过滤,mcp-log-bridge.py 构建日志
+  3 路+CodeCheck 缺陷 3 路落盘)——勘误:上一版把桥脚本当"/etc 配置
+  产物"不进仓,结果 artifacts 链空转一个月;④SuperChecker 类
+  **不可修工具前置分诊**(serve `--unfixable-tools`,全体命中且有 tool
+  证据才不派修复,拿不准照常派)。
+  边界如实记:MCP 网关按 streamable-HTTP 标准实现,内网网关若是旧
+  SSE/自定义包裹需按 toolkit 的 callMcpTool 原文对齐(脚本留了
+  MCP_PROTOCOL_ALIGNMENT/DEFECTS_SHAPE/THIRD_BUILD_ID 三个 TODO 锚,
+  等 toolkit 源码/真实样例回填);job 名→维度映射用默认正则,内网命名
+  不吻合时改 dimension-map.json;脚本未在真网关跑过,内网 --selftest
+  对拍是硬前置;覆盖率差分与 AI Review Tips 两路暂未接(增益项)。
+
 - **2026-08-28 "困死 Agent"专项排查批(四路审计驱动)**:
   ①**勘误**:此前"prepush 门禁放行构建产物 rm -rf(白名单)"在生产里
   **从未生效**——`serve.ts` 一直把演示桩 `demoContract`("rm -rf"裸子串

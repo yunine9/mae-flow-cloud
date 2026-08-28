@@ -106,7 +106,10 @@ import type { ExternalAction, PgProjection } from "./projection.ts";
 import type { RuntimeSettings } from "./settings.ts";
 import { ReviewStore, type ReviewRequest } from "./reviews.ts";
 import {
+  onlyUnfixableToolFailures,
   parsePipelineChecks,
+  selectTerminalRun,
+  summarizeFailedChecks,
   type PipelineCheck,
 } from "./pipelineContract.ts";
 import {
@@ -729,6 +732,11 @@ export interface TaskServiceOptions {
      * (报告 D3):平台文化是"回复归作者,resolve 归检视人",代点
      * 是越权。平台/团队明确允许代点的部署再打开。 */
     resolveDiscussions?: boolean;
+    /** 不可自动修复的质量工具名单(toolkit 的 UNFIXABLE_TOOLS 对齐,
+     * 如 ["SuperChecker"]):CODECHECK 红灯全部来自这些工具时不派修复
+     * 会话,直接如实等人——派了也是白烧一轮(2026-08-28 对比报告)。
+     * 判定要有 tool 证据且全体命中才生效,拿不准照常派修。 */
+    unfixableTools?: string[];
   };
   /** 环境预热编译专员(观测旁路)。**缺席即不启用**——serve/pilot 在
    * 隔离模式下显式开启;隐式默认开曾把 prepushIntegration 的 linear
@@ -8022,15 +8030,19 @@ export class TaskService {
     try {
       const repo = encodeURIComponent(
         task.summary.repo_url ?? this.effectiveDefaultRepo() ?? "");
+      const mrId = task.summary.delivery?.mr_id;
       const result = await fetch(
         `${this.effectivePlatformUrl()}/pipeline/status`
-        + `?sha=${sha}&repo=${repo}`,
+        + `?sha=${sha}&repo=${repo}`
+        + (mrId !== undefined
+          ? `&mr=${encodeURIComponent(String(mrId))}` : ""),
         { headers: this.platformIdentity(task) }).then((r) => readJson(r));
       if (!this.current(task, epoch)
           || task.summary.status !== "verifying") return;
-      const terminal = (Array.isArray(result.runs) ? result.runs : [])
-        .findLast((run: { status?: string }) =>
-          run.status === "success" || run.status === "failed");
+      // 与主轮询同一道防陈灯核验:重试登记也不许拿别的提交的灯凑数。
+      const terminal = selectTerminalRun<Record<string, unknown> & {
+        status?: string; sha?: string; is_valid?: boolean;
+      }>(Array.isArray(result.runs) ? result.runs : [], sha).run;
       if (terminal) {
         status = terminal.status === "failed" ? "failed" : "success";
         checks = parsePipelineChecks(terminal.checks);
@@ -9015,16 +9027,31 @@ export class TaskService {
       try {
         const repo = encodeURIComponent(
           task.summary.repo_url ?? this.effectiveDefaultRepo() ?? "");
+        const mrId = task.summary.delivery?.mr_id;
         const status = await fetch(
           `${this.effectivePlatformUrl()}/pipeline/status`
-          + `?sha=${sha}&repo=${repo}`,
+          + `?sha=${sha}&repo=${repo}`
+          + (mrId !== undefined
+            ? `&mr=${encodeURIComponent(String(mrId))}` : ""),
           { headers: this.platformIdentity(task) })
           .then((r) => readJson(r));
         if (!this.current(task, epoch)
             || task.summary.status !== "verifying") return;
-        terminal = (status.runs ?? []).findLast(
-          (run: { status?: string }) =>
-            run.status === "success" || run.status === "failed");
+        // 防陈灯机械核验(2026-08-28 对比报告头号根因):is_valid=false
+        // 或 run 绑着别的 SHA 的一律不认——旧绿灯不背书新代码,旧红灯
+        // 也不背书。被拒原因写进现场,人能看见"为什么还在等"。
+        const picked = selectTerminalRun(
+          Array.isArray(status.runs) ? status.runs : [], sha);
+        terminal = picked.run;
+        if (!terminal && picked.rejected.length) {
+          const why = picked.rejected[picked.rejected.length - 1];
+          task.summary.delivery = {
+            ...task.summary.delivery,
+            pipeline: `running(等待绑定本次提交的流水线;已拒陈灯: ${why})`,
+          };
+          this.options.log?.(
+            `任务 ${task.summary.id} 拒收陈灯流水线: ${picked.rejected.join("; ")}`);
+        }
       } catch (error) {
         this.options.log?.(
           `任务 ${task.summary.id} 流水线查询失败(继续轮): ${String(error)}`);
@@ -9225,6 +9252,21 @@ export class TaskService {
   ): Promise<void> {
     if (!this.current(task, epoch)) return;
     const delivery = task.summary.delivery!;
+    // 不可修工具前置分诊(toolkit UNFIXABLE_TOOLS 对齐):红灯全部来自
+    // SuperChecker 类工具时,修复会话改代码解决不了——不派单不烧轮,
+    // 如实挂"等人",人处理/豁免后重跑流水线即可回本环。
+    if (onlyUnfixableToolFailures(
+        delivery.checks, this.options.delivery?.unfixableTools)) {
+      delivery.pipeline = "failed(仅剩不可自动修复工具的告警,等人处理)";
+      delivery.waiting_on =
+        "CODECHECK 红灯全部来自不可自动修复的工具(部署配置的"
+        + " unfixable_tools 名单)。请在平台上处理或豁免这些告警后"
+        + "重跑流水线;修复 Agent 改代码解决不了这类问题,不派单。";
+      task.summary.detail = delivery.waiting_on;
+      this.persist(task);
+      this.notifyRepairStopped(task);
+      return;
+    }
     const loop = delivery.loop
       ?? (delivery.loop = { round: 0, max, state: "repairing" as const });
     if (loop.kind === "ci" && loop.last_sha === sha) {
@@ -9291,6 +9333,17 @@ export class TaskService {
     const failedDimensions = (delivery.checks ?? [])
       .filter((check) => check.status === "failed")
       .map((check) => check.dimension + (check.job ? `(${check.job})` : ""));
+    // stage/job/工具/缺陷定位的结构化明细(适配层给到多细这里就有多细,
+    // toolkit 对齐):有它,定位从"对着日志猜"变成"照单点名"。
+    const structuredFailures = summarizeFailedChecks(delivery.checks);
+    const unfixableSet = new Set(
+      (this.options.delivery?.unfixableTools ?? [])
+        .map((tool) => tool.trim().toLowerCase()).filter(Boolean));
+    const unfixableHit = (delivery.checks ?? []).some((check) =>
+      check.status === "failed" && [
+        ...(check.tool ? [check.tool] : []),
+        ...(check.details ?? []).map((defect) => defect.tool ?? ""),
+      ].some((tool) => unfixableSet.has(tool.toLowerCase())));
     task.mission = [
       `流水线红了,把它修到绿是你此刻唯一的使命(${roundText}修复):`,
       ...(failedDimensions.length ? [
@@ -9299,6 +9352,15 @@ export class TaskService {
         + `不要只修下面日志里讲得细的那一维就交差——日志的详细程度`
         + `按维度不均,讲得少不等于没红。某一维在日志和 ../pipeline/ 里`
         + `都找不到细节时,不许猜改,把"缺哪一维的失败原文"写进收口发言。`,
+      ] : []),
+      ...(structuredFailures.length ? [
+        `- 结构化失败明细(哪个 stage 的哪个 job 的哪个工具,含缺陷定位):`,
+        ...structuredFailures.map((line) => `  ${line}`),
+      ] : []),
+      ...(unfixableHit ? [
+        `- 其中不可自动修复工具(部署 unfixable_tools 名单)产生的告警`
+        + `**不要硬修**——那要人工在平台处理/豁免;修好其余问题后,`
+        + `在收口发言里把这类告警单独点名留给人工。`,
       ] : []),
       ...(blindInput ? [
         `- 分支上提交 ${sha} 的权威流水线结果是 failed,**但平台没有给出`
@@ -10057,8 +10119,11 @@ export class TaskService {
     try {
       const repo = encodeURIComponent(
         task.summary.repo_url ?? this.effectiveDefaultRepo() ?? "");
+      const mrId = task.summary.delivery?.mr_id;
       const response = await fetch(
-        `${platformUrl}/pipeline/artifacts?sha=${sha}&repo=${repo}`,
+        `${platformUrl}/pipeline/artifacts?sha=${sha}&repo=${repo}`
+        + (mrId !== undefined
+          ? `&mr=${encodeURIComponent(String(mrId))}` : ""),
         { headers: this.platformIdentity(task) });
       if (response.status === 404) return [];
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
