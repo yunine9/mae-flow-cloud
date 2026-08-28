@@ -699,6 +699,10 @@ async function main(): Promise<void> {
   // 运维工具(拉日志/换库):在场即接上,凭据由保险箱解密后经环境
   // 变量注入子进程(见 src/issueFlow/opsTools.ts)。
   const goToolsDir = join(REPO_ROOT, "assets", "ops-tools");
+  // 未配置也挂 fail-loud 占位:问题服务的工具取数与路由直连的拉单都
+  // 走同一个网关实例,未配置时由占位网关说人话,不静默 404。
+  const issueDtsGateway = issueDts ?? new UnconfiguredDtsGateway();
+  const issueLog = (message: string) => console.log(`  [issue] ${message}`);
   const issueFlow = new IssueFlowService({
     dataDir, provider, model, modelsJson, settings,
     // 探索方式烙印(个人设置,缺省固定流程):create 时读一次烙进会话。
@@ -711,7 +715,7 @@ async function main(): Promise<void> {
           log: (message) => console.log(`  ${message}`),
         })
       : undefined,
-    dts: issueDts ?? new UnconfiguredDtsGateway(),
+    dts: issueDtsGateway,
     // MR 与需求交付共用同一交付平台适配层(--platform)。
     ...(platformUrl ? { platformUrl } : {}),
     maxConcurrentTurns: Number(flag("--issue-max-turns") ?? "2"),
@@ -728,7 +732,7 @@ async function main(): Promise<void> {
           },
         }
       : {}),
-    log: (message) => console.log(`  [issue] ${message}`),
+    log: issueLog,
   });
 
   if (issueOnly) {
@@ -875,6 +879,9 @@ async function main(): Promise<void> {
   // TLS);工作机合盖=全员断线,它是工作站不是服务器。
   const server = createTaskServer(service, {
     webRoot, auth, lubanApproval, issueFlow, mcpGateway,
+    // 问题路由直连所需的 DTS 网关与台账日志(与问题服务同一实例/口径)。
+    dts: issueDtsGateway,
+    log: issueLog,
   });
   let terminating = false;
   const terminate = async (signal: "SIGTERM" | "SIGINT") => {

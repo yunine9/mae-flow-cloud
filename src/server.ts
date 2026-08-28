@@ -303,6 +303,10 @@ export function createTaskServer(
     lubanApproval?: LubanApprovalGateway;
     issueFlow?: import("./issueFlow/service.ts").IssueFlowService;
     mcpGateway?: import("./issueFlow/gateways.ts").McpGateway;
+    /** DTS 网关:问题路由直连拉单/详情/内嵌图代理(服务不再转手)。 */
+    dts?: import("./issueFlow/gateways.ts").DtsGateway;
+    /** 问题路由的台账日志(人工修改留痕,与问题服务同一口径)。 */
+    log?: (message: string) => void;
   } = {},
 ): Server {
   // 许愿墙按路由首次使用时才要求完整 TaskService 数据目录。知识效能等
@@ -711,8 +715,10 @@ export function createTaskServer(
       if (parts[0] === "issues") {
         const handled = await handleIssueRoutes(request, response, parts, {
           issueFlow: options.issueFlow,
+          dts: options.dts,
           viewer: viewer ?? undefined,
           authEnabled: Boolean(options.auth),
+          log: options.log,
         });
         if (handled) return;
       }

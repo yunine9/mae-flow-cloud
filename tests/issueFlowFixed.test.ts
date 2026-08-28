@@ -1312,6 +1312,66 @@ test("催办预算:连续收嘴只催 2 次,耗尽转人工(idle+备注),不再�
   }
 });
 
+test("催办预算不跨回合传染:耗尽转人工后续聊重新拿满预算,再耗尽仍走同一转人工路", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-nudge-round-"));
+  const origin = bareOrigin(dataDir);
+  const script: Scene[] = [
+    // 第 1 轮:拉仓 → 连续三次收嘴,预算 2 次耗尽落 idle(先例场景)。
+    { tool: { name: "pull_repo", input: { url: origin } } },
+    { text: "先到这。" },
+    { text: "又停了。" },
+    { text: "还停。" },
+    // 第 2 轮:用户「继续」重新点火——预算必须从头计,不能带着上轮的 3。
+    { text: "又停了。" },
+    { text: "还停。" },
+    { text: "收工。" },
+  ];
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    settings: fastPoll,
+    issueFlowMode: () => "fixed",
+  });
+  try {
+    const created = service.create({
+      account: "dev", title: "播放器偶发黑屏", mode: "fixed",
+      repoUrl: origin,
+    });
+    const parked1 = await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "idle" ? issue : undefined;
+    }, "第一轮催办耗尽落 idle");
+    assert.equal(model.requests.length, 4, "首轮+两次催办,共 4 个请求");
+    assert.equal(parked1.nudges, 3, "第一轮耗尽记账停在 3(超预算那次也入账)");
+    assert.match(parked1.stage_note, /提前收嘴/);
+
+    // 续聊重新点火:预算清零只发生在回合入口——若预算跨回合传染,
+    // 第一次收嘴就会直接落 idle,后面这些催办请求根本不会发生。
+    const resumed = service.reply(created.id, "继续");
+    assert.equal(resumed.status, "running");
+    const parked2 = await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "idle" ? issue : undefined;
+    }, "第二轮催办耗尽落 idle");
+    assert.equal(model.requests.length, 7,
+      "第二轮 = 续聊 1 次 + 催办 2 次;预算若传染,这里只会有 5 个请求");
+    assert.match(JSON.stringify(model.requests[5]), /第 1\/2 次/,
+      "新回合第一次催办从 1 起计,不带上一轮的账");
+    assert.match(JSON.stringify(model.requests[6]), /第 2\/2 次/);
+    assert.equal(parked2.nudges, 3, "第二轮耗尽同样记账到 3");
+    assert.match(parked2.stage_note, /提前收嘴/,
+      "耗尽转人工的出口与第一轮同一写法");
+    assert.match(parked2.stage_note, /发送「继续」或补充指示/);
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
 test("催办谓词:阶段未收口必催;阶段收口/流水线在途/自由模式三种豁免", () => {
   const now = new Date().toISOString();
   // 分析阶段进行中:必催。

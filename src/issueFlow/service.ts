@@ -75,18 +75,6 @@ import {
 import { readBusinessModule } from "../businessModuleLibrary.ts";
 import type { IssueOpsTools } from "./opsTools.ts";
 import type { DtsGateway, DtsTicketDetail } from "./gateways.ts";
-import {
-  listLogs,
-  listManualEdits,
-  listWorkspaceChanges,
-  readLog,
-  readWorkspaceFile,
-  recentEvents,
-  recordManualEdit,
-  workspaceDiffAll,
-  workspaceFileDiff,
-  writeWorkspaceFile,
-} from "./materials.ts";
 import { createIssueTools, expectedBranch, GATE_OPTIONS, type IssueToolContext } from "./tools.ts";
 import {
   buildIssueTimeline,
@@ -373,8 +361,14 @@ export class IssueFlowService {
     return messages.slice(-300);
   }
 
-  eventLogPath(id: string): string {
-    return join(this.require(id).root, "events.jsonl");
+  /** 会话现场定位(收窄票 #7):材料/事件旁路改由路由直连各自模块后,
+   * 这里是路由拿到"哪个会话、现场在哪"的唯一入口。未知会话抛
+   * IssueNotFoundError——与原先各透传方法里的 require 同一 404 语义。
+   * state 是活引用:材料旁路只读;快速修改写的是仓内文件与人工台账,
+   * 不动台账本身。 */
+  session(id: string): { state: IssueSessionState; root: string } {
+    const live = this.require(id);
+    return { state: live.state, root: live.root };
   }
 
   // ---- 视图旁路:耗时与卡点 + 结论文档(只读,fail-open) ----
@@ -661,24 +655,47 @@ export class IssueFlowService {
 
   // ---- 会话驱动 ----
 
+  /** 回合启动单点(收窄票 #7):新回合的共有不变量只有这一份——
+   * turning 互斥占位、status=running、催办预算清零(预算永不跨回合
+   * 传染)、落盘、调度 runTurn、finally 收口+再泵。各入口(登记点火/
+   * 作答/闸门裁决/续聊/平台通知)只保留差异部分:开场词、续聊词、
+   * 作答重放。入口冲突判守(409 打回/挂便签/排队跳过)留在调用点:
+   * 出路语义各不相同,收进来反而要改行为。settle 里的催办/补发续跑
+   * 不走这里——那是同一回合的延续,turning 还握着,预算也不清。 */
+  private beginTurn(live: LiveIssue, body: () => Promise<Outcome>): void {
+    this.turning.add(live.id);
+    live.state.status = "running";
+    live.state.nudges = 0;
+    saveState(live.root, live.state);
+    void this.runTurn(live, body).finally(() => {
+      this.turning.delete(live.id);
+      void this.pump();
+    });
+  }
+
+  /** 续聊形态的回合体:现场(driver)在场就把话递进去;进程重启后
+   * 重建会话,以续聊提示词把话交给重建的上下文。 */
+  private continueTurn(live: LiveIssue, message: string): void {
+    this.beginTurn(live, async () => {
+      await this.ensureContainer(live);
+      if (live.driver) return live.driver.continueWith(message);
+      const driver = await this.openDriver(live);
+      return driver.startResume(issueResumePrompt(live.state, message));
+    });
+  }
+
   /** 并发额度:同时进行的回合数(等待用户/闲置/挂起的会话不占额度)。 */
   private async pump(): Promise<void> {
     for (const live of this.live.values()) {
       if (this.turning.size >= (this.options.maxConcurrentTurns ?? 2)) break;
       if (live.state.status !== "queued" || this.turning.has(live.id)) continue;
-      this.turning.add(live.id);
-      live.state.status = "running";
-      saveState(live.root, live.state);
-      void this.runTurn(live, async () => {
+      this.beginTurn(live, async () => {
         // 2026-08-28 拍板:克隆不再是回合前的自动动作——登记的仓由
         // Agent 在「拉取代码仓」阶段调 pull_repo 逐个落地(开场词有令)。
         const driver = await this.openDriver(live);
         return driver.start(live.state.mode === "fixed"
           ? issueFixedOpeningPrompt(live.state)
           : issueOpeningPrompt(live.state));
-      }).finally(() => {
-        this.turning.delete(live.id);
-        void this.pump();
       });
     }
   }
@@ -997,11 +1014,7 @@ export class IssueFlowService {
     if (this.turning.has(live.id)) {
       throw new IssueControlError("会话正在处理上一条输入,稍候再试");
     }
-    this.turning.add(live.id);
-    live.state.status = "running";
-    live.state.nudges = 0;
-    saveState(live.root, live.state);
-    void this.runTurn(live, async () => {
+    this.beginTurn(live, async () => {
       await this.ensureContainer(live);
       if (live.driver) {
         return live.driver.resumeWithDecision(record);
@@ -1012,9 +1025,6 @@ export class IssueFlowService {
       driver.injectDecision(record);
       return driver.startResume(issueResumePrompt(live.state,
         `用户对问题卡的答复:\n${renderDecision(record)}`));
-    }).finally(() => {
-      this.turning.delete(live.id);
-      void this.pump();
     });
     return summarize(live.state);
   }
@@ -1056,22 +1066,6 @@ export class IssueFlowService {
       note: `用户作答(${gate.kind}): ${decision.split("\n")[0]}${notes ? `;补充: ${notes.split("\n")[0]}` : ""}`,
     });
 
-    const startTurn = (message: string) => {
-      this.turning.add(live.id);
-      state.status = "running";
-      state.nudges = 0;
-      saveState(live.root, state);
-      void this.runTurn(live, async () => {
-        await this.ensureContainer(live);
-        if (live.driver) return live.driver.continueWith(message);
-        const driver = await this.openDriver(live);
-        return driver.startResume(issueResumePrompt(state, message));
-      }).finally(() => {
-        this.turning.delete(live.id);
-        void this.pump();
-      });
-    };
-
     if (gate.kind === "analysis_confirm") {
       if (decision.startsWith(GATE_OPTIONS.analysis_confirm[0])) {
         const target = route?.confirmTo;
@@ -1082,7 +1076,7 @@ export class IssueFlowService {
         fixedAdvance(state, target,
           `用户确认分析报告,进入${stageName(target)}`);
         saveState(live.root, state);
-        startTurn(fixedAdvanceNotice(state,
+        this.continueTurn(live, fixedAdvanceNotice(state,
           `用户已确认问题分析报告,进入「${stageName(target)}」阶段。${supplement}`
             + "请按已确认的方案实施修复,完成后调用 complete_stage。"));
         return summarize(state);
@@ -1090,7 +1084,7 @@ export class IssueFlowService {
       // 有补充意见:留在分析阶段继续完善,改完重新提交。
       state.stage_note = "用户对分析报告有补充意见,继续分析";
       saveState(live.root, state);
-      startTurn(
+      this.continueTurn(live,
         `用户对分析报告提出补充意见,仍在「${stageName(state.stage as FixedStage)}」阶段:${decision}${supplement}\n`
           + "请按意见完善 issue-analysis.md 后重新 submit_analysis 提交。");
       return summarize(state);
@@ -1142,7 +1136,7 @@ export class IssueFlowService {
       const rework = route.reworkTo;
       fixedAdvance(state, rework, "用户对结论有补充意见,继续分析");
       saveState(live.root, state);
-      startTurn(
+      this.continueTurn(live,
         `用户对分析结论提出意见,回到「${stageName(rework)}」阶段:${decision}${supplement}\n`
           + "请继续查证,完善 issue-analysis.md 后重新 submit_analysis 提交结论。");
       return summarize(state);
@@ -1161,7 +1155,7 @@ export class IssueFlowService {
       const reason = notes || decision;
       fixedRollback(state, `用户环境验证发现问题:${reason.split("\n")[0]}`);
       saveState(live.root, state);
-      startTurn(fixedAdvanceNotice(state,
+      this.continueTurn(live, fixedAdvanceNotice(state,
         `用户在环境验证发现问题,已回退到「问题分析」阶段(第 ${state.round} 轮)。`
           + `${supplement || `\n用户描述: ${reason}`}\n`
           + "请带着新一轮的现场重新分析(前几轮的修复在分支上,不要推倒重来),"
@@ -1193,21 +1187,7 @@ export class IssueFlowService {
     }
     const content = text?.trim();
     if (!content) throw new IssueControlError("消息内容不能为空");
-    this.turning.add(live.id);
-    live.state.status = "running";
-    live.state.nudges = 0;
-    saveState(live.root, live.state);
-    void this.runTurn(live, async () => {
-      await this.ensureContainer(live);
-      if (live.driver) {
-        return live.driver.continueWith(content);
-      }
-      const driver = await this.openDriver(live);
-      return driver.startResume(issueResumePrompt(live.state, content));
-    }).finally(() => {
-      this.turning.delete(live.id);
-      void this.pump();
-    });
+    this.continueTurn(live, content);
     return summarize(live.state);
   }
 
@@ -1458,19 +1438,7 @@ export class IssueFlowService {
       saveState(live.root, state);
       return;
     }
-    this.turning.add(live.id);
-    state.status = "running";
-    state.nudges = 0;
-    saveState(live.root, state);
-    void this.runTurn(live, async () => {
-      await this.ensureContainer(live);
-      if (live.driver) return live.driver.continueWith(message);
-      const driver = await this.openDriver(live);
-      return driver.startResume(issueResumePrompt(state, message));
-    }).finally(() => {
-      this.turning.delete(live.id);
-      void this.pump();
-    });
+    this.continueTurn(live, message);
   }
 
   // ---- 无单挂起 → 关联单号转正(2026-08-27 拍板) ----
@@ -1624,126 +1592,6 @@ export class IssueFlowService {
     this.log(`[issue-flow] ${id} 关联 ${ticket} 转正为 ${newId}`);
     void this.pump();
     return { converted: summarize(converted) };
-  }
-
-  // ---- DTS 拉单(页面列表用) ----
-
-  async listDts(account: string) {
-    if (!this.options.dts) {
-      throw new IssueControlError("DTS 网关未配置(部署需 --dts-mcp-url 与 token)");
-    }
-    return this.options.dts.listByOwner(account);
-  }
-
-  /** 当前 DTS 是否为外部开发模式的模拟网关(--dts-mock)。前端据此
-   * 在拉单页签挂 DEV 徽标,模拟单不被误当真实单据。 */
-  get dtsMock(): boolean {
-    return this.options.dts?.mock === true;
-  }
-
-  async getDtsDetail(ticket: string) {
-    if (!this.options.dts) {
-      throw new IssueControlError("DTS 网关未配置(部署需 --dts-mcp-url 与 token)");
-    }
-    return this.options.dts.detail(ticket);
-  }
-
-  async proxyDtsFile(path: string) {
-    if (!this.options.dts) {
-      throw new IssueControlError("DTS 网关未配置(部署需 --dts-mcp-url 与 token)");
-    }
-    return this.options.dts.proxyFile(path);
-  }
-
-  // ---- 会话材料(交付材料页签;全部只读旁路 + 快速修改唯一写口) ----
-
-  /** 多仓材料聚合的公共底座:repo/ 下每个已克隆仓 → (仓名, 目录)。 */
-  private materialRepos(live: LiveIssue): Array<{ name: string; dir: string }> {
-    return issueRepoWorkspaces(live.state, live.root)
-      .filter((repo) => existsSync(join(repo.dir, ".git")))
-      .map((repo) => ({
-        name: repo.dir.split(/[\\/]/).at(-1) ?? "repo",
-        dir: repo.dir,
-      }));
-  }
-
-  /** 路径路由:rel 首段是仓名(repo/<仓名>/ 的平铺约定);对不上时
-   * 兜底首仓(老路径/手工输入),保证读写不因前缀缺席而砸。 */
-  private routeMaterialPath(
-    live: LiveIssue,
-    rel: string,
-  ): { repo: { name: string; dir: string }; rel: string } | undefined {
-    const repos = this.materialRepos(live);
-    if (!repos.length) return undefined;
-    const head = rel.split(/[\\/]/)[0];
-    const match = repos.find((repo) => repo.name === head);
-    if (match) return { repo: match, rel: rel.slice(head.length + 1) };
-    return { repo: repos[0], rel };
-  }
-
-  listMaterials(id: string) {
-    const live = this.require(id);
-    // 变更按仓聚合,路径带 <仓名>/ 前缀(与 routeMaterialPath 对得上)。
-    const changes = this.materialRepos(live).flatMap((repo) =>
-      listWorkspaceChanges(repo.dir)
-        .map((change) => ({ ...change, path: `${repo.name}/${change.path}` })));
-    return {
-      ticket: live.state.ticket,
-      pushes: live.state.pushes ?? [],
-      mrs: live.state.mrs ?? [],
-      analysis_available: existsSync(join(live.root, "issue-analysis.md")),
-      changes,
-      logs: listLogs(live.root),
-      manual_edits: listManualEdits(live.root),
-    };
-  }
-
-  readWorkspaceFile(id: string, rel: string) {
-    const live = this.require(id);
-    const routed = this.routeMaterialPath(live, rel);
-    if (!routed) throw new Error("会话还没有已克隆的代码仓");
-    return readWorkspaceFile(routed.repo.dir, routed.rel);
-  }
-
-  /** 快速修改:写工作区文件并入人工台账(会话私有账本,不进语义事件)。 */
-  saveWorkspaceFile(id: string, rel: string, content: string) {
-    const live = this.require(id);
-    const routed = this.routeMaterialPath(live, rel);
-    if (!routed) throw new Error("会话还没有已克隆的代码仓");
-    const result = writeWorkspaceFile(routed.repo.dir, routed.rel, content);
-    recordManualEdit(live.root, rel, result.size);
-    this.log(`[issue-flow] ${live.id} 人工修改 ${rel}(${result.size}B)`);
-    return result;
-  }
-
-  workspaceFileDiff(id: string, rel: string) {
-    const live = this.require(id);
-    const routed = this.routeMaterialPath(live, rel);
-    if (!routed) throw new Error("会话还没有已克隆的代码仓");
-    return workspaceFileDiff(routed.repo.dir, routed.rel);
-  }
-
-  workspaceDiffAll(id: string) {
-    const live = this.require(id);
-    // 按仓分段聚合:段间加"仓库"分隔行,前端 diff 视图按元信息行呈现。
-    const parts = this.materialRepos(live)
-      .map((repo) => ({ name: repo.name, diff: workspaceDiffAll(repo.dir) }))
-      .filter((part) => part.diff.trim());
-    if (!parts.length) return "";
-    return parts.map((part) =>
-      `===== 仓库 ${part.name} =====\n${part.diff}`).join("\n\n");
-  }
-
-  listIssueLogs(id: string) {
-    return listLogs(this.require(id).root);
-  }
-
-  readIssueLog(id: string, name: string) {
-    return readLog(this.require(id).root, name);
-  }
-
-  recentEvents(id: string, limit?: number) {
-    return recentEvents(this.require(id).root, limit);
   }
 
   // ---- 关停 ----

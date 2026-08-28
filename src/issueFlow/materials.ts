@@ -25,6 +25,7 @@ import {
 } from "node:fs";
 import { join, resolve, sep, basename } from "node:path";
 import { createSafeGitView } from "../safeGit.ts";
+import { issueRepoWorkspaces, type IssueSessionState } from "./state.ts";
 
 export interface WorkspaceChange {
   path: string;
@@ -313,4 +314,104 @@ export function recentEvents(
     })
     .filter((row): row is Record<string, unknown> => Boolean(row))
     .slice(-limit);
+}
+
+// ---- 会话级材料(/issues/:id/materials 路由直连的数据面;收窄票 #7
+// 把 service 上的 require+路由+委托三行透传挪到这里,服务不再转手) ----
+
+/** 多仓材料聚合的公共底座:repo/ 下每个已克隆仓 → (仓名, 目录)。 */
+function materialRepos(
+  state: IssueSessionState,
+  root: string,
+): Array<{ name: string; dir: string }> {
+  return issueRepoWorkspaces(state, root)
+    .filter((repo) => existsSync(join(repo.dir, ".git")))
+    .map((repo) => ({
+      name: repo.dir.split(/[\\/]/).at(-1) ?? "repo",
+      dir: repo.dir,
+    }));
+}
+
+/** 路径路由:rel 首段是仓名(repo/<仓名>/ 的平铺约定);对不上时
+ * 兜底首仓(老路径/手工输入),保证读写不因前缀缺席而砸。 */
+function routeMaterialPath(
+  state: IssueSessionState,
+  root: string,
+  rel: string,
+): { repo: { name: string; dir: string }; rel: string } | undefined {
+  const repos = materialRepos(state, root);
+  if (!repos.length) return undefined;
+  const head = rel.split(/[\\/]/)[0];
+  const match = repos.find((repo) => repo.name === head);
+  if (match) return { repo: match, rel: rel.slice(head.length + 1) };
+  return { repo: repos[0], rel };
+}
+
+/** 材料清单:变更按仓聚合,路径带 <仓名>/ 前缀(与 routeMaterialPath
+ * 对得上)。 */
+export function listMaterials(state: IssueSessionState, root: string) {
+  const changes = materialRepos(state, root).flatMap((repo) =>
+    listWorkspaceChanges(repo.dir)
+      .map((change) => ({ ...change, path: `${repo.name}/${change.path}` })));
+  return {
+    ticket: state.ticket,
+    pushes: state.pushes ?? [],
+    mrs: state.mrs ?? [],
+    analysis_available: existsSync(join(root, "issue-analysis.md")),
+    changes,
+    logs: listLogs(root),
+    manual_edits: listManualEdits(root),
+  };
+}
+
+/** 会话内读工作区文件(先按仓名路由,再进单仓读)。 */
+export function readSessionWorkspaceFile(
+  state: IssueSessionState,
+  root: string,
+  rel: string,
+): { content: string; truncated: boolean } {
+  const routed = routeMaterialPath(state, root, rel);
+  if (!routed) throw new Error("会话还没有已克隆的代码仓");
+  return readWorkspaceFile(routed.repo.dir, routed.rel);
+}
+
+/** 快速修改(会话级):路由到仓 → 写文件 → 入人工台账,写与账不分家。
+ * 控制台留痕归路由层(它知道会话号与日志口径),台账(manual-edits
+ * .jsonl)在这里——这是账本,不是日志。 */
+export function saveSessionWorkspaceFile(
+  state: IssueSessionState,
+  root: string,
+  rel: string,
+  content: string,
+): { ok: true; size: number } {
+  const routed = routeMaterialPath(state, root, rel);
+  if (!routed) throw new Error("会话还没有已克隆的代码仓");
+  const result = writeWorkspaceFile(routed.repo.dir, routed.rel, content);
+  recordManualEdit(root, rel, result.size);
+  return result;
+}
+
+/** 单文件 diff(会话级,对 HEAD)。 */
+export function sessionWorkspaceFileDiff(
+  state: IssueSessionState,
+  root: string,
+  rel: string,
+): string {
+  const routed = routeMaterialPath(state, root, rel);
+  if (!routed) throw new Error("会话还没有已克隆的代码仓");
+  return workspaceFileDiff(routed.repo.dir, routed.rel);
+}
+
+/** 聚合 diff(会话级):按仓分段,段间加"仓库"分隔行,前端 diff 视图
+ * 按元信息行呈现。 */
+export function sessionWorkspaceDiffAll(
+  state: IssueSessionState,
+  root: string,
+): string {
+  const parts = materialRepos(state, root)
+    .map((repo) => ({ name: repo.name, diff: workspaceDiffAll(repo.dir) }))
+    .filter((part) => part.diff.trim());
+  if (!parts.length) return "";
+  return parts.map((part) =>
+    `===== 仓库 ${part.name} =====\n${part.diff}`).join("\n\n");
 }

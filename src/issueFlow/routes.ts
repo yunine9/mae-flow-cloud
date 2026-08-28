@@ -34,11 +34,22 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { closeSync, existsSync, openSync, readSync, statSync } from "node:fs";
+import { join } from "node:path";
 import type { IssueFlowService } from "./service.ts";
 import {
   IssueControlError,
   IssueNotFoundError,
 } from "./service.ts";
+import {
+  listMaterials,
+  readSessionWorkspaceFile,
+  recentEvents,
+  readLog,
+  saveSessionWorkspaceFile,
+  sessionWorkspaceDiffAll,
+  sessionWorkspaceFileDiff,
+} from "./materials.ts";
+import type { DtsGateway } from "./gateways.ts";
 import { StateConflictError } from "../humanGate.ts";
 import { isTerminal } from "./state.ts";
 
@@ -49,9 +60,15 @@ export interface IssueViewer {
 
 export interface IssueRouteOptions {
   issueFlow?: IssueFlowService;
+  /** DTS 网关直连(拉单/单据详情/内嵌图代理;收窄票 #7:服务不再
+   * 转手)。缺席时按原透传层的同一句 fail-loud 打回。 */
+  dts?: DtsGateway;
   viewer?: IssueViewer;
   /** 会话鉴权是否启用(测试直连形态没有 auth)。 */
   authEnabled: boolean;
+  /** 人工修改的台账日志(口径与问题服务一致:快速修改动了谁的现场,
+   * 控制台要有痕迹;账本本体在 materials 的 manual-edits.jsonl)。 */
+  log?: (message: string) => void;
 }
 
 function json(response: ServerResponse, status: number, body: unknown): void {
@@ -93,7 +110,7 @@ function streamIssueEvents(
   id: string,
   response: ServerResponse,
 ): void {
-  const path = issueFlow.eventLogPath(id);
+  const path = join(issueFlow.session(id).root, "events.jsonl");
   response.writeHead(200, {
     "content-type": "text/event-stream",
     "cache-control": "no-cache",
@@ -133,6 +150,16 @@ function streamIssueEvents(
     setTimeout(push, 300);
   };
   push();
+}
+
+/** DTS 网关直连的缺席守卫:文案与原先 service 透传层一字不差
+ * (错误映射统一是 #9 的事,这里不顺手改)。 */
+function requireDts(dts: DtsGateway | undefined): DtsGateway {
+  if (!dts) {
+    throw new IssueControlError(
+      "DTS 网关未配置(部署需 --dts-mcp-url 与 token)");
+  }
+  return dts;
 }
 
 /** 处理 /issues/* 请求;返回 false 表示与问题域无关。 */
@@ -212,8 +239,10 @@ export async function handleIssueRoutes(
       if (viewer?.role === "admin") {
         return done(403, { error: "管理员不处理问题单" });
       }
-      const tickets = await issueFlow.listDts(String(viewer?.username ?? ""));
-      return done(200, { tickets, mock: issueFlow.dtsMock });
+      // 直连 DTS 网关(收窄票 #7):服务不再转手拉单。
+      const tickets = await requireDts(routeOptions.dts)
+        .listByOwner(String(viewer?.username ?? ""));
+      return done(200, { tickets, mock: routeOptions.dts?.mock === true });
     }
 
     // 单张问题单详情(页签展开用):登录即可查本人名下任意单。
@@ -223,7 +252,7 @@ export async function handleIssueRoutes(
       }
       const ticket = decodeURIComponent(parts[2]);
       if (!ticket) return done(400, { error: "缺少问题单号" });
-      const detail = await issueFlow.getDtsDetail(ticket);
+      const detail = await requireDts(routeOptions.dts).detail(ticket);
       return done(200, detail);
     }
 
@@ -240,7 +269,9 @@ export async function handleIssueRoutes(
         return done(400, { error: "缺少合法 path 参数(须为站内绝对路径)" });
       }
       try {
-        const file = await issueFlow.proxyDtsFile(path);
+        // 直连 DTS 网关代理回取(收窄票 #7);缺配置的打回也在 try 里,
+        // 与原先透传层抛错同一落点(502)。
+        const file = await requireDts(routeOptions.dts).proxyFile(path);
         response.writeHead(200, {
           "content-type": file.contentType,
           "cache-control": "public, max-age=86400",
@@ -265,12 +296,14 @@ export async function handleIssueRoutes(
       return done(200, issueFlow.get(id));
     }
 
-    // ---- 会话材料(交付材料页签)。读:本人或管理员;写(快速修改):
-    // 仅会话归属者。路径防穿越在 service/materials 层双保险,这里只做
-    // 归属与参数兜底。fail-open 语义:读类故障以 400 带人话返回,页面
-    // 给空态,不拖垮会话。
+    // ---- 会话材料(交付材料页签):路由直连 materials.ts,服务不再
+    // 转手(收窄票 #7);issueFlow.session 只负责"哪个会话、现场在哪"。
+    // 读:本人或管理员;写(快速修改):仅会话归属者。路径防穿越在
+    // materials 层双保险,这里只做归属与参数兜底。fail-open 语义:读类
+    // 故障以 400 带人话返回,页面给空态,不拖垮会话。
     if (parts[2] === "materials" && parts.length === 3) {
-      return done(200, issueFlow.listMaterials(id));
+      const session = issueFlow.session(id);
+      return done(200, listMaterials(session.state, session.root));
     }
     if (method === "PUT" && parts[2] === "materials"
         && parts[3] === "file" && parts.length === 4) {
@@ -279,8 +312,13 @@ export async function handleIssueRoutes(
       }
       const body = await readBody(request);
       try {
-        return done(200, issueFlow.saveWorkspaceFile(
-          id, String(body.path ?? ""), String(body.content ?? "")));
+        const rel = String(body.path ?? "");
+        const session = issueFlow.session(id);
+        const result = saveSessionWorkspaceFile(
+          session.state, session.root, rel, String(body.content ?? ""));
+        routeOptions.log?.(
+          `[issue-flow] ${id} 人工修改 ${rel}(${result.size}B)`);
+        return done(200, result);
       } catch (reason) {
         return done(400, {
           error: String(reason instanceof Error ? reason.message : reason),
@@ -293,23 +331,27 @@ export async function handleIssueRoutes(
         if (parts[3] === "diff") {
           // 带 path = 单文件;不带 = 聚合 diff(对齐任务侧交付材料形态)。
           const path = query.get("path");
+          const session = issueFlow.session(id);
           return done(200, {
             diff: path
-              ? issueFlow.workspaceFileDiff(id, path)
-              : issueFlow.workspaceDiffAll(id),
+              ? sessionWorkspaceFileDiff(session.state, session.root, path)
+              : sessionWorkspaceDiffAll(session.state, session.root),
           });
         }
         if (parts[3] === "file") {
-          return done(200, issueFlow.readWorkspaceFile(
-            id, String(query.get("path") ?? "")));
+          const session = issueFlow.session(id);
+          return done(200, readSessionWorkspaceFile(
+            session.state, session.root, String(query.get("path") ?? "")));
         }
         if (parts[3] === "log") {
-          return done(200, issueFlow.readIssueLog(id, String(query.get("name") ?? "")));
+          return done(200, readLog(
+            issueFlow.session(id).root, String(query.get("name") ?? "")));
         }
         if (parts[3] === "events") {
           const raw = Number(query.get("limit") ?? 200);
           const limit = Number.isFinite(raw) ? Math.min(Math.max(raw, 1), 1000) : 200;
-          return done(200, { events: issueFlow.recentEvents(id, limit) });
+          const root = issueFlow.session(id).root;
+          return done(200, { events: recentEvents(root, limit) });
         }
       } catch (reason) {
         return done(400, {
