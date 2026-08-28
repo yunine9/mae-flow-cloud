@@ -44,7 +44,7 @@
       "activities": [
         {"title": "多维度预检", "description": "从范围、角色、异常、兼容性和验收等维度识别真实缺口。", "required": true},
         {"title": "事实优先查证", "description": "代码和文档能够回答的问题不占用用户决策。", "required": true},
-        {"title": "逐项拍板", "description": "每次只呈现一个需要用户决定的问题，并给出依据和建议。", "required": true}
+        {"title": "成组拍板", "description": "彼此独立的问题每次集中呈现 3～4 个；有前后依赖或高影响的决定单独询问，并给出依据和建议。", "required": true}
       ],
       "resources": [
         {"kind": "guidance", "name": "需求澄清方法", "ref": "guidance/grill.md", "usage": "required"},

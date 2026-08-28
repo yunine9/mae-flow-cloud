@@ -603,12 +603,8 @@ export class LubanApprovalGateway {
       if (!content) return {
         error: "“自由回复：”后面还没有内容，请写明你的答案或修改要求。",
       };
-      if (question.options.length) {
-        return {
-          error: "自由说明不能代替流程选项。请先选择序号；如需补充原因，"
-            + "可回复“序号：说明”，例如“2：请补充异常场景”。",
-        };
-      }
+      // 选项不完备时，显式“自由回复：”是主答案，不伪装成任一流程
+      // 分支；普通自然语言仍保守匹配，拿不准只提示、不猜。
       return { answer: content };
     }
     const number = Number(answer);

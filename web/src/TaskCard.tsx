@@ -467,12 +467,18 @@ export function WaitingCard({
       allChoiceAnswers.has(option)))
     .map((item) => answerOf(item.question))
     .find(Boolean);
+  const selectedEffect = choiceEffects.find((effect) =>
+    effect.answers.includes(selectedReviewAnswer ?? ""));
+  const hasCustomPrimaryAnswer = questions.some((item) =>
+    (item.options?.length ?? 0) > 0
+    && !picked[item.question]
+    && !!custom[item.question]?.trim());
   const isReviewDecision = choiceEffects.some((effect) =>
     effect.closes_feedback);
   const ready = questions.every((item) => {
     const options = item.options ?? [];
     const answered = options.length
-      ? picked[item.question]
+      ? picked[item.question] || custom[item.question]?.trim()
       : custom[item.question]?.trim();
     return optional(item.question) || Boolean(answered);
   }) && (!requiresDeliverySelection || !!deliverySelection)
@@ -568,6 +574,17 @@ export function WaitingCard({
     }
   }
 
+  const submitLabel = submitting ? "正在提交…"
+    : repositorySkillSelection?.scanning ? "等待能力读取"
+      : hasCustomPrimaryAnswer ? "提交自定义处理方式"
+        : selectedEffect?.handles_feedback
+          ? "交给 Agent 调整后再检视"
+          : requiresDeliverySelection && deliverySelectionChanged
+            ? "按此范围自动整理并继续"
+            : requiresDeliverySelection
+              ? "确认推送范围并继续"
+              : "提交决定";
+
   return (
     <section className="decision-card" aria-labelledby={`decision-${task.id}`}>
       <header className="decision-head">
@@ -650,9 +667,15 @@ export function WaitingCard({
                   >
                       <span className="radio" />
                       <span className="option-body">
-                        <span className="option-title">{options.length ? "补充说明" : "填写答复"}</span>
+                        <span className="option-title">{options.length
+                          ? picked[item.question]
+                            ? "补充说明"
+                            : "以上都不合适，直接回答"
+                          : "填写答复"}</span>
                         <span className="option-hint">{options.length
-                          ? "说明会随决定提交，但不会改变所选流程分支"
+                          ? picked[item.question]
+                            ? "说明会随决定提交，但不会改变所选流程分支"
+                            : "你的文字将作为本题主答案，不会套用任一选项"
                           : "填写本题的具体答案"}</span>
                       </span>
                   </button>
@@ -663,7 +686,9 @@ export function WaitingCard({
                   <textarea
                     className={`custom-input${customActive ? " picked" : ""}`}
                     placeholder={options.length
-                      ? "补充原因、修改点或约束…"
+                      ? picked[item.question]
+                        ? "补充原因、修改点或约束…"
+                        : "写下选项之外的正确处理方式…"
                       : "写下你的答复…"}
                     value={custom[item.question] ?? ""}
                     autoFocus
@@ -673,7 +698,9 @@ export function WaitingCard({
                     })}
                   />
                   <span>{options.length
-                    ? "这段文字仅作为补充说明；流程走向以上方选项为准。"
+                    ? picked[item.question]
+                      ? "这段文字仅作为补充说明；流程走向以上方选项为准。"
+                      : "这段文字将作为主答案直接交给 Agent；系统不会替你选择错误分支。"
                     : "这段文字将作为开放题答案提交。"}</span>
                 </div>
               )}
@@ -716,14 +743,15 @@ export function WaitingCard({
             ? "本任务全部代码增量在「本任务变更」——请逐文件检视 diff;"
               + "勾选框默认全选,检视后这里才能提交。"
             : deliverySelectionChanged
-              ? `勾选与当前 commit 不同（剔除 ${deliverySelection!.committedPaths
+              ? selectedEffect?.handles_feedback
+                ? "提交后：Agent 按这个范围调整代码与清单，完成后重新给你检视；本次不会推送。"
+                : `提交后：Cloud 自动整理一个清单提交（移出 ${deliverySelection!.committedPaths
                   .filter((path) => !deliverySelection!.selectedPaths
-                    .includes(path)).length} 个、补入 ${deliverySelection!
+                    .includes(path)).length} 个，补入 ${deliverySelection!
                   .selectedPaths.filter((path) => !deliverySelection!
-                    .committedPaths.includes(path)).length} 个）。`
-                + "提交“通过”即可：Cloud 自动整理提交并直推——剔除的内容"
-                + `保留在工作区，不重新编译，由流水线裁决。想让 Agent 重新整理可选“${feedbackLabel}”。`
-              : "勾选与当前 commit 一致；提交通过后，服务端会在 push 前再次复核。"}</span>
+                    .committedPaths.includes(path)).length} 个）；未选内容保留在本地但不推送；`
+                + "不会让 Agent 猜着重改，也不重跑本地编译，最终由绑定新 SHA 的权威流水线裁决。"
+              : "提交后：保持当前提交不变；服务端复核同一文件集合，然后继续推送前验证与交付。"}</span>
           {onLocateDelivery && (
             <button type="button" className="delivery-locate"
               onClick={onLocateDelivery}>
@@ -762,8 +790,7 @@ export function WaitingCard({
           disabled={!ready}
           onClick={submit}
         >
-          {submitting ? "正在提交…" : repositorySkillSelection?.scanning
-            ? "等待能力读取" : "提交决定"}
+          {submitLabel}
           <svg viewBox="0 0 20 20" aria-hidden>
             <path d="m4 10 3.2 3.2L16 5.5" />
           </svg>

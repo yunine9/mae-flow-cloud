@@ -34,7 +34,7 @@ test("任务控制:排队任务可暂停、恢复并取消，取消不可被陈�
 test("任务控制:人工节点暂停后恢复到原决定卡", async () => {
   const model = new ScriptedModelServer([
     { tool: { name: "AskUserQuestion", input: {
-      questions: [{ question: "继续吗?", options: ["继续"] }],
+      questions: [{ question: "继续吗?", options: ["继续", "停止"] }],
     } } },
     { text: "完成。" },
   ]);
@@ -56,6 +56,39 @@ test("任务控制:人工节点暂停后恢复到原决定卡", async () => {
     assert.equal(resumed.status, "waiting_for_human");
     assert.equal(resumed.waiting?.waiting_id, waitingId);
     assert.equal((await service.cancel(created.id, "alice")).status, "canceled");
+  } finally {
+    await model.stop();
+  }
+});
+
+test("选择题选项都不合适时，自定义答复作为主答案继续而非强迫选错", async () => {
+  const question = "如何处理平台生成的本地文件?";
+  const model = new ScriptedModelServer([
+    { tool: { name: "AskUserQuestion", input: {
+      questions: [{ question, options: ["提交到业务仓", "暂停等用户处理"] }],
+    } } },
+    { text: "已按用户给出的第三种方式继续。" },
+  ]);
+  await model.start();
+  const service = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-control-custom-answer-")),
+    provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+  });
+  try {
+    const created = service.create("不完整选项自由回复演练");
+    await until(() => service.get(created.id)?.status === "waiting_for_human",
+      "进入不完整选项卡");
+    const waiting = service.get(created.id)!.waiting!;
+    await service.decide(created.id, {
+      state_version: waiting.state_version,
+      selected_options: {},
+      free_responses: {
+        [question]: "都不提交；写入 .git/info/exclude 后继续",
+      },
+    });
+    await until(() => service.get(created.id)?.status === "completed",
+      "自由主答案回注后继续");
   } finally {
     await model.stop();
   }

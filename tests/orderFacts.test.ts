@@ -161,6 +161,7 @@ test("下单事实:三项配置免问、Q2 不出、tweak 免卡入链、改选�
       // 记,prepush 修复 Agent 把它提交进了用户的 .gitignore 随 MR 推走)。
       for (const artifact of [
         ".mae-flow.json.exited", ".mae-flow-work/", "openspec/config.yaml",
+        "docs/req/",
       ]) {
         assert.ok(exclude.includes(artifact),
           `内核会话产物 ${artifact} 必须在平台 exclude 里,不能指望用户仓的 .gitignore`);

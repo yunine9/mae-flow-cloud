@@ -4,7 +4,8 @@
  * ——证据判定只有一份权威实现,在 mae_flow_core 里,TS 不复刻。
  *
  * 用法: npm run probe [-- --out <目录>]
- * 前置: pi 不需要单独安装(SDK 内嵌);内核仓在 ../mae-flow 或 MAE_FLOW_HOME。
+ * 前置: pi 不需要单独安装(SDK 内嵌);内核优先来自 MAE_FLOW_HOME 或
+ * 随 Cloud 发布的 kernel/，快照缺席时才回退 ../mae-flow。
  */
 
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";

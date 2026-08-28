@@ -27,7 +27,8 @@ rollback 未实现(工具只有部署前自动备份,无一键回滚,能力位�
 1. **内核唯一权威**。流程规则、门禁契约、证据判定只在
    [mae-flow](../mae-flow) 内核仓(Python)。本仓不复刻一行判定逻辑:
    TS 写现场,`harness/verify_transcript.py` 用内核契约裁决。
-   内核定位:`MAE_FLOW_HOME` 环境变量,缺省 `../mae-flow`。
+   内核定位:`MAE_FLOW_HOME` 环境变量 > 随 Cloud 发布的 `kernel/` >
+   快照缺席时回退 `../mae-flow`。
 2. **transcript JSONL 是语言中立契约**。TS 写出的每个字节必须被内核
    `parse_transcript` 与四个质量契约原样认出——这是跨语言接缝,
    也是"证据链换输入源而格式零漂移"的落点。
@@ -437,8 +438,9 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
   (全是 Response.json() 返 unknown 的老账)用 src/jsonBody.ts 的
   readJson 收敛到 0。**开着 strictNullChecks 但没全 strict**:先把门
   立起来,别让完美挡住可用;**没接进 CI/preflight**,目前靠人自觉跑;
-- **内核发现收敛(2026-08-16)**:`MAE_FLOW_HOME > ../mae-flow 活内核
-  > 仓内 kernel/ 快照`这条链原先在 serve、pilot、六个测试文件里各写
+- **内核发现收敛(2026-08-16,08-28 修正优先级)**:`MAE_FLOW_HOME >
+  仓内 kernel/ 快照 > ../mae-flow 兜底`这条链原先在 serve、pilot、
+  六个测试文件里各写
   一遍,测试那几份还手写 `cwd()/../mae-flow`——在 git worktree 里
   当场翻车:内核起不来、门禁拦死剧本会话,17 个用例轮询耗尽超时,
   报错却长得像业务判定错。现统一走 src/kernelDiscovery.ts,
@@ -452,8 +454,8 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
   属于部署基础设施，不在管理页配置；成员只配自己的通知 Token;
 - **集成产品形态 + 界面优先配置(2026-08-17,用户拍板"cloud 应该是
   独立的集成产品"/"参数不该是启动项")**:内核快照收编进 kernel/
-  (sync-kernel.sh 维护;serve 发现顺序 MAE_FLOW_HOME > ../mae-flow >
-  kernel/,开发机永远用活内核,快照只在部署形态生效)——一个 clone=
+  (sync-kernel.sh 维护;serve 发现顺序 MAE_FLOW_HOME > kernel/ >
+  ../mae-flow，需要联调活内核时显式设置环境变量)——一个 clone=
   完整产品。MR/流水线服务与验证形态由部署固定注入，管理员只在服务
   设置页看自检结果，不感知内部地址；代码仓始终由每个任务明确填写，不设服务级
   默认仓；模型网关本就在界面。正式部署用 --kernel-mode 开内核模式。

@@ -183,9 +183,16 @@ export function TaskWorkspace({
   }, [task.waiting?.waiting_id]);
 
   useEffect(() => {
-    const recommended = task.waiting?.recommended_view;
-    if (!recommended || task.status === "paused") return;
+    const waitingId = task.waiting?.waiting_id;
+    if (!waitingId || task.status === "paused") return;
+
+    // 暂停时工作台会主动切到“开发协作”，方便用户接管现场。恢复后若
+    // Agent 立即举出新问题，不能继续把左侧留在开发控制台——此刻人的
+    // 首要任务是对照证据做决定。每张新决策卡都回到材料视图；有明确的
+    // recommended_view 时再精确定位到文档或 diff。
     setWorkspaceView("materials");
+    const recommended = task.waiting?.recommended_view;
+    if (!recommended) return;
     setMaterialView(recommended);
     if (recommended === "diff") {
       const first = items?.find((item) => item.kind === "diff");
@@ -194,7 +201,7 @@ export function TaskWorkspace({
       const first = items?.find((item) => item.kind === "doc");
       if (first) setActive(first.name);
     }
-  }, [task.waiting?.waiting_id, task.waiting?.recommended_view]);
+  }, [task.status, task.waiting?.waiting_id, task.waiting?.recommended_view]);
 
   useEffect(() => {
     if (task.status === "paused") setWorkspaceView("collaboration");
@@ -696,7 +703,7 @@ export function TaskWorkspace({
                 warning={task.execution_profile_warning}
                 onSuggest={onExecutionPlanFeedback} />}
               <WarmupPanel task={task} />
-              <ExecutionPanel task={task} defaultOpen />
+              <ExecutionPanel task={task} />
               <KnowledgeFootprint usage={task.knowledge_usage}
                 utMethod={task.ut_generation_method}
                 taskId={task.id} taskStatus={task.status}

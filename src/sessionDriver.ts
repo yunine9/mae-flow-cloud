@@ -84,6 +84,52 @@ export function answersOf(
 
 const HOST_TOOLS = new Set(["AskUserQuestion", "Task"]);
 
+export function validateAskUserQuestionInput(input: unknown): string | undefined {
+  if (!input || typeof input !== "object") return "缺少 questions";
+  const request = input as Record<string, unknown>;
+  const extra = Object.keys(request)
+    .filter((key) => key !== "questions" && key !== "context");
+  if (extra.length) return `问题卡含不支持字段 ${extra.join("、")}`;
+  if (request.context !== undefined
+      && (typeof request.context !== "string" || !request.context.trim())) {
+    return "context 必须是非空的用户可见说明";
+  }
+  if (typeof request.context === "string" && request.context.length > 2_000) {
+    return "context 最多 2000 字符";
+  }
+  const questions = request.questions;
+  if (!Array.isArray(questions) || questions.length === 0) {
+    return "questions 必须包含至少一个问题";
+  }
+  if (questions.length > 4) return `一张卡有 ${questions.length} 个问题，最多四个`;
+  for (let index = 0; index < questions.length; index += 1) {
+    const value = questions[index];
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return `第 ${index + 1} 题不是问题对象`;
+    }
+    const question = value as Record<string, unknown>;
+    const extra = Object.keys(question)
+      .filter((key) => key !== "question" && key !== "options");
+    if (extra.length) {
+      return `第 ${index + 1} 题含不支持字段 ${extra.join("、")}`;
+    }
+    if (typeof question.question !== "string" || !question.question.trim()) {
+      return `第 ${index + 1} 题缺少问题正文`;
+    }
+    if (question.options === undefined) continue;
+    if (!Array.isArray(question.options)) {
+      return `第 ${index + 1} 题的 options 不是数组`;
+    }
+    const options = question.options.map((option) =>
+      typeof option === "string" ? option.trim() : "");
+    if (options.length < 2) return `第 ${index + 1} 题只有 ${options.length} 个选项`;
+    if (options.length > 6) return `第 ${index + 1} 题有 ${options.length} 个选项，最多六个`;
+    if (options.some((option) => !option)) return `第 ${index + 1} 题含空选项`;
+    if (new Set(options).size !== options.length) return `第 ${index + 1} 题含重复选项`;
+  }
+  return undefined;
+}
+
 export interface Outcome {
   status: "turn_finished" | "waiting_for_human" | "session_ended";
   waiting?: WaitingRecord;
@@ -1098,6 +1144,8 @@ export class CloudSession {
         "向用户提出结构化问题并等待决定。需要用户确认或选择时必须调用本工具," +
         "不要在正文里描述问题然后自行假设答案。一张卡可含多个问题" +
         "(如配置确认 + 交付方式合并成一次提问)。" +
+        "context 会原样显示为网页和小鲁班的‘决策背景’，请填写用户看得懂的" +
+        "事实、证据或影响摘要；禁止填写 apply/git/Bash 等内部操作过程。" +
         // 实战实测:正文预告"两个衍生题一次问完",工具调用只带了一题,
         // 另一题要么多花一轮补问,要么被自行拍板。预告即契约。
         "正文预告了几个问题,questions 就必须带几个——预告了却不发,"  +
@@ -1106,23 +1154,58 @@ export class CloudSession {
       // question + options。回答按问题分开记录——内核"整份背书"判定
       // 依赖这个结构。
       parameters: Type.Object({
+        context: Type.Optional(Type.String({
+          description: "用户可见的决策背景；只写事实、证据与影响，不写内部操作过程",
+          minLength: 1,
+          maxLength: 2000,
+        })),
         questions: Type.Array(Type.Object({
           question: Type.String({ description: "问题正文" }),
-          options: Type.Array(Type.String(),
-            { description: "可选决定,至少一项" }),
-        }), { description: "一张卡里的问题,通常 1-2 个" }),
-      }),
+          options: Type.Optional(Type.Array(Type.String({ minLength: 1 }), {
+            description: "可选决定；选择题至少两项，开放题省略本字段",
+            minItems: 2,
+            maxItems: 6,
+          })),
+        }, { additionalProperties: false }), {
+          description: "一张卡里的问题；彼此独立的问题可合并，最多四个",
+          minItems: 1,
+          maxItems: 4,
+        }),
+      }, { additionalProperties: false }),
       async execute(toolCallId: string, params: any) {
         const callId = String(toolCallId);
         driver.emit("tool_requested", driver.sessionId, {
           call_id: callId, name: "AskUserQuestion", input: params ?? {},
         });
+        const invalid = validateAskUserQuestionInput(params);
+        if (invalid) {
+          const text = "问题卡结构不完整，未向用户发送：" + invalid
+            + "。选择题必须提供至少两个非空、互不重复的选项；"
+            + "若确实要自由回答，请省略 options，页面会显示答复输入框。"
+            + "请修正后重试一次 AskUserQuestion，不要替用户猜答案。";
+          const finished = driver.emit("tool_finished", driver.sessionId, {
+            call_id: callId,
+            name: "AskUserQuestion",
+            input: params ?? {},
+            is_error: true,
+            result: text,
+          });
+          driver.kernelBypass(driver.options.hostHooks?.postTool?.(finished));
+          driver.hostAnswered.add(callId);
+          return {
+            content: [{ type: "text", text }],
+            details: {},
+            isError: true,
+          };
+        }
         const record = driver.options.humanGate.createWaiting({
           taskId: driver.options.taskId,
           step: driver.options.currentStep?.() ?? "",
           callId,
-          questionInput: params ?? {},
-          context: driver.lastAssistantText.get(driver.sessionId),
+          questionInput: { questions: params.questions },
+          context: typeof params.context === "string" && params.context.trim()
+            ? params.context.trim()
+            : driver.lastAssistantText.get(driver.sessionId),
         });
         // 重建会话可能把同一个工具调用重放出来。waiting_id 以
         // task+call_id 幂等；若盘上的决定已经 resolved，就把原答案

@@ -88,7 +88,14 @@ async function waitingService(repo: ReturnType<typeof repository>) {
     ? true : undefined, "任务等待代码检视");
   const internal = (service as any).tasks.get(id);
   internal.cwd = repo.cwd;
-  internal.summary.waiting.step = "inspect";
+  // 待办与通知保存面向人的本地化标题；宿主必须从 pulse 的稳定步骤 ID
+  // 读取内核契约，不能拿中文标题去查 flow.json。
+  internal.summary.waiting.step = "最终代码增量检视";
+  mkdirSync(join(repo.cwd, ".mae-flow-work"), { recursive: true });
+  writeFileSync(join(repo.cwd, ".mae-flow-work", "panel-pulse.js"),
+    "window.__panelPulse={\"step\":\"inspect\",\"step_title\":\"最终代码增量检视\",\"phase\":\"交付\",\"revision\":1};\n");
+  writeFileSync(join(repo.cwd, ".mae-flow-work", "panel.html"),
+    '<span class="phase-node current">交付</span>');
   (service.options as any).host = { kernelRoot: kernel(), repoPath: "/unused" };
   return { service, model, id, internal };
 }
@@ -99,6 +106,7 @@ test("未跟踪编译产物可不勾选，确认清单只绑定 HEAD 会推送�
   try {
     const waiting = service.get(id)!.waiting!;
     assert.equal(waiting.recommended_view, "diff");
+    assert.equal(service.get(id)!.progress?.step_id, "inspect");
     await service.decide(id, {
       state_version: waiting.state_version,
       selected_options: { "这轮代码通过吗？": "代码无需调整，继续提交" },

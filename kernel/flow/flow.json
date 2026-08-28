@@ -322,6 +322,9 @@
   },
   "delivery_review": {
    "title": "最终代码增量检视",
+   "approval_subject": {
+    "kind": "worktree"
+   },
    "evidence": [
     {
      "type": "delivery_manifest_committed"

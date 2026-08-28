@@ -131,6 +131,74 @@ test("确认绑定文件集合:同文件修复自动续推,新增文件才重新
   }
 });
 
+test("修复重新带入已拒绝文件时宿主自动收口，不新增循环门禁", async () => {
+  const { service, model, id, internal, repo } = await verifyingTask();
+  try {
+    // 先让构建日志真实出现在可选现场，再由用户明确排除。
+    writeFileSync(join(repo.cwd, "build.log"), "local build output\n");
+    internal.summary.push_confirmation = true;
+    await (service as any).pushConfirmationSatisfied(
+      internal, "master_bot_REQ1");
+    const waiting = service.get(id)!.waiting!;
+    await service.decide(id, {
+      state_version: waiting.state_version,
+      selected_options: {
+        [(waiting.question as any).questions[0].question]: "确认按清单推送",
+      },
+      delivery_paths: ["src/feature.ts"],
+    });
+    const cleanHead = repo.git("rev-parse", "HEAD");
+    internal.summary.delivery = {
+      git_push: {
+        sha: cleanHead,
+        ref: "refs/heads/master_bot_REQ1",
+        remote: "origin",
+        url: "https://git.example.test/repo.git",
+      },
+      sha: cleanHead,
+      pipeline: "failed",
+    };
+
+    // 模拟流水线修复：业务修复是对的，但顺手强制提交了用户拒绝的日志
+    // 与中心注入 Skill。两者都不能靠再加一张卡/再撞一次 Agent 门禁。
+    writeFileSync(join(repo.cwd, "src", "feature.ts"),
+      "export const value = 2;\n");
+    mkdirSync(join(repo.cwd, ".claude", "skills", "center"), {
+      recursive: true,
+    });
+    writeFileSync(join(repo.cwd, ".claude", "skills", "center", "SKILL.md"),
+      "center injected\n");
+    repo.git("add", "-f", "src/feature.ts", "build.log",
+      ".claude/skills/center/SKILL.md");
+    repo.git("commit", "--quiet", "-m", "repair plus rejected files");
+    assert.notEqual(repo.git("rev-list", "HEAD", "--", "build.log"), "");
+    assert.notEqual(repo.git("rev-list", "HEAD", "--",
+      ".claude/skills/center/SKILL.md"), "");
+
+    const result = await (service as any)
+      .reconcileConfirmedDeliveryBoundary(internal);
+    assert.equal(result, "changed");
+    assert.equal(repo.git("rev-parse", "HEAD^"), cleanHead,
+      "机械收口以最近一次已推送的干净 SHA 为锚，不重写远端旧历史");
+    assert.deepEqual(
+      repo.git("diff", "--name-only",
+        repo.git("rev-list", "--max-parents=0", "HEAD"), "HEAD")
+        .split("\n").filter(Boolean),
+      ["src/feature.ts"],
+    );
+    assert.equal(repo.git("rev-list", "HEAD", "--", "build.log"), "",
+      "拒绝文件不能只在最终树删除，污染提交也必须从可达历史消失");
+    assert.equal(repo.git("rev-list", "HEAD", "--",
+      ".claude/skills/center/SKILL.md"), "");
+    assert.equal(repo.git("check-ignore", "build.log"), "build.log",
+      "已拒绝的未跟踪过程件登记到 clone 本地 exclude，后续修复不再看见");
+    assert.equal(service.get(id)!.waiting, undefined,
+      "机械清理既有拒绝项不会再次打扰用户");
+  } finally {
+    await model.stop();
+  }
+});
+
 test("交付范围确认只在 prepush 收敛后执行", async () => {
   const { service, model, internal } = await verifyingTask();
   try {

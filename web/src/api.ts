@@ -463,6 +463,8 @@ export interface TaskProgress {
   phases: string[];
   current_index: number;
   current_phase: string;
+  /** 稳定内核步骤 ID；界面仍展示 step 人话标题。 */
+  step_id?: string;
   step?: string;
   revision?: number;
   /** 子任务里程碑由服务端透传；缺席时沿用原有阶段进度展示。 */

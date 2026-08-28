@@ -40,7 +40,8 @@
 
 **集成产品形态:一个 clone 就是全部**——内核快照收编在 `kernel/`
 (harness/sync-kernel.sh 维护,serve 自动发现:MAE_FLOW_HOME >
-../mae-flow > kernel/),不用再单独 clone 内核仓。
+kernel/ > ../mae-flow),不用再单独 clone 内核仓；需要联调活内核时
+显式设置 MAE_FLOW_HOME。
 
 1. **一切放 WSL 自己的 ext4**(`~/` 下)。`/mnt/c` 是 9p,chmod 600
    不可靠(密钥文件纪律会破)且慢一个量级;

@@ -6,7 +6,8 @@ TS 侧不复刻一行判定逻辑——它写现场,这里裁决。这既是 clo
 的验收器,也是跨语言对拍的契约:transcript JSONL 是中立格式,
 TS 写出的每个字节都必须被内核原样认出。
 
-内核定位:环境变量 MAE_FLOW_HOME,缺省找本仓同级的 ../mae-flow。
+内核定位:环境变量 MAE_FLOW_HOME,缺省使用随 Cloud 发布的 kernel/；
+只有发布快照缺席时才回退本仓同级的 ../mae-flow。
 """
 
 import argparse
@@ -20,8 +21,8 @@ REPO = os.path.dirname(HERE)
 
 def kernel_scripts_dir():
     """内核发现链,**必须与 src/kernelDiscovery.ts 同序同项**:
-    MAE_FLOW_HOME > 兄弟目录 ../mae-flow(开发机的活内核)> 仓内
-    kernel/ 快照(部署形态:一个 ZIP 就是完整产品)。
+    MAE_FLOW_HOME > 仓内 kernel/ 快照(与 Cloud 版本化发布) >
+    兄弟目录 ../mae-flow(快照缺席时的开发兜底)。
 
     第三项是补的:原来只找前两项,而**内网只能下 ZIP、没有兄弟目录**
     ——那边跑到这一步会直接 SystemExit,一条本来能过的验收莫名其妙
@@ -32,8 +33,8 @@ def kernel_scripts_dir():
     env = os.environ.get("MAE_FLOW_HOME")
     if env:
         candidates.append(env)
-    candidates.append(os.path.join(os.path.dirname(REPO), "mae-flow"))
     candidates.append(os.path.join(REPO, "kernel"))
+    candidates.append(os.path.join(os.path.dirname(REPO), "mae-flow"))
     for candidate in candidates:
         scripts = os.path.join(candidate, "scripts")
         if os.path.isdir(os.path.join(scripts, "mae_flow_core")):

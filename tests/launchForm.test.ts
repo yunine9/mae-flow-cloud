@@ -432,6 +432,8 @@ test("分析现场只读:真 push 必须在传输层死掉,不靠 prompt 嘱咐"
     assert.match(localExclude, new RegExp(`/${root.replace(".", "\\.")}/`),
       `${root} 未登记为 clone 本地运行资产`);
   }
+  assert.match(localExclude, /^docs\/req\/$/m,
+    "平台落盘的需求原文必须是 clone 本地资产，不能逼 Agent 修改业务 .gitignore");
   mkdirSync(join(normal, ".claude", "skills", "central"), { recursive: true });
   writeFileSync(join(normal, ".claude", "skills", "central", "SKILL.md"),
     "center injected\n");

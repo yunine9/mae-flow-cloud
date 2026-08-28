@@ -33,6 +33,12 @@ export interface PrePushRunRequest {
   requirement: string;
   branch: string;
   baseline: string;
+  /** 用户已经确认过的最终交付边界。专项 Agent 可以修这些文件，但不能
+   * 把此前排除的本地过程件重新带进提交；真正收口仍由宿主机械复核。 */
+  deliverySelection?: {
+    paths: string[];
+    excludedPaths: string[];
+  };
 }
 
 export interface PrePushRunResult {
@@ -424,6 +430,25 @@ export function prePushMission(
       + "不要自行用 600 秒之类的短 timeout 截断已知慢编译；平台会提升"
       + "过短的重型构建 timeout，整轮硬上限仍负责终止真正卡死的任务。"
     : "";
+  const deliverySelection = request.deliverySelection;
+  const deliveryGuidance = deliverySelection ? [
+    "",
+    "用户已经确认最终推送范围；这不是新的门禁，而是本轮修复必须继承的交付契约：",
+    `- 可以修改并提交已确认的 ${deliverySelection.paths.length} 个文件；`
+      + "同一文件内容变化不需要再次打扰用户。",
+    ...(deliverySelection.paths.slice(0, 300)
+      .map((path) => `  - ${path}`)),
+    ...(deliverySelection.paths.length > 300
+      ? [`  - …其余 ${deliverySelection.paths.length - 300} 个文件`] : []),
+    `- 此前明确排除的 ${deliverySelection.excludedPaths.length} 个本地文件`
+      + "不得重新 add/commit；它们留在工作区不影响 push，也不要求清空。",
+    ...(deliverySelection.excludedPaths.slice(0, 100)
+      .map((path) => `  - ${path}`)),
+    ...(deliverySelection.excludedPaths.length > 100
+      ? [`  - …其余 ${deliverySelection.excludedPaths.length - 100} 个文件`] : []),
+    "- 修复确实需要新增、删除或重命名业务文件时可以正常完成；Cloud 会只为"
+      + "新的业务范围重新请用户确认一次，不要用日志、过程文档或平台目录凑提交。",
+  ] : [];
   return [
     "你是 Cloud 的推送前验证与修复 Agent。这是独立专项会话，不在 Mae-Flow 内核流程中。",
     "不要执行 current、done、AskUserQuestion，也不要读取或修改 .mae-flow 状态。",
@@ -449,6 +474,7 @@ export function prePushMission(
     `Agent 平台目录(${describeAgentPlatformRoots()})也可能是中心服务 clone 后`
       + "注入的本地 Skill/配置：只读使用，禁止修改、强制 add 或提交；"
       + "Cloud 会在 push 前复核整个提交历史。",
+    ...deliveryGuidance,
     "依赖下载、工具缺失、磁盘/网络/权限等不是改代码能解决的问题，归类为 infrastructure_failure，",
     "写清缺什么后停止，不要为了制造绿灯篡改测试、关闭检查或编造执行结果。",
     "",

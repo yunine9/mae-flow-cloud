@@ -18,6 +18,27 @@ test("prepush 使命明确 Agent 平台目录只读且不得提交", () => {
   assert.match(mission, /\.claude.*\.cac.*只读使用.*禁止修改.*提交/s);
 });
 
+test("prepush 修复继承用户确认的交付范围，不把拒绝文件带回来", () => {
+  const mission = prePushMission({
+    taskId: "T-prepush-selection",
+    workspace: "/tmp/repo",
+    sha: "b".repeat(40),
+    round: 2,
+    requirement: "修复流水线失败",
+    branch: "feature",
+    baseline: "master",
+    deliverySelection: {
+      paths: ["src/feature.ts", "tests/feature.test.ts"],
+      excludedPaths: ["build.log", "docs/req/REQ-1.md"],
+    },
+  });
+  assert.match(mission, /最终推送范围.*交付契约/s);
+  assert.match(mission, /src\/feature\.ts/);
+  assert.match(mission, /不得重新 add\/commit/);
+  assert.match(mission, /build\.log/);
+  assert.match(mission, /新增、删除或重命名业务文件.*重新请用户确认一次/s);
+});
+
 function event(
   eventId: number,
   kind: SemanticEvent["kind"],

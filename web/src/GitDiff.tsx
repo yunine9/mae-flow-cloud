@@ -509,12 +509,10 @@ export function GitDiff({
 
       {(selectable || hiddenPaths.size > 0) && (
         <div className={`delivery-selection-bar${selectionChanged ? " changed" : ""}`}>
-          {selectable && <div><strong>交付清单：已勾选 {selectedDeliveryCount} / {files.length}</strong>
+          {selectable && <div><strong>最终推送范围：{selectedDeliveryCount} / {files.length} 个文件</strong>
             <span>{selectionChanged
-              ? "清单与当前 commit 不同。直接提交“通过”即可：Cloud 会按你的勾选"
-                + "整理提交——剔除的退出提交但内容保留在工作区，补勾的纳入——"
-                + "并直推，不重新编译，编译与 UT 由权威流水线裁决。"
-              : "当前勾选与 commit 一致；最终 push 前服务端会再次核对"}</span></div>}
+              ? "已调整范围：提交决定后 Cloud 自动整理提交，未勾选的文件留在本地不推送。"
+              : "勾选＝最终推送到远端的文件；提交右侧决定后生效。"}</span></div>}
           <div>
             {selectable && <>
               <button type="button" onClick={() =>

@@ -4707,7 +4707,11 @@ pre {
   overflow: hidden;
   background: var(--page);
 }
-.ws-body.has-decision { grid-template-columns: minmax(0, 1fr) clamp(420px, 34vw, 520px); }
+.ws-body.has-decision {
+  /* 决策是待办态的主操作。四个长问题挤在 34vw 窄栏时，选项频繁换行、
+     一张卡要滚很多屏；扩大操作区后，左侧仍保留足够宽度核对原文。 */
+  grid-template-columns: minmax(0, 1fr) clamp(500px, 42vw, 660px);
+}
 .ws-evidence {
   min-height: 0;
   overflow: hidden;
