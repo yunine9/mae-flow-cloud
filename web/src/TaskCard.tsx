@@ -534,8 +534,6 @@ export function WaitingCard({
           catalogToken: repositorySkillSelection.catalogToken,
           // 空数组有业务含义：明确清空父任务的预选，不能转成 undefined。
           selectedIds: repositorySkillSelection.selectedIds,
-          selectedKnowledgeIds:
-            repositorySkillSelection.selectedKnowledgeIds,
         }
       : undefined;
     setSubmitting(true);
@@ -1108,12 +1106,23 @@ function FollowPaused({ behind, onResume }: {
   );
 }
 
+interface EventDetailSelection {
+  key: string;
+  eventId: number;
+  eventLabel: string;
+  fieldLabel: string;
+  content: string;
+  structured: boolean;
+  timestamp: string;
+}
+
 function EventTail({ taskId, active }: { taskId: string; active: boolean }) {
   const PAGE_SIZE = 120;
   const [events, setEvents] = useState<SemanticEvent[]>([]);
   const [connection, setConnection] = useState<SseConnectionState>("connecting");
   const [filter, setFilter] = useState<EventFilter>("all");
   const [visibleLimit, setVisibleLimit] = useState(PAGE_SIZE);
+  const [detail, setDetail] = useState<EventDetailSelection>();
   const filtered = filterEvents(events, filter);
   const visible = eventWindow(filtered, visibleLimit);
   const counts = eventFilterCounts(events);
@@ -1124,6 +1133,7 @@ function EventTail({ taskId, active }: { taskId: string; active: boolean }) {
     setConnection("connecting");
     setFilter("all");
     setVisibleLimit(PAGE_SIZE);
+    setDetail(undefined);
   }, [taskId]);
 
   useEffect(() => setVisibleLimit(PAGE_SIZE), [filter]);
@@ -1173,33 +1183,55 @@ function EventTail({ taskId, active }: { taskId: string; active: boolean }) {
           <FollowPaused behind={follow.behind} onResume={follow.toBottom} />
         </div>
       )}
-      <div ref={follow.ref} className="event-stream"
-           onScroll={follow.onScroll}
-           /* aria-live 去掉了:一个每秒刷新的流对读屏软件是灾难,
-              而且"暂停跟随"之后再朗读最新内容,与人的意图正好相反。 */>
-        {visible.hidden > 0 && (
-          <button type="button" className="event-load-earlier"
-            onClick={() => setVisibleLimit((current) => current + PAGE_SIZE)}>
-            查看更早的 {Math.min(PAGE_SIZE, visible.hidden)} 条
-            <small>仍有 {visible.hidden} 条未挂载</small>
-          </button>
+      <div className={`event-workspace${detail ? " has-detail" : ""}`}>
+        <div ref={follow.ref} className="event-stream"
+             onScroll={follow.onScroll}
+             /* aria-live 去掉了:一个每秒刷新的流对读屏软件是灾难,
+                而且"暂停跟随"之后再朗读最新内容,与人的意图正好相反。 */>
+          {visible.hidden > 0 && (
+            <button type="button" className="event-load-earlier"
+              onClick={() => setVisibleLimit((current) => current + PAGE_SIZE)}>
+              查看更早的 {Math.min(PAGE_SIZE, visible.hidden)} 条
+              <small>仍有 {visible.hidden} 条未挂载</small>
+            </button>
+          )}
+          {events.length === 0 && (
+            <div className="event-empty">
+              <span aria-hidden />
+              <strong>正在连接任务现场</strong>
+              <small>新的执行动作会实时出现在这里。</small>
+            </div>
+          )}
+          {events.length > 0 && filtered.length === 0 && (
+            <div className="event-empty filtered">
+              <strong>这个筛选下没有事件</strong>
+              <small>原始事件没有丢失，可以切回“全部”继续查看。</small>
+            </div>
+          )}
+          {visible.items.map((event) => (
+            <EventRecord event={event} key={event.eventId}
+              selectedDetail={detail?.key}
+              onInspect={setDetail} />
+          ))}
+        </div>
+        {detail && (
+          <aside className="event-detail" aria-label="事件完整内容">
+            <header>
+              <div>
+                <span>#{detail.eventId} · {detail.eventLabel}</span>
+                <strong>{detail.fieldLabel}</strong>
+                <time dateTime={detail.timestamp}>
+                  {formatLocalDateTime(detail.timestamp, { seconds: true })}
+                </time>
+              </div>
+              <button type="button" onClick={() => setDetail(undefined)}
+                aria-label="关闭事件详情" title="关闭详情">×</button>
+            </header>
+            <pre className={detail.structured ? "structured" : ""}>
+              {detail.content}
+            </pre>
+          </aside>
         )}
-        {events.length === 0 && (
-          <div className="event-empty">
-            <span aria-hidden />
-            <strong>正在连接任务现场</strong>
-            <small>新的执行动作会实时出现在这里。</small>
-          </div>
-        )}
-        {events.length > 0 && filtered.length === 0 && (
-          <div className="event-empty filtered">
-            <strong>这个筛选下没有事件</strong>
-            <small>原始事件没有丢失，可以切回“全部”继续查看。</small>
-          </div>
-        )}
-        {visible.items.map((event) => (
-          <EventRecord event={event} key={event.eventId} />
-        ))}
       </div>
     </div>
   );
@@ -1273,16 +1305,20 @@ function eventTone(event: SemanticEvent): string {
   return "neutral";
 }
 
-function EventValue({ value }: { value: unknown }) {
+function EventValue({ value, onInspect }: {
+  value: unknown;
+  onInspect: (content: string, structured: boolean) => void;
+}) {
   if (typeof value === "string") {
     if (value.length > 480) {
-      return <details className="event-value-expand">
-        <summary>
+      return <button type="button" className="event-value-preview"
+        onClick={() => onInspect(value, false)}>
+        <span>
           <span>{value.slice(0, 180).trim()}…</span>
-          <small>展开完整内容 · {value.length} 字</small>
-        </summary>
-        <pre>{value}</pre>
-      </details>;
+          <small>{value.length} 字</small>
+        </span>
+        <strong>右侧查看 <i aria-hidden>→</i></strong>
+      </button>;
     }
     return <span className="event-value-text">{value || "（空）"}</span>;
   }
@@ -1293,19 +1329,25 @@ function EventValue({ value }: { value: unknown }) {
     return <code className="event-value-atom">{String(value)}</code>;
   }
   const structured = JSON.stringify(value, null, 2);
-  return <details className="event-value-expand structured">
-    <summary>
+  return <button type="button" className="event-value-preview structured"
+    onClick={() => onInspect(structured, true)}>
+    <span>
       <span>结构化内容</span>
-      <small>展开查看 · {structured.split("\n").length} 行</small>
-    </summary>
-    <pre className="event-value-structured">{structured}</pre>
-  </details>;
+      <small>{structured.split("\n").length} 行</small>
+    </span>
+    <strong>右侧查看 <i aria-hidden>→</i></strong>
+  </button>;
 }
 
-function EventRecord({ event }: { event: SemanticEvent }) {
+function EventRecord({ event, selectedDetail, onInspect }: {
+  event: SemanticEvent;
+  selectedDetail?: string;
+  onInspect: (selection: EventDetailSelection) => void;
+}) {
   const fields = Object.entries(event.payload);
   return (
-    <article className={`event-record ${eventTone(event)}`}>
+    <article className={`event-record ${eventTone(event)}${selectedDetail
+      ?.startsWith(`${event.eventId}:`) ? " selected" : ""}`}>
       <header>
         <span className="event-record-dot" aria-hidden />
         <strong>{EVENT_KIND_LABEL[event.kind] ?? event.kind}</strong>
@@ -1322,12 +1364,24 @@ function EventRecord({ event }: { event: SemanticEvent }) {
         <div className="event-record-empty">本事件没有附加内容</div>
       ) : (
         <dl>
-          {fields.map(([field, value]) => (
-            <div key={field}>
-              <dt>{EVENT_FIELD_LABEL[field] ?? field}</dt>
-              <dd><EventValue value={value} /></dd>
-            </div>
-          ))}
+          {fields.map(([field, value]) => {
+            const key = `${event.eventId}:${field}`;
+            return (
+              <div key={field}>
+                <dt>{EVENT_FIELD_LABEL[field] ?? field}</dt>
+                <dd><EventValue value={value} onInspect={(content, structured) =>
+                  onInspect({
+                    key,
+                    eventId: event.eventId,
+                    eventLabel: EVENT_KIND_LABEL[event.kind] ?? event.kind,
+                    fieldLabel: EVENT_FIELD_LABEL[field] ?? field,
+                    content,
+                    structured,
+                    timestamp: event.ts,
+                  })} /></dd>
+              </div>
+            );
+          })}
         </dl>
       )}
     </article>

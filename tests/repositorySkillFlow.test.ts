@@ -88,8 +88,6 @@ test("目录令牌把服务端发现结果还原为任务 Skill 清单", async (
   assert.equal(catalog.repositories[0].skills.length, 2);
   const chosen = catalog.repositories[0].skills.find(
     (skill) => skill.name === "domain-api")!;
-  const chosenKnowledge = catalog.repositories[0].knowledge.find(
-    (item) => item.relative_path === "docs/domain/api.md")!;
   const task = taskService.create("修改 API", {
     account: "dev",
     repo,
@@ -97,16 +95,12 @@ test("目录令牌把服务端发现结果还原为任务 Skill 清单", async (
     baseline: "master",
     repositorySkillCatalogToken: catalog.catalog_token,
     selectedRepositorySkillIds: [chosen.id],
-    selectedRepositoryKnowledgeIds: [chosenKnowledge.id],
   });
   assert.deepEqual(task.repository_skills?.map((skill) => skill.name),
     ["domain-api"]);
   assert.equal(task.repository_skills?.[0].repository, repo);
   assert.equal(task.repository_skills?.[0].relative_path,
     ".agents/skills/domain-api/SKILL.md");
-  assert.deepEqual(task.repository_knowledge?.map((item) => item.title),
-    ["API 领域知识"]);
-  assert.equal(task.repository_knowledge?.[0].repository, repo);
 });
 
 test("目录令牌绑定用户/仓/基线，伪造 Skill id 不能下单", async () => {

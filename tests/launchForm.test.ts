@@ -187,13 +187,14 @@ test("交付方式:选项与默认值都取自内核 flow.json,自造的当场�
         ({ key: item.key, label: item.answers[0] })),
     workflows.map((item) => ({ key: item.key, label: item.label })),
     "表单选项必须与内核目录(新单可选集)逐字一致");
-  // 步数/拍板数给人掂量快慢(完整开发=慢道,局部修改=快道),
-  // 数字按内核 flow 现算:完整开发必然比局部修改步数多。
+  // 下单页只讲适用场景，不再拿步数/拍板数让人猜该选哪个。
   const byKey = Object.fromEntries(
     workflows.map((item) => [item.key, item]));
-  assert.ok(byKey.full.steps! > byKey.tweak.steps!,
-    "完整开发的链应长于局部修改——快慢从数字上可见");
-  assert.ok(byKey.full.acks! >= 1);
+  assert.match(byKey.full.description ?? "", /新功能|较大改动/);
+  assert.match(byKey.hotfix.description ?? "", /问题原因.*明确/);
+  assert.match(byKey.tweak.description ?? "", /只改一小块/);
+  assert.equal(workflows.some((item) =>
+    /\d+\s*步|拍板/.test(item.description ?? "")), false);
 });
 
 test("单号/基线分支:下单收齐,基线默认 master,纯会话形态不摆这些框", () => {

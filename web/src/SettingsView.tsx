@@ -15,8 +15,11 @@ import {
   postModelsCheck,
   putModelsSettings,
   putRuntimeSettings,
+  putVisionSettings,
+  testVisionCapability,
   type SettingsView as Settings,
   type SystemCheckResult,
+  type VisionProbeResult,
 } from "./api";
 
 type Message = { kind: "success" | "error"; text: string } | null;
@@ -278,6 +281,124 @@ function ModelsCard({ view, onSaved }: {
   </div>;
 }
 
+function VisionModelsCard({ view, onSaved }: {
+  view: Settings; onSaved: (next: Settings) => void;
+}) {
+  const vision = view.models.vision;
+  const defaults = view.defaults.models.vision;
+  const savedUrl = vision.url ?? defaults.url ?? "";
+  const savedModel = vision.model ?? defaults.model ?? "";
+  const savedApi = vision.api ?? defaults.api ?? "openai-completions";
+  const [url, setUrl] = useState(savedUrl);
+  const [apiKey, setApiKey] = useState("");
+  const [model, setModel] = useState(savedModel);
+  const [api, setApi] = useState(savedApi);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [message, setMessage] = useMessage();
+  const [probe, setProbe] = useState<VisionProbeResult>();
+  const configured = vision.configured || defaults.configured;
+  const dirty = url.trim() !== savedUrl || model.trim() !== savedModel
+    || api !== savedApi || !!apiKey.trim();
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setSaving(true); setMessage(null); setProbe(undefined);
+    try {
+      onSaved(await putVisionSettings({
+        url: url.trim(),
+        api_key: apiKey.trim(),
+        model: model.trim(),
+        api,
+      }));
+      setApiKey("");
+      setMessage({ kind: "success",
+        text: "图片识别配置已保存。请点击“测试识图能力”验证真实调用。" });
+    } catch (error) {
+      setMessage({ kind: "error", text: String((error as Error).message ?? error) });
+    } finally { setSaving(false); }
+  }
+
+  async function test() {
+    setTesting(true); setMessage(null); setProbe(undefined);
+    try { setProbe(await testVisionCapability()); }
+    catch (error) {
+      setProbe({ status: "failed", provider: "", model: "", latency_ms: 0,
+        error: String((error as Error).message ?? error) });
+    } finally { setTesting(false); }
+  }
+
+  return <div className="user-create-card settings-card vision-settings-card">
+    <div className="user-create-copy">
+      <span className="section-kicker">IMAGE UNDERSTANDING</span>
+      <h2>图片识别</h2>
+      <p>主 Agent 需要看截图、图表或照片时，才会调用独立的 InspectImage
+        工具。主会话模型不会被替换，图片原文也不会写入任务记录。</p>
+      <span className={`settings-state ${configured ? "ok" : "missing"}`}>
+        <i aria-hidden />{vision.configured
+          ? `已配置${vision.key_hint ? ` · Key ${vision.key_hint}` : ""}`
+          : defaults.configured
+            ? `使用服务默认配置${defaults.model ? ` · ${defaults.model}` : ""}`
+            : "尚未配置"}
+      </span>
+    </div>
+    <form className="user-create-form settings-form" onSubmit={submit}>
+      <label className="span-2">
+        <span>图片识别网关地址</span>
+        <input value={url} type="url" required spellCheck={false}
+          placeholder="例如：https://qwen-vl.internal/v1"
+          onChange={(event) => setUrl(event.target.value)} />
+      </label>
+      <label>
+        <span>接口协议</span>
+        <select value={api} onChange={(event) => setApi(event.target.value)}>
+          <option value="openai-completions">OpenAI Chat Completions</option>
+          <option value="openai-responses">OpenAI Responses</option>
+          <option value="anthropic-messages">Anthropic Messages</option>
+        </select>
+      </label>
+      <label>
+        <span>模型名称</span>
+        <input value={model} required spellCheck={false}
+          placeholder="例如：qwen2.5-vl-72b-instruct"
+          onChange={(event) => setModel(event.target.value)} />
+      </label>
+      <label className="span-2">
+        <span>API Key</span>
+        <input value={apiKey} type="password" autoComplete="new-password"
+          required={!configured}
+          placeholder={vision.configured
+            ? `已保存 ${vision.key_hint ?? "密钥"}，留空保持不变`
+            : defaults.configured
+              ? "覆盖服务默认配置时请输入新的 API Key"
+              : "请输入图片识别网关 API Key"}
+          onChange={(event) => setApiKey(event.target.value)} />
+      </label>
+      <div className="vision-settings-actions span-2">
+        <button type="submit" disabled={saving || testing}>
+          {saving ? "正在保存…" : "保存图片识别配置"}</button>
+        <button type="button" className="secondary"
+          disabled={!configured || dirty || saving || testing}
+          onClick={() => void test()}>
+          {testing ? "正在识别测试图…" : dirty ? "请先保存再测试" : "测试识图能力"}</button>
+      </div>
+      {!configured && <small className="vision-test-note span-2">
+        保存配置后即可进行真实测试。</small>}
+      <Feedback message={message} />
+      {probe && <div className={`vision-probe-result ${probe.status}`} role="status">
+        <strong>{probe.status === "ready" ? "识图能力已就绪" : "识图测试未通过"}</strong>
+        <span>{probe.status === "ready"
+          ? `${probe.provider}/${probe.model} · ${probe.latency_ms} ms`
+          : probe.error ?? "未知错误"}</span>
+        {probe.response && <details>
+          <summary>查看模型观察</summary>
+          <small>{probe.response}</small>
+        </details>}
+      </div>}
+    </form>
+  </div>;
+}
+
 export function SettingsBoard() {
   const [view, setView] = useState<Settings | null>(null);
   const [error, setError] = useState("");
@@ -297,6 +418,9 @@ export function SettingsBoard() {
   return <section className="user-admin settings-board">
     <SystemCheckCard />
     <ModelsCard key={`m${view.models.url}:${view.models.model}:${view.models.key_hint}`}
+      view={view} onSaved={setView} />
+    <VisionModelsCard
+      key={`v${view.models.vision.url}:${view.models.vision.model}:${view.models.vision.key_hint}`}
       view={view} onSaved={setView} />
     <RuntimeCard key={`r${JSON.stringify(view.runtime)}:${JSON.stringify(view.defaults.runtime)}`}
       view={view} onSaved={setView} />

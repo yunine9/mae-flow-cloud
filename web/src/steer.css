@@ -57,6 +57,17 @@
   border-color: color-mix(in srgb, var(--active) 22%, transparent);
 }
 
+.steer-head > em.available {
+  color: var(--success);
+  background: var(--success-soft);
+  border-color: color-mix(in srgb, var(--success) 28%, var(--line));
+}
+
+.steer-head > em.unavailable {
+  color: var(--muted);
+  background: var(--surface-muted);
+}
+
 .collaboration-tabs {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -79,6 +90,10 @@
 }
 
 .collaboration-tabs button:hover { color: var(--text); }
+.collaboration-tabs button:disabled {
+  cursor: not-allowed;
+  opacity: .52;
+}
 
 .collaboration-tabs button.active {
   color: var(--text-strong);
@@ -287,22 +302,80 @@
   background: var(--muted);
 }
 
-.assistant-state strong { font-size: 13.5px; }
+.assistant-state strong {
+  color: var(--text-strong);
+  font-size: 14px;
+  font-weight: 750;
+  letter-spacing: .01em;
+}
 .assistant-state > span {
   flex: 1;
   max-width: 72%;
-  color: var(--muted);
-  font-size: 12px;
+  color: var(--text);
+  font-size: 12.5px;
   line-height: 1.45;
   text-align: right;
   overflow-wrap: anywhere;
 }
 
-.assistant-state.running i { background: var(--active); box-shadow: 0 0 0 4px var(--active-soft); }
-.assistant-state.completed i { background: var(--success); }
+.assistant-state.available.idle,
+.assistant-state.ready,
+.assistant-state.completed {
+  border-color: color-mix(in srgb, var(--success) 28%, var(--line));
+  background: color-mix(in srgb, var(--success-soft) 64%, var(--surface));
+}
+.assistant-state.available.idle strong,
+.assistant-state.ready strong,
+.assistant-state.completed strong { color: var(--success); }
+
+.assistant-state.acquiring,
+.assistant-state.returning {
+  border-color: color-mix(in srgb, var(--attention) 28%, var(--line));
+  background: color-mix(in srgb, var(--attention-soft) 64%, var(--surface));
+}
+.assistant-state.acquiring strong,
+.assistant-state.returning strong { color: var(--attention); }
+
+.assistant-state.working,
+.assistant-state.running {
+  border-color: color-mix(in srgb, var(--active) 28%, var(--line));
+  background: color-mix(in srgb, var(--active-soft) 66%, var(--surface));
+}
+.assistant-state.working strong,
+.assistant-state.running strong { color: var(--active); }
+
+.assistant-state.unavailable > span { color: var(--muted); }
+
+.assistant-state.available.idle i,
+.assistant-state.ready i,
+.assistant-state.completed i {
+  background: var(--success);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--success) 13%, transparent);
+}
+.assistant-state.acquiring i,
+.assistant-state.returning i {
+  background: var(--attention);
+  box-shadow: 0 0 0 4px var(--attention-soft);
+}
+.assistant-state.working i,
+.assistant-state.running i {
+  background: var(--active);
+  box-shadow: 0 0 0 4px var(--active-soft);
+  animation: assistantPulse 1.35s ease-in-out infinite;
+}
+.assistant-state.unavailable i { background: var(--muted); box-shadow: none; }
 .assistant-state.failed i { background: var(--danger); }
 .assistant-state.interrupted i { background: var(--attention); }
-.assistant-copy { margin-bottom: 0; }
+.assistant-copy {
+  margin-bottom: 0;
+  color: var(--text);
+  line-height: 1.62;
+}
+
+@keyframes assistantPulse {
+  0%, 100% { opacity: .55; }
+  50% { opacity: 1; }
+}
 
 .assistant-handoff {
   padding: 9px 10px;
@@ -363,6 +436,7 @@
   display: grid;
   gap: 7px;
   scrollbar-gutter: stable;
+  border-left: 2px solid color-mix(in srgb, var(--active) 22%, var(--line));
 }
 
 .assistant-conversation article {
@@ -379,6 +453,20 @@
   border-color: color-mix(in srgb, var(--accent) 20%, var(--line));
 }
 
+.assistant-conversation article.assistant {
+  border-left: 3px solid color-mix(in srgb, var(--active) 72%, var(--line));
+  background: color-mix(in srgb, var(--active-soft) 26%, var(--surface));
+}
+
+.assistant-conversation article.user::before {
+  content: ">";
+  float: left;
+  margin-right: 7px;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-weight: 800;
+}
+
 .assistant-conversation article header {
   display: flex;
   align-items: baseline;
@@ -387,12 +475,14 @@
   margin-bottom: 4px;
 }
 
-.assistant-conversation article strong { font-size: 12px; }
+.assistant-conversation article strong { font-size: 12.5px; }
+.assistant-conversation article.assistant strong { color: var(--active); }
+.assistant-conversation article.user strong { color: var(--accent); }
 .assistant-conversation article time { color: var(--muted); font-size: 11px; }
 .assistant-conversation article p {
   margin: 0;
   color: var(--text);
-  font-size: 13px;
+  font-size: 13.5px;
   line-height: 1.65;
   white-space: pre-wrap;
   overflow-wrap: anywhere;

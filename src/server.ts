@@ -611,6 +611,9 @@ export function createTaskServer(
           const modelSpec = providers[provider] ?? {};
           const model = service.options.model
             || String(modelSpec.models?.[0]?.id ?? "");
+          const visionChoice = service.options.vision;
+          const visionSpec = visionChoice
+            ? providers[visionChoice.provider] ?? {} : {};
           return ({
             ...settings.view(),
             defaults: {
@@ -629,6 +632,15 @@ export function createTaskServer(
                 configured: !!modelSpec.baseUrl && !!modelSpec.apiKey && !!model,
                 url: modelSpec.baseUrl ? String(modelSpec.baseUrl) : undefined,
                 model: model || undefined,
+                vision: {
+                  configured: !!visionChoice?.model && !!visionSpec.baseUrl
+                    && !!visionSpec.apiKey,
+                  provider: visionChoice?.provider,
+                  model: visionChoice?.model,
+                  url: visionSpec.baseUrl
+                    ? String(visionSpec.baseUrl) : undefined,
+                  api: visionSpec.api ? String(visionSpec.api) : undefined,
+                },
               },
             },
           });
@@ -654,6 +666,19 @@ export function createTaskServer(
             const target = resolveGatewayTarget(body, settings.models(),
               service.options.modelsJson as Record<string, unknown> | undefined);
             return json(response, 200, await checkModelGateway(target));
+          }
+          if (request.method === "PUT" && parts[1] === "vision") {
+            const body = await readBody(request);
+            settings.updateVision({
+              ...(body as Record<string, unknown>),
+              base_json: service.options.modelsJson,
+              base_vision: service.options.vision,
+            });
+            return json(response, 200, settingsView());
+          }
+          if (request.method === "POST" && parts[1] === "vision"
+              && parts[2] === "test") {
+            return json(response, 200, await service.testVisionCapability());
           }
         } catch (error) {
           if (error instanceof SettingsError
@@ -1373,9 +1398,6 @@ export function createTaskServer(
         const selectedRepositorySkillIds =
           Array.isArray(body.selected_repository_skill_ids)
             ? body.selected_repository_skill_ids.map(String) : undefined;
-        const selectedRepositoryKnowledgeIds =
-          Array.isArray(body.selected_repository_knowledge_ids)
-            ? body.selected_repository_knowledge_ids.map(String) : undefined;
         const selectedBusinessModuleIds =
           Array.isArray(body.selected_business_module_ids)
             ? body.selected_business_module_ids.map(String) : undefined;
@@ -1419,7 +1441,7 @@ export function createTaskServer(
               requirementDocumentName,
               lane, ticket, baseline, model,
               repairRounds, repositorySkillCatalogToken,
-              selectedRepositorySkillIds, selectedRepositoryKnowledgeIds,
+              selectedRepositorySkillIds,
               selectedBusinessModuleIds, selectedEngineeringKnowledgeIds,
               repositoryProfiles,
             }));
@@ -1525,9 +1547,6 @@ export function createTaskServer(
             selected_repository_skill_ids:
               Array.isArray(body.selected_repository_skill_ids)
                 ? body.selected_repository_skill_ids.map(String) : undefined,
-            selected_repository_knowledge_ids:
-              Array.isArray(body.selected_repository_knowledge_ids)
-                ? body.selected_repository_knowledge_ids.map(String) : undefined,
             delivery_paths: Array.isArray(body.delivery_paths)
               ? body.delivery_paths.map(String) : undefined,
           });
@@ -1585,9 +1604,6 @@ export function createTaskServer(
               ? undefined : String(body.repository_skill_catalog_token),
             selected_ids: Array.isArray(body.selected_repository_skill_ids)
               ? body.selected_repository_skill_ids.map(String) : undefined,
-            selected_knowledge_ids:
-              Array.isArray(body.selected_repository_knowledge_ids)
-                ? body.selected_repository_knowledge_ids.map(String) : undefined,
           }));
         }
         // Committer 检视必须由该单责任人主动发起。管理员只维护名单，
@@ -1640,6 +1656,14 @@ export function createTaskServer(
             if (!canOperate(viewer, target.luban_account, !!options.auth)) {
               return json(response, 403,
                 { error: "只能为分配给自己的任务使用开发助手" });
+            }
+            if (parts[3] === "interrupt") {
+              return json(response, 200, await service.stopDeveloperAssistant(
+                id, viewer?.username ?? "本地用户"));
+            }
+            if (parts[3] === "return") {
+              return json(response, 200, await service.returnDeveloperAssistant(
+                id, viewer?.username ?? "本地用户"));
             }
             const body = await readBody(request);
             return json(response, 202, service.startDeveloperAssistant(

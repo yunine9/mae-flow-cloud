@@ -72,7 +72,6 @@ export interface KnowledgeInsightTask {
   id: string;
   status: string;
   repository_skills?: unknown[];
-  repository_knowledge?: unknown[];
   business_modules?: unknown[];
   knowledge_usage?: TaskKnowledgeUsage;
   focus?: { needs_attention?: boolean };
@@ -240,7 +239,6 @@ function needsAttention(task: KnowledgeInsightTask): boolean {
 
 function tracked(task: KnowledgeInsightTask): boolean {
   return !!task.knowledge_usage
-    || task.repository_knowledge !== undefined
     || task.repository_skills !== undefined
     || task.business_modules !== undefined;
 }

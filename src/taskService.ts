@@ -52,7 +52,6 @@ import {
   workflowChoices,
   workflowLabel,
 } from "./kernelChoices.ts";
-import { collectKnowledge } from "./knowledgeBlocks.ts";
 import {
   AGENT_REQUIREMENT_DOCUMENT,
   MAX_REQUIREMENT_DOCUMENT_BYTES,
@@ -82,6 +81,11 @@ import {
   type WaitingRecord,
 } from "./humanGate.ts";
 import { CloudSession, type Outcome } from "./sessionDriver.ts";
+import {
+  probeVisionCapability,
+  type VisionModelChoice,
+  type VisionProbeResult,
+} from "./visionCapability.ts";
 import {
   TaskContainer,
   TaskContainerExecTimeoutError,
@@ -114,12 +118,6 @@ import {
   type SelectedRepositorySkill,
   validRepositorySkillPath,
 } from "./repositorySkillRuntime.ts";
-import {
-  materializeRepositoryKnowledge,
-  type MaterializedKnowledgeEntry,
-  type SelectedRepositoryKnowledge,
-  validRepositoryKnowledgePath,
-} from "./repositoryKnowledgeRuntime.ts";
 import { listBusinessModules } from "./businessModuleLibrary.ts";
 import {
   materializeBusinessModuleKnowledge,
@@ -244,6 +242,7 @@ import { createMergeRequest } from "./mrClient.ts";
 import {
   DEVELOPER_ASSISTANT_SESSION,
   appendDeveloperAssistantMessage,
+  developerAssistantConversation,
   developerAssistantGateContract,
   developerAssistantHandoffPrompt,
   developerAssistantMission,
@@ -506,9 +505,6 @@ export interface TaskSummary {
    * 新任务明确不加载仓内 Skill；字段缺席仅用于兼容旧任务此前的全量
    * 自动加载。Skill 是建议上下文，不是流程步骤或完成证据。 */
   repository_skills?: SelectedRepositorySkill[];
-  /** 用户在下单时明确选择为“本单参考资料”的 docs 文档。正文会在
-   * 会话开局进入上下文；它和 Skill 一样是辅助材料，不是内核证据。 */
-  repository_knowledge?: SelectedRepositoryKnowledge[];
   /** 用户下单时明确选择的业务模块及不可变知识快照。只把标题、摘要、
    * 适用场景和任务内路径目录交给 Agent，正文必须按需读取；模块后来
    * 更新不会改写运行中或历史任务。 */
@@ -654,6 +650,9 @@ export interface TaskServiceOptions {
    * 平台/prepush 不加载,create() 直接拒绝,launchOptions 摆出明面
    * 的 blocker。历史任务台账仍可读(管理/兜底不受影响)。 */
   requirementDisabled?: boolean;
+  /** 可选的专用视觉模型角色。模型定义位于同一份 models.json，主 Agent
+   * 仅通过 InspectImage Tool 调用它，不切换主会话模型。 */
+  vision?: VisionModelChoice;
   maxConcurrent?: number;
   /** 现场保留期(天)。终态任务过期后回收克隆等重货,台账原样留下;
    * 0 = 永不回收。部署值,可被管理页运行时设置压过。默认见 serve.ts。 */
@@ -1064,8 +1063,13 @@ interface TaskState {
   /** running 的暂停不截断当前工具，等 settle 的安全边界收口。 */
   pauseRequested?: boolean;
   /** 用户主动召唤的旁路开发助手。它只在主任务 paused 时运行，不参与
-   * 内核状态迁移；Promise 用于防重、恢复/关闭时确认资源收口。 */
+   * 内核状态迁移；Promise 只代表当前一轮，ready 时会话和容器继续保留。 */
   assistantActive?: Promise<void>;
+  /** 开发助手回合换代号。停止当前动作只终止旁路回合，不改主任务 epoch。 */
+  assistantEpoch?: number;
+  /** 暂停边界从 Pi 内存队列取回的主任务补充。恢复主会话前一直保留，
+   * listInterrupts 也据此如实维持“待读取”。 */
+  pendingMainSteers?: string[];
   /** 开发助手交还给重建主会话的一次性现场摘要。它不是内核证据；
    * 必须持久化，避免服务死在 resume→launch 之间把用户改动上下文丢掉。 */
   pendingAssistantHandoff?: string;
@@ -1127,7 +1131,6 @@ export interface DecisionSubmission {
   annotation_ids?: string[];
   repository_skill_catalog_token?: string;
   selected_repository_skill_ids?: string[];
-  selected_repository_knowledge_ids?: string[];
   /** 代码检视时用户勾选的最终交付文件。字段缺席表示该入口没有修改
    * 清单；空数组有业务含义，不能折叠成 undefined。 */
   delivery_paths?: string[];
@@ -1590,6 +1593,7 @@ export class TaskService {
       for (const task of this.tasks.values()) {
         // 旧回调即使稍后返回，也不能在关机窗口改写业务状态。
         task.controlEpoch += 1;
+        task.assistantEpoch = (task.assistantEpoch ?? 0) + 1;
         task.pauseRequested = false;
         task.prepushAbort?.abort();
         task.prepushAbort = undefined;
@@ -2200,6 +2204,15 @@ export class TaskService {
           detail: "没有可用模型",
           suggestion: "管理页 → 模型网关：填写网关地址、API Key 和模型名称" });
 
+    const vision = this.activeVisionChoice();
+    items.push(vision
+      ? { key: "vision", label: "图片识别", status: "ok",
+          detail: `${vision.provider}/${vision.model} 已配置（未做实时调用）`,
+          suggestion: "可在管理页点击“测试识图能力”做真实端到端验证" }
+      : { key: "vision", label: "图片识别", status: "warning",
+          detail: "尚未配置专用图片识别模型",
+          suggestion: "管理页 → 图片识别：配置内部多模态模型网关；不影响纯文本任务" });
+
     const notify = this.options.notifier?.health();
     items.push(!notify?.configured
       ? { key: "notify", label: "消息通知", status: "warning",
@@ -2339,7 +2352,6 @@ export class TaskService {
       knowledge_usage: includeKnowledgeUsage
         ? knowledgeUsageSnapshot({
             workspace: task.summary.workspace,
-            selectedKnowledge: summary.repository_knowledge,
             selectedSkills: summary.repository_skills,
             businessModules: summary.business_modules,
             engineeringKnowledge: summary.engineering_knowledge,
@@ -2649,7 +2661,6 @@ export class TaskService {
       },
       repositorySkillPaths: [],
       repositorySkillResources: [],
-      repositoryKnowledge: [],
       knowledgeTrace: this.knowledgeTrace(task, task.cwd),
       provider: task.summary.model_choice?.provider
         ?? modelOverride.provider ?? this.options.provider,
@@ -2890,7 +2901,10 @@ export class TaskService {
   }> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
-    const pending = new Set(task.driver?.pendingSteers() ?? []);
+    const pending = new Set([
+      ...(task.driver?.pendingSteers() ?? []),
+      ...(task.pendingMainSteers ?? []),
+    ]);
     try {
       const rows: Array<{
         text: string; at: string; delivered: boolean;
@@ -3059,6 +3073,52 @@ export class TaskService {
       ?? {}) as Record<string, unknown>;
   }
 
+  /** 当前生效的视觉角色。角色必须指向 models.json 中明确声明支持图片
+   * 的模型；配置漂移时宁可不暴露 Tool，也不把图片误发给文本模型。 */
+  private activeVisionChoice(): VisionModelChoice | undefined {
+    const choice = this.options.settings?.models().vision ?? this.options.vision;
+    if (!choice?.provider || !choice?.model) return undefined;
+    const spec = (this.activeModelsJson() as {
+      providers?: Record<string, { models?: Array<{
+        id?: string; input?: string[];
+      }> }>;
+    }).providers?.[choice.provider]?.models?.find((item) =>
+      String(item?.id ?? "") === choice.model);
+    return Array.isArray(spec?.input) && spec.input.includes("image")
+      ? choice : undefined;
+  }
+
+  private taskVision(task: TaskState) {
+    const choice = this.activeVisionChoice();
+    return choice ? {
+      choice,
+      cacheDir: join(task.summary.workspace, "vision-cache"),
+      timeoutMs: 45_000,
+    } : undefined;
+  }
+
+  /** 管理页的一键实测：系统色块图 → 当前视觉模型角色 → 语义校验。
+   * 不创建任务、不读取业务图片、不修改配置。 */
+  async testVisionCapability(): Promise<VisionProbeResult> {
+    const choice = this.activeVisionChoice();
+    if (!choice) {
+      return {
+        status: "failed",
+        provider: this.options.settings?.models().vision?.provider
+          ?? this.options.vision?.provider ?? "",
+        model: this.options.settings?.models().vision?.model
+          ?? this.options.vision?.model ?? "",
+        latency_ms: 0,
+        error: "图片识别模型未完整配置，或模型未声明支持 image 输入",
+      };
+    }
+    return probeVisionCapability({
+      modelsJson: this.activeModelsJson(),
+      choice,
+      timeoutMs: 45_000,
+    });
+  }
+
   /** 下单表单的数据源。
    *
    * 口径(用户 2026-08-18 拍板,按内网实战定的):
@@ -3085,7 +3145,8 @@ export class TaskService {
      * 空数组=读不到内核定义,表单就别摆出选择(下单不预选,卡到时
      * 老老实实问人)。 */
     workflows: Array<
-      { key: string; label: string; steps?: number; acks?: number }>;
+      { key: string; label: string; description?: string;
+        steps?: number; acks?: number }>;
     /** 显式发布的业务模块目录。这里只给下单所需摘要，不含知识正文。 */
     business_modules: Array<{
       id: string;
@@ -3308,7 +3369,6 @@ export class TaskService {
   private selectedResourcesFromCatalog(options: {
     catalogToken?: string;
     selectedSkillIds?: string[];
-    selectedKnowledgeIds?: string[];
     repositories: string[];
     baseline?: string;
     account?: string;
@@ -3316,17 +3376,12 @@ export class TaskService {
      * 就把父任务上已经确认的 Skill 清掉。仅该场景传入旧值；
      * 新下单仍不会从扫描失败的仓带入任何选择。 */
     preserveSkillsForErroredRepositories?: SelectedRepositorySkill[];
-    preserveKnowledgeForErroredRepositories?: SelectedRepositoryKnowledge[];
   }): {
     skills: SelectedRepositorySkill[];
-    knowledge: SelectedRepositoryKnowledge[];
   } {
     const skillIds = [...new Set((options.selectedSkillIds ?? []).map(String))];
-    const knowledgeIds = [
-      ...new Set((options.selectedKnowledgeIds ?? []).map(String)),
-    ];
-    if (!skillIds.length && !knowledgeIds.length && !options.catalogToken) {
-      return { skills: [], knowledge: [] };
+    if (!skillIds.length && !options.catalogToken) {
+      return { skills: [] };
     }
     if (!options.catalogToken) throw new Error("选择仓内能力前请重新读取 Skill 目录");
     const ticket = this.repositorySkillCatalogs.get(options.catalogToken);
@@ -3342,14 +3397,9 @@ export class TaskService {
       throw new Error("代码仓或基线已变化，请重新读取仓内能力");
     }
     if (skillIds.length > 20) throw new Error("每个任务最多选择 20 个仓内 Skill");
-    if (knowledgeIds.length > 12) throw new Error("每个任务最多选择 12 篇重点知识");
     const skillsById = new Map<string, {
       catalog: RepositorySkillCatalog;
       skill: RepositorySkillDescriptor;
-    }>();
-    const knowledgeById = new Map<string, {
-      catalog: RepositorySkillCatalog;
-      knowledge: RepositorySkillCatalog["knowledge"][number];
     }>();
     const successfulRepositories = new Set(
       ticket.catalogs.filter((catalog) => !catalog.error)
@@ -3360,9 +3410,6 @@ export class TaskService {
       if (catalog.error) continue;
       for (const skill of catalog.skills) {
         skillsById.set(skill.id, { catalog, skill });
-      }
-      for (const knowledge of catalog.knowledge) {
-        knowledgeById.set(knowledge.id, { catalog, knowledge });
       }
     }
     const selectedSkills = skillIds.map((id): SelectedRepositorySkill => {
@@ -3384,31 +3431,6 @@ export class TaskService {
         digest: found.skill.digest,
       };
     });
-    const selectedKnowledge = knowledgeIds.map((id): SelectedRepositoryKnowledge => {
-      const found = knowledgeById.get(id);
-      if (!found || !found.knowledge.selectable
-          || found.knowledge.kind !== "document") {
-        throw new Error("所选业务知识不存在或不能手动加载，请重新读取");
-      }
-      if (!validRepositoryKnowledgePath(found.knowledge.relative_path)) {
-        throw new Error("业务知识路径不合法");
-      }
-      return {
-        id: found.knowledge.id,
-        repository: found.catalog.repository,
-        revision: found.catalog.revision,
-        title: found.knowledge.title,
-        description: found.knowledge.description,
-        relative_path: found.knowledge.relative_path,
-        kind: "document",
-        digest: found.knowledge.digest,
-        bytes: found.knowledge.bytes,
-      };
-    });
-    if (selectedKnowledge.reduce((sum, item) => sum + item.bytes, 0)
-        > 256 * 1024) {
-      throw new Error("本单重点知识正文合计不能超过 256 KiB");
-    }
     const mergedSkills = options.preserveSkillsForErroredRepositories === undefined
       ? selectedSkills
       : ticket.repositories.flatMap((repository) => {
@@ -3422,28 +3444,11 @@ export class TaskService {
             .filter((skill) => skill.repository === repository)
             .map((skill) => ({ ...skill }));
         });
-    const mergedKnowledge =
-      options.preserveKnowledgeForErroredRepositories === undefined
-        ? selectedKnowledge
-        : ticket.repositories.flatMap((repository) => {
-            if (successfulRepositories.has(repository)) {
-              return selectedKnowledge.filter(
-                (item) => item.repository === repository);
-            }
-            return options.preserveKnowledgeForErroredRepositories!
-              .filter((item) => item.repository === repository)
-              .map((item) => ({ ...item }));
-          });
     if (mergedSkills.length > 20) {
       throw new Error("每个任务最多选择 20 个仓内 Skill");
     }
-    if (mergedKnowledge.length > 12
-        || mergedKnowledge.reduce((sum, item) => sum + item.bytes, 0)
-          > 256 * 1024) {
-      throw new Error("每个任务最多选择 12 篇且合计不超过 256 KiB 的重点知识");
-    }
     this.repositorySkillCatalogs.delete(options.catalogToken);
-    return { skills: mergedSkills, knowledge: mergedKnowledge };
+    return { skills: mergedSkills };
   }
 
   create(
@@ -3477,9 +3482,7 @@ export class TaskService {
        * 已验证清单。repositorySkills 只供 Chain 拆单内部透传。 */
       repositorySkillCatalogToken?: string;
       selectedRepositorySkillIds?: string[];
-      selectedRepositoryKnowledgeIds?: string[];
       repositorySkills?: SelectedRepositorySkill[];
-      repositoryKnowledge?: SelectedRepositoryKnowledge[];
       /** 普通下单只提交正式模块 ID；服务端在创建现场时固定当时的已发布
        * 资产版本与正文快照，浏览器不能自报内容。 */
       selectedBusinessModuleIds?: string[];
@@ -3584,14 +3587,12 @@ export class TaskService {
             || options.repairRounds < 0)) {
       throw new Error("修复轮预算必须是 ≥0 的数字");
     }
-    const directResources = options.repositorySkills !== undefined
-      || options.repositoryKnowledge !== undefined;
+    const directResources = options.repositorySkills !== undefined;
     const selectedResources = !options.preserveUndefinedRepositorySkills
         && !directResources
       ? this.selectedResourcesFromCatalog({
           catalogToken: options.repositorySkillCatalogToken,
           selectedSkillIds: options.selectedRepositorySkillIds,
-          selectedKnowledgeIds: options.selectedRepositoryKnowledgeIds,
           repositories,
           baseline,
           account: options.account,
@@ -3608,22 +3609,8 @@ export class TaskService {
             return { ...skill };
           })
         : selectedResources!.skills;
-    const repositoryKnowledge = directResources
-      ? (options.repositoryKnowledge ?? []).map((item) => {
-          if (!repositories.includes(item.repository)
-              || !validRepositoryKnowledgePath(item.relative_path)) {
-            throw new Error(`业务知识 ${item.title} 不属于本任务代码仓`);
-          }
-          return { ...item };
-        })
-      : selectedResources?.knowledge ?? [];
     if ((repositorySkills?.length ?? 0) > 20) {
       throw new Error("每个任务最多选择 20 个仓内 Skill");
-    }
-    if (repositoryKnowledge.length > 12
-        || repositoryKnowledge.reduce((sum, item) => sum + item.bytes, 0)
-          > 256 * 1024) {
-      throw new Error("每个任务最多选择 12 篇且合计不超过 256 KiB 的重点知识");
     }
     const id = options.reuseTaskId ?? this.allocateTaskId();
     if (options.reuseTaskId && (!/^task-\d+$/.test(id)
@@ -3721,7 +3708,6 @@ export class TaskService {
             === profile.repository.replace(/\/+$/, "").replace(/\.git$/i, "").toLowerCase()))
         : undefined,
       repository_skills: repositorySkills,
-      repository_knowledge: repositoryKnowledge,
       business_modules: businessModules.length ? businessModules : undefined,
       engineering_knowledge: engineeringKnowledge.length
         ? engineeringKnowledge : undefined,
@@ -3806,6 +3792,7 @@ export class TaskService {
         cwd: task.cwd,
         mission: task.mission,
         assistant_handoff: task.pendingAssistantHandoff,
+        pending_main_steers: task.pendingMainSteers,
         applied_developer_intervention_id:
           task.appliedDeveloperInterventionId,
         obsolete_developer_waiting: task.obsoleteDeveloperWaiting,
@@ -3895,6 +3882,9 @@ export class TaskService {
           pendingAssistantHandoff:
             typeof saved.assistant_handoff === "string"
               ? saved.assistant_handoff : undefined,
+          pendingMainSteers: Array.isArray(saved.pending_main_steers)
+            ? saved.pending_main_steers.map(String).filter(Boolean) : undefined,
+          assistantEpoch: 0,
           appliedDeveloperInterventionId:
             typeof saved.applied_developer_intervention_id === "string"
               ? saved.applied_developer_intervention_id : undefined,
@@ -3976,6 +3966,10 @@ export class TaskService {
             paused_from: summary.control?.paused_from ?? "running",
           };
           this.persist(task);
+        }
+        if (summary.status === "paused"
+            && readDeveloperAssistant(workspace).state === "acquiring") {
+          this.activatePendingDeveloperAssistant(task);
         }
         // 进程可死,轮询不死:重启前在等流水线的任务续轮
         // (锚是 delivery.sha,结果仍只认绑定版本)。
@@ -4396,8 +4390,6 @@ export class TaskService {
       repositorySkills: preserveUndefinedRepositorySkills
         ? undefined
         : source.repository_skills!.map((item) => ({ ...item })),
-      repositoryKnowledge: (source.repository_knowledge ?? [])
-        .map((item) => ({ ...item })),
       selectedBusinessModuleIds: (source.business_modules ?? [])
         .map((module) => module.id),
       repositoryProfiles: source.repository_profiles?.map((item) => ({ ...item })),
@@ -4676,8 +4668,6 @@ export class TaskService {
           ? undefined
           : task.summary.repository_skills!.filter(
               (skill) => skill.repository === repository.url),
-        repositoryKnowledge: (task.summary.repository_knowledge ?? [])
-          .filter((item) => item.repository === repository.url),
         businessModules: (task.summary.business_modules ?? [])
           .map((module) => ({
             ...module,
@@ -4721,7 +4711,6 @@ export class TaskService {
     skillSelection?: {
       catalog_token?: string;
       selected_ids?: string[];
-      selected_knowledge_ids?: string[];
     },
   ): Promise<TaskSummary> {
     const task = this.tasks.get(id);
@@ -4749,8 +4738,6 @@ export class TaskService {
         decision: "确认并生成任务",
         repository_skill_catalog_token: skillSelection?.catalog_token,
         selected_repository_skill_ids: skillSelection?.selected_ids,
-        selected_repository_knowledge_ids:
-          skillSelection?.selected_knowledge_ids,
         // 收尾令随决定送达:确认后父会话再举卡会被系统代答赶下台
         // (autoAnswerFor 的分析单兜底),但第一选择是它自己别举。
         notes: "各仓交付任务由平台自动生成与调度,不归本会话跟进;"
@@ -5122,8 +5109,7 @@ export class TaskService {
     if (confirmingGraph) this.requirementGraphPlan(task);
     const updatesRepositorySkills =
       input.repository_skill_catalog_token !== undefined
-      || input.selected_repository_skill_ids !== undefined
-      || input.selected_repository_knowledge_ids !== undefined;
+      || input.selected_repository_skill_ids !== undefined;
     if (updatesRepositorySkills) {
       if (!this.isRequirementAnalysis(task)) {
         throw new NotFoundError("只有跨仓方案检视可以在决定时调整仓内 Skill");
@@ -5140,17 +5126,13 @@ export class TaskService {
       const resources = this.selectedResourcesFromCatalog({
         catalogToken: input.repository_skill_catalog_token,
         selectedSkillIds: input.selected_repository_skill_ids,
-        selectedKnowledgeIds: input.selected_repository_knowledge_ids,
         repositories: task.summary.repositories ?? [],
         baseline: task.summary.baseline,
         account: task.summary.luban_account,
         preserveSkillsForErroredRepositories:
           task.summary.repository_skills ?? [],
-        preserveKnowledgeForErroredRepositories:
-          task.summary.repository_knowledge ?? [],
       });
       task.summary.repository_skills = resources.skills;
-      task.summary.repository_knowledge = resources.knowledge;
       // 必须先于 humanGate.resolve/createRepositoryDeliveries 落盘：确认
       // 后父会话会立刻收口，重启也只能从 task.json 恢复这份选择。
       this.persist(task);
@@ -5339,7 +5321,8 @@ export class TaskService {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     let snapshot = readDeveloperAssistant(task.summary.workspace);
-    if (snapshot.state === "running" && !task.assistantActive) {
+    if (["working", "running"].includes(snapshot.state)
+        && !task.assistantActive) {
       snapshot = interruptDeveloperAssistant(task.summary.workspace);
     }
     const events = new EventLog(
@@ -5347,6 +5330,7 @@ export class TaskService {
     ).replay();
     return {
       ...snapshot,
+      messages: developerAssistantConversation(snapshot, events),
       tools: developerAssistantTools(events),
       availability: this.developerAssistantAvailability(task),
     };
@@ -5355,6 +5339,39 @@ export class TaskService {
   private developerAssistantAvailability(
     task: TaskState,
   ): DeveloperAssistantAvailability {
+    if (!this.options.isolation) {
+      return {
+        available: false,
+        code: "core_unavailable",
+        mode: "unavailable",
+        reason: "当前部署未启用任务隔离容器，开发接管不可用",
+      };
+    }
+    if (this.isRequirementAnalysis(task)) {
+      return {
+        available: false,
+        code: "not_editable",
+        mode: "unavailable",
+        reason: "需求理解阶段请继续使用检视与批注；开发接管只处理具体代码仓任务",
+      };
+    }
+    if (!task.cwd || task.summary.workspace_reclaimed_at) {
+      return {
+        available: false,
+        code: "core_unavailable",
+        mode: "unavailable",
+        reason: "代码现场尚未就绪或已回收，暂不能接管",
+      };
+    }
+    if (["completed", "await_merge", "canceled", "failed"]
+        .includes(task.summary.status)) {
+      return {
+        available: false,
+        code: "not_editable",
+        mode: "unavailable",
+        reason: `任务当前是 ${task.summary.status}，没有可接管的活动代码现场`,
+      };
+    }
     return inspectDeveloperAssistantAvailability(
       task.cwd,
       this.options.host?.kernelRoot,
@@ -5362,9 +5379,9 @@ export class TaskService {
   }
 
   /**
-   * 开发助手只在主任务安全暂停后启动。它不挂 KernelHost，因此任意正常
-   * 构建/测试/检索命令不会被内核阶段门禁误拦；容器、工作区和凭据边界
-   * 仍由 GateService + developerAssistantGateContract 焊死。
+   * 用户发给开发接管会话的每条消息都先持久化。首次消息由服务端负责
+   * 安全暂停主任务，后续消息复用同一 Pi 会话；working 期间的新消息走
+   * steer，和本地 CLI 一样在当前工具结束后送达。
    */
   startDeveloperAssistant(
     id: string,
@@ -5378,29 +5395,92 @@ export class TaskService {
     if (message.length > 12_000) {
       throw new TaskControlError("开发助手单条要求不能超过 12000 字");
     }
-    if (task.summary.status !== "paused") {
-      throw new TaskControlError("请先暂停主任务，再让开发助手处理代码现场");
-    }
-    if (this.isRequirementAnalysis(task)) {
-      throw new TaskControlError("需求理解阶段请继续使用检视与批注；开发助手只处理具体代码仓任务");
-    }
-    if (!task.cwd || task.summary.workspace_reclaimed_at) {
-      throw new TaskControlError("当前任务代码现场已不可用，不能启动开发助手");
-    }
-    if (!this.options.isolation) {
-      throw new TaskControlError(
-        "开发助手必须在任务容器中运行；当前部署未启用隔离镜像",
-      );
-    }
-    if (task.assistantActive || task.driver || task.container) {
-      throw new TaskControlError("开发助手或其他任务会话仍在运行，请等待本轮收口");
-    }
-
     const availability = this.developerAssistantAvailability(task);
     if (!availability.available) {
       throw new TaskControlError(availability.reason);
     }
-    const previous = readDeveloperAssistant(task.summary.workspace);
+    const workspace = task.summary.workspace;
+    let previous = readDeveloperAssistant(workspace);
+    if (["working", "running"].includes(previous.state)
+        && !task.assistantActive) {
+      previous = interruptDeveloperAssistant(
+        workspace, "上一轮开发会话已不在运行，本条指令将重建会话");
+    }
+    if (previous.state === "returning") {
+      throw new TaskControlError("开发现场正在交还主任务，请等待交还完成");
+    }
+
+    if (["working", "running"].includes(previous.state)) {
+      appendDeveloperAssistantMessage(workspace, "user", message, "working");
+      // 首轮容器/会话还在启动时先落盘；mission 会在会话
+      // 真正就绪后读到它。会话已就绪则直接 steer。
+      if (task.assistantActive && !task.driver) {
+        return this.developerAssistant(id);
+      }
+      if (!task.driver || !task.assistantActive) {
+        throw new TaskControlError("开发会话正在恢复，请稍后重试本条指令");
+      }
+      void task.driver.steer(message).catch((error) => {
+        const current = readDeveloperAssistant(workspace);
+        const state = task.assistantActive
+          && ["working", "running"].includes(current.state)
+          ? "working" : current.state;
+        appendDeveloperAssistantMessage(
+          workspace, "assistant", `追加指令未能送达：${String(error)}`,
+          state, String(error));
+      });
+      return this.developerAssistant(id);
+    }
+
+    if (previous.state === "acquiring") {
+      appendDeveloperAssistantMessage(workspace, "user", message, "acquiring");
+      return this.developerAssistant(id);
+    }
+
+    // 首次接管时，running / waiting_for_human 本来就可能占有主
+    // 会话和容器。它们是 pause 要在安全边界收好的正常资源，
+    // 不能当成开发助手残留而拒绝。
+    if (task.summary.status !== "paused") {
+      appendDeveloperAssistantMessage(workspace, "user", message, "acquiring");
+      this.options.log?.(`任务 ${id} 开发现场由 ${actor} 请求接管`);
+      void this.pause(id, actor).then(() => {
+        this.activatePendingDeveloperAssistant(task);
+      }).catch((error) => {
+        appendDeveloperAssistantMessage(
+          workspace, "assistant", `未能接管主现场：${String(error)}`,
+          "failed", String(error));
+      });
+      return this.developerAssistant(id);
+    }
+
+    if (task.driver && task.container) {
+      appendDeveloperAssistantMessage(workspace, "user", message, "working");
+      this.launchDeveloperAssistantTurn(task, message, true);
+      return this.developerAssistant(id);
+    }
+
+    if (task.driver || task.container) {
+      throw new TaskControlError("主任务正在进入安全暂停边界，请稍后重试");
+    }
+
+    appendDeveloperAssistantMessage(workspace, "user", message, "acquiring");
+    this.options.log?.(`任务 ${id} 开发现场由 ${actor} 请求接管`);
+    this.activatePendingDeveloperAssistant(task);
+    return this.developerAssistant(id);
+  }
+
+  private activatePendingDeveloperAssistant(task: TaskState): void {
+    const workspace = task.summary.workspace;
+    const previous = readDeveloperAssistant(workspace);
+    if (task.summary.status !== "paused" || previous.state !== "acquiring"
+        || task.assistantActive || task.driver || task.container) return;
+    const availability = this.developerAssistantAvailability(task);
+    if (!availability.available || !task.cwd) {
+      appendDeveloperAssistantMessage(
+        workspace, "assistant", availability.reason, "failed",
+        availability.reason);
+      return;
+    }
     let handoff: DeveloperAssistantHandoff | undefined;
     if (this.options.host && task.cwd) {
       let initial;
@@ -5411,7 +5491,7 @@ export class TaskService {
         // Git/哈希读取偶发失败时仍允许助手工作，恢复后由主 Agent
         // 重新读取 current 与工作区，避免把任务永久留在暂停态。
         this.options.log?.(
-          `任务 ${id} 开发助手起点摘要不可用，将在交还时刷新: ${String(error)}`,
+          `任务 ${task.summary.id} 开发助手起点摘要不可用，将在交还时刷新: ${String(error)}`,
         );
         initial = {
           sha: "unavailable",
@@ -5426,28 +5506,46 @@ export class TaskService {
         initial,
       );
     }
+    writeDeveloperAssistant(workspace, {
+      ...previous,
+      state: "working",
+      ...(handoff ? { handoff } : {}),
+    });
+    const latest = [...previous.messages].reverse()
+      .find((item) => item.role === "user")?.text ?? "继续检查当前现场";
+    this.launchDeveloperAssistantTurn(task, latest, false);
+  }
 
-    appendDeveloperAssistantMessage(
-      task.summary.workspace, "user", message, "running", undefined, handoff);
-    this.options.log?.(`任务 ${id} 开发助手由 ${actor} 发起`);
-    const epoch = task.controlEpoch;
-    const work = this.runDeveloperAssistant(task, epoch);
+  private launchDeveloperAssistantTurn(
+    task: TaskState,
+    message: string,
+    continued: boolean,
+  ): void {
+    if (task.assistantActive) {
+      throw new TaskControlError("开发助手仍在处理上一轮输入");
+    }
+    const epoch = (task.assistantEpoch ?? 0) + 1;
+    task.assistantEpoch = epoch;
+    const work = this.runDeveloperAssistant(task, epoch, message, continued);
     task.assistantActive = work;
     void work.catch((error) => {
-      this.options.log?.(`任务 ${id} 开发助手异常: ${String(error)}`);
+      this.options.log?.(
+        `任务 ${task.summary.id} 开发助手异常: ${String(error)}`);
     }).finally(() => {
       if (task.assistantActive === work) task.assistantActive = undefined;
     });
-    return this.developerAssistant(id);
   }
 
   private async runDeveloperAssistant(
     task: TaskState,
     epoch: number,
+    message: string,
+    continued: boolean,
   ): Promise<void> {
     const workspace = task.summary.workspace;
     let driver: CloudSession | undefined;
     let container: TaskCommandContainer | undefined;
+    let keepSession = false;
     let businessModuleKnowledge: MaterializedBusinessModuleKnowledge = {
       entries: [], skill_paths: [], warnings: [],
     };
@@ -5455,6 +5553,17 @@ export class TaskService {
       = { entries: [], warnings: [] };
     try {
       if (!task.cwd) throw new Error("开发助手缺少代码工作区");
+      if (continued) {
+        if (!task.driver || !task.container) {
+          throw new Error("开发会话资源已经释放，将在下一条指令时重建");
+        }
+        driver = task.driver;
+        container = task.container;
+        const outcome = await driver.continueWith(message);
+        await this.settleDeveloperAssistantTurn(task, epoch, driver, outcome);
+        keepSession = true;
+        return;
+      }
       // 必须在容器 start 之前物化：root 宿主会在 start 前把整棵 bind
       // 工作区交给非 root 容器用户。若反过来，0440 的模块正文会在容器
       // 启动后由 root 新建，Agent 的 Read/Grep 反而读不到。
@@ -5478,7 +5587,7 @@ export class TaskService {
       }
       task.containerWorkspace = task.cwd;
       container = await this.startCodingContainer(task, { gitReadOnly: true });
-      if (!this.current(task, epoch) || task.summary.status !== "paused") {
+      if (!this.developerAssistantCurrent(task, epoch)) {
         throw new Error("开发助手启动期间任务状态已变化");
       }
       task.container = container;
@@ -5496,7 +5605,6 @@ export class TaskService {
       let repositorySkillResources: Array<KnowledgeResourceRef & {
         actual_path: string;
       }> = [];
-      let repositoryKnowledge: MaterializedKnowledgeEntry[] = [];
       const repository = task.summary.repo_url ?? this.effectiveDefaultRepo();
       if (repository) {
         const materialized = materializeRepositorySkills({
@@ -5521,16 +5629,6 @@ export class TaskService {
           this.options.log?.(
             `[developer-assistant-skill] 任务 ${task.summary.id}: ${warning}`);
         }
-        const materializedKnowledge = materializeRepositoryKnowledge({
-          selected: task.summary.repository_knowledge,
-          bindings: [{ repository, workspace: task.cwd }],
-          snapshotRoot: join(workspace, "repository-knowledge"),
-        });
-        repositoryKnowledge = materializedKnowledge.entries;
-        for (const warning of materializedKnowledge.warnings) {
-          this.options.log?.(
-            `[developer-assistant-knowledge] 任务 ${task.summary.id}: ${warning}`);
-        }
       }
       const eventLog = new EventLog(
         join(workspace, "events.jsonl"),
@@ -5553,7 +5651,6 @@ export class TaskService {
         },
         repositorySkillPaths,
         repositorySkillResources,
-        repositoryKnowledge,
         businessModuleKnowledge,
         engineeringKnowledge,
         knowledgeTrace: this.knowledgeTrace(task, task.cwd),
@@ -5586,6 +5683,7 @@ export class TaskService {
           AGENT_REQUIREMENT_DOCUMENT,
         )}`,
         onTokenUsage: (sample) => this.recordTaskTokenUsage(task, sample),
+        vision: this.taskVision(task),
         bashOperations: {
           exec: (command, dir, execOptions) =>
             container!.exec(command, dir, execOptions),
@@ -5601,7 +5699,7 @@ export class TaskService {
           : undefined,
         log: this.options.log,
       });
-      if (!this.current(task, epoch) || task.summary.status !== "paused") {
+      if (!this.developerAssistantCurrent(task, epoch)) {
         throw new Error("开发助手会话就绪前任务状态已变化");
       }
       task.driver = driver;
@@ -5615,22 +5713,11 @@ export class TaskService {
         snapshot.messages,
         this.developerAssistantAvailability(task),
       ));
-      if (!this.current(task, epoch)) {
-        interruptDeveloperAssistant(workspace, "任务控制操作中断了开发助手");
-        return;
-      }
-      if (outcome.status !== "turn_finished") {
-        throw new Error(outcome.detail ?? outcome.reason ?? "开发助手会话异常结束");
-      }
-      const reply = driver.finalReply().trim();
-      if (!reply) throw new Error("开发助手没有返回可展示的处理结果");
-      appendDeveloperAssistantMessage(
-        workspace, "assistant", reply, "completed");
+      await this.settleDeveloperAssistantTurn(task, epoch, driver, outcome);
+      keepSession = true;
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
-      if (!this.current(task, epoch)) {
-        interruptDeveloperAssistant(workspace, "任务控制操作中断了开发助手");
-      } else {
+      if (this.developerAssistantCurrent(task, epoch)) {
         appendDeveloperAssistantMessage(
           workspace,
           "assistant",
@@ -5640,6 +5727,7 @@ export class TaskService {
         );
       }
     } finally {
+      if (keepSession) return;
       if (driver && task.driver === driver) task.driver = undefined;
       driver?.dispose();
       if (container && task.container === container) task.container = undefined;
@@ -5652,8 +5740,149 @@ export class TaskService {
             workspace, "assistant", detail, "failed", detail);
         }
       }
-      this.finishDeveloperAssistantHandoff(task);
     }
+  }
+
+  private developerAssistantCurrent(task: TaskState, epoch: number): boolean {
+    return this.tasks.get(task.summary.id) === task
+      && task.assistantEpoch === epoch
+      && task.summary.status === "paused";
+  }
+
+  private async settleDeveloperAssistantTurn(
+    task: TaskState,
+    epoch: number,
+    driver: CloudSession,
+    first: Awaited<ReturnType<CloudSession["continueWith"]>>,
+  ): Promise<void> {
+    let outcome = first;
+    while (true) {
+      if (!this.developerAssistantCurrent(task, epoch)) return;
+      if (outcome.status !== "turn_finished") {
+        throw new Error(outcome.detail ?? outcome.reason
+          ?? "开发助手会话异常结束");
+      }
+      const late = driver.takeUndeliveredSteers();
+      if (late.length) {
+        outcome = await driver.continueWith(late.join("\n\n"));
+        continue;
+      }
+      const reply = driver.finalReply().trim();
+      if (!reply) throw new Error("开发助手没有返回可展示的处理结果");
+      appendDeveloperAssistantMessage(
+        task.summary.workspace, "assistant", reply, "ready");
+      return;
+    }
+  }
+
+  /** 停止当前开发动作但不交还主现场。下一条消息会在同一接管上下文里
+   * 懒重建会话，避免 Pi abort 后复用一个不确定的 session。 */
+  async stopDeveloperAssistant(
+    id: string,
+    actor: string,
+  ): Promise<DeveloperAssistantView> {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    const snapshot = readDeveloperAssistant(task.summary.workspace);
+    if (snapshot.state === "acquiring") {
+      appendDeveloperAssistantMessage(
+        task.summary.workspace, "assistant",
+        `已由 ${actor} 停止本次接管启动；主任务保持暂停，可以继续输入或交还。`,
+        "ready");
+      return this.developerAssistant(id);
+    }
+    if (!["working", "running"].includes(snapshot.state)) {
+      return this.developerAssistant(id);
+    }
+    task.assistantEpoch = (task.assistantEpoch ?? 0) + 1;
+    const driver = task.driver;
+    const container = task.container;
+    const cleanup = await Promise.allSettled([
+      driver?.abort() ?? Promise.resolve(),
+      container?.stop() ?? Promise.resolve(),
+    ]);
+    if (cleanup[0].status === "fulfilled" && task.driver === driver) {
+      task.driver = undefined;
+      driver?.dispose();
+    }
+    if (cleanup[1].status === "fulfilled" && task.container === container) {
+      task.container = undefined;
+    }
+    const failures = cleanup.flatMap((result, index) =>
+      result.status === "rejected"
+        ? [`${index === 0 ? "会话中止" : "容器回收"}: ${String(result.reason)}`]
+        : []);
+    if (failures.length) {
+      const detail = `停止当前开发动作时资源未能确认释放：${failures.join("；")}`;
+      appendDeveloperAssistantMessage(
+        task.summary.workspace, "assistant", detail, "failed", detail);
+      throw new TaskControlError(detail);
+    }
+    appendDeveloperAssistantMessage(
+      task.summary.workspace, "assistant",
+      `当前动作已由 ${actor} 停止。代码现场仍由你接管，可以继续输入下一条指令。`,
+      "ready");
+    return this.developerAssistant(id);
+  }
+
+  /** 显式退出 vibe-coding 接管：先停净旁路会话/容器，再冻结一次工作区
+   * 差异并走既有内核 reconcile，最后才允许主任务重建。 */
+  async returnDeveloperAssistant(
+    id: string,
+    actor: string,
+  ): Promise<TaskSummary> {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    if (task.summary.status !== "paused") {
+      throw new TaskControlError("只有已接管并暂停的主现场可以交还");
+    }
+    const snapshot = readDeveloperAssistant(task.summary.workspace);
+    if (["acquiring", "working", "running"].includes(snapshot.state)) {
+      throw new TaskControlError("开发助手仍在工作；请先停止当前动作再交还");
+    }
+    if (task.assistantActive) await task.assistantActive;
+    writeDeveloperAssistant(task.summary.workspace, {
+      ...readDeveloperAssistant(task.summary.workspace),
+      state: "returning",
+    });
+    task.assistantEpoch = (task.assistantEpoch ?? 0) + 1;
+    const driver = task.driver;
+    const container = task.container;
+    const cleanup = await Promise.allSettled([
+      driver?.abort() ?? Promise.resolve(),
+      container?.stop() ?? Promise.resolve(),
+    ]);
+    if (cleanup[0].status === "fulfilled" && task.driver === driver) {
+      task.driver = undefined;
+      driver?.dispose();
+    }
+    if (cleanup[1].status === "fulfilled" && task.container === container) {
+      task.container = undefined;
+    }
+    const failures = cleanup.flatMap((result, index) =>
+      result.status === "rejected"
+        ? [`${index === 0 ? "会话中止" : "容器回收"}: ${String(result.reason)}`]
+        : []);
+    if (failures.length) {
+      const detail = `交还前资源未能确认释放：${failures.join("；")}`;
+      writeDeveloperAssistant(task.summary.workspace, {
+        ...readDeveloperAssistant(task.summary.workspace),
+        state: "failed",
+        error: detail,
+      });
+      throw new TaskControlError(detail);
+    }
+    this.finishDeveloperAssistantHandoff(task);
+    writeDeveloperAssistant(task.summary.workspace, {
+      ...readDeveloperAssistant(task.summary.workspace),
+      state: "ready",
+    });
+    const resumed = this.resume(id, actor);
+    writeDeveloperAssistant(task.summary.workspace, {
+      ...readDeveloperAssistant(task.summary.workspace),
+      state: "idle",
+    });
+    return resumed;
   }
 
   private finishDeveloperAssistantHandoff(task: TaskState): void {
@@ -5734,9 +5963,13 @@ export class TaskService {
       throw new TaskControlError(
         `任务 ${id} 当前是 ${task.summary.status}，只有已暂停任务可以恢复`);
     }
-    if (task.assistantActive
-        || readDeveloperAssistant(task.summary.workspace).state === "running") {
-      throw new TaskControlError("开发助手仍在处理，请等待它返回后再交还主任务");
+    const assistantSnapshot = readDeveloperAssistant(task.summary.workspace);
+    if (task.assistantActive || task.driver || task.container
+        || ["acquiring", "working", "returning", "running"]
+          .includes(assistantSnapshot.state)
+        || assistantSnapshot.handoff?.state === "running") {
+      throw new TaskControlError(
+        "开发接管会话仍占有主现场，请从开发协作面板执行“交还主任务”");
     }
     const beforeSummary = JSON.parse(JSON.stringify(task.summary)) as TaskSummary;
     const beforeHandoffPrompt = task.pendingAssistantHandoff;
@@ -6057,6 +6290,7 @@ export class TaskService {
     task.summary.waiting = undefined;
     task.mission = undefined;
     task.pendingAssistantHandoff = undefined;
+    task.pendingMainSteers = undefined;
     interruptDeveloperAssistant(
       task.summary.workspace,
       `任务已由 ${actor} 取消，开发助手同时终止`,
@@ -6201,6 +6435,15 @@ export class TaskService {
     const container = task.container;
     const prepushAbort = task.prepushAbort;
     task.pauseRequested = false;
+    const undelivered = (driver as CloudSession | undefined)
+      ?.takeUndeliveredSteers?.() ?? [];
+    if (undelivered.length) {
+      task.pendingMainSteers = [...new Set([
+        ...(task.pendingMainSteers ?? []), ...undelivered,
+      ])];
+      this.options.log?.(
+        `任务 ${task.summary.id} 暂停前保全 ${undelivered.length} 条未送达补充`);
+    }
     prepushAbort?.abort();
     const cleanup = await Promise.allSettled([
       driver?.abort() ?? Promise.resolve(),
@@ -6250,6 +6493,7 @@ export class TaskService {
       paused_from: from,
     };
     this.persist(task);
+    this.activatePendingDeveloperAssistant(task);
   }
 
   private async pump(): Promise<void> {
@@ -6373,7 +6617,6 @@ export class TaskService {
       let repositorySkillResources: Array<KnowledgeResourceRef & {
         actual_path: string;
       }> = [];
-      let repositoryKnowledge: MaterializedKnowledgeEntry[] = [];
       let businessModuleKnowledge: MaterializedBusinessModuleKnowledge = {
         entries: [], skill_paths: [], warnings: [],
       };
@@ -6442,16 +6685,7 @@ export class TaskService {
           selected: true,
           actual_path: path,
         }));
-        const materializedKnowledge = materializeRepositoryKnowledge({
-          selected: task.summary.repository_knowledge,
-          bindings,
-          snapshotRoot: join(workspace, "repository-knowledge"),
-        });
-        repositoryKnowledge = materializedKnowledge.entries;
-        for (const warning of [
-          ...materialized.warnings,
-          ...materializedKnowledge.warnings,
-        ]) {
+        for (const warning of materialized.warnings) {
           this.options.log?.(
             `[repository-resource] 任务 ${task.summary.id}: ${warning}`);
         }
@@ -6513,16 +6747,6 @@ export class TaskService {
           }));
           for (const warning of materialized.warnings) {
             this.options.log?.(`[repository-skill] 任务 ${task.summary.id}: ${warning}`);
-          }
-          const materializedKnowledge = materializeRepositoryKnowledge({
-            selected: task.summary.repository_knowledge,
-            bindings: [{ repository: activeRepository, workspace: cwd }],
-            snapshotRoot: join(workspace, "repository-knowledge"),
-          });
-          repositoryKnowledge = materializedKnowledge.entries;
-          for (const warning of materializedKnowledge.warnings) {
-            this.options.log?.(
-              `[repository-knowledge] 任务 ${task.summary.id}: ${warning}`);
           }
         }
         // 下单事实(.mae-flow-order.json,内核契约):表单收齐的单号/
@@ -6800,35 +7024,12 @@ export class TaskService {
           + `选项**(系统会替用户选中含「${task.summary.lane}」的那一`
           + `项)。禁止自造"是/否"确认卡,禁止替用户改选。`;
       }
-      if (!analysisOnly && this.options.host) {
-        // 仓里的知识块:命中触发词才注入(知识在仓不在平台,换个仓
-        // 就是换套知识)。匹配语料 = 需求原文 + 本轮失败详情——修复
-        // 会话该被日志里的关键词(如 flyway/覆盖率)召唤出对应规矩。
-        const knowledge = collectKnowledge(
-          cwd,
-          [task.summary.requirement,
-           task.summary.delivery?.loop?.failure ?? ""]
-            .join("\n"),
-        );
-        if (knowledge.markdown) {
-          prompt = `${prompt}\n\n${knowledge.markdown}`;
-          const trace = this.knowledgeTrace(task, cwd);
-          for (const name of knowledge.used) {
-            const path = join(cwd, ".mae-flow", "knowledge", name);
-            const resource: KnowledgeResourceRef = {
-              id: `knowledge-block:${name}`,
-              kind: "document",
-              name,
-              path: `.mae-flow/knowledge/${name}`,
-              description: "按需求或失败信息命中的仓内知识块",
-            };
-            trace.register(path, resource);
-            trace.record("loaded", "main", resource);
-          }
-        }
-      }
       if (task.pendingAssistantHandoff) {
         prompt = `${prompt}\n\n${task.pendingAssistantHandoff}`;
+      }
+      if (task.pendingMainSteers?.length) {
+        prompt = `${prompt}\n\n主任务在暂停前尚未读取的用户补充（按原始顺序优先处理）：\n`
+          + task.pendingMainSteers.map((text) => `- ${text}`).join("\n");
       }
       // 专项使命(修复环)压轴:模型最后读到的最要紧。这里只用不清——
       // 修复会话跑一半被重启,使命要跟着 task.json 回来再喂一遍;
@@ -6863,7 +7064,6 @@ export class TaskService {
         },
         repositorySkillPaths,
         repositorySkillResources,
-        repositoryKnowledge,
         businessModuleKnowledge,
         engineeringKnowledge,
         knowledgeTrace: this.knowledgeTrace(task, cwd),
@@ -6872,6 +7072,7 @@ export class TaskService {
         // 摘要围绕"当前步骤+已确认配置"组织,不由云端编造。
         compactAnchor: () => this.kernelAnchor(task),
         onTokenUsage: (sample) => this.recordTaskTokenUsage(task, sample),
+        vision: this.taskVision(task),
         // 任务级选择 > 设置层默认 > 部署默认;任务级的记在 summary 上,
         // 重启续跑/会话重建都不漂移(设置层后来改了也不影响本单)。
         provider: task.summary.model_choice?.provider
@@ -6947,8 +7148,9 @@ export class TaskService {
         : task.driver.start(prompt);
       // start/startResume 已同步把 prompt 交给会话；到这里才消费一次性
       // 交还摘要。若此前进程退出，task.json 仍保留它，下次不会丢。
-      if (task.pendingAssistantHandoff) {
+      if (task.pendingAssistantHandoff || task.pendingMainSteers?.length) {
         task.pendingAssistantHandoff = undefined;
+        task.pendingMainSteers = undefined;
         this.writeTaskState(task);
       }
       await this.settle(task, turn, epoch);
@@ -7324,7 +7526,6 @@ export class TaskService {
     let repositorySkillResources: Array<KnowledgeResourceRef & {
       actual_path: string;
     }> = [];
-    let repositoryKnowledge: MaterializedKnowledgeEntry[] = [];
     const activeRepository = task.summary.repo_url ?? this.effectiveDefaultRepo();
     if (activeRepository) {
       const materialized = materializeRepositorySkills({
@@ -7348,16 +7549,6 @@ export class TaskService {
       for (const warning of materialized.warnings) {
         this.options.log?.(
           `[prepush-skill] 任务 ${task.summary.id}: ${warning}`);
-      }
-      const materializedKnowledge = materializeRepositoryKnowledge({
-        selected: task.summary.repository_knowledge,
-        bindings: [{ repository: activeRepository, workspace: task.cwd }],
-        snapshotRoot: join(task.summary.workspace, "repository-knowledge"),
-      });
-      repositoryKnowledge = materializedKnowledge.entries;
-      for (const warning of materializedKnowledge.warnings) {
-        this.options.log?.(
-          `[prepush-knowledge] 任务 ${task.summary.id}: ${warning}`);
       }
     }
 
@@ -7520,7 +7711,6 @@ export class TaskService {
         },
         repositorySkillPaths,
         repositorySkillResources,
-        repositoryKnowledge,
         knowledgeTrace: this.knowledgeTrace(task, task.cwd),
         provider: task.summary.model_choice?.provider
           ?? modelOverride.provider ?? this.options.provider,

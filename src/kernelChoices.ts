@@ -17,16 +17,16 @@
 
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 
-/** 一个交付方式:key 是内核的 choice(full/hotfix/…),label 是给人看的,
- * 也正是回传给内核的**选项原文**(done --choice 按它对账)。
- * steps/acks 是给人掂量快慢用的(这条链多少步、要拍板几次)——数字由
- * 内核 steps --json 按 flow 现算,不是前端手写一份会过期的说明;兜底
- * 路径(直接读 flow.json)算不出链就缺席,表单只显示名字。 */
+/** 一个交付方式:key 是内核的 choice(full/hotfix/…),label 是回传
+ * 内核的选项原文；description 只说适用场景，给下单的人做选择。
+ * steps/acks 仍是内核目录中的可观测事实，但不再用作下单说明。 */
 export interface WorkflowChoice {
   key: string;
   label: string;
+  description?: string;
   steps?: number;
   acks?: number;
 }
@@ -56,6 +56,27 @@ const cache = new Map<string, WorkflowEntry[]>();
 const effectCache = new Map<string, StepChoiceEffect[]>();
 const surfaceCache = new Map<string, "doc" | "diff" | undefined>();
 
+/** 开发机会优先使用兄弟目录的活内核，它可能比 Cloud 收编快照
+ * 旧一版。代号/选项原文仍以活内核为准；旧目录只缺新增的场景
+ * 说明时，才从与 Cloud 同版发布的内核快照补这一个展示字段。 */
+function workflowDescriptions(kernelRoot: string): Record<string, string> {
+  const bundled = join(dirname(fileURLToPath(import.meta.url)), "..", "kernel");
+  for (const root of [...new Set([kernelRoot, bundled])]) {
+    try {
+      const flow = JSON.parse(readFileSync(join(root, "flow", "flow.json"), "utf-8"));
+      const rows = flow?.steps?.workflow_select?.choice_descriptions;
+      if (rows && typeof rows === "object") {
+        return Object.fromEntries(Object.entries(rows)
+          .map(([key, value]) => [key, String(value).trim()])
+          .filter(([, value]) => value));
+      }
+    } catch {
+      // 场景说明缺席不影响选项原文与下单。
+    }
+  }
+  return {};
+}
+
 /** 首选:问内核要机读目录。python 不在/命令老(旧快照没有 --json)都
  * 只是拿不到,不是错误——静静退回兜底。 */
 function fromKernelCommand(kernelRoot: string): WorkflowEntry[] {
@@ -67,13 +88,17 @@ function fromKernelCommand(kernelRoot: string): WorkflowEntry[] {
     stdio: ["ignore", "pipe", "ignore"],
   });
   const catalog = JSON.parse(stdout.trim().split("\n").pop() ?? "{}");
+  const descriptions = workflowDescriptions(kernelRoot);
   return ((catalog.workflows ?? []) as Array<Record<string, any>>)
     .map((item) => {
       const chain = (item.steps ?? []) as Array<{ user_ack?: boolean }>;
+      const key = String(item.key ?? "");
+      const description = String(item.description ?? descriptions[key] ?? "").trim();
       return {
-        key: String(item.key ?? ""),
+        key,
         // answers[0] 是内核对账用的原文;没有就退回展示名
         label: String(item.answers?.[0] ?? item.label ?? ""),
+        ...(description ? { description } : {}),
         forNewOrders: item.for_new_orders !== false,
         ...(chain.length ? {
           steps: chain.length,
@@ -91,6 +116,7 @@ function fromFlowJson(kernelRoot: string): WorkflowEntry[] {
   const flow = JSON.parse(readFileSync(path, "utf-8"));
   const step = flow?.steps?.workflow_select ?? {};
   const answers = (step.choice_answers ?? {}) as Record<string, string[]>;
+  const descriptions = workflowDescriptions(kernelRoot);
   // 字段缺席(老 flow)=全部可给新单选。
   const newOrder = Array.isArray(step.new_order_choices)
     ? new Set((step.new_order_choices as unknown[]).map(String))
@@ -99,6 +125,8 @@ function fromFlowJson(kernelRoot: string): WorkflowEntry[] {
     .map((key) => ({
       key: String(key),
       label: answers[String(key)]?.[0],
+      ...(String(descriptions[String(key)] ?? "").trim()
+        ? { description: String(descriptions[String(key)]).trim() } : {}),
       forNewOrders: !newOrder || newOrder.has(String(key)),
     }))
     .filter((item): item is WorkflowEntry => !!item.label);

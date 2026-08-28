@@ -727,7 +727,6 @@ export function TaskWorkspace({
                       repositories={chainRepositories}
                       baseline={task.baseline}
                       initialSkills={task.repository_skills}
-                      initialKnowledge={task.repository_knowledge}
                       presentation="decision"
                       state={chainSkillPicker}
                       onStateChange={setChainSkillPicker}

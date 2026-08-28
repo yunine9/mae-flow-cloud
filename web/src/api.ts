@@ -534,8 +534,6 @@ export interface TaskSummary {
   repository_profiles?: RepositoryProfile[];
   /** 下单或 Chain 方案确认时选中的仓内 Skill；每个子任务只继承自己仓。 */
   repository_skills?: SelectedRepositorySkill[];
-  /** 本单开局明确加载的仓内 docs 参考资料；规则文件无需手选。 */
-  repository_knowledge?: SelectedRepositoryKnowledge[];
   /** 创建任务时固定的业务模块与知识版本；正文不进入任务摘要。 */
   business_modules?: SelectedBusinessModule[];
   engineering_knowledge?: Array<EngineeringKnowledgeLaunchOption & {
@@ -769,10 +767,11 @@ export interface LaunchOptions {
    * 前端一个字都不许另抄——抄了就会出现"页面说快速/慢速、内核只认
    * 完整开发/局部修改",于是下单选过的交付方式在流程里又被问一遍。
    * 空数组=读不到内核定义,那就不预选,老老实实等流程里问。 */
-  /** steps/acks:这条链多少步、要拍板几次——内核按 flow 现算,
-   * 给人掂量快慢;算不出时缺席,只显示名字。 */
+  /** description 只说适用场景；steps/acks 是内核目录的兼容字段，
+   * 下单页不用它们解释交付方式。 */
   workflows: Array<
-    { key: string; label: string; steps?: number; acks?: number }>;
+    { key: string; label: string; description?: string;
+      steps?: number; acks?: number }>;
   /** 已发布的可选业务模块摘要；知识正文不会随目录接口返回。 */
   business_modules: BusinessModuleLaunchOption[];
   engineering_knowledge: EngineeringKnowledgeLaunchOption[];
@@ -995,26 +994,6 @@ export interface RepositorySkill {
   digest: string;
   selectable: boolean;
   warning?: string;
-}
-
-export interface RepositoryKnowledge {
-  id: string;
-  title: string;
-  description: string;
-  relative_path: string;
-  kind: "rules" | "document";
-  digest: string;
-  bytes: number;
-  selectable: boolean;
-  recommended: boolean;
-  auto_load: boolean;
-  warning?: string;
-}
-
-export interface SelectedRepositoryKnowledge extends RepositoryKnowledge {
-  repository: string;
-  revision: string;
-  kind: "document";
 }
 
 export type KnowledgeKind = "rules" | "document" | "skill";
@@ -1446,7 +1425,6 @@ export interface RepositorySkillCatalog {
     repository: string;
     revision: string;
     skills: RepositorySkill[];
-    knowledge: RepositoryKnowledge[];
     error?: string;
   }>;
 }
@@ -1483,7 +1461,6 @@ export async function createTask(
     repairRounds?: number;
     repositorySkillCatalogToken?: string;
     selectedRepositorySkillIds?: string[];
-    selectedRepositoryKnowledgeIds?: string[];
     selectedBusinessModuleIds?: string[];
     selectedEngineeringKnowledgeIds?: string[];
     repositoryProfiles?: Array<Pick<RepositoryProfile,
@@ -1511,8 +1488,6 @@ export async function createTask(
         extras?.repositorySkillCatalogToken || undefined,
       selected_repository_skill_ids:
         extras?.selectedRepositorySkillIds,
-      selected_repository_knowledge_ids:
-        extras?.selectedRepositoryKnowledgeIds,
       selected_business_module_ids: extras?.selectedBusinessModuleIds,
       selected_engineering_knowledge_ids: extras?.selectedEngineeringKnowledgeIds,
       repository_profiles: extras?.repositoryProfiles,
@@ -1536,7 +1511,6 @@ export async function decide(
   repositorySkills?: {
     catalogToken: string;
     selectedIds: string[];
-    selectedKnowledgeIds: string[];
   },
   /** 代码检视勾选的最终交付文件；空数组表示明确不选任何文件。 */
   deliveryPaths?: string[],
@@ -1551,8 +1525,6 @@ export async function decide(
       annotation_ids: annotationIds?.length ? annotationIds : undefined,
       repository_skill_catalog_token: repositorySkills?.catalogToken,
       selected_repository_skill_ids: repositorySkills?.selectedIds,
-      selected_repository_knowledge_ids:
-        repositorySkills?.selectedKnowledgeIds,
       delivery_paths: deliveryPaths,
     }),
   });
@@ -1671,7 +1643,8 @@ export interface DeveloperAssistantHandoff {
 }
 
 export interface DeveloperAssistantView {
-  state: "idle" | "running" | "completed" | "failed" | "interrupted";
+  state: "idle" | "acquiring" | "working" | "ready" | "returning"
+    | "running" | "completed" | "failed" | "interrupted";
   messages: DeveloperAssistantMessage[];
   tools: DeveloperAssistantToolRun[];
   availability: DeveloperAssistantAvailability;
@@ -1701,6 +1674,28 @@ export async function startDeveloperAssistant(
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ text }),
     },
+  );
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function stopDeveloperAssistant(
+  taskId: string,
+): Promise<DeveloperAssistantView> {
+  const response = await fetch(
+    `/tasks/${encodeURIComponent(taskId)}/developer-assistant/interrupt`,
+    { method: "POST" },
+  );
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function returnDeveloperAssistant(
+  taskId: string,
+): Promise<TaskSummary> {
+  const response = await fetch(
+    `/tasks/${encodeURIComponent(taskId)}/developer-assistant/return`,
+    { method: "POST" },
   );
   if (!response.ok) throw new Error(await errorText(response));
   return response.json();
@@ -2041,6 +2036,14 @@ export interface SettingsView {
     api?: string;
     key_hint?: string;
     providers: Array<{ name: string; models: string[]; key_hint?: string }>;
+    vision: {
+      configured: boolean;
+      provider?: string;
+      model?: string;
+      url?: string;
+      api?: string;
+      key_hint?: string;
+    };
   };
   /** 未设置覆盖时实际采用的服务默认值，不让管理员猜启动参数。 */
   defaults: {
@@ -2055,6 +2058,13 @@ export interface SettingsView {
       configured: boolean;
       url?: string;
       model?: string;
+      vision: {
+        configured: boolean;
+        provider?: string;
+        model?: string;
+        url?: string;
+        api?: string;
+      };
     };
   };
 }
@@ -2086,7 +2096,7 @@ export async function getSettings(): Promise<SettingsView> {
 }
 
 async function putSettings(
-  section: "runtime" | "models",
+  section: "runtime" | "models" | "vision",
   body: unknown,
 ): Promise<SettingsView> {
   const response = await fetch(`/settings/${section}`, {
@@ -2124,6 +2134,30 @@ export async function postModelsCheck(body: {
     method: "POST",
     body: JSON.stringify(body),
   });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export function putVisionSettings(body: {
+  url: string;
+  api_key: string;
+  model: string;
+  api: string;
+}): Promise<SettingsView> {
+  return putSettings("vision", body);
+}
+
+export interface VisionProbeResult {
+  status: "ready" | "failed";
+  provider: string;
+  model: string;
+  latency_ms: number;
+  response?: string;
+  error?: string;
+}
+
+export async function testVisionCapability(): Promise<VisionProbeResult> {
+  const response = await fetch("/settings/vision/test", { method: "POST" });
   if (!response.ok) throw new Error(await errorText(response));
   return response.json();
 }

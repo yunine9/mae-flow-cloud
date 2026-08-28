@@ -59,8 +59,8 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus,
       items: resources.filter((item) => item.scope === "module") },
     { title: "团队工程知识与 Skill", note: "按仓库、技术栈和模块上下文匹配",
       items: resources.filter((item) => item.scope === "team") },
-    { title: "代码仓自带知识与 Skill", note: "扫描后默认勾选；仓库版本固定",
-      items: resources.filter((item) => !!item.repository) },
+    { title: "代码仓 Skill", note: "扫描后默认勾选；正文由 Agent 按需读取",
+      items: resources.filter((item) => !!item.repository && item.kind === "skill") },
     { title: "项目规则", note: "代码仓内自动发现",
       items: resources.filter((item) => item.kind === "rules"
         && !item.repository && item.scope !== "team") },
@@ -137,7 +137,7 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus,
           </article>)}
         </div>)}
         {!catalog.length && <div className="knowledge-footprint-empty">
-          本任务还没有可补充的已有知识；可直接沉淀新知识，或在下次发起时扫描代码仓资产。</div>}
+          本任务还没有可补充的已有知识；可直接沉淀新知识，或在下次发起时关联业务模块、技术画像与仓内 Skill。</div>}
       </div>
     </OverlayDialog>}
 

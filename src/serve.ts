@@ -252,6 +252,12 @@ async function main(): Promise<void> {
   let provider = flag("--provider") ?? "maeflow";
   let model = flag("--model") ?? "scripted-v1";
   const modelsPath = flag("--models");
+  const visionProvider = flag("--vision-provider")?.trim();
+  const visionModel = flag("--vision-model")?.trim();
+  if (!!visionProvider !== !!visionModel) {
+    console.error("[serve] --vision-provider 与 --vision-model 必须同时配置");
+    process.exit(2);
+  }
   const settingsModels = settings.models();
   // 演示判定是三态:--models > 管理页配过模型网关 > 才算演示。
   // 曾经"无 --models 即演示"会让最小启动(--data --port)每次重启
@@ -763,6 +769,8 @@ async function main(): Promise<void> {
   const service = new TaskService({
     dataDir, provider, model, modelsJson, maxConcurrent, settings,
     ...(issueOnly ? { requirementDisabled: true } : {}),
+    vision: visionProvider && visionModel
+      ? { provider: visionProvider, model: visionModel } : undefined,
     // 个人 Git 令牌(界面只写不读):任务启动时按归属人取,经
     // credential helper 注入;没配的用户走部署级访问方式。
     gitCredential: (account) => auth.gitCredential(account),

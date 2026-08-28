@@ -34,7 +34,6 @@ type LaunchDraft = {
   baseline: string;
   lane: string;
   repairRounds: string;
-  advancedOpen: boolean;
   selectedBusinessModuleIds?: string[];
 };
 type LaunchPreferences = {
@@ -105,8 +104,6 @@ export function LaunchWorkspace({
     validDraft?.lane ?? savedPreferences?.lane ?? "");
   const [repairRounds, setRepairRounds] = useState(
     validDraft?.repairRounds ?? savedPreferences?.repairRounds ?? "");
-  const [advancedOpen, setAdvancedOpen] = useState(
-    validDraft?.advancedOpen ?? false);
   const [selectedBusinessModuleIds, setSelectedBusinessModuleIds] = useState(
     validDraft?.selectedBusinessModuleIds ?? []);
   const [moduleSelectionNotice, setModuleSelectionNotice] = useState("");
@@ -149,15 +146,18 @@ export function LaunchWorkspace({
   }, [options, repos, repositoryTechnologies, selectedBusinessModuleIds]);
   const deliveryLocationVisible = !!options
     && (options.repo.enabled || options.ticket.enabled || options.baseline.enabled);
-  const moduleSectionNumber = deliveryLocationVisible ? "03" : "02";
-  const executionSectionNumber = String(2
-    + Number(deliveryLocationVisible)
-    + Number(businessModules.length > 0)).padStart(2, "0");
+  const executionSectionNumber = deliveryLocationVisible ? "03" : "02";
+  const moduleSectionNumber = String(
+    Number(executionSectionNumber) + 1).padStart(2, "0");
 
   useEffect(() => {
     let alive = true;
     void getLaunchOptions().then((result) => {
-      if (alive) setOptions(result);
+      if (!alive) return;
+      setOptions(result);
+      setBaseline((current) => current.trim()
+        || (result.baseline.enabled ? result.baseline.default : ""));
+      setLane((current) => current || result.workflows[0]?.label || "");
     }).catch(() => {
       if (alive) setOptionsError("未能读取任务配置，请刷新后重试");
     }).finally(() => {
@@ -179,7 +179,6 @@ export function LaunchWorkspace({
         baseline,
         lane,
         repairRounds,
-        advancedOpen,
         selectedBusinessModuleIds,
       };
       try {
@@ -192,7 +191,7 @@ export function LaunchWorkspace({
     }, 300);
     return () => window.clearTimeout(timer);
   }, [title, requirement, requirementDocumentName, repos, ticket,
-    baseline, lane, repairRounds, advancedOpen, selectedBusinessModuleIds,
+    baseline, lane, repairRounds, selectedBusinessModuleIds,
     session.username]);
 
   useEffect(() => {
@@ -313,9 +312,6 @@ export function LaunchWorkspace({
           selectedRepositorySkillIds:
             repositorySkillSelection.scanned
               ? repositorySkillSelection.selectedIds : undefined,
-          selectedRepositoryKnowledgeIds:
-            repositorySkillSelection.scanned
-              ? repositorySkillSelection.selectedKnowledgeIds : undefined,
           selectedBusinessModuleIds,
           selectedEngineeringKnowledgeIds,
           repositoryProfiles: asRepositoryProfiles(repositoryTechnologies),
@@ -377,7 +373,7 @@ export function LaunchWorkspace({
             <ol className="launch-guide" aria-label="创建任务步骤">
               <li><i>1</i><span><strong>说清结果</strong><small>描述完成标准，不必编排 Agent 步骤</small></span></li>
               <li><i>2</i><span><strong>圈定范围</strong><small>填写一个或多个相关代码仓</small></span></li>
-              <li><i>3</i><span><strong>确认执行</strong><small>负责人和交付方式一次选好</small></span></li>
+              <li><i>3</i><span><strong>确认执行</strong><small>单号、基线和交付方式一次确认</small></span></li>
             </ol>
             <small className="launch-copy-foot">提交后可在“我的需求”持续跟进和控制任务;处理问题请前往“问题处理”。</small>
           </aside>
@@ -504,7 +500,7 @@ export function LaunchWorkspace({
 
               {options && deliveryLocationVisible && (
                 <section className="launch-form-section">
-                  <div className="launch-section-head"><i>02</i><div><strong>交付定位</strong><small>Agent 据此进入正确仓库和分支</small></div></div>
+                  <div className="launch-section-head"><i>02</i><div><strong>交付定位</strong><small>Agent 据此进入正确仓库、单号和基线</small></div><em>必填</em></div>
                   {options.repo.enabled && (
                     <div className="repo-field">
                     <div className="repo-field-title">
@@ -546,28 +542,73 @@ export function LaunchWorkspace({
                         onChange={setRepositoryTechnologies} />
                     </div>
                   )}
-                  {advancedOpen && <div className="launch-field-grid">
-                    {options.ticket.enabled && (
-                      <label className="account-field">
-                        <span>需求/问题单号{options.ticket.required ? "（必填）" : ""}</span>
-                        <input type="text" value={ticket}
-                          onChange={(event) => setTicket(event.target.value)}
-                          placeholder="REQ2026xxxx / DTS2026xxxx"
-                          spellCheck={false}
-                          required={options.ticket.required} />
-                      </label>
-                    )}
-                    {options.baseline.enabled && (
-                      <label className="account-field">
-                        <span>基线分支</span>
-                        <input type="text" value={baseline}
-                          onChange={(event) => changeBaseline(event.target.value)}
-                          placeholder={`默认 ${options.baseline.default}`} spellCheck={false} />
-                      </label>
-                    )}
-                  </div>}
+                  {(options.ticket.enabled || options.baseline.enabled) && (
+                    <div className="launch-field-grid launch-required-delivery-grid">
+                      {options.ticket.enabled && (
+                        <label className="account-field">
+                          <span>需求/问题单号
+                            {options.ticket.required ? "（必填）" : ""}</span>
+                          <input type="text" value={ticket}
+                            onChange={(event) => setTicket(event.target.value)}
+                            placeholder="REQ2026xxxx / DTS2026xxxx"
+                            spellCheck={false}
+                            required={options.ticket.required} />
+                        </label>
+                      )}
+                      {options.baseline.enabled && (
+                        <label className="account-field">
+                          <span>基线分支（必填）</span>
+                          <input type="text" value={baseline}
+                            onChange={(event) => changeBaseline(event.target.value)}
+                            placeholder={options.baseline.default} spellCheck={false}
+                            required />
+                        </label>
+                      )}
+                    </div>
+                  )}
                 </section>
               )}
+              {options && <section className="launch-form-section launch-execution-settings">
+                <div className="launch-section-head"><i>{executionSectionNumber}</i><div><strong>执行设置</strong><small>交付方式需要确认；修复轮预算可按需覆盖团队默认</small></div>
+                  {options.workflows.length > 0 && <em>交付方式必填</em>}
+                </div>
+                <div className="launch-field-grid launch-settings-grid">
+                  {options.workflows.length > 0 && (
+                    <fieldset className="delivery-mode-field">
+                      <legend><strong>交付方式</strong>
+                        <small>选最像你现在这件事的情况</small></legend>
+                      <div className="delivery-mode-options">
+                        {options.workflows.map((item) => (
+                          <label key={item.key}
+                            className={`delivery-mode-option${(lane
+                              || options.workflows[0].label) === item.label
+                              ? " selected" : ""}`}>
+                            <input type="radio" name="delivery-workflow"
+                              value={item.label}
+                              checked={(lane || options.workflows[0].label)
+                                === item.label}
+                              onChange={() => setLane(item.label)} required />
+                            <span className="delivery-mode-radio" aria-hidden />
+                            <span><strong>{item.label}</strong>
+                              {item.description
+                                && <small>{item.description}</small>}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </fieldset>
+                  )}
+                  <label className="account-field repair-field">
+                    <span>修复轮预算（可选）</span>
+                    <input type="number" inputMode="numeric" min={0} step={1}
+                      value={repairRounds}
+                      onChange={(event) => setRepairRounds(event.target.value)}
+                      placeholder={options.repair_rounds !== undefined
+                        ? `沿用团队默认 ${options.repair_rounds}（0=关闭）`
+                        : "沿用团队默认：不限轮（0=关闭）"} />
+                    <small>留空沿用团队设置；只有需要限制或关闭自动修复时才填写。</small>
+                  </label>
+                </div>
+              </section>}
               {options && businessModules.length > 0 && (
                 <section className="launch-form-section business-module-picker">
                   <div className="launch-section-head"><i>{moduleSectionNumber}</i><div>
@@ -644,11 +685,11 @@ export function LaunchWorkspace({
                 </div> : <div className="engineering-knowledge-empty">
                   <strong>当前没有匹配的团队工程知识</strong>
                   <span>{repositoryTechnologies.some((item) => item.confirmed)
-                    ? "仍会正常使用业务模块知识和代码仓自带知识。"
+                    ? "仍会正常使用业务模块知识和代码仓 Skill。"
                     : "首次确认仓库技术栈后会出现更准确的匹配；这不影响继续下单。"}</span>
                 </div>}
                 <p className="business-module-picker-note">
-                  默认选中表示本任务可使用；正文按形态加载或按需读取，不把“选中”变成流程门禁。
+                  默认选中只表示加入本任务知识索引；正文必须按需读取，不把“选中”冒充“已使用”，也不形成流程门禁。
                 </p>
               </section>}
               {options?.repo.enabled && (
@@ -659,46 +700,6 @@ export function LaunchWorkspace({
                   onSelectionChange={setRepositorySkillSelection}
                 />
               )}
-              <button type="button" className="launch-advanced-toggle"
-                aria-expanded={advancedOpen}
-                onClick={() => setAdvancedOpen((open) => !open)}>
-                <span><strong>高级设置</strong><small>基线、交付方式及修复预算</small></span>
-                <i aria-hidden>{advancedOpen ? "收起" : "展开"}</i>
-              </button>
-              {advancedOpen && <>
-              <section className="launch-form-section">
-                <div className="launch-section-head"><i>{executionSectionNumber}</i><div><strong>执行设置</strong><small>选定交付方式和修复预算;任务自动归属你本人</small></div></div>
-                <div className="launch-field-grid launch-settings-grid">
-                  {(options?.workflows.length ?? 0) > 0 && (
-                    <label className="account-field">
-                      <span>交付方式</span>
-                      <select className="launch-model-select"
-                        value={lane || options!.workflows[0].label}
-                        onChange={(event) => setLane(event.target.value)}>
-                        {options!.workflows.map((item) => (
-                          <option key={item.key} value={item.label}>
-                            {item.label}
-                            {item.steps !== undefined
-                              ? `（${item.steps} 步 · 拍板 ${item.acks} 次）` : ""}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  )}
-                  {options && (
-                    <label className="account-field repair-field">
-                      <span>修复轮预算</span>
-                      <input type="text" inputMode="numeric" value={repairRounds}
-                        onChange={(event) => setRepairRounds(event.target.value)}
-                        placeholder={options.repair_rounds !== undefined
-                          ? `默认 ${options.repair_rounds}（0=关）`
-                          : "默认不限轮（0=关）"} />
-                    </label>
-                  )}
-                </div>
-              </section>
-              </>}
-
               {error && <div className="composer-error" role="alert">{error}</div>}
               <footer className="launch-submit-bar">
                 <div><strong>{blocked

@@ -78,6 +78,11 @@ test("开发助手:安全暂停主任务后执行真实命令，回复/工具结
       "printf 'assistant-ok\\n' > assistant-proof.txt && printf 'command-ok\\n'",
     } } },
     { text: "已创建 assistant-proof.txt，命令执行成功；没有提交或推送。" },
+    { tool: { name: "bash", input: { command:
+      "test \"$(cat assistant-proof.txt)\" = assistant-ok && printf 'second-ok\\n'",
+    } } },
+    { text: "第二轮仍在同一代码现场，证明文件检查通过。" },
+    { tool: { name: "bash", input: { command: "__MFC_HOLD__" } } },
   ], "scripted-v1", { linear: true });
   await model.start();
   const containers = new FakeTaskContainerHarness();
@@ -97,15 +102,19 @@ test("开发助手:安全暂停主任务后执行真实命令，回复/工具结
     const id = service.create("旁路助手集成演练").id;
     await until(() => service.get(id)?.status === "waiting_for_human",
       "主任务进入人工节点");
-    const paused = await service.pause(id, "alice");
-    assert.equal(paused.status, "paused");
 
     const started = service.startDeveloperAssistant(
       id, "直接跑命令并留下一个证明文件", "alice");
-    assert.equal(started.state, "running");
-    assert.throws(() => service.resume(id, "alice"), /开发助手仍在处理/);
+    assert.equal(started.messages.some((item) =>
+      item.role === "user" && /直接跑命令/.test(item.text)), true,
+    "第一条指令必须在暂停收口前就持久化");
+    assert.equal(["acquiring", "working"].includes(started.state), true,
+      "服务端应自动接管，不再要求前端先暂停");
+    await until(() => service.get(id)?.status === "paused",
+      "服务端把主任务收到安全暂停边界");
+    assert.throws(() => service.resume(id, "alice"), /开发接管会话/);
 
-    await until(() => service.developerAssistant(id).state === "completed",
+    await until(() => service.developerAssistant(id).state === "ready",
       "开发助手返回结果");
     const summary = service.get(id)!;
     const view = service.developerAssistant(id);
@@ -130,14 +139,81 @@ test("开发助手:安全暂停主任务后执行真实命令，回复/工具结
         event.taskId === id), true);
 
     const assistantContainer = containers.records.at(-1)!;
-    assert.equal(assistantContainer.stopped, true,
-      "助手回合结束必须释放任务容器");
+    assert.equal(assistantContainer.stopped, false,
+      "单轮结束后必须保留开发容器，维持 CLI 心流");
     assert.equal(assistantContainer.commands.some((command) =>
       command.includes("assistant-proof.txt")), true);
 
-    const resumed = service.resume(id, "alice");
+    service.startDeveloperAssistant(id, "继续检查刚才的证明文件", "alice");
+    await until(() => service.developerAssistant(id).state === "ready",
+      "开发助手第二轮返回结果");
+    assert.equal(containers.records.at(-1), assistantContainer,
+      "连续输入必须复用同一个接管容器");
+    assert.match(service.developerAssistant(id).messages.at(-1)?.text ?? "",
+      /第二轮仍在同一代码现场/);
+
+    service.startDeveloperAssistant(id, "开始一个可以手动停止的长动作", "alice");
+    await until(() => assistantContainer.commands.some((command) =>
+      command.includes("__MFC_HOLD__")), "开发助手进入长动作");
+    const stopped = await service.stopDeveloperAssistant(id, "alice");
+    assert.equal(stopped.state, "ready");
+    assert.equal(service.get(id)?.status, "paused",
+      "停止当前动作不等于交还主任务");
+    assert.match(stopped.messages.at(-1)?.text ?? "", /代码现场仍由你接管/);
+
+    const resumed = await service.returnDeveloperAssistant(id, "alice");
     assert.equal(resumed.status, "waiting_for_human",
       "交还后应回到原来的 Mae-Flow/主任务状态，而不是由助手越级推进");
+    assert.equal(assistantContainer.stopped, true,
+      "显式交还时才释放开发容器");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
+test("开发助手:主会话正在执行时可直接接管，安全边界后自动启动", async () => {
+  const model = new ScriptedModelServer([
+    { tool: { name: "bash", input: {
+      command: "sleep 0.2; printf 'main-safe-boundary\\n'",
+    } } },
+    { text: "主会话已在当前操作边界收口。" },
+    { text: "已接管正在运行的主现场，可以继续输入。" },
+  ], "scripted-v1", { linear: true });
+  await model.start();
+  const containers = new FakeTaskContainerHarness();
+  const service = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-developer-assistant-running-")),
+    provider: "maeflow",
+    model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    isolation: {
+      image: "fixture/developer-assistant:test",
+      containerFactory: containers.factory,
+    },
+  });
+
+  try {
+    const id = service.create("运行中直接接管").id;
+    await until(() => service.get(id)?.status === "running"
+      && model.requests.length >= 1, "主会话正在执行命令");
+
+    const started = service.startDeveloperAssistant(
+      id, "不用我先点暂停，直接接管主现场", "alice");
+    assert.equal(started.state, "acquiring");
+    assert.equal(service.get(id)?.status, "pausing");
+    assert.equal(started.messages.at(-1)?.text,
+      "不用我先点暂停，直接接管主现场");
+
+    await until(() => service.developerAssistant(id).state === "ready",
+      "主会话边界收口后自动进入开发 CLI");
+    assert.equal(service.get(id)?.status, "paused");
+    assert.match(service.developerAssistant(id).messages.at(-1)?.text ?? "",
+      /已接管正在运行的主现场/);
+    assert.equal(containers.records.length, 2,
+      "主会话容器必须先收口，开发 CLI 再使用独立容器");
+    assert.equal(containers.records[0].stopped, true);
+    assert.equal(containers.records[1].stopped, false);
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
@@ -187,19 +263,19 @@ test("开发助手:用户可跨流程位置接管，并把变更/命令结果一
 
     assert.equal(service.developerAssistant(id).availability.code, "edit_window");
     service.startDeveloperAssistant(id, "修复并运行检查", "alice");
-    await until(() => service.developerAssistant(id).state === "completed",
+    await until(() => service.developerAssistant(id).state === "ready",
       "内核窗口中的助手完成");
 
     const view = service.developerAssistant(id);
-    assert.equal(view.handoff?.state, "changed");
-    assert.deepEqual(view.handoff?.changed_paths, ["fixed.ts"]);
+    assert.equal(view.handoff?.state, "running",
+      "CLI 就绪不等于交还完成，起点必须持续保留");
 
     // revision 只是启动时的定位信息。即使内核账本被其他恢复动作刷新，
     // 交还也必须让主 Agent 重新读 current，而不是把任务卡在 paused。
     writeFileSync(join(repo, ".mae-flow.json"), JSON.stringify({
       current: "build", revision: 4,
     }));
-    const resumed = service.resume(id, "alice");
+    const resumed = await service.returnDeveloperAssistant(id, "alice");
     assert.equal(resumed.status, "queued");
     const saved = JSON.parse(readFileSync(
       join(dataDir, id, "task.json"), "utf-8"));
@@ -252,9 +328,9 @@ test("开发助手:用户可跨流程位置接管，并把变更/命令结果一
     });
     reviewState.summary.control = { paused_from: "waiting_for_human" };
     service.startDeveloperAssistant(reviewId, "这里需要直接调整", "alice");
-    await until(() => service.developerAssistant(reviewId).state === "completed",
+    await until(() => service.developerAssistant(reviewId).state === "ready",
       "审批阶段由用户接管完成");
-    const reviewResumed = service.resume(reviewId, "alice");
+    const reviewResumed = await service.returnDeveloperAssistant(reviewId, "alice");
     assert.equal(reviewResumed.status, "queued");
     const reviewSaved = JSON.parse(readFileSync(
       join(dataDir, reviewId, "task.json"), "utf-8"));
@@ -292,9 +368,10 @@ test("开发助手:用户可跨流程位置接管，并把变更/命令结果一
     }));
     service.startDeveloperAssistant(
       verifyingId, "流水线方向错了，直接修当前代码", "alice");
-    await until(() => service.developerAssistant(verifyingId).state === "completed",
+    await until(() => service.developerAssistant(verifyingId).state === "ready",
       "验证阶段由用户接管完成");
-    const verifyingResumed = service.resume(verifyingId, "alice");
+    const verifyingResumed = await service.returnDeveloperAssistant(
+      verifyingId, "alice");
     assert.equal(verifyingResumed.status, "queued",
       "用户改过代码后不能继续轮询旧流水线，必须重建主会话");
     assert.equal(verifyingResumed.delivery?.sha, undefined);

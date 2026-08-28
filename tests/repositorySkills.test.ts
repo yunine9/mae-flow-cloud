@@ -100,7 +100,7 @@ test("仓库没有 Skill 时成功返回空目录，不把可选能力变成下�
   assert.equal(catalog.revision, git(repo, "rev-parse", "HEAD"));
 });
 
-test("同一次安全目录发现项目规则与 docs，规则提及的文档给出建议", async () => {
+test("Skill 发现只读取固定 Skill 根，不读取仓库其他文件", async () => {
   const repo = makeRepo();
   mkdirSync(join(repo, "docs", "domain"), { recursive: true });
   writeFileSync(join(repo, "AGENTS.md"), [
@@ -115,14 +115,7 @@ test("同一次安全目录发现项目规则与 docs，规则提及的文档给
 
   const catalog = await discoverRepositorySkills({ repository: repo });
   assert.equal(catalog.error, undefined);
-  assert.deepEqual(catalog.knowledge.map((item) => item.relative_path), [
-    "AGENTS.md", "docs/domain/orders.md", "docs/misc.md",
-  ]);
-  assert.equal(catalog.knowledge[0].auto_load, true);
-  assert.equal(catalog.knowledge[0].selectable, false);
-  assert.equal(catalog.knowledge[1].recommended, true);
-  assert.equal(catalog.knowledge[2].recommended, false);
-  assert.ok(catalog.knowledge.every((item) => /^[0-9a-f]{64}$/.test(item.digest)));
+  assert.deepEqual(catalog.skills, []);
 });
 
 test("disable-model-invocation 仍展示，但不可被自动选择", async () => {
