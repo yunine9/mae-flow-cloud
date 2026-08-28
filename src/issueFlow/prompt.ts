@@ -71,16 +71,26 @@ function envLine(state: IssueSessionState): string {
 }
 
 /** 多仓清单块:主仓=交付仓(repo/),其余参考仓(ref/<仓名>/)。
- * 路径相对会话工作区(Agent 的 cwd 就是工作区根);空清单返回空串,
- * 由调用方给"未登记"文案。 */
+ * 路径相对会话工作区(Agent 的 cwd 就是工作区根)。清单以可读的
+ * 工作区路径开头——登记地址(尤其本地路径仓)只作"克隆自"注脚:
+ * 本地路径与本机真实目录同名同在,放前面会被 Agent 当可读路径去
+ * 撞工作区护栏(实测 issue-24 踩坑)。空清单返回空串,由调用方给
+ * "未登记"文案。 */
 function repoLines(state: IssueSessionState): string {
   const repos = issueRepoWorkspaces(state, "");
   if (!repos.length) return "";
-  const lines = repos.map((repo, index) =>
-    `  - ${repo.url} → ${repo.dir}(${
-      index === 0 ? "交付仓:推送/MR/部署都在这里" : "参考仓:只读分析"
-    })`);
-  return `- 代码仓(${repos.length} 个,已克隆):\n${lines.join("\n")}`;
+  const lines = repos.map((repo, index) => {
+    const role = index === 0
+      ? "交付仓:推送/MR/部署都在这里"
+      : "参考仓:只读分析";
+    const source = /^https?:\/\//i.test(repo.url)
+      ? `克隆自 ${repo.url}`
+      : `克隆自本地路径 ${repo.url}(那是工作区外的源,不可直接读,`
+        + `读代码用 ${repo.dir}/ 下的相对路径)`;
+    return `  - ${repo.dir}/ —— ${role};${source}`;
+  });
+  return `- 代码仓(${repos.length} 个,已克隆;读代码一律用下列`
+    + `工作区相对路径):\n${lines.join("\n")}`;
 }
 
 /** 阶段名(自由/固定两套词表都认)。 */

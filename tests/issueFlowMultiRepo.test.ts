@@ -222,11 +222,14 @@ test("无单多仓端到端:模块带仓克隆到 repo/+ref/,提示词与阶段�
       /3 个代码仓已克隆/.test(entry.note ?? "")),
     "prep_repo 收口的转移账要交代多仓事实");
 
-    // 提示词把仓清单连同工作区路径讲清楚,交付/参考角色不混淆。
+    // 提示词把仓清单连同工作区路径讲清楚:可读路径开头,交付/参考
+    // 角色分明;本地路径仓必须显式声明克隆源不可直接读(issue-24 踩坑)。
     const requestText = JSON.stringify(model.requests);
-    assert.match(requestText, /ref\/origin-2/);
+    assert.match(requestText, /ref\/origin-2\//);
     assert.match(requestText, /交付仓/);
     assert.match(requestText, /参考仓/);
+    assert.match(requestText, /读代码一律用下列工作区相对路径/);
+    assert.match(requestText, /克隆自本地路径 [^"]*origin\.git\(那是工作区外的源,不可直接读/);
 
     service.answer(created.id, {
       state_version: gate.gate!.state_version,
