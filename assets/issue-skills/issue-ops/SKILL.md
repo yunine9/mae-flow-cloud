@@ -15,9 +15,9 @@ metadata:
 - hosts 缺省用会话配置的网管环境;
 - 大目录耗时较长属正常;完成后直接在 local-logs/ 里 grep,不要把整个日志读进上下文。
 
-## build_deploy(hosts?, include_lib?)
+## build_deploy(repo?, hosts?, include_lib?)
 
-- 构建工作区 repo/ 并部署到目标服务器,部署前自动备份(版本号_bak时间戳);
+- 构建 `repo` 参数指定的代码仓并部署到目标服务器(缺省首个登记仓;**多仓会话必须显式指定要部署哪个仓**),部署前自动备份(版本号_bak时间戳);
 - **默认只更新 webapps**;`include_lib=true` 仅当 pom.xml 依赖版本变更;
 - 部署完成后**必须**停下(AskUserQuestion)请用户验证——"程序说部署成功"不等于"验证通过"。
 

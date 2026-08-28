@@ -2298,9 +2298,8 @@ export type IssueGateKind =
   | "analysis_confirm"
   | "conclude"
   | "env_verify"
-  // 2026-08-28:拉取代码仓缺仓(AI 识别/填地址/跳过三选一)与网管
-  // 环境缺配置(拉日志/换库现场补配),闸都由工具/宿主现场举。
-  | "repo_needed"
+  // 2026-08-28:代码仓缺口不再走平台闸(pull_repo 工具化);
+  // 网管环境缺配置(拉日志/换库现场补配)仍由工具现场举。
   | "env_needed";
 
 export interface IssueGateCard {
@@ -2336,7 +2335,8 @@ export interface IssueSummary {
   round?: number;
   gate?: IssueGateCard;
   ut?: { passed: boolean; summary: string; log_path?: string; round: number; at: string };
-  pipeline?: {
+  /** 流水线监看(按仓,键=仓地址;一仓一 MR 一流水线)。 */
+  pipelines?: Record<string, {
     sha: string;
     status: "running" | "success" | "failed";
     watching: boolean;
@@ -2344,7 +2344,7 @@ export interface IssueSummary {
     deadline: string;
     last_error?: string;
     round: number;
-  };
+  }>;
   converted_from?: string;
   converted_to?: string;
   status: IssueStatus;
@@ -2355,8 +2355,10 @@ export interface IssueSummary {
     summary: string;
     at: string;
   };
-  push?: { branch: string; sha: string; at: string };
-  mr?: { branch: string; title: string; url?: string; iid?: string; at: string };
+  /** 推送账(按仓,一仓一分支)。 */
+  pushes?: Array<{ repo: string; branch: string; sha: string; at: string }>;
+  /** MR 账(按仓,一仓一 MR)。 */
+  mrs?: Array<{ repo: string; branch: string; title: string; url?: string; iid?: string; at: string }>;
   /** 阶段转移审计:agent 声明与 platform 机械事实同账。 */
   transitions?: Array<{
     at: string; source: "agent" | "platform"; stage?: AnyIssueStage; note: string;
@@ -2566,7 +2568,8 @@ export interface IssueManualEdit {
 
 export interface IssueMaterials {
   ticket?: string;
-  push?: { branch: string; sha: string; at: string };
+  pushes: Array<{ repo: string; branch: string; sha: string; at: string }>;
+  mrs: Array<{ repo: string; branch: string; title: string; url?: string; iid?: string; at: string }>;
   analysis_available: boolean;
   changes: IssueWorkspaceChange[];
   logs: IssueMaterialFile[];

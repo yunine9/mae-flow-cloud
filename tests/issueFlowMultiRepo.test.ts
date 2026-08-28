@@ -57,7 +57,7 @@ async function until<T>(
   }
 }
 
-test("仓→工作区映射:主仓 repo/,参考仓 ref/<仓名>/,重名加序号,旧单仓字段兼容", () => {
+test("仓→工作区映射:全部平铺 repo/<仓名>/,重名加序号,旧单仓字段兼容", () => {
   const workspace = "/ws";
   const multi = issueRepoWorkspaces({
     repo_urls: [
@@ -67,21 +67,21 @@ test("仓→工作区映射:主仓 repo/,参考仓 ref/<仓名>/,重名加序号
     ],
   } as IssueSessionState, workspace);
   assert.deepEqual(multi.map((repo) => repo.dir), [
-    join(workspace, "repo"),
-    join(workspace, "ref", "orders"),
-    join(workspace, "ref", "orders-2"),
-  ], "主仓不占 ref/ 命名空间;参考仓同名才加序号");
+    join(workspace, "repo", "orders"),
+    join(workspace, "repo", "orders-2"),
+    join(workspace, "repo", "orders-3"),
+  ], "仓平等(2026-08-28):无主从,平铺命名,同名才加序号");
 
   const legacy = issueRepoWorkspaces(
     { repo_url: "/data/legacy.git" } as IssueSessionState, workspace);
-  assert.deepEqual(legacy.map((repo) => repo.dir), [join(workspace, "repo")],
-    "旧会话只有 repo_url 也读得出主仓");
+  assert.deepEqual(legacy.map((repo) => repo.dir), [join(workspace, "repo", "legacy")],
+    "旧会话只有 repo_url 也读得出映射(仓名派生)");
 
   assert.equal(issueRepoWorkspaces({} as IssueSessionState, workspace).length, 0,
     "没登记仓就没有映射");
 });
 
-test("issue.json 读取迁移:repo_url 与 repo_urls 双向补齐", () => {
+test("issue.json 读取迁移:repo_url 与 repo_urls 双向补齐;push/mr/pipeline 单数账升按仓", () => {
   const dir = mkdtempSync(join(tmpdir(), "mfc-issue-multirepo-"));
   const base = {
     id: "issue-1", account: "dev", created_at: "2026-08-28T00:00:00Z",
@@ -105,6 +105,28 @@ test("issue.json 读取迁移:repo_url 与 repo_urls 双向补齐", () => {
   const migrated = loadState(join(dir, "new"))!;
   assert.equal(migrated.repo_url, "https://code.test/x.git",
     "新清单的主仓回写别名,展示层不用两头兜底");
+
+  // 单数账迁移:push/mr/pipeline → pushes/mrs/pipelines(挂到主仓名下)。
+  mkdirSync(join(dir, "ledger"), { recursive: true });
+  writeFileSync(join(dir, "ledger", "issue.json"), JSON.stringify({
+    ...base,
+    repo_url: "https://code.test/x.git",
+    push: { branch: "master_dev_T1", sha: "a".repeat(40), at: "2026-08-28T00:00:00Z" },
+    mr: { branch: "master_dev_T1", title: "[T1] t", url: "http://mr/1", at: "2026-08-28T00:00:00Z" },
+    pipeline: {
+      sha: "a".repeat(40), status: "success", watching: false,
+      started_at: "2026-08-28T00:00:00Z",
+      deadline: "2026-08-28T00:10:00Z", round: 1,
+    },
+  }));
+  const ledger = loadState(join(dir, "ledger"))!;
+  assert.equal(ledger.pushes?.length, 1);
+  assert.equal(ledger.pushes![0].repo, "https://code.test/x.git");
+  assert.equal(ledger.pushes![0].branch, "master_dev_T1");
+  assert.equal(ledger.mrs?.length, 1);
+  assert.equal(ledger.mrs![0].url, "http://mr/1");
+  assert.equal(ledger.pipelines?.["https://code.test/x.git"]?.status, "success");
+  assert.equal((ledger as { push?: unknown }).push, undefined, "单数字段退役");
 });
 
 test("登记校验:模块必须存在且在架;仓数有上限;fixed 无仓放行(拉取代码仓阶段再定)", () => {
@@ -164,14 +186,19 @@ test("登记校验:模块必须存在且在架;仓数有上限;fixed 无仓放�
   }
 });
 
-test("无单多仓端到端:模块带仓克隆到 repo/+ref/,提示词与阶段备注交代清单,转正全继承", async () => {
+test("无单多仓端到端:模块带仓,AI 逐仓 pull_repo 落到 repo/<仓名>/ 平铺,转正全继承", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-mr-e2e-"));
-  // 三个裸仓:主仓之外的参考仓们 basename 相同,钉死 ref/ 目录去重。
+  // 三个裸仓名相同,钉死 repo/ 平铺命名的去重序号。
   const originA = bareOriginAt(join(dataDir, "a"), "origin.git");
   const originB = bareOriginAt(join(dataDir, "b"), "origin.git");
   const originC = bareOriginAt(join(dataDir, "c"), "origin.git");
   const TICKET = "DTS-2026-1002";
   const script: Scene[] = [
+    { tool: { name: "lookup_modules", input: { keyword: "支付" } } },
+    { tool: { name: "bind_module", input: { module_id: "pay-core" } } },
+    { tool: { name: "pull_repo", input: { url: originA } } },
+    { tool: { name: "pull_repo", input: { url: originB } } },
+    { tool: { name: "pull_repo", input: { url: originC } } },
     { tool: { name: "bash", input: { command:
       "printf '# 初步定位\\n\\n结论:是问题。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis",
@@ -199,8 +226,8 @@ test("无单多仓端到端:模块带仓克隆到 repo/+ref/,提示词与阶段�
     });
     assert.equal(created.scenario, "no_ticket");
     assert.deepEqual(created.repo_urls, [originA, originB, originC],
-      "模块绑定按序带出,首个=主仓");
-    assert.equal(created.repo_url, originA, "主仓别名同步");
+      "模块绑定按序带出登记清单");
+    assert.equal(created.repo_url, originA, "首个登记仓别名同步");
     assert.equal(created.module, "支付核心", "模块名称由模块库派生");
     assert.equal(created.module_id, "pay-core");
 
@@ -211,24 +238,25 @@ test("无单多仓端到端:模块带仓克隆到 repo/+ref/,提示词与阶段�
         ? issue : undefined;
     }, "无单结论闸");
 
-    // 克隆是异步回合里做的:prep_repo 收口(结论闸在场)后布局必须齐。
+    // 克隆由 AI 逐仓 pull_repo 落地:平铺布局必须齐。
     const root = join(dataDir, "issues", created.id);
-    assert.ok(existsSync(join(root, "repo", ".git")), "主仓克隆在 repo/");
-    assert.ok(existsSync(join(root, "ref", "origin", ".git")), "参考仓在 ref/origin/");
-    assert.ok(existsSync(join(root, "ref", "origin-2", ".git")),
-      "同名参考仓目录加序号");
+    assert.ok(existsSync(join(root, "repo", "origin", ".git")), "首仓 repo/origin/");
+    assert.ok(existsSync(join(root, "repo", "origin-2", ".git")), "同名仓加序号");
+    assert.ok(existsSync(join(root, "repo", "origin-3", ".git")), "第三仓齐装");
     const entered = service.get(created.id);
-    assert.ok(entered.transitions?.some((entry) =>
-      /3 个代码仓已克隆/.test(entry.note ?? "")),
-    "prep_repo 收口的转移账要交代多仓事实");
+    assert.equal(entered.stage_states?.[1], "done", "首仓落地即完成拉取阶段");
+    assert.equal(entered.stage, "conclude", "无单场景走到结论节点");
+    assert.ok((entered.transitions ?? []).filter((entry) =>
+      /代码仓已拉取/.test(entry.note ?? "")).length >= 3,
+    "逐仓拉取各留转移账");
 
-    // 提示词把仓清单连同工作区路径讲清楚:可读路径开头,交付/参考
-    // 角色分明;本地路径仓必须显式声明克隆源不可直接读(issue-24 踩坑)。
+    // 提示词把仓清单连同工作区路径讲清楚:开场时未拉的仓如实标注
+    // "待拉取"并指路 pull_repo;本地路径仓必须显式声明克隆源不可直接
+    // 读(issue-24 踩坑)。
     const requestText = JSON.stringify(model.requests);
-    assert.match(requestText, /ref\/origin-2\//);
-    assert.match(requestText, /交付仓/);
-    assert.match(requestText, /参考仓/);
-    assert.match(requestText, /读代码一律用下列工作区相对路径/);
+    assert.match(requestText, /repo\/origin-2\//);
+    assert.match(requestText, /待拉取\(调 pull_repo 拉它\)/);
+    assert.match(requestText, /一律平铺在 repo\/ 下/);
     assert.match(requestText, /克隆自本地路径 [^"]*origin\.git\(那是工作区外的源,不可直接读/);
 
     service.answer(created.id, {
@@ -246,13 +274,13 @@ test("无单多仓端到端:模块带仓克隆到 repo/+ref/,提示词与阶段�
     assert.equal(converted!.module_id, "pay-core", "模块留痕继承");
     assert.equal(converted!.module, "支付核心");
     const newRoot = join(dataDir, "issues", converted!.id);
-    assert.ok(existsSync(join(newRoot, "repo", ".git")), "主仓工作区继承");
-    assert.ok(existsSync(join(newRoot, "ref", "origin-2", ".git")),
-      "参考仓工作区继承(免二次克隆)");
-    const branch = spawnSync("git", ["-C", join(newRoot, "repo"),
+    assert.ok(existsSync(join(newRoot, "repo", "origin", ".git")), "首仓工作区继承");
+    assert.ok(existsSync(join(newRoot, "repo", "origin-2", ".git")),
+      "多仓工作区继承(免二次克隆)");
+    const branch = spawnSync("git", ["-C", join(newRoot, "repo", "origin"),
       "branch", "--show-current"], { encoding: "utf-8" });
     assert.equal(branch.stdout.trim(), `master_dev_${TICKET}`,
-      "宿主建分支仍只在主仓");
+      "转正时宿主给每个在场仓切好新单号分支");
 
     await until(() => {
       const issue = service.get(converted!.id);

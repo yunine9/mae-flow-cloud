@@ -24,7 +24,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import { CloudSession, type Outcome } from "../sessionDriver.ts";
 import { EventLog } from "../semanticEvents.ts";
 import { TranscriptStore } from "../transcriptStore.ts";
@@ -62,7 +62,9 @@ import {
 } from "./state.ts";
 import {
   cloneRepository,
+  currentHead,
   ensureBranch,
+  validateRepoUrl,
   type GitCredential,
 } from "./issueGit.ts";
 import { readBusinessModule } from "../businessModuleLibrary.ts";
@@ -190,12 +192,6 @@ export interface IssueMessage {
 
 const TICKET_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
-/** repo_needed 闸的题面(enterFixedStage 举闸与 resolveGate 失败重举
- * 共用一句话,改字两处要同步)。 */
-const REPO_NEEDED_QUESTION =
-  "拉取代码仓需要先确定代码仓:可让 AI 依据业务模块映射自动识别,"
-    + "或直接填写代码仓地址;本单无代码改动也可跳过拉取";
-
 /** 结论文档回传上限:一个巨型文档不能把页面拖死。 */
 const ANALYSIS_MAX_BYTES = 512 * 1024;
 const ANALYSIS_TRUNCATED_NOTE =
@@ -289,10 +285,13 @@ export class IssueFlowService {
       };
       this.live.set(state.id, live);
       // 流水线监看续表:deadline 还是原来那张(重启不白送预算);
-      // watching=false 的(终态/耗尽)不重挂。
-      if (state.mode === "fixed" && state.pipeline?.watching) {
-        this.log(`[issue-flow] ${state.id} 恢复流水线监看 @ ${state.pipeline.sha.slice(0, 12)}`);
-        void this.watchPipeline(live, state.pipeline.sha);
+      // watching=false 的(终态/耗尽)不重挂。多仓各自挂各自的表。
+      for (const [repo, watch] of Object.entries(state.pipelines ?? {})) {
+        if (state.mode === "fixed" && watch.watching) {
+          this.log(`[issue-flow] ${state.id} 恢复流水线监看(${repo})`
+            + ` @ ${watch.sha.slice(0, 12)}`);
+          void this.watchPipeline(live, repo, watch.sha);
+        }
       }
     }
     if (interrupted) {
@@ -640,8 +639,8 @@ export class IssueFlowService {
       live.state.status = "running";
       saveState(live.root, live.state);
       void this.runTurn(live, async () => {
-        await this.ensureCloned(live);
-        await this.enterFixedStage(live, live.state.stage as FixedStage);
+        // 2026-08-28 拍板:克隆不再是回合前的自动动作——登记的仓由
+        // Agent 在「拉取代码仓」阶段调 pull_repo 逐个落地(开场词有令)。
         const driver = await this.openDriver(live);
         return driver.start(live.state.mode === "fixed"
           ? issueFixedOpeningPrompt(live.state)
@@ -653,51 +652,71 @@ export class IssueFlowService {
     }
   }
 
-  /** 固定流程的阶段进入钩子:prep_repo 在克隆就绪后由平台收口(有单
-   * 场景还要宿主建分支——分支名规范烧着单号,交给 Agent 起名会漂)。
-   * 克隆失败按回合异常走 failed(free/fixed 同语义)。
-   *
-   * 2026-08-28 拍板:登记不再卡仓。进了 prep_repo 还没有仓时,宿主举
-   * repo_needed 闸(AI 识别/用户填地址/无代码仓跳过三选一),不抛异常
-   * ——闸只记"在场"不动状态,回合照常收口,waiting_user 由 settle 在
-   * 回合终点定格。pump 先跑的 ensureCloned 对空仓清单本来就 no-op,
-   * 这里是"空仓不克隆"的唯一裁决点,不存在双重克隆。 */
-  private async enterFixedStage(
+  /** 拉仓(pull_repo 工具的宿主实现;2026-08-28 拍板:克隆是 Agent 的
+   * 显式动作,平台只代劳凭据与机械步骤)。登记合并 → 带凭据克隆到
+   * repo/<仓名>/ →(有单场景)切好修复分支。回执只含事实;基线分支
+   * 缺失不炸——如实报 baselineMiss 退回默认分支,由 Agent 裁决。 */
+  private async pullRepoFor(
     live: LiveIssue,
-    stage: FixedStage,
-  ): Promise<void> {
+    rawUrl: string,
+  ): Promise<{
+    dir: string; cloned: boolean; branch?: string;
+    head: string; baselineMiss?: string;
+  }> {
     const { state } = live;
-    if (state.mode !== "fixed" || !state.scenario || stage !== "prep_repo") {
-      return;
+    const url = validateRepoUrl(rawUrl);
+    this.requireGitIdentity(state.account, [url]);
+    // 登记合并:与登记/模块绑定同一把尺,超上限整次打回。
+    const merged = normalizeIssueRepos(undefined,
+      [...(state.repo_urls ?? []), url]);
+    state.repo_urls = merged;
+    state.repo_url ??= merged[0];
+    const repo = issueRepoWorkspaces(state, live.root)
+      .find((item) => item.url === url)!;
+    let baselineMiss: string | undefined;
+    const cloned = !existsSync(join(repo.dir, ".git"));
+    if (cloned) {
+      this.log(`[issue-flow] ${live.id} 拉仓: ${url}`);
+      const common = {
+        dataDir: this.options.dataDir,
+        targetDir: repo.dir,
+        repoUrl: url,
+        credential: this.options.gitCredential?.(state.account),
+      };
+      try {
+        await cloneRepository({
+          ...common,
+          ...(state.baseline ? { baseline: state.baseline } : {}),
+        });
+      } catch (error) {
+        if (!state.baseline) throw error;
+        // 基线分支可能不存在(参考 Q7 拍板):退回默认分支克隆,
+        // 事实回报,不替 Agent 拍板。
+        baselineMiss = state.baseline;
+        this.log(`[issue-flow] ${live.id} 基线 ${state.baseline} 不可用,`
+          + `退回默认分支克隆 ${url}: ${String(error)}`);
+        await cloneRepository(common);
+      }
     }
-    if (!state.repo_urls?.length) {
-      raiseGate(state, "repo_needed", REPO_NEEDED_QUESTION,
-        [...GATE_OPTIONS.repo_needed]);
-      saveState(live.root, state);
-      return;
-    }
-    const repoDir = join(live.root, "repo");
-    if (!existsSync(join(repoDir, ".git"))) {
-      await this.ensureCloned(live);
-    }
-    const branch = state.scenario === "ticket" && state.ticket
-      ? expectedBranch(state)
-      : undefined;
-    if (branch) {
+    // 有单场景:修复分支统一由宿主切好(分支名烧着单号,不交给起名);
+    // 基线缺失时不建分支,让 Agent 先裁决基线对不对。
+    let branch: string | undefined;
+    if (!baselineMiss && state.scenario === "ticket" && state.ticket) {
+      branch = expectedBranch(state);
       await ensureBranch({
         dataDir: this.options.dataDir,
-        repoDir,
+        repoDir: repo.dir,
         branch,
-        ...(state.baseline ? { startPoint: state.baseline } : {}),
       });
     }
-    const repoNote = state.repo_urls.length > 1
-      ? `${state.repo_urls.length} 个代码仓已克隆(主仓 repo/,参考仓 ref/)`
-      : "代码仓已克隆";
-    fixedAdvance(state, "analyze", branch
-      ? `${repoNote},修复分支 ${branch} 已创建(在主仓)`
-      : `${repoNote}(无单场景不建分支)`);
-    saveState(live.root, live.state);
+    const head = await currentHead(repo.dir);
+    return {
+      dir: relative(live.root, repo.dir) || repo.dir,
+      cloned,
+      ...(branch ? { branch } : {}),
+      head,
+      ...(baselineMiss ? { baselineMiss } : {}),
+    };
   }
 
   /** 单回合执行骨架:统一失败收口,绝不把异常闷成悬挂状态。 */
@@ -769,30 +788,6 @@ export class IssueFlowService {
     }
   }
 
-  private async ensureCloned(live: LiveIssue): Promise<void> {
-    const { state } = live;
-    const repos = issueRepoWorkspaces(state, live.root);
-    if (!repos.length) return;
-    for (const [index, repo] of repos.entries()) {
-      if (existsSync(join(repo.dir, ".git"))) continue;
-      // baseline 是交付基线,只作用于主仓——参考仓跟自己的默认分支走,
-      // 不因别的仓没有同名分支而炸。
-      this.log(`[issue-flow] ${live.id} 克隆${index === 0 ? "主仓" : "参考仓"}: ${repo.url}`);
-      try {
-        await cloneRepository({
-          dataDir: this.options.dataDir,
-          targetDir: repo.dir,
-          repoUrl: repo.url,
-          ...(index === 0 && state.baseline ? { baseline: state.baseline } : {}),
-          credential: this.options.gitCredential?.(state.account),
-        });
-      } catch (error) {
-        throw new Error(`${index === 0 ? "主仓" : "参考仓"} ${repo.url}: `
-          + (error instanceof Error ? error.message : String(error)));
-      }
-    }
-  }
-
   private modelChoice(): { provider: string; model: string; json: Record<string, unknown> } {
     const fromSettings = this.options.settings?.models() ?? {};
     return {
@@ -848,31 +843,10 @@ export class IssueFlowService {
       },
       gitCredential: () =>
         this.options.gitCredential?.(live.state.account),
-      // 固定流程的宿主钩子:MR 建成→启动流水线监看;进入新阶段→
-      // 平台侧收口(prep_repo 的建分支/推进在这里做)。
-      onMrCreated: () => service.armPipelineWatch(live),
-      onStageEntered: async (stage) => {
-        await service.enterFixedStage(live, stage);
-      },
-      // Agent 侧绑定业务模块(bind_module)后的宿主收口:克隆→建分支→
-      // 推进问题分析;repo_needed 闸若在场一并清掉——仓已定,问题卡失效。
-      // 只在仍处 prep_repo 时做阶段推进:后期的改绑只更新模块标签,
-      // 不倒转阶段(fixedAdvance 无条件置目标阶段,不设防会拉回 analyze)。
-      onReposBound: async () => {
-        if (live.state.gate?.kind === "repo_needed") {
-          delete live.state.gate;
-          if (live.state.status === "waiting_user") {
-            live.state.status = "running";
-          }
-        }
-        if (live.state.stage !== "prep_repo") return;
-        await service.enterFixedStage(live, "prep_repo");
-        saveState(live.root, live.state);
-        // 回合多半还在跑(turning 在册),startPlatformTurn 会降级为
-        // stage_note;工具回执本身已告诉模型下一步,这里只是兜底开回合。
-        service.startPlatformTurn(live, fixedAdvanceNotice(live.state,
-          "业务模块已绑定,代码仓克隆就绪,已进入「问题分析」阶段,请开始分析。"));
-      },
+      // 拉仓工具的宿主实现(克隆+登记+建分支,凭据止步宿主)。
+      pullRepo: (url: string) => service.pullRepoFor(live, url),
+      // 固定流程:MR 建成→对该仓启动流水线监看(多仓各自挂表)。
+      onMrCreated: (repo: string) => service.armPipelineWatch(live, repo),
       log: (message) => this.log(message),
     };
     live.toolContext = context;
@@ -1035,84 +1009,6 @@ export class IssueFlowService {
         void this.pump();
       });
     };
-
-    if (gate.kind === "repo_needed") {
-      // ① AI 依据业务模块识别:清闸后仍在 prep_repo 开平台回合,把
-      // lookup_modules → bind_module →(检索不中)AskUserQuestion 的
-      // 推断路径交给 Agent,绑定成功由宿主钩子(onReposBound)克隆推进。
-      if (decision.startsWith(GATE_OPTIONS.repo_needed[0])) {
-        saveState(live.root, state);
-        startTurn(
-          "用户选择由你依据业务模块自动识别代码仓,仍在「拉取代码仓」阶段。"
-            + "请先用 lookup_modules 按问题单描述里的业务关键词检索业务模块库:"
-            + "命中且绑定了代码仓的模块,调用 bind_module 绑定——平台会克隆代码仓"
-            + "并推进到问题分析;检索不到匹配模块,再用 AskUserQuestion 问用户"
-            + `要业务模块名称或直接要代码仓地址。${supplement}`);
-        return summarize(state);
-      }
-      // ② 用户填地址:URL 就在补充说明里(逗号/空白分隔,首个=主仓)。
-      // 校验与登记同一把尺(normalizeIssueRepos + 凭据前置门禁);不通过
-      // 不炸流程——原样再举同一张闸,带上失败原因让用户改。
-      if (decision.startsWith(GATE_OPTIONS.repo_needed[1])) {
-        const refill = (reason: string): IssueSummary => {
-          raiseGate(state, "repo_needed", REPO_NEEDED_QUESTION,
-            [...GATE_OPTIONS.repo_needed], undefined,
-            `上一次填写未通过:${reason};请重新填写代码仓地址,`
-              + "或改选 AI 识别/跳过拉取");
-          state.status = "waiting_user";
-          saveState(live.root, state);
-          return summarize(state);
-        };
-        const candidates = notes.split(/[\s,，、]+/).map((item) => item.trim())
-          .filter(Boolean);
-        if (!candidates.length) return refill("补充说明里没有代码仓地址");
-        let repos: string[];
-        try {
-          repos = normalizeIssueRepos(undefined, candidates);
-          this.requireGitIdentity(state.account, repos);
-        } catch (error) {
-          return refill(error instanceof Error ? error.message : String(error));
-        }
-        state.repo_url = repos[0];
-        state.repo_urls = repos;
-        recordTransition(state, {
-          source: "platform",
-          note: `用户填写代码仓 ${repos.length} 个,平台开始克隆`,
-        });
-        this.turning.add(live.id);
-        state.status = "running";
-        saveState(live.root, state);
-        void this.runTurn(live, async () => {
-          // 与首轮 pump 同序:克隆就绪→宿主建分支→推进问题分析,再交接。
-          await this.ensureContainer(live);
-          await this.ensureCloned(live);
-          await this.enterFixedStage(live, "prep_repo");
-          const message = fixedAdvanceNotice(state,
-            "代码仓已克隆,进入「问题分析」阶段,请开展分析。");
-          if (live.driver) return live.driver.continueWith(message);
-          const driver = await this.openDriver(live);
-          return driver.startResume(issueResumePrompt(state, message));
-        }).finally(() => {
-          this.turning.delete(live.id);
-          void this.pump();
-        });
-        return summarize(state);
-      }
-      // ③ 无代码仓跳过:无代码改动是合法形态,机械跳过拉取代码仓
-      // (skip-span:prep_repo 记 done)直达问题分析。
-      if (decision.startsWith(GATE_OPTIONS.repo_needed[2])) {
-        fixedAdvance(state, "analyze",
-          "用户确认本单无需代码仓,跳过拉取代码仓");
-        saveState(live.root, state);
-        startTurn(fixedAdvanceNotice(state,
-          "用户确认本单无代码改动,已跳过「拉取代码仓」进入「问题分析」。"
-            + "请基于单据详情开展分析;需要日志证据时调用 fetch_logs"
-            + "(缺网管环境平台会向用户发起配置请求)。"));
-        return summarize(state);
-      }
-      throw new IssueControlError(
-        `无法识别的代码仓答复:「${decision.slice(0, 40)}」,请通过问题卡的选项作答`);
-    }
 
     if (gate.kind === "analysis_confirm") {
       if (decision.startsWith(GATE_OPTIONS.analysis_confirm[0])) {
@@ -1296,8 +1192,8 @@ export class IssueFlowService {
     } else {
       const kind = input.kind
         ?? (live.state.status === "suspended" ? "issue"
-          : live.state.mr ? "delivered"
-          : live.state.push ? "fixed" : "non_issue");
+          : live.state.mrs?.length ? "delivered"
+          : live.state.pushes?.length ? "fixed" : "non_issue");
       live.state.conclusion = {
         kind,
         summary: input.summary?.trim() || live.state.last_reply
@@ -1339,15 +1235,16 @@ export class IssueFlowService {
   /** MR 建成即挂表监看:触发流水线 → 轮询到终态。绿→自动进换库验证;
    * 红→携失败项开回合让 AI 修(同分支再推,MR 自动跟新提交)。幂等:
    * 同 SHA 在盯则跳过(MR 幂等重建会重复触发本钩子)。 */
-  armPipelineWatch(live: LiveIssue): void {
+  armPipelineWatch(live: LiveIssue, repo: string): void {
     const state = live.state;
     const platformUrl = this.options.platformUrl;
-    if (!platformUrl || !state.push || state.mode !== "fixed") return;
-    const sha = state.push.sha;
-    if (state.pipeline?.watching && state.pipeline.sha === sha) return;
+    const sha = state.pushes?.find((item) => item.repo === repo)?.sha;
+    if (!platformUrl || !sha || state.mode !== "fixed") return;
+    const watching = state.pipelines?.[repo];
+    if (watching?.watching && watching.sha === sha) return;
     const now = Date.now();
     const { budgetMs } = this.pipelineKnobs();
-    state.pipeline = {
+    (state.pipelines ??= {})[repo] = {
       sha,
       status: "running",
       watching: true,
@@ -1357,13 +1254,17 @@ export class IssueFlowService {
     };
     recordTransition(state, {
       source: "platform",
-      note: `流水线监看已启动 @ ${sha.slice(0, 12)}`,
+      note: `流水线监看已启动(${repo})@ ${sha.slice(0, 12)}`,
     });
     saveState(live.root, state);
-    void this.watchPipeline(live, sha);
+    void this.watchPipeline(live, repo, sha);
   }
 
-  private async watchPipeline(live: LiveIssue, sha: string): Promise<void> {
+  private async watchPipeline(
+    live: LiveIssue,
+    repo: string,
+    sha: string,
+  ): Promise<void> {
     const { state } = live;
     const platformUrl = this.options.platformUrl;
     if (!platformUrl) return;
@@ -1371,14 +1272,14 @@ export class IssueFlowService {
     const call = () => ({
       platformUrl,
       sha,
-      ...(state.repo_url ? { repo: state.repo_url } : {}),
+      repo,
       credential: this.options.gitCredential?.(state.account),
     });
     // 触发(假件必须显式触发;真件幂等无害)。触发响应可能已是终态。
     try {
       const first = await triggerPipeline(call());
       if (first.status !== "running") {
-        this.settlePipeline(live, sha, first);
+        this.settlePipeline(live, repo, sha, first);
         return;
       }
     } catch (error) {
@@ -1386,21 +1287,22 @@ export class IssueFlowService {
       this.log(`[issue-flow] ${live.id} 流水线触发失败(继续查状态): ${String(error)}`);
     }
     while (
-      state.pipeline?.sha === sha
-      && state.pipeline.watching
+      state.pipelines?.[repo]?.sha === sha
+      && state.pipelines[repo].watching
       && !isTerminal(state.status)
-      && Date.now() < Date.parse(state.pipeline.deadline)
+      && Date.now() < Date.parse(state.pipelines[repo].deadline)
     ) {
       await new Promise<void>((done) => {
         const timer = setTimeout(done, pollMs);
         timer.unref?.();
       });
-      if (state.pipeline?.sha !== sha || !state.pipeline.watching) return;
+      if (state.pipelines?.[repo]?.sha !== sha
+          || !state.pipelines[repo].watching) return;
       try {
         const status = await getPipelineStatus(call());
         const terminal = status.runs.findLast((run) => run.status !== "running");
         if (terminal) {
-          this.settlePipeline(live, sha, terminal);
+          this.settlePipeline(live, repo, sha, terminal);
           return;
         }
       } catch (error) {
@@ -1408,43 +1310,66 @@ export class IssueFlowService {
       }
     }
     // 预算耗尽:如实停表,不阻塞会话——用户可人工查看后发消息继续。
-    if (state.pipeline?.sha === sha && state.pipeline.watching) {
-      state.pipeline.watching = false;
-      state.pipeline.last_error = "轮询预算耗尽,请人工查看流水线";
+    if (state.pipelines?.[repo]?.sha === sha && state.pipelines[repo].watching) {
+      state.pipelines[repo].watching = false;
+      state.pipelines[repo].last_error = "轮询预算耗尽,请人工查看流水线";
       state.stage_note = "流水线轮询预算耗尽——请人工查看 MR/流水线,再发消息继续";
       saveState(live.root, state);
-      this.log(`[issue-flow] ${live.id} 流水线监看预算耗尽 @ ${sha.slice(0, 12)}`);
+      this.log(`[issue-flow] ${live.id} 流水线监看预算耗尽(${repo})`
+        + ` @ ${sha.slice(0, 12)}`);
     }
   }
 
   private settlePipeline(
     live: LiveIssue,
+    repo: string,
     sha: string,
     run: PipelineRun,
   ): void {
     const { state } = live;
-    if (state.pipeline?.sha !== sha) return;
-    state.pipeline.status = run.status;
-    state.pipeline.watching = false;
-    if (run.checks) state.pipeline.checks = run.checks;
+    const watch = state.pipelines?.[repo];
+    if (watch?.sha !== sha) return;
+    watch.status = run.status;
+    watch.watching = false;
+    if (run.checks) watch.checks = run.checks;
     if (run.status === "success") {
       recordTransition(state, {
-        source: "platform", note: `流水线全绿 @ ${sha.slice(0, 12)}`,
+        source: "platform", note: `流水线全绿(${repo})@ ${sha.slice(0, 12)}`,
       });
-      fixedAdvance(state, "deploy_verify", "流水线全绿,进入换库环境验证");
-      saveState(live.root, state);
-      this.startPlatformTurn(live, fixedAdvanceNotice(state,
-        `流水线已全绿${state.mr ? `(MR: ${state.mr.url})` : ""},进入「换库环境验证」阶段。`
-          + "请调用 build_deploy 部署到网管环境;部署完成后平台会举验证卡,等用户真实验证。"));
-    } else {
-      recordTransition(state, {
-        source: "platform", note: `流水线失败 @ ${sha.slice(0, 12)}`,
-      });
-      saveState(live.root, state);
-      this.startPlatformTurn(live,
-        `平台通知: 流水线未通过(仍在「提交 MR·跑绿」阶段)。\n${describePipelineRun(run)}\n`
-          + "请修复后同分支 push_branch 再 create_mr(同一 MR 会自动跟新提交),平台会重新监看。");
+      // 多仓语义(2026-08-28 拍板):AI 已建的 MR 各自跑流水线,全部
+      // 跑绿才进换库验证;还有在途/未绿的就等齐,不抢跑。
+      const mrs = state.mrs ?? [];
+      const allGreen = mrs.length > 0 && mrs.every((mr) =>
+        state.pipelines?.[mr.repo]?.status === "success");
+      const anyWatching = Object.values(state.pipelines ?? {})
+        .some((item) => item.watching);
+      if (allGreen && !anyWatching) {
+        fixedAdvance(state, "deploy_verify",
+          `全部 ${mrs.length} 个 MR 流水线跑绿,进入换库环境验证`);
+        saveState(live.root, state);
+        this.startPlatformTurn(live, fixedAdvanceNotice(state,
+          `全部 MR 流水线已跑绿(${mrs.map((mr) => mr.repo).join(", ")}),`
+            + "进入「换库环境验证」阶段。请调用 build_deploy 部署到网管环境"
+            + "(多仓时指定要部署的仓);部署完成后平台会举验证卡,等用户真实验证。"));
+      } else if (!anyWatching && mrs.length > 0) {
+        // 有 MR 未绿且没表在跑:那就是失败了,带回失败项让 AI 修。
+        saveState(live.root, state);
+        this.startPlatformTurn(live,
+          `平台通知: 仓 ${repo} 流水线已全绿,但仍有 MR 未跑绿`
+          + "(仍在「提交 MR·跑绿」阶段)。请核实各仓流水线状态,"
+          + "需要的仓修复后同分支 push_branch 再 create_mr。");
+      }
+      return;
     }
+    recordTransition(state, {
+      source: "platform", note: `流水线失败(${repo})@ ${sha.slice(0, 12)}`,
+    });
+    saveState(live.root, state);
+    this.startPlatformTurn(live,
+      `平台通知: 流水线未通过(仓 ${repo},仍在「提交 MR·跑绿」阶段)。\n`
+        + `${describePipelineRun(run)}\n`
+        + "请修复后同分支 push_branch 再 create_mr(同一 MR 会自动跟新提交),"
+        + "平台会重新监看。");
   }
 
   /** 平台侧开回合(闸门裁决/流水线结果的交接词)。会话正忙(等用户/
@@ -1522,8 +1447,9 @@ export class IssueFlowService {
     const newId = this.nextId();
     const newRoot = join(this.issuesRoot, newId);
     mkdirSync(newRoot, { recursive: true });
-    // 工作区复制:repo/(主仓)+ ref/(参考仓)整目录 + 分析报告
-    // (skills 由 openDriver 重物化,local-logs 不带——新一轮要拉新日志)。
+    // 工作区复制:repo/(平铺的全部代码仓)+ 分析报告(skills 由
+    // openDriver 重物化,local-logs 不带——新一轮要拉新日志)。老会话
+    // 遗留的 ref/ 目录(平铺前的参考仓)原样跟走,读代码不受影响。
     if (existsSync(join(live.root, "repo"))) {
       cpSync(join(live.root, "repo"), join(newRoot, "repo"), { recursive: true });
     }
@@ -1585,13 +1511,18 @@ export class IssueFlowService {
       source: "platform", stage: "fix",
       note: `由 ${id} 关联单号 ${ticket} 转正,分析报告已继承`,
     });
-    if (converted.repo_url && existsSync(join(newRoot, "repo", ".git"))) {
-      await ensureBranch({
-        dataDir: this.options.dataDir,
-        repoDir: join(newRoot, "repo"),
-        branch: expectedBranch(converted),
-        ...(converted.baseline ? { startPoint: converted.baseline } : {}),
-      });
+    // 继承仓全部切好转正分支(仓平等:每个在场仓都建,建不动的如实留日志)。
+    for (const repo of issueRepoWorkspaces(converted, newRoot)) {
+      if (!existsSync(join(repo.dir, ".git"))) continue;
+      try {
+        await ensureBranch({
+          dataDir: this.options.dataDir,
+          repoDir: repo.dir,
+          branch: expectedBranch(converted),
+        });
+      } catch (error) {
+        this.log(`[issue-flow] ${newId} 转正建分支失败(${repo.url}): ${String(error)}`);
+      }
     }
     saveState(newRoot, converted);
     this.live.set(newId, {
@@ -1649,37 +1580,81 @@ export class IssueFlowService {
 
   // ---- 会话材料(交付材料页签;全部只读旁路 + 快速修改唯一写口) ----
 
+  /** 多仓材料聚合的公共底座:repo/ 下每个已克隆仓 → (仓名, 目录)。 */
+  private materialRepos(live: LiveIssue): Array<{ name: string; dir: string }> {
+    return issueRepoWorkspaces(live.state, live.root)
+      .filter((repo) => existsSync(join(repo.dir, ".git")))
+      .map((repo) => ({
+        name: repo.dir.split(/[\\/]/).at(-1) ?? "repo",
+        dir: repo.dir,
+      }));
+  }
+
+  /** 路径路由:rel 首段是仓名(repo/<仓名>/ 的平铺约定);对不上时
+   * 兜底首仓(老路径/手工输入),保证读写不因前缀缺席而砸。 */
+  private routeMaterialPath(
+    live: LiveIssue,
+    rel: string,
+  ): { repo: { name: string; dir: string }; rel: string } | undefined {
+    const repos = this.materialRepos(live);
+    if (!repos.length) return undefined;
+    const head = rel.split(/[\\/]/)[0];
+    const match = repos.find((repo) => repo.name === head);
+    if (match) return { repo: match, rel: rel.slice(head.length + 1) };
+    return { repo: repos[0], rel };
+  }
+
   listMaterials(id: string) {
     const live = this.require(id);
+    // 变更按仓聚合,路径带 <仓名>/ 前缀(与 routeMaterialPath 对得上)。
+    const changes = this.materialRepos(live).flatMap((repo) =>
+      listWorkspaceChanges(repo.dir)
+        .map((change) => ({ ...change, path: `${repo.name}/${change.path}` })));
     return {
       ticket: live.state.ticket,
-      push: live.state.push,
+      pushes: live.state.pushes ?? [],
+      mrs: live.state.mrs ?? [],
       analysis_available: existsSync(join(live.root, "issue-analysis.md")),
-      changes: listWorkspaceChanges(join(live.root, "repo")),
+      changes,
       logs: listLogs(live.root),
       manual_edits: listManualEdits(live.root),
     };
   }
 
   readWorkspaceFile(id: string, rel: string) {
-    return readWorkspaceFile(join(this.require(id).root, "repo"), rel);
+    const live = this.require(id);
+    const routed = this.routeMaterialPath(live, rel);
+    if (!routed) throw new Error("会话还没有已克隆的代码仓");
+    return readWorkspaceFile(routed.repo.dir, routed.rel);
   }
 
   /** 快速修改:写工作区文件并入人工台账(会话私有账本,不进语义事件)。 */
   saveWorkspaceFile(id: string, rel: string, content: string) {
     const live = this.require(id);
-    const result = writeWorkspaceFile(join(live.root, "repo"), rel, content);
+    const routed = this.routeMaterialPath(live, rel);
+    if (!routed) throw new Error("会话还没有已克隆的代码仓");
+    const result = writeWorkspaceFile(routed.repo.dir, routed.rel, content);
     recordManualEdit(live.root, rel, result.size);
     this.log(`[issue-flow] ${live.id} 人工修改 ${rel}(${result.size}B)`);
     return result;
   }
 
   workspaceFileDiff(id: string, rel: string) {
-    return workspaceFileDiff(join(this.require(id).root, "repo"), rel);
+    const live = this.require(id);
+    const routed = this.routeMaterialPath(live, rel);
+    if (!routed) throw new Error("会话还没有已克隆的代码仓");
+    return workspaceFileDiff(routed.repo.dir, routed.rel);
   }
 
   workspaceDiffAll(id: string) {
-    return workspaceDiffAll(join(this.require(id).root, "repo"));
+    const live = this.require(id);
+    // 按仓分段聚合:段间加"仓库"分隔行,前端 diff 视图按元信息行呈现。
+    const parts = this.materialRepos(live)
+      .map((repo) => ({ name: repo.name, diff: workspaceDiffAll(repo.dir) }))
+      .filter((part) => part.diff.trim());
+    if (!parts.length) return "";
+    return parts.map((part) =>
+      `===== 仓库 ${part.name} =====\n${part.diff}`).join("\n\n");
   }
 
   listIssueLogs(id: string) {

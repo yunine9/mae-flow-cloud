@@ -64,13 +64,18 @@ export interface IssueToolContext {
   /** 宿主侧解密后的环境密码;未配置环境时为 undefined。 */
   environmentPassword?(): string | undefined;
   gitCredential?(): GitCredential | undefined;
+  /** 拉仓(2026-08-28 拍板:克隆是 Agent 的工具,不是平台自动动作)。
+   * 宿主实现:登记合并 → 带凭据克隆到 repo/<仓名>/ →(有单场景)
+   * 尽力建修复分支。回执只含事实,凭据永不进结果。 */
+  pullRepo(url: string): Promise<{
+    dir: string;
+    cloned: boolean;
+    branch?: string;
+    head: string;
+    baselineMiss?: string;
+  }>;
   /** 固定流程:create_mr 成功后由服务启动流水线监看(触发+轮询)。 */
-  onMrCreated?(): void;
-  /** 固定流程:进入新阶段的宿主收口钩子(prep_repo 的建分支/推进)。 */
-  onStageEntered?(stage: FixedStage): Promise<void>;
-  /** 固定流程:bind_module 绑定业务模块后的宿主收口(克隆→建分支→
-   * 推进问题分析,顺带清掉在场 repo_needed 闸)。 */
-  onReposBound?(): Promise<void>;
+  onMrCreated?(repo: string): void;
   log?: (message: string) => void;
 }
 
@@ -92,13 +97,6 @@ export const GATE_OPTIONS = {
   analysis_confirm: ["确认报告,开始问题修改", "有补充意见(填写补充说明)"],
   conclude: ["确认是问题,挂起等提单", "确认非问题,闭环归档", "有补充意见(填写补充说明)"],
   env_verify: ["验证通过", "验证发现问题(填写补充说明)"],
-  // repo_needed 三条裁决路(2026-08-28):AI 识别走 lookup_modules→
-  // bind_module;手填的地址随 notes 交给服务端校验;跳过=无代码改动。
-  repo_needed: [
-    "AI 依据业务模块识别",
-    "我来填写代码仓地址",
-    "无代码仓,跳过拉取",
-  ],
   // env_needed 在决策卡上渲染为专用表单(地址+密码),不走选项卡;
   // 这个选项只是卡面占位,服务端作答口是 /environment。
   env_needed: ["填写并继续"],
@@ -137,9 +135,9 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
   const fixed = state.mode === "fixed";
   const scenario = state.scenario;
 
-  /** 会话仓定位:repo 参数(缺省主仓)→ 克隆目录 + 权威地址。
-   * 多仓会话主仓在 repo/,参考仓在 ref/<仓名>/;地址比对忽略 .git
-   * 后缀,没登记过的仓一律打回。 */
+  /** 会话仓定位:repo 参数(缺省首个登记仓)→ 克隆目录 + 权威地址。
+   * 多仓会话全部平铺在 repo/<仓名>/(2026-08-28:仓平等,无主从);
+   * 地址比对忽略 .git 后缀,没登记过的仓一律打回。 */
   const locateRepo = (requested: string | undefined): { url: string; dir: string } => {
     const repos = issueRepoWorkspaces(state, ctx.workspace);
     if (!repos.length) fail("会话没有登记代码仓地址");
@@ -298,6 +296,52 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     },
   }));
 
+  // ---- 拉仓(两模式共用;2026-08-28 拍板:克隆是 Agent 的显式工具动作) ----
+
+  tools.push(defineTool({
+    name: "pull_repo",
+    label: "Pull Repository",
+    description:
+      "把一个代码仓加入会话并克隆到 repo/<仓名>/(宿主带凭据执行,你只见"
+      + "结果事实)。幂等:已克隆的仓直接回报。有单场景顺带尝试创建修复分支 "
+      + "master_<工号>_<单号>(基线分支不存在时不建,如实回报由你裁决)。"
+      + "发现缺仓就调它:lookup_modules 带出的仓、用户给的地址都经它落地。",
+    parameters: Type.Object({
+      url: Type.String({
+        description: "代码仓地址(https 或本地路径);已在会话里的仓幂等回报",
+      }),
+    }),
+    async execute(_toolCallId: string, params: any) {
+      gateStageFrom("pull_repo", "prep_repo");
+      const url = String(params.url ?? "").trim();
+      if (!url) fail("url 不能为空:给要拉取的代码仓地址");
+      const facts = await ctx.pullRepo(url);
+      recordTransition(state, {
+        source: "platform",
+        note: `代码仓已拉取: ${facts.dir}${facts.cloned ? "(新克隆)" : "(已在场)"}`
+          + `${facts.branch ? `,分支 ${facts.branch}` : ""}`,
+      });
+      // 首仓落地且仍处拉取阶段 → 机械推进问题分析;后续仓在分析及之后
+      // 随时可补(中途发现新仓是正当场景),不倒转阶段。
+      let advance = "";
+      if (fixed && scenario && state.stage === "prep_repo") {
+        fixedAdvance(state, "analyze",
+          `首个代码仓已就绪(${facts.dir}),进入问题分析`);
+        advance = "\n平台已推进到「问题分析」阶段——还有要拉的仓继续调 pull_repo"
+          + "(中途补仓随时可以),然后开始分析。";
+      }
+      ctx.persist();
+      const baselineNote = facts.baselineMiss
+        ? `\n注意: 该仓没有基线分支 ${facts.baselineMiss},修复分支未创建、`
+          + "停在其默认分支——请核实基线是否正确,拿不准就用 AskUserQuestion 问用户。"
+        : "";
+      return ok(`代码仓就绪:\n- 工作区目录: ${facts.dir}\n`
+        + `- HEAD: ${facts.head.slice(0, 12)}`
+        + `${facts.branch ? `\n- 修复分支: ${facts.branch}(已切好)` : ""}`
+        + `${baselineNote}${advance}`);
+    },
+  }));
+
   // ---- 运维:换库部署(fixed 仅换库验证阶段;成功即举环境验证闸) ----
 
   tools.push(defineTool({
@@ -305,15 +349,19 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     label: "Build And Deploy",
     description:
       "把工作区代码仓(含 deployment/pom.xml)构建并部署到网管服务器,"
-      + "自动备份当前版本。仅页面/前后端改动不要加 include_lib;"
+      + "自动备份当前版本。多仓会话用 repo 参数指定要部署的仓(缺省首个"
+      + "登记仓)。仅页面/前后端改动不要加 include_lib;"
       + "仅当 pom.xml 依赖版本变更时才加。部署后平台会举验证卡,"
       + "必须停下等用户在真实环境验证。",
     parameters: Type.Object({
+      repo: Type.Optional(Type.String({
+        description: "要部署的代码仓地址;缺省首个登记仓(多仓时按需指定)",
+      })),
       hosts: Type.Optional(Type.Array(Type.String(), {
         description: "目标服务器 IP(可多台);缺省用会话环境配置",
       })),
       include_lib: Type.Boolean({
-        description: "同时更新 lib 目录;仅 pom.xml 依赖变更时为 true",
+        description: "同时更新 lib 目录;仅 pom.xml 依赖版本变更时为 true",
       }),
     }),
     async execute(_toolCallId: string, params: any) {
@@ -321,8 +369,8 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       if (!ctx.ops) fail("宿主未部署运维工具(assets/ops-tools),无法换库");
       const password = ctx.environmentPassword?.();
       if (!password) raiseEnvNeededGate(ctx, "deploy");
-      const repoDir = join(ctx.workspace, "repo");
-      if (!existsSync(join(repoDir, ".git"))) fail("代码克隆不存在,无法部署");
+      const repoDir = locateRepo(params.repo).dir;
+      if (!existsSync(join(repoDir, ".git"))) fail("代码克隆不存在,无法部署(先 pull_repo)");
       const hosts = (params.hosts as string[] | undefined)?.length
         ? params.hosts as string[]
         : ctx.state.environment?.hosts ?? [];
@@ -384,14 +432,15 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       if (firstPull) {
         fixedAdvance(ctx.state, "prep_repo",
           `DTS 详情已获取(单据 ${detail.ticket}),进入拉取代码仓阶段`);
-        // 宿主收口:克隆在场就建分支并直接推进到问题分析(通常回合
-        // 开始前平台已克隆好,这一钩子让阶段机在一回合内顺滑走完)。
-        await ctx.onStageEntered?.("prep_repo");
       }
       ctx.persist();
       return ok(`问题单 ${detail.ticket} 详情:\n${detail.content}`
-        + (firstPull ? "\n\n平台已推进到「拉取代码仓」阶段:平台将完成克隆与建分支,"
-          + "克隆就绪后请基于单据详情开展问题分析。" : ""));
+        + (firstPull
+          ? "\n\n平台已推进到「拉取代码仓」阶段:先 lookup_modules 按单据里的"
+            + "业务关键词检索模块,命中就 bind_module 登记它的代码仓,再逐个 "
+            + "pull_repo 拉取;检索不到就 AskUserQuestion 问用户要仓地址;"
+            + "本单无需代码改动则 complete_stage 跳过本阶段。"
+          : ""));
     },
   }));
 
@@ -410,7 +459,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       })),
       repo: Type.Optional(Type.String({
         description:
-          "目标代码仓地址;缺省主仓(交付仓)。必须是会话登记过的仓"
+          "目标代码仓地址;缺省首个登记仓。必须是会话登记过的仓"
           + "(多仓分析时参考仓也能推,分支命名规则不变)",
       })),
     }),
@@ -422,7 +471,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
           + "——推送与提 MR 都以单号为门票");
       }
       const repo = locateRepo(params.repo);
-      if (!existsSync(join(repo.dir, ".git"))) fail("代码克隆不存在,无法推送");
+      if (!existsSync(join(repo.dir, ".git"))) fail("代码克隆不存在,无法推送(先 pull_repo)");
       const branch = String(params.branch ?? "").trim()
         || await currentBranch(repo.dir);
       if (!branch) fail("没有可推送的分支(缺 branch 参数且当前不在分支上)");
@@ -438,17 +487,21 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         branch,
         credential: ctx.gitCredential?.(),
       });
-      state.push = {
-        branch: receipt.branch,
-        sha: receipt.sha,
-        at: new Date().toISOString(),
+      // 按仓记账(一仓一分支):重推同仓覆盖旧账,不同仓各记各的。
+      const pushes = state.pushes ??= [];
+      const record = {
+        repo: repo.url, branch: receipt.branch,
+        sha: receipt.sha, at: new Date().toISOString(),
       };
+      const slot = pushes.findIndex((item) => item.repo === repo.url);
+      if (slot >= 0) pushes[slot] = record; else pushes.push(record);
       recordTransition(state, {
         source: "platform",
-        note: `分支已推送 ${receipt.branch} @ ${receipt.sha.slice(0, 12)}`,
+        note: `分支已推送 ${repo.url} ${receipt.branch} @ ${receipt.sha.slice(0, 12)}`,
       });
       ctx.persist();
-      return ok(`已推送 ${receipt.branch} @ ${receipt.sha.slice(0, 12)}`);
+      return ok(`已推送 ${receipt.branch} @ ${receipt.sha.slice(0, 12)}`
+        + `(仓 ${repo.url})`);
     },
   }));
 
@@ -467,7 +520,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         description: "目标分支,缺省 master",
       })),
       repo: Type.Optional(Type.String({
-        description: "目标代码仓地址;缺省主仓(交付仓)。必须是会话登记过的仓",
+        description: "目标代码仓地址;缺省首个登记仓。必须是会话登记过的仓",
       })),
     }),
     async execute(_toolCallId: string, params: any) {
@@ -480,42 +533,47 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         fail("UT 门禁:还没有 report_ut 上报通过记录,不能创建 MR。"
           + "请先在 UT 验证阶段跑完单测并用 report_ut 上报结果");
       }
-      if (!state.push) {
-        fail("分支还没有推送记录:请先调用 push_branch,再创建 MR");
-      }
       const platformUrl = ctx.platformUrl;
       if (!platformUrl) {
         fail("交付平台未配置(部署需 --platform 接适配层),无法创建 MR");
       }
-      if (!state.repo_url) fail("会话没有权威代码仓地址,拒绝创建 MR");
+      // 按仓门禁与记账(2026-08-28 拍板:对哪些仓交付由 AI 裁决,平台
+      // 只核"该仓自己推过分支"这一条机械事实)。
+      const repo = locateRepo(params.repo);
+      const pushRecord = state.pushes?.find((item) => item.repo === repo.url);
+      if (!pushRecord) {
+        fail(`仓 ${repo.url} 还没有推送记录:请先对该仓调用 push_branch,`
+          + "再创建 MR(一仓一 MR,改过的仓各自交付)");
+      }
       const target = String(params.target_branch ?? "").trim() || "master";
       const title = String(params.title ?? "").trim()
         || `[${state.ticket}] ${state.title}`;
-      const repo = locateRepo(params.repo);
       const receipt = await createMergeRequest({
         platformUrl,
         repo: repo.url,
-        sourceBranch: state.push.branch,
+        sourceBranch: pushRecord.branch,
         targetBranch: target,
         title,
         dtsNo: state.ticket,
         credential: ctx.gitCredential?.(),
       });
-      state.mr = {
-        branch: state.push.branch,
-        title,
+      const mrs = state.mrs ??= [];
+      const record = {
+        repo: repo.url, branch: pushRecord.branch, title,
         url: receipt.url,
         ...(receipt.id !== undefined ? { iid: String(receipt.id) } : {}),
         at: new Date().toISOString(),
       };
+      const slot = mrs.findIndex((item) => item.repo === repo.url);
+      if (slot >= 0) mrs[slot] = record; else mrs.push(record);
       recordTransition(state, {
         source: "platform",
         note: `MR 已创建: ${receipt.url}`,
       });
       ctx.persist();
-      if (fixed) ctx.onMrCreated?.();
-      return ok(`MR 已创建: ${receipt.url}\n(source ${state.push.branch} → ${target},`
-        + `关联单号 ${state.ticket})。${fixed
+      if (fixed) ctx.onMrCreated?.(repo.url);
+      return ok(`MR 已创建: ${receipt.url}\n(source ${pushRecord.branch} → ${target},`
+        + `仓 ${repo.url},关联单号 ${state.ticket})。${fixed
           ? "平台已启动流水线监看:请结束本回合,等待流水线结果(红了平台会带回失败项让你修)。"
           : "合入由用户在门禁通过后决定。"}`);
     },
@@ -524,16 +582,17 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
   // ---- 以下三个工具仅固定流程注册 ----
 
   if (fixed && scenario) {
-    // 绑定业务模块(拉取代码仓阶段的 AI 识别路):绑完宿主即克隆推进。
+    // 绑定业务模块(拉取代码仓阶段的 AI 识别路):只记账不克隆——
+    // 克隆是 pull_repo 的活(2026-08-28 拍板:AI 对拉仓效果保持认知)。
     tools.push(defineTool({
       name: "bind_module",
       label: "Bind Business Module",
       description:
-        "把会话绑定到业务模块,并按模块绑定的代码仓清单补齐本会话的代码仓"
-        + "(与已登记仓合并去重)。先 lookup_modules 检索再调用;绑定后平台"
-        + "自动克隆并推进到问题分析。重复调用=改绑(更新模块标签,已克隆的"
-        + "仓不动);模块没绑代码仓会失败,此时请用 AskUserQuestion 向用户"
-        + "要代码仓地址。",
+        "把会话绑定到业务模块,并按模块绑定的代码仓清单补齐本会话的登记"
+        + "(与已登记仓合并去重,不克隆)。先 lookup_modules 检索再调用;"
+        + "绑定后请对模块带出的每个仓逐个调 pull_repo 拉取。重复调用=改绑"
+        + "(更新模块标签);模块没绑代码仓会失败,此时用 AskUserQuestion"
+        + "向用户要代码仓地址。",
       parameters: Type.Object({
         module_id: Type.String({
           description: "业务模块 ID(lookup_modules 返回的 id)",
@@ -556,13 +615,15 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         }
         if (!module.repositories.length) {
           fail(`业务模块「${module.name}」没有绑定代码仓——请用 AskUserQuestion`
-            + "向用户要代码仓地址,由用户在平台闸或对话里提供");
+            + "向用户要代码仓地址");
         }
-        // 模块仓与已登记仓合并去重(用户手填的在前=主仓语义不变),
-        // 与登记/闸门补填同一把尺;超上限整次打回,不留半绑定状态。
+        // 模块仓与已登记仓合并去重(已在场的仓不动),与登记同一把尺;
+        // 超上限整次打回,不留半绑定状态。
         const merged = normalizeIssueRepos(undefined,
           [...(state.repo_urls ?? []), ...module.repositories]);
         const rebind = state.module_id === module.id;
+        const fresh = merged.filter((url) =>
+          !(state.repo_urls ?? []).includes(url));
         state.module_id = module.id;
         state.module = module.name;
         state.repo_url = merged[0];
@@ -574,13 +635,11 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
             : `已绑定业务模块「${module.name}」(代码仓 ${merged.length} 个)`,
         });
         ctx.persist();
-        // 宿主收口:克隆→建分支→推进问题分析;在场的 repo_needed 闸
-        // 由钩子清掉。回执告诉模型下一步(阶段已由平台推进)。
-        await ctx.onReposBound?.();
-        return ok(`已绑定业务模块「${module.name}」,会话代码仓 ${merged.length} 个。`
-          + (state.stage === "analyze"
-            ? "平台已克隆代码仓并推进到「问题分析」阶段,请开始分析。"
-            : "模块标签已更新,请继续当前阶段的工作。"));
+        return ok(`已绑定业务模块「${module.name}」,会话登记代码仓 ${merged.length} 个`
+          + (fresh.length
+            ? `——新登记 ${fresh.length} 个,请逐个调用 pull_repo 拉取:\n`
+              + fresh.map((url) => `  pull_repo(url: "${url}")`).join("\n")
+            : "(全部已在会话里)"));
       },
     }));
 
@@ -690,20 +749,31 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       },
     }));
 
-    // 修改完成自报(fix → ut 的软推进;其余推进都是机械的)
+    // 修改完成自报(fix → ut 的软推进;其余推进都是机械的)。
+    // prep_repo → analyze 是它的第二职责:AI 宣布"本单无需代码仓"的
+    // 跳过路(2026-08-28:repo_needed 闸退役,跳过也是 AI 的裁决)。
     tools.push(defineTool({
       name: "complete_stage",
       label: "Complete Current Stage",
       description:
-        "宣布「问题修改」阶段完成,平台推进到 UT 验证阶段。只在这一处"
-        + "允许自报推进:代码改完、自检通过再调;改没完不要调。",
+        "宣布当前阶段完成。「问题修改」完成→推进 UT 验证;「拉取代码仓」"
+        + "完成→推进问题分析(包括「本单无需代码仓」的跳过:研究结论不涉及"
+        + "代码改动时,不拉任何仓直接调它过关)。只在这两处允许自报推进:"
+        + "活干完再调,没干完不要调。",
       parameters: Type.Object({
-        note: Type.String({ description: "一句话:改了什么(文件/要点)" }),
+        note: Type.String({ description: "一句话:做了什么(文件/要点),或为何无需代码仓" }),
       }),
       async execute(_toolCallId: string, params: any) {
-        gateStage("complete_stage", ["fix"]);
-        fixedAdvance(ctx.state, "ut",
-          `问题修改完成:${String(params.note ?? "").split("\n")[0]}`);
+        gateStage("complete_stage", ["prep_repo", "fix"]);
+        const firstLine = String(params.note ?? "").split("\n")[0];
+        if (state.stage === "prep_repo") {
+          fixedAdvance(ctx.state, "analyze", `跳过拉取代码仓:${firstLine}`);
+          ctx.persist();
+          return ok("平台已推进到「问题分析」阶段:请基于单据/描述开展分析;"
+            + "需要日志证据时调用 fetch_logs;中途发现需要代码仓,"
+            + "随时 pull_repo 补上。");
+        }
+        fixedAdvance(ctx.state, "ut", `问题修改完成:${firstLine}`);
         ctx.persist();
         return ok("平台已推进到「UT 验证」阶段:请运行单元测试,"
           + "结束后用 report_ut 上报结果(passed=true 才能进 MR)。");

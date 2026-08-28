@@ -235,14 +235,15 @@ function IssueCard({ issue, active, onOpen }: {
           <path d="M6 3.5h6.5V10M12.25 3.75 5 11" />
         </svg>
       </button>
-      {issue.mr?.url && <a href={issue.mr.url} target="_blank" rel="noreferrer">
-        <span>合入请求{issue.mr.iid ? ` · !${issue.mr.iid}` : ""}</span>
+      {issue.mrs?.[0]?.url && <a href={issue.mrs[0].url} target="_blank" rel="noreferrer">
+        <span>合入请求{issue.mrs.length > 1 ? ` · ${issue.mrs.length} 个` : ""}</span>
         <svg viewBox="0 0 16 16" aria-hidden>
           <path d="M6 3.5h6.5V10M12.25 3.75 5 11" />
         </svg>
       </a>}
-      {issue.push && <span className="meta-fact">
-        已推送 · {issue.push.branch}@{issue.push.sha.slice(0, 10)}</span>}
+      {(issue.pushes?.length ?? 0) > 0 && <span className="meta-fact">
+        已推送 · {issue.pushes![0].branch}@{issue.pushes![0].sha.slice(0, 10)}
+        {issue.pushes!.length > 1 ? ` 等 ${issue.pushes!.length} 仓` : ""}</span>}
       {issue.error && <span className="meta-fact">{issue.error.slice(0, 80)}</span>}
     </div>
 
@@ -1307,14 +1308,18 @@ function IssueSessionView({
         && <button type="button" className="issue-error-action"
           onClick={onNavigateProfile}>去个人设置配置令牌</button>}
     </div>}
-    {detail.mr && <div className="issue-session-mr">
-      MR:{detail.mr.url
-        ? <a href={detail.mr.url} target="_blank" rel="noreferrer">{detail.mr.url}</a>
-        : detail.mr.title}
-      (分支 {detail.mr.branch})
+    {(detail.mrs?.length ?? 0) > 0 && <div className="issue-session-mr">
+      MR({detail.mrs!.length}):{detail.mrs!.map((mr, index) => <span
+        key={mr.url ?? index} className="issue-mr-item">
+        {mr.url
+          ? <a href={mr.url} target="_blank" rel="noreferrer">{mr.url}</a>
+          : mr.title}
+        (分支 {mr.branch})
+      </span>)}
     </div>}
-    {detail.push && !detail.mr && <div className="issue-session-mr">
-      已推送 {detail.push.branch} @ {detail.push.sha.slice(0, 12)}
+    {(detail.pushes?.length ?? 0) > (detail.mrs?.length ?? 0) && <div className="issue-session-mr">
+      已推送 {detail.pushes!.length} 个仓:{detail.pushes!.map((push) =>
+        `${push.branch}@${push.sha.slice(0, 8)}`).join("、")}
     </div>}
 
     <IssueCostPanel id={detail.id} />

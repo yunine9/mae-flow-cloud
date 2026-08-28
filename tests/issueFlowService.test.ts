@@ -485,8 +485,9 @@ test("单号门禁:未绑定单号时 push_branch 被机械拒绝", async () => 
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-gate-"));
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
+    { tool: { name: "pull_repo", input: { url: origin } } },
     { tool: { name: "bash", input: { command:
-      "cd repo && git checkout -q -b master_dev_DTS1 && "
+      "cd repo/origin && git checkout -q -b master_dev_DTS1 && "
       + "git -c user.name=test -c user.email=t@e commit -q --allow-empty "
       + "-m '[DTS1][fix] 修复测试问题'" } } },
     { tool: { name: "push_branch", input: { branch: "master_dev_DTS1" } } },
@@ -508,7 +509,7 @@ test("单号门禁:未绑定单号时 push_branch 被机械拒绝", async () => 
       return issue.status === "idle" ? issue : undefined;
     }, "无单号回合收口");
     assert.equal(created.ticket, undefined);
-    assert.equal(service.get(created.id).push, undefined,
+    assert.equal(service.get(created.id).pushes, undefined,
       "没有单号就不该有任何推送记录");
     const events = readFileSync(
       join(dataDir, "issues", created.id, "events.jsonl"), "utf-8");
@@ -549,8 +550,9 @@ test("宿主推送与提 MR:门禁、真推送、公共 mrClient(与需求交付
   await new Promise<void>((resolve) => platform.listen(0, "127.0.0.1", resolve));
   const platformUrl = `http://127.0.0.1:${(platform.address() as { port: number }).port}`;
   const script: Scene[] = [
+    { tool: { name: "pull_repo", input: { url: origin } } },
     { tool: { name: "bash", input: { command:
-      `cd repo && git checkout -q -b ${branch} && `
+      `cd repo/origin && git checkout -q -b ${branch} && `
       + "git -c user.name=test -c user.email=t@e commit -q --allow-empty "
       + "-m '[DTS2026082001317][fix] 修复登录超时'" } } },
     { tool: { name: "push_branch", input: { branch } } },
@@ -580,7 +582,7 @@ test("宿主推送与提 MR:门禁、真推送、公共 mrClient(与需求交付
       return issue.status === "idle" ? issue : undefined;
     }, "推送+提MR回合收口");
     const final = service.get(created.id);
-    const push = final.push;
+    const push = final.pushes?.[0];
     assert.ok(push, "推送应记录在案");
     assert.equal(push.branch, branch);
     // 远端真实状态(不信任务自述):裸仓里分支应指向同一 SHA。
@@ -591,14 +593,14 @@ test("宿主推送与提 MR:门禁、真推送、公共 mrClient(与需求交付
     assert.equal(remote.stdout.trim(), push.sha);
     // Agent 侧推送被焊死:克隆的 pushurl 指向必失败地址。
     const pushurl = spawnSync("git",
-      ["-C", join(dataDir, "issues", created.id, "repo"),
+      ["-C", join(dataDir, "issues", created.id, "repo", "origin"),
         "config", "--get", "remote.origin.pushurl"],
       { encoding: "utf-8" });
     assert.match(pushurl.stdout, /\/dev\/null/);
     // MR:走公共客户端,单号关联与身份头同需求交付一个格式。
-    assert.ok(final.mr, "MR 应记录在案");
-    assert.equal(final.mr!.url, "http://codehub.test/mr/1024");
-    assert.equal(final.mr!.iid, "1024");
+    assert.ok(final.mrs?.length, "MR 应记录在案");
+    assert.equal(final.mrs![0].url, "http://codehub.test/mr/1024");
+    assert.equal(final.mrs![0].iid, "1024");
     assert.equal(seen.length, 1);
     assert.equal(seen[0].body.source_branch, branch);
     assert.equal(seen[0].body.target_branch, "master");

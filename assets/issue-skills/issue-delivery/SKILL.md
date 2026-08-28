@@ -1,32 +1,37 @@
 ---
 name: issue-delivery
-description: 问题修复的交付环节:建修复分支、按严格格式提交、经平台推送、创建 MR。用户确认修复方案要动代码时使用。
+description: 问题修复的交付环节:修复分支、严格格式提交、经平台推送、一仓一 MR 创建。用户确认修复方案要动代码时使用;多仓修复时每个改过的仓各自走一遍。
 metadata:
-  tags: [issue, delivery, branch, commit, mr, codehub]
+  tags: [issue, delivery, branch, commit, mr, codehub, multi-repo]
 ---
 
 # 修复交付(分支/提交/推送/MR)
 
 前置:方案已经过用户对齐确认,且**会话已绑定单号**(没绑定时请用户去页面绑定——推送和 MR 的机械门禁都查它)。
 
-## 1. 建分支
+## 1. 分支(平台切好,你核实)
 
-在 repo/ 里:`git checkout -b master_<工号>_<单号>`(如 master_y00965296_DTS2026082001317)。工号/单号以会话开场说明为准。建前确认工作区干净。
+修复分支 `master_<工号>_<单号>`(如 master_y00965296_DTS2026082001317)在你 `pull_repo` 拉每个仓时由平台自动切好——开工前 `git branch --show-current` 核实一遍;回执里报过"基线分支不可用"的仓没有分支,先问用户基线对不对,不要自己起别的名字。
 
-## 2. 实施+提交
+## 2. 实施+提交(每个改动的仓各自做)
 
 提交信息**必须**精确匹配 `[单号][类型] 描述`(CodeHub pre-receive 钩子会拒收不合规提交):
 - 类型白名单:feat/fix/refactor/test/chore/docs/style(修 bug 用 fix);
 - 例:`[DTS2026082001317][fix] 修复登录超时`;
 - `git add` 只加本次范围的文件,禁用 `git add -A`。
 
-## 3. 推送(平台工具)
+## 3. 推送(平台工具,逐仓调)
 
-`git push` 在容器里被禁用(pushurl 指向 /dev/null)——推送必须调 `push_branch` 工具。它会校验分支名必须是 master_<工号>_<单号>,从宿主完成传输并复核远端 SHA。
+`git push` 在容器里被禁用(pushurl 指向 /dev/null)——推送必须调 `push_branch` 工具。多仓时**改过的仓各自调一次**,`repo` 参数传该仓地址;平台校验分支名必须是 master_<工号>_<单号>,从宿主完成传输并复核远端 SHA。
 
-## 4. 换库验证后提 MR
+## 4. 提 MR(一仓一 MR,repo 参数别漏)
 
-如需环境验证:`build_deploy` 部署 → ⚠️停下用 AskUserQuestion 等用户验证结果 → 通过后 `create_mr`(title 缺省为 [单号] 问题标题,自动关联单号)。**合入不由你执行**——MR 门禁与合入是用户的决定。
+`create_mr` 同样逐仓调用,`repo` 参数指定仓;title 缺省为 [单号] 问题标题,自动关联单号。如需环境验证先走:`build_deploy` 部署(多仓时 repo 参数指定部署哪个仓)→ ⚠️停下用 AskUserQuestion 等用户验证结果 → 通过后再提 MR。**合入不由你执行**——MR 门禁与合入是用户的决定。
+
+## 多仓口径
+
+- **只提你真正改过的仓**:对哪些仓交付是你的裁决,平台只核"该仓推过分支"这一条机械事实;没改的仓不硬凑 MR。
+- 每个改过的仓:各自分支(同名)→ 各自 push_branch → 各自 create_mr;平台逐仓监看流水线,**全部 MR 跑绿**才算交付完成,红的仓修完同分支再推。
 
 ## 边界
 

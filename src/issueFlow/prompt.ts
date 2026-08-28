@@ -73,27 +73,27 @@ function envLine(state: IssueSessionState): string {
   return `网管环境「${state.environment.name}」: ${state.environment.hosts.join(", ")}`;
 }
 
-/** 多仓清单块:主仓=交付仓(repo/),其余参考仓(ref/<仓名>/)。
- * 路径相对会话工作区(Agent 的 cwd 就是工作区根)。清单以可读的
- * 工作区路径开头——登记地址(尤其本地路径仓)只作"克隆自"注脚:
- * 本地路径与本机真实目录同名同在,放前面会被 Agent 当可读路径去
- * 撞工作区护栏(实测 issue-24 踩坑)。空清单返回空串,由调用方给
- * "未登记"文案。 */
+/** 多仓清单块:全部平铺 repo/<仓名>/(2026-08-28 拍板:仓平等,无主从)。
+ * 路径相对会话工作区(Agent 的 cwd 就是工作区根)。清单以可读的工作区
+ * 路径开头——登记地址(尤其本地路径仓)只作"克隆自"注脚:本地路径与
+ * 本机真实目录同名同在,放前面会被 Agent 当可读路径去撞工作区护栏
+ * (实测 issue-24 踩坑)。克隆由 Agent 自己调 pull_repo 完成,所以这里
+ * 如实标注每个仓"已克隆/待拉取"。空清单返回空串,由调用方给"未登记"
+ * 文案。 */
 function repoLines(state: IssueSessionState): string {
   const repos = issueRepoWorkspaces(state, "");
   if (!repos.length) return "";
-  const lines = repos.map((repo, index) => {
-    const role = index === 0
-      ? "交付仓:推送/MR/部署都在这里"
-      : "参考仓:只读分析";
+  const lines = repos.map((repo) => {
+    const cloned = existsSync(join(repo.dir, ".git"));
     const source = /^https?:\/\//i.test(repo.url)
       ? `克隆自 ${repo.url}`
       : `克隆自本地路径 ${repo.url}(那是工作区外的源,不可直接读,`
-        + `读代码用 ${repo.dir}/ 下的相对路径)`;
-    return `  - ${repo.dir}/ —— ${role};${source}`;
+        + `读代码用 repo/<仓名>/ 下的相对路径)`;
+    const rel = repo.dir.replace(/^[\\/]/, "");
+    return `  - ${rel}/ —— ${cloned ? "已克隆,可读写" : "待拉取(调 pull_repo 拉它)"};${source}`;
   });
-  return `- 代码仓(${repos.length} 个,已克隆;读代码一律用下列`
-    + `工作区相对路径):\n${lines.join("\n")}`;
+  return `- 代码仓(${repos.length} 个,一律平铺在 repo/ 下,读改均走工作区`
+    + `相对路径):\n${lines.join("\n")}`;
 }
 
 /** 阶段名(自由/固定两套词表都认)。 */
@@ -113,28 +113,31 @@ const FIXED_STAGE_BRIEFS: Record<FixedStage, { goal: string; tools: string }> = 
   dts_info:
     { goal: "调 dts_get_ticket 拉全单据详情,通读现象与处理历史", tools: "dts_get_ticket" },
   prep_repo:
-    { goal: "确定代码仓:登记时未带仓,平台已举「代码仓确认」卡等用户作答"
-      + "(填地址/AI 识别/跳过)。用户选 AI 识别后:用 lookup_modules 按问题单"
-      + "描述的业务关键词检索业务模块,命中且带仓就 bind_module 绑定——平台"
-      + "随即克隆并推进到问题分析;检索不到就 AskUserQuestion 问用户要业务"
-      + "模块或代码仓地址",
-      tools: "lookup_modules、bind_module" },
+    { goal: "把代码仓拉齐:lookup_modules 按单据里的业务关键词检索模块,"
+      + "命中就 bind_module 登记它的仓,再逐个 pull_repo 拉取(有单场景"
+      + "平台会顺带切好修复分支);检索不到就 AskUserQuestion 问用户要"
+      + "仓地址再 pull_repo。本单无需代码改动则 complete_stage 直接跳过",
+      tools: "lookup_modules、bind_module、pull_repo、complete_stage(跳过)" },
   analyze:
     { goal: "对齐现象-根因-方案,产出 issue-analysis.md,然后 submit_analysis 提交"
-      + "(无单场景 submit_analysis 需带结论 issue/non_issue)",
-      tools: "fetch_logs、dts_get_ticket(需要时重查单据)、submit_analysis" },
+      + "(无单场景 submit_analysis 需带结论 issue/non_issue)。中途发现"
+      + "还缺仓,pull_repo 随时可补",
+      tools: "fetch_logs、dts_get_ticket(重查)、pull_repo(补仓)、submit_analysis" },
   fix:
-    { goal: "按已确认的方案实施修复;改完自检通过后 complete_stage 自报完成",
+    { goal: "按已确认的方案实施修复(多仓问题在涉及的每个仓里改);"
+      + "改完自检通过后 complete_stage 自报完成",
       tools: "fetch_logs(补证据)、bash 改码、complete_stage" },
   ut:
-    { goal: "在代码仓里跑单元测试;全绿后 report_ut(passed=true)上报",
+    { goal: "在改过的代码仓里跑单元测试;全绿后 report_ut(passed=true)上报",
       tools: "bash 跑测、report_ut" },
   mr_green:
-    { goal: "push_branch 推送修复分支,create_mr 建 MR(须先有 UT 通过记录);"
-      + "平台监看流水线,红了会带回失败项,修完同分支再推,直到全绿",
+    { goal: "对**每个改过的仓**分别 push_branch + create_mr(一仓一 MR,"
+      + "仓参数别漏);平台逐仓监看流水线,红了会带回失败项,修完同分支"
+      + "再推,全部 MR 跑绿才进入下一阶段",
       tools: "push_branch、create_mr" },
   deploy_verify:
-    { goal: "调 build_deploy 换库部署;部署完成平台举验证卡,停下等用户真实验证",
+    { goal: "调 build_deploy 换库部署(多仓时用 repo 参数指定要部署的仓);"
+      + "部署完成平台举验证卡,停下等用户真实验证",
       tools: "build_deploy" },
   conclude:
     { goal: "submit_analysis 提交结论(是问题/非问题)——本场景没有修改与交付环节",
@@ -160,9 +163,10 @@ export function issueFixedOpeningPrompt(state: IssueSessionState): string {
     `- 描述: ${state.description || "(无补充描述)"}`,
     `- 单号: ${state.ticket ?? "(无单号场景:测试/开发自行定位,结论后由用户决定挂起提单或闭环)"}`,
     `- 工号: ${state.account}`,
-    repoLines(state) || "- 代码仓: (未登记)",
+    repoLines(state)
+      || "- 代码仓: (未登记——用 lookup_modules 检索业务模块带出仓,或 AskUserQuestion 问用户要地址,再 pull_repo 拉取)",
     ...(scenario === "ticket" && state.ticket
-      ? [`- 修复分支 master_${state.account}_${state.ticket} 由平台在主仓创建`]
+      ? [`- 修复分支 master_${state.account}_${state.ticket}:pull_repo 拉每个仓时由平台自动切好`]
       : []),
     `- ${envLine(state)}`,
     inheritedNote,
@@ -173,14 +177,16 @@ export function issueFixedOpeningPrompt(state: IssueSessionState): string {
     "## 阶段机契约(平台机械执行,说了算)",
     "1. 阶段真相在平台:你能用哪些工具由当前阶段决定,越权调用会被直接拒绝。",
     `2. 当前阶段「${FIXED_STAGE_LABELS[scenario][current]}」:${brief.goal}。可用工具:${brief.tools}。`,
-    "3. 平台闸:代码仓确认(拉取代码仓阶段缺仓时)、分析报告确认(有单)"
-      + "/结论确认(无单)、网管环境配置(拉日志/换库缺环境时)、换库后"
-      + "环境验证——平台举卡等用户,你不要替用户猜结果,举卡后立即结束回合。",
-    "4. UT 全绿才能建 MR;MR 建后平台监看流水线,红了会带回失败项让你修,"
-      + "同分支修复再推,直到全绿自动进入换库验证。",
-    "5. 用户环境验证不通过会整体回退到「问题分析」重走(轮次+1),这是正常节奏不是事故。",
-    "6. 秘密边界:环境密码与各 token 由平台保管,不向用户索要、不猜测、不讨论。",
-    "7. 持续维护 issue-analysis.md(现象-根因-方案),它是本会话的核心交付物。",
+    "3. 代码仓你自己拉(pull_repo):登记在册的仓也要你逐个调它落地——拉过才在场,"
+      + "中途发现缺仓随时补。对哪些仓推送/提 MR 由你裁决:**改过的仓各自交付,一仓一 MR**。",
+    "4. 平台闸:分析报告确认(有单)/结论确认(无单)、网管环境配置"
+      + "(拉日志/换库缺环境时)、换库后环境验证——平台举卡等用户,你不要替"
+      + "用户猜结果,举卡后立即结束回合。",
+    "5. UT 全绿才能建 MR;每个 MR 建后平台逐仓监看流水线,红了会带回失败项"
+      + "让你修,同分支修复再推;**全部 MR 跑绿**才进入换库验证。",
+    "6. 用户环境验证不通过会整体回退到「问题分析」重走(轮次+1),这是正常节奏不是事故。",
+    "7. 秘密边界:环境密码与各 token 由平台保管,不向用户索要、不猜测、不讨论。",
+    "8. 持续维护 issue-analysis.md(现象-根因-方案),它是本会话的核心交付物。",
     "",
     "现在开始:先复述你对问题现象的理解与当前阶段要做的事,然后推进。"
       + (scenario === "ticket" && current === "dts_info"
@@ -214,15 +220,17 @@ export function issueOpeningPrompt(state: IssueSessionState): string {
     `- 单号: ${state.ticket ?? "(尚未绑定——先研究后补单是正常形态;推送/提MR前必须请用户在页面绑定)"}`,
     `- 工号: ${state.account}`,
     repoLines(state)
-      || "- 代码仓: (未登记——需要读代码时请用户提供仓库地址,由用户在页面补充登记)",
+      || "- 代码仓: (未登记——可 lookup_modules 按业务关键词检索模块带出仓,"
+      + "或问用户要地址;要用的仓自己 pull_repo 拉取,拉过才在场)",
     `- ${envLine(state)}`,
     "",
     "## 行为契约",
     "1. 阶段上报:每进入新环节调 report_stage——平台显示你正在干什么,全靠它。",
     "2. 人工闸门:对齐方案、部署后验证,必须 AskUserQuestion 停下等用户,绝不自作主张。",
     "3. 非问题是一等结论:研究判定非问题就出结论收口,不强制编码。",
-    "4. 秘密边界:环境密码与各 token 由平台保管,不向用户索要、不猜测、不讨论。",
-    "5. 结论文档持续维护 issue-analysis.md,它是本会话的核心交付物。",
+    "4. 代码仓你自己拉(pull_repo)、自己管:改过的仓各自交付,一仓一 MR。",
+    "5. 秘密边界:环境密码与各 token 由平台保管,不向用户索要、不猜测、不讨论。",
+    "6. 结论文档持续维护 issue-analysis.md,它是本会话的核心交付物。",
     "",
     "现在开始:先复述你对问题现象的理解,给出研究计划(打算看什么、拉什么日志、"
     + "问用户什么),然后按计划推进。",
@@ -240,8 +248,12 @@ export function issueResumePrompt(
     `- 标题: ${state.title}`,
     `- 单号: ${state.ticket ?? "(未绑定)"}`,
     `- 最近阶段: ${stageLabelOf(state)}(${state.stage_note || "无说明"})`,
-    state.push ? `- 已推送: ${state.push.branch} @ ${state.push.sha.slice(0, 12)}` : "",
-    state.mr ? `- 已建 MR: ${state.mr.url}` : "",
+    state.pushes?.length
+      ? `- 已推送: ${state.pushes.map((push) =>
+          `${push.branch} @ ${push.sha.slice(0, 12)}`).join(";")}` : "",
+    state.mrs?.length
+      ? `- 已建 MR: ${state.mrs.map((mr) =>
+          mr.url ?? mr.title).join(";")}` : "",
     "",
     `用户的最新输入:\n\n${userText}`,
   ].filter(Boolean).join("\n");

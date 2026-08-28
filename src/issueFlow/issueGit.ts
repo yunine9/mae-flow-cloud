@@ -249,6 +249,19 @@ export async function currentBranch(repoDir: string): Promise<string> {
   }
 }
 
+/** 当前 HEAD 短 SHA(拉仓事实回报用;失败回空串由调用方如实呈现)。 */
+export async function currentHead(repoDir: string): Promise<string> {
+  const view = createSafeGitView(repoDir);
+  try {
+    const outcome = await runGit(
+      ["--no-pager", "rev-parse", "--short=12", "HEAD"],
+      { cwd: repoDir, env: view.environment(), timeoutMs: 10_000 });
+    return outcome.code === 0 ? outcome.stdout.trim() : "";
+  } finally {
+    view.cleanup();
+  }
+}
+
 /** 宿主侧确定性建分支(固定流程阶段2/转正时用)。分支名规范
  * master_工号_单号 由调用方拼好;这里只负责"分支已在且已检出"这个
  * 终态:已检出=幂等通过;分支存在未检出=切过去;不存在=从起点建。

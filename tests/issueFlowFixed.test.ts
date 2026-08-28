@@ -168,12 +168,14 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
   const platform = new LoopPlatform();
   await platform.start();
   const commit = (message: string) =>
-    `cd repo && git -c user.name=test -c user.email=t@e commit -q --allow-empty -m '${message}'`;
+    `cd repo/origin && git -c user.name=test -c user.email=t@e commit -q --allow-empty -m '${message}'`;
   const script: Scene[] = [
     // 第 1 回合:阶段门禁探针(换库部署在拉单阶段必须被拒)→ 拉单(机械
-    // 推进 prep_repo,宿主建分支后直进 analyze)→ 写报告 → 提交举闸。
+    // 推进 prep_repo)→ AI 自己拉仓(首仓落地即推进 analyze,平台顺带
+    // 建好修复分支)→ 写报告 → 提交举闸。
     { tool: { name: "build_deploy", input: { include_lib: false } } },
     { tool: { name: "dts_get_ticket", input: {} } },
+    { tool: { name: "pull_repo", input: { url: origin } } },
     { tool: { name: "bash", input: { command:
       "printf '# 问题分析\\n\\n现象:登录超时;根因:连接池耗尽;方案:超时回收。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis",
@@ -274,12 +276,13 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     assert.equal(fixing.stage_states?.[3], "done", "问题修改完成");
     assert.equal(fixing.stage_states?.[4], "done", "UT 通过记账");
     assert.equal(fixing.stage_states?.[5], "in_progress", "MR 跑绿进行中");
-    assert.ok(fixing.push, "修复分支已推送");
-    assert.ok(fixing.mr, "MR 已创建");
+    assert.equal(fixing.pushes?.length, 1, "修复分支已推送(按仓记账)");
+    assert.equal(fixing.pushes?.[0]?.repo, origin);
+    assert.equal(fixing.mrs?.length, 1, "MR 已创建(按仓记账)");
     const branchNow = spawnSync("git",
-      ["-C", join(dataDir, "issues", created.id, "repo"), "branch", "--show-current"],
+      ["-C", join(dataDir, "issues", created.id, "repo", "origin"), "branch", "--show-current"],
       { encoding: "utf-8" });
-    assert.equal(branchNow.stdout.trim(), BRANCH, "宿主建的修复分支名=master_工号_单号");
+    assert.equal(branchNow.stdout.trim(), BRANCH, "pull_repo 时宿主切的修复分支名=master_工号_单号");
 
     // ③ 流水线红→AI 修→再推→绿:全由宿主监看驱动,绿了自动进换库验证。
     const gate2 = await until(() => {
@@ -289,13 +292,13 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
         ? issue : undefined;
     }, "一轮:流水线红转绿后部署举验证闸");
     assert.equal(gate2.stage, "deploy_verify");
-    assert.equal(gate2.pipeline?.status, "success", "监看账应记全绿");
+    assert.equal(gate2.pipelines?.[origin]?.status, "success", "监看账应记全绿");
     const failedRound = platform.seen.filter((entry) =>
       entry.method === "POST" && entry.url === "/pipeline/trigger").length;
     assert.ok(failedRound >= 2, "红过一轮就要有第二轮触发(同 MR 修复再推)");
 
     // ④ 验证不通过:一律回退问题分析,轮次+1,UT/监看作废,分支 MR 延用。
-    const shaBefore = service.get(created.id).push!.sha;
+    const shaBefore = service.get(created.id).pushes![0].sha;
     service.answer(created.id, {
       state_version: gate2.gate!.state_version,
       decision: "验证发现问题(填写补充说明)",
@@ -311,7 +314,7 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     assert.equal(gate3.ut, undefined, "回退作废 UT 上报");
     assert.equal(gate3.stage_states?.[3], "redo", "修改阶段标待重做");
     assert.equal(gate3.stage_states?.[5], "redo", "MR 阶段标待重做");
-    assert.equal(gate3.push!.sha, shaBefore, "分支与 MR 延用(不另开)");
+    assert.equal(gate3.pushes![0].sha, shaBefore, "分支与 MR 延用(不另开)");
 
     // ⑤ 二轮走完至验证通过:末阶段完成,待手动归档。
     service.answer(created.id, {
@@ -334,7 +337,7 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
         && issue.stage_states?.[6] === "done" ? issue : undefined;
     }, "验证通过收尾");
     assert.equal(passed.stage, "deploy_verify", "固定流程留在自己的词表里");
-    assert.equal(passed.pipeline?.status, "success");
+    assert.equal(passed.pipelines?.[origin]?.status, "success");
 
     // ⑥ 手动归档:有 MR 记录,结论=已交付。
     const archived = service.control(created.id, { action: "archive" });
@@ -356,6 +359,7 @@ test("固定流程无单闭环:结论是问题→挂起;结论非问题→直接
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-noticket-"));
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
+    { tool: { name: "pull_repo", input: { url: origin } } },
     { tool: { name: "bash", input: { command:
       "printf '# 初步定位\\n\\n结论:是问题(索引缺失导致全表扫描)。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis",
@@ -409,6 +413,7 @@ test("固定流程无单闭环:结论非问题,用户确认后自动归档", asy
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-nonissue-"));
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
+    { tool: { name: "pull_repo", input: { url: origin } } },
     { tool: { name: "bash", input: { command:
       "printf '# 初步定位\\n\\n结论:非问题(测试环境时钟漂移)。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis",
@@ -458,7 +463,8 @@ test("关联转正:两段式(校验过目→确认),工作区/报告/凭据继�
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-assoc-"));
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
-    // 无单会话走到挂起。
+    // 无单会话走到挂起(先自己拉仓,分析阶段才开门)。
+    { tool: { name: "pull_repo", input: { url: origin } } },
     { tool: { name: "bash", input: { command:
       "printf '# 初步定位\\n\\n结论:是问题。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis",
@@ -466,9 +472,10 @@ test("关联转正:两段式(校验过目→确认),工作区/报告/凭据继�
     { text: "等用户确认。" },
     // 转正新会话的首轮(直接在问题修改阶段干活)。
     { tool: { name: "bash", input: { command:
-      `cd repo && git -c user.name=test -c user.email=t@e commit -q --allow-empty -m '[${TICKET}][fix] 修复死锁'` } } },
+      `cd repo/origin && git -c user.name=test -c user.email=t@e commit -q --allow-empty -m '[${TICKET}][fix] 修复死锁'` } } },
     { text: "修复已就位(继承的分析报告在案)。" },
     // 第二个无单会话(查重用)。
+    { tool: { name: "pull_repo", input: { url: origin } } },
     { tool: { name: "bash", input: { command:
       "printf '# 结论:是问题\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis",
@@ -523,9 +530,11 @@ test("关联转正:两段式(校验过目→确认),工作区/报告/凭据继�
       ["inherited", "inherited", "inherited"], "前三阶段标记继承");
     assert.equal(converted!.converted_from, created.id);
     const newRoot = join(dataDir, "issues", converted!.id);
-    assert.ok(existsSync(join(newRoot, "repo", ".git")), "工作区(repo/)继承,免二次克隆");
+    assert.ok(existsSync(join(newRoot, "repo", "origin", ".git")),
+      "工作区(repo/origin/)继承,免二次克隆");
     assert.ok(existsSync(join(newRoot, "issue-analysis.md")), "分析报告继承");
-    const branch = spawnSync("git", ["-C", join(newRoot, "repo"), "branch", "--show-current"],
+    const branch = spawnSync("git",
+      ["-C", join(newRoot, "repo", "origin"), "branch", "--show-current"],
       { encoding: "utf-8" });
     assert.equal(branch.stdout.trim(), BRANCH, "宿主已在副本上用新单号建分支");
     assert.ok(existsSync(join(dataDir, ".issue-environments", `${converted!.id}.json`)),
@@ -575,10 +584,12 @@ test("阶段门禁单点(免模型):工具只在所属阶段开放,UT 没过不�
     id: "issue-1", account: "dev",
     created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     title: "t", description: "", source: "dts", ticket: "T1",
-    repo_url: "/tmp/x.git", mode: "fixed", scenario: "ticket", round: 1,
+    repo_url: "/tmp/x.git", repo_urls: ["/tmp/x.git"],
+    mode: "fixed", scenario: "ticket", round: 1,
     stage_states: ["done", "done", "done", "done", "in_progress", "pending", "pending"],
     status: "idle", stage: "ut", stage_note: "", stage_at: new Date().toISOString(),
-    push: { branch: "master_dev_T1", sha: "a".repeat(40), at: new Date().toISOString() },
+    pushes: [{ repo: "/tmp/x.git", branch: "master_dev_T1",
+      sha: "a".repeat(40), at: new Date().toISOString() }],
   };
   const ctx: IssueToolContext = {
     state: base,
@@ -586,6 +597,9 @@ test("阶段门禁单点(免模型):工具只在所属阶段开放,UT 没过不�
     dataRoot: "/tmp/data",
     persist: () => undefined,
     platformUrl: "http://platform.test",
+    pullRepo: async (url) => ({
+      dir: `repo/${url.split("/").at(-1)}`, cloned: true, head: "a".repeat(12),
+    }),
   };
   const tools = createIssueTools(ctx) as Array<{
     name: string;
@@ -633,6 +647,9 @@ test("工读类放宽(2026-08-28):fetch_logs 全程可调,dts_get_ticket 重查�
     dataRoot: "/tmp/data",
     persist: () => undefined,
     dts: new MockDtsGateway(),
+    pullRepo: async (url) => ({
+      dir: `repo/${url.split("/").at(-1)}`, cloned: true, head: "a".repeat(12),
+    }),
   };
   const tools = createIssueTools(ctx) as Array<{
     name: string;
@@ -818,18 +835,24 @@ test("恢复:监看中的流水线重启后重新挂表,绿了自动推进", asy
     { encoding: "utf-8" }).stdout.trim();
   const root = join(dataDir, "issues", "issue-1");
   mkdirSync(root, { recursive: true });
+  const now = new Date().toISOString();
   writeFileSync(join(root, "issue.json"), JSON.stringify({
     id: "issue-1", account: "dev",
-    created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    created_at: now, updated_at: now,
     title: "t", description: "", source: "dts", ticket: "DTS-2026-1002",
-    repo_url: origin, mode: "fixed", scenario: "ticket", round: 1,
+    repo_url: origin, repo_urls: [origin], mode: "fixed", scenario: "ticket", round: 1,
     stage_states: ["done", "done", "done", "done", "done", "in_progress", "pending"],
-    status: "idle", stage: "mr_green", stage_note: "", stage_at: new Date().toISOString(),
-    pipeline: {
-      sha, status: "running", watching: true,
-      started_at: new Date().toISOString(),
-      deadline: new Date(Date.now() + 120_000).toISOString(),
-      round: 1,
+    status: "idle", stage: "mr_green", stage_note: "", stage_at: now,
+    pushes: [{ repo: origin, branch: `master_dev_DTS-2026-1002`, sha, at: now }],
+    mrs: [{ repo: origin, branch: `master_dev_DTS-2026-1002`,
+      title: "[DTS-2026-1002] t", at: now }],
+    pipelines: {
+      [origin]: {
+        sha, status: "running", watching: true,
+        started_at: now,
+        deadline: new Date(Date.now() + 120_000).toISOString(),
+        round: 1,
+      },
     },
   }));
   const service = new IssueFlowService({
@@ -847,8 +870,8 @@ test("恢复:监看中的流水线重启后重新挂表,绿了自动推进", asy
       return issue.stage === "deploy_verify" && issue.status === "idle"
         ? issue : undefined;
     }, "恢复监看并推进到换库验证");
-    assert.equal(done.pipeline?.status, "success");
-    assert.equal(done.pipeline?.watching, false);
+    assert.equal(done.pipelines?.[origin]?.status, "success");
+    assert.equal(done.pipelines?.[origin]?.watching, false);
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
@@ -887,23 +910,25 @@ test("模式烙印:个人偏好回调决定缺省;显式入参可覆盖;裸服�
   }
 });
 
-test("登记不卡仓(2026-08-28):fixed DTS 无仓发起→repo_needed 闸;填地址/跳过/AI识别三条裁决 + 同单查重", async () => {
+test("拉仓工具化(2026-08-28 v2):fixed DTS 无仓发起,AI 拉单后自己拉仓/自报跳过 + 同单查重", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-repogate-"));
   const origin = bareOrigin(dataDir);
-  // 线性剧本跨三个会话:每张单 = 首轮(拉单举闸)+ 裁决后的平台回合。
+  // 线性剧本跨两个会话:每张单 = 拉单 → AI 裁决(拉仓或跳过)→ 分析。
   const script: Scene[] = [
-    // 会话 A(我来填写地址)。
+    // 会话 A:拉单 → 自己拉仓(首仓落地机械推进问题分析)。
     { tool: { name: "dts_get_ticket", input: {} } },
-    { text: "等待用户确定代码仓。" },
-    { text: "代码仓已克隆,开始问题分析。" },
-    // 会话 B(无代码仓,跳过拉取)。
+    { tool: { name: "pull_repo", input: { url: origin } } },
+    { tool: { name: "bash", input: { command:
+      "printf '# 分析\n\n现象已核实。\n' > issue-analysis.md" } } },
+    { tool: { name: "submit_analysis", input: { summary: "根因=连接池耗尽" } } },
+    { text: "仓已拉好,分析已提交。" },
+    // 会话 B:拉单 → 无代码改动,complete_stage 自报跳过。
     { tool: { name: "dts_get_ticket", input: {} } },
-    { text: "等待用户确定代码仓。" },
-    { text: "本单无代码改动,直接开始分析。" },
-    // 会话 C(AI 依据业务模块识别;先演一次手填失败再改选 AI)。
-    { tool: { name: "dts_get_ticket", input: {} } },
-    { text: "等待用户确定代码仓。" },
-    { text: "正在按业务模块识别代码仓。" },
+    { tool: { name: "complete_stage", input: { note: "本单为配置问题,无需代码仓" } } },
+    { tool: { name: "bash", input: { command:
+      "printf '# 分析\n\n结论:配置项漂移。\n' > issue-analysis.md" } } },
+    { tool: { name: "submit_analysis", input: { summary: "配置项漂移,非代码问题" } } },
+    { text: "无仓跳过,分析已提交。" },
   ];
   const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
   await model.start();
@@ -914,121 +939,66 @@ test("登记不卡仓(2026-08-28):fixed DTS 无仓发起→repo_needed 闸;填�
     issueFlowMode: () => "fixed",
   });
   try {
-    // ① 无仓登记不再抛(旧实现直接打回"登记时就要确定代码仓")。
+    // ① 无仓登记放行(repo_needed 闸已退役,缺仓不再举平台卡)。
     const created = service.create({
       account: "dev", title: "登录超时", ticket: TICKET, source: "dts",
     });
     assert.equal(created.repo_url, undefined);
+    assert.equal(created.stage, "dts_info");
 
-    // ② 同账号+同单号至多一个进行中的固定流程:第二张 fail-loud 到单。
+    // ② 同账号+同单号至多一个进行中的固定流程。
     assert.throws(() => service.create({
       account: "dev", title: "重复发起", ticket: TICKET, source: "dts",
     }), /已有进行中的问题会话/);
 
-    // 首轮:拉单机械推进 prep_repo,宿主无仓可拉 → 举 repo_needed 闸。
-    const gate = await until(() => {
-      const issue = service.get(created.id);
-      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
-      return issue.status === "waiting_user" && issue.gate?.kind === "repo_needed"
-        ? issue : undefined;
-    }, "repo_needed 闸");
-    assert.equal(gate.stage, "prep_repo");
-    assert.deepEqual(gate.gate!.question.questions[0].options,
-      ["AI 依据业务模块识别", "我来填写代码仓地址", "无代码仓,跳过拉取"]);
+    // ③ 开场词要把"拉仓是你自己的事"讲清楚(工具化语义的引导层)。
+    await until(() => model.requests.length ? 1 : undefined, "首回合请求到达模型");
+    assert.match(JSON.stringify(model.requests[0]), /pull_repo/,
+      "开场词要指引 pull_repo(找不到仓的 AI 会像 issue-10 一样瞎撞 git)");
 
-    // ③ 手填路径:地址随补充说明,平台校验→落 state→克隆→建分支→
-    //    直达问题分析(prep_repo done)。
-    service.answer(created.id, {
-      state_version: gate.gate!.state_version,
-      decision: "我来填写代码仓地址",
-      notes: origin,
-    });
+    // ④ AI 拉仓路:首仓落地推进问题分析,平台顺带切好修复分支。
     const analyzed = await until(() => {
       const issue = service.get(created.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
-      return issue.stage === "analyze" && issue.status === "idle"
-        ? issue : undefined;
-    }, "填地址后克隆并推进分析");
-    assert.deepEqual(analyzed.repo_urls, [origin]);
-    assert.equal(analyzed.stage_states?.[1], "done", "prep_repo 完成");
+      return issue.status === "waiting_user"
+        && issue.gate?.kind === "analysis_confirm" ? issue : undefined;
+    }, "拉仓后分析闸");
+    assert.equal(analyzed.stage, "analyze");
+    assert.equal(analyzed.stage_states?.[1], "done", "prep_repo 随首仓完成");
     assert.equal(analyzed.stage_states?.[2], "in_progress", "分析进行中");
-    assert.ok(existsSync(join(dataDir, "issues", created.id, "repo", ".git")));
-    const branch = spawnSync("git",
-      ["-C", join(dataDir, "issues", created.id, "repo"), "branch", "--show-current"],
-      { encoding: "utf-8" });
-    assert.equal(branch.stdout.trim(), BRANCH, "宿主建分支照旧");
+    assert.deepEqual(analyzed.repo_urls, [origin]);
+    const root = join(dataDir, "issues", created.id);
+    assert.ok(existsSync(join(root, "repo", "origin", ".git")),
+      "克隆平铺在 repo/<仓名>/");
+    const branch = spawnSync("git", ["-C", join(root, "repo", "origin"),
+      "branch", "--show-current"], { encoding: "utf-8" });
+    assert.equal(branch.stdout.trim(), BRANCH, "拉仓时宿主切好修复分支");
     assert.ok(analyzed.transitions?.some((entry) =>
-      /用户填写代码仓 1 个/.test(entry.note)), "补填留转移账");
+      /代码仓已拉取/.test(entry.note)), "拉仓留转移账");
+    // 会话 A 停在分析闸即可(拉仓路已证明);不再作答,把线性剧本让给会话 B。
 
-    // ④ 跳过路径:无代码改动是合法形态,机械跳过拉取代码仓直达分析
-    //    (skip-span:prep_repo 记 done),repo 始终为空。
+    // ⑤ 跳过路:无代码改动是 AI 的合法自报,prep_repo 记 done,零克隆。
     const second = service.create({
       account: "dev", title: "纯配置问题", ticket: "DTS-2026-1002", source: "dts",
     });
     const gate2 = await until(() => {
       const issue = service.get(second.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
-      return issue.status === "waiting_user" && issue.gate?.kind === "repo_needed"
-        ? issue : undefined;
-    }, "第二张的 repo_needed 闸");
-    service.answer(second.id, {
-      state_version: gate2.gate!.state_version,
-      decision: "无代码仓,跳过拉取",
-    });
-    const skipped = await until(() => {
-      const issue = service.get(second.id);
-      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
-      return issue.stage === "analyze" && issue.status === "idle"
-        ? issue : undefined;
-    }, "跳过后直达分析");
-    assert.equal(skipped.repo_url, undefined, "跳过=无仓继续");
-    assert.equal(skipped.stage_states?.[1], "done", "prep_repo 记 done-skip");
-    assert.ok(existsSync(join(dataDir, "issues", second.id, "repo", ".git")) === false,
-      "跳过路径不克隆");
-
-    // ⑤ 手填校验失败:垃圾协议地址 → 原样再举同一张闸(带失败原因),
-    //    流程不炸、状态不变;随后改选 AI 识别,平台回合注入推断提示。
-    const third = service.create({
-      account: "dev", title: "接口超时", ticket: "DTS-2026-1003", source: "dts",
-    });
-    const gate3 = await until(() => {
-      const issue = service.get(third.id);
-      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
-      return issue.status === "waiting_user" && issue.gate?.kind === "repo_needed"
-        ? issue : undefined;
-    }, "第三张的 repo_needed 闸");
-    service.answer(third.id, {
-      state_version: gate3.gate!.state_version,
-      decision: "我来填写代码仓地址",
-      notes: "ssh://git@codehub.test/x.git",
-    });
-    const refilled = await until(() => {
-      const issue = service.get(third.id);
-      return issue.gate?.kind === "repo_needed"
-        && issue.gate.state_version !== gate3.gate!.state_version
-        ? issue : undefined;
-    }, "失败后重举的 repo_needed 闸");
-    assert.match(refilled.gate!.context ?? "", /上一次填写未通过/,
-      "失败原因要进问题卡背景");
-    assert.equal(refilled.repo_url, undefined, "坏地址不落 state");
-    service.answer(third.id, {
-      state_version: refilled.gate!.state_version,
-      decision: "AI 依据业务模块识别",
-    });
-    await until(() =>
-      service.get(third.id).status === "idle" ? 1 : undefined, "AI 识别回合收口");
-    const aiTurn = model.requests.at(-1);
-    assert.match(JSON.stringify(aiTurn), /lookup_modules/,
-      "AI 识别的平台回合要注入 lookup_modules→bind_module 的推断提示");
-    assert.ok(service.get(third.id).transitions?.some((entry) =>
-      /用户作答\(repo_needed\): AI 依据业务模块识别/.test(entry.note)));
+      return issue.status === "waiting_user"
+        && issue.gate?.kind === "analysis_confirm" ? issue : undefined;
+    }, "跳过路的分析闸");
+    assert.equal(gate2.stage, "analyze", "complete_stage 跳过直达分析");
+    assert.equal(gate2.repo_url, undefined, "跳过=无仓继续");
+    assert.equal(gate2.stage_states?.[1], "done", "prep_repo 记 done(跳过)");
+    assert.equal(existsSync(join(dataDir, "issues", second.id, "repo")), false,
+      "跳过路径零克隆");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
   }
 });
 
-test("业务模块映射(2026-08-28):prep_repo 阶段 bind_module 即克隆推进并清闸;lookup 未命中说无匹配;零仓模块打回", async () => {
+test("业务模块映射(2026-08-28 v2):bind_module 只登记,拉仓靠 pull_repo;lookup 未命中说无匹配;零仓模块打回", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-bindmod-"));
   const origin = bareOrigin(dataDir);
   createBusinessModule(dataDir, {
@@ -1040,8 +1010,14 @@ test("业务模块映射(2026-08-28):prep_repo 阶段 bind_module 即克隆推�
     owner: "dev", repositories: [],
   }, "tester");
   const script: Scene[] = [
+    { tool: { name: "lookup_modules", input: { keyword: "媒体" } } },
     { tool: { name: "bind_module", input: { module_id: "media-core" } } },
-    { text: "模块已绑定,代码仓就绪,开始分析。" },
+    { tool: { name: "pull_repo", input: { url: origin } } },
+    { tool: { name: "bash", input: { command:
+      "printf '# 分析\n\n转码失败已定位。\n' > issue-analysis.md" } } },
+    { tool: { name: "submit_analysis",
+      input: { conclusion: "issue", summary: "是问题:转码线程泄漏" } } },
+    { text: "模块已绑、仓已拉,分析已提交。" },
   ];
   const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
   await model.start();
@@ -1051,25 +1027,29 @@ test("业务模块映射(2026-08-28):prep_repo 阶段 bind_module 即克隆推�
     issueFlowMode: () => "fixed",
   });
   try {
-    // 无单 + 无仓登记:首轮入口即 prep_repo,宿主举闸后 Agent 在同一
-    // 回合里 bind_module → 宿主钩子克隆建分支、推进问题分析、清闸。
+    // 无单 + 无仓登记:首轮即 prep_repo,Agent 检索→绑定→拉仓→分析,
+    // 全在一个回合里走完(不再有平台闸,也没有宿主代克隆)。
     const created = service.create({ account: "dev", title: "转码失败" });
     assert.equal(created.scenario, "no_ticket");
     const analyzed = await until(() => {
       const issue = service.get(created.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
-      return issue.stage === "analyze" && issue.status === "idle"
-        ? issue : undefined;
-    }, "bind_module 后克隆并推进分析");
+      return issue.status === "waiting_user"
+        && issue.gate?.kind === "conclude" ? issue : undefined;
+    }, "绑定拉仓后结论闸");
     assert.equal(analyzed.module_id, "media-core");
     assert.equal(analyzed.module, "媒体核心", "模块名由模块库派生");
-    assert.deepEqual(analyzed.repo_urls, [origin], "模块仓合并进会话");
-    assert.equal(analyzed.gate, undefined, "repo_needed 闸随绑定清掉");
-    assert.ok(existsSync(join(dataDir, "issues", created.id, "repo", ".git")));
+    assert.deepEqual(analyzed.repo_urls, [origin], "模块仓并进会话登记");
+    assert.equal(analyzed.stage, "conclude", "无单场景分析结论即终点节点");
+    assert.ok(existsSync(
+      join(dataDir, "issues", created.id, "repo", "origin", ".git")),
+      "克隆由 pull_repo 落地(repo/<仓名>/ 平铺)");
     assert.ok(analyzed.transitions?.some((entry) =>
       /已绑定业务模块「媒体核心」/.test(entry.note)));
 
-    // 工具直调(免模型):检索命中/未命中、零仓模块打回、后期改绑不动阶段。
+    // 工具直调(免模型):检索命中/未命中、零仓模块打回、bind 回执
+    // 给出待拉仓的 pull_repo 指令、pull_repo 首拉推进阶段、后期改绑
+    // 与补拉不倒转阶段。
     const state: IssueSessionState = {
       id: "issue-x", account: "dev",
       created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
@@ -1078,11 +1058,14 @@ test("业务模块映射(2026-08-28):prep_repo 阶段 bind_module 即克隆推�
       stage_states: FIXED_TICKET_STAGES.map(() => "pending"),
       status: "idle", stage: "prep_repo", stage_note: "", stage_at: new Date().toISOString(),
     };
-    let bound = 0;
+    const pulled: string[] = [];
     const ctx: IssueToolContext = {
       state, workspace: "/tmp/ws", dataRoot: dataDir,
       persist: () => undefined,
-      onReposBound: async () => { bound += 1; },
+      pullRepo: async (url) => {
+        pulled.push(url);
+        return { dir: "repo/origin", cloned: true, head: "a".repeat(12) };
+      },
     };
     const tools = createIssueTools(ctx) as Array<{
       name: string;
@@ -1103,12 +1086,20 @@ test("业务模块映射(2026-08-28):prep_repo 阶段 bind_module 即克隆推�
     await assert.rejects(
       () => byName("bind_module").execute("x", { module_id: "empty-mod" }),
       /没有绑定代码仓/, "零仓模块必须打回,让模型转头去问用户");
-    await byName("bind_module").execute("x", { module_id: "media-core" });
-    assert.equal(bound, 1, "绑定要触发宿主收口钩子");
+    const bindReceipt = textOf(
+      await byName("bind_module").execute("x", { module_id: "media-core" }));
+    assert.match(bindReceipt, /pull_repo/, "绑定回执要给出逐仓拉取指令");
+    assert.equal(pulled.length, 0, "bind_module 本身不克隆");
     assert.deepEqual(state.repo_urls, [origin]);
+    // 首拉推进 prep_repo → analyze;此后补拉/改绑不倒转阶段。
+    await byName("pull_repo").execute("x", { url: origin });
+    assert.equal(state.stage, "analyze", "首仓落地机械推进问题分析");
+    assert.equal(state.stage_states?.[1], "done");
     state.stage = "fix";
+    await byName("pull_repo").execute("x", { url: origin });
     await byName("bind_module").execute("x", { module_id: "media-core" });
-    assert.equal(state.stage, "fix", "后期的改绑只更新标签,不倒转阶段");
+    assert.equal(state.stage, "fix", "后期的补拉与改绑只做事,不倒转阶段");
+    assert.equal(pulled.length, 2, "幂等重拉照常执行(工具不猜意图)");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
@@ -1131,6 +1122,9 @@ test("网管环境闸(2026-08-28):fetch_logs 缺环境举 env_needed(scope=logs)
     persist: () => undefined,
     ops: fakeOps,
     environmentPassword: () => undefined,
+    pullRepo: async (url) => ({
+      dir: `repo/${url.split("/").at(-1)}`, cloned: true, head: "a".repeat(12),
+    }),
   };
   const directTools = createIssueTools(directCtx) as Array<{
     name: string;

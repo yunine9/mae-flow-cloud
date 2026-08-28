@@ -200,6 +200,8 @@ export interface IssueConclusion {
 }
 
 export interface IssueMrRecord {
+  /** MR 所属仓(地址);多仓会话一仓一 MR,各记各的。 */
+  repo: string;
   branch: string;
   title: string;
   url?: string;
@@ -208,6 +210,7 @@ export interface IssueMrRecord {
 }
 
 export interface IssuePushRecord {
+  repo: string;
   branch: string;
   sha: string;
   at: string;
@@ -216,12 +219,13 @@ export interface IssuePushRecord {
 /** 平台问题卡(固定流程的人工闸)。与 Agent 的 AskUserQuestion 挂起
  * (humanGate/waiting.json)是并行的两条机制:平台闸由宿主写进
  * issue.json——Agent 对该文件只读,推不动闸门,这正是"固定流程"
- * 的强制度所在。渲染层复用问题卡组件(形状与 waiting 卡同构)。 */
+ * 的强制度所在。渲染层复用问题卡组件(形状与 waiting 卡同构)。
+ * 代码仓缺口不走平台闸(2026-08-28 拍板退役 repo_needed):AI 用
+ * lookup_modules/pull_repo/AskUserQuestion 自己闭环。 */
 export type IssueGateKind =
   | "analysis_confirm" // 报告确认:放行进入问题修改
   | "conclude"         // 无单结论:是问题→挂起 / 非问题→闭环
   | "env_verify"       // 换库验证:通过→待归档 / 有问题→回退问题分析
-  | "repo_needed"      // 拉取代码仓:AI 识别 / 用户填地址 / 无代码仓跳过(2026-08-28)
   | "env_needed";      // 网管环境:拉日志/换库缺地址与密码时现场补配(2026-08-28)
 
 /** env_needed 闸的用途面:决策卡据此给表单文案,服务端清闸后提示重试。 */
@@ -279,11 +283,12 @@ export interface IssueSessionState {
   source: IssueSource;
   /** 可空:先研究后补单是问题流的一等场景。绑定前推送/MR 被机械拒绝。 */
   ticket?: string;
-  /** 主仓(交付仓):推送/MR/部署链路的权威地址,克隆在 repo/。
-   * 与 repo_urls[0] 保持一致(dual-write),旧字段留给展示层与老会话。 */
+  /** 首个登记仓(兼容别名):推送/MR/部署缺省目标的权威地址,克隆在
+   * repo/<仓名>/。与 repo_urls[0] 保持一致(dual-write),旧字段留给
+   * 展示层与老会话。 */
   repo_url?: string;
-  /** 全部目标代码仓(首个=主仓):模块带仓的多仓分析是常态,主仓之外的
-   * 都是参考仓,克隆在 ref/<仓目录名>/ 供只读分析。 */
+  /** 全部目标代码仓(2026-08-28 拍板:彼此平等,都可读可改),克隆
+   * 平铺在 repo/<仓名>/,由 Agent 调 pull_repo 逐个拉取。 */
   repo_urls?: string[];
   baseline?: string;
   /** 业务模块:module_id 是登记时选定的一等实体(带出 repo_urls 的
@@ -302,7 +307,9 @@ export interface IssueSessionState {
   /** 平台问题卡在场即 waiting_user 由闸门挂起(与 humanGate 并行)。 */
   gate?: IssueGate;
   ut?: IssueUtRecord;
-  pipeline?: IssuePipelineWatch;
+  /** 流水线监看账(按仓,键=仓地址;一仓一 MR 一流水线)。重启后
+   * watching=true 的要逐仓重新挂表。 */
+  pipelines?: Record<string, IssuePipelineWatch>;
   /** 转正来源:本会话由哪个无单挂起会话转正而来(带报告继承)。 */
   converted_from?: string;
   /** 转正去向:本会话(无单挂起)转正生成的新会话 id。 */
@@ -314,8 +321,10 @@ export interface IssueSessionState {
   /** 阶段转移审计日志(Agent 声明 + 平台机械事实)。只增不改。 */
   transitions?: StageTransition[];
   conclusion?: IssueConclusion;
-  push?: IssuePushRecord;
-  mr?: IssueMrRecord;
+  /** 推送账(按仓,一仓一分支):只增不删,重推同分支覆盖同仓旧账。 */
+  pushes?: IssuePushRecord[];
+  /** MR 账(按仓,一仓一 MR):AI 的"上报"即 create_mr 的调用记录。 */
+  mrs?: IssueMrRecord[];
   error?: string;
   last_reply?: string;
 }
@@ -357,9 +366,10 @@ export function normalizeIssueRepos(
   return unique;
 }
 
-/** 会话登记仓 → 工作区克隆路径:主仓在 repo/(交付链路既定位置),
- * 参考仓在 ref/<仓名>/(只读分析)。仓目录名取地址末段去 .git,
- * 重名追加序号。 */
+/** 会话登记仓 → 工作区克隆路径:全部平铺 repo/<仓名>/(2026-08-28
+ * 拍板:仓平等——废除主仓 repo/ + 参考仓 ref/ 的等级布局,单仓多仓
+ * 同构)。仓名取地址末段去 .git,重名追加序号;克隆一律由 Agent 调
+ * pull_repo 工具发起,平台不自动克隆。 */
 export function issueRepoWorkspaces(
   state: IssueSessionState,
   workspaceRoot: string,
@@ -368,15 +378,14 @@ export function issueRepoWorkspaces(
     ? state.repo_urls
     : state.repo_url ? [state.repo_url] : [];
   const taken = new Set<string>();
-  return repoUrls.map((url, index) => {
-    if (index === 0) return { url, dir: join(workspaceRoot, "repo") };
+  return repoUrls.map((url) => {
     const tail = url.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "";
     const name = tail.replace(/\.git$/i, "") || "repo";
     let candidate = name;
     let serial = 2;
     while (taken.has(candidate)) candidate = `${name}-${serial++}`;
     taken.add(candidate);
-    return { url, dir: join(workspaceRoot, "ref", candidate) };
+    return { url, dir: join(workspaceRoot, "repo", candidate) };
   });
 }
 
@@ -403,6 +412,36 @@ export function loadState(root: string): IssueSessionState | undefined {
   } else if (state.repo_url) {
     state.repo_urls = [state.repo_url];
   }
+  // 推送/MR 账迁移:老会话的单数账(push/mr)读进来换成按仓数组
+  // (repo 用当时的主仓地址兜底),字段本身退役。
+  const legacyPush = (state as { push?: IssuePushRecord }).push;
+  if (!state.pushes?.length && legacyPush) {
+    state.pushes = [{
+      repo: state.repo_url ?? "",
+      branch: legacyPush.branch,
+      sha: legacyPush.sha,
+      at: legacyPush.at,
+    }];
+  }
+  const legacyMr = (state as { mr?: IssueMrRecord }).mr;
+  if (!state.mrs?.length && legacyMr) {
+    state.mrs = [{
+      repo: state.repo_url ?? "",
+      branch: legacyMr.branch,
+      title: legacyMr.title,
+      ...(legacyMr.url ? { url: legacyMr.url } : {}),
+      ...(legacyMr.iid ? { iid: legacyMr.iid } : {}),
+      at: legacyMr.at,
+    }];
+  }
+  delete (state as { push?: unknown }).push;
+  delete (state as { mr?: unknown }).mr;
+  // 流水线账迁移:老单数 pipeline 读进来挂到当时主仓名下。
+  const legacyPipeline = (state as { pipeline?: IssuePipelineWatch }).pipeline;
+  if (legacyPipeline && !state.pipelines) {
+    state.pipelines = { [state.repo_url ?? ""]: legacyPipeline };
+  }
+  delete (state as { pipeline?: unknown }).pipeline;
   return state;
 }
 
@@ -449,7 +488,6 @@ const GATE_NAMES: Record<IssueGateKind, string> = {
   analysis_confirm: "分析报告确认",
   conclude: "结论确认",
   env_verify: "环境验证",
-  repo_needed: "代码仓确认",
   env_needed: "网管环境配置",
 };
 
@@ -542,7 +580,7 @@ export function fixedRollback(
   state.stage_note = reason;
   state.stage_at = new Date().toISOString();
   delete state.ut;
-  delete state.pipeline;
+  delete state.pipelines;
   delete state.gate;
   recordTransition(state, {
     source: "platform", stage: "analyze",
