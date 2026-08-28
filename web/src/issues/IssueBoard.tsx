@@ -21,11 +21,17 @@ import {
   getDtsTicketDetail,
   getIssue,
   getIssueAnalysis,
+  getIssueMaterials,
+  getIssueRawEvents,
   getIssueTimeline,
+  getIssueWorkspaceFile,
+  getIssueMaterialLog,
+  getIssueFileDiff,
   issueStageText,
   listDtsTickets,
   listIssues,
   replyIssue,
+  saveIssueWorkspaceFile,
   steerIssue,
   tailIssueEvents,
   type AuthUser,
@@ -33,6 +39,8 @@ import {
   type DtsTicketBrief,
   type DtsTicketDetail,
   type IssueDetail,
+  type IssueMaterials,
+  type IssueRawEvent,
   type IssueStageState,
   type IssueSummary,
   type IssueTimeline,
@@ -707,7 +715,8 @@ function IssueSessionView({
   const [busy, setBusy] = useState(false);
   // 左栏页签:默认"有结论文档先看结论",用户手选优先(换会话才重置);
   // undefined 表示尚未手选,渲染时按当前 has_analysis 兜底。
-  const [pickedTab, setPickedTab] = useState<"chat" | "doc" | undefined>(undefined);
+  const [pickedTab, setPickedTab] = useState<
+    "chat" | "doc" | "materials" | "events" | undefined>(undefined);
   const threadRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -781,6 +790,10 @@ function IssueSessionView({
   }
   const sendReply = (text: string) => perform(() => replyIssue(detail.id, text));
   const sendSteer = (text: string) => perform(() => steerIssue(detail.id, text));
+  /** 快速修改后请 AI 复核:运行中走插话,空闲走续聊——都走现有通道,
+   * 不另开会话干预口。等待人工决策时不可用(先把卡答了)。 */
+  const notifyAI = (text: string) => detail.status === "running"
+    ? sendSteer(text) : sendReply(text);
   /** 挂起会话关联单号转正:两段式(校验过目 → 确认),转正后跳新会话。
    * 不走 perform:需要把 API 结果(单据详情/新会话)交回关联卡。 */
   async function associate(ticket: string, confirm: boolean):
@@ -919,10 +932,15 @@ function IssueSessionView({
                   placeholder="继续追问:补充信息、调整方向,或让 AI 继续"
                   actionLabel="发送" submit={sendReply} />}
             </div>
-          : <>
-              {/* 结论文档按 updated_at 缓存:文档可能被 AI 续写,状态一动就该重读。 */}
-              <IssueConclusionDoc id={detail.id} updatedAt={detail.updated_at} />
-            </>}
+          : tab === "materials"
+            ? <IssueMaterialsPane detail={detail} busy={busy}
+                onNotifyAI={notifyAI} />
+            : tab === "events"
+              ? <IssueEventsPane id={detail.id} updatedAt={detail.updated_at} />
+              : <>
+                  {/* 结论文档按 updated_at 缓存:文档可能被 AI 续写,状态一动就该重读。 */}
+                  <IssueConclusionDoc id={detail.id} updatedAt={detail.updated_at} />
+                </>}
       </section>
       <IssueRail
         detail={detail}
@@ -1021,9 +1039,9 @@ function IssuePaneTabs({
   hasAnalysis,
   onPick,
 }: {
-  tab: "chat" | "doc";
+  tab: "chat" | "doc" | "materials" | "events";
   hasAnalysis: boolean;
-  onPick: (tab: "chat" | "doc") => void;
+  onPick: (tab: "chat" | "doc" | "materials" | "events") => void;
 }) {
   return <div className="issue-pane-tabs" role="tablist"
     aria-label="会话内容视图">
@@ -1035,6 +1053,12 @@ function IssuePaneTabs({
       onClick={() => onPick("doc")}>
       结论文档{!hasAnalysis && <i>(未生成)</i>}
     </button>
+    <button type="button" role="tab" aria-selected={tab === "materials"}
+      className={tab === "materials" ? "on" : ""}
+      onClick={() => onPick("materials")}>材料</button>
+    <button type="button" role="tab" aria-selected={tab === "events"}
+      className={tab === "events" ? "on" : ""}
+      onClick={() => onPick("events")}>现场</button>
   </div>;
 }
 
@@ -1087,6 +1111,246 @@ function IssueConclusionDoc({ id, updatedAt }: { id: string; updatedAt: string }
         <Markdown text={content} />
       </article>
     </>}
+  </div>;
+}
+
+/** 会话材料(交付材料页签):DTS 单据 / 工作区变更(含快速修改)/ 拉取
+ * 日志。数据全部旁路:任何一块失败给空态,不拖垮会话。快速修改是
+ * 问题流唯一的人工写口——只改 repo/ 内已有文件,保存入人工台账,
+ * "请 AI 复核"按钮走现有插话/续聊通道把改动告知 AI。 */
+function IssueMaterialsPane({ detail, busy, onNotifyAI }: {
+  detail: IssueDetail;
+  busy: boolean;
+  onNotifyAI: (text: string) => Promise<boolean>;
+}) {
+  const [data, setData] = useState<IssueMaterials>();
+  const [note, setNote] = useState("");
+  const [loading, setLoading] = useState(false);
+  // 变更文件 → diff/编辑器;undefined 表示未选中任何文件。
+  const [activeFile, setActiveFile] = useState<string>();
+  const [diff, setDiff] = useState("");
+  const [content, setContent] = useState<string>();
+  const [saving, setSaving] = useState(false);
+  const [dtsDetail, setDtsDetail] = useState<DtsTicketDetail>();
+  const [logView, setLogView] = useState<{ name: string; content: string }>();
+
+  async function load() {
+    setLoading(true);
+    try {
+      setData(await getIssueMaterials(detail.id));
+      setNote("");
+    } catch (reason) {
+      setNote(String(reason instanceof Error ? reason.message : reason));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void load();
+    // 会话状态一动(AI 可能改了工作区)就刷新清单;id 变化由父层换页签兜底。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail.updated_at]);
+
+  async function openFile(path: string) {
+    setActiveFile(path);
+    setDiff("");
+    setContent(undefined);
+    setLogView(undefined);
+    try {
+      const [file, fileDiff] = await Promise.all([
+        getIssueWorkspaceFile(detail.id, path),
+        getIssueFileDiff(detail.id, path),
+      ]);
+      setContent(file.content);
+      setDiff(fileDiff.diff);
+    } catch (reason) {
+      setNote(String(reason instanceof Error ? reason.message : reason));
+    }
+  }
+
+  async function save() {
+    if (!activeFile || content === undefined || saving) return;
+    setSaving(true);
+    try {
+      await saveIssueWorkspaceFile(detail.id, activeFile, content);
+      setNote(`已保存 ${activeFile}。改动建议让 AI 复核一次。`);
+      await load();
+      const fileDiff = await getIssueFileDiff(detail.id, activeFile);
+      setDiff(fileDiff.diff);
+    } catch (reason) {
+      setNote(String(reason instanceof Error ? reason.message : reason));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function openLog(name: string) {
+    try {
+      const log = await getIssueMaterialLog(detail.id, name);
+      setLogView({ name, content: log.content });
+      setActiveFile(undefined);
+    } catch (reason) {
+      setNote(String(reason instanceof Error ? reason.message : reason));
+    }
+  }
+
+  async function openDts() {
+    if (!data?.ticket || dtsDetail) return;
+    try {
+      setDtsDetail(await getDtsTicketDetail(data.ticket));
+    } catch (reason) {
+      setNote(String(reason instanceof Error ? reason.message : reason));
+    }
+  }
+
+  return <div className="issue-materials">
+    <div className="issue-materials-toolbar">
+      <button type="button" onClick={load} disabled={loading}>
+        {loading ? "刷新中…" : "刷新材料"}
+      </button>
+      {data?.ticket && <button type="button" onClick={openDts}>
+        DTS 单据 {data.ticket}
+      </button>}
+      {data?.push && <span className="issue-materials-push"
+        title={`分支 ${data.push.branch} · ${data.push.at}`}>
+        已推送 {data.push.branch}@{data.push.sha.slice(0, 10)}
+      </span>}
+      {note && <span className="issue-materials-note">{note}</span>}
+    </div>
+    {dtsDetail && <section className="issue-materials-block">
+      <h4>DTS 单据</h4>
+      <p className="issue-materials-dts-head">
+        <strong>{dtsDetail.title || "(无标题)"}</strong>
+        {dtsDetail.severity && <span>级别:{dtsDetail.severity}</span>}
+        {dtsDetail.version && <span>版本:{dtsDetail.version}</span>}
+        {dtsDetail.submitter && <span>提单:{dtsDetail.submitter}</span>}
+        {dtsDetail.url && <a href={dtsDetail.url} target="_blank" rel="noreferrer">原始单</a>}
+      </p>
+      <div className="issue-materials-html issue-dts-detail-html"
+        dangerouslySetInnerHTML={{
+          __html: resolveDtsImages(dtsDetail.description || dtsDetail.content)
+            || "(无描述)",
+        }}
+      />
+    </section>}
+    <section className="issue-materials-block">
+      <h4>工作区变更{data ? `(${data.changes.length})` : ""}</h4>
+      {detail.status === "running" && <p className="issue-materials-warning">
+        AI 正在运行:此刻的编辑可能被它覆盖,建议空闲/等待时再改。
+      </p>}
+      {data && data.changes.length === 0 && <p className="issue-materials-empty">
+        工作区当前没有改动。
+      </p>}
+      <div className="issue-materials-files" role="list">
+        {data?.changes.map((change) => <button type="button" role="listitem"
+          key={change.path}
+          className={`issue-materials-file${activeFile === change.path ? " on" : ""}`}
+          onClick={() => openFile(change.path)}>
+          <span className={`st st-${change.status.replace(/\s/g, "")}`}>
+            {change.status}
+          </span>
+          <span className="p">{change.path}</span>
+          {(change.additions !== undefined || change.deletions !== undefined)
+            && <span className="num">
+              {change.additions !== undefined && <em>+{change.additions}</em>}
+              {change.deletions !== undefined && <em>-{change.deletions}</em>}
+            </span>}
+        </button>)}
+      </div>
+      {activeFile && <div className="issue-materials-editor">
+        <div className="issue-materials-editor-bar">
+          <strong>{activeFile}</strong>
+          <button type="button" className="primary" disabled={saving
+            || content === undefined} onClick={save}>
+            {saving ? "保存中…" : "保存修改"}
+          </button>
+          <button type="button" disabled={busy || saving}
+            title="把这次人工改动告知 AI,请它复核后继续"
+            onClick={() => onNotifyAI(
+              `[人工修改] 我直接改了 ${activeFile},请复核这份改动,与你的方案不一致时先说明再继续。`)}>
+            请 AI 复核
+          </button>
+        </div>
+        {content !== undefined
+          ? <textarea value={content} spellCheck={false}
+              onChange={(event) => setContent(event.target.value)} />
+          : <p className="issue-materials-empty">读取中…</p>}
+        {diff && <pre className="issue-materials-diff">{diff}</pre>}
+      </div>}
+    </section>
+    <section className="issue-materials-block">
+      <h4>人工修改记录{data ? `(${data.manual_edits.length})` : ""}</h4>
+      {data && data.manual_edits.length === 0 && <p className="issue-materials-empty">
+        还没有人工改动——在上方变更列表点文件即可编辑。
+      </p>}
+      <ul className="issue-materials-edits">
+        {data?.manual_edits.slice().reverse().map((edit, index) => <li
+          key={`${edit.ts}-${index}`}>
+          <span>{new Date(edit.ts).toLocaleTimeString()}</span>
+          <span className="p">{edit.path}</span>
+        </li>)}
+      </ul>
+    </section>
+    <section className="issue-materials-block">
+      <h4>拉取日志{data ? `(${data.logs.length})` : ""}</h4>
+      {data && data.logs.length === 0 && <p className="issue-materials-empty">
+        本会话还没有拉取过日志。
+      </p>}
+      <div className="issue-materials-files" role="list">
+        {data?.logs.map((log) => <button type="button" role="listitem"
+          key={log.name}
+          className={`issue-materials-file${logView?.name === log.name ? " on" : ""}`}
+          onClick={() => openLog(log.name)}>
+          <span className="p">{log.name}</span>
+          <span className="num">{(log.size / 1024).toFixed(1)} KB</span>
+        </button>)}
+      </div>
+      {logView && <pre className="issue-materials-diff">{logView.content}</pre>}
+    </section>
+  </div>;
+}
+
+/** 现场(执行现场页签):原始事件流尾随。只陈列,不解读——阶段推断
+ * 仍是宿主账本的事;数据与 SSE 直播同源(events.jsonl),按需取尾窗。 */
+function IssueEventsPane({ id, updatedAt }: { id: string; updatedAt: string }) {
+  const [events, setEvents] = useState<IssueRawEvent[]>();
+  const [note, setNote] = useState("");
+
+  async function load() {
+    try {
+      const result = await getIssueRawEvents(id);
+      setEvents(result.events ?? []);
+      setNote("");
+    } catch (reason) {
+      setNote(String(reason instanceof Error ? reason.message : reason));
+    }
+  }
+
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, updatedAt]);
+
+  return <div className="issue-events">
+    <div className="issue-materials-toolbar">
+      <button type="button" onClick={load}>刷新</button>
+      {note && <span className="issue-materials-note">{note}</span>}
+    </div>
+    {events && events.length === 0 && <p className="issue-materials-empty">
+      还没有事件记录。
+    </p>}
+    <div className="issue-events-list">
+      {events?.slice().reverse().map((event, index) => <div
+        key={`${event.eventId ?? index}-${index}`} className="issue-events-row">
+        <span className="ts">{event.ts
+          ? new Date(event.ts).toLocaleTimeString() : "--:--:--"}</span>
+        <span className="kind">{event.kind}</span>
+        <span className="payload">
+          {JSON.stringify(event.payload ?? {}).slice(0, 220)}
+        </span>
+      </div>)}
+    </div>
   </div>;
 }
 

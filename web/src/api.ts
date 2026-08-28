@@ -2091,10 +2091,12 @@ export interface DtsTicketBrief {
   description?: string;
 }
 
-/** 单张问题单详情(页签展开用):列表字段优先,详情接口补齐描述全文。 */
+/** 单张问题单详情(页签展开用):列表字段优先,详情接口补齐描述全文。
+ * content = mcpResultText 原文(兜底展示),description = detailDesc 全文。 */
 export interface DtsTicketDetail {
   ticket: string;
   title: string;
+  content: string;
   description?: string;
   severity?: string;
   version?: string;
@@ -2200,12 +2202,6 @@ export function associateIssueTicket(id: string, input: {
   });
 }
 
-export interface DtsTicketDetail {
-  ticket: string;
-  title: string;
-  content: string;
-}
-
 export function controlIssue(id: string, input: {
   action: "cancel" | "archive";
   kind?: "non_issue" | "fixed" | "delivered" | "issue" | "converted";
@@ -2224,6 +2220,81 @@ export function listDtsTickets(): Promise<DtsTicketBrief[]> {
 
 export function getDtsTicketDetail(ticket: string): Promise<DtsTicketDetail> {
   return issueFetch(`/issues/dts/${encodeURIComponent(ticket)}`);
+}
+
+// ---- 会话材料(交付材料页签;全部旁路,失败给空态) ----
+
+export interface IssueWorkspaceChange {
+  path: string;
+  status: string;
+  additions?: number;
+  deletions?: number;
+}
+
+export interface IssueMaterialFile {
+  name: string;
+  size: number;
+  mtime: string;
+}
+
+export interface IssueManualEdit {
+  ts: string;
+  path: string;
+  size: number;
+}
+
+export interface IssueMaterials {
+  ticket?: string;
+  push?: { branch: string; sha: string; at: string };
+  analysis_available: boolean;
+  changes: IssueWorkspaceChange[];
+  logs: IssueMaterialFile[];
+  manual_edits: IssueManualEdit[];
+}
+
+export interface IssueRawEvent {
+  eventId?: number;
+  ts?: string;
+  kind?: string;
+  payload?: Record<string, unknown>;
+}
+
+export function getIssueMaterials(id: string): Promise<IssueMaterials> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/materials`);
+}
+
+export function getIssueFileDiff(
+  id: string, path: string,
+): Promise<{ diff: string }> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/materials/diff?path=${encodeURIComponent(path)}`);
+}
+
+export function getIssueWorkspaceFile(
+  id: string, path: string,
+): Promise<{ content: string; truncated: boolean }> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/materials/file?path=${encodeURIComponent(path)}`);
+}
+
+export function saveIssueWorkspaceFile(
+  id: string, path: string, content: string,
+): Promise<{ ok: true; size: number }> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/materials/file`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ path, content }),
+  });
+}
+
+export function getIssueMaterialLog(
+  id: string, name: string,
+): Promise<{ content: string; truncated: boolean }> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/materials/log?name=${encodeURIComponent(name)}`);
+}
+
+export function getIssueRawEvents(
+  id: string, limit = 200,
+): Promise<{ events: IssueRawEvent[] }> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/materials/events?limit=${limit}`);
 }
 
 // ---- 问题会话的视图旁路(服务端 src/issueFlow/sessionView.ts 的镜像) ----

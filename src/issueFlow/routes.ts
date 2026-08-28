@@ -12,6 +12,12 @@
  *   GET  /issues/dts/:ticket          → 单张问题单详情(拉单页签展开用)
  *   GET  /issues/dts-file?path=…      → 描述内嵌图代理(后端带回二进制)
  *   GET  /issues/:id                  → 详情(状态 + 消息 + 问题卡)
+ *   GET  /issues/:id/materials        → 材料清单(变更/日志/人工台账/推送记录)
+ *   GET  /issues/:id/materials/diff   → 单文件 diff(?path=,对 HEAD)
+ *   GET  /issues/:id/materials/file   → 读工作区文件(?path=)
+ *   PUT  /issues/:id/materials/file   → 快速修改(仅归属者;入人工台账)
+ *   GET  /issues/:id/materials/log    → 读拉取日志(?name=,超长读尾)
+ *   GET  /issues/:id/materials/events → 原始事件尾随(?limit=,现场页签)
  *   GET  /issues/:id/timeline         → 耗时与卡点(纯函数归纳,只读)
  *   GET  /issues/:id/analysis         → 结论文档 issue-analysis.md
  *                                      (缺失为 200 {unavailable},不 404)
@@ -254,6 +260,55 @@ export async function handleIssueRoutes(
 
     if (method === "GET" && parts.length === 2) {
       return done(200, issueFlow.get(id));
+    }
+
+    // ---- 会话材料(交付材料页签)。读:本人或管理员;写(快速修改):
+    // 仅会话归属者。路径防穿越在 service/materials 层双保险,这里只做
+    // 归属与参数兜底。fail-open 语义:读类故障以 400 带人话返回,页面
+    // 给空态,不拖垮会话。
+    if (parts[2] === "materials" && parts.length === 3) {
+      return done(200, issueFlow.listMaterials(id));
+    }
+    if (method === "PUT" && parts[2] === "materials"
+        && parts[3] === "file" && parts.length === 4) {
+      if (brief && !own(brief.account)) {
+        return done(403, { error: "只能修改自己会话的工作区" });
+      }
+      const body = await readBody(request);
+      try {
+        return done(200, issueFlow.saveWorkspaceFile(
+          id, String(body.path ?? ""), String(body.content ?? "")));
+      } catch (reason) {
+        return done(400, {
+          error: String(reason instanceof Error ? reason.message : reason),
+        });
+      }
+    }
+    if (parts[2] === "materials" && parts.length === 4 && method === "GET") {
+      const query = new URL(request.url ?? "/", "http://x").searchParams;
+      try {
+        if (parts[3] === "diff") {
+          return done(200, {
+            diff: issueFlow.workspaceFileDiff(id, String(query.get("path") ?? "")),
+          });
+        }
+        if (parts[3] === "file") {
+          return done(200, issueFlow.readWorkspaceFile(
+            id, String(query.get("path") ?? "")));
+        }
+        if (parts[3] === "log") {
+          return done(200, issueFlow.readIssueLog(id, String(query.get("name") ?? "")));
+        }
+        if (parts[3] === "events") {
+          const raw = Number(query.get("limit") ?? 200);
+          const limit = Number.isFinite(raw) ? Math.min(Math.max(raw, 1), 1000) : 200;
+          return done(200, { events: issueFlow.recentEvents(id, limit) });
+        }
+      } catch (reason) {
+        return done(400, {
+          error: String(reason instanceof Error ? reason.message : reason),
+        });
+      }
     }
 
     // 耗时与卡点(只读):消息账 + 转移账归纳成"时间去哪了、卡在谁身上"。
