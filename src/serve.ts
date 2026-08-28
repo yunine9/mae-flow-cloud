@@ -625,22 +625,30 @@ async function main(): Promise<void> {
   }
 
   // 问题流(与需求内核完全分离的会话域):MCP 网关按需接线。
-  // token 只从文件读(/etc/mae-flow-cloud/mcp-token,可用
-  // --mcp-token-file 覆盖)——命令行/JSON 配置里不许出现明文密钥。
-  // 【遗留】DTS MCP 的 URL/工具名待用户提供后对拍;没配就 fail-loud,
-  // 页面拉单会如实报"网关未配置",不静默降级。
-  // --dts-mock:过渡期假单据(真实网关完整实现在位,等 URL 即通),
-  // 供外部环境跑通全流程;与 --dts-mcp-url 互斥。
+  // token 只从文件读(缺省 /etc/mae-flow-cloud/mcp-token,文件在场即
+  // 自动装载,可用 --mcp-token-file 覆盖)——命令行/JSON 配置里不许
+  // 出现明文密钥。
+  // DTS 网关地址是站点固定值(2026-08-28 拍板:内网唯一实例,值是死
+  // 的),直接给代码缺省——serve.json 不必为 DTS 写任何键。两条护栏:
+  // ①缺省 URL 仅在 token 文件在场时生效,否则开发机/演示形态会被
+  // "配了 URL 没 token 拒启"的 fail-fast 干掉;②显式 --dts-mock 压过
+  // 缺省(生产机想开 mock 测试不该撞互斥),互斥只拦显式 --dts-mcp-url。
+  // --dts-mock:过渡期假单据(真实网关完整实现在位),供外部环境跑通
+  // 全流程。
+  const DEFAULT_DTS_MCP_URL =
+    "http://mcpgateway.his.huawei.com/mcp/6a0ac03dc1218e60a80b2a59";
   const dtsMock = has("--dts-mock");
-  const dtsMcpUrl = flag("--dts-mcp-url");
-  if (dtsMock && dtsMcpUrl) {
+  const explicitDtsMcpUrl = flag("--dts-mcp-url");
+  const mcpTokenFile = flag("--mcp-token-file")
+    ?? (existsSync("/etc/mae-flow-cloud/mcp-token")
+      ? "/etc/mae-flow-cloud/mcp-token" : undefined);
+  const dtsMcpUrl = explicitDtsMcpUrl
+    ?? (dtsMock || !mcpTokenFile ? undefined : DEFAULT_DTS_MCP_URL);
+  if (dtsMock && explicitDtsMcpUrl) {
     console.error("[serve] --dts-mock 与 --dts-mcp-url 互斥:"
       + "前者是过渡期假单据,后者是真网关,别同时配");
     process.exit(2);
   }
-  const mcpTokenFile = flag("--mcp-token-file")
-    ?? (existsSync("/etc/mae-flow-cloud/mcp-token")
-      ? "/etc/mae-flow-cloud/mcp-token" : undefined);
   // token 不在启动时读定值——只校验文件在场且非空(fail-fast),之后
   // 每次请求经闭包重读文件。token 在网关侧轮换后服务不用重启;运行时
   // 文件被删/不可读则降级为不带头,让网关 401 显形而不是拖垮整个进程。
@@ -679,7 +687,8 @@ async function main(): Promise<void> {
       log: (message) => console.log(`  [issue-dts] ${message}`),
     });
     issueDts = new McpDtsGateway(mcpGateway);
-    console.log(`[serve] 问题流 DTS 网关: ${dtsMcpUrl}`);
+    console.log(`[serve] 问题流 DTS 网关: ${dtsMcpUrl}`
+      + (explicitDtsMcpUrl ? "" : "(站点缺省地址,--dts-mcp-url/serve.json 可覆盖)"));
   }
   // 运维工具(拉日志/换库):在场即接上,凭据由保险箱解密后经环境
   // 变量注入子进程(见 src/issueFlow/opsTools.ts)。

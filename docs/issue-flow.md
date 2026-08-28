@@ -197,14 +197,18 @@ git 读取优先 safeGit 零信任视图;Windows 无符号链接权限的环境�
 
 ```json
 {
-  "dts-mcp-url": "<DTS MCP 网关地址>",
-  "mcp-token-file": "/etc/mae-flow-cloud/mcp-token",
   "issue-max-turns": 2
 }
 ```
 
-- token 文件权限 600。DTS 网关未配置时拉单/查单/关联转正 fail-loud
-  (如实报"未配置",不静默降级)。
+- **DTS 网关零配置**:网关地址是站点固定值,已内置为代码缺省
+  (2026-08-28 拍板,"值是死的就硬编码"),token 文件缺省路径
+  `/etc/mae-flow-cloud/mcp-token` 也是内置的——**正式服务器放好
+  token 文件,DTS 链即自动接线,serve.json 一个键都不用写**。
+  缺省地址只在 token 文件在场时生效(开发机/演示形态不受影响);
+  `--dts-mcp-url`/serve.json 可覆盖。token 文件权限 600。
+- DTS 网关未配置时(无 token 文件的形态)拉单/查单/关联转正
+  fail-loud(如实报"未配置",不静默降级)。
 - **过渡期 mock**:`--dts-mock` 接确定性假单据(DTS-2026-1001~1005,
   与 --dts-mcp-url 互斥),供外部环境在真 MCP 接入前跑通全流程;真实
   网关实现完整在位,等 URL/工具名即通。
