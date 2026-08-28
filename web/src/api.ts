@@ -629,6 +629,16 @@ export interface TaskSummary {
     waiting_on?: string;
     /** 自愈已停、等人介入的原因。有它就该亮牌子给「重跑续推」。 */
     stalled?: string;
+    /** 红灯维度缺少可修复原文；工作台据此开放“批注回灌”入口。 */
+    evidence_gap?: {
+      sha: string;
+      state: "retrying" | "waiting_human" | "partial";
+      missing_dimensions: Array<"COMPILE" | "UT" | "CODECHECK">;
+      available_dimensions: Array<"COMPILE" | "UT" | "CODECHECK">;
+      reasons: string[];
+      attempts: number;
+      notified_at?: string;
+    };
     /** 修复环账本(服务端事实镜像,前端不推断只呈现)。 */
     loop?: {
       round: number;
@@ -1842,7 +1852,7 @@ export interface Annotation {
   kind: "doc" | "code";
   status: "draft" | "sent" | "verified" | "dropped";
   sent_at?: string;
-  sent_via?: "interrupt" | "decision";
+  sent_via?: "interrupt" | "decision" | "pipeline_evidence";
   verified_at?: string;
   /** 第几次返工(0/缺省 = 首轮)。 */
   rework?: number;

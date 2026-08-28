@@ -717,6 +717,8 @@ export function TaskWorkspace({
                     reply={reply}
                     canOperate={canOperate}
                     running={task.status === "running"}
+                    evidenceAwaiting={Boolean(
+                      task.delivery?.evidence_gap?.missing_dimensions.length)}
                     onLocate={locate}
                     onChanged={() => { setNotesPulse((tick) => tick + 1); onChanged(); }}
                   />

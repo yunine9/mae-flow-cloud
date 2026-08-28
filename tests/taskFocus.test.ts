@@ -41,6 +41,32 @@ test("任务焦点:机器修复、平台验证与跨仓依赖不会冒充人工�
   assert.equal(dependency.needs_attention, false);
 });
 
+test("任务焦点:证据重试是平台动作，预算耗尽才进入人的行动收件箱", () => {
+  const retrying = projectTaskFocus({
+    status: "verifying",
+    delivery: {
+      waiting_on: "正在重试取证",
+      evidence_gap: { state: "retrying", missing_dimensions: ["UT"] },
+    },
+  });
+  assert.equal(retrying.owner, "platform");
+  assert.equal(retrying.needs_attention, false);
+
+  const waiting = projectTaskFocus({
+    status: "verifying",
+    delivery: {
+      evidence_gap: {
+        state: "waiting_human",
+        missing_dimensions: ["COMPILE", "CODECHECK"],
+      },
+    },
+  });
+  assert.equal(waiting.kind, "human_action");
+  assert.equal(waiting.owner, "responsible");
+  assert.equal(waiting.needs_attention, true);
+  assert.match(waiting.next_action, /证据缺口.*批注/);
+});
+
 test("修复会话结束后以当前 prepush 为焦点，不再同时声称仍在修复", () => {
   const task = {
     status: "verifying" as const,

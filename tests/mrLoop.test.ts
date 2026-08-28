@@ -64,7 +64,10 @@ function buildService(
   platform: FakeGitPlatform,
   dataDir: string,
   modelsJson: Record<string, unknown>,
-  deliveryExtra: { resolveDiscussions?: boolean } = {},
+  deliveryExtra: {
+    resolveDiscussions?: boolean;
+    pollTimeoutMs?: number;
+  } = {},
 ): TaskService {
   return new TaskService({
     dataDir, provider: "maeflow", model: "scripted-v1", modelsJson,
@@ -103,7 +106,7 @@ test("检视优先于 CI;回复发布并标已解决(显式开代 resolve);CI �
     author: "张三", body: "这里要判空,别让缺失变量把模板炸了",
   });
   platform.artifacts.push(
-    { name: "build_101.log", text: "BUILD FAILURE: 编译失败详情全文" });
+    { name: "build_log_101.txt", text: "BUILD FAILURE: 编译失败详情全文" });
   await platform.start();
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-"));
   const model = mrModel([
@@ -142,7 +145,8 @@ EOF` } } },
       (service.get(id)!.delivery?.loop?.kind ?? "") === "ci", "CI 接棒");
     assert.equal(service.get(id)!.delivery?.loop?.round, 1);
     const workspace = service.get(id)!.workspace;
-    await until(() => existsSync(join(workspace, "pipeline", "build_101.log")),
+    await until(() => existsSync(
+      join(workspace, "pipeline", "build_log_101.txt")),
       "失败材料镜像到 pipeline/");
     const artifactsCall = platform.seenIdentity.find(
       (request) => request.path === "/pipeline/artifacts");
@@ -173,7 +177,8 @@ EOF` } } },
       .join("\n");
     assert.match(seen, /逐条处理它们是你此刻唯一的使命/, "检视使命在场");
     assert.match(seen, /review_replies\.md/, "回复文件契约在使命里");
-    assert.match(seen, /pipeline\/build_101\.log/, "落盘路径要交给修复会话");
+    assert.match(seen, /pipeline\/build_log_101\.txt/,
+      "落盘路径要交给修复会话");
   } finally {
     await model.stop();
     await platform.stop();
@@ -454,7 +459,7 @@ test("日志只详细到一维时:失败维度逐项点名,不许修完细的那
   }
 });
 
-test("失败详情只是个链接:使命明说无证据,不许假装'平台原文'", async () => {
+test("失败详情只是个链接:不派 Agent、不扣修复轮次并明确等人", async () => {
   // 内网实锤:适配层把 log 填成流水线页面链接(会话没有登录态打不开),
   // 使命却包装成"失败详情(平台原文)"——会话以为自己有输入,硬着头皮
   // 定位→修改→提交,看着专业实为猜改。证据缺席必须明说,会话的正确
@@ -471,28 +476,22 @@ test("失败详情只是个链接:使命明说无证据,不许假装'平台原�
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-blind-"));
   const model = mrModel([
     ...walkScript(),
-    // 修复会话按证据纪律行事:无据不猜改,写诊断收口(不提交)。
-    { text: "平台未提供失败日志,无法自证定位;诊断:请补适配层 log 原文"
-        + "与 pipeline_artifacts 端点,补齐后重跑。" },
   ], dataDir);
   await model.start();
-  const service = buildService(platform, dataDir, model.modelsJson());
+  const service = buildService(platform, dataDir, model.modelsJson(),
+    { pollTimeoutMs: 0 });
   try {
     const id = service.create("交付 REQ9:无证据修复").id;
-    // 无提交 → 同 SHA 刹车,诊断原文带给人。
+    // 取证预算立即收口：没有可靠输入时连修复会话都不开。
     await until(() =>
-      (service.get(id)!.delivery?.loop?.state ?? "") === "halted",
-      "无据轮次应如实停下");
-    const seen = model.requests
-      .flatMap((request) => (request as any).messages ?? [])
-      .map((message: any) => JSON.stringify(message.content ?? ""))
-      .join("\n");
-    assert.match(seen, /没有给出.*失败日志原文/, "使命必须明说证据缺席");
-    assert.match(seen, /证据纪律/, "无据时的行为准则要进使命");
-    assert.ok(!seen.includes("失败详情(平台原文)"),
-      "不许把链接包装成平台原文——那正是猜改的病根");
-    assert.match(service.get(id)!.delivery?.loop?.diagnosis ?? "",
-      /补适配层/, "会话的诊断要原文带给人");
+      service.get(id)!.delivery?.evidence_gap?.state === "waiting_human",
+      "无据时应如实等人工回灌");
+    const task = service.get(id)!;
+    assert.equal(task.delivery?.loop, undefined,
+      "没有派修就不能凭空产生或扣掉修复轮次");
+    assert.match(task.delivery?.waiting_on ?? "", /批注.*平台报错原文/);
+    assert.deepEqual(task.delivery?.evidence_gap?.missing_dimensions,
+      ["COMPILE"]);
   } finally {
     await model.stop();
     await platform.stop();
@@ -518,6 +517,10 @@ test("检视意见开的是真 review 单:下单事实换交付方式,修完这�
   platform.seedDiscussion({
     id: "d-1", file: "a.txt", line: 1, severity: "major",
     author: "李四", body: "这里的空指针要判一下",
+  });
+  platform.artifacts.push({
+    name: "build_log_202.txt",
+    text: "BUILD FAILURE: src/a.cpp:12: error: null guard missing",
   });
   await platform.start();
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-revorder-"));

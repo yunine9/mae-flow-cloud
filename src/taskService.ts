@@ -111,7 +111,14 @@ import {
   selectTerminalRun,
   summarizeFailedChecks,
   type PipelineCheck,
+  type PipelineDimension,
 } from "./pipelineContract.ts";
+import {
+  assessPipelineRepairEvidence,
+  PIPELINE_DIMENSION_TEXT,
+  type PipelineArtifactText,
+  type PipelineEvidenceAssessment,
+} from "./pipelineEvidence.ts";
 import {
   inspectKernelCompletion,
   type KernelCompletionAttestation,
@@ -633,6 +640,21 @@ export interface TaskSummary {
      * 通知发出。这是"验证中"这潭水里唯一诚实的出口——没有它的时候
      * 任务会既不完成也不失败也不重试,人连重跑都点不动(实测)。 */
     stalled?: string;
+    /** 红灯维度缺少具体报错时的宿主级取证状态。它不属于内核流程，
+     * 不消耗修复 round；平台证据恢复或人工批注回灌后自动清除。 */
+    evidence_gap?: {
+      sha: string;
+      state: "retrying" | "waiting_human" | "partial";
+      missing_dimensions: PipelineDimension[];
+      available_dimensions: PipelineDimension[];
+      reasons: string[];
+      attempts: number;
+      failure_log?: string;
+      retry_deadline?: string;
+      notified_at?: string;
+      human_evidence?: string;
+      human_dimensions?: PipelineDimension[];
+    };
     /** 修复环账本(小状态机):MR 全绿合入是最终目标(用户拍板
      * "不该有最大轮数限制,都该尽力修好")。失败先分类再派单
      * (检视>冲突>CI,同时多项只修最高优先级那一路——冲突不解 CI
@@ -1086,6 +1108,8 @@ interface TaskState {
   mergeWatchActive?: boolean;
   /** 流水线证据核销重试的防重入锁。纯宿主 timer，不占 Agent 会话。 */
   evidenceRetryActive?: boolean;
+  /** 红灯具体报错采集的防重入锁；与绿灯核销证据不是同一条链。 */
+  repairEvidenceRetryActive?: boolean;
   deliveryRecoveryActive?: boolean;
   /** 环境预热的防重入锁(内存态):一任务只跑一个预热专员。 */
   warmupActive?: boolean;
@@ -3151,6 +3175,52 @@ export class TaskService {
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     const picked = this.pickDrafts(task, ids);
     const text = renderAnnotations(picked, this.ticketOf(task));
+    const gap = task.summary.delivery?.evidence_gap;
+    if (gap?.missing_dimensions.length) {
+      const combined = [gap.human_evidence, text]
+        .map((item) => String(item ?? "").trim()).filter(Boolean)
+        .join("\n\n").slice(0, 12_000);
+      gap.human_evidence = combined;
+      gap.human_dimensions = [...new Set([
+        ...(gap.human_dimensions ?? []), ...gap.missing_dimensions,
+      ])];
+      // 活的修复会话直接收到；尚未启动的队列使命原位补充；全缺证据
+      // 停在 verifying 时则重新分诊并自动派修。三种状态共用一条批注账。
+      if (task.summary.status === "running" && task.driver) {
+        await task.driver.steer(text);
+      } else if (["queued", "running"].includes(task.summary.status)
+          && task.mission) {
+        task.mission += "\n\n- 人工刚从工作台回灌的流水线报错原文：\n"
+          + text;
+      } else if (task.summary.status === "verifying") {
+        task.summary.detail = "已收到人工流水线报错，正在自动恢复修复分诊";
+        task.summary.delivery!.waiting_on = undefined;
+        const loop = task.summary.delivery?.loop;
+        if (loop?.kind === "ci" && loop.last_sha === gap.sha) {
+          // 部分证据派修后，会话可能在人工回灌到达前因“缺信息且无新
+          // 提交”停下。同 SHA 刹车防的是拿同一份输入空转，不该挡住
+          // 新到的人类证据。把它作为原修复轮的续段重开，round 不加一。
+          loop.last_sha = undefined;
+          loop.round = Math.max(0, loop.round - 1);
+          loop.state = "verifying";
+          loop.diagnosis = undefined;
+        }
+        const max = task.summary.repair_rounds
+          ?? this.options.settings?.runtime().repair_rounds
+          ?? this.options.delivery?.repairRounds;
+        const sha = gap.sha;
+        const log = gap.failure_log ?? "";
+        setImmediate(() => this.bypass(task, "人工流水线证据回灌",
+          this.dispatchCiRepair(task, sha, log, max, task.controlEpoch)));
+      } else {
+        throw new NotFoundError(
+          `任务 ${id} 当前是 ${task.summary.status}，不能恢复流水线修复`);
+      }
+      this.annotations(task).markSent(
+        picked.map((item) => item.id), "pipeline_evidence");
+      this.persist(task);
+      return { sent: picked.map((item) => item.id), text };
+    }
     await this.interrupt(id, text);
     this.annotations(task).markSent(picked.map((item) => item.id), "interrupt");
     return { sent: picked.map((item) => item.id), text };
@@ -4153,6 +4223,19 @@ export class TaskService {
         // 进程可死,轮询不死:重启前在等流水线的任务续轮
         // (锚是 delivery.sha,结果仍只认绑定版本)。
         if (summary.status === "verifying"
+            && summary.delivery?.evidence_gap
+            && summary.delivery.sha) {
+          // 红灯证据缺口是交付侧等待，不是内核编码会话停机。进程重启后
+          // 继续从同一 SHA 取证/分诊；不能走 tryDeliver 重做 prepush，
+          // 更不能把主 Agent 从 current 重新拉起来猜改。
+          const gap = summary.delivery.evidence_gap;
+          const max = summary.repair_rounds
+            ?? this.options.settings?.runtime().repair_rounds
+            ?? this.options.delivery?.repairRounds;
+          this.bypass(task, "流水线失败证据恢复",
+            this.dispatchCiRepair(task, summary.delivery.sha,
+              gap.failure_log ?? "", max, task.controlEpoch));
+        } else if (summary.status === "verifying"
             && summary.delivery?.pipeline === "running") {
           this.bypass(task, "流水线轮询",
             this.pollPipeline(task, task.controlEpoch));
@@ -4548,9 +4631,11 @@ export class TaskService {
     // stalled = 外部验证的自愈预算已经烧完并如实停下(推送一直失败、
     // 流水线迟迟不给可核销结果……)。它必须和修复环停机同等对待:
     // 那种状态下没有任何东西在收敛,再拦着人重跑就是把任务锁死。
+    const evidenceStopped = delivery?.evidence_gap?.state === "waiting_human";
     const repairStopped = delivery?.loop?.state === "halted"
       || delivery?.loop?.state === "exhausted"
       || Boolean(delivery?.stalled)
+      || evidenceStopped
       || (delivery?.pipeline ?? "").includes("轮询预算耗尽");
     if (status === "verifying" && !repairStopped) {
       throw new NotFoundError(
@@ -4567,8 +4652,30 @@ export class TaskService {
         + "请先取消重试或重启服务触发 ownership 清扫",
       );
     }
+    if (status === "verifying" && evidenceStopped && delivery?.evidence_gap) {
+      // 人点“重试”只重新打开平台取证预算；它不是授权主 Agent 在没有
+      // 报错时重跑编码，也不应凭空消耗 CI 修复轮次。
+      const gap = delivery.evidence_gap;
+      gap.state = "retrying";
+      gap.attempts = 0;
+      gap.retry_deadline = new Date(
+        Date.now() + this.repairEvidenceBudgetMs()).toISOString();
+      gap.notified_at = undefined;
+      delivery.pipeline = "failed(人工要求重新取证)";
+      delivery.waiting_on = "正在重新拉取流水线具体报错，尚未派 Agent";
+      task.summary.detail = delivery.waiting_on;
+      this.persist(task);
+      const max = task.summary.repair_rounds
+        ?? this.options.settings?.runtime().repair_rounds
+        ?? this.options.delivery?.repairRounds;
+      this.bypass(task, "人工重试流水线失败证据",
+        this.dispatchCiRepair(task, gap.sha, gap.failure_log ?? "",
+          max, task.controlEpoch));
+      return { ...task.summary };
+    }
     if (status === "verifying" && task.summary.delivery) {
       task.summary.delivery.loop = undefined;
+      task.summary.delivery.evidence_gap = undefined;
       task.summary.delivery.pipeline = "人工重跑,待重新验证";
       // 人工背书"再试一次":停摆账本清掉,自愈预算重新开表。
       task.summary.delivery.stalled = undefined;
@@ -4607,6 +4714,7 @@ export class TaskService {
     if (task.driver || task.container || task.containerReopen
         || task.prepushActive || task.assistantActive
         || task.mergeWatchActive || task.evidenceRetryActive
+        || task.repairEvidenceRetryActive
         || task.deliveryRecoveryActive) {
       throw new TaskControlError(
         `任务 ${id} 仍有执行资源或后台收尾动作，暂不能从头重跑`,
@@ -4735,6 +4843,7 @@ export class TaskService {
     if (task && (task.driver || task.container || task.containerReopen
         || task.prepushActive || task.assistantActive
         || task.mergeWatchActive || task.evidenceRetryActive
+        || task.repairEvidenceRetryActive
         || task.deliveryRecoveryActive)) {
       throw new TaskControlError(
         `任务 ${id} 仍有执行资源或后台收尾动作，拒绝彻底删除`,
@@ -7972,7 +8081,8 @@ export class TaskService {
       && task.summary.status === "verifying"
       && !task.summary.delivery?.stalled
       && task.summary.delivery?.pipeline !== "running"
-      && !task.evidenceRetryActive;
+      && !task.evidenceRetryActive
+      && !task.repairEvidenceRetryActive;
   }
 
   /** INCOMPLETE / STALE / 登记抖动都是宿主等待，不得把 Agent 催回来
@@ -9240,6 +9350,137 @@ export class TaskService {
     await this.dispatchCiRepair(task, sha, log, max, epoch);
   }
 
+  private pipelineArtifactTexts(
+    task: TaskState,
+    names: string[],
+  ): PipelineArtifactText[] {
+    const dir = join(task.summary.workspace, "pipeline");
+    return names.flatMap((raw): PipelineArtifactText[] => {
+      const name = basename(raw);
+      if (!name || name !== raw) return [];
+      try {
+        return [{ name, text: readFileSync(join(dir, name), "utf-8") }];
+      } catch {
+        return [];
+      }
+    });
+  }
+
+  private repairEvidenceBudgetMs(): number {
+    const knobs = this.options.settings?.runtime() ?? {};
+    return (knobs.poll_timeout_s !== undefined
+      ? knobs.poll_timeout_s * 1000 : undefined)
+      ?? this.options.delivery?.pollTimeoutMs ?? 30 * 60_000;
+  }
+
+  private repairEvidenceDelayMs(waitingHuman: boolean): number {
+    const knobs = this.options.settings?.runtime() ?? {};
+    const base = Math.max(50,
+      (knobs.poll_interval_s !== undefined
+        ? knobs.poll_interval_s * 1000 : undefined)
+      ?? this.options.delivery?.pollIntervalMs ?? 10_000);
+    // 已经亮牌等人后仍低频探测平台，证据若恢复就自动续；不再按测试级
+    // 50ms 高频撞网关。每次调用自身仍有 adapter/MCP 超时预算。
+    return waitingHuman ? Math.max(30_000, base) : base;
+  }
+
+  private scheduleRepairEvidenceRetry(
+    task: TaskState,
+    sha: string,
+    log: string,
+    max: number | undefined,
+    epoch: number,
+    waitingHuman: boolean,
+  ): void {
+    if (task.repairEvidenceRetryActive) return;
+    task.repairEvidenceRetryActive = true;
+    const timer = setTimeout(() => {
+      task.repairEvidenceRetryActive = false;
+      if (!this.current(task, epoch)
+          || task.summary.status !== "verifying"
+          || task.summary.delivery?.sha !== sha
+          || !task.summary.delivery?.pipeline?.startsWith("failed")
+          || task.summary.delivery?.loop?.state === "repairing") return;
+      this.bypass(task, "流水线失败证据重试",
+        this.dispatchCiRepair(task, sha, log, max, epoch));
+    }, this.repairEvidenceDelayMs(waitingHuman));
+    timer.unref();
+  }
+
+  private evidenceGapReasons(
+    assessment: PipelineEvidenceAssessment,
+  ): string[] {
+    return assessment.missingDimensions.flatMap((dimension) => {
+      const reasons = assessment.reasons[dimension] ?? [];
+      return reasons.length
+        ? reasons.map((reason) =>
+            `${PIPELINE_DIMENSION_TEXT[dimension]}：${reason}`)
+        : [`${PIPELINE_DIMENSION_TEXT[dimension]}：未拿到具体报错`];
+    });
+  }
+
+  private writePipelineEvidenceGapMaterial(
+    task: TaskState,
+    assessment: PipelineEvidenceAssessment,
+  ): void {
+    const dir = join(task.summary.workspace, "pipeline");
+    mkdirSync(dir, { recursive: true });
+    const dimensions = assessment.missingDimensions
+      .map((item) => PIPELINE_DIMENSION_TEXT[item]).join("、");
+    const content = [
+      "# 流水线证据缺口",
+      "",
+      `提交版本：${task.summary.delivery?.sha ?? "未知"}`,
+      `缺少具体报错的维度：${dimensions}`,
+      "",
+      "系统已经确认这些维度红灯，但降级取证链没有返回可定位的报错原文：",
+      ...this.evidenceGapReasons(assessment).map((reason) => `- ${reason}`),
+      "",
+      "请在平台打开对应失败项，复制包含文件、行号、错误信息或堆栈的原文，",
+      "然后在本材料上添加批注并点击“回灌报错”。Agent 只会据此处理，",
+      "不会把本说明本身当成流水线错误证据。",
+      "",
+    ].join("\n");
+    try {
+      writeFileSync(join(dir, "流水线证据缺口.md"), content, { mode: 0o444 });
+    } catch (error) {
+      // 这份材料是人工入口的可用性增强；落不下不能反过来改写交付
+      // 判定，小鲁班与任务 waiting_on 仍是完整的降级入口。
+      this.options.log?.(
+        `任务 ${task.summary.id} 证据缺口材料写入失败: ${String(error)}`);
+    }
+  }
+
+  private notifyPipelineEvidenceGap(
+    task: TaskState,
+    assessment: PipelineEvidenceAssessment,
+    partial: boolean,
+  ): void {
+    const { notifier } = this.options;
+    const account = task.summary.luban_account;
+    const delivery = task.summary.delivery;
+    if (!notifier || !account || !delivery?.sha
+        || !assessment.missingDimensions.length) return;
+    const dimensions = assessment.missingDimensions
+      .map((item) => PIPELINE_DIMENSION_TEXT[item]).join("、");
+    const reasons = this.evidenceGapReasons(assessment).join("；").slice(0, 900);
+    const action = "请打开任务工作台，在《流水线证据缺口》材料上添加批注，"
+      + "把平台页面的具体报错原文粘贴进去并提交；系统会自动回灌给 Agent。";
+    this.bypass(task, "流水线证据缺口通知", notifier.notifyOutcome({
+      taskId: task.summary.id,
+      account,
+      status: `pipeline_evidence_${delivery.sha.slice(0, 12)}_`
+        + assessment.missingDimensions.join("_").toLowerCase(),
+      summary: partial
+        ? `流水线 ${dimensions} 红灯但具体报错缺失；Agent 会先修已有证据的部分。`
+          + `${reasons}。${action}`
+        : `流水线 ${dimensions} 红灯，但取证重试后仍没有具体报错，`
+          + `为避免猜改已暂停自动修复。${reasons}。${action}`,
+      link: personalTaskLink(
+        this.notificationLinkBase(), account, task.summary.id),
+    }));
+  }
+
   /** CI 修复派单(修复环的老主路):同 SHA 不二修、轮数预算、
    * 分诊+定位使命。唯一会累加 round 的一路——检视/冲突是流程性
    * 问题,不许耗掉代码修复的额度。 */
@@ -9267,15 +9508,14 @@ export class TaskService {
       this.notifyRepairStopped(task);
       return;
     }
-    const loop = delivery.loop
-      ?? (delivery.loop = { round: 0, max, state: "repairing" as const });
-    if (loop.kind === "ci" && loop.last_sha === sha) {
+    const existingLoop = delivery.loop;
+    if (existingLoop?.kind === "ci" && existingLoop.last_sha === sha) {
       // 修复会话没产生新提交 = 会话自己判了"改代码解决不了"。
       // 它的收口发言就是诊断(缺什么、去哪配),原文带给人,
       // 别让人拿着一句"已停"再去翻日志猜。
-      loop.state = "halted";
+      existingLoop.state = "halted";
       const diagnosis = (task.lastReply ?? "").trim();
-      if (diagnosis) loop.diagnosis = diagnosis.slice(0, 2000);
+      if (diagnosis) existingLoop.diagnosis = diagnosis.slice(0, 2000);
       delivery.pipeline = "failed(自动修复已停,需人工)";
       task.summary.detail = diagnosis
         ? `自动修复停下,修复会话的诊断:${diagnosis.slice(0, 600)}`
@@ -9284,6 +9524,101 @@ export class TaskService {
       this.notifyRepairStopped(task);
       return;
     }
+    // 先采证再创建/累加 loop：若红灯的具体报错全缺，根本没有派 Agent，
+    // 这一轮不能凭空扣掉修复预算。
+    const artifacts = await this.mirrorPipelineArtifacts(task);
+    if (!this.current(task, epoch)) return;
+    const previousGap = delivery.evidence_gap?.sha === sha
+      ? delivery.evidence_gap : undefined;
+    const humanEvidence = previousGap?.human_evidence?.trim()
+      ? {
+          dimensions: previousGap.human_dimensions
+            ?? previousGap.missing_dimensions,
+          text: previousGap.human_evidence,
+        }
+      : undefined;
+    const assessment = assessPipelineRepairEvidence({
+      checks: delivery.checks,
+      artifacts: this.pipelineArtifactTexts(task, artifacts),
+      failureSummary: log,
+      humanEvidence,
+    });
+    const hasDimensionFacts = assessment.failedDimensions.length > 0;
+    if (hasDimensionFacts && assessment.missingDimensions.length) {
+      this.writePipelineEvidenceGapMaterial(task, assessment);
+      const allMissing = assessment.availableDimensions.length === 0;
+      const reasons = this.evidenceGapReasons(assessment);
+      const now = Date.now();
+      const priorDeadline = previousGap?.retry_deadline
+        ? Date.parse(previousGap.retry_deadline) : NaN;
+      const deadline = Number.isFinite(priorDeadline)
+        ? priorDeadline : now + this.repairEvidenceBudgetMs();
+      const attempts = (previousGap?.attempts ?? 0) + 1;
+      if (allMissing) {
+        const waitingHuman = now >= deadline;
+        delivery.evidence_gap = {
+          sha,
+          state: waitingHuman ? "waiting_human" : "retrying",
+          missing_dimensions: assessment.missingDimensions,
+          available_dimensions: [],
+          reasons,
+          attempts,
+          failure_log: log.slice(0, 2000),
+          retry_deadline: new Date(deadline).toISOString(),
+          ...(previousGap?.notified_at
+            ? { notified_at: previousGap.notified_at } : {}),
+          ...(previousGap?.human_evidence
+            ? { human_evidence: previousGap.human_evidence } : {}),
+          ...(previousGap?.human_dimensions
+            ? { human_dimensions: previousGap.human_dimensions } : {}),
+        };
+        const dimensions = assessment.missingDimensions
+          .map((item) => PIPELINE_DIMENSION_TEXT[item]).join("、");
+        delivery.pipeline = waitingHuman
+          ? `failed(${dimensions} 具体报错缺失,等人工回灌)`
+          : `failed(${dimensions} 具体报错缺失,第 ${attempts} 次取证重试)`;
+        delivery.waiting_on = waitingHuman
+          ? `${dimensions} 红灯，但取证降级链均未给出可定位的具体报错。`
+            + "请在工作台对应材料上添加批注，粘贴平台报错原文并提交；"
+            + "平台证据若恢复，系统也会自动继续。"
+          : `${dimensions} 红灯但具体报错暂缺，系统正在有限重试取证，`
+            + "尚未派 Agent、未消耗修复轮次。";
+        task.summary.detail = delivery.waiting_on;
+        if (waitingHuman && !delivery.evidence_gap.notified_at) {
+          delivery.evidence_gap.notified_at = new Date().toISOString();
+          this.notifyPipelineEvidenceGap(task, assessment, false);
+        }
+        this.persist(task);
+        this.scheduleRepairEvidenceRetry(
+          task, sha, log, max, epoch, waitingHuman);
+        return;
+      }
+      // 部分维度有证据：能修的马上修，缺的同时求人，不互相等待。
+      delivery.evidence_gap = {
+        sha,
+        state: "partial",
+        missing_dimensions: assessment.missingDimensions,
+        available_dimensions: assessment.availableDimensions,
+        reasons,
+        attempts,
+        failure_log: log.slice(0, 2000),
+        notified_at: previousGap?.notified_at ?? new Date().toISOString(),
+        ...(previousGap?.human_evidence
+          ? { human_evidence: previousGap.human_evidence } : {}),
+        ...(previousGap?.human_dimensions
+          ? { human_dimensions: previousGap.human_dimensions } : {}),
+      };
+      if (!previousGap?.notified_at) {
+        this.notifyPipelineEvidenceGap(task, assessment, true);
+      }
+      delivery.waiting_on = undefined;
+    } else if (hasDimensionFacts) {
+      delivery.evidence_gap = undefined;
+      delivery.waiting_on = undefined;
+    }
+
+    const loop = delivery.loop
+      ?? (delivery.loop = { round: 0, max, state: "repairing" as const });
     if (loop.max !== undefined && loop.round >= loop.max) {
       loop.state = "exhausted";
       delivery.pipeline = `failed(${loop.max} 轮修复预算用完,请人工)`;
@@ -9301,10 +9636,8 @@ export class TaskService {
     loop.kind = "ci";
     loop.state = "repairing";
     loop.failure = log.slice(0, 2000) || "(平台未提供失败详情)";
-    // 批2 双通道:摘要进使命(下面),完整日志落盘工作区外 pipeline/
-    // 让修复会话自读——2000 字摘要装不下多类问题并发的全部原料。
-    const artifacts = await this.mirrorPipelineArtifacts(task);
-    if (!this.current(task, epoch)) return;
+    // 批2 双通道:摘要进使命(下面),完整日志已在逐维度判定前落盘到
+    // 工作区外 pipeline/，让修复会话自读。
     // 输入可信度:log 是纯链接或干脆缺席、又没有镜像材料时,修复会话
     // 手里没有任何失败证据。内网实锤:适配层把 log 填成流水线页面链接
     // (会话没有登录态,打不开),使命却把它包装成"失败详情(平台原文)"
@@ -9356,6 +9689,18 @@ export class TaskService {
       ...(structuredFailures.length ? [
         `- 结构化失败明细(哪个 stage 的哪个 job 的哪个工具,含缺陷定位):`,
         ...structuredFailures.map((line) => `  ${line}`),
+      ] : []),
+      ...(assessment.missingDimensions.length ? [
+        `- 证据缺口(系统已并行求助人工):${assessment.missingDimensions
+          .map((dimension) => PIPELINE_DIMENSION_TEXT[dimension]).join("、")}`
+          + " 红灯，但平台取证没有给出可定位原文。只修已有证据的维度，"
+          + "缺口维度不许猜改；人工补充会通过工作台批注送达。",
+        ...this.evidenceGapReasons(assessment)
+          .map((reason) => `  - ${reason}`),
+      ] : []),
+      ...(humanEvidence?.text ? [
+        "- 人工从工作台回灌的流水线报错原文（按人的原话定位，不扩大解释）：",
+        humanEvidence.text.slice(0, 12_000),
       ] : []),
       ...(unfixableHit ? [
         `- 其中不可自动修复工具(部署 unfixable_tools 名单)产生的告警`
@@ -9427,7 +9772,11 @@ export class TaskService {
       + `流水线"及原因,不许拿无关的汇报顶替诊断。`,
     ].join("\n");
     task.summary.status = "queued";
-    task.summary.detail = `流水线红,${roundText}修复排队中`;
+    task.summary.detail = assessment.missingDimensions.length
+      ? `流水线红,${roundText}修复排队中；${assessment.missingDimensions
+          .map((item) => PIPELINE_DIMENSION_TEXT[item]).join("、")}`
+        + " 的具体报错缺失，已并行求助人工"
+      : `流水线红,${roundText}修复排队中`;
     task.resume = true;
     this.persist(task);
     this.queue.push(task.summary.id);
