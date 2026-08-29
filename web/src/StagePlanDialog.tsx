@@ -66,15 +66,13 @@ export function StagePlanDialog({
           onSuggest={onSuggest} />
       ) : (
         <div className="execution-plan-card">
+          {/* 一句灰字说清出处即可:标题已写"执行方案",不再立标题
+              复述"这是底版"(信息重复=噪声)。 */}
           <div className="execution-plan-why">
-            <strong>{phase === currentPhase
-              ? "本阶段的编译方案暂不可读"
-              : "这是标准方案底版"}</strong>
             <span>
               {phase === currentPhase
-                ? "内核暂未给出本阶段的编译方案;以下为标准方案目录。"
-                : "活方案只在任务到达该阶段时结合定制编译产生,已过阶段"
-                  + "也不留存;以下底版仅供了解该阶段默认怎么干。"}
+                ? "内核暂未给出本阶段的编译方案，以下为标准方案目录。"
+                : "实际执行方案会在到达该阶段时结合定制编译产生（已过阶段不留存）；以下为标准默认做法。"}
             </span>
           </div>
           {error && <p className="execution-plan-warning" role="status">
