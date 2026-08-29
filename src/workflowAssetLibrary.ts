@@ -21,6 +21,23 @@
  *   写侧遇到损坏记录 fail-closed 拒绝操作(在坏账上继续写等于把
  *   损坏合法化)。
  * - 资产 ID 白名单正则 + 保留名 + 符号链接拒绝,路径永远不离开根目录。
+ *
+ * 事务策略(2026-08-29 第三批加固;每条顺序都要能解释、能恢复):
+ * - operations.jsonl 是**先行账**(WAL):每个变更先记账、后落盘,
+ *   追加失败则整个操作失败——因此永远不会出现"状态已变而账没记";
+ *   反向(账记了、状态没变)是允许的中断形态,恢复规则见下。
+ * - **提交点 = asset.json 的原子替换**。恢复一律以文件为准:
+ *   draft.json 是草稿内容与乐观锁 revision 的唯一权威;asset.json 是
+ *   生命周期/latest_version 的唯一权威(其 draft_revision/draft_digest
+ *   只是展示缓存,中断后可能落后于 draft.json,下一次成功写入自愈);
+ *   versions/vN.json 一旦存在即不可变。
+ * - 各操作落盘顺序:create=账→目录→draft→asset;saveDraft=账→
+ *   draft→asset;approve=账→vN→asset;状态迁移/归档=账→asset。
+ * - approve 可安全重试:中断后 vN 已存在时,若其 digest 与
+ *   from_revision 与当前草稿一致,视为上次中断的续跑直接复用;
+ *   不一致才是真冲突(version_exists 拒绝)。
+ * - create 中断(有目录无 asset.json)的残骸是惰性的:列表点名
+ *   warning,同 ID 重新 create 直接回收覆盖。
  */
 
 import { randomBytes } from "node:crypto";
@@ -187,30 +204,14 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-function atomicWriteJson(path: string, value: unknown): void {
-  const tmp = `${path}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`;
-  writeFileSync(tmp, JSON.stringify(value, null, 1));
-  renameSync(tmp, path);
-}
+/** 测试专用故障注入口:每次落盘 I/O 前调用,抛错即模拟该次写失败。
+ * 生产不传,不改变任何对外行为——事务顺序的兜底必须在它防御的故障
+ * 下被测过,否则等于没兜。 */
+export type WorkflowAssetFaultHook =
+  (action: "write" | "append" | "link", path: string) => void;
 
-/** 已发布版本专用:link(2) 在目标已存在时报 EEXIST——"永不可覆盖"
- * 靠内核保证,不靠先 existsSync 再写的竞态检查。 */
-function immutableWriteJson(path: string, value: unknown): void {
-  const tmp = `${path}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`;
-  writeFileSync(tmp, JSON.stringify(value, null, 1));
-  try {
-    linkSync(tmp, path);
-  } catch (error) {
-    rmSync(tmp, { force: true });
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-      throw new WorkflowAssetError(
-        "version_exists",
-        `已发布版本文件已存在,拒绝覆盖:${path}`,
-      );
-    }
-    throw error;
-  }
-  rmSync(tmp, { force: true });
+export interface WorkflowAssetLibraryOptions {
+  faultInjection?: WorkflowAssetFaultHook;
 }
 
 function parseJson<T>(raw: string): T {
@@ -245,11 +246,42 @@ function normalizeMaintainers(value: unknown): string[] {
 export class WorkflowAssetLibrary {
   private readonly root: string;
   private readonly oplogPath: string;
+  private readonly fault?: WorkflowAssetFaultHook;
 
-  constructor(dataDir: string) {
+  constructor(dataDir: string, options: WorkflowAssetLibraryOptions = {}) {
     this.root = join(dataDir, "workflow-assets");
     this.oplogPath = join(this.root, "operations.jsonl");
+    this.fault = options.faultInjection;
     mkdirSync(this.root, { recursive: true });
+  }
+
+  // -- 落盘原语(全部带故障注入口) --
+  private atomicWriteJson(path: string, value: unknown): void {
+    this.fault?.("write", path);
+    const tmp = `${path}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`;
+    writeFileSync(tmp, JSON.stringify(value, null, 1));
+    renameSync(tmp, path);
+  }
+
+  /** 已发布版本专用:link(2) 在目标已存在时报 EEXIST——"永不可覆盖"
+   * 靠内核保证,不靠先 existsSync 再写的竞态检查。 */
+  private immutableWriteJson(path: string, value: unknown): void {
+    this.fault?.("link", path);
+    const tmp = `${path}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`;
+    writeFileSync(tmp, JSON.stringify(value, null, 1));
+    try {
+      linkSync(tmp, path);
+    } catch (error) {
+      rmSync(tmp, { force: true });
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        throw new WorkflowAssetError(
+          "version_exists",
+          `已发布版本文件已存在,拒绝覆盖:${path}`,
+        );
+      }
+      throw error;
+    }
+    rmSync(tmp, { force: true });
   }
 
   // -- 路径防护 --
@@ -272,14 +304,17 @@ export class WorkflowAssetLibrary {
     return dir;
   }
 
-  /** 变更留痕。追加失败直接抛错(写侧 fail-closed):没有账的变更
-   * 宁可让调用方看到失败重试,不能默默丢账。 */
+  /** 变更留痕(先行账/WAL)。每个变更**先记账、后落盘**:追加失败
+   * 直接抛错且不做任何状态写入(fail-closed)——因此绝无"状态已变
+   * 而账没记";反向"账记了、状态没变"是允许的中断形态,恢复规则
+   * 一律以文件为准(见文件头"事务策略")。 */
   private logOperation(
     op: string,
     assetId: string,
     actor: string,
     detail: Record<string, unknown> = {},
   ): void {
+    this.fault?.("append", this.oplogPath);
     appendFileSync(this.oplogPath, JSON.stringify({
       ts: nowIso(), op, asset_id: assetId, actor, ...detail,
     }) + "\n");
@@ -332,7 +367,7 @@ export class WorkflowAssetLibrary {
   }
 
   private writeAsset(record: WorkflowAssetRecord): void {
-    atomicWriteJson(join(this.assetDir(record.id), "asset.json"), record);
+    this.atomicWriteJson(join(this.assetDir(record.id), "asset.json"), record);
   }
 
   private summarize(record: WorkflowAssetRecord): WorkflowAssetSummary {
@@ -383,6 +418,12 @@ export class WorkflowAssetLibrary {
     const digest = workflowDigest(definition);
     const at = nowIso();
 
+    // 账先行;随后 目录→draft→asset(提交点)。中断残骸(有目录无
+    // asset.json)是惰性的:列表点名,同 ID 重建直接回收。
+    this.logOperation("create", id, actor, {
+      scope: input.scope, digest,
+      ...(input.copied_from ? { copied_from: input.copied_from } : {}),
+    });
     mkdirSync(join(dir, "versions"), { recursive: true });
     const draft: WorkflowDraftRecord = {
       schema: WORKFLOW_DRAFT_SCHEMA,
@@ -392,7 +433,7 @@ export class WorkflowAssetLibrary {
       updated_at: at,
       updated_by: actor,
     };
-    atomicWriteJson(join(dir, "draft.json"), draft);
+    this.atomicWriteJson(join(dir, "draft.json"), draft);
     const record: WorkflowAssetRecord = {
       schema: WORKFLOW_ASSET_SCHEMA,
       id,
@@ -411,10 +452,6 @@ export class WorkflowAssetLibrary {
       updated_at: at,
     };
     this.writeAsset(record);
-    this.logOperation("create", id, actor, {
-      scope: record.scope, digest,
-      ...(input.copied_from ? { copied_from: input.copied_from } : {}),
-    });
     return this.summarize(record);
   }
 
@@ -600,16 +637,19 @@ export class WorkflowAssetLibrary {
       updated_at: at,
       updated_by: actor,
     };
-    atomicWriteJson(join(this.assetDir(id), "draft.json"), next);
+    // 账先行;随后 draft(乐观锁权威)→ asset(提交点/展示缓存)。
+    // 中断在两者之间:draft.revision 已前进而 asset 缓存落后——锁
+    // 语义不受影响(锁只看 draft.json),下一次成功写入自愈缓存。
+    this.logOperation("save_draft", id, actor, {
+      revision: next.revision, digest,
+    });
+    this.atomicWriteJson(join(this.assetDir(id), "draft.json"), next);
     record.draft_revision = next.revision;
     record.draft_digest = digest;
     record.updated_at = at;
     // 改已发布资产 = 开新草稿周期:published → draft;vN 原样躺着。
     if (record.status === "published") record.status = "draft";
     this.writeAsset(record);
-    this.logOperation("save_draft", id, actor, {
-      revision: next.revision, digest,
-    });
     return this.get(id);
   }
 
@@ -645,15 +685,19 @@ export class WorkflowAssetLibrary {
         "invalid_state",
         `当前状态 ${record.status} 不能执行 ${op}(需要 ${from.join("/")})`);
     }
+    this.logOperation(op, id, actor, detail);   // 账先行
     record.status = to;
     record.updated_at = nowIso();
     this.writeAsset(record);
-    this.logOperation(op, id, actor, detail);
     return this.summarize(record);
   }
 
   /** 通过审核并发布:草稿定格为 v(latest+1)。vN 用 link(2) 落盘,
-   * 已存在即 EEXIST 拒绝——"永不可覆盖"不靠自觉。 */
+   * 已存在即 EEXIST——"永不可覆盖"不靠自觉。
+   * 可安全重试:上一次 approve 在 vN 落盘后、asset.json 提交前中断,
+   * 重试会撞上已存在的 vN;此时若其 digest 与 from_revision 与当前
+   * 草稿完全一致,判定为同一次发布的续跑,直接复用该文件补写提交点;
+   * 内容不一致才是真冲突,version_exists 拒绝且现场原样。 */
   approve(id: string, input: { actor: string }): WorkflowAssetSummary {
     const record = this.readAssetStrict(id);
     const actor = normalizeActor(input.actor, "actor");
@@ -673,16 +717,28 @@ export class WorkflowAssetLibrary {
       published_by: actor,
       from_revision: draft.revision,
     };
-    immutableWriteJson(
-      join(this.assetDir(id), "versions", `v${version}.json`), versionRecord);
+    this.logOperation("approve", id, actor, {   // 账先行
+      version, digest: draft.digest, from_revision: draft.revision,
+    });
+    try {
+      this.immutableWriteJson(
+        join(this.assetDir(id), "versions", `v${version}.json`),
+        versionRecord);
+    } catch (error) {
+      if (!(error instanceof WorkflowAssetError)
+          || error.code !== "version_exists") throw error;
+      const existing = this.readVersionStrict(id, version);
+      if (existing.digest !== draft.digest
+          || existing.from_revision !== draft.revision) {
+        throw error;   // 内容不同:真冲突,绝不覆盖
+      }
+      // 同 digest 同 from_revision:上次中断的续跑,复用已落盘的 vN。
+    }
     record.status = "published";
     record.latest_version = version;
     record.published_digest = draft.digest;
     record.updated_at = versionRecord.published_at;
     this.writeAsset(record);
-    this.logOperation("approve", id, actor, {
-      version, digest: draft.digest, from_revision: draft.revision,
-    });
     return this.summarize(record);
   }
 
@@ -693,13 +749,13 @@ export class WorkflowAssetLibrary {
     if (record.status === "archived") {
       throw new WorkflowAssetError("invalid_state", "资产已经归档");
     }
+    this.logOperation("archive", id, actor, {   // 账先行
+      status_before: record.status,
+    });
     record.status_before_archive = record.status;
     record.status = "archived";
     record.updated_at = nowIso();
     this.writeAsset(record);
-    this.logOperation("archive", id, actor, {
-      status_before: record.status_before_archive,
-    });
     return this.summarize(record);
   }
 }
