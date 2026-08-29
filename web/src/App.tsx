@@ -41,12 +41,14 @@ import { startVisiblePolling } from "./visiblePolling";
 import { KnowledgeFlywheel } from "./KnowledgeFlywheel";
 import { WishWall, type WishWallDraft } from "./WishWall";
 import { BusinessModuleLibrary } from "./BusinessModuleLibrary";
+import { WorkflowAssetWorkspace } from "./workflows";
 
 type View = "team" | "mine" | "profile" | "history" | "users" | "settings"
   | "knowledge" | "wishes" | "business";
 type Theme = "light" | "dark";
 type Density = "comfortable" | "compact";
 type MineScope = "all" | "waiting" | "intervention" | "active" | "delivered";
+type TeamAssetTab = "knowledge" | "workflows";
 
 interface WorkspaceRoute {
   taskId: string;
@@ -299,6 +301,7 @@ export function App() {
   const [knowledgeInsights, setKnowledgeInsights] = useState<TeamKnowledgeInsights>();
   const [knowledgeInsightsLoading, setKnowledgeInsightsLoading] = useState(false);
   const [knowledgeInsightsError, setKnowledgeInsightsError] = useState("");
+  const [teamAssetTab, setTeamAssetTab] = useState<TeamAssetTab>("knowledge");
   const [myReviews, setMyReviews] = useState<ReviewRequest[]>([]);
   const [artifactTaskId, setArtifactTaskId] = useState("");
   const [artifactTaskSnapshot, setArtifactTaskSnapshot] = useState<TaskSummary>();
@@ -421,11 +424,11 @@ export function App() {
   // 知识聚合要读取多份任务足迹，独立低频刷新，不能跟 1.5 秒任务心跳
   // 绑在一起。开发成员也能看团队只读视图，和现有任务可见性一致。
   useEffect(() => {
-    if (!session || view !== "knowledge") return;
+    if (!session || view !== "knowledge" || teamAssetTab !== "knowledge") return;
     refreshKnowledgeInsights();
     const timer = window.setInterval(refreshKnowledgeInsights, 60_000);
     return () => window.clearInterval(timer);
-  }, [session?.username, view]);
+  }, [session?.username, view, teamAssetTab]);
 
   useEffect(() => {
     if (view !== "mine" || !targetTaskId || tasks.length === 0) return;
@@ -578,7 +581,7 @@ export function App() {
     profile: { title: "个人设置", description: "集中管理任务审批方式、CodeHub 提交身份和小鲁班通知。" },
     history: { title: "交付历史", description: "回看任务与交付记录；未启用历史投影时仍可浏览当前任务现场。" },
     business: { title: "业务版图", description: "用模块组织领域概念、规则、流程和边界，并在业务语境中持续管理知识；责任人与仓库是治理信息。" },
-    knowledge: { title: "团队知识", description: "管理 Skill 资产并观察模块知识的真实消费足迹，找到值得沉淀和需要改进的方向。" },
+    knowledge: { title: "团队资产", description: "统一管理知识与可复用工作流；知识按需进入任务，工作流用精确版本编排阶段内的做法。" },
     wishes: { title: "许愿墙", description: "汇聚真实诉求和使用问题；每一个声音都应该被看见、被回应、被闭环。" },
     users: { title: "账号管理", description: "创建本地账号并分配管理员或开发权限。" },
     settings: { title: "服务设置", description: "集中管理模型网关和团队运行策略；部署链路在此只读自检。" },
@@ -596,7 +599,7 @@ export function App() {
           <NavButton view="team" current={view} onSelect={setView} label="团队总览" badge={waitingCount} />
           <NavButton view="business" current={view} onSelect={setView} label="业务版图" />
           <NavButton view="wishes" current={view} onSelect={setView} label="许愿墙" />
-          <NavButton view="knowledge" current={view} onSelect={setView} label="团队知识" />
+          <NavButton view="knowledge" current={view} onSelect={setView} label="团队资产" />
           <NavButton view="history" current={view} onSelect={setView} label="交付历史" />
           <span className="nav-section-label admin-tools">系统管理</span>
           <NavButton view="users" current={view} onSelect={setView} label="账号管理" />
@@ -609,7 +612,7 @@ export function App() {
           <NavButton view="team" current={view} onSelect={setView} label="团队动态" badge={waitingCount} />
           <NavButton view="business" current={view} onSelect={setView} label="业务版图" />
           <NavButton view="wishes" current={view} onSelect={setView} label="许愿墙" />
-          <NavButton view="knowledge" current={view} onSelect={setView} label="团队知识" />
+          <NavButton view="knowledge" current={view} onSelect={setView} label="团队资产" />
           <NavButton view="history" current={view} onSelect={setView} label="交付历史" />
         </>}
       </nav>
@@ -630,17 +633,31 @@ export function App() {
           onOpenArtifacts={openArtifacts}
         />}
 
-        {view === "knowledge" && <KnowledgeFlywheel
-          admin={session.role === "admin"}
-          insights={knowledgeInsights}
-          loading={knowledgeInsightsLoading}
-          error={knowledgeInsightsError}
-          onRetry={refreshKnowledgeInsights}
-          onOpenTask={(taskId) => {
-            const target = tasks.find((task) => task.id === taskId);
-            if (target) openArtifacts(target);
-          }}
-        />}
+        {view === "knowledge" && <section className="team-assets-workspace">
+          <nav className="team-assets-tabs" aria-label="团队资产类型">
+            <button type="button" className={teamAssetTab === "knowledge" ? "active" : ""}
+              aria-pressed={teamAssetTab === "knowledge"}
+              onClick={() => setTeamAssetTab("knowledge")}>
+              <strong>知识资产</strong><small>业务与工程知识、Skill、真实消费足迹</small>
+            </button>
+            <button type="button" className={teamAssetTab === "workflows" ? "active" : ""}
+              aria-pressed={teamAssetTab === "workflows"}
+              onClick={() => setTeamAssetTab("workflows")}>
+              <strong>工作流方案</strong><small>保存、复制、审核并精确编排阶段内能力</small>
+            </button>
+          </nav>
+          {teamAssetTab === "knowledge" ? <KnowledgeFlywheel
+            admin={session.role === "admin"}
+            insights={knowledgeInsights}
+            loading={knowledgeInsightsLoading}
+            error={knowledgeInsightsError}
+            onRetry={refreshKnowledgeInsights}
+            onOpenTask={(taskId) => {
+              const target = tasks.find((task) => task.id === taskId);
+              if (target) openArtifacts(target);
+            }}
+          /> : <WorkflowAssetWorkspace />}
+        </section>}
 
         {view === "wishes" && <WishWall viewer={session} draft={wishDraft}
           onDraftConsumed={() => setWishDraft(undefined)} />}
@@ -691,7 +708,12 @@ export function App() {
       </main>
     </div>
     {launchOpen && <LaunchWorkspace session={session}
-      onCreated={refresh} onClose={() => setLaunchOpen(false)} />}
+      onCreated={refresh} onClose={() => setLaunchOpen(false)}
+      onOpenWorkflowAssets={() => {
+        setLaunchOpen(false);
+        setTeamAssetTab("workflows");
+        setView("knowledge");
+      }} />}
     {artifactTask && <TaskWorkspace
       task={artifactTask}
       viewerUsername={session.username}

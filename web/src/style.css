@@ -4917,11 +4917,52 @@ pre {
 }
 .ws-collaboration-view > .steer,
 .ws-execution-view > .execution-plan-card,
+.ws-execution-view > .workflow-profile-card,
 .ws-execution-view > .execution-panel,
 .ws-execution-view > .knowledge-footprint {
   width: min(1080px, 100%);
   margin: 0 auto;
 }
+
+.workflow-profile-card {
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--line));
+  border-radius: 14px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent-soft) 52%, var(--surface)) 0%, var(--surface) 54%);
+  box-shadow: var(--shadow-xs);
+}
+.workflow-profile-card > header {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 15px 16px 13px;
+}
+.workflow-profile-card > header > span {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 11px;
+  color: #fff;
+  background: var(--accent);
+  font: 800 12px var(--font-mono);
+  letter-spacing: .05em;
+}
+.workflow-profile-card > header > div:nth-child(2) { min-width: 0; }
+.workflow-profile-card small { display: block; margin-bottom: 2px; color: var(--accent); font-size: 10px; font-weight: 800; letter-spacing: .1em; }
+.workflow-profile-card strong { display: block; overflow: hidden; color: var(--text-strong); font-size: 17px; text-overflow: ellipsis; white-space: nowrap; }
+.workflow-profile-card header p { margin: 3px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.workflow-profile-version { display: grid; justify-items: end; gap: 4px; }
+.workflow-profile-version b { padding: 4px 8px; border-radius: 999px; color: var(--accent); background: var(--accent-soft); font-size: 11px; }
+.workflow-profile-version code { color: var(--muted); font-size: 10px; }
+.workflow-profile-facts { display: grid; grid-template-columns: repeat(4, 1fr); border-top: 1px solid var(--line); background: color-mix(in srgb, var(--surface-soft) 78%, transparent); }
+.workflow-profile-facts span { padding: 9px 12px; border-right: 1px solid var(--line); color: var(--muted); font-size: 11px; text-align: center; }
+.workflow-profile-facts span:last-child { border-right: 0; }
+.workflow-profile-facts b { margin-right: 3px; color: var(--text-strong); }
+.workflow-profile-facts .warning,.workflow-profile-warning { color: var(--attention); }
+.workflow-profile-facts .ok b { color: var(--success); }
+.workflow-profile-warning { margin: 0; padding: 9px 14px; border-top: 1px solid color-mix(in srgb, var(--attention) 22%, var(--line)); background: var(--attention-soft); font-size: 11px; line-height: 1.5; }
 .execution-plan-card {
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--line));

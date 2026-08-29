@@ -18,6 +18,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   symlinkSync,
   writeFileSync,
@@ -118,6 +119,44 @@ test("宿主级 skill 放一次,每个任务都带到模型眼前", async () => 
   assert.match(seen, /java-autout/, "skill 名字没到模型眼前");
   assert.match(seen, /JAVA-AUTOUT-MARKER/, "skill 描述没到模型眼前");
 });
+
+test("团队 Skill 在建任务时固定，货架更新与原位重跑都不改变既有任务版本",
+  async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "mfc-skill-pin-"));
+    const source = writeSkill(join(dataDir, "skills"), "stable-skill",
+      "PINNED-SKILL-V1");
+    const service = new TaskService({
+      dataDir, provider: "test", model: "test", modelsJson: {},
+      maxConcurrent: 0,
+    });
+    const created = service.create("固定团队 Skill");
+    const snapshot = join(created.workspace, "host-skill-snapshot");
+    const skillFile = (root: string): string => {
+      for (const entry of readdirSync(root, { withFileTypes: true })) {
+        const path = join(root, entry.name);
+        if (entry.isDirectory()) {
+          const found = skillFile(path);
+          if (found) return found;
+        } else if (entry.name === "SKILL.md") return path;
+      }
+      return "";
+    };
+    assert.match(readFileSync(skillFile(snapshot), "utf-8"), /PINNED-SKILL-V1/);
+
+    writeFileSync(source,
+      "---\nname: stable-skill\ndescription: PINNED-SKILL-V2\n---\n\nV2\n");
+    assert.match(readFileSync(skillFile(snapshot), "utf-8"), /PINNED-SKILL-V1/,
+      "货架更新不能回写已经创建的任务快照");
+
+    const internal = (service as any).tasks.get(created.id);
+    internal.summary.status = "completed";
+    internal.summary.completed_at = new Date().toISOString();
+    (service as any).persist(internal);
+    const rerun = await service.rerunFromStart(created.id);
+    assert.equal(rerun.host_skills_pinned, true);
+    assert.match(readFileSync(skillFile(snapshot), "utf-8"), /PINNED-SKILL-V1/,
+      "原位从头重跑必须复制旧快照，不能重新读取货架最新版");
+  });
 
 test("没有 skill 目录照常跑——不是每个部署都有内网 skill", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-skill-none-"));

@@ -672,6 +672,8 @@ async function main(): Promise<void> {
     // 在内核 gate(bash-recursive-delete 等)与 prepush 安全层,宿主不再
     // 叠一层无出路的子串匹配。
     host,
+    // 资产定制只读标准目录，不等同于启用内核代码执行。
+    workflowCatalogRoot: kernelRoot,
     delivery,
     // 环境预热编译:隔离模式显式开启(缺席即关,测试形态零意外会话)。
     warmup: host && isolateImage ? { enabled: true } : undefined,

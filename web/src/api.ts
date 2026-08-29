@@ -512,6 +512,150 @@ export interface TaskTokenUsage {
   source: "provider";
 }
 
+export interface WorkflowPlanItem {
+  id: string;
+  kind: "activity" | "knowledge" | "skill" | "agent" | "tool" | "instruction";
+  title: string;
+  description?: string;
+  locked: boolean;
+  editable: boolean;
+  source: "platform" | "workflow" | "task";
+  slot?: string;
+  asset_ref?: WorkflowAssetRef;
+  instructions?: string;
+  use?: { mode: "available" | "when_needed" | "on_stage_enter" | "before_item";
+    anchor?: string };
+}
+
+export interface WorkflowAssetRef {
+  registry: "business_knowledge" | "engineering_knowledge" | "team_skill"
+    | "repository_skill" | "platform_capability";
+  id: string;
+  version: string;
+  digest: string;
+  nature?: "business" | "engineering";
+  form?: "document" | "skill" | "rule" | "example";
+  business_module_id?: string;
+  repository?: string;
+  revision?: string;
+  relative_path?: string;
+}
+
+export type WorkflowEdit =
+  | { edit_id: string; stage_id: string; op: "add";
+      item: WorkflowPlanItem; position?: { before?: string; after?: string } }
+  | { edit_id: string; stage_id: string; op: "remove"; target_id: string }
+  | { edit_id: string; stage_id: string; op: "replace"; target_id: string;
+      item: WorkflowPlanItem }
+  | { edit_id: string; stage_id: string; op: "move"; target_id: string;
+      position: { before?: string; after?: string } }
+  | { edit_id: string; stage_id: string; op: "configure"; target_id: string;
+      use?: WorkflowPlanItem["use"]; instructions?: string };
+
+export interface WorkflowDefinition {
+  schema: "mae-flow-workflow-definition/1";
+  base: { standard_id: string; standard_version: string;
+    catalog_digest: string };
+  applicability: {
+    business_module_ids: string[];
+    repositories: string[];
+    technologies: string[];
+  };
+  edits: WorkflowEdit[];
+}
+
+export interface WorkflowDiagnostic {
+  code: string;
+  severity: "warning" | "error";
+  message: string;
+  fallback?: string;
+  stage_id?: string;
+  item_id?: string;
+}
+
+export interface WorkflowStagePlan {
+  id: string;
+  title: string;
+  phase: string;
+  steps: string[];
+  slots: Array<{ id: string; cardinality: "one" | "many" }>;
+  items: WorkflowPlanItem[];
+}
+
+export interface WorkflowExecutionProfile {
+  schema: "mae-flow-execution-profile/2";
+  revision: string;
+  source: { kind: "platform" | "workflow" | "task";
+    id: string; label?: string; version?: string; digest?: string };
+  base_snapshot: { standard_id: string; standard_version: string;
+    catalog_digest: string; stages: WorkflowStagePlan[] };
+  final_snapshot: { standard_id: string; standard_version: string;
+    catalog_digest: string; stages: WorkflowStagePlan[] };
+  edits: WorkflowEdit[];
+  asset_manifest: Array<WorkflowAssetRef & {
+    state: "available" | "unavailable" | "incompatible";
+    snapshot_path?: string;
+    diagnostic?: string;
+  }>;
+  diagnostics: WorkflowDiagnostic[];
+}
+
+export type WorkflowAssetStatus =
+  | "draft" | "pending_review" | "published" | "archived";
+
+export interface WorkflowAssetSummary {
+  id: string;
+  name: string;
+  description?: string;
+  scope: "personal" | "team";
+  owner: string;
+  maintainers: string[];
+  status: WorkflowAssetStatus;
+  latest_version: number;
+  draft_revision: number;
+  copied_from?: WorkflowExecutionProfile["source"];
+  selectable_for_tasks: boolean;
+  updated_at: string;
+  permissions: {
+    can_view: boolean;
+    can_edit: boolean;
+    can_submit: boolean;
+    can_publish: boolean;
+    can_archive: boolean;
+  };
+}
+
+export interface WorkflowDraftRecord {
+  schema: "mae-flow-workflow-draft/1";
+  revision: number;
+  definition: WorkflowDefinition;
+  digest: string;
+  updated_at: string;
+  updated_by: string;
+}
+
+export interface WorkflowAssetDetail {
+  asset: WorkflowAssetSummary;
+  draft: WorkflowDraftRecord;
+  versions: Array<{ version: number; digest: string;
+    published_at: string; published_by: string }>;
+}
+
+export interface WorkflowAssetCatalogItem {
+  ref: WorkflowAssetRef;
+  type: "knowledge" | "skill" | "agent" | "tool" | "capability";
+  title: string;
+  summary: string;
+  when_to_use?: string;
+  nature?: "business" | "engineering";
+  form?: "document" | "skill" | "rule" | "example";
+  business_module_ids: string[];
+  repositories: string[];
+  technologies: string[];
+  availability: "available" | "unavailable";
+  warning?: string;
+}
+
 export interface ExecutionPlan {
   schema: "mae-flow-execution-plan/1";
   plan_id: string;
@@ -527,7 +671,7 @@ export interface ExecutionPlan {
     version: string;
     title: string;
     summary: string;
-    source: "platform_default";
+    source: "platform_default" | "workflow" | "task";
     selection_reason: string;
   };
   contract: {
@@ -551,15 +695,17 @@ export interface ExecutionPlan {
     usage: "required" | "when_needed" | "on_demand";
     preferred?: boolean;
   }>;
+  workflow_items: WorkflowPlanItem[];
   knowledge: {
     loading: "indexed_on_demand";
     explanation: string;
   };
   customization: {
-    mode: "bounded";
+    mode: "bounded" | "structural";
     customizable: string[];
     locked: string[];
-    effective_source: "platform_default" | "platform_default+overrides";
+    effective_source: "platform_default" | "platform_default+overrides"
+      | "compiled_final_plan";
     profile_revision?: string;
     layers: Array<{
       scope: "team" | "business_module" | "repository" | "task";
@@ -572,6 +718,9 @@ export interface ExecutionPlan {
       source_id: string;
       title: string;
     }>;
+    workflow_source?: { kind: "platform" | "workflow" | "task";
+      id: string; version?: string; digest?: string };
+    diagnostics?: WorkflowDiagnostic[];
   };
 }
 
@@ -750,6 +899,10 @@ export interface TaskSummary {
   execution_plan?: ExecutionPlan;
   /** 可选执行补充未被采用时的明确降级说明。 */
   execution_profile_warning?: string;
+  workflow_profile?: WorkflowExecutionProfile;
+  workflow_profile_warning?: string;
+  host_skills_pinned?: boolean;
+  host_skill_snapshot_warnings?: string[];
   control?: {
     last_action: "pause" | "resume" | "cancel";
     actor: string;
@@ -941,6 +1094,7 @@ export interface LaunchOptions {
     { key: string; label: string; description?: string;
       steps?: number; acks?: number }>;
   execution_playbooks: ExecutionPlaybookOption[];
+  workflow_standard?: WorkflowExecutionProfile["base_snapshot"];
   execution_stage_defaults: ExecutionStageCustomization[];
   /** 已发布的可选业务模块摘要；知识正文不会随目录接口返回。 */
   business_modules: BusinessModuleLaunchOption[];
@@ -1145,6 +1299,107 @@ export async function archiveBusinessKnowledgeAsset(
     + `/assets/${encodeURIComponent(assetId)}`, { method: "DELETE" });
   if (!response.ok) throw new Error(await errorText(response));
   return response.json();
+}
+
+export class WorkflowApiError extends Error {
+  constructor(
+    message: string,
+    readonly code?: string,
+    readonly currentRevision?: number,
+  ) {
+    super(message);
+    this.name = "WorkflowApiError";
+  }
+}
+
+async function workflowResponse<T>(response: Response): Promise<T> {
+  if (response.ok) return response.json() as Promise<T>;
+  const body = await response.json().catch(() => ({})) as {
+    error?: unknown; code?: unknown; current_revision?: unknown };
+  throw new WorkflowApiError(
+    String(body.error ?? `HTTP ${response.status}`),
+    body.code === undefined ? undefined : String(body.code),
+    body.current_revision === undefined
+      ? undefined : Number(body.current_revision),
+  );
+}
+
+export async function listWorkflowAssets(): Promise<{
+  items: WorkflowAssetSummary[];
+  warnings: string[];
+}> {
+  return workflowResponse(await fetch("/workflow-assets"));
+}
+
+export async function getWorkflowAssetCatalog(): Promise<{
+  items: WorkflowAssetCatalogItem[];
+  warnings: string[];
+}> {
+  return workflowResponse(await fetch("/workflow-assets/catalog"));
+}
+
+export async function getWorkflowStandard(): Promise<
+WorkflowExecutionProfile["base_snapshot"]> {
+  return workflowResponse(await fetch("/workflow-assets/standard"));
+}
+
+export async function getWorkflowAsset(id: string): Promise<WorkflowAssetDetail> {
+  return workflowResponse(await fetch(
+    `/workflow-assets/${encodeURIComponent(id)}`));
+}
+
+export async function createWorkflowAsset(input: {
+  id?: string;
+  name: string;
+  description?: string;
+  scope: "personal" | "team";
+  maintainers?: string[];
+  definition: WorkflowDefinition;
+}): Promise<WorkflowAssetSummary> {
+  return workflowResponse(await fetch("/workflow-assets", {
+    method: "POST", body: JSON.stringify(input),
+  }));
+}
+
+export async function saveWorkflowDraft(
+  id: string,
+  definition: WorkflowDefinition,
+  expectedRevision: number,
+): Promise<WorkflowAssetDetail> {
+  return workflowResponse(await fetch(
+    `/workflow-assets/${encodeURIComponent(id)}/draft`, {
+      method: "PUT",
+      body: JSON.stringify({
+        definition, expected_revision: expectedRevision,
+      }),
+    }));
+}
+
+export async function copyWorkflowAsset(
+  id: string,
+  input: {
+    source_version?: number | string;
+    name: string;
+    description?: string;
+    scope: "personal" | "team";
+    maintainers?: string[];
+  },
+): Promise<WorkflowAssetSummary> {
+  return workflowResponse(await fetch(
+    `/workflow-assets/${encodeURIComponent(id)}/copy`, {
+      method: "POST", body: JSON.stringify(input),
+    }));
+}
+
+export async function workflowAssetAction(
+  id: string,
+  action: "submit" | "withdraw" | "approve" | "reject" | "archive",
+  input: { reason?: string } = {},
+): Promise<WorkflowAssetSummary> {
+  return workflowResponse(await fetch(
+    `/workflow-assets/${encodeURIComponent(id)}/${action}`, {
+      method: "POST", body: JSON.stringify(input),
+    }));
 }
 
 export async function getLaunchOptions(): Promise<LaunchOptions> {
@@ -1633,6 +1888,8 @@ export async function createTask(
     repairRounds?: number;
     taskInstructions?: string;
     executionStageCustomizations?: ExecutionStageCustomization[];
+    workflowDefinition?: unknown;
+    workflowSelection?: { id: string; version?: number | string };
     repositorySkillCatalogToken?: string;
     selectedRepositorySkillIds?: string[];
     selectedBusinessModuleIds?: string[];
@@ -1663,6 +1920,8 @@ export async function createTask(
       repair_rounds: extras?.repairRounds,
       task_instructions: extras?.taskInstructions?.trim() || undefined,
       execution_stage_customizations: extras?.executionStageCustomizations,
+      workflow_definition: extras?.workflowDefinition,
+      workflow_selection: extras?.workflowSelection,
       repository_skill_catalog_token:
         extras?.repositorySkillCatalogToken || undefined,
       selected_repository_skill_ids:

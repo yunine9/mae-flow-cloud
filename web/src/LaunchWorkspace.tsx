@@ -2,9 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import {
   createTask,
   getLaunchOptions,
+  listWorkflowAssets,
   type AuthUser,
-  type ExecutionStageCustomization,
   type LaunchOptions,
+  type WorkflowAssetSummary,
 } from "./api";
 import {
   EMPTY_REPOSITORY_SKILL_SELECTION,
@@ -17,7 +18,10 @@ import {
   type RepositoryTechnologyDraft,
 } from "./RepositoryTechnologyPicker";
 import { KnowledgeLanguageTags } from "./KnowledgeLanguages";
-import { StageCustomizationEditor } from "./StageCustomizationEditor";
+import {
+  SchemeSelector,
+  type WorkflowSchemeSelection,
+} from "./workflows";
 
 const MAX_MARKDOWN_BYTES = 512 * 1024;
 const INLINE_MARKDOWN_BYTES = 32 * 1024;
@@ -34,8 +38,8 @@ type LaunchDraft = {
   lane: string;
   repairRounds: string;
   taskInstructions?: string;
-  executionStageCustomizations?: ExecutionStageCustomization[];
   selectedBusinessModuleIds?: string[];
+  workflowSelection?: WorkflowSchemeSelection;
 };
 type LaunchPreferences = {
   recentRepos: string[];
@@ -64,10 +68,12 @@ export function LaunchWorkspace({
   session,
   onCreated,
   onClose,
+  onOpenWorkflowAssets,
 }: {
   session: AuthUser;
   onCreated: () => Promise<void>;
   onClose: () => void;
+  onOpenWorkflowAssets?: () => void;
 }) {
   const [restoredDraft] = useState(() =>
     readStored<LaunchDraft>(storageKey("draft", session.username)));
@@ -107,9 +113,6 @@ export function LaunchWorkspace({
     validDraft?.repairRounds ?? savedPreferences?.repairRounds ?? "");
   const [taskInstructions, setTaskInstructions] = useState(
     validDraft?.taskInstructions ?? "");
-  const [executionStageCustomizations, setExecutionStageCustomizations] =
-    useState<ExecutionStageCustomization[]>(
-      validDraft?.executionStageCustomizations ?? []);
   const [selectedBusinessModuleIds, setSelectedBusinessModuleIds] = useState(
     validDraft?.selectedBusinessModuleIds ?? []);
   const [moduleSelectionNotice, setModuleSelectionNotice] = useState("");
@@ -123,6 +126,11 @@ export function LaunchWorkspace({
     useState<string[]>([]);
   const [engineeringSelectionTouched, setEngineeringSelectionTouched] =
     useState(false);
+  const [workflowAssets, setWorkflowAssets] = useState<WorkflowAssetSummary[]>([]);
+  const [workflowAssetsLoaded, setWorkflowAssetsLoaded] = useState(false);
+  const [workflowSelection, setWorkflowSelection] = useState<WorkflowSchemeSelection | undefined>(
+    validDraft?.workflowSelection);
+  const [workflowSelectionNotice, setWorkflowSelectionNotice] = useState("");
   // 配置没配齐不让下单:缺项来自后端(服务级+个人级),前端只负责
   // 摆在明面上。后端同样硬拦——绕过界面打接口一样被 409 挡住。
   const blockers = options?.blockers ?? [];
@@ -172,6 +180,25 @@ export function LaunchWorkspace({
     return () => { alive = false; };
   }, []);
 
+  // 工作流资产是可选增强：目录暂时不可用时仍可用 Mae-Flow 标准方案
+  // 正常下单，不能把团队资产读失败升级成新门禁。
+  useEffect(() => {
+    let alive = true;
+    void listWorkflowAssets().then((result) => {
+      if (!alive) return;
+      setWorkflowAssets(result.items);
+      setWorkflowAssetsLoaded(true);
+      if (result.warnings.length) {
+        setWorkflowSelectionNotice(`部分工作流暂不可见：${result.warnings.join("；")}`);
+      }
+    }).catch(() => {
+      if (!alive) return;
+      setWorkflowAssetsLoaded(true);
+      setWorkflowSelectionNotice("工作流资产目录暂不可用，本次继续采用 Mae-Flow 标准方案。");
+    });
+    return () => { alive = false; };
+  }, []);
+
   useEffect(() => {
     const timer = window.setTimeout(() => {
       const draft: LaunchDraft = {
@@ -186,8 +213,8 @@ export function LaunchWorkspace({
         lane,
         repairRounds,
         taskInstructions,
-        executionStageCustomizations,
         selectedBusinessModuleIds,
+        workflowSelection,
       };
       try {
         localStorage.setItem(storageKey("draft", session.username),
@@ -199,9 +226,19 @@ export function LaunchWorkspace({
     }, 300);
     return () => window.clearTimeout(timer);
   }, [title, requirement, requirementDocumentName, repos, ticket,
-    baseline, lane, repairRounds, taskInstructions, executionStageCustomizations,
-    selectedBusinessModuleIds,
+    baseline, lane, repairRounds, taskInstructions,
+    selectedBusinessModuleIds, workflowSelection,
     session.username]);
+
+  useEffect(() => {
+    if (!workflowAssetsLoaded || !workflowSelection) return;
+    const selected = workflowAssets.find((item) => item.id === workflowSelection.id);
+    if (!selected?.selectable_for_tasks) {
+      setWorkflowSelection(undefined);
+      setWorkflowSelectionNotice(
+        "草稿中选择的工作流已归档、未发布或不可见，已明确回退到 Mae-Flow 标准方案。");
+    }
+  }, [workflowAssets, workflowAssetsLoaded, workflowSelection]);
 
   useEffect(() => {
     if (!options) return;
@@ -315,8 +352,11 @@ export function LaunchWorkspace({
           baseline: baseline.trim() || undefined,
           repairRounds: repairRounds.trim() === ""
             ? undefined : Number(repairRounds),
-          taskInstructions: taskInstructions.trim() || undefined,
-          executionStageCustomizations,
+          // 精确工作流与自由补充不叠加，避免用户选了一个方案，Agent
+          // 又同时收到另一套阶段指令。特殊要求写在需求正文即可。
+          taskInstructions: workflowSelection
+            ? undefined : taskInstructions.trim() || undefined,
+          workflowSelection,
           repositorySkillCatalogToken:
             repositorySkillSelection.scanned
               ? repositorySkillSelection.catalogToken : undefined,
@@ -581,9 +621,19 @@ export function LaunchWorkspace({
                 </section>
               )}
               {options && <section className="launch-form-section launch-execution-settings">
-                <div className="launch-section-head"><i>{executionSectionNumber}</i><div><strong>执行设置</strong><small>交付方式需要确认；修复轮预算可按需覆盖团队默认</small></div>
+                <div className="launch-section-head"><i>{executionSectionNumber}</i><div><strong>执行设置</strong><small>普通用户沿用标准方案；有明确编排时可选择已发布工作流</small></div>
                   {options.workflows.length > 0 && <em>交付方式必填</em>}
                 </div>
+                <SchemeSelector workflows={workflowAssets} value={workflowSelection}
+                  disabled={!workflowAssetsLoaded}
+                  onChange={(selection) => {
+                    setWorkflowSelection(selection);
+                    setWorkflowSelectionNotice("");
+                  }}
+                  onOpenEditor={onOpenWorkflowAssets
+                    ? () => onOpenWorkflowAssets() : undefined} />
+                {workflowSelectionNotice && <p className="workflow-selection-notice"
+                  role="status">{workflowSelectionNotice}</p>}
                 <div className="launch-field-grid launch-settings-grid">
                   {options.workflows.length > 0 && (
                     <fieldset className="delivery-mode-field">
@@ -619,22 +669,17 @@ export function LaunchWorkspace({
                         : "沿用团队默认：不限轮（0=关闭）"} />
                     <small>留空沿用团队设置；只有需要限制或关闭自动修复时才填写。</small>
                   </label>
-                  <label className="account-field task-instructions-field">
-                    <span>本任务执行补充（可选）</span>
+                  {!workflowSelection && <label className="account-field task-instructions-field">
+                    <span>标准方案下的任务提醒（可选）</span>
                     <textarea value={taskInstructions} maxLength={2000}
                       onChange={(event) => setTaskInstructions(event.target.value)}
                       placeholder="例如：先核对兼容旧数据的风险；接口命名尽量沿用现有模块；不确定时明确说明，不要猜。" />
                     <small>
-                      只写关注点、先后偏好或协作要求，不必重复需求。它会随任务固定并进入每个阶段，但不能关闭质量验证、人工决定或交付权限。
+                      仅在采用标准方案时生效；选择工作流后不会再叠加，避免两套指令摩擦。
                     </small>
                     <em>{taskInstructions.length}/2000</em>
-                  </label>
+                  </label>}
                 </div>
-                <StageCustomizationEditor
-                  playbooks={options.execution_playbooks}
-                  value={executionStageCustomizations}
-                  inherited={options.execution_stage_defaults}
-                  onChange={setExecutionStageCustomizations} />
               </section>}
               {options && businessModules.length > 0 && (
                 <section className="launch-form-section business-module-picker">

@@ -15,12 +15,13 @@ import {
   readFileSync,
   readdirSync,
 } from "node:fs";
-import { join, relative, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
 import {
   readSkillKnowledgeMetadata,
   type KnowledgeNature,
 } from "./knowledgeAssetModel.ts";
+import { packageDigest } from "./hostSkillRuntime.ts";
 
 /** 与宿主 Skill 快照(hostSkillRuntime)同深度上限:货架照见的范围
  * 不应超过运行时真会去装的范围。 */
@@ -37,10 +38,14 @@ export interface HostSkillShelfEntry {
   technologies: string[];
   /** SKILL.md 正文 sha256:版本指纹,页面对拍与后续留痕的锚。 */
   digest: string;
+  /** 整个 Skill 包（正文及附件）的指纹；工作流精确引用使用它。 */
+  package_digest: string;
   /** SKILL.md 的 mtime(ISO)。 */
   updated_at: string;
   /** 相对 skills 根的路径——宿主绝对路径不出接口。 */
   path: string;
+  /** 任务固定快照中的哈希目录会在这里还原原货架相对路径。 */
+  source_path?: string;
   bytes: number;
   /** pi 装载器认不认。false = 放了也不会进任何会话(缺 name/description
    * 等),货架必须照出来,否则"放了没生效"只能靠试跑撞见。 */
@@ -88,8 +93,29 @@ function fallbackFrontmatter(
   return match ? match[1].trim() : "";
 }
 
-export function listHostSkillShelf(dataDir: string): HostSkillShelf {
-  const root = resolve(dataDir, "skills");
+function snapshotSourcePath(root: string, file: string): string | undefined {
+  const first = relative(root, file).split(sep)[0];
+  if (!first) return undefined;
+  const metadata = join(root, `${first}.snapshot.json`);
+  if (!existsSync(metadata) || lstatSync(metadata).isSymbolicLink()
+      || !lstatSync(metadata).isFile()) return undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(metadata, "utf-8")) as {
+      source_path?: unknown;
+    };
+    const source = String(parsed.source_path ?? "").trim();
+    if (!source || source.startsWith("/") || source.split(/[\\/]/).includes("..")) {
+      return undefined;
+    }
+    return source.split(sep).join("/");
+  } catch {
+    return undefined;
+  }
+}
+
+/** 既能照见实时货架，也能照见任务内已经固定的哈希快照。 */
+export function listHostSkillShelfRoot(inputRoot: string): HostSkillShelf {
+  const root = resolve(inputRoot);
   if (!existsSync(root)) {
     return { root_exists: false, skills: [], warnings: [] };
   }
@@ -98,8 +124,8 @@ export function listHostSkillShelf(dataDir: string): HostSkillShelf {
   const loadableByPath = new Map<string, { name: string; description: string }>();
   try {
     for (const skill of loadSkills({
-      cwd: dataDir,
-      agentDir: dataDir,
+      cwd: root,
+      agentDir: root,
       skillPaths: [root],
       includeDefaults: false,
     }).skills) {
@@ -126,6 +152,13 @@ export function listHostSkillShelf(dataDir: string): HostSkillShelf {
     const loaded = loadableByPath.get(resolve(file));
     const text = content.toString("utf-8");
     const directory = relative(root, file).split(sep).slice(0, -1).join("/");
+    let wholePackageDigest: string;
+    try {
+      wholePackageDigest = packageDigest(dirname(file));
+    } catch (error) {
+      warnings.push(`Skill 包指纹失败: ${relative(root, file)} — ${String(error)}`);
+      wholePackageDigest = sha256(content);
+    }
     if (!loaded) {
       warnings.push(`不可装载(pi 装载器未接受,检查 frontmatter 的 `
         + `name/description): ${relative(root, file)}`);
@@ -143,6 +176,7 @@ export function listHostSkillShelf(dataDir: string): HostSkillShelf {
       warnings.push(`Skill 知识属性无效: ${relative(root, file)} — ${
         error instanceof Error ? error.message : String(error)}`);
     }
+    const sourcePath = snapshotSourcePath(root, file);
     skills.push({
       name: loaded?.name
         || fallbackFrontmatter(text, "name")
@@ -155,12 +189,18 @@ export function listHostSkillShelf(dataDir: string): HostSkillShelf {
       repositories: metadata.repositories,
       technologies: metadata.technologies,
       digest: sha256(content),
+      package_digest: wholePackageDigest,
       updated_at: mtime.toISOString(),
       path: relative(root, file).split(sep).join("/"),
+      ...(sourcePath ? { source_path: sourcePath } : {}),
       bytes: content.byteLength,
       loadable: !!loaded,
     });
   }
   skills.sort((left, right) => left.name.localeCompare(right.name));
   return { root_exists: true, skills, warnings };
+}
+
+export function listHostSkillShelf(dataDir: string): HostSkillShelf {
+  return listHostSkillShelfRoot(resolve(dataDir, "skills"));
 }

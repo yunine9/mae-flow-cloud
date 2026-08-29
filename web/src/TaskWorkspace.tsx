@@ -22,6 +22,7 @@ import { PrepushBadge } from "./PrepushStatus";
 import { TokenUsage } from "./TokenUsage";
 import { KnowledgeFootprint } from "./KnowledgeFootprint";
 import { ExecutionPlanCard } from "./ExecutionPlanCard";
+import { WorkflowProfileCard } from "./WorkflowProfileCard";
 import { CrossRepositorySync } from "./CrossRepositorySync";
 import { WarmupPanel, WarmupBadge } from "./WarmupPanel";
 import { taskHealthFacts } from "./taskHealth";
@@ -698,6 +699,9 @@ export function TaskWorkspace({
               <small>先看本阶段怎么做，再按需查看实时事件</small>
             </div>
             <div className="ws-primary-scroll ws-execution-view">
+              {task.workflow_profile && <WorkflowProfileCard
+                profile={task.workflow_profile}
+                warning={task.workflow_profile_warning} />}
               {task.execution_plan && <ExecutionPlanCard
                 plan={task.execution_plan}
                 warning={task.execution_profile_warning}

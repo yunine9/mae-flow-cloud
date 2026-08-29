@@ -159,17 +159,20 @@ export interface WorkflowAssetListResult {
 // 权限基线:团队发布/归档/设默认的最终裁决在 route 层,这里只给
 // 任何 route 都不该低于的下限判断。
 // ---------------------------------------------------------------------------
-export function canView(asset: WorkflowAssetRecord, user: string): boolean {
+type WorkflowPermissionSubject = Pick<WorkflowAssetRecord,
+  "scope" | "owner" | "maintainers" | "status">;
+
+export function canView(asset: WorkflowPermissionSubject, user: string): boolean {
   if (asset.scope === "team") return true;
   return asset.owner === user || asset.maintainers.includes(user);
 }
 
-export function canEdit(asset: WorkflowAssetRecord, user: string): boolean {
+export function canEdit(asset: WorkflowPermissionSubject, user: string): boolean {
   if (asset.status === "archived") return false;
   return asset.owner === user || asset.maintainers.includes(user);
 }
 
-export function canPublish(asset: WorkflowAssetRecord, user: string): boolean {
+export function canPublish(asset: WorkflowPermissionSubject, user: string): boolean {
   if (asset.status === "archived") return false;
   // 个人资产只有本人能发布;团队资产 owner/maintainer 都可提请,
   // 是否还需要额外审批人由 route 层叠加。
