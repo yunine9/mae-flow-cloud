@@ -50,9 +50,11 @@ function rawGet(base: string, path: string): Promise<string> {
 test("配 webRoot:index 与资产按类型出文件,API 与穿越各归各位", async () => {
   const webRoot = mkdtempSync(join(tmpdir(), "dist-"));
   mkdirSync(join(webRoot, "assets"));
+  mkdirSync(join(webRoot, "help"));
   writeFileSync(join(webRoot, "index.html"), "<title>正式前端</title>");
   writeFileSync(join(webRoot, "assets", "app.js"), "console.log(1)");
   writeFileSync(join(webRoot, "assets", "inter.woff2"), "font-data");
+  writeFileSync(join(webRoot, "help", "01-overview.png"), "png-data");
   writeFileSync(join(webRoot, "..", "secret.txt"), "不该被读到");
   const { base, close } = await startServer(webRoot);
   try {
@@ -90,6 +92,24 @@ test("配 webRoot:index 与资产按类型出文件,API 与穿越各归各位", 
     const work = await fetch(base + "/work/task-7");
     assert.equal(work.status, 200);
     assert.match(await work.text(), /正式前端/);
+
+    // FAQ 根入口和逐篇直链同样由 React 接管；否则刷新或从消息里直接
+    // 打开 /help/:article 会在服务端先变成 404。
+    for (const path of ["/help", "/help/getting-started"]) {
+      const help = await fetch(base + path);
+      assert.equal(help.status, 200);
+      assert.equal(help.headers.get("content-type"), "text/html; charset=utf-8");
+      assert.match(help.headers.get("cache-control") ?? "", /no-cache/);
+      assert.match(await help.text(), /正式前端/);
+    }
+    // 真实截图优先于 SPA 回退；缺图也必须诚实 404，不能返回 HTML 假图。
+    const helpShot = await fetch(base + "/help/01-overview.png");
+    assert.equal(helpShot.status, 200);
+    assert.equal(helpShot.headers.get("content-type"), "image/png");
+    assert.equal(await helpShot.text(), "png-data");
+    const missingHelpShot = await fetch(base + "/help/missing.png");
+    assert.equal(missingHelpShot.status, 404);
+
     const legacy = await fetch(base + "/tasks/task-7", {
       headers: { accept: "text/html" }, redirect: "manual",
     });

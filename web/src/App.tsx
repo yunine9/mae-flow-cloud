@@ -47,11 +47,15 @@ import { WorkflowAssetWorkspace } from "./workflows";
 // 用动另一边的构建产物。
 const IssueBoard = lazy(() =>
   import("./issues/IssueBoard").then((module) => ({ default: module.IssueBoard })));
+// 帮助中心内容多、截图也多，但不是每次进工作台都要用。和问题处理页一样
+// 独立加载，不能为了 FAQ 拖慢用户每天打开的首页。
+const HelpCenter = lazy(() =>
+  import("./HelpCenter").then((module) => ({ default: module.HelpCenter })));
 
 // 两侧各退役一个视图,取并集:"business" 并入团队资产页签(modules,
 // 本地);"history" 并入团队任务的档案页签(origin)。
 type View = "team" | "mine" | "issues" | "profile" | "users"
-  | "settings" | "knowledge" | "wishes";
+  | "settings" | "knowledge" | "wishes" | "help";
 type Theme = "light" | "dark";
 type Density = "comfortable" | "compact";
 type MineScope = "all" | "waiting" | "intervention" | "active" | "delivered";
@@ -89,6 +93,7 @@ function workspacePath(taskId: string, reviewId = ""): string {
 }
 
 function initialView(user: AuthUser): View {
+  if (/^\/help(?:\/|$)/.test(location.pathname)) return "help";
   // 管理员没有"我的待办"(不下单的角色没有个人任务收件箱,用户拍板):
   // 深链也一律落到团队总览,从那里打开任意任务行使兜底控制。
   if (user.role === "admin") return "team";
@@ -342,6 +347,7 @@ function NavIcon({ name }: { name: View }) {
   if (name === "wishes") return <svg viewBox="0 0 24 24" aria-hidden><path d="M12 20.25s-7.25-4.1-7.25-10.1A4.4 4.4 0 0 1 12 6.8a4.4 4.4 0 0 1 7.25 3.35c0 6-7.25 10.1-7.25 10.1Z" /><path d="m17.5 3.75.45 1.3 1.3.45-1.3.45-.45 1.3-.45-1.3-1.3-.45 1.3-.45.45-1.3Z" /></svg>;
   if (name === "users") return <svg viewBox="0 0 24 24" aria-hidden><circle cx="9" cy="8" r="3" /><path d="M3.75 18.5c.55-3.15 2.3-4.75 5.25-4.75s4.7 1.6 5.25 4.75M16.5 7.5h4M18.5 5.5v4" /></svg>;
   if (name === "settings") return <svg viewBox="0 0 24 24" aria-hidden><circle cx="12" cy="12" r="3" /><path d="M12 4.5v2M12 17.5v2M4.5 12h2M17.5 12h2M6.7 6.7l1.4 1.4M15.9 15.9l1.4 1.4M6.7 17.3l1.4-1.4M15.9 8.1l1.4-1.4" /></svg>;
+  if (name === "help") return <svg viewBox="0 0 24 24" aria-hidden><circle cx="12" cy="12" r="8.25" /><path d="M9.7 9.1a2.5 2.5 0 0 1 4.8.9c0 1.8-2.5 2-2.5 3.7M12 17.3v.15" /></svg>;
   return <svg viewBox="0 0 24 24" aria-hidden><path d="M5 4.75h14A1.25 1.25 0 0 1 20.25 6v12A1.25 1.25 0 0 1 19 19.25H5A1.25 1.25 0 0 1 3.75 18V6A1.25 1.25 0 0 1 5 4.75Z" /><path d="M8 9h8M8 13h5" /></svg>;
 }
 
@@ -364,6 +370,12 @@ export function App() {
   const [teamAssetTab, setTeamAssetTab] = useState<TeamAssetTab>("knowledge");
   /** 下单选择器"查看方案"带过来的直达目标;资产库挂载时消费。 */
   const [workflowFocusId, setWorkflowFocusId] = useState("");
+  const [helpArticleId, setHelpArticleId] = useState(() => {
+    const match = location.pathname.match(/^\/help(?:\/([^/]+))?\/?$/);
+    if (!match?.[1]) return "getting-started";
+    try { return decodeURIComponent(match[1]); }
+    catch { return "getting-started"; }
+  });
   const [myReviews, setMyReviews] = useState<ReviewRequest[]>([]);
   const [artifactTaskId, setArtifactTaskId] = useState("");
   const [artifactTaskSnapshot, setArtifactTaskSnapshot] = useState<TaskSummary>();
@@ -389,6 +401,26 @@ export function App() {
     addEventListener("popstate", syncRoute);
     return () => removeEventListener("popstate", syncRoute);
   }, []);
+
+  // FAQ 支持把具体文章链接直接发给别人；浏览器前进/后退也要真的切页，
+  // 不能只改地址栏。离开 /help 后回到该角色的默认首页。
+  useEffect(() => {
+    if (!session) return;
+    const syncHelpRoute = () => {
+      const match = location.pathname.match(/^\/help(?:\/([^/]+))?\/?$/);
+      if (match) {
+        let articleId = "getting-started";
+        try { articleId = match[1] ? decodeURIComponent(match[1]) : articleId; }
+        catch { /* 坏地址由帮助中心回到第一篇 */ }
+        setHelpArticleId(articleId);
+        setView("help");
+      } else {
+        setView((current) => current === "help" ? initialView(session) : current);
+      }
+    };
+    addEventListener("popstate", syncHelpRoute);
+    return () => removeEventListener("popstate", syncHelpRoute);
+  }, [session?.username, session?.role]);
 
   useEffect(() => {
     void getSession().then((user) => {
@@ -655,35 +687,48 @@ export function App() {
     wishes: { title: "许愿墙", description: "汇聚真实诉求和使用问题；每一个声音都应该被看见、被回应、被闭环。" },
     users: { title: "账号管理", description: "创建本地账号并分配管理员或开发权限。" },
     settings: { title: "服务设置", description: "集中管理模型网关和团队运行策略；部署链路在此只读自检。" },
+    help: { title: "使用帮助", description: "用大白话讲清每个功能：什么时候用、点哪里、接下来会发生什么。" },
   }[view];
   const relevantWaiting = view === "mine"
     ? myWaiting.length + pendingReviews.length
     : view === "team" && teamTaskTab === "current" ? waitingCount : 0;
   const launchEntry = launchGateCopy(launchGate);
+  const selectView = (next: View) => {
+    if (next === "help") {
+      const nextPath = `/help/${encodeURIComponent(helpArticleId)}`;
+      if (location.pathname !== nextPath) history.pushState({}, "", nextPath);
+    } else if (/^\/help(?:\/|$)/.test(location.pathname)) {
+      history.pushState({}, "", "/");
+    }
+    setView(next);
+  };
   return <div className="app-shell">
     <aside className="sidebar">
       <div className="brand-lockup"><span className="brand-symbol" aria-hidden><svg viewBox="0 0 28 28"><path d="M5.5 20.5 10.7 7l3.3 7.15L17.3 7l5.2 13.5" /><path d="M8.1 16.1h11.8" /></svg></span><span className="brand-copy"><strong>Mae-Flow</strong><small>{session.role === "admin" ? "Management Console" : "Developer Workspace"}</small></span></div>
       <nav className="sidebar-nav" aria-label="视图切换">
         {session.role === "admin" ? <>
           <span className="nav-section-label">管理视角</span>
-          <NavButton view="team" current={view} onSelect={setView} label="团队任务" badge={waitingCount} />
-          <NavButton view="wishes" current={view} onSelect={setView} label="许愿墙" />
-          <NavButton view="knowledge" current={view} onSelect={setView} label="团队资产" />
+          <NavButton view="team" current={view} onSelect={selectView} label="团队任务" badge={waitingCount} />
+          <NavButton view="wishes" current={view} onSelect={selectView} label="许愿墙" />
+          <NavButton view="knowledge" current={view} onSelect={selectView} label="团队资产" />
           <span className="nav-section-label admin-tools">系统管理</span>
-          <NavButton view="users" current={view} onSelect={setView} label="账号管理" />
-          <NavButton view="settings" current={view} onSelect={setView} label="服务设置" />
+          <NavButton view="users" current={view} onSelect={selectView} label="账号管理" />
+          <NavButton view="settings" current={view} onSelect={selectView} label="服务设置" />
         </> : <>
           <span className="nav-section-label">个人工作台</span>
-          <NavButton view="mine" current={view} onSelect={setView} label="我的需求" badge={myWaiting.length + pendingReviews.length} personal />
-          <NavButton view="issues" current={view} onSelect={setView} label="问题处理" />
-          <NavButton view="profile" current={view} onSelect={setView} label="个人设置" />
+          <NavButton view="mine" current={view} onSelect={selectView} label="我的需求" badge={myWaiting.length + pendingReviews.length} personal />
+          <NavButton view="issues" current={view} onSelect={selectView} label="问题处理" />
+          <NavButton view="profile" current={view} onSelect={selectView} label="个人设置" />
           <span className="nav-section-label team-context">团队信息</span>
-          <NavButton view="team" current={view} onSelect={setView} label="团队任务" badge={waitingCount} />
-          <NavButton view="wishes" current={view} onSelect={setView} label="许愿墙" />
-          <NavButton view="knowledge" current={view} onSelect={setView} label="团队资产" />
+          <NavButton view="team" current={view} onSelect={selectView} label="团队任务" badge={waitingCount} />
+          <NavButton view="wishes" current={view} onSelect={selectView} label="许愿墙" />
+          <NavButton view="knowledge" current={view} onSelect={selectView} label="团队资产" />
         </>}
       </nav>
       <div className="sidebar-bottom">
+        <div className="sidebar-help-entry">
+          <NavButton view="help" current={view} onSelect={selectView} label="使用帮助" />
+        </div>
         <DensitySwitch density={density} onChange={changeDensity} />
         <ThemeSwitch theme={theme} onChange={changeTheme} />
         <div className="sidebar-foot session-foot"><span className="account-avatar" aria-hidden>{session.username.slice(0, 1).toUpperCase()}</span><span className="sidebar-account"><strong>{session.username}</strong><small>{session.role === "admin" ? "管理员" : "开发成员"}</small></span><button type="button" className="logout-button" onClick={signOut} title="退出登录" aria-label="退出登录"><svg viewBox="0 0 20 20"><path d="M8 4H4.75A1.25 1.25 0 0 0 3.5 5.25v9.5A1.25 1.25 0 0 0 4.75 16H8M12.5 6.5 16 10l-3.5 3.5M7 10h9" /></svg></button></div>
@@ -691,7 +736,7 @@ export function App() {
     </aside>
 
     <div className="workspace">
-      <header className="workspace-header"><div><div className="eyebrow">MAE-FLOW CLOUD</div><h1>{header.title}</h1><p className={view === "mine" ? "header-context-line" : undefined}>{view === "mine" && <span className="header-user-context">{session.username}</span>}<span>{header.description}</span></p></div><div className="workspace-header-actions">{view !== "wishes" && <TaskSyncIndicator state={taskSync} onRetry={refresh} />}{relevantWaiting > 0 && view !== "users" && view !== "settings" && <div className="header-attention"><span className="attention-pulse" aria-hidden /><span><strong>{relevantWaiting}</strong>{view === "mine" ? " 项需要我处理" : " 项工作等待决策"}</span></div>}{view === "mine" && session.role !== "admin" && <div className="header-launch-gate"><button type="button" className="header-launch" disabled={!launchEntry.enabled} title={launchEntry.title} aria-label={launchEntry.ariaLabel} onClick={() => { if (launchEntry.enabled) setLaunchOpen(true); }}><svg viewBox="0 0 20 20" aria-hidden>{launchEntry.enabled ? <path d="M10 4v12M4 10h12" /> : <><rect x="5" y="8.5" width="10" height="8" rx="1.5" /><path d="M7.5 8.5V6.75a2.5 2.5 0 0 1 5 0V8.5" /></>}</svg><span>发起新任务</span></button>{launchEntry.helper && (launchEntry.action ? <button type="button" className="header-unlock" title={launchEntry.title} onClick={() => launchEntry.action === "profile" ? setView("profile") : void refreshLaunchGate(true)}>{launchEntry.helper}<svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg></button> : <span className="header-unlock is-status" title={launchEntry.title}>{launchEntry.helper}</span>)}</div>}</div></header>
+      <header className="workspace-header"><div><div className="eyebrow">MAE-FLOW CLOUD</div><h1>{header.title}</h1><p className={view === "mine" ? "header-context-line" : undefined}>{view === "mine" && <span className="header-user-context">{session.username}</span>}<span>{header.description}</span></p></div><div className="workspace-header-actions">{view !== "wishes" && view !== "help" && <TaskSyncIndicator state={taskSync} onRetry={refresh} />}{relevantWaiting > 0 && view !== "users" && view !== "settings" && <div className="header-attention"><span className="attention-pulse" aria-hidden /><span><strong>{relevantWaiting}</strong>{view === "mine" ? " 项需要我处理" : " 项工作等待决策"}</span></div>}{view === "mine" && session.role !== "admin" && <div className="header-launch-gate"><button type="button" className="header-launch" disabled={!launchEntry.enabled} title={launchEntry.title} aria-label={launchEntry.ariaLabel} onClick={() => { if (launchEntry.enabled) setLaunchOpen(true); }}><svg viewBox="0 0 20 20" aria-hidden>{launchEntry.enabled ? <path d="M10 4v12M4 10h12" /> : <><rect x="5" y="8.5" width="10" height="8" rx="1.5" /><path d="M7.5 8.5V6.75a2.5 2.5 0 0 1 5 0V8.5" /></>}</svg><span>发起新任务</span></button>{launchEntry.helper && (launchEntry.action ? <button type="button" className="header-unlock" title={launchEntry.title} onClick={() => launchEntry.action === "profile" ? setView("profile") : void refreshLaunchGate(true)}>{launchEntry.helper}<svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg></button> : <span className="header-unlock is-status" title={launchEntry.title}>{launchEntry.helper}</span>)}</div>}</div></header>
       <main className="workspace-main">
         {view === "team" && <section className="team-tasks-workspace">
           <nav className="team-task-tabs" aria-label="团队任务视图" role="tablist">
@@ -801,6 +846,14 @@ export function App() {
         {view === "users" && session.role === "admin"
           && <UsersBoard me={session.username} />}
         {view === "settings" && session.role === "admin" && <SettingsBoard />}
+        {view === "help" && <Suspense fallback={<div className="help-loading">使用帮助加载中…</div>}>
+          <HelpCenter viewer={session}
+            initialArticleId={helpArticleId}
+            onArticleChange={(articleId) => {
+              setHelpArticleId(articleId);
+              history.pushState({}, "", `/help/${encodeURIComponent(articleId)}`);
+            }} />
+        </Suspense>}
       </main>
     </div>
     {launchOpen && <LaunchWorkspace session={session}

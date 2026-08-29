@@ -2,6 +2,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { RootErrorBoundary } from "./RootErrorBoundary";
 import "./style.css";
+import "./help.css";
 // 错误页样式单独一个文件,不并进 style.css:那是全站共享的热点文件,
 // 几路改动同时往文件尾追加会互相踩(实测撞过一次)。样式在这里引,
 // 不在组件里引——组件要能被 node 测试直接 import,而 node 加载不了 .css。

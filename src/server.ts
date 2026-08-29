@@ -173,6 +173,7 @@ const MIME: Record<string, string> = {
   ".woff": "font/woff",
   ".woff2": "font/woff2",
   ".svg": "image/svg+xml",
+  ".png": "image/png",
   ".map": "application/json",
 };
 
@@ -1595,16 +1596,20 @@ export function createTaskServer(
         return json(response, 404, { error: "未知检视接口" });
       }
       // 静态前端(webRoot=React 构建产物):/ 与非 API 路径出文件;
-      // /work/:taskId[/review/:reviewId] 是前端深链，文件系统里当然没有
-      // 这个文件，必须回退 index.html 交给 React 解析。
+      // /work/:taskId[/review/:reviewId] 与 /help[/article] 是前端深链，
+      // 文件系统里当然没有这些文件，必须回退 index.html 交给 React
+      // 解析。/help/*.png 等有扩展名的截图仍按静态资产处理，缺失就 404，
+      // 不能拿 index.html 冒充成功图片。
       // 没配 webRoot 时零构建演示页兜底——两种形态永远有一个能用。
       if (request.method === "GET"
           && (url.pathname === "/" || parts[0] !== "tasks")) {
         const workspaceRoute = parts[0] === "work" && parts.length >= 2;
+        const helpRoute = parts[0] === "help" && extname(url.pathname) === "";
+        const appRoute = workspaceRoute || helpRoute;
         const exactFile = options.webRoot
           ? staticFile(options.webRoot, url.pathname)
           : undefined;
-        const file = exactFile ?? (options.webRoot && workspaceRoute
+        const file = exactFile ?? (options.webRoot && appRoute
           ? staticFile(options.webRoot, "/") : undefined);
         if (file) {
           response.writeHead(200, {
@@ -1618,7 +1623,7 @@ export function createTaskServer(
           });
           return response.end(readFileSync(file));
         }
-        if (url.pathname === "/" || workspaceRoute) {
+        if (url.pathname === "/" || appRoute) {
           response.writeHead(200,
             { "content-type": "text/html; charset=utf-8" });
           return response.end(WEB_PAGE);
