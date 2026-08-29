@@ -116,14 +116,20 @@ class StrategySkipped(RuntimeError):
     """外部数据本轮本就不会产生，不是采集链故障。"""
 
 
+NO_DATA_PATTERN = re.compile(
+    r'^(?:no\s+data(?:\s+found)?|not\s+found)'
+    r'(?:\s|[:：,，;；\-—]|$)',
+    re.IGNORECASE,
+)
+
+
 def is_no_data_payload(value) -> bool:
     """CodeCov 网关的空结果有字符串和包装 JSON 两种形态。"""
     if value is None:
         return True
     if isinstance(value, str):
-        return value.strip().lower() in {
-            '', 'no data', 'no data found', 'not found', 'null',
-        }
+        text = value.strip()
+        return text.lower() in {'', 'null'} or bool(NO_DATA_PATTERN.match(text))
     if isinstance(value, (list, tuple)):
         return not value or all(is_no_data_payload(item) for item in value)
     if isinstance(value, dict):

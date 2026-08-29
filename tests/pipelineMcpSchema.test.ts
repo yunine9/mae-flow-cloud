@@ -244,7 +244,7 @@ class Context:
     def __init__(self):
         self.writes = {}
     def mcp_call(self, gateway, tool, arguments, timeout=60):
-        return 'No data found'
+        return 'No data found for jobId: CodeCCP20-fixture'
     def write_json(self, name, value):
         self.writes[name] = value
     def redact(self, value):
@@ -259,10 +259,11 @@ try:
 except pipeline_log.StrategySkipped as error:
     assert '未产生覆盖率' in str(error)
 assert ctx.writes['coverage_summary.json'] == {
-    'CodeCCP20-fixture': 'empty: No data found'}
+    'CodeCCP20-fixture':
+        'empty: No data found for jobId: CodeCCP20-fixture'}
 `;
 
-test("CodeCov 的 No data found 记为未产生，不冒充链路故障", () => {
+test("CodeCov 带 jobId 的 No data found 记为未产生", () => {
   const result = spawnSync("python3", ["-c", NO_DATA_HARNESS], {
     cwd: ROOT,
     encoding: "utf-8",
