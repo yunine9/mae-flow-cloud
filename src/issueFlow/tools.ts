@@ -431,13 +431,20 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       });
       ctx.persist();
       // 首查不再机械推进:回执带注册表生成的下一阶段简报(交接文案与
-      // 门禁同源),告知"读完单据 complete_stage 收口"。
+      // 门禁同源),告知"读完单据 complete_stage 收口"。单据自带的业务
+      // 关键词(特性/模块)附在简报前,帮 lookup_modules 精准匹配。
+      const moduleHint = detail.featureName || detail.moduleName
+        ? `\n\n业务信息:特性=${detail.featureName ?? "无"}`
+          + `,模块=${detail.moduleName ?? "无"}`
+          + "——请用这些关键词调 lookup_modules 检索业务模块"
+        : "";
       const briefing = fixed && scenario && state.stage === "dts_info"
         ? "\n\n单据详情已获取——通读单据后调 complete_stage 收口本阶段,"
           + "进入拉取代码仓:\n"
           + stageBriefLines(scenario, "prep_repo").join("\n")
         : "";
-      return ok(`问题单 ${detail.ticket} 详情:\n${detail.content}${briefing}`);
+      return ok(`问题单 ${detail.ticket} 详情:\n${detail.content}`
+        + `${moduleHint}${briefing}`);
     },
   }));
 
