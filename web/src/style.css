@@ -8200,3 +8200,30 @@ body, .sidebar, .identity-bar, .launch-copy, .user-create-copy,
   .launch-delivery-mode-section { grid-column: 1; grid-row: auto; }
   .launch-delivery-mode-section .delivery-mode-options { grid-template-columns: repeat(3, 1fr); }
 }
+
+/* 阶段方案弹层(2026-08-29):折叠条目替掉浏览器默认 details marker,
+   与卡片语言一致——标题行手感像可点的,展开箭头随状态旋转。 */
+.execution-plan-activities details > summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  list-style: none;
+}
+.execution-plan-activities details > summary::-webkit-details-marker {
+  display: none;
+}
+.execution-plan-activities details > summary::after {
+  width: 6px;
+  height: 6px;
+  content: "";
+  flex: none;
+  border-right: 1.5px solid var(--faint);
+  border-bottom: 1.5px solid var(--faint);
+  transform: rotate(-45deg);
+  transition: transform var(--ease);
+}
+.execution-plan-activities details[open] > summary::after {
+  transform: rotate(45deg);
+}
+.execution-plan-activities details > p { margin: 6px 0 2px; }
