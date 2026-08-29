@@ -51,31 +51,78 @@ function CredentialGate({ viewer, needRepo, onNavigateProfile }: {
   </div>;
 }
 
-/** 多仓行编辑(两个登记页签共用):整表受控,可增删改,至少留一行。 */
-function RepoRows({ urls, onChange }: {
-  urls: string[];
-  onChange: (next: string[]) => void;
+/** 网管常见默认口令(现场公开默认值,ADR-0003 裁定允许进上下文;与
+ * 平台凭据是两回事):写死前端常量不做配置面(spec #15),PasswordCombo
+ * 下拉一键填,特殊口令仍可自由手输。 */
+const NETMAN_COMMON_PASSWORDS = [
+  "Huawei_123",
+  "Changeme_456",
+  "Changeme_123",
+  "Changeme_789",
+  "Huawei_456",
+  "Huawei_789",
+  "Aa@12345678",
+];
+
+/** PasswordCombo:密码输入框 + 常见口令下拉,点选即填、也可自由手输。
+ * 展开态交互沿 DTS 版本多选框的成熟模式:面板锚定在 wrapper 上,点
+ * 面板外或 Esc 收起。零外部依赖;页面密码与后台密码各用一套实例,
+ * 值由父级受控——父级保证密码不进草稿(共机不残留凭据)。 */
+function PasswordCombo({ value, onChange, name }: {
+  value: string;
+  onChange: (next: string) => void;
+  /** 无障碍名:输入框与触发钮的 aria-label 共用。 */
+  name: string;
 }) {
-  return <>
-    <div className="issue-repo-rows">
-      {urls.map((url, index) => (
-        <div className="issue-repo-row" key={index}>
-          <input value={url} spellCheck={false}
-            placeholder="https://codehub.../repo.git"
-            onChange={(event) => onChange(urls.map(
-              (item, itemIndex) => itemIndex === index
-                ? event.target.value : item))} />
-          {urls.length > 1 && (
-            <button type="button" aria-label={`移除第 ${index + 1} 个仓库`}
-              onClick={() => onChange(urls.filter(
-                (_, itemIndex) => itemIndex !== index))}>×</button>
-          )}
-        </div>
-      ))}
+  const [open, setOpen] = useState(false);
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  // 点面板外或 Esc 收起(与 DTS 版本下拉同一套交互)。
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (event: MouseEvent) => {
+      if (!boxRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+  return <div className="issue-password-combo" ref={boxRef}>
+    <div className="issue-password-row">
+      <input type="password" value={value} aria-label={name}
+        autoComplete="new-password" placeholder="下拉选常见口令,或直接输入"
+        onChange={(event) => onChange(event.target.value)} />
+      <button type="button" className="issue-password-toggle"
+        aria-label={`${name}常见口令`} aria-expanded={open}
+        title="常见默认口令" onClick={() => setOpen((isOpen) => !isOpen)}>▾</button>
     </div>
-    <button type="button" className="issue-repo-add"
-      onClick={() => onChange([...urls, ""])}>＋ 添加代码仓</button>
-  </>;
+    {open && <div className="issue-password-menu" role="listbox"
+      aria-label={`${name}的常见口令`}>
+      {NETMAN_COMMON_PASSWORDS.map((password) => (
+        <button type="button" key={password} role="option"
+          aria-selected={value === password}
+          className={`issue-password-option${value === password ? " on" : ""}`}
+          onClick={() => { onChange(password); setOpen(false); }}>
+          {password}
+        </button>
+      ))}
+    </div>}
+  </div>;
+}
+
+/** 只读仓清单行的短名:剥协议取末段再去 .git(file:// 演示仓同样适用);
+ * 全 URL 挂 title,悬停可见。 */
+function repoLabel(url: string): string {
+  const last = url.replace(/\/+$/, "").split(/[/:]/)
+    .filter(Boolean).pop() ?? url;
+  return last.replace(/\.git$/i, "") || url;
 }
 
 export function IssueRegistration({
@@ -134,43 +181,46 @@ function ManualRegister({
 }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [ticket, setTicket] = useState("");
-  // 多仓登记:关联仓彼此平等(CONTEXT.md 词表),选模块整表带出,可增删改。
-  const [repoUrls, setRepoUrls] = useState<string[]>([""]);
-  // 业务模块:目录非空时是选择器(无单必选),目录空/加载失败回退自由文本。
+  // 业务模块必选(spec #15):仓的唯一来源是模块绑定——手填仓、自由
+  // 文本模块与 DTS 单号一并废除,无单场景只有一个入口:选模块。
   const [moduleId, setModuleId] = useState("");
-  const [moduleName, setModuleName] = useState("");
   const [modules, setModules] = useState<BusinessModule[] | undefined>();
-  const [envOpen, setEnvOpen] = useState(false);
+  // 网管环境四件套常开必填(不再折叠):IP(逗号分隔可多台)/页面账号
+  // (预填 admin 可改)/页面密码/网管后台密码。两个密码不进草稿。
   const [envHosts, setEnvHosts] = useState("");
-  const [envPassword, setEnvPassword] = useState("");
+  const [envPageAccount, setEnvPageAccount] = useState("admin");
+  const [envPagePassword, setEnvPagePassword] = useState("");
+  const [envBackendPassword, setEnvBackendPassword] = useState("");
   const [busy, setBusy] = useState(false);
-  // 探索方式(个人设置,缺省固定流程):只影响本次登记的会话形态。
+  // 探索方式(个人设置,缺省固定流程):模块与环境两模式同等必选,这里
+  // 只影响提交后横幅下的流程提示文案。
   const fixed = viewer.issue_flow !== "free";
   const draftKey = `mae-flow:issue:draft:${viewer.username}`;
-  const moduleCatalog = useMemo(
-    () => (modules ?? []).filter((module) => module.status === "active"),
-    [modules]);
+  // 下拉只收 active 且至少绑一个仓的模块:零仓存量模块发起必被服务端
+  // 打回,不进下拉让它根本没有被选中的机会(spec #15)。
+  const moduleCatalog = useMemo(() => (modules ?? []).filter((module) =>
+    module.status === "active" && module.repositories.length > 0), [modules]);
   const selectedModule = moduleCatalog.find((module) => module.id === moduleId);
   useEffect(() => {
     let alive = true;
-    // 目录读不到按空处理:回退手填仓,不让模块库故障堵死问题发起。
+    // 目录读不到按空处理:发起按钮灰化并指路知识飞轮,不做其他兜底
+    // (spec #15:模块空目录不允许回退手填仓)。
     getBusinessModules()
       .then((catalog) => { if (alive) setModules(catalog.modules); })
       .catch(() => { if (alive) setModules([]); });
     return () => { alive = false; };
   }, []);
+  // 草稿纪律(spec #15):只存 标题/现象/模块/hosts/页面账号;两个密码
+  // 绝不进 localStorage——刷新或换机后密码框为空,共机不残留凭据。
   useEffect(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(draftKey) ?? "null");
       if (saved) {
         setTitle(saved.title ?? "");
         setDescription(saved.description ?? "");
-        setRepoUrls(Array.isArray(saved.repoUrls) && saved.repoUrls.length
-          ? saved.repoUrls.map(String)
-          : saved.repoUrl ? [String(saved.repoUrl)] : [""]);
         setModuleId(typeof saved.moduleId === "string" ? saved.moduleId : "");
-        setModuleName(typeof saved.moduleName === "string" ? saved.moduleName : "");
+        setEnvHosts(typeof saved.hosts === "string" ? saved.hosts : "");
+        if (saved.pageAccount) setEnvPageAccount(String(saved.pageAccount));
       }
     } catch { /* 草稿是旁路,坏了就坏了吧 */ }
   }, [draftKey]);
@@ -178,66 +228,76 @@ function ManualRegister({
     const timer = window.setTimeout(() => {
       try {
         localStorage.setItem(draftKey, JSON.stringify({
-          title, description, repoUrls, moduleId, moduleName,
+          title, description, moduleId,
+          hosts: envHosts, pageAccount: envPageAccount,
         }));
       } catch { /* 同上 */ }
     }, 400);
     return () => window.clearTimeout(timer);
-  }, [draftKey, title, description, repoUrls, moduleId, moduleName]);
+  }, [draftKey, title, description, moduleId, envHosts, envPageAccount]);
 
-  // 个人凭据前置门禁(2026-08-28 拍板):这单填了远端仓就得先有 Git
-  // 身份。登记不再强制带仓(代码仓可推迟到「拉取代码仓」阶段由平台闸
-  // 补定),门只拦"真要碰远端"的登记;服务端在 create 里机械拦,这里
-  // 把拦截面提前到表单,少撞一次墙。
-  const touchRemoteRepo = repoUrls.some((url) => /^https?:\/\//i.test(url.trim()));
+  // 个人凭据前置门禁:模块带出的仓一般是 https 远端,克隆与推送都用
+  // 发起人身份——按模块绑定判断 needRepo;全本地仓(file:// 演示库)
+  // 不拦。服务端 create 里机械拦(判定同源),这里把拦截面提前到表单。
+  const touchRemoteRepo = (selectedModule?.repositories ?? [])
+    .some((url) => /^https?:\/\//i.test(url));
   const credentialBlocked = touchRemoteRepo
     && (!viewer.git_token_hint || !viewer.git_email);
 
-  /** 选模块即带仓:用模块绑定整表替换仓库行(可删可改);清空模块回到单行。
-   * 模块绑定可能过期,所以带出后仍然全部可编辑。 */
-  function changeModule(nextId: string) {
-    setModuleId(nextId);
-    const module = moduleCatalog.find((item) => item.id === nextId);
-    setRepoUrls(nextId && module?.repositories.length
-      ? [...module.repositories]
-      : [""]);
-  }
+  // 发起按钮的灰化口径(spec 验收):目录为空/未选模块/凭据缺失/提交中。
+  // 字段缺内容不灰按钮——提交时逐项给友好指路文案,让人知道卡在哪。
+  const catalogEmpty = modules !== undefined && moduleCatalog.length === 0;
+  const submitDisabled = busy || credentialBlocked
+    || moduleCatalog.length === 0 || !selectedModule;
+  const blockedHint = modules === undefined
+    ? "正在加载业务模块目录…"
+    : catalogEmpty
+      ? "模块目录为空——先到「知识飞轮 → 业务模块」登记并绑定代码仓,再回来发起。"
+      : !selectedModule
+        ? "先选择业务模块:代码仓按模块绑定自动带出,不再手填。"
+        : undefined;
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (busy) return;
+    if (busy || submitDisabled) return;
     if (!title.trim()) {
       onError("问题标题必填——一句话说清现象");
       return;
     }
-    if (fixed && !ticket.trim() && moduleCatalog.length > 0 && !moduleId) {
-      onError("无单场景必须先选业务模块——平台按模块绑定的代码仓拉取现场。"
-        + "模块不在列表?先到「知识飞轮 → 业务模块」登记,或填写单号按有单流程走");
+    if (!description.trim()) {
+      onError("现象描述必填——发生条件、影响范围、复现步骤,写得越具体 AI 少走弯路");
       return;
     }
-    const repos = [...new Set(repoUrls.map((url) => url.trim()).filter(Boolean))];
-    // 固定流程不再强制登记带仓(2026-08-28):缺仓时平台会在「拉取代码
-    // 仓」阶段举卡让你补定(AI 识别/填地址/跳过三选一),这里不拦。
+    const hosts = envHosts.split(/[,，\s]+/).map((host) => host.trim())
+      .filter(Boolean);
+    if (!hosts.length) {
+      onError("网管环境IP必填——问题发生所在的网管,多台用逗号分隔");
+      return;
+    }
+    if (!envPagePassword.trim()) {
+      onError("页面密码必填——网管页面登录口令,可从输入框旁的下拉选常见默认值");
+      return;
+    }
+    if (!envBackendPassword.trim()) {
+      onError("网管后台密码必填——拉日志/换库的现场凭据,同样可下拉选常见默认值");
+      return;
+    }
     setBusy(true);
     try {
-      const hosts = envOpen
-        ? envHosts.split(/[,，\s]+/).map((host) => host.trim()).filter(Boolean)
-        : [];
-      const environment = envOpen && hosts.length && envPassword
-        ? { hosts, password: envPassword }
-        : undefined;
       const created = await createIssue({
         title: title.trim(),
-        description: description.trim() || undefined,
-        ticket: ticket.trim() || undefined,
-        ...(repos.length ? { repo_urls: repos } : {}),
-        ...(moduleId ? { module_id: moduleId } : {}),
-        ...(!moduleId && moduleName.trim() ? { module: moduleName.trim() } : {}),
-        ...(environment ? { environment } : {}),
+        description: description.trim(),
+        module_id: moduleId,
+        environment: {
+          hosts,
+          page_account: envPageAccount.trim() || undefined,
+          page_password: envPagePassword,
+          backend_password: envBackendPassword,
+        },
       });
-      setTitle(""); setDescription(""); setTicket("");
-      setRepoUrls([""]); setModuleId(""); setModuleName("");
-      setEnvHosts(""); setEnvPassword("");
+      setTitle(""); setDescription(""); setModuleId("");
+      setEnvHosts(""); setEnvPageAccount("admin");
+      setEnvPagePassword(""); setEnvBackendPassword("");
       onCreated(created);
     } catch (reason) {
       onError(String(reason instanceof Error ? reason.message : reason));
@@ -247,80 +307,88 @@ function ManualRegister({
   }
 
   return <form className="issue-form" onSubmit={submit}>
-    <label className="issue-field wide">
-      <span>问题标题 <i>必填</i></span>
-      <input value={title} placeholder="一句话说清现象,如:播放器偶发黑屏"
-        onChange={(event) => setTitle(event.target.value)} />
-    </label>
-    <label className="issue-field wide">
-      <span>现象描述</span>
-      <textarea rows={3} value={description}
-        placeholder="发生条件、影响范围、复现步骤;有日志片段也可以贴进来"
-        onChange={(event) => setDescription(event.target.value)} />
-    </label>
-    <label className="issue-field">
-      <span>DTS 单号 <i>{fixed ? "无单场景可留空" : "可后补"}</i></span>
-      <input value={ticket} placeholder={fixed
-        ? "测试/开发自行定位可留空;结论后可关联转正"
-        : "先研究后提单可留空"}
-        onChange={(event) => setTicket(event.target.value)} />
-    </label>
-    <label className="issue-field">
-      <span>业务模块 <i>{fixed && moduleCatalog.length > 0 ? "无单必选" : "可选"}</i></span>
-      {moduleCatalog.length > 0
-        ? <select value={moduleId}
-            onChange={(event) => changeModule(event.target.value)}>
-            <option value="">不选择模块(手动填仓)</option>
+    <div className="issue-group wide">
+      <span className="issue-group-title">问题信息</span>
+      <div className="issue-group-body">
+        <label className="issue-field wide">
+          <span>问题标题 <i>必填</i></span>
+          <input value={title} placeholder="一句话说清现象,如:播放器偶发黑屏"
+            onChange={(event) => setTitle(event.target.value)} />
+        </label>
+        <label className="issue-field wide">
+          <span>现象描述 <i>必填</i></span>
+          <textarea rows={3} value={description}
+            placeholder="发生条件、影响范围、复现步骤;有日志片段也可以贴进来"
+            onChange={(event) => setDescription(event.target.value)} />
+        </label>
+        <label className="issue-field wide">
+          <span>业务模块 <i>必选</i></span>
+          <select value={moduleId}
+            onChange={(event) => setModuleId(event.target.value)}>
+            <option value="" disabled>选择业务模块——代码仓按绑定自动带出</option>
             {moduleCatalog.map((module) => (
               <option key={module.id} value={module.id}>
                 {module.name}(绑 {module.repositories.length} 个仓)
               </option>
             ))}
           </select>
-        : <input value={moduleName} maxLength={60}
-            placeholder="如:媒体中心(仅展示与报告引用)"
-            onChange={(event) => setModuleName(event.target.value)} />}
-      {selectedModule && !selectedModule.repositories.length && (
-        <small>该模块未绑定代码仓,请手动填写仓库地址</small>
-      )}
-    </label>
-    <div className="issue-field">
-      <span>代码仓地址 <i>{fixed
-        ? selectedModule?.repositories.length ? "模块带出,可增删改" : "可选,可后补(拉取代码仓阶段再定)"
-        : "可选"}</i></span>
-      <RepoRows urls={repoUrls} onChange={setRepoUrls} />
+          {catalogEmpty && <small role="alert">
+            模块目录为空——先到「知识飞轮 → 业务模块」登记并绑定代码仓,再回来发起。
+          </small>}
+        </label>
+        {selectedModule && <div className="issue-field wide">
+          <span>将拉取的代码仓 <i>模块「{selectedModule.name}」的绑定清单,只读</i></span>
+          <ul className="issue-module-repos">
+            {selectedModule.repositories.map((url) => (
+              <li key={url} title={url}>{repoLabel(url)}</li>
+            ))}
+          </ul>
+          <small>登记后按模块绑定拉取 {selectedModule.repositories.length} 个仓;
+            要增删仓去「知识飞轮 → 业务模块」。</small>
+        </div>}
+      </div>
     </div>
-    <div className="issue-field wide">
-      <button type="button" className="issue-env-toggle"
-        aria-expanded={envOpen}
-        onClick={() => setEnvOpen((open) => !open)}>
-        网管环境(拉日志/换库){envOpen ? " −" : " +"}
-      </button>
-      {envOpen && <div className="issue-env-fields">
-        <label className="issue-field">
-          <span>服务器地址(可多个,逗号分隔)</span>
-          <input value={envHosts} placeholder="60.14.46.16, 60.14.46.17"
+    <div className="issue-group wide">
+      <span className="issue-group-title">网管环境 <i>四项全部必填</i></span>
+      <div className="issue-group-body">
+        <label className="issue-field wide">
+          <span>网管环境IP <i>必填,多台用逗号分隔</i></span>
+          <input value={envHosts} spellCheck={false}
+            placeholder="60.14.46.16, 60.14.46.17"
             onChange={(event) => setEnvHosts(event.target.value)} />
         </label>
         <label className="issue-field">
-          <span>共用密码(sopuser/ossuser/ossadm)</span>
-          <input type="password" value={envPassword} autoComplete="new-password"
-            onChange={(event) => setEnvPassword(event.target.value)} />
+          <span>页面账号 <i>网管页面登录名</i></span>
+          <input value={envPageAccount} placeholder="admin"
+            onChange={(event) => setEnvPageAccount(event.target.value)} />
         </label>
-      </div>}
+        <div className="issue-field">
+          <span>页面密码 <i>必填</i></span>
+          <PasswordCombo name="页面密码" value={envPagePassword}
+            onChange={setEnvPagePassword} />
+        </div>
+        <div className="issue-field">
+          <span>网管后台密码 <i>必填,拉日志/换库用</i></span>
+          <PasswordCombo name="网管后台密码" value={envBackendPassword}
+            onChange={setEnvBackendPassword} />
+        </div>
+        <small className="issue-group-note">
+          页面凭据本期随会话记录;后台密码供抓日志/部署。两组口令只存服务端
+          加密库,不进浏览器草稿。
+        </small>
+      </div>
     </div>
     <CredentialGate viewer={viewer} needRepo={touchRemoteRepo}
       onNavigateProfile={onNavigateProfile} />
     <div className="issue-form-actions">
-      <button type="submit" className="primary"
-        disabled={busy || credentialBlocked}>
+      <button type="submit" className="primary" disabled={submitDisabled}>
         {busy ? "登记中…" : "登记并开始处理"}
       </button>
       <span className="issue-form-hint">
-        {fixed
-          ? "固定流程:有单走七阶段,无单先定位出结论(是问题→挂起,关联单号后转正继续)。"
-          : "自由探索:AI 先做只读研究;非问题也是合法结论,不强制走编码。"}
-        (探索方式在「个人设置」切换)
+        {blockedHint ?? (fixed
+          ? "固定流程:无单先定位出结论(是问题→挂起,关联单号后转正继续)。"
+          : "自由探索:AI 先做只读研究;非问题也是合法结论,不强制走编码。")}
+        {!blockedHint && "(探索方式在「个人设置」切换)"}
       </span>
     </div>
   </form>;

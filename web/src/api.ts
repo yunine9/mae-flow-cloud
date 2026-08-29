@@ -3019,6 +3019,17 @@ export function getIssue(id: string): Promise<IssueDetail> {
   return issueFetch(`/issues/${encodeURIComponent(id)}`);
 }
 
+/** 登记侧网管环境四件套(wire 形,与服务端 service.ts 的
+ * normalizeEnvironmentInput 同一把尺):hosts 支持多台;页面账号缺省
+ * admin 由服务端归一;两个密码只进服务端 vault,任何接口不回显。
+ * 无单登记服务端强制 module_id + 环境(spec #15 的 wire 无兼容包袱)。 */
+export interface IssueRegistrationEnvironment {
+  hosts: string[];
+  page_account?: string;
+  page_password: string;
+  backend_password: string;
+}
+
 export function createIssue(input: {
   title: string;
   description?: string;
@@ -3029,9 +3040,10 @@ export function createIssue(input: {
   repo_urls?: string[];
   baseline?: string;
   module?: string;
-  /** 登记选定的业务模块 ID:后端校验存在且 active,名称派生 module。 */
+  /** 登记选定的业务模块 ID:后端校验存在且 active,名称派生 module。
+   * 无单号登记服务端强制必带,并按模块绑定整表带出仓。 */
   module_id?: string;
-  environment?: IssueEnvironmentForm;
+  environment?: IssueRegistrationEnvironment;
 }): Promise<IssueSummary> {
   return issueFetch("/issues", {
     method: "POST",
