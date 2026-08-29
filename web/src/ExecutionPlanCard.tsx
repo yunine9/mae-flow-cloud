@@ -41,7 +41,8 @@ export function ExecutionPlanCard({ plan, warning, onSuggest }: {
   return (
     <section className="execution-plan-card" aria-labelledby="execution-plan-title">
       <header>
-        <div className="execution-plan-mark" aria-hidden>策</div>
+        {/* 原有"策"字装饰角标已摘:这张卡现在只出现在阶段弹层里,
+            弹层标题已写明"XX · 执行方案",角标是纯噪声(用户点破)。 */}
         <div>
           <span>{plan.step.phase} · 当前步骤 {plan.step.title}</span>
           <strong id="execution-plan-title">{plan.strategy.title}</strong>
