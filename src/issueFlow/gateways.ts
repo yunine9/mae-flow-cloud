@@ -307,6 +307,10 @@ export interface DtsTicketDetail {
   version?: string;
   url?: string;
   submitter?: string;
+  /** 特性名(batchQueryTicket 的 sFeatureNoName,需 fields 显式请求)。 */
+  featureName?: string;
+  /** 模块名(batchQueryTicket 的 sModuleNoName,需 fields 显式请求)。 */
+  moduleName?: string;
 }
 
 export interface DtsGateway {
@@ -435,7 +439,9 @@ export class McpDtsGateway implements DtsGateway {
       this.gateway.toolName("detail", "batchQueryTicket"),
       {
         dtsNos: [ticket],
-        fields: [],
+        // 特性/模块名是业务模块匹配的关键词来源,batchQueryTicket 必须
+        // 在 fields 里显式请求才返回(实测缺省不给)。
+        fields: ["sFeatureNoName", "sModuleNoName"],
         attachmentView: false,
       },
     );
@@ -477,6 +483,10 @@ export class McpDtsGateway implements DtsGateway {
             url: outerLink,
             submitter: first.creator !== undefined
               ? String(first.creator) : undefined,
+            featureName: first.sFeatureNoName !== undefined
+              ? String(first.sFeatureNoName) : undefined,
+            moduleName: first.sModuleNoName !== undefined
+              ? String(first.sModuleNoName) : undefined,
           };
         }
       }

@@ -51,6 +51,7 @@ import {
 } from "./materials.ts";
 import type { DtsGateway } from "./gateways.ts";
 import { isTerminal } from "./state.ts";
+import { listBusinessModules } from "../businessModuleLibrary.ts";
 
 export interface IssueViewer {
   username: string;
@@ -161,6 +162,78 @@ function requireDts(dts: DtsGateway | undefined): DtsGateway {
   return dts;
 }
 
+/** DTS 单据自动匹配业务模块:用 sFeatureNoName / sModuleNoName 拆出
+ * 关键词,与模块库的 name/id/description 做匹配。唯一高置信命中时
+ * 返回模块 ID;多候选或零候选返回 undefined(留给 Agent 后续处理)。 */
+function matchDtsToModule(
+  featureName: string | undefined,
+  moduleName: string | undefined,
+  dataDir: string,
+): string | undefined {
+  if (!dataDir) return undefined;
+  const keywords = extractDtsKeywords(featureName, moduleName);
+  if (!keywords.length) return undefined;
+  const { modules } = listBusinessModules(dataDir);
+  const active = modules.filter((m) => m.status === "active");
+  if (!active.length) return undefined;
+
+  interface Scored { id: string; name: string; score: number; matchedBy: string[] }
+  const scored: Scored[] = [];
+  for (const mod of active) {
+    const nameLower = mod.name.toLowerCase();
+    const descLower = mod.description.toLowerCase();
+    const idLower = mod.id.toLowerCase();
+    let score = 0;
+    const matchedBy: string[] = [];
+    for (const kw of keywords) {
+      const kwLower = kw.toLowerCase();
+      if (nameLower === kwLower) { score += 100; matchedBy.push(`name=「${kw}」`); continue; }
+      if (nameLower.includes(kwLower)) { score += 50; matchedBy.push(`name∋「${kw}」`); continue; }
+      if (idLower === kwLower) { score += 90; matchedBy.push(`id=「${kw}」`); continue; }
+      if (idLower.includes(kwLower)) { score += 40; matchedBy.push(`id∋「${kw}」`); continue; }
+      if (descLower.includes(kwLower)) { score += 20; matchedBy.push(`desc∋「${kw}」`); continue; }
+      // 中文逐字匹配
+      const chars = [...kwLower];
+      let charHits = 0;
+      for (const ch of chars) {
+        if (nameLower.includes(ch) || descLower.includes(ch)) charHits++;
+      }
+      if (charHits >= chars.length * 0.6 && charHits > 0) {
+        score += Math.round(charHits / chars.length * 10);
+        matchedBy.push(`部分字∋「${kw}」(${charHits}/${chars.length})`);
+      }
+    }
+    if (score > 0) scored.push({ id: mod.id, name: mod.name, score, matchedBy });
+  }
+  scored.sort((a, b) => b.score - a.score);
+  // 唯一高置信命中(得分 >= 40 且远超第二名):自动绑定
+  if (scored.length === 1 && scored[0].score >= 40) return scored[0].id;
+  if (scored.length >= 2 && scored[0].score >= 40
+      && scored[0].score > scored[1].score * 2) return scored[0].id;
+  return undefined;
+}
+
+/** 从 DTS 的 sFeatureNoName / sModuleNoName 中提取关键词。
+ * 中英文混合拆分:"【Access】跟踪管理Fars" → ["Access", "跟踪管理", "Fars"] */
+function extractDtsKeywords(
+  featureName?: string,
+  moduleName?: string,
+): string[] {
+  const parts: string[] = [];
+  for (const text of [featureName, moduleName]) {
+    if (!text?.trim()) continue;
+    const cleaned = text.replace(/[【】\[\]()（）]/g, " ").replace(/\s+/g, " ").trim();
+    const rawParts = cleaned.split(/[\s,，、：:；;]+/);
+    for (const part of rawParts) {
+      const segments = part.match(/[\u4e00-\u9fff]+|[A-Za-z][A-Za-z0-9._-]*/g);
+      if (segments) {
+        for (const seg of segments) { if (seg.length >= 2) parts.push(seg); }
+      } else if (part.length >= 2) { parts.push(part); }
+    }
+  }
+  return parts;
+}
+
 /** 处理 /issues/* 请求;返回 false 表示与问题域无关。 */
 export async function handleIssueRoutes(
   request: IncomingMessage,
@@ -206,19 +279,37 @@ export async function handleIssueRoutes(
         });
       }
       const body = await readBody(request);
+      const source = body.source === "dts" ? "dts" as const : "manual" as const;
+      const ticket = body.ticket ? String(body.ticket) : undefined;
+      // DTS 来源自动匹配业务模块:前端未显式选模块时,用 DTS 单据的
+      // sFeatureNoName/sModuleNoName 与模块库做匹配;唯一高置信命中时
+      // 自动绑定,多候选或零候选时留给 Agent 在 prep_repo 阶段处理。
+      let autoModuleId: string | undefined;
+      if (source === "dts" && ticket && !body.module_id && routeOptions.dts) {
+        try {
+          const detail = await routeOptions.dts.detail(ticket);
+          autoModuleId = matchDtsToModule(
+            detail.featureName, detail.moduleName,
+            routeOptions.issueFlow?.dataDir ?? "",
+          );
+        } catch {
+          // 匹配失败不阻断发起,留给 Agent 处理。
+        }
+      }
       const created = issueFlow.create({
         account: String(body.account ?? viewer?.username ?? ""),
         title: String(body.title ?? ""),
         description: body.description === undefined
           ? undefined : String(body.description),
-        source: body.source === "dts" ? "dts" : "manual",
-        ...(body.ticket ? { ticket: String(body.ticket) } : {}),
+        source,
+        ...(ticket ? { ticket } : {}),
         ...(body.repo_url ? { repoUrl: String(body.repo_url) } : {}),
         ...(Array.isArray(body.repo_urls)
           ? { repoUrls: body.repo_urls.map(String) } : {}),
         ...(body.baseline ? { baseline: String(body.baseline) } : {}),
         ...(body.module ? { module: String(body.module) } : {}),
         ...(body.module_id ? { moduleId: String(body.module_id) } : {}),
+        ...(autoModuleId ? { moduleId: autoModuleId } : {}),
         ...(body.environment ? {
           environment: {
             name: body.environment.name === undefined
