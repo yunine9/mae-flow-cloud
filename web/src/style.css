@@ -8957,14 +8957,23 @@ body[data-view="issues"] .nav-item.on { box-shadow: inset 3px 0 #c87873; }
 
 /* 决策背景折叠:长清单默认只露开头,重点(要我做什么、较上次变了
    什么)在前几行;展开后内滚,不再把整卡撑成一屏纪律条文。 */
-.waiting-context { max-height: none; overflow: visible; }
+/* 工作台曾单独给外层设 280px 上限；展开正文却可到 440px，后面的
+   问题仍按 280px 起排，结果直接压在背景文字上。外层必须按正文真实
+   高度占位，滚动只发生在正文内部。带上工作台选择器以覆盖旧规则。 */
+.waiting-context,
+.ws-decision .waiting-context { max-height: none; overflow: visible; }
 .waiting-context-body.clamped {
   max-height: 190px;
   overflow: hidden;
   -webkit-mask-image: linear-gradient(180deg, #000 72%, transparent);
   mask-image: linear-gradient(180deg, #000 72%, transparent);
 }
-.waiting-context-body:not(.clamped) { max-height: 440px; overflow-y: auto; }
+.waiting-context-body:not(.clamped) {
+  max-height: 440px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
 .context-toggle {
   margin-top: 6px;
   padding: 4px 10px;
