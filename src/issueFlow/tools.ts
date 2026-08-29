@@ -418,7 +418,13 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
           `DTS 详情已获取(单据 ${detail.ticket}),进入拉取代码仓阶段`);
       }
       ctx.persist();
-      return ok(`问题单 ${detail.ticket} 详情:\n${detail.content}`
+      // 向 Agent 提示业务关键词,帮助 lookup_modules 精准匹配
+      const moduleHint = detail.featureName || detail.moduleName
+        ? `\n\n业务信息:特性=${detail.featureName ?? "无"}`
+          + `,模块=${detail.moduleName ?? "无"}`
+          + "——请用这些关键词调 lookup_modules 检索业务模块"
+        : "";
+      return ok(`问题单 ${detail.ticket} 详情:\n${detail.content}${moduleHint}`
         + (firstPull
           ? "\n\n平台已推进到「拉取代码仓」阶段:先 lookup_modules 按单据里的"
             + "业务关键词检索模块,命中就 bind_module 登记它的代码仓,再逐个 "

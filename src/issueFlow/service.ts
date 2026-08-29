@@ -326,9 +326,12 @@ export class IssueFlowService {
   private readonly issuesRoot: string;
   private readonly live = new Map<string, LiveIssue>();
   private readonly turning = new Set<string>();
+  /** 数据目录(业务模块库等子系统的根),供路由层读取。 */
+  readonly dataDir: string;
 
   constructor(options: IssueFlowOptions) {
     this.options = options;
+    this.dataDir = options.dataDir;
     this.vault = options.vault
       ?? new IssueEnvironmentVault(options.dataDir);
     this.issuesRoot = join(options.dataDir, "issues");

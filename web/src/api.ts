@@ -2990,6 +2990,8 @@ export interface DtsTicketDetail {
   version?: string;
   url?: string;
   submitter?: string;
+  /** 状态名:远程查单入列要靠它过"开发人员实施修改"可拉取判定。 */
+  status?: string;
 }
 
 export interface IssueEnvironmentForm {
