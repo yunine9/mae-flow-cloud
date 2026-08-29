@@ -1120,10 +1120,19 @@ test("业务模块映射(2026-08-28 v2):bind_module 只登记,拉仓靠 pull_rep
     id: "media-core", name: "媒体核心", description: "播放与转码",
     owner: "dev", repositories: [origin],
   }, "tester");
-  createBusinessModule(dataDir, {
-    id: "empty-mod", name: "空模块", description: "没绑仓",
-    owner: "dev", repositories: [],
-  }, "tester");
+  // 保存口强制模块至少绑一仓,零仓夹具只能直接落盘——这里钉的是
+  // bind 侧对存量零仓数据的兜底打回。
+  mkdirSync(join(dataDir, "business-modules", "empty-mod"), { recursive: true });
+  writeFileSync(
+    join(dataDir, "business-modules", "empty-mod", "module.json"),
+    `${JSON.stringify({
+      id: "empty-mod", name: "空模块", description: "没绑仓",
+      owner: "dev", maintainers: [], repositories: [], status: "active",
+      revision: 1, assets: [],
+      created_at: new Date().toISOString(), created_by: "tester",
+      updated_at: new Date().toISOString(), updated_by: "tester",
+    }, null, 2)}\n`,
+  );
   const script: Scene[] = [
     { tool: { name: "lookup_modules", input: { keyword: "媒体" } } },
     { tool: { name: "bind_module", input: { module_id: "media-core" } } },

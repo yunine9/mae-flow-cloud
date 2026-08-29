@@ -11,6 +11,7 @@ import {
   createBusinessModule,
   listBusinessModules,
   publishBusinessKnowledgeAsset,
+  readBusinessModule,
   readBusinessKnowledgeAsset,
   updateBusinessModule,
 } from "../src/businessModuleLibrary.ts";
@@ -82,6 +83,39 @@ test("业务模块由管理员指定 Owner；知识正文按版本发布且归�
     id: "../escape", name: "坏模块", description: "越界",
     owner: "owner-a",
   }, "admin-a"), BusinessModuleError);
+});
+
+test("业务模块保存与更新强制至少绑定一个代码仓", () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-business-module-min-repo-"));
+  assert.throws(() => createBusinessModule(dataDir, {
+    id: "empty-repos", name: "零仓模块", description: "没绑任何仓",
+    owner: "owner-a", repositories: [],
+  }, "admin-a"), /业务模块必须至少绑定一个代码仓/);
+  assert.throws(() => createBusinessModule(dataDir, {
+    id: "blank-repos", name: "空白仓模块", description: "仓列表全是空白项",
+    owner: "owner-a", repositories: ["  ", "\t"],
+  }, "admin-a"), /业务模块必须至少绑定一个代码仓/);
+  assert.equal(listBusinessModules(dataDir).modules.length, 0,
+    "被拦截的零仓模块不能落盘");
+
+  const created = createBusinessModule(dataDir, {
+    id: "payment-core", name: "支付核心", description: "统一支付边界",
+    owner: "owner-a",
+    repositories: ["https://code.example/pay.git",
+      "https://code.example/refund.git"],
+  }, "admin-a");
+  assert.deepEqual(created.repositories,
+    ["https://code.example/pay.git", "https://code.example/refund.git"],
+    "多仓正常保存不受下限拦截影响");
+  assert.throws(() => updateBusinessModule(dataDir, created.id, {
+    repositories: [],
+  }, "owner-a"), /业务模块必须至少绑定一个代码仓/);
+  assert.throws(() => updateBusinessModule(dataDir, created.id, {
+    repositories: [" "],
+  }, "owner-a"), /业务模块必须至少绑定一个代码仓/);
+  assert.deepEqual(readBusinessModule(dataDir, created.id).repositories,
+    ["https://code.example/pay.git", "https://code.example/refund.git"],
+    "清空仓的更新被拦后存量绑定原样保留");
 });
 
 test("HTTP 权限：admin 创建/转移 Owner；Owner 管资产；其他开发者只读", async () => {
