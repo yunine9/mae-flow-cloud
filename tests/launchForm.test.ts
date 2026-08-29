@@ -76,7 +76,15 @@ test("业务模块目录不返回正文；下单只交 ID，服务端固定当�
   const options = service.launchOptions();
   assert.deepEqual(options.business_modules.map((item) => ({
     id: item.id, owner: item.owner, assets: item.assets,
-  })), [{ id: "orders", owner: "owner-a", assets: 1 }]);
+    knowledge: item.knowledge,
+  })), [{
+    id: "orders", owner: "owner-a", assets: 1,
+    knowledge: [{
+      id: "state", title: "状态机", summary: "状态迁移约束",
+      when_to_use: "改订单状态时", form: "document",
+      repositories: [], version: 1,
+    }],
+  }]);
   assert.doesNotMatch(JSON.stringify(options), /MODULE_BODY_MUST_NOT_BE_IN_CATALOG/);
 
   const task = service.create("调整订单状态", {

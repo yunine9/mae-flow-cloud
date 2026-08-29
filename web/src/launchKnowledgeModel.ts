@@ -19,6 +19,21 @@ export interface LaunchTeamSkill {
   path: string;
 }
 
+export interface LaunchBusinessKnowledge {
+  id: string;
+  title: string;
+  summary: string;
+  when_to_use: string;
+  form: "document" | "skill" | "rule" | "example";
+  repositories: string[];
+  version: number;
+}
+
+export interface MatchedBusinessKnowledge extends LaunchBusinessKnowledge {
+  module_id: string;
+  module_name: string;
+}
+
 type UnknownRecord = Record<string, unknown>;
 
 function record(value: unknown): UnknownRecord | undefined {
@@ -35,6 +50,40 @@ function strings(value: unknown): string[] {
   return [...new Set(value
     .filter((item): item is string => typeof item === "string")
     .map((item) => item.trim()).filter(Boolean))];
+}
+
+function repositoryIdentity(value: string): string {
+  return value.trim().replace(/\/+$/, "").replace(/\.git$/i, "").toLowerCase();
+}
+
+/**
+ * 预览必须和创建任务时的模块知识匹配口径一致：只看已选模块，知识若
+ * 限定了仓库，则至少命中当前任务的一个仓库。旧服务没有 knowledge
+ * 字段时返回空清单，不能拿模块总数冒充本任务会实际使用的数量。
+ */
+export function matchBusinessModuleKnowledge(
+  modules: ReadonlyArray<{
+    id: string;
+    name: string;
+    knowledge?: readonly LaunchBusinessKnowledge[];
+  }>,
+  selectedModuleIds: readonly string[],
+  repositories: readonly string[],
+): MatchedBusinessKnowledge[] {
+  const selected = new Set(selectedModuleIds);
+  const taskRepositories = new Set(repositories
+    .map(repositoryIdentity).filter(Boolean));
+  return modules.filter((module) => selected.has(module.id))
+    .flatMap((module) => (module.knowledge ?? [])
+      .filter((item) => !item.repositories.length
+        || item.repositories.some((repository) =>
+          taskRepositories.has(repositoryIdentity(repository))))
+      .map((item) => ({
+        ...item,
+        repositories: [...item.repositories],
+        module_id: module.id,
+        module_name: module.name,
+      })));
 }
 
 /**

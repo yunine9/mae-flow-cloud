@@ -12,7 +12,11 @@ import {
   RepositoryTechnologyPicker,
   type RepositoryTechnologyDraft,
 } from "./RepositoryTechnologyPicker";
-import { normalizeLaunchKnowledgeCatalog } from "./launchKnowledgeModel";
+import {
+  matchBusinessModuleKnowledge,
+  normalizeLaunchKnowledgeCatalog,
+} from "./launchKnowledgeModel";
+import { knowledgeLanguageLabel } from "./KnowledgeLanguages";
 import {
   SchemeSelector,
   type WorkflowSchemeSelection,
@@ -62,6 +66,34 @@ function readStored<T>(key: string): T | undefined {
 
 function repositoryIdentity(value: string): string {
   return value.trim().replace(/\/+$/, "").replace(/\.git$/i, "").toLowerCase();
+}
+
+const KNOWLEDGE_FORM_LABEL = {
+  document: "文档",
+  skill: "Skill",
+  rule: "规则",
+  example: "示例",
+} as const;
+
+function LaunchKnowledgeRow({ form, title, summary, whenToUse, scope }: {
+  form: keyof typeof KNOWLEDGE_FORM_LABEL;
+  title: string;
+  summary: string;
+  whenToUse: string;
+  scope: string;
+}) {
+  return <article className="launch-knowledge-row">
+    <span className={`launch-knowledge-form ${form}`}>
+      {KNOWLEDGE_FORM_LABEL[form]}</span>
+    <span className="launch-knowledge-copy">
+      <strong>{title}</strong>
+      <small>{summary || whenToUse || "暂无说明"}</small>
+      {summary && whenToUse && <em>适合：{whenToUse}</em>}
+    </span>
+    <span className="launch-knowledge-scope">
+      <small>匹配依据</small><strong>{scope}</strong>
+    </span>
+  </article>;
 }
 
 export function LaunchWorkspace({
@@ -176,13 +208,26 @@ export function LaunchWorkspace({
         selectedBusinessModuleIds.includes(id))));
   }, [knowledgeCatalog, repos, repositoryTechnologies,
     selectedBusinessModuleIds]);
+  const matchingModuleKnowledge = useMemo(() =>
+    matchBusinessModuleKnowledge(businessModules,
+      selectedBusinessModuleIds, repos),
+  [businessModules, selectedBusinessModuleIds, repos]);
+  const businessModuleNames = useMemo(() => new Map(
+    businessModules.map((module) => [module.id, module.name])),
+  [businessModules]);
+  const describeKnowledgeScope = (
+    moduleIds: string[], technologies: string[], scopedRepositories: string[],
+  ) => {
+    const scopes = moduleIds.map((id) => businessModuleNames.get(id) ?? id);
+    scopes.push(...technologies.map(knowledgeLanguageLabel));
+    if (scopedRepositories.length) scopes.push("当前代码仓");
+    return scopes.join(" · ") || "团队通用";
+  };
   const matchedTeamKnowledgeCount = matchingEngineeringKnowledge.length
     + matchingTeamSkills.length;
   const deliveryLocationVisible = !!options
     && (options.repo.enabled || options.ticket.enabled || options.baseline.enabled);
-  const selectedModuleKnowledgeCount = businessModules
-    .filter((module) => selectedBusinessModuleIds.includes(module.id))
-    .reduce((sum, module) => sum + module.assets, 0);
+  const selectedModuleKnowledgeCount = matchingModuleKnowledge.length;
   const selectedKnowledgeCount = selectedModuleKnowledgeCount
     + matchedTeamKnowledgeCount;
 
@@ -762,25 +807,69 @@ export function LaunchWorkspace({
               {options && <section className="launch-form-section launch-task-resources">
                 <div className="launch-section-head"><i>知</i><div>
                   <strong>本任务知识</strong>
-                  <small>平台按任务范围自动装配，Agent 相关时按需读取</small>
+                  <small>自动匹配，不用手选；下面可以核对具体名单</small>
                 </div><em>自动匹配</em></div>
                 <div className="launch-resource-summary">
                   <span><strong>{selectedModuleKnowledgeCount}</strong>
                     <small>模块知识</small></span>
                   <span><strong>{matchedTeamKnowledgeCount}</strong>
-                    <small>团队通用</small></span>
+                    <small>团队资产</small></span>
                   <p>{selectedBusinessModuleIds.length
                     ? `来自 ${selectedBusinessModuleIds.map((id) =>
                         businessModules.find((item) => item.id === id)?.name)
                       .filter(Boolean).join("、")} 等已关联抽屉`
-                    : "尚未关联业务模块；仍会使用匹配的团队通用知识"}</p>
+                    : "尚未关联业务模块；仍会使用匹配的团队知识和 Skill"}</p>
+                </div>
+                <div className="launch-knowledge-list" aria-label="自动匹配的知识清单">
+                  <div className="launch-knowledge-list-head">
+                    <strong>自动匹配清单</strong>
+                    <span>{selectedKnowledgeCount
+                      ? `共 ${selectedKnowledgeCount} 项` : "暂时没有匹配项"}</span>
+                  </div>
+                  {matchingModuleKnowledge.length > 0 && <section
+                    className="launch-knowledge-group">
+                    <header><strong>业务模块知识</strong>
+                      <em>{matchingModuleKnowledge.length} 项</em></header>
+                    {matchingModuleKnowledge.map((item) =>
+                      <LaunchKnowledgeRow key={`${item.module_id}/${item.id}`}
+                        form={item.form} title={item.title}
+                        summary={item.summary} whenToUse={item.when_to_use}
+                        scope={`${item.module_name} · ${item.repositories.length
+                          ? "当前代码仓" : "模块通用"}`} />)}
+                  </section>}
+                  {matchingEngineeringKnowledge.length > 0 && <section
+                    className="launch-knowledge-group">
+                    <header><strong>工程知识</strong>
+                      <em>{matchingEngineeringKnowledge.length} 项</em></header>
+                    {matchingEngineeringKnowledge.map((item) =>
+                      <LaunchKnowledgeRow key={item.id} form={item.form}
+                        title={item.title} summary={item.summary}
+                        whenToUse={item.when_to_use}
+                        scope={describeKnowledgeScope(item.business_module_ids,
+                          item.technologies, item.repositories)} />)}
+                  </section>}
+                  {matchingTeamSkills.length > 0 && <section
+                    className="launch-knowledge-group">
+                    <header><strong>团队 Skill</strong>
+                      <em>{matchingTeamSkills.length} 项</em></header>
+                    {matchingTeamSkills.map((item) =>
+                      <LaunchKnowledgeRow key={item.path} form="skill"
+                        title={item.name} summary={item.description}
+                        whenToUse=""
+                        scope={describeKnowledgeScope(item.business_module_ids,
+                          item.technologies, item.repositories)} />)}
+                  </section>}
+                  {selectedKnowledgeCount === 0 && <div
+                    className="launch-knowledge-empty">
+                    没有匹配到平台知识；代码仓里的文档和 Skill 仍由开发助手自己发现。
+                  </div>}
                 </div>
                 <div className="launch-resource-boundary">
-                  <strong>{matchedTeamKnowledgeCount
-                    ? `已自动匹配 ${matchedTeamKnowledgeCount} 项` : "当前没有匹配项"}</strong>
-                  <span>{matchedTeamKnowledgeCount
-                    ? "服务端会在创建任务时再次校验范围并固定版本；正文不会整批注入。"
-                    : "不影响模块知识与 Git 现场探索；后续补齐适用资产即可自动生效。"}</span>
+                  <strong>{selectedKnowledgeCount
+                    ? `已自动匹配 ${selectedKnowledgeCount} 项` : "当前没有匹配项"}</strong>
+                  <span>{selectedKnowledgeCount
+                    ? "创建任务时系统会再核对一次，并记住当时的版本；开发助手只在需要时打开正文。"
+                    : "不影响 Git 现场探索；后续补齐适用范围即可自动生效。"}</span>
                 </div>
               </section>}
                 </div>

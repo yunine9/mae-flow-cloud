@@ -3540,6 +3540,15 @@ export class TaskService {
       repositories: string[];
       revision: number;
       assets: number;
+      knowledge: Array<{
+        id: string;
+        title: string;
+        summary: string;
+        when_to_use: string;
+        form: "document" | "skill" | "rule" | "example";
+        repositories: string[];
+        version: number;
+      }>;
       updated_at: string;
     }>;
     engineering_knowledge: Array<{
@@ -3561,6 +3570,11 @@ export class TaskService {
     let businessModules: Array<{
       id: string; name: string; description: string; owner: string;
       repositories: string[]; revision: number; assets: number;
+      knowledge: Array<{
+        id: string; title: string; summary: string; when_to_use: string;
+        form: "document" | "skill" | "rule" | "example";
+        repositories: string[]; version: number;
+      }>;
       updated_at: string;
     }> = [];
     let engineeringKnowledge: ReturnType<typeof publishedEngineeringKnowledge>
@@ -3575,17 +3589,30 @@ export class TaskService {
     try {
       businessModules = listBusinessModules(this.options.dataDir).modules
         .filter((module) => module.status === "active")
-        .map((module) => ({
-          id: module.id,
-          name: module.name,
-          description: module.description,
-          owner: module.owner,
-          repositories: module.repositories,
-          revision: module.revision,
-          assets: module.assets.filter((asset) =>
-            asset.status === "published").length,
-          updated_at: module.updated_at,
-        }));
+        .map((module) => {
+          const knowledge = module.assets
+            .filter((asset) => asset.status === "published")
+            .map((asset) => ({
+              id: asset.id,
+              title: asset.title,
+              summary: asset.summary,
+              when_to_use: asset.when_to_use,
+              form: asset.form,
+              repositories: [...asset.repositories],
+              version: asset.version,
+            }));
+          return {
+            id: module.id,
+            name: module.name,
+            description: module.description,
+            owner: module.owner,
+            repositories: module.repositories,
+            revision: module.revision,
+            assets: knowledge.length,
+            knowledge,
+            updated_at: module.updated_at,
+          };
+        });
     } catch (error) {
       // 模块知识是可选上下文；目录损坏要告警，但不能让所有人无法下单。
       this.options.log?.(`[business-modules] 下单目录读取失败(fail-open): ${error}`);

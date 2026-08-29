@@ -9202,7 +9202,8 @@ body[data-view="issues"] .nav-item.on { box-shadow: inset 3px 0 #c87873; }
 .launch-module-context .business-module-picker-note,
 .launch-module-context .business-module-picker-notice { margin: 0; padding: 8px 10px; }
 
-/* 一张任务知识清单：平台自动匹配，下单人只看数量和边界。 */
+/* 一张任务知识清单：平台自动匹配，但名单和匹配依据必须看得见。
+   清单限高滚动，避免知识多时把发起页重新撑成一堵墙。 */
 .launch-task-resources { display: grid; gap: 11px; }
 .launch-task-resources .launch-section-head { margin-bottom: 1px; }
 .launch-resource-summary {
@@ -9220,6 +9221,74 @@ body[data-view="issues"] .nav-item.on { box-shadow: inset 3px 0 #c87873; }
 .launch-resource-summary p {
   margin: 0; overflow: hidden; color: var(--muted); font-size: 11px;
   line-height: 1.5; text-align: right; text-overflow: ellipsis; white-space: nowrap;
+}
+.launch-knowledge-list {
+  max-height: 410px; overflow: auto; border: 1px solid var(--line);
+  border-radius: 10px; background: var(--surface);
+}
+.launch-knowledge-list-head {
+  position: sticky; top: 0; z-index: 2; min-height: 42px; padding: 9px 12px;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  backdrop-filter: blur(8px);
+}
+.launch-knowledge-list-head strong {
+  color: var(--text-strong); font-size: 12px;
+}
+.launch-knowledge-list-head span {
+  color: var(--accent); font-size: 10px; font-weight: 700;
+}
+.launch-knowledge-group + .launch-knowledge-group {
+  border-top: 1px solid var(--line);
+}
+.launch-knowledge-group > header {
+  min-height: 33px; padding: 7px 12px; display: flex; align-items: center;
+  justify-content: space-between; gap: 10px; background: var(--surface-soft);
+}
+.launch-knowledge-group > header strong {
+  color: var(--text); font-size: 11px;
+}
+.launch-knowledge-group > header em {
+  color: var(--muted); font-size: 10px; font-style: normal;
+}
+.launch-knowledge-row {
+  min-height: 62px; padding: 9px 12px; display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) minmax(150px, .42fr);
+  align-items: center; gap: 10px;
+}
+.launch-knowledge-row + .launch-knowledge-row { border-top: 1px solid var(--line); }
+.launch-knowledge-form {
+  width: 40px; padding: 3px 0; color: var(--accent); text-align: center;
+  border-radius: 6px; background: var(--accent-soft); font-size: 10px;
+  font-weight: 750;
+}
+.launch-knowledge-form.skill { color: var(--success); background: var(--success-soft); }
+.launch-knowledge-form.rule { color: var(--attention); background: var(--attention-soft); }
+.launch-knowledge-form.example { color: #7c5cc7; background: #f0eafd; }
+.launch-knowledge-copy { min-width: 0; display: grid; gap: 2px; }
+.launch-knowledge-copy strong {
+  overflow: hidden; color: var(--text-strong); font-size: 12px;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.launch-knowledge-copy small,
+.launch-knowledge-copy em {
+  overflow: hidden; color: var(--muted); font-size: 10px; font-style: normal;
+  line-height: 1.35; text-overflow: ellipsis; white-space: nowrap;
+}
+.launch-knowledge-copy em { color: var(--faint); }
+.launch-knowledge-scope {
+  min-width: 0; padding-left: 10px; display: grid; gap: 2px;
+  border-left: 1px solid var(--line);
+}
+.launch-knowledge-scope small { color: var(--faint); font-size: 9px; }
+.launch-knowledge-scope strong {
+  overflow: hidden; color: var(--success); font-size: 10px;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.launch-knowledge-empty {
+  padding: 18px 12px; color: var(--muted); font-size: 11px;
+  line-height: 1.55; text-align: center;
 }
 .launch-resource-boundary {
   padding: 0 2px; display: flex; align-items: baseline; gap: 8px;

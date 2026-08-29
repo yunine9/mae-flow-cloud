@@ -1182,6 +1182,16 @@ export interface BusinessModuleLaunchOption {
   repositories: string[];
   revision: number;
   assets: number;
+  /** 可核对的已发布知识目录，不含正文；可选以兼容滚动升级中的旧服务。 */
+  knowledge?: Array<{
+    id: string;
+    title: string;
+    summary: string;
+    when_to_use: string;
+    form: KnowledgeForm;
+    repositories: string[];
+    version: number;
+  }>;
   updated_at: string;
 }
 
