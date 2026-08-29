@@ -30,13 +30,17 @@ ENV_OFF = "MAE_FLOW_NO_NOTIFY"
 PHASES = {
     "启动": ("config_confirm", "workflow_select", "branch_create"),
     "澄清需求": ("grill", "grill_ask", "rf_triage"),
-    "定规格": ("open", "hf_open", "tw_open", "design", "archive",
-               "archive_confirm"),
+    # archive/archive_confirm 归"交付":与 playbooks.json 的
+    # knowledge-archive(phase=交付)保持同一词表——两处曾各说各话,
+    # 进度条点"定规格"弹不出活方案、点"交付"反而弹出(2026-08-30
+    # 审计实锤);一致性由 test_execution_plan 的词表断言钉死。
+    "定规格": ("open", "hf_open", "tw_open", "design"),
     "写设计": ("story", "story_ask"),
     # 2026-08-25 编排瘦身:实现/精简/规范/测试/规格自查全部发生在宽 build
     # 步里,验证从独立阶段变成 build 的一部分+出口(流水线)的职责。
     "写代码": ("build",),
-    "交付": ("domain_archive", "delivery_review", "push", "external_verify",
+    "交付": ("archive", "archive_confirm", "domain_archive",
+             "delivery_review", "push", "external_verify",
              "moonlight_review", "end"),
 }
 _STEP_PHASE = {step: phase for phase, steps in PHASES.items()

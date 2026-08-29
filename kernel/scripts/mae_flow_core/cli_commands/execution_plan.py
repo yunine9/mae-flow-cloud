@@ -11,8 +11,24 @@ from mae_flow_core.workflow.execution_plan import (
 def cmd_execution_plan(flow, state, args):
     profile, warning = load_execution_profile()
     workflow_profile, workflow_warning = load_workflow_profile()
-    plan = build_execution_plan(
-        flow, state, profile=profile, workflow_profile=workflow_profile)
+    try:
+        plan = build_execution_plan(
+            flow, state, profile=profile, workflow_profile=workflow_profile)
+    except ValueError as exc:
+        # 定制/偏好文件病到组装不出方案(catalog 校验失败、字段畸形等):
+        # 本命令是只读投影,崩溃退非 0 只会让宿主看到 plan=undefined、
+        # 原因全灭(2026-08-30 审计 P1-6)。丢掉两份定制按纯平台默认
+        # 重组,并把降级记进 diagnostics 供宿主上浮;连平台默认都组不出
+        # 才是真异常,让它照常抛——那说明 flow/catalog 本身坏了。
+        print("⚠ 定制执行方案不可用(%s),已退回平台默认。" % exc,
+              file=sys.stderr)
+        plan = build_execution_plan(flow, state)
+        plan["customization"]["diagnostics"].append({
+            "code": "profile_invalid",
+            "severity": "warning",
+            "message": "定制执行方案不可用(%s);本阶段已退回平台默认做法"
+                       % exc,
+        })
     if warning:
         print(warning, file=sys.stderr)
     if workflow_warning:

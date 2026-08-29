@@ -380,5 +380,74 @@ class ExecutionPlanContractTests(unittest.TestCase):
             self.assertIn("冲突部分无效", current.stdout)
 
 
+    def test_stage_id_mismatch_degrades_visibly_not_silently(self):
+        """定格方案缺当前阶段 → 退平台默认 + 留 diagnostics(审计 P1-7)。
+
+        stage.id 由 cloud 编译器写、内核消费,跨仓硬耦合;失配曾直接
+        raise 把整条 CLI 打崩。降级后 mode/strategy.source 必须如实说
+        "平台默认",不许一边跑默认一边展示定制皮。"""
+        from mae_flow_core.workflow.workflow_profile import (
+            _workflow_profile_revision)
+        workflow = structural_profile()
+        for key in ("base_snapshot", "final_snapshot"):
+            for stage in workflow[key]["stages"]:
+                stage["id"] = "cloud.renamed-elsewhere"
+        workflow["revision"] = _workflow_profile_revision(workflow)
+        self.assertEqual([], workflow_profile_errors(workflow))
+        plan = build_execution_plan(
+            self.flow, {"current": "build", "choices": {"workflow": "full"}},
+            self.catalog, workflow_profile=workflow)
+        self.assertEqual("bounded", plan["customization"]["mode"])
+        self.assertEqual("platform_default", plan["strategy"]["source"])
+        self.assertEqual("platform_default",
+                         plan["customization"]["effective_source"])
+        degrades = [item for item in plan["customization"]["diagnostics"]
+                    if item.get("code") == "profile_invalid"]
+        self.assertEqual(1, len(degrades))
+        self.assertEqual("warning", degrades[0]["severity"])
+        self.assertIn("退回平台默认", degrades[0]["message"])
+        self.assertEqual("platform.construction", degrades[0]["stage_id"])
+
+    def test_playbook_phase_vocabulary_matches_panel_phases(self):
+        """playbook.phase 与 panel PHASES 必须同一词表(审计 P0-3 实锤:
+        archive 两步一边归"定规格"一边归"交付",进度条点错阶段才弹层)。"""
+        from mae_flow_core.panel.notify import phase_of
+        for playbook in self.catalog["playbooks"]:
+            for step in playbook.get("steps") or ():
+                self.assertEqual(
+                    playbook.get("phase"), phase_of(step),
+                    "步骤 %s 的阶段词表分裂: playbook %s 说「%s」,"
+                    "panel 说「%s」" % (step, playbook.get("id"),
+                                       playbook.get("phase"), phase_of(step)))
+
+    def test_cli_survives_poisoned_customization_with_degraded_json(self):
+        """定制病到组装不出方案时 CLI 不许崩(审计 P1-6):退平台默认、
+        留 profile_invalid 诊断、stderr 说人话——宿主靠这个上浮告警。"""
+        import contextlib
+        import io
+        from unittest import mock
+        from mae_flow_core.cli_commands import execution_plan as cli
+        poisoned = structural_profile()
+        poisoned["revision"] = "sha256:" + "f" * 64
+        self.assertTrue(workflow_profile_errors(poisoned))
+        args = type("Args", (), {"json": True})()
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(cli, "load_execution_profile",
+                               return_value=(None, "")), \
+                mock.patch.object(cli, "load_workflow_profile",
+                                  return_value=(poisoned, "")), \
+                contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(err):
+            cli.cmd_execution_plan(
+                self.flow,
+                {"current": "build", "choices": {"workflow": "full"}}, args)
+        plan = json.loads(out.getvalue())
+        self.assertEqual("platform_default", plan["strategy"]["source"])
+        self.assertTrue(any(
+            item.get("code") == "profile_invalid"
+            for item in plan["customization"]["diagnostics"]))
+        self.assertIn("已退回平台默认", err.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

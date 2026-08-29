@@ -22,6 +22,18 @@ from .external_repair_gate import gate_repair_add, gate_repair_commit
 from .wiring import api
 
 
+# Bash 侧内部状态保护清单(与 guard/gate.py 的 Edit 侧同一份名单)。
+# v2 定格方案 workflow-profile.json 与 v1 execution-profile.json 同级:
+# revision 是确定性 sha256,篡改后可重算自洽,文件模式 0o440 只挡得住
+# 误操作——这条正则是"任务只执行这一份定格方案"的唯一机器保证
+# (2026-08-30 审计 P0-2,曾只盖 v1 漏掉 v2)。测试按此常量断言。
+INTERNAL_STATE_PATTERN = (
+    r"\.mae-flow(\.json|-history\.jsonl|-need-reload|-defaults\.json)"
+    r"|\.mae-flow-work/(?:moonlight-report\.md|"
+    r"execution-profile\.json|workflow-profile\.json|"
+    r"(?:plugin-resources|repository-skills|host-skills)(?:/|$))")
+
+
 def _hook_rule_message(rule, message):
     if os.environ.get("MAE_FLOW_HOOK_TRACE") == "1":
         return "[mae-flow-rule=%s]\n%s" % (
@@ -251,11 +263,7 @@ def _gate_bash_writes(flow, st, sid, step, intent, jdie):
         tokens=tuple(toks),
         writeish=writeish,
         hits_internal_state=guard_intent.hits_path(
-            intent,
-            r"\.mae-flow(\.json|-history\.jsonl|-need-reload|-defaults\.json)"
-            r"|\.mae-flow-work/(?:moonlight-report\.md|"
-            r"execution-profile\.json|"
-            r"(?:plugin-resources|repository-skills|host-skills)(?:/|$))"),
+            intent, INTERNAL_STATE_PATTERN),
         step=sid or "",
         offenders=tuple(offenders),
         source_unlocked=source_unlocked,

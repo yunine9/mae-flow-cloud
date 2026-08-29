@@ -70,7 +70,7 @@ def _protected_file_decision(context):
             "判定口径,改它等于改门禁规则。团队预设请在流程外走正常评审提交。")
     if re.search(
             r"(^|/)\.mae-flow-work/"
-            r"(?:execution-profile\.json$|"
+            r"(?:execution-profile\.json$|workflow-profile\.json$|"
             r"(?:plugin-resources|repository-skills|host-skills)(?:/|$))",
             path, re.I):
         return _absolute(

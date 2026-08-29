@@ -41,6 +41,9 @@ class EditGateTests(unittest.TestCase):
             (".mae-flow-work/repository-skills/java/SKILL.md", "只读资源"),
             (".mae-flow-work/host-skills/abc/SKILL.md", "只读资源"),
             (".mae-flow-work/execution-profile.json", "执行偏好"),
+            # v2 定格方案与 v1 偏好同级只读:revision 可重算自洽,
+            # 这道闸是"任务只执行这一份"的唯一机器保证(审计 P0-2)。
+            (".mae-flow-work/workflow-profile.json", "只读资源"),
             ("/plugin/scripts/mae-flow.py", "禁止修改插件自身"),
         ):
             with self.subTest(path=path):
@@ -149,6 +152,24 @@ class BashWriteGateTests(unittest.TestCase):
             writeish=True, hits_internal_state=True))
         self.assertEqual("absolute", internal.kind)
         self.assertIn("禁止经 Bash 改写", internal.message)
+
+    def test_bash_internal_state_pattern_covers_both_profile_files(self):
+        """v1/v2 两份方案文件都要被 Bash 侧名单命中(审计 P0-2 实锤:
+        名单曾只盖 execution-profile,sed -i 定格方案畅通无阻)。"""
+        from mae_flow_core.cli_commands.gate import INTERNAL_STATE_PATTERN
+        from mae_flow_core.guard import intent as guard_intent
+        for command in (
+            "sed -i 's/a/b/' .mae-flow-work/workflow-profile.json",
+            "cp /tmp/fake.json .mae-flow-work/execution-profile.json",
+        ):
+            with self.subTest(command=command):
+                intent = guard_intent.parse_intent("bash", command)
+                self.assertTrue(guard_intent.hits_path(
+                    intent, INTERNAL_STATE_PATTERN))
+        harmless = guard_intent.parse_intent(
+            "bash", "cat docs/workflow-profile-notes.md")
+        self.assertFalse(guard_intent.hits_path(
+            harmless, INTERNAL_STATE_PATTERN))
 
     def test_non_source_bash_writes_remain_available(self):
         """经 Bash 写需求/规格过程件不受源码阶段闸影响。

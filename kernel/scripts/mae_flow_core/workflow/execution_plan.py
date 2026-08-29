@@ -419,10 +419,26 @@ def build_execution_plan(flow, state, catalog=None, profile=None,
     catalog = catalog or load_catalog()
     step_id, step, playbook = _validated_selection(
         flow, state, catalog, profile, workflow_profile)
-    selected = _selected_playbook(playbook, profile, workflow_profile)
+    degrade = None
+    try:
+        selected = _selected_playbook(playbook, profile, workflow_profile)
+    except ValueError as exc:
+        # 定格方案缺当前 playbook 对应的 stage(cloud 编译器写 id、
+        # 内核消费,跨仓 id 失配等):fail-open 退回平台默认做法,但
+        # 必须留下 diagnostics——静默退化正是"界面显示定格方案、
+        # Agent 实际跑默认"的事故源(2026-08-30 审计 P0)。
+        degrade = {
+            "code": "profile_invalid",
+            "severity": "warning",
+            "message": "定格工作流缺少本阶段方案(%s);该阶段已退回"
+                       "平台默认做法" % exc,
+            "stage_id": str(playbook.get("id") or ""),
+        }
+        workflow_profile = None
+        selected = _selected_playbook(playbook, profile, None)
     outputs = _plan_outputs(selected, step)
     defaults = catalog.get("defaults") or {}
-    return {
+    plan = {
         "schema": SCHEMA,
         "plan_id": "%s@%s" % (selected["id"], selected["version"]),
         "plan_revision": _plan_revision(
@@ -446,3 +462,9 @@ def build_execution_plan(flow, state, catalog=None, profile=None,
         "customization": _customization(
             defaults, profile, selected["id"], workflow_profile),
     }
+    if degrade is not None:
+        # 退化后 workflow_profile 已置 None,mode/effective_source/
+        # strategy.source 全按平台默认如实计算;唯一的定制痕迹就是
+        # 这条 diagnostics——它是宿主上浮告警的锚点,不许省。
+        plan["customization"]["diagnostics"].append(degrade)
+    return plan
