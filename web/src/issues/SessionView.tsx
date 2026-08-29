@@ -24,6 +24,7 @@ import {
   steerIssue,
   type DtsTicketDetail,
   type IssueDetail,
+  type IssueEnvironmentForm,
   type IssueStageState,
   type IssueSummary,
   type IssueTimeline,
@@ -144,11 +145,8 @@ export function IssueSessionView({
   }
   /** env_needed 闸的专用提交口(POST /issues/:id/environment):密码只在
    * 这一次请求里过网、只进服务端 vault,成功后 perform 会带新详情回来。 */
-  const attachEnvironment = (input: {
-    hosts: string[];
-    port?: number;
-    password: string;
-  }) => perform(() => attachIssueEnvironment(detail.id, input));
+  const attachEnvironment = (input: IssueEnvironmentForm) =>
+    perform(() => attachIssueEnvironment(detail.id, input));
   const sendReply = (text: string) => perform(() => replyIssue(detail.id, text));
   const sendSteer = (text: string) => perform(() => steerIssue(detail.id, text));
   /** 快速修改后请 AI 复核:运行中走插话,空闲走续聊——都走现有通道,
@@ -211,6 +209,17 @@ export function IssueSessionView({
             ? `(第 ${detail.round} 轮)` : ""}
           {detail.stage_note ? ` · ${detail.stage_note}` : ""}
         </span>
+        {/* 登记元信息的网管环境常驻上屏(问"问题发生在哪个网管"不用翻
+            现场;ADR-0003:账号非密可上屏,密码本体只在 vault)。样式借
+            issue-stage 的行尾弱化文本。闸现场补配的环境没有页面凭据,
+            页面账号缺席就不占位。 */}
+        {detail.environment && <span className="issue-stage"
+          title="登记元信息里的网管环境(密码在平台加密保管,不上屏)">
+          网管环境 {detail.environment.hosts.join("、")}
+          {` · 端口 ${detail.environment.port}`}
+          {detail.environment.page_account
+            ? ` · 页面账号 ${detail.environment.page_account}` : ""}
+        </span>}
       </div>
       <div className="issue-session-ticket">
         {detail.ticket

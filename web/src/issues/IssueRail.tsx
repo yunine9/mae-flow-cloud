@@ -11,7 +11,8 @@
  */
 import { useState } from "react";
 import { issueStageText, type DtsTicketDetail, type IssueDetail,
-  type IssueGateKind, type IssueGateOption } from "../api";
+  type IssueEnvironmentForm, type IssueGateKind,
+  type IssueGateOption } from "../api";
 import { IssueDecisionCard } from "./IssueDecisionCard";
 
 export function IssueRail({ detail, busy, waiting, onAnswer, onReply,
@@ -46,11 +47,7 @@ export function IssueRail({ detail, busy, waiting, onAnswer, onReply,
   onAssociate: (ticket: string, confirm: boolean) =>
     Promise<{ ticket_detail?: DtsTicketDetail }>;
   /** env_needed 闸的专用提交口(POST /issues/:id/environment)。 */
-  onEnvironment?: (input: {
-    hosts: string[];
-    port?: number;
-    password: string;
-  }) => Promise<boolean>;
+  onEnvironment?: (input: IssueEnvironmentForm) => Promise<boolean>;
 }) {
   // 收口态:自由模式=done+idle;固定模式=末阶段完成+idle(验证通过后)。
   const lastState = detail.stage_states?.[detail.stage_states.length - 1];

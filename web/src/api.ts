@@ -943,31 +943,6 @@ export interface CrossRepositoryUpdate {
   created_at: string;
 }
 
-export interface IssueEnvironmentRef {
-  id: string;
-  name: string;
-  purpose: "logs" | "deploy" | "both";
-  protocol: "ssh";
-  host: string;
-  port: number;
-  accounts: Array<{
-    username: string;
-    credential_state: "stored";
-  }>;
-  /** 兼容短暂存在过的单账号任务现场。 */
-  username?: string;
-  credential_state?: "stored";
-}
-
-export interface IssueEnvironmentInput {
-  name: string;
-  purpose: "logs" | "deploy" | "both";
-  host: string;
-  port?: number;
-  accounts: Array<{ username: string; password: string }>;
-}
-
-
 /** 历史条目(服务端 projection.ts 的 TaskHistoryEntry 镜像)。 */
 export type TaskHistoryEntry = TaskSummary & {
   event_count: number;
@@ -2881,12 +2856,16 @@ export interface IssueSummary {
   module_id?: string;
   /** 登记基线(分支/tag 等起点说明;问题流登记表单未暴露)。 */
   baseline?: string;
-  /** 登记时带的网管环境(地址列表与 vault 引用;密码只存服务端,永不上线)。 */
+  /** 登记时带的网管环境(地址列表与 vault 引用;密码只存服务端,永不上线)。
+   * page_account/page_credential_ref 只在登记配了页面凭据时在场——env_needed
+   * 闸现场补配的环境没有页面凭据,两键一并缺席。 */
   environment?: {
     credential_ref: string;
     name: string;
     hosts: string[];
     port: number;
+    page_account?: string;
+    page_credential_ref?: string;
   };
   mode?: IssueFlowMode;
   scenario?: IssueScenario;
@@ -2992,11 +2971,14 @@ export interface DtsTicketDetail {
   status?: string;
 }
 
+/** env_needed 闸的环境表单 wire 形(POST /issues/:id/environment 请求体,
+ * 与服务端 routes 的读取一一对应):地址 + 端口 + 网管后台密码。闸只收
+ * 这三样——现场补配的流程(拉日志/换库)碰不到网管页面,没有页面凭据
+ * 的位置;密码只进服务端 vault,不落状态/事件。 */
 export interface IssueEnvironmentForm {
-  name?: string;
   hosts: string[];
   port?: number;
-  password: string;
+  backend_password: string;
 }
 
 async function issueFetch(
@@ -3086,7 +3068,7 @@ export function steerIssue(id: string, text: string): Promise<IssueSummary> {
 }
 
 /** 网管环境配置(env_needed 闸的作答口):登记时没配环境,拉日志/
- * 换库现场举闸后在这里补地址与密码。密码只进服务端 vault,不落
+ * 换库现场举闸后在这里补地址与网管后台密码。密码只进服务端 vault,不落
  * 状态/事件;成功即清闸,平台会开回合让 AI 重试刚才的操作。 */
 export function attachIssueEnvironment(
   id: string,

@@ -340,18 +340,9 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail/环境验证�
         ? issue : undefined;
     }, "全链走到环境验证闸(账齐的终点)");
 
-    // 环境样例:web/src/api.ts 的镜像本期不带页面凭据两键(前端环境
-    // 字段错位由工单 4 跟进),经变量带入绕开字面量的多属性检查;
-    // assertWireShape 对服务端投影仍逐键全量对账。
-    const environmentSample = {
-      credential_ref: "vault-ref",
-      name: "10.0.0.8",
-      hosts: ["10.0.0.8"],
-      port: 22,
-      page_account: "admin",
-      page_credential_ref: "vault-page-ref",
-    };
-    // 期望侧:按 web/src/api.ts 的 IssueSummary 手写,undefined 键 = 可选。
+    // 期望侧:按 web/src/api.ts 的 IssueSummary 手写,undefined 键 = 可选;
+    // 环境对象也直接写成镜像类型的字面量——页面凭据两键让 tsc 的多属性
+    // 检查与 assertWireShape 的逐键对账都全量生效。
     const summarySample: IssueSummary = {
       id: created.id,
       account: "dev",
@@ -366,7 +357,14 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail/环境验证�
       module: undefined,
       module_id: undefined,
       baseline: undefined,
-      environment: environmentSample,
+      environment: {
+        credential_ref: "vault-ref",
+        name: "10.0.0.8",
+        hosts: ["10.0.0.8"],
+        port: 22,
+        page_account: "admin",
+        page_credential_ref: "vault-page-ref",
+      },
       mode: "fixed",
       scenario: "ticket",
       stage_states: ["pending"],

@@ -12,12 +12,13 @@
  * 这里不伪造。
  *
  * 例外是 env_needed 闸(2026-08-28):通用选项卡换成语义化表单(地址+
- * 端口+密码),提交走 onEnvironment(由会话视图接到 attachIssueEnvironment
- * ——密码只经这一条路进服务端 vault,不进状态/事件/对话,也不出现在
- * 其他任何闸的渲染里)。
+ * 端口+网管后台密码),提交走 onEnvironment(由会话视图接到
+ * attachIssueEnvironment——密码只经这一条路进服务端 vault,不进状态/
+ * 事件/对话,也不出现在其他任何闸的渲染里)。闸只收 地址+后台密码:
+ * 现场补配的流程(拉日志/换库)碰不到网管页面,没有页面凭据的位置。
  */
 import { useState } from "react";
-import type { IssueWaitingCard } from "../api";
+import type { IssueEnvironmentForm, IssueWaitingCard } from "../api";
 import { Markdown } from "../markdown";
 
 const ENV_SCOPE_TEXT: Record<string, string> = {
@@ -31,11 +32,7 @@ export function IssueDecisionCard({ waiting, busy, onAnswer, onEnvironment }: {
   /** 组装好的答复。返回 true 表示提交成功(此时父级会带着新详情回来)。 */
   onAnswer: (decision: string, notes?: string) => Promise<boolean>;
   /** env_needed 闸的专用提交口(会话视图接到 /issues/:id/environment)。 */
-  onEnvironment?: (input: {
-    hosts: string[];
-    port?: number;
-    password: string;
-  }) => Promise<boolean>;
+  onEnvironment?: (input: IssueEnvironmentForm) => Promise<boolean>;
 }) {
   if (waiting.gate_kind === "env_needed") {
     return <section className="issue-decision" aria-label="配置网管环境">
@@ -55,25 +52,22 @@ export function IssueDecisionCard({ waiting, busy, onAnswer, onEnvironment }: {
   return <GenericDecisionCard waiting={waiting} busy={busy} onAnswer={onAnswer} />;
 }
 
-/** 网管环境表单:多行 hosts(逗号/换行分隔)+ 端口(默认 22)+ 共用密码。
- * 密码只在提交瞬间经 POST /issues/:id/environment 进服务端 vault
- * (AES-GCM 加密文件),不落状态/事件/对话——前端也不把它存进任何草稿。 */
+/** 网管环境表单:多行 hosts(逗号/换行分隔)+ 端口(默认 22)+ 网管后台
+ * 密码(sopuser/ossuser/ossadm 同密码)。密码只在提交瞬间经 POST
+ * /issues/:id/environment 进服务端 vault(AES-GCM 加密文件),不落
+ * 状态/事件/对话——前端也不把它存进任何草稿。 */
 function EnvNeededForm({ busy, onSubmit }: {
   busy: boolean;
-  onSubmit?: (input: {
-    hosts: string[];
-    port?: number;
-    password: string;
-  }) => Promise<boolean>;
+  onSubmit?: (input: IssueEnvironmentForm) => Promise<boolean>;
 }) {
   const [hosts, setHosts] = useState("");
   const [port, setPort] = useState("22");
-  const [password, setPassword] = useState("");
+  const [backendPassword, setBackendPassword] = useState("");
   const [error, setError] = useState("");
   const parsedHosts = hosts.split(/[\s,，、]+/).map((item) => item.trim())
     .filter(Boolean);
   const portNumber = Number(port);
-  const ready = parsedHosts.length > 0 && password.length > 0
+  const ready = parsedHosts.length > 0 && backendPassword.length > 0
     && Number.isInteger(portNumber) && portNumber >= 1 && portNumber <= 65535;
 
   async function submit() {
@@ -81,10 +75,10 @@ function EnvNeededForm({ busy, onSubmit }: {
     const ok = await onSubmit({
       hosts: parsedHosts,
       ...(port !== "22" ? { port: portNumber } : {}),
-      password,
+      backend_password: backendPassword,
     });
     if (ok) {
-      setPassword("");
+      setBackendPassword("");
       setError("");
     } else {
       setError("提交未成功,请稍后重试");
@@ -104,9 +98,9 @@ function EnvNeededForm({ busy, onSubmit }: {
         onChange={(event) => setPort(event.target.value)} />
     </label>
     <label className="issue-field">
-      <span>共用密码(sopuser/ossuser/ossadm)</span>
-      <input type="password" value={password} autoComplete="new-password"
-        onChange={(event) => setPassword(event.target.value)} />
+      <span>网管后台密码 <i>sopuser/ossuser/ossadm 共用</i></span>
+      <input type="password" value={backendPassword} autoComplete="new-password"
+        onChange={(event) => setBackendPassword(event.target.value)} />
     </label>
     <p className="issue-decision-note">
       密码由平台加密保管,不会出现在对话或状态里;提交后 AI 会重试刚才的操作。
