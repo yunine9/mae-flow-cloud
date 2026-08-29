@@ -22,6 +22,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
+import { IssueEnvironmentVault } from "../src/issueEnvironment.ts";
+import { createBusinessModule } from "../src/businessModuleLibrary.ts";
 import {
   buildIssueTimeline,
 } from "../src/issueFlow/sessionView.ts";
@@ -376,21 +378,46 @@ test("问题会话多轮闭环:研究→提问卡→作答→非问题归档(无
     modelsJson: model.modelsJson(),
   });
   try {
+    createBusinessModule(dataDir, {
+      id: "pay-core", name: "支付核心", description: "收单与清结算",
+      owner: "dev", repositories: [origin],
+    }, "tester");
     const created = service.create({
       account: "dev",
       title: "播放器偶发黑屏",
       description: "测试环境偶发黑屏,疑似新版本引入",
       repoUrl: origin,
+      moduleId: "pay-core",
       environment: {
         hosts: ["10.0.0.8"],
-        password: "env-shared-secret",
+        pagePassword: "page-secret",
+        backendPassword: "env-shared-secret",
       },
     });
     // create() 即刻排入首轮研究(并发额度内同步点火,状态直奔 running)。
     assert.equal(created.status, "running");
     assert.equal(created.ticket, undefined, "先研究后补单:创建时单号可空");
+    // 四件套落盘形状:页面账号是非密的登记元信息,回执可见;密码本体
+    // 只在 vault,状态文件与回执都搜不到。
+    assert.equal(created.environment?.page_account, "admin",
+      "页面账号未传缺省 admin");
+    assert.ok(created.environment?.page_credential_ref);
+    assert.ok(!JSON.stringify(created).includes("page-secret"));
     assert.ok(!existsSync(join(dataDir, "issues", created.id, "repo", ".mae-flow.json")),
       "问题会话不初始化内核(与需求流分属两个范式)");
+
+    // vault 两组凭据各自成组、可分别解出:后台三账号同密码,页面单账号。
+    const vault = new IssueEnvironmentVault(dataDir);
+    assert.deepEqual(
+      vault.credentials(created.id, created.environment!.credential_ref)
+        .map((account) => account.username),
+      ["sopuser", "ossuser", "ossadm"]);
+    assert.equal(vault.credential(created.id,
+      created.environment!.credential_ref, "sopuser")?.password,
+      "env-shared-secret");
+    assert.deepEqual(vault.credential(created.id,
+      created.environment!.page_credential_ref!),
+      { username: "admin", password: "page-secret" });
 
     const waiting = await until(() => {
       const issue = service.get(created.id);
@@ -404,10 +431,12 @@ test("问题会话多轮闭环:研究→提问卡→作答→非问题归档(无
     // 秘密纪律:环境密码不进模型上下文。
     const requestText = JSON.stringify(model.requests);
     assert.doesNotMatch(requestText, /env-shared-secret/);
+    assert.doesNotMatch(requestText, /page-secret/);
     assert.match(requestText, /10\.0\.0\.8/, "环境地址是现场材料,应该可见");
     const stateFile = readFileSync(
       join(dataDir, "issues", created.id, "issue.json"), "utf-8");
     assert.doesNotMatch(stateFile, /env-shared-secret/);
+    assert.doesNotMatch(stateFile, /page-secret/);
 
     service.answer(created.id, {
       state_version: waiting.waiting!.state_version,
@@ -506,8 +535,18 @@ test("单号门禁:未绑定单号时 push_branch 被机械拒绝", async () => 
     modelsJson: model.modelsJson(),
   });
   try {
+    createBusinessModule(dataDir, {
+      id: "pay-core", name: "支付核心", description: "收单与清结算",
+      owner: "dev", repositories: [origin],
+    }, "tester");
     const created = service.create({
       account: "dev", title: "无单号问题", repoUrl: origin,
+      moduleId: "pay-core",
+      environment: {
+        hosts: ["10.0.0.8"],
+        pagePassword: "page-secret",
+        backendPassword: "env-shared-secret",
+      },
     });
     await until(() => {
       const issue = service.get(created.id);
@@ -637,7 +676,21 @@ test("重启续聊:等待问题卡期间服务重启,作答仍能续上现场", 
   });
   let second: IssueFlowService | undefined;
   try {
-    const created = first.create({ account: "dev", title: "重启续聊" });
+    // 无单登记门禁要模块+环境(#17):夹具模块绑一个不存在的本地路径
+    // 仓即可——本测试不拉仓,只要登记过门。
+    createBusinessModule(dataDir, {
+      id: "pay-core", name: "支付核心", description: "收单与清结算",
+      owner: "dev", repositories: ["/tmp/fixture.git"],
+    }, "tester");
+    const created = first.create({
+      account: "dev", title: "重启续聊",
+      moduleId: "pay-core",
+      environment: {
+        hosts: ["10.0.0.8"],
+        pagePassword: "page-secret",
+        backendPassword: "env-shared-secret",
+      },
+    });
     const waiting = await until(() => {
       const issue = first.get(created.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
@@ -686,7 +739,19 @@ test("Agent 问题卡归码:投影派码(码+文案对),按码作答还原原文
     modelsJson: model.modelsJson(),
   });
   try {
-    const created = service.create({ account: "dev", title: "归码还原" });
+    createBusinessModule(dataDir, {
+      id: "pay-core", name: "支付核心", description: "收单与清结算",
+      owner: "dev", repositories: ["/tmp/fixture.git"],
+    }, "tester");
+    const created = service.create({
+      account: "dev", title: "归码还原",
+      moduleId: "pay-core",
+      environment: {
+        hosts: ["10.0.0.8"],
+        pagePassword: "page-secret",
+        backendPassword: "env-shared-secret",
+      },
+    });
     const waiting = await until(() => {
       const issue = service.get(created.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
@@ -844,26 +909,30 @@ test("网管环境配置路由(2026-08-28):POST /issues/:id/environment 密码�
     modelsJson: model.modelsJson(),
   });
   try {
-    // 校验打回:缺地址 / 缺密码都是 409 带人话,不产生任何落盘。
+    // 校验打回:缺地址 / 缺后台密码都是 409 带人话,不产生任何落盘。
     const noHosts = await issuePost(["issues", "issue-1", "environment"],
-      { hosts: [], password: "x" }, service);
+      { hosts: [], backend_password: "x" }, service);
     assert.equal(noHosts.status, 409);
     assert.match(noHosts.body.error, /至少要有一个服务器地址/);
     const noPassword = await issuePost(["issues", "issue-1", "environment"],
-      { hosts: ["10.0.0.8"], password: "   " }, service);
+      { hosts: ["10.0.0.8"], backend_password: "   " }, service);
     assert.equal(noPassword.status, 409);
-    assert.match(noPassword.body.error, /共用密码/);
+    assert.match(noPassword.body.error, /网管后台密码/);
 
     // 正常配置:状态只有 credential_ref,密码在 vault 加密文件里,
-    // issue.json 原文永远搜不到明文;随后平台回合照常收口。
+    // issue.json 原文永远搜不到明文;闸只收地址+后台密码,body 里即便
+    // 递了页面凭据也不认(env_needed 现场补配碰不到网管页面)。
     const ok = await issuePost(["issues", "issue-1", "environment"],
       { hosts: ["10.0.0.8", "10.0.0.9"], port: 2222,
-        password: "env-shared-secret" }, service);
+        backend_password: "env-shared-secret",
+        page_password: "should-be-ignored" }, service);
     assert.equal(ok.status, 200);
     assert.ok(ok.body.environment?.credential_ref, "状态里只有凭据引用");
     assert.equal(ok.body.gate ?? undefined, undefined, "没有闸在场就不凭空造闸");
     assert.deepEqual(ok.body.environment?.hosts, ["10.0.0.8", "10.0.0.9"]);
     assert.equal(ok.body.environment?.port, 2222);
+    assert.equal(ok.body.environment?.page_account, undefined,
+      "闸内补配没有页面凭据,消费面按缺席优雅处理");
     assert.ok(existsSync(join(dataDir, ".issue-environments", "issue-1.json")),
       "密码落在 vault 加密文件");
     const raw = readFileSync(join(dataDir, "issues", "issue-1", "issue.json"), "utf-8");

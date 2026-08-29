@@ -24,6 +24,7 @@ import { join } from "node:path";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
 import { createIssueTools, type IssueToolContext } from "../src/issueFlow/tools.ts";
+import { IssueEnvironmentVault } from "../src/issueEnvironment.ts";
 import { MockDtsGateway } from "../src/issueFlow/gateways.ts";
 import { createBusinessModule } from "../src/businessModuleLibrary.ts";
 import {
@@ -59,6 +60,23 @@ function bareOrigin(root: string): string {
   execFileSync("git", ["clone", "-q", "--bare", seed, origin], { env: GIT_ENV });
   return origin;
 }
+
+/** 无单登记门禁(#17)要求模块+环境,各用例只关心流程本身——模块与
+ * 网管环境四件套从这两个夹具取,别在每个测试里各写一遍。 */
+const MODULE_ID = "pay-core";
+
+function seedModule(dataDir: string, repoUrl: string): void {
+  createBusinessModule(dataDir, {
+    id: MODULE_ID, name: "支付核心", description: "收单与清结算",
+    owner: "dev", repositories: [repoUrl],
+  }, "tester");
+}
+
+const NO_TICKET_ENV = {
+  hosts: ["10.0.0.8"],
+  pagePassword: "page-secret",
+  backendPassword: "env-shared-secret",
+};
 
 async function until<T>(
   probe: () => T | undefined,
@@ -251,7 +269,11 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
       ticket: TICKET,
       source: "dts",
       repoUrl: origin,
-      environment: { hosts: ["10.0.0.8"], password: "env-shared-secret" },
+      environment: {
+        hosts: ["10.0.0.8"],
+        pagePassword: "page-secret",
+        backendPassword: "env-shared-secret",
+      },
     });
     assert.equal(created.mode, "fixed", "个人偏好缺省固定流程,create 烙印");
     assert.equal(created.scenario, "ticket");
@@ -390,8 +412,10 @@ test("固定流程无单闭环:结论是问题→挂起;结论非问题→直接
     issueFlowMode: () => "fixed",
   });
   try {
+    seedModule(dataDir, origin);
     const created = service.create({
       account: "dev", title: "列表导出超时", repoUrl: origin,
+      moduleId: MODULE_ID, environment: NO_TICKET_ENV,
     });
     assert.equal(created.scenario, "no_ticket", "无单登记=无单三节点");
     assert.equal(created.stage, "prep_repo");
@@ -445,9 +469,15 @@ test("固定流程无单闭环:结论非问题,用户确认后自动归档", asy
     issueFlowMode: () => "fixed",
   });
   try {
+    seedModule(dataDir, origin);
     const created = service.create({
       account: "dev", title: "疑似黑屏", repoUrl: origin,
-      environment: { hosts: ["10.0.0.8"], password: "env-shared-secret" },
+      moduleId: MODULE_ID,
+      environment: {
+        hosts: ["10.0.0.8"],
+        pagePassword: "page-secret",
+        backendPassword: "env-shared-secret",
+      },
     });
     assert.ok(existsSync(
       join(dataDir, ".issue-environments", `${created.id}.json`)),
@@ -509,8 +539,12 @@ test("举卡裁决协议化:闸卡带决策码,按码分派文案可变;旧文�
     issueFlowMode: () => "fixed",
   });
   try {
+    seedModule(dataDir, origin);
     const concludeGate = async (title: string) => {
-      const created = service.create({ account: "dev", title, repoUrl: origin });
+      const created = service.create({
+        account: "dev", title, repoUrl: origin,
+        moduleId: MODULE_ID, environment: NO_TICKET_ENV,
+      });
       return until(() => {
         const issue = service.get(created.id);
         if (issue.status === "failed") throw new Error(issue.error ?? "failed");
@@ -594,9 +628,15 @@ test("关联转正:两段式(校验过目→确认),工作区/报告/凭据继�
     issueFlowMode: () => "fixed",
   });
   try {
+    seedModule(dataDir, origin);
     const created = service.create({
       account: "dev", title: "偶发死锁", repoUrl: origin,
-      environment: { hosts: ["10.0.0.8"], password: "env-shared-secret" },
+      moduleId: MODULE_ID,
+      environment: {
+        hosts: ["10.0.0.8"],
+        pagePassword: "page-secret",
+        backendPassword: "env-shared-secret",
+      },
     });
     const gate = await until(() => {
       const issue = service.get(created.id);
@@ -642,6 +682,17 @@ test("关联转正:两段式(校验过目→确认),工作区/报告/凭据继�
     assert.equal(branch.stdout.trim(), BRANCH, "宿主已在副本上用新单号建分支");
     assert.ok(existsSync(join(dataDir, ".issue-environments", `${converted!.id}.json`)),
       "环境凭据已复制到新会话");
+    // 两组凭据随后台一起转正:新会话自己的 vault 里页面、后台各自解出,
+    // 页面账号与后台三账号的密码都对得上(#17)。
+    const newVault = new IssueEnvironmentVault(dataDir);
+    assert.equal(newVault.credential(converted!.id,
+      converted!.environment!.credential_ref, "sopuser")?.password,
+      "env-shared-secret", "后台凭据在新会话解出");
+    assert.deepEqual(
+      newVault.credentials(converted!.id,
+        converted!.environment!.page_credential_ref!),
+      [{ username: "admin", password: "page-secret" }],
+      "页面凭据随后台一起复制,账号缺省 admin");
     const old = service.get(created.id);
     assert.equal(old.status, "archived");
     assert.equal(old.conclusion?.kind, "converted");
@@ -659,6 +710,7 @@ test("关联转正:两段式(校验过目→确认),工作区/报告/凭据继�
     // 单号唯一:第二个挂起会话再关联同单号 → 拒。
     const second = service.create({
       account: "dev", title: "重复请求", repoUrl: origin,
+      moduleId: MODULE_ID, environment: NO_TICKET_ENV,
     });
     const gate2 = await until(() => {
       const issue = service.get(second.id);
@@ -800,6 +852,9 @@ test("个人凭据前置门禁:这单会碰远端仓就先要令牌与邮箱,本
   });
   let service: IssueFlowService | undefined;
   try {
+    // 无单登记要模块+环境(#17);模块绑的是本地裸仓,不触发凭据门禁,
+    // 这里钉的始终是 Git 身份这道门。
+    seedModule(dataDir, origin);
     // 无凭据 + https 仓:登记直接拒,指路个人设置(门在发起前,不在克隆后)。
     service = new IssueFlowService(base);
     assert.throws(() => service!.create({
@@ -809,20 +864,23 @@ test("个人凭据前置门禁:这单会碰远端仓就先要令牌与邮箱,本
     // 自由探索同样拦:自由模式填了远端仓,克隆一样要用发起人身份。
     assert.throws(() => service!.create({
       account: "dev", title: "登录超时", repoUrl: httpsRepo, mode: "free",
+      moduleId: MODULE_ID, environment: NO_TICKET_ENV,
     }), /Git 令牌未配置/);
     await service.shutdown();
 
     // 令牌在而邮箱缺:提交署名无主,同样拦。
     service = new IssueFlowService(withCred());
     assert.throws(() => service!.create({
-      account: "dev", title: "登录超时", repoUrl: httpsRepo, mode: "fixed",
+      account: "dev", title: "登录超时", ticket: "DTS-2026-1001",
+      repoUrl: httpsRepo, mode: "fixed",
     }), /个人邮箱未配置.*个人设置/);
     await service.shutdown();
 
     // 令牌+邮箱齐:登记放行(克隆成败是后面回合的事,门禁只管身份在场)。
     service = new IssueFlowService(withCred("dev@example.com"));
     const created = service.create({
-      account: "dev", title: "登录超时", repoUrl: httpsRepo, mode: "fixed",
+      account: "dev", title: "登录超时", ticket: "DTS-2026-1001",
+      repoUrl: httpsRepo, mode: "fixed",
     });
     assert.equal(created.mode, "fixed");
 
@@ -830,11 +888,15 @@ test("个人凭据前置门禁:这单会碰远端仓就先要令牌与邮箱,本
     await service.shutdown();
     service = new IssueFlowService(base);
     const local = service.create({
-      account: "dev", title: "本地裸仓问题", repoUrl: origin, mode: "fixed",
+      account: "dev", title: "本地裸仓问题", ticket: "DTS-2026-1002",
+      repoUrl: origin, mode: "fixed",
     });
     assert.ok(local.id);
-    // 自由探索不填仓:纯研究形态,与凭据无关。
-    const pure = service.create({ account: "dev", title: "纯现象咨询", mode: "free" });
+    // 自由探索(有单,不带仓):纯研究形态,与凭据无关。
+    const pure = service.create({
+      account: "dev", title: "纯现象咨询", ticket: "DTS-2026-1003",
+      moduleId: MODULE_ID, environment: NO_TICKET_ENV, mode: "free",
+    });
     assert.ok(pure.id);
   } finally {
     await service?.shutdown().catch(() => undefined);
@@ -1000,18 +1062,22 @@ test("模式烙印:个人偏好回调决定缺省;显式入参可覆盖;裸服�
     issueFlowMode: (account) => account === "freebird" ? "free" : "fixed",
   });
   try {
+    const origin = bareOrigin(dataDir);
+    seedModule(dataDir, origin);
     const fixedOne = service.create({
-      account: "dev", title: "默认固定", ticket: "T1", repoUrl: bareOrigin(dataDir),
+      account: "dev", title: "默认固定", ticket: "T1", repoUrl: origin,
       mode: undefined,
     });
     assert.equal(fixedOne.mode, "fixed");
     const freeOne = service.create({
       account: "freebird", title: "偏好自由",
+      moduleId: MODULE_ID, environment: NO_TICKET_ENV,
     });
     assert.equal(freeOne.mode, "free", "偏好自由的用户烙印 free");
     assert.equal(freeOne.scenario, undefined);
     const forced = service.create({
       account: "dev", title: "显式自由", mode: "free",
+      moduleId: MODULE_ID, environment: NO_TICKET_ENV,
     });
     assert.equal(forced.mode, "free", "显式入参盖过回调");
   } finally {
@@ -1120,6 +1186,12 @@ test("业务模块映射(2026-08-28 v2):bind_module 只登记,拉仓靠 pull_rep
     id: "media-core", name: "媒体核心", description: "播放与转码",
     owner: "dev", repositories: [origin],
   }, "tester");
+  // 登记门禁(#17)要求无单登记自带模块:给一个占位模块过门,会话内
+  // 绑定 media-core 仍是首次绑定(首绑与改绑的转移账文案不同)。
+  createBusinessModule(dataDir, {
+    id: "entry-mod", name: "入口模块", description: "登记占位",
+    owner: "dev", repositories: [origin],
+  }, "tester");
   // 保存口强制模块至少绑一仓,零仓夹具只能直接落盘——这里钉的是
   // bind 侧对存量零仓数据的兜底打回。
   mkdirSync(join(dataDir, "business-modules", "empty-mod"), { recursive: true });
@@ -1152,9 +1224,18 @@ test("业务模块映射(2026-08-28 v2):bind_module 只登记,拉仓靠 pull_rep
     issueFlowMode: () => "fixed",
   });
   try {
-    // 无单 + 无仓登记:首轮即 prep_repo,Agent 检索→绑定→拉仓→分析,
-    // 全在一个回合里走完(不再有平台闸,也没有宿主代克隆)。
-    const created = service.create({ account: "dev", title: "转码失败" });
+    // 无单登记带模块+环境(#17 门禁):首轮即 prep_repo,Agent 检索→
+    // 绑定→拉仓→分析,全在一个回合里走完(不再有平台闸,也没有宿主代
+    // 克隆);登记已带同款模块时 bind_module 重绑只做事不倒转阶段。
+    const created = service.create({
+      account: "dev", title: "转码失败",
+      moduleId: "entry-mod",
+      environment: {
+        hosts: ["10.0.0.8"],
+        pagePassword: "page-secret",
+        backendPassword: "env-shared-secret",
+      },
+    });
     assert.equal(created.scenario, "no_ticket");
     const analyzed = await until(() => {
       const issue = service.get(created.id);
@@ -1288,8 +1369,11 @@ test("网管环境闸(2026-08-28):fetch_logs 缺环境举 env_needed(scope=logs)
     issueFlowMode: () => "fixed",
   });
   try {
+    // 无单登记必须带环境(#17):要测 env_needed 现场补配,登记只能走
+    // 有单路(有单不带环境放行,环境缺在会话里补)。
     const created = service.create({
       account: "dev", title: "查服务日志", repoUrl: origin,
+      ticket: "DTS-2026-1001", source: "dts",
     });
     const waiting = await until(() => {
       const issue = service.get(created.id);
@@ -1302,7 +1386,7 @@ test("网管环境闸(2026-08-28):fetch_logs 缺环境举 env_needed(scope=logs)
     // 配置入口(POST /issues/:id/environment 的服务本体):密码进 vault,
     // 状态只有引用;闸清掉,平台开回合让 AI 重试。
     const configured = service.attachEnvironment(created.id, {
-      hosts: ["10.0.0.8"], port: 22, password: "env-shared-secret",
+      hosts: ["10.0.0.8"], port: 22, backendPassword: "env-shared-secret",
     });
     assert.ok(configured.environment?.credential_ref, "状态里只有凭据引用");
     assert.equal(configured.gate, undefined, "配置即清闸");
@@ -1372,9 +1456,11 @@ test("催办续跑:模型提前收嘴被推回阶段,催办词带阶段目标与
     issueFlowMode: () => "fixed",
   });
   try {
+    seedModule(dataDir, origin);
     const created = service.create({
       account: "dev", title: "播放器偶发黑屏", mode: "fixed",
       repoUrl: origin,
+      moduleId: MODULE_ID, environment: NO_TICKET_ENV,
     });
     const waiting = await until(() => {
       const issue = service.get(created.id);
@@ -1414,9 +1500,11 @@ test("催办预算:连续收嘴只催 2 次,耗尽转人工(idle+备注),不再�
     issueFlowMode: () => "fixed",
   });
   try {
+    seedModule(dataDir, origin);
     const created = service.create({
       account: "dev", title: "播放器偶发黑屏", mode: "fixed",
       repoUrl: origin,
+      moduleId: MODULE_ID, environment: NO_TICKET_ENV,
     });
     const parked = await until(() => {
       const issue = service.get(created.id);
@@ -1457,9 +1545,11 @@ test("催办预算不跨回合传染:耗尽转人工后续聊重新拿满预算,
     issueFlowMode: () => "fixed",
   });
   try {
+    seedModule(dataDir, origin);
     const created = service.create({
       account: "dev", title: "播放器偶发黑屏", mode: "fixed",
       repoUrl: origin,
+      moduleId: MODULE_ID, environment: NO_TICKET_ENV,
     });
     const parked1 = await until(() => {
       const issue = service.get(created.id);

@@ -27,12 +27,14 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { createServer } from "node:http";
+import { EventEmitter } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
 import { MockDtsGateway, type DtsGateway } from "../src/issueFlow/gateways.ts";
 import { handleIssueRoutes } from "../src/issueFlow/routes.ts";
+import { createBusinessModule } from "../src/businessModuleLibrary.ts";
 import type {
   DtsTicketBrief,
   DtsTicketDetail,
@@ -118,6 +120,39 @@ function issueGet(
 }
 
 // ---- 会话fixture基建(与 issueFlowService/Fixed 测试同款假件) ----
+
+/** POST 版(带 JSON 体):与浏览器同一 readBody 协议过线,登记 wire 的
+ * 契约测试用——直调 service.create 绕过了 JSON 序列化边界。 */
+function issuePost(
+  parts: string[],
+  payload: unknown,
+  service?: IssueFlowService,
+): Promise<{ status: number; body: Record<string, any> }> {
+  return new Promise((resolve, reject) => {
+    const request = new EventEmitter() as any;
+    request.method = "POST";
+    let status = 0;
+    void handleIssueRoutes(
+      request,
+      {
+        writeHead: (code: number) => {
+          status = code;
+        },
+        end: (output?: string) => {
+          try {
+            resolve({ status, body: JSON.parse(output ?? "{}") });
+          } catch (error) {
+            reject(error);
+          }
+        },
+      } as any,
+      parts,
+      { issueFlow: service, authEnabled: false },
+    ).catch(reject);
+    request.emit("data", Buffer.from(JSON.stringify(payload)));
+    request.emit("end");
+  });
+}
 
 const GIT_ENV = {
   ...process.env,
@@ -281,7 +316,11 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail/环境验证�
       ticket: TICKET,
       source: "dts",
       repoUrl: origin,
-      environment: { hosts: ["10.0.0.8"], password: "env-shared-secret" },
+      environment: {
+        hosts: ["10.0.0.8"],
+        pagePassword: "page-secret",
+        backendPassword: "env-shared-secret",
+      },
     });
     // 中途闸照实走:报告确认后平台才继续修→UT→推→MR→绿→部署举闸。
     const analysisGate = await until(() => {
@@ -301,6 +340,17 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail/环境验证�
         ? issue : undefined;
     }, "全链走到环境验证闸(账齐的终点)");
 
+    // 环境样例:web/src/api.ts 的镜像本期不带页面凭据两键(前端环境
+    // 字段错位由工单 4 跟进),经变量带入绕开字面量的多属性检查;
+    // assertWireShape 对服务端投影仍逐键全量对账。
+    const environmentSample = {
+      credential_ref: "vault-ref",
+      name: "10.0.0.8",
+      hosts: ["10.0.0.8"],
+      port: 22,
+      page_account: "admin",
+      page_credential_ref: "vault-page-ref",
+    };
     // 期望侧:按 web/src/api.ts 的 IssueSummary 手写,undefined 键 = 可选。
     const summarySample: IssueSummary = {
       id: created.id,
@@ -316,12 +366,7 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail/环境验证�
       module: undefined,
       module_id: undefined,
       baseline: undefined,
-      environment: {
-        credential_ref: "vault-ref",
-        name: "10.0.0.8",
-        hosts: ["10.0.0.8"],
-        port: 22,
-      },
+      environment: environmentSample,
       mode: "fixed",
       scenario: "ticket",
       stage_states: ["pending"],
@@ -420,8 +465,18 @@ test("契约快照:无单结论闸带机器可读提案(conclude 卡的 proposal
     issueFlowMode: () => "fixed",
   });
   try {
+    createBusinessModule(dataDir, {
+      id: "pay-core", name: "支付核心", description: "收单与清结算",
+      owner: "dev", repositories: [origin],
+    }, "tester");
     const created = service.create({
       account: "dev", title: "列表导出超时", repoUrl: origin,
+      moduleId: "pay-core",
+      environment: {
+        hosts: ["10.0.0.8"],
+        pagePassword: "page-secret",
+        backendPassword: "env-shared-secret",
+      },
     });
     await until(() => {
       const issue = service.get(created.id);
@@ -475,7 +530,21 @@ test("契约快照:Agent 问题卡 waiting 投影(整卡形状+机械派码)", a
     modelsJson: model.modelsJson(),
   });
   try {
-    const created = service.create({ account: "dev", title: "偶发黑屏" });
+    // 无单登记门禁(#17):自由模式同样要模块+环境;夹具仓不参与本
+    // 测试的断言,绑个占位本地路径即可。
+    createBusinessModule(dataDir, {
+      id: "pay-core", name: "支付核心", description: "收单与清结算",
+      owner: "dev", repositories: ["/tmp/fixture.git"],
+    }, "tester");
+    const created = service.create({
+      account: "dev", title: "偶发黑屏",
+      moduleId: "pay-core",
+      environment: {
+        hosts: ["10.0.0.8"],
+        pagePassword: "page-secret",
+        backendPassword: "env-shared-secret",
+      },
+    });
     await until(() => {
       const issue = service.get(created.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
@@ -624,6 +693,63 @@ test("契约快照:DTS 列表与单据详情投影(全字段假网关)", async (
       service, { dts: new FullFieldDtsGateway() });
     assert.equal(detail.status, 200);
     assertWireShape(detailSample, detail.body, "GET /issues/dts/:ticket");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+  }
+});
+
+test("契约快照:POST /issues 登记新 wire 形(四件套过线,页面账号回执、密码只回引用)", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-contract5-"));
+  createBusinessModule(dataDir, {
+    id: "pay-core", name: "支付核心", description: "收单与清结算",
+    owner: "dev", repositories: ["/tmp/fixture.git"],
+  }, "tester");
+  const service = new IssueFlowService({
+    dataDir, provider: "p", model: "m", modelsJson: {},
+  });
+  try {
+    // 门禁过线:无单缺模块 / 缺后台密码,409 带人话直出。
+    const noModule = await issuePost(
+      ["issues"], { account: "dev", title: "下单超时" }, service);
+    assert.equal(noModule.status, 409);
+    assert.match(noModule.body.error, /必须指定业务模块/);
+    const noBackend = await issuePost(["issues"], {
+      account: "dev", title: "下单超时", module_id: "pay-core",
+      environment: {
+        hosts: ["10.0.0.8"],
+        page_password: "page-pw",
+        backend_password: "",
+      },
+    }, service);
+    assert.equal(noBackend.status, 409);
+    assert.match(noBackend.body.error, /网管后台密码/);
+
+    // 全量过线:页面账号显式传入,环境回执只有引用与非密账号,两个
+    // 密码本体永不过线。
+    const created = await issuePost(["issues"], {
+      account: "dev", title: "下单超时", module_id: "pay-core",
+      environment: {
+        hosts: ["10.0.0.8"],
+        page_account: "ops",
+        page_password: "page-pw",
+        backend_password: "backend-pw",
+      },
+    }, service);
+    assert.equal(created.status, 201);
+    assert.equal(created.body.module_id, "pay-core", "模块留痕上投影");
+    assert.equal(created.body.module, "支付核心", "模块名由服务端派生");
+    assert.equal(created.body.environment?.page_account, "ops");
+    assertWireShape({
+      credential_ref: "vault-ref",
+      name: "10.0.0.8",
+      hosts: ["10.0.0.8"],
+      port: 22,
+      page_account: "ops",
+      page_credential_ref: "vault-page-ref",
+    }, created.body.environment, "POST /issues .environment");
+    const receipt = JSON.stringify(created.body);
+    assert.ok(!receipt.includes("page-pw"), "页面密码本体不过线");
+    assert.ok(!receipt.includes("backend-pw"), "后台密码本体不过线");
   } finally {
     await service.shutdown().catch(() => undefined);
   }

@@ -30,7 +30,10 @@ import { EventLog, type SemanticEvent } from "../semanticEvents.ts";
 import { TranscriptStore } from "../transcriptStore.ts";
 import { GateService } from "../gateService.ts";
 import { HumanGate, renderDecision, type WaitingRecord } from "../humanGate.ts";
-import { IssueEnvironmentVault } from "../issueEnvironment.ts";
+import {
+  IssueEnvironmentVault,
+  type IssueEnvironmentInput as VaultEnvironmentInput,
+} from "../issueEnvironment.ts";
 import { TaskContainer, taskContainerInstance } from "../containerRuntime.ts";
 import {
   prepareContainerHostPaths,
@@ -185,8 +188,85 @@ export interface IssueEnvironmentInput {
   name?: string;
   hosts: string[];
   port?: number;
-  /** 单一共用密码(playbook 契约:sopuser/ossuser/ossadm 同密码)。 */
-  password: string;
+  /** 页面账号(网管页面登录名;缺省 admin,非密随配置落 issue.json)。 */
+  pageAccount?: string;
+  /** 页面密码(纯记录,本期无消费方,为页面自动化预留;只进 vault)。 */
+  pagePassword?: string;
+  /** 网管后台密码(playbook 契约:sopuser/ossuser/ossadm 同密码)。 */
+  backendPassword: string;
+}
+
+/** 四件套的机械校验与归一(登记与 env_needed 闸作答共用同一把尺,差别
+ * 只在页面密码是否必填:闸是拉日志/换库的现场补配,那些流程碰不到
+ * 网管页面)。归一在落盘前跑,半截登记不许烧掉会话号。 */
+function normalizeEnvironmentInput(
+  input: IssueEnvironmentInput,
+  withPage: boolean,
+): {
+  hosts: string[];
+  name: string;
+  port: number;
+  pageAccount: string;
+  pagePassword?: string;
+  backendPassword: string;
+} {
+  const hosts = input.hosts.map((host) => host.trim()).filter(Boolean);
+  if (!hosts.length) {
+    throw new IssueControlError("网管环境至少要有一个服务器地址");
+  }
+  const backendPassword = input.backendPassword?.trim();
+  if (!backendPassword) {
+    throw new IssueControlError("配置了网管环境就必须填写网管后台密码");
+  }
+  const pagePassword = input.pagePassword?.trim();
+  if (withPage && !pagePassword) {
+    throw new IssueControlError("配置了网管环境就必须填写页面密码");
+  }
+  return {
+    hosts,
+    name: input.name?.trim() || hosts[0],
+    port: input.port ?? 22,
+    pageAccount: input.pageAccount?.trim() || "admin",
+    ...(pagePassword ? { pagePassword } : {}),
+    backendPassword,
+  };
+}
+
+/** vault 行·后台凭据:playbook 契约三个系统账号同密码,按形状存三套,
+ * vault 校验与工具取密(sopuser)都不用特判。 */
+function backendVaultRow(
+  name: string,
+  host: string,
+  port: number,
+  password: string,
+): VaultEnvironmentInput {
+  return {
+    name,
+    purpose: "both",
+    host,
+    port,
+    accounts: ["sopuser", "ossuser", "ossadm"].map((username) =>
+      ({ username, password })),
+  };
+}
+
+/** vault 行·页面凭据:单账号独立成组(purpose=page),与后台凭据
+ * 互不混存——页面口令是另一把钥匙,将来页面自动化按自己的组解。 */
+function pageVaultRow(
+  name: string,
+  host: string,
+  port: number,
+  account: string,
+  password: string,
+): VaultEnvironmentInput {
+  return {
+    name: `${name}·页面`,
+    purpose: "page",
+    host,
+    port,
+    username: account,
+    password,
+  };
 }
 
 export interface IssueCreateInput {
@@ -525,12 +605,25 @@ export class IssueFlowService {
     let moduleName = input.module?.trim() || undefined;
     let moduleRepos: string[] | undefined;
     const moduleId = input.moduleId?.trim() || undefined;
+    // 登记门禁(无单定位的机械真相):无单号登记必须指名业务模块并带上
+    // 网管环境——仓的唯一来源是模块绑定,现场凭据发起时就要齐,固定/
+    // 自由两模式同等。有单号登记(DTS 页签)不拦:单据自带现场线索,
+    // 环境可以在会话内经 env_needed 闸现场补。
+    if (!ticket && !moduleId) {
+      throw new IssueControlError(
+        "无单号登记必须指定业务模块:代码仓从模块绑定带出,"
+          + "请回登记页选择模块后再发起");
+    }
     if (moduleId) {
       try {
         const module = readBusinessModule(this.options.dataDir, moduleId);
         if (module.status !== "active") {
           throw new IssueControlError(
             `业务模块「${module.name}」已归档,不能用于新问题会话`);
+        }
+        if (!module.repositories.length) {
+          throw new IssueControlError(
+            `业务模块「${module.name}」还没有绑定代码仓,请先补绑定再发起`);
         }
         moduleName = module.name;
         moduleRepos = module.repositories;
@@ -539,6 +632,11 @@ export class IssueFlowService {
         throw new IssueControlError(
           `业务模块 ${moduleId} 不存在或元数据不可读,请刷新模块列表后重试`);
       }
+    }
+    if (!ticket && !input.environment) {
+      throw new IssueControlError(
+        "无单号登记必须配置网管环境"
+          + "(地址、页面账号密码与网管后台密码)");
     }
     // 模块带仓:只登记模块没给仓时,按模块绑定整表带出(同样过协议
     // 校验与上限)。"选模块→带仓"在服务端同样成立,不是前端专属糖。
@@ -567,31 +665,15 @@ export class IssueFlowService {
     // 都按邮箱对人,缺了它推上去的提交是无主的)。无仓登记(代码仓
     // 推迟到拉取代码仓阶段)自然不拦——闸门补填时会再过同一道检查。
     this.requireGitIdentity(account, repoUrls);
-    let environment;
-    let environmentPassword: string | undefined;
-    if (input.environment) {
-      const hosts = input.environment.hosts.map((host) => host.trim()).filter(Boolean);
-      if (!hosts.length) throw new IssueControlError("网管环境至少要有一个服务器地址");
-      environmentPassword = input.environment.password;
-      if (!environmentPassword?.trim()) {
-        throw new IssueControlError("配置了网管环境就必须填写共用密码");
-      }
-      environment = {
-        credential_ref: "", // 登记后由 vault 回填
-        name: input.environment.name?.trim() || hosts[0],
-        hosts,
-        port: input.environment.port ?? 22,
-      };
-    }
+    // 四件套校验先行: mkdir/占号之前打回,半截登记不落任何盘。
+    if (input.environment) normalizeEnvironmentInput(input.environment, true);
 
     const id = this.nextId();
     const root = join(this.issuesRoot, id);
     mkdirSync(root, { recursive: true });
-    if (environment && environmentPassword) {
-      // 与「问题卡环境表单」(attachEnvironment)同一条 vault 路径:
-      // 密码只进加密文件,issue.json 永远只有引用。
-      environment = this.storeEnvironment(id, input.environment!);
-    }
+    const environment = input.environment
+      ? this.storeEnvironment(id, input.environment, true)
+      : undefined;
     const now = new Date().toISOString();
     const firstStage: FixedStage | "registered" = scenario
       ? fixedStages(scenario)[0]
@@ -673,47 +755,52 @@ export class IssueFlowService {
     }
   }
 
-  /** 网管环境落盘的唯一路径:密码只进 vault(AES-GCM 按会话隔离的
-   * 加密文件),issue.json/事件/提示词永远只有 credential_ref。playbook
-   * 契约:三个账号共用一个密码,按旧形状存三套(sopuser/ossuser/
-   * ossadm 同密码),vault 校验与工具取密(sopuser)都不用特判。
-   * 登记与 POST /issues/:id/environment 共用,秘密纪律只有一份。 */
+  /** 网管环境落盘的唯一路径:两组凭据只进 vault(AES-GCM 按会话隔离的
+   * 加密文件),issue.json/事件/提示词永远只有引用。后台凭据(both)是
+   * fetch_logs/build_deploy 的消费方;页面凭据(page)本期纯记录,为
+   * 页面自动化预留,两组各自成行、可分别解出。登记(withPage)与
+   * env_needed 闸作答(只收地址+后台密码,页面字段即便递了也不认)
+   * 共用本路径,秘密纪律只有一份。 */
   private storeEnvironment(
     id: string,
     input: IssueEnvironmentInput,
+    withPage: boolean,
   ): IssueEnvironmentConfig {
-    const hosts = input.hosts.map((host) => host.trim()).filter(Boolean);
-    if (!hosts.length) {
-      throw new IssueControlError("网管环境至少要有一个服务器地址");
-    }
-    const password = input.password;
-    if (!password?.trim()) {
-      throw new IssueControlError("配置了网管环境就必须填写共用密码");
-    }
-    const name = input.name?.trim() || hosts[0];
-    const port = input.port ?? 22;
-    const refs = this.vault.store(id, [{
-      name,
-      purpose: "both",
-      host: hosts[0],
-      port,
-      accounts: ["sopuser", "ossuser", "ossadm"].map((username) =>
-        ({ username, password })),
-    }]);
-    return { credential_ref: refs[0]?.id ?? "", name, hosts, port };
+    const parts = normalizeEnvironmentInput(input, withPage);
+    const rows = [
+      backendVaultRow(parts.name, parts.hosts[0], parts.port,
+        parts.backendPassword),
+      ...(parts.pagePassword
+        ? [pageVaultRow(parts.name, parts.hosts[0], parts.port,
+          parts.pageAccount, parts.pagePassword)]
+        : []),
+    ];
+    const refs = this.vault.store(id, rows);
+    return {
+      credential_ref: refs[0]?.id ?? "",
+      name: parts.name,
+      hosts: parts.hosts,
+      port: parts.port,
+      ...(parts.pagePassword
+        ? {
+          page_account: parts.pageAccount,
+          page_credential_ref: refs[1]?.id ?? "",
+        }
+        : {}),
+    };
   }
 
   /** 网管环境配置(问题卡 env_needed 闸的作答口,POST
    * /issues/:id/environment):登记时没配环境,拉日志/换库的工具现场
-   * 举闸后,用户在这里补地址与密码。密码进 vault 后即清闸并开平台
-   * 回合,让 Agent 重试刚才的操作。 */
+   * 举闸后,用户在这里补地址与网管后台密码。密码进 vault 后即清闸并开
+   * 平台回合,让 Agent 重试刚才的操作。 */
   attachEnvironment(
     id: string,
     input: IssueEnvironmentInput,
   ): IssueSummary {
     const live = this.require(id);
     const { state } = live;
-    const environment = this.storeEnvironment(id, input);
+    const environment = this.storeEnvironment(id, input, false);
     state.environment = environment;
     if (state.gate?.kind === "env_needed") {
       // 闸清在 issue.json(与 answer() 的闸裁决同一纪律)。清闸后
@@ -1175,7 +1262,7 @@ export class IssueFlowService {
       // 环境闸的作答口是 POST /issues/:id/environment(问题卡上的专用
       // 表单),不是选项卡:走错口不动状态,如实指路。
       throw new IssueControlError(
-        "网管环境请在问题卡的配置表单里填写服务器地址与共用密码后提交");
+        "网管环境请在问题卡的配置表单里填写服务器地址与网管后台密码后提交");
     }
     const route = stageGateRoute(gate.kind);
     const stageName = (stage: FixedStage): string =>
@@ -1652,24 +1739,41 @@ export class IssueFlowService {
       cpSync(join(live.root, "issue-analysis.md"),
         join(newRoot, "issue-analysis.md"));
     }
-    // 环境凭据:解出旧密码,给新会话存一份自己的(vault 按会话 id 隔离;
-    // 先复制后销毁旧的,顺序不能反)。
-    let environment = state.environment ? { ...state.environment } : undefined;
-    if (environment) {
-      const password = this.vault.credential(
-        id, state.environment!.credential_ref, "sopuser")?.password;
-      if (password) {
-        const refs = this.vault.store(newId, [{
-          name: environment.name,
-          purpose: "both",
-          host: environment.hosts[0],
-          port: environment.port,
-          accounts: ["sopuser", "ossuser", "ossadm"].map((username) =>
-            ({ username, password })),
-        }]);
-        environment = { ...environment, credential_ref: refs[0]?.id ?? "" };
-      } else {
-        environment = undefined;
+    // 环境凭据:两组各自解出、各自给新会话存一份自己的(vault 按会话 id
+    // 隔离;先复制后销毁旧的,顺序不能反)。解不出的组优雅缺省——后台
+    // 是消费方在场的依据,页面只是记录,谁解不出来就只缺谁,不炸转正。
+    const oldEnvironment = state.environment;
+    let environment: IssueEnvironmentConfig | undefined;
+    if (oldEnvironment) {
+      const backendPassword = this.vault.credential(
+        id, oldEnvironment.credential_ref, "sopuser")?.password;
+      const page = oldEnvironment.page_credential_ref
+        ? this.vault.credential(id, oldEnvironment.page_credential_ref)
+        : undefined;
+      const rows: VaultEnvironmentInput[] = [];
+      if (backendPassword) {
+        rows.push(backendVaultRow(oldEnvironment.name, oldEnvironment.hosts[0],
+          oldEnvironment.port, backendPassword));
+      }
+      if (page) {
+        rows.push(pageVaultRow(oldEnvironment.name, oldEnvironment.hosts[0],
+          oldEnvironment.port, page.username, page.password));
+      }
+      if (rows.length) {
+        const refs = this.vault.store(newId, rows);
+        environment = {
+          credential_ref: backendPassword ? refs[0]?.id ?? "" : "",
+          name: oldEnvironment.name,
+          hosts: oldEnvironment.hosts,
+          port: oldEnvironment.port,
+          ...(page
+            ? {
+              page_account: page.username,
+              page_credential_ref:
+                refs[backendPassword ? 1 : 0]?.id ?? "",
+            }
+            : {}),
+        };
       }
     }
     const now = new Date().toISOString();

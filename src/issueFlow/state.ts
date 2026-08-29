@@ -156,6 +156,12 @@ export interface IssueEnvironmentConfig {
   /** 网管服务器地址列表(playbook 二进制支持多台串行)。 */
   hosts: string[];
   port: number;
+  /** 页面账号(登记元信息的一部分,非密;env_needed 闸现场补配的
+   * 环境没有页面凭据,两键一并缺席,消费面按"没有"处理)。 */
+  page_account?: string;
+  /** 页面凭据组的 vault 引用(页面密码本体只在 vault;纯记录,本期
+   * 无消费方,为页面自动化预留)。 */
+  page_credential_ref?: string;
 }
 
 export interface IssueConclusion {

@@ -318,7 +318,11 @@ export async function handleIssueRoutes(
               ? body.environment.hosts.map(String) : [],
             ...(body.environment.port !== undefined
               ? { port: Number(body.environment.port) } : {}),
-            password: String(body.environment.password ?? ""),
+            ...(body.environment.page_account !== undefined
+              ? { pageAccount: String(body.environment.page_account) } : {}),
+            ...(body.environment.page_password !== undefined
+              ? { pagePassword: String(body.environment.page_password) } : {}),
+            backendPassword: String(body.environment.backend_password ?? ""),
           },
         } : {}),
       });
@@ -507,9 +511,10 @@ export async function handleIssueRoutes(
     }
 
     // 网管环境配置(env_needed 闸的作答口):登记时没配环境,拉日志/
-    // 换库现场举闸后在这里补地址与密码。密码只经此进 vault(与登记同
-    // 一条存储路径),状态/事件里永远只有引用——成功即清闸并开平台
-    // 回合让 Agent 重试。
+    // 换库现场举闸后在这里补地址与网管后台密码。密码只经此进 vault(与
+    // 登记同一条存储路径),状态/事件里永远只有引用——成功即清闸并开
+    // 平台回合让 Agent 重试。闸只收地址+后台密码:页面凭据是登记侧的
+    // 四件套,现场补配的流程(抓日志/换库)碰不到网管页面。
     if (method === "POST" && parts[2] === "environment" && parts.length === 3) {
       if (viewer?.role === "admin" || !brief || !own(brief.account)) {
         return done(403, { error: "只有归属人能配置网管环境" });
@@ -518,7 +523,7 @@ export async function handleIssueRoutes(
       return done(200, issueFlow.attachEnvironment(id, {
         hosts: Array.isArray(body.hosts) ? body.hosts.map(String) : [],
         ...(body.port !== undefined ? { port: Number(body.port) } : {}),
-        password: String(body.password ?? ""),
+        backendPassword: String(body.backend_password ?? ""),
       }));
     }
 

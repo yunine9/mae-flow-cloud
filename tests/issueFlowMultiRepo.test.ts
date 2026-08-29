@@ -131,7 +131,7 @@ test("issue.json 读取迁移:repo_url 与 repo_urls 双向补齐;push/mr/pipeli
   assert.equal((ledger as { push?: unknown }).push, undefined, "单数字段退役");
 });
 
-test("登记校验:模块必须存在且在架;仓数有上限;fixed 无仓放行(拉取代码仓阶段再定)", () => {
+test("登记校验:无单必须带模块与环境(两模式同等);模块存在/在架/非零仓;四件套缺一打回;有单不拦", () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-mr-"));
   const origin = bareOriginAt(dataDir, "origin.git");
   const service = new IssueFlowService({
@@ -150,8 +150,35 @@ test("登记校验:模块必须存在且在架;仓数有上限;fixed 无仓放�
     }, "tester");
     updateBusinessModule(dataDir, archived.id,
       { status: "archived" }, "tester", true, true);
+    // 零仓模块是存量脏数据(保存口已强制至少一仓),登记同样机械打回。
+    mkdirSync(join(dataDir, "business-modules", "empty-mod"), { recursive: true });
+    writeFileSync(
+      join(dataDir, "business-modules", "empty-mod", "module.json"),
+      `${JSON.stringify({
+        id: "empty-mod", name: "空模块", description: "没绑仓",
+        owner: "dev", maintainers: [], repositories: [], status: "active",
+        revision: 1, assets: [],
+        created_at: new Date().toISOString(), created_by: "tester",
+        updated_at: new Date().toISOString(), updated_by: "tester",
+      }, null, 2)}\n`,
+    );
 
-    // 模块不存在/已归档:fail-loud,不让编造的 module_id 落盘。
+    // 登记门禁(#17):无单号必须指名业务模块并带网管环境,固定/自由
+    // 两模式同等;三种模块失败各有其文案。
+    assert.throws(
+      () => service.create({ account: "dev", title: "t" }),
+      /必须指定业务模块/,
+    );
+    assert.throws(
+      () => service.create({ account: "dev", title: "t", mode: "free" }),
+      /必须指定业务模块/, "自由探索同等拦截",
+    );
+    assert.throws(
+      () => service.create({
+        account: "dev", title: "t", moduleId: "pay-core",
+      }),
+      /必须配置网管环境/,
+    );
     assert.throws(
       () => service.create({ account: "dev", title: "t", moduleId: "nope" }),
       /不存在/,
@@ -162,6 +189,40 @@ test("登记校验:模块必须存在且在架;仓数有上限;fixed 无仓放�
       }),
       /已归档/,
     );
+    assert.throws(
+      () => service.create({
+        account: "dev", title: "t", moduleId: "empty-mod",
+        environment: { hosts: ["10.0.0.8"], pagePassword: "p", backendPassword: "b" },
+      }),
+      /先补绑定/,
+    );
+    // 四件套缺一:缺地址 / 缺页面密码 / 缺后台密码各有其文案。
+    assert.throws(
+      () => service.create({
+        account: "dev", title: "t", moduleId: "pay-core",
+        environment: { hosts: [], pagePassword: "p", backendPassword: "b" },
+      }),
+      /服务器地址/,
+    );
+    assert.throws(
+      () => service.create({
+        account: "dev", title: "t", moduleId: "pay-core",
+        environment: { hosts: ["10.0.0.8"], pagePassword: " ", backendPassword: "b" },
+      }),
+      /页面密码/,
+    );
+    assert.throws(
+      () => service.create({
+        account: "dev", title: "t", moduleId: "pay-core",
+        environment: { hosts: ["10.0.0.8"], pagePassword: "p", backendPassword: "" },
+      }),
+      /后台密码/,
+    );
+    // 有单号登记(DTS 页签):不带模块与环境照常放行,环境可会话内
+    // 经 env_needed 闸现场补。
+    const deferred = service.create({ account: "dev", title: "无仓登记", ticket: "DTS1" });
+    assert.equal(deferred.repo_url, undefined, "无仓登记不再拦截");
+    assert.equal(deferred.scenario, "ticket");
     // 上限:9 个仓拒(模块库允许绑 20,会话拉取封顶 8)。
     assert.throws(
       () => service.create({
@@ -171,14 +232,9 @@ test("登记校验:模块必须存在且在架;仓数有上限;fixed 无仓放�
       }),
       /最多拉取/,
     );
-    // fixed 无仓(2026-08-28 拍板):登记放行——代码仓推迟到「拉取代码
-    // 仓」阶段由 repo_needed 闸补定,登记不再卡流程入口。
-    const deferred = service.create({ account: "dev", title: "无仓登记" });
-    assert.equal(deferred.repo_url, undefined, "无仓登记不再拦截");
-    assert.equal(deferred.scenario, "no_ticket");
     // 多仓去重:同址出现两次只落一份。
     const created = service.create({
-      account: "dev", title: "重复仓登记",
+      account: "dev", title: "重复仓登记", ticket: "DTS2",
       repoUrl: origin, repoUrls: [origin, origin],
     });
     const state = loadState(join(dataDir, "issues", created.id))!;
@@ -229,6 +285,11 @@ test("无单多仓端到端:模块带仓,AI 逐仓 pull_repo 落到 repo/<仓名
     const created = service.create({
       account: "dev", title: "下单超时",
       moduleId: "pay-core",
+      environment: {
+        hosts: ["10.0.0.8"],
+        pagePassword: "page-secret",
+        backendPassword: "env-shared-secret",
+      },
     });
     assert.equal(created.scenario, "no_ticket");
     assert.deepEqual(created.repo_urls, [originA, originB, originC],
