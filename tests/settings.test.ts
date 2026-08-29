@@ -124,12 +124,49 @@ test("数值校验:无限等待没有语法;models 必须真实存在才能选",
     SettingsError);
   assert.throws(() => settings.updateRuntime({ poll_interval_s: "abc" }),
     SettingsError);
+  settings.updateRuntime({
+    build_cache_retention_days: 21,
+    build_cache_max_gb: 80,
+  });
+  assert.equal(settings.runtime().build_cache_retention_days, 21);
+  assert.equal(settings.runtime().build_cache_max_gb, 80);
+  assert.throws(() => settings.updateRuntime({ build_cache_max_gb: -1 }),
+    /构建缓存容量上限/);
   assert.throws(() => settings.updateModels({ provider: "gpt" }),
     /先提供 models.json/);
   assert.throws(() => settings.updateModels({
     json: { providers: { glm: { models: [{ id: "glm-5.1" }] } } },
     provider: "glm", model: "no-such",
   }), /没有模型 no-such/);
+});
+
+test("团队执行约定只影响新任务，并与任务补充按层固定", () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-set-policy-"));
+  const settings = new RuntimeSettings(dataDir);
+  settings.updateExecutionPolicy({
+    team_instructions: "公共契约变化要点名影响方",
+  });
+  const service = new TaskService({
+    dataDir, provider: "a", model: "a-1", maxConcurrent: 0,
+    modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
+    settings,
+  });
+  const first = service.create("调整接口", {
+    taskInstructions: "先核对旧客户端",
+  });
+  assert.deepEqual(first.execution_profile?.layers.map((layer) => layer.scope),
+    ["team", "task"]);
+  assert.equal(first.execution_profile?.layers[0].instructions,
+    "公共契约变化要点名影响方");
+
+  settings.updateExecutionPolicy({ team_instructions: "新团队约定" });
+  const second = service.create("另一个任务");
+  assert.equal(first.execution_profile?.layers[0].instructions,
+    "公共契约变化要点名影响方", "运行中/历史任务不得随设置漂移");
+  assert.equal(second.execution_profile?.layers[0].instructions, "新团队约定");
+  assert.throws(() => settings.updateExecutionPolicy({
+    team_instructions: "x".repeat(2001),
+  }), /团队执行约定不能超过 2000/);
 });
 
 test("旧版服务形态配置自动忽略:部署链路不再从管理页覆盖", () => {
@@ -267,6 +304,25 @@ test("路由权限:admin 可读改,开发成员 403,密钥不出网", async () =
     const visionView = await visionPut.text();
     assert.doesNotMatch(visionView, /vision-secret-3333/);
     assert.match(visionView, /••••3333/);
+    const policyPut = await fetch(`${base}/settings/execution-policy`, {
+      method: "PUT", headers: { cookie: admin },
+      body: JSON.stringify({ team_instructions: "不确定时明确说明，不要猜" }),
+    });
+    assert.equal(policyPut.status, 200);
+    const policyView = await policyPut.json() as {
+      execution_policy: { team_instructions?: string };
+    };
+    assert.equal(policyView.execution_policy.team_instructions,
+      "不确定时明确说明，不要猜");
+    const invalidPolicy = await fetch(`${base}/settings/execution-policy`, {
+      method: "PUT", headers: { cookie: admin },
+      body: JSON.stringify({ stage_customizations: [{
+        playbook_id: "platform.made-up",
+        optional_activities: ["skip-all-gates"],
+      }] }),
+    });
+    assert.equal(invalidPolicy.status, 400);
+    assert.match(await invalidPolicy.text(), /不存在的阶段方案/);
     const visionTest = await fetch(`${base}/settings/vision/test`, {
       method: "POST", headers: { cookie: admin },
     });
@@ -277,6 +333,22 @@ test("路由权限:admin 可读改,开发成员 403,密钥不出网", async () =
     assert.ok(model.requests.some((request: any) =>
       request.messages?.some((message: any) =>
         message.content?.some?.((block: any) => block.type === "image"))));
+
+    const deniedCache = await fetch(`${base}/settings/build-cache`, {
+      headers: { cookie: dev },
+    });
+    assert.equal(deniedCache.status, 403);
+    const cache = await fetch(`${base}/settings/build-cache`, {
+      headers: { cookie: admin },
+    });
+    assert.equal(cache.status, 200);
+    assert.equal((await cache.json() as { configured: boolean }).configured, false);
+    const reclaimed = await fetch(`${base}/settings/build-cache/reclaim`, {
+      method: "POST", headers: { cookie: admin },
+      body: JSON.stringify({ all_unused: true }),
+    });
+    assert.equal(reclaimed.status, 200);
+    assert.equal((await reclaimed.json() as { reclaimed: number }).reclaimed, 0);
 
     const bad = await fetch(`${base}/settings/runtime`, {
       method: "PUT", headers: { cookie: admin },

@@ -40,7 +40,8 @@
 
 **集成产品形态:一个 clone 就是全部**——内核快照收编在 `kernel/`
 (harness/sync-kernel.sh 维护,serve 自动发现:MAE_FLOW_HOME >
-../mae-flow > kernel/),不用再单独 clone 内核仓。
+kernel/ > ../mae-flow),不用再单独 clone 内核仓；需要联调活内核时
+显式设置 MAE_FLOW_HOME。
 
 1. **一切放 WSL 自己的 ext4**(`~/` 下)。`/mnt/c` 是 9p,chmod 600
    不可靠(密钥文件纪律会破)且慢一个量级;
@@ -189,7 +190,8 @@ codehubcli 命令行,代码零改动。配置形状(权限 600,文件头注释�
 |---|---|---|
 | `POST /mr` | `{repo, source_branch, target_branch, title}` | `{url}`(MR 链接,展示用)`, id?`(iid,门禁/讨论查询带回) |
 | `POST /pipeline/trigger` | `{repo, sha}` | `{status: "success"\|"failed"\|"running", log?, checks?}` |
-| `GET /pipeline/status?sha=<sha>&repo=<url>` | — | `{runs: [{status, log?, checks?}]}`(取最后一个终态 run) |
+| `GET /pipeline/status?sha=<sha>&repo=<url>&mr=<iid>` | — | `{runs: [{status, log?, checks?}]}`(取最后一个终态 run) |
+| `GET /pipeline/artifacts?sha=<sha>&repo=<url>&mr=<完整 MR URL>` | — | `{files: [{name, text}]}`(失败材料；与 status 的 `mr` 形状不同) |
 
 可选的终态 `checks` 固定形状如下。`status` 可用
 `success/failed/running/pending/canceled/skipped/not_run`；部署适配层负责
@@ -213,6 +215,28 @@ pipeline_artifacts,不配=404=宿主按纯流水线旧语义)与按能力核对�
 检视回复默认只回复不代点"已解决"(报告 D3:resolve 归检视人);
 团队明确允许代点的部署,serve 加 `--resolve-discussions` 且适配层配
 `discussion_resolve`。
+
+MCP 网关令牌与 CodeHub 项目/个人令牌是两个鉴权域。`{token}`
+仍只供 CodeHub REST、`codehub-cli`、push/MR 与已验证的 REST 兼容路；
+CodeHub/Build/CodeCCP/CodeCov 等所有 streamable-HTTP MCP 以及 SSE 日志
+下载都使用 `mcp-token`。
+部署时把可刷新令牌放在 `/etc/mae-flow-cloud/mcp-token`（权限 0600），
+并把以下环境传给 adapter 进程：
+
+```bash
+MFC_MCP_TOKEN_FILE=/etc/mae-flow-cloud/mcp-token
+# 可选：鉴权失效时立即调一次现有刷新脚本（不经 shell）
+MFC_MCP_TOKEN_REFRESH_COMMAND=/usr/local/bin/refresh-mcp-token
+MFC_MCP_TOKEN_REFRESH_TIMEOUT=15
+```
+
+脚本继续每 5 分钟刷新没有问题；采集器会按 mtime 换新 token，鉴权失败
+时立即刷新/重试一次，仍失败则退出当前请求。Cloud 会在 3 分钟后
+重新取证，不会在 Node HTTP 处理路径里等 3 分钟。如刷新脚本直接改原
+文件，建议改为写临时文件后 `rename` 的原子替换，避免读到半个 token。
+`MFC_W3TOKEN_FILE` 默认不配：目前没有独立 w3token 的现场证据，代码也
+不会把 mcp-token 自动复制到 `w3token` 头。只有某网关后续实测明确要求
+时才显式配置，即使指向同一文件也必须有实证。
 
 - `repo` = 这一单的交付仓地址(任务级可选,缺省=部署仓)。单仓部署的
   适配层/假件可以忽略它;多仓时靠它路由到对的 CodeHub 仓;
@@ -471,6 +495,8 @@ Cloud 只有一种最终质量语义，不需要管理员选择。推送前 Agen
   最终通过证据；
 - push 后保留 `external_verify`；流水线红灯进入轻量修复环，修复依据该次
   绑定 SHA 的流水线材料，新 HEAD 再走一次推送前编译+UT。
+- 红灯只在对应维度拿到可定位报错后才派修；全缺证据时先有限重试，随后
+  由《流水线证据缺口》批注回灌或平台晚到证据自动恢复，不派盲修也不扣轮次。
 
 订单中的固定形状如下（除 `UT生成方式` 会按实际可用 Skill 选择外，不是
 配置项）：
@@ -715,6 +741,8 @@ MFC 管理的跨任务业务/工程知识只走上一节的任务知识索引，
   "poll-interval": 30, "poll-timeout": 1800,
   "max-concurrent": 2,
   "workspace-retention-days": 14,
+  "build-cache-retention-days": 30,
+  "build-cache-max-gb": 100,
   "isolate-image": "registry.intra/mae-flow/task-builder@sha256:<digest>",
   "isolate-memory": "8g", "isolate-cpus": "8", "isolate-pids": 512,
   "isolate-network": "bridge",
@@ -749,6 +777,8 @@ install -m 600 /dev/null /etc/mae-flow-cloud/mcp-token
 | isolate-memory / isolate-cpus / isolate-pids | 8g / 8 / 512 | 每个任务容器的资源上限；`isolate-cpus` 是可用上限，不是预留核数 |
 | isolate-network | bridge | 任务容器网络；拒绝 host/container 模式 |
 | isolate-cache-root | `<data>/build-cache` | 按仓库哈希隔离的 Maven/npm/ccache/XDG 缓存 |
+| build-cache-retention-days | 30 | 仓库构建缓存从最后一次真实挂载起连续未使用多少天后自动回收；`0`=不按时间回收。正在运行或仍可能继续的任务一律保护 |
+| build-cache-max-gb | 100 | 构建缓存总量上限，超出后按最久未用优先回收；`0`=不限容量。扫描与删除使用异步 I/O，不阻塞服务请求 |
 | isolate-user | **Linux:服务进程 uid:gid**;root 守护形态必须显式给数字 uid:gid;其他平台:镜像内非 root 用户 | Linux 普通服务账号不配时按自己的 uid:gid 跑。root 守护进程必须显式给非 root 数字 uid:gid；Cloud 在容器启动前把实际代码工作区和分仓缓存安全交给该用户，不修改任务台账与凭据目录 |
 | build-slots | 1 | 同时运行的 prepush 重构建数，独立于普通 Agent 并发 |
 | prepush-attempt-timeout-minutes | 普通仓 30 / C++ 仓 60 | 单轮 prepush 的总墙钟预算；只在代表仓实测确实更慢时覆盖 |
@@ -765,7 +795,7 @@ install -m 600 /dev/null /etc/mae-flow-cloud/mcp-token
 管理员登录 Web 后左侧「服务设置」页,可热改两类东西(存
 `<data>/settings.json`,权限 600,**压过部署值**):
 
-- **运行参数**:并发数、修复轮预算、轮询间隔/预算、现场保留期。生效边界如实:
+- **运行参数**:并发数、修复轮预算、轮询间隔/预算、现场保留期，以及构建缓存保留期/容量上限。生效边界如实:
   并发=下一次调度,修复轮/轮询=下一次红灯/下一轮轮询;页面直接显示
   当前服务默认值，留空即使用默认值，不要求管理员猜启动参数。
 - **模型网关**:网关地址、API Key、模型名称三项；服务端转换为任务

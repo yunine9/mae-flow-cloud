@@ -90,6 +90,12 @@ export interface AuthUser {
   issue_flow?: "fixed" | "free";
 }
 
+export interface CollaborationAssignee {
+  username: string;
+  ready: boolean;
+  missing: string[];
+}
+
 export type WishKind = "wish" | "issue";
 export type WishStatus = "open" | "accepted" | "done" | "declined";
 
@@ -320,6 +326,12 @@ export async function listUsers(): Promise<AuthUser[]> {
   return response.json();
 }
 
+export async function listCollaborationAssignees(): Promise<CollaborationAssignee[]> {
+  const response = await fetch("/auth/collaboration-assignees");
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
 export async function createUser(
   username: string,
   password: string,
@@ -376,9 +388,39 @@ export async function putCommitter(
  * 随后幂等生成各仓交付；不是独立于审批卡之外的第二套状态。 */
 export async function confirmRequirementGraph(
   taskId: string,
+  repositoryAssignees?: Record<string, string>,
 ): Promise<TaskSummary> {
   const response = await fetch(
-    `/tasks/${encodeURIComponent(taskId)}/graph/confirm`, { method: "POST" });
+    `/tasks/${encodeURIComponent(taskId)}/graph/confirm`, {
+      method: "POST",
+      body: JSON.stringify({ repository_assignees: repositoryAssignees }),
+    });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function putRepositoryAssignees(
+  taskId: string,
+  repositoryAssignees: Record<string, string>,
+): Promise<TaskSummary> {
+  const response = await fetch(
+    `/tasks/${encodeURIComponent(taskId)}/repository-assignees`, {
+      method: "PUT",
+      body: JSON.stringify({ repository_assignees: repositoryAssignees }),
+    });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function putTaskCollaborators(
+  taskId: string,
+  collaborators: string[],
+): Promise<TaskSummary> {
+  const response = await fetch(
+    `/tasks/${encodeURIComponent(taskId)}/collaborators`, {
+      method: "PUT",
+      body: JSON.stringify({ collaborators }),
+    });
   if (!response.ok) throw new Error(await errorText(response));
   return response.json();
 }
@@ -437,6 +479,8 @@ export interface TaskProgress {
   phases: string[];
   current_index: number;
   current_phase: string;
+  /** 稳定内核步骤 ID；界面仍展示 step 人话标题。 */
+  step_id?: string;
   step?: string;
   revision?: number;
   /** 子任务里程碑由服务端透传；缺席时沿用原有阶段进度展示。 */
@@ -484,6 +528,86 @@ export interface TaskTokenUsage {
   source: "provider";
 }
 
+export interface ExecutionPlan {
+  schema: "mae-flow-execution-plan/1";
+  plan_id: string;
+  plan_revision: string;
+  step: {
+    id: string;
+    title: string;
+    phase: string;
+    state_revision?: number;
+  };
+  strategy: {
+    id: string;
+    version: string;
+    title: string;
+    summary: string;
+    source: "platform_default";
+    selection_reason: string;
+  };
+  contract: {
+    human_decision: boolean;
+    evidence: Array<{ type: string; label: string }>;
+    outputs: string[];
+  };
+  activities: Array<{
+    id: string;
+    title: string;
+    description: string;
+    required: boolean;
+    source?: "platform_default" | "customized";
+  }>;
+  resources: Array<{
+    id: string;
+    kind: "guidance" | "standard" | "agent" | "platform" | "knowledge"
+      | "skill" | "tool";
+    name: string;
+    ref?: string;
+    usage: "required" | "when_needed" | "on_demand";
+    preferred?: boolean;
+  }>;
+  knowledge: {
+    loading: "indexed_on_demand";
+    explanation: string;
+  };
+  customization: {
+    mode: "bounded";
+    customizable: string[];
+    locked: string[];
+    effective_source: "platform_default" | "platform_default+overrides";
+    profile_revision?: string;
+    layers: Array<{
+      scope: "team" | "business_module" | "repository" | "task";
+      source_id: string;
+      title: string;
+      instructions: string;
+    }>;
+    stage_layers: Array<ExecutionStageCustomization & {
+      scope: "team" | "business_module" | "repository" | "task";
+      source_id: string;
+      title: string;
+    }>;
+  };
+}
+
+export interface ExecutionStageCustomization {
+  playbook_id: string;
+  instructions?: string;
+  optional_activities: string[];
+  preferred_resources: string[];
+}
+
+export interface ExecutionPlaybookOption {
+  id: string;
+  version: string;
+  title: string;
+  summary: string;
+  phase: string;
+  activities: ExecutionPlan["activities"];
+  resources: ExecutionPlan["resources"];
+}
+
 export interface TaskSummary {
   id: string;
   title?: string;
@@ -528,6 +652,8 @@ export interface TaskSummary {
    * 页面据此如实说明,别让人对着 404 的代码差异发愣。 */
   workspace_reclaimed_at?: string;
   luban_account?: string;
+  /** 跨仓主任务共同开发者；主责任人仍是唯一的 luban_account。 */
+  collaborators?: string[];
   approval_mode?: "inherit" | "manual" | "moonlight";
   repo_url?: string;
   repositories?: string[];
@@ -551,13 +677,15 @@ export interface TaskSummary {
   requirement_graph?: {
     stage: "analysis" | "confirmed";
     repositories: Array<{
-      id: string; name: string; url: string; responsibility?: string; task_id?: string;
+      id: string; name: string; url: string; responsibility?: string;
+      assignee?: string; task_id?: string;
     }>;
     /** `from 依赖 to`：from 等待 to，to 是前置仓库。 */
     dependencies: Array<{ from: string; to: string; reason?: string }>;
   };
   parent_task_id?: string;
   blocked_by?: string[];
+  cross_repository_updates?: CrossRepositoryUpdate[];
   waiting?: {
     waiting_id: string;
     state_version: number;
@@ -592,6 +720,16 @@ export interface TaskSummary {
     waiting_on?: string;
     /** 自愈已停、等人介入的原因。有它就该亮牌子给「重跑续推」。 */
     stalled?: string;
+    /** 红灯维度缺少可修复原文；工作台据此开放“批注回灌”入口。 */
+    evidence_gap?: {
+      sha: string;
+      state: "retrying" | "waiting_human" | "partial";
+      missing_dimensions: Array<"COMPILE" | "UT" | "CODECHECK">;
+      available_dimensions: Array<"COMPILE" | "UT" | "CODECHECK">;
+      reasons: string[];
+      attempts: number;
+      notified_at?: string;
+    };
     /** 修复环账本(服务端事实镜像,前端不推断只呈现)。 */
     loop?: {
       round: number;
@@ -617,6 +755,10 @@ export interface TaskSummary {
   /** push 前人工确认交付范围(任务级显式开关,缺省继承个人设置)。 */
   push_confirmation?: boolean;
   progress?: TaskProgress;
+  /** 当前阶段采用什么做法的只读说明；状态与完成条件仍以内核为准。 */
+  execution_plan?: ExecutionPlan;
+  /** 可选执行补充未被采用时的明确降级说明。 */
+  execution_profile_warning?: string;
   control?: {
     last_action: "pause" | "resume" | "cancel";
     actor: string;
@@ -624,6 +766,42 @@ export interface TaskSummary {
     paused_from?: TaskStatus;
   };
 }
+
+export interface CrossRepositoryUpdate {
+  id: string;
+  parent_task_id: string;
+  source_task_id: string;
+  source_repository?: string;
+  author: string;
+  text: string;
+  target_task_ids: string[];
+  created_at: string;
+}
+
+export interface IssueEnvironmentRef {
+  id: string;
+  name: string;
+  purpose: "logs" | "deploy" | "both";
+  protocol: "ssh";
+  host: string;
+  port: number;
+  accounts: Array<{
+    username: string;
+    credential_state: "stored";
+  }>;
+  /** 兼容短暂存在过的单账号任务现场。 */
+  username?: string;
+  credential_state?: "stored";
+}
+
+export interface IssueEnvironmentInput {
+  name: string;
+  purpose: "logs" | "deploy" | "both";
+  host: string;
+  port?: number;
+  accounts: Array<{ username: string; password: string }>;
+}
+
 
 /** 历史条目(服务端 projection.ts 的 TaskHistoryEntry 镜像)。 */
 export type TaskHistoryEntry = TaskSummary & {
@@ -772,6 +950,8 @@ export interface LaunchOptions {
   workflows: Array<
     { key: string; label: string; description?: string;
       steps?: number; acks?: number }>;
+  execution_playbooks: ExecutionPlaybookOption[];
+  execution_stage_defaults: ExecutionStageCustomization[];
   /** 已发布的可选业务模块摘要；知识正文不会随目录接口返回。 */
   business_modules: BusinessModuleLaunchOption[];
   engineering_knowledge: EngineeringKnowledgeLaunchOption[];
@@ -1459,6 +1639,8 @@ export async function createTask(
     baseline?: string;
     model?: { provider: string; model: string };
     repairRounds?: number;
+    taskInstructions?: string;
+    executionStageCustomizations?: ExecutionStageCustomization[];
     repositorySkillCatalogToken?: string;
     selectedRepositorySkillIds?: string[];
     selectedBusinessModuleIds?: string[];
@@ -1484,6 +1666,8 @@ export async function createTask(
       baseline: extras?.baseline || undefined,
       model: extras?.model,
       repair_rounds: extras?.repairRounds,
+      task_instructions: extras?.taskInstructions?.trim() || undefined,
+      execution_stage_customizations: extras?.executionStageCustomizations,
       repository_skill_catalog_token:
         extras?.repositorySkillCatalogToken || undefined,
       selected_repository_skill_ids:
@@ -1512,6 +1696,8 @@ export async function decide(
     catalogToken: string;
     selectedIds: string[];
   },
+  /** Chain 图上的逐仓责任人；只在“确认并生成任务”时发送。 */
+  repositoryAssignees?: Record<string, string>,
   /** 代码检视勾选的最终交付文件；空数组表示明确不选任何文件。 */
   deliveryPaths?: string[],
 ): Promise<{ conflict?: string }> {
@@ -1525,6 +1711,7 @@ export async function decide(
       annotation_ids: annotationIds?.length ? annotationIds : undefined,
       repository_skill_catalog_token: repositorySkills?.catalogToken,
       selected_repository_skill_ids: repositorySkills?.selectedIds,
+      repository_assignees: repositoryAssignees,
       delivery_paths: deliveryPaths,
     }),
   });
@@ -1600,6 +1787,19 @@ export async function interruptTask(
     return { error: String(body.error ?? `HTTP ${response.status}`) };
   }
   return {};
+}
+
+export async function publishCrossRepositoryUpdate(
+  taskId: string,
+  text: string,
+): Promise<CrossRepositoryUpdate> {
+  const response = await fetch(
+    `/tasks/${encodeURIComponent(taskId)}/cross-repository-update`, {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
 }
 
 export interface DeveloperAssistantMessage {
@@ -1749,7 +1949,7 @@ export interface Annotation {
   kind: "doc" | "code";
   status: "draft" | "sent" | "verified" | "dropped";
   sent_at?: string;
-  sent_via?: "interrupt" | "decision";
+  sent_via?: "interrupt" | "decision" | "pipeline_evidence";
   verified_at?: string;
   /** 第几次返工(0/缺省 = 首轮)。 */
   rework?: number;
@@ -2025,7 +2225,15 @@ export interface SettingsView {
     poll_interval_s?: number;
     poll_timeout_s?: number;
     workspace_retention_days?: number;
+    build_cache_retention_days?: number;
+    build_cache_max_gb?: number;
   };
+  execution_policy: {
+    /** 只影响保存后新建任务；每单会固定快照。 */
+    team_instructions?: string;
+    stage_customizations?: ExecutionStageCustomization[];
+  };
+  execution_playbooks: ExecutionPlaybookOption[];
   models: {
     configured: boolean;
     provider?: string;
@@ -2053,6 +2261,8 @@ export interface SettingsView {
       poll_interval_s: number;
       poll_timeout_s: number;
       workspace_retention_days: number;
+      build_cache_retention_days: number;
+      build_cache_max_gb: number;
     };
     models: {
       configured: boolean;
@@ -2095,8 +2305,50 @@ export async function getSettings(): Promise<SettingsView> {
   return response.json();
 }
 
+export interface BuildCacheEntry {
+  key: string;
+  repository_hint?: string;
+  last_used_at: string;
+  size_bytes: number;
+  active: boolean;
+  tracked: boolean;
+}
+
+export interface BuildCacheStatus {
+  configured: boolean;
+  root?: string;
+  caches: number;
+  active: number;
+  total_bytes: number;
+  entries: BuildCacheEntry[];
+  policy: { retention_days: number; max_bytes: number };
+}
+
+export interface BuildCacheReclaimResult {
+  reclaimed: number;
+  freed_bytes: number;
+  skipped_active: number;
+  failed: Array<{ key: string; error: string }>;
+  status: BuildCacheStatus;
+}
+
+export async function getBuildCacheStatus(): Promise<BuildCacheStatus> {
+  const response = await fetch("/settings/build-cache");
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function reclaimUnusedBuildCaches(): Promise<BuildCacheReclaimResult> {
+  const response = await fetch("/settings/build-cache/reclaim", {
+    method: "POST",
+    body: JSON.stringify({ all_unused: true }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
 async function putSettings(
-  section: "runtime" | "models" | "vision",
+  section: "runtime" | "models" | "vision" | "execution-policy",
   body: unknown,
 ): Promise<SettingsView> {
   const response = await fetch(`/settings/${section}`, {
@@ -2111,6 +2363,13 @@ export function putRuntimeSettings(
   body: Record<string, unknown>,
 ): Promise<SettingsView> {
   return putSettings("runtime", body);
+}
+
+export function putExecutionPolicySettings(body: {
+  team_instructions: string;
+  stage_customizations?: ExecutionStageCustomization[];
+}): Promise<SettingsView> {
+  return putSettings("execution-policy", body);
 }
 
 export function putModelsSettings(body: {

@@ -26,6 +26,11 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import {
+  normalizeExecutionStageCustomizations,
+  normalizeTeamExecutionInstructions,
+  type ExecutionStageCustomization,
+} from "./executionProfile.ts";
 
 export interface RuntimeKnobs {
   max_concurrent?: number;
@@ -35,6 +40,10 @@ export interface RuntimeKnobs {
   /** 现场保留期(天):终态任务过期后回收克隆等重货,台账原样留下。
    * 0 = 永不回收。改了下一轮清理生效(每天扫一次)。 */
   workspace_retention_days?: number;
+  /** 仓库构建缓存连续未使用的保留期；0 = 不按时间回收。 */
+  build_cache_retention_days?: number;
+  /** 仓库构建缓存总容量上限(GB)；0 = 不设容量上限。 */
+  build_cache_max_gb?: number;
 }
 
 export interface ModelsSettings {
@@ -47,9 +56,16 @@ export interface ModelsSettings {
   vision?: { provider: string; model: string };
 }
 
+export interface ExecutionPolicySettings {
+  /** 新任务采用并固定；运行中与历史任务不漂移。 */
+  team_instructions?: string;
+  stage_customizations?: ExecutionStageCustomization[];
+}
+
 interface Stored {
   runtime?: RuntimeKnobs;
   models?: ModelsSettings;
+  execution_policy?: ExecutionPolicySettings;
 }
 
 export class SettingsError extends Error {}
@@ -117,6 +133,30 @@ export class RuntimeSettings {
     return this.load().models ?? {};
   }
 
+  executionPolicy(): ExecutionPolicySettings {
+    return this.load().execution_policy ?? {};
+  }
+
+  updateExecutionPolicy(patch: Record<string, unknown>): void {
+    const teamInstructions = "team_instructions" in patch
+      ? normalizeTeamExecutionInstructions(
+          patch.team_instructions == null
+            ? undefined : String(patch.team_instructions))
+      : this.executionPolicy().team_instructions;
+    const stageCustomizations = "stage_customizations" in patch
+      ? normalizeExecutionStageCustomizations(
+          patch.stage_customizations, "团队阶段执行方案")
+      : this.executionPolicy().stage_customizations ?? [];
+    this.save({
+      ...this.load(),
+      execution_policy: {
+        team_instructions: teamInstructions,
+        ...(stageCustomizations.length
+          ? { stage_customizations: stageCustomizations } : {}),
+      },
+    });
+  }
+
   updateRuntime(patch: Record<string, unknown>): void {
     const next: RuntimeKnobs = {
       ...this.runtime(),
@@ -134,6 +174,14 @@ export class RuntimeSettings {
         knob(patch.workspace_retention_days, "现场保留期")
         ?? (("workspace_retention_days" in patch)
           ? undefined : this.runtime().workspace_retention_days),
+      build_cache_retention_days:
+        knob(patch.build_cache_retention_days, "构建缓存保留期")
+        ?? (("build_cache_retention_days" in patch)
+          ? undefined : this.runtime().build_cache_retention_days),
+      build_cache_max_gb:
+        knob(patch.build_cache_max_gb, "构建缓存容量上限")
+        ?? (("build_cache_max_gb" in patch)
+          ? undefined : this.runtime().build_cache_max_gb),
     };
     this.save({ ...this.load(), runtime: next });
   }
@@ -313,6 +361,7 @@ export class RuntimeSettings {
    * 谁在这个函数里返回明文,谁就在给未来的泄漏签字。 */
   view(): {
     runtime: RuntimeKnobs;
+    execution_policy: ExecutionPolicySettings;
     models: { configured: boolean; provider?: string; model?: string;
               url?: string; api?: string; key_hint?: string;
               providers: Array<{ name: string; models: string[]; key_hint?: string }>;
@@ -338,6 +387,7 @@ export class RuntimeSettings {
     } | undefined)?.providers ?? {})[models.vision?.provider ?? ""];
     return {
       runtime: this.runtime(),
+      execution_policy: this.executionPolicy(),
       models: {
         configured: !!selectedSpec?.baseUrl && !!selectedSpec?.apiKey
           && !!models.model,

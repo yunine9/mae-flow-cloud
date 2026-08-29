@@ -322,6 +322,13 @@
   },
   "delivery_review": {
    "title": "最终代码增量检视",
+   "approval_subject": {
+    "kind": "worktree"
+   },
+   "confirmation_answers": [
+    "交付增量无需调整，确认推送",
+    "代码无需调整，按清单交付"
+   ],
    "evidence": [
     {
      "type": "delivery_manifest_committed"

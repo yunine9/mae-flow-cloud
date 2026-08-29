@@ -257,6 +257,60 @@ test("交付文件快照区分工作区可见项与 HEAD 真正会推送的文�
   assert.equal(snapshot?.head, run("rev-parse", "HEAD").trim());
 });
 
+test("Agent 平台注入目录不混入工作区检视，误提交后按完整历史拦截", async () => {
+  const cwd = makeSite({ git: true });
+  const run = (...args: string[]) =>
+    execFileSync("git", ["-C", cwd, ...args], { encoding: "utf-8" });
+  mkdirSync(join(cwd, ".agents", "skills", "existing"), { recursive: true });
+  writeFileSync(join(cwd, ".agents", "skills", "existing", "SKILL.md"),
+    "仓库原本跟踪的 Skill\n");
+  run("add", ".agents/skills/existing/SKILL.md");
+  run("commit", "--quiet", "-m", "repository skill baseline");
+  const baseline = run("rev-parse", "HEAD").trim();
+  writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify({
+    step_heads: { branch_create: baseline },
+  }));
+
+  mkdirSync(join(cwd, ".claude", "skills", "central"), { recursive: true });
+  mkdirSync(join(cwd, ".cac", "skills", "central"), { recursive: true });
+  writeFileSync(join(cwd, ".claude", "skills", "central", "SKILL.md"),
+    "CLAUDE_CENTER_ONLY\n");
+  writeFileSync(join(cwd, ".cac", "skills", "central", "SKILL.md"),
+    "CAC_CENTER_ONLY\n");
+  writeFileSync(join(cwd, ".agents", "skills", "existing", "SKILL.md"),
+    "仓库本来就跟踪，任务允许正常修改\n");
+
+  const beforeCommit = await deliveryChangeSnapshot(cwd);
+  assert.ok(beforeCommit?.workspace_paths.includes(
+    ".agents/skills/existing/SKILL.md"));
+  assert.equal(beforeCommit?.workspace_paths.some((path) =>
+    path.startsWith(".claude/") || path.startsWith(".cac/")), false,
+  "未跟踪的中心注入资产不应出现在检视/交付清单");
+  assert.doesNotMatch(String(readArtifact(cwd, DIFF_NAME)?.content),
+    /CLAUDE_CENTER_ONLY|CAC_CENTER_ONLY/);
+
+  // -f 模拟 Agent 绕过本地 ignore；随后删除 .claude 再提交，验证最终
+  // 树看不见它也不能绕过历史扫描。
+  run("add", ".agents/skills/existing/SKILL.md");
+  run("add", "-f", ".claude/skills/central/SKILL.md",
+    ".cac/skills/central/SKILL.md");
+  run("commit", "--quiet", "-m", "accidentally add injected skills");
+  run("rm", "--quiet", ".claude/skills/central/SKILL.md");
+  run("commit", "--quiet", "-m", "remove visible injected skill");
+
+  const afterCommit = await deliveryChangeSnapshot(cwd);
+  assert.deepEqual(afterCommit?.added_agent_platform_paths, [
+    ".cac/skills/central/SKILL.md",
+    ".claude/skills/central/SKILL.md",
+  ]);
+  assert.ok(afterCommit?.committed_paths.includes(
+    ".agents/skills/existing/SKILL.md"),
+  "基线已经跟踪的仓内 Skill 仍是正常业务增量");
+  assert.equal(afterCommit?.added_agent_platform_paths.includes(
+    ".agents/skills/existing/SKILL.md"), false,
+  "不能把仓库原有 Skill 的修改误报成中心注入");
+});
+
 test("本任务没有代码变更时如实说明,而不是假装没这项", () => {
   const cwd = makeSite({ docs: { "spec.md": "# 规格\n" }, git: true });
   const snapshot = readArtifact(cwd, DIFF_NAME);

@@ -24,6 +24,10 @@ import {
 } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { runSafeWorktreeGit } from "./safeGit.ts";
+import {
+  AGENT_PLATFORM_PATHSPECS,
+  AGENT_PLATFORM_ROOTS,
+} from "./agentPlatformPaths.ts";
 
 export type DeveloperAssistantAvailabilityCode =
   | "edit_window"
@@ -84,7 +88,7 @@ export interface DeveloperAssistantChangedPathSummary {
 
 const GENERATED_SEGMENTS = new Set([
   ".git", ".gradle", ".m2", ".cache", "node_modules", "coverage",
-  ".mae-flow-work",
+  ".mae-flow-work", ...AGENT_PLATFORM_ROOTS,
 ]);
 const GENERATED_OUTPUT = /\.(?:class|o|obj|so|dylib|dll|a|lib|jar|war|ear|pyc|pyo|exe|pdb|d)$/i;
 const CODE_PATH = /\.(?:[cm]?[jt]sx?|java|kt|kts|groovy|c|cc|cpp|cxx|h|hh|hpp|hxx|py|go|rs|cs|swift|scala|rb|php|sh|bash|zsh|sql|proto)$/i;
@@ -136,6 +140,7 @@ const CONTROL_PATHSPECS = [
   ":(exclude).mae-flow-work/**",
   ":(exclude).codecheckcli",
   ":(exclude).codecheckcli/**",
+  ...AGENT_PLATFORM_PATHSPECS,
 ] as const;
 
 function readNoFollowJson(path: string): Record<string, unknown> {

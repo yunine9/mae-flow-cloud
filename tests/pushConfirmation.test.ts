@@ -131,6 +131,74 @@ test("确认绑定文件集合:同文件修复自动续推,新增文件才重新
   }
 });
 
+test("修复重新带入已拒绝文件时宿主自动收口，不新增循环门禁", async () => {
+  const { service, model, id, internal, repo } = await verifyingTask();
+  try {
+    // 先让构建日志真实出现在可选现场，再由用户明确排除。
+    writeFileSync(join(repo.cwd, "build.log"), "local build output\n");
+    internal.summary.push_confirmation = true;
+    await (service as any).pushConfirmationSatisfied(
+      internal, "master_bot_REQ1");
+    const waiting = service.get(id)!.waiting!;
+    await service.decide(id, {
+      state_version: waiting.state_version,
+      selected_options: {
+        [(waiting.question as any).questions[0].question]: "确认按清单推送",
+      },
+      delivery_paths: ["src/feature.ts"],
+    });
+    const cleanHead = repo.git("rev-parse", "HEAD");
+    internal.summary.delivery = {
+      git_push: {
+        sha: cleanHead,
+        ref: "refs/heads/master_bot_REQ1",
+        remote: "origin",
+        url: "https://git.example.test/repo.git",
+      },
+      sha: cleanHead,
+      pipeline: "failed",
+    };
+
+    // 模拟流水线修复：业务修复是对的，但顺手强制提交了用户拒绝的日志
+    // 与中心注入 Skill。两者都不能靠再加一张卡/再撞一次 Agent 门禁。
+    writeFileSync(join(repo.cwd, "src", "feature.ts"),
+      "export const value = 2;\n");
+    mkdirSync(join(repo.cwd, ".claude", "skills", "center"), {
+      recursive: true,
+    });
+    writeFileSync(join(repo.cwd, ".claude", "skills", "center", "SKILL.md"),
+      "center injected\n");
+    repo.git("add", "-f", "src/feature.ts", "build.log",
+      ".claude/skills/center/SKILL.md");
+    repo.git("commit", "--quiet", "-m", "repair plus rejected files");
+    assert.notEqual(repo.git("rev-list", "HEAD", "--", "build.log"), "");
+    assert.notEqual(repo.git("rev-list", "HEAD", "--",
+      ".claude/skills/center/SKILL.md"), "");
+
+    const result = await (service as any)
+      .reconcileConfirmedDeliveryBoundary(internal);
+    assert.equal(result, "changed");
+    assert.equal(repo.git("rev-parse", "HEAD^"), cleanHead,
+      "机械收口以最近一次已推送的干净 SHA 为锚，不重写远端旧历史");
+    assert.deepEqual(
+      repo.git("diff", "--name-only",
+        repo.git("rev-list", "--max-parents=0", "HEAD"), "HEAD")
+        .split("\n").filter(Boolean),
+      ["src/feature.ts"],
+    );
+    assert.equal(repo.git("rev-list", "HEAD", "--", "build.log"), "",
+      "拒绝文件不能只在最终树删除，污染提交也必须从可达历史消失");
+    assert.equal(repo.git("rev-list", "HEAD", "--",
+      ".claude/skills/center/SKILL.md"), "");
+    assert.equal(repo.git("check-ignore", "build.log"), "build.log",
+      "已拒绝的未跟踪过程件登记到 clone 本地 exclude，后续修复不再看见");
+    assert.equal(service.get(id)!.waiting, undefined,
+      "机械清理既有拒绝项不会再次打扰用户");
+  } finally {
+    await model.stop();
+  }
+});
+
 test("交付范围确认只在 prepush 收敛后执行", async () => {
   const { service, model, internal } = await verifyingTask();
   try {
@@ -248,6 +316,55 @@ test("开关的边界:已推送后不能再开;等卡时关掉=作废卡继续�
     assert.equal(off.push_confirmation, undefined);
     assert.equal(off.waiting, undefined, "人说不看了,卡必须作废");
     assert.equal(off.status, "verifying", "关掉开关要继续推,不许悬在等待");
+  } finally {
+    await model.stop();
+  }
+});
+
+test("卡键绑文件集合:等卡时 HEAD 演进不换卡;重举卡增量优先;有清单即举卡", async () => {
+  const { service, model, id, internal, repo } = await verifyingTask();
+  try {
+    const gate = () => (service as any)
+      .pushConfirmationSatisfied(internal, "master_bot_REQ1");
+    internal.summary.push_confirmation = true;
+    assert.equal(await gate(), false, "未确认先出卡");
+    const first = service.get(id)!.waiting!;
+
+    // 人还在看卡,流水线修复推进了 HEAD 但清单没变:卡不能被作废重发
+    // (老实现绑 HEAD,每个中间 commit 都轰一遍人——鸡毛当令箭)。
+    writeFileSync(join(repo.cwd, "src", "feature.ts"),
+      "export const value = 9;\n");
+    repo.git("add", "src/feature.ts");
+    repo.git("commit", "--quiet", "-m", "mid-review repair");
+    assert.equal(await gate(), false);
+    assert.equal(service.get(id)!.waiting!.waiting_id, first.waiting_id,
+      "同一文件集合,等待中的卡必须原地保留");
+
+    await service.decide(id, {
+      state_version: service.get(id)!.waiting!.state_version,
+      selected_options: {
+        [(first.question as any).questions[0].question]: "确认按清单推送",
+      },
+    });
+    assert.equal(service.get(id)!.delivery_selection?.status, "confirmed");
+
+    // 修复新增文件 → 重新举卡,正文先说增量,人不用整单重看。
+    writeFileSync(join(repo.cwd, "src", "fix.ts"), "export const fix = 1;\n");
+    repo.git("add", "src/fix.ts");
+    repo.git("commit", "--quiet", "-m", "repair adds file");
+    internal.summary.status = "verifying";
+    assert.equal(await gate(), false, "集合变化必须重新确认");
+    const renewed = service.get(id)!.waiting!;
+    assert.match(String(renewed.context), /较上次已确认的清单/);
+    assert.match(String(renewed.context), /新增 src\/fix\.ts/);
+    assert.match(String(renewed.context), /1 个文件与上次确认一致/);
+
+    // 任务级/个人默认都缺省,但用户已提交过清单:复核不一致时回到卡
+    // 上重新确认,而不是把任务判 failed(死胡同改出路)。
+    internal.summary.push_confirmation = undefined;
+    internal.summary.waiting = undefined;
+    assert.equal(await gate(), false, "有清单在管范围,缺省也要举卡");
+    assert.equal(service.get(id)!.waiting!.step, "cloud_push_confirm");
   } finally {
     await model.stop();
   }

@@ -22,6 +22,7 @@ import { Notifier } from "../src/notifier.ts";
 import { RuntimeSettings } from "../src/settings.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskService } from "../src/taskService.ts";
+import { EventLog } from "../src/semanticEvents.ts";
 import { createTaskServer } from "../src/server.ts";
 import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
 import {
@@ -197,6 +198,60 @@ test("交付方式:选项与默认值都取自内核 flow.json,自造的当场�
     /\d+\s*步|拍板/.test(item.description ?? "")), false);
 });
 
+test("阶段执行方案:同一内核目录驱动页面选择、团队默认与任务快照", () => {
+  const kernelRoot = discoverKernelRoot(process.cwd());
+  if (!kernelRoot) throw new Error("找不到内核");
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-lf-stage-plan-"));
+  const settings = new RuntimeSettings(dataDir);
+  settings.updateExecutionPolicy({
+    team_instructions: "不确定的外部行为明确说明",
+    stage_customizations: [{
+      playbook_id: "platform.construction",
+      optional_activities: ["impact-scan"],
+      preferred_resources: ["selected-skills"],
+    }],
+  });
+  const service = new TaskService({
+    dataDir, provider: "a", model: "a-1", maxConcurrent: 0,
+    modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
+    host: { kernelRoot, repoPath: "/tmp/repo" }, settings,
+  });
+  const options = service.launchOptions();
+  const build = options.execution_playbooks.find((item) =>
+    item.id === "platform.construction")!;
+  assert.ok(build.activities.some((item) =>
+    item.id === "impact-scan" && !item.required));
+  assert.deepEqual(options.execution_stage_defaults[0].optional_activities,
+    ["impact-scan"]);
+
+  const task = service.create("验证阶段定制", {
+    executionStageCustomizations: [{
+      playbook_id: "platform.construction",
+      instructions: "先跑完整构建，再开始猜测范围外行为",
+      optional_activities: ["environment-warmup"],
+      preferred_resources: ["knowledge-index"],
+    }],
+  });
+  assert.deepEqual(task.execution_profile?.stage_customizations?.map((item) => ({
+    scope: item.scope,
+    actions: item.optional_activities,
+    resources: item.preferred_resources,
+  })), [
+    { scope: "team", actions: ["impact-scan"], resources: ["selected-skills"] },
+    { scope: "task", actions: ["environment-warmup"], resources: ["knowledge-index"] },
+  ]);
+  settings.updateExecutionPolicy({ stage_customizations: [] });
+  assert.equal(task.execution_profile?.stage_customizations?.[0].scope, "team",
+    "任务创建后必须保留当时的团队快照");
+
+  assert.throws(() => service.create("伪造动作", {
+    executionStageCustomizations: [{
+      playbook_id: "platform.construction",
+      optional_activities: ["delete-quality-gate"],
+    }],
+  }), /不存在的可选动作/);
+});
+
 test("单号/基线分支:下单收齐,基线默认 master,纯会话形态不摆这些框", () => {
   // 用户 2026-08-19 拍板:这两项和交付方式一样在表单上一次给完,
   // 不让模型开工后再逐项来问。单号必填与"交付仓必填"同口径;
@@ -273,11 +328,15 @@ test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队
     dataDir, provider: "a", model: "a-1", maxConcurrent: 0,
     modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
     host: { kernelRoot: "/tmp" },
+    collaborationAssigneeReadiness: (account) => account === "alice"
+      || account === "bob"
+      ? { ready: true, missing: [] }
+      : { ready: false, missing: ["CodeHub Token"] },
   });
   const parent = service.create("跨仓交付", {
     title: "跨仓订单状态交付",
     repos: ["https://codehub/team/api.git", "https://codehub/team/web.git"],
-    ticket: "REQ-G3",
+    ticket: "REQ-G3", account: "owner",
   });
   const state = (service as any).tasks.get(parent.id);
   const root = join(dataDir, parent.id, "repositories");
@@ -296,12 +355,26 @@ test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队
     dependencies: [{ from: "api", to: "web", reason: "等待接口可用" }],
   }));
   state.cwd = root;
+  assert.throws(() => service.setRequirementCollaborators(parent.id,
+    ["alice", "charlie"]), /charlie.*CodeHub Token/,
+  "个人设置不完整的人不能受邀参与主任务");
+  assert.deepEqual(service.setRequirementCollaborators(parent.id,
+    ["alice", "bob", "alice", "owner"]).collaborators, ["alice", "bob"],
+  "共同开发者去重且不重复列出唯一主责任人");
+  assert.throws(() => service.assignRequirementRepositories(parent.id, {
+    api: "alice", web: "charlie",
+  }), /charlie.*CodeHub Token/, "个人设置不完整的人不能接仓库任务");
+  service.assignRequirementRepositories(parent.id, {
+    api: "alice", web: "bob",
+  });
   (service as any).createRepositoryDeliveries(state);
   const graph = service.get(parent.id)!.requirement_graph!;
   const apiTask = service.get(graph.repositories[0].task_id!)!;
   const webTask = service.get(graph.repositories[1].task_id!)!;
   assert.equal(graph.stage, "confirmed");
   assert.equal(apiTask.parent_task_id, parent.id);
+  assert.equal(apiTask.luban_account, "alice");
+  assert.equal(webTask.luban_account, "bob");
   assert.deepEqual(apiTask.blocked_by, undefined);
   assert.deepEqual(webTask.blocked_by, [apiTask.id]);
   // 方案正文落工作区文件而非内联进需求(整份方案进 prompt 会被模型
@@ -314,6 +387,53 @@ test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队
     "人工检视过的 Chain 正文随子任务落盘,配置阶段经需求文档被读");
   assert.equal(apiTask.title, "跨仓订单状态交付 · api");
   assert.equal(webTask.title, "跨仓订单状态交付 · web");
+
+  // 上游完成后，下游启动前拿到真实交接：实际提交文件、责任人和 AI
+  // 收口说明都来自上游现场，不再只看最初 Chain 计划。
+  const upstreamCwd = join(dataDir, "upstream-real-delivery");
+  mkdirSync(upstreamCwd, { recursive: true });
+  execFileSync("git", ["init", "-q", "-b", "master", upstreamCwd]);
+  writeFileSync(join(upstreamCwd, "api.ts"), "export const version = 1;\n");
+  execFileSync("git", ["-C", upstreamCwd, "add", "api.ts"]);
+  execFileSync("git", ["-C", upstreamCwd, "commit", "-q", "-m", "base"], {
+    env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t",
+      GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" },
+  });
+  const baseline = execFileSync("git", ["-C", upstreamCwd, "rev-parse", "HEAD"],
+    { encoding: "utf-8" }).trim();
+  writeFileSync(join(upstreamCwd, ".mae-flow.json"), JSON.stringify({
+    step_heads: { branch_create: baseline },
+  }));
+  writeFileSync(join(upstreamCwd, "api.ts"), "export const version = 2;\n");
+  execFileSync("git", ["-C", upstreamCwd, "add", "api.ts"]);
+  execFileSync("git", ["-C", upstreamCwd, "commit", "-q", "-m", "change api"], {
+    env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t",
+      GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" },
+  });
+  const apiState = (service as any).tasks.get(apiTask.id);
+  apiState.cwd = upstreamCwd;
+  new EventLog(join(apiState.summary.workspace, "events.jsonl")).append({
+    eventId: 1, taskId: apiTask.id, sessionId: "main",
+    ts: new Date().toISOString(), kind: "assistant_message",
+    payload: { text: "接口字段 version 已升级，前端需要按新契约消费。" },
+  });
+  const downstreamCwd = join(dataDir, "downstream-start");
+  mkdirSync(downstreamCwd, { recursive: true });
+  assert.equal(await (service as any).materializeDependencyHandoff(
+    (service as any).tasks.get(webTask.id), downstreamCwd), true);
+  const handoff = readFileSync(
+    join(downstreamCwd, ".mae-flow-dependencies.md"), "utf-8");
+  assert.match(handoff, /责任人：alice/);
+  assert.match(handoff, /api\.ts/);
+  assert.match(handoff, /version 已升级/);
+
+  const update = await service.publishCrossRepositoryUpdate(
+    apiTask.id, "alice", "version 字段改成字符串，请下游核对兼容性");
+  assert.deepEqual(update.target_task_ids, [webTask.id]);
+  assert.match(service.get(parent.id)!.cross_repository_updates![0].text,
+    /改成字符串/);
+  assert.equal(service.get(webTask.id)!.cross_repository_updates?.[0].id,
+    update.id, "分工后的影响必须回流大任务并复制给直接下游");
 
   // 可重入:部分仓已有 task_id 时重跑,不许重复建任务(第 N 个仓
   // create 抛错/中途重启后的重试路径)。
@@ -357,6 +477,22 @@ test("分析现场只读:真 push 必须在传输层死掉,不靠 prompt 嘱咐"
     { stdio: "pipe" }), "只读分析现场的 push 必须失败");
   const normal = await (service as any).cloneRepo(
     join(dataDir, "ws2"), undefined, undefined, origin, undefined, "repo");
+  const localExclude = readFileSync(
+    join(normal, ".git", "info", "exclude"), "utf-8");
+  for (const root of [
+    ".agents", ".pi", ".claude", ".cac", ".codex", ".cursor",
+    ".windsurf", ".gemini",
+  ]) {
+    assert.match(localExclude, new RegExp(`/${root.replace(".", "\\.")}/`),
+      `${root} 未登记为 clone 本地运行资产`);
+  }
+  assert.match(localExclude, /^docs\/req\/$/m,
+    "平台落盘的需求原文必须是 clone 本地资产，不能逼 Agent 修改业务 .gitignore");
+  mkdirSync(join(normal, ".claude", "skills", "central"), { recursive: true });
+  writeFileSync(join(normal, ".claude", "skills", "central", "SKILL.md"),
+    "center injected\n");
+  assert.doesNotThrow(() => execFileSync("git", ["-C", normal,
+    "check-ignore", "-q", ".claude/skills/central/SKILL.md"]));
   execFileSync("git", ["-C", normal, "commit", "-q", "--allow-empty",
     "-m", "deliver"], { env: { ...process.env,
       GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t",
@@ -432,6 +568,9 @@ test("下单即校验:不存在的模型、负预算、带密码的仓地址,当
     /没有模型/);
   assert.throws(() =>
     service.create("x", { repairRounds: -1 }), /≥0/);
+  assert.throws(() => service.create("x", {
+    taskInstructions: "过长".repeat(1001),
+  }), /不能超过 2000/);
   // 明文凭据拼 URL 是堵死的洞,下单口也不许开
   assert.throws(() =>
     service.create("x", { repo: "https://user:pass@codehub.corp/r.git" }),
@@ -462,6 +601,22 @@ test("下单即校验:不存在的模型、负预算、带密码的仓地址,当
     /未接内核模式/);
 });
 
+test("任务执行补充在下单时固定，不与需求正文或内核红线混为一体", () => {
+  const service = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-lf-profile-")),
+    provider: "a", model: "a-1", maxConcurrent: 0,
+    modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
+  });
+  const task = service.create("实现兼容旧数据的读取", {
+    taskInstructions: "  先核对线上旧格式\n不确定时明确说明  ",
+  });
+  assert.equal(task.requirement, "实现兼容旧数据的读取");
+  assert.equal(task.execution_profile?.layers[0].scope, "task");
+  assert.equal(task.execution_profile?.layers[0].instructions,
+    "先核对线上旧格式\n不确定时明确说明");
+  assert.match(task.execution_profile?.revision ?? "", /^[a-f0-9]{16}$/);
+});
+
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf-8" }).trim();
 }
@@ -480,6 +635,11 @@ function makeRepo(name: string): string {
 test("消费:任务级代码仓压过部署仓,克隆的就是下单填的那个", async () => {
   const repoA = makeRepo("aaa");
   const repoB = makeRepo("bbb");
+  writeFileSync(join(repoB, ".mae-flow-defaults.json"), JSON.stringify({
+    执行补充: "修改接口前先检查兼容调用方",
+  }));
+  git(repoB, "add", ".mae-flow-defaults.json");
+  git(repoB, "commit", "--quiet", "-m", "add repository execution preset");
   const kernelRoot = discoverKernelRoot(process.cwd());
   if (!kernelRoot) throw new Error("找不到内核(MAE_FLOW_HOME/../mae-flow/仓内 kernel/ 皆无)");
   const model = new ScriptedModelServer(SCRIPT);
@@ -504,6 +664,10 @@ test("消费:任务级代码仓压过部署仓,克隆的就是下单填的那个
   assert.match(task.detail ?? "",
     /config_confirm|尚未到 terminal|状态文件不存在|尚未初始化/);
   assert.equal(task.repo_url, repoB);
+  assert.equal(task.execution_profile?.layers.find(
+    (layer) => layer.scope === "repository")?.instructions,
+  "修改接口前先检查兼容调用方");
+  assert.equal(task.execution_profile_repository_resolved, true);
   // 克隆目录名与 origin 都指向下单填的仓,不是部署仓
   const clone = join(task.workspace, basename(repoB));
   assert.equal(git(clone, "remote", "get-url", "origin"), repoB);

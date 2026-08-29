@@ -567,9 +567,10 @@ test("全选项多题可一次回复序号，补充说明与流程选项分离",
     message_id: "custom-explicit", sender: "alice",
     content: "自由回复：先做最小灰度验证，再根据数据决定方案",
   });
-  assert.equal(explicitCustom.status, 400);
-  assert.match(explicitCustom.text, /自由说明不能代替流程选项/);
-  assert.equal(customService.calls.length, 0);
+  assert.equal(explicitCustom.status, 200);
+  assert.match(explicitCustom.text, /已提交，Agent 已继续/);
+  assert.deepEqual(customService.calls[0].decision,
+    "先做最小灰度验证，再根据数据决定方案");
 });
 
 test("通过快捷命令绝不把“不通过”当成正向选项", async () => {

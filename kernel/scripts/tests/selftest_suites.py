@@ -131,6 +131,8 @@ REFACTOR_SAFETY_SUITES = (
      ("scripts/tests/test_approval_subject.py",), 90, 3000),
     ("宿主契约:steps --json 的交付方式目录与真流程一致",
      ("scripts/tests/test_steps_catalog.py",), 90, 3000),
+    ("当前阶段默认执行方案与有限定制边界",
+     ("scripts/tests/test_execution_plan.py",), 90, 3000),
     ("宿主契约:下单事实补配置、抑 Q2、workflow_select 免卡",
      ("scripts/tests/test_order_facts.py",), 90, 3000),
     ("Hook Agent 收尾编排回归",

@@ -16,6 +16,10 @@ import type {
   DeveloperAssistantAvailability,
   DeveloperAssistantHandoff,
 } from "./developerAssistantHandoff.ts";
+import {
+  describeAgentPlatformRoots,
+  isAgentPlatformPath,
+} from "./agentPlatformPaths.ts";
 
 export const DEVELOPER_ASSISTANT_SESSION = "developer-assistant";
 const MAX_MESSAGES = 60;
@@ -317,6 +321,10 @@ export function developerAssistantGateContract(
     if (kind !== "bash" && (path === ".git" || path.startsWith(".git/"))) {
       return deny("开发助手不能直接改写 Git 内部目录；代码修改只留在工作树。");
     }
+    if (["write", "edit"].includes(kind) && isAgentPlatformPath(path)) {
+      return deny("这些 Agent 平台目录是当前工作区的本地运行资产；可以读取，"
+        + "但不能由开发助手修改或带入业务交付。");
+    }
     if (kind === "bash") {
       if (/(?:^|[;&|\n]\s*)(?:[^\s;&|]*[\/])?mae-flow(?:\s|$)/i.test(source)) {
         return deny("开发助手不调用 Mae-Flow CLI；它只处理代码现场，不推进内核流程。");
@@ -347,6 +355,8 @@ export function developerAssistantMission(
     "你可以直接 Read / Edit / Write / Bash，按用户要求检查、运行命令并修改当前工作区。",
     "不要调用 mae-flow 命令，不要解释或推进流程阶段，不要创建人工审批卡。",
     "不要 git commit/push、切换分支、改远端或接触凭据；修改保留在工作区，稍后交还主 Agent。",
+    `仓库根的 Agent 平台目录(${describeAgentPlatformRoots()})可能由中心服务`
+      + "临时注入，只读使用，不修改、删除或加入交付。",
     availability?.core
       ? `主流程当前位于「${availability.core.title ?? availability.core.step}」。这只是现场上下文，不限制用户本次接管；按用户要求处理代码，但不要直接改 Mae-Flow 账本。`
       : "当前任务没有 Mae-Flow 内核步骤，只按用户交代处理代码现场。",

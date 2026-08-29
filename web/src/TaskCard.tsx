@@ -31,6 +31,7 @@ import {
   type EventFilter,
 } from "./eventView";
 import type { RepositorySkillSelection } from "./RepositorySkillPicker";
+import type { RepositoryAssigneeSelection } from "./RepositoryAssigneePicker";
 import type { GitDiffSelection } from "./GitDiff";
 import { PrepushStatus } from "./PrepushStatus";
 import { TokenUsage } from "./TokenUsage";
@@ -107,6 +108,21 @@ export function TaskCard({
               <span>下一步 · {task.focus.next_action}</span>
             </span>
           )}
+          {/* 收起态也要说清"为什么停/在等什么":原来失败原因和等待
+              项都藏在展开区,列表上只剩一颗红/灰 pill,任务看着像在
+              正常推进。一行摘要,点开看全文。 */}
+          {!expanded && task.status === "failed" && task.detail && (
+            <span className="task-key-line danger">{task.detail}</span>
+          )}
+          {!expanded && task.status === "verifying"
+            && (repairStopped(task) || task.delivery?.waiting_on) && (
+            <span className="task-key-line attention">
+              {repairStopped(task)
+                ? `自动修复已停，需要你介入：${task.delivery?.stalled
+                  ?? task.delivery?.loop?.diagnosis ?? task.detail ?? ""}`
+                : `正在等：${task.delivery!.waiting_on}`}
+            </span>
+          )}
           {(task.requirement_graph?.repositories.length ?? 0) > 1 && (
             <span className="task-chain-overview">
               <span className="task-graph-summary">
@@ -124,6 +140,7 @@ export function TaskCard({
                 {task.requirement_graph!.repositories.map((repository) => (
                   <span key={repository.id} title={repository.url}>
                     <i aria-hidden />{repository.name}
+                    {repository.assignee && <b>· {repository.assignee}</b>}
                   </span>
                 ))}
               </span>
@@ -179,8 +196,12 @@ export function TaskCard({
         {task.delivery?.pipeline && (
           <span className="meta-fact">流水线 · {task.delivery.pipeline}</span>
         )}
+        {/* 百字诊断不塞 meta chip(最重要的原因不该用最弱的视觉级):
+            这里只留结论,全文在展开区的 alert 里。 */}
         {task.delivery?.skipped && (
-          <span className="meta-fact">交付 · {task.delivery.skipped}</span>
+          <span className="meta-fact" title={task.delivery.skipped}>
+            交付已阻止
+          </span>
         )}
         {task.luban_account && (
           <span className="meta-fact">责任人 · {responsibleOf(task)}</span>
@@ -193,6 +214,12 @@ export function TaskCard({
             <div className="alert">
               <strong>任务执行失败</strong>
               <span>{task.detail}</span>
+            </div>
+          )}
+          {task.delivery?.skipped && task.detail !== task.delivery.skipped && (
+            <div className="alert">
+              <strong>交付已阻止</strong>
+              <span>{task.delivery.skipped}</span>
             </div>
           )}
           {task.notify && !task.notify.delivered && task.notify.attempts > 0 && (
@@ -379,6 +406,15 @@ export function TaskProgress({
   </span>;
 }
 
+/** 决策卡类型标题。只映射云端原生步骤(名字是本仓定的);内核步骤
+ * id 不猜译——猜错比不译更糟,通用标题足够,正文会说明这是什么决定。 */
+function waitingStepTitle(task: TaskSummary): string | undefined {
+  const step = task.waiting?.step ?? "";
+  if (step === "cloud_push_confirm") return "推送前确认：检视代码与交付范围";
+  if (task.waiting?.recommended_view === "diff") return "代码检视";
+  return undefined;
+}
+
 export function WaitingCard({
   task,
   onDecided,
@@ -386,6 +422,7 @@ export function WaitingCard({
   unresolvedAnnotationCount,
   attachment,
   repositorySkillSelection,
+  repositoryAssigneeSelection,
   deliverySelection,
   onLocateDelivery,
 }: {
@@ -401,6 +438,8 @@ export function WaitingCard({
   attachment?: ReactNode;
   /** 仅 Chain 的“确认并生成任务”消费；未扫描/需要修改都不发送。 */
   repositorySkillSelection?: RepositorySkillSelection;
+  /** Chain 的逐仓分工；确认拆单前必须全部指向已就绪成员。 */
+  repositoryAssigneeSelection?: RepositoryAssigneeSelection;
   /** 代码检视里的文件级交付清单；由工作区变更面板的真实勾选产生。 */
   deliverySelection?: GitDiffSelection;
   /** 跳到勾选面板(工作台的「本任务变更」)。列表页没有勾选面板,
@@ -412,6 +451,8 @@ export function WaitingCard({
   const [customOpen, setCustomOpen] = useState<Record<string, boolean>>({});
   const [notes, setNotes] = useState("");
   const [notesOpen, setNotesOpen] = useState(false);
+  const [contextOpen, setContextOpen] = useState(false);
+  useEffect(() => setContextOpen(false), [task.waiting?.waiting_id]);
   const [conflict, setConflict] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const questions = task.waiting?.question?.questions ?? [];
@@ -445,6 +486,8 @@ export function WaitingCard({
   const answerOf = (question: string) => picked[question] ?? "";
   const optional = (question: string) =>
     /可忽略|若上题|如无|可跳过|可不填/.test(question);
+  const confirmsChainChoice = Object.values(picked).some((answer) =>
+    answer.includes("确认并生成任务"));
   // 勾选与 commit 不同不再算冲突(2026-08-28 用户拍板易用性):服务端
   // 会按勾选机械整理提交并直推,"通过"就是一键走完。只有未闭环批注
   // 仍然拦"通过"——那是真有意见没处理。
@@ -460,18 +503,26 @@ export function WaitingCard({
       allChoiceAnswers.has(option)))
     .map((item) => answerOf(item.question))
     .find(Boolean);
+  const selectedEffect = choiceEffects.find((effect) =>
+    effect.answers.includes(selectedReviewAnswer ?? ""));
+  const hasCustomPrimaryAnswer = questions.some((item) =>
+    (item.options?.length ?? 0) > 0
+    && !picked[item.question]
+    && !!custom[item.question]?.trim());
   const isReviewDecision = choiceEffects.some((effect) =>
     effect.closes_feedback);
   const ready = questions.every((item) => {
     const options = item.options ?? [];
     const answered = options.length
-      ? picked[item.question]
+      ? picked[item.question] || custom[item.question]?.trim()
       : custom[item.question]?.trim();
     return optional(item.question) || Boolean(answered);
   }) && (!requiresDeliverySelection || !!deliverySelection)
     && !repositorySkillSelection?.scanning
     && (!repositorySkillSelection?.scanned
       || !!repositorySkillSelection.catalogToken)
+    && (!confirmsChainChoice || !repositoryAssigneeSelection
+      || repositoryAssigneeSelection.ready)
     && !reviewChoiceConflict
     && !submitting;
 
@@ -547,6 +598,7 @@ export function WaitingCard({
         notes,
         annotationIds,
         repositorySkills,
+        confirmsChain ? repositoryAssigneeSelection?.assignments : undefined,
         requiresDeliverySelection ? deliverySelection?.selectedPaths : undefined,
       );
       if (result.conflict) setConflict(result.conflict);
@@ -558,23 +610,56 @@ export function WaitingCard({
     }
   }
 
+  const submitLabel = submitting ? "正在提交…"
+    : repositorySkillSelection?.scanning ? "等待能力读取"
+      : hasCustomPrimaryAnswer ? "提交自定义处理方式"
+        : selectedEffect?.handles_feedback
+          ? "交给 Agent 调整后再检视"
+          : requiresDeliverySelection && deliverySelectionChanged
+            ? "按此范围自动整理并继续"
+            : requiresDeliverySelection
+              ? "确认推送范围并继续"
+              : "提交决定";
+
   return (
     <section className="decision-card" aria-labelledby={`decision-${task.id}`}>
       <header className="decision-head">
         <div>
           <span className="decision-kicker">ACTION REQUIRED</span>
-          <h3 id={`decision-${task.id}`}>需要你的决策</h3>
-          {task.waiting?.step && <p>{task.waiting.step}</p>}
+          {/* 标题按卡类型说话,原始步骤 id(cloud_push_confirm 之类)
+              不再印给人看——认不出的类型就只保留通用标题,卡的正文
+              自会说明这是什么决定。 */}
+          <h3 id={`decision-${task.id}`}>{waitingStepTitle(task) ?? "需要你的决策"}</h3>
         </div>
-        <span className="decision-count">{questions.length} 个问题</span>
+        {/* 几乎恒为 1 题:徽标只在真有多题时才有信息量。 */}
+        {questions.length > 1 && (
+          <span className="decision-count">{questions.length} 个问题</span>
+        )}
       </header>
 
-      {task.waiting?.context && (
-        <div className="waiting-context">
-          <div className="context-label">决策背景</div>
-          <Markdown text={rewritePanelPath(task.waiting.context, task.id)} />
-        </div>
-      )}
+      {task.waiting?.context && (() => {
+        /* 长背景(推送确认的文件清单动辄上百行)默认折叠只露开头——
+           重点(要我做什么、较上次变了什么)在前几行,整版清单是
+           留档不是必读;需要时一键展开。 */
+        const contextText = rewritePanelPath(task.waiting.context, task.id);
+        const contextLines = contextText.split("\n").length;
+        const collapsible = contextLines > 16;
+        return (
+          <div className="waiting-context">
+            <div className="context-label">决策背景</div>
+            <div className={`waiting-context-body${
+              collapsible && !contextOpen ? " clamped" : ""}`}>
+              <Markdown text={contextText} />
+            </div>
+            {collapsible && (
+              <button type="button" className="context-toggle"
+                onClick={() => setContextOpen((value) => !value)}>
+                {contextOpen ? "收起背景" : `展开全部背景（共 ${contextLines} 行）`}
+              </button>
+            )}
+          </div>
+        );
+      })()}
 
       <div className="question-list">
         {questions.map((item, index) => {
@@ -640,9 +725,15 @@ export function WaitingCard({
                   >
                       <span className="radio" />
                       <span className="option-body">
-                        <span className="option-title">{options.length ? "补充说明" : "填写答复"}</span>
+                        <span className="option-title">{options.length
+                          ? picked[item.question]
+                            ? "补充说明"
+                            : "以上都不合适，直接回答"
+                          : "填写答复"}</span>
                         <span className="option-hint">{options.length
-                          ? "说明会随决定提交，但不会改变所选流程分支"
+                          ? picked[item.question]
+                            ? "说明会随决定提交，但不会改变所选流程分支"
+                            : "你的文字将作为本题主答案，不会套用任一选项"
                           : "填写本题的具体答案"}</span>
                       </span>
                   </button>
@@ -653,7 +744,9 @@ export function WaitingCard({
                   <textarea
                     className={`custom-input${customActive ? " picked" : ""}`}
                     placeholder={options.length
-                      ? "补充原因、修改点或约束…"
+                      ? picked[item.question]
+                        ? "补充原因、修改点或约束…"
+                        : "写下选项之外的正确处理方式…"
                       : "写下你的答复…"}
                     value={custom[item.question] ?? ""}
                     autoFocus
@@ -663,7 +756,9 @@ export function WaitingCard({
                     })}
                   />
                   <span>{options.length
-                    ? "这段文字仅作为补充说明；流程走向以上方选项为准。"
+                    ? picked[item.question]
+                      ? "这段文字仅作为补充说明；流程走向以上方选项为准。"
+                      : "这段文字将作为主答案直接交给 Agent；系统不会替你选择错误分支。"
                     : "这段文字将作为开放题答案提交。"}</span>
                 </div>
               )}
@@ -706,14 +801,15 @@ export function WaitingCard({
             ? "本任务全部代码增量在「本任务变更」——请逐文件检视 diff;"
               + "勾选框默认全选,检视后这里才能提交。"
             : deliverySelectionChanged
-              ? `勾选与当前 commit 不同（剔除 ${deliverySelection!.committedPaths
+              ? selectedEffect?.handles_feedback
+                ? "提交后：Agent 按这个范围调整代码与清单，完成后重新给你检视；本次不会推送。"
+                : `提交后：Cloud 自动整理一个清单提交（移出 ${deliverySelection!.committedPaths
                   .filter((path) => !deliverySelection!.selectedPaths
-                    .includes(path)).length} 个、补入 ${deliverySelection!
+                    .includes(path)).length} 个，补入 ${deliverySelection!
                   .selectedPaths.filter((path) => !deliverySelection!
-                    .committedPaths.includes(path)).length} 个）。`
-                + "提交“通过”即可：Cloud 自动整理提交并直推——剔除的内容"
-                + `保留在工作区，不重新编译，由流水线裁决。想让 Agent 重新整理可选“${feedbackLabel}”。`
-              : "勾选与当前 commit 一致；提交通过后，服务端会在 push 前再次复核。"}</span>
+                    .committedPaths.includes(path)).length} 个）；未选内容保留在本地但不推送；`
+                + "不会让 Agent 猜着重改，也不重跑本地编译，最终由绑定新 SHA 的权威流水线裁决。"
+              : "提交后：保持当前提交不变；服务端复核同一文件集合，然后继续推送前验证与交付。"}</span>
           {onLocateDelivery && (
             <button type="button" className="delivery-locate"
               onClick={onLocateDelivery}>
@@ -746,20 +842,21 @@ export function WaitingCard({
             </label>
           )}
         </div>
+        {/* 报错紧贴提交按钮上方(role=alert 读屏即播):原来渲在整卡
+            最底沿,长卡时落在视口外,人以为点了没反应。 */}
+        {conflict && <div className="alert" role="alert">{conflict}</div>}
         <button
           type="button"
           className="submit-decision"
           disabled={!ready}
           onClick={submit}
         >
-          {submitting ? "正在提交…" : repositorySkillSelection?.scanning
-            ? "等待能力读取" : "提交决定"}
+          {submitLabel}
           <svg viewBox="0 0 20 20" aria-hidden>
             <path d="m4 10 3.2 3.2L16 5.5" />
           </svg>
         </button>
       </footer>
-      {conflict && <div className="alert">{conflict}</div>}
     </section>
   );
 }

@@ -172,7 +172,7 @@ test("SSE 增量推送:只收新增、不重不丢、半行凑齐换行才出手
   const model = new ScriptedModelServer([
     { tool: { name: "AskUserQuestion",
               input: { questions: [{ question: "继续吗?",
-                                     options: ["继续"] }] } } },
+                                     options: ["继续", "停止"] }] } } },
     { text: "收口。" },
   ]);
   await model.start();

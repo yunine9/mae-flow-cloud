@@ -43,6 +43,10 @@ interface FocusTask {
     pipeline?: string;
     waiting_on?: string;
     stalled?: string;
+    evidence_gap?: {
+      state?: "retrying" | "waiting_human" | "partial";
+      missing_dimensions?: string[];
+    };
     prepush?: { state?: string; round?: number; message?: string };
     loop?: { state?: string; round?: number; max?: number; diagnosis?: string };
   };
@@ -106,6 +110,19 @@ export function projectTaskFocus(task: FocusTask): TaskFocus {
       "需要继续时从当前现场恢复",
       "responsible",
       90,
+      true,
+    );
+  }
+  if (delivery?.evidence_gap?.state === "waiting_human") {
+    const dimensions = delivery.evidence_gap.missing_dimensions?.join("、");
+    return focus(
+      "human_action",
+      dimensions
+        ? `流水线 ${dimensions} 缺少具体报错`
+        : "流水线缺少可修复的具体报错",
+      "在工作台《流水线证据缺口》材料上批注并回灌平台原文",
+      "responsible",
+      98,
       true,
     );
   }

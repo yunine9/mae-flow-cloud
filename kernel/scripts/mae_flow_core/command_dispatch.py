@@ -32,6 +32,8 @@ FLOW_ROUTES = MappingProxyType({
     "moonlight": CommandRoute(
         "cmd_moonlight", ("flow", "state", "args")),
     "current": CommandRoute("print_current", ("flow", "state")),
+    "execution-plan": CommandRoute(
+        "cmd_execution_plan", ("flow", "state", "args")),
     "role-task": CommandRoute(
         "cmd_role_task", ("flow", "state", "args")),
     "pipeline": CommandRoute(

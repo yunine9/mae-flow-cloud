@@ -48,6 +48,7 @@ from mae_flow_core.workflow.definition import (
     definition_errors,
     workflow_graph_errors,
 )
+from mae_flow_core.workflow.execution_plan import catalog_errors
 from selftest_suites import execute_refactor_safety_suites
 
 fails = []
@@ -119,6 +120,7 @@ for f in ("scripts/mae-flow.py", "scripts/comet_compat.py", "hooks/dispatch.py",
           "scripts/mae_flow_core/workflow/agent_observations.py",
           "scripts/mae_flow_core/workflow/quality_executions.py",
           "scripts/mae_flow_core/workflow/completion.py",
+          "scripts/mae_flow_core/workflow/execution_plan.py",
           "scripts/mae_flow_core/workflow/definition.py",
           "scripts/mae_flow_core/workflow/evidence.py",
           "scripts/mae_flow_core/workflow/evidence_rules.py",
@@ -211,11 +213,14 @@ for probe_name, probe_file in (
 
 # 2. JSON
 flow = hooks = None
-for f in ("flow/flow.json", "hooks/hooks.json", "runtime/vendor/manifest.json"):
+playbooks = None
+for f in ("flow/flow.json", "flow/playbooks.json", "hooks/hooks.json", "runtime/vendor/manifest.json"):
     try:
         d = json.load(open(os.path.join(ROOT, f), encoding="utf-8"))
         if f == "flow/flow.json":
             flow = d
+        elif f == "flow/playbooks.json":
+            playbooks = d
         elif f == "hooks/hooks.json":
             hooks = d
         check(f"JSON {f}", True)
@@ -237,6 +242,9 @@ if flow:
         bad += [f"{sid}->{t}" for t in targets if t not in steps]
     check("流程图 next 全部有效", not bad, str(bad))
     check("start 步骤存在", flow.get("start") in steps)
+    playbook_errors = catalog_errors(flow, playbooks or {})
+    check("默认 Playbook 覆盖每个工作流步骤", not playbook_errors,
+          str(playbook_errors))
     miss_md = [sid for sid, s in steps.items()
                if not s.get("terminal") and not os.path.exists(os.path.join(ROOT, "flow", "steps", sid + ".md"))]
     check("非终态步骤均有指令文档", not miss_md, str(miss_md))

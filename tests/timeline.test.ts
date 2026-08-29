@@ -63,7 +63,7 @@ test("阶段轨迹/审批卡与决定/台账成败:读成人话且按时间正�
         payload: { call_id: "c1", name: "AskUserQuestion",
           input: { questions: [
             { question: "配置是否正确?", options: ["确认", "修改"] },
-            { question: "交付方式?", options: ["完整开发"] }] } } },
+            { question: "交付方式?", options: ["完整开发", "局部修改"] }] } } },
       { eventId: 3, taskId: "task-1", sessionId: "main",
         ts: "2026-08-15 10:05:00", kind: "human_decision",
         payload: { waiting_id: "task-1:c1", state_version: 1,

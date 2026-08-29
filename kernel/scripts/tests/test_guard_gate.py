@@ -40,6 +40,7 @@ class EditGateTests(unittest.TestCase):
              "只读资源"),
             (".mae-flow-work/repository-skills/java/SKILL.md", "只读资源"),
             (".mae-flow-work/host-skills/abc/SKILL.md", "只读资源"),
+            (".mae-flow-work/execution-profile.json", "执行偏好"),
             ("/plugin/scripts/mae-flow.py", "禁止修改插件自身"),
         ):
             with self.subTest(path=path):

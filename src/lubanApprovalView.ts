@@ -67,6 +67,7 @@ export function renderLubanHelp(): string {
     "多项待办时，请使用“mae-flow 选择 <审批码> <序号>”",
     "已打开当前待办时，也可直接回复序号",
     "补充说明请回复“序号：说明”，说明不会改变流程选项",
+    "选项都不合适时，回复“自由回复：你的处理方式”",
     "mae-flow 待审批（查看当前待办）",
     "多题卡会逐题记录，全部答完后一次提交",
     "全是选项题时可用斜杠一次回复，如三题回复 1/2/1",
@@ -136,7 +137,9 @@ export function renderLubanDetail(
     }
     lines.push("答错可回复“重答上一题”。" );
   } else if (questions[0].options.length) {
-    lines.push("", "回复方式：", "- 直接选择：回复序号", "- 选择并说明：回复“序号：你的说明”" );
+    lines.push("", "回复方式：", "- 直接选择：回复序号",
+      "- 选择并说明：回复“序号：你的说明”",
+      "- 选项都不合适：回复“自由回复：你的处理方式”" );
     lines.push(`无上下文备用：mae-flow 选择 ${code} <序号>`);
   } else {
     lines.push("", "直接回复你的答复。" );
@@ -155,7 +158,9 @@ export function renderLubanQuestionPrompt(
   question.options.forEach((option, optionIndex) =>
     lines.push(`${optionIndex + 1}. ${option}`));
   if (question.options.length) {
-    lines.push("回复方式：", "- 直接选择：回复序号", "- 选择并说明：回复“序号：你的说明”");
+    lines.push("回复方式：", "- 直接选择：回复序号",
+      "- 选择并说明：回复“序号：你的说明”",
+      "- 选项都不合适：回复“自由回复：你的处理方式”");
   } else {
     lines.push("请直接自由回复当前问题的答案。" );
   }

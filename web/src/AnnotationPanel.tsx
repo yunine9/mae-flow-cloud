@@ -64,7 +64,9 @@ function progressOf(item: Annotation, check?: AnchorCheck): {
 function deliveryText(item: Annotation): string {
   if (item.status === "verified") return "已确认";
   if (item.status !== "sent") return "尚未提交";
-  return item.sent_via === "decision" ? "通过审批提交" : "执行中发送";
+  if (item.sent_via === "decision") return "通过审批提交";
+  if (item.sent_via === "pipeline_evidence") return "作为流水线证据提交";
+  return "执行中发送";
 }
 
 export function AnnotationPanel({
@@ -75,6 +77,7 @@ export function AnnotationPanel({
   reply,
   canOperate,
   running,
+  evidenceAwaiting = false,
   onChanged,
   onLocate,
 }: {
@@ -89,6 +92,8 @@ export function AnnotationPanel({
   onLocate?: (item: Annotation) => void;
   /** 只有在跑的时候才能插话送出;等人决定时批注走决定卡。 */
   running: boolean;
+  /** 流水线缺具体报错时，批注直接回灌证据并自动恢复，不需要活会话。 */
+  evidenceAwaiting?: boolean;
   onChanged: () => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -132,16 +137,18 @@ export function AnnotationPanel({
           <i className="annot-panel-chevron" aria-hidden />
         </div>
       </summary>
-      {canOperate && drafts.length > 0 && running && (
+      {canOperate && drafts.length > 0 && (running || evidenceAwaiting) && (
         <div className="annot-panel-actions">
           <button type="button" className="primary" disabled={busy}
                   onClick={() => void send()}>
-            {busy ? "提交中…" : `提交 ${drafts.length} 条批注`}
+            {busy ? "提交中…" : evidenceAwaiting
+              ? `回灌 ${drafts.length} 条报错`
+              : `提交 ${drafts.length} 条批注`}
           </button>
         </div>
       )}
 
-      {canOperate && drafts.length > 0 && !running && (
+      {canOperate && drafts.length > 0 && !running && !evidenceAwaiting && (
         <p className="annot-panel-note">
           有 {drafts.length} 条批注待提交。完成当前审批时，可选择将它们作为修改说明一并提交。
         </p>

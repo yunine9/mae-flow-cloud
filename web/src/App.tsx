@@ -27,11 +27,9 @@ import {
   byTeamAttention,
   cycleTimeMs,
   isBlocked,
-  isStale,
   matchesTeamScope,
   median,
   responsibleOf,
-  progressAgeMs,
   type TeamScope,
 } from "./teamOps";
 import { formatLocalDateTime } from "./time";
@@ -42,7 +40,7 @@ import {
 } from "./launchGate";
 import { startVisiblePolling } from "./visiblePolling";
 import { KnowledgeFlywheel } from "./KnowledgeFlywheel";
-import { WishWall } from "./WishWall";
+import { WishWall, type WishWallDraft } from "./WishWall";
 import { BusinessModuleLibrary } from "./BusinessModuleLibrary";
 
 // 问题处理页独立分包(懒加载):问题流与需求流互不拖累,改哪边都不
@@ -363,6 +361,7 @@ export function App() {
   const [artifactTaskId, setArtifactTaskId] = useState("");
   const [artifactTaskSnapshot, setArtifactTaskSnapshot] = useState<TaskSummary>();
   const [launchOpen, setLaunchOpen] = useState(false);
+  const [wishDraft, setWishDraft] = useState<WishWallDraft>();
   const [launchGate, setLaunchGate] = useState<LaunchGateState>({ kind: "checking" });
   const launchGateRequest = useRef(0);
   const [taskSync, setTaskSync] = useState<TaskSyncState>({ kind: "loading" });
@@ -631,6 +630,11 @@ export function App() {
   // 谁能提交决定:管理员或任务归属人。工作台与列表共用这一个口径。
   const canOperate = (task: TaskSummary) =>
     session.role === "admin" || responsibleOf(task) === session.username;
+  const canCollaborate = (task: TaskSummary) => canOperate(task)
+    || (task.requirement_graph?.stage === "analysis"
+      && (task.collaborators?.includes(session.username) === true
+        || task.requirement_graph.repositories.some((repository) =>
+          repository.assignee === session.username)));
   const header = {
     team: session.role === "admin"
       ? { title: "团队总览", description: "看团队推进、负责人和阻塞风险；需要兜底时打开任务的过程工作台处置(暂停/恢复/决定)。" }
@@ -705,7 +709,8 @@ export function App() {
           }}
         />}
 
-        {view === "wishes" && <WishWall viewer={session} />}
+        {view === "wishes" && <WishWall viewer={session} draft={wishDraft}
+          onDraftConsumed={() => setWishDraft(undefined)} />}
 
         {view === "business" && <BusinessModuleLibrary
           admin={session.role === "admin"} />}
@@ -759,6 +764,7 @@ export function App() {
       task={artifactTask}
       viewerUsername={session.username}
       canOperate={canOperate(artifactTask)}
+      canCollaborate={canCollaborate(artifactTask)}
       canRequestReview={responsibleOf(artifactTask) === session.username}
       reviewAssignment={myReviews.find((review) =>
         review.task_id === artifactTask.id && review.status === "pending")}
@@ -767,6 +773,15 @@ export function App() {
       onOpenTask={(taskId) => {
         const related = tasks.find((task) => task.id === taskId);
         if (related) openArtifacts(related);
+      }}
+      onExecutionPlanFeedback={(draft) => {
+        setWishDraft({
+          key: `${artifactTask.id}:${artifactTask.execution_plan?.plan_revision ?? "plan"}:${Date.now()}`,
+          kind: "wish",
+          ...draft,
+        });
+        closeArtifacts();
+        setView("wishes");
       }}
     />}
   </div>;
@@ -802,7 +817,8 @@ function PersonalActionInbox({
       task,
       kicker: "等待你的决定",
       title: task.title ?? task.requirement,
-      detail: task.focus?.next_action ?? task.waiting?.step ?? "查看材料并完成当前确认",
+      // 不拿原始步骤 id 当行动指引(cloud_push_confirm 对人是噪声)。
+      detail: task.focus?.next_action ?? "查看材料并完成当前确认",
       action: "立即处理",
     });
   }
@@ -1018,16 +1034,6 @@ function formatOpsDuration(ms: number | undefined): string {
   return `${days} 天`;
 }
 
-function riskReason(task: TaskSummary): string {
-  if (task.focus) return `${task.focus.headline} · ${task.focus.next_action}`;
-  if (task.status === "waiting_for_human") return "等待负责人决策";
-  if (task.status === "paused") return "任务已暂停，等待恢复";
-  if (task.status === "failed") return task.detail ?? "任务执行失败";
-  if (isBlocked(task)) return "自动修复已停，需要人工介入";
-  if (isStale(task)) return "超过 2 小时没有有效推进";
-  return "需要关注";
-}
-
 function TeamDashboard({
   tasks,
   users,
@@ -1042,20 +1048,17 @@ function TeamDashboard({
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<TeamScope>("all");
   const [responsible, setResponsible] = useState("");
+  const [phase, setPhase] = useState("");
   const queueRef = useRef<HTMLElement>(null);
   const now = Date.now();
   const actionable = tasks.filter((task) =>
     matchesTeamScope(task, "action", now));
   const stale = tasks.filter((task) =>
     matchesTeamScope(task, "stale", now));
-  const wip = tasks.filter((task) => matchesTeamScope(task, "wip", now));
   const deliveredWeek = tasks.filter((task) =>
     matchesTeamScope(task, "week", now));
   const medianCycle = median(tasks.map(cycleTimeMs)
     .filter((value): value is number => value !== undefined));
-  const risks = [...new Map(
-    [...actionable, ...stale].map((task) => [task.id, task]),
-  ).values()].sort(byTeamAttention).slice(0, 6);
 
   const visible = useMemo(() => tasks.filter((task) => {
     const words = `${task.id} ${task.title ?? ""} ${task.requirement} ${responsibleOf(task) ?? ""}`
@@ -1065,8 +1068,9 @@ function TeamDashboard({
     if (responsible && responsible !== "__unassigned"
         && responsibleOf(task) !== responsible) return false;
     if (!matchesTeamScope(task, scope, now)) return false;
+    if (phase && task.progress?.current_phase !== phase) return false;
     return true;
-  }).sort(byTeamAttention), [tasks, query, scope, responsible]);
+  }).sort(byTeamAttention), [tasks, query, scope, responsible, phase]);
 
   function openMetric(next: Exclude<TeamScope, "all" | "waiting" | "delivered">) {
     setScope((current) => current === next ? "all" : next);
@@ -1075,32 +1079,31 @@ function TeamDashboard({
     }));
   }
 
+  function selectPhase(next: string) {
+    setPhase((current) => current === next ? "" : next);
+    requestAnimationFrame(() => queueRef.current?.scrollIntoView({
+      behavior: "smooth", block: "start",
+    }));
+  }
+
   return <>
-    <section className="team-pulse ops-pulse" aria-labelledby="pulse-title">
-      <div className="section-head pulse-head"><div><span className="section-kicker">TEAM OPERATIONS</span><h2 id="pulse-title">团队行动态势</h2></div><span className="section-count">行动项优先</span></div>
-      <div className="pulse-grid ops-grid">
-        <button type="button" className={`pulse-card metric-action attention${scope === "action" ? " selected" : ""}`} aria-pressed={scope === "action"} aria-controls="team-queue" onClick={() => openMetric("action")}><span className="pulse-card-label"><i aria-hidden />需要处理</span><strong>{actionable.length}</strong><small>决策、失败与人工阻塞</small><span className="metric-action-hint">查看明细 <i aria-hidden>→</i></span></button>
-        <button type="button" className={`pulse-card metric-action danger${scope === "stale" ? " selected" : ""}`} aria-pressed={scope === "stale"} aria-controls="team-queue" onClick={() => openMetric("stale")}><span className="pulse-card-label"><i aria-hidden />停滞任务</span><strong>{stale.length}</strong><small>2 小时没有有效推进</small><span className="metric-action-hint">查看明细 <i aria-hidden>→</i></span></button>
-        <button type="button" className={`pulse-card metric-action active${scope === "wip" ? " selected" : ""}`} aria-pressed={scope === "wip"} aria-controls="team-queue" onClick={() => openMetric("wip")}><span className="pulse-card-label"><i aria-hidden />当前在制</span><strong>{wip.length}</strong><small>机器与人工正在推进</small><span className="metric-action-hint">查看明细 <i aria-hidden>→</i></span></button>
-        <button type="button" className={`pulse-card metric-action success${scope === "week" ? " selected" : ""}`} aria-pressed={scope === "week"} aria-controls="team-queue" onClick={() => openMetric("week")}><span className="pulse-card-label"><i aria-hidden />近 7 天交付</span><strong>{deliveredWeek.length}</strong><small>进入完成或等待合入</small><span className="metric-action-hint">查看明细 <i aria-hidden>→</i></span></button>
-        <div className="pulse-card neutral"><span className="pulse-card-label"><i aria-hidden />典型交付周期</span><strong className="duration">{formatOpsDuration(medianCycle)}</strong><small>当前历史中位数</small></div>
+    <section className="team-overview" aria-label="团队概览">
+      <div className="team-overview-metrics" aria-label="团队关键指标">
+        <button type="button" className={`overview-metric attention${scope === "action" ? " selected" : ""}`} aria-pressed={scope === "action"} aria-controls="team-queue" onClick={() => openMetric("action")}><span><i aria-hidden />需要处理</span><strong>{actionable.length}</strong><small>决策、失败、暂停</small></button>
+        <button type="button" className={`overview-metric danger${scope === "stale" ? " selected" : ""}`} aria-pressed={scope === "stale"} aria-controls="team-queue" onClick={() => openMetric("stale")}><span><i aria-hidden />停滞任务</span><strong>{stale.length}</strong><small>超过 2 小时未推进</small></button>
+        <button type="button" className={`overview-metric success${scope === "week" ? " selected" : ""}`} aria-pressed={scope === "week"} aria-controls="team-queue" onClick={() => openMetric("week")}><span><i aria-hidden />近 7 天交付</span><strong>{deliveredWeek.length}</strong><small>完成或等待合入</small></button>
+        <div className="overview-metric neutral"><span><i aria-hidden />典型交付周期</span><strong className="duration">{formatOpsDuration(medianCycle)}</strong><small>历史中位数</small></div>
       </div>
+      <PhaseFunnel tasks={tasks} selected={phase} onSelect={selectPhase} />
     </section>
 
-    {risks.length > 0 && <section className="risk-radar" aria-labelledby="risk-title">
-      <div className="section-head"><div><span className="section-kicker">ATTENTION QUEUE</span><h2 id="risk-title">需要关注</h2></div><span className="section-count attention">{risks.length} 项优先展示</span></div>
-      <div className="risk-list">{risks.map((task) => <button type="button" key={task.id} onClick={() => onOpenArtifacts(task)}><span className="risk-dot" aria-hidden /><span className="risk-main"><strong>{task.title ?? task.requirement}</strong><small>{riskReason(task)}</small></span><span className="risk-owner">{responsibleOf(task) ?? "未指定"}</span><span className="risk-age">{formatOpsDuration(progressAgeMs(task, now))}</span><svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg></button>)}</div>
-    </section>}
-
-    <PhaseFunnel tasks={tasks} />
-
     <section className="task-section" id="team-queue" ref={queueRef} aria-labelledby="team-queue-title">
-      <div className="section-head"><div><span className="section-kicker">TEAM QUEUE</span><h2 id="team-queue-title">团队任务明细</h2></div><span className="section-count">{visible.length} / {tasks.length} 项</span></div>
+      <div className="section-head"><div><span className="section-kicker">TEAM QUEUE</span><h2 id="team-queue-title">{phase ? `${phase}阶段任务` : "团队任务"}</h2></div><span className={`section-count${phase ? " active-filter" : ""}`}>{phase ? `阶段 · ${phase}　` : ""}{visible.length} / {tasks.length} 项</span></div>
       <div className="task-filters" aria-label="筛选团队任务">
         <label className="task-search"><svg viewBox="0 0 18 18" aria-hidden><circle cx="8" cy="8" r="4.5" /><path d="m11.5 11.5 3 3" /></svg><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索任务、需求或负责人" /></label>
         <select aria-label="任务范围" value={scope} onChange={(event) => setScope(event.target.value as TeamScope)}><option value="all">全部范围</option><option value="action">需要处理</option><option value="stale">停滞任务</option><option value="wip">当前在制</option><option value="waiting">等待决策</option><option value="week">近 7 天交付</option><option value="delivered">全部已交付</option></select>
         <select aria-label="责任人" value={responsible} onChange={(event) => setResponsible(event.target.value)}><option value="">全部责任人</option><option value="__unassigned">未指定</option>{users.map((user) => <option value={user.username} key={user.username}>{user.username}</option>)}</select>
-        {(query || scope !== "all" || responsible) && <button type="button" className="filter-reset" onClick={() => { setQuery(""); setScope("all"); setResponsible(""); }}>清除筛选</button>}
+        {(query || scope !== "all" || responsible || phase) && <button type="button" className="filter-reset" onClick={() => { setQuery(""); setScope("all"); setResponsible(""); setPhase(""); }}>清除筛选</button>}
       </div>
       {visible.length === 0 && <TaskEmpty personal={false} />}
       <div className="task-list">{visible.map((task) => <TaskCard key={task.id} task={task} onChanged={onChanged} canOperate={false} decisionMode="signal" onOpenArtifacts={() => onOpenArtifacts(task)} />)}</div>
@@ -1136,13 +1139,28 @@ function TaskGroup({
 
 /** 阶段漏斗:状态计数答不了"队伍卡在哪个环节"。阶段与阶段顺序
  * 都来自任务卡同源的 progress(内核现场看板),Web 不复刻阶段表。 */
-function PhaseFunnel({ tasks }: { tasks: TaskSummary[] }) {
-  const tracked = tasks.filter((task) => task.progress);
-  if (tracked.length === 0) return null;
+function PhaseFunnel({
+  tasks,
+  selected,
+  onSelect,
+}: {
+  tasks: TaskSummary[];
+  selected: string;
+  onSelect: (phase: string) => void;
+}) {
+  const tracked = tasks.filter((task) => task.progress
+    && !["completed", "canceled", "failed"].includes(task.status));
+  if (tracked.length === 0) return <div className="phase-funnel empty">
+    <div><strong>暂无流程中任务</strong><small>新任务进入流程后，可按阶段直接筛选。</small></div>
+  </div>;
   // 阶段顺序取最长的一份(不同任务可能停在不同修订的看板上)。
-  const phases = tracked.reduce<string[]>(
+  const longest = tracked.reduce<string[]>(
     (best, task) => (task.progress!.phases.length > best.length
       ? task.progress!.phases : best), []);
+  const phases = [...new Set([
+    ...longest,
+    ...tracked.map((task) => task.progress!.current_phase),
+  ])];
   const counts = phases.map((phase) => ({
     phase,
     count: tracked.filter((task) => task.progress!.current_phase === phase).length,
@@ -1151,29 +1169,33 @@ function PhaseFunnel({ tasks }: { tasks: TaskSummary[] }) {
       && task.status === "waiting_for_human").length,
   }));
   return (
-    <section className="phase-funnel" aria-labelledby="funnel-title">
-      <div className="section-head">
-        <div>
-          <span className="section-kicker">PIPELINE</span>
-          <h2 id="funnel-title">阶段分布</h2>
-        </div>
-        <span className="section-count">{tracked.length} 项在流程中</span>
+    <div className="phase-funnel" aria-labelledby="funnel-title">
+      <div className="phase-funnel-head">
+        <div><strong id="funnel-title">按阶段筛选</strong>
+          <small>查看团队当前卡在哪一段</small></div>
+        <span>{tracked.length} 项在流程中{selected ? ` · 已选“${selected}”` : ""}</span>
       </div>
       <div className="funnel-row">
         {counts.map((entry) => (
-          <div
+          <button type="button"
             className={"funnel-cell"
               + (entry.count > 0 ? " filled" : "")
-              + (entry.waiting > 0 ? " attention" : "")}
+              + (entry.waiting > 0 ? " attention" : "")
+              + (selected === entry.phase ? " selected" : "")}
             key={entry.phase}
+            disabled={entry.count === 0}
+            aria-pressed={selected === entry.phase}
+            aria-controls="team-queue"
+            aria-label={`筛选${entry.phase}阶段，${entry.count} 项任务`}
+            onClick={() => onSelect(entry.phase)}
           >
             <strong>{entry.count}</strong>
             <span>{entry.phase}</span>
-            {entry.waiting > 0 && <i className="funnel-flag">待决策</i>}
-          </div>
+            {entry.waiting > 0 && <i className="funnel-flag">{entry.waiting} 待决策</i>}
+          </button>
         ))}
       </div>
-    </section>
+    </div>
   );
 }
 

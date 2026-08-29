@@ -21,6 +21,13 @@ import {
 const IMAGE_LIMIT = 4;
 const IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 
+export interface WishWallDraft {
+  key: string;
+  kind: WishKind;
+  title: string;
+  detail?: string;
+}
+
 interface ImageDraft {
   key: string;
   file: File;
@@ -29,6 +36,7 @@ interface ImageDraft {
 
 type Scope = "all" | WishKind;
 type Sort = "recent" | "popular";
+type StatusScope = "active" | WishStatus | "all";
 
 const STATUS_COPY: Record<WishStatus, { label: string; hint: string }> = {
   open: { label: "待回应", hint: "已收进墙里，等待明确答复" },
@@ -65,13 +73,17 @@ function StatusPath({ item }: { item: WishWallItem }) {
   </div>;
 }
 
-export function WishWall({ viewer }: { viewer: { username: string; role: string } }) {
+export function WishWall({ viewer, draft, onDraftConsumed }: {
+  viewer: { username: string; role: string };
+  draft?: WishWallDraft;
+  onDraftConsumed?: () => void;
+}) {
   const [items, setItems] = useState<WishWallItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
-  const [kind, setKind] = useState<WishKind>("wish");
-  const [title, setTitle] = useState("");
-  const [detail, setDetail] = useState("");
+  const [kind, setKind] = useState<WishKind>(draft?.kind ?? "wish");
+  const [title, setTitle] = useState(draft?.title ?? "");
+  const [detail, setDetail] = useState(draft?.detail ?? "");
   const [images, setImages] = useState<ImageDraft[]>([]);
   const imageRef = useRef<ImageDraft[]>([]);
   const [composerError, setComposerError] = useState("");
@@ -79,7 +91,9 @@ export function WishWall({ viewer }: { viewer: { username: string; role: string 
   const [submitting, setSubmitting] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [scope, setScope] = useState<Scope>("all");
+  const [statusScope, setStatusScope] = useState<StatusScope>("active");
   const [sort, setSort] = useState<Sort>("recent");
+  const [expandedId, setExpandedId] = useState("");
   const [busyId, setBusyId] = useState("");
   const [lightbox, setLightbox] = useState<{ url: string; title: string }>();
   const [manage, setManage] = useState<{
@@ -89,6 +103,7 @@ export function WishWall({ viewer }: { viewer: { username: string; role: string 
   }>();
 
   useEffect(() => { imageRef.current = images; }, [images]);
+  useEffect(() => { if (draft) onDraftConsumed?.(); }, [draft?.key]);
   useEffect(() => () => {
     imageRef.current.forEach((image) => URL.revokeObjectURL(image.preview));
   }, []);
@@ -220,11 +235,23 @@ export function WishWall({ viewer }: { viewer: { username: string; role: string 
     } finally { setBusyId(""); }
   }
 
+  const matchesStatus = useCallback((item: WishWallItem, value: StatusScope) => value === "all"
+    || (value === "active" ? item.status === "open" || item.status === "accepted" : item.status === value), []);
   const shown = useMemo(() => items
+    .filter((item) => matchesStatus(item, statusScope))
     .filter((item) => scope === "all" || item.kind === scope)
     .sort((left, right) => sort === "popular"
       ? right.votes - left.votes || right.created_at.localeCompare(left.created_at)
-      : right.created_at.localeCompare(left.created_at)), [items, scope, sort]);
+      : right.created_at.localeCompare(left.created_at)), [items, matchesStatus, scope, sort, statusScope]);
+  const statusCounts = useMemo(() => ({
+    active: items.filter((item) => matchesStatus(item, "active")).length,
+    open: items.filter((item) => item.status === "open").length,
+    accepted: items.filter((item) => item.status === "accepted").length,
+    done: items.filter((item) => item.status === "done").length,
+    declined: items.filter((item) => item.status === "declined").length,
+    all: items.length,
+  }), [items, matchesStatus]);
+  const scopedItems = useMemo(() => items.filter((item) => matchesStatus(item, statusScope)), [items, matchesStatus, statusScope]);
   const acceptedCount = items.filter((item) => item.status === "accepted").length;
   const doneCount = items.filter((item) => item.status === "done").length;
   const pasteModifier = useMemo(() => wishPasteModifier(), []);
@@ -302,13 +329,36 @@ export function WishWall({ viewer }: { viewer: { username: string; role: string 
     </form>
 
     <section className="wish-board" aria-labelledby="wish-board-title">
+      <div className="wish-board-overview">
+        <div className="wish-board-heading">
+          <span className="section-kicker">VOICES FROM THE TEAM</span>
+          <h2 id="wish-board-title">大家最近在意什么</h2>
+          <p>先看仍需推进的声音；已闭环和暂不接纳的内容随时可查，但不再和待办挤在一起。</p>
+        </div>
+        <div className="wish-status-filters" role="group" aria-label="按处理状态筛选">
+          {([
+            ["active", "进行中"],
+            ["open", "待回应"],
+            ["accepted", "已接纳"],
+            ["done", "已闭环"],
+            ["declined", "暂不接纳"],
+            ["all", "全部"],
+          ] as [StatusScope, string][]).map(([value, label]) => <button type="button" key={value}
+            className={statusScope === value ? `on is-${value}` : ""}
+            onClick={() => { setStatusScope(value); setScope("all"); setExpandedId(""); }}>
+            <span>{label}</span><strong>{statusCounts[value]}</strong>
+          </button>)}
+        </div>
+      </div>
       <div className="wish-board-toolbar">
-        <div><span className="section-kicker">VOICES FROM THE TEAM</span><h2 id="wish-board-title">大家最近在意什么</h2></div>
+        <span className="wish-result-count">当前显示 <strong>{shown.length}</strong> 条</span>
         <div className="wish-filters">
           <div role="group" aria-label="筛选类型">
             {(["all", "wish", "issue"] as Scope[]).map((value) => <button type="button"
               key={value} className={scope === value ? "on" : ""} onClick={() => setScope(value)}>
-              {value === "all" ? "全部" : value === "wish" ? "诉求" : "问题"}
+              {value === "all" ? `全部 ${scopedItems.length}` : value === "wish"
+                ? `诉求 ${scopedItems.filter((item) => item.kind === "wish").length}`
+                : `问题 ${scopedItems.filter((item) => item.kind === "issue").length}`}
             </button>)}
           </div>
           <select value={sort} onChange={(event) => setSort(event.target.value as Sort)}
@@ -320,47 +370,62 @@ export function WishWall({ viewer }: { viewer: { username: string; role: string 
       {loading && <div className="wish-load-state"><span className="wish-loading-dot" />正在把大家的声音搬过来…</div>}
       {!loading && !loadError && shown.length === 0 && <div className="wish-empty">
         <span aria-hidden>{scope === "issue" ? "🪁" : "🌱"}</span>
-        <strong>{items.length ? "这个分类还空着" : "墙面刚刷好，等第一张便利贴"}</strong>
-        <p>{items.length ? "换个分类看看，或者把你的想法贴上来。" : "不用想得很完整，一句话也值得被看见。"}</p>
+        <strong>{items.length ? "这里暂时没有内容" : "墙面刚刷好，等第一个声音"}</strong>
+        <p>{items.length ? "换个状态或类型看看，也可以把你的想法贴上来。" : "不用想得很完整，一句话也值得被看见。"}</p>
       </div>}
-      <div className="wish-card-grid">
-        {shown.map((item, index) => <article className={`wish-card ${item.kind} tone-${index % 4}`} key={item.id}>
-          <div className="wish-card-pin" aria-hidden />
-          <header>
-            <span className={`wish-kind ${item.kind}`}>{item.kind === "wish" ? "💫 诉求" : "🧩 问题"}</span>
-            <span className={`wish-status is-${item.status}`} title={STATUS_COPY[item.status].hint}>
-              <i />{STATUS_COPY[item.status].label}
-            </span>
-          </header>
-          <h3>{item.title}</h3>
-          {item.detail && <p className="wish-card-detail">{item.detail}</p>}
-          {item.images.length > 0 && <div className={`wish-card-images count-${Math.min(item.images.length, 3)}`}>
-            {item.images.map((image, imageIndex) => <button type="button" key={image.id}
-              onClick={() => setLightbox({ url: image.url, title: `${item.title} · 图片 ${imageIndex + 1}` })}>
-              <img src={image.url} alt={`${item.title}的补充图片 ${imageIndex + 1}`} loading="lazy" />
-            </button>)}
-          </div>}
-          <StatusPath item={item} />
-          {item.decision_note && <blockquote className={`wish-decision is-${item.status}`}>
-            <span>{item.status === "declined" ? "暂不接纳说明" : item.status === "done" ? "闭环反馈" : "处理反馈"}</span>
-            <p>{item.decision_note}</p>
-            <footer>{item.decided_by} · {formatLocalDateTime(item.decided_at)}</footer>
-          </blockquote>}
-          <footer className="wish-card-foot">
-            <span className="wish-author"><i aria-hidden>{item.author.slice(0, 1).toUpperCase()}</i><span><strong>{item.author}</strong><small title={formatLocalDateTime(item.created_at)}>{relativeTime(item.created_at)}</small></span></span>
-            <div className="wish-card-actions">
+      <div className="wish-card-list">
+        {shown.map((item) => {
+          const expanded = expandedId === item.id;
+          return <article className={`wish-card ${item.kind}${expanded ? " is-expanded" : ""}`} key={item.id}>
+            <span className="wish-card-mark" aria-hidden>{item.kind === "wish" ? "💫" : "🧩"}</span>
+            <div className="wish-card-body">
+              <header>
+                <span className={`wish-kind ${item.kind}`}>{item.kind === "wish" ? "诉求" : "问题"}</span>
+                <span className="wish-card-meta"><strong>{item.author}</strong><i>·</i><time title={formatLocalDateTime(item.created_at)}>{relativeTime(item.created_at)}</time></span>
+              </header>
+              <h3>{item.title}</h3>
+              {item.detail && !expanded && <p className="wish-card-detail">{item.detail}</p>}
+              {item.decision_note && !expanded && <p className={`wish-decision-preview is-${item.status}`}>
+                <strong>{item.status === "declined" ? "暂不接纳说明" : item.status === "done" ? "闭环反馈" : "处理反馈"}</strong>
+                <span>{item.decision_note}</span>
+              </p>}
+              {item.images.length > 0 && !expanded && <span className="wish-image-count">▧ {item.images.length} 张图片</span>}
+            </div>
+            <aside className="wish-card-side">
+              <span className={`wish-status is-${item.status}`} title={STATUS_COPY[item.status].hint}>
+                <i />{STATUS_COPY[item.status].label}
+              </span>
+              <div className="wish-card-actions">
               <button type="button" className={`wish-vote${item.viewer_voted ? " on" : ""}`}
                 disabled={busyId === item.id} aria-pressed={item.viewer_voted}
                 onClick={() => void toggleVote(item)} title={item.viewer_voted ? "取消点亮" : "我也期待"}>
                 <span aria-hidden>{item.viewer_voted ? "✦" : "☆"}</span>{item.votes || "点亮"}
               </button>
+              <button type="button" className="wish-expand" aria-expanded={expanded}
+                onClick={() => setExpandedId(expanded ? "" : item.id)}>{expanded ? "收起" : "查看详情"}</button>
               {item.can_manage && <button type="button" className="wish-manage"
                 onClick={() => setManage({ id: item.id, status: item.status, note: item.decision_note ?? "" })}>回应</button>}
               {item.can_delete && <button type="button" className="wish-remove"
                 disabled={busyId === item.id} onClick={() => void remove(item)} aria-label={`移除 ${item.title}`}>•••</button>}
-            </div>
-          </footer>
-        </article>)}
+              </div>
+            </aside>
+            {expanded && <div className="wish-card-expanded">
+              {item.detail && <p className="wish-card-full-detail">{item.detail}</p>}
+              {item.images.length > 0 && <div className="wish-card-images">
+                {item.images.map((image, imageIndex) => <button type="button" key={image.id}
+                  onClick={() => setLightbox({ url: image.url, title: `${item.title} · 图片 ${imageIndex + 1}` })}>
+                  <img src={image.url} alt={`${item.title}的补充图片 ${imageIndex + 1}`} loading="lazy" />
+                </button>)}
+              </div>}
+              <StatusPath item={item} />
+              {item.decision_note && <blockquote className={`wish-decision is-${item.status}`}>
+                <span>{item.status === "declined" ? "暂不接纳说明" : item.status === "done" ? "闭环反馈" : "处理反馈"}</span>
+                <p>{item.decision_note}</p>
+                <footer>{item.decided_by} · {formatLocalDateTime(item.decided_at)}</footer>
+              </blockquote>}
+            </div>}
+          </article>;
+        })}
       </div>
     </section>
 

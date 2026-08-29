@@ -120,7 +120,8 @@
    ```bash
    npm run adapter -- --config adapter.json --selftest \
      --repo <仓> --source-branch <测试分支> --target-branch <目标> \
-     --sha <一次真实提交> --mr <已存在的 MR iid>
+     --sha <一次真实提交> --mr <已存在的 MR iid> \
+     --mr-url <该 MR 的完整页面 URL>
    ```
 
 3. 验收:四个只读端点(status/gates/discussions/artifacts)都有

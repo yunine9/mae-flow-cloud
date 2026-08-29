@@ -42,6 +42,15 @@ export interface AuthSessionUser extends AuthUser {
   issue_flow: "fixed" | "free";
 }
 
+/** 跨仓分工只暴露“能不能接活”和缺项名称，绝不暴露任何令牌提示或
+ * 邮箱原文。这个视图给所有已登录开发读取，因此必须比 sessionView
+ * 更窄。 */
+export interface CollaborationAssignee {
+  username: string;
+  ready: boolean;
+  missing: string[];
+}
+
 interface StoredUser extends AuthUser {
   password_hash: string;
   created_at: string;
@@ -118,6 +127,22 @@ export class LocalAuth {
   listUsers(): AuthUser[] {
     return [...this.users.values()]
       .map(publicUser)
+      .sort((a, b) => a.username.localeCompare(b.username));
+  }
+
+  collaborationAssignees(needs: {
+    git_token: boolean;
+    luban_token: boolean;
+  }): CollaborationAssignee[] {
+    return [...this.users.values()]
+      .filter((user) => !user.disabled && user.role === "developer")
+      .map((user) => {
+        const missing: string[] = [];
+        if (needs.git_token && !user.git_token) missing.push("CodeHub Token");
+        if (needs.git_token && !user.git_email) missing.push("提交邮箱");
+        if (needs.luban_token && !user.luban_token) missing.push("小鲁班 Token");
+        return { username: user.username, ready: missing.length === 0, missing };
+      })
       .sort((a, b) => a.username.localeCompare(b.username));
   }
 

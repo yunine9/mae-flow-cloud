@@ -1,8 +1,11 @@
 /**
  * 内核自动发现——serve/pilot/测试共用的唯一一条链:
- *   显式 MAE_FLOW_HOME > 开发布局的兄弟目录 ../mae-flow(活内核,
- *   开发机不用收编快照)> 仓内收编的 kernel/(部署形态:一个 clone
- *   就是完整产品,harness/sync-kernel.sh 负责刷新快照)。
+ *   显式 MAE_FLOW_HOME > 仓内收编的 kernel/(与 Cloud 版本一起发布)
+ *   > 开发布局的兄弟目录 ../mae-flow(只在发布快照缺席时兜底)。
+ *
+ * Cloud 与内核之间存在版本化契约。兄弟目录可能恰好是另一个分支或
+ * 旧版本，若优先采用它，页面会有新字段而运行中的内核没有对应命令，
+ * 形成静默降级。需要联调活内核时显式设置 MAE_FLOW_HOME，意图更清楚。
  *
  * 为什么必须共用:worktree 里跑测试时 cwd 变了,各处手写的
  * `cwd()/../mae-flow` 指到不存在的位置,内核 bootstrap 起不来,
@@ -17,6 +20,6 @@ import { join, resolve } from "node:path";
 
 export function discoverKernelRoot(repoRoot: string): string | undefined {
   return process.env.MAE_FLOW_HOME
-    ?? [resolve(repoRoot, "..", "mae-flow"), resolve(repoRoot, "kernel")]
+    ?? [resolve(repoRoot, "kernel"), resolve(repoRoot, "..", "mae-flow")]
       .find((candidate) => existsSync(join(candidate, "hooks", "dispatch.py")));
 }

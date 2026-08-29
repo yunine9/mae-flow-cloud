@@ -76,6 +76,8 @@ class CommandDispatchTests(unittest.TestCase):
                 "cmd_requirement_record", ("state", "args")),
             "current": CommandRoute(
                 "print_current", ("flow", "state")),
+            "execution-plan": CommandRoute(
+                "cmd_execution_plan", ("flow", "state", "args")),
         })
         self.assertEqual(expected, dict(FLOW_ROUTES))
 

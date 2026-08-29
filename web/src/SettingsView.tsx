@@ -10,17 +10,23 @@
 
 import { useEffect, useState } from "react";
 import {
+  getBuildCacheStatus,
   getSettings,
   getSystemCheck,
   postModelsCheck,
+  putExecutionPolicySettings,
   putModelsSettings,
   putRuntimeSettings,
   putVisionSettings,
+  reclaimUnusedBuildCaches,
   testVisionCapability,
+  type BuildCacheStatus,
+  type ExecutionStageCustomization,
   type SettingsView as Settings,
   type SystemCheckResult,
   type VisionProbeResult,
 } from "./api";
+import { StageCustomizationEditor } from "./StageCustomizationEditor";
 
 type Message = { kind: "success" | "error"; text: string } | null;
 
@@ -150,6 +156,184 @@ function RuntimeCard({ view, onSaved }: {
         note="终态任务过期后回收代码克隆等可再生的大件；过程记录、证据与批注永久保留。0 表示永不回收"
         value={retention} onChange={setRetention} />
       <button type="submit" disabled={busy}>{busy ? "正在保存…" : "保存运行参数"}</button>
+      <Feedback message={message} />
+    </form>
+  </div>;
+}
+
+function ExecutionPolicyCard({ view, onSaved }: {
+  view: Settings; onSaved: (next: Settings) => void;
+}) {
+  const [instructions, setInstructions] = useState(
+    view.execution_policy.team_instructions ?? "");
+  const [stageCustomizations, setStageCustomizations] =
+    useState<ExecutionStageCustomization[]>(
+      view.execution_policy.stage_customizations ?? []);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useMessage();
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setBusy(true); setMessage(null);
+    try {
+      onSaved(await putExecutionPolicySettings({
+        team_instructions: instructions.trim(),
+        stage_customizations: stageCustomizations,
+      }));
+      setMessage({
+        kind: "success",
+        text: instructions.trim()
+          ? "团队执行约定已保存；只影响之后新建的任务，运行中与历史任务保持原快照。"
+          : "团队执行约定已清空；之后新建的任务只使用平台默认与任务补充。",
+      });
+    } catch (error) {
+      setMessage({ kind: "error", text: String((error as Error).message ?? error) });
+    } finally { setBusy(false); }
+  }
+
+  return <div className="user-create-card settings-card execution-policy-card">
+    <div className="user-create-copy">
+      <span className="section-kicker">WORKFLOW POLICY</span>
+      <h2>团队执行约定</h2>
+      <p>把团队长期采用的关注点与协作习惯叠加在平台默认方案上。每个新任务都会固定当时版本，并在“执行方案”里说明来源。</p>
+    </div>
+    <form className="user-create-form settings-form execution-policy-form"
+      onSubmit={submit}>
+      <label>
+        <span>新任务默认补充</span>
+        <textarea rows={7} maxLength={2000} value={instructions}
+          placeholder="例如：涉及存量接口时先核对兼容性；不确定的外部行为明确说明，不要猜；公共契约变更必须点名影响方。"
+          onChange={(event) => setInstructions(event.target.value)} />
+        <small className="knob-note">
+          只调整关注点、先后顺序和协作方式；不能覆盖阶段、真实证据、人工决定或 Git/交付权限。留空表示不设置团队补充。
+        </small>
+        <em className="settings-char-count">{instructions.length}/2000</em>
+      </label>
+      <StageCustomizationEditor
+        playbooks={view.execution_playbooks}
+        value={stageCustomizations}
+        onChange={setStageCustomizations}
+        title="团队各阶段默认增强"
+        description="新任务默认叠加；任务发起人还可以继续增加，不能取消这些团队选择。" />
+      <button type="submit" disabled={busy}>
+        {busy ? "正在保存…" : "保存团队执行约定"}
+      </button>
+      <Feedback message={message} />
+    </form>
+  </div>;
+}
+
+function bytes(value: number): string {
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let size = value;
+  let at = 0;
+  while (size >= 1024 && at < units.length - 1) { size /= 1024; at += 1; }
+  return `${size >= 10 || at === 0 ? Math.round(size) : size.toFixed(1)} ${units[at]}`;
+}
+
+function BuildCacheCard({ view, onSaved }: {
+  view: Settings; onSaved: (next: Settings) => void;
+}) {
+  const defaults = view.defaults.runtime;
+  const runtime = view.runtime;
+  const text = (value?: number) => value === undefined ? "" : String(value);
+  const [retention, setRetention] = useState(
+    text(runtime.build_cache_retention_days));
+  const [maxGb, setMaxGb] = useState(text(runtime.build_cache_max_gb));
+  const [status, setStatus] = useState<BuildCacheStatus>();
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [reclaiming, setReclaiming] = useState(false);
+  const [message, setMessage] = useMessage();
+
+  async function refresh() {
+    setLoading(true);
+    try { setStatus(await getBuildCacheStatus()); }
+    catch (error) {
+      setMessage({ kind: "error", text: String((error as Error).message ?? error) });
+    } finally { setLoading(false); }
+  }
+
+  useEffect(() => { void refresh(); }, []);
+
+  async function save(event: React.FormEvent) {
+    event.preventDefault();
+    setSaving(true); setMessage(null);
+    try {
+      const next = await putRuntimeSettings({
+        build_cache_retention_days: retention.trim(),
+        build_cache_max_gb: maxGb.trim(),
+      });
+      onSaved(next);
+      setMessage({ kind: "success", text: "缓存策略已保存，下一轮每日回收按新策略执行。" });
+      await refresh();
+    } catch (error) {
+      setMessage({ kind: "error", text: String((error as Error).message ?? error) });
+    } finally { setSaving(false); }
+  }
+
+  async function clearUnused() {
+    if (!window.confirm("清理当前未被任务或容器占用的全部构建缓存？\n\n"
+      + "后续任务仍可重新生成，但第一次编译会变慢；运行中的缓存不会被触碰。")) return;
+    setReclaiming(true); setMessage(null);
+    try {
+      const result = await reclaimUnusedBuildCaches();
+      setStatus(result.status);
+      setMessage({ kind: result.failed.length ? "error" : "success",
+        text: `已清理 ${result.reclaimed} 个仓库缓存，释放 ${bytes(result.freed_bytes)}`
+          + (result.skipped_active ? `；${result.skipped_active} 个正在使用，已跳过` : "")
+          + (result.failed.length ? `；${result.failed.length} 个清理失败` : "") });
+    } catch (error) {
+      setMessage({ kind: "error", text: String((error as Error).message ?? error) });
+    } finally { setReclaiming(false); }
+  }
+
+  const effectiveRetention = status?.policy.retention_days
+    ?? runtime.build_cache_retention_days ?? defaults.build_cache_retention_days;
+  const effectiveMax = (status?.policy.max_bytes ??
+    ((runtime.build_cache_max_gb ?? defaults.build_cache_max_gb) * 1024 ** 3));
+  return <div className="user-create-card settings-card build-cache-card">
+    <div className="user-create-copy">
+      <span className="section-kicker">BUILD CACHE</span>
+      <h2>构建缓存</h2>
+      <p>同一代码仓的后续任务会复用 Maven、npm、ccache 等缓存。任务删除不立即
+        误删共享缓存；长期不用或超过容量上限时自动回收。</p>
+      {loading && <span className="settings-state"><i aria-hidden />正在统计缓存…</span>}
+      {!loading && status && !status.configured && <span className="settings-state missing">
+        <i aria-hidden />当前部署未启用统一构建缓存</span>}
+      {!loading && status?.configured && <div className="build-cache-summary">
+        <strong>{bytes(status.total_bytes)}</strong>
+        <span>{status.caches} 个仓库分区 · {status.active} 个正在使用</span>
+        <small>{effectiveRetention > 0 ? `${effectiveRetention} 天未用自动清理` : "不按时间清理"}
+          {` · ${effectiveMax > 0 ? `总量上限 ${bytes(effectiveMax)}` : "不设容量上限"}`}</small>
+      </div>}
+      {status && status.entries.length > 0 && <details className="build-cache-details">
+        <summary>查看缓存明细</summary>
+        <div>{status.entries.map((entry) => <div className="build-cache-entry" key={entry.key}>
+          <span><strong>{entry.repository_hint || entry.key}</strong>
+            <small>最后使用 {new Date(entry.last_used_at).toLocaleString()}</small></span>
+          <em>{entry.active ? "使用中" : bytes(entry.size_bytes)}</em>
+        </div>)}</div>
+      </details>}
+    </div>
+    <form className="user-create-form settings-form build-cache-form" onSubmit={save}>
+      <KnobField label="未使用保留期（天）"
+        defaultText={`${defaults.build_cache_retention_days} 天`}
+        note="从最后一次挂载使用起计算；0 表示不按时间自动清理"
+        value={retention} onChange={setRetention} />
+      <KnobField label="总容量上限（GB）"
+        defaultText={`${defaults.build_cache_max_gb} GB`}
+        note="超出后优先清最久未用的缓存；0 表示不限制"
+        value={maxGb} onChange={setMaxGb} />
+      <div className="build-cache-actions span-2">
+        <button type="submit" disabled={saving || reclaiming}>
+          {saving ? "正在保存…" : "保存缓存策略"}</button>
+        <button type="button" className="secondary" disabled={loading || reclaiming || !status?.caches}
+          onClick={() => void clearUnused()}>
+          {reclaiming ? "正在清理…" : "清理未使用缓存"}</button>
+      </div>
+      <small className="knob-note span-2">手动清理也会保护运行中、等待继续执行的任务；
+        只删除可重新生成的构建缓存，不删除代码、任务记录或交付证据。</small>
       <Feedback message={message} />
     </form>
   </div>;
@@ -422,7 +606,12 @@ export function SettingsBoard() {
     <VisionModelsCard
       key={`v${view.models.vision.url}:${view.models.vision.model}:${view.models.vision.key_hint}`}
       view={view} onSaved={setView} />
+    <ExecutionPolicyCard
+      key={`p${view.execution_policy.team_instructions ?? ""}:${JSON.stringify(
+        view.execution_policy.stage_customizations ?? [])}`}
+      view={view} onSaved={setView} />
     <RuntimeCard key={`r${JSON.stringify(view.runtime)}:${JSON.stringify(view.defaults.runtime)}`}
       view={view} onSaved={setView} />
+    <BuildCacheCard view={view} onSaved={setView} />
   </section>;
 }

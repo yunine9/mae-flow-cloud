@@ -21,6 +21,8 @@ import { RequirementGraph } from "./RequirementGraph";
 import { PrepushBadge } from "./PrepushStatus";
 import { TokenUsage } from "./TokenUsage";
 import { KnowledgeFootprint } from "./KnowledgeFootprint";
+import { ExecutionPlanCard } from "./ExecutionPlanCard";
+import { CrossRepositorySync } from "./CrossRepositorySync";
 import { WarmupPanel, WarmupBadge } from "./WarmupPanel";
 import { taskHealthFacts } from "./taskHealth";
 import { relativeTime } from "./time";
@@ -30,6 +32,12 @@ import {
   RepositorySkillPicker,
   type RepositorySkillPickerState,
 } from "./RepositorySkillPicker";
+import {
+  EMPTY_REPOSITORY_ASSIGNEE_SELECTION,
+  RepositoryAssigneePicker,
+  type RepositoryAssigneeSelection,
+} from "./RepositoryAssigneePicker";
+import { RequirementTeamPicker } from "./RequirementTeamPicker";
 import {
   completeReview,
   controlTask,
@@ -104,20 +112,25 @@ export function TaskWorkspace({
   task,
   viewerUsername,
   canOperate,
+  canCollaborate,
   canRequestReview,
   reviewAssignment,
   onChanged,
   onClose,
   onOpenTask,
+  onExecutionPlanFeedback,
 }: {
   task: TaskSummary;
   viewerUsername: string;
   canOperate: boolean;
+  /** 主任务责任人或已被逐仓分工邀请的协作者。最终决定仍看 canOperate。 */
+  canCollaborate: boolean;
   canRequestReview: boolean;
   reviewAssignment?: ReviewRequest;
   onChanged: () => void;
   onClose: () => void;
   onOpenTask?: (taskId: string) => void;
+  onExecutionPlanFeedback?: (draft: { title: string; detail: string }) => void;
 }) {
   // 旧任务、纯会话和非内核提问没有 approval_subject 元数据；此时需求
   // 原文是唯一保证存在的证据，不能默认打开一个空的过程文档面板。
@@ -149,6 +162,8 @@ export function TaskWorkspace({
   const [cancelArmed, setCancelArmed] = useState(false);
   const [chainSkillPicker, setChainSkillPicker] =
     useState<RepositorySkillPickerState>(EMPTY_REPOSITORY_SKILL_PICKER_STATE);
+  const [repositoryAssignees, setRepositoryAssignees] =
+    useState<RepositoryAssigneeSelection>(EMPTY_REPOSITORY_ASSIGNEE_SELECTION);
   const [deliverySelection, setDeliverySelection] =
     useState<GitDiffSelection>();
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>(
@@ -159,6 +174,7 @@ export function TaskWorkspace({
     setMaterialView(task.waiting?.recommended_view ?? "source");
     setWorkspaceView(task.status === "paused" ? "collaboration" : "materials");
     setChainSkillPicker(EMPTY_REPOSITORY_SKILL_PICKER_STATE);
+    setRepositoryAssignees(EMPTY_REPOSITORY_ASSIGNEE_SELECTION);
     setDeliverySelection(undefined);
   }, [task.id]);
 
@@ -167,9 +183,16 @@ export function TaskWorkspace({
   }, [task.waiting?.waiting_id]);
 
   useEffect(() => {
-    const recommended = task.waiting?.recommended_view;
-    if (!recommended || task.status === "paused") return;
+    const waitingId = task.waiting?.waiting_id;
+    if (!waitingId || task.status === "paused") return;
+
+    // 暂停时工作台会主动切到“开发协作”，方便用户接管现场。恢复后若
+    // Agent 立即举出新问题，不能继续把左侧留在开发控制台——此刻人的
+    // 首要任务是对照证据做决定。每张新决策卡都回到材料视图；有明确的
+    // recommended_view 时再精确定位到文档或 diff。
     setWorkspaceView("materials");
+    const recommended = task.waiting?.recommended_view;
+    if (!recommended) return;
     setMaterialView(recommended);
     if (recommended === "diff") {
       const first = items?.find((item) => item.kind === "diff");
@@ -178,7 +201,7 @@ export function TaskWorkspace({
       const first = items?.find((item) => item.kind === "doc");
       if (first) setActive(first.name);
     }
-  }, [task.waiting?.waiting_id, task.waiting?.recommended_view]);
+  }, [task.status, task.waiting?.waiting_id, task.waiting?.recommended_view]);
 
   useEffect(() => {
     if (task.status === "paused") setWorkspaceView("collaboration");
@@ -362,7 +385,7 @@ export function TaskWorkspace({
       ? { kicker: "WORKTREE CHANGES", title: "工作区变更" }
       : { kicker: "WORK DOCUMENTS", title: "过程文档" };
   const waiting = task.status === "waiting_for_human" && task.waiting;
-  const collaborationVisible = canOperate && [
+  const collaborationVisible = canCollaborate && [
     "running", "pausing", "paused", "waiting_for_human", "verifying",
   ].includes(task.status);
   const chainReview = !!waiting
@@ -380,6 +403,27 @@ export function TaskWorkspace({
   ].includes(task.status);
   const health = taskHealthFacts(task, viewerUsername);
   const visibleProgress = workspaceProgress(task);
+  const pauseFeedback = task.status === "pausing"
+    ? {
+        state: "pending",
+        title: "正在安全暂停",
+        detail: task.detail
+          || "系统正在结束当前操作并保存现场；完成后会自动变为“已暂停”，无需重复点击。",
+      }
+    : task.status === "paused"
+      ? {
+          state: "done",
+          title: "已安全暂停",
+          detail: task.detail
+            || "现场和进度已经保留，需要继续时点击右上角“恢复”。",
+        }
+      : controlBusy === "pause"
+        ? {
+            state: "pending",
+            title: "暂停请求已提交",
+            detail: "正在登记暂停请求，随后会结束当前操作并保存现场。",
+          }
+        : undefined;
 
   async function runControl(action: "pause" | "resume" | "cancel") {
     if (controlBusy) return;
@@ -392,6 +436,10 @@ export function TaskWorkspace({
         setCancelArmed(false);
         await onChanged();
       }
+    } catch (reason) {
+      setControlError(reason instanceof Error
+        ? reason.message : `${action === "pause" ? "暂停" : action === "resume"
+          ? "恢复" : "取消"}请求失败，请重试`);
     } finally {
       setControlBusy("");
     }
@@ -423,6 +471,10 @@ export function TaskWorkspace({
               onChanged={onChanged} />
           </div>
           <strong id="task-workspace-title">{task.title ?? task.requirement}</strong>
+          {task.parent_task_id && <button type="button" className="ws-parent-task"
+            onClick={() => onOpenTask?.(task.parent_task_id!)}>
+            <span>隶属跨仓大任务</span><code>{task.parent_task_id}</code>
+          </button>}
         </div>
         {controllable && (
           <div className="ws-head-controls" aria-label="任务控制">
@@ -472,6 +524,22 @@ export function TaskWorkspace({
             {relativeTime(health.last_progress_at) || "暂无记录"}</span>
         </>} />
       </div>
+      {(pauseFeedback || controlError) && (
+        <div className="task-control-feedback" aria-live="polite">
+          {pauseFeedback && (
+            <div className={`task-control-state ${pauseFeedback.state}`}
+              role="status">
+              <i aria-hidden />
+              <span><strong>{pauseFeedback.title}</strong>
+                <small>{pauseFeedback.detail}</small></span>
+            </div>
+          )}
+          {controlError && <div className="task-control-error" role="alert">
+            <strong>操作没有完成</strong>
+            <span>{controlError}</span>
+          </div>}
+        </div>
+      )}
       <nav className="ws-workspace-nav" aria-label="任务工作台视图">
         {([
           ["materials", "交付材料", "文档、依赖与代码变更"],
@@ -480,7 +548,8 @@ export function TaskWorkspace({
               ? `${notes.length} 条批注` : "圈选原文、协作检视"],
           ["collaboration", "开发协作", collaborationVisible
             ? "补充主任务或主动接管" : assistantUnavailableReason(task)],
-          ["execution", "执行现场", task.focus?.headline ?? "原始 SSE 事件流"],
+          ["execution", "执行方案与现场", task.execution_plan?.strategy.title
+            ?? task.focus?.headline ?? "原始 SSE 事件流"],
         ] as Array<[WorkspaceView, string, string]>).map(([view, label, hint]) => (
           <button type="button" role="tab" key={view}
             aria-selected={workspaceView === view}
@@ -546,8 +615,26 @@ export function TaskWorkspace({
                 <Markdown text={task.requirement} />
               </article>
             ) : materialView === "chain" ? (
-              <RequirementGraph task={task} onOpenTask={onOpenTask}
-              />
+              <>
+                <RequirementGraph task={task} onOpenTask={onOpenTask} />
+                {!chainReview && canOperate
+                  && task.requirement_graph?.stage === "analysis" && <>
+                    <RequirementTeamPicker
+                      taskId={task.id}
+                      owner={task.luban_account}
+                      collaborators={task.collaborators}
+                      onSaved={onChanged}
+                    />
+                    <RepositoryAssigneePicker
+                      taskId={task.id}
+                      repositories={task.requirement_graph.repositories}
+                      defaultAssignee={task.luban_account}
+                      selection={repositoryAssignees}
+                      onSelectionChange={setRepositoryAssignees}
+                      onSaved={onChanged}
+                    />
+                  </>}
+              </>
             ) : <>
               {unavailable && <div className="utility-note">{unavailable}</div>}
               {!unavailable && !items && <div className="utility-note">正在读取现场…</div>}
@@ -585,10 +672,18 @@ export function TaskWorkspace({
             </div>
             <div className="ws-primary-scroll ws-collaboration-view">
               {collaborationVisible ? (
-                <SteerBox task={task} onChanged={() => {
-                  setLivePulse((value) => value + 1);
-                  onChanged();
-                }} />
+                <>
+                  {task.parent_task_id && <CrossRepositorySync
+                    taskId={task.id}
+                    updates={task.cross_repository_updates}
+                    onChanged={onChanged} />}
+                  <SteerBox task={task}
+                    steerOnly={task.requirement_graph?.stage === "analysis"}
+                    onChanged={() => {
+                    setLivePulse((value) => value + 1);
+                    onChanged();
+                  }} />
+                </>
               ) : (
                 <section className="ws-view-empty" aria-label="开发助手状态">
                   <span aria-hidden>›_</span>
@@ -599,12 +694,16 @@ export function TaskWorkspace({
             </div>
           </> : workspaceView === "execution" ? <>
             <div className="ws-pane-head">
-              <div><span>LIVE EXECUTION</span><strong>执行现场</strong></div>
-              <small>SSE 原始事件实时跟随；可按类型筛选</small>
+              <div><span>PLAN & LIVE EXECUTION</span><strong>执行方案与现场</strong></div>
+              <small>先看本阶段怎么做，再按需查看实时事件</small>
             </div>
             <div className="ws-primary-scroll ws-execution-view">
+              {task.execution_plan && <ExecutionPlanCard
+                plan={task.execution_plan}
+                warning={task.execution_profile_warning}
+                onSuggest={onExecutionPlanFeedback} />}
               <WarmupPanel task={task} />
-              <ExecutionPanel task={task} defaultOpen />
+              <ExecutionPanel task={task} />
               <KnowledgeFootprint usage={task.knowledge_usage}
                 utMethod={task.ut_generation_method}
                 taskId={task.id} taskStatus={task.status}
@@ -633,6 +732,8 @@ export function TaskWorkspace({
                     reply={reply}
                     canOperate={canOperate}
                     running={task.status === "running"}
+                    evidenceAwaiting={Boolean(
+                      task.delivery?.evidence_gap?.missing_dimensions.length)}
                     onLocate={locate}
                     onChanged={() => { setNotesPulse((tick) => tick + 1); onChanged(); }}
                   />
@@ -695,8 +796,16 @@ export function TaskWorkspace({
         <aside className={`ws-decision${chainReview ? " has-chain-skills" : ""}`}
           aria-label="当前决策与关键操作">
           <div className="ws-pane-head ws-pane-head-side">
-            <div><span>NEXT ACTION</span><strong>{waiting ? "当前需要处理" : "当前无待办"}</strong></div>
-            <small>{waiting ? "完成后流程继续" : "无需处理"}</small>
+            {/* 右栏标题按阶段说实话:failed 时喊"无待办"是误导——
+                此刻的待办就是看失败原因、决定重跑还是接手。 */}
+            <div><span>NEXT ACTION</span><strong>{waiting ? "当前需要处理"
+              : task.status === "failed" ? "任务已失败"
+              : task.status === "verifying" ? "交付验证中"
+              : "当前无待办"}</strong></div>
+            <small>{waiting ? "完成后流程继续"
+              : task.status === "failed" ? "看原因，决定重跑或接手"
+              : task.status === "verifying" ? "流水线与自动修复由系统跟进"
+              : "无需处理"}</small>
           </div>
           {waiting && canOperate && (
             /* 批注挂在提交按钮正上方(WaitingCard 内部),不放卡片外面:
@@ -710,6 +819,8 @@ export function TaskWorkspace({
               unresolvedAnnotationCount={unresolvedNotes.length}
               repositorySkillSelection={chainReview
                 ? chainSkillPicker.selection : undefined}
+              repositoryAssigneeSelection={chainReview
+                ? repositoryAssignees : undefined}
               deliverySelection={task.waiting?.recommended_view === "diff"
                 ? deliverySelection : undefined}
               onLocateDelivery={task.waiting?.recommended_view === "diff"
@@ -723,14 +834,30 @@ export function TaskWorkspace({
               attachment={
                 <>
                   {chainReview && (
-                    <RepositorySkillPicker
-                      repositories={chainRepositories}
-                      baseline={task.baseline}
-                      initialSkills={task.repository_skills}
-                      presentation="decision"
-                      state={chainSkillPicker}
-                      onStateChange={setChainSkillPicker}
-                    />
+                    <>
+                      <RequirementTeamPicker
+                        taskId={task.id}
+                        owner={task.luban_account}
+                        collaborators={task.collaborators}
+                        onSaved={onChanged}
+                      />
+                      <RepositoryAssigneePicker
+                        taskId={task.id}
+                        repositories={task.requirement_graph!.repositories}
+                        defaultAssignee={task.luban_account}
+                        selection={repositoryAssignees}
+                        onSelectionChange={setRepositoryAssignees}
+                        onSaved={onChanged}
+                      />
+                      <RepositorySkillPicker
+                        repositories={chainRepositories}
+                        baseline={task.baseline}
+                        initialSkills={task.repository_skills}
+                        presentation="decision"
+                        state={chainSkillPicker}
+                        onStateChange={setChainSkillPicker}
+                      />
+                    </>
                   )}
                   <AttachedNotes items={unresolvedNotes} onLocate={locate} />
                 </>
@@ -743,32 +870,60 @@ export function TaskWorkspace({
               你可以查看全部材料，但不能代为提交决定。
             </div>
           )}
-          {!waiting && (
-            <div className="ws-idle">
-              <strong>当前没有待你决定的事项</strong>
-              <p>
-                {task.status === "running"
-                  ? "模型正在推进；需要时可切到执行现场查看。"
-                  : "材料、协作和运行记录都在左侧主视图。"}
-              </p>
-              {canOperate && (task.status === "failed"
-                || task.status === "completed" || repairStopped(task)) && (
-                <RetryButton taskId={task.id} onDone={onChanged} />
+          {/* failed 的重点是"为什么失败":原因置顶,重跑按钮紧随其后,
+              不再先渲一段"当前没有待你决定的事项"把它压到最底。 */}
+          {task.status === "failed" && (
+            <>
+              {task.detail && (
+                <div className="alert">
+                  <strong>任务执行失败</strong>
+                  <span>{task.detail}</span>
+                </div>
               )}
-            </div>
+              {canOperate && !waiting && (
+                <div className="ws-failed-actions">
+                  <RetryButton taskId={task.id} onDone={onChanged} />
+                </div>
+              )}
+            </>
           )}
-          {controlError && <div className="task-control-error">{controlError}</div>}
           {task.status === "canceled" && (
             <div className="task-canceled-note">
               <strong>任务已取消</strong>
               <span>执行已停止；此前产生的文档、代码和过程记录仍可查看。</span>
             </div>
           )}
-          {task.status === "failed" && task.detail && (
-            <div className="alert">
-              <strong>任务执行失败</strong>
-              <span>{task.detail}</span>
-            </div>
+          {!waiting && task.status !== "failed" && task.status !== "canceled" && (
+            task.status === "verifying" ? (
+              /* 验证中右栏不再空转:此刻用户最想知道的是"卡在哪/等谁",
+                 waiting_on 有值就点名;修复停机时直接给重试入口。 */
+              <div className="ws-verify-focus">
+                <strong>交付验证进行中</strong>
+                {task.delivery?.waiting_on ? (
+                  <p className="ws-verify-focus-waiting">
+                    {task.delivery.waiting_on}
+                  </p>
+                ) : (
+                  <p>{task.detail
+                    || "流水线运行与自动修复由系统跟进；需要人时会在这里出卡。"}</p>
+                )}
+                {canOperate && repairStopped(task) && (
+                  <RetryButton taskId={task.id} onDone={onChanged} />
+                )}
+              </div>
+            ) : (
+              <div className="ws-idle">
+                <strong>当前没有待你决定的事项</strong>
+                <p>
+                  {task.status === "running"
+                    ? "模型正在推进；需要时可切到执行现场查看。"
+                    : "材料、协作和运行记录都在左侧主视图。"}
+                </p>
+                {canOperate && task.status === "completed" && (
+                  <RetryButton taskId={task.id} onDone={onChanged} />
+                )}
+              </div>
+            )
           )}
         </aside>
       </div>

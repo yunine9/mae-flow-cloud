@@ -108,6 +108,13 @@ function foldedRows(
 function DiffCellView({ cell }: { cell?: DiffCell }) {
   const mark = cell?.kind === "added" ? "+"
     : cell?.kind === "removed" ? "−" : "";
+  const text = cell?.text ?? "";
+  const [from, to] = cell?.emphasis ?? [0, 0];
+  // 词级高亮:mark 元素不改变 textContent,批注取 [data-code] 原文
+  // 与整行文本完全一致,锚定比对不受影响。
+  const body = to > from
+    ? <span data-code>{text.slice(0, from)}<mark>{text.slice(from, to)}</mark>{text.slice(to)}</span>
+    : <span data-code>{text}</span>;
   return (
     <div className={`diff-cell ${cell?.kind ?? "empty"}`}>
       <span className="diff-line-number">{cell?.number ?? ""}</span>
@@ -115,7 +122,7 @@ function DiffCellView({ cell }: { cell?: DiffCell }) {
           textContent 会把左边的行号和 +/− 标记一起抓进去,拿这种脏
           原文回头比对必然对不上,于是"这处已被改动"整片误报。
           内核面板也是分开取的(.ln 取行号、.c 取代码)。 */}
-      <code><i aria-hidden>{mark}</i><span data-code>{cell?.text ?? ""}</span></code>
+      <code><i aria-hidden>{mark}</i>{body}</code>
     </div>
   );
 }
@@ -173,7 +180,23 @@ export function GitDiff({
     [files, hiddenPaths],
   );
   const tree = useMemo(() => changeTree(visibleFiles), [visibleFiles]);
-  const allDirectories = useMemo(() => displayDirectoryPaths(tree), [tree]);
+  // 交付检视时按语义分两组:检视的重心是"将推送"的提交增量,工作区
+  // 其他改动默认不进远端——混在一棵树里,人分不清哪些必须看。
+  const pushFiles = useMemo(() => visibleFiles.filter((file) =>
+    file.stage === "committed" || file.stage === "committed_working"),
+  [visibleFiles]);
+  const localFiles = useMemo(() => visibleFiles.filter((file) =>
+    file.stage !== "committed" && file.stage !== "committed_working"),
+  [visibleFiles]);
+  const grouped = selectable && pushFiles.length > 0 && localFiles.length > 0;
+  const pushTree = useMemo(() => changeTree(pushFiles), [pushFiles]);
+  const localTree = useMemo(() => changeTree(localFiles), [localFiles]);
+  const allDirectories = useMemo(() => grouped
+    ? [...new Set([
+      ...displayDirectoryPaths(pushTree),
+      ...displayDirectoryPaths(localTree),
+    ])]
+    : displayDirectoryPaths(tree), [grouped, tree, pushTree, localTree]);
   const committedPaths = useMemo(() => files
     .filter((file) => file.stage === "committed"
       || file.stage === "committed_working")
@@ -441,12 +464,38 @@ export function GitDiff({
     );
   }
 
+  function renderTreeNodes(
+    source: { directories: ChangeDirectory[]; files: ChangedFile[] },
+    overview: boolean,
+  ) {
+    return (
+      <>
+        {source.directories.map((directory) =>
+          renderDirectory(directory, 0, overview))}
+        {source.files.map((file) => renderFile(file, 0, overview))}
+      </>
+    );
+  }
+
   function renderTree(overview: boolean) {
     return (
       <div className={`change-tree${overview ? " overview" : ""}`}>
-        {tree.directories.map((directory) =>
-          renderDirectory(directory, 0, overview))}
-        {tree.files.map((file) => renderFile(file, 0, overview))}
+        {grouped ? (
+          <>
+            <div className="change-tree-group">
+              <div className="change-tree-group-head push">
+                <strong>本次提交 · 将推送</strong><i>{pushFiles.length}</i>
+              </div>
+              {renderTreeNodes(pushTree, overview)}
+            </div>
+            <div className="change-tree-group">
+              <div className="change-tree-group-head local">
+                <strong>工作区其他改动 · 默认不推送</strong><i>{localFiles.length}</i>
+              </div>
+              {renderTreeNodes(localTree, overview)}
+            </div>
+          </>
+        ) : renderTreeNodes(tree, overview)}
         {!visibleFiles.length && (
           <div className="change-tree-empty">全部变更已从视图隐藏</div>
         )}
@@ -509,12 +558,10 @@ export function GitDiff({
 
       {(selectable || hiddenPaths.size > 0) && (
         <div className={`delivery-selection-bar${selectionChanged ? " changed" : ""}`}>
-          {selectable && <div><strong>交付清单：已勾选 {selectedDeliveryCount} / {files.length}</strong>
+          {selectable && <div><strong>最终推送范围：{selectedDeliveryCount} / {files.length} 个文件</strong>
             <span>{selectionChanged
-              ? "清单与当前 commit 不同。直接提交“通过”即可：Cloud 会按你的勾选"
-                + "整理提交——剔除的退出提交但内容保留在工作区，补勾的纳入——"
-                + "并直推，不重新编译，编译与 UT 由权威流水线裁决。"
-              : "当前勾选与 commit 一致；最终 push 前服务端会再次核对"}</span></div>}
+              ? "已调整范围：提交决定后 Cloud 自动整理提交，未勾选的文件留在本地不推送。"
+              : "勾选＝最终推送到远端的文件；提交右侧决定后生效。"}</span></div>}
           <div>
             {selectable && <>
               <button type="button" onClick={() =>

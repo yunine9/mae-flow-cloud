@@ -55,7 +55,9 @@ function fakeCli(dir: string): string {
     } else if (sub === "weird") {
       console.log(JSON.stringify({ data: { state: "SUSPENDED" } }));
     } else if (sub === "boom") {
-      console.error("CLI 炸了: token 无效");
+      const tokenAt = args.indexOf("--token");
+      console.error("CLI 炸了: token 无效 "
+        + (tokenAt >= 0 ? args[tokenAt + 1] : ""));
       process.exit(3);
     } else if (sub === "mergeable") {
       // CodeHub mergeable_state 的真实形状(能力核对报告 B 节):
@@ -196,7 +198,11 @@ test("诚实 502:未映射状态拒绝猜;CLI 非零退出带 stderr 上浮", as
   const cli = fakeCli(dir);
   const configPath = join(dir, "adapter.json");
   writeFileSync(configPath, JSON.stringify({
-    mr_create: { command: ["node", cli, "boom"], url: { regex: "https\\S+" } },
+    token: "svc-secret-do-not-leak",
+    mr_create: {
+      command: ["node", cli, "boom", "--token", "{token}"],
+      url: { regex: "https\\S+" },
+    },
     pipeline_trigger: {
       command: ["node", cli, "weird"],
       status: { json: "data.state" },
@@ -217,7 +223,12 @@ test("诚实 502:未映射状态拒绝猜;CLI 非零退出带 stderr 上浮", as
   await assert.rejects(
     adapter.handle("POST", "/mr", new URLSearchParams(),
       { repo: "r", source_branch: "s", target_branch: "t", title: "x" }, {}),
-    /token 无效/);
+    (error: Error) => {
+      assert.match(error.message, /token 无效/);
+      assert.match(error.message, /<token>/);
+      assert.doesNotMatch(error.message, /svc-secret-do-not-leak/);
+      return true;
+    });
 });
 
 test("报告后新口子:平铺布尔门禁、先查后建、两步回复/解决", async () => {
@@ -342,4 +353,111 @@ test("配置坏了拒绝启动;引用 {token} 但两头都没有=502", async () 
   const trigger = await adapter.handle("POST", "/pipeline/trigger",
     new URLSearchParams(), { repo: "r", sha: "x" }, {});
   assert.equal((trigger.payload as any).status, "running");
+});
+
+test("降级链+contract 直通:首路挂了走次路,回显 sha/is_valid 透传", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-adapter-"));
+  const cli = fakeCli(dir);
+  // contract 模式脚本:输出就是宿主契约(仓内编排脚本的形态)。
+  const bridge = join(dir, "fake-bridge.mjs");
+  writeFileSync(bridge, `
+    console.log(JSON.stringify({ runs: [
+      { status: "success", is_valid: false, sha: "${"c".repeat(40)}" },
+      { status: "failed", sha: "${"a".repeat(40)}", is_valid: true,
+        pipeline_id: "88", web_url: "https://ci/88",
+        log: "BUILD FAILURE",
+        checks: [{ dimension: "COMPILE", status: "failed",
+                   stage: "build", tool: "maven",
+                   details: [{ file: "src/A.java", line: 7,
+                               message: "找不到符号" }] }] },
+    ] }));
+  `);
+  const configPath = join(dir, "chain.json");
+  writeFileSync(configPath, JSON.stringify({
+    token: "svc-token-0000",
+    mr_create: { command: ["node", cli, "mr"],
+      url: { json: "data.web_url" } },
+    pipeline_trigger: { command: ["node", cli, "trigger"],
+      status: { const: "running" } },
+    pipeline_status: { candidates: [
+      // 首路必炸(exit 3):降级链要接住,不算端点失败。
+      { command: ["node", cli, "boom"], status: { json: "state" } },
+      { command: ["node", bridge], contract: true },
+    ] },
+  }));
+  const adapter = new PlatformAdapter(configPath, () => {});
+  const result = await adapter.handle("GET", "/pipeline/status",
+    new URLSearchParams({ sha: "a".repeat(40), repo: "r" }), {}, {});
+  assert.equal(result.status, 200);
+  const runs = (result.payload as any).runs;
+  assert.equal(runs.length, 2);
+  // 陈灯标记与 SHA 回显原样透传——机械核验在宿主(selectTerminalRun)。
+  assert.equal(runs[0].is_valid, false);
+  assert.equal(runs[1].sha, "a".repeat(40));
+  assert.equal(runs[1].pipeline_id, "88");
+  assert.equal(runs[1].checks[0].stage, "build");
+  assert.equal(runs[1].checks[0].details[0].line, 7);
+});
+
+test("contract 模式不放松诚实:非契约状态词=这一路失败;全败聚合上报", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-adapter-"));
+  const cli = fakeCli(dir);
+  const liar = join(dir, "liar.mjs");
+  writeFileSync(liar,
+    `console.log(JSON.stringify({ runs: [{ status: "GREEN" }] }));`);
+  const configPath = join(dir, "liar.json");
+  writeFileSync(configPath, JSON.stringify({
+    token: "svc-token-0000",
+    mr_create: { command: ["node", cli, "mr"],
+      url: { json: "data.web_url" } },
+    pipeline_trigger: { command: ["node", cli, "trigger"],
+      status: { const: "running" } },
+    pipeline_status: { candidates: [
+      { command: ["node", liar], contract: true },
+      { command: ["node", cli, "boom"], status: { json: "state" } },
+    ] },
+  }));
+  const adapter = new PlatformAdapter(configPath, () => {});
+  await assert.rejects(
+    adapter.handle("GET", "/pipeline/status",
+      new URLSearchParams({ sha: "x", repo: "r" }), {}, {}),
+    (error: Error) => /候选\[0\].*不是契约词/s.test(error.message)
+      && /候选\[1\]/.test(error.message));
+});
+
+test("模板模式的 run 级回显:run_sha/is_valid/pipeline_id 逐字段抽取", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-adapter-"));
+  const cli = fakeCli(dir);
+  const rest = join(dir, "rest.mjs");
+  writeFileSync(rest, `
+    console.log(JSON.stringify({ data: { runs: [
+      { state: "SUCCESS", commit_sha: "${"d".repeat(40)}",
+        id: 91, valid: "false" },
+    ] } }));
+  `);
+  const configPath = join(dir, "rest.json");
+  writeFileSync(configPath, JSON.stringify({
+    token: "svc-token-0000",
+    mr_create: { command: ["node", cli, "mr"],
+      url: { json: "data.web_url" } },
+    pipeline_trigger: { command: ["node", cli, "trigger"],
+      status: { const: "running" } },
+    pipeline_status: {
+      command: ["node", rest],
+      runs: { json: "data.runs" },
+      status: { json: "state" },
+      run_sha: { json: "commit_sha" },
+      pipeline_id: { json: "id" },
+      is_valid: { json: "valid" },
+      status_map: { SUCCESS: "success", FAILED: "failed",
+                    RUNNING: "running" },
+    },
+  }));
+  const adapter = new PlatformAdapter(configPath, () => {});
+  const result = await adapter.handle("GET", "/pipeline/status",
+    new URLSearchParams({ sha: "x", repo: "r" }), {}, {});
+  const run = (result.payload as any).runs[0];
+  assert.equal(run.sha, "d".repeat(40));
+  assert.equal(run.pipeline_id, "91");
+  assert.equal(run.is_valid, false);
 });

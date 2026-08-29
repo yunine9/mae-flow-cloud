@@ -15,6 +15,13 @@ from mae_flow_core.workflow.execution_contract import (
     uses_pipeline,
     validation_environment,
 )
+from mae_flow_core.workflow.execution_plan import (
+    build_execution_plan,
+    load_execution_profile,
+    load_workflow_profile,
+    render_agent_execution_plan,
+    render_execution_profile,
+)
 from mae_flow_core.cli_commands.approval_subject import build_subject
 from mae_flow_core.cli_commands.user_intervention import render_user_intervention
 
@@ -204,6 +211,18 @@ def print_current(flow, st):
         print(note)
     sid = st["current"]
     step = flow["steps"][sid]
+    execution_profile, execution_profile_warning = load_execution_profile()
+    workflow_profile, workflow_profile_warning = load_workflow_profile()
+    try:
+        execution_plan_text = render_agent_execution_plan(
+            build_execution_plan(
+                flow, st, profile=execution_profile,
+                workflow_profile=workflow_profile))
+        execution_plan_warning = ""
+    except Exception as exc:
+        execution_plan_text = ""
+        execution_plan_warning = (
+            "⚠ 平台默认执行方案暂不可用，当前阶段仍按内核指令推进：%s" % exc)
     if step.get("approval_subject") and not api._moonlight(st):
         try:
             subject = build_subject(os.getcwd(), st, sid, step)
@@ -215,6 +234,12 @@ def print_current(flow, st):
             st["approval_subject"] = subject
             api.save_state(st)
     print(f"═══ 当前步骤: {sid} — {step['title']} ═══")
+    if execution_profile_warning:
+        print(execution_profile_warning)
+    if workflow_profile_warning:
+        print(workflow_profile_warning)
+    if execution_plan_warning:
+        print(execution_plan_warning)
     if api._moonlight(st):
         ml = api._moonlight_data(st)
         print(f"🌙 月光宝盒运行中（第 {ml.get('cycle', 1)} 轮）：禁止询问用户；"
@@ -284,11 +309,21 @@ def print_current(flow, st):
         txt = _step_md_text(sid, st)
         if txt:
             print(txt)
+        if execution_plan_text:
+            print(execution_plan_text)
+        supplement = render_execution_profile(execution_profile)
+        if supplement:
+            print(supplement)
         return
     txt = _step_md_text(sid, st)
     if txt is not None:
         print("──── 执行指令 ────")
         print(txt)
+    if execution_plan_text:
+        print(execution_plan_text)
+    supplement = render_execution_profile(execution_profile)
+    if supplement:
+        print(supplement)
     if api._moonlight(st) and sid in MOONLIGHT_QUALITY_STEPS:
         print("──── 尽力而为出口 ────")
         print("先真实执行本步并尝试修复；确认继续尝试只会重复消耗后，提交当前有效改动，然后执行：")

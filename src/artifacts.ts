@@ -26,6 +26,10 @@ import {
 } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import { runSafeWorktreeGit, runSafeWorktreeGitAsync } from "./safeGit.ts";
+import {
+  AGENT_PLATFORM_ROOTS,
+  isAgentPlatformPath,
+} from "./agentPlatformPaths.ts";
 
 const WORK_DIR = ".mae-flow-work";
 /** 单个产物最多回传这么多字节:一个巨型 diff 不能把页面拖死。 */
@@ -88,6 +92,9 @@ export interface DeliveryChangeSnapshot {
   head: string;
   workspace_paths: string[];
   committed_paths: string[];
+  /** 本任务提交历史中新加入过的 Agent 平台目录文件；即使后来删除，
+   * 对象仍会随分支 push，因此宿主必须在传输前拦住。 */
+  added_agent_platform_paths: string[];
 }
 
 interface DocEntry {
@@ -253,13 +260,17 @@ async function untrackedDiffAsync(
 /** porcelain 行 → 改动路径(重命名行取箭头右边的新名字)。 */
 function changedPaths(status: string): string[] {
   return status.split("\n")
-    .map((line) => line.slice(3).trim())
-    .filter(Boolean)
-    .map((path) => {
-      const arrow = path.split(" -> ");
-      return (arrow[1] ?? arrow[0]).replace(/^"|"$/g, "");
-    })
-    .filter((path) => !isFlowControlPath(path));
+    .flatMap((line) => {
+      const raw = line.slice(3).trim();
+      if (!raw) return [];
+      const arrow = raw.split(" -> ");
+      const path = (arrow[1] ?? arrow[0]).replace(/^"|"$/g, "");
+      // 中心服务注入的是未跟踪运行资产：旧现场即使本地 exclude 缺失，
+      // 也不能让它们混进检视/交付清单。已暂存或已提交的异常路径仍
+      // 保留可见，交给推送硬闸明确报错，不能在 UI 里偷偷藏掉。
+      return isFlowControlPath(path)
+        || (line.startsWith("??") && isAgentPlatformPath(path)) ? [] : [path];
+    });
 }
 
 type ChangeOrigin = "committed" | "committed_working" | "staged"
@@ -353,10 +364,22 @@ export async function deliveryChangeSnapshot(
   ]);
   const head = String(headText ?? "").trim();
   if (!head || status === undefined) return undefined;
-  const committedText = baseline
-    ? await gitAsync(cwd, ["diff", "--name-only", baseline, "HEAD", "--"])
-    : undefined;
+  const [committedText, addedAgentText] = baseline
+    ? await Promise.all([
+        gitAsync(cwd, ["diff", "--name-only", baseline, "HEAD", "--"]),
+        // 查整个提交区间而非最终树差异：先提交注入 Skill、后续再删除，
+        // 相关 blob/commit 仍会被 push，不能被最终“看起来已删”绕过。
+        gitAsync(cwd, [
+          "log", "--format=", "--name-only", "-z", "--diff-filter=A",
+          `${baseline}..HEAD`, "--", ...AGENT_PLATFORM_ROOTS,
+        ]),
+      ])
+    : [undefined, undefined];
   const committed = uniqueBusinessPaths((committedText ?? "").split("\n"));
+  const addedAgentPaths = [...new Set(String(addedAgentText ?? "")
+    .split("\0").map((path) => path.trim())
+    .filter((path) => isAgentPlatformPath(path)))]
+    .sort((left, right) => left.localeCompare(right));
   return {
     ...(baseline ? { baseline } : {}),
     head,
@@ -365,6 +388,7 @@ export async function deliveryChangeSnapshot(
       ...changedPaths(status),
     ]),
     committed_paths: committed,
+    added_agent_platform_paths: addedAgentPaths,
   };
 }
 
@@ -462,7 +486,8 @@ function collectDiff(
   const untracked = status.split("\n")
     .filter((line) => line.startsWith("??"))
     .map((line) => line.slice(3).trim())
-    .filter((path) => path && !isFlowControlPath(path));
+    .filter((path) => path && !isFlowControlPath(path)
+      && !isAgentPlatformPath(path));
   const baseline = taskBaseline(cwd);
   const sections: string[] = [];
   let trackedPaths: string[] = [];
@@ -530,7 +555,8 @@ async function collectDiffAsync(
   const untracked = status.split("\n")
     .filter((line) => line.startsWith("??"))
     .map((line) => line.slice(3).trim())
-    .filter((path) => path && !isFlowControlPath(path));
+    .filter((path) => path && !isFlowControlPath(path)
+      && !isAgentPlatformPath(path));
   const baseline = await taskBaselineAsync(cwd);
   const sections: string[] = [];
   let trackedPaths: string[] = [];

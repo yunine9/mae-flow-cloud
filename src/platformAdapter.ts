@@ -9,7 +9,10 @@
  * 契约(与 docs/deploy-intranet.md 一字对应):
  *   POST /mr               {repo, source_branch, target_branch, title} → {url}
  *   POST /pipeline/trigger {repo, sha} → {status, log?, checks?}
- *   GET  /pipeline/status?sha=&repo=   → {runs: [{status, log?, checks?}]}
+ *   GET  /pipeline/status?sha=&repo=&mr=<iid>
+ *        → {runs: [{status, log?, checks?}]}
+ *   GET  /pipeline/artifacts?sha=&repo=&mr=<完整 MR URL>
+ *        → {files: [{name, text}]}
  *
  * 纪律(与本仓宪法一致):
  * - 诚实失败:CLI 缺失/非零退出/输出解析不出/状态映射不到,一律 502
@@ -58,6 +61,8 @@
  * }
  *
  * 占位符:{repo} {source_branch} {target_branch} {title} {sha} {mr}
+ *        注意:{mr} 在 status/gates/discussions 是 MR iid，在 artifacts
+ *        是完整 MR URL；两类命令是不同端点，不能共用对其形状的猜测。
  *        {repo_path}(从 {repo} 自动派生的 URL 编码项目路径,
  *          CodeHub REST 的 /projects/{路径}/ 直接用,不用手抄项目 id)
  *        {id} {body} {note_id}(检视回复链)
@@ -89,11 +94,23 @@ type Extract = { json?: string; regex?: string; const?: string };
 interface CommandSpec {
   command: string[];
   timeout_s?: number;
+  /** 命令输出**就是宿主契约 JSON**(pipeline_status: {runs:[...]})——
+   * 仓内自带的编排脚本(deploy/adapter-tools/)用这个形态,免去逐字段
+   * 抽取配置;status 仍逐 run 核验契约词,不放松诚实纪律。 */
+  contract?: boolean;
   status?: Extract;
   log?: Extract;
   url?: Extract;
   runs?: Extract;
   status_map?: Record<string, string>;
+  /** run 级回显(pipeline_status 用,全部可选;2026-08-28 对比报告的
+   * 防陈灯根治):run_sha=这条 run 绑定的提交,is_valid=平台"MR 头上
+   * 是否有效流水线"标记。配了宿主就机械核验"结果属于当次提交",
+   * 不配保持旧行为(selftest 会点名建议)。 */
+  run_sha?: Extract;
+  pipeline_id?: Extract;
+  is_valid?: Extract;
+  web_url?: Extract;
   /** 一次流水线 run 内的逐项质量结果。checks 指数组，后续字段相对
    * 数组元素抽取。缺席允许 trigger 只回 running；终态缺席会被宿主
    * fail-closed 留在 verifying，不能拿总体 success 代替。 */
@@ -102,6 +119,11 @@ interface CommandSpec {
   check_status?: Extract;
   check_job?: Extract;
   check_url?: Extract;
+  /** stage/tool 粒度(可选):失败时宿主能告诉修复 Agent"挂在哪个
+   * stage 的哪个 job 的哪个工具",不用对着 log 猜。缺陷明细(details)
+   * 不走模板抽取——嵌套太深,用 contract 模式的脚本直接给。 */
+  check_stage?: Extract;
+  check_tool?: Extract;
   check_status_map?: Record<string, string>;
   /** MR 标识(iid)抽取(mr_create/mr_lookup 用,可选):抽到了就随
    * {url} 一起回给宿主,后续门禁/讨论查询带回来当 {mr}。 */
@@ -141,6 +163,19 @@ interface ListSpec extends CommandSpec {
   ignore_fields?: string[];
 }
 
+/** 多候选降级链(toolkit 对齐,2026-08-28 对比报告差距①):一个端点
+ * 可配多个候选命令(如 编排脚本→REST→CLI),首个成功赢,每路失败
+ * 原因记日志并在全败时聚合上报——信息获取不再单点故障。每个候选是
+ * 完整的 spec(各自的抽取配置),向后兼容单命令写法。 */
+type Degradable<T extends CommandSpec> = T | { candidates: T[] };
+
+function candidatesOf<T extends CommandSpec>(
+  spec: Degradable<T>,
+): T[] {
+  return "candidates" in spec && Array.isArray(spec.candidates)
+    ? spec.candidates : [spec as T];
+}
+
 interface AdapterConfig {
   port?: number;
   /** 监听地址,默认 127.0.0.1(只给本机宿主)。适配层在 Windows 侧、
@@ -156,7 +191,7 @@ interface AdapterConfig {
    * 抽取:url 必配(查到即回),id 可选;查不到/命令失败=走创建。 */
   mr_lookup?: CommandSpec;
   pipeline_trigger: CommandSpec;
-  pipeline_status: CommandSpec;
+  pipeline_status: Degradable<CommandSpec>;
   /** MR 闭环的四个可选端点(docs/mr-loop-adaptation.md §3):
    * 不配=对应 HTTP 路由回 404,宿主 fail-open 回纯流水线语义。 */
   mr_gates?: ListSpec;
@@ -166,7 +201,7 @@ interface AdapterConfig {
    * 是两个调用(报告 D3)。宿主请求带 resolve:true 且配了它才执行;
    * 宿主默认不代 resolve(那是检视人的职责),所以多数部署不用配。 */
   discussion_resolve?: CommandSpec;
-  pipeline_artifacts?: ListSpec;
+  pipeline_artifacts?: Degradable<ListSpec>;
 }
 
 const CONTRACT_STATUS = new Set(["success", "failed", "running"]);
@@ -279,17 +314,32 @@ function extractChecks(
     const status = mapCheckStatus(extract(
       statusSpec, `checks[${index}] status`, stdout, item,
     ), spec.check_status_map ?? spec.status_map);
-    const job = spec.check_job
-      ? extractOptional(spec.check_job, stdout, item) : undefined;
-    const url = spec.check_url
-      ? extractOptional(spec.check_url, stdout, item) : undefined;
+    const optional = (fieldSpec: Extract | undefined) => {
+      const value = fieldSpec
+        ? extractOptional(fieldSpec, stdout, item) : undefined;
+      return value !== undefined && value !== "" ? String(value) : undefined;
+    };
+    const job = optional(spec.check_job);
+    const url = optional(spec.check_url);
+    const stage = optional(spec.check_stage);
+    const tool = optional(spec.check_tool);
     return {
       dimension: dimension as PipelineCheck["dimension"],
       status,
-      ...(job !== undefined && job !== "" ? { job: String(job) } : {}),
-      ...(url !== undefined && url !== "" ? { url: String(url) } : {}),
+      ...(job !== undefined ? { job } : {}),
+      ...(url !== undefined ? { url } : {}),
+      ...(stage !== undefined ? { stage } : {}),
+      ...(tool !== undefined ? { tool } : {}),
     };
   });
+}
+
+/** is_valid 原始值 → 布尔。平台可能给布尔、"false"/"0"、大小写混杂;
+ * 只有明确的否定词才判 false——半懂不懂的值当 true(拒陈灯另有
+ * run_sha 核验兜底,别把有效流水线误杀成陈灯)。 */
+function parseValidity(raw: unknown): boolean {
+  if (raw === false) return false;
+  return !["false", "0", "no"].includes(String(raw ?? "").toLowerCase());
 }
 
 export class PlatformAdapter {
@@ -301,12 +351,24 @@ export class PlatformAdapter {
     const raw = readFileSync(configPath, "utf-8");
     this.config = JSON.parse(raw) as AdapterConfig;
     for (const section of
-        ["mr_create", "pipeline_trigger", "pipeline_status"] as const) {
+        ["mr_create", "pipeline_trigger"] as const) {
       const spec = this.config[section];
       if (!Array.isArray(spec?.command) || spec.command.length === 0) {
         throw new Error(`配置缺 ${section}.command(argv 数组)`);
       }
     }
+    // pipeline_status 允许降级链:每个候选都要是完整可执行的 spec。
+    const statusCandidates = this.config.pipeline_status
+      ? candidatesOf(this.config.pipeline_status) : [];
+    if (!statusCandidates.length) {
+      throw new Error("配置缺 pipeline_status(单命令或 candidates 数组)");
+    }
+    statusCandidates.forEach((candidate, index) => {
+      if (!Array.isArray(candidate?.command) || !candidate.command.length) {
+        throw new Error(
+          `pipeline_status 候选[${index}] 缺 command(argv 数组)`);
+      }
+    });
     if (this.config.token_file) {
       this.serviceToken = readFileSync(this.config.token_file, "utf-8").trim();
     } else if (this.config.token) {
@@ -321,6 +383,15 @@ export class PlatformAdapter {
     spec: CommandSpec,
     values: Record<string, string>,
   ): Promise<string> {
+    const secrets = [values.token, this.serviceToken]
+      .filter((value): value is string => !!value);
+    const redact = (raw: unknown): string => {
+      let text = String(raw ?? "");
+      for (const secret of secrets) {
+        text = text.split(secret).join("<token>");
+      }
+      return text;
+    };
     const [executable, ...args] = spec.command.map((part) =>
       part.replace(/\{(\w+)\}/g, (_whole, name: string) => {
         const value = values[name];
@@ -339,8 +410,9 @@ export class PlatformAdapter {
         (error, stdout, stderr) => {
           if (error) {
             reject(new AdapterError(
-              `CLI 失败: ${executable} 退出异常(${error.message.slice(0, 200)})`
-              + `\nstderr: ${String(stderr).slice(0, 1000)}`));
+              `CLI 失败: ${executable} 退出异常(`
+              + `${redact(error.message).slice(0, 200)})`
+              + `\nstderr: ${redact(stderr).slice(0, 1000)}`));
           } else {
             // Windows CLI(WSL 互操作调 .exe / 适配层直跑 Windows)输出
             // 是 \r\n,\r 会咬正则抽取一口——统一归一化,JSON 不受影响。
@@ -392,6 +464,107 @@ export class PlatformAdapter {
       token: personal || this.serviceToken,
       git_username: decode(headers["x-mfc-git-user"]),
     };
+  }
+
+  /** pipeline_status 单候选执行。contract 模式=命令输出就是宿主契约
+   * (仓内编排脚本形态);模板模式=逐字段抽取。两条路的 status 都逐
+   * run 核验契约词——降级不降诚实。 */
+  private async statusRuns(
+    spec: CommandSpec,
+    values: Record<string, string>,
+  ): Promise<Array<Record<string, unknown>>> {
+    const stdout = await this.run(spec, values);
+    let parsedCache: unknown;
+    const parsed = () => parsedCache ??= JSON.parse(stdout);
+    if (spec.contract) {
+      const list = (parsed() as { runs?: unknown }).runs;
+      if (!Array.isArray(list)) {
+        throw new AdapterError(
+          "contract 模式要求输出 {runs:[...]},实际没有 runs 数组"
+          + `(输出前 300 字: ${stdout.slice(0, 300)})`);
+      }
+      return list.map((run, index) => {
+        const row = (run ?? {}) as Record<string, unknown>;
+        const status = String(row.status ?? "");
+        if (!CONTRACT_STATUS.has(status)) {
+          throw new AdapterError(
+            `contract 模式 runs[${index}].status "${status}" 不是契约词`
+            + "(success/failed/running)——脚本必须自己完成映射,不猜");
+        }
+        // 白名单透传:契约外的字段不带给宿主,脚本升级不会悄悄改契约。
+        return {
+          status,
+          ...(row.log !== undefined ? { log: String(row.log) } : {}),
+          ...(Array.isArray(row.checks) ? { checks: row.checks } : {}),
+          ...(row.sha ? { sha: String(row.sha) } : {}),
+          ...(row.pipeline_id
+            ? { pipeline_id: String(row.pipeline_id) } : {}),
+          ...(row.is_valid !== undefined
+            ? { is_valid: parseValidity(row.is_valid) } : {}),
+          ...(row.web_url ? { web_url: String(row.web_url) } : {}),
+        };
+      });
+    }
+    const list = spec.runs
+      ? extract(spec.runs, "runs 数组", stdout, parsed)
+      : parsed();
+    if (!Array.isArray(list)) {
+      throw new AdapterError("pipeline_status 抽出来的不是数组");
+    }
+    return list.map((run) => {
+      const current = () => run;
+      const status = mapStatus(
+        extract(spec.status, "run 状态", stdout, current),
+        spec.status_map);
+      const log = spec.log
+        ? String(extractOptional(spec.log, stdout, current) ?? "")
+        : undefined;
+      const checks = extractChecks(spec, stdout, current);
+      const optional = (fieldSpec: Extract | undefined) => {
+        const value = fieldSpec
+          ? extractOptional(fieldSpec, stdout, current) : undefined;
+        return value !== undefined && value !== "" ? value : undefined;
+      };
+      const sha = optional(spec.run_sha);
+      const pipelineId = optional(spec.pipeline_id);
+      const validity = optional(spec.is_valid);
+      const webUrl = optional(spec.web_url);
+      return {
+        status,
+        ...(log !== undefined ? { log } : {}),
+        ...(checks !== undefined ? { checks } : {}),
+        ...(sha !== undefined ? { sha: String(sha) } : {}),
+        ...(pipelineId !== undefined
+          ? { pipeline_id: String(pipelineId) } : {}),
+        ...(validity !== undefined
+          ? { is_valid: parseValidity(validity) } : {}),
+        ...(webUrl !== undefined ? { web_url: String(webUrl) } : {}),
+      };
+    });
+  }
+
+  /** pipeline_artifacts 单候选执行:命令下载到目录(SSE 网关那类)→
+   * 读目录;或命令直接输出 JSON → items/fields 抽 {name, text}。 */
+  private async artifactFiles(
+    spec: ListSpec,
+    values: Record<string, string>,
+  ): Promise<Array<{ name: string; text: string }>> {
+    if (spec.files_dir) {
+      await this.run(spec, values);
+      const dir = spec.files_dir.replace(/\{(\w+)\}/g,
+        (_whole, name: string) => values[name] ?? "");
+      return existsSync(dir)
+        ? readdirSync(dir).map((name) => ({
+            name,
+            text: readFileSync(join(dir, name), "utf-8")
+              .slice(0, 512 * 1024),
+          }))
+        : [];
+    }
+    const { items } = await this.runList(spec, values);
+    return items
+      .filter((row) => row.name !== undefined && row.text !== undefined)
+      .map((row) => ({ name: String(row.name), text: String(row.text) }));
   }
 
   /** 列表端点的通用执行:跑命令→取数组→逐字段抽。字段抽取失败按
@@ -505,35 +678,30 @@ export class PlatformAdapter {
       } };
     }
     if (method === "GET" && path === "/pipeline/status") {
-      const spec = this.config.pipeline_status;
-      const stdout = await this.run(spec, this.values({
+      const values = this.values({
         sha: query.get("sha") ?? "",
         repo: query.get("repo") ?? "",
-      }, headers));
-      let parsedCache: unknown;
-      const parsed = () => parsedCache ??= JSON.parse(stdout);
-      const list = spec.runs
-        ? extract(spec.runs, "runs 数组", stdout, parsed)
-        : parsed();
-      if (!Array.isArray(list)) {
-        throw new AdapterError("pipeline_status 抽出来的不是数组");
+        // MR 标识(宿主知道就带):actual_head_pipeline 按 MR 定位,
+        // 编排脚本有它就免去"用 sha 反查 MR"的一跳。
+        mr: query.get("mr") ?? "",
+      }, headers);
+      // 降级链:候选逐个试,首个成功赢;每路失败原因单独记日志,
+      // 全败聚合上报——单点故障是对比报告点名的差距①。
+      const failures: string[] = [];
+      for (const spec of candidatesOf(this.config.pipeline_status)) {
+        try {
+          return { status: 200,
+                   payload: { runs: await this.statusRuns(spec, values) } };
+        } catch (error) {
+          const reason = String((error as Error).message ?? error);
+          failures.push(reason.slice(0, 500));
+          this.log(`[adapter] pipeline_status 候选[${failures.length - 1}] `
+            + `失败,尝试下一路: ${reason.slice(0, 300)}`);
+        }
       }
-      const runs = list.map((run) => {
-        const current = () => run;
-        const status = mapStatus(
-          extract(spec.status, "run 状态", stdout, () => run),
-          spec.status_map);
-        const log = spec.log
-          ? String(extractOptional(spec.log, stdout, () => run) ?? "")
-          : undefined;
-        const checks = extractChecks(spec, stdout, current);
-        return {
-          status,
-          log,
-          ...(checks !== undefined ? { checks } : {}),
-        };
-      });
-      return { status: 200, payload: { runs } };
+      throw new AdapterError(
+        "pipeline_status 全部候选失败:\n"
+        + failures.map((why, index) => `候选[${index}]: ${why}`).join("\n"));
     }
     // ---- MR 闭环的四个可选端点:不配=404,宿主 fail-open ----
     if (method === "GET" && path === "/mr/gates") {
@@ -652,37 +820,40 @@ export class PlatformAdapter {
       }
     }
     if (method === "GET" && path === "/pipeline/artifacts") {
-      const spec = this.config.pipeline_artifacts;
-      if (!spec) {
+      if (!this.config.pipeline_artifacts) {
         return { status: 404,
                  payload: { error: "未配置 pipeline_artifacts" } };
       }
+      // 这里的 mr 契约是完整 MR URL。宿主 mirrorPipelineArtifacts 与
+      // pipeline-artifacts.sh 的第 4 参都按 MR-first 语义传递；不要改成
+      // status 主路使用的 iid，否则 query_mr_info 无法定位 MR。
       const values = this.values({
         sha: query.get("sha") ?? "",
         repo: query.get("repo") ?? "",
+        mr: query.get("mr") ?? "",
       }, headers);
-      // 两种形态:命令下载到目录(SSE 网关那类)→ 读目录;
-      // 或命令直接输出 JSON → items/fields 抽 {name, text}。
-      if (spec.files_dir) {
-        await this.run(spec, values);
-        const dir = spec.files_dir.replace(/\{(\w+)\}/g,
-          (_whole, name: string) => values[name] ?? "");
-        const files = existsSync(dir)
-          ? readdirSync(dir).map((name) => ({
-              name,
-              text: readFileSync(join(dir, name), "utf-8")
-                .slice(0, 512 * 1024),
-            }))
-          : [];
-        return { status: 200, payload: { files } };
+      // 降级链同 pipeline_status:失败材料是修复 Agent 的口粮,一路
+      // 挂了换下一路,全败才 502。空文件列表不算失败(材料可能真没有),
+      // 但记一句日志方便排查"桥跑了却没落盘"。
+      const failures: string[] = [];
+      for (const spec of candidatesOf(this.config.pipeline_artifacts)) {
+        try {
+          const files = await this.artifactFiles(spec, values);
+          if (!files.length) {
+            this.log("[adapter] pipeline_artifacts 本路成功但零文件"
+              + "(材料缺席或落盘目录配错)");
+          }
+          return { status: 200, payload: { files } };
+        } catch (error) {
+          const reason = String((error as Error).message ?? error);
+          failures.push(reason.slice(0, 500));
+          this.log(`[adapter] pipeline_artifacts 候选[${failures.length - 1}]`
+            + ` 失败,尝试下一路: ${reason.slice(0, 300)}`);
+        }
       }
-      const { items } = await this.runList(spec, values);
-      return { status: 200, payload: {
-        files: items
-          .filter((row) => row.name !== undefined && row.text !== undefined)
-          .map((row) => ({
-            name: String(row.name), text: String(row.text) })),
-      } };
+      throw new AdapterError(
+        "pipeline_artifacts 全部候选失败:\n"
+        + failures.map((why, index) => `候选[${index}]: ${why}`).join("\n"));
     }
     return { status: 404, payload: { error: "未知路径" } };
   }
@@ -698,28 +869,50 @@ export class PlatformAdapter {
       ["mr_create(只印不执行)", this.config.mr_create],
       ["mr_lookup(先查后建的查询)", this.config.mr_lookup],
       ["pipeline_trigger(只印不执行)", this.config.pipeline_trigger],
-      ["pipeline_status", this.config.pipeline_status],
       ["mr_gates", this.config.mr_gates],
       ["mr_discussions", this.config.mr_discussions],
       ["discussion_reply(只印不执行)", this.config.discussion_reply],
       ["discussion_resolve(只印不执行)", this.config.discussion_resolve],
-      ["pipeline_artifacts", this.config.pipeline_artifacts],
     ];
     for (const [name, spec] of sections) {
       lines.push(spec
         ? `[配置] ${name}: ${mask(spec.command)}`
         : `[缺席] ${name}: 未配置(对应端点 404,宿主按旧语义 fail-open)`);
     }
-    const pipelineSpec = this.config.pipeline_status;
-    lines.push(pipelineSpec.checks && pipelineSpec.check_dimension
-      && pipelineSpec.check_status
-      ? "[配置] 流水线逐项结果: ok (checks + dimension + status)"
+    // 降级链端点逐候选打印——内网对拍时一眼看清有几路、各是什么。
+    for (const [name, degradable] of [
+      ["pipeline_status", this.config.pipeline_status],
+      ["pipeline_artifacts", this.config.pipeline_artifacts],
+    ] as const) {
+      if (!degradable) {
+        lines.push(`[缺席] ${name}: 未配置`);
+        continue;
+      }
+      candidatesOf(degradable).forEach((candidate, index) => {
+        lines.push(`[配置] ${name} 候选[${index}]`
+          + `${candidate.contract ? "(contract 直通)" : ""}: `
+          + mask(candidate.command));
+      });
+    }
+    const statusCandidates = candidatesOf(this.config.pipeline_status);
+    lines.push(statusCandidates.some((spec) => spec.contract
+      || (spec.checks && spec.check_dimension && spec.check_status))
+      ? "[配置] 流水线逐项结果: ok"
       : "[建议] 流水线逐项结果: 当前使用整体流水线核销；建议为 "
-        + "pipeline_status 配置 checks / check_dimension / check_status，"
-        + "以便红灯时精确诊断");
+        + "pipeline_status 配置 checks / check_dimension / check_status "
+        + "(或用 contract 模式的编排脚本)，以便红灯时精确诊断");
+    lines.push(statusCandidates.some((spec) => spec.contract
+      || spec.run_sha || spec.is_valid)
+      ? "[配置] 防陈灯核验: ok (run_sha / is_valid 至少一路可回显)"
+      : "[建议] 防陈灯核验: 建议配置 run_sha / is_valid 回显——"
+        + "MR 头上无有效流水线时平台挂旧灯,宿主拿不到绑定 SHA 就"
+        + "无法机械拒收(2026-08-28 对比报告头号根因)");
     const probes: Array<[string, string, URLSearchParams]> = [
       ["GET /pipeline/status", "/pipeline/status",
-       new URLSearchParams({ sha: sample.sha ?? "", repo: sample.repo ?? "" })],
+       new URLSearchParams({
+         sha: sample.sha ?? "", repo: sample.repo ?? "",
+         mr: sample.mr ?? "",
+       })],
       ["GET /mr/gates", "/mr/gates", new URLSearchParams({
         repo: sample.repo ?? "",
         source_branch: sample.source_branch ?? "",
@@ -728,7 +921,10 @@ export class PlatformAdapter {
       ["GET /mr/discussions", "/mr/discussions", new URLSearchParams({
         repo: sample.repo ?? "", mr: sample.mr ?? "" })],
       ["GET /pipeline/artifacts", "/pipeline/artifacts",
-       new URLSearchParams({ sha: sample.sha ?? "", repo: sample.repo ?? "" })],
+       new URLSearchParams({
+         sha: sample.sha ?? "", repo: sample.repo ?? "",
+         mr: sample.mr_url ?? "",
+       })],
     ];
     for (const [label, path, query] of probes) {
       try {
@@ -824,6 +1020,7 @@ if (process.argv[1]?.endsWith("platformAdapter.ts")) {
         target_branch: argValue("--target-branch"),
         sha: argValue("--sha"),
         mr: argValue("--mr"),
+        mr_url: argValue("--mr-url"),
       }).then((report) => {
         console.log(report);
         process.exit(0);

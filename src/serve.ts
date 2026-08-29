@@ -24,6 +24,8 @@ import type { AddressInfo } from "node:net";
 import { ScriptedModelServer, type Scene } from "./scriptedModel.ts";
 import { discoverKernelRoot } from "./kernelDiscovery.ts";
 import {
+  DEFAULT_BUILD_CACHE_MAX_GB,
+  DEFAULT_BUILD_CACHE_RETENTION_DAYS,
   DEFAULT_WORKSPACE_RETENTION_DAYS,
   TaskService,
 } from "./taskService.ts";
@@ -378,14 +380,16 @@ async function main(): Promise<void> {
   // 推送/MR/流水线全环回,与 pilot 同款(部署手册的切换点在此落地)。
   let delivery: { platformUrl: string } | undefined;
   const platformUrl = flag("--platform");
-  // 交付链的三个预算旋钮:修复轮(默认 2,0=关)、轮询间隔(默认 10s,
-  // 内网按 CLI 开销放宽)、轮询预算(默认 30 分钟)。只暴露数值,
+  // 交付链的预算旋钮:修复轮(默认 2,0=关)、状态轮询(默认 10s)、
+  // 红灯证据重采(默认 3 分钟)与总轮询预算(默认 30 分钟)。只暴露数值,
   // "无限等待"这种取值不存在——预算的存在性不是配置项。
   const pace = {
     repairRounds: flag("--repair-rounds") !== undefined
       ? Number(flag("--repair-rounds")) : undefined,
     pollIntervalMs: flag("--poll-interval") !== undefined
       ? Number(flag("--poll-interval")) * 1000 : undefined,
+    evidenceRetryMs: flag("--evidence-retry-interval") !== undefined
+      ? Number(flag("--evidence-retry-interval")) * 1000 : undefined,
     pollTimeoutMs: flag("--poll-timeout") !== undefined
       ? Number(flag("--poll-timeout")) * 1000 : undefined,
   };
@@ -399,10 +403,19 @@ async function main(): Promise<void> {
   // ——内网既有框架的实证(能力核对报告 D3):resolve 归检视人,
   // 代点是越权;平台/团队明确允许的部署才加这个 flag。
   const resolveDiscussions = has("--resolve-discussions");
+  // --unfixable-tools(配置文件里写数组):CODECHECK 红灯全部来自这些
+  // 工具(如 SuperChecker)时不派修复会话,直接如实等人——修复 Agent
+  // 改代码解决不了平台侧告警,派了就是白烧一轮(2026-08-28 对比报告)。
+  const unfixableTools = flags("--unfixable-tools")
+    .flatMap((value) => value.split(","))
+    .map((tool) => tool.trim()).filter(Boolean);
   if (platformUrl) {
     delivery = { platformUrl, ...pace,
-                 ...(resolveDiscussions ? { resolveDiscussions } : {}) };
-    console.log(`[serve] 交付平台: ${platformUrl}`);
+                 ...(resolveDiscussions ? { resolveDiscussions } : {}),
+                 ...(unfixableTools.length ? { unfixableTools } : {}) };
+    console.log(`[serve] 交付平台: ${platformUrl}`
+      + (unfixableTools.length
+        ? `(不可修工具: ${unfixableTools.join("、")})` : ""));
   } else if (host && has("--fake-platform")) {
     // 假平台从 --repo 的本地仓灌裸仓;URL 仓/无仓没得灌,如实拒绝。
     if (!host.repoPath || /^(https?|ssh|git):\/\//i.test(host.repoPath)) {
@@ -523,9 +536,25 @@ async function main(): Promise<void> {
   // 以前一条回收策略都没有,dataDir 只涨不消(2026-08-22 查出来的)。
   const retentionDays = Number(
     flag("--workspace-retention-days") ?? String(DEFAULT_WORKSPACE_RETENTION_DAYS));
+  const buildCacheRetentionDays = Number(
+    flag("--build-cache-retention-days")
+      ?? String(DEFAULT_BUILD_CACHE_RETENTION_DAYS));
+  const buildCacheMaxGb = Number(
+    flag("--build-cache-max-gb") ?? String(DEFAULT_BUILD_CACHE_MAX_GB));
   if (!Number.isFinite(retentionDays) || retentionDays < 0) {
     console.error("[serve] --workspace-retention-days 必须是 ≥0 的数字"
       + "(0 = 永不回收),拒绝启动");
+    process.exit(2);
+  }
+  if (!Number.isFinite(buildCacheRetentionDays)
+      || buildCacheRetentionDays < 0) {
+    console.error("[serve] --build-cache-retention-days 必须是 ≥0 的数字"
+      + "(0 = 不按时间回收),拒绝启动");
+    process.exit(2);
+  }
+  if (!Number.isFinite(buildCacheMaxGb) || buildCacheMaxGb < 0) {
+    console.error("[serve] --build-cache-max-gb 必须是 ≥0 的数字"
+      + "(0 = 不限容量),拒绝启动");
     process.exit(2);
   }
   if (!Number.isInteger(isolatePids) || isolatePids <= 0) {
@@ -585,6 +614,8 @@ async function main(): Promise<void> {
     console.log(`[serve] 任务容器用户: ${containerUser.user ?? "镜像默认"}`
       + `(${containerUser.reason})`);
     console.log(`[serve] 分仓构建缓存: ${isolateCacheRoot}`);
+    console.log(`[serve] 构建缓存策略:连续 ${buildCacheRetentionDays} 天未使用回收，`
+      + `总量上限 ${buildCacheMaxGb > 0 ? `${buildCacheMaxGb}GB` : "不限"}`);
   }
 
   // 历史开关仅保留命令行兼容。内核的最终验证契约仍只有一种：三项
@@ -782,6 +813,15 @@ async function main(): Promise<void> {
     moonlight: (account) => auth.moonlightEnabled(account),
     // push 前清单过目:同样现读个人默认(真人缺省即开)。
     pushConfirmation: (account) => auth.pushConfirmationEnabled(account),
+    collaborationAssigneeReadiness: (account) => {
+      const needs = {
+        git_token: !!host,
+        luban_token: notifier?.needsPersonalToken() ?? false,
+      };
+      return auth.collaborationAssignees(needs)
+        .find((candidate) => candidate.username === account)
+        ?? { ready: false, missing: ["账号不存在或不是可用开发账号"] };
+    },
     compactEveryEvents: compactEvery,
     // 2026-08-28 摘除 demoContract:那是阶段一的演示桩("rm -rf"裸子串
     // 一律拒),却一直接在生产兜底位——prepush 构建产物删除白名单放行后
@@ -801,6 +841,8 @@ async function main(): Promise<void> {
         ? { buildCommandTimeoutMs: prepushBuildTimeoutMinutes * 60_000 } : {}),
     } : undefined,
     workspaceRetentionDays: retentionDays,
+    buildCacheRetentionDays,
+    buildCacheMaxGb,
     commitConvention,
     isolation: isolateImage
       ? {
@@ -844,10 +886,13 @@ async function main(): Promise<void> {
         log: (message) => console.log(`  [luban-plugin] ${message}`),
       })
     : undefined;
-  // 现场回收:启动扫一次(服务可能停了很久),之后每天一次。
-  // 纯旁路 fail-open——回收失败只是磁盘没省下来,不许它拖住服务。
-  // unref():这个定时器不该成为进程不肯退出的理由。
-  const sweepWorkspaces = () => {
+  // 现场与构建缓存回收:启动扫一次(服务可能停了很久),之后每天一次。
+  // 缓存体积扫描/递归删除全部异步，不能重演同步磁盘 I/O 拖死 HTTP。
+  // 纯旁路 fail-open；unref() 不成为进程不肯退出的理由。
+  let storageSweepActive = false;
+  const sweepStorage = async () => {
+    if (storageSweepActive) return;
+    storageSweepActive = true;
     try {
       const swept = service.reclaimIdleWorkspaces();
       if (swept.reclaimed) {
@@ -858,11 +903,23 @@ async function main(): Promise<void> {
     } catch (error) {
       console.log(`[serve] 现场回收失败(不影响服务): ${String(error)}`);
     }
+    try {
+      if (service.buildCacheRetentionDays() > 0 || service.buildCacheMaxGb() > 0) {
+        const swept = await service.reclaimIdleBuildCaches();
+        if (swept.reclaimed) {
+          console.log(`[serve] 构建缓存回收 ${swept.reclaimed} 个仓库分区，`
+            + `释放 ${humanBytes(swept.freed_bytes)}`);
+        }
+      }
+    } catch (error) {
+      console.log(`[serve] 构建缓存回收失败(不影响服务): ${String(error)}`);
+    } finally {
+      storageSweepActive = false;
+    }
   };
-  if (retentionDays > 0) {
-    sweepWorkspaces();
-    setInterval(sweepWorkspaces, 24 * 60 * 60_000).unref();
-  } else {
+  void sweepStorage();
+  setInterval(() => void sweepStorage(), 24 * 60 * 60_000).unref();
+  if (retentionDays === 0) {
     console.log("[serve] 现场保留期配置为 0:永不回收,dataDir 需自行看管");
   }
 

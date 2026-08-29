@@ -23,7 +23,7 @@ class MFParser(argparse.ArgumentParser):
             "其余子命令: status|panel|doctor|report|envcheck|skip|goto|unlock|allow|spec|template|"
             "lightcheck|accept-risk|moonlight|action|messages|config-review|requirement-record|"
             "story-localize|local-spec|domain-docs|domain-archive|manifest|"
-            "pipeline|milestone|intervention|"
+            "pipeline|milestone|intervention|execution-plan|"
             "migrate-flow|exit"
             "(用法见 current/exit 指令)。\n"
             "注意:子命令不带连字符(是 current 不是 --current);"
@@ -52,6 +52,12 @@ def build_parser():
         "--new", action="store_true",
         help="保留已退出的旧现场并开启另一轮流程；未指定时恢复原流程")
     sub.add_parser("current")
+    execution_plan = sub.add_parser(
+        "execution-plan",
+        help="查看当前阶段采用的默认做法、资源和不可覆盖边界")
+    execution_plan.add_argument(
+        "--json", action="store_true",
+        help="输出结构化执行方案，供 Cloud 工作台消费")
     intervention = sub.add_parser(
         "intervention", help="宿主登记用户接管后的代码现场（只回退，不放行质量证据）")
     intervention_actions = intervention.add_subparsers(

@@ -26,9 +26,9 @@ export function AttachedNotes({
   return (
     <div className="annot-attached">
       <div className="annot-attached-head">
-        <span>
-          服务端已发现 {items.length} 条未闭环检视意见；选择返工时会全部提交，选择放行时将被拦截
-        </span>
+        <span>服务端已发现 {items.length} 条未闭环检视意见</span>
+        {/* 动作约束独立成句:藏在长句后半没人看见,放行被拦时一脸茫然。 */}
+        <em>选「返工」会全部提交给 Agent；意见未闭环时「放行」会被拦截</em>
       </div>
       <ul className="annot-attached-list">
         {shown.map((item) => (

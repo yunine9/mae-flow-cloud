@@ -50,6 +50,7 @@ test("个人配置:退出重登与账号库重载后仍在,且不同用户严格
   original.setMoonlight("alice", true);
   original.setGitToken("bob", "bob-codehub-secret", "bob@example.com");
   original.setLubanToken("bob", "bob-luban-secret");
+  original.createUser("carol", "carol-password-123", "developer");
 
   // 用新的 LocalAuth 模拟服务重启，证明事实来自账号文件而非前端内存。
   const auth = new LocalAuth(file);
@@ -127,6 +128,24 @@ test("个人配置:退出重登与账号库重载后仍在,且不同用户严格
     });
     assert.equal(users.status, 403,
       "普通开发不能借账号管理接口读取其他用户信息");
+
+    const candidates = await fetch(`${base}/auth/collaboration-assignees`, {
+      headers: { cookie: bob.cookie },
+    });
+    assert.equal(candidates.status, 200);
+    const candidateText = await candidates.text();
+    const candidateRows = JSON.parse(candidateText) as Array<{
+      username: string; ready: boolean; missing: string[];
+    }>;
+    assert.deepEqual(candidateRows.find((row) => row.username === "alice"), {
+      username: "alice", ready: true, missing: [],
+    });
+    assert.deepEqual(candidateRows.find((row) => row.username === "carol"), {
+      username: "carol", ready: true, missing: [],
+    }, "纯会话部署不需要 Git/通知令牌，不能造一道假门");
+    assert.doesNotMatch(candidateText,
+      /alice@example\.com|alice-codehub-secret|alice-luban-secret|cret/,
+      "委派候选接口只能暴露就绪状态，不能带邮箱或任何令牌提示");
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
@@ -182,6 +201,48 @@ test("HTTP 登录:开发看全部任务,创建归自己,不能操作别人任务
     });
     assert.equal(list.status, 200, "开发可查看团队全部任务");
     assert.equal((await readJson(list) as unknown[]).length, 1);
+
+    // 这个权限测试用的是纯会话部署（按产品约束不能从 HTTP 下代码仓单），
+    // 因而直接种一张跨仓摘要，只验证多人协作的 HTTP 权限边界。
+    const cross = service.create("Bob 发起的跨仓主任务", { account: "bob" });
+    const crossState = (service as any).tasks.get(cross.id);
+    crossState.summary.repositories = [
+      "https://codehub/team/api.git", "https://codehub/team/web.git",
+    ];
+    crossState.summary.requirement_graph = {
+      stage: "analysis",
+      repositories: [
+        { id: "api", name: "api", url: "https://codehub/team/api.git" },
+        { id: "web", name: "web", url: "https://codehub/team/web.git" },
+      ],
+      dependencies: [],
+    };
+    const invite = await fetch(`${base}/tasks/${cross.id}/collaborators`, {
+      method: "PUT",
+      headers: { cookie: bob },
+      body: JSON.stringify({ collaborators: ["alice"] }),
+    });
+    assert.equal(invite.status, 200);
+    assert.deepEqual((await readJson(invite) as { collaborators: string[] })
+      .collaborators, ["alice"]);
+    crossState.summary.status = "running";
+    let steered = "";
+    crossState.driver = { steer: async (text: string) => { steered = text; } };
+    const collaborate = await fetch(`${base}/tasks/${cross.id}/interrupt`, {
+      method: "POST",
+      headers: { cookie: alice },
+      body: JSON.stringify({ text: "接口字段还需要一起确认" }),
+    });
+    assert.equal(collaborate.status, 200,
+      "受邀开发者可以进入同一个主任务和 AI 讨论");
+    assert.match(steered, /跨仓协作 · alice.*接口字段还需要一起确认/);
+    const collaboratorCannotInvite = await fetch(
+      `${base}/tasks/${cross.id}/collaborators`, {
+        method: "PUT", headers: { cookie: alice },
+        body: JSON.stringify({ collaborators: [] }),
+      });
+    assert.equal(collaboratorCannotInvite.status, 403,
+      "共同开发者不能改写主任务团队边界");
 
     const forbidden = await fetch(
       `${base}/tasks/${created.id}/decision`,

@@ -23,7 +23,8 @@ grep,build-deploy 以「部署完成」哨兵判定成功。真二进制冒烟�
 1. **内核唯一权威**。流程规则、门禁契约、证据判定只在
    [mae-flow](../mae-flow) 内核仓(Python)。本仓不复刻一行判定逻辑:
    TS 写现场,`harness/verify_transcript.py` 用内核契约裁决。
-   内核定位:`MAE_FLOW_HOME` 环境变量,缺省 `../mae-flow`。
+   内核定位:`MAE_FLOW_HOME` 环境变量 > 随 Cloud 发布的 `kernel/` >
+   快照缺席时回退 `../mae-flow`。
 2. **transcript JSONL 是语言中立契约**。TS 写出的每个字节必须被内核
    `parse_transcript` 与四个质量契约原样认出——这是跨语言接缝,
    也是"证据链换输入源而格式零漂移"的落点。
@@ -32,6 +33,33 @@ grep,build-deploy 以「部署完成」哨兵判定成功。真二进制冒烟�
    Promise 即人工节点挂起,子 Agent 是同进程再开一个 AgentSession。
    Python 版曾走「pi --mode rpc 子进程 + HTTP 环回桥」路线并全链验证过
    (内核仓历史 2add07b),进程内形态让那两层整体消失。
+
+## 平台默认方案与有限定制
+
+Mae-Flow 的阶段、退出条件、真实证据、人工决定和 Git/交付权限仍由内核
+唯一裁决；平台另外为每个阶段提供版本化 Playbook，解释“为什么这样安排、
+默认会做什么、完成时应得到什么、有哪些能力可按需使用”。Cloud 只消费内核
+`execution-plan --json` 的结构化结果，不在 TypeScript 再维护一套阶段判断。
+
+执行补充按“团队 → 代码仓 → 本任务”叠加，只能调整关注点、先后顺序和协作
+方式。除此之外，管理员与任务发起人还可按阶段启用 Playbook 明确列出的可选
+动作、把现有 Skill/知识/工具设为本阶段优先，并填写阶段补充。定制只允许“加”
+不能“减”：必做动作与必用能力不能取消，浏览器自报不存在的 ID 会被服务端
+拒绝。团队选择成为新任务默认，任务发起人只能继续增加，不能取消团队默认。
+
+团队约定在管理员设置中维护；代码仓可在 `.mae-flow-defaults.json` 使用「执行
+补充」；本任务的全局补充和阶段定制都在发起页填写。它们会在任务创建/首次
+clone 时固定为 `.mae-flow-work/execution-profile.json`，`current` 只把当前阶段
+的有效定制交给 Agent；恢复和从头重跑沿用原快照。配置缺失、目录升级导致旧的
+可选项失效或仓库文件损坏时，不阻塞任务，退回平台默认并明确提示。业务模块
+知识与工程知识继续作为索引化资源按需读取，不被混成一条执行指令，也不会把
+正文整包注入上下文。
+
+任务页的“执行方案与现场”会展示平台默认、叠加来源、输出/证据和不可覆盖的
+底线。“反馈这套安排”会把方案 ID、阶段和版本快照带入许愿墙，继续使用
+待接纳/已接纳/已闭环/未接纳的现有状态。反馈不会直接改写生产默认；维护者
+核验后发布新的 Playbook 版本并通过内核自检，平台才会采用，避免众筹意见绕过
+质量底线。
 
 ## 结构
 
@@ -89,6 +117,41 @@ probe 现场留档在 `.probe/`,serve 的任务现场在 `.tasks/<task-id>/`
 (transcript/events/waiting/子 Agent transcript),每个文件都能直接打开看。
 试跑现场一键对拍:`python3 harness/run-report.py .pilot/<label>`
 (审批卡/子 Agent 配对/质量台账/阶段轨迹读成 markdown,只读)。
+
+真模型试跑器也能注入可重复的流水线故障，不用等线上偶发红灯才验证
+修复回程。例如下面会让首轮 CodeCheck 红、修复后第二轮绿，并在首次
+交付清单里放一个明确排除的本地日志，专门检查修复 Agent 是否夹带：
+
+```bash
+npm run pilot -- --models .local/models.json --provider glm --model glm-5.1 \
+  --repo ../mae-flow-fieldtest-java --isolate-image mae-flow-task-builder:dev \
+  --lane '已定位问题修复' --push-confirm --seed-excluded build.log \
+  --pipeline-statuses failed,success \
+  --pipeline-failure-dimension CODECHECK \
+  --pipeline-failure-file notify-common/src/main/java/example/TextUtil.java \
+  --pipeline-failure-line 22 --pipeline-failure-rule ARCH-UTIL-02 \
+  --pipeline-log 'CODECHECK FAILED: example/TextUtil.java:22 ARCH-UTIL-02'
+```
+
+模糊现场用 `--pipeline-no-details` 注入“只有总体红灯/URL、没有文件行号”
+的真实坏形状；`--poll-timeout-s` 与 `--poll-interval-s` 只缩短试跑取证
+预算，不改变生产默认。试跑会继续穿过普通 `verifying`，只有到
+`await_merge`、终态，或明确的 `waiting_human/halted` 才收口；
+`--show-luban` 可把通知正文一并列入审计（包括手机端 `/mfc` 激活提示）。
+
+有界工作流定制也可直接交给真模型演练：`--customize-playbook` 指定方案，
+`--customize-activities` 与 `--customize-resources` 只接受目录 ID，
+`--customize-instructions` 提供该阶段的低优先级补充。例如：
+
+```bash
+npm run pilot -- --models .local/models.json --provider glm --model glm-5.1 \
+  --repo ../mae-flow-fieldtest-java --isolate-image mae-flow-task-builder:dev \
+  --lane '已定位问题修复' --push-confirm --pipeline-statuses success \
+  --customize-playbook platform.construction \
+  --customize-activities environment-warmup,impact-scan,boundary-test-matrix \
+  --customize-resources selected-skills,knowledge-index \
+  --customize-instructions '修改前先跑真实构建拉齐依赖；不确定时明确说明。'
+```
 
 本机挂了代理(Clash 等)时,curl 环回接口记得 `--noproxy '*'`;
 服务进程自身已强制环回直连,浏览器访问不受影响。
@@ -163,6 +226,95 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
 `docs/luban-notification-templates.md`。
 
 ## 已知边界(诚实清单)
+
+- **2026-08-28 流水线信息链对齐 toolkit(内网对比报告驱动,分三层)**:
+  修复环"时好时坏"的头号根因是**陈灯**——MR 头上无有效流水线时平台挂
+  旧分支的灯,而适配层返回里连 sha 都没有,宿主想核验都没材料。现在:
+  ①宿主机械核验(selectTerminalRun):run 回显 `sha`/`is_valid`,绑错
+  SHA 或 is_valid=false 一律拒收并写明"已拒陈灯",继续等;②适配层
+  `pipeline_status`/`pipeline_artifacts` 支持 **candidates 降级链**
+  (首成功赢,全败聚合上报)与 **contract 直通**(命令输出即宿主契约);
+  checks 扩展 stage/tool/details(缺陷:规则/文件/行号/描述),修复
+  使命注入结构化失败明细;③**取数脚本进仓=内网现用版的收编**
+  (deploy/adapter-tools/pipeline-status.sh / pipeline-artifacts.sh:
+  按 sha 直查 pipelines+quality CLI+reviewtips+MCP SSE 构建日志,
+  逻辑零改动,只加 sha/pipeline_id 回显、checks 的 tool/details、
+  地址环境变量化)——勘误×3:上一版把桥脚本当"/etc 配置产物"不进仓
+  导致 artifacts 链空转一个月;我按报告猜写的三个脚本(标准
+  streamable-HTTP MCP)与内网真实形态(自定义 SSE 客户端)不符,已删;
+  **收编件曾被误称"实测稳定版"——它来自修复环不稳的这一侧,其
+  `codehub-y/api/v4` 取数路来路未证(2026-08-28 用户点破)。toolkit
+  源码仲裁已回:稳定系统主路=MCP 网关 actual_head_pipeline(带
+  is_valid),CLI 降级,REST 只建 MR 一处(v3);v4 是 CodeHub 的
+  GitLab 兼容层,toolkit 从没走过。已按仲裁重排:新增
+  pipeline-status-mcp.py(主路,streamable-HTTP 客户端
+  mcp_http_client.py 带 --list-tools 自描述对拍)做第一候选,现用
+  v4 脚本降为第二候选,裸 REST 第三;SSE 日志客户端 mcp_sse_client.py
+  原文收编(个人路径/真实 MR 已泛化)**;④SuperChecker 类**不可修工具前置分诊**(serve
+  `--unfixable-tools`,全体命中且有 tool 证据才不派修复,拿不准照常派;
+  内网工具→维度映射表里 SuperChecker 归 CODECHECK,名单可直接用)。
+  边界如实记:mcp_sse_client.py 已收编进仓，内网部署只需
+  额外提供可刷新的 mcp-token;
+  收编脚本的三处增量(回显/tool/details)未在真网关跑过,内网
+  --selftest 对拍是硬前置;覆盖率差分与 AI Review Tips 暂未接(增益项)。
+  **⑤(同日后续)artifacts 通路整体重写为 toolkit「PipelineLog
+  编排器」忠实移植**(用户带回 7 系统全景图后拍板"照抄"):
+  pipeline_log.py 里 8 个 Strategy 原名原序、落盘文件名照抄、三条
+  降级链(构建日志 SSE→build 网关 zip→有界日志窗口;CodeCheck codeccp
+  MCP→reviewtips→defect/list),新接结构化构建错误
+  (get_build_error_info)、构建阶段(get_record_fullstages)、
+  覆盖率差分(CodeCovDiffCoverageTool)、**行云** AI Review(纯
+  REST;此前误写"星云",用户已正名)——上一段"覆盖率与 AI Review
+  暂未接"就此翻案;mcp_http_client.py 加五网关注册表。首次内网对拍
+  已完成:五网关 tools/list 钉死 CodeHub request 嵌套、Build 必填
+  group_id 与 CodeCov jobId;真红灯 MR 的 artifacts 首验按正确口径是
+  8 个 Strategy 中 6 路有材料:mergeable-state 因旧顶层参数失败，
+  coverage 的 `No data found` 也只算缺证据，不能冒充成功；quality 由
+  CLI、build log 由 SSE 降级兜住。现已按真实 schema 共用
+  mcp_tool_contracts.py 修正 status/artifacts 两条链，并修正宿主把完整
+  MR URL 交给 artifacts（status 仍使用 MR iid）。构建材料全空不再记
+  ok；长日志另存错误上下文，结构化错误优先装箱，总包限制 6MiB 并用
+  omission 清单明说省略项。但**修正后的真网关复验仍是硬前置**;
+  build MCP zip/日志窗口未被本次 SSE 成功现场实际踩到,
+  pipeline-status MCP 主候选也需单独真跑。summary 的 guessed_args 保留
+  为后续新增工具的诚实账,本次已确认调用不再列入。离线烟测只证明
+  fail-open,不冒充取数验证。toolkit 的 FSM/Monitor/Scheduler 不移植
+  (流程权威在内核);review/conflict 两条策略路由未照抄,待拍板。
+  **⑥取证缺口兜底已落地**：宿主按 COMPILE / UT / CODECHECK 逐维
+  对齐具体报错，不再以“附件包非空”冒充三维都有口粮。全缺时有限重试，
+  到预算后不派 Agent、不扣修复轮并明确等人；部分缺失时只修已有证据的
+  维度，同时小鲁班求助。工作台自动生成《流水线证据缺口》材料，用户把
+  平台原文作为批注回灌后，同一 SHA 自动恢复分诊；等待期间平台若晚到
+  证据也会自动续跑。通知失败只影响提醒，不改变任务真相。
+
+- **2026-08-28 待提交清单审核松绑(用户点破"拿 SHA 当令箭")**:
+  审计结论:交付确认里 SHA 只有两处是真令箭——流水线结果绑 SHA
+  (防陈灯)与 user_skipped 绑 HEAD(旧拍板不背书新代码),保持不动;
+  其余三处是拿 HEAD 当"清单"的替身,已改:①push 确认卡的 call_id
+  从 HEAD 前 12 位改为**交付文件集合的指纹**——人在看卡时流水线修复
+  推进 commit(清单没变)不再作废重发,通知不轰炸;②重新举卡时正文
+  **增量优先**("较上次确认:新增 X;其余 N 个一致"),配合 .gitignore
+  随单交付的新惯例,补一个文件只需扫一行;③勾选提交撞上现场变化不再
+  整单打回——消失路径=已与基线一致本就无可交付,自动移出留痕,全部
+  消失才报冲突;④任务级/个人默认均缺省但用户提交过清单时,push 复核
+  不一致改为重新举卡而非把任务判 failed(死胡同改出路)。契约钉在
+  pushConfirmation.test.ts。界面侧勾选条文案同步瘦身。**边界**:确认卡
+  正文里的"基线起 N 个文件"在等待期间不随 HEAD 刷新(diff 以检视材料
+  实时为准,正文已注明);检视面视觉/布局的整轮重做仍欠着。
+
+- **2026-08-29 工作台阶段布局审查轮(用户判"整个界面都不好")**:
+  审查结论:病根是**平均主义**——每个面板把所有已知事实近似等权
+  陈列,"此刻该做什么/为什么停了"没有独占层级。已改(7f8ebb1 +
+  36048bc):检视面词级 diff 高亮/文件树"将推送 vs 仅本地"分组/
+  长决策背景折叠;列表收起卡隐藏阶段轨道与 Token 遥测、failed/
+  verifying 加一行真话;工作台右栏按阶段给重点(failed 原因置顶,
+  verifying 点名等待项);决策卡标题类型化、step id 不示人、报错贴
+  按钮加 role=alert;交付阻止诊断出 meta 进 alert;批注引用两行
+  截断。**边界**:两条审查发现有意未做——"耗时与卡点"与决策卡的
+  当前卡点重复(改动涉及 cost-focus 结构,收益低)、团队 signal
+  红条与 pill 双重强调(视觉噪声轻);验证全部是构建+测试+服务
+  烟测,**没有人眼看过渲染效果**,视觉细节(间距/配色)待用户过目
+  再定,不宜继续盲调。
 
 - **2026-08-28 "困死 Agent"专项排查批(四路审计驱动)**:
   ①**勘误**:此前"prepush 门禁放行构建产物 rm -rf(白名单)"在生产里
@@ -356,8 +508,9 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
   (全是 Response.json() 返 unknown 的老账)用 src/jsonBody.ts 的
   readJson 收敛到 0。**开着 strictNullChecks 但没全 strict**:先把门
   立起来,别让完美挡住可用;**没接进 CI/preflight**,目前靠人自觉跑;
-- **内核发现收敛(2026-08-16)**:`MAE_FLOW_HOME > ../mae-flow 活内核
-  > 仓内 kernel/ 快照`这条链原先在 serve、pilot、六个测试文件里各写
+- **内核发现收敛(2026-08-16,08-28 修正优先级)**:`MAE_FLOW_HOME >
+  仓内 kernel/ 快照 > ../mae-flow 兜底`这条链原先在 serve、pilot、
+  六个测试文件里各写
   一遍,测试那几份还手写 `cwd()/../mae-flow`——在 git worktree 里
   当场翻车:内核起不来、门禁拦死剧本会话,17 个用例轮询耗尽超时,
   报错却长得像业务判定错。现统一走 src/kernelDiscovery.ts,
@@ -371,8 +524,8 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
   属于部署基础设施，不在管理页配置；成员只配自己的通知 Token;
 - **集成产品形态 + 界面优先配置(2026-08-17,用户拍板"cloud 应该是
   独立的集成产品"/"参数不该是启动项")**:内核快照收编进 kernel/
-  (sync-kernel.sh 维护;serve 发现顺序 MAE_FLOW_HOME > ../mae-flow >
-  kernel/,开发机永远用活内核,快照只在部署形态生效)——一个 clone=
+  (sync-kernel.sh 维护;serve 发现顺序 MAE_FLOW_HOME > kernel/ >
+  ../mae-flow，需要联调活内核时显式设置环境变量)——一个 clone=
   完整产品。MR/流水线服务与验证形态由部署固定注入，管理员只在服务
   设置页看自检结果，不感知内部地址；代码仓始终由每个任务明确填写，不设服务级
   默认仓；模型网关本就在界面。正式部署用 --kernel-mode 开内核模式。
@@ -516,6 +669,12 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
     真的 git push,把两周前早已合入、分支早删的老单凭空复活。这是
     "老单不被新尺子重新量"那个坑的另一种成因(尺子是我们自己弄丢的),
     用例先在没有这道闸的代码上验证为红(实测状态翻成 `failed`)。
+- **仓库构建缓存也有生命周期(2026-08-28)**:它不属于某一张任务，同仓
+  后续任务会继续复用，所以删除任务不立即连坐删除；但现在会登记最后使用
+  时间，默认 30 天未用自动回收，并以 100GB 总量上限做 LRU 止涨。两项均
+  可在管理页热改(`0` 分别表示不按时间清理/不限容量)，管理员也可一键清理
+  全部未占用缓存。运行中及仍可能继续执行的任务有租约保护，统计和递归删除
+  全走异步 I/O，避免缓存大时拖住 Node HTTP 事件循环。
 - **prepush 的"UT 真跑了没有"只靠嘱咐,没有闸(2026-08-22 查实,用户拍板
   维持现状)**。已经硬的两条:`status=passed` 时 `unit_test=skipped` 会被
   解析层直接拒收;上报的命令必须在最后一次改动/提交之后真实成功执行过。

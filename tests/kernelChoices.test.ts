@@ -89,13 +89,17 @@ test("推荐证据面只读 approval_subject 类型，不维护步骤名表", ()
   writeFileSync(flowPath, JSON.stringify(flow));
   assert.equal(stepReviewSurface(root, "some_new_review"), "doc");
   assert.equal(stepReviewSurface(root, "unknown_step"), undefined);
+  assert.equal(stepReviewSurface(KERNEL_ROOT, "delivery_review"), "diff",
+    "最终交付清单应直接把用户带到工作区变更");
 });
 
-test("收编内核的所有材料/代码检视点都有统一关闭语义", () => {
+test("收编内核的人工材料检视点都有统一关闭语义", () => {
   const flow = JSON.parse(readFileSync(
     join(KERNEL_ROOT, "flow", "flow.json"), "utf-8"));
   const reviewed = Object.entries(flow.steps as Record<string, any>)
-    .filter(([, step]) => step.approval_subject);
+    // delivery_review 在 Cloud 是自动确认清单，approval_subject 只负责把
+    // 偶发的模型追问定位到 Diff；user_ack 才是内核规定的人工闸。
+    .filter(([, step]) => step.approval_subject && step.user_ack);
   // 2026-08-25 编排瘦身:编码/质量段的中途检视点已整体退役,材料检视
   // (需求、Story、hotfix/tweak 开卡)仍必须齐全且语义统一。
   assert.ok(reviewed.length >= 4, "需求、Story、轻量开卡的材料检视不能漏");

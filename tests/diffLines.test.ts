@@ -75,13 +75,21 @@ test("双栏审阅把删除与新增横向配对,两侧行号各自递推", () =
     },
     {
       type: "line",
-      old: { number: 9, text: "old one", kind: "removed" },
-      next: { number: 11, text: "new one", kind: "added" },
+      old: {
+        number: 9, text: "old one", kind: "removed", emphasis: [0, 3],
+      },
+      next: {
+        number: 11, text: "new one", kind: "added", emphasis: [0, 3],
+      },
     },
     {
       type: "line",
-      old: { number: 10, text: "old two", kind: "removed" },
-      next: { number: 12, text: "new two", kind: "added" },
+      old: {
+        number: 10, text: "old two", kind: "removed", emphasis: [0, 3],
+      },
+      next: {
+        number: 12, text: "new two", kind: "added", emphasis: [0, 3],
+      },
     },
     {
       type: "line",
@@ -93,4 +101,30 @@ test("双栏审阅把删除与新增横向配对,两侧行号各自递推", () =
       next: { number: 14, text: "after", kind: "context" },
     },
   ]);
+});
+
+test("词级高亮:公共前后缀之外的中段标 emphasis;整行不同不标", () => {
+  const rows = diffReviewRows([
+    "@@ -1,3 +1,3 @@",
+    "-const value = 1;",
+    "-completely old",
+    "-tail",
+    "+const value = 42;",
+    "+entirely new!",
+    "+tail",
+  ]);
+  const [first, second, third] = rows.slice(1) as Array<
+    Extract<ReturnType<typeof diffReviewRows>[number], { type: "line" }>
+  >;
+  // 只有 "1" → "42" 变了:两侧 emphasis 圈住变化段,文本原样保留
+  // (mark 不改 textContent,批注锚定靠这一点)。
+  assert.deepEqual(first.old?.emphasis, [14, 15]);
+  assert.deepEqual(first.next?.emphasis, [14, 16]);
+  assert.equal(first.old?.text, "const value = 1;");
+  // 整行没有公共前后缀:不标,全行高亮等于没高亮。
+  assert.equal(second.old?.emphasis, undefined);
+  assert.equal(second.next?.emphasis, undefined);
+  // 文本完全相同的配对(只是位置变化)也不标。
+  assert.equal(third.old?.emphasis, undefined);
+  assert.equal(third.next?.emphasis, undefined);
 });

@@ -754,3 +754,28 @@
   font-size: 13px;
   font-weight: 600;
 }
+
+/* 2026-08-29 布局审查轮:引用原文默认两行截断——批注列表的主角是
+   意见本体,不是被圈的原文;hover/聚焦时展开看全。 */
+.annot-anchor {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.annot-anchor:hover,
+.annot-anchor:focus-within {
+  display: block;
+  -webkit-line-clamp: unset;
+}
+
+/* 附带批注头两行制:数量一行,动作约束独立强调一行。 */
+.annot-attached-head { flex-wrap: wrap; }
+.annot-attached-head em {
+  flex-basis: 100%;
+  margin-top: 2px;
+  color: var(--attention);
+  font-size: var(--font-size-assist);
+  font-style: normal;
+  font-weight: 600;
+}

@@ -1,14 +1,13 @@
 #!/bin/bash
 # 收编内核快照 → kernel/:发布形态一个仓=完整产品(用户拍板"cloud
-# 应该是独立的集成产品")。开发仍在 ../mae-flow 双仓联动——serve 的
-# 内核发现顺序是 MAE_FLOW_HOME > ../mae-flow > kernel/,开发机永远
-# 用活内核,快照只在部署形态(没有兄弟目录)时生效,不会拿旧快照
-# 坑开发。发布/推送前跑一次本脚本刷新快照。
+# 应该是独立的集成产品")。运行时优先使用随 Cloud 版本发布的 kernel/；
+# 需要联调 ../mae-flow 活内核时显式设置 MAE_FLOW_HOME，避免开发机上
+# 恰好存在另一版本的兄弟仓时发生静默降级。发布/推送前跑本脚本刷新快照。
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
-# 找内核仓的顺序与 src/kernelDiscovery.ts 保持一致:显式参数 >
-# MAE_FLOW_HOME > 兄弟目录。写死 ../mae-flow 在 git worktree 里会
-# 当场找不到(worktree 的上一级是 .claude/worktrees,不是 dev/)。
+# 这里选择的是“快照来源”而非运行时内核：显式参数 > MAE_FLOW_HOME >
+# 兄弟目录。写死 ../mae-flow 在 git worktree 里会当场找不到
+# (worktree 的上一级是 .claude/worktrees,不是 dev/)。
 kernel_src="${1:-${MAE_FLOW_HOME:-$root/../mae-flow}}"
 
 if [ ! -d "$kernel_src/.git" ]; then
