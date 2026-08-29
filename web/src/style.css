@@ -5143,6 +5143,169 @@ pre {
 }
 .execution-plan-card > footer > button:hover { background: var(--accent-soft); }
 .execution-plan-card > footer > small { color: var(--muted); font: 500 10px var(--font-mono); }
+
+/* 有界工作流定制：默认收起，避免把下单页重新堆成“高级设置墙”。展开后
+   每个阶段仍是独立的小合同，平台必做与用户新增不能混成一列。 */
+.stage-customization-editor {
+  grid-column: 1 / -1;
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--panel) 92%, var(--accent) 8%);
+  overflow: hidden;
+}
+.stage-customization-editor > summary,
+.stage-customization-item > summary {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+.stage-customization-editor > summary::-webkit-details-marker,
+.stage-customization-item > summary::-webkit-details-marker { display: none; }
+.stage-customization-editor > summary {
+  min-height: 62px;
+  padding: 12px 15px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+.stage-customization-editor > summary > span { display: grid; gap: 3px; }
+.stage-customization-editor > summary strong { color: var(--text-strong); font-size: 14px; }
+.stage-customization-editor > summary small { color: var(--muted); line-height: 1.4; }
+.stage-customization-editor > summary > em {
+  flex: none;
+  color: var(--accent);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 750;
+}
+.stage-customization-editor[open] > summary { border-bottom: 1px solid var(--line); }
+.stage-customization-list { padding: 10px; display: grid; gap: 8px; }
+.stage-customization-item {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  overflow: hidden;
+}
+.stage-customization-item.active { border-color: color-mix(in srgb, var(--accent) 38%, var(--line)); }
+.stage-customization-item > summary {
+  padding: 11px 13px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.stage-customization-item > summary > span { display: flex; align-items: baseline; gap: 10px; }
+.stage-customization-item > summary small { color: var(--accent); font-size: 10px; font-weight: 750; }
+.stage-customization-item > summary strong { color: var(--text-strong); font-size: 13px; }
+.stage-customization-item > summary em { color: var(--muted); font-size: 10px; font-style: normal; }
+.stage-customization-item.active > summary em { color: var(--accent); font-weight: 700; }
+.stage-customization-body {
+  padding: 13px;
+  display: grid;
+  gap: 13px;
+  border-top: 1px solid var(--line);
+}
+.stage-customization-body > p { margin: 0; color: var(--muted); font-size: 12px; }
+.stage-fixed-contract,
+.stage-inherited-note {
+  padding: 9px 11px;
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 10px;
+  border-radius: 8px;
+  background: var(--panel-soft);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.stage-fixed-contract strong { color: var(--text-strong); }
+.stage-inherited-note { background: var(--accent-soft); }
+.stage-inherited-note strong { color: var(--accent); }
+.stage-customization-body fieldset { margin: 0; padding: 0; border: 0; }
+.stage-customization-body legend,
+.stage-instructions-field > span {
+  margin-bottom: 7px;
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 750;
+}
+.stage-customization-body fieldset > label {
+  min-height: 54px;
+  padding: 8px 10px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.stage-customization-body input[type="checkbox"] {
+  width: 16px;
+  min-width: 16px;
+  height: 16px;
+  min-height: 16px;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--accent);
+}
+.stage-customization-body input[type="checkbox"]:disabled { cursor: not-allowed; }
+.stage-customization-body fieldset > label + label { margin-top: 6px; }
+.stage-customization-body fieldset > label > span { display: grid; gap: 2px; }
+.stage-customization-body fieldset > label strong { font-size: 12px; }
+.stage-customization-body fieldset > label small { color: var(--muted); line-height: 1.4; }
+.stage-customization-body fieldset > label em,
+.stage-resource-options label em { color: var(--accent); font-size: 10px; font-style: normal; }
+.stage-resource-options { display: flex; flex-wrap: wrap; gap: 7px; }
+.stage-resource-options label {
+  padding: 7px 9px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 11px;
+  cursor: pointer;
+}
+.stage-resource-options label > span { white-space: nowrap; }
+.stage-instructions-field { display: grid; position: relative; }
+.stage-instructions-field textarea {
+  width: 100%;
+  min-height: 76px;
+  resize: vertical;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  background: var(--panel);
+  font: inherit;
+}
+.stage-instructions-field > small { margin-top: 4px; justify-self: end; color: var(--muted); }
+.stage-customization-editor > footer {
+  padding: 10px 15px 12px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.execution-plan-override-list article small { display: block; margin-top: 4px; color: var(--muted); }
+.execution-plan-activities article.customized {
+  border-color: color-mix(in srgb, var(--accent) 32%, var(--line));
+  background: var(--accent-soft);
+}
+.execution-plan-activities article.customized > small {
+  align-self: start;
+  color: var(--accent);
+  font-size: 9px;
+  font-weight: 750;
+}
+.execution-plan-resources article.preferred {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
+  background: var(--accent-soft);
+}
 .knowledge-footprint {
   margin-bottom: 14px !important; overflow: hidden;
   border: 1px solid color-mix(in srgb, #36a88b 28%, var(--line));

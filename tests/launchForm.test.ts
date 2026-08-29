@@ -198,6 +198,60 @@ test("交付方式:选项与默认值都取自内核 flow.json,自造的当场�
     /\d+\s*步|拍板/.test(item.description ?? "")), false);
 });
 
+test("阶段执行方案:同一内核目录驱动页面选择、团队默认与任务快照", () => {
+  const kernelRoot = discoverKernelRoot(process.cwd());
+  if (!kernelRoot) throw new Error("找不到内核");
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-lf-stage-plan-"));
+  const settings = new RuntimeSettings(dataDir);
+  settings.updateExecutionPolicy({
+    team_instructions: "不确定的外部行为明确说明",
+    stage_customizations: [{
+      playbook_id: "platform.construction",
+      optional_activities: ["impact-scan"],
+      preferred_resources: ["selected-skills"],
+    }],
+  });
+  const service = new TaskService({
+    dataDir, provider: "a", model: "a-1", maxConcurrent: 0,
+    modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
+    host: { kernelRoot, repoPath: "/tmp/repo" }, settings,
+  });
+  const options = service.launchOptions();
+  const build = options.execution_playbooks.find((item) =>
+    item.id === "platform.construction")!;
+  assert.ok(build.activities.some((item) =>
+    item.id === "impact-scan" && !item.required));
+  assert.deepEqual(options.execution_stage_defaults[0].optional_activities,
+    ["impact-scan"]);
+
+  const task = service.create("验证阶段定制", {
+    executionStageCustomizations: [{
+      playbook_id: "platform.construction",
+      instructions: "先跑完整构建，再开始猜测范围外行为",
+      optional_activities: ["environment-warmup"],
+      preferred_resources: ["knowledge-index"],
+    }],
+  });
+  assert.deepEqual(task.execution_profile?.stage_customizations?.map((item) => ({
+    scope: item.scope,
+    actions: item.optional_activities,
+    resources: item.preferred_resources,
+  })), [
+    { scope: "team", actions: ["impact-scan"], resources: ["selected-skills"] },
+    { scope: "task", actions: ["environment-warmup"], resources: ["knowledge-index"] },
+  ]);
+  settings.updateExecutionPolicy({ stage_customizations: [] });
+  assert.equal(task.execution_profile?.stage_customizations?.[0].scope, "team",
+    "任务创建后必须保留当时的团队快照");
+
+  assert.throws(() => service.create("伪造动作", {
+    executionStageCustomizations: [{
+      playbook_id: "platform.construction",
+      optional_activities: ["delete-quality-gate"],
+    }],
+  }), /不存在的可选动作/);
+});
+
 test("单号/基线分支:下单收齐,基线默认 master,纯会话形态不摆这些框", () => {
   // 用户 2026-08-19 拍板:这两项和交付方式一样在表单上一次给完,
   // 不让模型开工后再逐项来问。单号必填与"交付仓必填"同口径;

@@ -34,6 +34,10 @@ export function ExecutionPlanCard({ plan, warning, onSuggest }: {
   warning?: string;
   onSuggest?: (draft: ExecutionPlanFeedbackDraft) => void;
 }) {
+  const customizationLayers = plan.customization.layers.length
+    + plan.customization.stage_layers.length;
+  const activityNames = new Map(plan.activities.map((item) => [item.id, item.title]));
+  const resourceNames = new Map(plan.resources.map((item) => [item.id, item.name]));
   return (
     <section className="execution-plan-card" aria-labelledby="execution-plan-title">
       <header>
@@ -44,8 +48,8 @@ export function ExecutionPlanCard({ plan, warning, onSuggest }: {
           <p>{plan.strategy.summary}</p>
         </div>
         <div className="execution-plan-version">
-          <span>{plan.customization.layers.length
-            ? `平台推荐 + ${plan.customization.layers.length} 层补充`
+          <span>{customizationLayers
+            ? `平台推荐 + ${customizationLayers} 层补充`
             : "平台推荐"}</span>
           <small>v{plan.strategy.version}</small>
         </div>
@@ -76,14 +80,41 @@ export function ExecutionPlanCard({ plan, warning, onSuggest }: {
         </section>
       )}
 
+      {plan.customization.stage_layers.length > 0 && (
+        <section className="execution-plan-overrides execution-plan-stage-overrides">
+          <div>
+            <strong>本阶段定制</strong>
+            <small>只增加动作与优先能力 · 不改变阶段合同</small>
+          </div>
+          <div className="execution-plan-override-list">
+            {plan.customization.stage_layers.map((layer) => (
+              <article key={`${layer.scope}:${layer.source_id}:${layer.playbook_id}`}>
+                <span>{PROFILE_SCOPE[layer.scope]}</span>
+                <div><strong>{layer.title}</strong>
+                  {layer.instructions && <p>{layer.instructions}</p>}
+                  {layer.optional_activities.length > 0 && <small>
+                    增加动作：{layer.optional_activities.map((id) =>
+                      activityNames.get(id) ?? id).join("、")}</small>}
+                  {layer.preferred_resources.length > 0 && <small>
+                    优先能力：{layer.preferred_resources.map((id) =>
+                      resourceNames.get(id) ?? id).join("、")}</small>}
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+
       <div className="execution-plan-grid">
         <section>
           <h4>默认会做</h4>
           <div className="execution-plan-activities">
             {plan.activities.map((activity) => (
-              <article key={activity.title}>
-                <i aria-hidden>✓</i>
+              <article key={activity.id}
+                className={activity.source === "customized" ? "customized" : ""}>
+                <i aria-hidden>{activity.source === "customized" ? "+" : "✓"}</i>
                 <div><strong>{activity.title}</strong><p>{activity.description}</p></div>
+                {activity.source === "customized" && <small>定制新增</small>}
               </article>
             ))}
           </div>
@@ -110,10 +141,10 @@ export function ExecutionPlanCard({ plan, warning, onSuggest }: {
         </summary>
         <div>
           {plan.resources.map((resource) => (
-            <article key={`${resource.kind}:${resource.name}`}>
+            <article key={resource.id} className={resource.preferred ? "preferred" : ""}>
               <span>{RESOURCE_KIND[resource.kind]}</span>
               <strong>{resource.name}</strong>
-              <small>{USAGE[resource.usage]}</small>
+              <small>{resource.preferred ? "定制优先" : USAGE[resource.usage]}</small>
             </article>
           ))}
           <p>{plan.knowledge.explanation}</p>

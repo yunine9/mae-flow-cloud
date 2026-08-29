@@ -610,6 +610,7 @@ export function createTaskServer(
             ? providers[visionChoice.provider] ?? {} : {};
           return ({
             ...settings.view(),
+            execution_playbooks: service.launchOptions().execution_playbooks,
             defaults: {
               runtime: {
                 max_concurrent: service.options.maxConcurrent ?? 2,
@@ -664,7 +665,16 @@ export function createTaskServer(
             return json(response, 200, settingsView());
           }
           if (request.method === "PUT" && parts[1] === "execution-policy") {
-            settings.updateExecutionPolicy(await readBody(request));
+            const body = await readBody(request);
+            if ("stage_customizations" in body) {
+              try {
+                service.validateExecutionStageCustomizationInput(
+                  body.stage_customizations, "团队阶段执行方案");
+              } catch (error) {
+                return json(response, 400, { error: String(error) });
+              }
+            }
+            settings.updateExecutionPolicy(body);
             return json(response, 200, settingsView());
           }
           if (request.method === "PUT" && parts[1] === "models") {
@@ -1392,6 +1402,7 @@ export function createTaskServer(
           ? undefined : Number(body.repair_rounds);
         const taskInstructions = body.task_instructions == null
           ? undefined : String(body.task_instructions);
+        const executionStageCustomizations = body.execution_stage_customizations;
         const repositorySkillCatalogToken =
           body.repository_skill_catalog_token === undefined
             ? undefined : String(body.repository_skill_catalog_token);
@@ -1440,7 +1451,8 @@ export function createTaskServer(
               title, account, repo, repos, entryKind, issueEnvironments,
               requirementDocumentName,
               lane, ticket, baseline, model,
-              repairRounds, taskInstructions, repositorySkillCatalogToken,
+              repairRounds, taskInstructions, executionStageCustomizations,
+              repositorySkillCatalogToken,
               selectedRepositorySkillIds,
               selectedBusinessModuleIds, selectedEngineeringKnowledgeIds,
               repositoryProfiles,

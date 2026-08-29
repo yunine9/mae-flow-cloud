@@ -3,6 +3,7 @@ import {
   createTask,
   getLaunchOptions,
   type AuthUser,
+  type ExecutionStageCustomization,
   type LaunchOptions,
 } from "./api";
 import {
@@ -16,6 +17,7 @@ import {
   type RepositoryTechnologyDraft,
 } from "./RepositoryTechnologyPicker";
 import { KnowledgeLanguageTags } from "./KnowledgeLanguages";
+import { StageCustomizationEditor } from "./StageCustomizationEditor";
 
 const MAX_MARKDOWN_BYTES = 512 * 1024;
 const INLINE_MARKDOWN_BYTES = 32 * 1024;
@@ -32,6 +34,7 @@ type LaunchDraft = {
   lane: string;
   repairRounds: string;
   taskInstructions?: string;
+  executionStageCustomizations?: ExecutionStageCustomization[];
   selectedBusinessModuleIds?: string[];
 };
 type LaunchPreferences = {
@@ -104,6 +107,9 @@ export function LaunchWorkspace({
     validDraft?.repairRounds ?? savedPreferences?.repairRounds ?? "");
   const [taskInstructions, setTaskInstructions] = useState(
     validDraft?.taskInstructions ?? "");
+  const [executionStageCustomizations, setExecutionStageCustomizations] =
+    useState<ExecutionStageCustomization[]>(
+      validDraft?.executionStageCustomizations ?? []);
   const [selectedBusinessModuleIds, setSelectedBusinessModuleIds] = useState(
     validDraft?.selectedBusinessModuleIds ?? []);
   const [moduleSelectionNotice, setModuleSelectionNotice] = useState("");
@@ -180,6 +186,7 @@ export function LaunchWorkspace({
         lane,
         repairRounds,
         taskInstructions,
+        executionStageCustomizations,
         selectedBusinessModuleIds,
       };
       try {
@@ -192,7 +199,8 @@ export function LaunchWorkspace({
     }, 300);
     return () => window.clearTimeout(timer);
   }, [title, requirement, requirementDocumentName, repos, ticket,
-    baseline, lane, repairRounds, taskInstructions, selectedBusinessModuleIds,
+    baseline, lane, repairRounds, taskInstructions, executionStageCustomizations,
+    selectedBusinessModuleIds,
     session.username]);
 
   useEffect(() => {
@@ -308,6 +316,7 @@ export function LaunchWorkspace({
           repairRounds: repairRounds.trim() === ""
             ? undefined : Number(repairRounds),
           taskInstructions: taskInstructions.trim() || undefined,
+          executionStageCustomizations,
           repositorySkillCatalogToken:
             repositorySkillSelection.scanned
               ? repositorySkillSelection.catalogToken : undefined,
@@ -621,6 +630,11 @@ export function LaunchWorkspace({
                     <em>{taskInstructions.length}/2000</em>
                   </label>
                 </div>
+                <StageCustomizationEditor
+                  playbooks={options.execution_playbooks}
+                  value={executionStageCustomizations}
+                  inherited={options.execution_stage_defaults}
+                  onChange={setExecutionStageCustomizations} />
               </section>}
               {options && businessModules.length > 0 && (
                 <section className="launch-form-section business-module-picker">

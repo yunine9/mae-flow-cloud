@@ -291,6 +291,15 @@ test("路由权限:admin 可读改,开发成员 403,密钥不出网", async () =
     };
     assert.equal(policyView.execution_policy.team_instructions,
       "不确定时明确说明，不要猜");
+    const invalidPolicy = await fetch(`${base}/settings/execution-policy`, {
+      method: "PUT", headers: { cookie: admin },
+      body: JSON.stringify({ stage_customizations: [{
+        playbook_id: "platform.made-up",
+        optional_activities: ["skip-all-gates"],
+      }] }),
+    });
+    assert.equal(invalidPolicy.status, 400);
+    assert.match(await invalidPolicy.text(), /不存在的阶段方案/);
     const visionTest = await fetch(`${base}/settings/vision/test`, {
       method: "POST", headers: { cookie: admin },
     });

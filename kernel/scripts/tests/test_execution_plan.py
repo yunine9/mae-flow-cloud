@@ -20,6 +20,7 @@ if SCRIPTS not in sys.path:
 from mae_flow_core.workflow.execution_plan import (  # noqa: E402
     SCHEMA,
     PROFILE_SCHEMA,
+    _profile_revision,
     build_execution_plan,
     catalog_errors,
     load_execution_profile,
@@ -129,6 +130,76 @@ class ExecutionPlanContractTests(unittest.TestCase):
         rendered = render_execution_profile(profile())
         self.assertIn("先核对旧数据兼容性", rendered)
         self.assertIn("冲突部分无效", rendered)
+
+    def test_stage_customization_only_adds_catalogued_work_and_priority(self):
+        customized_profile = {
+            "schema": PROFILE_SCHEMA,
+            "layers": [],
+            "stage_customizations": [{
+                "scope": "task",
+                "source_id": "task-9",
+                "title": "本任务阶段定制",
+                "playbook_id": "platform.construction",
+                "instructions": "先用真实构建拉齐依赖，再判断外部行为",
+                "optional_activities": ["environment-warmup", "impact-scan"],
+                "preferred_resources": ["selected-skills"],
+            }],
+        }
+        customized_profile["revision"] = _profile_revision(
+            [], customized_profile["stage_customizations"])
+        plan = build_execution_plan(
+            self.flow,
+            {"current": "build", "choices": {"workflow": "full"}},
+            self.catalog,
+            customized_profile,
+        )
+        activities = {item["id"]: item for item in plan["activities"]}
+        self.assertIn("risk-first-implementation", activities,
+                      "平台必做动作必须保留")
+        self.assertEqual("platform_default",
+                         activities["risk-first-implementation"]["source"])
+        self.assertEqual("customized", activities["environment-warmup"]["source"])
+        self.assertEqual("customized", activities["impact-scan"]["source"])
+        self.assertNotIn("boundary-test-matrix", activities,
+                         "没选的可选动作不能冒充已启用")
+        resources = {item["id"]: item for item in plan["resources"]}
+        self.assertTrue(resources["selected-skills"]["preferred"])
+        self.assertNotIn("preferred", resources["knowledge-index"])
+        self.assertEqual(1, len(plan["customization"]["stage_layers"]))
+        rendered = render_agent_execution_plan(plan)
+        self.assertIn("定制新增", rendered)
+        self.assertIn("先用真实构建拉齐依赖", rendered)
+        self.assertIn("定制优先", rendered)
+        self.assertIn("平台兜底", rendered)
+
+    def test_stage_customization_cannot_select_required_or_invent_catalog_ids(self):
+        customized_profile = {
+            "schema": PROFILE_SCHEMA,
+            "layers": [],
+            "stage_customizations": [{
+                "scope": "task", "source_id": "task-10",
+                "title": "本任务阶段定制",
+                "playbook_id": "platform.construction",
+                "optional_activities": ["risk-first-implementation", "made-up"],
+                "preferred_resources": ["code-taste-standard", "made-up-tool"],
+            }],
+        }
+        customized_profile["revision"] = _profile_revision(
+            [], customized_profile["stage_customizations"])
+        errors = profile_errors(customized_profile, self.catalog)
+        self.assertTrue(any("optional activity" in error for error in errors))
+        self.assertTrue(any("required resource" in error for error in errors))
+        self.assertTrue(any("unknown resource" in error for error in errors))
+
+        with tempfile.TemporaryDirectory() as root:
+            directory = os.path.join(root, ".mae-flow-work")
+            os.makedirs(directory)
+            with open(os.path.join(directory, "execution-profile.json"), "w",
+                      encoding="utf-8") as stream:
+                json.dump(customized_profile, stream, ensure_ascii=False)
+            loaded, warning = load_execution_profile(root)
+        self.assertIsNone(loaded)
+        self.assertIn("已采用平台默认方案", warning)
 
     def test_invalid_optional_profile_falls_back_with_a_clear_warning(self):
         broken = profile()

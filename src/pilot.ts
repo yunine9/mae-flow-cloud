@@ -151,6 +151,16 @@ async function main(): Promise<number> {
     console.error("[pilot] --poll-timeout-s/--poll-interval-s 必须是非负数");
     return 1;
   }
+  const customizePlaybook = flag("--customize-playbook");
+  const customizeList = (name: string): string[] =>
+    (flag(name) ?? "").split(",").map((item) => item.trim()).filter(Boolean);
+  const executionStageCustomizations = customizePlaybook ? [{
+    playbook_id: customizePlaybook,
+    ...(flag("--customize-instructions")
+      ? { instructions: flag("--customize-instructions") } : {}),
+    optional_activities: customizeList("--customize-activities"),
+    preferred_resources: customizeList("--customize-resources"),
+  }] : undefined;
 
   if (!existsSync(modelsPath)) {
     console.error(`[pilot] 找不到模型配置: ${modelsPath}`);
@@ -275,6 +285,8 @@ async function main(): Promise<number> {
     task = service.create(requirement, {
       account: "liaoxiang",
       ...(flag("--lane") ? { lane: flag("--lane") } : {}),
+      ...(executionStageCustomizations
+        ? { executionStageCustomizations } : {}),
     });
   }
   console.log(`[pilot] 任务 ${task.id},现场: ${task.workspace}`);

@@ -46,12 +46,18 @@ Mae-Flow 的阶段、退出条件、真实证据、人工决定和 Git/交付权
 `execution-plan --json` 的结构化结果，不在 TypeScript 再维护一套阶段判断。
 
 执行补充按“团队 → 代码仓 → 本任务”叠加，只能调整关注点、先后顺序和协作
-方式。团队约定在管理员设置中维护；代码仓可在 `.mae-flow-defaults.json` 使用
-「执行补充」；本任务补充在发起页直接填写。它们会在任务创建/首次 clone 时
-固定为 `.mae-flow-work/execution-profile.json`，每个阶段的 `current` 都会真实
-交给 Agent；恢复和从头重跑沿用原快照。配置缺失或损坏不阻塞任务，但任务页
-和 Agent 都会看到明确的降级说明。业务模块知识与工程知识继续作为索引化资源
-按需读取，不被混成一条执行指令，也不会把正文整包注入上下文。
+方式。除此之外，管理员与任务发起人还可按阶段启用 Playbook 明确列出的可选
+动作、把现有 Skill/知识/工具设为本阶段优先，并填写阶段补充。定制只允许“加”
+不能“减”：必做动作与必用能力不能取消，浏览器自报不存在的 ID 会被服务端
+拒绝。团队选择成为新任务默认，任务发起人只能继续增加，不能取消团队默认。
+
+团队约定在管理员设置中维护；代码仓可在 `.mae-flow-defaults.json` 使用「执行
+补充」；本任务的全局补充和阶段定制都在发起页填写。它们会在任务创建/首次
+clone 时固定为 `.mae-flow-work/execution-profile.json`，`current` 只把当前阶段
+的有效定制交给 Agent；恢复和从头重跑沿用原快照。配置缺失、目录升级导致旧的
+可选项失效或仓库文件损坏时，不阻塞任务，退回平台默认并明确提示。业务模块
+知识与工程知识继续作为索引化资源按需读取，不被混成一条执行指令，也不会把
+正文整包注入上下文。
 
 任务页的“执行方案与现场”会展示平台默认、叠加来源、输出/证据和不可覆盖的
 底线。“反馈这套安排”会把方案 ID、阶段和版本快照带入许愿墙，继续使用
@@ -136,6 +142,20 @@ npm run pilot -- --models .local/models.json --provider glm --model glm-5.1 \
 预算，不改变生产默认。试跑会继续穿过普通 `verifying`，只有到
 `await_merge`、终态，或明确的 `waiting_human/halted` 才收口；
 `--show-luban` 可把通知正文一并列入审计（包括手机端 `/mfc` 激活提示）。
+
+有界工作流定制也可直接交给真模型演练：`--customize-playbook` 指定方案，
+`--customize-activities` 与 `--customize-resources` 只接受目录 ID，
+`--customize-instructions` 提供该阶段的低优先级补充。例如：
+
+```bash
+npm run pilot -- --models .local/models.json --provider glm --model glm-5.1 \
+  --repo ../mae-flow-fieldtest-java --isolate-image mae-flow-task-builder:dev \
+  --lane '已定位问题修复' --push-confirm --pipeline-statuses success \
+  --customize-playbook platform.construction \
+  --customize-activities environment-warmup,impact-scan,boundary-test-matrix \
+  --customize-resources selected-skills,knowledge-index \
+  --customize-instructions '修改前先跑真实构建拉齐依赖；不确定时明确说明。'
+```
 
 本机挂了代理(Clash 等)时,curl 环回接口记得 `--noproxy '*'`;
 服务进程自身已强制环回直连,浏览器访问不受影响。

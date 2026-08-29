@@ -54,7 +54,9 @@ import {
 } from "./kernelChoices.ts";
 import {
   readCurrentExecutionPlan,
+  readExecutionPlaybookOptions,
   type ExecutionPlan,
+  type ExecutionPlaybookOption,
 } from "./executionPlan.ts";
 import {
   buildTaskExecutionProfile,
@@ -62,6 +64,7 @@ import {
   materializeExecutionProfile,
   normalizeTaskExecutionInstructions,
   resolveRepositoryExecutionProfile,
+  validateExecutionStageCustomizations,
   type TaskExecutionProfile,
 } from "./executionProfile.ts";
 import {
@@ -3406,6 +3409,11 @@ export class TaskService {
     workflows: Array<
       { key: string; label: string; description?: string;
         steps?: number; acks?: number }>;
+    /** 阶段内可组合项与能力偏好，和 Agent 消费的是同一份内核目录。 */
+    execution_playbooks: ExecutionPlaybookOption[];
+    /** 团队已选的阶段增强；任务只能继续增加，不能取消团队默认。 */
+    execution_stage_defaults: ReturnType<
+      typeof validateExecutionStageCustomizations>;
     /** 显式发布的业务模块目录。这里只给下单所需摘要，不含知识正文。 */
     business_modules: Array<{
       id: string;
@@ -3438,6 +3446,10 @@ export class TaskService {
     }> = [];
     let engineeringKnowledge: ReturnType<typeof publishedEngineeringKnowledge>
       = [];
+    const executionPlaybooks = readExecutionPlaybookOptions(
+      this.options.host?.kernelRoot);
+    let executionStageDefaults: ReturnType<
+      typeof validateExecutionStageCustomizations> = [];
     try {
       businessModules = listBusinessModules(this.options.dataDir).modules
         .filter((module) => module.status === "active")
@@ -3462,6 +3474,16 @@ export class TaskService {
       this.options.log?.(
         `[engineering-knowledge] 下单目录读取失败(fail-open): ${String(error)}`);
     }
+    try {
+      executionStageDefaults = validateExecutionStageCustomizations(
+        this.options.settings?.executionPolicy().stage_customizations,
+        "团队阶段执行方案",
+        executionPlaybooks,
+      );
+    } catch (error) {
+      this.options.log?.(
+        `[execution-policy] 团队阶段定制已失效，新任务采用平台默认: ${error}`);
+    }
     // 每条缺项**只在它真会咬人时才拦**:纯会话形态(不接代码仓)拦
     // Git 令牌毫无道理,没接通知端点拦通知令牌也一样——一刀切的门禁
     // 会把用不上那件东西的部署一起挡在门外。
@@ -3483,6 +3505,8 @@ export class TaskService {
       ticket: { enabled: !!this.options.host, required: !!this.options.host },
       baseline: { enabled: !!this.options.host, default: "master" },
       workflows: workflowChoices(this.options.host?.kernelRoot),
+      execution_playbooks: executionPlaybooks,
+      execution_stage_defaults: executionStageDefaults,
       business_modules: businessModules,
       engineering_knowledge: engineeringKnowledge
         .map((item) => ({
@@ -3505,6 +3529,17 @@ export class TaskService {
         luban_token: this.options.notifier?.needsPersonalToken() ?? false,
       },
     };
+  }
+
+  validateExecutionStageCustomizationInput(
+    value: unknown,
+    label = "阶段执行方案",
+  ): ReturnType<typeof validateExecutionStageCustomizations> {
+    return validateExecutionStageCustomizations(
+      value,
+      label,
+      readExecutionPlaybookOptions(this.options.host?.kernelRoot),
+    );
   }
 
   /** 当前生效的模型:设置层显式配的 > models.json 里的第一个 >
@@ -3725,6 +3760,8 @@ export class TaskService {
       repairRounds?: number;
       /** 任务级低优先级执行补充；详细需求仍放 requirement。 */
       taskInstructions?: string;
+      /** 按阶段增加目录内可选动作、提升能力优先级或补充阶段指导。 */
+      executionStageCustomizations?: unknown;
       /** 仅供跨仓拆单与原位重跑继承已经固定的分层快照。 */
       executionProfile?: TaskExecutionProfile;
       /** 仅供原位重跑继承“代码仓约定已解析”的事实。 */
@@ -3865,6 +3902,30 @@ export class TaskService {
     // 先校验再分配 task id，避免一个超长输入白白消耗任务序号。
     const taskInstructions = normalizeTaskExecutionInstructions(
       options.taskInstructions);
+    const executionPlaybooks = readExecutionPlaybookOptions(
+      this.options.host?.kernelRoot);
+    const taskStageCustomizations = options.executionProfile
+      ? [] : validateExecutionStageCustomizations(
+          options.executionStageCustomizations,
+          "本任务阶段执行方案",
+          executionPlaybooks,
+        );
+    let executionPolicyWarning: string | undefined;
+    let teamStageCustomizations: ReturnType<
+      typeof validateExecutionStageCustomizations> = [];
+    if (!options.executionProfile) {
+      try {
+        teamStageCustomizations = validateExecutionStageCustomizations(
+          this.options.settings?.executionPolicy().stage_customizations,
+          "团队阶段执行方案",
+          executionPlaybooks,
+        );
+      } catch (error) {
+        executionPolicyWarning =
+          `团队阶段执行方案未采用，本任务继续使用平台默认：${String(error)}`;
+        this.options.log?.(`[execution-policy] ${executionPolicyWarning}`);
+      }
+    }
     const directResources = options.repositorySkills !== undefined;
     const selectedResources = !options.preserveUndefinedRepositorySkills
         && !directResources
@@ -3900,11 +3961,23 @@ export class TaskService {
       ? {
           ...options.executionProfile,
           layers: options.executionProfile.layers.map((layer) => ({ ...layer })),
+          ...(options.executionProfile.stage_customizations ? {
+            stage_customizations: options.executionProfile.stage_customizations
+              .map((item) => ({
+                ...item,
+                optional_activities: [...item.optional_activities],
+                preferred_resources: [...item.preferred_resources],
+              })),
+          } : {}),
         }
       : buildTaskExecutionProfile(
           id,
           taskInstructions,
           this.options.settings?.executionPolicy().team_instructions,
+          {
+            team: teamStageCustomizations,
+            task: taskStageCustomizations,
+          },
         );
     mkdirSync(workspace, { recursive: true });
     let issueEnvironments: IssueEnvironmentRef[] = [];
@@ -4042,7 +4115,10 @@ export class TaskService {
       execution_profile: executionProfile,
       execution_profile_repository_resolved:
         options.executionProfileRepositoryResolved,
-      execution_profile_warning: options.executionProfileWarning,
+      execution_profile_warning: [
+        options.executionProfileWarning,
+        executionPolicyWarning,
+      ].filter(Boolean).join("；") || undefined,
     };
     const task: TaskState = {
       summary,

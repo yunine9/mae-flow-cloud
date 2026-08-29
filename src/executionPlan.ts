@@ -6,21 +6,35 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 export interface ExecutionPlanActivity {
+  id: string;
   title: string;
   description: string;
   required: boolean;
+  source?: "platform_default" | "customized";
 }
 
 export interface ExecutionPlanResource {
+  id: string;
   kind: "guidance" | "standard" | "agent" | "platform" | "knowledge"
     | "skill" | "tool";
   name: string;
   ref?: string;
   usage: "required" | "when_needed" | "on_demand";
+  preferred?: boolean;
+}
+
+export interface ExecutionPlaybookOption {
+  id: string;
+  version: string;
+  title: string;
+  summary: string;
+  phase: string;
+  activities: ExecutionPlanActivity[];
+  resources: ExecutionPlanResource[];
 }
 
 export interface ExecutionPlan {
@@ -63,6 +77,15 @@ export interface ExecutionPlan {
       source_id: string;
       title: string;
       instructions: string;
+    }>;
+    stage_layers: Array<{
+      scope: "team" | "business_module" | "repository" | "task";
+      source_id: string;
+      title: string;
+      playbook_id: string;
+      instructions?: string;
+      optional_activities: string[];
+      preferred_resources: string[];
     }>;
   };
 }
@@ -142,6 +165,7 @@ export function readCurrentExecutionPlan(options: {
         customization: {
           ...parsed.customization,
           layers: parsed.customization.layers ?? [],
+          stage_layers: parsed.customization.stage_layers ?? [],
         },
       };
     }
@@ -154,4 +178,71 @@ export function readCurrentExecutionPlan(options: {
 
 export function clearExecutionPlanCache(): void {
   cache.clear();
+}
+
+/** The launch/settings UI reads the same versioned catalog that the kernel
+ * compiles.  Failure returns an empty catalog: the UI then offers no invented
+ * customization, while the fixed workflow remains usable. */
+export function readExecutionPlaybookOptions(
+  kernelRoot: string | undefined,
+): ExecutionPlaybookOption[] {
+  if (!kernelRoot) return [];
+  try {
+    const value = JSON.parse(readFileSync(
+      join(kernelRoot, "flow", "playbooks.json"), "utf-8")) as {
+        schema?: string;
+        playbooks?: Array<Record<string, unknown>>;
+      };
+    if (value.schema !== "mae-flow-playbook-catalog/1"
+        || !Array.isArray(value.playbooks)) return [];
+    const parsed = value.playbooks.flatMap((raw) => {
+      const id = String(raw.id ?? "").trim();
+      const version = String(raw.version ?? "").trim();
+      const title = String(raw.title ?? "").trim();
+      const summary = String(raw.summary ?? "").trim();
+      const phase = String(raw.phase ?? "").trim();
+      if (!id || !version || !title || !summary || !phase) return [];
+      const rawActivities = Array.isArray(raw.activities) ? raw.activities : [];
+      const activities = rawActivities.flatMap((item) => {
+            const activity = item as Record<string, unknown>;
+            const activityId = String(activity.id ?? "").trim();
+            const activityTitle = String(activity.title ?? "").trim();
+            const description = String(activity.description ?? "").trim();
+            if (!activityId || !activityTitle || !description) return [];
+            return [{
+              id: activityId,
+              title: activityTitle,
+              description,
+              required: activity.required === true,
+            }];
+          });
+      if (activities.length !== rawActivities.length) return [];
+      const rawResources = Array.isArray(raw.resources) ? raw.resources : [];
+      const resources = rawResources.flatMap((item) => {
+            const resource = item as Record<string, unknown>;
+            const resourceId = String(resource.id ?? "").trim();
+            const name = String(resource.name ?? "").trim();
+            const kind = String(resource.kind ?? "") as ExecutionPlanResource["kind"];
+            const usage = String(resource.usage ?? "") as ExecutionPlanResource["usage"];
+            if (!resourceId || !name
+                || !["guidance", "standard", "agent", "platform", "knowledge",
+                  "skill", "tool"].includes(kind)
+                || !["required", "when_needed", "on_demand"].includes(usage)) {
+              return [];
+            }
+            return [{
+              id: resourceId,
+              kind,
+              name,
+              ...(resource.ref ? { ref: String(resource.ref) } : {}),
+              usage,
+            }];
+          });
+      if (resources.length !== rawResources.length) return [];
+      return [{ id, version, title, summary, phase, activities, resources }];
+    });
+    return parsed.length === value.playbooks.length ? parsed : [];
+  } catch {
+    return [];
+  }
 }

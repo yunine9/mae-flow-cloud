@@ -536,16 +536,20 @@ export interface ExecutionPlan {
     outputs: string[];
   };
   activities: Array<{
+    id: string;
     title: string;
     description: string;
     required: boolean;
+    source?: "platform_default" | "customized";
   }>;
   resources: Array<{
+    id: string;
     kind: "guidance" | "standard" | "agent" | "platform" | "knowledge"
       | "skill" | "tool";
     name: string;
     ref?: string;
     usage: "required" | "when_needed" | "on_demand";
+    preferred?: boolean;
   }>;
   knowledge: {
     loading: "indexed_on_demand";
@@ -563,7 +567,29 @@ export interface ExecutionPlan {
       title: string;
       instructions: string;
     }>;
+    stage_layers: Array<ExecutionStageCustomization & {
+      scope: "team" | "business_module" | "repository" | "task";
+      source_id: string;
+      title: string;
+    }>;
   };
+}
+
+export interface ExecutionStageCustomization {
+  playbook_id: string;
+  instructions?: string;
+  optional_activities: string[];
+  preferred_resources: string[];
+}
+
+export interface ExecutionPlaybookOption {
+  id: string;
+  version: string;
+  title: string;
+  summary: string;
+  phase: string;
+  activities: ExecutionPlan["activities"];
+  resources: ExecutionPlan["resources"];
 }
 
 export interface TaskSummary {
@@ -914,6 +940,8 @@ export interface LaunchOptions {
   workflows: Array<
     { key: string; label: string; description?: string;
       steps?: number; acks?: number }>;
+  execution_playbooks: ExecutionPlaybookOption[];
+  execution_stage_defaults: ExecutionStageCustomization[];
   /** 已发布的可选业务模块摘要；知识正文不会随目录接口返回。 */
   business_modules: BusinessModuleLaunchOption[];
   engineering_knowledge: EngineeringKnowledgeLaunchOption[];
@@ -1604,6 +1632,7 @@ export async function createTask(
     model?: { provider: string; model: string };
     repairRounds?: number;
     taskInstructions?: string;
+    executionStageCustomizations?: ExecutionStageCustomization[];
     repositorySkillCatalogToken?: string;
     selectedRepositorySkillIds?: string[];
     selectedBusinessModuleIds?: string[];
@@ -1633,6 +1662,7 @@ export async function createTask(
       model: extras?.model,
       repair_rounds: extras?.repairRounds,
       task_instructions: extras?.taskInstructions?.trim() || undefined,
+      execution_stage_customizations: extras?.executionStageCustomizations,
       repository_skill_catalog_token:
         extras?.repositorySkillCatalogToken || undefined,
       selected_repository_skill_ids:
@@ -2181,7 +2211,9 @@ export interface SettingsView {
   execution_policy: {
     /** 只影响保存后新建任务；每单会固定快照。 */
     team_instructions?: string;
+    stage_customizations?: ExecutionStageCustomization[];
   };
+  execution_playbooks: ExecutionPlaybookOption[];
   models: {
     configured: boolean;
     provider?: string;
@@ -2312,6 +2344,7 @@ export function putRuntimeSettings(
 
 export function putExecutionPolicySettings(body: {
   team_instructions: string;
+  stage_customizations?: ExecutionStageCustomization[];
 }): Promise<SettingsView> {
   return putSettings("execution-policy", body);
 }

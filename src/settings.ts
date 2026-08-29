@@ -26,7 +26,11 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { normalizeTeamExecutionInstructions } from "./executionProfile.ts";
+import {
+  normalizeExecutionStageCustomizations,
+  normalizeTeamExecutionInstructions,
+  type ExecutionStageCustomization,
+} from "./executionProfile.ts";
 
 export interface RuntimeKnobs {
   max_concurrent?: number;
@@ -55,6 +59,7 @@ export interface ModelsSettings {
 export interface ExecutionPolicySettings {
   /** 新任务采用并固定；运行中与历史任务不漂移。 */
   team_instructions?: string;
+  stage_customizations?: ExecutionStageCustomization[];
 }
 
 interface Stored {
@@ -138,9 +143,17 @@ export class RuntimeSettings {
           patch.team_instructions == null
             ? undefined : String(patch.team_instructions))
       : this.executionPolicy().team_instructions;
+    const stageCustomizations = "stage_customizations" in patch
+      ? normalizeExecutionStageCustomizations(
+          patch.stage_customizations, "团队阶段执行方案")
+      : this.executionPolicy().stage_customizations ?? [];
     this.save({
       ...this.load(),
-      execution_policy: { team_instructions: teamInstructions },
+      execution_policy: {
+        team_instructions: teamInstructions,
+        ...(stageCustomizations.length
+          ? { stage_customizations: stageCustomizations } : {}),
+      },
     });
   }
 

@@ -15,7 +15,10 @@ import {
   materializeExecutionProfile,
   normalizeTaskExecutionInstructions,
   resolveRepositoryExecutionProfile,
+  validateExecutionStageCustomizations,
 } from "../src/executionProfile.ts";
+import { readExecutionPlaybookOptions } from "../src/executionPlan.ts";
+import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
 
 test("任务执行补充会规范化、固定版本并原子投影给内核", () => {
   const profile = buildTaskExecutionProfile(
@@ -87,4 +90,51 @@ test("损坏的代码仓约定明确降级，不阻塞其他执行层", () => {
   });
   assert.equal(resolved.profile, base);
   assert.match(resolved.warning ?? "", /未采用.*继续使用其余执行方案/);
+});
+
+test("阶段定制按目录白名单固定；团队在前、任务在后", () => {
+  const kernelRoot = discoverKernelRoot(process.cwd());
+  assert.ok(kernelRoot);
+  const catalog = readExecutionPlaybookOptions(kernelRoot);
+  const team = validateExecutionStageCustomizations([{
+    playbook_id: "platform.construction",
+    optional_activities: ["impact-scan"],
+    preferred_resources: ["selected-skills"],
+  }], "团队阶段执行方案", catalog);
+  const task = validateExecutionStageCustomizations([{
+    playbook_id: "platform.construction",
+    instructions: "先跑真实构建拉齐依赖，再分析外部行为",
+    optional_activities: ["environment-warmup"],
+    preferred_resources: ["knowledge-index"],
+  }], "本任务阶段执行方案", catalog);
+  const profile = buildTaskExecutionProfile(
+    "task-5", undefined, undefined, { team, task });
+  assert.ok(profile);
+  assert.deepEqual(profile.stage_customizations?.map((item) => item.scope),
+    ["team", "task"]);
+  assert.match(profile.revision, /^[a-f0-9]{16}$/);
+  assert.match(executionProfilePrompt(profile), /environment-warmup/);
+
+  const workspace = mkdtempSync(join(tmpdir(), "mfc-stage-profile-"));
+  materializeExecutionProfile(workspace, profile);
+  assert.deepEqual(JSON.parse(readFileSync(join(
+    workspace, EXECUTION_PROFILE_PATH), "utf-8")), profile);
+});
+
+test("阶段定制不能伪造动作、重选必做项或把必用能力伪装成偏好", () => {
+  const kernelRoot = discoverKernelRoot(process.cwd());
+  assert.ok(kernelRoot);
+  const catalog = readExecutionPlaybookOptions(kernelRoot);
+  assert.throws(() => validateExecutionStageCustomizations([{
+    playbook_id: "platform.construction",
+    optional_activities: ["missing-action"],
+  }], "本任务阶段执行方案", catalog), /不存在的可选动作/);
+  assert.throws(() => validateExecutionStageCustomizations([{
+    playbook_id: "platform.construction",
+    optional_activities: ["risk-first-implementation"],
+  }], "本任务阶段执行方案", catalog), /平台必做动作/);
+  assert.throws(() => validateExecutionStageCustomizations([{
+    playbook_id: "platform.construction",
+    preferred_resources: ["code-taste-standard"],
+  }], "本任务阶段执行方案", catalog), /平台必用能力/);
 });
