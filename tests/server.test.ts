@@ -107,6 +107,7 @@ test("任务 API 整链:等待人工/409 冲突/决定生效/SSE 镜像", async 
     const decided = await fetch(`${base}/tasks/${created.id}/decision`, {
       method: "POST",
       body: JSON.stringify({
+        waiting_id: waiting.waiting.waiting_id,
         state_version: waiting.waiting.state_version,
         decision: "通过",
         notes: "API 测试决定",
@@ -114,14 +115,31 @@ test("任务 API 整链:等待人工/409 冲突/决定生效/SSE 镜像", async 
     });
     assert.equal(decided.status, 200);
 
-    // 决定已消费:重复提交没有待办可决,404 而不是再走一遍。
+    // 网络重试带稳定 waiting_id 且内容完全相同:幂等成功,不再把一次
+    // 已经生效的点击翻译成“已由先到决定完成”。
     const replay = await fetch(`${base}/tasks/${created.id}/decision`, {
       method: "POST",
       body: JSON.stringify({
-        state_version: waiting.waiting.state_version, decision: "通过",
+        waiting_id: waiting.waiting.waiting_id,
+        state_version: waiting.waiting.state_version,
+        decision: "通过", notes: "API 测试决定",
       }),
     });
-    assert.equal(replay.status, 404);
+    assert.equal(replay.status, 200);
+
+    const different = await fetch(`${base}/tasks/${created.id}/decision`, {
+      method: "POST",
+      body: JSON.stringify({
+        waiting_id: waiting.waiting.waiting_id,
+        state_version: waiting.waiting.state_version,
+        decision: "打回",
+      }),
+    });
+    assert.equal(different.status, 409);
+    const differentBody = await readJson(different);
+    assert.doesNotMatch(differentBody.error,
+      /任务状态已变化:\s*任务状态已变化/,
+      "冲突提示不能把同一句前缀叠两遍");
 
     const done = await until(async () => {
       const task = await fetch(`${base}/tasks/${created.id}`)

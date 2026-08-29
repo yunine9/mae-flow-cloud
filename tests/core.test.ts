@@ -89,6 +89,8 @@ test("人工待办:可读取权威记录,完全相同的请求重放幂等返回
   assert.deepEqual(replay, first, "网络重试不能把已经成功的同一请求报成冲突");
   assert.deepEqual(gate.get(waiting.waiting_id), first,
     "任务概要与待办账冲突时必须能读取 waiting.json 的权威记录");
+  assert.deepEqual(gate.resolved(), [first],
+    "宿主必须能枚举已决收据以修复派生投影");
   assert.throws(() => gate.resolve(waiting.waiting_id, {
     stateVersion: waiting.state_version,
     decision: "确认推送",

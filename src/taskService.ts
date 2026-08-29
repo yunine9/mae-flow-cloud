@@ -1395,12 +1395,14 @@ const PUSH_CONFIRM_ACCEPT = "确认按清单推送";
 const PUSH_CONFIRM_REWORK = "需要调整代码（按清单返工）";
 
 /** 卡键绑"交付文件集合"的指纹,不绑 HEAD——人确认的是范围,不是每个
- * 中间 SHA。绑 HEAD 的老键在流水线修复每推进一个 commit 时都会作废
- * 重发卡(清单明明没变),人被迫从头再看一遍(2026-08-28 用户点破:
- * 拿鸡毛当令箭)。同一集合 → 同一卡,重启与 HEAD 演进都不重复出卡。 */
-function pushConfirmCallId(paths: string[]): string {
+ * 中间 SHA。返工后的下一轮必须再加上一张前卡的身份：同一轮检视里
+ * HEAD 演进仍不换卡，但用户已经明确打回后，即使文件集合没变也要生成
+ * 一张新卡，绝不能把上一张 resolved 卡重新举出来。 */
+function pushConfirmCallId(paths: string[], afterWaitingId?: string): string {
   const digest = createHash("sha256")
-    .update(paths.join("\0")).digest("hex");
+    .update(paths.join("\0"))
+    .update(afterWaitingId ? `\0after:${afterWaitingId}` : "")
+    .digest("hex");
   return `push-confirm-${digest.slice(0, 12)}`;
 }
 
@@ -3114,6 +3116,7 @@ export class TaskService {
   } {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    this.reconcileResolvedDecisionAnnotations(task);
     const items = this.annotations(task).visible();
     const root = this.artifactRoot(id);
     const checks = reanchor(items, (artifact) =>
@@ -3130,6 +3133,7 @@ export class TaskService {
   }> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    this.reconcileResolvedDecisionAnnotations(task);
     const items = this.annotations(task).visible();
     const root = this.artifactRoot(id);
     const contents = new Map<string, string | undefined>();
@@ -4495,6 +4499,7 @@ export class TaskService {
           controlEpoch: 0,
         };
         this.tasks.set(summary.id, task);
+        this.reconcileResolvedDecisionAnnotations(task);
         const authoritativeWaiting = summary.waiting
           ? task.humanGate.get(summary.waiting.waiting_id) : undefined;
         // 旧版本把 repairing 一直保留到流水线最终绿灯。若修复使命已经
@@ -6202,6 +6207,21 @@ export class TaskService {
     }
   }
 
+  /** 决定事实和批注展示是两个 append-only 账。若进程死在两次写之间，
+   * 任务可能已经继续、summary.waiting 也已清空；因此不能只在“当前卡”
+   * 恢复时对账。任务恢复和批注读侧都用全部 resolved 收据补投影。 */
+  private reconcileResolvedDecisionAnnotations(task: TaskState): void {
+    try {
+      if (!this.annotations(task).drafts().length) return;
+      for (const waiting of task.humanGate.resolved()) {
+        this.markResolvedDecisionAnnotations(task, waiting);
+      }
+    } catch (error) {
+      this.options.log?.(
+        `任务 ${task.summary.id} 批注送达投影暂无法对账: ${String(error)}`);
+    }
+  }
+
   /** push 卡没有挂起的 Agent 工具调用，必须由宿主消费 resolved 收据。
    * 这一个函数同时服务正常提交、完全相同的网络重放和崩溃恢复。 */
   private finishResolvedPushConfirmation(
@@ -6211,7 +6231,6 @@ export class TaskService {
   ): void {
     task.summary.delivery_selection = selection;
     task.summary.waiting = undefined;
-    this.markResolvedDecisionAnnotations(task, waiting);
     if (this.pushConfirmationAccepted(waiting)) {
       task.summary.status = "verifying";
       task.summary.detail = "交付清单已确认,继续推送";
@@ -6239,6 +6258,10 @@ export class TaskService {
     task: TaskState,
     waiting: WaitingRecord,
   ): Promise<void> {
+    // 正常卡和 push 卡都可能死在 waiting.json 已落袋、批注投影尚未
+    // markSent 的窗口。恢复动作首先对账，不能只让 Agent 收到正文却在
+    // 页面继续显示“待提交”。失败会由 helper 记日志并保持流程可继续。
+    this.markResolvedDecisionAnnotations(task, waiting);
     if (waiting.step === CLOUD_PUSH_CONFIRM_STEP) {
       try {
         const selection = await this.resolvedPushSelection(task, waiting);
@@ -9483,7 +9506,10 @@ export class TaskService {
       }
       return true;
     }
-    const callId = pushConfirmCallId(committed);
+    const callId = pushConfirmCallId(
+      committed,
+      selection?.status === "requested" ? selection.waiting_id : undefined,
+    );
     const waiting = task.summary.waiting;
     if (waiting?.step === CLOUD_PUSH_CONFIRM_STEP) {
       if (waiting.call_id === callId) return false; // 同一集合的卡已在等人

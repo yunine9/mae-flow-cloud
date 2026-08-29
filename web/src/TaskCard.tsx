@@ -468,9 +468,19 @@ export function WaitingCard({
   const [notes, setNotes] = useState("");
   const [notesOpen, setNotesOpen] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
-  useEffect(() => setContextOpen(false), [task.waiting?.waiting_id]);
   const [conflict, setConflict] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  useEffect(() => {
+    // WaitingCard 在右栏原位复用。换 waiting_id 就是换了一桩事务，
+    // 上一张卡的选择、自由答复和错误提示都不能偷偷带到下一张。
+    setPicked({});
+    setCustom({});
+    setCustomOpen({});
+    setNotes("");
+    setNotesOpen(false);
+    setContextOpen(false);
+    setConflict("");
+  }, [task.waiting?.waiting_id]);
   const questions = task.waiting?.question?.questions ?? [];
   const choiceEffects = task.waiting?.choice_effects ?? [];
   const feedbackAnswers = new Set(choiceEffects

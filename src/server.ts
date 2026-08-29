@@ -2289,7 +2289,9 @@ export function createTaskServer(
       }
       if (error instanceof StateConflictError) {
         // 先到决定生效:后到的提交必须知道自己没生效,不能静默吞掉。
-        return json(response, 409, { error: `任务状态已变化: ${error.message}` });
+        const message = error.message.startsWith("任务状态已变化")
+          ? error.message : `任务状态已变化: ${error.message}`;
+        return json(response, 409, { error: message });
       }
       if (error instanceof TaskControlError) {
         return json(response, 409, { error: error.message });

@@ -277,6 +277,54 @@ test("返工开修复会话并携带清单契约;月光不代答确认卡", asyn
   }
 });
 
+test("同一文件集合连续返工也要逐轮生成新卡,不能复活已决卡", async () => {
+  const { service, model, id, internal } = await verifyingTask();
+  try {
+    internal.summary.push_confirmation = true;
+    const gate = () => (service as any)
+      .pushConfirmationSatisfied(internal, "master_bot_REQ1");
+    await gate();
+    const first = service.get(id)!.waiting!;
+    // 这里只冻结队列，专门验证人工确认的逐轮身份；Agent 是否真改了
+    // 内容不影响契约——用户打回这一事实本身就要求下一张新卡。
+    (service as any).enqueueRepair = (task: any, mission: string, detail: string) => {
+      task.mission = mission;
+      task.summary.status = "queued";
+      task.summary.detail = detail;
+      (service as any).persist(task);
+    };
+    const rework = async (waiting: typeof first) => service.decide(id, {
+      waiting_id: waiting.waiting_id,
+      state_version: waiting.state_version,
+      selected_options: {
+        [(waiting.question as any).questions[0].question]:
+          "需要调整代码（按清单返工）",
+      },
+    });
+
+    await rework(first);
+    internal.summary.status = "verifying";
+    assert.equal(await gate(), false);
+    const second = service.get(id)!.waiting!;
+    assert.equal(second.status, "waiting");
+    assert.notEqual(second.waiting_id, first.waiting_id,
+      "返工后的同文件复审不能复用 resolved 的上一张卡");
+    assert.equal(await gate(), false);
+    assert.equal(service.get(id)!.waiting!.waiting_id, second.waiting_id,
+      "同一轮等待期间再次过闸也必须保持同一张卡");
+
+    await rework(second);
+    internal.summary.status = "verifying";
+    await gate();
+    const third = service.get(id)!.waiting!;
+    assert.equal(third.status, "waiting");
+    assert.notEqual(third.waiting_id, second.waiting_id,
+      "连续两次返工也不能撞回前一轮的已决卡");
+  } finally {
+    await model.stop();
+  }
+});
+
 test("最终确认同一请求并发重放只消费一次,不会给成功者弹先到冲突", async () => {
   const { service, model, id, internal } = await verifyingTask();
   try {
@@ -300,6 +348,40 @@ test("最终确认同一请求并发重放只消费一次,不会给成功者弹�
     assert.equal(replay.waiting, undefined);
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(deliveries, 1, "同一确认不能启动两条推送链");
+  } finally {
+    await model.stop();
+  }
+});
+
+test("最终确认已落袋但概要未推进时,并发重放也只恢复一次", async () => {
+  const { service, model, id, internal } = await verifyingTask();
+  try {
+    internal.summary.push_confirmation = true;
+    await (service as any).pushConfirmationSatisfied(
+      internal, "master_bot_REQ1");
+    const waiting = service.get(id)!.waiting!;
+    const question = (waiting.question as any).questions[0].question;
+    const answer = "确认按清单推送";
+    internal.humanGate.resolve(waiting.waiting_id, {
+      stateVersion: waiting.state_version,
+      decision: answer,
+      answers: { [question]: answer },
+    });
+    let deliveries = 0;
+    (service as any).tryDeliver = async () => { deliveries += 1; };
+    const input = {
+      waiting_id: waiting.waiting_id,
+      state_version: waiting.state_version,
+      selected_options: { [question]: answer },
+    };
+
+    const [first, replay] = await Promise.all([
+      service.decide(id, input), service.decide(id, input),
+    ]);
+    assert.equal(first.waiting, undefined);
+    assert.equal(replay.waiting, undefined);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(deliveries, 1, "resolved/task.json 分叉也不能启动两条推送链");
   } finally {
     await model.stop();
   }

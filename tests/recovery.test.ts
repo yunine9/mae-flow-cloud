@@ -266,9 +266,20 @@ test("恢复自愈:概要还在等人但 waiting 已 resolved,自动续跑", asy
   // 之前的 waiting 副本。旧测试把 resolved 对象也塞进 task.json，反而
   // 绕开了线上真正会卡死的状态分叉。
   const workspace = join(dataDir, created.id);
+  const annotation = serviceA.addAnnotation(created.id, {
+    author: "liaoxiang", artifact: "Story", file: "story.md", line: 3,
+    anchor: "关键流程", note: "恢复后也要把这条标成已送达", kind: "doc",
+  });
+  const annotationText = serviceA.previewAnnotations(created.id, [annotation.id]);
   new HumanGate(join(workspace, "waiting.json")).resolve(
     waiting!.waiting_id,
-    { stateVersion: waiting!.state_version, decision: "确认" },
+    {
+      stateVersion: waiting!.state_version,
+      decision: "确认",
+      notes: annotationText,
+      requestDigest: "resolved-before-task-projection",
+      continuation: { annotation_ids: [annotation.id] },
+    },
   );
   const taskPath = join(workspace, "task.json");
   const saved = JSON.parse(readFileSync(taskPath, "utf-8"));
@@ -288,6 +299,8 @@ test("恢复自愈:概要还在等人但 waiting 已 resolved,自动续跑", asy
     serviceB.get(created.id)?.status === "completed"
       ? serviceB.get(created.id) : undefined, "自愈后收口");
   assert.equal(done?.waiting, undefined);
+  assert.equal(serviceB.listAnnotations(created.id).items[0].status, "sent",
+    "决定已落袋后恢复时也必须补齐批注送达投影");
   await modelB.stop();
 });
 

@@ -117,6 +117,15 @@ export class HumanGate {
     return record ? { ...record } : undefined;
   }
 
+  /** 已落袋决定清单供宿主修复派生投影（例如批注 sent 状态）。决定
+   * 本身仍以 waiting.json 为唯一真相，调用方不得据此重做业务选择。 */
+  resolved(): WaitingRecord[] {
+    return Object.values(this.load().records)
+      .filter((record) => record.status === "resolved")
+      .sort((left, right) => left.resolved_at.localeCompare(right.resolved_at))
+      .map((record) => ({ ...record }));
+  }
+
   /** 消费决定;版本不匹配或已被抢先,抛 StateConflictError。 */
   resolve(
     waitingId: string,
