@@ -307,6 +307,10 @@ export interface DtsTicketDetail {
   version?: string;
   url?: string;
   submitter?: string;
+  /** 状态名(batchQueryTicket 的 dtsStatusName,需 fields 显式请求)。
+   * 远程查单的前端要靠它判断可拉取(拉单只接"开发人员实施修改"),
+   * 缺了它远程命中的单会被一律误判为状态不可拉取。 */
+  status?: string;
   /** 特性名(batchQueryTicket 的 sFeatureNoName,需 fields 显式请求)。 */
   featureName?: string;
   /** 模块名(batchQueryTicket 的 sModuleNoName,需 fields 显式请求)。 */
@@ -439,9 +443,10 @@ export class McpDtsGateway implements DtsGateway {
       this.gateway.toolName("detail", "batchQueryTicket"),
       {
         dtsNos: [ticket],
-        // 特性/模块名是业务模块匹配的关键词来源,batchQueryTicket 必须
-        // 在 fields 里显式请求才返回(实测缺省不给)。
-        fields: ["sFeatureNoName", "sModuleNoName"],
+        // 特性/模块名是业务模块匹配的关键词来源,状态名是远程查单的
+        // 可拉取判据——batchQueryTicket 都必须在 fields 里显式请求才
+        // 返回(实测缺省不给)。
+        fields: ["sFeatureNoName", "sModuleNoName", "dtsStatusName"],
         attachmentView: false,
       },
     );
@@ -483,6 +488,8 @@ export class McpDtsGateway implements DtsGateway {
             url: outerLink,
             submitter: first.creator !== undefined
               ? String(first.creator) : undefined,
+            status: first.dtsStatusName !== undefined
+              ? String(first.dtsStatusName) : undefined,
             featureName: first.sFeatureNoName !== undefined
               ? String(first.sFeatureNoName) : undefined,
             moduleName: first.sModuleNoName !== undefined
@@ -565,12 +572,14 @@ export class MockDtsGateway implements DtsGateway {
         return {
           ticket: known.ticket,
           title: known.title,
+          status: known.status,
           content: known.content,
         };
       }
       return {
         ticket: known.ticket,
         title: known.title,
+        status: known.status,
         content:
           `【MOCK 单据】${known.title}\n\n`
           + `单号: ${known.ticket}\n状态: ${known.status ?? "打开"}\n`
