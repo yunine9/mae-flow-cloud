@@ -38,16 +38,51 @@ test("任务容器 run 参数:user 随 limits 透传为 --user", () => {
   assert.equal(args[at + 1], "10001:10001", "--user 取 limits.user 原值");
 });
 
-test("问题会话容器冒烟:显式 user 覆盖镜像默认 root,会话不被安全自检拒绝", async () => {
+test("问题会话容器冒烟:显式 user 覆盖镜像默认 root,会话不被安全自检拒绝", async (t) => {
   if (!await dockerAvailable()) {
-    console.log("[skip] 本机无 docker,冒烟层跳过(参数层已锁)");
+    t.skip("本机无 docker,冒烟层跳过(参数层已锁)");
     return;
   }
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-user-"));
   mkdirSync(join(dataDir, "issues"), { recursive: true });
-  const model = new ScriptedModelServer([
-    { text: "研究完成:冒烟用例,无需更多动作。" },
-  ]);
+  let issueId = "";
+  let containerUser = "";
+  let inspectFailure = "";
+  const model = new ScriptedModelServer(
+    [{ text: "研究完成:冒烟用例,无需更多动作。" }],
+    "scripted-v1",
+    {
+      // 会合点。模型被问到 = 会话正在跑 = 容器此刻必然活着,而且它会
+      // 一直活到我们从这个钩子返回——这是唯一能稳定观测到它的时机。
+      //
+      // 踩过的坑(2026-08-29 实测):原来靠 500ms 轮询 docker ps 找容器。
+      // 但剧本模型张口就答"研究完成",容器 running→TERM→removed 全程
+      // 跑完还不到一个轮询间隔,两次 poll 之间它就没了;于是空转满 60s
+      // 预算再拿 containerUser="" 断言失败。容器用户明明是对的,用例却
+      // 恒红——红着的用例等于没有用例,还把整个套件的绿灯一起拖没。
+      beforeScene: () => {
+        if (containerUser || inspectFailure) return;
+        if (!issueId) {
+          inspectFailure = "会话已开跑但 issueId 还没记下来,观测点失效";
+          return;
+        }
+        try {
+          const listed = execFileSync("docker", [
+            "ps", "--filter", `name=${issueId}`, "--format", "{{.Names}}",
+          ], { encoding: "utf-8" }).trim();
+          if (!listed) {
+            inspectFailure = `会话在跑,却查不到名字含 ${issueId} 的活容器`;
+            return;
+          }
+          containerUser = execFileSync("docker", [
+            "inspect", listed.split("\n")[0], "--format", "{{.Config.User}}",
+          ], { encoding: "utf-8" }).trim();
+        } catch (cause) {
+          inspectFailure = `docker 观测失败: ${String(cause)}`;
+        }
+      },
+    },
+  );
   await model.start();
   const service = new IssueFlowService({
     dataDir,
@@ -73,31 +108,19 @@ test("问题会话容器冒烟:显式 user 覆盖镜像默认 root,会话不被�
       description: "验证 isolation.user 透传到问题会话容器",
       source: "manual",
     });
-    // 轮询容器出现在 docker 里(TaskContainer 名字含 issue id)。
+    issueId = created.id;
+    // 观测已经交给 beforeScene 的会合点;这里只等会话跑完一轮,
+    // 预算是"会话该收口了没有",不是"容器还在不在"。
     const deadline = Date.now() + 60_000;
-    let containerUser = "";
     while (Date.now() < deadline) {
-      try {
-        const listed = execFileSync("docker", [
-          "ps", "-a", "--filter", `name=${created.id}`,
-          "--format", "{{.Names}}",
-        ], { encoding: "utf-8" }).trim();
-        if (listed) {
-          const name = listed.split("\n")[0];
-          containerUser = execFileSync("docker", [
-            "inspect", name, "--format", "{{.Config.User}}",
-          ], { encoding: "utf-8" }).trim();
-          break;
-        }
-      } catch {
-        // docker 查询瞬态失败按未出现处理,继续轮询。
-      }
       const issue = service.get(created.id);
       if (issue?.status === "failed") {
         throw new Error(`会话先于容器校验失败: ${issue.error ?? ""}`);
       }
-      await new Promise((tick) => setTimeout(tick, 500));
+      if (issue && issue.status !== "running" && issue.status !== "queued") break;
+      await new Promise((tick) => setTimeout(tick, 100));
     }
+    assert.equal(inspectFailure, "", "容器观测本身失败了,结论不作数");
     assert.equal(containerUser, "1000:1000",
       "问题会话容器必须以 isolation.user 运行(修复前为空→拒绝)");
   } finally {

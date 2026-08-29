@@ -740,14 +740,24 @@ test("问题流专用部署(--issue-only):需求流程停用,问题流不受影�
   assert.deepEqual(issueFlow.list(), []);
 });
 
-test("ops 运维工具:真二进制冒烟,诚实失败且不泄密码", async () => {
+test("ops 运维工具:真二进制冒烟,诚实失败且不泄密码", async (t) => {
   const toolsDir = join(process.cwd(), "assets", "ops-tools");
   const binary = process.platform === "win32"
     ? "fetch-logs.exe"
     : process.arch === "arm64"
       ? "fetch-logs-linux-arm64" : "fetch-logs-linux-amd64";
+  // 仓里只带 Linux ELF(和 Windows exe),macOS 上文件在场也跑不起来——
+  // spawn 直接 ENOEXEC。光查 existsSync 会让开发机上这条恒红,红着的
+  // 用例等于没有用例(实测:macOS 上断言拿到的是 "spawn ENOEXEC")。
+  const runnable = process.platform === "win32" || process.platform === "linux";
+  if (!runnable) {
+    // 纪律:没条件就显式 skip 并说清为什么。裸 return 在 node:test 里
+    // 算 pass,那才是"假装测过"。
+    t.skip(`${process.platform} 跑不了 ${binary}(Linux/Windows 专用二进制)`);
+    return;
+  }
   if (!existsSync(join(toolsDir, binary))) {
-    // 纪律:没条件(裁剪部署)显式跳过,不静默当过。
+    t.skip(`裁剪部署未随带 ${binary}`);
     return;
   }
   const ops = createGoOpsTools({ toolsDir });
