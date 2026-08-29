@@ -4,6 +4,7 @@ import {
   byTeamAttention,
   cycleTimeMs,
   isBlocked,
+  isCurrentTeamTask,
   isStale,
   median,
   matchesTeamScope,
@@ -37,6 +38,15 @@ test("停滞只认有效进展时间,完成任务不误报", () => {
     status: "completed",
     last_progress_at: "2026-08-16T01:00:00.000Z",
   }), now), false);
+});
+
+test("团队现场只留当前行动：交付结果进档案，失败仍需介入", () => {
+  assert.equal(isCurrentTeamTask(task({ status: "running" })), true);
+  assert.equal(isCurrentTeamTask(task({ status: "waiting_for_human" })), true);
+  assert.equal(isCurrentTeamTask(task({ status: "failed" })), true);
+  assert.equal(isCurrentTeamTask(task({ status: "await_merge" })), false);
+  assert.equal(isCurrentTeamTask(task({ status: "completed" })), false);
+  assert.equal(isCurrentTeamTask(task({ status: "canceled" })), false);
 });
 
 test("团队排序先行动项,再看停滞时长;交付周期中位数可解释", () => {
