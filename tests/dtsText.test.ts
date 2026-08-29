@@ -10,10 +10,23 @@ import assert from "node:assert/strict";
 import {
   DTS_ACTIONABLE_STATUS,
   dtsNoCandidates,
+  dtsVersionGroup,
   dtsVersionKey,
   isActionableDts,
   sortDtsVersionsDesc,
 } from "../web/src/issues/dtsText.ts";
+
+test("dtsVersionGroup:剥掉尾部 B 版构建号,得到版本组前缀", () => {
+  assert.equal(dtsVersionGroup("MAE-Access V100R025C10SPC010B009"),
+    "MAE-Access V100R025C10SPC010");
+  assert.equal(dtsVersionGroup("V100R025C10B002"), "V100R025C10", "无 SP 段同样剥 B");
+  assert.equal(dtsVersionGroup("V100R025C10SPC010"), "V100R025C10SPC010",
+    "没有 B 段的原样返回");
+  assert.equal(dtsVersionGroup("V100R025C10SPC0101"), "V100R025C10SPC0101",
+    "尾部数字不属于 B 段时不剥(SPC0101 是 SP 段)");
+  assert.equal(dtsVersionGroup("V100R025C10SPC010b009 "), "V100R025C10SPC010",
+    "小写 b 与尾空白都容忍");
+});
 
 test("dtsVersionKey:从真实版本串里解出 (R 版, C 版)", () => {
   assert.deepEqual(dtsVersionKey("MAE-Access V100R025C10SPC210B002"), [25, 10]);

@@ -14,6 +14,15 @@ export function dtsVersionKey(version: string): [number, number] | undefined {
   return match ? [Number(match[1]), Number(match[2])] : undefined;
 }
 
+/** B 版构建号剥掉后的版本组前缀:"MAE-Access V100R025C10SPC010B009"
+ * → "MAE-Access V100R025C10SPC010";没有 B 段的原样返回。版本过滤按
+ * 组勾选——B 版构建号太多,逐个勾不现实,勾一个组命中组内全部 B 版
+ * 单据。尾部 B 段才算构建号(SPC0101 这种 SP 段不受影响),大小写
+ * 不敏感;先去尾空白再剥,B 段锚定在串尾。 */
+export function dtsVersionGroup(version: string): string {
+  return version.trim().replace(/B\d+$/i, "");
+}
+
 /** 版本降序:先比 R 版,R 同再比 C 版;都解不出的按字典序垫底。 */
 export function sortDtsVersionsDesc(versions: string[]): string[] {
   return [...versions].sort((a, b) => {
