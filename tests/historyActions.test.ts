@@ -189,34 +189,6 @@ test("从头重跑原位覆盖；彻底删除受管理员与真终态双重约�
   }
 });
 
-test("带临时环境凭据的 DTS 不会被从头重跑悄悄降级", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-rerun-dts-"));
-  const service = new TaskService({
-    dataDir, provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0,
-  });
-  const created = service.create("排查线上问题", {
-    entryKind: "dts",
-    ticket: "DTS-100",
-    issueEnvironments: [{
-      name: "日志环境", purpose: "logs", host: "10.0.0.8",
-      accounts: [
-        { username: "sopuser", password: "secret-pass" },
-        { username: "ossuser", password: "secret-pass" },
-        { username: "ossadm", password: "secret-pass" },
-      ],
-    }],
-  });
-  const internal = (service as any).tasks.get(created.id);
-  internal.summary.status = "failed";
-  (service as any).persist(internal);
-  await assert.rejects(
-    service.rerunFromStart(created.id),
-    /临时环境凭据.*重新填写环境/,
-  );
-  assert.equal(service.get(created.id)?.status, "failed");
-  assert.equal(existsSync(join(created.workspace, "task.json")), true);
-});
-
 test("已拆出子任务的跨仓父单拒绝原位重跑，避免重复拆单", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-rerun-chain-"));
   const service = new TaskService({

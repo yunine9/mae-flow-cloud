@@ -37,6 +37,9 @@ export interface AuthSessionUser extends AuthUser {
   luban_token_hint?: string;
   moonlight: boolean;
   push_confirmation: boolean;
+  /** 问题处理探索方式:"fixed"(固定流程,缺省)|"free"(自由探索)。
+   * 只影响新会话——创建时烙印,进行中会话不迁移。 */
+  issue_flow: "fixed" | "free";
 }
 
 /** 跨仓分工只暴露“能不能接活”和缺项名称，绝不暴露任何令牌提示或
@@ -72,6 +75,9 @@ interface StoredUser extends AuthUser {
    * 前给不给人看。个人级默认、**缺省即开**(用户 2026-08-26 拍板:
    * 默认开启、不做任务粒度),所以只落盘显式的 false。 */
   push_confirmation?: boolean;
+  /** 问题处理探索方式(2026-08-27 拍板):缺省"固定流程",所以只
+   * 落盘显式的 "free"。切回固定=删字段。 */
+  issue_flow?: "free";
 }
 
 interface UserFile {
@@ -365,6 +371,24 @@ export class LocalAuth {
     return stored.push_confirmation !== false;
   }
 
+  /** 问题处理探索方式(2026-08-27 拍板):缺省固定流程,只落盘显式
+   * 的 "free"。只影响新建问题会话的烙印,进行中会话不迁移。 */
+  setIssueFlow(username: string, mode: "fixed" | "free"): void {
+    const stored = this.users.get(username);
+    if (!stored) throw new Error(`账号 ${username} 不存在`);
+    if (mode === "free") stored.issue_flow = "free";
+    else delete stored.issue_flow;
+    this.persist();
+  }
+
+  /** 消费口(问题流 create 烙印用);无账号按缺省固定流程。 */
+  issueFlowMode(username: string | undefined): "fixed" | "free" {
+    if (!username) return "fixed";
+    const stored = this.users.get(username);
+    return stored && !stored.disabled && stored.issue_flow === "free"
+      ? "free" : "fixed";
+  }
+
   /** 登录与 /auth/me 共用同一份本人视图，避免登录响应漏字段后让前端
    * 误以为个人配置丢失。只按传入账号读取，不接受客户端指定目标用户。 */
   sessionView(username: string): AuthSessionUser | undefined {
@@ -376,6 +400,7 @@ export class LocalAuth {
       luban_token_hint: this.lubanTokenHint(username),
       moonlight: this.moonlightEnabled(username),
       push_confirmation: this.pushConfirmationEnabled(username),
+      issue_flow: this.issueFlowMode(username),
     };
   }
 

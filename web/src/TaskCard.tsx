@@ -3,7 +3,7 @@
  * 外部动作与事件现场。服务端镜像是唯一事实来源。
  */
 
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { Markdown } from "./markdown";
 import {
   decide,
@@ -22,7 +22,7 @@ import {
 } from "./api";
 import { formatWait, URGENT_MINUTES, waitedMs } from "./taskTime";
 import { responsibleOf } from "./teamOps";
-import { atBottom, backlog } from "./follow";
+import { useStickyBottom } from "./stickyBottom";
 import {
   eventFilterCounts,
   eventWindow,
@@ -1165,46 +1165,6 @@ function CostBreakdown({ entries }: { entries: TimelineEntry[] }) {
       )}
     </div>
   );
-}
-
-/** 贴底跟随,但**人一往上翻就撒手**。判据见 follow.ts(纯函数,有用例)。 */
-function useStickyBottom<T extends HTMLElement>(count: number) {
-  const ref = useRef<T>(null);
-  const pinned = useRef(true);
-  const mark = useRef(count);
-  const [behind, setBehind] = useState(0);
-
-  useEffect(() => {
-    const node = ref.current;
-    if (!node) return;
-    if (pinned.current) {
-      node.scrollTo({ top: node.scrollHeight });
-      mark.current = count;
-      setBehind(0);
-    } else {
-      setBehind(backlog(count, mark.current));
-    }
-  }, [count]);
-
-  const onScroll = () => {
-    const node = ref.current;
-    if (!node) return;
-    const bottom = atBottom(node);
-    if (bottom === pinned.current) return;
-    pinned.current = bottom;
-    if (bottom) { mark.current = count; setBehind(0); }
-  };
-
-  const toBottom = () => {
-    const node = ref.current;
-    if (!node) return;
-    pinned.current = true;
-    mark.current = count;
-    setBehind(0);
-    node.scrollTo({ top: node.scrollHeight, behavior: "smooth" });
-  };
-
-  return { ref, behind, paused: !pinned.current, onScroll, toBottom };
 }
 
 /** 「已暂停跟随」的角标。停下来看东西时,人需要知道两件事:

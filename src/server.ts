@@ -86,6 +86,11 @@ import {
 } from "./auth.ts";
 import { SettingsError } from "./settings.ts";
 import {
+  checkModelGateway,
+  GatewayCheckError,
+  resolveGatewayTarget,
+} from "./modelGatewayCheck.ts";
+import {
   AnnotationError,
   AnnotationPermissionError,
 } from "./annotations.ts";
@@ -98,6 +103,7 @@ import {
   type WishStatus,
 } from "./wishWall.ts";
 import type { LubanApprovalGateway } from "./lubanApproval.ts";
+import { handleIssueRoutes } from "./issueFlow/routes.ts";
 import {
   SkillLibraryError,
   approveSkillSubmission,
@@ -309,6 +315,12 @@ export function createTaskServer(
     webRoot?: string;
     auth?: LocalAuth;
     lubanApproval?: LubanApprovalGateway;
+    issueFlow?: import("./issueFlow/service.ts").IssueFlowService;
+    mcpGateway?: import("./issueFlow/gateways.ts").McpGateway;
+    /** DTS 网关:问题路由直连拉单/详情/内嵌图代理(服务不再转手)。 */
+    dts?: import("./issueFlow/gateways.ts").DtsGateway;
+    /** 问题路由的台账日志(人工修改留痕,与问题服务同一口径)。 */
+    log?: (message: string) => void;
   } = {},
 ): Server {
   // TaskService 也可由测试、pilot 或嵌入式调用方直接构造。只要 HTTP
@@ -480,6 +492,24 @@ export function createTaskServer(
           if (!viewer) return json(response, 401, { error: "尚未登录" });
           const body = await readBody(request);
           options.auth!.setPushConfirmation(viewer.username, body.on === true);
+          return json(response, 200,
+            options.auth!.sessionView(viewer.username));
+        }
+        // 问题处理探索方式(固定流程/自由探索):个人偏好,只烙印到
+        // 新建的问题会话;进行中会话不迁移——"一键切回自由探索"的
+        // 保证就在这:自由路径从未被改掉。
+        if (request.method === "PUT" && parts[1] === "me"
+            && parts[2] === "issue-flow") {
+          if (!viewer) return json(response, 401, { error: "尚未登录" });
+          const body = await readBody(request);
+          const mode = body.mode === "free" ? "free"
+            : body.mode === "fixed" ? "fixed" : undefined;
+          if (!mode) {
+            return json(response, 400, {
+              error: "问题处理探索方式只能是 fixed(固定流程)或 free(自由探索)",
+            });
+          }
+          options.auth!.setIssueFlow(viewer.username, mode);
           return json(response, 200,
             options.auth!.sessionView(viewer.username));
         }
@@ -698,6 +728,16 @@ export function createTaskServer(
             settings.updateModels(await readBody(request));
             return json(response, 200, settingsView());
           }
+          // 模型网关连通性测试:表单草稿优先,留空回落已存配置/部署
+          // 默认(密钥"留空=沿用"与保存同口径)。与部署自检的分工:
+          // 自检只读不外发;这里管理员主动发起一次真实外发请求。
+          if (request.method === "POST" && parts[1] === "models"
+              && parts[2] === "check") {
+            const body = await readBody(request);
+            const target = resolveGatewayTarget(body, settings.models(),
+              service.options.modelsJson as Record<string, unknown> | undefined);
+            return json(response, 200, await checkModelGateway(target));
+          }
           if (request.method === "PUT" && parts[1] === "vision") {
             const body = await readBody(request);
             settings.updateVision({
@@ -712,12 +752,42 @@ export function createTaskServer(
             return json(response, 200, await service.testVisionCapability());
           }
         } catch (error) {
-          if (error instanceof SettingsError) {
+          if (error instanceof SettingsError
+              || error instanceof GatewayCheckError) {
             return json(response, 400, { error: error.message });
           }
           throw error;
         }
         return json(response, 404, { error: "未知设置接口" });
+      }
+
+      // MCP 网关健康检查(GET /mcp-health):握手 + tools/list,一次
+      // 验证连通性、token 有效性与工具清单(inputSchema 原样带回——
+      // 华为网关 arg0/arg1 的参数映射就靠它对拍)。无鉴权:探活端点
+      // 只暴露工具名与 schema,不含 token 也不含单据数据。网关没配
+      // 返回 200+ok:false(服务活着,MCP 未启用不是故障);连不上才 502。
+      if (request.method === "GET" && url.pathname === "/mcp-health") {
+        if (!options.mcpGateway) {
+          return json(response, 200, {
+            ok: false,
+            error: "MCP 网关未配置(需 --dts-mcp-url 与 --mcp-token-file)",
+          });
+        }
+        const result = await options.mcpGateway.healthCheck();
+        return json(response, result.ok ? 200 : 502, result);
+      }
+
+      // 问题流 API(/issues/*):独立于任务命名空间;未启用时由路由
+      // 自己 404。必须先于静态托管兜底(非 /tasks 的 GET 会被接管)。
+      if (parts[0] === "issues") {
+        const handled = await handleIssueRoutes(request, response, parts, {
+          issueFlow: options.issueFlow,
+          dts: options.dts,
+          viewer: viewer ?? undefined,
+          authEnabled: Boolean(options.auth),
+          log: options.log,
+        });
+        if (handled) return;
       }
 
       // 下单表单的数据源:模型清单与当前默认。登录即可看(不是密钥,
@@ -1569,28 +1639,6 @@ export function createTaskServer(
         const repo = body.repo === undefined ? undefined : String(body.repo);
         const repos = Array.isArray(body.repos)
           ? body.repos.map(String) : undefined;
-        const entryKind = body.entry_kind === undefined
-          ? undefined : String(body.entry_kind) as "requirement" | "dts";
-        const issueEnvironments = Array.isArray(body.issue_environments)
-          ? body.issue_environments.map((item: Record<string, unknown>) => ({
-              name: String(item?.name ?? ""),
-              purpose: String(item?.purpose ?? "") as "logs" | "deploy" | "both",
-              host: String(item?.host ?? ""),
-              port: item?.port === undefined || item?.port === ""
-                ? undefined : Number(item.port),
-              accounts: Array.isArray(item?.accounts)
-                ? item.accounts.map((account: Record<string, unknown>) => ({
-                    username: String(account?.username ?? ""),
-                    password: String(account?.password ?? ""),
-                  }))
-                : undefined,
-              // 兼容上一版已打开但尚未刷新的表单。
-              username: item?.username === undefined
-                ? undefined : String(item.username),
-              password: item?.password === undefined
-                ? undefined : String(item.password),
-            }))
-          : undefined;
         // 兼容旧前端：select 显示了默认项但可能提交空串。空白就是
         // “未指定”，交给 TaskService 采用内核默认交付方式。
         const lane = body.lane === undefined
@@ -1697,7 +1745,7 @@ export function createTaskServer(
           }
           return json(response, 201, service.create(requirement,
             {
-              title, account, repo, repos, entryKind, issueEnvironments,
+              title, account, repo, repos,
               requirementDocumentName,
               lane, ticket, baseline, model,
               repairRounds, taskInstructions, executionStageCustomizations,

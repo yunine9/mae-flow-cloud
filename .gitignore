@@ -12,4 +12,5 @@ web/*.tsbuildinfo
 .mae-flow.json.exited
 .mae-flow-history.jsonl
 openspec/config.yaml
+.zcode/
 __pycache__/

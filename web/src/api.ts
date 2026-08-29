@@ -85,6 +85,9 @@ export interface AuthUser {
   moonlight?: boolean;
   /** push 前清单过目的个人默认。缺省即开:只有显式 false 是关。 */
   push_confirmation?: boolean;
+  /** 问题处理探索方式:"fixed" 固定流程(缺省)/"free" 自由探索。
+   * 只烙印新会话,进行中会话不迁移。 */
+  issue_flow?: "fixed" | "free";
 }
 
 export interface CollaborationAssignee {
@@ -216,6 +219,19 @@ export async function putPersonalPushConfirmation(
   const response = await fetch("/auth/me/push-confirmation", {
     method: "PUT",
     body: JSON.stringify({ on }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+/** 问题处理探索方式(固定流程/自由探索)。缺省固定流程;只影响
+ * 新建的问题会话。 */
+export async function putIssueFlowMode(
+  mode: "fixed" | "free",
+): Promise<AuthUser> {
+  const response = await fetch("/auth/me/issue-flow", {
+    method: "PUT",
+    body: JSON.stringify({ mode }),
   });
   if (!response.ok) throw new Error(await errorText(response));
   return response.json();
@@ -756,13 +772,6 @@ export interface TaskSummary {
     bytes: number;
     context_mode: "inline" | "file";
   };
-  entry_kind?: "requirement" | "dts";
-  issue_context?: {
-    source: "manual";
-    stage: "triage" | "delivery";
-    environments: IssueEnvironmentRef[];
-    adapter: { logs: boolean; deploy: boolean; rollback: boolean };
-  };
   status: TaskStatus;
   /** 服务端对现有事实的唯一扫读解释；旧后端缺席时界面安全降级。 */
   focus?: {
@@ -957,6 +966,7 @@ export interface IssueEnvironmentInput {
   port?: number;
   accounts: Array<{ username: string; password: string }>;
 }
+
 
 /** 历史条目(服务端 projection.ts 的 TaskHistoryEntry 镜像)。 */
 export type TaskHistoryEntry = TaskSummary & {
@@ -1892,8 +1902,6 @@ export async function createTask(
     title?: string;
     repo?: string;
     repos?: string[];
-    entryKind?: "requirement" | "dts";
-    issueEnvironments?: IssueEnvironmentInput[];
     lane?: string;
     ticket?: string;
     baseline?: string;
@@ -1922,9 +1930,6 @@ export async function createTask(
       account: account || undefined,
       repo: extras?.repo || undefined,
       repos: extras?.repos?.length ? extras.repos : undefined,
-      entry_kind: extras?.entryKind,
-      issue_environments: extras?.entryKind === "dts"
-        ? extras.issueEnvironments ?? [] : undefined,
       // 空白等于没选，由服务端使用内核第一项；不要把 "" 伪装成
       // 一个需要校验的交付方式。
       lane: extras?.lane?.trim() || undefined,
@@ -2418,6 +2423,21 @@ export function tailPrepushEvents(
   return () => source.close();
 }
 
+/** 问题会话的实时事件流:服务端从头重放 events.jsonl 后持续跟进
+ * (300ms 增量),与任务侧 /tasks/:id/events 同一套 SSE 语义。 */
+export function tailIssueEvents(
+  issueId: string,
+  onEvent: (event: SemanticEvent) => void,
+  onState?: (state: SseConnectionState) => void,
+): () => void {
+  onState?.("connecting");
+  const source = new EventSource(`/issues/${encodeURIComponent(issueId)}/events`);
+  source.onopen = () => onState?.("live");
+  source.onmessage = (message) => onEvent(JSON.parse(message.data));
+  source.onerror = () => onState?.("reconnecting");
+  return () => source.close();
+}
+
 /** 交付时间线条目(服务端 src/timeline.ts 的镜像)。 */
 export interface TimelineEntry {
   ts: string;
@@ -2493,6 +2513,9 @@ export interface SettingsView {
     provider?: string;
     model?: string;
     url?: string;
+    /** 接口格式(openai-completions | anthropic-messages);未配置过时
+     * 由表单默认值接手。 */
+    api?: string;
     key_hint?: string;
     providers: Array<{ name: string; models: string[]; key_hint?: string }>;
     vision: {
@@ -2627,8 +2650,25 @@ export function putModelsSettings(body: {
   url: string;
   api_key: string;
   model?: string;
+  api?: string;
 }): Promise<SettingsView> {
   return putSettings("models", body);
+}
+
+/** 模型网关连通性测试:发送一条真实问答请求,返回网络连通/模型问答
+ * 两项结论。字段留空 = 服务端沿用已存配置(密钥不回传明文)。 */
+export async function postModelsCheck(body: {
+  url?: string;
+  api_key?: string;
+  model?: string;
+  api?: string;
+}): Promise<SystemCheckResult> {
+  const response = await fetch("/settings/models/check", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
 }
 
 export function putVisionSettings(body: {
@@ -2670,5 +2710,565 @@ export async function readArtifact(
     content: String(body.content ?? ""),
     kind: String(body.kind ?? "doc"),
     branch: body.branch ? String(body.branch) : undefined,
+  };
+}
+
+// ---- 问题流(与需求任务平行的独立会话域) ----
+
+/** 后端认证类报错的机器标记(src/issueFlow/issueGit.ts 的
+ * GIT_AUTH_ERROR_TAG 手工镜像,#10 契约护栏未做,双端要同步):
+ * 会话页的错误横幅命中它才给「去个人设置配置令牌」跳转——人话改字
+ * 不再破坏跳转(旧锚是文案里嵌「Git 令牌」字样)。 */
+export const GIT_AUTH_ERROR_TAG = "[git-auth]";
+
+export type IssueStatus =
+  | "queued"
+  | "running"
+  | "waiting_user"
+  | "idle"
+  | "interrupted"
+  | "suspended"
+  | "archived"
+  | "canceled"
+  | "failed";
+
+export const ISSUE_STATUS_TEXT: Record<IssueStatus, string> = {
+  queued: "排队启动中",
+  running: "AI 处理中",
+  waiting_user: "等你答复",
+  idle: "等你继续",
+  interrupted: "重启中断,可续聊",
+  suspended: "挂起(待关联单号)",
+  archived: "已归档",
+  canceled: "已取消",
+  failed: "出错了",
+};
+
+export type IssueStage =
+  | "registered"
+  | "fetch_detail"
+  | "align_issue"
+  | "locate_root"
+  | "align_solution"
+  | "modify_code"
+  | "switch_db"
+  | "verify"
+  | "submit_mr"
+  | "done";
+
+export const ISSUE_STAGE_TEXT: Record<IssueStage, string> = {
+  registered: "已登记",
+  fetch_detail: "获取 DTS 详情",
+  align_issue: "对齐问题",
+  locate_root: "分析根因",
+  align_solution: "对齐方案",
+  modify_code: "实施修改",
+  switch_db: "换库",
+  verify: "验证",
+  submit_mr: "提交 MR",
+  done: "问题闭环",
+};
+
+// ---- 固定流程(2026-08-27 拍板;自由探索那套词表原样保留) ----
+
+export type IssueFlowMode = "fixed" | "free";
+export type IssueScenario = "ticket" | "no_ticket";
+export type FixedIssueStage =
+  | "dts_info"
+  | "prep_repo"
+  | "analyze"
+  | "fix"
+  | "ut"
+  | "mr_green"
+  | "deploy_verify"
+  | "conclude";
+
+export type AnyIssueStage = IssueStage | FixedIssueStage;
+
+export const FIXED_TICKET_STAGES: FixedIssueStage[] = [
+  "dts_info", "prep_repo", "analyze", "fix", "ut", "mr_green", "deploy_verify",
+];
+export const FIXED_NO_TICKET_STAGES: FixedIssueStage[] = [
+  "prep_repo", "analyze", "conclude",
+];
+
+const FIXED_STAGE_TEXT: Record<FixedIssueStage, string> = {
+  dts_info: "获取 DTS 单信息",
+  prep_repo: "拉取代码仓",
+  analyze: "问题分析",
+  fix: "问题修改",
+  ut: "UT 验证",
+  mr_green: "提交 MR·跑绿",
+  deploy_verify: "换库环境验证",
+  conclude: "确定结论",
+};
+
+/** 按会话模式取阶段中文名(fixed 词表/自由词表各认各的;对不上
+ * (旧现场/异键)原样示人——前端不猜)。 */
+export function issueStageText(issue: {
+  mode?: IssueFlowMode;
+  scenario?: IssueScenario;
+  stage: AnyIssueStage;
+}): string {
+  return FIXED_STAGE_TEXT[issue.stage as FixedIssueStage]
+    ?? ISSUE_STAGE_TEXT[issue.stage as IssueStage]
+    ?? String(issue.stage);
+}
+
+/** 固定流程场景的阶段序列(进度条用)。 */
+export function fixedStageList(
+  scenario: IssueScenario | undefined,
+): FixedIssueStage[] {
+  return scenario === "no_ticket"
+    ? FIXED_NO_TICKET_STAGES : FIXED_TICKET_STAGES;
+}
+
+/** 单阶段执行状态:inherited=转正继承,redo=验证回退待重做。 */
+export type IssueStageState =
+  | "pending"
+  | "in_progress"
+  | "done"
+  | "inherited"
+  | "redo";
+
+/** 平台问题卡(固定流程的人工硬闸):形状与 Agent 问题卡同构,
+ * IssueDecisionCard 直接复用渲染。 */
+export type IssueGateKind =
+  | "analysis_confirm"
+  | "conclude"
+  | "env_verify"
+  // 2026-08-28:代码仓缺口不再走平台闸(pull_repo 工具化);
+  // 网管环境缺配置(拉日志/换库现场补配)仍由工具现场举。
+  | "env_needed";
+
+/** 闸卡选项 = 决策码 + 文案对(服务端 src/issueFlow/stageRegistry.ts
+ * 的 GateOption 镜像):渲染 label,提交 code——文案改字零协议后果。 */
+export interface IssueGateOption {
+  code: string;
+  label: string;
+}
+
+export interface IssueGateCard {
+  id: string;
+  kind: IssueGateKind;
+  state_version: number;
+  question: { questions?: Array<{ question: string; options: IssueGateOption[] }> };
+  context?: string;
+  /** 仅 env_needed:闸为哪类动作而举(logs=拉日志 / deploy=换库部署)。 */
+  scope?: "logs" | "deploy";
+  proposal?: {
+    conclusion?: "issue" | "non_issue";
+    summary?: string;
+    report?: string;
+  };
+  created_at: string;
+}
+
+export interface IssueSummary {
+  id: string;
+  account: string;
+  created_at: string;
+  updated_at: string;
+  title: string;
+  description: string;
+  source: "manual" | "dts";
+  ticket?: string;
+  repo_url?: string;
+  /** 全部关联仓(彼此平等;与 repo_url 由服务端 dual-write 保持一致)。 */
+  repo_urls?: string[];
+  module?: string;
+  /** 登记选定的业务模块 ID(module 标签的来源留痕)。 */
+  module_id?: string;
+  /** 登记基线(分支/tag 等起点说明;问题流登记表单未暴露)。 */
+  baseline?: string;
+  /** 登记时带的网管环境(地址列表与 vault 引用;密码只存服务端,永不上线)。 */
+  environment?: {
+    credential_ref: string;
+    name: string;
+    hosts: string[];
+    port: number;
+  };
+  mode?: IssueFlowMode;
+  scenario?: IssueScenario;
+  stage_states?: IssueStageState[];
+  round?: number;
+  gate?: IssueGateCard;
+  ut?: { passed: boolean; summary: string; log_path?: string; round: number; at: string };
+  /** 流水线监看(按仓,键=仓地址;一仓一 MR 一流水线)。 */
+  pipelines?: Record<string, {
+    sha: string;
+    status: "running" | "success" | "failed";
+    watching: boolean;
+    started_at: string;
+    deadline: string;
+    last_error?: string;
+    round: number;
+    /** 终态落账的检查项(服务端 settlePipeline 存);失败项据此呈现。 */
+    checks?: Array<{ dimension: string; status: string; job?: string; url?: string }>;
+  }>;
+  converted_from?: string;
+  converted_to?: string;
+  status: IssueStatus;
+  stage: AnyIssueStage;
+  stage_note: string;
+  /** 当前阶段的进入时刻(ISO)。 */
+  stage_at: string;
+  /** 网管环境是否已配置(服务端 summarize 派生)。 */
+  has_environment: boolean;
+  /** 本回合已用催办次数(服务端催办预算账;前端暂不消费)。 */
+  nudges?: number;
+  conclusion?: {
+    kind: "non_issue" | "fixed" | "delivered" | "issue" | "converted";
+    summary: string;
+    at: string;
+  };
+  /** 推送账(按仓,一仓一分支)。 */
+  pushes?: Array<{ repo: string; branch: string; sha: string; at: string }>;
+  /** MR 账(按仓,一仓一 MR)。 */
+  mrs?: Array<{ repo: string; branch: string; title: string; url?: string; iid?: string; at: string }>;
+  /** 阶段转移审计:agent 声明与 platform 机械事实同账。 */
+  transitions?: Array<{
+    at: string; source: "agent" | "platform"; stage?: AnyIssueStage; note: string;
+  }>;
+  error?: string;
+  last_reply?: string;
+}
+
+export interface IssueWaitingCard {
+  waiting_id: string;
+  state_version: number;
+  /** 选项一律是码+文案对:平台闸的码出自服务端注册表码表,Agent 卡
+   * 的码由服务端投影时按题号/序号派发(opt-题-序)。渲染 label,
+   * 提交 code。 */
+  question: { questions?: Array<{ question: string; options: IssueGateOption[] }> };
+  context?: string;
+  created_at: string;
+  /** 平台闸专用(会话视图从 detail.gate 带过来):闸的种类与用途面。
+   * env_needed 据此渲染专用环境表单,其余闸仍走通用选项卡。 */
+  gate_kind?: IssueGateKind;
+  gate_scope?: "logs" | "deploy";
+  /** 以下为服务端 humanGate 记录随线携带的内部账(卡片只渲染上面的
+   * 子集):契约测试(issueFlowContract)钉整卡形状,服务端加字段先
+   * 来这里补镜再让测试转绿。 */
+  task_id?: string;
+  step?: string;
+  call_id?: string;
+  status?: "waiting" | "resolved" | "superseded";
+  decision?: string;
+  answers?: Record<string, string>;
+  notes?: string;
+  resolved_at?: string;
+  reminders?: number;
+}
+
+export interface IssueDetail extends IssueSummary {
+  waiting?: IssueWaitingCard;
+  has_analysis: boolean;
+}
+
+export interface DtsTicketBrief {
+  ticket: string;
+  title: string;
+  status?: string;
+  version?: string;
+  severity?: string;
+  submitter?: string;
+  url?: string;
+  description?: string;
+}
+
+/** 单张问题单详情(页签展开用):列表字段优先,详情接口补齐描述全文。
+ * content = mcpResultText 原文(兜底展示),description = detailDesc 全文。 */
+export interface DtsTicketDetail {
+  ticket: string;
+  title: string;
+  content: string;
+  description?: string;
+  severity?: string;
+  version?: string;
+  url?: string;
+  submitter?: string;
+}
+
+export interface IssueEnvironmentForm {
+  name?: string;
+  hosts: string[];
+  port?: number;
+  password: string;
+}
+
+async function issueFetch(
+  path: string,
+  init?: RequestInit,
+): Promise<any> {
+  const response = await fetch(path, init);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(String(body.error ?? `HTTP ${response.status}`));
+  }
+  return response.json();
+}
+
+export function listIssues(): Promise<IssueSummary[]> {
+  return issueFetch("/issues").then((body) => body.issues ?? []);
+}
+
+export function getIssue(id: string): Promise<IssueDetail> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}`);
+}
+
+export function createIssue(input: {
+  title: string;
+  description?: string;
+  source?: "manual" | "dts";
+  ticket?: string;
+  repo_url?: string;
+  /** 多仓登记(模块带仓是常态):全部关联仓彼此平等,哪些交付由 AI 裁决。 */
+  repo_urls?: string[];
+  baseline?: string;
+  module?: string;
+  /** 登记选定的业务模块 ID:后端校验存在且 active,名称派生 module。 */
+  module_id?: string;
+  environment?: IssueEnvironmentForm;
+}): Promise<IssueSummary> {
+  return issueFetch("/issues", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function replyIssue(id: string, text: string): Promise<IssueSummary> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/reply`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+}
+
+/** 问题卡作答:decision 是人话文本(显示/自由作答);平台闸另带决策码
+ * code(裁决按它分派,文案不是匹配键);Agent 卡带逐题作答 answers
+ * (键=题号,值=决策码或自由文本)。 */
+export function answerIssue(id: string, input: {
+  state_version: number;
+  decision: string;
+  code?: string;
+  answers?: Record<string, string>;
+  notes?: string;
+}): Promise<IssueSummary> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/decision`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function steerIssue(id: string, text: string): Promise<IssueSummary> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/interrupt`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+}
+
+/** 网管环境配置(env_needed 闸的作答口):登记时没配环境,拉日志/
+ * 换库现场举闸后在这里补地址与密码。密码只进服务端 vault,不落
+ * 状态/事件;成功即清闸,平台会开回合让 AI 重试刚才的操作。 */
+export function attachIssueEnvironment(
+  id: string,
+  input: IssueEnvironmentForm,
+): Promise<IssueSummary> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/environment`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function bindIssueTicket(id: string, ticket: string): Promise<IssueSummary> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/ticket`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ticket }),
+  });
+}
+
+/** 挂起会话关联 DTS 单号转正(固定流程无单场景的收口)。两段式:
+ * 不带 confirm → 校验单号存在并回单据详情过目;带 confirm → 转正生成
+ * 新会话(继承分析报告直接进问题修改),返回 converted。 */
+export function associateIssueTicket(id: string, input: {
+  ticket: string;
+  confirm?: boolean;
+}): Promise<{ ticket_detail?: DtsTicketDetail; converted?: IssueSummary }> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/associate`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function controlIssue(id: string, input: {
+  action: "cancel" | "archive";
+  kind?: "non_issue" | "fixed" | "delivered" | "issue" | "converted";
+  summary?: string;
+}): Promise<IssueSummary> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/control`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function listDtsTickets(): Promise<{
+  tickets: DtsTicketBrief[];
+  /** 外部开发模式(--dts-mock):单据为模拟数据,页面要挂 DEV 徽标。 */
+  mock: boolean;
+}> {
+  const body = await issueFetch("/issues/dts");
+  return { tickets: body.tickets ?? [], mock: body.mock === true };
+}
+
+export function getDtsTicketDetail(ticket: string): Promise<DtsTicketDetail> {
+  return issueFetch(`/issues/dts/${encodeURIComponent(ticket)}`);
+}
+
+// ---- 会话材料(交付材料页签;全部旁路,失败给空态) ----
+
+export interface IssueWorkspaceChange {
+  path: string;
+  status: string;
+  additions?: number;
+  deletions?: number;
+}
+
+export interface IssueMaterialFile {
+  name: string;
+  size: number;
+  mtime: string;
+}
+
+export interface IssueManualEdit {
+  ts: string;
+  path: string;
+  size: number;
+}
+
+export interface IssueMaterials {
+  ticket?: string;
+  pushes: Array<{ repo: string; branch: string; sha: string; at: string }>;
+  mrs: Array<{ repo: string; branch: string; title: string; url?: string; iid?: string; at: string }>;
+  analysis_available: boolean;
+  changes: IssueWorkspaceChange[];
+  logs: IssueMaterialFile[];
+  manual_edits: IssueManualEdit[];
+}
+
+export interface IssueRawEvent {
+  eventId?: number;
+  ts?: string;
+  kind?: string;
+  payload?: Record<string, unknown>;
+}
+
+export function getIssueMaterials(id: string): Promise<IssueMaterials> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/materials`);
+}
+
+export function getIssueFileDiff(
+  id: string, path?: string,
+): Promise<{ diff: string }> {
+  const query = path ? `?path=${encodeURIComponent(path)}` : "";
+  return issueFetch(`/issues/${encodeURIComponent(id)}/materials/diff${query}`);
+}
+
+export function getIssueWorkspaceFile(
+  id: string, path: string,
+): Promise<{ content: string; truncated: boolean }> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/materials/file?path=${encodeURIComponent(path)}`);
+}
+
+export function saveIssueWorkspaceFile(
+  id: string, path: string, content: string,
+): Promise<{ ok: true; size: number }> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/materials/file`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ path, content }),
+  });
+}
+
+export function getIssueMaterialLog(
+  id: string, name: string,
+): Promise<{ content: string; truncated: boolean }> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/materials/log?name=${encodeURIComponent(name)}`);
+}
+
+export function getIssueRawEvents(
+  id: string, limit = 200,
+): Promise<{ events: IssueRawEvent[] }> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/materials/events?limit=${limit}`);
+}
+
+// ---- 问题会话的视图旁路(服务端 src/issueFlow/sessionView.ts 的镜像) ----
+
+/** 一段"等人"的时长:closed = 有下一条人话封口;open_ended = 问题卡
+ * 还开着,ms 以查询时刻截止。 */
+export interface IssueTimelineWait {
+  start: string;
+  end?: string;
+  ms: number;
+  open_ended?: boolean;
+  question: string;
+}
+
+/** 关键事件(消息节选级别,不是整段聊天):assistant=结论文节选、
+ * decision=用户决策节选、stage=阶段切换(source 标记 AI 上报/平台事实)。 */
+export interface IssueTimelineEvent {
+  ts: string;
+  kind: "assistant" | "decision" | "stage";
+  source?: string;
+  title: string;
+  detail?: string;
+}
+
+/** 「耗时与卡点」视图:问题域的消息账 + 转移账归纳结论。 */
+export interface IssueTimeline {
+  span: { start: string; end: string; ms: number };
+  human_waits: IssueTimelineWait[];
+  human_wait_ms: number;
+  human_wait_share: number;
+  longest_waits: IssueTimelineWait[];
+  decisions: number;
+  blocker: string;
+  events: IssueTimelineEvent[];
+}
+
+/** 时间线接口尚未就绪(旧进程)时把解释带回,不假装"什么都没发生"。 */
+export async function getIssueTimeline(
+  id: string,
+): Promise<{ timeline?: IssueTimeline; unavailable?: string }> {
+  const response = await fetch(`/issues/${encodeURIComponent(id)}/timeline`);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    return { unavailable: String(body.error ?? `HTTP ${response.status}`) };
+  }
+  return { timeline: await response.json() };
+}
+
+/** 结论文档(issue-analysis.md)。缺失为 200 {unavailable},404 只在
+ * 问题号未知时出现。 */
+export async function getIssueAnalysis(
+  id: string,
+): Promise<{ content?: string; truncated?: boolean; unavailable?: string }> {
+  const response = await fetch(`/issues/${encodeURIComponent(id)}/analysis`);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    return { unavailable: String(body.error ?? `HTTP ${response.status}`) };
+  }
+  const body = await response.json();
+  return {
+    content: body.content ? String(body.content) : undefined,
+    truncated: body.truncated === true ? true : undefined,
+    unavailable: body.unavailable ? String(body.unavailable) : undefined,
   };
 }

@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>问题处理(issue flow)架构评审 · mae-flow-cloud</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  mermaid.initialize({ startOnLoad: true, theme: "neutral", securityLevel: "loose" });
+</script>
+<style>
+  .seam { stroke-dasharray: 4 4; }
+  .leak { stroke: #dc2626; }
+  .deep { background: linear-gradient(135deg, #0f172a, #1e293b); }
+  .modlabel { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+</style>
+</head>
+<body class="bg-stone-50 text-slate-900 font-sans">
+<main class="max-w-5xl mx-auto px-6 py-12 space-y-12">
+
+<header class="space-y-3">
+  <h1 class="text-3xl font-serif font-bold">问题处理(issue flow)架构评审</h1>
+  <p class="text-sm text-slate-500">mae-flow-cloud · 2026-08-28 · 评审基线:当前工作区(含 ADR-0001 落地 <code class="font-mono">16a454d</code> 之后的未提交改动)</p>
+  <div class="flex flex-wrap gap-4 text-xs text-slate-600 pt-1">
+    <span class="inline-flex items-center gap-1.5"><span class="w-4 h-3 border border-slate-400 bg-white inline-block"></span>模块</span>
+    <span class="inline-flex items-center gap-1.5"><svg width="18" height="6"><line x1="0" y1="3" x2="18" y2="3" stroke="#64748b" stroke-dasharray="4 3"/></svg>seam</span>
+    <span class="inline-flex items-center gap-1.5"><svg width="18" height="6"><line x1="0" y1="3" x2="18" y2="3" stroke="#dc2626" stroke-width="2"/></svg>泄漏/风险</span>
+    <span class="inline-flex items-center gap-1.5"><span class="w-4 h-3 deep inline-block rounded-sm"></span>深模块(厚实现、薄接口)</span>
+  </div>
+</header>
+
+<section id="candidates" class="space-y-10">
+
+<!-- ============ 候选 1 ============ -->
+<article class="bg-white rounded-xl border border-slate-200 p-6 space-y-4">
+  <div class="flex items-start justify-between gap-4">
+    <h2 class="text-xl font-serif font-bold">1 · 阶段定义收进一张注册表——门禁、简报、裁决同吃一本账</h2>
+    <div class="flex gap-2 shrink-0">
+      <span class="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold">Strong</span>
+      <span class="px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 text-xs">in-process</span>
+    </div>
+  </div>
+  <p class="font-mono text-sm text-slate-600">state.ts · prompt.ts:113(FIXED_STAGE_BRIEFS) · tools.ts(gateStage 白名单 ×9 + fixedAdvance 目标 ×6) · service.ts(resolveGate 阶段分支 / initStageStates("ticket",3))</p>
+
+  <div class="grid md:grid-cols-2 gap-4">
+    <div class="rounded-lg border border-slate-200 bg-stone-50 p-4">
+      <p class="modlabel text-slate-500 mb-3">Before — 阶段知识住在 4 个文件</p>
+      <div class="space-y-2 text-xs">
+        <div class="border border-slate-300 bg-white rounded px-3 py-2"><b>state.ts</b><div class="text-slate-500">词表 · labels · advance/rollback 代数</div></div>
+        <div class="border border-red-300 bg-red-50 rounded px-3 py-2"><b>prompt.ts</b><span class="text-red-600">briefs.tools 手工复写工具名(引导层)</span></div>
+        <div class="border border-red-300 bg-red-50 rounded px-3 py-2"><b>tools.ts</b><span class="text-red-600">gateStage 白名单 ×9(权威层)</span></div>
+        <div class="border border-red-300 bg-red-50 rounded px-3 py-2"><b>service.ts</b><span class="text-red-600">resolveGate 阶段分支写死 + 继承数硬编码</span></div>
+        <p class="text-red-700 pt-1">改一个阶段 → 至少碰 4 处;引导说能用的工具,权威层打回 → 漂移静默</p>
+      </div>
+    </div>
+    <div class="rounded-lg border border-slate-200 bg-stone-50 p-4">
+      <p class="modlabel text-slate-500 mb-3">After — 一张深注册表,三个薄消费</p>
+      <div class="flex items-stretch gap-3 text-xs">
+        <div class="deep text-white rounded-lg px-3 py-4 flex-1">
+          <div class="modlabel text-slate-300">阶段注册表</div>
+          <div class="mt-2 space-y-1 text-slate-100">
+            <div>label · goal</div><div>出口工具(exit)</div><div>允许工具(权威)</div><div>推进目标 · 豁免</div>
+          </div>
+        </div>
+        <div class="flex-1 space-y-2">
+          <div class="border border-slate-300 bg-white rounded px-2 py-1.5">briefs ← 生成</div>
+          <div class="border border-slate-300 bg-white rounded px-2 py-1.5">gateStage ← 查表</div>
+          <div class="border border-slate-300 bg-white rounded px-2 py-1.5">resolveGate ← 查表</div>
+          <div class="text-slate-400 pt-1">改阶段 = 改一行注册表</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <p><b>问题:</b>阶段规则同时活在简报(引导)与工具门禁(权威)两处且无共享数据源,今天一天内阶段相关改动(放宽工读、收嘴催办、多仓)每一次都横跨 4 个文件。</p>
+  <p><b>方案:</b>把每个阶段的 label/goal/出口/允许工具/推进目标收成一张注册表,简报与门禁都从它生成——"进入阶段必调技能"若要做,也在这张表上加一列即可。</p>
+  <ul class="flex flex-wrap gap-2 text-xs">
+    <li class="px-2 py-1 bg-emerald-50 rounded">改阶段只碰一处</li>
+    <li class="px-2 py-1 bg-emerald-50 rounded">引导/权威不再漂移</li>
+    <li class="px-2 py-1 bg-emerald-50 rounded">技能门槛有现成挂点</li>
+    <li class="px-2 py-1 bg-emerald-50 rounded">注册表即可测接口</li>
+  </ul>
+</article>
+
+<!-- ============ 候选 2 ============ -->
+<article class="bg-white rounded-xl border border-slate-200 p-6 space-y-4">
+  <div class="flex items-start justify-between gap-4">
+    <h2 class="text-xl font-serif font-bold">2 · 举卡裁决去字符串化——决策带 id,文案只管显示</h2>
+    <div class="flex gap-2 shrink-0">
+      <span class="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold">Strong</span>
+      <span class="px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 text-xs">in-process</span>
+    </div>
+  </div>
+  <p class="font-mono text-sm text-slate-600">tools.ts:96(GATE_OPTIONS) · service.ts:1070-1152(resolveGate) · issueGit.ts:155(「Git 令牌」锚)</p>
+
+  <div class="grid md:grid-cols-2 gap-4">
+    <div class="rounded-lg border border-slate-200 bg-white p-4">
+      <p class="modlabel text-slate-500 mb-2">Before — 中文文案当协议</p>
+      <pre class="mermaid">
+flowchart TD
+  A["用户答案文本"] --> B["前缀匹配 GATE_OPTIONS<br/>(仅 analysis_confirm)"]
+  A --> C["includes('确认非问题')<br/>硬编码"]
+  A --> D["startsWith('验证通过')<br/>硬编码"]
+  B --> E["改文案 = 静默 409"]
+  C --> E
+  D --> E
+  classDef leak stroke:#dc2626,stroke-width:2px;
+  class E leak
+      </pre>
+    </div>
+    <div class="rounded-lg border border-slate-200 bg-white p-4">
+      <p class="modlabel text-slate-500 mb-2">After — code 走协议,文案走显示</p>
+      <pre class="mermaid">
+flowchart TD
+  A["raiseGate 发 decision code"] --> B["answer { code }"]
+  B --> C["switch (code) 单点分派"]
+  C --> D["文案随便改,永不坏"]
+      </pre>
+    </div>
+  </div>
+
+  <p><b>问题:</b>三种锚法混用——GATE_OPTIONS 前缀只覆盖一半分派,conclude/env_verify 硬编码中文 includes;决策卡改一个字,裁决静默变 409。同一"文案即协议"模式还出现在「Git 令牌」错误锚。</p>
+  <p><b>方案:</b>举卡时发机器可读 decision code,answer 携带 code;GATE_OPTIONS 降级为纯显示文案。</p>
+  <ul class="flex flex-wrap gap-2 text-xs">
+    <li class="px-2 py-1 bg-emerald-50 rounded">文案与协议解耦</li>
+    <li class="px-2 py-1 bg-emerald-50 rounded">分派单点可测</li>
+    <li class="px-2 py-1 bg-emerald-50 rounded">前端/移动端复用同 code</li>
+  </ul>
+</article>
+
+<!-- ============ 候选 3 ============ -->
+<article class="bg-white rounded-xl border border-slate-200 p-6 space-y-4">
+  <div class="flex items-start justify-between gap-4">
+    <h2 class="text-xl font-serif font-bold">3 · 一仓一 MR 上屏——逐仓状态是服务端在记、用户看不见的账</h2>
+    <div class="flex gap-2 shrink-0">
+      <span class="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold">Strong</span>
+      <span class="px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 text-xs">UI 布局 / 设计方案</span>
+    </div>
+  </div>
+  <p class="font-mono text-sm text-slate-600">IssueBoard.tsx:238(列表卡只显 mrs[0]) · :1311(MR 条平铺 URL) · :1520(diff 全仓合并) · api.ts:2339(pipelines 字段全站零消费) · service.ts:1300-1418(逐仓记账在跑)</p>
+
+  <div class="grid md:grid-cols-2 gap-4">
+    <div class="rounded-lg border border-slate-200 bg-stone-50 p-4">
+      <p class="modlabel text-slate-500 mb-3">Before — 一行 URL,流水线账无人看</p>
+      <div class="space-y-2 text-xs">
+        <div class="border border-slate-300 bg-white rounded px-3 py-2 font-mono text-slate-500 truncate">MR: https://codehub/mr/1 (分支 master_a_DTS-x)</div>
+        <div class="border border-slate-300 bg-white rounded px-3 py-2 text-slate-400">工作区变更:两个仓的改动混在一个 diff 里</div>
+        <div class="border border-red-300 bg-red-50 rounded px-3 py-2 text-red-700">pipelines[r] 每仓 running/failed/last_error —— 前端 0 渲染</div>
+      </div>
+    </div>
+    <div class="rounded-lg border border-slate-200 bg-stone-50 p-4">
+      <p class="modlabel text-slate-500 mb-3">After — 逐仓卡片栈</p>
+      <div class="space-y-2 text-xs">
+        <div class="border border-slate-300 bg-white rounded px-3 py-2 flex justify-between"><span><b>orders</b> · <span class="font-mono">MR !12</span></span><span class="px-1.5 rounded bg-emerald-100 text-emerald-700">流水线 ✔ 绿</span></div>
+        <div class="border border-slate-300 bg-white rounded px-3 py-2 flex justify-between"><span><b>clients</b> · 未交付(AI 未选)</span><span class="px-1.5 rounded bg-amber-100 text-amber-700">流水线 ✗ failed</span></div>
+        <div class="border border-slate-300 bg-white rounded px-3 py-2 text-slate-500">工作区变更:按仓切片(API 已支持按 path)</div>
+      </div>
+    </div>
+  </div>
+
+  <p><b>问题:</b>ADR-0001 的一仓一 MR 在服务端是按仓数组认真记账(pushes/mrs/pipelines),前端却只呈现"第一个 + 数量",流水线账完全没画,多仓 diff 混做一团——多仓场景用户失去"哪个仓绿了"的判断依据。</p>
+  <div class="border-l-4 border-amber-400 bg-amber-50 px-3 py-2 text-sm">ADR 呼应:这不是新决策,是 ADR-0001 的 UI 落实;数据已就位,缺的只是呈现层。</div>
+  <ul class="flex flex-wrap gap-2 text-xs">
+    <li class="px-2 py-1 bg-emerald-50 rounded">多仓可运营</li>
+    <li class="px-2 py-1 bg-emerald-50 rounded">死字段复活成界面</li>
+    <li class="px-2 py-1 bg-emerald-50 rounded">分仓 diff 可审</li>
+  </ul>
+</article>
+
+<!-- ============ 候选 4 ============ -->
+<article class="bg-white rounded-xl border border-slate-200 p-6 space-y-4">
+  <div class="flex items-start justify-between gap-4">
+    <h2 class="text-xl font-serif font-bold">4 · IssueBoard.tsx 按域拆分——登记/会话/材料/现场各归各家</h2>
+    <div class="flex gap-2 shrink-0">
+      <span class="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold">Strong</span>
+      <span class="px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 text-xs">in-process</span>
+    </div>
+  </div>
+  <p class="font-mono text-sm text-slate-600">web/src/issues/IssueBoard.tsx(2024 行 · 26 个顶层组件) · 对照任务侧 TaskWorkspace 的组合模式</p>
+
+  <div class="grid md:grid-cols-2 gap-4">
+    <div class="rounded-lg border border-slate-200 bg-stone-50 p-4">
+      <p class="modlabel text-slate-500 mb-3">Before — 一个文件,四个域</p>
+      <div class="border-2 border-slate-400 rounded-lg p-3 bg-white">
+        <div class="modlabel text-slate-500 mb-2">IssueBoard.tsx · 2024 行</div>
+        <div class="grid grid-cols-2 gap-1.5 text-[10px] text-slate-600">
+          <div class="border rounded px-1.5 py-1">登记(Manual 221 + Dts 484)</div>
+          <div class="border rounded px-1.5 py-1">会话(245 + 计划线/旅程线)</div>
+          <div class="border rounded px-1.5 py-1">材料(196 含文件编辑器)</div>
+          <div class="border rounded px-1.5 py-1">现场(SSE + 贴底 hook)</div>
+          <div class="border rounded px-1.5 py-1 col-span-2">散装纯函数 ×5(未导出,零测试)</div>
+        </div>
+      </div>
+    </div>
+    <div class="rounded-lg border border-slate-200 bg-stone-50 p-4">
+      <p class="modlabel text-slate-500 mb-3">After — 一域一文件 + 可测纯函数</p>
+      <div class="space-y-1.5 text-xs">
+        <div class="deep text-white rounded px-3 py-2"><span class="modlabel text-slate-300">issues/Registration.tsx</span><span class="float-right text-slate-400">~700 行</span></div>
+        <div class="deep text-white rounded px-3 py-2"><span class="modlabel text-slate-300">issues/SessionView.tsx</span><span class="float-right text-slate-400">~450 行</span></div>
+        <div class="deep text-white rounded px-3 py-2"><span class="modlabel text-slate-300">issues/MaterialsPane.tsx</span><span class="float-right text-slate-400">~300 行</span></div>
+        <div class="deep text-white rounded px-3 py-2"><span class="modlabel text-slate-300">issues/EventsPane.tsx + follow 复用</span><span class="float-right text-slate-400">~250 行</span></div>
+        <div class="border border-emerald-300 bg-emerald-50 rounded px-3 py-2 text-emerald-800">dtsText.ts:resolveDtsImages/版本排序/候选筛选 → 可单测</div>
+      </div>
+    </div>
+  </div>
+
+  <p><b>问题:</b>登记域(含远程查单防抖/详情缓存/批量发起)与现场域(SSE 直播)毫无耦合却同居一文件;五个纯函数埋在组件里没法测;任务侧早已是一文件一职责的组合模式。</p>
+  <p><b>方案:</b>按域拆四文件,纯函数抽 dtsText.ts;IssueBoard 退化为路由与组装。</p>
+  <ul class="flex flex-wrap gap-2 text-xs">
+    <li class="px-2 py-1 bg-emerald-50 rounded">评审面积 -70%</li>
+    <li class="px-2 py-1 bg-emerald-50 rounded">纯函数补上单测</li>
+    <li class="px-2 py-1 bg-emerald-50 rounded">与任务侧组织对齐</li>
+  </ul>
+</article>
+
+<!-- ============ 候选 5 ============ -->
+<article class="bg-white rounded-xl border border-slate-200 p-6 space-y-4">
+  <div class="flex items-start justify-between gap-4">
+    <h2 class="text-xl font-serif font-bold">5 · DTS 外部 HTML 消毒后再入 DOM</h2>
+    <div class="flex gap-2 shrink-0">
+      <span class="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold">Strong</span>
+      <span class="px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 text-xs">安全</span>
+    </div>
+  </div>
+  <p class="font-mono text-sm text-slate-600">IssueBoard.tsx:1042 · :1671(dangerouslySetInnerHTML) · resolveDtsImages 只重写 img、无 sanitize</p>
+  <div class="grid md:grid-cols-2 gap-4">
+    <div class="rounded-lg border border-slate-200 bg-stone-50 p-4">
+      <p class="modlabel text-slate-500 mb-3">Before</p>
+      <pre class="mermaid">
+flowchart LR
+  A["DTS 外部 HTML"] -->|"无消毒"| B["dangerouslySetInnerHTML"]
+  B --> C["DOM(脚本/事件属性直入)"]
+  classDef leak stroke:#dc2626,stroke-width:2px;
+  class A,B leak
+      </pre>
+    </div>
+    <div class="rounded-lg border border-slate-200 bg-stone-50 p-4">
+      <p class="modlabel text-slate-500 mb-3">After</p>
+      <pre class="mermaid">
+flowchart LR
+  A["DTS 外部 HTML"] --> B["DOMPurify 白名单"]
+  B --> C["DOM(只剩安全子集)"]
+      </pre>
+    </div>
+  </div>
+  <p><b>问题:</b>外部系统的单据描述未经消毒直注 DOM,是现成的存储型 XSS 面;图片代理改了 src 却没动其余内容。</p>
+  <p><b>方案:</b>渲染前过 DOMPurify 白名单(保留 img 走代理的重写);一个纯函数,顺手进 dtsText.ts 被测试覆盖。</p>
+  <ul class="flex flex-wrap gap-2 text-xs">
+    <li class="px-2 py-1 bg-emerald-50 rounded">XSS 面关死</li>
+    <li class="px-2 py-1 bg-emerald-50 rounded">改动一天内</li>
+  </ul>
+</article>
+
+<!-- ============ 候选 6 ============ -->
+<article class="bg-white rounded-xl border border-slate-200 p-6 space-y-4">
+  <div class="flex items-start justify-between gap-4">
+    <h2 class="text-xl font-serif font-bold">6 · service 接口收窄:透传出清 + 回合启动一个 seam</h2>
+    <div class="flex gap-2 shrink-0">
+      <span class="px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 text-xs font-bold">Worth exploring</span>
+      <span class="px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 text-xs">in-process</span>
+    </div>
+  </div>
+  <p class="font-mono text-sm text-slate-600">src/issueFlow/service.ts(29 个公开成员,约 13 个为透传;回合启动样板 ×5)</p>
+
+  <div class="grid md:grid-cols-2 gap-4">
+    <div class="rounded-lg border border-slate-200 bg-stone-50 p-4">
+      <p class="modlabel text-slate-500 mb-3">Before — 透传垫高接口面;不变量散落</p>
+      <div class="space-y-2 text-xs">
+        <div class="border border-slate-300 bg-white rounded px-3 py-2">routes → <span class="text-red-600">service.listMaterials/readIssueLog/… ×9</span> → materials.ts</div>
+        <div class="border border-slate-300 bg-white rounded px-3 py-2">routes → <span class="text-red-600">service.listDts/getDtsDetail/… ×4</span> → gateways</div>
+        <div class="border border-red-300 bg-red-50 rounded px-3 py-2 text-red-700">回合启动样板(turning.add/status/running/nudges=0/…)逐字 ×5,漏一处 = 催办预算跨回合传染</div>
+      </div>
+    </div>
+    <div class="rounded-lg border border-slate-200 bg-stone-50 p-4">
+      <p class="modlabel text-slate-500 mb-3">After — 路由直连;样板进深方法</p>
+      <div class="space-y-2 text-xs">
+        <div class="border border-slate-300 bg-white rounded px-3 py-2">routes → materials.ts(直连,seam 消失)</div>
+        <div class="border border-slate-300 bg-white rounded px-3 py-2">routes → dts 网关(直连)</div>
+        <div class="deep text-white rounded px-3 py-2"><span class="modlabel text-slate-300">beginTurn(live, message)</span><div class="text-slate-300 mt-1">turning/running/nudges=0/saveState/runTurn/finally 单点</div></div>
+        <div class="text-slate-500">公开成员 29 → 约 19,深核心(create/answer/resolveGate/settle)不变</div>
+      </div>
+    </div>
+  </div>
+  <p><b>问题:</b>deletion test 显示 13 个透传删掉后复杂度既不消失也不重现——纯垫高;`nudges = 0` 这个不变量靠 5 处手工复位维持。</p>
+  <p><b>方案:</b>材料/DTS 路由直连各自的模块;回合启动收进 beginTurn。不是上帝对象手术——类内深核心是好的,只是接口面该瘦。</p>
+  <ul class="flex flex-wrap gap-2 text-xs">
+    <li class="px-2 py-1 bg-emerald-50 rounded">公开面 -1/3</li>
+    <li class="px-2 py-1 bg-emerald-50 rounded">催办预算有单点守卫</li>
+    <li class="px-2 py-1 bg-emerald-50 rounded">新回合入口不再抄样板</li>
+  </ul>
+</article>
+
+<!-- ============ 候选 7 ============ -->
+<article class="bg-white rounded-xl border border-slate-200 p-6 space-y-4">
+  <div class="flex items-start justify-between gap-4">
+    <h2 class="text-xl font-serif font-bold">7 · 错误族过边界一张映射表</h2>
+    <div class="flex gap-2 shrink-0">
+      <span class="px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 text-xs font-bold">Worth exploring</span>
+      <span class="px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 text-xs">in-process</span>
+    </div>
+  </div>
+  <p class="font-mono text-sm text-slate-600">routes.ts:427-437(只认三族) · gateways.ts(McpGatewayError) · state.ts(IssueControlError 住错文件)</p>
+  <div class="grid md:grid-cols-2 gap-4">
+    <div class="rounded-lg border border-slate-200 bg-white p-4">
+      <p class="modlabel text-slate-500 mb-2">Before — 同类失败三种出口</p>
+      <pre class="mermaid">
+flowchart TD
+  A["McpGatewayError(listDts)"] -->|"漏映射"| X["500"]
+  A2["McpGatewayError(dts-file)"] --> Y["502"]
+  A3["McpGatewayError(associate 内)"] --> Z["409"]
+  classDef leak stroke:#dc2626,stroke-width:2px;
+  class X leak
+      </pre>
+    </div>
+    <div class="rounded-lg border border-slate-200 bg-white p-4">
+      <p class="modlabel text-slate-500 mb-2">After — 一张表,域错误一处声明</p>
+      <pre class="mermaid">
+flowchart TD
+  A["域错误类型(集中声明)"] --> B["toHttpError 一张映射"]
+  B --> C["404 / 409 / 502 各归各位"]
+      </pre>
+    </div>
+  </div>
+  <p><b>问题:</b>五族错误过同一 HTTP 边界只有三族有名字;同一失败类按调用路径不同变成 500/502/409。</p>
+  <p><b>方案:</b>toHttpError(error) 单点映射;IssueControlError 从 state.ts 搬去错误模块。</p>
+  <ul class="flex flex-wrap gap-2 text-xs">
+    <li class="px-2 py-1 bg-emerald-50 rounded">同类失败同码</li>
+    <li class="px-2 py-1 bg-emerald-50 rounded">路由不再逐个 try</li>
+  </ul>
+</article>
+
+<!-- ============ 候选 8 ============ -->
+<article class="bg-white rounded-xl border border-slate-200 p-6 space-y-4">
+  <div class="flex items-start justify-between gap-4">
+    <h2 class="text-xl font-serif font-bold">8 · 前后端契约加护栏,旧词汇随 ADR 清退</h2>
+    <div class="flex gap-2 shrink-0">
+      <span class="px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 text-xs font-bold">Worth exploring</span>
+      <span class="px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 text-xs">ports &amp; adapters</span>
+    </div>
+  </div>
+  <p class="font-mono text-sm text-slate-600">web/src/api.ts:2418(issueFetch → Promise&lt;any&gt;) · :2339(pipelines 死字段) · IssueBoard.tsx:366/1080(主仓/参考仓旧词) · :676(DTS 登记只取模块首仓)</p>
+  <div class="grid md:grid-cols-2 gap-4">
+    <div class="rounded-lg border border-slate-200 bg-stone-50 p-4">
+      <p class="modlabel text-slate-500 mb-3">Before — 手工镜像,断裂静默</p>
+      <div class="text-xs space-y-2">
+        <div class="border border-slate-300 bg-white rounded px-3 py-2">服务端 state.ts <span class="text-red-600">· · · 手工对抄 · · ·</span> api.ts(any)</div>
+        <div class="border border-red-300 bg-red-50 rounded px-3 py-2 text-red-700">服务端字段增改 → 前端零报错(pipelines 已是现成例子:记了没接)</div>
+        <div class="border border-red-300 bg-red-50 rounded px-3 py-2 text-red-700">UI 文案残留"主仓/参考仓"——CONTEXT.md 已废</div>
+      </div>
+    </div>
+    <div class="rounded-lg border border-slate-200 bg-stone-50 p-4">
+      <p class="modlabel text-slate-500 mb-3">After — 契约有测试,词汇随 ADR</p>
+      <div class="text-xs space-y-2">
+        <div class="border border-slate-300 bg-white rounded px-3 py-2">契约测试:服务端投影样例 ↔ api.ts 类型逐字段断言</div>
+        <div class="border border-emerald-300 bg-emerald-50 rounded px-3 py-2 text-emerald-800">UI 文案全部对齐"关联仓/变更仓";DTS 路径与手工路径同支持多仓</div>
+      </div>
+    </div>
+  </div>
+  <p><b>问题:</b>前后端 500 行问题流类型纯手工同步、运行时零校验;ADR-0001 的新词汇没有清退完旧文案。</p>
+  <p><b>方案:</b>最低成本先做契约快照测试(服务端投影 JSON ↔ 前端类型字段);文案清退跟 Card 3 一起走。</p>
+  <ul class="flex flex-wrap gap-2 text-xs">
+    <li class="px-2 py-1 bg-emerald-50 rounded">字段漂移测试期可抓</li>
+    <li class="px-2 py-1 bg-emerald-50 rounded">词汇与 ADR 对齐</li>
+  </ul>
+</article>
+
+</section>
+
+<!-- ============ TOP ============ -->
+<section id="top-recommendation" class="bg-slate-900 text-white rounded-xl p-8 space-y-4">
+  <p class="modlabel text-slate-400">Top recommendation</p>
+  <h2 class="text-2xl font-serif font-bold">先做候选 1:阶段注册表</h2>
+  <p class="text-slate-200 text-sm leading-relaxed">阶段是问题流的主轴,也是近两天改动最密集的地方(放宽工读门禁、收嘴/催办、多仓平铺、计划线改版——四次全部横跨 state/prompt/tools/service 四个文件)。把阶段收成一张注册表,是当前所有阶段演进的单点地基:引导/权威漂移从这里根治,"出口/催办"已有实现直接受益,你提过的"进入阶段必调技能"就是表上加一列。纯后端、无 UI 依赖、测试模式现成(工具直调 + 裸仓端到端都是现成的),一天到一天半的改造面。</p>
+  <p class="text-slate-400 text-sm">第二顺位:候选 5(DTS 消毒,半天,安全优先级)+ 候选 3(一仓一 MR 上屏,ADR 的 UI 落实,用户价值最直接)。候选 4/6 属于"下次大改前顺手",候选 2/7/8 可组合进任意一次相关改动,不必单开战役。</p>
+</section>
+
+<footer class="text-xs text-slate-400 pt-4 pb-8">
+  评审豁免注记:capAnalysisText 与 prepareSandbox 的两处刻意重复(跨域不 import 纪律,注释自证)不列为候选;sessionView.ts 与 worksiteExport.ts 是域内深模块标杆。工作区另有未提交改动正在演进(ADR-0001 后续),行号以评审时点为准。
+</footer>
+
+</main>
+</body>
+</html>

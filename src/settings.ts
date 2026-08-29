@@ -186,17 +186,20 @@ export class RuntimeSettings {
     this.save({ ...this.load(), runtime: next });
   }
 
-  /** 模型网关。管理页使用地址/API Key/模型名三个简单字段；旧的 JSON
-   * 参数只为兼容已有调用与落盘数据，provider/model 必须真实存在。 */
+  /** 模型网关。管理页使用地址/API Key/模型名/接口格式四个简单字段；
+   * 旧的 JSON 参数只为兼容已有调用与落盘数据，provider/model 必须真实存在。
+   * 接口格式(用户拍板 2026-08-26):表单默认 OpenAI Chat,可选 Anthropic;
+   * json 通路仍支持 pi 的全部格式,这里只校验表单送进来的那两种。 */
   updateModels(patch: {
     json?: unknown;
     provider?: unknown;
     model?: unknown;
     url?: unknown;
     api_key?: unknown;
+    api?: unknown;
   }): void {
     const current = this.models();
-    // 管理页只暴露地址、密钥、模型名三项；内部仍转换成 pi 需要的
+    // 管理页只暴露地址、密钥、模型名、接口格式;内部仍转换成 pi 需要的
     // models.json 形状。api_key 留空表示保留现有密钥。
     if (patch.url !== undefined || patch.api_key !== undefined) {
       const existingProviders = (current.json as {
@@ -216,6 +219,20 @@ export class RuntimeSettings {
       const model = patch.model === undefined
         ? String(current.model ?? existing.models?.[0]?.id ?? "").trim()
         : String(patch.model).trim();
+      // 格式:表单送来的必须认识;没送就沿用已存(老配置/异种格式不惊扰),
+      // 都没有才落默认 OpenAI Chat。
+      const FORM_API = new Set(["openai-completions", "anthropic-messages"]);
+      let api = existing.api;
+      if (patch.api !== undefined) {
+        api = String(patch.api).trim();
+        if (!FORM_API.has(api)) {
+          throw new SettingsError(
+            "接口格式只能是 OpenAI Chat 或 Anthropic Messages");
+        }
+      }
+      if (api === undefined || api === null || api === "") {
+        api = "openai-completions";
+      }
       if (!url || !apiKey || !model) {
         throw new SettingsError("请完整填写模型网关地址、API Key 和模型名称");
       }
@@ -229,7 +246,7 @@ export class RuntimeSettings {
       const json = { providers: { ...existingProviders, [provider]: {
         ...existing,
         baseUrl: url,
-        api: existing.api ?? "anthropic-messages",
+        api,
         apiKey,
         models: configuredModels,
       } } };
@@ -346,7 +363,7 @@ export class RuntimeSettings {
     runtime: RuntimeKnobs;
     execution_policy: ExecutionPolicySettings;
     models: { configured: boolean; provider?: string; model?: string;
-              url?: string; key_hint?: string;
+              url?: string; api?: string; key_hint?: string;
               providers: Array<{ name: string; models: string[]; key_hint?: string }>;
               vision: { configured: boolean; provider?: string; model?: string;
                 url?: string; api?: string; key_hint?: string } };
@@ -378,6 +395,7 @@ export class RuntimeSettings {
         model: models.model,
         url: selectedSpec?.baseUrl
           ? String(selectedSpec.baseUrl) : undefined,
+        api: selectedSpec?.api ? String(selectedSpec.api) : undefined,
         key_hint: selectedSpec?.apiKey
           ? mask(String(selectedSpec.apiKey)) : undefined,
         providers,

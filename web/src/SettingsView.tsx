@@ -13,6 +13,7 @@ import {
   getBuildCacheStatus,
   getSettings,
   getSystemCheck,
+  postModelsCheck,
   putExecutionPolicySettings,
   putModelsSettings,
   putRuntimeSettings,
@@ -40,6 +41,14 @@ function Feedback({ message }: { message: Message }) {
     {message.text}</div>;
 }
 
+/** 自检/连通性测试共用的结论网格:状态色 + 明细 + 建议一句话。 */
+function CheckItems({ result }: { result: SystemCheckResult }) {
+  return <div className="system-check-grid">{result.items.map((item) => <article className={`system-check-item ${item.status}`} key={item.key}>
+    <span className="check-icon" aria-hidden>{item.status === "ok" ? "✓" : item.status === "error" ? "!" : "·"}</span>
+    <div><strong>{item.label}</strong><p>{item.detail}</p>{item.suggestion && <small>{item.suggestion}</small>}</div>
+  </article>)}</div>;
+}
+
 function SystemCheckCard() {
   const [result, setResult] = useState<SystemCheckResult>();
   const [error, setError] = useState("");
@@ -65,10 +74,7 @@ function SystemCheckCard() {
     </div>
     {error && <div className="form-message error">{error}</div>}
     {!result && !error && <div className="settings-loading">正在检查服务…</div>}
-    {result && <div className="system-check-grid">{result.items.map((item) => <article className={`system-check-item ${item.status}`} key={item.key}>
-      <span className="check-icon" aria-hidden>{item.status === "ok" ? "✓" : item.status === "error" ? "!" : "·"}</span>
-      <div><strong>{item.label}</strong><p>{item.detail}</p>{item.suggestion && <small>{item.suggestion}</small>}</div>
-    </article>)}</div>}
+    {result && <CheckItems result={result} />}
   </section>;
 }
 
@@ -338,11 +344,17 @@ function ModelsCard({ view, onSaved }: {
 }) {
   const models = view.models;
   const defaults = view.defaults.models;
+  // 接口格式默认 OpenAI Chat(用户拍板 2026-08-26);已存配置回显原格式。
+  const [apiFormat, setApiFormat] = useState(
+    models.api ?? "openai-completions");
   const [url, setUrl] = useState(models.url ?? defaults.url ?? "");
   const [apiKey, setApiKey] = useState("");
   const [model, setModel] = useState(models.model ?? defaults.model ?? "");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useMessage();
+  const [testing, setTesting] = useState(false);
+  const [checkResult, setCheckResult] = useState<SystemCheckResult>();
+  const [checkError, setCheckError] = useState("");
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -352,13 +364,30 @@ function ModelsCard({ view, onSaved }: {
         url: url.trim(),
         api_key: apiKey.trim(),
         model: model.trim(),
+        api: apiFormat,
       }));
       setApiKey("");
       setMessage({ kind: "success",
-        text: "已保存；下一个新任务使用新配置，运行中的任务不受影响。" });
+        text: "已保存；下一个新任务使用新配置，运行中的任务不受影响。可点「测试连通」验证。" });
     } catch (error) {
       setMessage({ kind: "error", text: String((error as Error).message ?? error) });
     } finally { setBusy(false); }
+  }
+
+  // 测的是当前表单值(未保存也能测);密钥留空时服务端沿用已存的,
+  // 与保存的合并口径一致——界面永远不回填明文。
+  async function runCheck() {
+    setTesting(true); setCheckError(""); setCheckResult(undefined);
+    try {
+      setCheckResult(await postModelsCheck({
+        url: url.trim() || undefined,
+        api_key: apiKey.trim() || undefined,
+        model: model.trim() || undefined,
+        api: apiFormat,
+      }));
+    } catch (cause) {
+      setCheckError(String((cause as Error).message ?? cause));
+    } finally { setTesting(false); }
   }
 
   return <div className="user-create-card settings-card">
@@ -379,9 +408,15 @@ function ModelsCard({ view, onSaved }: {
       <label className="span-2">
         <span>模型网关地址</span>
         <input value={url} type="url" required spellCheck={false}
-          placeholder="例如：https://model-gateway.internal/api/anthropic"
+          placeholder={apiFormat === "anthropic-messages"
+            ? "例如：https://model-gateway.internal/api/anthropic"
+            : "例如：https://model-gateway.internal/v1"}
           onChange={(event) => setUrl(event.target.value)} />
-        <small className="knob-note">当前接入 Anthropic Messages 兼容接口。</small>
+        <small className="knob-note">
+          {apiFormat === "anthropic-messages"
+            ? "Anthropic Messages 兼容接口(请求发往 地址/v1/messages)。"
+            : "OpenAI Chat 兼容接口(请求发往 地址/chat/completions)。"}
+        </small>
       </label>
       <label className="span-2">
         <span>API Key</span>
@@ -394,14 +429,38 @@ function ModelsCard({ view, onSaved }: {
               : "请输入模型网关 API Key"}
           onChange={(event) => setApiKey(event.target.value)} />
       </label>
-      <label className="span-2">
+      <label>
         <span>模型名称</span>
         <input value={model} required spellCheck={false}
           placeholder="例如：glm-5.1"
           onChange={(event) => setModel(event.target.value)} />
       </label>
-      <button type="submit" disabled={busy}>{busy ? "正在保存…" : "保存模型配置"}</button>
+      <label>
+        <span>接口格式</span>
+        <select value={apiFormat}
+          onChange={(event) => setApiFormat(event.target.value)}>
+          <option value="openai-completions">OpenAI Chat</option>
+          <option value="anthropic-messages">Anthropic</option>
+        </select>
+        <small className="knob-note">按网关实际提供的接口协议选择</small>
+      </label>
+      <div className="settings-form-actions">
+        <button type="submit" disabled={busy || testing}>
+          {busy ? "正在保存…" : "保存模型配置"}</button>
+        <button type="button" disabled={busy || testing} onClick={() => void runCheck()}>
+          {testing ? "测试中…" : "测试连通"}</button>
+      </div>
+      <small className="knob-note">测试使用当前表单值向网关发送一条极小请求（密钥留空时沿用已保存的）。</small>
       <Feedback message={message} />
+      {checkError && <div className="form-message error">{checkError}</div>}
+      {testing && !checkResult && !checkError
+        && <div className="settings-loading">正在连通网关并等待模型回复…</div>}
+      {checkResult && <>
+        <span className={`check-summary ${checkResult.overall}`}>
+          <i aria-hidden />{checkResult.overall === "ok"
+            ? "网络与模型问答均正常" : "存在问题，见下方明细"}</span>
+        <CheckItems result={checkResult} />
+      </>}
     </form>
   </div>;
 }
