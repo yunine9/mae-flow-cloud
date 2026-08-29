@@ -201,6 +201,7 @@ test("无单多仓端到端:模块带仓,AI 逐仓 pull_repo 落到 repo/<仓名
     { tool: { name: "pull_repo", input: { url: originA } } },
     { tool: { name: "pull_repo", input: { url: originB } } },
     { tool: { name: "pull_repo", input: { url: originC } } },
+    { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
       "printf '# 初步定位\\n\\n结论:是问题。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis",
@@ -249,7 +250,7 @@ test("无单多仓端到端:模块带仓,AI 逐仓 pull_repo 落到 repo/<仓名
     assert.ok(existsSync(join(root, "repo", "origin-2", ".git")), "同名仓加序号");
     assert.ok(existsSync(join(root, "repo", "origin-3", ".git")), "第三仓齐装");
     const entered = service.get(created.id);
-    assert.equal(entered.stage_states?.[1], "done", "首仓落地即完成拉取阶段");
+    assert.equal(entered.stage_states?.[1], "done", "拉仓阶段随自报收口完成");
     assert.equal(entered.stage, "conclude", "无单场景走到结论节点");
     assert.ok((entered.transitions ?? []).filter((entry) =>
       /代码仓已拉取/.test(entry.note ?? "")).length >= 3,

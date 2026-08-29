@@ -51,6 +51,15 @@ test("阶段注册表:每个路线的每个阶段都有 label/目标/出口/工�
   assert.equal(STAGE_ROUTES.ticket.includes("conclude"), false);
   assert.deepEqual(STAGE_ROUTES.ticket, [...FIXED_TICKET_STAGES]);
   assert.deepEqual(STAGE_ROUTES.no_ticket, [...FIXED_NO_TICKET_STAGES]);
+  // 出口动作(2026-08-28 目标驱动拍板):五阶段出口=complete_stage
+  // 自报;三个举卡阶段卡工具即出口,没有 complete_stage 可绕。
+  for (const stage of ["dts_info", "prep_repo", "fix", "ut", "mr_green"] as const) {
+    assert.equal(FIXED_STAGE_SPECS[stage].exitAction, "complete_stage",
+      `${stage} 的出口动作应是 complete_stage 自报`);
+  }
+  assert.equal(FIXED_STAGE_SPECS.analyze.exitAction, "submit_analysis");
+  assert.equal(FIXED_STAGE_SPECS.conclude.exitAction, "submit_analysis");
+  assert.equal(FIXED_STAGE_SPECS.deploy_verify.exitAction, "build_deploy");
   // 标签:prep_repo 两场景叫法不同(无单不建分支),其余共用。
   assert.equal(fixedStageLabel("ticket", "prep_repo"), "拉取代码仓·建分支");
   assert.equal(fixedStageLabel("no_ticket", "prep_repo"), "拉取代码仓");
@@ -80,7 +89,10 @@ test("阶段注册表:门禁矩阵在注册表层面钉死(工读全程,出口�
   assert.deepEqual(stagesAllowingTool("ticket", "report_ut"), ["ut"]);
   assert.deepEqual(stagesAllowingTool("ticket", "create_mr"), ["mr_green"]);
   assert.deepEqual(stagesAllowingTool("ticket", "build_deploy"), ["deploy_verify"]);
-  assert.deepEqual(stagesAllowingTool("ticket", "complete_stage"), ["prep_repo", "fix"]);
+  // complete_stage 是五个自报阶段(拉单/拉仓/修改/UT/提交MR)的出口;
+  // 三个举卡阶段(分析/无单结论/换库验证)卡工具即出口,不含它。
+  assert.deepEqual(stagesAllowingTool("ticket", "complete_stage"),
+    ["dts_info", "prep_repo", "fix", "ut", "mr_green"]);
   assert.deepEqual(stagesAllowingTool("ticket", "lookup_modules"), ["prep_repo", "analyze"]);
   // 自 prep_repo 起常开:拉仓与改绑,越往后越不收回。
   const fromPrep = FIXED_TICKET_STAGES.filter((stage) => stage !== "dts_info");

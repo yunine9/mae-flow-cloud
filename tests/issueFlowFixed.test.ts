@@ -1,7 +1,8 @@
 /**
- * 固定流程(2026-08-27 拍板)的契约测试:阶段机推进、平台闸、UT/MR
- * 门禁、流水线监看(红→修→绿)、验证回退、无单挂起→关联转正、
- * MockDtsGateway、pipelineClient、恢复续表。
+ * 固定流程(2026-08-27 拍板)的契约测试:阶段机推进(2026-08-28 起
+ * 目标驱动自报)、平台闸、UT 事实上报与 MR 验绿门、流水线监看
+ * (红→修→绿)、验证回退、无单挂起→关联转正、MockDtsGateway、
+ * pipelineClient、恢复续表。
  *
  * 范式提醒:固定流程的真相在宿主(state.ts 的阶段机操作),测试钉的
  * 就是"AI 想越权也越不过去、用户不确认就停"这些机械事实。
@@ -176,32 +177,38 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
   const commit = (message: string) =>
     `cd repo/origin && git -c user.name=test -c user.email=t@e commit -q --allow-empty -m '${message}'`;
   const script: Scene[] = [
-    // 第 1 回合:阶段门禁探针(换库部署在拉单阶段必须被拒)→ 拉单(机械
-    // 推进 prep_repo)→ AI 自己拉仓(首仓落地即推进 analyze,平台顺带
-    // 建好修复分支)→ 写报告 → 提交举闸。
+    // 第 1 回合:阶段门禁探针(换库部署在拉单阶段必须被拒)→ 拉单 →
+    // complete_stage 自报收口(拉单不再机械推进)→ AI 自己拉仓 →
+    // complete_stage 收口(拉仓不再机械推进)→ 写报告 → 提交举闸。
     { tool: { name: "build_deploy", input: { include_lib: false } } },
     { tool: { name: "dts_get_ticket", input: {} } },
+    { tool: { name: "complete_stage", input: { note: "单据已通读" } } },
     { tool: { name: "pull_repo", input: { url: origin } } },
+    { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
       "printf '# 问题分析\\n\\n现象:登录超时;根因:连接池耗尽;方案:超时回收。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis",
       input: { summary: "根因=连接池耗尽,方案=超时回收" } } },
     { text: "分析报告已提交,等待用户确认。" },
-    // 第 2 回合(用户确认报告):提交修复 → 自报修改完成 → UT 上报 →
-    // 推送 → 建 MR(流水线监看启动)。
+    // 第 2 回合(用户确认报告):提交修复 → 自报修改完成 → UT 上报
+    // (只记账)→ 自报 UT 完成 → 推送 → 建 MR → complete_stage 申报
+    // MR 清单(在跑→受理等绿)。
     { tool: { name: "bash", input: { command: commit(`[${TICKET}][fix] 修复登录超时`) } } },
     { tool: { name: "complete_stage", input: { note: "连接池超时回收已实现" } } },
     { tool: { name: "report_ut", input: { passed: true, summary: "12/12 通过" } } },
+    { tool: { name: "complete_stage", input: { note: "UT 通过" } } },
     { tool: { name: "push_branch", input: {} } },
     { tool: { name: "create_mr", input: {} } },
-    { text: "MR 已创建,等待流水线。" },
+    { tool: { name: "complete_stage", input: { note: "MR 已申报", mrs: [origin] } } },
+    { text: "MR 已创建并申报,等待流水线。" },
     // 第 3 回合(流水线红了,平台携失败项开回合):修复 → 同分支再推 →
-    // 再建 MR(重新监看)。
+    // 再建 MR → 重新申报。
     { tool: { name: "bash", input: { command: commit(`[${TICKET}][fix] 补充修复告警`) } } },
     { tool: { name: "push_branch", input: {} } },
     { tool: { name: "create_mr", input: {} } },
+    { tool: { name: "complete_stage", input: { note: "MR 重新申报", mrs: [origin] } } },
     { text: "已修复再推,等待流水线。" },
-    // 第 4 回合(流水线全绿,平台推进换库验证):部署 → 平台举验证卡。
+    // 第 4 回合(流水线全绿+已申报,平台放行):部署 → 平台举验证卡。
     { tool: { name: "build_deploy", input: { include_lib: false } } },
     { text: "部署完成,等待用户在环境验证。" },
     // 第 5 回合(用户验证发现问题,回退问题分析):二轮分析 → 重新举闸。
@@ -210,12 +217,14 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     { tool: { name: "submit_analysis",
       input: { summary: "二轮:回收策略缺竞态保护" } } },
     { text: "第二轮分析已提交。" },
-    // 第 6 回合(二轮确认):改完 → UT → 推 → MR。
+    // 第 6 回合(二轮确认):改完 → UT 上报+自报收口 → 推 → MR → 申报。
     { tool: { name: "complete_stage", input: { note: "竞态保护补丁" } } },
     { tool: { name: "report_ut", input: { passed: true, summary: "15/15 通过" } } },
+    { tool: { name: "complete_stage", input: { note: "二轮 UT 通过" } } },
     { tool: { name: "bash", input: { command: commit(`[${TICKET}][fix] 回收竞态保护`) } } },
     { tool: { name: "push_branch", input: {} } },
     { tool: { name: "create_mr", input: {} } },
+    { tool: { name: "complete_stage", input: { note: "二轮 MR 已申报", mrs: [origin] } } },
     { text: "二轮修复已提交,等待流水线。" },
     // 第 7 回合(二轮流水线绿):再部署举闸。
     { tool: { name: "build_deploy", input: { include_lib: false } } },
@@ -366,6 +375,7 @@ test("固定流程无单闭环:结论是问题→挂起;结论非问题→直接
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
     { tool: { name: "pull_repo", input: { url: origin } } },
+    { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
       "printf '# 初步定位\\n\\n结论:是问题(索引缺失导致全表扫描)。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis",
@@ -420,6 +430,7 @@ test("固定流程无单闭环:结论非问题,用户确认后自动归档", asy
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
     { tool: { name: "pull_repo", input: { url: origin } } },
+    { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
       "printf '# 初步定位\\n\\n结论:非问题(测试环境时钟漂移)。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis",
@@ -469,8 +480,9 @@ test("举卡裁决协议化:闸卡带决策码,按码分派文案可变;旧文�
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-verdict-"));
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
-    // 会话 A:拉仓 → 报告 → 举结论闸(顺序创建,不与 B 并发抢剧本)。
+    // 会话 A:拉仓 → 自报收口 → 报告 → 举结论闸(顺序创建,不与 B 并发抢剧本)。
     { tool: { name: "pull_repo", input: { url: origin } } },
+    { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
       "printf '# 结论:非问题(时钟漂移误报)。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis",
@@ -479,6 +491,7 @@ test("举卡裁决协议化:闸卡带决策码,按码分派文案可变;旧文�
     // 会话 B:同样举结论闸;答旧文案回流分析(续跑回合收口:补充意见
     // 回合未到出口,还有两次催办才落 idle)。
     { tool: { name: "pull_repo", input: { url: origin } } },
+    { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
       "printf '# 结论:非问题(时钟漂移误报)。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis",
@@ -547,8 +560,9 @@ test("关联转正:两段式(校验过目→确认),工作区/报告/凭据继�
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-assoc-"));
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
-    // 无单会话走到挂起(先自己拉仓,分析阶段才开门)。
+    // 无单会话走到挂起(先自己拉仓,自报收口后分析阶段才开门)。
     { tool: { name: "pull_repo", input: { url: origin } } },
+    { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
       "printf '# 初步定位\\n\\n结论:是问题。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis",
@@ -564,6 +578,7 @@ test("关联转正:两段式(校验过目→确认),工作区/报告/凭据继�
     }] } } },
     // 第二个无单会话(查重用)。
     { tool: { name: "pull_repo", input: { url: origin } } },
+    { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
       "printf '# 结论:是问题\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis",
@@ -667,7 +682,7 @@ test("关联转正:两段式(校验过目→确认),工作区/报告/凭据继�
   }
 });
 
-test("阶段门禁单点(免模型):工具只在所属阶段开放,UT 没过不准建 MR", async () => {
+test("阶段门禁单点(免模型):工具只在所属阶段开放;UT 降级不再挡建 MR", async () => {
   const base: IssueSessionState = {
     id: "issue-1", account: "dev",
     created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
@@ -701,12 +716,16 @@ test("阶段门禁单点(免模型):工具只在所属阶段开放,UT 没过不�
   // 固定流程不注册 report_stage(阶段真相在宿主)。
   assert.equal(tools.some((tool) => tool.name === "report_stage"), false);
   assert.equal(tools.some((tool) => tool.name === "submit_analysis"), true);
-  // UT 阶段:建 MR 被阶段门禁拒;UT 上报没过也不放行。
+  // UT 阶段:建 MR 仍被阶段门禁拒;complete_stage 已是本阶段出口。
   await assert.rejects(() => byName("create_mr").execute("x", {}),
     /阶段门禁/, "ut 阶段建 MR 必须被拒");
+  // mr_green 阶段:没有 UT 记录不再挡建 MR(UT 降级为事实上报)——
+  // 门禁放行,卡在机械前置(平台未配置),而不是任何 UT/阶段闸。
   base.stage = "mr_green";
+  ctx.platformUrl = undefined;
   await assert.rejects(() => byName("create_mr").execute("x", {}),
-    /UT 门禁/, "没有 UT 通过记录不准建 MR");
+    (error: Error) => !/阶段门禁|UT 门禁/.test(error.message),
+    "没有 UT 记录也能建 MR(此处失败应因平台未配置)");
   // 换库部署只在 deploy_verify 开放。
   base.stage = "fix";
   await assert.rejects(() => byName("build_deploy").execute("x", { include_lib: false }),
@@ -934,6 +953,9 @@ test("恢复:监看中的流水线重启后重新挂表,绿了自动推进", asy
     pushes: [{ repo: origin, branch: `master_dev_DTS-2026-1002`, sha, at: now }],
     mrs: [{ repo: origin, branch: `master_dev_DTS-2026-1002`,
       title: "[DTS-2026-1002] t", at: now }],
+    // MR 验绿门:申报已受理(不变量——进 deploy_verify 当且仅当
+    // 已申报且全绿;监看器绿了凭它在场放行)。
+    mr_gate: { mrs: [origin], at: now },
     pipelines: {
       [origin]: {
         sha, status: "running", watching: true,
@@ -1001,17 +1023,22 @@ test("模式烙印:个人偏好回调决定缺省;显式入参可覆盖;裸服�
 test("拉仓工具化(2026-08-28 v2):fixed DTS 无仓发起,AI 拉单后自己拉仓/自报跳过 + 同单查重", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-repogate-"));
   const origin = bareOrigin(dataDir);
-  // 线性剧本跨两个会话:每张单 = 拉单 → AI 裁决(拉仓或跳过)→ 分析。
+  // 线性剧本跨两个会话:每张单 = 拉单 → 自报收口 → AI 裁决(拉仓后
+  // 再自报收口,或直接跳过)→ 分析。
   const script: Scene[] = [
-    // 会话 A:拉单 → 自己拉仓(首仓落地机械推进问题分析)。
+    // 会话 A:拉单 → complete_stage 收口 → 自己拉仓 → complete_stage 收口
+    // (拉单/拉仓都不再机械推进)。
     { tool: { name: "dts_get_ticket", input: {} } },
+    { tool: { name: "complete_stage", input: { note: "单据已通读" } } },
     { tool: { name: "pull_repo", input: { url: origin } } },
+    { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
       "printf '# 分析\n\n现象已核实。\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis", input: { summary: "根因=连接池耗尽" } } },
     { text: "仓已拉好,分析已提交。" },
-    // 会话 B:拉单 → 无代码改动,complete_stage 自报跳过。
+    // 会话 B:拉单 → 收口 → 无代码改动,complete_stage 自报跳过拉仓。
     { tool: { name: "dts_get_ticket", input: {} } },
+    { tool: { name: "complete_stage", input: { note: "单据已通读" } } },
     { tool: { name: "complete_stage", input: { note: "本单为配置问题,无需代码仓" } } },
     { tool: { name: "bash", input: { command:
       "printf '# 分析\n\n结论:配置项漂移。\n' > issue-analysis.md" } } },
@@ -1044,7 +1071,7 @@ test("拉仓工具化(2026-08-28 v2):fixed DTS 无仓发起,AI 拉单后自己�
     assert.match(JSON.stringify(model.requests[0]), /pull_repo/,
       "开场词要指引 pull_repo(找不到仓的 AI 会像 issue-10 一样瞎撞 git)");
 
-    // ④ AI 拉仓路:首仓落地推进问题分析,平台顺带切好修复分支。
+    // ④ AI 拉仓路:自报收口进入分析,平台顺带切好修复分支。
     const analyzed = await until(() => {
       const issue = service.get(created.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
@@ -1052,7 +1079,7 @@ test("拉仓工具化(2026-08-28 v2):fixed DTS 无仓发起,AI 拉单后自己�
         && issue.gate?.kind === "analysis_confirm" ? issue : undefined;
     }, "拉仓后分析闸");
     assert.equal(analyzed.stage, "analyze");
-    assert.equal(analyzed.stage_states?.[1], "done", "prep_repo 随首仓完成");
+    assert.equal(analyzed.stage_states?.[1], "done", "prep_repo 随自报收口完成");
     assert.equal(analyzed.stage_states?.[2], "in_progress", "分析进行中");
     assert.deepEqual(analyzed.repo_urls, [origin]);
     const root = join(dataDir, "issues", created.id);
@@ -1101,6 +1128,7 @@ test("业务模块映射(2026-08-28 v2):bind_module 只登记,拉仓靠 pull_rep
     { tool: { name: "lookup_modules", input: { keyword: "媒体" } } },
     { tool: { name: "bind_module", input: { module_id: "media-core" } } },
     { tool: { name: "pull_repo", input: { url: origin } } },
+    { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
       "printf '# 分析\n\n转码失败已定位。\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis",
@@ -1136,8 +1164,8 @@ test("业务模块映射(2026-08-28 v2):bind_module 只登记,拉仓靠 pull_rep
       /已绑定业务模块「媒体核心」/.test(entry.note)));
 
     // 工具直调(免模型):检索命中/未命中、零仓模块打回、bind 回执
-    // 给出待拉仓的 pull_repo 指令、pull_repo 首拉推进阶段、后期改绑
-    // 与补拉不倒转阶段。
+    // 给出待拉仓的 pull_repo 指令、pull_repo 只落地不推进(出口是
+    // complete_stage)、后期改绑与补拉不倒转阶段。
     const state: IssueSessionState = {
       id: "issue-x", account: "dev",
       created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
@@ -1179,9 +1207,15 @@ test("业务模块映射(2026-08-28 v2):bind_module 只登记,拉仓靠 pull_rep
     assert.match(bindReceipt, /pull_repo/, "绑定回执要给出逐仓拉取指令");
     assert.equal(pulled.length, 0, "bind_module 本身不克隆");
     assert.deepEqual(state.repo_urls, [origin]);
-    // 首拉推进 prep_repo → analyze;此后补拉/改绑不倒转阶段。
-    await byName("pull_repo").execute("x", { url: origin });
-    assert.equal(state.stage, "analyze", "首仓落地机械推进问题分析");
+    // 首拉只落地不再机械推进;回执带注册表简报指路 complete_stage;
+    // complete_stage 才把阶段推进 analyze。此后补拉/改绑不倒转阶段。
+    const pullReceipt = textOf(
+      await byName("pull_repo").execute("x", { url: origin }));
+    assert.equal(state.stage, "prep_repo", "拉仓只落地,不机械推进");
+    assert.match(pullReceipt, /complete_stage 收口/, "拉仓回执要指路出口");
+    assert.match(pullReceipt, /当前阶段「拉取代码仓·建分支」/, "回执带注册表简报");
+    await byName("complete_stage").execute("x", { note: "仓已拉齐" });
+    assert.equal(state.stage, "analyze", "complete_stage 自报才推进问题分析");
     assert.equal(state.stage_states?.[1], "done");
     state.stage = "fix";
     await byName("pull_repo").execute("x", { url: origin });
@@ -1309,8 +1343,9 @@ test("催办续跑:模型提前收嘴被推回阶段,催办词带阶段目标与
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-nudge-"));
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
-    // 第 1 回合:拉仓(首仓落地推进问题分析)→ 写报告 → 提前收嘴(没举卡)。
+    // 第 1 回合:拉仓 → 自报收口 → 写报告 → 提前收嘴(没举卡)。
     { tool: { name: "pull_repo", input: { url: origin } } },
+    { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
       "printf '# 分析\\n\\n现象已核实。\\n' > issue-analysis.md" } } },
     { text: "先研究到这,稍后继续。" },
@@ -1338,9 +1373,9 @@ test("催办续跑:模型提前收嘴被推回阶段,催办词带阶段目标与
       return issue.status === "waiting_user" && issue.gate?.kind === "conclude"
         ? issue : undefined;
     }, "催办后举结论卡");
-    // 剧本 5 幕 = 5 个请求:第 4 个请求的用户消息就是催办词。
-    assert.equal(model.requests.length, 5, "收嘴一次+催办一次,请求数要对得上");
-    const nudgeRequest = JSON.stringify(model.requests[3]);
+    // 剧本 6 幕 = 6 个请求:第 5 个请求的用户消息就是催办词。
+    assert.equal(model.requests.length, 6, "收嘴一次+催办一次,请求数要对得上");
+    const nudgeRequest = JSON.stringify(model.requests[4]);
     assert.match(nudgeRequest, /平台催办\(第 1\/2 次\)/, "催办词要报次数");
     assert.match(nudgeRequest, /当前阶段「问题分析」/, "催办要带上阶段定位");
     assert.match(nudgeRequest, /出口\(到什么程度算完\)/, "催办要说清出口");
@@ -1450,7 +1485,7 @@ test("催办预算不跨回合传染:耗尽转人工后续聊重新拿满预算,
   }
 });
 
-test("催办谓词:阶段未收口必催;阶段收口/流水线在途/自由模式三种豁免", () => {
+test("催办谓词:阶段未收口必催;阶段收口/流水线在途/已申报等绿/自由模式豁免", () => {
   const now = new Date().toISOString();
   // 分析阶段进行中:必催。
   assert.equal(shouldNudgeFixed(fixedState()), true);
@@ -1463,16 +1498,25 @@ test("催办谓词:阶段未收口必催;阶段收口/流水线在途/自由模�
     stage_states: FIXED_TICKET_STAGES.map(() => "done"),
   })), false);
   // MR 已建、流水线在途:停等流水线是出口的一部分,不催。
+  const mrGreenStates = FIXED_TICKET_STAGES.map((stage, index) =>
+    index < FIXED_TICKET_STAGES.indexOf("mr_green") ? "done" : "in_progress");
   assert.equal(shouldNudgeFixed(fixedState({
     stage: "mr_green",
-    stage_states: FIXED_TICKET_STAGES.map((stage, index) =>
-      index < FIXED_TICKET_STAGES.indexOf("mr_green") ? "done" : "in_progress"),
+    stage_states: mrGreenStates,
     mrs: [{ repo: "/tmp/x.git", branch: "master_dev_DTS1",
       title: "[DTS1][fix] 修复", at: now }],
     pipelines: { "/tmp/x.git": {
       sha: "0123456789abcdef", status: "running", watching: true,
       started_at: now, deadline: now, round: 1,
     } },
+  })), false);
+  // MR 验绿门已受理申报(在跑→受理等绿):合法停机,同停等流水线,不催。
+  assert.equal(shouldNudgeFixed(fixedState({
+    stage: "mr_green",
+    stage_states: mrGreenStates,
+    mrs: [{ repo: "/tmp/x.git", branch: "master_dev_DTS1",
+      title: "[DTS1][fix] 修复", at: now }],
+    mr_gate: { mrs: ["/tmp/x.git"], at: now },
   })), false);
 });
 

@@ -30,7 +30,7 @@ import {
   type FixedStage,
   type IssueScenario,
 } from "./state.ts";
-import { fixedStageSpec, stageToolLine } from "./stageRegistry.ts";
+import { fixedStageSpec, stageBriefLines, stageToolLine } from "./stageRegistry.ts";
 
 /** 技能源目录:标准 skill 目录,每个子目录一个 SKILL.md(测试对源断言用)。 */
 export const SKILL_SOURCE_DIR = resolve(
@@ -112,17 +112,8 @@ export function stageLabelOf(state: IssueSessionState): string {
 
 // 阶段简报(引导层)从阶段注册表生成:目标/出口/可用工具都是注册表的
 // 一行声明,与工具门禁(权威层)同源——这里不再手工复写工具清单,
-// 引导层说能用的与权威层放行的不会漂移。
-
-/** 固定流程的阶段简报渲染(开场词/交接词/催办词共用)。 */
-function fixedStageBriefLines(scenario: IssueScenario, stage: FixedStage): string[] {
-  const spec = fixedStageSpec(stage);
-  return [
-    `当前阶段「${FIXED_STAGE_LABELS[scenario][stage]}」: ${spec.goal}`,
-    `出口(到什么程度算完): ${spec.exit}`,
-    `可用工具: ${stageToolLine(stage)}`,
-  ];
-}
+// 引导层说能用的与权威层放行的不会漂移。渲染函数 stageBriefLines 也
+// 住在注册表:开场词/交接词/催办词/工具回执共用同一份三行简报。
 
 export function issueFixedOpeningPrompt(state: IssueSessionState): string {
   const scenario = state.scenario ?? "ticket";
@@ -187,7 +178,7 @@ export function fixedAdvanceNotice(
   const current = state.stage as FixedStage;
   return [
     `平台通知: ${message}`,
-    ...fixedStageBriefLines(scenario, current),
+    ...stageBriefLines(scenario, current),
   ].join("\n");
 }
 
@@ -202,7 +193,7 @@ export function fixedNudgeNotice(
   return [
     `平台催办(第 ${attempt}/${budget} 次): 你在阶段未收口时结束了回合,`
     + "这不算完成——阶段真相在平台,没走到出口就是没完。",
-    ...fixedStageBriefLines(scenario, current),
+    ...stageBriefLines(scenario, current),
     "继续推进。除非举卡等用户或确需用户决策,不要停机;"
       + `再无故停机 ${budget - attempt + 1} 次平台将不再催办,转为等你人工指令。`,
   ].join("\n");

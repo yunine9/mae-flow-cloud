@@ -241,7 +241,9 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail/环境验证�
     `cd repo/origin && git -c user.name=test -c user.email=t@e commit -q --allow-empty -m '${message}'`;
   const script: Scene[] = [
     { tool: { name: "dts_get_ticket", input: {} } },
+    { tool: { name: "complete_stage", input: { note: "单据已通读" } } },
     { tool: { name: "pull_repo", input: { url: origin } } },
+    { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
       "printf '# 问题分析\\n\\n根因:连接池耗尽,方案:超时回收。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis", input: { summary: "根因=连接池耗尽" } } },
@@ -249,9 +251,11 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail/环境验证�
     { tool: { name: "bash", input: { command: commit(`[${TICKET}][fix] 修复登录超时`) } } },
     { tool: { name: "complete_stage", input: { note: "超时回收已实现" } } },
     { tool: { name: "report_ut", input: { passed: true, summary: "12/12 通过" } } },
+    { tool: { name: "complete_stage", input: { note: "UT 通过" } } },
     { tool: { name: "push_branch", input: {} } },
     { tool: { name: "create_mr", input: {} } },
-    { text: "MR 已创建,等待流水线。" },
+    { tool: { name: "complete_stage", input: { note: "MR 已申报", mrs: [origin] } } },
+    { text: "MR 已创建并申报,等待流水线。" },
     { tool: { name: "build_deploy", input: { include_lib: false } } },
     { text: "部署完成,等待用户在环境验证。" },
   ];
@@ -402,6 +406,7 @@ test("契约快照:无单结论闸带机器可读提案(conclude 卡的 proposal
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
     { tool: { name: "pull_repo", input: { url: origin } } },
+    { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
       "printf '# 初步定位\\n\\n结论:是问题(索引缺失导致全表扫描)。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis", input: { conclusion: "issue", summary: "是问题:索引缺失" } } },

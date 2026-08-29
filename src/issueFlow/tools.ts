@@ -12,9 +12,12 @@
  *   同出阶段注册表 stageRegistry.ts,不会各说各话)。例外是
  *   工读类——fetch_logs 全程开放,dts_get_ticket 任意阶段可重查
  *   (2026-08-28 拍板:作业自由,门只守流程出口与出厂动作);
- * - 阶段推进:机械可判的推进(拉单成功/UT 通过)由工具直接记账,
- *   人工闸(报告确认/结论/环境验证)由工具举闸——raiseGate 写进
- *   issue.json,Agent 对它只读,推不动。
+ * - 阶段推进(2026-08-28 目标驱动自报):五个阶段(拉单/拉仓/修改/
+ *   UT/提交MR)的出口是 complete_stage 自报收口,平台不核实 AI 的
+ *   工作事实,只在提交 MR 阶段程序化验 MR 验绿门(清单=台账+流水线
+ *   全绿);三个举卡阶段卡工具即出口,人工闸(报告确认/结论/环境
+ *   验证)由工具举闸——raiseGate 写进 issue.json,Agent 对它只读,
+ *   推不动。report_ut 降级为事实上报(只记账)。
  *
  * 自由探索模式保持原有工具集(report_stage + 五工具)零改动。
  */
@@ -41,7 +44,13 @@ import {
 import {
   stageAllowsTool,
   stagesAllowingTool,
+  stageBriefLines,
 } from "./stageRegistry.ts";
+import {
+  describePipelineRun,
+  getPipelineStatus,
+  type PipelineRun,
+} from "../pipelineClient.ts";
 import { readBusinessModule, listBusinessModules } from "../businessModuleLibrary.ts";
 import type { IssueOpsTools } from "./opsTools.ts";
 import type { DtsGateway } from "./gateways.ts";
@@ -311,19 +320,18 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
             ? `——⚠ 远端同名修复分支遗留@${facts.remoteBranch}(与本地分叉)`
             : ""}`,
       });
-      // 首仓落地且仍处拉取阶段 → 机械推进问题分析;后续仓在分析及之后
-      // 随时可补(中途发现新仓是正当场景),不倒转阶段。
-      let advance = "";
-      if (fixed && scenario && state.stage === "prep_repo") {
-        fixedAdvance(state, "analyze",
-          `首个代码仓已就绪(${facts.dir}),进入问题分析`);
-        advance = "\n平台已推进到「问题分析」阶段——还有要拉的仓继续调 pull_repo"
-          + "(中途补仓随时可以),然后开始分析。";
-      }
       ctx.persist();
       const baselineNote = facts.baselineMiss
         ? `\n注意: 该仓没有基线分支 ${facts.baselineMiss},修复分支未创建、`
           + "停在其默认分支——请核实基线是否正确,拿不准就用 AskUserQuestion 问用户。"
+        : "";
+      // 拉仓只落地,不再机械推进(2026-08-28 拍板:出口=complete_stage
+      // 自报)。拉取阶段的回执带注册表简报指引:还有仓继续拉,拉齐了
+      // complete_stage 收口;其余阶段的补仓只回事实,不催收口。
+      const guide = fixed && scenario && state.stage === "prep_repo"
+        ? "\n\n拉仓指引:还有要用的仓继续调 pull_repo;都拉齐了就调 "
+          + "complete_stage 收口本阶段。\n"
+          + stageBriefLines(scenario, "prep_repo").join("\n")
         : "";
       return ok(`代码仓就绪:\n- 工作区目录: ${facts.dir}\n`
         + `- HEAD: ${facts.head.slice(0, 12)}`
@@ -334,7 +342,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
             + "放着不管 push_branch 会被拒(非快进)。请用 AskUserQuestion "
             + "请用户拍板处置:在代码平台删除远端旧分支后重推,还是沿用旧分支。"
           : ""}`
-        + `${baselineNote}${advance}`);
+        + `${baselineNote}${guide}`);
     },
   }));
 
@@ -398,17 +406,17 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     },
   }));
 
-  // ---- DTS 查单(fixed 仅首阶段;成功即机械推进到拉代码仓) ----
+  // ---- DTS 查单(工读类:任意阶段可重查;首查回执带注册表简报) ----
 
   tools.push(defineTool({
     name: "dts_get_ticket",
     label: "Get DTS Ticket",
     description:
       "按单号查 DTS 问题单详情(现象/影响/处理历史)。单号缺省用会话已"
-      + "绑定的单号。任意阶段都可调用(重查单据不限阶段);首次在"
-      + "「获取单据信息」阶段调用时,平台会顺势推进到拉取代码仓。注意:"
-      + "绑定单号是用户动作——查到的单号要用于推送/提MR,需请用户在页面"
-      + "完成绑定。",
+      + "绑定的单号。任意阶段都可调用(重查单据不限阶段);在「获取单据"
+      + "信息」阶段拉到详情后,通读单据调 complete_stage 收口进入拉取"
+      + "代码仓。注意:绑定单号是用户动作——查到的单号要用于推送/提MR,"
+      + "需请用户在页面完成绑定。",
     parameters: Type.Object({
       ticket: Type.Optional(Type.String({ description: "DTS 问题单号;缺省用会话绑定单号" })),
     }),
@@ -421,21 +429,15 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         source: "platform",
         note: `DTS 单 ${detail.ticket} 详情已获取`,
       });
-      // 首查(dts_info 阶段)顺势推进;后续阶段重查只回内容——
-      // fixedAdvance 会无条件置目标阶段,不设防会把阶段倒回 prep_repo。
-      const firstPull = fixed && scenario && state.stage === "dts_info";
-      if (firstPull) {
-        fixedAdvance(ctx.state, "prep_repo",
-          `DTS 详情已获取(单据 ${detail.ticket}),进入拉取代码仓阶段`);
-      }
       ctx.persist();
-      return ok(`问题单 ${detail.ticket} 详情:\n${detail.content}`
-        + (firstPull
-          ? "\n\n平台已推进到「拉取代码仓」阶段:先 lookup_modules 按单据里的"
-            + "业务关键词检索模块,命中就 bind_module 登记它的代码仓,再逐个 "
-            + "pull_repo 拉取;检索不到就 AskUserQuestion 问用户要仓地址;"
-            + "本单无需代码改动则 complete_stage 跳过本阶段。"
-          : ""));
+      // 首查不再机械推进:回执带注册表生成的下一阶段简报(交接文案与
+      // 门禁同源),告知"读完单据 complete_stage 收口"。
+      const briefing = fixed && scenario && state.stage === "dts_info"
+        ? "\n\n单据详情已获取——通读单据后调 complete_stage 收口本阶段,"
+          + "进入拉取代码仓:\n"
+          + stageBriefLines(scenario, "prep_repo").join("\n")
+        : "";
+      return ok(`问题单 ${detail.ticket} 详情:\n${detail.content}${briefing}`);
     },
   }));
 
@@ -500,7 +502,8 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     },
   }));
 
-  // ---- MR 创建(fixed 仅提交MR·跑绿阶段,且必须先过 UT 闸) ----
+  // ---- MR 创建(fixed 仅提交MR·跑绿阶段;验绿由 complete_stage 的
+  // MR 验绿门程序化把守,UT 不再是建 MR 前置) ----
 
   tools.push(defineTool({
     name: "create_mr",
@@ -523,10 +526,6 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       const state = ctx.state;
       if (!state.ticket) {
         fail("单号门禁:会话尚未绑定 DTS 单号,不能创建 MR");
-      }
-      if (fixed && state.ut?.passed !== true) {
-        fail("UT 门禁:还没有 report_ut 上报通过记录,不能创建 MR。"
-          + "请先在 UT 验证阶段跑完单测并用 report_ut 上报结果");
       }
       const platformUrl = ctx.platformUrl;
       if (!platformUrl) {
@@ -698,14 +697,17 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       },
     }));
 
-    // UT 上报:拦"上报"不拦"真相"(硬验证在阶段6流水线,UT 也在其中)
+    // UT 事实上报(2026-08-28 降级):只记账(台账+事件流+现场记录),
+    // 不推进阶段、不设建 MR 门禁——出口是 complete_stage,硬验证在
+    // 提交 MR 阶段的流水线验绿。
     tools.push(defineTool({
       name: "report_ut",
       label: "Report UT Result",
       description:
-        "上报 UT 验证结果(在代码仓里实际跑的单测)。passed=true 才会推进到"
-        + "提交 MR 阶段;失败就留在本阶段继续修,修完重跑重报。"
-        + "summary 带通过率与关键失败(如有),log_path 指向工作区内的测试报告/日志。",
+        "上报 UT 验证结果(在代码仓里实际跑的单测)。这是事实上报:平台只"
+        + "记账留痕,不推进阶段、不设任何门禁。summary 带通过率与关键失败"
+        + "(如有),log_path 指向工作区内的测试报告/日志。上报后本阶段出口"
+        + "仍是 complete_stage——测试结果可接受就调它收口。",
       parameters: Type.Object({
         passed: Type.Boolean({ description: "本轮单测是否全部通过" }),
         summary: Type.String({ description: "一段话结果:跑了什么/通过率/关键失败" }),
@@ -728,50 +730,173 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
           note: `UT 上报(第 ${round} 轮):${params.passed === true ? "通过" : "未通过"}`
             + ` — ${String(params.summary ?? "").split("\n")[0]}`,
         });
-        if (params.passed === true) {
-          fixedAdvance(ctx.state, "mr_green",
-            `UT 通过(第 ${round} 轮),进入提交 MR·跑绿阶段`);
-          ctx.persist();
-          return ok("UT 通过已记账,平台已推进到「提交 MR·跑绿」阶段:"
-            + "请推送修复分支(push_branch)并创建 MR(create_mr),"
-            + "创建后平台会监看流水线。");
-        }
         ctx.persist();
-        return ok("UT 未通过已记账——继续留在 UT 验证阶段:请修复后重跑,"
-          + "通过后再用 report_ut 重新上报。");
+        return ok(params.passed === true
+          ? `UT 结果已记账(第 ${round} 轮:通过)。report_ut 只记账不推进——`
+            + "本阶段出口是 complete_stage,测试结果可接受就调它收口,"
+            + "进入「提交 MR·跑绿」。"
+          : `UT 未通过已记账(第 ${round} 轮)——继续留在 UT 验证阶段:`
+            + "请修复后重跑重报;测试结果可接受后调 complete_stage 收口。");
       },
     }));
 
-    // 修改完成自报(fix → ut 的软推进;其余推进都是机械的)。
-    // prep_repo → analyze 是它的第二职责:AI 宣布"本单无需代码仓"的
-    // 跳过路(2026-08-28:repo_needed 闸退役,跳过也是 AI 的裁决)。
+    /** MR 验绿门(mr_green 阶段的 complete_stage 契约):AI 申报的清单
+     * 与台账(state.mrs,create_mr 自动记账)归一比对,少报多报都打回;
+     * 再对台账每个 MR 的最新推送 SHA 查流水线,三态裁决——全绿当场
+     * 放行、有红当场打回带失败项、在跑/无记录受理由监看器等绿放行
+     * (受理账 state.mr_gate,进 deploy_verify 当且仅当"已申报且全绿")。 */
+    const settleMrGate = async (
+      declared: string[], note: string,
+    ): Promise<ReturnType<typeof ok>> => {
+      const ledger = state.mrs ?? [];
+      // 归一:去空白/尾斜杠/.git 后缀。一仓一 MR 不变量下,MR 链接与
+      // 仓地址都能定位同一条台账。
+      const norm = (value: string) =>
+        value.trim().replace(/\/+$/, "").replace(/\.git$/i, "");
+      const byRepo = new Map(ledger.map((record) => [norm(record.repo), record]));
+      const byUrl = new Map(
+        ledger.filter((record) => record.url)
+          .map((record) => [norm(record.url!), record]));
+      const declaredRepos: string[] = [];
+      const unknown: string[] = [];
+      for (const entry of declared.map(norm)) {
+        if (!entry) continue;
+        const record = byUrl.get(entry) ?? byRepo.get(entry);
+        if (!record) {
+          if (!unknown.includes(entry)) unknown.push(entry);
+          continue;
+        }
+        if (!declaredRepos.includes(record.repo)) declaredRepos.push(record.repo);
+      }
+      const missing = ledger
+        .map((record) => record.repo)
+        .filter((repo) => !declaredRepos.includes(repo));
+      if (missing.length || unknown.length) {
+        fail("MR 清单与台账不一致,不能收口:"
+          + (missing.length
+            ? `\n- 少报(台账里有、清单没申报): ${missing.join(", ")}`
+            : "")
+          + (unknown.length
+            ? `\n- 多报(清单里有、台账没有这个 MR): ${unknown.join(", ")}`
+            : "")
+          + "\n清单=台账:对每个改过的仓 push_branch + create_mr,然后把"
+            + "全部 MR(链接或仓地址)重新申报,一个都不能少、不能编。");
+      }
+      // 空=空合法(无码修改路径):没有 MR 就没有可验的流水线,直接放行。
+      if (!ledger.length) {
+        fixedAdvance(ctx.state, "deploy_verify",
+          `无 MR 交付(空清单=空台账):${note}`);
+        ctx.persist();
+        return ok(`MR 清单核验通过(空清单=空台账),平台推进到换库环境验证——\n`
+          + stageBriefLines(scenario, "deploy_verify").join("\n"));
+      }
+      const platformUrl = ctx.platformUrl;
+      if (!platformUrl) {
+        fail("交付平台未配置(部署需 --platform 接适配层),无法验绿 MR 流水线");
+      }
+      // 逐 MR 查最新推送 SHA 的流水线(验绿事实源,不新增按 MR id 查)。
+      const runs: Array<{ repo: string; sha: string; run: PipelineRun }> = [];
+      for (const record of ledger) {
+        const sha = state.pushes?.find((item) => item.repo === record.repo)?.sha;
+        if (!sha) {
+          fail(`仓 ${record.repo} 的 MR 缺推送记录,无法验绿:`
+            + "先对该仓 push_branch,再 create_mr,然后重新申报");
+        }
+        const status = await getPipelineStatus({
+          platformUrl: platformUrl!,
+          repo: record.repo,
+          sha,
+          credential: ctx.gitCredential?.(),
+        });
+        // 终态 run 才带 log/checks(getPipelineStatus 顶层只给总体状态),
+        // 打回现场要看失败项详情,从 runs 里取。
+        const terminal = status.runs.findLast((item) => item.status !== "running");
+        runs.push({
+          repo: record.repo,
+          sha,
+          run: terminal ?? { status: status.status },
+        });
+      }
+      const failed = runs.filter((item) => item.run.status === "failed");
+      if (failed.length) {
+        delete state.mr_gate;
+        ctx.persist();
+        fail("MR 验绿门:有流水线未通过,不能收口。\n"
+          + failed.map((item) =>
+            `- ${item.repo} @ ${item.sha.slice(0, 12)}\n  `
+              + describePipelineRun(item.run)).join("\n")
+          + "\n处置:修复后同分支 push_branch、重建 MR(create_mr),"
+          + "再调 complete_stage 重新申报。");
+      }
+      if (runs.every((item) => item.run.status === "success")) {
+        delete state.mr_gate;
+        fixedAdvance(ctx.state, "deploy_verify",
+          `MR 验绿通过(${runs.length} 个 MR 全绿):${note}`);
+        ctx.persist();
+        return ok(`MR 验绿通过(${runs.map((item) => item.repo).join(", ")}),`
+          + "平台推进到换库环境验证——\n"
+          + stageBriefLines(scenario, "deploy_verify").join("\n"));
+      }
+      // 在跑/无记录:受理——记申报账,监看器绿了放行、红了带回失败项。
+      state.mr_gate = { mrs: declaredRepos, at: new Date().toISOString() };
+      recordTransition(state, {
+        source: "platform",
+        note: `MR 清单已申报(${declaredRepos.length} 个),等流水线验绿`,
+      });
+      ctx.persist();
+      return ok(`MR 清单已受理(${declaredRepos.join(", ")})——流水线还在跑或`
+        + "暂无记录。绿了平台自动放行进换库验证,红了平台会把失败项带回;"
+        + "可结束本回合停等。");
+    };
+
+    // 阶段自报出口(2026-08-28 目标驱动拍板):五个阶段(拉单/拉仓/
+    // 修改/UT/提交MR)的唯一出口动作。前四段只自报收口推进;提交MR
+    // 段是 MR 验绿门(唯一带平台核验的出口)。
     tools.push(defineTool({
       name: "complete_stage",
       label: "Complete Current Stage",
       description:
-        "宣布当前阶段完成。「问题修改」完成→推进 UT 验证;「拉取代码仓」"
-        + "完成→推进问题分析(包括「本单无需代码仓」的跳过:研究结论不涉及"
-        + "代码改动时,不拉任何仓直接调它过关)。只在这两处允许自报推进:"
+        "宣布当前阶段目标已达成并收口——拉单/拉仓/修改/UT/提交MR 五个"
+        + "阶段的唯一出口。「获取单据信息」通读单据后调;「拉取代码仓」"
+        + "把要用的仓拉齐后调(包括「本单无需代码仓」的跳过:研究结论不"
+        + "涉及代码改动时,不拉任何仓直接调它过关);「问题修改」改完自检"
+        + "通过后调;「UT 验证」测试结果可接受后调(report_ut 只是事实"
+        + "记账,不是出口);「提交 MR·跑绿」建齐 MR 后调,必带 mrs 参数"
+        + "申报 MR 清单(每项是 MR 链接或对应仓地址)——平台按台账与流水"
+        + "线验绿放行:全绿当场进下一阶段,有红当场打回,在跑受理等绿。"
         + "活干完再调,没干完不要调。",
       parameters: Type.Object({
         note: Type.String({ description: "一句话:做了什么(文件/要点),或为何无需代码仓" }),
+        mrs: Type.Optional(Type.Array(Type.String(), {
+          description: "提交MR阶段必填:申报的 MR 清单(MR 链接或对应仓地址),"
+            + "必须与会话台账(create_mr 记的账)完全一致",
+        })),
       }),
       async execute(_toolCallId: string, params: any) {
         gateStage("complete_stage");
         const firstLine = String(params.note ?? "").split("\n")[0];
-        if (state.stage === "prep_repo") {
-          fixedAdvance(ctx.state, "analyze", `跳过拉取代码仓:${firstLine}`);
-          ctx.persist();
-          return ok("平台已推进到「问题分析」阶段:请基于单据/描述开展分析;"
-            + "需要日志证据时调用 fetch_logs;中途发现需要代码仓,"
-            + "随时 pull_repo 补上。");
+        if (state.stage === "mr_green") {
+          return settleMrGate(
+            ((params.mrs as string[] | undefined) ?? []).map(String), firstLine);
         }
-        fixedAdvance(ctx.state, "ut", `问题修改完成:${firstLine}`);
+        // 前四段:纯自报推进,下一阶段指引全部由注册表生成。
+        const to: FixedStage = state.stage === "dts_info" ? "prep_repo"
+          : state.stage === "prep_repo" ? "analyze"
+          : state.stage === "fix" ? "ut" : "mr_green";
+        const note = state.stage === "prep_repo"
+          ? ((state.repo_urls?.length ?? 0) > 0
+            ? `拉取代码仓完成:${firstLine}`
+            : `跳过拉取代码仓:${firstLine}`)
+          : state.stage === "dts_info" ? `单据已通读:${firstLine}`
+          : state.stage === "fix" ? `问题修改完成:${firstLine}`
+          : `UT 验证完成:${firstLine}`;
+        fixedAdvance(ctx.state, to, note);
         ctx.persist();
-        return ok("平台已推进到「UT 验证」阶段:请运行单元测试,"
-          + "结束后用 report_ut 上报结果(passed=true 才能进 MR)。");
+        return ok(`已收口,平台推进到下一阶段——\n`
+          + stageBriefLines(scenario, to).join("\n"));
       },
     }));
+
   }
 
   // 给模型的固定流程阶段速查(描述里说明,方便宿主提示词引用)

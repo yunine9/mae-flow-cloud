@@ -9,12 +9,13 @@
  * 只在 analyze 放行——AI 被告知能用的工具,调用会被机械拒绝。
  *
  * 现在一张表定规矩:每个阶段一行,声明显示名(label)、目标(goal)、
- * 出口(exit)、开放工具(tools)与出口闸(gate);无单三节点与有单
- * 七阶段共用同一机制(prep_repo/analyze 两场景同格,conclude 只属
- * 无单路线)。阶段简报、门禁白名单、裁决阶段分支全部由本表生成——
- * 简报与门禁读同一列 tools,引导层说能用的与权威层放行的永远一致;
- * 往后给阶段加技能/资料门槛只是加一列 requiredResources(本版只预留
- * 字段,不实现门槛逻辑)。
+ * 出口(exit)、出口动作(exitAction)、开放工具(tools)与出口闸
+ * (gate);无单三节点与有单七阶段共用同一机制(prep_repo/analyze
+ * 两场景同格,conclude 只属无单路线)。阶段简报、门禁白名单、裁决
+ * 阶段分支全部由本表生成——简报与门禁读同一列 tools,引导层说能用
+ * 的与权威层放行的永远一致;工具回执的交接文案也走本表的
+ * stageBriefLines,不再手写。往后给阶段加技能/资料门槛只是加一列
+ * requiredResources(本版只预留字段,不实现门槛逻辑)。
  *
  * 词表与路线也住这里:阶段推进的机械操作(fixedAdvance 等)留在
  * state.ts,它们查本表的路线;本表只声明规则,不做任何状态变更。
@@ -26,13 +27,13 @@ import type { AnyIssueStage, IssueGateKind, IssueScenario } from "./state.ts";
 
 /** 有单场景七阶段。 */
 export const FIXED_TICKET_STAGES = [
-  "dts_info",      // 获取 DTS 单信息(工具拉详情,成功即机械推进)
-  "prep_repo",     // 拉取代码仓+创建分支(宿主代劳,机械推进)
+  "dts_info",      // 获取 DTS 单信息(通读单据后 complete_stage 自报收口)
+  "prep_repo",     // 拉取代码仓+创建分支(拉齐后 complete_stage 自报收口,无需代码仓也由它跳过)
   "analyze",       // 问题分析:对齐现象-根因-方案,产出分析报告(submit_analysis 触发人工闸)
   "fix",           // 问题修改(complete_stage 自报完成)
-  "ut",            // UT 验证(report_ut 上报,passed 才放行 MR)
-  "mr_green",      // 提交 MR+流水线跑绿(宿主监看,红→AI 修→再推)
-  "deploy_verify", // 换库环境验证(部署后平台闸等用户真实验证)
+  "ut",            // UT 验证(report_ut 事实上报;结果可接受后 complete_stage 收口)
+  "mr_green",      // 提交 MR+流水线跑绿(建齐 MR 后 complete_stage 申报清单,平台验绿放行)
+  "deploy_verify", // 换库环境验证(build_deploy 部署后平台闸等用户真实验证)
 ] as const;
 
 /** 无单场景三节点:测试/开发自行定位用,结论"是问题"→挂起待关联。 */
@@ -68,6 +69,16 @@ export interface IssueStageGate {
   reworkTo?: FixedStage;
 }
 
+/** 阶段出口动作——每个阶段有且只有一个出口,全流程只有两种形态:
+ * complete_stage = AI 判断目标达成后自报收口(平台不核实其工作事实);
+ * 其余值 = 卡工具本身(submit_analysis/build_deploy)就是出口,举卡
+ * 阶段没有 complete_stage 可绕。本列是声明与对账用:门禁白名单仍以
+ * tools 列为准,两列不一致在测试里当场红。 */
+export type StageExitAction =
+  | "complete_stage"
+  | "submit_analysis"
+  | "build_deploy";
+
 export interface IssueStageSpec {
   /** 阶段显示名(有单口径;无单不同的用 noTicketLabel 覆写)。 */
   label: string;
@@ -77,6 +88,9 @@ export interface IssueStageSpec {
   goal: string;
   /** 出口——"到什么程度算完"的白纸黑字,停机合法性只认出口动作。 */
   exit: string;
+  /** 出口动作(见 StageExitAction):五阶段=complete_stage 自报;
+   * 三个举卡阶段=卡工具本身。 */
+  exitAction: StageExitAction;
   /** 本阶段开放的平台工具。引导层(简报的"可用工具")与权威层
    * (工具门禁白名单)读同一列——两边的工具清单由构造保证一致。 */
   tools: readonly IssueStageTool[];
@@ -96,9 +110,11 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
   dts_info: {
     label: "获取 DTS 单信息",
     goal: "调 dts_get_ticket 拉全单据详情,通读现象与处理历史",
-    exit: "dts_get_ticket 成功返回单据详情(平台自动推进到下一阶段)",
+    exit: "通读单据后 complete_stage 收口(dts_get_ticket 成功返回只是材料到位,不自动推进)",
+    exitAction: "complete_stage",
     tools: [
       { name: "dts_get_ticket" },
+      { name: "complete_stage" },
       { name: "fetch_logs" },
     ],
   },
@@ -108,13 +124,14 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
     goal: "把代码仓拉齐:lookup_modules 按单据里的业务关键词检索模块,"
       + "命中就 bind_module 登记它的仓,再逐个 pull_repo 拉取(有单场景"
       + "平台会顺带切好修复分支);检索不到就 AskUserQuestion 问用户要"
-      + "仓地址再 pull_repo。本单无需代码改动则 complete_stage 直接跳过",
-    exit: "要用的仓都 pull_repo 落地;无需代码仓则 complete_stage 跳过",
+      + "仓地址再 pull_repo。本单无需代码改动则直接 complete_stage 跳过",
+    exit: "要用的仓都 pull_repo 落地 → complete_stage 收口;无需代码仓则直接 complete_stage 跳过",
+    exitAction: "complete_stage",
     tools: [
       { name: "lookup_modules" },
       { name: "bind_module" },
       { name: "pull_repo" },
-      { name: "complete_stage", note: "跳过" },
+      { name: "complete_stage" },
       { name: "fetch_logs" },
       { name: "dts_get_ticket" },
     ],
@@ -125,6 +142,7 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
       + "(无单场景 submit_analysis 需带结论 issue/non_issue)。中途发现"
       + "还缺仓,pull_repo 随时可补",
     exit: "issue-analysis.md 完成 → submit_analysis 提交并等平台举卡",
+    exitAction: "submit_analysis",
     tools: [
       { name: "fetch_logs" },
       { name: "dts_get_ticket", note: "重查" },
@@ -140,6 +158,7 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
     goal: "按已确认的方案实施修复(多仓问题在涉及的每个仓里改,"
       + "用 bash 直接改码);改完自检通过后 complete_stage 自报完成",
     exit: "所有涉及的仓改完且自检通过 → complete_stage 自报完成",
+    exitAction: "complete_stage",
     tools: [
       { name: "fetch_logs", note: "补证据" },
       { name: "dts_get_ticket" },
@@ -151,8 +170,10 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
   },
   ut: {
     label: "UT 验证",
-    goal: "在改过的代码仓里用 bash 跑单元测试;全绿后 report_ut(passed=true)上报",
-    exit: "UT 全绿 → report_ut(passed=true) 上报",
+    goal: "在改过的代码仓里用 bash 跑单元测试;每轮结果用 report_ut 如实上报"
+      + "(事实上报:平台只记账,不推进、不设门)",
+    exit: "测试结果可接受(通常全绿)→ complete_stage 收口(report_ut 只是记账,不是出口)",
+    exitAction: "complete_stage",
     tools: [
       { name: "fetch_logs" },
       { name: "dts_get_ticket" },
@@ -160,18 +181,21 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
       { name: "bind_module" },
       { name: "push_branch" },
       { name: "report_ut" },
+      { name: "complete_stage" },
     ],
   },
   mr_green: {
     label: "提交 MR·跑绿",
     goal: "对**每个改过的仓**分别 push_branch + create_mr(一仓一 MR,"
-      + "仓参数别漏);平台逐仓监看流水线,红了会带回失败项,修完同分支"
-      + "再推,全部 MR 跑绿才进入下一阶段",
-    exit: "每个改过的仓都 push_branch + create_mr;之后可停等流水线,"
-      + "平台会带回结果(红=修,全绿=进下一阶段)",
+      + "仓参数别漏);然后调 complete_stage 必带 mrs 申报 MR 清单,"
+      + "平台验绿放行:清单=台账+流水线全绿,红打回、在跑受理等绿",
+    exit: "对每个改过的仓 push_branch + create_mr,然后 complete_stage 申报 MR 清单"
+      + "(平台按台账与流水线验绿:全绿当场进下一阶段,有红当场打回,在跑受理等绿)",
+    exitAction: "complete_stage",
     tools: [
       { name: "push_branch" },
       { name: "create_mr" },
+      { name: "complete_stage", note: "申报 MR 清单" },
       { name: "fetch_logs" },
       { name: "dts_get_ticket" },
       { name: "pull_repo" },
@@ -183,6 +207,7 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
     goal: "调 build_deploy 换库部署(多仓时用 repo 参数指定要部署的仓);"
       + "部署完成平台举验证卡,停下等用户真实验证",
     exit: "build_deploy 部署完成 → 平台举「环境验证」卡等用户",
+    exitAction: "build_deploy",
     tools: [
       { name: "build_deploy" },
       { name: "fetch_logs" },
@@ -197,6 +222,7 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
     label: "确定结论",
     goal: "submit_analysis 提交结论(是问题/非问题)——本场景没有修改与交付环节",
     exit: "结论明确 → submit_analysis 提交并等平台举「结论确认」卡",
+    exitAction: "submit_analysis",
     // 出口动作 submit_analysis 是在 analyze 调的(调完即推进到本节点
     // 等闸),本阶段不再放行它——工具列以门禁真相为准,简报不谎报。
     tools: [
@@ -292,6 +318,21 @@ export function stageToolLine(stage: FixedStage): string {
   return fixedStageSpec(stage).tools
     .map((tool) => (tool.note ? `${tool.name}(${tool.note})` : tool.name))
     .join("、");
+}
+
+/** 阶段简报三行(引导层单点):当前阶段「X」:goal / 出口:exit /
+ * 可用工具:tools。开场词、交接词、催办词、工具回执共用——工具回执
+ * 也从这里生成,消灭手写交接文案;label 按场景取词(prep_repo 两
+ * 场景叫法不同)。 */
+export function stageBriefLines(
+  scenario: IssueScenario, stage: FixedStage,
+): string[] {
+  const spec = fixedStageSpec(stage);
+  return [
+    `当前阶段「${fixedStageLabel(scenario, stage)}」: ${spec.goal}`,
+    `出口(到什么程度算完): ${spec.exit}`,
+    `可用工具: ${stageToolLine(stage)}`,
+  ];
 }
 
 // ---- 举卡决策码(裁决协议:按码分派,文案只管显示) ----

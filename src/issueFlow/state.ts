@@ -240,6 +240,16 @@ export interface IssuePipelineWatch {
   round: number;
 }
 
+/** MR 验绿门的申报账(阶段6受理路):AI 调 complete_stage 申报清单时
+ * 流水线还在跑/无记录,平台先受理——监看器验绿后凭"申报在场"放行。
+ * 不变量:进 deploy_verify 当且仅当"已申报且全绿",全绿当场放行与
+ * 回退都要清掉它(新一轮要重新申报)。 */
+export interface IssueMrGateRecord {
+  /** 受理时 AI 申报的 MR 清单(归一到仓地址,一仓一 MR 下与链接等价)。 */
+  mrs: string[];
+  at: string;
+}
+
 export interface IssueSessionState {
   id: string;
   account: string;
@@ -292,6 +302,9 @@ export interface IssueSessionState {
   pushes?: IssuePushRecord[];
   /** MR 账(按仓,一仓一 MR):AI 的"上报"即 create_mr 的调用记录。 */
   mrs?: IssueMrRecord[];
+  /** MR 验绿门的申报账(受理路):complete_stage 申报时流水线在跑则
+   * 记账停等,监看器全绿后凭它在场放行(见 IssueMrGateRecord)。 */
+  mr_gate?: IssueMrGateRecord;
   /** 本回合已用催办次数(模型提前收嘴的自动续跑)。每个新回合起点清零;
    * 落在状态里是为了重启后不重复催办。 */
   nudges?: number;
@@ -357,8 +370,12 @@ export function issueRepoWorkspaces(
 }
 
 export function summarize(state: IssueSessionState): IssueSummary {
+  // mr_gate 是 MR 验绿门的内部受理账(流程机制状态):不上 wire——
+  // 服务端投影多出前端镜像没有的字段会让契约对账当场红;要上前端
+  // 先补 web/src/api.ts 镜像与样例。
+  const { mr_gate: _gate, ...rest } = state;
   return {
-    ...state,
+    ...rest,
     has_environment: Boolean(state.environment),
   };
 }
@@ -428,9 +445,11 @@ export function isTerminal(status: IssueStatus): boolean {
 }
 
 /** 催办谓词(fixed 模式):回合正常收口时,流程还没走到"可以停"的程度吗?
- * 三种情况算"可以停",不催:
+ * 四种情况算"可以停",不催:
  * - 当前阶段已收口(stage_states 里本阶段 done——如环境验证通过待归档);
  * - 流水线在途(MR 已建、平台还在监看——停等流水线是出口的一部分);
+ * - MR 验绿门已受理申报(mr_green 阶段 complete_stage 申报后等绿,
+ *   同"停等流水线"的合法停机;推进/回退即清,不会滞留);
  * - 自由模式(无阶段真相,停机合法性无从机械判定,不催)。
  * 其余一律催:阶段没走完,模型收嘴就是提前收嘴。 */
 export function shouldNudgeFixed(state: IssueSessionState): boolean {
@@ -444,6 +463,7 @@ export function shouldNudgeFixed(state: IssueSessionState): boolean {
       && pipelines.some((watch) => watch.watching || watch.status === "running")) {
     return false;
   }
+  if (state.mr_gate) return false;
   return true;
 }
 
@@ -550,7 +570,8 @@ export function fixedComplete(state: IssueSessionState, note: string): void {
 
 /** 验证不通过的一律回退(2026-08-27 拍板):回到问题分析,分析之后的
  * 阶段标 redo 待重做,轮次 +1;分支与 MR 记录延用(同分支追加修复,
- * CodeHub MR 自动跟新提交);UT 上报与流水线监看作废重来。 */
+ * CodeHub MR 自动跟新提交);UT 上报、流水线监看与 MR 申报账作废重来
+ * (mr_gate 清掉——新一轮要重新申报)。 */
 export function fixedRollback(
   state: IssueSessionState,
   reason: string,
@@ -574,6 +595,7 @@ export function fixedRollback(
   state.stage_at = new Date().toISOString();
   delete state.ut;
   delete state.pipelines;
+  delete state.mr_gate;
   delete state.gate;
   recordTransition(state, {
     source: "platform", stage: "analyze",

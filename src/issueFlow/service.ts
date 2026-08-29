@@ -1410,7 +1410,7 @@ export class IssueFlowService {
     return summarize(live.state);
   }
 
-  // ---- 固定流程:流水线监看(阶段6,MR 全绿才放行换库) ----
+  // ---- 固定流程:流水线监看(阶段6:已申报且全绿才放行换库) ----
 
   private pipelineKnobs(): { pollMs: number; budgetMs: number } {
     const knobs = this.options.settings?.runtime?.() ?? {};
@@ -1420,9 +1420,10 @@ export class IssueFlowService {
     };
   }
 
-  /** MR 建成即挂表监看:触发流水线 → 轮询到终态。绿→自动进换库验证;
-   * 红→携失败项开回合让 AI 修(同分支再推,MR 自动跟新提交)。幂等:
-   * 同 SHA 在盯则跳过(MR 幂等重建会重复触发本钩子)。 */
+  /** MR 建成即挂表监看:触发流水线 → 轮询到终态。绿→已申报则自动进
+   * 换库验证(未申报则提示 AI 申报);红→携失败项开回合让 AI 修
+   * (同分支再推,MR 自动跟新提交)。幂等:同 SHA 在盯则跳过
+   * (MR 幂等重建会重复触发本钩子)。 */
   armPipelineWatch(live: LiveIssue, repo: string): void {
     const state = live.state;
     const platformUrl = this.options.platformUrl;
@@ -1525,13 +1526,16 @@ export class IssueFlowService {
         source: "platform", note: `流水线全绿(${repo})@ ${sha.slice(0, 12)}`,
       });
       // 多仓语义(2026-08-28 拍板):AI 已建的 MR 各自跑流水线,全部
-      // 跑绿才进换库验证;还有在途/未绿的就等齐,不抢跑。
+      // 跑绿才进换库验证;还有在途/未绿的就等齐,不抢跑。放行还要过
+      // MR 验绿门的申报半边(不变量:进 deploy_verify 当且仅当
+      // "已申报且全绿"):AI 没申报就不推进,开回合提醒它 complete_stage。
       const mrs = state.mrs ?? [];
       const allGreen = mrs.length > 0 && mrs.every((mr) =>
         state.pipelines?.[mr.repo]?.status === "success");
       const anyWatching = Object.values(state.pipelines ?? {})
         .some((item) => item.watching);
-      if (allGreen && !anyWatching) {
+      if (allGreen && !anyWatching && state.mr_gate) {
+        delete state.mr_gate;
         fixedAdvance(state, "deploy_verify",
           `全部 ${mrs.length} 个 MR 流水线跑绿,进入换库环境验证`);
         saveState(live.root, state);
@@ -1539,6 +1543,15 @@ export class IssueFlowService {
           `全部 MR 流水线已跑绿(${mrs.map((mr) => mr.repo).join(", ")}),`
             + "进入「换库环境验证」阶段。请调用 build_deploy 部署到网管环境"
             + "(多仓时指定要部署的仓);部署完成后平台会举验证卡,等用户真实验证。"));
+      } else if (allGreen && !anyWatching && state.stage === "mr_green") {
+        // 全绿但 AI 还没申报清单:不推进(申报是 mr_green 的出口半边),
+        // 提醒它调 complete_stage 完成收口。(已在验绿门当场放行的滞后
+        // 结算不进这里——阶段守卫挡住,不发过时的申报提醒。)
+        saveState(live.root, state);
+        this.startPlatformTurn(live,
+          `平台通知: 全部 MR 流水线已跑绿(${mrs.map((mr) => mr.repo).join(", ")}),`
+          + "请调 complete_stage(带 mrs 参数申报 MR 清单)完成"
+          + "「提交 MR·跑绿」阶段收口。");
       } else if (!anyWatching && mrs.length > 0) {
         // 有 MR 未绿且没表在跑:那就是失败了,带回失败项让 AI 修。
         saveState(live.root, state);
@@ -1552,6 +1565,8 @@ export class IssueFlowService {
     recordTransition(state, {
       source: "platform", note: `流水线失败(${repo})@ ${sha.slice(0, 12)}`,
     });
+    // 红=申报打回:清掉申报账,修复后要重新申报再过验绿门。
+    delete state.mr_gate;
     saveState(live.root, state);
     this.startPlatformTurn(live,
       `平台通知: 流水线未通过(仓 ${repo},仍在「提交 MR·跑绿」阶段)。\n`

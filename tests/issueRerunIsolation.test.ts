@@ -68,10 +68,12 @@ test("取消后重跑同单:新会话新目录全新克隆,远端遗留同名分
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-rerun-"));
   const origin = bareOrigin(dataDir);
   const model = new ScriptedModelServer([
-    // ---- 会话 A:拉单(推进 prep_repo)→ 拉仓 → 修复分支上落一笔提交
-    // (模拟跑到中途)→ 举分析闸。
+    // ---- 会话 A:拉单(自报收口)→ 拉仓 → 自报收口 → 修复分支上落一笔
+    // 提交(模拟跑到中途)→ 举分析闸。
     { tool: { name: "dts_get_ticket", input: {} } },
+    { tool: { name: "complete_stage", input: { note: "单据已通读" } } },
     { tool: { name: "pull_repo", input: { url: origin } } },
+    { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
       "cd repo/origin && git -c user.name=test -c user.email=t@e commit -q"
       + " --allow-empty -m halfway" } } },
@@ -81,7 +83,9 @@ test("取消后重跑同单:新会话新目录全新克隆,远端遗留同名分
     { text: "分析已提交,等待确认。" },
     // ---- 会话 B(重跑):拉单 → 拉仓必须拿到遗留警报,照常举闸收口。
     { tool: { name: "dts_get_ticket", input: {} } },
+    { tool: { name: "complete_stage", input: { note: "单据已通读" } } },
     { tool: { name: "pull_repo", input: { url: origin } } },
+    { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
       "printf '# 问题分析\\n\\n根因:演示(重跑)。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis", input: { summary: "根因=演示(重跑)" } } },
