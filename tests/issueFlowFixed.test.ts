@@ -563,6 +563,10 @@ test("举卡裁决协议化:闸卡带决策码,按码分派文案可变;旧文�
       ["issue", "non_issue", "supplement"], "闸卡选项必须携带决策码");
     assert.ok(options.every((option) => option.label.length > 0),
       "每个码都要有给人看的文案");
+    // 推荐协议(ADR-0004):结论闸的推荐从 AI 提案派生——本会话提交的
+    // 结论是非问题,推荐就是「非问题」码(同一 wire 键,与 Agent 卡同形)。
+    assert.equal(gateA.gate!.question.questions[0].recommended, "non_issue",
+      "结论推荐应跟随 AI 提案(non_issue)");
 
     // 改文案零协议后果:decision 传任意字(显示文案本就来自 API),
     // 裁决只认 code——文案与裁决彻底解耦。
@@ -613,6 +617,7 @@ test("关联转正:两段式(校验过目→确认),工作区/报告/凭据继�
     { tool: { name: "AskUserQuestion", input: { questions: [{
       question: "修复已就位(继承的分析报告在案),继续跑 UT 验证?",
       options: ["继续跑 UT", "先停"],
+      recommended: "继续跑 UT",
     }] } } },
     // 第二个无单会话(查重用)。
     { tool: { name: "pull_repo", input: { url: origin } } },

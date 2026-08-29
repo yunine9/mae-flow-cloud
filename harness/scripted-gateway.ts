@@ -21,7 +21,8 @@ if (!pathA || !pathB) {
 const LIFE_A: Scene[] = [
   { tool: { name: "AskUserQuestion",
             input: { questions: [{ question: "重启演练:方案确认吗?",
-                                   options: ["确认", "打回"] }] } } },
+                                   options: ["确认", "打回"],
+                                   recommended: "确认" }] } } },
   { text: "不该走到这里:决定应由重建会话消费" },
 ];
 // 今生:重建会话不带旧上下文,首回合即收口。

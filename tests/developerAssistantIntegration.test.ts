@@ -72,7 +72,8 @@ function coreFixture(root: string): { repo: string; kernel: string } {
 test("开发助手:安全暂停主任务后执行真实命令，回复/工具结果可见且不推进主状态", async () => {
   const model = new ScriptedModelServer([
     { tool: { name: "AskUserQuestion", input: {
-      questions: [{ question: "主任务要继续吗?", options: ["继续", "停止"] }],
+      questions: [{ question: "主任务要继续吗?", options: ["继续", "停止"],
+        recommended: "继续" }],
     } } },
     { tool: { name: "bash", input: { command:
       "printf 'assistant-ok\\n' > assistant-proof.txt && printf 'command-ok\\n'",

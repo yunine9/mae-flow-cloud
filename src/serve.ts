@@ -69,7 +69,8 @@ const DEMO_SCRIPT: Scene[] = [
     tool: { name: "bash", input: { command: "git status --short" } } },
   { tool: { name: "AskUserQuestion",
             input: { questions: [{ question: "当前改动可以继续交付吗?",
-                                   options: ["通过", "打回"] }] } } },
+                                   options: ["通过", "打回"],
+                                   recommended: "通过" }] } } },
   { text: "已按你的决定继续交付。" },
 ];
 

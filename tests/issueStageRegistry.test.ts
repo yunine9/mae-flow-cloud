@@ -20,6 +20,7 @@ import {
   GATE_OPTIONS,
   STAGE_ROUTES,
   fixedStageLabel,
+  gateRecommendedCode,
   gateVerdict,
   registeredStageTools,
   stageAllowsTool,
@@ -131,22 +132,27 @@ test("阶段注册表:出口闸归属与裁决去向(确认推进/补充回流)"
 
 test("举卡决策码:码表钉死(码+文案对),分派纯函数只认 (kind, code)", () => {
   // 码表:每类闸的选项都有稳定码(协议)与人类文案(显示)。
-  assert.deepEqual(GATE_OPTIONS.analysis_confirm.map((option) => option.code),
+  assert.deepEqual(GATE_OPTIONS.analysis_confirm.options.map((option) => option.code),
     ["confirm", "supplement"]);
-  assert.deepEqual(GATE_OPTIONS.conclude.map((option) => option.code),
+  assert.deepEqual(GATE_OPTIONS.conclude.options.map((option) => option.code),
     ["issue", "non_issue", "supplement"]);
-  assert.deepEqual(GATE_OPTIONS.env_verify.map((option) => option.code),
+  assert.deepEqual(GATE_OPTIONS.env_verify.options.map((option) => option.code),
     ["pass", "fail"]);
-  assert.deepEqual(GATE_OPTIONS.env_needed.map((option) => option.code),
+  assert.deepEqual(GATE_OPTIONS.env_needed.options.map((option) => option.code),
     ["fill"]);
-  for (const [kind, options] of Object.entries(GATE_OPTIONS)) {
-    for (const option of options) {
+  for (const [kind, table] of Object.entries(GATE_OPTIONS)) {
+    for (const option of table.options) {
       assert.ok(option.label.length > 0, `${kind}/${option.code} 缺文案`);
       // 码是协议 token:小写词,不含文案碎片——文案怎么改都碰不到它。
       assert.match(option.code, /^[a-z_-]+$/, `${kind} 的码须是稳定 token`);
     }
-    const codes = options.map((option) => option.code);
+    const codes = table.options.map((option) => option.code);
     assert.equal(new Set(codes).size, codes.length, `${kind} 决策码不得重复`);
+    // 推荐码若在场,必是本行选项之一(悬空推荐=前端高亮不存在的项)。
+    if (table.recommended !== undefined) {
+      assert.ok(codes.includes(table.recommended),
+        `${kind} 的推荐码 ${table.recommended} 不在选项中`);
+    }
   }
 
   // 分派直测:每类闸每个码的裁决语义,与协议化之前的分支行为逐项一致。
@@ -166,6 +172,27 @@ test("举卡决策码:码表钉死(码+文案对),分派纯函数只认 (kind, c
   assert.equal(gateVerdict("env_verify", ""), "unrecognized");
   // env_needed 的作答口是配置表单:走到选项裁决即调用方违约,一律打回。
   assert.equal(gateVerdict("env_needed", "fill"), "unrecognized");
+});
+
+test("闸卡推荐(ADR-0004):码表定死分析确认,结论闸按提案派生,验证闸不硬给", () => {
+  // 宿主能定的在码表里定死:分析确认推荐放行。
+  assert.equal(gateRecommendedCode("analysis_confirm"), "confirm");
+  assert.equal(gateRecommendedCode("analysis_confirm", {
+    conclusion: "issue",
+  }), "confirm", "非结论闸不理会提案");
+  // 无单结论从 AI 提案派生:提案是问题→推荐「是问题」码,非问题同理;
+  // 提案缺席不派生——宿主不替 AI 表态。
+  assert.equal(gateRecommendedCode("conclude", { conclusion: "issue" }), "issue");
+  assert.equal(
+    gateRecommendedCode("conclude", { conclusion: "non_issue" }), "non_issue");
+  assert.equal(gateRecommendedCode("conclude"), undefined,
+    "提案缺席不派生");
+  assert.equal(gateRecommendedCode("conclude", {}), undefined,
+    "提案无结论同样不派生");
+  // 宿主定不了的不硬给:换库验证通过与否只有用户知道;
+  // 网管环境是语义表单,无选项天然无推荐。
+  assert.equal(gateRecommendedCode("env_verify"), undefined);
+  assert.equal(gateRecommendedCode("env_needed"), undefined);
 });
 
 test("生成等价性对账:同一注册表生成的简报与门禁,工具清单完全一致", () => {

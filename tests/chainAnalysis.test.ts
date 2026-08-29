@@ -69,7 +69,8 @@ test("跨仓分析会话:克隆只读现场→写产物→举卡→确认拆单�
         `${graphJson}\nEOF` } } },
     { tool: { name: "AskUserQuestion", input: { questions: [
         { question: "跨仓方案是否确认?",
-          options: ["确认并生成任务", "需要修改"] }] } } },
+          options: ["确认并生成任务", "需要修改"],
+          recommended: "确认并生成任务" }] } } },
     { text: "方案已确认,分析收口。" },
   ];
   const model = new ScriptedModelServer(script);

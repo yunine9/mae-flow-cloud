@@ -33,7 +33,8 @@ const SCRIPT: Scene[] = [
 const WAITING_SCRIPT: Scene[] = [
   { tool: { name: "AskUserQuestion",
             input: { questions: [{ question: "通过吗?",
-                                   options: ["通过", "打回"] }] } } },
+                                   options: ["通过", "打回"],
+                                   recommended: "通过" }] } } },
   { text: "完成。" },
 ];
 

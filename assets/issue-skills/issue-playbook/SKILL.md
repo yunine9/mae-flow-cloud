@@ -26,7 +26,7 @@ metadata:
 | 登记仓 | `bind_module` 工具 | 把模块的仓并进会话登记(不克隆,克隆靠下一行) |
 | 拉仓 | `pull_repo` 工具 | 把一个仓克隆进 `repo/<仓名>/`;有单场景平台顺带切好修复分支 |
 | 拉日志 | `fetch_logs` 工具 | 日志落在工作区 `local-logs/`,可直接 grep |
-| 对齐 | AskUserQuestion 工具 ⚠️**人工闸门** | 依次对齐现象/根因/方案/验证方式 |
+| 对齐 | AskUserQuestion 工具 ⚠️**人工闸门** | 依次对齐现象/根因/方案/验证方式;选项题必带推荐(有依据,拿不准先补研究) |
 | 实施修改 | bash + 文件工具 | 在涉及的每个仓里改(多仓问题就多仓都改) |
 | 提交 | bash:`git commit -m "[单号][类型] 描述"` | 类型白名单 feat/fix/refactor/test/chore/docs/style |
 | 换库 | `build_deploy` 工具 | 多仓时用 repo 参数指定部署哪个仓;部署后必须停下等用户验证 |

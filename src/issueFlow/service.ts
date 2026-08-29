@@ -130,10 +130,12 @@ const AGENT_OPTION_CODE = /^opt-(\d+)-(\d+)$/;
 function agentCardQuestions(record: WaitingRecord): Array<{
   question?: string;
   options?: string[];
+  recommended?: string;
 }> {
   return (record.question as { questions?: Array<{
     question?: string;
     options?: string[];
+    recommended?: string;
   }> })?.questions ?? [];
 }
 
@@ -150,13 +152,25 @@ function withAgentOptionCodes(
     ...record,
     question: {
       ...record.question,
-      questions: questions.map((item, questionIndex) => ({
-        ...item,
-        options: (item.options ?? []).map((option, optionIndex) => ({
+      questions: questions.map((item, questionIndex) => {
+        const options = (item.options ?? []).map((option, optionIndex) => ({
           code: agentOptionCode(questionIndex, optionIndex),
           label: option,
-        })),
-      })),
+        }));
+        // 推荐协议(ADR-0004):推荐原文换算成命中选项的投影码随卡
+        // 下发(questions[].recommended),前端按码标「AI 推荐」——
+        // 与选项同一条码表,文案改字零协议后果。校验器保证必命中;
+        // 万一没命中(卡先于校验落盘的旧现场)不带该键,不造悬空码。
+        const { recommended: rawRecommended, ...rest } = item;
+        const wanted = rawRecommended?.trim() ?? "";
+        const hit = options.findIndex((option) =>
+          option.label.trim() === wanted);
+        return {
+          ...rest,
+          options,
+          ...(hit >= 0 ? { recommended: options[hit].code } : {}),
+        };
+      }),
     },
   };
 }

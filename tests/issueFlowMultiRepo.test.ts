@@ -267,6 +267,7 @@ test("无单多仓端到端:模块带仓,AI 逐仓 pull_repo 落到 repo/<仓名
     { tool: { name: "AskUserQuestion", input: { questions: [{
       question: "已继承分析报告与多仓工作区,继续修复?",
       options: ["继续", "先停"],
+      recommended: "继续",
     }] } } },
   ];
   const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });

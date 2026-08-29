@@ -40,9 +40,28 @@ import type {
   DtsTicketDetail,
   IssueDetail,
   IssueGateCard,
+  IssueGateOption,
   IssueSummary,
   IssueWaitingCard,
 } from "../web/src/api.ts";
+
+// ---- 推荐协议(ADR-0004)的镜像侧 ----
+
+// recommended 键已随卡 wire 上线,但 web/src/api.ts 的正式声明与注释
+// 归前端单(R2);契约先用本地加键的样例类型钉住过线形状——服务端
+// 投影多键/缺键仍由 assertWireShape 对账,镜像声明到齐后 tsc 接管。
+interface RecommendedQuestion {
+  question: string;
+  options: IssueGateOption[];
+  /** 推荐项的投影码(Agent 卡=opt-题-序;平台闸=码表定死/提案派生)。 */
+  recommended?: string;
+}
+type GateCardSample = Omit<IssueGateCard, "question"> & {
+  question: { questions?: RecommendedQuestion[] };
+};
+type WaitingCardSample = Omit<IssueWaitingCard, "question"> & {
+  question: { questions?: RecommendedQuestion[] };
+};
 
 // ---- 契约对比器 ----
 
@@ -329,6 +348,11 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail/环境验证�
       return issue.status === "waiting_user" && issue.gate?.kind === "analysis_confirm"
         ? issue : undefined;
     }, "首轮分析确认闸");
+    // 推荐协议(ADR-0004):分析确认闸的推荐在码表里定死为放行码。
+    assert.equal(
+      (analysisGate.gate!.question.questions[0] as { recommended?: string })
+        .recommended,
+      "confirm", "分析确认卡必须携带码表定死的推荐码");
     service.answer(created.id, {
       state_version: analysisGate.gate!.state_version,
       code: "confirm",
@@ -373,6 +397,8 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail/环境验证�
         id: "gate-x",
         kind: "env_verify",
         state_version: 1,
+        // 样例不带 recommended 键:换库验证闸宿主不硬给推荐,实际侧
+        // 多出这个键就是对账红(与"分析确认必带推荐"互为对照)。
         question: { questions: [{
           question: "换库部署已完成,请在目标环境验证问题是否修复",
           options: [
@@ -485,7 +511,7 @@ test("契约快照:无单结论闸带机器可读提案(conclude 卡的 proposal
     const detail = await issueGet(["issues", created.id], service);
     assert.equal(detail.status, 200);
 
-    const gateSample: IssueGateCard = {
+    const gateSample: GateCardSample = {
       id: "gate-x",
       kind: "conclude",
       state_version: 1,
@@ -496,6 +522,8 @@ test("契约快照:无单结论闸带机器可读提案(conclude 卡的 proposal
           { code: "non_issue", label: "确认非问题,闭环归档" },
           { code: "supplement", label: "有补充意见(填写补充说明)" },
         ],
+        // 结论闸的推荐从 AI 提案派生(提案是问题→推荐「是问题」码)。
+        recommended: "issue",
       }] },
       context: undefined,
       scope: undefined,
@@ -513,11 +541,12 @@ test("契约快照:无单结论闸带机器可读提案(conclude 卡的 proposal
   }
 });
 
-test("契约快照:Agent 问题卡 waiting 投影(整卡形状+机械派码)", async () => {
+test("契约快照:Agent 问题卡 waiting 投影(整卡形状+机械派码+推荐码)", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-contract3-"));
   const script: Scene[] = [
     { tool: { name: "AskUserQuestion", input: { questions: [{
       question: "现象是必现还是偶发?", options: ["必现", "偶发"],
+      recommended: "偶发",
     }] } } },
     { text: "已收到答复,继续分析。" },
   ];
@@ -551,7 +580,7 @@ test("契约快照:Agent 问题卡 waiting 投影(整卡形状+机械派码)", a
     const detail = await issueGet(["issues", created.id], service);
     assert.equal(detail.status, 200);
 
-    const waitingSample: IssueWaitingCard = {
+    const waitingSample: WaitingCardSample = {
       waiting_id: `${created.id}:call-1`,
       state_version: 1,
       question: { questions: [{
@@ -560,6 +589,8 @@ test("契约快照:Agent 问题卡 waiting 投影(整卡形状+机械派码)", a
           { code: "opt-0-0", label: "必现" },
           { code: "opt-0-1", label: "偶发" },
         ],
+        // 推荐原文「偶发」投影成命中选项的码(Agent 卡推荐随卡下发)。
+        recommended: "opt-0-1",
       }] },
       context: undefined,
       created_at: "2026-08-28T00:00:00Z",

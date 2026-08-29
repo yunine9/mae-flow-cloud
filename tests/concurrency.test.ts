@@ -16,7 +16,8 @@ import { TaskService } from "../src/taskService.ts";
 const SCRIPT: Scene[] = [
   { tool: { name: "AskUserQuestion",
             input: { questions: [{ question: "继续吗?",
-                                   options: ["继续", "停"] }] } } },
+                                   options: ["继续", "停"],
+                                   recommended: "继续" }] } } },
   { text: "收到,完成。" },
 ];
 

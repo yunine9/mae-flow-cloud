@@ -364,6 +364,7 @@ test("问题会话多轮闭环:研究→提问卡→作答→非问题归档(无
     { tool: { name: "AskUserQuestion", input: { questions: [{
       question: "分析结论是非问题(误报),确认归档收口?",
       options: ["确认归档", "继续研究"],
+      recommended: "确认归档",
     }] } } },
     { tool: { name: "report_stage",
       input: { stage: "done", note: "非问题:误报" } } },
@@ -665,6 +666,7 @@ test("重启续聊:等待问题卡期间服务重启,作答仍能续上现场", 
   const script: Scene[] = [
     { tool: { name: "AskUserQuestion", input: { questions: [{
       question: "现象是必现还是偶发?", options: ["必现", "偶发"],
+      recommended: "偶发",
     }] } } },
     { text: "已收到答复,继续分析。" },
   ];
@@ -729,6 +731,7 @@ test("Agent 问题卡归码:投影派码(码+文案对),按码作答还原原文
   const script: Scene[] = [
     { tool: { name: "AskUserQuestion", input: { questions: [{
       question: "现象是必现还是偶发?", options: ["必现", "偶发"],
+      recommended: "偶发",
     }] } } },
     { text: "已收到答复,继续分析。" },
   ];
@@ -779,6 +782,63 @@ test("Agent 问题卡归码:投影派码(码+文案对),按码作答还原原文
     const replay = JSON.stringify(model.requests.at(-1));
     assert.match(replay, /偶发/, "AI 收到的是还原后的选项原文");
     assert.doesNotMatch(replay, /opt-0-1/, "决策码是平台协议,不得漏进模型上下文");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
+test("Agent 卡推荐投影:推荐原文换算成命中选项的投影码,多题各自独立,开放题不带", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-recommend-"));
+  const script: Scene[] = [
+    { tool: { name: "AskUserQuestion", input: { questions: [
+      { question: "影响范围?", options: ["仅 SMS ", "全部渠道"],
+        recommended: " 全部渠道" },
+      { question: "复现步骤是什么?(自由作答)" },
+      { question: "重试次数?", options: ["三次", "四次"],
+        recommended: "三次" },
+    ] } } },
+    { text: "已收到答复,继续分析。" },
+  ];
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+  });
+  try {
+    createBusinessModule(dataDir, {
+      id: "pay-core", name: "支付核心", description: "收单与清结算",
+      owner: "dev", repositories: ["/tmp/fixture.git"],
+    }, "tester");
+    const created = service.create({
+      account: "dev", title: "推荐投影",
+      moduleId: "pay-core",
+      environment: {
+        hosts: ["10.0.0.8"],
+        pagePassword: "page-secret",
+        backendPassword: "env-shared-secret",
+      },
+    });
+    const waiting = await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user" ? issue : undefined;
+    }, "Agent 问题卡");
+    // 推荐协议(ADR-0004):推荐原文换算成命中选项的投影码随 questions[]
+    // 下发,前端按码标「AI 推荐」——与选项同一条码表,文案改字零协议后果。
+    const questions = (waiting.waiting!.question as {
+      questions: Array<{
+        options?: Array<{ code: string; label: string }>;
+        recommended?: string;
+      }>;
+    }).questions;
+    assert.equal(questions[0].recommended, "opt-0-1",
+      "推荐原文两侧的空白不参与比对(trim 语义),命中即换码");
+    assert.equal("recommended" in questions[1], false,
+      "自由作答题没有推荐,投影不带该键");
+    assert.equal(questions[2].recommended, "opt-2-0",
+      "多题各自独立:推荐码带各自题号");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();

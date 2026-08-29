@@ -146,9 +146,12 @@ test("端到端:任务进入等待即通知;通知死透不改流程,页面可�
   const SCRIPT: Scene[] = [
     { text: "待确认配置：兼容旧接口；灰度关闭；观察窗口 30 分钟。",
       tool: { name: "AskUserQuestion", input: { questions: [
-      { question: "兼容旧接口吗?", options: ["兼容", "不兼容"] },
-      { question: "需要灰度吗?", options: ["需要", "不需要"] },
-      { question: "灰度观察多久?", options: ["30 分钟", "2 小时"] },
+      { question: "兼容旧接口吗?", options: ["兼容", "不兼容"],
+        recommended: "兼容" },
+      { question: "需要灰度吗?", options: ["需要", "不需要"],
+        recommended: "需要" },
+      { question: "灰度观察多久?", options: ["30 分钟", "2 小时"],
+        recommended: "30 分钟" },
     ] } } },
     { text: "收口" },
   ];

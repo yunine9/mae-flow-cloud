@@ -28,6 +28,7 @@ import { TaskService } from "../src/taskService.ts";
 const CARD: Scene = {
   tool: { name: "AskUserQuestion", input: { questions: [{
     question: "方案确认吗?", options: ["确认", "打回"],
+    recommended: "确认",
   }] } },
 };
 

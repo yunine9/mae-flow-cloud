@@ -30,16 +30,19 @@ const BRANCH = `master_cloudbot_${TICKET}`;
 const CONFIG_CARD = {
   questions: [
     { question: "上述完整配置是否正确?",
-      options: ["确认以上全部配置", "需要修改"] },
+      options: ["确认以上全部配置", "需要修改"],
+      recommended: "确认以上全部配置" },
     { question: "交付方式?",
-      options: ["完整开发", "已定位问题修复", "局部修改", "处理评审意见"] },
+      options: ["完整开发", "已定位问题修复", "局部修改", "处理评审意见"],
+      recommended: "完整开发" },
   ],
 };
 
 const REVIEWER_CARD = {
   questions: [
     { question: "是否启用独立 CODE Reviewer?",
-      options: ["不启用", "启用(人工检视前先由 Agent 预检)"] },
+      options: ["不启用", "启用(人工检视前先由 Agent 预检)"],
+      recommended: "不启用" },
   ],
 };
 

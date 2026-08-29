@@ -354,33 +354,66 @@ export interface GateOption {
   label: string;
 }
 
-/** 每类闸的选项表(码+文案对)。raiseGate 举卡时整表投影进闸卡,
- * resolveGate 按码裁决,前端渲染 label、提交 code——文案的定义地
- * 只此一处,「改字两处要同步」的自警从此作废。 */
-export const GATE_OPTIONS: Record<IssueGateKind, readonly GateOption[]> = {
-  analysis_confirm: [
-    { code: "confirm", label: "确认报告,开始问题修改" },
-    { code: "supplement", label: "有补充意见(填写补充说明)" },
-  ],
-  conclude: [
-    { code: "issue", label: "确认是问题,挂起等提单" },
-    { code: "non_issue", label: "确认非问题,闭环归档" },
-    { code: "supplement", label: "有补充意见(填写补充说明)" },
-  ],
-  env_verify: [
-    { code: "pass", label: "验证通过" },
-    { code: "fail", label: "验证发现问题(填写补充说明)" },
-  ],
+/** 每类闸的码表行:选项整表 + 推荐码(ADR-0004 平台闸同款推荐)。
+ * recommended 是宿主能定的推荐(值为 options 里的码,前端按它标
+ * 「AI 推荐」);宿主定不了的留空——无单结论从 AI 的结论提案派生
+ * (见 gateRecommendedCode),换库验证通过与否只有用户知道,不硬给。 */
+export interface GateOptionTable {
+  options: readonly GateOption[];
+  /** 宿主码表定死的推荐码;缺省=该闸不由码表定推荐。 */
+  recommended?: string;
+}
+
+/** 每类闸的码表(码+文案对,附推荐码)。raiseGate 举卡时整表投影进
+ * 闸卡,resolveGate 按码裁决,前端渲染 label、提交 code——文案的定义
+ * 地只此一处,「改字两处要同步」的自警从此作废。 */
+export const GATE_OPTIONS: Record<IssueGateKind, GateOptionTable> = {
+  analysis_confirm: {
+    // 分析确认的推荐就是放行:报告已过 submit_analysis 的文件门票,
+    // 平台没有更多事实可核,推荐摇摆只会把用户拖回追问循环。
+    options: [
+      { code: "confirm", label: "确认报告,开始问题修改" },
+      { code: "supplement", label: "有补充意见(填写补充说明)" },
+    ],
+    recommended: "confirm",
+  },
+  conclude: {
+    // 结论推荐跟 AI 提案走(提案是问题→推荐「是问题」码),不在此定死。
+    options: [
+      { code: "issue", label: "确认是问题,挂起等提单" },
+      { code: "non_issue", label: "确认非问题,闭环归档" },
+      { code: "supplement", label: "有补充意见(填写补充说明)" },
+    ],
+  },
+  env_verify: {
+    options: [
+      { code: "pass", label: "验证通过" },
+      { code: "fail", label: "验证发现问题(填写补充说明)" },
+    ],
+  },
   // env_needed 在决策卡上渲染为专用表单(地址+密码),作答口是
-  // /environment,不走选项裁决;这个选项只是卡面占位。
-  env_needed: [
-    { code: "fill", label: "填写并继续" },
-  ],
+  // /environment,不走选项裁决;这个选项只是卡面占位,自然无推荐。
+  env_needed: {
+    options: [
+      { code: "fill", label: "填写并继续" },
+    ],
+  },
 };
+
+/** 闸卡的推荐码(questions[].recommended 与 Agent 卡同一键)。分析
+ * 确认取码表定死值;无单结论按 AI 提案派生——提案是问题→推荐
+ * 「是问题」码,非问题同理;提案缺席不派生,宿主不替 AI 表态。 */
+export function gateRecommendedCode(
+  kind: IssueGateKind,
+  proposal?: { conclusion?: "issue" | "non_issue" },
+): string | undefined {
+  if (kind === "conclude") return proposal?.conclusion;
+  return GATE_OPTIONS[kind].recommended;
+}
 
 /** 码 → 文案(显示语义的还原:现场账与续聊提示词里永远是人话)。 */
 export function gateOptionLabel(kind: IssueGateKind, code: string): string {
-  const option = GATE_OPTIONS[kind]?.find((item) => item.code === code);
+  const option = GATE_OPTIONS[kind]?.options.find((item) => item.code === code);
   return option?.label ?? code;
 }
 

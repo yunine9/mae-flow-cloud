@@ -27,6 +27,7 @@ import {
   fixedStageIndex,
   fixedStages,
   GATE_OPTIONS,
+  gateRecommendedCode,
   type FixedStage,
   type GateOption,
 } from "./stageRegistry.ts";
@@ -208,8 +209,16 @@ export interface IssueGate {
   /** 作答幂等基准:创建时的 transitions 长度,对不上即状态已变。 */
   state_version: number;
   /** 选项携带码+文案对(出自 stageRegistry 的 GATE_OPTIONS):前端
-   * 渲染 label、提交 code,裁决按码单点分派——文案改字零协议后果。 */
-  question: { questions: Array<{ question: string; options: GateOption[] }> };
+   * 渲染 label、提交 code,裁决按码单点分派——文案改字零协议后果。
+   * recommended 是本闸的推荐码(ADR-0004,与 Agent 卡同一键):码表
+   * 定死或从提案派生(gateRecommendedCode),宿主定不了的缺席。 */
+  question: {
+    questions: Array<{
+      question: string;
+      options: GateOption[];
+      recommended?: string;
+    }>;
+  };
   context?: string;
   /** 仅 env_needed:闸为哪类动作而举(logs=拉日志 / deploy=换库部署)。 */
   scope?: IssueGateScope;
@@ -499,7 +508,9 @@ export function recordTransition(
  * 回合可能还在收尾,waiting_user 由 settle 在回合终点定格——中途置位
  * 会让作答撞上"正在处理上一条输入"的竞态。Agent 对 issue.json 只读,
  * 推不动闸。选项不接收参:码+文案对整表投影自 stageRegistry 的
- * GATE_OPTIONS——举卡方自带文案的旧路已废,文案定义地只剩注册表。 */
+ * GATE_OPTIONS——举卡方自带文案的旧路已废,文案定义地只剩注册表。
+ * 推荐码同源:码表定死或按 AI 提案派生(gateRecommendedCode),
+ * 随 questions[].recommended 落盘,与 Agent 卡的 wire 同形。 */
 const GATE_NAMES: Record<IssueGateKind, string> = {
   analysis_confirm: "分析报告确认",
   conclude: "结论确认",
@@ -515,6 +526,7 @@ export function raiseGate(
   context?: string,
   scope?: IssueGateScope,
 ): void {
+  const recommended = gateRecommendedCode(kind, proposal);
   state.gate = {
     id: `gate-${state.id}-${Date.now().toString(36)}`,
     kind,
@@ -522,7 +534,8 @@ export function raiseGate(
     question: {
       questions: [{
         question,
-        options: GATE_OPTIONS[kind].map((option) => ({ ...option })),
+        options: GATE_OPTIONS[kind].options.map((option) => ({ ...option })),
+        ...(recommended ? { recommended } : {}),
       }],
     },
     ...(proposal ? { proposal } : {}),
