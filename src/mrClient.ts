@@ -29,6 +29,10 @@ export interface MergeRequestCall {
 export interface MergeRequestReceipt {
   url: string;
   id?: string | number;
+  /** 平台返回的原始响应体。外部动作台账(主 spec §11)记的是"平台到底
+   * 回了什么",恢复时要拿它对远端真实状态——抽剩 url/id 再入账等于自己
+   * 把证据裁掉了,所以整体原样带出。 */
+  raw: Record<string, unknown>;
 }
 
 export async function createMergeRequest(
@@ -70,6 +74,7 @@ export async function createMergeRequest(
       url,
       ...(body.id !== undefined && body.id !== null && body.id !== ""
         ? { id: body.id as string | number } : {}),
+      raw: body,
     };
   } finally {
     clearTimeout(timer);

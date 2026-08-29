@@ -4345,10 +4345,12 @@ export class TaskService {
     try {
       this.persist(task);
     } catch (error) {
-      // 问题环境密码早于 task.json 写入；如果任务事实落盘失败，绝不
-      // 留下一份没有任务可回收的孤儿凭据。
+      // 任务事实落不了盘就不能留下半个现场:没有 task.json 的工作区
+      // 谁也回收不了。这里必须走 removeTaskTree——知识与 Skill 快照
+      // 是只读的,裸 rmSync 会 ENOTEMPTY(见该函数头注释),回滚二次
+      // 抛错反而把真正的落盘错误盖掉。
       this.tasks.delete(id);
-      rmSync(workspace, { recursive: true, force: true });
+      removeTaskTree(workspace);
       throw error;
     }
     if (!options.deferQueue) {
@@ -9909,7 +9911,9 @@ export class TaskService {
       if (!this.current(task, epoch)) return;
       ledger({ idemKey: mrKey, kind: "mr_create", request: mrRequest,
                sha, startedAt: mrStarted,
-               result: { url: mr.url, id: mr.id },
+               // 入账用平台的原始响应,不是抽剩的 url/id:台账是恢复时
+               // "先查远端真实状态"的底账,裁字段等于自断证据。
+               result: mr.raw,
                finishedAt: new Date().toISOString() });
       const runKey = `pipeline:${sha}`;
       const runStarted = new Date().toISOString();
