@@ -3,7 +3,7 @@
  * 外部动作与事件现场。服务端镜像是唯一事实来源。
  */
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { Markdown } from "./markdown";
 import {
   decide,
@@ -354,10 +354,13 @@ export function TaskProgress({
   progress,
   showDetailedStep,
   context,
+  onPhaseClick,
 }: {
   progress: NonNullable<TaskSummary["progress"]>;
   showDetailedStep: boolean;
   context?: ReactNode;
+  /** 工作台传入:点阶段名弹该阶段执行方案。列表页不传,保持纯展示。 */
+  onPhaseClick?: (phase: string) => void;
 }) {
   const currentLabel = showDetailedStep
     ? progress.step ?? progress.current_phase
@@ -397,7 +400,20 @@ export function TaskProgress({
       {progress.phases.map((phase, index) => {
         const state = index < progress.current_index
           ? "past" : index === progress.current_index ? "current" : "future";
-        return <span className={`task-phase ${state}`} key={phase}>
+        return <span className={`task-phase ${state}`} key={phase}
+          {...(onPhaseClick ? {
+            role: "button" as const,
+            tabIndex: 0,
+            title: "查看该阶段执行方案",
+            style: { cursor: "pointer" },
+            onClick: () => onPhaseClick(phase),
+            onKeyDown: (event: ReactKeyboardEvent) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                onPhaseClick(phase);
+              }
+            },
+          } : {})}>
           <i aria-hidden />
           <span>{phase}</span>
         </span>;

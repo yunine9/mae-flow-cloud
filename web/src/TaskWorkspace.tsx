@@ -21,7 +21,7 @@ import { RequirementGraph } from "./RequirementGraph";
 import { PrepushBadge } from "./PrepushStatus";
 import { TokenUsage } from "./TokenUsage";
 import { KnowledgeFootprint } from "./KnowledgeFootprint";
-import { ExecutionPlanCard } from "./ExecutionPlanCard";
+import { StagePlanDialog } from "./StagePlanDialog";
 import { WorkflowProfileCard } from "./WorkflowProfileCard";
 import { CrossRepositorySync } from "./CrossRepositorySync";
 import { WarmupPanel, WarmupBadge } from "./WarmupPanel";
@@ -167,6 +167,8 @@ export function TaskWorkspace({
     useState<RepositoryAssigneeSelection>(EMPTY_REPOSITORY_ASSIGNEE_SELECTION);
   const [deliverySelection, setDeliverySelection] =
     useState<GitDiffSelection>();
+  /** 点进度条阶段名弹该阶段执行方案;空串=不显示。 */
+  const [planPhase, setPlanPhase] = useState("");
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>(
     task.status === "paused" ? "collaboration" : "materials",
   );
@@ -518,12 +520,24 @@ export function TaskWorkspace({
 
       <div className={`ws-progress${task.progress ? "" : " is-fallback"}`
         + `${health?.needs_attention ? " attention" : ""}`}>
-        <TaskProgress progress={visibleProgress} showDetailedStep context={health && <>
+        {/* 阶段名可点:当前阶段弹内核编译的活方案,其他阶段弹标准
+            方案底版(用户拍板:方案入口收进进度条,执行页签让位给
+            SSE 现场)。 */}
+        <TaskProgress progress={visibleProgress} showDetailedStep
+          onPhaseClick={setPlanPhase}
+          context={health && <>
           <span title={health.next}><i>下一步</i>{health.next}</span>
           <span><i>责任</i>{health.actor}</span>
           <span title={health.last_progress_at}><i>更新</i>
             {relativeTime(health.last_progress_at) || "暂无记录"}</span>
         </>} />
+        {planPhase && <StagePlanDialog
+          phase={planPhase}
+          currentPhase={visibleProgress.current_phase}
+          plan={task.execution_plan}
+          planWarning={task.execution_profile_warning}
+          onSuggest={onExecutionPlanFeedback}
+          onClose={() => setPlanPhase("")} />}
       </div>
       {(pauseFeedback || controlError) && (
         <div className="task-control-feedback" aria-live="polite">
@@ -549,8 +563,7 @@ export function TaskWorkspace({
               ? `${notes.length} 条批注` : "圈选原文、协作检视"],
           ["collaboration", "开发协作", collaborationVisible
             ? "补充主任务或主动接管" : assistantUnavailableReason(task)],
-          ["execution", "执行方案与现场", task.execution_plan?.strategy.title
-            ?? task.focus?.headline ?? "原始 SSE 事件流"],
+          ["execution", "执行现场", task.focus?.headline ?? "原始 SSE 事件流"],
         ] as Array<[WorkspaceView, string, string]>).map(([view, label, hint]) => (
           <button type="button" role="tab" key={view}
             aria-selected={workspaceView === view}
@@ -695,19 +708,18 @@ export function TaskWorkspace({
             </div>
           </> : workspaceView === "execution" ? <>
             <div className="ws-pane-head">
-              <div><span>PLAN & LIVE EXECUTION</span><strong>执行方案与现场</strong></div>
-              <small>先看本阶段怎么做，再按需查看实时事件</small>
+              <div><span>LIVE EXECUTION</span><strong>执行现场</strong></div>
+              <small>实时事件流；各阶段执行方案点上方进度条的阶段名查看</small>
             </div>
             <div className="ws-primary-scroll ws-execution-view">
+              {/* SSE 实时现场是这个页签的主角(用户拍板),置顶;
+                  执行方案卡整体撤出堆叠——各阶段方案点上方进度条的
+                  阶段名查看(StagePlanDialog)。 */}
+              <ExecutionPanel task={task} />
+              <WarmupPanel task={task} />
               {task.workflow_profile && <WorkflowProfileCard
                 profile={task.workflow_profile}
                 warning={task.workflow_profile_warning} />}
-              {task.execution_plan && <ExecutionPlanCard
-                plan={task.execution_plan}
-                warning={task.execution_profile_warning}
-                onSuggest={onExecutionPlanFeedback} />}
-              <WarmupPanel task={task} />
-              <ExecutionPanel task={task} />
               <KnowledgeFootprint usage={task.knowledge_usage}
                 utMethod={task.ut_generation_method}
                 taskId={task.id} taskStatus={task.status}
