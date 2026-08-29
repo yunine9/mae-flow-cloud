@@ -14,8 +14,9 @@
  * 例外是 env_needed 闸(2026-08-28):通用选项卡换成语义化表单(地址+
  * 端口+网管后台密码),提交走 onEnvironment(由会话视图接到
  * attachIssueEnvironment——密码只经这一条路进服务端 vault,不进状态/
- * 事件/对话,也不出现在其他任何闸的渲染里)。闸只收 地址+后台密码:
- * 现场补配的流程(拉日志/换库)碰不到网管页面,没有页面凭据的位置。
+ * 事件,也不出现在其他任何闸的渲染里;配置后的口令按 ADR-0003 进
+ * 元信息渲染,那是消费面的事,不是提交流程的事)。闸只收 地址+后台
+ * 密码:现场补配的流程(拉日志/换库)碰不到网管页面,没有页面凭据的位置。
  */
 import { useState } from "react";
 import type { IssueEnvironmentForm, IssueWaitingCard } from "../api";
