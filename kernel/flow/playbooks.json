@@ -1,5 +1,9 @@
 {
   "schema": "mae-flow-playbook-catalog/1",
+  "standard": {
+    "id": "mae-flow.standard",
+    "version": "2.0.0"
+  },
   "defaults": {
     "knowledge_loading": "indexed_on_demand",
     "customizable": [
@@ -29,9 +33,9 @@
         {"id": "environment-readiness", "title": "提前核对开发环境", "description": "在正式探索前确认仓库构建入口与关键依赖是否可用，避免后续基于不完整环境猜测。", "required": false}
       ],
       "resources": [
-        {"id": "order-facts", "kind": "platform", "name": "下单事实", "usage": "required"},
-        {"id": "human-confirmation", "kind": "platform", "name": "结构化人工确认", "usage": "when_needed"},
-        {"id": "git-branch-gate", "kind": "platform", "name": "Git 分支门禁", "usage": "required"}
+        {"id": "order-facts", "kind": "platform", "name": "下单事实", "usage": "required", "locked": true},
+        {"id": "human-confirmation", "kind": "platform", "name": "结构化人工确认", "usage": "when_needed", "locked": true},
+        {"id": "git-branch-gate", "kind": "platform", "name": "Git 分支门禁", "usage": "required", "locked": true}
       ],
       "outputs": ["已确认配置", "交付方式", "任务分支"]
     },
@@ -51,8 +55,8 @@
       ],
       "resources": [
         {"id": "clarification-guidance", "kind": "guidance", "name": "需求澄清方法", "ref": "guidance/grill.md", "usage": "required"},
-        {"id": "grill-critic", "kind": "agent", "name": "Grill Critic", "usage": "required"},
-        {"id": "human-confirmation", "kind": "platform", "name": "结构化人工确认", "usage": "when_needed"}
+        {"id": "grill-critic", "kind": "agent", "name": "Grill Critic", "usage": "required", "locked": true},
+        {"id": "human-confirmation", "kind": "platform", "name": "结构化人工确认", "usage": "when_needed", "locked": true}
       ],
       "outputs": ["澄清工作表", "用户决定台账", "需求澄清结论"]
     },
@@ -70,7 +74,7 @@
       ],
       "resources": [
         {"id": "review-guidance", "kind": "guidance", "name": "评审意见处理方法", "ref": "guidance/review.md", "usage": "required"},
-        {"id": "human-confirmation", "kind": "platform", "name": "结构化人工确认", "usage": "required"}
+        {"id": "human-confirmation", "kind": "platform", "name": "结构化人工确认", "usage": "required", "locked": true}
       ],
       "outputs": ["逐条闭环的评审意见"]
     },
@@ -89,8 +93,8 @@
       ],
       "resources": [
         {"id": "domain-knowledge-index", "kind": "knowledge", "name": "业务模块与领域知识索引", "usage": "on_demand"},
-        {"id": "local-spec-validation", "kind": "platform", "name": "本地 Spec 校验", "usage": "required"},
-        {"id": "content-bound-review", "kind": "platform", "name": "内容绑定检视", "usage": "required"}
+        {"id": "local-spec-validation", "kind": "platform", "name": "本地 Spec 校验", "usage": "required", "locked": true},
+        {"id": "content-bound-review", "kind": "platform", "name": "内容绑定检视", "usage": "required", "locked": true}
       ],
       "outputs": ["本单 Spec", "验收条件", "范围边界"]
     },
@@ -109,8 +113,8 @@
       ],
       "resources": [
         {"id": "story-guidance", "kind": "guidance", "name": "Story 设计方法", "ref": "guidance/story-design.md", "usage": "required"},
-        {"id": "story-generator", "kind": "agent", "name": "Story Generator", "usage": "required"},
-        {"id": "craft-reviewer", "kind": "agent", "name": "Craft Reviewer", "usage": "required"}
+        {"id": "story-generator", "kind": "agent", "name": "Story Generator", "usage": "required", "locked": true},
+        {"id": "craft-reviewer", "kind": "agent", "name": "Craft Reviewer", "usage": "required", "locked": true}
       ],
       "outputs": ["Story", "实施附录", "设计检视结论"]
     },
@@ -156,7 +160,7 @@
       ],
       "resources": [
         {"id": "domain-truth", "kind": "knowledge", "name": "领域真相源", "usage": "on_demand"},
-        {"id": "knowledge-validation", "kind": "platform", "name": "领域知识校验与归档", "usage": "required"}
+        {"id": "knowledge-validation", "kind": "platform", "name": "领域知识校验与归档", "usage": "required", "locked": true}
       ],
       "outputs": ["领域知识增量或 unchanged 结论"]
     },
@@ -176,9 +180,9 @@
       ],
       "resources": [
         {"id": "quality-guidance", "kind": "guidance", "name": "质量出口口径", "ref": "guidance/quality.md", "usage": "on_demand"},
-        {"id": "prepush-agent", "kind": "platform", "name": "推送前验证 Agent", "usage": "required"},
-        {"id": "host-git-push", "kind": "platform", "name": "Git 宿主推送", "usage": "required"},
-        {"id": "pipeline-and-mr", "kind": "platform", "name": "权威流水线与 MR", "usage": "required"}
+        {"id": "prepush-agent", "kind": "platform", "name": "推送前验证 Agent", "usage": "required", "locked": true},
+        {"id": "host-git-push", "kind": "platform", "name": "Git 宿主推送", "usage": "required", "locked": true},
+        {"id": "pipeline-and-mr", "kind": "platform", "name": "权威流水线与 MR", "usage": "required", "locked": true}
       ],
       "outputs": ["精确交付清单", "推送前验证收据", "远端 SHA", "流水线与 MR 状态"]
     }

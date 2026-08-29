@@ -20,13 +20,16 @@ if SCRIPTS not in sys.path:
 from mae_flow_core.workflow.execution_plan import (  # noqa: E402
     SCHEMA,
     PROFILE_SCHEMA,
+    WORKFLOW_PROFILE_SCHEMA,
     _profile_revision,
     build_execution_plan,
     catalog_errors,
     load_execution_profile,
+    load_workflow_profile,
     profile_errors,
     render_agent_execution_plan,
     render_execution_profile,
+    workflow_profile_errors,
 )
 
 
@@ -49,6 +52,56 @@ def profile(instructions="先核对旧数据兼容性"):
         "revision": hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16],
         "layers": layers,
     }
+
+
+def structural_profile(items=None):
+    base_items = [
+        {"id": "pipeline-floor", "kind": "tool", "title": "权威流水线",
+         "locked": True, "editable": False, "source": "platform",
+         "use": {"mode": "on_stage_enter"}},
+        {"id": "implementation", "kind": "activity", "title": "完成实现",
+         "description": "按规格完成真实代码改动", "locked": False,
+         "editable": True, "source": "platform"},
+        {"id": "generic-test", "kind": "activity", "title": "通用测试",
+         "locked": False, "editable": True, "source": "platform"},
+    ]
+    stage = {"id": "platform.construction", "title": "完整实现与自查",
+             "phase": "写代码", "steps": ["build"], "slots": [],
+             "items": copy.deepcopy(base_items)}
+    final_stage = copy.deepcopy(stage)
+    final_stage["items"] = copy.deepcopy(items if items is not None else [
+        base_items[0], base_items[1],
+        {"id": "notify-test", "kind": "skill", "title": "通知模块测试",
+         "description": "读取任务固定的 Skill 索引后按需执行",
+         "instructions": "先覆盖失败与重试路径", "locked": False,
+         "editable": True, "source": "workflow",
+         "asset_ref": {"registry": "team_skill", "id": "notify-test",
+                       "version": "pkg-v2", "digest": "sha256:" + "b" * 64},
+         "use": {"mode": "before_item", "anchor": "implementation"}},
+    ])
+    snapshot = {"standard_id": "mae-flow.standard",
+                "standard_version": "2.0.0",
+                "catalog_digest": "sha256:" + "a" * 64,
+                "stages": [stage]}
+    result = {
+        "schema": WORKFLOW_PROFILE_SCHEMA,
+        "source": {"kind": "workflow", "id": "notify-flow", "version": "v2"},
+        "base_snapshot": snapshot,
+        "edits": [],
+        "final_snapshot": {**snapshot, "stages": [final_stage]},
+        "asset_manifest": [{
+            "registry": "team_skill", "id": "notify-test",
+            "version": "pkg-v2", "digest": "sha256:" + "b" * 64,
+            "state": "available",
+        }],
+        "diagnostics": [],
+    }
+    source = json.dumps(
+        {key: value for key, value in result.items() if key != "schema"},
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    result["revision"] = "sha256:" + hashlib.sha256(
+        source.encode("utf-8")).hexdigest()
+    return result
 
 
 class ExecutionPlanContractTests(unittest.TestCase):
@@ -200,6 +253,84 @@ class ExecutionPlanContractTests(unittest.TestCase):
             loaded, warning = load_execution_profile(root)
         self.assertIsNone(loaded)
         self.assertIn("已采用平台默认方案", warning)
+
+    def test_structural_profile_is_the_only_final_stage_plan(self):
+        workflow = structural_profile()
+        self.assertEqual([], workflow_profile_errors(workflow))
+        plan = build_execution_plan(
+            self.flow, {"current": "build", "revision": 4}, self.catalog,
+            profile("旧建议层仍可展示"), workflow_profile=workflow)
+        self.assertEqual("structural", plan["customization"]["mode"])
+        self.assertEqual("compiled_final_plan",
+                         plan["customization"]["effective_source"])
+        self.assertEqual("workflow", plan["strategy"]["source"])
+        self.assertEqual(
+            ["pipeline-floor", "implementation", "notify-test"],
+            [item["id"] for item in plan["workflow_items"]])
+        self.assertNotIn("generic-test",
+                         [item["id"] for item in plan["workflow_items"]])
+        guidance = render_agent_execution_plan(plan)
+        self.assertIn("已固定的最终执行方案", guidance)
+        self.assertIn("工作流定制", guidance)
+        self.assertIn("先覆盖失败与重试路径", guidance)
+        self.assertIn("固定 Skill：notify-test@pkg-v2", guidance)
+        self.assertNotIn("通用测试", guidance)
+
+    def test_workflow_asset_snapshot_path_is_safe_and_visible_not_inlined(self):
+        workflow = structural_profile()
+        ref = {"registry": "business_knowledge", "id": "diagnosis",
+               "business_module_id": "notify", "version": "3",
+               "digest": "sha256:" + "c" * 64}
+        item = {"id": "notify-diagnosis", "kind": "knowledge",
+                "title": "通知问题定位", "locked": False,
+                "editable": True, "source": "workflow",
+                "asset_ref": ref, "use": {"mode": "when_needed"}}
+        workflow["final_snapshot"]["stages"][0]["items"].append(item)
+        workflow["asset_manifest"].append({
+            **ref, "state": "available",
+            "snapshot_path": ".mae-flow-work/business-modules/notify/diagnosis.md",
+        })
+        source = json.dumps(
+            {key: value for key, value in workflow.items()
+             if key not in ("schema", "revision")},
+            ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        workflow["revision"] = "sha256:" + hashlib.sha256(
+            source.encode("utf-8")).hexdigest()
+        self.assertEqual([], workflow_profile_errors(workflow))
+        plan = build_execution_plan(
+            self.flow, {"current": "build"}, self.catalog,
+            workflow_profile=workflow)
+        guidance = render_agent_execution_plan(plan)
+        self.assertIn("正文按需读取：.mae-flow-work/business-modules/notify/diagnosis.md",
+                      guidance)
+        self.assertNotIn("问题定位正文", guidance)
+
+        workflow["asset_manifest"][-1]["snapshot_path"] = "../../secret"
+        self.assertTrue(any("unsafe snapshot path" in error
+                            for error in workflow_profile_errors(workflow)))
+
+    def test_structural_profile_cannot_tamper_with_locked_floor(self):
+        workflow = structural_profile()
+        workflow["final_snapshot"]["stages"][0]["items"] = [
+            item for item in workflow["final_snapshot"]["stages"][0]["items"]
+            if item["id"] != "pipeline-floor"]
+        source = json.dumps(
+            {key: value for key, value in workflow.items()
+             if key not in ("schema", "revision")},
+            ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        workflow["revision"] = "sha256:" + hashlib.sha256(
+            source.encode("utf-8")).hexdigest()
+        self.assertTrue(any("locked item" in error
+                            for error in workflow_profile_errors(workflow)))
+        with tempfile.TemporaryDirectory() as root:
+            directory = os.path.join(root, ".mae-flow-work")
+            os.makedirs(directory)
+            with open(os.path.join(directory, "workflow-profile.json"), "w",
+                      encoding="utf-8") as stream:
+                json.dump(workflow, stream, ensure_ascii=False)
+            loaded, warning = load_workflow_profile(root)
+        self.assertIsNone(loaded)
+        self.assertIn("采用既有 Mae-Flow 方案", warning)
 
     def test_invalid_optional_profile_falls_back_with_a_clear_warning(self):
         broken = profile()

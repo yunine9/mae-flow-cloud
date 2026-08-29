@@ -132,6 +132,50 @@ class ApprovalSubjectTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("旧决定已自动失效", reason)
 
+    def test_manifest_scope_ignores_noise_outside_delivery_set(self):
+        """2026-08-29 用户拍板:有交付清单时人批的是清单那组文件,
+        清单外的残留产物、新 commit(head 演进)都不作废批复——
+        "确认绑文件集合"与"产物留工作区别删"两条口径在此对齐。"""
+        state = {"implementation_base_head": self.head,
+                 "delivery_manifest": {"files": ["a.txt"],
+                                       "confirmed": True}}
+        step = {"approval_subject": {"kind": "worktree"}}
+        first = build_subject(self.root, state, "delivery_review", step)
+        self.assertEqual("delivery_manifest", first.get("scope"))
+        # 清单外的残留构建产物出现/变化:批复保持有效。
+        with open(os.path.join(self.root, "build.o"), "w",
+                  encoding="utf-8") as out:
+            out.write("artifact v1\n")
+        second = build_subject(self.root, state, "delivery_review", step)
+        self.assertEqual(first["sha256"], second["sha256"])
+        # 清单外文件提交产生新 HEAD:不绑每个中间 SHA,批复保持有效。
+        with open(os.path.join(self.root, "other.txt"), "w",
+                  encoding="utf-8") as out:
+            out.write("unrelated\n")
+        subprocess.run(["git", "-C", self.root, "add", "other.txt"],
+                       check=True)
+        subprocess.run(["git", "-C", self.root, "commit", "-qm", "noise"],
+                       check=True)
+        third = build_subject(self.root, state, "delivery_review", step)
+        self.assertEqual(first["sha256"], third["sha256"])
+        # 清单内文件内容变化:旧决定不背书新代码,必须作废。
+        with open(os.path.join(self.root, "a.txt"), "w",
+                  encoding="utf-8") as out:
+            out.write("changed\n")
+        fourth = build_subject(self.root, state, "delivery_review", step)
+        self.assertNotEqual(first["sha256"], fourth["sha256"])
+
+    def test_manifest_scope_binds_the_file_set_itself(self):
+        state = {"implementation_base_head": self.head,
+                 "delivery_manifest": {"files": ["a.txt"],
+                                       "confirmed": True}}
+        step = {"approval_subject": {"kind": "worktree"}}
+        first = build_subject(self.root, state, "delivery_review", step)
+        # 清单增删文件=换了审批对象,必须是新卡。
+        state["delivery_manifest"]["files"] = ["a.txt", "b.txt"]
+        second = build_subject(self.root, state, "delivery_review", step)
+        self.assertNotEqual(first["sha256"], second["sha256"])
+
     def test_stale_subject_is_rotated_without_agent_rework(self):
         state = {"implementation_base_head": self.head}
         step = {"approval_subject": {"kind": "worktree"}}

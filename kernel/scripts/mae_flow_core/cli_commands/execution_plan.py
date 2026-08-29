@@ -4,14 +4,19 @@ from .shared import json, sys
 from mae_flow_core.workflow.execution_plan import (
     build_execution_plan,
     load_execution_profile,
+    load_workflow_profile,
 )
 
 
 def cmd_execution_plan(flow, state, args):
     profile, warning = load_execution_profile()
-    plan = build_execution_plan(flow, state, profile=profile)
+    workflow_profile, workflow_warning = load_workflow_profile()
+    plan = build_execution_plan(
+        flow, state, profile=profile, workflow_profile=workflow_profile)
     if warning:
         print(warning, file=sys.stderr)
+    if workflow_warning:
+        print(workflow_warning, file=sys.stderr)
     if getattr(args, "json", False):
         print(json.dumps(plan, ensure_ascii=False, sort_keys=True))
         return
@@ -21,7 +26,7 @@ def cmd_execution_plan(flow, state, args):
     print("当前阶段: %s / %s" % (step["phase"], step["title"]))
     print(strategy["summary"])
     print("选择原因: " + strategy["selection_reason"])
-    print("默认会做:")
+    print("本阶段最终会做:")
     for activity in plan["activities"]:
         print("- %s: %s" % (activity["title"], activity["description"]))
     print("知识装载: " + plan["knowledge"]["explanation"])

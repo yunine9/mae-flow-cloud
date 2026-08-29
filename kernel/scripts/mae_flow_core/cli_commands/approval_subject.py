@@ -74,9 +74,45 @@ def _review_base(state, step_id):
     return str((state or {}).get("implementation_base_head", "") or "HEAD")
 
 
+def _manifest_scope(state):
+    """交付清单文件集。清单存在时它就是审批对象的全部范围。"""
+    manifest = (state or {}).get("delivery_manifest") or {}
+    paths = [str(path) for path in (manifest.get("files") or ())
+             if isinstance(path, str) and str(path).strip()]
+    return sorted(set(paths))
+
+
 def _worktree_payload(root, state, step_id):
+    """工作区审批对象。
+
+    2026-08-29 用户拍板:有交付清单时,人批的是**清单那组文件的内容与
+    集合**,不是整个工作区的每个字节——清单外的残留构建产物、临时
+    文件怎么变都不作废批复("产物留工作区别删"与"确认绑文件集合"
+    两条口径在此对齐);清单内内容变了、清单增删了文件仍然作废
+    (旧决定不背书新代码,这条红线不动)。因此收窄模式下:
+    - pathspec 限定为清单精确路径(清单归一化已禁 glob/魔法前缀);
+    - `head` 不进哈希——流水线修复在清单外推进 commit 不该打人;
+    - 暂存状态不进哈希——同样的内容 staged/unstaged 之别与检视无关,
+      内容差异由 diff(worktree vs base)与逐文件指纹兜住。
+    没有清单的步骤(如 build_review)保持整工作区绑定的老语义。
+    """
     base = _review_base(state, step_id)
     head = str(_git(root, "rev-parse", "--verify", "HEAD")).strip()
+    scope = _manifest_scope(state)
+    if scope:
+        diff = _git(root, "diff", "--binary", "--no-ext-diff", base, "--",
+                    *scope, binary=True)
+        return {
+            "kind": "worktree",
+            "scope": "delivery_manifest",
+            "base": base,
+            "paths": scope,   # 集合本身进哈希:清单增删文件即新卡
+            "diff_sha256": hashlib.sha256(diff).hexdigest(),
+            "path_fingerprints": [
+                review_path_fingerprint(os.path.join(root, path))
+                for path in scope
+            ],
+        }
     review_paths = (".",) + _FLOW_CONTROL_PATHSPECS
     diff = _git(root, "diff", "--binary", "--no-ext-diff", base, "--",
                 *review_paths, binary=True)

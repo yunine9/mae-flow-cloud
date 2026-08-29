@@ -18,6 +18,7 @@ from mae_flow_core.workflow.execution_contract import (
 from mae_flow_core.workflow.execution_plan import (
     build_execution_plan,
     load_execution_profile,
+    load_workflow_profile,
     render_agent_execution_plan,
     render_execution_profile,
 )
@@ -211,9 +212,12 @@ def print_current(flow, st):
     sid = st["current"]
     step = flow["steps"][sid]
     execution_profile, execution_profile_warning = load_execution_profile()
+    workflow_profile, workflow_profile_warning = load_workflow_profile()
     try:
         execution_plan_text = render_agent_execution_plan(
-            build_execution_plan(flow, st, profile=execution_profile))
+            build_execution_plan(
+                flow, st, profile=execution_profile,
+                workflow_profile=workflow_profile))
         execution_plan_warning = ""
     except Exception as exc:
         execution_plan_text = ""
@@ -232,6 +236,8 @@ def print_current(flow, st):
     print(f"═══ 当前步骤: {sid} — {step['title']} ═══")
     if execution_profile_warning:
         print(execution_profile_warning)
+    if workflow_profile_warning:
+        print(workflow_profile_warning)
     if execution_plan_warning:
         print(execution_plan_warning)
     if api._moonlight(st):
