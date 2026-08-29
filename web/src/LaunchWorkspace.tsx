@@ -1,9 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   createTask,
+  getLaunchKnowledgePreview,
   getLaunchOptions,
   listWorkflowAssets,
   type AuthUser,
+  type LaunchKnowledgeMatchedScope,
+  type LaunchKnowledgePreview,
   type LaunchOptions,
   type WorkflowAssetSummary,
 } from "./api";
@@ -12,11 +15,8 @@ import {
   RepositoryTechnologyPicker,
   type RepositoryTechnologyDraft,
 } from "./RepositoryTechnologyPicker";
-import {
-  matchBusinessModuleKnowledge,
-  normalizeLaunchKnowledgeCatalog,
-} from "./launchKnowledgeModel";
 import { knowledgeLanguageLabel } from "./KnowledgeLanguages";
+import { type KnowledgeAssetFocus } from "./knowledgeNavigation";
 import {
   SchemeSelector,
   type WorkflowSchemeSelection,
@@ -75,25 +75,34 @@ const KNOWLEDGE_FORM_LABEL = {
   example: "示例",
 } as const;
 
-function LaunchKnowledgeRow({ form, title, summary, whenToUse, scope }: {
+function LaunchKnowledgeRow({ form, title, summary, whenToUse, scope, version,
+  onOpen }: {
   form: keyof typeof KNOWLEDGE_FORM_LABEL;
   title: string;
   summary: string;
   whenToUse: string;
   scope: string;
+  version?: string;
+  onOpen: () => void;
 }) {
-  return <article className="launch-knowledge-row">
+  return <button type="button" className="launch-knowledge-row"
+    aria-label={`查看全文：${title}`} title={`到团队资产查看全文：${title}`}
+    onClick={onOpen}>
     <span className={`launch-knowledge-form ${form}`}>
       {KNOWLEDGE_FORM_LABEL[form]}</span>
     <span className="launch-knowledge-copy">
-      <strong>{title}</strong>
-      <small>{summary || whenToUse || "暂无说明"}</small>
-      {summary && whenToUse && <em>适合：{whenToUse}</em>}
+      <span className="launch-knowledge-titleline">
+        <strong title={title}>{title}</strong>
+        {version && <code>{version}</code>}
+      </span>
+      <small title={summary || whenToUse}>{summary || whenToUse || "暂无说明"}</small>
+      {summary && whenToUse && <em title={whenToUse}>适合：{whenToUse}</em>}
     </span>
     <span className="launch-knowledge-scope">
-      <small>匹配依据</small><strong>{scope}</strong>
+      <small>命中依据</small><strong title={scope}>{scope}</strong>
+      <em>查看全文 <span aria-hidden>→</span></em>
     </span>
-  </article>;
+  </button>;
 }
 
 export function LaunchWorkspace({
@@ -101,11 +110,13 @@ export function LaunchWorkspace({
   onCreated,
   onClose,
   onOpenWorkflowAssets,
+  onOpenKnowledgeAsset,
 }: {
   session: AuthUser;
   onCreated: () => Promise<void>;
   onClose: () => void;
   onOpenWorkflowAssets?: (workflowId?: string) => void;
+  onOpenKnowledgeAsset: (target: KnowledgeAssetFocus) => void;
 }) {
   const [restoredDraft] = useState(() =>
     readStored<LaunchDraft>(storageKey("draft", session.username)));
@@ -163,12 +174,12 @@ export function LaunchWorkspace({
     validDraft?.workflowSelection
     || validDraft?.taskInstructions?.trim(),
   ));
-  // 配置没配齐不让下单:缺项来自后端(服务级+个人级),前端只负责
-  // 摆在明面上。后端同样硬拦——绕过界面打接口一样被 409 挡住。
-  const blockers = options?.blockers ?? [];
-  const blocked = optionsLoading || blockers.length > 0 || !!optionsError;
-  const knowledgeCatalog = useMemo(
-    () => normalizeLaunchKnowledgeCatalog(options), [options]);
+  const [knowledgePreview, setKnowledgePreview] =
+    useState<LaunchKnowledgePreview>();
+  const [knowledgePreviewLoading, setKnowledgePreviewLoading] = useState(true);
+  const [knowledgePreviewError, setKnowledgePreviewError] = useState("");
+  const [knowledgePreviewKey, setKnowledgePreviewKey] = useState("");
+  const knowledgePreviewRequest = useRef(0);
   const businessModules = useMemo(() => {
     const wantedRepos = new Set(repos.map(repositoryIdentity).filter(Boolean));
     return [...(options?.business_modules ?? [])].sort((left, right) => {
@@ -180,47 +191,31 @@ export function LaunchWorkspace({
         || left.name.localeCompare(right.name);
     });
   }, [options, repos]);
-  const matchingEngineeringKnowledge = useMemo(() => {
-    const repositorySet = new Set(repos.map(repositoryIdentity).filter(Boolean));
-    const technologies = new Set(repositoryTechnologies
-      .filter((item) => item.confirmed)
-      .flatMap((item) => item.technologies));
-    return knowledgeCatalog.engineering.filter((item) =>
-      (!item.repositories.length || item.repositories.some((repository) =>
-        repositorySet.has(repositoryIdentity(repository))))
-      && (!item.technologies.length || item.technologies.some((technology) =>
-        technologies.has(technology)))
-      && (!item.business_module_ids.length || item.business_module_ids.some((id) =>
-        selectedBusinessModuleIds.includes(id))));
-  }, [knowledgeCatalog, repos, repositoryTechnologies,
-    selectedBusinessModuleIds]);
-  const matchingTeamSkills = useMemo(() => {
-    const repositorySet = new Set(repos.map(repositoryIdentity).filter(Boolean));
-    const technologies = new Set(repositoryTechnologies
-      .filter((item) => item.confirmed)
-      .flatMap((item) => item.technologies));
-    return knowledgeCatalog.skills.filter((item) =>
-      (!item.repositories.length || item.repositories.some((repository) =>
-        repositorySet.has(repositoryIdentity(repository))))
-      && (!item.technologies.length || item.technologies.some((technology) =>
-        technologies.has(technology)))
-      && (!item.business_module_ids.length || item.business_module_ids.some((id) =>
-        selectedBusinessModuleIds.includes(id))));
-  }, [knowledgeCatalog, repos, repositoryTechnologies,
-    selectedBusinessModuleIds]);
-  const matchingModuleKnowledge = useMemo(() =>
-    matchBusinessModuleKnowledge(businessModules,
-      selectedBusinessModuleIds, repos),
-  [businessModules, selectedBusinessModuleIds, repos]);
   const businessModuleNames = useMemo(() => new Map(
     businessModules.map((module) => [module.id, module.name])),
   [businessModules]);
-  const describeKnowledgeScope = (
-    moduleIds: string[], technologies: string[], scopedRepositories: string[],
-  ) => {
-    const scopes = moduleIds.map((id) => businessModuleNames.get(id) ?? id);
-    scopes.push(...technologies.map(knowledgeLanguageLabel));
-    if (scopedRepositories.length) scopes.push("当前代码仓");
+  const previewInput = useMemo(() => ({
+    repos: repos.map((item) => item.trim()).filter(Boolean),
+    selectedBusinessModuleIds,
+    repositoryProfiles: repositoryTechnologies.length > 0
+        && repositoryTechnologies.every((item) => item.confirmed)
+      ? asRepositoryProfiles(repositoryTechnologies) : undefined,
+    workflowSelection,
+  }), [repos, selectedBusinessModuleIds, repositoryTechnologies,
+    workflowSelection]);
+  const expectedKnowledgePreviewKey = JSON.stringify(previewInput);
+  const matchingModuleKnowledge = knowledgePreview?.business_knowledge ?? [];
+  const matchingEngineeringKnowledge = knowledgePreview?.engineering_knowledge ?? [];
+  const matchingTeamSkills = knowledgePreview?.team_skills ?? [];
+  const repositoryName = (value: string) => value.replace(/\/+$/, "")
+    .split("/").at(-1)?.replace(/\.git$/i, "") || value;
+  const describeMatchedScope = (item: LaunchKnowledgeMatchedScope) => {
+    const scopes = item.matched_business_module_ids.map((id) =>
+      `模块：${businessModuleNames.get(id) ?? id}`);
+    scopes.push(...item.matched_technologies.map((technology) =>
+      `语言：${knowledgeLanguageLabel(technology)}`));
+    scopes.push(...item.matched_repositories.map((repository) =>
+      `仓库：${repositoryName(repository)}`));
     return scopes.join(" · ") || "团队通用";
   };
   const matchedTeamKnowledgeCount = matchingEngineeringKnowledge.length
@@ -230,6 +225,20 @@ export function LaunchWorkspace({
   const selectedModuleKnowledgeCount = matchingModuleKnowledge.length;
   const selectedKnowledgeCount = selectedModuleKnowledgeCount
     + matchedTeamKnowledgeCount;
+  const previewBusinessModuleIds = knowledgePreview?.scope.business_module_ids
+    ?? selectedBusinessModuleIds;
+  const knowledgeNotices = [
+    ...(knowledgePreview?.errors ?? []),
+    ...(knowledgePreview?.warnings ?? []),
+  ];
+  // 配置与知识预览都必须可核对后才允许提交。目录降级时宁可把原因摆
+  // 出来，也不能一边写“已自动匹配”一边让后端暗中换一份名单。
+  const blockers = options?.blockers ?? [];
+  const previewSettled = knowledgePreviewKey === expectedKnowledgePreviewKey;
+  const knowledgeBlocked = knowledgePreviewLoading || !previewSettled
+    || !!knowledgePreviewError || !knowledgePreview?.complete;
+  const blocked = optionsLoading || blockers.length > 0 || !!optionsError
+    || knowledgeBlocked;
 
   useEffect(() => {
     let alive = true;
@@ -246,6 +255,29 @@ export function LaunchWorkspace({
     });
     return () => { alive = false; };
   }, []);
+
+  useEffect(() => {
+    if (!options) return;
+    const request = ++knowledgePreviewRequest.current;
+    const key = expectedKnowledgePreviewKey;
+    setKnowledgePreviewLoading(true);
+    setKnowledgePreviewError("");
+    void getLaunchKnowledgePreview(previewInput).then((result) => {
+      if (knowledgePreviewRequest.current !== request) return;
+      setKnowledgePreview(result);
+      setKnowledgePreviewKey(key);
+    }).catch((cause) => {
+      if (knowledgePreviewRequest.current !== request) return;
+      setKnowledgePreview(undefined);
+      setKnowledgePreviewKey(key);
+      setKnowledgePreviewError(cause instanceof Error
+        ? cause.message : "自动匹配清单暂时无法核对");
+    }).finally(() => {
+      if (knowledgePreviewRequest.current === request) {
+        setKnowledgePreviewLoading(false);
+      }
+    });
+  }, [expectedKnowledgePreviewKey, options]);
 
   // 工作流资产是可选增强：目录暂时不可用时仍可用 Mae-Flow 标准方案
   // 正常下单，不能把团队资产读失败升级成新门禁。
@@ -266,32 +298,34 @@ export function LaunchWorkspace({
     return () => { alive = false; };
   }, []);
 
+  const persistDraft = () => {
+    const draft: LaunchDraft = {
+      version: LAUNCH_DRAFT_VERSION,
+      updatedAt: new Date().toISOString(),
+      title,
+      requirement,
+      requirementDocumentName,
+      repos,
+      ticket,
+      baseline,
+      lane,
+      repairRounds,
+      taskInstructions,
+      selectedBusinessModuleIds,
+      moduleSelectionTouched,
+      workflowSelection,
+    };
+    try {
+      localStorage.setItem(storageKey("draft", session.username),
+        JSON.stringify(draft));
+      setDraftSavedAt(draft.updatedAt);
+    } catch {
+      // 草稿是体验增强；浏览器禁用存储时不阻止发起任务。
+    }
+  };
+
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      const draft: LaunchDraft = {
-        version: LAUNCH_DRAFT_VERSION,
-        updatedAt: new Date().toISOString(),
-        title,
-        requirement,
-        requirementDocumentName,
-        repos,
-        ticket,
-        baseline,
-        lane,
-        repairRounds,
-        taskInstructions,
-        selectedBusinessModuleIds,
-        moduleSelectionTouched,
-        workflowSelection,
-      };
-      try {
-        localStorage.setItem(storageKey("draft", session.username),
-          JSON.stringify(draft));
-        setDraftSavedAt(draft.updatedAt);
-      } catch {
-        // 草稿是体验增强；浏览器禁用存储时不阻止发起任务。
-      }
-    }, 300);
+    const timer = window.setTimeout(persistDraft, 300);
     return () => window.clearTimeout(timer);
   }, [title, requirement, requirementDocumentName, repos, ticket,
     baseline, lane, repairRounds, taskInstructions,
@@ -755,7 +789,12 @@ export function LaunchWorkspace({
                     <small>工作流、技术画像和知识清单；代码仓内容不在这里管理</small></span>
                   <span className="launch-advanced-summary">
                     <b>{workflowSelection ? "定制工作流" : "标准工作流"}</b>
-                    {selectedKnowledgeCount > 0 && <b>{selectedKnowledgeCount} 项平台知识</b>}
+                    {knowledgePreviewLoading || !previewSettled
+                      ? <b>知识核对中</b>
+                      : selectedKnowledgeCount > 0
+                        ? <b>{selectedKnowledgeCount} 项平台知识</b>
+                        : <b>无平台知识</b>}
+                    {knowledgePreview?.degraded && <b className="attention">预览异常</b>}
                     {repairRounds && <b>{repairRounds} 轮修复</b>}
                     {repositoryTechnologies.some((item) => !item.confirmed)
                       && <b className="attention">技术栈待确认</b>}
@@ -807,24 +846,40 @@ export function LaunchWorkspace({
               {options && <section className="launch-form-section launch-task-resources">
                 <div className="launch-section-head"><i>知</i><div>
                   <strong>本任务知识</strong>
-                  <small>自动匹配，不用手选；下面可以核对具体名单</small>
-                </div><em>自动匹配</em></div>
+                  <small>服务端自动匹配；逐项可进入团队资产查看全文</small>
+                </div><em>{knowledgePreviewLoading || !previewSettled
+                  ? "核对中" : knowledgePreview?.complete ? "权威预览" : "预览异常"}</em></div>
                 <div className="launch-resource-summary">
                   <span><strong>{selectedModuleKnowledgeCount}</strong>
                     <small>模块知识</small></span>
                   <span><strong>{matchedTeamKnowledgeCount}</strong>
                     <small>团队资产</small></span>
-                  <p>{selectedBusinessModuleIds.length
-                    ? `来自 ${selectedBusinessModuleIds.map((id) =>
+                  <p>{previewBusinessModuleIds.length
+                    ? `来自 ${previewBusinessModuleIds.map((id) =>
                         businessModules.find((item) => item.id === id)?.name)
-                      .filter(Boolean).join("、")} 等已关联抽屉`
+                      .filter(Boolean).join("、")} 等已关联抽屉${
+                        knowledgePreview?.scope.workflow_business_module_ids.length
+                          ? "（含工作流带入）" : ""}`
                     : "尚未关联业务模块；仍会使用匹配的团队知识和 Skill"}</p>
                 </div>
+                {(knowledgePreviewError || knowledgeNotices.length > 0)
+                  && <div className={`launch-knowledge-notices${
+                    knowledgePreview?.complete ? " warning" : " error"}`}
+                    role={knowledgePreview?.complete ? "status" : "alert"}>
+                    <strong>{knowledgePreview?.complete
+                      ? "自动匹配已应用容量规则" : "自动匹配清单暂时不能作为最终依据"}</strong>
+                    {knowledgePreviewError && <span>{knowledgePreviewError}</span>}
+                    {knowledgeNotices.map((notice, index) => <span
+                      key={`${notice.source}/${notice.code}/${index}`}>
+                      {notice.message}</span>)}
+                  </div>}
                 <div className="launch-knowledge-list" aria-label="自动匹配的知识清单">
                   <div className="launch-knowledge-list-head">
-                    <strong>自动匹配清单</strong>
-                    <span>{selectedKnowledgeCount
-                      ? `共 ${selectedKnowledgeCount} 项` : "暂时没有匹配项"}</span>
+                    <strong>发起前固定清单</strong>
+                    <span>{knowledgePreviewLoading || !previewSettled
+                      ? "正在由服务端核对"
+                      : selectedKnowledgeCount
+                        ? `共 ${selectedKnowledgeCount} 项` : "没有匹配项"}</span>
                   </div>
                   {matchingModuleKnowledge.length > 0 && <section
                     className="launch-knowledge-group">
@@ -834,8 +889,13 @@ export function LaunchWorkspace({
                       <LaunchKnowledgeRow key={`${item.module_id}/${item.id}`}
                         form={item.form} title={item.title}
                         summary={item.summary} whenToUse={item.when_to_use}
-                        scope={`${item.module_name} · ${item.repositories.length
-                          ? "当前代码仓" : "模块通用"}`} />)}
+                        version={`v${item.version}`}
+                        scope={describeMatchedScope(item)}
+                        onOpen={() => {
+                          persistDraft();
+                          onOpenKnowledgeAsset({ kind: "business",
+                            moduleId: item.module_id, assetId: item.id });
+                        }} />)}
                   </section>}
                   {matchingEngineeringKnowledge.length > 0 && <section
                     className="launch-knowledge-group">
@@ -845,8 +905,13 @@ export function LaunchWorkspace({
                       <LaunchKnowledgeRow key={item.id} form={item.form}
                         title={item.title} summary={item.summary}
                         whenToUse={item.when_to_use}
-                        scope={describeKnowledgeScope(item.business_module_ids,
-                          item.technologies, item.repositories)} />)}
+                        version={`版本 ${item.digest.slice(0, 8)}`}
+                        scope={describeMatchedScope(item)}
+                        onOpen={() => {
+                          persistDraft();
+                          onOpenKnowledgeAsset({ kind: "engineering",
+                            candidateId: item.id });
+                        }} />)}
                   </section>}
                   {matchingTeamSkills.length > 0 && <section
                     className="launch-knowledge-group">
@@ -856,20 +921,28 @@ export function LaunchWorkspace({
                       <LaunchKnowledgeRow key={item.path} form="skill"
                         title={item.name} summary={item.description}
                         whenToUse=""
-                        scope={describeKnowledgeScope(item.business_module_ids,
-                          item.technologies, item.repositories)} />)}
+                        version={`版本 ${item.digest.slice(0, 8)}`}
+                        scope={describeMatchedScope(item)}
+                        onOpen={() => {
+                          persistDraft();
+                          onOpenKnowledgeAsset({ kind: "skill",
+                            directory: item.path.split("/")[0] || item.path });
+                        }} />)}
                   </section>}
-                  {selectedKnowledgeCount === 0 && <div
+                  {!knowledgePreviewLoading && previewSettled
+                    && !knowledgePreviewError && selectedKnowledgeCount === 0 && <div
                     className="launch-knowledge-empty">
                     没有匹配到平台知识；代码仓里的文档和 Skill 仍由开发助手自己发现。
                   </div>}
                 </div>
                 <div className="launch-resource-boundary">
-                  <strong>{selectedKnowledgeCount
-                    ? `已自动匹配 ${selectedKnowledgeCount} 项` : "当前没有匹配项"}</strong>
-                  <span>{selectedKnowledgeCount
-                    ? "创建任务时系统会再核对一次，并记住当时的版本；开发助手只在需要时打开正文。"
-                    : "不影响 Git 现场探索；后续补齐适用范围即可自动生效。"}</span>
+                  <strong>{knowledgePreviewLoading || !previewSettled
+                    ? "正在核对最终名单"
+                    : selectedKnowledgeCount
+                      ? `将固定 ${selectedKnowledgeCount} 项` : "将固定 0 项平台知识"}</strong>
+                  <span>{knowledgePreview?.complete
+                    ? "清单与任务创建复用同一套选择器和容量规则；点击任一项可查看当前全文与版本。"
+                    : "预览完整前不会发起任务，避免页面清单与实际注入结果不一致。"}</span>
                 </div>
               </section>}
                 </div>
@@ -877,15 +950,27 @@ export function LaunchWorkspace({
               {error && <div className="composer-error" role="alert">{error}</div>}
               <footer className="launch-submit-bar">
                 <div><strong>{blocked
-                  ? "暂时不能发起"
+                  ? knowledgePreviewLoading || !previewSettled
+                    ? "正在核对知识清单"
+                    : knowledgePreviewError || !knowledgePreview?.complete
+                      ? "知识清单尚未核对完整"
+                      : "暂时不能发起"
                   : "信息确认后即可启动"}</strong><small>{blocked
-                  ? "请先处理上方配置项"
+                  ? knowledgePreviewLoading || !previewSettled
+                    ? "服务端正在固定本次任务会使用的全文与版本"
+                    : knowledgePreviewError || !knowledgePreview?.complete
+                      ? "请查看“本任务知识”中的明确原因后重试"
+                      : "请先处理上方配置项"
                   : "任务创建后会自动进入你的工作台"}</small></div>
                 <button type="submit" disabled={submitting || blocked}>
                   <span>{submitting
                     ? "正在发起"
                     : optionsLoading
                       ? "读取配置中"
+                      : knowledgePreviewLoading || !previewSettled
+                        ? "核对知识中"
+                        : knowledgePreviewError || !knowledgePreview?.complete
+                          ? "知识预览未完成"
                       : blocked
                         ? "配置未完成"
                         : "确认发起"}</span>

@@ -185,7 +185,10 @@ test("发布中断后重试:vN 已落盘、提交点没写——重试续跑,不
   assert.equal(readFileSync(v1Path, "utf-8"), v1Before);
 });
 
-test("发布版本文件已存在且内容不同:version_exists 拒绝,现场原样", () => {
+test("发布中断后改稿再发布:孤儿 vN 被回收,不再永久焊死", () => {
+  // 旧行为曾把这条路钉成 version_exists 拒绝——那意味着一次崩溃就让
+  // 资产永远发不出去(2026-08-29 部署审计实锤)。提交点(asset.json 的
+  // latest_version)没前进的 vN 是可证明的孤儿,发布时回收重写。
   const { assets, arm, disarm, root } = harness();
   assets.create({ id: "wf-v-exists", name: "x", scope: "team",
     owner: "alice", definition: definition(["java"]) });
@@ -193,23 +196,35 @@ test("发布版本文件已存在且内容不同:version_exists 拒绝,现场原
   arm("asset.json");
   assert.throws(() => assets.approve("wf-v-exists", { actor: "carol" }));
   disarm();
-  // 中断后草稿被撤回改了内容再发布:v1 已存在但 digest 不同=真冲突。
+  // 中断后草稿被撤回改了内容再发布:v1 已存在但 digest 不同。
   assets.withdraw("wf-v-exists", { actor: "alice" });
   assets.saveDraft("wf-v-exists", {
     definition: definition(["java", "go"]),
     expected_revision: 1, actor: "alice",
   });
   assets.submitForReview("wf-v-exists", { actor: "alice" });
-  const v1Before = readFileSync(
-    join(root, "wf-v-exists", "versions", "v1.json"), "utf-8");
-  assert.throws(() => assets.approve("wf-v-exists", { actor: "carol" }),
-    (error: unknown) => error instanceof WorkflowAssetError
-      && error.code === "version_exists");
-  assert.equal(readFileSync(
-    join(root, "wf-v-exists", "versions", "v1.json"), "utf-8"), v1Before,
-  "拒绝时不许动已落盘的 v1");
-  assert.equal(assets.get("wf-v-exists").asset.status, "pending_review",
-    "冲突时生命周期不得前进");
+  const v1Path = join(root, "wf-v-exists", "versions", "v1.json");
+  const v1Before = readFileSync(v1Path, "utf-8");
+  const republished = assets.approve("wf-v-exists", { actor: "carol" });
+  assert.equal(republished.status, "published");
+  assert.equal(republished.latest_version, 1);
+  assert.notEqual(readFileSync(v1Path, "utf-8"), v1Before,
+    "孤儿 v1 已被新内容替换");
+  const v1 = JSON.parse(readFileSync(v1Path, "utf-8"));
+  const draft = JSON.parse(readFileSync(
+    join(root, "wf-v-exists", "draft.json"), "utf-8"));
+  assert.equal(v1.digest, draft.digest, "落盘版本就是重发布的草稿内容");
+  // 回收只适用于提交点之外的孤儿:已发布的 v1 从此不可再动。
+  const v1Committed = readFileSync(v1Path, "utf-8");
+  assets.saveDraft("wf-v-exists", {
+    definition: definition(["java", "go", "rust"]),
+    expected_revision: 2, actor: "alice",
+  });
+  assets.submitForReview("wf-v-exists", { actor: "alice" });
+  const next = assets.approve("wf-v-exists", { actor: "carol" });
+  assert.equal(next.latest_version, 2, "提交点之内的版本只增不改");
+  assert.equal(readFileSync(v1Path, "utf-8"), v1Committed,
+    "已提交的 v1 一个字节不动");
 });
 
 test("两个写者同一 revision:后到者冲突可识别,按新 revision 重试成功", () => {

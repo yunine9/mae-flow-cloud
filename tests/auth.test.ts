@@ -38,6 +38,29 @@ test("账号库:scrypt 哈希落盘且重启后仍可登录", () => {
   );
 });
 
+test("会话落盘:重启后 cookie 仍有效,磁盘上没有原始令牌", () => {
+  // 2026-08-29 部署审计实锤:会话纯内存时,每次改 bug 重新部署都把
+  // 全员踢回登录页。落盘的是令牌 sha256——令牌只写不读的纪律对自家
+  // 令牌同样成立。
+  const dir = mkdtempSync(join(tmpdir(), "mfc-auth-session-"));
+  const file = join(dir, "auth.json");
+  const auth = new LocalAuth(file);
+  auth.bootstrapAdmin("admin", "correct-horse-battery");
+  const token = auth.createSession(
+    auth.authenticate("admin", "correct-horse-battery", "test").user!);
+  const sessionsFile = `${file}.sessions`;
+  const raw = readFileSync(sessionsFile, "utf-8");
+  assert.ok(!raw.includes(token), "磁盘不许出现可直接使用的令牌");
+  assert.equal(statSync(sessionsFile).mode & 0o777, 0o600);
+  // "重启":新实例从缓存接回会话,用户不被踢回登录页。
+  const restored = new LocalAuth(file);
+  assert.equal(restored.sessionUser(token)?.username, "admin");
+  // 注销也落盘:再次"重启"带不回已退出的会话。
+  restored.endSession(token);
+  const again = new LocalAuth(file);
+  assert.equal(again.sessionUser(token), undefined);
+});
+
 test("个人配置:退出重登与账号库重载后仍在,且不同用户严格隔离", async () => {
   const dir = mkdtempSync(join(tmpdir(), "mfc-auth-profile-"));
   const file = join(dir, "auth.json");

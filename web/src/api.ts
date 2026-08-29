@@ -1131,6 +1131,92 @@ export interface LaunchOptions {
   team_skills: HostSkillShelfEntry[];
 }
 
+export interface LaunchKnowledgeMatchedScope {
+  matched_business_module_ids: string[];
+  matched_repositories: string[];
+  matched_technologies: string[];
+}
+
+export interface LaunchBusinessKnowledgePreview
+  extends LaunchKnowledgeMatchedScope {
+  module_id: string;
+  module_name: string;
+  module_revision: number;
+  id: string;
+  title: string;
+  summary: string;
+  when_to_use: string;
+  form: KnowledgeForm;
+  repositories: string[];
+  version: number;
+  digest: string;
+  bytes: number;
+}
+
+export interface LaunchEngineeringKnowledgePreview
+  extends EngineeringKnowledgeLaunchOption, LaunchKnowledgeMatchedScope {
+  digest: string;
+  bytes: number;
+}
+
+export interface LaunchTeamSkillPreview
+  extends HostSkillShelfEntry, LaunchKnowledgeMatchedScope {
+  package_digest: string;
+}
+
+export interface LaunchKnowledgePreviewNotice {
+  source: "business_modules" | "engineering_knowledge" | "team_skills"
+    | "repository_profiles";
+  code: "catalog_unavailable" | "catalog_warning" | "limit_applied"
+    | "selection_invalid";
+  message: string;
+}
+
+export interface LaunchKnowledgePreview {
+  complete: boolean;
+  degraded: boolean;
+  scope: {
+    repositories: string[];
+    technologies: string[];
+    business_module_ids: string[];
+    workflow_business_module_ids: string[];
+    workflow_engineering_knowledge_ids: string[];
+    workflow_team_skill_ids: string[];
+  };
+  business_knowledge: LaunchBusinessKnowledgePreview[];
+  engineering_knowledge: LaunchEngineeringKnowledgePreview[];
+  team_skills: LaunchTeamSkillPreview[];
+  limits: { engineering_knowledge: {
+    max_assets: number;
+    max_total_bytes: number;
+    matched: number;
+    selected: number;
+    omitted: number;
+  } };
+  warnings: LaunchKnowledgePreviewNotice[];
+  errors: LaunchKnowledgePreviewNotice[];
+}
+
+export async function getLaunchKnowledgePreview(input: {
+  repos: string[];
+  selectedBusinessModuleIds: string[];
+  repositoryProfiles?: Array<Pick<RepositoryProfile,
+    "repository" | "technologies" | "confirmed">>;
+  workflowSelection?: { id: string; version?: number | string };
+}): Promise<LaunchKnowledgePreview> {
+  const response = await fetch("/launch-knowledge-preview", {
+    method: "POST",
+    body: JSON.stringify({
+      repos: input.repos,
+      selected_business_module_ids: input.selectedBusinessModuleIds,
+      repository_profiles: input.repositoryProfiles,
+      workflow_selection: input.workflowSelection,
+    }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
 export interface EngineeringKnowledgeLaunchOption {
   id: string;
   title: string;

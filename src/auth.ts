@@ -1,8 +1,13 @@
 /**
  * 本地账号与会话。
  *
- * 用户文件只保存 scrypt 加盐哈希，权限 0600；会话仅驻内存，
- * 服务重启即失效。认证只负责"谁在操作"，任务事实仍归 TaskService。
+ * 用户文件只保存 scrypt 加盐哈希，权限 0600。会话表另落一份 0600
+ * 缓存文件——曾经"仅驻内存,重启即失效",在频繁重部署 + 多人在线的
+ * 场景里等于每次改 bug 上线都把全员踢回登录页、半填的表单全丢
+ * (2026-08-29 部署审计实锤)。落盘的是令牌的 sha256,不是令牌本身:
+ * 磁盘上永远没有能直接用的凭据(令牌只写不读的纪律同样适用于自家)。
+ * 会话缓存坏了/丢了都不拦启动,代价只是重登一次。
+ * 认证只负责"谁在操作"，任务事实仍归 TaskService。
  */
 
 import {
@@ -15,6 +20,7 @@ import {
 } from "node:fs";
 import { dirname } from "node:path";
 import {
+  createHash,
   randomBytes,
   scryptSync,
   timingSafeEqual,
@@ -99,14 +105,18 @@ const MAX_FAILURES = 5;
 export class LocalAuth {
   private users = new Map<string, StoredUser>();
   private retiredUsernames = new Set<string>();
+  /** 键是令牌的 sha256 hex——内存里也不留原始令牌,与落盘口径一致。 */
   private sessions = new Map<string, { username: string; expiresAt: number }>();
   private failures = new Map<string, FailureWindow>();
+  private readonly sessionsFile: string;
 
   constructor(
     readonly file: string,
     private readonly sessionTtlMs = 8 * 60 * 60_000,
   ) {
+    this.sessionsFile = `${file}.sessions`;
     this.load();
+    this.loadSessions();
   }
 
   hasUsers(): boolean {
@@ -200,6 +210,7 @@ export class LocalAuth {
       if (session.username === username) this.sessions.delete(token);
     }
     this.persist();
+    this.persistSessions();
   }
 
   /** 管理员直接改密码,不验旧密码(内部平台,用户拍板:忘了密码找管理
@@ -214,6 +225,7 @@ export class LocalAuth {
       if (session.username === username) this.sessions.delete(token);
     }
     this.persist();
+    this.persistSessions();
   }
 
   authenticate(
@@ -436,19 +448,22 @@ export class LocalAuth {
 
   createSession(user: AuthUser): string {
     const token = randomBytes(32).toString("base64url");
-    this.sessions.set(token, {
+    this.sessions.set(sessionKey(token), {
       username: user.username,
       expiresAt: Date.now() + this.sessionTtlMs,
     });
+    this.persistSessions();
     return token;
   }
 
   sessionUser(token: string | undefined): AuthUser | undefined {
     if (!token) return undefined;
-    const session = this.sessions.get(token);
+    const key = sessionKey(token);
+    const session = this.sessions.get(key);
     if (!session) return undefined;
     if (session.expiresAt <= Date.now()) {
-      this.sessions.delete(token);
+      this.sessions.delete(key);
+      this.persistSessions();
       return undefined;
     }
     const user = this.users.get(session.username);
@@ -456,7 +471,8 @@ export class LocalAuth {
   }
 
   endSession(token: string | undefined): void {
-    if (token) this.sessions.delete(token);
+    if (!token) return;
+    if (this.sessions.delete(sessionKey(token))) this.persistSessions();
   }
 
   private load(): void {
@@ -487,6 +503,45 @@ export class LocalAuth {
     renameSync(temp, this.file);
     chmodSync(this.file, 0o600);
   }
+
+  /** 会话缓存是旁路:读坏了丢掉重登,写失败静默——绝不反噬认证请求。 */
+  private loadSessions(): void {
+    try {
+      if (!existsSync(this.sessionsFile)) return;
+      const parsed = JSON.parse(readFileSync(this.sessionsFile, "utf-8"));
+      if (parsed?.version !== 1 || !Array.isArray(parsed.sessions)) return;
+      const now = Date.now();
+      for (const item of parsed.sessions) {
+        if (typeof item?.token_sha256 !== "string"
+            || typeof item?.username !== "string"
+            || typeof item?.expiresAt !== "number"
+            || item.expiresAt <= now) continue;
+        this.sessions.set(item.token_sha256,
+          { username: item.username, expiresAt: item.expiresAt });
+      }
+    } catch { /* 损坏就当没有:代价只是全员重登一次 */ }
+  }
+
+  private persistSessions(): void {
+    try {
+      mkdirSync(dirname(this.sessionsFile), { recursive: true });
+      const now = Date.now();
+      const temp = `${this.sessionsFile}.tmp`;
+      writeFileSync(temp, JSON.stringify({
+        version: 1,
+        sessions: [...this.sessions.entries()]
+          .filter(([, session]) => session.expiresAt > now)
+          .map(([token_sha256, session]) => ({ token_sha256, ...session })),
+      }), { encoding: "utf-8", mode: 0o600 });
+      renameSync(temp, this.sessionsFile);
+      chmodSync(this.sessionsFile, 0o600);
+    } catch { /* 写不动只影响下次重启后的续登,不许打断本次请求 */ }
+  }
+}
+
+/** 会话表键=令牌 sha256:内存与磁盘上都不存在可直接使用的令牌。 */
+function sessionKey(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
 }
 
 /** 掩码:••••末4位。密钥一律只写不读,界面只用它确认"配过了、是哪个"。 */

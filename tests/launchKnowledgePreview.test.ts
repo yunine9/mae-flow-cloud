@@ -16,7 +16,8 @@ test("自动匹配知识必须展示逐项清单和匹配依据，不能退回�
   assert.match(section, /matchingModuleKnowledge\.map/);
   assert.match(section, /matchingEngineeringKnowledge\.map/);
   assert.match(section, /matchingTeamSkills\.map/);
-  assert.match(source, /匹配依据/);
+  assert.match(source, /命中依据/);
+  assert.match(source, /查看全文/);
   assert.doesNotMatch(section, /type="checkbox"/,
     "知识名单只用于核对，不能偷偷恢复手工勾选");
 });

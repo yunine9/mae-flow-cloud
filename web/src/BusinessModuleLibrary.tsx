@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   archiveBusinessKnowledgeAsset,
   createBusinessModule,
@@ -12,6 +12,7 @@ import {
   type BusinessModule,
   type BusinessModuleCatalog,
 } from "./api";
+import { knowledgeAssetElementId } from "./knowledgeNavigation";
 
 function lines(value: string): string[] {
   return value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean);
@@ -155,13 +156,16 @@ function AssetEditor({ module, asset, initialContent, onSaved, onCancel }: {
   </form>;
 }
 
-export function BusinessModuleLibrary({ admin }: { admin: boolean }) {
+export function BusinessModuleLibrary({ admin, initialAsset }: {
+  admin: boolean;
+  initialAsset?: { moduleId: string; assetId: string };
+}) {
   const [catalog, setCatalog] = useState<BusinessModuleCatalog>();
   const [users, setUsers] = useState<AuthUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
-  const [expanded, setExpanded] = useState("");
+  const [expanded, setExpanded] = useState(initialAsset?.moduleId ?? "");
   const [editingModule, setEditingModule] = useState("");
   const [editingAsset, setEditingAsset] = useState<{
     moduleId: string; asset?: BusinessKnowledgeAsset; content?: string }>();
@@ -173,6 +177,7 @@ export function BusinessModuleLibrary({ admin }: { admin: boolean }) {
     maintainers: "", repositories: "",
   });
   const [createBusy, setCreateBusy] = useState(false);
+  const focusedAsset = useRef("");
 
   const refresh = async () => {
     setLoading(true); setError("");
@@ -214,6 +219,32 @@ export function BusinessModuleLibrary({ admin }: { admin: boolean }) {
       setError(reason instanceof Error ? reason.message : "知识正文读取失败");
     } finally { setDocumentLoading(""); }
   };
+
+  useEffect(() => {
+    if (!initialAsset || !catalog) return;
+    const key = `${initialAsset.moduleId}/${initialAsset.assetId}`;
+    if (focusedAsset.current === key) return;
+    const module = catalog.modules.find((item) => item.id === initialAsset.moduleId);
+    const asset = module?.assets.find((item) => item.id === initialAsset.assetId
+      && item.status === "published");
+    if (!module || !asset) {
+      setError("要查看的模块知识已归档或不存在；当前任务的固定版本仍保留在任务现场。");
+      focusedAsset.current = key;
+      return;
+    }
+    focusedAsset.current = key;
+    setExpanded(module.id);
+    void openAsset(module, asset);
+  }, [catalog, initialAsset?.moduleId, initialAsset?.assetId]);
+
+  useEffect(() => {
+    if (!initialAsset || document?.moduleId !== initialAsset.moduleId
+        || document.assetId !== initialAsset.assetId) return;
+    requestAnimationFrame(() => globalThis.document.getElementById(
+      `${knowledgeAssetElementId("business", document.moduleId,
+        document.assetId)}-document`,
+    )?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  }, [document, initialAsset?.moduleId, initialAsset?.assetId]);
 
   return <section className="business-module-library" aria-labelledby="business-module-library-title">
     <header className="business-module-library-head">
@@ -333,7 +364,11 @@ export function BusinessModuleLibrary({ admin }: { admin: boolean }) {
             <div className="business-asset-list">
               <div className="business-asset-list-head"><strong>已发布知识</strong>
                 <small>点击名称查看正文；任务只会获得选中模块当时的固定版本。</small></div>
-              {liveAssets.map((asset) => <div className="business-asset-row" key={asset.id}>
+              {liveAssets.map((asset) => <div
+                id={knowledgeAssetElementId("business", module.id, asset.id)}
+                className={`business-asset-row${initialAsset?.moduleId === module.id
+                  && initialAsset.assetId === asset.id ? " focused" : ""}`}
+                key={asset.id}>
                 <button type="button" className="business-asset-title"
                   disabled={documentLoading === `${module.id}/${asset.id}`}
                   onClick={() => void openAsset(module, asset)}>
@@ -362,7 +397,10 @@ export function BusinessModuleLibrary({ admin }: { admin: boolean }) {
               {!liveAssets.length && <div className="business-asset-empty">
                 还没有已发布知识。Owner 可以从一项明确、可复用的知识开始。</div>}
             </div>
-            {document?.moduleId === module.id && <div className="business-asset-document">
+            {document?.moduleId === module.id && <div
+              id={`${knowledgeAssetElementId("business", document.moduleId,
+                document.assetId)}-document`}
+              className="business-asset-document">
               <header><strong>{document.title}</strong><button type="button"
                 onClick={() => setDocument(undefined)}>关闭正文</button></header>
               <pre>{document.content}</pre>

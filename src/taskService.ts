@@ -73,7 +73,6 @@ import {
 } from "./workflowProfileRuntime.ts";
 import {
   resolveWorkflowAssets,
-  workflowKnowledgeSelections,
 } from "./workflowAssetResolution.ts";
 import type {
   WorkflowExecutionProfileV2,
@@ -204,6 +203,12 @@ import {
   snapshotEngineeringKnowledge,
   type SelectedEngineeringKnowledge,
 } from "./engineeringKnowledgeRuntime.ts";
+import {
+  effectiveLaunchKnowledgeSelections,
+  previewLaunchKnowledge,
+  type LaunchKnowledgePreview,
+  type LaunchKnowledgePreviewInput,
+} from "./launchKnowledgePreview.ts";
 import {
   discoverRepositorySkills,
   type RepositorySkillCatalog,
@@ -3499,6 +3504,13 @@ export class TaskService {
     });
   }
 
+  /** 发起页只读预匹配；不创建 task id、不写任务现场、不返回正文。 */
+  previewLaunchKnowledge(
+    input: LaunchKnowledgePreviewInput,
+  ): LaunchKnowledgePreview {
+    return previewLaunchKnowledge(this.options.dataDir, input);
+  }
+
   /** 下单表单的数据源。
    *
    * 口径(用户 2026-08-18 拍板,按内网实战定的):
@@ -4083,20 +4095,17 @@ export class TaskService {
     if ((repositorySkills?.length ?? 0) > 20) {
       throw new Error("每个任务最多选择 20 个仓内 Skill");
     }
-    const workflowSelections = !options.workflowProfile
-        && options.workflowDefinition !== undefined
-      ? workflowKnowledgeSelections(options.workflowDefinition)
-      : { businessModuleIds: [], engineeringKnowledgeIds: [], teamSkillIds: [] };
-    const selectedBusinessModuleIds = [...new Set([
-      ...(options.selectedBusinessModuleIds ?? []),
-      ...workflowSelections.businessModuleIds,
-    ])];
+    const effectiveKnowledgeSelections = effectiveLaunchKnowledgeSelections({
+      selectedBusinessModuleIds: options.selectedBusinessModuleIds,
+      selectedEngineeringKnowledgeIds: options.selectedEngineeringKnowledgeIds,
+      workflowDefinition: !options.workflowProfile
+        ? options.workflowDefinition : undefined,
+    });
+    const workflowSelections = effectiveKnowledgeSelections.workflow;
+    const selectedBusinessModuleIds =
+      effectiveKnowledgeSelections.businessModuleIds;
     const selectedEngineeringKnowledgeIds =
-      options.selectedEngineeringKnowledgeIds === undefined
-        ? undefined : [...new Set([
-            ...options.selectedEngineeringKnowledgeIds,
-            ...workflowSelections.engineeringKnowledgeIds,
-          ])];
+      effectiveKnowledgeSelections.engineeringKnowledgeIds;
     const id = options.reuseTaskId ?? this.allocateTaskId();
     if (options.reuseTaskId && (!/^task-\d+$/.test(id)
         || this.tasks.has(id) || existsSync(join(this.options.dataDir, id)))) {
@@ -4383,6 +4392,7 @@ export class TaskService {
           task.appliedDeveloperInterventionId,
         obsolete_developer_waiting: task.obsoleteDeveloperWaiting,
         token_usage_state: task.tokenUsage,
+        notify_record: task.notifyRecord,
       }, null, 1));
       renameSync(path + ".tmp", path);
       return true;
@@ -4434,7 +4444,14 @@ export class TaskService {
     let restored = 0;
     let requeued = 0;
     if (!existsSync(this.options.dataDir)) return { restored, requeued };
-    for (const name of readdirSync(this.options.dataDir).sort()) {
+    // 按任务号数值排序,不是字典序:task-10 若排在 task-2 前面,重启后
+    // 重建的等待队列会悄悄插队(2026-08-29 部署审计实锤)。
+    for (const name of readdirSync(this.options.dataDir).sort((a, b) => {
+      const [na, nb] = [a, b].map((item) =>
+        /^task-\d+$/.test(item) ? Number(item.slice(5)) : Number.NaN);
+      return Number.isNaN(na) || Number.isNaN(nb)
+        ? a.localeCompare(b) : na - nb;
+    })) {
       const workspace = join(this.options.dataDir, name);
       const path = join(workspace, "task.json");
       if (!/^task-\d+$/.test(name) || !existsSync(path)
@@ -4480,6 +4497,11 @@ export class TaskService {
               && Number.isInteger(saved.obsolete_developer_waiting.stateVersion)
               ? saved.obsolete_developer_waiting : undefined,
           lastPersistedStatus: summary.status,
+          // 上一段进程记下的通知投递结果(含"没送到"红旗)要跟着回来,
+          // 页面才不会把投递失败演成"通知过了"。
+          notifyRecord: saved.notify_record
+              && typeof saved.notify_record.waiting_id === "string"
+            ? saved.notify_record as NotifyRecord : undefined,
           controlEpoch: 0,
         };
         this.tasks.set(summary.id, task);
@@ -4583,7 +4605,13 @@ export class TaskService {
             this.dispatchCiRepair(task, summary.delivery.sha,
               gap.failure_log ?? "", max, task.controlEpoch));
         } else if (summary.status === "verifying"
-            && summary.delivery?.pipeline === "running") {
+            && summary.delivery?.pipeline?.startsWith("running")) {
+          // 前缀匹配而非全等:预算耗尽/拒陈灯会把 pipeline 写成
+          // "running(轮询预算耗尽…)" 之类带注记的形态。它们语义上仍是
+          // "远端在跑/该继续盯",全等匹配会把这类任务漏到下面的
+          // tryDeliver 兜底里重建 MR + 同 SHA 重触发流水线
+          // (2026-08-29 部署审计实锤:每次重启白烧一条)。重启=新预算,
+          // 续轮即可,终态自然落袋。
           this.bypass(task, "流水线轮询",
             this.pollPipeline(task, task.controlEpoch));
         } else if (summary.status === "verifying"
@@ -9976,6 +10004,16 @@ export class TaskService {
             previous.loop?.failure ?? "", previous.checks, epoch);
           return;
         }
+        if (previous.pipeline.startsWith("running")) {
+          // 同 SHA 上次还挂着"运行中"(含预算耗尽/拒陈灯注记):流水线
+          // 大概率仍在远端跑或早已出结果只是没人盯。跌进下面的触发块
+          // 就是重建 MR + 同 SHA 重触发——远端每条流水线都是钱。
+          // 唯一正确动作:带新预算续轮,已终态的第一轮查询就能收口。
+          task.summary.status = "verifying";
+          this.persist(task);
+          this.bypass(task, "流水线轮询", this.pollPipeline(task, epoch));
+          return;
+        }
       }
       // 外部动作台账(§11):请求先落一行(带幂等键),结果回来再补
       // 结果侧——恢复时"先查远端真实状态"就有底账可对。纯旁路。
@@ -10113,6 +10151,13 @@ export class TaskService {
     const delivery = this.options.delivery;
     const sha = task.summary.delivery?.sha;
     if (!this.effectivePlatformUrl() || !sha) return;
+    if (task.summary.delivery?.pipeline?.startsWith("running(")) {
+      // "running(轮询预算耗尽,请人工查看…)"是上一段轮询的求助台词;
+      // 新一轮已带新预算重新盯上,再挂着"请人工"就是呈现与实际不一致。
+      // 复位成裸 running,后续事实由本轮如实写。
+      task.summary.delivery = { ...task.summary.delivery, pipeline: "running" };
+      this.persist(task);
+    }
     const knobs = this.options.settings?.runtime() ?? {};
     const interval = (knobs.poll_interval_s !== undefined
       ? knobs.poll_interval_s * 1000 : undefined)
@@ -11829,6 +11874,10 @@ export class TaskService {
       })
       .then((record) => {
         task.notifyRecord = record;
+        // 投递结果(尤其"没送到")要活过重启:不落盘的话,重启后页面
+        // 红旗消失,"通知失败"从可见事实变成不可见事实(2026-08-29
+        // 部署审计实锤)。写盘失败由 writeTaskState 自己记日志,纯旁路。
+        this.writeTaskState(task);
       }));
   }
 

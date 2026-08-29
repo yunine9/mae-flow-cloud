@@ -528,6 +528,41 @@ test("进程可死轮询不死:重启 recover 后继续收敛流水线", async (
   }
 });
 
+test("预算耗尽注记不挡续轮:重启只继续盯同 SHA,不重建 MR 不重触发", async () => {
+  // 2026-08-29 部署审计实锤:轮询预算耗尽把 pipeline 写成
+  // "running(轮询预算耗尽,请人工查看流水线)",recover 的全等匹配认不出
+  // 它,任务跌进 tryDeliver 兜底——重建 MR + 同 SHA 重新触发流水线,
+  // 每次重启白烧一条。前缀匹配 + tryDeliver 的 running 岔路挡住这条路。
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  platform.nextPipelineStatus = "running";
+  await platform.start();
+  try {
+    const { task, dataDir } = await runTask(
+      platform, true, { pollIntervalMs: 100_000 });
+    assert.equal(task.delivery?.pipeline, "running");
+    const before = { mrs: platform.mergeRequests.length,
+                     runs: platform.pipelines.length };
+    // 伪造上一段进程的临终笔迹:预算耗尽留痕后死于重启。
+    const statePath = join(dataDir, task.id, "task.json");
+    const saved = JSON.parse(readFileSync(statePath, "utf-8"));
+    saved.summary.delivery.pipeline = "running(轮询预算耗尽,请人工查看流水线)";
+    writeFileSync(statePath, JSON.stringify(saved, null, 1));
+    const revived = buildService(
+      platform, dataDir, {}, { pollIntervalMs: 100 });
+    assert.equal(revived.recover().restored, 1);
+    platform.finishPipeline(task.delivery!.sha!, "success");
+    await until(() =>
+      revived.get(task.id)!.status === "await_merge", "耗尽注记后续轮收敛");
+    assert.equal(platform.mergeRequests.length, before.mrs,
+      "重启不许重建 MR");
+    assert.equal(platform.pipelines.length, before.runs,
+      "同 SHA 不许被重新触发");
+  } finally {
+    await platform.stop();
+  }
+});
+
 test("老单不被新尺子重新量:恢复不翻状态、更不会把分支重新推回去", async () => {
   // 读代码逮住、第一次重启就会发生的事:恢复时对每个落盘 completed 的
   // 任务重做终态对账,而老单现场里没有 execution_contract,判据按"云端

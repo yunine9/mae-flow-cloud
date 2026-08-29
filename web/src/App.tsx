@@ -42,6 +42,11 @@ import { KnowledgeFlywheel } from "./KnowledgeFlywheel";
 import { WishWall, type WishWallDraft } from "./WishWall";
 import { BusinessModuleLibrary } from "./BusinessModuleLibrary";
 import { WorkflowAssetWorkspace } from "./workflows";
+import {
+  knowledgeAssetPath,
+  readKnowledgeAssetFocus,
+  type KnowledgeAssetFocus,
+} from "./knowledgeNavigation";
 
 // 问题处理页独立分包(懒加载):问题流与需求流互不拖累,改哪边都不
 // 用动另一边的构建产物。
@@ -94,6 +99,7 @@ function workspacePath(taskId: string, reviewId = ""): string {
 
 function initialView(user: AuthUser): View {
   if (/^\/help(?:\/|$)/.test(location.pathname)) return "help";
+  if (readKnowledgeAssetFocus()) return "knowledge";
   // 管理员没有"我的待办"(不下单的角色没有个人任务收件箱,用户拍板):
   // 深链也一律落到团队总览,从那里打开任意任务行使兜底控制。
   if (user.role === "admin") return "team";
@@ -367,7 +373,11 @@ export function App() {
   const [knowledgeInsights, setKnowledgeInsights] = useState<TeamKnowledgeInsights>();
   const [knowledgeInsightsLoading, setKnowledgeInsightsLoading] = useState(false);
   const [knowledgeInsightsError, setKnowledgeInsightsError] = useState("");
-  const [teamAssetTab, setTeamAssetTab] = useState<TeamAssetTab>("knowledge");
+  const [teamAssetTab, setTeamAssetTab] = useState<TeamAssetTab>(() =>
+    readKnowledgeAssetFocus()?.kind === "business" ? "modules" : "knowledge");
+  const [knowledgeFocus, setKnowledgeFocus] = useState<KnowledgeAssetFocus | undefined>(
+    readKnowledgeAssetFocus,
+  );
   /** 下单选择器"查看方案"带过来的直达目标;资产库挂载时消费。 */
   const [workflowFocusId, setWorkflowFocusId] = useState("");
   const [helpArticleId, setHelpArticleId] = useState(() => {
@@ -400,6 +410,18 @@ export function App() {
     };
     addEventListener("popstate", syncRoute);
     return () => removeEventListener("popstate", syncRoute);
+  }, []);
+
+  useEffect(() => {
+    const syncKnowledgeRoute = () => {
+      const focus = readKnowledgeAssetFocus();
+      setKnowledgeFocus(focus);
+      if (!focus) return;
+      setTeamAssetTab(focus.kind === "business" ? "modules" : "knowledge");
+      setView("knowledge");
+    };
+    addEventListener("popstate", syncKnowledgeRoute);
+    return () => removeEventListener("popstate", syncKnowledgeRoute);
   }, []);
 
   // FAQ 支持把具体文章链接直接发给别人；浏览器前进/后退也要真的切页，
@@ -694,13 +716,23 @@ export function App() {
     : view === "team" && teamTaskTab === "current" ? waitingCount : 0;
   const launchEntry = launchGateCopy(launchGate);
   const selectView = (next: View) => {
+    const leavingKnowledgeFocus = readKnowledgeAssetFocus();
+    if (leavingKnowledgeFocus) setKnowledgeFocus(undefined);
     if (next === "help") {
       const nextPath = `/help/${encodeURIComponent(helpArticleId)}`;
       if (location.pathname !== nextPath) history.pushState({}, "", nextPath);
     } else if (/^\/help(?:\/|$)/.test(location.pathname)) {
       history.pushState({}, "", "/");
+    } else if (leavingKnowledgeFocus) {
+      history.pushState({}, "", "/");
     }
     setView(next);
+  };
+  const selectTeamAssetTab = (next: TeamAssetTab) => {
+    setTeamAssetTab(next);
+    if (!knowledgeFocus) return;
+    setKnowledgeFocus(undefined);
+    history.pushState({}, "", "/");
   };
   return <div className="app-shell">
     <aside className="sidebar">
@@ -778,22 +810,23 @@ export function App() {
           <nav className="team-assets-tabs" aria-label="团队资产类型">
             <button type="button" className={teamAssetTab === "knowledge" ? "active" : ""}
               aria-pressed={teamAssetTab === "knowledge"}
-              onClick={() => setTeamAssetTab("knowledge")}>
+              onClick={() => selectTeamAssetTab("knowledge")}>
               <strong>知识资产</strong><small>团队通用知识及全部资产的真实使用效果</small>
             </button>
             <button type="button" className={teamAssetTab === "modules" ? "active" : ""}
               aria-pressed={teamAssetTab === "modules"}
-              onClick={() => setTeamAssetTab("modules")}>
+              onClick={() => selectTeamAssetTab("modules")}>
               <strong>业务模块</strong><small>模块是抽屉，集中维护业务语义和模块知识</small>
             </button>
             <button type="button" className={teamAssetTab === "workflows" ? "active" : ""}
               aria-pressed={teamAssetTab === "workflows"}
-              onClick={() => setTeamAssetTab("workflows")}>
+              onClick={() => selectTeamAssetTab("workflows")}>
               <strong>工作流方案</strong><small>保存、复制、审核并精确编排阶段内能力</small>
             </button>
           </nav>
           {teamAssetTab === "knowledge" ? <KnowledgeFlywheel
             admin={session.role === "admin"}
+            initialAsset={knowledgeFocus}
             insights={knowledgeInsights}
             loading={knowledgeInsightsLoading}
             error={knowledgeInsightsError}
@@ -803,7 +836,11 @@ export function App() {
               if (target) openArtifacts(target);
             }}
           /> : teamAssetTab === "modules" ? <BusinessModuleLibrary
-            admin={session.role === "admin"} />
+            admin={session.role === "admin"}
+            initialAsset={knowledgeFocus?.kind === "business" ? {
+              moduleId: knowledgeFocus.moduleId,
+              assetId: knowledgeFocus.assetId,
+            } : undefined} />
             : <WorkflowAssetWorkspace initialWorkflowId={workflowFocusId
               || undefined} />}
         </section>}
@@ -858,8 +895,20 @@ export function App() {
     </div>
     {launchOpen && <LaunchWorkspace session={session}
       onCreated={refresh} onClose={() => setLaunchOpen(false)}
+      onOpenKnowledgeAsset={(target) => {
+        setLaunchOpen(false);
+        setKnowledgeFocus(target);
+        setTeamAssetTab(target.kind === "business" ? "modules" : "knowledge");
+        setWorkflowFocusId("");
+        setView("knowledge");
+        const next = knowledgeAssetPath(target);
+        if (location.pathname + location.search !== next) {
+          history.pushState({}, "", next);
+        }
+      }}
       onOpenWorkflowAssets={(workflowId) => {
         setLaunchOpen(false);
+        setKnowledgeFocus(undefined);
         setTeamAssetTab("workflows");
         // 从下单选择器带 id 直达该方案详情(复制/编辑都在那里),
         // 不再把人扔到资产库首页自己找(审计 P1-9)。

@@ -9222,6 +9222,21 @@ body[data-view="issues"] .nav-item.on { box-shadow: inset 3px 0 #c87873; }
   margin: 0; overflow: hidden; color: var(--muted); font-size: 11px;
   line-height: 1.5; text-align: right; text-overflow: ellipsis; white-space: nowrap;
 }
+.launch-knowledge-notices {
+  padding: 10px 12px; display: grid; gap: 3px;
+  border: 1px solid var(--line); border-radius: 9px;
+  font-size: 10px; line-height: 1.5;
+}
+.launch-knowledge-notices strong { font-size: 11px; }
+.launch-knowledge-notices span { overflow-wrap: anywhere; }
+.launch-knowledge-notices.warning {
+  color: var(--attention); border-color: color-mix(in srgb, var(--attention) 34%, var(--line));
+  background: var(--attention-soft);
+}
+.launch-knowledge-notices.error {
+  color: var(--danger); border-color: color-mix(in srgb, var(--danger) 34%, var(--line));
+  background: var(--danger-soft);
+}
 .launch-knowledge-list {
   max-height: 410px; overflow: auto; border: 1px solid var(--line);
   border-radius: 10px; background: var(--surface);
@@ -9253,11 +9268,18 @@ body[data-view="issues"] .nav-item.on { box-shadow: inset 3px 0 #c87873; }
   color: var(--muted); font-size: 10px; font-style: normal;
 }
 .launch-knowledge-row {
-  min-height: 62px; padding: 9px 12px; display: grid;
+  width: 100%; min-height: 62px; padding: 9px 12px; display: grid;
   grid-template-columns: 44px minmax(0, 1fr) minmax(150px, .42fr);
-  align-items: center; gap: 10px;
+  align-items: center; gap: 10px; color: inherit; text-align: left;
+  border: 0; border-radius: 0; background: transparent; font: inherit;
+  cursor: pointer; transition: background var(--ease), box-shadow var(--ease);
 }
 .launch-knowledge-row + .launch-knowledge-row { border-top: 1px solid var(--line); }
+.launch-knowledge-row:hover { background: var(--surface-hover); }
+.launch-knowledge-row:focus-visible {
+  position: relative; z-index: 1; outline: 0;
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
 .launch-knowledge-form {
   width: 40px; padding: 3px 0; color: var(--accent); text-align: center;
   border-radius: 6px; background: var(--accent-soft); font-size: 10px;
@@ -9267,9 +9289,18 @@ body[data-view="issues"] .nav-item.on { box-shadow: inset 3px 0 #c87873; }
 .launch-knowledge-form.rule { color: var(--attention); background: var(--attention-soft); }
 .launch-knowledge-form.example { color: #7c5cc7; background: #f0eafd; }
 .launch-knowledge-copy { min-width: 0; display: grid; gap: 2px; }
-.launch-knowledge-copy strong {
+.launch-knowledge-titleline {
+  min-width: 0; display: flex; align-items: center; gap: 7px;
+}
+.launch-knowledge-titleline strong {
+  min-width: 0; flex: 0 1 auto;
   overflow: hidden; color: var(--text-strong); font-size: 12px;
   text-overflow: ellipsis; white-space: nowrap;
+}
+.launch-knowledge-titleline code {
+  flex: none; padding: 1px 5px; color: var(--accent); border-radius: 999px;
+  background: var(--accent-soft); font-family: inherit; font-size: 9px;
+  font-weight: 750;
 }
 .launch-knowledge-copy small,
 .launch-knowledge-copy em {
@@ -9286,6 +9317,9 @@ body[data-view="issues"] .nav-item.on { box-shadow: inset 3px 0 #c87873; }
   overflow: hidden; color: var(--success); font-size: 10px;
   text-overflow: ellipsis; white-space: nowrap;
 }
+.launch-knowledge-scope em {
+  color: var(--accent); font-size: 9px; font-style: normal; font-weight: 700;
+}
 .launch-knowledge-empty {
   padding: 18px 12px; color: var(--muted); font-size: 11px;
   line-height: 1.55; text-align: center;
@@ -9295,11 +9329,81 @@ body[data-view="issues"] .nav-item.on { box-shadow: inset 3px 0 #c87873; }
   color: var(--muted); font-size: 11px; line-height: 1.5;
 }
 .launch-resource-boundary strong { color: var(--success); white-space: nowrap; }
+
+/* 发起页点“查看全文”后的管理位落点：让用户一眼确认跳到的是同一项，
+   不是只把他扔到资产首页。 */
+.business-asset-row.focused,
+.knowledge-shelf-row.focused,
+.knowledge-candidate-list > article.focused {
+  scroll-margin: 24px; border-color: color-mix(in srgb, var(--accent) 62%, var(--line));
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.business-asset-document[id$="-document"],
+.knowledge-shelf-document[id$="-document"],
+.knowledge-candidate-list details[id$="-document"] { scroll-margin-top: 24px; }
 @media (max-width: 1120px) {
   .launch-composer { grid-template-columns: 1fr; }
   .launch-requirement-section, .launch-delivery-section,
   .launch-delivery-mode-section { grid-column: 1; grid-row: auto; }
   .launch-delivery-mode-section .delivery-mode-options { grid-template-columns: repeat(3, 1fr); }
+}
+
+/* 知识清单窄屏不再硬塞三列。新版发起页样式位于旧移动端规则之后，
+   这里显式收回桌面内边距，并把匹配依据放到正文下方，避免正文列被
+   150px 的依据列压成 0。长标题、摘要和适用场景在手机上完整换行。 */
+@media (max-width: 680px) {
+  .launch-workspace-body { padding: 20px 14px 36px; }
+  .launch-form-shell { padding: 17px 14px 20px; }
+  .launch-advanced > summary {
+    padding: 11px 12px; grid-template-columns: 34px minmax(0, 1fr) 18px;
+    align-items: start; gap: 8px 10px;
+  }
+  .launch-advanced-icon { grid-column: 1; grid-row: 1 / span 2; }
+  .launch-advanced-copy { grid-column: 2; grid-row: 1; }
+  .launch-advanced-copy small { overflow-wrap: anywhere; }
+  .launch-advanced-summary {
+    grid-column: 2 / -1; grid-row: 2; justify-content: flex-start;
+  }
+  .launch-advanced-chevron { grid-column: 3; grid-row: 1; }
+  .launch-advanced-body { padding: 10px; grid-template-columns: minmax(0, 1fr); }
+
+  .launch-resource-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0;
+  }
+  .launch-resource-summary > span { min-width: 0; }
+  .launch-resource-summary p {
+    grid-column: 1 / -1; margin-top: 9px; padding-top: 9px;
+    border-top: 1px solid var(--line); text-align: left;
+    text-overflow: clip; white-space: normal; overflow-wrap: anywhere;
+  }
+
+  .launch-knowledge-list {
+    min-width: 0; max-width: 100%; overflow-x: hidden; overflow-y: auto;
+  }
+  .launch-knowledge-row {
+    padding: 11px 10px; grid-template-columns: 40px minmax(0, 1fr);
+    align-items: start; gap: 7px 10px;
+  }
+  .launch-knowledge-form { grid-column: 1; grid-row: 1; }
+  .launch-knowledge-copy { grid-column: 2; grid-row: 1; }
+  .launch-knowledge-titleline { align-items: flex-start; flex-wrap: wrap; }
+  .launch-knowledge-titleline strong { flex-basis: 100%; }
+  .launch-knowledge-copy strong,
+  .launch-knowledge-copy small,
+  .launch-knowledge-copy em {
+    overflow: visible; text-overflow: clip; white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .launch-knowledge-scope {
+    grid-column: 2; grid-row: 2; padding: 7px 0 0;
+    border-top: 1px solid var(--line); border-left: 0;
+  }
+  .launch-knowledge-scope strong {
+    overflow: visible; text-overflow: clip; white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .launch-resource-boundary { display: grid; gap: 2px; }
+  .launch-resource-boundary strong { white-space: normal; }
 }
 
 /* 阶段方案弹层(2026-08-29):折叠条目替掉浏览器默认 details marker,

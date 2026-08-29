@@ -78,6 +78,12 @@ export interface MaterializedBusinessModuleKnowledge {
   warnings: string[];
 }
 
+export interface BusinessModuleSelectionOptions {
+  dataDir: string;
+  moduleIds?: string[];
+  repositories?: string[];
+}
+
 function sha256(value: string | Buffer): string {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -112,12 +118,13 @@ function assertNoSymlinkPath(root: string, target: string): void {
   }
 }
 
-export function snapshotBusinessModules(options: {
-  dataDir: string;
-  taskWorkspace: string;
-  moduleIds?: string[];
-  repositories?: string[];
-}): SelectedBusinessModule[] {
+/**
+ * 任务创建与发起前预览共用的唯一业务知识选择器。只返回不可变身份和
+ * 元数据，不读取/返回正文，也不写任务现场。
+ */
+export function selectBusinessModules(
+  options: BusinessModuleSelectionOptions,
+): SelectedBusinessModule[] {
   const ids = [...new Set((options.moduleIds ?? [])
     .map((item) => item.trim()).filter(Boolean))];
   if (ids.length > MAX_MODULES) {
@@ -145,20 +152,10 @@ export function snapshotBusinessModules(options: {
           `所选模块知识超过 ${MAX_ASSETS} 项或 8 MiB，请减少关联模块`,
         );
       }
-      const document = readBusinessKnowledgeAsset(
-        options.dataDir, module.id, asset.id);
       const snapshotPath = join(
         SNAPSHOT_DIR, module.id, `r${module.revision}`,
         `${asset.id}-v${asset.version}.md`,
       ).split(sep).join("/");
-      const destination = safeSnapshotPath(
-        options.taskWorkspace, snapshotPath);
-      assertNoSymlinkPath(options.taskWorkspace, destination);
-      mkdirSync(dirname(destination), { recursive: true, mode: 0o750 });
-      writeFileSync(destination, document.content, {
-        encoding: "utf-8", mode: 0o440,
-      });
-      chmodSync(destination, 0o440);
       assets.push({
         id: asset.id,
         title: asset.title,
@@ -180,6 +177,30 @@ export function snapshotBusinessModules(options: {
       revision: module.revision,
       assets,
     });
+  }
+  return selected;
+}
+
+export function snapshotBusinessModules(options: {
+  dataDir: string;
+  taskWorkspace: string;
+  moduleIds?: string[];
+  repositories?: string[];
+}): SelectedBusinessModule[] {
+  const selected = selectBusinessModules(options);
+  for (const module of selected) {
+    for (const asset of module.assets) {
+      const document = readBusinessKnowledgeAsset(
+        options.dataDir, module.id, asset.id);
+      const destination = safeSnapshotPath(
+        options.taskWorkspace, asset.snapshot_path);
+      assertNoSymlinkPath(options.taskWorkspace, destination);
+      mkdirSync(dirname(destination), { recursive: true, mode: 0o750 });
+      writeFileSync(destination, document.content, {
+        encoding: "utf-8", mode: 0o440,
+      });
+      chmodSync(destination, 0o440);
+    }
   }
   return selected;
 }

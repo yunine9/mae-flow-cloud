@@ -239,6 +239,7 @@ async function main(): Promise<void> {
     throw error;
   }
   guardProcess(dataDir);   // 旁路异常不许带走整个服务(见函数注释)
+  sweepStaleGitRuntime(dataDir);   // 上个进程留下的明文凭据现场(旁路)
   // 管理旋钮(主 spec §4:最大并发由管理员配置,超出排队)。
   const maxConcurrent = Number(flag("--max-concurrent") ?? 2);
   // 主动压缩节奏(事件量为代理,回合间隙以内核锚点压缩;0=关,
@@ -1076,6 +1077,52 @@ function warnStaleWeb(webRoot: string | undefined): void {
  * - **先落盘后上屏**:crash.log 是给人的,console 只是顺手;
  * - **重入保险**:记账过程自己出的事不再记,递归到此为止。
  */
+/** 清掉上一个进程遗留的 git 凭据现场。
+ *
+ * host-git/issue-git 每次动 git 都在 .runtime 下开 operation-* 私有
+ * 目录,里面躺着**明文个人令牌**;正常路径 finally 里删,kill -9 不给
+ * finally 机会——不扫的话每次硬重启都往磁盘上多留一份长期明文凭据
+ * (2026-08-29 部署审计实锤)。只删"够老"的:推送走 detached 进程组,
+ * 服务死了 git 可能还在 5 分钟预算内收尾,扫早了等于拔它的凭据。
+ * 纯旁路:任何一步失败只记日志,绝不拦启动。 */
+function sweepStaleGitRuntime(dataDir: string): void {
+  const cutoff = Date.now() - 15 * 60_000;
+  for (const lane of ["host-git", "issue-git"]) {
+    const root = join(dataDir, ".runtime", lane);
+    let entries: string[];
+    try {
+      entries = readdirSync(root);
+    } catch {
+      continue;   // 目录还没建过:无现场可扫
+    }
+    for (const name of entries) {
+      if (!name.startsWith("operation-")) continue;
+      const path = join(root, name);
+      try {
+        const stat = statSync(path);
+        if (!stat.isDirectory() || stat.mtimeMs > cutoff) continue;
+        rmSync(path, { recursive: true, force: true });
+        // 只报目录名,凭据内容永不上日志。
+        console.log(`[serve] 已清理遗留 git 凭据现场 ${lane}/${name}`);
+      } catch (error) {
+        console.log(`[serve] 清理 ${lane}/${name} 失败(不拦启动): `
+          + String(error));
+      }
+    }
+  }
+  // skill 换包的暂存目录同理是 kill -9 遗留(正常路径 finally 里删)。
+  // 它没有 detached 写者,不需要年龄闸,起服时全量清。
+  try {
+    const staging = join(dataDir, "skill-staging");
+    for (const name of existsSync(staging) ? readdirSync(staging) : []) {
+      rmSync(join(staging, name), { recursive: true, force: true });
+      console.log(`[serve] 已清理遗留 skill 暂存 ${name}`);
+    }
+  } catch (error) {
+    console.log(`[serve] 清理 skill 暂存失败(不拦启动): ${String(error)}`);
+  }
+}
+
 function guardProcess(dataDir: string): void {
   let recording = false;
   const record = (kind: string, error: unknown) => {

@@ -258,6 +258,31 @@ export class WorkflowAssetLibrary {
     this.oplogPath = join(this.root, "operations.jsonl");
     this.fault = options.faultInjection;
     mkdirSync(this.root, { recursive: true });
+    this.sweepOrphanTmp();
+  }
+
+  /** 崩溃遗留的写入中间态(*.tmp-<pid>-<hex>)只在这里回收:构造发生
+   * 在起服早期,实例锁保证此刻没有并发写者,扫到的 tmp 一律是上个
+   * 进程的孤儿。不影响正确性(读侧从不看 tmp),但不扫会无限累积。
+   * 纯旁路:任何失败都不拦启动。 */
+  private sweepOrphanTmp(): void {
+    const isTmp = (name: string) => /\.tmp-\d+-[0-9a-f]+$/.test(name);
+    const sweepDir = (dir: string) => {
+      let entries: string[];
+      try { entries = readdirSync(dir); } catch { return; }
+      for (const name of entries) {
+        if (isTmp(name)) rmSync(join(dir, name), { force: true });
+      }
+    };
+    try {
+      sweepDir(this.root);
+      for (const entry of readdirSync(this.root)) {
+        const dir = join(this.root, entry);
+        try { if (!lstatSync(dir).isDirectory()) continue; } catch { continue; }
+        sweepDir(dir);
+        sweepDir(join(dir, "versions"));
+      }
+    } catch { /* 清扫是旁路,失败不许拦库的启动 */ }
   }
 
   // -- 落盘原语(全部带故障注入口) --
@@ -739,7 +764,26 @@ export class WorkflowAssetLibrary {
       const existing = this.readVersionStrict(id, version);
       if (existing.digest !== draft.digest
           || existing.from_revision !== draft.revision) {
-        throw error;   // 内容不同:真冲突,绝不覆盖
+        // 内容不同:要么是上次发布在"vN 落盘"与"提交点写入"之间被杀
+        // 留下的孤儿(不回收的话,改稿后重新发布永远撞 version_exists,
+        // 资产整个焊死——2026-08-29 部署审计实锤,曾被故障测试当正确
+        // 行为钉住),要么是提交点被拨回、诱导重写真发布版本的篡改。
+        // 光看 latest_version 分不清这两者(拨回的就是它),铁证在
+        // WAL:每次发布提交成功都补一笔 approve_commit,查得到的 vN
+        // 是真发布过的,绝不覆盖;查不到的才是可回收的孤儿。
+        if (this.hasApproveCommit(id, version)) {
+          throw error;   // WAL 有提交确认:真发布过,永不可覆盖
+        }
+        // 回收动作照样账先行,孤儿的 digest 留痕可追。
+        this.logOperation("approve", id, actor, {
+          version, digest: draft.digest, from_revision: draft.revision,
+          reclaimed_orphan_digest: existing.digest,
+        });
+        rmSync(join(this.assetDir(id), "versions", `v${version}.json`),
+          { force: true });
+        this.immutableWriteJson(
+          join(this.assetDir(id), "versions", `v${version}.json`),
+          versionRecord);
       }
       // 同 digest 同 from_revision:上次中断的续跑,复用已落盘的 vN。
     }
@@ -748,7 +792,34 @@ export class WorkflowAssetLibrary {
     record.published_digest = draft.digest;
     record.updated_at = versionRecord.published_at;
     this.writeAsset(record);
+    // 唯一的账后行:它是"提交点已落定"的确认,天然只能写在提交之后。
+    // 有它的 vN 从此铁证不可覆盖;这一笔本身被杀掉的窗口无害——
+    // 状态已是 published,approve 不会再对同一个 version 走冲突分支。
+    this.logOperation("approve_commit", id, actor, { version });
     return this.summarize(record);
+  }
+
+  /** WAL 里是否有 vN 的发布提交确认。证据链断了(读失败/坏行)一律
+   * 按"有"处理:回收孤儿的前提是能证明它没发布过,证明不了就拒绝
+   * (fail-closed,宁可让人来看也不冒覆盖已发布版本的险)。 */
+  private hasApproveCommit(id: string, version: number): boolean {
+    let raw: string;
+    try {
+      raw = readFileSync(this.oplogPath, "utf-8");
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code !== "ENOENT";
+    }
+    for (const line of raw.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const entry = JSON.parse(line) as Record<string, unknown>;
+        if (entry.op === "approve_commit" && entry.asset_id === id
+            && entry.version === version) return true;
+      } catch {
+        return true;   // 账本有坏行=证据不全,按已发布对待
+      }
+    }
+    return false;
   }
 
   /** 归档:只挡"新任务选择"这一件事;草稿、版本、留痕全部原样保留。 */

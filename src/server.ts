@@ -840,6 +840,7 @@ export function createTaskServer(
 
       const protectedRoute =
         url.pathname === "/history" || parts[0] === "tasks"
+        || url.pathname === "/launch-knowledge-preview"
         || url.pathname === "/knowledge-insights"
         || parts[0] === "reviews" || parts[0] === "repository-skills"
         || parts[0] === "skills" || parts[0] === "business-modules"
@@ -878,6 +879,72 @@ export function createTaskServer(
       // 会被当成前端资源并返回 404。只读口径与团队任务可见性一致。
       if (request.method === "GET" && url.pathname === "/knowledge-insights") {
         return json(response, 200, service.knowledgeInsights());
+      }
+      // 发起页权威知识预匹配：只回元数据与固定身份，不分配 task id、
+      // 不写任务现场。保存的工作流选择必须在服务端解析已发布版本，
+      // 浏览器不能自报它引用了哪些知识来影响自动匹配。
+      if (request.method === "POST"
+          && url.pathname === "/launch-knowledge-preview") {
+        try {
+          const body = await readBody(request);
+          let workflowDefinition = body.workflow_definition;
+          const workflowSelection = body.workflow_selection
+              && typeof body.workflow_selection === "object"
+            ? body.workflow_selection as Record<string, unknown> : undefined;
+          if (workflowSelection && workflowDefinition !== undefined) {
+            return json(response, 400, {
+              error: "工作流方案选择与本任务临时定制不能同时提交",
+            });
+          }
+          if (workflowSelection) {
+            const id = String(workflowSelection.id ?? "").trim();
+            const detail = getWorkflowAssets().get(id);
+            const operator = viewer?.username ?? "本地部署";
+            if (!canViewWorkflow(detail.asset, operator)
+                || !detail.asset.selectable_for_tasks) {
+              return json(response, 409, {
+                error: "所选工作流方案不可用、未发布或已归档，请重新选择",
+              });
+            }
+            const rawVersion = workflowSelection.version;
+            const version = rawVersion == null || rawVersion === ""
+              ? undefined : Number(String(rawVersion).replace(/^v/, ""));
+            if (version !== undefined
+                && (!Number.isInteger(version) || version < 1)) {
+              return json(response, 400, { error: "工作流方案版本不合法" });
+            }
+            workflowDefinition = getWorkflowAssets()
+              .getPublished(id, version).definition;
+          }
+          const repositories = Array.isArray(body.repos)
+            ? body.repos.map(String)
+            : Array.isArray(body.repositories)
+              ? body.repositories.map(String)
+              : body.repo === undefined ? [] : [String(body.repo)];
+          const repositoryProfiles = Array.isArray(body.repository_profiles)
+            ? body.repository_profiles.map((item: Record<string, unknown>) => ({
+                repository: String(item.repository ?? ""),
+                technologies: Array.isArray(item.technologies)
+                  ? item.technologies.map(String) : [],
+                confirmed: item.confirmed !== false,
+              })) : undefined;
+          return json(response, 200, service.previewLaunchKnowledge({
+            repositories,
+            selectedBusinessModuleIds:
+              Array.isArray(body.selected_business_module_ids)
+                ? body.selected_business_module_ids.map(String) : undefined,
+            selectedEngineeringKnowledgeIds:
+              Array.isArray(body.selected_engineering_knowledge_ids)
+                ? body.selected_engineering_knowledge_ids.map(String) : undefined,
+            selectedHostSkillPaths:
+              Array.isArray(body.selected_host_skill_paths)
+                ? body.selected_host_skill_paths.map(String) : undefined,
+            repositoryProfiles,
+            workflowDefinition,
+          }));
+        } catch (error) {
+          return json(response, 400, { error: String(error) });
+        }
       }
       if (parts[0] === "repository-profiles") {
         const operator = viewer?.username ?? "本地部署";
