@@ -149,7 +149,7 @@ test("生命周期:提交/撤回/驳回/通过;发布落 v1 且改稿开新周�
       && error.code === "invalid_state");
 });
 
-test("已发布 vN 永不可覆盖:元数据被拨回也写不进已存在的版本文件", () => {
+test("已发布 vN 永不可覆盖:同内容撞车=中断续跑自愈,异内容=拒绝", () => {
   const { library: assets, root } = library();
   assets.create({ id: "wf-immutable", name: "不可覆盖", scope: "team",
     owner: "liaoxiang", definition: definition(["java"]) });
@@ -158,13 +158,30 @@ test("已发布 vN 永不可覆盖:元数据被拨回也写不进已存在的版
   const before = readFileSync(
     join(root, "wf-immutable", "versions", "v1.json"), "utf-8");
 
-  // 真篡改:把 latest_version 拨回 0 并伪造待审核状态,诱导下一次
-  // approve 重写 v1。防线在 link(2) 的 EEXIST,不在自觉。
+  // 元数据拨回 + 草稿内容与 v1 相同:磁盘形状等同"发布写完 vN、
+  // 提交点没写就中断"——按事务策略判定为续跑,补写提交点自愈,
+  // v1 一个字节不动(复用,不重写)。
   const record = readAsset(root, "wf-immutable");
   record.latest_version = 0;
   record.status = "pending_review";
   writeFileSync(join(root, "wf-immutable", "asset.json"),
     JSON.stringify(record));
+  const healed = assets.approve("wf-immutable", { actor: "carol" });
+  assert.equal(healed.latest_version, 1);
+  assert.equal(readFileSync(
+    join(root, "wf-immutable", "versions", "v1.json"), "utf-8"), before,
+  "续跑必须复用已落盘的 v1,不能重写");
+
+  // 草稿内容不同再诱导重写 v1:真冲突,version_exists 拒绝且 v1 原样。
+  assets.saveDraft("wf-immutable", {
+    definition: definition(["java", "rust"]),
+    expected_revision: 1, actor: "liaoxiang",
+  });
+  const tampered = readAsset(root, "wf-immutable");
+  tampered.latest_version = 0;
+  tampered.status = "pending_review";
+  writeFileSync(join(root, "wf-immutable", "asset.json"),
+    JSON.stringify(tampered));
   assert.throws(() => assets.approve("wf-immutable", { actor: "mallory" }),
     (error: unknown) => error instanceof WorkflowAssetError
       && error.code === "version_exists");
