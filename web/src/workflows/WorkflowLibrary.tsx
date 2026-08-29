@@ -1,3 +1,4 @@
+import { useMemo, useState } from "react";
 import type { WorkflowAssetSummary } from "../api";
 import { statusLabels } from "./model";
 
@@ -10,7 +11,9 @@ export function WorkflowLibrary({
   onSelect,
   onCreate,
   onCopy,
+  onRemoveDraft,
   onRefresh,
+  notice,
 }: {
   workflows: WorkflowAssetSummary[];
   loading?: boolean;
@@ -20,19 +23,50 @@ export function WorkflowLibrary({
   onSelect: (workflow: WorkflowAssetSummary) => void;
   onCreate?: () => void;
   onCopy?: (workflow: WorkflowAssetSummary) => void;
+  onRemoveDraft?: (workflow: WorkflowAssetSummary) => void;
   onRefresh?: () => void;
+  notice?: string;
 }) {
+  const [scope, setScope] = useState<"active" | "archived">("active");
+  const [query, setQuery] = useState("");
+  const activeCount = workflows.filter((item) => item.status !== "archived").length;
+  const archivedCount = workflows.length - activeCount;
+  const visible = useMemo(() => {
+    const wanted = query.trim().toLocaleLowerCase("zh-CN");
+    return workflows.filter((item) => (scope === "archived"
+      ? item.status === "archived" : item.status !== "archived")
+      && (!wanted || `${item.name} ${item.description ?? ""} ${item.owner}`
+        .toLocaleLowerCase("zh-CN").includes(wanted)));
+  }, [query, scope, workflows]);
   return <section className="wf-library" aria-labelledby="wf-library-title">
     <header className="wf-library-head">
-      <div><span className="wf-kicker">WORKFLOW ASSETS</span>
-        <h2 id="wf-library-title">工作流方案</h2>
-        <p>保存、复制和发布精确的阶段编排。平台标准方案始终兜底，普通任务无需配置。</p>
+      <div><span className="wf-kicker">团队资产 / 工作流</span>
+        <h2 id="wf-library-title">工作流</h2>
+        <p>普通任务直接使用平台标准方案；这里只管理需要精确编排的专业方案。</p>
       </div>
-      <div>{onRefresh && <button type="button" disabled={loading} onClick={onRefresh}>
-        {loading ? "读取中…" : "刷新"}</button>}
-        {onCreate && <button type="button" className="wf-primary" onClick={onCreate}>
-          新建工作流</button>}</div>
+      {onCreate && <button type="button" className="wf-primary wf-create-button" onClick={onCreate}>
+        <span aria-hidden>＋</span>新建工作流</button>}
     </header>
+    <div className="wf-library-toolbar">
+      <div className="wf-library-scopes" role="tablist" aria-label="工作流范围">
+        <button type="button" role="tab" aria-selected={scope === "active"}
+          onClick={() => setScope("active")}>当前工作流 <b>{activeCount}</b></button>
+        <button type="button" role="tab" aria-selected={scope === "archived"}
+          onClick={() => setScope("archived")}>已归档 <b>{archivedCount}</b></button>
+      </div>
+      <label className="wf-library-search">
+        <svg viewBox="0 0 20 20" aria-hidden><circle cx="8.5" cy="8.5" r="4.5" />
+          <path d="m12 12 4 4" /></svg>
+        <input value={query} onChange={(event) => setQuery(event.target.value)}
+          placeholder="搜索名称、说明或 Owner" aria-label="搜索工作流" />
+      </label>
+      {onRefresh && <button type="button" className="wf-refresh" disabled={loading}
+        onClick={onRefresh} title="刷新工作流" aria-label="刷新工作流">
+        <svg viewBox="0 0 20 20" aria-hidden><path d="M15.5 7A6 6 0 1 0 16 12M15.5 3.5V7H12" /></svg>
+      </button>}
+    </div>
+    {notice && <div className="wf-state-banner success" role="status">
+      <strong>操作完成</strong><span>{notice}</span></div>}
     {error && <div className="wf-state-banner error" role="alert">
       <strong>工作流资产读取失败</strong><span>{error}</span>
       {onRefresh && <button type="button" onClick={onRefresh}>重试</button>}
@@ -41,30 +75,40 @@ export function WorkflowLibrary({
       key={`${warning}-${index}`}><strong>部分资产暂不可见</strong><span>{warning}</span></div>)}
     {loading && !workflows.length ? <div className="wf-library-skeleton" aria-label="正在读取工作流">
       <i /><i /><i />
-    </div> : workflows.length ? <div className="wf-library-grid">
-      {workflows.map((workflow) => <article key={workflow.id}
+    </div> : visible.length ? <div className="wf-library-grid">
+      {visible.map((workflow) => <article key={workflow.id}
         className={selectedId === workflow.id ? "selected" : ""}>
         <button className="wf-workflow-main" type="button" onClick={() => onSelect(workflow)}>
-          <span className="wf-workflow-title"><strong>{workflow.name}</strong>
-            <em className={`status-${workflow.status}`}>{statusLabels[workflow.status]}</em></span>
-          <p>{workflow.description || "暂无说明。打开后可查看各阶段的精确编排。"}</p>
-          <span className="wf-workflow-meta">
-            <b>{workflow.scope === "team" ? "团队资产" : "个人资产"}</b>
-            <b>v{workflow.latest_version || "—"}</b><b>草稿 r{workflow.draft_revision}</b>
-            <b>{formatTime(workflow.updated_at)}</b>
+          <span className="wf-workflow-mark" aria-hidden>{workflow.name.trim().slice(0, 1) || "流"}</span>
+          <span className="wf-workflow-copy">
+            <span className="wf-workflow-title"><strong>{workflow.name}</strong>
+              <em className={`status-${workflow.status}`}>{statusLabels[workflow.status]}</em></span>
+            <p>{workflow.description || "暂无说明，打开后可查看精确编排。"}</p>
+            <span className="wf-workflow-owner">{workflow.scope === "team" ? "团队" : "个人"}
+              <i>·</i> Owner {workflow.owner}<i>·</i>{formatTime(workflow.updated_at)}</span>
           </span>
-          <span className="wf-workflow-owner">Owner · {workflow.owner}</span>
+          <span className="wf-workflow-meta">
+            <b>{workflow.latest_version ? `v${workflow.latest_version}` : "未发布"}</b>
+            <b>草稿 r{workflow.draft_revision}</b>
+          </span>
+          <svg className="wf-row-chevron" viewBox="0 0 20 20" aria-hidden>
+            <path d="m8 5 5 5-5 5" /></svg>
         </button>
         <footer>
           <span>{workflow.selectable_for_tasks ? "可供新任务选择" : statusHint(workflow)}</span>
           <div>{onCopy && <button type="button" onClick={() => onCopy(workflow)}>复制</button>}
-            <button type="button" onClick={() => onSelect(workflow)}>查看</button></div>
+            {onRemoveDraft && workflow.status === "draft" && workflow.latest_version === 0
+              && <button type="button" className="wf-text-danger"
+                onClick={() => onRemoveDraft(workflow)}>删除草稿</button>}</div>
         </footer>
       </article>)}
     </div> : !loading && !error && <div className="wf-empty large">
-      <strong>团队还没有可复用的工作流</strong>
-      <span>普通任务继续使用平台标准方案；有清晰编排思路时，再创建专业定制。</span>
-      {onCreate && <button type="button" className="wf-primary" onClick={onCreate}>
+      <strong>{query ? "没有匹配的工作流" : scope === "archived"
+        ? "没有已归档的工作流" : "还没有专业工作流"}</strong>
+      <span>{query ? "换一个关键词试试。" : scope === "archived"
+        ? "删除的草稿和停止使用的方案会保留在这里。"
+        : "普通任务继续使用平台标准方案；有明确编排思路时再创建。"}</span>
+      {!query && scope === "active" && onCreate && <button type="button" className="wf-primary" onClick={onCreate}>
         创建第一个工作流</button>}
     </div>}
   </section>;

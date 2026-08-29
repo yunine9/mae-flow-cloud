@@ -131,6 +131,11 @@ export function LaunchWorkspace({
   const [workflowSelection, setWorkflowSelection] = useState<WorkflowSchemeSelection | undefined>(
     validDraft?.workflowSelection);
   const [workflowSelectionNotice, setWorkflowSelectionNotice] = useState("");
+  const [advancedOpen, setAdvancedOpen] = useState(() => Boolean(
+    validDraft?.workflowSelection
+    || validDraft?.taskInstructions?.trim()
+    || validDraft?.selectedBusinessModuleIds?.length,
+  ));
   // 配置没配齐不让下单:缺项来自后端(服务级+个人级),前端只负责
   // 摆在明面上。后端同样硬拦——绕过界面打接口一样被 409 挡住。
   const blockers = options?.blockers ?? [];
@@ -160,9 +165,9 @@ export function LaunchWorkspace({
   }, [options, repos, repositoryTechnologies, selectedBusinessModuleIds]);
   const deliveryLocationVisible = !!options
     && (options.repo.enabled || options.ticket.enabled || options.baseline.enabled);
-  const executionSectionNumber = deliveryLocationVisible ? "03" : "02";
-  const moduleSectionNumber = String(
-    Number(executionSectionNumber) + 1).padStart(2, "0");
+  const selectedOptionalCount = selectedBusinessModuleIds.length
+    + selectedEngineeringKnowledgeIds.length
+    + repositorySkillSelection.selectedIds.length;
 
   useEffect(() => {
     let alive = true;
@@ -404,36 +409,28 @@ export function LaunchWorkspace({
       aria-modal="true"
       aria-labelledby="launch-workspace-title"
     >
-      <header className="ws-head">
-        <button type="button" className="ws-back" onClick={onClose} disabled={submitting} autoFocus>
-          <svg viewBox="0 0 20 20" aria-hidden><path d="m12.5 5-5 5 5 5" /></svg>
-          <span>返回我的工作</span>
+      <header className="ws-head launch-head">
+        <button type="button" className="launch-close" onClick={onClose}
+          disabled={submitting} aria-label="取消创建任务">
+          <svg viewBox="0 0 20 20" aria-hidden><path d="m6 6 8 8M14 6l-8 8" /></svg>
+          <span>取消</span>
         </button>
         <div className="ws-identity">
-          <div className="ws-identity-line"><code>NEW TASK</code></div>
-          <strong id="launch-workspace-title">发起新任务</strong>
+          <div className="ws-identity-line"><code>NEW DELIVERY</code></div>
+          <strong id="launch-workspace-title">创建交付任务</strong>
         </div>
+        <span className="launch-head-note"><i aria-hidden />草稿自动保存</span>
       </header>
 
       <main className="launch-workspace-body">
         <section className="launch-panel" aria-labelledby="launch-title">
-          <aside className="launch-copy">
-            <span className="section-kicker">CREATE WORK</span>
-            <h2 id="launch-title">发起交付任务</h2>
-            <p>任务会自动归入你的工作台，人工节点也会回到待核对列表。</p>
-            <ol className="launch-guide" aria-label="创建任务步骤">
-              <li><i>1</i><span><strong>说清结果</strong><small>描述完成标准，不必编排 Agent 步骤</small></span></li>
-              <li><i>2</i><span><strong>圈定范围</strong><small>填写一个或多个相关代码仓</small></span></li>
-              <li><i>3</i><span><strong>确认执行</strong><small>单号、基线和交付方式一次确认</small></span></li>
-            </ol>
-            <small className="launch-copy-foot">提交后可在“我的工作”持续跟进和控制任务。</small>
-          </aside>
-
           <div className="launch-form-shell">
             <div className="launch-form-intro">
-              <div><span>NEW DELIVERY</span>
-                <strong>填写任务信息</strong></div>
-              <small><i aria-hidden /> 必填项请一次填完整</small>
+              <div><span>CREATE WORK</span>
+                <strong id="launch-title">说清任务，确认交付位置</strong>
+                <p>必填信息都在当前页面；工作流、知识和 Skill 仅在需要时调整。</p>
+              </div>
+              <small><i aria-hidden /> 必填项始终可见</small>
             </div>
             {(title.trim() || requirement.trim() || repos.some((repo) => repo.trim()))
               && draftSavedAt && <div className="launch-draft-state" role="status">
@@ -476,14 +473,13 @@ export function LaunchWorkspace({
 
             <form className="composer launch-composer" onSubmit={submit}>
               <section className="launch-form-section launch-requirement-section">
-                <div className="launch-section-head"><i>01</i><div><strong>任务与需求</strong><small>名称用于快速识别，需求文档完整交给 Agent</small></div><em>必填</em></div>
+                <div className="launch-section-head"><i>1</i><div><strong>任务与需求</strong><small>说清目标、范围和完成标准即可</small></div><em>必填</em></div>
                 <label className="account-field launch-title-field">
                   <span>任务名称</span>
                   <input type="text" value={title} maxLength={80}
                     onChange={(event) => setTitle(event.target.value)}
                     placeholder="例如：修复通知模板变量缺失"
                     autoFocus required />
-                  <small>用于任务卡、通知和团队总览，不会替代需求文档</small>
                 </label>
                 <div className={`requirement-field${draggingDocument ? " is-dragging" : ""}`}
                   onDragOver={(event) => {
@@ -515,10 +511,6 @@ export function LaunchWorkspace({
                       选择 .md 文件
                     </label>
                   </div>
-                  <div className="markdown-drop-hint" aria-hidden>
-                    <svg viewBox="0 0 24 24"><path d="M7 18.5h10a4 4 0 0 0 .7-7.94A6 6 0 0 0 6.2 9.2 4.5 4.5 0 0 0 7 18.5Z" /><path d="m12 9-3 3m3-3 3 3m-3-3v6" /></svg>
-                    <span><strong>拖拽 Markdown 设计文档到这里</strong><small>仅支持 .md · 最大 512 KiB · 上传后仍可继续编辑正文</small></span>
-                  </div>
                   <textarea
                     id="launch-requirement"
                     value={requirement}
@@ -528,7 +520,7 @@ export function LaunchWorkspace({
                       if (!event.target.value) setRequirementDocumentName("");
                     }}
                     placeholder="粘贴完整需求说明、背景、范围和验收标准；支持 Markdown"
-                    rows={10}
+                    rows={12}
                     required
                   />
                   {requirementDocumentName && <div className="markdown-file-state">
@@ -545,13 +537,13 @@ export function LaunchWorkspace({
                   {documentError && <div className="markdown-upload-error" role="alert">{documentError}</div>}
                   <small>{requirement
                     ? `${requirement.split(/\r?\n/).length} 行 · ${requirement.length} 字符，原文将完整保留`
-                    : "这里是 Agent 实际接收的完整原文，不会被截成标题"}</small>
+                    : "可直接粘贴，也可把 .md 文件拖到这里（最大 512 KiB）"}</small>
                 </div>
               </section>
 
               {options && deliveryLocationVisible && (
-                <section className="launch-form-section">
-                  <div className="launch-section-head"><i>02</i><div><strong>交付定位</strong><small>Agent 据此进入正确仓库、单号和基线</small></div><em>必填</em></div>
+                <section className="launch-form-section launch-delivery-section">
+                  <div className="launch-section-head"><i>2</i><div><strong>交付定位</strong><small>让 Agent 进入正确仓库和基线</small></div><em>必填</em></div>
                   {options.repo.enabled && (
                     <div className="repo-field">
                     <div className="repo-field-title">
@@ -589,9 +581,6 @@ export function LaunchWorkspace({
                           <option key={repo} value={repo} />
                         ))}
                       </datalist>
-                      <RepositoryTechnologyPicker repositories={repos}
-                        value={repositoryTechnologies}
-                        onChange={setRepositoryTechnologies} />
                     </div>
                   )}
                   {(options.ticket.enabled || options.baseline.enabled) && (
@@ -620,70 +609,95 @@ export function LaunchWorkspace({
                   )}
                 </section>
               )}
-              {options && <section className="launch-form-section launch-execution-settings">
-                <div className="launch-section-head"><i>{executionSectionNumber}</i><div><strong>执行设置</strong><small>普通用户沿用标准方案；有明确编排时可选择已发布工作流</small></div>
-                  {options.workflows.length > 0 && <em>交付方式必填</em>}
-                </div>
-                <SchemeSelector workflows={workflowAssets} value={workflowSelection}
-                  disabled={!workflowAssetsLoaded}
-                  onChange={(selection) => {
-                    setWorkflowSelection(selection);
-                    setWorkflowSelectionNotice("");
-                  }}
-                  onOpenEditor={onOpenWorkflowAssets
-                    ? () => onOpenWorkflowAssets() : undefined} />
-                {workflowSelectionNotice && <p className="workflow-selection-notice"
-                  role="status">{workflowSelectionNotice}</p>}
-                <div className="launch-field-grid launch-settings-grid">
-                  {options.workflows.length > 0 && (
-                    <fieldset className="delivery-mode-field">
-                      <legend><strong>交付方式</strong>
-                        <small>选最像你现在这件事的情况</small></legend>
-                      <div className="delivery-mode-options">
-                        {options.workflows.map((item) => (
-                          <label key={item.key}
-                            className={`delivery-mode-option${(lane
-                              || options.workflows[0].label) === item.label
-                              ? " selected" : ""}`}>
-                            <input type="radio" name="delivery-workflow"
-                              value={item.label}
-                              checked={(lane || options.workflows[0].label)
-                                === item.label}
-                              onChange={() => setLane(item.label)} required />
-                            <span className="delivery-mode-radio" aria-hidden />
-                            <span><strong>{item.label}</strong>
-                              {item.description
-                                && <small>{item.description}</small>}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </fieldset>
-                  )}
-                  <label className="account-field repair-field">
-                    <span>修复轮预算（可选）</span>
-                    <input type="number" inputMode="numeric" min={0} step={1}
-                      value={repairRounds}
-                      onChange={(event) => setRepairRounds(event.target.value)}
-                      placeholder={options.repair_rounds !== undefined
-                        ? `沿用团队默认 ${options.repair_rounds}（0=关闭）`
-                        : "沿用团队默认：不限轮（0=关闭）"} />
-                    <small>留空沿用团队设置；只有需要限制或关闭自动修复时才填写。</small>
-                  </label>
-                  {!workflowSelection && <label className="account-field task-instructions-field">
-                    <span>标准方案下的任务提醒（可选）</span>
-                    <textarea value={taskInstructions} maxLength={2000}
-                      onChange={(event) => setTaskInstructions(event.target.value)}
-                      placeholder="例如：先核对兼容旧数据的风险；接口命名尽量沿用现有模块；不确定时明确说明，不要猜。" />
-                    <small>
-                      仅在采用标准方案时生效；选择工作流后不会再叠加，避免两套指令摩擦。
-                    </small>
-                    <em>{taskInstructions.length}/2000</em>
-                  </label>}
-                </div>
-              </section>}
+              {options && options.workflows.length > 0 &&
+                <section className={`launch-form-section launch-delivery-mode-section${
+                  deliveryLocationVisible ? "" : " launch-delivery-mode-only"}`}>
+                  <div className="launch-section-head"><i>3</i><div><strong>交付方式</strong>
+                    <small>选择最接近本次任务的交付规模</small></div><em>必填</em></div>
+                  <fieldset className="delivery-mode-field">
+                    <div className="delivery-mode-options">
+                      {options.workflows.map((item) => (
+                        <label key={item.key}
+                          className={`delivery-mode-option${(lane
+                            || options.workflows[0].label) === item.label
+                            ? " selected" : ""}`}>
+                          <input type="radio" name="delivery-workflow"
+                            value={item.label}
+                            checked={(lane || options.workflows[0].label)
+                              === item.label}
+                            onChange={() => setLane(item.label)} required />
+                          <span className="delivery-mode-radio" aria-hidden />
+                          <span><strong>{item.label}</strong>
+                            {item.description && <small>{item.description}</small>}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </fieldset>
+                </section>}
+
+              {options && <details className="launch-advanced" open={advancedOpen}
+                onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}>
+                <summary>
+                  <span className="launch-advanced-icon" aria-hidden>
+                    <svg viewBox="0 0 20 20"><path d="M4 5h12M7 10h9M4 15h12M7 3v4M13 8v4M9 13v4" /></svg>
+                  </span>
+                  <span className="launch-advanced-copy"><strong>按需配置</strong>
+                    <small>工作流、技术栈、知识、Skill 和修复策略；不设置也能正常发起</small></span>
+                  <span className="launch-advanced-summary">
+                    <b>{workflowSelection ? "定制工作流" : "标准工作流"}</b>
+                    {selectedOptionalCount > 0 && <b>{selectedOptionalCount} 项知识与能力</b>}
+                    {repairRounds && <b>{repairRounds} 轮修复</b>}
+                    {repositoryTechnologies.some((item) => !item.confirmed)
+                      && <b className="attention">技术栈待确认</b>}
+                  </span>
+                  <svg className="launch-advanced-chevron" viewBox="0 0 20 20" aria-hidden>
+                    <path d="m6 8 4 4 4-4" /></svg>
+                </summary>
+                <div className="launch-advanced-body">
+                  <section className="launch-form-section launch-execution-settings">
+                    <div className="launch-section-head"><i>流</i><div><strong>工作流与执行提醒</strong>
+                      <small>只有对阶段编排有明确要求时才调整</small></div></div>
+                    <SchemeSelector workflows={workflowAssets} value={workflowSelection}
+                      disabled={!workflowAssetsLoaded}
+                      onChange={(selection) => {
+                        setWorkflowSelection(selection);
+                        setWorkflowSelectionNotice("");
+                      }}
+                      onOpenEditor={onOpenWorkflowAssets
+                        ? () => onOpenWorkflowAssets() : undefined} />
+                    {workflowSelectionNotice && <p className="workflow-selection-notice"
+                      role="status">{workflowSelectionNotice}</p>}
+                    <div className="launch-field-grid launch-settings-grid">
+                      <label className="account-field repair-field">
+                        <span>修复轮预算</span>
+                        <input type="number" inputMode="numeric" min={0} step={1}
+                          value={repairRounds}
+                          onChange={(event) => setRepairRounds(event.target.value)}
+                          placeholder={options.repair_rounds !== undefined
+                            ? `团队默认 ${options.repair_rounds}（0=关闭）`
+                            : "团队默认不限轮（0=关闭）"} />
+                        <small>留空沿用团队设置。</small>
+                      </label>
+                      {!workflowSelection && <label className="account-field task-instructions-field">
+                        <span>给标准方案的补充提醒</span>
+                        <textarea value={taskInstructions} maxLength={2000}
+                          onChange={(event) => setTaskInstructions(event.target.value)}
+                          placeholder="例如：不确定时明确说明，不要猜；优先兼容旧数据。" />
+                        <small>选择定制工作流后不再叠加，避免两套指令摩擦。</small>
+                        <em>{taskInstructions.length}/2000</em>
+                      </label>}
+                    </div>
+                  </section>
+                  {options.repo.enabled && <section className="launch-form-section launch-technology-section">
+                    <div className="launch-section-head"><i>技</i><div><strong>仓库技术栈</strong>
+                      <small>首次确认后系统会记住，用于匹配工程知识</small></div></div>
+                    <RepositoryTechnologyPicker repositories={repos}
+                      value={repositoryTechnologies}
+                      onChange={setRepositoryTechnologies} />
+                  </section>}
               {options && businessModules.length > 0 && (
                 <section className="launch-form-section business-module-picker">
-                  <div className="launch-section-head"><i>{moduleSectionNumber}</i><div>
+                  <div className="launch-section-head"><i>业</i><div>
                     <strong>业务范围</strong>
                     <small>关联本次任务涉及的业务模块，并固定各模块当时的知识版本</small>
                   </div><em>可选 · 最多 4 个</em></div>
@@ -772,6 +786,8 @@ export function LaunchWorkspace({
                   onSelectionChange={setRepositorySkillSelection}
                 />
               )}
+                </div>
+              </details>}
               {error && <div className="composer-error" role="alert">{error}</div>}
               <footer className="launch-submit-bar">
                 <div><strong>{blocked

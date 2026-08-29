@@ -32,6 +32,9 @@ type ActionDialog = {
   title: string;
   explanation: string;
   requireReason?: boolean;
+  targetId?: string;
+  confirmLabel?: string;
+  destructive?: boolean;
 };
 
 export function WorkflowAssetWorkspace() {
@@ -49,6 +52,7 @@ export function WorkflowAssetWorkspace() {
   const [error, setError] = useState("");
   const [editorError, setEditorError] = useState("");
   const [dialogError, setDialogError] = useState("");
+  const [notice, setNotice] = useState("");
   const [createDialog, setCreateDialog] = useState<CreateDialog>();
   const [actionDialog, setActionDialog] = useState<ActionDialog>();
 
@@ -151,15 +155,26 @@ export function WorkflowAssetWorkspace() {
   }
 
   async function runAction(action: ActionDialog, reason = ""): Promise<void> {
-    if (!detail || busy) return;
+    const targetId = action.targetId ?? detail?.asset.id;
+    if (!targetId || busy) return;
     setBusy(true);
     setDialogError("");
     try {
-      await workflowAssetAction(detail.asset.id, action.action,
+      await workflowAssetAction(targetId, action.action,
         reason.trim() ? { reason: reason.trim() } : {});
       setActionDialog(undefined);
       await refreshLibrary();
-      setDetail(await getWorkflowAsset(detail.asset.id));
+      if (action.action === "archive") {
+        setNotice(action.destructive
+          ? "草稿已从当前工作流中移除；审计记录仍保留在“已归档”。"
+          : "工作流已归档，不再供新任务选择；历史版本保持不变。");
+        setPage("library");
+        setSelectedId("");
+        setDetail(undefined);
+      } else {
+        setNotice("");
+        setDetail(await getWorkflowAsset(targetId));
+      }
     } catch (cause) {
       setDialogError(messageOf(cause));
     } finally {
@@ -174,9 +189,23 @@ export function WorkflowAssetWorkspace() {
       withdraw: { title: "撤回审核", explanation: "撤回后回到草稿状态，可以继续编辑再提交。" },
       approve: { title: "审核通过并发布", explanation: "会生成一个不可覆盖的新版本，后续任务可精确选择它。" },
       reject: { title: "驳回工作流", explanation: "请明确写出需要调整的内容，维护者会看到原因。", requireReason: true },
-      archive: { title: "归档工作流", explanation: "历史任务仍保留原版本；归档后新任务不能继续选择。" },
+      archive: detail?.asset.status === "draft" && detail.asset.latest_version === 0
+        ? { title: "删除工作流草稿", explanation: "草稿会从当前工作流中移除。为保留操作留痕，记录仍可在“已归档”中查看或复制。", confirmLabel: "确认删除", destructive: true }
+        : { title: "归档工作流", explanation: "历史任务仍保留原版本；归档后新任务不能继续选择。", confirmLabel: "确认归档" },
     };
     setActionDialog({ action, ...copy[action] });
+  }
+
+  function askRemoveDraft(asset: WorkflowAssetSummary): void {
+    setDialogError("");
+    setActionDialog({
+      action: "archive",
+      targetId: asset.id,
+      title: `删除“${asset.name}”草稿`,
+      explanation: "它会从当前工作流中移除。为保留操作留痕，记录仍可在“已归档”中查看或复制。",
+      confirmLabel: "确认删除",
+      destructive: true,
+    });
   }
 
   const dirty = useMemo(() => Boolean(detail && definition
@@ -222,7 +251,8 @@ export function WorkflowAssetWorkspace() {
     {page === "library" ? <WorkflowLibrary workflows={workflows}
       loading={loading} error={error} warnings={warnings} selectedId={selectedId}
       onSelect={(asset) => void openWorkflow(asset)} onCreate={startCreate}
-      onCopy={startCopy} onRefresh={() => void refreshLibrary(true)} />
+      onCopy={startCopy} onRemoveDraft={askRemoveDraft} notice={notice}
+      onRefresh={() => void refreshLibrary(true)} />
       : <>
         {detail && error && <div className="wf-state-banner error" role="alert">
           <strong>操作未完成</strong><span>{error}</span>
@@ -334,9 +364,9 @@ function WorkflowActionDialog({ value, busy, error, onClose, onSubmit }: {
         rows={4} value={reason} onChange={(event) => setReason(event.target.value)}
         placeholder="写清楚需要修改什么，避免只说“不通过”。" /></label>}
       <footer><button type="button" onClick={onClose} disabled={busy}>取消</button>
-        <button type="submit" className="wf-primary"
+        <button type="submit" className={value.destructive ? "wf-confirm-danger" : "wf-primary"}
           disabled={busy || (value.requireReason && !reason.trim())}>
-          {busy ? "正在处理…" : "确认"}</button></footer>
+          {busy ? "正在处理…" : value.confirmLabel ?? "确认"}</button></footer>
     </form>
   </div>;
 }

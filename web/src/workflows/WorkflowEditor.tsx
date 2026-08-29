@@ -100,7 +100,9 @@ export function WorkflowEditor({
   return <section className="wf-editor" aria-labelledby="wf-editor-title">
     <header className="wf-editor-head">
       <div className="wf-editor-identity">
-        {onExit && <button type="button" aria-label="返回工作流资产库" onClick={onExit}>←</button>}
+        {onExit && <button type="button" className="wf-editor-back" onClick={onExit}>
+          <svg viewBox="0 0 20 20" aria-hidden><path d="m12 5-5 5 5 5" /></svg>
+          <span>返回详情</span></button>}
         <span><small>专业模式 · 精确编排</small><h2 id="wf-editor-title">{name}</h2>
           {description && <p>{description}</p>}</span>
       </div>

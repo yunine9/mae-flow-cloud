@@ -36,7 +36,9 @@ export function WorkflowDetail({
   const { asset, draft, versions } = detail;
   return <section className="wf-detail" aria-labelledby="wf-detail-title">
     <header className="wf-detail-head">
-      <div><button type="button" onClick={onBack}>← 资产库</button>
+      <div><button type="button" className="wf-breadcrumb-back" onClick={onBack}>
+        <svg viewBox="0 0 20 20" aria-hidden><path d="m12 5-5 5 5 5" /></svg>
+        <span>工作流资产</span></button>
         <span><small>{asset.scope === "team" ? "团队工作流" : "个人工作流"}</small>
           <h2 id="wf-detail-title">{asset.name}</h2><p>{asset.description || "暂无说明"}</p></span></div>
       <em className={`status-${asset.status}`}>{statusLabels[asset.status]}</em>
@@ -63,7 +65,9 @@ export function WorkflowDetail({
       {asset.permissions.can_publish && asset.status === "pending_review" && onReject &&
         <button type="button" onClick={onReject}>驳回并说明原因</button>}
       {asset.permissions.can_archive && asset.status !== "archived" && onArchive &&
-        <button type="button" className="wf-danger" onClick={onArchive}>归档</button>}
+        <button type="button" className="wf-danger" onClick={onArchive}>
+          {asset.status === "draft" && asset.latest_version === 0 ? "删除草稿" : "归档工作流"}
+        </button>}
     </div>
     <div className="wf-detail-grid">
       <article><header><span><small>草稿基线</small><strong>{draft.definition.base.standard_id}</strong></span>
