@@ -6,6 +6,9 @@
  * 让多题卡片能一次看清再作答。协议上是"码+文案"双通道(举卡裁决协议化):
  * 选项渲染 label(纯显示),提交回传 code(平台闸的裁决按它单点分派,
  * Agent 卡由服务端把码还原成选项原文再交给 AI)——文案改字零协议后果。
+ * 服务端还会随题下发推荐码(questions[].recommended,ADR-0004):渲染
+ * 成「AI 推荐」徽标+描边,只标注不预选——初始无选中,答案仍由用户
+ * 亲手点选产生。
  * decision 仍是人话文本(显示/审计/自由作答);平台闸的 code 是单题卡
  * 的所选项,Agent 卡的 answers 是逐题(码或自由文本)。补充说明走 notes。
  * 后果提示(choice_effects)是任务侧的服务端能力,问题域没有对应账目,
@@ -189,12 +192,19 @@ function GenericDecisionCard({ waiting, busy, onAnswer }: {
         ? <div className="options cards">
             {item.options.map((option) => {
               const chosen = picked[index] === option.code;
+              // 推荐按码标注(ADR-0004 只标注不预选):无推荐的旧卡
+              // 该键缺席,谁都不匹配,渲染与现状一致;推荐被点中后
+              // 正常进已选态,徽标常驻但描边让位(accent 蓝)。
+              const suggested = item.recommended === option.code;
               return <button type="button" key={option.code} role="radio"
                 aria-checked={chosen}
-                className={`option${chosen ? " picked" : ""}`}
+                className={`option${chosen ? " picked" : ""}${suggested ? " issue-recommended" : ""}`}
                 onClick={() => setPicked({ ...picked, [index]: option.code })}>
                 <span className={`radio${chosen ? " on" : ""}`} aria-hidden />
-                <span className="option-body"><span className="option-title">{option.label}</span></span>
+                <span className="option-body"><span className="option-title">
+                  {option.label}
+                  {suggested && <span className="issue-recommended-badge">AI 推荐</span>}
+                </span></span>
               </button>;
             })}
           </div>

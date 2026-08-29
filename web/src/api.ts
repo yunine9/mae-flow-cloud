@@ -2827,7 +2827,13 @@ export interface IssueGateCard {
   id: string;
   kind: IssueGateKind;
   state_version: number;
-  question: { questions?: Array<{ question: string; options: IssueGateOption[] }> };
+  question: { questions?: Array<{
+    question: string;
+    options: IssueGateOption[];
+    /** 推荐项的码(ADR-0004,只标注不预选):分析确认闸在码表里定死,
+     * 无单结论闸从 AI 提案派生;换库验证宿主定不了,不硬给。 */
+    recommended?: string;
+  }> };
   context?: string;
   /** 仅 env_needed:闸为哪类动作而举(logs=拉日志 / deploy=换库部署)。 */
   scope?: "logs" | "deploy";
@@ -2919,7 +2925,14 @@ export interface IssueWaitingCard {
   /** 选项一律是码+文案对:平台闸的码出自服务端注册表码表,Agent 卡
    * 的码由服务端投影时按题号/序号派发(opt-题-序)。渲染 label,
    * 提交 code。 */
-  question: { questions?: Array<{ question: string; options: IssueGateOption[] }> };
+  question: { questions?: Array<{
+    question: string;
+    options: IssueGateOption[];
+    /** 推荐项的投影码(ADR-0004,只标注不预选):Agent 卡由服务端把
+     * 推荐原文对回 opt-题-序 码,平台闸码表定死/提案派生;前端按码
+     * 标徽标,渲染 label、提交 code 的既有约定不变。 */
+    recommended?: string;
+  }> };
   context?: string;
   created_at: string;
   /** 平台闸专用(会话视图从 detail.gate 带过来):闸的种类与用途面。

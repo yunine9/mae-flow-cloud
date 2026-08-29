@@ -2568,6 +2568,29 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-decision-env .issue-decision-note[role="alert"] { color: #a8541f; }
 .issue-decision-env .issue-decision-submit { margin: 0 -15px 0; }
 
+/* AI 推荐标注(ADR-0004:只标注不预选):琥珀描边+徽标与卡头的
+   decision-kicker/计数 pill 同色系;:not(.picked) 让已选态(accent 蓝)
+   永远压过推荐描边——用户拍板后卡片只呈现"已选",两色不打架。徽标
+   常驻,选中后仍说明"这是 AI 的倾向",只是不再抢边。 */
+.option.issue-recommended:not(.picked) {
+  border-color: color-mix(in srgb, var(--attention) 55%, var(--line));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--attention) 14%, transparent);
+}
+.issue-recommended-badge {
+  display: inline-block;
+  margin-left: 7px;
+  padding: 0 7px;
+  border: 1px solid color-mix(in srgb, var(--attention) 30%, var(--line));
+  border-radius: 999px;
+  color: var(--attention);
+  background: var(--attention-soft);
+  font-size: var(--font-size-dense);
+  font-weight: 700;
+  line-height: 1.6;
+  vertical-align: 1px;
+  white-space: nowrap;
+}
+
 .issue-analysis-flag {
   margin-left: auto;
   border: 0;

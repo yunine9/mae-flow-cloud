@@ -40,28 +40,9 @@ import type {
   DtsTicketDetail,
   IssueDetail,
   IssueGateCard,
-  IssueGateOption,
   IssueSummary,
   IssueWaitingCard,
 } from "../web/src/api.ts";
-
-// ---- 推荐协议(ADR-0004)的镜像侧 ----
-
-// recommended 键已随卡 wire 上线,但 web/src/api.ts 的正式声明与注释
-// 归前端单(R2);契约先用本地加键的样例类型钉住过线形状——服务端
-// 投影多键/缺键仍由 assertWireShape 对账,镜像声明到齐后 tsc 接管。
-interface RecommendedQuestion {
-  question: string;
-  options: IssueGateOption[];
-  /** 推荐项的投影码(Agent 卡=opt-题-序;平台闸=码表定死/提案派生)。 */
-  recommended?: string;
-}
-type GateCardSample = Omit<IssueGateCard, "question"> & {
-  question: { questions?: RecommendedQuestion[] };
-};
-type WaitingCardSample = Omit<IssueWaitingCard, "question"> & {
-  question: { questions?: RecommendedQuestion[] };
-};
 
 // ---- 契约对比器 ----
 
@@ -349,9 +330,7 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail/环境验证�
         ? issue : undefined;
     }, "首轮分析确认闸");
     // 推荐协议(ADR-0004):分析确认闸的推荐在码表里定死为放行码。
-    assert.equal(
-      (analysisGate.gate!.question.questions[0] as { recommended?: string })
-        .recommended,
+    assert.equal(analysisGate.gate!.question.questions[0].recommended,
       "confirm", "分析确认卡必须携带码表定死的推荐码");
     service.answer(created.id, {
       state_version: analysisGate.gate!.state_version,
@@ -511,7 +490,7 @@ test("契约快照:无单结论闸带机器可读提案(conclude 卡的 proposal
     const detail = await issueGet(["issues", created.id], service);
     assert.equal(detail.status, 200);
 
-    const gateSample: GateCardSample = {
+    const gateSample: IssueGateCard = {
       id: "gate-x",
       kind: "conclude",
       state_version: 1,
@@ -580,7 +559,7 @@ test("契约快照:Agent 问题卡 waiting 投影(整卡形状+机械派码+推�
     const detail = await issueGet(["issues", created.id], service);
     assert.equal(detail.status, 200);
 
-    const waitingSample: WaitingCardSample = {
+    const waitingSample: IssueWaitingCard = {
       waiting_id: `${created.id}:call-1`,
       state_version: 1,
       question: { questions: [{
