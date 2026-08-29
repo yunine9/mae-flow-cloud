@@ -162,8 +162,15 @@ export class ScriptedModelServer {
 
   async stop(): Promise<void> {
     if (!this.server) return;
-    await new Promise<void>((resolve) => this.server!.close(() => resolve()));
+    const server = this.server;
     this.server = undefined;
+    // close 的回调要等存量连接全断才响:客户端 keep-alive 赖着时就
+    // 永远不回来,停机本身把测试挂死。主动掐连接 + 兜底超时双保险。
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+      setTimeout(resolve, 2_000).unref();
+    });
   }
 
   private plain(

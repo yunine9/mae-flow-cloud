@@ -23,6 +23,9 @@ import {
   type WorkflowSchemeSelection,
 } from "./workflows";
 
+// 问题单入口已迁往「问题处理」页(/issues,见 web/src/issues/):
+// 问题流是"先研究后补单"的动态对话,与需求的固定交付流水线分属
+// 两个范式,不再共用发起表单。这里只保留需求入口。
 const MAX_MARKDOWN_BYTES = 512 * 1024;
 const INLINE_MARKDOWN_BYTES = 32 * 1024;
 const LAUNCH_DRAFT_VERSION = 1;
@@ -547,8 +550,7 @@ export function LaunchWorkspace({
                   {options.repo.enabled && (
                     <div className="repo-field">
                     <div className="repo-field-title">
-                        <span>涉及代码仓
-                          {options.repo.required ? "（至少一个）" : ""}</span>
+                        <span>涉及代码仓{options.repo.required ? "（至少一个）" : ""}</span>
                         <small>单仓与多仓使用同一条需求交付流程</small>
                       </div>
                       <div className="repo-list">
@@ -587,11 +589,11 @@ export function LaunchWorkspace({
                     <div className="launch-field-grid launch-required-delivery-grid">
                       {options.ticket.enabled && (
                         <label className="account-field">
-                          <span>需求单号
+                          <span>需求/问题单号
                             {options.ticket.required ? "（必填）" : ""}</span>
                           <input type="text" value={ticket}
                             onChange={(event) => setTicket(event.target.value)}
-                            placeholder="REQ2026xxxx"
+                            placeholder="REQ2026xxxx / DTS2026xxxx"
                             spellCheck={false}
                             required={options.ticket.required} />
                         </label>

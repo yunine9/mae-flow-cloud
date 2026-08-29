@@ -1,8 +1,8 @@
 /**
- * 管理员默认看团队全局，开发默认直达我的工作；
+ * 管理员默认看团队全局，开发默认直达我的需求；
  * 登录身份决定任务归属与操作权限，任务事实仍来自服务端。
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import {
   createUser, deleteUser, getKnowledgeInsights, getLaunchOptions, getSession, getTask, listMyReviews, listTasks, listUsers,
   login, logout, putCommitter, resetUserPassword,
@@ -20,6 +20,7 @@ import {
   getMoonlightPreview,
   putMoonlight,
   putPersonalPushConfirmation,
+  putIssueFlowMode,
 } from "./api";
 import { byUrgency } from "./taskTime";
 import {
@@ -43,8 +44,13 @@ import { WishWall, type WishWallDraft } from "./WishWall";
 import { BusinessModuleLibrary } from "./BusinessModuleLibrary";
 import { WorkflowAssetWorkspace } from "./workflows";
 
-type View = "team" | "mine" | "profile" | "history" | "users" | "settings"
-  | "knowledge" | "wishes" | "business";
+// 问题处理页独立分包(懒加载):问题流与需求流互不拖累,改哪边都不
+// 用动另一边的构建产物。
+const IssueBoard = lazy(() =>
+  import("./issues/IssueBoard").then((module) => ({ default: module.IssueBoard })));
+
+type View = "team" | "mine" | "issues" | "profile" | "history" | "users"
+  | "settings" | "knowledge" | "wishes" | "business";
 type Theme = "light" | "dark";
 type Density = "comfortable" | "compact";
 type MineScope = "all" | "waiting" | "intervention" | "active" | "delivered";
@@ -248,6 +254,56 @@ function TaskSyncIndicator({
   );
 }
 
+/** 问题处理探索方式(2026-08-27 拍板):固定流程=平台按阶段状态机
+ * 推进、工具按阶段开放;自由探索=AI 按 playbook 自主编排。缺省固定
+ * 流程;只烙印新会话——进行中的会话不迁移,自由路径从未删掉,随时
+ * 一键切回。 */
+function IssueFlowModeSetting({
+  session,
+  onChanged,
+}: {
+  session: AuthUser;
+  onChanged: (patch: Partial<AuthUser>) => void;
+}) {
+  const [mode, setMode] = useState<"fixed" | "free">(
+    session.issue_flow === "free" ? "free" : "fixed");
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState("");
+  async function select(next: "fixed" | "free") {
+    if (busy || next === mode) return;
+    setBusy(true);
+    try {
+      const user = await putIssueFlowMode(next);
+      setMode(user.issue_flow === "free" ? "free" : "fixed");
+      setNote(next === "fixed"
+        ? "新发起的问题处理将按固定流程推进(七阶段/三节点,平台把关)"
+        : "新发起的问题处理改为自由探索(AI 按 playbook 自主编排);进行中的会话不受影响");
+      onChanged({ issue_flow: user.issue_flow });
+    } catch (cause) {
+      setNote(String((cause as Error).message ?? cause));
+    } finally { setBusy(false); }
+  }
+  return <section className="issue-flow-mode-setting" aria-labelledby="issue-flow-mode-title">
+    <header className="approval-setting-head">
+      <span className="approval-setting-icon" aria-hidden><svg viewBox="0 0 20 20"><path d="M4.5 15.5 8 9l3 3.5L14.5 5l2 4" fill="none" stroke="currentColor" strokeWidth="1.6" /></svg></span>
+      <div><span className="section-kicker">ISSUE EXPLORATION</span><h2 id="issue-flow-mode-title">问题处理探索方式</h2></div>
+      <span className="approval-setting-state">当前：{mode === "fixed" ? "固定流程" : "自由探索"}</span>
+    </header>
+    <p className="approval-setting-summary">只影响新发起的问题处理:固定流程按阶段状态机推进(有单七阶段、无单三节点,两个节点停下等你确认);自由探索交给 AI 按 playbook 自主编排。进行中的会话不受切换影响。</p>
+    <div className="approval-options" role="group" aria-label="问题处理探索方式">
+      <button type="button" className={mode === "fixed" ? "on" : ""} disabled={busy}
+        onClick={() => void select("fixed")}>
+        <strong>固定流程</strong><small>阶段固定、工具按阶段开放;报告确认与环境验证两处等你拍板(默认)</small>
+      </button>
+      <button type="button" className={mode === "free" ? "on" : ""} disabled={busy}
+        onClick={() => void select("free")}>
+        <strong>自由探索</strong><small>AI 自主决定研究路线,阶段自行上报;保留给需要灵活排查的场景</small>
+      </button>
+    </div>
+    {note ? <p className="approval-setting-note" role="status">{note}</p> : null}
+  </section>;
+}
+
 function PersonalSettingsPage({
   session,
   onSessionPatch,
@@ -262,6 +318,7 @@ function PersonalSettingsPage({
       onSessionPatch(patch);
       await onTasksChanged();
     }} />
+    <IssueFlowModeSetting session={session} onChanged={onSessionPatch} />
     <section className="personal-connections" aria-labelledby="personal-connections-title">
       <div className="personal-connections-head">
         <div><span className="section-kicker">PERSONAL CONNECTIONS</span><h2 id="personal-connections-title">个人接入</h2></div>
@@ -278,6 +335,7 @@ function PersonalSettingsPage({
 function NavIcon({ name }: { name: View }) {
   if (name === "team") return <svg viewBox="0 0 24 24" aria-hidden><path d="M4.75 19.25V11.5h4v7.75h-4Zm5.75 0V4.75h4v14.5h-4Zm5.75 0V8h4v11.25h-4Z" /></svg>;
   if (name === "mine") return <svg viewBox="0 0 24 24" aria-hidden><circle cx="12" cy="8" r="3.25" /><path d="M5.5 19.25c.65-3.45 2.82-5.25 6.5-5.25s5.85 1.8 6.5 5.25" /></svg>;
+  if (name === "issues") return <svg viewBox="0 0 24 24" aria-hidden><path d="M12 4.75 20 18.5H4L12 4.75Z" /><path d="M12 10v4M12 16.4v.2" /></svg>;
   if (name === "profile") return <svg viewBox="0 0 24 24" aria-hidden><circle cx="9" cy="8" r="3" /><path d="M3.75 18.5c.55-3.15 2.3-4.75 5.25-4.75s4.7 1.6 5.25 4.75" /><circle cx="17.5" cy="15.5" r="2.25" /><path d="M17.5 11.75v1.5M17.5 17.75v1.5M13.75 15.5h1.5M19.75 15.5h1.5" /></svg>;
   if (name === "wishes") return <svg viewBox="0 0 24 24" aria-hidden><path d="M12 20.25s-7.25-4.1-7.25-10.1A4.4 4.4 0 0 1 12 6.8a4.4 4.4 0 0 1 7.25 3.35c0 6-7.25 10.1-7.25 10.1Z" /><path d="m17.5 3.75.45 1.3 1.3.45-1.3.45-.45 1.3-.45-1.3-1.3-.45 1.3-.45.45-1.3Z" /></svg>;
   if (name === "business") return <svg viewBox="0 0 24 24" aria-hidden><rect x="4" y="4.5" width="6.5" height="6.5" rx="1" /><rect x="13.5" y="4.5" width="6.5" height="6.5" rx="1" /><rect x="8.75" y="14" width="6.5" height="6" rx="1" /><path d="M7.25 11v1.25H12M16.75 11v1.25H12M12 12.25V14" /></svg>;
@@ -481,6 +539,13 @@ export function App() {
   // 管理员不再有个人待办:归属人=下单人是硬规则,无主任务只可能来自
   // 无鉴权的老现场,团队总览里照常可见、可打开兜底处置。
 
+  // 视图打标:问题处理(issues)用淡红主题,与需求流的淡紫视觉分区
+  // (body 级 data-view,CSS 变量作用域覆盖,见 style.css 尾部)。
+  useEffect(() => {
+    document.body.dataset.view = view;
+    return () => { delete document.body.dataset.view; };
+  }, [view]);
+
   if (session === undefined) return <LoadingScreen />;
   if (session === null) return <LoginScreen onAuthenticated={(user) => {
     launchGateRequest.current += 1;
@@ -577,7 +642,8 @@ export function App() {
     team: session.role === "admin"
       ? { title: "团队总览", description: "看团队推进、负责人和阻塞风险；需要兜底时打开任务的过程工作台处置(暂停/恢复/决定)。" }
       : { title: "团队动态", description: "只读了解团队正在推进什么；你的待办与操作始终留在个人工作台。" },
-    mine: { title: "我的工作", description: "从发起到交付，集中推进你的每一项任务。" },
+    mine: { title: "我的需求", description: "从发起到交付，集中推进你的每一项需求任务。" },
+    issues: { title: "问题处理", description: "我的问题研究与 DTS 问题单处理：先定位，后补单，非问题也是合法结论。" },
     profile: { title: "个人设置", description: "集中管理任务审批方式、CodeHub 提交身份和小鲁班通知。" },
     history: { title: "交付历史", description: "回看任务与交付记录；未启用历史投影时仍可浏览当前任务现场。" },
     business: { title: "业务版图", description: "用模块组织领域概念、规则、流程和边界，并在业务语境中持续管理知识；责任人与仓库是治理信息。" },
@@ -606,7 +672,8 @@ export function App() {
           <NavButton view="settings" current={view} onSelect={setView} label="服务设置" />
         </> : <>
           <span className="nav-section-label">个人工作台</span>
-          <NavButton view="mine" current={view} onSelect={setView} label="我的工作" badge={myWaiting.length + pendingReviews.length} personal />
+          <NavButton view="mine" current={view} onSelect={setView} label="我的需求" badge={myWaiting.length + pendingReviews.length} personal />
+          <NavButton view="issues" current={view} onSelect={setView} label="问题处理" />
           <NavButton view="profile" current={view} onSelect={setView} label="个人设置" />
           <span className="nav-section-label team-context">团队信息</span>
           <NavButton view="team" current={view} onSelect={setView} label="团队动态" badge={waitingCount} />
@@ -691,6 +758,7 @@ export function App() {
           </section>
           {mineScope === "all" && myDelivered.length > 0 && <TaskGroup kicker="DELIVERY" title="等待合入与最近完成" tasks={myDelivered} onChanged={refresh} onOpenArtifacts={openArtifacts} targetTaskId={targetTaskId} />}
         </>}
+        {view === "issues" && session.role !== "admin" && <Suspense fallback={<div className="issue-board-loading">问题处理页加载中…</div>}><IssueBoard viewer={session} onNavigateProfile={() => setView("profile")} /></Suspense>}
         {view === "profile" && session.role !== "admin" && <PersonalSettingsPage
           session={session}
           onSessionPatch={patchSession}
@@ -955,7 +1023,7 @@ function UsersBoard({ me }: { me: string }) {
           <div className="user-row">
             <span className="user-cell"><i>{user.username.slice(0, 1).toUpperCase()}</i><strong>{user.username}</strong></span>
             <span><em className={`role-chip ${user.role}`}>{user.role === "admin" ? "管理员" : "开发成员"}</em></span>
-            <span className="user-entry">{user.role === "admin" ? "团队总览" : "我的工作"}</span>
+            <span className="user-entry">{user.role === "admin" ? "团队总览" : "我的需求"}</span>
             <span><button type="button" className={`committer-toggle${user.committer ? " on" : ""}`} aria-pressed={!!user.committer} onClick={() => void toggleCommitter(user)}><i aria-hidden />{user.committer ? "已加入" : "加入名单"}</button></span>
             <span className="user-actions">
               <button type="button" className="user-action" onClick={() => {

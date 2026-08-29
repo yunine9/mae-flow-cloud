@@ -38,7 +38,15 @@ import {
   LubanApprovalGateway,
 } from "./lubanApproval.ts";
 import { FakeGitPlatform } from "./gitPlatform.ts";
-import { createGoEnvironmentAdapter } from "./issueEnvironmentGoAdapter.ts";
+import { IssueFlowService } from "./issueFlow/service.ts";
+import { createGoOpsTools } from "./issueFlow/opsTools.ts";
+import {
+  McpGateway,
+  McpDtsGateway,
+  MockDtsGateway,
+  UnconfiguredDtsGateway,
+  type DtsGateway,
+} from "./issueFlow/gateways.ts";
 import { PgProjection } from "./projection.ts";
 import type { GateDecision } from "./gateService.ts";
 import { LocalAuth } from "./auth.ts";
@@ -71,18 +79,28 @@ const DEMO_SCRIPT: Scene[] = [
  * 参数不必动文件。文件坏了直接拒启,不静默忽略:带着一半配置起服,
  * 比不起服更害人(你以为切了真件,其实还在假件上)。
  *
+ * 不带 --config 时自动装载 /etc/mae-flow-cloud/serve.json(存在才装):
+ * 服务器裸起即得全量配置,排障临时参数走命令行覆盖。
+ *
  * 为什么不用环境变量堆:十几个 MAE_FLOW_* 散在 systemd 单元里没法
  * review;一个 JSON 文件即配置面清单,git 里能 diff(密钥除外——
  * apiKey 类仍走 secrets.env / models.json,权限 600,永不进仓)。
  */
 const CONFIG: Record<string, unknown> = (() => {
   const index = process.argv.indexOf("--config");
-  if (index < 0) return {};
-  const path = process.argv[index + 1];
-  if (!path) {
+  // 显式 --config 给路径;不给则自动装载部署侧固定位置的 serve.json——
+  // 内网服务器 npm run serve 裸起即得全量配置,systemd 单元不必再拼一串
+  // 参数。自动路径不存在不算错(视为无配置文件);显式给了 --config 却
+  // 缺值/读不到才是错,照旧拒启。
+  const DEFAULT_CONFIG_PATH = "/etc/mae-flow-cloud/serve.json";
+  if (index >= 0 && !process.argv[index + 1]) {
     console.error("[serve] --config 需要文件路径");
     process.exit(2);
   }
+  const path = index >= 0
+    ? process.argv[index + 1]
+    : (existsSync(DEFAULT_CONFIG_PATH) ? DEFAULT_CONFIG_PATH : undefined);
+  if (!path) return {};
   try {
     const parsed = JSON.parse(readFileSync(path, "utf-8"));
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
@@ -323,11 +341,23 @@ async function main(): Promise<void> {
   // 测试共用一条链,不许各写各的)。
   const kernelRoot = discoverKernelRoot(REPO_ROOT);
 
+  // 问题流专用部署(--issue-only):需求流程的重依赖(内核/交付平台/
+  // prepush/容器镜像守卫)整体不加载——它们缺配时也不再拒绝启动,
+  // 问题处理照常服务。这是对"需求侧配置问题不许拖死问题流"的正面
+  // 回答;反过来,没加 --issue-only 的内核模式部署仍按宪法 fail-loud。
+  const issueOnly = has("--issue-only");
+
   // 内核模式开启条件:找得到内核,且用 --repo 钉死单仓(演示/测试)
   // 或明确 --kernel-mode(正式形态,代码仓由开发逐单必填)。
+  // --issue-only 压过内核模式:给了两者就按问题流专用跑,并说清楚。
   const repoFlag = flag("--repo");
-  const kernelMode = !!kernelRoot
+  const kernelRequested = !!kernelRoot
     && (!!repoFlag || has("--kernel-mode"));
+  if (issueOnly && kernelRequested) {
+    console.log("[serve] --issue-only 与内核模式同时给出:按问题流专用跑,"
+      + "内核/交付平台/prepush 本次不加载(需求流程停用)");
+  }
+  const kernelMode = !issueOnly && kernelRequested;
   // URL 仓不许过 resolve(会被拼成本地路径,实测毁 URL);本地路径才归一化。
   const repoPath = repoFlag
     ? (/^(https?|ssh|git):\/\//i.test(repoFlag)
@@ -418,12 +448,24 @@ async function main(): Promise<void> {
   let lubanIsFake = false;
   if (lubanEndpoint) {
     console.log(`[serve] 小鲁班真件: ${lubanEndpoint}`);
+  } else if (issueOnly) {
+    // 问题流专用部署:通知假件起不来也不许挡住问题处理(需求流程
+    // 反正停用,没人消费通知)。完整部署保持 fail-loud 不变。
+    try {
+      const luban = new FakeLubanServer();
+      await luban.start();
+      lubanEndpoint = luban.endpoint;
+      lubanIsFake = true;
+      console.log("[serve] 假小鲁班已就位(问题流专用部署)");
+    } catch (error) {
+      console.log(`[serve] 假小鲁班启动失败,问题流专用模式继续(通知不可用): ${String(error)}`);
+    }
   } else {
     const luban = new FakeLubanServer();
     await luban.start();
     lubanEndpoint = luban.endpoint;
     lubanIsFake = true;  // 假件不索个人令牌(配置门禁据此放行)
-    console.log(`[serve] 假小鲁班已就位,消息可查: ${luban.endpoint.replace("/notify", "")}`);
+    console.log("[serve] 假小鲁班已就位,消息可查: " + luban.endpoint.replace("/notify", ""));
   }
   const lubanHeaders: Record<string, string> = {};
   for (const header of flags("--luban-header")) {
@@ -434,6 +476,13 @@ async function main(): Promise<void> {
     }
     lubanHeaders[header.slice(0, at).trim()] = header.slice(at + 1).trim();
   }
+  // 通知文案模板(可选):三类通知各一条,占位符词汇表与示例见
+  // docs/luban-notification-templates.md。配错(表外占位符)在 Notifier
+  // 构造期点名并拒绝启动——部署配置语义;通知运行期仍是旁路 fail-open,
+  // 两件事不冲突:错模板一次也别投出去。
+  const lubanTemplateWaiting = flag("--luban-template-waiting");
+  const lubanTemplateOutcome = flag("--luban-template-outcome");
+  const lubanTemplateReview = flag("--luban-template-review");
   // 手机审批是入站回调，与上面的出站通知令牌是两套身份。Token 只从
   // 0600 文件读，不允许塞进命令行或 JSON 配置的明文字段。
   const lubanPluginTokenFile = flag("--luban-plugin-token-file");
@@ -612,41 +661,149 @@ async function main(): Promise<void> {
       + (commitConvention.length > 60 ? "…" : ""));
   }
 
-  // 问题单环境适配器(拉日志/换库):assets/ops-tools 里的 Go 工具在场
-  // 就接上——凭据由任务保险箱解密后经环境变量注入子进程,工具与密码都
-  // 不进任务工作区(见 src/issueEnvironmentGoAdapter.ts 头注释)。
-  // workspaceOf 拿的是任务工作区根,适配器自己在里面找代码克隆。
-  let issueServiceRef: TaskService | undefined;
+  // 问题流(与需求内核完全分离的会话域):MCP 网关按需接线。
+  // token 只从文件读(缺省 /etc/mae-flow-cloud/mcp-token,文件在场即
+  // 自动装载,可用 --mcp-token-file 覆盖)——命令行/JSON 配置里不许
+  // 出现明文密钥。
+  // DTS 网关地址是站点固定值(2026-08-28 拍板:内网唯一实例,值是死
+  // 的),直接给代码缺省——serve.json 不必为 DTS 写任何键。两条护栏:
+  // ①缺省 URL 仅在 token 文件在场时生效,否则开发机/演示形态会被
+  // "配了 URL 没 token 拒启"的 fail-fast 干掉;②显式 --dts-mock 压过
+  // 缺省(生产机想开 mock 测试不该撞互斥),互斥只拦显式 --dts-mcp-url。
+  // --dts-mock:过渡期假单据(真实网关完整实现在位),供外部环境跑通
+  // 全流程。
+  const DEFAULT_DTS_MCP_URL =
+    "http://mcpgateway.his.huawei.com/mcp/6a0ac03dc1218e60a80b2a59";
+  const dtsMock = has("--dts-mock");
+  const explicitDtsMcpUrl = flag("--dts-mcp-url");
+  const mcpTokenFile = flag("--mcp-token-file")
+    ?? (existsSync("/etc/mae-flow-cloud/mcp-token")
+      ? "/etc/mae-flow-cloud/mcp-token" : undefined);
+  const dtsMcpUrl = explicitDtsMcpUrl
+    ?? (dtsMock || !mcpTokenFile ? undefined : DEFAULT_DTS_MCP_URL);
+  if (dtsMock && explicitDtsMcpUrl) {
+    console.error("[serve] --dts-mock 与 --dts-mcp-url 互斥:"
+      + "前者是过渡期假单据,后者是真网关,别同时配");
+    process.exit(2);
+  }
+  // token 不在启动时读定值——只校验文件在场且非空(fail-fast),之后
+  // 每次请求经闭包重读文件。token 在网关侧轮换后服务不用重启;运行时
+  // 文件被删/不可读则降级为不带头,让网关 401 显形而不是拖垮整个进程。
+  let mcpTokenProvider: (() => string) | undefined;
+  if (mcpTokenFile) {
+    try {
+      const initial = readFileSync(mcpTokenFile, "utf-8").trim();
+      if (!initial) throw new Error("token 文件为空");
+      console.log(`[serve] MCP token 文件(动态读取): ${mcpTokenFile}`);
+    } catch (error) {
+      console.error(`[serve] MCP token 读取失败,拒绝启动: ${String(error)}`);
+      process.exit(2);
+    }
+    mcpTokenProvider = () => {
+      try {
+        return readFileSync(mcpTokenFile, "utf-8").trim();
+      } catch {
+        return "";
+      }
+    };
+  }
+  if (dtsMcpUrl && !mcpTokenProvider) {
+    console.error("[serve] 配置了 MCP 网关地址但没有 token:"
+      + "请配置 --mcp-token-file(正式服务器为 /etc/mae-flow-cloud/mcp-token)");
+    process.exit(2);
+  }
+  let issueDts: DtsGateway | undefined;
+  let mcpGateway: McpGateway | undefined;
+  if (dtsMock) {
+    issueDts = new MockDtsGateway((message) => console.log(`  [issue-dts] ${message}`));
+    console.log("[serve] 问题流 DTS 网关: DEV·模拟(--dts-mock,外部开发模式,"
+      + "连不上真实 DTS;单据 DTS-2026-1001~1006 为模拟数据,页签有 DEV 标识)");
+  } else if (dtsMcpUrl && mcpTokenProvider) {
+    mcpGateway = new McpGateway({
+      url: dtsMcpUrl, tokenProvider: mcpTokenProvider,
+      log: (message) => console.log(`  [issue-dts] ${message}`),
+    });
+    issueDts = new McpDtsGateway(mcpGateway);
+    console.log(`[serve] 问题流 DTS 网关: ${dtsMcpUrl}`
+      + (explicitDtsMcpUrl ? "" : "(站点缺省地址,--dts-mcp-url/serve.json 可覆盖)"));
+  }
+  // 运维工具(拉日志/换库):在场即接上,凭据由保险箱解密后经环境
+  // 变量注入子进程(见 src/issueFlow/opsTools.ts)。
   const goToolsDir = join(REPO_ROOT, "assets", "ops-tools");
-  const issueEnvironmentAdapter
-    = existsSync(join(goToolsDir, process.platform === "win32"
-        ? "fetch-logs.exe" : "fetch-logs-linux-amd64"))
-      ? createGoEnvironmentAdapter({
+  // 未配置也挂 fail-loud 占位:问题服务的工具取数与路由直连的拉单都
+  // 走同一个网关实例,未配置时由占位网关说人话,不静默 404。
+  const issueDtsGateway = issueDts ?? new UnconfiguredDtsGateway();
+  const issueLog = (message: string) => console.log(`  [issue] ${message}`);
+  const issueFlow = new IssueFlowService({
+    dataDir, provider, model, modelsJson, settings,
+    // 探索方式烙印(个人设置,缺省固定流程):create 时读一次烙进会话。
+    issueFlowMode: (account) => auth.issueFlowMode(account),
+    gitCredential: (account) => auth.gitCredential(account),
+    opsTools: existsSync(join(goToolsDir, process.platform === "win32"
+      ? "fetch-logs.exe" : "fetch-logs-linux-amd64"))
+      ? createGoOpsTools({
           toolsDir: goToolsDir,
-          workspaceOf: (taskId) => issueServiceRef?.get(taskId)?.workspace,
           log: (message) => console.log(`  ${message}`),
         })
-      : undefined;
-  if (issueEnvironmentAdapter) {
-    console.log("[serve] 问题单环境适配器已接线:拉日志+换库"
-      + `(工具目录 ${goToolsDir})`);
+      : undefined,
+    dts: issueDtsGateway,
+    // MR 与需求交付共用同一交付平台适配层(--platform)。
+    ...(platformUrl ? { platformUrl } : {}),
+    maxConcurrentTurns: Number(flag("--issue-max-turns") ?? "2"),
+    ...(isolateImage
+      ? {
+          isolation: {
+            image: isolateImage,
+            volumes: flags("--isolate-volume"),
+            memory: isolateMemory,
+            cpus: isolateCpus,
+            ...(containerUser.user ? { user: containerUser.user } : {}),
+            pidsLimit: isolatePids,
+            network: isolateNetwork,
+          },
+        }
+      : {}),
+    log: issueLog,
+  });
+
+  if (issueOnly) {
+    console.log("[serve] 问题流专用模式(--issue-only):需求流程停用"
+      + "(发起任务入口会被拦截,在途需求任务不拉起);"
+      + "「问题处理」全功能可用");
   }
 
-  const notifier = new Notifier({
-    endpoint: lubanEndpoint,
-    headers: lubanHeaders,
-    fake: lubanIsFake,
-    mobileApproval: lubanPluginReplies,
-    approvalCode: lubanPluginReplies && lubanPluginToken
-      ? (input) => lubanApprovalCode({ token: lubanPluginToken, ...input })
-      : undefined,
-    // 发起人的通知令牌:普通任务提醒是自己发给自己；主动邀请检视时，
-    // 用责任人的令牌向所选 Committer 工号发送，不要求收件人配令牌。
-    personalToken: (account) => auth.lubanToken(account),
-  });
+  // issue-only 下假小鲁班起不来时 endpoint 缺席:通知器整个不接
+  // (notifier 是可选项),不让它变成问题流的启动依赖。
+  const notifier = lubanEndpoint
+    ? new Notifier({
+        endpoint: lubanEndpoint,
+        headers: lubanHeaders,
+        fake: lubanIsFake,
+        mobileApproval: lubanPluginReplies,
+        approvalCode: lubanPluginReplies && lubanPluginToken
+          ? (input) => lubanApprovalCode({ token: lubanPluginToken, ...input })
+          : undefined,
+        // 发起人的通知令牌:普通任务提醒是自己发给自己；主动邀请检视时，
+        // 用责任人的令牌向所选 Committer 工号发送，不要求收件人配令牌。
+        personalToken: (account) => auth.lubanToken(account),
+        ...(lubanTemplateWaiting || lubanTemplateOutcome || lubanTemplateReview
+          ? {
+              templates: {
+                ...(lubanTemplateWaiting
+                  ? { waiting: lubanTemplateWaiting } : {}),
+                ...(lubanTemplateOutcome
+                  ? { outcome: lubanTemplateOutcome } : {}),
+                ...(lubanTemplateReview
+                  ? { review: lubanTemplateReview } : {}),
+              },
+            }
+          : {}),
+      })
+    : undefined;
 
   const service = new TaskService({
     dataDir, provider, model, modelsJson, maxConcurrent, settings,
+    ...(issueOnly ? { requirementDisabled: true } : {}),
     vision: visionProvider && visionModel
       ? { provider: visionProvider, model: visionModel } : undefined,
     // 个人 Git 令牌(界面只写不读):任务启动时按归属人取,经
@@ -659,7 +816,7 @@ async function main(): Promise<void> {
     collaborationAssigneeReadiness: (account) => {
       const needs = {
         git_token: !!host,
-        luban_token: notifier.needsPersonalToken(),
+        luban_token: notifier?.needsPersonalToken() ?? false,
       };
       return auth.collaborationAssignees(needs)
         .find((candidate) => candidate.username === account)
@@ -701,15 +858,13 @@ async function main(): Promise<void> {
           network: isolateNetwork,
         }
       : undefined,
-    notifier,
+    ...(notifier ? { notifier } : {}),
     projection,
     // 正式部署建议固定 public-url；未配置时，服务会从已登录用户的
     // 实际请求 Host 学到内网入口，绝不再默认写死 127.0.0.1。
     linkBase: publicUrl,
-    issueEnvironmentAdapter,
     log: (message) => console.log(`  [task] ${message}`),
   });
-  issueServiceRef = service; // 适配器的 workspaceOf 从这里回查
   // 先清理本 dataDir 实例上次崩溃遗留的 coding/prepush/system-check
   // 容器，再恢复任务。顺序不能反：recover 一旦入队就可能撞上旧容器。
   const swept = await service.sweepOrphanContainers();
@@ -727,7 +882,9 @@ async function main(): Promise<void> {
     ? new LubanApprovalGateway(service, {
         token: lubanPluginToken,
         accountEnabled: (account) => !!auth.sessionView(account),
-        recentNotification: (account) => notifier.latestApproval(account),
+        ...(notifier ? {
+          recentNotification: (account) => notifier.latestApproval(account),
+        } : {}),
         log: (message) => console.log(`  [luban-plugin] ${message}`),
       })
     : undefined;
@@ -779,7 +936,12 @@ async function main(): Promise<void> {
   // 就不上网,是姿态不是疏忽)。暴露时登录/权限本来就在,但要认两条:
   // 内网是明文 http(会话 cookie 可被同网段嗅探,正式部署前加反代
   // TLS);工作机合盖=全员断线,它是工作站不是服务器。
-  const server = createTaskServer(service, { webRoot, auth, lubanApproval });
+  const server = createTaskServer(service, {
+    webRoot, auth, lubanApproval, issueFlow, mcpGateway,
+    // 问题路由直连所需的 DTS 网关与台账日志(与问题服务同一实例/口径)。
+    dts: issueDtsGateway,
+    log: issueLog,
+  });
   let terminating = false;
   const terminate = async (signal: "SIGTERM" | "SIGINT") => {
     if (terminating) return;
@@ -791,6 +953,7 @@ async function main(): Promise<void> {
     let exitCode = 0;
     try {
       await service.shutdown();
+      await issueFlow.shutdown();
       console.log("[serve] 所有任务会话与容器已确认释放；业务状态保持不变，"
         + "下次启动将继续恢复");
     } catch (error) {

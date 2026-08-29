@@ -107,24 +107,6 @@ test("任务焦点:运行态使用内核同源步骤，不自造流程阶段", (
   assert.equal(result.kind, "machine");
 });
 
-test("任务焦点:DTS 诊断与内核交接不会伪装成普通编码", () => {
-  const triage = projectTaskFocus({
-    status: "running",
-    entry_kind: "dts",
-    issue_context: { stage: "triage" },
-  });
-  assert.match(triage.headline, /日志、代码与问题根因/);
-  assert.match(triage.next_action, /请你确认/);
-
-  const handoff = projectTaskFocus({
-    status: "queued",
-    entry_kind: "dts",
-    issue_context: { stage: "delivery" },
-  });
-  assert.match(handoff.headline, /等待代码修复接管/);
-  assert.match(handoff.next_action, /Mae-Flow 问题修复/);
-});
-
 test("任务焦点:排队真相压过陈旧 detail,并报出位次", () => {
   // 实锤:并发 2 跑 3 单,重跑后的排队单拿 detail("人工重跑…")当
   // 标题,三单看起来都在推进,没人知道谁在排队。

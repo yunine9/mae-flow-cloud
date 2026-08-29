@@ -54,6 +54,11 @@ const HOST_SECRET_DIRS = ["pi-agent"];
 export interface GateServiceOptions {
   moonlight?: boolean;
   contract?: GateContract;
+  /** 追加的宿主账本(相对工作区根):问题流这类旁路会话有自己的
+   * 状态文件(issue.json)与注入的技能目录,同样不允许 Agent 改写。
+   * dirs 连同其下全部内容,files 只认工作区根下的同名文件。 */
+  extraLedgerDirs?: string[];
+  extraLedgerFiles?: string[];
   /** 文件工具的可达边界=**任务工作区**(含代码仓与仓外的修复材料)。
    *
    * 踩过的坑:边界一度锚在代码仓上,而修复使命指挥模型读 ../pipeline/
@@ -76,6 +81,8 @@ export interface GateServiceOptions {
 export class GateService {
   private readonly moonlight: boolean;
   private readonly contract?: GateContract;
+  private readonly ledgerDirs: readonly string[];
+  private readonly ledgerFiles: readonly string[];
   private readonly workspace?: string;
   private readonly cwd?: string;
   private readonly failClosed: boolean;
@@ -84,6 +91,12 @@ export class GateService {
   constructor(options: GateServiceOptions = {}) {
     this.moonlight = Boolean(options.moonlight);
     this.contract = options.contract;
+    this.ledgerDirs = [
+      ...HOST_LEDGER_DIRS, ...(options.extraLedgerDirs ?? []),
+    ];
+    this.ledgerFiles = [
+      ...HOST_LEDGERS, ...(options.extraLedgerFiles ?? []),
+    ];
     this.workspace = options.workspace
       ? realpathSync(resolve(options.workspace))
       : undefined;
@@ -163,7 +176,7 @@ export class GateService {
       }
       if (tool !== "Read") {
         const ledger = paths.find(
-          (path) => this.hitsHostPath(path, HOST_LEDGER_DIRS, HOST_LEDGERS));
+          (path) => this.hitsHostPath(path, this.ledgerDirs, this.ledgerFiles));
         if (ledger) {
           return {
             action: "deny",

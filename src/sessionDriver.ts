@@ -197,6 +197,10 @@ export interface CloudSessionOptions {
   /** 与 repositorySkillPaths 一一对应的业务身份，仅用于知识足迹归因；
    * 缺失时仍能按实际 Skill 文件记录，不影响装载。 */
   repositorySkillResources?: Array<KnowledgeResourceRef & { actual_path: string }>;
+  /** 会话专属宿主工具(defineTool 形状)。问题流这样的旁路会话用它把
+   * 平台原子能力(报阶段/拉日志/受门禁的推送)递给 Agent——秘密留在
+   * 宿主,Agent 只拿到工具语义。内核任务不传,行为不变。 */
+  extraTools?: unknown[];
   /** 创建任务时固定的业务模块知识。非 Skill 只进入统一轻量索引；
    * 正文保留为工作区文件，由 Agent 使用 Read/Grep 按需读取。 */
   businessModuleKnowledge?: MaterializedBusinessModuleKnowledge;
@@ -993,6 +997,7 @@ export class CloudSession {
       resourceLoader: loader,
       customTools: [
         ...(config.customTools as any[]),
+        ...((this.options.extraTools ?? []) as any[]),
         ...visionTools,
         ...ownedFileTools,
         ...isolatedTools,

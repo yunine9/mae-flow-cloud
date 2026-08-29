@@ -258,3 +258,65 @@ test("通知连通测试也带 /mfc 激活说明", async () => {
     await luban.stop();
   }
 });
+
+test("文案模板:占位符按类别套值;激活提示与手机指令不归模板管", async () => {
+  const notifier = new Notifier({
+    endpoint: "http://127.0.0.1:1/unused",
+    mobileApproval: true,
+    approvalCode: () => "A1B2C3D4E5",
+    backoffMs: [],
+    templates: {
+      waiting: "{account} 你好:{subject}({task_id})在 {stage}[{step}]等你\n{summary}\n直达:{link}",
+      outcome: "任务 {task_id} 已 {status}:{summary}\n详情:{link}",
+      review: "{sender_account} 邀 {account} 检视 {task_id}:{summary} {link}",
+    },
+  });
+  const waiting = await notifier.notifyWaiting({
+    waitingId: "T-tpl:w", stateVersion: 1, taskId: "T-tpl",
+    account: "alice", step: "delivery_review",
+    context: "基线:master",
+    questions: [{ question: "Diff 通过吗?", options: ["通过", "打回"] }],
+    link: "http://x/tasks/T-tpl",
+  });
+  // subject 缺席回落"任务 {task_id}";stage 是人话、step 是内核原名。
+  assert.match(waiting.text,
+    /alice 你好:任务 T-tpl\(T-tpl\)在 当前阶段确认\[delivery_review\]等你/);
+  assert.match(waiting.text, /待确认内容：\n基线:master/);
+  assert.match(waiting.text, /直达:http:\/\/x\/tasks\/T-tpl/);
+  // 模板删不掉的两段:激活前置 + 手机审批指令
+  assert.match(waiting.text, /先输入“\/mfc”激活 Mae-Flow 插件/);
+  assert.match(waiting.text, /可回复选项序号/);
+
+  const outcome = await notifier.notifyOutcome({
+    taskId: "T-tpl", account: "alice", status: "failed",
+    summary: "出错了", link: "http://x/tasks/T-tpl",
+  });
+  assert.match(outcome.text, /任务 T-tpl 已 failed:出错了/);
+  assert.match(outcome.text, /详情:http:\/\/x\/tasks\/T-tpl/);
+  assert.match(outcome.text, /先输入“\/mfc”激活/);
+
+  const review = await notifier.notifyReview({
+    taskId: "T-tpl", senderAccount: "bob", account: "alice",
+    summary: "看看", link: "http://x/tasks/T-tpl",
+  });
+  assert.match(review.text, /bob 邀 alice 检视 T-tpl:看看/);
+});
+
+test("文案模板:表外或跨类别占位符拒绝构造(部署配置语义)", () => {
+  assert.throws(
+    () => new Notifier({ endpoint: "x", templates: { waiting: "{task_i}" } }),
+    /waiting[\s\S]*task_i/);
+  // {stage} 是 waiting 专属,outcome 里用它=跨类别配错,同样点名。
+  assert.throws(
+    () => new Notifier({ endpoint: "x", templates: { outcome: "{stage}" } }),
+    /outcome[\s\S]*stage/);
+  assert.throws(
+    () => new Notifier({ endpoint: "x", templates: { review: "{status}" } }),
+    /review[\s\S]*status/);
+  // 报错里把该类别可用占位符列全,排障不用翻源码。
+  assert.throws(
+    () => new Notifier({ endpoint: "x", templates: { outcome: "{oops}" } }),
+    /\{task_id\} \{status\} \{summary\} \{account\} \{link\}/);
+  // 合法模板正常构造,不配模板=默认文案(既有用例已覆盖默认形状)。
+  new Notifier({ endpoint: "x", templates: { review: "{sender_account}→{link}" } });
+});

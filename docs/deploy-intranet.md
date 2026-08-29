@@ -292,6 +292,11 @@ npm run serve -- ... --luban http://127.0.0.1:8791
 早先设想的"小鲁班 MCP / 拉群 CLI 艾特"两条候选就此作废——真件是
 上面这个 HTTP 接口,已实测送达。
 
+通知**正文**可按部署自定义(值班群口吻、前缀规范等):三个模板键
+`luban-template-waiting/-outcome/-review`,`{占位符}` 套值;`/mfc`
+激活提示与手机审批指令由代码追加,模板删不掉。词汇表与示例见
+[`docs/luban-notification-templates.md`](./luban-notification-templates.md)。
+
 ### 手机纯文本审批:小鲁班插件回调
 
 内网 Agent/运维请优先按独立交接单
@@ -710,7 +715,8 @@ MFC 管理的跨任务业务/工程知识只走上一节的任务知识索引，
 
 ## 配置面全集(--config 一个文件收口)
 
-`npm run serve -- --config /etc/mae-flow-cloud/serve.json`。文件键 =
+`npm run serve`(不带参数)会自动装载 `/etc/mae-flow-cloud/serve.json`
+(存在才装);也可 `--config <路径>` 显式指定别的文件。文件键 =
 去掉 `--` 的 flag 名;命令行永远压过文件(排障临时改参数不必动文件);
 **文件坏了拒绝启动**,不静默忽略——带着一半配置起服,比不起服更害人。
 密钥(模型 apiKey、通知鉴权头)所在文件一律权限 600,永不进仓。
@@ -725,6 +731,10 @@ MFC 管理的跨任务业务/工程知识只走上一节的任务知识索引，
   "luban": "<通知端点>",
   "luban-header": ["Authorization: Bearer <密钥>"],
   "luban-plugin-token-file": "/etc/mae-flow-cloud/luban-plugin.token",
+  "dts-mcp-url": "<可省:站点缺省已内置,token 文件在场即生效>",
+  "mcp-token-file": "<可省:缺省就是 /etc/mae-flow-cloud/mcp-token>",
+  "issue-max-turns": 2,
+  "issue-only": false,
   "luban-plugin-replies": false,
   "pg": "postgresql://...",
   "data": "/var/lib/mae-flow-cloud", "port": 8787,
@@ -741,6 +751,15 @@ MFC 管理的跨任务业务/工程知识只走上一节的任务知识索引，
 }
 ```
 
+问题流的 MCP token(仅 DTS 网关用;提 MR 复用上方 --platform 适配层):
+
+```bash
+install -m 600 /dev/null /etc/mae-flow-cloud/mcp-token
+# 写入 x-auth-token 的值;两个网关地址配进 serve.json 后,
+# 「问题处理」页的拉单与 AI 的查单/提MR 即接线。未配置时对应
+# 能力如实报"未配置",不影响需求主链。
+```
+
 | 键(=flag 去 `--`) | 默认 | 说明 |
 | --- | --- | --- |
 | models / provider / model | 演示剧本 | 模型网关三件套 |
@@ -750,6 +769,7 @@ MFC 管理的跨任务业务/工程知识只走上一节的任务知识索引，
 | luban / luban-header | 假小鲁班 | 通知端点与鉴权头(可重复) |
 | luban-plugin-token-file | 无 | 准备 Cloud 手机审批回调端点；0600、至少 32 字节的固定 Token 文件，不代表小鲁班入站已接通 |
 | luban-plugin-replies | false | 真实小鲁班插件/入站桥端到端验收通过后才设 true；控制通知是否承诺 `/mfc` 激活后可回复 |
+| luban-template-waiting / -outcome / -review | 内置默认文案 | 通知正文模板，`{占位符}` 按类别白名单，词汇表与用法见 [`docs/luban-notification-templates.md`](./luban-notification-templates.md)；配错占位符拒绝启动 |
 | pg | 无 | 投影(纯旁路) |
 | data / port / web | .tasks / 8787 / web-dist | 现场目录、端口、前端 |
 | isolate-image | 无(内核模式必填) | 统一任务构建镜像 |

@@ -86,6 +86,8 @@ test("个人配置:退出重登与账号库重载后仍在,且不同用户严格
       moonlight: true,
       // push 前清单过目:真人缺省即开(2026-08-26 拍板)。
       push_confirmation: true,
+      // 问题处理探索方式:缺省固定流程(2026-08-27 拍板)。
+      issue_flow: "fixed",
     });
     assert.doesNotMatch(alice.text,
       /alice-codehub-secret|alice-luban-secret|bob-codehub-secret|bob@example/,
@@ -109,6 +111,7 @@ test("个人配置:退出重登与账号库重载后仍在,且不同用户严格
       luban_token_hint: "••••cret",
       moonlight: false,
       push_confirmation: true,
+      issue_flow: "fixed",
     });
     assert.equal(bobView.git_email, "bob@example.com");
     assert.notEqual(bobView.git_email, aliceView.git_email);
