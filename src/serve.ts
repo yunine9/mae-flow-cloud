@@ -681,40 +681,55 @@ async function main(): Promise<void> {
       ? "/etc/mae-flow-cloud/mcp-token" : undefined);
   const dtsMcpUrl = explicitDtsMcpUrl
     ?? (dtsMock || !mcpTokenFile ? undefined : DEFAULT_DTS_MCP_URL);
+  // 问题流的网关配置坏了,不许连累需求流。--issue-only 下问题处理就是
+  // 全部业务,配置坏了必须当场拒启;完整部署下 DTS 网关只是问题域的一路
+  // 旁路,按红线"旁路一律 fail-open"降级成不接线并大声记账——需求流程
+  // 照常起服,问题页由 UnconfiguredDtsGateway 当场说人话,不静默装可用。
+  // 踩过的坑:缺省会自动装载 /etc/mae-flow-cloud/mcp-token,一个空文件
+  // 就能让整台机器(含需求流)起不来,而没人点过问题处理。
+  let dtsDisabledReason = "";
+  const issueGatewayFault = (reason: string): void => {
+    if (issueOnly) {
+      console.error(`[serve] ${reason};--issue-only 下问题处理是全部业务,拒绝启动`);
+      process.exit(2);
+    }
+    dtsDisabledReason = reason;
+    console.error(`[serve] ${reason};本次不接 DTS 网关——`
+      + "「问题处理」页拉单会当场报缺配置,需求流程不受影响");
+  };
   if (dtsMock && explicitDtsMcpUrl) {
-    console.error("[serve] --dts-mock 与 --dts-mcp-url 互斥:"
+    issueGatewayFault("--dts-mock 与 --dts-mcp-url 互斥:"
       + "前者是过渡期假单据,后者是真网关,别同时配");
-    process.exit(2);
   }
-  // token 不在启动时读定值——只校验文件在场且非空(fail-fast),之后
-  // 每次请求经闭包重读文件。token 在网关侧轮换后服务不用重启;运行时
-  // 文件被删/不可读则降级为不带头,让网关 401 显形而不是拖垮整个进程。
+  // token 不在启动时读定值——只校验文件在场且非空,之后每次请求经闭包
+  // 重读文件。token 在网关侧轮换后服务不用重启;运行时文件被删/不可读
+  // 则降级为不带头,让网关 401 显形而不是拖垮整个进程。
   let mcpTokenProvider: (() => string) | undefined;
-  if (mcpTokenFile) {
+  if (mcpTokenFile && !dtsDisabledReason) {
     try {
       const initial = readFileSync(mcpTokenFile, "utf-8").trim();
       if (!initial) throw new Error("token 文件为空");
       console.log(`[serve] MCP token 文件(动态读取): ${mcpTokenFile}`);
+      mcpTokenProvider = () => {
+        try {
+          return readFileSync(mcpTokenFile, "utf-8").trim();
+        } catch {
+          return "";
+        }
+      };
     } catch (error) {
-      console.error(`[serve] MCP token 读取失败,拒绝启动: ${String(error)}`);
-      process.exit(2);
+      issueGatewayFault(`MCP token 读取失败(${mcpTokenFile}): ${String(error)}`);
     }
-    mcpTokenProvider = () => {
-      try {
-        return readFileSync(mcpTokenFile, "utf-8").trim();
-      } catch {
-        return "";
-      }
-    };
   }
-  if (dtsMcpUrl && !mcpTokenProvider) {
-    console.error("[serve] 配置了 MCP 网关地址但没有 token:"
+  if (dtsMcpUrl && !mcpTokenProvider && !dtsDisabledReason) {
+    issueGatewayFault("配置了 MCP 网关地址但没有 token:"
       + "请配置 --mcp-token-file(正式服务器为 /etc/mae-flow-cloud/mcp-token)");
-    process.exit(2);
   }
   let issueDts: DtsGateway | undefined;
   let mcpGateway: McpGateway | undefined;
-  if (dtsMock) {
+  if (dtsDisabledReason) {
+    // 已经如实记过账,这里只是不接线;issueDtsGateway 会落到占位网关。
+  } else if (dtsMock) {
     issueDts = new MockDtsGateway((message) => console.log(`  [issue-dts] ${message}`));
     console.log("[serve] 问题流 DTS 网关: DEV·模拟(--dts-mock,外部开发模式,"
       + "连不上真实 DTS;单据 DTS-2026-1001~1006 为模拟数据,页签有 DEV 标识)");
