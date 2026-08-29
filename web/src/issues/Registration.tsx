@@ -22,6 +22,7 @@ import { prepareDtsHtml } from "./dtsHtml";
 import {
   DTS_ACTIONABLE_STATUS,
   dtsNoCandidates,
+  dtsVersionGroup,
   dtsVersionKey,
   isActionableDts,
   sortDtsVersionsDesc,
@@ -115,8 +116,7 @@ export function IssueRegistration({
     </div>
     <div hidden={tab !== "dts"}>
       <DtsRegister viewer={viewer} issues={issues} active={tab === "dts"}
-        onCreated={onCreated} onError={onError}
-        onNavigateProfile={onNavigateProfile} />
+        onCreated={onCreated} onError={onError} />
     </div>
   </section>;
 }
@@ -332,7 +332,6 @@ function DtsRegister({
   active,
   onCreated,
   onError,
-  onNavigateProfile,
 }: {
   viewer: AuthUser;
   /** 我的会话列表:发起前按单查重(服务端 create 同样机械拦)。 */
@@ -341,7 +340,6 @@ function DtsRegister({
   active: boolean;
   onCreated: (issue: IssueSummary) => void;
   onError: (message: string) => void;
-  onNavigateProfile?: () => void;
 }) {
   const [tickets, setTickets] = useState<DtsTicketBrief[] | undefined>();
   // 外部开发模式(--dts-mock):单据为模拟数据,页签挂 DEV 徽标防误认。
@@ -349,46 +347,11 @@ function DtsRegister({
   const [loading, setLoading] = useState(false);
   // 批量发起(2026-08-28):勾选多张,逐张独立发起工作流。
   const [selected, setSelected] = useState<string[]>([]);
-  // 多仓登记(与手工登记同款行编辑):登记不强制带仓,留空=发起后由
-  // 「拉取代码仓」阶段的平台闸补定。
-  const [repoUrls, setRepoUrls] = useState<string[]>([""]);
-  // 业务模块:与手工登记同款选择器(选中带出绑定的全部关联仓);目录
-  // 空回退自由文本。
-  const [moduleId, setModuleId] = useState("");
-  const [moduleName, setModuleName] = useState("");
-  const [modules, setModules] = useState<BusinessModule[] | undefined>();
-  const [envHosts, setEnvHosts] = useState("");
-  const [envPassword, setEnvPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
-  const fixed = viewer.issue_flow !== "free";
-  const moduleCatalog = useMemo(
-    () => (modules ?? []).filter((module) => module.status === "active"),
-    [modules]);
-  const selectedModule = moduleCatalog.find((module) => module.id === moduleId);
-  useEffect(() => {
-    let alive = true;
-    // 目录读不到按空处理:回退手填,不让模块库故障堵死问题发起。
-    getBusinessModules()
-      .then((catalog) => { if (alive) setModules(catalog.modules); })
-      .catch(() => { if (alive) setModules([]); });
-    return () => { alive = false; };
-  }, []);
-  // 个人凭据前置门禁:只有真填了远端仓才要 Git 身份(登记不强制带仓,
-  // 缺仓由拉取代码仓阶段的平台闸补定,与手工登记同语义)。
-  const touchRemoteRepo = repoUrls.some((url) => /^https?:\/\//i.test(url.trim()));
-  const credentialBlocked = touchRemoteRepo
-    && (!viewer.git_token_hint || !viewer.git_email);
-
-  /** 选模块即带仓(与手工登记 changeModule 同款):模块绑定的全部关联
-   * 仓整表带出(可增删改);清空模块回到单行。 */
-  function changeModule(nextId: string) {
-    setModuleId(nextId);
-    const module = moduleCatalog.find((item) => item.id === nextId);
-    setRepoUrls(nextId && module?.repositories.length
-      ? [...module.repositories]
-      : [""]);
-  }
+  // 页签只管挑单与发起(2026-08-29 拍板):多选场景下预填的仓/模块/
+  // 网管环境价值不大——工作台里从问题单获取这些信息(业务模块识别/
+  // 拉取代码仓闸/环境闸按需现场补定),登记 payload 只带单号与标题。
 
   // 模糊搜索:单号/标题/版本,大小写不敏感;版本多选过滤叠加其上。
   const [query, setQuery] = useState("");
@@ -410,10 +373,14 @@ function DtsRegister({
     );
   }, [actionable, query]);
 
-  // 版本过滤:把可发起单的版本汇总去重,按 R 版降序、R 同比 C 版。
+  // 版本过滤(2026-08-29 拍板):按 B 版之前的版本段分组汇总(如
+  // V100R025C10SPC010B009 → V100R025C10SPC010),降序去重——B 版构建号
+  // 非常多,按完整版本过滤要大量勾选;勾一个组,组内全部 B 版都命中。
   const versions = useMemo(() => {
     const set = new Set<string>();
-    actionable?.forEach((t) => { if (t.version) set.add(t.version); });
+    actionable?.forEach((t) => {
+      if (t.version) set.add(dtsVersionGroup(t.version));
+    });
     return sortDtsVersionsDesc([...set]);
   }, [actionable]);
 
@@ -438,7 +405,10 @@ function DtsRegister({
     const list = fuzzyMatches;
     if (!list) return undefined;
     if (selectedVersions.length === 0) return list;
-    return list.filter((t) => t.version && selectedVersions.includes(t.version));
+    // 命中口径与汇总同尺:单据版本剥掉 B 段后落在勾选的组里即命中
+    // (组内所有 B 版构建号一并带出)。
+    return list.filter((t) => t.version
+      && selectedVersions.includes(dtsVersionGroup(t.version)));
   }, [fuzzyMatches, selectedVersions]);
 
   // 远程查单:本地搜索为空且输入像 DTS 单号(字母开头+数字,长 >=5,
@@ -573,19 +543,14 @@ function DtsRegister({
     }
   }
 
-  /** 批量发起(2026-08-28):每单一个独立工作流,共享模块/环境/可选仓
-   * 等登记信息;逐张串行 create,单张失败不拖垮整批。已有进行中会话的
-   * 单跳过并计入失败(服务端 create 的同单查重也会兜一道)。结束后
-   * 一条汇总横幅:成功 N 张 + 失败 M 张(单号 → 原因);有成功的跳进
-   * 第一张的会话。 */
+  /** 批量发起(2026-08-28):每单一个独立工作流;逐张串行 create,
+   * 单张失败不拖垮整批。已有进行中会话的单跳过并计入失败(服务端
+   * create 的同单查重也会兜一道)。结束后一条汇总横幅:成功 N 张 +
+   * 失败 M 张(单号 → 原因);有成功的跳进第一张的会话。payload 只带
+   * 单号与标题——仓/模块/环境由工作台内的问题单信息与阶段闸补定
+   * (2026-08-29 拍板,页签不再预填)。 */
   async function launch() {
     if (!selected.length || busy) return;
-    const hosts = envHosts.split(/[,，\s]+/).map((host) => host.trim()).filter(Boolean);
-    const environment = hosts.length && envPassword
-      ? { hosts, password: envPassword } : undefined;
-    // 多仓口径与手工登记一致:去重去空后走 repo_urls(服务端
-    // normalizeIssueRepos 统一收口,repo_url 兼容别名由它派生)。
-    const repos = [...new Set(repoUrls.map((url) => url.trim()).filter(Boolean))];
     setBusy(true);
     const launched: string[] = [];
     const failures: string[] = [];
@@ -607,10 +572,6 @@ function DtsRegister({
             source: "dts",
             ticket: ticketNo,
             description: ticket?.title || undefined,
-            ...(repos.length ? { repo_urls: repos } : {}),
-            ...(moduleId ? { module_id: moduleId } : {}),
-            ...(!moduleId && moduleName.trim() ? { module: moduleName.trim() } : {}),
-            ...(environment ? { environment } : {}),
           });
           launched.push(created.id);
           first ??= created;
@@ -648,7 +609,7 @@ function DtsRegister({
         {note && <span className="issue-dts-note">{note}</span>}
       </div>
       <button type="button" className="primary"
-        disabled={!selected.length || busy || credentialBlocked}
+        disabled={!selected.length || busy}
         title={selected.length > 1 ? `将逐张发起 ${selected.length} 个独立工作流` : undefined}
         onClick={launch}>
         {busy ? "发起中…" : selected.length > 1 ? `发起处理(${selected.length} 张)` : "发起处理"}
@@ -778,48 +739,5 @@ function DtsRegister({
       && <p className="issue-dts-hint">
         名下问题单里没有"{DTS_ACTIONABLE_STATUS}"状态的——其他状态不可发起。
       </p>}
-    <CredentialGate viewer={viewer} needRepo={touchRemoteRepo}
-      onNavigateProfile={onNavigateProfile} />
-    {/* 登记不卡仓(2026-08-28):仓可选,留空时由「拉取代码仓」阶段的
-        平台闸补定(AI 识别/填地址/跳过);业务模块选中即带出绑定的全部
-        关联仓;网管环境换库验证要用,登记时一并带上(缺了也会在用时
-        现场举闸补配)。 */}
-    <div className="issue-dts-fields">
-      <label className="issue-field">
-        <span>代码仓地址 <i>{fixed
-          ? selectedModule?.repositories.length ? "模块带出,可增删改" : "可选,可后补(拉取代码仓阶段再定)"
-          : "可选"}</i></span>
-        <RepoRows urls={repoUrls} onChange={setRepoUrls} />
-      </label>
-      <label className="issue-field">
-        <span>业务模块 <i>可选{selectedModule ? "(已带出关联仓)" : moduleCatalog.length ? "(选中自动带仓)" : ""}</i></span>
-        {moduleCatalog.length > 0
-          ? <select value={moduleId}
-              onChange={(event) => changeModule(event.target.value)}>
-              <option value="">不选择模块</option>
-              {moduleCatalog.map((module) => (
-                <option key={module.id} value={module.id}>
-                  {module.name}(绑 {module.repositories.length} 个仓)
-                </option>
-              ))}
-            </select>
-            : <input value={moduleName} maxLength={60}
-              placeholder="如:媒体中心(仅展示与报告引用)"
-              onChange={(event) => setModuleName(event.target.value)} />}
-        {selectedModule && !selectedModule.repositories.length && (
-          <small>该模块未绑定代码仓,请手动填写仓库地址</small>
-        )}
-      </label>
-      <label className="issue-field">
-        <span>网管服务器(可多个,逗号分隔;换库验证用)<i>可选</i></span>
-        <input value={envHosts} placeholder="60.14.46.16, 60.14.46.17"
-          onChange={(event) => setEnvHosts(event.target.value)} />
-      </label>
-      <label className="issue-field">
-        <span>共用密码(sopuser/ossuser/ossadm)<i>可选</i></span>
-        <input type="password" value={envPassword} autoComplete="new-password"
-          onChange={(event) => setEnvPassword(event.target.value)} />
-      </label>
-    </div>
   </div>;
 }
