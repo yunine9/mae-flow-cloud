@@ -1,4 +1,4 @@
-/** 历史投影优先、当前任务现场兜底的只读回望。 */
+/** 历史投影优先、本服务交付结果兜底的只读档案。 */
 
 import { useEffect, useState } from "react";
 import {
@@ -10,7 +10,11 @@ import {
   type TaskHistoryEntry,
   type TaskSummary,
 } from "./api";
-import { historyTaskTitle, workspaceHistoryEntries } from "./historyModel";
+import {
+  historyTaskTitle,
+  isDeliveryArchiveStatus,
+  workspaceHistoryEntries,
+} from "./historyModel";
 import { formatLocalDate, instantMs } from "./time";
 import { TokenUsage } from "./TokenUsage";
 
@@ -25,22 +29,16 @@ function timeAgo(iso: string): string {
 }
 
 const TILES = [
-  { label: "全部任务", tone: "neutral", match: (_status: string) => true },
+  { label: "全部档案", tone: "neutral", match: (_status: string) => true },
   {
-    label: "推进中",
-    tone: "active",
-    match: (status: string) => ["queued", "running", "pausing", "verifying"]
-      .includes(status),
-  },
-  {
-    label: "等待决策",
+    label: "待合入",
     tone: "attention",
-    match: (status: string) => status === "waiting_for_human",
+    match: (status: string) => status === "await_merge",
   },
   {
-    label: "待合入 / 完成",
+    label: "已完成",
     tone: "success",
-    match: (status: string) => ["completed", "await_merge"].includes(status),
+    match: (status: string) => status === "completed",
   },
   {
     label: "异常 / 已取消",
@@ -86,16 +84,18 @@ export function HistoryBoard({
 
   const workspaceEntries = workspaceHistoryEntries(tasks);
   const usingWorkspace = Boolean(unavailable);
-  const visibleEntries = usingWorkspace ? workspaceEntries : (entries ?? []);
+  const allEntries = usingWorkspace ? workspaceEntries : (entries ?? []);
+  const visibleEntries = allEntries.filter((entry) =>
+    isDeliveryArchiveStatus(entry.status));
   const currentTasks = new Map(tasks.map((task) => [task.id, task]));
 
   return (
     <section className="history-board">
       <div className="history-intro">
         <div>
-          <span className="section-kicker">DELIVERY HISTORY</span>
-          <h2>任务与交付记录</h2>
-          <p>优先回看跨生命周期历史；未启用投影时仍可浏览当前任务现场。</p>
+          <span className="section-kicker">DELIVERY ARCHIVE</span>
+          <h2>交付档案</h2>
+          <p>这里保存待合入、完成、失败和取消的任务；进行中的工作回到“当前现场”查看。</p>
         </div>
         <button className="refresh-button" onClick={() => void load()}>
           <svg viewBox="0 0 20 20" aria-hidden>
@@ -116,8 +116,8 @@ export function HistoryBoard({
         <div className="history-source-note" role="status" title={unavailable}>
           <span className="history-source-icon" aria-hidden>◎</span>
           <span>
-            <strong>当前使用任务现场</strong>
-            <small>历史投影暂不可用；这里展示本服务仍保留的任务，恢复后会自动切换。</small>
+            <strong>当前使用本服务保留的交付结果</strong>
+            <small>历史投影暂不可用；这里只展示已经形成结果的任务，恢复后会自动切换。</small>
           </span>
         </div>
       )}
@@ -129,11 +129,9 @@ export function HistoryBoard({
           <span className="empty-database" aria-hidden>
             <i /><i /><i />
           </span>
-          <strong>{usingWorkspace ? "当前没有可回看的任务" : "历史里还没有任务"}</strong>
+          <strong>{usingWorkspace ? "当前没有交付档案" : "交付档案里还没有记录"}</strong>
           <p>
-            {usingWorkspace
-              ? "发起第一项工作后，这里就能直接进入任务现场。"
-              : "发起第一项工作后，这里会留下跨生命周期的完整轨迹。"}
+            任务进入待合入、完成、失败或取消后，会在这里留下记录。
           </p>
         </div>
       )}

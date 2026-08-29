@@ -39,6 +39,12 @@ const WIP_STATUSES = [
 const DELIVERED_STATUSES = ["await_merge", "completed"];
 const WEEK_MS = 7 * 86_400_000;
 
+/** 团队现场只回答“现在谁需要行动”。待合入、已完成和已取消进入
+ * 交付档案；failed 仍留在现场，因为它明确需要负责人介入或重跑。 */
+export function isCurrentTeamTask(task: TeamTask): boolean {
+  return ![...DELIVERED_STATUSES, "canceled"].includes(task.status);
+}
+
 function repairStopped(task: TeamTask): boolean {
   const state = task.delivery?.loop?.state;
   return task.status === "verifying" && (

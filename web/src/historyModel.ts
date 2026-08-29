@@ -9,6 +9,12 @@ interface HistoryTaskFields {
   last_progress_at?: string;
 }
 
+/** 交付档案只收已经形成结果的任务。failed 同时是团队现场的异常
+ * 信号和这里的历史事实，这是刻意保留的唯一重叠。 */
+export function isDeliveryArchiveStatus(status: string): boolean {
+  return ["await_merge", "completed", "failed", "canceled"].includes(status);
+}
+
 /**
  * PostgreSQL 未启用时，用当前服务已经恢复的任务提供可用但不冒充历史的读侧。
  * event_count=0 只是类型占位；界面在现场模式下不会把它展示成历史事件数。

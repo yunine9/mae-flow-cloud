@@ -25,10 +25,9 @@ import {
 import { byUrgency } from "./taskTime";
 import {
   byTeamAttention,
-  cycleTimeMs,
   isBlocked,
+  isCurrentTeamTask,
   matchesTeamScope,
-  median,
   responsibleOf,
   type TeamScope,
 } from "./teamOps";
@@ -49,11 +48,12 @@ import { WorkflowAssetWorkspace } from "./workflows";
 const IssueBoard = lazy(() =>
   import("./issues/IssueBoard").then((module) => ({ default: module.IssueBoard })));
 
-type View = "team" | "mine" | "issues" | "profile" | "history" | "users"
+type View = "team" | "mine" | "issues" | "profile" | "users"
   | "settings" | "knowledge" | "wishes" | "business";
 type Theme = "light" | "dark";
 type Density = "comfortable" | "compact";
 type MineScope = "all" | "waiting" | "intervention" | "active" | "delivered";
+type TeamTaskTab = "current" | "archive";
 type TeamAssetTab = "knowledge" | "workflows";
 
 interface WorkspaceRoute {
@@ -354,6 +354,7 @@ export function App() {
   const [session, setSession] = useState<AuthUser | null>();
   const [view, setView] = useState<View>("team");
   const [mineScope, setMineScope] = useState<MineScope>("all");
+  const [teamTaskTab, setTeamTaskTab] = useState<TeamTaskTab>("current");
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [teamUsers, setTeamUsers] = useState<AuthUser[]>([]);
   const [knowledgeInsights, setKnowledgeInsights] = useState<TeamKnowledgeInsights>();
@@ -639,13 +640,14 @@ export function App() {
         || task.requirement_graph.repositories.some((repository) =>
           repository.assignee === session.username)));
   const header = {
-    team: session.role === "admin"
-      ? { title: "团队总览", description: "看团队推进、负责人和阻塞风险；需要兜底时打开任务的过程工作台处置(暂停/恢复/决定)。" }
-      : { title: "团队动态", description: "只读了解团队正在推进什么；你的待办与操作始终留在个人工作台。" },
+    team: { title: "团队任务", description: teamTaskTab === "current"
+      ? (session.role === "admin"
+        ? "查看团队当前推进、负责人和阻塞风险；需要时进入任务工作台兜底。"
+        : "了解团队此刻正在推进什么；你的操作仍留在个人工作台。")
+      : "回看已经形成结果的交付档案、MR 和事件记录。" },
     mine: { title: "我的需求", description: "从发起到交付，集中推进你的每一项需求任务。" },
     issues: { title: "问题处理", description: "我的问题研究与 DTS 问题单处理：先定位，后补单，非问题也是合法结论。" },
     profile: { title: "个人设置", description: "集中管理任务审批方式、CodeHub 提交身份和小鲁班通知。" },
-    history: { title: "交付历史", description: "回看任务与交付记录；未启用历史投影时仍可浏览当前任务现场。" },
     business: { title: "业务版图", description: "用模块组织领域概念、规则、流程和边界，并在业务语境中持续管理知识；责任人与仓库是治理信息。" },
     knowledge: { title: "团队资产", description: "统一管理知识与可复用工作流；知识按需进入任务，工作流用精确版本编排阶段内的做法。" },
     wishes: { title: "许愿墙", description: "汇聚真实诉求和使用问题；每一个声音都应该被看见、被回应、被闭环。" },
@@ -654,7 +656,7 @@ export function App() {
   }[view];
   const relevantWaiting = view === "mine"
     ? myWaiting.length + pendingReviews.length
-    : view === "team" ? waitingCount : 0;
+    : view === "team" && teamTaskTab === "current" ? waitingCount : 0;
   const launchEntry = launchGateCopy(launchGate);
   return <div className="app-shell">
     <aside className="sidebar">
@@ -662,11 +664,10 @@ export function App() {
       <nav className="sidebar-nav" aria-label="视图切换">
         {session.role === "admin" ? <>
           <span className="nav-section-label">管理视角</span>
-          <NavButton view="team" current={view} onSelect={setView} label="团队总览" badge={waitingCount} />
+          <NavButton view="team" current={view} onSelect={setView} label="团队任务" badge={waitingCount} />
           <NavButton view="business" current={view} onSelect={setView} label="业务版图" />
           <NavButton view="wishes" current={view} onSelect={setView} label="许愿墙" />
           <NavButton view="knowledge" current={view} onSelect={setView} label="团队资产" />
-          <NavButton view="history" current={view} onSelect={setView} label="交付历史" />
           <span className="nav-section-label admin-tools">系统管理</span>
           <NavButton view="users" current={view} onSelect={setView} label="账号管理" />
           <NavButton view="settings" current={view} onSelect={setView} label="服务设置" />
@@ -676,11 +677,10 @@ export function App() {
           <NavButton view="issues" current={view} onSelect={setView} label="问题处理" />
           <NavButton view="profile" current={view} onSelect={setView} label="个人设置" />
           <span className="nav-section-label team-context">团队信息</span>
-          <NavButton view="team" current={view} onSelect={setView} label="团队动态" badge={waitingCount} />
+          <NavButton view="team" current={view} onSelect={setView} label="团队任务" badge={waitingCount} />
           <NavButton view="business" current={view} onSelect={setView} label="业务版图" />
           <NavButton view="wishes" current={view} onSelect={setView} label="许愿墙" />
           <NavButton view="knowledge" current={view} onSelect={setView} label="团队资产" />
-          <NavButton view="history" current={view} onSelect={setView} label="交付历史" />
         </>}
       </nav>
       <div className="sidebar-bottom">
@@ -691,14 +691,43 @@ export function App() {
     </aside>
 
     <div className="workspace">
-      <header className="workspace-header"><div><div className="eyebrow">MAE-FLOW CLOUD</div><h1>{header.title}</h1><p className={view === "mine" ? "header-context-line" : undefined}>{view === "mine" && <span className="header-user-context">{session.username}</span>}<span>{header.description}</span></p></div><div className="workspace-header-actions">{view !== "wishes" && view !== "business" && <TaskSyncIndicator state={taskSync} onRetry={refresh} />}{relevantWaiting > 0 && view !== "history" && view !== "users" && view !== "settings" && <div className="header-attention"><span className="attention-pulse" aria-hidden /><span><strong>{relevantWaiting}</strong>{view === "mine" ? " 项需要我处理" : " 项工作等待决策"}</span></div>}{view === "mine" && session.role !== "admin" && <div className="header-launch-gate"><button type="button" className="header-launch" disabled={!launchEntry.enabled} title={launchEntry.title} aria-label={launchEntry.ariaLabel} onClick={() => { if (launchEntry.enabled) setLaunchOpen(true); }}><svg viewBox="0 0 20 20" aria-hidden>{launchEntry.enabled ? <path d="M10 4v12M4 10h12" /> : <><rect x="5" y="8.5" width="10" height="8" rx="1.5" /><path d="M7.5 8.5V6.75a2.5 2.5 0 0 1 5 0V8.5" /></>}</svg><span>发起新任务</span></button>{launchEntry.helper && (launchEntry.action ? <button type="button" className="header-unlock" title={launchEntry.title} onClick={() => launchEntry.action === "profile" ? setView("profile") : void refreshLaunchGate(true)}>{launchEntry.helper}<svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg></button> : <span className="header-unlock is-status" title={launchEntry.title}>{launchEntry.helper}</span>)}</div>}</div></header>
+      <header className="workspace-header"><div><div className="eyebrow">MAE-FLOW CLOUD</div><h1>{header.title}</h1><p className={view === "mine" ? "header-context-line" : undefined}>{view === "mine" && <span className="header-user-context">{session.username}</span>}<span>{header.description}</span></p></div><div className="workspace-header-actions">{view !== "wishes" && view !== "business" && <TaskSyncIndicator state={taskSync} onRetry={refresh} />}{relevantWaiting > 0 && view !== "users" && view !== "settings" && <div className="header-attention"><span className="attention-pulse" aria-hidden /><span><strong>{relevantWaiting}</strong>{view === "mine" ? " 项需要我处理" : " 项工作等待决策"}</span></div>}{view === "mine" && session.role !== "admin" && <div className="header-launch-gate"><button type="button" className="header-launch" disabled={!launchEntry.enabled} title={launchEntry.title} aria-label={launchEntry.ariaLabel} onClick={() => { if (launchEntry.enabled) setLaunchOpen(true); }}><svg viewBox="0 0 20 20" aria-hidden>{launchEntry.enabled ? <path d="M10 4v12M4 10h12" /> : <><rect x="5" y="8.5" width="10" height="8" rx="1.5" /><path d="M7.5 8.5V6.75a2.5 2.5 0 0 1 5 0V8.5" /></>}</svg><span>发起新任务</span></button>{launchEntry.helper && (launchEntry.action ? <button type="button" className="header-unlock" title={launchEntry.title} onClick={() => launchEntry.action === "profile" ? setView("profile") : void refreshLaunchGate(true)}>{launchEntry.helper}<svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg></button> : <span className="header-unlock is-status" title={launchEntry.title}>{launchEntry.helper}</span>)}</div>}</div></header>
       <main className="workspace-main">
-        {view === "team" && <TeamDashboard
-          tasks={tasks}
-          users={teamUsers}
-          onChanged={refresh}
-          onOpenArtifacts={openArtifacts}
-        />}
+        {view === "team" && <section className="team-tasks-workspace">
+          <nav className="team-task-tabs" aria-label="团队任务视图" role="tablist">
+            <button type="button" role="tab" id="team-task-current-tab"
+              aria-controls="team-task-current-panel"
+              aria-selected={teamTaskTab === "current"}
+              className={teamTaskTab === "current" ? "active" : ""}
+              onClick={() => setTeamTaskTab("current")}>
+              <strong>当前现场</strong><small>谁在推进、哪里卡住、谁需要行动</small>
+            </button>
+            <button type="button" role="tab" id="team-task-archive-tab"
+              aria-controls="team-task-archive-panel"
+              aria-selected={teamTaskTab === "archive"}
+              className={teamTaskTab === "archive" ? "active" : ""}
+              onClick={() => setTeamTaskTab("archive")}>
+              <strong>交付档案</strong><small>待合入、完成、失败与取消记录</small>
+            </button>
+          </nav>
+          {teamTaskTab === "current" ? <div role="tabpanel"
+            id="team-task-current-panel" aria-labelledby="team-task-current-tab">
+            <TeamDashboard
+              tasks={tasks}
+              users={teamUsers}
+              onChanged={refresh}
+              onOpenArtifacts={openArtifacts}
+            />
+          </div> : <div role="tabpanel"
+            id="team-task-archive-panel" aria-labelledby="team-task-archive-tab">
+            <HistoryBoard
+              tasks={tasks}
+              viewer={session}
+              onChanged={refresh}
+              onOpenTask={openArtifacts}
+            />
+          </div>}
+        </section>}
 
         {view === "knowledge" && <section className="team-assets-workspace">
           <nav className="team-assets-tabs" aria-label="团队资产类型">
@@ -763,12 +792,6 @@ export function App() {
           session={session}
           onSessionPatch={patchSession}
           onTasksChanged={refresh}
-        />}
-        {view === "history" && <HistoryBoard
-          tasks={tasks}
-          viewer={session}
-          onChanged={refresh}
-          onOpenTask={openArtifacts}
         />}
         {view === "users" && session.role === "admin"
           && <UsersBoard me={session.username} />}
@@ -1023,7 +1046,7 @@ function UsersBoard({ me }: { me: string }) {
           <div className="user-row">
             <span className="user-cell"><i>{user.username.slice(0, 1).toUpperCase()}</i><strong>{user.username}</strong></span>
             <span><em className={`role-chip ${user.role}`}>{user.role === "admin" ? "管理员" : "开发成员"}</em></span>
-            <span className="user-entry">{user.role === "admin" ? "团队总览" : "我的需求"}</span>
+            <span className="user-entry">{user.role === "admin" ? "团队任务" : "我的需求"}</span>
             <span><button type="button" className={`committer-toggle${user.committer ? " on" : ""}`} aria-pressed={!!user.committer} onClick={() => void toggleCommitter(user)}><i aria-hidden />{user.committer ? "已加入" : "加入名单"}</button></span>
             <span className="user-actions">
               <button type="button" className="user-action" onClick={() => {
@@ -1047,15 +1070,6 @@ function UsersBoard({ me }: { me: string }) {
   </section>;
 }
 
-function formatOpsDuration(ms: number | undefined): string {
-  if (ms === undefined) return "—";
-  const hours = Math.round(ms / 3_600_000);
-  if (hours < 1) return "<1 小时";
-  if (hours < 24) return `${hours} 小时`;
-  const days = Math.round(hours / 24);
-  return `${days} 天`;
-}
-
 function TeamDashboard({
   tasks,
   users,
@@ -1073,16 +1087,17 @@ function TeamDashboard({
   const [phase, setPhase] = useState("");
   const queueRef = useRef<HTMLElement>(null);
   const now = Date.now();
-  const actionable = tasks.filter((task) =>
+  const currentTasks = useMemo(() => tasks.filter(isCurrentTeamTask), [tasks]);
+  const actionable = currentTasks.filter((task) =>
     matchesTeamScope(task, "action", now));
-  const stale = tasks.filter((task) =>
+  const stale = currentTasks.filter((task) =>
     matchesTeamScope(task, "stale", now));
-  const deliveredWeek = tasks.filter((task) =>
-    matchesTeamScope(task, "week", now));
-  const medianCycle = median(tasks.map(cycleTimeMs)
-    .filter((value): value is number => value !== undefined));
+  const inProgress = currentTasks.filter((task) =>
+    matchesTeamScope(task, "wip", now));
+  const waiting = currentTasks.filter((task) =>
+    matchesTeamScope(task, "waiting", now));
 
-  const visible = useMemo(() => tasks.filter((task) => {
+  const visible = useMemo(() => currentTasks.filter((task) => {
     const words = `${task.id} ${task.title ?? ""} ${task.requirement} ${responsibleOf(task) ?? ""}`
       .toLowerCase();
     if (query.trim() && !words.includes(query.trim().toLowerCase())) return false;
@@ -1092,9 +1107,9 @@ function TeamDashboard({
     if (!matchesTeamScope(task, scope, now)) return false;
     if (phase && task.progress?.current_phase !== phase) return false;
     return true;
-  }).sort(byTeamAttention), [tasks, query, scope, responsible, phase]);
+  }).sort(byTeamAttention), [currentTasks, query, scope, responsible, phase]);
 
-  function openMetric(next: Exclude<TeamScope, "all" | "waiting" | "delivered">) {
+  function openMetric(next: "action" | "stale" | "wip" | "waiting") {
     setScope((current) => current === next ? "all" : next);
     requestAnimationFrame(() => queueRef.current?.scrollIntoView({
       behavior: "smooth", block: "start",
@@ -1109,21 +1124,21 @@ function TeamDashboard({
   }
 
   return <>
-    <section className="team-overview" aria-label="团队概览">
+    <section className="team-overview" aria-label="当前现场概览">
       <div className="team-overview-metrics" aria-label="团队关键指标">
         <button type="button" className={`overview-metric attention${scope === "action" ? " selected" : ""}`} aria-pressed={scope === "action"} aria-controls="team-queue" onClick={() => openMetric("action")}><span><i aria-hidden />需要处理</span><strong>{actionable.length}</strong><small>决策、失败、暂停</small></button>
         <button type="button" className={`overview-metric danger${scope === "stale" ? " selected" : ""}`} aria-pressed={scope === "stale"} aria-controls="team-queue" onClick={() => openMetric("stale")}><span><i aria-hidden />停滞任务</span><strong>{stale.length}</strong><small>超过 2 小时未推进</small></button>
-        <button type="button" className={`overview-metric success${scope === "week" ? " selected" : ""}`} aria-pressed={scope === "week"} aria-controls="team-queue" onClick={() => openMetric("week")}><span><i aria-hidden />近 7 天交付</span><strong>{deliveredWeek.length}</strong><small>完成或等待合入</small></button>
-        <div className="overview-metric neutral"><span><i aria-hidden />典型交付周期</span><strong className="duration">{formatOpsDuration(medianCycle)}</strong><small>历史中位数</small></div>
+        <button type="button" className={`overview-metric active${scope === "wip" ? " selected" : ""}`} aria-pressed={scope === "wip"} aria-controls="team-queue" onClick={() => openMetric("wip")}><span><i aria-hidden />正在推进</span><strong>{inProgress.length}</strong><small>排队、执行或验证中</small></button>
+        <button type="button" className={`overview-metric neutral${scope === "waiting" ? " selected" : ""}`} aria-pressed={scope === "waiting"} aria-controls="team-queue" onClick={() => openMetric("waiting")}><span><i aria-hidden />等待决策</span><strong>{waiting.length}</strong><small>需要责任人确认</small></button>
       </div>
-      <PhaseFunnel tasks={tasks} selected={phase} onSelect={selectPhase} />
+      <PhaseFunnel tasks={currentTasks} selected={phase} onSelect={selectPhase} />
     </section>
 
     <section className="task-section" id="team-queue" ref={queueRef} aria-labelledby="team-queue-title">
-      <div className="section-head"><div><span className="section-kicker">TEAM QUEUE</span><h2 id="team-queue-title">{phase ? `${phase}阶段任务` : "团队任务"}</h2></div><span className={`section-count${phase ? " active-filter" : ""}`}>{phase ? `阶段 · ${phase}　` : ""}{visible.length} / {tasks.length} 项</span></div>
-      <div className="task-filters" aria-label="筛选团队任务">
+      <div className="section-head"><div><span className="section-kicker">CURRENT TEAM WORK</span><h2 id="team-queue-title">{phase ? `${phase}阶段现场` : "当前现场"}</h2></div><span className={`section-count${phase ? " active-filter" : ""}`}>{phase ? `阶段 · ${phase}　` : ""}{visible.length} / {currentTasks.length} 项</span></div>
+      <div className="task-filters" aria-label="筛选当前现场">
         <label className="task-search"><svg viewBox="0 0 18 18" aria-hidden><circle cx="8" cy="8" r="4.5" /><path d="m11.5 11.5 3 3" /></svg><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索任务、需求或负责人" /></label>
-        <select aria-label="任务范围" value={scope} onChange={(event) => setScope(event.target.value as TeamScope)}><option value="all">全部范围</option><option value="action">需要处理</option><option value="stale">停滞任务</option><option value="wip">当前在制</option><option value="waiting">等待决策</option><option value="week">近 7 天交付</option><option value="delivered">全部已交付</option></select>
+        <select aria-label="现场范围" value={scope} onChange={(event) => setScope(event.target.value as TeamScope)}><option value="all">全部现场</option><option value="action">需要处理</option><option value="stale">停滞任务</option><option value="wip">正在推进</option><option value="waiting">等待决策</option></select>
         <select aria-label="责任人" value={responsible} onChange={(event) => setResponsible(event.target.value)}><option value="">全部责任人</option><option value="__unassigned">未指定</option>{users.map((user) => <option value={user.username} key={user.username}>{user.username}</option>)}</select>
         {(query || scope !== "all" || responsible || phase) && <button type="button" className="filter-reset" onClick={() => { setQuery(""); setScope("all"); setResponsible(""); setPhase(""); }}>清除筛选</button>}
       </div>

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   historyTaskTitle,
+  isDeliveryArchiveStatus,
   workspaceHistoryEntries,
 } from "../web/src/historyModel.ts";
 
@@ -41,4 +42,14 @@ test("现场历史按最近活动倒序并保留可跳转的完整任务", () =>
   assert.equal(entries[0]?.updated_at, "2026-08-22T10:00:00Z");
   assert.equal(entries[0]?.event_count, 0);
   assert.equal(entries[0]?.title, "较新的任务");
+});
+
+test("交付档案不再混入排队、运行和等待决策", () => {
+  assert.equal(isDeliveryArchiveStatus("queued"), false);
+  assert.equal(isDeliveryArchiveStatus("running"), false);
+  assert.equal(isDeliveryArchiveStatus("waiting_for_human"), false);
+  assert.equal(isDeliveryArchiveStatus("await_merge"), true);
+  assert.equal(isDeliveryArchiveStatus("completed"), true);
+  assert.equal(isDeliveryArchiveStatus("failed"), true);
+  assert.equal(isDeliveryArchiveStatus("canceled"), true);
 });
