@@ -37,7 +37,9 @@ import {
 import { TaskContainer, taskContainerInstance } from "../containerRuntime.ts";
 import {
   prepareContainerHostPaths,
+  repairContainerCloneOwnership,
   repairContainerMutationOwnership,
+  type ContainerOwnershipRuntime,
 } from "../containerOwnership.ts";
 import {
   fixedAdvance,
@@ -337,6 +339,9 @@ export interface IssueFlowOptions {
   vault?: IssueEnvironmentVault;
   maxConcurrentTurns?: number;
   isolation?: IssueIsolation;
+  /** 容器属主判定的运行时形态:生产缺席即按进程真实形态判定(非 root
+   * 部署守卫直接 false,零开销);只有测试注入它来模拟 root 宿主。 */
+  ownershipRuntime?: ContainerOwnershipRuntime;
   log?: (message: string) => void;
 }
 
@@ -971,6 +976,18 @@ export class IssueFlowService {
       ? await divergedRemoteBranch(repo.dir, branch)
       : undefined;
     const head = await currentHead(repo.dir);
+    // 克隆与切分支都以宿主身份落盘,而容器已经在跑:不把整棵仓交回容器
+    // 用户,容器内 git add/commit 就是 Permission denied。收口必须压在
+    // 全部宿主 git 写之后(切分支的 checkout 会重写 .git 内部,提前
+    // chown 会被原样污染回去),也只能在这里无条件做而不按 cloned 门——
+    // 存量 root 仓在下次拉取时顺带修好,幂等 walk 对属主已对的 inode
+    // 零写入;非 root 部署守卫直接 false,零开销。
+    repairContainerCloneOwnership({
+      workspace: live.root,
+      dir: repo.dir,
+      user: this.options.isolation?.user,
+      runtime: this.options.ownershipRuntime,
+    });
     return {
       dir: relative(live.root, repo.dir) || repo.dir,
       cloned,
