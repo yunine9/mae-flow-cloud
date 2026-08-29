@@ -40,6 +40,8 @@ export interface WorkflowAssetRef {
   digest: string;
   nature?: WorkflowAssetNature;
   form?: WorkflowAssetForm;
+  /** 业务知识 ID 只在模块内唯一，因此必须同时固定模块身份。 */
+  business_module_id?: string;
   repository?: string;
   revision?: string;
   relative_path?: string;
@@ -171,6 +173,8 @@ export interface WorkflowDefinition {
 export interface WorkflowSourceRef {
   kind: "platform" | "workflow" | "task";
   id: string;
+  /** 创建任务时固定的人类可读名称；资产后来改名不影响历史任务。 */
+  label?: string;
   version?: string;
   digest?: string;
 }
@@ -289,6 +293,11 @@ function normalizeAssetRef(value: unknown, label: string): WorkflowAssetRef {
     : requiredText(input.revision, `${label}仓库版本`, 255);
   const relativePath = input.relative_path == null ? undefined
     : requiredText(input.relative_path, `${label}仓内路径`, 512);
+  const businessModuleId = input.business_module_id == null ? undefined
+    : identifier(input.business_module_id, `${label}业务模块`);
+  if (registry === "business_knowledge" && !businessModuleId) {
+    throw new Error(`${label}业务知识必须固定业务模块 ID`);
+  }
   if (registry === "repository_skill"
       && (!repository || !revision || !relativePath)) {
     throw new Error(`${label}仓内 Skill 必须固定仓库、版本和相对路径`);
@@ -300,6 +309,7 @@ function normalizeAssetRef(value: unknown, label: string): WorkflowAssetRef {
     digest: digest(input.digest, `${label}摘要`),
     ...(nature ? { nature } : {}),
     ...(form ? { form } : {}),
+    ...(businessModuleId ? { business_module_id: businessModuleId } : {}),
     ...(repository ? { repository } : {}),
     ...(revision ? { revision } : {}),
     ...(relativePath ? { relative_path: relativePath } : {}),

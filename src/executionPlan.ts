@@ -8,6 +8,11 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import type {
+  WorkflowDiagnostic,
+  WorkflowPlanItem,
+  WorkflowSourceRef,
+} from "./workflowDefinition.ts";
 
 export interface ExecutionPlanActivity {
   id: string;
@@ -15,6 +20,9 @@ export interface ExecutionPlanActivity {
   description: string;
   required: boolean;
   source?: "platform_default" | "customized";
+  locked?: boolean;
+  editable?: boolean;
+  instructions?: string;
 }
 
 export interface ExecutionPlanResource {
@@ -25,6 +33,10 @@ export interface ExecutionPlanResource {
   ref?: string;
   usage: "required" | "when_needed" | "on_demand";
   preferred?: boolean;
+  locked?: boolean;
+  editable?: boolean;
+  source?: "platform" | "workflow" | "task";
+  instructions?: string;
 }
 
 export interface ExecutionPlaybookOption {
@@ -52,7 +64,7 @@ export interface ExecutionPlan {
     version: string;
     title: string;
     summary: string;
-    source: "platform_default";
+    source: "platform_default" | "workflow" | "task";
     selection_reason: string;
   };
   contract: {
@@ -62,15 +74,18 @@ export interface ExecutionPlan {
   };
   activities: ExecutionPlanActivity[];
   resources: ExecutionPlanResource[];
+  /** 结构化工作流启用时，这就是 Agent 消费的唯一有序阶段方案。 */
+  workflow_items: WorkflowPlanItem[];
   knowledge: {
     loading: "indexed_on_demand";
     explanation: string;
   };
   customization: {
-    mode: "bounded";
+    mode: "bounded" | "structural";
     customizable: string[];
     locked: string[];
-    effective_source: "platform_default" | "platform_default+overrides";
+    effective_source: "platform_default" | "platform_default+overrides"
+      | "compiled_final_plan";
     profile_revision?: string;
     layers: Array<{
       scope: "team" | "business_module" | "repository" | "task";
@@ -87,6 +102,8 @@ export interface ExecutionPlan {
       optional_activities: string[];
       preferred_resources: string[];
     }>;
+    workflow_source?: WorkflowSourceRef;
+    diagnostics?: WorkflowDiagnostic[];
   };
 }
 
@@ -101,6 +118,7 @@ function fingerprint(kernelRoot: string, workspace: string): string {
   return [
     join(workspace, ".mae-flow.json"),
     join(workspace, ".mae-flow-work", "execution-profile.json"),
+    join(workspace, ".mae-flow-work", "workflow-profile.json"),
     join(kernelRoot, "flow", "flow.json"),
     join(kernelRoot, "flow", "playbooks.json"),
   ].map((path) => {
@@ -124,6 +142,7 @@ function validPlan(value: unknown): value is ExecutionPlan {
     && typeof plan.strategy?.version === "string"
     && Array.isArray(plan.activities)
     && Array.isArray(plan.resources)
+    && (plan.workflow_items === undefined || Array.isArray(plan.workflow_items))
     && Array.isArray(plan.contract?.evidence)
     && Array.isArray(plan.contract?.outputs)
     && Array.isArray(plan.customization?.locked)
@@ -162,6 +181,7 @@ export function readCurrentExecutionPlan(options: {
     if (validPlan(parsed)) {
       value = {
         ...parsed,
+        workflow_items: parsed.workflow_items ?? [],
         customization: {
           ...parsed.customization,
           layers: parsed.customization.layers ?? [],

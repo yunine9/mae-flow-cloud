@@ -252,6 +252,44 @@ test("阶段执行方案:同一内核目录驱动页面选择、团队默认与�
   }), /不存在的可选动作/);
 });
 
+test("结构化工作流:下单固定唯一最终方案，平台下限不可删且有明确诊断", () => {
+  const kernelRoot = discoverKernelRoot(process.cwd());
+  if (!kernelRoot) throw new Error("找不到内核");
+  const service = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-lf-workflow-v2-")),
+    provider: "a", model: "a-1", maxConcurrent: 0,
+    modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
+    host: { kernelRoot, repoPath: "/tmp/repo" },
+  });
+  const standard = service.launchOptions().workflow_standard!;
+  assert.equal(standard.standard_id, "mae-flow.standard");
+  const task = service.create("使用精确工作流完成任务", {
+    workflowDefinition: {
+      schema: "mae-flow-workflow-definition/1",
+      base: { standard_id: standard.standard_id,
+        standard_version: standard.standard_version,
+        catalog_digest: standard.catalog_digest },
+      applicability: { business_module_ids: [], repositories: [], technologies: [] },
+      edits: [
+        { edit_id: "remove-code-standard", stage_id: "platform.construction",
+          op: "remove", target_id: "code-taste-standard" },
+        { edit_id: "remove-push-floor", stage_id: "platform.delivery",
+          op: "remove", target_id: "host-git-push" },
+      ],
+    },
+  });
+  assert.equal(task.workflow_profile?.source.kind, "task");
+  assert.equal(task.workflow_profile?.source.id, task.id);
+  assert.equal(task.workflow_profile?.final_snapshot.stages.find((item) =>
+    item.id === "platform.construction")?.items.some((item) =>
+      item.id === "code-taste-standard"), false);
+  assert.equal(task.workflow_profile?.final_snapshot.stages.find((item) =>
+    item.id === "platform.delivery")?.items.some((item) =>
+      item.id === "host-git-push"), true);
+  assert.equal(task.workflow_profile?.diagnostics[0].code, "base_item_restored");
+  assert.match(task.workflow_profile?.diagnostics[0].fallback ?? "", /保留/);
+});
+
 test("单号/基线分支:下单收齐,基线默认 master,纯会话形态不摆这些框", () => {
   // 用户 2026-08-19 拍板:这两项和交付方式一样在表单上一次给完,
   // 不让模型开工后再逐项来问。单号必填与"交付仓必填"同口径;
@@ -324,19 +362,47 @@ test("统一需求图:单仓是一个节点,多仓进入同一任务的需求分
 
 test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-lf-chain-confirm-"));
+  const kernelRoot = discoverKernelRoot(process.cwd())!;
   const service = new TaskService({
     dataDir, provider: "a", model: "a-1", maxConcurrent: 0,
     modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
-    host: { kernelRoot: "/tmp" },
+    host: { kernelRoot },
     collaborationAssigneeReadiness: (account) => account === "alice"
       || account === "bob"
       ? { ready: true, missing: [] }
       : { ready: false, missing: ["CodeHub Token"] },
   });
+  const standard = service.launchOptions().workflow_standard!;
+  const workflowStage = standard.stages.find((item) =>
+    item.id === "platform.construction") ?? standard.stages[0];
+  const repositorySkill = {
+    id: "api-diagnosis", repository: "https://codehub/team/api.git",
+    revision: "main-deadbeef", name: "api-diagnosis",
+    description: "API 问题定位", relative_path: ".claude/skills/api-diagnosis/SKILL.md",
+    source: ".claude", digest: "c".repeat(64),
+  };
   const parent = service.create("跨仓交付", {
     title: "跨仓订单状态交付",
     repos: ["https://codehub/team/api.git", "https://codehub/team/web.git"],
-    ticket: "REQ-G3", account: "owner",
+    ticket: "REQ-G3", account: "owner", repositorySkills: [repositorySkill],
+    workflowDefinition: {
+      schema: "mae-flow-workflow-definition/1",
+      base: { standard_id: standard.standard_id,
+        standard_version: standard.standard_version,
+        catalog_digest: standard.catalog_digest },
+      applicability: { business_module_ids: [],
+        repositories: [repositorySkill.repository], technologies: [] },
+      edits: [{ edit_id: "api-skill", stage_id: workflowStage.id, op: "add",
+        item: { id: "api-diagnosis-skill", kind: "skill",
+          title: "API 问题定位", locked: false, editable: true,
+          source: "workflow", use: { mode: "when_needed" },
+          asset_ref: { registry: "repository_skill", id: repositorySkill.id,
+            version: repositorySkill.revision, digest: repositorySkill.digest,
+            nature: "engineering", form: "skill",
+            repository: repositorySkill.repository,
+            revision: repositorySkill.revision,
+            relative_path: repositorySkill.relative_path } } }],
+    },
   });
   const state = (service as any).tasks.get(parent.id);
   const root = join(dataDir, parent.id, "repositories");
@@ -387,6 +453,17 @@ test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队
     "人工检视过的 Chain 正文随子任务落盘,配置阶段经需求文档被读");
   assert.equal(apiTask.title, "跨仓订单状态交付 · api");
   assert.equal(webTask.title, "跨仓订单状态交付 · web");
+  assert.ok(apiTask.workflow_profile?.final_snapshot.stages
+    .flatMap((item) => item.items)
+    .some((item) => item.id === "api-diagnosis-skill"),
+  "适用于 API 仓的固定 Skill 应保留在 API 子任务最终方案");
+  assert.ok(!webTask.workflow_profile?.final_snapshot.stages
+    .flatMap((item) => item.items)
+    .some((item) => item.id === "api-diagnosis-skill"),
+  "父任务工作流必须按子仓重编，不能把 API Skill 整份复制给 Web 子任务");
+  assert.ok(webTask.workflow_profile?.diagnostics.some((item) =>
+    item.code === "asset_unavailable"),
+  "子仓不适用的资产必须明确记录降级，不能静默消失");
 
   // 上游完成后，下游启动前拿到真实交接：实际提交文件、责任人和 AI
   // 收口说明都来自上游现场，不再只看最初 Chain 计划。

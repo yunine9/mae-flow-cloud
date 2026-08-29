@@ -153,6 +153,16 @@ import {
   listKnowledgeCandidates as listTeamKnowledgeCandidates,
   readKnowledgeCandidate as readTeamKnowledgeCandidate,
 } from "./knowledgeCandidates.ts";
+import {
+  WorkflowAssetError,
+  WorkflowAssetLibrary,
+  canEdit as canEditWorkflow,
+  canPublish as canPublishWorkflow,
+  canView as canViewWorkflow,
+} from "./workflowAssetLibrary.ts";
+import type { WorkflowSourceRef } from "./workflowDefinition.ts";
+import { listWorkflowAssetCatalog } from "./workflowAssetRegistry.ts";
+import { readWorkflowStandardSnapshot } from "./workflowCatalog.ts";
 
 /** 正式前端静态文件的最小类型表:Vite 产物就这几种。 */
 const MIME: Record<string, string> = {
@@ -327,6 +337,13 @@ export function createTaskServer(
   let wishWall: WishWallStore | undefined;
   const getWishWall = () => wishWall ??= new WishWallStore(
     join(service.options.dataDir, "wish-wall"));
+  let workflowAssets: WorkflowAssetLibrary | undefined;
+  const getWorkflowAssets = () => workflowAssets ??= new WorkflowAssetLibrary(
+    service.options.dataDir);
+  // 知识效能等独立只读接口会传最小服务替身；工作流旁路不能在起服
+  // 阶段要求完整 TaskService.options，更不能反向绑死无关读侧。
+  const workflowKernelRoot = service.options?.host?.kernelRoot
+    ?? service.options?.workflowCatalogRoot;
   return createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://localhost");
     const parts = url.pathname.split("/").filter(Boolean);
@@ -829,6 +846,7 @@ export function createTaskServer(
         || parts[0] === "skills" || parts[0] === "business-modules"
         || parts[0] === "repository-profiles"
         || parts[0] === "knowledge-candidates"
+        || parts[0] === "workflow-assets"
         || parts[0] === "wishes";
       // 兼容已经发出去的旧通知。/tasks/:id 是 JSON API，但旧链接若由
       // 浏览器作为页面打开，应带人去新的任务工作台；程序 fetch 默认
@@ -1352,6 +1370,197 @@ export function createTaskServer(
         }
         return json(response, 404, { error: "未知 Skill 资产接口" });
       }
+      // 工作流方案是 Cloud 团队资产，不是 Mae-Flow 插件主线配置。
+      // 定义只保存结构化差异；发布版本不可覆盖，任务选用时再固定为
+      // 完整最终方案快照。团队方案由所有者维护、管理员终审；个人方案
+      // 只有所有者/维护者可见，不会因为管理员身份自动泄露。
+      if (parts[0] === "workflow-assets") {
+        const library = getWorkflowAssets();
+        const operator = viewer?.username ?? "本地部署";
+        const admin = !options.auth || viewer?.role === "admin";
+        const decorate = (asset: ReturnType<typeof library.get>["asset"]) => ({
+          ...asset,
+          permissions: {
+            can_view: canViewWorkflow(asset, operator),
+            can_edit: canEditWorkflow(asset, operator),
+            can_submit: canEditWorkflow(asset, operator),
+            can_publish: asset.scope === "team"
+              ? admin : canPublishWorkflow(asset, operator),
+            can_archive: admin || canEditWorkflow(asset, operator),
+          },
+        });
+        const visible = (id: string) => {
+          const detail = library.get(id);
+          return canViewWorkflow(detail.asset, operator) ? detail : undefined;
+        };
+        const existingUsers = () => new Set(
+          options.auth?.listUsers().map((user) => user.username) ?? [operator]);
+        const maintainers = (value: unknown): string[] => {
+          const list = Array.isArray(value) ? value.map(String) : [];
+          if (options.auth) {
+            const users = existingUsers();
+            const missing = list.find((username) => !users.has(username));
+            if (missing) {
+              throw new WorkflowAssetError(
+                "invalid_input", `维护者账号不存在:${missing}`);
+            }
+          }
+          return list;
+        };
+        try {
+          if (request.method === "GET" && parts.length === 1) {
+            const result = library.list();
+            return json(response, 200, {
+              ...result,
+              items: result.items.filter((item) =>
+                canViewWorkflow(item, operator)).map(decorate),
+            });
+          }
+          if (request.method === "POST" && parts.length === 1) {
+            const body = await readBody(request);
+            const created = library.create({
+              id: body.id === undefined ? undefined : String(body.id),
+              name: String(body.name ?? ""),
+              description: body.description === undefined
+                ? undefined : String(body.description),
+              scope: String(body.scope ?? "personal") as "personal" | "team",
+              owner: operator,
+              maintainers: maintainers(body.maintainers),
+              definition: body.definition,
+              actor: operator,
+            });
+            return json(response, 201, decorate(created));
+          }
+          if (request.method === "GET" && parts.length === 2
+              && parts[1] === "catalog") {
+            return json(response, 200, listWorkflowAssetCatalog({
+              dataDir: service.options.dataDir,
+              standard: readWorkflowStandardSnapshot(workflowKernelRoot),
+            }));
+          }
+          if (request.method === "GET" && parts.length === 2
+              && parts[1] === "standard") {
+            const standard = readWorkflowStandardSnapshot(workflowKernelRoot);
+            return standard
+              ? json(response, 200, standard)
+              : json(response, 503, {
+                  error: "平台标准方案暂不可读；现有方案仍可查看，但不能安全创建或编辑",
+                });
+          }
+          if (parts.length >= 2) {
+            const id = decodeURIComponent(parts[1]);
+            const detail = visible(id);
+            if (!detail) {
+              return json(response, 404, { error: "工作流方案不存在或无权查看" });
+            }
+            if (request.method === "GET" && parts.length === 2) {
+              return json(response, 200, {
+                ...detail,
+                asset: decorate(detail.asset),
+              });
+            }
+            if (request.method === "GET" && parts.length === 4
+                && parts[2] === "versions") {
+              const version = Number(String(parts[3]).replace(/^v/, ""));
+              return json(response, 200, library.getPublished(id, version));
+            }
+            if (request.method === "PUT" && parts.length === 3
+                && parts[2] === "draft") {
+              if (!canEditWorkflow(detail.asset, operator)) {
+                return json(response, 403, { error: "只有方案所有者或维护者可以修改草稿" });
+              }
+              const body = await readBody(request);
+              const updated = library.saveDraft(id, {
+                definition: body.definition,
+                expected_revision: Number(body.expected_revision),
+                actor: operator,
+              });
+              return json(response, 200, {
+                ...updated, asset: decorate(updated.asset),
+              });
+            }
+            if (request.method === "POST" && parts.length === 3
+                && parts[2] === "copy") {
+              const body = await readBody(request);
+              const copied = library.copy({
+                source: {
+                  kind: "workflow",
+                  id,
+                  ...(body.source_version == null ? {}
+                    : { version: String(body.source_version) }),
+                },
+                name: String(body.name ?? `${detail.asset.name}（副本）`),
+                description: body.description === undefined
+                  ? detail.asset.description : String(body.description),
+                scope: String(body.scope ?? "personal") as "personal" | "team",
+                owner: operator,
+                maintainers: maintainers(body.maintainers),
+                actor: operator,
+              });
+              return json(response, 201, decorate(copied));
+            }
+            if (request.method === "POST" && parts.length === 3
+                && ["submit", "withdraw"].includes(parts[2])) {
+              if (!canEditWorkflow(detail.asset, operator)) {
+                return json(response, 403, { error: "只有方案所有者或维护者可以提交或撤回" });
+              }
+              const updated = parts[2] === "submit"
+                ? library.submitForReview(id, { actor: operator })
+                : library.withdraw(id, { actor: operator });
+              return json(response, 200, decorate(updated));
+            }
+            if (request.method === "POST" && parts.length === 3
+                && parts[2] === "approve") {
+              const allowed = detail.asset.scope === "team"
+                ? admin : canPublishWorkflow(detail.asset, operator);
+              if (!allowed) {
+                return json(response, 403,
+                  { error: "团队方案需要管理员审核；个人方案只能由所有者发布" });
+              }
+              return json(response, 200, decorate(
+                library.approve(id, { actor: operator })));
+            }
+            if (request.method === "POST" && parts.length === 3
+                && parts[2] === "reject") {
+              const allowed = detail.asset.scope === "team"
+                ? admin : detail.asset.owner === operator;
+              if (!allowed) {
+                return json(response, 403, { error: "没有权限驳回这个方案" });
+              }
+              const body = await readBody(request);
+              return json(response, 200, decorate(library.reject(id, {
+                actor: operator,
+                reason: body.reason === undefined
+                  ? undefined : String(body.reason),
+              })));
+            }
+            if (request.method === "POST" && parts.length === 3
+                && parts[2] === "archive") {
+              if (!admin && !canEditWorkflow(detail.asset, operator)) {
+                return json(response, 403, { error: "没有权限归档这个方案" });
+              }
+              return json(response, 200, decorate(
+                library.archive(id, { actor: operator })));
+            }
+          }
+        } catch (error) {
+          if (error instanceof WorkflowAssetError) {
+            const status = error.code === "not_found" ? 404
+              : error.code === "revision_conflict"
+                  || error.code === "invalid_state"
+                  || error.code === "version_exists" ? 409
+                : error.code === "corrupted" ? 422 : 400;
+            return json(response, status, {
+              error: error.message,
+              code: error.code,
+              ...(error.current_revision === undefined ? {}
+                : { current_revision: error.current_revision }),
+            });
+          }
+          throw error;
+        }
+        return json(response, 404, { error: "未知工作流方案接口" });
+      }
       // Committer 的个人检视收件箱。名单只决定“还能不能被新邀请”，
       // 已经发给本人的邀请即使后来移出名单也仍应可见、可完成。
       if (parts[0] === "reviews") {
@@ -1451,6 +1660,11 @@ export function createTaskServer(
         const taskInstructions = body.task_instructions == null
           ? undefined : String(body.task_instructions);
         const executionStageCustomizations = body.execution_stage_customizations;
+        let workflowDefinition = body.workflow_definition;
+        let workflowSource: WorkflowSourceRef | undefined;
+        const workflowSelection = body.workflow_selection &&
+            typeof body.workflow_selection === "object"
+          ? body.workflow_selection as Record<string, unknown> : undefined;
         const repositorySkillCatalogToken =
           body.repository_skill_catalog_token === undefined
             ? undefined : String(body.repository_skill_catalog_token);
@@ -1494,12 +1708,45 @@ export function createTaskServer(
           });
         }
         try {
+          if (workflowSelection && workflowDefinition !== undefined) {
+            return json(response, 400, {
+              error: "工作流方案选择与本任务临时定制不能同时提交",
+            });
+          }
+          if (workflowSelection) {
+            const id = String(workflowSelection.id ?? "").trim();
+            const detail = getWorkflowAssets().get(id);
+            const operator = viewer?.username ?? account ?? "本地部署";
+            if (!canViewWorkflow(detail.asset, operator)
+                || !detail.asset.selectable_for_tasks) {
+              return json(response, 409, {
+                error: "所选工作流方案不可用、未发布或已归档，请重新选择",
+              });
+            }
+            const rawVersion = workflowSelection.version;
+            const version = rawVersion == null || rawVersion === ""
+              ? undefined : Number(String(rawVersion).replace(/^v/, ""));
+            if (version !== undefined
+                && (!Number.isInteger(version) || version < 1)) {
+              return json(response, 400, { error: "工作流方案版本不合法" });
+            }
+            const published = getWorkflowAssets().getPublished(id, version);
+            workflowDefinition = published.definition;
+            workflowSource = {
+              kind: "workflow",
+              id,
+              label: detail.asset.name,
+              version: `v${published.version}`,
+              digest: published.digest,
+            };
+          }
           return json(response, 201, service.create(requirement,
             {
               title, account, repo, repos,
               requirementDocumentName,
               lane, ticket, baseline, model,
               repairRounds, taskInstructions, executionStageCustomizations,
+              workflowDefinition, workflowSource,
               repositorySkillCatalogToken,
               selectedRepositorySkillIds,
               selectedBusinessModuleIds, selectedEngineeringKnowledgeIds,

@@ -20,12 +20,14 @@ if ! git -C "$kernel_src" diff --quiet HEAD 2>/dev/null; then
 fi
 
 sha="$(git -C "$kernel_src" rev-parse HEAD)"
+ref="$(git -C "$kernel_src" symbolic-ref --quiet --short HEAD 2>/dev/null || printf 'detached')"
 rm -rf "$root/kernel"
 mkdir -p "$root/kernel"
 git -C "$kernel_src" archive HEAD | tar -x -C "$root/kernel"
 {
   printf '来源: mae-flow@%s\n' "$sha"
+  printf '分支: %s\n' "$ref"
   printf '收编时间: %s\n' "$(date +%F)"
   printf '纪律: 此目录是快照,不许手改;更新跑 harness/sync-kernel.sh\n'
 } > "$root/kernel/VENDORED"
-echo "内核已收编: mae-flow@${sha:0:12} → kernel/ ($(find "$root/kernel" -type f | wc -l | tr -d ' ') 个文件)"
+echo "内核已收编: mae-flow:${ref}@${sha:0:12} → kernel/ ($(find "$root/kernel" -type f | wc -l | tr -d ' ') 个文件)"
