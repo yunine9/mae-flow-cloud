@@ -1,10 +1,16 @@
-import { useEffect, useMemo, useState } from "react";
+import {
+  Component,
+  useEffect,
+  useMemo,
+  useState,
+  type ErrorInfo,
+  type ReactNode,
+} from "react";
 import {
   createTask,
   getLaunchOptions,
   listWorkflowAssets,
   type AuthUser,
-  type HostSkillShelfEntry,
   type LaunchOptions,
   type WorkflowAssetSummary,
 } from "./api";
@@ -14,6 +20,13 @@ import {
   type RepositoryTechnologyDraft,
 } from "./RepositoryTechnologyPicker";
 import { KnowledgeLanguageTags } from "./KnowledgeLanguages";
+import {
+  buildTaskKnowledgeChoices,
+  normalizeLaunchKnowledgeCatalog,
+  paginateTaskKnowledgeChoices,
+  type LaunchEngineeringKnowledge,
+  type LaunchTeamSkill,
+} from "./launchKnowledgeModel";
 import {
   SchemeSelector,
   type WorkflowSchemeSelection,
@@ -67,6 +80,134 @@ function readStored<T>(key: string): T | undefined {
 
 function repositoryIdentity(value: string): string {
   return value.trim().replace(/\/+$/, "").replace(/\.git$/i, "").toLowerCase();
+}
+
+class TaskKnowledgeBoundary extends Component<{
+  children: ReactNode;
+}, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo): void {
+    console.error("[launch-knowledge] 知识选择器渲染失败", error, info);
+  }
+
+  render() {
+    if (this.state.failed) {
+      return <div className="launch-knowledge-fallback" role="alert">
+        <strong>知识清单暂时无法展开</strong>
+        <span>不会影响必填信息；请刷新后重试，或保持默认选择直接发起。</span>
+      </div>;
+    }
+    return this.props.children;
+  }
+}
+
+function TaskKnowledgeSelector({
+  engineering,
+  skills,
+  selectedEngineeringIds,
+  selectedSkillPaths,
+  onToggleEngineering,
+  onToggleSkill,
+}: {
+  engineering: LaunchEngineeringKnowledge[];
+  skills: LaunchTeamSkill[];
+  selectedEngineeringIds: string[];
+  selectedSkillPaths: string[];
+  onToggleEngineering: (id: string, selected: boolean) => void;
+  onToggleSkill: (path: string, selected: boolean) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(0);
+  const selectedEngineering = useMemo(
+    () => new Set(selectedEngineeringIds), [selectedEngineeringIds]);
+  const selectedSkills = useMemo(
+    () => new Set(selectedSkillPaths), [selectedSkillPaths]);
+  const choices = useMemo(
+    () => open ? buildTaskKnowledgeChoices(engineering, skills, query) : [],
+    [engineering, skills, query, open]);
+  const pagination = paginateTaskKnowledgeChoices(choices, page);
+
+  return <details className="launch-resource-adjuster" open={open}
+    onToggle={(event) => setOpen(event.currentTarget.open)}>
+    <summary><span><strong>调整团队通用知识</strong>
+      <small>{engineering.length + skills.length
+        ? `${selectedEngineeringIds.length + selectedSkillPaths.length}/${engineering.length + skills.length} 项已选`
+        : "当前没有匹配项"}</small></span>
+      <svg viewBox="0 0 20 20" aria-hidden><path d="m6 8 4 4 4-4" /></svg>
+    </summary>
+    {open && <div className="launch-knowledge-catalog">
+      {engineering.length + skills.length > 0 && <div
+        className="launch-knowledge-toolbar">
+        <label><span>查找知识</span><input type="search" value={query}
+          onChange={(event) => {
+            setQuery(event.target.value);
+            setPage(0);
+          }} placeholder="按标题、说明、仓库或技术搜索" /></label>
+        <small>共 {pagination.total} 项，每页最多 40 项</small>
+      </div>}
+      {!!pagination.items.length && <div className="engineering-knowledge-options">
+        {pagination.items.map((choice) => {
+          if (choice.kind === "engineering") {
+            const item = choice.item;
+            const selected = selectedEngineering.has(item.id);
+            return <label key={choice.key}
+              className={`engineering-knowledge-option${selected ? " selected" : ""}`}>
+              <input type="checkbox" checked={selected} onChange={() =>
+                onToggleEngineering(item.id, selected)} />
+              <span className="business-module-check" aria-hidden>
+                {selected ? "✓" : ""}</span>
+              <span><span><strong>{item.title}</strong>
+                <em>{{ document: "文档", rule: "规则",
+                  example: "示例" }[item.form]}</em></span>
+                <small>{item.summary}</small>
+                <span className="engineering-knowledge-meta">
+                  {item.when_to_use}
+                  <KnowledgeLanguageTags languages={item.technologies}
+                    empty="技术无关" />
+                </span>
+              </span>
+            </label>;
+          }
+          const item = choice.item;
+          const selected = selectedSkills.has(item.path);
+          return <label key={choice.key}
+            className={`engineering-knowledge-option${selected ? " selected" : ""}`}>
+            <input type="checkbox" checked={selected} onChange={() =>
+              onToggleSkill(item.path, selected)} />
+            <span className="business-module-check" aria-hidden>
+              {selected ? "✓" : ""}</span>
+            <span><span><strong>{item.name}</strong><em>Skill</em></span>
+              <small>{item.description}</small>
+              <span className="engineering-knowledge-meta">
+                团队资产 · Agent 相关时按需读取正文
+                <KnowledgeLanguageTags languages={item.technologies}
+                  empty="技术无关" />
+              </span>
+            </span>
+          </label>;
+        })}
+      </div>}
+      {!pagination.items.length && <div className="engineering-knowledge-empty">
+        <strong>{query ? "没有符合搜索条件的团队知识" : "当前没有匹配的团队通用知识"}</strong>
+        <span>{query ? "换一个关键词，或清空搜索查看全部匹配项。"
+          : "不影响发起；模块知识和 Git 仓库上下文仍会正常提供。"}</span>
+      </div>}
+      {pagination.pages > 1 && <nav className="launch-knowledge-pagination"
+        aria-label="团队知识分页">
+        <button type="button" disabled={pagination.page === 0}
+          onClick={() => setPage(pagination.page - 1)}>上一页</button>
+        <span>{pagination.page + 1} / {pagination.pages}</span>
+        <button type="button" disabled={pagination.page + 1 >= pagination.pages}
+          onClick={() => setPage(pagination.page + 1)}>下一页</button>
+      </nav>}
+    </div>}
+  </details>;
 }
 export function LaunchWorkspace({
   session,
@@ -147,6 +288,8 @@ export function LaunchWorkspace({
   // 摆在明面上。后端同样硬拦——绕过界面打接口一样被 409 挡住。
   const blockers = options?.blockers ?? [];
   const blocked = optionsLoading || blockers.length > 0 || !!optionsError;
+  const knowledgeCatalog = useMemo(
+    () => normalizeLaunchKnowledgeCatalog(options), [options]);
   const businessModules = useMemo(() => {
     const wantedRepos = new Set(repos.map(repositoryIdentity).filter(Boolean));
     return [...(options?.business_modules ?? [])].sort((left, right) => {
@@ -162,26 +305,28 @@ export function LaunchWorkspace({
     const repositorySet = new Set(repos.map(repositoryIdentity).filter(Boolean));
     const technologies = new Set(repositoryTechnologies
       .flatMap((item) => item.technologies));
-    return (options?.engineering_knowledge ?? []).filter((item) =>
+    return knowledgeCatalog.engineering.filter((item) =>
       (!item.repositories.length || item.repositories.some((repository) =>
         repositorySet.has(repositoryIdentity(repository))))
       && (!item.technologies.length || item.technologies.some((technology) =>
         technologies.has(technology)))
       && (!item.business_module_ids.length || item.business_module_ids.some((id) =>
         selectedBusinessModuleIds.includes(id))));
-  }, [options, repos, repositoryTechnologies, selectedBusinessModuleIds]);
+  }, [knowledgeCatalog, repos, repositoryTechnologies,
+    selectedBusinessModuleIds]);
   const matchingTeamSkills = useMemo(() => {
     const repositorySet = new Set(repos.map(repositoryIdentity).filter(Boolean));
     const technologies = new Set(repositoryTechnologies
       .flatMap((item) => item.technologies));
-    return (options?.team_skills ?? []).filter((item: HostSkillShelfEntry) =>
+    return knowledgeCatalog.skills.filter((item) =>
       (!item.repositories.length || item.repositories.some((repository) =>
         repositorySet.has(repositoryIdentity(repository))))
       && (!item.technologies.length || item.technologies.some((technology) =>
         technologies.has(technology)))
       && (!item.business_module_ids.length || item.business_module_ids.some((id) =>
         selectedBusinessModuleIds.includes(id))));
-  }, [options, repos, repositoryTechnologies, selectedBusinessModuleIds]);
+  }, [knowledgeCatalog, repos, repositoryTechnologies,
+    selectedBusinessModuleIds]);
   const deliveryLocationVisible = !!options
     && (options.repo.enabled || options.ticket.enabled || options.baseline.enabled);
   const selectedModuleKnowledgeCount = businessModules
@@ -813,73 +958,25 @@ export function LaunchWorkspace({
                   <strong>这里只管理平台知识</strong>
                   <span>正文不会整批注入；Agent 先看索引，相关时再读取。代码仓内容始终从 Git 现场自主探索。</span>
                 </div>
-                <details className="launch-resource-adjuster">
-                  <summary><span><strong>调整团队通用知识</strong>
-                    <small>{matchingEngineeringKnowledge.length + matchingTeamSkills.length
-                      ? `${selectedEngineeringKnowledgeIds.length + selectedTeamSkillPaths.length}/${matchingEngineeringKnowledge.length + matchingTeamSkills.length} 项已选`
-                      : "当前没有匹配项"}</small></span>
-                    <svg viewBox="0 0 20 20" aria-hidden><path d="m6 8 4 4 4-4" /></svg>
-                  </summary>
-                  {!!matchingEngineeringKnowledge.length && <div
-                    className="engineering-knowledge-options">
-                    {matchingEngineeringKnowledge.map((item) => {
-                      const selected = selectedEngineeringKnowledgeIds.includes(item.id);
-                      return <label key={item.id}
-                        className={`engineering-knowledge-option${selected ? " selected" : ""}`}>
-                        <input type="checkbox" checked={selected} onChange={() => {
-                          setEngineeringSelectionTouched(true);
-                          setSelectedEngineeringKnowledgeIds((current) => selected
-                            ? current.filter((id) => id !== item.id)
-                            : [...current, item.id]);
-                        }} />
-                        <span className="business-module-check" aria-hidden>
-                          {selected ? "✓" : ""}</span>
-                        <span><span><strong>{item.title}</strong>
-                          <em>{{ document: "文档", rule: "规则",
-                            example: "示例" }[item.form]}</em></span>
-                          <small>{item.summary}</small>
-                          <span className="engineering-knowledge-meta">
-                            {item.when_to_use}
-                            <KnowledgeLanguageTags languages={item.technologies}
-                              empty="技术无关" />
-                          </span>
-                        </span>
-                      </label>;
-                    })}
-                  </div>}
-                  {!!matchingTeamSkills.length && <div
-                    className="engineering-knowledge-options team-skill-options">
-                    {matchingTeamSkills.map((item) => {
-                      const selected = selectedTeamSkillPaths.includes(item.path);
-                      return <label key={item.path}
-                        className={`engineering-knowledge-option${selected ? " selected" : ""}`}>
-                        <input type="checkbox" checked={selected} onChange={() => {
-                          setTeamSkillSelectionTouched(true);
-                          setSelectedTeamSkillPaths((current) => selected
-                            ? current.filter((path) => path !== item.path)
-                            : [...current, item.path]);
-                        }} />
-                        <span className="business-module-check" aria-hidden>
-                          {selected ? "✓" : ""}</span>
-                        <span><span><strong>{item.name}</strong><em>Skill</em></span>
-                          <small>{item.description}</small>
-                          <span className="engineering-knowledge-meta">
-                            团队资产 · Agent 相关时按需读取正文
-                            <KnowledgeLanguageTags languages={item.technologies}
-                              empty="技术无关" />
-                          </span>
-                        </span>
-                      </label>;
-                    })}
-                  </div>}
-                  {!matchingEngineeringKnowledge.length
-                    && !matchingTeamSkills.length && <div className="engineering-knowledge-empty">
-                    <strong>当前没有匹配的团队通用知识</strong>
-                    <span>{repositoryTechnologies.some((item) => item.confirmed)
-                      ? "不影响发起；模块知识和 Git 仓库上下文仍会正常提供。"
-                      : "首次确认仓库技术栈后会提高匹配准确度；暂不确定也可以继续。"}</span>
-                  </div>}
-                </details>
+                <TaskKnowledgeBoundary>
+                  <TaskKnowledgeSelector
+                    engineering={matchingEngineeringKnowledge}
+                    skills={matchingTeamSkills}
+                    selectedEngineeringIds={selectedEngineeringKnowledgeIds}
+                    selectedSkillPaths={selectedTeamSkillPaths}
+                    onToggleEngineering={(id, selected) => {
+                      setEngineeringSelectionTouched(true);
+                      setSelectedEngineeringKnowledgeIds((current) => selected
+                        ? current.filter((item) => item !== id)
+                        : [...current, id]);
+                    }}
+                    onToggleSkill={(path, selected) => {
+                      setTeamSkillSelectionTouched(true);
+                      setSelectedTeamSkillPaths((current) => selected
+                        ? current.filter((item) => item !== path)
+                        : [...current, path]);
+                    }} />
+                </TaskKnowledgeBoundary>
               </section>}
                 </div>
               </details>}

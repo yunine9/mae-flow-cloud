@@ -23,14 +23,17 @@ export function knowledgeLanguageLabel(id: string): string {
 }
 
 export function KnowledgeLanguageTags({ languages, empty = "未标注语言" }: {
-  languages: string[];
+  languages?: readonly string[] | null;
   empty?: string;
 }) {
-  if (!languages.length) {
+  const normalized = Array.isArray(languages)
+    ? languages.filter((id): id is string => typeof id === "string" && !!id)
+    : [];
+  if (!normalized.length) {
     return <span className="knowledge-language-empty">{empty}</span>;
   }
   return <span className="knowledge-language-tags">
-    {languages.map((id) => <em key={id}>{knowledgeLanguageLabel(id)}</em>)}
+    {normalized.map((id) => <em key={id}>{knowledgeLanguageLabel(id)}</em>)}
   </span>;
 }
 
