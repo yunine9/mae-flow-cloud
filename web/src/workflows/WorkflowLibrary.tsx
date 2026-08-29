@@ -84,6 +84,8 @@ export function WorkflowLibrary({
             <span className="wf-workflow-title"><strong>{workflow.name}</strong>
               <em className={`status-${workflow.status}`}>{statusLabels[workflow.status]}</em></span>
             <p>{workflow.description || "暂无说明，打开后可查看精确编排。"}</p>
+            {/* 列表直接回答"适用于哪"(审计 P2-14),不逼人点详情 */}
+            <span className="wf-workflow-scope">{applicabilityText(workflow)}</span>
             <span className="wf-workflow-owner">{workflow.scope === "team" ? "团队" : "个人"}
               <i>·</i> Owner {workflow.owner}<i>·</i>{formatTime(workflow.updated_at)}</span>
           </span>
@@ -112,6 +114,18 @@ export function WorkflowLibrary({
         创建第一个工作流</button>}
     </div>}
   </section>;
+}
+
+function applicabilityText(workflow: WorkflowAssetSummary): string {
+  const scope = workflow.applicability;
+  if (!scope) return "适用范围：未声明（旧资产，打开详情查看）";
+  const parts = [
+    scope.repositories.length && `仓库 ${scope.repositories.join("、")}`,
+    scope.technologies.length && `技术栈 ${scope.technologies.join("、")}`,
+    scope.business_module_ids.length
+      && `业务域 ${scope.business_module_ids.join("、")}`,
+  ].filter(Boolean) as string[];
+  return parts.length ? `适用：${parts.join("；")}` : "适用：不限（全部任务可选）";
 }
 
 function statusHint(workflow: WorkflowAssetSummary): string {

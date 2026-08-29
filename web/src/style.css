@@ -8125,21 +8125,38 @@ body, .sidebar, .identity-bar, .launch-copy, .user-create-copy,
   grid-template-columns: minmax(0, 1.58fr) minmax(360px, .92fr);
   align-items: start; gap: 14px;
 }
-.launch-requirement-section { grid-column: 1; grid-row: 1 / span 2; height: 100%; }
+.launch-requirement-section { grid-column: 1; grid-row: 1; height: 100%; }
 .launch-delivery-section { grid-column: 2; grid-row: 1; }
-.launch-delivery-mode-section { grid-column: 2; grid-row: 2; }
-.launch-delivery-mode-section.launch-delivery-mode-only { grid-row: 1 / span 2; align-self: stretch; }
+.launch-delivery-mode-section { grid-column: 1 / -1; grid-row: 2; }
+.launch-delivery-mode-section.launch-delivery-mode-only {
+  grid-column: 2; grid-row: 1; align-self: stretch;
+}
 .launch-requirement-section textarea { min-height: 270px; }
 .launch-requirement-section .requirement-field { padding: 4px 0 0; }
 .launch-delivery-section .launch-field-grid { grid-template-columns: 1fr; }
-.launch-delivery-mode-section .delivery-mode-options { grid-template-columns: 1fr; gap: 7px; }
+.launch-delivery-section .launch-required-delivery-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.launch-delivery-mode-section .delivery-mode-options {
+  grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px;
+}
 .launch-delivery-mode-section .delivery-mode-option {
-  min-height: 0; padding: 9px 10px; align-items: center;
+  min-height: 82px; padding: 10px 11px; display: grid;
+  grid-template-columns: 18px minmax(0, 1fr); align-items: start;
 }
 .launch-delivery-mode-section .delivery-mode-option > span:last-child { gap: 2px; }
 .launch-delivery-mode-section .delivery-mode-option small {
-  overflow: hidden; font-size: var(--font-size-assist); text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow: hidden; font-size: var(--font-size-assist); line-height: 1.45;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+}
+.launch-delivery-mode-section.launch-delivery-mode-only .delivery-mode-options {
+  grid-template-columns: 1fr; gap: 7px;
+}
+.launch-delivery-mode-section.launch-delivery-mode-only .delivery-mode-option {
+  min-height: 0; padding: 9px 10px; align-items: center;
+}
+.launch-delivery-mode-section.launch-delivery-mode-only .delivery-mode-option small {
+  display: block; text-overflow: ellipsis; white-space: nowrap;
 }
 .launch-advanced {
   grid-column: 1 / -1; min-width: 0; border: 1px solid var(--line);
@@ -8182,7 +8199,7 @@ body, .sidebar, .identity-bar, .launch-copy, .user-create-copy,
 }
 .launch-advanced-body > .launch-execution-settings,
 .launch-advanced-body > .launch-technology-section,
-.launch-advanced-body > .repository-skills-section { grid-column: 1 / -1; }
+.launch-advanced-body > .launch-task-resources { grid-column: 1 / -1; }
 .launch-advanced-body .business-module-picker-list,
 .launch-advanced-body .engineering-knowledge-options { grid-template-columns: 1fr; }
 .launch-advanced-body .wf-scheme-selector {
@@ -8193,6 +8210,101 @@ body, .sidebar, .identity-bar, .launch-copy, .user-create-copy,
 .launch-submit-bar, .composer-error { grid-column: 1 / -1; }
 .launch-submit-bar { position: sticky; bottom: -28px; z-index: 4; padding: 12px 2px;
   background: color-mix(in srgb, var(--surface) 96%, transparent); }
+
+/* 代码仓是 Git 工作现场，不是平台知识抽屉。边界直接贴在仓库输入下方，
+   不再用一个巨大的“仓内 Skill 管理器”暗示平台会收编仓库内容。 */
+.launch-git-context {
+  margin-top: 10px; padding: 9px 10px; display: flex; align-items: flex-start;
+  gap: 9px; color: var(--muted); border: 1px solid var(--line);
+  border-radius: 9px; background: var(--surface);
+}
+.launch-git-context svg {
+  width: 17px; height: 17px; margin-top: 1px; flex: none; fill: none;
+  stroke: var(--success); stroke-width: 1.45; stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.launch-git-context span { min-width: 0; display: grid; gap: 2px; }
+.launch-git-context strong { color: var(--text-strong); font-size: 12px; }
+.launch-git-context small { color: var(--muted); font-size: 11px; line-height: 1.45; }
+
+/* 业务模块是团队资产里的抽屉。创建任务只露一行当前选择；真正需要
+   调整时原地展开，避免把所有模块卡片永久铺在主表单。 */
+.launch-module-context {
+  margin-top: 12px; overflow: hidden; border: 1px solid var(--line);
+  border-radius: 9px; background: var(--surface);
+}
+.launch-module-context > summary {
+  min-height: 50px; padding: 9px 11px; display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 17px; align-items: center;
+  gap: 9px; list-style: none; cursor: pointer;
+}
+.launch-module-context > summary::-webkit-details-marker,
+.launch-resource-adjuster > summary::-webkit-details-marker { display: none; }
+.launch-module-context > summary > span { min-width: 0; display: grid; gap: 2px; }
+.launch-module-context > summary strong { color: var(--text-strong); font-size: 12px; }
+.launch-module-context > summary small {
+  overflow: hidden; color: var(--muted); font-size: 11px;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.launch-module-context > summary em {
+  padding: 2px 6px; color: var(--accent); border-radius: 999px;
+  background: var(--accent-soft); font-size: 10px; font-style: normal;
+  font-weight: 700;
+}
+.launch-module-context > summary svg,
+.launch-resource-adjuster > summary svg {
+  width: 16px; height: 16px; fill: none; stroke: var(--muted);
+  stroke-width: 1.6; transition: transform var(--ease);
+}
+.launch-module-context[open] > summary svg,
+.launch-resource-adjuster[open] > summary svg { transform: rotate(180deg); }
+.launch-module-context > .business-module-picker-list {
+  padding: 10px; grid-template-columns: 1fr; border-top: 1px solid var(--line);
+  background: var(--surface-soft);
+}
+.launch-module-context .business-module-option-copy > small { min-height: 0; }
+.launch-module-context .business-module-picker-note,
+.launch-module-context .business-module-picker-notice { margin: 0; padding: 8px 10px; }
+
+/* 一张任务知识清单：默认只看数量和边界，逐项勾选降到二级。 */
+.launch-task-resources { display: grid; gap: 11px; }
+.launch-task-resources .launch-section-head { margin-bottom: 1px; }
+.launch-resource-summary {
+  padding: 11px 12px; display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr); align-items: center;
+  gap: 14px; border: 1px solid var(--line); border-radius: 9px;
+  background: var(--surface);
+}
+.launch-resource-summary > span { min-width: 68px; display: grid; gap: 1px; }
+.launch-resource-summary > span + span {
+  padding-left: 14px; border-left: 1px solid var(--line);
+}
+.launch-resource-summary strong { color: var(--text-strong); font-size: 18px; }
+.launch-resource-summary small { color: var(--muted); font-size: 10px; }
+.launch-resource-summary p {
+  margin: 0; overflow: hidden; color: var(--muted); font-size: 11px;
+  line-height: 1.5; text-align: right; text-overflow: ellipsis; white-space: nowrap;
+}
+.launch-resource-boundary {
+  padding: 0 2px; display: flex; align-items: baseline; gap: 8px;
+  color: var(--muted); font-size: 11px; line-height: 1.5;
+}
+.launch-resource-boundary strong { color: var(--success); white-space: nowrap; }
+.launch-resource-adjuster {
+  overflow: hidden; border-top: 1px solid var(--line);
+}
+.launch-resource-adjuster > summary {
+  min-height: 42px; padding: 8px 2px 0; display: grid;
+  grid-template-columns: minmax(0, 1fr) 18px; align-items: center;
+  gap: 8px; list-style: none; cursor: pointer;
+}
+.launch-resource-adjuster > summary > span { display: flex; align-items: baseline; gap: 7px; }
+.launch-resource-adjuster > summary strong { color: var(--text-strong); font-size: 12px; }
+.launch-resource-adjuster > summary small { color: var(--muted); font-size: 10px; }
+.launch-resource-adjuster .engineering-knowledge-options {
+  margin-top: 8px; grid-template-columns: 1fr;
+}
+.launch-resource-adjuster .engineering-knowledge-empty { margin-top: 8px; }
 
 @media (max-width: 1120px) {
   .launch-composer { grid-template-columns: 1fr; }
@@ -8227,3 +8339,15 @@ body, .sidebar, .identity-bar, .launch-copy, .user-create-copy,
   transform: rotate(45deg);
 }
 .execution-plan-activities details > p { margin: 6px 0 2px; }
+
+/* ── 活方案对拍告警(审计 P0-1):呈现与实际不一致是最高级事故,
+   压在执行现场最上方,红得不容错过。 ── */
+.ws-plan-alert {
+  padding: 12px 14px;
+  border: 1px solid var(--danger);
+  border-left-width: 4px;
+  border-radius: 10px;
+  background: var(--danger-soft);
+}
+.ws-plan-alert strong { color: var(--danger); display: block; }
+.ws-plan-alert p { margin: 6px 0 0; font-size: .92em; }

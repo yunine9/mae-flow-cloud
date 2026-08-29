@@ -4,14 +4,10 @@ import {
   getLaunchOptions,
   listWorkflowAssets,
   type AuthUser,
+  type HostSkillShelfEntry,
   type LaunchOptions,
   type WorkflowAssetSummary,
 } from "./api";
-import {
-  EMPTY_REPOSITORY_SKILL_SELECTION,
-  RepositorySkillPicker,
-  type RepositorySkillSelection,
-} from "./RepositorySkillPicker";
 import {
   asRepositoryProfiles,
   RepositoryTechnologyPicker,
@@ -39,6 +35,11 @@ type LaunchDraft = {
   repairRounds: string;
   taskInstructions?: string;
   selectedBusinessModuleIds?: string[];
+  moduleSelectionTouched?: boolean;
+  selectedEngineeringKnowledgeIds?: string[];
+  engineeringSelectionTouched?: boolean;
+  selectedTeamSkillPaths?: string[];
+  teamSkillSelectionTouched?: boolean;
   workflowSelection?: WorkflowSchemeSelection;
 };
 type LaunchPreferences = {
@@ -73,7 +74,7 @@ export function LaunchWorkspace({
   session: AuthUser;
   onCreated: () => Promise<void>;
   onClose: () => void;
-  onOpenWorkflowAssets?: () => void;
+  onOpenWorkflowAssets?: (workflowId?: string) => void;
 }) {
   const [restoredDraft] = useState(() =>
     readStored<LaunchDraft>(storageKey("draft", session.username)));
@@ -118,14 +119,18 @@ export function LaunchWorkspace({
   const [moduleSelectionNotice, setModuleSelectionNotice] = useState("");
   const [draftSavedAt, setDraftSavedAt] = useState(
     validDraft?.updatedAt ?? "");
-  const [repositorySkillSelection, setRepositorySkillSelection] =
-    useState<RepositorySkillSelection>(EMPTY_REPOSITORY_SKILL_SELECTION);
   const [repositoryTechnologies, setRepositoryTechnologies] =
     useState<RepositoryTechnologyDraft[]>([]);
   const [selectedEngineeringKnowledgeIds, setSelectedEngineeringKnowledgeIds] =
-    useState<string[]>([]);
+    useState<string[]>(validDraft?.selectedEngineeringKnowledgeIds ?? []);
+  const [selectedTeamSkillPaths, setSelectedTeamSkillPaths] =
+    useState<string[]>(validDraft?.selectedTeamSkillPaths ?? []);
   const [engineeringSelectionTouched, setEngineeringSelectionTouched] =
-    useState(false);
+    useState(validDraft?.engineeringSelectionTouched === true);
+  const [teamSkillSelectionTouched, setTeamSkillSelectionTouched] =
+    useState(validDraft?.teamSkillSelectionTouched === true);
+  const [moduleSelectionTouched, setModuleSelectionTouched] = useState(
+    validDraft?.moduleSelectionTouched === true);
   const [workflowAssets, setWorkflowAssets] = useState<WorkflowAssetSummary[]>([]);
   const [workflowAssetsLoaded, setWorkflowAssetsLoaded] = useState(false);
   const [workflowSelection, setWorkflowSelection] = useState<WorkflowSchemeSelection | undefined>(
@@ -133,8 +138,7 @@ export function LaunchWorkspace({
   const [workflowSelectionNotice, setWorkflowSelectionNotice] = useState("");
   const [advancedOpen, setAdvancedOpen] = useState(() => Boolean(
     validDraft?.workflowSelection
-    || validDraft?.taskInstructions?.trim()
-    || validDraft?.selectedBusinessModuleIds?.length,
+    || validDraft?.taskInstructions?.trim(),
   ));
   // 配置没配齐不让下单:缺项来自后端(服务级+个人级),前端只负责
   // 摆在明面上。后端同样硬拦——绕过界面打接口一样被 409 挡住。
@@ -163,11 +167,25 @@ export function LaunchWorkspace({
       && (!item.business_module_ids.length || item.business_module_ids.some((id) =>
         selectedBusinessModuleIds.includes(id))));
   }, [options, repos, repositoryTechnologies, selectedBusinessModuleIds]);
+  const matchingTeamSkills = useMemo(() => {
+    const repositorySet = new Set(repos.map(repositoryIdentity).filter(Boolean));
+    const technologies = new Set(repositoryTechnologies
+      .flatMap((item) => item.technologies));
+    return (options?.team_skills ?? []).filter((item: HostSkillShelfEntry) =>
+      (!item.repositories.length || item.repositories.some((repository) =>
+        repositorySet.has(repositoryIdentity(repository))))
+      && (!item.technologies.length || item.technologies.some((technology) =>
+        technologies.has(technology)))
+      && (!item.business_module_ids.length || item.business_module_ids.some((id) =>
+        selectedBusinessModuleIds.includes(id))));
+  }, [options, repos, repositoryTechnologies, selectedBusinessModuleIds]);
   const deliveryLocationVisible = !!options
     && (options.repo.enabled || options.ticket.enabled || options.baseline.enabled);
-  const selectedOptionalCount = selectedBusinessModuleIds.length
-    + selectedEngineeringKnowledgeIds.length
-    + repositorySkillSelection.selectedIds.length;
+  const selectedModuleKnowledgeCount = businessModules
+    .filter((module) => selectedBusinessModuleIds.includes(module.id))
+    .reduce((sum, module) => sum + module.assets, 0);
+  const selectedKnowledgeCount = selectedModuleKnowledgeCount
+    + selectedEngineeringKnowledgeIds.length + selectedTeamSkillPaths.length;
 
   useEffect(() => {
     let alive = true;
@@ -219,6 +237,11 @@ export function LaunchWorkspace({
         repairRounds,
         taskInstructions,
         selectedBusinessModuleIds,
+        moduleSelectionTouched,
+        selectedEngineeringKnowledgeIds,
+        engineeringSelectionTouched,
+        selectedTeamSkillPaths,
+        teamSkillSelectionTouched,
         workflowSelection,
       };
       try {
@@ -232,7 +255,9 @@ export function LaunchWorkspace({
     return () => window.clearTimeout(timer);
   }, [title, requirement, requirementDocumentName, repos, ticket,
     baseline, lane, repairRounds, taskInstructions,
-    selectedBusinessModuleIds, workflowSelection,
+    selectedBusinessModuleIds, moduleSelectionTouched,
+    selectedEngineeringKnowledgeIds, engineeringSelectionTouched,
+    selectedTeamSkillPaths, teamSkillSelectionTouched, workflowSelection,
     session.username]);
 
   useEffect(() => {
@@ -258,6 +283,20 @@ export function LaunchWorkspace({
     });
   }, [options]);
 
+  // 关联仓库能够说明业务范围时直接替用户勾好匹配模块；这是推荐默认值，
+  // 用户一旦手动调整就不再追着仓库输入改选择。模块只带出平台管理的
+  // 模块知识，绝不扫描或收编 Git 仓库里的文档与 Skill。
+  useEffect(() => {
+    if (!options || moduleSelectionTouched) return;
+    const wantedRepos = new Set(repos.map(repositoryIdentity).filter(Boolean));
+    const matched = businessModules.filter((module) =>
+      module.repositories.some((repository) =>
+        wantedRepos.has(repositoryIdentity(repository))))
+      .map((module) => module.id)
+      .slice(0, 4);
+    setSelectedBusinessModuleIds(matched);
+  }, [options, businessModules, repos, moduleSelectionTouched]);
+
   useEffect(() => {
     if (!engineeringSelectionTouched) {
       setSelectedEngineeringKnowledgeIds(
@@ -268,6 +307,16 @@ export function LaunchWorkspace({
     setSelectedEngineeringKnowledgeIds((current) =>
       current.filter((id) => available.has(id)));
   }, [matchingEngineeringKnowledge, engineeringSelectionTouched]);
+
+  useEffect(() => {
+    if (!teamSkillSelectionTouched) {
+      setSelectedTeamSkillPaths(matchingTeamSkills.map((item) => item.path));
+      return;
+    }
+    const available = new Set(matchingTeamSkills.map((item) => item.path));
+    setSelectedTeamSkillPaths((current) =>
+      current.filter((path) => available.has(path)));
+  }, [matchingTeamSkills, teamSkillSelectionTouched]);
 
   useEffect(() => {
     const previous = document.body.style.overflow;
@@ -282,29 +331,21 @@ export function LaunchWorkspace({
     };
   }, [onClose, submitting]);
 
-  function invalidateSkillCatalog() {
-    setRepositorySkillSelection(EMPTY_REPOSITORY_SKILL_SELECTION);
-  }
-
   function changeRepository(index: number, value: string) {
-    invalidateSkillCatalog();
     setRepos((current) => current.map(
       (item, itemIndex) => itemIndex === index ? value : item));
   }
 
   function addRepository() {
-    invalidateSkillCatalog();
     setRepos((current) => [...current, ""]);
   }
 
   function removeRepository(index: number) {
-    invalidateSkillCatalog();
     setRepos((current) => current.filter(
       (_, itemIndex) => itemIndex !== index));
   }
 
   function changeBaseline(value: string) {
-    invalidateSkillCatalog();
     setBaseline(value);
   }
 
@@ -338,8 +379,7 @@ export function LaunchWorkspace({
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (!title.trim() || !requirement.trim() || submitting || blocked
-        || repositorySkillSelection.scanning) return;
+    if (!title.trim() || !requirement.trim() || submitting || blocked) return;
     setSubmitting(true);
     setError("");
     try {
@@ -362,14 +402,9 @@ export function LaunchWorkspace({
           taskInstructions: workflowSelection
             ? undefined : taskInstructions.trim() || undefined,
           workflowSelection,
-          repositorySkillCatalogToken:
-            repositorySkillSelection.scanned
-              ? repositorySkillSelection.catalogToken : undefined,
-          selectedRepositorySkillIds:
-            repositorySkillSelection.scanned
-              ? repositorySkillSelection.selectedIds : undefined,
           selectedBusinessModuleIds,
           selectedEngineeringKnowledgeIds,
+          selectedHostSkillPaths: selectedTeamSkillPaths,
           repositoryProfiles: asRepositoryProfiles(repositoryTechnologies),
           requirementDocumentName: requirementDocumentName || undefined,
         },
@@ -428,7 +463,7 @@ export function LaunchWorkspace({
             <div className="launch-form-intro">
               <div><span>CREATE WORK</span>
                 <strong id="launch-title">说清任务，确认交付位置</strong>
-                <p>必填信息都在当前页面；工作流、知识和 Skill 仅在需要时调整。</p>
+                <p>必填信息都在当前页面；工作流与知识清单仅在需要时调整。</p>
               </div>
               <small><i aria-hidden /> 必填项始终可见</small>
             </div>
@@ -444,6 +479,11 @@ export function LaunchWorkspace({
                   setRepos([""]);
                   setTicket("");
                   setSelectedBusinessModuleIds([]);
+                  setModuleSelectionTouched(false);
+                  setSelectedTeamSkillPaths([]);
+                  setTeamSkillSelectionTouched(false);
+                  setSelectedEngineeringKnowledgeIds([]);
+                  setEngineeringSelectionTouched(false);
                   setError("");
                   try { localStorage.removeItem(storageKey("draft", session.username)); } catch { /* noop */ }
                 }}>清空草稿</button>
@@ -581,6 +621,11 @@ export function LaunchWorkspace({
                           <option key={repo} value={repo} />
                         ))}
                       </datalist>
+                      <div className="launch-git-context">
+                        <svg viewBox="0 0 20 20" aria-hidden><path d="M6 4.5v7a3 3 0 0 0 3 3h5M6 4.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Zm11 10a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Z" /></svg>
+                        <span><strong>代码仓内容由 Git 管理</strong>
+                          <small>Agent 会自行读取代码、AGENTS.md、文档和仓库原生能力；MFC 不导入、不发布。</small></span>
+                      </div>
                     </div>
                   )}
                   {(options.ticket.enabled || options.baseline.enabled) && (
@@ -607,6 +652,57 @@ export function LaunchWorkspace({
                       )}
                     </div>
                   )}
+                  {businessModules.length > 0 && <details
+                    className="launch-module-context">
+                    <summary>
+                      <span><strong>业务模块</strong><small>
+                        {selectedBusinessModuleIds.length
+                          ? selectedBusinessModuleIds.map((id) =>
+                              businessModules.find((item) => item.id === id)?.name)
+                            .filter(Boolean).join("、")
+                          : "尚未关联；可选择本任务涉及的业务抽屉"}
+                      </small></span>
+                      <em>{selectedBusinessModuleIds.length
+                        ? `${selectedBusinessModuleIds.length} 个已关联` : "选择"}</em>
+                      <svg viewBox="0 0 20 20" aria-hidden><path d="m6 8 4 4 4-4" /></svg>
+                    </summary>
+                    <div className="business-module-picker-list">
+                      {businessModules.map((module) => {
+                        const selectedIndex = selectedBusinessModuleIds.indexOf(module.id);
+                        const selected = selectedIndex >= 0;
+                        const recommended = module.repositories.some((repo) =>
+                          repos.some((item) => repositoryIdentity(item)
+                            === repositoryIdentity(repo)));
+                        const disabled = !selected && selectedBusinessModuleIds.length >= 4;
+                        return <label key={module.id}
+                          className={`business-module-option${selected ? " selected" : ""}${disabled ? " disabled" : ""}`}>
+                          <input type="checkbox" checked={selected} disabled={disabled}
+                            onChange={() => {
+                              setModuleSelectionTouched(true);
+                              setSelectedBusinessModuleIds((current) => selected
+                                ? current.filter((id) => id !== module.id)
+                                : [...current, module.id]);
+                            }} />
+                          <span className="business-module-check" aria-hidden>{selected ? "✓" : ""}</span>
+                          <span className="business-module-option-copy">
+                            <span><strong>{module.name}</strong>
+                              {selectedIndex === 0 && <em>主模块</em>}
+                              {recommended && <em className="recommended">仓库匹配</em>}
+                            </span>
+                            <small>{module.description}</small>
+                            <span className="business-module-meta">
+                              {module.assets} 项模块知识 · {module.owner} 维护
+                            </span>
+                          </span>
+                        </label>;
+                      })}
+                    </div>
+                    {moduleSelectionNotice && <p className="business-module-picker-notice"
+                      role="status">{moduleSelectionNotice}</p>}
+                    <p className="business-module-picker-note">
+                      仓库匹配项会默认勾选；你手动调整后系统不再改动。只带出模块抽屉中的平台知识，不读取仓库内容。
+                    </p>
+                  </details>}
                 </section>
               )}
               {options && options.workflows.length > 0 &&
@@ -642,10 +738,10 @@ export function LaunchWorkspace({
                     <svg viewBox="0 0 20 20"><path d="M4 5h12M7 10h9M4 15h12M7 3v4M13 8v4M9 13v4" /></svg>
                   </span>
                   <span className="launch-advanced-copy"><strong>按需配置</strong>
-                    <small>工作流、技术栈、知识、Skill 和修复策略；不设置也能正常发起</small></span>
+                    <small>工作流、技术画像和知识清单；代码仓内容不在这里管理</small></span>
                   <span className="launch-advanced-summary">
                     <b>{workflowSelection ? "定制工作流" : "标准工作流"}</b>
-                    {selectedOptionalCount > 0 && <b>{selectedOptionalCount} 项知识与能力</b>}
+                    {selectedKnowledgeCount > 0 && <b>{selectedKnowledgeCount} 项平台知识</b>}
                     {repairRounds && <b>{repairRounds} 轮修复</b>}
                     {repositoryTechnologies.some((item) => !item.confirmed)
                       && <b className="attention">技术栈待确认</b>}
@@ -663,8 +759,7 @@ export function LaunchWorkspace({
                         setWorkflowSelection(selection);
                         setWorkflowSelectionNotice("");
                       }}
-                      onOpenEditor={onOpenWorkflowAssets
-                        ? () => onOpenWorkflowAssets() : undefined} />
+                      onOpenEditor={onOpenWorkflowAssets} />
                     {workflowSelectionNotice && <p className="workflow-selection-notice"
                       role="status">{workflowSelectionNotice}</p>}
                     <div className="launch-field-grid launch-settings-grid">
@@ -695,121 +790,112 @@ export function LaunchWorkspace({
                       value={repositoryTechnologies}
                       onChange={setRepositoryTechnologies} />
                   </section>}
-              {options && businessModules.length > 0 && (
-                <section className="launch-form-section business-module-picker">
-                  <div className="launch-section-head"><i>业</i><div>
-                    <strong>业务范围</strong>
-                    <small>关联本次任务涉及的业务模块，并固定各模块当时的知识版本</small>
-                  </div><em>可选 · 最多 4 个</em></div>
-                  <div className="business-module-picker-list">
-                    {businessModules.map((module) => {
-                      const selectedIndex = selectedBusinessModuleIds.indexOf(module.id);
-                      const selected = selectedIndex >= 0;
-                      const recommended = module.repositories.some((repo) =>
-                        repos.some((item) => repositoryIdentity(item)
-                          === repositoryIdentity(repo)));
-                      const disabled = !selected && selectedBusinessModuleIds.length >= 4;
-                      return <label key={module.id}
-                        className={`business-module-option${selected ? " selected" : ""}${disabled ? " disabled" : ""}`}>
-                        <input type="checkbox" checked={selected} disabled={disabled}
-                          onChange={() => setSelectedBusinessModuleIds((current) =>
-                            selected
-                              ? current.filter((id) => id !== module.id)
-                              : [...current, module.id])} />
-                        <span className="business-module-check" aria-hidden>{selected ? "✓" : ""}</span>
-                        <span className="business-module-option-copy">
-                          <span><strong>{module.name}</strong>
-                            {selectedIndex === 0 && <em>主模块</em>}
-                            {recommended && <em className="recommended">仓库匹配</em>}
-                          </span>
-                          <small>{module.description}</small>
-                          <span className="business-module-meta">
-                            Owner {module.owner} · {module.assets} 项知识 · revision {module.revision}
+              {options && <section className="launch-form-section launch-task-resources">
+                <div className="launch-section-head"><i>知</i><div>
+                  <strong>本任务知识</strong>
+                  <small>模块知识与团队通用知识合成一张清单</small>
+                </div><em>默认按需读取</em></div>
+                <div className="launch-resource-summary">
+                  <span><strong>{selectedModuleKnowledgeCount}</strong>
+                    <small>模块知识</small></span>
+                  <span><strong>{selectedEngineeringKnowledgeIds.length
+                    + selectedTeamSkillPaths.length}</strong>
+                    <small>团队通用</small></span>
+                  <p>{selectedBusinessModuleIds.length
+                    ? `来自 ${selectedBusinessModuleIds.map((id) =>
+                        businessModules.find((item) => item.id === id)?.name)
+                      .filter(Boolean).join("、")} 等已关联抽屉`
+                    : "尚未关联业务模块；仍会使用匹配的团队通用知识"}</p>
+                </div>
+                <div className="launch-resource-boundary">
+                  <strong>这里只管理平台知识</strong>
+                  <span>正文不会整批注入；Agent 先看索引，相关时再读取。代码仓内容始终从 Git 现场自主探索。</span>
+                </div>
+                <details className="launch-resource-adjuster">
+                  <summary><span><strong>调整团队通用知识</strong>
+                    <small>{matchingEngineeringKnowledge.length + matchingTeamSkills.length
+                      ? `${selectedEngineeringKnowledgeIds.length + selectedTeamSkillPaths.length}/${matchingEngineeringKnowledge.length + matchingTeamSkills.length} 项已选`
+                      : "当前没有匹配项"}</small></span>
+                    <svg viewBox="0 0 20 20" aria-hidden><path d="m6 8 4 4 4-4" /></svg>
+                  </summary>
+                  {!!matchingEngineeringKnowledge.length && <div
+                    className="engineering-knowledge-options">
+                    {matchingEngineeringKnowledge.map((item) => {
+                      const selected = selectedEngineeringKnowledgeIds.includes(item.id);
+                      return <label key={item.id}
+                        className={`engineering-knowledge-option${selected ? " selected" : ""}`}>
+                        <input type="checkbox" checked={selected} onChange={() => {
+                          setEngineeringSelectionTouched(true);
+                          setSelectedEngineeringKnowledgeIds((current) => selected
+                            ? current.filter((id) => id !== item.id)
+                            : [...current, item.id]);
+                        }} />
+                        <span className="business-module-check" aria-hidden>
+                          {selected ? "✓" : ""}</span>
+                        <span><span><strong>{item.title}</strong>
+                          <em>{{ document: "文档", rule: "规则",
+                            example: "示例" }[item.form]}</em></span>
+                          <small>{item.summary}</small>
+                          <span className="engineering-knowledge-meta">
+                            {item.when_to_use}
+                            <KnowledgeLanguageTags languages={item.technologies}
+                              empty="技术无关" />
                           </span>
                         </span>
                       </label>;
                     })}
-                  </div>
-                  {moduleSelectionNotice && <p className="business-module-picker-notice"
-                    role="status">{moduleSelectionNotice}</p>}
-                  <p className="business-module-picker-note">
-                    不选择也能正常发起；第一项作为主业务模块，最多再关联 3 个相关模块。系统只推荐仓库匹配项，不会替你勾选。
-                  </p>
-                </section>
-              )}
-              {options && <section className="launch-form-section engineering-knowledge-picker">
-                <div className="launch-section-head"><i>知</i><div>
-                  <strong>团队工程知识</strong>
-                  <small>按仓库、首次确认的技术栈和业务模块上下文匹配</small>
-                </div><em>匹配项默认选中</em></div>
-                {matchingEngineeringKnowledge.length ? <div
-                  className="engineering-knowledge-options">
-                  {matchingEngineeringKnowledge.map((item) => {
-                    const selected = selectedEngineeringKnowledgeIds.includes(item.id);
-                    return <label key={item.id}
-                      className={`engineering-knowledge-option${selected ? " selected" : ""}`}>
-                      <input type="checkbox" checked={selected} onChange={() => {
-                        setEngineeringSelectionTouched(true);
-                        setSelectedEngineeringKnowledgeIds((current) => selected
-                          ? current.filter((id) => id !== item.id)
-                          : [...current, item.id]);
-                      }} />
-                      <span className="business-module-check" aria-hidden>
-                        {selected ? "✓" : ""}</span>
-                      <span><span><strong>{item.title}</strong>
-                        <em>{{ document: "文档", rule: "规则",
-                          example: "示例" }[item.form]}</em></span>
-                        <small>{item.summary}</small>
-                        <span className="engineering-knowledge-meta">
-                          {item.when_to_use}
-                          <KnowledgeLanguageTags languages={item.technologies}
-                            empty="技术无关" />
+                  </div>}
+                  {!!matchingTeamSkills.length && <div
+                    className="engineering-knowledge-options team-skill-options">
+                    {matchingTeamSkills.map((item) => {
+                      const selected = selectedTeamSkillPaths.includes(item.path);
+                      return <label key={item.path}
+                        className={`engineering-knowledge-option${selected ? " selected" : ""}`}>
+                        <input type="checkbox" checked={selected} onChange={() => {
+                          setTeamSkillSelectionTouched(true);
+                          setSelectedTeamSkillPaths((current) => selected
+                            ? current.filter((path) => path !== item.path)
+                            : [...current, item.path]);
+                        }} />
+                        <span className="business-module-check" aria-hidden>
+                          {selected ? "✓" : ""}</span>
+                        <span><span><strong>{item.name}</strong><em>Skill</em></span>
+                          <small>{item.description}</small>
+                          <span className="engineering-knowledge-meta">
+                            团队资产 · Agent 相关时按需读取正文
+                            <KnowledgeLanguageTags languages={item.technologies}
+                              empty="技术无关" />
+                          </span>
                         </span>
-                      </span>
-                    </label>;
-                  })}
-                </div> : <div className="engineering-knowledge-empty">
-                  <strong>当前没有匹配的团队工程知识</strong>
-                  <span>{repositoryTechnologies.some((item) => item.confirmed)
-                    ? "仍会正常使用业务模块知识和代码仓 Skill。"
-                    : "首次确认仓库技术栈后会出现更准确的匹配；这不影响继续下单。"}</span>
-                </div>}
-                <p className="business-module-picker-note">
-                  默认选中只表示加入本任务知识索引；正文必须按需读取，不把“选中”冒充“已使用”，也不形成流程门禁。
-                </p>
+                      </label>;
+                    })}
+                  </div>}
+                  {!matchingEngineeringKnowledge.length
+                    && !matchingTeamSkills.length && <div className="engineering-knowledge-empty">
+                    <strong>当前没有匹配的团队通用知识</strong>
+                    <span>{repositoryTechnologies.some((item) => item.confirmed)
+                      ? "不影响发起；模块知识和 Git 仓库上下文仍会正常提供。"
+                      : "首次确认仓库技术栈后会提高匹配准确度；暂不确定也可以继续。"}</span>
+                  </div>}
+                </details>
               </section>}
-              {options?.repo.enabled && (
-                <RepositorySkillPicker
-                  key={JSON.stringify([repos, baseline])}
-                  repositories={repos}
-                  baseline={baseline}
-                  onSelectionChange={setRepositorySkillSelection}
-                />
-              )}
                 </div>
               </details>}
               {error && <div className="composer-error" role="alert">{error}</div>}
               <footer className="launch-submit-bar">
                 <div><strong>{blocked
                   ? "暂时不能发起"
-                  : repositorySkillSelection.scanning
-                    ? "正在读取仓内能力"
-                    : "信息确认后即可启动"}</strong><small>{blocked
+                  : "信息确认后即可启动"}</strong><small>{blocked
                   ? "请先处理上方配置项"
-                  : repositorySkillSelection.scanning
-                    ? "读取完成后可确认选择并启动"
-                    : "任务创建后会自动进入你的工作台"}</small></div>
-                <button type="submit" disabled={submitting || blocked
-                  || repositorySkillSelection.scanning}>
+                  : "任务创建后会自动进入你的工作台"}</small></div>
+                <button type="submit" disabled={submitting || blocked}>
                   <span>{submitting
                     ? "正在发起"
                     : optionsLoading
                       ? "读取配置中"
                       : blocked
                         ? "配置未完成"
-                        : repositorySkillSelection.scanning
-                          ? "读取能力中"
-                          : "确认发起"}</span>
+                        : "确认发起"}</span>
                   <svg viewBox="0 0 20 20" aria-hidden><path d="M4 10h11M11 6l4 4-4 4" /></svg>
                 </button>
               </footer>

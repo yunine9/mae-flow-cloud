@@ -730,14 +730,16 @@ export class CloudSession {
   }) {
     const { workspace, agentDir, provider, model } = this.options;
     // Skill=写法指南(团队那两个 UT skill 只负责"单测怎么写"),云端照用:
-    // pi 把 SKILL.md 直接注进系统提示让模型读；它不承担 UT 运行，也不
-    // 构成通过证据。正文里若含本地构建段落，以 Cloud 执行契约为准。
+    // Pi 只把 name/description/location 组成轻量可用 Skill 索引；模型判断
+    // 相关后再用 Read 读取 SKILL.md 正文。它不承担 UT 运行，也不构成
+    // 通过证据。正文里若含本地构建段落，以 Cloud 执行契约为准。
     //
     // 两个来源,宿主级在前(部署放一次、每个任务都带——团队的 skill 在
     // 内网出不来仓,老宿主靠"每次手动集成进 ut-generator 子 agent",
-    // 云端给它一个固定的家),仓内 Skill 必须由任务明确选中,只传精确
-    // SKILL.md 文件。绝不能把 .pi/.claude 的 skills 目录整体交给 Pi,
-    // 否则同仓乃至跨仓未选中的能力也会静默进入模型上下文。
+    // 云端给它一个固定的家)。仓内 Skill 只接受任务在首次 clone 后从
+    // Git 已跟踪内容固定的精确 SKILL.md；平台不管理正文，也绝不能把
+    // .pi/.claude 的 skills 目录整体交给 Pi，否则中心临时注入内容会
+    // 静默进入模型上下文。
     // 宿主 Skill 会先按完整包投影进当前任务，所以正文引导的附件相对路径
     // 也在边界内；源目录绝对路径绝不进入 Pi。子 Agent 经同一 openSession
     // 装配,自动使用完全相同的 allowlist。
@@ -918,6 +920,7 @@ export class CloudSession {
         name: skill.name,
         path: displayPath,
         description: skill.description,
+        scope: "team",
       };
       this.options.knowledgeTrace?.register(skill.filePath, resource, true);
       this.options.knowledgeTrace?.record(

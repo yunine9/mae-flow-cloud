@@ -250,6 +250,9 @@ export function materializeHostSkills(options: {
   sourceRoot?: string;
   workspaceRoot: string;
   snapshotRoot: string;
+  /** 缺席=按范围自动选择全部；空数组=明确不选。路径相对 sourceRoot，
+   * 只服务任务创建时的资源清单，复制父任务快照时不再重复筛选。 */
+  selectedSourcePaths?: string[];
   context?: {
     repositories: string[];
     technologies: string[];
@@ -288,6 +291,9 @@ export function materializeHostSkills(options: {
   }
   const paths: string[] = [];
   const names: string[] = [];
+  const selected = options.selectedSourcePaths === undefined ? undefined
+    : new Set(options.selectedSourcePaths.map((item) =>
+      item.replace(/\\/g, "/").replace(/^\.\//, "")));
   for (const skill of discovered.skills) {
     const sourceFile = resolve(skill.filePath);
     const packageRoot = resolve(skill.baseDir ?? dirname(sourceFile));
@@ -301,6 +307,8 @@ export function materializeHostSkills(options: {
       if (stat.size > MAX_SKILL_BYTES) {
         throw new Error("SKILL.md 超过 128 KiB");
       }
+      const sourcePath = relative(sourceRoot, sourceFile).split(sep).join("/");
+      if (selected && !selected.has(sourcePath)) continue;
       if (options.context) {
         const metadata = readSkillKnowledgeMetadata(
           readFileSync(sourceFile, "utf-8"));
@@ -312,7 +320,6 @@ export function materializeHostSkills(options: {
       validatePackage(
         sourceRoot, packageRoot, 0, { files: 0, bytes: 0 });
       const digest = packageDigest(packageRoot);
-      const sourcePath = relative(sourceRoot, sourceFile).split(sep).join("/");
       const key = sha256(`${skill.name}\0${sourcePath}\0${digest}`).slice(0, 20);
       destination = join(snapshotRoot, key);
       metadataPath = `${destination}.snapshot.json`;

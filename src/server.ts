@@ -1623,6 +1623,9 @@ export function createTaskServer(
         const selectedRepositorySkillIds =
           Array.isArray(body.selected_repository_skill_ids)
             ? body.selected_repository_skill_ids.map(String) : undefined;
+        const selectedHostSkillPaths =
+          Array.isArray(body.selected_host_skill_paths)
+            ? body.selected_host_skill_paths.map(String) : undefined;
         const selectedBusinessModuleIds =
           Array.isArray(body.selected_business_module_ids)
             ? body.selected_business_module_ids.map(String) : undefined;
@@ -1701,6 +1704,7 @@ export function createTaskServer(
               workflowDefinition, workflowSource,
               repositorySkillCatalogToken,
               selectedRepositorySkillIds,
+              selectedHostSkillPaths,
               selectedBusinessModuleIds, selectedEngineeringKnowledgeIds,
               repositoryProfiles,
             }));

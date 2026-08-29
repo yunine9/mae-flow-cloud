@@ -5,7 +5,7 @@
  * simply return no plan; Cloud never invents a second mapping as a fallback.
  */
 
-import { execFileSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type {
@@ -64,7 +64,9 @@ export interface ExecutionPlan {
     version: string;
     title: string;
     summary: string;
-    source: "platform_default" | "workflow" | "task";
+    // "platform" 是内核 _strategy_source 对 source.kind 的透传值之一,
+    // 类型联合漏列只是失真不炸(2026-08-30 审计 P2-16),补齐对拍。
+    source: "platform_default" | "platform" | "workflow" | "task";
     selection_reason: string;
   };
   contract: {
@@ -107,9 +109,17 @@ export interface ExecutionPlan {
   };
 }
 
+export interface ExecutionPlanReading {
+  plan?: ExecutionPlan;
+  /** 内核 stderr 里的 ⚠ 告警(定制文件坏了、已退平台默认等)。
+   * 曾经被 stdio ignore 整段扔掉——用户看着创建时的定格副本,Agent
+   * 实际按平台默认在跑,无人被通知(2026-08-30 审计 P0-1)。 */
+  kernel_warnings: string[];
+}
+
 interface CacheEntry {
   fingerprint: string;
-  value?: ExecutionPlan;
+  value: ExecutionPlanReading;
 }
 
 const cache = new Map<string, CacheEntry>();
@@ -150,50 +160,68 @@ function validPlan(value: unknown): value is ExecutionPlan {
       || Array.isArray(plan.customization.layers));
 }
 
-export function readCurrentExecutionPlan(options: {
+export function readCurrentExecutionPlanReading(options: {
   kernelRoot?: string;
   workspace?: string;
   python?: string;
-}): ExecutionPlan | undefined {
+}): ExecutionPlanReading {
   const { kernelRoot, workspace } = options;
-  if (!kernelRoot || !workspace) return undefined;
+  const empty: ExecutionPlanReading = { kernel_warnings: [] };
+  if (!kernelRoot || !workspace) return empty;
   const script = join(kernelRoot, "scripts", "mae-flow.py");
   const state = join(workspace, ".mae-flow.json");
-  if (!existsSync(script) || !existsSync(state)) return undefined;
+  if (!existsSync(script) || !existsSync(state)) return empty;
   const key = `${kernelRoot}\0${workspace}`;
   const currentFingerprint = fingerprint(kernelRoot, workspace);
   const cached = cache.get(key);
   if (cached?.fingerprint === currentFingerprint) return cached.value;
 
-  let value: ExecutionPlan | undefined;
+  const value: ExecutionPlanReading = { kernel_warnings: [] };
   try {
-    const output = execFileSync(
+    const result = spawnSync(
       options.python ?? "python3",
       [script, "execution-plan", "--json"],
       {
         cwd: workspace,
         encoding: "utf-8",
         timeout: 5_000,
-        stdio: ["ignore", "pipe", "ignore"],
+        stdio: ["ignore", "pipe", "pipe"],
       },
     );
-    const parsed = JSON.parse(output.trim().split("\n").at(-1) ?? "{}");
-    if (validPlan(parsed)) {
-      value = {
-        ...parsed,
-        workflow_items: parsed.workflow_items ?? [],
-        customization: {
-          ...parsed.customization,
-          layers: parsed.customization.layers ?? [],
-          stage_layers: parsed.customization.stage_layers ?? [],
-        },
-      };
+    // 只收 ⚠ 行:那是内核说人话的告警口径。旧内核不识别子命令时
+    // stderr 是 argparse 用法转储,不是告警,照旧安静降级。
+    value.kernel_warnings = (result.stderr ?? "")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith("⚠"));
+    if (result.status === 0) {
+      const parsed = JSON.parse(
+        (result.stdout ?? "").trim().split("\n").at(-1) ?? "{}");
+      if (validPlan(parsed)) {
+        value.plan = {
+          ...parsed,
+          workflow_items: parsed.workflow_items ?? [],
+          customization: {
+            ...parsed.customization,
+            layers: parsed.customization.layers ?? [],
+            stage_layers: parsed.customization.stage_layers ?? [],
+          },
+        };
+      }
     }
   } catch {
     // 旧内核没有命令、状态正在原子替换或只读投影超时：不影响任务。
   }
   cache.set(key, { fingerprint: currentFingerprint, value });
   return value;
+}
+
+export function readCurrentExecutionPlan(options: {
+  kernelRoot?: string;
+  workspace?: string;
+  python?: string;
+}): ExecutionPlan | undefined {
+  return readCurrentExecutionPlanReading(options).plan;
 }
 
 export function clearExecutionPlanCache(): void {

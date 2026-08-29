@@ -16,14 +16,25 @@ import {
 export function FinalPlanView({
   stages,
   diagnostics = [],
+  preview = false,
 }: {
   stages: WorkflowStagePlan[];
   diagnostics?: WorkflowDiagnostic[];
+  /** 没拿到服务端编译产物时必须亮明身份:这是本地即时预览,资产解析
+   * 与降级裁决发生在下单时——预览冒充编译产物撞"呈现必须与实际一致"
+   * 红线(2026-08-30 审计 P0-5)。 */
+  preview?: boolean;
 }) {
   return <section className="wf-overview" aria-labelledby="wf-final-title">
-    <header><div><span>最终方案</span><h3 id="wf-final-title">Agent 实际执行的单一方案</h3></div>
+    <header><div><span>{preview ? "最终方案（本地预览）" : "最终方案"}</span>
+      <h3 id="wf-final-title">{preview
+        ? "编排预览——非编译产物" : "Agent 实际执行的单一方案"}</h3></div>
       <em>{stages.reduce((sum, stage) => sum + stage.items.length, 0)} 个执行项</em>
     </header>
+    {preview && <p className="wf-preview-banner">
+      这是当前编排的即时预览。真正作用于 Agent 的方案在下单时由服务端
+      按任务范围解析资产并编译定格；无法安全应用的单项届时会明确降级。
+    </p>}
     {diagnostics.length > 0 && <div className="wf-diagnostics">
       {diagnostics.map((diagnostic, index) => <p key={`${diagnostic.code}-${index}`}
         className={diagnostic.severity}>
@@ -82,10 +93,13 @@ export function DependencyView({
   stages,
   catalog,
   manifest = [],
+  preview = false,
 }: {
   stages: WorkflowStagePlan[];
   catalog: WorkflowAssetCatalogItem[];
   manifest?: WorkflowExecutionProfile["asset_manifest"];
+  /** 无任务定格 manifest 时,状态列是"当前货架"而非"任务固定"事实。 */
+  preview?: boolean;
 }) {
   const dependencies = new Map<string, {
     ref: ReturnType<typeof stageAssetRefs>[number];
@@ -103,6 +117,10 @@ export function DependencyView({
     <header><div><span>依赖</span><h3 id="wf-dependency-title">版本、来源与可用状态</h3></div>
       <em>{dependencies.size} 个固定依赖</em>
     </header>
+    {preview && dependencies.size > 0 && <p className="wf-preview-banner">
+      下表状态是当前货架的实时可用性。下单时会按任务的仓库/技术栈/业务域
+      重新解析并固定到任务里，届时的结果以任务详情为准。
+    </p>}
     {!dependencies.size ? <div className="wf-empty">
       <strong>没有额外资产依赖</strong><span>当前方案只使用平台标准执行项。</span>
     </div> : <div className="wf-dependency-table" role="table">

@@ -53,7 +53,7 @@ import {
   workflowLabel,
 } from "./kernelChoices.ts";
 import {
-  readCurrentExecutionPlan,
+  readCurrentExecutionPlanReading,
   readExecutionPlaybookOptions,
   type ExecutionPlan,
   type ExecutionPlaybookOption,
@@ -227,6 +227,7 @@ import {
 } from "./knowledgeInsights.ts";
 import {
   listHostSkillShelf,
+  listHostSkillShelfRoot,
   type HostSkillShelf,
   type HostSkillShelfEntry,
 } from "./hostSkillShelf.ts";
@@ -629,10 +630,13 @@ export interface TaskSummary {
   repositories?: string[];
   /** 首次人工确认的仓库技术画像在下单时固定，后续修改只影响新任务。 */
   repository_profiles?: RepositoryProfile[];
-  /** 用户在下单时从各业务仓能力目录中明确选中的 Skill。空数组表示
-   * 新任务明确不加载仓内 Skill；字段缺席仅用于兼容旧任务此前的全量
-   * 自动加载。Skill 是建议上下文，不是流程步骤或完成证据。 */
+  /** Git 仓库原生 Skill 的固定快照。字段缺席表示尚未进入代码现场；
+   * 首次 clone 后只发现 Git 已跟踪内容并立即固化，平台不提供发布、
+   * 编辑或知识入库。空数组表示该 commit 没有可用仓内 Skill。 */
   repository_skills?: SelectedRepositorySkill[];
+  /** 本任务从团队知识货架固定的 Skill 形态资产；正文位于任务快照，
+   * 页面只展示元数据，Agent 仍通过 Skill 索引按需读取。 */
+  team_skills?: HostSkillShelfEntry[];
   /** 用户下单时明确选择的业务模块及不可变知识快照。只把标题、摘要、
    * 适用场景和任务内路径目录交给 Agent，正文必须按需读取；模块后来
    * 更新不会改写运行中或历史任务。 */
@@ -678,6 +682,11 @@ export interface TaskSummary {
   workflow_profile?: WorkflowExecutionProfileV2;
   /** 标准目录暂不可读等非阻断降级；不能静默假装定制已生效。 */
   workflow_profile_warning?: string;
+  /** 活方案对拍告警(详情投影时算):内核 stderr 的 ⚠、执行方案里的
+   * profile_invalid 诊断、以及"任务定了格但活方案没吃到定格"的失配。
+   * 曾经整条链路静默——界面展示创建时定格副本,Agent 实际跑平台默认,
+   * 无人被通知(2026-08-30 审计 P0-1)。有值必须标红呈现。 */
+  execution_plan_alerts?: string[];
   /** 新任务在创建时固定团队 Skill；旧任务缺席时才兼容读取实时货架。 */
   host_skills_pinned?: boolean;
   host_skill_snapshot_warnings?: string[];
@@ -2516,13 +2525,32 @@ export class TaskService {
     const record = task.notifyRecord;
     const progress = this.taskProgress(task);
     const summary = task.summary;
-    const executionPlan = includeKnowledgeUsage
-      ? readCurrentExecutionPlan({
+    const planReading = includeKnowledgeUsage
+      ? readCurrentExecutionPlanReading({
           kernelRoot: this.options.host?.kernelRoot,
           workspace: task.cwd ?? summary.workspace,
           python: this.options.host?.python,
         })
       : undefined;
+    const executionPlan = planReading?.plan;
+    // 活方案对拍(审计 P0-1):定制链路上任何一环退化都必须走到人眼前。
+    const planAlerts: string[] = [];
+    if (planReading) {
+      planAlerts.push(...planReading.kernel_warnings);
+      for (const diag of executionPlan?.customization.diagnostics ?? []) {
+        if (diag.code === "profile_invalid") {
+          planAlerts.push(`⚠ ${diag.message}`);
+        }
+      }
+      if (!planAlerts.length && summary.workflow_profile && executionPlan
+          && executionPlan.customization.effective_source
+            !== "compiled_final_plan") {
+        planAlerts.push(
+          "⚠ 本任务下单时定格了工作流,但内核当前执行方案未按定格生效"
+          + `(实际来源: ${executionPlan.customization.effective_source})`
+          + "——Agent 正按平台默认执行,页面上的定格方案与实际不一致。");
+      }
+    }
     const contractStep = this.reviewContractStep(task, summary.waiting);
     const choiceEffects = stepChoiceEffects(
       this.options.host?.kernelRoot,
@@ -2559,6 +2587,7 @@ export class TaskService {
         : undefined,
       progress,
       execution_plan: executionPlan,
+      ...(planAlerts.length ? { execution_plan_alerts: planAlerts } : {}),
       token_usage: tokenUsageSnapshot(task.tokenUsage),
       waiting: summary.waiting
         ? {
@@ -3499,6 +3528,8 @@ export class TaskService {
       business_module_ids: string[]; repositories: string[];
       technologies: string[];
     }>;
+    /** 团队管理的 Skill 形态知识目录；正文不随下单接口返回。 */
+    team_skills: HostSkillShelfEntry[];
     /** 服务级缺的配置(管理员去补)。非空=不给下单。 */
     blockers: Array<{ key: string; label: string; where: "admin" | "me" }>;
     /** 本部署要不要这两把个人令牌(由形态决定,见下方注释)。 */
@@ -3514,6 +3545,7 @@ export class TaskService {
     }> = [];
     let engineeringKnowledge: ReturnType<typeof publishedEngineeringKnowledge>
       = [];
+    let teamSkills: HostSkillShelfEntry[] = [];
     const workflowCatalogRoot = this.options.host?.kernelRoot
       ?? this.options.workflowCatalogRoot;
     const executionPlaybooks = readExecutionPlaybookOptions(
@@ -3545,6 +3577,13 @@ export class TaskService {
     } catch (error) {
       this.options.log?.(
         `[engineering-knowledge] 下单目录读取失败(fail-open): ${String(error)}`);
+    }
+    try {
+      teamSkills = listHostSkillShelf(this.options.dataDir).skills
+        .filter((skill) => skill.loadable);
+    } catch (error) {
+      this.options.log?.(
+        `[team-skills] 下单目录读取失败(fail-open): ${String(error)}`);
     }
     try {
       executionStageDefaults = validateExecutionStageCustomizations(
@@ -3592,6 +3631,7 @@ export class TaskService {
           repositories: item.repositories,
           technologies: item.technologies,
         })),
+      team_skills: teamSkills,
       blockers,
       needs: {
         // 个人令牌该不该要,由部署形态决定(同上:只拦真会咬人的)。
@@ -3813,6 +3853,19 @@ export class TaskService {
     return { skills: mergedSkills };
   }
 
+  /** 仓内知识的事实源只有 Git。首次进入 checkout 时把发现到的精确
+   * commit/path/digest 固定到任务；MFC 不产生自己的发布版本，也不在
+   * 后续会话重新扫描已经被 Agent 修改过的工作区。 */
+  private freezeRepositoryNativeSkills(
+    task: TaskState,
+    materialized: ReturnType<typeof materializeRepositorySkills>,
+  ): void {
+    if (task.summary.repository_skills !== undefined) return;
+    task.summary.repository_skills = materialized.entries
+      .map(({ skill }) => ({ ...skill }));
+    this.persist(task);
+  }
+
   create(
     requirement: string,
     options: {
@@ -3866,6 +3919,9 @@ export class TaskService {
       repositorySkillCatalogToken?: string;
       selectedRepositorySkillIds?: string[];
       repositorySkills?: SelectedRepositorySkill[];
+      /** 普通下单从统一资源清单提交的团队 Skill 路径；默认匹配项由
+       * 前端勾选，工作流精确引用的 Skill 会在服务端强制并入。 */
+      selectedHostSkillPaths?: string[];
       /** 普通下单只提交正式模块 ID；服务端在创建现场时固定当时的已发布
        * 资产版本与正文快照，浏览器不能自报内容。 */
       selectedBusinessModuleIds?: string[];
@@ -4012,8 +4068,10 @@ export class TaskService {
       }
     }
     const directResources = options.repositorySkills !== undefined;
+    const explicitCatalogSelection = options.repositorySkillCatalogToken !== undefined
+      || options.selectedRepositorySkillIds !== undefined;
     const selectedResources = !options.preserveUndefinedRepositorySkills
-        && !directResources
+        && !directResources && explicitCatalogSelection
       ? this.selectedResourcesFromCatalog({
           catalogToken: options.repositorySkillCatalogToken,
           selectedSkillIds: options.selectedRepositorySkillIds,
@@ -4032,14 +4090,14 @@ export class TaskService {
             }
             return { ...skill };
           })
-        : selectedResources!.skills;
+      : selectedResources?.skills;
     if ((repositorySkills?.length ?? 0) > 20) {
       throw new Error("每个任务最多选择 20 个仓内 Skill");
     }
     const workflowSelections = !options.workflowProfile
         && options.workflowDefinition !== undefined
       ? workflowKnowledgeSelections(options.workflowDefinition)
-      : { businessModuleIds: [], engineeringKnowledgeIds: [] };
+      : { businessModuleIds: [], engineeringKnowledgeIds: [], teamSkillIds: [] };
     const selectedBusinessModuleIds = [...new Set([
       ...(options.selectedBusinessModuleIds ?? []),
       ...workflowSelections.businessModuleIds,
@@ -4098,6 +4156,7 @@ export class TaskService {
     let issueEnvironments: IssueEnvironmentRef[] = [];
     let businessModules: SelectedBusinessModule[] = [];
     let engineeringKnowledge: SelectedEngineeringKnowledge[] = [];
+    let teamSkills: HostSkillShelfEntry[] = [];
     let hostSkillSnapshotWarnings: string[] = [];
     try {
       if (options.businessModules !== undefined) {
@@ -4146,12 +4205,36 @@ export class TaskService {
       }
       const hostSkillSnapshotRoot = join(workspace, "host-skill-snapshot");
       mkdirSync(hostSkillSnapshotRoot, { recursive: true, mode: 0o750 });
+      const hostSkillSourceRoot = options.hostSkillSnapshotSourceWorkspace
+        ? join(options.hostSkillSnapshotSourceWorkspace, "host-skill-snapshot")
+        : join(this.options.dataDir, "skills");
+      let selectedHostSkillPaths = options.selectedHostSkillPaths === undefined
+        ? undefined : [...new Set(options.selectedHostSkillPaths
+          .map((item) => String(item).trim()).filter(Boolean))];
+      // 专业工作流是用户明确编排，引用的团队 Skill 不能被普通清单里的
+      // 一次取消勾选悄悄拿掉；核心流程仍不依赖任何知识资产。
+      if (selectedHostSkillPaths && workflowSelections.teamSkillIds.length
+          && !options.hostSkillSnapshotSourceWorkspace) {
+        try {
+          const shelf = listHostSkillShelf(this.options.dataDir);
+          const required = shelf.skills.filter((skill) =>
+            workflowSelections.teamSkillIds.includes(
+              (skill.source_path ?? skill.path).split("/")[0]))
+            .map((skill) => skill.path);
+          selectedHostSkillPaths = [...new Set([
+            ...selectedHostSkillPaths, ...required,
+          ])];
+        } catch (error) {
+          this.options.log?.(
+            `[host-skill-snapshot] 工作流团队 Skill 目录解析失败(fail-open): ${String(error)}`);
+        }
+      }
       const hostSkillSnapshot = materializeHostSkills({
-        sourceRoot: options.hostSkillSnapshotSourceWorkspace
-          ? join(options.hostSkillSnapshotSourceWorkspace, "host-skill-snapshot")
-          : join(this.options.dataDir, "skills"),
+        sourceRoot: hostSkillSourceRoot,
         workspaceRoot: workspace,
         snapshotRoot: hostSkillSnapshotRoot,
+        selectedSourcePaths: options.hostSkillSnapshotSourceWorkspace
+          ? undefined : selectedHostSkillPaths,
         context: {
           repositories,
           technologies: profileTechnologies,
@@ -4159,6 +4242,11 @@ export class TaskService {
         },
       });
       hostSkillSnapshotWarnings = hostSkillSnapshot.warnings;
+      try {
+        teamSkills = listHostSkillShelfRoot(hostSkillSnapshotRoot).skills;
+      } catch (error) {
+        hostSkillSnapshotWarnings.push(`团队 Skill 清单读取失败：${String(error)}`);
+      }
       for (const warning of hostSkillSnapshotWarnings) {
         this.options.log?.(
           `[host-skill-snapshot] 任务 ${id}: ${warning}`);
@@ -4236,6 +4324,7 @@ export class TaskService {
             === profile.repository.replace(/\/+$/, "").replace(/\.git$/i, "").toLowerCase()))
         : undefined,
       repository_skills: repositorySkills,
+      team_skills: teamSkills.length ? teamSkills : undefined,
       business_modules: businessModules.length ? businessModules : undefined,
       engineering_knowledge: engineeringKnowledge.length
         ? engineeringKnowledge : undefined,
@@ -6688,6 +6777,7 @@ export class TaskService {
           snapshotRoot: join(task.cwd, ".mae-flow-work", "repository-skills"),
           reservedNames: hostSkillNames(this.options.dataDir),
         });
+        this.freezeRepositoryNativeSkills(task, materialized);
         repositorySkillPaths = materialized.paths;
         repositorySkillResources = materialized.entries.map(({ path, skill }) => ({
           id: skill.id,
@@ -7761,6 +7851,7 @@ export class TaskService {
           snapshotRoot: join(analysisRoot, ".mae-flow-work", "repository-skills"),
           reservedNames: hostSkillNames(this.options.dataDir),
         });
+        this.freezeRepositoryNativeSkills(task, materialized);
         repositorySkillPaths = materialized.paths;
         loadedRepositorySkillNames = materialized.names;
         repositorySkillResources = materialized.entries.map(({ path, skill }) => ({
@@ -7832,6 +7923,7 @@ export class TaskService {
             snapshotRoot: join(cwd, ".mae-flow-work", "repository-skills"),
             reservedNames: hostSkillNames(this.options.dataDir),
           });
+          this.freezeRepositoryNativeSkills(task, materialized);
           repositorySkillPaths = materialized.paths;
           loadedRepositorySkillNames = materialized.names;
           repositorySkillResources = materialized.entries.map(({ path, skill }) => ({
@@ -8779,6 +8871,7 @@ export class TaskService {
         snapshotRoot: join(task.cwd, ".mae-flow-work", "repository-skills"),
         reservedNames: hostSkillNames(this.options.dataDir),
       });
+      this.freezeRepositoryNativeSkills(task, materialized);
       repositorySkillPaths = materialized.paths;
       repositorySkillResources = materialized.entries.map(({ path, skill }) => ({
         id: skill.id,

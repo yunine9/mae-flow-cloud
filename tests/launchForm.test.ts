@@ -91,6 +91,32 @@ test("业务模块目录不返回正文；下单只交 ID，服务端固定当�
   /MODULE_BODY_MUST_NOT_BE_IN_CATALOG/);
 });
 
+test("团队 Skill 进入统一下单目录；任务只固定资源清单中勾选的版本", () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-lf-team-skill-"));
+  for (const [name, marker] of [["java-check", "JAVA-CHECK-BODY"],
+    ["cpp-check", "CPP-CHECK-BODY"]] as const) {
+    const directory = join(dataDir, "skills", name);
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, "SKILL.md"), [
+      "---", `name: ${name}`, `description: ${name} guide`, "---", "", marker,
+    ].join("\n"));
+  }
+  const service = new TaskService({
+    dataDir, provider: "a", model: "a-1", maxConcurrent: 0,
+    modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
+  });
+  const options = service.launchOptions();
+  assert.deepEqual(options.team_skills.map((item) => item.path).sort(),
+    ["cpp-check/SKILL.md", "java-check/SKILL.md"]);
+  assert.doesNotMatch(JSON.stringify(options), /JAVA-CHECK-BODY|CPP-CHECK-BODY/,
+    "下单目录不能返回 Skill 正文");
+
+  const task = service.create("只采用 Java 检视知识", {
+    selectedHostSkillPaths: ["java-check/SKILL.md"],
+  });
+  assert.deepEqual(task.team_skills?.map((item) => item.name), ["java-check"]);
+});
+
 test("模型默认自动派生:管理员只贴 models.json 也能直接用", () => {
   // 实测踩到:服务起来后表单是空的,人不知道还差"再手打一遍
   // provider/model"这一步。贴完就该能用——第一个 provider 的第一个

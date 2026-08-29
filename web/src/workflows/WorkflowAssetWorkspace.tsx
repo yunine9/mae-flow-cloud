@@ -37,7 +37,13 @@ type ActionDialog = {
   destructive?: boolean;
 };
 
-export function WorkflowAssetWorkspace() {
+export function WorkflowAssetWorkspace({
+  initialWorkflowId,
+}: {
+  /** 下单选择器"查看方案"带来的直达目标:挂载时直接打开它的详情
+   * (复制/编辑入口都在详情),不让用户在首页再找一遍(审计 P1-9)。 */
+  initialWorkflowId?: string;
+} = {}) {
   const [page, setPage] = useState<Page>("library");
   const [workflows, setWorkflows] = useState<WorkflowAssetSummary[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
@@ -55,6 +61,8 @@ export function WorkflowAssetWorkspace() {
   const [notice, setNotice] = useState("");
   const [createDialog, setCreateDialog] = useState<CreateDialog>();
   const [actionDialog, setActionDialog] = useState<ActionDialog>();
+  // 冲突暂存的失效计数:恢复/丢弃后靠它触发重读,不把暂存搬进状态。
+  const [stashVersion, setStashVersion] = useState(0);
 
   async function refreshLibrary(showLoading = false): Promise<void> {
     if (showLoading) setLoading(true);
@@ -96,6 +104,20 @@ export function WorkflowAssetWorkspace() {
     }).finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, []);
+
+  useEffect(() => {
+    if (!initialWorkflowId) return;
+    let alive = true;
+    setSelectedId(initialWorkflowId);
+    setPage("detail");
+    setDetail(undefined);
+    setDetailLoading(true);
+    getWorkflowAsset(initialWorkflowId)
+      .then((loaded) => { if (alive) setDetail(loaded); })
+      .catch((cause) => { if (alive) setError(messageOf(cause)); })
+      .finally(() => { if (alive) setDetailLoading(false); });
+    return () => { alive = false; };
+  }, [initialWorkflowId]);
 
   async function openWorkflow(asset: WorkflowAssetSummary): Promise<void> {
     setSelectedId(asset.id);
@@ -218,7 +240,28 @@ export function WorkflowAssetWorkspace() {
   )), [detail, standard]);
 
   if (page === "editor" && detail && definition && standard && !baselineMismatch) {
-    return <WorkflowEditor name={detail.asset.name}
+    const stash = stashVersion >= 0 ? readConflictStash(detail.asset.id) : undefined;
+    const stashDiffers = stash
+      && JSON.stringify(stash.definition) !== JSON.stringify(definition);
+    return <div className="wf-asset-workspace">
+      {stashDiffers && <div className="wf-state-banner warning" role="status">
+        <strong>发现冲突时的本机暂存</strong>
+        <span>
+          上次保存冲突时（{new Date(stash.stashed_at).toLocaleString()}）暂存的
+          {stash.definition.edits.length} 项变更还留在本机，可恢复到编辑器后
+          在最新草稿上重新合并。
+        </span>
+        <button type="button" onClick={() => {
+          setDefinition(structuredClone(stash.definition));
+          clearConflictStash(detail.asset.id);
+          setStashVersion((version) => version + 1);
+        }}>恢复我的改动</button>
+        <button type="button" onClick={() => {
+          clearConflictStash(detail.asset.id);
+          setStashVersion((version) => version + 1);
+        }}>丢弃暂存</button>
+      </div>}
+      <WorkflowEditor name={detail.asset.name}
       description={detail.asset.description} definition={definition}
       base={standard} catalog={catalog} busy={busy} error={editorError}
       onDefinitionChange={(next) => { setDefinition(next); setEditorError(""); }}
@@ -230,12 +273,19 @@ export function WorkflowAssetWorkspace() {
           .then((updated) => {
             setDetail(updated);
             setDefinition(structuredClone(updated.draft.definition));
+            clearConflictStash(updated.asset.id);
+            setStashVersion((version) => version + 1);
             void refreshLibrary();
           }).catch((cause) => {
             if (cause instanceof WorkflowApiError
                 && cause.code === "revision_conflict") {
+              // 重合并不能全靠人脑记住刚才改了什么(审计 P1-10):
+              // 落一份本机暂存,刷新回来编辑器会主动提示恢复。
+              writeConflictStash(detail.asset.id, definition);
+              setStashVersion((version) => version + 1);
               setEditorError(`草稿已被别人更新到 r${cause.currentRevision ?? "?"}；`
-                + "你的修改没有覆盖对方。返回详情刷新后再合并修改。");
+                + "你的修改没有覆盖对方，已在本机暂存一份。"
+                + "返回详情刷新草稿后再进编辑器，可一键恢复你的改动再合并。");
             } else setEditorError(messageOf(cause));
           }).finally(() => setBusy(false));
       }}
@@ -244,7 +294,8 @@ export function WorkflowAssetWorkspace() {
           setPage("detail");
           setEditorError("");
         }
-      }} />;
+      }} />
+    </div>;
   }
 
   return <div className="wf-asset-workspace">
@@ -288,6 +339,45 @@ export function WorkflowAssetWorkspace() {
       }}
       onSubmit={(reason) => void runAction(actionDialog, reason)} />}
   </div>;
+}
+
+/* 冲突暂存(审计 P1-10):revision_conflict 时本地未保存的编辑不能就地
+ * 蒸发。只存本机 localStorage,不含任何令牌/密钥,失败静默——暂存是
+ * 兜底便利,不是第二个草稿权威。 */
+type ConflictStash = { definition: WorkflowDefinition; stashed_at: string };
+
+function conflictStashKey(id: string): string {
+  return `mfc-wf-conflict-stash:${id}`;
+}
+
+function readConflictStash(id: string): ConflictStash | undefined {
+  try {
+    const raw = localStorage.getItem(conflictStashKey(id));
+    if (!raw) return undefined;
+    const parsed = JSON.parse(raw) as Partial<ConflictStash>;
+    return parsed?.definition && typeof parsed.stashed_at === "string"
+      ? parsed as ConflictStash : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeConflictStash(id: string, definition: WorkflowDefinition): void {
+  try {
+    localStorage.setItem(conflictStashKey(id), JSON.stringify({
+      definition, stashed_at: new Date().toISOString(),
+    }));
+  } catch {
+    // 存不进去(隐私模式/配额)就只剩错误提示,不阻塞保存流程。
+  }
+}
+
+function clearConflictStash(id: string): void {
+  try {
+    localStorage.removeItem(conflictStashKey(id));
+  } catch {
+    // 清不掉也无妨:恢复入口只在内容与当前不同才出现。
+  }
 }
 
 function emptyDefinition(

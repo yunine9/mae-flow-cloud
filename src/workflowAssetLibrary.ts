@@ -116,6 +116,10 @@ export interface WorkflowAssetRecord {
   draft_digest: string;
   published_digest?: string;
   copied_from?: WorkflowSourceRef;
+  /** 最新已知适用范围快照(创建/存草稿时同步)。列表页要直接回答
+   * "这个方案适用于哪"(审计 P2-14),不能逼人逐个点详情;缺席=
+   * 旧资产,前端按未声明处理。 */
+  applicability?: WorkflowDefinition["applicability"];
   created_at: string;
   updated_at: string;
 }
@@ -152,6 +156,7 @@ export interface WorkflowAssetSummary {
   copied_from?: WorkflowSourceRef;
   /** 归档只影响这一位:新任务不能再选它;已有引用与历史都在。 */
   selectable_for_tasks: boolean;
+  applicability?: WorkflowDefinition["applicability"];
   updated_at: string;
 }
 
@@ -384,6 +389,8 @@ export class WorkflowAssetLibrary {
       ...(record.copied_from ? { copied_from: record.copied_from } : {}),
       selectable_for_tasks:
         record.status === "published" && record.latest_version > 0,
+      ...(record.applicability
+        ? { applicability: record.applicability } : {}),
       updated_at: record.updated_at,
     };
   }
@@ -448,6 +455,7 @@ export class WorkflowAssetLibrary {
       draft_revision: 1,
       draft_digest: digest,
       ...(input.copied_from ? { copied_from: input.copied_from } : {}),
+      applicability: definition.applicability,
       created_at: at,
       updated_at: at,
     };
@@ -646,6 +654,7 @@ export class WorkflowAssetLibrary {
     this.atomicWriteJson(join(this.assetDir(id), "draft.json"), next);
     record.draft_revision = next.revision;
     record.draft_digest = digest;
+    record.applicability = definition.applicability;
     record.updated_at = at;
     // 改已发布资产 = 开新草稿周期:published → draft;vN 原样躺着。
     if (record.status === "published") record.status = "draft";

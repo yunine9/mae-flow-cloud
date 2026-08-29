@@ -217,9 +217,9 @@ export function BusinessModuleLibrary({ admin }: { admin: boolean }) {
 
   return <section className="business-module-library" aria-labelledby="business-module-library-title">
     <header className="business-module-library-head">
-      <div><span className="section-kicker">BUSINESS LANDSCAPE</span>
-        <h3 id="business-module-library-title">业务模块与模块知识</h3>
-        <p>模块沉淀领域概念、规则、流程和边界；知识可用文档、Skill、规则或示例呈现，并可限定到模块内某些仓库。</p>
+      <div><span className="section-kicker">TEAM ASSETS / MODULES</span>
+        <h3 id="business-module-library-title">业务模块</h3>
+        <p>每个模块是一个业务抽屉：说明业务边界、关联代码仓，并管理团队沉淀的模块知识。</p>
       </div>
       <div><span>{catalog?.modules.filter((item) => item.status === "active").length ?? 0} 个启用</span>
         {admin && <button type="button" className="primary"
@@ -229,18 +229,6 @@ export function BusinessModuleLibrary({ admin }: { admin: boolean }) {
           {loading ? "读取中…" : "刷新"}</button>
       </div>
     </header>
-
-    <div className="business-module-flow" aria-label="业务模块使用方式">
-      <div><i>1</i><span><strong>描述业务语义</strong><small>领域概念、规则、流程与边界</small></span></div>
-      <b aria-hidden>→</b>
-      <div><i>2</i><span><strong>治理模块知识</strong><small>Owner 组织发布、更新和归档</small></span></div>
-      <b aria-hidden>→</b>
-      <div><i>3</i><span><strong>任务按需使用</strong><small>发起时关联范围并固定当时版本</small></span></div>
-    </div>
-
-    <div className="business-module-dimension-bar">
-      <span><strong>业务性质 · 多种形态 · 仓库作用域</strong><small>业务知识不再挂语言标签；涉及实现方法的内容应单独沉淀为工程知识。</small></span>
-    </div>
 
     {createOpen && <form className="business-module-create" onSubmit={async (event) => {
       event.preventDefault(); setCreateBusy(true); setError("");

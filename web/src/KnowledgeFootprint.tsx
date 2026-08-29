@@ -57,11 +57,11 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus,
   const catalog = [
     { title: "业务模块知识", note: "由模块 Owner 治理；按任务固定版本",
       items: resources.filter((item) => item.scope === "module") },
-    { title: "团队工程知识与 Skill", note: "按仓库、技术栈和模块上下文匹配",
+    { title: "团队通用知识", note: "由团队资产治理，按任务范围匹配并固定版本",
       items: resources.filter((item) => item.scope === "team") },
-    { title: "代码仓 Skill", note: "扫描后默认勾选；正文由 Agent 按需读取",
+    { title: "代码仓原生能力", note: "来自任务固定的 Git commit；平台只读取，不管理",
       items: resources.filter((item) => !!item.repository && item.kind === "skill") },
-    { title: "项目规则", note: "代码仓内自动发现",
+    { title: "代码仓项目规则", note: "Agent 从 Git 工作现场自主发现",
       items: resources.filter((item) => item.kind === "rules"
         && !item.repository && item.scope !== "team") },
   ].filter((group) => group.items.length > 0);
@@ -114,7 +114,7 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus,
     {catalogOpen && <OverlayDialog ariaLabel="本任务可用知识"
       title="本任务可用知识" onClose={() => setCatalogOpen(false)}>
       <p className="knowledge-catalog-note">
-        三类来源分开呈现。可用≠已读；点“提醒 Agent 使用”会真实送达，送不了会明确报错，不会假装生效。
+        平台知识与 Git 原生上下文分开呈现。可用≠已读；提醒会真实送达，送不了会明确报错。
       </p>
       {feedback && <p className="knowledge-workbench-feedback" role="status">
         {feedback}</p>}
@@ -137,7 +137,7 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus,
           </article>)}
         </div>)}
         {!catalog.length && <div className="knowledge-footprint-empty">
-          本任务还没有可补充的已有知识；可直接沉淀新知识，或在下次发起时关联业务模块、技术画像与仓内 Skill。</div>}
+          本任务还没有可补充的平台知识；可直接沉淀新知识，或在下次发起时关联业务模块并确认技术画像。</div>}
       </div>
     </OverlayDialog>}
 
@@ -225,7 +225,8 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus,
       {consumed.slice(0, 8).map((item) => <article key={item.id}
         className={`knowledge-resource kind-${item.kind}`}>
         <span>{item.scope === "module" ? "模块知识"
-          : item.scope === "team" ? "团队工程知识" : KIND[item.kind]}</span>
+          : item.scope === "team" ? "团队通用知识"
+            : item.repository ? "仓库原生" : KIND[item.kind]}</span>
         <strong title={item.name}>{item.name}</strong>
         <code title={item.path}>{item.path}</code>
         <small>{item.read_count > 0 ? `读取/检索 ${item.read_count} 次`

@@ -2,12 +2,13 @@
  * 业务仓 Skill 的运行时装配。
  *
  * 仓库内容是不可信输入，而 Pi 的资源加载发生在工具 Gate 之前；因此
- * 不能把整个仓库目录直接交给 Pi 扫描。这里先把服务端拍板的精确
- * SKILL.md 做路径/软链/体积校验，再复制为任务内只读快照。主会话、
- * 子 Agent 与恢复会话始终读取同一份快照，仓库里的 Skill 后续被代码
- * Agent 改动也不会让规则半路换血。
+ * 不能把整个仓库目录直接交给 Pi 扫描。仓库原生模式只发现 Git 已跟踪
+ * 的 Skill 包，临时注入或被忽略的 .claude/.cac 等内容一律不采用；
+ * 随后做路径/软链/体积校验并复制为任务内只读快照。MFC 只是消费 Git
+ * 事实，不承担仓内知识的编辑、发布或版本管理。
  */
 
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -268,8 +269,40 @@ function materializeOne(
   }
 }
 
-function legacySkills(binding: RepositoryWorkspaceBinding): SelectedRepositorySkill[] {
+function gitOutput(workspace: string, args: string[]): string | undefined {
+  const result = spawnSync("git", args, {
+    cwd: workspace,
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  return result.status === 0 ? result.stdout.trim() : undefined;
+}
+
+/** 整包必须来自 Git：入口已跟踪还不够，旁边混入一个未跟踪脚本，
+ * 整包复制时照样会越界。普通未跟踪与 .gitignore 命中的文件都查。 */
+function gitOwnsPackage(
+  binding: RepositoryWorkspaceBinding,
+  relativePath: string,
+): boolean {
+  const packagePath = relativePath.replace(/\\/g, "/").replace(/\/SKILL\.md$/, "");
+  if (gitOutput(binding.workspace,
+      ["ls-files", "--error-unmatch", "--", relativePath]) === undefined) {
+    return false;
+  }
+  const untracked = gitOutput(binding.workspace,
+    ["ls-files", "--others", "--exclude-standard", "--", packagePath]);
+  const ignored = gitOutput(binding.workspace,
+    ["ls-files", "--others", "--ignored", "--exclude-standard", "--", packagePath]);
+  return untracked !== undefined && ignored !== undefined
+    && !untracked && !ignored;
+}
+
+function repositoryNativeSkills(
+  binding: RepositoryWorkspaceBinding,
+): SelectedRepositorySkill[] {
   const found: SelectedRepositorySkill[] = [];
+  const revision = gitOutput(binding.workspace, ["rev-parse", "HEAD"]);
+  if (!revision) return found;
   for (const root of ROOTS) {
     const directory = join(binding.workspace, ...root.split("/"));
     if (!existsSync(directory)) continue;
@@ -279,29 +312,31 @@ function legacySkills(binding: RepositoryWorkspaceBinding): SelectedRepositorySk
         const relativePath = `${root}/${entry.name}/SKILL.md`;
         const file = join(directory, entry.name, "SKILL.md");
         if (!existsSync(file) || lstatSync(file).isSymbolicLink()
-            || !lstatSync(file).isFile()) continue;
+            || !lstatSync(file).isFile()
+            || !gitOwnsPackage(binding, relativePath)) continue;
         const digest = sha256(readFileSync(file));
         found.push({
-          id: `legacy:${sha256(`${binding.repository}\0${relativePath}\0${digest}`)}`,
+          id: `repository:${sha256(`${binding.repository}\0${revision}\0${relativePath}\0${digest}`)}`,
           repository: binding.repository,
-          revision: "legacy",
+          revision,
           name: basename(dirname(file)),
-          description: "旧任务兼容加载",
+          description: "仓库原生 Skill（由 Git 管理）",
           relative_path: relativePath,
           source: root.split("/")[0],
           digest,
         });
       }
     } catch {
-      // 旧任务兼容是 fail-open；坏目录不妨碍任务恢复。
+      // 仓内能力是 fail-open；坏目录不妨碍任务运行。
     }
   }
   return found;
 }
 
 /**
- * `selected === undefined` 仅代表旧任务：兼容此前“仓内全量加载”。新
- * 任务即使一个也没选，也会持久化空数组，因此真的什么都不加载。
+ * `selected === undefined` 表示任务尚未固定仓库原生能力：只从当前
+ * checkout 发现 Git 已跟踪 Skill。调用方首次物化后会把精确列表写回
+ * task.json；后续恢复只读取固定快照，不随工作区变化。
  */
 export function materializeRepositorySkills(options: {
   selected: SelectedRepositorySkill[] | undefined;
@@ -313,7 +348,7 @@ export function materializeRepositorySkills(options: {
   const reserved = new Set(
     [...(options.reservedNames ?? [])].map((name) => name.toLowerCase()));
   const candidates = options.selected === undefined
-    ? options.bindings.flatMap(legacySkills)
+    ? options.bindings.flatMap(repositoryNativeSkills)
     : options.selected;
   const paths: string[] = [];
   const names: string[] = [];

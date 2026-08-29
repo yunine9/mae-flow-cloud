@@ -44,11 +44,11 @@ import { BusinessModuleLibrary } from "./BusinessModuleLibrary";
 import { WorkflowAssetWorkspace } from "./workflows";
 
 type View = "team" | "mine" | "profile" | "history" | "users" | "settings"
-  | "knowledge" | "wishes" | "business";
+  | "knowledge" | "wishes";
 type Theme = "light" | "dark";
 type Density = "comfortable" | "compact";
 type MineScope = "all" | "waiting" | "intervention" | "active" | "delivered";
-type TeamAssetTab = "knowledge" | "workflows";
+type TeamAssetTab = "knowledge" | "modules" | "workflows";
 
 interface WorkspaceRoute {
   taskId: string;
@@ -280,7 +280,6 @@ function NavIcon({ name }: { name: View }) {
   if (name === "mine") return <svg viewBox="0 0 24 24" aria-hidden><circle cx="12" cy="8" r="3.25" /><path d="M5.5 19.25c.65-3.45 2.82-5.25 6.5-5.25s5.85 1.8 6.5 5.25" /></svg>;
   if (name === "profile") return <svg viewBox="0 0 24 24" aria-hidden><circle cx="9" cy="8" r="3" /><path d="M3.75 18.5c.55-3.15 2.3-4.75 5.25-4.75s4.7 1.6 5.25 4.75" /><circle cx="17.5" cy="15.5" r="2.25" /><path d="M17.5 11.75v1.5M17.5 17.75v1.5M13.75 15.5h1.5M19.75 15.5h1.5" /></svg>;
   if (name === "wishes") return <svg viewBox="0 0 24 24" aria-hidden><path d="M12 20.25s-7.25-4.1-7.25-10.1A4.4 4.4 0 0 1 12 6.8a4.4 4.4 0 0 1 7.25 3.35c0 6-7.25 10.1-7.25 10.1Z" /><path d="m17.5 3.75.45 1.3 1.3.45-1.3.45-.45 1.3-.45-1.3-1.3-.45 1.3-.45.45-1.3Z" /></svg>;
-  if (name === "business") return <svg viewBox="0 0 24 24" aria-hidden><rect x="4" y="4.5" width="6.5" height="6.5" rx="1" /><rect x="13.5" y="4.5" width="6.5" height="6.5" rx="1" /><rect x="8.75" y="14" width="6.5" height="6" rx="1" /><path d="M7.25 11v1.25H12M16.75 11v1.25H12M12 12.25V14" /></svg>;
   if (name === "users") return <svg viewBox="0 0 24 24" aria-hidden><circle cx="9" cy="8" r="3" /><path d="M3.75 18.5c.55-3.15 2.3-4.75 5.25-4.75s4.7 1.6 5.25 4.75M16.5 7.5h4M18.5 5.5v4" /></svg>;
   if (name === "settings") return <svg viewBox="0 0 24 24" aria-hidden><circle cx="12" cy="12" r="3" /><path d="M12 4.5v2M12 17.5v2M4.5 12h2M17.5 12h2M6.7 6.7l1.4 1.4M15.9 15.9l1.4 1.4M6.7 17.3l1.4-1.4M15.9 8.1l1.4-1.4" /></svg>;
   return <svg viewBox="0 0 24 24" aria-hidden><path d="M5 4.75h14A1.25 1.25 0 0 1 20.25 6v12A1.25 1.25 0 0 1 19 19.25H5A1.25 1.25 0 0 1 3.75 18V6A1.25 1.25 0 0 1 5 4.75Z" /><path d="M8 9h8M8 13h5" /></svg>;
@@ -302,6 +301,8 @@ export function App() {
   const [knowledgeInsightsLoading, setKnowledgeInsightsLoading] = useState(false);
   const [knowledgeInsightsError, setKnowledgeInsightsError] = useState("");
   const [teamAssetTab, setTeamAssetTab] = useState<TeamAssetTab>("knowledge");
+  /** 下单选择器"查看方案"带过来的直达目标;资产库挂载时消费。 */
+  const [workflowFocusId, setWorkflowFocusId] = useState("");
   const [myReviews, setMyReviews] = useState<ReviewRequest[]>([]);
   const [artifactTaskId, setArtifactTaskId] = useState("");
   const [artifactTaskSnapshot, setArtifactTaskSnapshot] = useState<TaskSummary>();
@@ -580,8 +581,7 @@ export function App() {
     mine: { title: "我的工作", description: "从发起到交付，集中推进你的每一项任务。" },
     profile: { title: "个人设置", description: "集中管理任务审批方式、CodeHub 提交身份和小鲁班通知。" },
     history: { title: "交付历史", description: "回看任务与交付记录；未启用历史投影时仍可浏览当前任务现场。" },
-    business: { title: "业务版图", description: "用模块组织领域概念、规则、流程和边界，并在业务语境中持续管理知识；责任人与仓库是治理信息。" },
-    knowledge: { title: "团队资产", description: "统一管理知识与可复用工作流；知识按需进入任务，工作流用精确版本编排阶段内的做法。" },
+    knowledge: { title: "团队资产", description: "管理团队通用知识、业务模块和工作流；代码仓内容始终由 Git 管理。" },
     wishes: { title: "许愿墙", description: "汇聚真实诉求和使用问题；每一个声音都应该被看见、被回应、被闭环。" },
     users: { title: "账号管理", description: "创建本地账号并分配管理员或开发权限。" },
     settings: { title: "服务设置", description: "集中管理模型网关和团队运行策略；部署链路在此只读自检。" },
@@ -597,7 +597,6 @@ export function App() {
         {session.role === "admin" ? <>
           <span className="nav-section-label">管理视角</span>
           <NavButton view="team" current={view} onSelect={setView} label="团队总览" badge={waitingCount} />
-          <NavButton view="business" current={view} onSelect={setView} label="业务版图" />
           <NavButton view="wishes" current={view} onSelect={setView} label="许愿墙" />
           <NavButton view="knowledge" current={view} onSelect={setView} label="团队资产" />
           <NavButton view="history" current={view} onSelect={setView} label="交付历史" />
@@ -610,7 +609,6 @@ export function App() {
           <NavButton view="profile" current={view} onSelect={setView} label="个人设置" />
           <span className="nav-section-label team-context">团队信息</span>
           <NavButton view="team" current={view} onSelect={setView} label="团队动态" badge={waitingCount} />
-          <NavButton view="business" current={view} onSelect={setView} label="业务版图" />
           <NavButton view="wishes" current={view} onSelect={setView} label="许愿墙" />
           <NavButton view="knowledge" current={view} onSelect={setView} label="团队资产" />
           <NavButton view="history" current={view} onSelect={setView} label="交付历史" />
@@ -624,7 +622,7 @@ export function App() {
     </aside>
 
     <div className="workspace">
-      <header className="workspace-header"><div><div className="eyebrow">MAE-FLOW CLOUD</div><h1>{header.title}</h1><p className={view === "mine" ? "header-context-line" : undefined}>{view === "mine" && <span className="header-user-context">{session.username}</span>}<span>{header.description}</span></p></div><div className="workspace-header-actions">{view !== "wishes" && view !== "business" && <TaskSyncIndicator state={taskSync} onRetry={refresh} />}{relevantWaiting > 0 && view !== "history" && view !== "users" && view !== "settings" && <div className="header-attention"><span className="attention-pulse" aria-hidden /><span><strong>{relevantWaiting}</strong>{view === "mine" ? " 项需要我处理" : " 项工作等待决策"}</span></div>}{view === "mine" && session.role !== "admin" && <div className="header-launch-gate"><button type="button" className="header-launch" disabled={!launchEntry.enabled} title={launchEntry.title} aria-label={launchEntry.ariaLabel} onClick={() => { if (launchEntry.enabled) setLaunchOpen(true); }}><svg viewBox="0 0 20 20" aria-hidden>{launchEntry.enabled ? <path d="M10 4v12M4 10h12" /> : <><rect x="5" y="8.5" width="10" height="8" rx="1.5" /><path d="M7.5 8.5V6.75a2.5 2.5 0 0 1 5 0V8.5" /></>}</svg><span>发起新任务</span></button>{launchEntry.helper && (launchEntry.action ? <button type="button" className="header-unlock" title={launchEntry.title} onClick={() => launchEntry.action === "profile" ? setView("profile") : void refreshLaunchGate(true)}>{launchEntry.helper}<svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg></button> : <span className="header-unlock is-status" title={launchEntry.title}>{launchEntry.helper}</span>)}</div>}</div></header>
+      <header className="workspace-header"><div><div className="eyebrow">MAE-FLOW CLOUD</div><h1>{header.title}</h1><p className={view === "mine" ? "header-context-line" : undefined}>{view === "mine" && <span className="header-user-context">{session.username}</span>}<span>{header.description}</span></p></div><div className="workspace-header-actions">{view !== "wishes" && <TaskSyncIndicator state={taskSync} onRetry={refresh} />}{relevantWaiting > 0 && view !== "history" && view !== "users" && view !== "settings" && <div className="header-attention"><span className="attention-pulse" aria-hidden /><span><strong>{relevantWaiting}</strong>{view === "mine" ? " 项需要我处理" : " 项工作等待决策"}</span></div>}{view === "mine" && session.role !== "admin" && <div className="header-launch-gate"><button type="button" className="header-launch" disabled={!launchEntry.enabled} title={launchEntry.title} aria-label={launchEntry.ariaLabel} onClick={() => { if (launchEntry.enabled) setLaunchOpen(true); }}><svg viewBox="0 0 20 20" aria-hidden>{launchEntry.enabled ? <path d="M10 4v12M4 10h12" /> : <><rect x="5" y="8.5" width="10" height="8" rx="1.5" /><path d="M7.5 8.5V6.75a2.5 2.5 0 0 1 5 0V8.5" /></>}</svg><span>发起新任务</span></button>{launchEntry.helper && (launchEntry.action ? <button type="button" className="header-unlock" title={launchEntry.title} onClick={() => launchEntry.action === "profile" ? setView("profile") : void refreshLaunchGate(true)}>{launchEntry.helper}<svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg></button> : <span className="header-unlock is-status" title={launchEntry.title}>{launchEntry.helper}</span>)}</div>}</div></header>
       <main className="workspace-main">
         {view === "team" && <TeamDashboard
           tasks={tasks}
@@ -638,7 +636,12 @@ export function App() {
             <button type="button" className={teamAssetTab === "knowledge" ? "active" : ""}
               aria-pressed={teamAssetTab === "knowledge"}
               onClick={() => setTeamAssetTab("knowledge")}>
-              <strong>知识资产</strong><small>业务与工程知识、Skill、真实消费足迹</small>
+              <strong>知识资产</strong><small>团队通用知识及全部资产的真实使用效果</small>
+            </button>
+            <button type="button" className={teamAssetTab === "modules" ? "active" : ""}
+              aria-pressed={teamAssetTab === "modules"}
+              onClick={() => setTeamAssetTab("modules")}>
+              <strong>业务模块</strong><small>模块是抽屉，集中维护业务语义和模块知识</small>
             </button>
             <button type="button" className={teamAssetTab === "workflows" ? "active" : ""}
               aria-pressed={teamAssetTab === "workflows"}
@@ -656,14 +659,14 @@ export function App() {
               const target = tasks.find((task) => task.id === taskId);
               if (target) openArtifacts(target);
             }}
-          /> : <WorkflowAssetWorkspace />}
+          /> : teamAssetTab === "modules" ? <BusinessModuleLibrary
+            admin={session.role === "admin"} />
+            : <WorkflowAssetWorkspace initialWorkflowId={workflowFocusId
+              || undefined} />}
         </section>}
 
         {view === "wishes" && <WishWall viewer={session} draft={wishDraft}
           onDraftConsumed={() => setWishDraft(undefined)} />}
-
-        {view === "business" && <BusinessModuleLibrary
-          admin={session.role === "admin"} />}
 
         {view === "mine" && <>
           <PersonalActionInbox
@@ -709,9 +712,12 @@ export function App() {
     </div>
     {launchOpen && <LaunchWorkspace session={session}
       onCreated={refresh} onClose={() => setLaunchOpen(false)}
-      onOpenWorkflowAssets={() => {
+      onOpenWorkflowAssets={(workflowId) => {
         setLaunchOpen(false);
         setTeamAssetTab("workflows");
+        // 从下单选择器带 id 直达该方案详情(复制/编辑都在那里),
+        // 不再把人扔到资产库首页自己找(审计 P1-9)。
+        setWorkflowFocusId(workflowId ?? "");
         setView("knowledge");
       }} />}
     {artifactTask && <TaskWorkspace

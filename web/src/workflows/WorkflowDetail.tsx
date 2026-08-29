@@ -49,9 +49,17 @@ export function WorkflowDetail({
         <span>{versions.at(-1)?.published_at ? formatDate(versions.at(-1)!.published_at) : "—"}</span></div>
       <div><small>Owner</small><strong>{asset.owner}</strong><span>
         {asset.maintainers.length ? `${asset.maintainers.length} 位维护者` : "无额外维护者"}</span></div>
-      <div><small>适用范围</small><strong>{draft.definition.applicability.business_module_ids.length
-        + draft.definition.applicability.repositories.length
-        + draft.definition.applicability.technologies.length || "全部"}</strong><span>个限定条件</span></div>
+      {/* 说内容不报数:"3 个限定条件"回答不了"适用于哪"(审计 P2-17) */}
+      {(() => {
+        const scope = draft.definition.applicability;
+        const parts = [...scope.repositories, ...scope.technologies,
+          ...scope.business_module_ids];
+        return <div><small>适用范围</small>
+          <strong>{parts.length ? parts.slice(0, 2).join("、")
+            + (parts.length > 2 ? "…" : "") : "不限"}</strong>
+          <span title={parts.join("、")}>{parts.length
+            ? `共 ${parts.length} 项限定` : "全部任务可选"}</span></div>;
+      })()}
     </div>
     <div className="wf-detail-actions">
       {asset.permissions.can_edit && onEdit && <button type="button" className="wf-primary" onClick={onEdit}>编辑草稿</button>}

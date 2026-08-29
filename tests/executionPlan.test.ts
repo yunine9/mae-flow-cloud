@@ -1,11 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   clearExecutionPlanCache,
   readCurrentExecutionPlan,
+  readCurrentExecutionPlanReading,
 } from "../src/executionPlan.ts";
 
 function fixture(valid = true): { kernelRoot: string; workspace: string } {
@@ -59,6 +66,27 @@ test("Cloud 只消费内核结构化执行方案，不在 TS 侧猜阶段做法"
   assert.equal(plan?.step.id, "build");
   assert.deepEqual(plan?.customization.locked, ["真实证据"]);
   assert.equal(plan?.customization.layers[0].instructions, "先核对旧数据");
+});
+
+test("内核 stderr 的 ⚠ 告警随方案一起上浮——定制退化不许静默", () => {
+  // 审计 P0-1 实锤:stdio ignore 把"定格文件损坏已退平台默认"整段
+  // 扔掉,界面展示定格副本、Agent 实跑默认,无人被通知。
+  clearExecutionPlanCache();
+  const current = fixture();
+  const script = join(current.kernelRoot, "scripts", "mae-flow.py");
+  const originalBody = readFileSync(script, "utf-8");
+  writeFileSync(script, [
+    "#!/usr/bin/env python3",
+    "import sys",
+    "print('⚠ 本任务工作流定制无效，已采用既有 Mae-Flow 方案：坏档',"
+      + " file=sys.stderr)",
+    "print('usage noise that must not surface', file=sys.stderr)",
+    ...originalBody.split("\n").slice(1),
+  ].join("\n"));
+  const reading = readCurrentExecutionPlanReading(current);
+  assert.equal(reading.plan?.step.id, "build");
+  assert.deepEqual(reading.kernel_warnings,
+    ["⚠ 本任务工作流定制无效，已采用既有 Mae-Flow 方案：坏档"]);
 });
 
 test("旧内核或损坏输出安全降级为无方案，不影响任务详情", () => {

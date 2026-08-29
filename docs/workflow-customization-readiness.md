@@ -104,3 +104,46 @@ P0-3 词表对齐+测试、P0-5 前端传 profile、P1-6 CLI 不崩。
 第二批:P0-1 诊断上浮与对拍标红(cloud 中等改动)、P1-7/9/10。
 流程动作(需拍板):P0-4 内核分支合 main;P2-13 set-default 要不要;
 P2-15 prepush 不见定制是否属预期。
+
+## 修复落地(2026-08-29 全体修复轮,用户拍板"直接开工")
+
+**内核侧(mae-flow main = 2ec675e,分支已合主干并推送)**:
+- P0-2 ✅ guard/gate.py 与 cli gate.py 只读名单补 `workflow-profile.json`;
+  Bash 侧正则提为 `INTERNAL_STATE_PATTERN` 常量,测试按同一份断言。
+- P0-3 ✅ panel PHASES 的 archive/archive_confirm 归位"交付";新增
+  playbook.phase↔phase_of 全量一致性断言,词表再分裂直接红。
+- P1-7 ✅ structural_selection 的 stage.id 失配从 raise 改为退平台默认
+  + `profile_invalid` diagnostics 留痕;mode/effective_source/strategy.source
+  按退化后如实计算。
+- P1-6 ✅ cmd_execution_plan 加 ValueError 兜底:丢定制重组平台默认、
+  stderr 说人话、diagnostics 留痕;flow/catalog 真坏才照常抛。
+- P1-12 ✅ 四条测试缺口全补(词表一致性/门禁双侧/失配降级/CLI 不崩),
+  全量 4+13 与主干环境基线一致。
+- P0-4 ✅ cloud/workflow-customization 快进合入 main 并推送;cloud
+  kernel/ 重新收编,VENDORED 记 `分支: main`。
+
+**云侧(本轮提交)**:
+- P0-1 ✅ readCurrentExecutionPlanReading 捕获内核 stderr ⚠ 行;
+  project() 汇总 stderr 告警 + profile_invalid 诊断 + "定了格但活方案
+  effective_source ≠ compiled_final_plan"失配为任务级
+  `execution_plan_alerts`;执行现场页签顶部红色 role=alert 呈现。
+- P0-5 ✅ 按"编译是任务时事实"的结论修正为诚实标注:库级两视图明示
+  "本地预览,非编译产物"(标签、横幅、依赖状态口径);任务侧真编译
+  产物本就走 WorkflowProfileCard/StagePlanDialog。库级伪造编译(空
+  任务上下文解析)会产出假 unavailable,比预览更失真,不做。
+- P0-3(云半) ✅ 云端词表任务(需求受理/DTS)不再提供阶段弹层;
+  目录为空时明说"该阶段没有对应的内核执行方案"。
+- P1-9 ✅ 选择器"查看方案"带 id 直达资产详情(App workflowFocusId →
+  WorkflowAssetWorkspace initialWorkflowId)。
+- P1-10 ✅ revision_conflict 时本地编辑暂存 localStorage,重进编辑器
+  横幅一键"恢复我的改动/丢弃暂存";保存成功自动清理。
+- P2-14 ✅ 资产记录存 applicability 快照(创建/存草稿同步),列表页
+  直答"适用于哪";旧资产缺席如实标"未声明"。
+- P2-16 ✅ strategy.source 联合补 "platform"。
+- P2-17 ✅ 三处噪声:操作图例撤除、"N 个限定条件"改说内容、锁定项
+  纪律文案收成一行+悬停解释。
+- P1-8/P2-15 ✅ README「已知边界」钉死双 profile 分工与"prepush/预热
+  不消费定制"现状;v1 退役与 prepush 是否补齐待拍板。
+
+**明确不做(未拍板)**:P2-13 set-default;P1-11 单一来源化重构
+(已用一致性测试钉死,重构留内核侧专项)。

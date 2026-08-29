@@ -615,6 +615,12 @@ export interface WorkflowAssetSummary {
   draft_revision: number;
   copied_from?: WorkflowExecutionProfile["source"];
   selectable_for_tasks: boolean;
+  /** 最新已知适用范围;缺席=旧资产未声明,列表按"未限定"展示。 */
+  applicability?: {
+    business_module_ids: string[];
+    repositories: string[];
+    technologies: string[];
+  };
   updated_at: string;
   permissions: {
     can_view: boolean;
@@ -798,8 +804,10 @@ export interface TaskSummary {
   repo_url?: string;
   repositories?: string[];
   repository_profiles?: RepositoryProfile[];
-  /** 下单或 Chain 方案确认时选中的仓内 Skill；每个子任务只继承自己仓。 */
+  /** 首次进入 Git 现场后固定的仓库原生 Skill；平台只消费，不管理。 */
   repository_skills?: SelectedRepositorySkill[];
+  /** 从团队资产固定的 Skill 形态知识。 */
+  team_skills?: HostSkillShelfEntry[];
   /** 创建任务时固定的业务模块与知识版本；正文不进入任务摘要。 */
   business_modules?: SelectedBusinessModule[];
   engineering_knowledge?: Array<EngineeringKnowledgeLaunchOption & {
@@ -897,6 +905,10 @@ export interface TaskSummary {
   progress?: TaskProgress;
   /** 当前阶段采用什么做法的只读说明；状态与完成条件仍以内核为准。 */
   execution_plan?: ExecutionPlan;
+  /** 活方案对拍告警:定制链任何一环退化(定格文件损坏、阶段失配、
+   * 活方案没吃到定格)都在这里,有值必须标红——不许界面展示定格副本
+   * 而 Agent 实际跑平台默认。 */
+  execution_plan_alerts?: string[];
   /** 可选执行补充未被采用时的明确降级说明。 */
   execution_profile_warning?: string;
   workflow_profile?: WorkflowExecutionProfile;
@@ -1099,6 +1111,7 @@ export interface LaunchOptions {
   /** 已发布的可选业务模块摘要；知识正文不会随目录接口返回。 */
   business_modules: BusinessModuleLaunchOption[];
   engineering_knowledge: EngineeringKnowledgeLaunchOption[];
+  team_skills: HostSkillShelfEntry[];
 }
 
 export interface EngineeringKnowledgeLaunchOption {
@@ -1892,6 +1905,7 @@ export async function createTask(
     workflowSelection?: { id: string; version?: number | string };
     repositorySkillCatalogToken?: string;
     selectedRepositorySkillIds?: string[];
+    selectedHostSkillPaths?: string[];
     selectedBusinessModuleIds?: string[];
     selectedEngineeringKnowledgeIds?: string[];
     repositoryProfiles?: Array<Pick<RepositoryProfile,
@@ -1926,6 +1940,7 @@ export async function createTask(
         extras?.repositorySkillCatalogToken || undefined,
       selected_repository_skill_ids:
         extras?.selectedRepositorySkillIds,
+      selected_host_skill_paths: extras?.selectedHostSkillPaths,
       selected_business_module_ids: extras?.selectedBusinessModuleIds,
       selected_engineering_knowledge_ids: extras?.selectedEngineeringKnowledgeIds,
       repository_profiles: extras?.repositoryProfiles,

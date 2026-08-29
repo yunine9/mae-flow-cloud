@@ -522,7 +522,7 @@ test("Chain 检视按成功仓覆盖选择，扫描失败仓保留原 Skill", as
     ?.repository_skills?.map((skill) => skill.name), []);
 });
 
-test("HTTP 扫描与创建接口形成闭环，未选择仍可正常下单", async () => {
+test("HTTP 显式选择保持兼容；未选择时等待 Git 现场原生发现", async () => {
   const repo = repository("http", [
     { root: ".agents", name: "http-api", marker: "HTTP-MARKER" },
   ]);
@@ -569,7 +569,7 @@ test("HTTP 扫描与创建接口形成闭环，未选择仍可正常下单", asy
     });
     const plainText = await plain.text();
     assert.equal(plain.status, 201, plainText);
-    assert.deepEqual((JSON.parse(plainText) as any).repository_skills, []);
+    assert.equal("repository_skills" in (JSON.parse(plainText) as any), false);
   } finally {
     await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
   }

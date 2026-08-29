@@ -227,6 +227,24 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
 
 ## 已知边界(诚实清单)
 
+- **2026-08-29 工作流定制端到端审计修复轮**(审计报告见
+  docs/workflow-customization-readiness.md):5 个 P0 全清——①内核
+  stderr 告警与 profile_invalid 诊断上浮为任务级 `execution_plan_alerts`,
+  执行现场标红对拍,"界面展示定格、Agent 实跑默认"不再静默;②门禁
+  两侧补保 workflow-profile.json;③panel 阶段词表对齐 playbooks 并加
+  一致性断言,云端词表任务不再提供必然误导的阶段弹层;④内核定制分支
+  已合 main 并推送,kernel/ 快照来源回到 main;⑤资产库"最终方案/依赖"
+  两视图明示"本地预览,非编译产物"(编译真品只在任务创建时产生,
+  库级预览伪造编译结果反而更失真)。P1:stage.id 失配降级留痕、CLI
+  病档不崩、选择器带 id 直达详情、冲突本机暂存一键恢复;列表页直答
+  适用范围。**边界如实记**:prepush/预热/修复前置会话不消费工作流
+  定制(现状如此,是缺口还是边界待拍板);set-default 设默认方案未
+  实现(未拍板不建);**双 profile 分工**——v1
+  `execution-profile.json` 是有界建议层(层叠文字补充,不改结构),
+  v2 `workflow-profile.json` 是结构化定格(final_snapshot 即唯一有序
+  方案),内核同时消费、互不覆盖,v1 退役计划待拍板;内核内
+  "步骤→阶段"仍有两份(panel PHASES 与 playbook.phase),暂以词表
+  一致性测试钉死,单一来源化留待内核侧重构。
 - **2026-08-28 流水线信息链对齐 toolkit(内网对比报告驱动,分三层)**:
   修复环"时好时坏"的头号根因是**陈灯**——MR 头上无有效流水线时平台挂
   旧分支的灯,而适配层返回里连 sha 都没有,宿主想核验都没材料。现在:

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   resolveRepositoryProfiles,
+  saveRepositoryProfile,
   type RepositoryProfile,
 } from "./api";
 import { KnowledgeLanguagePicker, KnowledgeLanguageTags } from "./KnowledgeLanguages";
@@ -23,6 +24,7 @@ export function RepositoryTechnologyPicker({ repositories, value, onChange }: {
   onChange: (value: RepositoryTechnologyDraft[]) => void;
 }) {
   const [loading, setLoading] = useState(false);
+  const [savingRepository, setSavingRepository] = useState("");
   const [error, setError] = useState("");
   const normalized = repositories.map((item) => item.trim()).filter(Boolean);
 
@@ -57,6 +59,36 @@ export function RepositoryTechnologyPicker({ repositories, value, onChange }: {
   const update = (repository: string, patch: Partial<RepositoryTechnologyDraft>) =>
     onChange(value.map((item) => item.repository === repository
       ? { ...item, ...patch } : item));
+  const remember = async (
+    item: RepositoryTechnologyDraft,
+    technologies: string[],
+  ) => {
+    setSavingRepository(item.repository);
+    setError("");
+    try {
+      const saved = await saveRepositoryProfile({
+        repository: item.repository,
+        technologies,
+        confirmed: true,
+      });
+      update(item.repository, {
+        technologies: saved.technologies,
+        confirmed: true,
+        remembered: true,
+      });
+    } catch (reason) {
+      // 画像是推荐旁路：记忆失败不能卡本任务。当前选择仍进入本任务的
+      // 资源匹配和任务快照，只明确告诉用户下次可能需要重新确认。
+      update(item.repository, {
+        technologies,
+        confirmed: true,
+        remembered: false,
+      });
+      setError(`${reason instanceof Error ? reason.message : "仓库技术画像保存失败"}；本任务已采用当前选择，但系统没有记住，下次可能需要重新确认`);
+    } finally {
+      setSavingRepository("");
+    }
+  };
   return <div className="repository-technology-picker">
     <div className="repository-technology-head">
       <span><strong>仓库技术栈</strong><small>
@@ -74,16 +106,11 @@ export function RepositoryTechnologyPicker({ repositories, value, onChange }: {
           {!item.remembered && <em className="first">首次使用</em>}
         </header>
         {item.confirmed ? <>
-          <KnowledgeLanguagePicker value={item.technologies}
-            includeAgnostic={false}
-            onChange={(technologies) => update(item.repository, {
-              technologies, confirmed: true, remembered: false,
-            })} />
           <div className="repository-technology-state">
             <KnowledgeLanguageTags languages={item.technologies}
               empty="已确认：暂不确定 / 技术无关" />
             <button type="button" onClick={() => update(item.repository,
-              { confirmed: false, technologies: [] })}>重新选择</button>
+              { confirmed: false })}>重新选择</button>
           </div>
         </> : <div className="repository-technology-first">
           <KnowledgeLanguagePicker value={item.technologies}
@@ -91,11 +118,11 @@ export function RepositoryTechnologyPicker({ repositories, value, onChange }: {
             onChange={(technologies) => update(item.repository,
               { technologies })} />
           <div><button type="button" className="primary"
-            disabled={!item.technologies.length}
-            onClick={() => update(item.repository, { confirmed: true })}>
-            确认并记住</button>
-            <button type="button" onClick={() => update(item.repository,
-              { confirmed: true, technologies: [] })}>
+            disabled={!item.technologies.length || !!savingRepository}
+            onClick={() => void remember(item, item.technologies)}>
+            {savingRepository === item.repository ? "正在保存…" : "确认并记住"}</button>
+            <button type="button" disabled={!!savingRepository}
+              onClick={() => void remember(item, [])}>
               暂不确定，也继续</button></div>
         </div>}
       </article>)}

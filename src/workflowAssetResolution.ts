@@ -34,6 +34,7 @@ function references(value: unknown): WorkflowAssetRef[] {
 export function workflowKnowledgeSelections(value: unknown): {
   businessModuleIds: string[];
   engineeringKnowledgeIds: string[];
+  teamSkillIds: string[];
 } {
   const refs = references(value);
   return {
@@ -42,6 +43,8 @@ export function workflowKnowledgeSelections(value: unknown): {
         ? [ref.business_module_id] : []))],
     engineeringKnowledgeIds: [...new Set(refs.flatMap((ref) =>
       ref.registry === "engineering_knowledge" ? [ref.id] : []))],
+    teamSkillIds: [...new Set(refs.flatMap((ref) =>
+      ref.registry === "team_skill" ? [ref.id] : []))],
   };
 }
 

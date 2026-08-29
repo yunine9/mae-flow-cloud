@@ -10,10 +10,8 @@ import { AssetPicker } from "./AssetPicker";
 import {
   itemFromAsset,
   newEditId,
-  operationLabels,
   previewStages,
   sourceLabel,
-  type WorkflowEditOperation,
 } from "./model";
 import { StagePlan } from "./StagePlan";
 import { StageRail } from "./StageRail";
@@ -113,7 +111,9 @@ export function WorkflowEditor({
       </div>
     </header>
     <div className="wf-editor-tabs" role="tablist" aria-label="工作流查看方式">
-      {([ ["edit", "编排"], ["final", "最终方案"], ["changes", "变更清单"],
+      {([ ["edit", "编排"],
+        ["final", profile ? "最终方案" : "最终方案（预览）"],
+        ["changes", "变更清单"],
         ["dependencies", "依赖与版本"] ] as const).map(([id, label]) =>
         <button type="button" role="tab" aria-selected={view === id} key={id}
           onClick={() => setView(id)}>{label}</button>)}
@@ -142,10 +142,10 @@ export function WorkflowEditor({
           }} />}
     </div>}
     {view === "final" && <FinalPlanView stages={profile?.final_snapshot.stages ?? stages}
-      diagnostics={profile?.diagnostics} />}
+      diagnostics={profile?.diagnostics} preview={!profile} />}
     {view === "changes" && <WorkflowDiffView definition={definition} base={base} />}
     {view === "dependencies" && <DependencyView stages={stages} catalog={catalog}
-      manifest={profile?.asset_manifest} />}
+      manifest={profile?.asset_manifest} preview={!profile} />}
   </section>;
 }
 
@@ -176,16 +176,11 @@ function EditInspector({
   }, [item]);
   const index = item ? stageItems.findIndex((candidate) => candidate.id === item.id) : -1;
   const editable = !!item && !item.locked && item.editable;
-  const operations: WorkflowEditOperation[] = ["add", "remove", "replace", "move", "configure"];
   return <aside className="wf-edit-inspector" aria-labelledby="wf-inspector-title">
     <header><span>编辑面板</span><h3 id="wf-inspector-title">
       {item ? item.title : "选择一个执行项"}</h3></header>
-    <div className="wf-operation-legend" aria-label="支持的编辑操作">
-      {operations.map((operation) => <span key={operation}>
-        <i>{operation === "add" ? "+" : operation === "remove" ? "−"
-          : operation === "replace" ? "⇄" : operation === "move" ? "↕" : "⚙"}</i>
-        {operationLabels[operation]}</span>)}
-    </div>
+    {/* 五操作图例撤了:动作按钮自带符号+文字,常驻图例是重复
+        (审计 P2-17)。 */}
     {!item && <div className="wf-empty compact">
       <strong>请选择中间的一项进行精确编辑</strong>
       <span>也可以直接新增已经入库的知识、Skill、Agent 或工具。</span>
@@ -195,8 +190,8 @@ function EditInspector({
       <div className={`wf-selected-summary${item.locked ? " locked" : ""}`}>
         <span><b>{item.kind}</b><b>{sourceLabel(item)}</b></span>
         {item.description && <p>{item.description}</p>}
-        {item.locked && <p><strong>平台锁定项</strong>用于保证基本流程、证据和权限边界，
-          不能移除、替换、调序或重新配置。</p>}
+        {item.locked && <p><strong>平台锁定项</strong>不可移除、替换、调序或重新配置
+          <small title="锁定项用于保证基本流程、真实证据和权限边界。">（为什么？）</small></p>}
       </div>
       <div className="wf-direct-actions">
         <button type="button" onClick={onStartAdd}>＋ 新增</button>

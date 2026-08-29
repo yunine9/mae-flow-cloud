@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -53,6 +54,16 @@ function fixture(): {
   };
 }
 
+function commitRepository(workspace: string): void {
+  execFileSync("git", ["init", "-q"], { cwd: workspace });
+  execFileSync("git", ["config", "user.name", "MFC Test"], { cwd: workspace });
+  execFileSync("git", ["config", "user.email", "mfc@example.test"], {
+    cwd: workspace,
+  });
+  execFileSync("git", ["add", "."], { cwd: workspace });
+  execFileSync("git", ["commit", "-qm", "fixture"], { cwd: workspace });
+}
+
 test("只物化用户选中的精确 Skill，并保留相对资源", () => {
   const item = fixture();
   const result = materializeRepositorySkills({
@@ -71,8 +82,9 @@ test("只物化用户选中的精确 Skill，并保留相对资源", () => {
   assert.deepEqual(result.warnings, []);
 });
 
-test("新任务明确空选时不加载；旧任务字段缺席才兼容原来的全量加载", () => {
+test("显式空选不加载；字段缺席时只发现 Git 已跟踪的仓库原生 Skill", () => {
   const item = fixture();
+  commitRepository(item.workspace);
   const binding = [{
     repository: item.selected.repository,
     workspace: item.workspace,
@@ -80,15 +92,16 @@ test("新任务明确空选时不加载；旧任务字段缺席才兼容原来�
   assert.deepEqual(materializeRepositorySkills({
     selected: [], bindings: binding, snapshotRoot: item.snapshot,
   }).paths, []);
-  const legacy = materializeRepositorySkills({
+  const native = materializeRepositorySkills({
     selected: undefined,
     bindings: binding,
-    snapshotRoot: join(item.workspace, ".mae-flow-work", "legacy-skills"),
+    snapshotRoot: join(item.workspace, ".mae-flow-work", "native-skills"),
   });
-  assert.equal(legacy.paths.length, 1);
+  assert.equal(native.paths.length, 1);
+  assert.match(native.entries[0].skill.revision, /^[0-9a-f]{40}$/);
 });
 
-test(".cac/skills 与其他固定根使用同一物化和旧任务兼容语义", () => {
+test(".cac/skills 与其他固定根使用同一 Git 原生物化语义", () => {
   const item = fixture();
   const cacDirectory = join(item.workspace, ".cac", "skills", "cac-domain");
   mkdirSync(cacDirectory, { recursive: true });
@@ -103,6 +116,7 @@ test(".cac/skills 与其他固定根使用同一物化和旧任务兼容语义",
     source: ".cac/skills",
     digest: digest(content),
   };
+  commitRepository(item.workspace);
   const explicit = materializeRepositorySkills({
     selected: [selected],
     bindings: [{ repository: selected.repository, workspace: item.workspace }],
@@ -111,12 +125,35 @@ test(".cac/skills 与其他固定根使用同一物化和旧任务兼容语义",
   assert.deepEqual(explicit.names, ["cac-domain"]);
   assert.equal(readFileSync(explicit.paths[0], "utf-8"), content);
 
-  const legacy = materializeRepositorySkills({
+  const native = materializeRepositorySkills({
     selected: undefined,
     bindings: [{ repository: selected.repository, workspace: item.workspace }],
-    snapshotRoot: join(item.workspace, ".mae-flow-work", "cac-legacy"),
+    snapshotRoot: join(item.workspace, ".mae-flow-work", "cac-native"),
   });
-  assert.ok(legacy.names.includes("cac-domain"));
+  assert.ok(native.names.includes("cac-domain"));
+});
+
+test("中心临时注入或被忽略的 Agent 目录不作为仓库原生知识", () => {
+  const item = fixture();
+  commitRepository(item.workspace);
+  const injected = join(item.workspace, ".claude", "skills", "injected");
+  mkdirSync(injected, { recursive: true });
+  writeFileSync(join(injected, "SKILL.md"), [
+    "---", "name: injected", "description: 中心临时注入", "---", "",
+  ].join("\n"));
+  writeFileSync(join(item.workspace, ".gitignore"), ".cac/\n");
+  const ignored = join(item.workspace, ".cac", "skills", "ignored");
+  mkdirSync(ignored, { recursive: true });
+  writeFileSync(join(ignored, "SKILL.md"), [
+    "---", "name: ignored", "description: 被忽略的注入", "---", "",
+  ].join("\n"));
+
+  const native = materializeRepositorySkills({
+    selected: undefined,
+    bindings: [{ repository: item.selected.repository, workspace: item.workspace }],
+    snapshotRoot: join(item.workspace, ".mae-flow-work", "trusted-native"),
+  });
+  assert.deepEqual(native.names, ["domain-api"]);
 });
 
 test("快照冻结后源 Skill 改动不影响恢复会话", () => {

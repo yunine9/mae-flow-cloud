@@ -29,11 +29,6 @@ import { taskHealthFacts } from "./taskHealth";
 import { relativeTime } from "./time";
 import { startVisiblePolling } from "./visiblePolling";
 import {
-  EMPTY_REPOSITORY_SKILL_PICKER_STATE,
-  RepositorySkillPicker,
-  type RepositorySkillPickerState,
-} from "./RepositorySkillPicker";
-import {
   EMPTY_REPOSITORY_ASSIGNEE_SELECTION,
   RepositoryAssigneePicker,
   type RepositoryAssigneeSelection,
@@ -161,8 +156,6 @@ export function TaskWorkspace({
     useState<"pause" | "resume" | "cancel" | "">("");
   const [controlError, setControlError] = useState("");
   const [cancelArmed, setCancelArmed] = useState(false);
-  const [chainSkillPicker, setChainSkillPicker] =
-    useState<RepositorySkillPickerState>(EMPTY_REPOSITORY_SKILL_PICKER_STATE);
   const [repositoryAssignees, setRepositoryAssignees] =
     useState<RepositoryAssigneeSelection>(EMPTY_REPOSITORY_ASSIGNEE_SELECTION);
   const [deliverySelection, setDeliverySelection] =
@@ -176,7 +169,6 @@ export function TaskWorkspace({
   useEffect(() => {
     setMaterialView(task.waiting?.recommended_view ?? "source");
     setWorkspaceView(task.status === "paused" ? "collaboration" : "materials");
-    setChainSkillPicker(EMPTY_REPOSITORY_SKILL_PICKER_STATE);
     setRepositoryAssignees(EMPTY_REPOSITORY_ASSIGNEE_SELECTION);
     setDeliverySelection(undefined);
   }, [task.id]);
@@ -394,13 +386,10 @@ export function TaskWorkspace({
   const chainReview = !!waiting
     && task.requirement_graph?.stage === "analysis"
     && (task.requirement_graph.repositories.length ?? 0) > 1
-    // 多仓分析过程中的普通澄清也处于 analysis；仓内能力只应在最终
+    // 多仓分析过程中的普通澄清也处于 analysis；分工只应在最终
     // Chain 方案检视卡出现，避免尚未定案时就让人误以为即将下发。
     && (waiting.question?.questions?.some((question) =>
       question.options?.some((option) => option.includes("确认并生成任务"))) ?? false);
-  const chainRepositories = task.repositories?.length
-    ? task.repositories
-    : task.requirement_graph?.repositories.map((repository) => repository.url) ?? [];
   const controllable = canOperate && [
     "queued", "running", "pausing", "paused", "waiting_for_human", "verifying",
   ].includes(task.status);
@@ -522,9 +511,12 @@ export function TaskWorkspace({
         + `${health?.needs_attention ? " attention" : ""}`}>
         {/* 阶段名可点:当前阶段弹内核编译的活方案,其他阶段弹标准
             方案底版(用户拍板:方案入口收进进度条,执行页签让位给
-            SSE 现场)。 */}
+            SSE 现场)。需求受理/DTS 等云端词表任务的阶段名与内核
+            六阶段完全不同,弹出来必然落底版兜底属误导(审计 P0-3)
+            ——这些任务不提供弹层。 */}
         <TaskProgress progress={visibleProgress} showDetailedStep
-          onPhaseClick={setPlanPhase}
+          onPhaseClick={task.execution_plan || task.workflow_profile
+            ? setPlanPhase : undefined}
           context={health && <>
           <span title={health.next}><i>下一步</i>{health.next}</span>
           <span><i>责任</i>{health.actor}</span>
@@ -713,6 +705,16 @@ export function TaskWorkspace({
               <small>实时事件流；各阶段执行方案点上方进度条的阶段名查看</small>
             </div>
             <div className="ws-primary-scroll ws-execution-view">
+              {/* 定制链对拍告警必须压在现场之上:呈现与实际不一致是
+                  最高级事故(用户红线),比事件流本身更优先。 */}
+              {(task.execution_plan_alerts ?? []).length > 0 && (
+                <section className="ws-alert ws-plan-alert" role="alert">
+                  <strong>执行方案与定格不一致</strong>
+                  {task.execution_plan_alerts!.map((line, index) => (
+                    <p key={index}>{line.replace(/^⚠\s*/, "")}</p>
+                  ))}
+                </section>
+              )}
               {/* SSE 实时现场是这个页签的主角(用户拍板),置顶;
                   执行方案卡整体撤出堆叠——各阶段方案点上方进度条的
                   阶段名查看(StagePlanDialog)。 */}
@@ -810,7 +812,7 @@ export function TaskWorkspace({
           </>}
         </section>
 
-        <aside className={`ws-decision${chainReview ? " has-chain-skills" : ""}`}
+        <aside className="ws-decision"
           aria-label="当前决策与关键操作">
           <div className="ws-pane-head ws-pane-head-side">
             {/* 右栏标题按阶段说实话:failed 时喊"无待办"是误导——
@@ -834,8 +836,6 @@ export function TaskWorkspace({
               onDecided={() => { setNotesPulse((tick) => tick + 1); onChanged(); }}
               annotationIds={draftIds}
               unresolvedAnnotationCount={unresolvedNotes.length}
-              repositorySkillSelection={chainReview
-                ? chainSkillPicker.selection : undefined}
               repositoryAssigneeSelection={chainReview
                 ? repositoryAssignees : undefined}
               deliverySelection={task.waiting?.recommended_view === "diff"
@@ -865,14 +865,6 @@ export function TaskWorkspace({
                         selection={repositoryAssignees}
                         onSelectionChange={setRepositoryAssignees}
                         onSaved={onChanged}
-                      />
-                      <RepositorySkillPicker
-                        repositories={chainRepositories}
-                        baseline={task.baseline}
-                        initialSkills={task.repository_skills}
-                        presentation="decision"
-                        state={chainSkillPicker}
-                        onStateChange={setChainSkillPicker}
                       />
                     </>
                   )}

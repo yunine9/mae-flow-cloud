@@ -164,6 +164,31 @@ test("没有 skill 目录照常跑——不是每个部署都有内网 skill", a
   assert.ok(!seen.includes("JAVA-AUTOUT-MARKER"));
 });
 
+test("任务资源清单可取消团队 Skill，空数组不会退回全量装载", () => {
+  const root = mkdtempSync(join(tmpdir(), "mfc-host-skill-selection-"));
+  const workspace = join(root, "repo");
+  const sourceRoot = join(root, "deployment-skills");
+  mkdirSync(workspace, { recursive: true });
+  writeSkill(sourceRoot, "wanted", "WANTED-MARKER");
+  writeSkill(sourceRoot, "not-wanted", "NOT-WANTED-MARKER");
+
+  const selected = materializeHostSkills({
+    sourceRoot,
+    workspaceRoot: workspace,
+    snapshotRoot: join(workspace, ".mae-flow-work", "selected"),
+    selectedSourcePaths: ["wanted/SKILL.md"],
+  });
+  assert.deepEqual(selected.names, ["wanted"]);
+
+  const empty = materializeHostSkills({
+    sourceRoot,
+    workspaceRoot: workspace,
+    snapshotRoot: join(workspace, ".mae-flow-work", "empty"),
+    selectedSourcePaths: [],
+  });
+  assert.deepEqual(empty.paths, []);
+});
+
 test("宿主 Skill 正文和附件从任务内只读快照读取,不暴露部署源路径", async () => {
   const root = mkdtempSync(join(tmpdir(), "mfc-host-skill-projection-"));
   const workspace = join(root, "repo");
