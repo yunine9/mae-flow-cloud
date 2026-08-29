@@ -1,5 +1,6 @@
 /** 发起任务前的权威知识匹配：与任务快照复用同一选择器和工作流并入规则。 */
 
+import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 
 import {
@@ -112,6 +113,8 @@ export interface LaunchKnowledgePreview {
   business_knowledge: LaunchBusinessKnowledgePreview[];
   engineering_knowledge: LaunchEngineeringKnowledgePreview[];
   team_skills: LaunchTeamSkillPreview[];
+  /** 当前有序清单与版本身份的服务端指纹；创建时必须原样对拍。 */
+  selection_digest: string;
   limits: {
     engineering_knowledge: EngineeringKnowledgeSelection["limits"] & {
       matched: number;
@@ -216,6 +219,38 @@ function businessPreview(
   })));
 }
 
+function selectionDigest(input: {
+  repositories: string[];
+  technologies: string[];
+  businessModuleIds: string[];
+  businessKnowledge: LaunchBusinessKnowledgePreview[];
+  engineeringKnowledge: LaunchEngineeringKnowledgePreview[];
+  teamSkills: LaunchTeamSkillPreview[];
+}): string {
+  return createHash("sha256").update(JSON.stringify({
+    schema: "mae-flow-launch-knowledge-selection/1",
+    repositories: input.repositories,
+    technologies: input.technologies,
+    business_module_ids: input.businessModuleIds,
+    business_knowledge: input.businessKnowledge.map((item) => ({
+      module_id: item.module_id,
+      module_revision: item.module_revision,
+      id: item.id,
+      version: item.version,
+      digest: item.digest,
+    })),
+    engineering_knowledge: input.engineeringKnowledge.map((item) => ({
+      id: item.id,
+      digest: item.digest,
+    })),
+    team_skills: input.teamSkills.map((item) => ({
+      path: item.path,
+      digest: item.digest,
+      package_digest: item.package_digest,
+    })),
+  })).digest("hex");
+}
+
 export function previewLaunchKnowledge(
   dataDir: string,
   input: LaunchKnowledgePreviewInput,
@@ -299,7 +334,7 @@ export function previewLaunchKnowledge(
   };
 
   let engineeringSelection: EngineeringKnowledgeSelection = {
-    items: [], matched: 0, omitted: 0,
+    items: [], matched: 0, omitted: 0, warnings: [],
     limits: { ...ENGINEERING_KNOWLEDGE_LIMITS },
   };
   try {
@@ -307,6 +342,14 @@ export function previewLaunchKnowledge(
       dataDir, ...context,
       selectedIds: selections.engineeringKnowledgeIds,
     });
+    if (engineeringSelection.warnings.length) {
+      degraded = true;
+      warnings.push(...engineeringSelection.warnings.map((message) => ({
+        source: "engineering_knowledge" as const,
+        code: "catalog_warning" as const,
+        message,
+      })));
+    }
     if (engineeringSelection.omitted) {
       warnings.push({ source: "engineering_knowledge", code: "limit_applied",
         message: `有 ${engineeringSelection.omitted} 项匹配工程知识因 40 项 / 4 MiB 任务上限未进入本次快照` });
@@ -371,6 +414,35 @@ export function previewLaunchKnowledge(
       message: `团队 Skill 目录读取失败，任务将退化为无团队 Skill：${String(error)}` });
   }
 
+  const businessKnowledge = businessPreview(businessModules, context);
+  const engineeringKnowledge = engineeringSelection.items.map((item) => ({
+    id: item.id,
+    title: item.title,
+    summary: item.summary,
+    when_to_use: item.when_to_use,
+    form: item.form as "document" | "rule" | "example",
+    business_module_ids: [...item.business_module_ids],
+    repositories: [...item.repositories],
+    technologies: [...item.technologies],
+    digest: item.digest,
+    bytes: item.bytes,
+    ...matchedScope(item, context),
+  }));
+  const previewSkills = teamSkills.map((skill) => ({
+    name: skill.name,
+    description: skill.description,
+    form: skill.form,
+    nature: skill.nature as "business" | "engineering",
+    business_module_ids: [...skill.business_module_ids],
+    repositories: [...skill.repositories],
+    technologies: [...skill.technologies],
+    path: skill.path,
+    digest: skill.digest,
+    package_digest: skill.package_digest,
+    bytes: skill.bytes,
+    updated_at: skill.updated_at,
+    ...matchedScope(skill, context),
+  }));
   return {
     complete: !degraded && errors.length === 0,
     degraded,
@@ -383,35 +455,17 @@ export function previewLaunchKnowledge(
         selections.workflow.engineeringKnowledgeIds,
       workflow_team_skill_ids: selections.workflow.teamSkillIds,
     },
-    business_knowledge: businessPreview(businessModules, context),
-    engineering_knowledge: engineeringSelection.items.map((item) => ({
-      id: item.id,
-      title: item.title,
-      summary: item.summary,
-      when_to_use: item.when_to_use,
-      form: item.form as "document" | "rule" | "example",
-      business_module_ids: [...item.business_module_ids],
-      repositories: [...item.repositories],
-      technologies: [...item.technologies],
-      digest: item.digest,
-      bytes: item.bytes,
-      ...matchedScope(item, context),
-    })),
-    team_skills: teamSkills.map((skill) => ({
-      name: skill.name,
-      description: skill.description,
-      form: skill.form,
-      nature: skill.nature as "business" | "engineering",
-      business_module_ids: [...skill.business_module_ids],
-      repositories: [...skill.repositories],
-      technologies: [...skill.technologies],
-      path: skill.path,
-      digest: skill.digest,
-      package_digest: skill.package_digest,
-      bytes: skill.bytes,
-      updated_at: skill.updated_at,
-      ...matchedScope(skill, context),
-    })),
+    business_knowledge: businessKnowledge,
+    engineering_knowledge: engineeringKnowledge,
+    team_skills: previewSkills,
+    selection_digest: selectionDigest({
+      repositories,
+      technologies: uniqueTechnologies,
+      businessModuleIds: context.businessModuleIds,
+      businessKnowledge,
+      engineeringKnowledge,
+      teamSkills: previewSkills,
+    }),
     limits: { engineering_knowledge: {
       ...engineeringSelection.limits,
       matched: engineeringSelection.matched,

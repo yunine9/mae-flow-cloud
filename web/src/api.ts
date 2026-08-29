@@ -1186,6 +1186,7 @@ export interface LaunchKnowledgePreview {
   business_knowledge: LaunchBusinessKnowledgePreview[];
   engineering_knowledge: LaunchEngineeringKnowledgePreview[];
   team_skills: LaunchTeamSkillPreview[];
+  selection_digest: string;
   limits: { engineering_knowledge: {
     max_assets: number;
     max_total_bytes: number;
@@ -1203,9 +1204,10 @@ export async function getLaunchKnowledgePreview(input: {
   repositoryProfiles?: Array<Pick<RepositoryProfile,
     "repository" | "technologies" | "confirmed">>;
   workflowSelection?: { id: string; version?: number | string };
-}): Promise<LaunchKnowledgePreview> {
+}, signal?: AbortSignal): Promise<LaunchKnowledgePreview> {
   const response = await fetch("/launch-knowledge-preview", {
     method: "POST",
+    signal,
     body: JSON.stringify({
       repos: input.repos,
       selected_business_module_ids: input.selectedBusinessModuleIds,
@@ -1390,14 +1392,17 @@ export async function updateBusinessModule(
 export async function getBusinessKnowledgeAsset(
   moduleId: string,
   assetId: string,
+  version?: number,
 ): Promise<{
   module_id: string;
   module_name: string;
   asset: BusinessKnowledgeAsset;
   content: string;
 }> {
+  const query = version === undefined ? ""
+    : `?version=${encodeURIComponent(String(version))}`;
   const response = await fetch(`/business-modules/${encodeURIComponent(moduleId)}`
-    + `/assets/${encodeURIComponent(assetId)}`);
+    + `/assets/${encodeURIComponent(assetId)}${query}`);
   if (!response.ok) throw new Error(await errorText(response));
   return response.json();
 }
@@ -1744,6 +1749,7 @@ export interface HostSkillDocument {
   path: string;
   content: string;
   digest: string;
+  package_digest: string;
   bytes: number;
 }
 
@@ -2016,6 +2022,7 @@ export async function createTask(
     repositorySkillCatalogToken?: string;
     selectedRepositorySkillIds?: string[];
     selectedBusinessModuleIds?: string[];
+    knowledgePreviewDigest?: string;
     repositoryProfiles?: Array<Pick<RepositoryProfile,
       "repository" | "technologies" | "confirmed">>;
     requirementDocumentName?: string;
@@ -2045,6 +2052,7 @@ export async function createTask(
       selected_repository_skill_ids:
         extras?.selectedRepositorySkillIds,
       selected_business_module_ids: extras?.selectedBusinessModuleIds,
+      knowledge_preview_digest: extras?.knowledgePreviewDigest,
       repository_profiles: extras?.repositoryProfiles,
     }),
   });

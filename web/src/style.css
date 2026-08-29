@@ -9272,7 +9272,8 @@ body[data-view="issues"] .nav-item.on { box-shadow: inset 3px 0 #c87873; }
   grid-template-columns: 44px minmax(0, 1fr) minmax(150px, .42fr);
   align-items: center; gap: 10px; color: inherit; text-align: left;
   border: 0; border-radius: 0; background: transparent; font: inherit;
-  cursor: pointer; transition: background var(--ease), box-shadow var(--ease);
+  text-decoration: none; cursor: pointer;
+  transition: background var(--ease), box-shadow var(--ease);
 }
 .launch-knowledge-row + .launch-knowledge-row { border-top: 1px solid var(--line); }
 .launch-knowledge-row:hover { background: var(--surface-hover); }

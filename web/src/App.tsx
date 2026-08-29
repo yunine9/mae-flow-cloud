@@ -67,6 +67,41 @@ type MineScope = "all" | "waiting" | "intervention" | "active" | "delivered";
 type TeamTaskTab = "current" | "archive";
 type TeamAssetTab = "knowledge" | "modules" | "workflows";
 
+const APP_VIEWS = new Set<View>([
+  "team", "mine", "issues", "profile", "users", "settings", "knowledge",
+  "wishes", "help",
+]);
+const TEAM_ASSET_TABS = new Set<TeamAssetTab>([
+  "knowledge", "modules", "workflows",
+]);
+
+function appHistoryState(view: View, teamAssetTab?: TeamAssetTab) {
+  const current = history.state && typeof history.state === "object"
+    ? history.state as Record<string, unknown> : {};
+  return {
+    ...current,
+    maeFlowView: view,
+    maeFlowTeamAssetTab: teamAssetTab,
+  };
+}
+
+function viewFromHistoryState(state: unknown): View | undefined {
+  if (!state || typeof state !== "object") return undefined;
+  const candidate = (state as Record<string, unknown>).maeFlowView;
+  return typeof candidate === "string" && APP_VIEWS.has(candidate as View)
+    ? candidate as View : undefined;
+}
+
+function teamAssetTabFromHistoryState(
+  state: unknown,
+): TeamAssetTab | undefined {
+  if (!state || typeof state !== "object") return undefined;
+  const candidate = (state as Record<string, unknown>).maeFlowTeamAssetTab;
+  return typeof candidate === "string"
+      && TEAM_ASSET_TABS.has(candidate as TeamAssetTab)
+    ? candidate as TeamAssetTab : undefined;
+}
+
 interface WorkspaceRoute {
   taskId: string;
   reviewId: string;
@@ -413,10 +448,16 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    const syncKnowledgeRoute = () => {
+    const syncKnowledgeRoute = (event: PopStateEvent) => {
       const focus = readKnowledgeAssetFocus();
       setKnowledgeFocus(focus);
-      if (!focus) return;
+      if (!focus) {
+        const restoredView = viewFromHistoryState(event.state);
+        const restoredTab = teamAssetTabFromHistoryState(event.state);
+        if (restoredView) setView(restoredView);
+        if (restoredTab) setTeamAssetTab(restoredTab);
+        return;
+      }
       setTeamAssetTab(focus.kind === "business" ? "modules" : "knowledge");
       setView("knowledge");
     };
@@ -720,19 +761,36 @@ export function App() {
     if (leavingKnowledgeFocus) setKnowledgeFocus(undefined);
     if (next === "help") {
       const nextPath = `/help/${encodeURIComponent(helpArticleId)}`;
-      if (location.pathname !== nextPath) history.pushState({}, "", nextPath);
+      if (location.pathname !== nextPath) {
+        history.replaceState(appHistoryState(view,
+          view === "knowledge" ? teamAssetTab : undefined), "",
+          location.pathname + location.search);
+        history.pushState(appHistoryState("help"), "", nextPath);
+      }
     } else if (/^\/help(?:\/|$)/.test(location.pathname)) {
-      history.pushState({}, "", "/");
+      history.pushState(appHistoryState(next,
+        next === "knowledge" ? teamAssetTab : undefined), "", "/");
     } else if (leavingKnowledgeFocus) {
-      history.pushState({}, "", "/");
+      history.pushState(appHistoryState(next,
+        next === "knowledge" ? teamAssetTab : undefined), "", "/");
+    } else if (location.pathname === "/") {
+      history.replaceState(appHistoryState(next,
+        next === "knowledge" ? teamAssetTab : undefined), "",
+        location.pathname + location.search);
     }
     setView(next);
   };
   const selectTeamAssetTab = (next: TeamAssetTab) => {
     setTeamAssetTab(next);
-    if (!knowledgeFocus) return;
+    if (!knowledgeFocus) {
+      if (location.pathname === "/") {
+        history.replaceState(appHistoryState("knowledge", next), "",
+          location.pathname + location.search);
+      }
+      return;
+    }
     setKnowledgeFocus(undefined);
-    history.pushState({}, "", "/");
+    history.pushState(appHistoryState("knowledge", next), "", "/");
   };
   return <div className="app-shell">
     <aside className="sidebar">
@@ -837,10 +895,8 @@ export function App() {
             }}
           /> : teamAssetTab === "modules" ? <BusinessModuleLibrary
             admin={session.role === "admin"}
-            initialAsset={knowledgeFocus?.kind === "business" ? {
-              moduleId: knowledgeFocus.moduleId,
-              assetId: knowledgeFocus.assetId,
-            } : undefined} />
+            initialAsset={knowledgeFocus?.kind === "business"
+              ? knowledgeFocus : undefined} />
             : <WorkflowAssetWorkspace initialWorkflowId={workflowFocusId
               || undefined} />}
         </section>}
@@ -896,6 +952,11 @@ export function App() {
     {launchOpen && <LaunchWorkspace session={session}
       onCreated={refresh} onClose={() => setLaunchOpen(false)}
       onOpenKnowledgeAsset={(target) => {
+        // 当前历史项记住打开全文前所在视图；返回根路径时 popstate 才能
+        // 恢复“我的需求”，而不是只去掉高亮却仍滞留在团队资产。
+        history.replaceState(appHistoryState(view,
+          view === "knowledge" ? teamAssetTab : undefined), "",
+          location.pathname + location.search);
         setLaunchOpen(false);
         setKnowledgeFocus(target);
         setTeamAssetTab(target.kind === "business" ? "modules" : "knowledge");
@@ -903,7 +964,8 @@ export function App() {
         setView("knowledge");
         const next = knowledgeAssetPath(target);
         if (location.pathname + location.search !== next) {
-          history.pushState({}, "", next);
+          history.pushState(appHistoryState("knowledge",
+            target.kind === "business" ? "modules" : "knowledge"), "", next);
         }
       }}
       onOpenWorkflowAssets={(workflowId) => {
@@ -914,6 +976,11 @@ export function App() {
         // 不再把人扔到资产库首页自己找(审计 P1-9)。
         setWorkflowFocusId(workflowId ?? "");
         setView("knowledge");
+        if (location.pathname + location.search !== "/") {
+          history.pushState(appHistoryState("knowledge", "workflows"), "", "/");
+        } else {
+          history.replaceState(appHistoryState("knowledge", "workflows"), "", "/");
+        }
       }} />}
     {artifactTask && <TaskWorkspace
       task={artifactTask}

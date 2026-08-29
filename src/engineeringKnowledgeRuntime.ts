@@ -16,6 +16,7 @@ import {
   type KnowledgeForm,
 } from "./knowledgeAssetModel.ts";
 import {
+  listKnowledgeCandidateCatalog,
   listKnowledgeCandidates,
   type KnowledgeCandidateRecord,
 } from "./knowledgeCandidates.ts";
@@ -33,6 +34,8 @@ export interface EngineeringKnowledgeSelection {
   /** 进入作用域匹配、尚未应用容量上限的数量。 */
   matched: number;
   omitted: number;
+  /** 目录里被安全跳过的坏记录；调用方不能把少项冒充完整清单。 */
+  warnings: string[];
   limits: { max_assets: number; max_total_bytes: number };
 }
 
@@ -98,7 +101,10 @@ export function selectEngineeringKnowledge(options: {
 }): EngineeringKnowledgeSelection {
   const selected = options.selectedIds === undefined ? undefined
     : new Set(options.selectedIds);
-  const matching = publishedEngineeringKnowledge(options.dataDir)
+  const catalog = listKnowledgeCandidateCatalog(options.dataDir);
+  const matching = catalog.candidates.filter((item) =>
+    item.status === "published" && item.nature === "engineering"
+      && item.form !== "skill")
     .filter((item) => knowledgeMatchesTask(item, options)
       && (!selected || selected.has(item.id)));
   const candidates = matching.slice(0, ENGINEERING_KNOWLEDGE_LIMITS.max_assets);
@@ -114,6 +120,7 @@ export function selectEngineeringKnowledge(options: {
     items,
     matched: matching.length,
     omitted: matching.length - items.length,
+    warnings: catalog.warnings,
     limits: { ...ENGINEERING_KNOWLEDGE_LIMITS },
   };
 }

@@ -1,10 +1,17 @@
 export type KnowledgeAssetFocus =
-  | { kind: "business"; moduleId: string; assetId: string }
-  | { kind: "engineering"; candidateId: string }
-  | { kind: "skill"; directory: string };
+  | { kind: "business"; moduleId: string; assetId: string;
+      version: number; digest: string }
+  | { kind: "engineering"; candidateId: string; digest: string }
+  | { kind: "skill"; directory: string; digest: string;
+      packageDigest: string };
 
 function clean(value: string | null): string {
   return value?.trim() ?? "";
+}
+
+function digest(value: string | null): string {
+  const normalized = clean(value).toLowerCase().replace(/^sha256:/, "");
+  return /^[a-f0-9]{64}$/.test(normalized) ? normalized : "";
 }
 
 /**
@@ -17,10 +24,15 @@ export function knowledgeAssetPath(target: KnowledgeAssetFocus): string {
   if (target.kind === "business") {
     query.set("module", target.moduleId);
     query.set("asset", target.assetId);
+    query.set("version", String(target.version));
+    query.set("digest", target.digest);
   } else if (target.kind === "engineering") {
     query.set("asset", target.candidateId);
+    query.set("digest", target.digest);
   } else {
     query.set("asset", target.directory);
+    query.set("digest", target.digest);
+    query.set("package_digest", target.packageDigest);
   }
   return `/?${query.toString()}`;
 }
@@ -33,13 +45,24 @@ export function readKnowledgeAssetFocus(
   const query = new URLSearchParams(search ?? browserSearch);
   const kind = clean(query.get("knowledge"));
   const asset = clean(query.get("asset"));
-  if (!asset) return undefined;
+  const contentDigest = digest(query.get("digest"));
+  if (!asset || !contentDigest) return undefined;
   if (kind === "business") {
     const moduleId = clean(query.get("module"));
-    return moduleId ? { kind, moduleId, assetId: asset } : undefined;
+    const version = Number(clean(query.get("version")));
+    return moduleId && Number.isInteger(version) && version >= 1
+      ? { kind, moduleId, assetId: asset, version, digest: contentDigest }
+      : undefined;
   }
-  if (kind === "engineering") return { kind, candidateId: asset };
-  if (kind === "skill") return { kind, directory: asset };
+  if (kind === "engineering") {
+    return { kind, candidateId: asset, digest: contentDigest };
+  }
+  if (kind === "skill") {
+    const packageDigest = digest(query.get("package_digest"));
+    return packageDigest
+      ? { kind, directory: asset, digest: contentDigest, packageDigest }
+      : undefined;
+  }
   return undefined;
 }
 

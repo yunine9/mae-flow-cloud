@@ -379,6 +379,53 @@ function assetVersionFile(
     `v${version}.md`);
 }
 
+function assetVersionManifestFile(
+  dataDir: string,
+  moduleId: string,
+  assetId: string,
+  version: number,
+): string {
+  return join(moduleRoot(dataDir, moduleId), "assets", assetId,
+    `v${version}.json`);
+}
+
+/**
+ * 每个发布版本都保存当时的治理元数据和正文指纹。只有 Markdown 文件
+ * 无法证明历史 vN 仍是发布时那一版，也会错误套用当前标题/作用域。
+ */
+function readAssetVersionManifest(
+  dataDir: string,
+  moduleId: string,
+  assetId: string,
+  version: number,
+): BusinessKnowledgeAsset | undefined {
+  const file = assetVersionManifestFile(
+    dataDir, moduleId, assetId, version);
+  if (!existsSync(file)) return undefined;
+  if (lstatSync(file).isSymbolicLink() || !lstatSync(file).isFile()) {
+    throw new BusinessModuleError("知识版本发布清单不是普通文件");
+  }
+  try {
+    const asset = JSON.parse(readFileSync(file, "utf-8")) as
+      BusinessKnowledgeAsset;
+    if (!asset || asset.id !== assetId || asset.version !== version
+        || !asset.title || !asset.summary || !asset.when_to_use
+        || !["document", "skill", "rule", "example"].includes(asset.form)
+        || !Array.isArray(asset.repositories)
+        || !["published", "archived"].includes(asset.status)
+        || !/^[a-f0-9]{64}$/.test(String(asset.digest ?? ""))
+        || !Number.isInteger(asset.bytes) || asset.bytes < 0
+        || asset.bytes > MAX_ASSET_BYTES
+        || !asset.updated_at || !asset.updated_by) {
+      throw new Error("invalid manifest");
+    }
+    return { ...asset, repositories: repositories(asset.repositories) };
+  } catch (error) {
+    if (error instanceof BusinessModuleError) throw error;
+    throw new BusinessModuleError("知识版本发布清单损坏");
+  }
+}
+
 export function publishBusinessKnowledgeAsset(
   dataDir: string,
   moduleId: string,
@@ -438,12 +485,27 @@ export function publishBusinessKnowledgeAsset(
     updated_by: operator,
   };
   const file = assetVersionFile(dataDir, module.id, asset.id, asset.version);
+  const manifest = assetVersionManifestFile(
+    dataDir, module.id, asset.id, asset.version);
   const home = join(moduleRoot(dataDir, module.id), "assets", asset.id);
   assertOrdinaryDirectory(join(moduleRoot(dataDir, module.id), "assets"));
   assertOrdinaryDirectory(home);
   mkdirSync(home, { recursive: true, mode: 0o750 });
-  writeFileSync(file, content, { encoding: "utf-8", mode: 0o640, flag: "wx" });
-  chmodSync(file, 0o640);
+  if (existsSync(file) || existsSync(manifest)) {
+    throw new BusinessModuleError("知识版本文件已存在，拒绝覆盖历史版本");
+  }
+  try {
+    writeFileSync(file, content,
+      { encoding: "utf-8", mode: 0o640, flag: "wx" });
+    chmodSync(file, 0o640);
+    writeFileSync(manifest, `${JSON.stringify(asset, null, 2)}\n`,
+      { encoding: "utf-8", mode: 0o640, flag: "wx" });
+    chmodSync(manifest, 0o640);
+  } catch (error) {
+    rmSync(file, { force: true });
+    rmSync(manifest, { force: true });
+    throw error;
+  }
   const updated: BusinessModule = {
     ...module,
     revision: module.revision + 1,
@@ -456,6 +518,7 @@ export function publishBusinessKnowledgeAsset(
     writeModule(dataDir, updated);
   } catch (error) {
     rmSync(file, { force: true });
+    rmSync(manifest, { force: true });
     throw error;
   }
   operation(dataDir, {
@@ -488,10 +551,38 @@ export function readBusinessKnowledgeAsset(
     throw new BusinessModuleError("知识正文版本不存在或不是普通文件");
   }
   const content = readFileSync(file, "utf-8");
-  if (wanted === current.version && digest(content) !== current.digest) {
+  const contentDigest = digest(content);
+  const manifest = readAssetVersionManifest(
+    dataDir, module.id, assetId, wanted);
+  // 升级前的当前版本仍可由 module.json 中既有发布指纹核对；历史版本
+  // 没有同等证据时必须诚实拒绝，不能现场重算后冒充原发布身份。
+  if (!manifest && wanted !== current.version) {
+    throw new BusinessModuleError(
+      "知识历史版本缺少发布清单，无法核对发布指纹");
+  }
+  const published = manifest ?? current;
+  if (contentDigest !== published.digest
+      || Buffer.byteLength(content, "utf-8") !== published.bytes) {
     throw new BusinessModuleError("知识正文与发布指纹不一致");
   }
-  return { module_id: module.id, module_name: module.name, asset: current, content };
+  if (manifest && wanted === current.version
+      && JSON.stringify({
+        id: current.id, title: current.title, summary: current.summary,
+        when_to_use: current.when_to_use, form: current.form,
+        repositories: current.repositories, version: current.version,
+        digest: current.digest, bytes: current.bytes,
+      }) !== JSON.stringify({
+        id: manifest.id, title: manifest.title, summary: manifest.summary,
+        when_to_use: manifest.when_to_use, form: manifest.form,
+        repositories: manifest.repositories, version: manifest.version,
+        digest: manifest.digest, bytes: manifest.bytes,
+      })) {
+    throw new BusinessModuleError("知识元数据与版本发布清单不一致");
+  }
+  const asset = wanted === current.version
+    ? { ...published, status: current.status }
+    : published;
+  return { module_id: module.id, module_name: module.name, asset, content };
 }
 
 export function archiveBusinessKnowledgeAsset(

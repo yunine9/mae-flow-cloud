@@ -52,6 +52,10 @@ import {
   type KnowledgeAssetFocus,
 } from "./knowledgeNavigation";
 
+type EngineeringAssetFocus = Extract<KnowledgeAssetFocus,
+  { kind: "engineering" }>;
+type SkillAssetFocus = Extract<KnowledgeAssetFocus, { kind: "skill" }>;
+
 const KIND_LABEL: Record<KnowledgeKind, string> = {
   rules: "项目规则",
   document: "模块知识",
@@ -175,6 +179,11 @@ function directoryOf(skill: { path: string }): string | undefined {
   return segments.length > 1 ? segments[0] : undefined;
 }
 
+function packageDigestOf(skill: HostSkillShelf["skills"][number]): string {
+  return (skill as HostSkillShelf["skills"][number]
+    & { package_digest?: string }).package_digest ?? "";
+}
+
 function editableMetadata(skill: {
   nature: KnowledgeNature;
   business_module_ids: string[];
@@ -196,10 +205,10 @@ function editableMetadata(skill: {
  * 足迹里隐形,货架把"现在生效的是什么"照出来——包括不可装载的。
  * 管理员在同一张货架上换货:上传/更新/下线/回退,写进数据目录即对
  * 下一单生效;面板自己刷新自己,不用整页重取知识效能。 */
-function SkillLibraryPanel({ fallback, admin, initialDirectory }: {
+function SkillLibraryPanel({ fallback, admin, initialAsset }: {
   fallback?: HostSkillShelf;
   admin: boolean;
-  initialDirectory?: string;
+  initialAsset?: SkillAssetFocus;
 }) {
   const [library, setLibrary] = useState<
     HostSkillShelf & { operations: SkillOperationRecord[] }>();
@@ -222,8 +231,8 @@ function SkillLibraryPanel({ fallback, admin, initialDirectory }: {
     useState<{ skill: string; notes: string; evidence: string }>();
   const [distilling, setDistilling] = useState(false);
   const [showOperations, setShowOperations] = useState(false);
-  const [expanded, setExpanded] = useState(Boolean(initialDirectory));
-  const [documentFor, setDocumentFor] = useState(initialDirectory ?? "");
+  const [expanded, setExpanded] = useState(Boolean(initialAsset));
+  const [documentFor, setDocumentFor] = useState("");
   const [document, setDocument] = useState<HostSkillDocument>();
   const [submissions, setSubmissions] = useState<SkillSubmissionRecord[]>([]);
   const [submitNote, setSubmitNote] = useState("");
@@ -239,7 +248,7 @@ function SkillLibraryPanel({ fallback, admin, initialDirectory }: {
   const updateTargetRef = useRef("");
   const updateMetadataRef =
     useRef<SkillKnowledgeMetadataInput | undefined>(undefined);
-  const focusedSkill = useRef("");
+  const documentRequest = useRef(0);
 
   const refresh = () => Promise.all([
     getSkillLibrary()
@@ -256,33 +265,63 @@ function SkillLibraryPanel({ fallback, admin, initialDirectory }: {
   const operations = library?.operations ?? [];
 
   useEffect(() => {
-    if (!initialDirectory || !library
-        || focusedSkill.current === initialDirectory) return;
+    if (!initialAsset || !library) return;
+    const request = ++documentRequest.current;
+    const initialDirectory = initialAsset.directory;
+    // 深链目标优先于用户先前留在管理页的筛选；否则正文虽然读到了，
+    // 目标行仍会被旧筛选藏在 DOM 之外。
+    setExpanded(true);
+    setKindFilter("all");
+    setDetailFilter("all");
     const skill = library.skills.find((item) =>
       directoryOf(item) === initialDirectory);
-    focusedSkill.current = initialDirectory;
     if (!skill) {
-      setError("要查看的团队 Skill 已下线或不存在；当前任务的固定版本仍保留在任务现场。");
+      setError("要核对的团队 Skill 已下线或不存在，无法把管理页当前内容当作清单版本；请返回发起页重新核对。");
       setDocumentFor("");
+      setDocument(undefined);
       return;
     }
-    setExpanded(true);
+    const packageDigest = packageDigestOf(skill);
+    if (skill.digest !== initialAsset.digest
+        || packageDigest !== initialAsset.packageDigest) {
+      setError(`团队 Skill ${skill.name} 已发生变化（清单正文 ${
+        initialAsset.digest.slice(0, 8)} / 包 ${
+        initialAsset.packageDigest.slice(0, 8)}，当前正文 ${
+        skill.digest.slice(0, 8)} / 包 ${packageDigest.slice(0, 8) || "缺失"}）；`
+        + "已停止展开，不能把当前全文当作同一版本");
+      setDocumentFor("");
+      setDocument(undefined);
+      return;
+    }
+    let alive = true;
     setDocumentFor(initialDirectory);
     setDocument(undefined);
     void getSkillDocument(initialDirectory).then((value) => {
+      if (!alive || documentRequest.current !== request) return;
+      if (value.digest !== initialAsset.digest
+          || value.package_digest !== initialAsset.packageDigest) {
+        setError(`团队 Skill ${skill.name} 的正文或整包在读取期间已发生变化；`
+          + "已停止展示，请返回发起页重新核对");
+        setDocumentFor("");
+        setDocument(undefined);
+        return;
+      }
+      setError("");
       setDocument(value);
     }).catch((cause) => {
+      if (!alive || documentRequest.current !== request) return;
       setError(String(cause instanceof Error ? cause.message : cause));
       setDocumentFor("");
     });
-  }, [initialDirectory, library]);
+    return () => { alive = false; };
+  }, [initialAsset, library]);
 
   useEffect(() => {
-    if (!initialDirectory || documentFor !== initialDirectory || !document) return;
+    if (!initialAsset || documentFor !== initialAsset.directory || !document) return;
     requestAnimationFrame(() => globalThis.document.getElementById(
-      `${knowledgeAssetElementId("skill", initialDirectory)}-document`,
+      `${knowledgeAssetElementId("skill", initialAsset.directory)}-document`,
     )?.scrollIntoView({ behavior: "smooth", block: "start" }));
-  }, [document, documentFor, initialDirectory]);
+  }, [document, documentFor, initialAsset]);
 
   const run = async (work: () => Promise<unknown>) => {
     setBusy(true); setError("");
@@ -332,6 +371,7 @@ function SkillLibraryPanel({ fallback, admin, initialDirectory }: {
   }) ?? [];
 
   const toggleDocument = async (directory: string) => {
+    const request = ++documentRequest.current;
     if (documentFor === directory) {
       setDocumentFor("");
       setDocument(undefined);
@@ -341,8 +381,27 @@ function SkillLibraryPanel({ fallback, admin, initialDirectory }: {
     setDocument(undefined);
     setError("");
     try {
-      setDocument(await getSkillDocument(directory));
+      const expected = initialAsset?.directory === directory
+        ? initialAsset : undefined;
+      const current = shelf?.skills.find((item) =>
+        directoryOf(item) === directory);
+      if (expected && (!current || current.digest !== expected.digest
+          || packageDigestOf(current) !== expected.packageDigest)) {
+        throw new Error("这项团队 Skill 已不是清单中的版本；已停止展开当前全文，请返回发起页重新核对");
+      }
+      const value = await getSkillDocument(directory);
+      if (documentRequest.current !== request) return;
+      if (current && (value.digest !== current.digest
+          || value.package_digest !== packageDigestOf(current))) {
+        throw new Error("这项团队 Skill 的正文或整包与货架摘要不一致；已停止展示，请刷新后重试");
+      }
+      if (expected && (value.digest !== expected.digest
+          || value.package_digest !== expected.packageDigest)) {
+        throw new Error("这项团队 Skill 的正文或整包在读取期间已变化；已停止展示当前全文");
+      }
+      setDocument(value);
     } catch (cause) {
+      if (documentRequest.current !== request) return;
       setError(String(cause instanceof Error ? cause.message : cause));
       setDocumentFor("");
     }
@@ -502,10 +561,15 @@ function SkillLibraryPanel({ fallback, admin, initialDirectory }: {
 
     {visibleSkills.map((skill) => {
       const directory = directoryOf(skill);
+      const focusedVersion = directory === initialAsset?.directory;
+      const focusedVersionVerified = !!initialAsset && focusedVersion
+        && documentFor === directory
+        && document?.digest === initialAsset.digest
+        && document.package_digest === initialAsset.packageDigest;
       return <article
         id={directory ? knowledgeAssetElementId("skill", directory) : undefined}
         className={`knowledge-shelf-row${skill.loadable ? "" : " broken"}${
-          directory === initialDirectory ? " focused" : ""}`}
+          directory === initialAsset?.directory ? " focused" : ""}`}
         key={skill.path}>
         <div className="knowledge-shelf-main">
           {directory ? <button type="button" className="knowledge-shelf-name"
@@ -601,9 +665,14 @@ function SkillLibraryPanel({ fallback, admin, initialDirectory }: {
           </div>}
         {directory && documentFor === directory && <div
           id={`${knowledgeAssetElementId("skill", directory)}-document`}
-          className="knowledge-shelf-document" aria-label={`${skill.name} 内容`}>
+          className="knowledge-shelf-document" aria-label={`${skill.name} 全文`}>
           <header>
-            <span><strong>SKILL.md</strong><small>{skill.path}</small></span>
+            <span><strong>SKILL.md 全文</strong><small>{skill.path}
+              {` · 正文 ${(document?.digest ?? skill.digest).slice(0, 8)} · 包 ${
+                (document?.package_digest ?? packageDigestOf(skill)).slice(0, 8)
+                  || "未记录"} · ${focusedVersion
+                ? focusedVersionVerified ? "清单版本已对拍" : "正在对拍清单版本"
+                : document ? "当前生效版已核对" : "正在核对当前生效版"}`}</small></span>
             <button type="button" onClick={() => void toggleDocument(directory)}>收起</button>
           </header>
           {!document && <p>正在读取内容…</p>}
@@ -699,10 +768,10 @@ function SkillLibraryPanel({ fallback, admin, initialDirectory }: {
 const FORM_LABEL = { document: "文档", skill: "Skill", rule: "规则",
   example: "示例" } as const;
 
-function KnowledgeCandidatePanel({ admin, onOpenTask, initialCandidateId }: {
+function KnowledgeCandidatePanel({ admin, onOpenTask, initialAsset }: {
   admin: boolean;
   onOpenTask: (taskId: string) => void;
-  initialCandidateId?: string;
+  initialAsset?: EngineeringAssetFocus;
 }) {
   const [candidates, setCandidates] = useState<KnowledgeCandidateRecord[]>([]);
   const [modules, setModules] = useState<BusinessModule[]>([]);
@@ -711,8 +780,8 @@ function KnowledgeCandidatePanel({ admin, onOpenTask, initialCandidateId }: {
   const [busy, setBusy] = useState("");
   const [reasonFor, setReasonFor] = useState("");
   const [reason, setReason] = useState("");
-  const [expanded, setExpanded] = useState(Boolean(initialCandidateId));
-  const focusedCandidate = useRef("");
+  const [expanded, setExpanded] = useState(Boolean(initialAsset));
+  const [focusActivation, setFocusActivation] = useState(0);
   const refresh = async () => {
     setLoading(true); setError("");
     try {
@@ -726,22 +795,31 @@ function KnowledgeCandidatePanel({ admin, onOpenTask, initialCandidateId }: {
   };
   useEffect(() => { void refresh(); }, []);
   useEffect(() => {
-    if (!initialCandidateId || loading
-        || focusedCandidate.current === initialCandidateId) return;
-    focusedCandidate.current = initialCandidateId;
-    if (!candidates.some((item) => item.id === initialCandidateId)) {
-      setError("要查看的工程知识不存在或已被移除；当前任务的固定版本仍保留在任务现场。");
+    if (!initialAsset || loading) return;
+    const candidate = candidates.find((item) =>
+      item.id === initialAsset.candidateId);
+    if (!candidate) {
+      setError("要核对的工程知识已不存在，无法把管理页当前内容当作清单版本；请返回发起页重新核对。");
       return;
     }
     setExpanded(true);
-  }, [candidates, initialCandidateId, loading]);
+    setFocusActivation((value) => value + 1);
+    if (candidate.digest !== initialAsset.digest) {
+      setError(`工程知识 ${candidate.title} 已发生变化（清单 ${
+        initialAsset.digest.slice(0, 8)}，当前 ${
+        candidate.digest.slice(0, 8)}）；已停止展开，不能把当前全文当作同一版本`);
+      return;
+    }
+    setError("");
+  }, [candidates, initialAsset, loading]);
   useEffect(() => {
-    if (!initialCandidateId || loading || !expanded
-        || !candidates.some((item) => item.id === initialCandidateId)) return;
+    if (!initialAsset || loading || !expanded
+        || !candidates.some((item) => item.id === initialAsset.candidateId
+          && item.digest === initialAsset.digest)) return;
     requestAnimationFrame(() => document.getElementById(
-      `${knowledgeAssetElementId("engineering", initialCandidateId)}-document`,
+      `${knowledgeAssetElementId("engineering", initialAsset.candidateId)}-document`,
     )?.scrollIntoView({ behavior: "smooth", block: "start" }));
-  }, [candidates, expanded, initialCandidateId, loading]);
+  }, [candidates, expanded, focusActivation, initialAsset, loading]);
   const pending = candidates.filter((item) => item.status === "pending");
   const visible = expanded ? candidates : candidates.slice(0, 6);
   const canManage = (candidate: KnowledgeCandidateRecord) => admin
@@ -774,12 +852,18 @@ function KnowledgeCandidatePanel({ admin, onOpenTask, initialCandidateId }: {
     {!loading && !candidates.length && <div className="knowledge-shelf-empty">
       还没有任务沉淀候选。开发者可在任务页提交，不会自动发布。</div>}
     <div className="knowledge-candidate-list">
-      {visible.map((candidate) => <article key={candidate.id}
-        id={knowledgeAssetElementId("engineering", candidate.id)}
-        className={`status-${candidate.status}${candidate.id === initialCandidateId
-          ? " focused" : ""}`}>
+      {visible.map((candidate) => {
+        const targetAsset = candidate.id === initialAsset?.candidateId
+          ? initialAsset : undefined;
+        const exactTarget = !!targetAsset
+          && candidate.digest === targetAsset.digest;
+        return <article key={candidate.id}
+          id={knowledgeAssetElementId("engineering", candidate.id)}
+          className={`status-${candidate.status}${targetAsset
+            ? " focused" : ""}`}>
         <header><span><strong>{candidate.title}</strong>
-          <small>{candidate.id} · {candidate.submitted_by}</small></span>
+          <small>{candidate.id} · 版本 {candidate.digest.slice(0, 8)} · {
+            candidate.submitted_by}</small></span>
           <em>{candidate.status === "pending" ? "待审核"
             : candidate.status === "published" ? "已发布闭环" : "暂不接纳"}</em>
         </header>
@@ -798,12 +882,18 @@ function KnowledgeCandidatePanel({ admin, onOpenTask, initialCandidateId }: {
             && <KnowledgeLanguageTags languages={candidate.technologies}
               empty="缺少语言标签 · 需治理" />}
         </div>
-        <details
+        {targetAsset && !exactTarget ? <p className="business-module-error" role="alert">
+          清单版本 {targetAsset.digest.slice(0, 8)} 与当前版本 {
+            candidate.digest.slice(0, 8)} 不同；当前正文未作为同一版展开。
+        </p> : <details
+          key={`${candidate.id}/${exactTarget ? focusActivation : 0}`}
           id={`${knowledgeAssetElementId("engineering", candidate.id)}-document`}
-          open={candidate.id === initialCandidateId || undefined}>
-          <summary>查看正文与适用场景</summary>
+          open={exactTarget || undefined}>
+          <summary>{exactTarget ? "清单版本已对拍 · 查看全文与适用场景"
+            : "查看全文与适用场景"}</summary>
           <p><strong>何时使用：</strong>{candidate.when_to_use}</p>
           <pre>{candidate.content}</pre></details>
+        }
         <footer><button type="button"
           onClick={() => onOpenTask(candidate.source_task_id)}>
           来源 {candidate.source_task_id}</button>
@@ -826,7 +916,8 @@ function KnowledgeCandidatePanel({ admin, onOpenTask, initialCandidateId }: {
             onClick={() => void decide(candidate, "reject")}>确认驳回</button>
           <button type="button" onClick={() => setReasonFor("")}>取消</button>
         </div>}
-      </article>)}
+      </article>;
+      })}
     </div>
     {candidates.length > 6 && <button type="button" className="knowledge-show-all"
       onClick={() => setExpanded((value) => !value)}>
@@ -913,11 +1004,10 @@ export function KnowledgeFlywheel({
     {insights && insights.summary.tracked_tasks === 0 && <div className="knowledge-flywheel-empty"><span aria-hidden>◎</span><div><strong>知识飞轮正在等待第一批数据</strong><p>正式模块知识或 Skill 被新任务装载、读取后，这里会出现使用趋势；任务文档和仓库项目规则不会进入团队统计。</p></div></div>}
 
     <SkillLibraryPanel fallback={insights?.host_skills} admin={admin}
-      initialDirectory={initialAsset?.kind === "skill"
-        ? initialAsset.directory : undefined} />
+      initialAsset={initialAsset?.kind === "skill" ? initialAsset : undefined} />
     <KnowledgeCandidatePanel admin={admin} onOpenTask={onOpenTask}
-      initialCandidateId={initialAsset?.kind === "engineering"
-        ? initialAsset.candidateId : undefined} />
+      initialAsset={initialAsset?.kind === "engineering"
+        ? initialAsset : undefined} />
 
     {insights && insights.summary.tracked_tasks > 0 && <>
       <div className="knowledge-flywheel-metrics" aria-label="知识效能摘要">

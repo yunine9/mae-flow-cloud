@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
@@ -51,8 +51,8 @@ test("业务模块由管理员指定 Owner；知识正文按版本发布且归�
     ["https://code.example/pay.git"]);
   const v2 = publishBusinessKnowledgeAsset(dataDir, created.id, {
     id: "release-checklist",
-    title: "支付发布清单",
-    summary: "支付服务上线前的固定检查项",
+    title: "支付发布清单（新版）",
+    summary: "第二版支付服务上线检查项",
     when_to_use: "修改支付链路、渠道配置或账务逻辑时",
     content: "# 支付发布清单\n\n第二版正文。\n",
   }, "owner-a");
@@ -63,8 +63,16 @@ test("业务模块由管理员指定 Owner；知识正文按版本发布且归�
     "只更新正文不能静默抹掉形态与仓库作用域");
   assert.match(readBusinessKnowledgeAsset(
     dataDir, created.id, "release-checklist").content, /第二版/);
-  assert.match(readBusinessKnowledgeAsset(
-    dataDir, created.id, "release-checklist", 1).content, /第一版/);
+  const historical = readBusinessKnowledgeAsset(
+    dataDir, created.id, "release-checklist", 1);
+  assert.match(historical.content, /第一版/);
+  assert.equal(historical.asset.version, 1,
+    "按版本读全文时，返回身份也必须对应该历史正文");
+  assert.equal(historical.asset.digest, v1.assets[0].digest);
+  assert.notEqual(historical.asset.digest, v2.assets[0].digest);
+  assert.equal(historical.asset.title, "支付发布清单",
+    "历史全文必须带发布当时的元数据，不能套用当前标题");
+  assert.equal(historical.asset.summary, "支付服务上线前的固定检查项");
 
   const archived = archiveBusinessKnowledgeAsset(
     dataDir, created.id, "release-checklist", "owner-a");
@@ -73,6 +81,11 @@ test("业务模块由管理员指定 Owner；知识正文按版本发布且归�
     dataDir, created.id, "release-checklist", 1).content, /第一版/,
   "归档只停止新任务选用，历史版本仍可追溯");
   assert.equal(listBusinessModules(dataDir).operations.length, 4);
+  writeFileSync(join(dataDir, "business-modules", created.id, "assets",
+    "release-checklist", "v1.md"), "# 被篡改的历史正文\n");
+  assert.throws(() => readBusinessKnowledgeAsset(
+    dataDir, created.id, "release-checklist", 1), /发布指纹不一致/,
+  "历史文件变化后必须拒绝展示，不能现场重算成同一个 v1");
   assert.throws(() => publishBusinessKnowledgeAsset(dataDir, created.id, {
     id: "bad-repository", title: "坏作用域", summary: "摘要",
     when_to_use: "任何时候", repositories: ["https://code.example/other.git"],
@@ -146,6 +159,26 @@ test("HTTP 权限：admin 创建/转移 Owner；Owner 管资产；其他开发�
       { headers: { cookie: viewer } });
     assert.equal(readable.status, 200);
     assert.equal((await readable.json() as { content: string }).content, "正文");
+    const republished = await fetch(
+      `${base}/business-modules/pay/assets/rules`, {
+        method: "PUT", headers: { cookie: owner }, body: JSON.stringify({
+          title: "规则", summary: "摘要", when_to_use: "改支付时",
+          content: "第二版正文",
+        }),
+      });
+    assert.equal(republished.status, 200);
+    const historicalResponse = await fetch(
+      `${base}/business-modules/pay/assets/rules?version=1`,
+      { headers: { cookie: viewer } });
+    assert.equal(historicalResponse.status, 200);
+    const historicalView = await historicalResponse.json() as {
+      asset: { version: number }; content: string };
+    assert.equal(historicalView.asset.version, 1);
+    assert.equal(historicalView.content, "正文");
+    const invalidVersion = await fetch(
+      `${base}/business-modules/pay/assets/rules?version=latest`,
+      { headers: { cookie: viewer } });
+    assert.equal(invalidVersion.status, 400);
 
     const ownerTransfer = await fetch(`${base}/business-modules/pay`, {
       method: "PUT", headers: { cookie: owner },

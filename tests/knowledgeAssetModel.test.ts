@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
@@ -20,6 +20,7 @@ import {
 import {
   createKnowledgeCandidate,
   decideKnowledgeCandidate,
+  readKnowledgeCandidate,
 } from "../src/knowledgeCandidates.ts";
 import {
   materializeEngineeringKnowledge,
@@ -151,6 +152,28 @@ test("工程知识候选发布后按任务画像快照；不匹配时不误推�
   assert.deepEqual(materialized.warnings, []);
   assert.match(readFileSync(materialized.entries[0].path, "utf-8"),
     /不要把超时当基础设施故障/);
+});
+
+test("工程知识管理页与任务选择都拒绝正文和发布指纹不一致的记录", () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-engineering-tamper-"));
+  const candidate = createKnowledgeCandidate(dataDir, {
+    source_task_id: "task-source", title: "发布核对", summary: "摘要",
+    when_to_use: "发布时", nature: "engineering", form: "rule",
+    technologies: ["java"], content: "# 原始正文\n",
+  }, "developer-a");
+  const file = join(dataDir, "knowledge-candidates", `${candidate.id}.json`);
+  const stored = JSON.parse(readFileSync(file, "utf-8")) as {
+    content: string;
+  };
+  stored.content = "# 被替换但未重签的正文\n";
+  writeFileSync(file, `${JSON.stringify(stored, null, 2)}\n`);
+  assert.throws(() => readKnowledgeCandidate(dataDir, candidate.id),
+    /正文与发布指纹不一致/);
+  assert.deepEqual(snapshotEngineeringKnowledge({
+    dataDir,
+    taskWorkspace: join(dataDir, "task-1"),
+    repositories: [], technologies: ["java"], businessModuleIds: [],
+  }), [], "损坏记录不能进入任务快照");
 });
 
 test("知识飞轮 HTTP 闭环：任务沉淀待审、管理员发布、后续任务固定版本", async () => {

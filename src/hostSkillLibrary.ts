@@ -81,6 +81,8 @@ export interface HostSkillDocument {
   path: string;
   content: string;
   digest: string;
+  /** 正文与附件组成的当前整包指纹；深链必须与正文一起对拍。 */
+  package_digest: string;
   bytes: number;
 }
 
@@ -183,11 +185,21 @@ export function readHostSkillDocument(
   if (raw.byteLength > MAX_SKILL_BYTES) {
     throw new SkillLibraryError("SKILL.md 超过 128 KiB，拒绝展示");
   }
+  let packageDigestValue: string;
+  try {
+    // 正文读取与整包计算都在同一个同步请求中完成；同进程的换包写操作
+    // 无法插进两者之间，前端也不必拿先前的货架摘要冒充当前包身份。
+    packageDigestValue = packageDigest(packageRoot);
+  } catch (error) {
+    throw new SkillLibraryError(`Skill 包无法完整核对：${
+      error instanceof Error ? error.message : String(error)}`);
+  }
   return {
     directory,
     path: `${directory}/SKILL.md`,
     content: raw.toString("utf-8"),
     digest: sha256(raw),
+    package_digest: packageDigestValue,
     bytes: raw.byteLength,
   };
 }

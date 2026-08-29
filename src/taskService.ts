@@ -3965,6 +3965,8 @@ export class TaskService {
       repositoryProfiles?: RepositoryProfile[];
       /** 内部复制/旧客户端兼容；普通下单缺席并由服务端自动匹配。 */
       selectedEngineeringKnowledgeIds?: string[];
+      /** 发起页服务端预览的有序清单指纹；不一致时拒绝静默换名单。 */
+      knowledgePreviewDigest?: string;
       /** 仅供跨仓拆单复制父任务已固定版本。 */
       engineeringKnowledge?: SelectedEngineeringKnowledge[];
       engineeringKnowledgeSourceWorkspace?: string;
@@ -4106,6 +4108,26 @@ export class TaskService {
       effectiveKnowledgeSelections.businessModuleIds;
     const selectedEngineeringKnowledgeIds =
       effectiveKnowledgeSelections.engineeringKnowledgeIds;
+    let expectedKnowledgePreview:
+      ReturnType<typeof previewLaunchKnowledge> | undefined;
+    if (options.knowledgePreviewDigest) {
+      const currentPreview = previewLaunchKnowledge(this.options.dataDir, {
+        repositories,
+        selectedBusinessModuleIds: options.selectedBusinessModuleIds,
+        selectedEngineeringKnowledgeIds: options.selectedEngineeringKnowledgeIds,
+        selectedHostSkillPaths: options.selectedHostSkillPaths,
+        repositoryProfiles: options.repositoryProfiles,
+        workflowDefinition: !options.workflowProfile
+          ? options.workflowDefinition : undefined,
+      });
+      if (!currentPreview.complete) {
+        throw new Error("发起前知识清单暂时无法完整核对，请稍后重试");
+      }
+      if (currentPreview.selection_digest !== options.knowledgePreviewDigest) {
+        throw new Error("发起前知识清单已变化，请核对更新后的清单再发起");
+      }
+      expectedKnowledgePreview = currentPreview;
+    }
     const id = options.reuseTaskId ?? this.allocateTaskId();
     if (options.reuseTaskId && (!/^task-\d+$/.test(id)
         || this.tasks.has(id) || existsSync(join(this.options.dataDir, id)))) {
@@ -4227,6 +4249,49 @@ export class TaskService {
       for (const warning of hostSkillSnapshotWarnings) {
         this.options.log?.(
           `[host-skill-snapshot] 任务 ${id}: ${warning}`);
+      }
+      if (expectedKnowledgePreview) {
+        const expectedBusiness = expectedKnowledgePreview.business_knowledge
+          .map((item) => ({
+            module_id: item.module_id,
+            module_revision: item.module_revision,
+            id: item.id,
+            version: item.version,
+            digest: item.digest,
+          }));
+        const actualBusiness = businessModules.flatMap((module) =>
+          module.assets.map((asset) => ({
+            module_id: module.id,
+            module_revision: module.revision,
+            id: asset.id,
+            version: asset.version,
+            digest: asset.digest,
+          })));
+        const expectedEngineering = expectedKnowledgePreview
+          .engineering_knowledge.map((item) => ({
+            id: item.id, digest: item.digest,
+          }));
+        const actualEngineering = engineeringKnowledge.map((item) => ({
+          id: item.id, digest: item.digest,
+        }));
+        const expectedSkills = expectedKnowledgePreview.team_skills
+          .map((item) => ({
+            path: item.path,
+            digest: item.digest,
+            package_digest: item.package_digest,
+          }));
+        const actualSkills = teamSkills.map((item) => ({
+          path: item.source_path ?? item.path,
+          digest: item.digest,
+          package_digest: item.package_digest,
+        }));
+        if (JSON.stringify({ business: actualBusiness,
+          engineering: actualEngineering, skills: actualSkills })
+            !== JSON.stringify({ business: expectedBusiness,
+              engineering: expectedEngineering, skills: expectedSkills })) {
+          throw new Error(
+            "发起前知识清单未能按核对版本完整固定，请重新核对后再发起");
+        }
       }
       storeRequirementDocument(workspace, requirement, requirementDocument);
     } catch (error) {

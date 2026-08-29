@@ -143,9 +143,11 @@ import {
   type KnowledgeAssetMetadata,
 } from "./knowledgeAssetModel.ts";
 import {
+  normalizeRepositoryProfile,
   RepositoryProfileError,
   resolveRepositoryProfiles,
   saveRepositoryProfile,
+  type RepositoryProfile,
 } from "./repositoryProfiles.ts";
 import {
   KnowledgeCandidateError,
@@ -1266,9 +1268,15 @@ export function createTaskServer(
           }
           if (request.method === "GET" && parts.length === 4
               && parts[2] === "assets") {
+            const rawVersion = url.searchParams.get("version");
+            const version = rawVersion === null ? undefined : Number(rawVersion);
+            if (version !== undefined
+                && (!Number.isInteger(version) || version < 1)) {
+              return json(response, 400, { error: "知识版本不合法" });
+            }
             return json(response, 200, readBusinessKnowledgeAsset(
               dataDir, decodeURIComponent(parts[1]),
-              decodeURIComponent(parts[3])));
+              decodeURIComponent(parts[3]), version));
           }
           if (request.method === "PUT" && parts.length === 4
               && parts[2] === "assets") {
@@ -1766,20 +1774,35 @@ export function createTaskServer(
         const selectedEngineeringKnowledgeIds =
           Array.isArray(body.selected_engineering_knowledge_ids)
             ? body.selected_engineering_knowledge_ids.map(String) : undefined;
+        let knowledgePreviewDigest = body.knowledge_preview_digest === undefined
+          ? undefined : String(body.knowledge_preview_digest).trim();
+        if (body.knowledge_preview_digest !== undefined
+            && !/^[a-f0-9]{64}$/.test(knowledgePreviewDigest ?? "")) {
+          return json(response, 400, { error: "知识清单指纹不合法" });
+        }
         const repositoryProfiles = Array.isArray(body.repository_profiles)
           ? body.repository_profiles.flatMap((item: Record<string, unknown>) => {
+              let current: RepositoryProfile;
               try {
-                return [saveRepositoryProfile(service.options.dataDir, {
+                current = normalizeRepositoryProfile({
                   repository: String(item.repository ?? ""),
                   technologies: Array.isArray(item.technologies)
                     ? item.technologies.map(String) : [],
                   confirmed: item.confirmed !== false,
-                }, account ?? "本地部署")];
+                }, account ?? "本地部署");
               } catch (error) {
-                // 知识匹配旁路不能卡下单；当前任务退化为按仓库匹配。
                 service.options.log?.(
-                  `仓库技术画像保存失败(不影响下单): ${String(error)}`);
+                  `仓库技术画像无效(本单不采用): ${String(error)}`);
                 return [];
+              }
+              try {
+                return [saveRepositoryProfile(service.options.dataDir, current,
+                  account ?? "本地部署")];
+              } catch (error) {
+                // 记忆失败不改变本次选择：预览与任务仍使用同一份画像。
+                service.options.log?.(
+                  `仓库技术画像保存失败(本单仍采用): ${String(error)}`);
+                return [current];
               }
             }) : undefined;
         // 配置没配齐不给下单(用户拍板)。前端会把缺项摆在明面上,
@@ -1829,6 +1852,27 @@ export function createTaskServer(
               digest: published.digest,
             };
           }
+          if (!knowledgePreviewDigest) {
+            const preview = service.previewLaunchKnowledge({
+              repositories: repos?.length ? repos : repo ? [repo] : [],
+              selectedBusinessModuleIds,
+              selectedEngineeringKnowledgeIds,
+              selectedHostSkillPaths,
+              repositoryProfiles,
+              workflowDefinition,
+            });
+            const matched = preview.business_knowledge.length
+              + preview.engineering_knowledge.length
+              + preview.team_skills.length;
+            if (!preview.complete || matched > 0) {
+              return json(response, 409, {
+                error: "请先在发起页核对自动匹配知识全文与版本，再提交当前清单指纹",
+              });
+            }
+            // 兼容没有平台知识的旧客户端，但仍把权威空清单绑定到创建，
+            // 防止预检后目录新增资产而被静默带入。
+            knowledgePreviewDigest = preview.selection_digest;
+          }
           return json(response, 201, service.create(requirement,
             {
               title, account, repo, repos,
@@ -1841,6 +1885,7 @@ export function createTaskServer(
               selectedHostSkillPaths,
               selectedBusinessModuleIds, selectedEngineeringKnowledgeIds,
               repositoryProfiles,
+              knowledgePreviewDigest,
             }));
         } catch (error) {
           return json(response, 400, { error: String(error) });

@@ -44,6 +44,12 @@ export interface KnowledgeCandidateRecord extends KnowledgeAssetMetadata {
   published_target?: string;
 }
 
+export interface KnowledgeCandidateCatalog {
+  candidates: KnowledgeCandidateRecord[];
+  /** 单条坏记录不能混成“没有候选”；权威预览据此显式降级。 */
+  warnings: string[];
+}
+
 function required(value: unknown, label: string, max: number): string {
   const result = String(value ?? "").trim();
   if (!result) throw new KnowledgeCandidateError(`${label}不能为空`);
@@ -78,6 +84,11 @@ function parse(value: unknown): KnowledgeCandidateRecord {
       || !["pending", "published", "rejected"].includes(record.status)
       || !record.title || !record.content) {
     throw new KnowledgeCandidateError("知识候选数据损坏");
+  }
+  const bytes = Buffer.byteLength(record.content, "utf-8");
+  const digest = createHash("sha256").update(record.content).digest("hex");
+  if (record.bytes !== bytes || record.digest !== digest) {
+    throw new KnowledgeCandidateError("知识候选正文与发布指纹不一致");
   }
   const metadata = normalizeKnowledgeAssetMetadata(record,
     { allowUnclassified: false });
@@ -150,16 +161,32 @@ export function readKnowledgeCandidate(
   }
 }
 
-export function listKnowledgeCandidates(dataDir: string): KnowledgeCandidateRecord[] {
+export function listKnowledgeCandidateCatalog(
+  dataDir: string,
+): KnowledgeCandidateCatalog {
   const home = root(dataDir);
-  if (!existsSync(home)) return [];
-  return readdirSync(home, { withFileTypes: true }).flatMap((entry) => {
-    if (!entry.isFile() || entry.isSymbolicLink() || !entry.name.endsWith(".json")) {
+  if (!existsSync(home)) return { candidates: [], warnings: [] };
+  const warnings: string[] = [];
+  const candidates = readdirSync(home, { withFileTypes: true }).flatMap((entry) => {
+    if (!entry.name.endsWith(".json")) return [];
+    const id = entry.name.slice(0, -5);
+    if (!entry.isFile() || entry.isSymbolicLink()) {
+      warnings.push(`知识候选 ${id} 不是普通文件，已跳过`);
       return [];
     }
-    try { return [readKnowledgeCandidate(dataDir, entry.name.slice(0, -5))]; }
-    catch { return []; }
+    try { return [readKnowledgeCandidate(dataDir, id)]; }
+    catch (error) {
+      warnings.push(`知识候选 ${id} 读取失败：${error instanceof Error
+        ? error.message : String(error)}`);
+      return [];
+    }
   }).sort((left, right) => right.submitted_at.localeCompare(left.submitted_at));
+  return { candidates, warnings };
+}
+
+/** 兼容既有管理列表：返回类型与坏记录跳过语义不变。 */
+export function listKnowledgeCandidates(dataDir: string): KnowledgeCandidateRecord[] {
+  return listKnowledgeCandidateCatalog(dataDir).candidates;
 }
 
 export function decideKnowledgeCandidate(

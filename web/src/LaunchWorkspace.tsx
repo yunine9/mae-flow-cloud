@@ -16,7 +16,10 @@ import {
   type RepositoryTechnologyDraft,
 } from "./RepositoryTechnologyPicker";
 import { knowledgeLanguageLabel } from "./KnowledgeLanguages";
-import { type KnowledgeAssetFocus } from "./knowledgeNavigation";
+import {
+  knowledgeAssetPath,
+  type KnowledgeAssetFocus,
+} from "./knowledgeNavigation";
 import {
   SchemeSelector,
   type WorkflowSchemeSelection,
@@ -43,6 +46,7 @@ type LaunchDraft = {
   selectedBusinessModuleIds?: string[];
   moduleSelectionTouched?: boolean;
   workflowSelection?: WorkflowSchemeSelection;
+  repositoryTechnologies?: RepositoryTechnologyDraft[];
 };
 type LaunchPreferences = {
   recentRepos: string[];
@@ -64,6 +68,27 @@ function readStored<T>(key: string): T | undefined {
   }
 }
 
+function restoredRepositoryTechnologies(
+  value: unknown,
+): RepositoryTechnologyDraft[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 20).flatMap((candidate) => {
+    if (!candidate || typeof candidate !== "object") return [];
+    const item = candidate as Record<string, unknown>;
+    const repository = typeof item.repository === "string"
+      ? item.repository.trim() : "";
+    if (!repository || !Array.isArray(item.technologies)) return [];
+    return [{
+      repository,
+      technologies: item.technologies.filter((technology): technology is string =>
+        typeof technology === "string").slice(0, 50),
+      confirmed: item.confirmed === true,
+      ...(typeof item.remembered === "boolean"
+        ? { remembered: item.remembered } : {}),
+    }];
+  });
+}
+
 function repositoryIdentity(value: string): string {
   return value.trim().replace(/\/+$/, "").replace(/\.git$/i, "").toLowerCase();
 }
@@ -76,18 +101,24 @@ const KNOWLEDGE_FORM_LABEL = {
 } as const;
 
 function LaunchKnowledgeRow({ form, title, summary, whenToUse, scope, version,
-  onOpen }: {
+  href, onOpen }: {
   form: keyof typeof KNOWLEDGE_FORM_LABEL;
   title: string;
   summary: string;
   whenToUse: string;
   scope: string;
   version?: string;
+  href: string;
   onOpen: () => void;
 }) {
-  return <button type="button" className="launch-knowledge-row"
-    aria-label={`查看全文：${title}`} title={`到团队资产查看全文：${title}`}
-    onClick={onOpen}>
+  return <a className="launch-knowledge-row" href={href}
+    aria-label={`查看全文：${title}${version ? `，${version}` : ""}，命中依据：${scope}`}
+    title={`到团队资产查看全文：${title}`}
+    onClick={(event) => {
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      onOpen();
+    }}>
     <span className={`launch-knowledge-form ${form}`}>
       {KNOWLEDGE_FORM_LABEL[form]}</span>
     <span className="launch-knowledge-copy">
@@ -102,7 +133,7 @@ function LaunchKnowledgeRow({ form, title, summary, whenToUse, scope, version,
       <small>命中依据</small><strong title={scope}>{scope}</strong>
       <em>查看全文 <span aria-hidden>→</span></em>
     </span>
-  </button>;
+  </a>;
 }
 
 export function LaunchWorkspace({
@@ -162,7 +193,8 @@ export function LaunchWorkspace({
   const [draftSavedAt, setDraftSavedAt] = useState(
     validDraft?.updatedAt ?? "");
   const [repositoryTechnologies, setRepositoryTechnologies] =
-    useState<RepositoryTechnologyDraft[]>([]);
+    useState<RepositoryTechnologyDraft[]>(() =>
+      restoredRepositoryTechnologies(validDraft?.repositoryTechnologies));
   const [moduleSelectionTouched, setModuleSelectionTouched] = useState(
     validDraft?.moduleSelectionTouched === true);
   const [workflowAssets, setWorkflowAssets] = useState<WorkflowAssetSummary[]>([]);
@@ -180,6 +212,7 @@ export function LaunchWorkspace({
   const [knowledgePreviewError, setKnowledgePreviewError] = useState("");
   const [knowledgePreviewKey, setKnowledgePreviewKey] = useState("");
   const knowledgePreviewRequest = useRef(0);
+  const [knowledgePreviewRefresh, setKnowledgePreviewRefresh] = useState(0);
   const businessModules = useMemo(() => {
     const wantedRepos = new Set(repos.map(repositoryIdentity).filter(Boolean));
     return [...(options?.business_modules ?? [])].sort((left, right) => {
@@ -260,24 +293,37 @@ export function LaunchWorkspace({
     if (!options) return;
     const request = ++knowledgePreviewRequest.current;
     const key = expectedKnowledgePreviewKey;
+    const controller = new AbortController();
     setKnowledgePreviewLoading(true);
     setKnowledgePreviewError("");
-    void getLaunchKnowledgePreview(previewInput).then((result) => {
-      if (knowledgePreviewRequest.current !== request) return;
-      setKnowledgePreview(result);
-      setKnowledgePreviewKey(key);
-    }).catch((cause) => {
-      if (knowledgePreviewRequest.current !== request) return;
-      setKnowledgePreview(undefined);
-      setKnowledgePreviewKey(key);
-      setKnowledgePreviewError(cause instanceof Error
-        ? cause.message : "自动匹配清单暂时无法核对");
-    }).finally(() => {
+    // 仓库、模块和语言选择都可能连续变化；短防抖只发最后一次权威预览。
+    // 序号同时让已经在途但无法 Abort 的旧响应失效。
+    const timer = window.setTimeout(() => {
+      void getLaunchKnowledgePreview(previewInput, controller.signal).then((result) => {
+        if (knowledgePreviewRequest.current !== request) return;
+        setKnowledgePreview(result);
+        setKnowledgePreviewKey(key);
+      }).catch((cause) => {
+        if (knowledgePreviewRequest.current !== request) return;
+        if (cause instanceof DOMException && cause.name === "AbortError") return;
+        setKnowledgePreview(undefined);
+        setKnowledgePreviewKey(key);
+        setKnowledgePreviewError(cause instanceof Error
+          ? cause.message : "自动匹配清单暂时无法核对");
+      }).finally(() => {
+        if (knowledgePreviewRequest.current === request) {
+          setKnowledgePreviewLoading(false);
+        }
+      });
+    }, 180);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
       if (knowledgePreviewRequest.current === request) {
-        setKnowledgePreviewLoading(false);
+        knowledgePreviewRequest.current += 1;
       }
-    });
-  }, [expectedKnowledgePreviewKey, options]);
+    };
+  }, [expectedKnowledgePreviewKey, options, knowledgePreviewRefresh]);
 
   // 工作流资产是可选增强：目录暂时不可用时仍可用 Mae-Flow 标准方案
   // 正常下单，不能把团队资产读失败升级成新门禁。
@@ -314,6 +360,9 @@ export function LaunchWorkspace({
       selectedBusinessModuleIds,
       moduleSelectionTouched,
       workflowSelection,
+      repositoryTechnologies: repositoryTechnologies.map((item) => ({
+        ...item, technologies: [...item.technologies],
+      })),
     };
     try {
       localStorage.setItem(storageKey("draft", session.username),
@@ -330,7 +379,7 @@ export function LaunchWorkspace({
   }, [title, requirement, requirementDocumentName, repos, ticket,
     baseline, lane, repairRounds, taskInstructions,
     selectedBusinessModuleIds, moduleSelectionTouched,
-    workflowSelection, session.username]);
+    workflowSelection, repositoryTechnologies, session.username]);
 
   useEffect(() => {
     if (!workflowAssetsLoaded || !workflowSelection) return;
@@ -454,6 +503,7 @@ export function LaunchWorkspace({
             ? undefined : taskInstructions.trim() || undefined,
           workflowSelection,
           selectedBusinessModuleIds,
+          knowledgePreviewDigest: knowledgePreview?.selection_digest,
           // 团队通用知识不由下单人逐项治理。字段始终缺席，服务端按
           // 仓库、技术栈和业务模块在创建现场自动匹配并固定版本。
           repositoryProfiles: repositoryTechnologies.length > 0
@@ -485,6 +535,11 @@ export function LaunchWorkspace({
       setError(reason instanceof Error
         ? reason.message
         : "任务没有发起成功，请检查服务后重试。");
+      // 目录可能恰在预览后发生了版本变化。任何创建失败都重新核对一次，
+      // 尤其让 selection_digest 冲突恢复成可见的新清单，而不是反复提交旧版。
+      setKnowledgePreviewLoading(true);
+      setKnowledgePreviewKey("");
+      setKnowledgePreviewRefresh((current) => current + 1);
     } finally {
       setSubmitting(false);
     }
@@ -533,6 +588,7 @@ export function LaunchWorkspace({
                   setTicket("");
                   setSelectedBusinessModuleIds([]);
                   setModuleSelectionTouched(false);
+                  setRepositoryTechnologies([]);
                   setError("");
                   try { localStorage.removeItem(storageKey("draft", session.username)); } catch { /* noop */ }
                 }}>清空草稿</button>
@@ -812,7 +868,10 @@ export function LaunchWorkspace({
                         setWorkflowSelection(selection);
                         setWorkflowSelectionNotice("");
                       }}
-                      onOpenEditor={onOpenWorkflowAssets} />
+                      onOpenEditor={(workflowId) => {
+                        persistDraft();
+                        onOpenWorkflowAssets?.(workflowId);
+                      }} />
                     {workflowSelectionNotice && <p className="workflow-selection-notice"
                       role="status">{workflowSelectionNotice}</p>}
                     <div className="launch-field-grid launch-settings-grid">
@@ -881,7 +940,8 @@ export function LaunchWorkspace({
                       : selectedKnowledgeCount
                         ? `共 ${selectedKnowledgeCount} 项` : "没有匹配项"}</span>
                   </div>
-                  {matchingModuleKnowledge.length > 0 && <section
+                  {!knowledgePreviewLoading && previewSettled
+                    && matchingModuleKnowledge.length > 0 && <section
                     className="launch-knowledge-group">
                     <header><strong>业务模块知识</strong>
                       <em>{matchingModuleKnowledge.length} 项</em></header>
@@ -891,13 +951,18 @@ export function LaunchWorkspace({
                         summary={item.summary} whenToUse={item.when_to_use}
                         version={`v${item.version}`}
                         scope={describeMatchedScope(item)}
+                        href={knowledgeAssetPath({ kind: "business",
+                          moduleId: item.module_id, assetId: item.id,
+                          version: item.version, digest: item.digest })}
                         onOpen={() => {
                           persistDraft();
                           onOpenKnowledgeAsset({ kind: "business",
-                            moduleId: item.module_id, assetId: item.id });
+                            moduleId: item.module_id, assetId: item.id,
+                            version: item.version, digest: item.digest });
                         }} />)}
                   </section>}
-                  {matchingEngineeringKnowledge.length > 0 && <section
+                  {!knowledgePreviewLoading && previewSettled
+                    && matchingEngineeringKnowledge.length > 0 && <section
                     className="launch-knowledge-group">
                     <header><strong>工程知识</strong>
                       <em>{matchingEngineeringKnowledge.length} 项</em></header>
@@ -907,13 +972,16 @@ export function LaunchWorkspace({
                         whenToUse={item.when_to_use}
                         version={`版本 ${item.digest.slice(0, 8)}`}
                         scope={describeMatchedScope(item)}
+                        href={knowledgeAssetPath({ kind: "engineering",
+                          candidateId: item.id, digest: item.digest })}
                         onOpen={() => {
                           persistDraft();
                           onOpenKnowledgeAsset({ kind: "engineering",
-                            candidateId: item.id });
+                            candidateId: item.id, digest: item.digest });
                         }} />)}
                   </section>}
-                  {matchingTeamSkills.length > 0 && <section
+                  {!knowledgePreviewLoading && previewSettled
+                    && matchingTeamSkills.length > 0 && <section
                     className="launch-knowledge-group">
                     <header><strong>团队 Skill</strong>
                       <em>{matchingTeamSkills.length} 项</em></header>
@@ -923,10 +991,16 @@ export function LaunchWorkspace({
                         whenToUse=""
                         version={`版本 ${item.digest.slice(0, 8)}`}
                         scope={describeMatchedScope(item)}
+                        href={knowledgeAssetPath({ kind: "skill",
+                          directory: item.path.split("/")[0] || item.path,
+                          digest: item.digest,
+                          packageDigest: item.package_digest })}
                         onOpen={() => {
                           persistDraft();
                           onOpenKnowledgeAsset({ kind: "skill",
-                            directory: item.path.split("/")[0] || item.path });
+                            directory: item.path.split("/")[0] || item.path,
+                            digest: item.digest,
+                            packageDigest: item.package_digest });
                         }} />)}
                   </section>}
                   {!knowledgePreviewLoading && previewSettled

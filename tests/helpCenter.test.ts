@@ -20,7 +20,14 @@ test("使用帮助覆盖所有主功能，文章 id 和截图地址不会互相�
     .map((match) => match[1]);
   assert.equal(screenshots.length, 13);
   assert.equal(new Set(screenshots).size, screenshots.length);
-  for (const screenshot of screenshots) assert.match(screenshot, /^\d{2}-[a-z-]+\.png$/);
+  for (const screenshot of screenshots) {
+    assert.match(screenshot, /^\d{2}-[a-z-]+\.png$/);
+    const png = readFileSync(resolve("web/public/help", screenshot));
+    assert.equal(png.subarray(0, 8).toString("hex"), "89504e470d0a1a0a",
+      `${screenshot} 必须是真实 PNG 文件`);
+    assert.equal(png.readUInt32BE(16), 1600, `${screenshot} 视口宽度不统一`);
+    assert.equal(png.readUInt32BE(20), 1000, `${screenshot} 视口高度不统一`);
+  }
 });
 
 test("帮助文章能搜动作和提示，不要求用户记住内部功能名", () => {

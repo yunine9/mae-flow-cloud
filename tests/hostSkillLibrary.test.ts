@@ -70,6 +70,8 @@ test("上传→货架可见且权限归一;更新归档旧版;回退按版本痕
   const detail = readHostSkillDocument(dataDir, "java-autout");
   assert.equal(detail.content, skillMd("单测写法 v1"));
   assert.equal(detail.digest, first.skill_digest);
+  assert.equal(detail.package_digest, first.package_digest,
+    "正文详情必须带同一生效包的整包指纹");
   assert.equal(detail.path, "java-autout/SKILL.md");
   assert.throws(() => readHostSkillDocument(dataDir, "../escape"),
     SkillLibraryError, "查看入口与写入口共用目录边界");
@@ -102,6 +104,30 @@ test("上传→货架可见且权限归一;更新归档旧版;回退按版本痕
   assert.deepEqual(operations.map((item) => item.action),
     ["rollback", "update", "upload"], "留痕逐条且新在前");
   assert.equal(operations[0].operator, "admin-a");
+});
+
+test("Skill 正文不变但附件变化时，详情整包指纹必须随当前包变化", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-skill-detail-package-"));
+  const content = skillMd("整包对拍");
+  const first = await uploadHostSkill(dataDir, "package-version", [
+    { path: "SKILL.md", content_base64: encode(content) },
+    { path: "references/check.md", content_base64: encode("附件 v1\n") },
+  ], "admin-a", ENGINEERING_METADATA);
+  const firstDetail = readHostSkillDocument(dataDir, "package-version");
+  assert.equal(firstDetail.digest, first.skill_digest);
+  assert.equal(firstDetail.package_digest, first.package_digest);
+
+  const second = await uploadHostSkill(dataDir, "package-version", [
+    { path: "SKILL.md", content_base64: encode(content) },
+    { path: "references/check.md", content_base64: encode("附件 v2\n") },
+  ], "admin-b", ENGINEERING_METADATA);
+  const secondDetail = readHostSkillDocument(dataDir, "package-version");
+  assert.equal(secondDetail.digest, firstDetail.digest,
+    "只改附件时正文指纹应保持不变");
+  assert.notEqual(secondDetail.package_digest, firstDetail.package_digest,
+    "正文详情不能沿用旧货架的整包指纹");
+  assert.equal(secondDetail.package_digest, second.package_digest,
+    "详情响应必须描述当前完整生效包");
 });
 
 test("Skill 是知识形态；性质与模块/仓库/技术作用域分离且版本可回退", async () => {
@@ -269,11 +295,12 @@ test("下线归档可回退;不存在的下线与坏版本号回退明确报错"
 
 test("路由权限:登录才可读,写只归管理员;留痕带操作人", async () => {
   const dir = mkdtempSync(join(tmpdir(), "mfc-skill-route-"));
+  const dataDir = join(dir, "data");
   const auth = new LocalAuth(join(dir, "auth.json"));
   auth.bootstrapAdmin("boss", "administrator-pass");
   auth.createUser("dev", "developer-pass-1", "developer");
   const service = new TaskService({
-    dataDir: join(dir, "data"), provider: "test", model: "test",
+    dataDir, provider: "test", model: "test",
     modelsJson: {}, maxConcurrent: 0,
   });
   const server = createTaskServer(service, { auth });
@@ -316,10 +343,16 @@ test("路由权限:登录才可读,写只归管理员;留痕带操作人", async
     assert.equal(view.operations[0].operator, "boss",
       "留痕记录的是真实操作人,不是前端自报");
     const document = await (await fetch(`${base}/skills/route-demo`,
-      { headers: { cookie: dev } })).json() as { content: string; path: string };
+      { headers: { cookie: dev } })).json() as {
+        content: string; path: string; digest: string; package_digest: string;
+      };
     assert.match(document.content, /路由演练/,
       "登录成员应能从名称打开实际 SKILL.md");
     assert.equal(document.path, "route-demo/SKILL.md");
+    const currentSkill = listHostSkillShelf(dataDir).skills[0];
+    assert.equal(document.digest, currentSkill.digest);
+    assert.equal(document.package_digest, currentSkill.package_digest,
+      "HTTP 正文详情必须把当前正文与整包身份一起返回");
 
     const retagged = await fetch(`${base}/skills/route-demo/classification`, {
       method: "PATCH", headers: { cookie: boss },
