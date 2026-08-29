@@ -452,6 +452,9 @@ function DtsRegister({
         version: detail.version,
         url: detail.url,
         description: detail.description,
+        // 状态不带入列,可拉取判定(isActionableDts)会把远程命中的单
+        // 全部误判为"状态不可拉取"而不展示。
+        status: detail.status,
       })) });
     }, 500);
     return () => clearTimeout(timer);
