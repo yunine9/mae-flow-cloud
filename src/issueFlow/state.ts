@@ -216,8 +216,9 @@ export interface IssueGate {
   created_at: string;
 }
 
-/** UT 验证上报(阶段5)。宿主拦的是"上报"不拦"真相":passed 才放行
- * create_mr,但真正的硬验证在阶段6流水线(UT 本身也在流水线里跑)。 */
+/** UT 验证上报(阶段5,事实上报):平台只记账留痕,不推进、不设门——
+ * 真正的硬验证在阶段6流水线(UT 本身也在流水线里跑),阶段出口是
+ * complete_stage 自报。 */
 export interface IssueUtRecord {
   passed: boolean;
   summary: string;

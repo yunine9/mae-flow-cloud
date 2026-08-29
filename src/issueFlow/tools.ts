@@ -172,7 +172,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       .map((stage) => FIXED_STAGE_LABELS[scenario][stage]);
     fail(`阶段门禁:${tool} 在当前阶段「${stageLabel()}」不开放。`
       + `允许的阶段:${allowed.length ? allowed.join(" / ") : "无(本场景流程不含该工具)"}`
-      + `。固定流程的阶段由平台推进,请先完成本阶段工作`);
+      + `。固定流程按阶段出口推进,请先完成本阶段工作`);
   };
 
   // ---- 自由探索:阶段自报工具(fixed 模式不注册——阶段真相在宿主) ----

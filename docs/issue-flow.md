@@ -18,11 +18,14 @@
 
 ### 固定流程:宿主权威阶段机 + 工具门禁(方案 B)
 
-一个连续会话贯穿到底,但**阶段真相在宿主**:AI 上报不算数(固定模式不
-注册 report_stage),推进只发生在三处——机械推进(拉单成功/UT 通过/
-流水线全绿)、人工闸(用户确认)、AI 自报(仅"问题修改完成"一处)。
-工具按阶段开放,越权调用在 execute 入口被拒(提示词的工具清单只是
-引导层,工具门禁才是权威层)。
+一个连续会话贯穿到底,但**阶段真相在宿主**(固定模式不注册
+report_stage):目标驱动自报推进(2026-08-28 拍板,ADR 0002)——每阶段
+声明目标与唯一出口,拉单/拉仓/修改/UT/提交MR 五个阶段由 AI 判断达成后
+调 `complete_stage` 自报收口(平台不核实工作事实),问题分析/无单结论/
+换库验证三阶段的出口是卡工具本身(卡即出口,没有 complete_stage 可绕)。
+平台只守两道核验:人工闸(用户确认)与 MR 验绿门。工具按阶段开放,
+越权调用在 execute 入口被拒(提示词的工具清单只是引导层,工具门禁才是
+权威层,两者同源于阶段注册表的 tools 列)。
 
 **有单七阶段**:`dts_info 获取DTS单信息 → prep_repo 拉取代码仓·建分支
 → analyze 问题分析 → fix 问题修改 → ut UT验证 → mr_green 提交MR·跑绿
@@ -34,19 +37,29 @@
 结论"是问题"→ **挂起(suspended)** 等提单;"非问题"→ 直接闭环归档
 (报告仍落 issue-analysis.md 留痕)。
 
-**两个人工硬闸 + 两个机械闸**:
+**两个人工硬闸 + MR 验绿门**(2026-08-28 拍板:平台只守它比 AI 强的
+核验,其余出口 AI 自报):
 
 - 分析报告确认(analyze→fix):AI 调 `submit_analysis`(以报告文件在场
   为门票)→ 平台举闸,用户过目确认才放行修改;无单场景同一入口带结论
   (issue/non_issue)。
 - 换库环境验证(deploy_verify):`build_deploy` 成功 → 平台举闸,
   用户**真实验证**;通过→待手动归档,有问题→**一律回退 analyze**
-  (轮次+1,fix 起各阶段标 redo,分支/MR 延用同分支追加,UT/监看作废)。
-- UT 闸:没报 UT 通过(`report_ut passed=true`)不准 create_mr——
-  拦"上报"不拦"真相",硬验证在流水线(UT 本身也在流水线里跑)。
-- MR 绿闸:create_mr 后**宿主监看流水线**(公共 pipelineClient,触发+
-  轮询,预算内不弃看):红→携失败 checks 开回合让 AI 修(同分支再推,
-  MR 自动跟新提交),绿→自动进换库验证;预算耗尽如实停表请人工。
+  (轮次+1,fix 起各阶段标 redo,分支/MR 延用同分支追加,UT 上报/流水线
+  监看/MR 申报账作废重来)。
+- UT 事实上报(2026-08-28 降级):AI 跑完测试**自愿**调 `report_ut`
+  如实上报,平台只记账(台账+事件流+现场记录)——不再是出口、不再是
+  建 MR 前置;UT 阶段出口= `complete_stage` 自报(硬验证在流水线,
+  UT 本身也在流水线里跑)。
+- MR 验绿门(mr_green 阶段的 complete_stage):AI 建齐 MR(create_mr
+  自动记账进台账)后调 complete_stage **申报 MR 清单**(mrs 参数,MR
+  链接或仓地址),平台程序化验绿——清单=台账(少报/多报点名打回,
+  空=空合法)+ 台账每 MR 最新推送 SHA 的流水线全绿,三态裁决:全绿
+  当场放行进换库验证;有红当场打回携失败项(同分支修复再推、重建 MR、
+  重新申报);在跑受理(申报账 mr_gate),宿主监看器(公共
+  pipelineClient,触发+轮询,预算内不弃看)等绿自动放行、红携失败
+  checks 开回合;全绿未申报只开回合提醒申报,不推进(不变量:进
+  deploy_verify 当且仅当"已申报且全绿");预算耗尽如实停表请人工。
 
 平台闸写进 issue.json(`gate` 字段),Agent 对该文件只读——AI 推不动
 闸,这是"固定"的强制度所在;渲染复用问题卡组件。
@@ -133,11 +146,13 @@ fetch-logs 二进制,产物落工作区,Agent grep 真实文件)/ `build_deploy`
 单号自动关联)。
 
 固定模式工具:去掉 report_stage,新增 `submit_analysis`(提交分析/
-结论,以报告在场为门票,触发人工闸)/ `report_ut`(UT 结果上报,
-passed 才放行 MR)/ `complete_stage`(仅"问题修改完成"自报);阶段
-门禁:dts_get_ticket 仅 dts_info、build_deploy 仅 deploy_verify、
-create_mr 仅 mr_green 且 UT 已过、push_branch 自 fix 起、fetch_logs
-自 analyze 起(含回退轮)。
+结论,以报告在场为门票,触发人工闸)/ `report_ut`(UT 结果事实上报,
+只记账——不是出口、不是建 MR 前置)/ `complete_stage`(拉单/拉仓/
+修改/UT/提交MR 五个阶段的自报出口;提交 MR 阶段必带 mrs 申报 MR 清单,
+平台验绿放行)。阶段门禁以阶段注册表(src/issueFlow/stageRegistry.ts)
+的 tools 列为唯一事实源:dts_get_ticket、fetch_logs 全程开放(工读类),
+create_mr 仅 mr_green,push_branch 自 fix 起,build_deploy 仅
+deploy_verify,submit_analysis 仅 analyze,report_ut 仅 ut。
 
 技能(每次会话物化到 `skills/`,改编自 playbook):issue-playbook(路线
 图)、issue-research(研究方法与非问题出口)、issue-delivery(分支/提交
