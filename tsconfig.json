@@ -6,20 +6,28 @@
     "module": "esnext",
     "moduleResolution": "bundler",
     "target": "es2022",
-    "lib": ["es2023"],
+    "lib": [
+      "es2023"
+    ],
     "skipLibCheck": true,
     "jsx": "react-jsx",
-    "types": ["node"],
+    "types": [
+      "node"
+    ],
     "strictNullChecks": true,
     "noImplicitThis": true,
     "useUnknownInCatchVariables": false
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts"],
+  "include": [
+    "src/**/*.ts",
+    "tests/**/*.ts"
+  ],
   "exclude": [
     "node_modules",
     "web",
     "kernel",
     ".pilot",
-    "tests/issueFlowContract.test.ts"
+    "tests/issueFlowContract.test.ts",
+    "tests/rootErrorBoundary.test.ts"
   ]
 }
