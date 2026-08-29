@@ -98,6 +98,7 @@ import {
   issueOpeningPrompt,
   issueResumePrompt,
   materializeIssueSkills,
+  type IssueEnvCredentials,
 } from "./prompt.ts";
 import {
   GATE_OPTIONS,
@@ -790,6 +791,25 @@ export class IssueFlowService {
     };
   }
 
+  /** 登记元信息的网管凭据明文(ADR-0003:网管口令允许进 AI 上下文):
+   * 开场词/续聊词的渲染与 get_issue_meta 工具共用同一解密路——后台
+   * 凭据按 sopuser 解、页面凭据按组首账号解;解不出(闸未补配/缺组)
+   * 按缺省,字段不出现。 */
+  private environmentCredentials(live: LiveIssue): IssueEnvCredentials {
+    const env = live.state.environment;
+    if (!env) return {};
+    const backend = env.credential_ref
+      ? this.vault.credential(live.id, env.credential_ref, "sopuser")?.password
+      : undefined;
+    const page = env.page_credential_ref
+      ? this.vault.credential(live.id, env.page_credential_ref)?.password
+      : undefined;
+    return {
+      ...(backend ? { backend } : {}),
+      ...(page ? { page } : {}),
+    };
+  }
+
   /** 网管环境配置(问题卡 env_needed 闸的作答口,POST
    * /issues/:id/environment):登记时没配环境,拉日志/换库的工具现场
    * 举闸后,用户在这里补地址与网管后台密码。密码进 vault 后即清闸并开
@@ -815,8 +835,9 @@ export class IssueFlowService {
     saveState(live.root, state);
     this.log(`[issue-flow] ${id} 网管环境已配置(${environment.name})`);
     this.startPlatformTurn(live,
-      "平台通知: 网管环境已配置(密码由平台保管,不进入对话)。"
-        + "请重试刚才的操作——拉日志用 fetch_logs,换库部署用 build_deploy。");
+      "平台通知: 网管环境已配置(凭据已入 vault;调 get_issue_meta 可查"
+        + "登记元信息全量)。请重试刚才的操作——拉日志用 fetch_logs,"
+        + "换库部署用 build_deploy。");
     return summarize(state);
   }
 
@@ -847,7 +868,8 @@ export class IssueFlowService {
       await this.ensureContainer(live);
       if (live.driver) return live.driver.continueWith(message);
       const driver = await this.openDriver(live);
-      return driver.startResume(issueResumePrompt(live.state, message));
+      return driver.startResume(issueResumePrompt(live.state, message,
+        this.environmentCredentials(live)));
     });
   }
 
@@ -861,8 +883,10 @@ export class IssueFlowService {
         // Agent 在「拉取代码仓」阶段调 pull_repo 逐个落地(开场词有令)。
         const driver = await this.openDriver(live);
         return driver.start(live.state.mode === "fixed"
-          ? issueFixedOpeningPrompt(live.state)
-          : issueOpeningPrompt(live.state));
+          ? issueFixedOpeningPrompt(live.state,
+            this.environmentCredentials(live))
+          : issueOpeningPrompt(live.state,
+            this.environmentCredentials(live)));
       });
     }
   }
@@ -1111,6 +1135,14 @@ export class IssueFlowService {
           ? service.vault.credential(live.id, ref, "sopuser")?.password
           : undefined;
       },
+      // 登记元信息的页面密码(ADR-0003 明文进上下文;闸补配的环境
+      // 没有页面凭据组,按缺省)。
+      pagePassword: () => {
+        const ref = live.state.environment?.page_credential_ref;
+        return ref
+          ? service.vault.credential(live.id, ref)?.password
+          : undefined;
+      },
       gitCredential: () =>
         this.options.gitCredential?.(live.state.account),
       // 拉仓工具的宿主实现(克隆+登记+建分支,凭据止步宿主)。
@@ -1231,7 +1263,8 @@ export class IssueFlowService {
       const driver = await this.openDriver(live);
       driver.injectDecision(record);
       return driver.startResume(issueResumePrompt(live.state,
-        `用户对问题卡的答复:\n${renderDecision(record)}`));
+        `用户对问题卡的答复:\n${renderDecision(record)}`,
+        this.environmentCredentials(live)));
     });
     return summarize(live.state);
   }

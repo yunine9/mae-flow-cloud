@@ -36,6 +36,8 @@ import {
   fixedNudgeNotice,
   issueFixedOpeningPrompt,
   issueOpeningPrompt,
+  issueRegistrationMeta,
+  issueResumePrompt,
 } from "../src/issueFlow/prompt.ts";
 import {
   getPipelineStatus,
@@ -381,9 +383,11 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     assert.equal(archived.status, "archived");
     assert.equal(archived.conclusion?.kind, "delivered");
     assert.equal(archived.stage, "deploy_verify", "归档不改写固定流程阶段词表");
-    // 秘密纪律:环境密码与 git 令牌不进模型上下文。
+    // 登记元信息进上下文(ADR-0003):网管口令是现场公开默认值,明文
+    // 随元信息块出现;平台凭据(git 令牌)的铁律不变。
     const requestText = JSON.stringify(model.requests);
-    assert.doesNotMatch(requestText, /env-shared-secret/);
+    assert.match(requestText, /env-shared-secret/);
+    assert.match(requestText, /page-secret/);
     assert.doesNotMatch(requestText, /git-token/);
   } finally {
     await service.shutdown().catch(() => undefined);
@@ -1408,7 +1412,8 @@ test("网管环境闸(2026-08-28):fetch_logs 缺环境举 env_needed(scope=logs)
     assert.equal(fetches.length, 2);
     assert.equal(fetches[0].payload.is_error, true, "缺环境时如实失败");
     assert.notEqual(fetches[1].payload.is_error, true, "配置后重试放行");
-    // 秘密纪律:密码不进模型上下文。
+    // 环境是开场后才补配的:开场词渲染时元信息还没有环境,密码不借闸
+    // 进上下文(ADR-0003 的明文只随登记元信息走,要查调 get_issue_meta)。
     assert.doesNotMatch(JSON.stringify(model.requests), /env-shared-secret/);
   } finally {
     await service.shutdown().catch(() => undefined);
@@ -1629,4 +1634,168 @@ test("停机白名单与出口进了提示词(B):开局契约/自由契约/催�
   const nudge = fixedNudgeNotice(fixedState(), 1, 2);
   assert.match(nudge, /平台催办\(第 1\/2 次\)/);
   assert.match(nudge, /出口\(到什么程度算完\)/);
+});
+
+// ---- 登记元信息全量进上下文 + get_issue_meta(ADR-0003 裁定落地) ----
+
+/** 登记元信息的完整夹具:模块带两仓 + 环境四件套(页面凭据在册)。 */
+function metaState(overrides: Partial<IssueSessionState> = {}): IssueSessionState {
+  return fixedState({
+    title: "播放器偶发黑屏",
+    description: "升级后偶发,重启恢复",
+    module_id: MODULE_ID,
+    module: "支付核心",
+    repo_url: "/tmp/x.git",
+    repo_urls: ["/tmp/x.git", "/tmp/y.git"],
+    environment: {
+      credential_ref: "cred-1",
+      name: "10.0.0.8",
+      hosts: ["10.0.0.8", "10.0.0.9"],
+      port: 22,
+      page_account: "admin",
+      page_credential_ref: "page-1",
+    },
+    ...overrides,
+  });
+}
+
+const META_CREDENTIALS = { backend: "env-shared-secret", page: "page-secret" };
+
+test("登记元信息块(ADR-0003):开场/续聊词渲染环境四件套明文与模块/多仓;无环境会话整段缺席", () => {
+  const fixed = issueFixedOpeningPrompt(metaState(), META_CREDENTIALS);
+  // 四件套明文:密码字面量就出现在渲染结果里(不脱敏)。
+  assert.match(fixed, /服务器地址: 10\.0\.0\.8, 10\.0\.0\.9/);
+  assert.match(fixed, /页面账号: admin/);
+  assert.match(fixed, /页面密码: page-secret/);
+  assert.match(fixed, /网管后台密码.*: env-shared-secret/);
+  // 模块与多仓清单随登记渲染(仓走工作区相对路径)。
+  assert.match(fixed, /业务模块: 支付核心\(id: pay-core\)/);
+  assert.match(fixed, /repo\/x\//);
+  assert.match(fixed, /repo\/y\//);
+  // 自由模式同一事实源,同样带全量。
+  const free = issueOpeningPrompt(
+    metaState({ mode: "free", scenario: undefined }), META_CREDENTIALS);
+  assert.match(free, /页面密码: page-secret/);
+  assert.match(free, /env-shared-secret/);
+  // 续聊词(重启重建上下文)也不让元信息断档。
+  const resume = issueResumePrompt(metaState(), "继续", META_CREDENTIALS);
+  assert.match(resume, /页面密码: page-secret/);
+  assert.match(resume, /业务模块: 支付核心/);
+
+  // DTS 页签发起的会话:无模块无环境,段落整段缺席,不渲染空壳。
+  const bare = issueFixedOpeningPrompt(fixedState());
+  assert.doesNotMatch(bare, /业务模块/);
+  assert.doesNotMatch(bare, /网管环境「/);
+  assert.doesNotMatch(bare, /服务器地址/);
+  assert.doesNotMatch(bare, /page-secret/);
+
+  // env_needed 闸补配的环境只有后台凭据组:页面字段缺席,后台密码在场。
+  const gateOnly = issueFixedOpeningPrompt(metaState({
+    environment: {
+      credential_ref: "cred-1", name: "10.0.0.8",
+      hosts: ["10.0.0.8"], port: 22,
+    },
+  }), { backend: "env-shared-secret" });
+  assert.match(gateOnly, /网管后台密码.*: env-shared-secret/);
+  assert.doesNotMatch(gateOnly, /页面账号/);
+  assert.doesNotMatch(gateOnly, /页面密码/);
+});
+
+test("get_issue_meta 工具(ADR-0003):元信息完整 JSON 与提示词同源、密码在返回值里;无环境缺省形", async () => {
+  const state = metaState();
+  const tools = createIssueTools({
+    state, workspace: "/tmp/ws", dataRoot: "/tmp/data",
+    persist: () => undefined,
+    environmentPassword: () => META_CREDENTIALS.backend,
+    pagePassword: () => META_CREDENTIALS.page,
+    pullRepo: async (url) => ({ dir: url, cloned: false, head: "a".repeat(12) }),
+  }) as Array<{
+    name: string;
+    description?: string;
+    execute: (id: string, params: any) => Promise<unknown>;
+  }>;
+  const textOf = (result: unknown) =>
+    (result as { content: Array<{ text: string }> }).content[0].text;
+  const tool = tools.find((entry) => entry.name === "get_issue_meta")!;
+  assert.ok(tool, "get_issue_meta 应注册在工具集里");
+  assert.match(tool.description!, /dts_get_ticket/,
+    "工具描述要写明与 dts_get_ticket 的分工");
+
+  const receipt = textOf(await tool.execute("x", {}));
+  // 密码在返回值里(不脱敏),且与提示词同源(issueRegistrationMeta)。
+  assert.match(receipt, /page-secret/);
+  assert.match(receipt, /env-shared-secret/);
+  assert.deepEqual(JSON.parse(receipt), issueRegistrationMeta(state, META_CREDENTIALS));
+  assert.deepEqual(JSON.parse(receipt), {
+    title: "播放器偶发黑屏",
+    description: "升级后偶发,重启恢复",
+    module: { id: MODULE_ID, name: "支付核心" },
+    repos: ["/tmp/x.git", "/tmp/y.git"],
+    environment: {
+      name: "10.0.0.8",
+      hosts: ["10.0.0.8", "10.0.0.9"],
+      page_account: "admin",
+      page_password: "page-secret",
+      backend_password: "env-shared-secret",
+    },
+  });
+  // 只读:调完状态一个字没变。
+  assert.equal(state.gate, undefined);
+  assert.equal(state.stage, "analyze");
+
+  // 无环境会话:environment/module 键整段缺席(与工具返回风格一致)。
+  const bareTools = createIssueTools({
+    state: fixedState(), workspace: "/tmp/ws", dataRoot: "/tmp/data",
+    persist: () => undefined,
+    pullRepo: async (url) => ({ dir: url, cloned: false, head: "a".repeat(12) }),
+  }) as typeof tools;
+  const bare = JSON.parse(textOf(
+    await bareTools.find((entry) => entry.name === "get_issue_meta")!
+      .execute("x", {})));
+  assert.equal("environment" in bare, false, "无环境不造空壳");
+  assert.equal("module" in bare, false);
+  assert.deepEqual(bare.repos, ["/tmp/x.git"]);
+});
+
+test("登记元信息进开场上下文(service 接线):vault 解出的四件套明文进模型请求,get_issue_meta 回执同源", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-meta-"));
+  const origin = bareOrigin(dataDir);
+  const script: Scene[] = [
+    { tool: { name: "get_issue_meta", input: {} } },
+    { text: "登记信息已复核,开始研究。" },
+  ];
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    issueFlowMode: () => "fixed",
+  });
+  try {
+    seedModule(dataDir, origin);
+    const created = service.create({
+      account: "dev", title: "播放器偶发黑屏", mode: "fixed",
+      repoUrl: origin,
+      moduleId: MODULE_ID, environment: NO_TICKET_ENV,
+    });
+    await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "idle" ? issue : undefined;
+    }, "首轮收口");
+    // 开场词带着 vault 解出的四件套明文与模块行(ADR-0003)。
+    const opening = JSON.stringify(model.requests[0]);
+    assert.match(opening, /页面密码: page-secret/);
+    assert.match(opening, /env-shared-secret/);
+    assert.match(opening, /业务模块: 支付核心\(id: pay-core\)/);
+    // get_issue_meta 的回执进了第二个请求(工具结果回模型),密码在场。
+    const followup = JSON.stringify(model.requests[1]);
+    assert.match(followup, /get_issue_meta/);
+    assert.match(followup, /backend_password.*env-shared-secret/);
+    assert.match(followup, /page_password.*page-secret/);
+    assert.match(followup, /module.*pay-core/);
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
 });

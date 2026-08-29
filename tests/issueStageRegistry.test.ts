@@ -74,13 +74,16 @@ test("阶段注册表:每个路线的每个阶段都有 label/目标/出口/工�
 
 test("阶段注册表:门禁矩阵在注册表层面钉死(工读全程,出口工具各归其位)", () => {
   const allStages = [...FIXED_TICKET_STAGES, ...FIXED_NO_TICKET_STAGES];
-  // 工读类(2026-08-28 拍板):fetch_logs 全程开放,dts_get_ticket 任意阶段可重查。
+  // 工读类(2026-08-28 拍板):fetch_logs 全程开放,dts_get_ticket 任意
+  // 阶段可重查,get_issue_meta 任意阶段可查登记元信息(ADR-0003)。
   for (const scenario of ["ticket", "no_ticket"] as const) {
     for (const stage of STAGE_ROUTES[scenario]) {
       assert.equal(stageAllowsTool(scenario, stage, "fetch_logs"), true,
         `${scenario}/${stage} 的 fetch_logs 应全程开放`);
       assert.equal(stageAllowsTool(scenario, stage, "dts_get_ticket"), true,
         `${scenario}/${stage} 的 dts_get_ticket 应任意阶段可调`);
+      assert.equal(stageAllowsTool(scenario, stage, "get_issue_meta"), true,
+        `${scenario}/${stage} 的 get_issue_meta 应任意阶段可查`);
     }
   }
   // 出口/出厂工具各归其位(权威层矩阵,值与单源化前逐项一致)。

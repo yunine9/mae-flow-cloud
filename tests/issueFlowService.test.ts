@@ -428,10 +428,10 @@ test("问题会话多轮闭环:研究→提问卡→作答→非问题归档(无
     assert.ok(waiting.waiting, "问题卡应来自 AskUserQuestion");
     assert.ok(waiting.has_analysis, "结论文档应已产出");
 
-    // 秘密纪律:环境密码不进模型上下文。
+    // 登记元信息进上下文(ADR-0003):网管口令明文随元信息块出现。
     const requestText = JSON.stringify(model.requests);
-    assert.doesNotMatch(requestText, /env-shared-secret/);
-    assert.doesNotMatch(requestText, /page-secret/);
+    assert.match(requestText, /env-shared-secret/);
+    assert.match(requestText, /页面密码: page-secret/);
     assert.match(requestText, /10\.0\.0\.8/, "环境地址是现场材料,应该可见");
     const stateFile = readFileSync(
       join(dataDir, "issues", created.id, "issue.json"), "utf-8");

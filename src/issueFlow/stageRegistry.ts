@@ -103,8 +103,9 @@ export interface IssueStageSpec {
 
 /**
  * 阶段注册表。工具列 = 该阶段门禁实际放行的全集(含工读类:
- * fetch_logs 全程开放、dts_get_ticket 任意阶段可重查,2026-08-28
- * 拍板"作业自由,门只守流程出口与出厂动作",所以它们每行都在)。
+ * fetch_logs 全程开放、dts_get_ticket 任意阶段可重查、get_issue_meta
+ * 任意阶段可查登记元信息,2026-08-28 拍板"作业自由,门只守流程出口
+ * 与出厂动作",所以它们每行都在)。
  */
 export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
   dts_info: {
@@ -116,6 +117,7 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
       { name: "dts_get_ticket" },
       { name: "complete_stage" },
       { name: "fetch_logs" },
+      { name: "get_issue_meta" },
     ],
   },
   prep_repo: {
@@ -133,6 +135,7 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
       { name: "pull_repo" },
       { name: "complete_stage" },
       { name: "fetch_logs" },
+      { name: "get_issue_meta" },
       { name: "dts_get_ticket" },
     ],
   },
@@ -145,6 +148,7 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
     exitAction: "submit_analysis",
     tools: [
       { name: "fetch_logs" },
+      { name: "get_issue_meta" },
       { name: "dts_get_ticket", note: "重查" },
       { name: "lookup_modules" },
       { name: "bind_module" },
@@ -161,6 +165,7 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
     exitAction: "complete_stage",
     tools: [
       { name: "fetch_logs", note: "补证据" },
+      { name: "get_issue_meta" },
       { name: "dts_get_ticket" },
       { name: "pull_repo", note: "补仓" },
       { name: "bind_module" },
@@ -176,6 +181,7 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
     exitAction: "complete_stage",
     tools: [
       { name: "fetch_logs" },
+      { name: "get_issue_meta" },
       { name: "dts_get_ticket" },
       { name: "pull_repo" },
       { name: "bind_module" },
@@ -197,6 +203,7 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
       { name: "create_mr" },
       { name: "complete_stage", note: "申报 MR 清单" },
       { name: "fetch_logs" },
+      { name: "get_issue_meta" },
       { name: "dts_get_ticket" },
       { name: "pull_repo" },
       { name: "bind_module" },
@@ -211,6 +218,7 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
     tools: [
       { name: "build_deploy" },
       { name: "fetch_logs" },
+      { name: "get_issue_meta" },
       { name: "dts_get_ticket" },
       { name: "pull_repo" },
       { name: "bind_module" },
@@ -227,6 +235,7 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
     // 等闸),本阶段不再放行它——工具列以门禁真相为准,简报不谎报。
     tools: [
       { name: "fetch_logs" },
+      { name: "get_issue_meta" },
       { name: "dts_get_ticket" },
       { name: "pull_repo" },
       { name: "bind_module" },

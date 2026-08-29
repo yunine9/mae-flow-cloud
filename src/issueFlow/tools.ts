@@ -1,8 +1,10 @@
 /**
  * 问题会话的宿主工具集(递给 Agent 的平台原子能力)。
  *
- * 设计立场:秘密(环境密码、git/MCP token)止步于宿主,Agent 只拿到
- * 工具语义与结果文本。"提 MR 前必须有单号"在这里是机械门禁——
+ * 设计立场:平台凭据(git/MCP token)止步于宿主,Agent 只拿到工具
+ * 语义与结果文本;网管环境口令是例外——ADR-0003 裁定它是现场公开的
+ * 出厂默认值,随登记元信息明文进上下文(get_issue_meta),vault 落盘
+ * 的卫生不变。"提 MR 前必须有单号"在这里是机械门禁——
  * push_branch / create_mr 查不到绑定单号直接拒绝,提示词管不住的
  * 侥幸在工具层过不去。
  *
@@ -54,6 +56,7 @@ import {
 import { readBusinessModule, listBusinessModules } from "../businessModuleLibrary.ts";
 import type { IssueOpsTools } from "./opsTools.ts";
 import type { DtsGateway } from "./gateways.ts";
+import { issueRegistrationMeta } from "./prompt.ts";
 import {
   currentBranch,
   pushFromIssueWorkspace,
@@ -76,6 +79,9 @@ export interface IssueToolContext {
   platformUrl?: string;
   /** 宿主侧解密后的环境密码;未配置环境时为 undefined。 */
   environmentPassword?(): string | undefined;
+  /** 宿主侧解密后的网管页面密码(登记元信息用,ADR-0003 允许进
+   * 上下文);环境未配页面凭据(如 env_needed 闸补配)时为 undefined。 */
+  pagePassword?(): string | undefined;
   gitCredential?(): GitCredential | undefined;
   /** 拉仓(2026-08-28 拍板:克隆是 Agent 的工具,不是平台自动动作)。
    * 宿主实现:登记合并 → 带凭据克隆到 repo/<仓名>/ →(有单场景)
@@ -221,7 +227,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     description:
       "从网管服务器抓取服务业务日志到工作区 local-logs/ 目录(完整目录结构,"
       + "之后可直接 grep/读文件)。hosts 缺省用会话配置的网管环境。"
-      + "密码由平台保管,不需要也不允许出现在对话里。",
+      + "密码由平台自动带入,不需要你提供。",
     parameters: Type.Object({
       services: Type.Array(Type.String(), {
         description: "服务名列表(如 TranFmaWebsite),抓 /var/log/oss/MAE/<服务名> 全部内容",
@@ -445,6 +451,31 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         : "";
       return ok(`问题单 ${detail.ticket} 详情:\n${detail.content}`
         + `${moduleHint}${briefing}`);
+    },
+  }));
+
+  // ---- 登记元信息(工读类:任意阶段可查;与 dts_get_ticket 分工) ----
+  // 人手工登记的输入全量(标题/现象/模块/仓/网管环境四件套),与提示词
+  // 的元信息块同出 issueRegistrationMeta 一源;网管口令按 ADR-0003 明文
+  // 返回。只读:不碰状态、不落盘、不推进阶段。
+
+  tools.push(defineTool({
+    name: "get_issue_meta",
+    label: "Get Issue Meta",
+    description:
+      "获取本会话的登记元信息——手工登记时**人填的输入**全量:标题、现象"
+      + "描述、业务模块、带出的代码仓、网管环境(地址/页面账号/页面密码/"
+      + "网管后台密码,现场公开默认值,明文返回)。只读且不改任何状态;"
+      + "任意阶段都可调用,长会话里随时重查,不必翻找历史上下文。与 "
+      + "dts_get_ticket 的分工:登记元信息是人填的输入,查它用本工具;"
+      + "按单号拉 DTS 单据详情(平台拉的)用 dts_get_ticket,两者不可混用。",
+    parameters: Type.Object({}),
+    async execute() {
+      const meta = issueRegistrationMeta(state, {
+        backend: ctx.environmentPassword?.(),
+        page: ctx.pagePassword?.(),
+      });
+      return ok(JSON.stringify(meta, null, 2));
     },
   }));
 
