@@ -6464,13 +6464,17 @@ export class TaskService {
     const closesFeedback = closingEffects.length > 0
       && submitted.some((answer) => closingEffects.some((effect) =>
         matchesStepChoice(effect, answer)));
-    const handlesFeedback = effects.some((effect) => effect.handlesFeedback
-      && submitted.some((answer) => matchesStepChoice(effect, answer)));
     // push 前确认卡是云端原生步骤(不在内核流程里,effects 为空),
     // 关闭语义由选项原文判定;确认视同关闭检视——未闭环批注同样拦。
     const pushConfirmCard = waiting.step === CLOUD_PUSH_CONFIRM_STEP;
     const confirmingPush = pushConfirmCard
       && submitted.some((answer) => answer.includes(PUSH_CONFIRM_ACCEPT));
+    const handlesFeedback = effects.some((effect) => effect.handlesFeedback
+      && submitted.some((answer) => matchesStepChoice(effect, answer)))
+      // 云端 push 卡不在内核 effect 契约里；除明确确认外都意味着进入
+      // 新修复会话。这里必须由服务端认定为“处理意见”，不能依赖网页
+      // 携带 annotation_ids——小鲁班回复只有选项和说明。
+      || (pushConfirmCard && !confirmingPush);
     const deliverySelection = await this.deliverySelectionForDecision(
       task, waiting, input, closesFeedback || confirmingPush, pushConfirmCard);
     if (pushConfirmCard && !deliverySelection) {
@@ -6501,7 +6505,10 @@ export class TaskService {
     // 而漏掉意见。显式 ids 只兼容普通非返工卡的旧提交方式。
     const drafts = this.annotations(task).drafts();
     const picked = handlesFeedback
-      ? drafts
+      // 普通检视仍回到同一会话，sent 已经在上下文里，不重复送；push
+      // 返工会开一只全新会话，必须把 draft + sent 的全部未闭环意见
+      // 都带过去，否则“提前主动送达”的意见会断在上一只 Agent 里。
+      ? pushConfirmCard ? unresolved : drafts
       : input.annotation_ids?.length
         ? this.pickDecisionDrafts(task, input.annotation_ids) : [];
     // 批注与自由说明都进 notes，不污染内核用于 choice receipt 的选项。

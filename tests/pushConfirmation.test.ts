@@ -247,6 +247,13 @@ test("返工开修复会话并携带清单契约;月光不代答确认卡", asyn
       line: 1, anchor: "export const value = 1;",
       note: "这里必须补上异常分支测试", kind: "code",
     });
+    const alreadySent = service.addAnnotation(id, {
+      author: "liaoxiang", artifact: "未提交改动", file: "src/feature.ts",
+      line: 1, anchor: "export const value = 1;",
+      note: "提前提过的重试边界也不能丢", kind: "code",
+    });
+    (service as any).annotations(internal).markSent(
+      [alreadySent.id], "interrupt");
 
     assert.equal((service as any).autoAnswerFor(internal, true), undefined,
       "月光免审批不得代答用户显式要求的 push 前确认卡");
@@ -260,7 +267,7 @@ test("返工开修复会话并携带清单契约;月光不代答确认卡", asyn
       },
       delivery_paths: ["src/feature.ts"],
       notes: "extra.ts 是误提交,移出去",
-      annotation_ids: [annotation.id],
+      // 模拟小鲁班回复：只有选项与说明，不携带网页内部 annotation_ids。
     });
     const summary = service.get(id)!;
     assert.equal(summary.delivery_selection?.status, "requested");
@@ -271,7 +278,12 @@ test("返工开修复会话并携带清单契约;月光不代答确认卡", asyn
     assert.match(String(internal.mission), /extra\.ts 是误提交/);
     assert.match(String(internal.mission), /这里必须补上异常分支测试/,
       "push 确认没有挂起模型,批注必须显式进入返工使命");
-    assert.equal(service.listAnnotations(id).items[0].status, "sent");
+    assert.match(String(internal.mission), /提前提过的重试边界也不能丢/,
+      "返工是新会话，先前主动送达但未闭环的意见必须重新带入");
+    const statuses = new Map(service.listAnnotations(id).items
+      .map((item) => [item.id, item.status]));
+    assert.equal(statuses.get(annotation.id), "sent");
+    assert.equal(statuses.get(alreadySent.id), "sent");
   } finally {
     await model.stop();
   }
