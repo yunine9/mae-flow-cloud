@@ -3,8 +3,9 @@
 
 toolkit 仲裁结论(2026-08-28,源码实证):CodeHub 的流水线/质量/门禁
 信息主路全部走 MCP 网关(StreamableHTTPClientTransport →
-http://mcpgateway.his.huawei.com/mcp/<route>/1),网关注入
-X-Auth-Token + w3token 鉴权;CLI 是降级,REST 直调只有建 MR 一处。
+http://mcpgateway.his.huawei.com/mcp/<route>/1)。真现场已确认必需
+X-Auth-Token=mcp-token；w3token 尚无独立凭据，仅作显式可选头保留。
+CLI 是降级,REST 直调只有建 MR 一处。
 本客户端就是那条主路的最小实现:POST JSON-RPC(initialize →
 notifications/initialized → tools/call),响应兼容纯 JSON 与 SSE 帧。
 
@@ -14,6 +15,7 @@ HTTP 形态的网关(codehub 等)。
 
 环境变量:
   MFC_MCP_HTTP_URL      网关地址(默认 toolkit 同款 codehub 路由)
+  MFC_MCP_TOKEN_FILE    所有 MCP 网关共用的可刷新 X-Auth-Token
   MFC_W3TOKEN_FILE      w3token 文件(配了就带 w3token 头)
 令牌纪律:只从参数/文件读,永不进日志与异常文本。
 
@@ -174,6 +176,17 @@ def load_secret(path: str) -> str:
         return stream.read().strip()
 
 
+def default_mcp_token_file() -> str:
+    """MCP 令牌的唯一默认定位规则，避免各脚本各猜一处。"""
+    configured = os.environ.get("MFC_MCP_TOKEN_FILE", "").strip()
+    if configured:
+        return os.path.expanduser(configured)
+    production = "/etc/mae-flow-cloud/mcp-token"
+    if os.path.exists(production):
+        return production
+    return os.path.expanduser("~/.config/mae-flow-cloud/mcp-token")
+
+
 if __name__ == "__main__":
     # 自描述对拍:把网关工具清单与 inputSchema 打出来,参数形状不用猜。
     import argparse
@@ -182,7 +195,7 @@ if __name__ == "__main__":
     parser.add_argument("--gateway", default="codehub",
                         help="注册表网关名: " + "、".join(sorted(GATEWAYS)))
     parser.add_argument("--url", default="")
-    parser.add_argument("--token-file", default="")
+    parser.add_argument("--token-file", default=default_mcp_token_file())
     parser.add_argument("--w3token-file",
                         default=os.environ.get("MFC_W3TOKEN_FILE", ""))
     args = parser.parse_args()

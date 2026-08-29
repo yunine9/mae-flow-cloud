@@ -33,16 +33,20 @@ get_project_info/get_pipeline_quality/mergeable_state 使用真实嵌套结构�
 Build 四个 record 工具统一携带 x_auth_groups 对应的 group_id，CodeCov
 沿用已确认的 jobId。后续新增工具仍必须先对拍，不能恢复猜写。
 
-令牌纪律:token/w3token 只进请求头,永不落盘、永不进日志;错误文本
-一律 redact。
+令牌分域:{token} 只供 CodeHub REST/CLI 与已验证的 REST 兼容路；
+所有 streamable-HTTP MCP 网关与 SSE 构建日志均读
+MFC_MCP_TOKEN_FILE。token/w3token 只进请求头,永不落盘、永不进日志;
+错误文本一律 redact。
 """
 from __future__ import annotations
 
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
+import time
 import traceback
 import urllib.error
 import urllib.parse
@@ -51,10 +55,12 @@ import urllib.request
 from mcp_tool_contracts import (
     actual_head_pipeline_arguments,
     build_record_arguments,
+    codehub_host_from_url,
     coverage_arguments,
     mergeable_state_arguments,
     pipeline_quality_arguments,
     project_info_arguments,
+    unwrap_data,
 )
 
 MAX_ITEM_BYTES = 512 * 1024
@@ -65,11 +71,24 @@ MAX_BUNDLE_BYTES = 6 * 1024 * 1024
 
 CODEHUB_API = os.environ.get(
     'MFC_CODEHUB_API', 'https://codehub-y.huawei.com/api/v4')
+CODEHUB_HOST = os.environ.get(
+    'MFC_CODEHUB_HOST', codehub_host_from_url(CODEHUB_API))
 CLI_HOST = os.environ.get('MFC_CODEHUB_CLI_HOST', 'yellow')
 MCP_SSE_HOST = os.environ.get('MFC_MCP_SSE_HOST', '10.244.150.123')
 MCP_SSE_PORT = int(os.environ.get('MFC_MCP_SSE_PORT', '9000'))
-MCP_TOKEN_FILE = os.path.expanduser(os.environ.get(
-    'MFC_MCP_TOKEN_FILE', '~/.config/mae-flow-cloud/mcp-token'))
+_configured_token_file = os.environ.get('MFC_MCP_TOKEN_FILE', '').strip()
+if _configured_token_file:
+    MCP_TOKEN_FILE = os.path.expanduser(_configured_token_file)
+elif os.path.exists('/etc/mae-flow-cloud/mcp-token'):
+    MCP_TOKEN_FILE = '/etc/mae-flow-cloud/mcp-token'
+else:
+    # 保留开发机与旧部署兼容；生产部署的 /etc 文件存在时优先使用它。
+    MCP_TOKEN_FILE = os.path.expanduser(
+        '~/.config/mae-flow-cloud/mcp-token')
+MCP_TOKEN_REFRESH_COMMAND = os.environ.get(
+    'MFC_MCP_TOKEN_REFRESH_COMMAND', '').strip()
+MCP_TOKEN_REFRESH_TIMEOUT = max(1, int(os.environ.get(
+    'MFC_MCP_TOKEN_REFRESH_TIMEOUT', '15')))
 W3TOKEN_FILE = os.environ.get('MFC_W3TOKEN_FILE', '')
 # 行云 AI Review 是 toolkit 里唯一纯 REST 的外部系统(无 MCP 网关)。
 AI_REVIEW_URL = os.environ.get(
@@ -93,6 +112,31 @@ BUILD_ERROR_PATTERN = re.compile(
     re.IGNORECASE)
 
 
+class StrategySkipped(RuntimeError):
+    """外部数据本轮本就不会产生，不是采集链故障。"""
+
+
+def is_no_data_payload(value) -> bool:
+    """CodeCov 网关的空结果有字符串和包装 JSON 两种形态。"""
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip().lower() in {
+            '', 'no data', 'no data found', 'not found', 'null',
+        }
+    if isinstance(value, (list, tuple)):
+        return not value or all(is_no_data_payload(item) for item in value)
+    if isinstance(value, dict):
+        if not value:
+            return True
+        # 常见包装如 {data: "No data found"} / {message: ...}。
+        meaningful_values = [item for key, item in value.items()
+                             if key not in {'code', 'success', 'is_valid'}]
+        return bool(meaningful_values) and all(
+            is_no_data_payload(item) for item in meaningful_values)
+    return False
+
+
 # ---------------------------------------------------------------------------
 # 共享数据袋(toolkit 的 PipelineData 对应物)
 # ---------------------------------------------------------------------------
@@ -102,6 +146,8 @@ class PipelineData:
         self.sha = sha
         self.ref = ref
         self.mr_url = mr_url
+        self.codehub_host = (codehub_host_from_url(mr_url)
+                             if mr_url else CODEHUB_HOST)
         self.mr_iid = None
         self.project_id = None
         self.pipeline_id = None
@@ -125,6 +171,9 @@ class Context:
         self.token = token
         self.client_dir = client_dir
         self._http_clients = {}
+        self._mcp_token = None
+        self._mcp_token_mtime_ns = None
+        self._token_refresh_attempted = False
         self._sse_client = None
         self._sse_error = None
         self.opener = urllib.request.build_opener(
@@ -137,11 +186,13 @@ class Context:
                     self._w3token = fh.read().strip()
             except OSError:
                 pass
+        self._secret_values = {value for value in (token, self._w3token)
+                               if value}
 
     # -- 日志(带脱敏) --
     def redact(self, value) -> str:
         text = str(value)
-        for secret in (self.token, self._w3token):
+        for secret in self._secret_values:
             if secret:
                 text = text.replace(secret, '<token>')
         return text
@@ -171,14 +222,36 @@ class Context:
     def mcp_call(self, gateway: str, tool: str, arguments: dict,
                  timeout: float = 60):
         sys.path.insert(0, self.client_dir)
-        from mcp_http_client import McpHttpClient, gateway_url
-        if gateway not in self._http_clients:
-            client = McpHttpClient(url=gateway_url(gateway),
-                                   token=self.token, w3token=self._w3token)
-            client.initialize()
-            self._http_clients[gateway] = client
-        return self._http_clients[gateway].call_tool(
-            tool, arguments, timeout=timeout)
+        from mcp_http_client import McpHttpClient, McpHttpError, gateway_url
+        # {token} 是 CodeHub 项目 access token，只能给 REST/CLI。真实
+        # 网关已验证：CodeHub/Build/CodeCCP/CodeCov 等所有
+        # streamable-HTTP MCP 都要每 5 分钟刷新的 MCP X-Auth-Token，
+        # 与旧 SSE 下载共用 MFC_MCP_TOKEN_FILE。
+        for attempt in range(2):
+            auth_token = self.mcp_token(force_reload=attempt > 0)
+            try:
+                client = self._http_clients.get(gateway)
+                if client is None or client.token != auth_token:
+                    client = McpHttpClient(url=gateway_url(gateway),
+                                           token=auth_token,
+                                           w3token=self._w3token)
+                    # initialize 也可能直接返回 401/Token解析失败，
+                    # 必须和 tools/call 放在同一个有界鉴权重试里。
+                    client.initialize()
+                    self._http_clients[gateway] = client
+                return client.call_tool(tool, arguments, timeout=timeout)
+            except McpHttpError as error:
+                if (attempt > 0
+                        or self._token_refresh_attempted
+                        or not self._is_token_error(error)):
+                    raise
+                # 有界自愈：旧会话与内存 token 一并丢弃。刷新命令是部署
+                # 显式配置的 argv（不用 shell），缺省则只重读外部 5 分钟
+                # 刷新脚本维护的文件；无论如何只再试一次。
+                self._http_clients.pop(gateway, None)
+                self._token_refresh_attempted = True
+                self.refresh_mcp_token()
+        raise RuntimeError('MCP token 重试未收口')
 
     # -- 旧式 SSE MCP(日志网关专用,协议不同于 streamable HTTP) --
     def sse_client(self):
@@ -197,8 +270,71 @@ class Context:
         return self._sse_client
 
     def sse_token(self) -> str:
-        with open(MCP_TOKEN_FILE, encoding='utf-8') as fh:
-            return fh.read().strip()
+        return self.mcp_token()
+
+    def mcp_token(self, force_reload: bool = False) -> str:
+        try:
+            mtime_ns = os.stat(MCP_TOKEN_FILE).st_mtime_ns
+        except OSError:
+            mtime_ns = None
+        if (not force_reload and self._mcp_token is not None
+                and self._mcp_token_mtime_ns == mtime_ns):
+            return self._mcp_token
+        loaded = ''
+        loaded_mtime_ns = mtime_ns
+        # 外部刷新脚本如果不是 rename 原子替换，会有一个极短的
+        # truncate→write 窗口。限定 3 次快速稳定读，不把半个 token
+        # 装进客户端，也不会像跨轮重试那样卡住 HTTP 请求。
+        for attempt in range(3):
+            try:
+                before = os.stat(MCP_TOKEN_FILE)
+                with open(MCP_TOKEN_FILE, encoding='utf-8') as fh:
+                    candidate = fh.read().strip()
+                after = os.stat(MCP_TOKEN_FILE)
+                stable = (before.st_mtime_ns == after.st_mtime_ns
+                          and before.st_size == after.st_size)
+                if candidate and stable:
+                    loaded = candidate
+                    loaded_mtime_ns = after.st_mtime_ns
+                    break
+            except OSError:
+                pass
+            if attempt < 2:
+                time.sleep(0.05)
+        if not loaded:
+            raise RuntimeError(
+                f'MCP token 文件为空、不稳定或不存在: {MCP_TOKEN_FILE}')
+        self._mcp_token = loaded
+        self._mcp_token_mtime_ns = loaded_mtime_ns
+        self._secret_values.add(self._mcp_token)
+        return self._mcp_token
+
+    @staticmethod
+    def _is_token_error(error) -> bool:
+        text = str(error).lower()
+        return bool(re.search(
+            r'(?:token.*(?:解析失败|失效|过期|无效|invalid|expired|parse)'
+            r'|(?:unauthorized|forbidden|http\s+(?:401|403)))', text,
+            re.IGNORECASE))
+
+    def refresh_mcp_token(self) -> None:
+        self._mcp_token = None
+        self._mcp_token_mtime_ns = None
+        if not MCP_TOKEN_REFRESH_COMMAND:
+            self.log('MCP 鉴权失败，重新读取 token 文件后重试一次')
+            return
+        argv = shlex.split(MCP_TOKEN_REFRESH_COMMAND)
+        if not argv or not os.path.isabs(argv[0]):
+            raise RuntimeError(
+                'MFC_MCP_TOKEN_REFRESH_COMMAND 首项必须是绝对脚本路径')
+        self.log('MCP 鉴权失败，执行受控 token 刷新命令后重试一次')
+        proc = subprocess.run(
+            argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, text=True,
+            timeout=MCP_TOKEN_REFRESH_TIMEOUT, env=os.environ.copy())
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f'MCP token 刷新命令失败(rc={proc.returncode})')
 
     def close(self) -> None:
         if self._sse_client is not None:
@@ -223,6 +359,7 @@ def resolve_mr(data: PipelineData, ctx: Context) -> None:
         match = re.search(r'/merge_requests?/(\d+)', data.mr_url)
         if match:
             data.mr_iid = int(match.group(1))
+            data.codehub_host = codehub_host_from_url(data.mr_url)
     if not data.mr_url and not data.ref:
         # 老脚本的找 MR 路径:sha → 流水线 → ref → source_branch 反查。
         try:
@@ -259,7 +396,8 @@ def resolve_mr(data: PipelineData, ctx: Context) -> None:
                 r'/(?:-/)?merge_requests?/\d+(?:[/?#].*)?$', '', data.mr_url)
             project = ctx.mcp_call(
                 'codehub', 'get_project_info',
-                project_info_arguments(git_url))
+                project_info_arguments(git_url, data.codehub_host))
+            project = unwrap_data(project)
             if isinstance(project, dict):
                 data.project_id = (project.get('id')
                                    or project.get('project_id'))
@@ -301,7 +439,9 @@ def strategy_pipeline_detail(data: PipelineData, ctx: Context) -> None:
             detail = ctx.mcp_call(
                 'codehub', 'get_merge_request_actual_head_pipeline',
                 actual_head_pipeline_arguments(
-                    data.project_id, data.mr_iid, show_job=True))
+                    data.project_id, data.mr_iid, show_job=True,
+                    codehub_host=data.codehub_host))
+            detail = unwrap_data(detail)
         except Exception as error:
             ctx.log(f'actual_head_pipeline 失败,转 REST 降级: {error}')
     if detail:
@@ -346,7 +486,9 @@ def strategy_mergeable_state(data: PipelineData, ctx: Context) -> None:
         raise RuntimeError('缺 project_id/mr_iid,无法查门禁')
     state = ctx.mcp_call(
         'codehub', 'get_merge_request_mergeable_state',
-        mergeable_state_arguments(data.project_id, data.mr_iid))
+        mergeable_state_arguments(
+            data.project_id, data.mr_iid, data.codehub_host))
+    state = unwrap_data(state)
     if not state:
         raise RuntimeError('mergeable_state 返回空')
     ctx.write_json('mergeable_state.json', state)
@@ -364,7 +506,9 @@ def strategy_pipeline_quality(data: PipelineData, ctx: Context) -> None:
             quality = ctx.mcp_call(
                 'codehub', 'get_pipeline_quality',
                 pipeline_quality_arguments(
-                    data.project_id, data.pipeline_id))
+                    data.project_id, data.pipeline_id,
+                    codehub_host=data.codehub_host))
+            quality = unwrap_data(quality)
         except Exception as error:
             ctx.log(f'get_pipeline_quality 失败,转 CLI 降级: {error}')
     if not quality and data.pipeline_id is not None:
@@ -383,7 +527,13 @@ def strategy_pipeline_quality(data: PipelineData, ctx: Context) -> None:
     if not quality:
         raise RuntimeError('无 pipeline_id 或两路都没拿到 quality')
     ctx.write_json('pipeline_quality.json', quality)
-    for check in quality.get('checks', []) if isinstance(quality, dict) else []:
+    checks = []
+    if isinstance(quality, dict):
+        checks = quality.get('codequality_check') or quality.get('checks') or []
+        if isinstance(checks, dict):
+            checks = checks.get('checks') or checks.get('items') \
+                or list(checks.values())
+    for check in checks:
         for metric in check.get('metrics', []):
             real = metric.get('real', '')
             if isinstance(real, str) and 'jobId=' in real:
@@ -459,6 +609,7 @@ def strategy_build_logs(data: PipelineData, ctx: Context) -> None:
             answer = ctx.mcp_call(
                 'build', 'get_build_log_url',
                 build_record_arguments(rid, group_id))
+            answer = unwrap_data(answer)
             url_val = answer.get('url') if isinstance(answer, dict) else answer
             if isinstance(url_val, str) and url_val.startswith('http'):
                 import io
@@ -479,6 +630,7 @@ def strategy_build_logs(data: PipelineData, ctx: Context) -> None:
                 chunk = ctx.mcp_call(
                     'build', 'get_record_log',
                     build_record_arguments(rid, group_id))
+                chunk = unwrap_data(chunk)
                 text = chunk.get('log') if isinstance(chunk, dict) else chunk
                 if not isinstance(text, str):
                     text = ''
@@ -492,6 +644,7 @@ def strategy_build_logs(data: PipelineData, ctx: Context) -> None:
             errors = ctx.mcp_call(
                 'build', 'get_build_error_info',
                 build_record_arguments(rid, group_id))
+            errors = unwrap_data(errors)
             if errors:
                 name = f'build_errors_{rid}.json'
                 ctx.write_json(name, errors)
@@ -502,6 +655,7 @@ def strategy_build_logs(data: PipelineData, ctx: Context) -> None:
             stages = ctx.mcp_call(
                 'build', 'get_record_fullstages',
                 build_record_arguments(rid, group_id))
+            stages = unwrap_data(stages)
             if stages:
                 ctx.write_json(f'build_stages_{rid}.json', stages)
         except Exception as error:
@@ -539,15 +693,12 @@ def strategy_codecheck(data: PipelineData, ctx: Context) -> None:
                 f'{CODECCP_REST}/reviewtips/json'
                 f'?jobId={urllib.parse.quote(data.codeccp_job_id, safe="")}'
                 f'&toolType={urllib.parse.quote(tool_type, safe="")}')
-            # 鉴权头并集:表载 X-Auth-Token+w3token,现网脚本实跑的是
-            # Bearer+Private-Token——都带上,哪对生效以内网实测为准。
+            # 真现场已验证 reviewtips REST 消费 CodeHub token 的
+            # Bearer + Private-Token；MCP X-Auth-Token 不得混进这条路。
             headers = {
                 'Authorization': f'Bearer {ctx.token}',
                 'Private-Token': ctx.token,
-                'X-Auth-Token': ctx.token,
             }
-            if ctx._w3token:
-                headers['w3token'] = ctx._w3token
             req = urllib.request.Request(tips_url, headers=headers)
             with ctx.opener.open(req, timeout=10) as resp:
                 tips = json.loads(resp.read().decode('utf-8'))
@@ -568,17 +719,16 @@ def strategy_coverage(data: PipelineData, ctx: Context) -> None:
     每个 UT job 一份 coverage_diff_*.json,外加 coverage_summary.json。
     """
     if not data.ut_job_ids:
-        raise RuntimeError('pipeline_info 未给出 utJobIds')
+        raise StrategySkipped(
+            'pipeline_info 未给出 utJobIds；编译未通过或 UT 未运行时属正常')
     summary = {}
+    call_failures = 0
     for ut_job in data.ut_job_ids[:5]:
         try:
             coverage = ctx.mcp_call(
                 'codecov', 'CodeCovDiffCoverageTool',
                 coverage_arguments(ut_job))
-            no_data = isinstance(coverage, str) \
-                and coverage.strip().lower() in {
-                    'no data', 'no data found', 'not found',
-                }
+            no_data = is_no_data_payload(coverage)
             if coverage and not no_data:
                 ctx.write_json(f'coverage_diff_{ut_job}.json', coverage)
                 summary[str(ut_job)] = 'ok'
@@ -590,10 +740,15 @@ def strategy_coverage(data: PipelineData, ctx: Context) -> None:
                 summary[str(ut_job)] = (
                     f'empty: {coverage}' if coverage else 'empty')
         except Exception as error:
+            call_failures += 1
             summary[str(ut_job)] = f'failed: {ctx.redact(error)[:120]}'
     ctx.write_json('coverage_summary.json', summary)
     if not any(v == 'ok' for v in summary.values()):
-        raise RuntimeError(f'覆盖率各 job 均未拿到: {summary}')
+        if call_failures:
+            raise RuntimeError(f'覆盖率 MCP 调用失败: {summary}')
+        raise StrategySkipped(
+            '本次流水线未产生覆盖率数据（编译未通过或 UT '
+            f'未运行时属正常）: {summary}')
 
 
 def strategy_ai_review_tips(data: PipelineData, ctx: Context) -> None:
@@ -642,6 +797,10 @@ def run(project_path: str, sha: str, token: str, out_dir: str,
                 strategy(data, ctx)
                 data.summary[name] = {'status': 'ok'}
                 ctx.log(f'{name}: ok')
+            except StrategySkipped as error:
+                note = ctx.redact(str(error))[:300]
+                data.summary[name] = {'status': 'skipped', 'note': note}
+                ctx.log(f'{name}: skipped — {note}')
             except Exception as error:
                 # fail-open:失败进清单,别的策略照常跑。
                 note = ctx.redact(str(error) or

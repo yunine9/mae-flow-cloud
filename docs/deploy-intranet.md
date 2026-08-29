@@ -216,6 +216,28 @@ pipeline_artifacts,不配=404=宿主按纯流水线旧语义)与按能力核对�
 团队明确允许代点的部署,serve 加 `--resolve-discussions` 且适配层配
 `discussion_resolve`。
 
+MCP 网关令牌与 CodeHub 项目/个人令牌是两个鉴权域。`{token}`
+仍只供 CodeHub REST、`codehub-cli`、push/MR 与已验证的 REST 兼容路；
+CodeHub/Build/CodeCCP/CodeCov 等所有 streamable-HTTP MCP 以及 SSE 日志
+下载都使用 `mcp-token`。
+部署时把可刷新令牌放在 `/etc/mae-flow-cloud/mcp-token`（权限 0600），
+并把以下环境传给 adapter 进程：
+
+```bash
+MFC_MCP_TOKEN_FILE=/etc/mae-flow-cloud/mcp-token
+# 可选：鉴权失效时立即调一次现有刷新脚本（不经 shell）
+MFC_MCP_TOKEN_REFRESH_COMMAND=/usr/local/bin/refresh-mcp-token
+MFC_MCP_TOKEN_REFRESH_TIMEOUT=15
+```
+
+脚本继续每 5 分钟刷新没有问题；采集器会按 mtime 换新 token，鉴权失败
+时立即刷新/重试一次，仍失败则退出当前请求。Cloud 会在 3 分钟后
+重新取证，不会在 Node HTTP 处理路径里等 3 分钟。如刷新脚本直接改原
+文件，建议改为写临时文件后 `rename` 的原子替换，避免读到半个 token。
+`MFC_W3TOKEN_FILE` 默认不配：目前没有独立 w3token 的现场证据，代码也
+不会把 mcp-token 自动复制到 `w3token` 头。只有某网关后续实测明确要求
+时才显式配置，即使指向同一文件也必须有实证。
+
 - `repo` = 这一单的交付仓地址(任务级可选,缺省=部署仓)。单仓部署的
   适配层/假件可以忽略它;多仓时靠它路由到对的 CodeHub 仓;
 - **内部平台是 CodeHub(类比 GitHub)**:codehubcli 配一个从 CodeHub

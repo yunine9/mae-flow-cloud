@@ -120,6 +120,7 @@ test("有限重试期间平台补出证据会自动恢复派修", async () => {
     delivery: {
       platformUrl: platform.baseUrl,
       pollIntervalMs: 30,
+      evidenceRetryMs: 30,
       pollTimeoutMs: 1_000,
     },
   });

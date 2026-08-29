@@ -11,7 +11,9 @@ import { resolve } from "node:path";
 const ROOT = resolve(import.meta.dirname, "..");
 
 const HARNESS = String.raw`
+import contextlib
 import importlib.util
+import io
 import os
 import pathlib
 import sys
@@ -25,21 +27,35 @@ import pipeline_log
 from mcp_tool_contracts import (
     actual_head_pipeline_arguments,
     build_record_arguments,
+    codehub_host_from_url,
     coverage_arguments,
     mergeable_state_arguments,
     pipeline_quality_arguments,
     project_info_arguments,
+    unwrap_data,
 )
 
 assert project_info_arguments('https://codehub/group/repo') == {
-    'git_url': 'https://codehub/group/repo'}
-assert mergeable_state_arguments('42', '17') == {
-    'request': {'project_id': '42', 'merge_request_iid': 17}}
-assert actual_head_pipeline_arguments('42', '17') == {
+    'git_url': 'https://codehub/group/repo', 'codehub_host': 'codehub'}
+assert codehub_host_from_url('git@codehub.example:group/repo.git') \
+    == 'codehub.example'
+assert mergeable_state_arguments('42', '17', 'codehub.example') == {
+    'request': {'project_id': '42', 'merge_request_iid': 17},
+    'codehub_host': 'codehub.example'}
+assert actual_head_pipeline_arguments(
+        '42', '17', codehub_host='codehub.example') == {
     'request': {
-        'project_id': '42', 'merge_request_iid': 17, 'show_job': True}}
-assert pipeline_quality_arguments('42', '99') == {
-    'request': {'project_id': '42', 'pipeline_id': 99}}
+        'project_id': '42', 'merge_request_iid': 17, 'show_job': True},
+    'codehub_host': 'codehub.example'}
+assert pipeline_quality_arguments(
+        '42', '99', codehub_host='codehub.example') == {
+    'request': {'project_id': '42', 'pipeline_id': 99},
+    'codehub_host': 'codehub.example'}
+assert unwrap_data({'data': {'id': 99}, 'is_valid': True}) == {
+    'id': 99, 'is_valid': True}
+assert unwrap_data({'data': None, 'is_valid': False}) == {'is_valid': False}
+assert unwrap_data({'data': 'https://build/log.zip', 'success': True}) \
+    == 'https://build/log.zip'
 assert build_record_arguments('record-1', 'group-1') == {
     'record_id': 'record-1', 'group_id': 'group-1'}
 assert coverage_arguments('job-1') == {'jobId': 'job-1'}
@@ -66,13 +82,14 @@ class FakeContext:
 
     def _answer(self, tool):
         if tool == 'get_project_info':
-            return {'id': '42'}
+            return {'data': {'id': '42'}, 'is_valid': True}
         if tool == 'get_merge_request_mergeable_state':
-            return {'ci_state_passed': False}
+            return {'data': {'ci_state_passed': False}, 'is_valid': True}
         if tool == 'get_merge_request_actual_head_pipeline':
-            return {'id': 99, 'status': 'failed', 'sha': 'a' * 40}
+            return {'data': {'id': 99, 'status': 'failed',
+                             'sha': 'a' * 40}, 'is_valid': True}
         if tool == 'get_pipeline_quality':
-            return {'checks': []}
+            return {'data': {'codequality_check': []}, 'is_valid': True}
         if tool == 'get_build_log_url':
             return {}
         if tool == 'get_record_log':
@@ -113,7 +130,8 @@ pipeline_log.resolve_mr(data, ctx)
 assert data.project_id == '42'
 assert ctx.calls[-1] == (
     'codehub', 'get_project_info',
-    {'git_url': 'https://codehub.example/group/repo'})
+    {'git_url': 'https://codehub.example/group/repo',
+     'codehub_host': 'codehub.example'})
 
 data.pipeline_id = '99'
 pipeline_log.strategy_pipeline_detail(data, ctx)
@@ -122,11 +140,14 @@ pipeline_log.strategy_pipeline_quality(data, ctx)
 assert ('codehub', 'get_merge_request_actual_head_pipeline', {
     'request': {
         'project_id': '42', 'merge_request_iid': 17,
-        'show_job': True}}) in ctx.calls
+        'show_job': True},
+    'codehub_host': 'codehub.example'}) in ctx.calls
 assert ('codehub', 'get_merge_request_mergeable_state', {
-    'request': {'project_id': '42', 'merge_request_iid': 17}}) in ctx.calls
+    'request': {'project_id': '42', 'merge_request_iid': 17},
+    'codehub_host': 'codehub.example'}) in ctx.calls
 assert ('codehub', 'get_pipeline_quality', {
-    'request': {'project_id': '42', 'pipeline_id': 99}}) in ctx.calls
+    'request': {'project_id': '42', 'pipeline_id': 99},
+    'codehub_host': 'codehub.example'}) in ctx.calls
 
 data.record_ids = ['record-1']
 data.x_auth_groups = 'group-1'
@@ -151,18 +172,57 @@ spec.loader.exec_module(status)
 
 client = FakeContext()
 assert status.resolve_project_id(
-    client, 'https://codehub.example/group/repo.git') == '42'
+    client, 'https://codehub.example/group/repo.git',
+    'codehub.example') == '42'
 assert client.calls[-1] == (
     'codehub', 'get_project_info',
-    {'git_url': 'https://codehub.example/group/repo.git'})
+    {'git_url': 'https://codehub.example/group/repo.git',
+     'codehub_host': 'codehub.example'})
 picked = {}
-status.enrich_from_quality(client, '42', '99', picked)
+status.enrich_from_quality(
+    client, '42', '99', picked, 'codehub.example')
 assert client.calls[-1] == (
     'codehub', 'get_pipeline_quality', {
-        'request': {'project_id': '42', 'pipeline_id': 99}})
+        'request': {'project_id': '42', 'pipeline_id': 99},
+        'codehub_host': 'codehub.example'})
+
+
+class StatusClient(FakeContext):
+    received_token = None
+    received_w3token = None
+    def __init__(self, token='', w3token='', **kwargs):
+        super().__init__()
+        StatusClient.received_token = token
+        StatusClient.received_w3token = w3token
+    def initialize(self):
+        pass
+
+
+with tempfile.TemporaryDirectory() as raw:
+    mcp_file = pathlib.Path(raw) / 'mcp-token'
+    mcp_file.write_text('mcp-gateway-token', encoding='utf-8')
+    original_status_client = status.McpHttpClient
+    original_argv = sys.argv
+    status.McpHttpClient = StatusClient
+    sys.argv = [
+        'pipeline-status-mcp.py',
+        '--repo', 'https://codehub.example/group/repo.git',
+        '--sha', 'a' * 40,
+        '--mr', '17',
+        '--token', 'codehub-project-token',
+        '--mcp-token-file', str(mcp_file),
+    ]
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            assert status.main() == 0
+        assert StatusClient.received_token == 'mcp-gateway-token'
+        assert StatusClient.received_w3token == ''
+    finally:
+        status.McpHttpClient = original_status_client
+        sys.argv = original_argv
 `;
 
-test("CodeHub/Build/CodeCov 两条部署链使用 tools/list 真实参数", () => {
+test("所有 MCP 网关使用 tools/list 真实参数与独立令牌域", () => {
   const result = spawnSync("python3", ["-c", HARNESS], {
     cwd: ROOT,
     encoding: "utf-8",
@@ -195,14 +255,14 @@ data.ut_job_ids = ['CodeCCP20-fixture']
 ctx = Context()
 try:
     pipeline_log.strategy_coverage(data, ctx)
-    raise AssertionError('No data found 不能被当作 coverage ok')
-except RuntimeError as error:
-    assert '均未拿到' in str(error)
+    raise AssertionError('No data found 应显式跳过')
+except pipeline_log.StrategySkipped as error:
+    assert '未产生覆盖率' in str(error)
 assert ctx.writes['coverage_summary.json'] == {
     'CodeCCP20-fixture': 'empty: No data found'}
 `;
 
-test("CodeCov 的 No data found 记为缺证据，不冒充 coverage 成功", () => {
+test("CodeCov 的 No data found 记为未产生，不冒充链路故障", () => {
   const result = spawnSync("python3", ["-c", NO_DATA_HARNESS], {
     cwd: ROOT,
     encoding: "utf-8",
@@ -210,6 +270,106 @@ test("CodeCov 的 No data found 记为缺证据，不冒充 coverage 成功", ()
   });
   assert.equal(result.status, 0,
     `Coverage 诚实性回归失败：\n${result.stdout}\n${result.stderr}`);
+});
+
+const TOKEN_REFRESH_HARNESS = String.raw`
+import pathlib
+import sys
+import tempfile
+
+tools = pathlib.Path.cwd() / 'deploy' / 'adapter-tools'
+sys.path.insert(0, str(tools))
+import mcp_http_client
+import pipeline_log
+
+
+class FakeClient:
+    seen = []
+    def __init__(self, url='', token='', w3token='', timeout=30):
+        self.url = url
+        self.token = token
+        self.w3token = w3token
+    def initialize(self):
+        FakeClient.seen.append(('initialize', self.token))
+        if self.token == 'stale-mcp-token':
+            raise mcp_http_client.McpHttpError('网关 Token解析失败')
+    def call_tool(self, name, arguments, timeout=60):
+        FakeClient.seen.append((name, self.token))
+        return {'token_seen': self.token}
+
+
+with tempfile.TemporaryDirectory() as raw:
+    root = pathlib.Path(raw)
+    token_file = root / 'mcp-token'
+    token_file.write_text('stale-mcp-token', encoding='utf-8')
+    refresh = root / 'refresh-token.py'
+    refresh.write_text(
+        '#!/usr/bin/env python3\n'
+        'from pathlib import Path\n'
+        + f'Path({str(token_file)!r}).write_text('
+          "'fresh-mcp-token', encoding='utf-8')\n",
+        encoding='utf-8')
+    refresh.chmod(0o700)
+
+    pipeline_log.MCP_TOKEN_FILE = str(token_file)
+    pipeline_log.MCP_TOKEN_REFRESH_COMMAND = str(refresh)
+    pipeline_log.MCP_TOKEN_REFRESH_TIMEOUT = 5
+    original_client = mcp_http_client.McpHttpClient
+    mcp_http_client.McpHttpClient = FakeClient
+    try:
+        ctx = pipeline_log.Context(raw, 'codehub-personal-token', str(tools))
+        result = ctx.mcp_call('build', 'get_record_log', {})
+        assert result == {'token_seen': 'fresh-mcp-token'}
+        assert FakeClient.seen[:3] == [
+            ('initialize', 'stale-mcp-token'),
+            ('initialize', 'fresh-mcp-token'),
+            ('get_record_log', 'fresh-mcp-token'),
+        ]
+        codehub = ctx.mcp_call('codehub', 'get_project_info', {})
+        assert codehub == {'token_seen': 'fresh-mcp-token'}
+        codeccp = ctx.mcp_call('codeccp', 'query_mr_info', {})
+        codecov = ctx.mcp_call('codecov', 'CodeCovDiffCoverageTool', {})
+        assert codeccp == {'token_seen': 'fresh-mcp-token'}
+        assert codecov == {'token_seen': 'fresh-mcp-token'}
+        assert ctx.token == 'codehub-personal-token'
+
+        class Response:
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                pass
+            def read(self):
+                return b'{}'
+        class RestOpener:
+            headers = {}
+            def open(self, request, timeout=30):
+                RestOpener.headers = {
+                    key.lower(): value for key, value in request.header_items()}
+                return Response()
+        ctx.opener = RestOpener()
+        assert ctx.fetch_json('https://codehub.example/api/v4/project') == {}
+        assert RestOpener.headers['private-token'] \
+            == 'codehub-personal-token'
+        assert RestOpener.headers.get('x-auth-token') is None
+        # 新旧令牌都必须进脱敏集，不能因刷新后只遮新值。
+        assert '<token>' in ctx.redact(
+            'stale-mcp-token fresh-mcp-token codehub-personal-token')
+        assert 'stale-mcp-token' not in ctx.redact(
+            'stale-mcp-token fresh-mcp-token codehub-personal-token')
+        assert 'fresh-mcp-token' not in ctx.redact(
+            'stale-mcp-token fresh-mcp-token codehub-personal-token')
+    finally:
+        mcp_http_client.McpHttpClient = original_client
+`;
+
+test("所有 HTTP MCP 均用 mcp-token，失效时只刷新重试一次", () => {
+  const result = spawnSync("python3", ["-c", TOKEN_REFRESH_HARNESS], {
+    cwd: ROOT,
+    encoding: "utf-8",
+    env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+  });
+  assert.equal(result.status, 0,
+    `MCP token 分域/刷新回归失败：\n${result.stdout}\n${result.stderr}`);
 });
 
 const EVIDENCE_HARNESS = String.raw`

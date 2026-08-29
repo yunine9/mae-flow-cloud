@@ -16,7 +16,8 @@ get_project_info 使用顶层 git_url；actual_head_pipeline 与
 get_pipeline_quality 的业务参数都嵌在 request。
 
 用法: pipeline-status-mcp.py --repo <url> --sha <sha> --mr <iid>
-      --token <t>(缺 --mr 时如实失败:主路按 MR 定位,别猜)
+      [--mcp-token-file <path>]
+      --token 仅为兼容现有 adapter 命令模板保留，绝不用于 MCP。
 """
 from __future__ import annotations
 
@@ -27,11 +28,18 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from mcp_http_client import McpHttpClient, McpHttpError, load_secret  # noqa: E402
+from mcp_http_client import (  # noqa: E402
+    McpHttpClient,
+    McpHttpError,
+    default_mcp_token_file,
+    load_secret,
+)
 from mcp_tool_contracts import (  # noqa: E402
     actual_head_pipeline_arguments,
+    codehub_host_from_url,
     pipeline_quality_arguments,
     project_info_arguments,
+    unwrap_data,
 )
 import os  # noqa: E402
 
@@ -79,11 +87,16 @@ def map_word(raw, table, what):
     return table[word]
 
 
-def resolve_project_id(client: McpHttpClient, repo_url: str) -> str:
+def resolve_project_id(
+    client: McpHttpClient,
+    repo_url: str,
+    codehub_host: str,
+) -> str:
     """toolkit: getProjectId = MCP get_project_info → CLI fallback。
     tools/list 已确认真实参数为顶层 git_url；失败就交给 adapter 下一候选。"""
     info = client.call_tool(
-        "get_project_info", project_info_arguments(repo_url))
+        "get_project_info", project_info_arguments(repo_url, codehub_host))
+    info = unwrap_data(info)
     if isinstance(info, dict):
         for key in ("project_id", "id"):
             if info.get(key) is not None:
@@ -130,21 +143,26 @@ def enrich_from_quality(
     project_id,
     pipeline_id,
     picked,
+    codehub_host,
 ) -> None:
     """get_pipeline_quality → 逐工具状态与指标明细(增益路,失败不拦)。"""
     try:
         quality = client.call_tool(
             "get_pipeline_quality",
-            pipeline_quality_arguments(project_id, pipeline_id),
+            pipeline_quality_arguments(
+                project_id, pipeline_id, codehub_host=codehub_host),
         )
     except McpHttpError as error:
         log_err(f"质量增益路失败(忽略): {error}")
         return
+    quality = unwrap_data(quality)
     rows = (quality or {}).get("codequality_check") \
         if isinstance(quality, dict) else None
     if not isinstance(rows, list):
         rows = (quality or {}).get("checks") \
             if isinstance(quality, dict) else None
+    if isinstance(rows, dict):
+        rows = rows.get("checks") or rows.get("items") or list(rows.values())
     for row in rows or []:
         if not isinstance(row, dict):
             continue
@@ -181,7 +199,12 @@ def main() -> int:
     parser.add_argument("--repo", required=True)
     parser.add_argument("--sha", required=True)
     parser.add_argument("--mr", default="")
-    parser.add_argument("--token", default="")
+    parser.add_argument(
+        "--token", default="",
+        help="兼容参数：CodeHub token 不得用于 MCP")
+    parser.add_argument(
+        "--mcp-token-file", default=default_mcp_token_file(),
+        help="MCP 网关 X-Auth-Token 文件")
     parser.add_argument("--w3token-file",
                         default=os.environ.get("MFC_W3TOKEN_FILE", ""))
     args = parser.parse_args()
@@ -190,21 +213,32 @@ def main() -> int:
         # 流水线");没有 MR 号时这一路诚实退场,降级链走 sha 直查候选。
         log_err("缺 --mr:MCP 主路按 MR 定位,交给降级链的 sha 直查候选")
         return 2
-    client = McpHttpClient(token=args.token,
+    mcp_token = load_secret(args.mcp_token_file)
+    if not mcp_token:
+        raise McpHttpError(
+            f"MCP token 文件为空: {args.mcp_token_file}")
+    client = McpHttpClient(token=mcp_token,
                            w3token=load_secret(args.w3token_file))
     client.initialize()
-    project_id = resolve_project_id(client, args.repo)
-    pipeline = client.call_tool(
+    codehub_host = codehub_host_from_url(args.repo)
+    project_id = resolve_project_id(client, args.repo, codehub_host)
+    response = client.call_tool(
         "get_merge_request_actual_head_pipeline",
-        actual_head_pipeline_arguments(project_id, args.mr, show_job=True))
-    if not isinstance(pipeline, dict) or not pipeline:
+        actual_head_pipeline_arguments(
+            project_id, args.mr, show_job=True,
+            codehub_host=codehub_host))
+    pipeline = unwrap_data(response)
+    if (not isinstance(pipeline, dict) or not pipeline
+            or pipeline.get("is_valid") is False
+            and not pipeline.get("id")):
         # 平台明说没有流水线:空 runs,宿主继续等,不算这一路失败。
         print(json.dumps({"runs": []}, ensure_ascii=False))
         return 0
     picked = checks_from_stages(pipeline.get("stages"))
     pipeline_id = str(pipeline.get("id") or "")
     if pipeline_id:
-        enrich_from_quality(client, project_id, pipeline_id, picked)
+        enrich_from_quality(
+            client, project_id, pipeline_id, picked, codehub_host)
     run = {
         "status": map_word(pipeline.get("status"), RUN_STATUS, "pipeline"),
         # is_valid 是这条主路的灵魂:false=MR 头上无有效流水线、挂的是

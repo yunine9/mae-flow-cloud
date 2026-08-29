@@ -776,6 +776,9 @@ export interface TaskServiceOptions {
     platformUrl: string;
     pollIntervalMs?: number;
     pollTimeoutMs?: number;
+    /** 红灯详细证据暂不可得时的跨请求重试间隔。不与状态轮询
+     * 共用：采集 artifacts 较重，默认每 3 分钟重试一次。 */
+    evidenceRetryMs?: number;
     /** 流水线红灯的修复轮预算(默认 2;0 = 关掉修复环,红灯即留痕请人工)。
      * 每轮 = 一次专职修复会话 + 一次新流水线;耗尽如实停在 verifying。 */
     repairRounds?: number;
@@ -9771,14 +9774,12 @@ export class TaskService {
   }
 
   private repairEvidenceDelayMs(waitingHuman: boolean): number {
-    const knobs = this.options.settings?.runtime() ?? {};
-    const base = Math.max(50,
-      (knobs.poll_interval_s !== undefined
-        ? knobs.poll_interval_s * 1000 : undefined)
-      ?? this.options.delivery?.pollIntervalMs ?? 10_000);
-    // 已经亮牌等人后仍低频探测平台，证据若恢复就自动续；不再按测试级
-    // 50ms 高频撞网关。每次调用自身仍有 adapter/MCP 超时预算。
-    return waitingHuman ? Math.max(30_000, base) : base;
+    void waitingHuman;
+    // 重采 artifacts 比查状态重得多，且 token 可能由外部 5
+    // 分钟刷新脚本维护。单次调用立即刷新/重试一次；仍不可用
+    // 则退出当前请求，由这个定时器每 3 分钟发起新一轮。
+    return Math.max(50,
+      this.options.delivery?.evidenceRetryMs ?? 3 * 60_000);
   }
 
   private scheduleRepairEvidenceRetry(

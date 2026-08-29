@@ -285,7 +285,8 @@ selftest 拿到真实门禁集(19 项)**,九项之外多这十项,分类与文�
 
 **MCP 怎么办(已定,依据报告 C2)**:网关是 streamable HTTP——
 `GET /sse` 拿 session_id,`POST /messages` 发 JSON-RPC;鉴权分两个
-网关(主网关 `X-Auth-Token` + w3token,SSE 日志网关 auth:false 但要
+网关(主网关已验必需 `X-Auth-Token=mcp-token`；`w3token` 尚无独立
+现场证据，默认不发；SSE 日志网关 auth:false 但要
 `x_auth_token` 参数)。这个形态**包桥就够了**:一个几十行的脚本
 (argv 收参数 → 发两个 HTTP 请求 → stdout 吐 JSON),适配层照常以
 命令行拉起它——桥是配置产物,不算内网改代码,原生 MCP 客户端不做。
@@ -405,6 +406,8 @@ npm run adapter -- --config adapter.json --selftest
 ```jsonc
 {
   "token_file": "/etc/mae-flow-cloud/codehub-token",   // 0600
+  // 下面 v3 CodeHub REST 的 X-Auth-Token 消费的仍是 codehub-token；
+  // 它和 MCP 网关的同名请求头只是头名相同，凭据绝不通用。
   "mr_lookup": {   // 先查后建(A2:幂等语义不统一,查询是唯一稳的路)
     "command": ["curl", "-sf", "-H", "X-Auth-Token: {token}",
       "https://<host>/api/v3/projects/{repo_path}/merge_requests?state=opened&source_branch={source_branch}&target_branch={target_branch}"],
@@ -437,7 +440,7 @@ npm run adapter -- --config adapter.json --selftest
       { "command": ["python3",
           "/opt/mae-flow-cloud/deploy/adapter-tools/pipeline-status-mcp.py",
           "--repo", "{repo}", "--sha", "{sha}", "--mr", "{mr}",
-          "--token", "{token}"],
+          "--mcp-token-file", "/etc/mae-flow-cloud/mcp-token"],
         "contract": true },
       { "command": ["bash",
           "/opt/mae-flow-cloud/deploy/adapter-tools/pipeline-status.sh",
@@ -539,7 +542,9 @@ npm run adapter -- --config adapter.json --selftest
 - `pipeline-status.sh` / `mcp_sse_client.py`:内网现用版收编
   (v4 直查作 status 降级候选;SSE 客户端原文收编,__main__ 自测段
   的个人路径/真实 MR 已泛化)。
-仍需内网手放的只剩 `mcp-token` 文件(与可选的 w3token 文件)。
+仍需内网手放的只剩 `mcp-token` 文件。`w3token` 没有独立
+现场证据，默认不配也不自动复用 mcp-token；只在某网关实测明确
+要求时才显式配 `MFC_W3TOKEN_FILE`。
 内网动作:放脚本目录、填 adapter.json、跑 selftest/--list-tools
 对拍;不写代码。
 
@@ -569,6 +574,28 @@ details 与 `pipeline_artifacts` 负责给出为什么红。宿主按维度判�
 批注并点击“回灌报错”，现有 annotation 台账会记录
 `sent_via=pipeline_evidence`，无需新建消息通道；平台证据或人工证据任一
 补齐都会按原 SHA 自动恢复。服务重启只恢复取证，不重做 prepush 或主任务。
+
+**Token 轮换与 3 分钟重试**：CodeHub/Build/CodeCCP/CodeCov 等所有
+streamable-HTTP MCP 与旧 SSE 日志下载统一使用
+`MFC_MCP_TOKEN_FILE`（生产优先 `/etc/mae-flow-cloud/mcp-token`），不再
+误用 `{token}` 传入的 CodeHub 项目 token。每次 MCP 调用前按文件 mtime
+感知外部刷新；
+`initialize` 或 `tools/call` 明确返回 401/403/Token 失效时，丢弃旧会话，
+重读文件并仅重试一次。如需主动触发现有刷新脚本，配置：
+
+```bash
+MFC_MCP_TOKEN_FILE=/etc/mae-flow-cloud/mcp-token
+MFC_MCP_TOKEN_REFRESH_COMMAND=/usr/local/bin/refresh-mcp-token
+MFC_MCP_TOKEN_REFRESH_TIMEOUT=15
+```
+
+刷新命令必须是绝对路径，不经 shell，stdout 丢弃，错误文本脱敏；最好用
+“写临时文件 + rename”原子替换 token。单次刷新后仍失败不在 HTTP 请求
+内 sleep，宿主默认每 3 分钟重新采集整套 artifacts（可用
+`--evidence-retry-interval <秒>` 调整），并继续受总验证预算约束。
+
+Coverage 的 `No data found` 现在记为 `skipped`：编译没过或 UT 未运行时
+本来就没有覆盖率，不把它冒充成 CodeCov 链路故障，也不猜 jobId 转换规则。
 
 ### 试点必验清单(报告的三个缺口,都不是本仓代码能修的)
 

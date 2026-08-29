@@ -62,8 +62,14 @@ CODEHUB_API = os.environ.get(
 CLI_HOST = os.environ.get('MFC_CODEHUB_CLI_HOST', 'yellow')
 MCP_SSE_HOST = os.environ.get('MFC_MCP_SSE_HOST', '10.244.150.123')
 MCP_SSE_PORT = int(os.environ.get('MFC_MCP_SSE_PORT', '9000'))
-MCP_TOKEN_FILE = os.path.expanduser(os.environ.get(
-    'MFC_MCP_TOKEN_FILE', '~/.config/mae-flow-cloud/mcp-token'))
+configured_mcp_token = os.environ.get('MFC_MCP_TOKEN_FILE', '').strip()
+if configured_mcp_token:
+    MCP_TOKEN_FILE = os.path.expanduser(configured_mcp_token)
+elif os.path.exists('/etc/mae-flow-cloud/mcp-token'):
+    MCP_TOKEN_FILE = '/etc/mae-flow-cloud/mcp-token'
+else:
+    MCP_TOKEN_FILE = os.path.expanduser(
+        '~/.config/mae-flow-cloud/mcp-token')
 MCP_CLIENT_DIR = os.path.expanduser(os.environ.get(
     'MFC_MCP_CLIENT_DIR', '~/.config/mae-flow-cloud'))
 

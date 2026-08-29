@@ -383,6 +383,15 @@ export class PlatformAdapter {
     spec: CommandSpec,
     values: Record<string, string>,
   ): Promise<string> {
+    const secrets = [values.token, this.serviceToken]
+      .filter((value): value is string => !!value);
+    const redact = (raw: unknown): string => {
+      let text = String(raw ?? "");
+      for (const secret of secrets) {
+        text = text.split(secret).join("<token>");
+      }
+      return text;
+    };
     const [executable, ...args] = spec.command.map((part) =>
       part.replace(/\{(\w+)\}/g, (_whole, name: string) => {
         const value = values[name];
@@ -401,8 +410,9 @@ export class PlatformAdapter {
         (error, stdout, stderr) => {
           if (error) {
             reject(new AdapterError(
-              `CLI 失败: ${executable} 退出异常(${error.message.slice(0, 200)})`
-              + `\nstderr: ${String(stderr).slice(0, 1000)}`));
+              `CLI 失败: ${executable} 退出异常(`
+              + `${redact(error.message).slice(0, 200)})`
+              + `\nstderr: ${redact(stderr).slice(0, 1000)}`));
           } else {
             // Windows CLI(WSL 互操作调 .exe / 适配层直跑 Windows)输出
             // 是 \r\n,\r 会咬正则抽取一口——统一归一化,JSON 不受影响。

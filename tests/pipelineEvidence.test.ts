@@ -107,3 +107,25 @@ test("CodeCheck 状态明细必须带文件行号；只有页面 URL 仍算缺�
   assert.deepEqual(urlOnly.availableDimensions, []);
   assert.deepEqual(urlOnly.missingDimensions, ["CODECHECK"]);
 });
+
+test("识别内网 CodeCheck 真实 fileName/lineNum/indicatorName 字段", () => {
+  const result = assessPipelineRepairEvidence({
+    checks: [{
+      dimension: "CODECHECK", status: "failed", tool: "codecheck",
+    }],
+    artifacts: [{
+      name: "codecheck_detail.json",
+      text: JSON.stringify({ defects: [{
+        tool: "codecheck",
+        ruleId: "45deed5a4d6140c8b10884643f930bc3",
+        indicatorName: "G.FUN.01-CPP 函数功能要单一",
+        fileName: "service/HandleAdvice/AcceptNRAdviceMML.hpp",
+        lineNum: 13,
+        description: "函数行数建议不超过 50 行",
+        yellowResult: false,
+      }] }),
+    }],
+  });
+  assert.deepEqual(result.availableDimensions, ["CODECHECK"]);
+  assert.deepEqual(result.missingDimensions, []);
+});

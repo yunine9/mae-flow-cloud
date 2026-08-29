@@ -253,8 +253,8 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
   原文收编(个人路径/真实 MR 已泛化)**;④SuperChecker 类**不可修工具前置分诊**(serve
   `--unfixable-tools`,全体命中且有 tool 证据才不派修复,拿不准照常派;
   内网工具→维度映射表里 SuperChecker 归 CODECHECK,名单可直接用)。
-  边界如实记:脚本依赖内网部署件 mcp_sse_client.py(在
-  ~/.config/mae-flow-cloud/,**待拿到原文收编进仓**)与 mcp-token;
+  边界如实记:mcp_sse_client.py 已收编进仓，内网部署只需
+  额外提供可刷新的 mcp-token;
   收编脚本的三处增量(回显/tool/details)未在真网关跑过,内网
   --selftest 对拍是硬前置;覆盖率差分与 AI Review Tips 暂未接(增益项)。
   **⑤(同日后续)artifacts 通路整体重写为 toolkit「PipelineLog

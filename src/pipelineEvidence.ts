@@ -73,10 +73,11 @@ function hasLocatedDefect(value: unknown): boolean {
     /^(?:file|file_?path|filename|relative_?path|path)$/i.test(key)
       && meaningful(String(current ?? "")));
   const line = entries.find(([key, current]) =>
-    /^(?:line|line_?(?:no|number)|lineno|start_?line|new_?line)$/i.test(key)
+    /^(?:line|line_?(?:no|num|number)|lineno|linenum|start_?line|new_?line)$/i
+      .test(key)
       && Number.isFinite(Number(current)) && Number(current) > 0);
   const diagnosis = entries.find(([key, current]) =>
-    /^(?:message|msg|description|detail|rule|rule_?name|checker_?name|error)$/i
+    /^(?:message|msg|description|detail|rule|rule_?(?:id|name)|indicator_?name|checker_?name|error)$/i
       .test(key) && meaningful(String(current ?? "")));
   if (field && line && diagnosis) return true;
   return entries.some(([, nested]) => hasLocatedDefect(nested));

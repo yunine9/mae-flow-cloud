@@ -55,7 +55,9 @@ function fakeCli(dir: string): string {
     } else if (sub === "weird") {
       console.log(JSON.stringify({ data: { state: "SUSPENDED" } }));
     } else if (sub === "boom") {
-      console.error("CLI 炸了: token 无效");
+      const tokenAt = args.indexOf("--token");
+      console.error("CLI 炸了: token 无效 "
+        + (tokenAt >= 0 ? args[tokenAt + 1] : ""));
       process.exit(3);
     } else if (sub === "mergeable") {
       // CodeHub mergeable_state 的真实形状(能力核对报告 B 节):
@@ -196,7 +198,11 @@ test("诚实 502:未映射状态拒绝猜;CLI 非零退出带 stderr 上浮", as
   const cli = fakeCli(dir);
   const configPath = join(dir, "adapter.json");
   writeFileSync(configPath, JSON.stringify({
-    mr_create: { command: ["node", cli, "boom"], url: { regex: "https\\S+" } },
+    token: "svc-secret-do-not-leak",
+    mr_create: {
+      command: ["node", cli, "boom", "--token", "{token}"],
+      url: { regex: "https\\S+" },
+    },
     pipeline_trigger: {
       command: ["node", cli, "weird"],
       status: { json: "data.state" },
@@ -217,7 +223,12 @@ test("诚实 502:未映射状态拒绝猜;CLI 非零退出带 stderr 上浮", as
   await assert.rejects(
     adapter.handle("POST", "/mr", new URLSearchParams(),
       { repo: "r", source_branch: "s", target_branch: "t", title: "x" }, {}),
-    /token 无效/);
+    (error: Error) => {
+      assert.match(error.message, /token 无效/);
+      assert.match(error.message, /<token>/);
+      assert.doesNotMatch(error.message, /svc-secret-do-not-leak/);
+      return true;
+    });
 });
 
 test("报告后新口子:平铺布尔门禁、先查后建、两步回复/解决", async () => {

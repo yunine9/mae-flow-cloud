@@ -16,7 +16,8 @@
 2026-08-28 收编进仓版本化(逻辑照搬内网实测版,零改动):仅 __main__
 自测段泛化——个人路径与真实 MR 链接不进仓,改从环境变量/参数读:
   python3 mcp_sse_client.py <mr_url> [host] [port]
-  (token 文件走 MFC_MCP_TOKEN_FILE,默认 ~/.config/mae-flow-cloud/mcp-token)
+  (token 文件走 MFC_MCP_TOKEN_FILE，生产优先
+   /etc/mae-flow-cloud/mcp-token，旧开发机路径作兼容降级)
 """
 import socket, http.client, json, re, time, urllib.request, sys
 
@@ -258,8 +259,8 @@ if __name__ == "__main__":
         else os.environ.get("MFC_MCP_SSE_HOST", "10.244.150.123")
     port = int(sys.argv[3] if len(sys.argv) > 3
                else os.environ.get("MFC_MCP_SSE_PORT", "9000"))
-    token_file = os.path.expanduser(os.environ.get(
-        "MFC_MCP_TOKEN_FILE", "~/.config/mae-flow-cloud/mcp-token"))
+    from mcp_http_client import default_mcp_token_file
+    token_file = default_mcp_token_file()
     mcp_token = open(token_file).read().strip()  # noqa: F841 下载日志时用
     client = SSEMcpClient(host, port)
     try:
