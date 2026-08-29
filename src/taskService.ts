@@ -4022,8 +4022,192 @@ export class TaskService {
     let workflowProfile = options.workflowProfile
       ? structuredClone(options.workflowProfile) : undefined;
     mkdirSync(workspace, { recursive: true });
-      this.issueEnvironmentVault.remove(id);
+    let repositoryProfiles = options.repositoryProfiles ?? [];
+    if (options.repositoryProfiles === undefined && repositories.length) {
+      try {
+        repositoryProfiles = resolveRepositoryProfiles(
+          this.options.dataDir, repositories)
+          .flatMap((item) => item.profile ? [{ ...item.profile }] : []);
+      } catch (error) {
+        this.options.log?.(
+          `[repository-profiles] 任务 ${id} 读取失败，已退化为按仓库匹配（不影响下单）：${String(error)}`);
+      }
+    }
+    const profileTechnologies = [...new Set(repositoryProfiles
+      .flatMap((profile) => profile.technologies))];
+    let issueEnvironments: IssueEnvironmentRef[] = [];
+    let businessModules: SelectedBusinessModule[] = [];
+    let engineeringKnowledge: SelectedEngineeringKnowledge[] = [];
+    let hostSkillSnapshotWarnings: string[] = [];
+    try {
+      if (options.businessModules !== undefined) {
+        if (!options.businessModuleSourceWorkspace) {
+          throw new Error("复制业务模块快照时缺少父任务现场");
+        }
+        businessModules = copyBusinessModuleSnapshots({
+          selected: options.businessModules,
+          sourceTaskWorkspace: options.businessModuleSourceWorkspace,
+          targetTaskWorkspace: workspace,
+          repositories,
+        });
+      } else {
+        businessModules = snapshotBusinessModules({
+          dataDir: this.options.dataDir,
+          taskWorkspace: workspace,
+          moduleIds: selectedBusinessModuleIds,
+          repositories,
+        });
+      }
+      try {
+        if (options.engineeringKnowledge !== undefined) {
+          if (!options.engineeringKnowledgeSourceWorkspace) {
+            throw new Error("复制团队工程知识快照时缺少父任务现场");
+          }
+          engineeringKnowledge = copyEngineeringKnowledgeSnapshots({
+            selected: options.engineeringKnowledge,
+            sourceTaskWorkspace: options.engineeringKnowledgeSourceWorkspace,
+            targetTaskWorkspace: workspace,
+            repository: repositories.length === 1 ? repositories[0] : undefined,
+          });
+        } else {
+          engineeringKnowledge = snapshotEngineeringKnowledge({
+            dataDir: this.options.dataDir,
+            taskWorkspace: workspace,
+            repositories,
+            technologies: profileTechnologies,
+            businessModuleIds: businessModules.map((module) => module.id),
+            selectedIds: selectedEngineeringKnowledgeIds,
+          });
+        }
+      } catch (error) {
+        engineeringKnowledge = [];
+        this.options.log?.(
+          `[engineering-knowledge] 任务 ${id} 快照失败，已退化为无团队工程知识（不影响下单）：${String(error)}`);
+      }
+      const hostSkillSnapshotRoot = join(workspace, "host-skill-snapshot");
+      mkdirSync(hostSkillSnapshotRoot, { recursive: true, mode: 0o750 });
+      const hostSkillSnapshot = materializeHostSkills({
+        sourceRoot: options.hostSkillSnapshotSourceWorkspace
+          ? join(options.hostSkillSnapshotSourceWorkspace, "host-skill-snapshot")
+          : join(this.options.dataDir, "skills"),
+        workspaceRoot: workspace,
+        snapshotRoot: hostSkillSnapshotRoot,
+        context: {
+          repositories,
+          technologies: profileTechnologies,
+          businessModuleIds: businessModules.map((module) => module.id),
+        },
+      });
+      hostSkillSnapshotWarnings = hostSkillSnapshot.warnings;
+      for (const warning of hostSkillSnapshotWarnings) {
+        this.options.log?.(
+          `[host-skill-snapshot] 任务 ${id}: ${warning}`);
+      }
+      storeRequirementDocument(workspace, requirement, requirementDocument);
+    } catch (error) {
       removeTaskTree(workspace);
+      throw error;
+    }
+    if (!workflowProfile && options.workflowDefinition !== undefined) {
+      const standard = readWorkflowStandardSnapshot(
+        workflowCatalogRoot);
+      if (!standard) {
+        workflowProfileWarning = [
+          workflowProfileWarning,
+          "工作流标准目录暂不可读，已采用既有 Mae-Flow 默认流程；本次定制未生效",
+        ].filter(Boolean).join("；");
+      } else {
+        workflowProfile = compileWorkflow({
+          baseSnapshot: standard,
+          definition: options.workflowDefinition,
+          source: options.workflowSource ?? { kind: "task", id },
+          resolvedAssets: options.workflowResolvedAssets
+            ?? resolveWorkflowAssets({
+              definition: options.workflowDefinition,
+              dataDir: this.options.dataDir,
+              repositories,
+              technologies: profileTechnologies,
+              businessModules,
+              engineeringKnowledge,
+              repositorySkills,
+              hostSkillSnapshotRoot: join(workspace, "host-skill-snapshot"),
+            }),
+        });
+      }
+    }
+    const summary: TaskSummary = {
+      id,
+      // 旧调用方/历史兼容仍可从首行生成；产品下单界面会明确收任务名称，
+      // 不再让用户输入的长需求文档悄悄承担标题职责。
+      title: explicitTitle ?? taskTitle(requirement),
+      requirement,
+      requirement_document: requirementDocument,
+      status: "queued",
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      last_progress_at: new Date().toISOString(),
+      workspace,
+      luban_account: options.account || undefined,
+      repo_url: repo,
+      repositories: repositories.length ? repositories : undefined,
+      repository_profiles: repositories.length
+        ? repositoryProfiles
+          .filter((profile) => repositories.some((repository) =>
+            repository.replace(/\/+$/, "").replace(/\.git$/i, "").toLowerCase()
+            === profile.repository.replace(/\/+$/, "").replace(/\.git$/i, "").toLowerCase()))
+        : undefined,
+      repository_skills: repositorySkills,
+      business_modules: businessModules.length ? businessModules : undefined,
+      engineering_knowledge: engineeringKnowledge.length
+        ? engineeringKnowledge : undefined,
+      requirement_graph: repositories.length
+        ? {
+            stage: repositories.length > 1 ? "analysis" : "confirmed",
+            repositories: repositories.map((url, index) => ({
+              id: `repo-${index + 1}`,
+              name: basename(url).replace(/\.git$/, "") || `仓库 ${index + 1}`,
+              url,
+            })),
+            dependencies: [],
+          }
+        : undefined,
+      parent_task_id: options.parentTaskId,
+      blocked_by: options.blockedBy?.length ? [...options.blockedBy] : undefined,
+      // 用户拍板:交付方式下单就定,不让 agent 再问一遍。默认取内核
+      // 选项里的第一项(通常是"完整开发"),读不到内核就不预选。
+      lane: requestedLane ?? laneChoices[0],
+      ticket,
+      baseline,
+      model_choice: options.model,
+      repair_rounds: options.repairRounds,
+      execution_profile: executionProfile,
+      execution_profile_repository_resolved:
+        options.executionProfileRepositoryResolved,
+      execution_profile_warning: [
+        options.executionProfileWarning,
+        executionPolicyWarning,
+      ].filter(Boolean).join("；") || undefined,
+      workflow_profile: workflowProfile,
+      workflow_profile_warning: workflowProfileWarning,
+      host_skills_pinned: true,
+      host_skill_snapshot_warnings: hostSkillSnapshotWarnings.length
+        ? hostSkillSnapshotWarnings : undefined,
+    };
+    const task: TaskState = {
+      summary,
+      tokenUsage: emptyTokenUsageState(),
+      humanGate: new HumanGate(join(workspace, "waiting.json")),
+      lastPersistedStatus: summary.status,
+      controlEpoch: 0,
+    };
+    this.tasks.set(id, task);
+    try {
+      this.persist(task);
+    } catch (error) {
+      // 问题环境密码早于 task.json 写入；如果任务事实落盘失败，绝不
+      // 留下一份没有任务可回收的孤儿凭据。
+      this.tasks.delete(id);
+      rmSync(workspace, { recursive: true, force: true });
       throw error;
     }
     if (!options.deferQueue) {
@@ -4832,7 +5016,6 @@ export class TaskService {
       const replacement = this.create(source.requirement, createOptions);
       this.reviews.purgeTask(id);
       this.options.notifier?.purgeTask(id);
-      this.issueEnvironmentVault.remove(id);
       if (hadWorkspace) removeTaskTree(backup);
       this.queue.push(id);
       this.bypass(undefined, "任务泵", this.pump());

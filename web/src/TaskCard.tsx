@@ -3,7 +3,7 @@
  * 外部动作与事件现场。服务端镜像是唯一事实来源。
  */
 
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { Markdown } from "./markdown";
 import {
   decide,
