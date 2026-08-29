@@ -86,8 +86,8 @@ export function IssueRail({ detail, busy, waiting, onAnswer, onReply,
         <RailInput
           kind="steer"
           disabled={busy}
-          placeholder="会话运行中——插话(当前工具调用完成后送达)"
-          actionLabel="插话"
+          placeholder="会话运行中——补充说明会在当前步骤完成后送达"
+          actionLabel="发送补充"
           submit={onSteer}
         />
       </div>}

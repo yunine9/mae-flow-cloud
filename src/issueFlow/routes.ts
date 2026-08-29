@@ -27,7 +27,7 @@
  *   POST /issues/:id/reply            → 续聊
  *   POST /issues/:id/decision         → 问题卡作答
  *   POST /issues/:id/environment      → 网管环境配置(env_needed 闸的作答口)
- *   POST /issues/:id/interrupt        → 插话
+ *   POST /issues/:id/interrupt        → 补充(运行中送达 AI)
  *   POST /issues/:id/ticket           → 绑定单号
  *   POST /issues/:id/control          → 归档/取消
  */
@@ -529,7 +529,7 @@ export async function handleIssueRoutes(
 
     if (method === "POST" && parts[2] === "interrupt" && parts.length === 3) {
       if (viewer?.role === "admin" || !brief || !own(brief.account)) {
-        return done(403, { error: "只有归属人能插话" });
+        return done(403, { error: "只有归属人能补充" });
       }
       const body = await readBody(request);
       return done(200, issueFlow.steer(id, String(body.text ?? "")));

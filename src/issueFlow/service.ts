@@ -1449,7 +1449,7 @@ export class IssueFlowService {
       throw new IssueControlError("首轮研究还在排队启动,请稍候再发消息");
     }
     if (status === "running" || this.turning.has(live.id)) {
-      throw new IssueControlError("会话正在运行,请用插话(interrupt)");
+      throw new IssueControlError("会话正在运行,请用「补充」(运行中输入会在当前步骤完成后送达)");
     }
     if (isTerminal(status)) {
       throw new IssueControlError(`会话已${status === "archived" ? "归档" : "结束"},不能再续聊`);
@@ -1463,9 +1463,9 @@ export class IssueFlowService {
   steer(id: string, text: string): IssueSummary {
     const live = this.require(id);
     const content = text?.trim();
-    if (!content) throw new IssueControlError("插话内容不能为空");
+    if (!content) throw new IssueControlError("补充内容不能为空");
     if (live.state.status !== "running" || !live.driver) {
-      throw new IssueControlError("会话不在运行中,插话无处送达");
+      throw new IssueControlError("会话不在运行中,补充无处送达");
     }
     void live.driver.steer(content).catch((error) =>
       this.log(`[issue-flow] ${id} 插话失败: ${String(error)}`));
