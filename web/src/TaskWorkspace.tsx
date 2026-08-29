@@ -718,7 +718,10 @@ export function TaskWorkspace({
               {/* SSE 实时现场是这个页签的主角(用户拍板),置顶;
                   执行方案卡整体撤出堆叠——各阶段方案点上方进度条的
                   阶段名查看(StagePlanDialog)。 */}
-              <ExecutionPanel task={task} />
+              {/* 摘要卡里的执行现场默认收起，避免多张卡同时拉实时流；
+                  但这里已经是独立的“执行现场”页签，打开页签就该直接
+                  看见现场，不能再让用户做一次没有意义的展开。 */}
+              <ExecutionPanel task={task} defaultOpen />
               <WarmupPanel task={task} />
               {task.workflow_profile && <WorkflowProfileCard
                 profile={task.workflow_profile}
