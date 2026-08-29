@@ -1,0 +1,702 @@
+/**
+ * 文件存储型工作流资产库(HANDOFF-workflow-assets-cc 第一批)。
+ *
+ * 职责边界:只管资产的存储、生命周期与复制语义。工作流内容的合法性
+ * 全部交给共享契约 `workflowDefinition.ts`(唯一事实来源)——进出这里
+ * 的 definition 一律过 normalizeWorkflowDefinition,摘要一律用
+ * workflowDigest,本文件不复刻任何结构判断。团队场景下发布/归档/
+ * 设默认的最终权限judgment在 route 层;这里只导出 canView/canEdit/
+ * canPublish 基线判断与严格的状态机。
+ *
+ * 存储布局(<dataDir>/workflow-assets/):
+ *   operations.jsonl            全部变更的追加留痕(谁、何时、干了什么)
+ *   <asset-id>/asset.json       元数据与生命周期状态
+ *   <asset-id>/draft.json       当前草稿(revision 乐观锁)
+ *   <asset-id>/versions/vN.json 已发布版本,写入后永不可覆盖
+ *
+ * 纪律:
+ * - 一切写入走 tmp+rename 原子替换;已发布版本用 link(2) 落盘——
+ *   目标已存在时内核层面报 EEXIST,不存在"悄悄覆盖 v1"的路径。
+ * - 读侧遇到损坏记录跳过并返回 warning(列表不能因一条坏账全瘫);
+ *   写侧遇到损坏记录 fail-closed 拒绝操作(在坏账上继续写等于把
+ *   损坏合法化)。
+ * - 资产 ID 白名单正则 + 保留名 + 符号链接拒绝,路径永远不离开根目录。
+ */
+
+import { randomBytes } from "node:crypto";
+import {
+  appendFileSync,
+  existsSync,
+  linkSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { join } from "node:path";
+import {
+  normalizeWorkflowDefinition,
+  workflowDigest,
+  type WorkflowDefinition,
+  type WorkflowSourceRef,
+} from "./workflowDefinition.ts";
+
+export const WORKFLOW_ASSET_SCHEMA = "mae-flow-workflow-asset/1" as const;
+export const WORKFLOW_DRAFT_SCHEMA = "mae-flow-workflow-draft/1" as const;
+export const WORKFLOW_VERSION_SCHEMA = "mae-flow-workflow-version/1" as const;
+
+export type WorkflowAssetScope = "personal" | "team";
+export type WorkflowAssetStatus =
+  | "draft"
+  | "pending_review"
+  | "published"
+  | "archived";
+
+/** 与共享契约同一 ID 白名单;另加保留名,operations.jsonl 不能被一个
+ * 恶意资产 ID 顶掉。 */
+const ASSET_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/;
+const RESERVED_IDS = new Set(["operations.jsonl"]);
+const MAX_MAINTAINERS = 32;
+
+export type WorkflowAssetErrorCode =
+  | "invalid_input"
+  | "not_found"
+  | "revision_conflict"
+  | "invalid_state"
+  | "corrupted"
+  | "version_exists";
+
+/** 可识别错误:route 层按 code 翻译成 HTTP 语义(409/404/422…),
+ * 不靠解析中文文案。 */
+export class WorkflowAssetError extends Error {
+  constructor(
+    readonly code: WorkflowAssetErrorCode,
+    message: string,
+    /** revision_conflict 时带上当前 revision,前端能直接引导刷新。 */
+    readonly current_revision?: number,
+  ) {
+    super(message);
+    this.name = "WorkflowAssetError";
+  }
+}
+
+export interface WorkflowAssetRecord {
+  schema: typeof WORKFLOW_ASSET_SCHEMA;
+  id: string;
+  name: string;
+  description?: string;
+  scope: WorkflowAssetScope;
+  owner: string;
+  maintainers: string[];
+  status: WorkflowAssetStatus;
+  /** 归档只是"新任务不可选",不是删除;记下归档前状态,历史可考。 */
+  status_before_archive?: WorkflowAssetStatus;
+  latest_version: number;
+  draft_revision: number;
+  draft_digest: string;
+  published_digest?: string;
+  copied_from?: WorkflowSourceRef;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WorkflowDraftRecord {
+  schema: typeof WORKFLOW_DRAFT_SCHEMA;
+  revision: number;
+  definition: WorkflowDefinition;
+  digest: string;
+  updated_at: string;
+  updated_by: string;
+}
+
+export interface WorkflowVersionRecord {
+  schema: typeof WORKFLOW_VERSION_SCHEMA;
+  version: number;
+  definition: WorkflowDefinition;
+  digest: string;
+  published_at: string;
+  published_by: string;
+  from_revision: number;
+}
+
+export interface WorkflowAssetSummary {
+  id: string;
+  name: string;
+  description?: string;
+  scope: WorkflowAssetScope;
+  owner: string;
+  maintainers: string[];
+  status: WorkflowAssetStatus;
+  latest_version: number;
+  draft_revision: number;
+  copied_from?: WorkflowSourceRef;
+  /** 归档只影响这一位:新任务不能再选它;已有引用与历史都在。 */
+  selectable_for_tasks: boolean;
+  updated_at: string;
+}
+
+export interface WorkflowAssetDetail {
+  asset: WorkflowAssetSummary;
+  draft: WorkflowDraftRecord;
+  versions: Array<{
+    version: number;
+    digest: string;
+    published_at: string;
+    published_by: string;
+  }>;
+}
+
+export interface WorkflowAssetListResult {
+  items: WorkflowAssetSummary[];
+  /** 损坏/可疑目录逐条点名——静默跳过等于假装没坏。 */
+  warnings: string[];
+}
+
+// ---------------------------------------------------------------------------
+// 权限基线:团队发布/归档/设默认的最终裁决在 route 层,这里只给
+// 任何 route 都不该低于的下限判断。
+// ---------------------------------------------------------------------------
+export function canView(asset: WorkflowAssetRecord, user: string): boolean {
+  if (asset.scope === "team") return true;
+  return asset.owner === user || asset.maintainers.includes(user);
+}
+
+export function canEdit(asset: WorkflowAssetRecord, user: string): boolean {
+  if (asset.status === "archived") return false;
+  return asset.owner === user || asset.maintainers.includes(user);
+}
+
+export function canPublish(asset: WorkflowAssetRecord, user: string): boolean {
+  if (asset.status === "archived") return false;
+  // 个人资产只有本人能发布;团队资产 owner/maintainer 都可提请,
+  // 是否还需要额外审批人由 route 层叠加。
+  if (asset.scope === "personal") return asset.owner === user;
+  return asset.owner === user || asset.maintainers.includes(user);
+}
+
+// ---------------------------------------------------------------------------
+// 存储原语
+// ---------------------------------------------------------------------------
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function atomicWriteJson(path: string, value: unknown): void {
+  const tmp = `${path}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`;
+  writeFileSync(tmp, JSON.stringify(value, null, 1));
+  renameSync(tmp, path);
+}
+
+/** 已发布版本专用:link(2) 在目标已存在时报 EEXIST——"永不可覆盖"
+ * 靠内核保证,不靠先 existsSync 再写的竞态检查。 */
+function immutableWriteJson(path: string, value: unknown): void {
+  const tmp = `${path}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`;
+  writeFileSync(tmp, JSON.stringify(value, null, 1));
+  try {
+    linkSync(tmp, path);
+  } catch (error) {
+    rmSync(tmp, { force: true });
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+      throw new WorkflowAssetError(
+        "version_exists",
+        `已发布版本文件已存在,拒绝覆盖:${path}`,
+      );
+    }
+    throw error;
+  }
+  rmSync(tmp, { force: true });
+}
+
+function parseJson<T>(raw: string): T {
+  return JSON.parse(raw) as T;
+}
+
+function normalizeActor(value: unknown, label: string): string {
+  const actor = String(value ?? "").trim();
+  if (!actor || actor.length > 120 || /[\0\r\n]/.test(actor)) {
+    throw new WorkflowAssetError("invalid_input", `${label}不能为空或含控制字符`);
+  }
+  return actor;
+}
+
+function normalizeMaintainers(value: unknown): string[] {
+  if (value == null) return [];
+  if (!Array.isArray(value)) {
+    throw new WorkflowAssetError("invalid_input", "maintainers 必须是数组");
+  }
+  const list = [...new Set(value.map((item) =>
+    normalizeActor(item, "maintainer")))].sort();
+  if (list.length > MAX_MAINTAINERS) {
+    throw new WorkflowAssetError(
+      "invalid_input", `maintainers 最多 ${MAX_MAINTAINERS} 人`);
+  }
+  return list;
+}
+
+// ---------------------------------------------------------------------------
+// 资产库
+// ---------------------------------------------------------------------------
+export class WorkflowAssetLibrary {
+  private readonly root: string;
+  private readonly oplogPath: string;
+
+  constructor(dataDir: string) {
+    this.root = join(dataDir, "workflow-assets");
+    this.oplogPath = join(this.root, "operations.jsonl");
+    mkdirSync(this.root, { recursive: true });
+  }
+
+  // -- 路径防护 --
+  private assetDir(id: string): string {
+    if (!ASSET_ID.test(id) || RESERVED_IDS.has(id)) {
+      throw new WorkflowAssetError("invalid_input", `资产 ID 不合法:${id}`);
+    }
+    const dir = join(this.root, id);
+    // ID 正则已排除路径分隔符与 "..";这里再拒符号链接——资产目录被
+    // 换成软链后,后续写入会落到库外任意位置。
+    try {
+      if (lstatSync(dir).isSymbolicLink()) {
+        throw new WorkflowAssetError(
+          "corrupted", `资产目录是符号链接,拒绝操作:${id}`);
+      }
+    } catch (error) {
+      if (error instanceof WorkflowAssetError) throw error;
+      // 目录还不存在:交给调用方决定是创建还是 not_found。
+    }
+    return dir;
+  }
+
+  /** 变更留痕。追加失败直接抛错(写侧 fail-closed):没有账的变更
+   * 宁可让调用方看到失败重试,不能默默丢账。 */
+  private logOperation(
+    op: string,
+    assetId: string,
+    actor: string,
+    detail: Record<string, unknown> = {},
+  ): void {
+    appendFileSync(this.oplogPath, JSON.stringify({
+      ts: nowIso(), op, asset_id: assetId, actor, ...detail,
+    }) + "\n");
+  }
+
+  // -- 读原语(写路径共用;损坏时 fail-closed) --
+  private readAssetStrict(id: string): WorkflowAssetRecord {
+    const dir = this.assetDir(id);
+    const path = join(dir, "asset.json");
+    if (!existsSync(path)) {
+      throw new WorkflowAssetError("not_found", `资产不存在:${id}`);
+    }
+    let record: WorkflowAssetRecord;
+    try {
+      record = parseJson<WorkflowAssetRecord>(readFileSync(path, "utf-8"));
+    } catch {
+      throw new WorkflowAssetError(
+        "corrupted", `资产元数据损坏,拒绝在其上继续写入:${id}`);
+    }
+    if (record.schema !== WORKFLOW_ASSET_SCHEMA || record.id !== id) {
+      throw new WorkflowAssetError(
+        "corrupted", `资产元数据 schema/ID 不符,拒绝操作:${id}`);
+    }
+    return record;
+  }
+
+  private readDraftStrict(id: string): WorkflowDraftRecord {
+    const path = join(this.assetDir(id), "draft.json");
+    if (!existsSync(path)) {
+      throw new WorkflowAssetError("corrupted", `资产缺少草稿文件:${id}`);
+    }
+    let draft: WorkflowDraftRecord;
+    try {
+      draft = parseJson<WorkflowDraftRecord>(readFileSync(path, "utf-8"));
+    } catch {
+      throw new WorkflowAssetError("corrupted", `草稿文件损坏:${id}`);
+    }
+    if (draft.schema !== WORKFLOW_DRAFT_SCHEMA) {
+      throw new WorkflowAssetError("corrupted", `草稿 schema 不符:${id}`);
+    }
+    // 草稿内容重新过契约:磁盘不可信,坏定义不能借道流回系统。
+    try {
+      draft.definition = normalizeWorkflowDefinition(draft.definition);
+    } catch (error) {
+      throw new WorkflowAssetError(
+        "corrupted", `草稿定义不再符合契约:${id}(${String(
+          (error as Error).message)})`);
+    }
+    return draft;
+  }
+
+  private writeAsset(record: WorkflowAssetRecord): void {
+    atomicWriteJson(join(this.assetDir(record.id), "asset.json"), record);
+  }
+
+  private summarize(record: WorkflowAssetRecord): WorkflowAssetSummary {
+    return {
+      id: record.id,
+      name: record.name,
+      ...(record.description ? { description: record.description } : {}),
+      scope: record.scope,
+      owner: record.owner,
+      maintainers: record.maintainers,
+      status: record.status,
+      latest_version: record.latest_version,
+      draft_revision: record.draft_revision,
+      ...(record.copied_from ? { copied_from: record.copied_from } : {}),
+      selectable_for_tasks:
+        record.status === "published" && record.latest_version > 0,
+      updated_at: record.updated_at,
+    };
+  }
+
+  // -- 创建 --
+  create(input: {
+    id?: string;
+    name: string;
+    description?: string;
+    scope: WorkflowAssetScope;
+    owner: string;
+    maintainers?: string[];
+    definition: unknown;
+    copied_from?: WorkflowSourceRef;
+    actor?: string;
+  }): WorkflowAssetSummary {
+    const id = input.id ?? `wf-${randomBytes(6).toString("hex")}`;
+    const dir = this.assetDir(id);
+    if (existsSync(join(dir, "asset.json"))) {
+      throw new WorkflowAssetError("invalid_input", `资产 ID 已被占用:${id}`);
+    }
+    const name = String(input.name ?? "").trim();
+    if (!name || name.length > 160) {
+      throw new WorkflowAssetError("invalid_input", "资产名称不能为空且不超过 160 字");
+    }
+    if (input.scope !== "personal" && input.scope !== "team") {
+      throw new WorkflowAssetError("invalid_input", "scope 只能是 personal 或 team");
+    }
+    const owner = normalizeActor(input.owner, "owner");
+    const actor = normalizeActor(input.actor ?? owner, "actor");
+    const definition = normalizeWorkflowDefinition(input.definition);
+    const digest = workflowDigest(definition);
+    const at = nowIso();
+
+    mkdirSync(join(dir, "versions"), { recursive: true });
+    const draft: WorkflowDraftRecord = {
+      schema: WORKFLOW_DRAFT_SCHEMA,
+      revision: 1,
+      definition,
+      digest,
+      updated_at: at,
+      updated_by: actor,
+    };
+    atomicWriteJson(join(dir, "draft.json"), draft);
+    const record: WorkflowAssetRecord = {
+      schema: WORKFLOW_ASSET_SCHEMA,
+      id,
+      name,
+      ...(input.description
+        ? { description: String(input.description).slice(0, 1_000) } : {}),
+      scope: input.scope,
+      owner,
+      maintainers: normalizeMaintainers(input.maintainers),
+      status: "draft",
+      latest_version: 0,
+      draft_revision: 1,
+      draft_digest: digest,
+      ...(input.copied_from ? { copied_from: input.copied_from } : {}),
+      created_at: at,
+      updated_at: at,
+    };
+    this.writeAsset(record);
+    this.logOperation("create", id, actor, {
+      scope: record.scope, digest,
+      ...(input.copied_from ? { copied_from: input.copied_from } : {}),
+    });
+    return this.summarize(record);
+  }
+
+  // -- 复制:副本深拷贝独立编辑,永不共享;copied_from 记出身 --
+  copy(input: {
+    source: WorkflowSourceRef;
+    /** platform/task 来源必须由调用方带 definition(库够不到平台目录
+     * 与任务存储);workflow 来源从本库已发布版本取。 */
+    definition?: unknown;
+    name: string;
+    description?: string;
+    scope: WorkflowAssetScope;
+    owner: string;
+    maintainers?: string[];
+    actor?: string;
+  }): WorkflowAssetSummary {
+    const source = input.source;
+    let definition: unknown;
+    let copiedFrom: WorkflowSourceRef;
+    if (source.kind === "workflow") {
+      const origin = this.readAssetStrict(source.id);
+      const version = source.version
+        ? Number(String(source.version).replace(/^v/, ""))
+        : origin.latest_version;
+      if (!Number.isInteger(version) || version < 1
+          || version > origin.latest_version) {
+        throw new WorkflowAssetError(
+          "not_found", `资产 ${source.id} 没有可复制的版本 ${source.version ?? "(latest)"}`);
+      }
+      const record = this.readVersionStrict(source.id, version);
+      definition = record.definition;
+      copiedFrom = {
+        kind: "workflow", id: source.id,
+        version: `v${version}`, digest: record.digest,
+      };
+    } else if (source.kind === "platform" || source.kind === "task") {
+      if (input.definition == null) {
+        throw new WorkflowAssetError(
+          "invalid_input", `${source.kind} 来源复制必须提供 definition`);
+      }
+      definition = input.definition;
+      copiedFrom = { ...source };
+    } else {
+      throw new WorkflowAssetError("invalid_input", "不支持的复制来源");
+    }
+    // normalizeWorkflowDefinition 返回全新对象——这就是深拷贝边界,
+    // 副本与来源没有任何共享引用。
+    const summary = this.create({
+      name: input.name,
+      description: input.description,
+      scope: input.scope,
+      owner: input.owner,
+      maintainers: input.maintainers,
+      definition,
+      copied_from: copiedFrom,
+      actor: input.actor,
+    });
+    return summary;
+  }
+
+  private readVersionStrict(id: string, version: number): WorkflowVersionRecord {
+    const path = join(this.assetDir(id), "versions", `v${version}.json`);
+    if (!existsSync(path)) {
+      throw new WorkflowAssetError("not_found", `版本不存在:${id} v${version}`);
+    }
+    let record: WorkflowVersionRecord;
+    try {
+      record = parseJson<WorkflowVersionRecord>(readFileSync(path, "utf-8"));
+    } catch {
+      throw new WorkflowAssetError("corrupted", `版本文件损坏:${id} v${version}`);
+    }
+    if (record.schema !== WORKFLOW_VERSION_SCHEMA) {
+      throw new WorkflowAssetError("corrupted", `版本 schema 不符:${id} v${version}`);
+    }
+    try {
+      record.definition = normalizeWorkflowDefinition(record.definition);
+    } catch (error) {
+      throw new WorkflowAssetError(
+        "corrupted", `版本定义不再符合契约:${id} v${version}(${String(
+          (error as Error).message)})`);
+    }
+    return record;
+  }
+
+  // -- 列表:读侧宽容,坏账跳过并点名 --
+  list(): WorkflowAssetListResult {
+    const items: WorkflowAssetSummary[] = [];
+    const warnings: string[] = [];
+    for (const entry of readdirSync(this.root, { withFileTypes: true })) {
+      if (!entry.isDirectory()) {
+        if (entry.isSymbolicLink()) {
+          warnings.push(`跳过符号链接:${entry.name}`);
+        }
+        continue;
+      }
+      if (!ASSET_ID.test(entry.name) || RESERVED_IDS.has(entry.name)) {
+        warnings.push(`跳过不合法目录名:${entry.name}`);
+        continue;
+      }
+      const path = join(this.root, entry.name, "asset.json");
+      try {
+        const record = parseJson<WorkflowAssetRecord>(
+          readFileSync(path, "utf-8"));
+        if (record.schema !== WORKFLOW_ASSET_SCHEMA
+            || record.id !== entry.name) {
+          warnings.push(`资产元数据 schema/ID 不符,已跳过:${entry.name}`);
+          continue;
+        }
+        items.push(this.summarize(record));
+      } catch {
+        warnings.push(`资产元数据缺失或损坏,已跳过:${entry.name}`);
+      }
+    }
+    items.sort((left, right) => left.id.localeCompare(right.id));
+    return { items, warnings };
+  }
+
+  // -- 详情 --
+  get(id: string): WorkflowAssetDetail {
+    const record = this.readAssetStrict(id);
+    const draft = this.readDraftStrict(id);
+    const versions: WorkflowAssetDetail["versions"] = [];
+    for (let version = 1; version <= record.latest_version; version += 1) {
+      const item = this.readVersionStrict(id, version);
+      versions.push({
+        version: item.version,
+        digest: item.digest,
+        published_at: item.published_at,
+        published_by: item.published_by,
+      });
+    }
+    return { asset: this.summarize(record), draft, versions };
+  }
+
+  /** 任务创建选流程时用:必须已发布且未归档。指定 version 的历史读取
+   * 不受归档影响(归档只挡"新任务默认选择",不消灭历史)。 */
+  getPublished(id: string, version?: number): WorkflowVersionRecord {
+    const record = this.readAssetStrict(id);
+    if (record.latest_version < 1) {
+      throw new WorkflowAssetError("invalid_state", `资产尚未发布:${id}`);
+    }
+    if (version == null && record.status === "archived") {
+      throw new WorkflowAssetError(
+        "invalid_state", `资产已归档,新任务不能再选择它:${id}`);
+    }
+    return this.readVersionStrict(id, version ?? record.latest_version);
+  }
+
+  // -- 草稿保存(乐观锁) --
+  saveDraft(id: string, input: {
+    definition: unknown;
+    expected_revision: number;
+    actor: string;
+  }): WorkflowAssetDetail {
+    const record = this.readAssetStrict(id);
+    if (record.status === "archived") {
+      throw new WorkflowAssetError("invalid_state", "资产已归档,不能修改草稿");
+    }
+    if (record.status === "pending_review") {
+      throw new WorkflowAssetError(
+        "invalid_state", "资产在待审核中,请先撤回再修改草稿");
+    }
+    const draft = this.readDraftStrict(id);
+    if (draft.revision !== input.expected_revision) {
+      // 可识别冲突:code + 当前 revision,前端据此提示刷新合并,
+      // 而不是把别人刚存的草稿悄悄盖掉。
+      throw new WorkflowAssetError(
+        "revision_conflict",
+        `草稿已被更新(当前 revision ${draft.revision},`
+        + `提交基于 ${input.expected_revision})`,
+        draft.revision,
+      );
+    }
+    const actor = normalizeActor(input.actor, "actor");
+    const definition = normalizeWorkflowDefinition(input.definition);
+    const digest = workflowDigest(definition);
+    const at = nowIso();
+    const next: WorkflowDraftRecord = {
+      schema: WORKFLOW_DRAFT_SCHEMA,
+      revision: draft.revision + 1,
+      definition,
+      digest,
+      updated_at: at,
+      updated_by: actor,
+    };
+    atomicWriteJson(join(this.assetDir(id), "draft.json"), next);
+    record.draft_revision = next.revision;
+    record.draft_digest = digest;
+    record.updated_at = at;
+    // 改已发布资产 = 开新草稿周期:published → draft;vN 原样躺着。
+    if (record.status === "published") record.status = "draft";
+    this.writeAsset(record);
+    this.logOperation("save_draft", id, actor, {
+      revision: next.revision, digest,
+    });
+    return this.get(id);
+  }
+
+  // -- 生命周期:draft → pending_review → published;archived 终态 --
+  submitForReview(id: string, input: { actor: string }): WorkflowAssetSummary {
+    return this.transition(id, input.actor, "submit", ["draft"],
+      "pending_review");
+  }
+
+  withdraw(id: string, input: { actor: string }): WorkflowAssetSummary {
+    return this.transition(id, input.actor, "withdraw", ["pending_review"],
+      "draft");
+  }
+
+  reject(id: string, input: { actor: string; reason?: string }):
+  WorkflowAssetSummary {
+    return this.transition(id, input.actor, "reject", ["pending_review"],
+      "draft", { ...(input.reason ? { reason: input.reason } : {}) });
+  }
+
+  private transition(
+    id: string,
+    actorInput: string,
+    op: string,
+    from: WorkflowAssetStatus[],
+    to: WorkflowAssetStatus,
+    detail: Record<string, unknown> = {},
+  ): WorkflowAssetSummary {
+    const record = this.readAssetStrict(id);
+    const actor = normalizeActor(actorInput, "actor");
+    if (!from.includes(record.status)) {
+      throw new WorkflowAssetError(
+        "invalid_state",
+        `当前状态 ${record.status} 不能执行 ${op}(需要 ${from.join("/")})`);
+    }
+    record.status = to;
+    record.updated_at = nowIso();
+    this.writeAsset(record);
+    this.logOperation(op, id, actor, detail);
+    return this.summarize(record);
+  }
+
+  /** 通过审核并发布:草稿定格为 v(latest+1)。vN 用 link(2) 落盘,
+   * 已存在即 EEXIST 拒绝——"永不可覆盖"不靠自觉。 */
+  approve(id: string, input: { actor: string }): WorkflowAssetSummary {
+    const record = this.readAssetStrict(id);
+    const actor = normalizeActor(input.actor, "actor");
+    if (record.status !== "pending_review") {
+      throw new WorkflowAssetError(
+        "invalid_state",
+        `当前状态 ${record.status} 不能执行 approve(需要 pending_review)`);
+    }
+    const draft = this.readDraftStrict(id);
+    const version = record.latest_version + 1;
+    const versionRecord: WorkflowVersionRecord = {
+      schema: WORKFLOW_VERSION_SCHEMA,
+      version,
+      definition: draft.definition,
+      digest: draft.digest,
+      published_at: nowIso(),
+      published_by: actor,
+      from_revision: draft.revision,
+    };
+    immutableWriteJson(
+      join(this.assetDir(id), "versions", `v${version}.json`), versionRecord);
+    record.status = "published";
+    record.latest_version = version;
+    record.published_digest = draft.digest;
+    record.updated_at = versionRecord.published_at;
+    this.writeAsset(record);
+    this.logOperation("approve", id, actor, {
+      version, digest: draft.digest, from_revision: draft.revision,
+    });
+    return this.summarize(record);
+  }
+
+  /** 归档:只挡"新任务选择"这一件事;草稿、版本、留痕全部原样保留。 */
+  archive(id: string, input: { actor: string }): WorkflowAssetSummary {
+    const record = this.readAssetStrict(id);
+    const actor = normalizeActor(input.actor, "actor");
+    if (record.status === "archived") {
+      throw new WorkflowAssetError("invalid_state", "资产已经归档");
+    }
+    record.status_before_archive = record.status;
+    record.status = "archived";
+    record.updated_at = nowIso();
+    this.writeAsset(record);
+    this.logOperation("archive", id, actor, {
+      status_before: record.status_before_archive,
+    });
+    return this.summarize(record);
+  }
+}
