@@ -32,7 +32,10 @@ import { GateService } from "../gateService.ts";
 import { HumanGate, renderDecision, type WaitingRecord } from "../humanGate.ts";
 import { IssueEnvironmentVault } from "../issueEnvironment.ts";
 import { TaskContainer, taskContainerInstance } from "../containerRuntime.ts";
-import { repairContainerMutationOwnership } from "../containerOwnership.ts";
+import {
+  prepareContainerHostPaths,
+  repairContainerMutationOwnership,
+} from "../containerOwnership.ts";
 import {
   fixedAdvance,
   fixedComplete,
@@ -952,9 +955,31 @@ export class IssueFlowService {
       `mfc-${instance.namePrefix}-${live.id}`,
       (message) => this.log(`[issue-container] ${message}`),
       isolation.volumes,
-      { memory: isolation.memory, cpus: isolation.cpus, pidsLimit: isolation.pidsLimit },
+      // user 必须随 limits 传到 docker run(2026-08-29 真实环境实测:
+      // 漏传使容器落回镜像默认用户,安全自检"Config.User 为空或为
+      // root/0"拒绝运行——需求侧同环境能跑正是它传了)。
+      {
+        memory: isolation.memory,
+        cpus: isolation.cpus,
+        pidsLimit: isolation.pidsLimit,
+        user: isolation.user,
+      },
       { network: isolation.network },
     );
+    // root 守护进程 + 非 root 容器用户时,把工作区属主在 docker run
+    // 前交给容器用户(与需求侧同款;非 root 服务自判 active:false 跳过)。
+    const prepared = prepareContainerHostPaths({
+      workspace: live.root,
+      volumes: isolation.volumes,
+      user: isolation.user,
+      markerRoot: join(this.options.dataDir, ".container-ownership"),
+    });
+    if (prepared.active
+        && (prepared.workspaceEntries || prepared.cacheTrees)) {
+      this.log(`[issue-container] ${live.id} 属主准备: `
+        + `workspace=${prepared.workspaceEntries},`
+        + `owner=${prepared.owner!.uid}:${prepared.owner!.gid}`);
+    }
     await container.start();
     live.container = container;
   }
