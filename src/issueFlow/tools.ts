@@ -70,13 +70,15 @@ export interface IssueToolContext {
   gitCredential?(): GitCredential | undefined;
   /** 拉仓(2026-08-28 拍板:克隆是 Agent 的工具,不是平台自动动作)。
    * 宿主实现:登记合并 → 带凭据克隆到 repo/<仓名>/ →(有单场景)
-   * 尽力建修复分支。回执只含事实,凭据永不进结果。 */
+   * 尽力建修复分支。回执只含事实,凭据永不进结果。remoteBranch 非空
+   * = 远端已有同名修复分支且与本地分叉(同单重跑的上次遗留)。 */
   pullRepo(url: string): Promise<{
     dir: string;
     cloned: boolean;
     branch?: string;
     head: string;
     baselineMiss?: string;
+    remoteBranch?: string;
   }>;
   /** 固定流程:create_mr 成功后由服务启动流水线监看(触发+轮询)。 */
   onMrCreated?(repo: string): void;
@@ -304,7 +306,10 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       recordTransition(state, {
         source: "platform",
         note: `代码仓已拉取: ${facts.dir}${facts.cloned ? "(新克隆)" : "(已在场)"}`
-          + `${facts.branch ? `,分支 ${facts.branch}` : ""}`,
+          + `${facts.branch ? `,分支 ${facts.branch}` : ""}`
+          + `${facts.remoteBranch
+            ? `——⚠ 远端同名修复分支遗留@${facts.remoteBranch}(与本地分叉)`
+            : ""}`,
       });
       // 首仓落地且仍处拉取阶段 → 机械推进问题分析;后续仓在分析及之后
       // 随时可补(中途发现新仓是正当场景),不倒转阶段。
@@ -323,6 +328,12 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       return ok(`代码仓就绪:\n- 工作区目录: ${facts.dir}\n`
         + `- HEAD: ${facts.head.slice(0, 12)}`
         + `${facts.branch ? `\n- 修复分支: ${facts.branch}(已切好)` : ""}`
+        + `${facts.remoteBranch
+          ? `\n- 遗留警报: 远端已存在同名修复分支 ${facts.branch}@${facts.remoteBranch},`
+            + "与本地(从基线另起)分叉——疑似上次运行停止/取消前推送的遗留。"
+            + "放着不管 push_branch 会被拒(非快进)。请用 AskUserQuestion "
+            + "请用户拍板处置:在代码平台删除远端旧分支后重推,还是沿用旧分支。"
+          : ""}`
         + `${baselineNote}${advance}`);
     },
   }));

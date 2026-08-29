@@ -216,6 +216,30 @@ export async function cloneRepository(options: {
   }
 }
 
+/** 远端是否已有同名修复分支且与本地分叉(同单重跑的上次遗留)。
+ * 分支名烧死 master_工号_单号:上次运行(停止/取消)推过的话,新克隆
+ * 会把它带成 origin/<branch>,而本地从基线另起同名分支——分叉要一路
+ * 跑到 push 才以非快进炸掉。这里提前把事实挖出来:分叉返回远端短
+ * SHA;远端没有、或远端是本地祖先(正常推进)返回 undefined。 */
+export async function divergedRemoteBranch(
+  repoDir: string,
+  branch: string,
+): Promise<string | undefined> {
+  const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
+  const remote = await runGit(
+    ["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${branch}`],
+    { cwd: repoDir, env, timeoutMs: 10_000 });
+  if (remote.code !== 0) return undefined;
+  const remoteSha = remote.stdout.trim();
+  if (!remoteSha) return undefined;
+  const ancestor = await runGit(
+    ["merge-base", "--is-ancestor", remoteSha, "HEAD"],
+    { cwd: repoDir, env, timeoutMs: 10_000 });
+  // 远端是本地祖先 = 同会话已推送后的正常再确认,不是遗留。
+  if (ancestor.code === 0) return undefined;
+  return remoteSha.slice(0, 12);
+}
+
 export async function hardenCloneAsync(repoDir: string): Promise<void> {
   const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
   const configArgs = (...args: string[]) =>
@@ -271,7 +295,11 @@ export async function currentHead(repoDir: string): Promise<string> {
 /** 宿主侧确定性建分支(固定流程阶段2/转正时用)。分支名规范
  * master_工号_单号 由调用方拼好;这里只负责"分支已在且已检出"这个
  * 终态:已检出=幂等通过;分支存在未检出=切过去;不存在=从起点建。
- * 绝不 reset 已有分支——已有提交意味着有轮次在现场,覆盖是事故。 */
+ * 绝不 reset 已有分支——已有提交意味着有轮次在现场,覆盖是事故。
+ * 隐式续跑陷阱(2026-08-28 事故):本地分支不存在而 origin/<branch>
+ * 存在(同单重跑,上次运行推过)时,`git checkout <branch>` 会 DWIM
+ * 成"从远端分支顶上建本地分支"——静默续跑被停掉的半成品。所以
+ * 建分支必须先验本地引用,不存在就走显式 -b(起点明确,无 DWIM)。 */
 export async function ensureBranch(options: {
   dataDir: string;
   repoDir: string;
@@ -292,10 +320,21 @@ export async function ensureBranch(options: {
       [...sandbox.args, "branch", "--show-current"],
       { cwd: options.repoDir, env: sandbox.env, timeoutMs: 10_000 });
     if (current.code === 0 && current.stdout.trim() === options.branch) return;
-    const checkout = await runGit([
-      ...sandbox.args, "checkout", "--quiet", options.branch,
-    ], { cwd: options.repoDir, env: sandbox.env, timeoutMs: 60_000 });
-    if (checkout.code === 0) return;
+    // 本地分支在不在(显式验引用,不能让 checkout 的 DWIM 替我们决定):
+    // 在 → 只切换;不在 → 显式 -b 从起点建,绝不落在 origin/<branch> 上。
+    const local = await runGit(
+      [...sandbox.args, "show-ref", "--verify", "--quiet",
+        `refs/heads/${options.branch}`],
+      { cwd: options.repoDir, env: sandbox.env, timeoutMs: 10_000 });
+    if (local.code === 0) {
+      const checkout = await runGit([
+        ...sandbox.args, "checkout", "--quiet", options.branch,
+      ], { cwd: options.repoDir, env: sandbox.env, timeoutMs: 60_000 });
+      if (checkout.code === 0) return;
+      // 已存在但切换失败(如脏工作区冲突):原文带回去让人看。
+      throw new Error(
+        `切换分支失败(${options.branch}): ${checkout.stderr.trim().slice(0, 400)}`);
+    }
     // 分支不存在:从起点(缺省 HEAD)建。已存在但切换失败(如脏工作
     // 区冲突)会走到这里再失败一次,原文带回去让人看。
     const create = await runGit([
@@ -304,7 +343,7 @@ export async function ensureBranch(options: {
     ], { cwd: options.repoDir, env: sandbox.env, timeoutMs: 60_000 });
     if (create.code !== 0) {
       throw new Error(
-        `建分支失败(${options.branch}): ${(create.stderr || checkout.stderr).trim().slice(0, 400)}`);
+        `建分支失败(${options.branch}): ${create.stderr.trim().slice(0, 400)}`);
     }
   } finally {
     sandbox.cleanup();
@@ -368,9 +407,22 @@ export async function pushFromIssueWorkspace(options: {
       "--porcelain", remoteUrl, `${sha}:${ref}`,
     ], { env: { ...sandbox.env, ...objectEnv }, timeoutMs: 5 * 60_000 });
     if (pushed.code !== 0) {
-      const raw = `${pushed.stderr.trim() || pushed.stdout.trim()}`;
+      // porcelain 的拒收摘要(! [rejected] (non-fast-forward))走 stdout,
+      // 人话 hint 走 stderr——检测要两路合看,展示仍 stderr 优先。
+      const stderrText = pushed.stderr.trim();
+      const stdoutText = pushed.stdout.trim();
+      const raw = stderrText || stdoutText;
+      // 同单重跑撞远端遗留分支(2026-08-28 事故):分支名带单号,上次
+      // 停止的运行推过同名分支,本地从基线另起必然非快进。光透 git
+      // 原文等于让 AI 猜——点名原因与处置。
+      const staleBranch = /non-fast-forward|fetch first|stale info|already exists|\[rejected\]|behind its remote counterpart/i
+        .test(`${stderrText}\n${stdoutText}`)
+        ? " 远端同名分支已存在且非快进(常见于同单重跑:上次运行推过"
+          + "该分支)——请与用户确认处置(在代码平台删除远端旧分支后"
+          + "重推,或沿用旧分支),再重试。"
+        : "";
       throw new Error(authFailureHint("推送代码", options.credential, raw)
-        ?? `宿主推送失败: ${raw.slice(0, 500)}`);
+        ?? `宿主推送失败: ${raw.slice(0, 500)}${staleBranch}`);
     }
     const verified = await runGit([
       ...sandbox.args, `--git-dir=${staging}`,

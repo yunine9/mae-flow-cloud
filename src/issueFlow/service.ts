@@ -70,6 +70,7 @@ import {
 import {
   cloneRepository,
   currentHead,
+  divergedRemoteBranch,
   ensureBranch,
   validateRepoUrl,
   type GitCredential,
@@ -833,6 +834,14 @@ export class IssueFlowService {
         branch,
       });
     }
+    // 同单重跑的遗留检测(2026-08-28 事故):上次运行停止/取消前可能
+    // 已把同名修复分支推上远端,克隆把它带成 origin/<branch>,而本地
+    // 从基线另起——分叉一路憋到 push 才炸。这里把事实带进回执,让
+    // Agent 拉仓当下就向用户报告处置,而不是中途回一句"分支已存在"
+    // 让人摸不着头脑。
+    const remoteBranch = branch
+      ? await divergedRemoteBranch(repo.dir, branch)
+      : undefined;
     const head = await currentHead(repo.dir);
     return {
       dir: relative(live.root, repo.dir) || repo.dir,
@@ -840,6 +849,7 @@ export class IssueFlowService {
       ...(branch ? { branch } : {}),
       head,
       ...(baselineMiss ? { baselineMiss } : {}),
+      ...(remoteBranch ? { remoteBranch } : {}),
     };
   }
 
