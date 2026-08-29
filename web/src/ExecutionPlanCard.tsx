@@ -34,10 +34,7 @@ export function ExecutionPlanCard({ plan, warning, onSuggest }: {
   warning?: string;
   onSuggest?: (draft: ExecutionPlanFeedbackDraft) => void;
 }) {
-  const customizationLayers = plan.customization.layers.length
-    + plan.customization.stage_layers.length;
-  const activityNames = new Map(plan.activities.map((item) => [item.id, item.title]));
-  const resourceNames = new Map(plan.resources.map((item) => [item.id, item.name]));
+  const customizationLayers = plan.customization.layers.length;
   return (
     <section className="execution-plan-card" aria-labelledby="execution-plan-title">
       <header>
@@ -78,31 +75,6 @@ export function ExecutionPlanCard({ plan, warning, onSuggest }: {
             ))}
           </div>
           <p>这些补充只调整关注点、顺序和协作方式；与平台兜底冲突的部分不会生效。</p>
-        </section>
-      )}
-
-      {plan.customization.stage_layers.length > 0 && (
-        <section className="execution-plan-overrides execution-plan-stage-overrides">
-          <div>
-            <strong>本阶段定制</strong>
-            <small>只增加动作与优先能力 · 不改变阶段合同</small>
-          </div>
-          <div className="execution-plan-override-list">
-            {plan.customization.stage_layers.map((layer) => (
-              <article key={`${layer.scope}:${layer.source_id}:${layer.playbook_id}`}>
-                <span>{PROFILE_SCOPE[layer.scope]}</span>
-                <div><strong>{layer.title}</strong>
-                  {layer.instructions && <p>{layer.instructions}</p>}
-                  {layer.optional_activities.length > 0 && <small>
-                    增加动作：{layer.optional_activities.map((id) =>
-                      activityNames.get(id) ?? id).join("、")}</small>}
-                  {layer.preferred_resources.length > 0 && <small>
-                    优先能力：{layer.preferred_resources.map((id) =>
-                      resourceNames.get(id) ?? id).join("、")}</small>}
-                </div>
-              </article>
-            ))}
-          </div>
         </section>
       )}
 

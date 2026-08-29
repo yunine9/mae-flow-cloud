@@ -91,14 +91,18 @@ test("业务模块目录不返回正文；下单只交 ID，服务端固定当�
   /MODULE_BODY_MUST_NOT_BE_IN_CATALOG/);
 });
 
-test("团队 Skill 进入统一下单目录；任务只固定资源清单中勾选的版本", () => {
+test("团队 Skill 进入统一下单目录；普通任务自动固定全部适用版本", () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-lf-team-skill-"));
-  for (const [name, marker] of [["java-check", "JAVA-CHECK-BODY"],
-    ["cpp-check", "CPP-CHECK-BODY"]] as const) {
+  for (const [name, marker, language] of [
+    ["java-check", "JAVA-CHECK-BODY", "java"],
+    ["cpp-check", "CPP-CHECK-BODY", "cpp"],
+  ] as const) {
     const directory = join(dataDir, "skills", name);
     mkdirSync(directory, { recursive: true });
     writeFileSync(join(directory, "SKILL.md"), [
-      "---", `name: ${name}`, `description: ${name} guide`, "---", "", marker,
+      "---", `name: ${name}`, `description: ${name} guide`,
+      "knowledge_nature: engineering", `technologies: [${language}]`,
+      "---", "", marker,
     ].join("\n"));
   }
   const service = new TaskService({
@@ -111,10 +115,16 @@ test("团队 Skill 进入统一下单目录；任务只固定资源清单中勾�
   assert.doesNotMatch(JSON.stringify(options), /JAVA-CHECK-BODY|CPP-CHECK-BODY/,
     "下单目录不能返回 Skill 正文");
 
-  const task = service.create("只采用 Java 检视知识", {
-    selectedHostSkillPaths: ["java-check/SKILL.md"],
+  const automatic = service.create("采用自动匹配的团队 Skill", {
+    repositoryProfiles: [{
+      repository: "https://code.example/team/mixed.git",
+      technologies: ["java", "cpp"], confirmed: true,
+      updated_at: new Date().toISOString(), updated_by: "tester",
+    }],
   });
-  assert.deepEqual(task.team_skills?.map((item) => item.name), ["java-check"]);
+  assert.deepEqual(automatic.team_skills?.map((item) => item.name).sort(),
+    ["cpp-check", "java-check"],
+  "选择字段缺席时，服务端必须兜底装配全部适用项");
 });
 
 test("模型默认自动派生:管理员只贴 models.json 也能直接用", () => {
@@ -224,58 +234,36 @@ test("交付方式:选项与默认值都取自内核 flow.json,自造的当场�
     /\d+\s*步|拍板/.test(item.description ?? "")), false);
 });
 
-test("阶段执行方案:同一内核目录驱动页面选择、团队默认与任务快照", () => {
+test("文字补充:团队约定+任务补充编译进 supplement-only 定格档并留快照", () => {
+  // v1 阶段勾选定制已退役(2026-08-29):想改结构走工作流资产;
+  // 文字建议层统一落 workflow_profile.supplements。
   const kernelRoot = discoverKernelRoot(process.cwd());
   if (!kernelRoot) throw new Error("找不到内核");
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-lf-stage-plan-"));
   const settings = new RuntimeSettings(dataDir);
   settings.updateExecutionPolicy({
     team_instructions: "不确定的外部行为明确说明",
-    stage_customizations: [{
-      playbook_id: "platform.construction",
-      optional_activities: ["impact-scan"],
-      preferred_resources: ["selected-skills"],
-    }],
   });
   const service = new TaskService({
     dataDir, provider: "a", model: "a-1", maxConcurrent: 0,
     modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
     host: { kernelRoot, repoPath: "/tmp/repo" }, settings,
   });
-  const options = service.launchOptions();
-  const build = options.execution_playbooks.find((item) =>
-    item.id === "platform.construction")!;
-  assert.ok(build.activities.some((item) =>
-    item.id === "impact-scan" && !item.required));
-  assert.deepEqual(options.execution_stage_defaults[0].optional_activities,
-    ["impact-scan"]);
-
-  const task = service.create("验证阶段定制", {
-    executionStageCustomizations: [{
-      playbook_id: "platform.construction",
-      instructions: "先跑完整构建，再开始猜测范围外行为",
-      optional_activities: ["environment-warmup"],
-      preferred_resources: ["knowledge-index"],
-    }],
+  const task = service.create("验证文字补充", {
+    taskInstructions: "先跑完整构建，再开始猜测范围外行为",
   });
-  assert.deepEqual(task.execution_profile?.stage_customizations?.map((item) => ({
-    scope: item.scope,
-    actions: item.optional_activities,
-    resources: item.preferred_resources,
-  })), [
-    { scope: "team", actions: ["impact-scan"], resources: ["selected-skills"] },
-    { scope: "task", actions: ["environment-warmup"], resources: ["knowledge-index"] },
-  ]);
-  settings.updateExecutionPolicy({ stage_customizations: [] });
-  assert.equal(task.execution_profile?.stage_customizations?.[0].scope, "team",
+  const supplements = task.workflow_profile?.supplements ?? [];
+  assert.deepEqual(supplements.map((item) => item.scope), ["team", "task"]);
+  assert.equal(supplements[0].instructions, "不确定的外部行为明确说明");
+  assert.equal(supplements[1].instructions,
+    "先跑完整构建，再开始猜测范围外行为");
+  assert.equal(task.workflow_profile?.final_snapshot, undefined,
+    "只写补充不许伪造结构化定格");
+  settings.updateExecutionPolicy({ team_instructions: "后来改掉的约定" });
+  assert.equal(
+    (task.workflow_profile?.supplements ?? [])[0].instructions,
+    "不确定的外部行为明确说明",
     "任务创建后必须保留当时的团队快照");
-
-  assert.throws(() => service.create("伪造动作", {
-    executionStageCustomizations: [{
-      playbook_id: "platform.construction",
-      optional_activities: ["delete-quality-gate"],
-    }],
-  }), /不存在的可选动作/);
 });
 
 test("结构化工作流:下单固定唯一最终方案，平台下限不可删且有明确诊断", () => {
@@ -306,10 +294,10 @@ test("结构化工作流:下单固定唯一最终方案，平台下限不可删�
   });
   assert.equal(task.workflow_profile?.source.kind, "task");
   assert.equal(task.workflow_profile?.source.id, task.id);
-  assert.equal(task.workflow_profile?.final_snapshot.stages.find((item) =>
+  assert.equal(task.workflow_profile?.final_snapshot?.stages.find((item) =>
     item.id === "platform.construction")?.items.some((item) =>
       item.id === "code-taste-standard"), false);
-  assert.equal(task.workflow_profile?.final_snapshot.stages.find((item) =>
+  assert.equal(task.workflow_profile?.final_snapshot?.stages.find((item) =>
     item.id === "platform.delivery")?.items.some((item) =>
       item.id === "host-git-push"), true);
   assert.equal(task.workflow_profile?.diagnostics[0].code, "base_item_restored");
@@ -479,11 +467,11 @@ test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队
     "人工检视过的 Chain 正文随子任务落盘,配置阶段经需求文档被读");
   assert.equal(apiTask.title, "跨仓订单状态交付 · api");
   assert.equal(webTask.title, "跨仓订单状态交付 · web");
-  assert.ok(apiTask.workflow_profile?.final_snapshot.stages
+  assert.ok(apiTask.workflow_profile?.final_snapshot?.stages
     .flatMap((item) => item.items)
     .some((item) => item.id === "api-diagnosis-skill"),
   "适用于 API 仓的固定 Skill 应保留在 API 子任务最终方案");
-  assert.ok(!webTask.workflow_profile?.final_snapshot.stages
+  assert.ok(!webTask.workflow_profile?.final_snapshot?.stages
     .flatMap((item) => item.items)
     .some((item) => item.id === "api-diagnosis-skill"),
   "父任务工作流必须按子仓重编，不能把 API Skill 整份复制给 Web 子任务");
@@ -714,10 +702,12 @@ test("任务执行补充在下单时固定，不与需求正文或内核红线�
     taskInstructions: "  先核对线上旧格式\n不确定时明确说明  ",
   });
   assert.equal(task.requirement, "实现兼容旧数据的读取");
-  assert.equal(task.execution_profile?.layers[0].scope, "task");
-  assert.equal(task.execution_profile?.layers[0].instructions,
+  const supplements = task.workflow_profile?.supplements ?? [];
+  assert.equal(supplements[0]?.scope, "task");
+  assert.equal(supplements[0]?.instructions,
     "先核对线上旧格式\n不确定时明确说明");
-  assert.match(task.execution_profile?.revision ?? "", /^[a-f0-9]{16}$/);
+  assert.match(task.workflow_profile?.revision ?? "",
+    /^sha256:[a-f0-9]{64}$/);
 });
 
 function git(cwd: string, ...args: string[]): string {
@@ -767,10 +757,10 @@ test("消费:任务级代码仓压过部署仓,克隆的就是下单填的那个
   assert.match(task.detail ?? "",
     /config_confirm|尚未到 terminal|状态文件不存在|尚未初始化/);
   assert.equal(task.repo_url, repoB);
-  assert.equal(task.execution_profile?.layers.find(
-    (layer) => layer.scope === "repository")?.instructions,
+  assert.equal(task.workflow_profile?.supplements?.find(
+    (item) => item.scope === "repository")?.instructions,
   "修改接口前先检查兼容调用方");
-  assert.equal(task.execution_profile_repository_resolved, true);
+  assert.equal(task.repository_supplement_resolved, true);
   // 克隆目录名与 origin 都指向下单填的仓,不是部署仓
   const clone = join(task.workspace, basename(repoB));
   assert.equal(git(clone, "remote", "get-url", "origin"), repoB);

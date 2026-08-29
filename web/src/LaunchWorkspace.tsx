@@ -1,11 +1,4 @@
-import {
-  Component,
-  useEffect,
-  useMemo,
-  useState,
-  type ErrorInfo,
-  type ReactNode,
-} from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   createTask,
   getLaunchOptions,
@@ -19,14 +12,7 @@ import {
   RepositoryTechnologyPicker,
   type RepositoryTechnologyDraft,
 } from "./RepositoryTechnologyPicker";
-import { KnowledgeLanguageTags } from "./KnowledgeLanguages";
-import {
-  buildTaskKnowledgeChoices,
-  normalizeLaunchKnowledgeCatalog,
-  paginateTaskKnowledgeChoices,
-  type LaunchEngineeringKnowledge,
-  type LaunchTeamSkill,
-} from "./launchKnowledgeModel";
+import { normalizeLaunchKnowledgeCatalog } from "./launchKnowledgeModel";
 import {
   SchemeSelector,
   type WorkflowSchemeSelection,
@@ -52,10 +38,6 @@ type LaunchDraft = {
   taskInstructions?: string;
   selectedBusinessModuleIds?: string[];
   moduleSelectionTouched?: boolean;
-  selectedEngineeringKnowledgeIds?: string[];
-  engineeringSelectionTouched?: boolean;
-  selectedTeamSkillPaths?: string[];
-  teamSkillSelectionTouched?: boolean;
   workflowSelection?: WorkflowSchemeSelection;
 };
 type LaunchPreferences = {
@@ -82,133 +64,6 @@ function repositoryIdentity(value: string): string {
   return value.trim().replace(/\/+$/, "").replace(/\.git$/i, "").toLowerCase();
 }
 
-class TaskKnowledgeBoundary extends Component<{
-  children: ReactNode;
-}, { failed: boolean }> {
-  state = { failed: false };
-
-  static getDerivedStateFromError(): { failed: boolean } {
-    return { failed: true };
-  }
-
-  componentDidCatch(error: Error, info: ErrorInfo): void {
-    console.error("[launch-knowledge] 知识选择器渲染失败", error, info);
-  }
-
-  render() {
-    if (this.state.failed) {
-      return <div className="launch-knowledge-fallback" role="alert">
-        <strong>知识清单暂时无法展开</strong>
-        <span>不会影响必填信息；请刷新后重试，或保持默认选择直接发起。</span>
-      </div>;
-    }
-    return this.props.children;
-  }
-}
-
-function TaskKnowledgeSelector({
-  engineering,
-  skills,
-  selectedEngineeringIds,
-  selectedSkillPaths,
-  onToggleEngineering,
-  onToggleSkill,
-}: {
-  engineering: LaunchEngineeringKnowledge[];
-  skills: LaunchTeamSkill[];
-  selectedEngineeringIds: string[];
-  selectedSkillPaths: string[];
-  onToggleEngineering: (id: string, selected: boolean) => void;
-  onToggleSkill: (path: string, selected: boolean) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const [page, setPage] = useState(0);
-  const selectedEngineering = useMemo(
-    () => new Set(selectedEngineeringIds), [selectedEngineeringIds]);
-  const selectedSkills = useMemo(
-    () => new Set(selectedSkillPaths), [selectedSkillPaths]);
-  const choices = useMemo(
-    () => open ? buildTaskKnowledgeChoices(engineering, skills, query) : [],
-    [engineering, skills, query, open]);
-  const pagination = paginateTaskKnowledgeChoices(choices, page);
-
-  return <details className="launch-resource-adjuster" open={open}
-    onToggle={(event) => setOpen(event.currentTarget.open)}>
-    <summary><span><strong>调整团队通用知识</strong>
-      <small>{engineering.length + skills.length
-        ? `${selectedEngineeringIds.length + selectedSkillPaths.length}/${engineering.length + skills.length} 项已选`
-        : "当前没有匹配项"}</small></span>
-      <svg viewBox="0 0 20 20" aria-hidden><path d="m6 8 4 4 4-4" /></svg>
-    </summary>
-    {open && <div className="launch-knowledge-catalog">
-      {engineering.length + skills.length > 0 && <div
-        className="launch-knowledge-toolbar">
-        <label><span>查找知识</span><input type="search" value={query}
-          onChange={(event) => {
-            setQuery(event.target.value);
-            setPage(0);
-          }} placeholder="按标题、说明、仓库或技术搜索" /></label>
-        <small>共 {pagination.total} 项，每页最多 40 项</small>
-      </div>}
-      {!!pagination.items.length && <div className="engineering-knowledge-options">
-        {pagination.items.map((choice) => {
-          if (choice.kind === "engineering") {
-            const item = choice.item;
-            const selected = selectedEngineering.has(item.id);
-            return <label key={choice.key}
-              className={`engineering-knowledge-option${selected ? " selected" : ""}`}>
-              <input type="checkbox" checked={selected} onChange={() =>
-                onToggleEngineering(item.id, selected)} />
-              <span className="business-module-check" aria-hidden>
-                {selected ? "✓" : ""}</span>
-              <span><span><strong>{item.title}</strong>
-                <em>{{ document: "文档", rule: "规则",
-                  example: "示例" }[item.form]}</em></span>
-                <small>{item.summary}</small>
-                <span className="engineering-knowledge-meta">
-                  {item.when_to_use}
-                  <KnowledgeLanguageTags languages={item.technologies}
-                    empty="技术无关" />
-                </span>
-              </span>
-            </label>;
-          }
-          const item = choice.item;
-          const selected = selectedSkills.has(item.path);
-          return <label key={choice.key}
-            className={`engineering-knowledge-option${selected ? " selected" : ""}`}>
-            <input type="checkbox" checked={selected} onChange={() =>
-              onToggleSkill(item.path, selected)} />
-            <span className="business-module-check" aria-hidden>
-              {selected ? "✓" : ""}</span>
-            <span><span><strong>{item.name}</strong><em>Skill</em></span>
-              <small>{item.description}</small>
-              <span className="engineering-knowledge-meta">
-                团队资产 · Agent 相关时按需读取正文
-                <KnowledgeLanguageTags languages={item.technologies}
-                  empty="技术无关" />
-              </span>
-            </span>
-          </label>;
-        })}
-      </div>}
-      {!pagination.items.length && <div className="engineering-knowledge-empty">
-        <strong>{query ? "没有符合搜索条件的团队知识" : "当前没有匹配的团队通用知识"}</strong>
-        <span>{query ? "换一个关键词，或清空搜索查看全部匹配项。"
-          : "不影响发起；模块知识和 Git 仓库上下文仍会正常提供。"}</span>
-      </div>}
-      {pagination.pages > 1 && <nav className="launch-knowledge-pagination"
-        aria-label="团队知识分页">
-        <button type="button" disabled={pagination.page === 0}
-          onClick={() => setPage(pagination.page - 1)}>上一页</button>
-        <span>{pagination.page + 1} / {pagination.pages}</span>
-        <button type="button" disabled={pagination.page + 1 >= pagination.pages}
-          onClick={() => setPage(pagination.page + 1)}>下一页</button>
-      </nav>}
-    </div>}
-  </details>;
-}
 export function LaunchWorkspace({
   session,
   onCreated,
@@ -265,14 +120,6 @@ export function LaunchWorkspace({
     validDraft?.updatedAt ?? "");
   const [repositoryTechnologies, setRepositoryTechnologies] =
     useState<RepositoryTechnologyDraft[]>([]);
-  const [selectedEngineeringKnowledgeIds, setSelectedEngineeringKnowledgeIds] =
-    useState<string[]>(validDraft?.selectedEngineeringKnowledgeIds ?? []);
-  const [selectedTeamSkillPaths, setSelectedTeamSkillPaths] =
-    useState<string[]>(validDraft?.selectedTeamSkillPaths ?? []);
-  const [engineeringSelectionTouched, setEngineeringSelectionTouched] =
-    useState(validDraft?.engineeringSelectionTouched === true);
-  const [teamSkillSelectionTouched, setTeamSkillSelectionTouched] =
-    useState(validDraft?.teamSkillSelectionTouched === true);
   const [moduleSelectionTouched, setModuleSelectionTouched] = useState(
     validDraft?.moduleSelectionTouched === true);
   const [workflowAssets, setWorkflowAssets] = useState<WorkflowAssetSummary[]>([]);
@@ -304,6 +151,7 @@ export function LaunchWorkspace({
   const matchingEngineeringKnowledge = useMemo(() => {
     const repositorySet = new Set(repos.map(repositoryIdentity).filter(Boolean));
     const technologies = new Set(repositoryTechnologies
+      .filter((item) => item.confirmed)
       .flatMap((item) => item.technologies));
     return knowledgeCatalog.engineering.filter((item) =>
       (!item.repositories.length || item.repositories.some((repository) =>
@@ -317,6 +165,7 @@ export function LaunchWorkspace({
   const matchingTeamSkills = useMemo(() => {
     const repositorySet = new Set(repos.map(repositoryIdentity).filter(Boolean));
     const technologies = new Set(repositoryTechnologies
+      .filter((item) => item.confirmed)
       .flatMap((item) => item.technologies));
     return knowledgeCatalog.skills.filter((item) =>
       (!item.repositories.length || item.repositories.some((repository) =>
@@ -327,13 +176,15 @@ export function LaunchWorkspace({
         selectedBusinessModuleIds.includes(id))));
   }, [knowledgeCatalog, repos, repositoryTechnologies,
     selectedBusinessModuleIds]);
+  const matchedTeamKnowledgeCount = matchingEngineeringKnowledge.length
+    + matchingTeamSkills.length;
   const deliveryLocationVisible = !!options
     && (options.repo.enabled || options.ticket.enabled || options.baseline.enabled);
   const selectedModuleKnowledgeCount = businessModules
     .filter((module) => selectedBusinessModuleIds.includes(module.id))
     .reduce((sum, module) => sum + module.assets, 0);
   const selectedKnowledgeCount = selectedModuleKnowledgeCount
-    + selectedEngineeringKnowledgeIds.length + selectedTeamSkillPaths.length;
+    + matchedTeamKnowledgeCount;
 
   useEffect(() => {
     let alive = true;
@@ -386,10 +237,6 @@ export function LaunchWorkspace({
         taskInstructions,
         selectedBusinessModuleIds,
         moduleSelectionTouched,
-        selectedEngineeringKnowledgeIds,
-        engineeringSelectionTouched,
-        selectedTeamSkillPaths,
-        teamSkillSelectionTouched,
         workflowSelection,
       };
       try {
@@ -404,9 +251,7 @@ export function LaunchWorkspace({
   }, [title, requirement, requirementDocumentName, repos, ticket,
     baseline, lane, repairRounds, taskInstructions,
     selectedBusinessModuleIds, moduleSelectionTouched,
-    selectedEngineeringKnowledgeIds, engineeringSelectionTouched,
-    selectedTeamSkillPaths, teamSkillSelectionTouched, workflowSelection,
-    session.username]);
+    workflowSelection, session.username]);
 
   useEffect(() => {
     if (!workflowAssetsLoaded || !workflowSelection) return;
@@ -444,27 +289,6 @@ export function LaunchWorkspace({
       .slice(0, 4);
     setSelectedBusinessModuleIds(matched);
   }, [options, businessModules, repos, moduleSelectionTouched]);
-
-  useEffect(() => {
-    if (!engineeringSelectionTouched) {
-      setSelectedEngineeringKnowledgeIds(
-        matchingEngineeringKnowledge.map((item) => item.id));
-      return;
-    }
-    const available = new Set(matchingEngineeringKnowledge.map((item) => item.id));
-    setSelectedEngineeringKnowledgeIds((current) =>
-      current.filter((id) => available.has(id)));
-  }, [matchingEngineeringKnowledge, engineeringSelectionTouched]);
-
-  useEffect(() => {
-    if (!teamSkillSelectionTouched) {
-      setSelectedTeamSkillPaths(matchingTeamSkills.map((item) => item.path));
-      return;
-    }
-    const available = new Set(matchingTeamSkills.map((item) => item.path));
-    setSelectedTeamSkillPaths((current) =>
-      current.filter((path) => available.has(path)));
-  }, [matchingTeamSkills, teamSkillSelectionTouched]);
 
   useEffect(() => {
     const previous = document.body.style.overflow;
@@ -551,9 +375,11 @@ export function LaunchWorkspace({
             ? undefined : taskInstructions.trim() || undefined,
           workflowSelection,
           selectedBusinessModuleIds,
-          selectedEngineeringKnowledgeIds,
-          selectedHostSkillPaths: selectedTeamSkillPaths,
-          repositoryProfiles: asRepositoryProfiles(repositoryTechnologies),
+          // 团队通用知识不由下单人逐项治理。字段始终缺席，服务端按
+          // 仓库、技术栈和业务模块在创建现场自动匹配并固定版本。
+          repositoryProfiles: repositoryTechnologies.length > 0
+              && repositoryTechnologies.every((item) => item.confirmed)
+            ? asRepositoryProfiles(repositoryTechnologies) : undefined,
           requirementDocumentName: requirementDocumentName || undefined,
         },
       );
@@ -628,10 +454,6 @@ export function LaunchWorkspace({
                   setTicket("");
                   setSelectedBusinessModuleIds([]);
                   setModuleSelectionTouched(false);
-                  setSelectedTeamSkillPaths([]);
-                  setTeamSkillSelectionTouched(false);
-                  setSelectedEngineeringKnowledgeIds([]);
-                  setEngineeringSelectionTouched(false);
                   setError("");
                   try { localStorage.removeItem(storageKey("draft", session.username)); } catch { /* noop */ }
                 }}>清空草稿</button>
@@ -940,13 +762,12 @@ export function LaunchWorkspace({
               {options && <section className="launch-form-section launch-task-resources">
                 <div className="launch-section-head"><i>知</i><div>
                   <strong>本任务知识</strong>
-                  <small>模块知识与团队通用知识合成一张清单</small>
-                </div><em>默认按需读取</em></div>
+                  <small>平台按任务范围自动装配，Agent 相关时按需读取</small>
+                </div><em>自动匹配</em></div>
                 <div className="launch-resource-summary">
                   <span><strong>{selectedModuleKnowledgeCount}</strong>
                     <small>模块知识</small></span>
-                  <span><strong>{selectedEngineeringKnowledgeIds.length
-                    + selectedTeamSkillPaths.length}</strong>
+                  <span><strong>{matchedTeamKnowledgeCount}</strong>
                     <small>团队通用</small></span>
                   <p>{selectedBusinessModuleIds.length
                     ? `来自 ${selectedBusinessModuleIds.map((id) =>
@@ -955,28 +776,12 @@ export function LaunchWorkspace({
                     : "尚未关联业务模块；仍会使用匹配的团队通用知识"}</p>
                 </div>
                 <div className="launch-resource-boundary">
-                  <strong>这里只管理平台知识</strong>
-                  <span>正文不会整批注入；Agent 先看索引，相关时再读取。代码仓内容始终从 Git 现场自主探索。</span>
+                  <strong>{matchedTeamKnowledgeCount
+                    ? `已自动匹配 ${matchedTeamKnowledgeCount} 项` : "当前没有匹配项"}</strong>
+                  <span>{matchedTeamKnowledgeCount
+                    ? "服务端会在创建任务时再次校验范围并固定版本；正文不会整批注入。"
+                    : "不影响模块知识与 Git 现场探索；后续补齐适用资产即可自动生效。"}</span>
                 </div>
-                <TaskKnowledgeBoundary>
-                  <TaskKnowledgeSelector
-                    engineering={matchingEngineeringKnowledge}
-                    skills={matchingTeamSkills}
-                    selectedEngineeringIds={selectedEngineeringKnowledgeIds}
-                    selectedSkillPaths={selectedTeamSkillPaths}
-                    onToggleEngineering={(id, selected) => {
-                      setEngineeringSelectionTouched(true);
-                      setSelectedEngineeringKnowledgeIds((current) => selected
-                        ? current.filter((item) => item !== id)
-                        : [...current, id]);
-                    }}
-                    onToggleSkill={(path, selected) => {
-                      setTeamSkillSelectionTouched(true);
-                      setSelectedTeamSkillPaths((current) => selected
-                        ? current.filter((item) => item !== path)
-                        : [...current, path]);
-                    }} />
-                </TaskKnowledgeBoundary>
               </section>}
                 </div>
               </details>}

@@ -527,7 +527,7 @@ export function TaskWorkspace({
           phase={planPhase}
           currentPhase={visibleProgress.current_phase}
           plan={task.execution_plan}
-          planWarning={task.execution_profile_warning}
+          planWarning={task.workflow_profile_warning}
           profile={task.workflow_profile}
           onSuggest={onExecutionPlanFeedback}
           onClose={() => setPlanPhase("")} />}

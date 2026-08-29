@@ -9177,8 +9177,7 @@ body[data-view="issues"] .nav-item.on { box-shadow: inset 3px 0 #c87873; }
   grid-template-columns: minmax(0, 1fr) auto 17px; align-items: center;
   gap: 9px; list-style: none; cursor: pointer;
 }
-.launch-module-context > summary::-webkit-details-marker,
-.launch-resource-adjuster > summary::-webkit-details-marker { display: none; }
+.launch-module-context > summary::-webkit-details-marker { display: none; }
 .launch-module-context > summary > span { min-width: 0; display: grid; gap: 2px; }
 .launch-module-context > summary strong { color: var(--text-strong); font-size: 12px; }
 .launch-module-context > summary small {
@@ -9190,13 +9189,11 @@ body[data-view="issues"] .nav-item.on { box-shadow: inset 3px 0 #c87873; }
   background: var(--accent-soft); font-size: 10px; font-style: normal;
   font-weight: 700;
 }
-.launch-module-context > summary svg,
-.launch-resource-adjuster > summary svg {
+.launch-module-context > summary svg {
   width: 16px; height: 16px; fill: none; stroke: var(--muted);
   stroke-width: 1.6; transition: transform var(--ease);
 }
-.launch-module-context[open] > summary svg,
-.launch-resource-adjuster[open] > summary svg { transform: rotate(180deg); }
+.launch-module-context[open] > summary svg { transform: rotate(180deg); }
 .launch-module-context > .business-module-picker-list {
   padding: 10px; grid-template-columns: 1fr; border-top: 1px solid var(--line);
   background: var(--surface-soft);
@@ -9205,7 +9202,7 @@ body[data-view="issues"] .nav-item.on { box-shadow: inset 3px 0 #c87873; }
 .launch-module-context .business-module-picker-note,
 .launch-module-context .business-module-picker-notice { margin: 0; padding: 8px 10px; }
 
-/* 一张任务知识清单：默认只看数量和边界，逐项勾选降到二级。 */
+/* 一张任务知识清单：平台自动匹配，下单人只看数量和边界。 */
 .launch-task-resources { display: grid; gap: 11px; }
 .launch-task-resources .launch-section-head { margin-bottom: 1px; }
 .launch-resource-summary {
@@ -9229,66 +9226,11 @@ body[data-view="issues"] .nav-item.on { box-shadow: inset 3px 0 #c87873; }
   color: var(--muted); font-size: 11px; line-height: 1.5;
 }
 .launch-resource-boundary strong { color: var(--success); white-space: nowrap; }
-.launch-resource-adjuster {
-  overflow: hidden; border-top: 1px solid var(--line);
-}
-.launch-resource-adjuster > summary {
-  min-height: 42px; padding: 8px 2px 0; display: grid;
-  grid-template-columns: minmax(0, 1fr) 18px; align-items: center;
-  gap: 8px; list-style: none; cursor: pointer;
-}
-.launch-resource-adjuster > summary > span { display: flex; align-items: baseline; gap: 7px; }
-.launch-resource-adjuster > summary strong { color: var(--text-strong); font-size: 12px; }
-.launch-resource-adjuster > summary small { color: var(--muted); font-size: 10px; }
-.launch-resource-adjuster .engineering-knowledge-options {
-  max-height: 520px; margin-top: 8px; padding-right: 4px;
-  grid-template-columns: 1fr; overflow-y: auto; overscroll-behavior: contain;
-}
-.launch-resource-adjuster .engineering-knowledge-empty { margin-top: 8px; }
-.launch-knowledge-catalog { min-width: 0; }
-.launch-knowledge-toolbar {
-  margin-top: 8px; display: flex; align-items: flex-end;
-  justify-content: space-between; gap: 12px;
-}
-.launch-knowledge-toolbar label { min-width: 220px; flex: 1; display: grid; gap: 4px; }
-.launch-knowledge-toolbar label > span {
-  color: var(--text-strong); font-size: var(--font-size-assist); font-weight: 700;
-}
-.launch-knowledge-toolbar input {
-  width: 100%; padding: 8px 10px; color: var(--text);
-  border: 1px solid var(--line); border-radius: 7px; background: var(--surface);
-  font: inherit; box-sizing: border-box;
-}
-.launch-knowledge-toolbar > small { padding-bottom: 8px; color: var(--faint); white-space: nowrap; }
-.launch-knowledge-pagination {
-  padding-top: 9px; display: flex; align-items: center;
-  justify-content: flex-end; gap: 9px;
-}
-.launch-knowledge-pagination button {
-  padding: 5px 9px; color: var(--muted); border: 1px solid var(--line);
-  border-radius: 6px; background: var(--surface); cursor: pointer;
-}
-.launch-knowledge-pagination button:disabled { opacity: .45; cursor: not-allowed; }
-.launch-knowledge-pagination span { color: var(--faint); font-size: var(--font-size-assist); }
-.launch-knowledge-fallback {
-  margin-top: 8px; padding: 11px 12px; display: grid; gap: 3px;
-  border: 1px solid color-mix(in srgb, var(--attention) 35%, var(--line));
-  border-radius: 8px; background: var(--attention-soft);
-}
-.launch-knowledge-fallback strong { color: var(--attention); font-size: 12px; }
-.launch-knowledge-fallback span { color: var(--muted); font-size: 11px; line-height: 1.5; }
-
 @media (max-width: 1120px) {
   .launch-composer { grid-template-columns: 1fr; }
   .launch-requirement-section, .launch-delivery-section,
   .launch-delivery-mode-section { grid-column: 1; grid-row: auto; }
   .launch-delivery-mode-section .delivery-mode-options { grid-template-columns: repeat(3, 1fr); }
-}
-
-@media (max-width: 640px) {
-  .launch-knowledge-toolbar { align-items: stretch; flex-direction: column; gap: 5px; }
-  .launch-knowledge-toolbar label { min-width: 0; width: 100%; }
-  .launch-knowledge-toolbar > small { padding-bottom: 0; }
 }
 
 /* 阶段方案弹层(2026-08-29):折叠条目替掉浏览器默认 details marker,

@@ -19,17 +19,16 @@ if SCRIPTS not in sys.path:
 
 from mae_flow_core.workflow.execution_plan import (  # noqa: E402
     SCHEMA,
-    PROFILE_SCHEMA,
     WORKFLOW_PROFILE_SCHEMA,
-    _profile_revision,
     build_execution_plan,
     catalog_errors,
-    load_execution_profile,
     load_workflow_profile,
-    profile_errors,
     render_agent_execution_plan,
-    render_execution_profile,
+    render_workflow_supplements,
     workflow_profile_errors,
+)
+from mae_flow_core.workflow.workflow_profile import (  # noqa: E402
+    _workflow_profile_revision,
 )
 
 
@@ -38,20 +37,19 @@ def read_json(relative):
         return json.load(stream)
 
 
-def profile(instructions="先核对旧数据兼容性"):
-    layers = [{
-        "scope": "task", "source_id": "task-8", "title": "本任务补充",
-        "instructions": instructions,
-    }]
-    payload = "\n".join("\0".join((
-        item["scope"], item["source_id"], item["title"],
-        item["instructions"],
-    )) for item in layers)
-    return {
-        "schema": PROFILE_SCHEMA,
-        "revision": hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16],
-        "layers": layers,
+def supplement_profile(instructions="先核对旧数据兼容性"):
+    """supplement-only 的 v2 profile:v1 execution-profile 的直系替代。
+    没有 final_snapshot——任务按平台默认方案执行,只叠文字建议。"""
+    result = {
+        "schema": WORKFLOW_PROFILE_SCHEMA,
+        "source": {"kind": "platform", "id": "mae-flow.standard"},
+        "supplements": [{
+            "scope": "task", "source_id": "task-8", "title": "本任务补充",
+            "instructions": instructions,
+        }],
     }
+    result["revision"] = _workflow_profile_revision(result)
+    return result
 
 
 def structural_profile(items=None):
@@ -169,98 +167,76 @@ class ExecutionPlanContractTests(unittest.TestCase):
                 path = os.path.join(ROOT, "runtime", *reference.split("/"))
                 self.assertTrue(os.path.isfile(path), reference)
 
-    def test_pinned_task_layer_changes_plan_and_is_visible_to_current(self):
+    def test_pinned_task_supplement_changes_plan_and_is_visible(self):
+        """v1 层叠建议已并入 v2 supplements:同一体验,单一通道。"""
         default = build_execution_plan(
             self.flow, {"current": "build"}, self.catalog)
         customized = build_execution_plan(
-            self.flow, {"current": "build"}, self.catalog, profile())
+            self.flow, {"current": "build"}, self.catalog,
+            supplement_profile())
         self.assertNotEqual(default["plan_revision"],
                             customized["plan_revision"])
         self.assertEqual("platform_default+overrides",
                          customized["customization"]["effective_source"])
+        # supplement-only 不许冒充定格:模式/来源必须如实说平台默认。
+        self.assertEqual("bounded", customized["customization"]["mode"])
+        self.assertEqual("platform_default", customized["strategy"]["source"])
         self.assertEqual("先核对旧数据兼容性",
                          customized["customization"]["layers"][0]["instructions"])
-        rendered = render_execution_profile(profile())
+        rendered = render_workflow_supplements(supplement_profile())
         self.assertIn("先核对旧数据兼容性", rendered)
         self.assertIn("冲突部分无效", rendered)
+        plan_text = render_agent_execution_plan(customized)
+        self.assertIn("已叠加的执行补充", plan_text)
 
-    def test_stage_customization_only_adds_catalogued_work_and_priority(self):
-        customized_profile = {
-            "schema": PROFILE_SCHEMA,
-            "layers": [],
-            "stage_customizations": [{
-                "scope": "task",
-                "source_id": "task-9",
-                "title": "本任务阶段定制",
-                "playbook_id": "platform.construction",
-                "instructions": "先用真实构建拉齐依赖，再判断外部行为",
-                "optional_activities": ["environment-warmup", "impact-scan"],
-                "preferred_resources": ["selected-skills"],
-            }],
-        }
-        customized_profile["revision"] = _profile_revision(
-            [], customized_profile["stage_customizations"])
+    def test_platform_default_plan_lists_only_required_activities(self):
+        """v1 的"勾选可选动作/偏好资源"通道已退役:平台默认方案只列
+        必做动作,想改结构走 v2 结构化定制(structural_profile)。"""
         plan = build_execution_plan(
             self.flow,
             {"current": "build", "choices": {"workflow": "full"}},
             self.catalog,
-            customized_profile,
         )
         activities = {item["id"]: item for item in plan["activities"]}
         self.assertIn("risk-first-implementation", activities,
                       "平台必做动作必须保留")
-        self.assertEqual("platform_default",
-                         activities["risk-first-implementation"]["source"])
-        self.assertEqual("customized", activities["environment-warmup"]["source"])
-        self.assertEqual("customized", activities["impact-scan"]["source"])
-        self.assertNotIn("boundary-test-matrix", activities,
-                         "没选的可选动作不能冒充已启用")
-        resources = {item["id"]: item for item in plan["resources"]}
-        self.assertTrue(resources["selected-skills"]["preferred"])
-        self.assertNotIn("preferred", resources["knowledge-index"])
-        self.assertEqual(1, len(plan["customization"]["stage_layers"]))
-        rendered = render_agent_execution_plan(plan)
-        self.assertIn("定制新增", rendered)
-        self.assertIn("先用真实构建拉齐依赖", rendered)
-        self.assertIn("定制优先", rendered)
-        self.assertIn("平台兜底", rendered)
+        self.assertTrue(all(item["source"] == "platform_default"
+                            for item in activities.values()))
+        self.assertNotIn("environment-warmup", activities,
+                         "可选动作没有勾选通道,不能冒充已启用")
+        self.assertNotIn("stage_layers", plan["customization"],
+                         "v1 阶段定制字段应随退役消失,不留空壳")
 
-    def test_stage_customization_cannot_select_required_or_invent_catalog_ids(self):
-        customized_profile = {
-            "schema": PROFILE_SCHEMA,
-            "layers": [],
-            "stage_customizations": [{
-                "scope": "task", "source_id": "task-10",
-                "title": "本任务阶段定制",
-                "playbook_id": "platform.construction",
-                "optional_activities": ["risk-first-implementation", "made-up"],
-                "preferred_resources": ["code-taste-standard", "made-up-tool"],
-            }],
-        }
-        customized_profile["revision"] = _profile_revision(
-            [], customized_profile["stage_customizations"])
-        errors = profile_errors(customized_profile, self.catalog)
-        self.assertTrue(any("optional activity" in error for error in errors))
-        self.assertTrue(any("required resource" in error for error in errors))
-        self.assertTrue(any("unknown resource" in error for error in errors))
-
+    def test_supplement_profile_with_bad_revision_falls_back_visibly(self):
+        broken = supplement_profile()
+        broken["supplements"][0]["instructions"] = "被篡改的内容"
+        self.assertTrue(workflow_profile_errors(broken))
         with tempfile.TemporaryDirectory() as root:
             directory = os.path.join(root, ".mae-flow-work")
             os.makedirs(directory)
-            with open(os.path.join(directory, "execution-profile.json"), "w",
+            with open(os.path.join(directory, "workflow-profile.json"), "w",
                       encoding="utf-8") as stream:
-                json.dump(customized_profile, stream, ensure_ascii=False)
-            loaded, warning = load_execution_profile(root)
+                json.dump(broken, stream, ensure_ascii=False)
+            loaded, warning = load_workflow_profile(root)
         self.assertIsNone(loaded)
-        self.assertIn("已采用平台默认方案", warning)
+        self.assertIn("采用既有 Mae-Flow 方案", warning)
 
     def test_structural_profile_is_the_only_final_stage_plan(self):
+        # 归一后建议层与结构化定格同住一档:supplements 字段随档展示,
+        # 不再有第二个文件。
         workflow = structural_profile()
+        workflow["supplements"] = [{
+            "scope": "task", "source_id": "task-8", "title": "本任务补充",
+            "instructions": "旧建议层仍可展示",
+        }]
+        workflow["revision"] = _workflow_profile_revision(workflow)
         self.assertEqual([], workflow_profile_errors(workflow))
         plan = build_execution_plan(
             self.flow, {"current": "build", "revision": 4}, self.catalog,
-            profile("旧建议层仍可展示"), workflow_profile=workflow)
+            workflow_profile=workflow)
         self.assertEqual("structural", plan["customization"]["mode"])
+        self.assertEqual("旧建议层仍可展示",
+                         plan["customization"]["layers"][0]["instructions"])
         self.assertEqual("compiled_final_plan",
                          plan["customization"]["effective_source"])
         self.assertEqual("workflow", plan["strategy"]["source"])
@@ -332,20 +308,6 @@ class ExecutionPlanContractTests(unittest.TestCase):
         self.assertIsNone(loaded)
         self.assertIn("采用既有 Mae-Flow 方案", warning)
 
-    def test_invalid_optional_profile_falls_back_with_a_clear_warning(self):
-        broken = profile()
-        broken["revision"] = "tampered"
-        self.assertTrue(profile_errors(broken))
-        with tempfile.TemporaryDirectory() as root:
-            directory = os.path.join(root, ".mae-flow-work")
-            os.makedirs(directory)
-            with open(os.path.join(directory, "execution-profile.json"), "w",
-                      encoding="utf-8") as stream:
-                json.dump(broken, stream, ensure_ascii=False)
-            loaded, warning = load_execution_profile(root)
-        self.assertIsNone(loaded)
-        self.assertIn("已采用平台默认方案", warning)
-
     def test_real_current_delivers_pinned_supplement_to_agent(self):
         with tempfile.TemporaryDirectory() as project:
             subprocess.run(["git", "init", "-q", "-b", "master", project],
@@ -358,10 +320,10 @@ class ExecutionPlanContractTests(unittest.TestCase):
                      "GIT_COMMITTER_EMAIL": "t@t"})
             directory = os.path.join(project, ".mae-flow-work")
             os.makedirs(directory)
-            with open(os.path.join(directory, "execution-profile.json"), "w",
+            with open(os.path.join(directory, "workflow-profile.json"), "w",
                       encoding="utf-8") as stream:
-                json.dump(profile("先检查灰度兼容，再动接口"), stream,
-                          ensure_ascii=False)
+                json.dump(supplement_profile("先检查灰度兼容，再动接口"),
+                          stream, ensure_ascii=False)
             env = {**os.environ, "MAE_FLOW_NO_NOTIFY": "1"}
             initialized = subprocess.run(
                 [sys.executable, MAE, "init"], cwd=project, env=env,
@@ -432,10 +394,8 @@ class ExecutionPlanContractTests(unittest.TestCase):
         self.assertTrue(workflow_profile_errors(poisoned))
         args = type("Args", (), {"json": True})()
         out, err = io.StringIO(), io.StringIO()
-        with mock.patch.object(cli, "load_execution_profile",
-                               return_value=(None, "")), \
-                mock.patch.object(cli, "load_workflow_profile",
-                                  return_value=(poisoned, "")), \
+        with mock.patch.object(cli, "load_workflow_profile",
+                               return_value=(poisoned, "")), \
                 contextlib.redirect_stdout(out), \
                 contextlib.redirect_stderr(err):
             cli.cmd_execution_plan(

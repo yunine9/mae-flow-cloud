@@ -371,6 +371,10 @@ function validateStaged(stagingRoot: string, directory: string): {
     throw new SkillLibraryError(
       error instanceof Error ? error.message : String(error));
   }
+  if (metadata.nature === "unclassified") {
+    throw new SkillLibraryError(
+      "Skill 必须明确标为业务知识或工程知识，并补齐对应作用域标签");
+  }
   const { files, bytes } = packageStats(packageRoot);
   if (files > MAX_FILES) {
     throw new SkillLibraryError(`包内文件数超过 ${MAX_FILES}`);
@@ -577,6 +581,10 @@ function materializeToStaging(
   files: SkillUploadFile[],
   metadata?: Partial<KnowledgeAssetMetadata>,
 ): ReturnType<typeof validateStaged> {
+  if (metadata === undefined) {
+    throw new SkillLibraryError(
+      "上传或提交 Skill 时必须设置知识性质与作用域标签");
+  }
   const seen = new Set<string>();
   for (const file of files) {
     const path = String(file.path ?? "");

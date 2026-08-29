@@ -227,6 +227,18 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
 
 ## 已知边界(诚实清单)
 
+- **2026-08-29(后续)v1 执行偏好整体退役并入 v2**(用户拍板"趁无
+  存量窗口统一"):`execution-profile.json` 文件、任务摘要三字段、
+  团队/任务阶段勾选定制(stage_customizations)、pilot
+  `--customize-playbook` 全部退场。改嫁去向:任务补充说明/团队执行
+  约定/仓库执行约定编译为 `workflow_profile.supplements`(没选工作流
+  的任务产出 supplement-only 档,按平台默认执行、只叠建议,呈现如实
+  说 bounded/platform_default);阶段结构定制唯一入口=工作流资产库。
+  设置路由对老客户端传来的 stage_customizations 显式 400 指路,不
+  静默吞。**代价如实记**:阶段级"勾选可选动作"这种轻量中间形态没
+  有了,要么写文字建议、要么建完整工作流;若内网试用反馈这层缺口
+  真实存在,再评估在资产库里补"从阶段勾选生成工作流"的快捷路径。
+  内核侧同轮 mae-flow@2df944e(kernel/ 快照已收编)。
 - **2026-08-29 工作流定制端到端审计修复轮**(审计报告见
   docs/workflow-customization-readiness.md):5 个 P0 全清——①内核
   stderr 告警与 profile_invalid 诊断上浮为任务级 `execution_plan_alerts`,

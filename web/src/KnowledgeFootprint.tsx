@@ -17,6 +17,18 @@ const ACTION: Record<KnowledgeAction, string> = {
 const ROLE = { main: "主 Agent", subagent: "子 Agent", prepush: "推送前编译",
   warmup: "预热编译", "developer-assistant": "开发助手" } as const;
 
+type KnowledgeCandidateDraft = {
+  nature?: "business" | "engineering";
+  form: KnowledgeForm;
+  title: string;
+  summary: string;
+  when_to_use: string;
+  content: string;
+  business_module_ids: string[];
+  repositories: string[];
+  technologies: string[];
+};
+
 function time(value: string): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString([], {
@@ -44,8 +56,7 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus,
   const [captureOpen, setCaptureOpen] = useState(false);
   const [feedback, setFeedback] = useState("");
   const [busy, setBusy] = useState(false);
-  const [draft, setDraft] = useState({
-    nature: "engineering" as "business" | "engineering",
+  const [draft, setDraft] = useState<KnowledgeCandidateDraft>({
     form: "document" as KnowledgeForm,
     title: "", summary: "", when_to_use: "", content: "",
     business_module_ids: [] as string[], repositories: [...repositories],
@@ -78,15 +89,30 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus,
   }
 
   async function submitCandidate(event: React.FormEvent) {
-    event.preventDefault(); setBusy(true); setFeedback("");
+    event.preventDefault();
+    const nature = draft.nature;
+    if (!nature) {
+      setFeedback("请先明确选择：这项内容是业务知识，还是工程知识。");
+      return;
+    }
+    if (nature === "business" && !draft.business_module_ids.length) {
+      setFeedback("业务知识必须至少选择一个归属业务模块。");
+      return;
+    }
+    if (nature === "engineering" && !draft.technologies.length) {
+      setFeedback("工程知识必须至少选择一种适用语言。");
+      return;
+    }
+    setBusy(true); setFeedback("");
     try {
       const candidate = await createKnowledgeCandidate(taskId, {
-        ...draft,
-        technologies: draft.nature === "engineering" ? draft.technologies : [],
+        ...draft, nature,
+        technologies: nature === "engineering" ? draft.technologies : [],
       });
-      setFeedback(`已提交知识候选 ${candidate.id}，等待${draft.nature === "business"
+      setFeedback(`已提交知识候选 ${candidate.id}，等待${nature === "business"
         ? "模块维护者" : "管理员"}审核；不会阻塞本任务。`);
-      setDraft((current) => ({ ...current, title: "", summary: "",
+      setDraft((current) => ({ ...current, nature: undefined,
+        business_module_ids: [], technologies: [], title: "", summary: "",
         when_to_use: "", content: "" }));
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : "知识候选提交失败");
@@ -148,13 +174,14 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus,
         <div className="skill-kind-picker two">
           <button type="button" aria-pressed={draft.nature === "business"}
             onClick={() => setDraft({ ...draft, nature: "business",
-              business_module_ids: draft.business_module_ids.slice(0, 1),
               technologies: [] })}><strong>业务知识</strong>
             <small>领域概念、规则、流程与业务边界</small></button>
           <button type="button" aria-pressed={draft.nature === "engineering"}
             onClick={() => setDraft({ ...draft, nature: "engineering" })}>
             <strong>工程知识</strong><small>编码、构建、测试与排障方法</small></button>
         </div>
+        {!draft.nature && <p className="skill-classification-prompt">
+          必须先明确知识性质；Skill、文档、规则和示例只是呈现形态。</p>}
         <label><span>呈现形态</span><select value={draft.form}
           onChange={(event) => setDraft({ ...draft,
             form: event.target.value as KnowledgeForm })}>
@@ -172,14 +199,13 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus,
           value={draft.summary} onChange={(event) => setDraft({
             ...draft, summary: event.target.value })} /></label>
         <div className="knowledge-candidate-scope">
-          <span><strong>{draft.nature === "business" ? "归属业务模块（必选）"
+          <span><strong>{draft.nature === "business" ? "归属业务模块（必选，可多选）"
             : "业务模块上下文（可选）"}</strong></span>
           <div className="skill-module-picker">{businessModules.map((module) =>
             <button type="button" key={module.id}
               aria-pressed={draft.business_module_ids.includes(module.id)}
               onClick={() => setDraft({ ...draft, business_module_ids:
-                draft.nature === "business" ? [module.id]
-                : draft.business_module_ids.includes(module.id)
+                draft.business_module_ids.includes(module.id)
                   ? draft.business_module_ids.filter((id) => id !== module.id)
                   : [...draft.business_module_ids, module.id] })}>
               {module.name}</button>)}</div>
@@ -196,10 +222,13 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus,
               {shortRepository(repository)}</button>)}</div>
         </div>}
         {draft.nature === "engineering" && <div className="knowledge-candidate-scope">
-          <span><strong>适用技术栈（可选）</strong><small>不选表示技术无关</small></span>
+          <span><strong>适用语言（必选，可多选）</strong><small>
+            匹配不上时由知识治理者修正标签</small></span>
           <KnowledgeLanguagePicker value={draft.technologies}
             includeAgnostic={false}
             onChange={(technologies) => setDraft({ ...draft, technologies })} />
+          {!draft.technologies.length && <p className="skill-classification-prompt">
+            请选择至少一种适用语言。</p>}
         </div>}
         <label><span>知识正文（Markdown）</span><textarea required rows={12}
           value={draft.content} onChange={(event) => setDraft({
@@ -209,7 +238,9 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus,
         <div className="business-module-form-actions">
           <span>模糊内容请在正文中标明边界，审核人会明确接纳或驳回原因。</span>
           <button className="primary" type="submit" disabled={busy
-            || (draft.nature === "business" && !draft.business_module_ids.length)}>
+            || !draft.nature
+            || (draft.nature === "business" && !draft.business_module_ids.length)
+            || (draft.nature === "engineering" && !draft.technologies.length)}>
             {busy ? "提交中…" : "提交待审"}</button>
         </div>
       </form>

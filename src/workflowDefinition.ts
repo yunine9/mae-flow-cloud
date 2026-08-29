@@ -203,17 +203,37 @@ export interface WorkflowResolvedAsset extends WorkflowAssetRef {
   diagnostic?: string;
 }
 
+/** 文字建议层(v1 execution-profile 于 2026-08-29 退役并入):任务
+ * 补充说明/仓库执行约定/团队指引都长这样,只调整关注点、顺序与协作,
+ * 永远低于阶段合同、真实证据、人工决定与权限。 */
+export interface WorkflowSupplement {
+  scope: "team" | "business_module" | "repository" | "task";
+  source_id: string;
+  title: string;
+  instructions: string;
+}
+
 /** 任务运行只消费 final_snapshot；base_snapshot 和 edits 用于审计、
- * 展示差异以及单项资产损坏时恢复对应标准项。 */
+ * 展示差异以及单项资产损坏时恢复对应标准项。
+ * 两快照可整体缺席(supplement-only:没选工作流、只写了文字补充的
+ * 任务),此时按平台默认方案执行、只叠 supplements——校验口径与内核
+ * workflow_profile_errors 一致:结构化与补充至少有一。 */
 export interface WorkflowExecutionProfileV2 {
   schema: typeof WORKFLOW_EXECUTION_PROFILE_SCHEMA;
   revision: string;
   source: WorkflowSourceRef;
-  base_snapshot: WorkflowStandardSnapshot;
+  base_snapshot?: WorkflowStandardSnapshot;
   edits: WorkflowEdit[];
-  final_snapshot: WorkflowStandardSnapshot;
+  final_snapshot?: WorkflowStandardSnapshot;
   asset_manifest: WorkflowResolvedAsset[];
   diagnostics: WorkflowDiagnostic[];
+  supplements?: WorkflowSupplement[];
+}
+
+/** 编译器产物必带两快照;supplement-only 档不经编译器产生。 */
+export interface CompiledWorkflowProfile extends WorkflowExecutionProfileV2 {
+  base_snapshot: WorkflowStandardSnapshot;
+  final_snapshot: WorkflowStandardSnapshot;
 }
 
 function requiredText(value: unknown, label: string, max = 500): string {

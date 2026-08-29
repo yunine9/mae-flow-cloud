@@ -45,7 +45,7 @@ function writeSkill(dir: string, name: string, body: string): string {
   mkdirSync(skillDir, { recursive: true });
   const path = join(skillDir, "SKILL.md");
   writeFileSync(path,
-    `---\nname: ${name}\ndescription: ${body}\n---\n\n正文:按这个口径写单测。\n`);
+    `---\nname: ${name}\ndescription: ${body}\nknowledge_nature: engineering\ntechnologies: [java]\n---\n\n正文:按这个口径写单测。\n`);
   return path;
 }
 
@@ -59,7 +59,13 @@ async function runOnce(dataDir: string): Promise<string> {
       model: "scripted-v1",
       modelsJson: model.modelsJson(),
     });
-    const id = service.create("写点单测").id;
+    const id = service.create("写点单测", {
+      repositoryProfiles: [{
+        repository: "https://code.example/team/java.git",
+        technologies: ["java"], confirmed: true,
+        updated_at: new Date().toISOString(), updated_by: "tester",
+      }],
+    }).id;
     const deadline = Date.now() + 60_000;
     while (Date.now() < deadline) {
       const status = service.get(id)!.status;
@@ -129,7 +135,13 @@ test("团队 Skill 在建任务时固定，货架更新与原位重跑都不改�
       dataDir, provider: "test", model: "test", modelsJson: {},
       maxConcurrent: 0,
     });
-    const created = service.create("固定团队 Skill");
+    const created = service.create("固定团队 Skill", {
+      repositoryProfiles: [{
+        repository: "https://code.example/team/java.git",
+        technologies: ["java"], confirmed: true,
+        updated_at: new Date().toISOString(), updated_by: "tester",
+      }],
+    });
     const snapshot = join(created.workspace, "host-skill-snapshot");
     const skillFile = (root: string): string => {
       for (const entry of readdirSync(root, { withFileTypes: true })) {
@@ -144,7 +156,8 @@ test("团队 Skill 在建任务时固定，货架更新与原位重跑都不改�
     assert.match(readFileSync(skillFile(snapshot), "utf-8"), /PINNED-SKILL-V1/);
 
     writeFileSync(source,
-      "---\nname: stable-skill\ndescription: PINNED-SKILL-V2\n---\n\nV2\n");
+      "---\nname: stable-skill\ndescription: PINNED-SKILL-V2\n"
+      + "knowledge_nature: engineering\ntechnologies: [java]\n---\n\nV2\n");
     assert.match(readFileSync(skillFile(snapshot), "utf-8"), /PINNED-SKILL-V1/,
       "货架更新不能回写已经创建的任务快照");
 

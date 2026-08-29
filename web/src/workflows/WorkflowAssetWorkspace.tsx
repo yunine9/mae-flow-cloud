@@ -13,7 +13,7 @@ import {
   type WorkflowAssetDetail,
   type WorkflowAssetSummary,
   type WorkflowDefinition,
-  type WorkflowExecutionProfile,
+  type WorkflowStandardBase,
 } from "../api";
 import { WorkflowDetail } from "./WorkflowDetail";
 import { WorkflowEditor } from "./WorkflowEditor";
@@ -48,7 +48,7 @@ export function WorkflowAssetWorkspace({
   const [workflows, setWorkflows] = useState<WorkflowAssetSummary[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [catalog, setCatalog] = useState<WorkflowAssetCatalogItem[]>([]);
-  const [standard, setStandard] = useState<WorkflowExecutionProfile["base_snapshot"]>();
+  const [standard, setStandard] = useState<WorkflowStandardBase>();
   const [selectedId, setSelectedId] = useState("");
   const [detail, setDetail] = useState<WorkflowAssetDetail>();
   const [definition, setDefinition] = useState<WorkflowDefinition>();
@@ -381,7 +381,7 @@ function clearConflictStash(id: string): void {
 }
 
 function emptyDefinition(
-  standard: WorkflowExecutionProfile["base_snapshot"],
+  standard: WorkflowStandardBase,
 ): WorkflowDefinition {
   return {
     schema: "mae-flow-workflow-definition/1",

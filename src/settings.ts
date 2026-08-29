@@ -27,9 +27,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import {
-  normalizeExecutionStageCustomizations,
   normalizeTeamExecutionInstructions,
-  type ExecutionStageCustomization,
 } from "./executionProfile.ts";
 
 export interface RuntimeKnobs {
@@ -57,9 +55,10 @@ export interface ModelsSettings {
 }
 
 export interface ExecutionPolicySettings {
-  /** 新任务采用并固定；运行中与历史任务不漂移。 */
+  /** 新任务采用并固定；运行中与历史任务不漂移。编译为 workflow_profile
+   * 的 team 层 supplement。(团队阶段勾选定制 stage_customizations 已
+   * 随 v1 退役——想定制阶段结构请建团队工作流资产。) */
   team_instructions?: string;
-  stage_customizations?: ExecutionStageCustomization[];
 }
 
 interface Stored {
@@ -143,16 +142,10 @@ export class RuntimeSettings {
           patch.team_instructions == null
             ? undefined : String(patch.team_instructions))
       : this.executionPolicy().team_instructions;
-    const stageCustomizations = "stage_customizations" in patch
-      ? normalizeExecutionStageCustomizations(
-          patch.stage_customizations, "团队阶段执行方案")
-      : this.executionPolicy().stage_customizations ?? [];
     this.save({
       ...this.load(),
       execution_policy: {
         team_instructions: teamInstructions,
-        ...(stageCustomizations.length
-          ? { stage_customizations: stageCustomizations } : {}),
       },
     });
   }

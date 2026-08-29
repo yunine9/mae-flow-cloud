@@ -312,8 +312,7 @@ export function materializeHostSkills(options: {
       if (options.context) {
         const metadata = readSkillKnowledgeMetadata(
           readFileSync(sourceFile, "utf-8"));
-        if (metadata.nature !== "unclassified"
-            && !knowledgeMatchesTask(metadata, options.context)) {
+        if (!knowledgeMatchesTask(metadata, options.context)) {
           continue;
         }
       }

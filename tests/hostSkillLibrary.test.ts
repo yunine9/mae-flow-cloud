@@ -40,15 +40,24 @@ import { createBusinessModule } from "../src/businessModuleLibrary.ts";
 const encode = (text: string) => Buffer.from(text, "utf-8").toString("base64");
 
 function skillMd(description: string, body = "写单测先读我。"): string {
-  return `---\nname: java-autout\ndescription: ${description}\n---\n\n${body}\n`;
+  return `---\nname: java-autout\ndescription: ${description}\nknowledge_nature: engineering\ntechnologies: [java]\n---\n\n${body}\n`;
 }
+
+const ENGINEERING_METADATA = {
+  nature: "engineering" as const,
+  business_module_ids: [], repositories: [], technologies: ["java"],
+};
 
 test("上传→货架可见且权限归一;更新归档旧版;回退按版本痕复原", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-skill-lib-"));
+  await assert.rejects(uploadHostSkill(dataDir, "missing-tags", [
+    { path: "SKILL.md", content_base64: encode(skillMd("缺少治理参数")) },
+  ], "admin-a"), /必须设置知识性质与作用域标签/,
+  "资产库写入口本身也必须强制分类，不能只靠页面校验");
   const first = await uploadHostSkill(dataDir, "java-autout", [
     { path: "SKILL.md", content_base64: encode(skillMd("单测写法 v1")) },
     { path: "templates/case.md", content_base64: encode("三段命名模板\n") },
-  ], "admin-a");
+  ], "admin-a", ENGINEERING_METADATA);
   assert.equal(first.action, "upload");
   assert.equal(first.files, 2);
 
@@ -72,7 +81,7 @@ test("上传→货架可见且权限归一;更新归档旧版;回退按版本痕
 
   const second = await uploadHostSkill(dataDir, "java-autout", [
     { path: "SKILL.md", content_base64: encode(skillMd("单测写法 v2")) },
-  ], "admin-b");
+  ], "admin-b", ENGINEERING_METADATA);
   assert.equal(second.action, "update");
   const versions = listSkillVersions(dataDir, "java-autout");
   assert.equal(versions.length, 1, "覆盖必须先归档旧版");
@@ -163,7 +172,7 @@ test("Skill 是知识形态；性质与模块/仓库/技术作用域分离且版
   ], "admin-a", {
     nature: "business", business_module_ids: ["orders"], repositories: [],
     technologies: ["java"],
-  }), /业务知识不能标工程技术栈.*拆出一项工程知识/);
+  }), /业务知识不能标工程语言.*拆出一项工程知识/);
 });
 
 test("fail-closed:密钥、密钥容器文件名、坏 frontmatter、路径越界都拒收且不落盘", async () => {
@@ -182,7 +191,7 @@ test("fail-closed:密钥、密钥容器文件名、坏 frontmatter、路径越�
       ],
     },
     {
-      why: /装载器不接受/,
+      why: /缺少 YAML frontmatter|装载器不接受/,
       files: [{ path: "SKILL.md", content_base64: encode("没有 frontmatter\n") }],
     },
     {
@@ -202,7 +211,8 @@ test("fail-closed:密钥、密钥容器文件名、坏 frontmatter、路径越�
   ];
   for (const { why, files } of cases) {
     await assert.rejects(
-      uploadHostSkill(dataDir, "guarded", files, "admin"),
+      uploadHostSkill(
+        dataDir, "guarded", files, "admin", ENGINEERING_METADATA),
       (error) => error instanceof SkillLibraryError && why.test(error.message),
       `该拒的没拒: ${why}`);
     assert.ok(!existsSync(join(dataDir, "skills", "guarded")),
@@ -213,7 +223,7 @@ test("fail-closed:密钥、密钥容器文件名、坏 frontmatter、路径越�
     uploadHostSkill(dataDir, "guarded", [
       { path: "SKILL.md", content_base64: encode(
         skillMd("带密钥", "token = ghp_secretsecretsecret")) },
-    ], "admin"),
+    ], "admin", ENGINEERING_METADATA),
     (error) => error instanceof SkillLibraryError
       && error.message.includes("••••")
       && !error.message.includes("ghp_secretsecretsecret"));
@@ -226,7 +236,7 @@ test("fail-closed:密钥、密钥容器文件名、坏 frontmatter、路径越�
   const ok = await uploadHostSkill(dataDir, "guarded", [
     { path: "SKILL.md", content_base64: encode(
       skillMd("教学", "配置示例:api_key: <token>,不要写真值。")) },
-  ], "admin");
+  ], "admin", ENGINEERING_METADATA);
   assert.equal(ok.action, "upload");
 });
 
@@ -234,7 +244,7 @@ test("下线归档可回退;不存在的下线与坏版本号回退明确报错"
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-skill-off-"));
   await uploadHostSkill(dataDir, "review-notes", [
     { path: "SKILL.md", content_base64: encode(skillMd("检视笔记")) },
-  ], "admin");
+  ], "admin", ENGINEERING_METADATA);
   const off = await offlineHostSkill(dataDir, "review-notes", "admin");
   assert.equal(off.action, "offline");
   assert.equal(listHostSkillShelf(dataDir).skills.length, 0,
@@ -338,7 +348,7 @@ test("路由权限:登录才可读,写只归管理员;留痕带操作人", async
         technologies: ["java"] }),
     });
     assert.equal(coupled.status, 400);
-    assert.match(await coupled.text(), /业务知识不能标工程技术栈/);
+    assert.match(await coupled.text(), /业务知识不能标工程语言/);
 
     const unknownModule = await fetch(
       `${base}/skills/route-demo/classification`, {
@@ -384,7 +394,7 @@ test("包内路径放开中文(实锤:references/0010_如何使用Kernel.md 被�
     { path: "SKILL.md", content_base64: encode(skillMd("单测写法")) },
     // 内网真实被拒的路径原样收录,防回归。
     { path: "references/0010_如何使用Kernel.md", content_base64: encode("内核用法\n") },
-  ], "admin-a");
+  ], "admin-a", ENGINEERING_METADATA);
   assert.equal(record.files, 2);
   assert.ok(existsSync(join(
     dataDir, "skills", "java-autout", "references", "0010_如何使用Kernel.md")));
@@ -392,16 +402,16 @@ test("包内路径放开中文(实锤:references/0010_如何使用Kernel.md 被�
   // 目录名保持 ASCII(进 URL/配置/prompt),中文目录名仍拒。
   await assert.rejects(uploadHostSkill(dataDir, "中文目录", [
     { path: "SKILL.md", content_base64: encode(skillMd("x")) },
-  ], "admin-a"), SkillLibraryError);
+  ], "admin-a", ENGINEERING_METADATA), SkillLibraryError);
   // 点开头(.env)与 ".." 遍历依旧没门。
   await assert.rejects(uploadHostSkill(dataDir, "java-autout", [
     { path: "SKILL.md", content_base64: encode(skillMd("x")) },
     { path: "refs/.env", content_base64: encode("A=1\n") },
-  ], "admin-a"), SkillLibraryError);
+  ], "admin-a", ENGINEERING_METADATA), SkillLibraryError);
   await assert.rejects(uploadHostSkill(dataDir, "java-autout", [
     { path: "SKILL.md", content_base64: encode(skillMd("x")) },
     { path: "../escape.md", content_base64: encode("x\n") },
-  ], "admin-a"), SkillLibraryError);
+  ], "admin-a", ENGINEERING_METADATA), SkillLibraryError);
 });
 
 test("提交待审:验收闸同上架,通过才上架,驳回留痕,不许二次裁决", async () => {
@@ -409,11 +419,11 @@ test("提交待审:验收闸同上架,通过才上架,驳回留痕,不许二次�
   // 不合格的包(缺 SKILL.md)连待审区都进不去。
   await assert.rejects(submitHostSkill(dataDir, "java-autout", [
     { path: "notes.md", content_base64: encode("没有 SKILL.md\n") },
-  ], "dev-a"), SkillLibraryError);
+  ], "dev-a", ENGINEERING_METADATA), SkillLibraryError);
 
   const submitted = await submitHostSkill(dataDir, "java-autout", [
     { path: "SKILL.md", content_base64: encode(skillMd("开发者提交的写法")) },
-  ], "dev-a");
+  ], "dev-a", ENGINEERING_METADATA);
   assert.equal(submitted.status, "pending");
   assert.equal(listHostSkillShelf(dataDir).skills.length, 0,
     "提交≠上架,货架必须还是空的");
@@ -432,7 +442,7 @@ test("提交待审:验收闸同上架,通过才上架,驳回留痕,不许二次�
   // 第二份提交走驳回:货架不动,原因留痕。
   const second = await submitHostSkill(dataDir, "java-autout", [
     { path: "SKILL.md", content_base64: encode(skillMd("另一版写法")) },
-  ], "dev-c");
+  ], "dev-c", ENGINEERING_METADATA);
   const rejected = await rejectSkillSubmission(
     dataDir, "java-autout", second.id, "admin-b", "描述不够具体");
   assert.equal(rejected.status, "rejected");
@@ -445,5 +455,5 @@ test("提交待审:验收闸同上架,通过才上架,驳回留痕,不许二次�
   // 与 /skills/:dir 子路由撞名的目录名不许当 skill 目录。
   await assert.rejects(submitHostSkill(dataDir, "submissions", [
     { path: "SKILL.md", content_base64: encode(skillMd("x")) },
-  ], "dev-a"), SkillLibraryError);
+  ], "dev-a", ENGINEERING_METADATA), SkillLibraryError);
 });

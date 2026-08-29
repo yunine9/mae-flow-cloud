@@ -12,16 +12,11 @@ import hashlib
 import json
 import os
 
-from .execution_profile import (
-    PROFILE_SCHEMA,
-    _profile_revision,
-    load_execution_profile,
-    profile_errors,
-    render_execution_profile,
-)
 from .workflow_profile import (
     WORKFLOW_PROFILE_SCHEMA,
+    has_final_plan,
     load_workflow_profile,
+    render_workflow_supplements,
     structural_selection,
     workflow_profile_errors,
 )
@@ -112,36 +107,14 @@ def _render_legacy_activities(plan):
         for item in plan.get("activities") or ()]
 
 
-def _names(records, value_key):
-    return {item.get("id"): item.get(value_key) for item in records}
-
-
-def _render_stage_layer(layer, activity_names, resource_names):
-    detail = str(layer.get("instructions") or "").strip()
-    lines = ["- 【%s】%s" % (
-        layer.get("title") or "阶段定制", detail or "已选择阶段能力")]
-    additions = layer.get("optional_activities") or ()
-    preferred = layer.get("preferred_resources") or ()
-    if additions:
-        lines.append("  增加动作：" + "、".join(
-            activity_names.get(item) or item for item in additions))
-    if preferred:
-        lines.append("  优先能力：" + "、".join(
-            resource_names.get(item) or item for item in preferred))
-    return lines
-
-
-def _render_stage_layers(plan):
-    layers = plan.get("customization", {}).get("stage_layers") or ()
+def _render_supplement_layers(plan):
+    """v2 supplements(plan 里仍叫 layers)的方案内提示——细节在
+    current 的"已固定的执行补充"专区,这里只点名生效事实。"""
+    layers = plan.get("customization", {}).get("layers") or ()
     if not layers:
         return []
-    activity_names = _names(plan.get("activities") or (), "title")
-    resource_names = _names(plan.get("resources") or (), "name")
-    lines = ["本阶段已固定的定制补充（后层优先，但仍低于平台兜底）："]
-    for layer in layers:
-        lines.extend(_render_stage_layer(
-            layer, activity_names, resource_names))
-    return lines
+    return ["已叠加的执行补充（建议层，低于平台兜底）：" + "、".join(
+        str(item.get("title") or "补充") for item in layers)]
 
 
 def _render_resource(item):
@@ -183,7 +156,7 @@ def render_agent_execution_plan(plan):
     ]
     lines.extend(_render_structural_items(plan) if structural
                  else _render_legacy_activities(plan))
-    lines.extend(_render_stage_layers(plan))
+    lines.extend(_render_supplement_layers(plan))
     lines.extend(_render_resources(plan))
     lines.extend(_render_diagnostics(plan))
     outputs = plan.get("contract", {}).get("outputs") or ()
@@ -301,10 +274,8 @@ def _selection_reason(state, playbook):
     return reason + ("本单交付方式为 %s。" % workflow if workflow else "")
 
 
-def _validated_selection(flow, state, catalog, profile, workflow_profile):
+def _validated_selection(flow, state, catalog, workflow_profile):
     errors = catalog_errors(flow, catalog)
-    if profile:
-        errors.extend(profile_errors(profile, catalog))
     if workflow_profile:
         errors.extend(workflow_profile_errors(workflow_profile))
     if errors:
@@ -319,56 +290,27 @@ def _validated_selection(flow, state, catalog, profile, workflow_profile):
     return step_id, step, playbook
 
 
-def _active_stage_layers(profile, playbook_id):
-    return [item for item in (profile or {}).get("stage_customizations") or ()
-            if item.get("playbook_id") == playbook_id]
-
-
-def _selected_activity_ids(layers):
-    return {item_id for layer in layers
-            for item_id in layer.get("optional_activities") or ()}
-
-
-def _preferred_resource_ids(layers):
-    return {item_id for layer in layers
-            for item_id in layer.get("preferred_resources") or ()}
-
-
-def _legacy_activity(activity, selected_ids):
-    if not activity.get("required") and activity.get("id") not in selected_ids:
-        return None
-    return {**activity, "source": (
-        "platform_default" if activity.get("required") else "customized")}
-
-
-def _legacy_resource(resource, preferred_ids):
-    return {**resource, **({"preferred": True}
-                           if resource.get("id") in preferred_ids else {})}
-
-
-def _legacy_selection(playbook, profile):
+def _platform_selection(playbook):
+    """平台默认方案:只列必做动作。v1 的"有界勾选可选动作/偏好资源"
+    已随 v1 整体退役——想改结构走 v2 结构化定制。"""
     selected = copy.deepcopy(playbook)
     selected.pop("steps", None)
-    layers = _active_stage_layers(profile, selected.get("id"))
-    activity_ids = _selected_activity_ids(layers)
-    activities = [_legacy_activity(item, activity_ids)
-                  for item in selected.get("activities") or ()]
-    selected["activities"] = [item for item in activities if item]
-    preferred = _preferred_resource_ids(layers)
-    selected["resources"] = [_legacy_resource(item, preferred)
-                             for item in selected.get("resources") or ()]
+    selected["activities"] = [
+        {**item, "source": "platform_default"}
+        for item in selected.get("activities") or () if item.get("required")]
+    selected["resources"] = list(selected.get("resources") or ())
     return selected
 
 
-def _selected_playbook(playbook, profile=None, workflow_profile=None):
+def _selected_playbook(playbook, workflow_profile=None):
     return (structural_selection(playbook, workflow_profile)
-            if workflow_profile else _legacy_selection(playbook, profile))
+            if has_final_plan(workflow_profile)
+            else _platform_selection(playbook))
 
 
-def _plan_revision(selected, step_id, step, profile, workflow_profile=None):
+def _plan_revision(selected, step_id, step, workflow_profile=None):
     source = json.dumps({
         "playbook": selected, "step": step_id, "contract": step,
-        "profile_revision": (profile or {}).get("revision"),
         "workflow_profile_revision": (workflow_profile or {}).get("revision"),
     }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(source.encode("utf-8")).hexdigest()[:16]
@@ -381,47 +323,54 @@ def _plan_outputs(selected, step):
     return outputs
 
 
-def _effective_source(workflow_profile, layers, stage_layers):
-    if workflow_profile:
+def _effective_source(workflow_profile, supplements):
+    if has_final_plan(workflow_profile):
         return "compiled_final_plan"
-    return "platform_default+overrides" if layers or stage_layers \
-        else "platform_default"
+    return "platform_default+overrides" if supplements else "platform_default"
 
 
-def _customization(defaults, profile, playbook_id, workflow_profile=None):
-    layers = copy.deepcopy((profile or {}).get("layers") or [])
-    stage_layers = copy.deepcopy(_active_stage_layers(profile, playbook_id))
+def _customization(defaults, workflow_profile=None):
+    # plan 契约里的 layers 字段沿用旧名,内容来自 v2 supplements——
+    # 消费端(cloud/前端/CLI 渲染)零改动。
+    supplements = copy.deepcopy(
+        (workflow_profile or {}).get("supplements") or [])
+    structural = has_final_plan(workflow_profile)
     source = (workflow_profile or {}).get("source") or {}
     return {
-        "mode": "structural" if workflow_profile else "bounded",
+        "mode": "structural" if structural else "bounded",
         "customizable": list(defaults.get("customizable") or ()),
         "locked": list(defaults.get("locked") or ()),
-        "effective_source": _effective_source(
-            workflow_profile, layers, stage_layers),
-        "profile_revision": (profile or {}).get("revision"),
-        "layers": layers,
-        "stage_layers": stage_layers,
-        "workflow_source": copy.deepcopy(source) if workflow_profile else None,
+        "effective_source": _effective_source(workflow_profile, supplements),
+        "layers": supplements,
+        "workflow_source": copy.deepcopy(source) if structural else None,
         "diagnostics": copy.deepcopy(
             (workflow_profile or {}).get("diagnostics") or []),
     }
 
 
 def _strategy_source(workflow_profile):
-    if not workflow_profile:
+    if not has_final_plan(workflow_profile):
         return "platform_default"
     return str((workflow_profile.get("source") or {}).get("kind") or "workflow")
 
 
-def build_execution_plan(flow, state, catalog=None, profile=None,
-                         workflow_profile=None):
+def _supplements_only(workflow_profile):
+    """结构化部分退化时保留文字补充:失配只关结构,建议层照常生效。"""
+    if not (workflow_profile or {}).get("supplements"):
+        return None
+    return {key: copy.deepcopy(value)
+            for key, value in workflow_profile.items()
+            if key in ("schema", "source", "supplements", "revision")}
+
+
+def build_execution_plan(flow, state, catalog=None, workflow_profile=None):
     """Build one immutable, JSON-safe explanation for the current state."""
     catalog = catalog or load_catalog()
     step_id, step, playbook = _validated_selection(
-        flow, state, catalog, profile, workflow_profile)
+        flow, state, catalog, workflow_profile)
     degrade = None
     try:
-        selected = _selected_playbook(playbook, profile, workflow_profile)
+        selected = _selected_playbook(playbook, workflow_profile)
     except ValueError as exc:
         # 定格方案缺当前 playbook 对应的 stage(cloud 编译器写 id、
         # 内核消费,跨仓 id 失配等):fail-open 退回平台默认做法,但
@@ -434,15 +383,15 @@ def build_execution_plan(flow, state, catalog=None, profile=None,
                        "平台默认做法" % exc,
             "stage_id": str(playbook.get("id") or ""),
         }
-        workflow_profile = None
-        selected = _selected_playbook(playbook, profile, None)
+        workflow_profile = _supplements_only(workflow_profile)
+        selected = _selected_playbook(playbook, workflow_profile)
     outputs = _plan_outputs(selected, step)
     defaults = catalog.get("defaults") or {}
     plan = {
         "schema": SCHEMA,
         "plan_id": "%s@%s" % (selected["id"], selected["version"]),
         "plan_revision": _plan_revision(
-            selected, step_id, step, profile, workflow_profile),
+            selected, step_id, step, workflow_profile),
         "step": {"id": step_id, "title": str(step.get("title") or step_id),
                  "phase": selected.get("phase") or "",
                  "state_revision": state.get("revision")},
@@ -459,8 +408,7 @@ def build_execution_plan(flow, state, catalog=None, profile=None,
         "knowledge": {"loading": defaults.get(
             "knowledge_loading", "indexed_on_demand"),
             "explanation": "选中的知识和 Skill 先提供轻量索引，Agent 按任务需要读取正文；选中不等于全文注入。"},
-        "customization": _customization(
-            defaults, profile, selected["id"], workflow_profile),
+        "customization": _customization(defaults, workflow_profile),
     }
     if degrade is not None:
         # 退化后 workflow_profile 已置 None,mode/effective_source/

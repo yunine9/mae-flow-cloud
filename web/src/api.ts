@@ -603,9 +603,11 @@ export interface WorkflowExecutionProfile {
   revision: string;
   source: { kind: "platform" | "workflow" | "task";
     id: string; label?: string; version?: string; digest?: string };
-  base_snapshot: { standard_id: string; standard_version: string;
+  /** 两快照可整体缺席(supplement-only:只写了文字补充、没选工作流
+   * 的任务),此时按平台默认方案执行、只叠 supplements。 */
+  base_snapshot?: { standard_id: string; standard_version: string;
     catalog_digest: string; stages: WorkflowStagePlan[] };
-  final_snapshot: { standard_id: string; standard_version: string;
+  final_snapshot?: { standard_id: string; standard_version: string;
     catalog_digest: string; stages: WorkflowStagePlan[] };
   edits: WorkflowEdit[];
   asset_manifest: Array<WorkflowAssetRef & {
@@ -614,7 +616,19 @@ export interface WorkflowExecutionProfile {
     diagnostic?: string;
   }>;
   diagnostics: WorkflowDiagnostic[];
+  /** 文字建议层(v1 执行补充退役并入,2026-08-29)。 */
+  supplements?: Array<{
+    scope: "team" | "business_module" | "repository" | "task";
+    source_id: string;
+    title: string;
+    instructions: string;
+  }>;
 }
+
+/** 资产库/编辑器语境的标准快照(必有结构);任务档上的
+ * base/final 才可能缺席(supplement-only)。 */
+export type WorkflowStandardBase =
+  NonNullable<WorkflowExecutionProfile["base_snapshot"]>;
 
 export type WorkflowAssetStatus =
   | "draft" | "pending_review" | "published" | "archived";
@@ -728,29 +742,17 @@ export interface ExecutionPlan {
     locked: string[];
     effective_source: "platform_default" | "platform_default+overrides"
       | "compiled_final_plan";
-    profile_revision?: string;
+    /** 文字建议层(v2 supplements;plan 契约沿用 layers 旧名)。 */
     layers: Array<{
       scope: "team" | "business_module" | "repository" | "task";
       source_id: string;
       title: string;
       instructions: string;
     }>;
-    stage_layers: Array<ExecutionStageCustomization & {
-      scope: "team" | "business_module" | "repository" | "task";
-      source_id: string;
-      title: string;
-    }>;
     workflow_source?: { kind: "platform" | "workflow" | "task";
       id: string; version?: string; digest?: string };
     diagnostics?: WorkflowDiagnostic[];
   };
-}
-
-export interface ExecutionStageCustomization {
-  playbook_id: string;
-  instructions?: string;
-  optional_activities: string[];
-  preferred_resources: string[];
 }
 
 export interface ExecutionPlaybookOption {
@@ -918,8 +920,6 @@ export interface TaskSummary {
    * 活方案没吃到定格)都在这里,有值必须标红——不许界面展示定格副本
    * 而 Agent 实际跑平台默认。 */
   execution_plan_alerts?: string[];
-  /** 可选执行补充未被采用时的明确降级说明。 */
-  execution_profile_warning?: string;
   workflow_profile?: WorkflowExecutionProfile;
   workflow_profile_warning?: string;
   host_skills_pinned?: boolean;
@@ -1065,7 +1065,7 @@ export async function listKnowledgeCandidates(): Promise<KnowledgeCandidateRecor
 
 export async function publishKnowledgeCandidate(
   id: string,
-  input: { module_id?: string; asset_id?: string; directory?: string; note?: string } = {},
+  input: { asset_id?: string; directory?: string; note?: string } = {},
 ): Promise<KnowledgeCandidateRecord> {
   const response = await fetch(`/knowledge-candidates/${encodeURIComponent(id)}/publish`, {
     method: "POST", body: JSON.stringify(input),
@@ -1116,8 +1116,7 @@ export interface LaunchOptions {
     { key: string; label: string; description?: string;
       steps?: number; acks?: number }>;
   execution_playbooks: ExecutionPlaybookOption[];
-  workflow_standard?: WorkflowExecutionProfile["base_snapshot"];
-  execution_stage_defaults: ExecutionStageCustomization[];
+  workflow_standard?: WorkflowStandardBase;
   /** 已发布的可选业务模块摘要；知识正文不会随目录接口返回。 */
   business_modules: BusinessModuleLaunchOption[];
   engineering_knowledge: EngineeringKnowledgeLaunchOption[];
@@ -1362,7 +1361,7 @@ export async function getWorkflowAssetCatalog(): Promise<{
 }
 
 export async function getWorkflowStandard(): Promise<
-WorkflowExecutionProfile["base_snapshot"]> {
+WorkflowStandardBase> {
   return workflowResponse(await fetch("/workflow-assets/standard"));
 }
 
@@ -1908,14 +1907,11 @@ export async function createTask(
     model?: { provider: string; model: string };
     repairRounds?: number;
     taskInstructions?: string;
-    executionStageCustomizations?: ExecutionStageCustomization[];
     workflowDefinition?: unknown;
     workflowSelection?: { id: string; version?: number | string };
     repositorySkillCatalogToken?: string;
     selectedRepositorySkillIds?: string[];
-    selectedHostSkillPaths?: string[];
     selectedBusinessModuleIds?: string[];
-    selectedEngineeringKnowledgeIds?: string[];
     repositoryProfiles?: Array<Pick<RepositoryProfile,
       "repository" | "technologies" | "confirmed">>;
     requirementDocumentName?: string;
@@ -1938,16 +1934,13 @@ export async function createTask(
       model: extras?.model,
       repair_rounds: extras?.repairRounds,
       task_instructions: extras?.taskInstructions?.trim() || undefined,
-      execution_stage_customizations: extras?.executionStageCustomizations,
       workflow_definition: extras?.workflowDefinition,
       workflow_selection: extras?.workflowSelection,
       repository_skill_catalog_token:
         extras?.repositorySkillCatalogToken || undefined,
       selected_repository_skill_ids:
         extras?.selectedRepositorySkillIds,
-      selected_host_skill_paths: extras?.selectedHostSkillPaths,
       selected_business_module_ids: extras?.selectedBusinessModuleIds,
-      selected_engineering_knowledge_ids: extras?.selectedEngineeringKnowledgeIds,
       repository_profiles: extras?.repositoryProfiles,
     }),
   });
@@ -2506,9 +2499,8 @@ export interface SettingsView {
     build_cache_max_gb?: number;
   };
   execution_policy: {
-    /** 只影响保存后新建任务；每单会固定快照。 */
+    /** 只影响保存后新建任务；每单会固定快照(编译为 team 层补充)。 */
     team_instructions?: string;
-    stage_customizations?: ExecutionStageCustomization[];
   };
   execution_playbooks: ExecutionPlaybookOption[];
   models: {
@@ -2644,7 +2636,6 @@ export function putRuntimeSettings(
 
 export function putExecutionPolicySettings(body: {
   team_instructions: string;
-  stage_customizations?: ExecutionStageCustomization[];
 }): Promise<SettingsView> {
   return putSettings("execution-policy", body);
 }

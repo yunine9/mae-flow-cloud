@@ -183,8 +183,8 @@ export interface CloudSessionOptions {
    * 子 agent";云端子 Agent 照样有(Task 工具),缺的是自动装载——
    * pi 的 includeDefaults=false,不喂路径就一个 skill 都不装。 */
   hostSkillsDir?: string;
-  /** 用任务固定的模块/仓库/技术画像筛选团队 Skill。历史未标注 Skill
-   * 继续可用，避免模型迁移期间突然丢能力。 */
+  /** 用任务固定的模块/仓库/语言画像筛选尚未定格的团队 Skill；新任务
+   * 已在创建现场生成精确快照，后续会话不应重复匹配。 */
   knowledgeContext?: {
     repositories: string[];
     technologies: string[];

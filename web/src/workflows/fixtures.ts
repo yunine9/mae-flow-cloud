@@ -3,12 +3,12 @@ import type {
   WorkflowAssetDetail,
   WorkflowAssetSummary,
   WorkflowDefinition,
-  WorkflowExecutionProfile,
+  WorkflowStandardBase,
 } from "../api";
 
 const digest = "7c91a15bd3f4825a8d9ac7c747882e79037e0df9b7c71ec4821a72ec3ab40baf";
 
-export const workflowBaseFixture: WorkflowExecutionProfile["base_snapshot"] = {
+export const workflowBaseFixture: WorkflowStandardBase = {
   standard_id: "mae-flow-standard",
   standard_version: "2026.08",
   catalog_digest: digest,

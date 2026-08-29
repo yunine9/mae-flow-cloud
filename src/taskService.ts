@@ -59,19 +59,16 @@ import {
   type ExecutionPlaybookOption,
 } from "./executionPlan.ts";
 import {
-  buildTaskExecutionProfile,
-  executionProfilePrompt,
-  materializeExecutionProfile,
+  buildTaskSupplements,
   normalizeTaskExecutionInstructions,
-  resolveRepositoryExecutionProfile,
-  validateExecutionStageCustomizations,
-  type TaskExecutionProfile,
+  resolveRepositorySupplement,
 } from "./executionProfile.ts";
 import { compileWorkflow } from "./workflowCompiler.ts";
 import { readWorkflowStandardSnapshot } from "./workflowCatalog.ts";
 import {
   materializeWorkflowProfile,
   reconcileWorkflowProfileAssets,
+  withWorkflowSupplements,
   workflowProfilePrompt,
 } from "./workflowProfileRuntime.ts";
 import {
@@ -660,14 +657,11 @@ export interface TaskSummary {
   model_choice?: { provider: string; model: string };
   /** 下单时的修复轮预算;缺席=跟随服务当前默认。0=本单关掉修复环。 */
   repair_rounds?: number;
-  /** 各层执行偏好在下单/首次 clone 时解析并固定。它只能影响“怎么做”
-   * 的建议层，不能覆盖内核步骤、证据、人工决定或权限。 */
-  execution_profile?: TaskExecutionProfile;
-  /** 代码仓执行约定已完成首次解析；即使仓内没有配置或配置损坏，也要
-   * 固定这次结果，恢复/重跑不能从后来变化的仓库文件偷偷换方案。 */
-  execution_profile_repository_resolved?: boolean;
-  /** 可选执行补充无法采用时的可见降级说明；不阻塞任务。 */
-  execution_profile_warning?: string;
+  /** 代码仓执行约定已完成首次解析并固定进 workflow_profile.supplements;
+   * 即使仓内没有配置或配置损坏,也要固定这次结果——恢复/重跑不能从
+   * 后来变化的仓库文件偷偷换方案。(v1 execution_profile 三字段已随
+   * v1 退役删除,2026-08-29 无存量窗口统一。) */
+  repository_supplement_resolved?: boolean;
   /** 专业用户选定/定制的结构化工作流。base 与 final 都在下单时固定，
    * 任务只执行 final_snapshot；恢复、修复和历史查看不追随目录升级。 */
   workflow_profile?: WorkflowExecutionProfileV2;
@@ -2962,7 +2956,7 @@ export class TaskService {
       workspace: task.cwd,
       agentDir,
       hostSkillsDir: taskHostSkillsDir(this.options.dataDir, task.summary),
-      knowledgeContext: {
+      knowledgeContext: task.summary.host_skills_pinned ? undefined : {
         repositories: task.summary.repositories ?? [],
         technologies: [...new Set((task.summary.repository_profiles ?? [])
           .flatMap((profile) => profile.technologies))],
@@ -3509,9 +3503,6 @@ export class TaskService {
     execution_playbooks: ExecutionPlaybookOption[];
     /** 专业编辑器的精确标准基线；缺席时隐藏定制入口，不影响普通下单。 */
     workflow_standard?: WorkflowStandardSnapshot;
-    /** 团队已选的阶段增强；任务只能继续增加，不能取消团队默认。 */
-    execution_stage_defaults: ReturnType<
-      typeof validateExecutionStageCustomizations>;
     /** 显式发布的业务模块目录。这里只给下单所需摘要，不含知识正文。 */
     business_modules: Array<{
       id: string;
@@ -3553,8 +3544,6 @@ export class TaskService {
       workflowCatalogRoot);
     const workflowStandard = readWorkflowStandardSnapshot(
       workflowCatalogRoot);
-    let executionStageDefaults: ReturnType<
-      typeof validateExecutionStageCustomizations> = [];
     try {
       businessModules = listBusinessModules(this.options.dataDir).modules
         .filter((module) => module.status === "active")
@@ -3586,20 +3575,11 @@ export class TaskService {
     }
     try {
       teamSkills = listHostSkillShelf(this.options.dataDir).skills
-        .filter((skill) => skill.loadable);
+        .filter((skill) => skill.loadable
+          && skill.nature !== "unclassified");
     } catch (error) {
       this.options.log?.(
         `[team-skills] 下单目录读取失败(fail-open): ${String(error)}`);
-    }
-    try {
-      executionStageDefaults = validateExecutionStageCustomizations(
-        this.options.settings?.executionPolicy().stage_customizations,
-        "团队阶段执行方案",
-        executionPlaybooks,
-      );
-    } catch (error) {
-      this.options.log?.(
-        `[execution-policy] 团队阶段定制已失效，新任务采用平台默认: ${error}`);
     }
     // 每条缺项**只在它真会咬人时才拦**:纯会话形态(不接代码仓)拦
     // Git 令牌毫无道理,没接通知端点拦通知令牌也一样——一刀切的门禁
@@ -3624,7 +3604,6 @@ export class TaskService {
       workflows: workflowChoices(workflowCatalogRoot),
       execution_playbooks: executionPlaybooks,
       workflow_standard: workflowStandard,
-      execution_stage_defaults: executionStageDefaults,
       business_modules: businessModules,
       engineering_knowledge: engineeringKnowledge
         .map((item) => ({
@@ -3648,17 +3627,6 @@ export class TaskService {
         luban_token: this.options.notifier?.needsPersonalToken() ?? false,
       },
     };
-  }
-
-  validateExecutionStageCustomizationInput(
-    value: unknown,
-    label = "阶段执行方案",
-  ): ReturnType<typeof validateExecutionStageCustomizations> {
-    return validateExecutionStageCustomizations(
-      value,
-      label,
-      readExecutionPlaybookOptions(this.options.host?.kernelRoot),
-    );
   }
 
   /** 当前生效的模型:设置层显式配的 > models.json 里的第一个 >
@@ -3888,15 +3856,11 @@ export class TaskService {
       baseline?: string;
       model?: { provider: string; model: string };
       repairRounds?: number;
-      /** 任务级低优先级执行补充；详细需求仍放 requirement。 */
+      /** 任务级低优先级执行补充；详细需求仍放 requirement。编译进
+       * workflow_profile.supplements(v1 execution-profile 已退役)。 */
       taskInstructions?: string;
-      /** 按阶段增加目录内可选动作、提升能力优先级或补充阶段指导。 */
-      executionStageCustomizations?: unknown;
-      /** 仅供跨仓拆单与原位重跑继承已经固定的分层快照。 */
-      executionProfile?: TaskExecutionProfile;
-      /** 仅供原位重跑继承“代码仓约定已解析”的事实。 */
-      executionProfileRepositoryResolved?: boolean;
-      executionProfileWarning?: string;
+      /** 仅供原位重跑继承「代码仓约定已解析」的事实。 */
+      repositorySupplementResolved?: boolean;
       /** 专业模式提交结构化编辑；普通用户缺席即保持既有 Mae-Flow。 */
       workflowDefinition?: unknown;
       /** 保存的工作流/任务复制由服务端资产路由传入；普通 API 不自报。 */
@@ -3923,14 +3887,16 @@ export class TaskService {
       repositorySkillCatalogToken?: string;
       selectedRepositorySkillIds?: string[];
       repositorySkills?: SelectedRepositorySkill[];
-      /** 普通下单从统一资源清单提交的团队 Skill 路径；默认匹配项由
-       * 前端勾选，工作流精确引用的 Skill 会在服务端强制并入。 */
+      /** 内部复制/旧客户端的精确团队 Skill 清单；普通下单页面不暴露
+       * 选择，字段缺席时由服务端按任务范围自动匹配全部。工作流精确
+       * 引用的 Skill 会在服务端强制并入。 */
       selectedHostSkillPaths?: string[];
       /** 普通下单只提交正式模块 ID；服务端在创建现场时固定当时的已发布
        * 资产版本与正文快照，浏览器不能自报内容。 */
       selectedBusinessModuleIds?: string[];
       /** 前端首次人工确认并由服务端验过的技术画像；知识旁路字段。 */
       repositoryProfiles?: RepositoryProfile[];
+      /** 内部复制/旧客户端兼容；普通下单缺席并由服务端自动匹配。 */
       selectedEngineeringKnowledgeIds?: string[];
       /** 仅供跨仓拆单复制父任务已固定版本。 */
       engineeringKnowledge?: SelectedEngineeringKnowledge[];
@@ -4035,30 +4001,6 @@ export class TaskService {
     // 先校验再分配 task id，避免一个超长输入白白消耗任务序号。
     const taskInstructions = normalizeTaskExecutionInstructions(
       options.taskInstructions);
-    const executionPlaybooks = readExecutionPlaybookOptions(
-      workflowCatalogRoot);
-    const taskStageCustomizations = options.executionProfile
-      ? [] : validateExecutionStageCustomizations(
-          options.executionStageCustomizations,
-          "本任务阶段执行方案",
-          executionPlaybooks,
-        );
-    let executionPolicyWarning: string | undefined;
-    let teamStageCustomizations: ReturnType<
-      typeof validateExecutionStageCustomizations> = [];
-    if (!options.executionProfile) {
-      try {
-        teamStageCustomizations = validateExecutionStageCustomizations(
-          this.options.settings?.executionPolicy().stage_customizations,
-          "团队阶段执行方案",
-          executionPlaybooks,
-        );
-      } catch (error) {
-        executionPolicyWarning =
-          `团队阶段执行方案未采用，本任务继续使用平台默认：${String(error)}`;
-        this.options.log?.(`[execution-policy] ${executionPolicyWarning}`);
-      }
-    }
     const directResources = options.repositorySkills !== undefined;
     const explicitCatalogSelection = options.repositorySkillCatalogToken !== undefined
       || options.selectedRepositorySkillIds !== undefined;
@@ -4106,28 +4048,6 @@ export class TaskService {
       throw new TaskControlError(`任务 ${id} 不能安全地原位重建`);
     }
     const workspace = join(this.options.dataDir, id);
-    const executionProfile = options.executionProfile
-      ? {
-          ...options.executionProfile,
-          layers: options.executionProfile.layers.map((layer) => ({ ...layer })),
-          ...(options.executionProfile.stage_customizations ? {
-            stage_customizations: options.executionProfile.stage_customizations
-              .map((item) => ({
-                ...item,
-                optional_activities: [...item.optional_activities],
-                preferred_resources: [...item.preferred_resources],
-              })),
-          } : {}),
-        }
-      : buildTaskExecutionProfile(
-          id,
-          taskInstructions,
-          this.options.settings?.executionPolicy().team_instructions,
-          {
-            team: teamStageCustomizations,
-            task: taskStageCustomizations,
-          },
-        );
     let workflowProfileWarning = options.workflowProfileWarning;
     let workflowProfile = options.workflowProfile
       ? structuredClone(options.workflowProfile) : undefined;
@@ -4227,9 +4147,10 @@ export class TaskService {
         snapshotRoot: hostSkillSnapshotRoot,
         selectedSourcePaths: options.hostSkillSnapshotSourceWorkspace
           ? undefined : selectedHostSkillPaths,
-        context: {
-          repositories,
-          technologies: profileTechnologies,
+        // 新任务在这里自动匹配一次并固定版本；重跑/拆单复制的已经是
+        // 父任务快照，不能因画像字段迁移或后续治理变化再次筛掉。
+        context: options.hostSkillSnapshotSourceWorkspace ? undefined : {
+          repositories, technologies: profileTechnologies,
           businessModuleIds: businessModules.map((module) => module.id),
         },
       });
@@ -4273,6 +4194,18 @@ export class TaskService {
               hostSkillSnapshotRoot: join(workspace, "host-skill-snapshot"),
             }),
         });
+      }
+    }
+    // 文字建议层(任务补充+团队约定)并入定格方案;没选工作流也一样
+    // ——产出 supplement-only 档,内核只认这一个文件(v1 退役)。
+    // 原位重跑/拆单传入的 workflowProfile 已带 supplements,不重复叠。
+    if (!options.workflowProfile) {
+      const supplements = buildTaskSupplements(
+        id, taskInstructions,
+        this.options.settings?.executionPolicy().team_instructions);
+      if (supplements.length) {
+        workflowProfile = withWorkflowSupplements(
+          workflowProfile, supplements);
       }
     }
     const summary: TaskSummary = {
@@ -4321,13 +4254,7 @@ export class TaskService {
       baseline,
       model_choice: options.model,
       repair_rounds: options.repairRounds,
-      execution_profile: executionProfile,
-      execution_profile_repository_resolved:
-        options.executionProfileRepositoryResolved,
-      execution_profile_warning: [
-        options.executionProfileWarning,
-        executionPolicyWarning,
-      ].filter(Boolean).join("；") || undefined,
+      repository_supplement_resolved: options.repositorySupplementResolved,
       workflow_profile: workflowProfile,
       workflow_profile_warning: workflowProfileWarning,
       host_skills_pinned: true,
@@ -5105,10 +5032,7 @@ export class TaskService {
       baseline: source.baseline,
       model: source.model_choice ? { ...source.model_choice } : undefined,
       repairRounds: source.repair_rounds,
-      executionProfile: source.execution_profile,
-      executionProfileRepositoryResolved:
-        source.execution_profile_repository_resolved,
-      executionProfileWarning: source.execution_profile_warning,
+      repositorySupplementResolved: source.repository_supplement_resolved,
       workflowProfile: source.workflow_profile,
       workflowProfileWarning: source.workflow_profile_warning,
       requirementDocumentName: source.requirement_document?.name,
@@ -5551,11 +5475,15 @@ export class TaskService {
         baseline: task.summary.baseline,
         model: task.summary.model_choice,
         repairRounds: task.summary.repair_rounds,
-        executionProfile: task.summary.execution_profile,
+        // 父任务的文字补充随拆单下传(团队约定会按当前设置重建,
+        // 仓库约定由子任务自己的首次 clone 重新解析)。
+        taskInstructions: parentWorkflow?.supplements
+          ?.find((item) => item.scope === "task")?.instructions,
         // 子任务的仓库、技术和可用 Skill 已经变窄，不能整份照搬父任务
         // 的最终方案；用父 profile 保存的 base+edits 在子任务快照上重编，
-        // 不适用资产逐项回退，平台流程继续。
-        workflowDefinition: parentWorkflow ? {
+        // 不适用资产逐项回退，平台流程继续。supplement-only 档没有
+        // base_snapshot,无结构可重编。
+        workflowDefinition: parentWorkflow?.base_snapshot ? {
           schema: "mae-flow-workflow-definition/1",
           base: {
             standard_id: parentWorkflow.base_snapshot.standard_id,
@@ -5572,7 +5500,7 @@ export class TaskService {
           },
           edits: structuredClone(parentWorkflow.edits),
         } : undefined,
-        workflowSource: parentWorkflow
+        workflowSource: parentWorkflow?.base_snapshot
           ? structuredClone(parentWorkflow.source) : undefined,
         workflowProfileWarning: task.summary.workflow_profile_warning,
         hostSkillSnapshotSourceWorkspace: task.summary.workspace,
@@ -6967,7 +6895,7 @@ export class TaskService {
         workspace: task.cwd,
         agentDir,
         hostSkillsDir: taskHostSkillsDir(this.options.dataDir, task.summary),
-        knowledgeContext: {
+        knowledgeContext: task.summary.host_skills_pinned ? undefined : {
           repositories: task.summary.repositories ?? [],
           technologies: [...new Set((task.summary.repository_profiles ?? [])
             .flatMap((profile) => profile.technologies))],
@@ -7961,7 +7889,6 @@ export class TaskService {
       let hasDependencyHandoff = false;
       let knowledgeMaterialized = false;
       let activeWorkflowProfile = task.summary.workflow_profile;
-      let executionProfileMaterialized = !task.summary.execution_profile;
       let workflowProfileMaterialized = !activeWorkflowProfile;
       task.cwd = cwd;
       if (this.options.host && analysisOnly) {
@@ -8119,44 +8046,44 @@ export class TaskService {
             `[engineering-knowledge] 任务 ${task.summary.id}: ${warning}`);
         }
         knowledgeMaterialized = true;
+        // 仓库可在受版本控制的 .mae-flow-defaults.json 里声明一条
+        // 「执行补充」。只在首次 clone 后读取一次,作为 repository 层
+        // supplement 固定进 workflow_profile 并回写 task.json;之后
+        // 恢复/重跑都沿用快照,不随仓库或管理设置漂移。坏配置只明确
+        // 降级,不阻塞任务。必须先于 reconcile:两者都改 profile,
+        // 后写会覆盖前写。(v1 独立文件通道已退役。)
+        if (!task.summary.repository_supplement_resolved) {
+          const resolved = resolveRepositorySupplement({
+            workspace: cwd,
+            repositoryId: activeRepository ?? task.summary.id,
+          });
+          if (resolved.supplement) {
+            const others = (task.summary.workflow_profile?.supplements ?? [])
+              .filter((item) => item.scope !== "repository");
+            task.summary.workflow_profile = withWorkflowSupplements(
+              task.summary.workflow_profile,
+              [...others, resolved.supplement]);
+          }
+          task.summary.repository_supplement_resolved = true;
+          if (resolved.warning) {
+            task.summary.workflow_profile_warning = [
+              task.summary.workflow_profile_warning, resolved.warning,
+            ].filter(Boolean).join("；");
+            this.options.log?.(
+              `[workflow-profile] 任务 ${task.summary.id}: `
+              + resolved.warning);
+          }
+          this.persist(task);
+        }
         activeWorkflowProfile = reconcileWorkflowProfileAssets(
           task.summary.workflow_profile,
           [...businessModuleKnowledge.entries.map((item) => item.relative_path),
             ...engineeringKnowledge.entries.map((item) => item.relative_path)],
         );
-        // 仓库可在受版本控制的 .mae-flow-defaults.json 里声明一条
-        // 「执行补充」。只在首次 clone 后读取一次，插入 team 与 task
-        // 之间并回写 task.json；之后恢复/重跑都沿用快照，不随仓库或
-        // 管理设置漂移。坏配置只明确降级，不阻塞任务。
-        if (!task.summary.execution_profile_repository_resolved) {
-          const repositoryProfile = resolveRepositoryExecutionProfile({
-            workspace: cwd,
-            repositoryId: activeRepository ?? task.summary.id,
-            profile: task.summary.execution_profile,
-          });
-          task.summary.execution_profile = repositoryProfile.profile;
-          task.summary.execution_profile_repository_resolved = true;
-          task.summary.execution_profile_warning = repositoryProfile.warning;
-          if (repositoryProfile.warning) {
-            this.options.log?.(
-              `[execution-profile] 任务 ${task.summary.id}: `
-              + repositoryProfile.warning);
-          }
-          this.persist(task);
-        }
-        executionProfileMaterialized = !task.summary.execution_profile;
-        // 执行偏好必须先于 bootstrapManaged 落地：bootstrap 会机械执行
+        // 定格方案必须先于 bootstrapManaged 落地：bootstrap 会机械执行
         // init/current，内核要在第一条阶段指令里就读到它。文件是下单时
         // 固定的快照，不依赖 Cloud DB；失败不假装生效，后面会把同一份
         // 内容作为显式 prompt 兜底并留下日志。
-        try {
-          materializeExecutionProfile(cwd, task.summary.execution_profile);
-          executionProfileMaterialized = true;
-        } catch (cause) {
-          this.options.log?.(
-            `[execution-profile] 任务 ${task.summary.id} 快照投影失败，`
-            + `已退回显式 prompt（不影响开工）：${cause}`);
-        }
         try {
           materializeWorkflowProfile(cwd, activeWorkflowProfile);
           workflowProfileMaterialized = true;
@@ -8375,22 +8302,12 @@ export class TaskService {
             ...engineeringKnowledge.entries.map((item) => item.relative_path)],
         );
       }
-      const executionSupplement = executionProfilePrompt(
-        task.summary.execution_profile);
-      if (executionSupplement
-          && (analysisOnly || !this.options.host
-              || !executionProfileMaterialized)) {
-        prompt = `${prompt}\n\n${executionSupplement}`;
-      }
       const workflowSupplement = workflowProfilePrompt(
         activeWorkflowProfile);
       if (workflowSupplement
           && (analysisOnly || !this.options.host
               || !workflowProfileMaterialized)) {
         prompt = `${prompt}\n\n${workflowSupplement}`;
-      }
-      if (task.summary.execution_profile_warning) {
-        prompt = `${prompt}\n\n⚠ ${task.summary.execution_profile_warning}`;
       }
       if (task.summary.workflow_profile_warning) {
         prompt = `${prompt}\n\n⚠ ${task.summary.workflow_profile_warning}`;
@@ -8521,7 +8438,7 @@ export class TaskService {
         // 宿主级 skill:<数据目录>/skills 放一次,每个任务都带
         // (团队的 UT 写法指南在内网,老宿主靠手动集成进子 agent)。
         hostSkillsDir: taskHostSkillsDir(this.options.dataDir, task.summary),
-        knowledgeContext: {
+        knowledgeContext: task.summary.host_skills_pinned ? undefined : {
           repositories: task.summary.repositories ?? [],
           technologies: [...new Set((task.summary.repository_profiles ?? [])
             .flatMap((profile) => profile.technologies))],
@@ -9182,7 +9099,7 @@ export class TaskService {
         workspace: task.cwd,
         agentDir,
         hostSkillsDir: taskHostSkillsDir(this.options.dataDir, task.summary),
-        knowledgeContext: {
+        knowledgeContext: task.summary.host_skills_pinned ? undefined : {
           repositories: task.summary.repositories ?? [],
           technologies: [...new Set((task.summary.repository_profiles ?? [])
             .flatMap((profile) => profile.technologies))],

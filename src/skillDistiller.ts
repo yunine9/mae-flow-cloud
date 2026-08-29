@@ -32,6 +32,7 @@ import {
   type SkillOperationRecord,
   type SkillUploadFile,
 } from "./hostSkillLibrary.ts";
+import { readSkillKnowledgeMetadata } from "./knowledgeAssetModel.ts";
 
 const CANDIDATES_DIR = "skill-candidates";
 /** 单发补全的墙钟预算:起草不是交付,超时就放弃,人可以再点一次。 */
@@ -365,7 +366,13 @@ export async function adoptSkillCandidate(
   }
   let operation: SkillOperationRecord;
   try {
-    operation = await uploadHostSkill(dataDir, directory, files, operator);
+    if (!existsSync(join(live, "SKILL.md"))) {
+      throw new SkillDistillError("在架 Skill 不存在，无法继承知识标签");
+    }
+    const metadata = readSkillKnowledgeMetadata(
+      readFileSync(join(live, "SKILL.md"), "utf-8"));
+    operation = await uploadHostSkill(
+      dataDir, directory, files, operator, metadata);
   } catch (error) {
     if (error instanceof SkillLibraryError) {
       throw new SkillDistillError(`候选未通过上架闸: ${error.message}`);

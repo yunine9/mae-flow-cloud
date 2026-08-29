@@ -3,6 +3,7 @@ import type {
   WorkflowDefinition,
   WorkflowDiagnostic,
   WorkflowExecutionProfile,
+  WorkflowStandardBase,
   WorkflowStagePlan,
 } from "../api";
 import {
@@ -61,7 +62,7 @@ export function WorkflowDiffView({
   base,
 }: {
   definition: WorkflowDefinition;
-  base: WorkflowExecutionProfile["base_snapshot"];
+  base: WorkflowStandardBase;
 }) {
   return <section className="wf-overview" aria-labelledby="wf-diff-title">
     <header><div><span>变更清单</span><h3 id="wf-diff-title">相对平台标准方案的精确修改</h3></div>

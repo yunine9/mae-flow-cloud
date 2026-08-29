@@ -16,8 +16,51 @@ import type {
   WorkflowExecutionProfileV2,
   WorkflowPlanItem,
   WorkflowResolvedAsset,
+  WorkflowSupplement,
 } from "./workflowDefinition.ts";
-import { WORKFLOW_DEFINITION_SCHEMA } from "./workflowDefinition.ts";
+import {
+  WORKFLOW_DEFINITION_SCHEMA,
+  WORKFLOW_EXECUTION_PROFILE_SCHEMA,
+  workflowDigest,
+} from "./workflowDefinition.ts";
+
+const SUPPLEMENT_SCOPE_ORDER: Record<WorkflowSupplement["scope"], number> = {
+  team: 0, business_module: 1, repository: 2, task: 3,
+};
+
+/**
+ * 把文字建议层写进定格方案并重算 revision(revision 盖整个 payload,
+ * 内核按同一算法复验)。没有结构化定格时产出 supplement-only 档——
+ * 按平台默认方案执行、只叠建议;两者皆空返回 undefined。
+ * v1 execution-profile 已退役(2026-08-29):这是建议层唯一的落点。
+ */
+export function withWorkflowSupplements(
+  profile: WorkflowExecutionProfileV2 | undefined,
+  supplements: WorkflowSupplement[],
+): WorkflowExecutionProfileV2 | undefined {
+  const ordered = supplements
+    .map((item) => ({ ...item }))
+    .sort((left, right) =>
+      SUPPLEMENT_SCOPE_ORDER[left.scope] - SUPPLEMENT_SCOPE_ORDER[right.scope]);
+  if (!ordered.length) return profile;
+  const payload = {
+    ...(profile
+      ? Object.fromEntries(Object.entries(profile)
+          .filter(([key]) => key !== "schema" && key !== "revision"))
+      : {
+          source: { kind: "platform" as const, id: "mae-flow.standard" },
+          edits: [],
+          asset_manifest: [],
+          diagnostics: [],
+        }),
+    supplements: ordered,
+  };
+  return {
+    schema: WORKFLOW_EXECUTION_PROFILE_SCHEMA,
+    revision: workflowDigest(payload),
+    ...structuredClone(payload),
+  } as WorkflowExecutionProfileV2;
+}
 
 export const WORKFLOW_PROFILE_PATH = join(
   ".mae-flow-work", "workflow-profile.json");
@@ -32,6 +75,8 @@ export function reconcileWorkflowProfileAssets(
   materializedPaths: Iterable<string>,
 ): WorkflowExecutionProfileV2 | undefined {
   if (!profile) return undefined;
+  // supplement-only 档没有结构化资产,无从损坏也无从重编。
+  if (!profile.base_snapshot || !profile.final_snapshot) return profile;
   const available = new Set([...materializedPaths]
     .map((path) => path.replaceAll("\\", "/")));
   let changed = false;
@@ -60,12 +105,14 @@ export function reconcileWorkflowProfileAssets(
     },
     edits: structuredClone(profile.edits),
   };
-  return compileWorkflow({
+  // 重编产物不带 supplements(编译器只管结构),必须把建议层接回来,
+  // 否则单项资产损坏的自愈会顺手弄丢任务补充。
+  return withWorkflowSupplements(compileWorkflow({
     baseSnapshot: profile.base_snapshot,
     definition,
     source: profile.source,
     resolvedAssets: resolved,
-  });
+  }), profile.supplements ?? []);
 }
 
 function resolvedAsset(
@@ -127,28 +174,46 @@ export function workflowProfilePrompt(
   profile: WorkflowExecutionProfileV2 | undefined,
 ): string {
   if (!profile) return "";
-  const source = profile.source.kind === "platform"
-    ? "平台标准方案"
-    : `${profile.source.kind === "workflow" ? "工作流" : "本任务定制"}`
-      + ` ${profile.source.id}${profile.source.version
-        ? `@${profile.source.version}` : ""}`;
-  const lines = [
-    `──── 已固定的最终执行方案（${source}） ────`,
-    ...profile.final_snapshot.stages.flatMap((stage) => [
-      `【${stage.phase} · ${stage.title}】`,
-      stage.items.length
-        ? stage.items.map((item, index) =>
-            itemPrompt(profile, item, index)).join("\n")
-        : "采用该阶段内核合同，不额外指定做法。",
-    ]),
-  ];
-  if (profile.diagnostics.length) {
-    lines.push("已明确降级：", ...profile.diagnostics.map((item) =>
-      `- ${item.message}${item.fallback ? `；${item.fallback}` : ""}`));
+  const lines: string[] = [];
+  const finalSnapshot = profile.final_snapshot;
+  if (finalSnapshot) {
+    const source = profile.source.kind === "platform"
+      ? "平台标准方案"
+      : `${profile.source.kind === "workflow" ? "工作流" : "本任务定制"}`
+        + ` ${profile.source.id}${profile.source.version
+          ? `@${profile.source.version}` : ""}`;
+    lines.push(
+      `──── 已固定的最终执行方案（${source}） ────`,
+      ...finalSnapshot.stages.flatMap((stage) => [
+        `【${stage.phase} · ${stage.title}】`,
+        stage.items.length
+          ? stage.items.map((item, index) =>
+              itemPrompt(profile, item, index)).join("\n")
+          : "采用该阶段内核合同，不额外指定做法。",
+      ]),
+    );
+    if (profile.diagnostics.length) {
+      lines.push("已明确降级：", ...profile.diagnostics.map((item) =>
+        `- ${item.message}${item.fallback ? `；${item.fallback}` : ""}`));
+    }
+    lines.push(
+      "边界：这里只描述阶段内采用的做法；阶段、退出条件、真实证据、"
+        + "人工决定以及 Git/写入/交付权限仍以平台内核为准。",
+    );
   }
-  lines.push(
-    "边界：这里只描述阶段内采用的做法；阶段、退出条件、真实证据、"
-      + "人工决定以及 Git/写入/交付权限仍以平台内核为准。",
-  );
+  const supplements = profile.supplements ?? [];
+  if (supplements.length) {
+    // 与内核 render_workflow_supplements 同一措辞:非内核任务与投影
+    // 失败兜底也要拿到同款建议层,不因通道不同而少话。
+    lines.push(
+      "──── 已固定的执行补充（建议层） ────",
+      ...supplements.flatMap((item) => [
+        `【${item.title}】`, item.instructions,
+      ]),
+      "边界：这些补充只调整关注点、执行顺序和协作方式；若与当前阶段指令、"
+        + "真实证据、人工决定或 Git/写入/交付权限冲突，冲突部分无效，"
+        + "继续按平台规则执行并明确说明。",
+    );
+  }
   return lines.join("\n");
 }

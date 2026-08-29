@@ -317,7 +317,7 @@ function SkillLibraryPanel({ fallback, admin }: {
 
   return <div className="knowledge-shelf" aria-label="Skill 形态知识资产">
     <div className="knowledge-panel-head">
-      <div><strong>知识资产 · Skill 形态</strong><small>按知识性质、仓库、技术栈和模块上下文匹配给新任务；上架/下线无需重启。</small></div>
+      <div><strong>知识资产 · Skill 形态</strong><small>业务知识按模块、工程知识按语言自动匹配；仓库标签可进一步收窄范围，上架/下线无需重启。</small></div>
       <div className="knowledge-shelf-head-actions">
         <span>{shelf?.skills.length ?? 0} 项</span>
         {/* 人人可提交(2026-08-27 用户拍板):开发者走待审区,管理员
@@ -474,6 +474,10 @@ function SkillLibraryPanel({ fallback, admin }: {
             onClick={() => void toggleDocument(directory)}>{skill.name}</button>
             : <strong>{skill.name}</strong>}
           {!skill.loadable && <span className="knowledge-shelf-badge" title="pi 装载器未接受,任何会话都不会带上它;检查 SKILL.md frontmatter 的 name/description">不可装载</span>}
+          {skill.nature === "unclassified" && <span
+            className="knowledge-shelf-badge signal-attention"
+            title="缺少强制知识标签；补齐前不会自动匹配给任何任务">
+            未治理 · 不会匹配</span>}
           {skill.effect?.signal && <span
             className={`knowledge-shelf-badge signal-${skill.effect.signal}`}
             title={skill.effect.signal_evidence}>
@@ -682,17 +686,14 @@ function KnowledgeCandidatePanel({ admin, onOpenTask }: {
   const pending = candidates.filter((item) => item.status === "pending");
   const visible = expanded ? candidates : candidates.slice(0, 6);
   const canManage = (candidate: KnowledgeCandidateRecord) => admin
-    || candidate.nature === "business" && candidate.business_module_ids.some((id) =>
+    || candidate.nature === "business" && candidate.business_module_ids.every((id) =>
       modules.find((module) => module.id === id)?.can_manage);
   const decide = async (candidate: KnowledgeCandidateRecord,
     decision: "publish" | "reject") => {
     setBusy(candidate.id); setError("");
     try {
       if (decision === "publish") {
-        await publishKnowledgeCandidate(candidate.id, {
-          module_id: candidate.nature === "business"
-            ? candidate.business_module_ids[0] : undefined,
-        });
+        await publishKnowledgeCandidate(candidate.id);
       } else {
         await rejectKnowledgeCandidate(candidate.id, reason);
         setReasonFor(""); setReason("");
@@ -734,7 +735,7 @@ function KnowledgeCandidatePanel({ admin, onOpenTask }: {
             {repositoryName(repository)}</em>)}
           {candidate.nature === "engineering"
             && <KnowledgeLanguageTags languages={candidate.technologies}
-              empty="技术无关" />}
+              empty="缺少语言标签 · 需治理" />}
         </div>
         <details><summary>查看正文与适用场景</summary>
           <p><strong>何时使用：</strong>{candidate.when_to_use}</p>

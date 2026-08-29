@@ -139,6 +139,7 @@ import {
 } from "./businessModuleLibrary.ts";
 import {
   normalizeKnowledgeAssetMetadata,
+  repositoryIdentity,
   type KnowledgeAssetMetadata,
 } from "./knowledgeAssetModel.ts";
 import {
@@ -243,7 +244,7 @@ function skillMetadataFromBody(
 ): KnowledgeAssetMetadata {
   const rawTechnologies = body.technologies ?? body.languages;
   if (rawTechnologies !== undefined && !Array.isArray(rawTechnologies)) {
-    throw new SkillLibraryError("工程技术栈必须是数组");
+    throw new SkillLibraryError("工程语言标签必须是数组");
   }
   if (body.business_module_ids !== undefined
       && !Array.isArray(body.business_module_ids)) {
@@ -255,9 +256,7 @@ function skillMetadataFromBody(
   try {
     const technologies = rawTechnologies?.map(String) ?? [];
     const metadata = normalizeKnowledgeAssetMetadata({
-      nature: body.nature ?? (body.skill_kind === "general"
-        ? undefined : body.skill_kind) ?? (technologies.length
-          ? "engineering" : undefined),
+      nature: body.nature,
       form: "skill",
       business_module_ids: body.business_module_ids?.map(String) ?? [],
       repositories: body.repositories?.map(String) ?? [],
@@ -713,13 +712,12 @@ export function createTaskServer(
           }
           if (request.method === "PUT" && parts[1] === "execution-policy") {
             const body = await readBody(request);
+            // 团队阶段勾选定制(stage_customizations)已随 v1 退役:
+            // 想定制阶段结构请建团队工作流资产;这里只剩文字约定。
             if ("stage_customizations" in body) {
-              try {
-                service.validateExecutionStageCustomizationInput(
-                  body.stage_customizations, "团队阶段执行方案");
-              } catch (error) {
-                return json(response, 400, { error: String(error) });
-              }
+              return json(response, 400, {
+                error: "团队阶段执行方案已退役,请改用团队工作流资产做结构化定制",
+              });
             }
             settings.updateExecutionPolicy(body);
             return json(response, 200, settingsView());
@@ -927,27 +925,44 @@ export function createTaskServer(
               service.options.dataDir, decodeURIComponent(parts[1]));
             const body = await readBody(request);
             if (candidate.nature === "business") {
-              const moduleId = String(body.module_id
-                ?? candidate.business_module_ids[0] ?? "");
-              const module = readBusinessModule(service.options.dataDir, moduleId);
-              if (!canManageBusinessModule(module, viewer?.username, admin)) {
+              const modules = candidate.business_module_ids.map((moduleId) =>
+                readBusinessModule(service.options.dataDir, moduleId));
+              const unauthorized = modules.filter((module) =>
+                !canManageBusinessModule(module, viewer?.username, admin));
+              if (unauthorized.length) {
                 return json(response, 403,
-                  { error: "只有模块 Owner、维护者或管理员可以发布这项业务知识" });
+                  { error: `只有全部关联模块的 Owner、维护者或管理员可以发布这项业务知识；无权限模块：${unauthorized.map((module) => module.name).join("、")}` });
               }
               const assetId = String(body.asset_id ?? candidate.id);
-              publishBusinessKnowledgeAsset(service.options.dataDir, moduleId, {
-                id: assetId,
-                title: candidate.title,
-                summary: candidate.summary,
-                when_to_use: candidate.when_to_use,
-                form: candidate.form,
-                repositories: candidate.repositories,
-                content: candidate.content,
-              }, operator);
+              const publicationScopes = modules.map((module) => ({
+                module,
+                repositories: candidate.repositories.filter((repository) =>
+                  module.repositories.some((candidateRepository) =>
+                    repositoryIdentity(candidateRepository)
+                      === repositoryIdentity(repository))),
+              }));
+              const missingRepositoryScope = candidate.repositories.length
+                ? publicationScopes.filter((scope) =>
+                  scope.repositories.length === 0) : [];
+              if (missingRepositoryScope.length) {
+                return json(response, 400, { error:
+                  `知识限定的代码仓与以下业务模块没有交集：${missingRepositoryScope.map((scope) => scope.module.name).join("、")}；请修正知识作用域后再发布` });
+              }
+              for (const { module, repositories } of publicationScopes) {
+                publishBusinessKnowledgeAsset(service.options.dataDir, module.id, {
+                  id: assetId,
+                  title: candidate.title,
+                  summary: candidate.summary,
+                  when_to_use: candidate.when_to_use,
+                  form: candidate.form,
+                  repositories,
+                  content: candidate.content,
+                }, operator);
+              }
               return json(response, 200, decideKnowledgeCandidate(
                 service.options.dataDir, candidate.id, "published", operator, {
                   note: typeof body.note === "string" ? body.note : undefined,
-                  published_target: `business-modules/${moduleId}/${assetId}`,
+                  published_target: `business-modules/${modules.map((module) => module.id).join(",")}/${assetId}`,
                 }));
             }
             if (!admin) {
@@ -983,7 +998,7 @@ export function createTaskServer(
             const candidate = readTeamKnowledgeCandidate(
               service.options.dataDir, decodeURIComponent(parts[1]));
             const canManageBusiness = candidate.nature === "business"
-              && candidate.business_module_ids.some((id) => {
+              && candidate.business_module_ids.every((id) => {
                 try { return canManageBusinessModule(readBusinessModule(
                   service.options.dataDir, id), viewer?.username, admin); }
                 catch { return false; }
@@ -1659,7 +1674,6 @@ export function createTaskServer(
           ? undefined : Number(body.repair_rounds);
         const taskInstructions = body.task_instructions == null
           ? undefined : String(body.task_instructions);
-        const executionStageCustomizations = body.execution_stage_customizations;
         let workflowDefinition = body.workflow_definition;
         let workflowSource: WorkflowSourceRef | undefined;
         const workflowSelection = body.workflow_selection &&
@@ -1748,7 +1762,7 @@ export function createTaskServer(
               title, account, repo, repos,
               requirementDocumentName,
               lane, ticket, baseline, model,
-              repairRounds, taskInstructions, executionStageCustomizations,
+              repairRounds, taskInstructions,
               workflowDefinition, workflowSource,
               repositorySkillCatalogToken,
               selectedRepositorySkillIds,

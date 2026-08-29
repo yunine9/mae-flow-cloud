@@ -78,6 +78,73 @@ test("团队知识聚合按仓库/类型/路径合并并关联交付结果", () 
     item.kind === "needs-review" && item.evidence.includes("相关性") === false));
 });
 
+test("团队宿主 Skill 按名称跨旧路径、快照版本合并且每任务只计一次", () => {
+  const resource = (path: string, reads: number, selected = false) => ({
+    id: `skill:java-autout:${path}`,
+    kind: "skill" as const,
+    name: "java-autout",
+    path,
+    selected,
+    state: reads > 0 ? "used" as const : "loaded" as const,
+    available_count: 1,
+    loaded_count: 1,
+    read_count: reads,
+    last_at: "2026-08-29T08:00:00.000Z",
+  });
+  const tasks: KnowledgeInsightTask[] = [{
+    id: "legacy", status: "completed", repository_skills: [],
+    knowledge_usage: {
+      summary: { resources: 1, loaded: 1, used: 1, skills_used: 1,
+        selected_unused: 0 },
+      resources: [resource("宿主技能/java-autout/SKILL.md", 1)],
+      events: [],
+    },
+  }, {
+    id: "snapshot-v1", status: "completed", repository_skills: [],
+    knowledge_usage: {
+      summary: { resources: 2, loaded: 2, used: 2, skills_used: 2,
+        selected_unused: 0 },
+      // 同一任务即使在升级边界留下两个路径，也只能贡献一个任务数；
+      // 两次真实读取仍都属于访问事件。
+      resources: [
+        resource(".mae-flow-work/host-skills/111111/SKILL.md", 2, true),
+        resource("宿主技能/java-autout/SKILL.md", 1, true),
+      ],
+      events: [],
+    },
+  }, {
+    id: "snapshot-v2", status: "running", repository_skills: [],
+    knowledge_usage: {
+      summary: { resources: 1, loaded: 1, used: 1, skills_used: 1,
+        selected_unused: 0 },
+      resources: [resource(
+        ".mae-flow-work/host-skills/222222/SKILL.md", 3)],
+      events: [],
+    },
+  }];
+
+  const result = buildTeamKnowledgeInsights(tasks);
+  assert.equal(result.resources.length, 1,
+    "旧虚拟路径和不同版本哈希都属于同一个团队 Skill");
+  assert.deepEqual(result.resources[0], {
+    key: "team\0skill\0java-autout",
+    kind: "skill",
+    name: "java-autout",
+    path: "宿主技能/java-autout/SKILL.md",
+    repository: undefined,
+    scope: "team",
+    provided_tasks: 3,
+    selected_tasks: 1,
+    loaded_tasks: 3,
+    accessed_tasks: 3,
+    access_events: 7,
+    completed_tasks: 2,
+    repair_tasks: 0,
+    attention_tasks: 0,
+    last_used_at: "2026-08-29T08:00:00.000Z",
+  });
+});
+
 test("飞轮给出覆盖缺口、选而未用和正向沉淀建议", () => {
   const unused = usage({ id: "skill", kind: "skill", name: "发布助手",
     path: ".cac/skills/release/SKILL.md", selected: true, reads: 0 });
