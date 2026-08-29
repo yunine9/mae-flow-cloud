@@ -328,8 +328,10 @@ export function createTaskServer(
   let workflowAssets: WorkflowAssetLibrary | undefined;
   const getWorkflowAssets = () => workflowAssets ??= new WorkflowAssetLibrary(
     service.options.dataDir);
-  const workflowKernelRoot = service.options.host?.kernelRoot
-    ?? service.options.workflowCatalogRoot;
+  // 知识效能等独立只读接口会传最小服务替身；工作流旁路不能在起服
+  // 阶段要求完整 TaskService.options，更不能反向绑死无关读侧。
+  const workflowKernelRoot = service.options?.host?.kernelRoot
+    ?? service.options?.workflowCatalogRoot;
   return createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://localhost");
     const parts = url.pathname.split("/").filter(Boolean);
