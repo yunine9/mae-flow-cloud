@@ -43,7 +43,7 @@ const LIFE_B: Scene[] = [
   { text: "已收到用户答复,继续并完成任务。" },
 ];
 
-test("恢复老任务时把已结束修复的 repairing 校正为 verifying", async () => {
+test("恢复老任务时校正 repairing，且无 owner 的 prepush 不冒充运行中", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-recover-repair-phase-"));
   const workspace = join(dataDir, "task-1");
   const taskPath = join(workspace, "task.json");
@@ -79,7 +79,8 @@ test("恢复老任务时把已结束修复的 repairing 校正为 verifying", as
   assert.equal(service.recover().restored, 1);
   const restored = service.get("task-1")!;
   assert.equal(restored.delivery?.loop?.state, "verifying");
-  assert.equal(restored.focus?.headline, "正在准备编译");
+  assert.match(restored.focus?.headline ?? "", /中断.*没有.*执行会话/);
+  assert.equal(restored.delivery?.prepush_runtime?.state, "interrupted");
   assert.match(restored.detail ?? "", /修复会话已完成/);
 });
 

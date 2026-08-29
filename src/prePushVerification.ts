@@ -172,6 +172,7 @@ export type PrePushEvent =
       message: string;
       attempt_id?: string;
     }
+  | { type: "environment_failed"; at: string; message: string }
   | { type: "retry_requested"; at: string; message?: string }
   | { type: "recovered"; at: string };
 
@@ -452,6 +453,19 @@ export function transitionPrePush(
     case "no_progress":
       return markNoProgress(
         state, event.at, event.message, event.attempt_id);
+    case "environment_failed": {
+      if (state.state === "passed") return state;
+      const message = required(event.message, "pre-push 环境异常");
+      return {
+        ...state,
+        state: "environment_error",
+        message,
+        updated_at: event.at,
+        active_attempt: undefined,
+        issue: { kind: "infrastructure", message, at: event.at },
+        receipt: undefined,
+      };
+    }
     case "retry_requested": {
       if (state.state === "passed" || state.active_attempt) return state;
       return {
@@ -592,6 +606,16 @@ export function markPrePushNoProgress(
     type: "no_progress", at, message,
     ...(attemptId ? { attempt_id: attemptId } : {}),
   });
+}
+
+/** 恢复编排在真正启动 runner 前发现现场/配置不可用时的统一收口。
+ * 这类失败没有具体 compile/UT 维度，不能伪造成某一项检查结果。 */
+export function failPrePushEnvironment(
+  state: PrePushVerificationState,
+  at: string,
+  message: string,
+): PrePushVerificationState {
+  return transitionPrePush(state, { type: "environment_failed", at, message });
 }
 
 /**

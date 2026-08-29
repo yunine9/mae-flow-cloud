@@ -14,6 +14,7 @@ import {
   beginPrePushAttempt,
   canPushRevision,
   createPrePushVerification,
+  failPrePushEnvironment,
   getReusablePushReceipt,
   markPrePushNoProgress,
   nextPrePushAction,
@@ -293,6 +294,17 @@ test("恢复遇到坏账或伪造 receipt 时 fail-closed 重新验证", () => {
   assert.equal(restored.round, 0);
   assert.equal(restored.receipt, undefined);
   assert.equal(canPushRevision(restored, REVISION), false);
+});
+
+test("恢复前置条件缺失时收成环境异常，不留下无 owner 的 preparing", () => {
+  const started = begin(createPrePushVerification(REVISION, at(0)), 1).state;
+  const failed = failPrePushEnvironment(
+    started, at(2), "代码现场不存在或尚未挂载");
+  assert.equal(failed.state, "environment_error");
+  assert.equal(failed.active_attempt, undefined);
+  assert.equal(failed.issue?.kind, "infrastructure");
+  assert.match(failed.message, /代码现场/);
+  assert.equal(canPushRevision(failed, REVISION), false);
 });
 
 test("容器镜像与资源事实绑定同一 SHA/attempt，错配不能混入收据", () => {

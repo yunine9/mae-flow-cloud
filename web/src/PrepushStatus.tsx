@@ -3,6 +3,7 @@ import {
   retryPrepushVerification,
   skipPrepushVerification,
   stopPrepushVerification,
+  type PrepushRuntime,
   type PrepushVerification,
   type TaskSummary,
 } from "./api";
@@ -107,6 +108,42 @@ function viewOf(state: string): PrepushView {
   }
 }
 
+function withRuntime(view: PrepushView, runtime?: PrepushRuntime): PrepushView {
+  if (!runtime) return view;
+  if (runtime.state === "recovering") {
+    return {
+      ...view,
+      phase: "preparing",
+      label: "恢复中",
+      detail: runtime.message,
+      tone: "active",
+      busy: true,
+    };
+  }
+  if (runtime.state === "stopped" && view.phase === "environment") return view;
+  if (runtime.state === "interrupted" || runtime.state === "stopped") {
+    return {
+      ...view,
+      phase: "environment",
+      label: runtime.state === "interrupted" ? "已中断" : "已停止",
+      detail: runtime.message,
+      tone: "danger",
+      busy: false,
+    };
+  }
+  return view;
+}
+
+function runtimeOwnsCopy(state: string, runtime?: PrepushRuntime): boolean {
+  return Boolean(runtime && (
+    runtime.state === "recovering"
+    || runtime.state === "interrupted"
+    || (runtime.state === "stopped"
+      && ["queued", "preparing", "compiling", "testing", "unit_testing", "ut",
+        "repairing"].includes(state))
+  ));
+}
+
 function shortSha(sha: string): string {
   return sha.length > 12 ? sha.slice(0, 12) : sha;
 }
@@ -129,9 +166,12 @@ export function PrepushBadge({
   const [actionError, setActionError] = useState("");
   const prepush = task.delivery?.prepush;
   if (!prepush) return null;
+  const runtime = task.delivery?.prepush_runtime;
   const skippable = canOperate
     && ["blocked", "environment_error"].includes(prepush.state);
-  const view = viewOf(prepush.state);
+  const view = withRuntime(viewOf(prepush.state), runtime);
+  const badgeDetail = runtimeOwnsCopy(prepush.state, runtime)
+    ? (runtime?.message ?? view.detail) : (prepush.message?.trim() || view.detail);
   const perform = (kind: "stop" | "skip" | "retry",
     call: (id: string) => Promise<unknown>) => {
     setBusy(kind);
@@ -153,15 +193,16 @@ export function PrepushBadge({
     <>
       <button type="button" className={`warmup-badge ${cls}`}
         onClick={() => setOpen(true)}
-        title={`推送前编译:${prepush.message?.trim() || view.detail}`}>
+        title={`推送前编译:${badgeDetail}`}>
         <i aria-hidden />{label}
       </button>
       {open && (
         <OverlayDialog ariaLabel="推送前编译详情" title="推送前编译"
           onClose={() => setOpen(false)}>
-          <PrepushStatus prepush={prepush} placement="workspace" />
+          <PrepushStatus prepush={prepush} runtime={runtime}
+            placement="workspace" />
             <PrepushLiveLog taskId={task.id}
-              active={prepushActive(prepush.state)} />
+              active={prepushActive(prepush.state, runtime)} />
             {canOperate && prepush.state !== "passed" && (
               /* 统一操作栏(2026-08-28 用户点名重designed:三个叠放的
                  虚线盒子太丑)。语义分色的胶囊按钮 + 一条内联确认条:
@@ -201,7 +242,7 @@ export function PrepushBadge({
                   </div>
                 ) : (
                   <div className="prepush-actions-row">
-                    {prepushActive(prepush.state) && (
+                    {prepushActive(prepush.state, runtime) && (
                       <button type="button"
                         className="prepush-action-btn is-danger"
                         disabled={Boolean(busy)}
@@ -237,15 +278,18 @@ export function PrepushBadge({
 /** 推送前快速验证只补充平台状态，不覆盖内核的任务状态。 */
 export function PrepushStatus({
   prepush,
+  runtime,
   placement = "card",
 }: {
   prepush?: PrepushVerification;
+  runtime?: PrepushRuntime;
   placement?: "card" | "workspace";
 }) {
   if (!prepush) return null;
-  const view = viewOf(prepush.state);
+  const view = withRuntime(viewOf(prepush.state), runtime);
   const title = view.generic ? view.label : `推送前编译 · ${view.label}`;
-  const detail = prepush.message?.trim() || view.detail;
+  const detail = runtimeOwnsCopy(prepush.state, runtime)
+    ? (runtime?.message ?? view.detail) : (prepush.message?.trim() || view.detail);
   const titleHint = prepush.updated_at
     ? `${title}（更新于 ${formatLocalDateTime(prepush.updated_at, { seconds: true })}）`
     : title;

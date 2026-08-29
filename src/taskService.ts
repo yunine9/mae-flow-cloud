@@ -276,6 +276,7 @@ import {
   attestPrePushExecution,
   beginPrePushAttempt,
   createPrePushVerification,
+  failPrePushEnvironment,
   getReusablePushReceipt,
   observePrePushRevision,
   recordPrePushReport,
@@ -369,6 +370,15 @@ export type TaskStatus =
   | "await_merge"    // 流水线通过,等待人工合入;系统不自动合并
   | "canceled"
   | "failed";
+
+/** prepush 领域台账之外的进程活性投影。它只回答当前 serve 是否真的
+ * 持有执行权，不写进 task.json，也不能被当作验证结论。 */
+export type PrePushRuntimeState =
+  | "running"
+  | "recovering"
+  | "interrupted"
+  | "stopped"
+  | "idle";
 
 const HARD_DELETE_STATUSES: readonly TaskStatus[] = [
   "completed", "failed", "canceled",
@@ -704,6 +714,12 @@ export interface TaskSummary {
      * Mae-Flow 步骤或审批门禁；PASS 收据只负责避免把明显红灯送去慢
      * 流水线，并按 SHA + 工作区指纹支持纯网络重试复用。 */
     prepush?: PrePushVerificationState;
+    /** 读侧活性事实，不落盘。prepush.state=preparing 只表示领域阶段，
+     * 不能再被页面误当成当前进程确实持有 runner/容器。 */
+    prepush_runtime?: {
+      state: PrePushRuntimeState;
+      message: string;
+    };
     sha?: string;
     skipped?: string;
     /** 内核对流水线证据的裁决戳(如 "PASS@abc123456789"):终态时宿主
@@ -1208,6 +1224,9 @@ interface TaskState {
   /** 所有 push 入口共享同一个异步准备动作；避免恢复轮询与会话收口
    * 同时撞进来，为同一 HEAD 启两个编译 Agent。 */
   prepushActive?: Promise<boolean>;
+  /** 启动恢复的防重锁。它覆盖 tryDeliver 进入 prepushActive 之前的异步
+   * 对账窗口，避免两条恢复旁路同时看到“还没有在跑”而各起一轮。 */
+  prepushRecoveryActive?: boolean;
   /** prepush 回合的宿主中断信号。Pi 的 abort 偶尔只回到 idle、没有让
    * 已返回给调用方的 turn Promise 收口；这条信号用于结束宿主等待，
    * 容器销毁仍是进程树终止的安全边界。 */
@@ -2605,8 +2624,17 @@ export class TaskService {
     // 排队位次投影:status=queued 时人第一想知道的是"排到哪了"。
     const queueIndex = summary.status === "queued"
       ? this.queue.indexOf(summary.id) : -1;
+    const projectedDelivery = summary.delivery
+      ? {
+          ...summary.delivery,
+          ...(summary.delivery.prepush ? {
+            prepush_runtime: this.prePushRuntime(task),
+          } : {}),
+        }
+      : undefined;
     const projected = {
       ...summary,
+      delivery: projectedDelivery,
       ...(queueIndex >= 0 ? { queue_position: queueIndex + 1 } : {}),
       title: summary.title ?? taskTitle(summary.requirement),
       updated_at: summary.updated_at ?? summary.created_at,
@@ -4505,6 +4533,13 @@ export class TaskService {
             && readDeveloperAssistant(workspace).state === "acquiring") {
           this.activatePendingDeveloperAssistant(task);
         }
+        const prepushRecovery = this.reconcileInterruptedPrePush(task);
+        if (prepushRecovery !== "none") {
+          if (prepushRecovery === "scheduled") requeued += 1;
+          // prepush 是独立交付会话；已经接管或明确停机后，不得再掉进
+          // 通用 verifying/任务队列分支启动第二条恢复链。
+          continue;
+        }
         // 进程可死,轮询不死:重启前在等流水线的任务续轮
         // (锚是 delivery.sha,结果仍只认绑定版本)。
         if (summary.status === "verifying"
@@ -4552,18 +4587,7 @@ export class TaskService {
         // waiting_for_human(重建会话重放同 call_id 时发生)。这是矛盾
         // 状态:人已经答过,页面却还在催人。恢复时以 waiting.json 的
         // resolved 事实为准,自动续跑并把原决定带回重建会话。
-        if (summary.status === "running"
-            && summary.delivery?.prepush?.active_attempt
-            && task.cwd) {
-          // 崩在独立编译/UT 会话中时，不先重建一轮无事可做的内核编码
-          // 会话。专项状态机会把在途 attempt 视为中断并对同一现场重跑。
-          summary.status = "verifying";
-          summary.detail = "服务重启，重新执行未完成的推送前编译与 UT";
-          this.persist(task);
-          this.bypass(task, "推送前验证恢复",
-            this.tryDeliver(task, task.controlEpoch));
-          requeued += 1;
-        } else if (summary.status === "waiting_for_human"
+        if (summary.status === "waiting_for_human"
             && authoritativeWaiting?.status === "resolved") {
           // task.json 只是页面投影副本，真正的决定在 waiting.json。
           // 旧代码检查 summary.waiting.status，恰好检查了崩溃前的 stale
@@ -8836,6 +8860,101 @@ export class TaskService {
     task.summary.delivery = { ...task.summary.delivery, prepush: state };
   }
 
+  /** 领域状态说“准备中”不等于进程还活着。页面和投影只通过这里读取
+   * 当前 serve 的真实所有权，绝不再拿持久化阶段猜 runner/容器活性。 */
+  private prePushRuntime(task: TaskState): {
+    state: PrePushRuntimeState;
+    message: string;
+  } {
+    const prepush = task.summary.delivery?.prepush;
+    if (!prepush) return { state: "idle", message: "尚未开始推送前验证" };
+    if (task.prepushActive) {
+      return { state: "running", message: "当前服务正在执行这轮推送前验证" };
+    }
+    if (task.prepushRecoveryActive) {
+      return { state: "recovering", message: "服务正在恢复上次中断的推送前验证" };
+    }
+    if (["passed", "user_skipped"].includes(prepush.state)) {
+      return { state: "idle", message: "推送前验证已经收口" };
+    }
+    if (["blocked", "environment_error"].includes(prepush.state)
+        || prepush.state === "repairing"
+        || ["paused", "pausing", "canceled"].includes(task.summary.status)
+        || Boolean(task.summary.delivery?.stalled)) {
+      return { state: "stopped", message: "当前服务没有运行这轮推送前验证" };
+    }
+    return {
+      state: "interrupted",
+      message: "上次推送前验证已经中断，当前服务没有对应的执行会话",
+    };
+  }
+
+  /** 恢复前置条件坏了必须把 preparing 收成明确环境异常。继续保留一个
+   * 没有 owner 的“准备中”，页面和运维都会被同一份假活性误导。 */
+  private failPendingPrePush(task: TaskState, reason: string): void {
+    const prepush = task.summary.delivery?.prepush;
+    if (!prepush || ["passed", "user_skipped", "blocked", "environment_error"]
+      .includes(prepush.state)) return;
+    const message = `推送前验证无法恢复：${reason}`;
+    this.setPrePushState(task, failPrePushEnvironment(
+      prepush, new Date().toISOString(), message));
+    task.summary.status = "failed";
+    task.summary.detail = message;
+    delete task.summary.completed_at;
+    this.persist(task);
+  }
+
+  /** 启动期对账独立 prepush。旧容器已经由 serve 的 ownership 清扫收口，
+   * 这里只重建业务 attempt；绝不尝试把新进程接到旧 driver/container。 */
+  private reconcileInterruptedPrePush(
+    task: TaskState,
+  ): "none" | "scheduled" | "blocked" {
+    const delivery = task.summary.delivery;
+    const prepush = delivery?.prepush;
+    if (!prepush || ["passed", "user_skipped", "blocked", "environment_error"]
+      .includes(prepush.state)) return "none";
+    if (delivery?.pipeline === "running"
+        || (delivery?.pipeline === "success" && delivery.sha)
+        || delivery?.evidence_gap) return "none";
+    if (["paused", "pausing", "waiting_for_human", "canceled", "await_merge"]
+      .includes(task.summary.status) || delivery?.stalled) return "none";
+
+    // active_attempt 是上一进程留下的确凿中断证据；没有 attempt 的
+    // preparing 也可能是进程死在恢复过渡窗口，活动交付态同样要接回。
+    const canRestartUnownedStage = Boolean(this.options.prepush?.enabled && task.cwd);
+    const interrupted = Boolean(prepush.active_attempt)
+      || (canRestartUnownedStage && prepush.state === "preparing"
+        && ["running", "queued", "verifying", "completed", "failed"]
+          .includes(task.summary.status))
+      || (canRestartUnownedStage && prepush.state === "repairing"
+        && ["running", "queued", "verifying", "completed"]
+          .includes(task.summary.status));
+    if (!interrupted) return "none";
+    if (!this.options.prepush?.enabled) {
+      this.failPendingPrePush(task, "当前部署未启用推送前编译能力");
+      return "blocked";
+    }
+    if (!task.cwd || !existsSync(task.cwd)) {
+      this.failPendingPrePush(task, "代码现场不存在或尚未挂载");
+      return "blocked";
+    }
+    if (task.prepushRecoveryActive || task.prepushActive) return "scheduled";
+
+    task.prepushRecoveryActive = true;
+    task.summary.status = "verifying";
+    task.summary.detail = "服务重启，正在恢复未完成的推送前编译与 UT";
+    delete task.summary.completed_at;
+    this.persist(task);
+    const epoch = task.controlEpoch;
+    const work = this.resumePrePushVerification(task, epoch).finally(() => {
+      task.prepushRecoveryActive = false;
+      this.bypass(task, "推送前活性投影",
+        this.options.projection?.upsertTask(this.project(task)));
+    });
+    this.bypass(task, "推送前验证恢复", work);
+    return "scheduled";
+  }
+
   private prePushDomainReport(result: PrePushRunResult): PrePushReport {
     const failed = result.status === "infrastructure_failure"
       ? "infrastructure_failure" as const : "code_failure" as const;
@@ -9707,19 +9826,41 @@ export class TaskService {
     // 的是修复结果验证，不再是“Agent 正在修复”；prepush 可能耗时很长，
     // 这条转换必须在任何外部 I/O 之前持久化，重启和页面才能同一口径。
     if (this.enterRepairVerification(task)) this.persist(task);
-    // 平台地址由部署固定注入；每次交付动作使用同一条基础设施链路。
+    // 本地 prepush 不依赖 MR/流水线服务。部署窗口里外部平台暂未就绪时
+    // 仍应先把被重启打断的本地验证接回来，不能卡在 preparing 假装在跑。
     const platformUrl = this.effectivePlatformUrl();
-    if (!platformUrl || !this.options.host || !task.cwd) {
+    const prepush = task.summary.delivery?.prepush;
+    const pendingPrePush = Boolean(prepush
+      && !["passed", "user_skipped", "blocked", "environment_error"]
+        .includes(prepush.state));
+    if ((!platformUrl || !this.options.host) && !pendingPrePush) {
       if (this.atExternalVerificationWait(task)) {
         this.holdWithRecovery(
           task, "等待权威流水线：MR / 流水线服务未就绪", epoch);
       }
       return;
     }
+    if (!task.cwd) {
+      // active_attempt 是死进程留下的确证；启用 prepush 的当前部署也有
+      // 责任说清环境缺口。两者都没有时可能只是旧版只读台账，保持兼容。
+      if (task.summary.delivery?.prepush?.active_attempt
+          || this.options.prepush?.enabled) {
+        this.failPendingPrePush(task, "代码现场路径缺失");
+      }
+      return;
+    }
     try {
       const statePath = join(task.cwd, ".mae-flow.json");
       if (!existsSync(statePath)) {
-        task.summary.delivery = { skipped: "流程未初始化,无可交付" };
+        const reason = "流程未初始化,无可交付";
+        task.summary.delivery = { ...task.summary.delivery, skipped: reason };
+        if (task.summary.delivery.prepush
+            && !["passed", "user_skipped", "blocked", "environment_error"]
+              .includes(task.summary.delivery.prepush.state)) {
+          this.failPendingPrePush(task, reason);
+        } else {
+          this.persist(task);
+        }
         return;
       }
       const state = JSON.parse(readFileSync(statePath, "utf-8"));
@@ -9732,6 +9873,12 @@ export class TaskService {
           // 这一条重试没有意义:配置不会自己长出来。直接如实停下喊人,
           // 别用预算空转半小时再说同一句话。
           this.markVerificationStalled(task, reason);
+        } else if (task.summary.delivery.prepush
+            && !["passed", "user_skipped", "blocked", "environment_error"]
+              .includes(task.summary.delivery.prepush.state)) {
+          this.failPendingPrePush(task, reason);
+        } else {
+          this.persist(task);
         }
         return;
       }
@@ -9752,6 +9899,21 @@ export class TaskService {
         if (!this.current(task, epoch)) return;
       }
       if (!await this.agentPlatformChangesAllowPush(task)) return;
+      // 从这里开始才需要外部交付平台。prepush 已经有明确收口，不会因
+      // 平台配置在部署窗口暂缺而留下“准备中但没有 owner”的僵尸状态。
+      if (!platformUrl || !this.options.host) {
+        const reason = "等待权威流水线：MR / 流水线服务未就绪";
+        if (this.atExternalVerificationWait(task)) {
+          this.holdWithRecovery(task, reason, epoch);
+        } else {
+          task.summary.delivery = {
+            ...task.summary.delivery,
+            skipped: reason,
+          };
+          this.persist(task);
+        }
+        return;
+      }
       // 人工只看 prepush 收敛后的最终范围，避免“刚确认就因验证修复
       // 换了 HEAD 又确认一次”。之后仍由实时路径复核守住白名单；若
       // 自动修复越界增删/重命名文件，下一次续推会重新举卡。
@@ -9880,6 +10042,14 @@ export class TaskService {
       if (!this.current(task, epoch)) return;
       const reason = `交付动作失败: ${String(error)}`;
       task.summary.delivery = { ...task.summary.delivery, skipped: reason };
+      const prepush = task.summary.delivery.prepush;
+      if (prepush
+          && !["passed", "user_skipped", "blocked", "environment_error"]
+            .includes(prepush.state)) {
+        this.failPendingPrePush(task, String(error));
+        this.options.log?.(`任务 ${task.summary.id} ${reason}`);
+        return;
+      }
       if (this.atExternalVerificationWait(task)) {
         // push 504 / MR 网关 500 这类多半是一阵子的事,自己再试几轮;
         // 预算用完就停下说人话,而不是永远停在"验证中"没人管

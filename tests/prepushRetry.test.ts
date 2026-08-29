@@ -37,7 +37,11 @@ function repository() {
   git("config", "user.name", "bot");
   git("config", "user.email", "bot@test");
   writeFileSync(join(cwd, "README.md"), "baseline\n");
-  git("add", "README.md");
+  writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify({
+    current: "external_verify",
+    config: { "分支名": "master_bot", "基线分支": "master" },
+  }));
+  git("add", "README.md", ".mae-flow.json");
   git("commit", "--quiet", "-m", "baseline");
   return { cwd, git };
 }

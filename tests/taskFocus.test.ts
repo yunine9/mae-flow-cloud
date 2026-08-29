@@ -80,6 +80,32 @@ test("修复会话结束后以当前 prepush 为焦点，不再同时声称仍�
   assert.equal(result.next_action, "两项通过后才会推送代码");
 });
 
+test("prepush 领域态与进程活性分开：无 owner 时不再谎报正在编译", () => {
+  const interrupted = projectTaskFocus({
+    status: "verifying",
+    delivery: {
+      prepush: { state: "preparing", message: "正在准备编译" },
+      prepush_runtime: {
+        state: "interrupted",
+        message: "上次验证已中断，当前没有执行会话",
+      },
+    },
+  });
+  assert.equal(interrupted.kind, "blocked");
+  assert.equal(interrupted.needs_attention, true);
+  assert.match(interrupted.headline, /中断.*没有执行会话/);
+
+  const recovering = projectTaskFocus({
+    status: "verifying",
+    delivery: {
+      prepush: { state: "preparing", message: "旧阶段文案" },
+      prepush_runtime: { state: "recovering", message: "服务正在恢复验证" },
+    },
+  });
+  assert.equal(recovering.kind, "machine");
+  assert.equal(recovering.headline, "服务正在恢复验证");
+});
+
 test("任务焦点:失败、暂停和预推送环境故障诚实进入关注队列", () => {
   const failed = projectTaskFocus({ status: "failed", detail: "模型网关不可用" });
   assert.equal(failed.kind, "blocked");

@@ -155,7 +155,8 @@ export function TaskCard({
               showDetailedStep={decisionMode === "form"}
             />
           )}
-          <PrepushStatus prepush={task.delivery?.prepush} />
+          <PrepushStatus prepush={task.delivery?.prepush}
+            runtime={task.delivery?.prepush_runtime} />
           <TokenUsage usage={task.token_usage} />
         </span>
         <span className="task-chevron" aria-hidden>

@@ -7,6 +7,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   tailPrepushEvents,
+  type PrepushRuntime,
   type SemanticEvent,
   type SseConnectionState,
 } from "./api";
@@ -151,9 +152,12 @@ export function PrepushLiveLog({
   </div>;
 }
 
-/** 与服务端 prepush.state 对齐的"进行中"集合;PrepushStatus 的文案
- * 已各自描述,这里只回答要不要开实时流。 */
-export function prepushActive(state?: string): boolean {
+/** 新服务只认运行时 ownership；runtime 缺席时才兼容旧后端的阶段推断。 */
+export function prepushActive(
+  state?: string,
+  runtime?: PrepushRuntime,
+): boolean {
+  if (runtime) return ["running", "recovering"].includes(runtime.state);
   return ["queued", "preparing", "compiling", "testing", "unit_testing",
     "ut", "repairing"].includes(String(state ?? ""));
 }

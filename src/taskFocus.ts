@@ -48,6 +48,10 @@ interface FocusTask {
       missing_dimensions?: string[];
     };
     prepush?: { state?: string; round?: number; message?: string };
+    prepush_runtime?: {
+      state?: "running" | "recovering" | "interrupted" | "stopped" | "idle";
+      message?: string;
+    };
     loop?: { state?: string; round?: number; max?: number; diagnosis?: string };
   };
 }
@@ -182,13 +186,29 @@ export function projectTaskFocus(task: FocusTask): TaskFocus {
       60,
     );
   }
+  if (prepush && ["preparing", "compiling", "testing", "unit_testing", "ut"]
+      .includes(prepush.state ?? "")
+      && ["interrupted", "stopped"]
+        .includes(delivery?.prepush_runtime?.state ?? "")) {
+    return focus(
+      "blocked",
+      delivery?.prepush_runtime?.message
+        || "推送前编译已经中断，当前没有执行会话",
+      "服务会自动恢复；未恢复时可手动重跑编译",
+      "platform",
+      88,
+      true,
+    );
+  }
   if (prepush && [
     "queued", "preparing", "compiling", "testing", "unit_testing", "ut",
     "repairing",
   ].includes(prepush.state ?? "")) {
     return focus(
       "machine",
-      prepush.message?.trim()
+      delivery?.prepush_runtime?.state === "recovering"
+        ? (delivery.prepush_runtime.message || "服务正在恢复推送前编译")
+        : prepush.message?.trim()
         || `正在进行推送前编译与 UT${prepush.round ? `（第 ${prepush.round} 轮）` : ""}`,
       "两项通过后才会推送代码",
       "agent",

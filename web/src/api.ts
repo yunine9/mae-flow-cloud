@@ -515,6 +515,12 @@ export interface PrepushVerification {
   updated_at?: string;
 }
 
+/** 当前 serve 对 prepush 的真实执行所有权；与可持久化领域阶段分开。 */
+export interface PrepushRuntime {
+  state: "running" | "recovering" | "interrupted" | "stopped" | "idle";
+  message: string;
+}
+
 export interface TaskTokenUsage {
   /** 均为模型提供方真实上报；服务端不做字符数估算。 */
   input_tokens: number;
@@ -873,6 +879,8 @@ export interface TaskSummary {
     skipped?: string;
     /** Cloud 原生推送前快检；缺席表示服务端尚未开始或不支持该能力。 */
     prepush?: PrepushVerification;
+    /** 进程活性只看这里，不能再由 prepush.state=preparing 推断。 */
+    prepush_runtime?: PrepushRuntime;
     /** 卡在哪一环的人话(等审批、等某一项核销结果……)。服务端一直
      * 在写,前端一直没显示——于是"验证中"三个字后面藏着的真实原因
      * 谁也看不到,任务看着像马上要成了,其实早就停了。 */
