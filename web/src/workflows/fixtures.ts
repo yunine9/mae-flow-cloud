@@ -55,7 +55,7 @@ export const workflowBaseFixture: WorkflowStandardBase = {
         { id: "human-review", kind: "activity", title: "人工检视",
           description: "由用户决定是否继续交付。", locked: true,
           editable: false, source: "platform" },
-        { id: "prepush", kind: "tool", title: "流水线验证",
+        { id: "prepush", kind: "tool", title: "Build-Fix",
           description: "验证当前提交并明确报告失败原因。", locked: true,
           editable: false, source: "platform" },
       ],

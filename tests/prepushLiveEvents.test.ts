@@ -41,7 +41,7 @@ test("最新轮目录解析:取轮号最大者,没有轮目录时如实缺席", 
   assert.equal(service.prePushEventLogPath("missing"), undefined);
 });
 
-test("独立 SSE 流出 prepush 事件;换轮切文件并从头放新一轮", async () => {
+test("Build-Fix SSE 流出事件;换轮切文件并从头放新一轮", async () => {
   const workspace = mkdtempSync(join(tmpdir(), "mfc-prepush-sse-"));
   const round1 = join(workspace, "round-1");
   const round2 = join(workspace, "round-2");
@@ -64,7 +64,7 @@ test("独立 SSE 流出 prepush 事件;换轮切文件并从头放新一轮", as
   try {
     const address = server.address() as AddressInfo;
     const response = await fetch(
-      `http://127.0.0.1:${address.port}/tasks/t1/prepush/events`);
+      `http://127.0.0.1:${address.port}/tasks/t1/build-fix/events`);
     assert.equal(response.status, 200);
     assert.match(String(response.headers.get("content-type")),
       /text\/event-stream/);

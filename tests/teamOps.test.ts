@@ -40,11 +40,11 @@ test("停滞只认有效进展时间,完成任务不误报", () => {
   }), now), false);
 });
 
-test("团队现场只留当前行动：交付结果进档案，失败仍需介入", () => {
+test("团队现场保留待合入任务：MR 合入或用户停止才离场", () => {
   assert.equal(isCurrentTeamTask(task({ status: "running" })), true);
   assert.equal(isCurrentTeamTask(task({ status: "waiting_for_human" })), true);
   assert.equal(isCurrentTeamTask(task({ status: "failed" })), true);
-  assert.equal(isCurrentTeamTask(task({ status: "await_merge" })), false);
+  assert.equal(isCurrentTeamTask(task({ status: "await_merge" })), true);
   assert.equal(isCurrentTeamTask(task({ status: "completed" })), false);
   assert.equal(isCurrentTeamTask(task({ status: "canceled" })), false);
 });

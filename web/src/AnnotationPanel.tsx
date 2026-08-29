@@ -24,6 +24,7 @@ import {
   sendAnnotations,
   type Annotation,
   type AnchorCheck,
+  type TaskStatus,
 } from "./api";
 import { shortPath } from "./paths";
 import { relativeTime } from "./time";
@@ -66,6 +67,7 @@ function deliveryText(item: Annotation): string {
   if (item.status !== "sent") return "尚未提交";
   if (item.sent_via === "decision") return "通过审批提交";
   if (item.sent_via === "pipeline_evidence") return "作为流水线证据提交";
+  if (item.sent_via === "review_repair") return "已交给当前 MR 的修复 Agent";
   return "执行中发送";
 }
 
@@ -76,7 +78,9 @@ export function AnnotationPanel({
   checks,
   reply,
   canOperate,
-  running,
+  taskStatus,
+  reviewReady = false,
+  mergeRequestOpen,
   evidenceAwaiting = false,
   onChanged,
   onLocate,
@@ -90,8 +94,11 @@ export function AnnotationPanel({
   canOperate: boolean;
   /** 点一条回到材料里那一行——改批注前人几乎总要再看一眼上下文。 */
   onLocate?: (item: Annotation) => void;
-  /** 只有在跑的时候才能插话送出;等人决定时批注走决定卡。 */
-  running: boolean;
+  taskStatus: TaskStatus;
+  /** 人工意见修复与 Build-Fix 都已完成，当前真的轮到意见作者裁决。 */
+  reviewReady?: boolean;
+  /** MR 已创建且未合入/关闭：没有活会话也能开启下一轮 review 修复。 */
+  mergeRequestOpen: boolean;
   /** 流水线缺具体报错时，批注直接回灌证据并自动恢复，不需要活会话。 */
   evidenceAwaiting?: boolean;
   onChanged: () => void;
@@ -102,11 +109,19 @@ export function AnnotationPanel({
   const [mutationBusy, setMutationBusy] = useState("");
   const [error, setError] = useState("");
   const drafts = items.filter((item) => item.status === "draft");
-  const [open, setOpen] = useState(drafts.length > 0);
+  const myReviewCount = items.filter((item) =>
+    item.status === "sent" && item.author === viewerUsername).length;
+  const [open, setOpen] = useState(drafts.length > 0
+    || (reviewReady && myReviewCount > 0));
+  const running = taskStatus === "running";
+  const reviewSendable = mergeRequestOpen && [
+    "queued", "running", "verifying", "await_merge", "failed",
+  ].includes(taskStatus);
+  const canSend = running || evidenceAwaiting || reviewSendable;
 
   useEffect(() => {
-    if (drafts.length > 0) setOpen(true);
-  }, [drafts.length]);
+    if (drafts.length > 0 || (reviewReady && myReviewCount > 0)) setOpen(true);
+  }, [drafts.length, myReviewCount, reviewReady]);
 
   if (!items.length) return null;
   const checkOf = (id: string) => checks.find((check) => check.id === id);
@@ -137,20 +152,40 @@ export function AnnotationPanel({
           <i className="annot-panel-chevron" aria-hidden />
         </div>
       </summary>
-      {canOperate && drafts.length > 0 && (running || evidenceAwaiting) && (
+      {reviewReady && myReviewCount > 0 && (
+        <div className="annot-panel-note review-ready" role="status">
+          Agent 已处理你提出的 {myReviewCount} 条意见，Build-Fix 也已通过。
+          请看最新代码后，逐条选择“确认已修复”或“仍需调整”；没有全部闭环前不会推送。
+        </div>
+      )}
+      {canOperate && drafts.length > 0 && canSend && (
         <div className="annot-panel-actions">
           <button type="button" className="primary" disabled={busy}
                   onClick={() => void send()}>
-            {busy ? "提交中…" : evidenceAwaiting
-              ? `回灌 ${drafts.length} 条报错`
-              : `提交 ${drafts.length} 条批注`}
+            {busy ? "提交中…" : reviewSendable
+              ? `提交 ${drafts.length} 条并继续修改`
+              : evidenceAwaiting ? `回灌 ${drafts.length} 条报错`
+                : `提交 ${drafts.length} 条批注`}
           </button>
+          {reviewSendable && (
+            <p>继续使用当前分支和 MR；Agent 修改并提交后，系统会重新跑验证。MR 合入前可以反复提交。</p>
+          )}
         </div>
       )}
 
-      {canOperate && drafts.length > 0 && !running && !evidenceAwaiting && (
+      {canOperate && drafts.length > 0 && !canSend && (
         <p className="annot-panel-note">
-          有 {drafts.length} 条批注待提交。完成当前审批时，可选择将它们作为修改说明一并提交。
+          {taskStatus === "waiting_for_human"
+            ? `有 ${drafts.length} 条批注已保存。Agent 正等你的当前决定，提交决定时会把这些批注一并送达。`
+            : taskStatus === "paused" || taskStatus === "pausing"
+              ? `有 ${drafts.length} 条批注已保存。恢复任务后即可交给 Agent 继续修改。`
+              : taskStatus === "completed"
+                ? "MR 已合入，任务已经结束；这些批注只保留为本地记录，不会再触发修改。"
+                : taskStatus === "canceled"
+                  ? "任务已由用户停止；这些批注只保留为本地记录，不会再触发修改。"
+                  : mergeRequestOpen === false && taskStatus === "await_merge"
+                    ? "MR 当前已关闭。批注已经保存；重新打开 MR 后即可继续提交修改。"
+                : `有 ${drafts.length} 条批注待提交；当前没有可接收意见的执行会话。`}
         </p>
       )}
       {error && <div className="alert">{error}</div>}
@@ -234,20 +269,21 @@ export function AnnotationPanel({
                 )}
                 {/* 检视闭环的裁决:提过的意见不能停在"请你确认"没有下文。
                     通过=收口;返工=退回待提交,下一次提交再送给 AI。 */}
-                {item.status === "sent" && isAuthor && !editing && (
+                {item.status === "sent" && isAuthor && !editing
+                  && reviewReady && (
                   <span className="annot-verdict">
                     <button type="button" className="ghost"
                             disabled={!!mutationBusy} onClick={async () => {
                       const result = await judgeAnnotation(taskId, item.id, "reopen");
                       if (result.error) setError(result.error);
                       onChanged();
-                    }}>返工</button>
+                    }}>仍需调整</button>
                     <button type="button" className="approve"
                             disabled={!!mutationBusy} onClick={async () => {
                       const result = await judgeAnnotation(taskId, item.id, "verify");
                       if (result.error) setError(result.error);
                       onChanged();
-                    }}>确认通过</button>
+                    }}>确认已修复</button>
                   </span>
                 )}
               </div>

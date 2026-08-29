@@ -356,7 +356,7 @@ async function main(): Promise<void> {
     && (!!repoFlag || has("--kernel-mode"));
   if (issueOnly && kernelRequested) {
     console.log("[serve] --issue-only 与内核模式同时给出:按问题流专用跑,"
-      + "内核/交付平台/prepush 本次不加载(需求流程停用)");
+      + "内核/交付平台/Build-Fix 本次不加载(需求流程停用)");
   }
   const kernelMode = !issueOnly && kernelRequested;
   // URL 仓不许过 resolve(会被拼成本地路径,实测毁 URL);本地路径才归一化。
@@ -514,7 +514,7 @@ async function main(): Promise<void> {
     console.log("[serve] 小鲁班入站回复已由部署显式启用；通知将提供手机审批指令");
   }
 
-  // 统一任务执行面:普通编码/修复/子 Agent/推送前编译与 UT 的 Bash
+  // 统一任务执行面:普通编码/修复/子 Agent/Build-Fix 的 Bash
   // 全部进入同一类加固容器。Cloud 控制面、Git 凭据、MR/通知仍留宿主。
   const isolateImage = flag("--isolate-image");
   const isolateMemory = flag("--isolate-memory") ?? "8g";
@@ -527,10 +527,13 @@ async function main(): Promise<void> {
     flag("--isolate-cache-root") ?? join(dataDir, "build-cache"),
   );
   const buildSlots = Number(flag("--build-slots") ?? "1");
-  const prepushAttemptTimeoutValue = flag("--prepush-attempt-timeout-minutes");
+  // 新部署只暴露 Build-Fix 命名；旧 flag 保留兼容，避免滚动升级断配置。
+  const prepushAttemptTimeoutValue = flag("--build-fix-attempt-timeout-minutes")
+    ?? flag("--prepush-attempt-timeout-minutes");
   const prepushAttemptTimeoutMinutes = prepushAttemptTimeoutValue !== undefined
     ? Number(prepushAttemptTimeoutValue) : undefined;
-  const prepushBuildTimeoutValue = flag("--prepush-build-timeout-minutes");
+  const prepushBuildTimeoutValue = flag("--build-fix-command-timeout-minutes")
+    ?? flag("--prepush-build-timeout-minutes");
   const prepushBuildTimeoutMinutes = prepushBuildTimeoutValue !== undefined
     ? Number(prepushBuildTimeoutValue) : undefined;
   // 现场保留期:终态任务过期后回收克隆等重货,台账原样留下。
@@ -571,8 +574,8 @@ async function main(): Promise<void> {
     process.exit(2);
   }
   for (const [name, value] of [
-    ["--prepush-attempt-timeout-minutes", prepushAttemptTimeoutMinutes],
-    ["--prepush-build-timeout-minutes", prepushBuildTimeoutMinutes],
+    ["--build-fix-attempt-timeout-minutes", prepushAttemptTimeoutMinutes],
+    ["--build-fix-command-timeout-minutes", prepushBuildTimeoutMinutes],
   ] as const) {
     if (value !== undefined && (!Number.isFinite(value) || value <= 0)) {
       console.error(`[serve] ${name} 必须是正数,拒绝启动`);

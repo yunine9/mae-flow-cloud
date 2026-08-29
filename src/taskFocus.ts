@@ -144,7 +144,7 @@ export function projectTaskFocus(task: FocusTask): TaskFocus {
   if (prepush?.state === "environment_error" || prepush?.state === "blocked") {
     return focus(
       "blocked",
-      prepush.message?.trim() || "推送前验证暂时无法继续",
+      prepush.message?.trim() || "Build-Fix 暂时无法继续",
       prepush.state === "environment_error"
         ? "等待平台恢复编译环境"
         : "查看编译或 UT 失败现场",
@@ -193,7 +193,7 @@ export function projectTaskFocus(task: FocusTask): TaskFocus {
     return focus(
       "blocked",
       delivery?.prepush_runtime?.message
-        || "推送前编译已经中断，当前没有执行会话",
+        || "Build-Fix 已经中断，当前没有执行会话",
       "服务会自动恢复；未恢复时可手动重跑编译",
       "platform",
       88,
@@ -207,9 +207,9 @@ export function projectTaskFocus(task: FocusTask): TaskFocus {
     return focus(
       "machine",
       delivery?.prepush_runtime?.state === "recovering"
-        ? (delivery.prepush_runtime.message || "服务正在恢复推送前编译")
+        ? (delivery.prepush_runtime.message || "服务正在恢复 Build-Fix")
         : prepush.message?.trim()
-        || `正在进行推送前编译与 UT${prepush.round ? `（第 ${prepush.round} 轮）` : ""}`,
+        || `正在进行 Build-Fix${prepush.round ? `（第 ${prepush.round} 轮）` : ""}`,
       "两项通过后才会推送代码",
       "agent",
       58,

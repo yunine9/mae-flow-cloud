@@ -485,7 +485,7 @@ test("LocalAuth 个人默认:真人缺省即开,显式关才关;无账号不举�
     "无账号链路(probe/pilot/未接登录)不举卡,自动化不被卡死");
 });
 
-test("开关的边界:已推送后不能再开;等卡时关掉=作废卡继续推", async () => {
+test("开关的边界:已推送后不能再开;普通等卡可关闭", async () => {
   const { service, model, id, internal, repo } = await verifyingTask();
   try {
     internal.summary.status = "await_merge";
@@ -502,6 +502,89 @@ test("开关的边界:已推送后不能再开;等卡时关掉=作废卡继续�
     assert.equal(off.push_confirmation, undefined);
     assert.equal(off.waiting, undefined, "人说不看了,卡必须作废");
     assert.equal(off.status, "verifying", "关掉开关要继续推,不许悬在等待");
+  } finally {
+    await model.stop();
+  }
+});
+
+test("人工意见修复后同文件也必须复检；逐条闭环后可正常推送", async () => {
+  const { service, model, id, internal, repo } = await verifyingTask();
+  try {
+    const head = repo.git("rev-parse", "HEAD");
+    internal.summary.luban_account = "owner";
+    internal.summary.delivery_selection = {
+      paths: ["src/feature.ts"],
+      observed_paths: ["src/feature.ts"],
+      excluded_paths: [],
+      status: "confirmed",
+      waiting_id: "old-confirmation",
+      head,
+      updated_at: new Date().toISOString(),
+    };
+    const first = service.addAnnotation(id, {
+      author: "reviewer-a", artifact: "本任务变更", file: "src/feature.ts",
+      line: 1, anchor: "export const value = 1;",
+      note: "补上空值处理", kind: "code",
+    });
+    const second = service.addAnnotation(id, {
+      author: "reviewer-b", artifact: "本任务变更", file: "src/feature.ts",
+      line: 1, anchor: "export const value = 1;",
+      note: "补上边界测试", kind: "code",
+    });
+    (service as any).annotations(internal).markSent(
+      [first.id, second.id], "review_repair");
+    internal.summary.delivery = {
+      loop: {
+        round: 0,
+        state: "verifying",
+        kind: "review",
+        review_source: "workspace",
+        workspace_review_recheck_required: true,
+        workspace_review_annotation_ids: [first.id, second.id],
+        review_ids: "workspace:cycle-1",
+      },
+    };
+
+    assert.equal(await (service as any).pushConfirmationSatisfied(
+      internal, "master_bot_REQ1"), false,
+    "修改来源是人工意见时，即使文件集合没变也不能复用旧确认");
+    const waiting = service.get(id)!.waiting!;
+    assert.notEqual(waiting.waiting_id, "old-confirmation");
+    assert.match(String(waiting.context), /人工意见修改后的复检/);
+    assert.match(String(waiting.context), /还有 2 条待提出人确认/);
+    const question = (waiting.question as any).questions[0].question;
+    const accept = {
+      waiting_id: waiting.waiting_id,
+      state_version: waiting.state_version,
+      selected_options: { [question]: "确认按清单推送" },
+    };
+
+    await assert.rejects(service.decide(id, accept),
+      (error) => error instanceof TaskControlError
+        && /责任人的“继续提交”不能代替意见提出人确认/.test(error.message));
+    assert.equal(service.get(id)!.waiting!.waiting_id, waiting.waiting_id,
+      "越权放行必须零副作用，不能把原卡改旧造成后续假死");
+    assert.equal(service.get(id)!.delivery_selection?.waiting_id,
+      "old-confirmation", "拒绝前不能先改交付清单收据");
+    assert.throws(() => service.verifyAnnotation(id, first.id, "owner"),
+      /只能由他裁决/);
+    assert.throws(() => service.setPushConfirmation(id, false),
+      /不能关闭确认绕过/);
+
+    service.verifyAnnotation(id, first.id, "reviewer-a");
+    await assert.rejects(service.decide(id, accept),
+      (error) => error instanceof TaskControlError && /仍有 1 条/.test(error.message));
+    service.verifyAnnotation(id, second.id, "reviewer-b");
+    assert.match(String(service.get(id)!.detail), /已全部闭环/);
+
+    let deliveries = 0;
+    (service as any).tryDeliver = async () => { deliveries += 1; };
+    await service.decide(id, accept);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(deliveries, 1, "意见全部闭环后必须真正续推，不能卡在旧卡/旧 SHA");
+    assert.equal(service.get(id)!.waiting, undefined);
+    assert.equal(internal.summary.delivery.loop
+      .workspace_review_recheck_required, false);
   } finally {
     await model.stop();
   }

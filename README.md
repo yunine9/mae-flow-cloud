@@ -484,19 +484,26 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
 - **Cloud 固有执行契约(2026-08-21 收口;2026-08-25 编排瘦身勘误:
   编码会话不再被禁止编译——内核编码段收敛为宽 build 步,agent 可在
   隔离容器里自由编译/跑 UT 自查,但本地结果不构成任何交付证据,真验收
-  仍是下述 prepush + 绑 SHA 流水线 + MR 检视三道)**:每个执行仓的
+  仍是下述 Build-Fix + 绑 SHA 流水线 + MR 检视三道)**:每个执行仓的
   `.mae-flow-order.json` 都显式写入 `execution_contract`
   （`schema=mae-flow-execution/1`、`host=cloud`）：最终编译/UT
   运行/CodeCheck=`pipeline`，UT 编写=`agent`，并记录本次真正可用的
   `UT生成方式`。历史 CLI 旗子
   `--verify-via-pipeline` 仅兼容旧启动脚本，已弃用且不改变语义。
-  **Cloud 在每个新 HEAD 由宿主 push 前另起一个推送前验证 Agent**：它在
+  **Cloud 在每个新 HEAD 由宿主 push 前另起一个 Build-Fix Agent**：它在
   一次性任务构建容器运行仓库真实的编译与 UT 命令，失败时可直接修复并本地
   commit，直至通过或明确报告代码/环境故障；它不挂 Mae-Flow Hooks，
   不推进或回退内核流程，也不持有 Git 凭据、不自行 push、不跑
   CodeCheck。PASS 收据绑定修复后的最终 SHA 与 clean worktree；纯网络
   推送失败重试同一 SHA 时复用收据，HEAD 或工作区变化就必须重验。
-  这是 push 前的快速反馈与流量闸门，不冒充最终质量裁判。
+  Build-Fix 收敛后才展示最终人工代码检视；人确认的是一份可直接 push 的
+  代码，而不是会被后续本地构建再次改写的半成品。它是 push 前的快速反馈
+  与流量闸门，不冒充最终质量裁判。这里**不按第一次 push / 后续 push
+  分叉**，只看本轮修改来源：普通开发按用户的人工确认设置执行；人工检视
+  意见触发的修改一定回到意见作者逐条复检，全部闭环后责任人才可确认 push；
+  纯 Build-Fix 或流水线修复若没有改变已确认文件集合则自动续推。责任人的
+  “继续提交”和关闭确认开关都不能代替意见作者签字；Agent 修完会由小鲁班
+  直接通知各意见作者（含 `/mfc` 激活提示）。
   推送后内核仍停在
   `external_verify` 宿主等待点，不催 Agent 在本机继续；宿主触发权威
   流水线，把绑定 SHA 的总体结果和可选 `COMPILE / UT / CODECHECK`
@@ -505,9 +512,9 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
   增强，若明确出现 failed/pending 则优先采用，不会被总体绿灯掩盖。
   STALE 或登记失败仍 fail-closed 留在 `verifying`，但不会催 Agent 补
   宿主证据；`delivery.waiting_on` 明说缺口，`delivery.attested` 镜像内核裁决。
-  流水线红灯仍走轻量专职修复 Agent（编译/告警/UT/覆盖率/CodeCheck
-  分诊）；修复产出新 HEAD 后再次经过推送前编译+UT，再由宿主 push，
-  不回人工 Diff，也不重跑内核完整质量流程。
+  流水线红灯与人工检视意见统一成为当前代码 Agent 的修复输入，不再并行
+  启动第二个写代码的 Agent。修复产出新 HEAD 后再次经过 Build-Fix，再由
+  宿主更新同一个 MR；MR 合入或用户明确停止前持续监听，绿灯也不等于结束。
 
 - **MR 闭环升级(2026-08-17,对照内网既有框架,docs/mr-loop-adaptation.md)**:
   失败先分类再派单——九项合并门禁进契约(`GET /mr/gates`,可选端点,
@@ -515,7 +522,7 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
   重试只数 CI(检视/冲突触发清零);检视闭环(拉讨论→专职会话逐条
   回复→宿主发布并标已解决);冲突修复(宿主 merge 造真实冲突标记,
   agent 在真冲突上解);等人门禁(审批/投票/WIP)挂起等待不空转,
-  说清卡在哪并通知归属人;MR merged=完成、closed=失败请人工;失败
+  说清卡在哪并通知归属人;MR merged=完成、closed=等待重开或人工停止;失败
   材料落盘工作区外 pipeline/ 双通道喂修复会话;同 SHA 不再重复触发
   流水线(修复无新提交时直接按上次结果裁,省一条流水线)。五条端到
   端用例(tests/mrLoop.test.ts)+旧 delivery 16 项全绿。

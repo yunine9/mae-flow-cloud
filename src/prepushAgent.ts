@@ -39,6 +39,46 @@ export interface PrePushRunRequest {
     paths: string[];
     excludedPaths: string[];
   };
+  /** 只用于提醒 Build-Fix Agent 自查提交范围，不是按目录硬拦截。
+   * 某些仓会合法提交生成代码/二进制，最终判断仍由 Agent 基于仓库事实作出。 */
+  changeScope?: BuildFixScopeReview;
+}
+
+export interface BuildFixScopeReview {
+  totalPaths: number;
+  suspiciousPaths: number;
+  directorySummary: Array<{ directory: string; count: number }>;
+  suspiciousExamples: string[];
+}
+
+const COMMON_BUILD_PATH = /(?:^|\/)(?:target|build|dist|out|coverage|node_modules|\.gradle|CMakeFiles|cmake-build[^/]*)(?:\/|$)|(?:^|\/)CMakeCache\.txt$|\.(?:class|o|obj|so|dylib|dll|a|pyc|pyo)$/i;
+
+/** 变更多或带常见产物特征时，给 Agent 一份有界目录摘要。这里只提示、
+ * 不删除也不阻断：路径长得像产物不等于它一定不该进仓库。 */
+export function buildFixScopeReview(
+  paths: string[],
+): BuildFixScopeReview | undefined {
+  const normalized = [...new Set(paths.map((path) => path.trim())
+    .filter(Boolean))].sort((left, right) => left.localeCompare(right));
+  const suspicious = normalized.filter((path) => COMMON_BUILD_PATH.test(path));
+  if (normalized.length <= 10 && !suspicious.length) return undefined;
+  const directories = new Map<string, number>();
+  for (const path of normalized) {
+    const parts = path.split("/").filter(Boolean);
+    const directory = parts.length <= 1
+      ? "(仓库根目录)" : parts.slice(0, Math.min(2, parts.length - 1)).join("/");
+    directories.set(directory, (directories.get(directory) ?? 0) + 1);
+  }
+  return {
+    totalPaths: normalized.length,
+    suspiciousPaths: suspicious.length,
+    directorySummary: [...directories.entries()]
+      .map(([directory, count]) => ({ directory, count }))
+      .sort((left, right) => right.count - left.count
+        || left.directory.localeCompare(right.directory))
+      .slice(0, 12),
+    suspiciousExamples: suspicious.slice(0, 20),
+  };
 }
 
 export interface PrePushRunResult {
@@ -60,6 +100,56 @@ const RESULT_PATTERN = /<prepush-result>\s*([\s\S]*?)\s*<\/prepush-result>/gi;
 const MAX_RESULT_BYTES = 64 * 1024;
 
 const DENY = (reason: string): GateDecision => ({ action: "deny", reason });
+
+function shellWords(source: string): string[] {
+  return (source.match(/"[^"]*"|'[^']*'|\S+/g) ?? [])
+    .map((word) => word.replace(/^(?:"([\s\S]*)"|'([\s\S]*)')$/, "$1$2"));
+}
+
+function unsafeDiscardPath(path: string): boolean {
+  const value = path.trim();
+  return !value || value === "." || value === ".." || value === ":/"
+    || value.startsWith("../") || value.startsWith("/")
+    || /[*?\[\]{}]/.test(value)
+    || value.startsWith(":(glob)") || value.startsWith(":(top,glob)");
+}
+
+/** 精确文件回退是修复能力；全树/通配回退才是现场销毁。 */
+function unsafeGitWorktreeDiscard(segment: string): boolean {
+  const checkout = segment.match(/\bcheckout\b([\s\S]*)/i);
+  if (checkout) {
+    const words = shellWords(checkout[1]);
+    const marker = words.indexOf("--");
+    if (marker >= 0) {
+      const paths = words.slice(marker + 1);
+      return paths.length === 0 || paths.some(unsafeDiscardPath);
+    }
+  }
+  const restore = segment.match(/\brestore\b([\s\S]*)/i);
+  if (!restore) return false;
+  const words = shellWords(restore[1]);
+  const stagedOnly = (words.includes("--staged") || words.includes("-S"))
+    && !words.includes("--worktree") && !words.includes("-W");
+  if (stagedOnly) return false; // 只退暂存区，不会丢工作区内容
+  if (words.some((word) => word === "--pathspec-from-file"
+      || word.startsWith("--pathspec-from-file="))) return true;
+  const marker = words.indexOf("--");
+  let paths: string[];
+  if (marker >= 0) {
+    paths = words.slice(marker + 1);
+  } else {
+    paths = [];
+    for (let index = 0; index < words.length; index += 1) {
+      const word = words[index];
+      if (["-s", "--source"].includes(word)) {
+        index += 1;
+      } else if (!word.startsWith("-")) {
+        paths.push(word);
+      }
+    }
+  }
+  return paths.length === 0 || paths.some(unsafeDiscardPath);
+}
 
 /**
  * Cloud 推送前会话不是 Mae-Flow 的阶段会话，因此不能借内核 Hook 做裁决。
@@ -128,7 +218,7 @@ export function prePushSecurityDecision(
   // 仓库自己的 .claude/.codex skill 不在此列，避免误伤业务仓能力加载。
   const hostSecretPath = /(?:^|[\\/\s'"`=])(?:pi-agent|\.ssh|\.gnupg|\.aws|\.kube)(?:[\\/]|$)|(?:^|[\\/\s'"`=])\.docker[\\/]config\.json(?:$|[\s'"`;&|])|(?:^|[\\/\s'"`=])(?:\.netrc|\.git-credentials|git-credential(?:\.sh)?)(?:$|[\s'"`;&|])/i;
   if (hostSecretPath.test(source)) {
-    return DENY("推送前验证会话不能读取或改写宿主模型配置与凭据。");
+    return DENY("Build-Fix 会话不能读取或改写宿主模型配置与凭据。");
   }
 
   // Maven/npm/Git 的用户级配置可能内含仓库凭据，JDK truststore 与 shell
@@ -143,13 +233,13 @@ export function prePushSecurityDecision(
     || systemConfigPath.test(source)
     || systemCertificatePath.test(source)
     || environmentConfigPath.test(source)) {
-    return DENY("推送前验证会话不能读取或修改宿主的全局 Git、Maven、npm、JDK 或证书配置。");
+    return DENY("Build-Fix 会话不能读取或修改宿主的全局 Git、Maven、npm、JDK 或证书配置。");
   }
 
   // Write/Edit 的 value 在不同接线中可能是路径，也可能带着待写内容；一旦
   // 出现典型认证字段，宁可让宿主注入，也不能把凭据写进仓库配置。
   if (/\b(?:_authToken|authorization|private-token|oauth-token)\b\s*[:=]/i.test(source)) {
-    return DENY("推送前验证会话不能读取、写入或持久化认证 Token。");
+    return DENY("Build-Fix 会话不能读取、写入或持久化认证 Token。");
   }
 
   if (kind !== "bash") return undefined;
@@ -158,7 +248,7 @@ export function prePushSecurityDecision(
   // 等非秘密变量仍可查看，`env FOO=bar npm test` 这类构建命令也不受影响。
   const secretEnvironment = /(?:^|[;&|\n]\s*)(?:env|printenv|set|export\s+-p)\s*(?:$|[;&|\n])|\$(?:\{[A-Z_][A-Z0-9_]*(?:TOKEN|PASSWORD|PASSWD|SECRET|API_KEY|ACCESS_KEY|PRIVATE_KEY)[A-Z0-9_]*\}|[A-Z_][A-Z0-9_]*(?:TOKEN|PASSWORD|PASSWD|SECRET|API_KEY|ACCESS_KEY|PRIVATE_KEY)[A-Z0-9_]*)|(?:^|[;&|\n]\s*)printenv\s+[A-Z_][A-Z0-9_]*(?:TOKEN|PASSWORD|PASSWD|SECRET|API_KEY|ACCESS_KEY|PRIVATE_KEY)[A-Z0-9_]*/i;
   if (secretEnvironment.test(source)) {
-    return DENY("推送前验证会话不能枚举或输出宿主凭据环境变量。");
+    return DENY("Build-Fix 会话不能枚举或输出宿主凭据环境变量。");
   }
 
   // Agent 只能产生本地提交。认证注入、remote 以及真正的 push 都由释放
@@ -167,31 +257,30 @@ export function prePushSecurityDecision(
   for (const segment of shellSegments) {
     if (!/\bgit\b/i.test(segment)) continue;
     if (/\bgit\b[\s\S]*\bclone\b/i.test(segment)) {
-      return DENY("禁止在推送前验证会话中重新克隆仓库；请使用 Cloud 已准备好的工作区。");
+      return DENY("禁止在 Build-Fix 会话中重新克隆仓库；请使用 Cloud 已准备好的工作区。");
     }
     if (/\bgit\b[\s\S]*\bpush\b/i.test(segment)) {
-      return DENY("禁止在推送前验证会话中执行 git push；Cloud 会统一推送已复核的 HEAD。");
+      return DENY("禁止在 Build-Fix 会话中执行 git push；Cloud 会统一推送已复核的 HEAD。");
     }
     if (/\bgit\b[\s\S]*\bremote\b[\s\S]*\b(?:add|remove|rm|rename|set-url|set-head|set-branches|prune|update)\b/i.test(segment)) {
-      return DENY("禁止在推送前验证会话中改写或更新 Git remote。");
+      return DENY("禁止在 Build-Fix 会话中改写或更新 Git remote。");
     }
     if (/\bgit\b[\s\S]*\bcredential(?:-[\w-]+)?\b/i.test(segment)) {
-      return DENY("禁止在推送前验证会话中读取、批准或改写 Git 凭据。");
+      return DENY("禁止在 Build-Fix 会话中读取、批准或改写 Git 凭据。");
     }
     if (/\bgit\b[\s\S]*\bconfig\b[\s\S]*(?:--global\b|--system\b)/i.test(segment)) {
-      return DENY("禁止在推送前验证会话中修改宿主级 Git 配置；仅允许使用现有配置和本地提交。");
+      return DENY("禁止在 Build-Fix 会话中修改宿主级 Git 配置；仅允许使用现有配置和本地提交。");
     }
     if (/\bgit\b[\s\S]*(?:\bconfig\b[\s\S]*\bhttp\.sslverify\b(?:\s|=)+["']?(?:false|0|no|off)\b["']?|(?:^|\s)-c\s*http\.sslverify\s*=\s*["']?(?:false|0|no|off)\b["']?)/i.test(segment)) {
       return DENY("禁止关闭 Git TLS 证书校验；证书问题应报告为宿主基础设施故障。");
     }
     if (/\bgit\b[\s\S]*\bconfig\b[\s\S]*(?:credential\.|remote\.|url\.|http\.[^\s=]*(?:extraheader|token|auth)|core\.askpass|include(?:if)?\.path|gpg\.program|[^\s=]*(?:token|password|passwd|secret|oauth)[^\s=]*)/i.test(segment)) {
-      return DENY("禁止在推送前验证会话中改写 Git 远端或凭据配置。");
+      return DENY("禁止在 Build-Fix 会话中改写 Git 远端或凭据配置。");
     }
     if (/\bgit\b[\s\S]*\bclean\b/i.test(segment)
       || /\bgit\b[\s\S]*\breset\b[\s\S]*--hard\b/i.test(segment)
-      || /\bgit\b[\s\S]*\bcheckout\b[\s\S]*\s--(?:\s|$)/i.test(segment)
-      || /\bgit\b[\s\S]*\brestore\b[\s\S]*(?:--worktree\b|(?:^|\s)\.(?:\s|$))/i.test(segment)) {
-      return DENY("禁止丢弃工作区改动；请保留现场并修复，或明确报告环境失败。");
+      || unsafeGitWorktreeDiscard(segment)) {
+      return DENY("禁止整树或通配丢弃工作区改动；需要纠正误提交时，请用 git restore/checkout 精确到具体文件，再重新整理 commit。");
     }
   }
 
@@ -199,7 +288,7 @@ export function prePushSecurityDecision(
   if (/(?:^|[\\/\s'"`=])\.git[\\/]config(?:$|[\s'"`;&|])/i.test(source)
     || /\b(?:GIT|SSH)_ASKPASS\s*=/i.test(source)
     || /\bGIT_SSH_COMMAND\s*=/i.test(source)) {
-    return DENY("禁止在推送前验证会话中改写 Git 远端或认证入口。");
+    return DENY("禁止在 Build-Fix 会话中改写 Git 远端或认证入口。");
   }
 
   // 避免把 Token 直接塞进 URL/header，或让包管理器在 Agent 会话中登录、
@@ -207,13 +296,13 @@ export function prePushSecurityDecision(
   if (/\bhttps?:\/\/[^\s'"/@:]+:[^\s'"/@]+@/i.test(source)
     || /\b(?:authorization|private-token|oauth-token)\s*[:=]\s*(?:bearer\s+)?[^\s'";&|]+/i.test(source)
     || /(?:^|\s)(?:--token|--password|--passwd)(?:=|\s+)/i.test(source)) {
-    return DENY("禁止在推送前验证会话中读取、传入或持久化远端 Token/密码。");
+    return DENY("禁止在 Build-Fix 会话中读取、传入或持久化远端 Token/密码。");
   }
   if (/\b(?:npm|pnpm|yarn)\b[\s\S]*\b(?:login|logout|adduser|token)\b/i.test(source)
     || /\b(?:npm|pnpm|yarn)\b[\s\S]*\bconfig\b[\s\S]*\b(?:set|delete|del|edit)\b/i.test(source)
     || /\b(?:npm|pnpm)\b[\s\S]*(?:\s-g\b|\s--global\b)[\s\S]*\b(?:add|install|i)\b/i.test(source)
     || /\b(?:npm|pnpm)\b[\s\S]*\b(?:add|install|i)\b[\s\S]*(?:\s-g\b|\s--global\b)/i.test(source)) {
-    return DENY("禁止在推送前验证会话中登录包仓、改写包管理器配置或安装全局工具。");
+    return DENY("禁止在 Build-Fix 会话中登录包仓、改写包管理器配置或安装全局工具。");
   }
 
   // TLS/证书只能由部署侧统一维护；专项 Agent 不得以“先跑通”为由关闭
@@ -321,7 +410,7 @@ export function parsePrePushAgentReport(text: string): PrePushAgentReport | unde
       status: status as PrePushAgentReport["status"],
       compile,
       unit_test: unitTest,
-      summary: String(value.summary ?? "").trim() || "推送前验证会话已收口",
+      summary: String(value.summary ?? "").trim() || "Build-Fix 会话已收口",
     };
   } catch {
     return undefined;
@@ -449,8 +538,29 @@ export function prePushMission(
     "- 修复确实需要新增、删除或重命名业务文件时可以正常完成；Cloud 会只为"
       + "新的业务范围重新请用户确认一次，不要用日志、过程文档或平台目录凑提交。",
   ] : [];
+  const changeScope = request.changeScope;
+  const scopeGuidance = changeScope ? [
+    "",
+    "提交范围自检（提示，不是目录黑名单，也不会因为文件多就机械拦截）：",
+    `- 当前 HEAD 相对任务基线改动 ${changeScope.totalPaths} 个文件；`
+      + `其中 ${changeScope.suspiciousPaths} 个带常见构建产物特征。`,
+    "- 目录汇总：",
+    ...changeScope.directorySummary.map(({ directory, count }) =>
+      `  - ${directory}：${count} 个`),
+    ...(changeScope.suspiciousExamples.length ? [
+      "- 常见产物特征样例（只是线索，生成代码等合法提交要以仓库事实为准）：",
+      ...changeScope.suspiciousExamples.map((path) => `  - ${path}`),
+    ] : []),
+    "- 开始重构建前先用 git diff --stat、git status、仓库忽略规则和需求范围"
+      + "审计这些提交。不能只凭目录名删除，也不能把上千条文件甩给用户。",
+    "- 全部合理：在最终 summary 用一句话说明原因，然后正常继续；无需询问用户。",
+    "- 混入无关内容：使用精确路径 restore/checkout 或 reset --soft 自行整理 commit，"
+      + "再重新编译和跑 UT；无需打扰用户。",
+    "- 确实无法判断：以 code_failure 停下，只给目录数量汇总、可疑样例和一个"
+      + "明确问题；不要输出上千条文件，也不要反复尝试同一操作。",
+  ] : [];
   return [
-    "你是 Cloud 的推送前验证与修复 Agent。这是独立专项会话，不在 Mae-Flow 内核流程中。",
+    "你是 Cloud 的 Build-Fix Agent，负责在最终人工检视前完成构建、测试与必要修复。这是独立专项会话，不在 Mae-Flow 内核流程中。",
     "不要执行 current、done、AskUserQuestion，也不要读取或修改 .mae-flow 状态。",
     `任务：${request.taskId}；待验证 HEAD：${request.sha}；目标分支：${request.branch}`,
     `需求背景：${request.requirement}`,
@@ -459,6 +569,9 @@ export function prePushMission(
     "然后重新执行编译和 UT，直至两项都通过。可以自由检查源码、测试、pom/build/CMake/package 配置，",
     "但不要顺手重构无关代码。代码修改使用 Edit/Write 工具，不要用 shell 文本替换伪装修改。",
     "如有修改，按仓库现有提交规范提交到本地 HEAD；禁止 push、改 remote、读取或写入任何凭据，",
+    `如果此前误带了文件，可以用 git restore --source=${request.baseline} -- <具体文件>`
+      + "、git checkout <提交> -- <具体文件> 或 git reset --soft 重新整理本地 commit；"
+      + "精确文件回退允许，全树/通配回退和 reset --hard 仍禁止。",
     // 这句话必须与 prePushSecurityDecision 的 rm 白名单同一口径:之前
     // 写成一刀切"禁止递归强删",与 playbook"删掉陈旧 CMake 生成目录"
     // 正面打架,听话的模型永远修不好陈旧 configure。同时定调:删产物
@@ -474,6 +587,7 @@ export function prePushMission(
     `Agent 平台目录(${describeAgentPlatformRoots()})也可能是中心服务 clone 后`
       + "注入的本地 Skill/配置：只读使用，禁止修改、强制 add 或提交；"
       + "Cloud 会在 push 前复核整个提交历史。",
+    ...scopeGuidance,
     ...deliveryGuidance,
     "依赖下载、工具缺失、磁盘/网络/权限等不是改代码能解决的问题，归类为 infrastructure_failure，",
     "写清缺什么后停止，不要为了制造绿灯篡改测试、关闭检查或编造执行结果。",

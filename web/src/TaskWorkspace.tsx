@@ -656,6 +656,8 @@ export function TaskWorkspace({
                 fallbackFile={activeMeta?.label ?? active}
                 kind={activeMeta?.kind === "diff" ? "code" : "doc"}
                 items={notes}
+                enabled={canOperate
+                  && !["completed", "canceled"].includes(task.status)}
                 onAdded={() => setNotesPulse((tick) => tick + 1)}
               >
                 {materialView === "diff"
@@ -753,7 +755,14 @@ export function TaskWorkspace({
                     checks={checks}
                     reply={reply}
                     canOperate={canOperate}
-                    running={task.status === "running"}
+                    taskStatus={task.status}
+                    reviewReady={task.waiting?.step === "cloud_push_confirm"
+                      && task.delivery?.loop?.review_source === "workspace"
+                      && task.delivery.loop.workspace_review_recheck_required === true}
+                    mergeRequestOpen={Boolean(task.delivery?.mr_url)
+                      && !["completed", "canceled"].includes(task.status)
+                      && !String(task.delivery?.mr_state ?? "").startsWith("已合入")
+                      && task.delivery?.mr_state !== "已关闭"}
                     evidenceAwaiting={Boolean(
                       task.delivery?.evidence_gap?.missing_dimensions.length)}
                     onLocate={locate}

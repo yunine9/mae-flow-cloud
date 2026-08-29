@@ -209,7 +209,7 @@ function InterventionSetting({
         nextPush = user.push_confirmation !== false;
         setPush(nextPush);
         notes.push(nextPush
-          ? "后续任务会在推送前验证完成后展示最终交付范围"
+          ? "后续任务会在 Build-Fix 完成后展示最终交付范围"
           : "后续任务推送不再等待清单确认；已在等确认的任务点一下确认即可");
       }
       setNote(notes.join("；"));
@@ -224,7 +224,7 @@ function InterventionSetting({
       <div><span className="section-kicker">HUMAN INTERVENTION</span><h2 id="approval-setting-title">人工介入程度</h2></div>
       <span className="approval-setting-state">当前：{current.title}</span>
     </header>
-    <p className="approval-setting-summary">一处设定,所有任务生效:过程节点(需求澄清、方案确认)停不停,推送前验证完成后是否确认最终交付范围。同一文件集合内的自动修复不会重复询问；交付范围变化时会重新确认。流水线绑 SHA、MR 人工合入等门禁始终生效。</p>
+    <p className="approval-setting-summary">一处设定,所有任务生效:过程节点(需求澄清、方案确认)停不停,Build-Fix 完成后是否确认最终交付范围。纯自动修复留在已确认文件范围内时不会重复询问；人工检视意见引发的修改一定回到意见作者复检。流水线绑 SHA、MR 人工合入等门禁始终生效。</p>
     <div className="approval-options" role="group" aria-label="人工介入程度">
       {INTERVENTION_PRESETS.map((preset) => <button type="button" key={preset.key}
         className={current.key === preset.key ? "on" : ""} disabled={busy}
@@ -392,7 +392,9 @@ function NavIcon({ name }: { name: View }) {
   return <svg viewBox="0 0 24 24" aria-hidden><path d="M5 4.75h14A1.25 1.25 0 0 1 20.25 6v12A1.25 1.25 0 0 1 19 19.25H5A1.25 1.25 0 0 1 3.75 18V6A1.25 1.25 0 0 1 5 4.75Z" /><path d="M8 9h8M8 13h5" /></svg>;
 }
 
-const DELIVERED_STATUSES: TaskStatus[] = ["await_merge", "completed"];
+// MR 绿灯/待合入仍是活动任务：它继续监听门禁、流水线和人工检视。
+// 只有真正合入后的 completed 才进入“已交付”。
+const DELIVERED_STATUSES: TaskStatus[] = ["completed"];
 
 export function App() {
   const [theme, setTheme] = useState<Theme>(() =>

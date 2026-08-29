@@ -97,6 +97,28 @@ async function until(
   }
 }
 
+/** 本地人工意见触发的修改统一在 push 前回到意见作者手里。测试辅助只
+ * 代演真实交互：逐条作者确认，再由任务责任人确认最终代码。 */
+async function closeWorkspaceReview(
+  service: TaskService,
+  id: string,
+  annotations: Array<{ id: string; author: string }>,
+): Promise<void> {
+  await until(() => service.get(id)?.status === "waiting_for_human"
+    && service.get(id)?.waiting?.step === "cloud_push_confirm",
+  "人工意见修改后进入复检");
+  for (const annotation of annotations) {
+    service.verifyAnnotation(id, annotation.id, annotation.author);
+  }
+  const waiting = service.get(id)!.waiting!;
+  const question = (waiting.question as any).questions[0].question;
+  await service.decide(id, {
+    waiting_id: waiting.waiting_id,
+    state_version: waiting.state_version,
+    selected_options: { [question]: "确认按清单推送" },
+  });
+}
+
 test("检视优先于 CI;回复发布并标已解决(显式开代 resolve);CI 接棒;合入收口", async () => {
   const platform = new FakeGitPlatform();
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
@@ -572,8 +594,155 @@ EOF` } } },
       .flatMap((request) => (request as any).messages ?? [])
       .map((message: any) => JSON.stringify(message.content ?? ""))
       .join("\n");
-    assert.match(seen, /init --new/, "使命必须先让会话把这一轮的单开出来");
-    assert.match(seen, /门禁全部旁路/, "得讲清不开单的后果,不然模型会跳过");
+    assert.match(seen, /不要再次 init/, "宿主已机械开 review 新轮,不得让 Agent 重复 init");
+    assert.match(seen, /受内核门禁和证据台账/, "得讲清新轮的作用,不然模型会另起裸流程");
+  } finally {
+    await model.stop();
+    await platform.stop();
+  }
+});
+
+test("MR 未合入前本地批注可反复开启 review 轮，始终更新同一 MR", async () => {
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  await platform.start();
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-local-review-"));
+  const model = mrModel([
+    ...walkScript(),
+    { tool: { name: "bash", input: { command:
+        "echo review-one >> a.txt" } } },
+    { text: "第一轮本地检视意见已修改。" },
+    { tool: { name: "bash", input: { command:
+        "echo review-two >> a.txt" } } },
+    { text: "第二轮本地检视意见已修改。" },
+  ], dataDir);
+  await model.start();
+  const service = buildService(platform, dataDir, model.modelsJson());
+  try {
+    const id = service.create("交付 REQ9:本地反复检视", { lane: "完整开发" }).id;
+    await until(() => service.get(id)!.status === "await_merge", "首轮绿灯");
+    const first = service.get(id)!;
+    const mrUrl = first.delivery!.mr_url;
+    const firstSha = first.delivery!.sha;
+
+    const note1 = service.addAnnotation(id, {
+      author: "liaoxiang", artifact: "未提交改动", file: "a.txt", line: 1,
+      anchor: "change", note: "这里补上第一轮边界处理", kind: "code",
+    });
+    await service.sendAnnotations(id, [note1.id]);
+    assert.equal(service.listAnnotations(id).items[0].sent_via, "review_repair");
+    await closeWorkspaceReview(service, id, [note1]);
+    await until(() => service.get(id)!.status === "await_merge"
+      && service.get(id)!.delivery!.sha !== firstSha, "第一轮检视重新交付");
+    const secondSha = service.get(id)!.delivery!.sha;
+
+    const note2 = service.addAnnotation(id, {
+      author: "liaoxiang", artifact: "未提交改动", file: "a.txt", line: 2,
+      anchor: "review-one", note: "再补第二轮错误兜底", kind: "code",
+    });
+    await service.sendAnnotations(id, [note2.id]);
+    await closeWorkspaceReview(service, id, [note2]);
+    await until(() => service.get(id)!.status === "await_merge"
+      && service.get(id)!.delivery!.sha !== secondSha, "第二轮检视重新交付");
+
+    const final = service.get(id)!;
+    assert.equal(final.delivery!.mr_url, mrUrl, "每轮都必须复用原 MR");
+    assert.equal(platform.mergeRequests.length, 1, "不能重复创建 MR");
+    assert.equal(platform.pipelines.length, 3, "每个新 SHA 都重新跑一次流水线");
+    const seen = model.requests
+      .flatMap((request) => (request as any).messages ?? [])
+      .map((message: any) => JSON.stringify(message.content ?? ""))
+      .join("\n");
+    assert.match(seen, /第一轮边界处理/);
+    assert.match(seen, /第二轮错误兜底/);
+    assert.match(seen, /不要再次 init/,
+      "宿主已开 review 新轮，Agent 不得再撞一次 init");
+    assert.match(seen, /交付方式用户已在下单时选定:处理评审意见/,
+      "review 轮 prompt 与下单事实必须一致，不能再说原单完整开发");
+  } finally {
+    await model.stop();
+    await platform.stop();
+  }
+});
+
+test("本地检视撞上 CI 修复时并入当前 Agent，不启动第二只抢工作区", async () => {
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  platform.statusQueue.push("failed", "success");
+  platform.artifacts.push({
+    name: "build_log.txt",
+    text: "BUILD FAILURE: src/a.cpp:12: error: expected null guard",
+  });
+  await platform.start();
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-local-ci-"));
+  const model = mrModel([
+    ...walkScript(),
+    { tool: { name: "bash", input: { command:
+        "sleep 1; echo ci-and-review >> a.txt && git add a.txt && git commit --quiet -m fix" } } },
+    { text: "流水线问题与人的检视意见已合并处理。" },
+  ], dataDir);
+  await model.start();
+  const service = buildService(platform, dataDir, model.modelsJson());
+  try {
+    const id = service.create("交付 REQ9:CI 与本地检视并发").id;
+    await until(() => service.get(id)!.status === "running"
+      && service.get(id)!.delivery?.loop?.kind === "ci", "CI Agent 已开跑");
+    const note = service.addAnnotation(id, {
+      author: "liaoxiang", artifact: "未提交改动", file: "a.txt", line: 1,
+      anchor: "change", note: "同时把空值返回改成明确错误", kind: "code",
+    });
+    await service.sendAnnotations(id, [note.id]);
+    await closeWorkspaceReview(service, id, [note]);
+    await until(() => service.get(id)!.status === "await_merge", "合并修改后绿灯");
+
+    assert.equal(service.listAnnotations(id).items[0].sent_via, "review_repair");
+    assert.equal(platform.mergeRequests.length, 1);
+    assert.equal(platform.pipelines.length, 2,
+      "人的意见并入当前 CI 提交，只应为新 SHA 再跑一条流水线");
+    const seen = model.requests
+      .flatMap((request) => (request as any).messages ?? [])
+      .map((message: any) => JSON.stringify(message.content ?? ""))
+      .join("\n");
+    assert.match(seen, /空值返回改成明确错误/);
+    assert.match(seen, /优先级高于正在进行的流水线修复/);
+  } finally {
+    await model.stop();
+    await platform.stop();
+  }
+});
+
+test("流水线绿后仍持续监听：同一 MR 后续转红会自动修复并重验", async () => {
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  platform.statusQueue.push("success", "failed", "success");
+  platform.nextPipelineLog = "BUILD FAILURE: late gate regression";
+  await platform.start();
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-green-watch-"));
+  const model = mrModel([
+    ...walkScript(),
+    { tool: { name: "bash", input: { command:
+        "sleep 0.5; echo late-fix >> a.txt && git add a.txt && git commit --quiet -m fix" } } },
+    { text: "后续流水线回红已修复。" },
+  ], dataDir);
+  await model.start();
+  const service = buildService(platform, dataDir, model.modelsJson());
+  try {
+    const id = service.create("交付 REQ9:绿灯后继续监听").id;
+    await until(() => service.get(id)!.status === "await_merge", "第一条流水线绿灯");
+    const firstSha = service.get(id)!.delivery!.sha!;
+
+    const late = await fetch(`${platform.baseUrl}/pipeline/trigger`, {
+      method: "POST",
+      body: JSON.stringify({ sha: firstSha }),
+    });
+    assert.equal(late.status, 201);
+
+    await until(() => service.get(id)!.delivery?.loop?.kind === "ci"
+      && service.get(id)!.status === "running", "绿后回红自动派修");
+    await until(() => service.get(id)!.status === "await_merge"
+      && service.get(id)!.delivery?.sha !== firstSha, "修复后重新绿灯");
+    assert.equal(platform.pipelines.length, 3,
+      "首绿、后续回红、新提交复验三条流水线都要被看见");
   } finally {
     await model.stop();
     await platform.stop();
@@ -592,7 +761,7 @@ test("下单表单不列 review,但修复环问得到它的选项原文", () => 
     "问不到内核就回空串,调用方 fail-open 回本单原交付方式");
 });
 
-test("MR 被关闭 → 如实 failed 请人工,不硬修", async () => {
+test("MR 被关闭不算任务结束：持续监听，重开后恢复，用户可主动停止", async () => {
   const platform = new FakeGitPlatform();
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
   await platform.start();
@@ -604,8 +773,20 @@ test("MR 被关闭 → 如实 failed 请人工,不硬修", async () => {
     const id = service.create("交付 REQ9:被关单").id;
     await until(() => service.get(id)!.status === "await_merge", "先绿");
     platform.settleMr("master_bot_REQ9", "closed");
-    await until(() => service.get(id)!.status === "failed", "关闭即失败");
-    assert.match(service.get(id)!.detail ?? "", /MR 被关闭/);
+    await until(() => service.get(id)!.delivery?.mr_state === "已关闭", "识别关闭");
+    assert.equal(service.get(id)!.status, "await_merge", "关闭不是任务终态");
+    assert.match(service.get(id)!.detail ?? "", /继续监听/);
+
+    platform.mergeRequests[0].merge_state = "opened";
+    await until(() => service.get(id)!.delivery?.mr_state === "等待合入", "重开后恢复");
+    assert.match(service.get(id)!.detail ?? "", /重新打开/);
+
+    const stopped = await service.cancel(id, "tester");
+    assert.equal(stopped.status, "canceled", "MR 合入前用户始终可以主动停止");
+    assert.throws(() => service.addAnnotation(id, {
+      author: "liaoxiang", artifact: "未提交改动", file: "a.txt", line: 1,
+      anchor: "change", note: "停止后不应再新增", kind: "code",
+    }), /用户停止/);
   } finally {
     await model.stop();
     await platform.stop();

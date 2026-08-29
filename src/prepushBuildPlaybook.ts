@@ -281,7 +281,7 @@ function stackLabel(stack: PrePushBuildStack): string {
 export function renderPrePushBuildGuidance(profile: PrePushBuildProfile): string {
   const mvn = profile.maven_command;
   const lines = [
-    "### 内网推送前构建参考（建议，不是第二套流程）",
+    "### 内网 Build-Fix 参考（建议，不是第二套流程）",
     `识别到：${profile.stacks.length ? profile.stacks.map(stackLabel).join(" + ") : "尚未识别明确语言"}${profile.maven ? "；根目录由 Maven 编排" : ""}。`,
     "先以 pom/package、wrapper、仓库脚本与 CI 配置确认真实可执行入口；再根据已选择业务仓 Skill 的名称和描述判断是否相关，需要时读取其说明。Skill 是辅助说明，不得覆盖真实配置或安全边界；下述内网经验只在仓库材料没有说明时兜底。",
   ];

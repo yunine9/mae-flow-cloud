@@ -96,7 +96,7 @@ test("僵尸现场可重跑:收口旧 attempt 后新轮真验证到 passed", asy
 
     const summary = await service.retryPrePush(id);
     assert.equal(summary.status, "verifying");
-    assert.match(summary.detail ?? "", /人工重跑推送前编译/);
+    assert.match(summary.detail ?? "", /人工重跑 Build-Fix/);
 
     // retryPrePush 踢的 tryDeliver 在无平台配置下会早退(测试环境无
     // host);这里直接走 preparePush 验证交付链对僵尸现场的收口语义:

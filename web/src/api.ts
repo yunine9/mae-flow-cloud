@@ -515,7 +515,7 @@ export interface PrepushVerification {
   updated_at?: string;
 }
 
-/** 当前 serve 对 prepush 的真实执行所有权；与可持久化领域阶段分开。 */
+/** 当前 serve 对 Build-Fix 的真实执行所有权；与可持久化领域阶段分开。 */
 export interface PrepushRuntime {
   state: "running" | "recovering" | "interrupted" | "stopped" | "idle";
   message: string;
@@ -877,9 +877,9 @@ export interface TaskSummary {
     mr_state?: string;
     pipeline?: string;
     skipped?: string;
-    /** Cloud 原生推送前快检；缺席表示服务端尚未开始或不支持该能力。 */
+    /** Cloud 原生 Build-Fix；缺席表示服务端尚未开始或不支持该能力。 */
     prepush?: PrepushVerification;
-    /** 进程活性只看这里，不能再由 prepush.state=preparing 推断。 */
+    /** 进程活性只看这里，不能再由旧存储字段 prepush.state=preparing 推断。 */
     prepush_runtime?: PrepushRuntime;
     /** 卡在哪一环的人话(等审批、等某一项核销结果……)。服务端一直
      * 在写,前端一直没显示——于是"验证中"三个字后面藏着的真实原因
@@ -902,6 +902,11 @@ export interface TaskSummary {
       round: number;
       max?: number;
       state: "repairing" | "verifying" | "green" | "exhausted" | "halted";
+      kind?: "ci" | "review" | "conflict";
+      review_source?: "platform" | "workspace";
+      /** true=人工意见已修复，push 前必须回到意见作者逐条复检。 */
+      workspace_review_recheck_required?: boolean;
+      workspace_review_annotation_ids?: string[];
       diagnosis?: string;
       /** 流水线失败的平台原文(摘要)。刹车告警必须连它一起亮:诊断是
        * 会话的收口发言,可能在聊别的事(内网实锤:最后一轮会话在补文档
@@ -2331,7 +2336,7 @@ export interface Annotation {
   kind: "doc" | "code";
   status: "draft" | "sent" | "verified" | "dropped";
   sent_at?: string;
-  sent_via?: "interrupt" | "decision" | "pipeline_evidence";
+  sent_via?: "interrupt" | "decision" | "pipeline_evidence" | "review_repair";
   verified_at?: string;
   /** 第几次返工(0/缺省 = 首轮)。 */
   rework?: number;
@@ -2469,42 +2474,42 @@ export function tailEvents(
   return () => source.close();
 }
 
-/** 推送前验证的实时事件流:换轮(修复后新 HEAD 再验)由服务端切文件
+/** Build-Fix 的实时事件流:换轮(修复后新 HEAD 再验)由服务端切文件
  * 并从头重放新一轮,前端只管渲染。 */
-/** 推送前验证失败停机后,人拍板跳过本地验证、直推流水线裁决。 */
-export async function skipPrepushVerification(taskId: string): Promise<void> {
+/** Build-Fix 失败停机后,人拍板跳过本地验证、直推流水线裁决。 */
+export async function skipBuildFix(taskId: string): Promise<void> {
   const response = await fetch(
-    `/tasks/${encodeURIComponent(taskId)}/prepush/skip`, { method: "POST" });
+    `/tasks/${encodeURIComponent(taskId)}/build-fix/skip`, { method: "POST" });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     throw new Error(String(body.error ?? `HTTP ${response.status}`));
   }
 }
 
-/** 人工重跑推送前编译:僵尸现场(重启杀掉在途轮)的出路;真在跑时
+/** 人工重跑 Build-Fix:僵尸现场(重启杀掉在途轮)的出路;真在跑时
  * 服务端拒绝并明说"正在进行",等于一次活性探测。 */
-export async function retryPrepushVerification(taskId: string): Promise<void> {
+export async function retryBuildFix(taskId: string): Promise<void> {
   const response = await fetch(
-    `/tasks/${encodeURIComponent(taskId)}/prepush/retry`, { method: "POST" });
+    `/tasks/${encodeURIComponent(taskId)}/build-fix/retry`, { method: "POST" });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     throw new Error(String(body.error ?? `HTTP ${response.status}`));
   }
 }
 
-/** 停止在途的推送前编译并直推流水线(用户拍板的合并语义):中止本轮、
+/** 停止在途的 Build-Fix 并直推流水线(用户拍板的合并语义):中止本轮、
  * 如实收口停机账,随即绑当下 HEAD 跳过,编译与 UT 交由权威流水线裁决。
  * 停止瞬间恰好通过的按通过继续;暂停中的任务只停不推。 */
-export async function stopPrepushVerification(taskId: string): Promise<void> {
+export async function stopBuildFix(taskId: string): Promise<void> {
   const response = await fetch(
-    `/tasks/${encodeURIComponent(taskId)}/prepush/stop`, { method: "POST" });
+    `/tasks/${encodeURIComponent(taskId)}/build-fix/stop`, { method: "POST" });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     throw new Error(String(body.error ?? `HTTP ${response.status}`));
   }
 }
 
-/** 环境预热编译的实时事件流,与 prepush 同一套 SSE 语义。 */
+/** 环境预热编译的实时事件流,与 Build-Fix 同一套 SSE 语义。 */
 export function tailWarmupEvents(
   taskId: string,
   onEvent: (event: SemanticEvent) => void,
@@ -2518,18 +2523,27 @@ export function tailWarmupEvents(
   return () => source.close();
 }
 
-export function tailPrepushEvents(
+export function tailBuildFixEvents(
   taskId: string,
   onEvent: (event: SemanticEvent) => void,
   onState?: (state: SseConnectionState) => void,
 ): () => void {
   onState?.("connecting");
-  const source = new EventSource(`/tasks/${taskId}/prepush/events`);
+  const source = new EventSource(`/tasks/${taskId}/build-fix/events`);
   source.onopen = () => onState?.("live");
   source.onmessage = (message) => onEvent(JSON.parse(message.data));
   source.onerror = () => onState?.("reconnecting");
   return () => source.close();
 }
+
+/** @deprecated 兼容尚未升级的内部调用；新代码使用 Build-Fix 命名。 */
+export const skipPrepushVerification = skipBuildFix;
+/** @deprecated 兼容尚未升级的内部调用；新代码使用 Build-Fix 命名。 */
+export const retryPrepushVerification = retryBuildFix;
+/** @deprecated 兼容尚未升级的内部调用；新代码使用 Build-Fix 命名。 */
+export const stopPrepushVerification = stopBuildFix;
+/** @deprecated 兼容尚未升级的内部调用；新代码使用 Build-Fix 命名。 */
+export const tailPrepushEvents = tailBuildFixEvents;
 
 /** 问题会话的实时事件流:服务端从头重放 events.jsonl 后持续跟进
  * (300ms 增量),与任务侧 /tasks/:id/events 同一套 SSE 语义。 */

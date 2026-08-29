@@ -22,7 +22,12 @@ export type AnnotationKind = "doc" | "code";
 /** verified = 人看过改动、点了"确认通过"——这是人的判断,不是系统推断,
  * 所以它只能由按钮产生,永远不会被重锚定自动打上。 */
 export type AnnotationStatus = "draft" | "sent" | "verified" | "dropped";
-export type SentVia = "interrupt" | "decision" | "pipeline_evidence";
+export type SentVia =
+  | "interrupt"
+  | "decision"
+  | "pipeline_evidence"
+  /** MR 已创建后的本地检视：进入当前 MR 的持续修复环。 */
+  | "review_repair";
 
 export interface Annotation {
   id: string;

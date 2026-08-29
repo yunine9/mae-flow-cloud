@@ -59,7 +59,7 @@ export function warmupMission(
     "   JS 仓最重的一步,必须先于 Maven 编译完成。",
     `3. **沉淀构建入口**:把验证过的编译命令与注意事项写入 ${WARMUP_NOTES_PATH}`,
     "   (Markdown,一条命令一行,注明执行目录),编码期的构建自检",
-    "   子 Agent 和推送前验证都会先读它。样例:",
+    "   子 Agent 和 Build-Fix 都会先读它。样例:",
     "   ```",
     "   - 全量编译(仓库根): mvn clean compile",
     "   - 增量编译(仓库根): mvn compile   # 日常自检用这条",

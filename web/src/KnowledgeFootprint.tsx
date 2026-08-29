@@ -14,7 +14,7 @@ const ACTION: Record<KnowledgeAction, string> = {
   available: "进入能力目录", loaded: "已加载到上下文",
   read: "读取正文", searched: "检索定位",
 };
-const ROLE = { main: "主 Agent", subagent: "子 Agent", prepush: "推送前编译",
+const ROLE = { main: "主 Agent", subagent: "子 Agent", prepush: "Build-Fix",
   warmup: "预热编译", "developer-assistant": "开发助手" } as const;
 
 type KnowledgeCandidateDraft = {

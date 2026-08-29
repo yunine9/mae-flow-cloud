@@ -35,12 +35,13 @@ export type TeamScope =
 
 const WIP_STATUSES = [
   "queued", "running", "pausing", "verifying", "waiting_for_human",
+  "await_merge",
 ];
-const DELIVERED_STATUSES = ["await_merge", "completed"];
+const DELIVERED_STATUSES = ["completed"];
 const WEEK_MS = 7 * 86_400_000;
 
-/** 团队现场只回答“现在谁需要行动”。待合入、已完成和已取消进入
- * 交付档案；failed 仍留在现场，因为它明确需要负责人介入或重跑。 */
+/** 团队现场只回答“任务是否还活着”。待合入仍会监听流水线和接收
+ * 批注，所以继续留在现场；只有已合入和用户取消离开现场。 */
 export function isCurrentTeamTask(task: TeamTask): boolean {
   return ![...DELIVERED_STATUSES, "canceled"].includes(task.status);
 }

@@ -298,8 +298,8 @@ export function TaskCard({
                  所以这里只给入口不给表单。 */
               <div className="chain-review-entry">
                 <span>DELIVERY REVIEW</span>
-                <strong>推送前请检视代码</strong>
-                <p>本次全部代码增量等待你检视;请到任务工作台逐文件检视 diff,核对交付清单后提交决定。</p>
+                <strong>Build-Fix 已通过，请做最终代码检视</strong>
+                <p>这版代码已完成构建与测试修复；请到任务工作台检视 diff，确认后将直接推送。</p>
                 {onOpenArtifacts && (
                   <button type="button" onClick={onOpenArtifacts}>
                     去检视代码
@@ -427,7 +427,7 @@ export function TaskProgress({
  * id 不猜译——猜错比不译更糟,通用标题足够,正文会说明这是什么决定。 */
 function waitingStepTitle(task: TaskSummary): string | undefined {
   const step = task.waiting?.step ?? "";
-  if (step === "cloud_push_confirm") return "推送前确认：检视代码与交付范围";
+  if (step === "cloud_push_confirm") return "最终检视：确认这版代码可直接推送";
   if (task.waiting?.recommended_view === "diff") return "代码检视";
   return undefined;
 }
@@ -837,7 +837,7 @@ export function WaitingCard({
                   .selectedPaths.filter((path) => !deliverySelection!
                     .committedPaths.includes(path)).length} 个）；未选内容保留在本地但不推送；`
                 + "不会让 Agent 猜着重改，也不重跑本地编译，最终由绑定新 SHA 的权威流水线裁决。"
-              : "提交后：保持当前提交不变；服务端复核同一文件集合，然后继续推送前验证与交付。"}</span>
+              : "提交后：保持当前提交不变；服务端复核同一文件集合，然后继续交付。若代码变化，会先重新跑 Build-Fix。"}</span>
           {onLocateDelivery && (
             <button type="button" className="delivery-locate"
               onClick={onLocateDelivery}>

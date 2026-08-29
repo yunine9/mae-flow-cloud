@@ -250,6 +250,7 @@ export type DecoratedHostSkillShelf = HostSkillShelf & {
     & { effect?: HostSkillEffect; candidates: number }>;
 };
 import {
+  buildFixScopeReview,
   createPrePushGateContract,
   parsePrePushAgentReport,
   prePushMission,
@@ -774,6 +775,16 @@ export interface TaskSummary {
       state: "repairing" | "verifying" | "green" | "exhausted" | "halted";
       /** 最近一次派的修复类型:回程(settle 后)按它走收尾动作。 */
       kind?: "ci" | "review" | "conflict";
+      /** review 的来源决定是否还需要人裁决：MR 讨论只是别人提的意见，
+       * workspace 则是任务责任人已经在工作台明确提交的修改要求。 */
+      review_source?: "platform" | "workspace";
+      /** 本地检视可能并入正在运行的 CI/冲突会话；独立标记让 push 边界
+       * 知道这一轮新增业务文件也已由用户的修改要求授权。 */
+      workspace_review_pending?: boolean;
+      /** 人工意见引发的修改必须回到人手里复检；纯流水线修复不设置。 */
+      workspace_review_recheck_required?: boolean;
+      /** 本轮需要逐条闭环的批注。空数组表示只有整体补充说明，仍需总检。 */
+      workspace_review_annotation_ids?: string[];
       failure?: string;
       last_sha?: string;
       /** 检视修复的刹车锚:上一轮处理的讨论 id 集(排序拼接)。 */
@@ -1219,6 +1230,8 @@ interface TaskState {
   containerReopen?: Promise<TaskCommandContainer>;
   /** 合入监控环的防重入锁(内存态):一任务只挂一环。 */
   mergeWatchActive?: boolean;
+  /** 流水线轮询按 SHA 防重入；新 SHA 可以立刻接棒，旧轮醒来后自退。 */
+  pipelinePollSha?: string;
   /** 流水线证据核销重试的防重入锁。纯宿主 timer，不占 Agent 会话。 */
   evidenceRetryActive?: boolean;
   /** 红灯具体报错采集的防重入锁；与绿灯核销证据不是同一条链。 */
@@ -2075,14 +2088,14 @@ export class TaskService {
         continue;
       }
       this.activePrePushBuilds += 1;
-      waiter.task.summary.detail = `已获得推送前构建资源（`
+      waiter.task.summary.detail = `已获得 Build-Fix 构建资源（`
         + `${this.activePrePushBuilds}/${slots} 使用中）`;
       // 出队时把排队文案换掉,否则整轮编译期间气泡都还挂着"排队等待"。
       const granted = waiter.task.summary.delivery?.prepush;
       if (granted?.state === "preparing") {
         this.setPrePushState(waiter.task, {
           ...granted,
-          message: "已获得编译槽位，正在启动推送前编译",
+          message: "已获得编译槽位，正在启动 Build-Fix",
           updated_at: new Date().toISOString(),
         });
       }
@@ -2102,7 +2115,7 @@ export class TaskService {
       this.activePrePushBuilds += 1;
       return Promise.resolve(this.releasePrePushBuildSlot());
     }
-    task.summary.detail = `等待推送前构建资源（${this.activePrePushBuilds}/`
+    task.summary.detail = `等待 Build-Fix 构建资源（${this.activePrePushBuilds}/`
       + `${slots} 使用中，按任务顺序排队）`;
     // 排队真相也要进 prepush 现场:气泡读的是 prepush.message 不是任务
     // detail,不写这里用户看到的就是一动不动的"准备"(实锤被当成卡死)。
@@ -2552,13 +2565,13 @@ export class TaskService {
 
     const containerProbe = await this.probeTaskContainerToolchain();
     items.push(!this.options.prepush?.enabled
-      ? { key: "prepush", label: "推送前编译与 UT", status: "warning",
-          detail: "当前部署未启用推送前快速验证" }
+      ? { key: "prepush", label: "Build-Fix", status: "warning",
+          detail: "当前部署未启用 Build-Fix" }
       : !containerProbe.ready
-        ? { key: "prepush", label: "推送前编译与 UT", status: "error",
+        ? { key: "prepush", label: "Build-Fix", status: "error",
             detail: "已启用，但任务构建环境未通过真实自检",
             suggestion: containerProbe.suggestion }
-        : { key: "prepush", label: "推送前编译与 UT", status: "ok",
+        : { key: "prepush", label: "Build-Fix", status: "ok",
             detail: "已启用；每次 push 前在独立容器执行编译与 UT，构建槽位 "
               + `${this.prePushBuildSlotCount()}` });
 
@@ -3281,6 +3294,11 @@ export class TaskService {
   addAnnotation(id: string, input: AnnotationInput): Annotation {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    if (["completed", "canceled"].includes(task.summary.status)) {
+      throw new TaskControlError(task.summary.status === "completed"
+        ? "MR 已合入，任务已经结束，不能再新增批注"
+        : "任务已由用户停止，不能再新增批注");
+    }
     return this.annotations(task).add(input);
   }
 
@@ -3305,7 +3323,9 @@ export class TaskService {
   verifyAnnotation(id: string, annotationId: string, by: string): Annotation {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
-    return this.annotations(task).verify(annotationId, by);
+    const verified = this.annotations(task).verify(annotationId, by);
+    this.refreshWorkspaceReviewClosure(task);
+    return verified;
   }
 
   /** 裁决另半边:返工。锚点若已失效,趁重锚定结果在手边把它换成当前
@@ -3350,10 +3370,21 @@ export class TaskService {
   }> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    if (["completed", "canceled"].includes(task.summary.status)) {
+      throw new TaskControlError(task.summary.status === "completed"
+        ? "MR 已合入，任务已经结束，不能再提交批注"
+        : "任务已由用户停止，不能再提交批注");
+    }
     const picked = this.pickDrafts(task, ids);
     const text = renderAnnotations(picked, this.ticketOf(task));
     const gap = task.summary.delivery?.evidence_gap;
-    if (gap?.missing_dimensions.length) {
+    // 有证据缺口时不能把任何批注都武断地解释成“流水线日志”。用户也
+    // 可能正在代码 diff 上提功能意见；那一类必须走 MR 检视修复，不能
+    // 被塞进 CI 取证字段后悄悄丢失。只有批注落在流水线材料上才回灌。
+    const pipelineEvidence = Boolean(gap?.missing_dimensions.length)
+      && picked.every((item) => /(?:pipeline|build|compile|codecheck|\but\b|日志|流水线)/i
+        .test(`${item.artifact}\n${item.file}`));
+    if (gap?.missing_dimensions.length && pipelineEvidence) {
       const combined = [gap.human_evidence, text]
         .map((item) => String(item ?? "").trim()).filter(Boolean)
         .join("\n\n").slice(0, 12_000);
@@ -3398,9 +3429,180 @@ export class TaskService {
       this.persist(task);
       return { sent: picked.map((item) => item.id), text };
     }
+    if (this.hasOpenMergeRequest(task)) {
+      return this.sendMergeRequestReview(task, picked, text);
+    }
     await this.interrupt(id, text);
     this.annotations(task).markSent(picked.map((item) => item.id), "interrupt");
     return { sent: picked.map((item) => item.id), text };
+  }
+
+  /** MR 已经存在但尚未合入时，本地批注不是“给旧会话插句话”，而是
+   * 当前 MR 的下一轮修改要求。运行中的修复会话直接合并处理；没有活
+   * 会话时开启内核正式的 review 轮。始终复用原分支、原 MR。 */
+  private async sendMergeRequestReview(
+    task: TaskState,
+    picked: Annotation[],
+    text: string,
+  ): Promise<{ sent: string[]; text: string }> {
+    // await_merge 的页面与平台“刚刚点合入”可能竞态。能查询到终态就
+    // 先如实收口；平台不支持门禁契约则 fail-open，后续 push 仍会以
+    // 远端事实失败，不拿一次查询抖动阻塞人的意见。
+    if (["await_merge", "verifying"].includes(task.summary.status)) {
+      const view = await this.fetchGates(task);
+      if (view?.mrState === "merged" || view?.mrState === "closed") {
+        this.settleMergeState(task, view.mrState);
+        throw new TaskControlError(view.mrState === "merged"
+          ? "MR 已合入，当前任务已经结束；如需继续修改，请创建后续任务"
+          : "MR 已关闭，不能再向原 MR 提交修改；请重新打开 MR 或创建后续任务");
+      }
+    }
+    if (!this.hasOpenMergeRequest(task)) {
+      throw new TaskControlError(
+        "当前 MR 已结束，不能再向原分支提交检视修改");
+    }
+
+    const delivered = this.mergeRequestReviewPrompt(text);
+    // prepush 是另一只专项 Agent，也会暂时占用 task.driver。把功能检视
+    // steer 给它会与“只做编译/UT”使命打架。安全中止旧验证（不清现场），
+    // 换代 epoch 让旧回调失去写状态权，再开正式 review 轮；新轮结束后
+    // 会从头对新 HEAD 做 prepush，证据不会复用旧结果。
+    if (task.prepushActive) {
+      task.controlEpoch += 1;
+      const active = task.prepushActive;
+      task.prepushAbort?.abort();
+      await active.catch(() => undefined);
+      if (task.prepushActive === active) task.prepushActive = undefined;
+    }
+
+    if (task.summary.status === "running") {
+      // status 会在 launch 入口先切 running，driver 稍后才就绪。这个短窗
+      // 不能误判成“没有会话”再开第二只 Agent；先等就绪，仍没就绪就
+      // 持久化到 pendingMainSteers，由 launch 在 start 后补送。
+      const deadline = Date.now() + 10_000;
+      while (task.summary.status === "running" && !task.driver
+          && Date.now() < deadline) {
+        await new Promise((tick) => setTimeout(tick, 25));
+      }
+      if (task.summary.status === "running" && task.driver) {
+        await task.driver.steer(delivered);
+      } else if (task.summary.status === "running") {
+        task.pendingMainSteers = [...new Set([
+          ...(task.pendingMainSteers ?? []), delivered,
+        ])];
+      } else {
+        // 等待 driver 的几毫秒里旧会话可能刚好收口。此时再走一次本方法
+        // 的状态分支，仍只会开一轮正式 review，不会与旧 writer 重叠。
+        return this.sendMergeRequestReview(task, picked, text);
+      }
+      this.rememberWorkspaceReview(task, picked);
+      this.persist(task);
+    } else if (task.summary.status === "queued" && task.mission) {
+      // 还没拿到并发槽，直接把意见并进同一份持久使命；不会多起一轮。
+      task.mission += `\n\n${delivered}`;
+      this.rememberWorkspaceReview(task, picked);
+      this.persist(task);
+    } else if (task.summary.status === "waiting_for_human") {
+      throw new TaskControlError(
+        "Agent 正在等你回答当前问题。这批批注已保存，请在当前决定卡提交；系统会把批注一并交给 Agent");
+    } else if (["paused", "pausing"].includes(task.summary.status)) {
+      throw new TaskControlError(
+        "任务当前已暂停，批注已经保存；恢复任务后即可提交给 Agent 继续修改");
+    } else {
+      // 终止旧 SHA 的流水线/合入监控写权限，平台上的旧流水线可以自然
+      // 跑完，但它再也不能把新开的检视轮状态覆盖回去。
+      task.controlEpoch += 1;
+      this.dispatchWorkspaceReviewRepair(task, picked, text);
+    }
+    this.annotations(task).markSent(
+      picked.map((item) => item.id), "review_repair");
+    return { sent: picked.map((item) => item.id), text };
+  }
+
+  private hasOpenMergeRequest(task: TaskState): boolean {
+    const delivery = task.summary.delivery;
+    if (!delivery?.mr_url) return false;
+    if (["completed", "canceled"].includes(task.summary.status)) {
+      return false;
+    }
+    return !String(delivery.mr_state ?? "").startsWith("已合入")
+      && delivery.mr_state !== "已关闭";
+  }
+
+  private mergeRequestReviewPrompt(text: string): string {
+    return [
+      "[MR 本地检视 · 用户已明确提交]",
+      "这批意见是当前 MR 的修改要求，优先级高于正在进行的流水线修复；不要另起分支或 MR。",
+      text,
+      "逐条核对并处理：要求明确就直接修改，不要再问一次‘是否接纳’；只有语义确实不清、不同理解会造成不同代码结果时才举卡，并把歧义说具体。",
+      "若本轮同时有流水线问题，两类问题合并进同一次 commit；完成后回到原使命收口。不要自行 push，Cloud 宿主会统一推送原 MR 分支并重新验证。",
+    ].join("\n\n");
+  }
+
+  /** 人工意见与正在运行的 CI 修复并流时，仍要留下独立的回检账。
+   * “责任人让 Agent 继续”只会推进修改，不能覆盖意见作者的裁决权。 */
+  private rememberWorkspaceReview(
+    task: TaskState,
+    annotations: Annotation[],
+  ): void {
+    const delivery = task.summary.delivery;
+    if (!delivery) return;
+    const max = task.summary.repair_rounds
+      ?? this.options.settings?.runtime().repair_rounds
+      ?? this.options.delivery?.repairRounds;
+    const loop = delivery.loop
+      ?? (delivery.loop = { round: 0, max, state: "repairing" as const });
+    const startsNewCycle = !loop.workspace_review_recheck_required;
+    loop.kind = "review";
+    loop.review_source = "workspace";
+    loop.workspace_review_pending = true;
+    loop.workspace_review_recheck_required = true;
+    loop.workspace_review_annotation_ids = [...new Set([
+      ...(loop.workspace_review_annotation_ids ?? []),
+      ...annotations.map((item) => item.id),
+    ])];
+    if (startsNewCycle || !loop.review_ids) {
+      loop.review_ids = `workspace:${annotations.map((item) =>
+        `${item.id}:r${item.rework ?? 0}`).sort().join(",")}:${Date.now()}`;
+    }
+  }
+
+  /** 人工意见修复完以后，意见作者是唯一裁决人。最后一条点通过时只
+   * 解除“逐条意见未闭环”这一层，不替任务责任人点击最终 push 卡。
+   * 两层职责分开，既不会被责任人越权代签，也不会因为旧卡状态互相
+   * 覆盖而出现“都通过了仍提交不了”。 */
+  private refreshWorkspaceReviewClosure(task: TaskState): void {
+    const loop = task.summary.delivery?.loop;
+    if (loop?.review_source !== "workspace"
+        || !loop.workspace_review_recheck_required) return;
+    const wanted = new Set(loop.workspace_review_annotation_ids ?? []);
+    if (!wanted.size) return; // 只有整体说明，由最终总检卡闭环
+    const pending = this.annotations(task).list().filter((item) =>
+      wanted.has(item.id)
+      && (item.status === "draft" || item.status === "sent"));
+    if (task.summary.waiting?.step === CLOUD_PUSH_CONFIRM_STEP) {
+      task.summary.detail = pending.length
+        ? `等待 ${pending.length} 条检视意见由提出人确认`
+        : "检视意见已全部闭环，等待责任人确认推送";
+      this.persist(task);
+    }
+    if (pending.length || task.summary.waiting?.step !== CLOUD_PUSH_CONFIRM_STEP) {
+      return;
+    }
+    const account = task.summary.luban_account;
+    const notifier = this.options.notifier;
+    if (!account || !notifier) return;
+    const cycle = createHash("sha256")
+      .update(loop.review_ids ?? [...wanted].sort().join(","))
+      .digest("hex").slice(0, 16);
+    this.bypass(task, "检视意见全部闭环通知", notifier.notifyOutcome({
+      taskId: task.summary.id,
+      account,
+      status: `review-ready-to-push:${cycle}`,
+      summary: "本轮人工检视意见已全部由提出人确认，可以打开任务完成最终确认并推送。",
+      link: personalTaskLink(
+        this.notificationLinkBase(), account, task.summary.id),
+    }));
   }
 
   private pickDrafts(task: TaskState, ids?: string[]): Annotation[] {
@@ -4490,8 +4692,10 @@ export class TaskService {
         && task.lastPersistedStatus !== task.summary.status) {
       task.summary.last_progress_at = now;
     }
-    if (["completed", "await_merge"].includes(task.summary.status)) {
+    if (task.summary.status === "completed") {
       task.summary.completed_at ??= now;
+    } else {
+      delete task.summary.completed_at;
     }
     task.summary.updated_at = now;
     task.lastPersistedStatus = task.summary.status;
@@ -4923,13 +5127,13 @@ export class TaskService {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     if (task.prepushActive) {
-      throw new TaskControlError("推送前验证正在进行中,不能跳过");
+      throw new TaskControlError("Build-Fix 正在进行中，不能跳过");
     }
     const prepush = task.summary.delivery?.prepush;
     if (!prepush
         || !["blocked", "environment_error"].includes(prepush.state)) {
       throw new TaskControlError(
-        "只有推送前验证失败停机后才能跳过;当前没有可跳过的失败验证");
+        "只有 Build-Fix 失败停机后才能跳过；当前没有可跳过的失败验证");
     }
     if (!task.cwd) {
       throw new TaskControlError("代码现场不可用,无法绑定跳过时刻的 HEAD");
@@ -4959,36 +5163,36 @@ export class TaskService {
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     if (task.prepushActive) {
       throw new TaskControlError(
-        "推送前编译正在进行中(本进程内有在途轮),不是卡死;"
+        "Build-Fix 正在进行中（本进程内有在途轮），不是卡死；"
         + "等本轮收口或失败停机后再重跑");
     }
     if (task.driver || task.container) {
       throw new TaskControlError(
-        "任务的执行资源尚未释放(会话或容器仍在),不能重跑推送前编译");
+        "任务的执行资源尚未释放（会话或容器仍在），不能重跑 Build-Fix");
     }
     const prepush = task.summary.delivery?.prepush;
     if (!prepush) {
-      throw new TaskControlError("该任务还没有推送前编译现场,无可重跑");
+      throw new TaskControlError("该任务还没有 Build-Fix 现场，无可重跑");
     }
     if (prepush.state === "passed") {
       throw new TaskControlError(
-        "推送前编译已通过,收据仍绑定当前 HEAD,无需重跑");
+        "Build-Fix 已通过，收据仍绑定当前 HEAD，无需重跑");
     }
     if (!task.cwd) {
-      throw new TaskControlError("代码现场不可用,无法重跑推送前编译");
+      throw new TaskControlError("代码现场不可用，无法重跑 Build-Fix");
     }
     if (!["verifying", "failed"].includes(task.summary.status)) {
       throw new TaskControlError(
         `任务状态是 ${task.summary.status},只有 verifying/failed 的任务`
-        + "能重跑推送前编译");
+        + "能重跑 Build-Fix");
     }
     const epoch = task.controlEpoch;
     task.summary.status = "verifying";
-    task.summary.detail = "人工重跑推送前编译";
+    task.summary.detail = "人工重跑 Build-Fix";
     this.persist(task);
     // 交付链自己会收口僵尸 attempt(restore 的 recovered 转移)并起新轮;
     // 这里只负责把链路重新踢活。
-    this.bypass(task, "推送前编译人工重跑",
+    this.bypass(task, "Build-Fix 人工重跑",
       this.resumePrePushVerification(task, epoch));
     return this.project(task);
   }
@@ -5008,7 +5212,7 @@ export class TaskService {
     const active = task.prepushActive;
     if (!active) {
       throw new TaskControlError(
-        "当前没有在途的推送前编译;失败停机后请用重跑或跳过");
+        "当前没有在途的 Build-Fix；失败停机后请用重跑或跳过");
     }
     // 中止要反复补刀直到本轮真正收口:prepushAbort 在拿到编译槽位后
     // 才创建、排队 waiter 也是晚注册的,单发 abort 会打空(竞态)。
@@ -5031,7 +5235,7 @@ export class TaskService {
         ...prepush,
         state: "environment_error",
         active_attempt: undefined,
-        message: "用户停止了本轮推送前编译,直推流水线裁决",
+        message: "用户停止了本轮 Build-Fix，直推流水线裁决",
         updated_at: new Date().toISOString(),
       });
     }
@@ -5043,12 +5247,12 @@ export class TaskService {
     }
     if (["paused", "pausing", "canceled"].includes(task.summary.status)) {
       // 暂停/取消是用户更早的明确指令,只停编译,不顺手续跑去推。
-      task.summary.detail = "推送前编译已由用户停止";
+      task.summary.detail = "Build-Fix 已由用户停止";
       this.persist(task);
       return this.project(task);
     }
     task.summary.status = "failed";
-    task.summary.detail = "推送前编译已由用户停止,转直推流水线";
+    task.summary.detail = "Build-Fix 已由用户停止，转直推流水线";
     this.persist(task);
     // 停止并直推:失败停机后立刻走既有跳过链路(绑 HEAD 的
     // user_skipped + retry 续跑),语义与人分两步点完全一致。
@@ -6149,7 +6353,7 @@ export class TaskService {
         add.length ? `补入 ${add.length} 个勾选文件` : "",
       ].filter(Boolean).join("、");
       await run(["commit", "-m",
-        `chore: 按推送前人工确认整理交付清单——${summary}`], "整理提交");
+        `chore: 按最终人工检视整理交付清单——${summary}`], "整理提交");
     }
     // 提交落定后把被剔除文件的原内容写回工作区:改动只是"不交付",
     // 不是"被销毁";它们成为未暂存改动留在现场,脏区检查放行已确认
@@ -6306,6 +6510,11 @@ export class TaskService {
     task.summary.delivery_selection = selection;
     task.summary.waiting = undefined;
     if (this.pushConfirmationAccepted(waiting)) {
+      const loop = task.summary.delivery?.loop;
+      if (loop?.workspace_review_recheck_required) {
+        loop.workspace_review_recheck_required = false;
+        loop.workspace_review_annotation_ids = undefined;
+      }
       task.summary.status = "verifying";
       task.summary.detail = "交付清单已确认,继续推送";
       this.persist(task);
@@ -6314,6 +6523,13 @@ export class TaskService {
       return;
     }
     const review = waiting.notes.trim();
+    const annotationIds = Array.isArray(waiting.continuation?.annotation_ids)
+      ? waiting.continuation.annotation_ids.map(String) : [];
+    const annotations = this.annotations(task).list().filter((item) =>
+      annotationIds.includes(item.id));
+    // 即使只有补充说明、没有逐行批注，也要回到同一张总检卡；有逐行
+    // 批注时则必须由各自作者逐条裁决，责任人的“继续”不能代点通过。
+    this.rememberWorkspaceReview(task, annotations);
     this.enqueueRepair(task, [
       "用户在 push 前确认交付清单时要求按清单返工,整理提交是你此刻唯一的使命:",
       review
@@ -6549,12 +6765,6 @@ export class TaskService {
       // 新修复会话。这里必须由服务端认定为“处理意见”，不能依赖网页
       // 携带 annotation_ids——小鲁班回复只有选项和说明。
       || (pushConfirmCard && !confirmingPush);
-    const deliverySelection = await this.deliverySelectionForDecision(
-      task, waiting, input, closesFeedback || confirmingPush, pushConfirmCard);
-    if (pushConfirmCard && !deliverySelection) {
-      throw new TaskControlError(
-        "push 前确认必须基于当前变更快照,请刷新后重试");
-    }
     const unresolved = this.unresolvedAnnotations(task);
     if (unresolved.length && (closesFeedback || confirmingPush)) {
       const menuQuestions = Array.isArray(waiting.question?.questions)
@@ -6570,19 +6780,35 @@ export class TaskService {
         ?? nonClosing.find((option) => /需要.*(?:调整|修改)|返工|补充/.test(option))
         ?? nonClosing[0]
         ?? "需要调整";
+      // 必须在整理提交、消费待办之前拒绝。旧顺序先机械改 commit 再报
+      // “意见未闭环”，责任人一次误点就会让现场变化、卡片变旧，形成
+      // 明明后来全点通过却仍提交不了的假死。
       throw new TaskControlError(
         `当前仍有 ${unresolved.length} 条检视意见未闭环，不能继续放行。`
-        + `建议选择“${recommended}”继续处理；若意见已经落实，请先逐条确认通过或移除。`,
+        + `责任人的“继续提交”不能代替意见提出人确认。建议选择“${recommended}”`
+        + "继续处理；若已经修好，请由每条意见的提出人逐条确认通过。",
       );
+    }
+    const deliverySelection = await this.deliverySelectionForDecision(
+      task, waiting, input, closesFeedback || confirmingPush, pushConfirmCard);
+    if (pushConfirmCard && !deliverySelection) {
+      throw new TaskControlError(
+        "push 前确认必须基于当前变更快照,请刷新后重试");
     }
     // 服务端自己取任务当前全部草稿，手机端/月光模式不再因为没携带 id
     // 而漏掉意见。显式 ids 只兼容普通非返工卡的旧提交方式。
     const drafts = this.annotations(task).drafts();
+    const localReviewRound = task.summary.delivery?.loop?.kind === "review"
+      && task.summary.delivery.loop.review_source === "workspace"
+      && task.summary.delivery.loop.state === "repairing";
     const picked = handlesFeedback
       // 普通检视仍回到同一会话，sent 已经在上下文里，不重复送；push
       // 返工会开一只全新会话，必须把 draft + sent 的全部未闭环意见
       // 都带过去，否则“提前主动送达”的意见会断在上一只 Agent 里。
       ? pushConfirmCard ? unresolved : drafts
+      // 本地 review 轮里若 Agent 因真实歧义举卡，用户在等待期间新圈的
+      // 批注随这张卡一并回注；不能让人答完歧义后还要再点一次提交。
+      : localReviewRound ? drafts
       : input.annotation_ids?.length
         ? this.pickDecisionDrafts(task, input.annotation_ids) : [];
     // 批注与自由说明都进 notes，不污染内核用于 choice receipt 的选项。
@@ -7333,7 +7559,7 @@ export class TaskService {
         task.summary.delivery?.prepush?.active_attempt,
       );
       task.summary.detail = prepushRunning
-        ? "正在终止推送前构建容器，随后可从本轮验证恢复"
+        ? "正在终止 Build-Fix 容器，随后可从本轮验证恢复"
         : "正在完成当前操作，随后暂停";
       this.persist(task);
       if (prepushRunning) {
@@ -7458,10 +7684,10 @@ export class TaskService {
       // 直接回交付入口，restorePrePushVerification 会清理旧 attempt
       // 并对同一 SHA 重跑；绝不再起一轮普通编码 Agent。
       task.summary.status = "verifying";
-      task.summary.detail = "已恢复，等待重新执行推送前编译与 UT";
+      task.summary.detail = "已恢复，等待重新执行 Build-Fix";
       persistReturn();
       markReturned();
-      this.bypass(task, "推送前验证恢复",
+      this.bypass(task, "Build-Fix 恢复",
         this.resumePrePushVerification(task, task.controlEpoch));
       return { ...task.summary };
     }
@@ -7675,12 +7901,24 @@ export class TaskService {
   async cancel(id: string, actor: string): Promise<TaskSummary> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
-    const status = task.summary.status;
+    let status = task.summary.status;
     if (status === "canceled" && !task.driver && !task.container) {
       return { ...task.summary };
     }
-    if (["completed", "await_merge"].includes(status)) {
-      throw new TaskControlError(`任务 ${id} 已交付，不能取消`);
+    if (status === "completed") {
+      throw new TaskControlError(`任务 ${id} 已经结束，不能再停止`);
+    }
+    // 人点停止与平台刚合入可能竞态。能查到已合入就先按平台事实收口，
+    // 不能把一单已经合入的交付反写成“用户取消”。查询不可得时仍允许
+    // 用户停止，符合明确控制指令。
+    if (task.summary.delivery?.mr_url
+        && ["await_merge", "verifying"].includes(status)) {
+      const view = await this.fetchGates(task);
+      if (view?.mrState === "merged") {
+        this.settleMergeState(task, "merged");
+        throw new TaskControlError(`任务 ${id} 的 MR 已合入，任务已经结束`);
+      }
+      status = task.summary.status;
     }
     task.controlEpoch += 1;
     task.pauseRequested = false;
@@ -8034,6 +8272,8 @@ export class TaskService {
       let knowledgeMaterialized = false;
       let activeWorkflowProfile = task.summary.workflow_profile;
       let workflowProfileMaterialized = !activeWorkflowProfile;
+      const reviewLane = this.reviewRoundLane(task);
+      let promptSteerCount = 0;
       task.cwd = cwd;
       if (this.options.host && analysisOnly) {
         const analysisRoot = resuming ? savedCwd! : join(workspace, "repositories");
@@ -8143,7 +8383,6 @@ export class TaskService {
         }
         const activeRepository = task.summary.repo_url
           ?? this.effectiveDefaultRepo();
-        const reviewLane = this.reviewRoundLane(task);
         if (activeRepository) {
           const materialized = materializeRepositorySkills({
             selected: task.summary.repository_skills,
@@ -8543,18 +8782,20 @@ export class TaskService {
       // 举卡)。prompt 只补一句立场,具体怎么走听内核的——两种内核
       // 版本都不矛盾。唯一要钉死的是不许自造"是/否"卡:选项原文对
       // 不上号,预答接不住,只能真去等人(内网实测)。
-      if (!analysisOnly && this.options.host && task.summary.lane) {
+      const activeLane = reviewLane || task.summary.lane;
+      if (!analysisOnly && this.options.host && activeLane) {
         prompt = `${prompt}\n\n交付方式用户已在下单时选定:`
-          + `${task.summary.lane}(已写入工作区下单事实,内核能读到)。`
+          + `${activeLane}(已写入工作区下单事实,内核能读到)。`
           + `流程走到交付方式选择时**严格照内核指令执行**:内核说直接`
           + ` done --choice 就直接执行,内核要求出卡就**原样列出标准`
-          + `选项**(系统会替用户选中含「${task.summary.lane}」的那一`
+          + `选项**(系统会替用户选中含「${activeLane}」的那一`
           + `项)。禁止自造"是/否"确认卡,禁止替用户改选。`;
       }
       if (task.pendingAssistantHandoff) {
         prompt = `${prompt}\n\n${task.pendingAssistantHandoff}`;
       }
       if (task.pendingMainSteers?.length) {
+        promptSteerCount = task.pendingMainSteers.length;
         prompt = `${prompt}\n\n主任务在暂停前尚未读取的用户补充（按原始顺序优先处理）：\n`
           + task.pendingMainSteers.map((text) => `- ${text}`).join("\n");
       }
@@ -8673,12 +8914,19 @@ export class TaskService {
       const turn = rebuild
         ? task.driver.startResume(prompt)
         : task.driver.start(prompt);
+      // prompt 构造之后、driver 就绪之前仍可能收到人工检视。构造前已有
+      // 的内容已经随 prompt 送达；窗口内新到的内容在同一只 Agent 上
+      // steer，不能因为启动竞态再开第二只会话抢工作区。
+      const lateSteers = (task.pendingMainSteers ?? []).slice(promptSteerCount);
       // start/startResume 已同步把 prompt 交给会话；到这里才消费一次性
       // 交还摘要。若此前进程退出，task.json 仍保留它，下次不会丢。
       if (task.pendingAssistantHandoff || task.pendingMainSteers?.length) {
         task.pendingAssistantHandoff = undefined;
         task.pendingMainSteers = undefined;
         this.writeTaskState(task);
+      }
+      for (const message of lateSteers) {
+        await task.driver.steer(message);
       }
       await this.settle(task, turn, epoch);
     } catch (error) {
@@ -8928,12 +9176,12 @@ export class TaskService {
    * 的未提交/未跟踪文件不会进入远端；PASS 因此只绑定 SHA，不再用
    * `git status` 把编译产物误当成 push 阻断条件。 */
   private async prePushRevision(task: TaskState): Promise<PrePushRevision> {
-    if (!task.cwd) throw new Error("任务没有代码工作区，不能执行推送前验证");
+    if (!task.cwd) throw new Error("任务没有代码工作区，不能执行 Build-Fix");
     const head = await runSafeWorktreeGitAsync(
       task.cwd, ["rev-parse", "--verify", "HEAD"], { timeoutMs: 30_000 });
     const sha = String(head.stdout ?? "").trim();
     if (head.status !== 0 || !sha) {
-      throw new Error(`推送前读取 HEAD 失败: ${String(head.stderr ?? "")}`);
+      throw new Error(`Build-Fix 读取 HEAD 失败: ${String(head.stderr ?? "")}`);
     }
     return {
       sha,
@@ -8987,25 +9235,25 @@ export class TaskService {
     message: string;
   } {
     const prepush = task.summary.delivery?.prepush;
-    if (!prepush) return { state: "idle", message: "尚未开始推送前验证" };
+    if (!prepush) return { state: "idle", message: "尚未开始 Build-Fix" };
     if (task.prepushActive) {
-      return { state: "running", message: "当前服务正在执行这轮推送前验证" };
+      return { state: "running", message: "当前服务正在执行这轮 Build-Fix" };
     }
     if (task.prepushRecoveryActive) {
-      return { state: "recovering", message: "服务正在恢复上次中断的推送前验证" };
+      return { state: "recovering", message: "服务正在恢复上次中断的 Build-Fix" };
     }
     if (["passed", "user_skipped"].includes(prepush.state)) {
-      return { state: "idle", message: "推送前验证已经收口" };
+      return { state: "idle", message: "Build-Fix 已经收口" };
     }
     if (["blocked", "environment_error"].includes(prepush.state)
         || prepush.state === "repairing"
         || ["paused", "pausing", "canceled"].includes(task.summary.status)
         || Boolean(task.summary.delivery?.stalled)) {
-      return { state: "stopped", message: "当前服务没有运行这轮推送前验证" };
+      return { state: "stopped", message: "当前服务没有运行这轮 Build-Fix" };
     }
     return {
       state: "interrupted",
-      message: "上次推送前验证已经中断，当前服务没有对应的执行会话",
+      message: "上次 Build-Fix 已经中断，当前服务没有对应的执行会话",
     };
   }
 
@@ -9015,7 +9263,7 @@ export class TaskService {
     const prepush = task.summary.delivery?.prepush;
     if (!prepush || ["passed", "user_skipped", "blocked", "environment_error"]
       .includes(prepush.state)) return;
-    const message = `推送前验证无法恢复：${reason}`;
+    const message = `Build-Fix 无法恢复：${reason}`;
     this.setPrePushState(task, failPrePushEnvironment(
       prepush, new Date().toISOString(), message));
     task.summary.status = "failed";
@@ -9051,7 +9299,7 @@ export class TaskService {
           .includes(task.summary.status));
     if (!interrupted) return "none";
     if (!this.options.prepush?.enabled) {
-      this.failPendingPrePush(task, "当前部署未启用推送前编译能力");
+      this.failPendingPrePush(task, "当前部署未启用 Build-Fix 能力");
       return "blocked";
     }
     if (!task.cwd || !existsSync(task.cwd)) {
@@ -9062,16 +9310,16 @@ export class TaskService {
 
     task.prepushRecoveryActive = true;
     task.summary.status = "verifying";
-    task.summary.detail = "服务重启，正在恢复未完成的推送前编译与 UT";
+    task.summary.detail = "服务重启，正在恢复未完成的 Build-Fix";
     delete task.summary.completed_at;
     this.persist(task);
     const epoch = task.controlEpoch;
     const work = this.resumePrePushVerification(task, epoch).finally(() => {
       task.prepushRecoveryActive = false;
-      this.bypass(task, "推送前活性投影",
+      this.bypass(task, "Build-Fix 活性投影",
         this.options.projection?.upsertTask(this.project(task)));
     });
-    this.bypass(task, "推送前验证恢复", work);
+    this.bypass(task, "Build-Fix 恢复", work);
     return "scheduled";
   }
 
@@ -9114,8 +9362,8 @@ export class TaskService {
     epoch: number,
     attemptId: string,
   ): Promise<PrePushRunResult> {
-    if (!task.cwd) throw new Error("推送前验证缺少代码工作区");
-    if (task.driver) throw new Error("已有 Agent 会话在运行，不能启动推送前验证");
+    if (!task.cwd) throw new Error("Build-Fix 缺少代码工作区");
+    if (task.driver) throw new Error("已有 Agent 会话在运行，不能启动 Build-Fix");
     // 用户排除过的未跟踪过程件直接登记到 clone 本地 exclude。专项
     // Agent 看不到这些噪声，就不需要靠“别提交”门禁反复纠偏；已跟踪
     // 文件仍由下面的交付契约与宿主收口处理。
@@ -9126,7 +9374,7 @@ export class TaskService {
     const isolation = this.options.isolation;
     if (!isolation) {
       throw new Error(
-        "推送前编译与 UT 必须在任务容器中执行；当前未配置隔离镜像，"
+        "Build-Fix 必须在任务容器中执行；当前未配置隔离镜像，"
         + "已拒绝回退宿主机",
       );
     }
@@ -9144,7 +9392,7 @@ export class TaskService {
       if (task.container === previousContainer) task.container = undefined;
     }
     if (!this.current(task, epoch)) {
-      throw new Error("任务已停止，拒绝启动推送前构建容器");
+      throw new Error("任务已停止，拒绝启动 Build-Fix 容器");
     }
 
     const agentDir = join(task.summary.workspace, "pi-agent");
@@ -9251,7 +9499,7 @@ export class TaskService {
       const finish = () => resolve({
         status: "session_ended",
         reason: "prepush_interrupted",
-        detail: "推送前验证已由任务控制操作终止",
+        detail: "Build-Fix 已由任务控制操作终止",
       });
       if (abortController.signal.aborted) finish();
       else abortController.signal.addEventListener("abort", finish, { once: true });
@@ -9269,7 +9517,7 @@ export class TaskService {
     let driver: CloudSession | undefined;
     const attemptTimeoutMs = executionBudget.attemptTimeoutMs;
     const attemptTimer = setTimeout(() => failInfrastructure(
-      `推送前验证超过 ${Math.ceil(attemptTimeoutMs / 60_000)} 分钟，已终止本轮`,
+      `Build-Fix 超过 ${Math.ceil(attemptTimeoutMs / 60_000)} 分钟，已终止本轮`,
     ), attemptTimeoutMs);
     attemptTimer.unref?.();
     const withExecution = (result: PrePushRunResult): PrePushRunResult => {
@@ -9299,7 +9547,7 @@ export class TaskService {
     try {
       await container.start();
       if (!this.current(task, epoch)) {
-        throw new Error("任务已停止，推送前构建容器不再执行命令");
+        throw new Error("任务已停止，Build-Fix 容器不再执行命令");
       }
       // 先验证确定性的本地环境事实，再花模型额度。settings、Maven 实际
       // JDK、JVM cacerts、缓存或 C++ 拓扑不对时直接给出基础设施结论，
@@ -9366,7 +9614,7 @@ export class TaskService {
         streamBashOutput: true,
         sessionId: `prepush-${request.round}`,
         currentStep: () => this.currentStepLabel(task),
-        compactAnchor: () => `推送前验证任务: ${requirementContext(
+        compactAnchor: () => `Build-Fix 任务: ${requirementContext(
           task.summary.requirement,
           task.summary.requirement_document,
           AGENT_REQUIREMENT_DOCUMENT,
@@ -9387,12 +9635,12 @@ export class TaskService {
             } catch (error) {
               if (error instanceof TaskContainerExecTimeoutError) {
                 failInfrastructure(
-                  `推送前构建命令运行 ${Math.ceil(error.timeoutSeconds / 60)} 分钟`
+                  `Build-Fix 命令运行 ${Math.ceil(error.timeoutSeconds / 60)} 分钟`
                     + "仍未完成，已安全停止本轮；这是验证预算耗尽，不代表代码编译失败",
                 );
               } else if (error instanceof TaskContainerUnavailableError) {
                 failInfrastructure(
-                  `推送前容器不可用（${error.kind}）：${error.message}`,
+                  `Build-Fix 容器不可用（${error.kind}）：${error.message}`,
                 );
               }
               throw error;
@@ -9410,7 +9658,7 @@ export class TaskService {
       });
       if (!this.current(task, epoch) || abortController.signal.aborted) {
         driver.dispose();
-        throw new Error("任务已停止，推送前 Agent 不再启动");
+        throw new Error("任务已停止，Build-Fix Agent 不再启动");
       }
       task.driver = driver;
       let outcome = await waitForTurn(driver.start(prePushMission(
@@ -9432,7 +9680,7 @@ export class TaskService {
           return withExecution({
             status: "infrastructure_failure",
             sha: (await this.prePushRevision(task)).sha,
-            message: outcome.detail ?? outcome.reason ?? "推送前会话异常结束",
+            message: outcome.detail ?? outcome.reason ?? "Build-Fix 会话异常结束",
           });
         }
         const report = parsePrePushAgentReport(driver.finalReply());
@@ -9476,12 +9724,12 @@ export class TaskService {
           });
         }
         outcome = await waitForTurn(driver.continueWith([
-          "推送前验证尚不能签发 PASS，请在当前专项会话继续处理。",
+          "Build-Fix 尚不能签发 PASS，请在当前专项会话继续处理。",
           evidence,
           "不要只重写结论；两项命令必须在最后一次代码修改后真实成功。",
         ].filter(Boolean).join("\n")));
       }
-      throw new Error("推送前验证会话超过收口预算");
+      throw new Error("Build-Fix 会话超过收口预算");
     } finally {
       clearTimeout(attemptTimer);
       if (driver && task.driver === driver) task.driver = undefined;
@@ -9511,12 +9759,12 @@ export class TaskService {
     }
     if (["blocked", "environment_error"].includes(state.state)) {
       state = retryPrePushVerification(
-        state, at, "重新执行推送前编译与 UT 验证");
+        state, at, "重新执行 Build-Fix");
     }
     state = beginPrePushAttempt(state, at);
     const attemptId = state.active_attempt?.id;
     if (!attemptId) {
-      throw new Error(`推送前验证无法启动，当前状态: ${state.state}`);
+      throw new Error(`Build-Fix 无法启动，当前状态: ${state.state}`);
     }
     this.setPrePushState(task, state);
     const previousStatus = task.summary.status;
@@ -9524,6 +9772,9 @@ export class TaskService {
     task.summary.detail = state.message;
     this.persist(task);
 
+    const deliverySnapshot = await deliveryChangeSnapshot(task.cwd!);
+    const changeScope = buildFixScopeReview(
+      deliverySnapshot?.committed_paths ?? []);
     const request: PrePushRunRequest = {
       taskId: task.summary.id,
       workspace: task.cwd!,
@@ -9536,6 +9787,7 @@ export class TaskService {
       ),
       branch,
       baseline,
+      ...(changeScope ? { changeScope } : {}),
       ...(task.summary.delivery_selection?.status === "confirmed" ? {
         deliverySelection: {
           paths: [...task.summary.delivery_selection.paths],
@@ -9557,7 +9809,7 @@ export class TaskService {
       result = {
         status: "infrastructure_failure",
         sha: (await this.prePushRevision(task)).sha,
-        message: `推送前验证执行失败: ${String(error)}`,
+        message: `Build-Fix 执行失败: ${String(error)}`,
       };
     } finally {
       releaseBuildSlot();
@@ -9590,11 +9842,11 @@ export class TaskService {
     const passed = Boolean(getReusablePushReceipt(state, finalRevision));
     if (passed) {
       task.summary.status = previousStatus;
-      task.summary.detail = "推送前编译与 UT 已通过，准备推送";
+      task.summary.detail = "Build-Fix 已通过，等待最终人工检视";
       if (task.summary.delivery) delete task.summary.delivery.skipped;
     } else {
       task.summary.status = "failed";
-      task.summary.detail = `推送前验证未通过：${state.message}`;
+      task.summary.detail = `Build-Fix 未通过：${state.message}`;
       task.summary.delivery = {
         ...task.summary.delivery,
         skipped: task.summary.detail,
@@ -9624,7 +9876,7 @@ export class TaskService {
       const revision = await this.prePushRevision(task);
       if (sameRevision(skipped, revision)) {
         this.options.log?.(
-          `任务 ${task.summary.id} 按用户决定跳过推送前验证`
+          `任务 ${task.summary.id} 按用户决定跳过 Build-Fix`
           + `(HEAD ${revision.sha.slice(0, 12)}),交由流水线裁决`);
         return true;
       }
@@ -9638,20 +9890,25 @@ export class TaskService {
     }
   }
 
-  /** push 前人工确认闸。要不要举卡:任务级显式设置优先,其次归属人
-   * 个人默认(真人缺省即开;无账号链路不举卡);两者都缺省但用户在
-   * 检视中提交过交付清单时也举卡——人已经在管范围,复核不一致就该
-   * 回到卡上重新确认,而不是把任务判死。
-   * 人确认的是交付文件集合，不是每个中间 SHA：流水线修复只修改这
-   * 组文件时直接复用;卡键也绑集合指纹,HEAD 演进不换卡不打扰。
-   * 重新举卡时增量优先:先说较上次多了什么少了什么,人不用整单重看。 */
+  /** push 前人工确认闸不区分“第一次/后续”，只看本轮修改来源：
+   * - 普通开发按用户设置决定是否检视；
+   * - 人工意见触发的修改强制回到人手里复检，且每条意见只能由提出人
+   *   裁决，责任人不能代签；
+   * - 纯 Build-Fix/流水线修复若没有改变已确认文件集合，自动续推。
+   *
+   * 人确认的是交付文件集合，不是每个中间 SHA。人工返工周期另外带
+   * review cycle 身份，因此同一文件集合也会生成一张全新的复检卡，
+   * 绝不会复活上一张已决卡。 */
   private async pushConfirmationSatisfied(
     task: TaskState,
     branch: string,
   ): Promise<boolean> {
-    const required = task.summary.push_confirmation
+    const loop = task.summary.delivery?.loop;
+    const recheckRequired = loop?.review_source === "workspace"
+      && loop.workspace_review_recheck_required === true;
+    const required = recheckRequired || (task.summary.push_confirmation
       ?? this.options.pushConfirmation?.(task.summary.luban_account)
-      ?? Boolean(task.summary.delivery_selection);
+      ?? Boolean(task.summary.delivery_selection));
     if (!required || !task.cwd) return true;
     const snapshot = await deliveryChangeSnapshot(task.cwd);
     if (!snapshot?.baseline) {
@@ -9662,7 +9919,8 @@ export class TaskService {
     const committed = normalizedDeliveryPaths(snapshot.committed_paths);
     const selection = task.summary.delivery_selection;
     if (selection?.status === "confirmed"
-        && samePaths(normalizedDeliveryPaths(selection.paths), committed)) {
+        && samePaths(normalizedDeliveryPaths(selection.paths), committed)
+        && !recheckRequired) {
       if (selection.head !== snapshot.head) {
         this.options.log?.(
           `任务 ${task.summary.id} HEAD 已从 ${selection.head.slice(0, 12)} `
@@ -9671,10 +9929,10 @@ export class TaskService {
       }
       return true;
     }
-    const callId = pushConfirmCallId(
-      committed,
-      selection?.status === "requested" ? selection.waiting_id : undefined,
-    );
+    const cycleToken = selection?.status === "requested"
+      ? selection.waiting_id
+      : recheckRequired ? loop?.review_ids : undefined;
+    const callId = pushConfirmCallId(committed, cycleToken);
     const waiting = task.summary.waiting;
     if (waiting?.step === CLOUD_PUSH_CONFIRM_STEP) {
       if (waiting.call_id === callId) return false; // 同一集合的卡已在等人
@@ -9706,8 +9964,26 @@ export class TaskService {
     // 只在 prepush 收敛后举这一张卡。它既让人检视最终代码，也把
     // 文件集合固化成宿主可机械核验的授权边界；后续自动修复留在这个
     // 边界内就不中断，越界才重新问人。
+    const reviewAnnotationIds = new Set(
+      loop?.workspace_review_annotation_ids ?? []);
+    const reviewItems = recheckRequired
+      ? this.annotations(task).list().filter((item) =>
+          reviewAnnotationIds.has(item.id))
+      : [];
+    const pendingReviewItems = reviewItems.filter((item) =>
+      item.status === "draft" || item.status === "sent");
+    const reviewContext = recheckRequired ? [
+      "**这是人工意见修改后的复检，不是按 push 次数重复询问。**",
+      reviewItems.length
+        ? `本轮关联 ${reviewItems.length} 条检视意见，目前还有 ${pendingReviewItems.length} 条待提出人确认。`
+        : "本轮是整体检视意见返工，请在最终代码上确认修改结果。",
+      ...(pendingReviewItems.length ? [
+        "意见提出人请逐条点“确认已修复”或“仍需调整”；任务责任人的“确认推送”不能代替提出人签字。",
+      ] : ["逐条意见已经闭环，任务责任人可确认本次最终代码并推送。"]),
+    ] : [];
     const context = [
-      "**推送前最终确认:请检视代码——通过后宿主才推送并创建 MR。**",
+      "**最终代码检视：Build-Fix 已收敛。确认后将直接推送并创建或更新 MR。**",
+      ...reviewContext,
       ...deltaLines,
       "完整增量在「检视材料 → 本任务变更」逐文件看 diff;发现问题可在"
       + "代码行上留批注,选「需要调整代码」让 Agent 修改。",
@@ -9734,9 +10010,17 @@ export class TaskService {
       context,
     });
     task.summary.status = "waiting_for_human";
-    task.summary.detail = "等待确认最终交付范围";
+    task.summary.detail = recheckRequired
+      ? pendingReviewItems.length
+        ? `等待 ${pendingReviewItems.length} 条检视意见由提出人确认`
+        : "检视意见已闭环，等待责任人确认推送"
+      : "等待确认最终交付范围";
     this.persist(task);
-    this.notifyWaiting(task);
+    if (recheckRequired) {
+      this.notifyWorkspaceReviewReady(task, snapshot.head);
+    } else {
+      this.notifyWaiting(task);
+    }
     this.options.log?.(
       `任务 ${task.summary.id} push 前确认卡已生成(HEAD ${snapshot.head.slice(0, 12)})`);
     return false;
@@ -9783,7 +10067,8 @@ export class TaskService {
    * 交给 Agent 撞一道新门禁：若变化只涉及已明确排除的路径（或中心注入
    * 目录），宿主以最近一次已推送的干净 SHA 为锚，把修复中的已确认文件
    * 机械重组为一个提交。被排除内容仍留在工作区，但污染提交从可达历史中
-   * 消失；真正新增的业务文件不在这里猜，仍交给最终范围卡确认一次。 */
+   * 消失；真正新增的业务文件不在这里猜，由首次范围确认或用户明确提交
+   * 的 MR 检视授权决定。 */
   private async reconcileConfirmedDeliveryBoundary(
     task: TaskState,
   ): Promise<"unchanged" | "changed" | "blocked"> {
@@ -9796,17 +10081,17 @@ export class TaskService {
     const expected = normalizedDeliveryPaths(selection.paths);
     const rejected = new Set(normalizedDeliveryPaths(selection.excluded_paths));
     const unexpected = current.filter((path) => !expected.includes(path));
-    const missing = expected.filter((path) => !current.includes(path));
     const platformHistory = normalizedDeliveryPaths(
       snapshot.added_agent_platform_paths ?? []);
-    const onlyKnownRejected = unexpected.length > 0
-      && missing.length === 0
-      && unexpected.every((path) => rejected.has(path)
-        || isAgentPlatformPath(path));
-    if (!platformHistory.length && !onlyKnownRejected) return "unchanged";
-    const targetPaths = onlyKnownRejected
-      ? expected
-      : current.filter((path) => !isAgentPlatformPath(path));
+    const knownRejected = unexpected.filter((path) => rejected.has(path)
+      || isAgentPlatformPath(path));
+    if (!platformHistory.length && !knownRejected.length) return "unchanged";
+    // 已排除内容与真正的新业务文件同时出现时，也只机械剔除前者、保留
+    // 后者。旧实现要求“所有新增都属于已排除项”才清理，结果一条正常
+    // 新测试文件会让 .claude/.cac 等污染跟着回到确认门禁，修复 Agent
+    // 反复撞墙。目标集合只由事实分类，不猜新业务文件该不该留。
+    const targetPaths = current.filter((path) => !isAgentPlatformPath(path)
+      && !rejected.has(path));
 
     const run = async (args: string[], action: string) => {
       const result = await runSafeWorktreeGitAsync(cwd, args, {
@@ -9864,7 +10149,8 @@ export class TaskService {
 
     // 平台目录即便先提交后删除，blob 仍在历史里。以干净锚重组而不是补
     // 一个“删除提交”，才能保证远端不可达。已确认范围之外若出现真正的
-    // 新业务文件，不属于 onlyKnownRejected，前面已经留给重新确认卡。
+    // 新业务文件保留在 targetPaths；后面由 review 授权继承或首次确认卡
+    // 决定。这里始终只移除用户已排除项与平台目录。
     const stagePaths = [...new Set([
       ...targetPaths,
       ...expected,
@@ -9913,6 +10199,44 @@ export class TaskService {
       `任务 ${task.summary.id} 已自动移除修复重新带入的排除内容：${
         describeDirtyPaths([...new Set([...unexpected, ...platformHistory])])}`);
     return "changed";
+  }
+
+  /** 用户在 MR 工作台点“提交并继续修改”，已经授权 Agent 为落实这些
+   * 意见调整当前 MR 的业务文件集合。既有人工排除仍是硬边界，平台目录
+   * 仍由宿主硬剔除；其余必要的新源码/测试先继承到候选集合，再由本轮
+   * 人工意见复检卡统一确认，不因为文件集合变化额外制造第二张卡。 */
+  private async inheritWorkspaceReviewDeliverySelection(
+    task: TaskState,
+  ): Promise<void> {
+    const loop = task.summary.delivery?.loop;
+    const selection = task.summary.delivery_selection;
+    if (!loop?.workspace_review_pending) return;
+    if (selection?.status !== "confirmed" || !task.cwd) {
+      loop.workspace_review_pending = false;
+      this.persist(task);
+      return;
+    }
+    const snapshot = await deliveryChangeSnapshot(task.cwd);
+    if (!snapshot?.baseline) return;
+    const paths = normalizedDeliveryPaths(snapshot.committed_paths);
+    const rejected = new Set(normalizedDeliveryPaths(selection.excluded_paths));
+    // 这两类绝不靠“用户提交了检视意见”放宽。正常情况下前面的机械
+    // 清理已经移除；若仍在，保留 pending 让既有门禁明确停下。
+    if (paths.some((path) => rejected.has(path) || isAgentPlatformPath(path))) {
+      return;
+    }
+    task.summary.delivery_selection = {
+      ...selection,
+      paths,
+      observed_paths: snapshot.workspace_paths,
+      head: snapshot.head,
+      baseline: snapshot.baseline,
+      updated_at: new Date().toISOString(),
+    };
+    loop.workspace_review_pending = false;
+    this.persist(task);
+    this.options.log?.(
+      `任务 ${task.summary.id} 本地 MR 检视已更新本轮候选交付集合(${paths.length} 个文件)，等待同一轮人工复检`);
   }
 
   /** 中心能力注入目录绝不能靠 Agent 自觉。info/exclude 防普通 add，
@@ -10019,6 +10343,8 @@ export class TaskService {
         if (!this.current(task, epoch)) return;
       }
       if (!await this.agentPlatformChangesAllowPush(task)) return;
+      await this.inheritWorkspaceReviewDeliverySelection(task);
+      if (!this.current(task, epoch)) return;
       // 从这里开始才需要外部交付平台。prepush 已经有明确收口，不会因
       // 平台配置在部署窗口暂缺而留下“准备中但没有 owner”的僵尸状态。
       if (!platformUrl || !this.options.host) {
@@ -10207,18 +10533,20 @@ export class TaskService {
     return true;
   }
 
-  /** 流水线异步收敛:轮询 status?sha= 直到终态或预算耗尽。
+  /** 流水线异步收敛:轮询 status?sha= 直到终态或任务真正结束。
    * - 结果只认绑定 SHA 的运行(旧绿灯不背书新代码);
-   * - 查询失败 fail-open 继续轮,预算兜底——绝不无限等(红线);
-   * - 预算耗尽留痕请人工,任务停在 verifying,不假装有结论;
+   * - 查询失败 fail-open 继续轮；MR 合入/用户取消前不因时间预算失联;
    * - 终态落袋:状态/台账/通知一次收口,幂等锚是任务当前状态。 */
   private async pollPipeline(task: TaskState, epoch: number): Promise<void> {
     const delivery = this.options.delivery;
     const sha = task.summary.delivery?.sha;
     if (!this.effectivePlatformUrl() || !sha) return;
+    if (task.pipelinePollSha === sha) return;
+    task.pipelinePollSha = sha;
+    try {
     if (task.summary.delivery?.pipeline?.startsWith("running(")) {
-      // "running(轮询预算耗尽,请人工查看…)"是上一段轮询的求助台词;
-      // 新一轮已带新预算重新盯上,再挂着"请人工"就是呈现与实际不一致。
+      // 旧版本可能留下“预算耗尽”的求助台词；现在监听跟任务同寿命，
+      // 重建后复位成真实的 running。
       // 复位成裸 running,后续事实由本轮如实写。
       task.summary.delivery = { ...task.summary.delivery, pipeline: "running" };
       this.persist(task);
@@ -10227,15 +10555,13 @@ export class TaskService {
     const interval = (knobs.poll_interval_s !== undefined
       ? knobs.poll_interval_s * 1000 : undefined)
       ?? delivery?.pollIntervalMs ?? 10_000;
-    const deadline = Date.now() + ((knobs.poll_timeout_s !== undefined
-      ? knobs.poll_timeout_s * 1000 : undefined)
-      ?? delivery?.pollTimeoutMs ?? 30 * 60_000);
-    while (Date.now() < deadline) {
+    while (true) {
       // unref:轮询是旁路,不许它吊着进程不退(进程要退就让它退,
       // 重启后 recover 会以 delivery.sha 为锚续轮)。
       await new Promise((tick) => setTimeout(tick, interval).unref());
       if (!this.current(task, epoch)
-          || task.summary.status !== "verifying") return; // 已被别处推进
+          || task.summary.status !== "verifying"
+          || task.summary.delivery?.sha !== sha) return; // 已被别处推进/新 SHA 接棒
       let terminal;
       try {
         const repo = encodeURIComponent(
@@ -10249,7 +10575,8 @@ export class TaskService {
           { headers: this.platformIdentity(task) })
           .then((r) => readJson(r));
         if (!this.current(task, epoch)
-            || task.summary.status !== "verifying") return;
+            || task.summary.status !== "verifying"
+            || task.summary.delivery?.sha !== sha) return;
         // 防陈灯机械核验(2026-08-28 对比报告头号根因):is_valid=false
         // 或 run 绑着别的 SHA 的一律不认——旧绿灯不背书新代码,旧红灯
         // 也不背书。被拒原因写进现场,人能看见"为什么还在等"。
@@ -10296,13 +10623,9 @@ export class TaskService {
         String(terminal.log ?? ""), checks, epoch);
       return;
     }
-    if (!this.current(task, epoch)
-        || task.summary.status !== "verifying") return;
-    task.summary.delivery = {
-      ...task.summary.delivery,
-      pipeline: "running(轮询预算耗尽,请人工查看流水线)",
-    };
-    this.persist(task);
+    } finally {
+      if (task.pipelinePollSha === sha) task.pipelinePollSha = undefined;
+    }
   }
 
   /**
@@ -10941,8 +11264,8 @@ export class TaskService {
     }
   }
 
-  /** MR 平台侧终态:merged=任务真正的赢(比 await_merge 更进一步),
-   * closed=被人关掉(不是系统能修的,如实 failed 请人看)。 */
+  /** MR 平台侧状态:merged 才是任务真正结束。closed 只是一个需要人
+   * 处理的等待态：MR 可能被误关后重开，不能替用户把整个任务判死。 */
   private settleMergeState(
     task: TaskState,
     state: "merged" | "closed",
@@ -10982,17 +11305,19 @@ export class TaskService {
       }
       return;
     }
+    const changed = delivery.mr_state !== "已关闭"
+      || delivery.waiting_on !== "MR 已关闭，请重新打开或由任务责任人主动停止任务";
     delivery.mr_state = "已关闭";
-    task.summary.status = "failed";
-    task.summary.detail = "MR 被关闭(未合入),请人工确认原因";
-    this.persist(task);
-    this.notifyOutcome(task);
+    delivery.waiting_on = "MR 已关闭，请重新打开或由任务责任人主动停止任务";
+    task.summary.status = "await_merge";
+    task.summary.detail = "MR 已关闭但任务尚未结束；系统继续监听，重开后自动恢复";
+    if (changed) this.persist(task);
   }
 
-  /** 合入监控环:流水线绿之后接着盯门禁与 MR 状态,直到合入/关闭/
-   * 出现可修失败/预算耗尽。内网既有框架的"挂起等待"语义在这里:
+  /** 合入监控环:流水线绿之后接着盯门禁与 MR 状态,直到合入、用户取消
+   * 或出现可修失败。内网既有框架的"挂起等待"语义在这里:
    * 等审批/投票不是异常,保持监控、告诉人卡在哪,不空转不扣重试。
-   * 平台不支持门禁契约时本方法一轮就退——await_merge 即收口(旧语义)。 */
+   * 绿灯不是终态：目标分支、检视或平台状态随后变化，都要重新响应。 */
   private async watchMerge(task: TaskState, epoch: number): Promise<void> {
     if (task.mergeWatchActive) return; // 防重入:一任务一环
     task.mergeWatchActive = true;
@@ -11001,19 +11326,32 @@ export class TaskService {
       const interval = (knobs.poll_interval_s !== undefined
         ? knobs.poll_interval_s * 1000 : undefined)
         ?? this.options.delivery?.pollIntervalMs ?? 10_000;
-      const deadline = Date.now() + ((knobs.poll_timeout_s !== undefined
-        ? knobs.poll_timeout_s * 1000 : undefined)
-        ?? this.options.delivery?.pollTimeoutMs ?? 30 * 60_000);
-      while (Date.now() < deadline) {
+      while (true) {
         if (!this.current(task, epoch)
             || task.summary.status !== "await_merge") return;
         const view = await this.fetchGates(task);
         if (!this.current(task, epoch)
             || task.summary.status !== "await_merge") return;
-        if (!view) return; // 平台不支持/暂不可得:保持旧语义收口
-        if (view.mrState === "merged" || view.mrState === "closed") {
-          this.settleMergeState(task, view.mrState);
+        if (!view) {
+          // 平台暂不可得也不能永久丢掉监听；等待下一拍。timer unref，
+          // 服务退出时不会被后台监控吊住，重启恢复会重新挂环。
+          await new Promise((tick) => setTimeout(tick, interval).unref());
+          continue;
+        }
+        if (view.mrState === "merged") {
+          this.settleMergeState(task, "merged");
           return;
+        }
+        if (view.mrState === "closed") {
+          this.settleMergeState(task, "closed");
+          await new Promise((tick) => setTimeout(tick, interval).unref());
+          continue;
+        }
+        if (task.summary.delivery?.mr_state === "已关闭") {
+          task.summary.delivery.mr_state = "等待合入";
+          task.summary.delivery.waiting_on = undefined;
+          task.summary.detail = "MR 已重新打开，继续监听流水线与合入状态";
+          this.persist(task);
         }
         const sorted = classifyGates(view.gates);
         if (sorted.repairs.length) {
@@ -11074,14 +11412,6 @@ export class TaskService {
           }
         }
         await new Promise((tick) => setTimeout(tick, interval).unref());
-      }
-      // 预算耗尽:不是错误(MR 还开着),但监控停了要明说。
-      if (this.current(task, epoch)
-          && task.summary.status === "await_merge") {
-        task.summary.detail =
-          `合入监控预算耗尽,MR 仍未合入(${task.summary.delivery?.waiting_on
-            ?? "原因见平台"}),请人工留意`;
-        this.persist(task);
       }
     } finally {
       task.mergeWatchActive = false;
@@ -11151,6 +11481,7 @@ export class TaskService {
       return "halted";
     }
     loop.kind = "review";
+    loop.review_source = "platform";
     loop.round = 0; // 检视触发清零 CI 重试(内网框架的实证语义)
     loop.review_ids = ids;
     loop.replied_ids = undefined; // 新一批意见,答复台账从零记
@@ -11176,14 +11507,12 @@ export class TaskService {
         `MR 上有 ${discussions.length} 条检视意见未解决,`
         + `逐条处理它们是你此刻唯一的使命:`,
         ...lines,
-        `- **第一件事:执行 init --new 开这一轮的单**。上一单已交付到`
-        + `终态,内核会把它归一化成"终态换轮"并自动归档,不需要`
-        + `exit/goto/skip。交付方式已由下单事实给定(处理评审意见),`
-        + `选卡会自动通过;分支不会新建,内核按本单单号派生的就是当前`
-        + `这个 MR 分支。开单之后一律按 current 的本步指引走到 end,`
-        + `不要跳步、不要自己拼流程。`,
-        `- 为什么必须开单:不开单的话流程停在 end,门禁全部旁路——`
-        + `你这一轮的改动没人裁决、没人记账,改完也不会被流水线复验。`,
+        `- Cloud 宿主已在你入场前机械开启「处理评审意见」新轮，`
+        + `**不要再次 init、不要 exit/goto/skip**；先执行 current，`
+        + `随后严格按本步指引走到 end。分支不会新建，内核按本单单号`
+        + `派生的就是当前 MR 分支。`,
+        `- 为什么要走这张新单:它让本轮修改继续受内核门禁和证据台账`
+        + `约束，并在提交后重新进入流水线验证；不能在上一轮 end 上裸改。`,
         `- 原始数据在 ../reviews/discussions.json(仓库外),需要完整`
         + `上下文时自己读。`,
         `- 意见对的就改代码,意见基于误解的不改——但必须说清依据,`
@@ -11203,6 +11532,88 @@ export class TaskService {
       ].join("\n"),
       `检视意见 ${discussions.length} 条,专职会话处理中`);
     return "dispatched";
+  }
+
+  /** 工作台本地检视修复：用户点“提交并继续修改”本身就是逐条修复授权，
+   * 与“MR 上别人留了一条意见、需要责任人先裁决”不是同一种输入。
+   * 仍走内核 review 正路，但不让 Agent 再问一遍“这些意见接不接纳”。 */
+  private dispatchWorkspaceReviewRepair(
+    task: TaskState,
+    annotations: Annotation[],
+    rendered: string,
+  ): void {
+    const delivery = task.summary.delivery!;
+    const max = task.summary.repair_rounds
+      ?? this.options.settings?.runtime().repair_rounds
+      ?? this.options.delivery?.repairRounds;
+    const previousFailure = delivery.loop?.failure;
+    const loop = delivery.loop
+      ?? (delivery.loop = { round: 0, max, state: "repairing" as const });
+    loop.kind = "review";
+    loop.review_source = "workspace";
+    loop.workspace_review_pending = true;
+    loop.workspace_review_recheck_required = true;
+    loop.workspace_review_annotation_ids = [...new Set([
+      ...(loop.workspace_review_annotation_ids ?? []),
+      ...annotations.map((item) => item.id),
+    ])];
+    loop.round = 0;
+    loop.max = max;
+    loop.review_ids = `workspace:${annotations.map((item) =>
+      `${item.id}:r${item.rework ?? 0}`).sort().join(",")}:${Date.now()}`;
+    loop.replied_ids = undefined;
+    loop.state = "repairing";
+    loop.diagnosis = undefined;
+
+    // 旧 SHA 的取证/停机状态不能卡住人的新修改。旧失败摘要留在使命里，
+    // 让这一轮能顺手一起处理；最终结论只认新提交重新跑出的流水线。
+    delivery.waiting_on = undefined;
+    delivery.stalled = undefined;
+    delivery.verify_deadline = undefined;
+    delivery.evidence_gap = undefined;
+
+    const reviewsDir = join(task.summary.workspace, "reviews");
+    try {
+      mkdirSync(reviewsDir, { recursive: true });
+      writeFileSync(join(reviewsDir, "local-annotations.json"), JSON.stringify({
+        task_id: task.summary.id,
+        mr_url: delivery.mr_url,
+        submitted_at: new Date().toISOString(),
+        annotations,
+      }, null, 2));
+      // 本地检视没有 MR discussion 回复；残留的旧回复绝不能在本轮结束
+      // 时被误发到平台。
+      rmSync(join(task.summary.workspace, "review_replies.md"), { force: true });
+    } catch (error) {
+      this.options.log?.(
+        `任务 ${task.summary.id} 本地检视材料落盘失败(使命正文仍可用): ${String(error)}`);
+    }
+    const priorPipeline = previousFailure
+      ? [
+          "- 当前 MR 同时还有上一轮流水线失败。人的检视优先，但不要丢掉已知 CI 问题；两类修改合进同一次提交：",
+          previousFailure,
+          "  完整流水线材料若存在，仍在 ../pipeline/；新提交会重新跑权威流水线。",
+        ]
+      : [];
+    this.enqueueRepair(task, [
+      `任务责任人在工作台明确提交了 ${annotations.length} 条当前 MR 检视意见。`
+        + "逐条落实并更新原 MR，是你此刻唯一的使命：",
+      rendered,
+      "- Cloud 宿主已在你入场前机械开启「处理评审意见」新轮。不要再次 init，"
+        + "不要 exit/goto/skip；先执行 current，随后按内核指引走到 end。",
+      "- 这些不是待你猜测是否接纳的外部建议：用户点击“提交并继续修改”已经明确授权"
+        + "逐条修复。先查代码事实，要求明确就直接在 review.md 记为“修复(已确认)”并处理，"
+        + "不要再举卡重复问‘是否修复’。",
+      "- 若内核只因本轮没有重复 AskUserQuestion 而缺 ASKUSER 证据，按 current 给出的"
+        + "受控出口执行一次 accept-risk askuser，并把理由写成“用户已在工作台逐条提交修改要求”；"
+        + "这只豁免重复询问，不豁免 review.md、查证、实现、检视、提交或流水线。",
+      "- 只有意见本身确实模糊、不同理解会造成不同代码结果时才 AskUserQuestion；"
+        + "问题里必须点明歧义和不同结果，不能用泛泛的‘请确认’把工作退回用户。",
+      ...priorPipeline,
+      "- 在当前 MR 分支修改必要的源码和测试，遵守 current 的提交清单与 commit 指引。"
+        + "不要读取或索要个人 Git 令牌，不要自行 push；Cloud 会统一推送到原分支、"
+        + "更新原 MR，并对新 SHA 重新执行 Build-Fix 与权威流水线。",
+    ].join("\n"), `收到 ${annotations.length} 条本地检视意见，正在修改当前 MR`);
   }
 
   /** 冲突修复派单(批4):宿主先 merge 目标分支**故意把冲突标记留在
@@ -11401,6 +11812,7 @@ export class TaskService {
    * 逐条发到平台并标已解决。发布失败 fail-open 留痕——回复发不出去
    * 顶多门禁下一轮还红,再走一次刹车判定,绝不卡死收口。 */
   private async publishReviewReplies(task: TaskState): Promise<void> {
+    if (task.summary.delivery?.loop?.review_source === "workspace") return;
     const platformUrl = this.effectivePlatformUrl();
     const repliesPath = join(task.summary.workspace, "review_replies.md");
     if (!platformUrl || !existsSync(repliesPath)) return;
@@ -11714,11 +12126,20 @@ export class TaskService {
     }
     const moonlight = this.moonlightEnabledFor(task, forceMoonlight);
     const hasUnresolvedAnnotations = this.unresolvedAnnotations(task).length > 0;
+    const contractStep = this.reviewContractStep(task, waiting);
     const effects = stepChoiceEffects(
       this.options.host?.kernelRoot,
-      this.reviewContractStep(task, waiting),
+      contractStep,
     );
-    const lane = task.summary.lane;
+    // review 修复轮的下单事实已经切成内核定义的 review 选项，预答也
+    // 必须认同一份事实。继续拿原单“完整开发”去匹配，会让新轮卡在
+    // 交付方式选择上，形成“用户明明提交了检视意见又被问一遍”。
+    const reviewLane = this.reviewRoundLane(task);
+    const lane = reviewLane || task.summary.lane;
+    const localReviewConfig = contractStep === "config_confirm"
+      && task.summary.delivery?.loop?.kind === "review"
+      && task.summary.delivery.loop.review_source === "workspace"
+      && task.summary.delivery.loop.state === "repairing";
     const reasons = new Set<string>();
     const answers: Record<string, string> = {};
     for (const item of questions) {
@@ -11734,6 +12155,21 @@ export class TaskService {
       if (preselected) {
         answers[text] = preselected;
         reasons.add(`下单预选交付方式:${lane}`);
+      } else if (localReviewConfig) {
+        // 工作台提交已经授权“继续修改当前 MR”，新 review 轮又完整沿用
+        // 原单号/分支/需求事实，因此配置卡只是在重复确认同一份事实。
+        // 只命中明确的肯定选项；形状漂移就退回人，不猜。
+        const confirmed = (item.options ?? []).find((option) =>
+          /确认.*(?:配置|以上)|配置.*(?:正确|无误)|全部.*(?:正确|无误)/
+            .test(option)
+          && !/修改|调整|错误|不正确|有误/.test(option));
+        if (!confirmed) {
+          this.options.log?.(
+            `任务 ${task.summary.id} 本地检视轮配置卡缺少明确确认选项，退回人工`);
+          return undefined;
+        }
+        answers[text] = confirmed;
+        reasons.add("本地检视沿用原单已确认配置");
       } else if (moonlight) {
         // 有检视意见时绝不自动放行；开放题也必须由人明确填写。月光只
         // 能提交真实选项，不能再拿一段自由文本冒充内核分支值。
@@ -11833,9 +12269,8 @@ export class TaskService {
     };
   }
 
-  /** push 前人工确认开关。已推送(await_merge/终态)后再开没有意义,
-   * 如实拒绝;关掉时若正卡在确认卡上,作废卡并续推——人说不用看了,
-   * 机器不能还举着卡等。 */
+  /** push 前人工确认开关。普通确认可关闭；人工意见触发的复检属于
+   * 意见闭环，不是偏好开关，不能靠关开关绕过。 */
   setPushConfirmation(id: string, on: boolean): TaskSummary {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
@@ -11844,6 +12279,13 @@ export class TaskService {
       .includes(status)) {
       throw new TaskControlError(
         `任务已${status === "await_merge" ? "推送" : "收口"},push 前确认点已经过去`);
+    }
+    const loop = task.summary.delivery?.loop;
+    if (!on && loop?.review_source === "workspace"
+        && loop.workspace_review_recheck_required) {
+      throw new TaskControlError(
+        "本轮修改来自人工检视意见，必须完成复检后才能推送；不能关闭确认绕过。",
+      );
     }
     task.summary.push_confirmation = on || undefined;
     const waiting = task.summary.waiting;
@@ -12498,6 +12940,44 @@ export class TaskService {
       link: personalTaskLink(
         this.notificationLinkBase(), account, task.summary.id),
     }));
+  }
+
+  /** Agent 已按人工意见完成修改且 Build-Fix 收敛：把复检待办直接发给
+   * 每条意见的作者，不再只喊任务责任人。通知只负责提醒，权威状态仍
+   * 是批注账 + 最终确认卡；失败不会阻塞任务，恢复重放也不会重复发。 */
+  private notifyWorkspaceReviewReady(task: TaskState, sha: string): void {
+    const notifier = this.options.notifier;
+    const owner = task.summary.luban_account;
+    const loop = task.summary.delivery?.loop;
+    if (!notifier || !owner || loop?.review_source !== "workspace"
+        || !loop.workspace_review_recheck_required) return;
+    const wanted = new Set(loop.workspace_review_annotation_ids ?? []);
+    const pending = this.annotations(task).list().filter((item) =>
+      wanted.has(item.id)
+      && (item.status === "draft" || item.status === "sent"));
+    const byAuthor = new Map<string, number>();
+    for (const item of pending) {
+      byAuthor.set(item.author, (byAuthor.get(item.author) ?? 0) + 1);
+    }
+    // 只有整体补充说明时没有逐条作者，最终总检仍由任务责任人完成。
+    if (!byAuthor.size) byAuthor.set(owner, 0);
+    const revisionKey = createHash("sha256")
+      .update(`${loop.review_ids ?? "workspace"}:${sha}`)
+      .digest("hex").slice(0, 20);
+    for (const [account, count] of byAuthor) {
+      const summary = count
+        ? `Agent 已处理你提出的 ${count} 条检视意见，Build-Fix 已通过。请打开任务逐条点“确认已修复”或“仍需调整”；未全部闭环前不会推送。`
+        : "Agent 已按本轮整体检视意见完成修改，Build-Fix 已通过。请打开任务复检最终代码；确认前不会推送。";
+      this.bypass(task, `邀请 ${account} 复检`, notifier.notifyReviewReady({
+        taskId: task.summary.id,
+        senderAccount: owner,
+        account,
+        summary,
+        link: personalTaskLink(
+          this.notificationLinkBase(), account, task.summary.id),
+        revisionKey,
+      }));
+    }
   }
 
   /** 任务收口 → 小鲁班(说人话)。语义同待办通知:失败不改流程,

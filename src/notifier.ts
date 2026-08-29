@@ -433,6 +433,44 @@ export class Notifier {
     return record;
   }
 
+  /** Agent 已按人的意见改完，回请意见提出人复检。revisionKey 绑定
+   * “这一批意见 + 这一版代码”，恢复重放不会重复轰炸；新一轮返工仍会
+   * 产生新提醒。 */
+  async notifyReviewReady(input: {
+    taskId: string;
+    senderAccount: string;
+    account: string;
+    summary: string;
+    link: string;
+    revisionKey: string;
+  }): Promise<NotifyRecord> {
+    const key = `${input.taskId}:review-ready:${input.account}:`
+      + input.revisionKey;
+    const existing = this.records.get(key);
+    if (existing) return existing;
+    const record: NotifyRecord = {
+      waiting_id: key,
+      task_id: input.taskId,
+      account: input.account,
+      step: "review_ready",
+      summary: input.summary,
+      link: input.link,
+      text: withPluginActivationNotice(renderTemplate(this.templates.review, {
+        task_id: input.taskId,
+        summary: input.summary,
+        account: input.account,
+        sender_account: input.senderAccount,
+        link: input.link,
+      })),
+      attempts: 0,
+      delivered: false,
+      last_error: "",
+    };
+    this.records.set(key, record);
+    await this.deliver(record, input.senderAccount);
+    return record;
+  }
+
   /** 当前生效的投递目标:运行时覆盖压过静态配置。 */
   private target(): { endpoint: string; headers: Record<string, string> } {
     const live = this.options.live?.() ?? {};

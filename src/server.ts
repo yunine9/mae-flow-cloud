@@ -39,10 +39,11 @@
  *   POST /tasks/:id/annotations/:annId/verify           → 裁决:确认通过(只裁自己的)
  *   POST /tasks/:id/annotations/:annId/reopen           → 裁决:返工,退回草稿再送一轮
  *   GET  /tasks/:id/events                              → SSE:重放事件日志后持续跟进
- *   GET  /tasks/:id/prepush/events                      → SSE:推送前验证实时事件(换轮自动切新)
- *   POST /tasks/:id/prepush/skip                        → 失败停机后人工拍板跳过,直推流水线裁决
- *   POST /tasks/:id/prepush/retry                       → 人工重跑推送前编译(僵尸现场出路/活性探针)
- *   POST /tasks/:id/prepush/stop                        → 停止在途编译并直推流水线(绑 HEAD 跳过)
+ *   GET  /tasks/:id/build-fix/events                    → SSE:Build-Fix 实时事件(换轮自动切新)
+ *   POST /tasks/:id/build-fix/skip                      → 失败停机后人工拍板跳过,直推流水线裁决
+ *   POST /tasks/:id/build-fix/retry                     → 人工重跑 Build-Fix(僵尸现场出路/活性探针)
+ *   POST /tasks/:id/build-fix/stop                      → 停止在途 Build-Fix 并直推流水线(绑 HEAD 跳过)
+ *   /prepush/*                                          → 旧客户端兼容别名
  *   GET  /tasks/:id/warmup/events                       → SSE:环境预热编译实时事件
  *   GET  /tasks/:id/timeline                            → 人话交付时间线(只读现场)
  *   GET  /tasks/:id/activity                            → 行为摘要:此刻在干嘛/分段折叠/异常信号
@@ -2125,9 +2126,11 @@ export function createTaskServer(
         if (request.method === "GET" && parts[2] === "events") {
           return streamEvents(service, id, response);
         }
-        // 推送前验证的实时事件流(用户点名:编译过程、执行命令必须
+        // Build-Fix 的实时事件流(用户点名:编译过程、执行命令必须
         // 看得见)。轮目录由服务端每拍重解析,换轮自动从头放新一轮。
-        if (request.method === "GET" && parts[2] === "prepush"
+        // /prepush 是旧客户端兼容别名；新客户端统一使用 /build-fix。
+        if (request.method === "GET"
+            && ["build-fix", "prepush"].includes(parts[2])
             && parts[3] === "events") {
           return streamPrepushEvents(service, id, response);
         }
@@ -2282,8 +2285,9 @@ export function createTaskServer(
           }
           return json(response, 200, service.retry(id));
         }
-        // 推送前验证失败停机后,人可拍板跳过本地验证,直推流水线裁决。
-        if (request.method === "POST" && parts[2] === "prepush"
+        // Build-Fix 失败停机后,人可拍板跳过本地验证,直推流水线裁决。
+        if (request.method === "POST"
+            && ["build-fix", "prepush"].includes(parts[2])
             && parts[3] === "skip") {
           const target = service.get(id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
@@ -2293,9 +2297,10 @@ export function createTaskServer(
           return json(response, 200,
             await service.skipPrePushVerification(id));
         }
-        // 人工重跑推送前编译:重启杀掉在途轮留下的僵尸现场,或失败停机
+        // 人工重跑 Build-Fix:重启杀掉在途轮留下的僵尸现场,或失败停机
         // 后想再来一轮。真在跑时服务端拒绝并明说,兼作活性探针。
-        if (request.method === "POST" && parts[2] === "prepush"
+        if (request.method === "POST"
+            && ["build-fix", "prepush"].includes(parts[2])
             && parts[3] === "retry") {
           const target = service.get(id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
@@ -2304,8 +2309,9 @@ export function createTaskServer(
           }
           return json(response, 200, await service.retryPrePush(id));
         }
-        // 停止在途的推送前编译并直推流水线:收口停机账后立刻绑 HEAD 跳过。
-        if (request.method === "POST" && parts[2] === "prepush"
+        // 停止在途的 Build-Fix 并直推流水线:收口停机账后立刻绑 HEAD 跳过。
+        if (request.method === "POST"
+            && ["build-fix", "prepush"].includes(parts[2])
             && parts[3] === "stop") {
           const target = service.get(id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
@@ -2510,7 +2516,7 @@ function streamEvents(
   streamJsonlAsSse(service, id, response, () => service.eventLogPath(id));
 }
 
-/** 推送前验证事件流:路径每拍重解析——修复轮产生新 HEAD 会开新一轮
+/** Build-Fix 事件流:路径每拍重解析——修复轮产生新 HEAD 会开新一轮
  * 目录,路径一变就从头放新一轮,客户端不用自己发现换轮。 */
 function streamPrepushEvents(
   service: TaskService,

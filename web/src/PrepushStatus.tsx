@@ -1,8 +1,8 @@
 import { useState } from "react";
 import {
-  retryPrepushVerification,
-  skipPrepushVerification,
-  stopPrepushVerification,
+  retryBuildFix,
+  skipBuildFix,
+  stopBuildFix,
   type PrepushRuntime,
   type PrepushVerification,
   type TaskSummary,
@@ -99,8 +99,8 @@ function viewOf(state: string): PrepushView {
     default:
       return {
         phase: "unknown",
-        label: "推送前编译",
-        detail: "Cloud 正在处理这次推送前编译。",
+        label: "Build-Fix",
+        detail: "Cloud 正在检查并修复这次待推送版本。",
         tone: "neutral",
         busy: true,
         generic: true,
@@ -185,19 +185,19 @@ export function PrepushBadge({
   const cls = view.tone === "success" ? "is-passed"
     : view.tone === "danger" ? "is-failed"
       : view.tone === "repair" ? "is-repair" : "is-running";
-  const label = view.phase === "passed" ? "编译通过"
-    : view.generic ? "推送前编译"
+  const label = view.phase === "passed" ? "Build-Fix · 通过"
+    : view.generic ? "Build-Fix"
       : view.phase === "compiling" ? "编译中"
-        : prepush.state === "user_skipped" ? view.label : `编译·${view.label}`;
+        : prepush.state === "user_skipped" ? view.label : `Build-Fix · ${view.label}`;
   return (
     <>
       <button type="button" className={`warmup-badge ${cls}`}
         onClick={() => setOpen(true)}
-        title={`推送前编译:${badgeDetail}`}>
+        title={`Build-Fix：${badgeDetail}`}>
         <i aria-hidden />{label}
       </button>
       {open && (
-        <OverlayDialog ariaLabel="推送前编译详情" title="推送前编译"
+        <OverlayDialog ariaLabel="Build-Fix 详情" title="Build-Fix"
           onClose={() => setOpen(false)}>
           <PrepushStatus prepush={prepush} runtime={runtime}
             placement="workspace" />
@@ -220,7 +220,7 @@ export function PrepushBadge({
                       修复提交保留。</span>
                     <button type="button" className="prepush-action-btn is-danger"
                       disabled={busy === "stop"}
-                      onClick={() => perform("stop", stopPrepushVerification)}>
+                      onClick={() => perform("stop", stopBuildFix)}>
                       {busy === "stop" ? "停止中…" : "确认停止并直推"}
                     </button>
                     <button type="button" className="prepush-action-btn"
@@ -233,7 +233,7 @@ export function PrepushBadge({
                       裁决。跳过只绑当前 HEAD,新提交后自动失效。</span>
                     <button type="button" className="prepush-action-btn is-warn"
                       disabled={busy === "skip"}
-                      onClick={() => perform("skip", skipPrepushVerification)}>
+                      onClick={() => perform("skip", skipBuildFix)}>
                       {busy === "skip" ? "提交中…" : "确认跳过"}
                     </button>
                     <button type="button" className="prepush-action-btn"
@@ -261,7 +261,7 @@ export function PrepushBadge({
                     )}
                     <button type="button" className="prepush-action-btn"
                       disabled={Boolean(busy)}
-                      onClick={() => perform("retry", retryPrepushVerification)}
+                      onClick={() => perform("retry", retryBuildFix)}
                       title="失败停机或重启后卡住时用;正在编译时服务端会拒绝并说明,这句拒绝即是活性答案">
                       {busy === "retry" ? "提交中…" : "↻ 重跑编译"}
                     </button>
@@ -275,7 +275,7 @@ export function PrepushBadge({
   );
 }
 
-/** 推送前快速验证只补充平台状态，不覆盖内核的任务状态。 */
+/** Build-Fix 只补充平台状态，不覆盖内核的任务状态。 */
 export function PrepushStatus({
   prepush,
   runtime,
@@ -287,7 +287,7 @@ export function PrepushStatus({
 }) {
   if (!prepush) return null;
   const view = withRuntime(viewOf(prepush.state), runtime);
-  const title = view.generic ? view.label : `推送前编译 · ${view.label}`;
+  const title = view.generic ? view.label : `Build-Fix · ${view.label}`;
   const detail = runtimeOwnsCopy(prepush.state, runtime)
     ? (runtime?.message ?? view.detail) : (prepush.message?.trim() || view.detail);
   const titleHint = prepush.updated_at

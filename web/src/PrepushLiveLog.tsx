@@ -1,12 +1,12 @@
 /**
- * 推送前验证实时过程(用户点名的可观测性缺口:编译过程、执行命令必须
+ * Build-Fix 实时过程(用户点名的可观测性缺口:编译过程、执行命令必须
  * 看得见)。只渲染服务端事件不做推断;验证进行中订阅 SSE,收口后保留
  * 末尾现场供回看。换轮由服务端切文件从头重放,前端只管去重与渲染。
  */
 
 import { useEffect, useRef, useState } from "react";
 import {
-  tailPrepushEvents,
+  tailBuildFixEvents,
   type PrepushRuntime,
   type SemanticEvent,
   type SseConnectionState,
@@ -97,15 +97,15 @@ function linesOf(event: SemanticEvent): LiveLine[] {
 export function PrepushLiveLog({
   taskId,
   active,
-  source = tailPrepushEvents,
-  title = "编译过程",
-  emptyText = "等待编译 Agent 的第一条命令……",
+  source = tailBuildFixEvents,
+  title = "Build-Fix 过程",
+  emptyText = "等待 Build-Fix Agent 的第一条命令……",
 }: {
   taskId: string;
   /** 验证是否进行中:进行中订阅;结束后不再订阅但保留已收现场。 */
   active: boolean;
-  /** 事件源(默认 prepush;环境预热等同构流复用本组件时替换)。 */
-  source?: typeof tailPrepushEvents;
+  /** 事件源(默认 Build-Fix;环境预热等同构流复用本组件时替换)。 */
+  source?: typeof tailBuildFixEvents;
   title?: string;
   emptyText?: string;
 }) {
@@ -133,7 +133,7 @@ export function PrepushLiveLog({
     if (node) node.scrollTop = node.scrollHeight;
   }, [lines]);
   if (!active && lines.length === 0) return null;
-  return <div className="prepush-live" aria-label="推送前编译实时过程">
+  return <div className="prepush-live" aria-label="Build-Fix 实时过程">
     <div className="prepush-live-head">
       <strong>{title}</strong>
       {active

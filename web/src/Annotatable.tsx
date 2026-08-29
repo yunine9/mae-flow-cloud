@@ -31,6 +31,7 @@ export function Annotatable({
   fallbackFile,
   kind,
   items,
+  enabled = true,
   onAdded,
   children,
 }: {
@@ -41,6 +42,8 @@ export function Annotatable({
   kind: "doc" | "code";
   /** 已有批注:用来在材料上标出"这几处我圈过"。 */
   items: Annotation[];
+  /** MR 合入或用户停止后材料仍可读，但不再显示新增批注入口。 */
+  enabled?: boolean;
   onAdded: () => void;
   children: React.ReactNode;
 }) {
@@ -101,6 +104,7 @@ export function Annotatable({
   }
 
   function open(event: React.MouseEvent) {
+    if (!enabled) return;
     const target = event.target as HTMLElement | null;
     if (!target?.closest) return;
     const row = pickRow(
@@ -119,7 +123,7 @@ export function Annotatable({
   }
 
   function track(event: React.MouseEvent) {
-    if (draft) return;
+    if (!enabled || draft) return;
     const target = event.target as HTMLElement | null;
     if (!target?.closest || target.closest(".annot-fab, .annot-editor")) return;
     const row = target.closest<HTMLElement>("[data-l]");
@@ -164,7 +168,7 @@ export function Annotatable({
           setHint("");
         }}>{hint}<b>知道了</b></div>
       )}
-      {hovered && !draft && (
+      {enabled && hovered && !draft && (
         <button
           type="button"
           className="annot-fab"
