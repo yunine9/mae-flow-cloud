@@ -616,6 +616,7 @@ export function WaitingCard({
         repositorySkills,
         confirmsChain ? repositoryAssigneeSelection?.assignments : undefined,
         requiresDeliverySelection ? deliverySelection?.selectedPaths : undefined,
+        task.waiting!.waiting_id,
       );
       if (result.conflict) setConflict(result.conflict);
       onDecided();

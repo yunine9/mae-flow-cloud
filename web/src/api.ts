@@ -1974,10 +1974,13 @@ export async function decide(
   repositoryAssignees?: Record<string, string>,
   /** 代码检视勾选的最终交付文件；空数组表示明确不选任何文件。 */
   deliveryPaths?: string[],
+  /** 当前卡的稳定身份；用于把成功请求的网络重放识别为幂等成功。 */
+  waitingId?: string,
 ): Promise<{ conflict?: string }> {
   const response = await fetch(`/tasks/${taskId}/decision`, {
     method: "POST",
     body: JSON.stringify({
+      waiting_id: waitingId,
       state_version: stateVersion,
       selected_options: selectedOptions,
       free_responses: freeResponses,

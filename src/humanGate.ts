@@ -38,6 +38,13 @@ export interface WaitingRecord {
   created_at: string;
   resolved_at: string;
   reminders: number;
+  /** 同一 HTTP 请求的稳定指纹。网络重试只有完全相同才幂等返回；
+   * 不同决定仍严格执行先到生效。旧记录缺席时保持原有冲突语义。 */
+  request_digest?: string;
+  /** 决定落袋后宿主完成后续动作所需的结构化收据。它与决定同在
+   * waiting.json 的原子替换里，避免进程死在“决定已收、task.json
+   * 尚未推进”的窗口后丢失交付清单等上下文。 */
+  continuation?: Record<string, unknown>;
 }
 
 interface Store {
@@ -103,6 +110,13 @@ export class HumanGate {
       .sort((a, b) => a.created_at.localeCompare(b.created_at));
   }
 
+  /** waiting.json 是人工决定的权威账。task.json 只存页面投影副本；
+   * 两者发生分叉时，调用方必须从这里重新对账。 */
+  get(waitingId: string): WaitingRecord | undefined {
+    const record = this.load().records[waitingId];
+    return record ? { ...record } : undefined;
+  }
+
   /** 消费决定;版本不匹配或已被抢先,抛 StateConflictError。 */
   resolve(
     waitingId: string,
@@ -111,12 +125,19 @@ export class HumanGate {
       decision: string;
       answers?: Record<string, string>;
       notes?: string;
+      requestDigest?: string;
+      continuation?: Record<string, unknown>;
     },
   ): WaitingRecord {
     const store = this.load();
     const record = store.records[waitingId];
     if (!record) throw new StateConflictError(`待办 ${waitingId} 不存在`);
     if (record.status !== "waiting") {
+      if (record.status === "resolved"
+          && options.requestDigest
+          && record.request_digest === options.requestDigest) {
+        return { ...record };
+      }
       throw new StateConflictError(
         `任务状态已变化:待办 ${waitingId} 已由先到决定完成`);
     }
@@ -130,6 +151,9 @@ export class HumanGate {
       record.answers = { ...options.answers };
     }
     record.notes = String(options.notes ?? "");
+    record.request_digest = options.requestDigest || undefined;
+    record.continuation = options.continuation
+      ? { ...options.continuation } : undefined;
     record.state_version += 1;
     record.resolved_at = now();
     this.save(store);

@@ -262,17 +262,18 @@ test("恢复自愈:概要还在等人但 waiting 已 resolved,自动续跑", asy
   }, "任务进入等待");
   await modelA.stop();
 
-  // 模拟旧版本留下的现场:waiting.json 已有答案，task.json 却仍写
-  // waiting_for_human + resolved waiting，页面因此重复举卡。
+  // 模拟真实崩溃窗口:waiting.json 已有答案，task.json 仍保留 resolve
+  // 之前的 waiting 副本。旧测试把 resolved 对象也塞进 task.json，反而
+  // 绕开了线上真正会卡死的状态分叉。
   const workspace = join(dataDir, created.id);
-  const resolved = new HumanGate(join(workspace, "waiting.json")).resolve(
+  new HumanGate(join(workspace, "waiting.json")).resolve(
     waiting!.waiting_id,
     { stateVersion: waiting!.state_version, decision: "确认" },
   );
   const taskPath = join(workspace, "task.json");
   const saved = JSON.parse(readFileSync(taskPath, "utf-8"));
   saved.summary.status = "waiting_for_human";
-  saved.summary.waiting = resolved;
+  saved.summary.waiting = waiting;
   writeFileSync(taskPath, JSON.stringify(saved, null, 1));
 
   const modelB = new ScriptedModelServer(LIFE_B);

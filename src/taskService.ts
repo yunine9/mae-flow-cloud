@@ -1306,6 +1306,9 @@ export interface RepositorySkillCatalogResponse {
  * 选择题的补充说明，永远不参与流程分支匹配。decision/answers/notes 仅
  * 保留给旧调用方兼容，进入 HumanGate 前仍会执行同样的菜单校验。 */
 export interface DecisionSubmission {
+  /** 页面看到的待办身份。只靠 state_version=1 无法区分两张先后生成的
+   * 卡，也无法在任务概要已推进后识别同一次网络重试。 */
+  waiting_id?: string;
   state_version: number;
   selected_options?: Record<string, string>;
   free_responses?: Record<string, string>;
@@ -1345,6 +1348,44 @@ function normalizedDeliveryPaths(values: string[]): string[] {
 function samePaths(left: string[], right: string[]): boolean {
   return left.length === right.length
     && left.every((path, index) => path === right[index]);
+}
+
+function orderedRecord(
+  value: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  if (!value) return undefined;
+  return Object.fromEntries(Object.entries(value)
+    .map(([key, item]) => [key, String(item)] as const)
+    .sort(([left], [right]) => left.localeCompare(right)));
+}
+
+/** 浏览器重试/双击的稳定身份。它只判断“是不是完全同一份提交”，
+ * 不承担业务校验；业务校验仍由 normalizeDecisionSubmission 完成。 */
+function decisionRequestDigest(
+  waitingId: string,
+  input: DecisionSubmission,
+): string {
+  const normalized = {
+    waiting_id: waitingId,
+    state_version: input.state_version,
+    selected_options: orderedRecord(input.selected_options),
+    free_responses: orderedRecord(input.free_responses),
+    comment: input.comment?.trim() || undefined,
+    decision: input.decision?.trim() || undefined,
+    answers: orderedRecord(input.answers),
+    notes: input.notes?.trim() || undefined,
+    annotation_ids: input.annotation_ids
+      ? [...new Set(input.annotation_ids.map(String))].sort() : undefined,
+    repository_skill_catalog_token:
+      input.repository_skill_catalog_token || undefined,
+    selected_repository_skill_ids: input.selected_repository_skill_ids
+      ? [...new Set(input.selected_repository_skill_ids.map(String))].sort()
+      : undefined,
+    repository_assignees: orderedRecord(input.repository_assignees),
+    delivery_paths: input.delivery_paths
+      ? [...new Set(input.delivery_paths.map(String))].sort() : undefined,
+  };
+  return createHash("sha256").update(JSON.stringify(normalized)).digest("hex");
 }
 
 /** push 前确认卡的云端原生步骤名与选项原文。步骤不在内核流程里,
@@ -1491,6 +1532,13 @@ export class TaskService {
   private reviews: ReviewStore;
   private repositorySkillCatalogs =
     new Map<string, RepositorySkillCatalogTicket>();
+  /** 逐任务决定锁：交付清单快照读取是异步的，两次点击会在真正落锁前
+   * 同时越过校验。相同请求共享结果，不同请求仍由先到决定语义拒绝。 */
+  private activeDecisions = new Map<string, {
+    waitingId: string;
+    digest: string;
+    promise: Promise<TaskSummary>;
+  }>();
   /** 原位重跑与彻底删除共享同一把逐任务锁，防止两个破坏性请求在
    * projection await 期间都拿着旧 TaskState 继续执行。 */
   private historyMutationActive = new Set<string>();
@@ -4447,6 +4495,8 @@ export class TaskService {
           controlEpoch: 0,
         };
         this.tasks.set(summary.id, task);
+        const authoritativeWaiting = summary.waiting
+          ? task.humanGate.get(summary.waiting.waiting_id) : undefined;
         // 旧版本把 repairing 一直保留到流水线最终绿灯。若修复使命已经
         // 消费完，真实当前动作其实是 prepush/流水线验证；恢复时同步
         // 校正，不能让重新部署后的老任务继续同时显示两种当前阶段。
@@ -4580,13 +4630,12 @@ export class TaskService {
             this.tryDeliver(task, task.controlEpoch));
           requeued += 1;
         } else if (summary.status === "waiting_for_human"
-            && summary.waiting?.status === "resolved") {
-          task.pendingResume = { ...summary.waiting };
-          summary.waiting = undefined;
-          summary.status = "queued";
-          summary.detail = "检测到已完成的重复决策卡，自动恢复续跑";
-          this.persist(task);
-          this.queue.push(summary.id);
+            && authoritativeWaiting?.status === "resolved") {
+          // task.json 只是页面投影副本，真正的决定在 waiting.json。
+          // 旧代码检查 summary.waiting.status，恰好检查了崩溃前的 stale
+          // 副本，注释写着“以 waiting.json 为准”却从未读它。
+          this.bypass(task, "已决待办恢复对账",
+            this.resumeResolvedDecision(task, authoritativeWaiting));
           requeued += 1;
         } else if (summary.status === "running" || summary.status === "queued") {
           summary.status = "queued";
@@ -6041,17 +6090,289 @@ export class TaskService {
     this.persist(task);
   }
 
-  /** 所有入口的决定都在这里收口：先到生效；选项、自由说明与服务端
-   * 查询到的未闭环批注明确分离。 */
+  private pushConfirmationAccepted(waiting: WaitingRecord): boolean {
+    return [waiting.decision, ...Object.values(waiting.answers ?? {})]
+      .some((answer) => answer.includes(PUSH_CONFIRM_ACCEPT));
+  }
+
+  private continuationDeliverySelection(
+    waiting: WaitingRecord,
+  ): NonNullable<TaskSummary["delivery_selection"]> | undefined {
+    const value = waiting.continuation?.delivery_selection as
+      Partial<NonNullable<TaskSummary["delivery_selection"]>> | undefined;
+    if (!value || !Array.isArray(value.paths)
+        || !Array.isArray(value.observed_paths)
+        || !Array.isArray(value.excluded_paths)
+        || !["requested", "confirmed"].includes(String(value.status))
+        || typeof value.waiting_id !== "string"
+        || typeof value.head !== "string"
+        || typeof value.updated_at !== "string") {
+      return undefined;
+    }
+    return {
+      paths: value.paths.map(String),
+      observed_paths: value.observed_paths.map(String),
+      excluded_paths: value.excluded_paths.map(String),
+      status: value.status as "requested" | "confirmed",
+      waiting_id: value.waiting_id,
+      head: value.head,
+      ...(typeof value.baseline === "string"
+        ? { baseline: value.baseline } : {}),
+      updated_at: value.updated_at,
+    };
+  }
+
+  /** 修复前的 resolved 记录没有 continuation。返工清单正文已经作为
+   * 结构化块写进 notes，完整时可无损恢复；确认分支在 resolve 前已
+   * 机械整理 commit，因此实时 committed 集合就是用户确认的集合。 */
+  private legacyDeliveryPaths(waiting: WaitingRecord): string[] | undefined {
+    const block = waiting.notes.match(
+      /<delivery-selection\b[^>]*>([\s\S]*?)<\/delivery-selection>/);
+    const count = block?.[1].match(/只交付以下\s+(\d+)\s+个文件/)?.[1];
+    if (!block || count === undefined) return undefined;
+    const expected = Number(count);
+    if (expected === 0) return [];
+    const paths = block[1].split("\n")
+      .map((line) => line.match(/^\s*-\s+(.+?)\s*$/)?.[1] ?? "")
+      .filter((line) => line && !line.startsWith("…")
+        && line !== "（不交付任何文件）");
+    return paths.length === expected
+      ? normalizedDeliveryPaths(paths) : undefined;
+  }
+
+  private async resolvedPushSelection(
+    task: TaskState,
+    waiting: WaitingRecord,
+  ): Promise<NonNullable<TaskSummary["delivery_selection"]>> {
+    const durable = this.continuationDeliverySelection(waiting);
+    if (durable) return durable;
+    if (!task.cwd) throw new TaskControlError(
+      "已收到最终确认，但代码现场不可用，无法恢复交付清单");
+    const snapshot = await deliveryChangeSnapshot(task.cwd);
+    if (!snapshot?.baseline) throw new TaskControlError(
+      "已收到最终确认，但任务基线不可读，无法恢复交付清单");
+    const committed = normalizedDeliveryPaths(snapshot.committed_paths);
+    const paths = this.pushConfirmationAccepted(waiting)
+      ? committed
+      : this.legacyDeliveryPaths(waiting)
+        ?? task.summary.delivery_selection?.paths
+        ?? committed;
+    return {
+      paths,
+      observed_paths: snapshot.workspace_paths,
+      excluded_paths: snapshot.workspace_paths.filter((path) =>
+        !paths.includes(path)),
+      status: this.pushConfirmationAccepted(waiting)
+        ? "confirmed" : "requested",
+      waiting_id: waiting.waiting_id,
+      head: snapshot.head,
+      baseline: snapshot.baseline,
+      updated_at: waiting.resolved_at || new Date().toISOString(),
+    };
+  }
+
+  private markResolvedDecisionAnnotations(
+    task: TaskState,
+    waiting: WaitingRecord,
+  ): void {
+    try {
+      const drafts = this.annotations(task).drafts();
+      const durableIds = waiting.continuation?.annotation_ids;
+      const ids = Array.isArray(durableIds)
+        ? durableIds.map(String)
+        // 新记录明确没带 annotation_ids 就是真的没选，不能因为自由说明
+        // 恰好重复了批注原文而误标。只有修复前的旧账才走正文反推。
+        : waiting.request_digest
+          ? []
+          // 兼容修复前已 resolved、却死在 markSent 前的记录。旧账没有
+          // id，只认 resolved_at 之前且“要求+原文”都逐字进入决定 notes
+          // 的草稿；后来新圈的意见绝不能被旧决定顺手标成已发送。
+          : drafts.filter((item) => item.created_at <= waiting.resolved_at
+            && waiting.notes.includes(item.note)
+            && waiting.notes.includes(item.anchor)).map((item) => item.id);
+      if (!ids.length) return;
+      const draftIds = new Set(drafts.map((item) => item.id));
+      const pending = ids.filter((id) => draftIds.has(id));
+      if (pending.length) this.annotations(task).markSent(pending, "decision");
+    } catch (error) {
+      // waiting.json 已经把决定、批注 id 和完整原文一起落袋。批注账只是
+      // 展示投影，写坏不能把已经生效的决定伪装成“提交失败”；重启或
+      // 同请求重放会继续尝试对账。
+      this.options.log?.(`任务 ${task.summary.id} 批注送达状态暂未落盘: ${String(error)}`);
+    }
+  }
+
+  /** push 卡没有挂起的 Agent 工具调用，必须由宿主消费 resolved 收据。
+   * 这一个函数同时服务正常提交、完全相同的网络重放和崩溃恢复。 */
+  private finishResolvedPushConfirmation(
+    task: TaskState,
+    waiting: WaitingRecord,
+    selection: NonNullable<TaskSummary["delivery_selection"]>,
+  ): void {
+    task.summary.delivery_selection = selection;
+    task.summary.waiting = undefined;
+    this.markResolvedDecisionAnnotations(task, waiting);
+    if (this.pushConfirmationAccepted(waiting)) {
+      task.summary.status = "verifying";
+      task.summary.detail = "交付清单已确认,继续推送";
+      this.persist(task);
+      this.bypass(task, "push 确认续推",
+        this.tryDeliver(task, task.controlEpoch));
+      return;
+    }
+    const review = waiting.notes.trim();
+    this.enqueueRepair(task, [
+      "用户在 push 前确认交付清单时要求按清单返工,整理提交是你此刻唯一的使命:",
+      review
+        ? "- 用户本次确认的交付范围、补充说明与检视批注（完整原文）：\n"
+          + review
+        : "- 用户未填写额外说明；严格按结构化交付清单处理。",
+      "- 把不在清单里却已进入提交的文件从提交中移出(git rm --cached 或重排提交);",
+      "  文件本身要不要保留在工作区,按它的性质与用户意见判断,不确定就保留并说明。",
+      "- 清单内缺失的文件补进提交;不许为凑清单制造空改动。",
+      "- 整理完按仓库提交规范收口(单条 Bash 只做一个 commit);",
+      `  完成后系统会按新 HEAD 重新验证并再次请用户确认(当前清单 ${selection.paths.length} 个文件)。`,
+    ].join("\n"), "按交付清单整理提交中");
+  }
+
+  private async resumeResolvedDecision(
+    task: TaskState,
+    waiting: WaitingRecord,
+  ): Promise<void> {
+    if (waiting.step === CLOUD_PUSH_CONFIRM_STEP) {
+      try {
+        const selection = await this.resolvedPushSelection(task, waiting);
+        this.finishResolvedPushConfirmation(task, waiting, selection);
+      } catch (error) {
+        task.summary.waiting = undefined;
+        task.summary.status = "failed";
+        task.summary.detail = error instanceof Error ? error.message : String(error);
+        this.persist(task);
+      }
+      return;
+    }
+    task.summary.waiting = undefined;
+    if (task.driver) {
+      task.summary.status = "running";
+      this.persist(task);
+      this.bypass(task, "已决待办自愈续跑",
+        this.settle(task, task.driver.resumeWithDecision(waiting)));
+      return;
+    }
+    task.pendingResume = waiting;
+    task.resume = true;
+    task.summary.status = "queued";
+    task.summary.detail = "检测到已完成的决定，等待重建会话续跑";
+    this.persist(task);
+    if (!this.queue.includes(task.summary.id)) this.queue.push(task.summary.id);
+    this.bypass(undefined, "任务泵", this.pump());
+  }
+
+  private resolvedRequestMatches(
+    waiting: WaitingRecord,
+    input: DecisionSubmission,
+    digest: string,
+  ): boolean {
+    if (waiting.request_digest) return waiting.request_digest === digest;
+    // 兼容这次修复前已经落袋的决定：旧记录没有请求指纹，只能用结构
+    // 化答案 + 补充说明对拍。不能仅看 state_version（每张卡都从 1
+    // 开始），也不能把不同的后到决定误当重试吞掉。
+    try {
+      const normalized = this.normalizeDecisionSubmission(waiting, input);
+      const answers = orderedRecord(normalized.answers) ?? {};
+      const recorded = orderedRecord(waiting.answers) ?? {};
+      if (normalized.decision !== waiting.decision
+          || JSON.stringify(answers) !== JSON.stringify(recorded)) {
+        return false;
+      }
+      return !normalized.notes || waiting.notes.includes(normalized.notes);
+    } catch {
+      return false;
+    }
+  }
+
+  /** 所有入口的决定都在这里收口。异步读取 diff 发生在 HumanGate 落锁
+   * 之前，所以需要一把逐任务锁；否则一次双击会启动两条相同请求，
+   * 后一条只看到“先到决定完成”，把已经成功伪装成失败。 */
   async decide(
     id: string,
     input: DecisionSubmission,
   ): Promise<TaskSummary> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    const waitingId = input.waiting_id
+      ?? task.summary.waiting?.waiting_id;
+    if (!waitingId) {
+      throw new NotFoundError(`任务 ${id} 当前没有待人工决定`);
+    }
+    const digest = decisionRequestDigest(waitingId, input);
+    const active = this.activeDecisions.get(id);
+    if (active) {
+      if (active.waitingId === waitingId && active.digest === digest) {
+        return active.promise;
+      }
+      throw new StateConflictError(
+        `任务状态已变化:待办 ${waitingId} 已有另一份决定正在提交`);
+    }
+    // resolved 分叉自愈也必须进入同一把锁：若两个网络重试同时命中
+    // waiting.json 已决、task.json 未推进的窗口，仍只能恢复一次。
+    const promise = this.decideUnderLock(
+      id, input, waitingId, digest);
+    this.activeDecisions.set(id, { waitingId, digest, promise });
+    try {
+      return await promise;
+    } finally {
+      const latest = this.activeDecisions.get(id);
+      if (latest?.promise === promise) this.activeDecisions.delete(id);
+    }
+  }
+
+  private async decideUnderLock(
+    id: string,
+    input: DecisionSubmission,
+    waitingId: string,
+    digest: string,
+  ): Promise<TaskSummary> {
+    const task = this.tasks.get(id)!;
+    const authoritative = task.humanGate.get(waitingId);
+    if (authoritative?.status === "resolved") {
+      if (!this.resolvedRequestMatches(authoritative, input, digest)) {
+        throw new StateConflictError(
+          `任务状态已变化:待办 ${waitingId} 已由先到决定完成`);
+      }
+      if (task.summary.waiting?.waiting_id === waitingId) {
+        await this.resumeResolvedDecision(task, authoritative);
+      }
+      return { ...task.summary };
+    }
+    if (authoritative?.status === "superseded") {
+      throw new StateConflictError(`任务状态已变化:待办 ${waitingId} 已失效`);
+    }
+    const current = task.summary.waiting;
+    if (task.summary.status !== "waiting_for_human" || !current) {
+      throw new NotFoundError(`任务 ${id} 当前没有待人工决定`);
+    }
+    if (current.waiting_id !== waitingId) {
+      throw new StateConflictError(
+        `任务状态已变化:当前待办是 ${current.waiting_id},不是 ${waitingId}`);
+    }
+    return this.decideOnce(id, input, waitingId, digest);
+  }
+
+  private async decideOnce(
+    id: string,
+    input: DecisionSubmission,
+    waitingId: string,
+    requestDigest: string,
+  ): Promise<TaskSummary> {
+    const task = this.tasks.get(id)!;
     const waiting = task.summary.waiting;
     if (task.summary.status !== "waiting_for_human" || !waiting) {
       throw new NotFoundError(`任务 ${id} 当前没有待人工决定`);
+    }
+    if (waiting.waiting_id !== waitingId) {
+      throw new StateConflictError(
+        `任务状态已变化:当前待办是 ${waiting.waiting_id},不是 ${waitingId}`);
     }
     const normalized = this.normalizeDecisionSubmission(waiting, input);
     const { answers, decision } = normalized;
@@ -6177,14 +6498,19 @@ export class TaskService {
       decision,
       answers: Object.keys(answers).length ? answers : undefined,
       notes,
+      requestDigest,
+      continuation: {
+        ...(deliverySelection
+          ? { delivery_selection: deliverySelection.record } : {}),
+        ...(picked.length
+          ? { annotation_ids: picked.map((item) => item.id) } : {}),
+      },
     });
     if (deliverySelection) {
       task.summary.delivery_selection = deliverySelection.record;
     }
     // 决定已经落袋(waiting.json 写完),批注才算送出去。
-    if (picked.length) {
-      this.annotations(task).markSent(picked.map((item) => item.id), "decision");
-    }
+    this.markResolvedDecisionAnnotations(task, resolved);
     // 决定生效之后才生子任务(体检在落袋前做过,这里不会因图不齐半途
     // 而废)。建任务失败不回滚决定——决定是用户的事实;失败原因写进
     // detail,面板确认按钮随时可重试(可重入)。
@@ -6217,28 +6543,8 @@ export class TaskService {
     // 宿主在 push 路径上自己挂的),所以不回注会话、更不重建会话——
     // 确认就接着推,返工就开一只带清单契约的修复会话整理提交。
     if (pushConfirmCard) {
-      task.summary.waiting = undefined;
-      if (confirmingPush) {
-        task.summary.status = "verifying";
-        task.summary.detail = "交付清单已确认,继续推送";
-        this.persist(task);
-        this.bypass(task, "push 确认续推",
-          this.tryDeliver(task, task.controlEpoch));
-      } else {
-        const record = task.summary.delivery_selection!;
-        this.enqueueRepair(task, [
-          "用户在 push 前确认交付清单时要求按清单返工,整理提交是你此刻唯一的使命:",
-          deliverySelection?.note ?? "",
-          "- 把不在清单里却已进入提交的文件从提交中移出(git rm --cached 或重排提交);",
-          "  文件本身要不要保留在工作区,按它的性质与用户意见判断,不确定就保留并说明。",
-          "- 清单内缺失的文件补进提交;不许为凑清单制造空改动。",
-          ...(normalized.notes?.trim()
-            ? [`- 用户补充意见(最高优先):${normalized.notes.trim()}`] : []),
-          "- 整理完按仓库提交规范收口(单条 Bash 只做一个 commit);",
-          `  完成后系统会按新 HEAD 重新验证并再次请用户确认(当前清单 ${record.paths.length} 个文件)。`,
-        ].filter(Boolean).join("\n"),
-        "按交付清单整理提交中");
-      }
+      this.finishResolvedPushConfirmation(
+        task, resolved, task.summary.delivery_selection!);
       return { ...task.summary };
     }
     task.summary.waiting = undefined;

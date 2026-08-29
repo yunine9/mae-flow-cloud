@@ -1836,6 +1836,8 @@ export function createTaskServer(
           }
           const body = await readBody(request);
           const task = await service.decide(id, {
+            waiting_id: body.waiting_id === undefined
+              ? undefined : String(body.waiting_id),
             state_version: Number(body.state_version),
             selected_options: body.selected_options
               && typeof body.selected_options === "object"

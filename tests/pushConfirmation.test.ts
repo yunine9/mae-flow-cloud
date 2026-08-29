@@ -242,11 +242,17 @@ test("返工开修复会话并携带清单契约;月光不代答确认卡", asyn
     repo.git("commit", "--quiet", "-m", "extra file");
     await (service as any).pushConfirmationSatisfied(internal, "master_bot_REQ1");
     const waiting = service.get(id)!.waiting!;
+    const annotation = service.addAnnotation(id, {
+      author: "liaoxiang", artifact: "未提交改动", file: "src/feature.ts",
+      line: 1, anchor: "export const value = 1;",
+      note: "这里必须补上异常分支测试", kind: "code",
+    });
 
     assert.equal((service as any).autoAnswerFor(internal, true), undefined,
       "月光免审批不得代答用户显式要求的 push 前确认卡");
 
     await service.decide(id, {
+      waiting_id: waiting.waiting_id,
       state_version: waiting.state_version,
       selected_options: {
         [(waiting.question as any).questions[0].question]:
@@ -254,6 +260,7 @@ test("返工开修复会话并携带清单契约;月光不代答确认卡", asyn
       },
       delivery_paths: ["src/feature.ts"],
       notes: "extra.ts 是误提交,移出去",
+      annotation_ids: [annotation.id],
     });
     const summary = service.get(id)!;
     assert.equal(summary.delivery_selection?.status, "requested");
@@ -262,6 +269,91 @@ test("返工开修复会话并携带清单契约;月光不代答确认卡", asyn
     assert.match(String(internal.mission), /mae-flow-delivery-selection\/1/);
     assert.match(String(internal.mission), /只交付以下 1 个文件/);
     assert.match(String(internal.mission), /extra\.ts 是误提交/);
+    assert.match(String(internal.mission), /这里必须补上异常分支测试/,
+      "push 确认没有挂起模型,批注必须显式进入返工使命");
+    assert.equal(service.listAnnotations(id).items[0].status, "sent");
+  } finally {
+    await model.stop();
+  }
+});
+
+test("最终确认同一请求并发重放只消费一次,不会给成功者弹先到冲突", async () => {
+  const { service, model, id, internal } = await verifyingTask();
+  try {
+    internal.summary.push_confirmation = true;
+    await (service as any).pushConfirmationSatisfied(
+      internal, "master_bot_REQ1");
+    const waiting = service.get(id)!.waiting!;
+    const question = (waiting.question as any).questions[0].question;
+    let deliveries = 0;
+    (service as any).tryDeliver = async () => { deliveries += 1; };
+    const input = {
+      waiting_id: waiting.waiting_id,
+      state_version: waiting.state_version,
+      selected_options: { [question]: "确认按清单推送" },
+    };
+
+    const [first, replay] = await Promise.all([
+      service.decide(id, input), service.decide(id, input),
+    ]);
+    assert.equal(first.waiting, undefined);
+    assert.equal(replay.waiting, undefined);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(deliveries, 1, "同一确认不能启动两条推送链");
+  } finally {
+    await model.stop();
+  }
+});
+
+test("最终确认恢复:waiting 已决但任务概要仍在等待时自动返工且批注不丢", async () => {
+  const { service, model, id, internal, repo } = await verifyingTask();
+  try {
+    internal.summary.push_confirmation = true;
+    await (service as any).pushConfirmationSatisfied(
+      internal, "master_bot_REQ1");
+    const waiting = service.get(id)!.waiting!;
+    const question = (waiting.question as any).questions[0].question;
+    const annotation = service.addAnnotation(id, {
+      author: "liaoxiang", artifact: "未提交改动", file: "src/feature.ts",
+      line: 1, anchor: "export const value = 1;",
+      note: "补齐超时异常的回归测试", kind: "code",
+    });
+    const annotationText = service.previewAnnotations(id, [annotation.id]);
+    const selectionText = [
+      '<delivery-selection schema="mae-flow-delivery-selection/1" mode="allowlist">',
+      "用户通过文件勾选器确认：只交付以下 1 个文件。",
+      "- src/feature.ts",
+      "当前另有 0 个文件未勾选；它们不得进入提交。",
+      "</delivery-selection>",
+    ].join("\n");
+    // 精确模拟线上旧版本的崩溃窗口：权威待办已经 resolved，但没有新
+    // 版本 continuation；task.json 仍是 waiting，批注也没来得及 sent。
+    internal.humanGate.resolve(waiting.waiting_id, {
+      stateVersion: waiting.state_version,
+      decision: "需要调整代码（按清单返工）",
+      answers: { [question]: "需要调整代码（按清单返工）" },
+      notes: `${selectionText}\n\n${annotationText}`,
+    });
+    await model.stop();
+
+    const recovered = new TaskService({
+      dataDir: service.options.dataDir,
+      provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0,
+    });
+    const result = recovered.recover();
+    assert.equal(result.requeued, 1);
+    const resumed = await until(() => {
+      const task = recovered.get(id);
+      return task?.status === "queued" ? task : undefined;
+    }, "已决 push 卡恢复为返工队列");
+    assert.equal(resumed.waiting, undefined);
+    assert.deepEqual(resumed.delivery_selection?.paths, ["src/feature.ts"]);
+    assert.equal(resumed.delivery_selection?.status, "requested");
+    assert.match(String((recovered as any).tasks.get(id).mission),
+      /补齐超时异常的回归测试/);
+    assert.equal(recovered.listAnnotations(id).items[0].status, "sent",
+      "旧记录没有 annotation_ids 时也要从已落袋原文精确恢复送达状态");
+    void repo;
   } finally {
     await model.stop();
   }

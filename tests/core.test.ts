@@ -67,6 +67,35 @@ test("人工待办:同 call_id 幂等,先到决定生效", () => {
   assert.equal(gate.pending().length, 0);
 });
 
+test("人工待办:可读取权威记录,完全相同的请求重放幂等返回", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-"));
+  const gate = new HumanGate(join(dir, "waiting.json"));
+  const waiting = gate.createWaiting({
+    taskId: "T-1", step: "cloud_push_confirm", callId: "push-confirm-a",
+    questionInput: { q: "按清单推送吗" },
+  });
+  const first = gate.resolve(waiting.waiting_id, {
+    stateVersion: waiting.state_version,
+    decision: "需要调整代码",
+    requestDigest: "same-request",
+    continuation: { delivery_selection: { paths: ["src/a.ts"] } },
+  });
+  const replay = gate.resolve(waiting.waiting_id, {
+    stateVersion: waiting.state_version,
+    decision: "需要调整代码",
+    requestDigest: "same-request",
+    continuation: { delivery_selection: { paths: ["src/a.ts"] } },
+  });
+  assert.deepEqual(replay, first, "网络重试不能把已经成功的同一请求报成冲突");
+  assert.deepEqual(gate.get(waiting.waiting_id), first,
+    "任务概要与待办账冲突时必须能读取 waiting.json 的权威记录");
+  assert.throws(() => gate.resolve(waiting.waiting_id, {
+    stateVersion: waiting.state_version,
+    decision: "确认推送",
+    requestDigest: "different-request",
+  }), StateConflictError, "真正不同的后到决定仍须拒绝");
+});
+
 test("用户接管只作废旧待办，不伪造通过或打回答案", () => {
   const dir = mkdtempSync(join(tmpdir(), "mfc-"));
   const gate = new HumanGate(join(dir, "waiting.json"));
