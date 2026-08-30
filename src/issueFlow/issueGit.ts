@@ -281,14 +281,34 @@ export async function currentBranch(repoDir: string): Promise<string> {
   }
 }
 
-/** 当前 HEAD 短 SHA(拉仓事实回报用;失败回空串由调用方如实呈现)。 */
-export async function currentHead(repoDir: string): Promise<string> {
+/** 当前 HEAD 短 SHA(拉仓事实回报用;失败回空串由调用方如实呈现)。 */export async function currentHead(repoDir: string): Promise<string> {
   const view = createSafeGitView(repoDir);
   try {
     const outcome = await runGit(
       ["--no-pager", "rev-parse", "--short=12", "HEAD"],
       { cwd: repoDir, env: view.environment(), timeoutMs: 10_000 });
     return outcome.code === 0 ? outcome.stdout.trim() : "";
+  } finally {
+    view.cleanup();
+  }
+}
+
+/** 工作区未提交改动(含未跟踪文件),porcelain 逐行;干净返回空数组。
+ * push 前的熔断依据:push 只推已提交历史,脏工作区推出去=旧 HEAD,
+ * MR 没有 diff(2026-08-28 真实环境事故:AI 改了文件没 commit,
+ * push_branch 推了 clone 时的原始提交)。status 本身失败按"没有证据"
+ * 处理放行——属主修复后这是罕见路径,不值得为它堵死推送。 */
+export async function dirtyWorktree(repoDir: string): Promise<string[]> {
+  const view = createSafeGitView(repoDir);
+  try {
+    const outcome = await runGit(["status", "--porcelain"], {
+      cwd: repoDir,
+      env: view.environment(),
+      timeoutMs: 10_000,
+    });
+    if (outcome.code !== 0) return [];
+    return outcome.stdout.split("\n").map((line) => line.trim())
+      .filter(Boolean);
   } finally {
     view.cleanup();
   }

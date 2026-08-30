@@ -15,7 +15,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -598,4 +598,57 @@ test("MR 验绿门·未申报不放行:监看器全绿只提醒申报,阶段原�
   } finally {
     await stopChain(chain);
   }
+});
+
+test("MR 验绿门·状态查询带 mr:验绿门与监看器两路都不让模板空转", async () => {
+  const chain = await startChain({
+    platformStatus: "running",
+    declarations: (origin) => [[origin]],
+  });
+  try {
+    await until(() =>
+      chain.service.get(chain.id).status === "idle" ? 1 : undefined, "回合收口");
+    chain.platform.defaultStatus = "success";
+    await until(() =>
+      chain.service.get(chain.id).stage === "deploy_verify" ? 1 : undefined,
+      "监看器等绿后放行");
+    // 真实环境事故:适配层状态命令模板引用 {mr},缺参渲染失败 502——
+    // 验绿门当场查与监看器轮询两路都必须带上台账里的 iid。
+    const statusUrls = chain.platform.seen
+      .filter((entry) => entry.url.startsWith("/pipeline/status"))
+      .map((entry) => entry.url);
+    assert.ok(statusUrls.length >= 2, "验绿门 + 监看器都应查询过状态");
+    for (const url of statusUrls) {
+      assert.match(url, /[?&]mr=1(&|$)/, `状态查询缺 mr 参数: ${url}`);
+    }
+  } finally {
+    await stopChain(chain);
+  }
+});
+
+test("push_branch 脏工作区熔断:改了没 commit 点破打回,提交后放行", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-exit-dirty-"));
+  const origin = bareOrigin(dataDir);
+  const repoDir = join(dataDir, "repo", "origin");
+  execFileSync("git", ["clone", "-q", origin, repoDir], { env: GIT_ENV });
+  execFileSync("git", ["-C", repoDir, "checkout", "-q", "-b",
+    `master_dev_${TICKET}`], { env: GIT_ENV });
+  const state = directState(dataDir, "ticket", "mr_green");
+  state.repo_urls = [origin];
+  state.repo_url = origin;
+  const { byName, textOf } = directTools(state, dataDir);
+  // 改文件不提交就推:点破"推的是旧提交、MR 没有 diff",给出该做的事。
+  writeFileSync(join(repoDir, "fix.txt"), "changed", "utf-8");
+  await assert.rejects(
+    () => byName("push_branch").execute("x", {}),
+    /未提交[\s\S]*旧提交[\s\S]*git commit/,
+    "脏工作区推送要被熔断(否则静默推出空 diff 的 MR)");
+  assert.equal((state.pushes ?? []).length, 0, "熔断不产生推送账");
+  // 提交后放行:真推到裸仓远端,推送账落位。
+  execFileSync("git", ["-C", repoDir, "add", "-A"], { env: GIT_ENV });
+  execFileSync("git", ["-C", repoDir, "commit", "-q", "-m", "[T] fix"],
+    { env: GIT_ENV });
+  const receipt = textOf(await byName("push_branch").execute("x", {}));
+  assert.match(receipt, /已推送/);
+  assert.equal(state.pushes?.length, 1);
 });

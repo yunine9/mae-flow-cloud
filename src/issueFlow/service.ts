@@ -1683,6 +1683,10 @@ export class IssueFlowService {
       platformUrl,
       sha,
       repo,
+      // 状态命令模板可能引用 {mr},缺了每轮 502、监看永远等不到绿
+      // (2026-08-28 真实环境事故)。iid 按 repo 现查现用——MR 重建后
+      // 下一轮自然带上新 id。
+      mr: state.mrs?.find((item) => item.repo === repo)?.iid,
       credential: this.options.gitCredential?.(state.account),
     });
     // 触发(假件必须显式触发;真件幂等无害)。触发响应可能已是终态。
