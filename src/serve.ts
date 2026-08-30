@@ -981,6 +981,21 @@ async function main(): Promise<void> {
     if (terminating) return;
     terminating = true;
     console.log(`[serve] 收到 ${signal}，停止接单并清理会话/任务容器...`);
+    // Docker 默认只给 10 秒优雅退出。任务容器清理或外部连接偶发卡住
+    // 时，旧进程会在 release() 之前被 SIGKILL，下一容器便被陈旧锁永
+    // 久挡住。提前两秒做最后兜底：先撒锁、立即退出；残留的受管容器
+    // 会由下一实例按同一 dataDir 指纹清扫，绝不与旧进程并行运行。
+    const forcedExit = setTimeout(() => {
+      console.error("[serve] 优雅关闭超过 8 秒，释放实例锁后退出；"
+        + "残留任务容器将由下一实例接管清扫");
+      try {
+        instanceLock.release();
+      } catch (error) {
+        console.error(`[serve] 超时释放数据目录锁失败: ${String(error)}`);
+      }
+      process.exit(1);
+    }, 8_000);
+    forcedExit.unref();
     const closed = new Promise<void>((resolveClose) => {
       server.close(() => resolveClose());
     });
@@ -1015,6 +1030,7 @@ async function main(): Promise<void> {
     } catch (error) {
       console.error(`[serve] 释放数据目录锁失败(下次启动会自动接管): ${String(error)}`);
     }
+    clearTimeout(forcedExit);
     process.exit(exitCode);
   };
   process.once("SIGTERM", () => { void terminate("SIGTERM"); });

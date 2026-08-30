@@ -94,12 +94,42 @@ export function workspaceNextActionCopy(
  * 现采成一个 markdown 下载。服务端在出事瞬间也会自动留档一份到任务
  * 目录 diagnostics/,这里是给人手动再拿最新现场的口。 */
 function DiagnosticsLink({ taskId }: { taskId: string }) {
+  const [state, setState] = useState<"idle" | "loading" | "done" | "error">("idle");
+
+  async function downloadDiagnostics() {
+    setState("loading");
+    try {
+      const response = await fetch(
+        `/tasks/${encodeURIComponent(taskId)}/diagnostics`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const blob = await response.blob();
+      const disposition = response.headers.get("content-disposition") ?? "";
+      const matched = disposition.match(/filename="?([^";]+)"?/i);
+      const filename = matched?.[1] ?? `${taskId}-diagnostics.md`;
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setState("done");
+    } catch {
+      setState("error");
+    }
+  }
+
   return (
-    <a className="diagnostics-link"
-      href={`/tasks/${encodeURIComponent(taskId)}/diagnostics`} download
-      title="把任务状态、内核现场、Git/容器事实、会话事件与服务日志汇成一个文件">
-      导出诊断包
-    </a>
+    <span className="diagnostics-action">
+      <button type="button" className="diagnostics-link"
+        disabled={state === "loading"} onClick={downloadDiagnostics}
+        title="把任务状态、内核现场、Git/容器事实、会话事件与服务日志汇成一个文件">
+        {state === "loading" ? "正在生成诊断包…" : "导出诊断包"}
+      </button>
+      {state === "done" && <small role="status">已开始下载</small>}
+      {state === "error" && <small role="alert">生成失败，请重试</small>}
+    </span>
   );
 }
 
@@ -1260,7 +1290,10 @@ export function TaskWorkspace({
                     || "流水线运行与自动修复由系统跟进；需要人时会在这里出卡。"}</p>
                 )}
                 {canOperate && repairStopped(task) && (
-                  <RetryButton taskId={task.id} onDone={onChanged} />
+                  <RetryButton taskId={task.id} onDone={onChanged}
+                    label={task.delivery?.stalled && !task.delivery?.loop
+                        && !task.delivery?.evidence_gap
+                      ? "重新尝试交付" : undefined} />
                 )}
                 {task.delivery?.stalled && (
                   <DiagnosticsLink taskId={task.id} />
@@ -1274,9 +1307,6 @@ export function TaskWorkspace({
                     ? "模型正在推进；需要时可切到执行现场查看。"
                     : "材料、协作和运行记录都在左侧主视图。"}
                 </p>
-                {canOperate && task.status === "completed" && (
-                  <RetryButton taskId={task.id} onDone={onChanged} />
-                )}
               </div>
             )
           )}

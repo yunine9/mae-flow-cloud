@@ -20,7 +20,10 @@ import { join } from "node:path";
 import { FakeGitPlatform } from "../src/gitPlatform.ts";
 import { FakeLubanServer, Notifier } from "../src/notifier.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
-import { TaskService } from "../src/taskService.ts";
+import {
+  TaskService,
+  userFacingDeliveryFailure,
+} from "../src/taskService.ts";
 import { RuntimeSettings } from "../src/settings.ts";
 import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
 import { managedFlowFixture } from "./support/managedFlowFixture.ts";
@@ -33,6 +36,19 @@ function kernelRootOrDie(): string {
   return found;
 }
 const KERNEL_ROOT = kernelRootOrDie();
+
+test("交付连接与仓库权限异常只给人话，不泄露运行时类型和宿主路径", () => {
+  assert.equal(userFacingDeliveryFailure(new TypeError("fetch failed")),
+    "交付平台暂时连接不上，请检查平台地址或网络");
+  assert.equal(userFacingDeliveryFailure(new Error(
+    "平台返回里没有 MR 链接(url): {}")),
+    "交付平台响应不完整，未返回 MR 链接");
+  const push = userFacingDeliveryFailure(new Error(
+    "宿主推送失败: error: remote unpack failed: unable to create temporary object directory\n"
+    + "error: failed to push some refs to '/Users/alice/private/origin.git'"));
+  assert.match(push, /远端代码仓暂时无法写入/);
+  assert.doesNotMatch(push, /TypeError|\/Users\/alice/);
+});
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf-8" }).trim();
@@ -1183,10 +1199,15 @@ test("交付失败先自愈、预算耗尽如实停摆,人拿得回控制权", a
     assert.match(stalled.detail ?? "", /自动验证已停,需要你介入/);
     // 回程票:停摆之后人点得动「重跑续推」,且账本被清干净重新开表。
     const again = service.retry(task.id);
-    // 排上队即可(任务泵可能当场就把它接走,状态已经是 running)。
-    assert.ok(["queued", "running"].includes(again.status), again.status);
+    // 外部交付停机只重试宿主侧动作，不应再叫醒主 Agent 白跑一轮。
+    assert.equal(again.status, "verifying");
+    assert.match(again.detail ?? "", /重新尝试交付/);
     assert.equal(again.delivery?.stalled, undefined);
     assert.equal(again.delivery?.verify_deadline, undefined);
+    assert.equal(again.delivery?.skipped, undefined,
+      "新一轮已受理后不应继续显示上一轮交付已阻止");
+    assert.equal(again.delivery?.waiting_on, undefined,
+      "上一轮失败的等待原因不能冒充新一轮当前状态");
   } finally {
     await platform.stop();
   }

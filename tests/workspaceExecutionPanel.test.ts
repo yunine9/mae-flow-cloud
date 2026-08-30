@@ -103,3 +103,11 @@ test("已完成任务的进度展示收口到完成，不沿用合入前最后�
     "列表卡和工作台都要把任务终态交给同一进度组件");
   assert.match(workspace, /showDetailedStep status=\{task\.status\}/);
 });
+
+test("诊断包导出给出生成、成功与失败反馈，不再静默下载", () => {
+  assert.match(workspace, /正在生成诊断包/);
+  assert.match(workspace, /已开始下载/);
+  assert.match(workspace, /生成失败，请重试/);
+  assert.match(workspace, /response\.blob\(\)/,
+    "只有服务端真实返回诊断包后才能提示已开始下载");
+});

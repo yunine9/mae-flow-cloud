@@ -255,7 +255,10 @@ export function TaskCard({
               <span>
                 {task.delivery?.stalled ?? task.delivery?.loop?.diagnosis
                   ?? task.detail ?? "请查看流水线日志确认原因。"}
-                {" "}办完之后点「重跑续推」，机器接着干。
+                {task.delivery?.stalled && !task.delivery?.loop
+                    && !task.delivery?.evidence_gap
+                  ? " 确认外部平台恢复后，点「重新尝试交付」。"
+                  : " 办完之后点「重跑续推」，机器接着干。"}
               </span>
               {/* 诊断是会话的收口发言,可能在聊别的事(实锤:最后一轮在补
                   文档章节)。流水线到底红在哪必须单独亮,不靠诊断捎带。 */}
@@ -277,12 +280,15 @@ export function TaskCard({
             </div>
           )}
           {canOperate && (task.status === "failed"
-            || task.status === "completed" || task.status === "canceled"
+            || task.status === "canceled"
             || repairStopped(task)) && (
             <RetryButton
               taskId={task.id}
               onDone={onChanged}
-              allowFromStart={["completed", "failed", "canceled"]
+              label={task.delivery?.stalled && !task.delivery?.loop
+                  && !task.delivery?.evidence_gap
+                ? "重新尝试交付" : undefined}
+              allowFromStart={["failed", "canceled"]
                 .includes(task.status)}
             />
           )}
@@ -1021,10 +1027,12 @@ export function RetryButton({
   taskId,
   onDone,
   allowFromStart = false,
+  label = "重跑续推",
 }: {
   taskId: string;
   onDone: () => void;
   allowFromStart?: boolean;
+  label?: string;
 }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState<"retry" | "rerun" | "">("");
@@ -1045,7 +1053,7 @@ export function RetryButton({
         <svg viewBox="0 0 20 20" aria-hidden>
           <path d="M15.5 7A6 6 0 1 0 16 12M15.5 3v4h-4" />
         </svg>
-        {busy === "retry" ? "正在续推…" : "重跑续推"}
+        {busy === "retry" ? "正在尝试…" : label}
       </button>
       {allowFromStart && (
         <button className="destructive" type="button" disabled={Boolean(busy)}

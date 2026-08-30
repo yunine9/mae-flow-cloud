@@ -390,6 +390,26 @@ export const DEFAULT_WORKSPACE_RETENTION_DAYS = 14;
 export const DEFAULT_BUILD_CACHE_RETENTION_DAYS = 30;
 export const DEFAULT_BUILD_CACHE_MAX_GB = 100;
 
+/** 交付失败在页面上的人话。原始异常仍进服务日志/诊断包；任务摘要只
+ * 保留用户能据此行动的结论，避免 TypeError 和宿主绝对路径外泄。 */
+export function userFacingDeliveryFailure(error: unknown): string {
+  const raw = String(error).replace(/^(Error:\s*)+/, "").trim();
+  if (/\bfetch failed\b/i.test(raw)) {
+    return "交付平台暂时连接不上，请检查平台地址或网络";
+  }
+  if (/平台返回里没有 MR 链接/i.test(raw)) {
+    return "交付平台响应不完整，未返回 MR 链接";
+  }
+  if (/remote unpack failed:\s*unable to create temporary object directory/i
+    .test(raw)) {
+    return "宿主推送失败：远端代码仓暂时无法写入，请检查仓库服务或存储权限";
+  }
+  return raw.replace(
+    /failed to push some refs to\s+(['"])[^'"]+\1/gi,
+    "未能更新远端分支",
+  );
+}
+
 export type TaskStatus =
   | "queued"
   | "running"
@@ -5799,6 +5819,24 @@ export class TaskService {
         return { ...task.summary };
       }
     }
+    // 外部交付接口停机只需要宿主重试 MR / 流水线。旧实现把任务重新
+    // 入 Agent 队列，模型醒来后只能读到 external_verify 再原样结束：
+    // 用户白等一轮还多烧 token。没有修复环、没有证据缺口时，清掉
+    // 上一轮事故牌并直接踢活交付链。
+    if (status === "verifying" && delivery?.stalled
+        && !delivery.loop && !delivery.evidence_gap) {
+      delivery.pipeline = "人工重跑,待重新验证";
+      delivery.stalled = undefined;
+      delivery.verify_deadline = undefined;
+      delivery.skipped = undefined;
+      delivery.waiting_on = undefined;
+      task.summary.detail = actor
+        ? `人工重新尝试交付(${actor})` : "人工重新尝试交付";
+      this.persist(task);
+      this.bypass(task, "人工重新尝试交付",
+        this.tryDeliver(task, task.controlEpoch));
+      return this.project(task);
+    }
     if (status === "verifying" && task.summary.delivery) {
       task.summary.delivery.loop = undefined;
       task.summary.delivery.evidence_gap = undefined;
@@ -5806,6 +5844,11 @@ export class TaskService {
       // 人工背书"再试一次":停摆账本清掉,自愈预算重新开表。
       task.summary.delivery.stalled = undefined;
       task.summary.delivery.verify_deadline = undefined;
+      // 失败原因属于上一轮事故；续推已经受理后继续把它渲染成
+      // “交付已阻止”，会与正在运行的新状态互相矛盾。历史仍在诊断包
+      // 与服务日志里，当前态只保留这一轮的事实。
+      task.summary.delivery.skipped = undefined;
+      task.summary.delivery.waiting_on = undefined;
     }
     task.summary.status = "queued";
     delete task.summary.completed_at;
@@ -11315,7 +11358,11 @@ export class TaskService {
     } catch (error) {
       if (!this.current(task, epoch)) return;
       // 嵌套的 "Error: Error: …" 前缀对人是噪声,剥掉再进卡片/日志。
-      const cause = String(error).replace(/^(Error:\s*)+/, "");
+      const rawCause = String(error).replace(/^(Error:\s*)+/, "");
+      const cause = userFacingDeliveryFailure(error);
+      if (cause !== rawCause) {
+        this.options.log?.(`任务 ${task.summary.id} 交付原始异常:${rawCause}`);
+      }
       const reason = `交付动作失败: ${cause}`;
       task.summary.delivery = { ...task.summary.delivery, skipped: reason };
       const prepush = task.summary.delivery.prepush;
@@ -11337,7 +11384,10 @@ export class TaskService {
         if (/HTTP 4(?!08\b|29\b)\d\d\b/.test(cause)) {
           this.markVerificationStalled(task, `等待权威流水线：${reason}`);
         } else {
-          this.holdWithRecovery(task, `等待权威流水线：${reason}`, epoch);
+          const retrying = cause.startsWith("交付平台暂时连接不上")
+            ? "交付平台连接异常，系统正在自动重试，暂时无需操作"
+            : `等待权威流水线：${reason}`;
+          this.holdWithRecovery(task, retrying, epoch);
         }
       }
       this.logDeliveryFailure(task, reason);
