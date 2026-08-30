@@ -151,16 +151,16 @@ async function main(): Promise<number> {
     console.error("[pilot] --poll-timeout-s/--poll-interval-s 必须是非负数");
     return 1;
   }
-  const customizePlaybook = flag("--customize-playbook");
-  const customizeList = (name: string): string[] =>
-    (flag(name) ?? "").split(",").map((item) => item.trim()).filter(Boolean);
-  const executionStageCustomizations = customizePlaybook ? [{
-    playbook_id: customizePlaybook,
-    ...(flag("--customize-instructions")
-      ? { instructions: flag("--customize-instructions") } : {}),
-    optional_activities: customizeList("--customize-activities"),
-    preferred_resources: customizeList("--customize-resources"),
-  }] : undefined;
+  // --customize-playbook 系列参数已随 v1 有界定制退役(2026-08-29):
+  // 结构化定制走工作流资产;文字补充用 --task-instructions。
+  for (const retired of ["--customize-playbook", "--customize-instructions",
+    "--customize-activities", "--customize-resources"]) {
+    if (flag(retired) !== undefined) {
+      console.error(`[pilot] ${retired} 已退役:阶段结构定制请在工作流`
+        + "资产库编排;文字补充用 --task-instructions");
+      return 1;
+    }
+  }
 
   if (!existsSync(modelsPath)) {
     console.error(`[pilot] 找不到模型配置: ${modelsPath}`);
@@ -285,8 +285,8 @@ async function main(): Promise<number> {
     task = service.create(requirement, {
       account: "liaoxiang",
       ...(flag("--lane") ? { lane: flag("--lane") } : {}),
-      ...(executionStageCustomizations
-        ? { executionStageCustomizations } : {}),
+      ...(flag("--task-instructions")
+        ? { taskInstructions: flag("--task-instructions") } : {}),
     });
   }
   console.log(`[pilot] 任务 ${task.id},现场: ${task.workspace}`);

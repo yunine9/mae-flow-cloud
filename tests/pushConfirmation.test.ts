@@ -242,11 +242,24 @@ test("返工开修复会话并携带清单契约;月光不代答确认卡", asyn
     repo.git("commit", "--quiet", "-m", "extra file");
     await (service as any).pushConfirmationSatisfied(internal, "master_bot_REQ1");
     const waiting = service.get(id)!.waiting!;
+    const annotation = service.addAnnotation(id, {
+      author: "liaoxiang", artifact: "未提交改动", file: "src/feature.ts",
+      line: 1, anchor: "export const value = 1;",
+      note: "这里必须补上异常分支测试", kind: "code",
+    });
+    const alreadySent = service.addAnnotation(id, {
+      author: "liaoxiang", artifact: "未提交改动", file: "src/feature.ts",
+      line: 1, anchor: "export const value = 1;",
+      note: "提前提过的重试边界也不能丢", kind: "code",
+    });
+    (service as any).annotations(internal).markSent(
+      [alreadySent.id], "interrupt");
 
     assert.equal((service as any).autoAnswerFor(internal, true), undefined,
       "月光免审批不得代答用户显式要求的 push 前确认卡");
 
     await service.decide(id, {
+      waiting_id: waiting.waiting_id,
       state_version: waiting.state_version,
       selected_options: {
         [(waiting.question as any).questions[0].question]:
@@ -254,6 +267,7 @@ test("返工开修复会话并携带清单契约;月光不代答确认卡", asyn
       },
       delivery_paths: ["src/feature.ts"],
       notes: "extra.ts 是误提交,移出去",
+      // 模拟小鲁班回复：只有选项与说明，不携带网页内部 annotation_ids。
     });
     const summary = service.get(id)!;
     assert.equal(summary.delivery_selection?.status, "requested");
@@ -262,6 +276,178 @@ test("返工开修复会话并携带清单契约;月光不代答确认卡", asyn
     assert.match(String(internal.mission), /mae-flow-delivery-selection\/1/);
     assert.match(String(internal.mission), /只交付以下 1 个文件/);
     assert.match(String(internal.mission), /extra\.ts 是误提交/);
+    assert.match(String(internal.mission), /这里必须补上异常分支测试/,
+      "push 确认没有挂起模型,批注必须显式进入返工使命");
+    assert.match(String(internal.mission), /提前提过的重试边界也不能丢/,
+      "返工是新会话，先前主动送达但未闭环的意见必须重新带入");
+    const statuses = new Map(service.listAnnotations(id).items
+      .map((item) => [item.id, item.status]));
+    assert.equal(statuses.get(annotation.id), "sent");
+    assert.equal(statuses.get(alreadySent.id), "sent");
+  } finally {
+    await model.stop();
+  }
+});
+
+test("同一文件集合连续返工也要逐轮生成新卡,不能复活已决卡", async () => {
+  const { service, model, id, internal } = await verifyingTask();
+  try {
+    internal.summary.push_confirmation = true;
+    const gate = () => (service as any)
+      .pushConfirmationSatisfied(internal, "master_bot_REQ1");
+    await gate();
+    const first = service.get(id)!.waiting!;
+    // 这里只冻结队列，专门验证人工确认的逐轮身份；Agent 是否真改了
+    // 内容不影响契约——用户打回这一事实本身就要求下一张新卡。
+    (service as any).enqueueRepair = (task: any, mission: string, detail: string) => {
+      task.mission = mission;
+      task.summary.status = "queued";
+      task.summary.detail = detail;
+      (service as any).persist(task);
+    };
+    const rework = async (waiting: typeof first) => service.decide(id, {
+      waiting_id: waiting.waiting_id,
+      state_version: waiting.state_version,
+      selected_options: {
+        [(waiting.question as any).questions[0].question]:
+          "需要调整代码（按清单返工）",
+      },
+    });
+
+    await rework(first);
+    internal.summary.status = "verifying";
+    assert.equal(await gate(), false);
+    const second = service.get(id)!.waiting!;
+    assert.equal(second.status, "waiting");
+    assert.notEqual(second.waiting_id, first.waiting_id,
+      "返工后的同文件复审不能复用 resolved 的上一张卡");
+    assert.equal(await gate(), false);
+    assert.equal(service.get(id)!.waiting!.waiting_id, second.waiting_id,
+      "同一轮等待期间再次过闸也必须保持同一张卡");
+
+    await rework(second);
+    internal.summary.status = "verifying";
+    await gate();
+    const third = service.get(id)!.waiting!;
+    assert.equal(third.status, "waiting");
+    assert.notEqual(third.waiting_id, second.waiting_id,
+      "连续两次返工也不能撞回前一轮的已决卡");
+  } finally {
+    await model.stop();
+  }
+});
+
+test("最终确认同一请求并发重放只消费一次,不会给成功者弹先到冲突", async () => {
+  const { service, model, id, internal } = await verifyingTask();
+  try {
+    internal.summary.push_confirmation = true;
+    await (service as any).pushConfirmationSatisfied(
+      internal, "master_bot_REQ1");
+    const waiting = service.get(id)!.waiting!;
+    const question = (waiting.question as any).questions[0].question;
+    let deliveries = 0;
+    (service as any).tryDeliver = async () => { deliveries += 1; };
+    const input = {
+      waiting_id: waiting.waiting_id,
+      state_version: waiting.state_version,
+      selected_options: { [question]: "确认按清单推送" },
+    };
+
+    const [first, replay] = await Promise.all([
+      service.decide(id, input), service.decide(id, input),
+    ]);
+    assert.equal(first.waiting, undefined);
+    assert.equal(replay.waiting, undefined);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(deliveries, 1, "同一确认不能启动两条推送链");
+  } finally {
+    await model.stop();
+  }
+});
+
+test("最终确认已落袋但概要未推进时,并发重放也只恢复一次", async () => {
+  const { service, model, id, internal } = await verifyingTask();
+  try {
+    internal.summary.push_confirmation = true;
+    await (service as any).pushConfirmationSatisfied(
+      internal, "master_bot_REQ1");
+    const waiting = service.get(id)!.waiting!;
+    const question = (waiting.question as any).questions[0].question;
+    const answer = "确认按清单推送";
+    internal.humanGate.resolve(waiting.waiting_id, {
+      stateVersion: waiting.state_version,
+      decision: answer,
+      answers: { [question]: answer },
+    });
+    let deliveries = 0;
+    (service as any).tryDeliver = async () => { deliveries += 1; };
+    const input = {
+      waiting_id: waiting.waiting_id,
+      state_version: waiting.state_version,
+      selected_options: { [question]: answer },
+    };
+
+    const [first, replay] = await Promise.all([
+      service.decide(id, input), service.decide(id, input),
+    ]);
+    assert.equal(first.waiting, undefined);
+    assert.equal(replay.waiting, undefined);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(deliveries, 1, "resolved/task.json 分叉也不能启动两条推送链");
+  } finally {
+    await model.stop();
+  }
+});
+
+test("最终确认恢复:waiting 已决但任务概要仍在等待时自动返工且批注不丢", async () => {
+  const { service, model, id, internal, repo } = await verifyingTask();
+  try {
+    internal.summary.push_confirmation = true;
+    await (service as any).pushConfirmationSatisfied(
+      internal, "master_bot_REQ1");
+    const waiting = service.get(id)!.waiting!;
+    const question = (waiting.question as any).questions[0].question;
+    const annotation = service.addAnnotation(id, {
+      author: "liaoxiang", artifact: "未提交改动", file: "src/feature.ts",
+      line: 1, anchor: "export const value = 1;",
+      note: "补齐超时异常的回归测试", kind: "code",
+    });
+    const annotationText = service.previewAnnotations(id, [annotation.id]);
+    const selectionText = [
+      '<delivery-selection schema="mae-flow-delivery-selection/1" mode="allowlist">',
+      "用户通过文件勾选器确认：只交付以下 1 个文件。",
+      "- src/feature.ts",
+      "当前另有 0 个文件未勾选；它们不得进入提交。",
+      "</delivery-selection>",
+    ].join("\n");
+    // 精确模拟线上旧版本的崩溃窗口：权威待办已经 resolved，但没有新
+    // 版本 continuation；task.json 仍是 waiting，批注也没来得及 sent。
+    internal.humanGate.resolve(waiting.waiting_id, {
+      stateVersion: waiting.state_version,
+      decision: "需要调整代码（按清单返工）",
+      answers: { [question]: "需要调整代码（按清单返工）" },
+      notes: `${selectionText}\n\n${annotationText}`,
+    });
+    await model.stop();
+
+    const recovered = new TaskService({
+      dataDir: service.options.dataDir,
+      provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0,
+    });
+    const result = recovered.recover();
+    assert.equal(result.requeued, 1);
+    const resumed = await until(() => {
+      const task = recovered.get(id);
+      return task?.status === "queued" ? task : undefined;
+    }, "已决 push 卡恢复为返工队列");
+    assert.equal(resumed.waiting, undefined);
+    assert.deepEqual(resumed.delivery_selection?.paths, ["src/feature.ts"]);
+    assert.equal(resumed.delivery_selection?.status, "requested");
+    assert.match(String((recovered as any).tasks.get(id).mission),
+      /补齐超时异常的回归测试/);
+    assert.equal(recovered.listAnnotations(id).items[0].status, "sent",
+      "旧记录没有 annotation_ids 时也要从已落袋原文精确恢复送达状态");
+    void repo;
   } finally {
     await model.stop();
   }
@@ -299,7 +485,7 @@ test("LocalAuth 个人默认:真人缺省即开,显式关才关;无账号不举�
     "无账号链路(probe/pilot/未接登录)不举卡,自动化不被卡死");
 });
 
-test("开关的边界:已推送后不能再开;等卡时关掉=作废卡继续推", async () => {
+test("开关的边界:已推送后不能再开;普通等卡可关闭", async () => {
   const { service, model, id, internal, repo } = await verifyingTask();
   try {
     internal.summary.status = "await_merge";
@@ -316,6 +502,89 @@ test("开关的边界:已推送后不能再开;等卡时关掉=作废卡继续�
     assert.equal(off.push_confirmation, undefined);
     assert.equal(off.waiting, undefined, "人说不看了,卡必须作废");
     assert.equal(off.status, "verifying", "关掉开关要继续推,不许悬在等待");
+  } finally {
+    await model.stop();
+  }
+});
+
+test("人工意见修复后同文件也必须复检；逐条闭环后可正常推送", async () => {
+  const { service, model, id, internal, repo } = await verifyingTask();
+  try {
+    const head = repo.git("rev-parse", "HEAD");
+    internal.summary.luban_account = "owner";
+    internal.summary.delivery_selection = {
+      paths: ["src/feature.ts"],
+      observed_paths: ["src/feature.ts"],
+      excluded_paths: [],
+      status: "confirmed",
+      waiting_id: "old-confirmation",
+      head,
+      updated_at: new Date().toISOString(),
+    };
+    const first = service.addAnnotation(id, {
+      author: "reviewer-a", artifact: "本任务变更", file: "src/feature.ts",
+      line: 1, anchor: "export const value = 1;",
+      note: "补上空值处理", kind: "code",
+    });
+    const second = service.addAnnotation(id, {
+      author: "reviewer-b", artifact: "本任务变更", file: "src/feature.ts",
+      line: 1, anchor: "export const value = 1;",
+      note: "补上边界测试", kind: "code",
+    });
+    (service as any).annotations(internal).markSent(
+      [first.id, second.id], "review_repair");
+    internal.summary.delivery = {
+      loop: {
+        round: 0,
+        state: "verifying",
+        kind: "review",
+        review_source: "workspace",
+        workspace_review_recheck_required: true,
+        workspace_review_annotation_ids: [first.id, second.id],
+        review_ids: "workspace:cycle-1",
+      },
+    };
+
+    assert.equal(await (service as any).pushConfirmationSatisfied(
+      internal, "master_bot_REQ1"), false,
+    "修改来源是人工意见时，即使文件集合没变也不能复用旧确认");
+    const waiting = service.get(id)!.waiting!;
+    assert.notEqual(waiting.waiting_id, "old-confirmation");
+    assert.match(String(waiting.context), /人工意见修改后的复检/);
+    assert.match(String(waiting.context), /还有 2 条待提出人确认/);
+    const question = (waiting.question as any).questions[0].question;
+    const accept = {
+      waiting_id: waiting.waiting_id,
+      state_version: waiting.state_version,
+      selected_options: { [question]: "确认按清单推送" },
+    };
+
+    await assert.rejects(service.decide(id, accept),
+      (error) => error instanceof TaskControlError
+        && /责任人的“继续提交”不能代替意见提出人确认/.test(error.message));
+    assert.equal(service.get(id)!.waiting!.waiting_id, waiting.waiting_id,
+      "越权放行必须零副作用，不能把原卡改旧造成后续假死");
+    assert.equal(service.get(id)!.delivery_selection?.waiting_id,
+      "old-confirmation", "拒绝前不能先改交付清单收据");
+    assert.throws(() => service.verifyAnnotation(id, first.id, "owner"),
+      /只能由他裁决/);
+    assert.throws(() => service.setPushConfirmation(id, false),
+      /不能关闭确认绕过/);
+
+    service.verifyAnnotation(id, first.id, "reviewer-a");
+    await assert.rejects(service.decide(id, accept),
+      (error) => error instanceof TaskControlError && /仍有 1 条/.test(error.message));
+    service.verifyAnnotation(id, second.id, "reviewer-b");
+    assert.match(String(service.get(id)!.detail), /已全部闭环/);
+
+    let deliveries = 0;
+    (service as any).tryDeliver = async () => { deliveries += 1; };
+    await service.decide(id, accept);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(deliveries, 1, "意见全部闭环后必须真正续推，不能卡在旧卡/旧 SHA");
+    assert.equal(service.get(id)!.waiting, undefined);
+    assert.equal(internal.summary.delivery.loop
+      .workspace_review_recheck_required, false);
   } finally {
     await model.stop();
   }

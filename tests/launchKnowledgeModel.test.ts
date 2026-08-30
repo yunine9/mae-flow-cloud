@@ -1,24 +1,28 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  buildTaskKnowledgeChoices,
+  matchBusinessModuleKnowledge,
   normalizeLaunchKnowledgeCatalog,
-  paginateTaskKnowledgeChoices,
-  TASK_KNOWLEDGE_PAGE_SIZE,
-  type LaunchEngineeringKnowledge,
-} from "../web/src/launchKnowledgeModel.ts";
+} from
+  "../web/src/launchKnowledgeModel.ts";
 
 test("发起页知识目录容忍旧字段与坏记录，不让单项数据拖垮整页", () => {
   const catalog = normalizeLaunchKnowledgeCatalog({
     engineering_knowledge: [
-      { id: "guide", title: "构建指南", form: "unknown" },
+      { id: "guide", title: "构建指南", form: "unknown",
+        technologies: ["java"] },
       { id: "guide", title: "重复记录" },
+      { id: "missing-language", title: "缺语言" },
       { title: "没有 ID" },
       null,
     ],
     team_skills: [
-      { path: "review/SKILL.md", name: "review" },
+      { path: "review/SKILL.md", name: "review", nature: "engineering",
+        technologies: ["java"] },
       { path: "review/SKILL.md", name: "重复 Skill" },
+      { path: "legacy/SKILL.md", name: "未治理历史 Skill" },
+      { path: "business/SKILL.md", name: "缺业务模块",
+        nature: "business" },
       { name: "没有路径" },
     ],
   });
@@ -31,41 +35,49 @@ test("发起页知识目录容忍旧字段与坏记录，不让单项数据拖�
     form: "document",
     business_module_ids: [],
     repositories: [],
-    technologies: [],
+    technologies: ["java"],
   }]);
   assert.deepEqual(catalog.skills, [{
     path: "review/SKILL.md",
     name: "review",
     description: "",
+    nature: "engineering",
     business_module_ids: [],
     repositories: [],
-    technologies: [],
+    technologies: ["java"],
   }]);
 });
 
-test("大目录始终按固定页渲染，搜索仍覆盖全部知识", () => {
-  const engineering: LaunchEngineeringKnowledge[] = Array.from(
-    { length: 5_000 }, (_, index) => ({
-      id: `knowledge-${index}`,
-      title: index === 4_321 ? "唯一流水线排障手册" : `知识 ${index}`,
-      summary: "团队工程知识",
-      when_to_use: "需要时",
-      form: "document",
-      business_module_ids: [],
-      repositories: [],
-      technologies: ["cpp"],
-    }));
-  const choices = buildTaskKnowledgeChoices(engineering, [], "");
-  const first = paginateTaskKnowledgeChoices(choices, 0);
-  const last = paginateTaskKnowledgeChoices(choices, Number.MAX_SAFE_INTEGER);
+test("发起页只列出已选模块里真正适用于当前仓库的知识", () => {
+  const modules = [{
+    id: "orders",
+    name: "订单域",
+    knowledge: [
+      { id: "common", title: "订单状态", summary: "通用状态约束",
+        when_to_use: "修改订单状态时", form: "document" as const,
+        repositories: [], version: 2 },
+      { id: "server", title: "服务端排障", summary: "服务端专用",
+        when_to_use: "定位服务端问题时", form: "skill" as const,
+        repositories: ["https://code.example/orders-server.git"], version: 1 },
+      { id: "web", title: "前端规范", summary: "前端专用",
+        when_to_use: "修改页面时", form: "rule" as const,
+        repositories: ["https://code.example/orders-web.git"], version: 4 },
+    ],
+  }, {
+    id: "payment", name: "支付域", knowledge: [{
+      id: "refund", title: "退款", summary: "退款知识",
+      when_to_use: "处理退款时", form: "document" as const,
+      repositories: [], version: 1,
+    }],
+  }];
 
-  assert.equal(choices.length, 5_000);
-  assert.equal(first.items.length, TASK_KNOWLEDGE_PAGE_SIZE);
-  assert.equal(first.page, 0);
-  assert.equal(last.page, last.pages - 1);
-  assert.ok(last.items.length <= TASK_KNOWLEDGE_PAGE_SIZE);
+  const matched = matchBusinessModuleKnowledge(modules, ["orders"],
+    ["https://code.example/orders-server"]);
 
-  const searched = buildTaskKnowledgeChoices(engineering, [], "流水线排障");
-  assert.deepEqual(searched.map((item) => item.key),
-    ["engineering:knowledge-4321"]);
+  assert.deepEqual(matched.map((item) => ({
+    id: item.id, module: item.module_name,
+  })), [
+    { id: "common", module: "订单域" },
+    { id: "server", module: "订单域" },
+  ]);
 });

@@ -527,7 +527,7 @@ export function TaskWorkspace({
           phase={planPhase}
           currentPhase={visibleProgress.current_phase}
           plan={task.execution_plan}
-          planWarning={task.execution_profile_warning}
+          planWarning={task.workflow_profile_warning}
           profile={task.workflow_profile}
           onSuggest={onExecutionPlanFeedback}
           onClose={() => setPlanPhase("")} />}
@@ -556,7 +556,7 @@ export function TaskWorkspace({
               ? `${notes.length} 条批注` : "圈选原文、协作检视"],
           ["collaboration", "开发协作", collaborationVisible
             ? "补充主任务或主动接管" : assistantUnavailableReason(task)],
-          ["execution", "执行现场", task.focus?.headline ?? "原始 SSE 事件流"],
+          ["execution", "执行现场", task.focus?.headline ?? "实时执行日志"],
         ] as Array<[WorkspaceView, string, string]>).map(([view, label, hint]) => (
           <button type="button" role="tab" key={view}
             aria-selected={workspaceView === view}
@@ -656,6 +656,8 @@ export function TaskWorkspace({
                 fallbackFile={activeMeta?.label ?? active}
                 kind={activeMeta?.kind === "diff" ? "code" : "doc"}
                 items={notes}
+                enabled={canOperate
+                  && !["completed", "canceled"].includes(task.status)}
                 onAdded={() => setNotesPulse((tick) => tick + 1)}
               >
                 {materialView === "diff"
@@ -718,7 +720,10 @@ export function TaskWorkspace({
               {/* SSE 实时现场是这个页签的主角(用户拍板),置顶;
                   执行方案卡整体撤出堆叠——各阶段方案点上方进度条的
                   阶段名查看(StagePlanDialog)。 */}
-              <ExecutionPanel task={task} />
+              {/* 摘要卡里的执行现场默认收起，避免多张卡同时拉实时流；
+                  但这里已经是独立的“执行现场”页签，打开页签就该直接
+                  看见现场，不能再让用户做一次没有意义的展开。 */}
+              <ExecutionPanel task={task} defaultOpen />
               <WarmupPanel task={task} />
               {task.workflow_profile && <WorkflowProfileCard
                 profile={task.workflow_profile}
@@ -750,7 +755,14 @@ export function TaskWorkspace({
                     checks={checks}
                     reply={reply}
                     canOperate={canOperate}
-                    running={task.status === "running"}
+                    taskStatus={task.status}
+                    reviewReady={task.waiting?.step === "cloud_push_confirm"
+                      && task.delivery?.loop?.review_source === "workspace"
+                      && task.delivery.loop.workspace_review_recheck_required === true}
+                    mergeRequestOpen={Boolean(task.delivery?.mr_url)
+                      && !["completed", "canceled"].includes(task.status)
+                      && !String(task.delivery?.mr_state ?? "").startsWith("已合入")
+                      && task.delivery?.mr_state !== "已关闭"}
                     evidenceAwaiting={Boolean(
                       task.delivery?.evidence_gap?.missing_dimensions.length)}
                     onLocate={locate}

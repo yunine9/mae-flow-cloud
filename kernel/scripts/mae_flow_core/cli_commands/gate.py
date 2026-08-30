@@ -23,14 +23,15 @@ from .wiring import api
 
 
 # Bash 侧内部状态保护清单(与 guard/gate.py 的 Edit 侧同一份名单)。
-# v2 定格方案 workflow-profile.json 与 v1 execution-profile.json 同级:
-# revision 是确定性 sha256,篡改后可重算自洽,文件模式 0o440 只挡得住
-# 误操作——这条正则是"任务只执行这一份定格方案"的唯一机器保证
-# (2026-08-30 审计 P0-2,曾只盖 v1 漏掉 v2)。测试按此常量断言。
+# workflow-profile.json 的 revision 是确定性 sha256,篡改后可重算自洽,
+# 文件模式 0o440 只挡得住误操作——这条正则是"任务只执行这一份定格
+# 方案"的唯一机器保证(2026-08-30 审计 P0-2)。v1 execution-profile
+# 已整体退役并入 v2 supplements(2026-08-29,无存量窗口统一)。
+# 测试按此常量断言。
 INTERNAL_STATE_PATTERN = (
     r"\.mae-flow(\.json|-history\.jsonl|-need-reload|-defaults\.json)"
     r"|\.mae-flow-work/(?:moonlight-report\.md|"
-    r"execution-profile\.json|workflow-profile\.json|"
+    r"workflow-profile\.json|"
     r"(?:plugin-resources|repository-skills|host-skills)(?:/|$))")
 
 

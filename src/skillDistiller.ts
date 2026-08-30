@@ -32,6 +32,7 @@ import {
   type SkillOperationRecord,
   type SkillUploadFile,
 } from "./hostSkillLibrary.ts";
+import { readSkillKnowledgeMetadata } from "./knowledgeAssetModel.ts";
 
 const CANDIDATES_DIR = "skill-candidates";
 /** 单发补全的墙钟预算:起草不是交付,超时就放弃,人可以再点一次。 */
@@ -111,7 +112,7 @@ export function collectSkillEvidence(
     }
     const prepush = task.delivery?.prepush;
     if (prepush?.state) {
-      lines.push(`推送前验证:${prepush.state},第 ${prepush.round ?? "?"} 轮`);
+      lines.push(`Build-Fix:${prepush.state},第 ${prepush.round ?? "?"} 轮`);
       if (prepush.issue?.message) {
         lines.push(`失败原文(${prepush.issue.check ?? prepush.issue.kind
           ?? "?"}):${clip(prepush.issue.message)}`);
@@ -130,7 +131,7 @@ function effectSummary(effect: HostSkillEffect | undefined): string {
   const lines = [
     `装载 ${effect.provided_tasks} 单,读取 ${effect.accessed_tasks} 单,`
     + `读后返修 ${effect.repair_tasks} 单`,
-    `读后 prepush 一次过 ${effect.prepush_first_pass}/${effect.prepush_measured},`
+    `读后 Build-Fix 一次过 ${effect.prepush_first_pass}/${effect.prepush_measured},`
     + `未读对照 ${effect.baseline_first_pass}/${effect.baseline_measured}`,
   ];
   if (effect.signal_evidence) lines.push(`修订信号:${effect.signal_evidence}`);
@@ -365,7 +366,13 @@ export async function adoptSkillCandidate(
   }
   let operation: SkillOperationRecord;
   try {
-    operation = await uploadHostSkill(dataDir, directory, files, operator);
+    if (!existsSync(join(live, "SKILL.md"))) {
+      throw new SkillDistillError("在架 Skill 不存在，无法继承知识标签");
+    }
+    const metadata = readSkillKnowledgeMetadata(
+      readFileSync(join(live, "SKILL.md"), "utf-8"));
+    operation = await uploadHostSkill(
+      dataDir, directory, files, operator, metadata);
   } catch (error) {
     if (error instanceof SkillLibraryError) {
       throw new SkillDistillError(`候选未通过上架闸: ${error.message}`);

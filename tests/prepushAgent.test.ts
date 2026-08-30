@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { SemanticEvent } from "../src/semanticEvents.ts";
 import {
+  buildFixScopeReview,
   createPrePushGateContract,
   parsePrePushAgentReport,
   prePushMission,
@@ -9,6 +10,39 @@ import {
   verifyPrePushEvidence,
   type PrePushAgentReport,
 } from "../src/prepushAgent.ts";
+
+test("Build-Fix 提交范围自检只在文件多或疑似产物时提示，不做硬拦截", () => {
+  assert.equal(buildFixScopeReview([
+    "src/a.ts", "tests/a.test.ts",
+  ]), undefined, "少量正常源码无需增加提示噪音");
+
+  const many = buildFixScopeReview(Array.from(
+    { length: 11 }, (_, index) => `src/part-${index}.ts`))!;
+  assert.equal(many.totalPaths, 11);
+  assert.equal(many.suspiciousPaths, 0);
+  assert.deepEqual(many.directorySummary, [{ directory: "src", count: 11 }]);
+
+  const artifact = buildFixScopeReview([
+    "src/a.ts", "target/classes/A.class", "build/CMakeFiles/a.o",
+  ])!;
+  assert.equal(artifact.totalPaths, 3,
+    "即使少于 10 个，只要像编译产物也应提醒自查");
+  assert.equal(artifact.suspiciousPaths, 2);
+  assert.deepEqual(artifact.suspiciousExamples,
+    ["build/CMakeFiles/a.o", "target/classes/A.class"]);
+
+  const mission = prePushMission({
+    taskId: "T-scope", workspace: "/tmp/repo", sha: "c".repeat(40),
+    round: 1, requirement: "修复问题", branch: "feature", baseline: "master",
+    changeScope: artifact,
+  });
+  assert.match(mission, /提示，不是目录黑名单/);
+  assert.match(mission, /全部合理.*正常继续/s);
+  assert.match(mission, /混入无关内容.*自行整理 commit/s);
+  assert.match(mission, /确实无法判断.*目录数量汇总/s);
+  assert.match(mission, /不会因为文件多就机械拦截/,
+    "范围审计交给 Agent 判断，不增加反复撞墙的服务端门禁");
+});
 
 test("prepush 使命明确 Agent 平台目录只读且不得提交", () => {
   const mission = prePushMission({
@@ -306,6 +340,25 @@ test("prepush gate: 拦住宿主秘密和危险删除，不误伤仓库 skill", 
     "rm -rf cmake-build-debug",
   ]) {
     assert.equal(prePushSecurityDecision("Bash", command), undefined, command);
+  }
+  // 修复 Agent 必须能纠正自己误带的文件。只拦全树/通配销毁，不拦
+  // 精确 pathspec；否则第一次 commit 边界错了，后续永远背着错误文件。
+  for (const command of [
+    "git restore src/unwanted.ts",
+    "git restore --source=master -- src/unwanted.ts tests/unwanted.test.ts",
+    "git checkout HEAD^ -- src/unwanted.ts",
+    "git restore --staged .",
+    "git reset --soft HEAD^",
+  ]) {
+    assert.equal(prePushSecurityDecision("Bash", command), undefined, command);
+  }
+  for (const command of [
+    "git checkout HEAD -- .",
+    "git restore --worktree .",
+    "git restore --worktree 'src/*.ts'",
+    "git restore --pathspec-from-file=paths.txt",
+  ]) {
+    assert.equal(prePushSecurityDecision("Bash", command)?.action, "deny", command);
   }
   assert.equal(prePushSecurityDecision("Read", ".claude/skills/java/SKILL.md"), undefined);
   assert.equal(prePushSecurityDecision("Read", ".codex/skills/test/SKILL.md"), undefined);

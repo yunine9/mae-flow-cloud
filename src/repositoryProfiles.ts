@@ -35,6 +35,29 @@ export interface RepositoryProfileResolution {
   profile?: RepositoryProfile;
 }
 
+/** 持久化与“本单先采用”共用的归一化，避免保存失败后悄悄换作用域。 */
+export function normalizeRepositoryProfile(
+  input: { repository: string; technologies?: string[]; confirmed?: boolean },
+  operator: string,
+): RepositoryProfile {
+  const repository = validateRepository(input.repository);
+  let technologies: string[];
+  try {
+    technologies = normalizeKnowledgeLanguages(input.technologies ?? [])
+      .filter((item) => item !== "agnostic");
+  } catch (error) {
+    throw new RepositoryProfileError(
+      error instanceof Error ? error.message : String(error));
+  }
+  return {
+    repository,
+    technologies,
+    confirmed: input.confirmed !== false,
+    updated_at: new Date().toISOString(),
+    updated_by: operator,
+  };
+}
+
 function home(dataDir: string): string { return join(dataDir, ROOT); }
 function file(dataDir: string): string { return join(home(dataDir), FILE); }
 
@@ -111,22 +134,8 @@ export function saveRepositoryProfile(
   input: { repository: string; technologies?: string[]; confirmed?: boolean },
   operator: string,
 ): RepositoryProfile {
-  const repository = validateRepository(input.repository);
-  let technologies: string[];
-  try {
-    technologies = normalizeKnowledgeLanguages(input.technologies ?? [])
-      .filter((item) => item !== "agnostic");
-  } catch (error) {
-    throw new RepositoryProfileError(
-      error instanceof Error ? error.message : String(error));
-  }
-  const profile: RepositoryProfile = {
-    repository,
-    technologies,
-    confirmed: input.confirmed !== false,
-    updated_at: new Date().toISOString(),
-    updated_by: operator,
-  };
+  const profile = normalizeRepositoryProfile(input, operator);
+  const { repository, technologies } = profile;
   const identity = repositoryIdentity(repository);
   const all = readAll(dataDir).filter((item) =>
     repositoryIdentity(item.repository) !== identity);

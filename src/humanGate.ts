@@ -38,6 +38,16 @@ export interface WaitingRecord {
   created_at: string;
   resolved_at: string;
   reminders: number;
+  /** 同一 HTTP 请求的稳定指纹。网络重试只有完全相同才幂等返回；
+   * 不同决定仍严格执行先到生效。旧记录缺席时保持原有冲突语义。 */
+  request_digest?: string;
+  /** 谁提交的决定。管理员可替责任人拍板,事后必须答得出"谁点的"
+   * (2026-08-30 审计:决策不记 actor,追责只能靠猜)。 */
+  decided_by?: string;
+  /** 决定落袋后宿主完成后续动作所需的结构化收据。它与决定同在
+   * waiting.json 的原子替换里，避免进程死在“决定已收、task.json
+   * 尚未推进”的窗口后丢失交付清单等上下文。 */
+  continuation?: Record<string, unknown>;
 }
 
 interface Store {
@@ -103,6 +113,22 @@ export class HumanGate {
       .sort((a, b) => a.created_at.localeCompare(b.created_at));
   }
 
+  /** waiting.json 是人工决定的权威账。task.json 只存页面投影副本；
+   * 两者发生分叉时，调用方必须从这里重新对账。 */
+  get(waitingId: string): WaitingRecord | undefined {
+    const record = this.load().records[waitingId];
+    return record ? { ...record } : undefined;
+  }
+
+  /** 已落袋决定清单供宿主修复派生投影（例如批注 sent 状态）。决定
+   * 本身仍以 waiting.json 为唯一真相，调用方不得据此重做业务选择。 */
+  resolved(): WaitingRecord[] {
+    return Object.values(this.load().records)
+      .filter((record) => record.status === "resolved")
+      .sort((left, right) => left.resolved_at.localeCompare(right.resolved_at))
+      .map((record) => ({ ...record }));
+  }
+
   /** 消费决定;版本不匹配或已被抢先,抛 StateConflictError。 */
   resolve(
     waitingId: string,
@@ -111,12 +137,20 @@ export class HumanGate {
       decision: string;
       answers?: Record<string, string>;
       notes?: string;
+      requestDigest?: string;
+      decidedBy?: string;
+      continuation?: Record<string, unknown>;
     },
   ): WaitingRecord {
     const store = this.load();
     const record = store.records[waitingId];
     if (!record) throw new StateConflictError(`待办 ${waitingId} 不存在`);
     if (record.status !== "waiting") {
+      if (record.status === "resolved"
+          && options.requestDigest
+          && record.request_digest === options.requestDigest) {
+        return { ...record };
+      }
       throw new StateConflictError(
         `任务状态已变化:待办 ${waitingId} 已由先到决定完成`);
     }
@@ -130,6 +164,12 @@ export class HumanGate {
       record.answers = { ...options.answers };
     }
     record.notes = String(options.notes ?? "");
+    record.request_digest = options.requestDigest || undefined;
+    // 有值才赋:赋 undefined 会造出值为 undefined 的自有属性,与 JSON
+    // 落盘回读(键消失)不等价,幂等重放的 deepEqual 会被它绊倒(实测)。
+    if (options.decidedBy) record.decided_by = options.decidedBy;
+    record.continuation = options.continuation
+      ? { ...options.continuation } : undefined;
     record.state_version += 1;
     record.resolved_at = now();
     this.save(store);

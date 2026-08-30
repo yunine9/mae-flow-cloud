@@ -139,7 +139,7 @@ export function resolveWorkflowAssets(options: {
       return unavailable(ref,
         `团队 Skill ${ref.id} 的固定版本当前不可装载或摘要已变化`);
     }
-    if (skill.nature !== "unclassified" && !knowledgeMatchesTask(skill, {
+    if (!knowledgeMatchesTask(skill, {
       repositories: options.repositories,
       technologies: options.technologies,
       businessModuleIds: options.businessModules.map((item) => item.id),

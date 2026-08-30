@@ -34,8 +34,13 @@ import { TaskService } from "../src/taskService.ts";
 const encode = (text: string) => Buffer.from(text, "utf-8").toString("base64");
 
 function skillMd(description: string, body: string): string {
-  return `---\nname: java-autout\ndescription: ${description}\n---\n\n${body}\n`;
+  return `---\nname: java-autout\ndescription: ${description}\nknowledge_nature: engineering\ntechnologies: [java]\n---\n\n${body}\n`;
 }
+
+const ENGINEERING_METADATA = {
+  nature: "engineering" as const,
+  business_module_ids: [], repositories: [], technologies: ["java"],
+};
 
 function readerTask(options: {
   id: string;
@@ -101,7 +106,7 @@ test("候选区纪律:草稿过密钥扫描;采纳走上架闸,坏草稿拒并�
   await uploadHostSkill(dataDir, "java-autout", [
     { path: "SKILL.md", content_base64: encode(skillMd("v1", "老写法")) },
     { path: "templates/case.md", content_base64: encode("模板\n") },
-  ], "admin");
+  ], "admin", ENGINEERING_METADATA);
 
   // 含密钥的草稿在存候选时就拒——候选区与 skill 同属权限全开区。
   assert.throws(() => saveSkillCandidate(dataDir, "java-autout", {
@@ -163,7 +168,7 @@ test("端到端:distillSkillDraft 用真实足迹起草;无足迹如实拒绝", 
   try {
     await uploadHostSkill(dataDir, "java-autout", [
       { path: "SKILL.md", content_base64: encode(skillMd("v1", "老写法")) },
-    ], "admin");
+    ], "admin", ENGINEERING_METADATA);
 
     await assert.rejects(
       service.distillSkillDraft("java-autout", "boss"),

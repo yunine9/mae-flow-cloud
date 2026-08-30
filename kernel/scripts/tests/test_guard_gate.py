@@ -40,9 +40,9 @@ class EditGateTests(unittest.TestCase):
              "只读资源"),
             (".mae-flow-work/repository-skills/java/SKILL.md", "只读资源"),
             (".mae-flow-work/host-skills/abc/SKILL.md", "只读资源"),
-            (".mae-flow-work/execution-profile.json", "执行偏好"),
-            # v2 定格方案与 v1 偏好同级只读:revision 可重算自洽,
-            # 这道闸是"任务只执行这一份"的唯一机器保证(审计 P0-2)。
+            # 定格方案(v2,已吸收 v1 建议层)只读:revision 可重算
+            # 自洽,这道闸是"任务只执行这一份"的唯一机器保证(审计
+            # P0-2;v1 execution-profile 已于 2026-08-29 退役)。
             (".mae-flow-work/workflow-profile.json", "只读资源"),
             ("/plugin/scripts/mae-flow.py", "禁止修改插件自身"),
         ):
@@ -153,14 +153,14 @@ class BashWriteGateTests(unittest.TestCase):
         self.assertEqual("absolute", internal.kind)
         self.assertIn("禁止经 Bash 改写", internal.message)
 
-    def test_bash_internal_state_pattern_covers_both_profile_files(self):
-        """v1/v2 两份方案文件都要被 Bash 侧名单命中(审计 P0-2 实锤:
-        名单曾只盖 execution-profile,sed -i 定格方案畅通无阻)。"""
+    def test_bash_internal_state_pattern_covers_profile_and_reports(self):
+        """定格方案与月光报告都要被 Bash 侧名单命中(审计 P0-2 实锤:
+        名单曾漏过方案文件,sed -i 畅通无阻)。"""
         from mae_flow_core.cli_commands.gate import INTERNAL_STATE_PATTERN
         from mae_flow_core.guard import intent as guard_intent
         for command in (
             "sed -i 's/a/b/' .mae-flow-work/workflow-profile.json",
-            "cp /tmp/fake.json .mae-flow-work/execution-profile.json",
+            "cp /tmp/fake.md .mae-flow-work/moonlight-report.md",
         ):
             with self.subTest(command=command):
                 intent = guard_intent.parse_intent("bash", command)

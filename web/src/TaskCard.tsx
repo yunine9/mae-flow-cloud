@@ -155,7 +155,8 @@ export function TaskCard({
               showDetailedStep={decisionMode === "form"}
             />
           )}
-          <PrepushStatus prepush={task.delivery?.prepush} />
+          <PrepushStatus prepush={task.delivery?.prepush}
+            runtime={task.delivery?.prepush_runtime} />
           <TokenUsage usage={task.token_usage} />
         </span>
         <span className="task-chevron" aria-hidden>
@@ -194,7 +195,10 @@ export function TaskCard({
           </a>
         )}
         {task.delivery?.pipeline && (
-          <span className="meta-fact">流水线 · {task.delivery.pipeline}</span>
+          // 原始状态串形如 "running(轮询预算耗尽,请人工查看流水线)"——
+          // 括号里的注记才是给人看的;外壳状态词翻成人话,原文进 title。
+          <span className="meta-fact" title={task.delivery.pipeline}>
+            流水线 · {pipelineLabel(task.delivery.pipeline)}</span>
         )}
         {/* 百字诊断不塞 meta chip(最重要的原因不该用最弱的视觉级):
             这里只留结论,全文在展开区的 alert 里。 */}
@@ -297,8 +301,8 @@ export function TaskCard({
                  所以这里只给入口不给表单。 */
               <div className="chain-review-entry">
                 <span>DELIVERY REVIEW</span>
-                <strong>推送前请检视代码</strong>
-                <p>本次全部代码增量等待你检视;请到任务工作台逐文件检视 diff,核对交付清单后提交决定。</p>
+                <strong>Build-Fix 已通过，请做最终代码检视</strong>
+                <p>这版代码已完成构建与测试修复；请到任务工作台检视 diff，确认后将直接推送。</p>
                 {onOpenArtifacts && (
                   <button type="button" onClick={onOpenArtifacts}>
                     去检视代码
@@ -426,7 +430,7 @@ export function TaskProgress({
  * id 不猜译——猜错比不译更糟,通用标题足够,正文会说明这是什么决定。 */
 function waitingStepTitle(task: TaskSummary): string | undefined {
   const step = task.waiting?.step ?? "";
-  if (step === "cloud_push_confirm") return "推送前确认：检视代码与交付范围";
+  if (step === "cloud_push_confirm") return "最终检视：确认这版代码可直接推送";
   if (task.waiting?.recommended_view === "diff") return "代码检视";
   return undefined;
 }
@@ -468,9 +472,19 @@ export function WaitingCard({
   const [notes, setNotes] = useState("");
   const [notesOpen, setNotesOpen] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
-  useEffect(() => setContextOpen(false), [task.waiting?.waiting_id]);
   const [conflict, setConflict] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  useEffect(() => {
+    // WaitingCard 在右栏原位复用。换 waiting_id 就是换了一桩事务，
+    // 上一张卡的选择、自由答复和错误提示都不能偷偷带到下一张。
+    setPicked({});
+    setCustom({});
+    setCustomOpen({});
+    setNotes("");
+    setNotesOpen(false);
+    setContextOpen(false);
+    setConflict("");
+  }, [task.waiting?.waiting_id]);
   const questions = task.waiting?.question?.questions ?? [];
   const choiceEffects = task.waiting?.choice_effects ?? [];
   const feedbackAnswers = new Set(choiceEffects
@@ -616,6 +630,7 @@ export function WaitingCard({
         repositorySkills,
         confirmsChain ? repositoryAssigneeSelection?.assignments : undefined,
         requiresDeliverySelection ? deliverySelection?.selectedPaths : undefined,
+        task.waiting!.waiting_id,
       );
       if (result.conflict) setConflict(result.conflict);
       onDecided();
@@ -814,8 +829,10 @@ export function WaitingCard({
             /* 重心是"请检视代码":这里就是编排瘦身后唯一的人审代码点,
                只提清单会让人以为对对文件名就行。原文案"正在读取…"是
                误导:没在读,是检视面板还没打开过(实锤用户干等)。 */
-            ? "本任务全部代码增量在「本任务变更」——请逐文件检视 diff;"
-              + "勾选框默认全选,检视后这里才能提交。"
+            /* 名字必须与工作台一字不差:按钮实际叫「工作区变更」,
+               写别的词等于把人支去找一个不存在的入口(2026-08-30 审计)。 */
+            ? "本任务全部代码增量在「交付材料 → 工作区变更」——请逐文件"
+              + "检视 diff;勾选框默认全选,检视后这里才能提交。"
             : deliverySelectionChanged
               ? selectedEffect?.handles_feedback
                 ? "提交后：Agent 按这个范围调整代码与清单，完成后重新给你检视；本次不会推送。"
@@ -825,7 +842,7 @@ export function WaitingCard({
                   .selectedPaths.filter((path) => !deliverySelection!
                     .committedPaths.includes(path)).length} 个）；未选内容保留在本地但不推送；`
                 + "不会让 Agent 猜着重改，也不重跑本地编译，最终由绑定新 SHA 的权威流水线裁决。"
-              : "提交后：保持当前提交不变；服务端复核同一文件集合，然后继续推送前验证与交付。"}</span>
+              : "提交后：保持当前提交不变；服务端复核同一文件集合，然后继续交付。若代码变化，会先重新跑 Build-Fix。"}</span>
           {onLocateDelivery && (
             <button type="button" className="delivery-locate"
               onClick={onLocateDelivery}>
@@ -880,8 +897,20 @@ export function WaitingCard({
 function rewritePanelPath(context: string, taskId: string): string {
   return context.replace(
     /`?\/[^\s`]*\.mae-flow-work\/panel\.html`?/g,
-    `[在本页打开现场面板](/tasks/${taskId}/panel)`,
+    // markdown 渲染层给所有链接 target=_blank,文字必须与行为一致:
+    // 写"在本页打开"而实际开新标签页,是自相矛盾(2026-08-30 审计)。
+    `[新标签页打开现场面板](/tasks/${taskId}/panel)`,
   );
+}
+
+/** 流水线原始状态串 → 人话。带括号注记的,注记本身就是给人看的原因。 */
+function pipelineLabel(raw: string): string {
+  const annotated = raw.match(/^(running|failed|success)\((.+)\)$/);
+  if (annotated) return annotated[2];
+  if (raw === "running") return "运行中";
+  if (raw === "success") return "已通过";
+  if (raw === "failed") return "未通过";
+  return raw;
 }
 
 export function RetryButton({

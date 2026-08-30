@@ -1,0 +1,33 @@
+/* ── 根错误边界:白屏换成能读、能复制、能刷新的错误页(2026-08-29
+   "点知识清单某一行就白屏"实测:未捕获渲染异常会卸载整棵树,
+   页面纯白且零线索)。 ── */
+.root-error-screen {
+  min-height: 100vh; padding: 32px 20px; display: grid; place-items: center;
+  background: var(--bg, #0f1115);
+}
+.root-error-card {
+  width: min(760px, 100%); padding: 24px 26px; display: grid; gap: 12px;
+  border: 1px solid var(--line, rgba(255,255,255,.12));
+  border-left: 4px solid var(--danger, #d9534f);
+  border-radius: 12px; background: var(--surface, rgba(255,255,255,.04));
+}
+.root-error-card h1 {
+  margin: 0; color: var(--text-strong, #fff); font-size: 19px;
+}
+.root-error-card > p {
+  margin: 0; color: var(--muted, #9da8b9); font-size: 13px; line-height: 1.7;
+}
+.root-error-detail {
+  margin: 0; padding: 12px 14px; max-height: 320px; overflow: auto;
+  color: var(--text, #d7dde8); font: 12px/1.6 var(--font-mono, monospace);
+  white-space: pre-wrap; word-break: break-word;
+  border: 1px solid var(--line, rgba(255,255,255,.1)); border-radius: 8px;
+  background: var(--surface-soft, rgba(0,0,0,.25));
+}
+.root-error-actions { display: flex; gap: 10px; }
+.root-error-actions button {
+  padding: 8px 16px; color: var(--text-strong, #fff); cursor: pointer;
+  border: 1px solid var(--line, rgba(255,255,255,.16)); border-radius: 8px;
+  background: var(--surface-soft, rgba(255,255,255,.06)); font-size: 13px;
+}
+.root-error-actions button:hover { border-color: var(--accent, #7777ec); }

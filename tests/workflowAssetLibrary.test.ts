@@ -311,8 +311,11 @@ test("operations.jsonl:每次变更一行留痕,含操作、资产与操作人",
 
   const lines = readFileSync(join(root, "operations.jsonl"), "utf-8")
     .trim().split("\n").map((line) => JSON.parse(line));
+  // approve 之后多一笔 approve_commit:唯一的账后行,是"提交点已落定"
+  // 的确认——孤儿 vN 回收(见故障用例)只认查无此笔的版本。
   assert.deepEqual(lines.map((line) => line.op),
-    ["create", "save_draft", "submit", "approve", "archive"]);
+    ["create", "save_draft", "submit", "approve", "approve_commit",
+     "archive"]);
   assert.ok(lines.every((line) => line.asset_id === "wf-log"
     && typeof line.actor === "string" && line.actor
     && typeof line.ts === "string"));

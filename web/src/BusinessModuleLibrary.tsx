@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   archiveBusinessKnowledgeAsset,
   createBusinessModule,
@@ -12,6 +12,19 @@ import {
   type BusinessModule,
   type BusinessModuleCatalog,
 } from "./api";
+import {
+  knowledgeAssetElementId,
+  type KnowledgeAssetFocus,
+} from "./knowledgeNavigation";
+
+type BusinessAssetFocus = Extract<KnowledgeAssetFocus, { kind: "business" }>;
+
+async function sha256(content: string): Promise<string> {
+  const value = await globalThis.crypto.subtle.digest(
+    "SHA-256", new TextEncoder().encode(content));
+  return [...new Uint8Array(value)]
+    .map((item) => item.toString(16).padStart(2, "0")).join("");
+}
 
 function lines(value: string): string[] {
   return value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean);
@@ -155,24 +168,29 @@ function AssetEditor({ module, asset, initialContent, onSaved, onCancel }: {
   </form>;
 }
 
-export function BusinessModuleLibrary({ admin }: { admin: boolean }) {
+export function BusinessModuleLibrary({ admin, initialAsset }: {
+  admin: boolean;
+  initialAsset?: BusinessAssetFocus;
+}) {
   const [catalog, setCatalog] = useState<BusinessModuleCatalog>();
   const [users, setUsers] = useState<AuthUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
-  const [expanded, setExpanded] = useState("");
+  const [expanded, setExpanded] = useState(initialAsset?.moduleId ?? "");
   const [editingModule, setEditingModule] = useState("");
   const [editingAsset, setEditingAsset] = useState<{
     moduleId: string; asset?: BusinessKnowledgeAsset; content?: string }>();
   const [document, setDocument] = useState<{
-    moduleId: string; assetId: string; title: string; content: string }>();
+    moduleId: string; assetId: string; title: string; content: string;
+    version: number; digest: string }>();
   const [documentLoading, setDocumentLoading] = useState("");
   const [create, setCreate] = useState({
     id: "", name: "", description: "", owner: "",
     maintainers: "", repositories: "",
   });
   const [createBusy, setCreateBusy] = useState(false);
+  const documentRequest = useRef(0);
 
   const refresh = async () => {
     setLoading(true); setError("");
@@ -198,22 +216,64 @@ export function BusinessModuleLibrary({ admin }: { admin: boolean }) {
       module.id === updated.id ? updated : module) } : current);
 
   const openAsset = async (module: BusinessModule, asset: BusinessKnowledgeAsset,
-    edit = false) => {
+    edit = false, expected?: Pick<BusinessAssetFocus, "version" | "digest">) => {
     const key = `${module.id}/${asset.id}`;
+    const request = ++documentRequest.current;
     setDocumentLoading(key); setError("");
     try {
-      const value = await getBusinessKnowledgeAsset(module.id, asset.id);
+      const value = await getBusinessKnowledgeAsset(
+        module.id, asset.id, expected?.version);
+      const contentDigest = expected ? await sha256(value.content)
+        : value.asset.digest;
+      if (expected && (contentDigest !== expected.digest
+          || value.asset.digest !== expected.digest
+          || value.asset.version !== expected.version)) {
+        throw new Error(
+          `模块知识 ${asset.title} 的 v${expected.version} 正文与清单指纹不一致，`
+          + "已停止展示，不能把当前内容当作同一版本");
+      }
+      if (documentRequest.current !== request) return;
       if (edit) {
         setEditingAsset({ moduleId: module.id, asset, content: value.content });
         setDocument(undefined);
       } else {
         setDocument({ moduleId: module.id, assetId: asset.id,
-          title: asset.title, content: value.content });
+          title: value.asset.title, content: value.content,
+          version: value.asset.version,
+          digest: value.asset.digest });
       }
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "知识正文读取失败");
-    } finally { setDocumentLoading(""); }
+      if (documentRequest.current === request) {
+        setDocument(undefined);
+        setError(reason instanceof Error ? reason.message : "知识正文读取失败");
+      }
+    } finally {
+      if (documentRequest.current === request) setDocumentLoading("");
+    }
   };
+
+  useEffect(() => {
+    if (!initialAsset || !catalog) return;
+    const module = catalog.modules.find((item) => item.id === initialAsset.moduleId);
+    const asset = module?.assets.find((item) => item.id === initialAsset.assetId);
+    if (!module || !asset) {
+      setDocument(undefined);
+      setError("要核对的模块知识已不存在，无法把管理页当前内容当作清单版本；请返回发起页重新核对。");
+      return;
+    }
+    setExpanded(module.id);
+    setDocument(undefined);
+    void openAsset(module, asset, false, initialAsset);
+  }, [catalog, initialAsset]);
+
+  useEffect(() => {
+    if (!initialAsset || document?.moduleId !== initialAsset.moduleId
+        || document.assetId !== initialAsset.assetId) return;
+    requestAnimationFrame(() => globalThis.document.getElementById(
+      `${knowledgeAssetElementId("business", document.moduleId,
+        document.assetId)}-document`,
+    )?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  }, [document, initialAsset]);
 
   return <section className="business-module-library" aria-labelledby="business-module-library-title">
     <header className="business-module-library-head">
@@ -333,7 +393,11 @@ export function BusinessModuleLibrary({ admin }: { admin: boolean }) {
             <div className="business-asset-list">
               <div className="business-asset-list-head"><strong>已发布知识</strong>
                 <small>点击名称查看正文；任务只会获得选中模块当时的固定版本。</small></div>
-              {liveAssets.map((asset) => <div className="business-asset-row" key={asset.id}>
+              {liveAssets.map((asset) => <div
+                id={knowledgeAssetElementId("business", module.id, asset.id)}
+                className={`business-asset-row${initialAsset?.moduleId === module.id
+                  && initialAsset.assetId === asset.id ? " focused" : ""}`}
+                key={asset.id}>
                 <button type="button" className="business-asset-title"
                   disabled={documentLoading === `${module.id}/${asset.id}`}
                   onClick={() => void openAsset(module, asset)}>
@@ -362,8 +426,13 @@ export function BusinessModuleLibrary({ admin }: { admin: boolean }) {
               {!liveAssets.length && <div className="business-asset-empty">
                 还没有已发布知识。Owner 可以从一项明确、可复用的知识开始。</div>}
             </div>
-            {document?.moduleId === module.id && <div className="business-asset-document">
-              <header><strong>{document.title}</strong><button type="button"
+            {document?.moduleId === module.id && <div
+              id={`${knowledgeAssetElementId("business", document.moduleId,
+                document.assetId)}-document`}
+              className="business-asset-document"
+              aria-label={`${document.title} 全文`}>
+              <header><strong>{document.title} · 全文 · v{document.version}
+                {` · 指纹 ${document.digest.slice(0, 8)} 已对拍`}</strong><button type="button"
                 onClick={() => setDocument(undefined)}>关闭正文</button></header>
               <pre>{document.content}</pre>
             </div>}

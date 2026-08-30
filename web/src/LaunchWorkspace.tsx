@@ -1,17 +1,14 @@
-import {
-  Component,
-  useEffect,
-  useMemo,
-  useState,
-  type ErrorInfo,
-  type ReactNode,
-} from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   createTask,
+  getLaunchKnowledgePreview,
   getLaunchOptions,
   listWorkflowAssets,
   type AuthUser,
+  type LaunchKnowledgeMatchedScope,
+  type LaunchKnowledgePreview,
   type LaunchOptions,
+  type TaskSummary,
   type WorkflowAssetSummary,
 } from "./api";
 import {
@@ -19,14 +16,11 @@ import {
   RepositoryTechnologyPicker,
   type RepositoryTechnologyDraft,
 } from "./RepositoryTechnologyPicker";
-import { KnowledgeLanguageTags } from "./KnowledgeLanguages";
+import { knowledgeLanguageLabel } from "./KnowledgeLanguages";
 import {
-  buildTaskKnowledgeChoices,
-  normalizeLaunchKnowledgeCatalog,
-  paginateTaskKnowledgeChoices,
-  type LaunchEngineeringKnowledge,
-  type LaunchTeamSkill,
-} from "./launchKnowledgeModel";
+  knowledgeAssetPath,
+  type KnowledgeAssetFocus,
+} from "./knowledgeNavigation";
 import {
   SchemeSelector,
   type WorkflowSchemeSelection,
@@ -52,11 +46,8 @@ type LaunchDraft = {
   taskInstructions?: string;
   selectedBusinessModuleIds?: string[];
   moduleSelectionTouched?: boolean;
-  selectedEngineeringKnowledgeIds?: string[];
-  engineeringSelectionTouched?: boolean;
-  selectedTeamSkillPaths?: string[];
-  teamSkillSelectionTouched?: boolean;
   workflowSelection?: WorkflowSchemeSelection;
+  repositoryTechnologies?: RepositoryTechnologyDraft[];
 };
 type LaunchPreferences = {
   recentRepos: string[];
@@ -78,147 +69,87 @@ function readStored<T>(key: string): T | undefined {
   }
 }
 
+function restoredRepositoryTechnologies(
+  value: unknown,
+): RepositoryTechnologyDraft[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 20).flatMap((candidate) => {
+    if (!candidate || typeof candidate !== "object") return [];
+    const item = candidate as Record<string, unknown>;
+    const repository = typeof item.repository === "string"
+      ? item.repository.trim() : "";
+    if (!repository || !Array.isArray(item.technologies)) return [];
+    return [{
+      repository,
+      technologies: item.technologies.filter((technology): technology is string =>
+        typeof technology === "string").slice(0, 50),
+      confirmed: item.confirmed === true,
+      ...(typeof item.remembered === "boolean"
+        ? { remembered: item.remembered } : {}),
+    }];
+  });
+}
+
 function repositoryIdentity(value: string): string {
   return value.trim().replace(/\/+$/, "").replace(/\.git$/i, "").toLowerCase();
 }
 
-class TaskKnowledgeBoundary extends Component<{
-  children: ReactNode;
-}, { failed: boolean }> {
-  state = { failed: false };
+const KNOWLEDGE_FORM_LABEL = {
+  document: "文档",
+  skill: "Skill",
+  rule: "规则",
+  example: "示例",
+} as const;
 
-  static getDerivedStateFromError(): { failed: boolean } {
-    return { failed: true };
-  }
-
-  componentDidCatch(error: Error, info: ErrorInfo): void {
-    console.error("[launch-knowledge] 知识选择器渲染失败", error, info);
-  }
-
-  render() {
-    if (this.state.failed) {
-      return <div className="launch-knowledge-fallback" role="alert">
-        <strong>知识清单暂时无法展开</strong>
-        <span>不会影响必填信息；请刷新后重试，或保持默认选择直接发起。</span>
-      </div>;
-    }
-    return this.props.children;
-  }
-}
-
-function TaskKnowledgeSelector({
-  engineering,
-  skills,
-  selectedEngineeringIds,
-  selectedSkillPaths,
-  onToggleEngineering,
-  onToggleSkill,
-}: {
-  engineering: LaunchEngineeringKnowledge[];
-  skills: LaunchTeamSkill[];
-  selectedEngineeringIds: string[];
-  selectedSkillPaths: string[];
-  onToggleEngineering: (id: string, selected: boolean) => void;
-  onToggleSkill: (path: string, selected: boolean) => void;
+function LaunchKnowledgeRow({ form, title, summary, whenToUse, scope, version,
+  href, onOpen }: {
+  form: keyof typeof KNOWLEDGE_FORM_LABEL;
+  title: string;
+  summary: string;
+  whenToUse: string;
+  scope: string;
+  version?: string;
+  href: string;
+  onOpen: () => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const [page, setPage] = useState(0);
-  const selectedEngineering = useMemo(
-    () => new Set(selectedEngineeringIds), [selectedEngineeringIds]);
-  const selectedSkills = useMemo(
-    () => new Set(selectedSkillPaths), [selectedSkillPaths]);
-  const choices = useMemo(
-    () => open ? buildTaskKnowledgeChoices(engineering, skills, query) : [],
-    [engineering, skills, query, open]);
-  const pagination = paginateTaskKnowledgeChoices(choices, page);
-
-  return <details className="launch-resource-adjuster" open={open}
-    onToggle={(event) => setOpen(event.currentTarget.open)}>
-    <summary><span><strong>调整团队通用知识</strong>
-      <small>{engineering.length + skills.length
-        ? `${selectedEngineeringIds.length + selectedSkillPaths.length}/${engineering.length + skills.length} 项已选`
-        : "当前没有匹配项"}</small></span>
-      <svg viewBox="0 0 20 20" aria-hidden><path d="m6 8 4 4 4-4" /></svg>
-    </summary>
-    {open && <div className="launch-knowledge-catalog">
-      {engineering.length + skills.length > 0 && <div
-        className="launch-knowledge-toolbar">
-        <label><span>查找知识</span><input type="search" value={query}
-          onChange={(event) => {
-            setQuery(event.target.value);
-            setPage(0);
-          }} placeholder="按标题、说明、仓库或技术搜索" /></label>
-        <small>共 {pagination.total} 项，每页最多 40 项</small>
-      </div>}
-      {!!pagination.items.length && <div className="engineering-knowledge-options">
-        {pagination.items.map((choice) => {
-          if (choice.kind === "engineering") {
-            const item = choice.item;
-            const selected = selectedEngineering.has(item.id);
-            return <label key={choice.key}
-              className={`engineering-knowledge-option${selected ? " selected" : ""}`}>
-              <input type="checkbox" checked={selected} onChange={() =>
-                onToggleEngineering(item.id, selected)} />
-              <span className="business-module-check" aria-hidden>
-                {selected ? "✓" : ""}</span>
-              <span><span><strong>{item.title}</strong>
-                <em>{{ document: "文档", rule: "规则",
-                  example: "示例" }[item.form]}</em></span>
-                <small>{item.summary}</small>
-                <span className="engineering-knowledge-meta">
-                  {item.when_to_use}
-                  <KnowledgeLanguageTags languages={item.technologies}
-                    empty="技术无关" />
-                </span>
-              </span>
-            </label>;
-          }
-          const item = choice.item;
-          const selected = selectedSkills.has(item.path);
-          return <label key={choice.key}
-            className={`engineering-knowledge-option${selected ? " selected" : ""}`}>
-            <input type="checkbox" checked={selected} onChange={() =>
-              onToggleSkill(item.path, selected)} />
-            <span className="business-module-check" aria-hidden>
-              {selected ? "✓" : ""}</span>
-            <span><span><strong>{item.name}</strong><em>Skill</em></span>
-              <small>{item.description}</small>
-              <span className="engineering-knowledge-meta">
-                团队资产 · Agent 相关时按需读取正文
-                <KnowledgeLanguageTags languages={item.technologies}
-                  empty="技术无关" />
-              </span>
-            </span>
-          </label>;
-        })}
-      </div>}
-      {!pagination.items.length && <div className="engineering-knowledge-empty">
-        <strong>{query ? "没有符合搜索条件的团队知识" : "当前没有匹配的团队通用知识"}</strong>
-        <span>{query ? "换一个关键词，或清空搜索查看全部匹配项。"
-          : "不影响发起；模块知识和 Git 仓库上下文仍会正常提供。"}</span>
-      </div>}
-      {pagination.pages > 1 && <nav className="launch-knowledge-pagination"
-        aria-label="团队知识分页">
-        <button type="button" disabled={pagination.page === 0}
-          onClick={() => setPage(pagination.page - 1)}>上一页</button>
-        <span>{pagination.page + 1} / {pagination.pages}</span>
-        <button type="button" disabled={pagination.page + 1 >= pagination.pages}
-          onClick={() => setPage(pagination.page + 1)}>下一页</button>
-      </nav>}
-    </div>}
-  </details>;
+  return <a className="launch-knowledge-row" href={href}
+    aria-label={`查看全文：${title}${version ? `，${version}` : ""}，命中依据：${scope}`}
+    title={`到团队资产查看全文：${title}`}
+    onClick={(event) => {
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      onOpen();
+    }}>
+    <span className={`launch-knowledge-form ${form}`}>
+      {KNOWLEDGE_FORM_LABEL[form]}</span>
+    <span className="launch-knowledge-copy">
+      <span className="launch-knowledge-titleline">
+        <strong title={title}>{title}</strong>
+        {version && <code>{version}</code>}
+      </span>
+      <small title={summary || whenToUse}>{summary || whenToUse || "暂无说明"}</small>
+      {summary && whenToUse && <em title={whenToUse}>适合：{whenToUse}</em>}
+    </span>
+    <span className="launch-knowledge-scope">
+      <small>命中依据</small><strong title={scope}>{scope}</strong>
+      <em>查看全文 <span aria-hidden>→</span></em>
+    </span>
+  </a>;
 }
+
 export function LaunchWorkspace({
   session,
   onCreated,
   onClose,
   onOpenWorkflowAssets,
+  onOpenKnowledgeAsset,
 }: {
   session: AuthUser;
-  onCreated: () => Promise<void>;
+  /** 创建成功的任务摘要交给调用方,当场打开/高亮,下单不再零反馈。 */
+  onCreated: (task: TaskSummary) => void | Promise<void>;
   onClose: () => void;
   onOpenWorkflowAssets?: (workflowId?: string) => void;
+  onOpenKnowledgeAsset: (target: KnowledgeAssetFocus) => void;
 }) {
   const [restoredDraft] = useState(() =>
     readStored<LaunchDraft>(storageKey("draft", session.username)));
@@ -264,15 +195,8 @@ export function LaunchWorkspace({
   const [draftSavedAt, setDraftSavedAt] = useState(
     validDraft?.updatedAt ?? "");
   const [repositoryTechnologies, setRepositoryTechnologies] =
-    useState<RepositoryTechnologyDraft[]>([]);
-  const [selectedEngineeringKnowledgeIds, setSelectedEngineeringKnowledgeIds] =
-    useState<string[]>(validDraft?.selectedEngineeringKnowledgeIds ?? []);
-  const [selectedTeamSkillPaths, setSelectedTeamSkillPaths] =
-    useState<string[]>(validDraft?.selectedTeamSkillPaths ?? []);
-  const [engineeringSelectionTouched, setEngineeringSelectionTouched] =
-    useState(validDraft?.engineeringSelectionTouched === true);
-  const [teamSkillSelectionTouched, setTeamSkillSelectionTouched] =
-    useState(validDraft?.teamSkillSelectionTouched === true);
+    useState<RepositoryTechnologyDraft[]>(() =>
+      restoredRepositoryTechnologies(validDraft?.repositoryTechnologies));
   const [moduleSelectionTouched, setModuleSelectionTouched] = useState(
     validDraft?.moduleSelectionTouched === true);
   const [workflowAssets, setWorkflowAssets] = useState<WorkflowAssetSummary[]>([]);
@@ -284,12 +208,13 @@ export function LaunchWorkspace({
     validDraft?.workflowSelection
     || validDraft?.taskInstructions?.trim(),
   ));
-  // 配置没配齐不让下单:缺项来自后端(服务级+个人级),前端只负责
-  // 摆在明面上。后端同样硬拦——绕过界面打接口一样被 409 挡住。
-  const blockers = options?.blockers ?? [];
-  const blocked = optionsLoading || blockers.length > 0 || !!optionsError;
-  const knowledgeCatalog = useMemo(
-    () => normalizeLaunchKnowledgeCatalog(options), [options]);
+  const [knowledgePreview, setKnowledgePreview] =
+    useState<LaunchKnowledgePreview>();
+  const [knowledgePreviewLoading, setKnowledgePreviewLoading] = useState(true);
+  const [knowledgePreviewError, setKnowledgePreviewError] = useState("");
+  const [knowledgePreviewKey, setKnowledgePreviewKey] = useState("");
+  const knowledgePreviewRequest = useRef(0);
+  const [knowledgePreviewRefresh, setKnowledgePreviewRefresh] = useState(0);
   const businessModules = useMemo(() => {
     const wantedRepos = new Set(repos.map(repositoryIdentity).filter(Boolean));
     return [...(options?.business_modules ?? [])].sort((left, right) => {
@@ -301,39 +226,54 @@ export function LaunchWorkspace({
         || left.name.localeCompare(right.name);
     });
   }, [options, repos]);
-  const matchingEngineeringKnowledge = useMemo(() => {
-    const repositorySet = new Set(repos.map(repositoryIdentity).filter(Boolean));
-    const technologies = new Set(repositoryTechnologies
-      .flatMap((item) => item.technologies));
-    return knowledgeCatalog.engineering.filter((item) =>
-      (!item.repositories.length || item.repositories.some((repository) =>
-        repositorySet.has(repositoryIdentity(repository))))
-      && (!item.technologies.length || item.technologies.some((technology) =>
-        technologies.has(technology)))
-      && (!item.business_module_ids.length || item.business_module_ids.some((id) =>
-        selectedBusinessModuleIds.includes(id))));
-  }, [knowledgeCatalog, repos, repositoryTechnologies,
-    selectedBusinessModuleIds]);
-  const matchingTeamSkills = useMemo(() => {
-    const repositorySet = new Set(repos.map(repositoryIdentity).filter(Boolean));
-    const technologies = new Set(repositoryTechnologies
-      .flatMap((item) => item.technologies));
-    return knowledgeCatalog.skills.filter((item) =>
-      (!item.repositories.length || item.repositories.some((repository) =>
-        repositorySet.has(repositoryIdentity(repository))))
-      && (!item.technologies.length || item.technologies.some((technology) =>
-        technologies.has(technology)))
-      && (!item.business_module_ids.length || item.business_module_ids.some((id) =>
-        selectedBusinessModuleIds.includes(id))));
-  }, [knowledgeCatalog, repos, repositoryTechnologies,
-    selectedBusinessModuleIds]);
+  const businessModuleNames = useMemo(() => new Map(
+    businessModules.map((module) => [module.id, module.name])),
+  [businessModules]);
+  const previewInput = useMemo(() => ({
+    repos: repos.map((item) => item.trim()).filter(Boolean),
+    selectedBusinessModuleIds,
+    repositoryProfiles: repositoryTechnologies.length > 0
+        && repositoryTechnologies.every((item) => item.confirmed)
+      ? asRepositoryProfiles(repositoryTechnologies) : undefined,
+    workflowSelection,
+  }), [repos, selectedBusinessModuleIds, repositoryTechnologies,
+    workflowSelection]);
+  const expectedKnowledgePreviewKey = JSON.stringify(previewInput);
+  const matchingModuleKnowledge = knowledgePreview?.business_knowledge ?? [];
+  const matchingEngineeringKnowledge = knowledgePreview?.engineering_knowledge ?? [];
+  const matchingTeamSkills = knowledgePreview?.team_skills ?? [];
+  const repositoryName = (value: string) => value.replace(/\/+$/, "")
+    .split("/").at(-1)?.replace(/\.git$/i, "") || value;
+  const describeMatchedScope = (item: LaunchKnowledgeMatchedScope) => {
+    const scopes = item.matched_business_module_ids.map((id) =>
+      `模块：${businessModuleNames.get(id) ?? id}`);
+    scopes.push(...item.matched_technologies.map((technology) =>
+      `语言：${knowledgeLanguageLabel(technology)}`));
+    scopes.push(...item.matched_repositories.map((repository) =>
+      `仓库：${repositoryName(repository)}`));
+    return scopes.join(" · ") || "团队通用";
+  };
+  const matchedTeamKnowledgeCount = matchingEngineeringKnowledge.length
+    + matchingTeamSkills.length;
   const deliveryLocationVisible = !!options
     && (options.repo.enabled || options.ticket.enabled || options.baseline.enabled);
-  const selectedModuleKnowledgeCount = businessModules
-    .filter((module) => selectedBusinessModuleIds.includes(module.id))
-    .reduce((sum, module) => sum + module.assets, 0);
+  const selectedModuleKnowledgeCount = matchingModuleKnowledge.length;
   const selectedKnowledgeCount = selectedModuleKnowledgeCount
-    + selectedEngineeringKnowledgeIds.length + selectedTeamSkillPaths.length;
+    + matchedTeamKnowledgeCount;
+  const previewBusinessModuleIds = knowledgePreview?.scope.business_module_ids
+    ?? selectedBusinessModuleIds;
+  const knowledgeNotices = [
+    ...(knowledgePreview?.errors ?? []),
+    ...(knowledgePreview?.warnings ?? []),
+  ];
+  // 配置与知识预览都必须可核对后才允许提交。目录降级时宁可把原因摆
+  // 出来，也不能一边写“已自动匹配”一边让后端暗中换一份名单。
+  const blockers = options?.blockers ?? [];
+  const previewSettled = knowledgePreviewKey === expectedKnowledgePreviewKey;
+  const knowledgeBlocked = knowledgePreviewLoading || !previewSettled
+    || !!knowledgePreviewError || !knowledgePreview?.complete;
+  const blocked = optionsLoading || blockers.length > 0 || !!optionsError
+    || knowledgeBlocked;
 
   useEffect(() => {
     let alive = true;
@@ -350,6 +290,42 @@ export function LaunchWorkspace({
     });
     return () => { alive = false; };
   }, []);
+
+  useEffect(() => {
+    if (!options) return;
+    const request = ++knowledgePreviewRequest.current;
+    const key = expectedKnowledgePreviewKey;
+    const controller = new AbortController();
+    setKnowledgePreviewLoading(true);
+    setKnowledgePreviewError("");
+    // 仓库、模块和语言选择都可能连续变化；短防抖只发最后一次权威预览。
+    // 序号同时让已经在途但无法 Abort 的旧响应失效。
+    const timer = window.setTimeout(() => {
+      void getLaunchKnowledgePreview(previewInput, controller.signal).then((result) => {
+        if (knowledgePreviewRequest.current !== request) return;
+        setKnowledgePreview(result);
+        setKnowledgePreviewKey(key);
+      }).catch((cause) => {
+        if (knowledgePreviewRequest.current !== request) return;
+        if (cause instanceof DOMException && cause.name === "AbortError") return;
+        setKnowledgePreview(undefined);
+        setKnowledgePreviewKey(key);
+        setKnowledgePreviewError(cause instanceof Error
+          ? cause.message : "自动匹配清单暂时无法核对");
+      }).finally(() => {
+        if (knowledgePreviewRequest.current === request) {
+          setKnowledgePreviewLoading(false);
+        }
+      });
+    }, 180);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+      if (knowledgePreviewRequest.current === request) {
+        knowledgePreviewRequest.current += 1;
+      }
+    };
+  }, [expectedKnowledgePreviewKey, options, knowledgePreviewRefresh]);
 
   // 工作流资产是可选增强：目录暂时不可用时仍可用 Mae-Flow 标准方案
   // 正常下单，不能把团队资产读失败升级成新门禁。
@@ -370,43 +346,42 @@ export function LaunchWorkspace({
     return () => { alive = false; };
   }, []);
 
+  const persistDraft = () => {
+    const draft: LaunchDraft = {
+      version: LAUNCH_DRAFT_VERSION,
+      updatedAt: new Date().toISOString(),
+      title,
+      requirement,
+      requirementDocumentName,
+      repos,
+      ticket,
+      baseline,
+      lane,
+      repairRounds,
+      taskInstructions,
+      selectedBusinessModuleIds,
+      moduleSelectionTouched,
+      workflowSelection,
+      repositoryTechnologies: repositoryTechnologies.map((item) => ({
+        ...item, technologies: [...item.technologies],
+      })),
+    };
+    try {
+      localStorage.setItem(storageKey("draft", session.username),
+        JSON.stringify(draft));
+      setDraftSavedAt(draft.updatedAt);
+    } catch {
+      // 草稿是体验增强；浏览器禁用存储时不阻止发起任务。
+    }
+  };
+
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      const draft: LaunchDraft = {
-        version: LAUNCH_DRAFT_VERSION,
-        updatedAt: new Date().toISOString(),
-        title,
-        requirement,
-        requirementDocumentName,
-        repos,
-        ticket,
-        baseline,
-        lane,
-        repairRounds,
-        taskInstructions,
-        selectedBusinessModuleIds,
-        moduleSelectionTouched,
-        selectedEngineeringKnowledgeIds,
-        engineeringSelectionTouched,
-        selectedTeamSkillPaths,
-        teamSkillSelectionTouched,
-        workflowSelection,
-      };
-      try {
-        localStorage.setItem(storageKey("draft", session.username),
-          JSON.stringify(draft));
-        setDraftSavedAt(draft.updatedAt);
-      } catch {
-        // 草稿是体验增强；浏览器禁用存储时不阻止发起任务。
-      }
-    }, 300);
+    const timer = window.setTimeout(persistDraft, 300);
     return () => window.clearTimeout(timer);
   }, [title, requirement, requirementDocumentName, repos, ticket,
     baseline, lane, repairRounds, taskInstructions,
     selectedBusinessModuleIds, moduleSelectionTouched,
-    selectedEngineeringKnowledgeIds, engineeringSelectionTouched,
-    selectedTeamSkillPaths, teamSkillSelectionTouched, workflowSelection,
-    session.username]);
+    workflowSelection, repositoryTechnologies, session.username]);
 
   useEffect(() => {
     if (!workflowAssetsLoaded || !workflowSelection) return;
@@ -444,27 +419,6 @@ export function LaunchWorkspace({
       .slice(0, 4);
     setSelectedBusinessModuleIds(matched);
   }, [options, businessModules, repos, moduleSelectionTouched]);
-
-  useEffect(() => {
-    if (!engineeringSelectionTouched) {
-      setSelectedEngineeringKnowledgeIds(
-        matchingEngineeringKnowledge.map((item) => item.id));
-      return;
-    }
-    const available = new Set(matchingEngineeringKnowledge.map((item) => item.id));
-    setSelectedEngineeringKnowledgeIds((current) =>
-      current.filter((id) => available.has(id)));
-  }, [matchingEngineeringKnowledge, engineeringSelectionTouched]);
-
-  useEffect(() => {
-    if (!teamSkillSelectionTouched) {
-      setSelectedTeamSkillPaths(matchingTeamSkills.map((item) => item.path));
-      return;
-    }
-    const available = new Set(matchingTeamSkills.map((item) => item.path));
-    setSelectedTeamSkillPaths((current) =>
-      current.filter((path) => available.has(path)));
-  }, [matchingTeamSkills, teamSkillSelectionTouched]);
 
   useEffect(() => {
     const previous = document.body.style.overflow;
@@ -531,7 +485,7 @@ export function LaunchWorkspace({
     setSubmitting(true);
     setError("");
     try {
-      await createTask(
+      const created = await createTask(
         requirement.trim(),
         session.username,   // 归属人=本人;管理员不发起任务(入口已隐藏)
         {
@@ -551,9 +505,12 @@ export function LaunchWorkspace({
             ? undefined : taskInstructions.trim() || undefined,
           workflowSelection,
           selectedBusinessModuleIds,
-          selectedEngineeringKnowledgeIds,
-          selectedHostSkillPaths: selectedTeamSkillPaths,
-          repositoryProfiles: asRepositoryProfiles(repositoryTechnologies),
+          knowledgePreviewDigest: knowledgePreview?.selection_digest,
+          // 团队通用知识不由下单人逐项治理。字段始终缺席，服务端按
+          // 仓库、技术栈和业务模块在创建现场自动匹配并固定版本。
+          repositoryProfiles: repositoryTechnologies.length > 0
+              && repositoryTechnologies.every((item) => item.confirmed)
+            ? asRepositoryProfiles(repositoryTechnologies) : undefined,
           requirementDocumentName: requirementDocumentName || undefined,
         },
       );
@@ -574,12 +531,17 @@ export function LaunchWorkspace({
       } catch {
         // 不影响已经成功创建的任务。
       }
-      await onCreated();
+      await onCreated(created);
       onClose();
     } catch (reason) {
       setError(reason instanceof Error
         ? reason.message
         : "任务没有发起成功，请检查服务后重试。");
+      // 目录可能恰在预览后发生了版本变化。任何创建失败都重新核对一次，
+      // 尤其让 selection_digest 冲突恢复成可见的新清单，而不是反复提交旧版。
+      setKnowledgePreviewLoading(true);
+      setKnowledgePreviewKey("");
+      setKnowledgePreviewRefresh((current) => current + 1);
     } finally {
       setSubmitting(false);
     }
@@ -628,10 +590,15 @@ export function LaunchWorkspace({
                   setTicket("");
                   setSelectedBusinessModuleIds([]);
                   setModuleSelectionTouched(false);
-                  setSelectedTeamSkillPaths([]);
-                  setTeamSkillSelectionTouched(false);
-                  setSelectedEngineeringKnowledgeIds([]);
-                  setEngineeringSelectionTouched(false);
+                  setRepositoryTechnologies([]);
+                  // 清空必须清干净:执行补充/交付方式/基线/修复轮/工作流
+                  // 选择原来被留着,上一单的指示会悄悄跟进下一单,而且
+                  // 下一拍自动保存又把它们写回草稿(2026-08-30 审计)。
+                  setTaskInstructions("");
+                  setWorkflowSelection(undefined);
+                  setLane("");
+                  setBaseline("");
+                  setRepairRounds("");
                   setError("");
                   try { localStorage.removeItem(storageKey("draft", session.username)); } catch { /* noop */ }
                 }}>清空草稿</button>
@@ -888,7 +855,12 @@ export function LaunchWorkspace({
                     <small>工作流、技术画像和知识清单；代码仓内容不在这里管理</small></span>
                   <span className="launch-advanced-summary">
                     <b>{workflowSelection ? "定制工作流" : "标准工作流"}</b>
-                    {selectedKnowledgeCount > 0 && <b>{selectedKnowledgeCount} 项平台知识</b>}
+                    {knowledgePreviewLoading || !previewSettled
+                      ? <b>知识核对中</b>
+                      : selectedKnowledgeCount > 0
+                        ? <b>{selectedKnowledgeCount} 项平台知识</b>
+                        : <b>无平台知识</b>}
+                    {knowledgePreview?.degraded && <b className="attention">预览异常</b>}
                     {repairRounds && <b>{repairRounds} 轮修复</b>}
                     {repositoryTechnologies.some((item) => !item.confirmed)
                       && <b className="attention">技术栈待确认</b>}
@@ -906,7 +878,10 @@ export function LaunchWorkspace({
                         setWorkflowSelection(selection);
                         setWorkflowSelectionNotice("");
                       }}
-                      onOpenEditor={onOpenWorkflowAssets} />
+                      onOpenEditor={(workflowId) => {
+                        persistDraft();
+                        onOpenWorkflowAssets?.(workflowId);
+                      }} />
                     {workflowSelectionNotice && <p className="workflow-selection-notice"
                       role="status">{workflowSelectionNotice}</p>}
                     <div className="launch-field-grid launch-settings-grid">
@@ -940,58 +915,146 @@ export function LaunchWorkspace({
               {options && <section className="launch-form-section launch-task-resources">
                 <div className="launch-section-head"><i>知</i><div>
                   <strong>本任务知识</strong>
-                  <small>模块知识与团队通用知识合成一张清单</small>
-                </div><em>默认按需读取</em></div>
+                  <small>服务端自动匹配；逐项可进入团队资产查看全文</small>
+                </div><em>{knowledgePreviewLoading || !previewSettled
+                  ? "核对中" : knowledgePreview?.complete ? "权威预览" : "预览异常"}</em></div>
                 <div className="launch-resource-summary">
                   <span><strong>{selectedModuleKnowledgeCount}</strong>
                     <small>模块知识</small></span>
-                  <span><strong>{selectedEngineeringKnowledgeIds.length
-                    + selectedTeamSkillPaths.length}</strong>
-                    <small>团队通用</small></span>
-                  <p>{selectedBusinessModuleIds.length
-                    ? `来自 ${selectedBusinessModuleIds.map((id) =>
+                  <span><strong>{matchedTeamKnowledgeCount}</strong>
+                    <small>团队资产</small></span>
+                  <p>{previewBusinessModuleIds.length
+                    ? `来自 ${previewBusinessModuleIds.map((id) =>
                         businessModules.find((item) => item.id === id)?.name)
-                      .filter(Boolean).join("、")} 等已关联抽屉`
-                    : "尚未关联业务模块；仍会使用匹配的团队通用知识"}</p>
+                      .filter(Boolean).join("、")} 等已关联抽屉${
+                        knowledgePreview?.scope.workflow_business_module_ids.length
+                          ? "（含工作流带入）" : ""}`
+                    : "尚未关联业务模块；仍会使用匹配的团队知识和 Skill"}</p>
+                </div>
+                {(knowledgePreviewError || knowledgeNotices.length > 0)
+                  && <div className={`launch-knowledge-notices${
+                    knowledgePreview?.complete ? " warning" : " error"}`}
+                    role={knowledgePreview?.complete ? "status" : "alert"}>
+                    <strong>{knowledgePreview?.complete
+                      ? "自动匹配已应用容量规则" : "自动匹配清单暂时不能作为最终依据"}</strong>
+                    {knowledgePreviewError && <span>{knowledgePreviewError}</span>}
+                    {knowledgeNotices.map((notice, index) => <span
+                      key={`${notice.source}/${notice.code}/${index}`}>
+                      {notice.message}</span>)}
+                  </div>}
+                <div className="launch-knowledge-list" aria-label="自动匹配的知识清单">
+                  <div className="launch-knowledge-list-head">
+                    <strong>发起前固定清单</strong>
+                    <span>{knowledgePreviewLoading || !previewSettled
+                      ? "正在由服务端核对"
+                      : selectedKnowledgeCount
+                        ? `共 ${selectedKnowledgeCount} 项` : "没有匹配项"}</span>
+                  </div>
+                  {!knowledgePreviewLoading && previewSettled
+                    && matchingModuleKnowledge.length > 0 && <section
+                    className="launch-knowledge-group">
+                    <header><strong>业务模块知识</strong>
+                      <em>{matchingModuleKnowledge.length} 项</em></header>
+                    {matchingModuleKnowledge.map((item) =>
+                      <LaunchKnowledgeRow key={`${item.module_id}/${item.id}`}
+                        form={item.form} title={item.title}
+                        summary={item.summary} whenToUse={item.when_to_use}
+                        version={`v${item.version}`}
+                        scope={describeMatchedScope(item)}
+                        href={knowledgeAssetPath({ kind: "business",
+                          moduleId: item.module_id, assetId: item.id,
+                          version: item.version, digest: item.digest })}
+                        onOpen={() => {
+                          persistDraft();
+                          onOpenKnowledgeAsset({ kind: "business",
+                            moduleId: item.module_id, assetId: item.id,
+                            version: item.version, digest: item.digest });
+                        }} />)}
+                  </section>}
+                  {!knowledgePreviewLoading && previewSettled
+                    && matchingEngineeringKnowledge.length > 0 && <section
+                    className="launch-knowledge-group">
+                    <header><strong>工程知识</strong>
+                      <em>{matchingEngineeringKnowledge.length} 项</em></header>
+                    {matchingEngineeringKnowledge.map((item) =>
+                      <LaunchKnowledgeRow key={item.id} form={item.form}
+                        title={item.title} summary={item.summary}
+                        whenToUse={item.when_to_use}
+                        version={`版本 ${item.digest.slice(0, 8)}`}
+                        scope={describeMatchedScope(item)}
+                        href={knowledgeAssetPath({ kind: "engineering",
+                          candidateId: item.id, digest: item.digest })}
+                        onOpen={() => {
+                          persistDraft();
+                          onOpenKnowledgeAsset({ kind: "engineering",
+                            candidateId: item.id, digest: item.digest });
+                        }} />)}
+                  </section>}
+                  {!knowledgePreviewLoading && previewSettled
+                    && matchingTeamSkills.length > 0 && <section
+                    className="launch-knowledge-group">
+                    <header><strong>团队 Skill</strong>
+                      <em>{matchingTeamSkills.length} 项</em></header>
+                    {matchingTeamSkills.map((item) =>
+                      <LaunchKnowledgeRow key={item.path} form="skill"
+                        title={item.name} summary={item.description}
+                        whenToUse=""
+                        version={`版本 ${item.digest.slice(0, 8)}`}
+                        scope={describeMatchedScope(item)}
+                        href={knowledgeAssetPath({ kind: "skill",
+                          directory: item.path.split("/")[0] || item.path,
+                          digest: item.digest,
+                          packageDigest: item.package_digest })}
+                        onOpen={() => {
+                          persistDraft();
+                          onOpenKnowledgeAsset({ kind: "skill",
+                            directory: item.path.split("/")[0] || item.path,
+                            digest: item.digest,
+                            packageDigest: item.package_digest });
+                        }} />)}
+                  </section>}
+                  {!knowledgePreviewLoading && previewSettled
+                    && !knowledgePreviewError && selectedKnowledgeCount === 0 && <div
+                    className="launch-knowledge-empty">
+                    没有匹配到平台知识；代码仓里的文档和 Skill 仍由开发助手自己发现。
+                  </div>}
                 </div>
                 <div className="launch-resource-boundary">
-                  <strong>这里只管理平台知识</strong>
-                  <span>正文不会整批注入；Agent 先看索引，相关时再读取。代码仓内容始终从 Git 现场自主探索。</span>
+                  <strong>{knowledgePreviewLoading || !previewSettled
+                    ? "正在核对最终名单"
+                    : selectedKnowledgeCount
+                      ? `将固定 ${selectedKnowledgeCount} 项` : "将固定 0 项平台知识"}</strong>
+                  <span>{knowledgePreview?.complete
+                    ? "清单与任务创建复用同一套选择器和容量规则；点击任一项可查看当前全文与版本。"
+                    : "预览完整前不会发起任务，避免页面清单与实际注入结果不一致。"}</span>
                 </div>
-                <TaskKnowledgeBoundary>
-                  <TaskKnowledgeSelector
-                    engineering={matchingEngineeringKnowledge}
-                    skills={matchingTeamSkills}
-                    selectedEngineeringIds={selectedEngineeringKnowledgeIds}
-                    selectedSkillPaths={selectedTeamSkillPaths}
-                    onToggleEngineering={(id, selected) => {
-                      setEngineeringSelectionTouched(true);
-                      setSelectedEngineeringKnowledgeIds((current) => selected
-                        ? current.filter((item) => item !== id)
-                        : [...current, id]);
-                    }}
-                    onToggleSkill={(path, selected) => {
-                      setTeamSkillSelectionTouched(true);
-                      setSelectedTeamSkillPaths((current) => selected
-                        ? current.filter((item) => item !== path)
-                        : [...current, path]);
-                    }} />
-                </TaskKnowledgeBoundary>
               </section>}
                 </div>
               </details>}
               {error && <div className="composer-error" role="alert">{error}</div>}
               <footer className="launch-submit-bar">
                 <div><strong>{blocked
-                  ? "暂时不能发起"
+                  ? knowledgePreviewLoading || !previewSettled
+                    ? "正在核对知识清单"
+                    : knowledgePreviewError || !knowledgePreview?.complete
+                      ? "知识清单尚未核对完整"
+                      : "暂时不能发起"
                   : "信息确认后即可启动"}</strong><small>{blocked
-                  ? "请先处理上方配置项"
+                  ? knowledgePreviewLoading || !previewSettled
+                    ? "服务端正在固定本次任务会使用的全文与版本"
+                    : knowledgePreviewError || !knowledgePreview?.complete
+                      ? "请查看“本任务知识”中的明确原因后重试"
+                      : "请先处理上方配置项"
                   : "任务创建后会自动进入你的工作台"}</small></div>
                 <button type="submit" disabled={submitting || blocked}>
                   <span>{submitting
                     ? "正在发起"
                     : optionsLoading
                       ? "读取配置中"
+                      : knowledgePreviewLoading || !previewSettled
+                        ? "核对知识中"
+                        : knowledgePreviewError || !knowledgePreview?.complete
+                          ? "知识预览未完成"
                       : blocked
                         ? "配置未完成"
                         : "确认发起"}</span>

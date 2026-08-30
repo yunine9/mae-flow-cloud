@@ -37,7 +37,11 @@ function repository() {
   git("config", "user.name", "bot");
   git("config", "user.email", "bot@test");
   writeFileSync(join(cwd, "README.md"), "baseline\n");
-  git("add", "README.md");
+  writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify({
+    current: "external_verify",
+    config: { "分支名": "master_bot", "基线分支": "master" },
+  }));
+  git("add", "README.md", ".mae-flow.json");
   git("commit", "--quiet", "-m", "baseline");
   return { cwd, git };
 }
@@ -92,7 +96,7 @@ test("僵尸现场可重跑:收口旧 attempt 后新轮真验证到 passed", asy
 
     const summary = await service.retryPrePush(id);
     assert.equal(summary.status, "verifying");
-    assert.match(summary.detail ?? "", /人工重跑推送前编译/);
+    assert.match(summary.detail ?? "", /人工重跑 Build-Fix/);
 
     // retryPrePush 踢的 tryDeliver 在无平台配置下会早退(测试环境无
     // host);这里直接走 preparePush 验证交付链对僵尸现场的收口语义:

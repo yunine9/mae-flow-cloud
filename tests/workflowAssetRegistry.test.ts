@@ -38,10 +38,12 @@ test("统一资产目录返回真实版本身份，任务解析只接受对拍�
     await uploadHostSkill(dataDir, "review-helper", [{
       path: "SKILL.md",
       content_base64: Buffer.from([
-        "---", "name: review-helper", "description: Review helper", "---",
+        "---", "name: review-helper", "description: Review helper",
+        "knowledge_nature: engineering", "technologies: [typescript]", "---",
         "", "# Review", "", "Check the diff.",
       ].join("\n")).toString("base64"),
-    }], "admin");
+    }], "admin", { nature: "engineering", business_module_ids: [],
+      repositories: [], technologies: ["typescript"] });
 
     const catalog = listWorkflowAssetCatalog({ dataDir });
     const business = catalog.items.find((item) =>
@@ -65,10 +67,12 @@ test("统一资产目录返回真实版本身份，任务解析只接受对拍�
     await uploadHostSkill(dataDir, "review-helper", [{
       path: "SKILL.md",
       content_base64: Buffer.from([
-        "---", "name: review-helper", "description: Review helper v2", "---",
+        "---", "name: review-helper", "description: Review helper v2",
+        "knowledge_nature: engineering", "technologies: [typescript]", "---",
         "", "# Review v2", "", "New shelf content.",
       ].join("\n")).toString("base64"),
-    }], "admin");
+    }], "admin", { nature: "engineering", business_module_ids: [],
+      repositories: [], technologies: ["typescript"] });
 
     const businessModules = snapshotBusinessModules({
       dataDir, taskWorkspace: workspace, moduleIds: ["order"], repositories: [],

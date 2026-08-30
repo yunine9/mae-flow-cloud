@@ -70,12 +70,12 @@ def _protected_file_decision(context):
             "判定口径,改它等于改门禁规则。团队预设请在流程外走正常评审提交。")
     if re.search(
             r"(^|/)\.mae-flow-work/"
-            r"(?:execution-profile\.json$|workflow-profile\.json$|"
+            r"(?:workflow-profile\.json$|"
             r"(?:plugin-resources|repository-skills|host-skills)(?:/|$))",
             path, re.I):
         return _absolute(
-            "任务执行偏好与 Skill/模板是宿主或内核投影的只读资源，禁止直接编辑、"
-            "覆盖或删除；需要使用时请 Read，源资源更新后由宿主重新投影。",
+            "任务定格执行方案与 Skill/模板是宿主或内核投影的只读资源，禁止直接"
+            "编辑、覆盖或删除；需要使用时请 Read，源资源更新后由宿主重新投影。",
             rule="edit-readonly-resource")
     if (
         re.search(r"(^|/)\.env(\.[\w.-]+)?$", path, re.I)

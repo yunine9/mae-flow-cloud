@@ -39,10 +39,11 @@
  *   POST /tasks/:id/annotations/:annId/verify           → 裁决:确认通过(只裁自己的)
  *   POST /tasks/:id/annotations/:annId/reopen           → 裁决:返工,退回草稿再送一轮
  *   GET  /tasks/:id/events                              → SSE:重放事件日志后持续跟进
- *   GET  /tasks/:id/prepush/events                      → SSE:推送前验证实时事件(换轮自动切新)
- *   POST /tasks/:id/prepush/skip                        → 失败停机后人工拍板跳过,直推流水线裁决
- *   POST /tasks/:id/prepush/retry                       → 人工重跑推送前编译(僵尸现场出路/活性探针)
- *   POST /tasks/:id/prepush/stop                        → 停止在途编译并直推流水线(绑 HEAD 跳过)
+ *   GET  /tasks/:id/build-fix/events                    → SSE:Build-Fix 实时事件(换轮自动切新)
+ *   POST /tasks/:id/build-fix/skip                      → 失败停机后人工拍板跳过,直推流水线裁决
+ *   POST /tasks/:id/build-fix/retry                     → 人工重跑 Build-Fix(僵尸现场出路/活性探针)
+ *   POST /tasks/:id/build-fix/stop                      → 停止在途 Build-Fix 并直推流水线(绑 HEAD 跳过)
+ *   /prepush/*                                          → 旧客户端兼容别名
  *   GET  /tasks/:id/warmup/events                       → SSE:环境预热编译实时事件
  *   GET  /tasks/:id/timeline                            → 人话交付时间线(只读现场)
  *   GET  /tasks/:id/activity                            → 行为摘要:此刻在干嘛/分段折叠/异常信号
@@ -139,12 +140,15 @@ import {
 } from "./businessModuleLibrary.ts";
 import {
   normalizeKnowledgeAssetMetadata,
+  repositoryIdentity,
   type KnowledgeAssetMetadata,
 } from "./knowledgeAssetModel.ts";
 import {
+  normalizeRepositoryProfile,
   RepositoryProfileError,
   resolveRepositoryProfiles,
   saveRepositoryProfile,
+  type RepositoryProfile,
 } from "./repositoryProfiles.ts";
 import {
   KnowledgeCandidateError,
@@ -172,6 +176,7 @@ const MIME: Record<string, string> = {
   ".woff": "font/woff",
   ".woff2": "font/woff2",
   ".svg": "image/svg+xml",
+  ".png": "image/png",
   ".map": "application/json",
 };
 
@@ -243,7 +248,7 @@ function skillMetadataFromBody(
 ): KnowledgeAssetMetadata {
   const rawTechnologies = body.technologies ?? body.languages;
   if (rawTechnologies !== undefined && !Array.isArray(rawTechnologies)) {
-    throw new SkillLibraryError("工程技术栈必须是数组");
+    throw new SkillLibraryError("工程语言标签必须是数组");
   }
   if (body.business_module_ids !== undefined
       && !Array.isArray(body.business_module_ids)) {
@@ -255,9 +260,7 @@ function skillMetadataFromBody(
   try {
     const technologies = rawTechnologies?.map(String) ?? [];
     const metadata = normalizeKnowledgeAssetMetadata({
-      nature: body.nature ?? (body.skill_kind === "general"
-        ? undefined : body.skill_kind) ?? (technologies.length
-          ? "engineering" : undefined),
+      nature: body.nature,
       form: "skill",
       business_module_ids: body.business_module_ids?.map(String) ?? [],
       repositories: body.repositories?.map(String) ?? [],
@@ -713,13 +716,12 @@ export function createTaskServer(
           }
           if (request.method === "PUT" && parts[1] === "execution-policy") {
             const body = await readBody(request);
+            // 团队阶段勾选定制(stage_customizations)已随 v1 退役:
+            // 想定制阶段结构请建团队工作流资产;这里只剩文字约定。
             if ("stage_customizations" in body) {
-              try {
-                service.validateExecutionStageCustomizationInput(
-                  body.stage_customizations, "团队阶段执行方案");
-              } catch (error) {
-                return json(response, 400, { error: String(error) });
-              }
+              return json(response, 400, {
+                error: "团队阶段执行方案已退役,请改用团队工作流资产做结构化定制",
+              });
             }
             settings.updateExecutionPolicy(body);
             return json(response, 200, settingsView());
@@ -841,6 +843,7 @@ export function createTaskServer(
 
       const protectedRoute =
         url.pathname === "/history" || parts[0] === "tasks"
+        || url.pathname === "/launch-knowledge-preview"
         || url.pathname === "/knowledge-insights"
         || parts[0] === "reviews" || parts[0] === "repository-skills"
         || parts[0] === "skills" || parts[0] === "business-modules"
@@ -879,6 +882,72 @@ export function createTaskServer(
       // 会被当成前端资源并返回 404。只读口径与团队任务可见性一致。
       if (request.method === "GET" && url.pathname === "/knowledge-insights") {
         return json(response, 200, service.knowledgeInsights());
+      }
+      // 发起页权威知识预匹配：只回元数据与固定身份，不分配 task id、
+      // 不写任务现场。保存的工作流选择必须在服务端解析已发布版本，
+      // 浏览器不能自报它引用了哪些知识来影响自动匹配。
+      if (request.method === "POST"
+          && url.pathname === "/launch-knowledge-preview") {
+        try {
+          const body = await readBody(request);
+          let workflowDefinition = body.workflow_definition;
+          const workflowSelection = body.workflow_selection
+              && typeof body.workflow_selection === "object"
+            ? body.workflow_selection as Record<string, unknown> : undefined;
+          if (workflowSelection && workflowDefinition !== undefined) {
+            return json(response, 400, {
+              error: "工作流方案选择与本任务临时定制不能同时提交",
+            });
+          }
+          if (workflowSelection) {
+            const id = String(workflowSelection.id ?? "").trim();
+            const detail = getWorkflowAssets().get(id);
+            const operator = viewer?.username ?? "本地部署";
+            if (!canViewWorkflow(detail.asset, operator)
+                || !detail.asset.selectable_for_tasks) {
+              return json(response, 409, {
+                error: "所选工作流方案不可用、未发布或已归档，请重新选择",
+              });
+            }
+            const rawVersion = workflowSelection.version;
+            const version = rawVersion == null || rawVersion === ""
+              ? undefined : Number(String(rawVersion).replace(/^v/, ""));
+            if (version !== undefined
+                && (!Number.isInteger(version) || version < 1)) {
+              return json(response, 400, { error: "工作流方案版本不合法" });
+            }
+            workflowDefinition = getWorkflowAssets()
+              .getPublished(id, version).definition;
+          }
+          const repositories = Array.isArray(body.repos)
+            ? body.repos.map(String)
+            : Array.isArray(body.repositories)
+              ? body.repositories.map(String)
+              : body.repo === undefined ? [] : [String(body.repo)];
+          const repositoryProfiles = Array.isArray(body.repository_profiles)
+            ? body.repository_profiles.map((item: Record<string, unknown>) => ({
+                repository: String(item.repository ?? ""),
+                technologies: Array.isArray(item.technologies)
+                  ? item.technologies.map(String) : [],
+                confirmed: item.confirmed !== false,
+              })) : undefined;
+          return json(response, 200, service.previewLaunchKnowledge({
+            repositories,
+            selectedBusinessModuleIds:
+              Array.isArray(body.selected_business_module_ids)
+                ? body.selected_business_module_ids.map(String) : undefined,
+            selectedEngineeringKnowledgeIds:
+              Array.isArray(body.selected_engineering_knowledge_ids)
+                ? body.selected_engineering_knowledge_ids.map(String) : undefined,
+            selectedHostSkillPaths:
+              Array.isArray(body.selected_host_skill_paths)
+                ? body.selected_host_skill_paths.map(String) : undefined,
+            repositoryProfiles,
+            workflowDefinition,
+          }));
+        } catch (error) {
+          return json(response, 400, { error: String(error) });
+        }
       }
       if (parts[0] === "repository-profiles") {
         const operator = viewer?.username ?? "本地部署";
@@ -927,27 +996,44 @@ export function createTaskServer(
               service.options.dataDir, decodeURIComponent(parts[1]));
             const body = await readBody(request);
             if (candidate.nature === "business") {
-              const moduleId = String(body.module_id
-                ?? candidate.business_module_ids[0] ?? "");
-              const module = readBusinessModule(service.options.dataDir, moduleId);
-              if (!canManageBusinessModule(module, viewer?.username, admin)) {
+              const modules = candidate.business_module_ids.map((moduleId) =>
+                readBusinessModule(service.options.dataDir, moduleId));
+              const unauthorized = modules.filter((module) =>
+                !canManageBusinessModule(module, viewer?.username, admin));
+              if (unauthorized.length) {
                 return json(response, 403,
-                  { error: "只有模块 Owner、维护者或管理员可以发布这项业务知识" });
+                  { error: `只有全部关联模块的 Owner、维护者或管理员可以发布这项业务知识；无权限模块：${unauthorized.map((module) => module.name).join("、")}` });
               }
               const assetId = String(body.asset_id ?? candidate.id);
-              publishBusinessKnowledgeAsset(service.options.dataDir, moduleId, {
-                id: assetId,
-                title: candidate.title,
-                summary: candidate.summary,
-                when_to_use: candidate.when_to_use,
-                form: candidate.form,
-                repositories: candidate.repositories,
-                content: candidate.content,
-              }, operator);
+              const publicationScopes = modules.map((module) => ({
+                module,
+                repositories: candidate.repositories.filter((repository) =>
+                  module.repositories.some((candidateRepository) =>
+                    repositoryIdentity(candidateRepository)
+                      === repositoryIdentity(repository))),
+              }));
+              const missingRepositoryScope = candidate.repositories.length
+                ? publicationScopes.filter((scope) =>
+                  scope.repositories.length === 0) : [];
+              if (missingRepositoryScope.length) {
+                return json(response, 400, { error:
+                  `知识限定的代码仓与以下业务模块没有交集：${missingRepositoryScope.map((scope) => scope.module.name).join("、")}；请修正知识作用域后再发布` });
+              }
+              for (const { module, repositories } of publicationScopes) {
+                publishBusinessKnowledgeAsset(service.options.dataDir, module.id, {
+                  id: assetId,
+                  title: candidate.title,
+                  summary: candidate.summary,
+                  when_to_use: candidate.when_to_use,
+                  form: candidate.form,
+                  repositories,
+                  content: candidate.content,
+                }, operator);
+              }
               return json(response, 200, decideKnowledgeCandidate(
                 service.options.dataDir, candidate.id, "published", operator, {
                   note: typeof body.note === "string" ? body.note : undefined,
-                  published_target: `business-modules/${moduleId}/${assetId}`,
+                  published_target: `business-modules/${modules.map((module) => module.id).join(",")}/${assetId}`,
                 }));
             }
             if (!admin) {
@@ -983,7 +1069,7 @@ export function createTaskServer(
             const candidate = readTeamKnowledgeCandidate(
               service.options.dataDir, decodeURIComponent(parts[1]));
             const canManageBusiness = candidate.nature === "business"
-              && candidate.business_module_ids.some((id) => {
+              && candidate.business_module_ids.every((id) => {
                 try { return canManageBusinessModule(readBusinessModule(
                   service.options.dataDir, id), viewer?.username, admin); }
                 catch { return false; }
@@ -1183,9 +1269,15 @@ export function createTaskServer(
           }
           if (request.method === "GET" && parts.length === 4
               && parts[2] === "assets") {
+            const rawVersion = url.searchParams.get("version");
+            const version = rawVersion === null ? undefined : Number(rawVersion);
+            if (version !== undefined
+                && (!Number.isInteger(version) || version < 1)) {
+              return json(response, 400, { error: "知识版本不合法" });
+            }
             return json(response, 200, readBusinessKnowledgeAsset(
               dataDir, decodeURIComponent(parts[1]),
-              decodeURIComponent(parts[3])));
+              decodeURIComponent(parts[3]), version));
           }
           if (request.method === "PUT" && parts.length === 4
               && parts[2] === "assets") {
@@ -1580,16 +1672,20 @@ export function createTaskServer(
         return json(response, 404, { error: "未知检视接口" });
       }
       // 静态前端(webRoot=React 构建产物):/ 与非 API 路径出文件;
-      // /work/:taskId[/review/:reviewId] 是前端深链，文件系统里当然没有
-      // 这个文件，必须回退 index.html 交给 React 解析。
+      // /work/:taskId[/review/:reviewId] 与 /help[/article] 是前端深链，
+      // 文件系统里当然没有这些文件，必须回退 index.html 交给 React
+      // 解析。/help/*.png 等有扩展名的截图仍按静态资产处理，缺失就 404，
+      // 不能拿 index.html 冒充成功图片。
       // 没配 webRoot 时零构建演示页兜底——两种形态永远有一个能用。
       if (request.method === "GET"
           && (url.pathname === "/" || parts[0] !== "tasks")) {
         const workspaceRoute = parts[0] === "work" && parts.length >= 2;
+        const helpRoute = parts[0] === "help" && extname(url.pathname) === "";
+        const appRoute = workspaceRoute || helpRoute;
         const exactFile = options.webRoot
           ? staticFile(options.webRoot, url.pathname)
           : undefined;
-        const file = exactFile ?? (options.webRoot && workspaceRoute
+        const file = exactFile ?? (options.webRoot && appRoute
           ? staticFile(options.webRoot, "/") : undefined);
         if (file) {
           response.writeHead(200, {
@@ -1603,7 +1699,7 @@ export function createTaskServer(
           });
           return response.end(readFileSync(file));
         }
-        if (url.pathname === "/" || workspaceRoute) {
+        if (url.pathname === "/" || appRoute) {
           response.writeHead(200,
             { "content-type": "text/html; charset=utf-8" });
           return response.end(WEB_PAGE);
@@ -1659,7 +1755,6 @@ export function createTaskServer(
           ? undefined : Number(body.repair_rounds);
         const taskInstructions = body.task_instructions == null
           ? undefined : String(body.task_instructions);
-        const executionStageCustomizations = body.execution_stage_customizations;
         let workflowDefinition = body.workflow_definition;
         let workflowSource: WorkflowSourceRef | undefined;
         const workflowSelection = body.workflow_selection &&
@@ -1680,20 +1775,35 @@ export function createTaskServer(
         const selectedEngineeringKnowledgeIds =
           Array.isArray(body.selected_engineering_knowledge_ids)
             ? body.selected_engineering_knowledge_ids.map(String) : undefined;
+        let knowledgePreviewDigest = body.knowledge_preview_digest === undefined
+          ? undefined : String(body.knowledge_preview_digest).trim();
+        if (body.knowledge_preview_digest !== undefined
+            && !/^[a-f0-9]{64}$/.test(knowledgePreviewDigest ?? "")) {
+          return json(response, 400, { error: "知识清单指纹不合法" });
+        }
         const repositoryProfiles = Array.isArray(body.repository_profiles)
           ? body.repository_profiles.flatMap((item: Record<string, unknown>) => {
+              let current: RepositoryProfile;
               try {
-                return [saveRepositoryProfile(service.options.dataDir, {
+                current = normalizeRepositoryProfile({
                   repository: String(item.repository ?? ""),
                   technologies: Array.isArray(item.technologies)
                     ? item.technologies.map(String) : [],
                   confirmed: item.confirmed !== false,
-                }, account ?? "本地部署")];
+                }, account ?? "本地部署");
               } catch (error) {
-                // 知识匹配旁路不能卡下单；当前任务退化为按仓库匹配。
                 service.options.log?.(
-                  `仓库技术画像保存失败(不影响下单): ${String(error)}`);
+                  `仓库技术画像无效(本单不采用): ${String(error)}`);
                 return [];
+              }
+              try {
+                return [saveRepositoryProfile(service.options.dataDir, current,
+                  account ?? "本地部署")];
+              } catch (error) {
+                // 记忆失败不改变本次选择：预览与任务仍使用同一份画像。
+                service.options.log?.(
+                  `仓库技术画像保存失败(本单仍采用): ${String(error)}`);
+                return [current];
               }
             }) : undefined;
         // 配置没配齐不给下单(用户拍板)。前端会把缺项摆在明面上,
@@ -1743,18 +1853,40 @@ export function createTaskServer(
               digest: published.digest,
             };
           }
+          if (!knowledgePreviewDigest) {
+            const preview = service.previewLaunchKnowledge({
+              repositories: repos?.length ? repos : repo ? [repo] : [],
+              selectedBusinessModuleIds,
+              selectedEngineeringKnowledgeIds,
+              selectedHostSkillPaths,
+              repositoryProfiles,
+              workflowDefinition,
+            });
+            const matched = preview.business_knowledge.length
+              + preview.engineering_knowledge.length
+              + preview.team_skills.length;
+            if (!preview.complete || matched > 0) {
+              return json(response, 409, {
+                error: "请先在发起页核对自动匹配知识全文与版本，再提交当前清单指纹",
+              });
+            }
+            // 兼容没有平台知识的旧客户端，但仍把权威空清单绑定到创建，
+            // 防止预检后目录新增资产而被静默带入。
+            knowledgePreviewDigest = preview.selection_digest;
+          }
           return json(response, 201, service.create(requirement,
             {
               title, account, repo, repos,
               requirementDocumentName,
               lane, ticket, baseline, model,
-              repairRounds, taskInstructions, executionStageCustomizations,
+              repairRounds, taskInstructions,
               workflowDefinition, workflowSource,
               repositorySkillCatalogToken,
               selectedRepositorySkillIds,
               selectedHostSkillPaths,
               selectedBusinessModuleIds, selectedEngineeringKnowledgeIds,
               repositoryProfiles,
+              knowledgePreviewDigest,
             }));
         } catch (error) {
           return json(response, 400, { error: String(error) });
@@ -1832,10 +1964,15 @@ export function createTaskServer(
           const target = service.get(id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
           if (!canOperate(viewer, target.luban_account, !!options.auth)) {
-            return json(response, 403, { error: "只能处理分配给自己的任务" });
+            return json(response, 403, { error: "只能处理分配给自己的任务"
+              + (target.luban_account ? `,请联系责任人 ${target.luban_account}` : "") });
           }
           const body = await readBody(request);
           const task = await service.decide(id, {
+            // 操作人取登录会话,不信请求体:决定要答得出"谁点的"。
+            actor: viewer?.username,
+            waiting_id: body.waiting_id === undefined
+              ? undefined : String(body.waiting_id),
             state_version: Number(body.state_version),
             selected_options: body.selected_options
               && typeof body.selected_options === "object"
@@ -1992,9 +2129,11 @@ export function createTaskServer(
         if (request.method === "GET" && parts[2] === "events") {
           return streamEvents(service, id, response);
         }
-        // 推送前验证的实时事件流(用户点名:编译过程、执行命令必须
+        // Build-Fix 的实时事件流(用户点名:编译过程、执行命令必须
         // 看得见)。轮目录由服务端每拍重解析,换轮自动从头放新一轮。
-        if (request.method === "GET" && parts[2] === "prepush"
+        // /prepush 是旧客户端兼容别名；新客户端统一使用 /build-fix。
+        if (request.method === "GET"
+            && ["build-fix", "prepush"].includes(parts[2])
             && parts[3] === "events") {
           return streamPrepushEvents(service, id, response);
         }
@@ -2080,16 +2219,20 @@ export function createTaskServer(
                 String(body.note ?? ""), author));
           }
           // 只能删自己写的:多人环境里替别人删等于替他改主意。
+          // 管理员例外(override):作者不在场时一条未闭环批注会把整单
+          // 推送锁死,代删/代确认凭台账 op.by 留痕(2026-08-30 审计)。
           if (request.method === "DELETE" && parts.length === 4) {
             return json(response, 200,
-              service.dropAnnotation(id, decodeURIComponent(parts[3]), author));
+              service.dropAnnotation(id, decodeURIComponent(parts[3]), author,
+                viewer?.role === "admin"));
           }
           // 检视闭环的裁决:确认通过 / 返工。作者校验在台账层——
           // 谁的意见谁裁决,替别人点"通过"等于替他签字。
           if (request.method === "POST" && parts.length === 5
               && parts[4] === "verify") {
             return json(response, 200,
-              service.verifyAnnotation(id, decodeURIComponent(parts[3]), author));
+              service.verifyAnnotation(id, decodeURIComponent(parts[3]), author,
+                viewer?.role === "admin"));
           }
           if (request.method === "POST" && parts.length === 5
               && parts[4] === "reopen") {
@@ -2145,12 +2288,14 @@ export function createTaskServer(
           const target = service.get(id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
           if (!canOperate(viewer, target.luban_account, !!options.auth)) {
-            return json(response, 403, { error: "只能重跑分配给自己的任务" });
+            return json(response, 403, { error: "只能重跑分配给自己的任务"
+              + (target.luban_account ? `,请联系责任人 ${target.luban_account}` : "") });
           }
-          return json(response, 200, service.retry(id));
+          return json(response, 200, service.retry(id, viewer?.username));
         }
-        // 推送前验证失败停机后,人可拍板跳过本地验证,直推流水线裁决。
-        if (request.method === "POST" && parts[2] === "prepush"
+        // Build-Fix 失败停机后,人可拍板跳过本地验证,直推流水线裁决。
+        if (request.method === "POST"
+            && ["build-fix", "prepush"].includes(parts[2])
             && parts[3] === "skip") {
           const target = service.get(id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
@@ -2158,28 +2303,32 @@ export function createTaskServer(
             return json(response, 403, { error: "只能操作分配给自己的任务" });
           }
           return json(response, 200,
-            await service.skipPrePushVerification(id));
+            await service.skipPrePushVerification(id, viewer?.username));
         }
-        // 人工重跑推送前编译:重启杀掉在途轮留下的僵尸现场,或失败停机
+        // 人工重跑 Build-Fix:重启杀掉在途轮留下的僵尸现场,或失败停机
         // 后想再来一轮。真在跑时服务端拒绝并明说,兼作活性探针。
-        if (request.method === "POST" && parts[2] === "prepush"
+        if (request.method === "POST"
+            && ["build-fix", "prepush"].includes(parts[2])
             && parts[3] === "retry") {
           const target = service.get(id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
           if (!canOperate(viewer, target.luban_account, !!options.auth)) {
             return json(response, 403, { error: "只能操作分配给自己的任务" });
           }
-          return json(response, 200, await service.retryPrePush(id));
+          return json(response, 200,
+            await service.retryPrePush(id, viewer?.username));
         }
-        // 停止在途的推送前编译并直推流水线:收口停机账后立刻绑 HEAD 跳过。
-        if (request.method === "POST" && parts[2] === "prepush"
+        // 停止在途的 Build-Fix 并直推流水线:收口停机账后立刻绑 HEAD 跳过。
+        if (request.method === "POST"
+            && ["build-fix", "prepush"].includes(parts[2])
             && parts[3] === "stop") {
           const target = service.get(id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
           if (!canOperate(viewer, target.luban_account, !!options.auth)) {
             return json(response, 403, { error: "只能操作分配给自己的任务" });
           }
-          return json(response, 200, await service.stopPrePush(id));
+          return json(response, 200,
+            await service.stopPrePush(id, viewer?.username));
         }
         // 从头重跑会原位覆盖旧任务及其审计现场。管理员不替开发者发起
         // 或冒用其代码身份；鉴权部署下只能由任务本人执行。
@@ -2287,7 +2436,9 @@ export function createTaskServer(
       }
       if (error instanceof StateConflictError) {
         // 先到决定生效:后到的提交必须知道自己没生效,不能静默吞掉。
-        return json(response, 409, { error: `任务状态已变化: ${error.message}` });
+        const message = error.message.startsWith("任务状态已变化")
+          ? error.message : `任务状态已变化: ${error.message}`;
+        return json(response, 409, { error: message });
       }
       if (error instanceof TaskControlError) {
         return json(response, 409, { error: error.message });
@@ -2375,7 +2526,7 @@ function streamEvents(
   streamJsonlAsSse(service, id, response, () => service.eventLogPath(id));
 }
 
-/** 推送前验证事件流:路径每拍重解析——修复轮产生新 HEAD 会开新一轮
+/** Build-Fix 事件流:路径每拍重解析——修复轮产生新 HEAD 会开新一轮
  * 目录,路径一变就从头放新一轮,客户端不用自己发现换轮。 */
 function streamPrepushEvents(
   service: TaskService,

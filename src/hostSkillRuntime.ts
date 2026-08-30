@@ -121,6 +121,42 @@ function validatePackage(
   }
 }
 
+/**
+ * 发起前预览与真正快照共用的包级验收。这里只验证源包，不复制文件；
+ * 返回的 digest 是后续任务快照固定的同一版本身份。
+ */
+export function validateHostSkillSnapshotPackage(options: {
+  sourceRoot: string;
+  sourceFile: string;
+  packageRoot?: string;
+}): { source_path: string; package_digest: string } {
+  const declaredRoot = resolve(options.sourceRoot);
+  const sourceRoot = realpathSync(declaredRoot);
+  const relocate = (value: string): string => {
+    const rel = relative(declaredRoot, resolve(value));
+    if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+      throw new Error("Skill 路径越出宿主 Skill 根");
+    }
+    return resolve(sourceRoot, rel);
+  };
+  // macOS 的 /var → /private/var 等系统级路径别名只应规范化根一次；
+  // 不能对目标直接 realpath，否则会在拒绝前跟随包内恶意软链接。
+  const sourceFile = relocate(options.sourceFile);
+  const packageRoot = relocate(options.packageRoot ?? dirname(options.sourceFile));
+  assertNoSymlinkPath(sourceRoot, sourceFile);
+  assertNoSymlinkPath(sourceRoot, packageRoot);
+  const stat = lstatSync(sourceFile);
+  if (!stat.isFile()) throw new Error("SKILL.md 不是普通文件");
+  if (stat.size > MAX_SKILL_BYTES) {
+    throw new Error("SKILL.md 超过 128 KiB");
+  }
+  validatePackage(sourceRoot, packageRoot, 0, { files: 0, bytes: 0 });
+  return {
+    source_path: relative(sourceRoot, sourceFile).split(sep).join("/"),
+    package_digest: packageDigest(packageRoot),
+  };
+}
+
 /** 整包指纹(路径+内容序):快照对拍与管理面版本痕共用同一算法,
  * 两边各算一套的话"同 digest"就不再意味着"同内容"。 */
 export function packageDigest(root: string): string {
@@ -312,14 +348,13 @@ export function materializeHostSkills(options: {
       if (options.context) {
         const metadata = readSkillKnowledgeMetadata(
           readFileSync(sourceFile, "utf-8"));
-        if (metadata.nature !== "unclassified"
-            && !knowledgeMatchesTask(metadata, options.context)) {
+        if (!knowledgeMatchesTask(metadata, options.context)) {
           continue;
         }
       }
-      validatePackage(
-        sourceRoot, packageRoot, 0, { files: 0, bytes: 0 });
-      const digest = packageDigest(packageRoot);
+      const digest = validateHostSkillSnapshotPackage({
+        sourceRoot, sourceFile, packageRoot,
+      }).package_digest;
       const key = sha256(`${skill.name}\0${sourcePath}\0${digest}`).slice(0, 20);
       destination = join(snapshotRoot, key);
       metadataPath = `${destination}.snapshot.json`;

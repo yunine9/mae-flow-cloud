@@ -240,6 +240,7 @@ async function main(): Promise<void> {
     throw error;
   }
   guardProcess(dataDir);   // 旁路异常不许带走整个服务(见函数注释)
+  sweepStaleGitRuntime(dataDir);   // 上个进程留下的明文凭据现场(旁路)
   // 管理旋钮(主 spec §4:最大并发由管理员配置,超出排队)。
   const maxConcurrent = Number(flag("--max-concurrent") ?? 2);
   // 主动压缩节奏(事件量为代理,回合间隙以内核锚点压缩;0=关,
@@ -356,7 +357,7 @@ async function main(): Promise<void> {
     && (!!repoFlag || has("--kernel-mode"));
   if (issueOnly && kernelRequested) {
     console.log("[serve] --issue-only 与内核模式同时给出:按问题流专用跑,"
-      + "内核/交付平台/prepush 本次不加载(需求流程停用)");
+      + "内核/交付平台/Build-Fix 本次不加载(需求流程停用)");
   }
   const kernelMode = !issueOnly && kernelRequested;
   // URL 仓不许过 resolve(会被拼成本地路径,实测毁 URL);本地路径才归一化。
@@ -514,7 +515,7 @@ async function main(): Promise<void> {
     console.log("[serve] 小鲁班入站回复已由部署显式启用；通知将提供手机审批指令");
   }
 
-  // 统一任务执行面:普通编码/修复/子 Agent/推送前编译与 UT 的 Bash
+  // 统一任务执行面:普通编码/修复/子 Agent/Build-Fix 的 Bash
   // 全部进入同一类加固容器。Cloud 控制面、Git 凭据、MR/通知仍留宿主。
   const isolateImage = flag("--isolate-image");
   const isolateMemory = flag("--isolate-memory") ?? "8g";
@@ -527,10 +528,13 @@ async function main(): Promise<void> {
     flag("--isolate-cache-root") ?? join(dataDir, "build-cache"),
   );
   const buildSlots = Number(flag("--build-slots") ?? "1");
-  const prepushAttemptTimeoutValue = flag("--prepush-attempt-timeout-minutes");
+  // 新部署只暴露 Build-Fix 命名；旧 flag 保留兼容，避免滚动升级断配置。
+  const prepushAttemptTimeoutValue = flag("--build-fix-attempt-timeout-minutes")
+    ?? flag("--prepush-attempt-timeout-minutes");
   const prepushAttemptTimeoutMinutes = prepushAttemptTimeoutValue !== undefined
     ? Number(prepushAttemptTimeoutValue) : undefined;
-  const prepushBuildTimeoutValue = flag("--prepush-build-timeout-minutes");
+  const prepushBuildTimeoutValue = flag("--build-fix-command-timeout-minutes")
+    ?? flag("--prepush-build-timeout-minutes");
   const prepushBuildTimeoutMinutes = prepushBuildTimeoutValue !== undefined
     ? Number(prepushBuildTimeoutValue) : undefined;
   // 现场保留期:终态任务过期后回收克隆等重货,台账原样留下。
@@ -571,8 +575,8 @@ async function main(): Promise<void> {
     process.exit(2);
   }
   for (const [name, value] of [
-    ["--prepush-attempt-timeout-minutes", prepushAttemptTimeoutMinutes],
-    ["--prepush-build-timeout-minutes", prepushBuildTimeoutMinutes],
+    ["--build-fix-attempt-timeout-minutes", prepushAttemptTimeoutMinutes],
+    ["--build-fix-command-timeout-minutes", prepushBuildTimeoutMinutes],
   ] as const) {
     if (value !== undefined && (!Number.isFinite(value) || value <= 0)) {
       console.error(`[serve] ${name} 必须是正数,拒绝启动`);
@@ -682,40 +686,55 @@ async function main(): Promise<void> {
       ? "/etc/mae-flow-cloud/mcp-token" : undefined);
   const dtsMcpUrl = explicitDtsMcpUrl
     ?? (dtsMock || !mcpTokenFile ? undefined : DEFAULT_DTS_MCP_URL);
+  // 问题流的网关配置坏了,不许连累需求流。--issue-only 下问题处理就是
+  // 全部业务,配置坏了必须当场拒启;完整部署下 DTS 网关只是问题域的一路
+  // 旁路,按红线"旁路一律 fail-open"降级成不接线并大声记账——需求流程
+  // 照常起服,问题页由 UnconfiguredDtsGateway 当场说人话,不静默装可用。
+  // 踩过的坑:缺省会自动装载 /etc/mae-flow-cloud/mcp-token,一个空文件
+  // 就能让整台机器(含需求流)起不来,而没人点过问题处理。
+  let dtsDisabledReason = "";
+  const issueGatewayFault = (reason: string): void => {
+    if (issueOnly) {
+      console.error(`[serve] ${reason};--issue-only 下问题处理是全部业务,拒绝启动`);
+      process.exit(2);
+    }
+    dtsDisabledReason = reason;
+    console.error(`[serve] ${reason};本次不接 DTS 网关——`
+      + "「问题处理」页拉单会当场报缺配置,需求流程不受影响");
+  };
   if (dtsMock && explicitDtsMcpUrl) {
-    console.error("[serve] --dts-mock 与 --dts-mcp-url 互斥:"
+    issueGatewayFault("--dts-mock 与 --dts-mcp-url 互斥:"
       + "前者是过渡期假单据,后者是真网关,别同时配");
-    process.exit(2);
   }
-  // token 不在启动时读定值——只校验文件在场且非空(fail-fast),之后
-  // 每次请求经闭包重读文件。token 在网关侧轮换后服务不用重启;运行时
-  // 文件被删/不可读则降级为不带头,让网关 401 显形而不是拖垮整个进程。
+  // token 不在启动时读定值——只校验文件在场且非空,之后每次请求经闭包
+  // 重读文件。token 在网关侧轮换后服务不用重启;运行时文件被删/不可读
+  // 则降级为不带头,让网关 401 显形而不是拖垮整个进程。
   let mcpTokenProvider: (() => string) | undefined;
-  if (mcpTokenFile) {
+  if (mcpTokenFile && !dtsDisabledReason) {
     try {
       const initial = readFileSync(mcpTokenFile, "utf-8").trim();
       if (!initial) throw new Error("token 文件为空");
       console.log(`[serve] MCP token 文件(动态读取): ${mcpTokenFile}`);
+      mcpTokenProvider = () => {
+        try {
+          return readFileSync(mcpTokenFile, "utf-8").trim();
+        } catch {
+          return "";
+        }
+      };
     } catch (error) {
-      console.error(`[serve] MCP token 读取失败,拒绝启动: ${String(error)}`);
-      process.exit(2);
+      issueGatewayFault(`MCP token 读取失败(${mcpTokenFile}): ${String(error)}`);
     }
-    mcpTokenProvider = () => {
-      try {
-        return readFileSync(mcpTokenFile, "utf-8").trim();
-      } catch {
-        return "";
-      }
-    };
   }
-  if (dtsMcpUrl && !mcpTokenProvider) {
-    console.error("[serve] 配置了 MCP 网关地址但没有 token:"
+  if (dtsMcpUrl && !mcpTokenProvider && !dtsDisabledReason) {
+    issueGatewayFault("配置了 MCP 网关地址但没有 token:"
       + "请配置 --mcp-token-file(正式服务器为 /etc/mae-flow-cloud/mcp-token)");
-    process.exit(2);
   }
   let issueDts: DtsGateway | undefined;
   let mcpGateway: McpGateway | undefined;
-  if (dtsMock) {
+  if (dtsDisabledReason) {
+    // 已经如实记过账,这里只是不接线;issueDtsGateway 会落到占位网关。
+  } else if (dtsMock) {
     issueDts = new MockDtsGateway((message) => console.log(`  [issue-dts] ${message}`));
     console.log("[serve] 问题流 DTS 网关: DEV·模拟(--dts-mock,外部开发模式,"
       + "连不上真实 DTS;单据 DTS-2026-1001~1006 为模拟数据,页签有 DEV 标识)");
@@ -1062,6 +1081,52 @@ function warnStaleWeb(webRoot: string | undefined): void {
  * - **先落盘后上屏**:crash.log 是给人的,console 只是顺手;
  * - **重入保险**:记账过程自己出的事不再记,递归到此为止。
  */
+/** 清掉上一个进程遗留的 git 凭据现场。
+ *
+ * host-git/issue-git 每次动 git 都在 .runtime 下开 operation-* 私有
+ * 目录,里面躺着**明文个人令牌**;正常路径 finally 里删,kill -9 不给
+ * finally 机会——不扫的话每次硬重启都往磁盘上多留一份长期明文凭据
+ * (2026-08-29 部署审计实锤)。只删"够老"的:推送走 detached 进程组,
+ * 服务死了 git 可能还在 5 分钟预算内收尾,扫早了等于拔它的凭据。
+ * 纯旁路:任何一步失败只记日志,绝不拦启动。 */
+function sweepStaleGitRuntime(dataDir: string): void {
+  const cutoff = Date.now() - 15 * 60_000;
+  for (const lane of ["host-git", "issue-git"]) {
+    const root = join(dataDir, ".runtime", lane);
+    let entries: string[];
+    try {
+      entries = readdirSync(root);
+    } catch {
+      continue;   // 目录还没建过:无现场可扫
+    }
+    for (const name of entries) {
+      if (!name.startsWith("operation-")) continue;
+      const path = join(root, name);
+      try {
+        const stat = statSync(path);
+        if (!stat.isDirectory() || stat.mtimeMs > cutoff) continue;
+        rmSync(path, { recursive: true, force: true });
+        // 只报目录名,凭据内容永不上日志。
+        console.log(`[serve] 已清理遗留 git 凭据现场 ${lane}/${name}`);
+      } catch (error) {
+        console.log(`[serve] 清理 ${lane}/${name} 失败(不拦启动): `
+          + String(error));
+      }
+    }
+  }
+  // skill 换包的暂存目录同理是 kill -9 遗留(正常路径 finally 里删)。
+  // 它没有 detached 写者,不需要年龄闸,起服时全量清。
+  try {
+    const staging = join(dataDir, "skill-staging");
+    for (const name of existsSync(staging) ? readdirSync(staging) : []) {
+      rmSync(join(staging, name), { recursive: true, force: true });
+      console.log(`[serve] 已清理遗留 skill 暂存 ${name}`);
+    }
+  } catch (error) {
+    console.log(`[serve] 清理 skill 暂存失败(不拦启动): ${String(error)}`);
+  }
+}
+
 function guardProcess(dataDir: string): void {
   let recording = false;
   const record = (kind: string, error: unknown) => {

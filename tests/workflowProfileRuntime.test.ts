@@ -71,7 +71,7 @@ test("运行时单篇知识投影失败只撤销对应定制并恢复标准项",
     /正文按需读取：\.mae-flow-work\/business-modules\/notify\/diagnosis\.md/);
 
   const runtime = reconcileWorkflowProfileAssets(profile, [])!;
-  assert.equal(runtime.final_snapshot.stages[0].items[0].id, "implement");
+  assert.equal(runtime.final_snapshot!.stages[0].items[0].id, "implement");
   assert.ok(runtime.diagnostics.some((item) => item.code === "asset_unavailable"
     && item.fallback?.includes("implement")));
   assert.match(runtime.diagnostics.map((item) => item.message).join("\n"),

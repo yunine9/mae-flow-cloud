@@ -48,7 +48,7 @@ test("交付档案不再混入排队、运行和等待决策", () => {
   assert.equal(isDeliveryArchiveStatus("queued"), false);
   assert.equal(isDeliveryArchiveStatus("running"), false);
   assert.equal(isDeliveryArchiveStatus("waiting_for_human"), false);
-  assert.equal(isDeliveryArchiveStatus("await_merge"), true);
+  assert.equal(isDeliveryArchiveStatus("await_merge"), false);
   assert.equal(isDeliveryArchiveStatus("completed"), true);
   assert.equal(isDeliveryArchiveStatus("failed"), true);
   assert.equal(isDeliveryArchiveStatus("canceled"), true);

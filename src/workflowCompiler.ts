@@ -13,7 +13,7 @@ import {
   type WorkflowAssetRef,
   type WorkflowDefinition,
   type WorkflowDiagnostic,
-  type WorkflowExecutionProfileV2,
+  type CompiledWorkflowProfile,
   type WorkflowPlanItem,
   type WorkflowPosition,
   type WorkflowResolvedAsset,
@@ -233,7 +233,7 @@ function defaultProfile(
   base: WorkflowStandardSnapshot,
   source: WorkflowSourceRef,
   diagnostics: WorkflowDiagnostic[],
-): WorkflowExecutionProfileV2 {
+): CompiledWorkflowProfile {
   const payload = {
     source,
     base_snapshot: base,
@@ -255,7 +255,7 @@ function defaultProfile(
  */
 export function compileWorkflow(
   input: CompileWorkflowInput,
-): WorkflowExecutionProfileV2 {
+): CompiledWorkflowProfile {
   assertBaseSnapshot(input.baseSnapshot);
   const base = copy(input.baseSnapshot);
   let definition: WorkflowDefinition;

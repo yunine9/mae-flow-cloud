@@ -154,16 +154,17 @@ test("团队执行约定只影响新任务，并与任务补充按层固定", ()
   const first = service.create("调整接口", {
     taskInstructions: "先核对旧客户端",
   });
-  assert.deepEqual(first.execution_profile?.layers.map((layer) => layer.scope),
+  const firstSupplements = first.workflow_profile?.supplements ?? [];
+  assert.deepEqual(firstSupplements.map((item) => item.scope),
     ["team", "task"]);
-  assert.equal(first.execution_profile?.layers[0].instructions,
-    "公共契约变化要点名影响方");
+  assert.equal(firstSupplements[0].instructions, "公共契约变化要点名影响方");
 
   settings.updateExecutionPolicy({ team_instructions: "新团队约定" });
   const second = service.create("另一个任务");
-  assert.equal(first.execution_profile?.layers[0].instructions,
+  assert.equal((first.workflow_profile?.supplements ?? [])[0].instructions,
     "公共契约变化要点名影响方", "运行中/历史任务不得随设置漂移");
-  assert.equal(second.execution_profile?.layers[0].instructions, "新团队约定");
+  assert.equal((second.workflow_profile?.supplements ?? [])[0].instructions,
+    "新团队约定");
   assert.throws(() => settings.updateExecutionPolicy({
     team_instructions: "x".repeat(2001),
   }), /团队执行约定不能超过 2000/);
@@ -314,15 +315,17 @@ test("路由权限:admin 可读改,开发成员 403,密钥不出网", async () =
     };
     assert.equal(policyView.execution_policy.team_instructions,
       "不确定时明确说明，不要猜");
-    const invalidPolicy = await fetch(`${base}/settings/execution-policy`, {
+    // v1 团队阶段勾选定制已退役:老客户端还传就明确打回并指路,
+    // 绝不静默吞掉让人以为配置生效了。
+    const retiredPolicy = await fetch(`${base}/settings/execution-policy`, {
       method: "PUT", headers: { cookie: admin },
       body: JSON.stringify({ stage_customizations: [{
         playbook_id: "platform.made-up",
         optional_activities: ["skip-all-gates"],
       }] }),
     });
-    assert.equal(invalidPolicy.status, 400);
-    assert.match(await invalidPolicy.text(), /不存在的阶段方案/);
+    assert.equal(retiredPolicy.status, 400);
+    assert.match(await retiredPolicy.text(), /已退役.*工作流资产/);
     const visionTest = await fetch(`${base}/settings/vision/test`, {
       method: "POST", headers: { cookie: admin },
     });

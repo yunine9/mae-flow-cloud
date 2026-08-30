@@ -44,7 +44,7 @@ const LIFE_B: Scene[] = [
   { text: "已收到用户答复,继续并完成任务。" },
 ];
 
-test("恢复老任务时把已结束修复的 repairing 校正为 verifying", async () => {
+test("恢复老任务时校正 repairing，且无 owner 的 prepush 不冒充运行中", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-recover-repair-phase-"));
   const workspace = join(dataDir, "task-1");
   const taskPath = join(workspace, "task.json");
@@ -80,7 +80,8 @@ test("恢复老任务时把已结束修复的 repairing 校正为 verifying", as
   assert.equal(service.recover().restored, 1);
   const restored = service.get("task-1")!;
   assert.equal(restored.delivery?.loop?.state, "verifying");
-  assert.equal(restored.focus?.headline, "正在准备编译");
+  assert.match(restored.focus?.headline ?? "", /中断.*没有.*执行会话/);
+  assert.equal(restored.delivery?.prepush_runtime?.state, "interrupted");
   assert.match(restored.detail ?? "", /修复会话已完成/);
 });
 
@@ -266,17 +267,29 @@ test("恢复自愈:概要还在等人但 waiting 已 resolved,自动续跑", asy
   }, "任务进入等待");
   await modelA.stop();
 
-  // 模拟旧版本留下的现场:waiting.json 已有答案，task.json 却仍写
-  // waiting_for_human + resolved waiting，页面因此重复举卡。
+  // 模拟真实崩溃窗口:waiting.json 已有答案，task.json 仍保留 resolve
+  // 之前的 waiting 副本。旧测试把 resolved 对象也塞进 task.json，反而
+  // 绕开了线上真正会卡死的状态分叉。
   const workspace = join(dataDir, created.id);
-  const resolved = new HumanGate(join(workspace, "waiting.json")).resolve(
+  const annotation = serviceA.addAnnotation(created.id, {
+    author: "liaoxiang", artifact: "Story", file: "story.md", line: 3,
+    anchor: "关键流程", note: "恢复后也要把这条标成已送达", kind: "doc",
+  });
+  const annotationText = serviceA.previewAnnotations(created.id, [annotation.id]);
+  new HumanGate(join(workspace, "waiting.json")).resolve(
     waiting!.waiting_id,
-    { stateVersion: waiting!.state_version, decision: "确认" },
+    {
+      stateVersion: waiting!.state_version,
+      decision: "确认",
+      notes: annotationText,
+      requestDigest: "resolved-before-task-projection",
+      continuation: { annotation_ids: [annotation.id] },
+    },
   );
   const taskPath = join(workspace, "task.json");
   const saved = JSON.parse(readFileSync(taskPath, "utf-8"));
   saved.summary.status = "waiting_for_human";
-  saved.summary.waiting = resolved;
+  saved.summary.waiting = waiting;
   writeFileSync(taskPath, JSON.stringify(saved, null, 1));
 
   const modelB = new ScriptedModelServer(LIFE_B);
@@ -291,6 +304,8 @@ test("恢复自愈:概要还在等人但 waiting 已 resolved,自动续跑", asy
     serviceB.get(created.id)?.status === "completed"
       ? serviceB.get(created.id) : undefined, "自愈后收口");
   assert.equal(done?.waiting, undefined);
+  assert.equal(serviceB.listAnnotations(created.id).items[0].status, "sent",
+    "决定已落袋后恢复时也必须补齐批注送达投影");
   await modelB.stop();
 });
 

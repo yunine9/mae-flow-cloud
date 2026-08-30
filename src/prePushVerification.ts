@@ -1,5 +1,5 @@
 /**
- * Cloud-native 推送前验证状态机。
+ * Cloud-native Build-Fix 状态机。
  *
  * 这里故意不依赖 TaskService、SessionDriver 或 Mae-Flow 内核：它只记录
  * “这个工作区快照是否已经编译 + UT 通过”。调用方负责运行 Agent、
@@ -133,6 +133,11 @@ export interface PrePushVerificationState {
   state: PrePushStateName;
   round: number;
   message: string;
+  /** user_skipped 的拍板人。跳过是三道质量闸里最重的一次人工决定,
+   * 现场必须答得出"谁点的"(2026-08-30 审计:四个控制入口都不记人)。
+   * 只有"编译失败后人工跳过"这条路落它;清单整理的 user_skipped 刻意
+   * 不落——它同时是 MR 标题打"未经本地编译验证"标记的判据。 */
+  skipped_by?: string;
   sha: string;
   workspace_fingerprint: string;
   updated_at: string;
@@ -172,6 +177,7 @@ export type PrePushEvent =
       message: string;
       attempt_id?: string;
     }
+  | { type: "environment_failed"; at: string; message: string }
   | { type: "retry_requested"; at: string; message?: string }
   | { type: "recovered"; at: string };
 
@@ -272,7 +278,7 @@ export function observePrePushRevision(
     round: reason === "workspace_changed" ? state.round : 0,
     message: reason === "new_sha"
       ? `发现新 SHA ${shortSha(revision.sha)}，需要重新验证`
-      : "工作区内容已变化，旧的推送前验证已失效",
+      : "工作区内容已变化，旧的 Build-Fix 结果已失效",
     sha: revision.sha,
     workspace_fingerprint: revision.workspace_fingerprint,
     updated_at: at,
@@ -311,8 +317,8 @@ function startAttempt(
     state: state.state === "repairing" ? "repairing" : "preparing",
     round,
     message: state.state === "repairing"
-      ? `第 ${round} 轮推送前代码修复与复验`
-      : `第 ${round} 轮推送前编译和 UT 验证`,
+      ? `第 ${round} 轮 Build-Fix 修复与复验`
+      : `第 ${round} 轮 Build-Fix`,
     updated_at: at,
     checks: pendingFailedChecks(state.checks),
     active_attempt: { id: attemptId, started_at: at },
@@ -452,12 +458,25 @@ export function transitionPrePush(
     case "no_progress":
       return markNoProgress(
         state, event.at, event.message, event.attempt_id);
+    case "environment_failed": {
+      if (state.state === "passed") return state;
+      const message = required(event.message, "pre-push 环境异常");
+      return {
+        ...state,
+        state: "environment_error",
+        message,
+        updated_at: event.at,
+        active_attempt: undefined,
+        issue: { kind: "infrastructure", message, at: event.at },
+        receipt: undefined,
+      };
+    }
     case "retry_requested": {
       if (state.state === "passed" || state.active_attempt) return state;
       return {
         ...state,
         state: "preparing",
-        message: event.message?.trim() || "重新执行推送前验证",
+        message: event.message?.trim() || "重新执行 Build-Fix",
         updated_at: event.at,
         checks: pendingFailedChecks(state.checks),
         issue: undefined,
@@ -469,7 +488,7 @@ export function transitionPrePush(
       return {
         ...state,
         state: "preparing",
-        message: "服务恢复，继续未完成的推送前验证",
+        message: "服务恢复，继续未完成的 Build-Fix",
         updated_at: event.at,
         active_attempt: undefined,
         // 已收到的单项 PASS 绑定同一快照，可继续；未知的在途动作重跑。
@@ -522,7 +541,7 @@ export function recordPrePushReport(
   if (report.compile.outcome === "not_run") {
     return markNoProgress(
       state, at,
-      report.compile.message?.trim() || "本轮没有执行编译，推送前验证无进展",
+      report.compile.message?.trim() || "本轮没有执行编译，Build-Fix 无进展",
       attemptId);
   }
   let next = recordPrePushCheck(
@@ -549,7 +568,7 @@ export function attestPrePushExecution(
 ): PrePushVerificationState {
   const receipt = state.receipt;
   if (state.state !== "passed" || !receipt) {
-    throw new Error("只有已通过的推送前验证才能登记容器事实");
+    throw new Error("只有已通过的 Build-Fix 才能登记容器事实");
   }
   if (execution.schema !== PRE_PUSH_EXECUTION_SCHEMA
       || execution.sha !== receipt.sha
@@ -558,7 +577,7 @@ export function attestPrePushExecution(
       || !execution.container_id || !execution.image_id
       || !execution.image_digest || execution.read_only_root !== true
       || !Number.isInteger(execution.pids_limit) || execution.pids_limit <= 0) {
-    throw new Error("容器事实与推送前验证收据不匹配");
+    throw new Error("容器事实与 Build-Fix 收据不匹配");
   }
   return {
     ...state,
@@ -592,6 +611,16 @@ export function markPrePushNoProgress(
     type: "no_progress", at, message,
     ...(attemptId ? { attempt_id: attemptId } : {}),
   });
+}
+
+/** 恢复编排在真正启动 runner 前发现现场/配置不可用时的统一收口。
+ * 这类失败没有具体 compile/UT 维度，不能伪造成某一项检查结果。 */
+export function failPrePushEnvironment(
+  state: PrePushVerificationState,
+  at: string,
+  message: string,
+): PrePushVerificationState {
+  return transitionPrePush(state, { type: "environment_failed", at, message });
 }
 
 /**

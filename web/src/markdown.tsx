@@ -9,11 +9,13 @@ import type { ReactNode } from "react";
 import { MermaidFlow } from "./MermaidFlow";
 import { PlantUml } from "./PlantUml";
 
-/** 行内:**加粗**、`代码` 与 [文字](链接)。链接只认站内路径与
+/** 行内:**加粗**、`代码`、[文字](链接),以及帮助中心用的少量重点色:
+ * {{blue|操作重点}} / {{green|成功结果}} / {{red|风险警告}}。颜色语法
+ * 仍由 React 拼元素,不开放任意 HTML 或 CSS。链接只认站内路径与
  * http(s)——其余原样当文本,渲染器不背安全锅。 */
 function inline(text: string): ReactNode[] {
   return text
-    .split(/(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\))/g)
+    .split(/(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\)|\{\{(?:blue|green|red)\|[^}]+\}\})/g)
     .filter(Boolean)
     .map((piece, index) => {
       if (piece.startsWith("**") && piece.endsWith("**")) {
@@ -21,6 +23,11 @@ function inline(text: string): ReactNode[] {
       }
       if (piece.startsWith("`") && piece.endsWith("`")) {
         return <code key={index} className="md-code">{piece.slice(1, -1)}</code>;
+      }
+      const emphasis = piece.match(/^\{\{(blue|green|red)\|([^}]+)\}\}$/);
+      if (emphasis) {
+        return <strong key={index}
+          className={`md-emphasis tone-${emphasis[1]}`}>{emphasis[2]}</strong>;
       }
       const link = piece.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
       if (link && (/^\//.test(link[2]) || /^https?:\/\//.test(link[2]))) {

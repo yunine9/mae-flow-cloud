@@ -69,12 +69,14 @@ python3 harness/run-report.py .pilot/<label>   # 试跑现场一键对拍
 
 - **2026-08-22 勘误**:原文"Cloud 宿主不提供编译、UT 运行或 CodeCheck"
   已被 cc2da9d 推翻。现在的口径是:普通编码会话仍不编译,但**宿主在每个
-  新 HEAD push 前另起一个推送前验证 Agent**,在一次性构建容器里跑仓库
+  新 HEAD push 前另起一个 Build-Fix Agent**,在一次性构建容器里跑仓库
   真实的编译与 UT,失败可自行修复并本地 commit。它是 push 前的闸门,
   不是质量裁判——CodeCheck 与最终核销仍只在绑定 SHA 的流水线。UT skill
-  仍只负责测试编写。详见 README「Cloud 固有执行契约」。
+  仍只负责测试编写。push 前复检不按首次/后续分叉：人工意见引发的修改
+  强制回到意见作者闭环，纯流水线修复在已确认文件范围内自动续推。详见
+  README「Cloud 固有执行契约」。
 - 容器不只做隔离了:内核模式未配 `--isolate-image` 直接拒绝启动;
-  主 Agent、子 Agent、修复会话与 prepush 的**所有 Bash** 都进容器,
+  主 Agent、子 Agent、修复会话与 Build-Fix 的**所有 Bash** 都进容器,
   文件 Read/Edit/Write 仍在宿主(受工作区 realpath 边界 + fail-closed
   Gate 约束)。
 - docker 走 Colima:VM 只挂 $HOME(/var/folders 挂进去是空目录);

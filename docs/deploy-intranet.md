@@ -388,13 +388,13 @@ mae-flow 退回 <审批码> <意见>
 本身已有可靠验签，桥先按原生方式验证，再加上这个固定内部 Token 转给
 Cloud。手机不需要访问 Cloud 内网页面。
 
-## 推送前验证与流水线修复环(全绿是最终目标)
+## Build-Fix 与流水线修复环（MR 合入才是任务结束）
 
 每次准备把一个**新 HEAD** 推到远端时，Cloud 宿主先启动独立的
-Cloud-native 验证 Agent。它不是普通编码会话的延长，也不是 Mae-Flow
+Build-Fix Agent。它不是普通编码会话的延长，也不是 Mae-Flow
 的新阶段：
 
-- 普通编码会话仍只写代码和 UT；推送前会话不挂 Mae-Flow Hooks，不读取
+- 普通编码会话仍只写代码和 UT；Build-Fix 不挂 Mae-Flow Hooks，不读取
   或改写内核 `current/done`，因此轻量修复不会被内核阶段门禁卡住；
 - 它在一次性加固构建容器中发现并执行仓库真实的编译、UT 命令，失败时可
   修改代码、重跑并在本地 commit；它不读取个人 Git 令牌，也不能自行 push；
@@ -402,14 +402,14 @@ Cloud-native 验证 Agent。它不是普通编码会话的延长，也不是 Mae
   和 clean worktree，修复产生新 commit 后以新 SHA 出具；工作区或 HEAD
   再变化，旧收据立即失效。收据附带实际镜像 digest、只读根、资源/网络和
   挂载目的地；暂停/取消会销毁整个 attempt 容器，恢复后新建一轮；
-- 宿主拿到 PASS 才 push。若只是网络失败，重试同一 SHA 且工作区仍干净时
+- 宿主拿到 PASS 后先让人检视最终代码，确认后才直接 push。若只是网络失败，重试同一 SHA 且工作区仍干净时
   复用收据，不再烧一次模型和构建；代码失败或工具链/依赖环境失败则停止
   push，并在任务状态中分别说明；
 - 这张收据只是快速反馈与 push 闸门，不是内核最终证据。push 后仍进入
   `external_verify`，CodeCheck 与最终编译/UT 由绑定同一 SHA 的权威流水线
   裁决。
 
-### 预推送 Agent 怎样选择构建命令（内网经验基线）
+### Build-Fix 怎样选择构建命令（内网经验基线）
 
 命令不是平台按语言写死的。Agent 先以本仓 pom/package、wrapper、仓库脚本
 和流水线构建描述确认真实可执行入口，再按名称与描述判断选中的构建/测试
@@ -780,15 +780,19 @@ install -m 600 /dev/null /etc/mae-flow-cloud/mcp-token
 | build-cache-retention-days | 30 | 仓库构建缓存从最后一次真实挂载起连续未使用多少天后自动回收；`0`=不按时间回收。正在运行或仍可能继续的任务一律保护 |
 | build-cache-max-gb | 100 | 构建缓存总量上限，超出后按最久未用优先回收；`0`=不限容量。扫描与删除使用异步 I/O，不阻塞服务请求 |
 | isolate-user | **Linux:服务进程 uid:gid**;root 守护形态必须显式给数字 uid:gid;其他平台:镜像内非 root 用户 | Linux 普通服务账号不配时按自己的 uid:gid 跑。root 守护进程必须显式给非 root 数字 uid:gid；Cloud 在容器启动前把实际代码工作区和分仓缓存安全交给该用户，不修改任务台账与凭据目录 |
-| build-slots | 1 | 同时运行的 prepush 重构建数，独立于普通 Agent 并发 |
-| prepush-attempt-timeout-minutes | 普通仓 30 / C++ 仓 60 | 单轮 prepush 的总墙钟预算；只在代表仓实测确实更慢时覆盖 |
-| prepush-build-timeout-minutes | 普通仓 20 / C++ 仓 45 | Maven/CMake/Make/Gradle/npm 等单条重构建预算；Agent 填得更短时由平台自动提升，总预算仍是硬上限 |
+| build-slots | 1 | 同时运行的 Build-Fix 重构建数，独立于普通 Agent 并发 |
+| build-fix-attempt-timeout-minutes | 普通仓 30 / C++ 仓 60 | 单轮 Build-Fix 的总墙钟预算；只在代表仓实测确实更慢时覆盖 |
+| build-fix-command-timeout-minutes | 普通仓 20 / C++ 仓 45 | Maven/CMake/Make/Gradle/npm 等单条重构建预算；Agent 填得更短时由平台自动提升，总预算仍是硬上限 |
 | repair-rounds | 不限 | 修复环手刹:数字=上限,0=关;不配=修到绿/出诊断为止 |
 | poll-interval / poll-timeout | 10 / 1800(秒) | 流水线轮询节奏与预算 |
 | max-concurrent | 2 | 并发任务数 |
 | workspace-retention-days | 14 | 现场保留期(天)。终态任务过期后回收**代码克隆等编译环境**,交付账本/事件/transcript/prepush 收据/流水线证据/批注一律保留;`0`=永不回收。只碰 completed/failed/canceled,`await_merge` 与 `verifying` 不碰 |
 | compact-every | 150 | 主动压缩节奏(事件数;0=关) |
 | desktop-notify | false | 单机手感的桌面弹窗 |
+
+旧部署中的 `--prepush-attempt-timeout-minutes` 和
+`--prepush-build-timeout-minutes` 仍可读取，仅作为滚动升级兼容别名；新配置统一使用
+`build-fix-*`。
 
 ### 部署配置之上还有一层:管理页运行时设置
 
@@ -923,7 +927,7 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
   检出 C++ 信号后自动放宽到 60/45 分钟。即使 Agent 给 Maven 全量编译
   填了 `timeout: 600`，容器实际仍至少获得平台预算；普通探查命令不被
   无谓放宽。若代表仓的完整冷构建 P95 仍超过默认值，用
-  `--prepush-attempt-timeout-minutes` 与 `--prepush-build-timeout-minutes`
+  `--build-fix-attempt-timeout-minutes` 与 `--build-fix-command-timeout-minutes`
   显式上调（例如 120/100）。单命令预算会自动限制在整轮预算以下，给
   结果整理与容器清理留余量；真正耗尽时当次命令立即明确收口，不再靠
   下一条 Bash 触发二次错误。

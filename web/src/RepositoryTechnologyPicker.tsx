@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   resolveRepositoryProfiles,
   saveRepositoryProfile,
@@ -18,6 +18,11 @@ function label(repository: string): string {
     ?.replace(/\.git$/i, "") || repository;
 }
 
+function identity(repository: string): string {
+  return repository.trim().replace(/\/+$/, "").replace(/\.git$/i, "")
+    .toLowerCase();
+}
+
 export function RepositoryTechnologyPicker({ repositories, value, onChange }: {
   repositories: string[];
   value: RepositoryTechnologyDraft[];
@@ -27,6 +32,8 @@ export function RepositoryTechnologyPicker({ repositories, value, onChange }: {
   const [savingRepository, setSavingRepository] = useState("");
   const [error, setError] = useState("");
   const normalized = repositories.map((item) => item.trim()).filter(Boolean);
+  const valueRef = useRef(value);
+  valueRef.current = value;
 
   useEffect(() => {
     if (!normalized.length) { onChange([]); return; }
@@ -35,19 +42,39 @@ export function RepositoryTechnologyPicker({ repositories, value, onChange }: {
       setLoading(true); setError("");
       void resolveRepositoryProfiles(normalized).then((items) => {
         if (!alive) return;
-        onChange(items.map((item) => ({
-          repository: item.repository,
-          technologies: item.profile?.technologies ?? [],
-          confirmed: item.profile?.confirmed === true,
-          remembered: !!item.profile,
-        })));
+        const local = new Map(valueRef.current.map((item) =>
+          [identity(item.repository), item]));
+        const resolved = new Map(items.map((item) =>
+          [identity(item.repository), item]));
+        onChange(normalized.map((repository) => {
+          const current = local.get(identity(repository));
+          const item = resolved.get(identity(repository));
+          // 草稿代表“本单已经采用”的选择，优先级高于团队画像回填。
+          // 特别是 remembered=false（保存失败）不能在重挂载后被抹掉。
+          if (current) return {
+            ...current,
+            repository: item?.repository ?? repository,
+            technologies: [...current.technologies],
+          };
+          return {
+            repository: item?.repository ?? repository,
+            technologies: item?.profile?.technologies ?? [],
+            confirmed: item?.profile?.confirmed === true,
+            remembered: !!item?.profile,
+          };
+        }));
       }).catch((reason) => {
         if (!alive) return;
         // 画像是推荐旁路，读不到不能卡下单；界面明确说明退化结果。
         setError(reason instanceof Error ? reason.message : "仓库技术画像读取失败");
-        onChange(normalized.map((repository) => ({
-          repository, technologies: [], confirmed: false,
-        })));
+        const local = new Map(valueRef.current.map((item) =>
+          [identity(item.repository), item]));
+        onChange(normalized.map((repository) => {
+          const current = local.get(identity(repository));
+          return current ? { ...current, repository,
+            technologies: [...current.technologies] }
+            : { repository, technologies: [], confirmed: false };
+        }));
       }).finally(() => { if (alive) setLoading(false); });
     }, 350);
     return () => { alive = false; window.clearTimeout(timer); };
@@ -97,7 +124,7 @@ export function RepositoryTechnologyPicker({ repositories, value, onChange }: {
         ? "已确认" : "有首次选择"}</em>
     </div>
     {error && <p className="repository-technology-warning" role="status">
-      {error}。不影响发起任务，本单将只按仓库范围匹配知识。</p>}
+      {error}。请核对上方当前选择状态；本单已确认的选择仍会保留。</p>}
     <div className="repository-technology-list">
       {value.map((item) => <article key={item.repository}>
         <header><span><strong>{label(item.repository)}</strong>

@@ -157,8 +157,13 @@ export function listWorkflowAssetCatalog(options: {
         business_module_ids: [...skill.business_module_ids],
         repositories: [...skill.repositories],
         technologies: [...skill.technologies],
-        availability: skill.loadable ? "available" : "unavailable",
-        ...(!skill.loadable ? { warning: "Pi 装载器未接受这个 Skill" } : {}),
+        availability: skill.loadable && skill.nature !== "unclassified"
+          ? "available" : "unavailable",
+        ...(!skill.loadable
+          ? { warning: "Pi 装载器未接受这个 Skill" }
+          : skill.nature === "unclassified"
+            ? { warning: "缺少知识性质与作用域标签，请先完成治理" }
+            : {}),
       });
     }
   } catch (error) {

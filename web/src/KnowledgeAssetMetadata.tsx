@@ -26,6 +26,9 @@ export function skillMetadataInput(
   if (value.nature === "business" && !value.business_module_ids.length) {
     return undefined;
   }
+  if (value.nature === "engineering" && !value.technologies.length) {
+    return undefined;
+  }
   return {
     nature: value.nature,
     business_module_ids: value.business_module_ids,
@@ -49,8 +52,6 @@ export function SkillMetadataEditor({ value, modules, onChange }: {
     module.repositories))];
   const chooseNature = (nature: Exclude<KnowledgeNature, "unclassified">) =>
     onChange({ ...value, nature,
-      business_module_ids: nature === "business"
-        ? value.business_module_ids.slice(0, 1) : value.business_module_ids,
       technologies: nature === "business" ? [] : value.technologies });
   return <div className="skill-classification-editor">
     <div className="skill-kind-picker two" role="group" aria-label="知识性质">
@@ -67,18 +68,17 @@ export function SkillMetadataEditor({ value, modules, onChange }: {
       先判断正文讲业务事实还是工程方法；Skill 只是它的呈现形态。</p>}
 
     {value.nature && <div className="skill-classification-detail">
-      <span><strong>{value.nature === "business" ? "归属业务模块（必选）"
+      <span><strong>{value.nature === "business" ? "归属业务模块（必选，可多选）"
         : "业务模块上下文（可选）"}</strong><small>
         {value.nature === "business"
-          ? "业务知识必须有明确模块归属。"
+          ? "业务知识必须至少归属一个模块；跨模块知识可以多选。"
           : "例如订单仓排障 Skill 仍是工程知识，这里只说明使用语境。"}
       </small></span>
       {activeModules.length ? <div className="skill-module-picker">
         {activeModules.map((module) => <button type="button" key={module.id}
           aria-pressed={value.business_module_ids.includes(module.id)}
           onClick={() => onChange({ ...value,
-            business_module_ids: value.nature === "business" ? [module.id]
-              : toggle(value.business_module_ids, module.id) })}>
+            business_module_ids: toggle(value.business_module_ids, module.id) })}>
           {module.name}<small>{module.id}</small></button>)}
       </div> : <small className="skill-classification-empty">
         目前没有启用中的业务模块。</small>}
@@ -101,15 +101,17 @@ export function SkillMetadataEditor({ value, modules, onChange }: {
 
     {value.nature === "engineering" && <div
       className="skill-classification-detail">
-      <span><strong>适用技术栈（可选）</strong><small>
-        不选表示技术无关；仓库技术栈由用户首次选择并由系统记忆。</small></span>
+      <span><strong>适用语言（必选，可多选）</strong><small>
+        必须至少选择一种语言；仓库语言由用户首次选择并由系统记忆。</small></span>
       <KnowledgeLanguagePicker value={value.technologies}
         includeAgnostic={false}
         onChange={(technologies) => onChange({ ...value, technologies })} />
+      {!value.technologies.length && <p className="skill-classification-prompt">
+        请选择至少一种适用语言；匹配不上应由知识治理者修正标签。</p>}
     </div>}
 
     <p className="skill-classification-rule">
-      性质看正文，不看挂载位置。若同一正文同时讲业务规则和工程实现，请拆成两项知识；它们可以关联同一模块和仓库。</p>
+      性质看正文，不看挂载位置。业务知识按模块匹配，工程知识按语言匹配；若正文同时讲两类内容，请拆成两项知识。</p>
   </div>;
 }
 
@@ -135,6 +137,6 @@ export function SkillMetadataTags({ nature, moduleIds, repositories,
       key={repository}>{repository.replace(/\/+$/, "").split("/").at(-1)
         ?.replace(/\.git$/i, "") || repository}</em>)}
     {nature === "engineering" && <KnowledgeLanguageTags
-      languages={technologies} empty="技术无关" />}
+      languages={technologies} empty="缺少语言标签 · 需治理" />}
   </span>;
 }

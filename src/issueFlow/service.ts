@@ -1167,7 +1167,18 @@ export class IssueFlowService {
         pidsLimit: isolation.pidsLimit,
         user: isolation.user,
       },
-      { network: isolation.network },
+      {
+        network: isolation.network,
+        // ownership 标签与需求侧 createTaskContainer 同一套。少了它们,
+        // kill -9 后的启动清扫(按 instance 指纹过滤)整批看不见 issue
+        // 容器——每次硬重启漏一批,宿主内存被静默吃光(2026-08-29
+        // 部署审计实锤)。role=issue 已列入清扫白名单 MANAGED_ROLES。
+        labels: {
+          "com.mae-flow-cloud.instance": instance.fingerprint,
+          "com.mae-flow-cloud.role": "issue",
+          "com.mae-flow-cloud.task": live.id,
+        },
+      },
     );
     // root 守护进程 + 非 root 容器用户时,把工作区属主在 docker run
     // 前交给容器用户(与需求侧同款;非 root 服务自判 active:false 跳过)。

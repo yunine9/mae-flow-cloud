@@ -56,6 +56,36 @@ test("投递成功:待办事实与审批链接送达账号;同待办幂等", asy
   }
 });
 
+test("人工意见修好后通知原作者复检；同一代码版本幂等且带 /mfc", async () => {
+  const luban = new FakeLubanServer();
+  await luban.start();
+  try {
+    const notifier = new Notifier({ endpoint: luban.endpoint });
+    const input = {
+      taskId: "T-review-ready",
+      senderAccount: "owner",
+      account: "reviewer",
+      summary: "Agent 已处理你提出的 2 条意见，请逐条确认。",
+      link: "http://x/work/T-review-ready",
+      revisionKey: "cycle-1-sha-a",
+    };
+    const first = await notifier.notifyReviewReady(input);
+    const replay = await notifier.notifyReviewReady(input);
+    assert.equal(replay, first);
+    assert.equal(luban.messages.length, 1, "恢复重放不能重复轰炸检视人");
+    assert.equal(first.account, "reviewer");
+    assert.match(first.text, /Agent 已处理你提出的 2 条意见/);
+    assert.match(first.text, /先输入“\/mfc”激活 Mae-Flow 插件/);
+
+    await notifier.notifyReviewReady({
+      ...input, revisionKey: "cycle-2-sha-b",
+    });
+    assert.equal(luban.messages.length, 2, "新一轮返工完成后必须重新提醒");
+  } finally {
+    await luban.stop();
+  }
+});
+
 test("清空重跑会同时清除旧通知审批上下文", async () => {
   const notifier = new Notifier({
     endpoint: "http://127.0.0.1:1/unused",

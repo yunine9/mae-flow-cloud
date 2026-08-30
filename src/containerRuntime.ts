@@ -405,7 +405,7 @@ export interface ManagedContainerSweepResult {
   removed: string[];
 }
 
-const MANAGED_ROLES = new Set(["coding", "prepush", "system-check"]);
+const MANAGED_ROLES = new Set(["coding", "prepush", "system-check", "issue"]);
 
 /**
  * 清理上一次进程崩溃遗留的本实例容器。

@@ -192,7 +192,7 @@ test("build playbook: 安全地忽略符号链接，不建议泄露凭据或关�
   assert.match(guidance, /确实没有 UT 入口时如实报告/);
 });
 
-test("build playbook: 实际注入预推送 Agent mission，而非仅停留在文档", (t) => {
+test("build playbook: 实际注入 Build-Fix Agent mission，而非仅停留在文档", (t) => {
   const repo = repository({
     "pom.xml": "<project><artifactId>maven-compiler-plugin</artifactId></project>",
     "src/main/java/App.java": "class App {}",
@@ -211,7 +211,7 @@ test("build playbook: 实际注入预推送 Agent mission，而非仅停留在�
     attemptTimeoutMs: 60 * 60_000,
     buildCommandTimeoutMs: 45 * 60_000,
   });
-  assert.match(mission, /内网推送前构建参考/);
+  assert.match(mission, /内网 Build-Fix 参考/);
   assert.match(mission, /pom\/package.*真实可执行入口/);
   assert.match(mission, /mvn package -DskipTests/);
   assert.match(mission, /mvn test/);

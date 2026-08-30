@@ -1,5 +1,3 @@
-export const TASK_KNOWLEDGE_PAGE_SIZE = 40;
-
 export interface LaunchEngineeringKnowledge {
   id: string;
   title: string;
@@ -14,15 +12,27 @@ export interface LaunchEngineeringKnowledge {
 export interface LaunchTeamSkill {
   name: string;
   description: string;
+  nature: "business" | "engineering";
   business_module_ids: string[];
   repositories: string[];
   technologies: string[];
   path: string;
 }
 
-export type TaskKnowledgeChoice =
-  | { kind: "engineering"; key: string; item: LaunchEngineeringKnowledge }
-  | { kind: "skill"; key: string; item: LaunchTeamSkill };
+export interface LaunchBusinessKnowledge {
+  id: string;
+  title: string;
+  summary: string;
+  when_to_use: string;
+  form: "document" | "skill" | "rule" | "example";
+  repositories: string[];
+  version: number;
+}
+
+export interface MatchedBusinessKnowledge extends LaunchBusinessKnowledge {
+  module_id: string;
+  module_name: string;
+}
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -42,11 +52,45 @@ function strings(value: unknown): string[] {
     .map((item) => item.trim()).filter(Boolean))];
 }
 
+function repositoryIdentity(value: string): string {
+  return value.trim().replace(/\/+$/, "").replace(/\.git$/i, "").toLowerCase();
+}
+
+/**
+ * 预览必须和创建任务时的模块知识匹配口径一致：只看已选模块，知识若
+ * 限定了仓库，则至少命中当前任务的一个仓库。旧服务没有 knowledge
+ * 字段时返回空清单，不能拿模块总数冒充本任务会实际使用的数量。
+ */
+export function matchBusinessModuleKnowledge(
+  modules: ReadonlyArray<{
+    id: string;
+    name: string;
+    knowledge?: readonly LaunchBusinessKnowledge[];
+  }>,
+  selectedModuleIds: readonly string[],
+  repositories: readonly string[],
+): MatchedBusinessKnowledge[] {
+  const selected = new Set(selectedModuleIds);
+  const taskRepositories = new Set(repositories
+    .map(repositoryIdentity).filter(Boolean));
+  return modules.filter((module) => selected.has(module.id))
+    .flatMap((module) => (module.knowledge ?? [])
+      .filter((item) => !item.repositories.length
+        || item.repositories.some((repository) =>
+          taskRepositories.has(repositoryIdentity(repository))))
+      .map((item) => ({
+        ...item,
+        repositories: [...item.repositories],
+        module_id: module.id,
+        module_name: module.name,
+      })));
+}
+
 /**
  * launch-options is a deployment boundary: an older service or one legacy
  * asset must not be able to take down the whole launch screen. Invalid rows
- * without a stable identity are ignored; optional matching metadata degrades
- * to an empty list (meaning generally applicable).
+ * and knowledge without mandatory governance scope are ignored: the launch
+ * page must never pretend an unclassified asset will be matched.
  */
 export function normalizeLaunchKnowledgeCatalog(value: unknown): {
   engineering: LaunchEngineeringKnowledge[];
@@ -60,7 +104,8 @@ export function normalizeLaunchKnowledgeCatalog(value: unknown): {
   for (const raw of rawEngineering) {
     const item = record(raw);
     const id = string(item?.id);
-    if (!item || !id || engineeringIds.has(id)) continue;
+    const technologies = strings(item?.technologies);
+    if (!item || !id || engineeringIds.has(id) || !technologies.length) continue;
     const rawForm = string(item.form);
     const form = rawForm === "rule" || rawForm === "example"
       ? rawForm : "document";
@@ -73,7 +118,7 @@ export function normalizeLaunchKnowledgeCatalog(value: unknown): {
       form,
       business_module_ids: strings(item.business_module_ids),
       repositories: strings(item.repositories),
-      technologies: strings(item.technologies),
+      technologies,
     });
   }
 
@@ -83,58 +128,23 @@ export function normalizeLaunchKnowledgeCatalog(value: unknown): {
   for (const raw of rawSkills) {
     const item = record(raw);
     const path = string(item?.path);
-    if (!item || !path || skillPaths.has(path)) continue;
+    const nature = string(item?.nature);
+    const businessModuleIds = strings(item?.business_module_ids);
+    const technologies = strings(item?.technologies);
+    if (!item || !path || skillPaths.has(path)
+        || nature !== "business" && nature !== "engineering"
+        || nature === "business" && !businessModuleIds.length
+        || nature === "engineering" && !technologies.length) continue;
     skillPaths.add(path);
     skills.push({
       path,
       name: string(item.name) || path,
       description: string(item.description),
-      business_module_ids: strings(item.business_module_ids),
+      nature,
+      business_module_ids: businessModuleIds,
       repositories: strings(item.repositories),
-      technologies: strings(item.technologies),
+      technologies,
     });
   }
   return { engineering, skills };
-}
-
-export function buildTaskKnowledgeChoices(
-  engineering: LaunchEngineeringKnowledge[],
-  skills: LaunchTeamSkill[],
-  query: string,
-): TaskKnowledgeChoice[] {
-  const choices: TaskKnowledgeChoice[] = [
-    ...engineering.map((item): TaskKnowledgeChoice => ({
-      kind: "engineering", key: `engineering:${item.id}`, item,
-    })),
-    ...skills.map((item): TaskKnowledgeChoice => ({
-      kind: "skill", key: `skill:${item.path}`, item,
-    })),
-  ];
-  const wanted = query.trim().toLocaleLowerCase();
-  if (!wanted) return choices;
-  return choices.filter((choice) => {
-    const fields = choice.kind === "engineering"
-      ? [choice.item.title, choice.item.summary, choice.item.when_to_use,
-        ...choice.item.repositories, ...choice.item.technologies]
-      : [choice.item.name, choice.item.description, choice.item.path,
-        ...choice.item.repositories, ...choice.item.technologies];
-    return fields.some((field) => field.toLocaleLowerCase().includes(wanted));
-  });
-}
-
-export function paginateTaskKnowledgeChoices(
-  choices: TaskKnowledgeChoice[],
-  requestedPage: number,
-  pageSize = TASK_KNOWLEDGE_PAGE_SIZE,
-): { items: TaskKnowledgeChoice[]; page: number; pages: number; total: number } {
-  const safePageSize = Number.isSafeInteger(pageSize) && pageSize > 0
-    ? pageSize : TASK_KNOWLEDGE_PAGE_SIZE;
-  const pages = Math.max(1, Math.ceil(choices.length / safePageSize));
-  const page = Math.min(Math.max(0, Math.trunc(requestedPage) || 0), pages - 1);
-  return {
-    items: choices.slice(page * safePageSize, (page + 1) * safePageSize),
-    page,
-    pages,
-    total: choices.length,
-  };
 }

@@ -3,7 +3,7 @@ import type {
   WorkflowAssetRef,
   WorkflowDefinition,
   WorkflowEdit,
-  WorkflowExecutionProfile,
+  WorkflowStandardBase,
   WorkflowPlanItem,
   WorkflowStagePlan,
 } from "../api";
@@ -94,7 +94,7 @@ function moveItem(
  * 无法安全应用的编辑会被忽略，详情由服务端 diagnostics 明确说明。
  */
 export function previewStages(
-  base: WorkflowExecutionProfile["base_snapshot"],
+  base: WorkflowStandardBase,
   definition: WorkflowDefinition,
 ): WorkflowStagePlan[] {
   const stages = base.stages.map((stage) => ({

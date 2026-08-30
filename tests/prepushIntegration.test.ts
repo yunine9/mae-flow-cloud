@@ -28,6 +28,7 @@ import type {
   PrePushRunRequest,
   PrePushRunner,
 } from "../src/prepushAgent.ts";
+import { PRE_PUSH_STATE_SCHEMA } from "../src/prePushVerification.ts";
 import { FakeTaskContainerHarness } from "./support/fakeTaskContainer.ts";
 import { managedFlowFixture } from "./support/managedFlowFixture.ts";
 
@@ -246,6 +247,62 @@ test("prepush 代码验证失败时禁止 push、MR 与流水线", async () => {
     assert.match(JSON.stringify(service.get(id)!.delivery ?? {}),
       /compile failed|prepush|推送前/i,
       "失败原因应留在任务交付现场");
+  } finally {
+    await model.stop();
+    await platform.stop();
+  }
+});
+
+test("失败后人工跳过的交付,MR 标题带「未经本地编译验证」标记", async () => {
+  // 检视人在 CodeHub 里看不见云端工作台;不打标,他就在不知情下背书
+  // 一份从未编译过的代码(2026-08-30 审计)。清单整理的 user_skipped
+  // 不打标——判据是 skipped_by,只有失败跳过路落它。
+  const platform = new FakeGitPlatform();
+  platform.initBare(sourceRepo(), mkdtempSync(join(tmpdir(), "mfc-prepush-p-")));
+  await platform.start();
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-prepush-data-"));
+  const model = new ScriptedModelServer(deliveryScenes(), "scripted-v1", {
+    beforeScene: managedFlowFixture(dataDir, {
+      branch: "master_bot_REQ_SKIPMARK", ticket: "REQ_SKIPMARK",
+    }),
+  });
+  await model.start();
+  // 标记逻辑只读 delivery.prepush 的落账状态,与 prepush 开关无关;
+  // 直接注入失败跳过的收据,免得测试为凑 blocked 驱动整个修复环。
+  const service = new TaskService({
+    dataDir,
+    provider: "maeflow",
+    model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    host: { kernelRoot: KERNEL_ROOT, repoPath: platform.barePath,
+            python: "python3" },
+    delivery: { platformUrl: platform.baseUrl, pollIntervalMs: 100,
+                pollTimeoutMs: 10_000 },
+  });
+  try {
+    const id = service.create("REQ_SKIPMARK：跳过要留痕", {
+      ticket: "REQ_SKIPMARK",
+    }).id;
+    (service as any).tasks.get(id).summary.delivery = {
+      prepush: {
+        schema: PRE_PUSH_STATE_SCHEMA,
+        state: "user_skipped",
+        skipped_by: "zhangsan",
+        round: 2,
+        message: "zhangsan选择跳过本地验证,编译与 UT 交由权威流水线裁决",
+        sha: "f".repeat(40),
+        workspace_fingerprint: "stale",
+        updated_at: new Date().toISOString(),
+        checks: {
+          compile: { state: "pending" },
+          unit_test: { state: "pending" },
+        },
+      },
+    };
+    await until(() => platform.mergeRequests.length > 0, "跳过后照常建 MR");
+    assert.match(platform.mergeRequests[0].title,
+      /【未经本地编译验证,zhangsan跳过】/,
+      "跳过的事实必须跟着 MR 标题走到平台上");
   } finally {
     await model.stop();
     await platform.stop();

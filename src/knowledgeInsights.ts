@@ -210,6 +210,7 @@ export function buildHostSkillEffects(
 
 function resourceKey(resource: {
   kind: KnowledgeKind;
+  name: string;
   path: string;
   repository?: string;
   scope?: string;
@@ -219,7 +220,24 @@ function resourceKey(resource: {
     return ["module", resource.module_id ?? "", resource.kind, resource.path]
       .join("\0");
   }
+  // 团队宿主 Skill 会随投影机制和版本产生不同展示路径：老任务是
+  // `宿主技能/<name>/SKILL.md`，固定快照后是
+  // `.mae-flow-work/host-skills/<version-key>/SKILL.md`。路径只是某次任务
+  // 的快照位置，Skill 名才是货架的稳定身份；否则同一资产每更新一次
+  // 就会在团队页多出一行。
+  const hostName = hostSkillName(resource);
+  if (hostName) return ["team", "skill", hostName].join("\0");
   return [resource.repository ?? "", resource.kind, resource.path].join("\0");
+}
+
+function displayPath(resource: {
+  kind: KnowledgeKind;
+  name: string;
+  path: string;
+  repository?: string;
+}): string {
+  const hostName = hostSkillName(resource);
+  return hostName ? `宿主技能/${hostName}/SKILL.md` : resource.path;
 }
 
 function completed(task: KnowledgeInsightTask): boolean {
@@ -325,8 +343,9 @@ function recommendations(
   return result.slice(0, 8);
 }
 
-/** 聚合同一批任务的知识使用趋势。重复资源按 仓库+类型+路径 合并，
- * 不按内容 digest 拆散，便于观察同一文档跨版本的长期表现。 */
+/** 聚合同一批任务的知识使用趋势。仓库/模块资源按作用域+路径合并；
+ * 团队宿主 Skill 按名称跨历史路径和内容版本合并。内容 digest 不拆行，
+ * 便于观察同一资产跨版本的长期表现。 */
 export function buildTeamKnowledgeInsights(
   tasks: KnowledgeInsightTask[],
   now = new Date(),
@@ -344,15 +363,24 @@ export function buildTeamKnowledgeInsights(
     if (!accessed && (repaired(task) || needsAttention(task))) {
       frictionWithoutAccess.push(task.id);
     }
+    // 历史任务若在升级前后都留下同一宿主 Skill 的不同路径，归一化后
+    // 仍只能算“一个任务提供/选择/访问过一次”；访问事件本身则继续
+    // 累加，保留真实阅读次数。
+    const providedKeys = new Set<string>();
+    const selectedKeys = new Set<string>();
+    const loadedKeys = new Set<string>();
+    const accessedKeys = new Set<string>();
     for (const resource of reusable) {
       const key = resourceKey(resource);
+      const hostName = hostSkillName(resource);
       const item = aggregate.get(key) ?? {
         key,
         kind: resource.kind,
         name: resource.name,
-        path: resource.path,
+        path: displayPath(resource),
         repository: resource.repository,
-        ...(resource.scope ? { scope: resource.scope } : {}),
+        ...(hostName ? { scope: "team" as const }
+          : resource.scope ? { scope: resource.scope } : {}),
         ...(resource.module_id ? { module_id: resource.module_id } : {}),
         ...(resource.module_name ? { module_name: resource.module_name } : {}),
         ...(resource.asset_version !== undefined
@@ -370,15 +398,27 @@ export function buildTeamKnowledgeInsights(
       if (!item.description && resource.description) {
         item.description = resource.description;
       }
-      item.provided_tasks += 1;
-      if (resource.selected) item.selected_tasks += 1;
-      if (resource.loaded_count > 0) item.loaded_tasks += 1;
+      if (!providedKeys.has(key)) {
+        item.provided_tasks += 1;
+        providedKeys.add(key);
+      }
+      if (resource.selected && !selectedKeys.has(key)) {
+        item.selected_tasks += 1;
+        selectedKeys.add(key);
+      }
+      if (resource.loaded_count > 0 && !loadedKeys.has(key)) {
+        item.loaded_tasks += 1;
+        loadedKeys.add(key);
+      }
       if (resource.read_count > 0) {
-        item.accessed_tasks += 1;
         item.access_events += resource.read_count;
-        if (completed(task)) item.completed_tasks += 1;
-        if (repaired(task)) item.repair_tasks += 1;
-        if (needsAttention(task)) item.attention_tasks += 1;
+        if (!accessedKeys.has(key)) {
+          item.accessed_tasks += 1;
+          if (completed(task)) item.completed_tasks += 1;
+          if (repaired(task)) item.repair_tasks += 1;
+          if (needsAttention(task)) item.attention_tasks += 1;
+          accessedKeys.add(key);
+        }
       }
       if (resource.last_at
           && (!item.last_used_at || resource.last_at > item.last_used_at)) {

@@ -42,21 +42,65 @@ import { KnowledgeFlywheel } from "./KnowledgeFlywheel";
 import { WishWall, type WishWallDraft } from "./WishWall";
 import { BusinessModuleLibrary } from "./BusinessModuleLibrary";
 import { WorkflowAssetWorkspace } from "./workflows";
+import {
+  knowledgeAssetPath,
+  readKnowledgeAssetFocus,
+  type KnowledgeAssetFocus,
+} from "./knowledgeNavigation";
 
 // 问题处理页独立分包(懒加载):问题流与需求流互不拖累,改哪边都不
 // 用动另一边的构建产物。
 const IssueBoard = lazy(() =>
   import("./issues/IssueBoard").then((module) => ({ default: module.IssueBoard })));
+// 帮助中心内容多、截图也多，但不是每次进工作台都要用。和问题处理页一样
+// 独立加载，不能为了 FAQ 拖慢用户每天打开的首页。
+const HelpCenter = lazy(() =>
+  import("./HelpCenter").then((module) => ({ default: module.HelpCenter })));
 
 // 两侧各退役一个视图,取并集:"business" 并入团队资产页签(modules,
 // 本地);"history" 并入团队任务的档案页签(origin)。
 type View = "team" | "mine" | "issues" | "profile" | "users"
-  | "settings" | "knowledge" | "wishes";
+  | "settings" | "knowledge" | "wishes" | "help";
 type Theme = "light" | "dark";
 type Density = "comfortable" | "compact";
 type MineScope = "all" | "waiting" | "intervention" | "active" | "delivered";
 type TeamTaskTab = "current" | "archive";
 type TeamAssetTab = "knowledge" | "modules" | "workflows";
+
+const APP_VIEWS = new Set<View>([
+  "team", "mine", "issues", "profile", "users", "settings", "knowledge",
+  "wishes", "help",
+]);
+const TEAM_ASSET_TABS = new Set<TeamAssetTab>([
+  "knowledge", "modules", "workflows",
+]);
+
+function appHistoryState(view: View, teamAssetTab?: TeamAssetTab) {
+  const current = history.state && typeof history.state === "object"
+    ? history.state as Record<string, unknown> : {};
+  return {
+    ...current,
+    maeFlowView: view,
+    maeFlowTeamAssetTab: teamAssetTab,
+  };
+}
+
+function viewFromHistoryState(state: unknown): View | undefined {
+  if (!state || typeof state !== "object") return undefined;
+  const candidate = (state as Record<string, unknown>).maeFlowView;
+  return typeof candidate === "string" && APP_VIEWS.has(candidate as View)
+    ? candidate as View : undefined;
+}
+
+function teamAssetTabFromHistoryState(
+  state: unknown,
+): TeamAssetTab | undefined {
+  if (!state || typeof state !== "object") return undefined;
+  const candidate = (state as Record<string, unknown>).maeFlowTeamAssetTab;
+  return typeof candidate === "string"
+      && TEAM_ASSET_TABS.has(candidate as TeamAssetTab)
+    ? candidate as TeamAssetTab : undefined;
+}
 
 interface WorkspaceRoute {
   taskId: string;
@@ -89,6 +133,8 @@ function workspacePath(taskId: string, reviewId = ""): string {
 }
 
 function initialView(user: AuthUser): View {
+  if (/^\/help(?:\/|$)/.test(location.pathname)) return "help";
+  if (readKnowledgeAssetFocus()) return "knowledge";
   // 管理员没有"我的待办"(不下单的角色没有个人任务收件箱,用户拍板):
   // 深链也一律落到团队总览,从那里打开任意任务行使兜底控制。
   if (user.role === "admin") return "team";
@@ -163,7 +209,7 @@ function InterventionSetting({
         nextPush = user.push_confirmation !== false;
         setPush(nextPush);
         notes.push(nextPush
-          ? "后续任务会在推送前验证完成后展示最终交付范围"
+          ? "后续任务会在 Build-Fix 完成后展示最终交付范围"
           : "后续任务推送不再等待清单确认；已在等确认的任务点一下确认即可");
       }
       setNote(notes.join("；"));
@@ -178,7 +224,7 @@ function InterventionSetting({
       <div><span className="section-kicker">HUMAN INTERVENTION</span><h2 id="approval-setting-title">人工介入程度</h2></div>
       <span className="approval-setting-state">当前：{current.title}</span>
     </header>
-    <p className="approval-setting-summary">一处设定,所有任务生效:过程节点(需求澄清、方案确认)停不停,推送前验证完成后是否确认最终交付范围。同一文件集合内的自动修复不会重复询问；交付范围变化时会重新确认。流水线绑 SHA、MR 人工合入等门禁始终生效。</p>
+    <p className="approval-setting-summary">一处设定,所有任务生效:过程节点(需求澄清、方案确认)停不停,Build-Fix 完成后是否确认最终交付范围。纯自动修复留在已确认文件范围内时不会重复询问；人工检视意见引发的修改一定回到意见作者复检。流水线绑 SHA、MR 人工合入等门禁始终生效。</p>
     <div className="approval-options" role="group" aria-label="人工介入程度">
       {INTERVENTION_PRESETS.map((preset) => <button type="button" key={preset.key}
         className={current.key === preset.key ? "on" : ""} disabled={busy}
@@ -342,10 +388,13 @@ function NavIcon({ name }: { name: View }) {
   if (name === "wishes") return <svg viewBox="0 0 24 24" aria-hidden><path d="M12 20.25s-7.25-4.1-7.25-10.1A4.4 4.4 0 0 1 12 6.8a4.4 4.4 0 0 1 7.25 3.35c0 6-7.25 10.1-7.25 10.1Z" /><path d="m17.5 3.75.45 1.3 1.3.45-1.3.45-.45 1.3-.45-1.3-1.3-.45 1.3-.45.45-1.3Z" /></svg>;
   if (name === "users") return <svg viewBox="0 0 24 24" aria-hidden><circle cx="9" cy="8" r="3" /><path d="M3.75 18.5c.55-3.15 2.3-4.75 5.25-4.75s4.7 1.6 5.25 4.75M16.5 7.5h4M18.5 5.5v4" /></svg>;
   if (name === "settings") return <svg viewBox="0 0 24 24" aria-hidden><circle cx="12" cy="12" r="3" /><path d="M12 4.5v2M12 17.5v2M4.5 12h2M17.5 12h2M6.7 6.7l1.4 1.4M15.9 15.9l1.4 1.4M6.7 17.3l1.4-1.4M15.9 8.1l1.4-1.4" /></svg>;
+  if (name === "help") return <svg viewBox="0 0 24 24" aria-hidden><circle cx="12" cy="12" r="8.25" /><path d="M9.7 9.1a2.5 2.5 0 0 1 4.8.9c0 1.8-2.5 2-2.5 3.7M12 17.3v.15" /></svg>;
   return <svg viewBox="0 0 24 24" aria-hidden><path d="M5 4.75h14A1.25 1.25 0 0 1 20.25 6v12A1.25 1.25 0 0 1 19 19.25H5A1.25 1.25 0 0 1 3.75 18V6A1.25 1.25 0 0 1 5 4.75Z" /><path d="M8 9h8M8 13h5" /></svg>;
 }
 
-const DELIVERED_STATUSES: TaskStatus[] = ["await_merge", "completed"];
+// MR 绿灯/待合入仍是活动任务：它继续监听门禁、流水线和人工检视。
+// 只有真正合入后的 completed 才进入“已交付”。
+const DELIVERED_STATUSES: TaskStatus[] = ["completed"];
 
 export function App() {
   const [theme, setTheme] = useState<Theme>(() =>
@@ -361,9 +410,19 @@ export function App() {
   const [knowledgeInsights, setKnowledgeInsights] = useState<TeamKnowledgeInsights>();
   const [knowledgeInsightsLoading, setKnowledgeInsightsLoading] = useState(false);
   const [knowledgeInsightsError, setKnowledgeInsightsError] = useState("");
-  const [teamAssetTab, setTeamAssetTab] = useState<TeamAssetTab>("knowledge");
+  const [teamAssetTab, setTeamAssetTab] = useState<TeamAssetTab>(() =>
+    readKnowledgeAssetFocus()?.kind === "business" ? "modules" : "knowledge");
+  const [knowledgeFocus, setKnowledgeFocus] = useState<KnowledgeAssetFocus | undefined>(
+    readKnowledgeAssetFocus,
+  );
   /** 下单选择器"查看方案"带过来的直达目标;资产库挂载时消费。 */
   const [workflowFocusId, setWorkflowFocusId] = useState("");
+  const [helpArticleId, setHelpArticleId] = useState(() => {
+    const match = location.pathname.match(/^\/help(?:\/([^/]+))?\/?$/);
+    if (!match?.[1]) return "getting-started";
+    try { return decodeURIComponent(match[1]); }
+    catch { return "getting-started"; }
+  });
   const [myReviews, setMyReviews] = useState<ReviewRequest[]>([]);
   const [artifactTaskId, setArtifactTaskId] = useState("");
   const [artifactTaskSnapshot, setArtifactTaskSnapshot] = useState<TaskSummary>();
@@ -372,6 +431,8 @@ export function App() {
   const [launchGate, setLaunchGate] = useState<LaunchGateState>({ kind: "checking" });
   const launchGateRequest = useRef(0);
   const [taskSync, setTaskSync] = useState<TaskSyncState>({ kind: "loading" });
+  /** 深链指向的任务已不存在时的提示(空串=无提示)。 */
+  const [missingTaskNotice, setMissingTaskNotice] = useState("");
   const refreshInFlight = useRef<Promise<void> | undefined>(undefined);
   const [targetRoute, setTargetRoute] = useState(readWorkspaceRoute);
   const targetTaskId = targetRoute.taskId;
@@ -389,6 +450,44 @@ export function App() {
     addEventListener("popstate", syncRoute);
     return () => removeEventListener("popstate", syncRoute);
   }, []);
+
+  useEffect(() => {
+    const syncKnowledgeRoute = (event: PopStateEvent) => {
+      const focus = readKnowledgeAssetFocus();
+      setKnowledgeFocus(focus);
+      if (!focus) {
+        const restoredView = viewFromHistoryState(event.state);
+        const restoredTab = teamAssetTabFromHistoryState(event.state);
+        if (restoredView) setView(restoredView);
+        if (restoredTab) setTeamAssetTab(restoredTab);
+        return;
+      }
+      setTeamAssetTab(focus.kind === "business" ? "modules" : "knowledge");
+      setView("knowledge");
+    };
+    addEventListener("popstate", syncKnowledgeRoute);
+    return () => removeEventListener("popstate", syncKnowledgeRoute);
+  }, []);
+
+  // FAQ 支持把具体文章链接直接发给别人；浏览器前进/后退也要真的切页，
+  // 不能只改地址栏。离开 /help 后回到该角色的默认首页。
+  useEffect(() => {
+    if (!session) return;
+    const syncHelpRoute = () => {
+      const match = location.pathname.match(/^\/help(?:\/([^/]+))?\/?$/);
+      if (match) {
+        let articleId = "getting-started";
+        try { articleId = match[1] ? decodeURIComponent(match[1]) : articleId; }
+        catch { /* 坏地址由帮助中心回到第一篇 */ }
+        setHelpArticleId(articleId);
+        setView("help");
+      } else {
+        setView((current) => current === "help" ? initialView(session) : current);
+      }
+    };
+    addEventListener("popstate", syncHelpRoute);
+    return () => removeEventListener("popstate", syncHelpRoute);
+  }, [session?.username, session?.role]);
 
   useEffect(() => {
     void getSession().then((user) => {
@@ -503,7 +602,15 @@ export function App() {
   useEffect(() => {
     if (!targetTaskId || artifactTaskId === targetTaskId || tasks.length === 0) return;
     const target = tasks.find((task) => task.id === targetTaskId);
-    if (!target) return;
+    if (!target) {
+      // 深链指向的任务不在列表里(已删除/链接过期):静默返回的话页面
+      // 停在普通"我的工作",人只会怀疑自己点错或系统坏了(2026-08-30
+      // 审计)。说破并把 URL 收回根路径。
+      setMissingTaskNotice(targetTaskId);
+      setTargetRoute({ taskId: "", reviewId: "" });
+      history.replaceState({}, "", "/");
+      return;
+    }
     setArtifactTaskSnapshot(target);
     setArtifactTaskId(target.id);
     const canonical = workspacePath(targetTaskId, targetReviewId);
@@ -655,35 +762,75 @@ export function App() {
     wishes: { title: "许愿墙", description: "汇聚真实诉求和使用问题；每一个声音都应该被看见、被回应、被闭环。" },
     users: { title: "账号管理", description: "创建本地账号并分配管理员或开发权限。" },
     settings: { title: "服务设置", description: "集中管理模型网关和团队运行策略；部署链路在此只读自检。" },
+    help: { title: "使用帮助", description: "用大白话讲清每个功能：什么时候用、点哪里、接下来会发生什么。" },
   }[view];
   const relevantWaiting = view === "mine"
     ? myWaiting.length + pendingReviews.length
     : view === "team" && teamTaskTab === "current" ? waitingCount : 0;
   const launchEntry = launchGateCopy(launchGate);
+  const selectView = (next: View) => {
+    const leavingKnowledgeFocus = readKnowledgeAssetFocus();
+    if (leavingKnowledgeFocus) setKnowledgeFocus(undefined);
+    if (next === "help") {
+      const nextPath = `/help/${encodeURIComponent(helpArticleId)}`;
+      if (location.pathname !== nextPath) {
+        history.replaceState(appHistoryState(view,
+          view === "knowledge" ? teamAssetTab : undefined), "",
+          location.pathname + location.search);
+        history.pushState(appHistoryState("help"), "", nextPath);
+      }
+    } else if (/^\/help(?:\/|$)/.test(location.pathname)) {
+      history.pushState(appHistoryState(next,
+        next === "knowledge" ? teamAssetTab : undefined), "", "/");
+    } else if (leavingKnowledgeFocus) {
+      history.pushState(appHistoryState(next,
+        next === "knowledge" ? teamAssetTab : undefined), "", "/");
+    } else if (location.pathname === "/") {
+      history.replaceState(appHistoryState(next,
+        next === "knowledge" ? teamAssetTab : undefined), "",
+        location.pathname + location.search);
+    }
+    setView(next);
+  };
+  const selectTeamAssetTab = (next: TeamAssetTab) => {
+    setTeamAssetTab(next);
+    if (!knowledgeFocus) {
+      if (location.pathname === "/") {
+        history.replaceState(appHistoryState("knowledge", next), "",
+          location.pathname + location.search);
+      }
+      return;
+    }
+    setKnowledgeFocus(undefined);
+    history.pushState(appHistoryState("knowledge", next), "", "/");
+  };
   return <div className="app-shell">
     <aside className="sidebar">
       <div className="brand-lockup"><span className="brand-symbol" aria-hidden><svg viewBox="0 0 28 28"><path d="M5.5 20.5 10.7 7l3.3 7.15L17.3 7l5.2 13.5" /><path d="M8.1 16.1h11.8" /></svg></span><span className="brand-copy"><strong>Mae-Flow</strong><small>{session.role === "admin" ? "Management Console" : "Developer Workspace"}</small></span></div>
       <nav className="sidebar-nav" aria-label="视图切换">
         {session.role === "admin" ? <>
           <span className="nav-section-label">管理视角</span>
-          <NavButton view="team" current={view} onSelect={setView} label="团队任务" badge={waitingCount} />
-          <NavButton view="wishes" current={view} onSelect={setView} label="许愿墙" />
-          <NavButton view="knowledge" current={view} onSelect={setView} label="团队资产" />
+          <NavButton view="team" current={view} onSelect={selectView} label="团队任务" badge={waitingCount} />
+          <NavButton view="wishes" current={view} onSelect={selectView} label="许愿墙" />
+          <NavButton view="knowledge" current={view} onSelect={selectView} label="团队资产" />
           <span className="nav-section-label admin-tools">系统管理</span>
-          <NavButton view="users" current={view} onSelect={setView} label="账号管理" />
-          <NavButton view="settings" current={view} onSelect={setView} label="服务设置" />
+          <NavButton view="users" current={view} onSelect={selectView} label="账号管理" />
+          <NavButton view="settings" current={view} onSelect={selectView} label="服务设置" />
         </> : <>
           <span className="nav-section-label">个人工作台</span>
-          <NavButton view="mine" current={view} onSelect={setView} label="我的需求" badge={myWaiting.length + pendingReviews.length} personal />
-          <NavButton view="issues" current={view} onSelect={setView} label="问题处理" />
-          <NavButton view="profile" current={view} onSelect={setView} label="个人设置" />
+          <NavButton view="mine" current={view} onSelect={selectView} label="我的需求" badge={myWaiting.length + pendingReviews.length} personal />
+          <NavButton view="issues" current={view} onSelect={selectView} label="问题处理" />
+          <NavButton view="profile" current={view} onSelect={selectView} label="个人设置" />
           <span className="nav-section-label team-context">团队信息</span>
-          <NavButton view="team" current={view} onSelect={setView} label="团队任务" badge={waitingCount} />
-          <NavButton view="wishes" current={view} onSelect={setView} label="许愿墙" />
-          <NavButton view="knowledge" current={view} onSelect={setView} label="团队资产" />
+          <NavButton view="team" current={view} onSelect={selectView} label="团队任务" badge={waitingCount} />
+          <NavButton view="wishes" current={view} onSelect={selectView} label="许愿墙" />
+          <NavButton view="knowledge" current={view} onSelect={selectView} label="团队资产" />
         </>}
       </nav>
       <div className="sidebar-bottom">
+        <div className="sidebar-help-entry">
+          <NavButton view="help" current={view} onSelect={selectView} label="使用帮助" />
+        </div>
         <DensitySwitch density={density} onChange={changeDensity} />
         <ThemeSwitch theme={theme} onChange={changeTheme} />
         <div className="sidebar-foot session-foot"><span className="account-avatar" aria-hidden>{session.username.slice(0, 1).toUpperCase()}</span><span className="sidebar-account"><strong>{session.username}</strong><small>{session.role === "admin" ? "管理员" : "开发成员"}</small></span><button type="button" className="logout-button" onClick={signOut} title="退出登录" aria-label="退出登录"><svg viewBox="0 0 20 20"><path d="M8 4H4.75A1.25 1.25 0 0 0 3.5 5.25v9.5A1.25 1.25 0 0 0 4.75 16H8M12.5 6.5 16 10l-3.5 3.5M7 10h9" /></svg></button></div>
@@ -691,7 +838,7 @@ export function App() {
     </aside>
 
     <div className="workspace">
-      <header className="workspace-header"><div><div className="eyebrow">MAE-FLOW CLOUD</div><h1>{header.title}</h1><p className={view === "mine" ? "header-context-line" : undefined}>{view === "mine" && <span className="header-user-context">{session.username}</span>}<span>{header.description}</span></p></div><div className="workspace-header-actions">{view !== "wishes" && <TaskSyncIndicator state={taskSync} onRetry={refresh} />}{relevantWaiting > 0 && view !== "users" && view !== "settings" && <div className="header-attention"><span className="attention-pulse" aria-hidden /><span><strong>{relevantWaiting}</strong>{view === "mine" ? " 项需要我处理" : " 项工作等待决策"}</span></div>}{view === "mine" && session.role !== "admin" && <div className="header-launch-gate"><button type="button" className="header-launch" disabled={!launchEntry.enabled} title={launchEntry.title} aria-label={launchEntry.ariaLabel} onClick={() => { if (launchEntry.enabled) setLaunchOpen(true); }}><svg viewBox="0 0 20 20" aria-hidden>{launchEntry.enabled ? <path d="M10 4v12M4 10h12" /> : <><rect x="5" y="8.5" width="10" height="8" rx="1.5" /><path d="M7.5 8.5V6.75a2.5 2.5 0 0 1 5 0V8.5" /></>}</svg><span>发起新任务</span></button>{launchEntry.helper && (launchEntry.action ? <button type="button" className="header-unlock" title={launchEntry.title} onClick={() => launchEntry.action === "profile" ? setView("profile") : void refreshLaunchGate(true)}>{launchEntry.helper}<svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg></button> : <span className="header-unlock is-status" title={launchEntry.title}>{launchEntry.helper}</span>)}</div>}</div></header>
+      <header className="workspace-header"><div><div className="eyebrow">MAE-FLOW CLOUD</div><h1>{header.title}</h1><p className={view === "mine" ? "header-context-line" : undefined}>{view === "mine" && <span className="header-user-context">{session.username}</span>}<span>{header.description}</span></p></div><div className="workspace-header-actions">{view !== "wishes" && view !== "help" && <TaskSyncIndicator state={taskSync} onRetry={refresh} />}{relevantWaiting > 0 && view !== "users" && view !== "settings" && <div className="header-attention"><span className="attention-pulse" aria-hidden /><span><strong>{relevantWaiting}</strong>{view === "mine" ? " 项需要我处理" : " 项工作等待决策"}</span></div>}{view === "mine" && session.role !== "admin" && <div className="header-launch-gate"><button type="button" className={`header-launch${launchEntry.enabled ? "" : " is-blocked"}`} title={launchEntry.title} aria-label={launchEntry.ariaLabel} onClick={() => setLaunchOpen(true)}><svg viewBox="0 0 20 20" aria-hidden>{launchEntry.enabled ? <path d="M10 4v12M4 10h12" /> : <><rect x="5" y="8.5" width="10" height="8" rx="1.5" /><path d="M7.5 8.5V6.75a2.5 2.5 0 0 1 5 0V8.5" /></>}</svg><span>发起新任务</span></button>{launchEntry.helper && (launchEntry.action ? <button type="button" className="header-unlock" title={launchEntry.title} onClick={() => launchEntry.action === "profile" ? setView("profile") : void refreshLaunchGate(true)}>{launchEntry.helper}<svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg></button> : <span className="header-unlock is-status" title={launchEntry.title}>{launchEntry.helper}</span>)}</div>}</div></header>
       <main className="workspace-main">
         {view === "team" && <section className="team-tasks-workspace">
           <nav className="team-task-tabs" aria-label="团队任务视图" role="tablist">
@@ -733,22 +880,23 @@ export function App() {
           <nav className="team-assets-tabs" aria-label="团队资产类型">
             <button type="button" className={teamAssetTab === "knowledge" ? "active" : ""}
               aria-pressed={teamAssetTab === "knowledge"}
-              onClick={() => setTeamAssetTab("knowledge")}>
+              onClick={() => selectTeamAssetTab("knowledge")}>
               <strong>知识资产</strong><small>团队通用知识及全部资产的真实使用效果</small>
             </button>
             <button type="button" className={teamAssetTab === "modules" ? "active" : ""}
               aria-pressed={teamAssetTab === "modules"}
-              onClick={() => setTeamAssetTab("modules")}>
+              onClick={() => selectTeamAssetTab("modules")}>
               <strong>业务模块</strong><small>模块是抽屉，集中维护业务语义和模块知识</small>
             </button>
             <button type="button" className={teamAssetTab === "workflows" ? "active" : ""}
               aria-pressed={teamAssetTab === "workflows"}
-              onClick={() => setTeamAssetTab("workflows")}>
+              onClick={() => selectTeamAssetTab("workflows")}>
               <strong>工作流方案</strong><small>保存、复制、审核并精确编排阶段内能力</small>
             </button>
           </nav>
           {teamAssetTab === "knowledge" ? <KnowledgeFlywheel
             admin={session.role === "admin"}
+            initialAsset={knowledgeFocus}
             insights={knowledgeInsights}
             loading={knowledgeInsightsLoading}
             error={knowledgeInsightsError}
@@ -758,7 +906,9 @@ export function App() {
               if (target) openArtifacts(target);
             }}
           /> : teamAssetTab === "modules" ? <BusinessModuleLibrary
-            admin={session.role === "admin"} />
+            admin={session.role === "admin"}
+            initialAsset={knowledgeFocus?.kind === "business"
+              ? knowledgeFocus : undefined} />
             : <WorkflowAssetWorkspace initialWorkflowId={workflowFocusId
               || undefined} />}
         </section>}
@@ -767,11 +917,17 @@ export function App() {
           onDraftConsumed={() => setWishDraft(undefined)} />}
 
         {view === "mine" && <>
+          {missingTaskNotice && <div className="missing-task-notice" role="alert">
+            <span>任务 {missingTaskNotice} 不存在或已被删除,已返回「我的需求」。
+              链接可能已过期。</span>
+            <button type="button" onClick={() => setMissingTaskNotice("")}>知道了</button>
+          </div>}
           <PersonalActionInbox
             waiting={myWaiting}
             intervention={myIntervention}
+            merges={myTasks.filter((task) => task.status === "await_merge")}
             reviews={pendingReviews}
-            tasks={tasks}
+            tasks={myTasks}
             onOpen={openArtifacts}
           />
           <section className="personal-pulse four" aria-label="我的任务摘要">
@@ -801,17 +957,53 @@ export function App() {
         {view === "users" && session.role === "admin"
           && <UsersBoard me={session.username} />}
         {view === "settings" && session.role === "admin" && <SettingsBoard />}
+        {view === "help" && <Suspense fallback={<div className="help-loading">使用帮助加载中…</div>}>
+          <HelpCenter viewer={session}
+            initialArticleId={helpArticleId}
+            onArticleChange={(articleId) => {
+              setHelpArticleId(articleId);
+              history.pushState({}, "", `/help/${encodeURIComponent(articleId)}`);
+            }} />
+        </Suspense>}
       </main>
     </div>
     {launchOpen && <LaunchWorkspace session={session}
-      onCreated={refresh} onClose={() => setLaunchOpen(false)}
+      onCreated={(created) => {
+        void refresh();
+        // 下单成功当场打开新任务工作台:比"弹窗一关、任务沉进列表中段"
+        // 直接得多——人立刻看到"已创建,排队中"(2026-08-30 审计)。
+        openArtifacts(created);
+      }} onClose={() => setLaunchOpen(false)}
+      onOpenKnowledgeAsset={(target) => {
+        // 当前历史项记住打开全文前所在视图；返回根路径时 popstate 才能
+        // 恢复“我的需求”，而不是只去掉高亮却仍滞留在团队资产。
+        history.replaceState(appHistoryState(view,
+          view === "knowledge" ? teamAssetTab : undefined), "",
+          location.pathname + location.search);
+        setLaunchOpen(false);
+        setKnowledgeFocus(target);
+        setTeamAssetTab(target.kind === "business" ? "modules" : "knowledge");
+        setWorkflowFocusId("");
+        setView("knowledge");
+        const next = knowledgeAssetPath(target);
+        if (location.pathname + location.search !== next) {
+          history.pushState(appHistoryState("knowledge",
+            target.kind === "business" ? "modules" : "knowledge"), "", next);
+        }
+      }}
       onOpenWorkflowAssets={(workflowId) => {
         setLaunchOpen(false);
+        setKnowledgeFocus(undefined);
         setTeamAssetTab("workflows");
         // 从下单选择器带 id 直达该方案详情(复制/编辑都在那里),
         // 不再把人扔到资产库首页自己找(审计 P1-9)。
         setWorkflowFocusId(workflowId ?? "");
         setView("knowledge");
+        if (location.pathname + location.search !== "/") {
+          history.pushState(appHistoryState("knowledge", "workflows"), "", "/");
+        } else {
+          history.replaceState(appHistoryState("knowledge", "workflows"), "", "/");
+        }
       }} />}
     {artifactTask && <TaskWorkspace
       task={artifactTask}
@@ -843,16 +1035,22 @@ export function App() {
 function PersonalActionInbox({
   waiting,
   intervention,
+  merges,
   reviews,
   tasks,
   onOpen,
 }: {
   waiting: TaskSummary[];
   intervention: TaskSummary[];
+  /** await_merge:全链路最后一个必须人动手的动作(去 CodeHub 合入)。
+   * 曾被归进绿色"完成堆"不进待办,任务从视野里消失、MR 躺到过期
+   * (2026-08-30 审计)。 */
+  merges: TaskSummary[];
   reviews: ReviewRequest[];
   tasks: TaskSummary[];
   onOpen: (task: TaskSummary) => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const seen = new Set<string>();
   const items: Array<{
     key: string;
@@ -899,7 +1097,21 @@ function PersonalActionInbox({
       action: "查看现场",
     });
   }
-  const shown = items.slice(0, 3);
+  for (const task of merges) {
+    if (seen.has(task.id)) continue;
+    seen.add(task.id);
+    items.push({
+      key: `merge:${task.id}`,
+      task,
+      kicker: "等待你去合入",
+      title: task.title ?? task.requirement,
+      detail: task.delivery?.mr_url
+        ? `验证已通过,请到 CodeHub 完成检视与合入:${task.delivery.mr_url}`
+        : "验证已通过,请到 CodeHub 完成检视与合入",
+      action: "查看合入请求",
+    });
+  }
+  const shown = expanded ? items : items.slice(0, 3);
   return <section className="personal-action-inbox" aria-labelledby="personal-action-title">
     <div className="personal-action-head">
       <div><span className="section-kicker">NEXT ACTION</span>
@@ -915,8 +1127,15 @@ function PersonalActionInbox({
       </article>
     ))}</div> : <div className="personal-action-clear">
       <span aria-hidden>✓</span><div><strong>当前没有需要你处理的事项</strong>
-        <p>Agent 正在继续推进；新的确认、检视或异常会优先出现在这里。</p></div>
+        {/* 零任务的新用户看到"Agent 正在推进"会以为后台有活在跑,
+            白等半天(2026-08-30 审计)。 */}
+        <p>{tasks.length
+          ? "Agent 正在继续推进；新的确认、检视或异常会优先出现在这里。"
+          : "你还没有任务——点右上角「发起新任务」开始;需要人工处理的事项会优先出现在这里。"}</p></div>
     </div>}
+    {items.length > 3 && <button type="button" className="personal-action-more"
+      onClick={() => setExpanded((current) => !current)}>
+      {expanded ? "收起" : `还有 ${items.length - 3} 项 →`}</button>}
   </section>;
 }
 

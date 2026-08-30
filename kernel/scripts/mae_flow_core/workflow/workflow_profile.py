@@ -13,6 +13,10 @@ _ITEM_KINDS = {
     "activity", "knowledge", "skill", "agent", "tool", "instruction",
 }
 _ASSET_STATES = {"available", "unavailable", "incompatible"}
+# v1 execution-profile 退役后(2026-08-29,趁无存量统一),文字建议层
+# 以 supplements 并入本文件:任务补充说明/仓库约定/团队指引都走这里,
+# 定制只剩一个文件、一条加载路、一处门禁。
+_SUPPLEMENT_SCOPES = ("team", "business_module", "repository", "task")
 
 
 def _workflow_profile_revision(profile):
@@ -146,7 +150,7 @@ def _snapshot_identity_match_errors(base, final):
             if base.get(key) != final.get(key)]
 
 
-def _profile_field_errors(profile):
+def _profile_field_errors(profile, structural):
     errors = []
     if not isinstance(profile.get("source"), dict):
         errors.append("workflow profile has no source")
@@ -154,7 +158,11 @@ def _profile_field_errors(profile):
             ("edits", "edits"),
             ("asset_manifest", "asset manifest"),
             ("diagnostics", "diagnostics")):
-        if not isinstance(profile.get(key), list):
+        value = profile.get(key)
+        # supplement-only 档没有结构化记账义务;字段一旦出现仍须成形。
+        if value is None and not structural:
+            continue
+        if not isinstance(value, list):
             errors.append("workflow profile %s must be a list" % label)
     return errors
 
@@ -184,6 +192,45 @@ def _asset_manifest_errors(profile):
     return errors
 
 
+def _supplement_item_errors(item, label):
+    if not isinstance(item, dict):
+        return ["%s must be an object" % label]
+    errors = _identity_errors(
+        item, label, ("source_id", "title", "instructions"))
+    scope = str(item.get("scope") or "")
+    if scope not in _SUPPLEMENT_SCOPES:
+        errors.append("%s has unknown scope %s" % (label, scope))
+    if len(str(item.get("instructions") or "")) > 2000:
+        errors.append("%s exceeds 2000 characters" % label)
+    return errors
+
+
+def _supplement_errors(profile):
+    supplements = profile.get("supplements")
+    if supplements is None:
+        return []
+    if not isinstance(supplements, list):
+        return ["workflow profile supplements must be a list"]
+    errors = [] if len(supplements) <= 12 else [
+        "workflow profile has too many supplements"]
+    for index, item in enumerate(supplements):
+        errors.extend(_supplement_item_errors(
+            item, "workflow supplement %s" % (index + 1)))
+    order = [_SUPPLEMENT_SCOPES.index(str(item.get("scope")))
+             for item in supplements
+             if isinstance(item, dict)
+             and str(item.get("scope") or "") in _SUPPLEMENT_SCOPES]
+    if order != sorted(order):
+        errors.append("workflow profile supplements are out of precedence order")
+    return errors
+
+
+def has_final_plan(profile):
+    """结构化定格是否在场。补充建议(supplements)可以单独存在——
+    supplement-only 的任务按平台默认方案执行,只叠文字建议。"""
+    return bool((profile or {}).get("final_snapshot"))
+
+
 def workflow_profile_errors(profile):
     if not isinstance(profile, dict):
         return ["workflow profile must be an object"]
@@ -191,12 +238,19 @@ def workflow_profile_errors(profile):
               ["workflow profile schema must be %s" % WORKFLOW_PROFILE_SCHEMA])
     base = profile.get("base_snapshot")
     final = profile.get("final_snapshot")
-    errors.extend(_snapshot_errors(base, "workflow base snapshot"))
-    errors.extend(_snapshot_errors(final, "workflow final snapshot"))
+    # 结构化部分可整体缺席(supplement-only);一旦出现就必须完整成对。
+    if base is not None or final is not None:
+        errors.extend(_snapshot_errors(base, "workflow base snapshot"))
+        errors.extend(_snapshot_errors(final, "workflow final snapshot"))
+    elif not profile.get("supplements"):
+        errors.append(
+            "workflow profile must carry a final snapshot or supplements")
     if isinstance(base, dict) and isinstance(final, dict):
         errors.extend(_snapshot_identity_match_errors(base, final))
         errors.extend(_locked_floor_errors(base, final))
-    errors.extend(_profile_field_errors(profile))
+    errors.extend(_supplement_errors(profile))
+    errors.extend(_profile_field_errors(
+        profile, base is not None or final is not None))
     errors.extend(_asset_manifest_errors(profile))
     if profile.get("revision") != _workflow_profile_revision(profile):
         errors.append("workflow profile revision does not match its snapshot")
@@ -219,6 +273,24 @@ def load_workflow_profile(root=None):
     except Exception as exc:
         return None, ("⚠ 本任务工作流定制无法读取，已采用既有 Mae-Flow 方案：%s" %
                       exc)
+
+
+def render_workflow_supplements(profile):
+    """Render layered text guidance for ``current`` and fallback sessions.
+
+    v1 render_execution_profile 的直系后继:同一段边界声明原文保留——
+    建议层永远低于阶段指令/真实证据/人工决定/权限,冲突部分无效。"""
+    supplements = (profile or {}).get("supplements") or ()
+    if not supplements:
+        return ""
+    lines = ["──── 已固定的执行补充（建议层） ────"]
+    for item in supplements:
+        lines.extend(("【%s】" % item["title"], item["instructions"]))
+    lines.append(
+        "边界：这些补充只调整关注点、执行顺序和协作方式；若与当前阶段指令、"
+        "真实证据、人工决定或 Git/写入/交付权限冲突，冲突部分无效，"
+        "继续按平台规则执行并明确说明。")
+    return "\n".join(lines)
 
 
 def workflow_stage(profile, playbook_id):

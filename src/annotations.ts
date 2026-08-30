@@ -22,7 +22,12 @@ export type AnnotationKind = "doc" | "code";
 /** verified = 人看过改动、点了"确认通过"——这是人的判断,不是系统推断,
  * 所以它只能由按钮产生,永远不会被重锚定自动打上。 */
 export type AnnotationStatus = "draft" | "sent" | "verified" | "dropped";
-export type SentVia = "interrupt" | "decision" | "pipeline_evidence";
+export type SentVia =
+  | "interrupt"
+  | "decision"
+  | "pipeline_evidence"
+  /** MR 已创建后的本地检视：进入当前 MR 的持续修复环。 */
+  | "review_repair";
 
 export interface Annotation {
   id: string;
@@ -44,6 +49,8 @@ export interface Annotation {
   sent_at?: string;
   sent_via?: SentVia;
   verified_at?: string;
+  /** 非作者(管理员)代确认时记谁点的;作者本人裁决不填。 */
+  verified_by?: string;
   /** 第几次返工(0 = 首轮)。返工回到 draft,走原有的两条送出通道。 */
   rework?: number;
   /** 返工时锚点若已失效,这里存上一轮针对的原文——给模型看历史。 */
@@ -63,9 +70,10 @@ export interface AnnotationInput {
 type Operation =
   | { op: "add"; record: Annotation }
   | { op: "edit"; id: string; note: string; at: string }
-  | { op: "drop"; id: string }
+  /** by 缺席 = 作者本人(老账);带 by = 管理员代闭环,审计凭它。 */
+  | { op: "drop"; id: string; by?: string }
   | { op: "sent"; ids: string[]; via: SentVia; at: string }
-  | { op: "verify"; id: string; at: string }
+  | { op: "verify"; id: string; at: string; by?: string }
   | { op: "reopen"; id: string; at: string;
       line?: number; anchor?: string; note?: string };
 
@@ -144,6 +152,7 @@ export class AnnotationStore {
         if (found) {
           found.status = "verified";
           found.verified_at = operation.at;
+          found.verified_by = operation.by;
         }
         continue;
       }
@@ -206,13 +215,18 @@ export class AnnotationStore {
    * 但清单是人自己的看板:提过二十条之后满屏都是已完成的旧条目,
    * 反而看不见当前要紧的那几条。移除只是从看板上拿掉,jsonl 里留痕
    * 照查;界面上因此把措辞分开说,别让人误以为能撤回。 */
-  drop(id: string, by: string): Annotation {
+  drop(id: string, by: string, override = false): Annotation {
     const found = this.list().find((item) => item.id === id);
     if (!found) throw new AnnotationError(`批注不存在: ${id}`);
-    if (found.author !== by) {
+    if (found.author !== by && !override) {
       throw new AnnotationPermissionError(`这条是 ${found.author} 写的,不能替他删`);
     }
-    this.append({ op: "drop", id });
+    // override = 管理员出路:作者不在场时,一条未闭环批注会把整单的
+    // 推送永远锁死(2026-08-30 审计)。代删必须留痕(op.by),不是撤销
+    // "谁的意见谁裁决"——那仍是默认规则,这里只是给死锁开的有账可查
+    // 的门。
+    this.append(found.author !== by
+      ? { op: "drop", id, by } : { op: "drop", id });
     return { ...found, status: "dropped" };
   }
 
@@ -239,11 +253,12 @@ export class AnnotationStore {
     this.append({ op: "sent", ids, via, at: new Date().toISOString() });
   }
 
-  /** 谁的意见谁裁决:和 drop 同一条规矩,替别人点"通过"等于替他签字。 */
-  private judgeable(id: string, by: string): Annotation {
+  /** 谁的意见谁裁决:和 drop 同一条规矩,替别人点"通过"等于替他签字。
+   * override 是管理员的死锁出路,凭 op.by 留痕(见 drop 的注释)。 */
+  private judgeable(id: string, by: string, override = false): Annotation {
     const found = this.list().find((item) => item.id === id);
     if (!found) throw new AnnotationError(`批注不存在: ${id}`);
-    if (found.author !== by) {
+    if (found.author !== by && !override) {
       throw new AnnotationPermissionError(`这条是 ${found.author} 写的,只能由他裁决`);
     }
     if (found.status === "draft") {
@@ -256,11 +271,13 @@ export class AnnotationStore {
   }
 
   /** 确认通过:人看过那处改动,认了。检视闭环的收口一步。 */
-  verify(id: string, by: string): Annotation {
-    const found = this.judgeable(id, by);
+  verify(id: string, by: string, override = false): Annotation {
+    const found = this.judgeable(id, by, override);
     const at = new Date().toISOString();
-    this.append({ op: "verify", id, at });
-    return { ...found, status: "verified", verified_at: at };
+    const proxy = found.author !== by;
+    this.append(proxy ? { op: "verify", id, at, by } : { op: "verify", id, at });
+    return { ...found, status: "verified", verified_at: at,
+             ...(proxy ? { verified_by: by } : {}) };
   }
 
   /**

@@ -16,14 +16,28 @@ import {
   type KnowledgeForm,
 } from "./knowledgeAssetModel.ts";
 import {
+  listKnowledgeCandidateCatalog,
   listKnowledgeCandidates,
   type KnowledgeCandidateRecord,
 } from "./knowledgeCandidates.ts";
 
 const SNAPSHOT_DIR = "engineering-knowledge-snapshot";
 const RUNTIME_DIR = ".mae-flow-work/team-engineering-knowledge";
-const MAX_ASSETS = 40;
-const MAX_TOTAL_BYTES = 4 * 1024 * 1024;
+export const ENGINEERING_KNOWLEDGE_LIMITS = {
+  max_assets: 40,
+  max_total_bytes: 4 * 1024 * 1024,
+} as const;
+
+export interface EngineeringKnowledgeSelection {
+  /** 与任务快照完全相同的有序选择；正文只在服务端短暂持有。 */
+  items: KnowledgeCandidateRecord[];
+  /** 进入作用域匹配、尚未应用容量上限的数量。 */
+  matched: number;
+  omitted: number;
+  /** 目录里被安全跳过的坏记录；调用方不能把少项冒充完整清单。 */
+  warnings: string[];
+  limits: { max_assets: number; max_total_bytes: number };
+}
 
 export interface SelectedEngineeringKnowledge {
   id: string;
@@ -74,6 +88,43 @@ export function publishedEngineeringKnowledge(
     && item.form !== "skill");
 }
 
+/**
+ * 任务创建与发起前预览共用的唯一选择器。先按目录顺序限制 40 项，
+ * 再按同一顺序累计 4 MiB；遇到第一项越界即停止，保持历史快照语义。
+ */
+export function selectEngineeringKnowledge(options: {
+  dataDir: string;
+  repositories: string[];
+  technologies: string[];
+  businessModuleIds: string[];
+  selectedIds?: string[];
+}): EngineeringKnowledgeSelection {
+  const selected = options.selectedIds === undefined ? undefined
+    : new Set(options.selectedIds);
+  const catalog = listKnowledgeCandidateCatalog(options.dataDir);
+  const matching = catalog.candidates.filter((item) =>
+    item.status === "published" && item.nature === "engineering"
+      && item.form !== "skill")
+    .filter((item) => knowledgeMatchesTask(item, options)
+      && (!selected || selected.has(item.id)));
+  const candidates = matching.slice(0, ENGINEERING_KNOWLEDGE_LIMITS.max_assets);
+  const items: KnowledgeCandidateRecord[] = [];
+  let totalBytes = 0;
+  for (const item of candidates) {
+    if (totalBytes + item.bytes
+        > ENGINEERING_KNOWLEDGE_LIMITS.max_total_bytes) break;
+    totalBytes += item.bytes;
+    items.push(item);
+  }
+  return {
+    items,
+    matched: matching.length,
+    omitted: matching.length - items.length,
+    warnings: catalog.warnings,
+    limits: { ...ENGINEERING_KNOWLEDGE_LIMITS },
+  };
+}
+
 export function snapshotEngineeringKnowledge(options: {
   dataDir: string;
   taskWorkspace: string;
@@ -82,22 +133,14 @@ export function snapshotEngineeringKnowledge(options: {
   businessModuleIds: string[];
   selectedIds?: string[];
 }): SelectedEngineeringKnowledge[] {
-  const selected = options.selectedIds === undefined ? undefined
-    : new Set(options.selectedIds);
-  const matched = publishedEngineeringKnowledge(options.dataDir)
-    .filter((item) => knowledgeMatchesTask(item, options)
-      && (!selected || selected.has(item.id)))
-    .slice(0, MAX_ASSETS);
+  const matched = selectEngineeringKnowledge(options).items;
   const result: SelectedEngineeringKnowledge[] = [];
-  let totalBytes = 0;
   for (const item of matched) {
-    if (totalBytes + item.bytes > MAX_TOTAL_BYTES) break;
     const snapshotPath = `${SNAPSHOT_DIR}/${item.id}.md`;
     const destination = safe(options.taskWorkspace, snapshotPath);
     mkdirSync(dirname(destination), { recursive: true, mode: 0o750 });
     writeFileSync(destination, item.content, { encoding: "utf-8", mode: 0o440 });
     chmodSync(destination, 0o440);
-    totalBytes += item.bytes;
     result.push({
       id: item.id,
       title: item.title,

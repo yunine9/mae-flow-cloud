@@ -157,7 +157,7 @@ test("勾选与 commit 不同也能直接通过:宿主机械整理提交并绑�
     assert.notEqual(after, before, "整理必须落成新提交,不许改写历史");
     assert.equal(selection?.head, after);
     assert.match(repo.git("log", "-1", "--format=%s"),
-      /按推送前人工确认整理交付清单/);
+      /按最终人工检视整理交付清单/);
     assert.equal(
       repo.git("ls-files", "--", "target/classes/Feature.class"), "",
       "被剔除的新增产物必须退出索引");

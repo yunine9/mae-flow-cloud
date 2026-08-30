@@ -262,6 +262,12 @@
 .annot-panel[open] .annot-panel-chevron { transform: rotate(225deg); }
 .annot-panel-actions { padding: 10px 12px; border-bottom: 1px solid var(--line); }
 .annot-panel-actions button { width: 100%; min-height: 36px; }
+.annot-panel-actions p {
+  margin: 7px 2px 0;
+  color: var(--muted);
+  font-size: 13.5px;
+  line-height: 1.55;
+}
 
 .annot-panel-note {
   margin: 0;
@@ -271,6 +277,12 @@
   color: var(--muted);
   background: var(--surface-soft);
   border-bottom: 1px solid var(--line);
+}
+
+.annot-panel-note.review-ready {
+  color: color-mix(in srgb, var(--accent) 78%, var(--text));
+  background: color-mix(in srgb, var(--accent-soft) 72%, var(--surface));
+  border-left: 3px solid var(--accent);
 }
 
 .annot-list {

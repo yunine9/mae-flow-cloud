@@ -7,7 +7,7 @@
   "scripts": {
     "probe": "tsx src/probe.ts",
     "test": "tsx --test --test-timeout=180000 --test-force-exit tests/*.test.ts",
-    "typecheck": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.contract.json",
     "serve": "tsx src/serve.ts",
     "adapter": "tsx src/platformAdapter.ts",
     "pilot": "tsx src/pilot.ts"

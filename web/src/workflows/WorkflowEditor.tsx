@@ -4,6 +4,7 @@ import type {
   WorkflowDefinition,
   WorkflowEdit,
   WorkflowExecutionProfile,
+  WorkflowStandardBase,
   WorkflowPlanItem,
 } from "../api";
 import { AssetPicker } from "./AssetPicker";
@@ -35,7 +36,7 @@ export function WorkflowEditor({
   name: string;
   description?: string;
   definition: WorkflowDefinition;
-  base: WorkflowExecutionProfile["base_snapshot"];
+  base: WorkflowStandardBase;
   catalog: WorkflowAssetCatalogItem[];
   profile?: WorkflowExecutionProfile;
   busy?: boolean;
@@ -141,7 +142,7 @@ export function WorkflowEditor({
               op: "configure", target_id: item.id, use, instructions });
           }} />}
     </div>}
-    {view === "final" && <FinalPlanView stages={profile?.final_snapshot.stages ?? stages}
+    {view === "final" && <FinalPlanView stages={profile?.final_snapshot?.stages ?? stages}
       diagnostics={profile?.diagnostics} preview={!profile} />}
     {view === "changes" && <WorkflowDiffView definition={definition} base={base} />}
     {view === "dependencies" && <DependencyView stages={stages} catalog={catalog}

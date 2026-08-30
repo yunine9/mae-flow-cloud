@@ -117,10 +117,15 @@ export function normalizeKnowledgeAssetMetadata(input: {
   const technologies = normalizeKnowledgeLanguages(input.technologies ?? [])
     .filter((item) => item !== "agnostic");
   if (rawNature === "business") {
-    if (modules.length !== 1) throw new Error("业务知识必须归属且只归属一个业务模块");
-    if (technologies.length) {
-      throw new Error("业务知识不能标工程技术栈；若正文包含实现方法，请拆出一项工程知识");
+    if (!modules.length) {
+      throw new Error("业务知识必须至少选择一个归属业务模块");
     }
+    if (technologies.length) {
+      throw new Error("业务知识不能标工程语言；若正文包含实现方法，请拆出一项工程知识");
+    }
+  }
+  if (rawNature === "engineering" && !technologies.length) {
+    throw new Error("工程知识必须至少选择一种适用语言");
   }
   return {
     nature: rawNature as KnowledgeNature,
@@ -211,6 +216,10 @@ export function knowledgeMatchesTask(metadata: KnowledgeAssetMetadata, context: 
   technologies: string[];
   businessModuleIds: string[];
 }): boolean {
+  // 历史未治理资产可以继续在管理面展示并补标签，但不能靠“无标签”
+  // 绕过匹配进入任务。匹配失败应回到知识治理端修正，而不是让任务
+  // 发起人临时猜选。
+  if (metadata.nature === "unclassified") return false;
   const taskRepositories = new Set(context.repositories.map(repositoryIdentity));
   if (metadata.repositories.length && !metadata.repositories.some((item) =>
     taskRepositories.has(repositoryIdentity(item)))) return false;

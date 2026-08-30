@@ -55,7 +55,7 @@ export function StagePlanDialog({
   onClose: () => void;
 }) {
   const live = !!plan && plan.step.phase === phase;
-  const fixedStages = live ? [] : (profile?.final_snapshot.stages ?? [])
+  const fixedStages = live ? [] : (profile?.final_snapshot?.stages ?? [])
     .filter((stage) => stage.phase === phase);
   const needCatalog = !live && fixedStages.length === 0;
   const [catalog, setCatalog] = useState<ExecutionPlaybookOption[]>();

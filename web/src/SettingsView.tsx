@@ -21,12 +21,10 @@ import {
   reclaimUnusedBuildCaches,
   testVisionCapability,
   type BuildCacheStatus,
-  type ExecutionStageCustomization,
   type SettingsView as Settings,
   type SystemCheckResult,
   type VisionProbeResult,
 } from "./api";
-import { StageCustomizationEditor } from "./StageCustomizationEditor";
 
 type Message = { kind: "success" | "error"; text: string } | null;
 
@@ -166,9 +164,6 @@ function ExecutionPolicyCard({ view, onSaved }: {
 }) {
   const [instructions, setInstructions] = useState(
     view.execution_policy.team_instructions ?? "");
-  const [stageCustomizations, setStageCustomizations] =
-    useState<ExecutionStageCustomization[]>(
-      view.execution_policy.stage_customizations ?? []);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useMessage();
 
@@ -178,7 +173,6 @@ function ExecutionPolicyCard({ view, onSaved }: {
     try {
       onSaved(await putExecutionPolicySettings({
         team_instructions: instructions.trim(),
-        stage_customizations: stageCustomizations,
       }));
       setMessage({
         kind: "success",
@@ -209,12 +203,8 @@ function ExecutionPolicyCard({ view, onSaved }: {
         </small>
         <em className="settings-char-count">{instructions.length}/2000</em>
       </label>
-      <StageCustomizationEditor
-        playbooks={view.execution_playbooks}
-        value={stageCustomizations}
-        onChange={setStageCustomizations}
-        title="团队各阶段默认增强"
-        description="新任务默认叠加；任务发起人还可以继续增加，不能取消这些团队选择。" />
+      {/* 团队各阶段勾选增强已随 v1 退役(2026-08-29):想定制阶段
+          结构请到「团队资产 → 工作流」建团队工作流资产。 */}
       <button type="submit" disabled={busy}>
         {busy ? "正在保存…" : "保存团队执行约定"}
       </button>
@@ -607,8 +597,7 @@ export function SettingsBoard() {
       key={`v${view.models.vision.url}:${view.models.vision.model}:${view.models.vision.key_hint}`}
       view={view} onSaved={setView} />
     <ExecutionPolicyCard
-      key={`p${view.execution_policy.team_instructions ?? ""}:${JSON.stringify(
-        view.execution_policy.stage_customizations ?? [])}`}
+      key={`p${view.execution_policy.team_instructions ?? ""}`}
       view={view} onSaved={setView} />
     <RuntimeCard key={`r${JSON.stringify(view.runtime)}:${JSON.stringify(view.defaults.runtime)}`}
       view={view} onSaved={setView} />
