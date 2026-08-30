@@ -46,13 +46,14 @@ export {
 export type IssueSource = "manual" | "dts";
 
 /** 会话生命周期。idle = 回合结束、对话仍开放,用户随时可以继续说;
- * 这是问题流与任务队列的根本差异——"聊完这轮"不等于"办完了"。 */
+ * 这是问题流与任务队列的根本差异——"聊完这轮"不等于"办完了"。
+ * 没有"打断"态(2026-08-29 拍板):服务重启不是用户可停留的状态,
+ * 正在跑的会话恢复时重新入队,由并发额度泵自动续跑。 */
 export type IssueStatus =
-  | "queued"         // 已登记,首轮还没排上(并发额度)
+  | "queued"         // 排队等并发额度(登记首轮与重启恢复共用)
   | "running"        // Agent 回合进行中
   | "waiting_user"   // Agent 举了 AskUserQuestion(或平台闸门),等用户作答
   | "idle"           // 回合结束,等用户下一句话
-  | "interrupted"    // 服务重启打断,用户发消息即可续聊
   | "suspended"      // 无单流程结论为"问题",挂起等用户关联 DTS 单号转正
   | "archived"       // 已收口归档(结论见 conclusion)
   | "canceled"

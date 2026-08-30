@@ -279,7 +279,7 @@ test("视图旁路路由:文档缺失是 200 {unavailable};残缺现场时间线
     created_at: "2026-08-26T08:00:00Z",
     updated_at: "2026-08-26T09:00:00Z",
     title: "t", description: "", source: "manual",
-    status: "interrupted", stage: "locate_root", stage_note: "",
+    status: "idle", stage: "locate_root", stage_note: "",
     stage_at: "2026-08-26T09:00:00Z",
     // 没有 stage 的转移条目不上关键事件墙
     transitions: [{ at: "2026-08-26T08:30:00Z", source: "agent",
@@ -722,6 +722,154 @@ test("重启续聊:等待问题卡期间服务重启,作答仍能续上现场", 
   } finally {
     await first.shutdown().catch(() => undefined);
     await second?.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
+/** 落一个最小可恢复的问题现场(自由模式:收口不牵催办/阶段机)。 */
+function seedRecoverableIssue(
+  dataDir: string,
+  id: string,
+  patch: Record<string, unknown>,
+): void {
+  const now = "2026-08-29T00:00:00Z";
+  const root = join(dataDir, "issues", id);
+  mkdirSync(root, { recursive: true });
+  writeFileSync(join(root, "issue.json"), JSON.stringify({
+    id, account: "dev", created_at: now, updated_at: now,
+    title: `标题-${id}`, description: "", source: "manual",
+    mode: "free", status: "idle",
+    stage: "locate_root", stage_note: "正在核对日志时序", stage_at: now,
+    ...patch,
+  }));
+}
+
+test("重启恢复翻转:running/旧 interrupted 重新入队自动续跑,queued 原样开跑,waiting/suspended 不动", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-recover2-"));
+  // 五个现场直接落盘(状态各一,不跑全链,聚焦恢复语义)。旧版
+  // interrupted 已不在词表里,夹具按盘上原样写(旧版本盖的戳)。
+  seedRecoverableIssue(dataDir, "issue-1", { status: "running" });
+  seedRecoverableIssue(dataDir, "issue-2", {
+    status: "queued", stage: "registered",
+    stage_note: "已登记,准备开始首轮研究",
+  });
+  seedRecoverableIssue(dataDir, "issue-3", {
+    status: "interrupted", stage: "align_issue",
+    stage_note: "对齐方案讨论中",
+  });
+  seedRecoverableIssue(dataDir, "issue-4", { status: "waiting_user" });
+  seedRecoverableIssue(dataDir, "issue-5", { status: "suspended" });
+  const script: Scene[] = [{ text: "收到,继续推进。" }];
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
+  await model.start();
+  const logs: string[] = [];
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    log: (message) => logs.push(message),
+  });
+  try {
+    // 构造即恢复:重排队的在默认额度(2)内点火,剩下的坐额度队列;
+    // 等家人与挂起的原样不动。目录遍历序不定,按集合断言。
+    const active = ["issue-1", "issue-2", "issue-3"]
+      .map((id) => service.get(id).status).sort();
+    assert.deepEqual(active, ["queued", "running", "running"],
+      "running/旧 interrupted/queued 都进泵,但受并发额度约束");
+    assert.equal(service.get("issue-4").status, "waiting_user");
+    assert.equal(service.get("issue-5").status, "suspended");
+    assert.ok(logs.some((line) => /重启恢复: 续跑 2 个、排队 1 个/.test(line)),
+      "恢复台账行要报续跑/排队数");
+    await until(() => {
+      const statuses = ["issue-1", "issue-2", "issue-3"]
+        .map((id) => service.get(id).status);
+      if (statuses.some((s) => s === "failed")) {
+        throw new Error(service.get("issue-1").error
+          ?? service.get("issue-2").error ?? "failed");
+      }
+      return statuses.every((s) => s === "idle") ? statuses : undefined;
+    }, "重排队的会话逐个续跑收口");
+    assert.equal(service.get("issue-4").status, "waiting_user", "全程未动");
+    assert.equal(service.get("issue-5").status, "suspended", "全程未动");
+    // 按标题认领各会话的请求:重启续跑的收到平台通知开场;原样排队
+    // 的是登记首轮,仍走开场词——两条入口不混。
+    const requests = model.requests.map((request) => JSON.stringify(request));
+    for (const id of ["issue-1", "issue-3"]) {
+      assert.ok(requests.some((r) => r.includes(`标题-${id}`)
+        && r.includes("服务重启,平台自动续跑")),
+        `${id} 的续跑回合开场是平台通知口径`);
+    }
+    assert.ok(requests.some((r) => r.includes("标题-issue-2")
+      && r.includes("研究与处理 Agent")), "queued 原样走开场词");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
+test("续跑点火:开场是重启平台通知,续聊提示词带当前阶段上下文,事件流留痕", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-resume-"));
+  seedRecoverableIssue(dataDir, "issue-1", {
+    title: "登录超时", status: "running",
+  });
+  const script: Scene[] = [{ text: "收到,接着当前阶段继续排查。" }];
+  const model = new ScriptedModelServer(script);
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+  });
+  try {
+    const idle = await until(() => {
+      const issue = service.get("issue-1");
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "idle" ? issue : undefined;
+    }, "续跑回合收口");
+    assert.equal(idle.stage, "locate_root", "续跑不重置阶段");
+    // 开场词:平台通知口径 + 续聊提示词的现场块(最近阶段/登记元信息)。
+    const prompt = JSON.stringify(model.requests[0]);
+    assert.ok(prompt.includes(
+      "服务重启,平台自动续跑,接着当前阶段继续,不重复已完成的工作"));
+    assert.ok(prompt.includes("服务重启/续聊后继续同一问题会话"));
+    assert.ok(prompt.includes("最近阶段: 分析根因(正在核对日志时序)"),
+      "阶段语境原样交给重建的上下文");
+    assert.ok(prompt.includes("- 标题: 登录超时"), "登记元信息随现场重给");
+    // 重启通知以用户消息落事件流,时间线可查。
+    assert.ok(service.messages("issue-1").some((message) =>
+      message.role === "user"
+      && message.text.includes("服务重启,平台自动续跑")));
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
+test("恢复续跑受并发额度约束:超出 maxConcurrentTurns 的会话排队逐个跑,不瞬时打满", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-quota-"));
+  for (const id of ["issue-1", "issue-2", "issue-3"]) {
+    seedRecoverableIssue(dataDir, id, { status: "running" });
+  }
+  const script: Scene[] = [{ text: "继续。" }];
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    maxConcurrentTurns: 2,
+  });
+  try {
+    // 构造同步段即断言:额度内点火两个,第三个还在排队。
+    const statuses = ["issue-1", "issue-2", "issue-3"]
+      .map((id) => service.get(id).status);
+    assert.equal(statuses.filter((s) => s === "running").length, 2);
+    assert.equal(statuses.filter((s) => s === "queued").length, 1);
+    await until(() => {
+      const now = ["issue-1", "issue-2", "issue-3"]
+        .map((id) => service.get(id).status);
+      if (now.includes("failed")) throw new Error("续跑回合失败");
+      return now.every((s) => s === "idle") ? now : undefined;
+    }, "额度排队逐个收口");
+  } finally {
+    await service.shutdown().catch(() => undefined);
     await model.stop();
   }
 });

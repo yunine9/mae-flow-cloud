@@ -8,8 +8,9 @@
  * 3. 门禁(推送/提MR 的单号闸;秘密止步宿主)。
  *
  * 会话真相在 dataDir/issues/<id>/(issue.json + events.jsonl +
- * transcript.jsonl + waiting.json),API 是投影;服务重启后 running →
- * interrupted,用户发一句消息即从现场续聊。
+ * transcript.jsonl + waiting.json),API 是投影;服务重启后正在跑/
+ * 排队的会话重新入队,由并发额度泵以续聊回合自动续跑——需求侧断点
+ * 续跑的同款语义(2026-08-29 拍板),不再有等人发消息救活的滞留态。
  */
 
 import {
@@ -353,6 +354,9 @@ interface LiveIssue {
   driver?: CloudSession;
   container?: TaskContainer;
   toolContext?: IssueToolContext;
+  /** 重启续跑的待递话:恢复路径把会话重新入队时放上平台通知,泵点火
+   * 时消费——续跑与用户续聊共用同一条重建回合体,只差这句开场。 */
+  resumeMessage?: string;
 }
 
 export interface IssueMessage {
@@ -366,6 +370,12 @@ const TICKET_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 /** 催办续跑预算:每个用户/平台回合最多自动推回模型这么多次,再收嘴就
  * 落 idle 交还人工——催办是纠偏不是永动机,连收嘴说明模型真不想干了。 */
 const NUDGE_BUDGET = 2;
+
+/** 重启续跑的开场通知(#27):续跑回合以它为用户消息,落事件流——
+ * 重启这件事在会话时间线里可查,不落 stage_note(那是显示层的现场
+ * 说明,盖掉就丢了恢复前的阶段语境,续聊提示词还要用它)。 */
+const RESTART_RESUME_NOTICE =
+  "平台通知: 服务重启,平台自动续跑,接着当前阶段继续,不重复已完成的工作。";
 
 /** 结论文档回传上限:一个巨型文档不能把页面拖死。 */
 const ANALYSIS_MAX_BYTES = 512 * 1024;
@@ -444,22 +454,41 @@ export class IssueFlowService {
     this.options.log?.(message);
   }
 
+  /** 重启恢复(#27,与需求侧断点续跑同语义):正在跑的会话重新入队,
+   * 由并发额度泵逐个自动续跑(现场 driver 不在就重建,续聊提示词交给
+   * 重建的上下文);排队中的保持 queued 原样开跑;旧版本盖在盘上的
+   * interrupted 戳(词表已退役)按 running 同一条路处理。
+   * waiting_user/suspended 照旧等家人,终态不动。恢复完成补一脚泵——
+   * 泵原本只在回合点火/收口被调,启动期没有调用点,不补则重新入队的
+   * 会话永远坐着。 */
   private recover(): void {
-    let interrupted = 0;
+    let requeued = 0;
+    let keptQueued = 0;
     for (const name of readdirSync(this.issuesRoot)) {
       if (!name.startsWith("issue-")) continue;
       const root = join(this.issuesRoot, name);
       const state = loadState(root);
       if (!state) continue;
-      if (state.status === "running" || state.status === "queued") {
-        state.status = "interrupted";
-        state.stage_note = "服务重启打断,发消息即可续聊";
+      // 旧值按字符串比(interrupted 已不在词表里,类型层面不认它)。
+      const diskStatus: string = state.status;
+      const resuming = diskStatus === "running" || diskStatus === "interrupted";
+      if (resuming) {
+        state.status = "queued";
+        // 阶段语境(stage/note)原样保留:续聊提示词的「最近阶段」
+        // 靠它把现场交给重建的上下文;重启事实走转移台账与开场通知。
+        recordTransition(state, {
+          source: "platform",
+          note: "服务重启,重新入队,平台自动续跑",
+        });
         saveState(root, state);
-        interrupted += 1;
+        requeued += 1;
+      } else if (state.status === "queued") {
+        keptQueued += 1;
       }
       const live: LiveIssue = {
         id: state.id, root, state,
         humanGate: new HumanGate(join(root, "waiting.json")),
+        ...(resuming ? { resumeMessage: RESTART_RESUME_NOTICE } : {}),
       };
       this.live.set(state.id, live);
       // 流水线监看续表:deadline 还是原来那张(重启不白送预算);
@@ -472,8 +501,12 @@ export class IssueFlowService {
         }
       }
     }
-    if (interrupted) {
-      this.log(`[issue-flow] 恢复: ${interrupted} 个问题会话标记为已中断(可续聊)`);
+    if (requeued || keptQueued) {
+      this.log(`[issue-flow] 重启恢复: 续跑 ${requeued} 个、`
+        + `排队 ${keptQueued} 个问题会话`);
+      // 台账行之后立即点火:构造函数不能 await,泵与 create()/associate()
+      // 同款 void 火力——同步段把首批额度占上,余下的在收口时再泵。
+      void this.pump();
     }
   }
 
@@ -880,16 +913,25 @@ export class IssueFlowService {
     });
   }
 
-  /** 续聊形态的回合体:现场(driver)在场就把话递进去;进程重启后
-   * 重建会话,以续聊提示词把话交给重建的上下文。 */
+  /** 续聊形态的回合入口:现场(driver)在场就把话递进去;进程重启后
+   * 重建会话,以续聊提示词把话交给重建的上下文。用户主动续聊与平台
+   * 通知共用;重启自动续跑(#27)是同一回合体的另一条点火路径,走
+   * 泵(见 pump),不在这里——它必须排队等并发额度。 */
   private continueTurn(live: LiveIssue, message: string): void {
-    this.beginTurn(live, async () => {
-      await this.ensureContainer(live);
-      if (live.driver) return live.driver.continueWith(message);
-      const driver = await this.openDriver(live);
-      return driver.startResume(issueResumePrompt(live.state, message,
-        this.environmentCredentials(live)));
-    });
+    this.beginTurn(live, () => this.resumeTurnBody(live, message));
+  }
+
+  /** 续聊/续跑共用的回合体:话递给在场 driver,或重建后以续聊提示词
+   * 开回合(issueResumePrompt 带登记元信息与最近阶段,上下文不流失)。 */
+  private async resumeTurnBody(
+    live: LiveIssue,
+    message: string,
+  ): Promise<Outcome> {
+    await this.ensureContainer(live);
+    if (live.driver) return live.driver.continueWith(message);
+    const driver = await this.openDriver(live);
+    return driver.startResume(issueResumePrompt(live.state, message,
+      this.environmentCredentials(live)));
   }
 
   /** 并发额度:同时进行的回合数(等待用户/闲置/挂起的会话不占额度)。 */
@@ -897,7 +939,13 @@ export class IssueFlowService {
     for (const live of this.live.values()) {
       if (this.turning.size >= (this.options.maxConcurrentTurns ?? 2)) break;
       if (live.state.status !== "queued" || this.turning.has(live.id)) continue;
+      // 重启续跑与首轮开跑共用同一份额度:带待递话的(恢复路径重新
+      // 入队的)走续聊回合体,开场是平台通知;纯排队的是登记首轮,
+      // 仍走开场词。待递话消费即清,再泵不重放。
+      const resumeMessage = live.resumeMessage;
+      live.resumeMessage = undefined;
       this.beginTurn(live, async () => {
+        if (resumeMessage) return this.resumeTurnBody(live, resumeMessage);
         // 2026-08-28 拍板:克隆不再是回合前的自动动作——登记的仓由
         // Agent 在「拉取代码仓」阶段调 pull_repo 逐个落地(开场词有令)。
         const driver = await this.openDriver(live);
