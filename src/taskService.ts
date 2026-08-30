@@ -2696,10 +2696,13 @@ export class TaskService {
       if (!planAlerts.length && summary.workflow_profile && executionPlan
           && executionPlan.customization.effective_source
             !== "compiled_final_plan") {
+        // 实测(MFC-010)这种差异更多是"定格投影没落盘/没被读到",内核
+        // 仍按平台默认+overrides 正常编译——不是 Agent 违规。措辞按
+        // 事实说:方案投影缺失,给出实际来源;真要追责先核对两侧 hash。
         planAlerts.push(
-          "⚠ 本任务下单时定格了工作流,但内核当前执行方案未按定格生效"
-          + `(实际来源: ${executionPlan.customization.effective_source})`
-          + "——Agent 正按平台默认执行,页面上的定格方案与实际不一致。");
+          "⚠ 本任务下单时定格的工作流方案投影缺失或未被内核读到"
+          + `(内核实际执行来源: ${executionPlan.customization.effective_source})`
+          + "——通常为投影缺失而非执行偏离;若需确认,请核对任务详情中的方案指纹。");
       }
     }
     const contractStep = this.reviewContractStep(task, summary.waiting);
@@ -2731,6 +2734,9 @@ export class TaskService {
     const projected = {
       ...summary,
       delivery: projectedDelivery,
+      // 开发助手占场时,"从当前现场恢复"是条死路(resume 会 409 让人
+      // 去交还)——focus 必须知道占场事实才能指对路(MFC-029)。
+      ...(task.assistantActive ? { assistant_engaged: true } : {}),
       ...(queueIndex >= 0 ? { queue_position: queueIndex + 1 } : {}),
       title: summary.title ?? taskTitle(summary.requirement),
       updated_at: summary.updated_at ?? summary.created_at,
