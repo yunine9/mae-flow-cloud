@@ -57,6 +57,7 @@ import {
   INSTANCE_LOCK_FILE,
   InstanceLockedError,
 } from "./instanceLock.ts";
+import { inspectDeploymentRuntime } from "./deploymentPreflight.ts";
 
 const REPO_ROOT = resolve(fileURLToPath(import.meta.url), "..", "..");
 
@@ -825,8 +826,10 @@ async function main(): Promise<void> {
 
   // 任务日志环形缓冲(诊断包切片用):进程存活期间保留最近几千行。
   const taskLogRing: string[] = [];
+  const deploymentRuntime = inspectDeploymentRuntime();
   const service = new TaskService({
     dataDir, provider, model, modelsJson, maxConcurrent, settings,
+    deploymentRuntime,
     ...(issueOnly ? { requirementDisabled: true } : {}),
     vision: visionProvider && visionModel
       ? { provider: visionProvider, model: visionModel } : undefined,
@@ -899,6 +902,18 @@ async function main(): Promise<void> {
     },
     recentLog: () => [...taskLogRing],
   });
+  const platformCheck = await service.refreshDeliveryPlatformCheck();
+  const runtimeLog = deploymentRuntime.status === "error"
+    ? console.error : console.log;
+  runtimeLog(`[serve] Linux 部署自检(${deploymentRuntime.status}): `
+    + deploymentRuntime.detail
+    + (deploymentRuntime.suggestion ? `；${deploymentRuntime.suggestion}` : ""));
+  if (platformCheck) {
+    const platformLog = platformCheck.ready ? console.log : console.error;
+    platformLog(`[serve] 交付平台预检(${platformCheck.ready ? "ok" : "error"}): `
+      + platformCheck.detail
+      + (platformCheck.suggestion ? `；${platformCheck.suggestion}` : ""));
+  }
   // 先清理本 dataDir 实例上次崩溃遗留的 coding/prepush/system-check
   // 容器，再恢复任务。顺序不能反：recover 一旦入队就可能撞上旧容器。
   const swept = await service.sweepOrphanContainers();

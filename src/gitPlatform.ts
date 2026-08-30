@@ -164,7 +164,16 @@ export class FakeGitPlatform {
           // 事实展示+合入表单;合入真实推进目标 ref,不是翻状态字段。
           const pageMatch = url.pathname.match(/^\/mr\/(\d+)$/);
           const mergeMatch = url.pathname.match(/^\/mr\/(\d+)\/merge$/);
-          if (request.method === "GET" && pageMatch) {
+          if (request.method === "GET" && url.pathname === "/") {
+            reply(200, {
+              ok: true,
+              endpoints: [
+                "POST /mr",
+                "POST /pipeline/trigger",
+                "GET /pipeline/status?sha=&repo=",
+              ],
+            });
+          } else if (request.method === "GET" && pageMatch) {
             const html = this.mergeRequestPage(Number(pageMatch[1]));
             response
               .writeHead(html ? 200 : 404,

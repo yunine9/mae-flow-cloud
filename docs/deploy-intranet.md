@@ -824,7 +824,10 @@ install -m 600 /dev/null /etc/mae-flow-cloud/mcp-token
 只有多入口必须统一出口等特殊部署，才在启动参数或配置文件中设置可选的
 `--public-url http://<稳定内网域名>:8787`，它的优先级最高。
 MR/流水线服务同样是部署基础设施，管理页仅通过「部署自检」显示链路
-是否可用，不展示内部地址，也不允许运行时覆盖。
+是否可用，不展示内部地址，也不允许运行时覆盖。启动与每次手动自检都会
+只读访问平台根接口：只有明确声明 `POST /mr`、`POST /pipeline/trigger`
+和 `GET /pipeline/status` 三项能力才算通过；`200 {}` 这类“地址活着但
+接错服务”的情况会判红并阻止新需求下单，不会创建试探 MR 或流水线。
 
 两种失败语义是刻意分开的:`--config` 坏了**拒绝启动**(部署形态残缺
 比不起服害人);`settings.json` 坏了**按无覆盖处理**并记日志(它是
@@ -1062,8 +1065,10 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
 2. `npm run probe` 全绿(内核裁判在场);
 3. 网关连通:发一个最小任务,确认首回合不是空转
    (429/网关错误会如实落 failed + detail,不会假 completed);
-4. 适配层自检通过，管理员「部署自检」确认通知链接、MR/流水线连接均为
-   内网可访问地址；「统一任务容器」必须为 ok，并显示不可变镜像 digest，
+4. 适配层自检通过，管理员「部署自检」确认「Linux 部署」与 MR/流水线
+   能力均为 ok；容器部署时服务必须直接接收停止信号（PID 1），建议用
+   `exec node --import tsx src/serve.ts …` 或直接运行编译后的 JS，不要让
+   npm / tsx 启动器隔一层；「统一任务容器」也必须为 ok，并显示不可变镜像 digest，
    该项会在 bind-mounted 工作区真实写文件并编译 Java/C++，逐项写读删
    Maven/npm/ccache/XDG 缓存，检查 Node/Maven 后确认容器销毁;
 5. 一单真需求走到 `await_merge`,MR 出现在真平台上；核对

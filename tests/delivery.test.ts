@@ -21,6 +21,7 @@ import { FakeGitPlatform } from "../src/gitPlatform.ts";
 import { FakeLubanServer, Notifier } from "../src/notifier.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import {
+  deterministicDeliveryFailure,
   TaskService,
   userFacingDeliveryFailure,
 } from "../src/taskService.ts";
@@ -48,6 +49,13 @@ test("交付连接与仓库权限异常只给人话，不泄露运行时类型�
     + "error: failed to push some refs to '/Users/alice/private/origin.git'"));
   assert.match(push, /远端代码仓暂时无法写入/);
   assert.doesNotMatch(push, /TypeError|\/Users\/alice/);
+  assert.equal(deterministicDeliveryFailure(
+    "交付平台响应不完整，未返回 MR 链接"), true);
+  assert.equal(deterministicDeliveryFailure(
+    "流水线返回未知状态: (empty)"), true);
+  assert.equal(deterministicDeliveryFailure(
+    "交付平台暂时连接不上，请检查平台地址或网络"), false,
+  "网络瞬断仍应进入自动重试，不可被平台契约快停误伤");
 });
 
 function git(cwd: string, ...args: string[]): string {

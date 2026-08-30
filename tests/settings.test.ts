@@ -269,7 +269,7 @@ test("路由权限:admin 可读改,开发成员 403,密钥不出网", async () =
     };
     assert.ok(["ok", "warning", "error"].includes(checkBody.overall));
     assert.deepEqual(checkBody.items.map((item) => item.key),
-      ["data", "model", "vision", "notify", "link", "postgres", "git", "prepush",
+      ["runtime", "data", "model", "vision", "notify", "link", "postgres", "git", "prepush",
        "container"]);
     assert.equal(checkBody.items.find((item) => item.key === "model")?.status,
       "ok");

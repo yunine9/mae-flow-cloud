@@ -105,6 +105,11 @@ import type {
   WorkflowSourceRef,
   WorkflowStandardSnapshot,
 } from "./workflowDefinition.ts";
+import {
+  probeDeliveryPlatform,
+  type DeliveryPlatformCheck,
+} from "./deliveryPlatformProbe.ts";
+import type { DeploymentRuntimeCheck } from "./deploymentPreflight.ts";
 
 /**
  * 任务快照会把知识与 Skill 包设成只读；直接 rm -r 时，macOS 会因为
@@ -408,6 +413,13 @@ export function userFacingDeliveryFailure(error: unknown): string {
     /failed to push some refs to\s+(['"])[^'"]+\1/gi,
     "未能更新远端分支",
   );
+}
+
+/** 这类失败是平台契约接错/损坏，原样重放不会自愈；网络错误、限流和
+ * 超时不在这里，仍由既有恢复预算自动续推。 */
+export function deterministicDeliveryFailure(cause: string): boolean {
+  return cause.startsWith("交付平台响应不完整")
+    || cause.startsWith("流水线返回未知状态");
 }
 
 export type TaskStatus =
@@ -914,6 +926,8 @@ export interface TaskServiceOptions {
   model: string;
   /** 每个任务 agent 目录的 models.json 内容(生产=GLM 网关,演练=剧本假模型)。 */
   modelsJson: Record<string, unknown>;
+  /** serve 启动时采集的 Linux/容器信号事实；直接构造的测试形态可缺席。 */
+  deploymentRuntime?: DeploymentRuntimeCheck;
   /** 问题流专用部署(--issue-only):需求流程整体停用——内核/交付
    * 平台/prepush 不加载,create() 直接拒绝,launchOptions 摆出明面
    * 的 blocker。历史任务台账仍可读(管理/兜底不受影响)。 */
@@ -1670,6 +1684,9 @@ export class TaskService {
   private historyMutationActive = new Set<string>();
   /** 每次体积扫描都可能很重；自动回收与管理员手动回收不许重叠。 */
   private buildCacheReclaimActive = false;
+  /** 平台探测是异步的，launchOptions 只消费最近一次事实。serve 在开放
+   * HTTP 前先探一次，管理页每次“重新检查”都会刷新。 */
+  private deliveryPlatformCheck?: DeliveryPlatformCheck;
 
   constructor(readonly options: TaskServiceOptions) {
     this.reviews = new ReviewStore(join(options.dataDir, "reviews.jsonl"));
@@ -1690,6 +1707,16 @@ export class TaskService {
     if (!process.env.MAE_FLOW_DESKTOP_NOTIFY) {
       process.env.MAE_FLOW_NO_NOTIFY ??= "1";
     }
+  }
+
+  async refreshDeliveryPlatformCheck(): Promise<DeliveryPlatformCheck | undefined> {
+    const platform = this.effectivePlatformUrl();
+    if (!platform) {
+      this.deliveryPlatformCheck = undefined;
+      return undefined;
+    }
+    this.deliveryPlatformCheck = await probeDeliveryPlatform(platform);
+    return this.deliveryPlatformCheck;
   }
 
   observeLinkBase(base: string | undefined): void {
@@ -2618,6 +2645,12 @@ export class TaskService {
    * 会启动并销毁一个短命构建容器，以免把宿主工具链误报成任务可用。 */
   async systemCheck(): Promise<SystemCheckResult> {
     const items: SystemCheckItem[] = [];
+    const runtime = this.options.deploymentRuntime;
+    items.push(runtime
+      ? { key: "runtime", label: "Linux 部署", ...runtime }
+      : { key: "runtime", label: "Linux 部署", status: "warning",
+          detail: "当前调用形态没有部署运行信息",
+          suggestion: "请从正式 serve 入口运行部署自检" });
     try {
       accessSync(this.options.dataDir, constants.R_OK | constants.W_OK);
       items.push({ key: "data", label: "任务数据", status: "ok",
@@ -2687,15 +2720,21 @@ export class TaskService {
               detail: "连接与投影正常" });
 
     const platform = this.effectivePlatformUrl();
+    const platformCheck = platform
+      ? await this.refreshDeliveryPlatformCheck() : undefined;
     items.push(!this.options.host
       ? { key: "git", label: "Git 交付", status: "warning",
           detail: "当前是纯会话模式", suggestion: "交付代码前启用内核模式与代码仓" }
       : !platform
-        ? { key: "git", label: "Git 交付", status: "warning",
+        ? { key: "git", label: "Git 交付", status: "error",
             detail: "MR / 流水线服务未就绪",
             suggestion: "请部署维护人员检查平台适配服务" }
-        : { key: "git", label: "Git 交付", status: "ok",
-            detail: "平台已配置;代码仓逐单填写(本部署不设默认仓)" });
+        : !platformCheck?.ready
+          ? { key: "git", label: "Git 交付", status: "error",
+              detail: platformCheck?.detail ?? "平台能力预检未完成",
+              suggestion: platformCheck?.suggestion }
+          : { key: "git", label: "Git 交付", status: "ok",
+              detail: platformCheck.detail });
 
     const containerProbe = await this.probeTaskContainerToolchain();
     items.push(!this.options.prepush?.enabled
@@ -4208,6 +4247,15 @@ export class TaskService {
     if (this.options.host && !this.effectivePlatformUrl()) {
       blockers.push({ key: "platform", where: "admin",
         label: "交付基础设施未就绪；代码暂时无法交付，请联系部署维护人员检查 MR / 流水线服务" });
+    }
+    if (this.options.host && this.deliveryPlatformCheck
+        && !this.deliveryPlatformCheck.ready) {
+      blockers.push({ key: "platform_unhealthy", where: "admin",
+        label: `交付平台预检未通过：${this.deliveryPlatformCheck.detail}` });
+    }
+    if (this.options.host && this.options.deploymentRuntime?.status === "error") {
+      blockers.push({ key: "deployment_runtime", where: "admin",
+        label: `部署自检未通过：${this.options.deploymentRuntime.detail}` });
     }
     return {
       model: active,
@@ -11381,7 +11429,8 @@ export class TaskService {
         // 还是 4xx,不烧重试预算,当场如实停摆喊人(MFC-020 实测同文
         // MR-400 以 poll_interval 节拍刷了 86 条日志、两轮预算)。
         // 408/429 是超时/限流,仍按瞬时故障自愈。
-        if (/HTTP 4(?!08\b|29\b)\d\d\b/.test(cause)) {
+        const contractBroken = deterministicDeliveryFailure(cause);
+        if (/HTTP 4(?!08\b|29\b)\d\d\b/.test(cause) || contractBroken) {
           this.markVerificationStalled(task, `等待权威流水线：${reason}`);
         } else {
           const retrying = cause.startsWith("交付平台暂时连接不上")
