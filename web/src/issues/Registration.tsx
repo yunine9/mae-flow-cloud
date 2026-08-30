@@ -142,12 +142,10 @@ export function IssueRegistration({
   const [tab, setTab] = useState<"dts" | "manual">("manual");
   // 两个子面板常驻(隐藏切换):DTS 列表、勾选与表单状态跨页签驻留,
   // 首开「DTS 列表」自动拉取一次,之后靠「刷新」手动更新。
-  return <section className="issue-section" aria-labelledby="issue-register-title">
+  return <section className="issue-section" aria-label="发起问题会话">
+    {/* 页签即区块头:两个页签各自表意(登记问题/DTS 列表),上面再压
+        一层"发起会话/登记问题"标题是三重冗余,且对 DTS 页签名不副实。 */}
     <div className="section-head">
-      <div>
-        <span className="section-kicker">发起会话</span>
-        <h2 id="issue-register-title">登记问题</h2>
-      </div>
       <div className="issue-register-tabs" role="tablist">
         <button type="button" role="tab" aria-selected={tab === "manual"}
           className={tab === "manual" ? "on" : ""}
