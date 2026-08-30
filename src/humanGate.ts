@@ -25,6 +25,8 @@ export interface WaitingRecord {
   step: string;
   call_id: string;
   question: Record<string, unknown>;
+  /** 举卡前 Agent 刚展示的上文(清单/确认单),随卡呈现防盲签。 */
+  preface?: string;
   /** 提问前模型的最后一段话:审批卡的上下文。"编译与 UT 命令如上表"
    * 这类指代,表就在这里——不带上它,卡在页面上就是悬空的
    * (真人实战第一单实测)。 */
@@ -82,6 +84,10 @@ export class HumanGate {
     callId: string;
     questionInput: Record<string, unknown>;
     context?: string;
+    /** 卡片正文之外的"上文":举卡前 Agent 刚展示的清单/说明。卡上写
+     * "上述配置是否正确"时,"上述"必须就在卡里,不能让人去现场流水里
+     * 回翻(MFC-028 盲签风险)。 */
+    preface?: string;
   }): WaitingRecord {
     const waitingId = `${options.taskId}:${options.callId}`;
     const store = this.load();
@@ -94,6 +100,7 @@ export class HumanGate {
       call_id: options.callId,
       question: options.questionInput,
       context: options.context || undefined,
+      preface: options.preface || undefined,
       state_version: 1,
       status: "waiting",
       decision: "",

@@ -860,7 +860,19 @@ export function TaskWorkspace({
                 {materialView === "diff"
                   ? <GitDiff text={content} branch={branch}
                       hideKey={task.id}
+                      scopeLabel={pushReview
+                        ? diffScope === "changes"
+                          ? `本次修改 · ${(pushReview.base_sha ?? "").slice(0, 7)}`
+                            + ` → ${(pushReview.head_sha ?? "").slice(0, 7)}`
+                          : `完整交付 · ${(pushReview.baseline_sha
+                              ?? pushReview.base_sha ?? "").slice(0, 7)}`
+                            + ` → ${(pushReview.head_sha ?? "").slice(0, 7)}`
+                        : undefined}
                       selectable={canOperate
+                        // waiting 残留(如 await_merge 后列表快照没带
+                        // waiting 键)不得再开勾选:必须真的在等这张卡
+                        // (MFC-009)。
+                        && task.status === "waiting_for_human"
                         && task.waiting?.recommended_view === "diff"
                         && (!pushReview || diffScope === "full")}
                       selectionKey={task.waiting?.waiting_id}

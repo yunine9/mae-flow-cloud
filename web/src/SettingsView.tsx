@@ -348,9 +348,11 @@ function ModelsCard({ view, onSaved }: {
 }) {
   const models = view.models;
   const defaults = view.defaults.models;
-  // 接口格式默认 OpenAI Chat(用户拍板 2026-08-26);已存配置回显原格式。
+  // 接口格式:已存配置 > 部署默认 > OpenAI Chat(用户拍板 2026-08-26)。
+  // 部署用 --models 配了 anthropic 协议时,健康检查曾按 openai 回落
+  // 打到 /chat/completions,同一配置假红(MFC-011)。
   const [apiFormat, setApiFormat] = useState(
-    models.api ?? "openai-completions");
+    models.api ?? defaults.api ?? "openai-completions");
   const [url, setUrl] = useState(models.url ?? defaults.url ?? "");
   const [apiKey, setApiKey] = useState("");
   const [model, setModel] = useState(models.model ?? defaults.model ?? "");

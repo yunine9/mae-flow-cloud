@@ -738,6 +738,13 @@ export function App() {
       ? {
           ...current,
           ...latest,
+          // 易变字段必须以最新响应为准——包括"从有到无"。waiting 清掉
+          // 后 JSON 里没有这个键,普通 spread 会让旧决策卡/勾选条永远
+          // 残留在工作台上(MFC-009:await_merge 后仍显示"最终范围
+          // 2/21")。undefined 覆盖即删除。
+          waiting: latest.waiting,
+          delivery: latest.delivery,
+          delivery_selection: latest.delivery_selection,
           knowledge_usage: current.knowledge_usage,
         }
       : latest);

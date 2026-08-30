@@ -135,6 +135,7 @@ export function GitDiff({
   selectionKey = "",
   initialSelectedPaths,
   onSelectionChange,
+  scopeLabel,
 }: {
   text: string;
   branch?: string;
@@ -145,6 +146,10 @@ export function GitDiff({
   selectionKey?: string;
   initialSelectedPaths?: string[];
   onSelectionChange?: (selection: GitDiffSelection) => void;
+  /** 当前对比范围的人话(如"本次修改 · a2f2715 → 510a5fa")。缺省
+   * 沿用工作区语义。曾经硬编码"任务基线至当前工作区",HEAD→HEAD
+   * 的增量也顶着这行标题(MFC-007)。 */
+  scopeLabel?: string;
 }) {
   const files = useMemo(() => parseChanges(text), [text]);
   const [selected, setSelected] = useState(files[0]?.key ?? "");
@@ -529,7 +534,8 @@ export function GitDiff({
             <span>CODE REVIEW</span>
             <strong>代码审阅</strong>
             <small><code title={`当前分支：${branchLabel}`}>{branchLabel}</code>
-              <i>·</i>{files.length} 个文件 · {kinds.join("、")}</small>
+              <i>·</i>{files.length} 个文件 · {kinds.join("、")}
+              {scopeLabel ? <> · {scopeLabel}</> : null}</small>
           </div>
           <div className="code-review-totals" aria-label="变更统计">
             <b>+{additions}</b><i>−{deletions}</i>
@@ -541,7 +547,7 @@ export function GitDiff({
             <span>WORKTREE</span>
             <strong>{files.length} 个文件发生变化</strong>
             <small><code title={`当前分支：${branchLabel}`}>{branchLabel}</code>
-              <i>·</i>{kinds.join("、")} · 任务基线至当前工作区</small>
+              <i>·</i>{kinds.join("、")} · {scopeLabel ?? "任务基线至当前工作区"}</small>
           </div>
           <div className="change-summary-actions">
             <div className="change-totals" aria-label="变更统计">

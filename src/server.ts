@@ -694,6 +694,11 @@ export function createTaskServer(
                 configured: !!modelSpec.baseUrl && !!modelSpec.apiKey && !!model,
                 url: modelSpec.baseUrl ? String(modelSpec.baseUrl) : undefined,
                 model: model || undefined,
+                // 协议随默认配置一并下发:健康检查必须按部署真实协议
+                // 测,不能 UI 默认 openai、部署实际 anthropic——同一份
+                // 配置一边假绿一边假红(MFC-011)。
+                api: modelSpec.api === "anthropic-messages"
+                  ? "anthropic-messages" : "openai-completions",
                 vision: {
                   configured: !!visionChoice?.model && !!visionSpec.baseUrl
                     && !!visionSpec.apiKey,

@@ -723,8 +723,13 @@ export function WaitingCard({
       {task.waiting?.context && (() => {
         /* 长背景(推送确认的文件清单动辄上百行)默认折叠只露开头——
            重点(要我做什么、较上次变了什么)在前几行,整版清单是
-           留档不是必读;需要时一键展开。 */
-        const contextText = rewritePanelPath(task.waiting.context, task.id);
+           留档不是必读;需要时一键展开。
+           preface = 举卡前 Agent 刚展示的完整清单:卡上写"上述配置
+           是否正确"时,"上述"必须就在卡里(MFC-028 盲签)。 */
+        const preface = task.waiting.preface
+          ? rewritePanelPath(task.waiting.preface, task.id) : undefined;
+        const contextText = (preface ? `${preface}\n\n---\n\n` : "")
+          + rewritePanelPath(task.waiting.context, task.id);
         const contextLines = contextText.split("\n").length;
         const collapsible = contextLines > 16;
         return (

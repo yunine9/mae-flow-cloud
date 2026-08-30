@@ -9833,3 +9833,20 @@ body[data-view="issues"] .nav-item.on { box-shadow: inset 3px 0 #c87873; }
 }
 .ws-plan-alert strong { color: var(--danger); display: block; }
 .ws-plan-alert p { margin: 6px 0 0; font-size: .92em; }
+
+/* 窄屏专注审阅(MFC-008):focused 的三栏 grid 比通用窄屏规则更特异,
+   399px 上仍保留 320px 文件树,代码列被挤出屏外。此处同特异度、
+   靠书写顺序压回单列;文件树折成顶部限高块,代码区靠横向滚动可达。 */
+@media (max-width: 760px) {
+  .git-change-view.is-focused .git-change-browser {
+    grid-template-columns: 1fr;
+  }
+  .git-change-view.is-focused .change-panel-resizer { display: none; }
+  .git-change-view.is-focused .change-files {
+    max-height: 200px;
+    overflow-y: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .code-review-head { flex-wrap: wrap; gap: 8px; }
+}

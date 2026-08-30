@@ -880,6 +880,8 @@ export interface TaskSummary {
     question?: { questions?: WaitingQuestion[] };
     /** 提问前模型的最后一段话:"如上表"这类指代的落点。 */
     context?: string;
+    /** 举卡前 Agent 刚展示的上文(完整清单/确认单),随卡呈现防盲签。 */
+    preface?: string;
     recommended_view?: "source" | "doc" | "chain" | "diff";
     /** 由服务端读取内核 flow 投影；前端据此识别关闭检视与继续处理意见
      * 的选项，不维护 build_review 等阶段表。 */
@@ -2673,6 +2675,8 @@ export interface SettingsView {
       configured: boolean;
       url?: string;
       model?: string;
+      /** 部署默认协议;健康检查与真实调用必须同协议(MFC-011)。 */
+      api?: "openai-completions" | "anthropic-messages";
       vision: {
         configured: boolean;
         provider?: string;
