@@ -310,7 +310,9 @@ function ManualRegister({
             placeholder="发生条件、影响范围、复现步骤;有日志片段也可以贴进来"
             onChange={(event) => setDescription(event.target.value)} />
         </label>
-        <label className="issue-field wide">
+        {/* 未选模块时选择器占满一行;选中后与只读仓清单并排一行,
+            少占一整行。 */}
+        <label className={selectedModule ? "issue-field" : "issue-field wide"}>
           <span>业务模块 <i className="req">*</i></span>
           <select value={moduleId}
             onChange={(event) => setModuleId(event.target.value)}>
@@ -325,22 +327,20 @@ function ManualRegister({
             模块目录为空——先到「知识飞轮 → 业务模块」登记并绑定代码仓,再回来发起。
           </small>}
         </label>
-        {selectedModule && <div className="issue-field wide">
-          <span>将拉取的代码仓 <i>模块「{selectedModule.name}」的绑定清单,只读</i></span>
+        {selectedModule && <div className="issue-field">
+          <span>将拉取的代码仓 <i>{selectedModule.repositories.length} 个,只读</i></span>
           <ul className="issue-module-repos">
             {selectedModule.repositories.map((url) => (
               <li key={url} title={url}>{repoLabel(url)}</li>
             ))}
           </ul>
-          <small>登记后按模块绑定拉取 {selectedModule.repositories.length} 个仓;
-            要增删仓去「知识飞轮 → 业务模块」。</small>
         </div>}
       </div>
     </div>
     <div className="issue-group wide">
       <span className="issue-group-title">网管环境</span>
       <div className="issue-group-body">
-        <label className="issue-field wide">
+        <label className="issue-field">
           <span>网管环境IP <i className="req">*</i></span>
           <input value={envHosts} spellCheck={false}
             placeholder="60.14.46.16"
