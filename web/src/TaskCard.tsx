@@ -379,6 +379,7 @@ export function TaskProgress({
   const currentIndex = completed ? phases.length - 1 : progress.current_index;
   const currentLabel = completed ? "完成" : showDetailedStep
     ? progress.step ?? progress.current_phase : progress.current_phase;
+  const displayedCurrentLabel = currentLabel === "交付" ? "验证与交付" : currentLabel;
   const milestone = progress.milestone;
   const milestoneEvent = milestone
     ? ({
@@ -393,11 +394,11 @@ export function TaskProgress({
   const showMilestone = Boolean(
     milestone?.task_id && milestone.title && milestoneEvent,
   );
-  return <span className="task-progress" aria-label={`当前阶段：${currentLabel}`}>
+  return <span className="task-progress" aria-label={`当前阶段：${displayedCurrentLabel}`}>
     <span className="task-progress-caption">
       <span>当前进度</span>
       {context && <span className="task-progress-caption-context">{context}</span>}
-      <strong>{currentLabel}</strong>
+      <strong>{displayedCurrentLabel}</strong>
     </span>
     {showMilestone && milestone && (
       <span className={`task-milestone ${milestone.event}`}>
@@ -429,7 +430,7 @@ export function TaskProgress({
             },
           } : {})}>
           <i aria-hidden />
-          <span>{phase}</span>
+          <span>{phase === "交付" ? "验证与交付" : phase}</span>
         </span>;
       })}
     </span>
@@ -454,7 +455,6 @@ export function WaitingCard({
   repositorySkillSelection,
   repositoryAssigneeSelection,
   deliverySelection,
-  onDeliverySelectionChange,
   pushReview,
   onLocateDelivery,
   activeDeliveryScope,
@@ -475,7 +475,7 @@ export function WaitingCard({
   repositoryAssigneeSelection?: RepositoryAssigneeSelection;
   /** 代码检视里的文件级交付清单；由工作区变更面板的真实勾选产生。 */
   deliverySelection?: GitDiffSelection;
-  /** 右栏也是完整的交付范围控制面；改动后与左侧 diff 树双向同步。 */
+  /** 兼容调用方；文件去留只在左侧 diff 树调整，右栏不再放第二套控件。 */
   onDeliverySelectionChange?: (selection: GitDiffSelection) => void;
   /** 当前待推送代码为什么需要再检视，以及两种阅读范围。 */
   pushReview?: PushReviewPresentation;
@@ -548,6 +548,7 @@ export function WaitingCard({
     const answer = answerOf(item.question);
     return Boolean(answer) && closingAnswers.has(answer);
   });
+  const selectedAnswers = Object.values(picked).filter(Boolean);
   const selectedReviewAnswer = questions
     .filter((item) => (item.options ?? []).some((option) =>
       allChoiceAnswers.has(option)))
@@ -555,14 +556,20 @@ export function WaitingCard({
     .find(Boolean);
   const selectedEffect = choiceEffects.find((effect) =>
     effect.answers.includes(selectedReviewAnswer ?? ""));
+  // 历史任务或内核别名可能只把“需要调整代码”登记进 choice_effects，
+  // 而当前卡展示成“需要调整代码（按清单返工）”。服务端允许这种别名，
+  // 前端也必须从 diff 卡的明确返工文案兜底识别，不能仍承诺“推送”。
+  const selectedHandlesFeedback = Boolean(selectedEffect?.handles_feedback)
+    || (requiresDeliverySelection && selectedAnswers.some((answer) =>
+      /需要.*(?:调整|修改)|返工|补充/.test(answer)));
   const hasCustomPrimaryAnswer = questions.some((item) =>
     (item.options?.length ?? 0) > 0
     && !picked[item.question]
     && !!custom[item.question]?.trim());
-  const isReviewDecision = choiceEffects.some((effect) =>
-    effect.closes_feedback);
+  const isReviewDecision = requiresDeliverySelection
+    || choiceEffects.some((effect) => effect.closes_feedback);
   const deliveryReady = !requiresDeliverySelection || Boolean(deliverySelection
-    && (selectedEffect?.handles_feedback
+    && (selectedHandlesFeedback
       || deliverySelection.selectedPaths.length > 0));
   const ready = questions.every((item) => {
     const options = item.options ?? [];
@@ -617,23 +624,6 @@ export function WaitingCard({
     setCustomOpen({ ...customOpen, [question]: true });
   }
 
-  function replaceDeliverySelection(paths: string[]) {
-    if (!deliverySelection || !onDeliverySelectionChange) return;
-    onDeliverySelectionChange({
-      ...deliverySelection,
-      selectedPaths: [...paths].sort((left, right) =>
-        left.localeCompare(right)),
-    });
-  }
-
-  function toggleDeliveryPath(path: string) {
-    if (!deliverySelection) return;
-    const next = new Set(deliverySelection.selectedPaths);
-    if (next.has(path)) next.delete(path);
-    else next.add(path);
-    replaceDeliverySelection([...next]);
-  }
-
   async function submit() {
     if (!ready || submitting) return;
     const selectedOptions: Record<string, string> = {};
@@ -684,7 +674,7 @@ export function WaitingCard({
   const submitLabel = submitting ? "正在提交…"
     : repositorySkillSelection?.scanning ? "等待能力读取"
       : hasCustomPrimaryAnswer ? "提交自定义处理方式"
-        : selectedEffect?.handles_feedback
+        : selectedHandlesFeedback
           ? "提交返工意见"
           : requiresDeliverySelection && deliverySelection
             ? `按这 ${deliverySelection.selectedPaths.length} 个文件推送`
@@ -817,62 +807,24 @@ export function WaitingCard({
                 ? `${deliverySelection.selectedPaths.length} / ${deliverySelection.allPaths.length} 个文件将推送`
                 : "先打开代码差异完成检视"}</strong>
             </div>
-            {deliverySelection && onDeliverySelectionChange && (
-              <div className="delivery-scope-bulk">
-                <button type="button" onClick={() =>
-                  replaceDeliverySelection(deliverySelection.allPaths)}>
-                  全部纳入
-                </button>
-                <button type="button" onClick={() =>
-                  replaceDeliverySelection([])}>
-                  全部仅留本地
-                </button>
-              </div>
-            )}
           </header>
           {!deliverySelection ? (
-            <p>请到左侧「工作区变更」逐文件查看 diff；打开后，文件去留会在这里同步显示。</p>
+            <p>请到左侧「工作区变更」逐文件查看 diff，并在那里决定文件去留。</p>
           ) : (
-            <>
-              <div className="delivery-scope-files" aria-label="交付文件清单">
-                {deliverySelection.allPaths.map((path) => {
-                  const included = deliverySelection.selectedPaths.includes(path);
-                  const originallyCommitted = deliverySelection.committedPaths.includes(path);
-                  return (
-                    <button type="button" key={path}
-                      className={included ? "included" : "local-only"}
-                      disabled={!onDeliverySelectionChange}
-                      aria-pressed={included}
-                      onClick={() => toggleDeliveryPath(path)}>
-                      <span className="delivery-scope-check" aria-hidden>
-                        {included ? "✓" : "–"}
-                      </span>
-                      <code title={path}>{path}</code>
-                      <span className="delivery-scope-state">
-                        <strong>{included ? "纳入交付" : "仅留本地"}</strong>
-                        <small>{included
-                          ? originallyCommitted ? "随当前提交推送" : "将补入交付提交"
-                          : originallyCommitted ? "将从交付提交移出" : "不进入远端与 MR"}</small>
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-              <div className="delivery-scope-result" role="status">
-                <strong>提交右侧决定后生效</strong>
-                <span>{selectedEffect?.handles_feedback
-                  ? "这次只提交返工意见，不会推送；Agent 会按当前范围处理后再次交给你检视。"
-                  : deliverySelection.selectedPaths.length === 0
-                    ? "至少纳入一个文件才能通过；也可以选择返工，把去留原因交给 Agent。"
-                    : deliverySelectionChanged
-                      ? `Cloud 会按上面 ${deliverySelection.selectedPaths.length} 个文件机械整理提交；其余 ${deliverySelection.allPaths.length - deliverySelection.selectedPaths.length} 个只留在任务工作区。`
-                      : "保持当前提交文件集合不变，服务端复核后继续推送。"}</span>
-              </div>
-            </>
+            <div className="delivery-scope-result" role="status">
+              <strong>文件去留在左侧代码差异中调整</strong>
+              <span>{selectedHandlesFeedback
+                ? "这次只提交返工意见，不会推送；Agent 会按当前范围处理后再次交给你检视。"
+                : deliverySelection.selectedPaths.length === 0
+                  ? "至少纳入一个文件才能通过；也可以选择返工，把去留原因交给 Agent。"
+                  : deliverySelectionChanged
+                    ? `Cloud 会按左侧选中的 ${deliverySelection.selectedPaths.length} 个文件机械整理提交；其余 ${deliverySelection.allPaths.length - deliverySelection.selectedPaths.length} 个只留在任务工作区。`
+                    : "保持当前提交文件集合不变，服务端复核后继续推送。"}</span>
+            </div>
           )}
           {onLocateDelivery && (
             <button type="button" className="delivery-locate"
-              onClick={() => onLocateDelivery("full")}>回到代码差异逐行检视</button>
+              onClick={() => onLocateDelivery("full")}>打开代码差异并调整文件</button>
           )}
         </section>
       )}

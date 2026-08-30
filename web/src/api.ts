@@ -49,14 +49,22 @@ export function repairStopped(task: {
  * 人工节点与出错永远压过修复环文案(等人/坏了都比修复更紧急)。 */
 export function statusText(task: {
   status: TaskStatus;
-  delivery?: { loop?: { round: number; max?: number; state: string } };
+  delivery?: {
+    loop?: { round: number; max?: number; state: string; kind?: string };
+  };
 }): string {
   const loop = task.delivery?.loop;
   if (loop && ["queued", "running", "pausing", "verifying"]
     .includes(task.status)) {
     if (loop.state === "repairing") {
-      return `流水线修复中(第 ${loop.round}${
-        loop.max !== undefined ? `/${loop.max}` : ""} 轮)`;
+      // 人工检视刚触发返工时，round=0 表示尚未消耗任何流水线修复
+      // 轮次。它是内部状态，不应作为“第 0 轮”暴露给用户；此时用户
+      // 真正关心的是 Agent 正在处理检视意见。只有进入真实 CI 修复轮后
+      // 才展示轮次。
+      if (loop.kind === "review" || loop.round <= 0) {
+        return "正在按检视意见修改";
+      }
+      return "流水线修复中";
     }
     if (loop.state === "verifying") return "修复结果验证中";
     if (loop.state === "halted") return "自动修复已停,需人工";

@@ -22,7 +22,7 @@ test("任务焦点:机器修复、平台验证与跨仓依赖不会冒充人工�
     status: "verifying",
     delivery: { loop: { state: "repairing", round: 2 } },
   });
-  assert.match(repair.headline, /第 2 轮/);
+  assert.equal(repair.headline, "Agent 正在修复流水线问题");
   assert.equal(repair.owner, "agent");
   assert.equal(repair.needs_attention, false);
 

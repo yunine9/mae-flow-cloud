@@ -5983,6 +5983,65 @@ pre {
   width: auto; min-width: 0; min-height: 0; padding: 0;
   flex: none; flex-direction: row; border: 0; background: transparent;
 }
+.ws-execution-subnav {
+  min-height: 58px;
+  padding: 7px 20px;
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  flex: none;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.ws-execution-subnav button {
+  min-width: 180px;
+  padding: 7px 12px;
+  display: grid;
+  align-content: center;
+  gap: 2px;
+  color: var(--muted);
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+.ws-execution-subnav button:hover {
+  color: var(--text);
+  background: var(--surface-soft);
+}
+.ws-execution-subnav button.active {
+  color: var(--text-strong);
+  border-color: var(--line);
+  background: var(--surface-soft);
+  box-shadow: var(--shadow-xs);
+}
+.ws-execution-subnav strong {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13.5px;
+}
+.ws-execution-subnav strong em {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  display: inline-grid;
+  place-items: center;
+  color: #278b72;
+  border-radius: 999px;
+  background: color-mix(in srgb, #36a88b 13%, var(--surface));
+  font: 700 10px var(--font-mono);
+  font-style: normal;
+}
+.ws-execution-subnav small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--font-size-assist);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .ws-source-switch button {
   height: 32px;
   padding: 0 11px;
@@ -6162,12 +6221,16 @@ pre {
     var(--surface);
 }
 .ws-collaboration-view > .steer,
-.ws-execution-view > .execution-plan-card,
-.ws-execution-view > .workflow-profile-card,
-.ws-execution-view > .execution-panel,
-.ws-execution-view > .knowledge-footprint {
+.ws-execution-subview > .execution-plan-card,
+.ws-execution-subview > .workflow-profile-card,
+.ws-execution-subview > .execution-panel,
+.ws-execution-subview > .knowledge-footprint {
   width: min(1080px, 100%);
   margin: 0 auto;
+}
+.ws-execution-subview[hidden] { display: none; }
+.ws-execution-subview.is-knowledge > .knowledge-footprint {
+  margin-bottom: 0 !important;
 }
 
 .workflow-profile-card {
@@ -8825,6 +8888,8 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
   .ws-workspace-nav strong { font-size: 13px; }
   .ws-workspace-nav small { font-size: var(--font-size-assist); }
   .ws-pane-head { padding: 10px 14px; align-items: flex-start; flex-direction: column; }
+  .ws-execution-subnav { padding-left: 12px; padding-right: 12px; overflow-x: auto; }
+  .ws-execution-subnav button { min-width: 170px; flex: 1 0 170px; }
   .ws-pane-head > .ws-source-switch { width: 100%; overflow-x: auto; }
   .ws-source-switch { padding-left: 10px; padding-right: 10px; }
   .ws-tabs { padding-left: 10px; }

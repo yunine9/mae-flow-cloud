@@ -7027,6 +7027,15 @@ export class TaskService {
     // 即使只有补充说明、没有逐行批注，也要回到同一张总检卡；有逐行
     // 批注时则必须由各自作者逐条裁决，责任人的“继续”不能代点通过。
     this.rememberWorkspaceReview(task, annotations);
+    // push 确认卡上的整体返工没有逐行批注，也必须真正开启 review 新轮。
+    // rememberWorkspaceReview 还服务“意见并入正在运行的会话”，不能在
+    // helper 内无条件改状态；但这里旧会话已收口，若仍沿用 verifying，
+    // reviewRoundLane() 会返回空，Agent 只看到 external_verify 的等待指令
+    // 并原样交回同一 HEAD，形成假返工闭环。
+    if (task.summary.delivery?.loop) {
+      task.summary.delivery.loop.state = "repairing";
+      task.summary.delivery.loop.round = 0;
+    }
     this.enqueueRepair(task, [
       "用户在 push 前确认交付清单时要求按清单返工,整理提交是你此刻唯一的使命:",
       review
@@ -7041,6 +7050,8 @@ export class TaskService {
       "  只允许在任务自己新增的提交范围内整理。历史乱了就在当前 HEAD 上",
       "  追加修正提交,绝不重写基线之前的历史。",
       "- 清单内缺失的文件补进提交;不许为凑清单制造空改动。",
+      "- 入场后先执行 current，严格按当前 review 步骤顺序推进；交付清单尚未由流程确认前，不要直接 git add/commit。",
+      "- 若清单包含领域真相文档，不要直接编辑 docs 下的正式文件；只修改 domain-archive prepare 生成的候选，再由 apply 机械落到正式路径。",
       "- 整理完按仓库提交规范收口(单条 Bash 只做一个 commit);",
       `  完成后系统会按新 HEAD 重新验证并再次请用户确认(当前清单 ${selection.paths.length} 个文件)。`,
       // 回执契约必须与 post-MR review 同一份:少了它,Agent 改完代码

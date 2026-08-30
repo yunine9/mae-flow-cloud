@@ -70,6 +70,17 @@ function annotation(overrides: Record<string, unknown> = {}) {
   };
 }
 
+test("检视返工不把内部第 0 轮显示成流水线修复轮次", () => {
+  assert.equal(api.statusText({
+    status: "running",
+    delivery: { loop: { state: "repairing", kind: "review", round: 0, max: 2 } },
+  }), "正在按检视意见修改");
+  assert.equal(api.statusText({
+    status: "verifying",
+    delivery: { loop: { state: "repairing", kind: "ci", round: 1, max: 2 } },
+  }), "流水线修复中");
+});
+
 test("个人行动清单能关联别人归属的 Committer 检视，且缺详情也不吞角标", () => {
   const foreign = task("foreign", "waiting_for_human", "alice");
   const visible = app.buildPersonalActionItems({
@@ -184,7 +195,7 @@ test("工作台面向用户只说实时执行日志和单元测试", () => {
   }), "单元测试验证");
 });
 
-test("最终交付决定卡本身能说明并控制每个文件的去留", () => {
+test("最终交付决定卡只显示范围摘要，文件去留统一留在左侧 diff", () => {
   const deliveryTask = {
     ...task("delivery", "waiting_for_human"),
     waiting: {
@@ -214,8 +225,9 @@ test("最终交付决定卡本身能说明并控制每个文件的去留", () =>
   }));
   assert.match(html, /本次交付范围/);
   assert.match(html, /1 \/ 2 个文件将推送/);
-  assert.match(html, /src\/emoji\.ts[^]*纳入交付/);
-  assert.match(html, /test\.log[^]*仅留本地/);
+  assert.match(html, /文件去留在左侧代码差异中调整/);
+  assert.doesNotMatch(html, /交付文件清单|全部纳入|全部仅留本地/);
+  assert.doesNotMatch(html, /src\/emoji\.ts|test\.log/);
   assert.match(html, /按这 1 个文件推送/);
 });
 

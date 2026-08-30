@@ -72,14 +72,15 @@ test("Agent 长说明与提交记录默认折叠，避免挤满窄决策栏", ()
     "长篇内部回复不能继续与标题、提交记录全挤在一个段落里");
 });
 
-test("最终交付范围在决策卡内可直接调整，并与 diff 树双向同步", () => {
-  assert.match(taskCard, /className="delivery-scope-files"/);
-  assert.match(taskCard, /纳入交付/);
-  assert.match(taskCard, /仅留本地/);
+test("最终交付范围只在 diff 树调整，决策卡保留摘要和直达入口", () => {
+  assert.doesNotMatch(taskCard, /className="delivery-scope-files"/);
+  assert.match(taskCard, /文件去留在左侧代码差异中调整/);
+  assert.match(taskCard, /打开代码差异并调整文件/);
   assert.match(taskCard, /按这 \$\{deliverySelection\.selectedPaths\.length\} 个文件推送/);
   assert.match(taskCard, /提交返工意见/);
-  assert.match(workspace, /onDeliverySelectionChange=\{task\.waiting[^]*setDeliverySelection/);
-  assert.match(gitDiff, /右侧「本次交付范围」也是完整控制面/);
+  assert.doesNotMatch(workspace, /onDeliverySelectionChange=\{task\.waiting/);
+  assert.match(workspace, /focusRequest=\{diffReviewRequest\}/);
+  assert.match(gitDiff, /if \(focusRequest > 0\) setFocused\(true\)/);
   assert.match(gitDiff, /requestedDeliveryKey[^]*setDeliveryPaths/);
 });
 

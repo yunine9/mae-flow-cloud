@@ -136,6 +136,7 @@ export function GitDiff({
   initialSelectedPaths,
   onSelectionChange,
   scopeLabel,
+  focusRequest = 0,
 }: {
   text: string;
   branch?: string;
@@ -150,12 +151,17 @@ export function GitDiff({
    * 沿用工作区语义。曾经硬编码"任务基线至当前工作区",HEAD→HEAD
    * 的增量也顶着这行标题(MFC-007)。 */
   scopeLabel?: string;
+  /** 外部明确请求进入专注审阅；递增即可重复打开。 */
+  focusRequest?: number;
 }) {
   const files = useMemo(() => parseChanges(text), [text]);
   const [selected, setSelected] = useState(files[0]?.key ?? "");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [showAll, setShowAll] = useState(false);
   const [focused, setFocused] = useState(false);
+  useEffect(() => {
+    if (focusRequest > 0) setFocused(true);
+  }, [focusRequest]);
   const [treePanelWidth, setTreePanelWidth] = useState(() =>
     clampTreePanelWidth(storedNumber("mae-flow:git-tree-width",
       DEFAULT_TREE_PANEL_WIDTH), 2000));
@@ -295,8 +301,8 @@ export function GitDiff({
     ?.filter((path) => files.some((file) => file.path === path))
     .sort((left, right) => left.localeCompare(right)).join("\0");
   useEffect(() => {
-    // 右侧「本次交付范围」也是完整控制面。它改动清单后，diff 树必须
-    // 原位跟上，不能只把 initialSelectedPaths 当成一次性的默认值。
+    // 服务端刷新后可能回送已请求的交付清单，diff 树必须原位跟上，
+    // 不能只把 initialSelectedPaths 当成一次性的默认值。
     if (!selectable || initialSelectedPaths === undefined) return;
     const available = new Set(files.map((file) => file.path));
     const next = new Set(initialSelectedPaths.filter((path) =>
@@ -311,7 +317,7 @@ export function GitDiff({
   useEffect(() => {
     const key = selectionKey || "delivery";
     if (!selectable || activeSelectionKey !== key) return;
-    // 外部控制面刚改完时，先等上面的同步 effect 落到树里；否则这里会
+    // 外部清单刚刷新时，先等上面的同步 effect 落到树里；否则这里会
     // 用一帧前的旧值反向覆盖父层，表现成右侧点了又弹回去。
     if (requestedDeliveryKey !== undefined
         && requestedDeliveryKey !== [...deliveryPaths].sort().join("\0")) return;
@@ -353,7 +359,6 @@ export function GitDiff({
   const canFold = showAll || folded.hidden > 0 || expanded.size > 0;
   const additions = files.reduce((sum, file) => sum + file.additions, 0);
   const deletions = files.reduce((sum, file) => sum + file.deletions, 0);
-  const kinds = Array.from(new Set(files.map((file) => file.kind)));
   const branchLabel = branch || "分支未知";
   const selectedDeliveryCount = deliveryPaths.size;
   const hasCollapsedDirectories = allDirectories.some((path) =>
@@ -580,8 +585,7 @@ export function GitDiff({
             <span>CODE REVIEW</span>
             <strong>代码审阅</strong>
             <small><code title={`当前分支：${branchLabel}`}>{branchLabel}</code>
-              <i>·</i>{files.length} 个文件 · {kinds.join("、")}
-              {scopeLabel ? <> · {scopeLabel}</> : null}</small>
+              <i>·</i>{scopeLabel ?? "任务基线至当前工作区"}</small>
           </div>
           <div className="code-review-totals" aria-label="变更统计">
             <b>+{additions}</b><i>−{deletions}</i>
@@ -593,7 +597,7 @@ export function GitDiff({
             <span>WORKTREE</span>
             <strong>{files.length} 个文件发生变化</strong>
             <small><code title={`当前分支：${branchLabel}`}>{branchLabel}</code>
-              <i>·</i>{kinds.join("、")} · {scopeLabel ?? "任务基线至当前工作区"}</small>
+              <i>·</i>{scopeLabel ?? "任务基线至当前工作区"}</small>
           </div>
           <div className="change-summary-actions">
             <div className="change-totals" aria-label="变更统计">
@@ -612,8 +616,8 @@ export function GitDiff({
         <div className={`delivery-selection-bar${selectionChanged ? " changed" : ""}`}>
           {selectable && <div><strong>最终推送范围：{selectedDeliveryCount} / {files.length} 个文件</strong>
             <span>{selectionChanged
-              ? "已调整范围；这里与右侧「本次交付范围」实时同步。"
-              : "勾选表示纳入交付；取消表示仅留本地。右侧可统一确认和提交。"}</span></div>}
+              ? "已调整范围；右侧只读摘要会实时同步。"
+              : "勾选表示纳入交付；取消表示仅留本地。完成后在右侧提交决定。"}</span></div>}
           <div>
             {selectable && <>
               <button type="button" onClick={() =>

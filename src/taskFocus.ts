@@ -80,12 +80,6 @@ function focus(
   };
 }
 
-function repairRound(task: FocusTask): string {
-  const loop = task.delivery?.loop;
-  if (!loop?.round) return "";
-  return `（第 ${loop.round}${loop.max !== undefined ? `/${loop.max}` : ""} 轮）`;
-}
-
 /** 从服务端已有事实生成唯一的扫读口径；任何未知状态都安全降级。 */
 export function projectTaskFocus(task: FocusTask): TaskFocus {
   const delivery = task.delivery;
@@ -223,7 +217,7 @@ export function projectTaskFocus(task: FocusTask): TaskFocus {
     }
     return focus(
       "machine",
-      `Agent 正在修复流水线问题${repairRound(task)}`,
+      "Agent 正在修复流水线问题",
       "产生新提交后自动重新验证",
       "agent",
       60,

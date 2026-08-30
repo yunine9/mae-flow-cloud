@@ -62,6 +62,7 @@ import {
 } from "./TaskCard";
 
 type WorkspaceView = "materials" | "collaboration" | "execution" | "insights";
+type ExecutionView = "events" | "knowledge";
 
 export interface WorkspaceNextActionCopy {
   title: string;
@@ -308,19 +309,23 @@ export function TaskWorkspace({
   );
   const [diffScope, setDiffScope] = useState<"changes" | "full">(
     pushReview?.has_focused_changes ? "changes" : "full");
+  const [diffReviewRequest, setDiffReviewRequest] = useState(0);
   /** 点进度条阶段名弹该阶段执行方案;空串=不显示。 */
   const [planPhase, setPlanPhase] = useState("");
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>(
     defaultWorkspaceView(task),
   );
+  const [executionView, setExecutionView] = useState<ExecutionView>("events");
 
   useEffect(() => {
     setMaterialView(task.waiting?.recommended_view ?? "source");
     setWorkspaceView(defaultWorkspaceView(task));
+    setExecutionView("events");
     setRepositoryAssignees(EMPTY_REPOSITORY_ASSIGNEE_SELECTION);
     setDeliverySelection(undefined);
     setPushDiffState(pushReview ? { kind: "checking" } : { kind: "idle" });
     setDiffScope(pushReview?.has_focused_changes ? "changes" : "full");
+    setDiffReviewRequest(0);
   }, [task.id]);
 
   useEffect(() => {
@@ -952,7 +957,8 @@ export function TaskWorkspace({
                       initialSelectedPaths={deliverySelection?.selectedPaths
                         ?? (task.delivery_selection?.status === "requested"
                           ? task.delivery_selection.paths : undefined)}
-                      onSelectionChange={setDeliverySelection} />
+                      onSelectionChange={setDeliverySelection}
+                      focusRequest={diffReviewRequest} />
                   : <Markdown text={content} />}
               </Annotatable>
               )}
@@ -990,6 +996,26 @@ export function TaskWorkspace({
               <div><span>LIVE EXECUTION</span><strong>执行现场</strong></div>
               <small>实时事件流；各阶段执行方案点上方进度条的阶段名查看</small>
             </div>
+            <nav className="ws-execution-subnav" role="tablist"
+              aria-label="执行现场内容">
+              <button type="button" role="tab"
+                aria-selected={executionView === "events"}
+                className={executionView === "events" ? "active" : ""}
+                onClick={() => setExecutionView("events")}>
+                <strong>实时事件</strong>
+                <small>{task.focus?.headline ?? "Agent 动作与工具结果"}</small>
+              </button>
+              <button type="button" role="tab"
+                aria-selected={executionView === "knowledge"}
+                className={executionView === "knowledge" ? "active" : ""}
+                onClick={() => setExecutionView("knowledge")}>
+                <strong>本任务知识
+                  <em>{task.knowledge_usage?.resources.length ?? 0}</em>
+                </strong>
+                <small>{task.knowledge_usage?.summary.used ?? 0} 项已消费{" · "}
+                  {task.knowledge_usage?.resources.length ?? 0} 项可用</small>
+              </button>
+            </nav>
             <div className="ws-primary-scroll ws-execution-view">
               {/* 定制链对拍告警必须压在现场之上:呈现与实际不一致是
                   最高级事故(用户红线),比事件流本身更优先。 */}
@@ -1007,21 +1033,27 @@ export function TaskWorkspace({
               {/* 摘要卡里的执行现场默认收起，避免多张卡同时拉实时流；
                   但这里已经是独立的“执行现场”页签，打开页签就该直接
                   看见现场，不能再让用户做一次没有意义的展开。 */}
-              <ExecutionPanel task={task} defaultOpen />
-              <WarmupPanel task={task} />
-              {task.workflow_profile && <WorkflowProfileCard
-                profile={task.workflow_profile}
-                warning={task.workflow_profile_warning} />}
-              <KnowledgeFootprint usage={task.knowledge_usage}
-                utMethod={task.ut_generation_method}
-                taskId={task.id} taskStatus={task.status}
-                repositories={task.repositories ?? []}
-                repositoryTechnologies={[...new Set(
-                  (task.repository_profiles ?? []).flatMap((item) =>
-                    item.technologies))]}
-                businessModules={(task.business_modules ?? []).map((module) => ({
-                  id: module.id, name: module.name,
-                }))} />
+              <div className="ws-execution-subview"
+                hidden={executionView !== "events"}>
+                <ExecutionPanel task={task} defaultOpen />
+                <WarmupPanel task={task} />
+                {task.workflow_profile && <WorkflowProfileCard
+                  profile={task.workflow_profile}
+                  warning={task.workflow_profile_warning} />}
+              </div>
+              <div className="ws-execution-subview is-knowledge"
+                hidden={executionView !== "knowledge"}>
+                <KnowledgeFootprint usage={task.knowledge_usage}
+                  utMethod={task.ut_generation_method}
+                  taskId={task.id} taskStatus={task.status}
+                  repositories={task.repositories ?? []}
+                  repositoryTechnologies={[...new Set(
+                    (task.repository_profiles ?? []).flatMap((item) =>
+                      item.technologies))]}
+                  businessModules={(task.business_modules ?? []).map((module) => ({
+                    id: module.id, name: module.name,
+                  }))} />
+              </div>
             </div>
           </> : <>
             <div className="ws-pane-head">
@@ -1130,8 +1162,6 @@ export function TaskWorkspace({
                 ? repositoryAssignees : undefined}
               deliverySelection={task.waiting?.recommended_view === "diff"
                 ? decisionDeliverySelection : undefined}
-              onDeliverySelectionChange={task.waiting?.recommended_view === "diff"
-                ? setDeliverySelection : undefined}
               pushReview={pushReview}
               onLocateDelivery={task.waiting?.recommended_view === "diff"
                 ? (scope) => {
@@ -1146,6 +1176,7 @@ export function TaskWorkspace({
                     } else {
                       setDiffScope(nextScope);
                     }
+                    setDiffReviewRequest((request) => request + 1);
                     const first = items?.find((item) => item.kind === "diff");
                     if (first) setActive(first.name);
                   }

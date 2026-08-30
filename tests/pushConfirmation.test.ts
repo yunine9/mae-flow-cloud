@@ -929,6 +929,8 @@ test("返工轮复检卡仍有「这次修改」:基点是人上次看过的 HEA
     assert.equal(
       service.get(id)!.delivery?.last_reviewed_head, reviewedHead,
       "返工也是人看过这个 HEAD,必须钉住");
+    assert.equal(internal.summary.delivery?.loop?.state, "repairing",
+      "整体返工必须机械开启 review 新轮，不能让 Agent 仍停在 external_verify");
 
     // Agent 按意见改码收口,产生新 HEAD;复检卡的快速入口必须从人上次
     // 看过的 HEAD 起算,而不是退回任务基线装作没有增量。
