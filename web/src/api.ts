@@ -3305,10 +3305,14 @@ export function getIssueMaterials(id: string): Promise<IssueMaterials> {
 }
 
 export function getIssueFileDiff(
-  id: string, path?: string,
+  id: string, path?: string, repo?: string,
 ): Promise<{ diff: string }> {
-  const query = path ? `?path=${encodeURIComponent(path)}` : "";
-  return issueFetch(`/issues/${encodeURIComponent(id)}/materials/diff${query}`);
+  // path = 单文件;repo = 单仓切片(服务端只回该仓,无分段标记,#32)。
+  const params = new URLSearchParams();
+  if (path) params.set("path", path);
+  if (repo) params.set("repo", repo);
+  const query = params.toString();
+  return issueFetch(`/issues/${encodeURIComponent(id)}/materials/diff${query ? `?${query}` : ""}`);
 }
 
 export function getIssueWorkspaceFile(

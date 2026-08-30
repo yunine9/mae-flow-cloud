@@ -14,6 +14,8 @@
  *   GET  /issues/:id                  → 详情(状态 + 消息 + 问题卡)
  *   GET  /issues/:id/materials        → 材料清单(变更/日志/人工台账/推送记录)
  *   GET  /issues/:id/materials/diff   → 单文件 diff(?path=,对 HEAD)
+ *                                      / 单仓切片(?repo=,无标记)
+ *                                      / 聚合(缺省,带仓库分段标记)
  *   GET  /issues/:id/materials/file   → 读工作区文件(?path=)
  *   PUT  /issues/:id/materials/file   → 快速修改(仅归属者;入人工台账)
  *   GET  /issues/:id/materials/log    → 读拉取日志(?name=,超长读尾)
@@ -48,6 +50,7 @@ import {
   saveSessionWorkspaceFile,
   sessionWorkspaceDiffAll,
   sessionWorkspaceFileDiff,
+  sessionWorkspaceRepoDiff,
 } from "./materials.ts";
 import type { DtsGateway } from "./gateways.ts";
 import { isTerminal } from "./state.ts";
@@ -423,12 +426,17 @@ export async function handleIssueRoutes(
       const session = issueFlow.session(id);
       try {
         if (parts[3] === "diff") {
-          // 带 path = 单文件;不带 = 聚合 diff(对齐任务侧交付材料形态)。
+          // 带 path = 单文件;带 repo = 单仓切片(#32,服务端只回该仓,
+          // 前端逐仓审阅不再解析分段标记);都不带 = 聚合 diff(带
+          // 「===== 仓库 =====」标记,合并视图照旧)。
+          const repo = query.get("repo");
           const path = query.get("path");
           return done(200, {
-            diff: path
-              ? sessionWorkspaceFileDiff(session.state, session.root, path)
-              : sessionWorkspaceDiffAll(session.state, session.root),
+            diff: repo
+              ? sessionWorkspaceRepoDiff(session.state, session.root, repo)
+              : path
+                ? sessionWorkspaceFileDiff(session.state, session.root, path)
+                : sessionWorkspaceDiffAll(session.state, session.root),
           });
         }
         if (parts[3] === "file") {

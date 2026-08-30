@@ -415,3 +415,17 @@ export function sessionWorkspaceDiffAll(
   return parts.map((part) =>
     `===== 仓库 ${part.name} =====\n${part.diff}`).join("\n\n");
 }
+
+/** 单仓 diff(会话级,#32):?repo= 服务端切片,逐仓审阅不再靠前端
+ * 解析聚合里的「===== 仓库 =====」标记。仓名按 materialRepos 的取名
+ * 匹配(与变更清单的 <仓名>/ 前缀同源);对不上不兜底——兜底到首仓
+ * 会让"看 A 仓"静默变成"看 B 仓",宁可让调用方拿到明确的错。 */
+export function sessionWorkspaceRepoDiff(
+  state: IssueSessionState,
+  root: string,
+  repo: string,
+): string {
+  const match = materialRepos(state, root).find((item) => item.name === repo);
+  if (!match) throw new Error(`仓 ${repo} 不在本会话的关联仓里`);
+  return workspaceDiffAll(match.dir);
+}
