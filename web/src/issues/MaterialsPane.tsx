@@ -4,9 +4,11 @@
  *
  * 从 IssueBoard.tsx 原文搬移(spec #2 按域拆分,纯搬移零行为变化):
  * 结构照搬任务工作台交付材料页(ws-pane-head + ws-source-switch +
- * ws-doc),diff 用同一把 GitDiff 渲染;聚合 diff 按服务端自己的分段
- * 标记切片在 perRepo.ts(splitDiffByRepo)。结论文档子视图
- * (IssueConclusionDoc)只有材料页签渲染,随本文件走。
+ * ws-doc),diff 用同一把 GitDiff 渲染。合并视图直接渲染聚合 diff
+ * (服务端自带「===== 仓库 =====」分段标记,GitDiff 按元信息行呈现);
+ * 逐仓视图走 ?repo= 服务端切片(#32),每仓独立请求,不再前端解析
+ * 分段标记。结论文档子视图(IssueConclusionDoc)只有材料页签渲染,
+ * 随本文件走。
  * 快速修改是问题流唯一的人工写口——只改 repo/ 内已有文件,保存入
  * 人工台账,"请 AI 复核"走现有插话/续聊通道。
  */
@@ -26,7 +28,6 @@ import {
 import { Markdown } from "../markdown";
 import { GitDiff } from "../GitDiff";
 import { prepareDtsHtml } from "./dtsHtml";
-import { splitDiffByRepo } from "./perRepo";
 
 /** 结论文档(issue-analysis.md):激活页签时才取;状态一动(updated_at
  * 变化)自动重读,让 AI 续写的内容能贴着节奏刷新。 */
@@ -93,12 +94,9 @@ export function IssueMaterialsPane({ detail, busy, view, onView, onNotifyAI }: {
   const [data, setData] = useState<IssueMaterials>();
   const [note, setNote] = useState("");
   const [allDiff, setAllDiff] = useState("");
-  // 逐仓分片:聚合 diff 按服务端自己的分段标记(service.workspaceDiffAll
-  // 写入的「===== 仓库 <名> =====」)切成每仓一段;"" = 合并视图(缺省,
-  // 与旧版一致)。不带 path 的聚合接口一次拿全,前端只做切片渲染。
-  const [diffSections, setDiffSections] = useState<
-    Array<{ name: string; diff: string }>
-  >([]);
+  // 逐仓视图(#32):?repo= 服务端切片,每仓独立请求,不解析聚合里
+  // 的分段标记;"" = 合并视图(缺省,用聚合 diff)。undefined = 读取中。
+  const [repoDiff, setRepoDiff] = useState<string>();
   const [diffRepo, setDiffRepo] = useState("");
   // 快速修改:选中文件 → 编辑器;undefined 表示未选中。
   const [activeFile, setActiveFile] = useState<string>();
@@ -109,19 +107,18 @@ export function IssueMaterialsPane({ detail, busy, view, onView, onNotifyAI }: {
 
   async function load() {
     try {
+      // 聚合 diff 一次拿全(合并视图用);逐仓切片由下面的 effect 按
+      // 选仓独立取,两份数据互不依赖。
       const [materials, diff] = await Promise.all([
         getIssueMaterials(detail.id),
         getIssueFileDiff(detail.id),
       ]);
-      const sections = splitDiffByRepo(diff.diff);
       setData(materials);
       setAllDiff(diff.diff);
-      setDiffSections(sections);
-      // 手选的仓刷新后仍在清单里才保留;仓的改动清零了就回合并视图。
+      // 手选的仓刷新后仍在变更清单里才保留;仓的改动清零了就回合并视图。
       setDiffRepo((current) => current
-        && (sections.some((section) => section.name === current)
-          || materials.changes.some((change) =>
-            change.path.split(/[\\/]/)[0] === current))
+        && materials.changes.some((change) =>
+          change.path.split(/[\\/]/)[0] === current)
         ? current : "");
       setNote("");
     } catch (reason) {
@@ -134,6 +131,25 @@ export function IssueMaterialsPane({ detail, busy, view, onView, onNotifyAI }: {
     // 会话状态一动(AI 可能改了工作区)就刷新;id 变化由父层换页签兜底。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detail.updated_at]);
+
+  // 逐仓 diff 随选仓与会话刷新取(#32):服务端切片,与聚合各走各的
+  // 请求。alive 防竞态:快速切仓时旧响应不得覆盖新仓的内容。
+  useEffect(() => {
+    if (!diffRepo) return;
+    let alive = true;
+    setRepoDiff(undefined);
+    getIssueFileDiff(detail.id, undefined, diffRepo)
+      .then((result) => {
+        if (alive) setRepoDiff(result.diff);
+      })
+      .catch((reason) => {
+        if (!alive) return;
+        setNote(String(reason instanceof Error ? reason.message : reason));
+        setRepoDiff("");
+      });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [diffRepo, detail.updated_at]);
 
   async function editFile(path: string) {
     setActiveFile(path);
@@ -182,22 +198,17 @@ export function IssueMaterialsPane({ detail, busy, view, onView, onNotifyAI }: {
 
   const changes = data?.changes ?? [];
 
-  // 可切的仓 = diff 分段名 ∪ 变更清单路径首段(服务端 listMaterials 给
-  // 每条变更加 <仓名>/ 前缀)。两者都来自 API 输出,前端不猜仓清单。
+  // 可切的仓 = 变更清单路径首段(服务端 listMaterials 给每条变更加
+  // <仓名>/ 前缀)。前端不猜仓清单;逐仓 diff 本体由 ?repo= 按需取。
   const diffRepos = useMemo(() => {
     const names: string[] = [];
-    for (const section of diffSections) {
-      if (section.name && !names.includes(section.name)) names.push(section.name);
-    }
     for (const change of changes) {
       const head = change.path.split(/[\\/]/)[0];
       if (head && !names.includes(head)) names.push(head);
     }
     return names;
-  }, [diffSections, changes]);
-  const activeDiff = diffRepo
-    ? diffSections.find((section) => section.name === diffRepo)?.diff ?? ""
-    : allDiff;
+  }, [changes]);
+  const activeDiff = diffRepo ? repoDiff ?? "" : allDiff;
 
   return <div className="issue-materials">
     <div className="ws-pane-head">
@@ -240,7 +251,11 @@ export function IssueMaterialsPane({ detail, busy, view, onView, onNotifyAI }: {
           {activeDiff
             ? <GitDiff text={activeDiff} hideKey={detail.id} />
             : <div className="utility-note">
-                {diffRepo ? "该仓当前没有可展示的改动。" : "工作区当前没有改动。"}
+                {diffRepo
+                  ? (repoDiff === undefined
+                    ? "正在读取该仓变更…"
+                    : "该仓当前没有可展示的改动。")
+                  : "工作区当前没有改动。"}
               </div>}
         </div>
       <div className="issue-materials-editor">

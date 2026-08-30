@@ -302,6 +302,21 @@ test("插话回执:发过什么、读到没有,都要能查", async () => {
     await until(() => model.requests.length >= 1, "模型开跑");
 
     assert.deepEqual(service.listInterrupts(id), [], "没发过就是空的");
+
+    // 时序收口(#33):只等"模型开跑"钉不住第一幕已成过去时——假模型
+    // 收到请求到宿主把第一幕文本落账(message_end → assistant_message
+    // 入 events.jsonl)之间有窗口,全套并发跑时插话能钻进去:插话账
+    // (user_message)先落,第一幕文本后落,重放时它就排在插话后面,
+    // 按"送达时刻分界"的契约被算进 said——炸的是测试没等齐,不是产品
+    // 语义。这里等第一幕文本出现在同一本事件账里再插话:落账走
+    // appendFileSync,先落者必排前,listInterrupts 重放同一文件,顺序即
+    // 事实,插话只可能晚于第一幕,窗口不复存在(328 行的边界断言恒真)。
+    await until(
+      () => new EventLog(service.eventLogPath(id)).replay()
+        .some((event) => event.kind === "assistant_message"
+          && String(event.payload?.text ?? "").includes("先看一眼现场")),
+      "第一幕发言已落账");
+
     await service.interrupt(id, "掩码保留后四位");
     const logged = service.listInterrupts(id);
     assert.equal(logged.length, 1);
