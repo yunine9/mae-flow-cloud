@@ -1797,10 +1797,8 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 }
 .issue-group-title i { font-style: normal; font-weight: 400; color: var(--faint); }
 .issue-group-body { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.issue-group-note {
-  grid-column: 1 / -1; margin: 0; color: var(--faint);
-  font-size: var(--font-size-dense); line-height: 1.5;
-}
+/* 必填星号:业界惯例,标签尾部一枚,不再用文字解释必填性。 */
+.issue-field span i.req { color: var(--danger); font-weight: 700; }
 /* 只读仓清单:模块绑定带出,登记页只许看不许改——要增删仓去知识飞轮。
    短名一行放下,全地址挂 title 悬停可见。 */
 .issue-module-repos { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
@@ -1841,7 +1839,6 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   font-weight: 700; cursor: pointer;
 }
 .issue-form-actions .primary:disabled, .issue-dts-toolbar .primary:disabled { opacity: .55; cursor: not-allowed; }
-.issue-form-hint { color: var(--faint); font-size: var(--font-size-assist); }
 .issue-dts-mock-banner {
   margin: 0 0 10px; padding: 9px 12px;
   border: 1px solid color-mix(in srgb, var(--attention) 45%, transparent);

@@ -1,5 +1,5 @@
 /**
- * 登记域:发起问题会话的两个页签(手工登记 / DTS 列表)。
+ * 登记域:发起问题会话的两个页签(登记问题 / DTS 列表)。
  *
  * 从 IssueBoard.tsx 原文搬移(spec #2 按域拆分,纯搬移零行为变化):
  * 两个子面板常驻(隐藏切换),表单/勾选/搜索状态跨页签驻留。
@@ -151,7 +151,7 @@ export function IssueRegistration({
       <div className="issue-register-tabs" role="tablist">
         <button type="button" role="tab" aria-selected={tab === "manual"}
           className={tab === "manual" ? "on" : ""}
-          onClick={() => setTab("manual")}>手工登记</button>
+          onClick={() => setTab("manual")}>登记问题</button>
         <button type="button" role="tab" aria-selected={tab === "dts"}
           className={tab === "dts" ? "on" : ""}
           onClick={() => setTab("dts")}>DTS 列表</button>
@@ -192,9 +192,6 @@ function ManualRegister({
   const [envPagePassword, setEnvPagePassword] = useState("");
   const [envBackendPassword, setEnvBackendPassword] = useState("");
   const [busy, setBusy] = useState(false);
-  // 探索方式(个人设置,缺省固定流程):模块与环境两模式同等必选,这里
-  // 只影响提交后横幅下的流程提示文案。
-  const fixed = viewer.issue_flow !== "free";
   const draftKey = `mae-flow:issue:draft:${viewer.username}`;
   // 下拉只收 active 且至少绑一个仓的模块:零仓存量模块发起必被服务端
   // 打回,不进下拉让它根本没有被选中的机会(spec #15)。
@@ -249,13 +246,6 @@ function ManualRegister({
   const catalogEmpty = modules !== undefined && moduleCatalog.length === 0;
   const submitDisabled = busy || credentialBlocked
     || moduleCatalog.length === 0 || !selectedModule;
-  const blockedHint = modules === undefined
-    ? "正在加载业务模块目录…"
-    : catalogEmpty
-      ? "模块目录为空——先到「知识飞轮 → 业务模块」登记并绑定代码仓,再回来发起。"
-      : !selectedModule
-        ? "先选择业务模块:代码仓按模块绑定自动带出,不再手填。"
-        : undefined;
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -268,18 +258,17 @@ function ManualRegister({
       onError("现象描述必填——发生条件、影响范围、复现步骤,写得越具体 AI 少走弯路");
       return;
     }
-    const hosts = envHosts.split(/[,，\s]+/).map((host) => host.trim())
-      .filter(Boolean);
-    if (!hosts.length) {
-      onError("网管环境IP必填——问题发生所在的网管,多台用逗号分隔");
+    const host = envHosts.trim();
+    if (!host) {
+      onError("网管环境IP必填");
       return;
     }
     if (!envPagePassword.trim()) {
-      onError("页面密码必填——网管页面登录口令,可从输入框旁的下拉选常见默认值");
+      onError("页面密码必填");
       return;
     }
     if (!envBackendPassword.trim()) {
-      onError("网管后台密码必填——拉日志/换库的现场凭据,同样可下拉选常见默认值");
+      onError("网管后台密码必填");
       return;
     }
     setBusy(true);
@@ -289,7 +278,7 @@ function ManualRegister({
         description: description.trim(),
         module_id: moduleId,
         environment: {
-          hosts,
+          hosts: [host],
           page_account: envPageAccount.trim() || undefined,
           page_password: envPagePassword,
           backend_password: envBackendPassword,
@@ -311,21 +300,21 @@ function ManualRegister({
       <span className="issue-group-title">问题信息</span>
       <div className="issue-group-body">
         <label className="issue-field wide">
-          <span>问题标题 <i>必填</i></span>
+          <span>问题标题 <i className="req">*</i></span>
           <input value={title} placeholder="一句话说清现象,如:播放器偶发黑屏"
             onChange={(event) => setTitle(event.target.value)} />
         </label>
         <label className="issue-field wide">
-          <span>现象描述 <i>必填</i></span>
+          <span>现象描述 <i className="req">*</i></span>
           <textarea rows={3} value={description}
             placeholder="发生条件、影响范围、复现步骤;有日志片段也可以贴进来"
             onChange={(event) => setDescription(event.target.value)} />
         </label>
         <label className="issue-field wide">
-          <span>业务模块 <i>必选</i></span>
+          <span>业务模块 <i className="req">*</i></span>
           <select value={moduleId}
             onChange={(event) => setModuleId(event.target.value)}>
-            <option value="" disabled>选择业务模块——代码仓按绑定自动带出</option>
+            <option value="" disabled>选择业务模块——决定关联代码仓</option>
             {moduleCatalog.map((module) => (
               <option key={module.id} value={module.id}>
                 {module.name}(绑 {module.repositories.length} 个仓)
@@ -349,47 +338,37 @@ function ManualRegister({
       </div>
     </div>
     <div className="issue-group wide">
-      <span className="issue-group-title">网管环境 <i>四项全部必填</i></span>
+      <span className="issue-group-title">网管环境</span>
       <div className="issue-group-body">
         <label className="issue-field wide">
-          <span>网管环境IP <i>必填,多台用逗号分隔</i></span>
+          <span>网管环境IP <i className="req">*</i></span>
           <input value={envHosts} spellCheck={false}
-            placeholder="60.14.46.16, 60.14.46.17"
+            placeholder="60.14.46.16"
             onChange={(event) => setEnvHosts(event.target.value)} />
         </label>
         <label className="issue-field">
-          <span>页面账号 <i>网管页面登录名</i></span>
+          <span>页面账号 <i className="req">*</i></span>
           <input value={envPageAccount} placeholder="admin"
             onChange={(event) => setEnvPageAccount(event.target.value)} />
         </label>
         <div className="issue-field">
-          <span>页面密码 <i>必填</i></span>
+          <span>页面密码 <i className="req">*</i></span>
           <PasswordCombo name="页面密码" value={envPagePassword}
             onChange={setEnvPagePassword} />
         </div>
         <div className="issue-field">
-          <span>网管后台密码 <i>必填,拉日志/换库用</i></span>
+          <span>网管后台密码 <i className="req">*</i></span>
           <PasswordCombo name="网管后台密码" value={envBackendPassword}
             onChange={setEnvBackendPassword} />
         </div>
-        <small className="issue-group-note">
-          页面凭据本期随会话记录;后台密码供抓日志/部署。两组口令只存服务端
-          加密库,不进浏览器草稿。
-        </small>
       </div>
     </div>
     <CredentialGate viewer={viewer} needRepo={touchRemoteRepo}
       onNavigateProfile={onNavigateProfile} />
     <div className="issue-form-actions">
       <button type="submit" className="primary" disabled={submitDisabled}>
-        {busy ? "登记中…" : "登记并开始处理"}
+        {busy ? "分析中…" : "开始分析"}
       </button>
-      <span className="issue-form-hint">
-        {blockedHint ?? (fixed
-          ? "固定流程:无单先定位出结论(是问题→挂起,关联单号后转正继续)。"
-          : "自由探索:AI 先做只读研究;非问题也是合法结论,不强制走编码。")}
-        {!blockedHint && "(探索方式在「个人设置」切换)"}
-      </span>
     </div>
   </form>;
 }
