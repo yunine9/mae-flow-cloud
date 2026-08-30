@@ -159,7 +159,26 @@ export class FakeGitPlatform {
         try {
           const replyMatch = url.pathname.match(
             /^\/mr\/discussions\/([^/]+)\/reply$/);
-          if (request.method === "POST" && url.pathname === "/mr") {
+          // 浏览器可达的 MR 页面与合入按钮(MFC-005):任务卡上的 mr_url
+          // 点开曾是 404,整链 E2E 没法在浏览器里收口。页面只做最小
+          // 事实展示+合入表单;合入真实推进目标 ref,不是翻状态字段。
+          const pageMatch = url.pathname.match(/^\/mr\/(\d+)$/);
+          const mergeMatch = url.pathname.match(/^\/mr\/(\d+)\/merge$/);
+          if (request.method === "GET" && pageMatch) {
+            const html = this.mergeRequestPage(Number(pageMatch[1]));
+            response
+              .writeHead(html ? 200 : 404,
+                { "content-type": "text/html; charset=utf-8" })
+              .end(html ?? "<h1>MR 不存在</h1>");
+          } else if (request.method === "POST" && mergeMatch) {
+            const outcome = this.mergeMergeRequest(Number(mergeMatch[1]));
+            if (outcome.ok) {
+              response.writeHead(303,
+                { location: `/mr/${mergeMatch[1]}` }).end();
+            } else {
+              reply(409, { error: outcome.error });
+            }
+          } else if (request.method === "POST" && url.pathname === "/mr") {
             reply(201, this.createMergeRequest(body));
           } else if (request.method === "GET" && url.pathname === "/mr") {
             reply(200, this.mergeRequests);
@@ -299,6 +318,70 @@ export class FakeGitPlatform {
   /** 测试注入:种一条未解决的检视意见。 */
   seedDiscussion(input: Omit<Discussion, "resolved" | "replies">): void {
     this.discussions.push({ ...input, resolved: false, replies: [] });
+  }
+
+  /** MR 详情页(最小 HTML,零依赖):事实 + 合入按钮。 */
+  private mergeRequestPage(id: number): string | undefined {
+    const mr = this.mergeRequests.find((item) => item.id === id);
+    if (!mr) return undefined;
+    const gates = this.mergeGates(mr.source_branch, mr.target_branch).gates;
+    const blocked = gates.filter((gate) => !gate.passed);
+    const esc = (value: string) => value.replace(/[&<>"]/g, (ch) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]!));
+    return [
+      "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">",
+      `<title>MR !${mr.id} · ${esc(mr.title)}</title>`,
+      "<style>body{font:14px/1.7 system-ui;max-width:640px;margin:40px auto;padding:0 16px}",
+      "code{background:#f2f2f4;padding:1px 5px;border-radius:4px}",
+      "button{padding:8px 20px;font-size:14px;cursor:pointer}",
+      ".ok{color:#0a7a3d}.bad{color:#b3261e}</style></head><body>",
+      `<h1>MR !${mr.id} ${esc(mr.title)}</h1>`,
+      `<p><code>${esc(mr.source_branch)}</code> → `
+        + `<code>${esc(mr.target_branch)}</code> · SHA `
+        + `<code>${esc(mr.sha.slice(0, 12))}</code></p>`,
+      `<p>状态:<b>${mr.merge_state === "merged" ? "已合入"
+        : mr.merge_state === "closed" ? "已关闭" : "在途"}</b></p>`,
+      "<ul>",
+      ...gates.map((gate) => `<li class=\"${gate.passed ? "ok" : "bad"}\">`
+        + `${gate.passed ? "✔" : "✘"} ${esc(gate.name)}`
+        + `${gate.detail ? ` — ${esc(gate.detail)}` : ""}</li>`),
+      "</ul>",
+      mr.merge_state === "opened"
+        ? (blocked.length
+            ? `<p class=\"bad\">${blocked.length} 项门禁未过,不能合入。</p>`
+            : `<form method=\"post\" action=\"/mr/${mr.id}/merge\">`
+              + "<button type=\"submit\">合入</button></form>")
+        : "",
+      "</body></html>",
+    ].join("\n");
+  }
+
+  /** 浏览器合入:门禁全绿才放行,真实快进目标 ref 再翻状态——
+   * 交付事实来自远端真实状态,假件也不许只翻字段。 */
+  private mergeMergeRequest(id: number): { ok: boolean; error?: string } {
+    const mr = this.mergeRequests.find((item) => item.id === id);
+    if (!mr) return { ok: false, error: `MR ${id} 不存在` };
+    if (mr.merge_state !== "opened") {
+      return { ok: false, error: `MR ${id} 已是 ${mr.merge_state}` };
+    }
+    const blocked = this.mergeGates(mr.source_branch, mr.target_branch)
+      .gates.filter((gate) => !gate.passed);
+    if (blocked.length) {
+      return { ok: false,
+        error: `门禁未过: ${blocked.map((gate) => gate.name).join("、")}` };
+    }
+    try {
+      execFileSync("git", ["-C", this.barePath, "merge-base",
+        "--is-ancestor", mr.target_branch, mr.sha], { encoding: "utf-8" });
+    } catch {
+      return { ok: false,
+        error: "目标分支已前进且非快进,请先在任务侧合并目标分支再推送" };
+    }
+    git(this.barePath, "update-ref",
+      `refs/heads/${mr.target_branch}`, mr.sha);
+    mr.merge_state = "merged";
+    mr.state = "等待合入" as MergeRequest["state"];
+    return { ok: true };
   }
 
   /** 测试裁定:平台侧把 MR 合入/关闭(审批人点了按钮)。 */

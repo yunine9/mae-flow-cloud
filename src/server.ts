@@ -233,6 +233,13 @@ function readRawBody(
   });
 }
 
+/** 校验/领域错误给人看:取 message,剥掉嵌套 "Error: " 前缀。
+ * 用户曾直面 "Error: 密码至少需要 10 个字符"(MFC-018.1)。 */
+function humanError(error: unknown): string {
+  const text = error instanceof Error ? error.message : String(error);
+  return text.replace(/^(Error:\s*)+/, "");
+}
+
 function json(
   response: import("node:http").ServerResponse,
   status: number,
@@ -374,7 +381,7 @@ export function createTaskServer(
         try {
           rawBody = await readRawBody(request);
         } catch (error) {
-          return json(response, 413, { error: String(error) });
+          return json(response, 413, { error: humanError(error) });
         }
         const first = (value: string | string[] | undefined) =>
           Array.isArray(value) ? value[0] : value;
@@ -439,12 +446,15 @@ export function createTaskServer(
             request.socket.remoteAddress ?? "unknown",
           );
           if (result.blockedForMs) {
-            response.setHeader(
-              "retry-after",
-              String(Math.ceil(result.blockedForMs / 1000)),
-            );
+            const seconds = Math.ceil(result.blockedForMs / 1000);
+            response.setHeader("retry-after", String(seconds));
+            // 锁多久要说清:服务端明明算了时长,前端不读 header,
+            // 用户只看到"稍后"干等(MFC-031)。时长直接进文案。
+            const wait = seconds >= 60
+              ? `${Math.ceil(seconds / 60)} 分钟` : `${seconds} 秒`;
             return json(response, 429, {
-              error: "登录失败次数过多，请稍后再试",
+              error: `登录失败次数过多，请约 ${wait} 后再试`,
+              retry_after_s: seconds,
             });
           }
           if (!result.user) {
@@ -530,7 +540,7 @@ export function createTaskServer(
                 ? undefined : String(body.git_email),
             );
           } catch (error) {
-            return json(response, 400, { error: String(error) });
+            return json(response, 400, { error: humanError(error) });
           }
           return json(response, 200,
             options.auth!.gitProfile(viewer.username));
@@ -547,7 +557,7 @@ export function createTaskServer(
             options.auth!.setLubanToken(
               viewer.username, String(body.token ?? ""));
           } catch (error) {
-            return json(response, 400, { error: String(error) });
+            return json(response, 400, { error: humanError(error) });
           }
           return json(response, 200, {
             luban_token_hint: options.auth!.lubanTokenHint(viewer.username),
@@ -576,7 +586,7 @@ export function createTaskServer(
               );
               return json(response, 201, user);
             } catch (error) {
-              return json(response, 400, { error: String(error) });
+              return json(response, 400, { error: humanError(error) });
             }
           }
           if (request.method === "PUT" && parts.length === 4
@@ -587,7 +597,7 @@ export function createTaskServer(
                 decodeURIComponent(parts[2]), body.on === true);
               return json(response, 200, user);
             } catch (error) {
-              return json(response, 400, { error: String(error) });
+              return json(response, 400, { error: humanError(error) });
             }
           }
           // 内部平台的管理员特权(用户拍板:内网自用,不要自助找回那
@@ -601,7 +611,7 @@ export function createTaskServer(
                 decodeURIComponent(parts[2]), String(body.password ?? ""));
               return json(response, 200, { ok: true });
             } catch (error) {
-              return json(response, 400, { error: String(error) });
+              return json(response, 400, { error: humanError(error) });
             }
           }
           if (request.method === "DELETE" && parts.length === 3) {
@@ -610,7 +620,7 @@ export function createTaskServer(
                 decodeURIComponent(parts[2]), viewer.username);
               return json(response, 200, { ok: true });
             } catch (error) {
-              return json(response, 400, { error: String(error) });
+              return json(response, 400, { error: humanError(error) });
             }
           }
         }
@@ -838,7 +848,7 @@ export function createTaskServer(
             account: viewer?.username,
           }));
         } catch (error) {
-          return json(response, 400, { error: String(error) });
+          return json(response, 400, { error: humanError(error) });
         }
       }
 
@@ -947,7 +957,7 @@ export function createTaskServer(
             workflowDefinition,
           }));
         } catch (error) {
-          return json(response, 400, { error: String(error) });
+          return json(response, 400, { error: humanError(error) });
         }
       }
       if (parts[0] === "repository-profiles") {
@@ -1667,7 +1677,7 @@ export function createTaskServer(
             return json(response, 200,
               service.completeReview(decodeURIComponent(parts[1]), viewer.username));
           } catch (error) {
-            return json(response, 403, { error: String(error) });
+            return json(response, 403, { error: humanError(error) });
           }
         }
         return json(response, 404, { error: "未知检视接口" });
@@ -1890,7 +1900,7 @@ export function createTaskServer(
               knowledgePreviewDigest,
             }));
         } catch (error) {
-          return json(response, 400, { error: String(error) });
+          return json(response, 400, { error: humanError(error) });
         }
       }
       if (request.method === "GET" && url.pathname === "/tasks") {
@@ -2472,7 +2482,7 @@ export function createTaskServer(
       if (error instanceof AnnotationError) {
         return json(response, 400, { error: error.message });
       }
-      return json(response, 500, { error: String(error) });
+      return json(response, 500, { error: humanError(error) });
     }
   });
 }

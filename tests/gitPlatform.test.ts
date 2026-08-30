@@ -124,3 +124,63 @@ test("流水线失败:MR 停在验证中;失败结果同样绑 SHA 留痕", asyn
     await platform.stop();
   }
 });
+
+test("浏览器路径:MR 页面可开、门禁全绿才可合入、合入真实快进目标 ref(MFC-005)", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-git-merge-"));
+  const source = makeSourceRepo();
+  const platform = new FakeGitPlatform();
+  const bare = platform.initBare(source, dataDir);
+  await platform.start();
+  try {
+    const work = join(dataDir, "work");
+    git(dataDir, "clone", "--quiet", bare, "work");
+    git(work, "config", "user.email", "bot@test");
+    git(work, "config", "user.name", "bot");
+    git(work, "checkout", "--quiet", "-b", "master_bot_REQ2");
+    writeFileSync(join(work, "b.txt"), "merge me\n");
+    git(work, "add", ".");
+    git(work, "commit", "--quiet", "-m", "feat: REQ2");
+    git(work, "push", "--quiet", "origin", "master_bot_REQ2");
+    const sha = git(work, "rev-parse", "HEAD");
+    const mr = await fetch(`${platform.baseUrl}/mr`, {
+      method: "POST",
+      body: JSON.stringify({
+        source_branch: "master_bot_REQ2", target_branch: "master",
+        title: "feat: REQ2",
+      }),
+    }).then((r) => readJson(r)) as { id: number; url: string };
+
+    // 页面可开(曾经 404,任务卡上的链接是死的)。
+    const page = await fetch(mr.url);
+    assert.equal(page.status, 200);
+    const html = await page.text();
+    assert.match(html, /master_bot_REQ2/);
+    assert.match(html, /门禁未过|未跑/, "流水线未跑时页面必须说清为什么不能合入");
+    assert.doesNotMatch(html, /<button/, "门禁未过不给合入按钮");
+
+    // 门禁红时 POST 合入被拒,目标 ref 不动。
+    const refused = await fetch(`${mr.url}/merge`, { method: "POST" });
+    assert.equal(refused.status, 409);
+    assert.notEqual(git(bare, "rev-parse", "master"), sha);
+
+    // 流水线绿灯后按钮出现,合入真实快进目标分支并翻 merged。
+    await fetch(`${platform.baseUrl}/pipeline/trigger`, {
+      method: "POST", body: JSON.stringify({ sha }),
+    });
+    const ready = await fetch(mr.url).then((r) => r.text());
+    assert.match(ready, /<button/);
+    const merged = await fetch(`${mr.url}/merge`, { method: "POST", redirect: "manual" });
+    assert.equal(merged.status, 303, "浏览器表单合入后回到 MR 页面");
+    assert.equal(git(bare, "rev-parse", "master"), sha,
+      "合入必须真实推进目标 ref,不是翻状态字段");
+    const gates = await fetch(`${platform.baseUrl}/mr/gates`
+      + "?source_branch=master_bot_REQ2&target_branch=master")
+      .then((r) => readJson(r)) as { mr_state: string };
+    assert.equal(gates.mr_state, "merged", "宿主轮询看到的就是合入事实");
+    // 二次合入幂等拒绝。
+    const again = await fetch(`${mr.url}/merge`, { method: "POST" });
+    assert.equal(again.status, 409);
+  } finally {
+    await platform.stop();
+  }
+});

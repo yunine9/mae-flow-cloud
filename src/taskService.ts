@@ -1335,6 +1335,9 @@ interface TaskState {
   /** 开发助手交还给重建主会话的一次性现场摘要。它不是内核证据；
    * 必须持久化，避免服务死在 resume→launch 之间把用户改动上下文丢掉。 */
   pendingAssistantHandoff?: string;
+  /** 交付失败日志聚合:同一指纹只全文记一次,其后按计数聚合
+   * (MFC-020:同文 MR-400 曾刷 86 条)。进程内即可,不持久化。 */
+  deliveryFailureLog?: { fingerprint: string; count: number };
 }
 
 interface PrePushBuildWaiter {
@@ -4158,8 +4161,18 @@ export class TaskService {
       repair_rounds: this.options.settings?.runtime().repair_rounds
         ?? this.options.delivery?.repairRounds,
       // 没接内核模式=任务不碰代码仓,表单别摆出输入框骗人。
-      repo: { enabled: !!this.options.host, required: !!this.options.host },
-      ticket: { enabled: !!this.options.host, required: !!this.options.host },
+      // 钉死单仓部署(--repo)不收逐单仓:字段直接不启用,别让人填一个
+      // 注定被拒/被换掉的地址(MFC-024;假平台部署曾因此推错仓)。
+      // required 与 create() 的实际校验必须同口径——曾经 UI 宣称必填、
+      // API 却放行空白,required 成了摆设。
+      repo: {
+        enabled: !!this.options.host && !this.options.host.repoPath,
+        required: !!this.options.host && !this.options.host.repoPath,
+      },
+      ticket: {
+        enabled: !!this.options.host,
+        required: !!this.options.host && !this.options.host.repoPath,
+      },
       baseline: { enabled: !!this.options.host, default: "master" },
       workflows: workflowChoices(workflowCatalogRoot),
       execution_playbooks: executionPlaybooks,
@@ -4571,6 +4584,23 @@ export class TaskService {
       // SSH、明文 userinfo 与控制字符的口径同时服务任务创建和 Skill
       // 目录扫描，不能让“能列出、却注定无法交付”的仓进入下一步。
       validateRepositoryAddress(candidate);
+    }
+    // 钉死单仓部署(--repo/假平台)不接受逐单仓:任务会克隆用户填的
+    // 地址、把分支推到那里,而交付平台盯的是部署仓——推送与 MR 各查
+    // 各的,走到最后一步才 MR 400,整单白烧(e2e-picky-20260830 实锤,
+    // MFC-004/024)。与部署仓相同的写法放行(测试/试跑常显式传它)。
+    const pinnedRepo = this.options.host?.repoPath;
+    if (pinnedRepo && repositories.length && !options.internalRequirement) {
+      const normalize = (value: string) =>
+        /^(https?|ssh|git):\/\//i.test(value) ? value : resolve(value);
+      const pinnedNormalized = normalize(pinnedRepo);
+      const mismatched = repositories.filter((candidate) =>
+        normalize(candidate) !== pinnedNormalized);
+      if (mismatched.length) {
+        throw new Error(
+          `本部署已用固定交付仓启动,不接受逐单代码仓(${mismatched[0]})。`
+          + "留空即使用部署仓;需要逐单交付请以 --kernel-mode(不带 --repo)部署");
+      }
     }
     if (options.model) {
       // 下单不再给选模型(用户拍板:管理员统一配一个)。这条通路留给
@@ -11065,13 +11095,15 @@ export class TaskService {
       }
     } catch (error) {
       if (!this.current(task, epoch)) return;
-      const reason = `交付动作失败: ${String(error)}`;
+      // 嵌套的 "Error: Error: …" 前缀对人是噪声,剥掉再进卡片/日志。
+      const cause = String(error).replace(/^(Error:\s*)+/, "");
+      const reason = `交付动作失败: ${cause}`;
       task.summary.delivery = { ...task.summary.delivery, skipped: reason };
       const prepush = task.summary.delivery.prepush;
       if (prepush
           && !["passed", "user_skipped", "blocked", "environment_error"]
             .includes(prepush.state)) {
-        this.failPendingPrePush(task, String(error));
+        this.failPendingPrePush(task, cause);
         this.options.log?.(`任务 ${task.summary.id} ${reason}`);
         return;
       }
@@ -11079,10 +11111,35 @@ export class TaskService {
         // push 504 / MR 网关 500 这类多半是一阵子的事,自己再试几轮;
         // 预算用完就停下说人话,而不是永远停在"验证中"没人管
         // (实测过:那种状态既没定时器、重启也不复活、连重跑都被拒)。
-        this.holdWithRecovery(task, `等待权威流水线：${reason}`, epoch);
+        // 确定性 4xx(分支不存在、参数错……)例外:同一请求再发一百次
+        // 还是 4xx,不烧重试预算,当场如实停摆喊人(MFC-020 实测同文
+        // MR-400 以 poll_interval 节拍刷了 86 条日志、两轮预算)。
+        // 408/429 是超时/限流,仍按瞬时故障自愈。
+        if (/HTTP 4(?!08\b|29\b)\d\d\b/.test(cause)) {
+          this.markVerificationStalled(task, `等待权威流水线：${reason}`);
+        } else {
+          this.holdWithRecovery(task, `等待权威流水线：${reason}`, epoch);
+        }
       }
-      this.options.log?.(`任务 ${task.summary.id} 交付失败: ${String(error)}`);
+      this.logDeliveryFailure(task, reason);
     }
+  }
+
+  /** 同因交付失败按指纹聚合:首次全文,其后每 10 次记一条计数——
+   * 排障要的是"发生了什么、重复了多少次",不是 86 条同文刷屏。 */
+  private logDeliveryFailure(task: TaskState, reason: string): void {
+    const fingerprint = reason.slice(0, 200);
+    const last = task.deliveryFailureLog;
+    if (last?.fingerprint === fingerprint) {
+      last.count += 1;
+      if (last.count % 10 === 0) {
+        this.options.log?.(`任务 ${task.summary.id} 交付失败已重复 `
+          + `${last.count} 次(同一原因,已聚合): ${fingerprint.slice(0, 80)}…`);
+      }
+      return;
+    }
+    task.deliveryFailureLog = { fingerprint, count: 1 };
+    this.options.log?.(`任务 ${task.summary.id} ${reason}`);
   }
 
   /** 修复会话 → 修复结果验证的唯一状态交接。
