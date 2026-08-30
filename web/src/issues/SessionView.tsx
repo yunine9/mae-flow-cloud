@@ -36,6 +36,7 @@ import {
   repoPipelineBadge,
   repoRole,
   type RepoDeliveryRow,
+  type RepoLedgerInput,
 } from "./perRepo";
 import { IssueRail } from "./IssueRail";
 import { IssueMaterialsPane } from "./MaterialsPane";
@@ -307,21 +308,72 @@ export function IssueSessionView({
   </section>;
 }
 
+/** 转正前账的只读引用缓存(模块级,跨会话视图重挂载不重复请求):
+ * converted 会话按 inherited_accounts 经既有详情接口读旧会话账(#31)。
+ * 归档会话本就可只读(list/get 不拦终态,归属校验同账号放行),不另设
+ * 端点。值:账对象=取到;null=取过但失败(旧会话被物理清理等)——
+ * 失败一次就不再重试,仓卡静默退回现状,不报错、不空转。 */
+const inheritedLedgerCache = new Map<string, RepoLedgerInput | null>();
+
+/** 拉转正前账(按 inherited_accounts 只读引用旧会话详情):返回
+ * undefined = 无引用 / 还没取到 / 已判缺失,仓卡一律按现状渲染。 */
+function useInheritedLedger(
+  ref: { issue: string } | undefined,
+): RepoLedgerInput | undefined {
+  const [ledger, setLedger] = useState<RepoLedgerInput | undefined>();
+  const issueId = ref?.issue;
+  useEffect(() => {
+    if (!issueId) return;
+    const cached = inheritedLedgerCache.get(issueId);
+    // 缓存命中(null 含在内)不再发请求:详情 10s 轮询会反复走到这里。
+    if (cached !== undefined) {
+      setLedger(cached ?? undefined);
+      return;
+    }
+    let alive = true;
+    void getIssue(issueId).then((old) => {
+      const account: RepoLedgerInput = {
+        repo_urls: old.repo_urls,
+        repo_url: old.repo_url,
+        pushes: old.pushes,
+        mrs: old.mrs,
+        pipelines: old.pipelines,
+      };
+      inheritedLedgerCache.set(issueId, account);
+      if (alive) setLedger(account);
+    }).catch(() => {
+      // 旧会话读不到(被清理/越权):静默缺省,失败一次不再重试。
+      inheritedLedgerCache.set(issueId, null);
+      if (alive) setLedger(undefined);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [issueId]);
+  return ledger;
+}
+
 /** 逐仓交付区(一仓一 MR):每个关联仓一张卡——仓名/角色(变更仓·
  * 未交付)/MR 链接与分支/流水线状态徽标(绿/红含失败项/运行中)。
  * 角色与徽标的口径都出自 perRepo.ts(有推送记录=已交付;流水线只认
- * pipelines 该仓的 status),前端不推断、不硬造状态。 */
+ * pipelines 该仓的 status),前端不推断、不硬造状态。
+ * 转正而来的会话(#31):按 inherited_accounts 只读引用旧会话账,标注
+ * 「转正前」并入各仓卡;本会话自己的账照常陈列,两本账不混。 */
 function IssueRepoDelivery({ detail }: { detail: IssueDetail }) {
-  const rows = useMemo(() => repoDeliveryRows(detail), [detail]);
+  const inherited = useInheritedLedger(detail.inherited_accounts);
+  const rows = useMemo(
+    () => repoDeliveryRows(detail, inherited), [detail, inherited]);
   if (rows.length === 0) return null;
   return <section className="issue-repo-delivery" aria-label="逐仓交付">
     <div className="issue-repo-delivery-head">
       <strong>逐仓交付</strong>
       <span>一仓一 MR:每个变更仓各自建分支、各自提 MR、各看流水线</span>
-      {/* 转正而来的会话:逐仓账不跨会话搬运,原会话的交付账留在原地——
-          这里如实指出去向,不把旧账伪装成本会话的事实。 */}
+      {/* 旧账取到时如实说明来源;取不到(已清理)时退回"账在原会话"
+          的现状文案——引用静默缺省,不报错。 */}
       {detail.converted_from && <span className="issue-repo-converted">
-        转正自 {detail.converted_from}——原会话的逐仓交付账留在原会话
+        转正自 {detail.converted_from}——{inherited
+          ? "标注「转正前」的交付事实继承自原会话"
+          : "原会话的逐仓交付账留在原会话"}
       </span>}
     </div>
     <div className="issue-repo-cards">
@@ -335,6 +387,9 @@ function RepoDeliveryCard({ row }: { row: RepoDeliveryRow }) {
   const role = repoRole(row);
   const mrLabel = row.mr
     ? `${row.mr.iid ? `!${row.mr.iid} ` : ""}${row.mr.branch}`
+    : "";
+  const oldMrLabel = row.inherited?.mr
+    ? `${row.inherited.mr.iid ? `!${row.inherited.mr.iid} ` : ""}${row.inherited.mr.branch}`
     : "";
   return <article className="issue-repo-card">
     <header>
@@ -354,6 +409,20 @@ function RepoDeliveryCard({ row }: { row: RepoDeliveryRow }) {
       {!row.mr && !row.push && <span className="empty">
         该仓还没有推送与 MR 记录</span>}
     </div>
+    {/* 转正前账(只读引用,旧会话数据):与本会话事实分区陈列,
+        弱化样式 + 「转正前」前缀,不冒充本会话的交付。 */}
+    {row.inherited && <div className="issue-repo-inherited">
+      <em>转正前</em>
+      {row.inherited.mr && (row.inherited.mr.url
+        ? <a href={row.inherited.mr.url} target="_blank" rel="noreferrer"
+            title={row.inherited.mr.title}>MR {oldMrLabel}</a>
+        : <span title={row.inherited.mr.title}>MR {oldMrLabel}</span>)}
+      {row.inherited.push && <span>
+        已推送 {row.inherited.push.branch}@{row.inherited.push.sha.slice(0, 10)}</span>}
+      {row.inherited.pipeline && <span>
+        {row.inherited.pipeline.label}{row.inherited.pipeline.failedChecks.length
+          ? `(失败项:${row.inherited.pipeline.failedChecks.join("、")})` : ""}</span>}
+    </div>}
     {/* last_error 不只跟 failed 走:轮询预算耗尽时 status 仍是 running、
         但监看已停——两个字段都如实示人,不替服务端下结论。 */}
     {(row.pipeline?.last_error || (row.pipeline?.failedChecks.length ?? 0) > 0)

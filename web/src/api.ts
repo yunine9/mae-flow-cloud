@@ -3078,6 +3078,10 @@ export interface IssueSummary {
   }>;
   converted_from?: string;
   converted_to?: string;
+  /** 转正继承的交付账引用(#31 只读引用):指向转正前的旧会话,仓卡
+   * 渲染时按它经详情接口读旧账并标注「转正前」;旧会话被物理清理时
+   * 静默缺省(仓卡退回现状)。 */
+  inherited_accounts?: { issue: string };
   status: IssueStatus;
   stage: AnyIssueStage;
   stage_note: string;

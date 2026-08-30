@@ -2239,6 +2239,26 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-repo-facts { display: flex; gap: 4px 14px; flex-wrap: wrap; color: var(--muted); overflow-wrap: anywhere; }
 .issue-repo-facts a { color: var(--accent); }
 .issue-repo-facts .empty { color: var(--faint); }
+/* 转正前账(#31 只读引用):与本会话事实分区、弱化呈现——虚线分隔 +
+   幽色词签,读得到但不抢本会话交付的戏。 */
+.issue-repo-inherited {
+  display: flex;
+  gap: 4px 14px;
+  flex-wrap: wrap;
+  align-items: baseline;
+  padding-top: 4px;
+  border-top: 1px dashed var(--line);
+  color: var(--faint);
+  overflow-wrap: anywhere;
+}
+.issue-repo-inherited em {
+  font-style: normal;
+  padding: 0 6px;
+  border: 1px dashed var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  white-space: nowrap;
+}
 .issue-repo-pipeline-error { display: grid; gap: 2px; color: var(--danger); overflow-wrap: anywhere; }
 /* 材料页签:工作区变更按仓分片的切换条(全部合并 = 旧视图)。 */
 .issue-diff-repo-switch { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
