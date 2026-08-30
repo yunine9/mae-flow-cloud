@@ -431,6 +431,8 @@ export function App() {
   const [launchGate, setLaunchGate] = useState<LaunchGateState>({ kind: "checking" });
   const launchGateRequest = useRef(0);
   const [taskSync, setTaskSync] = useState<TaskSyncState>({ kind: "loading" });
+  /** 深链指向的任务已不存在时的提示(空串=无提示)。 */
+  const [missingTaskNotice, setMissingTaskNotice] = useState("");
   const refreshInFlight = useRef<Promise<void> | undefined>(undefined);
   const [targetRoute, setTargetRoute] = useState(readWorkspaceRoute);
   const targetTaskId = targetRoute.taskId;
@@ -600,7 +602,15 @@ export function App() {
   useEffect(() => {
     if (!targetTaskId || artifactTaskId === targetTaskId || tasks.length === 0) return;
     const target = tasks.find((task) => task.id === targetTaskId);
-    if (!target) return;
+    if (!target) {
+      // 深链指向的任务不在列表里(已删除/链接过期):静默返回的话页面
+      // 停在普通"我的工作",人只会怀疑自己点错或系统坏了(2026-08-30
+      // 审计)。说破并把 URL 收回根路径。
+      setMissingTaskNotice(targetTaskId);
+      setTargetRoute({ taskId: "", reviewId: "" });
+      history.replaceState({}, "", "/");
+      return;
+    }
     setArtifactTaskSnapshot(target);
     setArtifactTaskId(target.id);
     const canonical = workspacePath(targetTaskId, targetReviewId);
@@ -828,7 +838,7 @@ export function App() {
     </aside>
 
     <div className="workspace">
-      <header className="workspace-header"><div><div className="eyebrow">MAE-FLOW CLOUD</div><h1>{header.title}</h1><p className={view === "mine" ? "header-context-line" : undefined}>{view === "mine" && <span className="header-user-context">{session.username}</span>}<span>{header.description}</span></p></div><div className="workspace-header-actions">{view !== "wishes" && view !== "help" && <TaskSyncIndicator state={taskSync} onRetry={refresh} />}{relevantWaiting > 0 && view !== "users" && view !== "settings" && <div className="header-attention"><span className="attention-pulse" aria-hidden /><span><strong>{relevantWaiting}</strong>{view === "mine" ? " 项需要我处理" : " 项工作等待决策"}</span></div>}{view === "mine" && session.role !== "admin" && <div className="header-launch-gate"><button type="button" className="header-launch" disabled={!launchEntry.enabled} title={launchEntry.title} aria-label={launchEntry.ariaLabel} onClick={() => { if (launchEntry.enabled) setLaunchOpen(true); }}><svg viewBox="0 0 20 20" aria-hidden>{launchEntry.enabled ? <path d="M10 4v12M4 10h12" /> : <><rect x="5" y="8.5" width="10" height="8" rx="1.5" /><path d="M7.5 8.5V6.75a2.5 2.5 0 0 1 5 0V8.5" /></>}</svg><span>发起新任务</span></button>{launchEntry.helper && (launchEntry.action ? <button type="button" className="header-unlock" title={launchEntry.title} onClick={() => launchEntry.action === "profile" ? setView("profile") : void refreshLaunchGate(true)}>{launchEntry.helper}<svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg></button> : <span className="header-unlock is-status" title={launchEntry.title}>{launchEntry.helper}</span>)}</div>}</div></header>
+      <header className="workspace-header"><div><div className="eyebrow">MAE-FLOW CLOUD</div><h1>{header.title}</h1><p className={view === "mine" ? "header-context-line" : undefined}>{view === "mine" && <span className="header-user-context">{session.username}</span>}<span>{header.description}</span></p></div><div className="workspace-header-actions">{view !== "wishes" && view !== "help" && <TaskSyncIndicator state={taskSync} onRetry={refresh} />}{relevantWaiting > 0 && view !== "users" && view !== "settings" && <div className="header-attention"><span className="attention-pulse" aria-hidden /><span><strong>{relevantWaiting}</strong>{view === "mine" ? " 项需要我处理" : " 项工作等待决策"}</span></div>}{view === "mine" && session.role !== "admin" && <div className="header-launch-gate"><button type="button" className={`header-launch${launchEntry.enabled ? "" : " is-blocked"}`} title={launchEntry.title} aria-label={launchEntry.ariaLabel} onClick={() => setLaunchOpen(true)}><svg viewBox="0 0 20 20" aria-hidden>{launchEntry.enabled ? <path d="M10 4v12M4 10h12" /> : <><rect x="5" y="8.5" width="10" height="8" rx="1.5" /><path d="M7.5 8.5V6.75a2.5 2.5 0 0 1 5 0V8.5" /></>}</svg><span>发起新任务</span></button>{launchEntry.helper && (launchEntry.action ? <button type="button" className="header-unlock" title={launchEntry.title} onClick={() => launchEntry.action === "profile" ? setView("profile") : void refreshLaunchGate(true)}>{launchEntry.helper}<svg viewBox="0 0 16 16" aria-hidden><path d="m6 3 5 5-5 5" /></svg></button> : <span className="header-unlock is-status" title={launchEntry.title}>{launchEntry.helper}</span>)}</div>}</div></header>
       <main className="workspace-main">
         {view === "team" && <section className="team-tasks-workspace">
           <nav className="team-task-tabs" aria-label="团队任务视图" role="tablist">
@@ -907,11 +917,17 @@ export function App() {
           onDraftConsumed={() => setWishDraft(undefined)} />}
 
         {view === "mine" && <>
+          {missingTaskNotice && <div className="missing-task-notice" role="alert">
+            <span>任务 {missingTaskNotice} 不存在或已被删除,已返回「我的需求」。
+              链接可能已过期。</span>
+            <button type="button" onClick={() => setMissingTaskNotice("")}>知道了</button>
+          </div>}
           <PersonalActionInbox
             waiting={myWaiting}
             intervention={myIntervention}
+            merges={myTasks.filter((task) => task.status === "await_merge")}
             reviews={pendingReviews}
-            tasks={tasks}
+            tasks={myTasks}
             onOpen={openArtifacts}
           />
           <section className="personal-pulse four" aria-label="我的任务摘要">
@@ -952,7 +968,12 @@ export function App() {
       </main>
     </div>
     {launchOpen && <LaunchWorkspace session={session}
-      onCreated={refresh} onClose={() => setLaunchOpen(false)}
+      onCreated={(created) => {
+        void refresh();
+        // 下单成功当场打开新任务工作台:比"弹窗一关、任务沉进列表中段"
+        // 直接得多——人立刻看到"已创建,排队中"(2026-08-30 审计)。
+        openArtifacts(created);
+      }} onClose={() => setLaunchOpen(false)}
       onOpenKnowledgeAsset={(target) => {
         // 当前历史项记住打开全文前所在视图；返回根路径时 popstate 才能
         // 恢复“我的需求”，而不是只去掉高亮却仍滞留在团队资产。
@@ -1014,16 +1035,22 @@ export function App() {
 function PersonalActionInbox({
   waiting,
   intervention,
+  merges,
   reviews,
   tasks,
   onOpen,
 }: {
   waiting: TaskSummary[];
   intervention: TaskSummary[];
+  /** await_merge:全链路最后一个必须人动手的动作(去 CodeHub 合入)。
+   * 曾被归进绿色"完成堆"不进待办,任务从视野里消失、MR 躺到过期
+   * (2026-08-30 审计)。 */
+  merges: TaskSummary[];
   reviews: ReviewRequest[];
   tasks: TaskSummary[];
   onOpen: (task: TaskSummary) => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const seen = new Set<string>();
   const items: Array<{
     key: string;
@@ -1070,7 +1097,21 @@ function PersonalActionInbox({
       action: "查看现场",
     });
   }
-  const shown = items.slice(0, 3);
+  for (const task of merges) {
+    if (seen.has(task.id)) continue;
+    seen.add(task.id);
+    items.push({
+      key: `merge:${task.id}`,
+      task,
+      kicker: "等待你去合入",
+      title: task.title ?? task.requirement,
+      detail: task.delivery?.mr_url
+        ? `验证已通过,请到 CodeHub 完成检视与合入:${task.delivery.mr_url}`
+        : "验证已通过,请到 CodeHub 完成检视与合入",
+      action: "查看合入请求",
+    });
+  }
+  const shown = expanded ? items : items.slice(0, 3);
   return <section className="personal-action-inbox" aria-labelledby="personal-action-title">
     <div className="personal-action-head">
       <div><span className="section-kicker">NEXT ACTION</span>
@@ -1086,8 +1127,15 @@ function PersonalActionInbox({
       </article>
     ))}</div> : <div className="personal-action-clear">
       <span aria-hidden>✓</span><div><strong>当前没有需要你处理的事项</strong>
-        <p>Agent 正在继续推进；新的确认、检视或异常会优先出现在这里。</p></div>
+        {/* 零任务的新用户看到"Agent 正在推进"会以为后台有活在跑,
+            白等半天(2026-08-30 审计)。 */}
+        <p>{tasks.length
+          ? "Agent 正在继续推进；新的确认、检视或异常会优先出现在这里。"
+          : "你还没有任务——点右上角「发起新任务」开始;需要人工处理的事项会优先出现在这里。"}</p></div>
     </div>}
+    {items.length > 3 && <button type="button" className="personal-action-more"
+      onClick={() => setExpanded((current) => !current)}>
+      {expanded ? "收起" : `还有 ${items.length - 3} 项 →`}</button>}
   </section>;
 }
 

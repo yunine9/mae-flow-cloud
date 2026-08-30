@@ -1964,7 +1964,8 @@ export function createTaskServer(
           const target = service.get(id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
           if (!canOperate(viewer, target.luban_account, !!options.auth)) {
-            return json(response, 403, { error: "只能处理分配给自己的任务" });
+            return json(response, 403, { error: "只能处理分配给自己的任务"
+              + (target.luban_account ? `,请联系责任人 ${target.luban_account}` : "") });
           }
           const body = await readBody(request);
           const task = await service.decide(id, {
@@ -2287,7 +2288,8 @@ export function createTaskServer(
           const target = service.get(id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
           if (!canOperate(viewer, target.luban_account, !!options.auth)) {
-            return json(response, 403, { error: "只能重跑分配给自己的任务" });
+            return json(response, 403, { error: "只能重跑分配给自己的任务"
+              + (target.luban_account ? `,请联系责任人 ${target.luban_account}` : "") });
           }
           return json(response, 200, service.retry(id, viewer?.username));
         }

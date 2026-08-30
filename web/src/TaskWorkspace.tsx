@@ -556,7 +556,7 @@ export function TaskWorkspace({
               ? `${notes.length} 条批注` : "圈选原文、协作检视"],
           ["collaboration", "开发协作", collaborationVisible
             ? "补充主任务或主动接管" : assistantUnavailableReason(task)],
-          ["execution", "执行现场", task.focus?.headline ?? "原始 SSE 事件流"],
+          ["execution", "执行现场", task.focus?.headline ?? "实时执行日志"],
         ] as Array<[WorkspaceView, string, string]>).map(([view, label, hint]) => (
           <button type="button" role="tab" key={view}
             aria-selected={workspaceView === view}

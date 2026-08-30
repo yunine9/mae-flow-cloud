@@ -2032,7 +2032,9 @@ export async function createTask(
       "repository" | "technologies" | "confirmed">>;
     requirementDocumentName?: string;
   },
-): Promise<void> {
+  // 返回创建结果:调用方靠它把新任务当场打开/高亮。原来丢弃 201 响应
+  // 体,下单成功零反馈,人会怀疑没提交成功再点一次(2026-08-30 审计)。
+): Promise<TaskSummary> {
   const response = await fetch("/tasks", {
     method: "POST",
     body: JSON.stringify({
@@ -2062,6 +2064,7 @@ export async function createTask(
     }),
   });
   if (!response.ok) throw new Error(await errorText(response));
+  return await response.json() as TaskSummary;
 }
 
 /** 提交决定。结构化选项与自由说明分开，服务端统一查询未闭环批注。 */

@@ -55,7 +55,7 @@ function viewOf(state: string): PrepushView {
     case "ut":
       return {
         phase: "testing",
-        label: "UT",
+        label: "单元测试",
         detail: "编译已通过，正在运行单元测试。",
         tone: "active",
         busy: true,
@@ -311,7 +311,8 @@ export function PrepushStatus({
         {prepush.round !== undefined && (
           <span>第 {prepush.round} 轮</span>
         )}
-        {prepush.sha && <code>SHA {shortSha(prepush.sha)}</code>}
+        {prepush.sha && <code title="本次验证绑定的代码版本号(Git 提交)">
+          SHA {shortSha(prepush.sha)}</code>}
       </span>
     </span>
   );

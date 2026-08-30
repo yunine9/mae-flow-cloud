@@ -766,6 +766,10 @@ svg {
 .personal-action-clear > span { color: var(--success); font-size: 20px; font-weight: 800; }
 .personal-action-clear strong { color: var(--text-strong); font-size: 14px; }
 .personal-action-clear p { margin: 2px 0 0; font-size: 13px; }
+.personal-action-more { margin-top: 10px; width: 100%; padding: 8px 12px; border: 1px dashed var(--line); border-radius: 8px; background: transparent; color: var(--muted); font-size: 13px; cursor: pointer; }
+.personal-action-more:hover { color: var(--text-strong); border-color: var(--text-strong); }
+.missing-task-notice { margin-bottom: 16px; padding: 12px 14px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-radius: 10px; background: var(--warn-soft, rgba(214, 158, 46, 0.12)); color: var(--text-strong); font-size: 13px; }
+.missing-task-notice button { padding: 5px 12px; border: 1px solid var(--line); border-radius: 7px; background: transparent; color: var(--muted); font-size: 12px; cursor: pointer; }
 .personal-pulse {
   margin-bottom: 26px;
   display: grid;

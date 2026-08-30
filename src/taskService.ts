@@ -4262,6 +4262,32 @@ export class TaskService {
       ? options.repos : options.repo ? [options.repo] : [])
       .map((item) => String(item).trim()).filter(Boolean)
       .filter((item, index, all) => all.indexOf(item) === index);
+    // 同(单号,归属人,仓)重复下单会派生出**同名分支**:第二单非快进
+    // 推送失败烧完预算 stalled,报错还是裸 git stderr;同分支对的 MR
+    // 又是幂等复用,两单互相污染检视与门禁(2026-08-30 审计,"跑挂了
+    // 不管旧单直接重下"是最常见操作)。在途旧单存在时如实拒绝并指路;
+    // 终态(completed/failed/canceled)不拦——重来是合法的。内部创建
+    // (跨仓拆单/原位重跑)豁免:父单在途是拆单的前提,不是撞单。
+    if (ticket && !options.internalRequirement) {
+      const account = options.account?.trim() || undefined;
+      const duplicate = [...this.tasks.values()].find((existing) => {
+        const summary = existing.summary;
+        if (["completed", "failed", "canceled"].includes(summary.status)) {
+          return false;
+        }
+        if ((summary.ticket ?? "") !== ticket) return false;
+        if ((summary.luban_account ?? "") !== (account ?? "")) return false;
+        return !summary.repo_url || repositories.length === 0
+          || repositories.includes(summary.repo_url);
+      });
+      if (duplicate) {
+        throw new TaskControlError(
+          `单号 ${ticket} 已有在途任务 ${duplicate.summary.id}`
+          + `(状态 ${duplicate.summary.status})。同单号重复下单会派生`
+          + "同名分支互相覆盖;请在旧任务上继续(重跑/答卡),或先取消"
+          + "它再重新发起");
+      }
+    }
     const repo = repositories[0];
     // 交付仓必填(用户 2026-08-18 拍板:没有"默认仓"这回事)。一个
     // 部署要服务很多个仓,兜底一个默认值只会让人漏看一眼就把单下错

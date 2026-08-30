@@ -195,7 +195,10 @@ export function TaskCard({
           </a>
         )}
         {task.delivery?.pipeline && (
-          <span className="meta-fact">流水线 · {task.delivery.pipeline}</span>
+          // 原始状态串形如 "running(轮询预算耗尽,请人工查看流水线)"——
+          // 括号里的注记才是给人看的;外壳状态词翻成人话,原文进 title。
+          <span className="meta-fact" title={task.delivery.pipeline}>
+            流水线 · {pipelineLabel(task.delivery.pipeline)}</span>
         )}
         {/* 百字诊断不塞 meta chip(最重要的原因不该用最弱的视觉级):
             这里只留结论,全文在展开区的 alert 里。 */}
@@ -894,8 +897,20 @@ export function WaitingCard({
 function rewritePanelPath(context: string, taskId: string): string {
   return context.replace(
     /`?\/[^\s`]*\.mae-flow-work\/panel\.html`?/g,
-    `[在本页打开现场面板](/tasks/${taskId}/panel)`,
+    // markdown 渲染层给所有链接 target=_blank,文字必须与行为一致:
+    // 写"在本页打开"而实际开新标签页,是自相矛盾(2026-08-30 审计)。
+    `[新标签页打开现场面板](/tasks/${taskId}/panel)`,
   );
+}
+
+/** 流水线原始状态串 → 人话。带括号注记的,注记本身就是给人看的原因。 */
+function pipelineLabel(raw: string): string {
+  const annotated = raw.match(/^(running|failed|success)\((.+)\)$/);
+  if (annotated) return annotated[2];
+  if (raw === "running") return "运行中";
+  if (raw === "success") return "已通过";
+  if (raw === "failed") return "未通过";
+  return raw;
 }
 
 export function RetryButton({

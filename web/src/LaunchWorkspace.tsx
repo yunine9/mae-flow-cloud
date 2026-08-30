@@ -8,6 +8,7 @@ import {
   type LaunchKnowledgeMatchedScope,
   type LaunchKnowledgePreview,
   type LaunchOptions,
+  type TaskSummary,
   type WorkflowAssetSummary,
 } from "./api";
 import {
@@ -144,7 +145,8 @@ export function LaunchWorkspace({
   onOpenKnowledgeAsset,
 }: {
   session: AuthUser;
-  onCreated: () => Promise<void>;
+  /** 创建成功的任务摘要交给调用方,当场打开/高亮,下单不再零反馈。 */
+  onCreated: (task: TaskSummary) => void | Promise<void>;
   onClose: () => void;
   onOpenWorkflowAssets?: (workflowId?: string) => void;
   onOpenKnowledgeAsset: (target: KnowledgeAssetFocus) => void;
@@ -483,7 +485,7 @@ export function LaunchWorkspace({
     setSubmitting(true);
     setError("");
     try {
-      await createTask(
+      const created = await createTask(
         requirement.trim(),
         session.username,   // 归属人=本人;管理员不发起任务(入口已隐藏)
         {
@@ -529,7 +531,7 @@ export function LaunchWorkspace({
       } catch {
         // 不影响已经成功创建的任务。
       }
-      await onCreated();
+      await onCreated(created);
       onClose();
     } catch (reason) {
       setError(reason instanceof Error
@@ -589,6 +591,14 @@ export function LaunchWorkspace({
                   setSelectedBusinessModuleIds([]);
                   setModuleSelectionTouched(false);
                   setRepositoryTechnologies([]);
+                  // 清空必须清干净:执行补充/交付方式/基线/修复轮/工作流
+                  // 选择原来被留着,上一单的指示会悄悄跟进下一单,而且
+                  // 下一拍自动保存又把它们写回草稿(2026-08-30 审计)。
+                  setTaskInstructions("");
+                  setWorkflowSelection(undefined);
+                  setLane("");
+                  setBaseline("");
+                  setRepairRounds("");
                   setError("");
                   try { localStorage.removeItem(storageKey("draft", session.username)); } catch { /* noop */ }
                 }}>清空草稿</button>
