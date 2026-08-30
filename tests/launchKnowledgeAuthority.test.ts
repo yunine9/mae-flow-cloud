@@ -427,6 +427,7 @@ test("POST 预匹配由服务端解析已发布 workflow_selection，不创建�
     const dataDir = mkdtempSync(join(tmpdir(), "mfc-launch-authority-route-"));
     createBusinessModule(dataDir, {
       id: "orders", name: "订单域", description: "订单边界", owner: "owner",
+      repositories: ["https://code.example/team/orders.git"],
     }, "admin");
     const module = publishBusinessKnowledgeAsset(dataDir, "orders", {
       id: "state", title: "状态规则", summary: "状态迁移约束",
