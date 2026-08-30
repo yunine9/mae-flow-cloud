@@ -14,6 +14,18 @@ test("进入独立执行现场页签后直接展开，不要求用户再点一�
   assert.match(executionView, /<ExecutionPanel task=\{task\} defaultOpen \/>/);
 });
 
+test("运行中的任务默认进入执行现场，真正等人时才回到材料", () => {
+  const policy = workspace.slice(
+    workspace.indexOf("function defaultWorkspaceView"),
+    workspace.indexOf("function sizeText"),
+  );
+  assert.match(policy, /status === "paused"[^]*return "collaboration"/);
+  assert.match(policy,
+    /task\.waiting \|\| task\.status === "waiting_for_human"[^]*return "materials"/);
+  assert.match(policy,
+    /"queued", "running", "pausing", "verifying", "await_merge"[^]*return "execution"/);
+});
+
 test("任务摘要卡仍按需展开，避免多张卡同时建立实时连接", () => {
   const utilities = taskCard.slice(
     taskCard.indexOf('<div className="task-utilities">'),

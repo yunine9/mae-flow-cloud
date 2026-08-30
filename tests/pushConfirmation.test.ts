@@ -2,8 +2,9 @@
  * push 前人工确认(commit 前人工介入的云端落点):
  * 瘦身后的主链没有中途检视卡,想在交付前亲眼核对清单的人从这里看。
  * 契约:默认关零打扰;开着时宿主在 prepush 收敛后挂云端原生 diff 卡;
- * 确认授权文件集合，同文件修复产生新 HEAD 自动续推，增删/重命名文件
- * 才重新举卡；返工开修复会话并携带清单契约；月光不代答这张卡。
+ * 确认授权精确的 HEAD + 文件集合；任何修复产生新 HEAD 都重新举卡；
+ * 完全相同 HEAD 的重试幂等复用。返工开修复会话并携带清单契约；
+ * 月光不代答这张卡。
  */
 
 import { test } from "node:test";
@@ -68,7 +69,7 @@ async function verifyingTask() {
   return { service, model, id, internal, repo };
 }
 
-test("确认绑定文件集合:同文件修复自动续推,新增文件才重新确认", async () => {
+test("确认绑定 HEAD+文件集合:同文件修复产生新 HEAD 也必须重新确认", async () => {
   const { service, model, id, internal, repo } = await verifyingTask();
   try {
     const gate = () => (service as any)
@@ -106,16 +107,23 @@ test("确认绑定文件集合:同文件修复自动续推,新增文件才重新
       repo.git("rev-parse", "HEAD"));
     assert.equal(await gate(), true, "已确认且 HEAD 未变,放行");
 
-    // 流水线自动修复已确认文件：HEAD 变化但交付边界没变，不应打断人。
+    // 流水线修复即使只动原文件，也产生了新的待推送代码，必须重新检视。
     writeFileSync(join(repo.cwd, "src", "feature.ts"),
       "export const value = 2;\n");
     repo.git("add", "src/feature.ts");
     repo.git("commit", "--quiet", "-m", "repair confirmed file");
     internal.summary.status = "verifying";
-    assert.equal(await gate(), true, "同一文件集合的新 HEAD 应复用确认");
-    assert.equal(service.get(id)!.waiting, undefined);
-    assert.notEqual(summary.delivery_selection?.head,
-      repo.git("rev-parse", "HEAD"), "确认时 HEAD 只作审计锚，不伪造二次确认");
+    assert.equal(await gate(), false, "同一文件集合的新 HEAD 也不能复用旧确认");
+    const repaired = service.get(id)!.waiting!;
+    assert.notEqual(repaired.waiting_id, waiting.waiting_id);
+    assert.match(String(repaired.context), /最终代码检视/);
+    await service.decide(id, {
+      state_version: repaired.state_version,
+      selected_options: {
+        [(repaired.question as any).questions[0].question]: "确认按清单推送",
+      },
+    });
+    assert.equal(await gate(), true, "新 HEAD 确认后才放行");
 
     // 修复越过已确认边界新增文件：必须按最新范围重新举卡。
     writeFileSync(join(repo.cwd, "src", "fix.ts"), "export const fix = 1;\n");
@@ -571,6 +579,19 @@ test("人工意见修复后同文件也必须复检；逐条闭环后可正常�
     assert.throws(() => service.setPushConfirmation(id, false),
       /不能关闭确认绕过/);
 
+    (service as any).annotations(internal).respond(first.id, {
+      outcome: "needs_clarification", summary: "空值指的是入参还是返回值？",
+      evidence: [],
+    });
+    assert.throws(() => service.verifyAnnotation(id, first.id, "reviewer-a"),
+      /仍有歧义/,
+      "Agent 明确说没理解时不能让人误点成已修复");
+    (service as any).annotations(internal).respond(first.id, {
+      outcome: "fixed", summary: "已补空值处理", evidence: ["src/feature.ts:1"],
+    });
+    (service as any).annotations(internal).respond(second.id, {
+      outcome: "fixed", summary: "已补边界测试", evidence: ["src/feature.ts:1"],
+    });
     service.verifyAnnotation(id, first.id, "reviewer-a");
     await assert.rejects(service.decide(id, accept),
       (error) => error instanceof TaskControlError && /仍有 1 条/.test(error.message));
@@ -590,7 +611,7 @@ test("人工意见修复后同文件也必须复检；逐条闭环后可正常�
   }
 });
 
-test("卡键绑文件集合:等卡时 HEAD 演进不换卡;重举卡增量优先;有清单即举卡", async () => {
+test("卡键绑定 HEAD:等待期间代码变化会明确换卡;重举卡增量优先", async () => {
   const { service, model, id, internal, repo } = await verifyingTask();
   try {
     const gate = () => (service as any)
@@ -599,20 +620,20 @@ test("卡键绑文件集合:等卡时 HEAD 演进不换卡;重举卡增量优先
     assert.equal(await gate(), false, "未确认先出卡");
     const first = service.get(id)!.waiting!;
 
-    // 人还在看卡,流水线修复推进了 HEAD 但清单没变:卡不能被作废重发
-    // (老实现绑 HEAD,每个中间 commit 都轰一遍人——鸡毛当令箭)。
+    // 人正在看的代码已经变了，旧卡必须作废。继续让人点旧卡才是假通过。
     writeFileSync(join(repo.cwd, "src", "feature.ts"),
       "export const value = 9;\n");
     repo.git("add", "src/feature.ts");
     repo.git("commit", "--quiet", "-m", "mid-review repair");
     assert.equal(await gate(), false);
-    assert.equal(service.get(id)!.waiting!.waiting_id, first.waiting_id,
-      "同一文件集合,等待中的卡必须原地保留");
+    const current = service.get(id)!.waiting!;
+    assert.notEqual(current.waiting_id, first.waiting_id,
+      "HEAD 变化后必须换成覆盖最新代码的卡");
 
     await service.decide(id, {
-      state_version: service.get(id)!.waiting!.state_version,
+      state_version: current.state_version,
       selected_options: {
-        [(first.question as any).questions[0].question]: "确认按清单推送",
+        [(current.question as any).questions[0].question]: "确认按清单推送",
       },
     });
     assert.equal(service.get(id)!.delivery_selection?.status, "confirmed");

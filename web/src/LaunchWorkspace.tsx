@@ -266,8 +266,9 @@ export function LaunchWorkspace({
     ...(knowledgePreview?.errors ?? []),
     ...(knowledgePreview?.warnings ?? []),
   ];
-  // 配置与知识预览都必须可核对后才允许提交。目录降级时宁可把原因摆
-  // 出来，也不能一边写“已自动匹配”一边让后端暗中换一份名单。
+  // 明确选中的知识无法固定才阻塞。自动目录是可选增强：读不到时把
+  // 降级清单和原因摊给人看，仍允许发起；创建现场继续用 digest 对拍，
+  // 目录若恢复或变化会要求刷新，绝不会静默换一份名单。
   const blockers = options?.blockers ?? [];
   const previewSettled = knowledgePreviewKey === expectedKnowledgePreviewKey;
   const knowledgeBlocked = knowledgePreviewLoading || !previewSettled
@@ -845,6 +846,91 @@ export function LaunchWorkspace({
                   </fieldset>
                 </section>}
 
+              {options && <section className={`launch-knowledge-quick${
+                knowledgePreview?.degraded ? " degraded" : ""}${
+                knowledgePreview && !knowledgePreview.complete ? " blocked" : ""}`}
+                aria-label="自动匹配的本任务知识">
+                <header>
+                  <div><span>自动匹配</span><strong>本任务知识</strong>
+                    <small>按业务模块、代码仓、语言和工作流匹配；无需手工勾选</small></div>
+                  <em>{knowledgePreviewLoading || !previewSettled
+                    ? "核对中…"
+                    : knowledgePreviewError ? "暂不可用"
+                      : `${selectedKnowledgeCount} 项`}</em>
+                </header>
+                {knowledgePreviewLoading || !previewSettled ? (
+                  <div className="launch-knowledge-quick-loading">正在核对知识名称、版本与作用域…</div>
+                ) : knowledgePreviewError ? (
+                  <div className="launch-knowledge-quick-message error">
+                    <strong>知识清单暂时无法核对</strong><span>{knowledgePreviewError}</span>
+                  </div>
+                ) : <>
+                  {knowledgePreview?.degraded && (
+                    <div className={`launch-knowledge-quick-message${
+                      knowledgePreview.complete ? " warning" : " error"}`}>
+                      <strong>{knowledgePreview.complete
+                        ? "部分可选知识暂不可用，本次按下面的可用清单继续"
+                        : "明确选择的知识暂时无法固定"}</strong>
+                      <span>{knowledgeNotices.map((notice) => notice.message)
+                        .slice(0, 2).join("；")}</span>
+                    </div>
+                  )}
+                  {selectedKnowledgeCount > 0 ? (
+                    <div className="launch-knowledge-quick-list">
+                      {matchingModuleKnowledge.map((item) => (
+                        <a key={`business/${item.module_id}/${item.id}`}
+                          href={knowledgeAssetPath({ kind: "business",
+                            moduleId: item.module_id, assetId: item.id,
+                            version: item.version, digest: item.digest })}
+                          onClick={(event) => {
+                            event.preventDefault(); persistDraft();
+                            onOpenKnowledgeAsset({ kind: "business",
+                              moduleId: item.module_id, assetId: item.id,
+                              version: item.version, digest: item.digest });
+                          }}>
+                          <b>业务</b><span><strong>{item.title}</strong>
+                            <small>{describeMatchedScope(item)}</small></span>
+                        </a>
+                      ))}
+                      {matchingEngineeringKnowledge.map((item) => (
+                        <a key={`engineering/${item.id}`}
+                          href={knowledgeAssetPath({ kind: "engineering",
+                            candidateId: item.id, digest: item.digest })}
+                          onClick={(event) => {
+                            event.preventDefault(); persistDraft();
+                            onOpenKnowledgeAsset({ kind: "engineering",
+                              candidateId: item.id, digest: item.digest });
+                          }}>
+                          <b>工程</b><span><strong>{item.title}</strong>
+                            <small>{describeMatchedScope(item)}</small></span>
+                        </a>
+                      ))}
+                      {matchingTeamSkills.map((item) => (
+                        <a key={`skill/${item.path}`}
+                          href={knowledgeAssetPath({ kind: "skill",
+                            directory: item.path.split("/")[0] || item.path,
+                            digest: item.digest,
+                            packageDigest: item.package_digest })}
+                          onClick={(event) => {
+                            event.preventDefault(); persistDraft();
+                            onOpenKnowledgeAsset({ kind: "skill",
+                              directory: item.path.split("/")[0] || item.path,
+                              digest: item.digest,
+                              packageDigest: item.package_digest });
+                          }}>
+                          <b>Skill</b><span><strong>{item.name}</strong>
+                            <small>{describeMatchedScope(item)}</small></span>
+                        </a>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="launch-knowledge-quick-empty">
+                      当前没有匹配到平台知识；不影响发起。代码仓内容不纳入平台知识清单。
+                    </div>
+                  )}
+                </>}
+              </section>}
+
               {options && <details className="launch-advanced" open={advancedOpen}
                 onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}>
                 <summary>
@@ -860,7 +946,8 @@ export function LaunchWorkspace({
                       : selectedKnowledgeCount > 0
                         ? <b>{selectedKnowledgeCount} 项平台知识</b>
                         : <b>无平台知识</b>}
-                    {knowledgePreview?.degraded && <b className="attention">预览异常</b>}
+                    {knowledgePreview?.degraded && <b className="attention">{
+                      knowledgePreview.complete ? "知识已降级" : "知识需处理"}</b>}
                     {repairRounds && <b>{repairRounds} 轮修复</b>}
                     {repositoryTechnologies.some((item) => !item.confirmed)
                       && <b className="attention">技术栈待确认</b>}
@@ -917,7 +1004,9 @@ export function LaunchWorkspace({
                   <strong>本任务知识</strong>
                   <small>服务端自动匹配；逐项可进入团队资产查看全文</small>
                 </div><em>{knowledgePreviewLoading || !previewSettled
-                  ? "核对中" : knowledgePreview?.complete ? "权威预览" : "预览异常"}</em></div>
+                  ? "核对中" : knowledgePreview?.complete
+                    ? knowledgePreview.degraded ? "部分降级" : "权威预览"
+                    : "需要处理"}</em></div>
                 <div className="launch-resource-summary">
                   <span><strong>{selectedModuleKnowledgeCount}</strong>
                     <small>模块知识</small></span>
@@ -936,7 +1025,10 @@ export function LaunchWorkspace({
                     knowledgePreview?.complete ? " warning" : " error"}`}
                     role={knowledgePreview?.complete ? "status" : "alert"}>
                     <strong>{knowledgePreview?.complete
-                      ? "自动匹配已应用容量规则" : "自动匹配清单暂时不能作为最终依据"}</strong>
+                      ? knowledgePreview.degraded
+                        ? "部分可选知识已降级，本次按当前清单继续"
+                        : "自动匹配已应用容量规则"
+                      : "明确选择的知识暂时不能固定"}</strong>
                     {knowledgePreviewError && <span>{knowledgePreviewError}</span>}
                     {knowledgeNotices.map((notice, index) => <span
                       key={`${notice.source}/${notice.code}/${index}`}>
@@ -1016,7 +1108,7 @@ export function LaunchWorkspace({
                   {!knowledgePreviewLoading && previewSettled
                     && !knowledgePreviewError && selectedKnowledgeCount === 0 && <div
                     className="launch-knowledge-empty">
-                    没有匹配到平台知识；代码仓里的文档和 Skill 仍由开发助手自己发现。
+                    没有匹配到平台知识；不影响发起。代码仓内容不在这里管理。
                   </div>}
                 </div>
                 <div className="launch-resource-boundary">
@@ -1025,8 +1117,10 @@ export function LaunchWorkspace({
                     : selectedKnowledgeCount
                       ? `将固定 ${selectedKnowledgeCount} 项` : "将固定 0 项平台知识"}</strong>
                   <span>{knowledgePreview?.complete
-                    ? "清单与任务创建复用同一套选择器和容量规则；点击任一项可查看当前全文与版本。"
-                    : "预览完整前不会发起任务，避免页面清单与实际注入结果不一致。"}</span>
+                    ? knowledgePreview.degraded
+                      ? "可选目录的降级原因已明确列出；创建时仍按本清单指纹核对，目录变化会要求刷新。"
+                      : "清单与任务创建复用同一套选择器和容量规则；点击任一项可查看当前全文与版本。"
+                    : "明确选择的资产无法固定前不会发起，避免定制工作流缺能力却假装生效。"}</span>
                 </div>
               </section>}
                 </div>

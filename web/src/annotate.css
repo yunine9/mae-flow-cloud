@@ -424,6 +424,39 @@
   color: var(--text-strong);
 }
 
+.annot-response {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--success);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--success) 7%, var(--surface));
+}
+
+.annot-response.not_fixed {
+  border-left-color: var(--attention);
+  background: color-mix(in srgb, var(--attention) 7%, var(--surface));
+}
+
+.annot-response.needs_clarification {
+  border-left-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 7%, var(--surface));
+}
+
+.annot-response strong,
+.annot-response p,
+.annot-response small { margin: 0; }
+
+.annot-response p { line-height: 1.55; }
+
+.annot-response small {
+  display: block;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
 .annot-inline-editor {
   margin: 2px 0 8px;
   padding: 10px;

@@ -122,17 +122,22 @@ test("未跟踪编译产物可不勾选，确认清单只绑定 HEAD 会推送�
     writeFileSync(join(repo.cwd, "src", "extra.ts"), "export const extra = 1;\n");
     repo.git("add", "src/extra.ts");
     repo.git("commit", "--quiet", "-m", "late unreviewed file");
-    assert.equal(await (service as any).deliverySelectionAllowsPush(internal), false);
-    assert.equal(service.get(id)?.status, "failed");
-    assert.match(service.get(id)?.detail ?? "", /新增了未确认文件 src\/extra\.ts/);
+    assert.equal(await (service as any).deliverySelectionAllowsPush(
+      internal, "master_bot_REQ1"), false);
+    assert.equal(service.get(id)?.status, "waiting_for_human",
+      "确认后现场变化应回到最新检视卡，不能掉进 failed 死胡同");
+    assert.equal(service.get(id)?.waiting?.step, "cloud_push_confirm");
+    assert.match(service.get(id)?.detail ?? "", /等待确认最终交付范围/);
+    assert.match(String(service.get(id)?.waiting?.context ?? ""),
+      /新增 src\/extra\.ts/);
   } finally {
     await model.stop();
   }
 });
 
-test("勾选与 commit 不同也能直接通过:宿主机械整理提交并绑用户跳过直推", async () => {
-  // 用户拍板(2026-08-28):清单调整是机械活,不打回 Agent 也不重编;
-  // 且剔除≠销毁——退出提交,工作区内容原样保留。
+test("勾选与 commit 不同:宿主机械整理但新 HEAD 必须重新 Build-Fix", async () => {
+  // 清单调整是机械活,不打回 Agent；但机械提交同样是新 HEAD，不能拿
+  // 用户选文件冒充跳过编译。且剔除≠销毁——退出提交,内容原样保留。
   const repo = repository({ commitArtifact: true });
   const { service, model, id, internal } = await waitingService(repo);
   try {
@@ -149,7 +154,8 @@ test("勾选与 commit 不同也能直接通过:宿主机械整理提交并绑�
       delivery_paths: ["src/feature.ts"],
     });
     const selection = service.get(id)?.delivery_selection;
-    assert.equal(selection?.status, "confirmed");
+    assert.equal(selection?.status, "requested",
+      "机械整理后的新 HEAD 还没经过 Build-Fix 与最终复检");
     assert.deepEqual(selection?.paths, ["src/feature.ts"]);
 
     // 宿主补了整理提交:未勾选的退出 commit,清单绑定新 HEAD。
@@ -178,11 +184,11 @@ test("勾选与 commit 不同也能直接通过:宿主机械整理提交并绑�
       && !dirty.includes("target/classes/Feature.class"),
       `拍板剔除的路径不应出现在脏区: ${dirty.join(", ")}`);
 
-    // 不重编:新 HEAD 绑用户跳过,编译与 UT 交流水线裁决,账留痕。
+    // 新 HEAD 明确回到 Build-Fix preparing，下一次交付统一重验。
     const prepush = service.get(id)?.delivery?.prepush;
-    assert.equal(prepush?.state, "user_skipped");
+    assert.equal(prepush?.state, "preparing");
     assert.equal(prepush?.sha, after);
-    assert.match(prepush?.message ?? "", /流水线裁决/);
+    assert.match(prepush?.message ?? "", /重新执行 Build-Fix/);
   } finally {
     await model.stop();
   }

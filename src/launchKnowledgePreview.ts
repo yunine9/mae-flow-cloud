@@ -98,7 +98,8 @@ export interface LaunchTeamSkillPreview extends MatchedScope {
 }
 
 export interface LaunchKnowledgePreview {
-  /** 所有目录均成功读取且输入可创建时为 true。 */
+  /** 当前返回清单可以被创建时为 true。可选目录降级仍可 true；只有
+   * 用户/工作流明确选中的资产无法固定时才 false。 */
   complete: boolean;
   /** 任一可选目录 fail-open 或返回治理告警时为 true。 */
   degraded: boolean;
@@ -156,9 +157,10 @@ export function effectiveLaunchKnowledgeSelections(input: {
       ...workflow.businessModuleIds,
     ].map(String).map((item) => item.trim()).filter(Boolean))],
     engineeringKnowledgeIds:
-      input.selectedEngineeringKnowledgeIds === undefined ? undefined
+      input.selectedEngineeringKnowledgeIds === undefined
+        && workflow.engineeringKnowledgeIds.length === 0 ? undefined
         : [...new Set([
-            ...input.selectedEngineeringKnowledgeIds,
+            ...(input.selectedEngineeringKnowledgeIds ?? []),
             ...workflow.engineeringKnowledgeIds,
           ].map(String).map((item) => item.trim()).filter(Boolean))],
     workflow,
@@ -344,11 +346,17 @@ export function previewLaunchKnowledge(
     });
     if (engineeringSelection.warnings.length) {
       degraded = true;
-      warnings.push(...engineeringSelection.warnings.map((message) => ({
+      const notices = engineeringSelection.warnings.map((message) => ({
         source: "engineering_knowledge" as const,
-        code: "catalog_warning" as const,
+        code: selections.engineeringKnowledgeIds !== undefined
+          ? "selection_invalid" as const : "catalog_warning" as const,
         message,
-      })));
+      }));
+      if (selections.engineeringKnowledgeIds !== undefined) {
+        errors.push(...notices);
+      } else {
+        warnings.push(...notices);
+      }
     }
     if (engineeringSelection.omitted) {
       warnings.push({ source: "engineering_knowledge", code: "limit_applied",
@@ -356,13 +364,19 @@ export function previewLaunchKnowledge(
     }
   } catch (error) {
     degraded = true;
-    warnings.push({ source: "engineering_knowledge",
-      code: "catalog_unavailable",
-      message: `团队工程知识目录读取失败，任务将退化为无工程知识：${String(error)}` });
+    const notice = { source: "engineering_knowledge" as const,
+      code: selections.engineeringKnowledgeIds !== undefined
+        ? "selection_invalid" as const : "catalog_unavailable" as const,
+      message: selections.engineeringKnowledgeIds !== undefined
+        ? `明确选择的工程知识无法固定：${String(error)}`
+        : `团队工程知识目录读取失败，任务将退化为无工程知识：${String(error)}` };
+    if (selections.engineeringKnowledgeIds !== undefined) errors.push(notice);
+    else warnings.push(notice);
   }
 
   const selectedHostSkillPaths = input.selectedHostSkillPaths === undefined
-    ? undefined : new Set(input.selectedHostSkillPaths.map(String)
+      && selections.workflow.teamSkillIds.length === 0
+    ? undefined : new Set((input.selectedHostSkillPaths ?? []).map(String)
       .map((item) => item.replace(/\\/g, "/").replace(/^\.\//, "")));
   let teamSkills: HostSkillShelfEntry[] = [];
   try {
@@ -374,6 +388,24 @@ export function previewLaunchKnowledge(
         code: "catalog_warning" as const,
         message,
       })));
+    }
+    const explicitlySelectedPaths = new Set(
+      (input.selectedHostSkillPaths ?? []).map(String)
+        .map((item) => item.replace(/\\/g, "/").replace(/^\.\//, "")));
+    for (const path of explicitlySelectedPaths) {
+      const selected = shelf.skills.find((skill) => skill.path === path);
+      if (!selected?.loadable) {
+        errors.push({ source: "team_skills", code: "selection_invalid",
+          message: `明确选择的团队 Skill ${path} 不存在或当前不可装载` });
+      }
+    }
+    for (const id of selections.workflow.teamSkillIds) {
+      const required = shelf.skills.filter((skill) =>
+        (skill.source_path ?? skill.path).split("/")[0] === id);
+      if (!required.some((skill) => skill.loadable)) {
+        errors.push({ source: "team_skills", code: "selection_invalid",
+          message: `工作流引用的团队 Skill ${id} 不存在或当前不可装载` });
+      }
     }
     if (selectedHostSkillPaths && selections.workflow.teamSkillIds.length) {
       for (const skill of shelf.skills) {
@@ -402,16 +434,29 @@ export function previewLaunchKnowledge(
         return true;
       } catch (error) {
         degraded = true;
-        warnings.push({ source: "team_skills", code: "catalog_warning",
+        const explicitlyRequired = selections.workflow.teamSkillIds.includes(
+          (skill.source_path ?? skill.path).split("/")[0])
+          || (input.selectedHostSkillPaths ?? []).includes(skill.path);
+        const notice = { source: "team_skills" as const,
+          code: explicitlyRequired
+            ? "selection_invalid" as const : "catalog_warning" as const,
           message: `${skill.name}：${error instanceof Error
-            ? error.message : String(error)}` });
+            ? error.message : String(error)}` };
+        if (explicitlyRequired) errors.push(notice);
+        else warnings.push(notice);
         return false;
       }
     });
   } catch (error) {
     degraded = true;
-    warnings.push({ source: "team_skills", code: "catalog_unavailable",
-      message: `团队 Skill 目录读取失败，任务将退化为无团队 Skill：${String(error)}` });
+    const required = selectedHostSkillPaths !== undefined;
+    const notice = { source: "team_skills" as const,
+      code: required ? "selection_invalid" as const : "catalog_unavailable" as const,
+      message: required
+        ? `明确选择的团队 Skill 无法固定：${String(error)}`
+        : `团队 Skill 目录读取失败，任务将退化为无团队 Skill：${String(error)}` };
+    if (required) errors.push(notice);
+    else warnings.push(notice);
   }
 
   const businessKnowledge = businessPreview(businessModules, context);
@@ -444,7 +489,7 @@ export function previewLaunchKnowledge(
     ...matchedScope(skill, context),
   }));
   return {
-    complete: !degraded && errors.length === 0,
+    complete: errors.length === 0,
     degraded,
     scope: {
       repositories,

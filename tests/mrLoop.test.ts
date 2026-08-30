@@ -60,6 +60,16 @@ function walkScript(): Scene[] {
   ];
 }
 
+/** 模拟 Agent 按新契约逐条留下结构化回执。真实场景由使命提示写文件；
+ * 测试从宿主已经落好的 local-annotations.json 取稳定 id/revision。 */
+function localReviewReceiptCommand(summary: string): string {
+  const safeSummary = JSON.stringify(summary);
+  return "node -e 'const fs=require(\"fs\");"
+    + "const p=JSON.parse(fs.readFileSync(\"../reviews/local-annotations.json\",\"utf8\"));"
+    + `const summary=${safeSummary};`
+    + "fs.writeFileSync(\"../reviews/local-receipts.json\",JSON.stringify({receipts:p.annotations.map(a=>({annotation_id:a.id,revision:a.rework||0,outcome:\"fixed\",summary,evidence:[a.file+\":\"+a.line]}))}))'";
+}
+
 function buildService(
   platform: FakeGitPlatform,
   dataDir: string,
@@ -67,6 +77,7 @@ function buildService(
   deliveryExtra: {
     resolveDiscussions?: boolean;
     pollTimeoutMs?: number;
+    repairRounds?: number;
   } = {},
 ): TaskService {
   return new TaskService({
@@ -253,6 +264,55 @@ EOF` } } },
     platform.discussions[0].resolved = true;
     platform.settleMr("master_bot_REQ9", "merged");
     await until(() => service.get(id)!.status === "completed", "合入收口");
+  } finally {
+    await model.stop();
+    await platform.stop();
+  }
+});
+
+test("MR 回复部分失败:成功项不重发,失败项由 outbox 自动续投", async () => {
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  platform.seedDiscussion({
+    id: "d-ok", file: "a.txt", line: 1, severity: "minor",
+    author: "甲", body: "第一条意见",
+  });
+  platform.seedDiscussion({
+    id: "d-retry", file: "a.txt", line: 2, severity: "minor",
+    author: "乙", body: "第二条意见",
+  });
+  platform.failNextDiscussionReplies("d-retry", 1);
+  await platform.start();
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-outbox-"));
+  const model = mrModel([
+    ...walkScript(),
+    { tool: { name: "bash", input: { command:
+        `cat > ../review_replies.md <<'REPLY'
+[d-ok]
+第一条已处理。
+[d-retry]
+第二条已处理。
+REPLY` } } },
+    { text: "两条均已逐条答复。" },
+  ], dataDir);
+  await model.start();
+  const service = buildService(platform, dataDir, model.modelsJson());
+  try {
+    const id = service.create("交付 REQ9:回复故障恢复").id;
+    const replies = (discussionId: string) =>
+      platform.discussions.find((item) => item.id === discussionId)?.replies ?? [];
+    await until(() => replies("d-ok").length === 1
+      && replies("d-retry").length === 1, "失败回复由 outbox 自动续投");
+    assert.equal(replies("d-ok").length, 1,
+      "同批成功项不能随失败项一起重发");
+    const outbox = readFileSync(join(
+      service.get(id)!.workspace, "delivery-outbox.jsonl"), "utf-8");
+    assert.match(outbox, /"op":"failed"/);
+    assert.equal((outbox.match(/"op":"delivered"/g) ?? []).length, 2);
+
+    for (const discussion of platform.discussions) discussion.resolved = true;
+    platform.settleMr("master_bot_REQ9", "merged");
+    await until(() => service.get(id)!.status === "completed", "故障恢复后合入收口");
   } finally {
     await model.stop();
     await platform.stop();
@@ -689,10 +749,10 @@ test("MR 未合入前本地批注可反复开启 review 轮，始终更新同一
   const model = mrModel([
     ...walkScript(),
     { tool: { name: "bash", input: { command:
-        "echo review-one >> a.txt" } } },
+        `echo review-one >> a.txt; ${localReviewReceiptCommand("第一轮边界处理已完成")}` } } },
     { text: "第一轮本地检视意见已修改。" },
     { tool: { name: "bash", input: { command:
-        "echo review-two >> a.txt" } } },
+        `echo review-two >> a.txt; ${localReviewReceiptCommand("第二轮错误兜底已完成")}` } } },
     { text: "第二轮本地检视意见已修改。" },
   ], dataDir);
   await model.start();
@@ -757,7 +817,8 @@ test("本地检视撞上 CI 修复时并入当前 Agent，不启动第二只抢�
   const model = mrModel([
     ...walkScript(),
     { tool: { name: "bash", input: { command:
-        "sleep 1; echo ci-and-review >> a.txt && git add a.txt && git commit --quiet -m fix" } } },
+        "sleep 1; echo ci-and-review >> a.txt && git add a.txt && git commit --quiet -m fix; "
+        + localReviewReceiptCommand("流水线与人工意见已合并处理") } } },
     { text: "流水线问题与人的检视意见已合并处理。" },
   ], dataDir);
   await model.start();
@@ -866,6 +927,34 @@ test("MR 被关闭不算任务结束：持续监听，重开后恢复，用户�
       author: "liaoxiang", artifact: "未提交改动", file: "a.txt", line: 1,
       anchor: "change", note: "停止后不应再新增", kind: "code",
     }), /用户停止/);
+  } finally {
+    await model.stop();
+    await platform.stop();
+  }
+});
+
+test("自动修复关闭只停修复不停监控：人工处理后仍能识别合入", async () => {
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  await platform.start();
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-watch-only-"));
+  const model = mrModel(walkScript(), dataDir);
+  await model.start();
+  const service = buildService(platform, dataDir, model.modelsJson(), {
+    repairRounds: 0,
+  });
+  try {
+    const id = service.create("交付 REQ9:只监控不自动修").id;
+    await until(() => service.get(id)!.status === "await_merge", "先到等待合入");
+    platform.conflictGate = true;
+    await until(() => (service.get(id)!.delivery?.waiting_on ?? "")
+      .includes("自动修复已关闭"), "明确提示人工处理红门禁");
+    assert.equal(service.get(id)!.status, "await_merge");
+
+    platform.conflictGate = false;
+    platform.settleMr("master_bot_REQ9", "merged");
+    await until(() => service.get(id)!.status === "completed",
+      "人工处理后监控仍在并识别合入");
   } finally {
     await model.stop();
     await platform.stop();

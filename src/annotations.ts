@@ -29,6 +29,19 @@ export type SentVia =
   /** MR 已创建后的本地检视：进入当前 MR 的持续修复环。 */
   | "review_repair";
 
+/** Agent 对一条已提交意见的结构化回执。它只陈述 Agent 做了什么，
+ * 不能代替意见作者的 verify：response 是机器事实，verified 是人的判断。 */
+export interface AnnotationResponse {
+  /** 同一条意见返工后 revision 递增，旧回执仍留在 JSONL 审计账里。 */
+  revision: number;
+  outcome: "fixed" | "not_fixed" | "needs_clarification";
+  summary: string;
+  evidence: string[];
+  /** 回执对应的本地提交；没有代码仓的纯文档任务可以缺席。 */
+  fixed_sha?: string;
+  responded_at: string;
+}
+
 export interface Annotation {
   id: string;
   author: string;
@@ -48,6 +61,8 @@ export interface Annotation {
   status: AnnotationStatus;
   sent_at?: string;
   sent_via?: SentVia;
+  /** Agent 对当前 rework revision 的逐条回应。 */
+  response?: AnnotationResponse;
   verified_at?: string;
   /** 非作者(管理员)代确认时记谁点的;作者本人裁决不填。 */
   verified_by?: string;
@@ -73,6 +88,7 @@ type Operation =
   /** by 缺席 = 作者本人(老账);带 by = 管理员代闭环,审计凭它。 */
   | { op: "drop"; id: string; by?: string }
   | { op: "sent"; ids: string[]; via: SentVia; at: string }
+  | { op: "respond"; id: string; response: AnnotationResponse }
   | { op: "verify"; id: string; at: string; by?: string }
   | { op: "reopen"; id: string; at: string;
       line?: number; anchor?: string; note?: string };
@@ -133,6 +149,7 @@ export class AnnotationStore {
           found.status = "draft";
           found.sent_at = undefined;
           found.sent_via = undefined;
+          found.response = undefined;
           found.verified_at = undefined;
         }
         continue;
@@ -144,6 +161,17 @@ export class AnnotationStore {
           found.status = "sent";
           found.sent_at = operation.at;
           found.sent_via = operation.via;
+        }
+        continue;
+      }
+      if (operation.op === "respond") {
+        const found = byId.get(operation.id);
+        if (!found || found.status === "draft" || found.status === "dropped") {
+          continue;
+        }
+        // 晚到的旧轮回执不能覆盖新一轮返工。revision=0 兼容首轮。
+        if (operation.response.revision === (found.rework ?? 0)) {
+          found.response = operation.response;
         }
         continue;
       }
@@ -163,6 +191,7 @@ export class AnnotationStore {
         found.rework = (found.rework ?? 0) + 1;
         found.sent_at = undefined;
         found.sent_via = undefined;
+        found.response = undefined;
         found.verified_at = undefined;
         if (operation.anchor && operation.anchor !== found.anchor) {
           found.anchor_was = found.anchor;
@@ -251,6 +280,44 @@ export class AnnotationStore {
   markSent(ids: string[], via: SentVia): void {
     if (!ids.length) return;
     this.append({ op: "sent", ids, via, at: new Date().toISOString() });
+  }
+
+  /** 记录 Agent 的逐条回应。只接受已经提交且仍是当前 revision 的意见；
+   * 作者是否认可由 verify/reopen 决定，绝不在这里自动闭环。 */
+  respond(
+    id: string,
+    input: Omit<AnnotationResponse, "revision" | "responded_at"> & {
+      revision?: number;
+      responded_at?: string;
+    },
+  ): Annotation {
+    const found = this.list().find((item) => item.id === id);
+    if (!found) throw new AnnotationError(`批注不存在: ${id}`);
+    if (found.status === "draft") {
+      throw new AnnotationError("批注尚未提交，不能登记 Agent 回应");
+    }
+    if (found.status === "dropped") {
+      throw new AnnotationError("这条已经移除");
+    }
+    const revision = input.revision ?? (found.rework ?? 0);
+    if (revision !== (found.rework ?? 0)) {
+      throw new AnnotationError(
+        `批注 ${id} 当前是第 ${(found.rework ?? 0) + 1} 轮，不能登记旧轮回应`,
+      );
+    }
+    const summary = String(input.summary ?? "").trim();
+    if (!summary) throw new AnnotationError("Agent 逐条回应不能为空");
+    const response: AnnotationResponse = {
+      revision,
+      outcome: input.outcome,
+      summary,
+      evidence: [...new Set((input.evidence ?? [])
+        .map((item) => String(item).trim()).filter(Boolean))].slice(0, 20),
+      ...(input.fixed_sha?.trim() ? { fixed_sha: input.fixed_sha.trim() } : {}),
+      responded_at: input.responded_at ?? new Date().toISOString(),
+    };
+    this.append({ op: "respond", id, response });
+    return this.list().find((item) => item.id === id)!;
   }
 
   /** 谁的意见谁裁决:和 drop 同一条规矩,替别人点"通过"等于替他签字。
@@ -351,7 +418,9 @@ export function renderAnnotations(
       lines.push(`【${item.file}】`);
     }
     index += 1;
-    lines.push(`${index}. 第 ${item.line} 行`);
+    // 稳定 id 是逐条回执的连接键。不能再靠“第 1 段大概回答第 1 条”猜，
+    // Agent、服务端和页面都必须能精确指回同一条意见。
+    lines.push(`${index}. [${item.id}] 第 ${item.line} 行`);
     lines.push(`   ${item.kind === "code" ? "当前代码" : "原文"}:${item.anchor}`);
     lines.push(`   要求:${item.note}`);
     // 返工必须点明,不然模型把它当全新意见——轻则重复上一轮的改法,

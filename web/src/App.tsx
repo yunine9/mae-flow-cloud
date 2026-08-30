@@ -392,9 +392,9 @@ function NavIcon({ name }: { name: View }) {
   return <svg viewBox="0 0 24 24" aria-hidden><path d="M5 4.75h14A1.25 1.25 0 0 1 20.25 6v12A1.25 1.25 0 0 1 19 19.25H5A1.25 1.25 0 0 1 3.75 18V6A1.25 1.25 0 0 1 5 4.75Z" /><path d="M8 9h8M8 13h5" /></svg>;
 }
 
-// MR 绿灯/待合入仍是活动任务：它继续监听门禁、流水线和人工检视。
-// 只有真正合入后的 completed 才进入“已交付”。
-const DELIVERED_STATUSES: TaskStatus[] = ["completed"];
+// MR 绿灯/待合入仍是活动任务：它继续监听门禁、流水线和人工检视，
+// 但在“我的工作”里与已完成任务共用交付接力区，不混进自动推进列表。
+const DELIVERY_HANDOFF_STATUSES: TaskStatus[] = ["await_merge", "completed"];
 
 export function App() {
   const [theme, setTheme] = useState<Theme>(() =>
@@ -706,12 +706,12 @@ export function App() {
   const myActive = myTasks.filter((task) =>
     task.status !== "waiting_for_human" && !isBlocked(task)
     && task.status !== "paused" && task.status !== "canceled"
-    && !DELIVERED_STATUSES.includes(task.status));
+    && !DELIVERY_HANDOFF_STATUSES.includes(task.status));
   const myCurrent = myTasks.filter((task) =>
-    task.status !== "canceled" && !DELIVERED_STATUSES.includes(task.status))
+    task.status !== "canceled" && !DELIVERY_HANDOFF_STATUSES.includes(task.status))
     .sort(byTeamAttention);
   const myDelivered = myTasks.filter((task) =>
-    DELIVERED_STATUSES.includes(task.status));
+    DELIVERY_HANDOFF_STATUSES.includes(task.status));
   const scopedMyWork = mineScope === "waiting" ? myWaiting
     : mineScope === "intervention" ? myIntervention
       : mineScope === "active" ? myActive
@@ -1059,6 +1059,7 @@ function PersonalActionInbox({
     title: string;
     detail: string;
     action: string;
+    href?: string;
   }> = [];
   for (const task of waiting) {
     if (seen.has(task.id)) continue;
@@ -1109,6 +1110,7 @@ function PersonalActionInbox({
         ? `验证已通过,请到 CodeHub 完成检视与合入:${task.delivery.mr_url}`
         : "验证已通过,请到 CodeHub 完成检视与合入",
       action: "查看合入请求",
+      href: task.delivery?.mr_url,
     });
   }
   const shown = expanded ? items : items.slice(0, 3);
@@ -1122,8 +1124,13 @@ function PersonalActionInbox({
       <article key={item.key} className={index === 0 ? "primary" : ""}>
         <span className="personal-action-rank">{String(index + 1).padStart(2, "0")}</span>
         <div><small>{item.kicker}</small><strong>{item.title}</strong><p>{item.detail}</p></div>
-        <button type="button" disabled={!item.task}
-          onClick={() => item.task && onOpen(item.task)}>{item.action}</button>
+        {item.href ? (
+          <a className="personal-action-button" href={item.href}
+            target="_blank" rel="noreferrer">{item.action} ↗</a>
+        ) : (
+          <button type="button" disabled={!item.task}
+            onClick={() => item.task && onOpen(item.task)}>{item.action}</button>
+        )}
       </article>
     ))}</div> : <div className="personal-action-clear">
       <span aria-hidden>✓</span><div><strong>当前没有需要你处理的事项</strong>

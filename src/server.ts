@@ -2200,12 +2200,17 @@ export function createTaskServer(
           }
           // 送达 = 在指挥这一单,权限同决定;圈注不需要这个门槛。
           if (request.method === "POST" && parts[3] === "send") {
-            if (!canCollaborate(viewer, target, !!options.auth)) {
+            const assignedReviewer = !!viewer && service.listTaskReviews(id)
+              .some((review) => review.status === "pending"
+                && review.committer === viewer.username);
+            if (!canCollaborate(viewer, target, !!options.auth)
+                && !assignedReviewer) {
               return json(response, 403, { error: "只有任务责任人或受邀协作者可以送批注" });
             }
             const body = await readBody(request);
             const ids = Array.isArray(body.ids) ? body.ids.map(String) : undefined;
-            return json(response, 200, await service.sendAnnotations(id, ids));
+            return json(response, 200,
+              await service.sendAnnotations(id, ids, author));
           }
           if (request.method === "GET" && parts[3] === "preview") {
             return json(response, 200,

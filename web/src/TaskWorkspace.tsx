@@ -62,6 +62,14 @@ import {
 
 type WorkspaceView = "materials" | "collaboration" | "execution" | "insights";
 
+function defaultWorkspaceView(task: TaskSummary): WorkspaceView {
+  if (task.status === "paused") return "collaboration";
+  if (task.waiting || task.status === "waiting_for_human") return "materials";
+  if (["queued", "running", "pausing", "verifying", "await_merge"]
+      .includes(task.status)) return "execution";
+  return "materials";
+}
+
 function sizeText(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
@@ -163,12 +171,12 @@ export function TaskWorkspace({
   /** 点进度条阶段名弹该阶段执行方案;空串=不显示。 */
   const [planPhase, setPlanPhase] = useState("");
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>(
-    task.status === "paused" ? "collaboration" : "materials",
+    defaultWorkspaceView(task),
   );
 
   useEffect(() => {
     setMaterialView(task.waiting?.recommended_view ?? "source");
-    setWorkspaceView(task.status === "paused" ? "collaboration" : "materials");
+    setWorkspaceView(defaultWorkspaceView(task));
     setRepositoryAssignees(EMPTY_REPOSITORY_ASSIGNEE_SELECTION);
     setDeliverySelection(undefined);
   }, [task.id]);
@@ -200,7 +208,13 @@ export function TaskWorkspace({
 
   useEffect(() => {
     if (task.status === "paused") setWorkspaceView("collaboration");
-  }, [task.status]);
+    else if (task.waiting || task.status === "waiting_for_human") {
+      setWorkspaceView("materials");
+    } else if (["queued", "running", "pausing", "verifying", "await_merge"]
+        .includes(task.status)) {
+      setWorkspaceView("execution");
+    }
+  }, [task.status, task.waiting?.waiting_id]);
 
   useEffect(() => {
     if (!canRequestReview) return;
@@ -380,6 +394,7 @@ export function TaskWorkspace({
       ? { kicker: "WORKTREE CHANGES", title: "工作区变更" }
       : { kicker: "WORK DOCUMENTS", title: "过程文档" };
   const waiting = task.status === "waiting_for_human" && task.waiting;
+  const canContributeReview = canOperate || canCollaborate || !!reviewAssignment;
   const collaborationVisible = canCollaborate && [
     "running", "pausing", "paused", "waiting_for_human", "verifying",
   ].includes(task.status);
@@ -392,6 +407,7 @@ export function TaskWorkspace({
       question.options?.some((option) => option.includes("确认并生成任务"))) ?? false);
   const controllable = canOperate && [
     "queued", "running", "pausing", "paused", "waiting_for_human", "verifying",
+    "await_merge",
   ].includes(task.status);
   const health = taskHealthFacts(task, viewerUsername);
   const visibleProgress = workspaceProgress(task);
@@ -470,7 +486,7 @@ export function TaskWorkspace({
         </div>
         {controllable && (
           <div className="ws-head-controls" aria-label="任务控制">
-            {task.status === "paused" ? (
+            {task.status === "await_merge" ? null : task.status === "paused" ? (
               <button type="button" className="primary" disabled={!!controlBusy}
                 title="沿用当前工作区和流程进度继续执行"
                 onClick={() => void runControl("resume")}>
@@ -656,7 +672,7 @@ export function TaskWorkspace({
                 fallbackFile={activeMeta?.label ?? active}
                 kind={activeMeta?.kind === "diff" ? "code" : "doc"}
                 items={notes}
-                enabled={canOperate
+                enabled={canContributeReview
                   && !["completed", "canceled"].includes(task.status)}
                 onAdded={() => setNotesPulse((tick) => tick + 1)}
               >
@@ -754,7 +770,7 @@ export function TaskWorkspace({
                     items={notes}
                     checks={checks}
                     reply={reply}
-                    canOperate={canOperate}
+                    canOperate={canContributeReview}
                     taskStatus={task.status}
                     reviewReady={task.waiting?.step === "cloud_push_confirm"
                       && task.delivery?.loop?.review_source === "workspace"
@@ -915,7 +931,25 @@ export function TaskWorkspace({
             </div>
           )}
           {!waiting && task.status !== "failed" && task.status !== "canceled" && (
-            task.status === "verifying" ? (
+            task.status === "await_merge" ? (
+              <div className="ws-merge-focus">
+                <span>MERGE REQUEST</span>
+                <strong>{task.delivery?.mr_state === "已关闭"
+                  ? "MR 已关闭，任务还没有结束"
+                  : "代码已验证，等待检视与合入"}</strong>
+                <p>{task.delivery?.waiting_on
+                  || "系统会继续监听流水线和门禁；MR 合入后任务才真正完成。"}</p>
+                {task.delivery?.mr_url ? (
+                  <a href={task.delivery.mr_url} target="_blank"
+                    rel="noreferrer">打开合入请求 ↗</a>
+                ) : (
+                  <em>平台尚未返回 MR 链接，请稍后刷新。</em>
+                )}
+                {canOperate && (
+                  <small>不再继续这项任务时，可用右上角“取消”明确停止监听。</small>
+                )}
+              </div>
+            ) : task.status === "verifying" ? (
               /* 验证中右栏不再空转:此刻用户最想知道的是"卡在哪/等谁",
                  waiting_on 有值就点名;修复停机时直接给重试入口。 */
               <div className="ws-verify-focus">

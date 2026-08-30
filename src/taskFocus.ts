@@ -160,12 +160,20 @@ export function projectTaskFocus(task: FocusTask): TaskFocus {
     return focus("done", "交付已经完成", "可在交付历史中复盘", "none", 5);
   }
   if (task.status === "await_merge") {
+    const waiting = delivery?.waiting_on?.trim();
+    const closed = delivery?.mr_state === "已关闭"
+      || /MR 已关闭/.test(waiting ?? "");
     return focus(
-      "external",
-      delivery?.mr_state ? `合入请求：${delivery.mr_state}` : "验证通过，等待合入",
-      "在 CodeHub 完成检视与合入",
+      "human_action",
+      waiting || (closed ? "MR 已关闭，任务仍在等待处理"
+        : delivery?.mr_state ? `合入请求：${delivery.mr_state}`
+          : "验证通过，等待合入"),
+      closed
+        ? "重新打开 MR 继续推进，或主动停止任务"
+        : "打开 MR 完成检视、审批与合入",
       "responsible",
-      20,
+      closed ? 94 : 82,
+      true,
     );
   }
   if (task.status === "pausing") {

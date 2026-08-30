@@ -2315,6 +2315,14 @@ export interface Annotation {
   status: "draft" | "sent" | "verified" | "dropped";
   sent_at?: string;
   sent_via?: "interrupt" | "decision" | "pipeline_evidence" | "review_repair";
+  response?: {
+    revision: number;
+    outcome: "fixed" | "not_fixed" | "needs_clarification";
+    summary: string;
+    evidence: string[];
+    fixed_sha?: string;
+    responded_at: string;
+  };
   verified_at?: string;
   /** 第几次返工(0/缺省 = 首轮)。 */
   rework?: number;

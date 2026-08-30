@@ -41,6 +41,19 @@ test("检视完成回执:committer 点完成,发起人收到通知", async () =>
     const review = await service.requestReview(id, "alice", "bob");
     await until(() => luban.messages.length >= 1, "邀请通知投递");
     const invites = luban.messages.length;
+    const draft = service.addAnnotation(id, {
+      author: "bob", artifact: "spec.md", file: "spec.md", line: 1,
+      anchor: "原文", note: "这里需要补边界说明", kind: "doc",
+    });
+    assert.throws(() => service.completeReview(review.id, "bob"),
+      /草稿尚未提交或删除/,
+      "不能一边留着自己的未提交意见，一边声称检视已经完成");
+    const internal = (service as any).tasks.get(id);
+    (service as any).annotations(internal).markSent([draft.id], "review_repair");
+    assert.throws(() => service.completeReview(review.id, "bob"),
+      /已提交意见尚未确认闭环/,
+      "意见交给 Agent 后也不能直接把检视邀请点完成");
+    service.verifyAnnotation(id, draft.id, "bob");
     service.completeReview(review.id, "bob");
     await until(() => luban.messages.length > invites, "完成回执投递");
     const receipt = luban.messages[luban.messages.length - 1] as

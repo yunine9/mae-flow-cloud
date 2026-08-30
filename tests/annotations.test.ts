@@ -67,7 +67,7 @@ test("批注清单:那四条护栏一字不能少", () => {
   assert.match(text, /说明理由,别默默跳过/);
   // 三元组:坐标 + 原文 + 要求
   assert.match(text, /【spec\.md】/);
-  assert.match(text, /1\. 第 42 行/);
+  assert.match(text, /1\. \[an-[^\]]+\] 第 42 行/);
   assert.match(text, /原文:手机号按后四位掩码/);
   assert.match(text, /要求:掩码要保留后四位/);
 });
@@ -333,6 +333,38 @@ test("检视闭环:确认通过收口,返工退回草稿再送一轮", () => {
   assert.throws(() => target.verify(draft.id, "liaoxiang"), /没有可裁决/);
   target.markSent([draft.id], "decision");
   assert.throws(() => target.verify(draft.id, "路人"), /只能由他裁决/);
+});
+
+test("逐条回执:按 revision 追加留痕,返工后旧回应不能冒充新一轮", () => {
+  const target = store();
+  const note = seed(target, "补充空值保护");
+  assert.throws(() => target.respond(note.id, {
+    outcome: "fixed", summary: "尚未提交就声称已修", evidence: [],
+  }), /尚未提交/);
+
+  target.markSent([note.id], "review_repair");
+  const responded = target.respond(note.id, {
+    outcome: "fixed",
+    summary: "已在入口增加空值保护并补测试",
+    evidence: ["src/handler.ts:23", "src/handler.ts:23"],
+    fixed_sha: "abc123",
+  });
+  assert.equal(responded.response?.revision, 0);
+  assert.deepEqual(responded.response?.evidence, ["src/handler.ts:23"]);
+  assert.equal(target.list()[0].response?.fixed_sha, "abc123",
+    "append-only 台账重放后回应仍须存在");
+
+  const reopened = target.reopen(note.id, "liaoxiang");
+  assert.equal(reopened.response, undefined, "返工必须清掉上一轮机器回应");
+  target.markSent([note.id], "review_repair");
+  assert.throws(() => target.respond(note.id, {
+    revision: 0, outcome: "fixed", summary: "迟到的第一轮回应", evidence: [],
+  }), /不能登记旧轮回应/);
+  const second = target.respond(note.id, {
+    revision: 1, outcome: "not_fixed", summary: "按新证据无需修改", evidence: [],
+  });
+  assert.equal(second.response?.revision, 1);
+  assert.equal(second.response?.outcome, "not_fixed");
 });
 
 test("空内容与缺原文一律拒收——没有原文的批注无从定位", () => {

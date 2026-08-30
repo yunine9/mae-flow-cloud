@@ -89,7 +89,7 @@ export function AnnotationPanel({
   viewerUsername: string;
   items: Annotation[];
   checks: AnchorCheck[];
-  /** 最后一批送出后 AI 的原话。不做逐条对应——配错了比不显示更害人。 */
+  /** 旧任务的总体回复兼容展示；新检视以每条 response 为权威。 */
   reply?: { texts: string[]; truncated: boolean };
   canOperate: boolean;
   /** 点一条回到材料里那一行——改批注前人几乎总要再看一眼上下文。 */
@@ -108,7 +108,10 @@ export function AnnotationPanel({
   const [editingNote, setEditingNote] = useState("");
   const [mutationBusy, setMutationBusy] = useState("");
   const [error, setError] = useState("");
-  const drafts = items.filter((item) => item.status === "draft");
+  // 每个人只提交自己的草稿。其他人的草稿既不应被代交，也不能成为
+  // 暗中锁住任务的全局门禁。
+  const drafts = items.filter((item) =>
+    item.status === "draft" && item.author === viewerUsername);
   const myReviewCount = items.filter((item) =>
     item.status === "sent" && item.author === viewerUsername).length;
   const [open, setOpen] = useState(drafts.length > 0
@@ -130,7 +133,7 @@ export function AnnotationPanel({
     if (busy) return;
     setBusy(true);
     setError("");
-    const result = await sendAnnotations(taskId);
+    const result = await sendAnnotations(taskId, drafts.map((item) => item.id));
     setBusy(false);
     if (result.error) setError(result.error);
     onChanged();
@@ -241,6 +244,22 @@ export function AnnotationPanel({
                 </div>
               ) : <p className="annot-note">{item.note}</p>}
               <blockquote className="annot-anchor"><span>针对</span>{item.anchor}</blockquote>
+              {item.response && (
+                <div className={`annot-response ${item.response.outcome}`}>
+                  <strong>{item.response.outcome === "fixed"
+                    ? "Agent：已处理"
+                    : item.response.outcome === "not_fixed"
+                      ? "Agent：没有修改"
+                      : "Agent：需要你补充说明"}</strong>
+                  <p>{item.response.summary}</p>
+                  {item.response.evidence.length > 0 && (
+                    <small>依据：{item.response.evidence.join("；")}</small>
+                  )}
+                  {item.response.fixed_sha && (
+                    <small>对应提交：{item.response.fixed_sha.slice(0, 12)}</small>
+                  )}
+                </div>
+              )}
               <div className="annot-item-foot">
                 <small>
                   {deliveryText(item)} · {item.author} · {relativeTime(item.created_at)}
@@ -270,7 +289,19 @@ export function AnnotationPanel({
                 {/* 检视闭环的裁决:提过的意见不能停在"请你确认"没有下文。
                     通过=收口;返工=退回待提交,下一次提交再送给 AI。 */}
                 {item.status === "sent" && isAuthor && !editing
-                  && reviewReady && (
+                  && reviewReady && item.response?.outcome === "needs_clarification" && (
+                  <span className="annot-verdict">
+                    <button type="button" className="ghost"
+                            disabled={!!mutationBusy}
+                            onClick={() => {
+                              setEditingId(item.id);
+                              setEditingNote(item.note);
+                            }}>补充说明后重提</button>
+                  </span>
+                )}
+                {item.status === "sent" && isAuthor && !editing
+                  && reviewReady && item.response
+                  && item.response.outcome !== "needs_clarification" && (
                   <span className="annot-verdict">
                     <button type="button" className="ghost"
                             disabled={!!mutationBusy} onClick={async () => {

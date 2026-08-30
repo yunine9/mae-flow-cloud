@@ -41,6 +41,31 @@ test("任务焦点:机器修复、平台验证与跨仓依赖不会冒充人工�
   assert.equal(dependency.needs_attention, false);
 });
 
+test("任务焦点:await_merge 是明确的人类行动，不藏进自动推进", () => {
+  const waiting = projectTaskFocus({
+    status: "await_merge",
+    delivery: {
+      mr_state: "等待合入",
+      waiting_on: "等检视人确认已回复的意见",
+    },
+  });
+  assert.equal(waiting.kind, "human_action");
+  assert.equal(waiting.headline, "等检视人确认已回复的意见");
+  assert.equal(waiting.owner, "responsible");
+  assert.equal(waiting.needs_attention, true);
+  assert.match(waiting.next_action, /打开 MR/);
+
+  const closed = projectTaskFocus({
+    status: "await_merge",
+    delivery: {
+      mr_state: "已关闭",
+      waiting_on: "MR 已关闭，请重新打开或由任务责任人主动停止任务",
+    },
+  });
+  assert.match(closed.next_action, /重新打开.*停止/);
+  assert.equal(closed.needs_attention, true);
+});
+
 test("任务焦点:证据重试是平台动作，预算耗尽才进入人的行动收件箱", () => {
   const retrying = projectTaskFocus({
     status: "verifying",

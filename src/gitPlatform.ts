@@ -82,6 +82,10 @@ export class FakeGitPlatform {
   nextPipelineChecks?: PipelineCheck[];
   /** 检视讨论(测试注入 seedDiscussion;修复闭环回复+resolve 落这里)。 */
   readonly discussions: Discussion[] = [];
+  /** 故障注入：指定讨论的接下来 N 次回复返回失败。 */
+  readonly discussionReplyFailures = new Map<string, number>();
+  /** 假平台也兑现幂等键，覆盖“远端成功、本地来不及记账”的重放窗。 */
+  private readonly discussionReplyIdempotency = new Set<string>();
   /** 冲突门禁:true=conflict_passed 不过(真件由平台判,假件测试拨)。 */
   conflictGate = false;
   /** 等人类门禁覆盖(approvers_passed 等):不设=通过。
@@ -273,9 +277,23 @@ export class FakeGitPlatform {
   ): { ok: boolean } {
     const discussion = this.discussions.find((item) => item.id === id);
     if (!discussion) throw new Error(`讨论 ${id} 不存在`);
+    const remaining = this.discussionReplyFailures.get(id) ?? 0;
+    if (remaining > 0) {
+      this.discussionReplyFailures.set(id, remaining - 1);
+      throw new Error(`讨论 ${id} 模拟回复失败`);
+    }
+    const idempotencyKey = String(body.idempotency_key ?? "").trim();
+    if (idempotencyKey && this.discussionReplyIdempotency.has(idempotencyKey)) {
+      return { ok: true };
+    }
     discussion.replies.push(String(body.body ?? ""));
+    if (idempotencyKey) this.discussionReplyIdempotency.add(idempotencyKey);
     if (body.resolve === true) discussion.resolved = true;
     return { ok: true };
+  }
+
+  failNextDiscussionReplies(id: string, count = 1): void {
+    this.discussionReplyFailures.set(id, Math.max(0, Math.trunc(count)));
   }
 
   /** 测试注入:种一条未解决的检视意见。 */
