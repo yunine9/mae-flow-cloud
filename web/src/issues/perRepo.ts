@@ -10,6 +10,9 @@
  *   原因前端不知道,不硬造)。
  * 流水线徽标只认 pipelines 里该仓的 status 字段;记录缺席就不出徽标,
  * 不在前端补逻辑硬造状态。
+ * 转正会话(#31)另有一本只读引用的旧账(inherited_accounts 指向旧
+ * 会话):repoDeliveryRows 按仓把它捞成各卡的 inherited 事实,标注
+ * 「转正前」陈列,不参与本会话的已交付判定——两本账不混。
  */
 
 /** 服务端 workspaceDiffAll 的分段标记(service.ts 逐仓拼接时写入,
@@ -36,7 +39,18 @@ export interface RepoLedgerInput {
   }>;
 }
 
-/** 一个仓一张卡的全部呈现事实:角色(变更仓/未交付)、MR、推送、流水线。 */
+/** 转正前账的一仓事实(#31 只读引用,来自 inherited_accounts 指向的
+ * 旧会话):与本会话账分开陈列,渲染层加「转正前」标识,两本账不混。
+ * 流水线只给陈列词(与 repoPipelineBadge 同一套),不出头部徽标——
+ * 徽标位置留给本会话的当前事实。 */
+export interface RepoInheritedFacts {
+  push?: { branch: string; sha: string; at: string };
+  mr?: { branch: string; title: string; url?: string; iid?: string };
+  pipeline?: { label: string; failedChecks: string[] };
+}
+
+/** 一个仓一张卡的全部呈现事实:角色(变更仓/未交付)、MR、推送、流水线,
+ * 以及该仓的转正前账(有才带)。 */
 export interface RepoDeliveryRow {
   /** 仓地址(API 各账的 repo 字段原样)。 */
   repo: string;
@@ -55,6 +69,9 @@ export interface RepoDeliveryRow {
      * dimension/job 原文,不翻译不推断)。 */
     failedChecks: string[];
   };
+  /** 转正前账(只读引用,见 RepoInheritedFacts);该仓在旧会话确有
+   * 记录时在场。 */
+  inherited?: RepoInheritedFacts;
 }
 
 /** 展示名:地址末段去 .git(与服务端 issueRepoWorkspaces 的取名同源;
@@ -64,9 +81,52 @@ export function repoName(url: string): string {
   return tail.replace(/\.git$/i, "") || url;
 }
 
+/** 转正前流水线的陈列词:与 repoPipelineBadge 同一套,不硬造第四种。 */
+function inheritedPipelineLabel(status: "running" | "success" | "failed"): string {
+  if (status === "success") return "流水线通过";
+  if (status === "failed") return "流水线失败";
+  return "流水线运行中";
+}
+
+/** 从旧账(只读引用拉回的旧会话账)里捞起某仓的转正前事实;旧账缺席
+ * 或该仓无任何记录 → undefined(仓卡不加「转正前」行,与现状无异)。 */
+function inheritedFactsOf(
+  inherited: RepoLedgerInput | undefined, repo: string,
+): RepoInheritedFacts | undefined {
+  if (!inherited) return undefined;
+  const push = inherited.pushes?.find((item) => item.repo === repo);
+  const mr = inherited.mrs?.find((item) => item.repo === repo);
+  const watch = inherited.pipelines?.[repo];
+  if (!push && !mr && !watch) return undefined;
+  return {
+    ...(push ? { push } : {}),
+    ...(mr ? {
+      mr: {
+        branch: mr.branch, title: mr.title,
+        ...(mr.url ? { url: mr.url } : {}),
+        ...(mr.iid ? { iid: mr.iid } : {}),
+      },
+    } : {}),
+    ...(watch ? {
+      pipeline: {
+        label: inheritedPipelineLabel(watch.status),
+        failedChecks: (watch.checks ?? [])
+          .filter((check) => check.status === "failed")
+          .map((check) => check.job
+            ? `${check.dimension} · ${check.job}`
+            : check.dimension),
+      },
+    } : {}),
+  };
+}
+
 /** 逐仓交付账:登记仓为骨架,按仓地址捞起各自的推送/MR/流水线记录。
- * 账里出现登记清单之外的仓(形状漂移/极端旧现场)时追加在尾部,不丢账。 */
-export function repoDeliveryRows(issue: RepoLedgerInput): RepoDeliveryRow[] {
+ * 账里出现登记清单之外的仓(形状漂移/极端旧现场)时追加在尾部,不丢账;
+ * inherited(转正前账,只读引用)同尺参与捞取与补尾,但只进各卡自己的
+ * 「转正前」行,不影响本会话的已交付判定。 */
+export function repoDeliveryRows(
+  issue: RepoLedgerInput, inherited?: RepoLedgerInput,
+): RepoDeliveryRow[] {
   const urls = issue.repo_urls?.length
     ? [...issue.repo_urls]
     : issue.repo_url ? [issue.repo_url] : [];
@@ -74,6 +134,9 @@ export function repoDeliveryRows(issue: RepoLedgerInput): RepoDeliveryRow[] {
     ...(issue.pushes ?? []).map((item) => item.repo),
     ...(issue.mrs ?? []).map((item) => item.repo),
     ...Object.keys(issue.pipelines ?? {}),
+    ...(inherited?.pushes ?? []).map((item) => item.repo),
+    ...(inherited?.mrs ?? []).map((item) => item.repo),
+    ...Object.keys(inherited?.pipelines ?? {}),
   ]) {
     if (extra && !urls.includes(extra)) urls.push(extra);
   }
@@ -81,6 +144,7 @@ export function repoDeliveryRows(issue: RepoLedgerInput): RepoDeliveryRow[] {
     const push = issue.pushes?.find((item) => item.repo === repo);
     const mr = issue.mrs?.find((item) => item.repo === repo);
     const watch = issue.pipelines?.[repo];
+    const old = inheritedFactsOf(inherited, repo);
     return {
       repo,
       name: repoName(repo),
@@ -105,6 +169,7 @@ export function repoDeliveryRows(issue: RepoLedgerInput): RepoDeliveryRow[] {
               : check.dimension),
         },
       } : {}),
+      ...(old ? { inherited: old } : {}),
     };
   });
 }

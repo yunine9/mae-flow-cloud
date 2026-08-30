@@ -308,6 +308,11 @@ export interface IssueSessionState {
   converted_from?: string;
   /** 转正去向:本会话(无单挂起)转正生成的新会话 id。 */
   converted_to?: string;
+  /** 转正继承的交付账引用(#31 拍板:只读引用零拷贝):指向旧会话 id,
+   * 旧账(pushes/mrs/pipelines)留在原地不搬运——服务端保持薄,前端
+   * 仓卡渲染时经只读详情接口取回并标注「转正前」;旧会话被物理清理时
+   * 引用静默缺省。 */
+  inherited_accounts?: { issue: string };
   status: IssueStatus;
   stage: AnyIssueStage;
   stage_note: string;
