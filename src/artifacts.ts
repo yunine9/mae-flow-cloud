@@ -326,6 +326,25 @@ function taskBaseline(cwd: string): string | undefined {
     || undefined;
 }
 
+/** 定格基线的**不自愈**读法:只认内核建分支时记录的 step_heads。
+ * taskBaselineAsync 的 merge-base 回退是给 diff 展示兜底的——它永远
+ * 返回 HEAD 的祖先,用它做祖先门禁等于门禁永远绿(MFC-036 教训),
+ * 所以祖先校验必须走这里;没记录就返回 undefined,让调用方明确跳过。 */
+export async function frozenTaskBaseline(
+  cwd: string,
+): Promise<string | undefined> {
+  try {
+    const state = JSON.parse(readFileSync(join(cwd, ".mae-flow.json"), "utf-8"));
+    const recorded = [
+      state?.step_heads?.branch_create,
+      state?.step_heads?.workflow_select,
+    ].find((value) => typeof value === "string" && value.trim());
+    return recorded ? String(recorded).trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function taskBaselineAsync(cwd: string): Promise<string | undefined> {
   try {
     const state = JSON.parse(readFileSync(join(cwd, ".mae-flow.json"), "utf-8"));

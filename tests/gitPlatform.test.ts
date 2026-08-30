@@ -184,3 +184,93 @@ test("浏览器路径:MR 页面可开、门禁全绿才可合入、合入真实�
     await platform.stop();
   }
 });
+
+// MFC-037:冲突门禁与真正 merge 必须同一套事实。此前门禁读测试布尔恒
+// 绿,页面给出合入按钮,点了才在 Git 层撞 409——MFC 看见假绿永远不派
+// 冲突修复,人卡在浏览器死路里。现在目标分支前进(非快进)时门禁就红。
+test("目标分支前进后冲突门禁立即红;合入 409 给人话页面;补齐快进后恢复", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-git-conflict-"));
+  const source = makeSourceRepo();
+  const platform = new FakeGitPlatform();
+  const bare = platform.initBare(source, dataDir);
+  await platform.start();
+  try {
+    const work = join(dataDir, "work");
+    git(dataDir, "clone", "--quiet", bare, "work");
+    git(work, "config", "user.email", "bot@test");
+    git(work, "config", "user.name", "bot");
+    git(work, "checkout", "--quiet", "-b", "master_bot_REQ3");
+    writeFileSync(join(work, "c.txt"), "task change\n");
+    git(work, "add", ".");
+    git(work, "commit", "--quiet", "-m", "feat: REQ3");
+    git(work, "push", "--quiet", "origin", "master_bot_REQ3");
+    const sha = git(work, "rev-parse", "HEAD");
+    const mr = await fetch(`${platform.baseUrl}/mr`, {
+      method: "POST",
+      body: JSON.stringify({
+        source_branch: "master_bot_REQ3", target_branch: "master",
+        title: "feat: REQ3",
+      }),
+    }).then((r) => readJson(r)) as { id: number; url: string };
+    await fetch(`${platform.baseUrl}/pipeline/trigger`, {
+      method: "POST", body: JSON.stringify({ sha }),
+    });
+
+    // 模拟别的 MR 先合入:目标分支前进,任务分支不再可快进。
+    const other = join(dataDir, "other");
+    git(dataDir, "clone", "--quiet", bare, "other");
+    git(other, "config", "user.email", "peer@test");
+    git(other, "config", "user.name", "peer");
+    writeFileSync(join(other, "d.txt"), "peer change\n");
+    git(other, "add", ".");
+    git(other, "commit", "--quiet", "-m", "feat: peer");
+    git(other, "push", "--quiet", "origin", "master");
+
+    // 门禁与页面同一事实:conflict_passed 红、无合入按钮。
+    const gates = await fetch(`${platform.baseUrl}/mr/gates`
+      + "?source_branch=master_bot_REQ3&target_branch=master")
+      .then((r) => readJson(r)) as {
+        gates: Array<{ name: string; passed: boolean; detail?: string }> };
+    const conflict = gates.gates.find((g) => g.name === "conflict_passed")!;
+    assert.equal(conflict.passed, false, "目标分支前进后冲突门禁必须红");
+    assert.match(String(conflict.detail), /先在任务侧合并目标分支/);
+    const page = await fetch(mr.url).then((r) => r.text());
+    assert.doesNotMatch(page, /<button/, "冲突红时不给合入按钮");
+
+    // 即便绕过页面直接 POST,也拿到人话 HTML 而非裸 JSON 死路。
+    const refused = await fetch(`${mr.url}/merge`, { method: "POST" });
+    assert.equal(refused.status, 409);
+    const refusedHtml = await refused.text();
+    assert.match(refusedHtml, /合入失败/);
+    assert.match(refusedHtml, /自动派修复|返回 MR 页/);
+
+    // 任务侧合并目标分支后重推,门禁恢复绿,可正常合入。
+    git(work, "fetch", "--quiet", "origin");
+    git(work, "merge", "--quiet", "--no-edit", "origin/master");
+    git(work, "push", "--quiet", "origin", "master_bot_REQ3");
+    const mergedSha = git(work, "rev-parse", "HEAD");
+    await fetch(`${platform.baseUrl}/mr`, {
+      method: "POST",
+      body: JSON.stringify({
+        source_branch: "master_bot_REQ3", target_branch: "master",
+        title: "feat: REQ3",
+      }),
+    }); // 幂等复用把 MR sha 对齐到新 HEAD
+    await fetch(`${platform.baseUrl}/pipeline/trigger`, {
+      method: "POST", body: JSON.stringify({ sha: mergedSha }),
+    });
+    const recovered = await fetch(`${platform.baseUrl}/mr/gates`
+      + "?source_branch=master_bot_REQ3&target_branch=master")
+      .then((r) => readJson(r)) as {
+        gates: Array<{ name: string; passed: boolean }> };
+    assert.equal(recovered.gates
+      .find((g) => g.name === "conflict_passed")!.passed, true,
+      "快进恢复后冲突门禁必须回绿");
+    const merged = await fetch(`${mr.url}/merge`,
+      { method: "POST", redirect: "manual" });
+    assert.equal(merged.status, 303);
+    assert.equal(git(bare, "rev-parse", "master"), mergedSha);
+  } finally {
+    await platform.stop();
+  }
+});

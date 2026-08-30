@@ -838,3 +838,65 @@ test("等决定期间检视人可提交批注:入队为团队事实,随返工决
     await model.stop();
   }
 });
+
+// MFC-036:Agent 整理清单时把历史重排到定格基线之外,最终树看似正确但
+// 基线不再是 HEAD 祖先,MR 永远无法快进合入。宿主必须在 Build-Fix 前
+// 机械重放净改动回基线(树逐字节一致),推送前复核则只停不改写。
+test("历史脱离定格基线:宿主机械重放回基线且树不变;二次脱离只停不改写", async () => {
+  const { service, model, internal, repo } = await verifyingTask();
+  try {
+    const baseline = repo.git("rev-parse", `HEAD~1`);
+    const origHead = repo.git("rev-parse", "HEAD");
+    // 模拟重排:同树、但父提交不含定格基线(orphan),祖先关系断裂。
+    const orphan = repo.git("commit-tree", `${origHead}^{tree}`,
+      "-m", "rearranged history");
+    repo.git("reset", "--soft", orphan);
+    assert.throws(() => repo.git(
+      "merge-base", "--is-ancestor", baseline, "HEAD"),
+      "前置:重排后基线必须已不是祖先");
+
+    const outcome = await (service as any)
+      .reconcileFrozenBaselineAncestry(internal, true);
+    assert.equal(outcome, "repaired", "干净现场必须机械重放而不是停摆");
+    // 重放合同:基线恢复祖先、树逐字节一致、父提交正是定格基线。
+    repo.git("merge-base", "--is-ancestor", baseline, "HEAD");
+    assert.equal(repo.git("diff", origHead, "HEAD"), "", "重放不得改树内容");
+    assert.equal(repo.git("rev-parse", "HEAD^"), baseline,
+      "净改动应重放为基线之上的提交");
+
+    // 推送前复核(repair=false):再次脱离只如实停下,不许改写历史。
+    const again = repo.git("commit-tree",
+      `${repo.git("rev-parse", "HEAD")}^{tree}`, "-m", "rearranged again");
+    repo.git("reset", "--soft", again);
+    const final = await (service as any)
+      .reconcileFrozenBaselineAncestry(internal, false);
+    assert.equal(final, "blocked");
+    assert.equal(repo.git("rev-parse", "HEAD"), again,
+      "推送前复核不得动 HEAD");
+    assert.match(String(internal.summary.delivery?.stalled),
+      /脱离任务定格基线/, "停摆原因必须点名基线脱离");
+  } finally {
+    await model.stop();
+  }
+});
+
+// 同场景但工作区还有未提交改动:宿主不猜着整理,如实停下喊人。
+test("历史脱离定格基线且工作区未收口:不改写,如实停下", async () => {
+  const { service, model, internal, repo } = await verifyingTask();
+  try {
+    const origHead = repo.git("rev-parse", "HEAD");
+    const orphan = repo.git("commit-tree", `${origHead}^{tree}`,
+      "-m", "rearranged history");
+    repo.git("reset", "--soft", orphan);
+    writeFileSync(join(repo.cwd, "src", "feature.ts"),
+      "export const value = 2;\n");
+    const outcome = await (service as any)
+      .reconcileFrozenBaselineAncestry(internal, true);
+    assert.equal(outcome, "blocked");
+    assert.equal(repo.git("rev-parse", "HEAD"), orphan,
+      "未收口现场不得被宿主改写");
+    assert.match(String(internal.summary.delivery?.stalled), /未提交改动/);
+  } finally {
+    await model.stop();
+  }
+});

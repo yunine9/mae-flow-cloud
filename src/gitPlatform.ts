@@ -176,7 +176,25 @@ export class FakeGitPlatform {
               response.writeHead(303,
                 { location: `/mr/${mergeMatch[1]}` }).end();
             } else {
-              reply(409, { error: outcome.error });
+              // 浏览器点合入失败时人必须原地看到原因(MFC-037:裸 409
+              // JSON 在浏览器里就是白屏死路)。任务侧门禁与此同源,下一
+              // 拍监控会看到红灯并自动接手,页面把这条路说清楚。
+              response.writeHead(409,
+                { "content-type": "text/html; charset=utf-8" })
+                .end([
+                  "<!doctype html><html lang=\"zh-CN\"><head>",
+                  "<meta charset=\"utf-8\"><title>合入失败</title></head>",
+                  "<body style=\"font:14px/1.7 system-ui;max-width:640px;",
+                  "margin:40px auto;padding:0 16px\">",
+                  "<h1>合入失败</h1>",
+                  `<p style=\"color:#b3261e\">${String(outcome.error ?? "")
+                    .replace(/[&<>"]/g, (ch) => ({ "&": "&amp;",
+                      "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]!))}</p>`,
+                  "<p>任务侧门禁会在下一轮监控看到同样的红灯并自动派修复;",
+                  "也可回到 MR 页刷新门禁状态。</p>",
+                  `<p><a href=\"/mr/${mergeMatch[1]}\">返回 MR 页</a></p>`,
+                  "</body></html>",
+                ].join("\n"));
             }
           } else if (request.method === "POST" && url.pathname === "/mr") {
             reply(201, this.createMergeRequest(body));
@@ -257,6 +275,7 @@ export class FakeGitPlatform {
    * 语义与真件对齐:名字用 CodeHub 原始拼写,passed 是布尔。 */
   private mergeGates(source: string, target: string): {
     mr_state: string;
+    sha: string;
     gates: Array<{ name: string; passed: boolean; detail?: string }>;
   } {
     const mr = this.mergeRequests.find(
@@ -272,11 +291,31 @@ export class FakeGitPlatform {
         ...(unresolved.length
           ? { detail: `${unresolved.length} 条检视意见未解决` } : {}),
       },
-      {
-        name: "conflict_passed",
-        passed: !this.conflictGate,
-        ...(this.conflictGate ? { detail: "与目标分支存在冲突" } : {}),
-      },
+      // 冲突门禁必须和真正 merge 用同一套事实(MFC-037:此前门禁读
+      // 测试布尔恒绿,点合入才在 Git 层撞 409,MFC 看见假绿永远不派
+      // 冲突修复)。这里用 bare 仓真实祖先关系判断能否快进;测试布尔
+      // 只保留"强拨红"一个方向,不能把真实冲突拨绿。
+      (() => {
+        let targetAdvanced = false;
+        try {
+          execFileSync("git", ["-C", this.barePath, "merge-base",
+            "--is-ancestor", mr.target_branch, mr.sha],
+            { encoding: "utf-8" });
+        } catch {
+          targetAdvanced = true;
+        }
+        const passed = !this.conflictGate
+          && (!targetAdvanced || mr.merge_state === "merged");
+        return {
+          name: "conflict_passed",
+          passed,
+          ...(passed ? {} : {
+            detail: this.conflictGate
+              ? "与目标分支存在冲突"
+              : "目标分支已前进且非快进,请先在任务侧合并目标分支再推送",
+          }),
+        };
+      })(),
       {
         name: "ci_state_passed",
         passed: lastRun?.status === "success",
@@ -287,7 +326,10 @@ export class FakeGitPlatform {
         name, passed,
       })),
     ];
-    return { mr_state: mr.merge_state, gates };
+    // sha 是门禁契约的一等公民(MFC-038):宿主要用它核对"平台上被
+    // 验证/合入的提交"确实等于任务验证过的 delivery.sha,防止分支被
+    // 平台侧改写后旧绿灯背书新代码。
+    return { mr_state: mr.merge_state, sha: mr.sha, gates };
   }
 
   private replyDiscussion(

@@ -1141,3 +1141,39 @@ test("自动修复关闭只停修复不停监控：人工处理后仍能识别�
     await platform.stop();
   }
 });
+
+// MFC-038:merged 不是靠状态字段自证的。平台实际合入/指向的源提交必须
+// 等于本任务验证过的 delivery.sha——流水线绿灯、prepush 收据、人工检视
+// 全部绑定后者;分支被平台侧改写后,MFC 绝不能拿旧验证宣告完成。
+test("MR 源提交在等待合入期间被替换:拒绝完成,停摆点名两个 SHA", async () => {
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  await platform.start();
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-shaswap-"));
+  const model = mrModel(walkScript(), dataDir);
+  await model.start();
+  const service = buildService(platform, dataDir, model.modelsJson());
+  try {
+    const id = service.create("交付 REQ9:换提交").id;
+    await until(() => service.get(id)!.status === "await_merge", "先绿");
+    const verified = service.get(id)!.delivery?.sha ?? "";
+    assert.ok(verified, "前置:等待合入时必须已有验证 SHA");
+    // 模拟平台侧改写:MR 指向另一个提交并被合入(codex 第二轮实证:
+    // 夹具重放出 ef83355 合入,MFC 仍拿旧验证 4806f99 宣告完成)。
+    const swapped = "f".repeat(40);
+    platform.mergeRequests[0].sha = swapped;
+    platform.mergeRequests[0].merge_state = "merged";
+    await until(() => Boolean(service.get(id)!.delivery?.stalled),
+      "监控必须停摆而不是收口");
+    const summary = service.get(id)!;
+    assert.notEqual(summary.status, "completed",
+      "被替换的合入绝不能标记完成");
+    assert.match(String(summary.delivery?.stalled),
+      /不一致|未经本任务验证/, "停摆原因必须点名 SHA 不符");
+    assert.match(String(summary.delivery?.stalled),
+      new RegExp(verified.slice(0, 7)), "要点名本任务验证过的提交");
+  } finally {
+    await model.stop();
+    await platform.stop();
+  }
+});

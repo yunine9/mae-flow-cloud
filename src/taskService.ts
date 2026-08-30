@@ -57,6 +57,7 @@ import {
 import {
   compareDeliveryRevisions,
   deliveryChangeSnapshot,
+  frozenTaskBaseline,
   DIFF_NAME,
   readArtifact,
   readArtifactAsync,
@@ -1128,6 +1129,10 @@ interface GateItem {
 interface GateView {
   mrState: "opened" | "merged" | "closed";
   gates: GateItem[];
+  /** 平台报告的 MR 源分支当前提交。MFC-038:合入监控必须核对它与本
+   * 任务验证过的 delivery.sha 一致,否则旧绿灯/旧人审在背书别的代码。
+   * 旧平台契约没有该字段时为 undefined——无法核对,保持旧行为并留痕。 */
+  sourceSha?: string;
 }
 
 /** 失败分类:可修的按优先级排序(全部返回——高优先级不可派时要能
@@ -3656,7 +3661,7 @@ export class TaskService {
     if (["await_merge", "verifying"].includes(task.summary.status)) {
       const view = await this.fetchGates(task);
       if (view?.mrState === "merged" || view?.mrState === "closed") {
-        this.settleMergeState(task, view.mrState);
+        this.settleMergeState(task, view.mrState, view.sourceSha);
         throw new TaskControlError(view.mrState === "merged"
           ? "MR 已合入，当前任务已经结束；如需继续修改，请创建后续任务"
           : "MR 已关闭，不能再向原 MR 提交修改；请重新打开 MR 或创建后续任务");
@@ -6946,8 +6951,13 @@ export class TaskService {
         ? "- 用户本次确认的交付范围、补充说明与检视批注（完整原文）：\n"
           + review
         : "- 用户未填写额外说明；严格按结构化交付清单处理。",
-      "- 把不在清单里却已进入提交的文件从提交中移出(git rm --cached 或重排提交);",
+      "- 把不在清单里却已进入提交的文件从提交中移出(优先 git rm --cached 后追加提交);",
       "  文件本身要不要保留在工作区,按它的性质与用户意见判断,不确定就保留并说明。",
+      // MFC-036 实锤:Agent 为整理清单 rebase 到定格基线的父提交,最终
+      // 树看似正确但基线祖先关系断裂,MR 永远无法快进合入。硬边界写死。
+      "- 硬边界:任何 reset/rebase/amend 都不得触及任务基线及更早的提交;",
+      "  只允许在任务自己新增的提交范围内整理。历史乱了就在当前 HEAD 上",
+      "  追加修正提交,绝不重写基线之前的历史。",
       "- 清单内缺失的文件补进提交;不许为凑清单制造空改动。",
       "- 整理完按仓库提交规范收口(单条 Bash 只做一个 commit);",
       `  完成后系统会按新 HEAD 重新验证并再次请用户确认(当前清单 ${selection.paths.length} 个文件)。`,
@@ -8352,7 +8362,7 @@ export class TaskService {
         && ["await_merge", "verifying"].includes(status)) {
       const view = await this.fetchGates(task);
       if (view?.mrState === "merged") {
-        this.settleMergeState(task, "merged");
+        this.settleMergeState(task, "merged", view.sourceSha);
         throw new TaskControlError(`任务 ${id} 的 MR 已合入，任务已经结束`);
       }
       status = task.summary.status;
@@ -10622,6 +10632,83 @@ export class TaskService {
     return false;
   }
 
+  /** MFC-036:交付历史必须生长在任务定格基线之上。Agent 整理清单时
+   * reset/rebase 到基线父提交后,最终树可以看似正确,但祖先关系已断,
+   * MR 永远无法快进合入,下游"这次修改"diff/统计也全部失真。这里在
+   * Build-Fix 之前机械把净改动重放回定格基线(commit-tree 以旧 HEAD 的
+   * 树为内容、定格基线为父,重放前后树逐字节一致),而不是等远端 409。
+   * repair=false 用于推送前的最终复核:那时再脱离只如实停下,不改写。 */
+  private async reconcileFrozenBaselineAncestry(
+    task: TaskState,
+    repair: boolean,
+  ): Promise<"ok" | "repaired" | "blocked"> {
+    if (!task.cwd) return "ok";
+    const cwd = task.cwd;
+    const frozen = await frozenTaskBaseline(cwd);
+    // 旧现场没记录定格基线时无法裁决;不猜、不拿自愈回退假装校验过。
+    if (!frozen) return "ok";
+    const stall = (detail: string): "blocked" => {
+      this.markVerificationStalled(task, detail);
+      return "blocked";
+    };
+    const git = (args: string[]) => runSafeWorktreeGitAsync(cwd, args, {
+      timeoutMs: 60_000,
+      configs: [
+        ["user.name", "mae-flow-cloud"],
+        ["user.email", "cloud@mae-flow.local"],
+      ],
+    });
+    const exists = await git(["cat-file", "-e", `${frozen}^{commit}`]);
+    if (exists.status !== 0) {
+      return stall(`任务定格基线 ${frozen.slice(0, 7)} 在当前仓库已不可见,`
+        + "无法核对交付历史是否仍生长在基线之上;请人工确认现场。");
+    }
+    const headResult = await git(["rev-parse", "--verify", "HEAD"]);
+    const head = String(headResult.stdout ?? "").trim();
+    if (headResult.status !== 0 || !head) {
+      return stall("读取当前 HEAD 失败,无法核对定格基线祖先关系。");
+    }
+    const ancestor = await git(["merge-base", "--is-ancestor", frozen, head]);
+    if (ancestor.status === 0) return "ok";
+    if (!repair) {
+      return stall(`推送前复核发现提交历史脱离任务定格基线 ${
+        frozen.slice(0, 7)}(疑似验证期间又被改写);已停止推送,请人工确认。`);
+    }
+    // 只在 Agent 已用 commit 收口时重放;未提交的改动不能被宿主猜着处理。
+    const unstaged = await git(["diff", "--quiet"]);
+    const staged = await git(["diff", "--cached", "--quiet"]);
+    if (unstaged.status !== 0 || staged.status !== 0) {
+      return stall(`提交历史已脱离任务定格基线 ${frozen.slice(0, 7)},同时`
+        + "工作区还有未提交改动;平台不猜着整理,请在代码检视中确认处理。");
+    }
+    const replay = await git(["commit-tree", `${head}^{tree}`, "-p", frozen,
+      "-m", "chore: 按任务定格基线重放净改动——历史重排已被平台整理"]);
+    const replayed = String(replay.stdout ?? "").trim();
+    if (replay.status !== 0 || !replayed) {
+      return stall(`按定格基线重放净改动失败:${String(
+        replay.stderr || replay.error || "").trim().slice(0, 200)}`);
+    }
+    const moved = await git(["reset", "--soft", replayed]);
+    if (moved.status !== 0) {
+      return stall(`按定格基线重放后切换 HEAD 失败:${String(
+        moved.stderr || moved.error || "").trim().slice(0, 200)}`);
+    }
+    // 重放合同:树逐字节一致 + 基线恢复为祖先。任一不成立都回到原 HEAD
+    // 如实停下,绝不带着可疑历史继续交付。
+    const sameTree = await git(["diff", "--quiet", head, "HEAD"]);
+    const nowAncestor = await git(["merge-base", "--is-ancestor",
+      frozen, "HEAD"]);
+    if (sameTree.status !== 0 || nowAncestor.status !== 0) {
+      await git(["reset", "--soft", head]);
+      return stall("按定格基线重放后复核未通过(树不一致或祖先关系仍断);"
+        + "已回到原 HEAD 停下,请人工确认。");
+    }
+    this.options.log?.(`任务 ${task.summary.id} 提交历史曾脱离定格基线 ${
+      frozen.slice(0, 7)},已机械重放净改动(${head.slice(0, 7)} → ${
+      replayed.slice(0, 7)}),树内容未变。`);
+    return "repaired";
+  }
+
   /** 流水线/prepush 修复不得把用户已经排除的文件“顺手带回来”。这不再
    * 交给 Agent 撞一道新门禁：若变化只涉及已明确排除的路径（或中心注入
    * 目录），宿主以最近一次已推送的干净 SHA 为锚，把修复中的已确认文件
@@ -10670,6 +10757,9 @@ export class TaskService {
     const candidates = [
       task.summary.delivery?.git_push?.sha,
       selection.head,
+      // 历史刚被按定格基线重放过时,旧 push/selection SHA 都不再是
+      // HEAD 祖先;定格基线本身永远是合法的收口锚,兜在最后。
+      await frozenTaskBaseline(cwd),
     ].map((value) => String(value ?? "").trim()).filter(Boolean);
     let anchor = "";
     for (const candidate of candidates) {
@@ -10888,6 +10978,11 @@ export class TaskService {
         }
         return;
       }
+      // 定格基线祖先门禁必须走在一切交付动作(Build-Fix/范围整理/推送)
+      // 之前:历史脱离基线时后面每一步都在错的合同上白烧。
+      const baselineGate =
+        await this.reconcileFrozenBaselineAncestry(task, true);
+      if (baselineGate === "blocked") return;
       // 流水线修复若只把用户明确排除的过程件带回提交，宿主先机械收口，
       // 不新增一道让 Agent 反复碰撞的门禁；真正的新业务文件仍在后面的
       // 最终范围卡确认。第一遍也避免在已知污染 HEAD 上白烧编译。
@@ -10955,6 +11050,10 @@ export class TaskService {
         ? authorizedPrePush.sha : observedRevision.sha;
       if (!await this.pushConfirmationSatisfied(task, branch)) return;
       if (!await this.deliverySelectionAllowsPush(task, branch)) return;
+      // 推送前最后一道基线复核:Build-Fix/确认期间若历史又被改写,
+      // 只如实停下(fail-closed),不在这个时点做任何机械改写。
+      if (await this.reconcileFrozenBaselineAncestry(task, false)
+          === "blocked") return;
       const previous = task.summary.delivery;
       const pushReceipt = await this.pushFromHost(
         task, branch, expectedPushSha);
@@ -11385,7 +11484,7 @@ export class TaskService {
     const view = await this.fetchGates(task);
     if (!this.current(task, epoch)) return;
     if (view?.mrState === "merged" || view?.mrState === "closed") {
-      this.settleMergeState(task, view.mrState);
+      this.settleMergeState(task, view.mrState, view.sourceSha);
       return;
     }
     const sorted = view
@@ -11893,7 +11992,9 @@ export class TaskService {
         }));
       const mrState = body.mr_state === "merged" || body.mr_state === "closed"
         ? body.mr_state : "opened";
-      return { mrState, gates };
+      const sourceSha = typeof body.sha === "string" && body.sha.trim()
+        ? body.sha.trim() : undefined;
+      return { mrState, gates, ...(sourceSha ? { sourceSha } : {}) };
     } catch (error) {
       this.options.log?.(
         `任务 ${task.summary.id} 门禁查询失败(按不可得处理): ${String(error)}`);
@@ -11902,13 +12003,27 @@ export class TaskService {
   }
 
   /** MR 平台侧状态:merged 才是任务真正结束。closed 只是一个需要人
-   * 处理的等待态：MR 可能被误关后重开，不能替用户把整个任务判死。 */
+   * 处理的等待态：MR 可能被误关后重开，不能替用户把整个任务判死。
+   * observedSourceSha 是平台报告的 MR 源提交:与本任务验证过的
+   * delivery.sha 不一致时绝不能 completed——流水线绿灯、prepush 收据
+   * 与人工检视全部绑定旧 SHA,拿它们背书别的提交是交付完整性漏洞
+   * (MFC-038 实证:夹具换 SHA 合入,MFC 仍拿旧验证宣告完成)。 */
   private settleMergeState(
     task: TaskState,
     state: "merged" | "closed",
+    observedSourceSha?: string,
   ): void {
     const delivery = task.summary.delivery!;
     if (state === "merged") {
+      const verified = String(delivery.sha ?? "").trim();
+      const observed = String(observedSourceSha ?? "").trim();
+      if (verified && observed && verified !== observed) {
+        this.markVerificationStalled(task,
+          `平台实际合入的提交 ${observed.slice(0, 7)} 与本任务验证过的 ${
+            verified.slice(0, 7)} 不一致;流水线与人工检视只背书后者,`
+          + "不能标记完成。请人工核实分支是否被平台侧改写。");
+        return;
+      }
       const attestation = this.completionAttestation(task);
       if (attestation && !attestation.complete) {
         // 远端 MR 状态不能反向篡改内核流程真相。即使有人在平台上手工
@@ -11982,13 +12097,28 @@ export class TaskService {
           continue;
         }
         if (view.mrState === "merged") {
-          this.settleMergeState(task, "merged");
+          this.settleMergeState(task, "merged", view.sourceSha);
           return;
         }
         if (view.mrState === "closed") {
           this.settleMergeState(task, "closed");
           await new Promise((tick) => setTimeout(tick, interval).unref());
           continue;
+        }
+        // MFC-038:MR 还开着但源提交已不是本任务验证过的那一个——
+        // 有人在平台侧改写了分支。旧绿灯不背书新代码,立即停摆喊人;
+        // 在途修复不会走到这里(派修复即离开 await_merge,回来前会
+        // 重新对齐 MR 与 delivery.sha)。
+        {
+          const verified = String(task.summary.delivery?.sha ?? "").trim();
+          const observed = String(view.sourceSha ?? "").trim();
+          if (verified && observed && verified !== observed) {
+            this.markVerificationStalled(task,
+              `MR 源分支已指向未经本任务验证的提交 ${observed.slice(0, 7)}`
+              + `(已验证的是 ${verified.slice(0, 7)});已停止自动合入`
+              + "监控,请人工核实分支是否被平台侧改写。");
+            return;
+          }
         }
         if (task.summary.delivery?.mr_state === "已关闭") {
           task.summary.delivery.mr_state = "等待合入";
