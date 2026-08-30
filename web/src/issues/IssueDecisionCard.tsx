@@ -56,10 +56,9 @@ export function IssueDecisionCard({ waiting, busy, onAnswer, onEnvironment }: {
   return <GenericDecisionCard waiting={waiting} busy={busy} onAnswer={onAnswer} />;
 }
 
-/** 网管环境表单:多行 hosts(逗号/换行分隔)+ 端口(默认 22)+ 网管后台
- * 密码(sopuser/ossuser/ossadm 同密码)。密码只在提交瞬间经 POST
- * /issues/:id/environment 进服务端 vault(AES-GCM 加密文件),不落
- * 状态/事件/对话——前端也不把它存进任何草稿。 */
+/** 网管环境表单:网管环境IP(单个,一个问题一个环境)+ 端口(默认 22)
+ * + 网管后台密码。密码只在提交瞬间经 POST /issues/:id/environment 进
+ * 服务端 vault,不落状态/事件——前端也不把它存进任何草稿。 */
 function EnvNeededForm({ busy, onSubmit }: {
   busy: boolean;
   onSubmit?: (input: IssueEnvironmentForm) => Promise<boolean>;
@@ -68,16 +67,15 @@ function EnvNeededForm({ busy, onSubmit }: {
   const [port, setPort] = useState("22");
   const [backendPassword, setBackendPassword] = useState("");
   const [error, setError] = useState("");
-  const parsedHosts = hosts.split(/[\s,，、]+/).map((item) => item.trim())
-    .filter(Boolean);
+  const host = hosts.trim();
   const portNumber = Number(port);
-  const ready = parsedHosts.length > 0 && backendPassword.length > 0
+  const ready = host !== "" && backendPassword.length > 0
     && Number.isInteger(portNumber) && portNumber >= 1 && portNumber <= 65535;
 
   async function submit() {
     if (!ready || busy || !onSubmit) return;
     const ok = await onSubmit({
-      hosts: parsedHosts,
+      hosts: [host],
       ...(port !== "22" ? { port: portNumber } : {}),
       backend_password: backendPassword,
     });
@@ -91,9 +89,9 @@ function EnvNeededForm({ busy, onSubmit }: {
 
   return <div className="issue-decision-env">
     <label className="issue-field wide">
-      <span>网管服务器地址(多个用逗号或换行分隔)</span>
-      <textarea rows={2} value={hosts} spellCheck={false}
-        placeholder={"60.14.46.16, 60.14.46.17"}
+      <span>网管环境IP</span>
+      <input value={hosts} spellCheck={false}
+        placeholder="60.14.46.16"
         onChange={(event) => setHosts(event.target.value)} />
     </label>
     <label className="issue-field">
@@ -102,13 +100,10 @@ function EnvNeededForm({ busy, onSubmit }: {
         onChange={(event) => setPort(event.target.value)} />
     </label>
     <label className="issue-field">
-      <span>网管后台密码 <i>sopuser/ossuser/ossadm 共用</i></span>
+      <span>网管后台密码</span>
       <input type="password" value={backendPassword} autoComplete="new-password"
         onChange={(event) => setBackendPassword(event.target.value)} />
     </label>
-    <p className="issue-decision-note">
-      密码由平台加密保管,不会出现在对话或状态里;提交后 AI 会重试刚才的操作。
-    </p>
     {error && <p className="issue-decision-note" role="alert">{error}</p>}
     <div className="issue-decision-submit">
       <button type="button" disabled={!ready || busy} onClick={() => void submit()}>

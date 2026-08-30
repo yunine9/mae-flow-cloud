@@ -754,7 +754,12 @@ export class IssueFlowService {
         ? {
           scenario,
           round: 1,
-          stage_states: initStageStates(scenario, 0),
+          // 首阶段直接 in_progress:登记即入场,等 complete_stage 收口
+          // 后由 fixedAdvance 接管后续;全 pending 会让进度条首节点
+          // 不亮,当前感无处安放。
+          stage_states: initStageStates(scenario, 0)
+            .map((entry, index) =>
+              index === 0 ? "in_progress" as const : entry),
         }
         : {}),
       status: "queued",
@@ -1918,7 +1923,11 @@ export class IssueFlowService {
       mode: "fixed",
       scenario: "ticket",
       round: 1,
-      stage_states: initStageStates("ticket", 3),
+      // 继承段 3 个(inherited),当前 fix 段直接 in_progress(同 create
+      // 的首阶段理由:转正即入场,进度条当前节点必须亮)。
+      stage_states: initStageStates("ticket", 3)
+        .map((entry, index) =>
+          index === 3 ? "in_progress" as const : entry),
       converted_from: id,
       status: "queued",
       stage: "fix",

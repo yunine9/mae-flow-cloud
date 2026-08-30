@@ -107,7 +107,7 @@ export function IssueBoard({ viewer, onNavigateProfile }: {
     <section className="issue-section" aria-labelledby="issue-mine-title">
       <div className="section-head">
         <div>
-          <span className="section-kicker">问题处理</span>
+          {/* kicker 不再重复页首大标题「问题处理」;列表区自己只有标题。 */}
           <h2 id="issue-mine-title">我的问题</h2>
         </div>
         {/* 聚合徽章与任务侧"当前任务"同款语义:待答复置前,需介入报警。 */}
@@ -171,8 +171,6 @@ function IssueCard({ issue, active, onOpen }: {
           <span className={`pill ${issue.status}`}>
             <i aria-hidden />{ISSUE_STATUS_TEXT[issue.status]}
           </span>
-          {issue.status === "waiting_user" && <span className="task-created">
-            等你答复</span>}
           <span className="task-created">{formatLocalDateTime(issue.updated_at)}</span>
         </span>
         <strong className="task-title">{issue.title}</strong>
