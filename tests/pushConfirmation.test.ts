@@ -79,6 +79,7 @@ test("确认绑定 HEAD+文件集合:同文件修复产生新 HEAD 也必须重�
     assert.equal(await gate(), true, "开关默认关,闸门必须放行");
 
     internal.summary.push_confirmation = true;
+    internal.lastReply = "## 已完成\n\n- 修复 Emoji 截断\n- 已运行单元测试";
     assert.equal(await gate(), false, "开着且未确认,必须拦下出卡");
     const waiting = service.get(id)!.waiting!;
     assert.equal(waiting.step, "cloud_push_confirm");
@@ -88,6 +89,9 @@ test("确认绑定 HEAD+文件集合:同文件修复产生新 HEAD 也必须重�
     const firstReview = service.get(id)!.delivery?.push_review;
     assert.equal(firstReview?.kind, "delivery");
     assert.equal(firstReview?.title, "完整交付内容");
+    assert.equal(firstReview?.agent_note,
+      "## 已完成\n\n- 修复 Emoji 截断\n- 已运行单元测试",
+      "展开后的 Agent 说明应保留 Markdown 段落，不能压成拥挤的一整行");
     assert.equal(firstReview?.has_focused_changes, false);
     assert.deepEqual(firstReview?.committed_paths, ["src/feature.ts"]);
     assert.deepEqual(firstReview?.all_paths, ["src/feature.ts"]);

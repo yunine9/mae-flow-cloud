@@ -5,6 +5,8 @@ import test from "node:test";
 
 const workspace = readFileSync(resolve("web/src/TaskWorkspace.tsx"), "utf-8");
 const taskCard = readFileSync(resolve("web/src/TaskCard.tsx"), "utf-8");
+const gitDiff = readFileSync(resolve("web/src/GitDiff.tsx"), "utf-8");
+const app = readFileSync(resolve("web/src/App.tsx"), "utf-8");
 
 test("进入独立执行现场页签后直接展开，不要求用户再点一次", () => {
   const executionView = workspace.slice(
@@ -24,6 +26,15 @@ test("运行中的任务默认进入执行现场，真正等人时才回到材�
     /task\.waiting \|\| task\.status === "waiting_for_human"[^]*return "materials"/);
   assert.match(policy,
     /"queued", "running", "pausing", "verifying", "await_merge"[^]*return "execution"/);
+});
+
+test("等待人工检视时工作台标题显示人的当前事项，不沿用自动阶段旧步骤", () => {
+  const policy = workspace.slice(
+    workspace.indexOf("function workspaceProgress"),
+    workspace.indexOf("function assistantUnavailableReason"),
+  );
+  assert.match(policy, /status === "waiting_for_human"/);
+  assert.match(policy, /step: task\.focus\?\.headline/);
 });
 
 test("任务摘要卡仍按需展开，避免多张卡同时建立实时连接", () => {
@@ -59,6 +70,28 @@ test("Agent 长说明与提交记录默认折叠，避免挤满窄决策栏", ()
   assert.doesNotMatch(taskCard,
     /<p className="push-review-agent-note">\s*<strong>Agent 说明<\/strong>/,
     "长篇内部回复不能继续与标题、提交记录全挤在一个段落里");
+});
+
+test("最终交付范围在决策卡内可直接调整，并与 diff 树双向同步", () => {
+  assert.match(taskCard, /className="delivery-scope-files"/);
+  assert.match(taskCard, /纳入交付/);
+  assert.match(taskCard, /仅留本地/);
+  assert.match(taskCard, /按这 \$\{deliverySelection\.selectedPaths\.length\} 个文件推送/);
+  assert.match(taskCard, /提交返工意见/);
+  assert.match(workspace, /onDeliverySelectionChange=\{task\.waiting[^]*setDeliverySelection/);
+  assert.match(gitDiff, /右侧「本次交付范围」也是完整控制面/);
+  assert.match(gitDiff, /requestedDeliveryKey[^]*setDeliveryPaths/);
+});
+
+test("工作台打开后列表卡只保留待办信号，不重复渲染整张决定表单", () => {
+  assert.match(app,
+    /decisionMode=\{artifactTaskId === task\.id \? "signal" : "form"\}/);
+});
+
+test("工作区其他改动默认折叠但不隐藏事实", () => {
+  assert.match(gitDiff, /const \[localGroupOpen, setLocalGroupOpen\]/);
+  assert.match(gitDiff, /工作区其他改动 · 默认仅留本地/);
+  assert.match(gitDiff, /localGroupOpen && renderTreeNodes\(localTree/);
 });
 
 test("已完成任务的进度展示收口到完成，不沿用合入前最后一步", () => {

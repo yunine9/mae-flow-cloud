@@ -184,6 +184,41 @@ test("工作台面向用户只说实时执行日志和单元测试", () => {
   }), "单元测试验证");
 });
 
+test("最终交付决定卡本身能说明并控制每个文件的去留", () => {
+  const deliveryTask = {
+    ...task("delivery", "waiting_for_human"),
+    waiting: {
+      waiting_id: "wait-delivery",
+      state_version: 1,
+      step: "cloud_push_confirm",
+      recommended_view: "diff",
+      question: { questions: [{
+        question: "是否按清单继续？",
+        options: ["确认按清单推送", "按清单返工"],
+      }] },
+      choice_effects: [
+        { key: "confirm", answers: ["确认按清单推送"], closes_feedback: true },
+        { key: "revise", answers: ["按清单返工"], handles_feedback: true },
+      ],
+    },
+  };
+  const html = renderToStaticMarkup(React.createElement(taskCard.WaitingCard, {
+    task: deliveryTask,
+    onDecided: () => undefined,
+    deliverySelection: {
+      selectedPaths: ["src/emoji.ts"],
+      committedPaths: ["src/emoji.ts", "test.log"],
+      allPaths: ["src/emoji.ts", "test.log"],
+    },
+    onDeliverySelectionChange: () => undefined,
+  }));
+  assert.match(html, /本次交付范围/);
+  assert.match(html, /1 \/ 2 个文件将推送/);
+  assert.match(html, /src\/emoji\.ts[^]*纳入交付/);
+  assert.match(html, /test\.log[^]*仅留本地/);
+  assert.match(html, /按这 1 个文件推送/);
+});
+
 test("管理员旁路只开放给当前复检白名单中的他人待闭环意见", () => {
   const current = annotation();
   const access = (item: Record<string, unknown>, options: {

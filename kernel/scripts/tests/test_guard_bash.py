@@ -58,6 +58,11 @@ class BashGatePolicyTests(unittest.TestCase):
             commit_message="bad"))
         self.assertEqual(("block", "bash-commit-format"),
                          (fmt.kind, fmt.rule))
+        self.assertIn("Bash 工具调用是整体阻止", fmt.message)
+        self.assertIn("git add 等前置段", fmt.message)
+        self.assertIn("也没有执行", fmt.message)
+        self.assertIn("git status", fmt.message)
+        self.assertIn("[REQ-1][fix]", fmt.message)
         branch = decide_commit_branch(self.context(
             command="git commit -m '[REQ-1][fix]ok'",
             commit_message_present=True,

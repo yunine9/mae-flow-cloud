@@ -10387,12 +10387,18 @@ export class TaskService {
    * 幂等复用，HEAD 变化则旧收据立即失效。 */
   private concisePushReviewNote(task: TaskState): string | undefined {
     const text = String(task.lastReply ?? "")
-      .replace(/```[a-z0-9_-]*/gi, " ")
+      .replace(/\r\n?/g, "\n")
+      .replace(/^```[a-z0-9_-]*\s*$/gim, "")
       .replace(/<\/?[a-z][^>]*>/gi, " ")
-      .replace(/\s+/g, " ")
+      .replace(/[ \t]+\n/g, "\n")
+      .replace(/\n[ \t]+/g, "\n")
+      .replace(/[ \t]{2,}/g, " ")
+      .replace(/\n{3,}/g, "\n\n")
       .trim();
     if (!text) return undefined;
-    return text.length > 360 ? `${text.slice(0, 357)}…` : text;
+    // 默认态已经折成一行；展开后保留 Agent 原本的段落/清单结构，
+    // 不能再把整段 Markdown 压成一条 360 字的“电报”。
+    return text.length > 720 ? `${text.slice(0, 717).trimEnd()}…` : text;
   }
 
   private async buildPushReviewPresentation(

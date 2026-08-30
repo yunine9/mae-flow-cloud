@@ -68,11 +68,15 @@ def _pre_commit_format(context):
         return _block(
             "bash-commit-format",
             "commit message「%s」不符合 [%s][feat|fix]描述 格式。"
+            "本次 Bash 工具调用是整体阻止的:**命令里的 git add 等前置段"
+            "也没有执行**。先用 git status 核对现场,再把原来的精确 git add"
+            "和修正后的 git commit 一起重新执行;例如 `git commit -m "
+            "'[%s][fix]修正问题描述'`。"
             "类型只有 feat 与 fix 两种:**单元测试提交也用它们**"
             "(新增能力配套的测试写 feat,修缺陷配套的测试写 fix)。"
             "无人值守八条线里这条拦截出现最多,原因几乎都是在补测试时"
             "顺手写了 [test]——那不是格式笔误,是类型表里根本没有的值。"
-            % (message, context.ticket),
+            % (message, context.ticket, context.ticket),
         )
     return None
 

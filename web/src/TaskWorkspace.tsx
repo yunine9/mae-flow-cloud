@@ -189,7 +189,15 @@ function sizeText(bytes: number): string {
  * 仍给人一条 Cloud 生命周期轨道，避免工作台最重要的“走到哪了”整块消失。
  * 这只是只读展示兜底，不参与流程判断或任务迁移。 */
 function workspaceProgress(task: TaskSummary): NonNullable<TaskSummary["progress"]> {
-  if (task.progress) return task.progress;
+  if (task.progress) {
+    // 内核进度记录的是自动流程最后停在哪；举卡后人真正面对的当前步骤
+    // 已经变成“检视/确认”。工作台大标题继续写“等待权威流水线”会与
+    // 旁边的下一步自相矛盾。这里只改只读标题，不动阶段与证据账。
+    return task.status === "waiting_for_human"
+      ? { ...task.progress,
+          step: task.focus?.headline ?? task.waiting?.step ?? "等待你的决定" }
+      : task.progress;
+  }
   const phases = [
     "已受理", "需求理解", "开发实现", "人工确认", "交付验证", "等待合入", "完成",
   ];
@@ -1109,6 +1117,8 @@ export function TaskWorkspace({
                 ? repositoryAssignees : undefined}
               deliverySelection={task.waiting?.recommended_view === "diff"
                 ? decisionDeliverySelection : undefined}
+              onDeliverySelectionChange={task.waiting?.recommended_view === "diff"
+                ? setDeliverySelection : undefined}
               pushReview={pushReview}
               onLocateDelivery={task.waiting?.recommended_view === "diff"
                 ? (scope) => {
