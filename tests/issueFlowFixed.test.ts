@@ -280,7 +280,10 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     assert.equal(created.mode, "fixed", "个人偏好缺省固定流程,create 烙印");
     assert.equal(created.scenario, "ticket");
     assert.equal(created.stage, "dts_info");
-    assert.deepEqual(created.stage_states, FIXED_TICKET_STAGES.map(() => "pending"));
+    // 首阶段登记即 in_progress(进度条当前节点必须亮),其余 pending。
+    assert.deepEqual(created.stage_states,
+      FIXED_TICKET_STAGES.map((_, index) =>
+        index === 0 ? "in_progress" : "pending"));
 
     // ① 报告确认闸:AI 提交分析后必须停下等用户。
     const gate1 = await until(() => {
