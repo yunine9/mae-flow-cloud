@@ -899,7 +899,15 @@ export interface TaskServiceOptions {
    * (sessionstart+userprompt 捕获需求、铺转发壳)→ 深层门禁与证据
    * 全部经 kernelHost 走内核 dispatch。不配则为纯会话模式(演练)。 */
   /** repoPath 仅用于 --repo 钉死单仓的演示/测试形态；正式下单逐单填仓。 */
-  host?: { kernelRoot: string; repoPath?: string; python?: string };
+  host?: {
+    kernelRoot: string;
+    repoPath?: string;
+    python?: string;
+    /** serve 部署以 --repo 钉死单仓时置真:逐单 repo 被拒、表单不再
+     * 收仓库地址(MFC-024)。直接构造 TaskService 的测试/试跑 harness
+     * 不置,repoPath 仍只是缺省克隆源。 */
+    repoPinned?: boolean;
+  };
   /** Cloud 工作流资产使用的只读目录根；不会开启代码仓、内核执行或交付。
    * 演示形态也可据此创建、发布并真实编译工作流方案。 */
   workflowCatalogRoot?: string;
@@ -4161,12 +4169,12 @@ export class TaskService {
       repair_rounds: this.options.settings?.runtime().repair_rounds
         ?? this.options.delivery?.repairRounds,
       // 没接内核模式=任务不碰代码仓,表单别摆出输入框骗人。
-      // 钉死单仓部署(--repo)不收逐单仓:字段直接不启用,别让人填一个
-      // 注定被拒/被换掉的地址(MFC-024;假平台部署曾因此推错仓)。
-      // required 与 create() 的实际校验必须同口径——曾经 UI 宣称必填、
-      // API 却放行空白,required 成了摆设。
+      // 钉死单仓部署(serve --repo,repoPinned)不收逐单仓:字段直接
+      // 不启用,别让人填一个注定被拒/被换掉的地址(MFC-024;假平台
+      // 部署曾因此推错仓)。required 与 create() 的实际校验同口径——
+      // 曾经 UI 宣称必填、API 却放行空白,required 成了摆设。
       repo: {
-        enabled: !!this.options.host && !this.options.host.repoPath,
+        enabled: !!this.options.host && !this.options.host.repoPinned,
         required: !!this.options.host && !this.options.host.repoPath,
       },
       ticket: {
@@ -4585,11 +4593,13 @@ export class TaskService {
       // 目录扫描，不能让“能列出、却注定无法交付”的仓进入下一步。
       validateRepositoryAddress(candidate);
     }
-    // 钉死单仓部署(--repo/假平台)不接受逐单仓:任务会克隆用户填的
-    // 地址、把分支推到那里,而交付平台盯的是部署仓——推送与 MR 各查
-    // 各的,走到最后一步才 MR 400,整单白烧(e2e-picky-20260830 实锤,
-    // MFC-004/024)。与部署仓相同的写法放行(测试/试跑常显式传它)。
-    const pinnedRepo = this.options.host?.repoPath;
+    // 钉死单仓部署(serve --repo/假平台,repoPinned)不接受逐单仓:
+    // 任务会克隆用户填的地址、把分支推到那里,而交付平台盯的是部署仓
+    // ——推送与 MR 各查各的,走到最后一步才 MR 400,整单白烧
+    // (e2e-picky-20260830 实锤,MFC-004/024)。与部署仓相同的写法
+    // 放行;直接构造 TaskService 的测试/试跑不置 repoPinned,不受限。
+    const pinnedRepo = this.options.host?.repoPinned
+      ? this.options.host.repoPath : undefined;
     if (pinnedRepo && repositories.length && !options.internalRequirement) {
       const normalize = (value: string) =>
         /^(https?|ssh|git):\/\//i.test(value) ? value : resolve(value);

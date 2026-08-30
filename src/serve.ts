@@ -366,7 +366,9 @@ async function main(): Promise<void> {
         ? repoFlag : resolve(repoFlag))
     : undefined;
   let host = kernelMode
-    ? { kernelRoot: kernelRoot!, repoPath, python: resolveKernelPython() }
+    ? { kernelRoot: kernelRoot!, repoPath, python: resolveKernelPython(),
+        // --repo 钉死单仓的部署形态:逐单仓从入口就拒(MFC-024)。
+        ...(repoPath ? { repoPinned: true } : {}) }
     : undefined;
   if (host) {
     console.log(`[serve] 内核模式:内核 ${host.kernelRoot}`
