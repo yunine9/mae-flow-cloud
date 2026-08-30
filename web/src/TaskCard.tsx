@@ -19,6 +19,7 @@ import {
   type SseConnectionState,
   type TaskSummary,
   type TimelineEntry,
+  type PushReviewPresentation,
 } from "./api";
 import { formatWait, URGENT_MINUTES, waitedMs } from "./taskTime";
 import { responsibleOf } from "./teamOps";
@@ -444,6 +445,7 @@ export function WaitingCard({
   repositorySkillSelection,
   repositoryAssigneeSelection,
   deliverySelection,
+  pushReview,
   onLocateDelivery,
 }: {
   task: TaskSummary;
@@ -462,9 +464,11 @@ export function WaitingCard({
   repositoryAssigneeSelection?: RepositoryAssigneeSelection;
   /** 代码检视里的文件级交付清单；由工作区变更面板的真实勾选产生。 */
   deliverySelection?: GitDiffSelection;
+  /** 当前待推送代码为什么需要再检视，以及两种阅读范围。 */
+  pushReview?: PushReviewPresentation;
   /** 跳到勾选面板(工作台的「本任务变更」)。列表页没有勾选面板,
    * 不传即不渲跳转钮。 */
-  onLocateDelivery?: () => void;
+  onLocateDelivery?: (scope?: "changes" | "full") => void;
 }) {
   const [picked, setPicked] = useState<Record<string, string>>({});
   const [custom, setCustom] = useState<Record<string, string>>({});
@@ -668,6 +672,54 @@ export function WaitingCard({
         )}
       </header>
 
+      {pushReview && (
+        <section className="push-review-overview" aria-label="本次代码检视摘要">
+          <div className="push-review-copy">
+            <span>待推送代码</span>
+            <strong>{pushReview.title}</strong>
+            <p>{pushReview.description}</p>
+          </div>
+          <div className="push-review-facts" aria-label="修改统计">
+            <span><b>{pushReview.file_count}</b>
+              {pushReview.has_focused_changes ? " 个本次修改文件" : " 个交付文件"}
+            </span>
+            <span className="added">+{pushReview.additions}</span>
+            <span className="deleted">-{pushReview.deletions}</span>
+            {pushReview.verification && <span className="verified">
+              {pushReview.verification}
+            </span>}
+          </div>
+          {pushReview.agent_note && (
+            <p className="push-review-agent-note">
+              <strong>Agent 说明</strong>{pushReview.agent_note}
+            </p>
+          )}
+          {pushReview.commits.length > 0 && (
+            <div className="push-review-commits">
+              {pushReview.commits.slice(0, 3).map((commit) => (
+                <span key={commit.sha}>
+                  <code>{commit.sha}</code>{commit.subject}
+                </span>
+              ))}
+            </div>
+          )}
+          {onLocateDelivery && (
+            <div className="push-review-actions">
+              {pushReview.has_focused_changes && (
+                <button type="button" className="primary"
+                  onClick={() => onLocateDelivery("changes")}>
+                  查看这次修改
+                </button>
+              )}
+              <button type="button"
+                onClick={() => onLocateDelivery("full")}>
+                查看完整交付
+              </button>
+            </div>
+          )}
+        </section>
+      )}
+
       {task.waiting?.context && (() => {
         /* 长背景(推送确认的文件清单动辄上百行)默认折叠只露开头——
            重点(要我做什么、较上次变了什么)在前几行,整版清单是
@@ -843,9 +895,9 @@ export function WaitingCard({
                     .committedPaths.includes(path)).length} 个）；未选内容保留在本地但不推送；`
                 + "不会让 Agent 猜着重改，也不重跑本地编译，最终由绑定新 SHA 的权威流水线裁决。"
               : "提交后：保持当前提交不变；服务端复核同一文件集合，然后继续交付。若代码变化，会先重新跑 Build-Fix。"}</span>
-          {onLocateDelivery && (
+          {onLocateDelivery && !pushReview && (
             <button type="button" className="delivery-locate"
-              onClick={onLocateDelivery}>
+              onClick={() => onLocateDelivery()}>
               {deliverySelection ? "回到代码检视" : "去检视代码"}
             </button>
           )}

@@ -42,6 +42,7 @@ import {
   listCommitters,
   listTaskReviews,
   readArtifact,
+  readPushReviewDiff,
   repairStopped,
   requestCommitterReview,
   statusText,
@@ -139,6 +140,8 @@ export function TaskWorkspace({
   // 旧任务、纯会话和非内核提问没有 approval_subject 元数据；此时需求
   // 原文是唯一保证存在的证据，不能默认打开一个空的过程文档面板。
   const recommendedMaterialView = task.waiting?.recommended_view ?? "source";
+  const pushReview = task.waiting?.step === "cloud_push_confirm"
+    ? task.delivery?.push_review : undefined;
   const [items, setItems] = useState<ArtifactMeta[]>();
   const [unavailable, setUnavailable] = useState("");
   const [active, setActive] = useState("");
@@ -168,6 +171,8 @@ export function TaskWorkspace({
     useState<RepositoryAssigneeSelection>(EMPTY_REPOSITORY_ASSIGNEE_SELECTION);
   const [deliverySelection, setDeliverySelection] =
     useState<GitDiffSelection>();
+  const [diffScope, setDiffScope] = useState<"changes" | "full">(
+    pushReview?.has_focused_changes ? "changes" : "full");
   /** 点进度条阶段名弹该阶段执行方案;空串=不显示。 */
   const [planPhase, setPlanPhase] = useState("");
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>(
@@ -179,11 +184,25 @@ export function TaskWorkspace({
     setWorkspaceView(defaultWorkspaceView(task));
     setRepositoryAssignees(EMPTY_REPOSITORY_ASSIGNEE_SELECTION);
     setDeliverySelection(undefined);
+    setDiffScope(pushReview?.has_focused_changes ? "changes" : "full");
   }, [task.id]);
 
   useEffect(() => {
-    setDeliverySelection(undefined);
-  }, [task.waiting?.waiting_id]);
+    if (!pushReview) {
+      setDeliverySelection(undefined);
+      setDiffScope("full");
+      return;
+    }
+    const selected = task.delivery_selection?.status === "requested"
+      ? task.delivery_selection.paths : pushReview.committed_paths;
+    setDeliverySelection({
+      selectedPaths: [...selected],
+      committedPaths: [...pushReview.committed_paths],
+      allPaths: [...pushReview.all_paths],
+    });
+    setContent("");
+    setDiffScope(pushReview.has_focused_changes ? "changes" : "full");
+  }, [task.waiting?.waiting_id, pushReview?.head_sha]);
 
   useEffect(() => {
     const waitingId = task.waiting?.waiting_id;
@@ -320,7 +339,12 @@ export function TaskWorkspace({
     if (!active) return;
     let alive = true;
     setLoading((was) => was || !content);
-    void readArtifact(task.id, active).then((result) => {
+    const pushDiffActive = Boolean(pushReview
+      && items?.find((item) => item.name === active)?.kind === "diff");
+    const reading = pushDiffActive
+      ? readPushReviewDiff(task.id, diffScope)
+      : readArtifact(task.id, active);
+    void reading.then((result) => {
       if (!alive) return;
       const next = result.content ?? result.unavailable ?? "";
       // 内容没变就别 setState:轮询期间无谓重渲染会把正在写的批注打断。
@@ -329,7 +353,8 @@ export function TaskWorkspace({
       setLoading(false);
     });
     return () => { alive = false; };
-  }, [task.id, active, livePulse]);
+  }, [task.id, active, livePulse, diffScope, pushReview?.head_sha,
+    items?.find((item) => item.name === active)?.kind]);
 
   // 批注随任务加载,也随"圈了一条/送出一批/任务状态变了"重取——
   // 进展(那处动没动)是服务端现算的,前端不自己推断。
@@ -391,7 +416,10 @@ export function TaskWorkspace({
     : materialView === "chain"
     ? { kicker: "CHAIN OVERVIEW", title: "仓间依赖" }
     : materialView === "diff"
-      ? { kicker: "WORKTREE CHANGES", title: "工作区变更" }
+      ? pushReview
+        ? { kicker: "PUSH REVIEW", title: diffScope === "changes"
+            ? pushReview.title : "完整交付内容" }
+        : { kicker: "WORKTREE CHANGES", title: "工作区变更" }
       : { kicker: "WORK DOCUMENTS", title: "过程文档" };
   const waiting = task.status === "waiting_for_human" && task.waiting;
   const canContributeReview = canOperate || canCollaborate || !!reviewAssignment;
@@ -659,6 +687,27 @@ export function TaskWorkspace({
                   </>}
               </>
             ) : <>
+              {materialView === "diff" && pushReview && (
+                <div className="push-review-scope" aria-label="代码检视范围">
+                  {pushReview.has_focused_changes && (
+                    <button type="button"
+                      className={diffScope === "changes" ? "on" : ""}
+                      onClick={() => { setContent(""); setDiffScope("changes"); }}>
+                      <strong>这次修改</strong>
+                      <span>{pushReview.title}</span>
+                    </button>
+                  )}
+                  <button type="button"
+                    className={diffScope === "full" ? "on" : ""}
+                    onClick={() => { setContent(""); setDiffScope("full"); }}>
+                    <strong>完整交付</strong>
+                    <span>从任务起点到当前待推送代码</span>
+                  </button>
+                  <p>{diffScope === "changes"
+                    ? "这里只看这次处理产生的变化，方便快速复检；最终授权仍绑定当前完整待推送版本。"
+                    : "这里可以调整最终交付文件；取消勾选的文件不会进入本次推送。"}</p>
+                </div>
+              )}
               {unavailable && <div className="utility-note">{unavailable}</div>}
               {!unavailable && !items && <div className="utility-note">正在读取现场…</div>}
               {items?.length === 0 && (
@@ -680,10 +729,12 @@ export function TaskWorkspace({
                   ? <GitDiff text={content} branch={branch}
                       hideKey={task.id}
                       selectable={canOperate
-                        && task.waiting?.recommended_view === "diff"}
+                        && task.waiting?.recommended_view === "diff"
+                        && (!pushReview || diffScope === "full")}
                       selectionKey={task.waiting?.waiting_id}
-                      initialSelectedPaths={task.delivery_selection?.status === "requested"
-                        ? task.delivery_selection.paths : undefined}
+                      initialSelectedPaths={deliverySelection?.selectedPaths
+                        ?? (task.delivery_selection?.status === "requested"
+                          ? task.delivery_selection.paths : undefined)}
                       onSelectionChange={setDeliverySelection} />
                   : <Markdown text={content} />}
               </Annotatable>
@@ -868,10 +919,14 @@ export function TaskWorkspace({
                 ? repositoryAssignees : undefined}
               deliverySelection={task.waiting?.recommended_view === "diff"
                 ? deliverySelection : undefined}
+              pushReview={pushReview}
               onLocateDelivery={task.waiting?.recommended_view === "diff"
-                ? () => {
+                ? (scope) => {
                     setWorkspaceView("materials");
                     setMaterialView("diff");
+                    setContent("");
+                    setDiffScope(scope
+                      ?? (pushReview?.has_focused_changes ? "changes" : "full"));
                     const first = items?.find((item) => item.kind === "diff");
                     if (first) setActive(first.name);
                   }

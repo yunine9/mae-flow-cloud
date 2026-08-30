@@ -3391,6 +3391,63 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   font-weight: 700;
   white-space: nowrap;
 }
+.push-review-overview {
+  margin: 14px 18px 4px;
+  padding: 14px 15px;
+  display: grid;
+  gap: 10px;
+  color: var(--text);
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line));
+  border-radius: 11px;
+  background:
+    linear-gradient(115deg, color-mix(in srgb, var(--accent-soft) 72%, var(--surface)), var(--surface) 72%);
+}
+.push-review-copy { min-width: 0; display: grid; gap: 3px; }
+.push-review-copy > span {
+  color: var(--accent); font-size: var(--font-size-assist); font-weight: 800;
+  letter-spacing: .1em;
+}
+.push-review-copy > strong { color: var(--text-strong); font-size: 17px; }
+.push-review-copy > p {
+  margin: 0; color: var(--muted); font-size: 13.5px; line-height: 1.5;
+}
+.push-review-facts { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.push-review-facts > span {
+  min-height: 25px; padding: 4px 8px; display: inline-flex; align-items: center;
+  gap: 3px; border-radius: 7px; color: var(--muted);
+  background: var(--surface); border: 1px solid var(--line);
+  font-size: var(--font-size-assist); font-weight: 700;
+}
+.push-review-facts .added { color: var(--success); }
+.push-review-facts .deleted { color: var(--danger); }
+.push-review-facts .verified {
+  color: var(--success); background: var(--success-soft);
+  border-color: color-mix(in srgb, var(--success) 22%, var(--line));
+}
+.push-review-agent-note {
+  margin: 0; padding: 9px 10px; display: -webkit-box; overflow: hidden;
+  color: var(--muted); background: color-mix(in srgb, var(--surface-soft) 78%, transparent);
+  border-left: 3px solid var(--accent); border-radius: 0 7px 7px 0;
+  font-size: 12.5px; line-height: 1.55; -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+.push-review-agent-note strong { margin-right: 7px; color: var(--text-strong); }
+.push-review-commits { display: grid; gap: 3px; }
+.push-review-commits > span {
+  min-width: 0; overflow: hidden; color: var(--muted); font-size: 12px;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.push-review-commits code { margin-right: 7px; color: var(--accent); }
+.push-review-actions { display: flex; gap: 8px; }
+.push-review-actions button {
+  min-height: 34px; padding: 0 12px; color: var(--text-strong);
+  border: 1px solid var(--line); border-radius: 8px; background: var(--surface);
+  font: inherit; font-size: 13px; font-weight: 700; cursor: pointer;
+}
+.push-review-actions button:hover { border-color: var(--accent); }
+.push-review-actions button.primary {
+  color: #fff; border-color: var(--accent); background: var(--accent);
+}
 .waiting-context {
   margin: 16px 20px 6px;
   padding: 15px 17px;
@@ -5797,6 +5854,41 @@ pre {
 .ws-doc > .repository-assignees { width: min(900px, 100%); margin: 0 auto; }
 .ws-doc > .requirement-graph + .requirement-team-picker,
 .ws-doc > .requirement-team-picker + .repository-assignees { margin-top: 12px; }
+.push-review-scope {
+  width: min(980px, 100%);
+  margin: 0 auto 15px;
+  padding: 6px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface-soft);
+}
+.push-review-scope button {
+  min-width: 0; min-height: 53px; padding: 8px 11px; display: grid; gap: 2px;
+  color: var(--muted); border: 1px solid transparent; border-radius: 8px;
+  background: transparent; text-align: left; font: inherit; cursor: pointer;
+}
+.push-review-scope button:hover { color: var(--text); background: var(--surface); }
+.push-review-scope button.on {
+  color: var(--text-strong); border-color: var(--line-strong);
+  background: var(--surface); box-shadow: var(--shadow-xs);
+}
+.push-review-scope button.on::before {
+  width: 22px; height: 3px; margin-bottom: 2px; content: "";
+  border-radius: 999px; background: var(--accent);
+}
+.push-review-scope button:only-of-type { grid-column: 1 / -1; }
+.push-review-scope strong { font-size: 13.5px; }
+.push-review-scope span {
+  overflow: hidden; color: var(--muted); font-size: var(--font-size-assist);
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.push-review-scope > p {
+  grid-column: 1 / -1; margin: 1px 5px 2px; color: var(--muted);
+  font-size: var(--font-size-assist); line-height: 1.45;
+}
 .ws-decision .requirement-team-members { grid-template-columns: 1fr; }
 .ws-decision .requirement-team-picker > header,
 .ws-decision .requirement-team-picker > footer { align-items: stretch; flex-direction: column; }

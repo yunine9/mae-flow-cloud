@@ -47,6 +47,7 @@
  *   GET  /tasks/:id/warmup/events                       → SSE:环境预热编译实时事件
  *   GET  /tasks/:id/timeline                            → 人话交付时间线(只读现场)
  *   GET  /tasks/:id/activity                            → 行为摘要:此刻在干嘛/分段折叠/异常信号
+ *   GET  /tasks/:id/push-review-diff?scope=changes|full → 当前 push 检视比较(只读)
  *   GET  /tasks/:id/artifacts[/:name]                   → 检视产物清单/内容(只读现场)
  *
  * Web 不自行推断状态:详情与列表只是 TaskService 状态的镜像,
@@ -2377,6 +2378,18 @@ export function createTaskServer(
           const cwd = panel ? dirname(dirname(panel)) : undefined;
           return json(response, 200,
             buildTimeline(target.workspace, cwd));
+        }
+        if (request.method === "GET" && parts.length === 3
+            && parts[2] === "push-review-diff") {
+          const scope = url.searchParams.get("scope") === "full"
+            ? "full" : "changes";
+          const comparison = await service.pushReviewDiff(id, scope);
+          if (!comparison) {
+            return json(response, 404, {
+              error: "这张检视卡对应的代码已经变化，请刷新查看最新版本",
+            });
+          }
+          return json(response, 200, comparison);
         }
         // 检视产物(只读):决策与证据必须同屏——审批卡问"Spec 确认吗",
         // spec.md 就该在旁边,而不是让人跳到另一套界面里翻。权限口径

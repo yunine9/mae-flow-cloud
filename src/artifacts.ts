@@ -97,6 +97,21 @@ export interface DeliveryChangeSnapshot {
   added_agent_platform_paths: string[];
 }
 
+/** 两个已经落成的提交之间，真正会随 push 传输的代码变化。它只服务
+ * 检视阅读，不参与交付授权；授权仍由 delivery_selection 的 HEAD 与
+ * 完整路径集合决定。 */
+export interface DeliveryRevisionComparison {
+  from: string;
+  to: string;
+  content: string;
+  truncated: boolean;
+  paths: string[];
+  additions: number;
+  deletions: number;
+  commits: Array<{ sha: string; subject: string }>;
+  branch?: string;
+}
+
 interface DocEntry {
   meta: ArtifactMeta;
   /** 集合内部保存的绝对路径:读取只走这里,不由 name 拼。 */
@@ -389,6 +404,76 @@ export async function deliveryChangeSnapshot(
     ]),
     committed_paths: committed,
     added_agent_platform_paths: addedAgentPaths,
+  };
+}
+
+function exactCommitId(value: string): boolean {
+  return /^[0-9a-f]{40,64}$/i.test(value);
+}
+
+/** 给检视页生成“触发这次修改的代码 → 当前待推送代码”。两个 revision
+ * 都必须是内部已经解析出的完整提交 id，且 from 必须是 to 的祖先；
+ * 页面不能传任意 ref/path 参与 Git 参数。 */
+export async function compareDeliveryRevisions(
+  cwd: string,
+  from: string,
+  to: string,
+): Promise<DeliveryRevisionComparison | undefined> {
+  if (!exactCommitId(from) || !exactCommitId(to) || from === to) {
+    return undefined;
+  }
+  const toplevel = (await gitAsync(cwd, ["rev-parse", "--show-toplevel"]))?.trim();
+  let sameRoot = false;
+  try {
+    sameRoot = !!toplevel && realpathSync(toplevel) === realpathSync(cwd);
+  } catch {
+    sameRoot = false;
+  }
+  if (!sameRoot) return undefined;
+  const [fromCommit, toCommit, ancestor] = await Promise.all([
+    gitAsync(cwd, ["cat-file", "-e", `${from}^{commit}`]),
+    gitAsync(cwd, ["cat-file", "-e", `${to}^{commit}`]),
+    gitAsync(cwd, ["merge-base", "--is-ancestor", from, to]),
+  ]);
+  if (fromCommit === undefined || toCommit === undefined
+      || ancestor === undefined) return undefined;
+  const [raw, log] = await Promise.all([
+    gitAsync(cwd, ["diff", "--unified=999999", from, to, "--"]),
+    gitAsync(cwd, [
+      "log", "--max-count=5", "--format=%h%x09%s", `${from}..${to}`, "--",
+    ]),
+  ]);
+  if (raw === undefined) return undefined;
+  const businessDiff = deliveryDiff(raw);
+  const chunks = diffChunks(businessDiff);
+  let additions = 0;
+  let deletions = 0;
+  for (const line of businessDiff.split("\n")) {
+    if (line.startsWith("+") && !line.startsWith("+++")) additions += 1;
+    if (line.startsWith("-") && !line.startsWith("---")) deletions += 1;
+  }
+  // 这是两个 commit 的比较，不是工作区未暂存内容。复用 GitDiff 时必须
+  // 带上同一份阶段标题，否则解析器会按默认值把它错标成“未暂存”。
+  const reviewText = businessDiff
+    ? `## 已提交(committed)\n\n${businessDiff}`
+    : "当前比较范围没有代码内容变化。";
+  const capped = cap(reviewText);
+  const commits = String(log ?? "").split("\n").flatMap((line) => {
+    const [sha, ...subject] = line.split("\t");
+    return sha && subject.length
+      ? [{ sha, subject: subject.join("\t").trim() }]
+      : [];
+  });
+  return {
+    from,
+    to,
+    content: capped.content,
+    truncated: capped.truncated,
+    paths: uniqueBusinessPaths(chunks.map((chunk) => chunk.path)),
+    additions,
+    deletions,
+    commits,
+    branch: await currentBranchAsync(cwd),
   };
 }
 

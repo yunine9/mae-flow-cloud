@@ -53,10 +53,13 @@ import {
   parseReviewReplies,
 } from "./deliveryOutbox.ts";
 import {
+  compareDeliveryRevisions,
   deliveryChangeSnapshot,
+  DIFF_NAME,
   readArtifact,
   readArtifactAsync,
   resolveArtifactRoot,
+  type DeliveryRevisionComparison,
 } from "./artifacts.ts";
 import { KernelHost } from "./kernelHost.ts";
 import {
@@ -571,6 +574,29 @@ export interface CrossRepositoryUpdate {
   created_at: string;
 }
 
+/** push 前检视的阅读导航。它解释“这次为什么又来检视、先看哪里”，
+ * 但不新增审批状态：真正授权仍只认 delivery_selection 绑定的完整
+ * HEAD + 文件集合。 */
+export interface PushReviewPresentation {
+  kind: "delivery" | "feedback" | "pipeline" | "conflict" | "rework";
+  title: string;
+  description: string;
+  base_sha: string;
+  baseline_sha: string;
+  head_sha: string;
+  has_focused_changes: boolean;
+  file_count: number;
+  additions: number;
+  deletions: number;
+  commits: Array<{ sha: string; subject: string }>;
+  /** 完整工作区变化用来初始化勾选器；committed_paths 才是当前 HEAD
+   * 真正会随 push 带走的默认范围。 */
+  all_paths: string[];
+  committed_paths: string[];
+  agent_note?: string;
+  verification?: string;
+}
+
 export interface TaskSummary {
   id: string;
   /** 扫读标题:需求原文仍完整保留在 requirement。旧任务缺席时由读侧
@@ -740,6 +766,8 @@ export interface TaskSummary {
       state: PrePushRuntimeState;
       message: string;
     };
+    /** 当前 push 检视卡的只读说明与比较锚。卡片销毁即清除。 */
+    push_review?: PushReviewPresentation;
     sha?: string;
     skipped?: string;
     /** 内核对流水线证据的裁决戳(如 "PASS@abc123456789"):终态时宿主
@@ -3155,6 +3183,32 @@ export class TaskService {
       ?? this.panelFile(id, "panel-pulse.js");
     return resolveArtifactRoot(
       task.summary.workspace, panel ? dirname(dirname(panel)) : undefined);
+  }
+
+  /** 当前 push 检视卡的代码比较。scope 只在服务端已经固化的两个锚中
+   * 二选一，浏览器不能提交任意 Git ref；HEAD 一旦变化，旧链接立即
+   * 失效并等新卡，避免人在旧 diff 上签新代码。 */
+  async pushReviewDiff(
+    id: string,
+    scope: "changes" | "full",
+  ): Promise<{ content: string; branch?: string; truncated?: boolean } | undefined> {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    const review = task.summary.delivery?.push_review;
+    if (!task.cwd || !review
+        || task.summary.waiting?.step !== CLOUD_PUSH_CONFIRM_STEP) {
+      return undefined;
+    }
+    const snapshot = await deliveryChangeSnapshot(task.cwd);
+    if (!snapshot || snapshot.head !== review.head_sha) return undefined;
+    if (scope === "full") {
+      // push 卡已经有权威 cwd，优先直接读它；纯会话/旧任务再沿用普通
+      // 产物定位。不能因此改变 /artifacts 的兼容扫描口径。
+      const root = resolveArtifactRoot(task.summary.workspace, task.cwd)
+        ?? this.artifactRoot(id);
+      return root ? readArtifactAsync(root, DIFF_NAME) : undefined;
+    }
+    return compareDeliveryRevisions(task.cwd, review.base_sha, review.head_sha);
   }
 
   private annotations(task: TaskState): AnnotationStore {
@@ -6718,6 +6772,7 @@ export class TaskService {
   ): void {
     task.summary.delivery_selection = selection;
     task.summary.waiting = undefined;
+    if (task.summary.delivery) delete task.summary.delivery.push_review;
     if (this.pushConfirmationAccepted(waiting)) {
       const loop = task.summary.delivery?.loop;
       if (loop?.workspace_review_recheck_required) {
@@ -10103,6 +10158,92 @@ export class TaskService {
    * Build-Fix，再拿最终代码给人检视。人工意见还要先由提出人逐条裁决；
    * 任务责任人只在逐条闭环后签本次 HEAD。完全相同 HEAD 的网络重试
    * 幂等复用，HEAD 变化则旧收据立即失效。 */
+  private concisePushReviewNote(task: TaskState): string | undefined {
+    const text = String(task.lastReply ?? "")
+      .replace(/```[a-z0-9_-]*/gi, " ")
+      .replace(/<\/?[a-z][^>]*>/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!text) return undefined;
+    return text.length > 360 ? `${text.slice(0, 357)}…` : text;
+  }
+
+  private async buildPushReviewPresentation(
+    task: TaskState,
+    snapshot: NonNullable<Awaited<ReturnType<typeof deliveryChangeSnapshot>>>,
+    recheckRequired: boolean,
+  ): Promise<PushReviewPresentation> {
+    const delivery = task.summary.delivery;
+    const selection = task.summary.delivery_selection;
+    const hasPriorReview = Boolean(selection?.head
+      && selection.head !== snapshot.head);
+    const kind: PushReviewPresentation["kind"] = recheckRequired
+      ? "feedback"
+      : delivery?.loop?.kind === "ci" ? "pipeline"
+      : delivery?.loop?.kind === "conflict" ? "conflict"
+      : hasPriorReview ? "rework"
+      : "delivery";
+    const copy = {
+      delivery: {
+        title: "完整交付内容",
+        description: "这是当前待推送的全部代码，确认后会直接推送并创建或更新 MR。",
+      },
+      feedback: {
+        title: "按检视意见修改",
+        description: "Agent 已处理这批检视意见，建议先核对这次处理，再决定是否通过。",
+      },
+      pipeline: {
+        title: "流水线修复内容",
+        description: "流水线修复产生了新提交，建议先核对这次修复，再决定是否通过。",
+      },
+      conflict: {
+        title: "冲突处理内容",
+        description: "Agent 已处理分支冲突，建议先核对冲突处理结果，再决定是否通过。",
+      },
+      rework: {
+        title: "按上次检视调整",
+        description: "Agent 已按你上次的交付范围和说明调整，建议先核对调整结果。",
+      },
+    } satisfies Record<PushReviewPresentation["kind"], {
+      title: string; description: string;
+    }>;
+
+    const preferred = [selection?.head, delivery?.git_push?.sha]
+      .filter((sha): sha is string => Boolean(sha)
+        && sha !== snapshot.head && sha !== snapshot.baseline);
+    let focused: DeliveryRevisionComparison | undefined;
+    for (const base of [...new Set(preferred)]) {
+      focused = await compareDeliveryRevisions(task.cwd!, base, snapshot.head);
+      if (focused) break;
+    }
+    const comparison = focused ?? await compareDeliveryRevisions(
+      task.cwd!, snapshot.baseline!, snapshot.head);
+    const base = focused?.from ?? snapshot.baseline!;
+    const prepush = delivery?.prepush;
+    const verification = prepush?.state === "passed"
+      ? "Build-Fix 已通过"
+      : prepush?.state === "user_skipped"
+        ? "本轮已按决定跳过 Build-Fix"
+        : undefined;
+    const agentNote = this.concisePushReviewNote(task);
+    return {
+      kind,
+      ...copy[kind],
+      base_sha: base,
+      baseline_sha: snapshot.baseline!,
+      head_sha: snapshot.head,
+      has_focused_changes: base !== snapshot.baseline,
+      file_count: comparison?.paths.length ?? snapshot.committed_paths.length,
+      additions: comparison?.additions ?? 0,
+      deletions: comparison?.deletions ?? 0,
+      commits: comparison?.commits ?? [],
+      all_paths: normalizedDeliveryPaths(snapshot.workspace_paths),
+      committed_paths: normalizedDeliveryPaths(snapshot.committed_paths),
+      ...(agentNote ? { agent_note: agentNote } : {}),
+      ...(verification ? { verification } : {}),
+    };
+  }
+
   private async pushConfirmationSatisfied(
     task: TaskState,
     branch: string,
@@ -10144,8 +10285,8 @@ export class TaskService {
         notes: "交付文件集合已变化,旧确认卡作废,按最新范围重新确认",
       });
     }
-    // 较上次已确认清单的增量。这是重复确认时最值钱的一句话:例如修复
-    // 只补了一个 .gitignore,人看一行就能拍板,不用整单重看。
+    // 重复确认时把文件范围变化说成人话。例如只补了一个 .gitignore，
+    // 人看一行就能拍板，不用整单重看；“增量 diff”这类实现词不露出。
     const previous = selection?.status === "confirmed"
       ? normalizedDeliveryPaths(selection.paths) : undefined;
     const addedPaths = previous
@@ -10154,7 +10295,7 @@ export class TaskService {
       ? previous.filter((path) => !committed.includes(path)) : [];
     const deltaLines = previous && (addedPaths.length || removedPaths.length)
       ? [
-        `**较上次已确认的清单:${[
+        `**文件范围变化：${[
           addedPaths.length ? `新增 ${describeDirtyPaths(addedPaths)}` : "",
           removedPaths.length ? `移除 ${describeDirtyPaths(removedPaths)}` : "",
         ].filter(Boolean).join(";")};其余 ${
@@ -10163,7 +10304,6 @@ export class TaskService {
       ] : [];
     const extras = snapshot.workspace_paths
       .filter((path) => !committed.includes(path));
-    const limit = 200;
     // 只在 Build-Fix 收敛后举卡。卡同时固化最终 HEAD 与文件集合：
     // 后续任何修复都会产生新 HEAD，因此一律重新检视；同一 HEAD 的
     // 传输重试才幂等复用，不按“第一次/后续”另开两套规则。
@@ -10175,6 +10315,12 @@ export class TaskService {
       : [];
     const pendingReviewItems = reviewItems.filter((item) =>
       item.status === "draft" || item.status === "sent");
+    const pushReview = await this.buildPushReviewPresentation(
+      task, snapshot, recheckRequired);
+    task.summary.delivery = {
+      ...task.summary.delivery,
+      push_review: pushReview,
+    };
     const reviewContext = recheckRequired ? [
       "**这是人工意见修改后的复检，不是按 push 次数重复询问。**",
       reviewItems.length
@@ -10186,12 +10332,13 @@ export class TaskService {
     ] : [];
     const context = [
       "**最终代码检视：Build-Fix 已收敛。确认后将直接推送并创建或更新 MR。**",
+      `**${pushReview.title}：${pushReview.file_count} 个文件，+${pushReview.additions} / -${pushReview.deletions}。**`,
       ...reviewContext,
       ...deltaLines,
       // 名字必须与界面一字不差:页签叫「交付材料」、按钮叫「工作区
       // 变更」。此前写「检视材料 → 本任务变更」,界面上根本没有这两个
       // 词,新人在唯一的人审闸口满屏找不到入口(2026-08-30 审计)。
-      "完整增量在「交付材料 → 工作区变更」逐文件看 diff;发现问题可在"
+      "完整代码变化在「交付材料 → 工作区变更」逐文件查看;发现问题可在"
       + "代码行上留批注,选「需要调整代码」让 Agent 修改。",
       "文件树左侧勾选框决定交付范围:取消勾选=该文件不推送。确认后,"
       + "若 Agent 继续修改并生成新 HEAD,系统会在 Build-Fix 通过后展示"
@@ -10199,9 +10346,9 @@ export class TaskService {
       "",
       `即将向分支 ${branch} 推送以下 ${committed.length} 个文件`
       + `(自基线 ${snapshot.baseline.slice(0, 12)} 起;内容以检视材料实时为准):`,
-      ...committed.slice(0, limit).map((path) => `- ${path}`),
-      ...(committed.length > limit
-        ? [`- …其余 ${committed.length - limit} 个文件`] : []),
+      ...committed.slice(0, 20).map((path) => `- ${path}`),
+      ...(committed.length > 20
+        ? [`- …其余 ${committed.length - 20} 个文件请在完整交付内容中查看`] : []),
       ...(extras.length ? [
         `另有 ${extras.length} 个工作区文件不在本次提交中(未跟踪/未暂存),`
         + "不会被推送。"] : []),
@@ -10211,7 +10358,7 @@ export class TaskService {
       step: CLOUD_PUSH_CONFIRM_STEP,
       callId,
       questionInput: { questions: [{
-        question: `交付范围确认:请检视本次代码增量(${committed.length} 个文件 → ${branch}),是否通过并按清单推送?`,
+        question: `交付范围确认:请检视当前待推送代码(${committed.length} 个文件 → ${branch}),是否通过并按清单推送?`,
         options: [PUSH_CONFIRM_ACCEPT, PUSH_CONFIRM_REWORK],
       }] },
       context,
@@ -12656,6 +12803,7 @@ export class TaskService {
         notes: "用户关闭 push 前确认,卡作废,继续推送",
       });
       task.summary.waiting = undefined;
+      if (task.summary.delivery) delete task.summary.delivery.push_review;
       task.summary.status = "verifying";
       task.summary.detail = "已关闭 push 前确认,继续推送";
       this.bypass(task, "关闭确认续推",

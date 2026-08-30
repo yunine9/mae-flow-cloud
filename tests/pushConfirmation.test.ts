@@ -13,8 +13,10 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { AddressInfo } from "node:net";
 import { ScriptedModelServer } from "../src/scriptedModel.ts";
 import { TaskControlError, TaskService } from "../src/taskService.ts";
+import { createTaskServer } from "../src/server.ts";
 
 async function until<T>(probe: () => T | undefined, what: string): Promise<T> {
   const deadline = Date.now() + 20_000;
@@ -83,6 +85,14 @@ test("确认绑定 HEAD+文件集合:同文件修复产生新 HEAD 也必须重�
     assert.equal(service.get(id)!.status, "waiting_for_human");
     assert.equal(waiting.recommended_view, "diff",
       "云端原生卡要给 diff 检视面,勾选 UI 才会开放");
+    const firstReview = service.get(id)!.delivery?.push_review;
+    assert.equal(firstReview?.kind, "delivery");
+    assert.equal(firstReview?.title, "完整交付内容");
+    assert.equal(firstReview?.has_focused_changes, false);
+    assert.deepEqual(firstReview?.committed_paths, ["src/feature.ts"]);
+    assert.deepEqual(firstReview?.all_paths, ["src/feature.ts"]);
+    assert.match(String((await service.pushReviewDiff(id, "full"))?.content),
+      /src\/feature\.ts/);
     assert.match(String(waiting.context), /src\/feature\.ts/);
     const options = (waiting.question as any).questions[0].options as string[];
     assert.ok(options.some((option) => option.includes("确认按清单推送")));
@@ -105,9 +115,14 @@ test("确认绑定 HEAD+文件集合:同文件修复产生新 HEAD 也必须重�
       "没显式勾选=按当前 commit 全量确认");
     assert.equal(summary.delivery_selection?.head,
       repo.git("rev-parse", "HEAD"));
+    const previouslyReviewedHead = summary.delivery_selection!.head;
     assert.equal(await gate(), true, "已确认且 HEAD 未变,放行");
 
     // 流水线修复即使只动原文件，也产生了新的待推送代码，必须重新检视。
+    internal.summary.delivery = {
+      ...internal.summary.delivery,
+      loop: { round: 1, state: "verifying", kind: "ci" },
+    };
     writeFileSync(join(repo.cwd, "src", "feature.ts"),
       "export const value = 2;\n");
     repo.git("add", "src/feature.ts");
@@ -117,12 +132,24 @@ test("确认绑定 HEAD+文件集合:同文件修复产生新 HEAD 也必须重�
     const repaired = service.get(id)!.waiting!;
     assert.notEqual(repaired.waiting_id, waiting.waiting_id);
     assert.match(String(repaired.context), /最终代码检视/);
+    const repairReview = service.get(id)!.delivery?.push_review;
+    assert.equal(repairReview?.kind, "pipeline");
+    assert.equal(repairReview?.title, "流水线修复内容");
+    assert.equal(repairReview?.base_sha, previouslyReviewedHead,
+      "快速入口应从上一次人看过的代码起算，不是机械地永远比较任务基线");
+    assert.equal(repairReview?.has_focused_changes, true);
+    const repairedDiff = await service.pushReviewDiff(id, "changes");
+    assert.match(String(repairedDiff?.content), /^## 已提交\(committed\)/);
+    assert.match(String(repairedDiff?.content), /export const value = 2/);
+    assert.doesNotMatch(String(repairedDiff?.content), /task result/);
     await service.decide(id, {
       state_version: repaired.state_version,
       selected_options: {
         [(repaired.question as any).questions[0].question]: "确认按清单推送",
       },
     });
+    assert.equal(service.get(id)!.delivery?.push_review, undefined,
+      "卡片完成后清掉阅读导航，不能把旧比较留给下一次 HEAD");
     assert.equal(await gate(), true, "新 HEAD 确认后才放行");
 
     // 修复越过已确认边界新增文件：必须按最新范围重新举卡。
@@ -135,6 +162,60 @@ test("确认绑定 HEAD+文件集合:同文件修复产生新 HEAD 也必须重�
     assert.notEqual(renewed.waiting_id, waiting.waiting_id);
     assert.match(String(renewed.context), /src\/fix\.ts/);
   } finally {
+    await model.stop();
+  }
+});
+
+test("push 检视 HTTP 入口只读当前卡片锚，HEAD 变化后明确要求刷新", async () => {
+  const { service, model, id, internal, repo } = await verifyingTask();
+  const server = createTaskServer(service);
+  try {
+    const gate = () => (service as any)
+      .pushConfirmationSatisfied(internal, "master_bot_REQ1");
+    internal.summary.push_confirmation = true;
+    await gate();
+    const first = service.get(id)!.waiting!;
+    await service.decide(id, {
+      state_version: first.state_version,
+      selected_options: {
+        [(first.question as any).questions[0].question]: "确认按清单推送",
+      },
+    });
+    const reviewedHead = repo.git("rev-parse", "HEAD");
+    writeFileSync(join(repo.cwd, "src", "feature.ts"),
+      "export const value = 3;\n");
+    repo.git("add", "src/feature.ts");
+    repo.git("commit", "--quiet", "-m", "fix: pipeline repair for review");
+    internal.summary.status = "verifying";
+    internal.summary.delivery = {
+      ...internal.summary.delivery,
+      loop: { round: 1, state: "verifying", kind: "ci" },
+    };
+    await gate();
+    assert.equal(service.get(id)!.delivery?.push_review?.base_sha, reviewedHead);
+
+    await new Promise<void>((ready) => server.listen(0, "127.0.0.1", ready));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const focused = await fetch(
+      `${base}/tasks/${id}/push-review-diff?scope=changes`);
+    assert.equal(focused.status, 200);
+    const focusedBody = await focused.json() as { content?: unknown };
+    assert.match(String(focusedBody.content), /value = 3/);
+    const full = await fetch(`${base}/tasks/${id}/push-review-diff?scope=full`);
+    assert.equal(full.status, 200);
+    const fullBody = await full.json() as { content?: unknown };
+    assert.match(String(fullBody.content), /src\/feature\.ts/);
+
+    writeFileSync(join(repo.cwd, "src", "repair.ts"), "export const late = 1;\n");
+    repo.git("add", "src/repair.ts");
+    repo.git("commit", "--quiet", "-m", "late change invalidates card");
+    const stale = await fetch(
+      `${base}/tasks/${id}/push-review-diff?scope=changes`);
+    assert.equal(stale.status, 404);
+    const staleBody = await stale.json() as { error?: unknown };
+    assert.match(String(staleBody.error), /代码已经变化/);
+  } finally {
+    await new Promise<void>((done) => server.close(() => done()));
     await model.stop();
   }
 });
@@ -645,7 +726,7 @@ test("卡键绑定 HEAD:等待期间代码变化会明确换卡;重举卡增量�
     internal.summary.status = "verifying";
     assert.equal(await gate(), false, "集合变化必须重新确认");
     const renewed = service.get(id)!.waiting!;
-    assert.match(String(renewed.context), /较上次已确认的清单/);
+    assert.match(String(renewed.context), /文件范围变化/);
     assert.match(String(renewed.context), /新增 src\/fix\.ts/);
     assert.match(String(renewed.context), /1 个文件与上次确认一致/);
 

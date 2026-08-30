@@ -771,6 +771,24 @@ export interface ExecutionPlaybookOption {
   resources: ExecutionPlan["resources"];
 }
 
+export interface PushReviewPresentation {
+  kind: "delivery" | "feedback" | "pipeline" | "conflict" | "rework";
+  title: string;
+  description: string;
+  base_sha: string;
+  baseline_sha: string;
+  head_sha: string;
+  has_focused_changes: boolean;
+  file_count: number;
+  additions: number;
+  deletions: number;
+  commits: Array<{ sha: string; subject: string }>;
+  all_paths: string[];
+  committed_paths: string[];
+  agent_note?: string;
+  verification?: string;
+}
+
 export interface TaskSummary {
   id: string;
   title?: string;
@@ -881,6 +899,8 @@ export interface TaskSummary {
     prepush?: PrepushVerification;
     /** 进程活性只看这里，不能再由旧存储字段 prepush.state=preparing 推断。 */
     prepush_runtime?: PrepushRuntime;
+    /** 当前 push 检视的阅读导航；授权仍由 delivery_selection 决定。 */
+    push_review?: PushReviewPresentation;
     /** 卡在哪一环的人话(等审批、等某一项核销结果……)。服务端一直
      * 在写,前端一直没显示——于是"验证中"三个字后面藏着的真实原因
      * 谁也看不到,任务看着像马上要成了,其实早就停了。 */
@@ -2815,6 +2835,25 @@ export async function readArtifact(
   return {
     content: String(body.content ?? ""),
     kind: String(body.kind ?? "doc"),
+    branch: body.branch ? String(body.branch) : undefined,
+  };
+}
+
+/** push 检视只允许二选一：看这次处理，或看从任务基线起的完整交付。
+ * Git revision 都由服务端从当前卡片取，页面不传 ref。 */
+export async function readPushReviewDiff(
+  taskId: string,
+  scope: "changes" | "full",
+): Promise<{ content?: string; branch?: string; unavailable?: string }> {
+  const response = await fetch(
+    `/tasks/${encodeURIComponent(taskId)}/push-review-diff?scope=${scope}`);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    return { unavailable: String(body.error ?? `HTTP ${response.status}`) };
+  }
+  const body = await response.json();
+  return {
+    content: String(body.content ?? ""),
     branch: body.branch ? String(body.branch) : undefined,
   };
 }
