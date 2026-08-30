@@ -1938,6 +1938,10 @@ export class IssueFlowService {
         .map((entry, index) =>
           index === 3 ? "in_progress" as const : entry),
       converted_from: id,
+      // 逐仓交付账只读引用(#31):账不拷贝,指向旧会话——旧会话归档但
+      // issue.json 原样在,前端仓卡按引用读旧账标注「转正前」;新会话
+      // 自己的 pushes/mrs/pipelines 只记新交付,两本账不混。
+      inherited_accounts: { issue: id },
       status: "queued",
       stage: "fix",
       stage_note: `转正自 ${id}:分析报告已继承,直接进入问题修改`,
