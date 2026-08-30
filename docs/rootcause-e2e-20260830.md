@@ -438,3 +438,290 @@ CC 轮佐证:内核自己都打出"桌面通知这次没弹出来"(task-4 events
 - MFC-027:Spec 按批注返工后可能仍有一次内核内容绑定的重新确认卡
   (Agent 自设卡问题待内核批);
 - GEN-xxx 是业务样例仓问题,不在 MFC 修复范围。
+
+---
+
+## CC 修复后真实 GLM + Linux 第二轮 E2E 复验（2026-08-30 晚）
+
+### 复验环境与结论口径
+
+- Cloud：`--fake-platform --repo <固定仓> --provider glm --model glm-5.1`。
+- 执行环境：真实 Linux Docker 隔离容器，镜像
+  `mae-flow-task-builder@sha256:73913b6b...`，4 CPU、8 GiB、只读根文件系统。
+- 源仓：为排除上一轮遗留 hardlink，使用 `git clone --no-hardlinks` 得到的
+  独立复验仓 `.e2e-fixtures/source-20260830-rerun`。
+- 任务：`task-1 / REQ2026083002`，真实 GLM 完成 Java 代码、UT、三轮人工
+  批注返工、Build-Fix、推送、假平台流水线、MR 与合入。
+- 注意：本轮最终 `completed` 是在记录产品阻塞后，用**受控测试夹具恢复**
+  定格基线祖先关系才继续得到；不能把整链算作干净通过。恢复前产品自身
+  没有可用的继续入口。
+
+### 已通过的重点验收
+
+1. **真实 Linux/GLM 可运行**：主 Agent 与 Build-Fix 都在 Linux 容器运行，
+   Maven 编译与 UT 真实通过；全程未出现 `python: not found`，也未靠 Agent
+   接触 Git 凭据或直接 push。
+2. **批注不删除可闭环**：受邀检视人 `picky_reviewer` 在任务等决定期创建、
+   发送批注均为 200；责任人选返工后 Agent 收到原文并写逐条回执，批注作者
+   点“确认已修复”后继续推进。MFC-022 本路径通过。
+3. **缺回执停机与窄使命续推通过**：持续删除新生成的
+   `reviews/local-receipts.json` 后，任务在秒级停为 `verifying`，文案准确点名
+   `an-mtfrywts-4`，loop 保留为 `halted`；点“重跑续推”后 loop 变为
+   `repairing`，使命明确为“只复核当前 HEAD 并补回执，未发现漏改不要改代码”。
+   续推前后 HEAD 均为 `31cff06`，没有重烧代码返工。
+4. **快照刷新基本平滑**：运行、等决定、返工、停机、续推之间没有整页空白，
+   旧决定卡也能随状态切走；但复检基准与范围字段有独立错误，见下文。
+5. **源仓隔离通过**：完整测试后源仓
+   `find .git/objects -type f -links +1` 为 0；源仓只有 `master` 与
+   `origin/master`，没有任务分支，工作树干净。
+6. **固定仓入口的显式 UI 通过**：代码仓输入框、仓库 Skill 与技术画像入口
+   都按 `repoPinned` 隐藏；API 强塞另一代码仓由服务端拒绝。旧草稿的隐藏字段
+   仍会污染请求，见 MFC-033。
+7. **MR 基础链通过一半**：MR 链接可打开；流水线三项
+   COMPILE/UT/CODECHECK 全绿后才显示“合入”。但冲突门禁是假绿，首次合入
+   409 且无恢复路，见 MFC-037。
+
+### MFC-033 · P1 · 固定仓部署隐藏了仓库输入，却继续提交旧草稿仓库
+
+- **动态现象**：同一浏览器 origin 里保留上一轮下单草稿后，固定仓部署的
+  下单页不显示仓库输入框；提交却仍暗带旧仓
+  `/Users/.../mae-flow-fieldtest-java`。服务端正确拒绝并提示固定交付仓不接受
+  逐单代码仓。换一个干净 origin 才能继续。
+- **根因（已定位）**：`web/src/LaunchWorkspace.tsx` 的 `repos` 无条件从
+  `LaunchDraft.repos` / `LaunchPreferences.recentRepos` 恢复；
+  `options.repo.enabled` 只控制表单是否渲染（约 690 行），`submit()` 却始终
+  把 `repo: repos[0]` 与 `repos: repos[...]` 传给 `createTask()`（约 500 行）。
+  知识预览的 `previewInput.repos` 也沿用隐藏旧值。
+- **修法**：拿到 `launch-options` 后，若 `repo.enabled=false`，立即清空本次
+  `repos` 与仓库技术画像；提交、草稿保存和知识预览都必须按 enabled 裁字段，
+  不能只隐藏控件。保留现有服务端拒绝作为最后防线。
+
+### MFC-034 · P1 · 专注审阅里的代码行仍无法打开批注编辑器
+
+- **动态现象**：进入“专注审阅”并选择 `TextUtil.java` 后，DOM 中明确存在
+  `.annotatable [data-l="28"]`；点击/强制点击代码行均不出现编辑器和悬浮批注
+  按钮，反而提示“这一处没有行号可锚定”。只能调用 annotations API 绕行。
+- **根因状态**：源头已收窄到 `web/src/Annotatable.tsx` 的事件委托
+  `open() -> pickRow()` 与 `GitDiff` 的 fixed 专注布局交互：行节点存在，但
+  实际 click target 没被解析成该 `[data-l]` 行。`pickRow` 的纯逻辑测试覆盖了
+  假节点，没有覆盖真实专注审阅 DOM/事件目标；尚未定位到唯一一行代码，修前
+  应补浏览器级回归测试再改。
+- **修法**：至少用真实 `GitDiff + Annotatable` 挂载测试复现；让代码单元格或
+  行容器直接成为可操作按钮/明确绑定 `onClick`，不要把最重要的人审入口完全
+  依赖祖先事件命中。399 px 与桌面宽度都验。
+
+### MFC-035 · P1 · “自上次检视以来”复检模式仍会消失，完整交付伪装成按钮
+
+- **动态现象**：第一轮人工检视后 HEAD 从 `8b39fcc` 多次变化到
+  `024dcaf/7c70d86/31cff06`，复检卡仍只有“完整交付”，没有“这次修改”；
+  API `push_review.has_focused_changes=false`、`base_sha=任务基线`。用户点击
+  “完整交付”无任何反馈，因为它其实是唯一状态标签，却使用按钮外观。
+- **根因（已定位）**：`buildPushReviewPresentation()`
+  (`src/taskService.ts:10396-10435`)只拿 `delivery_selection.head` 或上次
+  `git_push.sha` 做候选；`compareDeliveryRevisions()` 又强制 `from` 必须是
+  `to` 祖先。Agent 重排历史后旧检视 HEAD 不再是祖先，比较返回 undefined，
+  代码静默回退整单基线并把 `has_focused_changes` 置 false。与此同时
+  `delivery_selection.head` 在复检轮保持旧值，不能表达“最近一次人实际看过的
+  HEAD”。
+- **修法**：单独持久化不可变的 `last_reviewed_head` 与 waiting/receipt 身份；
+  历史被重排时不要静默降级，应先拦截基线祖先关系错误（MFC-036）。若确实
+  只能展示完整交付，要说明原因。有两个 scope 才渲染切换按钮；只有一个时
+  改为不可点击标签。
+
+### MFC-036 · P0 · Agent 可把交付分支重排到定格基线的父提交，平台未拦截
+
+- **动态现象**：任务定格基线为 `8e7f2ad`，Agent 为整理 4 文件清单执行历史
+  重排后，HEAD `31cff06` 的父提交变成 `8dc0b41`；
+  `git merge-base --is-ancestor 8e7f2ad HEAD` 返回 1。左侧仍显示用户勾选
+  4 文件，右侧卡片却把 `_FIELDTEST/README.md` 算成第 5 个交付文件。
+- **后续表现**：用户再次确认 4 文件后，宿主追加一个“剔除未勾选文件”的
+  commit `4806f99`，净 diff 恢复成 4 文件，但 **8e7f2ad 仍不是 HEAD 祖先**；
+  平台只修最终树，没有修提交拓扑，最终 MR 无法快进合入。
+- **根因（已定位）**：交付门禁只用定格基线到 HEAD 的路径集合校验，不做
+  `merge-base --is-ancestor <frozen-baseline> HEAD`。边界整理
+  `reconcileConfirmedDeliveryBoundary()`（`src/taskService.ts:10637+`）以旧
+  selection HEAD 为 anchor 做 mixed reset/重提交，但在 anchor 自己已经脱离
+  定格基线时仍放行；最终树看似正确，历史合同已经破坏。
+- **修法**：在 Build-Fix 前、生成 push 卡前、真正 push 前都统一校验定格
+  baseline 必须是 HEAD 祖先；失败应派“把当前净改动重放到定格基线”的窄使命，
+  或由宿主用新 worktree 机械重建，不能用补一个反向文件 commit 掩盖。Agent
+  指令也应禁止 reset/rebase 到定格基线之前。
+
+### MFC-037 · P0 · MR 冲突门禁假绿，合入 409 不展示且 MFC 无恢复入口
+
+- **动态现象**：MR 页显示
+  `resolve_discussion_passed/conflict_passed/ci_state_passed` 三项全绿并给“合入”
+  按钮；点击实际返回 409：`目标分支已前进且非快进，请先在任务侧合并目标分支
+  再推送`。任务仍是 `await_merge`，页面继续说“等待合入”。“开发协作”显示
+  “当前没有可接管的代码现场”，向 `/interrupt` 发同一错误也返回 409
+  “await_merge 没有在跑的会话可插话”，Agent 无法正常接住。
+- **根因（已定位）**：假平台 `mergeGates()`
+  (`src/gitPlatform.ts:255-286`)的 `conflict_passed` 只读测试布尔
+  `!this.conflictGate`；真正 POST merge 才在
+  `mergeMergeRequest()`（约 370 行）执行 Git `merge-base --is-ancestor`。
+  同一平台的“能否合入”出现两套事实。MR 页又只是原生 form，409 没有可回到
+  MFC 的结构化上报；watchMerge 只相信假绿 gates，自然不会派冲突修复。
+- **修法**：假平台与真适配统一使用真实目标/source SHA 计算 conflict gate；
+  merge POST 的 409 要在 MR 页原地显示，并可回传 MFC/下一轮 gates。MFC 在
+  await_merge 必须保留“报告合入失败/派冲突修复”的入口，不能只允许取消。
+
+### MFC-038 · P0 · await_merge 只看 merged，不核对实际合入 SHA
+
+- **动态现象（受控恢复实证）**：为继续验证 completed，测试夹具把同样 4 文件
+  净改动重放到正确基线，得到新 SHA `ef83355`，更新 MR 并重新触发三项流水线
+  后合入。MFC 随即标记 `completed`，但任务交付台账、prepush 收据、attested
+  仍全部绑定旧 SHA `4806f99`；实际目标分支已是 `ef83355`。
+- **根因（已定位）**：`fetchGates()`（`src/taskService.ts:11864+`）只返回
+  `mrState` 与 gates，不读取 MR 的 source/merge SHA；`watchMerge()` 看见
+  `merged` 就调用 `settleMergeState()`。`completionAttestation()` 只核对任务
+  本地旧交付事实是否完整，不核对“平台实际合入的提交是否等于该事实”。
+- **风险**：真实平台上若分支被 force-push、MR 被更新或合入了另一 SHA，MFC
+  仍可用旧绿灯与旧人工确认宣告完成，属于交付完整性漏洞。
+- **修法**：门禁/MR 状态契约必须返回当前 source SHA、merge commit SHA；
+  await_merge 每拍要求 source SHA 等于 `delivery.sha`。不一致立即撤销旧
+  attestation，重新进入 Build-Fix + 人工检视；merged 时也必须对 merge SHA
+  做祖先/内容绑定核验，不符绝不能 completed。
+
+### MFC-039 · P2 · 新增“代码已验证，等待检视与合入”大卡重复且抢层级
+
+- **动态现象**：await_merge 时右栏已有“等待检视与合入 / 前往 CodeHub 完成
+  最后一步”，下面又出现 `MERGE REQUEST / 代码已验证，等待检视与合入` 大卡，
+  再重复一段监听说明和 MR 链接。信息正确，但位置突兀、视觉层级高于真正操作。
+- **来源（已定位）**：当天提交 `3e2bc25` 新增
+  `web/src/TaskWorkspace.tsx` 的 `ws-merge-focus`（约 1134 行）。
+- **用户确认的改法**：默认不显示这张大卡；只保留已有“等待合入”状态。
+  点击“等待合入”后展开一行：`流水线与门禁已通过，请前往 MR 完成检视与
+  合入。`，紧跟 MR 链接即可。
+
+### MFC-040 · P1 · 复检统计显示 5 个文件却固定为 +0/-0
+
+- **动态现象**：多轮真实代码变化后，右侧复检摘要连续显示“5 个交付文件，
+  +0/-0”；左侧完整 diff 同时显示数十行新增，事实明显冲突。
+- **根因（已定位）**：与 MFC-035/036 同源。祖先约束导致
+  `compareDeliveryRevisions()` 返回 undefined；
+  `buildPushReviewPresentation()` 对 file_count 退回 snapshot 路径数，却把
+  additions/deletions 直接默认 0，形成“文件数有值、行数假零”的混合结果。
+- **修法**：比较不可得时不要显示 0；显示“统计不可用：提交历史偏离任务基线”
+  并阻塞，先修复祖先关系。测试必须覆盖比较 undefined，而非只覆盖正常祖先链。
+
+### 本轮交互意见：最终推送范围的能力有价值，但操作被拆散
+
+- 勾选的真实语义是交付白名单：选中会进最终 commit/push/MR；未选仅留本地，
+  不会删除。当前却被拆成左侧文件树勾选、右侧“确认/返工”单选、底部
+  “确认推送范围并继续”三处；返工时 CTA 仍叫“确认推送范围”，用户无法一眼
+  判断勾选是否已经执行、与返工是什么关系。
+- 建议合成一张“本次交付范围”卡：每项明确标“纳入交付 / 仅留本地”，显示
+  排除原因和最终 4 文件摘要；按选择分支把 CTA 改成“按这 4 个文件推送”或
+  “提交返工意见”，不要共用一条模糊按钮。
+
+### 尚未完成/不能算通过的复验项
+
+1. **4xx 秒级喊人**：本轮真实遇到 merge POST 409，但它发生在浏览器直连
+   假平台的合入动作，MFC 完全未接收到，因此不是原计划的 adapter 4xx 快停
+   正向通过，反而形成 MFC-037。仍需另造“平台 API 在 MFC 调用期间返回 400”
+   的用例复验快停正则。
+2. **门禁红时不显示合入按钮**：代码路径存在，且当前绿时按钮正确出现；本轮
+   没有在同一真实任务上动态拨红再拨绿。相关单测只能作补充，不能替代真链。
+3. **Linux hardlink 旧现场拒绝**：本轮用无 hardlink 的独立源仓验证了不新增
+   hardlink；没有另外在 Linux root 容器手造 `cp -al` 旧现场验证拒绝文案。
+
+### 给 CC 的下一轮修复顺序
+
+1. **先修 P0 完整性链**：MFC-036（定格基线祖先门禁）→ MFC-037（冲突门禁
+   单一事实 + 409 可恢复）→ MFC-038（merged SHA 与验证/人审 SHA 绑定）。
+2. **再修人审可用性**：MFC-034（专注审阅批注）→ MFC-035/040（最近检视
+   diff、范围按钮、统计失败显式化）。
+3. **最后收交互**：MFC-033（固定仓旧草稿裁字段）、MFC-039（等待合入折叠
+   展示）、交付白名单卡片合并。
+4. 修完必须新增三类集成测试：Agent 重排到 baseline 父提交；MR source SHA
+   在 await_merge 被替换；MR merge POST 409 后任务派窄冲突修复并重新人审。
+
+### 本轮本地回归结果
+
+- `npm test -- --runInBand`：953 项，945 通过，0 失败，8 项按环境跳过；
+  其中现有 hardlink、批注回执窄使命、等决定期 committer 批注等测试均绿。
+- `npm run typecheck`：主 tsconfig 与 contract tsconfig 均通过。
+- `git diff --check`：通过。
+- 结论：上述新问题不是现有单测红灯，而是测试覆盖缺口；尤其缺
+  “定格基线祖先关系”“MR 当前 SHA 与 attestation 绑定”“真实专注审阅 DOM
+  点击”三类动态断言。
+
+## CC 第二轮修复记录(2026-08-30 深夜,commit 54d7af0 + 43dc301)
+
+按「给 CC 的下一轮修复顺序」执行,全部落地;验证口径:typecheck 双配置
++ web tsc + 全量测试。逐项与建议的对照:
+
+### P0 完整性链
+
+- **MFC-036 已修(54d7af0)**:`tryDeliver` 在 Build-Fix 之前用
+  `frozenTaskBaseline`(只认 step_heads.branch_create,**不许**用
+  merge-base 自愈回退——它永远自证祖先,门禁会恒绿)做
+  `merge-base --is-ancestor` 校验;历史脱离时若工作区已收口,宿主用
+  `commit-tree`(旧 HEAD 的树 + 定格基线为父)机械重放,重放合同=
+  树逐字节一致 + 祖先恢复,任一不成立回原 HEAD 停摆。推送前复核
+  (repair=false)只停不改写。整理使命删掉"或重排提交"的错误教唆,
+  写死"不得 reset/rebase 触及基线及更早提交"。附带:
+  reconcileConfirmedDeliveryBoundary 的锚点候选补上定格基线兜底。
+  集成测试:重排为 orphan → repaired(HEAD^==基线、树不变);二次
+  脱离 → blocked 不动 HEAD;未收口 → blocked 不改写。
+- **MFC-037 已修(54d7af0)**:假平台 `conflict_passed` 改用 bare 仓
+  真实 `merge-base --is-ancestor <target> <mr.sha>`,测试布尔只保留
+  强拨红方向;merge POST 409 返回人话 HTML(原因+返回 MR 页+说明
+  任务侧会自动接手)。宿主 dispatchConflictRepair 本来就在,门禁说
+  真话后恢复链自动生效(mrLoop 18 项全绿,其中冲突环用例现在靠真实
+  分叉触红)。集成测试:目标分支前进→门禁即红/无合入按钮/409 人话页
+  →任务侧合并重推→门禁回绿→正常合入。
+- **MFC-038 已修(54d7af0)**:门禁契约新增 `sha`(MR 源提交);
+  `settleMergeState` 收 observedSourceSha,merged 且与 delivery.sha
+  不符→拒绝 completed,停摆点名两个 SHA;watchMerge 每拍在 opened
+  态也核对,发现被替换立即停摆。四个 settle 调用点全部接线。
+  集成测试:await_merge 期间 MR sha 被换并翻 merged → 不 completed,
+  stalled 点名已验证 SHA。**边界**:旧平台契约无 sha 字段时退化为
+  旧行为(无法核对);内网真平台适配须补该字段。
+
+### 人审可用性
+
+- **MFC-034 已修(43dc301),根因坐实**:不是事件委托逻辑错,是
+  `.diff-column-resizer`(left:50%、全高、z-index:4)恰好压在每行
+  几何中心——自动化点击打元素中心,target 永远是把手。修法:
+  ①`pickRowFromStack` 沿 `elementsFromPoint` 整叠穿透找行(只认
+  自身/祖先带 data-l;**不用** pickRow 的容器回退,叠层里躺着整块
+  画布,回退会错落到第一行);②把手拖动收尾的 click 不外泄(原地
+  单击仍放行给批注层)。纯逻辑测试按真实 DOM 形状(把手/行/画布叠层)
+  复现并钉死。**未做浏览器级测试**:仓库零外部依赖,无 jsdom/vitest
+  基建;下一轮 E2E 请真点专注审阅行(包括行中心与分栏线附近)。
+- **MFC-035 已修(43dc301)**:delivery 新增 `last_reviewed_head`,
+  push 确认卡被人解决(通过或返工)即钉住;复检基点优先级
+  last_reviewed_head > selection.head > git_push.sha。单一范围渲染为
+  不可点状态标签。测试:返工轮复检卡 base_sha==人上次看过的 HEAD、
+  has_focused_changes=true。
+- **MFC-040 已修(43dc301)**:比较不可得时 push_review 带
+  `stats_unavailable_reason`,前端显示原因,不再摆 +0/−0;正常路径
+  行为不变。MFC-036 门禁在更早处拦基线偏离,此字段是最后的诚实兜底。
+
+### 交互收尾
+
+- **MFC-033 已修(43dc301)**:launch-options 到手且 repo.enabled=false
+  时立即清空草稿恢复的 repos 与技术画像;提交/知识预览按 enabled 裁
+  字段;服务端拒绝保留为最后防线。
+- **MFC-039 已修(43dc301,按用户拍板方案原样)**:删除 ws-merge-focus
+  大卡;默认一行"等待合入",点开展开一句说明(waiting_on 有值用
+  waiting_on)+ MR 链接;MR 被关闭保持直接可见的警示条。
+- **交付白名单卡片合并(勾选/单选/CTA 三处拆散)未动**:整卡重排是
+  专门交互优化轮的活,本轮不夹带。
+
+### 给下一轮 E2E 的增量验证点
+
+1. Agent 重排历史(或手工 reset --soft 到 orphan)后继续交付:应看到
+   宿主日志"已机械重放净改动",MR 可快进合入,不再出现反向文件 commit。
+2. 双 MR 竞争同一目标分支:后合入的一单应在门禁处直接红
+   (conflict_passed 带"先在任务侧合并目标分支"),数拍内自动派冲突
+   修复,而不是点合入才 409。
+3. await_merge 时在平台侧直接改写源分支/换 SHA 合入:任务必须停摆
+   点名两个 SHA,绝不 completed。
+4. 专注审阅:普通点击行、点行几何中心、点分栏线附近、拖动分栏后单击,
+   四种都应出批注编辑器或明确提示;399px 窄屏同验。
+5. 固定仓部署 + 残留旧草稿的浏览器 origin:下单应直接成功,不再
+   400"不接受逐单代码仓"。
+6. 多轮返工后复检卡:应有"这次修改"(基点=上一张卡的 HEAD)且
+   统计非零;若出现"统计不可用"文案,说明基线偏离——按 1 排查。

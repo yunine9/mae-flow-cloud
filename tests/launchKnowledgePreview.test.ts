@@ -60,8 +60,10 @@ test("发起页只展示 Mae-Flow 平台管理的三类知识，不把仓库内�
   assert.doesNotMatch(contract, /repository_skills|platform_capabilit/,
     "仓库原生 Skill 与运行时平台能力不能混入可见知识清单");
 
-  assert.match(source, /repos: repos\.map/,
-    "仓库仍须保留为平台知识的匹配条件");
+  // MFC-033 后仓库输入按 repo.enabled 裁字段:固定仓部署不许把草稿
+  // 旧仓暗带进预览/提交。匹配条件语义不变,但表达式带了开关。
+  assert.match(source, /repos: repoFieldsEnabled\s*\n?\s*\? repos\.map/,
+    "仓库仍须保留为平台知识的匹配条件(按 repo.enabled 裁剪)");
   assert.match(source, /repositoryProfiles:/,
     "语言技术画像仍须保留为平台工程知识的匹配条件");
 });
