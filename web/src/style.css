@@ -2214,7 +2214,9 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   border-radius: 50%;
   background: var(--surface);
 }
-/* 连线是"进线":画在本节点左侧,通到本节点的路走过才着色 */
+/* 连线画在本节点与下一节点之间:本节点走完(或已继承)才着色——
+ * 进行中/待重做节点前方的路保持灰,管道正好停在当前阶段的节点上;
+ * "当前"由节点自己的脉冲光晕表达,不靠管线向前多伸一段。 */
 .issue-fixed-step:not(:last-child)::before {
   content: "";
   position: absolute;
@@ -2229,9 +2231,6 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-fixed-step.state-done > i { border-color: var(--success); background: var(--success); }
 .issue-fixed-step.state-done::before { background: var(--success); }
 .issue-fixed-step.state-in_progress { color: var(--accent); font-weight: 700; }
-.issue-fixed-step.state-in_progress::before {
-  background: linear-gradient(90deg, var(--success), var(--accent));
-}
 .issue-fixed-step.state-in_progress > i {
   width: 11px;
   height: 11px;
@@ -2258,7 +2257,6 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 }
 .issue-fixed-step.state-redo { color: #a8541f; }
 .issue-fixed-step.state-redo > i { border-color: #d49b37; background: #d49b37; }
-.issue-fixed-step.state-redo::before { background: #d49b37; }
 .issue-fixed-name {
   max-width: 100%;
   overflow: hidden;
