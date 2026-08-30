@@ -17,7 +17,6 @@ class GateDecision:
 @dataclass(frozen=True)
 class EditGateContext:
     path: str
-    match_path: str
     step: str
     inside_plugin: bool
     is_source: bool

@@ -307,7 +307,7 @@ def _print_action_scope(action, inferred):
     print("  - 确认以上范围")
     print("  - 需要调整范围")
     print("用户确认后执行：")
-    print('python "%s" action confirm-scope' %
+    print('python3 "%s" action confirm-scope' %
           os.path.abspath(sys.argv[0]))
     print("若用户要求调整，执行 action cancel 后按新范围重新 action start；禁止自行扩大文件清单。")
 

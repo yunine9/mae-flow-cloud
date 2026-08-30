@@ -36,7 +36,7 @@ class BootstrapTests(unittest.TestCase):
         head = skill.split("首次触发")[1][:400]
         self.assertIn("转发壳由 Hook 在你发起交付时自动铺好", head)
         self.assertIn("不需要找", head)
-        self.assertIn('先执行 `python ".mae-flow-work/bin/mae-flow.py" init`',
+        self.assertIn('先执行 `python3 ".mae-flow-work/bin/mae-flow.py" init`',
                       skill)
 
     def test_hook_lays_the_bridge_itself_on_a_delivery_request(self):

@@ -203,3 +203,71 @@ class UserSceneDiscardTests(unittest.TestCase):
         source = inspect.getsource(guard_bash)
         self.assertIn("本单 Agent 自己写", source)
         self.assertIn("用户现场", source)
+
+
+class GitObjectSurgeryTests(unittest.TestCase):
+    """MFC-019:.git 手术类动作必须停给人,只读诊断放行。
+
+    实锤(e2e-picky-20260830):Git 对象 EACCES 后 Agent 批量复制重写
+    loose object、删掉 core,随后宣称 fsck 全绿——hardlink 在场时这会
+    污染源仓,崩溃证据也没了。"""
+
+    def context(self, command):
+        values = {
+            "command": command,
+            "has_internal_state_path": False,
+            "branch_name": "",
+            "branch_creating": False,
+            "step": "build",
+            "wanted_branch": "feature/req",
+            "base_branch": "main",
+            "ticket": "REQ-1",
+            "commit_message_present": False,
+            "commit_message": "",
+            "current_branch": "",
+            "add_paths": (),
+            "recursive_delete_targets": (),
+            "state_active": True,
+        }
+        return BashGateContext(**values)
+
+    def test_object_rewrite_blocked(self):
+        for command in (
+            'cp .git/objects/51/0a5f .git/objects/51/0a5f.new',
+            'rm -f .git/objects/51/0a5f',
+            'chmod 644 .git/objects/51/0a5f',
+            'true; mv fixed.obj .git/objects/ab/cd',
+        ):
+            with self.subTest(command=command):
+                decision = decide_post_commit(self.context(command))
+                self.assertEqual(
+                    ("block", "bash-git-objects-surgery"),
+                    (decision.kind, decision.rule))
+
+    def test_core_dump_delete_blocked(self):
+        for command in ('rm core', 'rm ./core.12345'):
+            with self.subTest(command=command):
+                decision = decide_post_commit(self.context(command))
+                self.assertEqual(
+                    ("block", "bash-core-dump-delete"),
+                    (decision.kind, decision.rule))
+
+    def test_recursive_git_perms_blocked(self):
+        decision = decide_post_commit(self.context('chmod -R 755 .git'))
+        self.assertEqual(
+            ("block", "bash-git-recursive-perms"),
+            (decision.kind, decision.rule))
+
+    def test_readonly_diagnostics_and_unrelated_rm_pass(self):
+        for command in (
+            'git fsck --full --no-dangling',
+            'ls -la .git/objects/51',
+            'stat .git/objects/51/0a5f',
+            'rm build/core-utils.o',
+            'rm docs/decoration.md',
+        ):
+            with self.subTest(command=command):
+                decision = decide_post_commit(self.context(command))
+                self.assertNotIn(decision.rule, (
+                    "bash-git-objects-surgery", "bash-core-dump-delete",
+                    "bash-git-recursive-perms"))

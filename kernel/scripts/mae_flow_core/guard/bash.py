@@ -209,6 +209,35 @@ def _post_dangerous(context):
         return _absolute(
             "bash-remote-script-pipe",
             "危险命令拦截:管道执行远程脚本(供应链风险)。确需执行请用户手动运行。")
+    # Git 对象库/崩溃证据的手术动作(MFC-019 实锤:对象读取异常时
+    # Agent 批量复制重写 loose object、删掉 core,随后宣称 fsck 全绿——
+    # hardlink 在场时这会污染源仓,证据也没了)。只读诊断(git fsck、
+    # stat、ls)不受限;改写类必须停给人:这是环境/基础设施故障,
+    # 不是业务 Agent 该自愈的层。
+    if re.search(
+        r"(?:^|[|&;]\s*)(?:rm|mv|cp|chmod|chown|truncate|ln|dd)\b"
+        r"[^|&;]*\.git/objects", command):
+        return _block(
+            "bash-git-objects-surgery",
+            "Git 对象库手术拦截:复制/重写/删除 .git/objects 下的对象属于"
+            "基础设施级动作——若对象与其他仓共享硬链接,这会直接污染源仓,"
+            "还会销毁故障证据。只做只读诊断(git fsck --full、stat、ls);"
+            "确认是环境故障就原样停下,把现象交给用户或平台处理。")
+    if re.search(
+        r"(?:^|[|&;]\s*)rm\b[^|&;]*(?:\s|/)core(?:\.\d+)?(?:\s|$)",
+        command):
+        return _block(
+            "bash-core-dump-delete",
+            "崩溃证据保护:core 文件是唯一能回溯崩溃原因的现场,删掉之后"
+            "\u201c已修复\u201d就再也无法证伪。移动到工作区外的隔离目录留存,"
+            "或把处置交给用户。")
+    if re.search(
+        r"(?:^|[|&;]\s*)(?:chmod|chown)\b[^|&;]*-[a-zA-Z]*R[^|&;]*\.git\b",
+        command):
+        return _block(
+            "bash-git-recursive-perms",
+            "对 .git 递归改权限/属主被拦截:硬链接在场时会改到源仓同一"
+            "inode。权限异常属于环境故障,交给平台的 ownership 机制处理。")
     git_commands = executed_git_invocations(command)
     if _git_clean_ignored(git_commands):
         return _absolute(

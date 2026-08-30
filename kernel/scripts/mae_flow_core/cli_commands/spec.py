@@ -267,7 +267,7 @@ def cmd_spec(flow, st, args):
             script = api.norm(os.path.abspath(sys.argv[0]))
             stop = min(order.index(target), order.index("verify"))
             chain = " && ".join(
-                'python "%s" spec phase %s' % (script, p)
+                'python3 "%s" spec phase %s' % (script, p)
                 for p in order[order.index(cur) + 1:stop + 1])
             tail = ("(verify 之后由 spec verify-pass 与 spec archive 推进,"
                     "不可用 phase 直达)" if order.index(target) > order.index("verify")
@@ -306,7 +306,7 @@ def cmd_spec(flow, st, args):
         if not report or not os.path.isfile(report):
             script = api.norm(os.path.abspath(sys.argv[0]))
             api.die("verify-pass 要求先登记真实存在的验证报告:"
-                "python \"%s\" spec set verification_report \"<路径>\"。"
+                "python3 \"%s\" spec set verification_report \"<路径>\"。"
                 "验证结论不能凭口头产生。" % script, 2)
         # 校准实锤:0 字节报告与零任务清单曾可满足"三重硬校验"——空产物
         # 不能证明任何事。

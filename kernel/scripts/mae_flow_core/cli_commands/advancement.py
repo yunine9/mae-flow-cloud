@@ -383,6 +383,6 @@ def cmd_config_review(flow, st, args):
         print("Q2 的答案由随后的 workflow_select 直接消费，那一步不再重复提问。")
     print("不要把前面多个单项回答拼成 ack，也不要再次调用 config-review。")
     print("用户选择确认后执行：")
-    print('python "%s" done' % os.path.abspath(sys.argv[0]))
+    print('python3 "%s" done' % os.path.abspath(sys.argv[0]))
     print("若 AskUserQuestion 的选择结果未被宿主回传，让用户直接发送同一句普通消息后重试；"
           "无需退出或重新初始化。")

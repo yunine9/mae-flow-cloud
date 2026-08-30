@@ -17,9 +17,9 @@ class MFParser(argparse.ArgumentParser):
         print("[mae-flow] 参数错误: " + message, file=sys.stderr)
         print(
             "正确用法(高频三条,直接复制):\n"
-            '  python "%s" current\n'
-            '  python "%s" done [--choice 值] [--set 键=值]\n'
-            '  python "%s" init\n'
+            '  python3 "%s" current\n'
+            '  python3 "%s" done [--choice 值] [--set 键=值]\n'
+            '  python3 "%s" init\n'
             "其余子命令: status|panel|doctor|report|envcheck|skip|goto|unlock|allow|spec|template|"
             "lightcheck|accept-risk|moonlight|action|messages|config-review|requirement-record|"
             "story-localize|local-spec|domain-docs|domain-archive|manifest|"

@@ -330,7 +330,7 @@ def cmd_status(flow, st, args):
         ctx = (";" + ";".join(parts)) if parts else ""
         me = os.path.abspath(sys.argv[0])
         print(f"[mae-flow 状态] 当前步骤: {sid}({step['title']}){ctx};{api.perms_line(step)}。"
-              f"执行 python \"{me}\" current 获取指令(勿搜索脚本位置,以此路径为准),"
+              f"执行 python3 \"{me}\" current 获取指令(勿搜索脚本位置,以此路径为准),"
               f"禁止做当前步骤之外的流程动作。"
               f"(用户与流程无关的问答/阅读/分析不受此限,照常回应;但无关的源码改动应引导用户开 worktree,勿混入交付分支)")
         return

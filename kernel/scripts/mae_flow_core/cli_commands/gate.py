@@ -103,12 +103,9 @@ def _redirect_targets(c):
 
 def _gate_edit(flow, st, sid, step, intent, jdie):
     p = intent.subject
-    rel = api._repo_rel_for_match(p)
-    pm = rel if rel is not None else p
     plugin_root = api.norm(os.path.abspath(os.path.join(HERE, ".."))).lower()
     decision = decide_edit(EditGateContext(
         path=p,
-        match_path=pm,
         step=sid or "",
         inside_plugin=api.norm(os.path.abspath(p)).lower().startswith(
             plugin_root + "/"),

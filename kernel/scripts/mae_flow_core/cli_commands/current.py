@@ -322,17 +322,17 @@ def print_current(flow, st):
     if api._moonlight(st) and sid in MOONLIGHT_QUALITY_STEPS:
         print("──── 尽力而为出口 ────")
         print("先真实执行本步并尝试修复；确认继续尝试只会重复消耗后，提交当前有效改动，然后执行：")
-        print(f"python \"{os.path.abspath(sys.argv[0])}\" moonlight defer "
+        print(f"python3 \"{os.path.abspath(sys.argv[0])}\" moonlight defer "
               "--reason \"<遗留现象、已尝试修复、当前风险>\"")
         print("该命令会把问题写入晨间报告并继续下一阶段，不会把失败伪装成通过。")
     if api._moonlight(st) and sid == "push":
         print("push 若因认证、网络或冲突在有限重试后仍失败，禁止询问或谎报成功；执行：")
-        print(f"python \"{os.path.abspath(sys.argv[0])}\" moonlight push-failed "
+        print(f"python3 \"{os.path.abspath(sys.argv[0])}\" moonlight push-failed "
               "--reason \"<错误原文和已尝试处理>\"")
         print("状态会停在 push，早晨修好远端问题后直接重新 push + done。")
     if api._moonlight(st) and api._moonlight_can_block(sid):
         print("若不是质量失败，而是需求材料、权限或外部依赖客观缺失，继续执行已无意义，执行：")
-        print(f"python \"{os.path.abspath(sys.argv[0])}\" moonlight blocked "
+        print(f"python3 \"{os.path.abspath(sys.argv[0])}\" moonlight blocked "
               "--reason \"<缺失条件、已尝试确认、为什么无法继续>\"")
         print("它会生成晨间报告并允许本轮正常停止，不会让 Stop Hook 无限打回。")
     if sid == "moonlight_review":
@@ -387,11 +387,11 @@ def print_current(flow, st):
             api._print_config_review(review, step, st)
             print("把上述确认单逐项复制进你的回复正文(用户看不见工具输出),"
                   "再只问一次最终确认；不要再拼接前面的单项回答。")
-            print('python "%s" done' % os.path.abspath(sys.argv[0]))
+            print('python3 "%s" done' % os.path.abspath(sys.argv[0]))
         else:
             sets = " --set ".join(
                 key + "=<值>" for key in config_keys)
-            print('python "%s" config-review --set %s' % (
+            print('python3 "%s" config-review --set %s' % (
                 os.path.abspath(sys.argv[0]), sets))
             print("该命令会一次性校验并展示完整配置；用户最终确认后再执行它输出的简短 done 命令。")
         return
@@ -406,6 +406,6 @@ def print_current(flow, st):
         if missing_sets:
             extra += " --set " + " --set ".join(k + "=<值>" for k in missing_sets)
     # python(非 python3:Windows 无此命令);abspath(非 relpath:跨盘符 relpath 抛 ValueError)
-    print(f"python \"{os.path.abspath(sys.argv[0])}\" done{extra}")
+    print(f"python3 \"{os.path.abspath(sys.argv[0])}\" done{extra}")
     if step.get("skippable"):
         print(f"(可跳过: ... skip --reason \"<理由>\")")

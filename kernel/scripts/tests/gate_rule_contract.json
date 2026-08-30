@@ -251,6 +251,24 @@
       "escape": "cli:current",
       "evidence": "capability openspec",
       "why": "全局 openspec 随上游漂移且 init 会污染仓库;正路是 current 给出的 capability 命令"
+    },
+    "bash-git-objects-surgery": {
+      "kind": "permit",
+      "tier": "A",
+      "escape": "permit",
+      "why": "重写 .git/objects 会污染硬链接共享的源仓并销毁故障证据"
+    },
+    "bash-core-dump-delete": {
+      "kind": "permit",
+      "tier": "A",
+      "escape": "permit",
+      "why": "core 是唯一能回溯崩溃原因的现场,删了\"已修复\"无法证伪"
+    },
+    "bash-git-recursive-perms": {
+      "kind": "permit",
+      "tier": "A",
+      "escape": "permit",
+      "why": "对 .git 递归改权限会打到硬链接共享的源仓 inode"
     }
   }
 }

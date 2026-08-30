@@ -204,7 +204,7 @@ class ActiveHookEventAdapter(HookQualityExecutionMixin):
         return HookResponse(stderr=(
             "[mae-flow] 自动退出未完成(流程状态仍在)。不要重复要求用户确认；"
             "请执行 current 输出中的 doctor 命令查看原因，用户始终可在真实终端运行 "
-            "`python \"%s\" exit --interactive`；若插件脚本本身不可用,恢复插件后"
+            "`python3 \"%s\" exit --interactive`；若插件脚本本身不可用,恢复插件后"
             "重试,或(确认放弃流程时)由用户手动删除项目根的 .mae-flow.json* "
             "文件。\n" % os.path.abspath(self.maeflow_path)))
 
@@ -215,7 +215,7 @@ class ActiveHookEventAdapter(HookQualityExecutionMixin):
         readme = os.path.abspath(
             os.path.join(self.plugin_root, "README.md"))
         return HookResponse(stdout=(
-            "[mae-flow] 存在进行中的交付流程。续跑先执行 python "
+            "[mae-flow] 存在进行中的交付流程。续跑先执行 python3 "
             "\"%s\" current 获取当前步骤指令。"
             "用户问 mae-flow 用法/流程类问题时,先读 \"%s\" "
             "再按其内容作答,禁止凭记忆即兴。\n"
@@ -260,7 +260,7 @@ class ActiveHookEventAdapter(HookQualityExecutionMixin):
                 "[mae-flow] 本项目适用 mae-flow 交付流程:开新单直接说"
                 "「交付 <单号> + SE 文档」或敲 /mae-flow:mae-flow;"
                 "新手指南敲 /mae-flow:mae-flow help。"
-                "(流程脚本: python \"%s\";"
+                "(流程脚本: python3 \"%s\";"
                 "用户问用法/流程类问题时,先读 \"%s\" "
                 "再作答,禁止凭记忆即兴)\n" % (script, readme)
             ))

@@ -40,7 +40,7 @@ def _extract_markdown_sections(text, wanted):
 
 def _adapt_embedded_method(body, maeflow):
     """Keep upstream methodology while removing its host-level orchestration."""
-    embedded = 'python "%s" capability openspec -- ' % maeflow
+    embedded = 'python3 "%s" capability openspec -- ' % maeflow
     body = re.sub(
         r"(?m)^(\s*)openspec\s+",
         lambda match: match.group(1) + embedded,
@@ -59,13 +59,13 @@ def _adapt_embedded_method(body, maeflow):
         flags=re.S)
     command_prefixes = {
         r'"\$COMET_BASH"\s+"\$COMET_STATE"\s+':
-            'python "%s" capability comet-state -- ' % maeflow,
+            'python3 "%s" capability comet-state -- ' % maeflow,
         r'"\$COMET_BASH"\s+"\$COMET_GUARD"\s+':
-            'python "%s" capability comet-guard -- ' % maeflow,
+            'python3 "%s" capability comet-guard -- ' % maeflow,
         r'"\$COMET_BASH"\s+"\$COMET_HANDOFF"\s+':
-            'python "%s" capability comet-handoff -- ' % maeflow,
+            'python3 "%s" capability comet-handoff -- ' % maeflow,
         r'"\$COMET_BASH"\s+"\$COMET_ARCHIVE"\s+':
-            'python "%s" capability comet-archive -- ' % maeflow,
+            'python3 "%s" capability comet-archive -- ' % maeflow,
     }
     for pattern, replacement in command_prefixes.items():
         # A Windows plugin path such as ``C:\Users\...`` is not a valid
@@ -190,6 +190,6 @@ def render_pack(name):
         "上面的原始方法只提供本步骤需要的思考与执行纪律。不要按其中的“下一步”、"
         "“调用其他 Skill”或“结束工作流”自行跳转；完成后回到本步骤正文，"
         "由本步骤正文给出的完成命令决定下一步；若正文要求收口，使用 "
-        "`python \"%s\" done`。" % maeflow,
+        "`python3 \"%s\" done`。" % maeflow,
     ))
     return "\n".join(sections).rstrip()
