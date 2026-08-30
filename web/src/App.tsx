@@ -132,6 +132,26 @@ function workspacePath(taskId: string, reviewId = ""): string {
     + (reviewId ? `/review/${encodeURIComponent(reviewId)}` : "");
 }
 
+export type WorkspaceTargetResolution =
+  | { kind: "pending" }
+  | { kind: "missing" }
+  | { kind: "ready"; task: TaskSummary };
+
+/** 深链只能在任务目录完成一次权威读取后判失效。`tasks.length` 不能充当
+ * “已加载”标记：一个完全没有任务的新账号，合法结果本来就是空数组。 */
+export function resolveWorkspaceTarget(
+  taskId: string,
+  openedTaskId: string,
+  tasks: TaskSummary[],
+  taskListLoaded: boolean,
+): WorkspaceTargetResolution {
+  if (!taskId || openedTaskId === taskId || !taskListLoaded) {
+    return { kind: "pending" };
+  }
+  const task = tasks.find((candidate) => candidate.id === taskId);
+  return task ? { kind: "ready", task } : { kind: "missing" };
+}
+
 function initialView(user: AuthUser): View {
   if (/^\/help(?:\/|$)/.test(location.pathname)) return "help";
   if (readKnowledgeAssetFocus()) return "knowledge";
@@ -396,6 +416,88 @@ function NavIcon({ name }: { name: View }) {
 // 但在“我的工作”里与已完成任务共用交付接力区，不混进自动推进列表。
 const DELIVERY_HANDOFF_STATUSES: TaskStatus[] = ["await_merge", "completed"];
 
+export interface PersonalActionItem {
+  key: string;
+  task?: TaskSummary;
+  kicker: string;
+  title: string;
+  detail: string;
+  action: string;
+  href?: string;
+}
+
+/** 顶部行动清单与侧栏角标共用同一份事实。尤其 Committer 邀请可能来自
+ * 别人归属的任务，关联时必须查全量可见任务，不能查“我的任务”子集。 */
+export function buildPersonalActionItems({
+  waiting,
+  intervention,
+  merges,
+  reviews,
+  tasks,
+}: {
+  waiting: TaskSummary[];
+  intervention: TaskSummary[];
+  merges: TaskSummary[];
+  reviews: ReviewRequest[];
+  tasks: TaskSummary[];
+}): PersonalActionItem[] {
+  const seen = new Set<string>();
+  const items: PersonalActionItem[] = [];
+  for (const task of waiting) {
+    if (seen.has(task.id)) continue;
+    seen.add(task.id);
+    items.push({
+      key: `decision:${task.id}`,
+      task,
+      kicker: "等待你的决定",
+      title: task.title ?? task.requirement,
+      detail: task.focus?.next_action ?? "查看材料并完成当前确认",
+      action: "立即处理",
+    });
+  }
+  for (const review of reviews) {
+    const task = tasks.find((candidate) => candidate.id === review.task_id);
+    items.push({
+      key: `review:${review.id}`,
+      task,
+      kicker: "Committer 检视",
+      title: review.task_title,
+      detail: task
+        ? `${review.requester} 邀请你检视代码与交付材料`
+        : `${review.requester} 邀请你检视；任务详情暂未同步，请稍后刷新`,
+      action: task ? "开始检视" : "任务暂不可用",
+    });
+  }
+  for (const task of intervention) {
+    if (seen.has(task.id)) continue;
+    seen.add(task.id);
+    items.push({
+      key: `intervention:${task.id}`,
+      task,
+      kicker: task.status === "paused" ? "任务已暂停" : "需要人工介入",
+      title: task.title ?? task.requirement,
+      detail: task.focus?.next_action ?? task.detail ?? "查看现场并决定下一步",
+      action: "查看现场",
+    });
+  }
+  for (const task of merges) {
+    if (seen.has(task.id)) continue;
+    seen.add(task.id);
+    items.push({
+      key: `merge:${task.id}`,
+      task,
+      kicker: "等待你去合入",
+      title: task.title ?? task.requirement,
+      detail: task.delivery?.mr_url
+        ? `验证已通过，请到 CodeHub 完成检视与合入：${task.delivery.mr_url}`
+        : "验证已通过，请到 CodeHub 完成检视与合入",
+      action: "查看合入请求",
+      href: task.delivery?.mr_url,
+    });
+  }
+  return items;
+}
+
 export function App() {
   const [theme, setTheme] = useState<Theme>(() =>
     document.documentElement.dataset.theme === "light" ? "light" : "dark");
@@ -600,9 +702,14 @@ export function App() {
   // 通知/复制链接进入时直接打开指定任务工作台。Committer 不要求任务
   // 归属本人；能否操作仍由服务端和 canOperate 决定，URL 不授予权限。
   useEffect(() => {
-    if (!targetTaskId || artifactTaskId === targetTaskId || tasks.length === 0) return;
-    const target = tasks.find((task) => task.id === targetTaskId);
-    if (!target) {
+    const resolution = resolveWorkspaceTarget(
+      targetTaskId,
+      artifactTaskId,
+      tasks,
+      taskSync.kind === "live",
+    );
+    if (resolution.kind === "pending") return;
+    if (resolution.kind === "missing") {
       // 深链指向的任务不在列表里(已删除/链接过期):静默返回的话页面
       // 停在普通"我的工作",人只会怀疑自己点错或系统坏了(2026-08-30
       // 审计)。说破并把 URL 收回根路径。
@@ -611,13 +718,15 @@ export function App() {
       history.replaceState({}, "", "/");
       return;
     }
+    const target = resolution.task;
+    setMissingTaskNotice("");
     setArtifactTaskSnapshot(target);
     setArtifactTaskId(target.id);
     const canonical = workspacePath(targetTaskId, targetReviewId);
     if (location.pathname + location.search !== canonical) {
       history.replaceState({}, "", canonical);
     }
-  }, [targetReviewId, targetTaskId, tasks, artifactTaskId]);
+  }, [targetReviewId, targetTaskId, tasks, artifactTaskId, taskSync.kind]);
 
   // 打开的工作台必须跨轮询稳定存在。任务在状态切换时可能有一拍没出现在
   // 列表响应里；若直接用 tasks.find 渲染,组件会被卸载再挂载,表现为
@@ -712,6 +821,15 @@ export function App() {
     .sort(byTeamAttention);
   const myDelivered = myTasks.filter((task) =>
     DELIVERY_HANDOFF_STATUSES.includes(task.status));
+  const myMerges = myTasks.filter((task) => task.status === "await_merge");
+  const personalActionItems = buildPersonalActionItems({
+    waiting: myWaiting,
+    intervention: myIntervention,
+    merges: myMerges,
+    reviews: pendingReviews,
+    // Committer 可以检视别人归属的任务；这里必须用全量可见目录关联。
+    tasks,
+  });
   const scopedMyWork = mineScope === "waiting" ? myWaiting
     : mineScope === "intervention" ? myIntervention
       : mineScope === "active" ? myActive
@@ -765,7 +883,7 @@ export function App() {
     help: { title: "使用帮助", description: "用大白话讲清每个功能：什么时候用、点哪里、接下来会发生什么。" },
   }[view];
   const relevantWaiting = view === "mine"
-    ? myWaiting.length + pendingReviews.length
+    ? personalActionItems.length
     : view === "team" && teamTaskTab === "current" ? waitingCount : 0;
   const launchEntry = launchGateCopy(launchGate);
   const selectView = (next: View) => {
@@ -818,7 +936,7 @@ export function App() {
           <NavButton view="settings" current={view} onSelect={selectView} label="服务设置" />
         </> : <>
           <span className="nav-section-label">个人工作台</span>
-          <NavButton view="mine" current={view} onSelect={selectView} label="我的需求" badge={myWaiting.length + pendingReviews.length} personal />
+          <NavButton view="mine" current={view} onSelect={selectView} label="我的需求" badge={personalActionItems.length} personal />
           <NavButton view="issues" current={view} onSelect={selectView} label="问题处理" />
           <NavButton view="profile" current={view} onSelect={selectView} label="个人设置" />
           <span className="nav-section-label team-context">团队信息</span>
@@ -923,11 +1041,8 @@ export function App() {
             <button type="button" onClick={() => setMissingTaskNotice("")}>知道了</button>
           </div>}
           <PersonalActionInbox
-            waiting={myWaiting}
-            intervention={myIntervention}
-            merges={myTasks.filter((task) => task.status === "await_merge")}
-            reviews={pendingReviews}
-            tasks={myTasks}
+            items={personalActionItems}
+            hasOwnTasks={myTasks.length > 0}
             onOpen={openArtifacts}
           />
           <section className="personal-pulse four" aria-label="我的任务摘要">
@@ -1008,6 +1123,7 @@ export function App() {
     {artifactTask && <TaskWorkspace
       task={artifactTask}
       viewerUsername={session.username}
+      canOverride={session.role === "admin"}
       canOperate={canOperate(artifactTask)}
       canCollaborate={canCollaborate(artifactTask)}
       canRequestReview={responsibleOf(artifactTask) === session.username}
@@ -1033,86 +1149,15 @@ export function App() {
 }
 
 function PersonalActionInbox({
-  waiting,
-  intervention,
-  merges,
-  reviews,
-  tasks,
+  items,
+  hasOwnTasks,
   onOpen,
 }: {
-  waiting: TaskSummary[];
-  intervention: TaskSummary[];
-  /** await_merge:全链路最后一个必须人动手的动作(去 CodeHub 合入)。
-   * 曾被归进绿色"完成堆"不进待办,任务从视野里消失、MR 躺到过期
-   * (2026-08-30 审计)。 */
-  merges: TaskSummary[];
-  reviews: ReviewRequest[];
-  tasks: TaskSummary[];
+  items: PersonalActionItem[];
+  hasOwnTasks: boolean;
   onOpen: (task: TaskSummary) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const seen = new Set<string>();
-  const items: Array<{
-    key: string;
-    task?: TaskSummary;
-    kicker: string;
-    title: string;
-    detail: string;
-    action: string;
-    href?: string;
-  }> = [];
-  for (const task of waiting) {
-    if (seen.has(task.id)) continue;
-    seen.add(task.id);
-    items.push({
-      key: `decision:${task.id}`,
-      task,
-      kicker: "等待你的决定",
-      title: task.title ?? task.requirement,
-      // 不拿原始步骤 id 当行动指引(cloud_push_confirm 对人是噪声)。
-      detail: task.focus?.next_action ?? "查看材料并完成当前确认",
-      action: "立即处理",
-    });
-  }
-  for (const review of reviews) {
-    const task = tasks.find((item) => item.id === review.task_id);
-    if (!task) continue;
-    items.push({
-      key: `review:${review.id}`,
-      task,
-      kicker: "Committer 检视",
-      title: review.task_title,
-      detail: `${review.requester} 邀请你检视代码与交付材料`,
-      action: "开始检视",
-    });
-  }
-  for (const task of intervention) {
-    if (seen.has(task.id)) continue;
-    seen.add(task.id);
-    items.push({
-      key: `intervention:${task.id}`,
-      task,
-      kicker: task.status === "paused" ? "任务已暂停" : "需要人工介入",
-      title: task.title ?? task.requirement,
-      detail: task.focus?.next_action ?? task.detail ?? "查看现场并决定下一步",
-      action: "查看现场",
-    });
-  }
-  for (const task of merges) {
-    if (seen.has(task.id)) continue;
-    seen.add(task.id);
-    items.push({
-      key: `merge:${task.id}`,
-      task,
-      kicker: "等待你去合入",
-      title: task.title ?? task.requirement,
-      detail: task.delivery?.mr_url
-        ? `验证已通过,请到 CodeHub 完成检视与合入:${task.delivery.mr_url}`
-        : "验证已通过,请到 CodeHub 完成检视与合入",
-      action: "查看合入请求",
-      href: task.delivery?.mr_url,
-    });
-  }
   const shown = expanded ? items : items.slice(0, 3);
   return <section className="personal-action-inbox" aria-labelledby="personal-action-title">
     <div className="personal-action-head">
@@ -1136,7 +1181,7 @@ function PersonalActionInbox({
       <span aria-hidden>✓</span><div><strong>当前没有需要你处理的事项</strong>
         {/* 零任务的新用户看到"Agent 正在推进"会以为后台有活在跑,
             白等半天(2026-08-30 审计)。 */}
-        <p>{tasks.length
+        <p>{hasOwnTasks
           ? "Agent 正在继续推进；新的确认、检视或异常会优先出现在这里。"
           : "你还没有任务——点右上角「发起新任务」开始;需要人工处理的事项会优先出现在这里。"}</p></div>
     </div>}

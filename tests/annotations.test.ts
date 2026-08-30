@@ -202,6 +202,91 @@ test("死锁出路:管理员可代闭环并留痕,非 override 仍拒绝越权",
   assert.equal(target.drop(draft.id, "admin", true).status, "dropped");
 });
 
+test("服务端管理员代办只在当前 workspace push 复检内生效", () => {
+  const service = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-anno-admin-service-")),
+    provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0,
+  });
+  const id = service.create("管理员批注代办边界").id;
+  const internal = (service as any).tasks.get(id);
+  const annotations = (service as any).annotations(internal) as AnnotationStore;
+  const add = (author: string, note: string) => service.addAnnotation(id, {
+    author, artifact: "本任务变更", file: "src/feature.ts", line: 1,
+    anchor: "export const value = 1;", note, kind: "code",
+  });
+  const verifyNote = add("reviewer-a", "当前待确认");
+  const dropNote = add("reviewer-b", "当前待移除");
+  const historical = add("reviewer-c", "上一轮历史意见");
+  const draft = add("reviewer-d", "尚未送达的草稿");
+  const unanswered = add("reviewer-e", "当前轮尚无 Agent 回应");
+  const own = add("admin", "管理员自己的草稿");
+  annotations.markSent(
+    [verifyNote.id, dropNote.id, historical.id, unanswered.id], "review_repair");
+  annotations.respond(verifyNote.id, {
+    outcome: "fixed", summary: "已按要求修复", evidence: ["src/feature.ts:1"],
+  });
+
+  const currentIds = [verifyNote.id, dropNote.id, draft.id, unanswered.id];
+  internal.summary.delivery = { loop: {
+    round: 0, state: "verifying", kind: "review",
+    review_source: "workspace", workspace_review_recheck_required: true,
+    workspace_review_annotation_ids: currentIds,
+  } };
+  internal.summary.status = "waiting_for_human";
+  internal.summary.waiting = internal.humanGate.createWaiting({
+    taskId: id, step: "cloud_push_confirm", callId: "admin-override-current",
+    questionInput: { questions: [] },
+  });
+
+  assert.throws(
+    () => service.dropAnnotation(id, historical.id, "admin", true),
+    (error) => error instanceof TaskControlError && /当前人工检视/.test(error.message),
+    "历史批注即使仍是 sent，也不能靠 admin 角色越过当前批次",
+  );
+  assert.throws(
+    () => service.dropAnnotation(id, draft.id, "admin", true),
+    (error) => error instanceof TaskControlError && /已送达且尚未闭环/.test(error.message),
+    "当前 ID 中尚未送达的草稿也不是代办对象",
+  );
+  assert.throws(
+    () => service.verifyAnnotation(id, unanswered.id, "admin", true),
+    (error) => error instanceof TaskControlError && /当前轮的逐条回应/.test(error.message),
+    "仅仅 sent 还不够，代确认仍须有当前 revision 的 Agent 回应",
+  );
+
+  internal.summary.status = "verifying";
+  assert.throws(
+    () => service.dropAnnotation(id, dropNote.id, "admin", true),
+    (error) => error instanceof TaskControlError && /当前人工检视/.test(error.message),
+    "页面武装后任务离开等待阶段，服务端必须挡住第二次点击",
+  );
+  assert.equal(annotations.list().find((item) => item.id === dropNote.id)?.status,
+    "sent", "阶段竞态被拒后台账必须零副作用");
+  internal.summary.status = "waiting_for_human";
+  internal.summary.waiting.step = "another_gate";
+  assert.throws(
+    () => service.verifyAnnotation(id, verifyNote.id, "admin", true),
+    (error) => error instanceof TaskControlError && /当前人工检视/.test(error.message),
+    "只有 cloud_push_confirm 卡允许代办",
+  );
+  internal.summary.waiting.step = "cloud_push_confirm";
+
+  const verified = service.verifyAnnotation(id, verifyNote.id, "admin", true);
+  assert.equal(verified.status, "verified");
+  assert.equal(verified.verified_by, "admin", "合法代确认仍须留下代理人");
+  const dropped = service.dropAnnotation(id, dropNote.id, "admin", true);
+  assert.equal(dropped.status, "dropped", "合法代删只处理本轮未闭环 sent");
+  assert.throws(
+    () => service.verifyAnnotation(id, verifyNote.id, "admin", true),
+    (error) => error instanceof TaskControlError && /已送达且尚未闭环/.test(error.message),
+    "已经闭环的意见不能重复代签",
+  );
+
+  // HTTP 路由会对 admin 一律传 override=true；服务层必须把本人操作降级
+  // 成普通作者操作，而不是要求自己的草稿也进入代办白名单。
+  assert.equal(service.dropAnnotation(id, own.id, "admin", true).status, "dropped");
+});
+
 test("批注 HTTP 权限:开发与 Committer 都只能管理自己提出的意见", async () => {
   const dir = mkdtempSync(join(tmpdir(), "mfc-anno-auth-"));
   const auth = new LocalAuth(join(dir, "auth.json"));
@@ -274,25 +359,85 @@ test("批注 HTTP 权限:开发与 Committer 都只能管理自己提出的意�
       });
     assert.equal(committerCannotEdit.status, 403);
 
-    // 管理员例外:作者不在场的死锁出路,HTTP 层按登录角色放行 override。
+    // 管理员角色只让路由提出 override 请求；真正的当前复检事实必须由
+    // 服务层核验，普通草稿/历史意见不能因为 API 被直接调用就越权。
     const admin = await login("admin", "administrator-pass");
-    const adminDeletesOther = await fetch(
+    const adminCannotDeleteOrdinaryDraft = await fetch(
       `${base}/tasks/${created.id}/annotations/${developerNote.id}`, {
         method: "DELETE", headers: { cookie: admin },
       });
-    assert.equal(adminDeletesOther.status, 200,
-      "管理员可代删他人批注(留痕在台账 op.by)");
+    assert.equal(adminCannotDeleteOrdinaryDraft.status, 409,
+      "不在当前 push 复检时，admin 也不能直接删他人草稿");
 
+    const internal = (service as any).tasks.get(created.id);
+    const annotations = (service as any).annotations(internal) as AnnotationStore;
+    annotations.markSent(
+      [developerNote.id, committerNote.id], "review_repair");
+    annotations.respond(committerNote.id, {
+      outcome: "fixed", summary: "已按意见修复", evidence: ["spec.md:1"],
+    });
+    const historical = service.addAnnotation(created.id, {
+      author: "former-reviewer", artifact: "spec.md", file: "spec.md", line: 1,
+      anchor: "原始内容", note: "历史意见", kind: "doc",
+    });
+    annotations.markSent([historical.id], "review_repair");
+    internal.summary.delivery = { loop: {
+      round: 0, state: "verifying", kind: "review",
+      review_source: "workspace", workspace_review_recheck_required: true,
+      workspace_review_annotation_ids: [developerNote.id, committerNote.id],
+    } };
+    internal.summary.status = "waiting_for_human";
+    internal.summary.waiting = internal.humanGate.createWaiting({
+      taskId: created.id, step: "cloud_push_confirm",
+      callId: "annotation-admin-http", questionInput: { questions: [] },
+    });
+
+    const adminCannotDeleteHistorical = await fetch(
+      `${base}/tasks/${created.id}/annotations/${historical.id}`, {
+        method: "DELETE", headers: { cookie: admin },
+      });
+    assert.equal(adminCannotDeleteHistorical.status, 409,
+      "sent 历史意见不在当前 ID 白名单，API 必须拒绝");
+
+    internal.summary.status = "verifying";
+    const racedDelete = await fetch(
+      `${base}/tasks/${created.id}/annotations/${developerNote.id}`, {
+        method: "DELETE", headers: { cookie: admin },
+      });
+    assert.equal(racedDelete.status, 409,
+      "前端确认期间阶段变化后，第二次请求必须由服务端拒绝");
+    internal.summary.status = "waiting_for_human";
+
+    const adminDeletesCurrent = await fetch(
+      `${base}/tasks/${created.id}/annotations/${developerNote.id}`, {
+        method: "DELETE", headers: { cookie: admin },
+      });
+    assert.equal(adminDeletesCurrent.status, 200,
+      "当前复检中的 sent 他人意见允许管理员代删");
+    const adminVerifiesCurrent = await fetch(
+      `${base}/tasks/${created.id}/annotations/${committerNote.id}/verify`, {
+        method: "POST", headers: { cookie: admin },
+      });
+    assert.equal(adminVerifiesCurrent.status, 200,
+      "有当前轮 Agent 回应的当前 sent 意见允许管理员代确认");
+    const verifiedBody = await adminVerifiesCurrent.json() as Annotation;
+    assert.equal(verifiedBody.verified_by, "admin", "API 合法代办必须留痕");
+
+    const committerOwn = await add(committer, "Committer 自己删除的意见");
     const committerDeletesOwn = await fetch(
-      `${base}/tasks/${created.id}/annotations/${committerNote.id}`, {
+      `${base}/tasks/${created.id}/annotations/${committerOwn.id}`, {
         method: "DELETE", headers: { cookie: committer },
       });
     assert.equal(committerDeletesOwn.status, 200);
     const listed = await fetch(`${base}/tasks/${created.id}/annotations`, {
       headers: { cookie: developer },
     }).then((response) => readJson(response)) as { items: Annotation[] };
-    assert.deepEqual(listed.items, [],
-      "两条都已删除(一条本人删、一条管理员代删)");
+    assert.equal(listed.items.find((item) => item.id === developerNote.id),
+      undefined, "当前意见已被管理员代删并从看板隐藏");
+    assert.equal(listed.items.find((item) => item.id === committerNote.id)?.status,
+      "verified", "当前意见已由管理员代确认");
+    assert.equal(listed.items.find((item) => item.id === historical.id)?.status,
+      "sent", "被拒绝的历史意见必须保持原状");
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }

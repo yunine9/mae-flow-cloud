@@ -683,6 +683,8 @@ test("关联转正:两段式(校验过目→确认),工作区/报告/凭据继�
     assert.equal(converted!.stage, "fix", "转正直接进问题修改");
     assert.deepEqual(converted!.stage_states?.slice(0, 3),
       ["inherited", "inherited", "inherited"], "前三阶段标记继承");
+    assert.equal(converted!.stage_states?.[3], "in_progress",
+      "转正后 fix 阶段必须立即点亮为当前阶段");
     assert.equal(converted!.converted_from, created.id);
     const newRoot = join(dataDir, "issues", converted!.id);
     assert.ok(existsSync(join(newRoot, "repo", "origin", ".git")),

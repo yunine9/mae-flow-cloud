@@ -846,13 +846,14 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
           sha,
           credential: ctx.gitCredential?.(),
         });
-        // 终态 run 才带 log/checks(getPipelineStatus 顶层只给总体状态),
-        // 打回现场要看失败项详情,从 runs 里取。
-        const terminal = status.runs.findLast((item) => item.status !== "running");
+        // runs 是同一 SHA 按时间顺序返回的运行历史，只有最后一条代表
+        // 当前流水线。历史绿/红后又触发的新 run 仍在 running 时，绝不
+        // 能拿旧终态提前放行或打回。
+        const latest = status.runs.at(-1);
         runs.push({
           repo: record.repo,
           sha,
-          run: terminal ?? { status: status.status },
+          run: latest ?? { status: status.status },
         });
       }
       const failed = runs.filter((item) => item.run.status === "failed");

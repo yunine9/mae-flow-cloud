@@ -1391,7 +1391,7 @@ function EventTail({ taskId, active }: { taskId: string; active: boolean }) {
   );
 }
 
-/** 执行现场=原始 SSE 事件流,一种读法(2026-08-26 用户拍板:心流
+/** 执行现场=实时执行日志,一种读法(2026-08-26 用户拍板:心流
  * 摘要定位不清晰,干掉;筛选器 + 贴底跟随已足够扫读与取证)。
  * 展开才建立实时连接。 */
 export function ExecutionPanel({
@@ -1414,7 +1414,7 @@ export function ExecutionPanel({
         onClick={() => setExpanded((current) => !current)}>
         <span>
           <strong>执行现场</strong>
-          <small>{task.focus?.headline ?? "SSE 原始事件流,实时跟随"}</small>
+          <small>{task.focus?.headline ?? "实时执行日志，自动跟随"}</small>
         </span>
         <i aria-hidden />
       </button>

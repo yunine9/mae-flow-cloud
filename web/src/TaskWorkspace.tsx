@@ -63,6 +63,69 @@ import {
 
 type WorkspaceView = "materials" | "collaboration" | "execution" | "insights";
 
+export interface WorkspaceNextActionCopy {
+  title: string;
+  detail: string;
+}
+
+/** 右栏标题和真正渲染的行动卡共用这一套阶段解释，避免卡片明明要求去
+ * 合入，标题却还说“当前无待办”。 */
+export function workspaceNextActionCopy(
+  task: TaskSummary,
+  waiting: boolean,
+): WorkspaceNextActionCopy {
+  if (waiting) return { title: "当前需要处理", detail: "完成后流程继续" };
+  if (task.status === "failed") {
+    return { title: "任务已失败", detail: "看原因，决定重跑或接手" };
+  }
+  if (task.status === "verifying") {
+    return { title: "交付验证中", detail: "流水线与自动修复由系统跟进" };
+  }
+  if (task.status === "await_merge") {
+    return task.delivery?.mr_state === "已关闭"
+      ? { title: "MR 已关闭，需要处理", detail: "查看合入状态并决定后续处理" }
+      : { title: "等待检视与合入", detail: "前往 CodeHub 完成最后一步" };
+  }
+  return { title: "当前无待办", detail: "无需处理" };
+}
+
+export type PushReviewDiffLoadState =
+  | { kind: "idle" | "checking" | "ready" }
+  | { kind: "error"; message: string; expired: boolean };
+
+export function normalizePushReviewDiffResult(result: {
+  content?: string;
+  branch?: string;
+  unavailable?: string;
+  status?: number;
+}): {
+  content: string;
+  branch: string;
+  state: PushReviewDiffLoadState;
+} {
+  const message = result.unavailable?.trim();
+  if (message) {
+    return {
+      content: "",
+      branch: "",
+      state: { kind: "error", message, expired: result.status === 404 },
+    };
+  }
+  return {
+    content: result.content ?? "",
+    branch: result.branch ?? "",
+    state: { kind: "ready" },
+  };
+}
+
+export function usablePushReviewSelection(
+  pushReviewActive: boolean,
+  state: PushReviewDiffLoadState,
+  selection: GitDiffSelection | undefined,
+): GitDiffSelection | undefined {
+  return pushReviewActive && state.kind !== "ready" ? undefined : selection;
+}
+
 function defaultWorkspaceView(task: TaskSummary): WorkspaceView {
   if (task.status === "paused") return "collaboration";
   if (task.waiting || task.status === "waiting_for_human") return "materials";
@@ -116,6 +179,7 @@ function assistantUnavailableReason(task: TaskSummary): string {
 export function TaskWorkspace({
   task,
   viewerUsername,
+  canOverride,
   canOperate,
   canCollaborate,
   canRequestReview,
@@ -127,6 +191,8 @@ export function TaskWorkspace({
 }: {
   task: TaskSummary;
   viewerUsername: string;
+  /** 管理员仅可代删或代确认别人的批注；默认裁决权仍归作者。 */
+  canOverride: boolean;
   canOperate: boolean;
   /** 主任务责任人或已被逐仓分工邀请的协作者。最终决定仍看 canOperate。 */
   canCollaborate: boolean;
@@ -171,6 +237,9 @@ export function TaskWorkspace({
     useState<RepositoryAssigneeSelection>(EMPTY_REPOSITORY_ASSIGNEE_SELECTION);
   const [deliverySelection, setDeliverySelection] =
     useState<GitDiffSelection>();
+  const [pushDiffState, setPushDiffState] = useState<PushReviewDiffLoadState>(
+    pushReview ? { kind: "checking" } : { kind: "idle" },
+  );
   const [diffScope, setDiffScope] = useState<"changes" | "full">(
     pushReview?.has_focused_changes ? "changes" : "full");
   /** 点进度条阶段名弹该阶段执行方案;空串=不显示。 */
@@ -184,12 +253,14 @@ export function TaskWorkspace({
     setWorkspaceView(defaultWorkspaceView(task));
     setRepositoryAssignees(EMPTY_REPOSITORY_ASSIGNEE_SELECTION);
     setDeliverySelection(undefined);
+    setPushDiffState(pushReview ? { kind: "checking" } : { kind: "idle" });
     setDiffScope(pushReview?.has_focused_changes ? "changes" : "full");
   }, [task.id]);
 
   useEffect(() => {
     if (!pushReview) {
       setDeliverySelection(undefined);
+      setPushDiffState({ kind: "idle" });
       setDiffScope("full");
       return;
     }
@@ -200,6 +271,7 @@ export function TaskWorkspace({
       committedPaths: [...pushReview.committed_paths],
       allPaths: [...pushReview.all_paths],
     });
+    setPushDiffState({ kind: "checking" });
     setContent("");
     setDiffScope(pushReview.has_focused_changes ? "changes" : "full");
   }, [task.waiting?.waiting_id, pushReview?.head_sha]);
@@ -341,15 +413,37 @@ export function TaskWorkspace({
     setLoading((was) => was || !content);
     const pushDiffActive = Boolean(pushReview
       && items?.find((item) => item.name === active)?.kind === "diff");
+    if (pushDiffActive) setPushDiffState({ kind: "checking" });
     const reading = pushDiffActive
       ? readPushReviewDiff(task.id, diffScope)
       : readArtifact(task.id, active);
     void reading.then((result) => {
       if (!alive) return;
+      if (pushDiffActive) {
+        const normalized = normalizePushReviewDiffResult(result);
+        setPushDiffState(normalized.state);
+        setContent((current) => current === normalized.content
+          ? current : normalized.content);
+        setBranch(normalized.branch);
+        setLoading(false);
+        return;
+      }
       const next = result.content ?? result.unavailable ?? "";
       // 内容没变就别 setState:轮询期间无谓重渲染会把正在写的批注打断。
       setContent((current) => current === next ? current : next);
       setBranch(result.branch ?? "");
+      setLoading(false);
+    }).catch((reason) => {
+      if (!alive) return;
+      const message = reason instanceof Error ? reason.message : String(reason);
+      if (pushDiffActive) {
+        setPushDiffState({ kind: "error", message, expired: false });
+        setContent("");
+        setBranch("");
+      } else {
+        setContent(message);
+        setBranch("");
+      }
       setLoading(false);
     });
     return () => { alive = false; };
@@ -422,6 +516,19 @@ export function TaskWorkspace({
         : { kicker: "WORKTREE CHANGES", title: "工作区变更" }
       : { kicker: "WORK DOCUMENTS", title: "过程文档" };
   const waiting = task.status === "waiting_for_human" && task.waiting;
+  const workspaceReviewReady = task.status === "waiting_for_human"
+    && task.waiting?.step === "cloud_push_confirm"
+    && task.delivery?.loop?.review_source === "workspace"
+    && task.delivery.loop.workspace_review_recheck_required === true;
+  const workspaceReviewAnnotationIds = workspaceReviewReady
+    ? task.delivery?.loop?.workspace_review_annotation_ids ?? []
+    : [];
+  const nextAction = workspaceNextActionCopy(task, Boolean(waiting));
+  const decisionDeliverySelection = usablePushReviewSelection(
+    Boolean(pushReview),
+    pushDiffState,
+    deliverySelection,
+  );
   const canContributeReview = canOperate || canCollaborate || !!reviewAssignment;
   const collaborationVisible = canCollaborate && [
     "running", "pausing", "paused", "waiting_for_human", "verifying",
@@ -692,14 +799,24 @@ export function TaskWorkspace({
                   {pushReview.has_focused_changes && (
                     <button type="button"
                       className={diffScope === "changes" ? "on" : ""}
-                      onClick={() => { setContent(""); setDiffScope("changes"); }}>
+                      onClick={() => {
+                        if (diffScope === "changes") return;
+                        setContent("");
+                        setPushDiffState({ kind: "checking" });
+                        setDiffScope("changes");
+                      }}>
                       <strong>这次修改</strong>
                       <span>{pushReview.title}</span>
                     </button>
                   )}
                   <button type="button"
                     className={diffScope === "full" ? "on" : ""}
-                    onClick={() => { setContent(""); setDiffScope("full"); }}>
+                    onClick={() => {
+                      if (diffScope === "full") return;
+                      setContent("");
+                      setPushDiffState({ kind: "checking" });
+                      setDiffScope("full");
+                    }}>
                     <strong>完整交付</strong>
                     <span>从任务起点到当前待推送代码</span>
                   </button>
@@ -712,6 +829,21 @@ export function TaskWorkspace({
               {!unavailable && !items && <div className="utility-note">正在读取现场…</div>}
               {items?.length === 0 && (
                 <div className="utility-note">这一单还没有可检视的产物。</div>
+              )}
+              {materialView === "diff" && pushReview
+                && pushDiffState.kind === "error" && (
+                <div className="utility-note" role="alert">
+                  <strong>{pushDiffState.expired
+                    ? "这版代码已失效，暂不能确认推送"
+                    : "代码检视暂不可用，暂不能确认推送"}</strong>
+                  <span>{pushDiffState.message}</span>
+                  <button type="button" onClick={() => {
+                    setContent("");
+                    setPushDiffState({ kind: "checking" });
+                    setLivePulse((tick) => tick + 1);
+                    onChanged();
+                  }}>刷新任务并重新读取</button>
+                </div>
               )}
               {loading && <div className="utility-note">正在打开 {activeMeta?.label}…</div>}
               {!loading && content && (
@@ -818,14 +950,14 @@ export function TaskWorkspace({
                   <AnnotationPanel
                     taskId={task.id}
                     viewerUsername={viewerUsername}
+                    canOverride={canOverride}
                     items={notes}
                     checks={checks}
                     reply={reply}
                     canOperate={canContributeReview}
                     taskStatus={task.status}
-                    reviewReady={task.waiting?.step === "cloud_push_confirm"
-                      && task.delivery?.loop?.review_source === "workspace"
-                      && task.delivery.loop.workspace_review_recheck_required === true}
+                    reviewReady={workspaceReviewReady}
+                    reviewAnnotationIds={workspaceReviewAnnotationIds}
                     mergeRequestOpen={Boolean(task.delivery?.mr_url)
                       && !["completed", "canceled"].includes(task.status)
                       && !String(task.delivery?.mr_state ?? "").startsWith("已合入")
@@ -896,14 +1028,8 @@ export function TaskWorkspace({
           <div className="ws-pane-head ws-pane-head-side">
             {/* 右栏标题按阶段说实话:failed 时喊"无待办"是误导——
                 此刻的待办就是看失败原因、决定重跑还是接手。 */}
-            <div><span>NEXT ACTION</span><strong>{waiting ? "当前需要处理"
-              : task.status === "failed" ? "任务已失败"
-              : task.status === "verifying" ? "交付验证中"
-              : "当前无待办"}</strong></div>
-            <small>{waiting ? "完成后流程继续"
-              : task.status === "failed" ? "看原因，决定重跑或接手"
-              : task.status === "verifying" ? "流水线与自动修复由系统跟进"
-              : "无需处理"}</small>
+            <div><span>NEXT ACTION</span><strong>{nextAction.title}</strong></div>
+            <small>{nextAction.detail}</small>
           </div>
           {waiting && canOperate && (
             /* 批注挂在提交按钮正上方(WaitingCard 内部),不放卡片外面:
@@ -918,15 +1044,21 @@ export function TaskWorkspace({
               repositoryAssigneeSelection={chainReview
                 ? repositoryAssignees : undefined}
               deliverySelection={task.waiting?.recommended_view === "diff"
-                ? deliverySelection : undefined}
+                ? decisionDeliverySelection : undefined}
               pushReview={pushReview}
               onLocateDelivery={task.waiting?.recommended_view === "diff"
                 ? (scope) => {
                     setWorkspaceView("materials");
                     setMaterialView("diff");
                     setContent("");
-                    setDiffScope(scope
-                      ?? (pushReview?.has_focused_changes ? "changes" : "full"));
+                    setPushDiffState({ kind: "checking" });
+                    const nextScope = scope
+                      ?? (pushReview?.has_focused_changes ? "changes" : "full");
+                    if (nextScope === diffScope) {
+                      setLivePulse((tick) => tick + 1);
+                    } else {
+                      setDiffScope(nextScope);
+                    }
                     const first = items?.find((item) => item.kind === "diff");
                     if (first) setActive(first.name);
                   }

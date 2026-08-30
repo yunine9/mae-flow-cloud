@@ -208,7 +208,8 @@ export interface IssueEnvironmentInput {
   port?: number;
   /** 页面账号(网管页面登录名;缺省 admin,非密随配置落 issue.json)。 */
   pageAccount?: string;
-  /** 页面密码(纯记录,本期无消费方,为页面自动化预留;只进 vault)。 */
+  /** 页面密码(vault 加密落盘,并按 ADR-0003 进入当前问题的 AI 上下文;
+   * 不出现在会话列表、状态摘要或事件流)。 */
   pagePassword?: string;
   /** 网管后台密码(playbook 契约:sopuser/ossuser/ossadm 同密码)。 */
   backendPassword: string;
@@ -269,7 +270,8 @@ function backendVaultRow(
 }
 
 /** vault 行·页面凭据:单账号独立成组(purpose=page),与后台凭据
- * 互不混存——页面口令是另一把钥匙,将来页面自动化按自己的组解。 */
+ * 互不混存——environmentCredentials 按自己的组解到当前问题的
+ * AI 上下文,页面操作不借用 SSH 三账号那把钥匙。 */
 function pageVaultRow(
   name: string,
   host: string,
@@ -814,9 +816,10 @@ export class IssueFlowService {
   }
 
   /** 网管环境落盘的唯一路径:两组凭据只进 vault(AES-GCM 按会话隔离的
-   * 加密文件),issue.json/事件/提示词永远只有引用。后台凭据(both)是
-   * fetch_logs/build_deploy 的消费方;页面凭据(page)本期纯记录,为
-   * 页面自动化预留,两组各自成行、可分别解出。登记(withPage)与
+   * 加密文件),issue.json/公开 API/事件只有引用；随后
+   * environmentCredentials 会按 ADR-0003 解密到当前问题的 AI 上下文。
+   * 后台凭据(both)供 fetch_logs/build_deploy 消费；页面凭据(page)供
+   * 页面操作消费,两组各自成行、可分别解出。登记(withPage)与
    * env_needed 闸作答(只收地址+后台密码,页面字段即便递了也不认)
    * 共用本路径,秘密纪律只有一份。 */
   private storeEnvironment(
@@ -1707,9 +1710,11 @@ export class IssueFlowService {
           || !state.pipelines[repo].watching) return;
       try {
         const status = await getPipelineStatus(call());
-        const terminal = status.runs.findLast((run) => run.status !== "running");
-        if (terminal) {
-          this.settlePipeline(live, repo, sha, terminal);
+        // 与申报门同一口径：runs.at(-1) 才是当前 run。历史终态不能
+        // 越过后触发且仍在 running 的新 run，让监看器提前收口。
+        const latest = status.runs.at(-1);
+        if (latest && latest.status !== "running") {
+          this.settlePipeline(live, repo, sha, latest);
           return;
         }
       } catch (error) {

@@ -190,7 +190,7 @@ codehubcli 命令行,代码零改动。配置形状(权限 600,文件头注释�
 |---|---|---|
 | `POST /mr` | `{repo, source_branch, target_branch, title}` | `{url}`(MR 链接,展示用)`, id?`(iid,门禁/讨论查询带回) |
 | `POST /pipeline/trigger` | `{repo, sha}` | `{status: "success"\|"failed"\|"running", log?, checks?}` |
-| `GET /pipeline/status?sha=<sha>&repo=<url>&mr=<iid>` | — | `{runs: [{status, log?, checks?}]}`(取最后一个终态 run) |
+| `GET /pipeline/status?sha=<sha>&repo=<url>&mr=<iid>` | — | `{runs: [{status, log?, checks?}]}`(严格取 `runs.at(-1)` 最新 run；历史终态不得越过最新 running) |
 | `GET /pipeline/artifacts?sha=<sha>&repo=<url>&mr=<完整 MR URL>` | — | `{files: [{name, text}]}`(失败材料；与 status 的 `mr` 形状不同) |
 
 可选的终态 `checks` 固定形状如下。`status` 可用
@@ -214,7 +214,10 @@ pipeline_artifacts,不配=404=宿主按纯流水线旧语义)与按能力核对�
 两步回复/解决、MCP 日志桥),见 **docs/mr-loop-adaptation.md §3/§11**。
 检视回复默认只回复不代点"已解决"(报告 D3:resolve 归检视人);
 团队明确允许代点的部署,serve 加 `--resolve-discussions` 且适配层配
-`discussion_resolve`。
+`discussion_resolve`。`discussion_reply` 模板必须引用
+`{idempotency_key}` 并把它传给平台支持的幂等请求头/稳定键参数；宿主
+同时发送 `Idempotency-Key` 头与 `idempotency_key` JSON 字段。模板吞掉
+该键时适配层会 502 fail-closed，回复留在 outbox 等修好配置后重试。
 
 MCP 网关令牌与 CodeHub 项目/个人令牌是两个鉴权域。`{token}`
 仍只供 CodeHub REST、`codehub-cli`、push/MR 与已验证的 REST 兼容路；

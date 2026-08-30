@@ -13,9 +13,12 @@ Mae-Flow 云端服务:Pi(pi-mono coding agent)**进程内**集成 + Mae-Flow 内
 `src/issueFlow/` 独立承载——不进内核、不依赖 taskService,可用
 `--issue-only` 单独起服(见 `docs/issue-flow.md`)。拉日志/换库用
 every-skill 的两个 Go 工具(`assets/ops-tools/`):宿主以**环境变量**
-注入共用密码(`FETCH_LOGS_PASSWORD`/`BUILD_DEPLOY_PASSWORD`)后执行,
-密码不进会话上下文;fetch-logs 产物以真实文件落会话工作区供 Agent
-grep,build-deploy 以「部署完成」哨兵判定成功。真二进制冒烟在
+注入共用密码(`FETCH_LOGS_PASSWORD`/`BUILD_DEPLOY_PASSWORD`)后执行。
+浏览器草稿不保存网管口令，vault 以 AES-GCM 加密落盘；为让 Agent
+操作页面、抓日志和换库，口令会以明文进入该问题会话的 AI 上下文；
+它不会出现在会话列表、状态摘要或事件流中。只能使用脱敏演示/现场专用口令，
+不能填写个人复用或生产口令。fetch-logs 产物以真实文件落会话工作区
+供 Agent grep，build-deploy 以「部署完成」哨兵判定成功。真二进制冒烟在
 `tests/issueFlowService.test.ts`。
 
 ## 三条铁的边界
@@ -234,7 +237,8 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
   意见,停环文案点名未答复 id;回复文件解析容错同行格式(`[id] 正文`),
   按 reviews/discussions.json 名单裁定头行防误切。②completeReview
   给发起人回执通知(修复完成提醒批注作者的 notifyReviewReady 先前
-  已有)。③批注死锁开管理员旁路:作者不在场时 admin 可代确认/代删,
+  已有)。③批注死锁开管理员旁路:作者不在场时 admin 可在批注面板
+  代确认/代删,
   台账 op.by 与 verified_by 留痕;"谁的意见谁裁决"仍是默认规则。
   ④决策与跳闸记操作人:decide 落 waiting.json 的 decided_by,
   prepush skip/stop/retry 与任务 retry 带 actor,user_skipped 收据

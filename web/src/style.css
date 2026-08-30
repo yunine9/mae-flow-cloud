@@ -1802,7 +1802,25 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-group-body { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 /* 必填星号:业界惯例,标签尾部一枚,不再用文字解释必填性。 */
 .issue-field span i.req { color: var(--danger); font-weight: 700; }
-/* 只读仓清单:模块绑定带出,登记页只许看不许改——要增删仓去知识飞轮。
+.issue-group-note {
+  grid-column: 1 / -1; margin: 0; color: var(--faint);
+  font-size: var(--font-size-dense); line-height: 1.5;
+}
+.issue-privacy-note {
+  padding: 9px 10px; border-radius: 8px;
+  background: color-mix(in srgb, var(--attention) 9%, var(--surface-muted));
+  color: var(--muted);
+}
+.issue-module-load-error {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 8px 10px; border: 1px solid color-mix(in srgb, #d64545 35%, var(--line));
+  border-radius: 8px; color: #d64545;
+}
+.issue-module-load-error button {
+  flex: none; min-height: 32px; padding: 0 10px; border: 1px solid currentColor;
+  border-radius: 7px; background: transparent; color: inherit; cursor: pointer;
+}
+/* 只读仓清单:模块绑定带出,登记页只许看不许改——要增删仓去团队资产。
    短名一行放下,全地址挂 title 悬停可见。 */
 .issue-module-repos { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .issue-module-repos li {
@@ -1823,7 +1841,8 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-password-toggle:hover { color: var(--text-strong); border-color: var(--accent); }
 .issue-password-menu {
   position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 40;
-  display: grid; gap: 2px; padding: 6px;
+  display: grid; gap: 2px; max-height: min(280px, 45dvh); padding: 6px;
+  overflow-y: auto; overscroll-behavior: contain;
   border: 1px solid var(--line); border-radius: 10px;
   background: var(--surface); box-shadow: var(--shadow-md, 0 8px 24px rgba(0,0,0,.14));
 }
@@ -1833,7 +1852,10 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   font-size: var(--font-size-dense); cursor: pointer; text-align: left;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.issue-password-option:hover { background: var(--surface-muted); color: var(--text-strong); }
+.issue-password-option:hover,
+.issue-password-option:focus-visible {
+  outline: none; background: var(--surface-muted); color: var(--text-strong);
+}
 .issue-password-option.on { color: var(--accent); }
 .issue-form-actions { grid-column: 1 / -1; display: flex; align-items: center; gap: 14px; }
 .issue-form-actions .primary, .issue-dts-toolbar .primary {
@@ -1842,6 +1864,27 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   font-weight: 700; cursor: pointer;
 }
 .issue-form-actions .primary:disabled, .issue-dts-toolbar .primary:disabled { opacity: .55; cursor: not-allowed; }
+.annot-panel-note.admin-override {
+  border-color: color-mix(in srgb, var(--attention) 35%, var(--line));
+  background: color-mix(in srgb, var(--attention) 7%, var(--surface));
+}
+@media (max-width: 680px) {
+  .issue-section { padding: 13px 12px; }
+  .issue-section .section-head { align-items: stretch; flex-direction: column; }
+  .issue-register-tabs { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
+  .issue-register-tabs button { min-height: 40px; }
+  .issue-form, .issue-group-body { grid-template-columns: minmax(0, 1fr); }
+  .issue-group { padding: 12px 10px; }
+  .issue-field, .issue-field.wide, .issue-group-note { grid-column: 1; min-width: 0; }
+  .issue-password-toggle { width: 44px; min-height: 44px; }
+  .issue-password-menu {
+    position: static; max-height: min(240px, 42dvh); box-shadow: none;
+  }
+  .issue-password-option { min-height: 40px; padding: 9px 10px; }
+  .issue-module-load-error { align-items: stretch; flex-direction: column; }
+  .issue-form-actions { align-items: stretch; flex-direction: column; }
+  .issue-form-actions .primary { width: 100%; min-height: 44px; }
+}
 .issue-dts-mock-banner {
   margin: 0 0 10px; padding: 9px 12px;
   border: 1px solid color-mix(in srgb, var(--attention) 45%, transparent);
@@ -1894,7 +1937,8 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-dts-version-clear:hover { text-decoration: underline; }
 .issue-dts-version-menu {
   position: absolute; top: calc(100% + 6px); left: 0; z-index: 40;
-  min-width: 320px; max-height: 280px; overflow: auto;
+  min-width: 320px; max-width: min(420px, calc(100vw - 32px));
+  max-height: 280px; overflow: auto;
   display: grid; gap: 2px; padding: 6px;
   border: 1px solid var(--line); border-radius: 10px;
   background: var(--surface); box-shadow: var(--shadow-md, 0 8px 24px rgba(0,0,0,.14));
@@ -1913,6 +1957,38 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   cursor: pointer; text-align: left;
 }
 .issue-dts-version-clear-all:hover { text-decoration: underline; }
+@media (max-width: 680px) {
+  .issue-dts-versions {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto;
+    width: 100%; max-width: 100%;
+  }
+  .issue-dts-version-trigger {
+    justify-content: space-between; min-width: 0; min-height: 44px;
+  }
+  .issue-dts-version-trigger span {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .issue-dts-version-clear { min-height: 44px; }
+  .issue-dts-version-menu {
+    position: static; grid-column: 1 / -1;
+    width: 100%; min-width: 0; max-width: 100%; max-height: min(280px, 45dvh);
+    box-shadow: none;
+  }
+  .issue-dts-version-option, .issue-dts-version-clear-all {
+    min-height: 44px; padding: 10px 8px;
+  }
+  .issue-dts-row .issue-dts-row-main {
+    grid-template-columns: auto minmax(0, 1fr); gap: 4px 8px;
+  }
+  .issue-dts-row .issue-dts-row-main > input {
+    grid-column: 1; grid-row: 1 / span 3;
+  }
+  .issue-dts-row .issue-dts-identity { grid-column: 2; grid-row: 1; }
+  .issue-dts-row .issue-dts-title {
+    grid-column: 2; grid-row: 2; white-space: normal; overflow-wrap: anywhere;
+  }
+  .issue-dts-row .issue-dts-status { grid-column: 2; grid-row: 3; }
+}
 .issue-dts-search-count.remote { color: #b7791f; }
 .issue-dts-remote {
   padding: 1px 6px; border-radius: 6px; font-size: var(--font-size-dense);
@@ -1941,19 +2017,28 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 }
 .issue-dts-row.on { border-color: var(--accent); }
 .issue-dts-row.expanded { border-color: var(--accent); }
-.issue-dts-row-main {
-  display: grid; grid-template-columns: auto auto 1fr auto auto;
-  align-items: center; gap: 10px;
-  padding: 8px 12px; cursor: pointer;
+.issue-dts-row-control {
+  display: grid; grid-template-columns: minmax(0, 1fr) 44px; align-items: stretch;
 }
+.issue-dts-row-main {
+  display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: center; gap: 10px;
+  min-width: 0; padding: 8px 6px 8px 12px; cursor: pointer;
+}
+.issue-dts-identity { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .issue-dts-ticket { color: var(--accent); font: 700 var(--font-size-assist) var(--font-mono); }
 .issue-dts-title { color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .issue-dts-status { color: var(--faint); }
 .issue-dts-expand {
-  background: none; border: none; color: var(--muted);
-  cursor: pointer; padding: 2px 6px; font-size: 12px; line-height: 1;
+  display: grid; place-items: center; min-width: 44px; min-height: 44px;
+  background: none; border: 0; border-left: 1px solid var(--line); color: var(--muted);
+  cursor: pointer; padding: 0; font-size: 12px; line-height: 1;
 }
-.issue-dts-expand:hover { color: var(--accent); }
+.issue-dts-expand:hover { background: var(--surface); color: var(--accent); }
+.issue-dts-expand:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: -3px;
+  background: var(--surface); color: var(--accent);
+}
 .issue-dts-detail {
   padding: 10px 14px 12px;
   border-top: 1px solid var(--line);
@@ -8463,6 +8548,57 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 .committer-review-history strong { font-size: var(--font-size-assist); }
 .committer-review-history small { color: var(--muted); font-size: var(--font-size-assist); }
 
+/* 服务设置总览直接汇总当前真实配置；四个入口只负责滚到完整表单，
+ * 不复制一套容易失真的“示意配置”。 */
+.settings-overview {
+  padding: 22px; border: 1px solid var(--line); border-radius: 14px;
+  background: var(--surface); box-shadow: var(--shadow-xs);
+}
+.settings-overview > header {
+  margin-bottom: 14px; display: flex; align-items: flex-end;
+  justify-content: space-between; gap: 20px;
+}
+.settings-overview h2 {
+  margin: 4px 0 0; color: var(--text-strong); font-size: 22px;
+}
+.settings-overview > header p {
+  margin: 0; color: var(--muted); font-size: 13px;
+}
+.settings-overview-grid {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px;
+}
+.settings-overview-grid button {
+  min-width: 0; min-height: 125px; padding: 14px;
+  display: grid; align-content: start; gap: 6px; text-align: left;
+  color: var(--text); background: var(--surface-soft);
+  border: 1px solid var(--line); border-radius: 11px; cursor: pointer;
+}
+.settings-overview-grid button:hover,
+.settings-overview-grid button:focus-visible {
+  border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft);
+  outline: none;
+}
+.settings-overview-grid button > span {
+  color: var(--accent); font: 700 12px var(--font-mono);
+}
+.settings-overview-grid button > strong {
+  color: var(--text-strong); font-size: 15px;
+}
+.settings-overview-grid button > small {
+  color: var(--muted); font-size: 12px; line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.settings-overview-grid button > em {
+  margin-top: auto; color: var(--accent); font-size: 12px;
+  font-style: normal; font-weight: 700;
+}
+#settings-check,
+#settings-models,
+#settings-vision,
+#settings-policy,
+#settings-runtime,
+#settings-cache { scroll-margin-top: 18px; }
+
 /* 管理员部署自检：状态先于配置表单，且所有探测均为只读。 */
 .system-check-card { padding: 22px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow-xs); }
 .system-check-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
@@ -8486,12 +8622,15 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 .system-check-item small { overflow: hidden; color: var(--danger); font-size: var(--font-size-assist); line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
 
 @media (max-width: 900px) {
+  .settings-overview > header { align-items: flex-start; flex-direction: column; gap: 8px; }
+  .settings-overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .system-check-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .review-assignment { grid-template-columns: 34px minmax(0, 1fr); }
   .review-assignment button { grid-column: 1 / -1; }
 }
 
 @media (max-width: 620px) {
+  .settings-overview-grid { grid-template-columns: 1fr; }
   .system-check-head { flex-direction: column; }
   .system-check-actions { width: 100%; justify-content: space-between; }
   .system-check-grid { grid-template-columns: 1fr; }

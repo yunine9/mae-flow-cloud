@@ -47,22 +47,34 @@ function CheckItems({ result }: { result: SystemCheckResult }) {
   </article>)}</div>;
 }
 
-function SystemCheckCard() {
+function SystemCheckCard({ onResult }: {
+  onResult?: (result: SystemCheckResult | undefined, error?: string) => void;
+}) {
   const [result, setResult] = useState<SystemCheckResult>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
   async function run() {
-    setBusy(true); setError("");
-    try { setResult(await getSystemCheck()); }
-    catch (cause) { setError(String((cause as Error).message ?? cause)); }
+    setBusy(true); setError(""); onResult?.(undefined);
+    try {
+      const next = await getSystemCheck();
+      setResult(next);
+      onResult?.(next);
+    }
+    catch (cause) {
+      const message = String((cause as Error).message ?? cause);
+      setResult(undefined);
+      setError(message);
+      onResult?.(undefined, message);
+    }
     finally { setBusy(false); }
   }
 
   useEffect(() => { void run(); }, []);
   const summary = result?.overall === "ok" ? "全部正常"
     : result?.overall === "error" ? "存在不可用项" : "可运行，但有待完善项";
-  return <section className="system-check-card" aria-labelledby="system-check-title">
+  return <section id="settings-check" className="system-check-card"
+    aria-labelledby="system-check-title">
     <div className="system-check-head">
       <div><span className="section-kicker">DEPLOYMENT CHECK</span><h2 id="system-check-title">部署自检</h2><p>只读检查当前服务，不发送消息、不创建任务。</p></div>
       <div className="system-check-actions">
@@ -125,7 +137,7 @@ function RuntimeCard({ view, onSaved }: {
     } finally { setBusy(false); }
   }
 
-  return <div className="user-create-card settings-card">
+  return <div id="settings-runtime" className="user-create-card settings-card">
     <div className="user-create-copy">
       <span className="section-kicker">RUNTIME</span>
       <h2>运行参数</h2>
@@ -185,7 +197,8 @@ function ExecutionPolicyCard({ view, onSaved }: {
     } finally { setBusy(false); }
   }
 
-  return <div className="user-create-card settings-card execution-policy-card">
+  return <div id="settings-policy"
+    className="user-create-card settings-card execution-policy-card">
     <div className="user-create-copy">
       <span className="section-kicker">WORKFLOW POLICY</span>
       <h2>团队执行约定</h2>
@@ -282,7 +295,8 @@ function BuildCacheCard({ view, onSaved }: {
     ?? runtime.build_cache_retention_days ?? defaults.build_cache_retention_days;
   const effectiveMax = (status?.policy.max_bytes ??
     ((runtime.build_cache_max_gb ?? defaults.build_cache_max_gb) * 1024 ** 3));
-  return <div className="user-create-card settings-card build-cache-card">
+  return <div id="settings-cache"
+    className="user-create-card settings-card build-cache-card">
     <div className="user-create-copy">
       <span className="section-kicker">BUILD CACHE</span>
       <h2>构建缓存</h2>
@@ -380,7 +394,7 @@ function ModelsCard({ view, onSaved }: {
     } finally { setTesting(false); }
   }
 
-  return <div className="user-create-card settings-card">
+  return <div id="settings-models" className="user-create-card settings-card">
     <div className="user-create-copy">
       <span className="section-kicker">MODEL GATEWAY</span>
       <h2>模型网关</h2>
@@ -502,7 +516,8 @@ function VisionModelsCard({ view, onSaved }: {
     } finally { setTesting(false); }
   }
 
-  return <div className="user-create-card settings-card vision-settings-card">
+  return <div id="settings-vision"
+    className="user-create-card settings-card vision-settings-card">
     <div className="user-create-copy">
       <span className="section-kicker">IMAGE UNDERSTANDING</span>
       <h2>图片识别</h2>
@@ -573,8 +588,65 @@ function VisionModelsCard({ view, onSaved }: {
   </div>;
 }
 
+function SettingsOverview({ view, check, checkError }: {
+  view: Settings;
+  check?: SystemCheckResult;
+  checkError?: string;
+}) {
+  const runtime = view.runtime;
+  const defaults = view.defaults.runtime;
+  const mainModel = view.models.model ?? view.defaults.models.model;
+  const visionModel = view.models.vision.model
+    ?? view.defaults.models.vision.model;
+  const workspaceDays = runtime.workspace_retention_days
+    ?? defaults.workspace_retention_days;
+  const cacheDays = runtime.build_cache_retention_days
+    ?? defaults.build_cache_retention_days;
+  const cacheGb = runtime.build_cache_max_gb ?? defaults.build_cache_max_gb;
+  const go = (id: string) => document.getElementById(id)?.scrollIntoView({
+    behavior: "smooth", block: "start",
+  });
+  const checkLabel = checkError ? "检查失败"
+    : check?.overall === "ok" ? "全部正常"
+    : check?.overall === "error" ? "存在不可用项"
+      : check?.overall === "warning" ? "有待完善项" : "正在检查";
+  return <section className="settings-overview" aria-labelledby="settings-overview-title">
+    <header>
+      <div><span className="section-kicker">SERVICE SETTINGS</span>
+        <h2 id="settings-overview-title">服务设置总览</h2></div>
+      <p>先看真实状态，再进入对应区域修改；密钥不会在总览或表单中回显。</p>
+    </header>
+    <div className="settings-overview-grid">
+      <button type="button" onClick={() => go("settings-models")}>
+        <span>01</span><strong>模型与图片识别</strong>
+        <small>主模型 {mainModel ?? "未配置"} · 图片识别 {visionModel ?? "未配置"}</small>
+        <em>进入配置与测试能力</em>
+      </button>
+      <button type="button" onClick={() => go("settings-check")}>
+        <span>02</span><strong>真实部署自检</strong>
+        <small>{checkLabel}{check ? ` · ${check.items.length} 项检查` : ""}</small>
+        <em>查看真实检查结果</em>
+      </button>
+      <button type="button" onClick={() => go("settings-policy")}>
+        <span>03</span><strong>团队统一约定</strong>
+        <small>{view.execution_policy.team_instructions?.trim()
+          ? "已设置 · 仅影响之后新建的任务" : "未设置 · 使用平台默认约定"}</small>
+        <em>进入团队约定</em>
+      </button>
+      <button type="button" onClick={() => go("settings-runtime")}>
+        <span>04</span><strong>现场与构建缓存</strong>
+        <small>任务现场 {workspaceDays === 0 ? "永不回收" : `${workspaceDays} 天`}
+          {` · 缓存 ${cacheDays === 0 ? "不按时间清理" : `${cacheDays} 天`} / ${cacheGb === 0 ? "不限容量" : `${cacheGb} GB`}`}</small>
+        <em>进入保留与缓存策略</em>
+      </button>
+    </div>
+  </section>;
+}
+
 export function SettingsBoard() {
   const [view, setView] = useState<Settings | null>(null);
+  const [check, setCheck] = useState<SystemCheckResult>();
+  const [checkError, setCheckError] = useState("");
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -590,7 +662,11 @@ export function SettingsBoard() {
   // 两张设置卡共享同一份视图:任一保存返回完整 view,整页跟着刷新,
   // 掩码提示(末4位)因此始终是服务端刚确认过的事实。
   return <section className="user-admin settings-board">
-    <SystemCheckCard />
+    <SettingsOverview view={view} check={check} checkError={checkError} />
+    <SystemCheckCard onResult={(result, nextError = "") => {
+      setCheck(result);
+      setCheckError(nextError);
+    }} />
     <ModelsCard key={`m${view.models.url}:${view.models.model}:${view.models.key_hint}`}
       view={view} onSaved={setView} />
     <VisionModelsCard

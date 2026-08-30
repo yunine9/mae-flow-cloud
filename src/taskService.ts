@@ -51,6 +51,7 @@ import {
 import {
   DeliveryOutbox,
   parseReviewReplies,
+  type DeliveryOutboxItem,
 } from "./deliveryOutbox.ts";
 import {
   compareDeliveryRevisions,
@@ -1279,6 +1280,8 @@ interface TaskState {
   /** 红灯具体报错采集的防重入锁；与绿灯核销证据不是同一条链。 */
   repairEvidenceRetryActive?: boolean;
   deliveryRecoveryActive?: boolean;
+  /** 检视回复账本投递的单飞锁；恢复、交付与合入 watcher 共用。 */
+  reviewOutboxFlush?: Promise<boolean>;
   /** 环境预热的防重入锁(内存态):一任务只跑一个预热专员。 */
   warmupActive?: boolean;
   /** 所有 push 入口共享同一个异步准备动作；避免恢复轮询与会话收口
@@ -1936,6 +1939,15 @@ export class TaskService {
             taskId: task.summary.id,
             role: "prepush",
             work: task.prepushActive,
+          });
+        }
+        if (task.reviewOutboxFlush) {
+          // 回复请求已经可能到达外部平台，不能在 shutdown 返回后仍让
+          // 旧进程追加账本/持久化，与随后启动的新进程恢复链并发。
+          backgroundWork.push({
+            taskId: task.summary.id,
+            role: "review-outbox",
+            work: task.reviewOutboxFlush,
           });
         }
         if (task.assistantActive) {
@@ -3401,7 +3413,13 @@ export class TaskService {
   ): Annotation {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
-    const dropped = this.annotations(task).drop(annotationId, by, override);
+    const annotations = this.annotations(task);
+    const item = annotations.list().find((one) => one.id === annotationId);
+    const adminOverride = override && !!item && item.author !== by;
+    if (adminOverride) {
+      this.assertCurrentWorkspaceReviewAdminOverride(task, item);
+    }
+    const dropped = annotations.drop(annotationId, by, adminOverride);
     // 拿掉一条未闭环批注也可能让本轮复检全部闭环,和 verify 同口径刷新。
     this.refreshWorkspaceReviewClosure(task);
     return dropped;
@@ -3427,14 +3445,18 @@ export class TaskService {
   ): Annotation {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    const annotations = this.annotations(task);
+    const item = annotations.list().find((one) => one.id === annotationId);
+    const adminOverride = override && !!item && item.author !== by;
+    if (adminOverride) {
+      this.assertCurrentWorkspaceReviewAdminOverride(task, item);
+    }
     const loop = task.summary.delivery?.loop;
     const currentCycle = loop?.review_source === "workspace"
       && loop.workspace_review_recheck_required
       && (loop.workspace_review_annotation_ids ?? []).includes(annotationId);
     if (currentCycle) {
-      const item = this.annotations(task).list().find((one) =>
-        one.id === annotationId);
-      if (item && item.author !== by && !override) {
+      if (item && item.author !== by && !adminOverride) {
         throw new AnnotationPermissionError(
           `这条是 ${item.author} 写的，只能由他裁决`,
         );
@@ -3451,9 +3473,36 @@ export class TaskService {
         );
       }
     }
-    const verified = this.annotations(task).verify(annotationId, by, override);
+    const verified = annotations.verify(annotationId, by, adminOverride);
     this.refreshWorkspaceReviewClosure(task);
     return verified;
+  }
+
+  /** 管理员代办不是一张全局“替别人签字”通行证，只解决当前 push 复检
+   * 中作者暂时不在场造成的死锁。路由读到 admin 角色后仍必须在服务层
+   * 重新核对全部当前事实；校验与 append 同步完成，避免页面两次点击间
+   * 阶段已经切换却仍修改历史批注。管理员处理自己的意见走普通作者路径。 */
+  private assertCurrentWorkspaceReviewAdminOverride(
+    task: TaskState,
+    item: Annotation,
+  ): void {
+    const loop = task.summary.delivery?.loop;
+    const current = task.summary.status === "waiting_for_human"
+      && task.summary.waiting?.step === CLOUD_PUSH_CONFIRM_STEP
+      && loop?.kind === "review"
+      && loop.review_source === "workspace"
+      && loop.workspace_review_recheck_required === true
+      && (loop.workspace_review_annotation_ids ?? []).includes(item.id);
+    if (!current) {
+      throw new TaskControlError(
+        "管理员代办只限当前人工检视的 push 确认卡；任务阶段或复检批次已变化，请刷新后再检查",
+      );
+    }
+    if (item.status !== "sent") {
+      throw new TaskControlError(
+        "管理员只能代办当前复检中已送达且尚未闭环的他人意见",
+      );
+    }
   }
 
   /** 裁决另半边:返工。锚点若已失效,趁重锚定结果在手边把它换成当前
@@ -4471,8 +4520,13 @@ export class TaskService {
         }
         if ((summary.ticket ?? "") !== ticket) return false;
         if ((summary.luban_account ?? "") !== (account ?? "")) return false;
-        return !summary.repo_url || repositories.length === 0
-          || repositories.includes(summary.repo_url);
+        const existingRepositories = [...new Set([
+          ...(summary.repositories ?? []),
+          ...(summary.repo_url ? [summary.repo_url] : []),
+        ].map((item) => String(item).trim()).filter(Boolean))];
+        return existingRepositories.length === 0 || repositories.length === 0
+          || existingRepositories.some((repository) =>
+            repositories.includes(repository));
       });
       if (duplicate) {
         throw new TaskControlError(
@@ -5083,7 +5137,10 @@ export class TaskService {
           }
         }
         this.replayProjection(task);
+        const reviewOutboxStalled = this.reviewReplyOutboxStalled(task);
         if (!["completed", "canceled"].includes(summary.status)
+            && summary.status !== "await_merge"
+            && !reviewOutboxStalled
             && summary.delivery?.git_push?.sha) {
           this.bypass(task, "检视回复 outbox 恢复",
             this.flushReviewReplyOutbox(task));
@@ -5117,7 +5174,12 @@ export class TaskService {
         }
         // 进程可死,轮询不死:重启前在等流水线的任务续轮
         // (锚是 delivery.sha,结果仍只认绑定版本)。
-        if (summary.status === "verifying"
+        if (summary.status === "verifying" && reviewOutboxStalled) {
+          // delivery-outbox.jsonl 是可由管理员原地修复的持久化账本。
+          // 修复后须在本进程续接 tryDeliver，不能只清掉 stalled 后等
+          // 第二次重启才继续交付。
+          this.scheduleDeliveryRecovery(task, task.controlEpoch);
+        } else if (summary.status === "verifying"
             && summary.delivery?.evidence_gap
             && summary.delivery.sha) {
           // 红灯证据缺口是交付侧等待，不是内核编码会话停机。进程重启后
@@ -5617,7 +5679,7 @@ export class TaskService {
         || task.prepushActive || task.assistantActive
         || task.mergeWatchActive || task.evidenceRetryActive
         || task.repairEvidenceRetryActive
-        || task.deliveryRecoveryActive) {
+        || task.deliveryRecoveryActive || task.reviewOutboxFlush) {
       throw new TaskControlError(
         `任务 ${id} 仍有执行资源或后台收尾动作，暂不能从头重跑`,
       );
@@ -5744,7 +5806,7 @@ export class TaskService {
         || task.prepushActive || task.assistantActive
         || task.mergeWatchActive || task.evidenceRetryActive
         || task.repairEvidenceRetryActive
-        || task.deliveryRecoveryActive)) {
+        || task.deliveryRecoveryActive || task.reviewOutboxFlush)) {
       throw new TaskControlError(
         `任务 ${id} 仍有执行资源或后台收尾动作，拒绝彻底删除`,
       );
@@ -9323,6 +9385,20 @@ export class TaskService {
     epoch: number,
   ): Promise<void> {
     if (!this.recoveryStillNeeded(task, epoch)) return;
+    if (this.reviewReplyOutboxStalled(task)) {
+      const readable = await this.flushReviewReplyOutbox(task);
+      if (!readable || this.reviewReplyOutboxStalled(task)) {
+        // 账本损坏不是一次性网络抖动，也不受普通验证超时预算限制；
+        // 管理员可原地修复，服务在同一进程持续探测并自动续接。
+        this.scheduleDeliveryRecovery(task, epoch);
+        return;
+      }
+      if (this.current(task, epoch)
+          && task.summary.status === "verifying") {
+        await this.tryDeliver(task, epoch);
+      }
+      return;
+    }
     await this.tryDeliver(task, epoch);
     if (!this.recoveryStillNeeded(task, epoch)) return;
     if (Date.now() >= this.verificationDeadline(task)) {
@@ -9346,7 +9422,8 @@ export class TaskService {
   private recoveryStillNeeded(task: TaskState, epoch: number): boolean {
     return this.current(task, epoch)
       && task.summary.status === "verifying"
-      && !task.summary.delivery?.stalled
+      && (!task.summary.delivery?.stalled
+        || this.reviewReplyOutboxStalled(task))
       && task.summary.delivery?.pipeline !== "running"
       && !task.evidenceRetryActive
       && !task.repairEvidenceRetryActive;
@@ -9417,9 +9494,22 @@ export class TaskService {
       if (!this.current(task, epoch)
           || task.summary.status !== "verifying") return;
       // 与主轮询同一道防陈灯核验:重试登记也不许拿别的提交的灯凑数。
+      const allRuns = Array.isArray(result.runs) ? result.runs : [];
+      const latestRuns = allRuns.length ? [allRuns.at(-1)!] : [];
       const terminal = selectTerminalRun<Record<string, unknown> & {
         status?: string; sha?: string; is_valid?: boolean;
-      }>(Array.isArray(result.runs) ? result.runs : [], sha).run;
+      }>(latestRuns, sha).run;
+      if (allRuns.length && !terminal) {
+        // 查询成功且最新 run 明确尚未形成可接收终态时，不能回退复用
+        // 上一次 success；把任务重新交给常规轮询，等这次最新 run。
+        task.summary.delivery = {
+          ...task.summary.delivery,
+          pipeline: "running",
+        };
+        this.persist(task);
+        this.bypass(task, "流水线轮询", this.pollPipeline(task, epoch));
+        return;
+      }
       if (terminal) {
         status = terminal.status === "failed" ? "failed" : "success";
         checks = parsePipelineChecks(terminal.checks);
@@ -10622,7 +10712,10 @@ export class TaskService {
    * SHA，再建 MR——不信任务自己的说法，也不让 Agent 接触 token。
    * MR 成功≠完成:流水线过了才"等待合入",否则停在"验证中"。
    * 交付失败不吞:原因写进 summary.delivery,任务保持 completed。 */
-  private async tryDeliver(task: TaskState, epoch: number): Promise<void> {
+  private async tryDeliver(
+    task: TaskState,
+    epoch: number,
+  ): Promise<"review_reply_blocked" | undefined> {
     // 多仓父任务只负责需求理解和人工检视，不产生分支/MR。
     if (this.isRequirementAnalysis(task)) return;
     // settle 在调用交付前已经释放修复会话并清空 mission。此刻开始处理
@@ -10704,6 +10797,25 @@ export class TaskService {
       if (!await this.agentPlatformChangesAllowPush(task)) return;
       await this.inheritWorkspaceReviewDeliverySelection(task);
       if (!this.current(task, epoch)) return;
+      // 平台检视回复必须在 Build-Fix 以及交付范围机械整理全部收敛后
+      // 才绑定最终 HEAD 入 outbox。此前在普通 Agent 收口时就入队，
+      // prepush 若继续修码产生新提交，回复会错误地借后一个 SHA 投递。
+      if (task.summary.delivery?.loop?.kind === "review"
+          && task.summary.delivery.loop.review_source === "platform") {
+        const staged = await this.stageReviewReplies(task);
+        if (!staged.ok) {
+          const loop = task.summary.delivery.loop;
+          loop.state = "halted";
+          loop.diagnosis = staged.detail;
+          task.summary.status = "verifying";
+          task.summary.detail = staged.detail ?? "MR 逐条回复不完整";
+          task.summary.delivery.stalled = task.summary.detail;
+          this.persist(task);
+          this.notifyRepairStopped(task);
+          return "review_reply_blocked";
+        }
+        if (!this.current(task, epoch)) return;
+      }
       // 从这里开始才需要外部交付平台。prepush 已经有明确收口，不会因
       // 平台配置在部署窗口暂缺而留下“准备中但没有 owner”的僵尸状态。
       if (!platformUrl || !this.options.host) {
@@ -10722,10 +10834,20 @@ export class TaskService {
       // 人工只看 prepush 收敛后的最终范围，避免“刚确认就因验证修复
       // 换了 HEAD 又确认一次”。之后仍由实时路径复核守住白名单；若
       // 自动修复越界增删/重命名文件，下一次续推会重新举卡。
+      // 把已通过的 Build-Fix/人工确认绑定到一个不可变 SHA。后续门禁
+      // 与真实 push 之间即便有外部进程移动工作区 HEAD，pushFromHost
+      // 也只接受这里钉死的提交，不会把未检视的新 HEAD 顺手送上远端。
+      const observedRevision = await this.prePushRevision(task);
+      const authorizedPrePush = task.summary.delivery?.prepush;
+      const expectedPushSha = this.options.prepush?.enabled
+          && authorizedPrePush?.sha
+          && ["passed", "user_skipped"].includes(authorizedPrePush.state)
+        ? authorizedPrePush.sha : observedRevision.sha;
       if (!await this.pushConfirmationSatisfied(task, branch)) return;
       if (!await this.deliverySelectionAllowsPush(task, branch)) return;
       const previous = task.summary.delivery;
-      const pushReceipt = await this.pushFromHost(task, branch);
+      const pushReceipt = await this.pushFromHost(
+        task, branch, expectedPushSha);
       const sha = pushReceipt.sha;
       if (previous) previous.git_push = pushReceipt;
       else task.summary.delivery = { git_push: pushReceipt };
@@ -10734,7 +10856,10 @@ export class TaskService {
       this.persist(task);
       // 检视回复只能在对应代码可从远端看见后投递。部分失败保留在
       // outbox，后续监控/重启继续；不重派 Agent、不删除失败项。
-      await this.flushReviewReplyOutbox(task);
+      if (!await this.flushReviewReplyOutbox(task)) {
+        this.scheduleDeliveryRecovery(task, epoch);
+        return "review_reply_blocked";
+      }
       if (!this.current(task, epoch)) return;
       // 修复回程的岔路:SHA 没变说明本轮没有新代码(检视修复只回复
       // 不改码、或修复会话判断无需改动)。这时**绝不再触发流水线**
@@ -10954,8 +11079,9 @@ export class TaskService {
         // 防陈灯机械核验(2026-08-28 对比报告头号根因):is_valid=false
         // 或 run 绑着别的 SHA 的一律不认——旧绿灯不背书新代码,旧红灯
         // 也不背书。被拒原因写进现场,人能看见"为什么还在等"。
+        const allRuns = Array.isArray(status.runs) ? status.runs : [];
         const picked = selectTerminalRun(
-          Array.isArray(status.runs) ? status.runs : [], sha);
+          allRuns.length ? [allRuns.at(-1)!] : [], sha);
         terminal = picked.run;
         if (!terminal && picked.rejected.length) {
           const why = picked.rejected[picked.rejected.length - 1];
@@ -11703,7 +11829,10 @@ export class TaskService {
       while (true) {
         if (!this.current(task, epoch)
             || task.summary.status !== "await_merge") return;
-        await this.flushReviewReplyOutbox(task);
+        if (!await this.flushReviewReplyOutbox(task)) {
+          await new Promise((tick) => setTimeout(tick, interval).unref());
+          continue;
+        }
         if (!this.current(task, epoch)
             || task.summary.status !== "await_merge") return;
         const view = await this.fetchGates(task);
@@ -11860,8 +11989,13 @@ export class TaskService {
         && loop.replied_ids
         ? loop.replied_ids.split(",").filter(Boolean) : []);
     const pending = discussions.filter((item) => !replied.has(item.id));
+    const pushedSha = task.summary.delivery?.git_push?.sha;
     const queuedReplyIds = new Set(this.deliveryOutbox(task)
-      .pendingReviewReplies().map((item) => item.payload.discussion_id));
+      // 旧提交的 pending 回复不能让新提交永久停在“正在重试”。它仍
+      // 留在 outbox 审计并由 flush fail-closed，但只有当前远端 push
+      // 收据对应的动作才可代表本轮已经排队。
+      .pendingReviewReplies(pushedSha)
+      .map((item) => item.payload.discussion_id));
     if (pending.length
         && pending.every((item) => queuedReplyIds.has(item.id))) {
       // Agent 已逐条答完，当前只是在重试外部投递。把它当“没干活”再派
@@ -12242,9 +12376,10 @@ export class TaskService {
       join(task.summary.workspace, "delivery-outbox.jsonl"));
   }
 
-  /** Agent 收口时只把逐条回复可靠入队，不做网络动作。代码尚未 push，
-   * 此时先去 MR 上说“已修复”会让检视人看到旧代码；更不能部分成功后
-   * 删除草稿。缺任何一条就明确停下，不能拿总体发言冒充逐条答复。 */
+  /** Build-Fix 收敛后把逐条回复按最终 SHA 可靠入队，不做网络动作。
+   * 代码尚未 push，此时先去 MR 上说“已修复”会让检视人看到旧代码；
+   * 更不能部分成功后删除草稿。缺任何一条就明确停下，不能拿总体发言
+   * 冒充逐条答复。 */
   private async stageReviewReplies(task: TaskState): Promise<{
     ok: boolean;
     detail?: string;
@@ -12268,9 +12403,20 @@ export class TaskService {
     } catch { /* review_ids 是持久化兜底 */ }
     const expected = [...new Set(known)]
       .filter((id) => !alreadyReplied.has(id));
+    let sourceSha: string;
+    try {
+      if (!task.cwd) throw new Error("代码现场不可用");
+      sourceSha = (await this.prePushRevision(task)).sha;
+    } catch (error) {
+      return {
+        ok: false,
+        detail: `MR 回复无法绑定最终提交：${String(error)}`,
+      };
+    }
     const outbox = this.deliveryOutbox(task);
     const staged = new Set(outbox.list()
-      .filter((item) => item.kind === "review_reply")
+      .filter((item) => item.kind === "review_reply"
+        && item.payload.expected_sha === sourceSha)
       .map((item) => item.payload.discussion_id));
     const uncovered = expected.filter((id) => !staged.has(id));
     if (!uncovered.length) return { ok: true };
@@ -12297,7 +12443,6 @@ export class TaskService {
     }
     const repo = task.summary.repo_url ?? this.effectiveDefaultRepo() ?? "";
     const resolve = this.options.delivery?.resolveDiscussions ?? false;
-    const sourceSha = task.cwd ? (await this.prePushRevision(task)).sha : undefined;
     try {
       for (const reply of parsed.replies) {
         outbox.enqueueReviewReply({
@@ -12324,11 +12469,74 @@ export class TaskService {
 
   /** 只在宿主已经拿到 push 收据后投递。单条失败只留它自己 pending；
    * 后续监控/重启继续，不重派 Agent，也不把整批误记成已回复。 */
-  private async flushReviewReplyOutbox(task: TaskState): Promise<void> {
+  private reviewReplyOutboxStalled(task: TaskState): boolean {
+    return task.summary.delivery?.stalled
+      ?.startsWith("检视回复投递账不可读") === true;
+  }
+
+  private markReviewReplyOutboxUnreadable(
+    task: TaskState,
+    error: unknown,
+  ): false {
+    const detail = "检视回复投递账不可读，已停止自动回复；"
+      + "请管理员修复任务现场中的 delivery-outbox.jsonl 后重试。"
+      + `原因：${String(error).slice(0, 500)}`;
+    task.summary.detail = detail;
+    task.summary.delivery = {
+      ...task.summary.delivery,
+      stalled: detail,
+      waiting_on: detail,
+    };
+    if (!["await_merge", "waiting_for_human", "paused", "canceled"]
+      .includes(task.summary.status)) {
+      task.summary.status = "verifying";
+    }
+    this.persist(task);
+    this.options.log?.(`任务 ${task.summary.id} ${detail}`);
+    return false;
+  }
+
+  private async flushReviewReplyOutbox(task: TaskState): Promise<boolean> {
+    if (task.reviewOutboxFlush) return task.reviewOutboxFlush;
+    const running = this.flushReviewReplyOutboxOnce(task);
+    task.reviewOutboxFlush = running;
+    try {
+      return await running;
+    } finally {
+      if (task.reviewOutboxFlush === running) {
+        task.reviewOutboxFlush = undefined;
+      }
+    }
+  }
+
+  private async flushReviewReplyOutboxOnce(task: TaskState): Promise<boolean> {
     const platformUrl = this.effectivePlatformUrl();
-    if (!platformUrl || !task.summary.delivery?.git_push?.sha) return;
+    const pushedSha = task.summary.delivery?.git_push?.sha;
+    if (!platformUrl || !pushedSha) return true;
     const outbox = this.deliveryOutbox(task);
-    for (const item of outbox.pendingReviewReplies()) {
+    let pending: DeliveryOutboxItem[];
+    try {
+      pending = outbox.pendingReviewReplies();
+    } catch (error) {
+      return this.markReviewReplyOutboxUnreadable(task, error);
+    }
+    for (const item of pending) {
+      if (item.payload.expected_sha !== pushedSha) {
+        const reason = `拒绝投递：回复绑定 ${item.payload.expected_sha.slice(0, 12)}`
+          + `，当前远端推送收据是 ${pushedSha.slice(0, 12)}`;
+        try {
+          if (item.last_error !== reason) {
+            // 这不是一次远端 attempt；只落失败原因，保持 pending，等对应
+            // SHA 的真实 push 收据恢复后再投，绝不能借另一版代码发“已修”。
+            outbox.markFailed(item.id, reason);
+          }
+        } catch (error) {
+          return this.markReviewReplyOutboxUnreadable(task, error);
+        }
+        this.options.log?.(
+          `任务 ${task.summary.id} 检视回复 SHA 不匹配，${reason}`);
+        continue;
+      }
       try {
         outbox.markAttempt(item.id);
         const response = await fetch(
@@ -12361,17 +12569,30 @@ export class TaskService {
           finishedAt: new Date().toISOString(),
         }));
       } catch (error) {
-        try { outbox.markFailed(item.id, String(error)); } catch {
-          // 如果失败发生在 delivered 落账之后，下一次重放会从事实同步。
+        try { outbox.markFailed(item.id, String(error)); } catch (ledgerError) {
+          // 多进程或旧恢复链可能已经把同一动作落成 delivered。此时本轮
+          // 的失败落账冲突不是账损坏；重新读权威 append-only 状态即可。
+          try {
+            const current = outbox.list().find((one) => one.id === item.id);
+            if (current?.state === "delivered") continue;
+          } catch (readError) {
+            return this.markReviewReplyOutboxUnreadable(task, readError);
+          }
+          return this.markReviewReplyOutboxUnreadable(task, ledgerError);
         }
         this.options.log?.(
           `任务 ${task.summary.id} 检视回复待重试(讨论 ${
             item.payload.discussion_id}): ${String(error)}`);
       }
     }
-    const delivered = outbox.list().filter((item) =>
-      item.kind === "review_reply" && item.state === "delivered")
-      .map((item) => item.payload.discussion_id);
+    let delivered: string[];
+    try {
+      delivered = outbox.list().filter((item) =>
+        item.kind === "review_reply" && item.state === "delivered")
+        .map((item) => item.payload.discussion_id);
+    } catch (error) {
+      return this.markReviewReplyOutboxUnreadable(task, error);
+    }
     const loop = task.summary.delivery?.loop;
     if (loop?.kind === "review" && delivered.length) {
       // replied_ids 描述“当前仍未解决的讨论里哪些已回复”，不是无限历史。
@@ -12390,6 +12611,20 @@ export class TaskService {
         this.persist(task);
       }
     }
+    const stalled = task.summary.delivery?.stalled;
+    if (stalled?.startsWith("检视回复投递账不可读")) {
+      delete task.summary.delivery!.stalled;
+      if (task.summary.delivery?.waiting_on === stalled) {
+        task.summary.delivery.waiting_on = undefined;
+      }
+      if (task.summary.detail === stalled) {
+        task.summary.detail = task.summary.status === "await_merge"
+          ? "检视回复投递账已恢复，继续等待 MR 检视与合入"
+          : "检视回复投递账已恢复，继续交付验证";
+      }
+      this.persist(task);
+    }
+    return true;
   }
 
   /** 流水线证据口:终态时把平台事实(sha/status/可选 checks/来源)写成文件喂给
@@ -13141,6 +13376,7 @@ export class TaskService {
   private async pushFromHost(
     task: TaskState,
     branch: string,
+    expectedSha?: string,
   ): Promise<GitPushReceipt> {
     if (task.driver) {
       throw new Error("安全拒绝：Agent 会话仍在，不能执行宿主 Git 推送");
@@ -13199,6 +13435,11 @@ export class TaskService {
       const sha = String(head.stdout ?? "").trim();
       if (head.status !== 0 || !sha) {
         throw new Error(`读取待推送 HEAD 失败: ${String(head.stderr ?? "")}`);
+      }
+      if (expectedSha && sha !== expectedSha) {
+        throw new Error(
+          `安全拒绝：待推送 HEAD 已从已验证的 ${expectedSha.slice(0, 12)}`
+          + ` 变为 ${sha.slice(0, 12)}，旧确认不可复用`);
       }
       const objects = gitView.objectDirectory;
       const staging = join(sandbox.dir, "transport.git");
@@ -13778,29 +14019,11 @@ export class TaskService {
             break;
           }
         }
-        // 平台检视回复先入可靠 outbox。这里不能做网络动作：新代码还没
-        // push，先回“已修复”会让检视人看到旧代码。缺逐条回复则与本地
-        // 批注同样明确停下，不能拿总体发言糊弄过去。
-        if (task.summary.delivery?.loop?.kind === "review"
-            && task.summary.delivery.loop.review_source === "platform") {
-          const staged = await this.stageReviewReplies(task);
-          if (!staged.ok) {
-            const loop = task.summary.delivery.loop;
-            loop.state = "halted";
-            loop.diagnosis = staged.detail;
-            task.summary.status = "verifying";
-            task.summary.detail = staged.detail ?? "MR 逐条回复不完整";
-            task.summary.delivery.stalled = task.summary.detail;
-            this.persist(task);
-            this.notifyRepairStopped(task);
-            break;
-          }
-          if (!this.current(task, epoch)) break;
-        }
         // 终态在交付判定之后才定:先标 completed 再改,轮询会撞见
         // 中间态(实测竞态)。交付把状态升为 verifying/await_merge,
         // 没交付动作时才落 completed。
-        await this.tryDeliver(task, epoch);
+        const deliveryResult = await this.tryDeliver(task, epoch);
+        if (deliveryResult === "review_reply_blocked") break;
         if (!this.current(task, epoch)) break;
         // 交付请求本身也可能耗时；用户若在这段窗口点了暂停，外部流水线
         // 已触发就停在 verifying 跟踪点，否则停在普通执行点。若已经绿灯

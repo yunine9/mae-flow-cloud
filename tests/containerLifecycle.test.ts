@@ -62,7 +62,22 @@ test("shutdown 停止调度、drain 构建等待者并确认容器删除，但�
   const waiting = (service as any).acquirePrePushBuildSlot(secondState, 0);
   assert.equal((service as any).prePushBuildQueue.length, 1);
 
-  await service.shutdown();
+  let releaseOutbox!: () => void;
+  const outboxWork = new Promise<void>((resolve) => {
+    releaseOutbox = resolve;
+  });
+  firstState.reviewOutboxFlush = outboxWork.finally(() => {
+    firstState.reviewOutboxFlush = undefined;
+  });
+  let shutdownDone = false;
+  const shuttingDown = service.shutdown().then(() => {
+    shutdownDone = true;
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(shutdownDone, false,
+    "shutdown 返回前必须等在途检视回复停止写平台与账本");
+  releaseOutbox();
+  await shuttingDown;
   assert.equal(await waiting, undefined, "排队的构建等待者必须在关机时被唤醒");
   assert.equal(aborted, true, "在途 prepush 宿主等待必须收到 abort");
   assert.equal(containers.records[0]?.stopped, true,

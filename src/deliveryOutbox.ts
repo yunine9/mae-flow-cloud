@@ -8,7 +8,12 @@
  */
 
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  readFileSync,
+  truncateSync,
+} from "node:fs";
 
 export interface ReviewReplyPayload {
   discussion_id: string;
@@ -16,7 +21,8 @@ export interface ReviewReplyPayload {
   repo: string;
   mr?: string | number;
   resolve: boolean;
-  expected_sha?: string;
+  /** 回复所依据、且必须已经推到远端的最终提交。 */
+  expected_sha: string;
 }
 
 export interface DeliveryOutboxItem {
@@ -88,26 +94,136 @@ function replyId(payload: ReviewReplyPayload): string {
   return `review-reply-${digest.slice(0, 24)}`;
 }
 
+function record(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown> : undefined;
+}
+
+function timestamp(value: unknown): value is string {
+  return typeof value === "string" && value.trim() !== ""
+    && !Number.isNaN(Date.parse(value));
+}
+
+/** JSON.parse 只有语法保证。outbox 决定外部动作是否已经发生，合法 JSON
+ * 里的错字段同样必须 fail-closed，不能靠 TypeScript 断言把它当真。 */
+function storedItem(
+  value: unknown,
+  line: number,
+): DeliveryOutboxItem {
+  const item = record(value);
+  const payload = record(item?.payload);
+  const discussionId = typeof payload?.discussion_id === "string"
+    ? payload.discussion_id.trim() : "";
+  const body = typeof payload?.body === "string" ? payload.body.trim() : "";
+  const repo = typeof payload?.repo === "string" ? payload.repo : "";
+  const expectedSha = typeof payload?.expected_sha === "string"
+    ? payload.expected_sha.trim() : "";
+  const mr = payload?.mr;
+  const validMr = mr === undefined || typeof mr === "string"
+    || (typeof mr === "number" && Number.isFinite(mr));
+  if (!item || item.kind !== "review_reply"
+      || typeof item.id !== "string" || !item.id
+      || item.state !== "pending" || item.attempts !== 0
+      || !timestamp(item.created_at)
+      || item.delivered_at !== undefined || item.last_error !== undefined
+      || !payload || !discussionId || !body || !repo.trim() || !expectedSha
+      || payload.discussion_id !== discussionId || payload.body !== body
+      || payload.expected_sha !== expectedSha
+      || typeof payload.resolve !== "boolean" || !validMr) {
+    throw new Error(`delivery outbox 第 ${line} 行入队项无效`);
+  }
+  const normalized: ReviewReplyPayload = {
+    discussion_id: discussionId,
+    body,
+    repo,
+    ...(mr !== undefined ? { mr: mr as string | number } : {}),
+    resolve: payload.resolve,
+    expected_sha: expectedSha,
+  };
+  if (item.id !== replyId(normalized)) {
+    throw new Error(`delivery outbox 第 ${line} 行入队项 id 与内容不匹配`);
+  }
+  return {
+    id: item.id,
+    kind: "review_reply",
+    payload: normalized,
+    state: "pending",
+    attempts: 0,
+    created_at: item.created_at,
+  };
+}
+
+function storedOperation(value: unknown, line: number): Operation {
+  const operation = record(value);
+  const op = operation?.op;
+  if (!operation || !["enqueue", "attempt", "failed", "delivered"]
+    .includes(String(op ?? ""))) {
+    throw new Error(`delivery outbox 第 ${line} 行操作无效`);
+  }
+  if (op === "enqueue") {
+    return { op, item: storedItem(operation.item, line) };
+  }
+  if (typeof operation.id !== "string" || !operation.id
+      || !timestamp(operation.at)) {
+    throw new Error(`delivery outbox 第 ${line} 行 ${String(op)} 操作无效`);
+  }
+  if (op === "failed") {
+    if (typeof operation.error !== "string" || operation.error.length > 1000) {
+      throw new Error(`delivery outbox 第 ${line} 行 failed 操作无效`);
+    }
+    return { op, id: operation.id, at: operation.at, error: operation.error };
+  }
+  return {
+    op: op as "attempt" | "delivered",
+    id: operation.id,
+    at: operation.at,
+  };
+}
+
 export class DeliveryOutbox {
   constructor(readonly path: string) {}
 
   list(): DeliveryOutboxItem[] {
     if (!existsSync(this.path)) return [];
-    let text = "";
-    try { text = readFileSync(this.path, "utf-8"); } catch { return []; }
+    let text: string;
+    try {
+      text = readFileSync(this.path, "utf-8");
+    } catch (error) {
+      // outbox 是“哪些外部动作已成功”的权威事实；读不出来绝不能
+      // 假装空账继续重投或删草稿。
+      throw new Error(`读取 delivery outbox 失败: ${String(error)}`);
+    }
     const items = new Map<string, DeliveryOutboxItem>();
-    for (const line of text.split("\n")) {
+    const lines = text.split("\n");
+    const hasTrailingNewline = text.endsWith("\n");
+    for (const [index, line] of lines.entries()) {
       if (!line.trim()) continue;
-      let operation: Operation;
-      try { operation = JSON.parse(line) as Operation; } catch { continue; }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch (error) {
+        // 进程可能死在 append 的半行：仅允许“文件末尾且没有换行”的
+        // 截断尾巴，下一次写入前会安全截掉。中段/完整坏行意味着事实链
+        // 不可信，必须 fail-closed，留给人修复原文件。
+        if (index === lines.length - 1 && !hasTrailingNewline) continue;
+        throw new Error(`delivery outbox 第 ${index + 1} 行损坏: ${String(error)}`);
+      }
+      const operation = storedOperation(parsed, index + 1);
       if (operation.op === "enqueue") {
-        if (operation.item?.id && !items.has(operation.item.id)) {
+        if (!items.has(operation.item.id)) {
           items.set(operation.item.id, structuredClone(operation.item));
         }
         continue;
       }
       const item = items.get(operation.id);
-      if (!item) continue;
+      if (!item) {
+        throw new Error(
+          `delivery outbox 第 ${index + 1} 行引用未知项: ${operation.id}`);
+      }
+      if (item.state !== "pending") {
+        throw new Error(
+          `delivery outbox 第 ${index + 1} 行对已投递项重复 ${operation.op}`);
+      }
       if (operation.op === "attempt") {
         item.attempts += 1;
         item.last_error = undefined;
@@ -130,10 +246,13 @@ export class DeliveryOutbox {
       ...payload,
       discussion_id: String(payload.discussion_id).trim(),
       body: String(payload.body).trim(),
-      repo: String(payload.repo),
+      repo: String(payload.repo ?? ""),
+      expected_sha: String(payload.expected_sha ?? "").trim(),
     };
-    if (!normalized.discussion_id || !normalized.body) {
-      throw new Error("检视回复缺少 discussion_id 或正文");
+    if (!normalized.discussion_id || !normalized.body
+        || !normalized.repo.trim() || !normalized.expected_sha) {
+      throw new Error(
+        "检视回复缺少 discussion_id、正文、代码仓或 expected_sha");
     }
     const id = replyId(normalized);
     const existing = this.list().find((item) => item.id === id);
@@ -150,9 +269,10 @@ export class DeliveryOutbox {
     return item;
   }
 
-  pendingReviewReplies(): DeliveryOutboxItem[] {
+  pendingReviewReplies(expectedSha?: string): DeliveryOutboxItem[] {
     return this.list().filter((item) =>
-      item.kind === "review_reply" && item.state === "pending");
+      item.kind === "review_reply" && item.state === "pending"
+      && (!expectedSha || item.payload.expected_sha === expectedSha));
   }
 
   markAttempt(id: string, at = new Date().toISOString()): void {
@@ -178,6 +298,29 @@ export class DeliveryOutbox {
 
   private append(operation: Operation): void {
     // 写侧 fail-closed：调用方只有成功返回后才能删除 Agent 草稿。
-    appendFileSync(this.path, JSON.stringify(operation) + "\n", "utf-8");
+    let separator = "";
+    if (existsSync(this.path)) {
+      let text: string;
+      try {
+        text = readFileSync(this.path, "utf-8");
+      } catch (error) {
+        throw new Error(`读取 delivery outbox 失败: ${String(error)}`);
+      }
+      if (text && !text.endsWith("\n")) {
+        const tailAt = text.lastIndexOf("\n") + 1;
+        const tail = text.slice(tailAt);
+        try {
+          JSON.parse(tail);
+          separator = "\n"; // 完整 JSON 只缺换行，保留并隔开下一条。
+        } catch {
+          // 唯一可自动恢复的损坏：崩溃留下的末尾半行。按 UTF-8 字节
+          // 截到上一条完整换行，之后再 append，避免半行与新 JSON 粘连。
+          truncateSync(this.path,
+            Buffer.byteLength(text.slice(0, tailAt), "utf-8"));
+        }
+      }
+    }
+    appendFileSync(this.path,
+      separator + JSON.stringify(operation) + "\n", "utf-8");
   }
 }

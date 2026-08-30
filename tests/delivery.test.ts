@@ -489,6 +489,38 @@ test("异步流水线:running 验证中,绿灯后轮询收敛到等待合入", a
   }
 });
 
+test("需求交付轮询只认最新 run:历史成功后最新 running 不得提前放行", async () => {
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  platform.nextPipelineStatus = "running";
+  await platform.start();
+  try {
+    const { task, service } = await runTask(
+      platform, true, { pollIntervalMs: 80 });
+    const sha = task.delivery!.sha!;
+    platform.pipelines.unshift({
+      id: -1,
+      sha,
+      status: "success",
+      checks: [
+        { dimension: "COMPILE", status: "success" },
+        { dimension: "UT", status: "success" },
+        { dimension: "CODECHECK", status: "success" },
+      ],
+    });
+    // 至少跨过两次轮询。旧实现会 findLast(终态) 选中历史 success，
+    // 即刻把任务推进 await_merge；最新 run 尚未结束时必须原地等待。
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    assert.equal(service.get(task.id)!.status, "verifying");
+    assert.equal(service.get(task.id)!.delivery?.pipeline, "running");
+    platform.finishPipeline(sha, "success");
+    await until(() => service.get(task.id)!.status === "await_merge",
+      "最新 run 真正成功后再放行");
+  } finally {
+    await platform.stop();
+  }
+});
+
 test("异步流水线:红灯留痕(修复环关闭),任务停在验证中不标完成", async () => {
   const platform = new FakeGitPlatform();
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
@@ -1065,6 +1097,32 @@ test("宿主 push 硬拒本任务新提交的 Agent 平台注入目录", async (
     }, "must-not-exist"), /Agent 平台本地目录.*\.claude/s);
     assert.equal(git(remote, "branch", "--list", "must-not-exist"), "",
       "硬闸命中后远端不能出现分支");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+  }
+});
+
+test("宿主 push 钉死已验证 SHA,确认后 HEAD 变化不得发生 TOCTOU 误推", async () => {
+  const cwd = makeSourceRepo();
+  const approved = git(cwd, "rev-parse", "HEAD");
+  writeFileSync(join(cwd, "after-review.txt"), "not reviewed\n");
+  git(cwd, "add", "after-review.txt");
+  git(cwd, "commit", "--quiet", "-m", "change after review");
+  const current = git(cwd, "rev-parse", "HEAD");
+  assert.notEqual(current, approved);
+  const remote = mkdtempSync(join(tmpdir(), "mfc-toctou-remote-"));
+  git(remote, "init", "--bare", "--quiet");
+  const service = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-toctou-data-")),
+    provider: "fixture", model: "fixture", modelsJson: {},
+  });
+  try {
+    await assert.rejects(() => (service as any).pushFromHost({
+      cwd,
+      summary: { id: "task-toctou", repo_url: remote },
+    }, "must-not-exist", approved), /HEAD 已从已验证的.*旧确认不可复用/);
+    assert.equal(git(remote, "branch", "--list", "must-not-exist"), "",
+      "SHA 不一致时远端不能出现分支");
   } finally {
     await service.shutdown().catch(() => undefined);
   }

@@ -7,6 +7,8 @@ const source = readFileSync(resolve("web/src/HelpCenter.tsx"), "utf-8");
 const appSource = readFileSync(resolve("web/src/App.tsx"), "utf-8");
 const markdownSource = readFileSync(resolve("web/src/markdown.tsx"), "utf-8");
 const cssSource = readFileSync(resolve("web/src/help.css"), "utf-8");
+const lubanSource = readFileSync(resolve("web/src/LubanTokenCard.tsx"), "utf-8");
+const settingsSource = readFileSync(resolve("web/src/SettingsView.tsx"), "utf-8");
 
 test("使用帮助覆盖所有主功能，文章 id 和截图地址不会互相打架", () => {
   const ids = [...source.matchAll(/^\s{4}id: "([a-z-]+)",$/gm)]
@@ -36,6 +38,44 @@ test("帮助文章能搜动作和提示，不要求用户记住内部功能名",
   }
   assert.match(source, /article\.title, article\.summary, article\.group, article\.body/);
   assert.match(source, /article\.steps\.flatMap/);
+});
+
+test("个人设置的小鲁班卡直接说明 /mfc 激活前置条件", () => {
+  assert.match(lubanSource, /手机回复/);
+  assert.match(lubanSource, /<code>\/mfc<\/code> 激活 Mae-Flow 插件/);
+});
+
+test("服务设置总览汇总真实配置，并可进入四类完整管理表单", () => {
+  for (const label of ["模型与图片识别", "真实部署自检", "团队统一约定", "现场与构建缓存"]) {
+    assert.match(settingsSource, new RegExp(label));
+  }
+  for (const target of ["settings-models", "settings-check", "settings-policy", "settings-runtime"]) {
+    assert.match(settingsSource, new RegExp(`go\\(\"${target}\"\\)`));
+  }
+  assert.match(settingsSource, /checkError \? "检查失败"/);
+  assert.match(settingsSource,
+    /<SystemCheckCard onResult=\{\(result, nextError = ""\) => \{/);
+  assert.match(settingsSource, /密钥不会在总览或表单中回显/);
+});
+
+test("问题 FAQ 使用当前登记入口和真实口令边界", () => {
+  assert.match(source, /手工登记（无单）/);
+  assert.match(source, /团队资产 → 业务模块/);
+  assert.match(source, /DTS 列表（已有单）/);
+  assert.match(source, /页面账号默认 admin/);
+  assert.match(source, /AI 上下文/);
+  assert.match(source, /不会出现在会话列表、状态摘要或事件流中/);
+  assert.match(source, /个人复用或生产口令/);
+  assert.doesNotMatch(source, /有 DTS 单号时一并提供/);
+  assert.doesNotMatch(source, /密码不会出现在聊天内容里/);
+});
+
+test("批注 FAQ 说明管理员代办的当前复检边界、二次确认和审计", () => {
+  assert.match(source, /当前工作区复检/);
+  assert.match(source, /本轮仍待闭环的他人已提交意见/);
+  assert.match(source, /草稿、历史意见、已闭环意见和管理员自己的意见都不会显示入口/);
+  assert.match(source, /第一次点击只进入确认，第二次点击才执行/);
+  assert.match(source, /实际执行的管理员和原批注作者/);
 });
 
 test("角色保护覆盖目录、直链、快捷卡和相关推荐", () => {

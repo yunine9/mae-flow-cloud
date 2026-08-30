@@ -2344,6 +2344,8 @@ export interface Annotation {
     responded_at: string;
   };
   verified_at?: string;
+  /** 非作者代确认时的实际操作者；缺席表示由意见作者本人确认。 */
+  verified_by?: string;
   /** 第几次返工(0/缺省 = 首轮)。 */
   rework?: number;
 }
@@ -2504,7 +2506,7 @@ export async function retryBuildFix(taskId: string): Promise<void> {
 }
 
 /** 停止在途的 Build-Fix 并直推流水线(用户拍板的合并语义):中止本轮、
- * 如实收口停机账,随即绑当下 HEAD 跳过,编译与 UT 交由权威流水线裁决。
+ * 如实收口停机账,随即绑当下 HEAD 跳过,编译与单元测试交由权威流水线裁决。
  * 停止瞬间恰好通过的按通过继续;暂停中的任务只停不推。 */
 export async function stopBuildFix(taskId: string): Promise<void> {
   const response = await fetch(
@@ -2844,12 +2846,21 @@ export async function readArtifact(
 export async function readPushReviewDiff(
   taskId: string,
   scope: "changes" | "full",
-): Promise<{ content?: string; branch?: string; unavailable?: string }> {
+): Promise<{
+  content?: string;
+  branch?: string;
+  unavailable?: string;
+  /** HTTP 状态只在不可用时返回，供工作台区分“版本已失效”和暂时故障。 */
+  status?: number;
+}> {
   const response = await fetch(
     `/tasks/${encodeURIComponent(taskId)}/push-review-diff?scope=${scope}`);
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    return { unavailable: String(body.error ?? `HTTP ${response.status}`) };
+    return {
+      unavailable: String(body.error ?? `HTTP ${response.status}`),
+      status: response.status,
+    };
   }
   const body = await response.json();
   return {
@@ -2940,7 +2951,7 @@ const FIXED_STAGE_TEXT: Record<FixedIssueStage, string> = {
   prep_repo: "拉取代码仓",
   analyze: "问题分析",
   fix: "问题修改",
-  ut: "UT 验证",
+  ut: "单元测试验证",
   mr_green: "提交 MR·跑绿",
   deploy_verify: "换库环境验证",
   conclude: "确定结论",

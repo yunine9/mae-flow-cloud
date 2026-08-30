@@ -10,6 +10,7 @@ const businessSource = readFileSync(
   resolve("web/src/BusinessModuleLibrary.tsx"), "utf-8");
 const pickerSource = readFileSync(
   resolve("web/src/RepositoryTechnologyPicker.tsx"), "utf-8");
+const apiSource = readFileSync(resolve("web/src/api.ts"), "utf-8");
 
 test("自动匹配知识必须展示逐项清单和匹配依据，不能退回只显示数量", () => {
   const start = source.indexOf(
@@ -25,6 +26,44 @@ test("自动匹配知识必须展示逐项清单和匹配依据，不能退回�
   assert.match(source, /查看全文/);
   assert.doesNotMatch(section, /type="checkbox"/,
     "知识名单只用于核对，不能偷偷恢复手工勾选");
+});
+
+test("发起页只展示 Mae-Flow 平台管理的三类知识，不把仓库内容列成知识条目", () => {
+  assert.match(source, /平台管理的本任务知识/);
+  assert.match(source,
+    /仅展示业务知识、工程知识与平台团队 Skill/);
+  assert.match(source, /<header><strong>业务知识<\/strong>/);
+  assert.match(source, /<header><strong>工程知识<\/strong>/);
+  assert.match(source, /<header><strong>平台团队 Skill<\/strong>/);
+
+  assert.match(source,
+    /className="business-module-picker-note launch-knowledge-boundary-note"/);
+  assert.match(source,
+    /下单页只展示 Mae-Flow 平台管理的业务知识、工程知识和 Skill/);
+  assert.match(source,
+    /AGENTS\.md[\s\S]*仓内文档、项目规则[\s\S]*Agent 运行时自行读取[\s\S]*不在下单界面列出或包装成“本任务知识”/);
+  assert.equal(source.match(/AGENTS\.md/g)?.length, 1,
+    "AGENTS.md 只能出现在低强调边界说明中，不能成为清单项或独立卡片");
+  assert.doesNotMatch(source, /仓库原生能力/);
+  assert.doesNotMatch(source, /className="launch-git-context"/);
+  assert.doesNotMatch(source, /RepositorySkillPicker/);
+
+  const contractStart = apiSource.indexOf(
+    "export interface LaunchKnowledgePreview {");
+  const contractEnd = apiSource.indexOf("\n}\n\nexport async function", contractStart);
+  assert.ok(contractStart >= 0 && contractEnd > contractStart,
+    "找不到发起页知识预览契约");
+  const contract = apiSource.slice(contractStart, contractEnd);
+  assert.match(contract, /business_knowledge:/);
+  assert.match(contract, /engineering_knowledge:/);
+  assert.match(contract, /team_skills:/);
+  assert.doesNotMatch(contract, /repository_skills|platform_capabilit/,
+    "仓库原生 Skill 与运行时平台能力不能混入可见知识清单");
+
+  assert.match(source, /repos: repos\.map/,
+    "仓库仍须保留为平台知识的匹配条件");
+  assert.match(source, /repositoryProfiles:/,
+    "语言技术画像仍须保留为平台工程知识的匹配条件");
 });
 
 test("知识多时清单内部滚动，不把发起页无限撑长", () => {

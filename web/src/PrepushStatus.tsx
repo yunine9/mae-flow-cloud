@@ -22,7 +22,7 @@ interface PrepushView {
   generic?: boolean;
 }
 
-function viewOf(state: string): PrepushView {
+export function prepushViewOf(state: string): PrepushView {
   switch (state) {
     case "queued":
       return {
@@ -64,7 +64,7 @@ function viewOf(state: string): PrepushView {
       return {
         phase: "repairing",
         label: "自动修复",
-        detail: "专项 Agent 正在修复验证失败，修复后会重新编译并运行 UT。",
+        detail: "专项 Agent 正在修复验证失败，修复后会重新编译并运行单元测试。",
         tone: "repair",
         busy: true,
       };
@@ -72,7 +72,7 @@ function viewOf(state: string): PrepushView {
       return {
         phase: "environment",
         label: "编译未通过",
-        detail: "编译或 UT 尚未修复完成，本次推送已停止。",
+        detail: "编译或单元测试尚未修复完成，本次推送已停止。",
         tone: "danger",
       };
     case "environment_error":
@@ -86,14 +86,14 @@ function viewOf(state: string): PrepushView {
       return {
         phase: "passed",
         label: "通过",
-        detail: "编译与 UT 已通过，Cloud 可以推送这个 SHA。",
+        detail: "编译与单元测试已通过，Cloud 可以推送这个 SHA。",
         tone: "success",
       };
     case "user_skipped":
       return {
         phase: "environment",
         label: "已跳过·流水线裁决",
-        detail: "用户选择跳过本地验证；编译与 UT 由权威流水线裁决。",
+        detail: "用户选择跳过本地验证；编译与单元测试由权威流水线裁决。",
         tone: "neutral",
       };
     default:
@@ -169,7 +169,7 @@ export function PrepushBadge({
   const runtime = task.delivery?.prepush_runtime;
   const skippable = canOperate
     && ["blocked", "environment_error"].includes(prepush.state);
-  const view = withRuntime(viewOf(prepush.state), runtime);
+  const view = withRuntime(prepushViewOf(prepush.state), runtime);
   const badgeDetail = runtimeOwnsCopy(prepush.state, runtime)
     ? (runtime?.message ?? view.detail) : (prepush.message?.trim() || view.detail);
   const perform = (kind: "stop" | "skip" | "retry",
@@ -229,7 +229,7 @@ export function PrepushBadge({
                   </div>
                 ) : confirming === "skip" ? (
                   <div className="prepush-actions-confirm">
-                    <span>跳过本地编译直接推送,编译与 UT 交由权威流水线
+                    <span>跳过本地编译直接推送,编译与单元测试交由权威流水线
                       裁决。跳过只绑当前 HEAD,新提交后自动失效。</span>
                     <button type="button" className="prepush-action-btn is-warn"
                       disabled={busy === "skip"}
@@ -286,7 +286,7 @@ export function PrepushStatus({
   placement?: "card" | "workspace";
 }) {
   if (!prepush) return null;
-  const view = withRuntime(viewOf(prepush.state), runtime);
+  const view = withRuntime(prepushViewOf(prepush.state), runtime);
   const title = view.generic ? view.label : `Build-Fix · ${view.label}`;
   const detail = runtimeOwnsCopy(prepush.state, runtime)
     ? (runtime?.message ?? view.detail) : (prepush.message?.trim() || view.detail);

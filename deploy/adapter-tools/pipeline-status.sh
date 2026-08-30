@@ -462,6 +462,16 @@ if not pipelines:
 
 log_err(f'找到 {len(pipelines)} 条流水线')
 
+# API 先用 sort=desc 取得本 SHA 最新一页；若改成 asc，重跑超过
+# per_page 后拿到的只会是最老几条。对外契约仍固定为旧→新，宿主只认
+# runs.at(-1)，因此再按流水线 id 本地升序归一。极老接口若不回 id，
+# 则保留 API 的 desc 顺序交给适配层 fail-closed，不拿 status 猜新旧。
+try:
+    if all(pipeline.get('id') is not None for pipeline in pipelines):
+        pipelines = sorted(pipelines, key=lambda pipeline: int(pipeline['id']))
+except (TypeError, ValueError):
+    log_err('流水线 id 不是可排序整数，沿用 API sort=desc 返回顺序')
+
 for pipeline in pipelines:
     entry = {
         'status': pipeline.get('status', ''),

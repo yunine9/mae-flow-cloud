@@ -128,6 +128,32 @@ test("同(单号,归属人)在途重复下单直接拒绝并指路;终态旧单�
   }).id);
 });
 
+test("多仓撞单门禁按完整 repositories 集合求交,不只比较首仓", () => {
+  const service = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-lf-multi-dup-")),
+    provider: "a", model: "a-1", maxConcurrent: 0,
+    modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
+    host: { kernelRoot: "/tmp" },
+  });
+  const api = "https://codehub/team/api.git";
+  const web = "https://codehub/team/web.git";
+  const admin = "https://codehub/team/admin.git";
+  const docs = "https://codehub/team/docs.git";
+  const first = service.create("跨仓需求", {
+    ticket: "REQ-MULTI-DUP", account: "alice", repos: [api, web],
+  });
+  assert.equal(first.repo_url, api, "兼容字段仍是首仓，回归必须覆盖第二仓相交");
+  assert.throws(() => service.create("第二仓相撞", {
+    ticket: "REQ-MULTI-DUP", account: "alice", repos: [admin, web],
+  }), (error: unknown) => error instanceof Error
+    && error.message.includes(first.id)
+    && error.message.includes("同名分支"),
+  "旧任务第二仓与新任务第二仓相交也必须拒绝");
+  assert.ok(service.create("仓集合完全不相交", {
+    ticket: "REQ-MULTI-DUP", account: "alice", repos: [admin, docs],
+  }).id, "完整集合无交集时不应误伤同单号的独立仓交付");
+});
+
 test("团队 Skill 进入统一下单目录；普通任务自动固定全部适用版本", () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-lf-team-skill-"));
   for (const [name, marker, language] of [

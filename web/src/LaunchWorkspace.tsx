@@ -101,6 +101,17 @@ const KNOWLEDGE_FORM_LABEL = {
   example: "示例",
 } as const;
 
+/** 站内打开只接管普通点击；Cmd/Ctrl/Shift/Alt 点击保留浏览器原生的
+ * 新标签页、新窗口等行为，知识链接因此既能直达也能按用户习惯打开。 */
+export function isPlainKnowledgeActivation(event: {
+  metaKey: boolean;
+  ctrlKey: boolean;
+  shiftKey: boolean;
+  altKey: boolean;
+}): boolean {
+  return !(event.metaKey || event.ctrlKey || event.shiftKey || event.altKey);
+}
+
 function LaunchKnowledgeRow({ form, title, summary, whenToUse, scope, version,
   href, onOpen }: {
   form: keyof typeof KNOWLEDGE_FORM_LABEL;
@@ -116,7 +127,7 @@ function LaunchKnowledgeRow({ form, title, summary, whenToUse, scope, version,
     aria-label={`查看全文：${title}${version ? `，${version}` : ""}，命中依据：${scope}`}
     title={`到团队资产查看全文：${title}`}
     onClick={(event) => {
-      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      if (!isPlainKnowledgeActivation(event)) return;
       event.preventDefault();
       onOpen();
     }}>
@@ -736,11 +747,6 @@ export function LaunchWorkspace({
                           <option key={repo} value={repo} />
                         ))}
                       </datalist>
-                      <div className="launch-git-context">
-                        <svg viewBox="0 0 20 20" aria-hidden><path d="M6 4.5v7a3 3 0 0 0 3 3h5M6 4.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Zm11 10a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Z" /></svg>
-                        <span><strong>代码仓内容由 Git 管理</strong>
-                          <small>Agent 会自行读取代码、AGENTS.md、文档和仓库原生能力；MFC 不导入、不发布。</small></span>
-                      </div>
                     </div>
                   )}
                   {(options.ticket.enabled || options.baseline.enabled) && (
@@ -815,7 +821,7 @@ export function LaunchWorkspace({
                     {moduleSelectionNotice && <p className="business-module-picker-notice"
                       role="status">{moduleSelectionNotice}</p>}
                     <p className="business-module-picker-note">
-                      仓库匹配项会默认勾选；你手动调整后系统不再改动。只带出模块抽屉中的平台知识，不读取仓库内容。
+                      仓库匹配项会默认勾选；你手动调整后系统不再改动。这里只带出 Mae-Flow 平台管理的业务知识。
                     </p>
                   </details>}
                 </section>
@@ -849,15 +855,18 @@ export function LaunchWorkspace({
               {options && <section className={`launch-knowledge-quick${
                 knowledgePreview?.degraded ? " degraded" : ""}${
                 knowledgePreview && !knowledgePreview.complete ? " blocked" : ""}`}
-                aria-label="自动匹配的本任务知识">
+                aria-label="自动匹配的平台知识清单">
                 <header>
-                  <div><span>自动匹配</span><strong>本任务知识</strong>
-                    <small>按业务模块、代码仓、语言和工作流匹配；无需手工勾选</small></div>
+                  <div><span>自动匹配</span><strong>平台管理的本任务知识</strong>
+                    <small>按业务模块、代码仓、语言和工作流匹配平台知识；无需手工勾选</small></div>
                   <em>{knowledgePreviewLoading || !previewSettled
                     ? "核对中…"
                     : knowledgePreviewError ? "暂不可用"
                       : `${selectedKnowledgeCount} 项`}</em>
                 </header>
+                <p className="business-module-picker-note launch-knowledge-boundary-note">
+                  下单页只展示 Mae-Flow 平台管理的业务知识、工程知识和 Skill；仓库里的 <code>AGENTS.md</code>、仓内文档、项目规则等仍由 Agent 运行时自行读取，但不在下单界面列出或包装成“本任务知识”。
+                </p>
                 {knowledgePreviewLoading || !previewSettled ? (
                   <div className="launch-knowledge-quick-loading">正在核对知识名称、版本与作用域…</div>
                 ) : knowledgePreviewError ? (
@@ -883,6 +892,7 @@ export function LaunchWorkspace({
                             moduleId: item.module_id, assetId: item.id,
                             version: item.version, digest: item.digest })}
                           onClick={(event) => {
+                            if (!isPlainKnowledgeActivation(event)) return;
                             event.preventDefault(); persistDraft();
                             onOpenKnowledgeAsset({ kind: "business",
                               moduleId: item.module_id, assetId: item.id,
@@ -897,6 +907,7 @@ export function LaunchWorkspace({
                           href={knowledgeAssetPath({ kind: "engineering",
                             candidateId: item.id, digest: item.digest })}
                           onClick={(event) => {
+                            if (!isPlainKnowledgeActivation(event)) return;
                             event.preventDefault(); persistDraft();
                             onOpenKnowledgeAsset({ kind: "engineering",
                               candidateId: item.id, digest: item.digest });
@@ -912,20 +923,21 @@ export function LaunchWorkspace({
                             digest: item.digest,
                             packageDigest: item.package_digest })}
                           onClick={(event) => {
+                            if (!isPlainKnowledgeActivation(event)) return;
                             event.preventDefault(); persistDraft();
                             onOpenKnowledgeAsset({ kind: "skill",
                               directory: item.path.split("/")[0] || item.path,
                               digest: item.digest,
                               packageDigest: item.package_digest });
                           }}>
-                          <b>Skill</b><span><strong>{item.name}</strong>
+                          <b>平台 Skill</b><span><strong>{item.name}</strong>
                             <small>{describeMatchedScope(item)}</small></span>
                         </a>
                       ))}
                     </div>
                   ) : (
                     <div className="launch-knowledge-quick-empty">
-                      当前没有匹配到平台知识；不影响发起。代码仓内容不纳入平台知识清单。
+                      当前没有匹配到 Mae-Flow 平台管理的知识；不影响发起。
                     </div>
                   )}
                 </>}
@@ -938,7 +950,7 @@ export function LaunchWorkspace({
                     <svg viewBox="0 0 20 20"><path d="M4 5h12M7 10h9M4 15h12M7 3v4M13 8v4M9 13v4" /></svg>
                   </span>
                   <span className="launch-advanced-copy"><strong>按需配置</strong>
-                    <small>工作流、技术画像和知识清单；代码仓内容不在这里管理</small></span>
+                    <small>工作流、技术画像和 Mae-Flow 平台知识清单</small></span>
                   <span className="launch-advanced-summary">
                     <b>{workflowSelection ? "定制工作流" : "标准工作流"}</b>
                     {knowledgePreviewLoading || !previewSettled
@@ -1001,8 +1013,8 @@ export function LaunchWorkspace({
                   </section>}
               {options && <section className="launch-form-section launch-task-resources">
                 <div className="launch-section-head"><i>知</i><div>
-                  <strong>本任务知识</strong>
-                  <small>服务端自动匹配；逐项可进入团队资产查看全文</small>
+                  <strong>平台管理的本任务知识</strong>
+                  <small>仅展示业务知识、工程知识与平台团队 Skill；逐项可进入团队资产查看全文</small>
                 </div><em>{knowledgePreviewLoading || !previewSettled
                   ? "核对中" : knowledgePreview?.complete
                     ? knowledgePreview.degraded ? "部分降级" : "权威预览"
@@ -1011,14 +1023,14 @@ export function LaunchWorkspace({
                   <span><strong>{selectedModuleKnowledgeCount}</strong>
                     <small>模块知识</small></span>
                   <span><strong>{matchedTeamKnowledgeCount}</strong>
-                    <small>团队资产</small></span>
+                    <small>平台团队资产</small></span>
                   <p>{previewBusinessModuleIds.length
                     ? `来自 ${previewBusinessModuleIds.map((id) =>
                         businessModules.find((item) => item.id === id)?.name)
                       .filter(Boolean).join("、")} 等已关联抽屉${
                         knowledgePreview?.scope.workflow_business_module_ids.length
                           ? "（含工作流带入）" : ""}`
-                    : "尚未关联业务模块；仍会使用匹配的团队知识和 Skill"}</p>
+                    : "尚未关联业务模块；仍会使用匹配的工程知识和平台团队 Skill"}</p>
                 </div>
                 {(knowledgePreviewError || knowledgeNotices.length > 0)
                   && <div className={`launch-knowledge-notices${
@@ -1034,7 +1046,7 @@ export function LaunchWorkspace({
                       key={`${notice.source}/${notice.code}/${index}`}>
                       {notice.message}</span>)}
                   </div>}
-                <div className="launch-knowledge-list" aria-label="自动匹配的知识清单">
+                <div className="launch-knowledge-list" aria-label="自动匹配的平台知识清单">
                   <div className="launch-knowledge-list-head">
                     <strong>发起前固定清单</strong>
                     <span>{knowledgePreviewLoading || !previewSettled
@@ -1045,7 +1057,7 @@ export function LaunchWorkspace({
                   {!knowledgePreviewLoading && previewSettled
                     && matchingModuleKnowledge.length > 0 && <section
                     className="launch-knowledge-group">
-                    <header><strong>业务模块知识</strong>
+                    <header><strong>业务知识</strong>
                       <em>{matchingModuleKnowledge.length} 项</em></header>
                     {matchingModuleKnowledge.map((item) =>
                       <LaunchKnowledgeRow key={`${item.module_id}/${item.id}`}
@@ -1085,7 +1097,7 @@ export function LaunchWorkspace({
                   {!knowledgePreviewLoading && previewSettled
                     && matchingTeamSkills.length > 0 && <section
                     className="launch-knowledge-group">
-                    <header><strong>团队 Skill</strong>
+                    <header><strong>平台团队 Skill</strong>
                       <em>{matchingTeamSkills.length} 项</em></header>
                     {matchingTeamSkills.map((item) =>
                       <LaunchKnowledgeRow key={item.path} form="skill"
@@ -1108,14 +1120,14 @@ export function LaunchWorkspace({
                   {!knowledgePreviewLoading && previewSettled
                     && !knowledgePreviewError && selectedKnowledgeCount === 0 && <div
                     className="launch-knowledge-empty">
-                    没有匹配到平台知识；不影响发起。代码仓内容不在这里管理。
+                    没有匹配到 Mae-Flow 平台管理的知识；不影响发起。
                   </div>}
                 </div>
                 <div className="launch-resource-boundary">
                   <strong>{knowledgePreviewLoading || !previewSettled
                     ? "正在核对最终名单"
                     : selectedKnowledgeCount
-                      ? `将固定 ${selectedKnowledgeCount} 项` : "将固定 0 项平台知识"}</strong>
+                      ? `将固定 ${selectedKnowledgeCount} 项平台知识` : "将固定 0 项平台知识"}</strong>
                   <span>{knowledgePreview?.complete
                     ? knowledgePreview.degraded
                       ? "可选目录的降级原因已明确列出；创建时仍按本清单指纹核对，目录变化会要求刷新。"

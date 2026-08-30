@@ -2225,15 +2225,17 @@ export function createTaskServer(
                 String(body.note ?? ""), author));
           }
           // 只能删自己写的:多人环境里替别人删等于替他改主意。
-          // 管理员例外(override):作者不在场时一条未闭环批注会把整单
-          // 推送锁死,代删/代确认凭台账 op.by 留痕(2026-08-30 审计)。
+          // 管理员角色只提出 override 请求；服务层仍会原子复核当前状态
+          // 必须是 workspace review 的 cloud_push_confirm、当前 ID、sent
+          // 且未闭环，不能把这个布尔值当成全局代签通行证。
           if (request.method === "DELETE" && parts.length === 4) {
             return json(response, 200,
               service.dropAnnotation(id, decodeURIComponent(parts[3]), author,
                 viewer?.role === "admin"));
           }
           // 检视闭环的裁决:确认通过 / 返工。作者校验在台账层——
-          // 谁的意见谁裁决,替别人点"通过"等于替他签字。
+          // 谁的意见谁裁决,替别人点"通过"等于替他签字；管理员的窄代办
+          // 同样由服务层按当前复检事实校验，并在台账记录 verified_by。
           if (request.method === "POST" && parts.length === 5
               && parts[4] === "verify") {
             return json(response, 200,

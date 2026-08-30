@@ -467,9 +467,18 @@ def strategy_pipeline_detail(data: PipelineData, ctx: Context) -> None:
         f'{CODEHUB_API}/projects/{encoded_repo}/pipelines'
         f'?sha={urllib.parse.quote(data.sha, safe="")}'
         f'&per_page=5&order_by=id&sort=desc') or []
-    chosen = next((p for p in pipelines if p.get('status') == 'failed'),
-                  None) or next(
-        (p for p in pipelines if p.get('status') == 'success'), None)
+    # REST 明确请求 id 倒序，第一条就是最新 run；若网关忽略 sort，
+    # 有完整数字 id 时再取最大值归一。绝不能跨过最新 running 去挑历史
+    # failed/success，否则 artifacts 会把旧失败现场冒充成当前流水线。
+    chosen = None
+    if pipelines:
+        chosen = pipelines[0]
+        try:
+            if all(pipeline.get('id') is not None for pipeline in pipelines):
+                chosen = max(pipelines,
+                             key=lambda pipeline: int(pipeline['id']))
+        except (TypeError, ValueError):
+            ctx.log('流水线 id 不是可排序整数，沿用 REST sort=desc 首条')
     if not chosen:
         raise RuntimeError('MCP 与 REST 都没拿到本 SHA 的流水线')
     data.pipeline_id = chosen.get('id')

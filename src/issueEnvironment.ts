@@ -1,10 +1,11 @@
 /**
  * 环境凭据保险箱:需求/问题两个会话域共享的加密存储。
  *
- * 只做一件事:把 SSH 凭据放进宿主专用加密文件,任务/模型/API 只看
- * 引用。消费方是问题流 v2(src/issueFlow/,playbook 的 fetch-logs/
- * build-deploy 二进制由宿主工具以环境变量喂密码);旧 DTS triage 流
- * 的适配器接口已随该流程一并下线。
+ * 只做一件事:把 SSH 凭据放进宿主专用加密文件,公开的任务状态/API/
+ * 事件只看引用。消费方是问题流 v2(src/issueFlow/,playbook 的
+ * fetch-logs/build-deploy 二进制由宿主工具以环境变量喂密码);该域还会
+ * 按 ADR-0003 明确解密到当前问题的 AI 上下文。旧 DTS triage 流的
+ * 适配器接口已随该流程一并下线。
  */
 
 import {
@@ -109,7 +110,8 @@ function normalize(
   const rows: StoredIssueEnvironment[] = inputs.map((input, index) => {
     const purpose = input.purpose;
     // page = 网管页面凭据组(问题流 v2 登记四件套):单账号走旧形状
-    // (username/password,不经三账号校验),纯记录、无 SSH 消费方。
+    // (username/password,不经三账号校验)。它没有 SSH 消费方；问题流
+    // 会在服务层按 ADR-0003 解密到当前问题的 AI 上下文。
     if (!(["logs", "deploy", "both", "page"] as const).includes(purpose)) {
       throw new Error(`第 ${index + 1} 组环境用途不合法`);
     }
@@ -189,8 +191,10 @@ function publicRef(item: StoredIssueEnvironment): IssueEnvironmentRef {
 
 /**
  * 这不是外部密钥管理系统的替代品；它解决的是更现实的第一道边界：
- * 密码不能明文混进 task.json、事件、API 或 Agent 上下文。key 与密文
- * 均为宿主 0600，未来接 Vault/KMS 时只需替换本类。
+ * 密码不能明文混进 task.json、事件或公开 API。问题流会按 ADR-0003
+ * 在消费时把网管口令解密到当前问题的 AI 上下文；那是显式消费契约，
+ * 不改变这里“落盘只存密文、列表/状态/事件只给引用”的边界。key 与
+ * 密文均为宿主 0600，未来接 Vault/KMS 时只需替换本类。
  */
 export class IssueEnvironmentVault {
   private readonly root: string;

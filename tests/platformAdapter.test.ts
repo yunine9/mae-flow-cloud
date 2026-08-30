@@ -43,10 +43,10 @@ function fakeCli(dir: string): string {
       ], argv: args } }));
     } else if (sub === "status") {
       console.log(JSON.stringify({ data: { runs: [
-        { state: "RUNNING", jobs: [
+        { id: 101, state: "RUNNING", jobs: [
           { quality: "COMPILE", state: "RUNNING", name: "compile" },
         ] },
-        { state: "FAILED", fail_log: "BUILD FAILURE: 覆盖率 61%", jobs: [
+        { id: 102, state: "FAILED", fail_log: "BUILD FAILURE: 覆盖率 61%", jobs: [
           { quality: "COMPILE", state: "SUCCESS", name: "compile" },
           { quality: "UT", state: "FAILED", name: "unit-test" },
           { quality: "CODECHECK", state: "SKIPPED", name: "codecheck" },
@@ -113,6 +113,7 @@ function makeAdapter(dir: string, cli: string): PlatformAdapter {
       command: ["node", cli, "status", "--sha", "{sha}", "--token", "{token}"],
       runs: { json: "data.runs" },
       status: { json: "state" },
+      pipeline_id: { json: "id" },
       log: { json: "fail_log" },
       checks: { json: "jobs" },
       check_dimension: { json: "quality" },
@@ -269,7 +270,8 @@ test("报告后新口子:平铺布尔门禁、先查后建、两步回复/解决
       },
       discussion_reply: {
         command: ["node", cli, "note", "--id", "{id}",
-          "--body", "{body}", "--token", "{token}"],
+          "--body", "{body}", "--idempotency-key", "{idempotency_key}",
+          "--token", "{token}"],
         note_id: { json: "result.id" },
       },
       discussion_resolve: {
@@ -313,15 +315,59 @@ test("报告后新口子:平铺布尔门禁、先查后建、两步回复/解决
 
   // 回复默认一步:resolve 未带/false 时只跑 reply 命令
   await adapter.handle("POST", "/mr/discussions/d-1/reply",
-    new URLSearchParams(), { repo: "r", body: "回复正文" }, {});
+    new URLSearchParams(), {
+      repo: "r", body: "回复正文", idempotency_key: "body-idem-1",
+    }, {});
   assert.ok(lastArgv().includes("note"), "只回复时最后一跳是 reply 命令");
+  assert.ok(lastArgv().includes("body-idem-1"),
+    "请求体 idempotency_key 必须进入真实 CLI 模板");
+
+  // HTTP 头优先于 body（真实宿主两处都会带）：大小写不敏感读取，
+  // 避免 Node 归一成小写后模板拿不到稳定动作键。
+  await adapter.handle("POST", "/mr/discussions/d-1/reply",
+    new URLSearchParams(), {
+      repo: "r", body: "回复正文", idempotency_key: "body-fallback",
+    }, { "Idempotency-Key": "header-idem-2" });
+  assert.ok(lastArgv().includes("header-idem-2"));
+  assert.ok(!lastArgv().includes("body-fallback"));
 
   // resolve:true → 第二跳执行,note id 从 reply 输出抽出来传进去
   const two = await adapter.handle("POST", "/mr/discussions/d-1/reply",
-    new URLSearchParams(), { repo: "r", body: "回复正文", resolve: true }, {});
+    new URLSearchParams(), {
+      repo: "r", body: "回复正文", resolve: true,
+      idempotency_key: "body-idem-3",
+    }, {});
   assert.equal((two.payload as any).resolved, true);
   assert.ok(lastArgv().includes("resolvecmd"));
   assert.ok(lastArgv().includes("555"), "note id 没接力到 resolve 命令");
+
+  // 旧真实模板吞掉稳定动作键时必须 fail-closed；否则远端成功而本地
+  // 未落 delivered 的重放会重复发言。无 idempotency_key 的旧调用仍
+  // 保持兼容，收到了宿主 outbox 键才启用硬闸。
+  const legacyPath = join(dir, "adapter-legacy-reply.json");
+  writeFileSync(legacyPath, JSON.stringify({
+    token: "svc-token-0000",
+    mr_create: { command: ["node", cli, "mr"],
+      url: { json: "data.web_url" } },
+    pipeline_trigger: { command: ["node", cli, "trigger"],
+      status: { const: "running" } },
+    pipeline_status: { command: ["node", cli, "status"],
+      runs: { json: "data.runs" }, status: { json: "state" },
+      status_map: { RUNNING: "running", FAILED: "failed" } },
+    discussion_reply: {
+      command: ["node", cli, "note", "--id", "{id}",
+        "--body", "{body}", "--token", "{token}"],
+    },
+  }));
+  const legacy = new PlatformAdapter(legacyPath, () => {});
+  await assert.rejects(() => legacy.handle(
+    "POST", "/mr/discussions/d-legacy/reply", new URLSearchParams(),
+    { repo: "r", body: "回复正文", idempotency_key: "stable-action-key" },
+    {}), /模板未引用 \{idempotency_key\}.*拒绝非幂等投递/s);
+  const compatible = await legacy.handle(
+    "POST", "/mr/discussions/d-legacy/reply", new URLSearchParams(),
+    { repo: "r", body: "旧调用无幂等键" }, {});
+  assert.equal(compatible.status, 200, "无动作键的旧调用保持兼容");
 });
 
 test("配置坏了拒绝启动;引用 {token} 但两头都没有=502", async () => {
@@ -460,4 +506,60 @@ test("模板模式的 run 级回显:run_sha/is_valid/pipeline_id 逐字段抽取
   assert.equal(run.sha, "d".repeat(40));
   assert.equal(run.pipeline_id, "91");
   assert.equal(run.is_valid, false);
+});
+
+test("pipeline_status 兼容旧 desc 配置并对无顺序键的多 run fail-closed", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-adapter-"));
+  const cli = fakeCli(dir);
+  const desc = join(dir, "desc.mjs");
+  writeFileSync(desc, `
+    console.log(JSON.stringify([
+      { state: "RUNNING", id: 93 },
+      { state: "FAILED", id: 92 },
+      { state: "SUCCESS", id: 91 }
+    ]));
+  `);
+  const orderedPath = join(dir, "ordered.json");
+  writeFileSync(orderedPath, JSON.stringify({
+    token: "svc-token-0000",
+    mr_create: { command: ["node", cli, "mr"],
+      url: { json: "data.web_url" } },
+    pipeline_trigger: { command: ["node", cli, "trigger"],
+      status: { const: "running" } },
+    pipeline_status: {
+      command: ["node", desc],
+      status: { json: "state" },
+      pipeline_id: { json: "id" },
+      status_map: { SUCCESS: "success", FAILED: "failed",
+                    RUNNING: "running" },
+    },
+  }));
+  const ordered = new PlatformAdapter(orderedPath, () => {});
+  const result = await ordered.handle("GET", "/pipeline/status",
+    new URLSearchParams({ sha: "x", repo: "r" }), {}, {});
+  assert.deepEqual((result.payload as any).runs.map((run: any) =>
+    run.pipeline_id), ["91", "92", "93"]);
+  assert.equal((result.payload as any).runs.at(-1).status, "running");
+
+  const ambiguous = join(dir, "ambiguous.mjs");
+  writeFileSync(ambiguous, `console.log(JSON.stringify([
+    { state: "SUCCESS" }, { state: "RUNNING" }
+  ]));`);
+  const ambiguousPath = join(dir, "ambiguous.json");
+  writeFileSync(ambiguousPath, JSON.stringify({
+    token: "svc-token-0000",
+    mr_create: { command: ["node", cli, "mr"],
+      url: { json: "data.web_url" } },
+    pipeline_trigger: { command: ["node", cli, "trigger"],
+      status: { const: "running" } },
+    pipeline_status: {
+      command: ["node", ambiguous],
+      status: { json: "state" },
+      status_map: { SUCCESS: "success", RUNNING: "running" },
+    },
+  }));
+  const unsafe = new PlatformAdapter(ambiguousPath, () => {});
+  await assert.rejects(() => unsafe.handle("GET", "/pipeline/status",
+    new URLSearchParams({ sha: "x", repo: "r" }), {}, {}),
+  /多条 run.*pipeline_id.*无法可靠判断最新流水线/s);
 });
