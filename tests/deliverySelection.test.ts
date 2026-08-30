@@ -73,6 +73,7 @@ async function waitingService(repo: ReturnType<typeof repository>) {
     { tool: { name: "AskUserQuestion", input: { questions: [{
       question: "这轮代码通过吗？",
       options: ["代码无需调整，继续提交", "需要调整代码（按清单返工）"],
+      recommended: "代码无需调整，继续提交",
     }] } } },
     { text: "收到清单。" },
   ]);

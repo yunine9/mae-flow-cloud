@@ -35,7 +35,8 @@ async function until<T>(
 const LIFE_A: Scene[] = [
   { tool: { name: "AskUserQuestion",
             input: { questions: [{ question: "方案确认吗?",
-                                   options: ["确认", "打回"] }] } } },
+                                   options: ["确认", "打回"],
+                                   recommended: "确认" }] } } },
   { text: "不该走到这里:决定应由重建会话消费" },
 ];
 
@@ -162,7 +163,8 @@ test("恢复重放同一提问 ID:已回答的卡直接回放,不再次等人", 
   const script: Scene[] = [
     { text: "先读取现场", tool: { name: "bash", input: { command: "echo ok" } } },
     { tool: { name: "AskUserQuestion", input: { questions: [
-      { question: "方案确认吗?", options: ["确认", "打回"] },
+      { question: "方案确认吗?", options: ["确认", "打回"],
+        recommended: "确认" },
     ] } } },
     { text: "决定已消费,正常收口。" },
   ];
@@ -211,6 +213,7 @@ test("恢复重放同一提问 ID:已失效的旧卡返回工具错误,不再次
     callId: "scripted-0",
     questionInput: { questions: [{
       question: "旧代码可以继续吗?", options: ["继续", "修改"],
+      recommended: "继续",
     }] },
   });
   gate.supersede(stale.waiting_id, {
@@ -220,6 +223,7 @@ test("恢复重放同一提问 ID:已失效的旧卡返回工具错误,不再次
   const model = new ScriptedModelServer([
     { tool: { name: "AskUserQuestion", input: { questions: [{
       question: "旧代码可以继续吗?", options: ["继续", "修改"],
+      recommended: "继续",
     }] } } },
     { text: "旧卡已失效，已重新读取现场并继续。" },
   ]);

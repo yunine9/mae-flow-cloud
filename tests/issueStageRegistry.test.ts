@@ -20,6 +20,7 @@ import {
   GATE_OPTIONS,
   STAGE_ROUTES,
   fixedStageLabel,
+  gateRecommendedCode,
   gateVerdict,
   registeredStageTools,
   stageAllowsTool,
@@ -51,6 +52,15 @@ test("阶段注册表:每个路线的每个阶段都有 label/目标/出口/工�
   assert.equal(STAGE_ROUTES.ticket.includes("conclude"), false);
   assert.deepEqual(STAGE_ROUTES.ticket, [...FIXED_TICKET_STAGES]);
   assert.deepEqual(STAGE_ROUTES.no_ticket, [...FIXED_NO_TICKET_STAGES]);
+  // 出口动作(2026-08-28 目标驱动拍板):五阶段出口=complete_stage
+  // 自报;三个举卡阶段卡工具即出口,没有 complete_stage 可绕。
+  for (const stage of ["dts_info", "prep_repo", "fix", "ut", "mr_green"] as const) {
+    assert.equal(FIXED_STAGE_SPECS[stage].exitAction, "complete_stage",
+      `${stage} 的出口动作应是 complete_stage 自报`);
+  }
+  assert.equal(FIXED_STAGE_SPECS.analyze.exitAction, "submit_analysis");
+  assert.equal(FIXED_STAGE_SPECS.conclude.exitAction, "submit_analysis");
+  assert.equal(FIXED_STAGE_SPECS.deploy_verify.exitAction, "build_deploy");
   // 标签:prep_repo 两场景叫法不同(无单不建分支),其余共用。
   assert.equal(fixedStageLabel("ticket", "prep_repo"), "拉取代码仓·建分支");
   assert.equal(fixedStageLabel("no_ticket", "prep_repo"), "拉取代码仓");
@@ -65,13 +75,16 @@ test("阶段注册表:每个路线的每个阶段都有 label/目标/出口/工�
 
 test("阶段注册表:门禁矩阵在注册表层面钉死(工读全程,出口工具各归其位)", () => {
   const allStages = [...FIXED_TICKET_STAGES, ...FIXED_NO_TICKET_STAGES];
-  // 工读类(2026-08-28 拍板):fetch_logs 全程开放,dts_get_ticket 任意阶段可重查。
+  // 工读类(2026-08-28 拍板):fetch_logs 全程开放,dts_get_ticket 任意
+  // 阶段可重查,get_issue_meta 任意阶段可查登记元信息(ADR-0003)。
   for (const scenario of ["ticket", "no_ticket"] as const) {
     for (const stage of STAGE_ROUTES[scenario]) {
       assert.equal(stageAllowsTool(scenario, stage, "fetch_logs"), true,
         `${scenario}/${stage} 的 fetch_logs 应全程开放`);
       assert.equal(stageAllowsTool(scenario, stage, "dts_get_ticket"), true,
         `${scenario}/${stage} 的 dts_get_ticket 应任意阶段可调`);
+      assert.equal(stageAllowsTool(scenario, stage, "get_issue_meta"), true,
+        `${scenario}/${stage} 的 get_issue_meta 应任意阶段可查`);
     }
   }
   // 出口/出厂工具各归其位(权威层矩阵,值与单源化前逐项一致)。
@@ -80,7 +93,10 @@ test("阶段注册表:门禁矩阵在注册表层面钉死(工读全程,出口�
   assert.deepEqual(stagesAllowingTool("ticket", "report_ut"), ["ut"]);
   assert.deepEqual(stagesAllowingTool("ticket", "create_mr"), ["mr_green"]);
   assert.deepEqual(stagesAllowingTool("ticket", "build_deploy"), ["deploy_verify"]);
-  assert.deepEqual(stagesAllowingTool("ticket", "complete_stage"), ["prep_repo", "fix"]);
+  // complete_stage 是五个自报阶段(拉单/拉仓/修改/UT/提交MR)的出口;
+  // 三个举卡阶段(分析/无单结论/换库验证)卡工具即出口,不含它。
+  assert.deepEqual(stagesAllowingTool("ticket", "complete_stage"),
+    ["dts_info", "prep_repo", "fix", "ut", "mr_green"]);
   assert.deepEqual(stagesAllowingTool("ticket", "lookup_modules"), ["prep_repo", "analyze"]);
   // 自 prep_repo 起常开:拉仓与改绑,越往后越不收回。
   const fromPrep = FIXED_TICKET_STAGES.filter((stage) => stage !== "dts_info");
@@ -116,22 +132,27 @@ test("阶段注册表:出口闸归属与裁决去向(确认推进/补充回流)"
 
 test("举卡决策码:码表钉死(码+文案对),分派纯函数只认 (kind, code)", () => {
   // 码表:每类闸的选项都有稳定码(协议)与人类文案(显示)。
-  assert.deepEqual(GATE_OPTIONS.analysis_confirm.map((option) => option.code),
+  assert.deepEqual(GATE_OPTIONS.analysis_confirm.options.map((option) => option.code),
     ["confirm", "supplement"]);
-  assert.deepEqual(GATE_OPTIONS.conclude.map((option) => option.code),
+  assert.deepEqual(GATE_OPTIONS.conclude.options.map((option) => option.code),
     ["issue", "non_issue", "supplement"]);
-  assert.deepEqual(GATE_OPTIONS.env_verify.map((option) => option.code),
+  assert.deepEqual(GATE_OPTIONS.env_verify.options.map((option) => option.code),
     ["pass", "fail"]);
-  assert.deepEqual(GATE_OPTIONS.env_needed.map((option) => option.code),
+  assert.deepEqual(GATE_OPTIONS.env_needed.options.map((option) => option.code),
     ["fill"]);
-  for (const [kind, options] of Object.entries(GATE_OPTIONS)) {
-    for (const option of options) {
+  for (const [kind, table] of Object.entries(GATE_OPTIONS)) {
+    for (const option of table.options) {
       assert.ok(option.label.length > 0, `${kind}/${option.code} 缺文案`);
       // 码是协议 token:小写词,不含文案碎片——文案怎么改都碰不到它。
       assert.match(option.code, /^[a-z_-]+$/, `${kind} 的码须是稳定 token`);
     }
-    const codes = options.map((option) => option.code);
+    const codes = table.options.map((option) => option.code);
     assert.equal(new Set(codes).size, codes.length, `${kind} 决策码不得重复`);
+    // 推荐码若在场,必是本行选项之一(悬空推荐=前端高亮不存在的项)。
+    if (table.recommended !== undefined) {
+      assert.ok(codes.includes(table.recommended),
+        `${kind} 的推荐码 ${table.recommended} 不在选项中`);
+    }
   }
 
   // 分派直测:每类闸每个码的裁决语义,与协议化之前的分支行为逐项一致。
@@ -151,6 +172,27 @@ test("举卡决策码:码表钉死(码+文案对),分派纯函数只认 (kind, c
   assert.equal(gateVerdict("env_verify", ""), "unrecognized");
   // env_needed 的作答口是配置表单:走到选项裁决即调用方违约,一律打回。
   assert.equal(gateVerdict("env_needed", "fill"), "unrecognized");
+});
+
+test("闸卡推荐(ADR-0004):码表定死分析确认,结论闸按提案派生,验证闸不硬给", () => {
+  // 宿主能定的在码表里定死:分析确认推荐放行。
+  assert.equal(gateRecommendedCode("analysis_confirm"), "confirm");
+  assert.equal(gateRecommendedCode("analysis_confirm", {
+    conclusion: "issue",
+  }), "confirm", "非结论闸不理会提案");
+  // 无单结论从 AI 提案派生:提案是问题→推荐「是问题」码,非问题同理;
+  // 提案缺席不派生——宿主不替 AI 表态。
+  assert.equal(gateRecommendedCode("conclude", { conclusion: "issue" }), "issue");
+  assert.equal(
+    gateRecommendedCode("conclude", { conclusion: "non_issue" }), "non_issue");
+  assert.equal(gateRecommendedCode("conclude"), undefined,
+    "提案缺席不派生");
+  assert.equal(gateRecommendedCode("conclude", {}), undefined,
+    "提案无结论同样不派生");
+  // 宿主定不了的不硬给:换库验证通过与否只有用户知道;
+  // 网管环境是语义表单,无选项天然无推荐。
+  assert.equal(gateRecommendedCode("env_verify"), undefined);
+  assert.equal(gateRecommendedCode("env_needed"), undefined);
 });
 
 test("生成等价性对账:同一注册表生成的简报与门禁,工具清单完全一致", () => {

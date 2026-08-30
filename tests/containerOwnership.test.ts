@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   prepareContainerHostPaths,
+  repairContainerCloneOwnership,
   repairContainerKernelOwnership,
   repairContainerMutationOwnership,
   rootContainerOwner,
@@ -171,4 +172,87 @@ test("宿主内核原子换新的状态文件会立即交还容器用户", () =>
     uid);
   assert.equal(statSync(join(workspace, "README.md")).uid, readmeBefore.uid,
     "内核收口不能顺带遍历业务源码");
+});
+
+test("克隆收口只在 Linux root 宿主激活，守卫先行零副作用", () => {
+  const workspace = mkdtempSync(join(tmpdir(), "mfc-container-owner-clone-"));
+  const repo = join(workspace, "repo", "origin");
+  // 守卫不激活时连"目录不存在"都不许报错:非 root 部署每次拉仓都路过
+  // 这里,缺 user 也一样——rootContainerOwner 对缺 user 的 fail-loud
+  // 是容器启动期契约,不能泄漏到拉仓收口。
+  for (const runtime of [
+    { platform: "linux" as const, effectiveUid: 1000 },
+    { platform: "darwin" as const, effectiveUid: 0 },
+  ]) {
+    assert.equal(repairContainerCloneOwnership({
+      workspace, dir: repo, user: "10001:10001", runtime,
+    }), false);
+  }
+  assert.equal(repairContainerCloneOwnership({
+    workspace, dir: repo, runtime: { platform: "linux", effectiveUid: 0 },
+  }), false);
+});
+
+test("克隆收口只认工作区内的仓现场，根目录与越界路径一律不碰", () => {
+  const root = mkdtempSync(join(tmpdir(), "mfc-container-owner-clone-b-"));
+  const workspace = join(root, "ws");
+  mkdirSync(join(workspace, "repo"), { recursive: true });
+  writeFileSync(join(workspace, "issue.json"), "{}\n");
+  const outside = join(root, "outside");
+  mkdirSync(join(outside, "repo"), { recursive: true });
+  writeFileSync(join(outside, "repo", "f"), "x");
+  const uid = process.getuid?.() === 0 ? 12345 : process.getuid!();
+  const gid = process.getgid?.() === 0 ? 12345 : process.getgid!();
+  const outsideBefore = statSync(join(outside, "repo", "f"));
+  const user = `${uid}:${gid}`;
+  const runtime = { platform: "linux" as const, effectiveUid: 0 };
+  assert.equal(repairContainerCloneOwnership({
+    workspace, dir: join(root, "elsewhere", "repo"), user, runtime,
+  }), false, "工作区外的同名仓现场不认");
+  assert.equal(repairContainerCloneOwnership({
+    workspace, dir: join(outside, "repo"), user, runtime,
+  }), false, "绝对路径越界同样不认");
+  assert.equal(repairContainerCloneOwnership({
+    workspace, dir: workspace, user, runtime,
+  }), false, "工作区根本身还背着 issue.json 等控制面文件,不许整树交接");
+  assert.equal(statSync(join(outside, "repo", "f")).uid, outsideBefore.uid,
+    "越界路径不能被 chown");
+});
+
+test("克隆收口整树交给容器用户，.git 内部照常交接且软链不跟随", () => {
+  const root = mkdtempSync(join(tmpdir(), "mfc-container-owner-clone-t-"));
+  const workspace = join(root, "ws");
+  const repo = join(workspace, "repo", "origin");
+  mkdirSync(join(repo, ".git", "objects", "ab"), { recursive: true });
+  writeFileSync(join(repo, ".git", "HEAD"), "ref: refs/heads/master\n");
+  writeFileSync(join(repo, ".git", "objects", "ab", "cdef"), "obj");
+  writeFileSync(join(repo, "Main.ts"), "export {};\n");
+  const outside = join(root, "outside.txt");
+  writeFileSync(outside, "keep\n");
+  symlinkSync(outside, join(repo, ".git", "linked-source"));
+  const uid = process.getuid?.() === 0 ? 12345 : process.getuid!();
+  const gid = process.getgid?.() === 0 ? 12345 : process.getgid!();
+  const outsideBefore = statSync(outside);
+  assert.equal(repairContainerCloneOwnership({
+    workspace, dir: repo, user: `${uid}:${gid}`,
+    runtime: { platform: "linux", effectiveUid: 0 },
+  }), true);
+  for (const entry of [repo, join(repo, "Main.ts"), join(repo, ".git"),
+    join(repo, ".git", "HEAD"),
+    join(repo, ".git", "objects", "ab", "cdef")]) {
+    assert.equal(statSync(entry).uid, uid, `uid 必须是容器用户: ${entry}`);
+    assert.equal(statSync(entry).gid, gid, `gid 必须一起交接: ${entry}`);
+  }
+  assert.equal(lstatSync(join(repo, ".git", "linked-source")).uid, uid,
+    "仓内软链只改链接本身");
+  assert.equal(statSync(outside).uid, outsideBefore.uid,
+    "软链绝不能把交接带到工作区外");
+});
+
+test("root 形态下仓目录缺席必须炸出来，不吞成静默 false", () => {
+  const workspace = mkdtempSync(join(tmpdir(), "mfc-container-owner-clone-m-"));
+  assert.throws(() => repairContainerCloneOwnership({
+    workspace, dir: join(workspace, "repo", "origin"),
+    user: "10001:10001", runtime: { platform: "linux", effectiveUid: 0 },
+  }), /不存在的容器目录/);
 });

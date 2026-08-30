@@ -109,14 +109,25 @@ export function validateAskUserQuestionInput(input: unknown): string | undefined
     }
     const question = value as Record<string, unknown>;
     const extra = Object.keys(question)
-      .filter((key) => key !== "question" && key !== "options");
+      .filter((key) => key !== "question" && key !== "options"
+        && key !== "recommended");
     if (extra.length) {
       return `第 ${index + 1} 题含不支持字段 ${extra.join("、")}`;
     }
     if (typeof question.question !== "string" || !question.question.trim()) {
       return `第 ${index + 1} 题缺少问题正文`;
     }
-    if (question.options === undefined) continue;
+    if (question.recommended !== undefined
+        && typeof question.recommended !== "string") {
+      return `第 ${index + 1} 题的 recommended 不是字符串`;
+    }
+    if (question.options === undefined) {
+      // 推荐协议(ADR-0004):推荐挂在选项上,自由作答题带它是误用。
+      if (question.recommended !== undefined) {
+        return `第 ${index + 1} 题是自由作答题(未给 options),不能带 recommended`;
+      }
+      continue;
+    }
     if (!Array.isArray(question.options)) {
       return `第 ${index + 1} 题的 options 不是数组`;
     }
@@ -126,6 +137,17 @@ export function validateAskUserQuestionInput(input: unknown): string | undefined
     if (options.length > 6) return `第 ${index + 1} 题有 ${options.length} 个选项，最多六个`;
     if (options.some((option) => !option)) return `第 ${index + 1} 题含空选项`;
     if (new Set(options).size !== options.length) return `第 ${index + 1} 题含重复选项`;
+    // 推荐是协议必填而非可选礼貌(将来无审批全自动模式要按它执行):
+    // 必须给、trim 后与选项原文逐字命中。选项已去重,命中即唯一。
+    const recommended = String(question.recommended ?? "").trim();
+    if (!recommended) {
+      return `第 ${index + 1} 题缺少推荐项:选项题必须带 recommended`
+        + "(所推荐选项的原文)";
+    }
+    if (!options.includes(recommended)) {
+      return `第 ${index + 1} 题的推荐项不在选项中:「${recommended.slice(0, 40)}」`
+        + "须与 options 之一逐字一致(trim 后比对)";
+    }
   }
   return undefined;
 }
@@ -1174,6 +1196,12 @@ export class CloudSession {
             minItems: 2,
             maxItems: 6,
           })),
+          recommended: Type.Optional(Type.String({
+            description:
+              "所推荐选项的原文(与 options 之一逐字一致)。选项题必填:"
+              + "推荐要有依据(写进问题正文或 context),拿不准先补研究,"
+              + "不要空着;开放题不得携带本字段",
+          })),
         }, { additionalProperties: false }), {
           description: "一张卡里的问题；彼此独立的问题可合并，最多四个",
           minItems: 1,
@@ -1189,6 +1217,7 @@ export class CloudSession {
         if (invalid) {
           const text = "问题卡结构不完整，未向用户发送：" + invalid
             + "。选择题必须提供至少两个非空、互不重复的选项；"
+            + "选项题必须带 recommended(所推荐选项的原文，须与选项逐字一致)；"
             + "若确实要自由回答，请省略 options，页面会显示答复输入框。"
             + "请修正后重试一次 AskUserQuestion，不要替用户猜答案。";
           const finished = driver.emit("tool_finished", driver.sessionId, {

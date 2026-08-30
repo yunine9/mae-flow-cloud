@@ -30,15 +30,22 @@ import { KERNEL_ROOT } from "./kernelFixture.ts";
 // 内核的真选项(缺内核则空数组)。模型出卡时惯例在标签后带上代号,
 // 内网实测就是"局部修改(tweak)"这种形状——假件照这个形状造。
 const LANES = workflowChoices(KERNEL_ROOT);
+// 推荐协议:推荐必须是选项原文之一(校验器逐字核对)。取 tweak 优先,
+// 与各用例对账用的 choice 同源;缺内核(空数组)时不带该键。
+const preferredLane = LANES.find((item) => item.key === "tweak") ?? LANES[0];
 const LANE_CARD: Scene = {
   tool: { name: "AskUserQuestion", input: { questions: [{
     question: "本单采用哪种交付方式?",
     options: LANES.map((item) => `${item.label}(${item.key})`),
+    ...(preferredLane
+      ? { recommended: `${preferredLane.label}(${preferredLane.key})` }
+      : {}),
   }] } },
 };
 const REVIEW_CARD: Scene = {
   tool: { name: "AskUserQuestion", input: { questions: [{
     question: "Diff 通过吗?", options: ["通过", "打回"],
+    recommended: "通过",
   }] } },
 };
 
@@ -103,6 +110,7 @@ test("模型自造是/否确认卡:预答不硬猜,退回等人并写明为什�
   const model = new ScriptedModelServer([
     { tool: { name: "AskUserQuestion", input: { questions: [{
       question: `是否选择${lane}(tweak)?`, options: ["是", "否"],
+      recommended: "是",
     }] } } },
     { text: "收口。" },
   ]);

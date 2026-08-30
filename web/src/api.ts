@@ -956,31 +956,6 @@ export interface CrossRepositoryUpdate {
   created_at: string;
 }
 
-export interface IssueEnvironmentRef {
-  id: string;
-  name: string;
-  purpose: "logs" | "deploy" | "both";
-  protocol: "ssh";
-  host: string;
-  port: number;
-  accounts: Array<{
-    username: string;
-    credential_state: "stored";
-  }>;
-  /** 兼容短暂存在过的单账号任务现场。 */
-  username?: string;
-  credential_state?: "stored";
-}
-
-export interface IssueEnvironmentInput {
-  name: string;
-  purpose: "logs" | "deploy" | "both";
-  host: string;
-  port?: number;
-  accounts: Array<{ username: string; password: string }>;
-}
-
-
 /** 历史条目(服务端 projection.ts 的 TaskHistoryEntry 镜像)。 */
 export type TaskHistoryEntry = TaskSummary & {
   event_count: number;
@@ -2849,7 +2824,6 @@ export type IssueStatus =
   | "running"
   | "waiting_user"
   | "idle"
-  | "interrupted"
   | "suspended"
   | "archived"
   | "canceled"
@@ -2860,7 +2834,6 @@ export const ISSUE_STATUS_TEXT: Record<IssueStatus, string> = {
   running: "AI 处理中",
   waiting_user: "等你答复",
   idle: "等你继续",
-  interrupted: "重启中断,可续聊",
   suspended: "挂起(待关联单号)",
   archived: "已归档",
   canceled: "已取消",
@@ -2975,7 +2948,13 @@ export interface IssueGateCard {
   id: string;
   kind: IssueGateKind;
   state_version: number;
-  question: { questions?: Array<{ question: string; options: IssueGateOption[] }> };
+  question: { questions?: Array<{
+    question: string;
+    options: IssueGateOption[];
+    /** 推荐项的码(ADR-0004,只标注不预选):分析确认闸在码表里定死,
+     * 无单结论闸从 AI 提案派生;换库验证宿主定不了,不硬给。 */
+    recommended?: string;
+  }> };
   context?: string;
   /** 仅 env_needed:闸为哪类动作而举(logs=拉日志 / deploy=换库部署)。 */
   scope?: "logs" | "deploy";
@@ -3004,12 +2983,16 @@ export interface IssueSummary {
   module_id?: string;
   /** 登记基线(分支/tag 等起点说明;问题流登记表单未暴露)。 */
   baseline?: string;
-  /** 登记时带的网管环境(地址列表与 vault 引用;密码只存服务端,永不上线)。 */
+  /** 登记时带的网管环境(地址列表与 vault 引用;密码只存服务端,永不上线)。
+   * page_account/page_credential_ref 只在登记配了页面凭据时在场——env_needed
+   * 闸现场补配的环境没有页面凭据,两键一并缺席。 */
   environment?: {
     credential_ref: string;
     name: string;
     hosts: string[];
     port: number;
+    page_account?: string;
+    page_credential_ref?: string;
   };
   mode?: IssueFlowMode;
   scenario?: IssueScenario;
@@ -3063,7 +3046,14 @@ export interface IssueWaitingCard {
   /** 选项一律是码+文案对:平台闸的码出自服务端注册表码表,Agent 卡
    * 的码由服务端投影时按题号/序号派发(opt-题-序)。渲染 label,
    * 提交 code。 */
-  question: { questions?: Array<{ question: string; options: IssueGateOption[] }> };
+  question: { questions?: Array<{
+    question: string;
+    options: IssueGateOption[];
+    /** 推荐项的投影码(ADR-0004,只标注不预选):Agent 卡由服务端把
+     * 推荐原文对回 opt-题-序 码,平台闸码表定死/提案派生;前端按码
+     * 标徽标,渲染 label、提交 code 的既有约定不变。 */
+    recommended?: string;
+  }> };
   context?: string;
   created_at: string;
   /** 平台闸专用(会话视图从 detail.gate 带过来):闸的种类与用途面。
@@ -3115,11 +3105,14 @@ export interface DtsTicketDetail {
   status?: string;
 }
 
+/** env_needed 闸的环境表单 wire 形(POST /issues/:id/environment 请求体,
+ * 与服务端 routes 的读取一一对应):地址 + 端口 + 网管后台密码。闸只收
+ * 这三样——现场补配的流程(拉日志/换库)碰不到网管页面,没有页面凭据
+ * 的位置;密码只进服务端 vault,不落状态/事件。 */
 export interface IssueEnvironmentForm {
-  name?: string;
   hosts: string[];
   port?: number;
-  password: string;
+  backend_password: string;
 }
 
 async function issueFetch(
@@ -3142,6 +3135,17 @@ export function getIssue(id: string): Promise<IssueDetail> {
   return issueFetch(`/issues/${encodeURIComponent(id)}`);
 }
 
+/** 登记侧网管环境四件套(wire 形,与服务端 service.ts 的
+ * normalizeEnvironmentInput 同一把尺):hosts 支持多台;页面账号缺省
+ * admin 由服务端归一;两个密码只进服务端 vault,任何接口不回显。
+ * 无单登记服务端强制 module_id + 环境(spec #15 的 wire 无兼容包袱)。 */
+export interface IssueRegistrationEnvironment {
+  hosts: string[];
+  page_account?: string;
+  page_password: string;
+  backend_password: string;
+}
+
 export function createIssue(input: {
   title: string;
   description?: string;
@@ -3152,9 +3156,10 @@ export function createIssue(input: {
   repo_urls?: string[];
   baseline?: string;
   module?: string;
-  /** 登记选定的业务模块 ID:后端校验存在且 active,名称派生 module。 */
+  /** 登记选定的业务模块 ID:后端校验存在且 active,名称派生 module。
+   * 无单号登记服务端强制必带,并按模块绑定整表带出仓。 */
   module_id?: string;
-  environment?: IssueEnvironmentForm;
+  environment?: IssueRegistrationEnvironment;
 }): Promise<IssueSummary> {
   return issueFetch("/issues", {
     method: "POST",
@@ -3197,7 +3202,7 @@ export function steerIssue(id: string, text: string): Promise<IssueSummary> {
 }
 
 /** 网管环境配置(env_needed 闸的作答口):登记时没配环境,拉日志/
- * 换库现场举闸后在这里补地址与密码。密码只进服务端 vault,不落
+ * 换库现场举闸后在这里补地址与网管后台密码。密码只进服务端 vault,不落
  * 状态/事件;成功即清闸,平台会开回合让 AI 重试刚才的操作。 */
 export function attachIssueEnvironment(
   id: string,

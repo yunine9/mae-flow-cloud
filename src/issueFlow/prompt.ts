@@ -5,7 +5,7 @@
  * skill 目录形态),从 every-skill 仓的 playbook 改编而来,适配云上:
  * - 工号不再是 $HOME 目录名,而是平台注入的登录账号;
  * - 二进制/MCP 不由 Agent 直调,换成宿主工具(fetch_logs/build_deploy/
- *   push_branch/create_mr/dts_get_ticket);
+ *   push_branch/create_mr/dts_get_ticket/get_issue_meta);
  * - 新增"非问题出口":研究结论可以就是终点,不强制进编码交付。
  * 每次会话启动时从源目录整读、物化到工作区 skills/ 下(幂等重写)。
  * 技能文本与它引用的宿主工具同仓同版本演进——改工具就得同 commit
@@ -30,7 +30,7 @@ import {
   type FixedStage,
   type IssueScenario,
 } from "./state.ts";
-import { fixedStageSpec, stageToolLine } from "./stageRegistry.ts";
+import { fixedStageSpec, stageBriefLines, stageToolLine } from "./stageRegistry.ts";
 
 /** 技能源目录:标准 skill 目录,每个子目录一个 SKILL.md(测试对源断言用)。 */
 export const SKILL_SOURCE_DIR = resolve(
@@ -67,12 +67,92 @@ export function materializeIssueSkills(workspace: string): string[] {
   return paths;
 }
 
-function envLine(state: IssueSessionState): string {
-  if (!state.environment) {
-    return "未配置网管环境——需要拉日志/换库时直接调工具,平台会向用户发起"
-      + "环境配置请求(密码只进平台,不经你手)。";
-  }
-  return `网管环境「${state.environment.name}」: ${state.environment.hosts.join(", ")}`;
+// ---- 登记元信息(提示词块与 get_issue_meta 工具的同一事实源) ----
+
+/** 网管环境从 vault 解出的明文凭据。ADR-0003 裁定:网管口令是现场
+ * 公开的出厂默认值,允许进 AI 上下文——"密码不进上下文"的铁律只
+ * 覆盖平台凭据(Git 令牌、登录口令);vault 落盘的卫生不变,解密只
+ * 由持有 vault 的服务层做,这里只收解出的明文。解不出(闸未补配/
+ * 凭据组缺席)按缺省,对应字段不出现。 */
+export interface IssueEnvCredentials {
+  /** 网管后台密码(sopuser/ossuser/ossadm 共用)。 */
+  backend?: string;
+  /** 网管页面密码。 */
+  page?: string;
+}
+
+/** 登记元信息:手工登记时人填的输入全量(标题/现象/模块/带出仓/
+ * 网管环境)。module/environment 只在会话真带这些信息时出现——
+ * DTS 页签发起的会话环境闸还没补配,键整段缺席,不造空壳。 */
+export interface IssueRegistrationMeta {
+  title: string;
+  description: string;
+  module?: { id: string; name: string };
+  repos: string[];
+  environment?: {
+    name: string;
+    hosts: string[];
+    page_account?: string;
+    page_password?: string;
+    backend_password?: string;
+  };
+}
+
+/** 元信息组装单源:开场词/续聊词的渲染与 get_issue_meta 的返回都
+ * 从这里出,工具与提示词永不各说各话。 */
+export function issueRegistrationMeta(
+  state: IssueSessionState,
+  credentials: IssueEnvCredentials = {},
+): IssueRegistrationMeta {
+  const env = state.environment;
+  return {
+    title: state.title,
+    description: state.description,
+    ...(state.module_id
+      ? { module: {
+        id: state.module_id,
+        name: state.module || state.module_id,
+      } }
+      : {}),
+    repos: state.repo_urls?.length
+      ? [...state.repo_urls]
+      : state.repo_url ? [state.repo_url] : [],
+    ...(env
+      ? { environment: {
+        name: env.name,
+        hosts: [...env.hosts],
+        ...(env.page_account ? { page_account: env.page_account } : {}),
+        ...(credentials.page ? { page_password: credentials.page } : {}),
+        ...(credentials.backend
+          ? { backend_password: credentials.backend }
+          : {}),
+      } }
+      : {}),
+  };
+}
+
+/** 元信息的网管环境段(开场词/续聊词用):四件套明文(ADR-0003),
+ * 没有环境整段缺席——闸未补配的会话不渲染空壳。 */
+function environmentLines(meta: IssueRegistrationMeta): string[] {
+  const env = meta.environment;
+  if (!env) return [];
+  return [
+    `- 网管环境「${env.name}」(网管口令是现场公开的出厂默认值,凭据`
+      + "明文如下,用户问起直接回答):",
+    `    - 服务器地址: ${env.hosts.join(", ")}`,
+    ...(env.page_account ? [`    - 页面账号: ${env.page_account}`] : []),
+    ...(env.page_password ? [`    - 页面密码: ${env.page_password}`] : []),
+    ...(env.backend_password
+      ? [`    - 网管后台密码(sopuser/ossuser/ossadm 共用): ${env.backend_password}`]
+      : []),
+  ];
+}
+
+/** 元信息的模块行(模块是登记必选,但 DTS 发起/未绑定的会话还没有)。 */
+function moduleLine(meta: IssueRegistrationMeta): string {
+  return meta.module
+    ? `- 业务模块: ${meta.module.name}(id: ${meta.module.id})`
+    : "";
 }
 
 /** 多仓清单块:全部平铺 repo/<仓名>/(2026-08-28 拍板:仓平等,无主从)。
@@ -112,19 +192,13 @@ export function stageLabelOf(state: IssueSessionState): string {
 
 // 阶段简报(引导层)从阶段注册表生成:目标/出口/可用工具都是注册表的
 // 一行声明,与工具门禁(权威层)同源——这里不再手工复写工具清单,
-// 引导层说能用的与权威层放行的不会漂移。
+// 引导层说能用的与权威层放行的不会漂移。渲染函数 stageBriefLines 也
+// 住在注册表:开场词/交接词/催办词/工具回执共用同一份三行简报。
 
-/** 固定流程的阶段简报渲染(开场词/交接词/催办词共用)。 */
-function fixedStageBriefLines(scenario: IssueScenario, stage: FixedStage): string[] {
-  const spec = fixedStageSpec(stage);
-  return [
-    `当前阶段「${FIXED_STAGE_LABELS[scenario][stage]}」: ${spec.goal}`,
-    `出口(到什么程度算完): ${spec.exit}`,
-    `可用工具: ${stageToolLine(stage)}`,
-  ];
-}
-
-export function issueFixedOpeningPrompt(state: IssueSessionState): string {
+export function issueFixedOpeningPrompt(
+  state: IssueSessionState,
+  credentials: IssueEnvCredentials = {},
+): string {
   const scenario = state.scenario ?? "ticket";
   const stages = fixedStages(scenario).map((stage) =>
     FIXED_STAGE_LABELS[scenario][stage]).join(" → ");
@@ -133,13 +207,16 @@ export function issueFixedOpeningPrompt(state: IssueSessionState): string {
     ? `\n- 本会话由 ${state.converted_from} 转正而来:分析报告(issue-analysis.md)已继承,`
       + "前三个阶段视为已完成,直接从「问题修改」开始——先读报告再动手,不要重新分析。"
     : "";
+  const meta = issueRegistrationMeta(state, credentials);
   return [
-    "你是本问题会话的处理 Agent。本会话走**固定流程**:阶段由平台推进与把关,"
-      + "你只在当前阶段内干活。研究方法参考技能 issue-research/issue-ops,交付参考 issue-delivery。",
+    "你是本问题会话的处理 Agent。本会话走**固定流程**:每阶段给目标与唯一"
+      + "出口,活干到你判断达标就调出口动作自报收口,平台只在用户决策卡与 "
+      + "MR 验绿处设卡。研究方法参考技能 issue-research/issue-ops,交付参考 issue-delivery。",
     "",
     "## 问题事实",
-    `- 标题: ${state.title}`,
-    `- 描述: ${state.description || "(无补充描述)"}`,
+    `- 标题: ${meta.title}`,
+    `- 描述: ${meta.description || "(无补充描述)"}`,
+    moduleLine(meta),
     `- 单号: ${state.ticket ?? "(无单号场景:测试/开发自行定位,结论后由用户决定挂起提单或闭环)"}`,
     `- 工号: ${state.account}`,
     repoLines(state)
@@ -147,7 +224,7 @@ export function issueFixedOpeningPrompt(state: IssueSessionState): string {
     ...(scenario === "ticket" && state.ticket
       ? [`- 修复分支 master_${state.account}_${state.ticket}:pull_repo 拉每个仓时由平台自动切好`]
       : []),
-    `- ${envLine(state)}`,
+    ...environmentLines(meta),
     inheritedNote,
     "",
     `## 阶段路线(${scenario === "ticket" ? "有单七阶段" : "无单三节点"})`,
@@ -159,17 +236,23 @@ export function issueFixedOpeningPrompt(state: IssueSessionState): string {
       + `出口(到什么程度算完):${fixedStageSpec(current).exit}。可用工具:${stageToolLine(current)}。`,
     "3. 停机白名单——回合只允许停在这三处,其余情况必须继续调工具推进,"
     + "阶段性总结不是停机理由:①举卡等用户(AskUserQuestion 或平台闸);"
-    + "②出口动作已调用、平台交接词已到位(含 MR 建完停等流水线);"
+    + "②出口动作已调用、平台交接词已到位(含 MR 清单申报受理后停等流水线);"
     + "③确需用户补充信息或决策才能继续。违反会收到平台催办,把你推回阶段。",
     "4. 代码仓你自己拉(pull_repo):登记在册的仓也要你逐个调它落地——拉过才在场,"
       + "中途发现缺仓随时补。对哪些仓推送/提 MR 由你裁决:**改过的仓各自交付,一仓一 MR**。",
     "5. 平台闸:分析报告确认(有单)/结论确认(无单)、网管环境配置"
       + "(拉日志/换库缺环境时)、换库后环境验证——平台举卡等用户,你不要替"
       + "用户猜结果,举卡后立即结束回合。",
-    "6. UT 全绿才能建 MR;每个 MR 建后平台逐仓监看流水线,红了会带回失败项"
-      + "让你修,同分支修复再推;**全部 MR 跑绿**才进入换库验证。",
+    "6. UT 跑完可自愿调 report_ut 如实上报——平台只记账,它不是出口、也不是"
+      + "建 MR 的前置,UT 阶段出口仍是 complete_stage。提交 MR 阶段:每个改过的"
+      + "仓 push_branch + create_mr 后,调 complete_stage 申报 MR 清单(mrs 参数),"
+      + "平台验绿(清单=台账、流水线全绿)才放行进换库验证——有红当场打回带"
+      + "失败项:修复后同分支再推、重建 MR、重新申报;在跑则受理,你可停等,"
+      + "绿了平台自动放行;全绿未申报平台只会开回合提醒你申报,不会替你推进。",
     "7. 用户环境验证不通过会整体回退到「问题分析」重走(轮次+1),这是正常节奏不是事故。",
-    "8. 秘密边界:环境密码与各 token 由平台保管,不向用户索要、不猜测、不讨论。",
+    "8. 秘密边界:平台凭据(Git 令牌、登录口令)由平台保管,不向用户索要、"
+      + "不猜测、不讨论;网管环境的账号密码是现场公开的出厂默认值,已明文"
+      + "写在登记元信息里(拿不准调 get_issue_meta 重查),用户问起直接回答。",
     "9. 持续维护 issue-analysis.md(现象-根因-方案),它是本会话的核心交付物。",
     "",
     "现在开始:先复述你对问题现象的理解与当前阶段要做的事,然后推进。"
@@ -187,7 +270,7 @@ export function fixedAdvanceNotice(
   const current = state.stage as FixedStage;
   return [
     `平台通知: ${message}`,
-    ...fixedStageBriefLines(scenario, current),
+    ...stageBriefLines(scenario, current),
   ].join("\n");
 }
 
@@ -202,26 +285,31 @@ export function fixedNudgeNotice(
   return [
     `平台催办(第 ${attempt}/${budget} 次): 你在阶段未收口时结束了回合,`
     + "这不算完成——阶段真相在平台,没走到出口就是没完。",
-    ...fixedStageBriefLines(scenario, current),
+    ...stageBriefLines(scenario, current),
     "继续推进。除非举卡等用户或确需用户决策,不要停机;"
       + `再无故停机 ${budget - attempt + 1} 次平台将不再催办,转为等你人工指令。`,
   ].join("\n");
 }
 
-export function issueOpeningPrompt(state: IssueSessionState): string {
+export function issueOpeningPrompt(
+  state: IssueSessionState,
+  credentials: IssueEnvCredentials = {},
+): string {
+  const meta = issueRegistrationMeta(state, credentials);
   return [
     "你是本问题会话的研究与处理 Agent。工作方式见技能 issue-playbook(路线图)、"
-    + "issue-research(研究方法)、issue-delivery(交付)、issue-ops(环境操作)。",
+      + "issue-research(研究方法)、issue-delivery(交付)、issue-ops(环境操作)。",
     "",
     "## 问题事实",
-    `- 标题: ${state.title}`,
-    `- 描述: ${state.description || "(无补充描述)"}`,
+    `- 标题: ${meta.title}`,
+    `- 描述: ${meta.description || "(无补充描述)"}`,
+    moduleLine(meta),
     `- 单号: ${state.ticket ?? "(尚未绑定——先研究后补单是正常形态;推送/提MR前必须请用户在页面绑定)"}`,
     `- 工号: ${state.account}`,
     repoLines(state)
       || "- 代码仓: (未登记——可 lookup_modules 按业务关键词检索模块带出仓,"
       + "或问用户要地址;要用的仓自己 pull_repo 拉取,拉过才在场)",
-    `- ${envLine(state)}`,
+    ...environmentLines(meta),
     "",
     "## 行为契约",
     "1. 阶段上报:每进入新环节调 report_stage——平台显示你正在干什么,全靠它。",
@@ -231,7 +319,9 @@ export function issueOpeningPrompt(state: IssueSessionState): string {
     "5. 停机纪律:研究中途不要输出阶段性总结后停机——要么继续查证,"
       + "要么 AskUserQuestion 问,要么出结论(submit_analysis)。停机只属于"
       + "举卡、结论收口、确需用户决策三种情况。",
-    "6. 秘密边界:环境密码与各 token 由平台保管,不向用户索要、不猜测、不讨论。",
+    "6. 秘密边界:平台凭据(Git 令牌、登录口令)由平台保管,不向用户索要、"
+      + "不猜测、不讨论;网管环境的账号密码是现场公开的出厂默认值,已明文"
+      + "写在登记元信息里(拿不准调 get_issue_meta 重查),用户问起直接回答。",
     "7. 结论文档持续维护 issue-analysis.md,它是本会话的核心交付物。",
     "",
     "现在开始:先复述你对问题现象的理解,给出研究计划(打算看什么、拉什么日志、"
@@ -239,16 +329,22 @@ export function issueOpeningPrompt(state: IssueSessionState): string {
   ].join("\n");
 }
 
-/** 续聊提示词(重启/归档前的下一轮):锚定已有现场,不从头推翻。 */
+/** 续聊提示词(重启/归档前的下一轮):锚定已有现场,不从头推翻。
+ * 登记元信息随现场一并重给(服务重启后模型上下文是重建的,元信息
+ * 不随对话流失——含网管环境明文,与开场词同一事实源)。 */
 export function issueResumePrompt(
   state: IssueSessionState,
   userText: string,
+  credentials: IssueEnvCredentials = {},
 ): string {
+  const meta = issueRegistrationMeta(state, credentials);
   return [
     "服务重启/续聊后继续同一问题会话。已有现场(不要从头推翻,先读 "
       + "issue-analysis.md 与 skills/ 提示,再继续):",
-    `- 标题: ${state.title}`,
+    `- 标题: ${meta.title}`,
     `- 单号: ${state.ticket ?? "(未绑定)"}`,
+    moduleLine(meta),
+    ...environmentLines(meta),
     `- 最近阶段: ${stageLabelOf(state)}(${state.stage_note || "无说明"})`,
     state.pushes?.length
       ? `- 已推送: ${state.pushes.map((push) =>

@@ -28,7 +28,7 @@ import {
 } from "node:crypto";
 import { join } from "node:path";
 
-export type IssueEnvironmentPurpose = "logs" | "deploy" | "both";
+export type IssueEnvironmentPurpose = "logs" | "deploy" | "both" | "page";
 
 export interface IssueEnvironmentAccountInput {
   username: string;
@@ -108,7 +108,9 @@ function normalize(
   }
   const rows: StoredIssueEnvironment[] = inputs.map((input, index) => {
     const purpose = input.purpose;
-    if (!(["logs", "deploy", "both"] as const).includes(purpose)) {
+    // page = 网管页面凭据组(问题流 v2 登记四件套):单账号走旧形状
+    // (username/password,不经三账号校验),纯记录、无 SSH 消费方。
+    if (!(["logs", "deploy", "both", "page"] as const).includes(purpose)) {
       throw new Error(`第 ${index + 1} 组环境用途不合法`);
     }
     // "both"(单一共用环境)只有问题流 v2 会提交:playbook 的

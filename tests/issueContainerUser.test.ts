@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { dockerAvailable, TaskContainer } from "../src/containerRuntime.ts";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
 import { ScriptedModelServer } from "../src/scriptedModel.ts";
+import { createBusinessModule } from "../src/businessModuleLibrary.ts";
 
 test("任务容器 run 参数:user 随 limits 透传为 --user", () => {
   const workspace = mkdtempSync(join(tmpdir(), "mfc-user-arg-"));
@@ -45,6 +46,10 @@ test("问题会话容器冒烟:显式 user 覆盖镜像默认 root,会话不被�
   }
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-user-"));
   mkdirSync(join(dataDir, "issues"), { recursive: true });
+  createBusinessModule(dataDir, {
+    id: "smoke-mod", name: "冒烟模块", description: "容器用户冒烟占位",
+    owner: "dev", repositories: ["/tmp/fixture.git"],
+  }, "tester");
   let issueId = "";
   let containerUser = "";
   let inspectFailure = "";
@@ -107,6 +112,13 @@ test("问题会话容器冒烟:显式 user 覆盖镜像默认 root,会话不被�
       title: "容器用户冒烟",
       description: "验证 isolation.user 透传到问题会话容器",
       source: "manual",
+      // 无单登记门禁(#17):冒烟夹具带占位模块与环境过门。
+      moduleId: "smoke-mod",
+      environment: {
+        hosts: ["10.0.0.8"],
+        pagePassword: "page-secret",
+        backendPassword: "env-shared-secret",
+      },
     });
     issueId = created.id;
     // 观测已经交给 beforeScene 的会合点;这里只等会话跑完一轮,

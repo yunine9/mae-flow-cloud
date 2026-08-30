@@ -8,8 +8,9 @@
  * 3. 门禁(推送/提MR 的单号闸;秘密止步宿主)。
  *
  * 会话真相在 dataDir/issues/<id>/(issue.json + events.jsonl +
- * transcript.jsonl + waiting.json),API 是投影;服务重启后 running →
- * interrupted,用户发一句消息即从现场续聊。
+ * transcript.jsonl + waiting.json),API 是投影;服务重启后正在跑/
+ * 排队的会话重新入队,由并发额度泵以续聊回合自动续跑——需求侧断点
+ * 续跑的同款语义(2026-08-29 拍板),不再有等人发消息救活的滞留态。
  */
 
 import {
@@ -30,11 +31,16 @@ import { EventLog, type SemanticEvent } from "../semanticEvents.ts";
 import { TranscriptStore } from "../transcriptStore.ts";
 import { GateService } from "../gateService.ts";
 import { HumanGate, renderDecision, type WaitingRecord } from "../humanGate.ts";
-import { IssueEnvironmentVault } from "../issueEnvironment.ts";
+import {
+  IssueEnvironmentVault,
+  type IssueEnvironmentInput as VaultEnvironmentInput,
+} from "../issueEnvironment.ts";
 import { TaskContainer, taskContainerInstance } from "../containerRuntime.ts";
 import {
   prepareContainerHostPaths,
+  repairContainerCloneOwnership,
   repairContainerMutationOwnership,
+  type ContainerOwnershipRuntime,
 } from "../containerOwnership.ts";
 import {
   fixedAdvance,
@@ -70,6 +76,7 @@ import {
 import {
   cloneRepository,
   currentHead,
+  divergedRemoteBranch,
   ensureBranch,
   validateRepoUrl,
   type GitCredential,
@@ -94,6 +101,7 @@ import {
   issueOpeningPrompt,
   issueResumePrompt,
   materializeIssueSkills,
+  type IssueEnvCredentials,
 } from "./prompt.ts";
 import {
   GATE_OPTIONS,
@@ -125,10 +133,12 @@ const AGENT_OPTION_CODE = /^opt-(\d+)-(\d+)$/;
 function agentCardQuestions(record: WaitingRecord): Array<{
   question?: string;
   options?: string[];
+  recommended?: string;
 }> {
   return (record.question as { questions?: Array<{
     question?: string;
     options?: string[];
+    recommended?: string;
   }> })?.questions ?? [];
 }
 
@@ -145,13 +155,25 @@ function withAgentOptionCodes(
     ...record,
     question: {
       ...record.question,
-      questions: questions.map((item, questionIndex) => ({
-        ...item,
-        options: (item.options ?? []).map((option, optionIndex) => ({
+      questions: questions.map((item, questionIndex) => {
+        const options = (item.options ?? []).map((option, optionIndex) => ({
           code: agentOptionCode(questionIndex, optionIndex),
           label: option,
-        })),
-      })),
+        }));
+        // 推荐协议(ADR-0004):推荐原文换算成命中选项的投影码随卡
+        // 下发(questions[].recommended),前端按码标「AI 推荐」——
+        // 与选项同一条码表,文案改字零协议后果。校验器保证必命中;
+        // 万一没命中(卡先于校验落盘的旧现场)不带该键,不造悬空码。
+        const { recommended: rawRecommended, ...rest } = item;
+        const wanted = rawRecommended?.trim() ?? "";
+        const hit = options.findIndex((option) =>
+          option.label.trim() === wanted);
+        return {
+          ...rest,
+          options,
+          ...(hit >= 0 ? { recommended: options[hit].code } : {}),
+        };
+      }),
     },
   };
 }
@@ -184,8 +206,85 @@ export interface IssueEnvironmentInput {
   name?: string;
   hosts: string[];
   port?: number;
-  /** 单一共用密码(playbook 契约:sopuser/ossuser/ossadm 同密码)。 */
-  password: string;
+  /** 页面账号(网管页面登录名;缺省 admin,非密随配置落 issue.json)。 */
+  pageAccount?: string;
+  /** 页面密码(纯记录,本期无消费方,为页面自动化预留;只进 vault)。 */
+  pagePassword?: string;
+  /** 网管后台密码(playbook 契约:sopuser/ossuser/ossadm 同密码)。 */
+  backendPassword: string;
+}
+
+/** 四件套的机械校验与归一(登记与 env_needed 闸作答共用同一把尺,差别
+ * 只在页面密码是否必填:闸是拉日志/换库的现场补配,那些流程碰不到
+ * 网管页面)。归一在落盘前跑,半截登记不许烧掉会话号。 */
+function normalizeEnvironmentInput(
+  input: IssueEnvironmentInput,
+  withPage: boolean,
+): {
+  hosts: string[];
+  name: string;
+  port: number;
+  pageAccount: string;
+  pagePassword?: string;
+  backendPassword: string;
+} {
+  const hosts = input.hosts.map((host) => host.trim()).filter(Boolean);
+  if (!hosts.length) {
+    throw new IssueControlError("网管环境至少要有一个服务器地址");
+  }
+  const backendPassword = input.backendPassword?.trim();
+  if (!backendPassword) {
+    throw new IssueControlError("配置了网管环境就必须填写网管后台密码");
+  }
+  const pagePassword = input.pagePassword?.trim();
+  if (withPage && !pagePassword) {
+    throw new IssueControlError("配置了网管环境就必须填写页面密码");
+  }
+  return {
+    hosts,
+    name: input.name?.trim() || hosts[0],
+    port: input.port ?? 22,
+    pageAccount: input.pageAccount?.trim() || "admin",
+    ...(pagePassword ? { pagePassword } : {}),
+    backendPassword,
+  };
+}
+
+/** vault 行·后台凭据:playbook 契约三个系统账号同密码,按形状存三套,
+ * vault 校验与工具取密(sopuser)都不用特判。 */
+function backendVaultRow(
+  name: string,
+  host: string,
+  port: number,
+  password: string,
+): VaultEnvironmentInput {
+  return {
+    name,
+    purpose: "both",
+    host,
+    port,
+    accounts: ["sopuser", "ossuser", "ossadm"].map((username) =>
+      ({ username, password })),
+  };
+}
+
+/** vault 行·页面凭据:单账号独立成组(purpose=page),与后台凭据
+ * 互不混存——页面口令是另一把钥匙,将来页面自动化按自己的组解。 */
+function pageVaultRow(
+  name: string,
+  host: string,
+  port: number,
+  account: string,
+  password: string,
+): VaultEnvironmentInput {
+  return {
+    name: `${name}·页面`,
+    purpose: "page",
+    host,
+    port,
+    username: account,
+    password,
+  };
 }
 
 export interface IssueCreateInput {
@@ -241,6 +340,9 @@ export interface IssueFlowOptions {
   vault?: IssueEnvironmentVault;
   maxConcurrentTurns?: number;
   isolation?: IssueIsolation;
+  /** 容器属主判定的运行时形态:生产缺席即按进程真实形态判定(非 root
+   * 部署守卫直接 false,零开销);只有测试注入它来模拟 root 宿主。 */
+  ownershipRuntime?: ContainerOwnershipRuntime;
   log?: (message: string) => void;
 }
 
@@ -252,6 +354,9 @@ interface LiveIssue {
   driver?: CloudSession;
   container?: TaskContainer;
   toolContext?: IssueToolContext;
+  /** 重启续跑的待递话:恢复路径把会话重新入队时放上平台通知,泵点火
+   * 时消费——续跑与用户续聊共用同一条重建回合体,只差这句开场。 */
+  resumeMessage?: string;
 }
 
 export interface IssueMessage {
@@ -265,6 +370,12 @@ const TICKET_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 /** 催办续跑预算:每个用户/平台回合最多自动推回模型这么多次,再收嘴就
  * 落 idle 交还人工——催办是纠偏不是永动机,连收嘴说明模型真不想干了。 */
 const NUDGE_BUDGET = 2;
+
+/** 重启续跑的开场通知(#27):续跑回合以它为用户消息,落事件流——
+ * 重启这件事在会话时间线里可查,不落 stage_note(那是显示层的现场
+ * 说明,盖掉就丢了恢复前的阶段语境,续聊提示词还要用它)。 */
+const RESTART_RESUME_NOTICE =
+  "平台通知: 服务重启,平台自动续跑,接着当前阶段继续,不重复已完成的工作。";
 
 /** 结论文档回传上限:一个巨型文档不能把页面拖死。 */
 const ANALYSIS_MAX_BYTES = 512 * 1024;
@@ -343,22 +454,41 @@ export class IssueFlowService {
     this.options.log?.(message);
   }
 
+  /** 重启恢复(#27,与需求侧断点续跑同语义):正在跑的会话重新入队,
+   * 由并发额度泵逐个自动续跑(现场 driver 不在就重建,续聊提示词交给
+   * 重建的上下文);排队中的保持 queued 原样开跑;旧版本盖在盘上的
+   * interrupted 戳(词表已退役)按 running 同一条路处理。
+   * waiting_user/suspended 照旧等家人,终态不动。恢复完成补一脚泵——
+   * 泵原本只在回合点火/收口被调,启动期没有调用点,不补则重新入队的
+   * 会话永远坐着。 */
   private recover(): void {
-    let interrupted = 0;
+    let requeued = 0;
+    let keptQueued = 0;
     for (const name of readdirSync(this.issuesRoot)) {
       if (!name.startsWith("issue-")) continue;
       const root = join(this.issuesRoot, name);
       const state = loadState(root);
       if (!state) continue;
-      if (state.status === "running" || state.status === "queued") {
-        state.status = "interrupted";
-        state.stage_note = "服务重启打断,发消息即可续聊";
+      // 旧值按字符串比(interrupted 已不在词表里,类型层面不认它)。
+      const diskStatus: string = state.status;
+      const resuming = diskStatus === "running" || diskStatus === "interrupted";
+      if (resuming) {
+        state.status = "queued";
+        // 阶段语境(stage/note)原样保留:续聊提示词的「最近阶段」
+        // 靠它把现场交给重建的上下文;重启事实走转移台账与开场通知。
+        recordTransition(state, {
+          source: "platform",
+          note: "服务重启,重新入队,平台自动续跑",
+        });
         saveState(root, state);
-        interrupted += 1;
+        requeued += 1;
+      } else if (state.status === "queued") {
+        keptQueued += 1;
       }
       const live: LiveIssue = {
         id: state.id, root, state,
         humanGate: new HumanGate(join(root, "waiting.json")),
+        ...(resuming ? { resumeMessage: RESTART_RESUME_NOTICE } : {}),
       };
       this.live.set(state.id, live);
       // 流水线监看续表:deadline 还是原来那张(重启不白送预算);
@@ -371,8 +501,12 @@ export class IssueFlowService {
         }
       }
     }
-    if (interrupted) {
-      this.log(`[issue-flow] 恢复: ${interrupted} 个问题会话标记为已中断(可续聊)`);
+    if (requeued || keptQueued) {
+      this.log(`[issue-flow] 重启恢复: 续跑 ${requeued} 个、`
+        + `排队 ${keptQueued} 个问题会话`);
+      // 台账行之后立即点火:构造函数不能 await,泵与 create()/associate()
+      // 同款 void 火力——同步段把首批额度占上,余下的在收口时再泵。
+      void this.pump();
     }
   }
 
@@ -524,12 +658,25 @@ export class IssueFlowService {
     let moduleName = input.module?.trim() || undefined;
     let moduleRepos: string[] | undefined;
     const moduleId = input.moduleId?.trim() || undefined;
+    // 登记门禁(无单定位的机械真相):无单号登记必须指名业务模块并带上
+    // 网管环境——仓的唯一来源是模块绑定,现场凭据发起时就要齐,固定/
+    // 自由两模式同等。有单号登记(DTS 页签)不拦:单据自带现场线索,
+    // 环境可以在会话内经 env_needed 闸现场补。
+    if (!ticket && !moduleId) {
+      throw new IssueControlError(
+        "无单号登记必须指定业务模块:代码仓从模块绑定带出,"
+          + "请回登记页选择模块后再发起");
+    }
     if (moduleId) {
       try {
         const module = readBusinessModule(this.options.dataDir, moduleId);
         if (module.status !== "active") {
           throw new IssueControlError(
             `业务模块「${module.name}」已归档,不能用于新问题会话`);
+        }
+        if (!module.repositories.length) {
+          throw new IssueControlError(
+            `业务模块「${module.name}」还没有绑定代码仓,请先补绑定再发起`);
         }
         moduleName = module.name;
         moduleRepos = module.repositories;
@@ -538,6 +685,11 @@ export class IssueFlowService {
         throw new IssueControlError(
           `业务模块 ${moduleId} 不存在或元数据不可读,请刷新模块列表后重试`);
       }
+    }
+    if (!ticket && !input.environment) {
+      throw new IssueControlError(
+        "无单号登记必须配置网管环境"
+          + "(地址、页面账号密码与网管后台密码)");
     }
     // 模块带仓:只登记模块没给仓时,按模块绑定整表带出(同样过协议
     // 校验与上限)。"选模块→带仓"在服务端同样成立,不是前端专属糖。
@@ -566,31 +718,15 @@ export class IssueFlowService {
     // 都按邮箱对人,缺了它推上去的提交是无主的)。无仓登记(代码仓
     // 推迟到拉取代码仓阶段)自然不拦——闸门补填时会再过同一道检查。
     this.requireGitIdentity(account, repoUrls);
-    let environment;
-    let environmentPassword: string | undefined;
-    if (input.environment) {
-      const hosts = input.environment.hosts.map((host) => host.trim()).filter(Boolean);
-      if (!hosts.length) throw new IssueControlError("网管环境至少要有一个服务器地址");
-      environmentPassword = input.environment.password;
-      if (!environmentPassword?.trim()) {
-        throw new IssueControlError("配置了网管环境就必须填写共用密码");
-      }
-      environment = {
-        credential_ref: "", // 登记后由 vault 回填
-        name: input.environment.name?.trim() || hosts[0],
-        hosts,
-        port: input.environment.port ?? 22,
-      };
-    }
+    // 四件套校验先行: mkdir/占号之前打回,半截登记不落任何盘。
+    if (input.environment) normalizeEnvironmentInput(input.environment, true);
 
     const id = this.nextId();
     const root = join(this.issuesRoot, id);
     mkdirSync(root, { recursive: true });
-    if (environment && environmentPassword) {
-      // 与「问题卡环境表单」(attachEnvironment)同一条 vault 路径:
-      // 密码只进加密文件,issue.json 永远只有引用。
-      environment = this.storeEnvironment(id, input.environment!);
-    }
+    const environment = input.environment
+      ? this.storeEnvironment(id, input.environment, true)
+      : undefined;
     const now = new Date().toISOString();
     const firstStage: FixedStage | "registered" = scenario
       ? fixedStages(scenario)[0]
@@ -672,47 +808,71 @@ export class IssueFlowService {
     }
   }
 
-  /** 网管环境落盘的唯一路径:密码只进 vault(AES-GCM 按会话隔离的
-   * 加密文件),issue.json/事件/提示词永远只有 credential_ref。playbook
-   * 契约:三个账号共用一个密码,按旧形状存三套(sopuser/ossuser/
-   * ossadm 同密码),vault 校验与工具取密(sopuser)都不用特判。
-   * 登记与 POST /issues/:id/environment 共用,秘密纪律只有一份。 */
+  /** 网管环境落盘的唯一路径:两组凭据只进 vault(AES-GCM 按会话隔离的
+   * 加密文件),issue.json/事件/提示词永远只有引用。后台凭据(both)是
+   * fetch_logs/build_deploy 的消费方;页面凭据(page)本期纯记录,为
+   * 页面自动化预留,两组各自成行、可分别解出。登记(withPage)与
+   * env_needed 闸作答(只收地址+后台密码,页面字段即便递了也不认)
+   * 共用本路径,秘密纪律只有一份。 */
   private storeEnvironment(
     id: string,
     input: IssueEnvironmentInput,
+    withPage: boolean,
   ): IssueEnvironmentConfig {
-    const hosts = input.hosts.map((host) => host.trim()).filter(Boolean);
-    if (!hosts.length) {
-      throw new IssueControlError("网管环境至少要有一个服务器地址");
-    }
-    const password = input.password;
-    if (!password?.trim()) {
-      throw new IssueControlError("配置了网管环境就必须填写共用密码");
-    }
-    const name = input.name?.trim() || hosts[0];
-    const port = input.port ?? 22;
-    const refs = this.vault.store(id, [{
-      name,
-      purpose: "both",
-      host: hosts[0],
-      port,
-      accounts: ["sopuser", "ossuser", "ossadm"].map((username) =>
-        ({ username, password })),
-    }]);
-    return { credential_ref: refs[0]?.id ?? "", name, hosts, port };
+    const parts = normalizeEnvironmentInput(input, withPage);
+    const rows = [
+      backendVaultRow(parts.name, parts.hosts[0], parts.port,
+        parts.backendPassword),
+      ...(parts.pagePassword
+        ? [pageVaultRow(parts.name, parts.hosts[0], parts.port,
+          parts.pageAccount, parts.pagePassword)]
+        : []),
+    ];
+    const refs = this.vault.store(id, rows);
+    return {
+      credential_ref: refs[0]?.id ?? "",
+      name: parts.name,
+      hosts: parts.hosts,
+      port: parts.port,
+      ...(parts.pagePassword
+        ? {
+          page_account: parts.pageAccount,
+          page_credential_ref: refs[1]?.id ?? "",
+        }
+        : {}),
+    };
+  }
+
+  /** 登记元信息的网管凭据明文(ADR-0003:网管口令允许进 AI 上下文):
+   * 开场词/续聊词的渲染与 get_issue_meta 工具共用同一解密路——后台
+   * 凭据按 sopuser 解、页面凭据按组首账号解;解不出(闸未补配/缺组)
+   * 按缺省,字段不出现。 */
+  private environmentCredentials(live: LiveIssue): IssueEnvCredentials {
+    const env = live.state.environment;
+    if (!env) return {};
+    const backend = env.credential_ref
+      ? this.vault.credential(live.id, env.credential_ref, "sopuser")?.password
+      : undefined;
+    const page = env.page_credential_ref
+      ? this.vault.credential(live.id, env.page_credential_ref)?.password
+      : undefined;
+    return {
+      ...(backend ? { backend } : {}),
+      ...(page ? { page } : {}),
+    };
   }
 
   /** 网管环境配置(问题卡 env_needed 闸的作答口,POST
    * /issues/:id/environment):登记时没配环境,拉日志/换库的工具现场
-   * 举闸后,用户在这里补地址与密码。密码进 vault 后即清闸并开平台
-   * 回合,让 Agent 重试刚才的操作。 */
+   * 举闸后,用户在这里补地址与网管后台密码。密码进 vault 后即清闸并开
+   * 平台回合,让 Agent 重试刚才的操作。 */
   attachEnvironment(
     id: string,
     input: IssueEnvironmentInput,
   ): IssueSummary {
     const live = this.require(id);
     const { state } = live;
-    const environment = this.storeEnvironment(id, input);
+    const environment = this.storeEnvironment(id, input, false);
     state.environment = environment;
     if (state.gate?.kind === "env_needed") {
       // 闸清在 issue.json(与 answer() 的闸裁决同一纪律)。清闸后
@@ -727,8 +887,9 @@ export class IssueFlowService {
     saveState(live.root, state);
     this.log(`[issue-flow] ${id} 网管环境已配置(${environment.name})`);
     this.startPlatformTurn(live,
-      "平台通知: 网管环境已配置(密码由平台保管,不进入对话)。"
-        + "请重试刚才的操作——拉日志用 fetch_logs,换库部署用 build_deploy。");
+      "平台通知: 网管环境已配置(凭据已入 vault;调 get_issue_meta 可查"
+        + "登记元信息全量)。请重试刚才的操作——拉日志用 fetch_logs,"
+        + "换库部署用 build_deploy。");
     return summarize(state);
   }
 
@@ -752,15 +913,25 @@ export class IssueFlowService {
     });
   }
 
-  /** 续聊形态的回合体:现场(driver)在场就把话递进去;进程重启后
-   * 重建会话,以续聊提示词把话交给重建的上下文。 */
+  /** 续聊形态的回合入口:现场(driver)在场就把话递进去;进程重启后
+   * 重建会话,以续聊提示词把话交给重建的上下文。用户主动续聊与平台
+   * 通知共用;重启自动续跑(#27)是同一回合体的另一条点火路径,走
+   * 泵(见 pump),不在这里——它必须排队等并发额度。 */
   private continueTurn(live: LiveIssue, message: string): void {
-    this.beginTurn(live, async () => {
-      await this.ensureContainer(live);
-      if (live.driver) return live.driver.continueWith(message);
-      const driver = await this.openDriver(live);
-      return driver.startResume(issueResumePrompt(live.state, message));
-    });
+    this.beginTurn(live, () => this.resumeTurnBody(live, message));
+  }
+
+  /** 续聊/续跑共用的回合体:话递给在场 driver,或重建后以续聊提示词
+   * 开回合(issueResumePrompt 带登记元信息与最近阶段,上下文不流失)。 */
+  private async resumeTurnBody(
+    live: LiveIssue,
+    message: string,
+  ): Promise<Outcome> {
+    await this.ensureContainer(live);
+    if (live.driver) return live.driver.continueWith(message);
+    const driver = await this.openDriver(live);
+    return driver.startResume(issueResumePrompt(live.state, message,
+      this.environmentCredentials(live)));
   }
 
   /** 并发额度:同时进行的回合数(等待用户/闲置/挂起的会话不占额度)。 */
@@ -768,13 +939,21 @@ export class IssueFlowService {
     for (const live of this.live.values()) {
       if (this.turning.size >= (this.options.maxConcurrentTurns ?? 2)) break;
       if (live.state.status !== "queued" || this.turning.has(live.id)) continue;
+      // 重启续跑与首轮开跑共用同一份额度:带待递话的(恢复路径重新
+      // 入队的)走续聊回合体,开场是平台通知;纯排队的是登记首轮,
+      // 仍走开场词。待递话消费即清,再泵不重放。
+      const resumeMessage = live.resumeMessage;
+      live.resumeMessage = undefined;
       this.beginTurn(live, async () => {
+        if (resumeMessage) return this.resumeTurnBody(live, resumeMessage);
         // 2026-08-28 拍板:克隆不再是回合前的自动动作——登记的仓由
         // Agent 在「拉取代码仓」阶段调 pull_repo 逐个落地(开场词有令)。
         const driver = await this.openDriver(live);
         return driver.start(live.state.mode === "fixed"
-          ? issueFixedOpeningPrompt(live.state)
-          : issueOpeningPrompt(live.state));
+          ? issueFixedOpeningPrompt(live.state,
+            this.environmentCredentials(live))
+          : issueOpeningPrompt(live.state,
+            this.environmentCredentials(live)));
       });
     }
   }
@@ -836,13 +1015,34 @@ export class IssueFlowService {
         branch,
       });
     }
+    // 同单重跑的遗留检测(2026-08-28 事故):上次运行停止/取消前可能
+    // 已把同名修复分支推上远端,克隆把它带成 origin/<branch>,而本地
+    // 从基线另起——分叉一路憋到 push 才炸。这里把事实带进回执,让
+    // Agent 拉仓当下就向用户报告处置,而不是中途回一句"分支已存在"
+    // 让人摸不着头脑。
+    const remoteBranch = branch
+      ? await divergedRemoteBranch(repo.dir, branch)
+      : undefined;
     const head = await currentHead(repo.dir);
+    // 克隆与切分支都以宿主身份落盘,而容器已经在跑:不把整棵仓交回容器
+    // 用户,容器内 git add/commit 就是 Permission denied。收口必须压在
+    // 全部宿主 git 写之后(切分支的 checkout 会重写 .git 内部,提前
+    // chown 会被原样污染回去),也只能在这里无条件做而不按 cloned 门——
+    // 存量 root 仓在下次拉取时顺带修好,幂等 walk 对属主已对的 inode
+    // 零写入;非 root 部署守卫直接 false,零开销。
+    repairContainerCloneOwnership({
+      workspace: live.root,
+      dir: repo.dir,
+      user: this.options.isolation?.user,
+      runtime: this.options.ownershipRuntime,
+    });
     return {
       dir: relative(live.root, repo.dir) || repo.dir,
       cloned,
       ...(branch ? { branch } : {}),
       head,
       ...(baselineMiss ? { baselineMiss } : {}),
+      ...(remoteBranch ? { remoteBranch } : {}),
     };
   }
 
@@ -1025,6 +1225,14 @@ export class IssueFlowService {
           ? service.vault.credential(live.id, ref, "sopuser")?.password
           : undefined;
       },
+      // 登记元信息的页面密码(ADR-0003 明文进上下文;闸补配的环境
+      // 没有页面凭据组,按缺省)。
+      pagePassword: () => {
+        const ref = live.state.environment?.page_credential_ref;
+        return ref
+          ? service.vault.credential(live.id, ref)?.password
+          : undefined;
+      },
       gitCredential: () =>
         this.options.gitCredential?.(live.state.account),
       // 拉仓工具的宿主实现(克隆+登记+建分支,凭据止步宿主)。
@@ -1145,7 +1353,8 @@ export class IssueFlowService {
       const driver = await this.openDriver(live);
       driver.injectDecision(record);
       return driver.startResume(issueResumePrompt(live.state,
-        `用户对问题卡的答复:\n${renderDecision(record)}`));
+        `用户对问题卡的答复:\n${renderDecision(record)}`,
+        this.environmentCredentials(live)));
     });
     return summarize(live.state);
   }
@@ -1176,7 +1385,7 @@ export class IssueFlowService {
       // 环境闸的作答口是 POST /issues/:id/environment(问题卡上的专用
       // 表单),不是选项卡:走错口不动状态,如实指路。
       throw new IssueControlError(
-        "网管环境请在问题卡的配置表单里填写服务器地址与共用密码后提交");
+        "网管环境请在问题卡的配置表单里填写服务器地址与网管后台密码后提交");
     }
     const route = stageGateRoute(gate.kind);
     const stageName = (stage: FixedStage): string =>
@@ -1316,7 +1525,7 @@ export class IssueFlowService {
       throw new IssueControlError("首轮研究还在排队启动,请稍候再发消息");
     }
     if (status === "running" || this.turning.has(live.id)) {
-      throw new IssueControlError("会话正在运行,请用插话(interrupt)");
+      throw new IssueControlError("会话正在运行,请用「补充」(运行中输入会在当前步骤完成后送达)");
     }
     if (isTerminal(status)) {
       throw new IssueControlError(`会话已${status === "archived" ? "归档" : "结束"},不能再续聊`);
@@ -1330,9 +1539,9 @@ export class IssueFlowService {
   steer(id: string, text: string): IssueSummary {
     const live = this.require(id);
     const content = text?.trim();
-    if (!content) throw new IssueControlError("插话内容不能为空");
+    if (!content) throw new IssueControlError("补充内容不能为空");
     if (live.state.status !== "running" || !live.driver) {
-      throw new IssueControlError("会话不在运行中,插话无处送达");
+      throw new IssueControlError("会话不在运行中,补充无处送达");
     }
     void live.driver.steer(content).catch((error) =>
       this.log(`[issue-flow] ${id} 插话失败: ${String(error)}`));
@@ -1414,7 +1623,7 @@ export class IssueFlowService {
     return summarize(live.state);
   }
 
-  // ---- 固定流程:流水线监看(阶段6,MR 全绿才放行换库) ----
+  // ---- 固定流程:流水线监看(阶段6:已申报且全绿才放行换库) ----
 
   private pipelineKnobs(): { pollMs: number; budgetMs: number } {
     const knobs = this.options.settings?.runtime?.() ?? {};
@@ -1424,9 +1633,10 @@ export class IssueFlowService {
     };
   }
 
-  /** MR 建成即挂表监看:触发流水线 → 轮询到终态。绿→自动进换库验证;
-   * 红→携失败项开回合让 AI 修(同分支再推,MR 自动跟新提交)。幂等:
-   * 同 SHA 在盯则跳过(MR 幂等重建会重复触发本钩子)。 */
+  /** MR 建成即挂表监看:触发流水线 → 轮询到终态。绿→已申报则自动进
+   * 换库验证(未申报则提示 AI 申报);红→携失败项开回合让 AI 修
+   * (同分支再推,MR 自动跟新提交)。幂等:同 SHA 在盯则跳过
+   * (MR 幂等重建会重复触发本钩子)。 */
   armPipelineWatch(live: LiveIssue, repo: string): void {
     const state = live.state;
     const platformUrl = this.options.platformUrl;
@@ -1529,13 +1739,16 @@ export class IssueFlowService {
         source: "platform", note: `流水线全绿(${repo})@ ${sha.slice(0, 12)}`,
       });
       // 多仓语义(2026-08-28 拍板):AI 已建的 MR 各自跑流水线,全部
-      // 跑绿才进换库验证;还有在途/未绿的就等齐,不抢跑。
+      // 跑绿才进换库验证;还有在途/未绿的就等齐,不抢跑。放行还要过
+      // MR 验绿门的申报半边(不变量:进 deploy_verify 当且仅当
+      // "已申报且全绿"):AI 没申报就不推进,开回合提醒它 complete_stage。
       const mrs = state.mrs ?? [];
       const allGreen = mrs.length > 0 && mrs.every((mr) =>
         state.pipelines?.[mr.repo]?.status === "success");
       const anyWatching = Object.values(state.pipelines ?? {})
         .some((item) => item.watching);
-      if (allGreen && !anyWatching) {
+      if (allGreen && !anyWatching && state.mr_gate) {
+        delete state.mr_gate;
         fixedAdvance(state, "deploy_verify",
           `全部 ${mrs.length} 个 MR 流水线跑绿,进入换库环境验证`);
         saveState(live.root, state);
@@ -1543,6 +1756,15 @@ export class IssueFlowService {
           `全部 MR 流水线已跑绿(${mrs.map((mr) => mr.repo).join(", ")}),`
             + "进入「换库环境验证」阶段。请调用 build_deploy 部署到网管环境"
             + "(多仓时指定要部署的仓);部署完成后平台会举验证卡,等用户真实验证。"));
+      } else if (allGreen && !anyWatching && state.stage === "mr_green") {
+        // 全绿但 AI 还没申报清单:不推进(申报是 mr_green 的出口半边),
+        // 提醒它调 complete_stage 完成收口。(已在验绿门当场放行的滞后
+        // 结算不进这里——阶段守卫挡住,不发过时的申报提醒。)
+        saveState(live.root, state);
+        this.startPlatformTurn(live,
+          `平台通知: 全部 MR 流水线已跑绿(${mrs.map((mr) => mr.repo).join(", ")}),`
+          + "请调 complete_stage(带 mrs 参数申报 MR 清单)完成"
+          + "「提交 MR·跑绿」阶段收口。");
       } else if (!anyWatching && mrs.length > 0) {
         // 有 MR 未绿且没表在跑:那就是失败了,带回失败项让 AI 修。
         saveState(live.root, state);
@@ -1556,6 +1778,8 @@ export class IssueFlowService {
     recordTransition(state, {
       source: "platform", note: `流水线失败(${repo})@ ${sha.slice(0, 12)}`,
     });
+    // 红=申报打回:清掉申报账,修复后要重新申报再过验绿门。
+    delete state.mr_gate;
     saveState(live.root, state);
     this.startPlatformTurn(live,
       `平台通知: 流水线未通过(仓 ${repo},仍在「提交 MR·跑绿」阶段)。\n`
@@ -1638,24 +1862,41 @@ export class IssueFlowService {
       cpSync(join(live.root, "issue-analysis.md"),
         join(newRoot, "issue-analysis.md"));
     }
-    // 环境凭据:解出旧密码,给新会话存一份自己的(vault 按会话 id 隔离;
-    // 先复制后销毁旧的,顺序不能反)。
-    let environment = state.environment ? { ...state.environment } : undefined;
-    if (environment) {
-      const password = this.vault.credential(
-        id, state.environment!.credential_ref, "sopuser")?.password;
-      if (password) {
-        const refs = this.vault.store(newId, [{
-          name: environment.name,
-          purpose: "both",
-          host: environment.hosts[0],
-          port: environment.port,
-          accounts: ["sopuser", "ossuser", "ossadm"].map((username) =>
-            ({ username, password })),
-        }]);
-        environment = { ...environment, credential_ref: refs[0]?.id ?? "" };
-      } else {
-        environment = undefined;
+    // 环境凭据:两组各自解出、各自给新会话存一份自己的(vault 按会话 id
+    // 隔离;先复制后销毁旧的,顺序不能反)。解不出的组优雅缺省——后台
+    // 是消费方在场的依据,页面只是记录,谁解不出来就只缺谁,不炸转正。
+    const oldEnvironment = state.environment;
+    let environment: IssueEnvironmentConfig | undefined;
+    if (oldEnvironment) {
+      const backendPassword = this.vault.credential(
+        id, oldEnvironment.credential_ref, "sopuser")?.password;
+      const page = oldEnvironment.page_credential_ref
+        ? this.vault.credential(id, oldEnvironment.page_credential_ref)
+        : undefined;
+      const rows: VaultEnvironmentInput[] = [];
+      if (backendPassword) {
+        rows.push(backendVaultRow(oldEnvironment.name, oldEnvironment.hosts[0],
+          oldEnvironment.port, backendPassword));
+      }
+      if (page) {
+        rows.push(pageVaultRow(oldEnvironment.name, oldEnvironment.hosts[0],
+          oldEnvironment.port, page.username, page.password));
+      }
+      if (rows.length) {
+        const refs = this.vault.store(newId, rows);
+        environment = {
+          credential_ref: backendPassword ? refs[0]?.id ?? "" : "",
+          name: oldEnvironment.name,
+          hosts: oldEnvironment.hosts,
+          port: oldEnvironment.port,
+          ...(page
+            ? {
+              page_account: page.username,
+              page_credential_ref:
+                refs[backendPassword ? 1 : 0]?.id ?? "",
+            }
+            : {}),
+        };
       }
     }
     const now = new Date().toISOString();

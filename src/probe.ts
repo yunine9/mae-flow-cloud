@@ -34,7 +34,8 @@ const SCRIPT: Scene[] = [
                      prompt: "只编写单元测试，不在本机运行" } } },
   { tool: { name: "AskUserQuestion",
             input: { questions: [{ question: "未提交 Diff 通过吗?",
-                                   options: ["通过", "打回"] }] } } },
+                                   options: ["通过", "打回"],
+                                   recommended: "通过" }] } } },
   { text: "UT_WRITE_RESULT: DONE 已按决定继续交付" },
 ];
 

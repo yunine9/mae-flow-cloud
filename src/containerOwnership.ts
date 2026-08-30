@@ -245,6 +245,38 @@ export function repairContainerMutationOwnership(input: {
   return true;
 }
 
+/**
+ * 宿主 git 在容器运行期间落盘后的整树交接。问题流的克隆与切分支都在
+ * 宿主执行而容器已在跑（需求流是"先 clone → 整树 chown → 再 docker
+ * run"，时序天然安全；问题流的 clone 发生在 docker run 之后），这些
+ * root 新文件不交回容器用户，容器内 git add/commit 就是 Permission
+ * denied。调用点必须在整个宿主 git 写结束之后：切分支的 checkout 会
+ * 重写 .git 内部，提前 chown 会被原样污染回去。
+ */
+export function repairContainerCloneOwnership(input: {
+  /** 会话工作区边界；dir 只许是里面的代码仓现场。 */
+  workspace: string;
+  dir: string;
+  user?: string;
+  runtime?: ContainerOwnershipRuntime;
+}): boolean {
+  // 无 user 先行 false:调用点对非隔离部署同样每单路过,而
+  // rootContainerOwner 对 root 形态缺 user 是 fail-loud——那是容器
+  // 启动期的契约,不该在拉仓收口上爆炸。
+  if (!input.user?.trim()) return false;
+  const owner = rootContainerOwner(input.user, input.runtime);
+  if (!owner) return false;
+  const workspace = resolve(input.workspace);
+  const dir = resolve(workspace, input.dir);
+  // 边界比写入修复更紧：工作区根本身还背着 issue.json 等控制面文件，
+  // 整树交接只认 workspace 深处的工作区，根目录整体 chown 不在本职内。
+  if (!dir.startsWith(`${workspace}/`)) return false;
+  // 调用点在 clone 之后，dir 不在场说明时序已被破坏，与写入修复同款
+  // fail-loud（chownTree 自带存在性守卫），不吞成静默 false。
+  chownTree(dir, owner);
+  return true;
+}
+
 /** 宿主 KernelHost 使用原子 replace 写状态，会把原本属于容器用户的
  * `.mae-flow*` 文件重新变成 root。每次 Hook 收口只核对这些小型状态树，
  * 不递归扫描整个业务仓。 */

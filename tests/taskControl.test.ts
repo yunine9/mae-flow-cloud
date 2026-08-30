@@ -34,7 +34,8 @@ test("任务控制:排队任务可暂停、恢复并取消，取消不可被陈�
 test("任务控制:人工节点暂停后恢复到原决定卡", async () => {
   const model = new ScriptedModelServer([
     { tool: { name: "AskUserQuestion", input: {
-      questions: [{ question: "继续吗?", options: ["继续", "停止"] }],
+      questions: [{ question: "继续吗?", options: ["继续", "停止"],
+        recommended: "继续" }],
     } } },
     { text: "完成。" },
   ]);
@@ -65,7 +66,8 @@ test("选择题选项都不合适时，自定义答复作为主答案继续而�
   const question = "如何处理平台生成的本地文件?";
   const model = new ScriptedModelServer([
     { tool: { name: "AskUserQuestion", input: {
-      questions: [{ question, options: ["提交到业务仓", "暂停等用户处理"] }],
+      questions: [{ question, options: ["提交到业务仓", "暂停等用户处理"],
+        recommended: "提交到业务仓" }],
     } } },
     { text: "已按用户给出的第三种方式继续。" },
   ]);

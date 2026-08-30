@@ -248,10 +248,12 @@ test("跨模块业务知识需治理全部模块，审核一次发布到每个�
   createBusinessModule(dataDir, {
     id: "orders", name: "订单", description: "订单规则",
     owner: "orders-owner",
+    repositories: ["https://code.example/team/orders.git"],
   }, "boss");
   createBusinessModule(dataDir, {
     id: "payments", name: "支付", description: "支付规则",
     owner: "payments-owner",
+    repositories: ["https://code.example/team/payments.git"],
   }, "boss");
   const candidate = createKnowledgeCandidate(dataDir, {
     source_task_id: "task-source", title: "跨域幂等规则",

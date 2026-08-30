@@ -1781,29 +1781,59 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-field { display: grid; gap: 5px; font-size: var(--font-size-assist); color: var(--muted); }
 .issue-field.wide { grid-column: 1 / -1; }
 .issue-field i { font-style: normal; color: var(--faint); }
-.issue-field input, .issue-field select, .issue-field textarea, .issue-env-fields input, .issue-bind input {
+.issue-field input, .issue-field select, .issue-field textarea, .issue-bind input {
   padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
   background: var(--surface-muted); color: var(--text-strong); font: inherit; width: 100%;
 }
-.issue-repo-rows { display: grid; gap: 6px; }
-.issue-repo-row { display: flex; gap: 6px; }
-.issue-repo-row button {
-  flex: none; width: 32px; border: 1px solid var(--line); border-radius: 8px;
+/* 登记表单的两段视觉分组(问题信息/网管环境):分组是给发起人的心理
+   分段——模块必选与凭据四件套常开不折叠,不再是"可选项"(spec #15)。 */
+.issue-group {
+  grid-column: 1 / -1; display: grid; gap: 12px; padding: 14px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
+}
+.issue-group-title {
+  display: block; color: var(--accent);
+  font-size: var(--font-size-assist); font-weight: 700; line-height: 1.2;
+}
+.issue-group-title i { font-style: normal; font-weight: 400; color: var(--faint); }
+.issue-group-body { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.issue-group-note {
+  grid-column: 1 / -1; margin: 0; color: var(--faint);
+  font-size: var(--font-size-dense); line-height: 1.5;
+}
+/* 只读仓清单:模块绑定带出,登记页只许看不许改——要增删仓去知识飞轮。
+   短名一行放下,全地址挂 title 悬停可见。 */
+.issue-module-repos { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.issue-module-repos li {
+  padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface-muted); color: var(--text-strong);
+  font-family: var(--font-mono); font-size: var(--font-size-dense);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* PasswordCombo:密码输入框 + 常见默认口令下拉(可选可手输)。面板
+   交互沿 DTS 版本多选框的成熟模式:锚定 wrapper,点面板外或 Esc 收起。 */
+.issue-password-combo { position: relative; display: grid; gap: 6px; }
+.issue-password-row { display: flex; gap: 6px; }
+.issue-password-row input { flex: 1; min-width: 0; }
+.issue-password-toggle {
+  flex: none; width: 34px; border: 1px solid var(--line); border-radius: 8px;
   background: var(--surface-muted); color: var(--muted); cursor: pointer;
 }
-.issue-repo-row button:hover { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
-.issue-repo-add {
-  justify-self: start; padding: 6px 12px; border: 1px dashed var(--line);
-  border-radius: 8px; background: none; color: var(--muted);
-  font-size: var(--font-size-assist); cursor: pointer;
+.issue-password-toggle:hover { color: var(--text-strong); border-color: var(--accent); }
+.issue-password-menu {
+  position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 40;
+  display: grid; gap: 2px; padding: 6px;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--surface); box-shadow: var(--shadow-md, 0 8px 24px rgba(0,0,0,.14));
 }
-.issue-repo-add:hover { color: var(--text-strong); border-color: var(--line-strong); }
-.issue-env-toggle {
-  justify-self: start; padding: 6px 12px; border: 1px dashed var(--line);
-  border-radius: 8px; background: none; color: var(--muted);
-  font-size: var(--font-size-assist); cursor: pointer;
+.issue-password-option {
+  padding: 6px 8px; border: 0; border-radius: 7px; background: none;
+  color: var(--muted); font-family: var(--font-mono);
+  font-size: var(--font-size-dense); cursor: pointer; text-align: left;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.issue-env-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px; }
+.issue-password-option:hover { background: var(--surface-muted); color: var(--text-strong); }
+.issue-password-option.on { color: var(--accent); }
 .issue-form-actions { grid-column: 1 / -1; display: flex; align-items: center; gap: 14px; }
 .issue-form-actions .primary, .issue-dts-toolbar .primary {
   min-height: 36px; padding: 0 18px; border: 0; border-radius: 9px;
@@ -2188,7 +2218,9 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   border-radius: 50%;
   background: var(--surface);
 }
-/* 连线是"进线":画在本节点左侧,通到本节点的路走过才着色 */
+/* 连线画在本节点与下一节点之间:本节点走完(或已继承)才着色——
+ * 进行中/待重做节点前方的路保持灰,管道正好停在当前阶段的节点上;
+ * "当前"由节点自己的脉冲光晕表达,不靠管线向前多伸一段。 */
 .issue-fixed-step:not(:last-child)::before {
   content: "";
   position: absolute;
@@ -2203,9 +2235,6 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-fixed-step.state-done > i { border-color: var(--success); background: var(--success); }
 .issue-fixed-step.state-done::before { background: var(--success); }
 .issue-fixed-step.state-in_progress { color: var(--accent); font-weight: 700; }
-.issue-fixed-step.state-in_progress::before {
-  background: linear-gradient(90deg, var(--success), var(--accent));
-}
 .issue-fixed-step.state-in_progress > i {
   width: 11px;
   height: 11px;
@@ -2232,7 +2261,6 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 }
 .issue-fixed-step.state-redo { color: #a8541f; }
 .issue-fixed-step.state-redo > i { border-color: #d49b37; background: #d49b37; }
-.issue-fixed-step.state-redo::before { background: #d49b37; }
 .issue-fixed-name {
   max-width: 100%;
   overflow: hidden;
@@ -2261,6 +2289,7 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 }
 /* 发起前置门禁条(个人凭据缺项):黄底警示 + 一键跳个人设置 */
 .issue-credential-gate {
+  grid-column: 1 / -1;
   display: flex; align-items: center; justify-content: space-between;
   gap: 10px; flex-wrap: wrap;
   padding: 10px 13px;
@@ -2540,6 +2569,29 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-decision-env .issue-decision-note { margin: 0; }
 .issue-decision-env .issue-decision-note[role="alert"] { color: #a8541f; }
 .issue-decision-env .issue-decision-submit { margin: 0 -15px 0; }
+
+/* AI 推荐标注(ADR-0004:只标注不预选):琥珀描边+徽标与卡头的
+   decision-kicker/计数 pill 同色系;:not(.picked) 让已选态(accent 蓝)
+   永远压过推荐描边——用户拍板后卡片只呈现"已选",两色不打架。徽标
+   常驻,选中后仍说明"这是 AI 的倾向",只是不再抢边。 */
+.option.issue-recommended:not(.picked) {
+  border-color: color-mix(in srgb, var(--attention) 55%, var(--line));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--attention) 14%, transparent);
+}
+.issue-recommended-badge {
+  display: inline-block;
+  margin-left: 7px;
+  padding: 0 7px;
+  border: 1px solid color-mix(in srgb, var(--attention) 30%, var(--line));
+  border-radius: 999px;
+  color: var(--attention);
+  background: var(--attention-soft);
+  font-size: var(--font-size-dense);
+  font-weight: 700;
+  line-height: 1.6;
+  vertical-align: 1px;
+  white-space: nowrap;
+}
 
 .issue-analysis-flag {
   margin-left: auto;

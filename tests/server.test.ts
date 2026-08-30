@@ -28,7 +28,8 @@ const SCRIPT: Scene[] = [
     tool: { name: "bash", input: { command: "echo BUILD SUCCESS" } } },
   { tool: { name: "AskUserQuestion",
             input: { questions: [{ question: "Diff 通过吗?",
-                                   options: ["通过", "打回"] }] } } },
+                                   options: ["通过", "打回"],
+                                   recommended: "通过" }] } } },
   { text: "COMPILE_RESULT: PASS 收口" },
 ];
 
@@ -190,7 +191,8 @@ test("SSE 增量推送:只收新增、不重不丢、半行凑齐换行才出手
   const model = new ScriptedModelServer([
     { tool: { name: "AskUserQuestion",
               input: { questions: [{ question: "继续吗?",
-                                     options: ["继续", "停止"] }] } } },
+                                     options: ["继续", "停止"],
+                                     recommended: "继续" }] } } },
     { text: "收口。" },
   ]);
   await model.start();

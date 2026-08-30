@@ -23,6 +23,7 @@ test("统一资产目录返回真实版本身份，任务解析只接受对拍�
     const workspace = mkdtempSync(join(tmpdir(), "mfc-workflow-snapshot-"));
     createBusinessModule(dataDir, {
       id: "order", name: "订单", description: "订单业务", owner: "alice",
+      repositories: ["https://code.example/order.git"],
     }, "admin");
     const module = publishBusinessKnowledgeAsset(dataDir, "order", {
       id: "diagnosis", title: "订单问题定位", summary: "定位订单状态异常",

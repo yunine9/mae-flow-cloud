@@ -25,9 +25,11 @@ const TICKET = "REQ2026081403";
 const CONFIG_CARD = {
   questions: [
     { question: "上述完整配置是否正确?",
-      options: ["确认以上全部配置", "需要修改"] },
+      options: ["确认以上全部配置", "需要修改"],
+      recommended: "确认以上全部配置" },
     { question: "交付方式?",
-      options: ["完整开发", "局部修改"] },
+      options: ["完整开发", "局部修改"],
+      recommended: "完整开发" },
   ],
 };
 

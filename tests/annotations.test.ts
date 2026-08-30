@@ -346,7 +346,8 @@ test("空内容与缺原文一律拒收——没有原文的批注无从定位",
 const REVIEW_SCRIPT: Scene[] = [
   { tool: { name: "AskUserQuestion",
             input: { questions: [{ question: "这轮代码通过吗?",
-                                   options: ["通过", "需要修改"] }] } } },
+                                   options: ["通过", "需要修改"],
+                                   recommended: "通过" }] } } },
   { text: "按你圈的几处改完了。" },
 ];
 
@@ -429,6 +430,7 @@ test("未闭环检视意见不能随直接提交分支越过返工", async () =>
     tool: { name: "AskUserQuestion", input: { questions: [{
       question: "这轮代码通过吗?",
       options: ["代码无需调整，继续提交", "需要调整代码（按检视意见返工）"],
+      recommended: "代码无需调整，继续提交",
     }] } },
   }]);
   await model.start();
@@ -546,6 +548,7 @@ test("批注已主动送达后，检视决定的补充说明仍可提交且不�
       tool: { name: "bash", input: { command: "sleep 2; echo CHECKED" } } },
     { tool: { name: "AskUserQuestion", input: { questions: [{
       question, options: ["继续调整", "确认通过"],
+      recommended: "确认通过",
     }] } } },
     { text: "收到新的补充要求。" },
   ]);

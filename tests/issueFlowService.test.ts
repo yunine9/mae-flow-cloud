@@ -22,6 +22,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
+import { IssueEnvironmentVault } from "../src/issueEnvironment.ts";
+import { createBusinessModule } from "../src/businessModuleLibrary.ts";
 import {
   buildIssueTimeline,
 } from "../src/issueFlow/sessionView.ts";
@@ -277,7 +279,7 @@ test("视图旁路路由:文档缺失是 200 {unavailable};残缺现场时间线
     created_at: "2026-08-26T08:00:00Z",
     updated_at: "2026-08-26T09:00:00Z",
     title: "t", description: "", source: "manual",
-    status: "interrupted", stage: "locate_root", stage_note: "",
+    status: "idle", stage: "locate_root", stage_note: "",
     stage_at: "2026-08-26T09:00:00Z",
     // 没有 stage 的转移条目不上关键事件墙
     transitions: [{ at: "2026-08-26T08:30:00Z", source: "agent",
@@ -362,6 +364,7 @@ test("问题会话多轮闭环:研究→提问卡→作答→非问题归档(无
     { tool: { name: "AskUserQuestion", input: { questions: [{
       question: "分析结论是非问题(误报),确认归档收口?",
       options: ["确认归档", "继续研究"],
+      recommended: "确认归档",
     }] } } },
     { tool: { name: "report_stage",
       input: { stage: "done", note: "非问题:误报" } } },
@@ -376,21 +379,46 @@ test("问题会话多轮闭环:研究→提问卡→作答→非问题归档(无
     modelsJson: model.modelsJson(),
   });
   try {
+    createBusinessModule(dataDir, {
+      id: "pay-core", name: "支付核心", description: "收单与清结算",
+      owner: "dev", repositories: [origin],
+    }, "tester");
     const created = service.create({
       account: "dev",
       title: "播放器偶发黑屏",
       description: "测试环境偶发黑屏,疑似新版本引入",
       repoUrl: origin,
+      moduleId: "pay-core",
       environment: {
         hosts: ["10.0.0.8"],
-        password: "env-shared-secret",
+        pagePassword: "page-secret",
+        backendPassword: "env-shared-secret",
       },
     });
     // create() 即刻排入首轮研究(并发额度内同步点火,状态直奔 running)。
     assert.equal(created.status, "running");
     assert.equal(created.ticket, undefined, "先研究后补单:创建时单号可空");
+    // 四件套落盘形状:页面账号是非密的登记元信息,回执可见;密码本体
+    // 只在 vault,状态文件与回执都搜不到。
+    assert.equal(created.environment?.page_account, "admin",
+      "页面账号未传缺省 admin");
+    assert.ok(created.environment?.page_credential_ref);
+    assert.ok(!JSON.stringify(created).includes("page-secret"));
     assert.ok(!existsSync(join(dataDir, "issues", created.id, "repo", ".mae-flow.json")),
       "问题会话不初始化内核(与需求流分属两个范式)");
+
+    // vault 两组凭据各自成组、可分别解出:后台三账号同密码,页面单账号。
+    const vault = new IssueEnvironmentVault(dataDir);
+    assert.deepEqual(
+      vault.credentials(created.id, created.environment!.credential_ref)
+        .map((account) => account.username),
+      ["sopuser", "ossuser", "ossadm"]);
+    assert.equal(vault.credential(created.id,
+      created.environment!.credential_ref, "sopuser")?.password,
+      "env-shared-secret");
+    assert.deepEqual(vault.credential(created.id,
+      created.environment!.page_credential_ref!),
+      { username: "admin", password: "page-secret" });
 
     const waiting = await until(() => {
       const issue = service.get(created.id);
@@ -401,13 +429,15 @@ test("问题会话多轮闭环:研究→提问卡→作答→非问题归档(无
     assert.ok(waiting.waiting, "问题卡应来自 AskUserQuestion");
     assert.ok(waiting.has_analysis, "结论文档应已产出");
 
-    // 秘密纪律:环境密码不进模型上下文。
+    // 登记元信息进上下文(ADR-0003):网管口令明文随元信息块出现。
     const requestText = JSON.stringify(model.requests);
-    assert.doesNotMatch(requestText, /env-shared-secret/);
+    assert.match(requestText, /env-shared-secret/);
+    assert.match(requestText, /页面密码: page-secret/);
     assert.match(requestText, /10\.0\.0\.8/, "环境地址是现场材料,应该可见");
     const stateFile = readFileSync(
       join(dataDir, "issues", created.id, "issue.json"), "utf-8");
     assert.doesNotMatch(stateFile, /env-shared-secret/);
+    assert.doesNotMatch(stateFile, /page-secret/);
 
     service.answer(created.id, {
       state_version: waiting.waiting!.state_version,
@@ -506,8 +536,18 @@ test("单号门禁:未绑定单号时 push_branch 被机械拒绝", async () => 
     modelsJson: model.modelsJson(),
   });
   try {
+    createBusinessModule(dataDir, {
+      id: "pay-core", name: "支付核心", description: "收单与清结算",
+      owner: "dev", repositories: [origin],
+    }, "tester");
     const created = service.create({
       account: "dev", title: "无单号问题", repoUrl: origin,
+      moduleId: "pay-core",
+      environment: {
+        hosts: ["10.0.0.8"],
+        pagePassword: "page-secret",
+        backendPassword: "env-shared-secret",
+      },
     });
     await until(() => {
       const issue = service.get(created.id);
@@ -626,6 +666,7 @@ test("重启续聊:等待问题卡期间服务重启,作答仍能续上现场", 
   const script: Scene[] = [
     { tool: { name: "AskUserQuestion", input: { questions: [{
       question: "现象是必现还是偶发?", options: ["必现", "偶发"],
+      recommended: "偶发",
     }] } } },
     { text: "已收到答复,继续分析。" },
   ];
@@ -637,7 +678,21 @@ test("重启续聊:等待问题卡期间服务重启,作答仍能续上现场", 
   });
   let second: IssueFlowService | undefined;
   try {
-    const created = first.create({ account: "dev", title: "重启续聊" });
+    // 无单登记门禁要模块+环境(#17):夹具模块绑一个不存在的本地路径
+    // 仓即可——本测试不拉仓,只要登记过门。
+    createBusinessModule(dataDir, {
+      id: "pay-core", name: "支付核心", description: "收单与清结算",
+      owner: "dev", repositories: ["/tmp/fixture.git"],
+    }, "tester");
+    const created = first.create({
+      account: "dev", title: "重启续聊",
+      moduleId: "pay-core",
+      environment: {
+        hosts: ["10.0.0.8"],
+        pagePassword: "page-secret",
+        backendPassword: "env-shared-secret",
+      },
+    });
     const waiting = await until(() => {
       const issue = first.get(created.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
@@ -671,11 +726,160 @@ test("重启续聊:等待问题卡期间服务重启,作答仍能续上现场", 
   }
 });
 
+/** 落一个最小可恢复的问题现场(自由模式:收口不牵催办/阶段机)。 */
+function seedRecoverableIssue(
+  dataDir: string,
+  id: string,
+  patch: Record<string, unknown>,
+): void {
+  const now = "2026-08-29T00:00:00Z";
+  const root = join(dataDir, "issues", id);
+  mkdirSync(root, { recursive: true });
+  writeFileSync(join(root, "issue.json"), JSON.stringify({
+    id, account: "dev", created_at: now, updated_at: now,
+    title: `标题-${id}`, description: "", source: "manual",
+    mode: "free", status: "idle",
+    stage: "locate_root", stage_note: "正在核对日志时序", stage_at: now,
+    ...patch,
+  }));
+}
+
+test("重启恢复翻转:running/旧 interrupted 重新入队自动续跑,queued 原样开跑,waiting/suspended 不动", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-recover2-"));
+  // 五个现场直接落盘(状态各一,不跑全链,聚焦恢复语义)。旧版
+  // interrupted 已不在词表里,夹具按盘上原样写(旧版本盖的戳)。
+  seedRecoverableIssue(dataDir, "issue-1", { status: "running" });
+  seedRecoverableIssue(dataDir, "issue-2", {
+    status: "queued", stage: "registered",
+    stage_note: "已登记,准备开始首轮研究",
+  });
+  seedRecoverableIssue(dataDir, "issue-3", {
+    status: "interrupted", stage: "align_issue",
+    stage_note: "对齐方案讨论中",
+  });
+  seedRecoverableIssue(dataDir, "issue-4", { status: "waiting_user" });
+  seedRecoverableIssue(dataDir, "issue-5", { status: "suspended" });
+  const script: Scene[] = [{ text: "收到,继续推进。" }];
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
+  await model.start();
+  const logs: string[] = [];
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    log: (message) => logs.push(message),
+  });
+  try {
+    // 构造即恢复:重排队的在默认额度(2)内点火,剩下的坐额度队列;
+    // 等家人与挂起的原样不动。目录遍历序不定,按集合断言。
+    const active = ["issue-1", "issue-2", "issue-3"]
+      .map((id) => service.get(id).status).sort();
+    assert.deepEqual(active, ["queued", "running", "running"],
+      "running/旧 interrupted/queued 都进泵,但受并发额度约束");
+    assert.equal(service.get("issue-4").status, "waiting_user");
+    assert.equal(service.get("issue-5").status, "suspended");
+    assert.ok(logs.some((line) => /重启恢复: 续跑 2 个、排队 1 个/.test(line)),
+      "恢复台账行要报续跑/排队数");
+    await until(() => {
+      const statuses = ["issue-1", "issue-2", "issue-3"]
+        .map((id) => service.get(id).status);
+      if (statuses.some((s) => s === "failed")) {
+        throw new Error(service.get("issue-1").error
+          ?? service.get("issue-2").error ?? "failed");
+      }
+      return statuses.every((s) => s === "idle") ? statuses : undefined;
+    }, "重排队的会话逐个续跑收口");
+    assert.equal(service.get("issue-4").status, "waiting_user", "全程未动");
+    assert.equal(service.get("issue-5").status, "suspended", "全程未动");
+    // 按标题认领各会话的请求:重启续跑的收到平台通知开场;原样排队
+    // 的是登记首轮,仍走开场词——两条入口不混。
+    const requests = model.requests.map((request) => JSON.stringify(request));
+    for (const id of ["issue-1", "issue-3"]) {
+      assert.ok(requests.some((r) => r.includes(`标题-${id}`)
+        && r.includes("服务重启,平台自动续跑")),
+        `${id} 的续跑回合开场是平台通知口径`);
+    }
+    assert.ok(requests.some((r) => r.includes("标题-issue-2")
+      && r.includes("研究与处理 Agent")), "queued 原样走开场词");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
+test("续跑点火:开场是重启平台通知,续聊提示词带当前阶段上下文,事件流留痕", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-resume-"));
+  seedRecoverableIssue(dataDir, "issue-1", {
+    title: "登录超时", status: "running",
+  });
+  const script: Scene[] = [{ text: "收到,接着当前阶段继续排查。" }];
+  const model = new ScriptedModelServer(script);
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+  });
+  try {
+    const idle = await until(() => {
+      const issue = service.get("issue-1");
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "idle" ? issue : undefined;
+    }, "续跑回合收口");
+    assert.equal(idle.stage, "locate_root", "续跑不重置阶段");
+    // 开场词:平台通知口径 + 续聊提示词的现场块(最近阶段/登记元信息)。
+    const prompt = JSON.stringify(model.requests[0]);
+    assert.ok(prompt.includes(
+      "服务重启,平台自动续跑,接着当前阶段继续,不重复已完成的工作"));
+    assert.ok(prompt.includes("服务重启/续聊后继续同一问题会话"));
+    assert.ok(prompt.includes("最近阶段: 分析根因(正在核对日志时序)"),
+      "阶段语境原样交给重建的上下文");
+    assert.ok(prompt.includes("- 标题: 登录超时"), "登记元信息随现场重给");
+    // 重启通知以用户消息落事件流,时间线可查。
+    assert.ok(service.messages("issue-1").some((message) =>
+      message.role === "user"
+      && message.text.includes("服务重启,平台自动续跑")));
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
+test("恢复续跑受并发额度约束:超出 maxConcurrentTurns 的会话排队逐个跑,不瞬时打满", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-quota-"));
+  for (const id of ["issue-1", "issue-2", "issue-3"]) {
+    seedRecoverableIssue(dataDir, id, { status: "running" });
+  }
+  const script: Scene[] = [{ text: "继续。" }];
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    maxConcurrentTurns: 2,
+  });
+  try {
+    // 构造同步段即断言:额度内点火两个,第三个还在排队。
+    const statuses = ["issue-1", "issue-2", "issue-3"]
+      .map((id) => service.get(id).status);
+    assert.equal(statuses.filter((s) => s === "running").length, 2);
+    assert.equal(statuses.filter((s) => s === "queued").length, 1);
+    await until(() => {
+      const now = ["issue-1", "issue-2", "issue-3"]
+        .map((id) => service.get(id).status);
+      if (now.includes("failed")) throw new Error("续跑回合失败");
+      return now.every((s) => s === "idle") ? now : undefined;
+    }, "额度排队逐个收口");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
 test("Agent 问题卡归码:投影派码(码+文案对),按码作答还原原文,AI 看到的仍是自己的措辞", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-agentcode-"));
   const script: Scene[] = [
     { tool: { name: "AskUserQuestion", input: { questions: [{
       question: "现象是必现还是偶发?", options: ["必现", "偶发"],
+      recommended: "偶发",
     }] } } },
     { text: "已收到答复,继续分析。" },
   ];
@@ -686,7 +890,19 @@ test("Agent 问题卡归码:投影派码(码+文案对),按码作答还原原文
     modelsJson: model.modelsJson(),
   });
   try {
-    const created = service.create({ account: "dev", title: "归码还原" });
+    createBusinessModule(dataDir, {
+      id: "pay-core", name: "支付核心", description: "收单与清结算",
+      owner: "dev", repositories: ["/tmp/fixture.git"],
+    }, "tester");
+    const created = service.create({
+      account: "dev", title: "归码还原",
+      moduleId: "pay-core",
+      environment: {
+        hosts: ["10.0.0.8"],
+        pagePassword: "page-secret",
+        backendPassword: "env-shared-secret",
+      },
+    });
     const waiting = await until(() => {
       const issue = service.get(created.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
@@ -714,6 +930,63 @@ test("Agent 问题卡归码:投影派码(码+文案对),按码作答还原原文
     const replay = JSON.stringify(model.requests.at(-1));
     assert.match(replay, /偶发/, "AI 收到的是还原后的选项原文");
     assert.doesNotMatch(replay, /opt-0-1/, "决策码是平台协议,不得漏进模型上下文");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
+test("Agent 卡推荐投影:推荐原文换算成命中选项的投影码,多题各自独立,开放题不带", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-recommend-"));
+  const script: Scene[] = [
+    { tool: { name: "AskUserQuestion", input: { questions: [
+      { question: "影响范围?", options: ["仅 SMS ", "全部渠道"],
+        recommended: " 全部渠道" },
+      { question: "复现步骤是什么?(自由作答)" },
+      { question: "重试次数?", options: ["三次", "四次"],
+        recommended: "三次" },
+    ] } } },
+    { text: "已收到答复,继续分析。" },
+  ];
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+  });
+  try {
+    createBusinessModule(dataDir, {
+      id: "pay-core", name: "支付核心", description: "收单与清结算",
+      owner: "dev", repositories: ["/tmp/fixture.git"],
+    }, "tester");
+    const created = service.create({
+      account: "dev", title: "推荐投影",
+      moduleId: "pay-core",
+      environment: {
+        hosts: ["10.0.0.8"],
+        pagePassword: "page-secret",
+        backendPassword: "env-shared-secret",
+      },
+    });
+    const waiting = await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user" ? issue : undefined;
+    }, "Agent 问题卡");
+    // 推荐协议(ADR-0004):推荐原文换算成命中选项的投影码随 questions[]
+    // 下发,前端按码标「AI 推荐」——与选项同一条码表,文案改字零协议后果。
+    const questions = (waiting.waiting!.question as {
+      questions: Array<{
+        options?: Array<{ code: string; label: string }>;
+        recommended?: string;
+      }>;
+    }).questions;
+    assert.equal(questions[0].recommended, "opt-0-1",
+      "推荐原文两侧的空白不参与比对(trim 语义),命中即换码");
+    assert.equal("recommended" in questions[1], false,
+      "自由作答题没有推荐,投影不带该键");
+    assert.equal(questions[2].recommended, "opt-2-0",
+      "多题各自独立:推荐码带各自题号");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
@@ -854,26 +1127,30 @@ test("网管环境配置路由(2026-08-28):POST /issues/:id/environment 密码�
     modelsJson: model.modelsJson(),
   });
   try {
-    // 校验打回:缺地址 / 缺密码都是 409 带人话,不产生任何落盘。
+    // 校验打回:缺地址 / 缺后台密码都是 409 带人话,不产生任何落盘。
     const noHosts = await issuePost(["issues", "issue-1", "environment"],
-      { hosts: [], password: "x" }, service);
+      { hosts: [], backend_password: "x" }, service);
     assert.equal(noHosts.status, 409);
     assert.match(noHosts.body.error, /至少要有一个服务器地址/);
     const noPassword = await issuePost(["issues", "issue-1", "environment"],
-      { hosts: ["10.0.0.8"], password: "   " }, service);
+      { hosts: ["10.0.0.8"], backend_password: "   " }, service);
     assert.equal(noPassword.status, 409);
-    assert.match(noPassword.body.error, /共用密码/);
+    assert.match(noPassword.body.error, /网管后台密码/);
 
     // 正常配置:状态只有 credential_ref,密码在 vault 加密文件里,
-    // issue.json 原文永远搜不到明文;随后平台回合照常收口。
+    // issue.json 原文永远搜不到明文;闸只收地址+后台密码,body 里即便
+    // 递了页面凭据也不认(env_needed 现场补配碰不到网管页面)。
     const ok = await issuePost(["issues", "issue-1", "environment"],
       { hosts: ["10.0.0.8", "10.0.0.9"], port: 2222,
-        password: "env-shared-secret" }, service);
+        backend_password: "env-shared-secret",
+        page_password: "should-be-ignored" }, service);
     assert.equal(ok.status, 200);
     assert.ok(ok.body.environment?.credential_ref, "状态里只有凭据引用");
     assert.equal(ok.body.gate ?? undefined, undefined, "没有闸在场就不凭空造闸");
     assert.deepEqual(ok.body.environment?.hosts, ["10.0.0.8", "10.0.0.9"]);
     assert.equal(ok.body.environment?.port, 2222);
+    assert.equal(ok.body.environment?.page_account, undefined,
+      "闸内补配没有页面凭据,消费面按缺席优雅处理");
     assert.ok(existsSync(join(dataDir, ".issue-environments", "issue-1.json")),
       "密码落在 vault 加密文件");
     const raw = readFileSync(join(dataDir, "issues", "issue-1", "issue.json"), "utf-8");

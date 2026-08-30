@@ -6,18 +6,23 @@
  * 让多题卡片能一次看清再作答。协议上是"码+文案"双通道(举卡裁决协议化):
  * 选项渲染 label(纯显示),提交回传 code(平台闸的裁决按它单点分派,
  * Agent 卡由服务端把码还原成选项原文再交给 AI)——文案改字零协议后果。
+ * 服务端还会随题下发推荐码(questions[].recommended,ADR-0004):渲染
+ * 成「AI 推荐」徽标+描边,只标注不预选——初始无选中,答案仍由用户
+ * 亲手点选产生。
  * decision 仍是人话文本(显示/审计/自由作答);平台闸的 code 是单题卡
  * 的所选项,Agent 卡的 answers 是逐题(码或自由文本)。补充说明走 notes。
  * 后果提示(choice_effects)是任务侧的服务端能力,问题域没有对应账目,
  * 这里不伪造。
  *
  * 例外是 env_needed 闸(2026-08-28):通用选项卡换成语义化表单(地址+
- * 端口+密码),提交走 onEnvironment(由会话视图接到 attachIssueEnvironment
- * ——密码只经这一条路进服务端 vault,不进状态/事件/对话,也不出现在
- * 其他任何闸的渲染里)。
+ * 端口+网管后台密码),提交走 onEnvironment(由会话视图接到
+ * attachIssueEnvironment——密码只经这一条路进服务端 vault,不进状态/
+ * 事件,也不出现在其他任何闸的渲染里;配置后的口令按 ADR-0003 进
+ * 元信息渲染,那是消费面的事,不是提交流程的事)。闸只收 地址+后台
+ * 密码:现场补配的流程(拉日志/换库)碰不到网管页面,没有页面凭据的位置。
  */
 import { useState } from "react";
-import type { IssueWaitingCard } from "../api";
+import type { IssueEnvironmentForm, IssueWaitingCard } from "../api";
 import { Markdown } from "../markdown";
 
 const ENV_SCOPE_TEXT: Record<string, string> = {
@@ -31,11 +36,7 @@ export function IssueDecisionCard({ waiting, busy, onAnswer, onEnvironment }: {
   /** 组装好的答复。返回 true 表示提交成功(此时父级会带着新详情回来)。 */
   onAnswer: (decision: string, notes?: string) => Promise<boolean>;
   /** env_needed 闸的专用提交口(会话视图接到 /issues/:id/environment)。 */
-  onEnvironment?: (input: {
-    hosts: string[];
-    port?: number;
-    password: string;
-  }) => Promise<boolean>;
+  onEnvironment?: (input: IssueEnvironmentForm) => Promise<boolean>;
 }) {
   if (waiting.gate_kind === "env_needed") {
     return <section className="issue-decision" aria-label="配置网管环境">
@@ -55,25 +56,22 @@ export function IssueDecisionCard({ waiting, busy, onAnswer, onEnvironment }: {
   return <GenericDecisionCard waiting={waiting} busy={busy} onAnswer={onAnswer} />;
 }
 
-/** 网管环境表单:多行 hosts(逗号/换行分隔)+ 端口(默认 22)+ 共用密码。
- * 密码只在提交瞬间经 POST /issues/:id/environment 进服务端 vault
- * (AES-GCM 加密文件),不落状态/事件/对话——前端也不把它存进任何草稿。 */
+/** 网管环境表单:多行 hosts(逗号/换行分隔)+ 端口(默认 22)+ 网管后台
+ * 密码(sopuser/ossuser/ossadm 同密码)。密码只在提交瞬间经 POST
+ * /issues/:id/environment 进服务端 vault(AES-GCM 加密文件),不落
+ * 状态/事件/对话——前端也不把它存进任何草稿。 */
 function EnvNeededForm({ busy, onSubmit }: {
   busy: boolean;
-  onSubmit?: (input: {
-    hosts: string[];
-    port?: number;
-    password: string;
-  }) => Promise<boolean>;
+  onSubmit?: (input: IssueEnvironmentForm) => Promise<boolean>;
 }) {
   const [hosts, setHosts] = useState("");
   const [port, setPort] = useState("22");
-  const [password, setPassword] = useState("");
+  const [backendPassword, setBackendPassword] = useState("");
   const [error, setError] = useState("");
   const parsedHosts = hosts.split(/[\s,，、]+/).map((item) => item.trim())
     .filter(Boolean);
   const portNumber = Number(port);
-  const ready = parsedHosts.length > 0 && password.length > 0
+  const ready = parsedHosts.length > 0 && backendPassword.length > 0
     && Number.isInteger(portNumber) && portNumber >= 1 && portNumber <= 65535;
 
   async function submit() {
@@ -81,10 +79,10 @@ function EnvNeededForm({ busy, onSubmit }: {
     const ok = await onSubmit({
       hosts: parsedHosts,
       ...(port !== "22" ? { port: portNumber } : {}),
-      password,
+      backend_password: backendPassword,
     });
     if (ok) {
-      setPassword("");
+      setBackendPassword("");
       setError("");
     } else {
       setError("提交未成功,请稍后重试");
@@ -104,9 +102,9 @@ function EnvNeededForm({ busy, onSubmit }: {
         onChange={(event) => setPort(event.target.value)} />
     </label>
     <label className="issue-field">
-      <span>共用密码(sopuser/ossuser/ossadm)</span>
-      <input type="password" value={password} autoComplete="new-password"
-        onChange={(event) => setPassword(event.target.value)} />
+      <span>网管后台密码 <i>sopuser/ossuser/ossadm 共用</i></span>
+      <input type="password" value={backendPassword} autoComplete="new-password"
+        onChange={(event) => setBackendPassword(event.target.value)} />
     </label>
     <p className="issue-decision-note">
       密码由平台加密保管,不会出现在对话或状态里;提交后 AI 会重试刚才的操作。
@@ -194,12 +192,19 @@ function GenericDecisionCard({ waiting, busy, onAnswer }: {
         ? <div className="options cards">
             {item.options.map((option) => {
               const chosen = picked[index] === option.code;
+              // 推荐按码标注(ADR-0004 只标注不预选):无推荐的旧卡
+              // 该键缺席,谁都不匹配,渲染与现状一致;推荐被点中后
+              // 正常进已选态,徽标常驻但描边让位(accent 蓝)。
+              const suggested = item.recommended === option.code;
               return <button type="button" key={option.code} role="radio"
                 aria-checked={chosen}
-                className={`option${chosen ? " picked" : ""}`}
+                className={`option${chosen ? " picked" : ""}${suggested ? " issue-recommended" : ""}`}
                 onClick={() => setPicked({ ...picked, [index]: option.code })}>
                 <span className={`radio${chosen ? " on" : ""}`} aria-hidden />
-                <span className="option-body"><span className="option-title">{option.label}</span></span>
+                <span className="option-body"><span className="option-title">
+                  {option.label}
+                  {suggested && <span className="issue-recommended-badge">AI 推荐</span>}
+                </span></span>
               </button>;
             })}
           </div>

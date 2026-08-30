@@ -35,14 +35,16 @@ const MAEFLOW = 'python ".mae-flow-work/bin/mae-flow.py"';
 const Q1_ONLY_CARD = {
   questions: [
     { question: "上述完整配置是否正确?",
-      options: ["确认以上全部配置", "需要修改"] },
+      options: ["确认以上全部配置", "需要修改"],
+      recommended: "确认以上全部配置" },
   ],
 };
 
 const REVIEWER_CARD = {
   questions: [
     { question: "是否启用独立 CODE Reviewer?",
-      options: ["不启用", "启用(人工检视前先由 Agent 预检)"] },
+      options: ["不启用", "启用(人工检视前先由 Agent 预检)"],
+      recommended: "不启用" },
   ],
 };
 

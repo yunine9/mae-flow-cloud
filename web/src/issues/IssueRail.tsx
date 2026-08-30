@@ -11,7 +11,8 @@
  */
 import { useState } from "react";
 import { issueStageText, type DtsTicketDetail, type IssueDetail,
-  type IssueGateKind, type IssueGateOption } from "../api";
+  type IssueEnvironmentForm, type IssueGateKind,
+  type IssueGateOption } from "../api";
 import { IssueDecisionCard } from "./IssueDecisionCard";
 
 export function IssueRail({ detail, busy, waiting, onAnswer, onReply,
@@ -34,7 +35,7 @@ export function IssueRail({ detail, busy, waiting, onAnswer, onReply,
    * answers=Agent 卡逐题作答);返回 true 表示成功。 */
   onAnswer: (decision: string, code?: string,
     answers?: Record<string, string>, notes?: string) => Promise<boolean>;
-  /** 继续对话(idle/interrupted);返回 true 表示成功。 */
+  /** 继续对话(idle);返回 true 表示成功。 */
   onReply: (text: string) => Promise<boolean>;
   /** 运行中插话;返回 true 表示成功。 */
   onSteer: (text: string) => Promise<boolean>;
@@ -46,11 +47,7 @@ export function IssueRail({ detail, busy, waiting, onAnswer, onReply,
   onAssociate: (ticket: string, confirm: boolean) =>
     Promise<{ ticket_detail?: DtsTicketDetail }>;
   /** env_needed 闸的专用提交口(POST /issues/:id/environment)。 */
-  onEnvironment?: (input: {
-    hosts: string[];
-    port?: number;
-    password: string;
-  }) => Promise<boolean>;
+  onEnvironment?: (input: IssueEnvironmentForm) => Promise<boolean>;
 }) {
   // 收口态:自由模式=done+idle;固定模式=末阶段完成+idle(验证通过后)。
   const lastState = detail.stage_states?.[detail.stage_states.length - 1];
@@ -89,8 +86,8 @@ export function IssueRail({ detail, busy, waiting, onAnswer, onReply,
         <RailInput
           kind="steer"
           disabled={busy}
-          placeholder="会话运行中——插话(当前工具调用完成后送达)"
-          actionLabel="插话"
+          placeholder="会话运行中——补充说明会在当前步骤完成后送达"
+          actionLabel="发送补充"
           submit={onSteer}
         />
       </div>}
@@ -107,19 +104,6 @@ export function IssueRail({ detail, busy, waiting, onAnswer, onReply,
           submit={onReply}
         />
       </div>}
-      {!waiting && detail.status !== "suspended" && !doneIdle
-        && detail.status === "interrupted"
-        && <div className="issue-rail-card is-resume">
-          <strong>服务重启打断了会话</strong>
-          <p>现场还在——发消息即可续聊。</p>
-          <RailInput
-            kind="reply"
-            disabled={busy}
-            placeholder="从现场继续…"
-            actionLabel="发送"
-            submit={onReply}
-          />
-        </div>}
       {!waiting && detail.status !== "suspended" && !doneIdle
         && ["archived", "canceled", "failed"].includes(detail.status)
         && <div className="issue-rail-card is-ended">

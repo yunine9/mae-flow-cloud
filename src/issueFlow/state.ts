@@ -27,6 +27,7 @@ import {
   fixedStageIndex,
   fixedStages,
   GATE_OPTIONS,
+  gateRecommendedCode,
   type FixedStage,
   type GateOption,
 } from "./stageRegistry.ts";
@@ -45,13 +46,14 @@ export {
 export type IssueSource = "manual" | "dts";
 
 /** 会话生命周期。idle = 回合结束、对话仍开放,用户随时可以继续说;
- * 这是问题流与任务队列的根本差异——"聊完这轮"不等于"办完了"。 */
+ * 这是问题流与任务队列的根本差异——"聊完这轮"不等于"办完了"。
+ * 没有"打断"态(2026-08-29 拍板):服务重启不是用户可停留的状态,
+ * 正在跑的会话恢复时重新入队,由并发额度泵自动续跑。 */
 export type IssueStatus =
-  | "queued"         // 已登记,首轮还没排上(并发额度)
+  | "queued"         // 排队等并发额度(登记首轮与重启恢复共用)
   | "running"        // Agent 回合进行中
   | "waiting_user"   // Agent 举了 AskUserQuestion(或平台闸门),等用户作答
   | "idle"           // 回合结束,等用户下一句话
-  | "interrupted"    // 服务重启打断,用户发消息即可续聊
   | "suspended"      // 无单流程结论为"问题",挂起等用户关联 DTS 单号转正
   | "archived"       // 已收口归档(结论见 conclusion)
   | "canceled"
@@ -156,6 +158,12 @@ export interface IssueEnvironmentConfig {
   /** 网管服务器地址列表(playbook 二进制支持多台串行)。 */
   hosts: string[];
   port: number;
+  /** 页面账号(登记元信息的一部分,非密;env_needed 闸现场补配的
+   * 环境没有页面凭据,两键一并缺席,消费面按"没有"处理)。 */
+  page_account?: string;
+  /** 页面凭据组的 vault 引用(页面密码本体只在 vault;纯记录,本期
+   * 无消费方,为页面自动化预留)。 */
+  page_credential_ref?: string;
 }
 
 export interface IssueConclusion {
@@ -202,8 +210,16 @@ export interface IssueGate {
   /** 作答幂等基准:创建时的 transitions 长度,对不上即状态已变。 */
   state_version: number;
   /** 选项携带码+文案对(出自 stageRegistry 的 GATE_OPTIONS):前端
-   * 渲染 label、提交 code,裁决按码单点分派——文案改字零协议后果。 */
-  question: { questions: Array<{ question: string; options: GateOption[] }> };
+   * 渲染 label、提交 code,裁决按码单点分派——文案改字零协议后果。
+   * recommended 是本闸的推荐码(ADR-0004,与 Agent 卡同一键):码表
+   * 定死或从提案派生(gateRecommendedCode),宿主定不了的缺席。 */
+  question: {
+    questions: Array<{
+      question: string;
+      options: GateOption[];
+      recommended?: string;
+    }>;
+  };
   context?: string;
   /** 仅 env_needed:闸为哪类动作而举(logs=拉日志 / deploy=换库部署)。 */
   scope?: IssueGateScope;
@@ -216,8 +232,9 @@ export interface IssueGate {
   created_at: string;
 }
 
-/** UT 验证上报(阶段5)。宿主拦的是"上报"不拦"真相":passed 才放行
- * create_mr,但真正的硬验证在阶段6流水线(UT 本身也在流水线里跑)。 */
+/** UT 验证上报(阶段5,事实上报):平台只记账留痕,不推进、不设门——
+ * 真正的硬验证在阶段6流水线(UT 本身也在流水线里跑),阶段出口是
+ * complete_stage 自报。 */
 export interface IssueUtRecord {
   passed: boolean;
   summary: string;
@@ -238,6 +255,16 @@ export interface IssuePipelineWatch {
   checks?: import("../pipelineContract.ts").PipelineCheck[];
   last_error?: string;
   round: number;
+}
+
+/** MR 验绿门的申报账(阶段6受理路):AI 调 complete_stage 申报清单时
+ * 流水线还在跑/无记录,平台先受理——监看器验绿后凭"申报在场"放行。
+ * 不变量:进 deploy_verify 当且仅当"已申报且全绿",全绿当场放行与
+ * 回退都要清掉它(新一轮要重新申报)。 */
+export interface IssueMrGateRecord {
+  /** 受理时 AI 申报的 MR 清单(归一到仓地址,一仓一 MR 下与链接等价)。 */
+  mrs: string[];
+  at: string;
 }
 
 export interface IssueSessionState {
@@ -292,6 +319,9 @@ export interface IssueSessionState {
   pushes?: IssuePushRecord[];
   /** MR 账(按仓,一仓一 MR):AI 的"上报"即 create_mr 的调用记录。 */
   mrs?: IssueMrRecord[];
+  /** MR 验绿门的申报账(受理路):complete_stage 申报时流水线在跑则
+   * 记账停等,监看器全绿后凭它在场放行(见 IssueMrGateRecord)。 */
+  mr_gate?: IssueMrGateRecord;
   /** 本回合已用催办次数(模型提前收嘴的自动续跑)。每个新回合起点清零;
    * 落在状态里是为了重启后不重复催办。 */
   nudges?: number;
@@ -357,8 +387,12 @@ export function issueRepoWorkspaces(
 }
 
 export function summarize(state: IssueSessionState): IssueSummary {
+  // mr_gate 是 MR 验绿门的内部受理账(流程机制状态):不上 wire——
+  // 服务端投影多出前端镜像没有的字段会让契约对账当场红;要上前端
+  // 先补 web/src/api.ts 镜像与样例。
+  const { mr_gate: _gate, ...rest } = state;
   return {
-    ...state,
+    ...rest,
     has_environment: Boolean(state.environment),
   };
 }
@@ -428,9 +462,11 @@ export function isTerminal(status: IssueStatus): boolean {
 }
 
 /** 催办谓词(fixed 模式):回合正常收口时,流程还没走到"可以停"的程度吗?
- * 三种情况算"可以停",不催:
+ * 四种情况算"可以停",不催:
  * - 当前阶段已收口(stage_states 里本阶段 done——如环境验证通过待归档);
  * - 流水线在途(MR 已建、平台还在监看——停等流水线是出口的一部分);
+ * - MR 验绿门已受理申报(mr_green 阶段 complete_stage 申报后等绿,
+ *   同"停等流水线"的合法停机;推进/回退即清,不会滞留);
  * - 自由模式(无阶段真相,停机合法性无从机械判定,不催)。
  * 其余一律催:阶段没走完,模型收嘴就是提前收嘴。 */
 export function shouldNudgeFixed(state: IssueSessionState): boolean {
@@ -444,6 +480,7 @@ export function shouldNudgeFixed(state: IssueSessionState): boolean {
       && pipelines.some((watch) => watch.watching || watch.status === "running")) {
     return false;
   }
+  if (state.mr_gate) return false;
   return true;
 }
 
@@ -472,7 +509,9 @@ export function recordTransition(
  * 回合可能还在收尾,waiting_user 由 settle 在回合终点定格——中途置位
  * 会让作答撞上"正在处理上一条输入"的竞态。Agent 对 issue.json 只读,
  * 推不动闸。选项不接收参:码+文案对整表投影自 stageRegistry 的
- * GATE_OPTIONS——举卡方自带文案的旧路已废,文案定义地只剩注册表。 */
+ * GATE_OPTIONS——举卡方自带文案的旧路已废,文案定义地只剩注册表。
+ * 推荐码同源:码表定死或按 AI 提案派生(gateRecommendedCode),
+ * 随 questions[].recommended 落盘,与 Agent 卡的 wire 同形。 */
 const GATE_NAMES: Record<IssueGateKind, string> = {
   analysis_confirm: "分析报告确认",
   conclude: "结论确认",
@@ -488,6 +527,7 @@ export function raiseGate(
   context?: string,
   scope?: IssueGateScope,
 ): void {
+  const recommended = gateRecommendedCode(kind, proposal);
   state.gate = {
     id: `gate-${state.id}-${Date.now().toString(36)}`,
     kind,
@@ -495,7 +535,8 @@ export function raiseGate(
     question: {
       questions: [{
         question,
-        options: GATE_OPTIONS[kind].map((option) => ({ ...option })),
+        options: GATE_OPTIONS[kind].options.map((option) => ({ ...option })),
+        ...(recommended ? { recommended } : {}),
       }],
     },
     ...(proposal ? { proposal } : {}),
@@ -550,7 +591,8 @@ export function fixedComplete(state: IssueSessionState, note: string): void {
 
 /** 验证不通过的一律回退(2026-08-27 拍板):回到问题分析,分析之后的
  * 阶段标 redo 待重做,轮次 +1;分支与 MR 记录延用(同分支追加修复,
- * CodeHub MR 自动跟新提交);UT 上报与流水线监看作废重来。 */
+ * CodeHub MR 自动跟新提交);UT 上报、流水线监看与 MR 申报账作废重来
+ * (mr_gate 清掉——新一轮要重新申报)。 */
 export function fixedRollback(
   state: IssueSessionState,
   reason: string,
@@ -574,6 +616,7 @@ export function fixedRollback(
   state.stage_at = new Date().toISOString();
   delete state.ut;
   delete state.pipelines;
+  delete state.mr_gate;
   delete state.gate;
   recordTransition(state, {
     source: "platform", stage: "analyze",

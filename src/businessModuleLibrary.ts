@@ -140,6 +140,17 @@ function repositories(values: string[]): string[] {
   return unique;
 }
 
+/** 模块是仓在登记侧的唯一来源，零仓模块没有存在价值；资产的作用域仓
+ * 允许为空（表示适用全部关联仓），所以下限不放进 repositories()，
+ * 只把守模块自身的保存。 */
+function moduleRepositories(values: string[]): string[] {
+  const unique = repositories(values);
+  if (!unique.length) {
+    throw new BusinessModuleError("业务模块必须至少绑定一个代码仓");
+  }
+  return unique;
+}
+
 function root(dataDir: string): string {
   return join(dataDir, ROOT);
 }
@@ -297,7 +308,7 @@ export function createBusinessModule(
     description: required(input.description, "模块说明", 500),
     owner,
     maintainers: usernames(input.maintainers ?? [], owner),
-    repositories: repositories(input.repositories ?? []),
+    repositories: moduleRepositories(input.repositories ?? []),
     status: "active",
     revision: 1,
     assets: [],
@@ -353,7 +364,7 @@ export function updateBusinessModule(
       ? current.maintainers.filter((item) => item !== owner)
       : usernames(patch.maintainers, owner),
     repositories: patch.repositories === undefined
-      ? current.repositories : repositories(patch.repositories),
+      ? current.repositories : moduleRepositories(patch.repositories),
     status,
     revision: current.revision + 1,
     updated_at: now,
