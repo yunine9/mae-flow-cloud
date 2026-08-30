@@ -259,6 +259,85 @@ EOF` } } },
   }
 });
 
+test("答复台账跨批继承:部分解决不复读旧意见,新增只答新意见", async () => {
+  // 2026-08-30 探针实锤的修复:检视人解决两条中的一条后,旧逻辑把剩下
+  // 那条当"新一批"重新派单——平台上同一讨论被重复回复,还白烧一只
+  // 修复会话。现在答复台账跨批继承:集合缩水=继续等人;集合增长=只对
+  // 未答复的意见派活。顺带钉住回复文件的同行格式容错([id] 正文)。
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  platform.seedDiscussion({
+    id: "d-a", file: "a.txt", line: 1, severity: "minor",
+    author: "李四", body: "建议改名 templateVars",
+  });
+  platform.seedDiscussion({
+    id: "d-b", file: "a.txt", line: 2, severity: "minor",
+    author: "王五", body: "这里补个注释",
+  });
+  await platform.start();
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-ledger-"));
+  const model = mrModel([
+    ...walkScript(),
+    // 首轮检视会话:d-a 用标准格式,d-b 故意写成同行格式——模型常这么
+    // 偏,严格解析会整条丢掉并触发"没答复"停环。
+    { tool: { name: "bash", input: { command:
+        `cat > ../review_replies.md <<'REPLY'
+[d-a]
+命名保持一致,暂不改。
+[d-b] 注释已补充说明,不改代码。
+REPLY` } } },
+    { text: "两条意见都已答复。" },
+    // 第二轮只应该为新意见 d-c 而起;若旧意见被复读,回复计数会露馅。
+    { tool: { name: "bash", input: { command:
+        `cat > ../review_replies.md <<'REPLY'
+[d-c]
+边界条件已确认,无需改动。
+REPLY` } } },
+    { text: "新意见已答复。" },
+  ], dataDir);
+  await model.start();
+  const service = buildService(platform, dataDir, model.modelsJson());
+  try {
+    const id = service.create("交付 REQ9:台账继承").id;
+    const replies = (which: string) =>
+      platform.discussions.find((d) => d.id === which)?.replies ?? [];
+    await until(() => replies("d-a").length >= 1 && replies("d-b").length >= 1,
+      "首轮两条都答复(含同行格式那条)");
+    assert.match(replies("d-b")[0] ?? "", /注释已补充/,
+      "同行格式的回复正文不能丢");
+    await until(() =>
+      (service.get(id)!.delivery?.waiting_on ?? "").includes("等检视人确认"),
+      "挂到等检视人确认");
+    // 检视人只解决 d-a:剩下的 d-b 已答复过,必须继续等人,不许复读。
+    platform.discussions.find((d) => d.id === "d-a")!.resolved = true;
+    await new Promise((tick) => setTimeout(tick, 2_500));
+    assert.equal(replies("d-b").length, 1,
+      `d-b 已答复过,不该被重复回复(实际 ${JSON.stringify(replies("d-b"))})`);
+    // 检视人新增一条:只答新意见,旧的仍不复读。
+    platform.seedDiscussion({
+      id: "d-c", file: "a.txt", line: 3, severity: "minor",
+      author: "赵六", body: "边界条件确认一下",
+    });
+    await until(() => replies("d-c").length >= 1, "新意见得到答复");
+    assert.equal(replies("d-a").length, 1, "已解决的 d-a 不许再收到回复");
+    assert.equal(replies("d-b").length, 1, "已答复的 d-b 不许再收到回复");
+    // 第二轮使命只点名新意见,并明说旧的不用再答。
+    const seen = model.requests
+      .flatMap((request) => (request as any).messages ?? [])
+      .map((message: any) => JSON.stringify(message.content ?? ""))
+      .join("\n");
+    assert.match(seen, /1 条检视意见待处理/, "第二轮只派 1 条新意见");
+    assert.match(seen, /此前已答复/, "使命明说旧意见不用再答");
+    // 全部解决后照常合入收口。
+    for (const d of platform.discussions) d.resolved = true;
+    platform.settleMr("master_bot_REQ9", "merged");
+    await until(() => service.get(id)!.status === "completed", "合入收口");
+  } finally {
+    await model.stop();
+    await platform.stop();
+  }
+});
+
 test("等人门禁:挂起等待不派 agent,说清卡在哪;人批完合入收口", async () => {
   const platform = new FakeGitPlatform();
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));

@@ -41,6 +41,9 @@ export interface WaitingRecord {
   /** 同一 HTTP 请求的稳定指纹。网络重试只有完全相同才幂等返回；
    * 不同决定仍严格执行先到生效。旧记录缺席时保持原有冲突语义。 */
   request_digest?: string;
+  /** 谁提交的决定。管理员可替责任人拍板,事后必须答得出"谁点的"
+   * (2026-08-30 审计:决策不记 actor,追责只能靠猜)。 */
+  decided_by?: string;
   /** 决定落袋后宿主完成后续动作所需的结构化收据。它与决定同在
    * waiting.json 的原子替换里，避免进程死在“决定已收、task.json
    * 尚未推进”的窗口后丢失交付清单等上下文。 */
@@ -135,6 +138,7 @@ export class HumanGate {
       answers?: Record<string, string>;
       notes?: string;
       requestDigest?: string;
+      decidedBy?: string;
       continuation?: Record<string, unknown>;
     },
   ): WaitingRecord {
@@ -161,6 +165,9 @@ export class HumanGate {
     }
     record.notes = String(options.notes ?? "");
     record.request_digest = options.requestDigest || undefined;
+    // 有值才赋:赋 undefined 会造出值为 undefined 的自有属性,与 JSON
+    // 落盘回读(键消失)不等价,幂等重放的 deepEqual 会被它绊倒(实测)。
+    if (options.decidedBy) record.decided_by = options.decidedBy;
     record.continuation = options.continuation
       ? { ...options.continuation } : undefined;
     record.state_version += 1;

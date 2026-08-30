@@ -1355,6 +1355,9 @@ export interface DecisionSubmission {
   /** 代码检视时用户勾选的最终交付文件。字段缺席表示该入口没有修改
    * 清单；空数组有业务含义，不能折叠成 undefined。 */
   delivery_paths?: string[];
+  /** 操作人(HTTP 层从登录会话注入,自动交卷不填)。只入审计账,
+   * 不参与请求指纹——同内容的网络重试无论谁发都幂等。 */
+  actor?: string;
 }
 
 /** 脏路径给人看的形态:前几条点名,余量说总数——三万个产物文件不能
@@ -2294,7 +2297,22 @@ export class TaskService {
   }
 
   completeReview(id: string, committer: string): ReviewRequest {
-    return this.reviews.complete(id, committer);
+    const record = this.reviews.complete(id, committer);
+    // 收口回执:发起人在等这个信号——不发,他只能反复刷页面或线下问
+    // (2026-08-30 审计:检视完成静默,两边互等)。纯旁路,失败只留日志。
+    if (this.options.notifier && record.requester
+        && record.requester !== committer) {
+      this.bypass(undefined, "检视完成回执", this.options.notifier.notifyOutcome({
+        taskId: record.task_id,
+        account: record.requester,
+        status: `review-completed:${record.id}`,
+        summary: `${committer} 已完成对「${record.task_title}」的检视,`
+          + "可以继续推进任务",
+        link: personalTaskLink(
+          this.notificationLinkBase(), record.requester, record.task_id),
+      }));
+    }
+    return record;
   }
 
   /** 启动一次与真实任务同约束的短命容器，验证的不是宿主 PATH，而是
@@ -3302,10 +3320,18 @@ export class TaskService {
     return this.annotations(task).add(input);
   }
 
-  dropAnnotation(id: string, annotationId: string, by: string): Annotation {
+  dropAnnotation(
+    id: string,
+    annotationId: string,
+    by: string,
+    override = false,
+  ): Annotation {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
-    return this.annotations(task).drop(annotationId, by);
+    const dropped = this.annotations(task).drop(annotationId, by, override);
+    // 拿掉一条未闭环批注也可能让本轮复检全部闭环,和 verify 同口径刷新。
+    this.refreshWorkspaceReviewClosure(task);
+    return dropped;
   }
 
   editAnnotation(
@@ -3319,11 +3345,16 @@ export class TaskService {
     return this.annotations(task).edit(annotationId, note, by);
   }
 
-  /** 检视闭环的裁决半边:确认通过。 */
-  verifyAnnotation(id: string, annotationId: string, by: string): Annotation {
+  /** 检视闭环的裁决半边:确认通过。override=管理员代闭环(死锁出路)。 */
+  verifyAnnotation(
+    id: string,
+    annotationId: string,
+    by: string,
+    override = false,
+  ): Annotation {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
-    const verified = this.annotations(task).verify(annotationId, by);
+    const verified = this.annotations(task).verify(annotationId, by, override);
     this.refreshWorkspaceReviewClosure(task);
     return verified;
   }
@@ -5123,7 +5154,10 @@ export class TaskService {
    * 的前闸,不是权威——权威裁决在绑 SHA 流水线,所以这是"fail-closed
    * 停下后由人接手"的合法出路,不是自动降级。跳过绑当下 HEAD:之后
    * 出现新提交,跳过即失效,重新走真验证(旧拍板不背书新代码)。 */
-  async skipPrePushVerification(id: string): Promise<TaskSummary> {
+  async skipPrePushVerification(
+    id: string,
+    actor?: string,
+  ): Promise<TaskSummary> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     if (task.prepushActive) {
@@ -5142,15 +5176,20 @@ export class TaskService {
     this.setPrePushState(task, {
       ...prepush,
       state: "user_skipped",
+      // 恒填(无鉴权部署记"用户"):它同时是 MR 标记的判据——只有
+      // "编译失败后人工跳过"这条路打标,清单整理的 user_skipped 不打
+      // (那是 prepush 已通过后的机械调整,恐吓性标记会误伤常规流)。
+      skipped_by: actor ?? "用户",
       sha: revision.sha,
       workspace_fingerprint: revision.workspace_fingerprint,
-      message: "用户选择跳过本地验证,编译与 UT 交由权威流水线裁决",
+      message: `${actor ?? "用户"}选择跳过本地验证,`
+        + "编译与 UT 交由权威流水线裁决",
       updated_at: new Date().toISOString(),
     });
     this.persist(task);
     // 复用「重跑续推」的恢复链路续接交付;交付环走到 preparePush 时
     // 命中同 HEAD 的跳过放行,不再起验证 Agent。
-    return this.retry(id);
+    return this.retry(id, actor);
   }
 
   /** 用户显式重跑推送前编译。实锤场景(2026-08-27 内网):部署重启杀掉
@@ -5158,7 +5197,7 @@ export class TaskService {
    * 「重跑续推」按 verifying 在途拒绝——人对着僵尸现场没有任何出路。
    * 这个口子同时是活性探针:真在跑时 prepushActive 挡住并明说
    * "正在进行",人立刻知道不是卡死。只动 prepush,不重排内核会话。 */
-  async retryPrePush(id: string): Promise<TaskSummary> {
+  async retryPrePush(id: string, actor?: string): Promise<TaskSummary> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     if (task.prepushActive) {
@@ -5188,7 +5227,8 @@ export class TaskService {
     }
     const epoch = task.controlEpoch;
     task.summary.status = "verifying";
-    task.summary.detail = "人工重跑 Build-Fix";
+    task.summary.detail = actor
+      ? `人工重跑 Build-Fix(${actor})` : "人工重跑 Build-Fix";
     this.persist(task);
     // 交付链自己会收口僵尸 attempt(restore 的 recovered 转移)并起新轮;
     // 这里只负责把链路重新踢活。
@@ -5206,7 +5246,7 @@ export class TaskService {
    * 停机账、跳过拍板都如实落在现场里。两个例外:本轮在停止瞬间已经
    * 通过的,按通过继续推,不冤枉它;暂停中的任务只停不推——暂停是
    * 用户更早的明确指令,不许被顺手续跑。 */
-  async stopPrePush(id: string): Promise<TaskSummary> {
+  async stopPrePush(id: string, actor?: string): Promise<TaskSummary> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     const active = task.prepushActive;
@@ -5235,7 +5275,7 @@ export class TaskService {
         ...prepush,
         state: "environment_error",
         active_attempt: undefined,
-        message: "用户停止了本轮 Build-Fix，直推流水线裁决",
+        message: `${actor ?? "用户"}停止了本轮 Build-Fix，直推流水线裁决`,
         updated_at: new Date().toISOString(),
       });
     }
@@ -5256,10 +5296,10 @@ export class TaskService {
     this.persist(task);
     // 停止并直推:失败停机后立刻走既有跳过链路(绑 HEAD 的
     // user_skipped + retry 续跑),语义与人分两步点完全一致。
-    return this.skipPrePushVerification(id);
+    return this.skipPrePushVerification(id, actor);
   }
 
-  retry(id: string): TaskSummary {
+  retry(id: string, actor?: string): TaskSummary {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     const { status, delivery } = task.summary;
@@ -5318,7 +5358,8 @@ export class TaskService {
     }
     task.summary.status = "queued";
     delete task.summary.completed_at;
-    task.summary.detail = "人工重跑,续接内核当前步骤";
+    task.summary.detail = actor
+      ? `人工重跑(${actor}),续接内核当前步骤` : "人工重跑,续接内核当前步骤";
     task.resume = true;
     this.persist(task);
     this.queue.push(id);
@@ -6829,6 +6870,7 @@ export class TaskService {
       answers: Object.keys(answers).length ? answers : undefined,
       notes,
       requestDigest,
+      decidedBy: input.actor,
       continuation: {
         ...(deliverySelection
           ? { delivery_selection: deliverySelection.record } : {}),
@@ -9985,7 +10027,10 @@ export class TaskService {
       "**最终代码检视：Build-Fix 已收敛。确认后将直接推送并创建或更新 MR。**",
       ...reviewContext,
       ...deltaLines,
-      "完整增量在「检视材料 → 本任务变更」逐文件看 diff;发现问题可在"
+      // 名字必须与界面一字不差:页签叫「交付材料」、按钮叫「工作区
+      // 变更」。此前写「检视材料 → 本任务变更」,界面上根本没有这两个
+      // 词,新人在唯一的人审闸口满屏找不到入口(2026-08-30 审计)。
+      "完整增量在「交付材料 → 工作区变更」逐文件看 diff;发现问题可在"
       + "代码行上留批注,选「需要调整代码」让 Agent 修改。",
       "文件树左侧勾选框决定交付范围:取消勾选=该文件不推送。确认后,"
       + "自动修复只要不增删交付文件就不再重复打扰。",
@@ -10417,8 +10462,19 @@ export class TaskService {
         repo: task.summary.repo_url ?? this.effectiveDefaultRepo(),
         source_branch: branch,
         target_branch: baseline,
+        // 编译失败后人工跳过的交付,标记必须跟着 MR 走到平台上:检视
+        // 人在 CodeHub 里看不见云端工作台,不标就是让他在不知情下背书
+        // 一份从未编译过的代码(云端契约里编译全托给流水线,2026-08-30
+        // 审计)。判据是 skipped_by(只有失败跳过路落它)——清单整理的
+        // user_skipped 是 prepush 通过后的机械调整,不打标。MR 幂等复用
+        // 时旧标题不更新,尽力而为。
         title: `${state?.config?.["单号"] ?? branch}: ${
-          task.summary.title ?? taskTitle(task.summary.requirement)}`,
+          task.summary.title ?? taskTitle(task.summary.requirement)}${
+          task.summary.delivery?.prepush?.state === "user_skipped"
+            && task.summary.delivery.prepush.skipped_by
+            ? `【未经本地编译验证,${
+              task.summary.delivery.prepush.skipped_by}跳过】`
+            : ""}`,
         // E2E 单号关联(内网诉求 2026-08-19):单号只拼进 title 平台看
         // 不见,要走 codehub-cli 的 --e2e-issues 才可追踪。取值优先
         // **用户下单填的需求号**(用户拍板"直接关联开始填入的那个"),
@@ -11464,6 +11520,15 @@ export class TaskService {
       return "skip";
     }
     const ids = discussions.map((item) => item.id).sort().join(",");
+    // 答复台账跨批次继承。"未解决集合"随检视人点掉/新增而变,但已经
+    // 答复过的讨论不因此变回未答复——原来换批清账重派,会对同一条讨论
+    // 重复回复(2026-08-30 探针实锤:两条意见解决一条,另一条被复读),
+    // 检视人视角就是机器人刷屏,还白烧一只修复会话。
+    const replied = new Set(
+      loop.kind === "review" && loop.review_source === "platform"
+        && loop.replied_ids
+        ? loop.replied_ids.split(",").filter(Boolean) : []);
+    const pending = discussions.filter((item) => !replied.has(item.id));
     if (loop.kind === "review" && loop.review_ids === ids) {
       if (loop.replied_ids === ids) {
         // 这批意见的回复都发布过了,门禁红只是检视人还没点"已解决"
@@ -11474,17 +11539,36 @@ export class TaskService {
       loop.state = "halted";
       const diagnosis = (task.lastReply ?? "").trim();
       if (diagnosis) loop.diagnosis = diagnosis.slice(0, 2000);
+      // 点名没答复的是哪几条:不点名,人只能去 MR 上逐条对台账。
+      const unanswered = discussions.map((item) => item.id)
+        .filter((one) => !replied.has(one));
       task.summary.detail =
-        "同一批检视意见处理过一轮仍未答复完,请人工查看 MR 讨论";
+        `同一批检视意见处理过一轮仍未答复完(未答复: ${
+          unanswered.slice(0, 8).join(", ")}${
+          unanswered.length > 8 ? ` 等 ${unanswered.length} 条` : ""
+        }),请人工查看 MR 讨论`;
       this.persist(task);
       this.notifyRepairStopped(task);
       return "halted";
+    }
+    if (loop.kind === "review" && loop.review_source === "platform"
+        && !pending.length) {
+      // 集合变了但没有要新答的(检视人解决了部分):同步台账口径到
+      // 当前集合,继续等人——绝不重新派单。
+      loop.review_ids = ids;
+      loop.replied_ids = ids;
+      this.persist(task);
+      return "waiting";
     }
     loop.kind = "review";
     loop.review_source = "platform";
     loop.round = 0; // 检视触发清零 CI 重试(内网框架的实证语义)
     loop.review_ids = ids;
-    loop.replied_ids = undefined; // 新一批意见,答复台账从零记
+    // 换批只继承仍在场的答复记录,不清零(见上);离场的 id 出账,
+    // 免得台账无限膨胀。
+    loop.replied_ids = [...replied]
+      .filter((one) => discussions.some((item) => item.id === one))
+      .sort().join(",") || undefined;
     loop.state = "repairing";
     // 意见落盘 reviews/(仓库外):原始数据给 agent 自读,摘要进使命。
     const reviewsDir = join(task.summary.workspace, "reviews");
@@ -11496,7 +11580,7 @@ export class TaskService {
     } catch {
       /* 落盘失败不拦路:使命里的摘要仍然够用 */
     }
-    const lines = discussions.map((item) =>
+    const lines = pending.map((item) =>
       `  [${item.id}] ${item.file ?? "(整体意见)"}`
       + `${item.line !== undefined ? `:${item.line}` : ""}`
       + `${item.severity ? ` (${item.severity})` : ""}`
@@ -11504,9 +11588,13 @@ export class TaskService {
       + ` ${String(item.body ?? "").slice(0, 300)}`);
     this.enqueueRepair(task,
       [
-        `MR 上有 ${discussions.length} 条检视意见未解决,`
+        `MR 上有 ${pending.length} 条检视意见待处理,`
         + `逐条处理它们是你此刻唯一的使命:`,
         ...lines,
+        ...(discussions.length > pending.length ? [
+          `- 另有 ${discussions.length - pending.length} 条此前已答复、`
+          + `在等检视人确认,**不要**再答复它们。`,
+        ] : []),
         `- Cloud 宿主已在你入场前机械开启「处理评审意见」新轮，`
         + `**不要再次 init、不要 exit/goto/skip**；先执行 current，`
         + `随后严格按本步指引走到 end。分支不会新建，内核按本单单号`
@@ -11519,7 +11607,7 @@ export class TaskService {
         + `不许含糊带过;不确定的按意见改(检视人对本仓比你熟)。`,
         `- 把逐条回复写到 ../review_replies.md(仓库外,不会进提交),`
         + `格式严格如下,每条以方括号 id 单独一行开头:`,
-        `  [${discussions[0].id}]`,
+        `  [${pending[0].id}]`,
         `  <这条的回复:改了什么/为什么不改,一两句讲清>`,
         `- 改动在 build 步收口前如实 commit(按 current 的指引),`
         + `不要自己另起一套；不要读取或索要个人 Git 令牌,也不要 push,`
@@ -11530,7 +11618,7 @@ export class TaskService {
         + `决定,默认留给检视人点),回复写给检视人看,说人话,`
         + `别写流程黑话。`,
       ].join("\n"),
-      `检视意见 ${discussions.length} 条,专职会话处理中`);
+      `检视意见 ${pending.length} 条,专职会话处理中`);
     return "dispatched";
   }
 
@@ -11822,17 +11910,32 @@ export class TaskService {
     } catch {
       return;
     }
-    // 解析:每条以 [id] 单独成行开头,正文到下一个 [id] 行为止。
+    // 解析:每条以 [id] 行开头,正文到下一个 [id] 行为止。约定是 id
+    // 单独成行,但模型常写成 "[id] 回复正文" 同行形态——按严格版整条
+    // 会丢失,触发"没答复"停环喊人(2026-08-30 审计),所以同行正文也
+    // 收。防误切:落盘的 reviews/discussions.json 有本批 id 名单,行首
+    // 方括号只有命中名单才算新条目;名单读不到才退回宽松判定。
+    let known: Set<string> | undefined;
+    try {
+      const parsed = JSON.parse(readFileSync(
+        join(task.summary.workspace, "reviews", "discussions.json"), "utf-8"));
+      if (Array.isArray(parsed)) {
+        const listed = parsed
+          .map((item) => String((item as { id?: unknown })?.id ?? ""))
+          .filter(Boolean);
+        if (listed.length) known = new Set(listed);
+      }
+    } catch { /* 名单缺席不拦发布,退回宽松解析 */ }
     const replies: Array<{ id: string; body: string }> = [];
     let current: { id: string; body: string[] } | undefined;
     for (const line of text.split("\n")) {
-      const head = line.trim().match(/^\[([^\]\s]+)\]$/);
-      if (head) {
+      const head = line.trim().match(/^\[([^\]\s]+)\]\s*(.*)$/);
+      if (head && (!known || known.has(head[1]))) {
         if (current) {
           replies.push({ id: current.id,
                          body: current.body.join("\n").trim() });
         }
-        current = { id: head[1], body: [] };
+        current = { id: head[1], body: head[2] ? [head[2]] : [] };
       } else if (current) {
         current.body.push(line);
       }
@@ -12181,8 +12284,16 @@ export class TaskService {
           matchesStepChoice(effect, option)))
           ?? item.options.find((option) =>
             /通过|确认|同意|接受|批准|继续|无需|无须/.test(option)
-            && !/不通过|打回|退回|拒绝|修改|调整|返工/.test(option))
-          ?? item.options[0];
+            && !/不通过|打回|退回|拒绝|修改|调整|返工/.test(option));
+        if (!chosen) {
+          // 兜底选第一项曾在这里:选项顺序一变就可能替人选中"打回"
+          // 之类的反向分支(2026-08-30 审计)。月光只代答认得出的
+          // "通过"类选项;认不出=形状漂移,整卡退回人,不猜。
+          this.options.log?.(
+            `任务 ${task.summary.id} 月光模式认不出明确的通过类选项`
+            + `(${(item.options ?? []).join("/")}),整卡退回等人`);
+          return undefined;
+        }
         answers[text] = chosen;
         reasons.add(`月光模式选择:${chosen}`);
       } else {

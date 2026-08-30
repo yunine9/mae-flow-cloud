@@ -82,12 +82,15 @@ async function failedTask() {
 test("失败停机可跳:绑当下 HEAD,同 HEAD 放行不起验证 Agent", async () => {
   const { service, model, id, internal, repo } = await failedTask();
   try {
-    await service.skipPrePushVerification(id);
+    await service.skipPrePushVerification(id, "zhangsan");
     const prepush = service.get(id)!.delivery!.prepush!;
     assert.equal(prepush.state, "user_skipped");
     assert.equal(prepush.sha, repo.git("rev-parse", "HEAD"),
       "跳过必须绑拍板时刻的 HEAD");
     assert.match(prepush.message, /流水线裁决/);
+    // 跳过是三道闸里最重的人工拍板,现场必须答得出"谁点的"。
+    assert.equal(prepush.skipped_by, "zhangsan");
+    assert.match(prepush.message, /zhangsan/);
 
     // retry 链路已把任务送回队列续跑;等它收口(重跑会话会把 cwd
     // 换成剧本工作区,测试仓要重新指回)。

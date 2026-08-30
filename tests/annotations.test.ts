@@ -178,6 +178,30 @@ test("批注归作者管理:本人可编辑删除,其他人无权代改", () => 
   assert.equal(dropped.status, "dropped");
 });
 
+test("死锁出路:管理员可代闭环并留痕,非 override 仍拒绝越权", () => {
+  // 作者不在场时,一条未闭环批注会把整单推送永远锁死(2026-08-30
+  // 审计)。"谁的意见谁裁决"仍是默认规则;override 是有账可查的门。
+  const target = store();
+  const stray = seed(target, "路过圈的一条", { author: "visitor" });
+  target.markSent([stray.id], "decision");
+  assert.throws(() => target.verify(stray.id, "admin"),
+    AnnotationPermissionError, "不带 override 依然不能替别人签字");
+  const verified = target.verify(stray.id, "admin", true);
+  assert.equal(verified.status, "verified");
+  assert.equal(verified.verified_by, "admin", "代闭环必须记谁点的");
+  const replayed = target.list().find((item) => item.id === stray.id)!;
+  assert.equal(replayed.verified_by, "admin", "台账重放后留痕仍在");
+  // 作者本人裁决不算代签,verified_by 不落。
+  const own = seed(target, "自己的意见", { author: "visitor" });
+  target.markSent([own.id], "decision");
+  assert.equal(target.verify(own.id, "visitor").verified_by, undefined);
+  // 草稿没有可裁决的改动,管理员的出路是代删——同样留痕生效。
+  const draft = seed(target, "没送出的草稿", { author: "visitor" });
+  assert.throws(() => target.drop(draft.id, "admin"),
+    AnnotationPermissionError);
+  assert.equal(target.drop(draft.id, "admin", true).status, "dropped");
+});
+
 test("批注 HTTP 权限:开发与 Committer 都只能管理自己提出的意见", async () => {
   const dir = mkdtempSync(join(tmpdir(), "mfc-anno-auth-"));
   const auth = new LocalAuth(join(dir, "auth.json"));
@@ -250,6 +274,15 @@ test("批注 HTTP 权限:开发与 Committer 都只能管理自己提出的意�
       });
     assert.equal(committerCannotEdit.status, 403);
 
+    // 管理员例外:作者不在场的死锁出路,HTTP 层按登录角色放行 override。
+    const admin = await login("admin", "administrator-pass");
+    const adminDeletesOther = await fetch(
+      `${base}/tasks/${created.id}/annotations/${developerNote.id}`, {
+        method: "DELETE", headers: { cookie: admin },
+      });
+    assert.equal(adminDeletesOther.status, 200,
+      "管理员可代删他人批注(留痕在台账 op.by)");
+
     const committerDeletesOwn = await fetch(
       `${base}/tasks/${created.id}/annotations/${committerNote.id}`, {
         method: "DELETE", headers: { cookie: committer },
@@ -258,7 +291,8 @@ test("批注 HTTP 权限:开发与 Committer 都只能管理自己提出的意�
     const listed = await fetch(`${base}/tasks/${created.id}/annotations`, {
       headers: { cookie: developer },
     }).then((response) => readJson(response)) as { items: Annotation[] };
-    assert.deepEqual(listed.items.map((item) => item.id), [developerNote.id]);
+    assert.deepEqual(listed.items, [],
+      "两条都已删除(一条本人删、一条管理员代删)");
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }

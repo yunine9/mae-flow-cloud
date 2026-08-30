@@ -1968,6 +1968,8 @@ export function createTaskServer(
           }
           const body = await readBody(request);
           const task = await service.decide(id, {
+            // 操作人取登录会话,不信请求体:决定要答得出"谁点的"。
+            actor: viewer?.username,
             waiting_id: body.waiting_id === undefined
               ? undefined : String(body.waiting_id),
             state_version: Number(body.state_version),
@@ -2216,16 +2218,20 @@ export function createTaskServer(
                 String(body.note ?? ""), author));
           }
           // 只能删自己写的:多人环境里替别人删等于替他改主意。
+          // 管理员例外(override):作者不在场时一条未闭环批注会把整单
+          // 推送锁死,代删/代确认凭台账 op.by 留痕(2026-08-30 审计)。
           if (request.method === "DELETE" && parts.length === 4) {
             return json(response, 200,
-              service.dropAnnotation(id, decodeURIComponent(parts[3]), author));
+              service.dropAnnotation(id, decodeURIComponent(parts[3]), author,
+                viewer?.role === "admin"));
           }
           // 检视闭环的裁决:确认通过 / 返工。作者校验在台账层——
           // 谁的意见谁裁决,替别人点"通过"等于替他签字。
           if (request.method === "POST" && parts.length === 5
               && parts[4] === "verify") {
             return json(response, 200,
-              service.verifyAnnotation(id, decodeURIComponent(parts[3]), author));
+              service.verifyAnnotation(id, decodeURIComponent(parts[3]), author,
+                viewer?.role === "admin"));
           }
           if (request.method === "POST" && parts.length === 5
               && parts[4] === "reopen") {
@@ -2283,7 +2289,7 @@ export function createTaskServer(
           if (!canOperate(viewer, target.luban_account, !!options.auth)) {
             return json(response, 403, { error: "只能重跑分配给自己的任务" });
           }
-          return json(response, 200, service.retry(id));
+          return json(response, 200, service.retry(id, viewer?.username));
         }
         // Build-Fix 失败停机后,人可拍板跳过本地验证,直推流水线裁决。
         if (request.method === "POST"
@@ -2295,7 +2301,7 @@ export function createTaskServer(
             return json(response, 403, { error: "只能操作分配给自己的任务" });
           }
           return json(response, 200,
-            await service.skipPrePushVerification(id));
+            await service.skipPrePushVerification(id, viewer?.username));
         }
         // 人工重跑 Build-Fix:重启杀掉在途轮留下的僵尸现场,或失败停机
         // 后想再来一轮。真在跑时服务端拒绝并明说,兼作活性探针。
@@ -2307,7 +2313,8 @@ export function createTaskServer(
           if (!canOperate(viewer, target.luban_account, !!options.auth)) {
             return json(response, 403, { error: "只能操作分配给自己的任务" });
           }
-          return json(response, 200, await service.retryPrePush(id));
+          return json(response, 200,
+            await service.retryPrePush(id, viewer?.username));
         }
         // 停止在途的 Build-Fix 并直推流水线:收口停机账后立刻绑 HEAD 跳过。
         if (request.method === "POST"
@@ -2318,7 +2325,8 @@ export function createTaskServer(
           if (!canOperate(viewer, target.luban_account, !!options.auth)) {
             return json(response, 403, { error: "只能操作分配给自己的任务" });
           }
-          return json(response, 200, await service.stopPrePush(id));
+          return json(response, 200,
+            await service.stopPrePush(id, viewer?.username));
         }
         // 从头重跑会原位覆盖旧任务及其审计现场。管理员不替开发者发起
         // 或冒用其代码身份；鉴权部署下只能由任务本人执行。
