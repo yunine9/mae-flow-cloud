@@ -710,7 +710,7 @@ export function TaskWorkspace({
             SSE 现场)。需求受理/DTS 等云端词表任务的阶段名与内核
             六阶段完全不同,弹出来必然落底版兜底属误导(审计 P0-3)
             ——这些任务不提供弹层。 */}
-        <TaskProgress progress={visibleProgress} showDetailedStep
+        <TaskProgress progress={visibleProgress} showDetailedStep status={task.status}
           onPhaseClick={task.execution_plan || task.workflow_profile
             ? setPlanPhase : undefined}
           context={health && <>
@@ -1127,6 +1127,9 @@ export function TaskWorkspace({
                     if (first) setActive(first.name);
                   }
                 : undefined}
+              activeDeliveryScope={task.waiting?.recommended_view === "diff"
+                && workspaceView === "materials" && materialView === "diff"
+                ? diffScope : undefined}
               attachment={
                 <>
                   {chainReview && (

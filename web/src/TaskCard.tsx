@@ -154,6 +154,7 @@ export function TaskCard({
             <TaskProgress
               progress={task.progress}
               showDetailedStep={decisionMode === "form"}
+              status={task.status}
             />
           )}
           <PrepushStatus prepush={task.delivery?.prepush}
@@ -360,16 +361,24 @@ export function TaskProgress({
   showDetailedStep,
   context,
   onPhaseClick,
+  status,
 }: {
   progress: NonNullable<TaskSummary["progress"]>;
   showDetailedStep: boolean;
   context?: ReactNode;
+  status?: TaskSummary["status"];
   /** 工作台传入:点阶段名弹该阶段执行方案。列表页不传,保持纯展示。 */
   onPhaseClick?: (phase: string) => void;
 }) {
-  const currentLabel = showDetailedStep
-    ? progress.step ?? progress.current_phase
-    : progress.current_phase;
+  // completed 是任务 API 的终态事实。内核 progress 记录的是最后执行到的
+  // 工作步骤，合入后通常仍停在“等待权威流水线”；直接照抄会让完成页像
+  // 还有事没跑完。终态展示追加一个“完成”节点，不改写内核现场。
+  const completed = status === "completed";
+  const phases = completed && progress.phases.at(-1) !== "完成"
+    ? [...progress.phases, "完成"] : progress.phases;
+  const currentIndex = completed ? phases.length - 1 : progress.current_index;
+  const currentLabel = completed ? "完成" : showDetailedStep
+    ? progress.step ?? progress.current_phase : progress.current_phase;
   const milestone = progress.milestone;
   const milestoneEvent = milestone
     ? ({
@@ -402,9 +411,9 @@ export function TaskProgress({
       </span>
     )}
     <span className="task-phase-track">
-      {progress.phases.map((phase, index) => {
-        const state = index < progress.current_index
-          ? "past" : index === progress.current_index ? "current" : "future";
+      {phases.map((phase, index) => {
+        const state = index < currentIndex
+          ? "past" : index === currentIndex ? "current" : "future";
         return <span className={`task-phase ${state}`} key={phase}
           {...(onPhaseClick ? {
             role: "button" as const,
@@ -447,6 +456,7 @@ export function WaitingCard({
   deliverySelection,
   pushReview,
   onLocateDelivery,
+  activeDeliveryScope,
 }: {
   task: TaskSummary;
   onDecided: () => void;
@@ -469,6 +479,9 @@ export function WaitingCard({
   /** 跳到勾选面板(工作台的「本任务变更」)。列表页没有勾选面板,
    * 不传即不渲跳转钮。 */
   onLocateDelivery?: (scope?: "changes" | "full") => void;
+  /** 当前已经摆在左侧的检视范围。相同范围必须显示成状态,不能继续
+   * 假装是一个点了会有动作的按钮。 */
+  activeDeliveryScope?: "changes" | "full";
 }) {
   const [picked, setPicked] = useState<Record<string, string>>({});
   const [custom, setCustom] = useState<Record<string, string>>({});
@@ -697,32 +710,43 @@ export function WaitingCard({
               {pushReview.verification}
             </span>}
           </div>
-          {pushReview.agent_note && (
-            <p className="push-review-agent-note">
-              <strong>Agent 说明</strong>{pushReview.agent_note}
-            </p>
-          )}
-          {pushReview.commits.length > 0 && (
-            <div className="push-review-commits">
-              {pushReview.commits.slice(0, 3).map((commit) => (
-                <span key={commit.sha}>
-                  <code>{commit.sha}</code>{commit.subject}
-                </span>
-              ))}
-            </div>
+          {(pushReview.agent_note || pushReview.commits.length > 0) && (
+            <details className="push-review-evidence">
+              <summary>
+                <strong>Agent 交付说明</strong>
+                <span>{pushReview.commits.length
+                  ? `${pushReview.commits.length} 个提交` : "实现与验证摘要"}</span>
+              </summary>
+              {pushReview.agent_note && (
+                <p className="push-review-agent-note">{pushReview.agent_note}</p>
+              )}
+              {pushReview.commits.length > 0 && (
+                <div className="push-review-commits">
+                  {pushReview.commits.slice(0, 3).map((commit) => (
+                    <span key={commit.sha}>
+                      <code>{commit.sha}</code>{commit.subject}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </details>
           )}
           {onLocateDelivery && (
             <div className="push-review-actions">
               {pushReview.has_focused_changes && (
-                <button type="button" className="primary"
-                  onClick={() => onLocateDelivery("changes")}>
-                  查看这次修改
-                </button>
+                activeDeliveryScope === "changes"
+                  ? <span className="current" role="status">这次修改已显示</span>
+                  : <button type="button" className="primary"
+                      onClick={() => onLocateDelivery("changes")}>
+                      查看这次修改
+                    </button>
               )}
-              <button type="button"
-                onClick={() => onLocateDelivery("full")}>
-                查看完整交付
-              </button>
+              {activeDeliveryScope === "full"
+                ? <span className="current" role="status">完整交付已显示</span>
+                : <button type="button"
+                    onClick={() => onLocateDelivery("full")}>
+                    查看完整交付
+                  </button>}
             </div>
           )}
         </section>

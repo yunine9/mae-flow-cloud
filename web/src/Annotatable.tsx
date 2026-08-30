@@ -133,6 +133,10 @@ export function Annotatable({
       openRow(covered);
       return;
     }
+    // Annotatable 包着整块 Git 审阅器，目录树、标题、分栏把手也都在
+    // 它里面。那些控件的空隙不是“材料正文”，点它们不该冒出一条
+    // 批注失败提示；只有确实落在文档或 diff 正文里时才解释为何没锚点。
+    if (!target.closest(".ws-doc, .diff-review-body")) return;
     // 点在了材料上、却落不到任何一行(容器空隙、纯装饰块):**说一句**,
     // 别装作没点——"点了没反应"是这个功能最常见的投诉,而多数时候它只是
     // 差了这一句话。

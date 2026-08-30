@@ -3526,21 +3526,45 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   color: var(--success); background: var(--success-soft);
   border-color: color-mix(in srgb, var(--success) 22%, var(--line));
 }
-.push-review-agent-note {
-  margin: 0; padding: 9px 10px; display: -webkit-box; overflow: hidden;
-  color: var(--muted); background: color-mix(in srgb, var(--surface-soft) 78%, transparent);
-  border-left: 3px solid var(--accent); border-radius: 0 7px 7px 0;
-  font-size: 12.5px; line-height: 1.55; -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
+.push-review-evidence {
+  overflow: hidden; border: 1px solid var(--line); border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-soft) 78%, transparent);
 }
-.push-review-agent-note strong { margin-right: 7px; color: var(--text-strong); }
+.push-review-evidence > summary {
+  min-height: 35px; padding: 7px 10px; display: flex; align-items: center;
+  justify-content: space-between; gap: 10px; color: var(--text-strong);
+  font-size: 12.5px; cursor: pointer; list-style: none;
+}
+.push-review-evidence > summary::-webkit-details-marker { display: none; }
+.push-review-evidence > summary::after {
+  content: "展开"; flex: none; color: var(--accent); font-size: var(--font-size-assist);
+  font-weight: 750;
+}
+.push-review-evidence[open] > summary::after { content: "收起"; }
+.push-review-evidence > summary span {
+  min-width: 0; margin-left: auto; overflow: hidden; color: var(--muted);
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.push-review-agent-note {
+  max-height: 180px; margin: 0; padding: 10px 11px; overflow: auto;
+  color: var(--muted); border-top: 1px solid var(--line);
+  font-size: 12.5px; line-height: 1.6;
+}
 .push-review-commits { display: grid; gap: 3px; }
+.push-review-evidence .push-review-commits {
+  padding: 8px 11px; border-top: 1px solid var(--line);
+}
 .push-review-commits > span {
   min-width: 0; overflow: hidden; color: var(--muted); font-size: 12px;
   text-overflow: ellipsis; white-space: nowrap;
 }
 .push-review-commits code { margin-right: 7px; color: var(--accent); }
 .push-review-actions { display: flex; gap: 8px; }
+.push-review-actions .current {
+  min-height: 34px; padding: 0 11px; display: inline-flex; align-items: center;
+  color: var(--muted); border: 1px dashed var(--line); border-radius: 8px;
+  background: var(--surface-soft); font-size: 13px; font-weight: 700;
+}
 .push-review-actions button {
   min-height: 34px; padding: 0 12px; color: var(--text-strong);
   border: 1px solid var(--line); border-radius: 8px; background: var(--surface);
