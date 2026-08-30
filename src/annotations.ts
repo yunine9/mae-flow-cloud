@@ -27,7 +27,11 @@ export type SentVia =
   | "decision"
   | "pipeline_evidence"
   /** MR 已创建后的本地检视：进入当前 MR 的持续修复环。 */
-  | "review_repair";
+  | "review_repair"
+  /** 任务正等人决定时提交:先成为团队事实(阻塞放行),正文随下一次
+   * 决定的 continuation 送达 Agent。检视人不必等任务恰好 running
+   * (MFC-022:曾经这窗口里没有任何合法提交路径)。 */
+  | "queued_decision";
 
 /** Agent 对一条已提交意见的结构化回执。它只陈述 Agent 做了什么，
  * 不能代替意见作者的 verify：response 是机器事实，verified 是人的判断。 */

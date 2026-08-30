@@ -196,7 +196,11 @@ export function AnnotationPanel({
   const reviewSendable = mergeRequestOpen && [
     "queued", "running", "verifying", "await_merge", "failed",
   ].includes(taskStatus);
-  const canSend = running || evidenceAwaiting || reviewSendable;
+  // 等决定期间也能提交:服务端把意见先记成团队事实(阻塞放行),正文
+  // 随下一次决定送达。检视人(批注作者≠决定人)在这窗口里从此有合法
+  // 路径,不再依赖"责任人替你带上"的假承诺(MFC-022)。
+  const queueable = taskStatus === "waiting_for_human";
+  const canSend = running || evidenceAwaiting || reviewSendable || queueable;
   const reviewScopeKey = (reviewReady ? "ready:" : "closed:")
     + reviewAnnotationIds.join("\u0000");
 
@@ -309,19 +313,21 @@ export function AnnotationPanel({
             {busy ? "提交中…" : reviewSendable
               ? `提交 ${drafts.length} 条并继续修改`
               : evidenceAwaiting ? `回灌 ${drafts.length} 条报错`
+                : queueable ? `提交 ${drafts.length} 条（随决定送达）`
                 : `提交 ${drafts.length} 条批注`}
           </button>
           {reviewSendable && (
             <p>继续使用当前分支和 MR；Agent 修改并提交后，系统会重新跑验证。MR 合入前可以反复提交。</p>
+          )}
+          {queueable && !reviewSendable && (
+            <p>任务正等一张决定卡。提交后意见立即成为待闭环事实（阻止直接放行），正文会随下一次决定一起交给 Agent。</p>
           )}
         </div>
       )}
 
       {canOperate && drafts.length > 0 && !canSend && (
         <p className="annot-panel-note">
-          {taskStatus === "waiting_for_human"
-            ? `有 ${drafts.length} 条批注已保存。Agent 正等你的当前决定，提交决定时会把这些批注一并送达。`
-            : taskStatus === "paused" || taskStatus === "pausing"
+          {taskStatus === "paused" || taskStatus === "pausing"
               ? `有 ${drafts.length} 条批注已保存。恢复任务后即可交给 Agent 继续修改。`
               : taskStatus === "completed"
                 ? "MR 已合入，任务已经结束；这些批注只保留为本地记录，不会再触发修改。"

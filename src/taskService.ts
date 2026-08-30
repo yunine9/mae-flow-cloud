@@ -42,6 +42,7 @@ import {
 import {
   blockingAnnotations,
   parseWorkspaceReviewReceipts,
+  unansweredAnnotations,
   workspaceReviewReceiptInstructions,
 } from "./feedbackPolicy.ts";
 import {
@@ -3609,6 +3610,16 @@ export class TaskService {
     if (this.hasOpenMergeRequest(task)) {
       return this.sendMergeRequestReview(task, picked, text);
     }
+    // 任务正等人决定时,插话通道不可用——但检视人(批注作者≠决定人)
+    // 在这窗口里必须有合法提交路径,否则责任人一放行意见就落空
+    // (MFC-022)。此时先把意见转成团队事实(sent,阻塞关闭检视),
+    // 正文由下一次决定的 continuation 送达 Agent。
+    if (task.summary.status === "waiting_for_human") {
+      this.annotations(task).markSent(
+        picked.map((item) => item.id), "queued_decision");
+      this.persist(task);
+      return { sent: picked.map((item) => item.id), text };
+    }
     await this.interrupt(id, text);
     this.annotations(task).markSent(picked.map((item) => item.id), "interrupt");
     return { sent: picked.map((item) => item.id), text };
@@ -5636,6 +5647,33 @@ export class TaskService {
           max, task.controlEpoch));
       return { ...task.summary };
     }
+    // 检视轮因缺逐条回执停机时,generic retry 曾把 loop 连同批注 id、
+    // review_source 一起清空——批注停在 sent、恢复意图全丢,唯一出路
+    // 变成删批注(e2e-picky-20260830 双复现,MFC-003)。这里改成保留
+    // 检视账,派一条"只补回执"的窄使命,不清 loop、不烧无关修复。
+    if (status === "verifying") {
+      const loop = task.summary.delivery?.loop;
+      const pendingReview = loop?.kind === "review"
+        && loop.review_source === "workspace"
+        ? unansweredAnnotations(this.annotations(task).list(),
+            loop.workspace_review_annotation_ids ?? [])
+        : [];
+      if (loop && pendingReview.length) {
+        loop.state = "repairing";
+        loop.diagnosis = undefined;
+        task.summary.delivery!.stalled = undefined;
+        task.summary.delivery!.waiting_on = undefined;
+        task.summary.delivery!.verify_deadline = undefined;
+        task.summary.delivery!.pipeline = "人工重跑,补齐检视回执";
+        this.enqueueRepair(task, [
+          "上一轮检视修改已经完成,但缺少机器可核对的逐条回执,系统据此停下。",
+          "本次使命只有一件事:复核当前 HEAD 上这些意见的落实情况并补写回执;",
+          "不要重新修改代码,除非复核发现某条意见确实没有落实。",
+          workspaceReviewReceiptInstructions(pendingReview),
+        ].join("\n"), "人工重跑:复核当前 HEAD 并补齐逐条检视回执");
+        return { ...task.summary };
+      }
+    }
     if (status === "verifying" && task.summary.delivery) {
       task.summary.delivery.loop = undefined;
       task.summary.delivery.evidence_gap = undefined;
@@ -6867,7 +6905,11 @@ export class TaskService {
       "- 清单内缺失的文件补进提交;不许为凑清单制造空改动。",
       "- 整理完按仓库提交规范收口(单条 Bash 只做一个 commit);",
       `  完成后系统会按新 HEAD 重新验证并再次请用户确认(当前清单 ${selection.paths.length} 个文件)。`,
-    ].join("\n"), "按交付清单整理提交中");
+      // 回执契约必须与 post-MR review 同一份:少了它,Agent 改完代码
+      // 也不知道要写 local-receipts.json,收口时被回执门禁如实拦下,
+      // 形成"改了却过不去"的死锁(e2e-picky-20260830 双复现,MFC-002)。
+      workspaceReviewReceiptInstructions(annotations),
+    ].filter(Boolean).join("\n"), "按交付清单整理提交中");
   }
 
   private async resumeResolvedDecision(
@@ -7124,6 +7166,11 @@ export class TaskService {
     // 服务端自己取任务当前全部草稿，手机端/月光模式不再因为没携带 id
     // 而漏掉意见。显式 ids 只兼容普通非返工卡的旧提交方式。
     const drafts = this.annotations(task).drafts();
+    // 等待期间经 queued_decision 提交的意见:状态是 sent,但正文还没
+    // 送到过任何 Agent——随这次决定一并送达,送完转正常 decision 账。
+    const queued = this.annotations(task).list().filter((item) =>
+      item.status === "sent" && item.sent_via === "queued_decision"
+      && item.response?.revision !== (item.rework ?? 0));
     const localReviewRound = task.summary.delivery?.loop?.kind === "review"
       && task.summary.delivery.loop.review_source === "workspace"
       && task.summary.delivery.loop.state === "repairing";
@@ -7131,12 +7178,13 @@ export class TaskService {
       // 普通检视仍回到同一会话，sent 已经在上下文里，不重复送；push
       // 返工会开一只全新会话，必须把 draft + sent 的全部未闭环意见
       // 都带过去，否则“提前主动送达”的意见会断在上一只 Agent 里。
-      ? pushConfirmCard ? unresolved : drafts
+      ? pushConfirmCard ? unresolved : [...queued, ...drafts]
       // 本地 review 轮里若 Agent 因真实歧义举卡，用户在等待期间新圈的
       // 批注随这张卡一并回注；不能让人答完歧义后还要再点一次提交。
-      : localReviewRound ? drafts
+      : localReviewRound ? [...queued, ...drafts]
       : input.annotation_ids?.length
-        ? this.pickDecisionDrafts(task, input.annotation_ids) : [];
+        ? this.pickDecisionDrafts(task, input.annotation_ids)
+        : queued;
     // 批注与自由说明都进 notes，不污染内核用于 choice receipt 的选项。
     const notes = [
       normalized.notes,
@@ -7168,6 +7216,14 @@ export class TaskService {
     }
     // 决定已经落袋(waiting.json 写完),批注才算送出去。
     this.markResolvedDecisionAnnotations(task, resolved);
+    // 等待期入队的意见随这次决定完成送达:账目从 queued_decision 转
+    // "decision",下一张卡不再重复携带同一份正文。
+    const queuedDelivered = picked
+      .filter((item) => item.sent_via === "queued_decision")
+      .map((item) => item.id);
+    if (queuedDelivered.length) {
+      this.annotations(task).markSent(queuedDelivered, "decision");
+    }
     // 决定生效之后才生子任务(体检在落袋前做过,这里不会因图不齐半途
     // 而废)。建任务失败不回滚决定——决定是用户的事实;失败原因写进
     // detail,面板确认按钮随时可重试(可重入)。
@@ -7247,13 +7303,21 @@ export class TaskService {
     const message = text.trim();
     if (!message) throw new NotFoundError("插话内容不能为空");
     if (task.summary.status === "waiting_for_human") {
-      throw new NotFoundError("这一单正等你的决定,请在决定卡里回答");
+      throw new TaskControlError("这一单正等你的决定,请在决定卡里回答");
     }
     if (task.summary.status !== "running" || !task.driver) {
-      throw new NotFoundError(
+      throw new TaskControlError(
         `任务 ${id} 当前是 ${task.summary.status},没有在跑的会话可插话`);
     }
-    const delivered = actor ? `[跨仓协作 · ${actor}] ${message}` : message;
+    // 前缀只标"谁在说话",不标"什么场景":这里是普通插话通道,单仓
+    // 任务也走它。曾经无条件写"[跨仓协作 · x]",单仓插话被模型当成
+    // 跨仓消息记进了交付件(spec 里出现"用户跨仓消息补充",MFC-021)。
+    // 真正的跨仓同步走 /cross-repository-update,自带跨仓抬头。
+    const delivered = actor
+      ? (actor === task.summary.luban_account
+          ? `[责任人 ${actor} 插话] ${message}`
+          : `[协作者 ${actor} 插话] ${message}`)
+      : message;
     await task.driver.steer(delivered);
     this.options.log?.(`任务 ${id} 已插话(本轮工具调用结束后送达)`);
     return { ...task.summary };
@@ -13611,7 +13675,12 @@ export class TaskService {
                "-c", "credential.helper=",
                "-c", `credential.helper=${hardened.helper}`]
             : []),
-          "clone", "--quiet",
+          // --no-local:本地路径 clone 默认 hardlink 复用 .git/objects,
+          // 任务对象与源仓/兄弟任务共享 inode——任务 cwd 又整目录 RW
+          // bind 进容器,任务侧 chmod/truncate 直接打在源仓对象上
+          // (e2e-picky-20260830 实锤:任务对象 nlink=2452,容器内
+          // mmap EACCES)。URL 仓不受此 flag 影响,统一加无副作用。
+          "clone", "--quiet", "--no-local",
           ...(checkoutBaseline ? ["--branch", checkoutBaseline] : []),
           "--", source, target,
         ],

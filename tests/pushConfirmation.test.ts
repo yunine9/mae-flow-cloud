@@ -369,6 +369,12 @@ test("返工开修复会话并携带清单契约;月光不代答确认卡", asyn
       "push 确认没有挂起模型,批注必须显式进入返工使命");
     assert.match(String(internal.mission), /提前提过的重试边界也不能丢/,
       "返工是新会话，先前主动送达但未闭环的意见必须重新带入");
+    assert.match(String(internal.mission), /local-receipts\.json/,
+      "pre-MR 返工使命必须携带逐条回执契约——少了它 Agent 改完代码"
+      + "也不知道要写回执,收口时被回执门禁拦成死锁(MFC-002)");
+    assert.match(String(internal.mission),
+      new RegExp(`${annotation.id}: revision 0`),
+      "回执契约必须点名每条批注的 id 与 revision");
     const statuses = new Map(service.listAnnotations(id).items
       .map((item) => [item.id, item.status]));
     assert.equal(statuses.get(annotation.id), "sent");
@@ -736,6 +742,98 @@ test("卡键绑定 HEAD:等待期间代码变化会明确换卡;重举卡增量�
     internal.summary.waiting = undefined;
     assert.equal(await gate(), false, "有清单在管范围,缺省也要举卡");
     assert.equal(service.get(id)!.waiting!.step, "cloud_push_confirm");
+  } finally {
+    await model.stop();
+  }
+});
+
+test("缺回执停机后 retry 保留检视账并派补回执窄使命(MFC-003)", async () => {
+  const { service, model, id, internal } = await verifyingTask();
+  try {
+    const annotation = service.addAnnotation(id, {
+      author: "liaoxiang", artifact: "未提交改动", file: "src/feature.ts",
+      line: 1, anchor: "export const value = 1;",
+      note: "常量抽取还没做", kind: "code",
+    });
+    (service as any).annotations(internal).markSent(
+      [annotation.id], "review_repair");
+    internal.summary.delivery = {
+      loop: {
+        round: 0, state: "halted", kind: "review",
+        review_source: "workspace",
+        workspace_review_pending: true,
+        workspace_review_recheck_required: true,
+        workspace_review_annotation_ids: [annotation.id],
+      },
+      stalled: "Agent 没有留下逐条检视回执",
+      waiting_on: "Agent 没有留下逐条检视回执",
+    };
+    service.retry(id, "liaoxiang");
+    const summary = service.get(id)!;
+    const loop = summary.delivery?.loop;
+    assert.ok(loop, "retry 不得清空 review loop——那会把恢复意图连同批注 id 一起丢掉");
+    assert.equal(loop!.state, "repairing");
+    assert.deepEqual(loop!.workspace_review_annotation_ids, [annotation.id],
+      "待闭环批注 id 必须原样保留");
+    assert.equal(summary.delivery?.stalled, undefined, "停摆账应被人工重跑清掉");
+    assert.match(String(internal.mission), /local-receipts\.json/,
+      "补回执使命必须带机器回执契约");
+    assert.match(String(internal.mission), new RegExp(annotation.id),
+      "使命必须点名待补回执的批注");
+    assert.match(String(internal.mission), /不要重新修改代码/,
+      "这是窄使命:只补回执,不烧无关修复");
+  } finally {
+    await model.stop();
+  }
+});
+
+test("等决定期间检视人可提交批注:入队为团队事实,随返工决定送达(MFC-022)", async () => {
+  const { service, model, id, internal, repo } = await verifyingTask();
+  try {
+    internal.summary.push_confirmation = true;
+    internal.summary.luban_account = "dev.liao";
+    await (service as any).pushConfirmationSatisfied(internal, "master_bot_REQ1");
+    const waiting = service.get(id)!.waiting!;
+    assert.equal(service.get(id)!.status, "waiting_for_human");
+
+    const note = service.addAnnotation(id, {
+      author: "reviewer.wang", artifact: "未提交改动", file: "src/feature.ts",
+      line: 1, anchor: "export const value = 1;",
+      note: "检视人在等待窗口提的意见不能落空", kind: "code",
+    });
+    // 曾经这里 404"请在决定卡里回答"——而决定卡对检视人是 403,死路。
+    const sent = await service.sendAnnotations(id, [note.id], "reviewer.wang");
+    assert.deepEqual(sent.sent, [note.id]);
+    const queued = service.listAnnotations(id).items
+      .find((item) => item.id === note.id)!;
+    assert.equal(queued.status, "sent");
+    assert.equal(queued.sent_via, "queued_decision");
+
+    // 有未闭环意见时,责任人直接放行必须仍被拦住(护栏不因入队而松)。
+    await assert.rejects(service.decide(id, {
+      waiting_id: waiting.waiting_id,
+      state_version: waiting.state_version,
+      selected_options: {
+        [(waiting.question as any).questions[0].question]: "确认按清单推送",
+      },
+    }), /未闭环/);
+
+    // 责任人选择返工:入队意见的完整原文必须进入返工使命。
+    await service.decide(id, {
+      waiting_id: waiting.waiting_id,
+      state_version: waiting.state_version,
+      selected_options: {
+        [(waiting.question as any).questions[0].question]:
+          "需要调整代码（按清单返工）",
+      },
+      delivery_paths: ["src/feature.ts"],
+    });
+    assert.match(String(internal.mission), /检视人在等待窗口提的意见不能落空/,
+      "入队意见必须随决定送达,不能停在账上");
+    const after = service.listAnnotations(id).items
+      .find((item) => item.id === note.id)!;
+    assert.equal(after.sent_via, "decision",
+      "送达后账目转 decision,下一张卡不再重复携带");
   } finally {
     await model.stop();
   }
