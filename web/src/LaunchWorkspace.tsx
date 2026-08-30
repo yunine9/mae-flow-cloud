@@ -240,15 +240,19 @@ export function LaunchWorkspace({
   const businessModuleNames = useMemo(() => new Map(
     businessModules.map((module) => [module.id, module.name])),
   [businessModules]);
+  // 固定仓部署不渲染仓库输入,预览/提交也一并按 enabled 裁字段——
+  // 隐藏控件不等于字段不存在(MFC-033)。
+  const repoFieldsEnabled = options?.repo.enabled !== false;
   const previewInput = useMemo(() => ({
-    repos: repos.map((item) => item.trim()).filter(Boolean),
+    repos: repoFieldsEnabled
+      ? repos.map((item) => item.trim()).filter(Boolean) : [],
     selectedBusinessModuleIds,
-    repositoryProfiles: repositoryTechnologies.length > 0
+    repositoryProfiles: repoFieldsEnabled && repositoryTechnologies.length > 0
         && repositoryTechnologies.every((item) => item.confirmed)
       ? asRepositoryProfiles(repositoryTechnologies) : undefined,
     workflowSelection,
-  }), [repos, selectedBusinessModuleIds, repositoryTechnologies,
-    workflowSelection]);
+  }), [repoFieldsEnabled, repos, selectedBusinessModuleIds,
+    repositoryTechnologies, workflowSelection]);
   const expectedKnowledgePreviewKey = JSON.stringify(previewInput);
   const matchingModuleKnowledge = knowledgePreview?.business_knowledge ?? [];
   const matchingEngineeringKnowledge = knowledgePreview?.engineering_knowledge ?? [];
@@ -292,6 +296,14 @@ export function LaunchWorkspace({
     void getLaunchOptions().then((result) => {
       if (!alive) return;
       setOptions(result);
+      // 固定仓部署(repo.enabled=false)只是不渲染仓库输入框,但草稿/
+      // 最近使用里恢复的旧仓值仍在 state 里,提交时会被暗带上——服务端
+      // 虽会拒绝,用户却在一个没有仓库输入框的页面上收到"仓库不对"
+      // (MFC-033 实证)。拿到配置就把不该存在的字段清干净。
+      if (!result.repo.enabled) {
+        setRepos([""]);
+        setRepositoryTechnologies([]);
+      }
       setBaseline((current) => current.trim()
         || (result.baseline.enabled ? result.baseline.default : ""));
       setLane((current) => current || result.workflows[0]?.label || "");
@@ -502,8 +514,9 @@ export function LaunchWorkspace({
         session.username,   // 归属人=本人;管理员不发起任务(入口已隐藏)
         {
           title: title.trim(),
-          repo: repos[0]?.trim() || undefined,
-          repos: repos.map((item) => item.trim()).filter(Boolean),
+          repo: repoFieldsEnabled ? repos[0]?.trim() || undefined : undefined,
+          repos: repoFieldsEnabled
+            ? repos.map((item) => item.trim()).filter(Boolean) : [],
           // select 虽然会视觉显示第一项，但用户没手动切换时 state 仍是
           // 空串；提交必须使用屏幕上真正显示的默认项。
           lane: lane || options?.workflows[0]?.label,
@@ -520,7 +533,8 @@ export function LaunchWorkspace({
           knowledgePreviewDigest: knowledgePreview?.selection_digest,
           // 团队通用知识不由下单人逐项治理。字段始终缺席，服务端按
           // 仓库、技术栈和业务模块在创建现场自动匹配并固定版本。
-          repositoryProfiles: repositoryTechnologies.length > 0
+          repositoryProfiles: repoFieldsEnabled
+              && repositoryTechnologies.length > 0
               && repositoryTechnologies.every((item) => item.confirmed)
             ? asRepositoryProfiles(repositoryTechnologies) : undefined,
           requirementDocumentName: requirementDocumentName || undefined,

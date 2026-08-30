@@ -782,6 +782,8 @@ export interface PushReviewPresentation {
   file_count: number;
   additions: number;
   deletions: number;
+  /** 设置时 additions/deletions 是占位 0,界面必须显示原因而不是 +0/−0。 */
+  stats_unavailable_reason?: string;
   commits: Array<{ sha: string; subject: string }>;
   all_paths: string[];
   committed_paths: string[];

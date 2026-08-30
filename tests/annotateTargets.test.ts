@@ -14,7 +14,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  anchorOf, blockedBySelection, pickRow, type RowNode,
+  anchorOf, blockedBySelection, pickRow, pickRowFromStack, type RowNode,
 } from "../web/src/annotateTargets.ts";
 
 /** 极简假节点:只实现规则用到的那几个 DOM 能力。 */
@@ -161,4 +161,40 @@ test("划词只认这块材料里的:别处残留的选区不许把材料整片�
     { isCollapsed: true, toString: () => "", anchorNode: inside }, contains),
     false, "点一下产生的折叠光标不算划词");
   assert.equal(blockedBySelection(null, contains), false);
+});
+
+// MFC-034 案发现场:专注审阅的分栏把手(全高、left:50%、z-index:4)恰好
+// 压在每一行的几何中心。自动化点击打元素中心 → event.target 永远是把手,
+// 行明明在 DOM 里却"这一处没有行号可锚定"。兜底口径:拿该坐标下的整叠
+// 元素(elementsFromPoint 序:上层在前)穿透找第一个能落到行的。
+test("落点被覆盖层挡住:沿坐标下的整叠元素穿透找到底下那一行", () => {
+  const cell = node({ tag: "div", cls: "diff-cell", text: "return value;" });
+  const row = node({ tag: "div", cls: "diff-review-row", line: 28,
+    children: [cell] });
+  const body = node({ cls: "diff-review-body", children: [row] });
+  const resizer = node({ cls: "diff-column-resizer" });
+  const canvas = node({ cls: "diff-review-canvas",
+    children: [body, resizer] });
+  const root = node({ cls: "annotatable", children: [canvas] });
+  const inRoot = (candidate: RowNode) => {
+    let cursor: RowNode | null = candidate;
+    while (cursor) {
+      if (cursor === (root as unknown as RowNode)) return true;
+      cursor = (cursor as { parent?: RowNode }).parent ?? null;
+    }
+    return false;
+  };
+  // 直接命中把手:pickRow 找不到行(这正是线上症状)。
+  assert.equal(pickRow(resizer, root), undefined);
+  // 穿透:叠层顺序 把手 → 行内格 → 行 → 画布,兜底落到 28 行。
+  assert.equal(
+    pickRowFromStack([resizer, cell, row, canvas], root, inRoot), row);
+  // 整叠都够不着行(点在头部/空隙):仍如实 undefined,由 UI 说人话。
+  const head = node({ cls: "diff-review-head" });
+  assert.equal(pickRowFromStack([resizer, head, canvas], root, inRoot),
+    undefined);
+  // root 之外的同类节点不认:别把别的材料区的行错圈进来。
+  const foreignRow = node({ tag: "div", line: 5 });
+  node({ cls: "other", children: [foreignRow] });
+  assert.equal(pickRowFromStack([foreignRow], root, inRoot), undefined);
 });

@@ -173,6 +173,8 @@ export function GitDiff({
   const initializedDirectories = useRef<Set<string>>(new Set());
   const gitBrowser = useRef<HTMLDivElement>(null);
   const diffCanvas = useRef<HTMLDivElement>(null);
+  // 分栏把手是否真被拖动过:拖动收尾的 click 不算"点了一行"(MFC-034)。
+  const resizerDragged = useRef(false);
   const [pathTip, setPathTip] = useState<{
     path: string;
     left: number;
@@ -711,16 +713,26 @@ export function GitDiff({
                   }}
                   onPointerDown={(event) => {
                     event.preventDefault();
+                    resizerDragged.current = false;
                     event.currentTarget.setPointerCapture(event.pointerId);
                     resizeDiffColumns(event.clientX);
                   }}
                   onPointerMove={(event) => {
                     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                      resizerDragged.current = true;
                       resizeDiffColumns(event.clientX);
                     }
                   }}
                   onPointerUp={(event) =>
-                    event.currentTarget.releasePointerCapture(event.pointerId)}>
+                    event.currentTarget.releasePointerCapture(event.pointerId)}
+                  onClick={(event) => {
+                    // 把手压在行中心(MFC-034):真拖动过的收尾 click 不外
+                    // 泄,原地单击则放行给批注层按坐标落到底下那一行。
+                    if (resizerDragged.current) {
+                      resizerDragged.current = false;
+                      event.stopPropagation();
+                    }
+                  }}>
                   <span aria-hidden />
                 </div>
               </div>

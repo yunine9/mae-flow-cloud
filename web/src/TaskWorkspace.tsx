@@ -89,6 +89,51 @@ export function workspaceNextActionCopy(
   return { title: "当前无待办", detail: "无需处理" };
 }
 
+/** await_merge 的右栏行:默认一行状态,点开只展开一句说明 + MR 链接
+ * (MFC-039 用户拍板:去掉与右栏标题重复的大卡)。MR 被关闭是需要人
+ * 处理的例外,直接展示不折叠。 */
+function MergeWaitLine({ task, canOperate }: {
+  task: TaskSummary;
+  canOperate: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const mrLink = task.delivery?.mr_url
+    ? <a href={task.delivery.mr_url} target="_blank" rel="noreferrer">
+        打开合入请求 ↗
+      </a>
+    : <em>平台尚未返回 MR 链接，请稍后刷新。</em>;
+  if (task.delivery?.mr_state === "已关闭") {
+    return (
+      <div className="ws-merge-line is-closed" role="alert">
+        <strong>MR 已关闭，任务还没有结束</strong>
+        <p>{task.delivery?.waiting_on
+          || "重新打开 MR 后系统自动恢复监听；不再继续可用右上角“取消”。"}
+          {mrLink}</p>
+      </div>
+    );
+  }
+  return (
+    <div className="ws-merge-line">
+      <button type="button" aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}>
+        <span className="ws-merge-line-dot" aria-hidden />
+        等待合入
+        <svg viewBox="0 0 16 16" aria-hidden
+          className={open ? "is-open" : undefined}>
+          <path d="m5 6.5 3 3 3-3" /></svg>
+      </button>
+      {open && (
+        <p>{task.delivery?.waiting_on
+          || "流水线与门禁已通过，请前往 MR 完成检视与合入。"}{mrLink}
+          {canOperate && <small>
+            不再继续这项任务时，可用右上角“取消”明确停止监听。
+          </small>}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export type PushReviewDiffLoadState =
   | { kind: "idle" | "checking" | "ready" }
   | { kind: "error"; message: string; expired: boolean };
@@ -796,7 +841,7 @@ export function TaskWorkspace({
             ) : <>
               {materialView === "diff" && pushReview && (
                 <div className="push-review-scope" aria-label="代码检视范围">
-                  {pushReview.has_focused_changes && (
+                  {pushReview.has_focused_changes ? <>
                     <button type="button"
                       className={diffScope === "changes" ? "on" : ""}
                       onClick={() => {
@@ -808,18 +853,25 @@ export function TaskWorkspace({
                       <strong>这次修改</strong>
                       <span>{pushReview.title}</span>
                     </button>
+                    <button type="button"
+                      className={diffScope === "full" ? "on" : ""}
+                      onClick={() => {
+                        if (diffScope === "full") return;
+                        setContent("");
+                        setPushDiffState({ kind: "checking" });
+                        setDiffScope("full");
+                      }}>
+                      <strong>完整交付</strong>
+                      <span>从任务起点到当前待推送代码</span>
+                    </button>
+                  </> : (
+                    // 只有一个范围时不是"可切换":按钮外观点了没反应,
+                    // 用户会当成坏了(MFC-035)。老实渲染成状态标签。
+                    <div className="on scope-single" role="note">
+                      <strong>完整交付</strong>
+                      <span>从任务起点到当前待推送代码;本轮没有可单看的增量修改</span>
+                    </div>
                   )}
-                  <button type="button"
-                    className={diffScope === "full" ? "on" : ""}
-                    onClick={() => {
-                      if (diffScope === "full") return;
-                      setContent("");
-                      setPushDiffState({ kind: "checking" });
-                      setDiffScope("full");
-                    }}>
-                    <strong>完整交付</strong>
-                    <span>从任务起点到当前待推送代码</span>
-                  </button>
                   <p>{diffScope === "changes"
                     ? "这里只看这次处理产生的变化，方便快速复检；最终授权仍绑定当前完整待推送版本。"
                     : "这里可以调整最终交付文件；取消勾选的文件不会进入本次推送。"}</p>
@@ -1131,23 +1183,11 @@ export function TaskWorkspace({
           )}
           {!waiting && task.status !== "failed" && task.status !== "canceled" && (
             task.status === "await_merge" ? (
-              <div className="ws-merge-focus">
-                <span>MERGE REQUEST</span>
-                <strong>{task.delivery?.mr_state === "已关闭"
-                  ? "MR 已关闭，任务还没有结束"
-                  : "代码已验证，等待检视与合入"}</strong>
-                <p>{task.delivery?.waiting_on
-                  || "系统会继续监听流水线和门禁；MR 合入后任务才真正完成。"}</p>
-                {task.delivery?.mr_url ? (
-                  <a href={task.delivery.mr_url} target="_blank"
-                    rel="noreferrer">打开合入请求 ↗</a>
-                ) : (
-                  <em>平台尚未返回 MR 链接，请稍后刷新。</em>
-                )}
-                {canOperate && (
-                  <small>不再继续这项任务时，可用右上角“取消”明确停止监听。</small>
-                )}
-              </div>
+              // 右栏标题已经说了"等待检视与合入":这里不再摆一张层级
+              // 更高的大卡复读(MFC-039 用户拍板),默认只有一行状态,
+              // 点开才展开说明与 MR 链接。MR 被关是需要人处理的例外,
+              // 保持直接可见。
+              <MergeWaitLine task={task} canOperate={canOperate} />
             ) : task.status === "verifying" ? (
               /* 验证中右栏不再空转:此刻用户最想知道的是"卡在哪/等谁",
                  waiting_on 有值就点名;修复停机时直接给重试入口。 */

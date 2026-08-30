@@ -591,6 +591,10 @@ export interface PushReviewPresentation {
   file_count: number;
   additions: number;
   deletions: number;
+  /** 逐行统计不可得的原因(如提交历史与对比基点不连续)。设置时
+   * additions/deletions 是占位 0,界面必须显示这句话而不是 +0/−0
+   * ——文件数有值、行数假零的混合结果比没有更误导(MFC-040)。 */
+  stats_unavailable_reason?: string;
   commits: Array<{ sha: string; subject: string }>;
   /** 完整工作区变化用来初始化勾选器；committed_paths 才是当前 HEAD
    * 真正会随 push 带走的默认范围。 */
@@ -771,6 +775,11 @@ export interface TaskSummary {
     };
     /** 当前 push 检视卡的只读说明与比较锚。卡片销毁即清除。 */
     push_review?: PushReviewPresentation;
+    /** 最近一次**人真正看过**的 HEAD:push 确认卡被解决(通过或返工)
+     * 时钉住,复检轮"这次修改"的基点从这里取。delivery_selection.head
+     * 只在通过时才换,返工多轮后会指到更早的卡,不能表达这个语义
+     * (MFC-035 实证:复检卡因此只剩"完整交付")。 */
+    last_reviewed_head?: string;
     sha?: string;
     skipped?: string;
     /** 内核对流水线证据的裁决戳(如 "PASS@abc123456789"):终态时宿主
@@ -6923,6 +6932,14 @@ export class TaskService {
   ): void {
     task.summary.delivery_selection = selection;
     task.summary.waiting = undefined;
+    // 人解决这张卡(不论通过还是返工)就是"看过了这个 HEAD":钉住它,
+    // 复检轮的"这次修改"从这里起算(MFC-035)。
+    if (selection.head) {
+      task.summary.delivery = {
+        ...task.summary.delivery,
+        last_reviewed_head: selection.head,
+      };
+    }
     if (task.summary.delivery) delete task.summary.delivery.push_review;
     if (this.pushConfirmationAccepted(waiting)) {
       const loop = task.summary.delivery?.loop;
@@ -10418,8 +10435,14 @@ export class TaskService {
       title: string; description: string;
     }>;
 
-    const preferred = [selection?.head, delivery?.git_push?.sha]
-      .filter((sha): sha is string => Boolean(sha)
+    // 基点优先级:最近一次人真正看过的 HEAD > 上次通过确认的 HEAD >
+    // 上次推送。selection.head 返工多轮不更新,单靠它复检卡会退化成
+    // 只有"完整交付"(MFC-035)。
+    const preferred = [
+      delivery?.last_reviewed_head,
+      selection?.head,
+      delivery?.git_push?.sha,
+    ].filter((sha): sha is string => Boolean(sha)
         && sha !== snapshot.head && sha !== snapshot.baseline);
     let focused: DeliveryRevisionComparison | undefined;
     for (const base of [...new Set(preferred)]) {
@@ -10446,6 +10469,11 @@ export class TaskService {
       file_count: comparison?.paths.length ?? snapshot.committed_paths.length,
       additions: comparison?.additions ?? 0,
       deletions: comparison?.deletions ?? 0,
+      // 连基线比较都不可得(祖先关系断/提交不可见)时不许装作 +0/−0:
+      // MFC-036 门禁通常会在这之前拦下,这里是最后的诚实兜底。
+      ...(comparison ? {} : { stats_unavailable_reason:
+        "提交历史与任务基线不再连续,无法计算逐行统计;"
+        + "请先处理基线偏离,再核对完整交付视图" }),
       commits: comparison?.commits ?? [],
       all_paths: normalizedDeliveryPaths(snapshot.workspace_paths),
       committed_paths: normalizedDeliveryPaths(snapshot.committed_paths),

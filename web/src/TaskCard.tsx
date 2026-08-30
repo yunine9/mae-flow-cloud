@@ -683,8 +683,16 @@ export function WaitingCard({
             <span><b>{pushReview.file_count}</b>
               {pushReview.has_focused_changes ? " 个本次修改文件" : " 个交付文件"}
             </span>
-            <span className="added">+{pushReview.additions}</span>
-            <span className="deleted">-{pushReview.deletions}</span>
+            {/* 统计不可得时说原因,不许摆 +0/−0:文件数有值、行数假零的
+                混合结果比没有更误导(MFC-040 实证)。 */}
+            {pushReview.stats_unavailable_reason ? (
+              <span className="stats-unavailable" role="alert">
+                统计不可用:{pushReview.stats_unavailable_reason}
+              </span>
+            ) : <>
+              <span className="added">+{pushReview.additions}</span>
+              <span className="deleted">-{pushReview.deletions}</span>
+            </>}
             {pushReview.verification && <span className="verified">
               {pushReview.verification}
             </span>}

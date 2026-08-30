@@ -900,3 +900,48 @@ test("历史脱离定格基线且工作区未收口:不改写,如实停下", asy
     await model.stop();
   }
 });
+
+// MFC-035:返工不更新 delivery_selection.head(它只在通过时换),多轮
+// 返工后"这次修改"曾退化成只有完整交付。现在人解决卡(含返工)即钉住
+// last_reviewed_head,复检卡从"人上次真正看过的 HEAD"起算。
+test("返工轮复检卡仍有「这次修改」:基点是人上次看过的 HEAD", async () => {
+  const { service, model, id, internal, repo } = await verifyingTask();
+  try {
+    const gate = () => (service as any)
+      .pushConfirmationSatisfied(internal, "master_bot_REQ1");
+    internal.summary.push_confirmation = true;
+    assert.equal(await gate(), false, "先出第一张确认卡");
+    const first = service.get(id)!.waiting!;
+    const reviewedHead = repo.git("rev-parse", "HEAD");
+    await service.decide(id, {
+      state_version: first.state_version,
+      selected_options: {
+        [(first.question as any).questions[0].question]:
+          "需要调整代码（按清单返工）",
+      },
+      notes: "变量名再明确些",
+      delivery_paths: ["src/feature.ts"],
+    });
+    assert.equal(
+      service.get(id)!.delivery?.last_reviewed_head, reviewedHead,
+      "返工也是人看过这个 HEAD,必须钉住");
+
+    // Agent 按意见改码收口,产生新 HEAD;复检卡的快速入口必须从人上次
+    // 看过的 HEAD 起算,而不是退回任务基线装作没有增量。
+    writeFileSync(join(repo.cwd, "src", "feature.ts"),
+      "export const clarifiedValue = 1;\n");
+    repo.git("add", "src/feature.ts");
+    repo.git("commit", "--quiet", "-m", "rework: clarify name");
+    internal.summary.status = "verifying";
+    assert.equal(await gate(), false, "返工后的新 HEAD 重新举卡");
+    const review = service.get(id)!.delivery?.push_review;
+    assert.equal(review?.has_focused_changes, true,
+      "返工轮必须有「这次修改」视角");
+    assert.equal(review?.base_sha, reviewedHead,
+      "基点=人上次看过的 HEAD,不是任务基线");
+    assert.equal(review?.stats_unavailable_reason, undefined);
+    assert.ok((review?.additions ?? 0) > 0, "逐行统计来自真实比较");
+  } finally {
+    await model.stop();
+  }
+});

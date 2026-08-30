@@ -5962,6 +5962,15 @@ pre {
   border-radius: 999px; background: var(--accent);
 }
 .push-review-scope button:only-of-type { grid-column: 1 / -1; }
+/* 单一范围时的状态标签(MFC-035):不是按钮,不给可点的暗示。 */
+.push-review-scope .scope-single {
+  min-width: 0; min-height: 53px; padding: 8px 11px; display: grid; gap: 2px;
+  grid-column: 1 / -1; color: var(--text-strong);
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface); cursor: default;
+}
+/* 统计不可得(MFC-040):亮原因,压过 +0/−0 的既有配色。 */
+.push-review-facts .stats-unavailable { color: var(--danger); }
 .push-review-scope strong { font-size: 13.5px; }
 .push-review-scope span {
   overflow: hidden; color: var(--muted); font-size: var(--font-size-assist);
@@ -9301,34 +9310,38 @@ body[data-view="issues"] .nav-item.on { box-shadow: inset 3px 0 #c87873; }
   font-weight: 600;
 }
 
-.ws-merge-focus {
-  margin: 12px 14px;
-  padding: 15px 16px;
-  display: grid;
-  gap: 8px;
-  background: color-mix(in srgb, var(--purple-soft) 65%, var(--surface));
-  border: 1px solid color-mix(in srgb, var(--purple) 25%, var(--line));
-  border-left: 3px solid var(--purple);
-  border-radius: 10px;
+/* await_merge 右栏一行式状态(MFC-039):右栏标题已说明阶段,这里
+   默认只有一行,点开才是说明与 MR 链接;MR 被关是例外,直接可见。 */
+.ws-merge-line { margin: 12px 14px; display: grid; gap: 6px; }
+.ws-merge-line > button {
+  width: fit-content; padding: 7px 11px; display: inline-flex;
+  align-items: center; gap: 7px; color: var(--text);
+  border: 1px solid var(--line); border-radius: 999px;
+  background: var(--surface); font: inherit; font-size: 13px;
+  font-weight: 700; cursor: pointer;
 }
-.ws-merge-focus > span {
-  color: var(--purple); font-size: 11px; font-weight: 800; letter-spacing: .08em;
+.ws-merge-line > button:hover { border-color: var(--line-strong); }
+.ws-merge-line-dot {
+  width: 8px; height: 8px; border-radius: 999px; background: var(--purple);
 }
-.ws-merge-focus strong { color: var(--text-strong); font-size: 15px; }
-.ws-merge-focus p,
-.ws-merge-focus small,
-.ws-merge-focus em { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
-.ws-merge-focus a {
-  width: fit-content;
-  padding: 9px 12px;
-  color: #fff;
-  background: var(--purple);
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 800;
-  text-decoration: none;
+.ws-merge-line > button svg {
+  width: 14px; height: 14px; fill: none; stroke: currentColor;
+  stroke-width: 1.6; transition: transform .15s ease;
 }
-.ws-merge-focus a:hover { filter: brightness(1.06); }
+.ws-merge-line > button svg.is-open { transform: rotate(180deg); }
+.ws-merge-line > p {
+  margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  color: var(--muted); font-size: 13px; line-height: 1.6;
+}
+.ws-merge-line a { color: var(--purple); font-weight: 700; }
+.ws-merge-line small { flex-basis: 100%; color: var(--muted); }
+.ws-merge-line em { color: var(--muted); }
+.ws-merge-line.is-closed {
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, var(--line));
+  border-left: 3px solid var(--danger); border-radius: 10px;
+}
+.ws-merge-line.is-closed strong { color: var(--text-strong); font-size: 14px; }
 
 /* 列表页收起卡只保留主线:阶段轨道与 Token 遥测是详情级信息,
    收起时隐藏——扫 20 张卡的场景里,它们把 focus 行淹了。 */
