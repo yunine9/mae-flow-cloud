@@ -119,6 +119,36 @@ test("阶段轨迹/审批卡与决定/台账成败:读成人话且按时间正�
   assert.equal(find(entries, "开始执行")?.tone, "info");
 });
 
+// 裸时间戳的时区语义按写入方分路,是双轮实测(MFC-016)换来的结论:
+// history 由容器内内核 CLI 写(TZ=UTC),质量台账由宿主 dispatch 写
+// (跟服务器本地时区)。用 UTC+8 模拟生产服务器,钉死两路不许一刀切。
+test("裸时间戳分路:history 按 UTC,质量台账按宿主本地时区", () => {
+  const prevTZ = process.env.TZ;
+  process.env.TZ = "Asia/Shanghai";
+  try {
+    const { workspace, cwd } = makeSite({
+      state: {
+        current: "build",
+        history: [{ step: "build", result: "done", note: "",
+          at: "2026-08-15 10:00:00" }],
+      },
+      ledger: {
+        executions: [{ kind: "COMPILE", step: "build", succeeded: true,
+          command: "make", at: "2026-08-15 10:00:00" }],
+      },
+    });
+    const entries = buildTimeline(workspace, cwd);
+    const history = entries.find((entry) => entry.kind === "phase");
+    const quality = entries.find((entry) => entry.kind === "quality");
+    // 同一串裸时间,容器写的就是这一刻的 UTC,宿主写的要回退 8 小时。
+    assert.equal(history?.ts, "2026-08-15T10:00:00.000Z");
+    assert.equal(quality?.ts, "2026-08-15T02:00:00.000Z");
+  } finally {
+    if (prevTZ === undefined) delete process.env.TZ;
+    else process.env.TZ = prevTZ;
+  }
+});
+
 test("子 Agent 配对:返回的成对,收口后仍无返回登记的标红", () => {
   const { workspace, cwd } = makeSite({
     events: [

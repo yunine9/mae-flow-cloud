@@ -31,11 +31,14 @@ export interface TimelineEntry {
 const BARE_TIMESTAMP = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
 
 /**
- * 历史语义事件的裸串来自 `toISOString()` 去掉 T/Z，实际是 UTC；
+ * 历史语义事件的裸串来自 `toISOString()` 去掉 T/Z,实际是 UTC;
  * 内核 Python 的裸串来自 `time.strftime()`——写的是**执行进程所在
- * 时区**。内核命令自进容器后全在 UTC 容器里跑,"bare=宿主本地时区"
- * 的旧假设在那一刻就断了(实测耗时整体偏移 8 小时,MFC-016)。
- * 两路如今都按 UTC 补全;长期解法是内核直接写带偏移量的 ISO。
+ * 时区**,所以 bareMeans 必须按写入方逐路判定,不能一刀切:
+ * - history:Agent 经 Bash 在容器里跑内核 CLI 写入,容器 TZ=UTC
+ *   (实测耗时整体偏移 8 小时,MFC-016)→ 按 UTC 补全;
+ * - 质量台账:宿主上的 dispatch 进程写入(hook_quality_execution),
+ *   跟随服务器本地时区 → 按 local 补全。
+ * 长期解法是内核直接写带偏移量的 ISO,这里的分路才可以退役。
  */
 function normalizeTimestamp(
   value: unknown,
@@ -267,7 +270,8 @@ function fromQualityLedger(cwd: string): TimelineEntry[] {
     const kind = String(row.kind ?? "");
     const ok = row.succeeded === true;
     entries.push({
-      ts: normalizeTimestamp(row.at, "utc"),
+      // 台账由宿主 dispatch 进程写(非容器),裸串是服务器本地时区。
+      ts: normalizeTimestamp(row.at, "local"),
       kind: "quality",
       title: `${label[kind] ?? kind}执行:${ok ? "成功" : "失败"}`,
       detail: [clip(row.step, 40) && `步骤 ${clip(row.step, 40)}`,
