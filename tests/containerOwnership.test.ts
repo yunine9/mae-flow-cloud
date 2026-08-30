@@ -6,6 +6,7 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  rmSync,
   statSync,
   symlinkSync,
   writeFileSync,
@@ -255,4 +256,32 @@ test("root 形态下仓目录缺席必须炸出来，不吞成静默 false", () 
     workspace, dir: join(workspace, "repo", "origin"),
     user: "10001:10001", runtime: { platform: "linux", effectiveUid: 0 },
   }), /不存在的容器目录/);
+});
+
+
+test("缓存重建后旧 marker 失效:签名绑定 inode(MFC-013)", () => {
+  const root = mkdtempSync(join(tmpdir(), "mfc-marker-inode-"));
+  const cacheRoot = join(root, "cache");
+  const cache = join(cacheRoot, "maven");
+  const markerRoot = join(root, "markers");
+  const workspace = join(root, "ws");
+  mkdirSync(cache, { recursive: true });
+  mkdirSync(workspace, { recursive: true });
+  const uid = process.getuid?.() === 0 ? 12345 : process.getuid!();
+  const gid = process.getgid?.() === 0 ? 12345 : process.getgid!();
+  const run = () => prepareContainerHostPaths({
+    workspace,
+    volumes: [`${cache}:/cache/maven:rw`],
+    cacheRoot,
+    markerRoot,
+    user: `${uid}:${gid}`,
+    runtime: { platform: "linux", effectiveUid: 0 },
+  });
+  assert.equal(run().cacheTrees, 1, "首轮核对整棵缓存");
+  assert.equal(run().cacheTrees, 0, "同一 inode 第二轮命中 marker 跳过");
+  // 模拟回收重建:同路径、新 inode。旧 marker 不得再放行跳过——
+  // 曾经签名只有 uid:gid,重建后 root 误以为属主已就位。
+  rmSync(cache, { recursive: true, force: true });
+  mkdirSync(cache, { recursive: true });
+  assert.equal(run().cacheTrees, 1, "重建后 inode 变化,必须重新核对");
 });

@@ -998,6 +998,12 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
   After=network.target docker.service
 
   [Service]
+  # 以专用非 root 账号运行(先 useradd -r maeflow 并把数据/缓存目录
+  # chown 给它)。root 运行时服务会要求 --isolate-user <uid>:<gid> 且
+  # 拒绝 0:0——与其在 push 前才被容器用户约束拦下,不如单元文件里
+  # 就写对(e2e-picky-20260830 审计:旧样例 root 裸跑与启动约束冲突)。
+  User=maeflow
+  Group=maeflow
   WorkingDirectory=/srv/mae-flow-cloud
   Environment=MAE_FLOW_HOME=/srv/mae-flow
   Environment=MAE_FLOW_ADMIN_USER=admin
@@ -1022,6 +1028,8 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
   ```
   `secrets.env` 至少包含 `MAE_FLOW_ADMIN_PASSWORD=...`,权限设为 `0600`,
   不要把密码直接写进单元文件或仓库。账号库已存在后不会重复创建管理员。
+  必须以 root 运行的部署(极少数,如需要读受限 CA):去掉 `User=` 并在
+  ExecStart 追加 `--isolate-user <业务uid>:<业务gid>`——0:0 会被拒绝启动。
 - 环回代理教训(外部踩过三次):如果服务器有全局代理,
   确认 `NO_PROXY=127.0.0.1,localhost`(代码里 `ensureLoopbackDirect()`
   已兜底,但 curl 排障时记得 `--noproxy '*'`)。

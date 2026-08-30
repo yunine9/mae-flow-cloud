@@ -164,7 +164,12 @@ function prepareCache(
 ): boolean {
   mkdirSync(path, { recursive: true });
   ownershipMarkerRoot(markerRoot);
-  const signature = `${owner.uid}:${owner.gid}\n`;
+  // 签名绑定目录 inode:缓存被回收重建后路径相同、inode 必然不同,
+  // 旧标记不得再让宿主跳过核对(MFC-013:重建后 marker 陈旧,root
+  // 误以为属主已就位)。
+  const identity = lstatSync(path);
+  const signature =
+    `${owner.uid}:${owner.gid} ${identity.dev}:${identity.ino}\n`;
   const sourceId = createHash("sha256").update(resolve(path)).digest("hex");
   const marker = join(
     markerRoot,
