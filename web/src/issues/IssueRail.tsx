@@ -35,7 +35,7 @@ export function IssueRail({ detail, busy, waiting, onAnswer, onReply,
    * answers=Agent 卡逐题作答);返回 true 表示成功。 */
   onAnswer: (decision: string, code?: string,
     answers?: Record<string, string>, notes?: string) => Promise<boolean>;
-  /** 继续对话(idle/interrupted);返回 true 表示成功。 */
+  /** 继续对话(idle);返回 true 表示成功。 */
   onReply: (text: string) => Promise<boolean>;
   /** 运行中插话;返回 true 表示成功。 */
   onSteer: (text: string) => Promise<boolean>;
@@ -104,19 +104,6 @@ export function IssueRail({ detail, busy, waiting, onAnswer, onReply,
           submit={onReply}
         />
       </div>}
-      {!waiting && detail.status !== "suspended" && !doneIdle
-        && detail.status === "interrupted"
-        && <div className="issue-rail-card is-resume">
-          <strong>服务重启打断了会话</strong>
-          <p>现场还在——发消息即可续聊。</p>
-          <RailInput
-            kind="reply"
-            disabled={busy}
-            placeholder="从现场继续…"
-            actionLabel="发送"
-            submit={onReply}
-          />
-        </div>}
       {!waiting && detail.status !== "suspended" && !doneIdle
         && ["archived", "canceled", "failed"].includes(detail.status)
         && <div className="issue-rail-card is-ended">

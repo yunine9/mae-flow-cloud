@@ -40,7 +40,7 @@ export function IssueBoard({ viewer, onNavigateProfile }: {
   const waitingCount = issues.filter((issue) =>
     issue.status === "waiting_user").length;
   const interventionCount = issues.filter((issue) =>
-    issue.status === "failed" || issue.status === "interrupted").length;
+    issue.status === "failed").length;
 
   const refreshList = () => {
     void listIssues().then(setIssues).catch(() => undefined);
@@ -237,10 +237,6 @@ function IssueCard({ issue, active, onOpen }: {
       {issue.status === "waiting_user" && <div className="verify-waiting">
         <strong>等你处理</strong>
         <span>进入问题工作台答复问题卡 / 平台闸,会话才会继续跑。</span>
-      </div>}
-      {issue.status === "interrupted" && <div className="verify-waiting">
-        <strong>服务重启打断</strong>
-        <span>进入问题工作台发一条消息即可续上现场。</span>
       </div>}
       <div className="task-utilities">
         <IssueEventsPane id={issue.id} active={expanded} />

@@ -2701,7 +2701,6 @@ export type IssueStatus =
   | "running"
   | "waiting_user"
   | "idle"
-  | "interrupted"
   | "suspended"
   | "archived"
   | "canceled"
@@ -2712,7 +2711,6 @@ export const ISSUE_STATUS_TEXT: Record<IssueStatus, string> = {
   running: "AI 处理中",
   waiting_user: "等你答复",
   idle: "等你继续",
-  interrupted: "重启中断,可续聊",
   suspended: "挂起(待关联单号)",
   archived: "已归档",
   canceled: "已取消",
