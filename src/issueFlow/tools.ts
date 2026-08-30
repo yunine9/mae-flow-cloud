@@ -59,6 +59,7 @@ import type { DtsGateway } from "./gateways.ts";
 import { issueRegistrationMeta } from "./prompt.ts";
 import {
   currentBranch,
+  dirtyWorktree,
   pushFromIssueWorkspace,
   type GitCredential,
 } from "./issueGit.ts";
@@ -486,8 +487,9 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     label: "Push Branch (Host)",
     description:
       "把当前修复分支经宿主推送到远端(git push 在容器里是禁用的,必须走"
-      + "本工具)。机械门禁:会话必须已绑定单号,且分支名必须是 "
-      + "master_<工号>_<单号>。推送后返回 SHA。",
+      + "本工具)。机械门禁:会话必须已绑定单号,分支名必须是 "
+      + "master_<工号>_<单号>,且工作区不能有未提交改动(push 只推已提交"
+      + "的历史——改完先 git add -A && git commit 再推)。推送后返回 SHA。",
     parameters: Type.Object({
       branch: Type.Optional(Type.String({
         description: "要推送的分支;缺省取代码仓当前分支",
@@ -514,6 +516,18 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       if (branch !== expected) {
         fail(`分支名不符合交付规则: 应为 ${expected},实际 ${branch}。`
           + "修复分支命名固定为 master_<工号>_<单号>");
+      }
+      // 脏工作区熔断(2026-08-28 真实环境事故):AI 改了文件没 commit,
+      // push 推的是 clone 时的旧 HEAD,MR 没有 diff。与其让空 MR 静默
+      // 出厂,不如在这里点破并给出该做的事。
+      const dirty = await dirtyWorktree(repo.dir);
+      if (dirty.length) {
+        fail("工作区有未提交改动,push 只推送已提交的历史——现在推只会"
+          + `推出旧提交(MR 将没有 diff)。先提交再重推:\n`
+          + `  git add -A && git commit -m "[${state.ticket}] <改动说明>"\n`
+          + `未提交的文件(${dirty.length} 条):\n`
+          + dirty.slice(0, 10).map((line) => `  ${line}`).join("\n")
+          + (dirty.length > 10 ? `\n  …共 ${dirty.length} 条` : ""));
       }
       const receipt = await pushFromIssueWorkspace({
         dataDir: ctx.dataRoot,
@@ -844,6 +858,9 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
           platformUrl: platformUrl!,
           repo: record.repo,
           sha,
+          // 适配层状态命令模板可能引用 {mr}(2026-08-28 真实环境 502:
+          // 模板变量空串渲染失败)——台账里记了 iid,带上。
+          ...(record.iid ? { mr: record.iid } : {}),
           credential: ctx.gitCredential?.(),
         });
         // 终态 run 才带 log/checks(getPipelineStatus 顶层只给总体状态),

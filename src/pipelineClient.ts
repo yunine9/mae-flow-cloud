@@ -27,6 +27,9 @@ export interface PipelineCallBase {
   platformUrl: string;
   /** 目标仓地址;缺席时适配层按自身单仓配置处理。 */
   repo?: string;
+  /** MR 内部 id(iid)。适配层的状态命令模板可能引用 {mr} 按单过滤:
+   * 缺了它模板渲染失败(真实环境 502 实测)。知道就传,别让模板空转。 */
+  mr?: string;
   credential?: PipelineCredential;
   timeoutMs?: number;
 }
@@ -129,6 +132,7 @@ export async function getPipelineStatus(
   const base = call.platformUrl.replace(/\/+$/, "");
   const query = new URLSearchParams({ sha: call.sha });
   if (call.repo) query.set("repo", call.repo);
+  if (call.mr) query.set("mr", call.mr);
   const body = await pipelineFetch(
     `${base}/pipeline/status?${query.toString()}`,
     { method: "GET", headers: pipelineHeaders(call.credential) },
