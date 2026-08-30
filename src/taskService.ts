@@ -66,6 +66,11 @@ import {
 } from "./artifacts.ts";
 import { KernelHost } from "./kernelHost.ts";
 import {
+  collectTaskDiagnostics,
+  writeTaskDiagnostics,
+  type DiagnosticsInput,
+} from "./taskDiagnostics.ts";
+import {
   matchesStepChoice,
   stepChoiceEffects,
   stepReviewSurface,
@@ -1050,6 +1055,9 @@ export interface TaskServiceOptions {
     account: string,
   ) => { ready: boolean; missing: string[] };
   log?: (message: string) => void;
+  /** 服务日志环形缓冲的读口(serve 注入)。诊断包用它切最近日志;
+   * 缺席时诊断包只是少一节,采集本身照常。 */
+  recentLog?: () => string[];
 }
 
 export interface TaskCommandContainer {
@@ -1319,6 +1327,9 @@ interface TaskState {
   prepushAbort?: AbortController;
   /** 上次主动压缩时的事件水位(事件量是上下文增长的诚实代理)。 */
   lastCompactAt?: number;
+  /** 已自动采集过诊断包的事故键(内存态)。同一事故只落一份,
+   * 重复 persist 不刷屏;文件名里的 hash 负责跨重启去重。 */
+  lastDiagnosticsKey?: string;
   /** 恢复标记:launch 走重建会话路径(不重克隆、内核 current 续跑)。 */
   resume?: boolean;
   /** 恢复期收到的人工决定:重建会话就绪后由 driver 补登记再续跑。 */
@@ -5080,6 +5091,60 @@ export class TaskService {
     // 文件先落袋(它才是真相),投影旁路跟进;失败由投影自己 fail-open。
     this.bypass(task, "投影 upsert",
       this.options.projection?.upsertTask(this.project(task)));
+    this.maybeCaptureDiagnostics(task);
+  }
+
+  /** 任务一进事故态(failed / 交付停摆)就自动落一份诊断包——第一
+   * 时间抓现场,人来看时不用再翻七八处。纯旁路:采集失败只记日志,
+   * 绝不影响任务;同一事故(状态+原因)只落一份。 */
+  private maybeCaptureDiagnostics(task: TaskState): void {
+    const stalled = task.summary.delivery?.stalled ?? "";
+    const key = task.summary.status === "failed"
+      ? `failed:${task.summary.detail ?? ""}`
+      : stalled ? `stalled:${stalled}` : "";
+    if (!key || task.lastDiagnosticsKey === key) return;
+    task.lastDiagnosticsKey = key;
+    this.bypass(task, "诊断包采集", writeTaskDiagnostics({
+      ...this.diagnosticsInput(task),
+      reason: key.startsWith("failed:")
+        ? `任务失败:${task.summary.detail ?? ""}`
+        : `交付停摆:${stalled}`,
+      dedupeKey: key,
+    }).then(({ path, skipped }) => {
+      if (!skipped) {
+        this.options.log?.(`任务 ${task.summary.id} 已自动落诊断包:${path}`);
+      }
+    }));
+  }
+
+  private diagnosticsInput(task: TaskState): DiagnosticsInput {
+    const meta = task.container?.metadata;
+    return {
+      taskId: task.summary.id,
+      workspace: task.summary.workspace,
+      ...(task.cwd ? { cwd: task.cwd } : {}),
+      ...(this.options.recentLog
+        ? { serviceLogTail: this.options.recentLog() } : {}),
+      ...(meta ? { container: {
+        name: meta.name, containerId: meta.containerId } } : {}),
+      dataDir: this.options.dataDir,
+    };
+  }
+
+  /** 人工导出诊断包(页面按钮/HTTP):现采现回,同时落盘留档。 */
+  async exportDiagnostics(
+    id: string,
+  ): Promise<{ path: string; content: string }> {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    const input = { ...this.diagnosticsInput(task), reason: "人工导出" };
+    const content = await collectTaskDiagnostics(input);
+    const dir = join(task.summary.workspace, "diagnostics");
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir,
+      `${new Date().toISOString().replace(/[:.]/g, "-")}-manual.md`);
+    writeFileSync(path, content);
+    return { path, content };
   }
 
   /** 服务重启后恢复任务(服务启动时调用一次):

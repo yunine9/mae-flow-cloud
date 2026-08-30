@@ -89,6 +89,19 @@ export function workspaceNextActionCopy(
   return { title: "当前无待办", detail: "无需处理" };
 }
 
+/** 问题定位一键采集:任务出事(failed/交付停摆)时把全部可定位事实
+ * 现采成一个 markdown 下载。服务端在出事瞬间也会自动留档一份到任务
+ * 目录 diagnostics/,这里是给人手动再拿最新现场的口。 */
+function DiagnosticsLink({ taskId }: { taskId: string }) {
+  return (
+    <a className="diagnostics-link"
+      href={`/tasks/${encodeURIComponent(taskId)}/diagnostics`} download
+      title="把任务状态、内核现场、Git/容器事实、会话事件与服务日志汇成一个文件">
+      导出诊断包
+    </a>
+  );
+}
+
 /** await_merge 的右栏行:默认一行状态,点开只展开一句说明 + MR 链接
  * (MFC-039 用户拍板:去掉与右栏标题重复的大卡)。MR 被关闭是需要人
  * 处理的例外,直接展示不折叠。 */
@@ -1184,6 +1197,7 @@ export function TaskWorkspace({
               {canOperate && !waiting && (
                 <div className="ws-failed-actions">
                   <RetryButton taskId={task.id} onDone={onChanged} />
+                  <DiagnosticsLink taskId={task.id} />
                 </div>
               )}
             </>
@@ -1216,6 +1230,9 @@ export function TaskWorkspace({
                 )}
                 {canOperate && repairStopped(task) && (
                   <RetryButton taskId={task.id} onDone={onChanged} />
+                )}
+                {task.delivery?.stalled && (
+                  <DiagnosticsLink taskId={task.id} />
                 )}
               </div>
             ) : (

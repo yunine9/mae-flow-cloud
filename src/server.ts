@@ -2396,6 +2396,20 @@ export function createTaskServer(
           return json(response, 200,
             buildTimeline(target.workspace, cwd));
         }
+        // 问题定位一键采集(只读现场+现查 git/容器):现采现回并留档。
+        // 权限口径同任务详情;能看任务就能拿它的诊断包。
+        if (request.method === "GET" && parts.length === 3
+            && parts[2] === "diagnostics") {
+          const target = service.get(id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          const bundle = await service.exportDiagnostics(id);
+          response.writeHead(200, {
+            "content-type": "text/markdown; charset=utf-8",
+            "content-disposition":
+              `attachment; filename="${id}-diagnostics.md"`,
+          });
+          return response.end(bundle.content);
+        }
         if (request.method === "GET" && parts.length === 3
             && parts[2] === "push-review-diff") {
           const scope = url.searchParams.get("scope") === "full"

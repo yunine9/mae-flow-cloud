@@ -823,6 +823,8 @@ async function main(): Promise<void> {
       })
     : undefined;
 
+  // 任务日志环形缓冲(诊断包切片用):进程存活期间保留最近几千行。
+  const taskLogRing: string[] = [];
   const service = new TaskService({
     dataDir, provider, model, modelsJson, maxConcurrent, settings,
     ...(issueOnly ? { requirementDisabled: true } : {}),
@@ -885,7 +887,17 @@ async function main(): Promise<void> {
     // 正式部署建议固定 public-url；未配置时，服务会从已登录用户的
     // 实际请求 Host 学到内网入口，绝不再默认写死 127.0.0.1。
     linkBase: publicUrl,
-    log: (message) => console.log(`  [task] ${message}`),
+    // 任务日志除了进 stdout,还进内存环形缓冲——诊断包(问题定位
+    // 一键采集)靠它切最近日志;进程重启缓冲清零,历史看 stdout 归档。
+    log: (message) => {
+      const line = `${new Date().toISOString()} [task] ${message}`;
+      console.log(`  [task] ${message}`);
+      taskLogRing.push(line);
+      if (taskLogRing.length > 4000) {
+        taskLogRing.splice(0, taskLogRing.length - 2000);
+      }
+    },
+    recentLog: () => [...taskLogRing],
   });
   // 先清理本 dataDir 实例上次崩溃遗留的 coding/prepush/system-check
   // 容器，再恢复任务。顺序不能反：recover 一旦入队就可能撞上旧容器。

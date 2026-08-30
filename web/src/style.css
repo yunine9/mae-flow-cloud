@@ -9417,7 +9417,14 @@ body[data-view="issues"] .nav-item.on { box-shadow: inset 3px 0 #c87873; }
 .context-toggle:hover { background: var(--accent-soft); }
 
 /* 全工作台阶段审查轮(2026-08-29):右栏按阶段给重点。 */
-.ws-failed-actions { margin: 10px 14px 0; display: flex; }
+.ws-failed-actions { margin: 10px 14px 0; display: flex; gap: 10px; align-items: center; }
+/* 问题定位一键采集入口:低调链接,出事区域(失败/停摆)旁边就近取。 */
+.diagnostics-link {
+  width: fit-content; padding: 6px 10px; color: var(--muted);
+  border: 1px dashed var(--line); border-radius: 8px;
+  font-size: var(--font-size-assist); text-decoration: none;
+}
+.diagnostics-link:hover { color: var(--text); border-color: var(--line-strong); }
 .ws-verify-focus {
   margin: 12px 14px;
   padding: 14px 16px;
