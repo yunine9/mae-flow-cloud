@@ -77,6 +77,7 @@ import {
   stepReviewSurface,
   workflowChoices,
   workflowLabel,
+  type StepChoiceEffect,
 } from "./kernelChoices.ts";
 import {
   readCurrentExecutionPlanReading,
@@ -2812,10 +2813,30 @@ export class TaskService {
       }
     }
     const contractStep = this.reviewContractStep(task, summary.waiting);
-    const choiceEffects = stepChoiceEffects(
-      this.options.host?.kernelRoot,
-      contractStep,
-    );
+    // cloud_push_confirm 是 Cloud 自己生成的卡，不在内核 flow.json 里。
+    // 之前这里只问内核要效果，结果这张卡永远没有 choice_effects：页面
+    // 明明看得到“需要调整”，却不知道它是返工分支，只能错误提示用户
+    // 去写自定义答复。云端原生卡的选项与服务端处理本就由本文件定义，
+    // 在同一处把关闭/返工语义投影出去，历史待办读取时也能立即恢复。
+    const choiceEffects: StepChoiceEffect[] =
+      summary.waiting?.step === CLOUD_PUSH_CONFIRM_STEP
+        ? [{
+            key: "confirm",
+            answers: [PUSH_CONFIRM_ACCEPT],
+            allowsSourceEdit: false,
+            handlesFeedback: false,
+            closesFeedback: true,
+          }, {
+            key: "rework",
+            answers: [PUSH_CONFIRM_REWORK],
+            allowsSourceEdit: true,
+            handlesFeedback: true,
+            closesFeedback: false,
+          }]
+        : stepChoiceEffects(
+            this.options.host?.kernelRoot,
+            contractStep,
+          );
     const recommendedView: "source" | "doc" | "chain" | "diff" | undefined =
       this.isRequirementAnalysis(task)
       ? "chain"

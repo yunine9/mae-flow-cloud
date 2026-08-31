@@ -620,7 +620,7 @@ export function WaitingCard({
       return changed ? next : current;
     });
   }, [task.waiting?.waiting_id, annotationKey, choiceKey,
-    deliverySelectionChanged]);
+    deliverySelectionChanged, attachmentCount]);
 
   function pickOption(question: string, option: string) {
     setPicked({ ...picked, [question]: option });
