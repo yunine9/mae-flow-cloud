@@ -103,11 +103,12 @@ test("克隆认证失败说人话:引导去个人设置配令牌,其余保留 gi
 function issueGet(
   parts: string[],
   service?: IssueFlowService,
+  query = "",
 ): Promise<{ status: number; body: Record<string, any> }> {
   return new Promise((resolve, reject) => {
     let status = 0;
     void handleIssueRoutes(
-      { method: "GET" } as any,
+      { method: "GET", url: `/${parts.join("/")}${query}` } as any,
       {
         writeHead: (code: number) => {
           status = code;
@@ -271,7 +272,7 @@ test("问题时间线归纳(纯函数):waiting_user 未决段以 now 封口;坏�
   assert.equal(odd.span.ms, 0);
 });
 
-test("视图旁路路由:文档缺失是 200 {unavailable};残缺现场时间线 fail-open", () => {
+test("视图旁路路由:过程文档缺失是 200 {unavailable};残缺现场问答投影 fail-open", () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-view-"));
   mkdirSync(join(dataDir, "issues", "issue-1"), { recursive: true });
   writeFileSync(join(dataDir, "issues", "issue-1", "issue.json"), JSON.stringify({
@@ -295,10 +296,23 @@ test("视图旁路路由:文档缺失是 200 {unavailable};残缺现场时间线
   });
   return (async () => {
     try {
-      const analysis = await issueGet(["issues", "issue-1", "analysis"], service);
-      assert.equal(analysis.status, 200,
+      const docs = await issueGet(["issues", "issue-1", "documents"], service);
+      assert.equal(docs.status, 200, "清单 fail-open:没有 .md 给空清单,不报错");
+      assert.deepEqual(docs.body.documents, []);
+
+      const missing = await issueGet(
+        ["issues", "issue-1", "documents", "read"], service,
+        "?name=issue-analysis.md");
+      assert.equal(missing.status, 200,
         "问题号存在但文档缺失=200 {unavailable},不是 404");
-      assert.equal(analysis.body.unavailable, "尚未生成结论文档");
+      assert.equal(missing.body.unavailable, "文档不存在");
+
+      const dialogue = await issueGet(["issues", "issue-1", "dialogue"], service);
+      assert.equal(dialogue.status, 200);
+      assert.equal(dialogue.body.turns.length, 1,
+        "残行跳过,有效的 user_message 照投影");
+      assert.equal(dialogue.body.turns[0].kind, "user");
+      assert.equal(dialogue.body.turns[0].text, "开场");
 
       const timeline = await issueGet(
         ["issues", "issue-1", "timeline"], service);
@@ -427,7 +441,7 @@ test("问题会话多轮闭环:研究→提问卡→作答→非问题归档(无
     }, "根因确认问题卡");
     assert.equal(waiting.stage, "locate_root");
     assert.ok(waiting.waiting, "问题卡应来自 AskUserQuestion");
-    assert.ok(waiting.has_analysis, "结论文档应已产出");
+    assert.ok(waiting.has_analysis, "分析报告应已产出");
 
     // 登记元信息进上下文(ADR-0003):网管口令明文随元信息块出现。
     const requestText = JSON.stringify(model.requests);
@@ -466,7 +480,7 @@ test("问题会话多轮闭环:研究→提问卡→作答→非问题归档(无
       assert.notEqual(issue.status, "failed", issue.error);
     });
 
-    // 视图旁路(真路由形状):多轮闭环完成后,「耗时与卡点」与结论文档
+    // 视图旁路(真路由形状):多轮闭环完成后,「耗时与卡点」与过程文档
     // 都应能直接出结论——等待段配对、决策计数、issue-analysis.md 全文。
     const timelineResponse = await issueGet(
       ["issues", created.id, "timeline"], service);
@@ -481,15 +495,16 @@ test("问题会话多轮闭环:研究→提问卡→作答→非问题归档(无
     assert.ok(typeof timelineResponse.body.span?.ms === "number"
       && timelineResponse.body.span.ms >= 0,
     "耗时区间必须是有限的非负毫秒数");
-    const analysisResponse = await issueGet(
-      ["issues", created.id, "analysis"], service);
-    assert.equal(analysisResponse.status, 200,
-      "文档存在时 analysis 必须是 200,不是 404");
-    assert.match(String(analysisResponse.body.content), /非问题/,
+    const docResponse = await issueGet(
+      ["issues", created.id, "documents", "read"], service,
+        "?name=issue-analysis.md");
+    assert.equal(docResponse.status, 200,
+      "文档存在时读取必须是 200,不是 404");
+    assert.match(String(docResponse.body.content), /非问题/,
       "issue-analysis.md 的内容应原样可读");
     // 问题号未知才是 404;文档缺失的对照路在下方独立测试里钉死。
     assert.equal((await issueGet(
-      ["issues", "issue-999", "analysis"], service)).status, 404);
+      ["issues", "issue-999", "documents"], service)).status, 404);
 
     const archived = service.control(created.id, {
       action: "archive", kind: "non_issue", summary: "误报,时钟漂移",

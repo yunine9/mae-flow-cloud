@@ -14,18 +14,15 @@
  */
 
 import {
-  closeSync,
   cpSync,
   existsSync,
   mkdirSync,
-  openSync,
   readdirSync,
   readFileSync,
-  readSync,
   statSync,
   writeFileSync,
 } from "node:fs";
-import { join, relative, resolve, sep } from "node:path";
+import { join, relative } from "node:path";
 import { CloudSession, type Outcome } from "../sessionDriver.ts";
 import { EventLog, type SemanticEvent } from "../semanticEvents.ts";
 import { TranscriptStore } from "../transcriptStore.ts";
@@ -379,60 +376,6 @@ const NUDGE_BUDGET = 2;
 const RESTART_RESUME_NOTICE =
   "平台通知: 服务重启,平台自动续跑,接着当前阶段继续,不重复已完成的工作。";
 
-/** 结论文档回传上限:一个巨型文档不能把页面拖死。 */
-const ANALYSIS_MAX_BYTES = 512 * 1024;
-const ANALYSIS_TRUNCATED_NOTE =
-  "\n\n…(内容超过 512 KB,只回传前 512 KB;完整内容见会话工作区文件)";
-
-/** 结论文档按字节帽读取。这是 artifacts.ts 里 cap/readCapped 的十行
- * 本地副本——问题流与需求流互不 import,不为一顶帽子引入跨域耦合。
- * 按字节切会把 UTF-8 多字节字符切一半,末尾的替换符直接抹掉——宁可
- * 少一个字,不给用户看乱码。 */
-function capAnalysisText(text: string): {
-  content: string;
-  truncated: boolean;
-} {
-  if (Buffer.byteLength(text, "utf-8") <= ANALYSIS_MAX_BYTES) {
-    return { content: text, truncated: false };
-  }
-  const clipped = Buffer.from(text, "utf-8")
-    .subarray(0, ANALYSIS_MAX_BYTES)
-    .toString("utf-8")
-    .replace(/\uFFFD+$/, "");
-  return { content: clipped + ANALYSIS_TRUNCATED_NOTE, truncated: true };
-}
-
-/** 读会话根目录的 issue-analysis.md。白名单即边界:文件名是服务自己
- * 的固定常量,不掺任何输入;读之前再核对解析后的路径仍在会话现场之
- * 下(双保险,与需求侧 artifacts.ts 同款纪律),越界一律 undefined。 */
-function readAnalysisFile(
-  root: string,
-): { content: string; truncated: boolean } | undefined {
-  const path = join(root, "issue-analysis.md");
-  if (!existsSync(path)) return undefined;
-  const boundary = resolve(root);
-  if (!resolve(path).startsWith(boundary + sep)) return undefined;
-  try {
-    const info = statSync(path);
-    if (info.size <= ANALYSIS_MAX_BYTES) {
-      return capAnalysisText(readFileSync(path, "utf-8"));
-    }
-    const handle = openSync(path, "r");
-    try {
-      const buffer = Buffer.alloc(ANALYSIS_MAX_BYTES);
-      const read = readSync(handle, buffer, 0, ANALYSIS_MAX_BYTES, 0);
-      const content = buffer.subarray(0, read).toString("utf-8")
-        .replace(/\uFFFD+$/, "");
-      return { content: content + ANALYSIS_TRUNCATED_NOTE, truncated: true };
-    } finally {
-      closeSync(handle);
-    }
-  } catch {
-    // 文件在读取途中消失或不可读:当"还没生成",别让页面报错。
-    return undefined;
-  }
-}
-
 export class IssueFlowService {
   private readonly options: IssueFlowOptions;
   private readonly vault: IssueEnvironmentVault;
@@ -586,7 +529,7 @@ export class IssueFlowService {
     return { state: live.state, root: live.root };
   }
 
-  // ---- 视图旁路:耗时与卡点 + 结论文档(只读,fail-open) ----
+  // ---- 视图旁路:耗时与卡点(只读,fail-open);过程文档数据面在 documents.ts ----
 
   /** 「耗时与卡点」视图:纯函数归纳(见 sessionView.ts),这里只负责
    * 把消息账、状态与在等的问题卡喂给它——面板没有自己的真相。 */
@@ -597,22 +540,6 @@ export class IssueFlowService {
       messages: this.messages(id),
       waiting: live.humanGate.pending()[0],
     });
-  }
-
-  /** 结论文档(issue-analysis.md):404 只发生在问题号未知;文档缺失
-   * 返回 {unavailable}——那是"还没生成",不是"没有这个接口"。 */
-  analysis(id: string): {
-    content?: string;
-    truncated?: boolean;
-    unavailable?: string;
-  } {
-    const live = this.require(id);
-    const read = readAnalysisFile(live.root);
-    if (!read) return { unavailable: "尚未生成结论文档" };
-    return {
-      content: read.content,
-      ...(read.truncated ? { truncated: true } : {}),
-    };
   }
 
   /** 现场记录导出:事件流逐字 + issue.json 台账 → 单文件 Markdown
@@ -1367,6 +1294,29 @@ export class IssueFlowService {
     return summarize(live.state);
   }
 
+  /** 会话事件补记:服务侧发生的事实(如闸作答)落进事件账本,与
+   * driver 记的模型侧事件共用一个幂等序列。 */
+  private appendSessionEvent(
+    live: LiveIssue,
+    kind: SemanticEvent["kind"],
+    payload: Record<string, unknown>,
+  ): void {
+    try {
+      const eventLog = new EventLog(join(live.root, "events.jsonl"));
+      eventLog.append({
+        eventId: eventLog.lastEventId() + 1,
+        taskId: live.id,
+        sessionId: live.id,
+        ts: new Date().toISOString(),
+        kind,
+        payload,
+      });
+    } catch (cause) {
+      this.log?.(`[issue-flow] ${live.id} 事件补记失败(${kind}): `
+        + String(cause instanceof Error ? cause.message : cause));
+    }
+  }
+
   // ---- 固定流程:平台闸的裁决与阶段机联动 ----
 
   /** 平台闸作答分派:按决策码单点分派(gateVerdict 纯函数,语义与
@@ -1416,6 +1366,16 @@ export class IssueFlowService {
     recordTransition(state, {
       source: "platform",
       note: `用户作答(${gate.kind}): ${decision.split("\n")[0]}${notes ? `;补充: ${notes.split("\n")[0]}` : ""}`,
+    });
+    // 闸作答补记 human_decision:CONTEXT 对"现场记录"的定义是"事件流
+    // 含用户决策",而闸作答此前只进转移账,过程问答(事件账本投影)里
+    // 固定流程的关键问答会缺用户那一半。失败 fail-open:账少一条不挡
+    // 闸裁决——闸的真相在 issue.json,事件账是投影不是第二状态机。
+    this.appendSessionEvent(live, "human_decision", {
+      waiting_id: gate.id,
+      state_version: gate.state_version,
+      decision,
+      ...(notes ? { notes } : { notes: "" }),
     });
 
     if (verdict === "advance") {
