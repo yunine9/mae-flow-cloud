@@ -564,6 +564,19 @@ export class IssueFlowService {
     return { state: live.state, root: live.root };
   }
 
+  /** 解压日志档案的属主交接参数(#47):isolation.user 与运行时形态只有
+   * 服务知道,而材料路由直连 materials.ts 不经服务转手——写口(解压)
+   * 需要交接容器属主时从这里取,与拉仓收口同一来源。 */
+  logOwnershipInputs(): {
+    user?: string;
+    runtime?: ContainerOwnershipRuntime;
+  } {
+    return {
+      user: this.options.isolation?.user,
+      runtime: this.options.ownershipRuntime,
+    };
+  }
+
   // ---- 视图旁路:耗时与卡点(只读,fail-open);过程文档数据面在 documents.ts ----
 
   /** 「耗时与卡点」视图:纯函数归纳(见 sessionView.ts),这里只负责

@@ -2839,6 +2839,17 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   padding: 1px 6px; border-radius: 6px; font-size: var(--font-size-dense);
   background: var(--surface-muted); color: var(--muted); white-space: nowrap;
 }
+/* 拉取日志树(#47):目录行加粗示层级;文件行 = 查看按钮 + 可选解压
+   按钮并排;解压是写操作入口,禁用态如实降透明度。 */
+.issue-log-dir { font-weight: 600; }
+.issue-log-row { display: grid; grid-template-columns: 1fr auto; gap: 6px; }
+.issue-log-extract {
+  padding: 6px 12px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface); color: var(--text-strong); white-space: nowrap;
+  font: var(--font-size-assist) var(--font-sans); cursor: pointer;
+}
+.issue-log-extract:hover:not(:disabled) { border-color: var(--accent); }
+.issue-log-extract:disabled { opacity: 0.5; cursor: default; }
 .issue-materials-editor { display: grid; gap: 8px; margin-top: 4px; }
 .issue-materials-editor-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .issue-materials-editor-bar strong {

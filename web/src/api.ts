@@ -3432,10 +3432,19 @@ export interface IssueWorkspaceChange {
   deletions?: number;
 }
 
-export interface IssueMaterialFile {
-  name: string;
+/** 拉取日志条目(#47):local-logs 相对路径,type=dir 的 size 恒 0,
+ * archive 按扩展名标注(压缩包行才有解压按钮)。 */
+export interface IssueLogEntry {
+  path: string;
+  type: "file" | "dir";
   size: number;
   mtime: string;
+  archive: boolean;
+}
+
+export interface IssueLogListing {
+  entries: IssueLogEntry[];
+  truncated: boolean;
 }
 
 export interface IssueManualEdit {
@@ -3449,7 +3458,7 @@ export interface IssueMaterials {
   pushes: Array<{ repo: string; branch: string; sha: string; at: string }>;
   mrs: Array<{ repo: string; branch: string; title: string; url?: string; iid?: string; at: string }>;
   changes: IssueWorkspaceChange[];
-  logs: IssueMaterialFile[];
+  logs: IssueLogListing;
   manual_edits: IssueManualEdit[];
 }
 
@@ -3492,9 +3501,21 @@ export function saveIssueWorkspaceFile(
 }
 
 export function getIssueMaterialLog(
-  id: string, name: string,
+  id: string, path: string,
 ): Promise<{ content: string; truncated: boolean }> {
-  return issueFetch(`/issues/${encodeURIComponent(id)}/materials/log?name=${encodeURIComponent(name)}`);
+  return issueFetch(`/issues/${encodeURIComponent(id)}/materials/log?name=${encodeURIComponent(path)}`);
+}
+
+/** 解压压缩包日志(#47):服务端解到同目录 <去扩展名>-extracted/,
+ * 目录已在时幂等返回(reused=true,不重解)。 */
+export function extractIssueLog(
+  id: string, path: string,
+): Promise<{ ok: true; path: string; reused: boolean }> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/materials/log-extract`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
 }
 
 export function getIssueRawEvents(

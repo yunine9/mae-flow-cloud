@@ -18,7 +18,10 @@
  *                                      / 聚合(缺省,带仓库分段标记)
  *   GET  /issues/:id/materials/file   → 读工作区文件(?path=)
  *   PUT  /issues/:id/materials/file   → 快速修改(仅归属者;入人工台账)
- *   GET  /issues/:id/materials/log    → 读拉取日志(?name=,超长读尾)
+ *   GET  /issues/:id/materials/log    → 读拉取日志(?name=,任意深度
+ *                                      相对路径,超长读尾)
+ *   POST /issues/:id/materials/log-extract → 解压压缩包日志(body
+ *                                      {path};仅归属者;幂等)
  *   GET  /issues/:id/materials/events → 原始事件尾随(?limit=,现场页签)
  *   GET  /issues/:id/timeline         → 耗时与卡点(纯函数归纳,只读)
  *   GET  /issues/:id/documents        → 过程文档清单(分析报告+Agent 落
@@ -46,6 +49,7 @@ import {
   toHttpError,
 } from "./errors.ts";
 import {
+  extractLog,
   listMaterials,
   readSessionWorkspaceFile,
   recentEvents,
@@ -460,6 +464,27 @@ export async function handleIssueRoutes(
           const limit = Number.isFinite(raw) ? Math.min(Math.max(raw, 1), 1000) : 200;
           return done(200, { events: recentEvents(session.root, limit) });
         }
+      } catch (reason) {
+        return done(400, {
+          error: String(reason instanceof Error ? reason.message : reason),
+        });
+      }
+    }
+    // 解压压缩包日志(#47):写操作,仅归属者(与快速修改同一口子)。
+    // 数据面在 materials.extractLog(预检 + 系统命令解压 + 属主交接),
+    // 失败 400 带人话——解压是写,错误必须让人知道发生了什么。
+    if (method === "POST" && parts[2] === "materials"
+        && parts[3] === "log-extract" && parts.length === 4) {
+      if (brief && !own(brief.account)) {
+        return done(403, { error: "只能解压自己会话的日志" });
+      }
+      const body = await readBody(request);
+      // 会话定位在 try 外(#9):未知会话按 404 出码,不被写失败兜底吞掉。
+      const session = issueFlow.session(id);
+      try {
+        return done(200, await extractLog(
+          session.root, String(body.path ?? ""),
+          issueFlow.logOwnershipInputs()));
       } catch (reason) {
         return done(400, {
           error: String(reason instanceof Error ? reason.message : reason),
