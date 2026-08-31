@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { addAnnotation, type Annotation } from "./api";
+import { addAnnotation } from "./api";
 import {
   anchorOf, blockedBySelection, pickRow, pickRowFromStack, type RowNode,
 } from "./annotateTargets";
@@ -33,6 +33,7 @@ export function Annotatable({
   items,
   enabled = true,
   onAdded,
+  addDraft,
   children,
 }: {
   taskId: string;
@@ -40,11 +41,19 @@ export function Annotatable({
   /** 文档没有 data-file,用产物名当路径。 */
   fallbackFile: string;
   kind: "doc" | "code";
-  /** 已有批注:用来在材料上标出"这几处我圈过"。 */
-  items: Annotation[];
+  /** 已有圈注:用来在材料上标出"这几处我圈过"。只要这三个字段——
+   * 任务批注与问题域检视意见两种账都能结构兼容,不必互为类型。 */
+  items: ReadonlyArray<{ artifact: string; line: number; status: string }>;
   /** MR 合入或用户停止后材料仍可读，但不再显示新增批注入口。 */
   enabled?: boolean;
   onAdded: () => void;
+  /** 圈注落账的替代口(问题域检视,ADR-0007):给了就走它,不给走
+   * 任务流 addAnnotation。交互两域同一套,只有提交端点不同。 */
+  addDraft?: (input: {
+    line: number;
+    anchor: string;
+    note: string;
+  }) => Promise<{ error?: string }>;
   children: React.ReactNode;
 }) {
   const host = useRef<HTMLDivElement>(null);
@@ -156,14 +165,16 @@ export function Annotatable({
     const text = note.trim();
     if (!text) return;
     setBusy(true);
-    const result = await addAnnotation(taskId, {
-      artifact,
-      file: draft.file,
-      line: draft.line,
-      anchor: draft.anchor,
-      note: text,
-      kind: draft.kind,
-    });
+    const result = addDraft
+      ? await addDraft({ line: draft.line, anchor: draft.anchor, note: text })
+      : await addAnnotation(taskId, {
+        artifact,
+        file: draft.file,
+        line: draft.line,
+        anchor: draft.anchor,
+        note: text,
+        kind: draft.kind,
+      });
     setBusy(false);
     if (result.error) {
       setError(result.error);

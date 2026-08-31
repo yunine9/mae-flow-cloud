@@ -31,7 +31,10 @@ export type SentVia =
   /** 任务正等人决定时提交:先成为团队事实(阻塞放行),正文随下一次
    * 决定的 continuation 送达 Agent。检视人不必等任务恰好 running
    * (MFC-022:曾经这窗口里没有任何合法提交路径)。 */
-  | "queued_decision";
+  | "queued_decision"
+  /** 问题域的检视提交(ADR-0007):意见清单随整体回退注入新一轮
+   * 问题分析。存储/锚点/重锚定与需求流同一套,只有通道不同。 */
+  | "issue_review";
 
 /** Agent 对一条已提交意见的结构化回执。它只陈述 Agent 做了什么，
  * 不能代替意见作者的 verify：response 是机器事实，verified 是人的判断。 */

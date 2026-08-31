@@ -2834,11 +2834,11 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-thread.issue-doc .ws-tabs { padding: 0; border-bottom: none; min-height: 0; background: none; }
 .issue-thread.issue-doc .ws-tab { border: 1px solid var(--line); border-radius: 8px; }
 .issue-thread.issue-doc .ws-tab.on { border-color: var(--accent); }
-/* 过程问答(复盘阅读面的对话气泡):用户/决策靠右,Agent 与问答卡靠左 */
+/* 过程问答(复盘阅读面的对话气泡):用户与决策靠右,问答卡与检视意见靠左 */
 .issue-dialogue { display: flex; flex-direction: column; gap: 10px; padding: 2px; }
 .issue-dialogue-turn { display: flex; flex-direction: column; gap: 3px; max-width: 86%; }
 .issue-dialogue-turn.user, .issue-dialogue-turn.decision { align-self: flex-end; align-items: flex-end; }
-.issue-dialogue-turn.agent, .issue-dialogue-turn.card { align-self: flex-start; align-items: flex-start; }
+.issue-dialogue-turn.card, .issue-dialogue-turn.review { align-self: flex-start; align-items: flex-start; }
 .issue-dialogue-meta { display: flex; gap: 6px; align-items: baseline; color: var(--faint); font-size: var(--font-size-assist); }
 .issue-dialogue-meta b { color: var(--muted); font-weight: 600; }
 .issue-dialogue-bubble {
@@ -2854,6 +2854,33 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .issue-dialogue-q .issue-dialogue-opts { margin: 0 0 8px; padding-left: 18px; color: var(--muted); }
 .issue-dialogue-q:last-child .issue-dialogue-opts { margin-bottom: 0; }
 .issue-dialogue-notes { display: block; margin-top: 4px; color: var(--muted); }
+.issue-dialogue-turn.review .issue-dialogue-bubble { background: var(--surface-soft); }
+.issue-dialogue-review pre {
+  margin: 0; font: inherit; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+/* 检视面板(材料页签「检视」子视图;ADR-0005) */
+.issue-review { display: flex; flex-direction: column; gap: 12px; }
+.issue-review-group h4 { margin: 0 0 6px; color: var(--muted); }
+.issue-review-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.issue-review-item {
+  border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px;
+  background: var(--surface); font-size: var(--font-size-assist); line-height: 1.6;
+}
+.issue-review-item-head { display: flex; gap: 8px; align-items: baseline; }
+.issue-review-item-head time { color: var(--faint); font-size: var(--font-size-dense); }
+.issue-review-item-head .ghost { margin-left: auto; }
+.issue-review-anchor {
+  margin: 4px 0; padding: 2px 8px; border-left: 3px solid var(--line);
+  color: var(--muted); overflow-wrap: anywhere;
+}
+.issue-review-note { margin: 0; color: var(--text-strong); overflow-wrap: anywhere; }
+.issue-review-actions { display: flex; gap: 10px; align-items: center; margin-top: 8px; }
+.issue-review-badge {
+  border-radius: 999px; padding: 0 8px; font-size: var(--font-size-dense);
+}
+.issue-review-badge.gone { background: var(--accent-soft); color: var(--accent); }
+.issue-review-badge.warn { background: var(--surface-muted); color: var(--muted); }
+.issue-review-badge.hit { background: var(--surface-muted); color: var(--muted); }
 /* 问答气泡里的 markdown(Agent 发言)贴回气泡排版 */
 .issue-dialogue-bubble .md > :first-child { margin-top: 0; }
 .issue-dialogue-bubble .md > :last-child { margin-bottom: 0; }
