@@ -290,7 +290,6 @@ function DensitySwitch({ density, onChange }: {
     <span className="density-switch-icon" aria-hidden>
       <svg viewBox="0 0 20 20"><path d={compact ? "M4 5.5h12M4 10h12M4 14.5h12" : "M4 4.5h12M4 10h12M4 15.5h12"} /></svg>
     </span>
-    <span className="density-switch-copy"><strong>{compact ? "紧凑密度" : "舒适密度"}</strong><small>{compact ? "适合高信息量浏览" : "更易读的默认字号"}</small></span>
   </button>;
 }
 
@@ -956,9 +955,8 @@ export function App() {
         <div className="sidebar-help-entry">
           <NavButton view="help" current={view} onSelect={selectView} label="使用帮助" />
         </div>
-        <DensitySwitch density={density} onChange={changeDensity} />
         <ThemeSwitch theme={theme} onChange={changeTheme} />
-        <div className="sidebar-foot session-foot"><span className="account-avatar" aria-hidden>{session.username.slice(0, 1).toUpperCase()}</span><span className="sidebar-account"><strong>{session.username}</strong><small>{session.role === "admin" ? "管理员" : "开发成员"}</small></span><button type="button" className="logout-button" onClick={signOut} title="退出登录" aria-label="退出登录"><svg viewBox="0 0 20 20"><path d="M8 4H4.75A1.25 1.25 0 0 0 3.5 5.25v9.5A1.25 1.25 0 0 0 4.75 16H8M12.5 6.5 16 10l-3.5 3.5M7 10h9" /></svg></button></div>
+        <div className="sidebar-foot session-foot"><span className="account-avatar" aria-hidden>{session.username.slice(0, 1).toUpperCase()}</span><span className="sidebar-account"><strong>{session.username}</strong><small>{session.role === "admin" ? "管理员" : "开发成员"}</small></span><DensitySwitch density={density} onChange={changeDensity} /><button type="button" className="logout-button" onClick={signOut} title="退出登录" aria-label="退出登录"><svg viewBox="0 0 20 20"><path d="M8 4H4.75A1.25 1.25 0 0 0 3.5 5.25v9.5A1.25 1.25 0 0 0 4.75 16H8M12.5 6.5 16 10l-3.5 3.5M7 10h9" /></svg></button></div>
       </div>
     </aside>
 

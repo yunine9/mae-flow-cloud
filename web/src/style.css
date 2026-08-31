@@ -378,23 +378,18 @@ svg {
 .sidebar-bottom { margin-top: auto; display: grid; gap: 8px; }
 .sidebar-bottom .sidebar-foot { margin-top: 0; }
 .density-switch {
-  width: 100%; min-height: 42px; padding: 6px 9px;
-  display: grid; grid-template-columns: 30px minmax(0, 1fr);
-  align-items: center; gap: 9px;
-  color: #cbd3df; border: 1px solid rgba(255, 255, 255, .075);
-  border-radius: 11px; background: rgba(255, 255, 255, .035);
-  cursor: pointer; text-align: left;
+  width: 30px; height: 30px; padding: 0;
+  display: grid; place-items: center; flex: none;
+  color: #7f8a9e; border: 1px solid rgba(255, 255, 255, .08);
+  border-radius: 8px; background: rgba(255, 255, 255, .035);
+  cursor: pointer;
   transition: color var(--ease), border-color var(--ease), background var(--ease);
 }
 .density-switch:hover { color: #fff; border-color: rgba(151, 151, 255, .28); background: rgba(119, 119, 236, .08); }
 .density-switch-icon {
-  width: 30px; height: 30px; display: grid; place-items: center;
-  color: #a8a8ff; border-radius: 8px; background: rgba(119, 119, 236, .14);
+  width: 100%; height: 100%; display: grid; place-items: center;
 }
 .density-switch-icon svg { width: 16px; height: 16px; }
-.density-switch-copy { min-width: 0; display: grid; gap: 1px; }
-.density-switch-copy strong { font-size: var(--font-size-assist); font-weight: 700; }
-.density-switch-copy small { color: #707c90; font-size: var(--font-size-assist); }
 .theme-switch {
   width: 100%; min-height: 48px; padding: 7px 9px;
   display: grid; grid-template-columns: 30px minmax(0, 1fr) 28px;
@@ -8965,10 +8960,8 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
   color: #3e465c; border-color: rgba(78, 75, 112, .11);
   background: rgba(255, 255, 255, .55);
 }
-:root[data-theme="light"] .density-switch { color: #504b70; border-color: rgba(101, 91, 216, .12); background: rgba(255, 255, 255, .55); }
-:root[data-theme="light"] .density-switch:hover { color: #272450; border-color: rgba(101, 91, 216, .25); background: rgba(255, 255, 255, .84); }
-:root[data-theme="light"] .density-switch-icon { color: #655bd8; background: #eeecff; }
-:root[data-theme="light"] .density-switch-copy small { color: #8a91a1; }
+:root[data-theme="light"] .density-switch { color: #82899a; border-color: rgba(76, 74, 105, .11); background: rgba(255, 255, 255, .48); }
+:root[data-theme="light"] .density-switch:hover { color: #655bd8; border-color: rgba(101, 91, 216, .25); background: rgba(255, 255, 255, .84); }
 :root[data-theme="light"] .theme-switch:hover { color: #272450; border-color: rgba(101, 91, 216, .25); background: rgba(255, 255, 255, .84); }
 :root[data-theme="light"] .theme-switch-icon { color: #9d6b20; background: #fff3d8; }
 :root[data-theme="light"] .theme-switch-copy small { color: #8a91a1; }
