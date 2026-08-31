@@ -119,6 +119,20 @@ test("配 webRoot:index 与资产按类型出文件,API 与穿越各归各位", 
     assert.equal(apiDetail.status, 404);
     assert.match(apiDetail.headers.get("content-type") ?? "", /application\/json/);
 
+    // 问题会话工作台深链(小鲁班通知的落点):GET /issues/:id 既是详情
+    // API 又是前端路由——判别式与 /tasks/:id 相同,浏览器导航(Accept
+    // 要 text/html)拿 SPA 入口,程序 fetch(默认 Accept: */*)照旧拿
+    // 问题流 API 的 JSON,契约零变化。
+    const issuePage = await fetch(base + "/issues/is-1", {
+      headers: { accept: "text/html" },
+    });
+    assert.equal(issuePage.status, 200);
+    assert.match(issuePage.headers.get("content-type") ?? "", /text\/html/);
+    assert.match(await issuePage.text(), /正式前端/);
+    const issueApi = await fetch(base + "/issues/is-1");
+    assert.equal(issueApi.status, 404);
+    assert.match(issueApi.headers.get("content-type") ?? "", /application\/json/);
+
     // 穿越:fetch 会在客户端就规范化 "..",测不到服务端——
     // 用裸 socket 发未规范化路径,断言真属性:秘密永不泄露。
     const raw = await rawGet(base, "/assets/../../secret.txt");

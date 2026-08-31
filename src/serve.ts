@@ -740,7 +740,7 @@ async function main(): Promise<void> {
   } else if (dtsMock) {
     issueDts = new MockDtsGateway((message) => console.log(`  [issue-dts] ${message}`));
     console.log("[serve] 问题流 DTS 网关: DEV·模拟(--dts-mock,外部开发模式,"
-      + "连不上真实 DTS;单据 DTS-2026-1001~1006 为模拟数据,页签有 DEV 标识)");
+      + "连不上真实 DTS;单据 DTS-2026-1001~1007 为模拟数据,页签有 DEV 标识)");
   } else if (dtsMcpUrl && mcpTokenProvider) {
     mcpGateway = new McpGateway({
       url: dtsMcpUrl, tokenProvider: mcpTokenProvider,
@@ -757,44 +757,6 @@ async function main(): Promise<void> {
   // 走同一个网关实例,未配置时由占位网关说人话,不静默 404。
   const issueDtsGateway = issueDts ?? new UnconfiguredDtsGateway();
   const issueLog = (message: string) => console.log(`  [issue] ${message}`);
-  const issueFlow = new IssueFlowService({
-    dataDir, provider, model, modelsJson, settings,
-    // 探索方式烙印(个人设置,缺省固定流程):create 时读一次烙进会话。
-    issueFlowMode: (account) => auth.issueFlowMode(account),
-    gitCredential: (account) => auth.gitCredential(account),
-    opsTools: existsSync(join(goToolsDir, process.platform === "win32"
-      ? "fetch-logs.exe" : "fetch-logs-linux-amd64"))
-      ? createGoOpsTools({
-          toolsDir: goToolsDir,
-          log: (message) => console.log(`  ${message}`),
-        })
-      : undefined,
-    dts: issueDtsGateway,
-    // MR 与需求交付共用同一交付平台适配层(--platform)。
-    ...(platformUrl ? { platformUrl } : {}),
-    maxConcurrentTurns: Number(flag("--issue-max-turns") ?? "2"),
-    ...(isolateImage
-      ? {
-          isolation: {
-            image: isolateImage,
-            volumes: flags("--isolate-volume"),
-            memory: isolateMemory,
-            cpus: isolateCpus,
-            ...(containerUser.user ? { user: containerUser.user } : {}),
-            pidsLimit: isolatePids,
-            network: isolateNetwork,
-          },
-        }
-      : {}),
-    log: issueLog,
-  });
-
-  if (issueOnly) {
-    console.log("[serve] 问题流专用模式(--issue-only):需求流程停用"
-      + "(发起任务入口会被拦截,在途需求任务不拉起);"
-      + "「问题处理」全功能可用");
-  }
-
   // issue-only 下假小鲁班起不来时 endpoint 缺席:通知器整个不接
   // (notifier 是可选项),不让它变成问题流的启动依赖。
   const notifier = lubanEndpoint
@@ -823,6 +785,52 @@ async function main(): Promise<void> {
           : {}),
       })
     : undefined;
+  const issueFlow = new IssueFlowService({
+    dataDir, provider, model, modelsJson, settings,
+    // 探索方式烙印(个人设置,缺省固定流程):create 时读一次烙进会话。
+    issueFlowMode: (account) => auth.issueFlowMode(account),
+    gitCredential: (account) => auth.gitCredential(account),
+    opsTools: existsSync(join(goToolsDir, process.platform === "win32"
+      ? "fetch-logs.exe" : "fetch-logs-linux-amd64"))
+      ? createGoOpsTools({
+          toolsDir: goToolsDir,
+          log: (message) => console.log(`  ${message}`),
+        })
+      : undefined,
+    dts: issueDtsGateway,
+    // MR 与需求交付共用同一交付平台适配层(--platform)。
+    ...(platformUrl ? { platformUrl } : {}),
+    // 视觉旁路与需求侧共用同一对旗标(--vision-provider/--vision-model):
+    // 配齐才透传,问题会话由此获得 inspect_image;缺席一切照旧。
+    ...(visionProvider && visionModel
+      ? { vision: { provider: visionProvider, model: visionModel } } : {}),
+    maxConcurrentTurns: Number(flag("--issue-max-turns") ?? "2"),
+    ...(isolateImage
+      ? {
+          isolation: {
+            image: isolateImage,
+            volumes: flags("--isolate-volume"),
+            memory: isolateMemory,
+            cpus: isolateCpus,
+            ...(containerUser.user ? { user: containerUser.user } : {}),
+            pidsLimit: isolatePids,
+            network: isolateNetwork,
+          },
+        }
+      : {}),
+    log: issueLog,
+    // 小鲁班通知是公共能力:问题流 AI 举卡等决策时也提醒归属用户
+    // (与需求侧同一实例;--issue-only 专用部署同样接线)。
+    ...(notifier ? { notifier } : {}),
+    // 通知深链落到问题会话工作台 /issues/<id>(与需求侧 /work 同一地位)。
+    linkBase: publicUrl,
+  });
+
+  if (issueOnly) {
+    console.log("[serve] 问题流专用模式(--issue-only):需求流程停用"
+      + "(发起任务入口会被拦截,在途需求任务不拉起);"
+      + "「问题处理」全功能可用");
+  }
 
   // 任务日志环形缓冲(诊断包切片用):进程存活期间保留最近几千行。
   const taskLogRing: string[] = [];

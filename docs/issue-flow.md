@@ -97,7 +97,10 @@ associate {ticket, confirm?}`。
   提供——发起后由工作台从问题单获取这些信息(模块识别/拉仓闸/环境闸
   按需补定);批量发起每单一个独立工作流。
 - 会话 = 一条多轮对话 + 一个工作区(`dataDir/issues/<id>/`,克隆固定在
-  `repo/`,日志落在 `local-logs/`,分析报告 `issue-analysis.md`)。
+  `repo/`,日志落在 `local-logs/`,分析报告 `issue-analysis.md`,
+  DTS 内嵌截图落 `ticket-images/<单号>/`——只有 dts_get_ticket 按需
+  下载(#42,内容哈希去重、失败标记不再重试),前端展示仍走
+  `/issues/dts-file` 代理,转正/导出不携带这些二进制)。
 - 三条用户输入通道,全部复用 CloudSession 原语:
   - **问题卡作答**:AI 用 AskUserQuestion 挂起(自由模式的人工闸门),
     或平台闸(固定模式,同组件渲染);页面选项/自由作答后回合续跑;
