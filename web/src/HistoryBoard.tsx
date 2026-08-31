@@ -166,7 +166,8 @@ export function HistoryBoard({
                   .includes(entry.status);
                 const canRerun = viewer.role !== "admin" && terminal
                   && currentTask?.luban_account === viewer.username;
-                const canDelete = viewer.role === "admin" && terminal;
+                const canDelete = terminal && (viewer.role === "admin"
+                  || entry.luban_account === viewer.username);
                 return (
                   <div className="history-row" key={entry.id}>
                     <div className="history-task">

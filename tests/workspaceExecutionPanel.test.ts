@@ -7,6 +7,8 @@ const workspace = readFileSync(resolve("web/src/TaskWorkspace.tsx"), "utf-8");
 const taskCard = readFileSync(resolve("web/src/TaskCard.tsx"), "utf-8");
 const gitDiff = readFileSync(resolve("web/src/GitDiff.tsx"), "utf-8");
 const app = readFileSync(resolve("web/src/App.tsx"), "utf-8");
+const steerBox = readFileSync(resolve("web/src/SteerBox.tsx"), "utf-8");
+const historyBoard = readFileSync(resolve("web/src/HistoryBoard.tsx"), "utf-8");
 
 test("进入独立执行现场页签后直接展开，不要求用户再点一次", () => {
   const executionView = workspace.slice(
@@ -35,6 +37,26 @@ test("等待人工检视时工作台标题显示人的当前事项，不沿用�
   );
   assert.match(policy, /status === "waiting_for_human"/);
   assert.match(policy, /step: task\.focus\?\.headline/);
+});
+
+test("补充给主任务置灰时明确解释原因，而不是只留一个灰输入框", () => {
+  assert.match(steerBox, /steerDisabledReason/);
+  assert.match(steerBox, /主任务正在等待人工决定/);
+  assert.match(steerBox, /主任务已暂停/);
+  assert.match(steerBox, /当前正在验证交付结果/);
+  assert.match(steerBox, /当前正在等待合入/);
+  assert.match(steerBox, /className="steer-disabled-reason"/);
+});
+
+test("责任人能在终态任务上看到删除入口，并必须二次确认", () => {
+  assert.match(workspace,
+    /const deletable = canOperate && \["completed", "failed", "canceled"\]/);
+  assert.match(workspace, />删除任务<\/button>/);
+  assert.match(workspace, /工作区和记录将永久删除/);
+  assert.match(workspace, /确认删除/);
+  assert.match(historyBoard,
+    /viewer\.role === "admin"[^]*entry\.luban_account === viewer\.username/,
+    "档案页应同时允许管理员和任务责任人删除真终态");
 });
 
 test("任务摘要卡仍按需展开，避免多张卡同时建立实时连接", () => {

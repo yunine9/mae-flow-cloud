@@ -29,7 +29,7 @@
  *   GET/POST /tasks/:id/developer-assistant             → 旁路开发助手现场/发起处理
  *   POST /tasks/:id/pause|resume|cancel                 → 200;任务控制
  *   POST /tasks/:id/rerun                               → 200;原位清空并从头重跑
- *   DELETE /tasks/:id                                   → 200;管理员彻底删除真终态历史
+ *   DELETE /tasks/:id                                   → 200;责任人/管理员彻底删除真终态历史
  *   GET  /tasks/:id/interrupts                          → 发过的插话 + 送达与否
  *   GET  /tasks/:id/annotations                         → 待送出批注 + 锚点现状
  *   POST /tasks/:id/annotations {artifact,file,line,anchor,note,kind} → 201
@@ -2102,11 +2102,22 @@ export function createTaskServer(
           }
         }
         if (request.method === "DELETE" && parts.length === 2) {
-          if (viewer?.role !== "admin") {
-            return json(response, 403, { error: "只有管理员可以彻底删除历史任务" });
+          const target = service.get(id);
+          let taskAccount = target?.luban_account;
+          if (!target && service.options.projection) {
+            const identity = await service.options.projection.taskIdentity(id);
+            taskAccount = identity.luban_account;
           }
+          if (options.auth
+              && viewer?.role !== "admin"
+              && (!viewer || !taskAccount || viewer.username !== taskAccount)) {
+            return json(response, 403, {
+              error: "只能删除自己负责的历史任务",
+            });
+          }
+          const deleted = await service.hardDeleteHistory(id);
           options.lubanApproval?.purgeTask(id);
-          return json(response, 200, await service.hardDeleteHistory(id));
+          return json(response, 200, deleted);
         }
         if (request.method === "POST" && parts[2] === "decision") {
           const target = service.get(id);

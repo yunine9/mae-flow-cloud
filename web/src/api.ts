@@ -2233,11 +2233,13 @@ export async function rerunTaskFromStart(
   return { task: await response.json() };
 }
 
-/** 管理员彻底删除真终态历史及 Cloud 内全部关联现场。 */
+/** 责任人可删除自己的真终态历史；管理员可删除任意真终态历史。 */
 export async function deleteHistoryTask(
   taskId: string,
 ): Promise<{ error?: string }> {
-  const response = await fetch(`/tasks/${taskId}`, { method: "DELETE" });
+  const response = await fetch(`/tasks/${encodeURIComponent(taskId)}`, {
+    method: "DELETE",
+  });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     return { error: String(body.error ?? `HTTP ${response.status}`) };

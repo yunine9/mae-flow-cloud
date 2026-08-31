@@ -8788,7 +8788,7 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 .ws-head-controls {
   display: flex; align-items: center; gap: 6px; justify-self: end;
 }
-.ws-head-controls > button, .ws-cancel-confirm button {
+.ws-head-controls > button, .ws-cancel-confirm button, .ws-delete-confirm button {
   height: 32px; padding: 0 11px; color: var(--text); border: 1px solid var(--line);
   border-radius: 7px; background: var(--surface-soft); font-size: var(--font-size-assist);
   font-weight: 700; cursor: pointer; white-space: nowrap;
@@ -8797,13 +8797,14 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 .ws-head-controls > button:hover:not(:disabled) { border-color: var(--line-strong); }
 .ws-head-controls > button.primary { color: white; border-color: var(--accent); background: var(--accent); }
 .ws-head-controls > button.cancel { color: var(--danger); }
-.ws-cancel-confirm {
+.ws-head-controls > button.delete { color: var(--danger); }
+.ws-cancel-confirm, .ws-delete-confirm {
   height: 38px; padding: 0 4px 0 9px; display: flex; align-items: center;
   gap: 4px; border-radius: 8px; background: var(--danger-weak);
 }
-.ws-cancel-confirm span { margin-right: 2px; color: var(--danger); font-size: var(--font-size-assist); font-weight: 700; white-space: nowrap; }
-.ws-cancel-confirm button { height: 28px; padding: 0 8px; }
-.ws-cancel-confirm button:first-of-type { color: white; border-color: var(--danger); background: var(--danger); }
+.ws-cancel-confirm span, .ws-delete-confirm span { margin-right: 2px; color: var(--danger); font-size: var(--font-size-assist); font-weight: 700; white-space: nowrap; }
+.ws-cancel-confirm button, .ws-delete-confirm button { height: 28px; padding: 0 8px; }
+.ws-cancel-confirm button:first-of-type, .ws-delete-confirm button:first-of-type { color: white; border-color: var(--danger); background: var(--danger); }
 .task-control-error {
   grid-template-columns: auto minmax(0, 1fr); color: var(--danger);
   border-color: color-mix(in srgb, var(--danger) 28%, var(--line));

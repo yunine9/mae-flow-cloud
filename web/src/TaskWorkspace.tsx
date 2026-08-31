@@ -37,6 +37,7 @@ import { RequirementTeamPicker } from "./RequirementTeamPicker";
 import {
   completeReview,
   controlTask,
+  deleteHistoryTask,
   listAnnotations,
   listArtifacts,
   listCommitters,
@@ -382,9 +383,10 @@ export function TaskWorkspace({
   const [completeBusy, setCompleteBusy] = useState(false);
   const [completeError, setCompleteError] = useState("");
   const [controlBusy, setControlBusy] =
-    useState<"pause" | "resume" | "cancel" | "">("");
+    useState<"pause" | "resume" | "cancel" | "delete" | "">("");
   const [controlError, setControlError] = useState("");
   const [cancelArmed, setCancelArmed] = useState(false);
+  const [deleteArmed, setDeleteArmed] = useState(false);
   const [repositoryAssignees, setRepositoryAssignees] =
     useState<RepositoryAssigneeSelection>(EMPTY_REPOSITORY_ASSIGNEE_SELECTION);
   const [deliverySelection, setDeliverySelection] =
@@ -730,6 +732,8 @@ export function TaskWorkspace({
     "queued", "running", "pausing", "paused", "waiting_for_human", "verifying",
     "await_merge",
   ].includes(task.status);
+  const deletable = canOperate && ["completed", "failed", "canceled"]
+    .includes(task.status);
   const health = taskHealthFacts(task, viewerUsername);
   const visibleProgress = workspaceProgress(task);
   const pauseFeedback = task.status === "pausing"
@@ -774,6 +778,25 @@ export function TaskWorkspace({
     }
   }
 
+  async function deleteTask() {
+    if (controlBusy) return;
+    setControlBusy("delete");
+    setControlError("");
+    try {
+      const result = await deleteHistoryTask(task.id);
+      if (result.error) setControlError(result.error);
+      else {
+        await onChanged();
+        onClose();
+      }
+    } catch (reason) {
+      setControlError(reason instanceof Error
+        ? reason.message : "删除任务失败，请重试");
+    } finally {
+      setControlBusy("");
+    }
+  }
+
   return (
     <section
       className="workspace-overlay"
@@ -807,9 +830,9 @@ export function TaskWorkspace({
             <code>{task.parent_task?.ticket ?? task.parent_task_id}</code>
           </button>}
         </div>
-        {controllable && (
+        {(controllable || deletable) && (
           <div className="ws-head-controls" aria-label="任务控制">
-            {task.status === "await_merge" ? null : task.status === "paused" ? (
+            {controllable && (task.status === "await_merge" ? null : task.status === "paused" ? (
               <button type="button" className="primary" disabled={!!controlBusy}
                 title="沿用当前工作区和流程进度继续执行"
                 onClick={() => void runControl("resume")}>
@@ -826,8 +849,8 @@ export function TaskWorkspace({
                 onClick={() => void runControl("pause")}>
                 {controlBusy === "pause" ? "暂停中…" : "暂停"}
               </button>
-            )}
-            {!cancelArmed ? (
+            ))}
+            {controllable && (!cancelArmed ? (
               <button type="button" className="cancel" disabled={!!controlBusy}
                 title="取消后不可恢复，已有文件和记录仍会保留"
                 onClick={() => setCancelArmed(true)}>取消</button>
@@ -841,7 +864,22 @@ export function TaskWorkspace({
                 <button type="button" disabled={!!controlBusy}
                   onClick={() => setCancelArmed(false)}>返回</button>
               </div>
-            )}
+            ))}
+            {deletable && (!deleteArmed ? (
+              <button type="button" className="delete" disabled={!!controlBusy}
+                title="永久删除工作区、事件、批注与历史记录"
+                onClick={() => setDeleteArmed(true)}>删除任务</button>
+            ) : (
+              <div className="ws-delete-confirm">
+                <span>工作区和记录将永久删除</span>
+                <button type="button" disabled={!!controlBusy}
+                  onClick={() => void deleteTask()}>
+                  {controlBusy === "delete" ? "删除中…" : "确认删除"}
+                </button>
+                <button type="button" disabled={!!controlBusy}
+                  onClick={() => setDeleteArmed(false)}>返回</button>
+              </div>
+            ))}
           </div>
         )}
       </header>

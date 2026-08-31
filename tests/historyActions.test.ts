@@ -1,7 +1,7 @@
 /**
  * 历史破坏性操作：
  * - 责任人可原位清空真终态任务并从第一步重跑；
- * - 管理员可彻底删除真终态，开发者与在途任务都被拒绝；
+ * - 责任人可删除自己的真终态，管理员可兜底，其他人和在途任务被拒绝；
  * - 删除最高编号后重启也不得复用旧 task-N。
  */
 
@@ -21,7 +21,7 @@ import { createTaskServer } from "../src/server.ts";
 import { Notifier } from "../src/notifier.ts";
 import { TaskService } from "../src/taskService.ts";
 
-test("从头重跑原位覆盖；彻底删除受管理员与真终态双重约束", async () => {
+test("从头重跑原位覆盖；责任人删除受归属与真终态双重约束", async () => {
   const root = mkdtempSync(join(tmpdir(), "mfc-history-actions-"));
   const dataDir = join(root, "tasks");
   const auth = new LocalAuth(join(root, "auth.json"));
@@ -89,14 +89,20 @@ test("从头重跑原位覆盖；彻底删除受管理员与真终态双重约�
       method: "DELETE", headers: { cookie: admin },
     });
     assert.equal(activeDelete.status, 409, "排队中的任务不能伪装成历史被删除");
-    const developerDelete = await fetch(`${base}/tasks/${original.id}`, {
+    const ownerActiveDelete = await fetch(`${base}/tasks/${original.id}`, {
       method: "DELETE", headers: { cookie: alice },
     });
-    assert.equal(developerDelete.status, 403, "开发者没有彻底删除权限");
+    assert.equal(ownerActiveDelete.status, 409,
+      "责任人也不能删除仍在执行的任务");
 
     internal.summary.status = "completed";
     internal.summary.completed_at = new Date().toISOString();
     (service as any).persist(internal);
+
+    const foreignDelete = await fetch(`${base}/tasks/${original.id}`, {
+      method: "DELETE", headers: { cookie: bob },
+    });
+    assert.equal(foreignDelete.status, 403, "不能删除别人的任务");
 
     const foreignRerun = await fetch(`${base}/tasks/${original.id}/rerun`, {
       method: "POST", headers: { cookie: bob },
@@ -158,7 +164,7 @@ test("从头重跑原位覆盖；彻底删除受管理员与真终态双重约�
     (service as any).persist(dependentState);
 
     const deleted = await fetch(`${base}/tasks/${original.id}`, {
-      method: "DELETE", headers: { cookie: admin },
+      method: "DELETE", headers: { cookie: alice },
     });
     assert.equal(deleted.status, 200);
     const deletedBody = await deleted.json() as {
