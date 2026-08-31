@@ -41,7 +41,7 @@ export function IssueRail({ detail, busy, waiting, onAnswer, onReply,
   onSteer: (text: string) => Promise<boolean>;
   onArchive: () => void;
   onCancel: () => void;
-  /** 打开材料页签的结论文档子视图。 */
+  /** 打开材料页签的过程文档子视图。 */
   onOpenDoc: () => void;
   /** 挂起会话的关联单号转正(两段式);返回校验详情或转正结果。 */
   onAssociate: (ticket: string, confirm: boolean) =>
@@ -118,9 +118,9 @@ export function IssueRail({ detail, busy, waiting, onAnswer, onReply,
     </div>
     <footer className="issue-rail-foot">
       {detail.has_analysis && <button type="button" className="issue-analysis-flag"
-        title="查看结论文档"
+        title="查看过程文档(分析报告 / 过程问答)"
         onClick={onOpenDoc}>
-        结论文档 issue-analysis.md 已产出 →
+        分析报告已产出,进入过程文档 →
       </button>}
       {/* 同控制/确认/禁用条件与旧 composer-actions 完全一致 */}
       <div className="issue-rail-actions">

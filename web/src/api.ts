@@ -3365,7 +3365,6 @@ export interface IssueMaterials {
   ticket?: string;
   pushes: Array<{ repo: string; branch: string; sha: string; at: string }>;
   mrs: Array<{ repo: string; branch: string; title: string; url?: string; iid?: string; at: string }>;
-  analysis_available: boolean;
   changes: IssueWorkspaceChange[];
   logs: IssueMaterialFile[];
   manual_edits: IssueManualEdit[];
@@ -3467,20 +3466,57 @@ export async function getIssueTimeline(
   return { timeline: await response.json() };
 }
 
-/** 结论文档(issue-analysis.md)。缺失为 200 {unavailable},404 只在
+// ---- 过程文档(材料页签的过程文档子视图;数据面 documents.ts) ----
+
+export interface IssueDocMeta {
+  name: string;
+  label: string;
+  bytes: number;
+  modified_at: string;
+}
+
+export interface IssueDialogueQuestion {
+  question: string;
+  options: string[];
+}
+
+/** 过程问答的一回合:user/agent 发言、agent 举的问答卡、用户决策。 */
+export interface IssueDialogueTurn {
+  kind: "user" | "agent" | "card" | "decision";
+  ts?: string;
+  text?: string;
+  via?: string;
+  questions?: IssueDialogueQuestion[];
+  decision?: string;
+  notes?: string;
+}
+
+/** 过程文档清单(分析报告固定首位 + Agent 落的其他 .md)。 */
+export function getIssueDocuments(id: string): Promise<{
+  documents: IssueDocMeta[];
+}> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/documents`);
+}
+
+/** 读一份过程文档。缺失为 200 {unavailable}(还没生成),404 只在
  * 问题号未知时出现。 */
-export async function getIssueAnalysis(
+export async function getIssueDocument(
   id: string,
+  name: string,
 ): Promise<{ content?: string; truncated?: boolean; unavailable?: string }> {
-  const response = await fetch(`/issues/${encodeURIComponent(id)}/analysis`);
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    return { unavailable: String(body.error ?? `HTTP ${response.status}`) };
-  }
-  const body = await response.json();
+  const body = await issueFetch(
+    `/issues/${encodeURIComponent(id)}/documents/read?name=${encodeURIComponent(name)}`);
   return {
     content: body.content ? String(body.content) : undefined,
     truncated: body.truncated === true ? true : undefined,
     unavailable: body.unavailable ? String(body.unavailable) : undefined,
   };
+}
+
+/** 过程问答:事件账本投影的对话。 */
+export function getIssueDialogue(id: string): Promise<{
+  turns: IssueDialogueTurn[];
+  truncated?: boolean;
+}> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/dialogue`);
 }

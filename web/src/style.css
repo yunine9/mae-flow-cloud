@@ -2578,7 +2578,7 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 }
 .issue-rail-input > button:disabled { opacity: .55; cursor: not-allowed; }
 
-/* 栏脚:归档/取消钉底(自旧 composer-actions 整体迁入),结论文档
+/* 栏脚:归档/取消钉底(自旧 composer-actions 整体迁入),分析报告
    快捷键也落在这里;m-left:auto 在新上下文里没有意义,归零。 */
 .issue-rail-foot {
   display: grid;
@@ -2829,8 +2829,35 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 }
 .issue-materials-edits .p { color: var(--muted); font-family: var(--font-mono); }
 
-/* 结论文档正文:复用消息区滚动容器,内部换成 markdown 排版 */
+/* 过程文档正文:复用消息区滚动容器,内部换成 markdown 排版;多页签
+   复用任务侧 ws-tabs 的样式定义(类名同源,视觉与需求侧一致) */
 .issue-thread.issue-doc { gap: 12px; }
+.issue-thread.issue-doc .ws-tabs { padding: 0; border-bottom: none; min-height: 0; background: none; }
+.issue-thread.issue-doc .ws-tab { border: 1px solid var(--line); border-radius: 8px; }
+.issue-thread.issue-doc .ws-tab.on { border-color: var(--accent); }
+/* 过程问答(复盘阅读面的对话气泡):用户/决策靠右,Agent 与问答卡靠左 */
+.issue-dialogue { display: flex; flex-direction: column; gap: 10px; padding: 2px; }
+.issue-dialogue-turn { display: flex; flex-direction: column; gap: 3px; max-width: 86%; }
+.issue-dialogue-turn.user, .issue-dialogue-turn.decision { align-self: flex-end; align-items: flex-end; }
+.issue-dialogue-turn.agent, .issue-dialogue-turn.card { align-self: flex-start; align-items: flex-start; }
+.issue-dialogue-meta { display: flex; gap: 6px; align-items: baseline; color: var(--faint); font-size: var(--font-size-assist); }
+.issue-dialogue-meta b { color: var(--muted); font-weight: 600; }
+.issue-dialogue-bubble {
+  border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px;
+  background: var(--surface); color: var(--text-strong);
+  font-size: var(--font-size-assist); line-height: 1.65;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.issue-dialogue-turn.user .issue-dialogue-bubble { background: var(--accent-soft); border-color: transparent; }
+.issue-dialogue-turn.decision .issue-dialogue-bubble { border-style: dashed; }
+.issue-dialogue-turn.card .issue-dialogue-bubble { background: var(--surface-soft); white-space: normal; }
+.issue-dialogue-q p { margin: 0 0 4px; font-weight: 600; }
+.issue-dialogue-q .issue-dialogue-opts { margin: 0 0 8px; padding-left: 18px; color: var(--muted); }
+.issue-dialogue-q:last-child .issue-dialogue-opts { margin-bottom: 0; }
+.issue-dialogue-notes { display: block; margin-top: 4px; color: var(--muted); }
+/* 问答气泡里的 markdown(Agent 发言)贴回气泡排版 */
+.issue-dialogue-bubble .md > :first-child { margin-top: 0; }
+.issue-dialogue-bubble .md > :last-child { margin-bottom: 0; }
 .issue-doc-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--faint); font-size: var(--font-size-dense); }
 .issue-doc-toolbar button {
   min-height: 26px; padding: 0 12px; border: 1px solid var(--line); border-radius: 7px;

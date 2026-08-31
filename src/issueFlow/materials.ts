@@ -357,7 +357,6 @@ export function listMaterials(state: IssueSessionState, root: string) {
     ticket: state.ticket,
     pushes: state.pushes ?? [],
     mrs: state.mrs ?? [],
-    analysis_available: existsSync(join(root, "issue-analysis.md")),
     changes,
     logs: listLogs(root),
     manual_edits: listManualEdits(root),

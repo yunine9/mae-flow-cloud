@@ -7,7 +7,7 @@
  *
  * 数据源 = 事件流(events.jsonl 逐字:工具调用输入输出、AI 发言、用户
  * 指令与决策)+ issue.json 台账(单号/仓/阶段转移/结论)。原始语义保真:
- * 不脱敏、不删减、不截断——结论文档(issue-analysis.md)是 AI 用 Write
+ * 不脱敏、不删减、不截断——分析报告(issue-analysis.md)是 AI 用 Write
  * 写出来的,内容已在 tool_requested/tool_finished 里,不单独附加。
  */
 
