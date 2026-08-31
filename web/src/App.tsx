@@ -943,7 +943,7 @@ export function App() {
         </> : <>
           <span className="nav-section-label">个人工作台</span>
           <NavButton view="mine" current={view} onSelect={selectView} label="我的需求" badge={personalActionItems.length} personal />
-          <NavButton view="issues" current={view} onSelect={selectView} label="问题处理" beta />
+          <NavButton view="issues" current={view} onSelect={selectView} label="问题处理（Beta）" beta />
           <NavButton view="profile" current={view} onSelect={selectView} label="个人设置" />
           <span className="nav-section-label team-context">团队信息</span>
           <NavButton view="team" current={view} onSelect={selectView} label="团队任务" badge={waitingCount} />
@@ -1225,13 +1225,14 @@ function CommitterInbox({
   </section>;
 }
 
+/** beta 只作用于提示语:Beta 已并入标签文字(问题处理（Beta）),不再
+ * 另挂徽标,避免"（Beta）beta"重复。悬停/读屏仍能听到"能力建设中"。 */
 function NavButton({ view, current, onSelect, label, badge = 0, personal = false, beta = false }: { view: View; current: View; onSelect: (view: View) => void; label: string; badge?: number; personal?: boolean; beta?: boolean }) {
   return <button className={`nav-item ${current === view ? "on" : ""}`}
-    aria-label={beta ? `${label}(beta,能力建设中)` : label}
-    title={beta ? `${label}(beta——能力建设中,尚不保证可用,慎重选择)` : label}
+    aria-label={beta ? `${label}(能力建设中)` : label}
+    title={beta ? `${label}——能力建设中,尚不保证可用,慎重选择` : label}
     onClick={() => onSelect(view)}>
-    <NavIcon name={view} /><span>{label}</span>{beta
-      && <span className="nav-beta">beta</span>}{badge > 0
+    <NavIcon name={view} /><span>{label}</span>{badge > 0
       && <span className={`nav-badge${personal ? " personal" : ""}`}>{badge}</span>}
   </button>;
 }
