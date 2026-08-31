@@ -22,7 +22,7 @@ test("任务焦点:机器修复、平台验证与跨仓依赖不会冒充人工�
     status: "verifying",
     delivery: { loop: { state: "repairing", round: 2 } },
   });
-  assert.match(repair.headline, /第 2 轮/);
+  assert.equal(repair.headline, "Agent 正在修复流水线问题");
   assert.equal(repair.owner, "agent");
   assert.equal(repair.needs_attention, false);
 
@@ -39,6 +39,31 @@ test("任务焦点:机器修复、平台验证与跨仓依赖不会冒充人工�
   });
   assert.equal(dependency.headline, "等待 2 个前置任务完成");
   assert.equal(dependency.needs_attention, false);
+});
+
+test("任务焦点:await_merge 是明确的人类行动，不藏进自动推进", () => {
+  const waiting = projectTaskFocus({
+    status: "await_merge",
+    delivery: {
+      mr_state: "等待合入",
+      waiting_on: "等检视人确认已回复的意见",
+    },
+  });
+  assert.equal(waiting.kind, "human_action");
+  assert.equal(waiting.headline, "等检视人确认已回复的意见");
+  assert.equal(waiting.owner, "responsible");
+  assert.equal(waiting.needs_attention, true);
+  assert.match(waiting.next_action, /打开 MR/);
+
+  const closed = projectTaskFocus({
+    status: "await_merge",
+    delivery: {
+      mr_state: "已关闭",
+      waiting_on: "MR 已关闭，请重新打开或由任务责任人主动停止任务",
+    },
+  });
+  assert.match(closed.next_action, /重新打开.*停止/);
+  assert.equal(closed.needs_attention, true);
 });
 
 test("任务焦点:证据重试是平台动作，预算耗尽才进入人的行动收件箱", () => {
@@ -146,4 +171,46 @@ test("任务焦点:排队真相压过陈旧 detail,并报出位次", () => {
 
   const noPosition = projectTaskFocus({ status: "queued" });
   assert.equal(noPosition.headline, "任务正在执行队列中等待");
+});
+
+test("检视返工不冒充流水线修复(MFC-023)", () => {
+  const focus = projectTaskFocus({
+    status: "running",
+    delivery: { loop: { state: "repairing", kind: "review", round: 0 } },
+  });
+  assert.match(focus.headline, /按检视意见修改/);
+  assert.doesNotMatch(focus.headline, /流水线/,
+    "kind=review 时代码还没推,没有任何流水线在跑");
+});
+
+test("流水线修复播报保持原样(kind=ci)", () => {
+  const focus = projectTaskFocus({
+    status: "running",
+    delivery: { loop: { state: "repairing", kind: "ci", round: 1, max: 2 } },
+  });
+  assert.match(focus.headline, /修复流水线问题/);
+});
+
+test("助手占场的暂停指去交还入口,不指死路恢复(MFC-029)", () => {
+  const focus = projectTaskFocus({
+    status: "paused", assistant_engaged: true,
+  });
+  assert.match(focus.headline, /开发助手/);
+  assert.match(focus.next_action, /交还主任务/);
+  const plain = projectTaskFocus({ status: "paused" });
+  assert.match(plain.next_action, /恢复/);
+});
+
+test("从未起跑的 failed 单指向重新下单,不指无效重跑(MFC-025)", () => {
+  const focus = projectTaskFocus({
+    status: "failed",
+    detail: "Error: 仓库克隆失败：代码仓基线「no-such-branch」不存在或不可访问",
+  });
+  assert.match(focus.next_action, /重新发起/,
+    "克隆期配置错,重跑一百次也一样");
+  const started = projectTaskFocus({
+    status: "failed", detail: "会话中断",
+    progress: { current_phase: "写代码", step: "自由实现" },
+  });
+  assert.match(started.next_action, /重跑/);
 });

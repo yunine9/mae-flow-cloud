@@ -19,6 +19,7 @@ import {
   type SseConnectionState,
   type TaskSummary,
   type TimelineEntry,
+  type PushReviewPresentation,
 } from "./api";
 import { formatWait, URGENT_MINUTES, waitedMs } from "./taskTime";
 import { responsibleOf } from "./teamOps";
@@ -153,6 +154,7 @@ export function TaskCard({
             <TaskProgress
               progress={task.progress}
               showDetailedStep={decisionMode === "form"}
+              status={task.status}
             />
           )}
           <PrepushStatus prepush={task.delivery?.prepush}
@@ -253,7 +255,10 @@ export function TaskCard({
               <span>
                 {task.delivery?.stalled ?? task.delivery?.loop?.diagnosis
                   ?? task.detail ?? "请查看流水线日志确认原因。"}
-                {" "}办完之后点「重跑续推」，机器接着干。
+                {task.delivery?.stalled && !task.delivery?.loop
+                    && !task.delivery?.evidence_gap
+                  ? " 确认外部平台恢复后，点「重新尝试交付」。"
+                  : " 办完之后点「重跑续推」，机器接着干。"}
               </span>
               {/* 诊断是会话的收口发言,可能在聊别的事(实锤:最后一轮在补
                   文档章节)。流水线到底红在哪必须单独亮,不靠诊断捎带。 */}
@@ -275,12 +280,15 @@ export function TaskCard({
             </div>
           )}
           {canOperate && (task.status === "failed"
-            || task.status === "completed" || task.status === "canceled"
+            || task.status === "canceled"
             || repairStopped(task)) && (
             <RetryButton
               taskId={task.id}
               onDone={onChanged}
-              allowFromStart={["completed", "failed", "canceled"]
+              label={task.delivery?.stalled && !task.delivery?.loop
+                  && !task.delivery?.evidence_gap
+                ? "重新尝试交付" : undefined}
+              allowFromStart={["failed", "canceled"]
                 .includes(task.status)}
             />
           )}
@@ -359,16 +367,25 @@ export function TaskProgress({
   showDetailedStep,
   context,
   onPhaseClick,
+  status,
 }: {
   progress: NonNullable<TaskSummary["progress"]>;
   showDetailedStep: boolean;
   context?: ReactNode;
+  status?: TaskSummary["status"];
   /** 工作台传入:点阶段名弹该阶段执行方案。列表页不传,保持纯展示。 */
   onPhaseClick?: (phase: string) => void;
 }) {
-  const currentLabel = showDetailedStep
-    ? progress.step ?? progress.current_phase
-    : progress.current_phase;
+  // completed 是任务 API 的终态事实。内核 progress 记录的是最后执行到的
+  // 工作步骤，合入后通常仍停在“等待权威流水线”；直接照抄会让完成页像
+  // 还有事没跑完。终态展示追加一个“完成”节点，不改写内核现场。
+  const completed = status === "completed";
+  const phases = completed && progress.phases.at(-1) !== "完成"
+    ? [...progress.phases, "完成"] : progress.phases;
+  const currentIndex = completed ? phases.length - 1 : progress.current_index;
+  const currentLabel = completed ? "完成" : showDetailedStep
+    ? progress.step ?? progress.current_phase : progress.current_phase;
+  const displayedCurrentLabel = currentLabel === "交付" ? "验证与交付" : currentLabel;
   const milestone = progress.milestone;
   const milestoneEvent = milestone
     ? ({
@@ -383,11 +400,11 @@ export function TaskProgress({
   const showMilestone = Boolean(
     milestone?.task_id && milestone.title && milestoneEvent,
   );
-  return <span className="task-progress" aria-label={`当前阶段：${currentLabel}`}>
+  return <span className="task-progress" aria-label={`当前阶段：${displayedCurrentLabel}`}>
     <span className="task-progress-caption">
       <span>当前进度</span>
       {context && <span className="task-progress-caption-context">{context}</span>}
-      <strong>{currentLabel}</strong>
+      <strong>{displayedCurrentLabel}</strong>
     </span>
     {showMilestone && milestone && (
       <span className={`task-milestone ${milestone.event}`}>
@@ -401,9 +418,9 @@ export function TaskProgress({
       </span>
     )}
     <span className="task-phase-track">
-      {progress.phases.map((phase, index) => {
-        const state = index < progress.current_index
-          ? "past" : index === progress.current_index ? "current" : "future";
+      {phases.map((phase, index) => {
+        const state = index < currentIndex
+          ? "past" : index === currentIndex ? "current" : "future";
         return <span className={`task-phase ${state}`} key={phase}
           {...(onPhaseClick ? {
             role: "button" as const,
@@ -419,7 +436,7 @@ export function TaskProgress({
             },
           } : {})}>
           <i aria-hidden />
-          <span>{phase}</span>
+          <span>{phase === "交付" ? "验证与交付" : phase}</span>
         </span>;
       })}
     </span>
@@ -444,7 +461,9 @@ export function WaitingCard({
   repositorySkillSelection,
   repositoryAssigneeSelection,
   deliverySelection,
+  pushReview,
   onLocateDelivery,
+  activeDeliveryScope,
 }: {
   task: TaskSummary;
   onDecided: () => void;
@@ -462,9 +481,16 @@ export function WaitingCard({
   repositoryAssigneeSelection?: RepositoryAssigneeSelection;
   /** 代码检视里的文件级交付清单；由工作区变更面板的真实勾选产生。 */
   deliverySelection?: GitDiffSelection;
+  /** 兼容调用方；文件去留只在左侧 diff 树调整，右栏不再放第二套控件。 */
+  onDeliverySelectionChange?: (selection: GitDiffSelection) => void;
+  /** 当前待推送代码为什么需要再检视，以及两种阅读范围。 */
+  pushReview?: PushReviewPresentation;
   /** 跳到勾选面板(工作台的「本任务变更」)。列表页没有勾选面板,
    * 不传即不渲跳转钮。 */
-  onLocateDelivery?: () => void;
+  onLocateDelivery?: (scope?: "changes" | "full") => void;
+  /** 当前已经摆在左侧的检视范围。相同范围必须显示成状态,不能继续
+   * 假装是一个点了会有动作的按钮。 */
+  activeDeliveryScope?: "changes" | "full";
 }) {
   const [picked, setPicked] = useState<Record<string, string>>({});
   const [custom, setCustom] = useState<Record<string, string>>({});
@@ -528,6 +554,7 @@ export function WaitingCard({
     const answer = answerOf(item.question);
     return Boolean(answer) && closingAnswers.has(answer);
   });
+  const selectedAnswers = Object.values(picked).filter(Boolean);
   const selectedReviewAnswer = questions
     .filter((item) => (item.options ?? []).some((option) =>
       allChoiceAnswers.has(option)))
@@ -535,19 +562,28 @@ export function WaitingCard({
     .find(Boolean);
   const selectedEffect = choiceEffects.find((effect) =>
     effect.answers.includes(selectedReviewAnswer ?? ""));
+  // 历史任务或内核别名可能只把“需要调整代码”登记进 choice_effects，
+  // 而当前卡展示成“需要调整代码（按清单返工）”。服务端允许这种别名，
+  // 前端也必须从 diff 卡的明确返工文案兜底识别，不能仍承诺“推送”。
+  const selectedHandlesFeedback = Boolean(selectedEffect?.handles_feedback)
+    || (requiresDeliverySelection && selectedAnswers.some((answer) =>
+      /需要.*(?:调整|修改)|返工|补充/.test(answer)));
   const hasCustomPrimaryAnswer = questions.some((item) =>
     (item.options?.length ?? 0) > 0
     && !picked[item.question]
     && !!custom[item.question]?.trim());
-  const isReviewDecision = choiceEffects.some((effect) =>
-    effect.closes_feedback);
+  const isReviewDecision = requiresDeliverySelection
+    || choiceEffects.some((effect) => effect.closes_feedback);
+  const deliveryReady = !requiresDeliverySelection || Boolean(deliverySelection
+    && (selectedHandlesFeedback
+      || deliverySelection.selectedPaths.length > 0));
   const ready = questions.every((item) => {
     const options = item.options ?? [];
     const answered = options.length
       ? picked[item.question] || custom[item.question]?.trim()
       : custom[item.question]?.trim();
     return optional(item.question) || Boolean(answered);
-  }) && (!requiresDeliverySelection || !!deliverySelection)
+  }) && deliveryReady
     && !repositorySkillSelection?.scanning
     && (!repositorySkillSelection?.scanned
       || !!repositorySkillSelection.catalogToken)
@@ -644,12 +680,12 @@ export function WaitingCard({
   const submitLabel = submitting ? "正在提交…"
     : repositorySkillSelection?.scanning ? "等待能力读取"
       : hasCustomPrimaryAnswer ? "提交自定义处理方式"
-        : selectedEffect?.handles_feedback
-          ? "交给 Agent 调整后再检视"
-          : requiresDeliverySelection && deliverySelectionChanged
-            ? "按此范围自动整理并继续"
+        : selectedHandlesFeedback
+          ? "提交返工意见"
+          : requiresDeliverySelection && deliverySelection
+            ? `按这 ${deliverySelection.selectedPaths.length} 个文件推送`
             : requiresDeliverySelection
-              ? "确认推送范围并继续"
+              ? "先检视并选择交付文件"
               : "提交决定";
 
   return (
@@ -668,11 +704,85 @@ export function WaitingCard({
         )}
       </header>
 
+      {pushReview && (
+        <section className="push-review-overview" aria-label="本次代码检视摘要">
+          <div className="push-review-copy">
+            <span>待推送代码</span>
+            <strong>{pushReview.title}</strong>
+            <p>{pushReview.description}</p>
+          </div>
+          <div className="push-review-facts" aria-label="修改统计">
+            <span><b>{pushReview.file_count}</b>
+              {pushReview.has_focused_changes ? " 个本次修改文件" : " 个交付文件"}
+            </span>
+            {/* 统计不可得时说原因,不许摆 +0/−0:文件数有值、行数假零的
+                混合结果比没有更误导(MFC-040 实证)。 */}
+            {pushReview.stats_unavailable_reason ? (
+              <span className="stats-unavailable" role="alert">
+                统计不可用:{pushReview.stats_unavailable_reason}
+              </span>
+            ) : <>
+              <span className="added">+{pushReview.additions}</span>
+              <span className="deleted">-{pushReview.deletions}</span>
+            </>}
+            {pushReview.verification && <span className="verified">
+              {pushReview.verification}
+            </span>}
+          </div>
+          {(pushReview.agent_note || pushReview.commits.length > 0) && (
+            <details className="push-review-evidence">
+              <summary>
+                <strong>Agent 交付说明</strong>
+                <span>{pushReview.commits.length
+                  ? `${pushReview.commits.length} 个提交` : "实现与验证摘要"}</span>
+              </summary>
+              {pushReview.agent_note && (
+                <div className="push-review-agent-note">
+                  <Markdown text={pushReview.agent_note} />
+                </div>
+              )}
+              {pushReview.commits.length > 0 && (
+                <div className="push-review-commits">
+                  {pushReview.commits.slice(0, 3).map((commit) => (
+                    <span key={commit.sha}>
+                      <code>{commit.sha}</code>{commit.subject}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </details>
+          )}
+          {onLocateDelivery && (
+            <div className="push-review-actions">
+              {pushReview.has_focused_changes && (
+                activeDeliveryScope === "changes"
+                  ? <span className="current" role="status">这次修改已显示</span>
+                  : <button type="button" className="primary"
+                      onClick={() => onLocateDelivery("changes")}>
+                      查看这次修改
+                    </button>
+              )}
+              {activeDeliveryScope === "full"
+                ? <span className="current" role="status">完整交付已显示</span>
+                : <button type="button"
+                    onClick={() => onLocateDelivery("full")}>
+                    查看完整交付
+                  </button>}
+            </div>
+          )}
+        </section>
+      )}
+
       {task.waiting?.context && (() => {
         /* 长背景(推送确认的文件清单动辄上百行)默认折叠只露开头——
            重点(要我做什么、较上次变了什么)在前几行,整版清单是
-           留档不是必读;需要时一键展开。 */
-        const contextText = rewritePanelPath(task.waiting.context, task.id);
+           留档不是必读;需要时一键展开。
+           preface = 举卡前 Agent 刚展示的完整清单:卡上写"上述配置
+           是否正确"时,"上述"必须就在卡里(MFC-028 盲签)。 */
+        const preface = task.waiting.preface
+          ? rewritePanelPath(task.waiting.preface, task.id) : undefined;
+        const contextText = (preface ? `${preface}\n\n---\n\n` : "")
+          + rewritePanelPath(task.waiting.context, task.id);
         const contextLines = contextText.split("\n").length;
         const collapsible = contextLines > 16;
         return (
@@ -691,6 +801,39 @@ export function WaitingCard({
           </div>
         );
       })()}
+
+      {requiresDeliverySelection && (
+        <section className={`delivery-scope-card${
+          deliverySelectionChanged ? " changed" : ""}`}
+          aria-labelledby={`delivery-scope-${task.id}`}>
+          <header>
+            <div>
+              <span>本次交付范围</span>
+              <strong id={`delivery-scope-${task.id}`}>{deliverySelection
+                ? `${deliverySelection.selectedPaths.length} / ${deliverySelection.allPaths.length} 个文件将推送`
+                : "先打开代码差异完成检视"}</strong>
+            </div>
+          </header>
+          {!deliverySelection ? (
+            <p>请到左侧「工作区变更」逐文件查看 diff，并在那里决定文件去留。</p>
+          ) : (
+            <div className="delivery-scope-result" role="status">
+              <strong>文件去留在左侧代码差异中调整</strong>
+              <span>{selectedHandlesFeedback
+                ? "这次只提交返工意见，不会推送；Agent 会按当前范围处理后再次交给你检视。"
+                : deliverySelection.selectedPaths.length === 0
+                  ? "至少纳入一个文件才能通过；也可以选择返工，把去留原因交给 Agent。"
+                  : deliverySelectionChanged
+                    ? `Cloud 会按左侧选中的 ${deliverySelection.selectedPaths.length} 个文件机械整理提交；其余 ${deliverySelection.allPaths.length - deliverySelection.selectedPaths.length} 个只留在任务工作区。`
+                    : "保持当前提交文件集合不变，服务端复核后继续推送。"}</span>
+            </div>
+          )}
+          {onLocateDelivery && (
+            <button type="button" className="delivery-locate"
+              onClick={() => onLocateDelivery("full")}>打开代码差异并调整文件</button>
+          )}
+        </section>
+      )}
 
       <div className="question-list">
         {questions.map((item, index) => {
@@ -819,39 +962,6 @@ export function WaitingCard({
         </div>
       )}
 
-      {requiresDeliverySelection && (
-        <div className={`delivery-decision-guidance${
-          deliverySelectionChanged ? " changed" : ""}`} role="status">
-          <strong>{deliverySelection
-            ? `交付文件 ${deliverySelection.selectedPaths.length} / ${deliverySelection.allPaths.length}`
-            : "代码待检视"}</strong>
-          <span>{!deliverySelection
-            /* 重心是"请检视代码":这里就是编排瘦身后唯一的人审代码点,
-               只提清单会让人以为对对文件名就行。原文案"正在读取…"是
-               误导:没在读,是检视面板还没打开过(实锤用户干等)。 */
-            /* 名字必须与工作台一字不差:按钮实际叫「工作区变更」,
-               写别的词等于把人支去找一个不存在的入口(2026-08-30 审计)。 */
-            ? "本任务全部代码增量在「交付材料 → 工作区变更」——请逐文件"
-              + "检视 diff;勾选框默认全选,检视后这里才能提交。"
-            : deliverySelectionChanged
-              ? selectedEffect?.handles_feedback
-                ? "提交后：Agent 按这个范围调整代码与清单，完成后重新给你检视；本次不会推送。"
-                : `提交后：Cloud 自动整理一个清单提交（移出 ${deliverySelection!.committedPaths
-                  .filter((path) => !deliverySelection!.selectedPaths
-                    .includes(path)).length} 个，补入 ${deliverySelection!
-                  .selectedPaths.filter((path) => !deliverySelection!
-                    .committedPaths.includes(path)).length} 个）；未选内容保留在本地但不推送；`
-                + "不会让 Agent 猜着重改，也不重跑本地编译，最终由绑定新 SHA 的权威流水线裁决。"
-              : "提交后：保持当前提交不变；服务端复核同一文件集合，然后继续交付。若代码变化，会先重新跑 Build-Fix。"}</span>
-          {onLocateDelivery && (
-            <button type="button" className="delivery-locate"
-              onClick={onLocateDelivery}>
-              {deliverySelection ? "回到代码检视" : "去检视代码"}
-            </button>
-          )}
-        </div>
-      )}
-
       <footer className="decision-footer">
         <div className="decision-notes">
           {!notesOpen ? (
@@ -917,10 +1027,12 @@ export function RetryButton({
   taskId,
   onDone,
   allowFromStart = false,
+  label = "重跑续推",
 }: {
   taskId: string;
   onDone: () => void;
   allowFromStart?: boolean;
+  label?: string;
 }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState<"retry" | "rerun" | "">("");
@@ -941,7 +1053,7 @@ export function RetryButton({
         <svg viewBox="0 0 20 20" aria-hidden>
           <path d="M15.5 7A6 6 0 1 0 16 12M15.5 3v4h-4" />
         </svg>
-        {busy === "retry" ? "正在续推…" : "重跑续推"}
+        {busy === "retry" ? "正在尝试…" : label}
       </button>
       {allowFromStart && (
         <button className="destructive" type="button" disabled={Boolean(busy)}
@@ -1339,7 +1451,7 @@ function EventTail({ taskId, active }: { taskId: string; active: boolean }) {
   );
 }
 
-/** 执行现场=原始 SSE 事件流,一种读法(2026-08-26 用户拍板:心流
+/** 执行现场=实时执行日志,一种读法(2026-08-26 用户拍板:心流
  * 摘要定位不清晰,干掉;筛选器 + 贴底跟随已足够扫读与取证)。
  * 展开才建立实时连接。 */
 export function ExecutionPanel({
@@ -1362,7 +1474,7 @@ export function ExecutionPanel({
         onClick={() => setExpanded((current) => !current)}>
         <span>
           <strong>执行现场</strong>
-          <small>{task.focus?.headline ?? "SSE 原始事件流,实时跟随"}</small>
+          <small>{task.focus?.headline ?? "实时执行日志，自动跟随"}</small>
         </span>
         <i aria-hidden />
       </button>

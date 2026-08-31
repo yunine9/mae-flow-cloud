@@ -42,6 +42,7 @@ import {
   listCommitters,
   listTaskReviews,
   readArtifact,
+  readPushReviewDiff,
   repairStopped,
   requestCommitterReview,
   statusText,
@@ -61,6 +62,166 @@ import {
 } from "./TaskCard";
 
 type WorkspaceView = "materials" | "collaboration" | "execution" | "insights";
+type ExecutionView = "events" | "knowledge";
+
+export interface WorkspaceNextActionCopy {
+  title: string;
+  detail: string;
+}
+
+/** 右栏标题和真正渲染的行动卡共用这一套阶段解释，避免卡片明明要求去
+ * 合入，标题却还说“当前无待办”。 */
+export function workspaceNextActionCopy(
+  task: TaskSummary,
+  waiting: boolean,
+): WorkspaceNextActionCopy {
+  if (waiting) return { title: "当前需要处理", detail: "完成后流程继续" };
+  if (task.status === "failed") {
+    return { title: "任务已失败", detail: "看原因，决定重跑或接手" };
+  }
+  if (task.status === "verifying") {
+    return { title: "交付验证中", detail: "流水线与自动修复由系统跟进" };
+  }
+  if (task.status === "await_merge") {
+    return task.delivery?.mr_state === "已关闭"
+      ? { title: "MR 已关闭，需要处理", detail: "查看合入状态并决定后续处理" }
+      : { title: "等待检视与合入", detail: "前往 CodeHub 完成最后一步" };
+  }
+  return { title: "当前无待办", detail: "无需处理" };
+}
+
+/** 问题定位一键采集:任务出事(failed/交付停摆)时把全部可定位事实
+ * 现采成一个 markdown 下载。服务端在出事瞬间也会自动留档一份到任务
+ * 目录 diagnostics/,这里是给人手动再拿最新现场的口。 */
+function DiagnosticsLink({ taskId }: { taskId: string }) {
+  const [state, setState] = useState<"idle" | "loading" | "done" | "error">("idle");
+
+  async function downloadDiagnostics() {
+    setState("loading");
+    try {
+      const response = await fetch(
+        `/tasks/${encodeURIComponent(taskId)}/diagnostics`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const blob = await response.blob();
+      const disposition = response.headers.get("content-disposition") ?? "";
+      const matched = disposition.match(/filename="?([^";]+)"?/i);
+      const filename = matched?.[1] ?? `${taskId}-diagnostics.md`;
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setState("done");
+    } catch {
+      setState("error");
+    }
+  }
+
+  return (
+    <span className="diagnostics-action">
+      <button type="button" className="diagnostics-link"
+        disabled={state === "loading"} onClick={downloadDiagnostics}
+        title="把任务状态、内核现场、Git/容器事实、会话事件与服务日志汇成一个文件">
+        {state === "loading" ? "正在生成诊断包…" : "导出诊断包"}
+      </button>
+      {state === "done" && <small role="status">已开始下载</small>}
+      {state === "error" && <small role="alert">生成失败，请重试</small>}
+    </span>
+  );
+}
+
+/** await_merge 的右栏行:默认一行状态,点开只展开一句说明 + MR 链接
+ * (MFC-039 用户拍板:去掉与右栏标题重复的大卡)。MR 被关闭是需要人
+ * 处理的例外,直接展示不折叠。 */
+function MergeWaitLine({ task, canOperate }: {
+  task: TaskSummary;
+  canOperate: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const mrLink = task.delivery?.mr_url
+    ? <a href={task.delivery.mr_url} target="_blank" rel="noreferrer">
+        打开合入请求 ↗
+      </a>
+    : <em>平台尚未返回 MR 链接，请稍后刷新。</em>;
+  if (task.delivery?.mr_state === "已关闭") {
+    return (
+      <div className="ws-merge-line is-closed" role="alert">
+        <strong>MR 已关闭，任务还没有结束</strong>
+        <p>{task.delivery?.waiting_on
+          || "重新打开 MR 后系统自动恢复监听；不再继续可用右上角“取消”。"}
+          {mrLink}</p>
+      </div>
+    );
+  }
+  return (
+    <div className="ws-merge-line">
+      <button type="button" aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}>
+        <span className="ws-merge-line-dot" aria-hidden />
+        等待合入
+        <svg viewBox="0 0 16 16" aria-hidden
+          className={open ? "is-open" : undefined}>
+          <path d="m5 6.5 3 3 3-3" /></svg>
+      </button>
+      {open && (
+        <p>{task.delivery?.waiting_on
+          || "流水线与门禁已通过，请前往 MR 完成检视与合入。"}{mrLink}
+          {canOperate && <small>
+            不再继续这项任务时，可用右上角“取消”明确停止监听。
+          </small>}
+        </p>
+      )}
+    </div>
+  );
+}
+
+export type PushReviewDiffLoadState =
+  | { kind: "idle" | "checking" | "ready" }
+  | { kind: "error"; message: string; expired: boolean };
+
+export function normalizePushReviewDiffResult(result: {
+  content?: string;
+  branch?: string;
+  unavailable?: string;
+  status?: number;
+}): {
+  content: string;
+  branch: string;
+  state: PushReviewDiffLoadState;
+} {
+  const message = result.unavailable?.trim();
+  if (message) {
+    return {
+      content: "",
+      branch: "",
+      state: { kind: "error", message, expired: result.status === 404 },
+    };
+  }
+  return {
+    content: result.content ?? "",
+    branch: result.branch ?? "",
+    state: { kind: "ready" },
+  };
+}
+
+export function usablePushReviewSelection(
+  pushReviewActive: boolean,
+  state: PushReviewDiffLoadState,
+  selection: GitDiffSelection | undefined,
+): GitDiffSelection | undefined {
+  return pushReviewActive && state.kind !== "ready" ? undefined : selection;
+}
+
+function defaultWorkspaceView(task: TaskSummary): WorkspaceView {
+  if (task.status === "paused") return "collaboration";
+  if (task.waiting || task.status === "waiting_for_human") return "materials";
+  if (["queued", "running", "pausing", "verifying", "await_merge"]
+      .includes(task.status)) return "execution";
+  return "materials";
+}
 
 function sizeText(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -72,7 +233,15 @@ function sizeText(bytes: number): string {
  * 仍给人一条 Cloud 生命周期轨道，避免工作台最重要的“走到哪了”整块消失。
  * 这只是只读展示兜底，不参与流程判断或任务迁移。 */
 function workspaceProgress(task: TaskSummary): NonNullable<TaskSummary["progress"]> {
-  if (task.progress) return task.progress;
+  if (task.progress) {
+    // 内核进度记录的是自动流程最后停在哪；举卡后人真正面对的当前步骤
+    // 已经变成“检视/确认”。工作台大标题继续写“等待权威流水线”会与
+    // 旁边的下一步自相矛盾。这里只改只读标题，不动阶段与证据账。
+    return task.status === "waiting_for_human"
+      ? { ...task.progress,
+          step: task.focus?.headline ?? task.waiting?.step ?? "等待你的决定" }
+      : task.progress;
+  }
   const phases = [
     "已受理", "需求理解", "开发实现", "人工确认", "交付验证", "等待合入", "完成",
   ];
@@ -107,6 +276,7 @@ function assistantUnavailableReason(task: TaskSummary): string {
 export function TaskWorkspace({
   task,
   viewerUsername,
+  canOverride,
   canOperate,
   canCollaborate,
   canRequestReview,
@@ -118,6 +288,8 @@ export function TaskWorkspace({
 }: {
   task: TaskSummary;
   viewerUsername: string;
+  /** 管理员仅可代删或代确认别人的批注；默认裁决权仍归作者。 */
+  canOverride: boolean;
   canOperate: boolean;
   /** 主任务责任人或已被逐仓分工邀请的协作者。最终决定仍看 canOperate。 */
   canCollaborate: boolean;
@@ -131,6 +303,8 @@ export function TaskWorkspace({
   // 旧任务、纯会话和非内核提问没有 approval_subject 元数据；此时需求
   // 原文是唯一保证存在的证据，不能默认打开一个空的过程文档面板。
   const recommendedMaterialView = task.waiting?.recommended_view ?? "source";
+  const pushReview = task.waiting?.step === "cloud_push_confirm"
+    ? task.delivery?.push_review : undefined;
   const [items, setItems] = useState<ArtifactMeta[]>();
   const [unavailable, setUnavailable] = useState("");
   const [active, setActive] = useState("");
@@ -160,22 +334,48 @@ export function TaskWorkspace({
     useState<RepositoryAssigneeSelection>(EMPTY_REPOSITORY_ASSIGNEE_SELECTION);
   const [deliverySelection, setDeliverySelection] =
     useState<GitDiffSelection>();
+  const [pushDiffState, setPushDiffState] = useState<PushReviewDiffLoadState>(
+    pushReview ? { kind: "checking" } : { kind: "idle" },
+  );
+  const [diffScope, setDiffScope] = useState<"changes" | "full">(
+    pushReview?.has_focused_changes ? "changes" : "full");
+  const [diffReviewRequest, setDiffReviewRequest] = useState(0);
   /** 点进度条阶段名弹该阶段执行方案;空串=不显示。 */
   const [planPhase, setPlanPhase] = useState("");
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>(
-    task.status === "paused" ? "collaboration" : "materials",
+    defaultWorkspaceView(task),
   );
+  const [executionView, setExecutionView] = useState<ExecutionView>("events");
 
   useEffect(() => {
     setMaterialView(task.waiting?.recommended_view ?? "source");
-    setWorkspaceView(task.status === "paused" ? "collaboration" : "materials");
+    setWorkspaceView(defaultWorkspaceView(task));
+    setExecutionView("events");
     setRepositoryAssignees(EMPTY_REPOSITORY_ASSIGNEE_SELECTION);
     setDeliverySelection(undefined);
+    setPushDiffState(pushReview ? { kind: "checking" } : { kind: "idle" });
+    setDiffScope(pushReview?.has_focused_changes ? "changes" : "full");
+    setDiffReviewRequest(0);
   }, [task.id]);
 
   useEffect(() => {
-    setDeliverySelection(undefined);
-  }, [task.waiting?.waiting_id]);
+    if (!pushReview) {
+      setDeliverySelection(undefined);
+      setPushDiffState({ kind: "idle" });
+      setDiffScope("full");
+      return;
+    }
+    const selected = task.delivery_selection?.status === "requested"
+      ? task.delivery_selection.paths : pushReview.committed_paths;
+    setDeliverySelection({
+      selectedPaths: [...selected],
+      committedPaths: [...pushReview.committed_paths],
+      allPaths: [...pushReview.all_paths],
+    });
+    setPushDiffState({ kind: "checking" });
+    setContent("");
+    setDiffScope(pushReview.has_focused_changes ? "changes" : "full");
+  }, [task.waiting?.waiting_id, pushReview?.head_sha]);
 
   useEffect(() => {
     const waitingId = task.waiting?.waiting_id;
@@ -200,7 +400,13 @@ export function TaskWorkspace({
 
   useEffect(() => {
     if (task.status === "paused") setWorkspaceView("collaboration");
-  }, [task.status]);
+    else if (task.waiting || task.status === "waiting_for_human") {
+      setWorkspaceView("materials");
+    } else if (["queued", "running", "pausing", "verifying", "await_merge"]
+        .includes(task.status)) {
+      setWorkspaceView("execution");
+    }
+  }, [task.status, task.waiting?.waiting_id]);
 
   useEffect(() => {
     if (!canRequestReview) return;
@@ -306,16 +512,44 @@ export function TaskWorkspace({
     if (!active) return;
     let alive = true;
     setLoading((was) => was || !content);
-    void readArtifact(task.id, active).then((result) => {
+    const pushDiffActive = Boolean(pushReview
+      && items?.find((item) => item.name === active)?.kind === "diff");
+    if (pushDiffActive) setPushDiffState({ kind: "checking" });
+    const reading = pushDiffActive
+      ? readPushReviewDiff(task.id, diffScope)
+      : readArtifact(task.id, active);
+    void reading.then((result) => {
       if (!alive) return;
+      if (pushDiffActive) {
+        const normalized = normalizePushReviewDiffResult(result);
+        setPushDiffState(normalized.state);
+        setContent((current) => current === normalized.content
+          ? current : normalized.content);
+        setBranch(normalized.branch);
+        setLoading(false);
+        return;
+      }
       const next = result.content ?? result.unavailable ?? "";
       // 内容没变就别 setState:轮询期间无谓重渲染会把正在写的批注打断。
       setContent((current) => current === next ? current : next);
       setBranch(result.branch ?? "");
       setLoading(false);
+    }).catch((reason) => {
+      if (!alive) return;
+      const message = reason instanceof Error ? reason.message : String(reason);
+      if (pushDiffActive) {
+        setPushDiffState({ kind: "error", message, expired: false });
+        setContent("");
+        setBranch("");
+      } else {
+        setContent(message);
+        setBranch("");
+      }
+      setLoading(false);
     });
     return () => { alive = false; };
-  }, [task.id, active, livePulse]);
+  }, [task.id, active, livePulse, diffScope, pushReview?.head_sha,
+    items?.find((item) => item.name === active)?.kind]);
 
   // 批注随任务加载,也随"圈了一条/送出一批/任务状态变了"重取——
   // 进展(那处动没动)是服务端现算的,前端不自己推断。
@@ -377,9 +611,26 @@ export function TaskWorkspace({
     : materialView === "chain"
     ? { kicker: "CHAIN OVERVIEW", title: "仓间依赖" }
     : materialView === "diff"
-      ? { kicker: "WORKTREE CHANGES", title: "工作区变更" }
+      ? pushReview
+        ? { kicker: "PUSH REVIEW", title: diffScope === "changes"
+            ? pushReview.title : "完整交付内容" }
+        : { kicker: "WORKTREE CHANGES", title: "工作区变更" }
       : { kicker: "WORK DOCUMENTS", title: "过程文档" };
   const waiting = task.status === "waiting_for_human" && task.waiting;
+  const workspaceReviewReady = task.status === "waiting_for_human"
+    && task.waiting?.step === "cloud_push_confirm"
+    && task.delivery?.loop?.review_source === "workspace"
+    && task.delivery.loop.workspace_review_recheck_required === true;
+  const workspaceReviewAnnotationIds = workspaceReviewReady
+    ? task.delivery?.loop?.workspace_review_annotation_ids ?? []
+    : [];
+  const nextAction = workspaceNextActionCopy(task, Boolean(waiting));
+  const decisionDeliverySelection = usablePushReviewSelection(
+    Boolean(pushReview),
+    pushDiffState,
+    deliverySelection,
+  );
+  const canContributeReview = canOperate || canCollaborate || !!reviewAssignment;
   const collaborationVisible = canCollaborate && [
     "running", "pausing", "paused", "waiting_for_human", "verifying",
   ].includes(task.status);
@@ -392,6 +643,7 @@ export function TaskWorkspace({
       question.options?.some((option) => option.includes("确认并生成任务"))) ?? false);
   const controllable = canOperate && [
     "queued", "running", "pausing", "paused", "waiting_for_human", "verifying",
+    "await_merge",
   ].includes(task.status);
   const health = taskHealthFacts(task, viewerUsername);
   const visibleProgress = workspaceProgress(task);
@@ -470,7 +722,7 @@ export function TaskWorkspace({
         </div>
         {controllable && (
           <div className="ws-head-controls" aria-label="任务控制">
-            {task.status === "paused" ? (
+            {task.status === "await_merge" ? null : task.status === "paused" ? (
               <button type="button" className="primary" disabled={!!controlBusy}
                 title="沿用当前工作区和流程进度继续执行"
                 onClick={() => void runControl("resume")}>
@@ -514,7 +766,7 @@ export function TaskWorkspace({
             SSE 现场)。需求受理/DTS 等云端词表任务的阶段名与内核
             六阶段完全不同,弹出来必然落底版兜底属误导(审计 P0-3)
             ——这些任务不提供弹层。 */}
-        <TaskProgress progress={visibleProgress} showDetailedStep
+        <TaskProgress progress={visibleProgress} showDetailedStep status={task.status}
           onPhaseClick={task.execution_plan || task.workflow_profile
             ? setPlanPhase : undefined}
           context={health && <>
@@ -643,10 +895,63 @@ export function TaskWorkspace({
                   </>}
               </>
             ) : <>
+              {materialView === "diff" && pushReview && (
+                <div className="push-review-scope" aria-label="代码检视范围">
+                  {pushReview.has_focused_changes ? <>
+                    <button type="button"
+                      className={diffScope === "changes" ? "on" : ""}
+                      onClick={() => {
+                        if (diffScope === "changes") return;
+                        setContent("");
+                        setPushDiffState({ kind: "checking" });
+                        setDiffScope("changes");
+                      }}>
+                      <strong>这次修改</strong>
+                      <span>{pushReview.title}</span>
+                    </button>
+                    <button type="button"
+                      className={diffScope === "full" ? "on" : ""}
+                      onClick={() => {
+                        if (diffScope === "full") return;
+                        setContent("");
+                        setPushDiffState({ kind: "checking" });
+                        setDiffScope("full");
+                      }}>
+                      <strong>完整交付</strong>
+                      <span>从任务起点到当前待推送代码</span>
+                    </button>
+                  </> : (
+                    // 只有一个范围时不是"可切换":按钮外观点了没反应,
+                    // 用户会当成坏了(MFC-035)。老实渲染成状态标签。
+                    <div className="on scope-single" role="note">
+                      <strong>完整交付</strong>
+                      <span>从任务起点到当前待推送代码;本轮没有可单看的增量修改</span>
+                    </div>
+                  )}
+                  <p>{diffScope === "changes"
+                    ? "这里只看这次处理产生的变化，方便快速复检；最终授权仍绑定当前完整待推送版本。"
+                    : "这里可以调整最终交付文件；取消勾选的文件不会进入本次推送。"}</p>
+                </div>
+              )}
               {unavailable && <div className="utility-note">{unavailable}</div>}
               {!unavailable && !items && <div className="utility-note">正在读取现场…</div>}
               {items?.length === 0 && (
                 <div className="utility-note">这一单还没有可检视的产物。</div>
+              )}
+              {materialView === "diff" && pushReview
+                && pushDiffState.kind === "error" && (
+                <div className="utility-note" role="alert">
+                  <strong>{pushDiffState.expired
+                    ? "这版代码已失效，暂不能确认推送"
+                    : "代码检视暂不可用，暂不能确认推送"}</strong>
+                  <span>{pushDiffState.message}</span>
+                  <button type="button" onClick={() => {
+                    setContent("");
+                    setPushDiffState({ kind: "checking" });
+                    setLivePulse((tick) => tick + 1);
+                    onChanged();
+                  }}>刷新任务并重新读取</button>
+                </div>
               )}
               {loading && <div className="utility-note">正在打开 {activeMeta?.label}…</div>}
               {!loading && content && (
@@ -656,19 +961,34 @@ export function TaskWorkspace({
                 fallbackFile={activeMeta?.label ?? active}
                 kind={activeMeta?.kind === "diff" ? "code" : "doc"}
                 items={notes}
-                enabled={canOperate
+                enabled={canContributeReview
                   && !["completed", "canceled"].includes(task.status)}
                 onAdded={() => setNotesPulse((tick) => tick + 1)}
               >
                 {materialView === "diff"
                   ? <GitDiff text={content} branch={branch}
                       hideKey={task.id}
+                      scopeLabel={pushReview
+                        ? diffScope === "changes"
+                          ? `本次修改 · ${(pushReview.base_sha ?? "").slice(0, 7)}`
+                            + ` → ${(pushReview.head_sha ?? "").slice(0, 7)}`
+                          : `完整交付 · ${(pushReview.baseline_sha
+                              ?? pushReview.base_sha ?? "").slice(0, 7)}`
+                            + ` → ${(pushReview.head_sha ?? "").slice(0, 7)}`
+                        : undefined}
                       selectable={canOperate
-                        && task.waiting?.recommended_view === "diff"}
+                        // waiting 残留(如 await_merge 后列表快照没带
+                        // waiting 键)不得再开勾选:必须真的在等这张卡
+                        // (MFC-009)。
+                        && task.status === "waiting_for_human"
+                        && task.waiting?.recommended_view === "diff"
+                        && (!pushReview || diffScope === "full")}
                       selectionKey={task.waiting?.waiting_id}
-                      initialSelectedPaths={task.delivery_selection?.status === "requested"
-                        ? task.delivery_selection.paths : undefined}
-                      onSelectionChange={setDeliverySelection} />
+                      initialSelectedPaths={deliverySelection?.selectedPaths
+                        ?? (task.delivery_selection?.status === "requested"
+                          ? task.delivery_selection.paths : undefined)}
+                      onSelectionChange={setDeliverySelection}
+                      focusRequest={diffReviewRequest} />
                   : <Markdown text={content} />}
               </Annotatable>
               )}
@@ -706,6 +1026,26 @@ export function TaskWorkspace({
               <div><span>LIVE EXECUTION</span><strong>执行现场</strong></div>
               <small>实时事件流；各阶段执行方案点上方进度条的阶段名查看</small>
             </div>
+            <nav className="ws-execution-subnav" role="tablist"
+              aria-label="执行现场内容">
+              <button type="button" role="tab"
+                aria-selected={executionView === "events"}
+                className={executionView === "events" ? "active" : ""}
+                onClick={() => setExecutionView("events")}>
+                <strong>实时事件</strong>
+                <small>{task.focus?.headline ?? "Agent 动作与工具结果"}</small>
+              </button>
+              <button type="button" role="tab"
+                aria-selected={executionView === "knowledge"}
+                className={executionView === "knowledge" ? "active" : ""}
+                onClick={() => setExecutionView("knowledge")}>
+                <strong>本任务知识
+                  <em>{task.knowledge_usage?.resources.length ?? 0}</em>
+                </strong>
+                <small>{task.knowledge_usage?.summary.used ?? 0} 项已消费{" · "}
+                  {task.knowledge_usage?.resources.length ?? 0} 项可用</small>
+              </button>
+            </nav>
             <div className="ws-primary-scroll ws-execution-view">
               {/* 定制链对拍告警必须压在现场之上:呈现与实际不一致是
                   最高级事故(用户红线),比事件流本身更优先。 */}
@@ -723,21 +1063,27 @@ export function TaskWorkspace({
               {/* 摘要卡里的执行现场默认收起，避免多张卡同时拉实时流；
                   但这里已经是独立的“执行现场”页签，打开页签就该直接
                   看见现场，不能再让用户做一次没有意义的展开。 */}
-              <ExecutionPanel task={task} defaultOpen />
-              <WarmupPanel task={task} />
-              {task.workflow_profile && <WorkflowProfileCard
-                profile={task.workflow_profile}
-                warning={task.workflow_profile_warning} />}
-              <KnowledgeFootprint usage={task.knowledge_usage}
-                utMethod={task.ut_generation_method}
-                taskId={task.id} taskStatus={task.status}
-                repositories={task.repositories ?? []}
-                repositoryTechnologies={[...new Set(
-                  (task.repository_profiles ?? []).flatMap((item) =>
-                    item.technologies))]}
-                businessModules={(task.business_modules ?? []).map((module) => ({
-                  id: module.id, name: module.name,
-                }))} />
+              <div className="ws-execution-subview"
+                hidden={executionView !== "events"}>
+                <ExecutionPanel task={task} defaultOpen />
+                <WarmupPanel task={task} />
+                {task.workflow_profile && <WorkflowProfileCard
+                  profile={task.workflow_profile}
+                  warning={task.workflow_profile_warning} />}
+              </div>
+              <div className="ws-execution-subview is-knowledge"
+                hidden={executionView !== "knowledge"}>
+                <KnowledgeFootprint usage={task.knowledge_usage}
+                  utMethod={task.ut_generation_method}
+                  taskId={task.id} taskStatus={task.status}
+                  repositories={task.repositories ?? []}
+                  repositoryTechnologies={[...new Set(
+                    (task.repository_profiles ?? []).flatMap((item) =>
+                      item.technologies))]}
+                  businessModules={(task.business_modules ?? []).map((module) => ({
+                    id: module.id, name: module.name,
+                  }))} />
+              </div>
             </div>
           </> : <>
             <div className="ws-pane-head">
@@ -751,14 +1097,14 @@ export function TaskWorkspace({
                   <AnnotationPanel
                     taskId={task.id}
                     viewerUsername={viewerUsername}
+                    canOverride={canOverride}
                     items={notes}
                     checks={checks}
                     reply={reply}
-                    canOperate={canOperate}
+                    canOperate={canContributeReview}
                     taskStatus={task.status}
-                    reviewReady={task.waiting?.step === "cloud_push_confirm"
-                      && task.delivery?.loop?.review_source === "workspace"
-                      && task.delivery.loop.workspace_review_recheck_required === true}
+                    reviewReady={workspaceReviewReady}
+                    reviewAnnotationIds={workspaceReviewAnnotationIds}
                     mergeRequestOpen={Boolean(task.delivery?.mr_url)
                       && !["completed", "canceled"].includes(task.status)
                       && !String(task.delivery?.mr_state ?? "").startsWith("已合入")
@@ -829,14 +1175,8 @@ export function TaskWorkspace({
           <div className="ws-pane-head ws-pane-head-side">
             {/* 右栏标题按阶段说实话:failed 时喊"无待办"是误导——
                 此刻的待办就是看失败原因、决定重跑还是接手。 */}
-            <div><span>NEXT ACTION</span><strong>{waiting ? "当前需要处理"
-              : task.status === "failed" ? "任务已失败"
-              : task.status === "verifying" ? "交付验证中"
-              : "当前无待办"}</strong></div>
-            <small>{waiting ? "完成后流程继续"
-              : task.status === "failed" ? "看原因，决定重跑或接手"
-              : task.status === "verifying" ? "流水线与自动修复由系统跟进"
-              : "无需处理"}</small>
+            <div><span>NEXT ACTION</span><strong>{nextAction.title}</strong></div>
+            <small>{nextAction.detail}</small>
           </div>
           {waiting && canOperate && (
             /* 批注挂在提交按钮正上方(WaitingCard 内部),不放卡片外面:
@@ -851,15 +1191,29 @@ export function TaskWorkspace({
               repositoryAssigneeSelection={chainReview
                 ? repositoryAssignees : undefined}
               deliverySelection={task.waiting?.recommended_view === "diff"
-                ? deliverySelection : undefined}
+                ? decisionDeliverySelection : undefined}
+              pushReview={pushReview}
               onLocateDelivery={task.waiting?.recommended_view === "diff"
-                ? () => {
+                ? (scope) => {
                     setWorkspaceView("materials");
                     setMaterialView("diff");
+                    setContent("");
+                    setPushDiffState({ kind: "checking" });
+                    const nextScope = scope
+                      ?? (pushReview?.has_focused_changes ? "changes" : "full");
+                    if (nextScope === diffScope) {
+                      setLivePulse((tick) => tick + 1);
+                    } else {
+                      setDiffScope(nextScope);
+                    }
+                    setDiffReviewRequest((request) => request + 1);
                     const first = items?.find((item) => item.kind === "diff");
                     if (first) setActive(first.name);
                   }
                 : undefined}
+              activeDeliveryScope={task.waiting?.recommended_view === "diff"
+                && workspaceView === "materials" && materialView === "diff"
+                ? diffScope : undefined}
               attachment={
                 <>
                   {chainReview && (
@@ -904,6 +1258,7 @@ export function TaskWorkspace({
               {canOperate && !waiting && (
                 <div className="ws-failed-actions">
                   <RetryButton taskId={task.id} onDone={onChanged} />
+                  <DiagnosticsLink taskId={task.id} />
                 </div>
               )}
             </>
@@ -915,7 +1270,13 @@ export function TaskWorkspace({
             </div>
           )}
           {!waiting && task.status !== "failed" && task.status !== "canceled" && (
-            task.status === "verifying" ? (
+            task.status === "await_merge" ? (
+              // 右栏标题已经说了"等待检视与合入":这里不再摆一张层级
+              // 更高的大卡复读(MFC-039 用户拍板),默认只有一行状态,
+              // 点开才展开说明与 MR 链接。MR 被关是需要人处理的例外,
+              // 保持直接可见。
+              <MergeWaitLine task={task} canOperate={canOperate} />
+            ) : task.status === "verifying" ? (
               /* 验证中右栏不再空转:此刻用户最想知道的是"卡在哪/等谁",
                  waiting_on 有值就点名;修复停机时直接给重试入口。 */
               <div className="ws-verify-focus">
@@ -929,7 +1290,13 @@ export function TaskWorkspace({
                     || "流水线运行与自动修复由系统跟进；需要人时会在这里出卡。"}</p>
                 )}
                 {canOperate && repairStopped(task) && (
-                  <RetryButton taskId={task.id} onDone={onChanged} />
+                  <RetryButton taskId={task.id} onDone={onChanged}
+                    label={task.delivery?.stalled && !task.delivery?.loop
+                        && !task.delivery?.evidence_gap
+                      ? "重新尝试交付" : undefined} />
+                )}
+                {task.delivery?.stalled && (
+                  <DiagnosticsLink taskId={task.id} />
                 )}
               </div>
             ) : (
@@ -940,9 +1307,6 @@ export function TaskWorkspace({
                     ? "模型正在推进；需要时可切到执行现场查看。"
                     : "材料、协作和运行记录都在左侧主视图。"}
                 </p>
-                {canOperate && task.status === "completed" && (
-                  <RetryButton taskId={task.id} onDone={onChanged} />
-                )}
               </div>
             )
           )}

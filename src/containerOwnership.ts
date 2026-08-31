@@ -102,6 +102,16 @@ function chownTree(path: string, owner: NumericOwner): number {
       }
       return; // 只改链接本身，绝不跟随到工作区外。
     }
+    // Git 对象若与别的仓共享 inode(旧版本地 clone 的 hardlink 复用),
+    // 这里 chown 会直接改到源仓/兄弟任务的同一对象上——数据安全问题,
+    // 宁可任务起不来也不能悄悄污染源仓(e2e-picky-20260830 实锤)。
+    // 新 clone 已统一 --no-local,撞到这条只可能是历史现场,提示重建。
+    if (stat.isFile() && stat.nlink > 1
+        && /\/\.git\/objects\//.test(entry.split("\\").join("/"))) {
+      throw new Error(
+        `拒绝准备容器属主:Git 对象与其他仓库共享硬链接(nlink=${stat.nlink})`
+        + `——继续会污染源仓。请重新发起任务以获得隔离克隆:${entry}`);
+    }
     if (stat.uid !== owner.uid || stat.gid !== owner.gid) {
       chownSync(entry, owner.uid, owner.gid);
       changed += 1;
@@ -154,7 +164,12 @@ function prepareCache(
 ): boolean {
   mkdirSync(path, { recursive: true });
   ownershipMarkerRoot(markerRoot);
-  const signature = `${owner.uid}:${owner.gid}\n`;
+  // 签名绑定目录 inode:缓存被回收重建后路径相同、inode 必然不同,
+  // 旧标记不得再让宿主跳过核对(MFC-013:重建后 marker 陈旧,root
+  // 误以为属主已就位)。
+  const identity = lstatSync(path);
+  const signature =
+    `${owner.uid}:${owner.gid} ${identity.dev}:${identity.ino}\n`;
   const sourceId = createHash("sha256").update(resolve(path)).digest("hex");
   const marker = join(
     markerRoot,

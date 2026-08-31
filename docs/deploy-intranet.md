@@ -190,7 +190,7 @@ codehubcli 命令行,代码零改动。配置形状(权限 600,文件头注释�
 |---|---|---|
 | `POST /mr` | `{repo, source_branch, target_branch, title}` | `{url}`(MR 链接,展示用)`, id?`(iid,门禁/讨论查询带回) |
 | `POST /pipeline/trigger` | `{repo, sha}` | `{status: "success"\|"failed"\|"running", log?, checks?}` |
-| `GET /pipeline/status?sha=<sha>&repo=<url>&mr=<iid>` | — | `{runs: [{status, log?, checks?}]}`(取最后一个终态 run) |
+| `GET /pipeline/status?sha=<sha>&repo=<url>&mr=<iid>` | — | `{runs: [{status, log?, checks?}]}`(严格取 `runs.at(-1)` 最新 run；历史终态不得越过最新 running) |
 | `GET /pipeline/artifacts?sha=<sha>&repo=<url>&mr=<完整 MR URL>` | — | `{files: [{name, text}]}`(失败材料；与 status 的 `mr` 形状不同) |
 
 可选的终态 `checks` 固定形状如下。`status` 可用
@@ -214,7 +214,10 @@ pipeline_artifacts,不配=404=宿主按纯流水线旧语义)与按能力核对�
 两步回复/解决、MCP 日志桥),见 **docs/mr-loop-adaptation.md §3/§11**。
 检视回复默认只回复不代点"已解决"(报告 D3:resolve 归检视人);
 团队明确允许代点的部署,serve 加 `--resolve-discussions` 且适配层配
-`discussion_resolve`。
+`discussion_resolve`。`discussion_reply` 模板必须引用
+`{idempotency_key}` 并把它传给平台支持的幂等请求头/稳定键参数；宿主
+同时发送 `Idempotency-Key` 头与 `idempotency_key` JSON 字段。模板吞掉
+该键时适配层会 502 fail-closed，回复留在 outbox 等修好配置后重试。
 
 MCP 网关令牌与 CodeHub 项目/个人令牌是两个鉴权域。`{token}`
 仍只供 CodeHub REST、`codehub-cli`、push/MR 与已验证的 REST 兼容路；
@@ -821,7 +824,10 @@ install -m 600 /dev/null /etc/mae-flow-cloud/mcp-token
 只有多入口必须统一出口等特殊部署，才在启动参数或配置文件中设置可选的
 `--public-url http://<稳定内网域名>:8787`，它的优先级最高。
 MR/流水线服务同样是部署基础设施，管理页仅通过「部署自检」显示链路
-是否可用，不展示内部地址，也不允许运行时覆盖。
+是否可用，不展示内部地址，也不允许运行时覆盖。启动与每次手动自检都会
+只读访问平台根接口：只有明确声明 `POST /mr`、`POST /pipeline/trigger`
+和 `GET /pipeline/status` 三项能力才算通过；`200 {}` 这类“地址活着但
+接错服务”的情况会判红并阻止新需求下单，不会创建试探 MR 或流水线。
 
 两种失败语义是刻意分开的:`--config` 坏了**拒绝启动**(部署形态残缺
 比不起服害人);`settings.json` 坏了**按无覆盖处理**并记日志(它是
@@ -995,6 +1001,12 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
   After=network.target docker.service
 
   [Service]
+  # 以专用非 root 账号运行(先 useradd -r maeflow 并把数据/缓存目录
+  # chown 给它)。root 运行时服务会要求 --isolate-user <uid>:<gid> 且
+  # 拒绝 0:0——与其在 push 前才被容器用户约束拦下,不如单元文件里
+  # 就写对(e2e-picky-20260830 审计:旧样例 root 裸跑与启动约束冲突)。
+  User=maeflow
+  Group=maeflow
   WorkingDirectory=/srv/mae-flow-cloud
   Environment=MAE_FLOW_HOME=/srv/mae-flow
   Environment=MAE_FLOW_ADMIN_USER=admin
@@ -1019,6 +1031,8 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
   ```
   `secrets.env` 至少包含 `MAE_FLOW_ADMIN_PASSWORD=...`,权限设为 `0600`,
   不要把密码直接写进单元文件或仓库。账号库已存在后不会重复创建管理员。
+  必须以 root 运行的部署(极少数,如需要读受限 CA):去掉 `User=` 并在
+  ExecStart 追加 `--isolate-user <业务uid>:<业务gid>`——0:0 会被拒绝启动。
 - 环回代理教训(外部踩过三次):如果服务器有全局代理,
   确认 `NO_PROXY=127.0.0.1,localhost`(代码里 `ensureLoopbackDirect()`
   已兜底,但 curl 排障时记得 `--noproxy '*'`)。
@@ -1051,8 +1065,10 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
 2. `npm run probe` 全绿(内核裁判在场);
 3. 网关连通:发一个最小任务,确认首回合不是空转
    (429/网关错误会如实落 failed + detail,不会假 completed);
-4. 适配层自检通过，管理员「部署自检」确认通知链接、MR/流水线连接均为
-   内网可访问地址；「统一任务容器」必须为 ok，并显示不可变镜像 digest，
+4. 适配层自检通过，管理员「部署自检」确认「Linux 部署」与 MR/流水线
+   能力均为 ok；容器部署时服务必须直接接收停止信号（PID 1），建议用
+   `exec node --import tsx src/serve.ts …` 或直接运行编译后的 JS，不要让
+   npm / tsx 启动器隔一层；「统一任务容器」也必须为 ok，并显示不可变镜像 digest，
    该项会在 bind-mounted 工作区真实写文件并编译 Java/C++，逐项写读删
    Maven/npm/ccache/XDG 缓存，检查 Node/Maven 后确认容器销毁;
 5. 一单真需求走到 `await_merge`,MR 出现在真平台上；核对

@@ -37,6 +37,59 @@ const ANCHOR_TEXT: Record<AnchorCheck["state"], string> = {
   ambiguous: "存在多个匹配位置",
 };
 
+export interface AdminOverrideAccess {
+  canDrop: boolean;
+  canVerify: boolean;
+}
+
+/** 管理员旁路必须同时满足服务端下发的“当前复检”白名单和页面阶段事实。
+ * 缺少任一事实时默认关闭，不能把历史意见、草稿或自己的意见暴露为代办。 */
+export function adminOverrideAccess({
+  item,
+  viewerUsername,
+  canOverride,
+  reviewReady,
+  reviewAnnotationIds,
+}: {
+  item: Annotation;
+  viewerUsername: string;
+  canOverride: boolean;
+  reviewReady: boolean;
+  reviewAnnotationIds: readonly string[];
+}): AdminOverrideAccess {
+  const currentPending = canOverride
+    && reviewReady
+    && item.author !== viewerUsername
+    && item.status === "sent"
+    && reviewAnnotationIds.includes(item.id);
+  const currentResponse = item.response?.revision === (item.rework ?? 0);
+  return {
+    canDrop: currentPending,
+    canVerify: currentPending
+      && currentResponse
+      && item.response?.outcome !== "needs_clarification",
+  };
+}
+
+export type AdminOverrideAction = "drop" | "verify";
+
+export interface AdminOverrideArm {
+  annotationId: string;
+  action: AdminOverrideAction;
+}
+
+/** 首次点击只武装；只有同一条意见上的同一动作再次点击才真正执行。 */
+export function advanceAdminOverrideArm(
+  current: AdminOverrideArm | undefined,
+  annotationId: string,
+  action: AdminOverrideAction,
+): { execute: boolean; arm: AdminOverrideArm | undefined } {
+  if (current?.annotationId === annotationId && current.action === action) {
+    return { execute: true, arm: undefined };
+  }
+  return { execute: false, arm: { annotationId, action } };
+}
+
 /** 一条批注此刻处在哪。检视闭环的五站:
  * 待提交 → 已提交 → 已被改动·请你确认 → 确认通过 / 返工(回到待提交)。 */
 function progressOf(item: Annotation, check?: AnchorCheck): {
@@ -45,8 +98,13 @@ function progressOf(item: Annotation, check?: AnchorCheck): {
   hint?: string;
 } {
   if (item.status === "verified") {
-    return { tone: "done", text: "确认通过",
-             hint: "你已确认这处改动符合要求。" };
+    const proxyVerifier = item.verified_by && item.verified_by !== item.author
+      ? item.verified_by : undefined;
+    return proxyVerifier
+      ? { tone: "done", text: "管理员代确认",
+          hint: `由管理员 ${proxyVerifier} 代替批注作者 ${item.author} 确认。` }
+      : { tone: "done", text: "确认通过",
+          hint: "意见作者已确认这处改动符合要求。" };
   }
   if (item.status !== "sent") {
     return item.rework
@@ -63,7 +121,11 @@ function progressOf(item: Annotation, check?: AnchorCheck): {
 }
 
 function deliveryText(item: Annotation): string {
-  if (item.status === "verified") return "已确认";
+  if (item.status === "verified") {
+    return item.verified_by && item.verified_by !== item.author
+      ? `管理员 ${item.verified_by} 代确认`
+      : "意见作者已确认";
+  }
   if (item.status !== "sent") return "尚未提交";
   if (item.sent_via === "decision") return "通过审批提交";
   if (item.sent_via === "pipeline_evidence") return "作为流水线证据提交";
@@ -78,8 +140,10 @@ export function AnnotationPanel({
   checks,
   reply,
   canOperate,
+  canOverride = false,
   taskStatus,
   reviewReady = false,
+  reviewAnnotationIds = [],
   mergeRequestOpen,
   evidenceAwaiting = false,
   onChanged,
@@ -89,14 +153,18 @@ export function AnnotationPanel({
   viewerUsername: string;
   items: Annotation[];
   checks: AnchorCheck[];
-  /** 最后一批送出后 AI 的原话。不做逐条对应——配错了比不显示更害人。 */
+  /** 旧任务的总体回复兼容展示；新检视以每条 response 为权威。 */
   reply?: { texts: string[]; truncated: boolean };
   canOperate: boolean;
+  /** 管理员应急旁路:作者不在场时可代删/代确认,服务端会记录操作人。 */
+  canOverride?: boolean;
   /** 点一条回到材料里那一行——改批注前人几乎总要再看一眼上下文。 */
   onLocate?: (item: Annotation) => void;
   taskStatus: TaskStatus;
   /** 人工意见修复与 Build-Fix 都已完成，当前真的轮到意见作者裁决。 */
   reviewReady?: boolean;
+  /** 当前工作区复检仍待闭环的意见 ID；缺席时管理员旁路按关闭处理。 */
+  reviewAnnotationIds?: readonly string[];
   /** MR 已创建且未合入/关闭：没有活会话也能开启下一轮 review 修复。 */
   mergeRequestOpen: boolean;
   /** 流水线缺具体报错时，批注直接回灌证据并自动恢复，不需要活会话。 */
@@ -108,20 +176,50 @@ export function AnnotationPanel({
   const [editingNote, setEditingNote] = useState("");
   const [mutationBusy, setMutationBusy] = useState("");
   const [error, setError] = useState("");
-  const drafts = items.filter((item) => item.status === "draft");
+  const [overrideArm, setOverrideArm] = useState<AdminOverrideArm>();
+  // 每个人只提交自己的草稿。其他人的草稿既不应被代交，也不能成为
+  // 暗中锁住任务的全局门禁。
+  const drafts = items.filter((item) =>
+    item.status === "draft" && item.author === viewerUsername);
   const myReviewCount = items.filter((item) =>
     item.status === "sent" && item.author === viewerUsername).length;
+  const overrideReviewCount = items.filter((item) => adminOverrideAccess({
+    item,
+    viewerUsername,
+    canOverride,
+    reviewReady,
+    reviewAnnotationIds,
+  }).canDrop).length;
   const [open, setOpen] = useState(drafts.length > 0
-    || (reviewReady && myReviewCount > 0));
+    || (reviewReady && (myReviewCount > 0 || overrideReviewCount > 0)));
   const running = taskStatus === "running";
   const reviewSendable = mergeRequestOpen && [
     "queued", "running", "verifying", "await_merge", "failed",
   ].includes(taskStatus);
-  const canSend = running || evidenceAwaiting || reviewSendable;
+  // 等决定期间也能提交:服务端把意见先记成团队事实(阻塞放行),正文
+  // 随下一次决定送达。检视人(批注作者≠决定人)在这窗口里从此有合法
+  // 路径,不再依赖"责任人替你带上"的假承诺(MFC-022)。
+  const queueable = taskStatus === "waiting_for_human";
+  const canSend = running || evidenceAwaiting || reviewSendable || queueable;
+  const reviewScopeKey = (reviewReady ? "ready:" : "closed:")
+    + reviewAnnotationIds.join("\u0000");
 
   useEffect(() => {
-    if (drafts.length > 0 || (reviewReady && myReviewCount > 0)) setOpen(true);
-  }, [drafts.length, myReviewCount, reviewReady]);
+    if (drafts.length > 0
+        || (reviewReady && (myReviewCount > 0 || overrideReviewCount > 0))) {
+      setOpen(true);
+    }
+  }, [drafts.length, myReviewCount, overrideReviewCount, reviewReady]);
+
+  useEffect(() => {
+    setOverrideArm(undefined);
+  }, [taskId, reviewScopeKey]);
+
+  useEffect(() => {
+    if (!overrideArm) return;
+    const timer = window.setTimeout(() => setOverrideArm(undefined), 6000);
+    return () => window.clearTimeout(timer);
+  }, [overrideArm]);
 
   if (!items.length) return null;
   const checkOf = (id: string) => checks.find((check) => check.id === id);
@@ -130,10 +228,53 @@ export function AnnotationPanel({
     if (busy) return;
     setBusy(true);
     setError("");
-    const result = await sendAnnotations(taskId);
+    const result = await sendAnnotations(taskId, drafts.map((item) => item.id));
     setBusy(false);
     if (result.error) setError(result.error);
     onChanged();
+  }
+
+  async function mutateAnnotation(
+    annotationId: string,
+    operation: () => Promise<{ error?: string }>,
+  ) {
+    if (mutationBusy) return;
+    setMutationBusy(annotationId);
+    setError("");
+    try {
+      const result = await operation();
+      if (result.error) setError(result.error);
+      onChanged();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setMutationBusy("");
+      setOverrideArm(undefined);
+    }
+  }
+
+  async function requestAdminOverride(
+    item: Annotation,
+    action: AdminOverrideAction,
+  ) {
+    const access = adminOverrideAccess({
+      item,
+      viewerUsername,
+      canOverride,
+      reviewReady,
+      reviewAnnotationIds,
+    });
+    if (action === "drop" ? !access.canDrop : !access.canVerify) {
+      setOverrideArm(undefined);
+      setError("这条意见已不属于当前复检，管理员代办已取消；请刷新后再检查。");
+      return;
+    }
+    const next = advanceAdminOverrideArm(overrideArm, item.id, action);
+    setOverrideArm(next.arm);
+    if (!next.execute) return;
+    await mutateAnnotation(item.id, action === "drop"
+      ? () => dropAnnotation(taskId, item.id)
+      : () => judgeAnnotation(taskId, item.id, "verify"));
   }
 
   return (
@@ -158,6 +299,13 @@ export function AnnotationPanel({
           请看最新代码后，逐条选择“确认已修复”或“仍需调整”；没有全部闭环前不会推送。
         </div>
       )}
+      {overrideReviewCount > 0 && (
+        <div className="annot-panel-note admin-override" role="note">
+          当前复检有 {overrideReviewCount} 条他人意见仍待作者闭环。
+          仅在作者不在场时使用管理员代办；第一次点击只会进入确认，
+          必须再次点击才会执行，结果会显示实际管理员。
+        </div>
+      )}
       {canOperate && drafts.length > 0 && canSend && (
         <div className="annot-panel-actions">
           <button type="button" className="primary" disabled={busy}
@@ -165,19 +313,21 @@ export function AnnotationPanel({
             {busy ? "提交中…" : reviewSendable
               ? `提交 ${drafts.length} 条并继续修改`
               : evidenceAwaiting ? `回灌 ${drafts.length} 条报错`
+                : queueable ? `提交 ${drafts.length} 条（随决定送达）`
                 : `提交 ${drafts.length} 条批注`}
           </button>
           {reviewSendable && (
             <p>继续使用当前分支和 MR；Agent 修改并提交后，系统会重新跑验证。MR 合入前可以反复提交。</p>
+          )}
+          {queueable && !reviewSendable && (
+            <p>任务正等一张决定卡。提交后意见立即成为待闭环事实（阻止直接放行），正文会随下一次决定一起交给 Agent。</p>
           )}
         </div>
       )}
 
       {canOperate && drafts.length > 0 && !canSend && (
         <p className="annot-panel-note">
-          {taskStatus === "waiting_for_human"
-            ? `有 ${drafts.length} 条批注已保存。Agent 正等你的当前决定，提交决定时会把这些批注一并送达。`
-            : taskStatus === "paused" || taskStatus === "pausing"
+          {taskStatus === "paused" || taskStatus === "pausing"
               ? `有 ${drafts.length} 条批注已保存。恢复任务后即可交给 Agent 继续修改。`
               : taskStatus === "completed"
                 ? "MR 已合入，任务已经结束；这些批注只保留为本地记录，不会再触发修改。"
@@ -196,6 +346,17 @@ export function AnnotationPanel({
           const progress = progressOf(item, check);
           const isAuthor = item.author === viewerUsername;
           const editing = editingId === item.id;
+          const overrideAccess = adminOverrideAccess({
+            item,
+            viewerUsername,
+            canOverride,
+            reviewReady,
+            reviewAnnotationIds,
+          });
+          const dropArmed = overrideArm?.annotationId === item.id
+            && overrideArm.action === "drop";
+          const verifyArmed = overrideArm?.annotationId === item.id
+            && overrideArm.action === "verify";
           return (
             <li key={item.id} className={`annot-item ${progress.tone}`}>
               <div className="annot-item-head">
@@ -241,49 +402,116 @@ export function AnnotationPanel({
                 </div>
               ) : <p className="annot-note">{item.note}</p>}
               <blockquote className="annot-anchor"><span>针对</span>{item.anchor}</blockquote>
+              {item.response && (
+                <div className={`annot-response ${item.response.outcome}`}>
+                  <strong>{item.response.outcome === "fixed"
+                    ? "Agent：已处理"
+                    : item.response.outcome === "not_fixed"
+                      ? "Agent：没有修改"
+                      : "Agent：需要你补充说明"}</strong>
+                  <p>{item.response.summary}</p>
+                  {item.response.evidence.length > 0 && (
+                    <small>依据：{item.response.evidence.join("；")}</small>
+                  )}
+                  {item.response.fixed_sha && (
+                    <small>对应提交：{item.response.fixed_sha.slice(0, 12)}</small>
+                  )}
+                </div>
+              )}
               <div className="annot-item-foot">
                 <small>
-                  {deliveryText(item)} · {item.author} · {relativeTime(item.created_at)}
+                  {deliveryText(item)} · 批注作者 {item.author} · {relativeTime(item.created_at)}
                   {item.edited_at && " · 已编辑"}
                   {check && check.state !== "hit"
                     && ` · ${ANCHOR_TEXT[check.state]}`}
                 </small>
-                {isAuthor && !editing && (
+                {(isAuthor || overrideAccess.canDrop) && !editing && (
                   <span className="annot-owner-actions">
-                    <button type="button" className="ghost"
+                    {isAuthor && <button type="button" className="ghost"
                             disabled={!!mutationBusy}
                             onClick={() => {
                               setEditingId(item.id);
                               setEditingNote(item.note);
-                            }}>编辑</button>
-                    <button type="button" className="ghost danger"
-                            disabled={!!mutationBusy} onClick={async () => {
-                      setMutationBusy(item.id);
-                      setError("");
-                      const result = await dropAnnotation(taskId, item.id);
-                      setMutationBusy("");
-                      if (result.error) setError(result.error);
-                      onChanged();
-                    }}>删除</button>
+                            }}>编辑</button>}
+                    {isAuthor ? (
+                      <button type="button" className="ghost danger"
+                              disabled={!!mutationBusy}
+                              onClick={() => void mutateAnnotation(item.id,
+                                () => dropAnnotation(taskId, item.id))}>
+                        删除
+                      </button>
+                    ) : (
+                      <>
+                        <button type="button" className="ghost danger"
+                                aria-pressed={dropArmed}
+                                title={dropArmed
+                                  ? `再次点击后，将由 ${viewerUsername} 代 ${item.author} 删除`
+                                  : `先进入确认，再由 ${viewerUsername} 代 ${item.author} 删除`}
+                                disabled={!!mutationBusy}
+                                onClick={() => void requestAdminOverride(item, "drop")}>
+                          {dropArmed ? "再次点击确认代删" : "管理员代删"}
+                        </button>
+                        {dropArmed && (
+                          <button type="button" className="ghost"
+                                  disabled={!!mutationBusy}
+                                  onClick={() => setOverrideArm(undefined)}>
+                            取消代办
+                          </button>
+                        )}
+                      </>
+                    )}
                   </span>
                 )}
                 {/* 检视闭环的裁决:提过的意见不能停在"请你确认"没有下文。
                     通过=收口;返工=退回待提交,下一次提交再送给 AI。 */}
                 {item.status === "sent" && isAuthor && !editing
-                  && reviewReady && (
+                  && reviewReady && item.response?.outcome === "needs_clarification" && (
                   <span className="annot-verdict">
                     <button type="button" className="ghost"
-                            disabled={!!mutationBusy} onClick={async () => {
-                      const result = await judgeAnnotation(taskId, item.id, "reopen");
-                      if (result.error) setError(result.error);
-                      onChanged();
-                    }}>仍需调整</button>
-                    <button type="button" className="approve"
-                            disabled={!!mutationBusy} onClick={async () => {
-                      const result = await judgeAnnotation(taskId, item.id, "verify");
-                      if (result.error) setError(result.error);
-                      onChanged();
-                    }}>确认已修复</button>
+                            disabled={!!mutationBusy}
+                            onClick={() => {
+                              setEditingId(item.id);
+                              setEditingNote(item.note);
+                            }}>补充说明后重提</button>
+                  </span>
+                )}
+                {item.status === "sent" && (isAuthor || overrideAccess.canVerify) && !editing
+                  && reviewReady && item.response
+                  && item.response.outcome !== "needs_clarification" && (
+                  <span className="annot-verdict">
+                    {isAuthor && <button type="button" className="ghost"
+                            disabled={!!mutationBusy}
+                            onClick={() => void mutateAnnotation(item.id,
+                              () => judgeAnnotation(taskId, item.id, "reopen"))}>
+                      仍需调整
+                    </button>}
+                    {isAuthor ? (
+                      <button type="button" className="approve"
+                              disabled={!!mutationBusy}
+                              onClick={() => void mutateAnnotation(item.id,
+                                () => judgeAnnotation(taskId, item.id, "verify"))}>
+                        确认已修复
+                      </button>
+                    ) : (
+                      <>
+                        <button type="button" className="approve"
+                                aria-pressed={verifyArmed}
+                                title={verifyArmed
+                                  ? `再次点击后，将由 ${viewerUsername} 代 ${item.author} 确认`
+                                  : `先进入确认，再由 ${viewerUsername} 代 ${item.author} 确认`}
+                                disabled={!!mutationBusy}
+                                onClick={() => void requestAdminOverride(item, "verify")}>
+                          {verifyArmed ? "再次点击确认代确认" : "管理员代确认"}
+                        </button>
+                        {verifyArmed && (
+                          <button type="button" className="ghost"
+                                  disabled={!!mutationBusy}
+                                  onClick={() => setOverrideArm(undefined)}>
+                            取消代办
+                          </button>
+                        )}
+                      </>
+                    )}
                   </span>
                 )}
               </div>
@@ -313,7 +541,7 @@ export function AnnotationPanel({
           {reply.texts.map((text, at) => (
             <blockquote key={at}>{text}</blockquote>
           ))}
-          {reply.truncated && <p className="annot-reply-note">(太长截断,完整内容见执行动态)</p>}
+          {reply.truncated && <p className="annot-reply-note">(太长截断,完整内容见“执行现场”)</p>}
         </details>
       )}
     </details>

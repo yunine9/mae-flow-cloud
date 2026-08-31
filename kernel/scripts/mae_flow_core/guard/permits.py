@@ -73,7 +73,7 @@ def strike_escalation(
         "  1) 用 AskUserQuestion 把本次动作和风险摆给用户,"
         "**问题正文里原样带上编号 %s**(选项照旧简短,如「允许」「不允许」);\n"
         "  2) messages 取到那条回答的 ID;\n"
-        "  3) python \"%s\" allow %s --message-id <ID>。\n"
+        "  3) python3 \"%s\" allow %s --message-id <ID>。\n"
         "验真只看两条:这条回答里有本次编号、且不是拒绝——不必让用户复述路径,"
         "也不要替他补写或概括。放行只对这个动作生效一次,绑定当前步骤与代码版本;"
         "Git exact 授权消费后会留下 delivery 收据,push/done 不会重复否定。"

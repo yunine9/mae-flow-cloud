@@ -29,6 +29,8 @@ export interface TaskFocus {
 interface FocusTask {
   status: string;
   detail?: string;
+  /** 开发助手正占有主现场:此时"恢复"是死路,要指去交还入口。 */
+  assistant_engaged?: boolean;
   /** 执行队列位次(1 起,投影字段):排队真相必须压过陈旧 detail。 */
   queue_position?: number;
   blocked_by?: string[];
@@ -52,7 +54,11 @@ interface FocusTask {
       state?: "running" | "recovering" | "interrupted" | "stopped" | "idle";
       message?: string;
     };
-    loop?: { state?: string; round?: number; max?: number; diagnosis?: string };
+    loop?: {
+      state?: string; round?: number; max?: number; diagnosis?: string;
+      /** review=本地检视返工;ci=流水线修复。播报必须分清(MFC-023)。 */
+      kind?: string;
+    };
   };
 }
 
@@ -74,12 +80,6 @@ function focus(
   };
 }
 
-function repairRound(task: FocusTask): string {
-  const loop = task.delivery?.loop;
-  if (!loop?.round) return "";
-  return `（第 ${loop.round}${loop.max !== undefined ? `/${loop.max}` : ""} 轮）`;
-}
-
 /** 从服务端已有事实生成唯一的扫读口径；任何未知状态都安全降级。 */
 export function projectTaskFocus(task: FocusTask): TaskFocus {
   const delivery = task.delivery;
@@ -98,16 +98,34 @@ export function projectTaskFocus(task: FocusTask): TaskFocus {
     );
   }
   if (task.status === "failed") {
+    const detail = task.detail?.trim() || "任务执行失败";
+    // 克隆/初始化期的失败是下单配置问题(仓库地址、基线分支、单号…),
+    // "处理后重跑"重跑一百次也一样——出路是修正信息重新下单(MFC-025)。
+    // 判据:任务从未产生过流程进度(progress 只有内核跑起来才有)。
+    const neverStarted = !task.progress
+      || (!task.progress.current_phase && !task.progress.step);
     return focus(
       "blocked",
-      task.detail?.trim() || "任务执行失败",
-      "查看失败现场，处理后重跑",
+      detail,
+      neverStarted
+        ? "多为下单配置问题(仓库/分支/单号):修正后重新发起任务"
+        : "查看失败现场，处理后重跑",
       "responsible",
       95,
       true,
     );
   }
   if (task.status === "paused") {
+    if (task.assistant_engaged) {
+      return focus(
+        "blocked",
+        "开发助手正在接管代码现场，主任务已安全暂停",
+        "在「开发协作」面板完成工作并「交还主任务」后自动继续",
+        "responsible",
+        90,
+        true,
+      );
+    }
     return focus(
       "blocked",
       "任务已暂停，现场已经保留",
@@ -160,12 +178,20 @@ export function projectTaskFocus(task: FocusTask): TaskFocus {
     return focus("done", "交付已经完成", "可在交付历史中复盘", "none", 5);
   }
   if (task.status === "await_merge") {
+    const waiting = delivery?.waiting_on?.trim();
+    const closed = delivery?.mr_state === "已关闭"
+      || /MR 已关闭/.test(waiting ?? "");
     return focus(
-      "external",
-      delivery?.mr_state ? `合入请求：${delivery.mr_state}` : "验证通过，等待合入",
-      "在 CodeHub 完成检视与合入",
+      "human_action",
+      waiting || (closed ? "MR 已关闭，任务仍在等待处理"
+        : delivery?.mr_state ? `合入请求：${delivery.mr_state}`
+          : "验证通过，等待合入"),
+      closed
+        ? "重新打开 MR 继续推进，或主动停止任务"
+        : "打开 MR 完成检视、审批与合入",
       "responsible",
-      20,
+      closed ? 94 : 82,
+      true,
     );
   }
   if (task.status === "pausing") {
@@ -178,9 +204,20 @@ export function projectTaskFocus(task: FocusTask): TaskFocus {
     );
   }
   if (loop?.state === "repairing") {
+    // kind=review 是本地检视返工:代码还没推,没有任何流水线在跑。
+    // 曾经不看 kind,团队总览把检视返工播成"修复流水线问题"(MFC-023)。
+    if (loop.kind === "review") {
+      return focus(
+        "machine",
+        "Agent 正在按检视意见修改",
+        "修改完成并通过 Build-Fix 后重新出检视卡",
+        "agent",
+        60,
+      );
+    }
     return focus(
       "machine",
-      `Agent 正在修复流水线问题${repairRound(task)}`,
+      "Agent 正在修复流水线问题",
       "产生新提交后自动重新验证",
       "agent",
       60,

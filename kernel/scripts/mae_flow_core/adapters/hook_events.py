@@ -65,12 +65,12 @@ class HookEventAdapter:
         elif os.path.isfile(self.action_state):
             print(
                 "[mae-flow] ⚠ 独立任务状态损坏，Hook 已按 fail-open 放行普通开发。"
-                "执行 `python \".mae-flow-work/bin/mae-flow.py\" action cancel` "
+                "执行 `python3 \".mae-flow-work/bin/mae-flow.py\" action cancel` "
                 "可保存坏现场并清理控制指针。")
         else:
             print(
                 "[mae-flow] ⚠ 退出标记损坏，Hook 已按 fail-open 放行普通开发。"
-                "执行 `python \".mae-flow-work/bin/mae-flow.py\" doctor` "
+                "执行 `python3 \".mae-flow-work/bin/mae-flow.py\" doctor` "
                 "查看现场；不要直接删除文件。")
         if os.path.isfile(self.state):
             return self._invoke(
@@ -108,11 +108,11 @@ class HookEventAdapter:
         if bridge:
             print("[mae-flow] 转发壳已就位: .mae-flow-work/bin/mae-flow.py。"
                   "首次开工直接执行:\n"
-                  '  python ".mae-flow-work/bin/mae-flow.py" init')
+                  '  python3 ".mae-flow-work/bin/mae-flow.py" init')
             return
         print("[mae-flow] ⚠ 转发壳写入失败(权限或只读目录?)。本次用插件入口"
               "的绝对路径顶上:\n"
-              '  python "%s" init\n'
+              '  python3 "%s" init\n'
               "这不该经常出现;若反复出现,检查项目目录的写权限。"
               % plugin_entry_path())
 

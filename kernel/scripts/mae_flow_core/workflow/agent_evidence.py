@@ -46,7 +46,7 @@ class AgentEvidenceRules:
             prefix
             + "如果无法补齐证据但希望承担风险继续，可把以下风险原样展示给用户并让用户明确选择："
             + risk
-            + "。用户确认承担风险后执行: python \""
+            + "。用户确认承担风险后执行: python3 \""
             + os.path.abspath(self.ports.script_path())
             + "\" accept-risk "
             + kind.lower()

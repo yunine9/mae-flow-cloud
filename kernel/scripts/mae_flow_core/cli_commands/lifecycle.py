@@ -264,7 +264,7 @@ def cmd_exit(flow, st, args):
         print("\n直接发送 `/mae-flow:mae-flow exit` 即可退出，UserPromptSubmit Hook 会把该用户事件作为授权，"
               "不再要求二次确认。")
         print("若 Hook 已损坏，请用户在真实终端手动执行：")
-        print('python "%s" exit --interactive --reason "切换为普通开发"'
+        print('python3 "%s" exit --interactive --reason "切换为普通开发"'
               % os.path.abspath(sys.argv[0]))
         return
 

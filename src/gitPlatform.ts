@@ -82,6 +82,10 @@ export class FakeGitPlatform {
   nextPipelineChecks?: PipelineCheck[];
   /** 检视讨论(测试注入 seedDiscussion;修复闭环回复+resolve 落这里)。 */
   readonly discussions: Discussion[] = [];
+  /** 故障注入：指定讨论的接下来 N 次回复返回失败。 */
+  readonly discussionReplyFailures = new Map<string, number>();
+  /** 假平台也兑现幂等键，覆盖“远端成功、本地来不及记账”的重放窗。 */
+  private readonly discussionReplyIdempotency = new Set<string>();
   /** 冲突门禁:true=conflict_passed 不过(真件由平台判,假件测试拨)。 */
   conflictGate = false;
   /** 等人类门禁覆盖(approvers_passed 等):不设=通过。
@@ -155,7 +159,53 @@ export class FakeGitPlatform {
         try {
           const replyMatch = url.pathname.match(
             /^\/mr\/discussions\/([^/]+)\/reply$/);
-          if (request.method === "POST" && url.pathname === "/mr") {
+          // 浏览器可达的 MR 页面与合入按钮(MFC-005):任务卡上的 mr_url
+          // 点开曾是 404,整链 E2E 没法在浏览器里收口。页面只做最小
+          // 事实展示+合入表单;合入真实推进目标 ref,不是翻状态字段。
+          const pageMatch = url.pathname.match(/^\/mr\/(\d+)$/);
+          const mergeMatch = url.pathname.match(/^\/mr\/(\d+)\/merge$/);
+          if (request.method === "GET" && url.pathname === "/") {
+            reply(200, {
+              ok: true,
+              endpoints: [
+                "POST /mr",
+                "POST /pipeline/trigger",
+                "GET /pipeline/status?sha=&repo=",
+              ],
+            });
+          } else if (request.method === "GET" && pageMatch) {
+            const html = this.mergeRequestPage(Number(pageMatch[1]));
+            response
+              .writeHead(html ? 200 : 404,
+                { "content-type": "text/html; charset=utf-8" })
+              .end(html ?? "<h1>MR 不存在</h1>");
+          } else if (request.method === "POST" && mergeMatch) {
+            const outcome = this.mergeMergeRequest(Number(mergeMatch[1]));
+            if (outcome.ok) {
+              response.writeHead(303,
+                { location: `/mr/${mergeMatch[1]}` }).end();
+            } else {
+              // 浏览器点合入失败时人必须原地看到原因(MFC-037:裸 409
+              // JSON 在浏览器里就是白屏死路)。任务侧门禁与此同源,下一
+              // 拍监控会看到红灯并自动接手,页面把这条路说清楚。
+              response.writeHead(409,
+                { "content-type": "text/html; charset=utf-8" })
+                .end([
+                  "<!doctype html><html lang=\"zh-CN\"><head>",
+                  "<meta charset=\"utf-8\"><title>合入失败</title></head>",
+                  "<body style=\"font:14px/1.7 system-ui;max-width:640px;",
+                  "margin:40px auto;padding:0 16px\">",
+                  "<h1>合入失败</h1>",
+                  `<p style=\"color:#b3261e\">${String(outcome.error ?? "")
+                    .replace(/[&<>"]/g, (ch) => ({ "&": "&amp;",
+                      "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]!))}</p>`,
+                  "<p>任务侧门禁会在下一轮监控看到同样的红灯并自动派修复;",
+                  "也可回到 MR 页刷新门禁状态。</p>",
+                  `<p><a href=\"/mr/${mergeMatch[1]}\">返回 MR 页</a></p>`,
+                  "</body></html>",
+                ].join("\n"));
+            }
+          } else if (request.method === "POST" && url.pathname === "/mr") {
             reply(201, this.createMergeRequest(body));
           } else if (request.method === "GET" && url.pathname === "/mr") {
             reply(200, this.mergeRequests);
@@ -234,6 +284,7 @@ export class FakeGitPlatform {
    * 语义与真件对齐:名字用 CodeHub 原始拼写,passed 是布尔。 */
   private mergeGates(source: string, target: string): {
     mr_state: string;
+    sha: string;
     gates: Array<{ name: string; passed: boolean; detail?: string }>;
   } {
     const mr = this.mergeRequests.find(
@@ -249,11 +300,31 @@ export class FakeGitPlatform {
         ...(unresolved.length
           ? { detail: `${unresolved.length} 条检视意见未解决` } : {}),
       },
-      {
-        name: "conflict_passed",
-        passed: !this.conflictGate,
-        ...(this.conflictGate ? { detail: "与目标分支存在冲突" } : {}),
-      },
+      // 冲突门禁必须和真正 merge 用同一套事实(MFC-037:此前门禁读
+      // 测试布尔恒绿,点合入才在 Git 层撞 409,MFC 看见假绿永远不派
+      // 冲突修复)。这里用 bare 仓真实祖先关系判断能否快进;测试布尔
+      // 只保留"强拨红"一个方向,不能把真实冲突拨绿。
+      (() => {
+        let targetAdvanced = false;
+        try {
+          execFileSync("git", ["-C", this.barePath, "merge-base",
+            "--is-ancestor", mr.target_branch, mr.sha],
+            { encoding: "utf-8" });
+        } catch {
+          targetAdvanced = true;
+        }
+        const passed = !this.conflictGate
+          && (!targetAdvanced || mr.merge_state === "merged");
+        return {
+          name: "conflict_passed",
+          passed,
+          ...(passed ? {} : {
+            detail: this.conflictGate
+              ? "与目标分支存在冲突"
+              : "目标分支已前进且非快进,请先在任务侧合并目标分支再推送",
+          }),
+        };
+      })(),
       {
         name: "ci_state_passed",
         passed: lastRun?.status === "success",
@@ -264,7 +335,10 @@ export class FakeGitPlatform {
         name, passed,
       })),
     ];
-    return { mr_state: mr.merge_state, gates };
+    // sha 是门禁契约的一等公民(MFC-038):宿主要用它核对"平台上被
+    // 验证/合入的提交"确实等于任务验证过的 delivery.sha,防止分支被
+    // 平台侧改写后旧绿灯背书新代码。
+    return { mr_state: mr.merge_state, sha: mr.sha, gates };
   }
 
   private replyDiscussion(
@@ -273,14 +347,92 @@ export class FakeGitPlatform {
   ): { ok: boolean } {
     const discussion = this.discussions.find((item) => item.id === id);
     if (!discussion) throw new Error(`讨论 ${id} 不存在`);
+    const remaining = this.discussionReplyFailures.get(id) ?? 0;
+    if (remaining > 0) {
+      this.discussionReplyFailures.set(id, remaining - 1);
+      throw new Error(`讨论 ${id} 模拟回复失败`);
+    }
+    const idempotencyKey = String(body.idempotency_key ?? "").trim();
+    if (idempotencyKey && this.discussionReplyIdempotency.has(idempotencyKey)) {
+      return { ok: true };
+    }
     discussion.replies.push(String(body.body ?? ""));
+    if (idempotencyKey) this.discussionReplyIdempotency.add(idempotencyKey);
     if (body.resolve === true) discussion.resolved = true;
     return { ok: true };
+  }
+
+  failNextDiscussionReplies(id: string, count = 1): void {
+    this.discussionReplyFailures.set(id, Math.max(0, Math.trunc(count)));
   }
 
   /** 测试注入:种一条未解决的检视意见。 */
   seedDiscussion(input: Omit<Discussion, "resolved" | "replies">): void {
     this.discussions.push({ ...input, resolved: false, replies: [] });
+  }
+
+  /** MR 详情页(最小 HTML,零依赖):事实 + 合入按钮。 */
+  private mergeRequestPage(id: number): string | undefined {
+    const mr = this.mergeRequests.find((item) => item.id === id);
+    if (!mr) return undefined;
+    const gates = this.mergeGates(mr.source_branch, mr.target_branch).gates;
+    const blocked = gates.filter((gate) => !gate.passed);
+    const esc = (value: string) => value.replace(/[&<>"]/g, (ch) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]!));
+    return [
+      "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">",
+      `<title>MR !${mr.id} · ${esc(mr.title)}</title>`,
+      "<style>body{font:14px/1.7 system-ui;max-width:640px;margin:40px auto;padding:0 16px}",
+      "code{background:#f2f2f4;padding:1px 5px;border-radius:4px}",
+      "button{padding:8px 20px;font-size:14px;cursor:pointer}",
+      ".ok{color:#0a7a3d}.bad{color:#b3261e}</style></head><body>",
+      `<h1>MR !${mr.id} ${esc(mr.title)}</h1>`,
+      `<p><code>${esc(mr.source_branch)}</code> → `
+        + `<code>${esc(mr.target_branch)}</code> · SHA `
+        + `<code>${esc(mr.sha.slice(0, 12))}</code></p>`,
+      `<p>状态:<b>${mr.merge_state === "merged" ? "已合入"
+        : mr.merge_state === "closed" ? "已关闭" : "在途"}</b></p>`,
+      "<ul>",
+      ...gates.map((gate) => `<li class=\"${gate.passed ? "ok" : "bad"}\">`
+        + `${gate.passed ? "✔" : "✘"} ${esc(gate.name)}`
+        + `${gate.detail ? ` — ${esc(gate.detail)}` : ""}</li>`),
+      "</ul>",
+      mr.merge_state === "opened"
+        ? (blocked.length
+            ? `<p class=\"bad\">${blocked.length} 项门禁未过,不能合入。</p>`
+            : `<form method=\"post\" action=\"/mr/${mr.id}/merge\">`
+              + "<button type=\"submit\">合入</button></form>")
+        : "",
+      "</body></html>",
+    ].join("\n");
+  }
+
+  /** 浏览器合入:门禁全绿才放行,真实快进目标 ref 再翻状态——
+   * 交付事实来自远端真实状态,假件也不许只翻字段。 */
+  private mergeMergeRequest(id: number): { ok: boolean; error?: string } {
+    const mr = this.mergeRequests.find((item) => item.id === id);
+    if (!mr) return { ok: false, error: `MR ${id} 不存在` };
+    if (mr.merge_state !== "opened") {
+      return { ok: false, error: `MR ${id} 已是 ${mr.merge_state}` };
+    }
+    const blocked = this.mergeGates(mr.source_branch, mr.target_branch)
+      .gates.filter((gate) => !gate.passed);
+    if (blocked.length) {
+      return { ok: false,
+        error: `门禁未过: ${blocked.map((gate) => gate.name).join("、")}` };
+    }
+    try {
+      execFileSync("git", ["-C", this.barePath, "merge-base",
+        "--is-ancestor", mr.target_branch, mr.sha], { encoding: "utf-8" });
+    } catch {
+      return { ok: false,
+        error: "目标分支已前进且非快进,请先在任务侧合并目标分支再推送" };
+    }
+    git(this.barePath, "update-ref",
+      `refs/heads/${mr.target_branch}`, mr.sha);
+    mr.merge_state = "merged";
+    mr.state = "等待合入" as MergeRequest["state"];
+    return { ok: true };
   }
 
   /** 测试裁定:平台侧把 MR 合入/关闭(审批人点了按钮)。 */

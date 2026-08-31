@@ -258,7 +258,8 @@ test("HTTP 登录:开发看全部任务,创建归自己,不能操作别人任务
     });
     assert.equal(collaborate.status, 200,
       "受邀开发者可以进入同一个主任务和 AI 讨论");
-    assert.match(steered, /跨仓协作 · alice.*接口字段还需要一起确认/);
+    assert.match(steered, /协作者 alice 插话.*接口字段还需要一起确认/,
+      "插话前缀只标身份;\"跨仓协作\"标签曾污染单仓任务的交付件(MFC-021)");
     const collaboratorCannotInvite = await fetch(
       `${base}/tasks/${cross.id}/collaborators`, {
         method: "PUT", headers: { cookie: alice },

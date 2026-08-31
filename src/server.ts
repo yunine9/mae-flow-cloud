@@ -47,6 +47,7 @@
  *   GET  /tasks/:id/warmup/events                       → SSE:环境预热编译实时事件
  *   GET  /tasks/:id/timeline                            → 人话交付时间线(只读现场)
  *   GET  /tasks/:id/activity                            → 行为摘要:此刻在干嘛/分段折叠/异常信号
+ *   GET  /tasks/:id/push-review-diff?scope=changes|full → 当前 push 检视比较(只读)
  *   GET  /tasks/:id/artifacts[/:name]                   → 检视产物清单/内容(只读现场)
  *
  * Web 不自行推断状态:详情与列表只是 TaskService 状态的镜像,
@@ -232,6 +233,13 @@ function readRawBody(
   });
 }
 
+/** 校验/领域错误给人看:取 message,剥掉嵌套 "Error: " 前缀。
+ * 用户曾直面 "Error: 密码至少需要 10 个字符"(MFC-018.1)。 */
+function humanError(error: unknown): string {
+  const text = error instanceof Error ? error.message : String(error);
+  return text.replace(/^(Error:\s*)+/, "");
+}
+
 function json(
   response: import("node:http").ServerResponse,
   status: number,
@@ -373,7 +381,7 @@ export function createTaskServer(
         try {
           rawBody = await readRawBody(request);
         } catch (error) {
-          return json(response, 413, { error: String(error) });
+          return json(response, 413, { error: humanError(error) });
         }
         const first = (value: string | string[] | undefined) =>
           Array.isArray(value) ? value[0] : value;
@@ -438,12 +446,15 @@ export function createTaskServer(
             request.socket.remoteAddress ?? "unknown",
           );
           if (result.blockedForMs) {
-            response.setHeader(
-              "retry-after",
-              String(Math.ceil(result.blockedForMs / 1000)),
-            );
+            const seconds = Math.ceil(result.blockedForMs / 1000);
+            response.setHeader("retry-after", String(seconds));
+            // 锁多久要说清:服务端明明算了时长,前端不读 header,
+            // 用户只看到"稍后"干等(MFC-031)。时长直接进文案。
+            const wait = seconds >= 60
+              ? `${Math.ceil(seconds / 60)} 分钟` : `${seconds} 秒`;
             return json(response, 429, {
-              error: "登录失败次数过多，请稍后再试",
+              error: `登录失败次数过多，请约 ${wait} 后再试`,
+              retry_after_s: seconds,
             });
           }
           if (!result.user) {
@@ -529,7 +540,7 @@ export function createTaskServer(
                 ? undefined : String(body.git_email),
             );
           } catch (error) {
-            return json(response, 400, { error: String(error) });
+            return json(response, 400, { error: humanError(error) });
           }
           return json(response, 200,
             options.auth!.gitProfile(viewer.username));
@@ -546,7 +557,7 @@ export function createTaskServer(
             options.auth!.setLubanToken(
               viewer.username, String(body.token ?? ""));
           } catch (error) {
-            return json(response, 400, { error: String(error) });
+            return json(response, 400, { error: humanError(error) });
           }
           return json(response, 200, {
             luban_token_hint: options.auth!.lubanTokenHint(viewer.username),
@@ -575,7 +586,7 @@ export function createTaskServer(
               );
               return json(response, 201, user);
             } catch (error) {
-              return json(response, 400, { error: String(error) });
+              return json(response, 400, { error: humanError(error) });
             }
           }
           if (request.method === "PUT" && parts.length === 4
@@ -586,7 +597,7 @@ export function createTaskServer(
                 decodeURIComponent(parts[2]), body.on === true);
               return json(response, 200, user);
             } catch (error) {
-              return json(response, 400, { error: String(error) });
+              return json(response, 400, { error: humanError(error) });
             }
           }
           // 内部平台的管理员特权(用户拍板:内网自用,不要自助找回那
@@ -600,7 +611,7 @@ export function createTaskServer(
                 decodeURIComponent(parts[2]), String(body.password ?? ""));
               return json(response, 200, { ok: true });
             } catch (error) {
-              return json(response, 400, { error: String(error) });
+              return json(response, 400, { error: humanError(error) });
             }
           }
           if (request.method === "DELETE" && parts.length === 3) {
@@ -609,7 +620,7 @@ export function createTaskServer(
                 decodeURIComponent(parts[2]), viewer.username);
               return json(response, 200, { ok: true });
             } catch (error) {
-              return json(response, 400, { error: String(error) });
+              return json(response, 400, { error: humanError(error) });
             }
           }
         }
@@ -683,6 +694,11 @@ export function createTaskServer(
                 configured: !!modelSpec.baseUrl && !!modelSpec.apiKey && !!model,
                 url: modelSpec.baseUrl ? String(modelSpec.baseUrl) : undefined,
                 model: model || undefined,
+                // 协议随默认配置一并下发:健康检查必须按部署真实协议
+                // 测,不能 UI 默认 openai、部署实际 anthropic——同一份
+                // 配置一边假绿一边假红(MFC-011)。
+                api: modelSpec.api === "anthropic-messages"
+                  ? "anthropic-messages" : "openai-completions",
                 vision: {
                   configured: !!visionChoice?.model && !!visionSpec.baseUrl
                     && !!visionSpec.apiKey,
@@ -837,7 +853,7 @@ export function createTaskServer(
             account: viewer?.username,
           }));
         } catch (error) {
-          return json(response, 400, { error: String(error) });
+          return json(response, 400, { error: humanError(error) });
         }
       }
 
@@ -946,7 +962,7 @@ export function createTaskServer(
             workflowDefinition,
           }));
         } catch (error) {
-          return json(response, 400, { error: String(error) });
+          return json(response, 400, { error: humanError(error) });
         }
       }
       if (parts[0] === "repository-profiles") {
@@ -1666,7 +1682,7 @@ export function createTaskServer(
             return json(response, 200,
               service.completeReview(decodeURIComponent(parts[1]), viewer.username));
           } catch (error) {
-            return json(response, 403, { error: String(error) });
+            return json(response, 403, { error: humanError(error) });
           }
         }
         return json(response, 404, { error: "未知检视接口" });
@@ -1889,7 +1905,7 @@ export function createTaskServer(
               knowledgePreviewDigest,
             }));
         } catch (error) {
-          return json(response, 400, { error: String(error) });
+          return json(response, 400, { error: humanError(error) });
         }
       }
       if (request.method === "GET" && url.pathname === "/tasks") {
@@ -2200,12 +2216,17 @@ export function createTaskServer(
           }
           // 送达 = 在指挥这一单,权限同决定;圈注不需要这个门槛。
           if (request.method === "POST" && parts[3] === "send") {
-            if (!canCollaborate(viewer, target, !!options.auth)) {
+            const assignedReviewer = !!viewer && service.listTaskReviews(id)
+              .some((review) => review.status === "pending"
+                && review.committer === viewer.username);
+            if (!canCollaborate(viewer, target, !!options.auth)
+                && !assignedReviewer) {
               return json(response, 403, { error: "只有任务责任人或受邀协作者可以送批注" });
             }
             const body = await readBody(request);
             const ids = Array.isArray(body.ids) ? body.ids.map(String) : undefined;
-            return json(response, 200, await service.sendAnnotations(id, ids));
+            return json(response, 200,
+              await service.sendAnnotations(id, ids, author));
           }
           if (request.method === "GET" && parts[3] === "preview") {
             return json(response, 200,
@@ -2219,15 +2240,17 @@ export function createTaskServer(
                 String(body.note ?? ""), author));
           }
           // 只能删自己写的:多人环境里替别人删等于替他改主意。
-          // 管理员例外(override):作者不在场时一条未闭环批注会把整单
-          // 推送锁死,代删/代确认凭台账 op.by 留痕(2026-08-30 审计)。
+          // 管理员角色只提出 override 请求；服务层仍会原子复核当前状态
+          // 必须是 workspace review 的 cloud_push_confirm、当前 ID、sent
+          // 且未闭环，不能把这个布尔值当成全局代签通行证。
           if (request.method === "DELETE" && parts.length === 4) {
             return json(response, 200,
               service.dropAnnotation(id, decodeURIComponent(parts[3]), author,
                 viewer?.role === "admin"));
           }
           // 检视闭环的裁决:确认通过 / 返工。作者校验在台账层——
-          // 谁的意见谁裁决,替别人点"通过"等于替他签字。
+          // 谁的意见谁裁决,替别人点"通过"等于替他签字；管理员的窄代办
+          // 同样由服务层按当前复检事实校验，并在台账记录 verified_by。
           if (request.method === "POST" && parts.length === 5
               && parts[4] === "verify") {
             return json(response, 200,
@@ -2373,6 +2396,32 @@ export function createTaskServer(
           return json(response, 200,
             buildTimeline(target.workspace, cwd));
         }
+        // 问题定位一键采集(只读现场+现查 git/容器):现采现回并留档。
+        // 权限口径同任务详情;能看任务就能拿它的诊断包。
+        if (request.method === "GET" && parts.length === 3
+            && parts[2] === "diagnostics") {
+          const target = service.get(id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          const bundle = await service.exportDiagnostics(id);
+          response.writeHead(200, {
+            "content-type": "text/markdown; charset=utf-8",
+            "content-disposition":
+              `attachment; filename="${id}-diagnostics.md"`,
+          });
+          return response.end(bundle.content);
+        }
+        if (request.method === "GET" && parts.length === 3
+            && parts[2] === "push-review-diff") {
+          const scope = url.searchParams.get("scope") === "full"
+            ? "full" : "changes";
+          const comparison = await service.pushReviewDiff(id, scope);
+          if (!comparison) {
+            return json(response, 404, {
+              error: "这张检视卡对应的代码已经变化，请刷新查看最新版本",
+            });
+          }
+          return json(response, 200, comparison);
+        }
         // 检视产物(只读):决策与证据必须同屏——审批卡问"Spec 确认吗",
         // spec.md 就该在旁边,而不是让人跳到另一套界面里翻。权限口径
         // 同任务详情;能读哪些文件由 artifacts.ts 的白名单把守。
@@ -2452,7 +2501,7 @@ export function createTaskServer(
       if (error instanceof AnnotationError) {
         return json(response, 400, { error: error.message });
       }
-      return json(response, 500, { error: String(error) });
+      return json(response, 500, { error: humanError(error) });
     }
   });
 }

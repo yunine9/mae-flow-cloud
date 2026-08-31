@@ -20,7 +20,11 @@ import { join } from "node:path";
 import { FakeGitPlatform } from "../src/gitPlatform.ts";
 import { FakeLubanServer, Notifier } from "../src/notifier.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
-import { TaskService } from "../src/taskService.ts";
+import {
+  deterministicDeliveryFailure,
+  TaskService,
+  userFacingDeliveryFailure,
+} from "../src/taskService.ts";
 import { RuntimeSettings } from "../src/settings.ts";
 import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
 import { managedFlowFixture } from "./support/managedFlowFixture.ts";
@@ -33,6 +37,26 @@ function kernelRootOrDie(): string {
   return found;
 }
 const KERNEL_ROOT = kernelRootOrDie();
+
+test("交付连接与仓库权限异常只给人话，不泄露运行时类型和宿主路径", () => {
+  assert.equal(userFacingDeliveryFailure(new TypeError("fetch failed")),
+    "交付平台暂时连接不上，请检查平台地址或网络");
+  assert.equal(userFacingDeliveryFailure(new Error(
+    "平台返回里没有 MR 链接(url): {}")),
+    "交付平台响应不完整，未返回 MR 链接");
+  const push = userFacingDeliveryFailure(new Error(
+    "宿主推送失败: error: remote unpack failed: unable to create temporary object directory\n"
+    + "error: failed to push some refs to '/Users/alice/private/origin.git'"));
+  assert.match(push, /远端代码仓暂时无法写入/);
+  assert.doesNotMatch(push, /TypeError|\/Users\/alice/);
+  assert.equal(deterministicDeliveryFailure(
+    "交付平台响应不完整，未返回 MR 链接"), true);
+  assert.equal(deterministicDeliveryFailure(
+    "流水线返回未知状态: (empty)"), true);
+  assert.equal(deterministicDeliveryFailure(
+    "交付平台暂时连接不上，请检查平台地址或网络"), false,
+  "网络瞬断仍应进入自动重试，不可被平台契约快停误伤");
+});
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf-8" }).trim();
@@ -484,6 +508,38 @@ test("异步流水线:running 验证中,绿灯后轮询收敛到等待合入", a
     const settled = service.get(task.id)!;
     assert.equal(settled.delivery?.pipeline, "success");
     assert.equal(settled.delivery?.mr_state, "等待合入");
+  } finally {
+    await platform.stop();
+  }
+});
+
+test("需求交付轮询只认最新 run:历史成功后最新 running 不得提前放行", async () => {
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  platform.nextPipelineStatus = "running";
+  await platform.start();
+  try {
+    const { task, service } = await runTask(
+      platform, true, { pollIntervalMs: 80 });
+    const sha = task.delivery!.sha!;
+    platform.pipelines.unshift({
+      id: -1,
+      sha,
+      status: "success",
+      checks: [
+        { dimension: "COMPILE", status: "success" },
+        { dimension: "UT", status: "success" },
+        { dimension: "CODECHECK", status: "success" },
+      ],
+    });
+    // 至少跨过两次轮询。旧实现会 findLast(终态) 选中历史 success，
+    // 即刻把任务推进 await_merge；最新 run 尚未结束时必须原地等待。
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    assert.equal(service.get(task.id)!.status, "verifying");
+    assert.equal(service.get(task.id)!.delivery?.pipeline, "running");
+    platform.finishPipeline(sha, "success");
+    await until(() => service.get(task.id)!.status === "await_merge",
+      "最新 run 真正成功后再放行");
   } finally {
     await platform.stop();
   }
@@ -1070,6 +1126,32 @@ test("宿主 push 硬拒本任务新提交的 Agent 平台注入目录", async (
   }
 });
 
+test("宿主 push 钉死已验证 SHA,确认后 HEAD 变化不得发生 TOCTOU 误推", async () => {
+  const cwd = makeSourceRepo();
+  const approved = git(cwd, "rev-parse", "HEAD");
+  writeFileSync(join(cwd, "after-review.txt"), "not reviewed\n");
+  git(cwd, "add", "after-review.txt");
+  git(cwd, "commit", "--quiet", "-m", "change after review");
+  const current = git(cwd, "rev-parse", "HEAD");
+  assert.notEqual(current, approved);
+  const remote = mkdtempSync(join(tmpdir(), "mfc-toctou-remote-"));
+  git(remote, "init", "--bare", "--quiet");
+  const service = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-toctou-data-")),
+    provider: "fixture", model: "fixture", modelsJson: {},
+  });
+  try {
+    await assert.rejects(() => (service as any).pushFromHost({
+      cwd,
+      summary: { id: "task-toctou", repo_url: remote },
+    }, "must-not-exist", approved), /HEAD 已从已验证的.*旧确认不可复用/);
+    assert.equal(git(remote, "branch", "--list", "must-not-exist"), "",
+      "SHA 不一致时远端不能出现分支");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+  }
+});
+
 test("某一项永远不给结果 → 核销重试也吃预算,不无限空转", async () => {
   // 实测过的另一潭死水:平台把 UT 报成 skipped(rules 跳过、或 manual
   // 没人点),内核判 INCOMPLETE,而宿主的证据重试没有预算——6 秒里
@@ -1125,10 +1207,15 @@ test("交付失败先自愈、预算耗尽如实停摆,人拿得回控制权", a
     assert.match(stalled.detail ?? "", /自动验证已停,需要你介入/);
     // 回程票:停摆之后人点得动「重跑续推」,且账本被清干净重新开表。
     const again = service.retry(task.id);
-    // 排上队即可(任务泵可能当场就把它接走,状态已经是 running)。
-    assert.ok(["queued", "running"].includes(again.status), again.status);
+    // 外部交付停机只重试宿主侧动作，不应再叫醒主 Agent 白跑一轮。
+    assert.equal(again.status, "verifying");
+    assert.match(again.detail ?? "", /重新尝试交付/);
     assert.equal(again.delivery?.stalled, undefined);
     assert.equal(again.delivery?.verify_deadline, undefined);
+    assert.equal(again.delivery?.skipped, undefined,
+      "新一轮已受理后不应继续显示上一轮交付已阻止");
+    assert.equal(again.delivery?.waiting_on, undefined,
+      "上一轮失败的等待原因不能冒充新一轮当前状态");
   } finally {
     await platform.stop();
   }

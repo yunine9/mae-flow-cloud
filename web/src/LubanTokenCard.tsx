@@ -60,6 +60,10 @@ export function LubanTokenCard({
       <span>如何获取</span>
       <p>向小鲁班发送：<code>“获取发送token”</code></p>
     </div>
+    <div className="credential-howto">
+      <span>手机回复</span>
+      <p>先输入 <code>/mfc</code> 激活 Mae-Flow 插件，再按通知提示回复。</p>
+    </div>
 
     <div className="credential-card-actions">
       {message && <span className="credential-feedback success">{message}</span>}

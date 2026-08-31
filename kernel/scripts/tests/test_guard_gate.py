@@ -23,7 +23,6 @@ class EditGateTests(unittest.TestCase):
     def context(self, **overrides):
         values = {
             "path": "README.md",
-            "match_path": "README.md",
             "step": "build",
             "inside_plugin": False,
             "is_source": False,
@@ -48,8 +47,7 @@ class EditGateTests(unittest.TestCase):
         ):
             with self.subTest(path=path):
                 result = decide_edit(self.context(
-                    path=path, match_path=path,
-                    inside_plugin=path.startswith("/plugin/")))
+                    path=path, inside_plugin=path.startswith("/plugin/")))
                 self.assertEqual("absolute", result.kind)
                 self.assertIn(fragment, result.message)
 
@@ -57,14 +55,11 @@ class EditGateTests(unittest.TestCase):
         """合法编码步可写源码；文档与过程产物不受源码阶段闸影响。"""
         for label, context in (
                 ("specs", self.context(
-                    path="openspec/specs/api/spec.md",
-                    match_path="openspec/specs/api/spec.md")),
+                    path="openspec/specs/api/spec.md")),
                 ("source", self.context(
-                    path="src/main.py", match_path="src/main.py",
-                    is_source=True)),
+                    path="src/main.py", is_source=True)),
                 ("docs-req", self.context(
-                    path="docs/req/REQ1.md", match_path="docs/req/REQ1.md",
-                    step="config_confirm")),
+                    path="docs/req/REQ1.md", step="config_confirm")),
         ):
             with self.subTest(rule=label):
                 self.assertEqual("allow", decide_edit(context).kind)
@@ -74,24 +69,21 @@ class EditGateTests(unittest.TestCase):
         需求正文带实施方案,模型跳过配置直接开写,写完才回头问配置)。
         文档不受限;用户裁决解锁尊重;选定后即回到退役口径(不拦)。"""
         head = decide_edit(self.context(
-            path="src/main.py", match_path="src/main.py",
-            step="config_confirm", is_source=True, workflow_chosen=False))
+            path="src/main.py", step="config_confirm", is_source=True, workflow_chosen=False))
         self.assertEqual(("block", "edit-before-workflow"),
                          (head.kind, head.rule))
         self.assertIn("交付方式尚未选定", head.message)
         self.assertIn("current", head.message)
         # 需求/方案文档在头部照写不误——分析结论就该落在这儿。
         self.assertEqual("allow", decide_edit(self.context(
-            path="docs/req/REQ1.md", match_path="docs/req/REQ1.md",
-            step="config_confirm", workflow_chosen=False)).kind)
+            path="docs/req/REQ1.md", step="config_confirm", workflow_chosen=False)).kind)
         # 用户裁决解锁压过头部禁令(人高于流程)。
         self.assertEqual("allow", decide_edit(self.context(
-            path="src/main.py", match_path="src/main.py", is_source=True,
+            path="src/main.py", is_source=True,
             workflow_chosen=False, source_unlocked=True)).kind)
         # 选定之后回到退役口径:中段改源码不再逐步拦。
         self.assertEqual("allow", decide_edit(self.context(
-            path="src/main.py", match_path="src/main.py",
-            is_source=True, workflow_chosen=True)).kind)
+            path="src/main.py", is_source=True, workflow_chosen=True)).kind)
 
     def test_source_edits_free_after_workflow_chosen(self):
         """步骤级"本步禁改源码"已退役(2026-08-28 用户拍板"编码阶段
@@ -102,15 +94,14 @@ class EditGateTests(unittest.TestCase):
         for step in ("grill", "story", "open", "external_verify"):
             with self.subTest(step=step):
                 self.assertEqual("allow", decide_edit(self.context(
-                    path="src/main.py", match_path="src/main.py",
-                    step=step, is_source=True,
+                    path="src/main.py", step=step, is_source=True,
                     workflow_chosen=True)).kind)
         self.assertEqual("allow", decide_edit(self.context(
             path=".mae-flow-work/REQ/grill.md",
-            match_path=".mae-flow-work/REQ/grill.md", step="grill",
+            step="grill",
             is_source=False)).kind)
         self.assertEqual("allow", decide_edit(self.context(
-            path="src/main.py", match_path="src/main.py", step="build",
+            path="src/main.py", step="build",
             is_source=True)).kind)
 
     def test_build_step_tests_are_free(self):
@@ -119,8 +110,7 @@ class EditGateTests(unittest.TestCase):
         for path in ("tests/test_new.py", "tests/test_old.py", "src/x.py"):
             with self.subTest(path=path):
                 self.assertEqual(("allow", "", ""), tuple(decide_edit(
-                    self.context(path=path, match_path=path,
-                                 is_source=True))))
+                    self.context(path=path, is_source=True))))
 
     def test_allowed_edit_has_no_rule_or_message(self):
         self.assertEqual(

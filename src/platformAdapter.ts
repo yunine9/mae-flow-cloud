@@ -65,7 +65,7 @@
  *        是完整 MR URL；两类命令是不同端点，不能共用对其形状的猜测。
  *        {repo_path}(从 {repo} 自动派生的 URL 编码项目路径,
  *          CodeHub REST 的 /projects/{路径}/ 直接用,不用手抄项目 id)
- *        {id} {body} {note_id}(检视回复链)
+ *        {id} {body} {note_id} {idempotency_key}(检视回复链)
  *        {token} {git_username}(后两个优先取请求头里的个人身份)。
  * 命令以 argv 数组直接 spawn,不过 shell——标题带空格、注入都不是问题。
  *
@@ -342,6 +342,41 @@ function parseValidity(raw: unknown): boolean {
   return !["false", "0", "no"].includes(String(raw ?? "").toLowerCase());
 }
 
+/** 把适配器的多条流水线统一成旧→新。现网外置配置曾长期请求
+ * sort=desc；宿主升级为 runs.at(-1) 后若继续原样透传，会把最老 run
+ * 当成当前事实。pipeline_id 是唯一可靠顺序键：完整时机械升序；只有
+ * 明确 is_valid=false 的陈灯允许缺 id 并被放到最前。其余多 run 无法
+ * 判断新旧，宁可让该候选失败，也不能拿历史绿灯放行。 */
+function orderStatusRuns(
+  runs: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+  if (runs.length <= 1) return runs;
+  const rows = runs.map((run) => {
+    const raw = String(run.pipeline_id ?? "").trim();
+    return {
+      run,
+      id: /^\d+$/.test(raw) ? BigInt(raw) : undefined,
+    };
+  });
+  if (rows.every((row) => row.id !== undefined)) {
+    return rows.sort((left, right) => left.id! < right.id! ? -1
+      : left.id! > right.id! ? 1 : 0).map((row) => row.run);
+  }
+  const ordered = rows.filter((row) => row.id !== undefined);
+  const missing = rows.filter((row) => row.id === undefined);
+  if (ordered.length > 0
+      && missing.every((row) => row.run.is_valid === false)) {
+    ordered.sort((left, right) => left.id! < right.id! ? -1
+      : left.id! > right.id! ? 1 : 0);
+    return [...missing.map((row) => row.run),
+      ...ordered.map((row) => row.run)];
+  }
+  throw new AdapterError(
+    "pipeline_status 返回多条 run，但 pipeline_id 缺失或不是十进制整数，"
+    + "无法可靠判断最新流水线；请配置 pipeline_id 抽取或改用 contract 输出",
+  );
+}
+
 export class PlatformAdapter {
   private readonly config: AdapterConfig;
   private serviceToken = "";
@@ -436,6 +471,16 @@ export class PlatformAdapter {
       }
     };
     const personal = decode(headers["x-mfc-git-token"]);
+    // Node 会把真实 HTTP 头归一成小写；handle 也会被测试/嵌入方直接
+    // 调用，那里未必归一。大小写不敏感地读取，header 优先、请求体
+    // idempotency_key 兼容没有转发该头的旧网关。模板显式引用
+    // {idempotency_key} 后，真实 discussion_reply CLI 才能把宿主 outbox
+    // 的稳定动作键传给平台，封住“远端成功、本地未落账”的重放窗口。
+    const idempotencyHeader = Object.entries(headers).find(([name]) =>
+      name.toLowerCase() === "idempotency-key")?.[1];
+    const idempotencyKey = decode(Array.isArray(idempotencyHeader)
+      ? idempotencyHeader[0] : idempotencyHeader).trim()
+      || String(body.idempotency_key ?? "").trim();
     // {repo_path}:从仓库 URL 自动派生"URL 编码的项目路径"——
     // CodeHub REST 按 /api/v3/projects/{路径}/... 定位仓,人不该手抄
     // 项目 id(用户拍板:能从 MR/仓地址推出来的就自动拿)。
@@ -461,6 +506,7 @@ export class PlatformAdapter {
       id: String(body.id ?? ""),
       body: String(body.body ?? ""),
       resolve: String(body.resolve ?? ""),
+      idempotency_key: idempotencyKey,
       token: personal || this.serviceToken,
       git_username: decode(headers["x-mfc-git-user"]),
     };
@@ -483,7 +529,7 @@ export class PlatformAdapter {
           "contract 模式要求输出 {runs:[...]},实际没有 runs 数组"
           + `(输出前 300 字: ${stdout.slice(0, 300)})`);
       }
-      return list.map((run, index) => {
+      const runs = list.map((run, index) => {
         const row = (run ?? {}) as Record<string, unknown>;
         const status = String(row.status ?? "");
         if (!CONTRACT_STATUS.has(status)) {
@@ -504,6 +550,7 @@ export class PlatformAdapter {
           ...(row.web_url ? { web_url: String(row.web_url) } : {}),
         };
       });
+      return orderStatusRuns(runs);
     }
     const list = spec.runs
       ? extract(spec.runs, "runs 数组", stdout, parsed)
@@ -511,7 +558,7 @@ export class PlatformAdapter {
     if (!Array.isArray(list)) {
       throw new AdapterError("pipeline_status 抽出来的不是数组");
     }
-    return list.map((run) => {
+    const runs = list.map((run) => {
       const current = () => run;
       const status = mapStatus(
         extract(spec.status, "run 状态", stdout, current),
@@ -541,6 +588,7 @@ export class PlatformAdapter {
         ...(webUrl !== undefined ? { web_url: String(webUrl) } : {}),
       };
     });
+    return orderStatusRuns(runs);
   }
 
   /** pipeline_artifacts 单候选执行:命令下载到目录(SSE 网关那类)→
@@ -801,6 +849,17 @@ export class PlatformAdapter {
         }
         const values = this.values(
           { ...body, id: decodeURIComponent(replyMatch[1]) }, headers);
+        if (values.idempotency_key
+            && !spec.command.some((part) =>
+              part.includes("{idempotency_key}"))) {
+          // 宿主 outbox 已经提供稳定动作键时，旧模板若吞掉它就无法
+          // 封住“远端成功、本地未落账”的重放窗口。宁可让本次保持
+          // pending 等管理员修配置，也不能悄悄执行一个非幂等回复。
+          throw new AdapterError(
+            "discussion_reply 收到了 idempotency_key，但命令模板未引用 "
+            + "{idempotency_key}；已拒绝非幂等投递，请把该占位符传给"
+            + "平台支持的幂等请求头或稳定键参数");
+        }
         const stdout = await this.run(spec, values);
         // 回复与"标已解决"是两个调用(报告 D3)。宿主默认不代
         // resolve(检视人的职责);带了 resolve:true 且配了第二条
@@ -878,6 +937,14 @@ export class PlatformAdapter {
       lines.push(spec
         ? `[配置] ${name}: ${mask(spec.command)}`
         : `[缺席] ${name}: 未配置(对应端点 404,宿主按旧语义 fail-open)`);
+    }
+    if (this.config.discussion_reply
+        && !this.config.discussion_reply.command.some((part) =>
+          part.includes("{idempotency_key}"))) {
+      lines.push("[错误] discussion_reply 未引用 {idempotency_key}："
+        + "宿主虽会携带稳定动作键，但当前 CLI 模板无法把它传给平台，"
+        + "真实回复会 fail-closed 保持 outbox pending；请在平台支持的"
+        + "幂等参数或请求头位置补上该占位符");
     }
     // 降级链端点逐候选打印——内网对拍时一眼看清有几路、各是什么。
     for (const [name, degradable] of [

@@ -497,6 +497,7 @@ npm run adapter -- --config adapter.json --selftest
   "discussion_reply": {
     "command": ["curl", "-sf", "-X", "POST",
       "-H", "X-Auth-Token: {token}", "-H", "Content-Type: application/json",
+      "-H", "Idempotency-Key: {idempotency_key}",
       "-d", "{\"body\":\"{body}\"}",
       "https://<host>/api/v3/projects/{repo_path}/merge_requests/{mr}/discussions/{id}/notes"],
     "note_id": {"json": "id"}
@@ -513,6 +514,20 @@ npm run adapter -- --config adapter.json --selftest
   }
 }
 ```
+
+`pipeline_status` 的 `runs` 顺序是硬契约：**旧→新，`runs.at(-1)` 才是
+当前 run**。因此上面的裸 REST 候选必须请求 `sort=desc`，先拿到本 SHA
+最新一页（若请求 `asc`，重跑超过 `per_page` 后会漏掉最新 run）；适配层和
+仓内 `pipeline-status.sh` 再按数字 pipeline id 升序输出。不要为了拿终态
+跨过最新 `running` 去挑历史 `failed/success`。
+
+`discussion_reply` 必须把 `{idempotency_key}` 传给平台支持的幂等请求头
+或稳定键参数。宿主对同一条 outbox 动作会同时发送 `Idempotency-Key`
+请求头和 `idempotency_key` JSON 字段，适配层统一映射成该占位符；若收到
+动作键而模板未引用它，适配层会 fail-closed 返回 502，让 outbox 保持
+pending，绝不以“可能重复回复”为代价继续投递。上例使用 HTTP
+`Idempotency-Key`；若内网平台使用别的参数名，只替换命令参数，仍须保留
+`{idempotency_key}` 作为值。
 
 **脚本进仓纪律(2026-08-28 勘误)**:取数编排脚本**必须进仓版本化**
 (deploy/adapter-tools/),不再当"/etc 下的配置产物"——上一版把它们

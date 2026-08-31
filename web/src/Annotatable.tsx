@@ -12,7 +12,7 @@
 import { useEffect, useRef, useState } from "react";
 import { addAnnotation, type Annotation } from "./api";
 import {
-  anchorOf, blockedBySelection, pickRow, type RowNode,
+  anchorOf, blockedBySelection, pickRow, pickRowFromStack, type RowNode,
 } from "./annotateTargets";
 import "./annotate.css";
 
@@ -115,10 +115,31 @@ export function Annotatable({
       openRow(row);
       return;
     }
+    // 点在交互元素上(按钮/链接)不打扰:那儿有它自己的活。
+    if (target.closest("button, a, textarea, input, .annot-editor")) return;
+    // 落点被覆盖层挡住(专注审阅的分栏把手正压在行中心,MFC-034):
+    // 沿该坐标下的整叠元素穿透找行,不再赌事件恰好命中行节点。
+    const covered = typeof document !== "undefined"
+      && typeof document.elementsFromPoint === "function"
+      ? pickRowFromStack(
+          document.elementsFromPoint(event.clientX, event.clientY) as
+            unknown as ArrayLike<RowNode>,
+          host.current as unknown as RowNode,
+          (node) => !!host.current
+            && host.current.contains(node as unknown as Node),
+        ) as unknown as HTMLElement | undefined
+      : undefined;
+    if (covered) {
+      openRow(covered);
+      return;
+    }
+    // Annotatable 包着整块 Git 审阅器，目录树、标题、分栏把手也都在
+    // 它里面。那些控件的空隙不是“材料正文”，点它们不该冒出一条
+    // 批注失败提示；只有确实落在文档或 diff 正文里时才解释为何没锚点。
+    if (!target.closest(".ws-doc, .diff-review-body")) return;
     // 点在了材料上、却落不到任何一行(容器空隙、纯装饰块):**说一句**,
     // 别装作没点——"点了没反应"是这个功能最常见的投诉,而多数时候它只是
-    // 差了这一句话。点在交互元素上(按钮/链接)不打扰。
-    if (target.closest("button, a, textarea, input, .annot-editor")) return;
+    // 差了这一句话。
     setHint("这一处没有行号可锚定,点正文那一行(标题/段落/列表项/代码行)");
   }
 

@@ -16,12 +16,12 @@
  *
  * 例外是 env_needed 闸(2026-08-28):通用选项卡换成语义化表单(地址+
  * 端口+网管后台密码),提交走 onEnvironment(由会话视图接到
- * attachIssueEnvironment——密码只经这一条路进服务端 vault,不进状态/
- * 事件,也不出现在其他任何闸的渲染里;配置后的口令按 ADR-0003 进
- * 元信息渲染,那是消费面的事,不是提交流程的事)。闸只收 地址+后台
- * 密码:现场补配的流程(拉日志/换库)碰不到网管页面,没有页面凭据的位置。
+ * attachIssueEnvironment——密码不进浏览器草稿,在服务端 vault 加密
+ * 保存;配置后会按 ADR-0003 进入本问题会话的 AI 上下文供工具消费,
+ * 但不出现在会话列表、状态摘要或事件流)。闸只收 地址+后台密码:现场补配的流程(拉日志/换库)
+ * 碰不到网管页面,没有页面凭据的位置。
  */
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { IssueEnvironmentForm, IssueWaitingCard } from "../api";
 import { Markdown } from "../markdown";
 
@@ -34,7 +34,8 @@ export function IssueDecisionCard({ waiting, busy, onAnswer, onEnvironment }: {
   waiting: IssueWaitingCard;
   busy: boolean;
   /** 组装好的答复。返回 true 表示提交成功(此时父级会带着新详情回来)。 */
-  onAnswer: (decision: string, notes?: string) => Promise<boolean>;
+  onAnswer: (decision: string, code?: string,
+    answers?: Record<string, string>, notes?: string) => Promise<boolean>;
   /** env_needed 闸的专用提交口(会话视图接到 /issues/:id/environment)。 */
   onEnvironment?: (input: IssueEnvironmentForm) => Promise<boolean>;
 }) {
@@ -57,8 +58,9 @@ export function IssueDecisionCard({ waiting, busy, onAnswer, onEnvironment }: {
 }
 
 /** 网管环境表单:网管环境IP(单个,一个问题一个环境)+ 端口(默认 22)
- * + 网管后台密码。密码只在提交瞬间经 POST /issues/:id/environment 进
- * 服务端 vault,不落状态/事件——前端也不把它存进任何草稿。 */
+ * + 网管后台密码。密码经 POST 进服务端 vault
+ * (AES-GCM 加密文件),前端不存草稿;之后会进入本问题会话的 AI 上下文,
+ * 让拉日志/换库工具能够消费,但不出现在会话列表、状态摘要或事件流。 */
 function EnvNeededForm({ busy, onSubmit }: {
   busy: boolean;
   onSubmit?: (input: IssueEnvironmentForm) => Promise<boolean>;
@@ -68,8 +70,9 @@ function EnvNeededForm({ busy, onSubmit }: {
   const [backendPassword, setBackendPassword] = useState("");
   const [error, setError] = useState("");
   const host = hosts.trim();
+  const invalidHost = host !== "" && /[\s,，、]/.test(host);
   const portNumber = Number(port);
-  const ready = host !== "" && backendPassword.length > 0
+  const ready = host !== "" && !invalidHost && backendPassword.length > 0
     && Number.isInteger(portNumber) && portNumber >= 1 && portNumber <= 65535;
 
   async function submit() {
@@ -104,6 +107,13 @@ function EnvNeededForm({ busy, onSubmit }: {
       <input type="password" value={backendPassword} autoComplete="new-password"
         onChange={(event) => setBackendPassword(event.target.value)} />
     </label>
+    {invalidHost && <p className="issue-decision-note" role="alert">
+      网管环境IP一次只填一个，请不要输入逗号、空格或换行。
+    </p>}
+    <p className="issue-decision-note">
+      口令由服务端加密保存，不会出现在会话列表、状态摘要或事件流中，
+      但会以明文进入本问题的 AI 上下文；请勿填写个人复用或生产口令。
+    </p>
     {error && <p className="issue-decision-note" role="alert">{error}</p>}
     <div className="issue-decision-submit">
       <button type="button" disabled={!ready || busy} onClick={() => void submit()}>
@@ -111,6 +121,15 @@ function EnvNeededForm({ busy, onSubmit }: {
       </button>
     </div>
   </div>;
+}
+
+export function areIssueQuestionsComplete(
+  questions: Array<{ options: ReadonlyArray<unknown> }>,
+  picked: Record<number, string>,
+  custom: Record<number, string>,
+): boolean {
+  return questions.length > 0 && questions.every((item, index) =>
+    item.options.length > 0 ? !!picked[index] : !!custom[index]?.trim());
 }
 
 function GenericDecisionCard({ waiting, busy, onAnswer }: {
@@ -125,16 +144,36 @@ function GenericDecisionCard({ waiting, busy, onAnswer }: {
   const [custom, setCustom] = useState<Record<number, string>>({});
   const [notesOpen, setNotesOpen] = useState(false);
   const [notes, setNotes] = useState("");
+  const radioRefs = useRef<Record<number, Array<HTMLButtonElement | null>>>({});
 
-  // 可提交口径(承旧版自由作答的口子):所有选择题都选了答案;
-  // 或任一开放题写了自由作答;整卡没有问题时则看补充说明是否非空。
-  const hasOptionQuestion = questions.some((item) => item.options.length > 0);
-  const optionsAllPicked = hasOptionQuestion && questions.every((item, index) =>
-    item.options.length === 0 || !!picked[index]);
-  const freeAnswered = questions.some((item, index) =>
-    !item.options.length && !!custom[index]?.trim());
-  const ready = optionsAllPicked || freeAnswered
+  // 一张卡可能同时有选择题和开放题。逐题全答完才允许提交，不能让
+  // “选择题都选了”或“任一开放题写了”掩盖同卡里仍空着的问题。
+  const ready = areIssueQuestionsComplete(questions, picked, custom)
     || (questions.length === 0 && !!notes.trim());
+
+  function moveRadio(
+    questionIndex: number,
+    optionIndex: number,
+    key: string,
+  ): boolean {
+    const options = questions[questionIndex]?.options ?? [];
+    if (!options.length) return false;
+    const next = key === "Home" ? 0
+      : key === "End" ? options.length - 1
+        : key === "ArrowRight" || key === "ArrowDown"
+          ? (optionIndex + 1) % options.length
+          : key === "ArrowLeft" || key === "ArrowUp"
+            ? (optionIndex - 1 + options.length) % options.length
+            : undefined;
+    if (next === undefined) return false;
+    setPicked((current) => ({
+      ...current,
+      [questionIndex]: options[next].code,
+    }));
+    window.requestAnimationFrame(() =>
+      radioRefs.current[questionIndex]?.[next]?.focus());
+    return true;
+  }
 
   async function submit() {
     if (!ready || busy) return;
@@ -184,17 +223,26 @@ function GenericDecisionCard({ waiting, busy, onAnswer }: {
         <span className="question-text">{item.question || "需要你确认"}</span>
       </legend>
       {item.options.length > 0
-        ? <div className="options cards">
-            {item.options.map((option) => {
+        ? <div className="options cards" role="radiogroup"
+            aria-label={`问题 ${index + 1}：${item.question || "需要你确认"}`}>
+            {item.options.map((option, optionIndex) => {
               const chosen = picked[index] === option.code;
               // 推荐按码标注(ADR-0004 只标注不预选):无推荐的旧卡
               // 该键缺席,谁都不匹配,渲染与现状一致;推荐被点中后
               // 正常进已选态,徽标常驻但描边让位(accent 蓝)。
               const suggested = item.recommended === option.code;
               return <button type="button" key={option.code} role="radio"
+                ref={(node) => {
+                  (radioRefs.current[index] ??= [])[optionIndex] = node;
+                }}
                 aria-checked={chosen}
+                tabIndex={chosen || (!picked[index] && optionIndex === 0) ? 0 : -1}
                 className={`option${chosen ? " picked" : ""}${suggested ? " issue-recommended" : ""}`}
-                onClick={() => setPicked({ ...picked, [index]: option.code })}>
+                onKeyDown={(event) => {
+                  if (moveRadio(index, optionIndex, event.key)) event.preventDefault();
+                }}
+                onClick={() => setPicked((current) =>
+                  ({ ...current, [index]: option.code }))}>
                 <span className={`radio${chosen ? " on" : ""}`} aria-hidden />
                 <span className="option-body"><span className="option-title">
                   {option.label}

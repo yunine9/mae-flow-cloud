@@ -34,7 +34,7 @@ def verify_completion_task(kind, report, state, ports):
     task = _task_for(state, kind)
     if not task:
         return rejected(
-            "未生成 harness 任务卡。standalone 独立任务先执行 python \"%s\" "
+            "未生成 harness 任务卡。standalone 独立任务先执行 python3 \"%s\" "
             "action status 获取当前任务卡;主流程已不签发 %s 任务卡。"
             % (ports.script_path(), kind))
     if task.get("step") != state.get("current"):
@@ -58,7 +58,7 @@ def _dispatch_missing_message(kind, script_path, state):
     # UT/CODECHECK 卡只存在于 standalone 独立任务(2026-08-25 编排瘦身):
     # 主流程编码期写测试/修规范是主 Agent 份内事,不签卡也不必派专项 Agent。
     command = commands.get(kind, "action status")
-    remedy = 'python "%s" %s' % (script_path, command)
+    remedy = 'python3 "%s" %s' % (script_path, command)
     return (
         "[mae-flow] 派发前拦截:%s 尚无本步任务卡。先执行 %s,再按其输出话术派发。"
         "现在拦下只损失一次调用;跑完整只 agent 才被契约打回,重做要上百轮白跑。"

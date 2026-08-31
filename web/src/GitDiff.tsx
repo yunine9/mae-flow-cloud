@@ -135,6 +135,8 @@ export function GitDiff({
   selectionKey = "",
   initialSelectedPaths,
   onSelectionChange,
+  scopeLabel,
+  focusRequest = 0,
 }: {
   text: string;
   branch?: string;
@@ -145,12 +147,21 @@ export function GitDiff({
   selectionKey?: string;
   initialSelectedPaths?: string[];
   onSelectionChange?: (selection: GitDiffSelection) => void;
+  /** 当前对比范围的人话(如"本次修改 · a2f2715 → 510a5fa")。缺省
+   * 沿用工作区语义。曾经硬编码"任务基线至当前工作区",HEAD→HEAD
+   * 的增量也顶着这行标题(MFC-007)。 */
+  scopeLabel?: string;
+  /** 外部明确请求进入专注审阅；递增即可重复打开。 */
+  focusRequest?: number;
 }) {
   const files = useMemo(() => parseChanges(text), [text]);
   const [selected, setSelected] = useState(files[0]?.key ?? "");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [showAll, setShowAll] = useState(false);
   const [focused, setFocused] = useState(false);
+  useEffect(() => {
+    if (focusRequest > 0) setFocused(true);
+  }, [focusRequest]);
   const [treePanelWidth, setTreePanelWidth] = useState(() =>
     clampTreePanelWidth(storedNumber("mae-flow:git-tree-width",
       DEFAULT_TREE_PANEL_WIDTH), 2000));
@@ -163,11 +174,14 @@ export function GitDiff({
     useState<Set<string>>(new Set());
   const [hiddenPaths, setHiddenPaths] = useState<Set<string>>(new Set());
   const [deliveryPaths, setDeliveryPaths] = useState<Set<string>>(new Set());
+  const [localGroupOpen, setLocalGroupOpen] = useState(false);
   const [activeSelectionKey, setActiveSelectionKey] = useState("");
   const initializedSelection = useRef("");
   const initializedDirectories = useRef<Set<string>>(new Set());
   const gitBrowser = useRef<HTMLDivElement>(null);
   const diffCanvas = useRef<HTMLDivElement>(null);
+  // 分栏把手是否真被拖动过:拖动收尾的 click 不算"点了一行"(MFC-034)。
+  const resizerDragged = useRef(false);
   const [pathTip, setPathTip] = useState<{
     path: string;
     left: number;
@@ -283,9 +297,30 @@ export function GitDiff({
     ));
   }, [selectable, selectionKey, files.map((file) => file.path).join("\0")]);
 
+  const requestedDeliveryKey = initialSelectedPaths
+    ?.filter((path) => files.some((file) => file.path === path))
+    .sort((left, right) => left.localeCompare(right)).join("\0");
+  useEffect(() => {
+    // 服务端刷新后可能回送已请求的交付清单，diff 树必须原位跟上，
+    // 不能只把 initialSelectedPaths 当成一次性的默认值。
+    if (!selectable || initialSelectedPaths === undefined) return;
+    const available = new Set(files.map((file) => file.path));
+    const next = new Set(initialSelectedPaths.filter((path) =>
+      available.has(path)));
+    setDeliveryPaths((current) => {
+      const currentKey = [...current].sort().join("\0");
+      const nextKey = [...next].sort().join("\0");
+      return currentKey === nextKey ? current : next;
+    });
+  }, [selectable, selectionKey, requestedDeliveryKey]);
+
   useEffect(() => {
     const key = selectionKey || "delivery";
     if (!selectable || activeSelectionKey !== key) return;
+    // 外部清单刚刷新时，先等上面的同步 effect 落到树里；否则这里会
+    // 用一帧前的旧值反向覆盖父层，表现成右侧点了又弹回去。
+    if (requestedDeliveryKey !== undefined
+        && requestedDeliveryKey !== [...deliveryPaths].sort().join("\0")) return;
     onSelectionChange?.({
       selectedPaths: [...deliveryPaths].sort((left, right) =>
         left.localeCompare(right)),
@@ -293,7 +328,7 @@ export function GitDiff({
       allPaths: files.map((file) => file.path).sort((left, right) =>
         left.localeCompare(right)),
     });
-  }, [selectable, selectionKey, activeSelectionKey,
+  }, [selectable, selectionKey, activeSelectionKey, requestedDeliveryKey,
     [...deliveryPaths].sort().join("\0"), committedPaths.join("\0"),
     files.map((file) => file.path).join("\0")]);
 
@@ -324,7 +359,6 @@ export function GitDiff({
   const canFold = showAll || folded.hidden > 0 || expanded.size > 0;
   const additions = files.reduce((sum, file) => sum + file.additions, 0);
   const deletions = files.reduce((sum, file) => sum + file.deletions, 0);
-  const kinds = Array.from(new Set(files.map((file) => file.kind)));
   const branchLabel = branch || "分支未知";
   const selectedDeliveryCount = deliveryPaths.size;
   const hasCollapsedDirectories = allDirectories.some((path) =>
@@ -335,14 +369,30 @@ export function GitDiff({
 
   function toggleDelivery(paths: string[]) {
     if (!selectable) return;
-    setDeliveryPaths((current) => {
-      const next = new Set(current);
-      const add = paths.some((path) => !next.has(path));
-      for (const path of paths) {
-        if (add) next.add(path);
-        else next.delete(path);
-      }
-      return next;
+    const next = new Set(deliveryPaths);
+    const add = paths.some((path) => !next.has(path));
+    for (const path of paths) {
+      if (add) next.add(path);
+      else next.delete(path);
+    }
+    setDeliveryPaths(next);
+    onSelectionChange?.({
+      selectedPaths: [...next].sort((left, right) => left.localeCompare(right)),
+      committedPaths,
+      allPaths: files.map((file) => file.path).sort((left, right) =>
+        left.localeCompare(right)),
+    });
+  }
+
+  function replaceDelivery(paths: string[]) {
+    if (!selectable) return;
+    const next = new Set(paths);
+    setDeliveryPaths(next);
+    onSelectionChange?.({
+      selectedPaths: [...next].sort((left, right) => left.localeCompare(right)),
+      committedPaths,
+      allPaths: files.map((file) => file.path).sort((left, right) =>
+        left.localeCompare(right)),
     });
   }
 
@@ -370,8 +420,8 @@ export function GitDiff({
         {selectable && (
           <button type="button" className={`delivery-check${included ? " checked" : ""}`}
             aria-pressed={included}
-            aria-label={`${included ? "不提交" : "提交"} ${file.path}`}
-            title={included ? "从交付清单移除" : "加入交付清单"}
+            aria-label={`${included ? "改为仅留本地" : "纳入交付"} ${file.path}`}
+            title={included ? "改为仅留本地，不推送" : "纳入本次交付"}
             onClick={() => toggleDelivery([file.path])}>
             <svg viewBox="0 0 16 16" aria-hidden><path d="m3.5 8 3 3 6-6" /></svg>
           </button>
@@ -429,7 +479,9 @@ export function GitDiff({
               className={`delivery-check${included === paths.length ? " checked" : ""}${
                 included > 0 && included < paths.length ? " partial" : ""}`}
               aria-pressed={included === paths.length}
-              aria-label={`${included === paths.length ? "不提交" : "提交"}目录 ${directory.path}`}
+              aria-label={`${included === paths.length ? "改为仅留本地" : "纳入交付"}目录 ${directory.path}`}
+              title={included === paths.length
+                ? "整个目录改为仅留本地，不推送" : "整个目录纳入本次交付"}
               onClick={() => toggleDelivery(paths)}>
               <svg viewBox="0 0 16 16" aria-hidden><path d="m3.5 8 3 3 6-6" /></svg>
             </button>
@@ -489,10 +541,14 @@ export function GitDiff({
               {renderTreeNodes(pushTree, overview)}
             </div>
             <div className="change-tree-group">
-              <div className="change-tree-group-head local">
-                <strong>工作区其他改动 · 默认不推送</strong><i>{localFiles.length}</i>
-              </div>
-              {renderTreeNodes(localTree, overview)}
+              <button type="button" className="change-tree-group-head local"
+                aria-expanded={localGroupOpen}
+                onClick={() => setLocalGroupOpen((open) => !open)}>
+                <span aria-hidden>{localGroupOpen ? "⌄" : "›"}</span>
+                <strong>工作区其他改动 · 默认仅留本地</strong>
+                <i>{localFiles.length}</i>
+              </button>
+              {localGroupOpen && renderTreeNodes(localTree, overview)}
             </div>
           </>
         ) : renderTreeNodes(tree, overview)}
@@ -529,7 +585,7 @@ export function GitDiff({
             <span>CODE REVIEW</span>
             <strong>代码审阅</strong>
             <small><code title={`当前分支：${branchLabel}`}>{branchLabel}</code>
-              <i>·</i>{files.length} 个文件 · {kinds.join("、")}</small>
+              <i>·</i>{scopeLabel ?? "任务基线至当前工作区"}</small>
           </div>
           <div className="code-review-totals" aria-label="变更统计">
             <b>+{additions}</b><i>−{deletions}</i>
@@ -541,7 +597,7 @@ export function GitDiff({
             <span>WORKTREE</span>
             <strong>{files.length} 个文件发生变化</strong>
             <small><code title={`当前分支：${branchLabel}`}>{branchLabel}</code>
-              <i>·</i>{kinds.join("、")} · 任务基线至当前工作区</small>
+              <i>·</i>{scopeLabel ?? "任务基线至当前工作区"}</small>
           </div>
           <div className="change-summary-actions">
             <div className="change-totals" aria-label="变更统计">
@@ -560,13 +616,13 @@ export function GitDiff({
         <div className={`delivery-selection-bar${selectionChanged ? " changed" : ""}`}>
           {selectable && <div><strong>最终推送范围：{selectedDeliveryCount} / {files.length} 个文件</strong>
             <span>{selectionChanged
-              ? "已调整范围：提交决定后 Cloud 自动整理提交，未勾选的文件留在本地不推送。"
-              : "勾选＝最终推送到远端的文件；提交右侧决定后生效。"}</span></div>}
+              ? "已调整范围；右侧只读摘要会实时同步。"
+              : "勾选表示纳入交付；取消表示仅留本地。完成后在右侧提交决定。"}</span></div>}
           <div>
             {selectable && <>
               <button type="button" onClick={() =>
-                setDeliveryPaths(new Set(files.map((file) => file.path)))}>全选</button>
-              <button type="button" onClick={() => setDeliveryPaths(new Set())}>清空</button>
+                replaceDelivery(files.map((file) => file.path))}>全部纳入</button>
+              <button type="button" onClick={() => replaceDelivery([])}>全部仅留本地</button>
             </>}
             {hiddenPaths.size > 0 && <button type="button"
               title="隐藏只影响浏览，不影响上面的交付勾选"
@@ -705,16 +761,26 @@ export function GitDiff({
                   }}
                   onPointerDown={(event) => {
                     event.preventDefault();
+                    resizerDragged.current = false;
                     event.currentTarget.setPointerCapture(event.pointerId);
                     resizeDiffColumns(event.clientX);
                   }}
                   onPointerMove={(event) => {
                     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                      resizerDragged.current = true;
                       resizeDiffColumns(event.clientX);
                     }
                   }}
                   onPointerUp={(event) =>
-                    event.currentTarget.releasePointerCapture(event.pointerId)}>
+                    event.currentTarget.releasePointerCapture(event.pointerId)}
+                  onClick={(event) => {
+                    // 把手压在行中心(MFC-034):真拖动过的收尾 click 不外
+                    // 泄,原地单击则放行给批注层按坐标落到底下那一行。
+                    if (resizerDragged.current) {
+                      resizerDragged.current = false;
+                      event.stopPropagation();
+                    }
+                  }}>
                   <span aria-hidden />
                 </div>
               </div>

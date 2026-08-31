@@ -57,6 +57,7 @@ import {
   INSTANCE_LOCK_FILE,
   InstanceLockedError,
 } from "./instanceLock.ts";
+import { inspectDeploymentRuntime } from "./deploymentPreflight.ts";
 
 const REPO_ROOT = resolve(fileURLToPath(import.meta.url), "..", "..");
 
@@ -366,7 +367,9 @@ async function main(): Promise<void> {
         ? repoFlag : resolve(repoFlag))
     : undefined;
   let host = kernelMode
-    ? { kernelRoot: kernelRoot!, repoPath, python: resolveKernelPython() }
+    ? { kernelRoot: kernelRoot!, repoPath, python: resolveKernelPython(),
+        // --repo 钉死单仓的部署形态:逐单仓从入口就拒(MFC-024)。
+        ...(repoPath ? { repoPinned: true } : {}) }
     : undefined;
   if (host) {
     console.log(`[serve] 内核模式:内核 ${host.kernelRoot}`
@@ -821,8 +824,12 @@ async function main(): Promise<void> {
       })
     : undefined;
 
+  // 任务日志环形缓冲(诊断包切片用):进程存活期间保留最近几千行。
+  const taskLogRing: string[] = [];
+  const deploymentRuntime = inspectDeploymentRuntime();
   const service = new TaskService({
     dataDir, provider, model, modelsJson, maxConcurrent, settings,
+    deploymentRuntime,
     ...(issueOnly ? { requirementDisabled: true } : {}),
     vision: visionProvider && visionModel
       ? { provider: visionProvider, model: visionModel } : undefined,
@@ -883,8 +890,30 @@ async function main(): Promise<void> {
     // 正式部署建议固定 public-url；未配置时，服务会从已登录用户的
     // 实际请求 Host 学到内网入口，绝不再默认写死 127.0.0.1。
     linkBase: publicUrl,
-    log: (message) => console.log(`  [task] ${message}`),
+    // 任务日志除了进 stdout,还进内存环形缓冲——诊断包(问题定位
+    // 一键采集)靠它切最近日志;进程重启缓冲清零,历史看 stdout 归档。
+    log: (message) => {
+      const line = `${new Date().toISOString()} [task] ${message}`;
+      console.log(`  [task] ${message}`);
+      taskLogRing.push(line);
+      if (taskLogRing.length > 4000) {
+        taskLogRing.splice(0, taskLogRing.length - 2000);
+      }
+    },
+    recentLog: () => [...taskLogRing],
   });
+  const platformCheck = await service.refreshDeliveryPlatformCheck();
+  const runtimeLog = deploymentRuntime.status === "error"
+    ? console.error : console.log;
+  runtimeLog(`[serve] Linux 部署自检(${deploymentRuntime.status}): `
+    + deploymentRuntime.detail
+    + (deploymentRuntime.suggestion ? `；${deploymentRuntime.suggestion}` : ""));
+  if (platformCheck) {
+    const platformLog = platformCheck.ready ? console.log : console.error;
+    platformLog(`[serve] 交付平台预检(${platformCheck.ready ? "ok" : "error"}): `
+      + platformCheck.detail
+      + (platformCheck.suggestion ? `；${platformCheck.suggestion}` : ""));
+  }
   // 先清理本 dataDir 实例上次崩溃遗留的 coding/prepush/system-check
   // 容器，再恢复任务。顺序不能反：recover 一旦入队就可能撞上旧容器。
   const swept = await service.sweepOrphanContainers();
@@ -967,6 +996,21 @@ async function main(): Promise<void> {
     if (terminating) return;
     terminating = true;
     console.log(`[serve] 收到 ${signal}，停止接单并清理会话/任务容器...`);
+    // Docker 默认只给 10 秒优雅退出。任务容器清理或外部连接偶发卡住
+    // 时，旧进程会在 release() 之前被 SIGKILL，下一容器便被陈旧锁永
+    // 久挡住。提前两秒做最后兜底：先撒锁、立即退出；残留的受管容器
+    // 会由下一实例按同一 dataDir 指纹清扫，绝不与旧进程并行运行。
+    const forcedExit = setTimeout(() => {
+      console.error("[serve] 优雅关闭超过 8 秒，释放实例锁后退出；"
+        + "残留任务容器将由下一实例接管清扫");
+      try {
+        instanceLock.release();
+      } catch (error) {
+        console.error(`[serve] 超时释放数据目录锁失败: ${String(error)}`);
+      }
+      process.exit(1);
+    }, 8_000);
+    forcedExit.unref();
     const closed = new Promise<void>((resolveClose) => {
       server.close(() => resolveClose());
     });
@@ -1001,6 +1045,7 @@ async function main(): Promise<void> {
     } catch (error) {
       console.error(`[serve] 释放数据目录锁失败(下次启动会自动接管): ${String(error)}`);
     }
+    clearTimeout(forcedExit);
     process.exit(exitCode);
   };
   process.once("SIGTERM", () => { void terminate("SIGTERM"); });

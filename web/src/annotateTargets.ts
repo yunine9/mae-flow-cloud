@@ -68,6 +68,34 @@ export function pickRow(
   return undefined;
 }
 
+/** 落点被覆盖层挡住时,沿"该坐标下的整叠元素"往下找第一个能落到行的。
+ *
+ * 真实案发现场(MFC-034):专注审阅的分栏把手是一条 left:50%、全高、
+ * z-index:4 的竖条,恰好压在每一行的几何中心;自动化点击默认打元素
+ * 中心点,于是 event.target 永远是把手,`closest("[data-l]")` 找不到行,
+ * 行明明在 DOM 里却"点不了"。人手点在分栏线附近同样哑火。
+ * 调用方把 `document.elementsFromPoint(x, y)` 的结果喂进来,这里只认
+ * root 之内的候选——覆盖层自己不带行号,会被自然跳过。 */
+export function pickRowFromStack(
+  stack: ArrayLike<RowNode | null | undefined>,
+  root: RowNode | null | undefined,
+  contains: (node: RowNode) => boolean,
+): RowNode | undefined {
+  if (!root) return undefined;
+  for (let index = 0; index < stack.length; index += 1) {
+    const candidate = stack[index];
+    if (!candidate || !contains(candidate)) continue;
+    if (candidate.closest("button, a, textarea, input, .annot-editor")) {
+      continue;
+    }
+    // 只认"候选自身或祖先带行号"。不复用 pickRow 的容器回退——叠层里
+    // 永远躺着整块画布容器,回退会把点击错落到画布第一行,比不落更糟。
+    const row = candidate.closest("[data-l]");
+    if (row && lineOf(row)) return row;
+  }
+  return undefined;
+}
+
 /**
  * 划词是在读,不是要批注——但只认**这块材料里**的划词。
  *

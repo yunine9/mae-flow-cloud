@@ -12,6 +12,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  appendFileSync,
   chmodSync,
   existsSync,
   mkdtempSync,
@@ -23,8 +24,10 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FakeGitPlatform } from "../src/gitPlatform.ts";
+import { DeliveryOutbox } from "../src/deliveryOutbox.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskService } from "../src/taskService.ts";
+import type { PrePushRunner } from "../src/prepushAgent.ts";
 import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
 import { workflowChoices, workflowLabel } from "../src/kernelChoices.ts";
 import { managedFlowFixture } from "./support/managedFlowFixture.ts";
@@ -60,6 +63,16 @@ function walkScript(): Scene[] {
   ];
 }
 
+/** 模拟 Agent 按新契约逐条留下结构化回执。真实场景由使命提示写文件；
+ * 测试从宿主已经落好的 local-annotations.json 取稳定 id/revision。 */
+function localReviewReceiptCommand(summary: string): string {
+  const safeSummary = JSON.stringify(summary);
+  return "node -e 'const fs=require(\"fs\");"
+    + "const p=JSON.parse(fs.readFileSync(\"../reviews/local-annotations.json\",\"utf8\"));"
+    + `const summary=${safeSummary};`
+    + "fs.writeFileSync(\"../reviews/local-receipts.json\",JSON.stringify({receipts:p.annotations.map(a=>({annotation_id:a.id,revision:a.rework||0,outcome:\"fixed\",summary,evidence:[a.file+\":\"+a.line]}))}))'";
+}
+
 function buildService(
   platform: FakeGitPlatform,
   dataDir: string,
@@ -67,7 +80,9 @@ function buildService(
   deliveryExtra: {
     resolveDiscussions?: boolean;
     pollTimeoutMs?: number;
+    repairRounds?: number;
   } = {},
+  prepushRunner?: PrePushRunner,
 ): TaskService {
   return new TaskService({
     dataDir, provider: "maeflow", model: "scripted-v1", modelsJson,
@@ -75,6 +90,8 @@ function buildService(
             python: "python3" },
     delivery: { platformUrl: platform.baseUrl, pollIntervalMs: 120,
                 ...deliveryExtra },
+    ...(prepushRunner
+      ? { prepush: { enabled: true, runner: prepushRunner } } : {}),
   });
 }
 
@@ -255,6 +272,230 @@ EOF` } } },
     await until(() => service.get(id)!.status === "completed", "合入收口");
   } finally {
     await model.stop();
+    await platform.stop();
+  }
+});
+
+test("MR 回复部分失败:成功项不重发,失败项由 outbox 自动续投", async () => {
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  platform.seedDiscussion({
+    id: "d-ok", file: "a.txt", line: 1, severity: "minor",
+    author: "甲", body: "第一条意见",
+  });
+  platform.seedDiscussion({
+    id: "d-retry", file: "a.txt", line: 2, severity: "minor",
+    author: "乙", body: "第二条意见",
+  });
+  platform.failNextDiscussionReplies("d-retry", 1);
+  await platform.start();
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-outbox-"));
+  const model = mrModel([
+    ...walkScript(),
+    { tool: { name: "bash", input: { command:
+        `cat > ../review_replies.md <<'REPLY'
+[d-ok]
+第一条已处理。
+[d-retry]
+第二条已处理。
+REPLY` } } },
+    { text: "两条均已逐条答复。" },
+  ], dataDir);
+  await model.start();
+  const service = buildService(platform, dataDir, model.modelsJson());
+  try {
+    const id = service.create("交付 REQ9:回复故障恢复").id;
+    const replies = (discussionId: string) =>
+      platform.discussions.find((item) => item.id === discussionId)?.replies ?? [];
+    await until(() => replies("d-ok").length === 1
+      && replies("d-retry").length === 1, "失败回复由 outbox 自动续投");
+    assert.equal(replies("d-ok").length, 1,
+      "同批成功项不能随失败项一起重发");
+    const outbox = readFileSync(join(
+      service.get(id)!.workspace, "delivery-outbox.jsonl"), "utf-8");
+    assert.match(outbox, /"op":"failed"/);
+    assert.equal((outbox.match(/"op":"delivered"/g) ?? []).length, 2);
+
+    for (const discussion of platform.discussions) discussion.resolved = true;
+    platform.settleMr("master_bot_REQ9", "merged");
+    await until(() => service.get(id)!.status === "completed", "故障恢复后合入收口");
+  } finally {
+    await model.stop();
+    await platform.stop();
+  }
+});
+
+test("MR 回复在 Build-Fix 后才入队，并绑定实际推送的最终 SHA", async () => {
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  platform.seedDiscussion({
+    id: "d-final-sha", file: "a.txt", line: 1, severity: "major",
+    author: "甲", body: "请补上最终修复",
+  });
+  await platform.start();
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-final-sha-"));
+  const model = mrModel([
+    ...walkScript(),
+    { tool: { name: "bash", input: { command:
+      `cat > ../review_replies.md <<'REPLY'
+[d-final-sha]
+已按意见修复，并由 Build-Fix 完成最终校验。
+REPLY` } } },
+    // 给测试宿主一个窗口模拟“普通检视 Agent 已提交 B”。真实 Agent
+    // 会自己改码提交；这里用宿主写是为了不把用例耦合到 review 内核
+    // 的命令门禁细节，本测试只钉 outbox 与 prepush 的时序。
+    { tool: { name: "bash", input: { command:
+      `node -e "setTimeout(()=>{},1500)"` } } },
+    { text: "检视意见已处理。" },
+  ], dataDir);
+  await model.start();
+  let shaBeforeBuildFix = "";
+  let shaAfterBuildFix = "";
+  let changedReviewRevision = false;
+  const runner: PrePushRunner = async (request) => {
+    // 首次交付时 MR 尚不存在；检视修复后的第二次 Build-Fix 再模拟
+    // 专项 Agent 补一笔提交，证明回复不能提前绑定普通 Agent 的 HEAD。
+    if (platform.mergeRequests.length > 0 && !changedReviewRevision) {
+      changedReviewRevision = true;
+      shaBeforeBuildFix = request.sha;
+      writeFileSync(join(request.workspace, "prepush-final.txt"),
+        "final build fix\n");
+      git(request.workspace, "add", "prepush-final.txt");
+      git(request.workspace, "commit", "--quiet", "-m", "prepush final fix");
+      shaAfterBuildFix = git(request.workspace, "rev-parse", "HEAD");
+      return {
+        status: "passed", sha: shaAfterBuildFix,
+        message: "Build-Fix 最终提交已通过",
+      };
+    }
+    return { status: "passed", sha: request.sha, message: "Build-Fix 通过" };
+  };
+  const service = buildService(platform, dataDir, model.modelsJson(),
+    { resolveDiscussions: true }, runner);
+  try {
+    const id = service.create("交付 REQ9:回复绑定最终 SHA").id;
+    await until(() => existsSync(join(
+      service.get(id)!.workspace, "review_replies.md")), "检视回复草稿落盘");
+    const cwd = (service as any).tasks.get(id).cwd as string;
+    writeFileSync(join(cwd, "review-fix.txt"), "ordinary review fix\n");
+    git(cwd, "add", "review-fix.txt");
+    git(cwd, "commit", "--quiet", "-m", "ordinary review fix");
+    await until(() => platform.discussions[0].replies.length === 1
+      || service.get(id)?.status === "failed"
+      || service.get(id)?.delivery?.loop?.state === "halted",
+    "最终 SHA push 后投递回复");
+    assert.equal(platform.discussions[0].replies.length, 1,
+      `回复未投递：${JSON.stringify({
+        status: service.get(id)?.status,
+        detail: service.get(id)?.detail,
+        delivery: service.get(id)?.delivery,
+      })}`);
+    assert.ok(shaBeforeBuildFix && shaAfterBuildFix);
+    assert.notEqual(shaBeforeBuildFix, shaAfterBuildFix,
+      "测试前提：Build-Fix 必须在回复草稿之后产生新提交");
+    const summary = service.get(id)!;
+    assert.equal(summary.delivery?.git_push?.sha, shaAfterBuildFix);
+    const operations = readFileSync(join(
+      summary.workspace, "delivery-outbox.jsonl"), "utf-8")
+      .trim().split("\n").map((line) => JSON.parse(line));
+    const enqueued = operations.filter((operation) =>
+      operation.op === "enqueue"
+      && operation.item?.payload?.discussion_id === "d-final-sha");
+    assert.equal(enqueued.length, 1);
+    assert.equal(enqueued[0].item.payload.expected_sha, shaAfterBuildFix,
+      "outbox 必须绑定 Build-Fix 收敛后的最终 SHA");
+    assert.notEqual(enqueued[0].item.payload.expected_sha, shaBeforeBuildFix,
+      "普通 Agent 收口时的中间 SHA 不得提前入队");
+  } finally {
+    await model.stop();
+    await platform.stop();
+  }
+});
+
+test("outbox 恢复投递强制匹配 push 收据 SHA，旧版回复不能借新分支发出", async () => {
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  platform.seedDiscussion({
+    id: "d-recovery-sha", file: "a.txt", line: 1, severity: "major",
+    author: "乙", body: "恢复场景意见",
+  });
+  await platform.start();
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-recovery-sha-"));
+  const service = new TaskService({
+    dataDir, provider: "fixture", model: "fixture", maxConcurrent: 0,
+    modelsJson: { providers: { fixture: { models: [{ id: "fixture" }] } } },
+    host: { kernelRoot: KERNEL_ROOT, repoPath: platform.barePath,
+            python: "python3" },
+    delivery: { platformUrl: platform.baseUrl, pollIntervalMs: 50 },
+  });
+  try {
+    const id = service.create("outbox SHA 恢复", { ticket: "REQ_OUTBOX_SHA" }).id;
+    const internal = (service as any).tasks.get(id);
+    const expectedSha = "a".repeat(40);
+    const otherSha = "b".repeat(40);
+    internal.summary.delivery = { git_push: { sha: otherSha } };
+    const outbox = new DeliveryOutbox(join(
+      internal.summary.workspace, "delivery-outbox.jsonl"));
+    const item = outbox.enqueueReviewReply({
+      discussion_id: "d-recovery-sha", body: "已修复", repo: platform.barePath,
+      resolve: false, expected_sha: expectedSha,
+    });
+
+    await (service as any).flushReviewReplyOutbox(internal);
+    assert.equal(platform.discussions[0].replies.length, 0,
+      "当前 push 是另一 SHA 时必须零网络副作用");
+    const blocked = outbox.list().find((one) => one.id === item.id)!;
+    assert.equal(blocked.state, "pending");
+    assert.equal(blocked.attempts, 0, "SHA 拒绝不是一次远端 attempt");
+    assert.match(blocked.last_error ?? "", /当前远端推送收据/);
+
+    // 模拟重启对账恢复出这条动作真正对应的 push 收据；同一 pending
+    // 此时才允许投递，并正常落 delivered。
+    internal.summary.delivery.git_push.sha = expectedSha;
+    await (service as any).flushReviewReplyOutbox(internal);
+    assert.deepEqual(platform.discussions[0].replies, ["已修复"]);
+    assert.equal(outbox.list().find((one) => one.id === item.id)?.state,
+      "delivered");
+
+    // 启动恢复与合入 watcher 可能同拍请求 flush；单飞必须保证同一动作
+    // 只产生一次 attempt / 网络副作用，不能由本地竞态制造假 stalled。
+    const concurrent = outbox.enqueueReviewReply({
+      discussion_id: "d-recovery-sha", body: "并发恢复", repo: platform.barePath,
+      resolve: false, expected_sha: expectedSha,
+    });
+    await Promise.all([
+      (service as any).flushReviewReplyOutbox(internal),
+      (service as any).flushReviewReplyOutbox(internal),
+    ]);
+    const concurrentState = outbox.list().find(
+      (one) => one.id === concurrent.id)!;
+    assert.equal(concurrentState.state, "delivered");
+    assert.equal(concurrentState.attempts, 1);
+    assert.deepEqual(platform.discussions[0].replies,
+      ["已修复", "并发恢复"]);
+
+    // 合法投递事实后出现完整坏行时必须 fail-closed 且把阻塞投影给人，
+    // 不能只在后台 watcher 里反复抛错，让 await_merge 表面继续等合入。
+    appendFileSync(outbox.path, "这不是 JSON\n", "utf-8");
+    internal.summary.status = "await_merge";
+    assert.equal(await (service as any).flushReviewReplyOutbox(internal), false);
+    assert.match(internal.summary.detail, /检视回复投递账不可读/);
+    assert.match(internal.summary.delivery.stalled, /delivery-outbox\.jsonl/);
+
+    writeFileSync(outbox.path,
+      readFileSync(outbox.path, "utf-8").replace("这不是 JSON\n", ""),
+      "utf-8");
+    let resumed = 0;
+    (service as any).tryDeliver = async () => { resumed += 1; };
+    internal.summary.status = "verifying";
+    (service as any).scheduleDeliveryRecovery(
+      internal, internal.controlEpoch);
+    await until(() => internal.summary.delivery.stalled === undefined
+      && resumed === 1, "修复投递账后在同一进程自动续接交付", 5_000);
+    assert.equal(internal.summary.delivery.stalled, undefined);
+    assert.match(internal.summary.detail, /投递账已恢复/);
+  } finally {
+    await service.shutdown().catch(() => undefined);
     await platform.stop();
   }
 });
@@ -689,10 +930,10 @@ test("MR 未合入前本地批注可反复开启 review 轮，始终更新同一
   const model = mrModel([
     ...walkScript(),
     { tool: { name: "bash", input: { command:
-        "echo review-one >> a.txt" } } },
+        `echo review-one >> a.txt; ${localReviewReceiptCommand("第一轮边界处理已完成")}` } } },
     { text: "第一轮本地检视意见已修改。" },
     { tool: { name: "bash", input: { command:
-        "echo review-two >> a.txt" } } },
+        `echo review-two >> a.txt; ${localReviewReceiptCommand("第二轮错误兜底已完成")}` } } },
     { text: "第二轮本地检视意见已修改。" },
   ], dataDir);
   await model.start();
@@ -757,7 +998,8 @@ test("本地检视撞上 CI 修复时并入当前 Agent，不启动第二只抢�
   const model = mrModel([
     ...walkScript(),
     { tool: { name: "bash", input: { command:
-        "sleep 1; echo ci-and-review >> a.txt && git add a.txt && git commit --quiet -m fix" } } },
+        "sleep 1; echo ci-and-review >> a.txt && git add a.txt && git commit --quiet -m fix; "
+        + localReviewReceiptCommand("流水线与人工意见已合并处理") } } },
     { text: "流水线问题与人的检视意见已合并处理。" },
   ], dataDir);
   await model.start();
@@ -866,6 +1108,70 @@ test("MR 被关闭不算任务结束：持续监听，重开后恢复，用户�
       author: "liaoxiang", artifact: "未提交改动", file: "a.txt", line: 1,
       anchor: "change", note: "停止后不应再新增", kind: "code",
     }), /用户停止/);
+  } finally {
+    await model.stop();
+    await platform.stop();
+  }
+});
+
+test("自动修复关闭只停修复不停监控：人工处理后仍能识别合入", async () => {
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  await platform.start();
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-watch-only-"));
+  const model = mrModel(walkScript(), dataDir);
+  await model.start();
+  const service = buildService(platform, dataDir, model.modelsJson(), {
+    repairRounds: 0,
+  });
+  try {
+    const id = service.create("交付 REQ9:只监控不自动修").id;
+    await until(() => service.get(id)!.status === "await_merge", "先到等待合入");
+    platform.conflictGate = true;
+    await until(() => (service.get(id)!.delivery?.waiting_on ?? "")
+      .includes("自动修复已关闭"), "明确提示人工处理红门禁");
+    assert.equal(service.get(id)!.status, "await_merge");
+
+    platform.conflictGate = false;
+    platform.settleMr("master_bot_REQ9", "merged");
+    await until(() => service.get(id)!.status === "completed",
+      "人工处理后监控仍在并识别合入");
+  } finally {
+    await model.stop();
+    await platform.stop();
+  }
+});
+
+// MFC-038:merged 不是靠状态字段自证的。平台实际合入/指向的源提交必须
+// 等于本任务验证过的 delivery.sha——流水线绿灯、prepush 收据、人工检视
+// 全部绑定后者;分支被平台侧改写后,MFC 绝不能拿旧验证宣告完成。
+test("MR 源提交在等待合入期间被替换:拒绝完成,停摆点名两个 SHA", async () => {
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  await platform.start();
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-shaswap-"));
+  const model = mrModel(walkScript(), dataDir);
+  await model.start();
+  const service = buildService(platform, dataDir, model.modelsJson());
+  try {
+    const id = service.create("交付 REQ9:换提交").id;
+    await until(() => service.get(id)!.status === "await_merge", "先绿");
+    const verified = service.get(id)!.delivery?.sha ?? "";
+    assert.ok(verified, "前置:等待合入时必须已有验证 SHA");
+    // 模拟平台侧改写:MR 指向另一个提交并被合入(codex 第二轮实证:
+    // 夹具重放出 ef83355 合入,MFC 仍拿旧验证 4806f99 宣告完成)。
+    const swapped = "f".repeat(40);
+    platform.mergeRequests[0].sha = swapped;
+    platform.mergeRequests[0].merge_state = "merged";
+    await until(() => Boolean(service.get(id)!.delivery?.stalled),
+      "监控必须停摆而不是收口");
+    const summary = service.get(id)!;
+    assert.notEqual(summary.status, "completed",
+      "被替换的合入绝不能标记完成");
+    assert.match(String(summary.delivery?.stalled),
+      /不一致|未经本任务验证/, "停摆原因必须点名 SHA 不符");
+    assert.match(String(summary.delivery?.stalled),
+      new RegExp(verified.slice(0, 7)), "要点名本任务验证过的提交");
   } finally {
     await model.stop();
     await platform.stop();

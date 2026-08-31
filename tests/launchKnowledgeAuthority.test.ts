@@ -199,7 +199,8 @@ test("目录损坏显式返回 source 告警与 degraded，不伪装成零匹配
     "{broken");
   writeFileSync(join(dataDir, "knowledge-candidates"), "not-a-directory");
   const preview = service(dataDir).previewLaunchKnowledge({});
-  assert.equal(preview.complete, false);
+  assert.equal(preview.complete, true,
+    "可选目录损坏要明确降级，但不能阻塞一项本来不依赖它的任务");
   assert.equal(preview.degraded, true);
   assert.equal(preview.warnings.some((warning) =>
     warning.source === "business_modules"
@@ -209,7 +210,7 @@ test("目录损坏显式返回 source 告警与 degraded，不伪装成零匹配
       && warning.code === "catalog_unavailable"), true);
 });
 
-test("工程知识正文损坏不能伪装成完整清单，旧 digest 创建必须拒绝", () => {
+test("自动匹配工程知识损坏时明确降级；旧 digest 拒绝，新清单可继续", () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-launch-authority-corrupt-"));
   const repository = "https://code.example/team/orders.git";
   const candidate = publishEngineering(dataDir, 1);
@@ -232,7 +233,8 @@ test("工程知识正文损坏不能伪装成完整清单，旧 digest 创建必
   writeFileSync(file, `${JSON.stringify(stored, null, 2)}\n`);
 
   const degraded = taskService.previewLaunchKnowledge(input);
-  assert.equal(degraded.complete, false);
+  assert.equal(degraded.complete, true,
+    "自动匹配项是可选增强，损坏时按明确的空清单继续");
   assert.equal(degraded.degraded, true);
   assert.deepEqual(degraded.engineering_knowledge, []);
   assert.equal(degraded.warnings.some((warning) =>
@@ -241,14 +243,30 @@ test("工程知识正文损坏不能伪装成完整清单，旧 digest 创建必
       && warning.message.includes(candidate.id)
       && warning.message.includes("正文与发布指纹不一致")), true);
 
+  const explicitlySelected = taskService.previewLaunchKnowledge({
+    ...input,
+    selectedEngineeringKnowledgeIds: [candidate.id],
+  });
+  assert.equal(explicitlySelected.complete, false,
+    "用户或工作流点名的资产损坏不能悄悄退化掉");
+  assert.equal(explicitlySelected.errors.some((notice) =>
+    notice.source === "engineering_knowledge"
+      && notice.code === "selection_invalid"), true);
+
   assert.throws(() => taskService.create("不能固定损坏的知识清单", {
     repo: repository,
     repositoryProfiles,
     knowledgePreviewDigest: trusted.selection_digest,
-  }), /知识清单暂时无法完整核对/);
+  }), /知识清单已变化/);
   assert.deepEqual(taskService.list(), []);
   assert.equal(existsSync(join(dataDir, "task-1")), false,
-    "目录降级必须在 task id 分配和现场创建前拒绝");
+    "旧指纹必须在 task id 分配和现场创建前拒绝");
+  const created = taskService.create("降级为无工程知识继续", {
+    repo: repository,
+    repositoryProfiles,
+    knowledgePreviewDigest: degraded.selection_digest,
+  });
+  assert.deepEqual(created.engineering_knowledge ?? [], []);
 });
 
 test("团队 Skill 预览复用快照包验收，坏包不会冒充最终已固定", () => {
@@ -278,24 +296,18 @@ test("团队 Skill 预览复用快照包验收，坏包不会冒充最终已固�
   assert.match(preview.team_skills[0].digest, /^[a-f0-9]{64}$/);
   assert.equal(preview.warnings.some((warning) =>
     warning.source === "team_skills" && /128 KiB/.test(warning.message)), true);
-  assert.equal(preview.complete, false,
-    "坏包存在时清单必须显式标为不可用于最终固定");
-  rmSync(oversized, { recursive: true });
-  const verifiedPreview = taskService.previewLaunchKnowledge({
-    repositories, repositoryProfiles,
-  });
-  assert.equal(verifiedPreview.complete, true,
-    JSON.stringify(verifiedPreview.warnings));
+  assert.equal(preview.complete, true,
+    "坏的是自动匹配可选包，保留明确告警并固定其余合法 Skill 即可");
   const task = taskService.create("核对团队 Skill", {
     repo: repositories[0],
     repositoryProfiles: repositoryProfiles.map((item) => ({
       ...item, updated_at: new Date().toISOString(), updated_by: "tester",
     })),
-    knowledgePreviewDigest: verifiedPreview.selection_digest,
+    knowledgePreviewDigest: preview.selection_digest,
   });
   assert.deepEqual(task.team_skills?.map((skill) =>
     skill.source_path ?? skill.path),
-    verifiedPreview.team_skills.map((skill) => skill.path));
+    preview.team_skills.map((skill) => skill.path));
 });
 
 test("知识清单指纹绑定创建：旧清单拒绝且不占 task id，未变化清单放行",

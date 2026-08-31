@@ -170,7 +170,7 @@ def evidence_error(
     if failure_count < 2 or moonlight:
         return message
     goto_hint = (
-        '先执行 messages 取得该回答 ID，再执行 python "%s" goto %s '
+        '先执行 messages 取得该回答 ID，再执行 python3 "%s" goto %s '
         "--force --message-id <ID>"
         % (script_path, target)
         if target else

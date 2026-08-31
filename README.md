@@ -13,9 +13,12 @@ Mae-Flow 云端服务:Pi(pi-mono coding agent)**进程内**集成 + Mae-Flow 内
 `src/issueFlow/` 独立承载——不进内核、不依赖 taskService,可用
 `--issue-only` 单独起服(见 `docs/issue-flow.md`)。拉日志/换库用
 every-skill 的两个 Go 工具(`assets/ops-tools/`):宿主以**环境变量**
-注入共用密码(`FETCH_LOGS_PASSWORD`/`BUILD_DEPLOY_PASSWORD`)后执行,
-密码不进会话上下文;fetch-logs 产物以真实文件落会话工作区供 Agent
-grep,build-deploy 以「部署完成」哨兵判定成功。真二进制冒烟在
+注入共用密码(`FETCH_LOGS_PASSWORD`/`BUILD_DEPLOY_PASSWORD`)后执行。
+浏览器草稿不保存网管口令，vault 以 AES-GCM 加密落盘；为让 Agent
+操作页面、抓日志和换库，口令会以明文进入该问题会话的 AI 上下文；
+它不会出现在会话列表、状态摘要或事件流中。只能使用脱敏演示/现场专用口令，
+不能填写个人复用或生产口令。fetch-logs 产物以真实文件落会话工作区
+供 Agent grep，build-deploy 以「部署完成」哨兵判定成功。真二进制冒烟在
 `tests/issueFlowService.test.ts`。
 
 ## 三条铁的边界
@@ -117,6 +120,13 @@ probe 现场留档在 `.probe/`,serve 的任务现场在 `.tasks/<task-id>/`
 (transcript/events/waiting/子 Agent transcript),每个文件都能直接打开看。
 试跑现场一键对拍:`python3 harness/run-report.py .pilot/<label>`
 (审批卡/子 Agent 配对/质量台账/阶段轨迹读成 markdown,只读)。
+
+问题定位一键采集:任务一进 failed / 交付停摆,服务自动把全部可定位
+事实(任务状态、内核现场、Git/容器事实、事件尾部、人审账、服务日志
+切片)汇成一个 markdown 落到 `<任务目录>/diagnostics/`;页面出事区域
+有「导出诊断包」链接,命令行 `curl -O <服务>/tasks/<任务号>/diagnostics`
+也能现采。不脱敏(包给自己人看),但 `.runtime` 下的明文令牌文件
+靠白名单采集从结构上排除——诊断包生来要被转发,令牌进包迟早外流。
 
 真模型试跑器也能注入可重复的流水线故障，不用等线上偶发红灯才验证
 修复回程。例如下面会让首轮 CodeCheck 红、修复后第二轮绿，并在首次
@@ -227,6 +237,38 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
 
 ## 已知边界(诚实清单)
 
+- **2026-08-30 第二轮复验修复(P0 完整性链 + 人审可用性)**(codex 真
+  Linux 容器 + GLM 整链复验揪出 3 个 P0,记录在 docs/
+  rootcause-e2e-20260830.md「第二轮 E2E 复验」一节):已修
+  MFC-033/034/035/036/037/038/039/040。要点:①定格基线必须是 HEAD
+  祖先,Build-Fix 前机械重放净改动回基线(树逐字节一致),推送前复核
+  只停不改写;②假平台冲突门禁与 merge 同用真实祖先事实,浏览器 409
+  给人话页;③merged 必须核对平台源提交==本任务验证过的 delivery.sha,
+  不符停摆点名两个 SHA。**如实挂账**:①内网真平台的门禁契约若不返回
+  sha 字段,MFC-038 的核对自动退化为旧行为(留痕不拦),接内网适配时
+  必须补该字段;②MFC-034 修法基于代码级根因(分栏把手压行中心)与
+  纯逻辑穿透测试,真浏览器手感须由下一轮 E2E 实点确认(本仓无浏览器
+  测试基建,零依赖纪律不为此拉 jsdom);③交付白名单"勾选/返工/CTA
+  三处拆散"的整卡合并是专门交互轮的活,本轮未动;④MFC-037 的
+  「await_merge 无法插话上报合入失败」未加新入口——门禁说真话后监控
+  自动派修,取消路径照旧,若真平台出现门禁绿但 merge 仍 409 的缝隙,
+  仍需人工。
+- **2026-08-30 双轮挑剔实测修复轮**(codex Linux + CC macOS 两轮真模型
+  E2E,根因总表 docs/rootcause-e2e-20260830.md):已修 MFC-001/002/003/
+  004/005/006/009/010/011/012/013/016(宿主)/018.1/019/020/021/022/023/
+  024/025/028/029/031 与 007/008 的标题/窄屏部分。**尚未修、如实挂账**:
+  ①MFC-030 交付文件树仍会把未提交的工作区文件(如 Agent 自己重定向出的
+  build.log)列进 all_paths 可勾选——勾了会指示 Agent 补提交,语义
+  合法但易勾错,展示分组待做;②MFC-014 Issue Flow 凭据边界只做了静态
+  审计,按交接文档建议须先做动态 secret boundary 验证再动层;
+  ③MFC-015 容器起后未对拍 Memory/NanoCpus/User;④MFC-016 内核仍写
+  无时区裸时间戳(宿主已按 UTC 解,长期解法在内核仓);⑤MFC-017 容器
+  内桌面通知无效(小鲁班通道不受影响);⑥MFC-026/027 单号预检与
+  Spec 双确认要动内核流程,另批;⑦MFC-007 问题一:Agent 自设检视卡
+  仍无原生增量入口,只有 cloud_push_confirm 卡有"这次修改"。
+  修复验证口径:typecheck 双配置 + 全量测试 + 内核 selftest 全绿;
+  真容器/真模型整链由下一轮 E2E 复验(测试建议见根因总表末尾)。
+
 - **2026-08-30 检视闭环与协作止血轮**(第三方视角三路审计后用户拍板
   "全部修改+充分测试"):①检视答复台账跨批继承——检视人解决部分/
   新增意见不再把已答复的讨论重新派单重复回复(曾被探针测试实锤,
@@ -234,7 +276,8 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
   意见,停环文案点名未答复 id;回复文件解析容错同行格式(`[id] 正文`),
   按 reviews/discussions.json 名单裁定头行防误切。②completeReview
   给发起人回执通知(修复完成提醒批注作者的 notifyReviewReady 先前
-  已有)。③批注死锁开管理员旁路:作者不在场时 admin 可代确认/代删,
+  已有)。③批注死锁开管理员旁路:作者不在场时 admin 可在批注面板
+  代确认/代删,
   台账 op.by 与 verified_by 留痕;"谁的意见谁裁决"仍是默认规则。
   ④决策与跳闸记操作人:decide 落 waiting.json 的 decided_by,
   prepush skip/stop/retry 与任务 retry 带 actor,user_skipped 收据

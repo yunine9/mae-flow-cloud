@@ -857,6 +857,7 @@ export class CloudSession {
         description: item.description,
         digest: item.digest,
         selected: item.selected,
+        scope: "repository",
       }, true);
     }
     if (skillPaths.length) {
@@ -928,6 +929,7 @@ export class CloudSession {
         description: known.description,
         digest: known.digest,
         selected: known.selected,
+        scope: "repository",
       } : moduleKnown ? {
         id: moduleKnown.id,
         kind: "skill",
@@ -1235,14 +1237,22 @@ export class CloudSession {
             isError: true,
           };
         }
+        const explicitContext =
+          typeof params.context === "string" && params.context.trim()
+            ? params.context.trim() : undefined;
+        const lastSaid = driver.lastAssistantText.get(driver.sessionId);
         const record = driver.options.humanGate.createWaiting({
           taskId: driver.options.taskId,
           step: driver.options.currentStep?.() ?? "",
           callId,
           questionInput: { questions: params.questions },
-          context: typeof params.context === "string" && params.context.trim()
-            ? params.context.trim()
-            : driver.lastAssistantText.get(driver.sessionId),
+          context: explicitContext ?? lastSaid,
+          // Agent 常在举卡前把完整清单说在正文里,卡的 context 只写
+          // "以上/上述…"——卡上必须带得到那个"上述",不能让人回翻
+          // 现场流水(MFC-028 盲签)。context 缺席时 lastSaid 已经当
+          // context 用了,不重复。
+          preface: explicitContext && lastSaid
+            && lastSaid !== explicitContext ? lastSaid : undefined,
         });
         // 重建会话可能把同一个工具调用重放出来。waiting_id 以
         // task+call_id 幂等；若盘上的决定已经 resolved，就把原答案

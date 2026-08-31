@@ -77,6 +77,8 @@ class GatePlatform {
   readonly seen: Array<{ method: string; url: string }> = [];
   readonly status = new Map<string, "running" | "success" | "failed">();
   defaultStatus: "running" | "success" | "failed" = "running";
+  /** 模拟同一 SHA 已有旧终态、随后重跑仍在进行的真实返回顺序。 */
+  historicalStatus?: "success" | "failed";
   private mrCount = 0;
   private server: ReturnType<typeof createServer> | undefined;
   baseUrl = "";
@@ -106,7 +108,7 @@ class GatePlatform {
             .searchParams.get("sha") ?? "";
           const run = this.status.get(sha) ?? this.defaultStatus;
           send({
-            runs: [{ status: "running" }, {
+            runs: [{ status: this.historicalStatus ?? "running" }, {
               status: run,
               ...(run === "failed"
                 ? { log: "BUILD FAILURE: 模块 notify-service 编译失败" }
@@ -185,12 +187,14 @@ async function stopChain(chain: Chain): Promise<void> {
  * declarations 回调在拿到 origin 后生成申报演出(仓地址/错报清单)。 */
 async function startChain(options: {
   platformStatus?: "running" | "success" | "failed";
+  historicalStatus?: "success" | "failed";
   declarations?: (origin: string) => string[][];
 }): Promise<Chain> {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-exit-"));
   const origin = bareOrigin(dataDir);
   const platform = new GatePlatform();
   platform.defaultStatus = options.platformStatus ?? "running";
+  platform.historicalStatus = options.historicalStatus;
   await platform.start();
   const model = new ScriptedModelServer(
     chainScenes(origin, options.declarations?.(origin) ?? []),
@@ -444,6 +448,37 @@ test("MR 验绿门·在跑受理:记申报账停等,监看器绿后自动放行"
     assert.equal(chain.saved().mr_gate, undefined, "放行即清申报账");
   } finally {
     await stopChain(chain);
+  }
+});
+
+test("MR 验绿门·只认最新 run:历史绿/红后最新 running 均不得提前裁决", async () => {
+  for (const historicalStatus of ["success", "failed"] as const) {
+    const chain = await startChain({
+      platformStatus: "running",
+      historicalStatus,
+      declarations: (origin) => [[origin]],
+    });
+    try {
+      await until(() =>
+        chain.service.get(chain.id).status === "idle" ? 1 : undefined,
+      `历史 ${historicalStatus} + 最新 running 的申报回合收口`);
+      const saved = chain.saved();
+      assert.equal(saved.stage, "mr_green",
+        `历史 ${historicalStatus} 不能越过最新 running 推进或打回`);
+      assert.deepEqual(saved.mr_gate?.mrs, [chain.origin],
+        "最新 run 仍在跑时应按受理停等处理");
+      assert.equal(chain.errorReceipts().length, 0,
+        "历史红灯不能让最新重跑被误判失败");
+
+      // 再等一次监看轮询，监看器也必须保持相同的“最新 run”口径。
+      await until(() => chain.platform.seen.filter((item) =>
+        item.method === "GET" && item.url.startsWith("/pipeline/status"))
+        .length >= 2 ? 1 : undefined, "监看器再次读取流水线");
+      assert.equal(chain.service.get(chain.id).stage, "mr_green");
+      assert.equal(chain.saved().pipelines?.[chain.origin]?.status, "running");
+    } finally {
+      await stopChain(chain);
+    }
   }
 });
 

@@ -6,7 +6,7 @@
  * DTS 文本/版本/候选纯函数在 dtsText.ts,单据 HTML 的图片代理重写与
  * 白名单消毒在 dtsHtml.ts,这里只引用不重复。
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   createIssue,
   getBusinessModules,
@@ -75,8 +75,25 @@ function PasswordCombo({ value, onChange, name }: {
   name: string;
 }) {
   const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
   const boxRef = useRef<HTMLDivElement | null>(null);
-  // 点面板外或 Esc 收起(与 DTS 版本下拉同一套交互)。
+  const toggleRef = useRef<HTMLButtonElement | null>(null);
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const listId = useId();
+
+  function openAndFocus(index: number) {
+    const next = Math.max(0, Math.min(index, NETMAN_COMMON_PASSWORDS.length - 1));
+    setActiveIndex(next);
+    setOpen(true);
+    window.requestAnimationFrame(() => optionRefs.current[next]?.focus());
+  }
+
+  function closeAndFocusTrigger() {
+    setOpen(false);
+    window.requestAnimationFrame(() => toggleRef.current?.focus());
+  }
+
+  // 点面板外、Tab 到组件外或 Esc 收起(与 DTS 版本下拉同一套交互)。
   useEffect(() => {
     if (!open) return;
     const onDoc = (event: MouseEvent) => {
@@ -87,29 +104,76 @@ function PasswordCombo({ value, onChange, name }: {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") setOpen(false);
     };
+    const onFocus = (event: FocusEvent) => {
+      if (!boxRef.current?.contains(event.target as Node)) setOpen(false);
+    };
     document.addEventListener("mousedown", onDoc);
     document.addEventListener("keydown", onKey);
+    document.addEventListener("focusin", onFocus);
     return () => {
       document.removeEventListener("mousedown", onDoc);
       document.removeEventListener("keydown", onKey);
+      document.removeEventListener("focusin", onFocus);
     };
   }, [open]);
   return <div className="issue-password-combo" ref={boxRef}>
     <div className="issue-password-row">
       <input type="password" value={value} aria-label={name}
+        aria-controls={listId} aria-expanded={open} aria-haspopup="listbox"
         autoComplete="new-password" placeholder="下拉选常见口令,或直接输入"
+        onKeyDown={(event) => {
+          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            event.preventDefault();
+            openAndFocus(event.key === "ArrowDown" ? 0
+              : NETMAN_COMMON_PASSWORDS.length - 1);
+          }
+        }}
         onChange={(event) => onChange(event.target.value)} />
-      <button type="button" className="issue-password-toggle"
+      <button ref={toggleRef} type="button" className="issue-password-toggle"
         aria-label={`${name}常见口令`} aria-expanded={open}
-        title="常见默认口令" onClick={() => setOpen((isOpen) => !isOpen)}>▾</button>
+        aria-controls={listId} aria-haspopup="listbox" title="常见默认口令"
+        onKeyDown={(event) => {
+          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            event.preventDefault();
+            openAndFocus(event.key === "ArrowDown" ? 0
+              : NETMAN_COMMON_PASSWORDS.length - 1);
+          }
+        }}
+        onClick={() => {
+          if (open) setOpen(false);
+          else openAndFocus(Math.max(0, NETMAN_COMMON_PASSWORDS.indexOf(value)));
+        }}>▾</button>
     </div>
-    {open && <div className="issue-password-menu" role="listbox"
+    {open && <div id={listId} className="issue-password-menu" role="listbox"
       aria-label={`${name}的常见口令`}>
-      {NETMAN_COMMON_PASSWORDS.map((password) => (
+      {NETMAN_COMMON_PASSWORDS.map((password, index) => (
         <button type="button" key={password} role="option"
+          ref={(node) => { optionRefs.current[index] = node; }}
           aria-selected={value === password}
           className={`issue-password-option${value === password ? " on" : ""}`}
-          onClick={() => { onChange(password); setOpen(false); }}>
+          tabIndex={index === activeIndex ? 0 : -1}
+          onFocus={() => setActiveIndex(index)}
+          onKeyDown={(event) => {
+            if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+              event.preventDefault();
+              const next = event.key === "Home" ? 0
+                : event.key === "End" ? NETMAN_COMMON_PASSWORDS.length - 1
+                  : event.key === "ArrowDown"
+                    ? (index + 1) % NETMAN_COMMON_PASSWORDS.length
+                    : (index - 1 + NETMAN_COMMON_PASSWORDS.length)
+                      % NETMAN_COMMON_PASSWORDS.length;
+              setActiveIndex(next);
+              optionRefs.current[next]?.focus();
+            } else if (event.key === "Escape") {
+              event.preventDefault();
+              event.stopPropagation();
+              closeAndFocusTrigger();
+            }
+          }}
+          onClick={() => {
+            onChange(password);
+            closeAndFocusTrigger();
+          }}>
           {password}
         </button>
       ))}
@@ -183,7 +247,9 @@ function ManualRegister({
   // 文本模块与 DTS 单号一并废除,无单场景只有一个入口:选模块。
   const [moduleId, setModuleId] = useState("");
   const [modules, setModules] = useState<BusinessModule[] | undefined>();
-  // 网管环境四件套常开必填(不再折叠):IP(逗号分隔可多台)/页面账号
+  const [moduleLoadError, setModuleLoadError] = useState("");
+  const [moduleLoadAttempt, setModuleLoadAttempt] = useState(0);
+  // 网管环境四件套常开必填(不再折叠):单个 IP/页面账号
   // (预填 admin 可改)/页面密码/网管后台密码。两个密码不进草稿。
   const [envHosts, setEnvHosts] = useState("");
   const [envPageAccount, setEnvPageAccount] = useState("admin");
@@ -198,13 +264,19 @@ function ManualRegister({
   const selectedModule = moduleCatalog.find((module) => module.id === moduleId);
   useEffect(() => {
     let alive = true;
-    // 目录读不到按空处理:发起按钮灰化并指路知识飞轮,不做其他兜底
-    // (spec #15:模块空目录不允许回退手填仓)。
+    setModules(undefined);
+    setModuleLoadError("");
+    // 加载失败和空目录是两种事实:前者给重试,后者指路团队资产。两种
+    // 情况都不回退手填仓(spec #15:仓的唯一权威是模块绑定)。
     getBusinessModules()
       .then((catalog) => { if (alive) setModules(catalog.modules); })
-      .catch(() => { if (alive) setModules([]); });
+      .catch((cause) => {
+        if (!alive) return;
+        setModuleLoadError(cause instanceof Error
+          ? cause.message : "业务模块目录暂时无法读取");
+      });
     return () => { alive = false; };
-  }, []);
+  }, [moduleLoadAttempt]);
   // 草稿纪律(spec #15):只存 标题/现象/模块/hosts/页面账号;两个密码
   // 绝不进 localStorage——刷新或换机后密码框为空,共机不残留凭据。
   useEffect(() => {
@@ -241,7 +313,8 @@ function ManualRegister({
 
   // 发起按钮的灰化口径(spec 验收):目录为空/未选模块/凭据缺失/提交中。
   // 字段缺内容不灰按钮——提交时逐项给友好指路文案,让人知道卡在哪。
-  const catalogEmpty = modules !== undefined && moduleCatalog.length === 0;
+  const catalogEmpty = modules !== undefined && !moduleLoadError
+    && moduleCatalog.length === 0;
   const submitDisabled = busy || credentialBlocked
     || moduleCatalog.length === 0 || !selectedModule;
 
@@ -261,6 +334,14 @@ function ManualRegister({
       onError("网管环境IP必填");
       return;
     }
+    if (/[\s,，、]/.test(host)) {
+      onError("网管环境IP一次只填一个，请不要输入逗号、空格或换行");
+      return;
+    }
+    if (!envPageAccount.trim()) {
+      onError("页面账号必填——默认 admin 可改,请填写网管页面登录名");
+      return;
+    }
     if (!envPagePassword.trim()) {
       onError("页面密码必填");
       return;
@@ -277,7 +358,7 @@ function ManualRegister({
         module_id: moduleId,
         environment: {
           hosts: [host],
-          page_account: envPageAccount.trim() || undefined,
+          page_account: envPageAccount.trim(),
           page_password: envPagePassword,
           backend_password: envBackendPassword,
         },
@@ -313,6 +394,7 @@ function ManualRegister({
         <label className={selectedModule ? "issue-field" : "issue-field wide"}>
           <span>业务模块 <i className="req">*</i></span>
           <select value={moduleId}
+            disabled={modules === undefined || !!moduleLoadError}
             onChange={(event) => setModuleId(event.target.value)}>
             <option value="" disabled>选择业务模块——决定关联代码仓</option>
             {moduleCatalog.map((module) => (
@@ -321,8 +403,14 @@ function ManualRegister({
               </option>
             ))}
           </select>
+          {moduleLoadError && <small className="issue-module-load-error" role="alert">
+            <span>业务模块加载失败：{moduleLoadError}</span>
+            <button type="button" onClick={() => setModuleLoadAttempt((value) => value + 1)}>
+              重试加载
+            </button>
+          </small>}
           {catalogEmpty && <small role="alert">
-            模块目录为空——先到「知识飞轮 → 业务模块」登记并绑定代码仓,再回来发起。
+            模块目录为空——先到「团队资产 → 业务模块」登记并绑定代码仓,再回来发起。
           </small>}
         </label>
         {selectedModule && <div className="issue-field">
@@ -346,7 +434,7 @@ function ManualRegister({
         </label>
         <label className="issue-field">
           <span>页面账号 <i className="req">*</i></span>
-          <input value={envPageAccount} placeholder="admin"
+          <input value={envPageAccount} placeholder="admin" required
             onChange={(event) => setEnvPageAccount(event.target.value)} />
         </label>
         <div className="issue-field">
@@ -359,6 +447,10 @@ function ManualRegister({
           <PasswordCombo name="网管后台密码" value={envBackendPassword}
             onChange={setEnvBackendPassword} />
         </div>
+        <small className="issue-group-note issue-privacy-note">
+          口令由服务端加密保存，不会出现在会话列表、状态摘要或事件流中，
+          但会以明文进入本问题的 AI 上下文；请勿填写个人复用或生产口令。
+        </small>
       </div>
     </div>
     <CredentialGate viewer={viewer} needRepo={touchRemoteRepo}
@@ -718,24 +810,31 @@ function DtsRegister({
             const isRemote = remote.tickets.some((item) => item.ticket === ticket.ticket);
             const isExpanded = expandedTicket === ticket.ticket;
             const detail = detailCache[ticket.ticket];
+            const detailId = `issue-dts-detail-${encodeURIComponent(ticket.ticket)}`;
             return <div key={ticket.ticket}
               className={`issue-dts-row${selected.includes(ticket.ticket) ? " on" : ""}${isExpanded ? " expanded" : ""}`}>
-              <label className="issue-dts-row-main">
-                <input type="checkbox" checked={selected.includes(ticket.ticket)}
-                  onChange={(event) => setSelected((current) => event.target.checked
-                    ? [...current, ticket.ticket]
-                    : current.filter((item) => item !== ticket.ticket))} />
-                <span className="issue-dts-ticket">{ticket.ticket}</span>
-                {isRemote && <span className="issue-dts-remote">远程</span>}
-                <span className="issue-dts-title">{ticket.title || "(无标题)"}</span>
-                {ticket.status && <span className="issue-dts-status">{ticket.status}</span>}
+              <div className="issue-dts-row-control">
+                <label className="issue-dts-row-main">
+                  <input type="checkbox" checked={selected.includes(ticket.ticket)}
+                    onChange={(event) => setSelected((current) => event.target.checked
+                      ? [...current, ticket.ticket]
+                      : current.filter((item) => item !== ticket.ticket))} />
+                  <span className="issue-dts-identity">
+                    <span className="issue-dts-ticket">{ticket.ticket}</span>
+                    {isRemote && <span className="issue-dts-remote">远程</span>}
+                  </span>
+                  <span className="issue-dts-title">{ticket.title || "(无标题)"}</span>
+                  {ticket.status && <span className="issue-dts-status">{ticket.status}</span>}
+                </label>
                 <button type="button" className="issue-dts-expand"
                   aria-expanded={isExpanded}
-                  onClick={(e) => { e.preventDefault(); toggleExpand(ticket.ticket); }}>
-                  {isExpanded ? "▼" : "▶"}
+                  aria-controls={detailId}
+                  aria-label={`${isExpanded ? "收起" : "展开"} ${ticket.ticket} 详情`}
+                  onClick={() => void toggleExpand(ticket.ticket)}>
+                  <span aria-hidden>{isExpanded ? "▼" : "▶"}</span>
                 </button>
-              </label>
-              {isExpanded && <div className="issue-dts-detail">
+              </div>
+              {isExpanded && <div id={detailId} className="issue-dts-detail">
                 {detailLoading && <span className="issue-dts-detail-loading">加载详情…</span>}
                 <dl className="issue-dts-detail-fields">
                   <div>

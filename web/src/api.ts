@@ -49,14 +49,22 @@ export function repairStopped(task: {
  * 人工节点与出错永远压过修复环文案(等人/坏了都比修复更紧急)。 */
 export function statusText(task: {
   status: TaskStatus;
-  delivery?: { loop?: { round: number; max?: number; state: string } };
+  delivery?: {
+    loop?: { round: number; max?: number; state: string; kind?: string };
+  };
 }): string {
   const loop = task.delivery?.loop;
   if (loop && ["queued", "running", "pausing", "verifying"]
     .includes(task.status)) {
     if (loop.state === "repairing") {
-      return `流水线修复中(第 ${loop.round}${
-        loop.max !== undefined ? `/${loop.max}` : ""} 轮)`;
+      // 人工检视刚触发返工时，round=0 表示尚未消耗任何流水线修复
+      // 轮次。它是内部状态，不应作为“第 0 轮”暴露给用户；此时用户
+      // 真正关心的是 Agent 正在处理检视意见。只有进入真实 CI 修复轮后
+      // 才展示轮次。
+      if (loop.kind === "review" || loop.round <= 0) {
+        return "正在按检视意见修改";
+      }
+      return "流水线修复中";
     }
     if (loop.state === "verifying") return "修复结果验证中";
     if (loop.state === "halted") return "自动修复已停,需人工";
@@ -771,6 +779,26 @@ export interface ExecutionPlaybookOption {
   resources: ExecutionPlan["resources"];
 }
 
+export interface PushReviewPresentation {
+  kind: "delivery" | "feedback" | "pipeline" | "conflict" | "rework";
+  title: string;
+  description: string;
+  base_sha: string;
+  baseline_sha: string;
+  head_sha: string;
+  has_focused_changes: boolean;
+  file_count: number;
+  additions: number;
+  deletions: number;
+  /** 设置时 additions/deletions 是占位 0,界面必须显示原因而不是 +0/−0。 */
+  stats_unavailable_reason?: string;
+  commits: Array<{ sha: string; subject: string }>;
+  all_paths: string[];
+  committed_paths: string[];
+  agent_note?: string;
+  verification?: string;
+}
+
 export interface TaskSummary {
   id: string;
   title?: string;
@@ -798,6 +826,8 @@ export interface TaskSummary {
   token_usage?: TaskTokenUsage;
   /** 执行队列位次(1 起,服务端投影):排队的单要能回答"排到哪了"。 */
   queue_position?: number;
+  /** 开发助手正占有主现场(paused 期间):恢复入口是"交还主任务"。 */
+  assistant_engaged?: boolean;
   /** 环境预热编译收据(服务端镜像):基线红=环境/上游的锅,与本单
    * 增量无关;不构成任何交付证据。 */
   baseline_build?: {
@@ -860,6 +890,8 @@ export interface TaskSummary {
     question?: { questions?: WaitingQuestion[] };
     /** 提问前模型的最后一段话:"如上表"这类指代的落点。 */
     context?: string;
+    /** 举卡前 Agent 刚展示的上文(完整清单/确认单),随卡呈现防盲签。 */
+    preface?: string;
     recommended_view?: "source" | "doc" | "chain" | "diff";
     /** 由服务端读取内核 flow 投影；前端据此识别关闭检视与继续处理意见
      * 的选项，不维护 build_review 等阶段表。 */
@@ -881,6 +913,8 @@ export interface TaskSummary {
     prepush?: PrepushVerification;
     /** 进程活性只看这里，不能再由旧存储字段 prepush.state=preparing 推断。 */
     prepush_runtime?: PrepushRuntime;
+    /** 当前 push 检视的阅读导航；授权仍由 delivery_selection 决定。 */
+    push_review?: PushReviewPresentation;
     /** 卡在哪一环的人话(等审批、等某一项核销结果……)。服务端一直
      * 在写,前端一直没显示——于是"验证中"三个字后面藏着的真实原因
      * 谁也看不到,任务看着像马上要成了,其实早就停了。 */
@@ -2315,7 +2349,17 @@ export interface Annotation {
   status: "draft" | "sent" | "verified" | "dropped";
   sent_at?: string;
   sent_via?: "interrupt" | "decision" | "pipeline_evidence" | "review_repair";
+  response?: {
+    revision: number;
+    outcome: "fixed" | "not_fixed" | "needs_clarification";
+    summary: string;
+    evidence: string[];
+    fixed_sha?: string;
+    responded_at: string;
+  };
   verified_at?: string;
+  /** 非作者代确认时的实际操作者；缺席表示由意见作者本人确认。 */
+  verified_by?: string;
   /** 第几次返工(0/缺省 = 首轮)。 */
   rework?: number;
 }
@@ -2476,7 +2520,7 @@ export async function retryBuildFix(taskId: string): Promise<void> {
 }
 
 /** 停止在途的 Build-Fix 并直推流水线(用户拍板的合并语义):中止本轮、
- * 如实收口停机账,随即绑当下 HEAD 跳过,编译与 UT 交由权威流水线裁决。
+ * 如实收口停机账,随即绑当下 HEAD 跳过,编译与单元测试交由权威流水线裁决。
  * 停止瞬间恰好通过的按通过继续;暂停中的任务只停不推。 */
 export async function stopBuildFix(taskId: string): Promise<void> {
   const response = await fetch(
@@ -2641,6 +2685,8 @@ export interface SettingsView {
       configured: boolean;
       url?: string;
       model?: string;
+      /** 部署默认协议;健康检查与真实调用必须同协议(MFC-011)。 */
+      api?: "openai-completions" | "anthropic-messages";
       vision: {
         configured: boolean;
         provider?: string;
@@ -2811,6 +2857,34 @@ export async function readArtifact(
   };
 }
 
+/** push 检视只允许二选一：看这次处理，或看从任务基线起的完整交付。
+ * Git revision 都由服务端从当前卡片取，页面不传 ref。 */
+export async function readPushReviewDiff(
+  taskId: string,
+  scope: "changes" | "full",
+): Promise<{
+  content?: string;
+  branch?: string;
+  unavailable?: string;
+  /** HTTP 状态只在不可用时返回，供工作台区分“版本已失效”和暂时故障。 */
+  status?: number;
+}> {
+  const response = await fetch(
+    `/tasks/${encodeURIComponent(taskId)}/push-review-diff?scope=${scope}`);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    return {
+      unavailable: String(body.error ?? `HTTP ${response.status}`),
+      status: response.status,
+    };
+  }
+  const body = await response.json();
+  return {
+    content: String(body.content ?? ""),
+    branch: body.branch ? String(body.branch) : undefined,
+  };
+}
+
 // ---- 问题流(与需求任务平行的独立会话域) ----
 
 /** 后端认证类报错的机器标记(src/issueFlow/issueGit.ts 的
@@ -2893,7 +2967,7 @@ const FIXED_STAGE_TEXT: Record<FixedIssueStage, string> = {
   prep_repo: "拉取代码仓",
   analyze: "问题分析",
   fix: "问题修改",
-  ut: "UT 验证",
+  ut: "单元测试验证",
   mr_green: "提交 MR·跑绿",
   deploy_verify: "换库环境验证",
   conclude: "确定结论",

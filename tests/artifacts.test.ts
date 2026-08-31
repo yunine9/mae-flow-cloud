@@ -25,6 +25,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import {
+  compareDeliveryRevisions,
   deliveryChangeSnapshot,
   DIFF_NAME,
   listArtifacts,
@@ -255,6 +256,42 @@ test("交付文件快照区分工作区可见项与 HEAD 真正会推送的文�
     ["src/feature.ts", "target/classes/Feature.class"]);
   assert.equal(snapshot?.baseline, baseline);
   assert.equal(snapshot?.head, run("rev-parse", "HEAD").trim());
+});
+
+test("提交比较只展示检视锚之后的修改，并把内容标成已提交", async () => {
+  const cwd = makeSite({ git: true });
+  const run = (...args: string[]) =>
+    execFileSync("git", ["-C", cwd, ...args], { encoding: "utf-8" }).trim();
+  const baseline = run("rev-parse", "HEAD");
+  writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify({
+    step_heads: { branch_create: baseline },
+  }));
+  mkdirSync(join(cwd, "src"), { recursive: true });
+  writeFileSync(join(cwd, "src", "feature.ts"), "export const value = 1;\n");
+  run("add", "src/feature.ts");
+  run("commit", "--quiet", "-m", "feat: initial delivery");
+  const reviewed = run("rev-parse", "HEAD");
+  writeFileSync(join(cwd, "src", "feature.ts"), "export const value = 2;\n");
+  writeFileSync(join(cwd, "src", "repair.ts"), "export const repaired = true;\n");
+  run("add", "src/feature.ts", "src/repair.ts");
+  run("commit", "--quiet", "-m", "fix: address review");
+  const head = run("rev-parse", "HEAD");
+
+  const comparison = await compareDeliveryRevisions(cwd, reviewed, head);
+  assert.ok(comparison);
+  assert.equal(comparison?.from, reviewed);
+  assert.equal(comparison?.to, head);
+  assert.deepEqual(comparison?.paths, ["src/feature.ts", "src/repair.ts"]);
+  assert.match(String(comparison?.content), /^## 已提交\(committed\)/);
+  assert.match(String(comparison?.content), /export const value = 2/);
+  assert.match(String(comparison?.content), /export const repaired = true/);
+  assert.doesNotMatch(String(comparison?.content), /feat: initial delivery/);
+  assert.deepEqual(comparison?.commits.map((item) => item.subject),
+    ["fix: address review"]);
+  assert.equal(await compareDeliveryRevisions(cwd, head, reviewed), undefined,
+    "反向或不构成祖先关系的锚不能参与比较");
+  assert.equal(await compareDeliveryRevisions(cwd, "HEAD", head), undefined,
+    "页面不能把任意 ref 送进 Git 命令");
 });
 
 test("Agent 平台注入目录不混入工作区检视，误提交后按完整历史拦截", async () => {

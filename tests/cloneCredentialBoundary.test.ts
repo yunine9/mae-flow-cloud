@@ -18,6 +18,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   realpathSync,
   statSync,
   symlinkSync,
@@ -152,4 +153,51 @@ test("Host Git 私有运行目录拒绝符号链接", () => {
   const service = newService(dataDir);
   assert.throws(() => service.prepareHostGitSandbox(undefined),
     /不是可信普通目录/);
+});
+
+/** 收集一个仓的松散对象绝对路径 → inode 映射(pack 文件同样纳入:
+ * hardlink 复用对 pack 一样成立)。 */
+function objectInodes(repo: string): Map<string, number> {
+  const inodes = new Map<string, number>();
+  const objectsDir = join(repo, ".git", "objects");
+  const bareObjects = join(repo, "objects");
+  const root = existsSync(objectsDir) ? objectsDir
+    : existsSync(bareObjects) ? bareObjects : undefined;
+  if (!root) return inodes;
+  const walk = (dir: string): void => {
+    for (const name of readdirSync(dir)) {
+      const path = join(dir, name);
+      const stat = statSync(path);
+      if (stat.isDirectory()) walk(path);
+      else inodes.set(path, stat.ino);
+    }
+  };
+  walk(root);
+  return inodes;
+}
+
+test("任务克隆不与源仓共享 Git 对象 inode(hardlink 污染面,e2e-picky-20260830)", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mfc-clone-inode-"));
+  // 普通工作仓(非 bare)是最容易触发 hardlink 复用的形态。
+  const work = join(root, "source-work");
+  mkdirSync(work, { recursive: true });
+  git(["init", "--quiet", "--initial-branch=master", work]);
+  writeFileSync(join(work, "README.md"), "# inode fixture\n");
+  git(["add", "."], work);
+  git(["-c", "user.name=t", "-c", "user.email=t@t",
+    "commit", "--quiet", "-m", "init"], work);
+
+  const service = newService(join(root, "data"));
+  const target = join(root, "task-clone");
+  mkdirSync(target, { recursive: true });
+  const cwd = await service.cloneRepo(target, undefined, undefined, work, "master");
+
+  const sourceInodes = new Set(objectInodes(work).values());
+  const shared: string[] = [];
+  for (const [path, ino] of objectInodes(cwd)) {
+    const stat = statSync(path);
+    if (stat.nlink > 1 || sourceInodes.has(ino)) shared.push(path);
+  }
+  assert.deepEqual(shared, [],
+    "任务对象与源仓共享 inode:容器内 chmod/truncate 会直接打在源仓上");
 });
