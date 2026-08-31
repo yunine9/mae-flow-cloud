@@ -84,11 +84,23 @@ export function RepositoryAssigneePicker({
   }, [taskId, initialAssignments, initialTickets]);
 
   const peopleByName = new Map(people.map((person) => [person.username, person]));
+  const hasDeliveryUnits = new Set(repositories.map((item) => item.url)).size
+    < repositories.length;
+
+  function chooseTicket(repositoryId: string, value: string) {
+    const nextTickets = { ...selection.tickets, [repositoryId]: value };
+    const ready = repositories.every((repository) =>
+      peopleByName.get(selection.assignments[repository.id])?.ready === true)
+      && ticketsReady(nextTickets);
+    onSelectionChange({ ...selection, tickets: nextTickets, ready });
+  }
 
   return <section className="repository-assignees" aria-label="逐仓交付信息">
     <header>
       <div><span>跨仓协作</span><strong>逐仓分工</strong></div>
-      <small>责任人与 AR 单号均已在发起任务时确定</small>
+      <small>{hasDeliveryUnits
+        ? "同仓拆分后，每个交付单元需要独立 AR 单号"
+        : "责任人与 AR 单号均已在发起任务时确定"}</small>
     </header>
     <div className="repository-assignee-list">
       {repositories.map((repository) => {
@@ -103,10 +115,16 @@ export function RepositoryAssigneePicker({
           <span className="repository-assignee-readonly">
             <small>责任人</small><strong>{selected || "未指定"}</strong>
           </span>
-          <span className="repository-ticket-readonly"
+          {hasDeliveryUnits ? <span className="repository-ticket-editable">
+            <small>该单元的 AR 单号</small>
+            <input value={ticket}
+              aria-label={`${repository.name}的 AR 单号`}
+              placeholder="例如：REQ2026xxxx"
+              onChange={(event) => chooseTicket(repository.id, event.target.value)} />
+          </span> : <span className="repository-ticket-readonly"
             title="AR 单号来自发起任务时填写的逐仓信息">
             <small>AR 单号</small><strong>{ticket || "未填写"}</strong>
-          </span>
+          </span>}
           <em className={person?.ready && !ticketProblem ? "ready" : "missing"}>
             {ticketProblem || (person?.ready ? "可委派"
               : person ? `未就绪：${person.missing.join("、")}` : "待选择")}
@@ -118,7 +136,9 @@ export function RepositoryAssigneePicker({
       {selection.error}
     </p>}
     <footer>
-      <p>确认方案后，系统会按上面的责任人、单号和依赖关系直接生成各仓子任务。</p>
+      <p>{hasDeliveryUnits
+        ? "为每个单元填写不同的 AR 单号；确认后将按依赖顺序生成子任务。"
+        : "确认方案后，系统会按上面的责任人、单号和依赖关系直接生成各仓子任务。"}</p>
     </footer>
   </section>;
 }

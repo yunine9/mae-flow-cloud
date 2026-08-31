@@ -1576,6 +1576,10 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .repository-assignee-readonly, .repository-ticket-readonly { min-width: 0; padding: 5px 8px; display: grid !important; gap: 1px !important; border-left: 2px solid var(--accent); border-radius: 0 6px 6px 0; background: var(--accent-soft); }
 .repository-assignee-readonly small, .repository-ticket-readonly small { color: var(--muted); font-size: 10px; }
 .repository-assignee-readonly strong, .repository-ticket-readonly strong { overflow: hidden; font: 700 12px var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.repository-ticket-editable { min-width: 0; display: grid !important; gap: 3px !important; }
+.repository-ticket-editable small { color: var(--muted); font-size: 10px; }
+.repository-ticket-editable input { width: 100%; min-height: 34px; padding: 0 9px; border: 1px solid var(--line-strong); border-radius: 6px; color: var(--text-strong); background: var(--surface); font: 650 12px var(--font-mono); }
+.repository-ticket-editable input:focus { border-color: var(--accent); outline: 2px solid color-mix(in srgb, var(--accent) 18%, transparent); }
 .repository-assignee-list em { color: var(--muted); font-size: 11.5px; font-style: normal; font-weight: 700; }
 .repository-assignee-list em.ready { color: #16885d; }
 .repository-assignee-list em.missing { color: var(--attention); }

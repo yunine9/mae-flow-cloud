@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   fatalToolExecutionError,
+  userFacingModelFailure,
   validateAskUserQuestionInput,
 } from "../src/sessionDriver.ts";
 
@@ -20,6 +21,19 @@ test("输出上限截断的问题卡会显式停机，不伪装成继续推进",
     "Tool call was not executed because assistant hit the output token limit",
     false,
   ), undefined);
+});
+
+test("模型额度耗尽只展示恢复时间和可执行动作，不把网关 JSON 糊到任务卡", () => {
+  const raw = "429 {\"type\":\"error\",\"error\":{"
+    + "\"type\":\"rate_limit_error\",\"code\":\"1308\","
+    + "\"message\":\"[已达到 5 小时的使用上限。您的限额将在 "
+    + "2026-09-01 03:34:40 重置。]\"},"
+    + "\"request_id\":\"internal-id\"}";
+  const message = userFacingModelFailure(raw);
+  assert.match(message, /2026-09-01 03:34:40.*重跑续推.*不会丢失/);
+  assert.doesNotMatch(message, /request_id|rate_limit_error|internal-id/);
+  assert.equal(userFacingModelFailure("500 upstream exploded"),
+    "500 upstream exploded", "未知模型故障仍保留原文供排查");
 });
 
 test("残缺选择题不发送给用户，开放题和完整多题卡可用", () => {

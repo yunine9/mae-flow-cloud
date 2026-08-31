@@ -6551,7 +6551,11 @@ export class TaskService {
    * 单独成函数的原因是 decide() 的顺序纪律——校验必须在决定落袋
    * (humanGate.resolve 的乐观锁)之前,建任务必须在之后;原来两件事
    * 挤在一个函数里,版本冲突 409 时子任务已经先落地了。 */
-  private requirementGraphPlan(task: TaskState): {
+  private requirementGraphPlan(
+    task: TaskState,
+    assignmentOverrides?: Record<string, string>,
+    ticketOverrides?: Record<string, string>,
+  ): {
     graph: RequirementGraph;
     order: string[];
     incoming: Map<string, string[]>;
@@ -6573,12 +6577,58 @@ export class TaskService {
     if (!artifact?.content.trim()) {
       throw new NotFoundError("跨仓方案正文尚未生成，请先让 Agent 补齐 Chain 文档");
     }
+    // 同仓拆成多个单元时，负责面必须是互不包含的路径段集合。
+    // 只靠 prompt 不够：模型一旦给契约单元一个 src/ 宽目录、再给后续
+    // 单元 src/filter/，前者会合法吞掉后者，推送门禁也无法分辨归属。
+    // 在人工确认前机械拒绝，逼分析会话先把共享文件明确归到唯一单元。
+    const unitsByUrl = new Map<string, RequirementRepository[]>();
+    for (const repository of graph.repositories) {
+      const units = unitsByUrl.get(repository.url) ?? [];
+      units.push(repository);
+      unitsByUrl.set(repository.url, units);
+    }
+    const cleanScopePath = (path: string) => path.replace(/\\/g, "/")
+      .replace(/^\.\//, "").replace(/\/+$/, "");
+    for (const units of unitsByUrl.values()) {
+      if (units.length < 2) continue;
+      for (const unit of units) {
+        if (!unit.scope?.paths.length) {
+          throw new TaskControlError(
+            `同仓拆分单元「${unit.scope?.name ?? unit.name}」缺少负责文件面;`
+            + "请先为每个单元填写互不重叠的 scope.paths 再确认");
+        }
+      }
+      for (let leftIndex = 0; leftIndex < units.length; leftIndex += 1) {
+        for (let rightIndex = leftIndex + 1;
+          rightIndex < units.length; rightIndex += 1) {
+          const left = units[leftIndex];
+          const right = units[rightIndex];
+          for (const leftRaw of left.scope!.paths) {
+            const leftPath = cleanScopePath(leftRaw);
+            for (const rightRaw of right.scope!.paths) {
+              const rightPath = cleanScopePath(rightRaw);
+              if (!leftPath || !rightPath) continue;
+              const overlap = leftPath === rightPath
+                || leftPath.startsWith(`${rightPath}/`)
+                || rightPath.startsWith(`${leftPath}/`);
+              if (!overlap) continue;
+              throw new TaskControlError(
+                `交付单元「${left.scope!.name}」的负责面 ${leftRaw} 与「${
+                  right.scope!.name}」的 ${rightRaw} 重叠;同仓文件必须只归`
+                + "一个单元，请缩小负责面或把共享文件明确归入契约单元后再确认");
+            }
+          }
+        }
+      }
+    }
     // 同仓多单元的分支名由(责任人,单号)决定:同仓同责任人同单号的
     // 两个单元会撞同一条分支,必须在确认前挡下,不能等克隆后才炸。
     const branchKeys = new Map<string, string>();
     for (const repository of graph.repositories) {
-      const owner = repository.assignee ?? task.summary.luban_account ?? "";
-      const unitTicket = repository.ticket ?? ticket;
+      const owner = assignmentOverrides?.[repository.id]
+        ?? repository.assignee ?? task.summary.luban_account ?? "";
+      const unitTicket = ticketOverrides?.[repository.id]
+        ?? repository.ticket ?? ticket;
       const key = `${repository.url}\0${owner}\0${unitTicket}`;
       const clash = branchKeys.get(key);
       if (clash) {
@@ -6852,7 +6902,11 @@ export class TaskService {
           + "接口契约、依赖关系、已确认事项清单)在工作区文件"
           + " .mae-flow-chain.md,配置确认的「需求文档」会自动指向它"
           + "——按内核流程推进,在需求/设计阶段读与你相关的章节,"
-          + "不要跳过流程直接实施。只交付本单元职责;发现方案不够用时"
+          + "不要跳过流程直接实施。『已确认事项清单』是主任务已经拍板的"
+          + "权威输入:需求澄清阶段直接引用,不得把同一事项换个说法再次"
+          + "问人;只有代码事实与已确认结论发生明确冲突,或出现清单没有"
+          + "覆盖的新业务决定时才能举卡,并要点名冲突或新增项。"
+          + "只交付本单元职责;发现方案不够用时"
           + "停止并报告,不要自行改变拆分契约。",
         [
           `本单元任务书(第 ${position} 个交付单元):`,
@@ -7052,7 +7106,8 @@ export class TaskService {
     if (!this.isRequirementAnalysis(task)) {
       throw new NotFoundError("该任务不是多仓需求分析单,没有需求图可确认");
     }
-    this.requirementGraphPlan(task);
+    this.requirementGraphPlan(task, skillSelection?.repository_assignees,
+      skillSelection?.repository_tickets);
     const alreadyGenerated = task.summary.requirement_graph?.repositories
       .every((repository) => repository.task_id) ?? false;
     if (alreadyGenerated && task.summary.status !== "waiting_for_human") {
@@ -7796,7 +7851,8 @@ export class TaskService {
       throw new NotFoundError("逐仓责任人与 AR 单号只能随“确认并生成任务”提交");
     }
     if (confirmingGraph) {
-      this.requirementGraphPlan(task);
+      this.requirementGraphPlan(task, input.repository_assignees,
+        input.repository_tickets);
       if (input.repository_assignees) {
         if (waiting.state_version !== input.state_version
             || waiting.status !== "waiting") {
@@ -14624,7 +14680,10 @@ export class TaskService {
       "第二步:改动面盘点。澄清收口后,列出这个需求实际要动的全部位置:"
         + "存量触点(要改哪些既有文件/类,逐个列)+ 新增规划(要新建哪些"
         + "模块/目录,各自职责)+ 接缝清单(纯新增也逃不掉的既有文件触点:"
-        + "路由注册、启动装配、构建文件、DB migration 等全局单点)。",
+        + "路由注册、启动装配、构建文件、测试依赖、资源文件、DB migration"
+        + " 等全局单点)。必须沿运行链路和构建链路各走一遍:方案职责或"
+        + "验收里点名的调用点、装配点、模块 pom/build 文件和测试依赖都要"
+        + "进入盘点,不能只盘新增源码目录。",
       "第三步:划分方向卡(固定动作,不可跳过)。把改动面盘点用"
         + " AskUserQuestion 摆给用户,问「打算怎么拆分,有什么讲究?」,"
         + "并给出你建议的切法;用户可以给方向、指定某块归谁,也可以答"
@@ -14638,6 +14697,8 @@ export class TaskService {
         + "公共数据结构、共享文件里的注册占位,配空实现,整体编译得过"
         + "——它像曳光弹先把链路打通,后续单元在它之上填实现;"
         + "接缝清单里的全局单点文件全部划给契约骨架单元;"
+        + "契约骨架的 scope 必须覆盖它职责里列出的全部调用点、装配点、"
+        + "资源与构建文件,不能出现「任务书要求修改但 scope 未授权」;"
         + "④跨语言/跨进程的依赖边,契约骨架先落接口描述文件(如 OpenAPI),"
         + "两侧代码都从它生成,人手不写两份;"
         + "⑤横扫全仓的机械宽改动(改名、换类型)不硬塞进一个单元:"
@@ -14661,6 +14722,11 @@ export class TaskService {
         + "就写多个节点(id 互不相同);scope.paths 是该单元负责的仓内"
         + "相对路径前缀,允许指向尚不存在的目录(新增模块);整仓一个"
         + "单元时 scope 可省略。上方每个仓库至少要有一个节点。"
+        + "同仓多单元的 scope 默认不得相互包含或重叠;确实共享的文件"
+        + "必须只归一个单元,其他单元通过依赖使用,不要用上层宽目录吞掉"
+        + "后续单元的负责面。写文件前做一次机械自查:改动面盘点中的"
+        + "每个路径恰好有一个 owner,每个单元任务书提及的修改路径都被"
+        + "本单元 scope 覆盖;发现遗漏或重叠先修方案,不得交付。"
         + "dependencies 的语义必须是 dependent 依赖 prerequisite，"
         + "也就是 prerequisite 先开发、dependent 后开发；"
         + "只有确实不能并行的硬依赖才写，禁止循环依赖"

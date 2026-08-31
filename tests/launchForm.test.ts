@@ -882,7 +882,7 @@ test("REQ 单号字段明确要求填写 AR 对应单号，并说明无法按格
   assert.match(source, /两者格式相同，系统无法自动识别/);
 });
 
-test("多仓发起时每个仓在同一行填写自己的 AR 单号，后续分工不再重复编辑", () => {
+test("多仓沿用下单单号，单仓拆分后逐单元开放独立 AR 单号", () => {
   const launch = readFileSync(join(process.cwd(), "web/src/LaunchWorkspace.tsx"), "utf-8");
   const picker = readFileSync(join(process.cwd(),
     "web/src/RepositoryAssigneePicker.tsx"), "utf-8");
@@ -893,7 +893,9 @@ test("多仓发起时每个仓在同一行填写自己的 AR 单号，后续分�
   assert.match(launch, /repositoryTickets: repoFieldsEnabled/);
   assert.match(launch, /repositoryAssignees: repoFieldsEnabled/);
   assert.match(picker, /责任人与 AR 单号均已在发起任务时确定/);
-  assert.doesNotMatch(picker, /onChange=\{\(event\) => chooseTicket/);
+  assert.match(picker, /同仓拆分后，每个交付单元需要独立 AR 单号/);
+  assert.match(picker, /onChange=\{\(event\) => chooseTicket/);
+  assert.match(picker, /hasDeliveryUnits \? <span className="repository-ticket-editable">/);
   assert.doesNotMatch(picker, /<select/);
 });
 

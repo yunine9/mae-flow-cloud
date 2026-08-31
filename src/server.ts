@@ -2572,7 +2572,8 @@ export function createTaskServer(
           const decider = parent?.luban_account ?? target.luban_account;
           if (!canOperate(viewer, decider, !!options.auth)) {
             return json(response, 403,
-              { error: "越界改动只能由主任务责任人裁决" });
+              { error: `越界改动只能由主任务责任人 ${
+                decider ?? "（账号未配置）"} 裁决，请联系该账号处理` });
           }
           const body = await readBody(request);
           const decision = body.decision === "allow" ? "allow"

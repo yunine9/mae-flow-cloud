@@ -18,7 +18,9 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
-import { TaskControlError, TaskService } from "../src/taskService.ts";
+import {
+  type RequirementGraph, TaskControlError, TaskService,
+} from "../src/taskService.ts";
 
 const GIT_ENV = { ...process.env,
   GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t",
@@ -96,6 +98,12 @@ test("单仓拆分:分析→撞单号挡下→分单号确认→串行子任务+
     assert.match(prompt, /划分方向卡/, "拆分前必须固定动作问人偏好");
     assert.match(prompt, /契约骨架/, "同仓多单元第一个必须是契约骨架");
     assert.match(prompt, /已确认事项清单/, "澄清期 Q&A 必须落进方案正文");
+    assert.match(prompt, /每个路径恰好有一个 owner/,
+      "生成拆分图前必须机械核对路径唯一归属");
+    assert.match(prompt, /任务书要求修改但 scope 未授权/,
+      "契约单元职责与负责面必须闭合");
+    assert.match(prompt, /同仓多单元的 scope 默认不得相互包含或重叠/,
+      "同仓拆分不能用宽 scope 吞掉后续单元");
     assert.match(prompt, /"scope":\{"name"/, "图产物格式必须含 scope 示例");
     assert.match(prompt, /同仓单元由平台自动按顺序串行/,
       "串行是平台纪律,不让模型自己写同仓边");
@@ -110,6 +118,21 @@ test("单仓拆分:分析→撞单号挡下→分单号确认→串行子任务+
     assert.deepEqual(nodes.map((node) => node.scope?.name),
       ["契约骨架", "过滤实现"]);
 
+    // 宽负责面会吞掉后续单元。即使模型漏掉自查，确认入口也要机械挡住，
+    // 不能等开发完成后才在越界裁决里发现拆分方案自相矛盾。
+    const parentState = (service as any).tasks.get(parent.id);
+    const graphPath = join(parentState.cwd, artifactDir,
+      "requirement-graph.json");
+    const overlappingGraph = JSON.parse(graphJson) as RequirementGraph;
+    overlappingGraph.repositories[1].scope!.paths = ["src/contract/filter/"];
+    writeFileSync(graphPath, JSON.stringify(overlappingGraph));
+    await assert.rejects(
+      () => service.confirmRequirementGraph(parent.id),
+      (error: unknown) => error instanceof TaskControlError
+        && /负责面.*重叠/.test((error as Error).message),
+      "同仓交付单元的 scope 路径不得互相包含");
+    writeFileSync(graphPath, graphJson);
+
     // 两个单元此刻同责任人、同单号(都继承父单):分支名会互相覆盖,
     // 必须在确认时挡下,不能等克隆后才炸。
     await assert.rejects(
@@ -118,12 +141,17 @@ test("单仓拆分:分析→撞单号挡下→分单号确认→串行子任务+
         && /同仓、同责任人、同单号/.test((error as Error).message),
       "同仓同人同单号必须在确认前被撞分支校验拒绝");
 
-    service.assignRequirementRepositories(parent.id, {
-      "unit-contract": "cloudbot", "unit-filter": "cloudbot",
-    }, {
-      "unit-contract": "REQ2026083101", "unit-filter": "REQ2026083102",
+    // 页面在同一次“确认并生成任务”提交里改子单号。计划校验必须
+    // 先按这批覆盖值判断撞分支，再原子保存分工；不能拿旧的父单号
+    // 先判一次红，把用户永远卡在确认卡上。
+    const confirmed = await service.confirmRequirementGraph(parent.id, {
+      repository_assignees: {
+        "unit-contract": "cloudbot", "unit-filter": "cloudbot",
+      },
+      repository_tickets: {
+        "unit-contract": "REQ2026083101", "unit-filter": "REQ2026083102",
+      },
     });
-    const confirmed = await service.confirmRequirementGraph(parent.id);
     assert.equal(confirmed.status, "coordinating");
 
     const graph = service.get(parent.id)!.requirement_graph!;
@@ -157,6 +185,8 @@ test("单仓拆分:分析→撞单号挡下→分单号确认→串行子任务+
       "隐式串行边必须让上游知道有人基于它开发");
     assert.match(filterChild.requirement, /\.mae-flow-chain\.md/,
       "方案正文不内联,只指路");
+    assert.match(filterChild.requirement, /不得把同一事项换个说法再次问人/,
+      "子任务必须消费主任务已拍板结论,不能重新开一轮相同澄清");
     assert.ok(!filterChild.requirement.includes("契约先行,过滤在后"),
       "方案正文不得内联进需求");
     const plan = readFileSync(

@@ -235,7 +235,7 @@ function ScopeViolationCard({ task, onChanged }: {
           {busy === "revert" ? "正在下发撤出令…" : "打回,撤出越界改动"}
         </button>
       </div>
-      <small>裁决人是主任务责任人;其他成员点击会被如实拒绝。</small>
+      <small>裁决人是主任务责任人；其他成员点击后会提示应联系的具体账号。</small>
       {error && <small role="alert" className="scope-violation-error">{error}</small>}
     </div>
   );
