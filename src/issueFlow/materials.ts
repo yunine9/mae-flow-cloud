@@ -1,6 +1,11 @@
 /**
  * 问题会话工作区材料(交付材料页签的数据面)。
  *
+ * 工作区变更的口径与需求侧 artifacts.ts 对齐:**基线 → 当前工作区**
+ * (含已提交)——交付流程要求 commit 后推送,只 diff HEAD 的话问题
+ * 修改一提交变更就集体隐身;基线 = 登记基线分支 → origin/HEAD 依次
+ * 试 merge-base(建分支的起点),无基线参照的裸本地仓退回 HEAD 口径。
+ *
  * 边界纪律(与 readAnalysisFile 同款,双保险):
  * - 一切相对路径先 join 再 resolve,解析结果必须仍落在会话工作区内,
  *   越界一律拒绝——path 来自浏览器查询串,不可信。
@@ -116,18 +121,186 @@ function gitRead(repoDir: string, args: string[]): string {
   }
 }
 
-/** 工作区变更清单:tracked 改动(diff HEAD)+ 未跟踪新文件。 */
-export function listWorkspaceChanges(repoDir: string): WorkspaceChange[] {
+// ---- 工作区变更(基线口径,对齐需求侧 artifacts.ts 的 collectDiff) ----
+
+/** 变更来源分组(标签与语义同需求侧交付检视)。只 diff HEAD 的话,
+ * 问题修改一提交(交付流程:改完 commit 再推送)变更就集体隐身——
+ * 已提交的也要能看,这是"修改完成后检视"的主视图。 */
+type ChangeOrigin = "committed" | "committed_working" | "staged"
+  | "staged_working" | "unstaged";
+
+const ORIGIN_HEADING: Record<ChangeOrigin, string> = {
+  committed: "已提交(committed)",
+  committed_working: "已提交后又修改(committed-working)",
+  staged: "已暂存(staged)",
+  staged_working: "已暂存后又修改(staged-working)",
+  unstaged: "未暂存(unstaged)",
+};
+
+/** 未跟踪文件展开全文 diff 的上限(口径同需求侧):超限只列 ?? 路径
+ * 不展开内容——列表完整,细节有帽。 */
+const UNTRACKED_CAP = 50;
+
+/** 修复分支的基线(建分支的起点):登记基线分支 → origin/HEAD 依次试
+ * merge-base。问题域没有需求侧 .mae-flow.json 的 step_heads 记录,用
+ * 分叉点反推最稳:基线分支上别人的新提交天然不进本会话的变更视图,
+ * 而本会话提交过的(问题修改阶段的 commit)从分叉点起照常可见。取
+ * 不到(无远端引用的裸本地仓)返回 undefined,调用方退回 HEAD 口径
+ * ——旧行为(只看未提交)是它的保守退化,不因环境缺失报错。 */
+function repoBaseline(
+  repoDir: string,
+  baselineBranch?: string,
+): string | undefined {
+  const refs: string[] = [];
+  const named = baselineBranch?.trim();
+  if (named) refs.push(`origin/${named}`, named);
+  refs.push("origin/HEAD");
+  for (const ref of refs) {
+    const base = gitRead(repoDir, ["merge-base", "HEAD", ref]).trim();
+    if (base) return base;
+  }
+  return undefined;
+}
+
+/** 聚合 diff → 文件块(按 diff --git 头切,取 b/ 侧路径)。 */
+function diffChunks(text: string): Array<{ path: string; text: string }> {
+  return text.split(/(?=^diff --git )/m).map((chunk) => chunk.trim())
+    .filter(Boolean)
+    .flatMap((chunk) => {
+      const header = chunk.match(/^diff --git a\/(.+?) b\/(.+)$/m);
+      return header ? [{ path: header[2], text: chunk }] : [];
+    });
+}
+
+/** porcelain 行 → 路径(重命名取箭头右侧的新名字;引号是 git 对特殊
+ * 字符的转义包装,剥掉)。 */
+function porcelainPath(line: string): string {
+  const raw = line.slice(3).trim();
+  if (!raw) return "";
+  const arrow = raw.split(" -> ");
+  return (arrow[1] ?? arrow[0]).replace(/^"|"$/g, "");
+}
+
+/** porcelain 全文 → 路径 → XY 状态(未跟踪行不进表,它们单独走)。 */
+function statusEntries(status: string): Map<string, { x: string; y: string }> {
+  const entries = new Map<string, { x: string; y: string }>();
+  for (const line of status.split("\n")) {
+    if (line.length < 4 || line.startsWith("??")) continue;
+    const path = porcelainPath(line);
+    if (path) entries.set(path, { x: line[0], y: line[1] });
+  }
+  return entries;
+}
+
+function originOf(
+  path: string,
+  committed: Set<string>,
+  statuses: Map<string, { x: string; y: string }>,
+): ChangeOrigin {
+  const status = statuses.get(path);
+  const indexChanged = !!status && status.x !== " ";
+  const worktreeChanged = !!status && status.y !== " ";
+  if (committed.has(path) && (indexChanged || worktreeChanged)) {
+    return "committed_working";
+  }
+  if (indexChanged && worktreeChanged) return "staged_working";
+  if (indexChanged) return "staged";
+  if (worktreeChanged) return "unstaged";
+  return "committed";
+}
+
+/** 单仓"本会话变更"全集:基线 → 当前工作区(含已提交与未提交),
+ * 未跟踪新文件补全文 diff;分组标题沿用需求侧交付检视的口径。changed
+ * 是路径全集,变更清单(快速修改下拉)与 diff 视图同出一把尺。 */
+function collectRepoDiff(
+  repoDir: string,
+  baselineBranch?: string,
+): { text: string; changed: string[] } {
+  if (!existsSync(join(repoDir, ".git"))) return { text: "", changed: [] };
+  // 完整上下文(--unified=999999,同需求侧):前端 GitDiff 才能默认
+  // 折叠未改动区后按需展开全文。
+  const fullContext = "--unified=999999";
+  const status = gitRead(repoDir,
+    ["status", "--porcelain", "--untracked-files=all"]);
+  const untracked = status.split("\n")
+    .filter((line) => line.startsWith("??"))
+    .map(porcelainPath)
+    .filter(Boolean);
+  const tracked = new Set<string>();
+  const sections: string[] = [];
+  const baseline = repoBaseline(repoDir, baselineBranch);
+  if (baseline) {
+    const aggregate = gitRead(repoDir, ["diff", fullContext, baseline]);
+    const committed = new Set(gitRead(repoDir,
+      ["diff", "--name-only", baseline, "HEAD"])
+      .split("\n").map((line) => line.trim()).filter(Boolean));
+    const statuses = statusEntries(status);
+    const grouped = new Map<ChangeOrigin, string[]>();
+    for (const chunk of diffChunks(aggregate)) {
+      tracked.add(chunk.path);
+      const origin = originOf(chunk.path, committed, statuses);
+      grouped.set(origin, [...(grouped.get(origin) ?? []), chunk.text]);
+    }
+    for (const origin of ["committed", "committed_working", "staged",
+      "staged_working", "unstaged"] as ChangeOrigin[]) {
+      const chunks = grouped.get(origin);
+      if (chunks?.length) {
+        sections.push(`## ${ORIGIN_HEADING[origin]}\n\n${chunks.join("\n\n")}`);
+      }
+    }
+  } else {
+    // 没有基线参照(裸本地仓无远端引用):退回 HEAD 口径只看未提交
+    // ——保守退化,与旧行为一致,不因环境缺失砸页面。
+    const staged = gitRead(repoDir, ["diff", "--cached", fullContext]).trim();
+    const unstaged = gitRead(repoDir, ["diff", fullContext]).trim();
+    for (const [heading, text] of [
+      [ORIGIN_HEADING.staged, staged],
+      [ORIGIN_HEADING.unstaged, unstaged],
+    ] as Array<[string, string]>) {
+      if (!text) continue;
+      sections.push(`## ${heading}\n\n${text}`);
+      for (const chunk of diffChunks(text)) tracked.add(chunk.path);
+    }
+  }
+  if (untracked.length) {
+    const snapshots = untracked.map((rel, index) => {
+      if (index >= UNTRACKED_CAP) return `?? ${rel}`;
+      const abs = insideRoot(repoDir, rel);
+      if (!abs || !existsSync(abs) || !statSync(abs).isFile()) return `?? ${rel}`;
+      try {
+        const body = readFileSync(abs, "utf-8")
+          .split("\n").map((line) => `+${line}`).join("\n");
+        return `diff --git a/${rel} b/${rel}\nnew file mode 100644\n`
+          + `--- /dev/null\n+++ b/${rel}\n${body}`;
+      } catch {
+        // 二进制等读不了的文件如实列名,不拖垮整份聚合 diff。
+        return `?? ${rel}`;
+      }
+    });
+    sections.push(`## 未跟踪(untracked)\n\n${snapshots.join("\n\n")}`);
+  }
+  return {
+    text: sections.join("\n\n"),
+    changed: [...new Set([...tracked, ...untracked])],
+  };
+}
+
+/** 工作区变更清单:与 diff 视图同一把尺(基线→工作区,含已提交)+
+ * 未跟踪;±行数取同一参照的 numstat,未跟踪无行数。status 展示用:
+ * porcelain XY,已提交且未再动的标 committed。 */
+export function listWorkspaceChanges(
+  repoDir: string,
+  baselineBranch?: string,
+): WorkspaceChange[] {
   if (!existsSync(join(repoDir, ".git"))) return [];
   try {
-    const rows = gitRead(repoDir, ["status", "--porcelain=v1", "-uall"])
-      .split("\n").filter(Boolean);
+    const ref = repoBaseline(repoDir, baselineBranch) ?? "HEAD";
     const statByName = new Map<string, { additions?: number; deletions?: number }>();
-    for (const line of gitRead(repoDir, ["diff", "HEAD", "--numstat"])
+    for (const line of gitRead(repoDir, ["diff", "--numstat", ref])
       .split("\n")) {
       if (!line.trim()) continue;
       const [add, del, ...rest] = line.split("\t");
-      // 重命名行形如 "a\tb\told => new",取尾段主干对齐 status 输出。
+      // 重命名行形如 "a\tb\told => new",取尾段主干对齐 name-status 输出。
       const name = (rest.join("\t").split(" => ").at(-1) ?? "").trim();
       if (!name) continue;
       statByName.set(name, {
@@ -135,58 +308,66 @@ export function listWorkspaceChanges(repoDir: string): WorkspaceChange[] {
         ...(del === "-" ? {} : { deletions: Number(del) }),
       });
     }
-    return rows.map((row) => {
-      const status = row.slice(0, 2).trim() || "M";
-      const path = row.slice(3).replace(/^"|"$/g, "");
+    const status = gitRead(repoDir, ["status", "--porcelain", "-uall"]);
+    const statuses = statusEntries(status);
+    const untracked = new Set(status.split("\n")
+      .filter((line) => line.startsWith("??"))
+      .map(porcelainPath)
+      .filter(Boolean));
+    const seen = new Set<string>();
+    const rows: WorkspaceChange[] = [];
+    const push = (path: string) => {
+      if (!path || seen.has(path)) return;
+      seen.add(path);
+      const entry = statuses.get(path);
       const stat = statByName.get(path);
-      return {
+      rows.push({
         path,
-        status,
+        status: untracked.has(path) ? "??"
+          : entry ? (entry.x !== " " ? entry.x : entry.y)
+          : "committed",
         ...(stat?.additions !== undefined ? { additions: stat.additions } : {}),
         ...(stat?.deletions !== undefined ? { deletions: stat.deletions } : {}),
-      };
-    });
+      });
+    };
+    for (const line of gitRead(repoDir, ["diff", "--name-only", ref])
+      .split("\n")) {
+      push(line.trim());
+    }
+    for (const path of [...statuses.keys(), ...untracked]) push(path);
+    return rows;
   } catch {
     // git 视图起不来(坏配置/竞态):给空清单,fail-open 不拖垮页面。
     return [];
   }
 }
 
-/** 聚合 diff(对 HEAD,未跟踪新文件补全文 diff)——对齐任务侧"服务端
- * 只出一份聚合 diff"的形态,前端交给 GitDiff 渲染文件树。 */
-export function workspaceDiffAll(repoDir: string): string {
-  if (!existsSync(join(repoDir, ".git"))) return "";
-  const parts: string[] = [];
-  const tracked = gitRead(repoDir, ["diff", "HEAD"]);
-  if (tracked.trim()) parts.push(tracked.trim());
-  const status = gitRead(repoDir, ["status", "--porcelain=v1", "-uall"]);
-  for (const row of status.split("\n").filter(Boolean)) {
-    if (!row.slice(0, 2).includes("?")) continue;
-    const rel = row.slice(3).replace(/^"|"$/g, "");
-    const abs = insideRoot(repoDir, rel);
-    if (!abs || !existsSync(abs) || !statSync(abs).isFile()) continue;
-    try {
-      const body = readFileSync(abs, "utf-8")
-        .split("\n").map((line) => `+${line}`).join("\n");
-      parts.push(`diff --git a/${rel} b/${rel}\nnew file mode 100644\n`
-        + `--- /dev/null\n+++ b/${rel}\n${body}`);
-    } catch {
-      // 二进制等读不了的文件跳过,不拖垮整份聚合 diff。
-    }
-  }
-  return parts.join("\n").slice(0, READ_CAP_BYTES);
+/** 单仓聚合 diff(基线口径,超长截断如实标注)。 */
+export function workspaceDiffAll(
+  repoDir: string,
+  baselineBranch?: string,
+): string {
+  const text = collectRepoDiff(repoDir, baselineBranch).text;
+  if (Buffer.byteLength(text, "utf-8") <= READ_CAP_BYTES) return text;
+  return text.slice(0, READ_CAP_BYTES)
+    + "\n\n…(内容超过 512 KB,只回传前 512 KB;完整内容见代码仓工作区)";
 }
 
-/** 单文件 diff(对 HEAD;新文件给全文 + 前缀)。 */
-export function workspaceFileDiff(repoDir: string, rel: string): string {
+/** 单文件 diff(基线口径;未跟踪新文件给全文 + 前缀)。 */
+export function workspaceFileDiff(
+  repoDir: string,
+  rel: string,
+  baselineBranch?: string,
+): string {
   const abs = insideRoot(repoDir, rel);
   if (!abs || rel.split(/[\\/]/).includes(".git")) {
     throw new Error("路径越界");
   }
-  const diff = gitRead(repoDir, ["diff", "HEAD", "--", rel]);
+  const ref = repoBaseline(repoDir, baselineBranch) ?? "HEAD";
+  const diff = gitRead(repoDir, ["diff", ref, "--", rel]);
   if (diff.trim()) return diff.slice(0, READ_CAP_BYTES);
   if (existsSync(abs)) {
-    // HEAD 里没有的(新文件):diff 为空,给带 + 前缀的全文冒充新文件 diff。
+    // 参照里没有的(未跟踪新文件):diff 为空,给带 + 前缀的全文冒充新文件 diff。
     const body = readFileSync(abs, "utf-8")
       .split("\n").map((line) => `+${line}`).join("\n");
     return `--- /dev/null\n+++ b/${rel}\n${body.slice(0, READ_CAP_BYTES)}`;
@@ -348,10 +529,10 @@ function routeMaterialPath(
 }
 
 /** 材料清单:变更按仓聚合,路径带 <仓名>/ 前缀(与 routeMaterialPath
- * 对得上)。 */
+ * 对得上)。口径 = 基线→工作区(含已提交),登记基线分支一路下传。 */
 export function listMaterials(state: IssueSessionState, root: string) {
   const changes = materialRepos(state, root).flatMap((repo) =>
-    listWorkspaceChanges(repo.dir)
+    listWorkspaceChanges(repo.dir, state.baseline)
       .map((change) => ({ ...change, path: `${repo.name}/${change.path}` })));
   return {
     ticket: state.ticket,
@@ -390,7 +571,7 @@ export function saveSessionWorkspaceFile(
   return result;
 }
 
-/** 单文件 diff(会话级,对 HEAD)。 */
+/** 单文件 diff(会话级,基线口径)。 */
 export function sessionWorkspaceFileDiff(
   state: IssueSessionState,
   root: string,
@@ -398,17 +579,20 @@ export function sessionWorkspaceFileDiff(
 ): string {
   const routed = routeMaterialPath(state, root, rel);
   if (!routed) throw new Error("会话还没有已克隆的代码仓");
-  return workspaceFileDiff(routed.repo.dir, routed.rel);
+  return workspaceFileDiff(routed.repo.dir, routed.rel, state.baseline);
 }
 
 /** 聚合 diff(会话级):按仓分段,段间加"仓库"分隔行,前端 diff 视图
- * 按元信息行呈现。 */
+ * 按元信息行呈现。口径 = 基线→工作区(含已提交),登记基线一路下传。 */
 export function sessionWorkspaceDiffAll(
   state: IssueSessionState,
   root: string,
 ): string {
   const parts = materialRepos(state, root)
-    .map((repo) => ({ name: repo.name, diff: workspaceDiffAll(repo.dir) }))
+    .map((repo) => ({
+      name: repo.name,
+      diff: workspaceDiffAll(repo.dir, state.baseline),
+    }))
     .filter((part) => part.diff.trim());
   if (!parts.length) return "";
   return parts.map((part) =>
@@ -426,5 +610,5 @@ export function sessionWorkspaceRepoDiff(
 ): string {
   const match = materialRepos(state, root).find((item) => item.name === repo);
   if (!match) throw new Error(`仓 ${repo} 不在本会话的关联仓里`);
-  return workspaceDiffAll(match.dir);
+  return workspaceDiffAll(match.dir, state.baseline);
 }

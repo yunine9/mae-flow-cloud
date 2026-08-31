@@ -141,6 +141,69 @@ test("材料 diff 契约:?repo= 只回该仓,无分段标记", async () => {
   }
 });
 
+/** 已提交场景的夹具:模拟"问题修改完成"——AI 改完代码并 commit(交付
+ * 流程:commit 后才推送)。回归口径:commit 之后工作区变更必须仍然
+ * 可见(旧实现只 diff HEAD,commit 一落变更集体隐身,2026-08-31 实测)。 */
+function seedCommittedSession(dataDir: string): {
+  id: string; origin: string; service: IssueFlowService;
+} {
+  const seed = join(dataDir, "seed");
+  execFileSync("git", ["init", "-q", "-b", "master", seed], { env: GIT_ENV });
+  writeFileSync(join(seed, "base.txt"), "v1\n");
+  execFileSync("git", ["-C", seed, "add", "."], { env: GIT_ENV });
+  execFileSync("git", ["-C", seed, "commit", "-q", "-m", "init"], { env: GIT_ENV });
+  const origin = join(dataDir, "origin.git");
+  execFileSync("git", ["clone", "-q", "--bare", seed, origin], { env: GIT_ENV });
+  const id = "issue-committed";
+  const root = join(dataDir, "issues", id);
+  const repoDir = join(root, "repo", "origin");
+  execFileSync("git", ["clone", "-q", origin, repoDir], { env: GIT_ENV });
+  // 问题修改阶段的动作:改 + 增,然后 commit(推不推送与视图无关)。
+  writeFileSync(join(repoDir, "base.txt"), "v2-fixed\n");
+  writeFileSync(join(repoDir, "extra.txt"), "new module\n");
+  execFileSync("git", ["-C", repoDir, "add", "."], { env: GIT_ENV });
+  execFileSync("git", ["-C", repoDir, "commit", "-q", "-m", "[DTS-1][fix] 修复"], {
+    env: GIT_ENV,
+  });
+  writeFileSync(join(root, "issue.json"), JSON.stringify({
+    id, account: "dev",
+    created_at: "2026-08-31T08:00:00Z", updated_at: "2026-08-31T09:00:00Z",
+    title: "t", description: "", source: "manual",
+    mode: "fixed", scenario: "no_ticket",
+    status: "idle", stage: "conclude", stage_note: "",
+    stage_at: "2026-08-31T09:00:00Z",
+    repo_urls: [origin],
+  }));
+  const service = new IssueFlowService({
+    dataDir, provider: "p", model: "m", modelsJson: {},
+  });
+  return { id, origin, service };
+}
+
+test("问题修改已提交,工作区变更仍可见(基线口径,对齐需求侧)", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-diff-commit-"));
+  const { id, service } = seedCommittedSession(dataDir);
+  try {
+    const diff = await issueGet(["issues", id, "materials", "diff"],
+      `/issues/${id}/materials/diff`, service);
+    assert.equal(diff.status, 200);
+    const text = String(diff.body.diff);
+    assert.match(text, /v2-fixed/, "已提交的修改必须在 diff 里(旧口径只对 HEAD,提交即隐身)");
+    assert.match(text, /extra\.txt/, "已提交的新文件同样可见");
+    assert.match(text, /已提交\(committed\)/, "按来源分组:这一块要标明是已提交");
+    // 变更清单同一把尺:快速修改下拉与角标不因 commit 清零。
+    const materials = await issueGet(["issues", id, "materials"],
+      `/issues/${id}/materials`, service);
+    assert.equal(materials.status, 200);
+    const paths = (materials.body.changes ?? [])
+      .map((change: { path: string }) => change.path);
+    assert.ok(paths.includes("origin/base.txt"), `变更清单应含已提交文件,实际 ${paths}`);
+    assert.ok(paths.includes("origin/extra.txt"));
+  } finally {
+    await service.shutdown().catch(() => undefined);
+  }
+});
+
 test("材料 diff 契约:仓名不匹配关联仓 → 400 带人话,不兜底到首仓", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-diff-bad-"));
   const { id, service } = seedTwoRepoSession(dataDir);
