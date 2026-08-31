@@ -7,7 +7,7 @@ technologies: [java, go, python, cpp, javascript]
 
 # DTS 问题定位诊断通用技能
 
-本篇是团队货架的通用定位方法论：取用次序与阶段关卡以所在问题会话的工作流（技能 issue-analysis）为准——业务仓 `docs/skills/` 有问题 skill 用业务仓的，否则用本篇。
+本篇是团队货架的通用定位方法论：取用次序与阶段关卡以所在问题会话的工作流（技能 issue-analysis）为准——业务仓根目录 `.cac/skills/` 有问题 skill 用业务仓的，否则用本篇。
 
 ## 核心方法论：五步诊断法
 
