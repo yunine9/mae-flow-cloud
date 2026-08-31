@@ -15,6 +15,8 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import {
+  addIssueReview,
+  dropIssueReview,
   getDtsTicketDetail,
   getIssueDocument,
   getIssueDocuments,
@@ -22,14 +24,19 @@ import {
   getIssueFileDiff,
   getIssueMaterialLog,
   getIssueMaterials,
+  getIssueReviews,
   getIssueWorkspaceFile,
   saveIssueWorkspaceFile,
+  sendIssueReviews,
   type DtsTicketDetail,
   type IssueDetail,
   type IssueDialogueTurn,
   type IssueDocMeta,
   type IssueMaterials,
+  type IssueReview,
+  type IssueReviewCheck,
 } from "../api";
+import { Annotatable } from "../Annotatable";
 import { Markdown } from "../markdown";
 import { GitDiff } from "../GitDiff";
 import { formatLocalDateTime } from "../time";
@@ -40,6 +47,8 @@ import { prepareDtsHtml } from "./dtsHtml";
 const ANALYSIS_DOC = "issue-analysis.md";
 /** 过程问答的页签键(不是文件名,.md 文件撞不到它)。 */
 const DIALOGUE_TAB = "dialogue";
+/** 检视面板的页签键(同上;ADR-0007)。 */
+const REVIEW_TAB = "review";
 
 function sizeText(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -47,8 +56,10 @@ function sizeText(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-/** 过程问答(对话气泡):复盘阅读面——用户/Agent 发言、问答卡、用户
- * 决策按时间序陈列。现场页签仍是原始事件直播,两不替代。 */
+/** 过程问答(对话气泡):复盘阅读面(ADR-0008 口径)——问答卡、用户
+ * 决策(卡答与闸答,闸答带合成的问句)、用户主动输入、检视意见按
+ * 时间序陈列;agent 的过程性发言不进。现场页签仍是原始事件直播,
+ * 两不替代。 */
 function IssueDialogue({ turns, truncated }: {
   turns: IssueDialogueTurn[];
   truncated: boolean;
@@ -56,7 +67,7 @@ function IssueDialogue({ turns, truncated }: {
   if (turns.length === 0) {
     return <div className="issue-doc-empty">
       <strong>还没有问答</strong>
-      <p>会话开始后,Agent 与你的对话、问答卡与你的决策会按时间序出现在这里。</p>
+      <p>会话开始后,Agent 的提问卡、你的答复与检视意见会按时间序出现在这里。</p>
     </div>;
   }
   return <div className="issue-dialogue">
@@ -88,27 +99,45 @@ function IssueDialogueTurnView({ turn }: { turn: IssueDialogueTurn }) {
       <span className="issue-dialogue-meta"><b>用户决策</b>
         <time>{time}</time></span>
       <div className="issue-dialogue-bubble">
+        {/* 平台闸的问句快照(闸答完即从状态里消失,只能随事件走);
+            Agent 卡的问在前一张问答卡里,不重复。 */}
+        {(turn.questions ?? []).map((question, index) => <div
+          key={index} className="issue-dialogue-q">
+          <p>{question.question}</p>
+          {question.options.length > 0 && <ul className="issue-dialogue-opts">
+            {question.options.map((option, index) => <li key={index}>{option}</li>)}
+          </ul>}
+        </div>)}
         {turn.decision || "(无文字答复)"}
         {turn.notes && <span className="issue-dialogue-notes">补充:{turn.notes}</span>}
       </div>
     </div>;
   }
-  const isUser = turn.kind === "user";
-  return <div className={`issue-dialogue-turn ${turn.kind}`}>
+  if (turn.kind === "review") {
+    return <div className="issue-dialogue-turn review">
+      <span className="issue-dialogue-meta"><b>检视意见({turn.count ?? 0} 条)</b>
+        <time>{time}</time></span>
+      <div className="issue-dialogue-bubble issue-dialogue-review">
+        <pre>{turn.text}</pre>
+      </div>
+    </div>;
+  }
+  return <div className="issue-dialogue-turn user">
     <span className="issue-dialogue-meta">
-      <b>{isUser ? "用户" : "Agent"}{turn.via === "interrupt" ? "(插话)" : ""}</b>
+      <b>用户{turn.via === "interrupt" ? "(插话)" : ""}</b>
       <time>{time}</time>
     </span>
-    <div className="issue-dialogue-bubble">
-      {isUser ? turn.text : <Markdown text={turn.text ?? ""} />}
-    </div>
+    <div className="issue-dialogue-bubble">{turn.text}</div>
   </div>;
 }
 
-/** 过程文档子视图:多页签(分析报告固定首页 + 过程问答 + Agent 落的
- * 其他 .md)。激活页签才取内容;状态一动(updated_at 变化)自动重读,
- * 让 AI 续写的内容能贴着节奏刷新。 */
-function IssueProcessDocs({ id, updatedAt }: { id: string; updatedAt: string }) {
+/** 过程文档子视图:多页签(分析报告固定首页 + 过程问答 + 检视 +
+ * Agent 落的其他 .md)。激活页签才取内容;状态一动(updated_at 变化)
+ * 自动重读,让 AI 续写的内容能贴着节奏刷新。
+ * 检视(ADR-0007):分析报告按块悬停圈注意见(交互与需求流批注同一套),
+ * 「检视」页签攒草稿、一次提交触发整体回退重跑。 */
+function IssueProcessDocs({ detail }: { detail: IssueDetail }) {
+  const id = detail.id;
   const [docs, setDocs] = useState<IssueDocMeta[]>([]);
   const [active, setActive] = useState(ANALYSIS_DOC);
   const [content, setContent] = useState("");
@@ -117,9 +146,13 @@ function IssueProcessDocs({ id, updatedAt }: { id: string; updatedAt: string }) 
   const [loading, setLoading] = useState(false);
   const [turns, setTurns] = useState<IssueDialogueTurn[]>([]);
   const [turnsTruncated, setTurnsTruncated] = useState(false);
+  // 检视账本(轻量):随会话动态重读——锚点检测按当前报告现算,
+  // AI 一改报告,徽标就贴着 updated_at 的节奏刷新。
+  const [reviews, setReviews] = useState<IssueReview[]>([]);
+  const [checks, setChecks] = useState<IssueReviewCheck[]>([]);
   // 已加载基准 = 会话动态 + 激活页签:两者任一变化就重取;只在响应到手
   // 后记账,半路失败下次仍会重试。
-  const refreshKey = `${updatedAt}|${active}`;
+  const refreshKey = `${detail.updated_at}|${active}`;
   const [loadedKey, setLoadedKey] = useState("");
 
   async function loadList() {
@@ -131,6 +164,16 @@ function IssueProcessDocs({ id, updatedAt }: { id: string; updatedAt: string }) 
     }
   }
 
+  async function loadReviews() {
+    try {
+      const result = await getIssueReviews(id);
+      setReviews(result.reviews ?? []);
+      setChecks(result.checks ?? []);
+    } catch {
+      // 检视数据缺席只让它自己空着,不拖垮文档页。
+    }
+  }
+
   async function loadActive() {
     setLoading(true);
     try {
@@ -139,6 +182,10 @@ function IssueProcessDocs({ id, updatedAt }: { id: string; updatedAt: string }) 
         setTurns(result.turns ?? []);
         setTurnsTruncated(result.truncated === true);
         setNote("");
+      } else if (active === REVIEW_TAB) {
+        // 检视面板的数据由 loadReviews 随会话动态取,这里只清残留空态。
+        setNote("");
+        setContent("");
       } else {
         const result = await getIssueDocument(id, active);
         if (result.unavailable) {
@@ -160,12 +207,41 @@ function IssueProcessDocs({ id, updatedAt }: { id: string; updatedAt: string }) 
     }
   }
 
-  useEffect(() => { void loadList(); }, [updatedAt]);
+  useEffect(() => {
+    void loadList();
+    void loadReviews();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail.updated_at]);
   useEffect(() => {
     if (loadedKey !== refreshKey) void loadActive();
     // loadedKey 有意不在依赖里:刷新按钮要的是无视缓存的重取。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshKey]);
+
+  /** 检视面板 → 分析报告的锚点定位:切页签、等渲染、滚动 + 闪烁。 */
+  async function locate(line: number) {
+    setActive(ANALYSIS_DOC);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await new Promise((done) => setTimeout(done, 150));
+      const node = document.querySelector<HTMLElement>(
+        `.issue-doc-body [data-l="${line}"]`);
+      if (node) {
+        node.scrollIntoView({ block: "center" });
+        node.classList.add("annot-flash");
+        window.setTimeout(() => node.classList.remove("annot-flash"), 1700);
+        return;
+      }
+    }
+  }
+
+  // 检视入口的会话级门槛(与服务端 requireReviewable 同口径的显示面):
+  // 固定流程、未终态、无转正继承段(转正继承的报告不可检视)、检视
+  // 回合未在进行中。后端仍逐项把门,这里只管把按钮放对位置。
+  const reviewEnabled = detail.mode === "fixed"
+    && !["archived", "canceled", "failed"].includes(detail.status)
+    && !detail.stage_states?.some((state) => state === "inherited")
+    && detail.review_active !== true;
+  const draftCount = reviews.filter((item) => item.status === "draft").length;
 
   const analysisMeta = docs.find((doc) => doc.name === ANALYSIS_DOC);
   const tabs = [
@@ -173,6 +249,10 @@ function IssueProcessDocs({ id, updatedAt }: { id: string; updatedAt: string }) 
       hint: analysisMeta ? sizeText(analysisMeta.bytes) : "未生成" },
     { key: DIALOGUE_TAB, label: "过程问答",
       hint: turns.length ? `${turns.length} 回合` : "" },
+    ...(detail.mode === "fixed"
+      ? [{ key: REVIEW_TAB, label: "检视",
+        hint: draftCount ? `${draftCount} 条待提交` : "" }]
+      : []),
     ...docs.filter((doc) => doc.name !== ANALYSIS_DOC)
       .map((doc) => ({ key: doc.name, label: doc.label, hint: sizeText(doc.bytes) })),
   ];
@@ -195,15 +275,167 @@ function IssueProcessDocs({ id, updatedAt }: { id: string; updatedAt: string }) 
     </div>}
     {!loading && !note && active === DIALOGUE_TAB
       && <IssueDialogue turns={turns} truncated={turnsTruncated} />}
-    {!loading && !note && active !== DIALOGUE_TAB && content && <>
+    {!loading && !note && active === REVIEW_TAB
+      && <IssueReviewPanel detail={detail} reviews={reviews} checks={checks}
+        reviewEnabled={reviewEnabled}
+        onReload={() => void loadReviews()} onLocate={(line) => void locate(line)} />}
+    {!loading && !note && active !== DIALOGUE_TAB && active !== REVIEW_TAB
+      && content && <>
       <div className="issue-doc-toolbar">
         <span>研究现场落盘的 markdown · 即写即读{truncated ? " · 内容超长已截断" : ""}</span>
         <button type="button" onClick={() => void loadActive()}>刷新</button>
       </div>
       <article className="issue-doc-body">
-        <Markdown text={content} />
+        {active === ANALYSIS_DOC && reviewEnabled
+          ? <Annotatable taskId={id} artifact={ANALYSIS_DOC}
+              fallbackFile={ANALYSIS_DOC} kind="doc" items={reviews}
+              onAdded={() => void loadReviews()}
+              addDraft={async ({ line, anchor, note: text }) => {
+                try {
+                  await addIssueReview(id, { line, anchor, note: text });
+                  void loadReviews();
+                  return {};
+                } catch (reason) {
+                  return {
+                    error: String(reason instanceof Error ? reason.message : reason),
+                  };
+                }
+              }}>
+              <Markdown text={content} />
+            </Annotatable>
+          : <Markdown text={content} />}
       </article>
     </>}
+  </div>;
+}
+
+/** 锚点检测徽标(ADR-0007 Q13):gone = 已被改动(唯一判据),原文
+ * 还在 = 黄灯提醒"这条可能还没被吸收"。人工改动引发的失配同理可见。 */
+function IssueReviewBadge({ check }: { check?: IssueReviewCheck }) {
+  if (!check) return null;
+  if (check.state === "gone") {
+    return <span className="issue-review-badge gone">已被改动·请你确认</span>;
+  }
+  if (check.state === "moved") {
+    return <span className="issue-review-badge warn"
+      title="原文还在,只是行号漂移">已移至第 {check.line} 行</span>;
+  }
+  if (check.state === "ambiguous") {
+    return <span className="issue-review-badge warn"
+      title="原文多处命中,点行号自行核对">多处命中</span>;
+  }
+  return <span className="issue-review-badge hit"
+    title="这条意见对应的原文还在报告里——可能还没被吸收,点行号核对">
+    原文仍在</span>;
+}
+
+function IssueReviewItem({ item, check, onLocate, onRemove }: {
+  item: IssueReview;
+  check?: IssueReviewCheck;
+  onLocate: (line: number) => void;
+  onRemove?: () => void;
+}) {
+  return <li className="issue-review-item">
+    <div className="issue-review-item-head">
+      <button type="button" className="link"
+        onClick={() => onLocate(item.line)}>第 {item.line} 行</button>
+      {item.status === "sent" && <IssueReviewBadge check={check} />}
+      <time>{formatLocalDateTime(item.created_at, { seconds: true })}</time>
+      {onRemove && <button type="button" className="ghost"
+        onClick={onRemove}>移除</button>}
+    </div>
+    <blockquote className="issue-review-anchor">针对 {item.anchor}</blockquote>
+    <p className="issue-review-note">{item.note}</p>
+  </li>;
+}
+
+/** 检视面板:草稿攒批、一次提交触发整体回退(轻量确认列明后果);
+ * 已提交的意见带锚点徽标,服务于下一轮对照。 */
+function IssueReviewPanel({ detail, reviews, checks, reviewEnabled, onReload, onLocate }: {
+  detail: IssueDetail;
+  reviews: IssueReview[];
+  checks: IssueReviewCheck[];
+  reviewEnabled: boolean;
+  onReload: () => void;
+  onLocate: (line: number) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState("");
+  const id = detail.id;
+  const drafts = reviews.filter((item) => item.status === "draft");
+  const sent = reviews.filter((item) => item.status === "sent");
+  const checkOf = (reviewId: string) =>
+    checks.find((check) => check.id === reviewId);
+
+  async function remove(reviewId: string) {
+    setBusy(true);
+    try {
+      await dropIssueReview(id, reviewId);
+      onReload();
+    } catch (reason) {
+      setNote(String(reason instanceof Error ? reason.message : reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submit() {
+    if (!window.confirm(
+      `提交 ${drafts.length} 条检视意见并重跑分析?\n\n`
+        + "· 当前等你回答的问题卡(如有)将作废\n"
+        + "· 工作流从「问题分析」重新执行,其后阶段标记重做(轮次 +1)\n"
+        + "· 已申报的 UT/流水线/MR 账作废;分支与 MR 延用,同分支追加修复")) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await sendIssueReviews(id);
+      setNote("检视意见已提交,工作流已回退到「问题分析」,AI 正在按意见修订。");
+      onReload();
+    } catch (reason) {
+      setNote(String(reason instanceof Error ? reason.message : reason));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <div className="issue-review">
+    {detail.review_active && <div className="utility-note">
+      上一轮检视意见已提交,AI 正在按意见修订分析报告;修订重新提交后这里恢复圈注。
+    </div>}
+    {drafts.length === 0 && sent.length === 0 && <div className="issue-doc-empty">
+      <strong>还没有检视意见</strong>
+      <p>到「分析报告」页签,把鼠标停在要提意见的那一行,点行尾的 ✎ 记一条;
+      攒多条后在这里一次提交——AI 会按意见修订报告,并从「问题分析」重新执行。</p>
+    </div>}
+    {note && <div className="utility-note">{note}</div>}
+    {drafts.length > 0 && <section className="issue-review-group">
+      <h4>待提交({drafts.length})</h4>
+      <ul className="issue-review-list">
+        {drafts.map((item) => <IssueReviewItem key={item.id} item={item}
+          check={checkOf(item.id)} onLocate={onLocate}
+          onRemove={reviewEnabled ? () => void remove(item.id) : undefined} />)}
+      </ul>
+      <div className="issue-review-actions">
+        <button type="button" className="primary"
+          disabled={busy || !reviewEnabled || detail.status === "running"}
+          title={!reviewEnabled
+            ? "当前会话状态不能提交检视(转正继承/检视回合进行中/会话已结束)"
+            : detail.status === "running"
+              ? "AI 正在运行——等它停机或举卡等你时再提交"
+              : "提交后工作流从问题分析重新执行"}
+          onClick={() => void submit()}>
+          {busy ? "提交中…" : `提交 ${drafts.length} 条意见并重跑分析`}
+        </button>
+      </div>
+    </section>}
+    {sent.length > 0 && <section className="issue-review-group">
+      <h4>已提交({sent.length})</h4>
+      <ul className="issue-review-list">
+        {sent.map((item) => <IssueReviewItem key={item.id} item={item}
+          check={checkOf(item.id)} onLocate={onLocate} />)}
+      </ul>
+    </section>}
   </div>;
 }
 
@@ -453,9 +685,9 @@ export function IssueMaterialsPane({ detail, busy, view, onView, onNotifyAI }: {
       </> : <div className="utility-note">正在读取单据详情…</div>}
     </div>}
     {view === "doc" && <>
-      {/* 过程文档(分析报告 + 过程问答 + 动态文档)按 updated_at 缓存:
-          文档可能被 AI 续写,状态一动就该重读。 */}
-      <IssueProcessDocs id={detail.id} updatedAt={detail.updated_at} />
+      {/* 过程文档(分析报告 + 过程问答 + 检视 + 动态文档)按 updated_at
+          缓存:文档可能被 AI 续写,状态一动就该重读。 */}
+      <IssueProcessDocs detail={detail} />
     </>}
     {view === "logs" && <div className="ws-doc">
       {data && data.logs.length === 0 && <div className="utility-note">

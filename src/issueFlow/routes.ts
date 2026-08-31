@@ -26,6 +26,10 @@
  *   GET  /issues/:id/documents/read   → 读一份过程文档(?name=;缺失为
  *                                      200 {unavailable},不 404)
  *   GET  /issues/:id/dialogue         → 过程问答(事件账本投影的对话)
+ *   GET  /issues/:id/reviews          → 检视面板(意见+锚点检测+回合标记)
+ *   POST /issues/:id/reviews          → 记一条检视草稿(悬停圈注)
+ *   POST /issues/:id/reviews/send     → 提交检视(整体回退到问题分析)
+ *   DELETE /issues/:id/reviews/:rid   → 移除一条意见(软删留痕)
  *   GET  /issues/:id/export           → 现场记录导出(单文件 Markdown:
  *                                      事件流逐字 + 台账,复盘用)
  *   GET  /issues/:id/events           → SSE:事件流尾随
@@ -505,6 +509,38 @@ export async function handleIssueRoutes(
         turns: dialogue.turns,
         ...(dialogue.truncated ? { truncated: true } : {}),
       });
+    }
+
+    // 检视(ADR-0007):意见账本 + 提交重跑。读:本人或管理员;记/
+    // 删/提交:仅归属人。提交是"整体回退"这一有后果动作的人工触发
+    // 源,服务层把门(固定流程/未终态/非转正继承/不可叠加/状态在
+    // 等或闲置);这里的轻量确认在页面层,服务端只认状态守卫。
+    if (method === "GET" && parts[2] === "reviews" && parts.length === 3) {
+      return done(200, issueFlow.listReviews(id));
+    }
+    if (method === "POST" && parts[2] === "reviews" && parts.length === 3) {
+      if (viewer?.role === "admin" || !brief || !own(brief.account)) {
+        return done(403, { error: "只有归属人能记检视意见" });
+      }
+      const body = await readBody(request);
+      return done(200, issueFlow.addReview(id, {
+        line: Number(body.line),
+        anchor: String(body.anchor ?? ""),
+        note: String(body.note ?? ""),
+      }));
+    }
+    if (method === "POST" && parts[2] === "reviews"
+        && parts[3] === "send" && parts.length === 4) {
+      if (viewer?.role === "admin" || !brief || !own(brief.account)) {
+        return done(403, { error: "只有归属人能提交检视" });
+      }
+      return done(200, issueFlow.submitReviews(id));
+    }
+    if (method === "DELETE" && parts[2] === "reviews" && parts.length === 4) {
+      if (viewer?.role === "admin" || !brief || !own(brief.account)) {
+        return done(403, { error: "只有归属人能移除检视意见" });
+      }
+      return done(200, issueFlow.dropReview(id, String(parts[3])));
     }
 
     // 现场记录导出(GET /issues/:id/export):事件流逐字 + 台账 → 单文件
