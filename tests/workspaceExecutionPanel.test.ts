@@ -111,3 +111,18 @@ test("诊断包导出给出生成、成功与失败反馈，不再静默下载",
   assert.match(workspace, /response\.blob\(\)/,
     "只有服务端真实返回诊断包后才能提示已开始下载");
 });
+
+test("需求原文接入圈注层，终态只把已停止任务设为只读", () => {
+  const sourceBranch = workspace.slice(
+    workspace.indexOf('materialView === "source" ?'),
+    workspace.indexOf(') : materialView === "chain"'),
+  );
+  assert.match(sourceBranch, /<Annotatable/);
+  assert.match(sourceBranch, /artifact=\{TASK_REQUIREMENT_ARTIFACT\}/);
+  assert.match(sourceBranch, /fallbackFile="需求原文"/);
+  assert.match(sourceBranch, /<Markdown text=\{task\.requirement\} \/>/);
+  assert.match(workspace, /return status !== "canceled"/,
+    "已交付任务可归档批注，只有明确停止后才关闭新增入口");
+  assert.match(workspace, /checks\.find\(\(check\) => check\.id === item\.id\)\?\.line/,
+    "定位应使用重锚定后的当前行号");
+});

@@ -81,6 +81,48 @@ test("检视返工不把内部第 0 轮显示成流水线修复轮次", () => {
   }), "流水线修复中");
 });
 
+test("圈注权与发送权拆开，需求原文批注能回到原文视图", () => {
+  assert.equal(workspace.canCreateWorkspaceAnnotation("completed"), true,
+    "已交付任务仍可留下交付后记录");
+  assert.equal(workspace.canCreateWorkspaceAnnotation("canceled"), false,
+    "用户明确停止的任务不再新增记录");
+  assert.equal(workspace.materialViewForAnnotation(
+    api.TASK_REQUIREMENT_ARTIFACT, []), "source");
+  assert.equal(workspace.materialViewForAnnotation("changes.diff", [
+    { name: "changes.diff", label: "代码差异", kind: "diff", bytes: 1 },
+  ]), "diff");
+  assert.deepEqual(workspace.decisionAnnotationIds([
+    annotation({ id: "mine", status: "draft", author: "alice" }),
+    annotation({ id: "visitor", status: "draft", author: "visitor" }),
+    annotation({ id: "sent", status: "sent", author: "alice" }),
+  ], "alice"), ["mine"],
+  "决定只能携带当前操作者自己的未送达草稿");
+});
+
+test("已交付批注明确是归档记录，不再冒充待提交", () => {
+  const html = renderToStaticMarkup(React.createElement(
+    annotationPanel.AnnotationPanel,
+    {
+      taskId: "task-done",
+      viewerUsername: "visitor",
+      items: [annotation({
+        status: "draft", author: "visitor",
+        artifact: api.TASK_REQUIREMENT_ARTIFACT,
+        file: "需求原文",
+      })],
+      checks: [],
+      canOperate: false,
+      taskStatus: "completed",
+      mergeRequestOpen: false,
+      onChanged: () => undefined,
+    },
+  ));
+  assert.match(html, /交付后记录/);
+  assert.match(html, /已保存在本任务档案中/);
+  assert.doesNotMatch(html, /条待提交/);
+  assert.doesNotMatch(html, />提交 1 条/);
+});
+
 test("个人行动清单能关联别人归属的 Committer 检视，且缺详情也不吞角标", () => {
   const foreign = task("foreign", "waiting_for_human", "alice");
   const visible = app.buildPersonalActionItems({

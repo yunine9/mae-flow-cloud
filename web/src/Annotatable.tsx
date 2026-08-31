@@ -42,7 +42,7 @@ export function Annotatable({
   kind: "doc" | "code";
   /** 已有批注:用来在材料上标出"这几处我圈过"。 */
   items: Annotation[];
-  /** MR 合入或用户停止后材料仍可读，但不再显示新增批注入口。 */
+  /** 用户停止后材料仍可读但不新增；已交付任务仍可留下归档批注。 */
   enabled?: boolean;
   onAdded: () => void;
   children: React.ReactNode;
@@ -156,27 +156,33 @@ export function Annotatable({
     const text = note.trim();
     if (!text) return;
     setBusy(true);
-    const result = await addAnnotation(taskId, {
-      artifact,
-      file: draft.file,
-      line: draft.line,
-      anchor: draft.anchor,
-      note: text,
-      kind: draft.kind,
-    });
-    setBusy(false);
-    if (result.error) {
-      setError(result.error);
-      return;
+    setError("");
+    try {
+      const result = await addAnnotation(taskId, {
+        artifact,
+        file: draft.file,
+        line: draft.line,
+        anchor: draft.anchor,
+        note: text,
+        kind: draft.kind,
+      });
+      if (result.error) {
+        setError(result.error);
+        return;
+      }
+      setDraft(undefined);
+      setNote("");
+      onAdded();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "批注保存失败，请重试");
+    } finally {
+      setBusy(false);
     }
-    setDraft(undefined);
-    setNote("");
-    onAdded();
   }
 
   return (
     <div
-      className="annotatable"
+      className={`annotatable${enabled ? "" : " is-readonly"}`}
       ref={host}
       onClick={open}
       onMouseMove={track}

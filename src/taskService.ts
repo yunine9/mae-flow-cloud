@@ -32,6 +32,7 @@ import { loadSkills } from "@earendil-works/pi-coding-agent";
 import {
   AnnotationPermissionError,
   AnnotationStore,
+  TASK_REQUIREMENT_ARTIFACT,
   reanchor,
   renderAnnotations,
   type Annotation,
@@ -3330,6 +3331,29 @@ export class TaskService {
       join(task.summary.workspace, "annotations.jsonl"));
   }
 
+  /** 批注靶子既可能是真实产物，也可能是任务快照里的需求原文。 */
+  private annotationArtifactContent(
+    task: TaskState,
+    artifact: string,
+  ): string | undefined {
+    if (artifact === TASK_REQUIREMENT_ARTIFACT) {
+      return task.summary.requirement;
+    }
+    const root = this.artifactRoot(task.summary.id);
+    return root ? readArtifact(root, artifact)?.content : undefined;
+  }
+
+  private async annotationArtifactContentAsync(
+    task: TaskState,
+    artifact: string,
+  ): Promise<string | undefined> {
+    if (artifact === TASK_REQUIREMENT_ARTIFACT) {
+      return task.summary.requirement;
+    }
+    const root = this.artifactRoot(task.summary.id);
+    return root ? (await readArtifactAsync(root, artifact))?.content : undefined;
+  }
+
   /** 单号来自内核状态文件;拿不到就退回任务号——不为抬头编内容。 */
   private ticketOf(task: TaskState): string {
     try {
@@ -3363,9 +3387,8 @@ export class TaskService {
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     this.reconcileResolvedDecisionAnnotations(task);
     const items = this.annotations(task).visible();
-    const root = this.artifactRoot(id);
     const checks = reanchor(items, (artifact) =>
-      root ? readArtifact(root, artifact)?.content : undefined);
+      this.annotationArtifactContent(task, artifact));
     return { items, checks, reply: this.annotationReply(task, items) };
   }
 
@@ -3380,15 +3403,12 @@ export class TaskService {
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     this.reconcileResolvedDecisionAnnotations(task);
     const items = this.annotations(task).visible();
-    const root = this.artifactRoot(id);
     const contents = new Map<string, string | undefined>();
-    if (root) {
-      await Promise.all([...new Set(items.map((item) => item.artifact))]
-        .map(async (artifact) => {
-          contents.set(artifact,
-            (await readArtifactAsync(root, artifact))?.content);
-        }));
-    }
+    await Promise.all([...new Set(items.map((item) => item.artifact))]
+      .map(async (artifact) => {
+        contents.set(artifact,
+          await this.annotationArtifactContentAsync(task, artifact));
+      }));
     const checks = reanchor(items, (artifact) => contents.get(artifact));
     return { items, checks, reply: this.annotationReply(task, items) };
   }
@@ -3499,10 +3519,8 @@ export class TaskService {
   addAnnotation(id: string, input: AnnotationInput): Annotation {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
-    if (["completed", "canceled"].includes(task.summary.status)) {
-      throw new TaskControlError(task.summary.status === "completed"
-        ? "MR 已合入，任务已经结束，不能再新增批注"
-        : "任务已由用户停止，不能再新增批注");
+    if (task.summary.status === "canceled") {
+      throw new TaskControlError("任务已由用户停止，不能再新增批注");
     }
     return this.annotations(task).add(input);
   }
@@ -3620,9 +3638,8 @@ export class TaskService {
     const item = store.list().find((one) => one.id === annotationId);
     let update: { line?: number; anchor?: string } | undefined;
     if (item) {
-      const root = this.artifactRoot(id);
-      const content = root
-        ? (await readArtifactAsync(root, item.artifact))?.content : undefined;
+      const content = await this.annotationArtifactContentAsync(
+        task, item.artifact);
       const [check] = reanchor([item], () => content);
       if (check?.state === "moved") update = { line: check.line };
       if (check?.state === "gone" && check.now) {
@@ -4011,15 +4028,24 @@ export class TaskService {
    * 决定仍携带旧 ID。它已经送达，不该重复发送，更不能因此拦住本次新写
    * 的补充说明。存在但已 sent/verified/dropped 的条目幂等跳过；真正不
    * 存在的 ID 仍拒绝，避免把跨任务或损坏的引用静默吞掉。 */
-  private pickDecisionDrafts(task: TaskState, ids: string[]): Annotation[] {
+  private pickDecisionDrafts(
+    task: TaskState,
+    ids: string[],
+    actor?: string,
+  ): Annotation[] {
     const wanted = new Set(ids);
     const items = this.annotations(task).list();
     const found = new Set(items.map((item) => item.id));
     if ([...wanted].some((id) => !found.has(id))) {
       throw new NotFoundError("有批注不存在，请刷新后重试");
     }
+    if (actor && items.some((item) => wanted.has(item.id)
+        && item.status === "draft" && item.author !== actor)) {
+      throw new AnnotationPermissionError("只能随决定提交自己写的批注");
+    }
     return items.filter((item) =>
-      item.status === "draft" && wanted.has(item.id));
+      item.status === "draft" && wanted.has(item.id)
+        && (!actor || item.author === actor));
   }
 
   /** MR/流水线连接是部署基础设施，管理员页面只读自检、不暴露地址。 */
@@ -7403,9 +7429,16 @@ export class TaskService {
       throw new TaskControlError(
         "push 前确认必须基于当前变更快照,请刷新后重试");
     }
-    // 服务端自己取任务当前全部草稿，手机端/月光模式不再因为没携带 id
-    // 而漏掉意见。显式 ids 只兼容普通非返工卡的旧提交方式。
-    const drafts = this.annotations(task).drafts();
+    // 决定只能携带决定者自己的草稿。旁观者可以先记，但“记录权”不能
+    // 在手机端/月光模式或返工卡里悄悄升级为“送达 Agent 的权力”。
+    // 无 actor 的旧回调按任务责任人收口；旧单也没有责任人时才保留
+    // 原单用户兼容语义。
+    const draftAuthor = input.actor ?? task.summary.luban_account;
+    const allDrafts = this.annotations(task).drafts();
+    const drafts = draftAuthor
+      ? allDrafts.filter((item) => item.author === draftAuthor) : allDrafts;
+    const deliverableUnresolved = unresolved.filter((item) =>
+      item.status !== "draft" || !draftAuthor || item.author === draftAuthor);
     // 等待期间经 queued_decision 提交的意见:状态是 sent,但正文还没
     // 送到过任何 Agent——随这次决定一并送达,送完转正常 decision 账。
     const queued = this.annotations(task).list().filter((item) =>
@@ -7418,12 +7451,12 @@ export class TaskService {
       // 普通检视仍回到同一会话，sent 已经在上下文里，不重复送；push
       // 返工会开一只全新会话，必须把 draft + sent 的全部未闭环意见
       // 都带过去，否则“提前主动送达”的意见会断在上一只 Agent 里。
-      ? pushConfirmCard ? unresolved : [...queued, ...drafts]
+      ? pushConfirmCard ? deliverableUnresolved : [...queued, ...drafts]
       // 本地 review 轮里若 Agent 因真实歧义举卡，用户在等待期间新圈的
       // 批注随这张卡一并回注；不能让人答完歧义后还要再点一次提交。
       : localReviewRound ? [...queued, ...drafts]
       : input.annotation_ids?.length
-        ? this.pickDecisionDrafts(task, input.annotation_ids)
+        ? this.pickDecisionDrafts(task, input.annotation_ids, draftAuthor)
         : queued;
     // 批注与自由说明都进 notes，不污染内核用于 choice receipt 的选项。
     const notes = [

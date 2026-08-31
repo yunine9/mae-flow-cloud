@@ -2335,6 +2335,9 @@ export async function listInterrupts(
 
 /* ---------------- 检视批注 ---------------- */
 
+/** 需求原文来自任务快照；这个保留标识与服务端 annotations.ts 同合同。 */
+export const TASK_REQUIREMENT_ARTIFACT = "__task_requirement__";
+
 export interface Annotation {
   id: string;
   author: string;

@@ -21,6 +21,7 @@ import {
   AnnotationError,
   AnnotationPermissionError,
   AnnotationStore,
+  TASK_REQUIREMENT_ARTIFACT,
   orderAnnotations,
   reanchor,
   renderAnnotations,
@@ -121,6 +122,67 @@ test("重锚定读不到材料时按「还在」放行——旁路绝不挡住�
   const checks = reanchor(target.drafts(), () => undefined);
   assert.equal(checks[0].state, "hit");
   assert.equal(checks[0].id, only.id);
+});
+
+test("需求原文批注直接锚定任务快照，现场不存在也能跟随新行号", async () => {
+  const service = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-anno-requirement-")),
+    provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0,
+  });
+  const id = service.create("第一行\n需要重点检视的原文\n第三行").id;
+  const note = service.addAnnotation(id, {
+    author: "reviewer", artifact: TASK_REQUIREMENT_ARTIFACT,
+    file: "需求原文", line: 2, anchor: "需要重点检视的原文",
+    note: "这里的验收口径要更明确", kind: "doc",
+  });
+
+  assert.equal(service.listAnnotations(id).checks[0].state, "hit");
+  const internal = (service as any).tasks.get(id);
+  internal.summary.requirement =
+    "新增说明\n第一行\n需要重点检视的原文\n第三行";
+  const syncCheck = service.listAnnotations(id).checks[0];
+  assert.equal(syncCheck.state, "moved");
+  assert.equal(syncCheck.line, 3);
+  const asyncCheck = (await service.listAnnotationsAsync(id)).checks[0];
+  assert.equal(asyncCheck.state, "moved",
+    "没有 artifact root 时异步清单也必须读取需求快照");
+  assert.equal(asyncCheck.line, 3);
+
+  const store = (service as any).annotations(internal) as AnnotationStore;
+  store.markSent([note.id], "review_repair");
+  const reopened = await service.reopenAnnotation(id, note.id, "reviewer");
+  assert.equal(reopened.line, 3, "返工应把需求原文批注更新到当前行号");
+});
+
+test("终态批注合同：已交付可留档但不能再送，已停止仍禁止新增", async () => {
+  const service = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-anno-terminal-")),
+    provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0,
+  });
+  const id = service.create("终态也要允许留下复盘意见").id;
+  const internal = (service as any).tasks.get(id);
+  internal.summary.status = "completed";
+  const archived = service.addAnnotation(id, {
+    author: "reviewer", artifact: TASK_REQUIREMENT_ARTIFACT,
+    file: "需求原文", line: 1, anchor: "终态也要允许留下复盘意见",
+    note: "后续任务需要补充这个边界", kind: "doc",
+  });
+  assert.equal(service.listAnnotations(id).items[0].id, archived.id);
+  await assert.rejects(
+    service.sendAnnotations(id, [archived.id], "reviewer"),
+    (error) => error instanceof TaskControlError
+      && /任务已经结束，不能再提交批注/.test(error.message),
+  );
+  assert.equal(service.listAnnotations(id).items[0].status, "draft",
+    "拒绝发送不能改动归档记录状态");
+
+  internal.summary.status = "canceled";
+  assert.throws(() => service.addAnnotation(id, {
+    author: "reviewer", artifact: TASK_REQUIREMENT_ARTIFACT,
+    file: "需求原文", line: 1, anchor: "终态也要允许留下复盘意见",
+    note: "停止后不应再增加", kind: "doc",
+  }), (error) => error instanceof TaskControlError
+    && /用户停止，不能再新增批注/.test(error.message));
 });
 
 test("append-only:软删留痕、已送出可移出看板、半行 JSON 只丢它自己", () => {
@@ -332,6 +394,14 @@ test("批注 HTTP 权限:开发与 Committer 都只能管理自己提出的意�
     const committerNote = await add(committer, "Committer 的意见");
     const developerNote = await add(developer, "开发的意见");
 
+    const committerCannotSend = await fetch(
+      `${base}/tasks/${created.id}/annotations/send`, {
+        method: "POST", headers: { cookie: committer },
+        body: JSON.stringify({ ids: [committerNote.id] }),
+      });
+    assert.equal(committerCannotSend.status, 403,
+      "普通成员可以先圈注，但不能因此获得指挥 Agent 的权限");
+
     const committerEditsOwn = await fetch(
       `${base}/tasks/${created.id}/annotations/${committerNote.id}`, {
         method: "PATCH", headers: { cookie: committer },
@@ -538,7 +608,7 @@ async function until(
   }
 }
 
-test("批注随决定提交:进 notes 不进 decision,选项记账不被污染", async () => {
+test("批注随决定提交:只送决定者自己的草稿,旁观记录不越权", async () => {
   const model = new ScriptedModelServer(REVIEW_SCRIPT);
   await model.start();
   const service = new TaskService({
@@ -556,13 +626,19 @@ test("批注随决定提交:进 notes 不进 decision,选项记账不被污染",
       line: 23, anchor: "retry(3)", note: "重试只该对网关失败生效",
       kind: "code",
     });
-    assert.equal(service.listAnnotations(id).items.length, 1);
+    const visitor = service.addAnnotation(id, {
+      author: "visitor", artifact: "REQ-1/spec.md", file: "SmsHandler.java",
+      line: 24, anchor: "timeout(3)", note: "这只是旁观者的个人记录",
+      kind: "code",
+    });
+    assert.equal(service.listAnnotations(id).items.length, 2);
 
     const waiting = service.get(id)!.waiting!;
     await service.decide(id, {
       state_version: waiting.state_version,
       decision: "需要修改",
       annotation_ids: [one.id],
+      actor: "liaoxiang",
     });
     await until(() => service.get(id)?.status === "completed", "任务收口");
 
@@ -574,12 +650,16 @@ test("批注随决定提交:进 notes 不进 decision,选项记账不被污染",
     assert.match(seen, /需要修改/);
     assert.match(seen, /重试只该对网关失败生效/);
     assert.match(seen, /以原文为准定位/);
+    assert.doesNotMatch(seen, /这只是旁观者的个人记录/,
+      "记录权不能被决定路径暗中升级为送达权");
     // 送出即出队,不会在下一个检视点重复送一遍;但清单上不下架——
     // 人得看得见"这条我提过了、是随决定提的"。
     const after = service.listAnnotations(id).items;
-    assert.equal(after.length, 1);
-    assert.equal(after[0].status, "sent");
-    assert.equal(after[0].sent_via, "decision");
+    assert.equal(after.length, 2);
+    assert.equal(after.find((item) => item.id === one.id)?.status, "sent");
+    assert.equal(after.find((item) => item.id === one.id)?.sent_via, "decision");
+    assert.equal(after.find((item) => item.id === visitor.id)?.status, "draft",
+      "旁观者记录在决定后仍应保持未送达");
   } finally {
     await model.stop();
   }
@@ -823,4 +903,21 @@ test("重锚定:渲染吃掉的 markdown 语法不该被判成原文消失", () 
   const removed = seed(target, "真没了", { anchor: "这句真的被删了" });
   const after = reanchor([removed], () => file);
   assert.equal(after[0].state, "gone");
+});
+
+test("重锚定:跨行代码块的整块锚点刚创建时不能立刻 gone", () => {
+  const target = store();
+  const block = seed(target, "代码块里的返回值要补判空", {
+    line: 1,
+    anchor: "const result = await load(); if (!result) return fallback;",
+  });
+  const source = [
+    "```ts",
+    "const result = await load();",
+    "if (!result) return fallback;",
+    "```",
+  ].join("\n");
+  const [check] = reanchor([block], () => source);
+  assert.notEqual(check.state, "gone");
+  assert.equal(check.line, 2, "跨行命中应定位到正文起始行");
 });

@@ -46,6 +46,7 @@ import {
   repairStopped,
   requestCommitterReview,
   statusText,
+  TASK_REQUIREMENT_ARTIFACT,
   type AnchorCheck,
   type Annotation,
   type ArtifactMeta,
@@ -63,6 +64,33 @@ import {
 
 type WorkspaceView = "materials" | "collaboration" | "execution" | "insights";
 type ExecutionView = "events" | "knowledge";
+type MaterialView = "source" | "doc" | "chain" | "diff";
+
+/** 圈注和“把意见送给 Agent”是两种权限；只有停止的任务禁止再记。 */
+export function canCreateWorkspaceAnnotation(
+  status: TaskSummary["status"],
+): boolean {
+  return status !== "canceled";
+}
+
+/** 批注定位必须能回到虚拟的需求原文，而不是把它误当过程文档。 */
+export function materialViewForAnnotation(
+  artifact: string,
+  artifacts: readonly ArtifactMeta[] = [],
+): MaterialView {
+  if (artifact === TASK_REQUIREMENT_ARTIFACT) return "source";
+  return artifacts.find((item) => item.name === artifact)?.kind === "diff"
+    ? "diff" : "doc";
+}
+
+/** 决定只能携带当前操作者自己尚未送达的草稿；别人的草稿只是其记录。 */
+export function decisionAnnotationIds(
+  items: readonly Annotation[],
+  viewerUsername: string,
+): string[] {
+  return items.filter((item) => item.status === "draft"
+    && item.author === viewerUsername).map((item) => item.id);
+}
 
 export interface WorkspaceNextActionCopy {
   title: string;
@@ -309,7 +337,7 @@ export function TaskWorkspace({
   const [unavailable, setUnavailable] = useState("");
   const [active, setActive] = useState("");
   const [materialView, setMaterialView] =
-    useState<"source" | "doc" | "chain" | "diff">(recommendedMaterialView);
+    useState<MaterialView>(recommendedMaterialView);
   const [content, setContent] = useState("");
   const [branch, setBranch] = useState("");
   const [loading, setLoading] = useState(false);
@@ -565,25 +593,31 @@ export function TaskWorkspace({
   }, [task.id, task.status, notesPulse, livePulse]);
 
   const drafts = notes.filter((item) => item.status === "draft");
+  const myDrafts = drafts.filter((item) => item.author === viewerUsername);
+  // 决定卡只展示会阻塞团队流转的事实：已送达意见，以及责任人自己的
+  // 未送达草稿。旁观者草稿仍可在批注页管理，但不能暗中进入 Agent。
   const unresolvedNotes = notes.filter((item) =>
-    item.status === "draft" || item.status === "sent");
+    item.status === "sent" || (item.status === "draft"
+      && (!task.luban_account || item.author === task.luban_account)));
   // sent 仍是“未闭环”，要继续展示并阻止误放行；但它已经主动送给
   // Agent，不能再冒充本次决定要附带的草稿。两组 ID 混用会让决定接口
   // 按 draft 校验时拒绝整次提交，连人刚写的补充说明也一起被挡住。
-  const draftIds = drafts.map((item) => item.id);
+  const draftIds = decisionAnnotationIds(notes, viewerUsername);
 
   /** 回到被圈的那一行:换页签→等它渲染出来→滚过去并闪一下。
    * 改批注前人几乎总要再看一眼上下文,只报"第 23 行"等于让他自己找。
    * 等待有预算(2 秒封顶),找不到就算了——旁路不许把界面卡住。 */
   function locate(item: Annotation) {
     setWorkspaceView("materials");
-    if (item.artifact !== active) setActive(item.artifact);
-    setMaterialView(items?.find((artifact) => artifact.name === item.artifact)
-      ?.kind === "diff" ? "diff" : "doc");
+    const source = item.artifact === TASK_REQUIREMENT_ARTIFACT;
+    if (!source && item.artifact !== active) setActive(item.artifact);
+    setMaterialView(materialViewForAnnotation(item.artifact, items));
+    const currentLine = checks.find((check) => check.id === item.id)?.line
+      ?? item.line;
     let tries = 0;
     const seek = () => {
       const node = document.querySelector<HTMLElement>(
-        `.ws-doc [data-l="${item.line}"]`);
+        `.ws-doc [data-l="${currentLine}"]`);
       if (!node) {
         if (tries++ < 20) window.setTimeout(seek, 100);
         return;
@@ -592,7 +626,7 @@ export function TaskWorkspace({
       node.classList.add("annot-flash");
       window.setTimeout(() => node.classList.remove("annot-flash"), 1700);
     };
-    window.setTimeout(seek, item.artifact === active ? 0 : 120);
+    window.setTimeout(seek, source || item.artifact === active ? 0 : 120);
   }
   const activeMeta = items?.find((item) => item.name === active);
   const documents = items?.filter((item) => item.kind === "doc") ?? [];
@@ -631,6 +665,7 @@ export function TaskWorkspace({
     deliverySelection,
   );
   const canContributeReview = canOperate || canCollaborate || !!reviewAssignment;
+  const canCreateAnnotation = canCreateWorkspaceAnnotation(task.status);
   const collaborationVisible = canCollaborate && [
     "running", "pausing", "paused", "waiting_for_human", "verifying",
   ].includes(task.status);
@@ -803,8 +838,11 @@ export function TaskWorkspace({
       <nav className="ws-workspace-nav" aria-label="任务工作台视图">
         {([
           ["materials", "交付材料", "文档、依赖与代码变更"],
-          ["insights", "批注与检视", drafts.length
-            ? `${drafts.length} 条批注待提交` : notes.length
+          ["insights", "批注与检视", (task.status === "completed"
+            ? drafts.length : myDrafts.length)
+            ? task.status === "completed"
+              ? `${drafts.length} 条交付后记录`
+              : `${myDrafts.length} 条批注待提交` : notes.length
               ? `${notes.length} 条批注` : "圈选原文、协作检视"],
           ["collaboration", "开发协作", collaborationVisible
             ? "补充主任务或主动接管" : assistantUnavailableReason(task)],
@@ -813,12 +851,16 @@ export function TaskWorkspace({
           <button type="button" role="tab" key={view}
             aria-selected={workspaceView === view}
             className={`${workspaceView === view ? "active" : ""}`
-              + `${view === "insights" && drafts.length ? " attention" : ""}`}
+              + `${view === "insights" && myDrafts.length
+                && task.status !== "completed" ? " attention" : ""}`}
             onClick={() => setWorkspaceView(view)}>
             <strong>
               {label}
               {view === "insights" && notes.length > 0 && (
-                <em>{drafts.length > 0 ? `${drafts.length} 待提交` : notes.length}</em>
+                <em>{(task.status === "completed" ? drafts.length : myDrafts.length) > 0
+                  ? task.status === "completed"
+                    ? `${drafts.length} 记录` : `${myDrafts.length} 待提交`
+                  : notes.length}</em>
               )}
             </strong>
             <small>{hint}</small>
@@ -864,15 +906,25 @@ export function TaskWorkspace({
           )}
           <div className="ws-doc">
             {materialView === "source" ? (
-              <article className="requirement-source">
-                <div className="requirement-source-label">
-                  <span>{task.requirement_document?.name ?? "用户提交的完整内容"}
-                    {task.requirement_document?.context_mode === "file"
-                      && <em>Agent 分段读取</em>}</span>
-                  <small>{task.requirement.split(/\r?\n/).length} 行 · {task.requirement.length} 字符</small>
-                </div>
-                <Markdown text={task.requirement} />
-              </article>
+              <Annotatable
+                taskId={task.id}
+                artifact={TASK_REQUIREMENT_ARTIFACT}
+                fallbackFile="需求原文"
+                kind="doc"
+                items={notes}
+                enabled={canCreateAnnotation}
+                onAdded={() => setNotesPulse((tick) => tick + 1)}
+              >
+                <article className="requirement-source">
+                  <div className="requirement-source-label">
+                    <span>{task.requirement_document?.name ?? "用户提交的完整内容"}
+                      {task.requirement_document?.context_mode === "file"
+                        && <em>Agent 分段读取</em>}</span>
+                    <small>{task.requirement.split(/\r?\n/).length} 行 · {task.requirement.length} 字符</small>
+                  </div>
+                  <Markdown text={task.requirement} />
+                </article>
+              </Annotatable>
             ) : materialView === "chain" ? (
               <>
                 <RequirementGraph task={task} onOpenTask={onOpenTask} />
@@ -961,8 +1013,7 @@ export function TaskWorkspace({
                 fallbackFile={activeMeta?.label ?? active}
                 kind={activeMeta?.kind === "diff" ? "code" : "doc"}
                 items={notes}
-                enabled={canContributeReview
-                  && !["completed", "canceled"].includes(task.status)}
+                enabled={canCreateAnnotation}
                 onAdded={() => setNotesPulse((tick) => tick + 1)}
               >
                 {materialView === "diff"

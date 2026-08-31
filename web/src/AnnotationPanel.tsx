@@ -92,7 +92,11 @@ export function advanceAdminOverrideArm(
 
 /** 一条批注此刻处在哪。检视闭环的五站:
  * 待提交 → 已提交 → 已被改动·请你确认 → 确认通过 / 返工(回到待提交)。 */
-function progressOf(item: Annotation, check?: AnchorCheck): {
+function progressOf(
+  item: Annotation,
+  check?: AnchorCheck,
+  archival = false,
+): {
   tone: "draft" | "waiting" | "review" | "done";
   text: string;
   hint?: string;
@@ -107,6 +111,10 @@ function progressOf(item: Annotation, check?: AnchorCheck): {
           hint: "意见作者已确认这处改动符合要求。" };
   }
   if (item.status !== "sent") {
+    if (archival) {
+      return { tone: "draft", text: "交付后记录",
+        hint: "任务已经交付，这条记录保留在任务档案中，不会再触发 Agent 修改。" };
+    }
     return item.rework
       ? { tone: "draft", text: `第 ${item.rework + 1} 轮·待提交`,
           hint: "上一轮改动没达到要求,这条已退回,提交后会再送给 AI。" }
@@ -120,13 +128,13 @@ function progressOf(item: Annotation, check?: AnchorCheck): {
     : { tone: "waiting", text: "已提交" };
 }
 
-function deliveryText(item: Annotation): string {
+function deliveryText(item: Annotation, archival = false): string {
   if (item.status === "verified") {
     return item.verified_by && item.verified_by !== item.author
       ? `管理员 ${item.verified_by} 代确认`
       : "意见作者已确认";
   }
-  if (item.status !== "sent") return "尚未提交";
+  if (item.status !== "sent") return archival ? "交付后记录" : "尚未提交";
   if (item.sent_via === "decision") return "通过审批提交";
   if (item.sent_via === "pipeline_evidence") return "作为流水线证据提交";
   if (item.sent_via === "review_repair") return "已交给当前 MR 的修复 Agent";
@@ -228,10 +236,16 @@ export function AnnotationPanel({
     if (busy) return;
     setBusy(true);
     setError("");
-    const result = await sendAnnotations(taskId, drafts.map((item) => item.id));
-    setBusy(false);
-    if (result.error) setError(result.error);
-    onChanged();
+    try {
+      const result = await sendAnnotations(taskId,
+        drafts.map((item) => item.id));
+      if (result.error) setError(result.error);
+      onChanged();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "批注提交失败，请重试");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function mutateAnnotation(
@@ -288,7 +302,8 @@ export function AnnotationPanel({
         <div className="annot-panel-summary-side">
           <div className="annot-panel-counts">
             <span>{items.length} 条</span>
-            {drafts.length > 0 && <em>{drafts.length} 条待提交</em>}
+            {drafts.length > 0 && <em>{drafts.length} 条
+              {taskStatus === "completed" ? "交付后记录" : "待提交"}</em>}
           </div>
           <i className="annot-panel-chevron" aria-hidden />
         </div>
@@ -325,15 +340,30 @@ export function AnnotationPanel({
         </div>
       )}
 
-      {canOperate && drafts.length > 0 && !canSend && (
+      {drafts.length > 0 && taskStatus === "completed" && (
+        <p className="annot-panel-note">
+          任务已经交付；这些批注已保存在本任务档案中，不会自动触发修改。
+          需要继续改代码时，请创建后续任务。
+        </p>
+      )}
+      {drafts.length > 0 && taskStatus === "canceled" && (
+        <p className="annot-panel-note">
+          任务已由用户停止；已有批注仍保留，但不会再触发修改。
+        </p>
+      )}
+      {!canOperate && drafts.length > 0
+        && !["completed", "canceled"].includes(taskStatus) && (
+        <p className="annot-panel-note">
+          批注已保存在你的清单中。你目前只有记录权限；成为受邀协作者或本次检视人后，
+          才能提交给 Agent。
+        </p>
+      )}
+      {canOperate && drafts.length > 0 && !canSend
+        && !["completed", "canceled"].includes(taskStatus) && (
         <p className="annot-panel-note">
           {taskStatus === "paused" || taskStatus === "pausing"
               ? `有 ${drafts.length} 条批注已保存。恢复任务后即可交给 Agent 继续修改。`
-              : taskStatus === "completed"
-                ? "MR 已合入，任务已经结束；这些批注只保留为本地记录，不会再触发修改。"
-                : taskStatus === "canceled"
-                  ? "任务已由用户停止；这些批注只保留为本地记录，不会再触发修改。"
-                  : mergeRequestOpen === false && taskStatus === "await_merge"
+              : mergeRequestOpen === false && taskStatus === "await_merge"
                     ? "MR 当前已关闭。批注已经保存；重新打开 MR 后即可继续提交修改。"
                 : `有 ${drafts.length} 条批注待提交；当前没有可接收意见的执行会话。`}
         </p>
@@ -343,7 +373,9 @@ export function AnnotationPanel({
       <ol className="annot-list">
         {items.map((item) => {
           const check = checkOf(item.id);
-          const progress = progressOf(item, check);
+          const archival = taskStatus === "completed"
+            && item.status === "draft";
+          const progress = progressOf(item, check, archival);
           const isAuthor = item.author === viewerUsername;
           const editing = editingId === item.id;
           const overrideAccess = adminOverrideAccess({
@@ -377,8 +409,12 @@ export function AnnotationPanel({
                             onChange={(event) => setEditingNote(event.target.value)} />
                   <div>
                     <span>{item.status === "draft"
-                      ? "保存后仍在待提交清单中。"
-                      : "修改后会回到待提交，避免新内容被误认为已经送达。"}</span>
+                      ? archival
+                        ? "保存后仍作为交付后记录保留。"
+                        : "保存后仍在待提交清单中。"
+                      : taskStatus === "completed"
+                        ? "修改后会成为交付后记录，不会再次送给 Agent。"
+                        : "修改后会回到待提交，避免新内容被误认为已经送达。"}</span>
                     <button type="button" className="ghost"
                             disabled={!!mutationBusy}
                             onClick={() => { setEditingId(""); setEditingNote(""); }}>
@@ -420,7 +456,7 @@ export function AnnotationPanel({
               )}
               <div className="annot-item-foot">
                 <small>
-                  {deliveryText(item)} · 批注作者 {item.author} · {relativeTime(item.created_at)}
+                  {deliveryText(item, archival)} · 批注作者 {item.author} · {relativeTime(item.created_at)}
                   {item.edited_at && " · 已编辑"}
                   {check && check.state !== "hit"
                     && ` · ${ANCHOR_TEXT[check.state]}`}
