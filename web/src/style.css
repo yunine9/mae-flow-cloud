@@ -1219,6 +1219,17 @@ svg {
 .repo-row > span { color: var(--muted); font: 700 11px var(--font-mono); text-align: center; }
 .repo-row > button { height: 30px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); background: var(--surface-soft); cursor: pointer; }
 .repo-row > button:hover { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+.repo-probe-state {
+  grid-column: 2 / -1; margin-top: -2px; display: flex; align-items: center;
+  gap: 6px; color: var(--muted); font-size: var(--font-size-assist); line-height: 1.4;
+}
+.repo-probe-state::before {
+  width: 6px; height: 6px; flex: none; border-radius: 50%; background: currentColor;
+  content: "";
+}
+.repo-probe-state.checking { color: var(--accent); }
+.repo-probe-state.success { color: var(--success); }
+.repo-probe-state.error { color: var(--danger); }
 .repo-add { width: max-content; padding: 6px 10px; border: 1px dashed var(--line-strong); border-radius: 8px; color: var(--accent); background: transparent; font-size: var(--font-size-assist); cursor: pointer; }
 .repo-add:hover { border-color: var(--accent); background: var(--accent-soft); }
 .composer-actions .account-field input { width: 100%; }
@@ -8998,9 +9009,13 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 :root[data-theme="light"] .sidebar-account small { color: #9299a8; }
 :root[data-theme="light"] .account-avatar { color: #4d46a9; background: rgba(101, 91, 216, .13); }
 :root[data-theme="light"] .logout-button {
-  color: #82899a; border-color: rgba(76, 74, 105, .11); background: rgba(255, 255, 255, .48);
+  color: #343b4f; border-color: rgba(50, 55, 76, .2); background: #fff;
 }
-:root[data-theme="light"] .logout-button:hover { color: #5148c5; background: #fff; }
+:root[data-theme="light"] .logout-button svg { color: #343b4f; stroke: currentColor; }
+:root[data-theme="light"] .logout-button:hover {
+  color: #4439b7; border-color: rgba(81, 72, 197, .32); background: #f5f3ff;
+}
+:root[data-theme="light"] .logout-button:hover svg { color: #4439b7; }
 
 :root[data-theme="light"] .identity-bar {
   color: var(--text);

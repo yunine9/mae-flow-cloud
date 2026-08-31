@@ -1263,6 +1263,25 @@ export async function resolveRepositoryProfiles(
   return (await response.json()).repositories;
 }
 
+export interface RepositoryProbeResult {
+  repository: string;
+  reachable: boolean;
+  message: string;
+}
+
+export async function probeRepositories(
+  repositories: string[],
+  signal?: AbortSignal,
+): Promise<RepositoryProbeResult[]> {
+  const response = await fetch("/repositories/probe", {
+    method: "POST",
+    signal,
+    body: JSON.stringify({ repositories }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return (await response.json()).repositories;
+}
+
 export async function saveRepositoryProfile(input: {
   repository: string;
   technologies: string[];

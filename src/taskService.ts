@@ -1448,6 +1448,16 @@ export interface RepositorySkillCatalogResponse {
   repositories: RepositorySkillCatalog[];
 }
 
+export interface RepositoryProbeResult {
+  repository: string;
+  reachable: boolean;
+  message: string;
+}
+
+export interface RepositoryProbeResponse {
+  repositories: RepositoryProbeResult[];
+}
+
 /** 所有审批入口共用的决定契约。
  *
  * selected_options 只承载内核选项原文；free_responses 承载开放题答案或
@@ -4411,6 +4421,71 @@ export class TaskService {
       catalogs,
     });
     return { catalog_token: catalogToken, repositories: catalogs };
+  }
+
+  /**
+   * 下单前的轻量可达性探测。这里只问远端“能否读取引用”，不 clone、
+   * 不扫描内容，也不在浏览器里碰个人令牌。与真正 clone/push 共用同一
+   * 套临时凭据和隔离 Git 环境，避免表单探测绿、真正执行却因身份不同红。
+   */
+  async probeRepositories(input: {
+    repositories: string[];
+    account?: string;
+  }): Promise<RepositoryProbeResponse> {
+    if (!this.options.host) {
+      throw new Error("本部署未接代码仓，无法探测仓库地址");
+    }
+    const repositories = input.repositories
+      .map((item) => String(item).trim()).filter(Boolean)
+      .filter((item, index, all) => all.indexOf(item) === index);
+    if (repositories.length > 12) throw new Error("一次最多探测 12 个代码仓");
+    const credential = this.options.gitCredential?.(input.account);
+    const sandbox = this.prepareHostGitSandbox(credential);
+    try {
+      const results = await Promise.all(repositories.map(async (repository) => {
+        try {
+          validateRepositoryAddress(repository);
+          const windowsDrive = /^[a-z]:[\\/]/i.test(repository);
+          if (!windowsDrive
+              && /^[a-z][a-z\d+.-]*:/i.test(repository)
+              && !/^(?:https?|file):\/\//i.test(repository)) {
+            throw new Error("代码仓传输协议不受支持，只允许 HTTPS 或本地仓");
+          }
+          const remote = /^(?:https?|file):\/\//i.test(repository)
+            ? repository : resolve(repository);
+          const checked = await runGitProcess([
+            ...sandbox.args, "ls-remote", "--symref", remote, "HEAD",
+          ], {
+            timeoutMs: 8_000,
+            maxBuffer: 64 * 1024,
+            env: sandbox.env,
+          });
+          if (checked.status === 0 && !checked.error && !checked.timedOut) {
+            return { repository, reachable: true,
+              message: "地址有效，仓库可访问" };
+          }
+          const detail = `${checked.stderr}\n${checked.error?.message ?? ""}`;
+          const message = checked.timedOut
+            ? "连接超时，请检查仓库服务或网络"
+            : /authentication|authorization|access denied|forbidden|403|401|could not read username|terminal prompts disabled/i.test(detail)
+              ? "仓库需要权限，请检查个人 Git Token"
+              : /not found|does not exist|repository.*not found|no such file|not a git repository|does not appear to be a git repository/i.test(detail)
+                ? "仓库不存在或地址填写有误"
+                : /could not resolve host|name or service not known/i.test(detail)
+                  ? "无法解析仓库主机，请检查域名"
+                  : /failed to connect|couldn't connect|connection refused|network is unreachable/i.test(detail)
+                    ? "无法连接仓库服务，请检查网络或地址"
+                    : "仓库无法访问，请检查地址和个人 Git Token";
+          return { repository, reachable: false, message };
+        } catch (error) {
+          return { repository, reachable: false,
+            message: error instanceof Error ? error.message : "仓库地址无效" };
+        }
+      }));
+      return { repositories: results };
+    } finally {
+      this.cleanupHostGitCredential(sandbox);
+    }
   }
 
   private catalogWithConflicts(

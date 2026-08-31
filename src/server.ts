@@ -857,11 +857,32 @@ export function createTaskServer(
         }
       }
 
+      // 仓库地址在下单前就做轻量可达性探测。探测使用服务端的个人
+      // Git 身份，浏览器只拿“可访问/原因”，不会接触令牌或 Git 输出。
+      if (request.method === "POST"
+          && url.pathname === "/repositories/probe") {
+        if (options.auth && !viewer) {
+          return json(response, 401, { error: "请先登录" });
+        }
+        try {
+          const body = await readBody(request);
+          const repositories = Array.isArray(body.repositories)
+            ? body.repositories.map(String) : [];
+          return json(response, 200, await service.probeRepositories({
+            repositories,
+            account: viewer?.username,
+          }));
+        } catch (error) {
+          return json(response, 400, { error: humanError(error) });
+        }
+      }
+
       const protectedRoute =
         url.pathname === "/history" || parts[0] === "tasks"
         || url.pathname === "/launch-knowledge-preview"
         || url.pathname === "/knowledge-insights"
         || parts[0] === "reviews" || parts[0] === "repository-skills"
+        || parts[0] === "repositories"
         || parts[0] === "skills" || parts[0] === "business-modules"
         || parts[0] === "repository-profiles"
         || parts[0] === "knowledge-candidates"
@@ -1889,6 +1910,27 @@ export function createTaskServer(
             // 兼容没有平台知识的旧客户端，但仍把权威空清单绑定到创建，
             // 防止预检后目录新增资产而被静默带入。
             knowledgePreviewDigest = preview.selection_digest;
+          }
+          // UI 会即时探测，但真正“不让坏地址创建任务”必须由服务端兜底：
+          // 旧页面、脚本或竞态都不能绕过这道闸。固定仓部署没有逐单地址，
+          // 由启动自检负责，不在这里重复探测。知识清单契约先判，保持旧
+          // 客户端拿到“先核对清单”的 409 后能按原流程自愈。
+          const requestedRepositories = repos?.length
+            ? repos : repo ? [repo] : [];
+          if (service.launchOptions().repo.enabled
+              && requestedRepositories.length > 0) {
+            const probed = await service.probeRepositories({
+              repositories: requestedRepositories,
+              account,
+            });
+            const failed = probed.repositories.filter((item) => !item.reachable);
+            if (failed.length) {
+              return json(response, 400, {
+                error: "代码仓不可访问，任务未创建："
+                  + failed.map((item) => `${item.repository}（${item.message}）`).join("；"),
+                repositories: probed.repositories,
+              });
+            }
           }
           return json(response, 201, service.create(requirement,
             {

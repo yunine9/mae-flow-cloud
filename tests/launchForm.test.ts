@@ -788,6 +788,52 @@ function makeRepo(name: string): string {
   return dir;
 }
 
+test("仓库地址在下单前按真实 Git 身份探测，并逐仓返回人话错误", async () => {
+  const repository = makeRepo("probe-ok");
+  const missing = join(tmpdir(), `mfc-probe-missing-${Date.now()}`);
+  const kernelRoot = discoverKernelRoot(process.cwd());
+  if (!kernelRoot) throw new Error("找不到内核");
+  const service = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-lf-probe-")),
+    provider: "a", model: "a-1", maxConcurrent: 0,
+    modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
+    host: { kernelRoot },
+  });
+  const server = createTaskServer(service);
+  await new Promise<void>((resolveListen) =>
+    server.listen(0, "127.0.0.1", resolveListen));
+  const address = server.address() as AddressInfo;
+  try {
+    const response = await fetch(
+      `http://127.0.0.1:${address.port}/repositories/probe`, {
+        method: "POST",
+        body: JSON.stringify({ repositories: [
+          repository, missing, "git@example.com:team/repo.git",
+        ] }),
+      });
+    const body = await readJson(response) as {
+      repositories: Array<{ repository: string; reachable: boolean; message: string }>;
+    };
+    assert.equal(response.status, 200);
+    assert.deepEqual(body.repositories.map((item) => item.reachable),
+      [true, false, false]);
+    assert.match(body.repositories[0].message, /地址有效/);
+    assert.match(body.repositories[1].message, /不存在|填写有误/);
+    assert.match(body.repositories[2].message, /HTTPS/);
+  } finally {
+    await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+  }
+});
+
+test("发起页会防抖探测仓库并阻止坏地址，浅色退出图标有明确对比色", () => {
+  const source = readFileSync(join(process.cwd(), "web/src/LaunchWorkspace.tsx"), "utf-8");
+  const style = readFileSync(join(process.cwd(), "web/src/style.css"), "utf-8");
+  assert.match(source, /probeRepositories\(repositoriesToProbe/);
+  assert.match(source, /repositoryProbeBlocked/);
+  assert.match(source, /正在检查仓库地址/);
+  assert.match(style, /data-theme="light"\] \.logout-button svg[\s\S]*?#343b4f/);
+});
+
 test("消费:任务级代码仓压过部署仓,克隆的就是下单填的那个", async () => {
   const repoA = makeRepo("aaa");
   const repoB = makeRepo("bbb");

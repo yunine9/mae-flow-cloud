@@ -4,10 +4,12 @@ import {
   getLaunchKnowledgePreview,
   getLaunchOptions,
   listWorkflowAssets,
+  probeRepositories,
   type AuthUser,
   type LaunchKnowledgeMatchedScope,
   type LaunchKnowledgePreview,
   type LaunchOptions,
+  type RepositoryProbeResult,
   type TaskSummary,
   type WorkflowAssetSummary,
 } from "./api";
@@ -187,6 +189,12 @@ export function LaunchWorkspace({
     ? validDraft.repos
     : savedPreferences?.recentRepos?.[0]
       ? [savedPreferences.recentRepos[0]] : [""]);
+  const [repositoryProbeResults, setRepositoryProbeResults] =
+    useState<RepositoryProbeResult[]>([]);
+  const [repositoryProbeKey, setRepositoryProbeKey] = useState("");
+  const [repositoryProbeLoading, setRepositoryProbeLoading] = useState(false);
+  const [repositoryProbeError, setRepositoryProbeError] = useState("");
+  const repositoryProbeRequest = useRef(0);
   // 单号/基线分支:内核配置确认要的两项事实,下单一并收齐——
   // 不让模型开工后再逐项来问(用户 2026-08-19 拍板,基线默认 master)。
   const [ticket, setTicket] = useState(validDraft?.ticket ?? "");
@@ -243,6 +251,20 @@ export function LaunchWorkspace({
   // 固定仓部署不渲染仓库输入,预览/提交也一并按 enabled 裁字段——
   // 隐藏控件不等于字段不存在(MFC-033)。
   const repoFieldsEnabled = options?.repo.enabled !== false;
+  const repositoriesToProbe = useMemo(() => [...new Set(
+    repos.map((item) => item.trim()).filter(Boolean),
+  )], [repos]);
+  const expectedRepositoryProbeKey = JSON.stringify(repositoriesToProbe);
+  const repositoryProbeByUrl = useMemo(() => new Map(
+    repositoryProbeResults.map((item) => [item.repository, item]),
+  ), [repositoryProbeResults]);
+  const repositoryProbeSettled = repositoryProbeKey
+    === expectedRepositoryProbeKey;
+  const repositoryProbeBlocked = repoFieldsEnabled
+    && repositoriesToProbe.length > 0
+    && (repositoryProbeLoading || !repositoryProbeSettled
+      || !!repositoryProbeError
+      || repositoryProbeResults.some((item) => !item.reachable));
   const previewInput = useMemo(() => ({
     repos: repoFieldsEnabled
       ? repos.map((item) => item.trim()).filter(Boolean) : [],
@@ -289,7 +311,7 @@ export function LaunchWorkspace({
   const knowledgeBlocked = knowledgePreviewLoading || !previewSettled
     || !!knowledgePreviewError || !knowledgePreview?.complete;
   const blocked = optionsLoading || blockers.length > 0 || !!optionsError
-    || knowledgeBlocked;
+    || knowledgeBlocked || repositoryProbeBlocked;
 
   useEffect(() => {
     let alive = true;
@@ -314,6 +336,47 @@ export function LaunchWorkspace({
     });
     return () => { alive = false; };
   }, []);
+
+  useEffect(() => {
+    if (!options?.repo.enabled || repositoriesToProbe.length === 0) {
+      setRepositoryProbeResults([]);
+      setRepositoryProbeKey(expectedRepositoryProbeKey);
+      setRepositoryProbeLoading(false);
+      setRepositoryProbeError("");
+      return;
+    }
+    const request = ++repositoryProbeRequest.current;
+    const key = expectedRepositoryProbeKey;
+    const controller = new AbortController();
+    setRepositoryProbeLoading(true);
+    setRepositoryProbeError("");
+    const timer = window.setTimeout(() => {
+      void probeRepositories(repositoriesToProbe, controller.signal)
+        .then((result) => {
+          if (repositoryProbeRequest.current !== request) return;
+          setRepositoryProbeResults(result);
+          setRepositoryProbeKey(key);
+        }).catch((cause) => {
+          if (repositoryProbeRequest.current !== request) return;
+          if (cause instanceof DOMException && cause.name === "AbortError") return;
+          setRepositoryProbeResults([]);
+          setRepositoryProbeKey(key);
+          setRepositoryProbeError(cause instanceof Error
+            ? cause.message : "仓库地址暂时无法检查");
+        }).finally(() => {
+          if (repositoryProbeRequest.current === request) {
+            setRepositoryProbeLoading(false);
+          }
+        });
+    }, 420);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+      if (repositoryProbeRequest.current === request) {
+        repositoryProbeRequest.current += 1;
+      }
+    };
+  }, [expectedRepositoryProbeKey, options?.repo.enabled]);
 
   useEffect(() => {
     if (!options) return;
@@ -740,10 +803,28 @@ export function LaunchWorkspace({
                               placeholder="https://codehub…/team/project.git"
                               list="launch-recent-repositories"
                               spellCheck={false}
+                              aria-invalid={Boolean(value.trim()
+                                && repositoryProbeSettled
+                                && repositoryProbeByUrl.get(value.trim())
+                                  ?.reachable === false)}
                               required={options.repo.required} />
                             {repos.length > 1 && <button type="button"
                               aria-label={`移除第 ${index + 1} 个仓库`}
                               onClick={() => removeRepository(index)}>×</button>}
+                            {value.trim() && <small className={`repo-probe-state ${
+                              repositoryProbeLoading || !repositoryProbeSettled
+                                ? "checking"
+                                : repositoryProbeByUrl.get(value.trim())?.reachable
+                                  ? "success" : "error"}`}
+                              role={repositoryProbeSettled
+                                && repositoryProbeByUrl.get(value.trim())?.reachable === false
+                                ? "alert" : "status"}>
+                              {repositoryProbeLoading || !repositoryProbeSettled
+                                ? "正在检查仓库地址…"
+                                : repositoryProbeByUrl.get(value.trim())?.message
+                                  ?? repositoryProbeError
+                                  ?? "仓库地址暂时无法检查"}
+                            </small>}
                           </div>
                         ))}
                       </div>
@@ -1154,13 +1235,21 @@ export function LaunchWorkspace({
               {error && <div className="composer-error" role="alert">{error}</div>}
               <footer className="launch-submit-bar">
                 <div><strong>{blocked
-                  ? knowledgePreviewLoading || !previewSettled
+                  ? repositoryProbeBlocked
+                    ? repositoryProbeLoading || !repositoryProbeSettled
+                      ? "正在检查代码仓"
+                      : "代码仓暂不可用"
+                  : knowledgePreviewLoading || !previewSettled
                     ? "正在核对知识清单"
                     : knowledgePreviewError || !knowledgePreview?.complete
                       ? "知识清单尚未核对完整"
                       : "暂时不能发起"
                   : "信息确认后即可启动"}</strong><small>{blocked
-                  ? knowledgePreviewLoading || !previewSettled
+                  ? repositoryProbeBlocked
+                    ? repositoryProbeLoading || !repositoryProbeSettled
+                      ? "正在确认地址与当前 Git 身份是否真的可访问"
+                      : "请根据仓库地址下方的原因修正后再发起"
+                  : knowledgePreviewLoading || !previewSettled
                     ? "服务端正在固定本次任务会使用的全文与版本"
                     : knowledgePreviewError || !knowledgePreview?.complete
                       ? "请查看“本任务知识”中的明确原因后重试"
@@ -1171,6 +1260,10 @@ export function LaunchWorkspace({
                     ? "正在发起"
                     : optionsLoading
                       ? "读取配置中"
+                    : repositoryProbeBlocked
+                      ? repositoryProbeLoading || !repositoryProbeSettled
+                        ? "检查仓库中"
+                        : "仓库不可用"
                       : knowledgePreviewLoading || !previewSettled
                         ? "核对知识中"
                         : knowledgePreviewError || !knowledgePreview?.complete
