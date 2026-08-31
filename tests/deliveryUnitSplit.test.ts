@@ -6,9 +6,8 @@
  * 另测负责面交付门禁:越界提交停摆举卡,主责任人放行(记豁免)或
  * 打回(派撤出修复),邻居目录前缀(src/filterX)不被吞进面内。
  *
- * HTTP 侧 scope-decision 的"只有主任务责任人可裁决"是 server.ts
- * 路由一行 canOperate 判定,此处不起真 HTTP 服务(已知边界,README
- * 如实记录);服务层语义在这里全部真跑。
+ * HTTP 侧也起真服务、带两个真实登录态点击 scope-decision：非主责任人
+ * 必须 403，且错误正文点名真正应该联系的主责任人账号。
  */
 
 import { test } from "node:test";
@@ -17,6 +16,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { AddressInfo } from "node:net";
+import { LocalAuth } from "../src/auth.ts";
+import { readJson } from "../src/jsonBody.ts";
+import { createTaskServer } from "../src/server.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import {
   type RequirementGraph, TaskControlError, TaskService,
@@ -304,5 +307,54 @@ test("负责面门禁:打回派窄使命撤出越界文件,面内实现保留", 
     await service.cancel(id, "tester");
   } finally {
     await model.stop();
+  }
+});
+
+test("负责面门禁 HTTP:非主责任人 403 并点名应联系的账号", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mfc-scope-http-"));
+  const auth = new LocalAuth(join(root, "auth.json"));
+  auth.bootstrapAdmin("admin", "administrator-pass");
+  auth.createUser("main-owner", "main-owner-pass", "developer");
+  auth.createUser("other-dev", "other-developer-pass", "developer");
+  const service = new TaskService({
+    dataDir: join(root, "tasks"), provider: "test", model: "test",
+    modelsJson: {}, maxConcurrent: 0,
+  });
+  const parent = service.create("跨单元主任务", { account: "main-owner" });
+  const child = service.create("越界子任务", { account: "other-dev" });
+  const childState = (service as any).tasks.get(child.id);
+  childState.summary.parent_task_id = parent.id;
+  childState.summary.delivery_scope = {
+    name: "过滤实现", paths: ["src/filter/"],
+  };
+  childState.summary.delivery = {
+    scope_violation: {
+      paths: ["src/filterX/other.ts"], noted_at: new Date().toISOString(),
+    },
+  };
+  (service as any).persist(childState);
+  const server = createTaskServer(service, { auth });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  try {
+    const login = await fetch(`${base}/auth/login`, {
+      method: "POST",
+      body: JSON.stringify({
+        username: "other-dev", password: "other-developer-pass",
+      }),
+    });
+    assert.equal(login.status, 200);
+    const cookie = login.headers.get("set-cookie")!.split(";")[0];
+    const denied = await fetch(`${base}/tasks/${child.id}/scope-decision`, {
+      method: "POST", headers: { cookie },
+      body: JSON.stringify({ decision: "allow" }),
+    });
+    assert.equal(denied.status, 403);
+    const payload = await readJson(denied);
+    assert.match(payload.error, /主任务责任人 main-owner.*联系该账号/);
+    assert.deepEqual(service.get(child.id)?.delivery?.scope_violation?.paths,
+      ["src/filterX/other.ts"], "越权点击不得改变待裁决现场");
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
