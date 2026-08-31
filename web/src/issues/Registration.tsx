@@ -610,6 +610,24 @@ function DtsRegister({
     return [...list, ...extra];
   }, [versionFiltered, remoteTickets]);
 
+  // 全选表头(三态):只作用于当前展示列表(搜索+版本过滤后)——全中时
+  // 点击整体取消,部分或全无时一键勾满。已勾选但被过滤掉的单不在展示
+  // 列表里,保持原样,发起时照常带上。
+  const displayedTickets = display.map((t) => t.ticket);
+  const displayedSelectedCount =
+    displayedTickets.filter((no) => selected.includes(no)).length;
+  const allDisplayedSelected = displayedTickets.length > 0
+    && displayedSelectedCount === displayedTickets.length;
+  function toggleSelectAll() {
+    if (allDisplayedSelected) {
+      const shown = new Set(displayedTickets);
+      setSelected((current) => current.filter((no) => !shown.has(no)));
+    } else {
+      setSelected((current) =>
+        [...new Set([...current, ...displayedTickets])]);
+    }
+  }
+
   // 版本下拉:点面板外或 Esc 收起。
   useEffect(() => {
     if (!versionOpen) return;
@@ -805,6 +823,20 @@ function DtsRegister({
         "{DTS_ACTIONABLE_STATUS}",不在可拉取范围。
       </div>}
       <div className="issue-dts-list" role="table">
+        {display.length > 0 && <div className="issue-dts-row issue-dts-selectall">
+          <label className="issue-dts-selectall-main">
+            <input type="checkbox" checked={allDisplayedSelected}
+              ref={(node) => {
+                if (node) node.indeterminate =
+                  displayedSelectedCount > 0 && !allDisplayedSelected;
+              }}
+              onChange={toggleSelectAll} />
+            <span className="issue-dts-selectall-label">全选</span>
+            <span className="issue-dts-selectall-count">
+              已选 {displayedSelectedCount} / {displayedTickets.length} 张
+            </span>
+          </label>
+        </div>}
         {display.length > 0
           ? display.map((ticket) => {
             const isRemote = remote.tickets.some((item) => item.ticket === ticket.ticket);

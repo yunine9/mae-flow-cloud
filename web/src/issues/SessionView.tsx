@@ -65,7 +65,7 @@ export function IssueSessionView({
   // 左栏页签:默认"现场"(AI 干活的直播面),用户手选优先;换会话重置。
   // 发言不靠页签——右栏 NEXT ACTION 六态常驻输入,现场只管看。
   const [tab, setTab] = useState<"materials" | "events">("events");
-  // 材料子视图提到会话层:右栏"结论文档已产出"要能一步跳到该子视图。
+  // 材料子视图提到会话层:右栏"分析报告已产出"要能一步跳到该子视图。
   const [materialsView, setMaterialsView] = useState<
     "dts" | "changes" | "logs" | "doc">("changes");
 
@@ -496,8 +496,9 @@ function IssueJourneyTrail({ trail }: {
 }
 
 /** 材料 / 现场 的页签栏(左栏头;默认口在 IssueSessionView 里定:
- * 打开会话先看现场直播,手选保持到换会话)。对话不设页签——发言走
- * 右栏 NEXT ACTION,对话内容本身就在现场的「消息」筛选里。 */
+ * 打开会话先看现场直播,手选保持到换会话)。发言入口仍走右栏
+ * NEXT ACTION;对话的复盘阅读面在材料的「过程文档 · 过程问答」,
+ * 现场的「消息」筛选管原始事件,三者各司其职。 */
 /** 页签栏:结构照搬任务工作台的 ws-workspace-nav(彩色卡 +
  * 主副两行文案),视觉与需求侧完全一致。 */
 function IssuePaneTabs({
@@ -508,7 +509,7 @@ function IssuePaneTabs({
   onPick: (tab: "materials" | "events") => void;
 }) {
   const views = [
-    ["materials", "材料", "DTS 单据、结论文档、工作区变更与拉取日志"],
+    ["materials", "材料", "DTS 单据、过程文档、工作区变更与拉取日志"],
     ["events", "现场", "执行事件实时跟随,对话内容在「消息」筛选"],
   ] as const;
   return <nav className="ws-workspace-nav" aria-label="会话工作台视图">

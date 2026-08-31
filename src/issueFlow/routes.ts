@@ -21,8 +21,11 @@
  *   GET  /issues/:id/materials/log    → 读拉取日志(?name=,超长读尾)
  *   GET  /issues/:id/materials/events → 原始事件尾随(?limit=,现场页签)
  *   GET  /issues/:id/timeline         → 耗时与卡点(纯函数归纳,只读)
- *   GET  /issues/:id/analysis         → 结论文档 issue-analysis.md
- *                                      (缺失为 200 {unavailable},不 404)
+ *   GET  /issues/:id/documents        → 过程文档清单(分析报告+Agent 落
+ *                                      的其他 .md)
+ *   GET  /issues/:id/documents/read   → 读一份过程文档(?name=;缺失为
+ *                                      200 {unavailable},不 404)
+ *   GET  /issues/:id/dialogue         → 过程问答(事件账本投影的对话)
  *   GET  /issues/:id/export           → 现场记录导出(单文件 Markdown:
  *                                      事件流逐字 + 台账,复盘用)
  *   GET  /issues/:id/events           → SSE:事件流尾随
@@ -52,6 +55,11 @@ import {
   sessionWorkspaceFileDiff,
   sessionWorkspaceRepoDiff,
 } from "./materials.ts";
+import {
+  listSessionDocuments,
+  projectDialogue,
+  readSessionDocument,
+} from "./documents.ts";
 import type { DtsGateway } from "./gateways.ts";
 import { isTerminal } from "./state.ts";
 import { listBusinessModules } from "../businessModuleLibrary.ts";
@@ -466,10 +474,37 @@ export async function handleIssueRoutes(
       return done(200, issueFlow.timeline(id));
     }
 
-    // 结论文档 issue-analysis.md(只读):404 只发生在问题号未知;
-    // 文档还没生成为 200 {unavailable},前端据此出空态而不是报错。
-    if (method === "GET" && parts[2] === "analysis" && parts.length === 3) {
-      return done(200, issueFlow.analysis(id));
+    // 过程文档(只读旁路,数据面在 documents.ts):清单 + 单份读取。
+    // 读取缺失为 200 {unavailable}——"还没生成"不是"没有这个接口",
+    // 前端据此出空态而不是报错。
+    if (method === "GET" && parts[2] === "documents" && parts.length === 3) {
+      const session = issueFlow.session(id);
+      return done(200, { documents: listSessionDocuments(session.root) });
+    }
+    if (method === "GET" && parts[2] === "documents"
+        && parts[3] === "read" && parts.length === 4) {
+      const session = issueFlow.session(id);
+      const name = String(
+        new URL(request.url ?? "", "http://x").searchParams.get("name") ?? "");
+      const read = readSessionDocument(session.root, name);
+      if (!read) return done(200, { unavailable: "文档不存在" });
+      return done(200, {
+        name: read.meta.name,
+        label: read.meta.label,
+        content: read.content,
+        ...(read.truncated ? { truncated: true } : {}),
+      });
+    }
+
+    // 过程问答(只读):事件账本投影成对话,复盘阅读面(现场页签仍
+    // 是原始事件直播)。
+    if (method === "GET" && parts[2] === "dialogue" && parts.length === 3) {
+      const session = issueFlow.session(id);
+      const dialogue = projectDialogue(session.root);
+      return done(200, {
+        turns: dialogue.turns,
+        ...(dialogue.truncated ? { truncated: true } : {}),
+      });
     }
 
     // 现场记录导出(GET /issues/:id/export):事件流逐字 + 台账 → 单文件

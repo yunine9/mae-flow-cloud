@@ -310,6 +310,15 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
       state_version: gate1.gate!.state_version,
       code: "confirm",
     });
+    // 闸作答补记 human_decision 入事件账:CONTEXT 对"现场记录"的定义含
+    // 用户决策,过程问答(事件投影)里固定流程的关键问答不能缺用户半句。
+    const eventsAfterAnswer = readFileSync(
+      join(dataDir, "issues", created.id, "events.jsonl"), "utf-8");
+    const gateDecision = eventsAfterAnswer.split("\n").filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, any>)
+      .filter((event) => event.kind === "human_decision").at(-1);
+    assert.ok(gateDecision, "闸作答应补记 human_decision 入事件账");
+    assert.match(String(gateDecision.payload?.decision), /确认报告/);
     await until(() => {
       const issue = service.get(created.id);
       return issue.stage === "mr_green" && issue.status === "idle" ? issue : undefined;

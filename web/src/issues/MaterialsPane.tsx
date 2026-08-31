@@ -1,5 +1,5 @@
 /**
- * 材料域:会话材料页签(DTS 单据 / 结论文档 / 工作区变更含快速修改 /
+ * 材料域:会话材料页签(DTS 单据 / 过程文档 / 工作区变更含快速修改 /
  * 拉取日志)。
  *
  * 从 IssueBoard.tsx 原文搬移(spec #2 按域拆分,纯搬移零行为变化):
@@ -7,15 +7,18 @@
  * ws-doc),diff 用同一把 GitDiff 渲染。合并视图直接渲染聚合 diff
  * (服务端自带「===== 仓库 =====」分段标记,GitDiff 按元信息行呈现);
  * 逐仓视图走 ?repo= 服务端切片(#32),每仓独立请求,不再前端解析
- * 分段标记。结论文档子视图(IssueConclusionDoc)只有材料页签渲染,
- * 随本文件走。
+ * 分段标记。过程文档子视图(IssueProcessDocs,原结论文档升级:
+ * 多页签 = 分析报告 + 过程问答 + Agent 落的其他 .md,页签样式同任务
+ * 侧 ws-tabs)只有材料页签渲染,随本文件走。
  * 快速修改是问题流唯一的人工写口——只改 repo/ 内已有文件,保存入
  * 人工台账,"请 AI 复核"走现有插话/续聊通道。
  */
 import { useEffect, useMemo, useState } from "react";
 import {
   getDtsTicketDetail,
-  getIssueAnalysis,
+  getIssueDocument,
+  getIssueDocuments,
+  getIssueDialogue,
   getIssueFileDiff,
   getIssueMaterialLog,
   getIssueMaterials,
@@ -23,33 +26,133 @@ import {
   saveIssueWorkspaceFile,
   type DtsTicketDetail,
   type IssueDetail,
+  type IssueDialogueTurn,
+  type IssueDocMeta,
   type IssueMaterials,
 } from "../api";
 import { Markdown } from "../markdown";
 import { GitDiff } from "../GitDiff";
+import { formatLocalDateTime } from "../time";
 import { prepareDtsHtml } from "./dtsHtml";
 
-/** 结论文档(issue-analysis.md):激活页签时才取;状态一动(updated_at
- * 变化)自动重读,让 AI 续写的内容能贴着节奏刷新。 */
-function IssueConclusionDoc({ id, updatedAt }: { id: string; updatedAt: string }) {
-  const [docKey, setDocKey] = useState("");
+/** 分析报告的文件名(与服务端 documents.ts 的常量镜像:前端不拼路径,
+ * 只用它认页签)。 */
+const ANALYSIS_DOC = "issue-analysis.md";
+/** 过程问答的页签键(不是文件名,.md 文件撞不到它)。 */
+const DIALOGUE_TAB = "dialogue";
+
+function sizeText(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** 过程问答(对话气泡):复盘阅读面——用户/Agent 发言、问答卡、用户
+ * 决策按时间序陈列。现场页签仍是原始事件直播,两不替代。 */
+function IssueDialogue({ turns, truncated }: {
+  turns: IssueDialogueTurn[];
+  truncated: boolean;
+}) {
+  if (turns.length === 0) {
+    return <div className="issue-doc-empty">
+      <strong>还没有问答</strong>
+      <p>会话开始后,Agent 与你的对话、问答卡与你的决策会按时间序出现在这里。</p>
+    </div>;
+  }
+  return <div className="issue-dialogue">
+    {truncated && <div className="utility-note">回合较多,只显示最近的 500 条。</div>}
+    {turns.map((turn, index) => <IssueDialogueTurnView key={index} turn={turn} />)}
+  </div>;
+}
+
+function IssueDialogueTurnView({ turn }: { turn: IssueDialogueTurn }) {
+  const time = turn.ts
+    ? formatLocalDateTime(turn.ts, { seconds: true }) : "";
+  if (turn.kind === "card") {
+    return <div className="issue-dialogue-turn card">
+      <span className="issue-dialogue-meta"><b>Agent 问答卡</b>
+        <time>{time}</time></span>
+      <div className="issue-dialogue-bubble">
+        {(turn.questions ?? []).map((question, index) => <div
+          key={index} className="issue-dialogue-q">
+          <p>{question.question}</p>
+          {question.options.length > 0 && <ul className="issue-dialogue-opts">
+            {question.options.map((option, index) => <li key={index}>{option}</li>)}
+          </ul>}
+        </div>)}
+      </div>
+    </div>;
+  }
+  if (turn.kind === "decision") {
+    return <div className="issue-dialogue-turn decision">
+      <span className="issue-dialogue-meta"><b>用户决策</b>
+        <time>{time}</time></span>
+      <div className="issue-dialogue-bubble">
+        {turn.decision || "(无文字答复)"}
+        {turn.notes && <span className="issue-dialogue-notes">补充:{turn.notes}</span>}
+      </div>
+    </div>;
+  }
+  const isUser = turn.kind === "user";
+  return <div className={`issue-dialogue-turn ${turn.kind}`}>
+    <span className="issue-dialogue-meta">
+      <b>{isUser ? "用户" : "Agent"}{turn.via === "interrupt" ? "(插话)" : ""}</b>
+      <time>{time}</time>
+    </span>
+    <div className="issue-dialogue-bubble">
+      {isUser ? turn.text : <Markdown text={turn.text ?? ""} />}
+    </div>
+  </div>;
+}
+
+/** 过程文档子视图:多页签(分析报告固定首页 + 过程问答 + Agent 落的
+ * 其他 .md)。激活页签才取内容;状态一动(updated_at 变化)自动重读,
+ * 让 AI 续写的内容能贴着节奏刷新。 */
+function IssueProcessDocs({ id, updatedAt }: { id: string; updatedAt: string }) {
+  const [docs, setDocs] = useState<IssueDocMeta[]>([]);
+  const [active, setActive] = useState(ANALYSIS_DOC);
   const [content, setContent] = useState("");
+  const [truncated, setTruncated] = useState(false);
   const [note, setNote] = useState("");
   const [loading, setLoading] = useState(false);
+  const [turns, setTurns] = useState<IssueDialogueTurn[]>([]);
+  const [turnsTruncated, setTurnsTruncated] = useState(false);
+  // 已加载基准 = 会话动态 + 激活页签:两者任一变化就重取;只在响应到手
+  // 后记账,半路失败下次仍会重试。
+  const refreshKey = `${updatedAt}|${active}`;
+  const [loadedKey, setLoadedKey] = useState("");
 
-  async function load() {
+  async function loadList() {
+    try {
+      const result = await getIssueDocuments(id);
+      setDocs(result.documents ?? []);
+    } catch {
+      // 清单失败不动内容区:材料域 fail-open,不给会话页添堵。
+    }
+  }
+
+  async function loadActive() {
     setLoading(true);
     try {
-      const result = await getIssueAnalysis(id);
-      if (result.unavailable) {
-        setNote(result.unavailable);
-        setContent("");
-      } else {
+      if (active === DIALOGUE_TAB) {
+        const result = await getIssueDialogue(id);
+        setTurns(result.turns ?? []);
+        setTurnsTruncated(result.truncated === true);
         setNote("");
-        setContent(result.content ?? "");
+      } else {
+        const result = await getIssueDocument(id, active);
+        if (result.unavailable) {
+          setNote(active === ANALYSIS_DOC
+            ? "AI 研究中会把结论写入 issue-analysis.md,生成后这里直接可读。"
+            : result.unavailable);
+          setContent("");
+        } else {
+          setNote("");
+          setContent(result.content ?? "");
+          setTruncated(result.truncated === true);
+        }
       }
-      // 只在拿到响应后记账:半路失败下次仍会重试。
-      setDocKey(updatedAt);
+      setLoadedKey(refreshKey);
     } catch (reason) {
       setNote(String(reason instanceof Error ? reason.message : reason));
     } finally {
@@ -57,22 +160,45 @@ function IssueConclusionDoc({ id, updatedAt }: { id: string; updatedAt: string }
     }
   }
 
+  useEffect(() => { void loadList(); }, [updatedAt]);
   useEffect(() => {
-    if (docKey !== updatedAt) void load();
-    // docKey 有意不在依赖里:刷新按钮要的是无视缓存的重取。
+    if (loadedKey !== refreshKey) void loadActive();
+    // loadedKey 有意不在依赖里:刷新按钮要的是无视缓存的重取。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [updatedAt]);
+  }, [refreshKey]);
+
+  const analysisMeta = docs.find((doc) => doc.name === ANALYSIS_DOC);
+  const tabs = [
+    { key: ANALYSIS_DOC, label: "分析报告",
+      hint: analysisMeta ? sizeText(analysisMeta.bytes) : "未生成" },
+    { key: DIALOGUE_TAB, label: "过程问答",
+      hint: turns.length ? `${turns.length} 回合` : "" },
+    ...docs.filter((doc) => doc.name !== ANALYSIS_DOC)
+      .map((doc) => ({ key: doc.name, label: doc.label, hint: sizeText(doc.bytes) })),
+  ];
 
   return <div className="issue-thread issue-doc">
-    {loading && <p className="issue-thread-empty">正在读取结论文档…</p>}
-    {!loading && note && <div className="issue-doc-empty">
-      <strong>还没有结论文档</strong>
-      <p>{note}——AI 研究中会把结论写入 issue-analysis.md,生成后这里直接可读。</p>
+    {tabs.length > 1 && <div className="ws-tabs" role="tablist"
+        aria-label="过程文档页签">
+      {tabs.map((tab) => (
+        <button key={tab.key} role="tab" aria-selected={active === tab.key}
+          className={"ws-tab" + (active === tab.key ? " on" : "")}
+          onClick={() => setActive(tab.key)}>
+          <span>{tab.label}</span>{tab.hint && <i>{tab.hint}</i>}
+        </button>
+      ))}
     </div>}
-    {!loading && !note && content && <>
+    {loading && <p className="issue-thread-empty">正在读取…</p>}
+    {!loading && note && <div className="issue-doc-empty">
+      <strong>{active === ANALYSIS_DOC ? "还没有分析报告" : "读不到这份文档"}</strong>
+      <p>{note}</p>
+    </div>}
+    {!loading && !note && active === DIALOGUE_TAB
+      && <IssueDialogue turns={turns} truncated={turnsTruncated} />}
+    {!loading && !note && active !== DIALOGUE_TAB && content && <>
       <div className="issue-doc-toolbar">
-        <span>研究现场落盘的 markdown · 即写即读</span>
-        <button type="button" onClick={() => void load()}>刷新</button>
+        <span>研究现场落盘的 markdown · 即写即读{truncated ? " · 内容超长已截断" : ""}</span>
+        <button type="button" onClick={() => void loadActive()}>刷新</button>
       </div>
       <article className="issue-doc-body">
         <Markdown text={content} />
@@ -81,9 +207,9 @@ function IssueConclusionDoc({ id, updatedAt }: { id: string; updatedAt: string }
   </div>;
 }
 
-/** 会话材料(材料页签):DTS 单据 / 结论文档 / 工作区变更 / 拉取日志。
+/** 会话材料(材料页签):DTS 单据 / 过程文档 / 工作区变更 / 拉取日志。
  * 数据全部旁路:任何一块失败给空态。
- * 子视图状态在会话层(右栏"结论文档已产出"要能一步跳进来)。 */
+ * 子视图状态在会话层(右栏"分析报告已产出"要能一步跳进来)。 */
 export function IssueMaterialsPane({ detail, busy, view, onView, onNotifyAI }: {
   detail: IssueDetail;
   busy: boolean;
@@ -104,6 +230,8 @@ export function IssueMaterialsPane({ detail, busy, view, onView, onNotifyAI }: {
   const [saving, setSaving] = useState(false);
   const [dtsDetail, setDtsDetail] = useState<DtsTicketDetail>();
   const [logView, setLogView] = useState<{ name: string; content: string }>();
+  // 过程文档清单(开关角标用):随会话动态轻量重读(只扫顶层 .md)。
+  const [docCount, setDocCount] = useState(0);
 
   async function load() {
     try {
@@ -123,6 +251,13 @@ export function IssueMaterialsPane({ detail, busy, view, onView, onNotifyAI }: {
       setNote("");
     } catch (reason) {
       setNote(String(reason instanceof Error ? reason.message : reason));
+    }
+    // 清单独立取(旁路):失败只是角标停在旧值,不拖累上面的主数据。
+    try {
+      const docs = await getIssueDocuments(detail.id);
+      setDocCount((docs.documents ?? []).length);
+    } catch {
+      // 角标口径照旧,fail-open。
     }
   }
 
@@ -219,8 +354,8 @@ export function IssueMaterialsPane({ detail, busy, view, onView, onNotifyAI }: {
           <span>DTS 单据</span><i>{data?.ticket ? "1" : "0"}</i>
         </button>
         <button className={view === "doc" ? "on" : ""}
-          disabled={!detail.has_analysis} onClick={() => onView("doc")}>
-          <span>结论文档</span><i>{detail.has_analysis ? "1" : "0"}</i>
+          onClick={() => onView("doc")}>
+          <span>过程文档</span><i>{docCount + 1}</i>
         </button>
         <button className={view === "changes" ? "on" : ""}
           onClick={() => onView("changes")}>
@@ -318,8 +453,9 @@ export function IssueMaterialsPane({ detail, busy, view, onView, onNotifyAI }: {
       </> : <div className="utility-note">正在读取单据详情…</div>}
     </div>}
     {view === "doc" && <>
-      {/* 结论文档按 updated_at 缓存:文档可能被 AI 续写,状态一动就该重读。 */}
-      <IssueConclusionDoc id={detail.id} updatedAt={detail.updated_at} />
+      {/* 过程文档(分析报告 + 过程问答 + 动态文档)按 updated_at 缓存:
+          文档可能被 AI 续写,状态一动就该重读。 */}
+      <IssueProcessDocs id={detail.id} updatedAt={detail.updated_at} />
     </>}
     {view === "logs" && <div className="ws-doc">
       {data && data.logs.length === 0 && <div className="utility-note">
