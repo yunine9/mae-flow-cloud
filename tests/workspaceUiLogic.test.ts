@@ -99,6 +99,44 @@ test("圈注权与发送权拆开，需求原文批注能回到原文视图", ()
   "决定只能携带当前操作者自己的未送达草稿");
 });
 
+test("流水线证据缺口直接打开补证材料，用户切走后不被轮询抢回", () => {
+  const gap = {
+    name: "pipeline/流水线证据缺口.md",
+    label: "流水线证据缺口.md",
+    kind: "doc",
+    purpose: "pipeline_evidence_gap",
+    bytes: 120,
+    modified_at: "2026-08-30T00:00:00.000Z",
+  };
+  const spec = {
+    name: "REQ1/spec.md", label: "spec.md", kind: "doc", bytes: 100,
+    modified_at: "2026-08-30T00:01:00.000Z",
+  };
+  const evidenceTask = {
+    ...task("gap", "verifying"),
+    delivery: { evidence_gap: {
+      sha: "a".repeat(40), state: "waiting_human",
+      missing_dimensions: ["COMPILE"], available_dimensions: [],
+      reasons: ["日志缺失"], attempts: 3,
+    } },
+  };
+  assert.equal(workspace.pipelineEvidenceNeedsHuman(evidenceTask), true);
+  assert.equal(workspace.defaultWorkspaceView(evidenceTask), "materials",
+    "补证是明确的人工作业，不能仍默认打开执行现场");
+  assert.equal(workspace.preferredWorkspaceArtifact(
+    [spec, gap], "", undefined, true), gap.name,
+  "点名的补证材料优先于最近修改排序");
+  assert.equal(workspace.preferredWorkspaceArtifact(
+    [spec, gap], spec.name, undefined, true), spec.name,
+  "用户主动切换后的有效选择不能被后台刷新抢走");
+  assert.equal(workspace.pipelineEvidenceNeedsHuman({
+    ...evidenceTask,
+    delivery: { evidence_gap: {
+      ...evidenceTask.delivery.evidence_gap, state: "retrying",
+    } },
+  }), false, "系统仍在自动重试时不冒充人工待办");
+});
+
 test("已交付批注明确是归档记录，不再冒充待提交", () => {
   const html = renderToStaticMarkup(React.createElement(
     annotationPanel.AnnotationPanel,

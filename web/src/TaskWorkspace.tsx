@@ -10,7 +10,7 @@
  * 单文件 HTML，工作台自己承接材料、决策与过程观察，避免形成两套入口。
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Markdown } from "./markdown";
 import { GitDiff, type GitDiffSelection } from "./GitDiff";
 import { SteerBox } from "./SteerBox";
@@ -81,6 +81,32 @@ export function materialViewForAnnotation(
   if (artifact === TASK_REQUIREMENT_ARTIFACT) return "source";
   return artifacts.find((item) => item.name === artifact)?.kind === "diff"
     ? "diff" : "doc";
+}
+
+/** 这是显式的人工作业，不等同于普通 verifying。partial 时 Agent 可以
+ * 先修已有证据，但缺失维度仍需要人并行补原文。 */
+export function pipelineEvidenceNeedsHuman(task: TaskSummary): boolean {
+  const state = task.delivery?.evidence_gap?.state;
+  return (state === "waiting_human" || state === "partial")
+    && Boolean(task.delivery?.evidence_gap?.missing_dimensions.length);
+}
+
+/** 首次进入工作台时，系统点名要求处理的补证材料必须胜过“最近修改”
+ * 排序；用户已经主动切到别的有效材料后则不抢回焦点。 */
+export function preferredWorkspaceArtifact(
+  items: readonly ArtifactMeta[],
+  current: string,
+  recommendedView: "source" | "doc" | "chain" | "diff" | undefined,
+  evidenceGapActive: boolean,
+): string {
+  if (current && items.some((item) => item.name === current)) return current;
+  if (evidenceGapActive) {
+    const gap = items.find((item) => item.purpose === "pipeline_evidence_gap");
+    if (gap) return gap.name;
+  }
+  const preferredKind = recommendedView === "diff" ? "diff" : "doc";
+  return items.find((item) => item.kind === preferredKind)?.name
+    ?? items[0]?.name ?? "";
 }
 
 /** 决定只能携带当前操作者自己尚未送达的草稿；别人的草稿只是其记录。 */
@@ -243,8 +269,9 @@ export function usablePushReviewSelection(
   return pushReviewActive && state.kind !== "ready" ? undefined : selection;
 }
 
-function defaultWorkspaceView(task: TaskSummary): WorkspaceView {
+export function defaultWorkspaceView(task: TaskSummary): WorkspaceView {
   if (task.status === "paused") return "collaboration";
+  if (pipelineEvidenceNeedsHuman(task)) return "materials";
   if (task.waiting || task.status === "waiting_for_human") return "materials";
   if (["queued", "running", "pausing", "verifying", "await_merge"]
       .includes(task.status)) return "execution";
@@ -374,8 +401,15 @@ export function TaskWorkspace({
     defaultWorkspaceView(task),
   );
   const [executionView, setExecutionView] = useState<ExecutionView>("events");
+  const artifactTask = useRef("");
+  const openedEvidenceGap = useRef("");
 
   useEffect(() => {
+    artifactTask.current = "";
+    openedEvidenceGap.current = "";
+    setItems(undefined);
+    setActive("");
+    setContent("");
     setMaterialView(task.waiting?.recommended_view ?? "source");
     setWorkspaceView(defaultWorkspaceView(task));
     setExecutionView("events");
@@ -428,13 +462,16 @@ export function TaskWorkspace({
 
   useEffect(() => {
     if (task.status === "paused") setWorkspaceView("collaboration");
+    else if (pipelineEvidenceNeedsHuman(task)) setWorkspaceView("materials");
     else if (task.waiting || task.status === "waiting_for_human") {
       setWorkspaceView("materials");
     } else if (["queued", "running", "pausing", "verifying", "await_merge"]
         .includes(task.status)) {
       setWorkspaceView("execution");
     }
-  }, [task.status, task.waiting?.waiting_id]);
+  }, [task.status, task.waiting?.waiting_id,
+    task.delivery?.evidence_gap?.state,
+    task.delivery?.evidence_gap?.sha]);
 
   useEffect(() => {
     if (!canRequestReview) return;
@@ -525,16 +562,26 @@ export function TaskWorkspace({
       setItems(result.items);
       // 列表可能随任务轮询/状态切换重新读取。默认项只用于首次进入；
       // 用户已经切到工作区变更时绝不能被后台刷新拽回最近文档。
-      setActive((current) => {
-        if (result.items?.some((item) => item.name === current)) return current;
-        const preferredKind = task.waiting?.recommended_view === "diff"
-          ? "diff" : "doc";
-        return result.items?.find((item) => item.kind === preferredKind)?.name
-          ?? result.items?.[0]?.name ?? "";
-      });
+      const evidenceKey = pipelineEvidenceNeedsHuman(task)
+        ? `${task.id}:${task.delivery?.evidence_gap?.sha ?? ""}` : "";
+      const newlyActionable = Boolean(evidenceKey
+        && openedEvidenceGap.current !== evidenceKey);
+      const current = artifactTask.current === task.id && !newlyActionable
+        ? active : "";
+      const next = preferredWorkspaceArtifact(
+        result.items ?? [], current, task.waiting?.recommended_view,
+        pipelineEvidenceNeedsHuman(task));
+      artifactTask.current = task.id;
+      openedEvidenceGap.current = evidenceKey;
+      setActive(next);
+      if (next !== current && result.items?.find((item) => item.name === next)
+          ?.purpose === "pipeline_evidence_gap") {
+        setMaterialView("doc");
+      }
     });
     return () => { alive = false; };
-  }, [task.id, livePulse]);
+  }, [task.id, livePulse, task.delivery?.evidence_gap?.state,
+    task.delivery?.evidence_gap?.sha]);
 
   useEffect(() => {
     if (!active) return;
@@ -631,6 +678,9 @@ export function TaskWorkspace({
   const activeMeta = items?.find((item) => item.name === active);
   const documents = items?.filter((item) => item.kind === "doc") ?? [];
   const changes = items?.filter((item) => item.kind === "diff") ?? [];
+  const evidenceGapArtifact = documents.find((item) =>
+    item.purpose === "pipeline_evidence_gap");
+  const evidenceGapActionable = pipelineEvidenceNeedsHuman(task);
   // 服务端只生成一份聚合 diff，因此 changes.length 几乎永远是 1，
   // 它表示“产物份数”而不是用户关心的“变更文件数”。旧服务尚未提供
   // file_count 时保留原回退，避免滚动升级期间把入口误判为空。
@@ -895,6 +945,25 @@ export function TaskWorkspace({
               </button>
             </div>
           </div>
+          {evidenceGapActionable && evidenceGapArtifact && (
+            <section className="ws-evidence-gap-callout" role="status">
+              <div>
+                <span>流水线需要补充原文</span>
+                <strong>打开《流水线证据缺口》，圈选说明并粘贴平台报错</strong>
+                <p>保存批注后会自动进入“批注与检视”，点击“回灌报错”即可让 Agent 继续。</p>
+              </div>
+              <button type="button"
+                className={active === evidenceGapArtifact.name
+                    && materialView === "doc" ? "on" : ""}
+                onClick={() => {
+                  setMaterialView("doc");
+                  setActive(evidenceGapArtifact.name);
+                }}>
+                {active === evidenceGapArtifact.name && materialView === "doc"
+                  ? "正在查看" : "打开材料"}
+              </button>
+            </section>
+          )}
           {materialView === "doc" && documents.length > 1 && (
             <div className="ws-tabs">
               {documents.map((item) => (
@@ -1014,7 +1083,12 @@ export function TaskWorkspace({
                 kind={activeMeta?.kind === "diff" ? "code" : "doc"}
                 items={notes}
                 enabled={canCreateAnnotation}
-                onAdded={() => setNotesPulse((tick) => tick + 1)}
+                onAdded={() => {
+                  setNotesPulse((tick) => tick + 1);
+                  if (activeMeta?.purpose === "pipeline_evidence_gap") {
+                    setWorkspaceView("insights");
+                  }
+                }}
               >
                 {materialView === "diff"
                   ? <GitDiff text={content} branch={branch}

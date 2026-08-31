@@ -2639,6 +2639,8 @@ export interface ArtifactMeta {
   modified_at: string;
   /** 差异产物包含的真实文件数；文档产物不提供。 */
   file_count?: number;
+  /** Cloud 生成材料的稳定用途；页面不应靠文件名猜业务语义。 */
+  purpose?: "pipeline_evidence_gap";
 }
 
 export async function listArtifacts(

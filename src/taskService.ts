@@ -60,6 +60,7 @@ import {
   deliveryChangeSnapshot,
   frozenTaskBaseline,
   DIFF_NAME,
+  PIPELINE_EVIDENCE_GAP_FILE,
   readArtifact,
   readArtifactAsync,
   resolveArtifactRoot,
@@ -11940,7 +11941,8 @@ export class TaskService {
       "",
     ].join("\n");
     try {
-      writeFileSync(join(dir, "流水线证据缺口.md"), content, { mode: 0o444 });
+      writeFileSync(join(dir, PIPELINE_EVIDENCE_GAP_FILE), content,
+        { mode: 0o444 });
     } catch (error) {
       // 这份材料是人工入口的可用性增强；落不下不能反过来改写交付
       // 判定，小鲁班与任务 waiting_on 仍是完整的降级入口。

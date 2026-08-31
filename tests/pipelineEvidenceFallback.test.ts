@@ -7,6 +7,11 @@ import { FakeGitPlatform } from "../src/gitPlatform.ts";
 import { FakeLubanServer, Notifier } from "../src/notifier.ts";
 import { TaskService } from "../src/taskService.ts";
 import type { PipelineCheck } from "../src/pipelineContract.ts";
+import {
+  listArtifactsAsync,
+  PIPELINE_EVIDENCE_GAP_ARTIFACT,
+  readArtifactAsync,
+} from "../src/artifacts.ts";
 
 async function until(
   probe: () => boolean,
@@ -67,6 +72,15 @@ test("全部红灯无具体证据时不派 Agent、不消耗修复轮次并通�
     assert.equal(existsSync(gapMaterial), true,
       "平台材料全空时也必须给人一个可批注的入口");
     assert.match(readFileSync(gapMaterial, "utf-8"), /编译\/构建、CodeCheck/);
+    const visible = await listArtifactsAsync(undefined, {
+      pipelineRoot: join(task.summary.workspace, "pipeline"),
+    });
+    assert.equal(visible[0]?.name, PIPELINE_EVIDENCE_GAP_ARTIFACT,
+      "宿主生成材料必须真的出现在工作台材料接口，而不只是落盘");
+    assert.match(String((await readArtifactAsync(undefined,
+      PIPELINE_EVIDENCE_GAP_ARTIFACT, {
+        pipelineRoot: join(task.summary.workspace, "pipeline"),
+      }))?.content), /添加批注并点击“回灌报错”/);
     await until(() => luban.messages.length === 1, "证据缺口通知");
     assert.match(String(luban.messages[0].text), /编译\/构建、CodeCheck/);
     assert.match(String(luban.messages[0].text), /工作台.*批注/);
@@ -159,7 +173,7 @@ test("工作台批注可回灌缺失报错并自动恢复同一 SHA", async () =
     await service.dispatchCiRepair(task, sha, "", 2, task.controlEpoch);
     const note = service.addAnnotation(task.summary.id, {
       author: "liaoxiang",
-      artifact: "pipeline_log_summary.json",
+      artifact: PIPELINE_EVIDENCE_GAP_ARTIFACT,
       file: "src/main.cpp",
       line: 42,
       anchor: "void oversizedFunction()",

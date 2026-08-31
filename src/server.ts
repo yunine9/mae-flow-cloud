@@ -2474,15 +2474,16 @@ export function createTaskServer(
             ?? service.panelFile(id, "panel-pulse.js");
           const root = resolveArtifactRoot(
             target.workspace, panel ? dirname(dirname(panel)) : undefined);
+          const sources = { pipelineRoot: join(target.workspace, "pipeline") };
           if (parts.length === 3) {
-            // 没有现场时给空列表:流程还没走到 init 不是错误。
+            // 代码现场尚未 init 时也可能已有任务级流水线补证材料；两路
+            // 独立 fail-open，不能用 root 缺失把 pipeline/ 一起吞掉。
             return json(response, 200,
-              root ? await listArtifactsAsync(root) : []);
+              await listArtifactsAsync(root, sources));
           }
           // name 里带 `/`(单号目录/文件名):编码与未编码两种形态都收。
           const name = decodeURIComponent(parts.slice(3).join("/"));
-          const artifact = root
-            ? await readArtifactAsync(root, name) : undefined;
+          const artifact = await readArtifactAsync(root, name, sources);
           if (!artifact) {
             return json(response, 404,
               { error: `没有可检视的产物「${name}」` });
