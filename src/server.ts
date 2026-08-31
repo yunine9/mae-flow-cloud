@@ -798,14 +798,23 @@ export function createTaskServer(
       // 问题流 API(/issues/*):独立于任务命名空间;未启用时由路由
       // 自己 404。必须先于静态托管兜底(非 /tasks 的 GET 会被接管)。
       if (parts[0] === "issues") {
-        const handled = await handleIssueRoutes(request, response, parts, {
-          issueFlow: options.issueFlow,
-          dts: options.dts,
-          viewer: viewer ?? undefined,
-          authEnabled: Boolean(options.auth),
-          log: options.log,
-        });
-        if (handled) return;
+        // GET /issues/:id 既是详情 API 也是会话工作台的深链地址(小鲁班
+        // 通知点开即达)。与 /tasks/:id 的旧通知兼容同一判别式:浏览器
+        // 导航(Accept 要 text/html)让给前端 SPA,程序 fetch(默认
+        // Accept: */*)照旧拿 JSON,API 契约零变化。
+        const issuePage = request.method === "GET"
+          && parts.length === 2
+          && String(request.headers.accept ?? "").includes("text/html");
+        if (!issuePage) {
+          const handled = await handleIssueRoutes(request, response, parts, {
+            issueFlow: options.issueFlow,
+            dts: options.dts,
+            viewer: viewer ?? undefined,
+            authEnabled: Boolean(options.auth),
+            log: options.log,
+          });
+          if (handled) return;
+        }
       }
 
       // 下单表单的数据源:模型清单与当前默认。登录即可看(不是密钥,
@@ -1697,7 +1706,10 @@ export function createTaskServer(
           && (url.pathname === "/" || parts[0] !== "tasks")) {
         const workspaceRoute = parts[0] === "work" && parts.length >= 2;
         const helpRoute = parts[0] === "help" && extname(url.pathname) === "";
-        const appRoute = workspaceRoute || helpRoute;
+        // 问题会话工作台深链(小鲁班通知的落点):上一段已把带 text/html
+        // 的 GET /issues/:id 让出,这里只管把它接住交给 React。
+        const issuesRoute = parts[0] === "issues" && parts.length === 2;
+        const appRoute = workspaceRoute || helpRoute || issuesRoute;
         const exactFile = options.webRoot
           ? staticFile(options.webRoot, url.pathname)
           : undefined;

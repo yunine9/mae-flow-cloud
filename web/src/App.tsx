@@ -132,6 +132,14 @@ function workspacePath(taskId: string, reviewId = ""): string {
     + (reviewId ? `/review/${encodeURIComponent(reviewId)}` : "");
 }
 
+/** 问题会话工作台深链(/issues/:id,小鲁班通知的落点)。匹配返回会话
+ * id,其余路径返回空串。 */
+function readIssueRoute(): string {
+  const match = location.pathname.match(/^\/issues\/([^/]+)\/?$/);
+  if (!match) return "";
+  try { return decodeURIComponent(match[1]); } catch { return ""; }
+}
+
 export type WorkspaceTargetResolution =
   | { kind: "pending" }
   | { kind: "missing" }
@@ -158,6 +166,8 @@ function initialView(user: AuthUser): View {
   // 管理员没有"我的待办"(不下单的角色没有个人任务收件箱,用户拍板):
   // 深链也一律落到团队总览,从那里打开任意任务行使兜底控制。
   if (user.role === "admin") return "team";
+  // 问题会话深链:通知点开就是那张卡,不再让人去"问题处理"列表里找。
+  if (readIssueRoute()) return "issues";
   if (readWorkspaceRoute().reviewId) return "mine";
   return "mine";
 }
@@ -539,11 +549,15 @@ export function App() {
   const [targetRoute, setTargetRoute] = useState(readWorkspaceRoute);
   const targetTaskId = targetRoute.taskId;
   const targetReviewId = targetRoute.reviewId;
+  // 问题会话深链(/issues/:id):只承载"打开哪个会话",用户在页内
+  // 切换后 URL 不跟随(与 /work 深链先例同款的最小路由)。
+  const [issueRouteId, setIssueRouteId] = useState(readIssueRoute);
 
   useEffect(() => {
     const syncRoute = () => {
       const next = readWorkspaceRoute();
       setTargetRoute(next);
+      setIssueRouteId(readIssueRoute());
       if (!next.taskId) {
         setArtifactTaskId("");
         setArtifactTaskSnapshot(undefined);
@@ -1070,7 +1084,7 @@ export function App() {
           </section>
           {mineScope === "all" && myDelivered.length > 0 && <TaskGroup kicker="DELIVERY" title="等待合入与最近完成" tasks={myDelivered} onChanged={refresh} onOpenArtifacts={openArtifacts} targetTaskId={targetTaskId} />}
         </>}
-        {view === "issues" && session.role !== "admin" && <Suspense fallback={<div className="issue-board-loading">问题处理页加载中…</div>}><IssueBoard viewer={session} onNavigateProfile={() => setView("profile")} /></Suspense>}
+        {view === "issues" && session.role !== "admin" && <Suspense fallback={<div className="issue-board-loading">问题处理页加载中…</div>}><IssueBoard viewer={session} initialOpenId={issueRouteId} onNavigateProfile={() => setView("profile")} /></Suspense>}
         {view === "profile" && session.role !== "admin" && <PersonalSettingsPage
           session={session}
           onSessionPatch={patchSession}

@@ -27,12 +27,15 @@ import { IssueRegistration } from "./Registration";
 import { IssueCostPanel, IssueFixedProgress, IssueSessionView } from "./SessionView";
 import { IssueEventsPane } from "./EventsPane";
 
-export function IssueBoard({ viewer, onNavigateProfile }: {
+export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "" }: {
   viewer: AuthUser;
   onNavigateProfile?: () => void;
+  /** 深链 /issues/:id 带进来的会话(小鲁班通知点开即达):只作 openId
+   * 的初值,之后的返回列表/点开别的会话照旧走组件内部 state,URL 不跟。 */
+  initialOpenId?: string;
 }) {
   const [issues, setIssues] = useState<IssueSummary[]>([]);
-  const [openId, setOpenId] = useState("");
+  const [openId, setOpenId] = useState(initialOpenId);
   const [detail, setDetail] = useState<IssueDetail | undefined>();
   const [error, setError] = useState("");
 

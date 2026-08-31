@@ -27,6 +27,7 @@ import {
 } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import { CloudSession, type Outcome } from "../sessionDriver.ts";
+import type { Notifier, NotifyQuestion } from "../notifier.ts";
 import { EventLog, type SemanticEvent } from "../semanticEvents.ts";
 import { TranscriptStore } from "../transcriptStore.ts";
 import { GateService } from "../gateService.ts";
@@ -341,6 +342,13 @@ export interface IssueFlowOptions {
   platformUrl?: string;
   vault?: IssueEnvironmentVault;
   maxConcurrentTurns?: number;
+  /** 小鲁班通知(公共能力,与需求侧同一实例):AI 举卡等决策时提醒
+   * 归属用户。缺席(演示形态)不通知,流程照走——通知是旁路,不是
+   * 问题流的启动依赖。 */
+  notifier?: Notifier;
+  /** 通知链接的对外入口(--public-url):深链落到问题会话工作台
+   * /issues/<id>,与需求侧 /work/<id> 同一地位。 */
+  linkBase?: string;
   isolation?: IssueIsolation;
   /** 容器属主判定的运行时形态:生产缺席即按进程真实形态判定(非 root
    * 部署守卫直接 false,零开销);只有测试注入它来模拟 root 宿主。 */
@@ -1130,7 +1138,49 @@ export class IssueFlowService {
       this.releaseDriver(live);
     }
     saveState(live.root, live.state);
+    // AI 要人拍板才通知(对齐需求侧公共能力);suspended/idle/终态是
+    // 结论后的动作与正常交还,不催人。
+    if (state.status === "waiting_user") this.notifyWaitingCard(live);
     if (isTerminal(state.status)) this.releaseDriver(live);
+  }
+
+  /** 等待卡 → 小鲁班(需求侧 notifyWaiting 的同款公共能力)。两条纪律:
+   * - 旁路 fail-open:投递失败只记日志,回合状态一字不动;
+   * - 幂等靠 notifier 按 waiting_id 去重,恢复重放不重复轰炸。
+   * 闸卡与 Agent 卡并存时闸优先——与作答分派(answer)同一优先级;
+   * 通知里只给人话文案:决策码是页面作答协议,发给用户只会把人看懵。 */
+  private notifyWaitingCard(live: LiveIssue): void {
+    const { notifier, linkBase } = this.options;
+    if (!notifier) return;
+    const { state } = live;
+    const gate = state.gate;
+    const record = gate ? undefined : live.humanGate.pending()[0];
+    if (!gate && !record) return;
+    const questions: NotifyQuestion[] = gate
+      ? gate.question.questions.map((item) => ({
+          question: item.question,
+          options: item.options.map((option) => option.label),
+        }))
+      : agentCardQuestions(record!).map((item) => ({
+          question: String(item.question ?? ""),
+          options: (item.options ?? []).map(String),
+        }));
+    notifier.notifyWaiting({
+      waitingId: gate ? gate.id : record!.waiting_id,
+      stateVersion: gate ? gate.state_version : record!.state_version,
+      taskId: live.id,
+      subject: state.ticket
+        ? `${state.title}(单号 ${state.ticket})` : state.title,
+      account: state.account,
+      step: state.stage_note || state.stage,
+      context: gate ? gate.context : record?.context,
+      questions,
+      summary: "问题处理需要你决策",
+      link: `${(linkBase ?? "").replace(/\/+$/, "")}`
+        + `/issues/${encodeURIComponent(live.id)}`,
+    }).catch((error) =>
+      this.log(`[issue-flow] ${live.id} 等待卡通知失败(旁路,流程照走): `
+        + String(error)));
   }
 
   private releaseDriver(live: LiveIssue): void {

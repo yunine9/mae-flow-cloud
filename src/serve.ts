@@ -757,6 +757,34 @@ async function main(): Promise<void> {
   // 走同一个网关实例,未配置时由占位网关说人话,不静默 404。
   const issueDtsGateway = issueDts ?? new UnconfiguredDtsGateway();
   const issueLog = (message: string) => console.log(`  [issue] ${message}`);
+  // issue-only 下假小鲁班起不来时 endpoint 缺席:通知器整个不接
+  // (notifier 是可选项),不让它变成问题流的启动依赖。
+  const notifier = lubanEndpoint
+    ? new Notifier({
+        endpoint: lubanEndpoint,
+        headers: lubanHeaders,
+        fake: lubanIsFake,
+        mobileApproval: lubanPluginReplies,
+        approvalCode: lubanPluginReplies && lubanPluginToken
+          ? (input) => lubanApprovalCode({ token: lubanPluginToken, ...input })
+          : undefined,
+        // 发起人的通知令牌:普通任务提醒是自己发给自己；主动邀请检视时，
+        // 用责任人的令牌向所选 Committer 工号发送，不要求收件人配令牌。
+        personalToken: (account) => auth.lubanToken(account),
+        ...(lubanTemplateWaiting || lubanTemplateOutcome || lubanTemplateReview
+          ? {
+              templates: {
+                ...(lubanTemplateWaiting
+                  ? { waiting: lubanTemplateWaiting } : {}),
+                ...(lubanTemplateOutcome
+                  ? { outcome: lubanTemplateOutcome } : {}),
+                ...(lubanTemplateReview
+                  ? { review: lubanTemplateReview } : {}),
+              },
+            }
+          : {}),
+      })
+    : undefined;
   const issueFlow = new IssueFlowService({
     dataDir, provider, model, modelsJson, settings,
     // 探索方式烙印(个人设置,缺省固定流程):create 时读一次烙进会话。
@@ -787,6 +815,11 @@ async function main(): Promise<void> {
         }
       : {}),
     log: issueLog,
+    // 小鲁班通知是公共能力:问题流 AI 举卡等决策时也提醒归属用户
+    // (与需求侧同一实例;--issue-only 专用部署同样接线)。
+    ...(notifier ? { notifier } : {}),
+    // 通知深链落到问题会话工作台 /issues/<id>(与需求侧 /work 同一地位)。
+    linkBase: publicUrl,
   });
 
   if (issueOnly) {
@@ -794,35 +827,6 @@ async function main(): Promise<void> {
       + "(发起任务入口会被拦截,在途需求任务不拉起);"
       + "「问题处理」全功能可用");
   }
-
-  // issue-only 下假小鲁班起不来时 endpoint 缺席:通知器整个不接
-  // (notifier 是可选项),不让它变成问题流的启动依赖。
-  const notifier = lubanEndpoint
-    ? new Notifier({
-        endpoint: lubanEndpoint,
-        headers: lubanHeaders,
-        fake: lubanIsFake,
-        mobileApproval: lubanPluginReplies,
-        approvalCode: lubanPluginReplies && lubanPluginToken
-          ? (input) => lubanApprovalCode({ token: lubanPluginToken, ...input })
-          : undefined,
-        // 发起人的通知令牌:普通任务提醒是自己发给自己；主动邀请检视时，
-        // 用责任人的令牌向所选 Committer 工号发送，不要求收件人配令牌。
-        personalToken: (account) => auth.lubanToken(account),
-        ...(lubanTemplateWaiting || lubanTemplateOutcome || lubanTemplateReview
-          ? {
-              templates: {
-                ...(lubanTemplateWaiting
-                  ? { waiting: lubanTemplateWaiting } : {}),
-                ...(lubanTemplateOutcome
-                  ? { outcome: lubanTemplateOutcome } : {}),
-                ...(lubanTemplateReview
-                  ? { review: lubanTemplateReview } : {}),
-              },
-            }
-          : {}),
-      })
-    : undefined;
 
   // 任务日志环形缓冲(诊断包切片用):进程存活期间保留最近几千行。
   const taskLogRing: string[] = [];
