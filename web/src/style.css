@@ -303,6 +303,19 @@ svg {
   color: #dadaff;
   background: rgba(119, 119, 236, .2);
 }
+/* beta 徽标:能力建设中的入口(问题处理)。区别于数字计数的 nav-badge,
+   用文字 pill 提醒"尚不保证可用";窄屏随文字一起隐藏。 */
+.nav-beta {
+  margin-left: auto;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid rgba(199, 121, 19, .45);
+  color: #ffc46e;
+  background: rgba(199, 121, 19, .12);
+  font-size: 11px;
+  line-height: 16px;
+  letter-spacing: .04em;
+}
 .sidebar-foot {
   margin-top: auto;
   padding: 13px 10px 4px;
@@ -4978,13 +4991,13 @@ pre {
    平板宽度提前收起导航文字，避免 481–620px 区间出现顶栏错位。 */
 @media (max-width: 620px) {
   .brand-copy { display: none; }
-  .nav-item span:not(.nav-badge) { display: none; }
+  .nav-item span:not(.nav-badge):not(.nav-beta) { display: none; }
   .nav-item { padding-left: 11px; padding-right: 11px; }
 }
 
 @media (max-width: 480px) {
   .brand-copy { display: none; }
-  .nav-item span:not(.nav-badge) { display: none; }
+  .nav-item span:not(.nav-badge):not(.nav-beta) { display: none; }
   .nav-item { padding: 0 11px; }
   .workspace-header, .workspace-main { padding-left: 13px; padding-right: 13px; }
   .pulse-grid, .history-metrics { gap: 7px; }
@@ -8118,7 +8131,7 @@ button.overview-metric:focus-visible { outline: 2px solid var(--focus); outline-
 
 @media (max-width: 760px) {
   /* 顶栏已有七个一级入口；进入横向顶栏形态后只保留图标和可访问名称。 */
-  .sidebar-nav .nav-item span:not(.nav-badge) { display: none; }
+  .sidebar-nav .nav-item span:not(.nav-badge):not(.nav-beta) { display: none; }
   .sidebar-nav .nav-item { padding-left: 9px; padding-right: 9px; }
   .ops-grid, .personal-pulse.four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .task-kind-tabs { width: 100%; grid-template-columns: repeat(3, minmax(0, 1fr)); }
