@@ -1130,6 +1130,10 @@ svg {
 .launch-requirement-section textarea { min-height: 260px; resize: vertical; font-size: 14.5px; line-height: 1.65; }
 .launch-field-grid { margin-top: 12px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .launch-settings-grid { margin-top: 0; }
+.ticket-ar-hint {
+  margin-top: 7px; display: block; color: var(--attention);
+  font-size: var(--font-size-assist); font-weight: 650; line-height: 1.5;
+}
 .launch-settings-grid .repair-field > small {
   margin-top: 6px; display: block; color: var(--muted);
   font-size: var(--font-size-assist); line-height: 1.45;

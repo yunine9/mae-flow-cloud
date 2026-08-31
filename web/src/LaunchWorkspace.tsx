@@ -848,13 +848,17 @@ export function LaunchWorkspace({
                     <div className="launch-field-grid launch-required-delivery-grid">
                       {options.ticket.enabled && (
                         <label className="account-field">
-                          <span>需求/问题单号
+                          <span>AR 对应的 REQ 单号
                             {options.ticket.required ? "（必填）" : ""}</span>
                           <input type="text" value={ticket}
                             onChange={(event) => setTicket(event.target.value)}
-                            placeholder="REQ2026xxxx / DTS2026xxxx"
+                            placeholder="例如：REQ2026xxxx"
                             spellCheck={false}
                             required={options.ticket.required} />
+                          <small className="ticket-ar-hint">
+                            请确认这是 AR 对应的 REQ 单号，不要填写 FuR 对应的 REQ 单号；
+                            两者格式相同，系统无法自动识别。
+                          </small>
                         </label>
                       )}
                       {options.baseline.enabled && (

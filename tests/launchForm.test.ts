@@ -834,6 +834,14 @@ test("发起页会防抖探测仓库并阻止坏地址，浅色退出图标有�
   assert.match(style, /data-theme="light"\] \.logout-button svg[\s\S]*?#343b4f/);
 });
 
+test("REQ 单号字段明确要求填写 AR 对应单号，并说明无法按格式区分 FuR", () => {
+  const source = readFileSync(join(process.cwd(), "web/src/LaunchWorkspace.tsx"), "utf-8");
+  assert.match(source, /AR 对应的 REQ 单号/);
+  assert.match(source, /placeholder="例如：REQ2026xxxx"/);
+  assert.match(source, /不要填写 FuR 对应的 REQ 单号/);
+  assert.match(source, /两者格式相同，系统无法自动识别/);
+});
+
 test("消费:任务级代码仓压过部署仓,克隆的就是下单填的那个", async () => {
   const repoA = makeRepo("aaa");
   const repoB = makeRepo("bbb");
