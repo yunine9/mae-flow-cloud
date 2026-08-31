@@ -148,7 +148,7 @@ function chainScenes(origin: string, declarations: string[][]): Scene[] {
     { tool: { name: "pull_repo", input: { url: origin } } },
     { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
-      "printf '# 问题分析\\n\\n根因:演示。\\n' > issue-analysis.md" } } },
+      "printf '# 问题分析\\n\\n## 结论\\n根因:演示。\\n## 证据链\\n日志:演示报错。\\n## 置信度\\n高。\\n## 下一步建议\\n修复演示路径。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis", input: { summary: "根因=演示" } } },
     { text: "分析报告已提交,等待确认。" },
     { tool: { name: "bash", input: { command: commit(`[${TICKET}][fix] 修复`) } } },
@@ -520,7 +520,7 @@ test("MR 验绿门·空=空合法通过:无码修改路径零 MR 进换库验证
     { tool: { name: "complete_stage", input: { note: "单据已通读" } } },
     { tool: { name: "complete_stage", input: { note: "本单为配置问题,无需代码仓" } } },
     { tool: { name: "bash", input: { command:
-      "printf '# 分析\\n\\n结论:配置项漂移。\\n' > issue-analysis.md" } } },
+      "printf '# 分析\\n\\n## 结论\\n配置项漂移(非代码问题)。\\n## 证据链\\n配置比对:超时阈值不一致。\\n## 置信度\\n高。\\n## 下一步建议\\n恢复配置。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis", input: { summary: "配置项漂移" } } },
     { text: "分析已提交。" },
     // 确认后:修改 → UT → 提交MR 段零 MR,空清单=空台账直接放行。

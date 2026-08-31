@@ -789,6 +789,8 @@ async function main(): Promise<void> {
     dataDir, provider, model, modelsJson, settings,
     // 探索方式烙印(个人设置,缺省固定流程):create 时读一次烙进会话。
     issueFlowMode: (account) => auth.issueFlowMode(account),
+    // 月光免审批(人工介入程度的过程轴,现读现判):分析结论闸代答。
+    moonlight: (account) => auth.moonlightEnabled(account),
     gitCredential: (account) => auth.gitCredential(account),
     opsTools: existsSync(join(goToolsDir, process.platform === "win32"
       ? "fetch-logs.exe" : "fetch-logs-linux-amd64"))

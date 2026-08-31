@@ -280,7 +280,7 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail/环境验证�
     { tool: { name: "pull_repo", input: { url: origin } } },
     { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
-      "printf '# 问题分析\\n\\n根因:连接池耗尽,方案:超时回收。\\n' > issue-analysis.md" } } },
+      "printf '# 问题分析\\n\\n## 结论\\n连接池耗尽。\\n## 证据链\\n日志:连接池耗尽。\\n## 置信度\\n高。\\n## 下一步建议\\n超时回收。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis", input: { summary: "根因=连接池耗尽" } } },
     { text: "分析报告已提交,等待用户确认。" },
     { tool: { name: "bash", input: { command: commit(`[${TICKET}][fix] 修复登录超时`) } } },
@@ -457,7 +457,7 @@ test("契约快照:无单结论闸带机器可读提案(conclude 卡的 proposal
     { tool: { name: "pull_repo", input: { url: origin } } },
     { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
-      "printf '# 初步定位\\n\\n结论:是问题(索引缺失导致全表扫描)。\\n' > issue-analysis.md" } } },
+      "printf '# 初步定位\\n\\n## 结论\\n是问题(索引缺失导致全表扫描)。\\n## 证据链\\n执行计划:全表扫描。\\n## 置信度\\n高:执行计划直接指向。\\n## 下一步建议\\n补索引。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis", input: { conclusion: "issue", summary: "是问题:索引缺失" } } },
     { text: "结论已提交,等待用户确认。" },
   ];

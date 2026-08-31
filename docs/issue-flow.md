@@ -145,9 +145,10 @@ done/inherited/redo)+ 旅程线(transitions 账)并存。真相链:
   没配就在 create 拒绝并指路个人设置,不让"发起后才在克隆期失败"
   (那是终态,整单作废)。file:// 本地仓与不碰仓的纯研究不拦;前端
   在表单上同步禁用提交并给出跳转,服务端是权威。
-- 台账保护:GateService 把 `issue.json`、`skills/` 列为宿主账本,
-  文件工具拒写(bash 路径的残余风险见诚实清单)。平台闸/阶段状态/
-  UT 上报都在 issue.json 里——Agent 想改也改不动。
+- 台账保护:GateService 把 `issue.json`、`skills/`、`.mae-flow-work/`
+  host-skills(货架快照)列为宿主账本,文件工具拒写(bash 路径的残余
+  风险见诚实清单)。平台闸/阶段状态/UT 上报都在 issue.json 里——Agent
+  想改也改不动。
 
 ## 宿主工具与会话技能
 
@@ -158,7 +159,7 @@ fetch-logs 二进制,产物落工作区,Agent grep 真实文件)/ `build_deploy`
 单号自动关联)。
 
 固定模式工具:去掉 report_stage,新增 `submit_analysis`(提交分析/
-结论,以报告在场为门票,触发人工闸)/ `report_ut`(UT 结果事实上报,
+结论,以报告在场且四章节齐全为门票,触发人工闸)/ `report_ut`(UT 结果事实上报,
 只记账——不是出口、不是建 MR 前置)/ `complete_stage`(拉单/拉仓/
 修改/UT/提交MR 五个阶段的自报出口;提交 MR 阶段必带 mrs 申报 MR 清单,
 平台验绿放行)。阶段门禁以阶段注册表(src/issueFlow/stageRegistry.ts)
@@ -167,9 +168,51 @@ create_mr 仅 mr_green,push_branch 自 fix 起,build_deploy 仅
 deploy_verify,submit_analysis 仅 analyze,report_ut 仅 ut。
 
 技能(每次会话物化到 `skills/`,改编自 playbook):issue-playbook(路线
-图)、issue-research(研究方法与非问题出口)、issue-delivery(分支/提交
-格式 `[单号][类型] 描述`/推送/MR)、issue-ops(环境工具用法)。工号 =
-登录账号,不再从 $HOME 猜。
+图)、issue-analysis(分析工作流编排:方法论取用次序/轻量分流/取证
+规范/报告四要素)、issue-research(研究方法与非问题出口,方法论兜底)、
+issue-delivery(分支/提交格式 `[单号][类型] 描述`/推送/MR)、
+issue-ops(环境工具用法)。工号 = 登录账号,不再从 $HOME 猜。
+
+### 分析供给线与报告门票(2026-08-31,ADR-0005)
+
+分析质量的三层供给,取用次序写在 issue-analysis 技能里(替换式,命中
+即用,不叠加;不做显式冲突裁决):
+
+1. **业务仓问题 skill**:约定放业务仓内 `docs/skills/<name>/SKILL.md`
+   (标准 skill 形态),拉仓后由 Agent 按需 Read——平台不做发现装载,
+   零代码约定。边界:只供领域知识与排障方法,不约定流程/报告格式/
+   停机节奏(见 issue-analysis 技能的「知识边界」)。
+2. **团队货架通用 skill**:问题会话装配补上 hostSkillsDir,货架 skill
+   经只读快照(`.mae-flow-work/host-skills`,GateService 账本拒写)进
+   会话;匹配走 `knowledgeMatchesIssueSession`——任务口径上一处豁免:
+   未限定仓库/模块的 engineering 通用知识进所有问题会话,技术栈维度
+   不参与,未分类维持不进。首个通用定位 skill 的仓内发布源:
+   `assets/host-skills/dts-diagnose/SKILL.md`(五步诊断法,已经平台
+   适配:报告对齐四要素门票、无逐步确认、截图走 dts_get_ticket/
+   inspect_image;经管理面上传发布)。
+3. **仓内 issue-research**:兜底方法论;都没有则 Agent 按取证规范自行
+   定位。
+
+报告门票:`submit_analysis` 机械校验 issue-analysis.md 含四章节
+(结论/证据链/置信度/下一步建议),缺章节整单打回——轻量路径的简版
+报告同样要素不缺。"结论必附证据"由此从纯提示词约定升级为工具层关卡。
+
+### 人工介入程度联动(2026-08-31,ADR-0006)
+
+个人设置的月光轴(moonlight,过程人工节点系统代答)现读现判接入固定
+流程的分析段:
+
+- **有单分析闸**:月光开 → analysis_confirm 全量自动确认(推荐码
+  confirm 首次被机器消费,ADR-0004 的预留兑现),只通知不等待,
+  事后可经现有回退推翻;
+- **无单结论闸**:月光开 → 仅提案 non_issue 且自报置信度高才自动
+  闭环归档;是问题或置信度不足必举卡(闭环无下游闸,分级保守);
+- **永不代答**:env_needed/env_verify 问的是用户事实(环境配置/
+  验证结果);MR 验绿门不动;
+- **提示层**:开场词/续聊词按月光现值渲染「介入节奏」(月光档少问、
+  不做中间简报、报告写到自足;把关档主动问、每轮循环给简报);
+  `submit_analysis` 增可选 confidence 自报字段供无单分级消费,
+  缺省视为置信度不足——宁人工勿猜。
 
 ## DTS 列表页签(工具对拍与文件代理)
 
