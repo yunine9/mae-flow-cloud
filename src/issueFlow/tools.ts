@@ -56,6 +56,11 @@ import {
 import { readBusinessModule, listBusinessModules } from "../businessModuleLibrary.ts";
 import type { IssueOpsTools } from "./opsTools.ts";
 import type { DtsGateway } from "./gateways.ts";
+import {
+  applyTicketImageRewrites,
+  renderTicketImageNote,
+  syncTicketImages,
+} from "./ticketImages.ts";
 import { issueRegistrationMeta } from "./prompt.ts";
 import {
   currentBranch,
@@ -432,6 +437,30 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       const ticket = String(params.ticket ?? "").trim() || ctx.state.ticket;
       if (!ticket) fail("没有单号:请提供 ticket 参数,或请用户先绑定单号");
       const detail = await ctx.dts.detail(ticket);
+      // 内嵌截图落工作区(#42):描述里的 <img> 下载到 ticket-images/
+      // 并把 AI 可见文本里的 URL 改写为工作区相对路径,随后可对本地
+      // 路径调 inspect_image 识图。fail-open:下载是旁路,单图失败/
+      // 超时/超限只标注缺失,详情照常返回,绝不因此堵住查单。
+      let contentText = detail.content;
+      let imageNote = "";
+      const description = detail.description ?? detail.content;
+      if (/<img\s[^>]*?src="/i.test(description)) {
+        try {
+          const outcome = await syncTicketImages({
+            description,
+            ticket: detail.ticket,
+            workspace: ctx.workspace,
+            gateway: ctx.dts,
+            log: ctx.log,
+          });
+          contentText = applyTicketImageRewrites(contentText, outcome.downloads);
+          imageNote = renderTicketImageNote(outcome);
+        } catch (error) {
+          const reason = String(error instanceof Error ? error.message : error);
+          imageNote = `[内嵌图] 下载环节异常,本次未处理(详情照常): ${reason}`;
+          ctx.log?.(`[issue-tools] 内嵌图处理失败(${detail.ticket}): ${reason}`);
+        }
+      }
       recordTransition(ctx.state, {
         source: "platform",
         note: `DTS 单 ${detail.ticket} 详情已获取`,
@@ -450,7 +479,8 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
           + "进入拉取代码仓:\n"
           + stageBriefLines(scenario, "prep_repo").join("\n")
         : "";
-      return ok(`问题单 ${detail.ticket} 详情:\n${detail.content}`
+      return ok(`问题单 ${detail.ticket} 详情:\n${contentText}`
+        + (imageNote ? `\n\n${imageNote}` : "")
         + `${moduleHint}${briefing}`);
     },
   }));

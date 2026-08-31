@@ -922,7 +922,7 @@ test("MockDtsGateway:确定性单据集,已知单给罐头详情,未知单 fail-
   const gateway = new MockDtsGateway();
   assert.equal(gateway.mock, true, "模拟网关必须自带 DEV 标记(列表 API 挂徽标用)");
   const list = await gateway.listByOwner("y00965296");
-  assert.equal(list.length, 6, "六个测试单");
+  assert.equal(list.length, 7, "七个测试单");
   assert.ok(list.every((item) => item.title.startsWith("【DEV·模拟】")),
     "标题打 DEV 标,列表里一眼认出模拟单");
   assert.ok(list.every((item) => item.ticket.startsWith("DTS-2026-")));
@@ -933,6 +933,16 @@ test("MockDtsGateway:确定性单据集,已知单给罐头详情,未知单 fail-
   const flying = await gateway.detail("DTS-2026-1006");
   assert.match(flying.content, /开局飞跑/);
   assert.match(flying.content, /行军动画/, "自带现象描述的单子用原文,不走罐头模板");
+  // 1007 号带内嵌截图(#42):描述与正文都含 img,proxyFile 按路径回
+  // 罐头 PNG,dts_get_ticket 的下载改写全链在 --dts-mock 下可演示。
+  const withImage = await gateway.detail("DTS-2026-1007");
+  assert.match(withImage.description ?? "", /<img src="\/v1\/nfs\/mock\//);
+  assert.match(withImage.content, /<img src="\/v1\/nfs\/mock\//,
+    "正文同样带 img,改写才有 URL 可换");
+  const png = await gateway.proxyFile("/v1/nfs/mock/2026-1007/topology.png");
+  assert.equal(png.data.subarray(0, 4).toString("latin1"), "\x89PNG",
+    "罐头图必须是真图片字节,落盘后才能被识图");
+  await assert.rejects(() => gateway.proxyFile("/v1/nfs/mock/404.png"), /没有这个/);
 });
 
 test("pipelineClient 公共客户端:触发/查询/契约校验/checks 解析", async () => {
