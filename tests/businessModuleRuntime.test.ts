@@ -83,6 +83,31 @@ test("任务固定发布版本；上下文只注入目录，正文留给 Read/Gr
   assert.match(readFileSync(join(childWorkspace,
     child[0].assets[0].snapshot_path), "utf-8"), /V1_ONLY_SECRET_BODY/);
 
+  createBusinessModule(dataDir, {
+    id: "inventory", name: "库存域", description: "库存履约边界",
+    owner: "owner-b", repositories: ["https://code.example/inventory.git"],
+  }, "admin");
+  publishBusinessKnowledgeAsset(dataDir, "inventory", {
+    id: "inventory-event", title: "库存事件",
+    summary: "库存事件契约", when_to_use: "消费库存事件时",
+    repositories: ["https://code.example/inventory.git"],
+    content: "# 库存事件\n\nINVENTORY_ONLY\n",
+  }, "owner-b");
+  const inventory = snapshotBusinessModules({
+    dataDir, taskWorkspace, moduleIds: ["inventory"],
+    repositories: ["https://code.example/inventory.git"],
+  });
+  const filteredWorkspace = join(dataDir, "task-3");
+  mkdirSync(filteredWorkspace, { recursive: true });
+  const filtered = copyBusinessModuleSnapshots({
+    selected: [...selected, ...inventory],
+    sourceTaskWorkspace: taskWorkspace,
+    targetTaskWorkspace: filteredWorkspace,
+    repositories: ["https://code.example/orders.git"],
+  });
+  assert.deepEqual(filtered.map((module) => module.id), ["orders"],
+    "子任务不能保留没有任何适用知识的业务模块空壳");
+
   const snapshotPath = join(
     taskWorkspace, selected[0].assets[0].snapshot_path);
   chmodSync(snapshotPath, 0o640);

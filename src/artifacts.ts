@@ -40,6 +40,16 @@ const TRUNCATED_NOTE =
   "\n\n…(内容超过 512 KB,只回传前 512 KB;完整内容见工作区文件)";
 /** Git 工作区差异的固定标识:它是"虚拟产物",不对应磁盘上某个文件。 */
 export const DIFF_NAME = "未提交改动";
+/** 宿主在平台红灯却拿不到具体报错时生成的人工补证材料。它不在代码
+ * 仓里，而在任务级 pipeline/ 目录；仍使用稳定 ID 进入同一套批注链。 */
+export const PIPELINE_EVIDENCE_GAP_FILE = "流水线证据缺口.md";
+export const PIPELINE_EVIDENCE_GAP_ARTIFACT =
+  `pipeline/${PIPELINE_EVIDENCE_GAP_FILE}`;
+
+export interface ArtifactSources {
+  /** 任务级流水线材料目录。调用方必须显式传入，不能从代码仓路径猜。 */
+  pipelineRoot?: string;
+}
 
 /** Mae-Flow 自己的流程状态不是代码交付内容。Git 本地排除规则是第一道
  * 防线，但它可能缺失、写入失败或来自旧现场；差异采集必须再守一道，
@@ -74,6 +84,8 @@ export interface ArtifactMeta {
   modified_at: string;
   /** 差异产物包含的真实文件数；文档产物不提供。 */
   file_count?: number;
+  /** Cloud 生成材料的稳定用途；前端据此导航，不靠中文文件名猜语义。 */
+  purpose?: "pipeline_evidence_gap";
 }
 
 export interface ArtifactContent extends ArtifactMeta {
@@ -116,6 +128,8 @@ interface DocEntry {
   meta: ArtifactMeta;
   /** 集合内部保存的绝对路径:读取只走这里,不由 name 拼。 */
   path: string;
+  /** 允许读取的真实根目录；最终读取还会用 realpath 再守一次边界。 */
+  root: string;
 }
 
 /** 代码工作区:调用方给了就用;没给就在任务工作区下找带
@@ -172,6 +186,7 @@ function collectDocs(cwd: string): DocEntry[] {
         if (!info.isFile()) continue;
         docs.push({
           path,
+          root: workRoot,
           meta: {
             name: `${basename(dir)}/${fileName}`,
             label: fileName,
@@ -186,6 +201,45 @@ function collectDocs(cwd: string): DocEntry[] {
     }
   }
   return docs;
+}
+
+/** 任务级 pipeline/ 里有很多给 Agent 的原始日志，不能一股脑塞进业务
+ * 工作台。这里只暴露系统明确要求人补证的那一份材料；候选路径固定，
+ * 不接收请求参数，也不跟随越出 pipeline/ 的符号链接。 */
+function collectPipelineDocs(pipelineRoot?: string): DocEntry[] {
+  if (!pipelineRoot) return [];
+  const path = join(pipelineRoot, PIPELINE_EVIDENCE_GAP_FILE);
+  try {
+    const root = realpathSync(pipelineRoot);
+    const target = realpathSync(path);
+    if (target !== root && !target.startsWith(root + sep)) return [];
+    const info = statSync(target);
+    if (!info.isFile()) return [];
+    return [{
+      path: target,
+      root,
+      meta: {
+        name: PIPELINE_EVIDENCE_GAP_ARTIFACT,
+        label: PIPELINE_EVIDENCE_GAP_FILE,
+        kind: "doc",
+        bytes: info.size,
+        modified_at: info.mtime.toISOString(),
+        purpose: "pipeline_evidence_gap",
+      },
+    }];
+  } catch {
+    return [];
+  }
+}
+
+function collectReadableDocs(
+  cwd: string | undefined,
+  sources: ArtifactSources,
+): DocEntry[] {
+  return [
+    ...(cwd ? collectDocs(cwd) : []),
+    ...collectPipelineDocs(sources.pipelineRoot),
+  ];
 }
 
 /** git 子进程:失败一律返回 undefined(不是 git 仓、git 不在、超时)。 */
@@ -783,15 +837,18 @@ function readCapped(path: string): { content: string; truncated: boolean } | und
  * 列出可检视的产物,最近修改的在前。
  * 任何一路出问题只让那一路缺席,永远返回数组。
  */
-export function listArtifacts(cwd: string): ArtifactMeta[] {
+export function listArtifacts(
+  cwd: string | undefined,
+  sources: ArtifactSources = {},
+): ArtifactMeta[] {
   const items: ArtifactMeta[] = [];
   try {
-    items.push(...collectDocs(cwd).map((doc) => doc.meta));
+    items.push(...collectReadableDocs(cwd, sources).map((doc) => doc.meta));
   } catch {
     // 文档一路塌了,还有 diff 一路。
   }
   try {
-    const diff = diffMeta(cwd);
+    const diff = cwd ? diffMeta(cwd) : undefined;
     if (diff) items.push(diff);
   } catch {
     // git 一路塌了,文档照出。
@@ -803,15 +860,19 @@ export function listArtifacts(cwd: string): ArtifactMeta[] {
 
 /** HTTP 读侧版本：Git 子进程不阻塞事件循环，编译产生大量未跟踪文件时
  * 页面请求可以变慢，但健康检查、任务列表和其他人的工作台仍可响应。 */
-export async function listArtifactsAsync(cwd: string): Promise<ArtifactMeta[]> {
+export async function listArtifactsAsync(
+  cwd: string | undefined,
+  sources: ArtifactSources = {},
+): Promise<ArtifactMeta[]> {
   const items: ArtifactMeta[] = [];
   try {
-    items.push(...collectDocs(cwd).map((doc) => doc.meta));
+    items.push(...collectReadableDocs(cwd, sources).map((doc) => doc.meta));
   } catch {
     // 文档一路塌了，Git 一路仍可返回。
   }
   try {
-    const diff = diffMetaFromSnapshot(cwd, await collectDiffAsync(cwd));
+    const diff = cwd
+      ? diffMetaFromSnapshot(cwd, await collectDiffAsync(cwd)) : undefined;
     if (diff) items.push(diff);
   } catch {
     // 观测旁路 fail-open。
@@ -825,13 +886,15 @@ export async function listArtifactsAsync(cwd: string): Promise<ArtifactMeta[]> {
  * undefined——白名单是这里唯一的安全边界。
  */
 export function readArtifact(
-  cwd: string,
+  cwd: string | undefined,
   name: string,
+  sources: ArtifactSources = {},
 ): ArtifactContent | undefined {
   const wanted = String(name ?? "").trim();
   if (!wanted) return undefined;
   try {
     if (wanted === DIFF_NAME) {
+      if (!cwd) return undefined;
       // 快照只算一次:diffMeta 内部会再跑一遍完整 collectDiff,
       // 在大工作区上等于白白双倍阻塞。
       const diff = collectDiff(cwd);
@@ -840,13 +903,15 @@ export function readArtifact(
       const { content, truncated } = cap(diff.text);
       return { ...meta, content, truncated, branch: currentBranch(cwd) };
     }
-    const doc = collectDocs(cwd).find((entry) => entry.meta.name === wanted);
+    const doc = collectReadableDocs(cwd, sources)
+      .find((entry) => entry.meta.name === wanted);
     if (!doc) return undefined;
-    // 双保险:即便集合本身出了岔子,路径也必须仍在 .mae-flow-work 之下。
-    const root = resolve(join(cwd, WORK_DIR));
-    const target = resolve(doc.path);
+    // 双保险：扫描后文件可能被替换成符号链接；读取前重新 realpath，
+    // 且必须仍在它所属的白名单根目录内。
+    const root = realpathSync(doc.root);
+    const target = realpathSync(doc.path);
     if (target !== root && !target.startsWith(root + sep)) return undefined;
-    const read = readCapped(doc.path);
+    const read = readCapped(target);
     if (!read) return undefined;
     return { ...doc.meta, content: read.content, truncated: read.truncated };
   } catch {
@@ -855,12 +920,14 @@ export function readArtifact(
 }
 
 export async function readArtifactAsync(
-  cwd: string,
+  cwd: string | undefined,
   name: string,
+  sources: ArtifactSources = {},
 ): Promise<ArtifactContent | undefined> {
   const wanted = String(name ?? "").trim();
   if (!wanted) return undefined;
-  if (wanted !== DIFF_NAME) return readArtifact(cwd, wanted);
+  if (wanted !== DIFF_NAME) return readArtifact(cwd, wanted, sources);
+  if (!cwd) return undefined;
   try {
     const diff = await collectDiffAsync(cwd);
     const meta = diffMetaFromSnapshot(cwd, diff);

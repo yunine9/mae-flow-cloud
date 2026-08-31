@@ -45,6 +45,12 @@ export interface ProjectionDeleteResult {
   status?: string;
 }
 
+export interface ProjectionTaskIdentity {
+  found: boolean;
+  status?: string;
+  luban_account?: string;
+}
+
 const SCHEMA = `
 create table if not exists tasks (
   task_id       text primary key,
@@ -215,6 +221,23 @@ export class PgProjection {
       delivery: row.delivery ?? undefined,
       event_count: row.event_count,
     }));
+  }
+
+  /** 删除授权不能只依赖本机工作区：现场回收或换机后，任务可能只剩
+   * PostgreSQL 历史。这里仅返回裁权所需的最小身份，不展开任务内容。 */
+  async taskIdentity(taskId: string): Promise<ProjectionTaskIdentity> {
+    await this.ensureSchema();
+    const rows = await this.pool.query(
+      "select status, luban_account from tasks where task_id = $1",
+      [taskId],
+    );
+    if (!rows.rowCount) return { found: false };
+    return {
+      found: true,
+      status: String(rows.rows[0].status),
+      luban_account: rows.rows[0].luban_account
+        ? String(rows.rows[0].luban_account) : undefined,
+    };
   }
 
   /** 历史条目的事件量指标:该任务的事件副本行数。读失败抛错。 */

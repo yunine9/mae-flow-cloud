@@ -254,7 +254,7 @@ export function copyBusinessModuleSnapshots(options: {
       chmodSync(destination, 0o440);
       return { ...asset };
     }),
-  }));
+  })).filter((module) => !taskRepositories.size || module.assets.length > 0);
   return copied;
 }
 

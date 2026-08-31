@@ -228,6 +228,9 @@ export interface IssueGate {
     conclusion?: "issue" | "non_issue";
     summary?: string;
     report?: string;
+    /** 置信度自报(ADR-0006):无单结论闸的月光代答消费——non_issue
+     * 且 high 才自动闭环;缺省按置信度不足处理,宁人工勿猜。 */
+    confidence?: "high" | "medium" | "low";
   };
   created_at: string;
 }

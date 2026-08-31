@@ -10,7 +10,7 @@
  * 单文件 HTML，工作台自己承接材料、决策与过程观察，避免形成两套入口。
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Markdown } from "./markdown";
 import { GitDiff, type GitDiffSelection } from "./GitDiff";
 import { SteerBox } from "./SteerBox";
@@ -37,6 +37,7 @@ import { RequirementTeamPicker } from "./RequirementTeamPicker";
 import {
   completeReview,
   controlTask,
+  deleteHistoryTask,
   listAnnotations,
   listArtifacts,
   listCommitters,
@@ -46,6 +47,7 @@ import {
   repairStopped,
   requestCommitterReview,
   statusText,
+  TASK_REQUIREMENT_ARTIFACT,
   type AnchorCheck,
   type Annotation,
   type ArtifactMeta,
@@ -63,6 +65,59 @@ import {
 
 type WorkspaceView = "materials" | "collaboration" | "execution" | "insights";
 type ExecutionView = "events" | "knowledge";
+type MaterialView = "source" | "doc" | "chain" | "diff";
+
+/** 圈注和“把意见送给 Agent”是两种权限；只有停止的任务禁止再记。 */
+export function canCreateWorkspaceAnnotation(
+  status: TaskSummary["status"],
+): boolean {
+  return status !== "canceled";
+}
+
+/** 批注定位必须能回到虚拟的需求原文，而不是把它误当过程文档。 */
+export function materialViewForAnnotation(
+  artifact: string,
+  artifacts: readonly ArtifactMeta[] = [],
+): MaterialView {
+  if (artifact === TASK_REQUIREMENT_ARTIFACT) return "source";
+  return artifacts.find((item) => item.name === artifact)?.kind === "diff"
+    ? "diff" : "doc";
+}
+
+/** 这是显式的人工作业，不等同于普通 verifying。partial 时 Agent 可以
+ * 先修已有证据，但缺失维度仍需要人并行补原文。 */
+export function pipelineEvidenceNeedsHuman(task: TaskSummary): boolean {
+  const state = task.delivery?.evidence_gap?.state;
+  return (state === "waiting_human" || state === "partial")
+    && Boolean(task.delivery?.evidence_gap?.missing_dimensions.length);
+}
+
+/** 首次进入工作台时，系统点名要求处理的补证材料必须胜过“最近修改”
+ * 排序；用户已经主动切到别的有效材料后则不抢回焦点。 */
+export function preferredWorkspaceArtifact(
+  items: readonly ArtifactMeta[],
+  current: string,
+  recommendedView: "source" | "doc" | "chain" | "diff" | undefined,
+  evidenceGapActive: boolean,
+): string {
+  if (current && items.some((item) => item.name === current)) return current;
+  if (evidenceGapActive) {
+    const gap = items.find((item) => item.purpose === "pipeline_evidence_gap");
+    if (gap) return gap.name;
+  }
+  const preferredKind = recommendedView === "diff" ? "diff" : "doc";
+  return items.find((item) => item.kind === preferredKind)?.name
+    ?? items[0]?.name ?? "";
+}
+
+/** 决定只能携带当前操作者自己尚未送达的草稿；别人的草稿只是其记录。 */
+export function decisionAnnotationIds(
+  items: readonly Annotation[],
+  viewerUsername: string,
+): string[] {
+  return items.filter((item) => item.status === "draft"
+    && item.author === viewerUsername).map((item) => item.id);
+}
 
 export interface WorkspaceNextActionCopy {
   title: string;
@@ -215,8 +270,9 @@ export function usablePushReviewSelection(
   return pushReviewActive && state.kind !== "ready" ? undefined : selection;
 }
 
-function defaultWorkspaceView(task: TaskSummary): WorkspaceView {
+export function defaultWorkspaceView(task: TaskSummary): WorkspaceView {
   if (task.status === "paused") return "collaboration";
+  if (pipelineEvidenceNeedsHuman(task)) return "materials";
   if (task.waiting || task.status === "waiting_for_human") return "materials";
   if (["queued", "running", "pausing", "verifying", "await_merge"]
       .includes(task.status)) return "execution";
@@ -309,7 +365,7 @@ export function TaskWorkspace({
   const [unavailable, setUnavailable] = useState("");
   const [active, setActive] = useState("");
   const [materialView, setMaterialView] =
-    useState<"source" | "doc" | "chain" | "diff">(recommendedMaterialView);
+    useState<MaterialView>(recommendedMaterialView);
   const [content, setContent] = useState("");
   const [branch, setBranch] = useState("");
   const [loading, setLoading] = useState(false);
@@ -327,9 +383,10 @@ export function TaskWorkspace({
   const [completeBusy, setCompleteBusy] = useState(false);
   const [completeError, setCompleteError] = useState("");
   const [controlBusy, setControlBusy] =
-    useState<"pause" | "resume" | "cancel" | "">("");
+    useState<"pause" | "resume" | "cancel" | "delete" | "">("");
   const [controlError, setControlError] = useState("");
   const [cancelArmed, setCancelArmed] = useState(false);
+  const [deleteArmed, setDeleteArmed] = useState(false);
   const [repositoryAssignees, setRepositoryAssignees] =
     useState<RepositoryAssigneeSelection>(EMPTY_REPOSITORY_ASSIGNEE_SELECTION);
   const [deliverySelection, setDeliverySelection] =
@@ -346,8 +403,15 @@ export function TaskWorkspace({
     defaultWorkspaceView(task),
   );
   const [executionView, setExecutionView] = useState<ExecutionView>("events");
+  const artifactTask = useRef("");
+  const openedEvidenceGap = useRef("");
 
   useEffect(() => {
+    artifactTask.current = "";
+    openedEvidenceGap.current = "";
+    setItems(undefined);
+    setActive("");
+    setContent("");
     setMaterialView(task.waiting?.recommended_view ?? "source");
     setWorkspaceView(defaultWorkspaceView(task));
     setExecutionView("events");
@@ -400,13 +464,16 @@ export function TaskWorkspace({
 
   useEffect(() => {
     if (task.status === "paused") setWorkspaceView("collaboration");
+    else if (pipelineEvidenceNeedsHuman(task)) setWorkspaceView("materials");
     else if (task.waiting || task.status === "waiting_for_human") {
       setWorkspaceView("materials");
     } else if (["queued", "running", "pausing", "verifying", "await_merge"]
         .includes(task.status)) {
       setWorkspaceView("execution");
     }
-  }, [task.status, task.waiting?.waiting_id]);
+  }, [task.status, task.waiting?.waiting_id,
+    task.delivery?.evidence_gap?.state,
+    task.delivery?.evidence_gap?.sha]);
 
   useEffect(() => {
     if (!canRequestReview) return;
@@ -497,16 +564,26 @@ export function TaskWorkspace({
       setItems(result.items);
       // 列表可能随任务轮询/状态切换重新读取。默认项只用于首次进入；
       // 用户已经切到工作区变更时绝不能被后台刷新拽回最近文档。
-      setActive((current) => {
-        if (result.items?.some((item) => item.name === current)) return current;
-        const preferredKind = task.waiting?.recommended_view === "diff"
-          ? "diff" : "doc";
-        return result.items?.find((item) => item.kind === preferredKind)?.name
-          ?? result.items?.[0]?.name ?? "";
-      });
+      const evidenceKey = pipelineEvidenceNeedsHuman(task)
+        ? `${task.id}:${task.delivery?.evidence_gap?.sha ?? ""}` : "";
+      const newlyActionable = Boolean(evidenceKey
+        && openedEvidenceGap.current !== evidenceKey);
+      const current = artifactTask.current === task.id && !newlyActionable
+        ? active : "";
+      const next = preferredWorkspaceArtifact(
+        result.items ?? [], current, task.waiting?.recommended_view,
+        pipelineEvidenceNeedsHuman(task));
+      artifactTask.current = task.id;
+      openedEvidenceGap.current = evidenceKey;
+      setActive(next);
+      if (next !== current && result.items?.find((item) => item.name === next)
+          ?.purpose === "pipeline_evidence_gap") {
+        setMaterialView("doc");
+      }
     });
     return () => { alive = false; };
-  }, [task.id, livePulse]);
+  }, [task.id, livePulse, task.delivery?.evidence_gap?.state,
+    task.delivery?.evidence_gap?.sha]);
 
   useEffect(() => {
     if (!active) return;
@@ -565,25 +642,31 @@ export function TaskWorkspace({
   }, [task.id, task.status, notesPulse, livePulse]);
 
   const drafts = notes.filter((item) => item.status === "draft");
+  const myDrafts = drafts.filter((item) => item.author === viewerUsername);
+  // 决定卡只展示会阻塞团队流转的事实：已送达意见，以及责任人自己的
+  // 未送达草稿。旁观者草稿仍可在批注页管理，但不能暗中进入 Agent。
   const unresolvedNotes = notes.filter((item) =>
-    item.status === "draft" || item.status === "sent");
+    item.status === "sent" || (item.status === "draft"
+      && (!task.luban_account || item.author === task.luban_account)));
   // sent 仍是“未闭环”，要继续展示并阻止误放行；但它已经主动送给
   // Agent，不能再冒充本次决定要附带的草稿。两组 ID 混用会让决定接口
   // 按 draft 校验时拒绝整次提交，连人刚写的补充说明也一起被挡住。
-  const draftIds = drafts.map((item) => item.id);
+  const draftIds = decisionAnnotationIds(notes, viewerUsername);
 
   /** 回到被圈的那一行:换页签→等它渲染出来→滚过去并闪一下。
    * 改批注前人几乎总要再看一眼上下文,只报"第 23 行"等于让他自己找。
    * 等待有预算(2 秒封顶),找不到就算了——旁路不许把界面卡住。 */
   function locate(item: Annotation) {
     setWorkspaceView("materials");
-    if (item.artifact !== active) setActive(item.artifact);
-    setMaterialView(items?.find((artifact) => artifact.name === item.artifact)
-      ?.kind === "diff" ? "diff" : "doc");
+    const source = item.artifact === TASK_REQUIREMENT_ARTIFACT;
+    if (!source && item.artifact !== active) setActive(item.artifact);
+    setMaterialView(materialViewForAnnotation(item.artifact, items));
+    const currentLine = checks.find((check) => check.id === item.id)?.line
+      ?? item.line;
     let tries = 0;
     const seek = () => {
       const node = document.querySelector<HTMLElement>(
-        `.ws-doc [data-l="${item.line}"]`);
+        `.ws-doc [data-l="${currentLine}"]`);
       if (!node) {
         if (tries++ < 20) window.setTimeout(seek, 100);
         return;
@@ -592,11 +675,14 @@ export function TaskWorkspace({
       node.classList.add("annot-flash");
       window.setTimeout(() => node.classList.remove("annot-flash"), 1700);
     };
-    window.setTimeout(seek, item.artifact === active ? 0 : 120);
+    window.setTimeout(seek, source || item.artifact === active ? 0 : 120);
   }
   const activeMeta = items?.find((item) => item.name === active);
   const documents = items?.filter((item) => item.kind === "doc") ?? [];
   const changes = items?.filter((item) => item.kind === "diff") ?? [];
+  const evidenceGapArtifact = documents.find((item) =>
+    item.purpose === "pipeline_evidence_gap");
+  const evidenceGapActionable = pipelineEvidenceNeedsHuman(task);
   // 服务端只生成一份聚合 diff，因此 changes.length 几乎永远是 1，
   // 它表示“产物份数”而不是用户关心的“变更文件数”。旧服务尚未提供
   // file_count 时保留原回退，避免滚动升级期间把入口误判为空。
@@ -631,6 +717,7 @@ export function TaskWorkspace({
     deliverySelection,
   );
   const canContributeReview = canOperate || canCollaborate || !!reviewAssignment;
+  const canCreateAnnotation = canCreateWorkspaceAnnotation(task.status);
   const collaborationVisible = canCollaborate && [
     "running", "pausing", "paused", "waiting_for_human", "verifying",
   ].includes(task.status);
@@ -645,6 +732,8 @@ export function TaskWorkspace({
     "queued", "running", "pausing", "paused", "waiting_for_human", "verifying",
     "await_merge",
   ].includes(task.status);
+  const deletable = canOperate && ["completed", "failed", "canceled"]
+    .includes(task.status);
   const health = taskHealthFacts(task, viewerUsername);
   const visibleProgress = workspaceProgress(task);
   const pauseFeedback = task.status === "pausing"
@@ -689,6 +778,25 @@ export function TaskWorkspace({
     }
   }
 
+  async function deleteTask() {
+    if (controlBusy) return;
+    setControlBusy("delete");
+    setControlError("");
+    try {
+      const result = await deleteHistoryTask(task.id);
+      if (result.error) setControlError(result.error);
+      else {
+        await onChanged();
+        onClose();
+      }
+    } catch (reason) {
+      setControlError(reason instanceof Error
+        ? reason.message : "删除任务失败，请重试");
+    } finally {
+      setControlBusy("");
+    }
+  }
+
   return (
     <section
       className="workspace-overlay"
@@ -717,12 +825,14 @@ export function TaskWorkspace({
           <strong id="task-workspace-title">{task.title ?? task.requirement}</strong>
           {task.parent_task_id && <button type="button" className="ws-parent-task"
             onClick={() => onOpenTask?.(task.parent_task_id!)}>
-            <span>隶属跨仓大任务</span><code>{task.parent_task_id}</code>
+            <span>返回主任务</span>
+            <strong>{task.parent_task?.title ?? "跨仓大任务"}</strong>
+            <code>{task.parent_task?.ticket ?? task.parent_task_id}</code>
           </button>}
         </div>
-        {controllable && (
+        {(controllable || deletable) && (
           <div className="ws-head-controls" aria-label="任务控制">
-            {task.status === "await_merge" ? null : task.status === "paused" ? (
+            {controllable && (task.status === "await_merge" ? null : task.status === "paused" ? (
               <button type="button" className="primary" disabled={!!controlBusy}
                 title="沿用当前工作区和流程进度继续执行"
                 onClick={() => void runControl("resume")}>
@@ -739,8 +849,8 @@ export function TaskWorkspace({
                 onClick={() => void runControl("pause")}>
                 {controlBusy === "pause" ? "暂停中…" : "暂停"}
               </button>
-            )}
-            {!cancelArmed ? (
+            ))}
+            {controllable && (!cancelArmed ? (
               <button type="button" className="cancel" disabled={!!controlBusy}
                 title="取消后不可恢复，已有文件和记录仍会保留"
                 onClick={() => setCancelArmed(true)}>取消</button>
@@ -754,7 +864,22 @@ export function TaskWorkspace({
                 <button type="button" disabled={!!controlBusy}
                   onClick={() => setCancelArmed(false)}>返回</button>
               </div>
-            )}
+            ))}
+            {deletable && (!deleteArmed ? (
+              <button type="button" className="delete" disabled={!!controlBusy}
+                title="永久删除工作区、事件、批注与历史记录"
+                onClick={() => setDeleteArmed(true)}>删除任务</button>
+            ) : (
+              <div className="ws-delete-confirm">
+                <span>工作区和记录将永久删除</span>
+                <button type="button" disabled={!!controlBusy}
+                  onClick={() => void deleteTask()}>
+                  {controlBusy === "delete" ? "删除中…" : "确认删除"}
+                </button>
+                <button type="button" disabled={!!controlBusy}
+                  onClick={() => setDeleteArmed(false)}>返回</button>
+              </div>
+            ))}
           </div>
         )}
       </header>
@@ -803,8 +928,11 @@ export function TaskWorkspace({
       <nav className="ws-workspace-nav" aria-label="任务工作台视图">
         {([
           ["materials", "交付材料", "文档、依赖与代码变更"],
-          ["insights", "批注与检视", drafts.length
-            ? `${drafts.length} 条批注待提交` : notes.length
+          ["insights", "批注与检视", (task.status === "completed"
+            ? drafts.length : myDrafts.length)
+            ? task.status === "completed"
+              ? `${drafts.length} 条交付后记录`
+              : `${myDrafts.length} 条批注待提交` : notes.length
               ? `${notes.length} 条批注` : "圈选原文、协作检视"],
           ["collaboration", "开发协作", collaborationVisible
             ? "补充主任务或主动接管" : assistantUnavailableReason(task)],
@@ -813,12 +941,16 @@ export function TaskWorkspace({
           <button type="button" role="tab" key={view}
             aria-selected={workspaceView === view}
             className={`${workspaceView === view ? "active" : ""}`
-              + `${view === "insights" && drafts.length ? " attention" : ""}`}
+              + `${view === "insights" && myDrafts.length
+                && task.status !== "completed" ? " attention" : ""}`}
             onClick={() => setWorkspaceView(view)}>
             <strong>
               {label}
               {view === "insights" && notes.length > 0 && (
-                <em>{drafts.length > 0 ? `${drafts.length} 待提交` : notes.length}</em>
+                <em>{(task.status === "completed" ? drafts.length : myDrafts.length) > 0
+                  ? task.status === "completed"
+                    ? `${drafts.length} 记录` : `${myDrafts.length} 待提交`
+                  : notes.length}</em>
               )}
             </strong>
             <small>{hint}</small>
@@ -853,6 +985,25 @@ export function TaskWorkspace({
               </button>
             </div>
           </div>
+          {evidenceGapActionable && evidenceGapArtifact && (
+            <section className="ws-evidence-gap-callout" role="status">
+              <div>
+                <span>流水线需要补充原文</span>
+                <strong>打开《流水线证据缺口》，圈选说明并粘贴平台报错</strong>
+                <p>保存批注后会自动进入“批注与检视”，点击“回灌报错”即可让 Agent 继续。</p>
+              </div>
+              <button type="button"
+                className={active === evidenceGapArtifact.name
+                    && materialView === "doc" ? "on" : ""}
+                onClick={() => {
+                  setMaterialView("doc");
+                  setActive(evidenceGapArtifact.name);
+                }}>
+                {active === evidenceGapArtifact.name && materialView === "doc"
+                  ? "正在查看" : "打开材料"}
+              </button>
+            </section>
+          )}
           {materialView === "doc" && documents.length > 1 && (
             <div className="ws-tabs">
               {documents.map((item) => (
@@ -864,15 +1015,31 @@ export function TaskWorkspace({
           )}
           <div className="ws-doc">
             {materialView === "source" ? (
-              <article className="requirement-source">
-                <div className="requirement-source-label">
-                  <span>{task.requirement_document?.name ?? "用户提交的完整内容"}
-                    {task.requirement_document?.context_mode === "file"
-                      && <em>Agent 分段读取</em>}</span>
-                  <small>{task.requirement.split(/\r?\n/).length} 行 · {task.requirement.length} 字符</small>
-                </div>
-                <Markdown text={task.requirement} />
-              </article>
+              <Annotatable
+                taskId={task.id}
+                artifact={TASK_REQUIREMENT_ARTIFACT}
+                fallbackFile="需求原文"
+                kind="doc"
+                items={notes}
+                enabled={canCreateAnnotation}
+                onAdded={() => setNotesPulse((tick) => tick + 1)}
+              >
+                <article className="requirement-source">
+                  <div className="requirement-source-label">
+                    <span>{task.requirement_document?.bundle_name
+                      ?? task.requirement_document?.name
+                      ?? "用户提交的完整内容"}
+                      {task.requirement_document?.context_mode === "file"
+                        && <em>Agent 分段读取</em>}</span>
+                    <small>{task.requirement.split(/\r?\n/).length} 行 · {task.requirement.length} 字符</small>
+                  </div>
+                  <Markdown text={task.requirement} resolveImage={(path) =>
+                    task.requirement_document?.assets?.some(
+                      (asset) => asset.path === path)
+                      ? `/tasks/${encodeURIComponent(task.id)}/requirement-asset?path=${encodeURIComponent(path)}`
+                      : undefined} />
+                </article>
+              </Annotatable>
             ) : materialView === "chain" ? (
               <>
                 <RequirementGraph task={task} onOpenTask={onOpenTask} />
@@ -888,9 +1055,9 @@ export function TaskWorkspace({
                       taskId={task.id}
                       repositories={task.requirement_graph.repositories}
                       defaultAssignee={task.luban_account}
+                      defaultTicket={task.ticket}
                       selection={repositoryAssignees}
                       onSelectionChange={setRepositoryAssignees}
-                      onSaved={onChanged}
                     />
                   </>}
               </>
@@ -961,9 +1128,13 @@ export function TaskWorkspace({
                 fallbackFile={activeMeta?.label ?? active}
                 kind={activeMeta?.kind === "diff" ? "code" : "doc"}
                 items={notes}
-                enabled={canContributeReview
-                  && !["completed", "canceled"].includes(task.status)}
-                onAdded={() => setNotesPulse((tick) => tick + 1)}
+                enabled={canCreateAnnotation}
+                onAdded={() => {
+                  setNotesPulse((tick) => tick + 1);
+                  if (activeMeta?.purpose === "pipeline_evidence_gap") {
+                    setWorkspaceView("insights");
+                  }
+                }}
               >
                 {materialView === "diff"
                   ? <GitDiff text={content} branch={branch}
@@ -1228,9 +1399,9 @@ export function TaskWorkspace({
                         taskId={task.id}
                         repositories={task.requirement_graph!.repositories}
                         defaultAssignee={task.luban_account}
+                        defaultTicket={task.ticket}
                         selection={repositoryAssignees}
                         onSelectionChange={setRepositoryAssignees}
-                        onSaved={onChanged}
                       />
                     </>
                   )}

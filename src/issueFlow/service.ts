@@ -24,6 +24,8 @@ import {
 } from "node:fs";
 import { join, relative } from "node:path";
 import { CloudSession, type Outcome } from "../sessionDriver.ts";
+import type { VisionCapabilityConfig, VisionModelChoice } from "../visionCapability.ts";
+import type { Notifier, NotifyQuestion } from "../notifier.ts";
 import { EventLog, type SemanticEvent } from "../semanticEvents.ts";
 import { TranscriptStore } from "../transcriptStore.ts";
 import { GateService } from "../gateService.ts";
@@ -261,6 +263,23 @@ function normalizeEnvironmentInput(
   };
 }
 
+/** 问题域知识上下文(ADR-0005):货架 skill 匹配问题会话用的画像=
+ * 登记的关联仓 + 绑定的业务模块。纯函数单源,openDriver 装配与测试
+ * 共用——改口径只动这里。 */
+export function issueKnowledgeContext(state: IssueSessionState): {
+  repositories: string[];
+  technologies: string[];
+  businessModuleIds: string[];
+} {
+  return {
+    repositories: state.repo_urls?.length
+      ? [...state.repo_urls]
+      : state.repo_url ? [state.repo_url] : [],
+    technologies: [],
+    businessModuleIds: state.module_id ? [state.module_id] : [],
+  };
+}
+
 /** vault 行·后台凭据:playbook 契约三个系统账号同密码,按形状存三套,
  * vault 校验与工具取密(sopuser)都不用特判。 */
 function backendVaultRow(
@@ -343,6 +362,11 @@ export interface IssueFlowOptions {
    * 这是裸构造(测试/旧部署)的兼容缺省;正式接线在 serve 层,那里的
    * auth.issueFlowMode 对真人缺省返回 fixed。 */
   issueFlowMode?: (account: string) => IssueFlowMode;
+  /** 月光免审批(个人设置「人工介入程度」的过程轴,现读现判):开着时
+   * 分析结论闸由系统代答——analysis_confirm 全量;conclude 仅提案
+   * non_issue 且自报高置信。env_needed/env_verify 问的是用户事实,
+   * 永不代答(ADR-0006)。回调缺席或返回非真=关闭,行为与现状一致。 */
+  moonlight?: (account?: string) => boolean | undefined;
   gitCredential?: (account: string) =>
     (GitCredential & { email?: string }) | undefined;
   opsTools?: IssueOpsTools;
@@ -351,6 +375,17 @@ export interface IssueFlowOptions {
   platformUrl?: string;
   vault?: IssueEnvironmentVault;
   maxConcurrentTurns?: number;
+  /** 可选的专用视觉模型角色(与需求侧 TaskService 同形)。openDriver
+   * 组装会话时按同款逻辑变成 VisionCapabilityConfig,主会话由此获得
+   * inspect_image 工具;缺席则工具不出现,行为照旧。 */
+  vision?: VisionModelChoice;
+  /** 小鲁班通知(公共能力,与需求侧同一实例):AI 举卡等决策时提醒
+   * 归属用户。缺席(演示形态)不通知,流程照走——通知是旁路,不是
+   * 问题流的启动依赖。 */
+  notifier?: Notifier;
+  /** 通知链接的对外入口(--public-url):深链落到问题会话工作台
+   * /issues/<id>,与需求侧 /work/<id> 同一地位。 */
+  linkBase?: string;
   isolation?: IssueIsolation;
   /** 容器属主判定的运行时形态:生产缺席即按进程真实形态判定(非 root
    * 部署守卫直接 false,零开销);只有测试注入它来模拟 root 宿主。 */
@@ -879,7 +914,8 @@ export class IssueFlowService {
     if (live.driver) return live.driver.continueWith(message);
     const driver = await this.openDriver(live);
     return driver.startResume(issueResumePrompt(live.state, message,
-      this.environmentCredentials(live)));
+      this.environmentCredentials(live),
+      { moonlight: this.moonlightOn(live) }));
   }
 
   /** 并发额度:同时进行的回合数(等待用户/闲置/挂起的会话不占额度)。 */
@@ -899,7 +935,8 @@ export class IssueFlowService {
         const driver = await this.openDriver(live);
         return driver.start(live.state.mode === "fixed"
           ? issueFixedOpeningPrompt(live.state,
-            this.environmentCredentials(live))
+            this.environmentCredentials(live),
+            { moonlight: this.moonlightOn(live) })
           : issueOpeningPrompt(live.state,
             this.environmentCredentials(live)));
       });
@@ -1070,7 +1107,105 @@ export class IssueFlowService {
       this.releaseDriver(live);
     }
     saveState(live.root, live.state);
+    // AI 要人拍板才通知(对齐需求侧公共能力);suspended/idle/终态是
+    // 结论后的动作与正常交还,不催人。
+    if (state.status === "waiting_user") {
+      this.notifyWaitingCard(live);
+      this.maybeAutoAnswerGate(live);
+    }
     if (isTerminal(state.status)) this.releaseDriver(live);
+  }
+
+  /** 等待卡 → 小鲁班(需求侧 notifyWaiting 的同款公共能力)。两条纪律:
+   * - 旁路 fail-open:投递失败只记日志,回合状态一字不动;
+   * - 幂等靠 notifier 按 waiting_id 去重,恢复重放不重复轰炸。
+   * 闸卡与 Agent 卡并存时闸优先——与作答分派(answer)同一优先级;
+   * 通知里只给人话文案:决策码是页面作答协议,发给用户只会把人看懵。 */
+  private notifyWaitingCard(live: LiveIssue): void {
+    const { notifier, linkBase } = this.options;
+    if (!notifier) return;
+    const { state } = live;
+    const gate = state.gate;
+    const record = gate ? undefined : live.humanGate.pending()[0];
+    if (!gate && !record) return;
+    const questions: NotifyQuestion[] = gate
+      ? gate.question.questions.map((item) => ({
+          question: item.question,
+          options: item.options.map((option) => option.label),
+        }))
+      : agentCardQuestions(record!).map((item) => ({
+          question: String(item.question ?? ""),
+          options: (item.options ?? []).map(String),
+        }));
+    notifier.notifyWaiting({
+      waitingId: gate ? gate.id : record!.waiting_id,
+      stateVersion: gate ? gate.state_version : record!.state_version,
+      taskId: live.id,
+      subject: state.ticket
+        ? `${state.title}(单号 ${state.ticket})` : state.title,
+      account: state.account,
+      step: state.stage_note || state.stage,
+      context: gate ? gate.context : record?.context,
+      questions,
+      summary: "问题处理需要你决策",
+      link: `${(linkBase ?? "").replace(/\/+$/, "")}`
+        + `/issues/${encodeURIComponent(live.id)}`,
+    }).catch((error) =>
+      this.log(`[issue-flow] ${live.id} 等待卡通知失败(旁路,流程照走): `
+        + String(error)));
+  }
+
+  /** 月光轴现读现判:会话开/续聊渲染节奏、闸代答判定都读当下值,
+   * 用户改设置即刻生效(与需求流"每张卡到达时现读"同纪律)。 */
+  private moonlightOn(live: LiveIssue): boolean {
+    return this.options.moonlight?.(live.state.account) === true;
+  }
+
+  /** 月光免审批的闸代答(ADR-0006):只代答"确认类"闸——
+   * analysis_confirm 全量(推荐码表定死 confirm);conclude 仅提案
+   * non_issue 且自报高置信(闭环无下游闸,分级保守)。env_needed/
+   * env_verify 问的是用户的事实(环境配置/验证结果),永不代答。
+   * 作答 defer 到回合收口(turning 释放)之后,走 answer() 同一裁决
+   * 通道——现场账、通知、续跑与真人作答同款,事后可经现有回退推翻。 */
+  private maybeAutoAnswerGate(live: LiveIssue): void {
+    const { state } = live;
+    const gate = state.gate;
+    if (!gate) return;
+    if (!this.moonlightOn(live)) return;
+    // 检视回合的确认卡永不代答(ADR-0007):用户提了意见、agent 按意见
+    // 修订重提,这张卡就是"意见是否被吸收"的复核点——代答放行等于
+    // 检视闭环被架空。普通流程(无检视回合)不受影响。
+    if (state.review_active === true) return;
+    let code: string | undefined;
+    if (gate.kind === "analysis_confirm") code = "confirm";
+    else if (gate.kind === "conclude"
+        && gate.proposal?.conclusion === "non_issue"
+        && gate.proposal?.confidence === "high") code = "non_issue";
+    if (!code) return;
+    const issueId = live.id;
+    const version = gate.state_version;
+    const kind = gate.kind;
+    this.log(`[issue-flow] ${issueId} 月光免审批:闸 ${kind} 自动作答(${code})`);
+    setTimeout(() => {
+      try {
+        const summary = this.answer(issueId, {
+          state_version: version,
+          code,
+          decision: `月光免审批自动确认(${gateOptionLabel(kind, code)})`,
+        });
+        void this.options.notifier?.notifyOutcome({
+          taskId: issueId,
+          account: state.account,
+          status: summary.status,
+          summary: `月光免审批:分析结论已自动确认(${gateOptionLabel(kind, code)})`,
+          link: `${(this.options.linkBase ?? "").replace(/\/+$/, "")}`
+            + `/issues/${encodeURIComponent(issueId)}`,
+        }).catch(() => undefined);
+      } catch (error) {
+        this.log(`[issue-flow] ${issueId} 月光自动作答失败(旁路,卡留待人): `
+          + String(error instanceof Error ? error.message : error));
+      }
+    }, 0);
   }
 
   private releaseDriver(live: LiveIssue): void {
@@ -1094,6 +1229,25 @@ export class IssueFlowService {
       model: fromSettings.model ?? this.options.model,
       json: fromSettings.json ?? this.options.modelsJson,
     };
+  }
+
+  /** 当前生效的视觉角色(TaskService.taskVision 的同款组装):角色必须
+   * 指向 models.json 中明确声明支持图片的模型,配置漂移时宁可不暴露
+   * 工具,也不把图片误发给文本模型。缓存落会话工作区(与需求侧
+   * workspace/vision-cache 同一约定;代码仓在其下的 repo/ 子目录,
+   * 缓存不会被推送或结论文档卷走)。 */
+  private visionCapability(workspace: string): VisionCapabilityConfig | undefined {
+    const choice = this.options.vision;
+    if (!choice?.provider || !choice?.model) return undefined;
+    const spec = (this.modelChoice().json as {
+      providers?: Record<string, { models?: Array<{
+        id?: string; input?: string[];
+      }> }>;
+    }).providers?.[choice.provider]?.models?.find((item) =>
+      String(item?.id ?? "") === choice.model);
+    return Array.isArray(spec?.input) && spec.input.includes("image")
+      ? { choice, cacheDir: join(workspace, "vision-cache"), timeoutMs: 45_000 }
+      : undefined;
   }
 
   private async ensureContainer(live: LiveIssue): Promise<void> {
@@ -1159,6 +1313,10 @@ export class IssueFlowService {
     this.log(`[issue-flow] ${live.id} 装载技能: ${
       skillPaths.map((path) => path.split("/").at(-2)).join(", ")}`);
     const service = this;
+    // 团队货架 skill 进问题会话(ADR-0005):问题域知识上下文=登记的
+    // 关联仓 + 绑定的业务模块;匹配走 issue 口径(通用工程知识豁免、
+    // 技术栈维度不参与)。部署源与需求侧同一个 dataDir/skills。
+    const knowledgeContext = issueKnowledgeContext(live.state);
     const context: IssueToolContext = {
       state: live.state,
       workspace: live.root,
@@ -1208,6 +1366,10 @@ export class IssueFlowService {
       agentDir,
       // 改编版 playbook 技能(精确到 SKILL.md 文件的 allowlist 形态)。
       repositorySkillPaths: skillPaths,
+      // 团队货架 skill(通用定位类知识的问题会话供给线,ADR-0005)。
+      hostSkillsDir: join(this.options.dataDir, "skills"),
+      knowledgeContext,
+      knowledgeScope: "issue",
       provider: model.provider,
       model: model.model,
       eventLog: new EventLog(join(live.root, "events.jsonl")),
@@ -1217,11 +1379,12 @@ export class IssueFlowService {
         // issue-analysis.md 都在里面)。台账类文件由 GateService 的
         // 宿主账本规则拒写;问题域追加自己的账本与技能目录——
         // issue.json 是推送门禁的依据,skills/ 是行为契约,都不能
-        // 让 Agent 自己改。
+        // 让 Agent 自己改;货架 skill 快照(.mae-flow-work/host-skills)
+        // 同罪:只读投影,Agent 没有写它的理由。
         workspace: live.root,
         cwd: live.root,
         extraLedgerFiles: ["issue.json", "issue.json.tmp"],
-        extraLedgerDirs: ["skills"],
+        extraLedgerDirs: ["skills", ".mae-flow-work/host-skills"],
         failClosed: false,
         log: (message) => this.log(`[issue-gate] ${message}`),
       }),
@@ -1229,6 +1392,9 @@ export class IssueFlowService {
       allowHumanQuestions: true,
       allowSubagents: false,
       extraTools: createIssueTools(context),
+      // 视觉旁路(与需求侧同一套配置语义):配了有效角色才注入
+      // inspect_image,主上下文只收文字结论。
+      vision: this.visionCapability(live.root),
       currentStep: () => live.state.stage_note || live.state.stage,
       compactAnchor: () => `问题会话「${live.state.title}」;`
         + `阶段 ${live.state.stage};单号 ${live.state.ticket ?? "未绑定"}`,
@@ -1302,7 +1468,8 @@ export class IssueFlowService {
       driver.injectDecision(record);
       return driver.startResume(issueResumePrompt(live.state,
         `用户对问题卡的答复:\n${renderDecision(record)}`,
-        this.environmentCredentials(live)));
+        this.environmentCredentials(live),
+        { moonlight: this.moonlightOn(live) }));
     });
     return summarize(live.state);
   }

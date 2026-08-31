@@ -29,7 +29,7 @@
  *   GET/POST /tasks/:id/developer-assistant             → 旁路开发助手现场/发起处理
  *   POST /tasks/:id/pause|resume|cancel                 → 200;任务控制
  *   POST /tasks/:id/rerun                               → 200;原位清空并从头重跑
- *   DELETE /tasks/:id                                   → 200;管理员彻底删除真终态历史
+ *   DELETE /tasks/:id                                   → 200;责任人/管理员彻底删除真终态历史
  *   GET  /tasks/:id/interrupts                          → 发过的插话 + 送达与否
  *   GET  /tasks/:id/annotations                         → 待送出批注 + 锚点现状
  *   POST /tasks/:id/annotations {artifact,file,line,anchor,note,kind} → 201
@@ -105,6 +105,10 @@ import {
   type WishStatus,
 } from "./wishWall.ts";
 import type { LubanApprovalGateway } from "./lubanApproval.ts";
+import {
+  parseRequirementBundle,
+  RequirementBundleError,
+} from "./requirementBundle.ts";
 import { handleIssueRoutes } from "./issueFlow/routes.ts";
 import {
   SkillLibraryError,
@@ -798,14 +802,23 @@ export function createTaskServer(
       // 问题流 API(/issues/*):独立于任务命名空间;未启用时由路由
       // 自己 404。必须先于静态托管兜底(非 /tasks 的 GET 会被接管)。
       if (parts[0] === "issues") {
-        const handled = await handleIssueRoutes(request, response, parts, {
-          issueFlow: options.issueFlow,
-          dts: options.dts,
-          viewer: viewer ?? undefined,
-          authEnabled: Boolean(options.auth),
-          log: options.log,
-        });
-        if (handled) return;
+        // GET /issues/:id 既是详情 API 也是会话工作台的深链地址(小鲁班
+        // 通知点开即达)。与 /tasks/:id 的旧通知兼容同一判别式:浏览器
+        // 导航(Accept 要 text/html)让给前端 SPA,程序 fetch(默认
+        // Accept: */*)照旧拿 JSON,API 契约零变化。
+        const issuePage = request.method === "GET"
+          && parts.length === 2
+          && String(request.headers.accept ?? "").includes("text/html");
+        if (!issuePage) {
+          const handled = await handleIssueRoutes(request, response, parts, {
+            issueFlow: options.issueFlow,
+            dts: options.dts,
+            viewer: viewer ?? undefined,
+            authEnabled: Boolean(options.auth),
+            log: options.log,
+          });
+          if (handled) return;
+        }
       }
 
       // 下单表单的数据源:模型清单与当前默认。登录即可看(不是密钥,
@@ -857,11 +870,32 @@ export function createTaskServer(
         }
       }
 
+      // 仓库地址在下单前就做轻量可达性探测。探测使用服务端的个人
+      // Git 身份，浏览器只拿“可访问/原因”，不会接触令牌或 Git 输出。
+      if (request.method === "POST"
+          && url.pathname === "/repositories/probe") {
+        if (options.auth && !viewer) {
+          return json(response, 401, { error: "请先登录" });
+        }
+        try {
+          const body = await readBody(request);
+          const repositories = Array.isArray(body.repositories)
+            ? body.repositories.map(String) : [];
+          return json(response, 200, await service.probeRepositories({
+            repositories,
+            account: viewer?.username,
+          }));
+        } catch (error) {
+          return json(response, 400, { error: humanError(error) });
+        }
+      }
+
       const protectedRoute =
         url.pathname === "/history" || parts[0] === "tasks"
         || url.pathname === "/launch-knowledge-preview"
         || url.pathname === "/knowledge-insights"
         || parts[0] === "reviews" || parts[0] === "repository-skills"
+        || parts[0] === "repositories"
         || parts[0] === "skills" || parts[0] === "business-modules"
         || parts[0] === "repository-profiles"
         || parts[0] === "knowledge-candidates"
@@ -1697,7 +1731,10 @@ export function createTaskServer(
           && (url.pathname === "/" || parts[0] !== "tasks")) {
         const workspaceRoute = parts[0] === "work" && parts.length >= 2;
         const helpRoute = parts[0] === "help" && extname(url.pathname) === "";
-        const appRoute = workspaceRoute || helpRoute;
+        // 问题会话工作台深链(小鲁班通知的落点):上一段已把带 text/html
+        // 的 GET /issues/:id 让出,这里只管把它接住交给 React。
+        const issuesRoute = parts[0] === "issues" && parts.length === 2;
+        const appRoute = workspaceRoute || helpRoute || issuesRoute;
         const exactFile = options.webRoot
           ? staticFile(options.webRoot, url.pathname)
           : undefined;
@@ -1722,11 +1759,53 @@ export function createTaskServer(
         }
         return json(response, 404, { error: "未知路径" });
       }
+      if (request.method === "POST"
+          && url.pathname === "/requirement-bundles/preview") {
+        if (options.auth && !viewer) {
+          return json(response, 401, { error: "请先登录" });
+        }
+        try {
+          const body = await readBody(request, 42 * 1024 * 1024);
+          const bundle = parseRequirementBundle(body.name, body.content_base64);
+          return json(response, 200, {
+            bundle_name: bundle.bundle_name,
+            document_name: bundle.document_name,
+            requirement: bundle.requirement,
+            assets: bundle.assets.map((asset) => ({
+              path: asset.path,
+              source_path: asset.source_path,
+              mime_type: asset.mime_type,
+              bytes: asset.bytes,
+              content_base64: asset.content.toString("base64"),
+            })),
+          });
+        } catch (error) {
+          if (error instanceof RequirementBundleError) {
+            return json(response, 400, { error: error.message });
+          }
+          throw error;
+        }
+      }
       if (request.method === "POST" && url.pathname === "/tasks") {
-        const body = await readBody(request);
+        const body = await readBody(request, 42 * 1024 * 1024);
+        let requirementBundle: ReturnType<typeof parseRequirementBundle> | undefined;
+        try {
+          if (body.requirement_bundle) {
+            requirementBundle = parseRequirementBundle(
+              body.requirement_bundle.name,
+              body.requirement_bundle.content_base64,
+            );
+          }
+        } catch (error) {
+          if (error instanceof RequirementBundleError) {
+            return json(response, 400, { error: error.message });
+          }
+          throw error;
+        }
         const title = body.title === undefined
           ? undefined : String(body.title).trim() || undefined;
-        const requirement = String(body.requirement ?? "").trim();
+        const requirement = String(
+          requirementBundle?.requirement ?? body.requirement ?? "").trim();
         if (!requirement) {
           return json(response, 400, { error: "requirement 不能为空" });
         }
@@ -1745,8 +1824,9 @@ export function createTaskServer(
         // 单人/测试)沿用请求体里的账号。
         const account = viewer?.username
           ?? (body.account ? String(body.account) : undefined);
-        const requirementDocumentName = body.requirement_document_name === undefined
-          ? undefined : String(body.requirement_document_name);
+        const requirementDocumentName = requirementBundle?.document_name
+          ?? (body.requirement_document_name === undefined
+            ? undefined : String(body.requirement_document_name));
         // 任务级可配(用户拍板):交付代码仓、交付方式(选项来自内核)、修复轮预算。
         const repo = body.repo === undefined ? undefined : String(body.repo);
         const repos = Array.isArray(body.repos)
@@ -1757,6 +1837,20 @@ export function createTaskServer(
           ? undefined : String(body.lane).trim() || undefined;
         const ticket = body.ticket === undefined
           ? undefined : String(body.ticket);
+        const repositoryTickets = body.repository_tickets
+            && typeof body.repository_tickets === "object"
+            && !Array.isArray(body.repository_tickets)
+          ? Object.fromEntries(Object.entries(
+              body.repository_tickets as Record<string, unknown>,
+            ).map(([repository, value]) => [repository, String(value ?? "")]))
+          : undefined;
+        const repositoryAssignees = body.repository_assignees
+            && typeof body.repository_assignees === "object"
+            && !Array.isArray(body.repository_assignees)
+          ? Object.fromEntries(Object.entries(
+              body.repository_assignees as Record<string, unknown>,
+            ).map(([repository, value]) => [repository, String(value ?? "")]))
+          : undefined;
         const baseline = body.baseline === undefined
           ? undefined : String(body.baseline);
         const model = body.model
@@ -1890,11 +1984,35 @@ export function createTaskServer(
             // 防止预检后目录新增资产而被静默带入。
             knowledgePreviewDigest = preview.selection_digest;
           }
+          // UI 会即时探测，但真正“不让坏地址创建任务”必须由服务端兜底：
+          // 旧页面、脚本或竞态都不能绕过这道闸。固定仓部署没有逐单地址，
+          // 由启动自检负责，不在这里重复探测。知识清单契约先判，保持旧
+          // 客户端拿到“先核对清单”的 409 后能按原流程自愈。
+          const requestedRepositories = repos?.length
+            ? repos : repo ? [repo] : [];
+          if (service.launchOptions().repo.enabled
+              && requestedRepositories.length > 0) {
+            const probed = await service.probeRepositories({
+              repositories: requestedRepositories,
+              account,
+            });
+            const failed = probed.repositories.filter((item) => !item.reachable);
+            if (failed.length) {
+              return json(response, 400, {
+                error: "代码仓不可访问，任务未创建："
+                  + failed.map((item) => `${item.repository}（${item.message}）`).join("；"),
+                repositories: probed.repositories,
+              });
+            }
+          }
           return json(response, 201, service.create(requirement,
             {
               title, account, repo, repos,
               requirementDocumentName,
-              lane, ticket, baseline, model,
+              requirementBundleName: requirementBundle?.bundle_name,
+              requirementAssets: requirementBundle?.assets,
+              lane, ticket, repositoryTickets, repositoryAssignees,
+              baseline, model,
               repairRounds, taskInstructions,
               workflowDefinition, workflowSource,
               repositorySkillCatalogToken,
@@ -1922,6 +2040,20 @@ export function createTaskServer(
           const task = service.get(id);
           if (!task) return json(response, 404, { error: `任务 ${id} 不存在` });
           return json(response, 200, task);
+        }
+        if (request.method === "GET" && parts.length === 3
+            && parts[2] === "requirement-asset") {
+          const path = url.searchParams.get("path") ?? "";
+          const asset = service.requirementAsset(id, path);
+          if (!asset) return json(response, 404, { error: "需求图片不存在" });
+          response.writeHead(200, {
+            "content-type": asset.mime_type,
+            "content-length": asset.content.length,
+            "content-disposition": "inline",
+            "x-content-type-options": "nosniff",
+            "cache-control": "private, max-age=86400",
+          });
+          return response.end(asset.content);
         }
         if (request.method === "POST" && parts.length === 3
             && parts[2] === "knowledge-candidates") {
@@ -1970,11 +2102,22 @@ export function createTaskServer(
           }
         }
         if (request.method === "DELETE" && parts.length === 2) {
-          if (viewer?.role !== "admin") {
-            return json(response, 403, { error: "只有管理员可以彻底删除历史任务" });
+          const target = service.get(id);
+          let taskAccount = target?.luban_account;
+          if (!target && service.options.projection) {
+            const identity = await service.options.projection.taskIdentity(id);
+            taskAccount = identity.luban_account;
           }
+          if (options.auth
+              && viewer?.role !== "admin"
+              && (!viewer || !taskAccount || viewer.username !== taskAccount)) {
+            return json(response, 403, {
+              error: "只能删除自己负责的历史任务",
+            });
+          }
+          const deleted = await service.hardDeleteHistory(id);
           options.lubanApproval?.purgeTask(id);
-          return json(response, 200, await service.hardDeleteHistory(id));
+          return json(response, 200, deleted);
         }
         if (request.method === "POST" && parts[2] === "decision") {
           const target = service.get(id);
@@ -2017,6 +2160,13 @@ export function createTaskServer(
               ? Object.fromEntries(Object.entries(body.repository_assignees)
                   .map(([repositoryId, account]) =>
                     [repositoryId, String(account)]))
+              : undefined,
+            repository_tickets: body.repository_tickets
+              && typeof body.repository_tickets === "object"
+              && !Array.isArray(body.repository_tickets)
+              ? Object.fromEntries(Object.entries(body.repository_tickets)
+                  .map(([repositoryId, ticket]) =>
+                    [repositoryId, String(ticket)]))
               : undefined,
             delivery_paths: Array.isArray(body.delivery_paths)
               ? body.delivery_paths.map(String) : undefined,
@@ -2070,8 +2220,15 @@ export function createTaskServer(
                 .map(([repositoryId, account]) =>
                   [repositoryId, String(account)]))
             : {};
+          const tickets = body.repository_tickets
+            && typeof body.repository_tickets === "object"
+            && !Array.isArray(body.repository_tickets)
+            ? Object.fromEntries(Object.entries(body.repository_tickets)
+                .map(([repositoryId, ticket]) =>
+                  [repositoryId, String(ticket)]))
+            : undefined;
           return json(response, 200,
-            service.assignRequirementRepositories(id, assignments));
+            service.assignRequirementRepositories(id, assignments, tickets));
         }
         // push 前人工确认交付范围(任务级显式开关)。未显式设置时按
         // 个人默认；开着时宿主在 prepush 收敛后挂云端原生 diff 卡。
@@ -2114,6 +2271,13 @@ export function createTaskServer(
               ? Object.fromEntries(Object.entries(body.repository_assignees)
                   .map(([repositoryId, account]) =>
                     [repositoryId, String(account)]))
+              : undefined,
+            repository_tickets: body.repository_tickets
+              && typeof body.repository_tickets === "object"
+              && !Array.isArray(body.repository_tickets)
+              ? Object.fromEntries(Object.entries(body.repository_tickets)
+                  .map(([repositoryId, ticket]) =>
+                    [repositoryId, String(ticket)]))
               : undefined,
           }));
         }
@@ -2432,15 +2596,16 @@ export function createTaskServer(
             ?? service.panelFile(id, "panel-pulse.js");
           const root = resolveArtifactRoot(
             target.workspace, panel ? dirname(dirname(panel)) : undefined);
+          const sources = { pipelineRoot: join(target.workspace, "pipeline") };
           if (parts.length === 3) {
-            // 没有现场时给空列表:流程还没走到 init 不是错误。
+            // 代码现场尚未 init 时也可能已有任务级流水线补证材料；两路
+            // 独立 fail-open，不能用 root 缺失把 pipeline/ 一起吞掉。
             return json(response, 200,
-              root ? await listArtifactsAsync(root) : []);
+              await listArtifactsAsync(root, sources));
           }
           // name 里带 `/`(单号目录/文件名):编码与未编码两种形态都收。
           const name = decodeURIComponent(parts.slice(3).join("/"));
-          const artifact = root
-            ? await readArtifactAsync(root, name) : undefined;
+          const artifact = await readArtifactAsync(root, name, sources);
           if (!artifact) {
             return json(response, 404,
               { error: `没有可检视的产物「${name}」` });

@@ -17,6 +17,7 @@ import { readJson } from "../src/jsonBody.ts";
 import {
   mkdirSync,
   mkdtempSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -28,6 +29,7 @@ import {
   compareDeliveryRevisions,
   deliveryChangeSnapshot,
   DIFF_NAME,
+  PIPELINE_EVIDENCE_GAP_ARTIFACT,
   listArtifacts,
   listArtifactsAsync,
   readArtifact,
@@ -144,6 +146,34 @@ test("异步工作台读侧与原有差异快照语义一致", async () => {
   const snapshot = await readArtifactAsync(cwd, DIFF_NAME);
   assert.match(String(snapshot?.content), /异步路径修改/);
   assert.match(String(snapshot?.content), /异步路径未跟踪/);
+});
+
+test("任务级流水线证据缺口无需代码现场也能在工作台列出并读取", async () => {
+  const taskRoot = mkdtempSync(join(tmpdir(), "mfc-pipeline-material-"));
+  const pipelineRoot = join(taskRoot, "pipeline");
+  mkdirSync(pipelineRoot);
+  writeFileSync(join(pipelineRoot, "流水线证据缺口.md"),
+    "# 流水线证据缺口\n\n请粘贴平台报错原文。\n");
+
+  const items = await listArtifactsAsync(undefined, { pipelineRoot });
+  assert.deepEqual(names(items), [PIPELINE_EVIDENCE_GAP_ARTIFACT]);
+  assert.equal(items[0].purpose, "pipeline_evidence_gap");
+  const artifact = await readArtifactAsync(
+    undefined, PIPELINE_EVIDENCE_GAP_ARTIFACT, { pipelineRoot });
+  assert.match(String(artifact?.content), /粘贴平台报错原文/);
+});
+
+test("任务级流水线材料不跟随越出白名单目录的符号链接", async () => {
+  const taskRoot = mkdtempSync(join(tmpdir(), "mfc-pipeline-boundary-"));
+  const pipelineRoot = join(taskRoot, "pipeline");
+  mkdirSync(pipelineRoot);
+  const secret = join(taskRoot, "secret.md");
+  writeFileSync(secret, "不能通过材料接口读取\n");
+  symlinkSync(secret, join(pipelineRoot, "流水线证据缺口.md"));
+
+  assert.deepEqual(await listArtifactsAsync(undefined, { pipelineRoot }), []);
+  assert.equal(await readArtifactAsync(
+    undefined, PIPELINE_EVIDENCE_GAP_ARTIFACT, { pipelineRoot }), undefined);
 });
 
 test("Mae-Flow 流程状态不混入代码差异,普通未跟踪文件仍展示", () => {
@@ -448,15 +478,30 @@ test("路由 GET /tasks/:id/artifacts[/:name]:能看任务就能看材料", asyn
     assert.equal(list.status, 200);
     assert.deepEqual(await readJson(list), []);
 
-    // 现场铺上材料后,同一路由就能列出来、读出来。
+    // 任务级补证材料不依赖代码现场，也必须先能列出来、读出来。
     const workspace = service.get(created.id)!.workspace;
+    const pipeline = join(workspace, "pipeline");
+    mkdirSync(pipeline, { recursive: true });
+    writeFileSync(join(pipeline, "流水线证据缺口.md"),
+      "# 流水线证据缺口\n\n粘贴真实报错。\n");
+    const pipelineOnly = await fetch(`${base}/tasks/${created.id}/artifacts`)
+      .then((response) => readJson(response)) as ArtifactMeta[];
+    assert.deepEqual(names(pipelineOnly), [PIPELINE_EVIDENCE_GAP_ARTIFACT]);
+    const pipelineRead = await fetch(`${base}/tasks/${created.id}/artifacts/${
+      encodeURIComponent(PIPELINE_EVIDENCE_GAP_ARTIFACT)}`);
+    assert.equal(pipelineRead.status, 200);
+    assert.match(String((await readJson(pipelineRead)).content), /粘贴真实报错/);
+
+    // 代码现场铺上过程文档后，两类材料在同一接口汇合。
     const ticket = join(workspace, "origin", ".mae-flow-work", "REQ7");
     mkdirSync(ticket, { recursive: true });
     writeFileSync(join(ticket, ".ticket-id"), "REQ7");
     writeFileSync(join(ticket, "spec.md"), "# 规格\n\n决策与证据同屏。\n");
     const listed = await fetch(`${base}/tasks/${created.id}/artifacts`)
       .then((response) => readJson(response)) as ArtifactMeta[];
-    assert.deepEqual(names(listed), ["REQ7/spec.md"]);
+    assert.deepEqual(new Set(names(listed)), new Set([
+      "REQ7/spec.md", PIPELINE_EVIDENCE_GAP_ARTIFACT,
+    ]));
 
     const encoded = encodeURIComponent("REQ7/spec.md");
     const read = await fetch(`${base}/tasks/${created.id}/artifacts/${encoded}`);

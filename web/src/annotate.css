@@ -11,7 +11,7 @@
   transition: background-color 120ms ease, box-shadow 120ms ease;
 }
 
-.annotatable [data-l]:hover {
+.annotatable:not(.is-readonly) [data-l]:hover {
   background: color-mix(in srgb, var(--accent-soft) 62%, transparent);
   box-shadow: inset -2px 0 color-mix(in srgb, var(--accent) 48%, transparent);
   border-radius: 5px;
@@ -83,8 +83,8 @@
 }
 
 /* 深色 diff 里保持局部高亮,不灌入浅紫色块。 */
-.ws-diff .annotatable [data-l]:hover,
-.annotatable .ws-diff [data-l]:hover {
+.ws-diff .annotatable:not(.is-readonly) [data-l]:hover,
+.annotatable:not(.is-readonly) .ws-diff [data-l]:hover {
   background: rgba(99, 102, 241, .14);
   box-shadow: inset -2px 0 rgba(165, 180, 252, .72);
 }

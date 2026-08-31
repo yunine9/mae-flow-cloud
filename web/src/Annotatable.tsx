@@ -44,7 +44,7 @@ export function Annotatable({
   /** 已有圈注:用来在材料上标出"这几处我圈过"。只要这三个字段——
    * 任务批注与问题域检视意见两种账都能结构兼容,不必互为类型。 */
   items: ReadonlyArray<{ artifact: string; line: number; status: string }>;
-  /** MR 合入或用户停止后材料仍可读，但不再显示新增批注入口。 */
+  /** 用户停止后材料仍可读但不新增；已交付任务仍可留下归档批注。 */
   enabled?: boolean;
   onAdded: () => void;
   /** 圈注落账的替代口(问题域检视,ADR-0007):给了就走它,不给走
@@ -165,29 +165,35 @@ export function Annotatable({
     const text = note.trim();
     if (!text) return;
     setBusy(true);
-    const result = addDraft
-      ? await addDraft({ line: draft.line, anchor: draft.anchor, note: text })
-      : await addAnnotation(taskId, {
-        artifact,
-        file: draft.file,
-        line: draft.line,
-        anchor: draft.anchor,
-        note: text,
-        kind: draft.kind,
-      });
-    setBusy(false);
-    if (result.error) {
-      setError(result.error);
-      return;
+    setError("");
+    try {
+      const result = addDraft
+        ? await addDraft({ line: draft.line, anchor: draft.anchor, note: text })
+        : await addAnnotation(taskId, {
+          artifact,
+          file: draft.file,
+          line: draft.line,
+          anchor: draft.anchor,
+          note: text,
+          kind: draft.kind,
+        });
+      if (result.error) {
+        setError(result.error);
+        return;
+      }
+      setDraft(undefined);
+      setNote("");
+      onAdded();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "批注保存失败，请重试");
+    } finally {
+      setBusy(false);
     }
-    setDraft(undefined);
-    setNote("");
-    onAdded();
   }
 
   return (
     <div
-      className="annotatable"
+      className={`annotatable${enabled ? "" : " is-readonly"}`}
       ref={host}
       onClick={open}
       onMouseMove={track}

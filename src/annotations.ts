@@ -18,6 +18,12 @@
 
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 
+/**
+ * 需求原文来自任务快照，不是 .mae-flow-work 下的真实产物。批注仍需一个
+ * 稳定锚点标识，前后端用这个保留值识别它，不能把它混进产物清单。
+ */
+export const TASK_REQUIREMENT_ARTIFACT = "__task_requirement__";
+
 export type AnnotationKind = "doc" | "code";
 /** verified = 人看过改动、点了"确认通过"——这是人的判断,不是系统推断,
  * 所以它只能由按钮产生,永远不会被重锚定自动打上。 */
@@ -499,6 +505,29 @@ export function reanchor(
       if (normalize(line).includes(needle)) hits.push(at + 1);
     });
     if (!hits.length) {
+      // 代码块、表格等一个 DOM 块可能跨多行；浏览器抓到的是整块
+      // textContent，逐行当然永远匹配不到。再按同一归一化口径搜索
+      // 连续全文，并把命中起点还原为源文件行号，避免批注刚记下就 gone。
+      const normalizedLines = lines.map(normalize);
+      const joined = normalizedLines.join("");
+      const first = joined.indexOf(needle);
+      if (first >= 0) {
+        let offset = 0;
+        let line = 1;
+        for (const [at, content] of normalizedLines.entries()) {
+          if (first < offset + content.length) {
+            line = at + 1;
+            break;
+          }
+          offset += content.length;
+        }
+        const repeated = joined.indexOf(needle, first + 1) >= 0;
+        return repeated
+          ? { id: item.id, state: "ambiguous", line }
+          : line === item.line
+            ? { id: item.id, state: "hit", line }
+            : { id: item.id, state: "moved", line };
+      }
       const now = lines[item.line - 1];
       return {
         id: item.id,

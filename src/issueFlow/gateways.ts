@@ -18,6 +18,7 @@
 
 // 错误类型住 errors.ts(#9 集中声明):本模块只负责抛,码由路由层的
 // toHttpError 单点译出。
+import { deflateSync } from "node:zlib";
 import { DtsGatewayUnconfiguredError, McpGatewayError } from "./errors.ts";
 
 export interface McpGatewayConfig {
@@ -285,6 +286,11 @@ export function mcpResultText(result: unknown): string {
 
 // ---- DTS 问题单网关 ----
 
+/** DTS 文件域域名(描述内嵌图的 host)。与 MCP 网关不是一域,当前
+ * 内网部署只有这一个文件域,先写死;多环境再升配置。ticketImages 的
+ * 站内路径归一(#42)用同一常量判"绝对地址是不是本域",别抄两份。 */
+export const DTS_FILE_ORIGIN = "https://dts-szv.clouddragon.huawei.com";
+
 export interface DtsTicketBrief {
   ticket: string;
   title: string;
@@ -362,14 +368,8 @@ function parseTicketList(raw: string): DtsTicketBrief[] {
 export class McpDtsGateway implements DtsGateway {
   constructor(private readonly gateway: McpGateway) {}
 
-  /** DTS 文件域域名(描述内嵌图的 host)。与 MCP 网关不是一域,当前
-   * 内网部署只有这一个文件域,先写死;多环境再升配置。 */
-  private static readonly DTS_FILE_ORIGIN =
-    "https://dts-szv.clouddragon.huawei.com";
-
   async proxyFile(path: string): Promise<{ data: Buffer; contentType: string }> {
-    return this.gateway.fetchWithAuth(
-      `${McpDtsGateway.DTS_FILE_ORIGIN}${path}`);
+    return this.gateway.fetchWithAuth(`${DTS_FILE_ORIGIN}${path}`);
   }
 
   async listByOwner(account: string): Promise<DtsTicketBrief[]> {
@@ -525,11 +525,75 @@ export class UnconfiguredDtsGateway implements DtsGateway {
 
 // ---- Mock 网关:过渡期测试用(--dts-mock) ----
 
+/** 构造一张极小的确定性 PNG(单色块,颜色由种子派生):mock 内嵌图要有
+ * 真图片字节,落盘后才能过 inspect_image 的魔数校验、真被识图;不同
+ * 种子内容不同,内容哈希文件名各归各。编码手写(PNG 三件套 IHDR/IDAT/
+ * IEND + CRC),不引依赖,先例同 src/visionCapability.ts 的探测图。 */
+function mockTicketPng(seed: string): Buffer {
+  const crc32 = (bytes: Buffer): number => {
+    let crc = 0xffffffff;
+    for (const byte of bytes) {
+      crc ^= byte;
+      for (let bit = 0; bit < 8; bit += 1) {
+        crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
+      }
+    }
+    return (crc ^ 0xffffffff) >>> 0;
+  };
+  const chunk = (type: string, data: Buffer): Buffer => {
+    const kind = Buffer.from(type, "ascii");
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(data.length);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(Buffer.concat([kind, data])));
+    return Buffer.concat([length, kind, data, crc]);
+  };
+  const width = 8;
+  const height = 8;
+  const hash = [...seed].reduce((sum, ch) => sum + ch.charCodeAt(0), 0);
+  const color = [hash % 256, (hash * 7) % 256, (hash * 13) % 256];
+  const row = Buffer.alloc(1 + width * 3);
+  for (let x = 0; x < width; x += 1) {
+    row[1 + x * 3] = color[0];
+    row[2 + x * 3] = color[1];
+    row[3 + x * 3] = color[2];
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", ihdr),
+    chunk("IDAT", deflateSync(Buffer.concat(
+      Array.from({ length: height }, () => row)))),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+/** 1007 号模拟单的内嵌图:NFS 站内路径 → 罐头 PNG。proxyFile 按这份
+ * 账回取,路径之外一律如实报错(真实网关 404 语义,不静默给空图)。 */
+const MOCK_TICKET_IMAGES: Record<string, Buffer> = {
+  "/v1/nfs/mock/2026-1007/export-error.png": mockTicketPng("export-error"),
+  "/v1/nfs/mock/2026-1007/topology.png": mockTicketPng("topology"),
+};
+
+/** 1007 号模拟单的描述 HTML(带 <img> 的形态与真实 detailDesc 一致:
+ * 站内绝对路径,经前端代理重写展示、经 ticketImages 落工作区识图)。 */
+const MOCK_TICKET_1007_HTML =
+  '<p>现象:点击「导出」后接口报 500,页面截图如下。</p>'
+  + '<img src="/v1/nfs/mock/2026-1007/export-error.png">'
+  + '<p>对照:正常环境的模块拓扑图。</p>'
+  + '<img src="/v1/nfs/mock/2026-1007/topology.png">';
+
 /** DTS MCP 未接入期间的确定性假单据(2026-08-27 拍板:真实网关完整
  * 实现在位等 URL,过渡期 mock 拉单/查单让全流程可测)。单据集固定
- * 可预期:六个测试单按账号尾号分发,detail 对任何 "MOCK-" 前缀单号
+ * 可预期:七个测试单按账号尾号分发,detail 对任何 "MOCK-" 前缀单号
  * 都给罐头内容——关联转正的"查无此单即拒"路径用乱编单号就能测。
- * 与真实网关同接口,接线处一行替换;启动横幅会醒目标注 MOCK。 */
+ * 1007 号自带内嵌截图(#42):dts_get_ticket 的下载改写与 --dts-mock
+ * 演示形态全链可走。与真实网关同接口,接线处一行替换;启动横幅会
+ * 醒目标注 MOCK。 */
 export class MockDtsGateway implements DtsGateway {
   readonly mock = true;
 
@@ -554,6 +618,17 @@ export class MockDtsGateway implements DtsGateway {
         + "会影响游戏的整体一致性。\n"
         + "影响: 联网/离线两种模式下开局表现不一致,破坏整体体验一致性。",
     },
+    {
+      ticket: "DTS-2026-1007",
+      title: "【DEV·模拟】报表导出失败(带内嵌截图)",
+      status: "打开",
+      description: MOCK_TICKET_1007_HTML,
+      // content 是 AI 看到的正文:截图以 img 形态内嵌在文本里,
+      // dts_get_ticket 的改写才有 URL 可换成本地相对路径。
+      content:
+        "【MOCK 单据】报表导出失败\n\n"
+        + `单号: DTS-2026-1007\n状态: 打开\n${MOCK_TICKET_1007_HTML}`,
+    },
   ];
 
   async listByOwner(account: string): Promise<DtsTicketBrief[]> {
@@ -573,6 +648,7 @@ export class MockDtsGateway implements DtsGateway {
           ticket: known.ticket,
           title: known.title,
           status: known.status,
+          ...(known.description ? { description: known.description } : {}),
           content: known.content,
         };
       }
@@ -590,12 +666,19 @@ export class MockDtsGateway implements DtsGateway {
     }
     this.log?.(`[dts-mock] detail(${ticket}) → 查无此单`);
     throw new McpGatewayError(
-      `DTS 查无此单: ${ticket}(mock 网关只认 DTS-2026-1001 ~ 1006)`);
+      `DTS 查无此单: ${ticket}(mock 网关只认 DTS-2026-1001 ~ 1007)`);
   }
 
-  /** mock 没有真实 DTS 域可代理——罐头单据不带内嵌图,如实报错。 */
-  async proxyFile(_path: string): Promise<{ data: Buffer; contentType: string }> {
-    throw new McpGatewayError("mock 网关没有可代理的 DTS 域文件(描述不含内嵌图)");
+  /** mock 的内嵌图按约定路径回取罐头 PNG(与真实网关的 proxyFile 同
+   * 语义:带单据同源凭据回二进制——mock 无凭据可带,直接给字节)。
+   * 账外路径如实报错,不给"图在但空"的假象。 */
+  async proxyFile(path: string): Promise<{ data: Buffer; contentType: string }> {
+    const image = MOCK_TICKET_IMAGES[path];
+    if (!image) {
+      throw new McpGatewayError(
+        `mock 网关没有这个 DTS 域文件: ${path}(只有 1007 号单的两张内嵌图)`);
+    }
+    return { data: image, contentType: "image/png" };
   }
 }
 

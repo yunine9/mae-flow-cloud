@@ -574,9 +574,13 @@ export function WaitingCard({
     && !!custom[item.question]?.trim());
   const isReviewDecision = requiresDeliverySelection
     || choiceEffects.some((effect) => effect.closes_feedback);
-  const deliveryReady = !requiresDeliverySelection || Boolean(deliverySelection
-    && (selectedHandlesFeedback
-      || deliverySelection.selectedPaths.length > 0));
+  // 返工只要求把意见送回 Agent；服务端会以当前 commit 范围作为默认
+  // 清单。代码 diff 短暂加载失败、版本刚刷新时也必须让人退回修改，
+  // 不能拿“先读到文件树”当返工前置。只有确认推送才要求浏览器拿到
+  // 当前清单且至少选中一个文件。
+  const deliveryReady = !requiresDeliverySelection
+    || selectedHandlesFeedback
+    || Boolean(deliverySelection?.selectedPaths.length);
   const ready = questions.every((item) => {
     const options = item.options ?? [];
     const answered = options.length
@@ -620,7 +624,7 @@ export function WaitingCard({
       return changed ? next : current;
     });
   }, [task.waiting?.waiting_id, annotationKey, choiceKey,
-    deliverySelectionChanged]);
+    deliverySelectionChanged, attachmentCount]);
 
   function pickOption(question: string, option: string) {
     setPicked({ ...picked, [question]: option });
@@ -665,6 +669,7 @@ export function WaitingCard({
         annotationIds,
         repositorySkills,
         confirmsChain ? repositoryAssigneeSelection?.assignments : undefined,
+        confirmsChain ? repositoryAssigneeSelection?.tickets : undefined,
         requiresDeliverySelection ? deliverySelection?.selectedPaths : undefined,
         task.waiting!.waiting_id,
       );

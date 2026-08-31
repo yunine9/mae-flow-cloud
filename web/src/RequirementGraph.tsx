@@ -5,6 +5,12 @@ function repoName(id: string, task: TaskSummary): string {
   return task.requirement_graph?.repositories.find((item) => item.id === id)?.name ?? id;
 }
 
+const childStatusText: Record<string, string> = {
+  queued: "排队中", running: "执行中", pausing: "暂停中", paused: "已暂停",
+  waiting_for_human: "待确认", verifying: "验证中", await_merge: "等待合入",
+  completed: "已完成", stalled: "已停机", failed: "失败", canceled: "已取消",
+};
+
 export function RequirementGraph({
   task,
   onOpenTask,
@@ -13,13 +19,16 @@ export function RequirementGraph({
   onOpenTask?: (taskId: string) => void;
 }) {
   const graph = task.requirement_graph;
-  const [expanded, setExpanded] = useState(graph?.stage === "analysis");
+  const [expanded, setExpanded] = useState(true);
   if (!graph || graph.repositories.length < 2) return null;
   const participantNames = [...new Set([
     ...(task.collaborators ?? []),
     ...graph.repositories.map((repository) => repository.assignee)
       .filter((account): account is string => !!account),
   ])].filter((account) => account !== task.luban_account);
+  const generated = graph.repositories.filter((repository) => repository.task_id).length;
+  const completed = graph.repositories.filter((repository) =>
+    repository.task_status === "completed").length;
   const remaining = new Set(graph.repositories.map((repository) => repository.id));
   const stages: typeof graph.repositories[] = [];
   while (remaining.size) {
@@ -37,15 +46,26 @@ export function RequirementGraph({
     <summary>
       <div>
         <span>CHAIN OVERVIEW</span>
-        <strong id="requirement-graph-title">跨仓大任务协作树</strong>
+        <strong id="requirement-graph-title">主任务与子任务进展</strong>
       </div>
-      <small>{graph.repositories.length} 个仓库 · {graph.dependencies.length} 条硬依赖</small>
+      <small>{generated < graph.repositories.length
+        ? `待拆分 · ${graph.repositories.length} 个仓库`
+        : `${completed}/${graph.repositories.length} 个子任务已完成`}</small>
       <i className="requirement-toggle" aria-hidden />
     </summary>
     <div className="requirement-graph-body">
+      <div className="requirement-root-task">
+        <span>主任务</span>
+        <div><strong>{task.title ?? task.requirement}</strong>
+          <small>{task.ticket ?? task.id} · 统筹需求、依赖与各仓交付</small></div>
+        <em className={task.status}>{childStatusText[task.status] ?? task.status}</em>
+      </div>
+      <div className="requirement-split-label">
+        <span>{generated ? `已拆分为 ${generated} 个仓库子任务` : "确认方案后拆分仓库子任务"}</span>
+      </div>
       <div className="requirement-main-team">
         <div><span>主任务团队</span>
-          <small>1 位主责任人 · {participantNames.length} 位共同开发者</small></div>
+          <small>1 位主责任人 · {participantNames.length} 位参与成员</small></div>
         <div className="requirement-team-pills">
           <strong>{task.luban_account ?? "本地主责任人"}<i>主责任人</i></strong>
           {participantNames.map((account) => <span key={account}>{account}
@@ -68,10 +88,18 @@ export function RequirementGraph({
                   <i aria-hidden />
                   <strong>{repository.name}</strong>
                   {repository.task_id && <button type="button"
-                    onClick={() => onOpenTask?.(repository.task_id!)}>打开任务</button>}
+                    onClick={() => onOpenTask?.(repository.task_id!)}>查看子任务</button>}
                 </div>
+                {repository.task_id && <span className={`repo-task-status ${
+                  repository.task_status ?? "queued"}`}>
+                  {childStatusText[repository.task_status ?? "queued"] ?? repository.task_status}
+                  {repository.current_phase ? ` · ${repository.current_phase}` : ""}
+                </span>}
                 <span className="repo-assignee">
                   {repository.assignee ? `负责人 · ${repository.assignee}` : "负责人待确认"}
+                </span>
+                <span className="repo-ticket">
+                  AR 单号 · {repository.ticket ?? task.ticket ?? "待确认"}
                 </span>
                 {repository.responsibility && <p>{repository.responsibility}</p>}
                 {parents.length > 0 && <span className="repo-prerequisite">

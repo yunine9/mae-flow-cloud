@@ -234,3 +234,27 @@ export function knowledgeMatchesTask(metadata: KnowledgeAssetMetadata, context: 
         context.technologies.includes(item))) return false;
   return true;
 }
+
+/**
+ * 问题会话的匹配口径（ADR-0005）：任务口径上做一处豁免——未限定
+ * 仓库/模块作用域的工程知识是团队通用方法（通用问题定位 skill 就以
+ * 这个形态发布），进所有问题会话。其余与任务同款按作用域过滤；技术
+ * 栈维度问题会话没有口径，不参与过滤。未分类资产维持“不进任务”。
+ */
+export function knowledgeMatchesIssueSession(
+  metadata: KnowledgeAssetMetadata,
+  context: { repositories: string[]; businessModuleIds: string[] },
+): boolean {
+  if (metadata.nature === "unclassified") return false;
+  if (metadata.nature === "engineering"
+      && !metadata.repositories.length
+      && !metadata.business_module_ids.length) return true;
+  const issueRepositories = new Set(
+    context.repositories.map(repositoryIdentity));
+  if (metadata.repositories.length && !metadata.repositories.some((item) =>
+    issueRepositories.has(repositoryIdentity(item)))) return false;
+  if (metadata.business_module_ids.length
+      && !metadata.business_module_ids.some((id) =>
+        context.businessModuleIds.includes(id))) return false;
+  return true;
+}

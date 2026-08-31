@@ -13,9 +13,12 @@ import { PlantUml } from "./PlantUml";
  * {{blue|操作重点}} / {{green|成功结果}} / {{red|风险警告}}。颜色语法
  * 仍由 React 拼元素,不开放任意 HTML 或 CSS。链接只认站内路径与
  * http(s)——其余原样当文本,渲染器不背安全锅。 */
-function inline(text: string): ReactNode[] {
+function inline(
+  text: string,
+  resolveImage?: (path: string) => string | undefined,
+): ReactNode[] {
   return text
-    .split(/(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\)|\{\{(?:blue|green|red)\|[^}]+\}\})/g)
+    .split(/(!\[[^\]]*\]\([^)]+\)|\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\)|\{\{(?:blue|green|red)\|[^}]+\}\})/g)
     .filter(Boolean)
     .map((piece, index) => {
       if (piece.startsWith("**") && piece.endsWith("**")) {
@@ -23,6 +26,14 @@ function inline(text: string): ReactNode[] {
       }
       if (piece.startsWith("`") && piece.endsWith("`")) {
         return <code key={index} className="md-code">{piece.slice(1, -1)}</code>;
+      }
+      const image = piece.match(/^!\[([^\]]*)\]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)$/);
+      if (image) {
+        const source = resolveImage?.(image[2]);
+        return source
+          ? <img key={index} className="md-image" src={source}
+              alt={image[1]} loading="lazy" />
+          : piece;
       }
       const emphasis = piece.match(/^\{\{(blue|green|red)\|([^}]+)\}\}$/);
       if (emphasis) {
@@ -49,8 +60,19 @@ function tableCells(row: string): string[] {
 const isTableRow = (line: string) => /^\s*\|.*\|\s*$/.test(line);
 const isDivider = (line: string) => /^\s*\|[\s:|-]+\|\s*$/.test(line);
 
-export function Markdown({ text }: { text: string }) {
-  const lines = text.split("\n");
+export function Markdown({
+  text,
+  resolveImage,
+}: {
+  text: string;
+  resolveImage?: (path: string) => string | undefined;
+}) {
+  // 需求正文不一定只带 Unix 换行。从工单、富文本或旧系统粘贴时，
+  // 可能混入裸 CR、Unicode line/paragraph separator。若只按 \n 切，
+  // 一条有序列表会跨过这些分隔符：宽松初筛认成列表，后续逐行解析
+  // 却拿不到 match，最终把整张任务页炸掉。这里先把所有文本换行统一
+  // 切开；正文再脏也只能降级展示，不能影响进入任务。
+  const lines = text.split(/\r\n|[\n\r\u2028\u2029]/);
   const blocks: ReactNode[] = [];
   let index = 0;
   let key = 0;
@@ -97,13 +119,13 @@ export function Markdown({ text }: { text: string }) {
         <table key={key++} className="md-table" data-l={at}>
           {head && (
             <thead><tr>
-              {head.map((cell, i) => <th key={i}>{inline(cell)}</th>)}
+              {head.map((cell, i) => <th key={i}>{inline(cell, resolveImage)}</th>)}
             </tr></thead>
           )}
           <tbody>
             {body.map((cells, r) => (
               <tr key={r}>
-                {cells.map((cell, i) => <td key={i}>{inline(cell)}</td>)}
+                {cells.map((cell, i) => <td key={i}>{inline(cell, resolveImage)}</td>)}
               </tr>
             ))}
           </tbody>
@@ -125,7 +147,7 @@ export function Markdown({ text }: { text: string }) {
       blocks.push(
         <ul key={key++} className="md-list">
           {items.map((item, i) => (
-            <li key={i} data-l={item.at}>{inline(item.text)}</li>
+            <li key={i} data-l={item.at}>{inline(item.text, resolveImage)}</li>
           ))}
         </ul>);
       continue;
@@ -133,18 +155,22 @@ export function Markdown({ text }: { text: string }) {
     // 有序列表:连续 "1." / "1)" 行。内核与 CHAIN 文档满篇编号步骤,
     // 不认它们的后果就是整屏"没渲染的文本"(内网实锤)。编号用原文的,
     // 不让浏览器重排——文档里"步骤 3"必须和屏上的 3 对得上。
-    if (/^\s*\d+[.)]\s+/.test(line)) {
+    const firstOrderedItem = line.match(/^\s*(\d+)[.)]\s+(.*)$/);
+    if (firstOrderedItem) {
       const items: Array<{ mark: string; text: string; at: number }> = [];
-      while (index < lines.length && /^\s*\d+[.)]\s+/.test(lines[index])) {
-        const match = lines[index].match(/^\s*(\d+)[.)]\s+(.*)$/)!;
+      let match: RegExpMatchArray | null = firstOrderedItem;
+      while (index < lines.length && match) {
         items.push({ mark: match[1], text: match[2], at: index + 1 });
         index += 1;
+        match = index < lines.length
+          ? lines[index].match(/^\s*(\d+)[.)]\s+(.*)$/)
+          : null;
       }
       blocks.push(
         <ol key={key++} className="md-list md-ordered">
           {items.map((item, i) => (
             <li key={i} value={Number(item.mark)} data-l={item.at}>
-              {inline(item.text)}
+              {inline(item.text, resolveImage)}
             </li>
           ))}
         </ol>);
@@ -165,7 +191,7 @@ export function Markdown({ text }: { text: string }) {
       }
       blocks.push(
         <blockquote key={key++} className="md-quote" data-l={at}>
-          {quoted.map((row, i) => <p key={i} className="md-p">{inline(row)}</p>)}
+          {quoted.map((row, i) => <p key={i} className="md-p">{inline(row, resolveImage)}</p>)}
         </blockquote>);
       continue;
     }
@@ -176,7 +202,7 @@ export function Markdown({ text }: { text: string }) {
         <div key={key++}
           className={`md-heading md-h${Math.min(heading[1].length, 4)}`}
           data-l={at}>
-          {inline(heading[2])}
+          {inline(heading[2], resolveImage)}
         </div>);
       index += 1;
       continue;
@@ -198,7 +224,7 @@ export function Markdown({ text }: { text: string }) {
         </pre>);
       continue;
     }
-    blocks.push(<p key={key++} className="md-p" data-l={at}>{inline(line)}</p>);
+    blocks.push(<p key={key++} className="md-p" data-l={at}>{inline(line, resolveImage)}</p>);
     index += 1;
   }
   return <div className="md">{blocks}</div>;

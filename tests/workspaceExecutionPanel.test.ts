@@ -7,6 +7,8 @@ const workspace = readFileSync(resolve("web/src/TaskWorkspace.tsx"), "utf-8");
 const taskCard = readFileSync(resolve("web/src/TaskCard.tsx"), "utf-8");
 const gitDiff = readFileSync(resolve("web/src/GitDiff.tsx"), "utf-8");
 const app = readFileSync(resolve("web/src/App.tsx"), "utf-8");
+const steerBox = readFileSync(resolve("web/src/SteerBox.tsx"), "utf-8");
+const historyBoard = readFileSync(resolve("web/src/HistoryBoard.tsx"), "utf-8");
 
 test("进入独立执行现场页签后直接展开，不要求用户再点一次", () => {
   const executionView = workspace.slice(
@@ -35,6 +37,26 @@ test("等待人工检视时工作台标题显示人的当前事项，不沿用�
   );
   assert.match(policy, /status === "waiting_for_human"/);
   assert.match(policy, /step: task\.focus\?\.headline/);
+});
+
+test("补充给主任务置灰时明确解释原因，而不是只留一个灰输入框", () => {
+  assert.match(steerBox, /steerDisabledReason/);
+  assert.match(steerBox, /主任务正在等待人工决定/);
+  assert.match(steerBox, /主任务已暂停/);
+  assert.match(steerBox, /当前正在验证交付结果/);
+  assert.match(steerBox, /当前正在等待合入/);
+  assert.match(steerBox, /className="steer-disabled-reason"/);
+});
+
+test("责任人能在终态任务上看到删除入口，并必须二次确认", () => {
+  assert.match(workspace,
+    /const deletable = canOperate && \["completed", "failed", "canceled"\]/);
+  assert.match(workspace, />删除任务<\/button>/);
+  assert.match(workspace, /工作区和记录将永久删除/);
+  assert.match(workspace, /确认删除/);
+  assert.match(historyBoard,
+    /viewer\.role === "admin"[^]*entry\.luban_account === viewer\.username/,
+    "档案页应同时允许管理员和任务责任人删除真终态");
 });
 
 test("任务摘要卡仍按需展开，避免多张卡同时建立实时连接", () => {
@@ -78,6 +100,9 @@ test("最终交付范围只在 diff 树调整，决策卡保留摘要和直达�
   assert.match(taskCard, /打开代码差异并调整文件/);
   assert.match(taskCard, /按这 \$\{deliverySelection\.selectedPaths\.length\} 个文件推送/);
   assert.match(taskCard, /提交返工意见/);
+  assert.match(taskCard,
+    /const deliveryReady = !requiresDeliverySelection\s*\|\| selectedHandlesFeedback/,
+    "返工不能被 diff/文件清单加载失败卡死；只有确认推送需要当前清单");
   assert.doesNotMatch(workspace, /onDeliverySelectionChange=\{task\.waiting/);
   assert.match(workspace, /focusRequest=\{diffReviewRequest\}/);
   assert.match(gitDiff, /if \(focusRequest > 0\) setFocused\(true\)/);
@@ -110,4 +135,22 @@ test("诊断包导出给出生成、成功与失败反馈，不再静默下载",
   assert.match(workspace, /生成失败，请重试/);
   assert.match(workspace, /response\.blob\(\)/,
     "只有服务端真实返回诊断包后才能提示已开始下载");
+});
+
+test("需求原文接入圈注层，终态只把已停止任务设为只读", () => {
+  const sourceBranch = workspace.slice(
+    workspace.indexOf('materialView === "source" ?'),
+    workspace.indexOf(') : materialView === "chain"'),
+  );
+  assert.match(sourceBranch, /<Annotatable/);
+  assert.match(sourceBranch, /artifact=\{TASK_REQUIREMENT_ARTIFACT\}/);
+  assert.match(sourceBranch, /fallbackFile="需求原文"/);
+  assert.match(sourceBranch, /<Markdown text=\{task\.requirement\} resolveImage=/,
+    "需求原文应原样进入 Markdown，并为包内图片提供受控解析入口");
+  assert.match(sourceBranch, /requirement_document\?\.assets\?\.some/,
+    "只有任务元数据登记过的图片才能渲染，不能开放任意地址");
+  assert.match(workspace, /return status !== "canceled"/,
+    "已交付任务可归档批注，只有明确停止后才关闭新增入口");
+  assert.match(workspace, /checks\.find\(\(check\) => check\.id === item\.id\)\?\.line/,
+    "定位应使用重锚定后的当前行号");
 });

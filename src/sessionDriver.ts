@@ -84,6 +84,23 @@ export function answersOf(
 
 const HOST_TOOLS = new Set(["AskUserQuestion", "Task"]);
 
+/** 有些模型在输出预算耗尽时已经吐出了工具调用开头，却没生成完整参数。
+ * Pi 会把它记成一次普通 tool error，随后回合仍以 end_turn 收口；如果宿主
+ * 不单独识别，任务就会在当前步骤反复催办，看起来永远“正在推进”。 */
+export function fatalToolExecutionError(
+  name: string,
+  result: string,
+  isError: boolean,
+): string | undefined {
+  if (!isError) return undefined;
+  const text = result.trim();
+  const outputLimit = /output token limit|maximum output tokens|max[_ -]?tokens|输出(?:长度|令牌|token)?.{0,8}(?:上限|限制)/i.test(text);
+  const unexecuted = /not executed|was not run|未执行|没有执行/i.test(text);
+  if (!outputLimit || !unexecuted) return undefined;
+  return `模型回复超过输出上限，${name || "工具调用"}没有真正执行。`
+    + "任务已停在可恢复位置，请点“重跑续推”继续；已有数据不会丢失。";
+}
+
 export function validateAskUserQuestionInput(input: unknown): string | undefined {
   if (!input || typeof input !== "object") return "缺少 questions";
   const request = input as Record<string, unknown>;
@@ -212,6 +229,9 @@ export interface CloudSessionOptions {
     technologies: string[];
     businessModuleIds: string[];
   };
+  /** 知识匹配口径:缺省 task;问题会话传 issue(ADR-0005)——未限定
+   * 作用域的通用工程知识豁免进会话,技术栈维度不参与过滤。 */
+  knowledgeScope?: "task" | "issue";
   /** 本单明确选中的仓库 Skill。每项必须是一个存在的 SKILL.md 文件；
    * 不能传 skills 目录，否则同目录下未选择的 Skill 也会被 Pi 扫入。
    * 跨仓时可同时传多个仓各自的文件，主/子 Agent 共用同一 allowlist。 */
@@ -303,6 +323,7 @@ export class CloudSession {
    * 直接 end_turn),宿主必须自己识别,否则空转被标成 completed。 */
   private turnActivity = 0;
   private turnError = "";
+  private turnTerminalError = "";
   /** 上下文超限只自愈一次(整条会话计):压完还爆是单轮输入本身过大,
    * 再压是空转——按预算纪律,补救必须有次数上限。 */
   private overflowRepaired = false;
@@ -535,6 +556,7 @@ export class CloudSession {
     this.emit("user_message", this.sessionId, { text: userMessage });
     this.turnActivity = 0;
     this.turnError = "";
+    this.turnTerminalError = "";
     this.waitingSignal = deferred<Outcome>();
     this.pendingTurn = this.session
       .prompt(userMessage)
@@ -561,6 +583,13 @@ export class CloudSession {
     }
     if (!this.turnActivity && this.turnError) {
       const detail = `模型回合失败: ${this.turnError}`;
+      this.emit("session_ended", this.sessionId, {
+        reason: "failed", detail,
+      });
+      return { status: "session_ended", reason: "failed", detail };
+    }
+    if (this.turnTerminalError) {
+      const detail = this.turnTerminalError;
       this.emit("session_ended", this.sessionId, {
         reason: "failed", detail,
       });
@@ -776,6 +805,7 @@ export class CloudSession {
       workspaceRoot: workspace,
       snapshotRoot: join(workspace, ".mae-flow-work", "host-skills"),
       context: this.options.knowledgeContext,
+      knowledgeScope: this.options.knowledgeScope,
     });
     for (const warning of hostSkills.warnings) {
       this.options.log?.(
@@ -1138,6 +1168,13 @@ export class CloudSession {
         .filter((block: any) => block?.type === "text")
         .map((block: any) => String(block.text ?? ""))
         .join("\n");
+      if (sessionId === this.sessionId) {
+        this.turnTerminalError = fatalToolExecutionError(
+          TOOL_NAME_MAP[rawName] ?? rawName,
+          result,
+          Boolean(event.isError),
+        ) ?? this.turnTerminalError;
+      }
       const semantic: SemanticEvent = {
         eventId: this.options.eventLog.lastEventId() + 1,
         taskId: this.options.taskId,
