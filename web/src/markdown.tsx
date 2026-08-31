@@ -50,7 +50,12 @@ const isTableRow = (line: string) => /^\s*\|.*\|\s*$/.test(line);
 const isDivider = (line: string) => /^\s*\|[\s:|-]+\|\s*$/.test(line);
 
 export function Markdown({ text }: { text: string }) {
-  const lines = text.split("\n");
+  // 需求正文不一定只带 Unix 换行。从工单、富文本或旧系统粘贴时，
+  // 可能混入裸 CR、Unicode line/paragraph separator。若只按 \n 切，
+  // 一条有序列表会跨过这些分隔符：宽松初筛认成列表，后续逐行解析
+  // 却拿不到 match，最终把整张任务页炸掉。这里先把所有文本换行统一
+  // 切开；正文再脏也只能降级展示，不能影响进入任务。
+  const lines = text.split(/\r\n|[\n\r\u2028\u2029]/);
   const blocks: ReactNode[] = [];
   let index = 0;
   let key = 0;
@@ -133,12 +138,16 @@ export function Markdown({ text }: { text: string }) {
     // 有序列表:连续 "1." / "1)" 行。内核与 CHAIN 文档满篇编号步骤,
     // 不认它们的后果就是整屏"没渲染的文本"(内网实锤)。编号用原文的,
     // 不让浏览器重排——文档里"步骤 3"必须和屏上的 3 对得上。
-    if (/^\s*\d+[.)]\s+/.test(line)) {
+    const firstOrderedItem = line.match(/^\s*(\d+)[.)]\s+(.*)$/);
+    if (firstOrderedItem) {
       const items: Array<{ mark: string; text: string; at: number }> = [];
-      while (index < lines.length && /^\s*\d+[.)]\s+/.test(lines[index])) {
-        const match = lines[index].match(/^\s*(\d+)[.)]\s+(.*)$/)!;
+      let match: RegExpMatchArray | null = firstOrderedItem;
+      while (index < lines.length && match) {
         items.push({ mark: match[1], text: match[2], at: index + 1 });
         index += 1;
+        match = index < lines.length
+          ? lines[index].match(/^\s*(\d+)[.)]\s+(.*)$/)
+          : null;
       }
       blocks.push(
         <ol key={key++} className="md-list md-ordered">
