@@ -1622,6 +1622,12 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 }
 .task-repo-list > span > i { flex: none; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
 .task-repo-list > span > b { color: var(--accent); font-size: 11px; font-weight: 750; }
+.task-repo-list > span > em { color: var(--muted); font-size: 10.5px; font-style: normal; }
+.task-repo-list > span > em.completed { color: var(--success); }
+.task-repo-list > span > em.failed,
+.task-repo-list > span > em.canceled { color: var(--danger); }
+.task-repo-list > span > em.waiting_for_human,
+.task-repo-list > span > em.paused { color: var(--attention); }
 .task-dependency-wait { margin-top: 5px; color: #d59a3c; }
 .chain-review-entry {
   margin: 14px 0 0; padding: 15px 16px; border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line));
@@ -1781,7 +1787,8 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   background: var(--faint);
 }
 .status-running .task-status-rail,
-.status-verifying .task-status-rail { background: var(--active); }
+.status-verifying .task-status-rail,
+.status-coordinating .task-status-rail { background: var(--active); }
 .status-pausing .task-status-rail { background: var(--attention); }
 .status-paused .task-status-rail { background: var(--muted); }
 .status-waiting_for_human .task-status-rail { background: var(--attention); }
@@ -1807,6 +1814,73 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   font: 700 var(--font-size-dense) var(--font-mono);
   letter-spacing: .02em;
 }
+.task-level {
+  padding: 2px 6px; border-radius: 5px; font-size: 10.5px; font-weight: 800;
+  letter-spacing: .05em;
+}
+.task-level.parent { color: var(--accent); background: var(--accent-soft); }
+.task-level.child { color: var(--purple); background: var(--purple-soft); }
+.task-card.is-child-task { margin-left: 28px; overflow: visible; }
+.task-card.is-child-task::before {
+  content: ""; position: absolute; left: -18px; top: -12px; width: 14px; height: 54px;
+  border-left: 1px solid var(--line-strong); border-bottom: 1px solid var(--line-strong);
+  border-radius: 0 0 0 9px; pointer-events: none;
+}
+.task-parent-link {
+  width: calc(100% - 36px); margin: -4px 18px 9px; padding: 7px 10px;
+  display: flex; align-items: center; gap: 7px; border: 1px solid var(--line);
+  border-radius: 7px; color: var(--muted); background: var(--surface-soft);
+  text-align: left; cursor: pointer;
+}
+.task-parent-link span { font-size: 11px; font-weight: 750; }
+.task-parent-link strong { min-width: 0; overflow: hidden; color: var(--text-strong); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.task-parent-link code { margin-left: auto; color: var(--accent); font-size: 10.5px; }
+.task-child-links {
+  margin: -1px 18px 10px 21px; padding: 10px 11px 10px 17px;
+  display: grid; grid-template-columns: 58px minmax(0, 1fr); gap: 9px;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 48%, var(--line));
+  background: color-mix(in srgb, var(--accent) 3%, transparent);
+}
+.task-child-links-label { padding-top: 7px; color: var(--muted); font-size: 11px; font-weight: 800; }
+.task-child-links > div { min-width: 0; display: grid; gap: 5px; }
+.task-child-links button {
+  min-width: 0; padding: 7px 9px; display: grid; grid-template-columns: 21px minmax(0, 1fr) auto;
+  align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 7px;
+  color: var(--text); background: var(--surface); text-align: left; cursor: pointer;
+}
+.task-child-links button:hover { border-color: var(--accent); background: var(--surface-soft); }
+.task-child-links button > i {
+  width: 21px; height: 21px; display: grid; place-items: center; border-radius: 50%;
+  color: var(--accent); background: var(--accent-soft); font: 800 10px var(--font-mono);
+}
+.task-child-links button > span { min-width: 0; display: grid; gap: 1px; }
+.task-child-links button strong { overflow: hidden; color: var(--text-strong); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.task-child-links button small { color: var(--muted); font-size: 10.5px; }
+.task-child-links button em { color: var(--muted); font-size: 11px; font-style: normal; white-space: nowrap; }
+.task-child-links button em.completed { color: var(--success); }
+.task-child-links button em.failed,
+.task-child-links button em.canceled { color: var(--danger); }
+.task-child-links button em.waiting_for_human,
+.task-child-links button em.paused { color: var(--attention); }
+.ws-child-focus { display: grid; gap: 9px; }
+.ws-child-focus > strong { color: var(--text-strong); font-size: 14px; }
+.ws-child-focus > p { margin: 0; color: var(--muted); font-size: var(--font-size-assist); line-height: 1.55; }
+.ws-child-focus > div { display: grid; gap: 6px; }
+.ws-child-focus button {
+  padding: 8px 9px; display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; border: 1px solid var(--line); border-radius: 7px;
+  color: var(--text); background: var(--surface); text-align: left; cursor: pointer;
+}
+.ws-child-focus button:hover { border-color: var(--accent); }
+.ws-child-focus button > span { min-width: 0; display: grid; gap: 1px; }
+.ws-child-focus button strong { overflow: hidden; color: var(--text-strong); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.ws-child-focus button small { color: var(--muted); font-size: 10.5px; }
+.ws-child-focus button em { color: var(--muted); font-size: 11px; font-style: normal; white-space: nowrap; }
+.ws-child-focus button em.completed { color: var(--success); }
+.ws-child-focus button em.failed,
+.ws-child-focus button em.canceled { color: var(--danger); }
+.ws-child-focus button em.waiting_for_human,
+.ws-child-focus button em.paused { color: var(--attention); }
 /* ---- 问题处理页(与我的需求隔离的独立会话域) ---- */
 .issue-board { display: grid; gap: 18px; }
 .issue-board-loading { padding: 40px; color: var(--muted); }
@@ -3464,7 +3538,7 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   background: currentColor;
 }
 .pill.queued { color: var(--muted); background: var(--surface-muted); }
-.pill.running { color: var(--active); background: var(--active-soft); }
+.pill.running, .pill.coordinating { color: var(--active); background: var(--active-soft); }
 .pill.pausing { color: var(--attention); background: var(--attention-soft); }
 .pill.paused { color: var(--muted); background: var(--surface-muted); }
 .pill.waiting_for_human { color: var(--attention); background: var(--attention-soft); }
@@ -3477,7 +3551,7 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .pill.await_merge { color: var(--purple); background: var(--purple-soft); }
 .pill.canceled { color: var(--faint); background: var(--surface-muted); }
 .pill.failed { color: var(--danger); background: var(--danger-soft); }
-.pill.running i, .pill.pausing i { animation: statusBlink 1.35s ease-in-out infinite; }
+.pill.running i, .pill.coordinating i, .pill.pausing i { animation: statusBlink 1.35s ease-in-out infinite; }
 @keyframes statusBlink { 50% { opacity: .25; } }
 .task-meta {
   min-height: 34px;

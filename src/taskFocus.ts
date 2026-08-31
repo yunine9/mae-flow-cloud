@@ -29,6 +29,9 @@ export interface TaskFocus {
 interface FocusTask {
   status: string;
   detail?: string;
+  requirement_graph?: {
+    repositories?: Array<{ task_status?: string }>;
+  };
   /** 开发助手正占有主现场:此时"恢复"是死路,要指去交还入口。 */
   assistant_engaged?: boolean;
   /** 执行队列位次(1 起,投影字段):排队真相必须压过陈旧 detail。 */
@@ -85,6 +88,21 @@ export function projectTaskFocus(task: FocusTask): TaskFocus {
   const delivery = task.delivery;
   const loop = delivery?.loop;
   const prepush = delivery?.prepush;
+
+  if (task.status === "coordinating") {
+    const repositories = task.requirement_graph?.repositories ?? [];
+    const attention = repositories.filter((repository) => [
+      "waiting_for_human", "paused", "failed", "canceled",
+    ].includes(repository.task_status ?? "")).length;
+    return focus(
+      attention ? "human_action" : "machine",
+      task.detail?.trim() || "子任务正在推进",
+      attention ? "打开主任务查看并处理异常子任务" : "等待各子任务完成",
+      attention ? "responsible" : "agent",
+      attention ? 96 : 50,
+      attention > 0,
+    );
+  }
 
   if (task.status === "waiting_for_human") {
     const questions = task.waiting?.question?.questions?.length ?? 0;

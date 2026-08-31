@@ -90,6 +90,38 @@ export function advanceAdminOverrideArm(
   return { execute: false, arm: { annotationId, action } };
 }
 
+/** 意见作者什么时候可以裁决一条已送达批注。
+ *
+ * MR 修复轮有逐条结构化回执，仍按 reviewReady 的严格门禁开放；普通
+ * 需求/设计检视没有这份回执，Agent 再次举卡就是本轮已经回到人工的
+ * 权威事实。旧实现把两类场景混成一类，导致普通批注已经送达、Agent
+ * 也改完并再次等人后，页面仍隐藏“确认已修复 / 仍需调整”，而服务端
+ * 又用这条 sent 意见阻止通过，形成无法自救的闭环死锁。
+ */
+export function authorVerdictReady(
+  item: Annotation,
+  taskStatus: TaskStatus,
+  workspaceReviewReady: boolean,
+): boolean {
+  if (taskStatus !== "waiting_for_human" || item.status !== "sent") {
+    return false;
+  }
+  // 这类意见只是趁“等决定”窗口先登记为团队事实，尚未随决定真正
+  // 送给 Agent；不能刚提交就让作者自称已经验收。
+  if (item.sent_via === "queued_decision") return false;
+  // 流水线证据用于恢复取证，不是代码/文档检视闭环。
+  if (item.sent_via === "pipeline_evidence") return false;
+  // MR 工作区修复必须等 Build-Fix 收敛并生成当前复检卡；有总回复也
+  // 不能绕过逐条回执与 HEAD 绑定。
+  if (item.sent_via === "review_repair") {
+    return workspaceReviewReady
+      && item.response?.revision === (item.rework ?? 0);
+  }
+  // decision / interrupt 以及没有 sent_via 的旧账都属于普通流程检视：
+  // Agent 再次进入人工节点后，由意见作者依据最新材料亲自裁决。
+  return true;
+}
+
 /** 一条批注此刻处在哪。检视闭环的五站:
  * 待提交 → 已提交 → 已被改动·请你确认 → 确认通过 / 返工(回到待提交)。 */
 function progressOf(
@@ -198,6 +230,10 @@ export function AnnotationPanel({
     reviewReady,
     reviewAnnotationIds,
   }).canDrop).length;
+  const ordinaryReviewCount = items.filter((item) =>
+    item.author === viewerUsername
+    && authorVerdictReady(item, taskStatus, reviewReady)
+    && item.sent_via !== "review_repair").length;
   const [open, setOpen] = useState(drafts.length > 0
     || (reviewReady && (myReviewCount > 0 || overrideReviewCount > 0)));
   const running = taskStatus === "running";
@@ -314,6 +350,12 @@ export function AnnotationPanel({
           请看最新代码后，逐条选择“确认已修复”或“仍需调整”；没有全部闭环前不会推送。
         </div>
       )}
+      {ordinaryReviewCount > 0 && (
+        <div className="annot-panel-note review-ready" role="status">
+          Agent 已再次回到人工检视。请核对最新材料后，逐条选择
+          “确认已修复”或“仍需调整”；没有全部闭环前不会继续。
+        </div>
+      )}
       {overrideReviewCount > 0 && (
         <div className="annot-panel-note admin-override" role="note">
           当前复检有 {overrideReviewCount} 条他人意见仍待作者闭环。
@@ -389,6 +431,8 @@ export function AnnotationPanel({
             && overrideArm.action === "drop";
           const verifyArmed = overrideArm?.annotationId === item.id
             && overrideArm.action === "verify";
+          const authorCanJudge = isAuthor
+            && authorVerdictReady(item, taskStatus, reviewReady);
           return (
             <li key={item.id} className={`annot-item ${progress.tone}`}>
               <div className="annot-item-head">
@@ -501,7 +545,8 @@ export function AnnotationPanel({
                 {/* 检视闭环的裁决:提过的意见不能停在"请你确认"没有下文。
                     通过=收口;返工=退回待提交,下一次提交再送给 AI。 */}
                 {item.status === "sent" && isAuthor && !editing
-                  && reviewReady && item.response?.outcome === "needs_clarification" && (
+                  && authorCanJudge
+                  && item.response?.outcome === "needs_clarification" && (
                   <span className="annot-verdict">
                     <button type="button" className="ghost"
                             disabled={!!mutationBusy}
@@ -511,9 +556,9 @@ export function AnnotationPanel({
                             }}>补充说明后重提</button>
                   </span>
                 )}
-                {item.status === "sent" && (isAuthor || overrideAccess.canVerify) && !editing
-                  && reviewReady && item.response
-                  && item.response.outcome !== "needs_clarification" && (
+                {item.status === "sent"
+                  && (authorCanJudge || overrideAccess.canVerify) && !editing
+                  && item.response?.outcome !== "needs_clarification" && (
                   <span className="annot-verdict">
                     {isAuthor && <button type="button" className="ghost"
                             disabled={!!mutationBusy}

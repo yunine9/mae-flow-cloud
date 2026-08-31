@@ -425,6 +425,30 @@ function NavIcon({ name }: { name: View }) {
 // 但在“我的工作”里与已完成任务共用交付接力区，不混进自动推进列表。
 const DELIVERY_HANDOFF_STATUSES: TaskStatus[] = ["await_merge", "completed"];
 
+/** 只调整同一列表内的顺序：主任务在前，紧跟它的直接子任务。
+ * 父任务被筛掉时子任务仍保留，并由卡片上的“隶属于主任务”说明来源。 */
+export function orderTaskHierarchy<T extends { id: string; parent_task_id?: string }>(
+  tasks: T[],
+): T[] {
+  const ids = new Set(tasks.map((task) => task.id));
+  const children = new Map<string, T[]>();
+  for (const task of tasks) {
+    if (!task.parent_task_id || !ids.has(task.parent_task_id)) continue;
+    children.set(task.parent_task_id, [
+      ...(children.get(task.parent_task_id) ?? []), task,
+    ]);
+  }
+  const ordered: T[] = [];
+  const append = (task: T) => {
+    ordered.push(task);
+    for (const child of children.get(task.id) ?? []) append(child);
+  };
+  for (const task of tasks) {
+    if (!task.parent_task_id || !ids.has(task.parent_task_id)) append(task);
+  }
+  return ordered;
+}
+
 export interface PersonalActionItem {
   key: string;
   task?: TaskSummary;
@@ -873,6 +897,10 @@ export function App() {
       setTargetRoute({ taskId: task.id, reviewId: "" });
     }
   };
+  const openRelatedTask = (taskId: string) => {
+    const related = tasks.find((task) => task.id === taskId);
+    if (related) openArtifacts(related);
+  };
   const closeArtifacts = () => {
     setArtifactTaskId("");
     setArtifactTaskSnapshot(undefined);
@@ -1078,7 +1106,7 @@ export function App() {
           <section className="task-section current-work-section" aria-labelledby="current-work-title">
             <div className="section-head"><div><span className="section-kicker">{mineScope === "all" ? "CURRENT WORK" : "FOCUSED WORK"}</span><h2 id="current-work-title">{myWorkTitle}</h2></div><div className="current-work-counts">{mineScope === "all" && myWaiting.length > 0 && <span className="section-count attention">{myWaiting.length} 项待核对</span>}{mineScope === "all" && myIntervention.length > 0 && <span className="section-count danger">{myIntervention.length} 项需介入</span>}<span className="section-count">{mineScope === "all" ? `共 ${visibleMyWork.length} 项` : `筛选出 ${visibleMyWork.length} 项`}</span></div></div>
             {visibleMyWork.length === 0 && <div className="review-clear current-work-empty"><span aria-hidden>✓</span><div><strong>{mineScope === "all" ? "当前没有进行中的任务" : `没有${myWorkTitle}的任务`}</strong><p>{mineScope === "all" ? "新任务启动后会出现在这里；需要你核对的任务会自动排在最前。" : "再次点击上方已选中的摘要卡，可恢复查看全部当前任务。"}</p></div></div>}
-            <div className="task-list current-work-list">{visibleMyWork.map((task) => <TaskCard key={task.id} task={task} onChanged={refresh} focused={task.id === targetTaskId} canOperate decisionMode={artifactTaskId === task.id ? "signal" : "form"} onOpenArtifacts={() => openArtifacts(task)} />)}</div>
+            <div className="task-list current-work-list">{orderTaskHierarchy(visibleMyWork).map((task) => <TaskCard key={task.id} task={task} onChanged={refresh} focused={task.id === targetTaskId} canOperate decisionMode={artifactTaskId === task.id ? "signal" : "form"} onOpenArtifacts={() => openArtifacts(task)} onOpenRelatedTask={openRelatedTask} />)}</div>
           </section>
           {mineScope === "all" && myDelivered.length > 0 && <TaskGroup kicker="DELIVERY" title="等待合入与最近完成" tasks={myDelivered} onChanged={refresh} onOpenArtifacts={openArtifacts} targetTaskId={targetTaskId} />}
         </>}
@@ -1390,6 +1418,10 @@ function TeamDashboard({
   const queueRef = useRef<HTMLElement>(null);
   const now = Date.now();
   const currentTasks = useMemo(() => tasks.filter(isCurrentTeamTask), [tasks]);
+  const openRelatedTask = (taskId: string) => {
+    const related = tasks.find((task) => task.id === taskId);
+    if (related) onOpenArtifacts(related);
+  };
   const actionable = currentTasks.filter((task) =>
     matchesTeamScope(task, "action", now));
   const stale = currentTasks.filter((task) =>
@@ -1445,7 +1477,7 @@ function TeamDashboard({
         {(query || scope !== "all" || responsible || phase) && <button type="button" className="filter-reset" onClick={() => { setQuery(""); setScope("all"); setResponsible(""); setPhase(""); }}>清除筛选</button>}
       </div>
       {visible.length === 0 && <TaskEmpty personal={false} />}
-      <div className="task-list">{visible.map((task) => <TaskCard key={task.id} task={task} onChanged={onChanged} canOperate={false} decisionMode="signal" onOpenArtifacts={() => onOpenArtifacts(task)} />)}</div>
+      <div className="task-list">{orderTaskHierarchy(visible).map((task) => <TaskCard key={task.id} task={task} onChanged={onChanged} canOperate={false} decisionMode="signal" onOpenArtifacts={() => onOpenArtifacts(task)} onOpenRelatedTask={openRelatedTask} showChildLinks={false} />)}</div>
     </section>
   </>;
 }
@@ -1472,7 +1504,10 @@ function TaskGroup({
   return <section className={`task-section${tone ? ` ${tone}` : ""}`}>
     <div className="section-head"><div><span className="section-kicker">{kicker}</span><h2>{title}</h2></div><span className={`section-count ${tone ?? ""}`}>{tasks.length} 项</span></div>
     {tasks.length === 0 && <div className="review-clear compact"><span aria-hidden>✓</span><div><strong>{empty ?? "当前没有任务"}</strong></div></div>}
-    <div className="task-list">{tasks.map((task) => <TaskCard key={task.id} task={task} onChanged={onChanged} focused={task.id === targetTaskId} canOperate onOpenArtifacts={() => onOpenArtifacts(task)} />)}</div>
+    <div className="task-list">{orderTaskHierarchy(tasks).map((task) => <TaskCard key={task.id} task={task} onChanged={onChanged} focused={task.id === targetTaskId} canOperate onOpenArtifacts={() => onOpenArtifacts(task)} showChildLinks={false} onOpenRelatedTask={(taskId) => {
+      const related = tasks.find((item) => item.id === taskId);
+      if (related) onOpenArtifacts(related);
+    }} />)}</div>
   </section>;
 }
 

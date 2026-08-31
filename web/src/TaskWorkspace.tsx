@@ -142,6 +142,9 @@ export function workspaceNextActionCopy(
       ? { title: "MR 已关闭，需要处理", detail: "查看合入状态并决定后续处理" }
       : { title: "等待检视与合入", detail: "前往 CodeHub 完成最后一步" };
   }
+  if (task.status === "coordinating") {
+    return { title: "子任务进行中", detail: "全部子任务完成后主任务自动完成" };
+  }
   return { title: "当前无待办", detail: "无需处理" };
 }
 
@@ -289,6 +292,15 @@ function sizeText(bytes: number): string {
  * 仍给人一条 Cloud 生命周期轨道，避免工作台最重要的“走到哪了”整块消失。
  * 这只是只读展示兜底，不参与流程判断或任务迁移。 */
 function workspaceProgress(task: TaskSummary): NonNullable<TaskSummary["progress"]> {
+  if (task.status === "coordinating") {
+    const phases = ["已受理", "需求理解", "方案确认", "子任务交付", "完成"];
+    return {
+      phases,
+      current_index: 3,
+      current_phase: "子任务交付",
+      step: task.focus?.headline ?? "子任务正在推进",
+    };
+  }
   if (task.progress) {
     // 内核进度记录的是自动流程最后停在哪；举卡后人真正面对的当前步骤
     // 已经变成“检视/确认”。工作台大标题继续写“等待权威流水线”会与
@@ -358,7 +370,8 @@ export function TaskWorkspace({
 }) {
   // 旧任务、纯会话和非内核提问没有 approval_subject 元数据；此时需求
   // 原文是唯一保证存在的证据，不能默认打开一个空的过程文档面板。
-  const recommendedMaterialView = task.waiting?.recommended_view ?? "source";
+  const recommendedMaterialView = task.waiting?.recommended_view
+    ?? (task.requirement_graph?.stage === "confirmed" ? "chain" : "source");
   const pushReview = task.waiting?.step === "cloud_push_confirm"
     ? task.delivery?.push_review : undefined;
   const [items, setItems] = useState<ArtifactMeta[]>();
@@ -412,7 +425,8 @@ export function TaskWorkspace({
     setItems(undefined);
     setActive("");
     setContent("");
-    setMaterialView(task.waiting?.recommended_view ?? "source");
+    setMaterialView(task.waiting?.recommended_view
+      ?? (task.requirement_graph?.stage === "confirmed" ? "chain" : "source"));
     setWorkspaceView(defaultWorkspaceView(task));
     setExecutionView("events");
     setRepositoryAssignees(EMPTY_REPOSITORY_ASSIGNEE_SELECTION);
@@ -1469,6 +1483,24 @@ export function TaskWorkspace({
                 {task.delivery?.stalled && (
                   <DiagnosticsLink taskId={task.id} />
                 )}
+              </div>
+            ) : task.status === "coordinating" ? (
+              <div className="ws-child-focus">
+                <strong>{task.focus?.needs_attention
+                  ? "有子任务需要处理" : "子任务正在推进"}</strong>
+                <p>{task.detail ?? "全部子任务完成后，主任务会自动完成。"}</p>
+                <div>{task.requirement_graph?.repositories.map((repository) => (
+                  <button type="button" key={repository.id}
+                    disabled={!repository.task_id || !onOpenTask}
+                    onClick={() => repository.task_id
+                      && onOpenTask?.(repository.task_id)}>
+                    <span><strong>{repository.name}</strong>
+                      <small>{repository.assignee ?? "未指定负责人"}</small></span>
+                    <em className={repository.task_status ?? "queued"}>
+                      {statusText({ status: repository.task_status ?? "queued" })}
+                    </em>
+                  </button>
+                ))}</div>
               </div>
             ) : (
               <div className="ws-idle">

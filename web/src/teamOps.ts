@@ -35,7 +35,7 @@ export type TeamScope =
 
 const WIP_STATUSES = [
   "queued", "running", "pausing", "verifying", "waiting_for_human",
-  "await_merge",
+  "await_merge", "coordinating",
 ];
 const DELIVERED_STATUSES = ["completed"];
 const WEEK_MS = 7 * 86_400_000;
@@ -77,7 +77,8 @@ export function progressAgeMs(task: TeamTask, now = Date.now()): number {
 }
 
 export function isStale(task: TeamTask, now = Date.now()): boolean {
-  return ["queued", "running", "pausing", "verifying"].includes(task.status)
+  return ["queued", "running", "pausing", "verifying", "coordinating"]
+    .includes(task.status)
     && progressAgeMs(task, now) >= STALE_AFTER_MS;
 }
 

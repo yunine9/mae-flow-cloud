@@ -365,6 +365,47 @@ test("管理员危险动作必须连续确认同一条意见和同一动作", ()
   assert.deepEqual(second, { execute: true, arm: undefined });
 });
 
+test("普通流程批注在 Agent 再次举卡后可由作者闭环，不依赖 MR 复检状态", () => {
+  const common = {
+    taskId: "task-1",
+    viewerUsername: "alice",
+    checks: [],
+    canOperate: true,
+    canOverride: false,
+    taskStatus: "waiting_for_human",
+    reviewReady: false,
+    reviewAnnotationIds: [],
+    mergeRequestOpen: false,
+    onChanged: () => undefined,
+  };
+  const ordinary = annotation({ sent_via: "decision", response: undefined });
+  assert.equal(annotationPanel.authorVerdictReady(
+    ordinary, "waiting_for_human", false), true);
+  const html = renderToStaticMarkup(React.createElement(
+    annotationPanel.AnnotationPanel,
+    { ...common, items: [ordinary] },
+  ));
+  assert.match(html, /Agent 已再次回到人工检视/);
+  assert.match(html, />仍需调整<\/button>/);
+  assert.match(html, />确认已修复<\/button>/);
+
+  assert.equal(annotationPanel.authorVerdictReady(
+    ordinary, "running", false), false,
+  "Agent 仍在修改时不能提前验收");
+  assert.equal(annotationPanel.authorVerdictReady(
+    annotation({ sent_via: "queued_decision", response: undefined }),
+    "waiting_for_human", false), false,
+  "只登记、尚未真正送达 Agent 的意见不能立即验收");
+  assert.equal(annotationPanel.authorVerdictReady(
+    annotation({ sent_via: "review_repair" }),
+    "waiting_for_human", false), false,
+  "MR 修复仍必须等 Build-Fix 与复检卡");
+  assert.equal(annotationPanel.authorVerdictReady(
+    annotation({ sent_via: "review_repair", response: undefined }),
+    "waiting_for_human", true), false,
+  "MR 修复缺逐条回执时不能误开放通过");
+});
+
 test("批注面板显示受限管理员入口和实际代确认审计", () => {
   const common = {
     taskId: "task-1",

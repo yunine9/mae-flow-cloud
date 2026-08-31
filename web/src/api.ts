@@ -10,6 +10,7 @@ export type TaskStatus =
   | "pausing"
   | "paused"
   | "waiting_for_human"
+  | "coordinating"
   | "completed"
   | "verifying"
   | "await_merge"
@@ -22,6 +23,7 @@ export const STATUS_TEXT: Record<TaskStatus, string> = {
   pausing: "正在暂停",
   paused: "已暂停",
   waiting_for_human: "等你决定",
+  coordinating: "子任务进行中",
   completed: "已完成",
   failed: "出错了",
   verifying: "代码已提交,流水线验证中",
@@ -2429,7 +2431,8 @@ export interface Annotation {
   kind: "doc" | "code";
   status: "draft" | "sent" | "verified" | "dropped";
   sent_at?: string;
-  sent_via?: "interrupt" | "decision" | "pipeline_evidence" | "review_repair";
+  sent_via?: "interrupt" | "decision" | "pipeline_evidence" | "review_repair"
+    | "queued_decision";
   response?: {
     revision: number;
     outcome: "fixed" | "not_fixed" | "needs_clarification";

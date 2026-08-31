@@ -46,6 +46,8 @@ test("团队现场保留待合入任务：MR 合入或用户停止才离场", ()
   assert.equal(isCurrentTeamTask(task({ status: "failed" })), true);
   assert.equal(isCurrentTeamTask(task({ status: "await_merge" })), true);
   assert.equal(isCurrentTeamTask(task({ status: "completed" })), false);
+  assert.equal(isCurrentTeamTask(task({ status: "coordinating" })), true,
+    "子任务进行中的主任务必须留在当前现场");
   assert.equal(isCurrentTeamTask(task({ status: "canceled" })), false);
 });
 

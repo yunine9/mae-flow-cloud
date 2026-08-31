@@ -439,6 +439,7 @@ export type TaskStatus =
   | "pausing"
   | "paused"
   | "waiting_for_human"
+  | "coordinating"   // 跨仓主任务已拆单，等待全部子任务真实完成
   | "completed"
   | "verifying"      // MR 已建,权威流水线未过(主 spec §10:不能标完成)
   | "await_merge"    // 流水线通过,等待人工合入;系统不自动合并
@@ -5407,10 +5408,49 @@ export class TaskService {
     this.writeTaskState(task);
   }
 
+  /** 子任务的状态变化必须回写主任务，否则“主任务完成”只能靠页面猜。
+   * 主任务不再运行 Agent，只作为跨仓需求的持久汇总：所有子任务都是真
+   * completed 才完成；失败/取消/暂停/等人都继续留在当前现场并点名。 */
+  private reconcileRequirementParent(parent: TaskState): void {
+    const graph = parent.summary.requirement_graph;
+    if (!this.isRequirementAnalysis(parent) || graph?.stage !== "confirmed"
+        || graph.repositories.length === 0
+        || parent.summary.status === "canceled"
+        || parent.summary.status === "failed") return;
+    const children = graph.repositories.map((repository) =>
+      repository.task_id ? this.tasks.get(repository.task_id) : undefined);
+    if (children.some((child) => !child)) return;
+    const states = children as TaskState[];
+    const completed = states.filter((child) =>
+      child.summary.status === "completed").length;
+    const attention = states.filter((child) => [
+      "waiting_for_human", "paused", "failed", "canceled",
+    ].includes(child.summary.status)).length;
+    const allCompleted = completed === states.length;
+    const nextStatus: TaskStatus = allCompleted ? "completed" : "coordinating";
+    const nextDetail = allCompleted
+      ? `全部 ${states.length} 个子任务已完成，跨仓需求交付完成`
+      : `${completed}/${states.length} 个子任务已完成`
+        + (attention ? `，${attention} 个需要处理` : "，其余正在推进");
+    const previousStatus = parent.summary.status;
+    if (previousStatus === nextStatus && parent.summary.detail === nextDetail) return;
+    parent.summary.status = nextStatus;
+    parent.summary.detail = nextDetail;
+    parent.summary.waiting = undefined;
+    this.persist(parent, false, false);
+    if (previousStatus !== "completed" && nextStatus === "completed") {
+      this.notifyOutcome(parent);
+    }
+  }
+
   /** 任务事实落盘(原子写):进程可死,任务不能死。
    * summary+cwd 就是重启后重建 TaskState 需要的全部——待办在
    * waiting.json、事件在 events.jsonl、流程真相在内核状态文件。 */
-  private persist(task: TaskState, strict = false): void {
+  private persist(
+    task: TaskState,
+    strict = false,
+    reconcileParent = true,
+  ): void {
     const now = new Date().toISOString();
     if (task.lastPersistedStatus !== undefined
         && task.lastPersistedStatus !== task.summary.status) {
@@ -5428,6 +5468,10 @@ export class TaskService {
     this.bypass(task, "投影 upsert",
       this.options.projection?.upsertTask(this.project(task)));
     this.maybeCaptureDiagnostics(task);
+    if (reconcileParent && task.summary.parent_task_id) {
+      const parent = this.tasks.get(task.summary.parent_task_id);
+      if (parent) this.reconcileRequirementParent(parent);
+    }
   }
 
   /** 任务一进事故态(failed / 交付停摆)就自动落一份诊断包——第一
@@ -5722,6 +5766,14 @@ export class TaskService {
         }
       } catch (error) {
         this.options.log?.(`恢复 ${name} 失败: ${String(error)}`);
+      }
+    }
+    // 旧版本在“拆单成功”时就把父任务写成 completed。等所有 task.json
+    // 都恢复完再统一校正，避免父任务先加载时误把尚未入内存的子任务
+    // 当成缺失；无需一次性迁移脚本，重启即可恢复真实层级状态。
+    for (const task of this.tasks.values()) {
+      if (this.isRequirementAnalysis(task)) {
+        this.reconcileRequirementParent(task);
       }
     }
     if (this.counter > 0) {
@@ -6903,17 +6955,15 @@ export class TaskService {
     return { ...task.summary };
   }
 
-  /** 父分析单确认即硬收口(用户拍板 2026-08-19:拆单后它的使命就
-   * 结束了)。不等模型自觉写收尾:并发槽让给子任务,"确认后又举卡"
-   * 的窗口彻底关死。会话直接终止没有可丢的——CHAIN 方案在盘上,
-   * 子任务已生成,决定也已落袋(waiting.json)。teardown 与 cancel
-   * 同款:先涨 controlEpoch 让在途 settle 对不上暗号,不回写状态。 */
+  /** 父分析会话确认后硬收口，但主任务本身不能冒充“整个需求已完成”。
+   * 会话和容器立即释放给子任务；主任务进入 coordinating，只做跨仓
+   * 进度汇总。全部子任务真实 completed 后才由 reconcile 自动完成。 */
   private async finishRequirementAnalysis(task: TaskState): Promise<void> {
     task.controlEpoch += 1;
     task.pauseRequested = false;
     this.removeFromQueue(task.summary.id);
-    task.summary.status = "completed";
-    task.summary.completed_at = new Date().toISOString();
+    task.summary.status = "coordinating";
+    delete task.summary.completed_at;
     task.mission = undefined;
     this.persist(task);
     const driver = task.driver;
@@ -6937,13 +6987,13 @@ export class TaskService {
         ? [`${index === 0 ? "会话中止" : "容器回收"}: ${String(result.reason)}`]
         : []);
     if (failures.length) {
-      task.summary.detail = "需求分析已完成，但执行资源未能确认释放："
+      task.summary.detail = "子任务已开始推进，但分析资源未能确认释放："
         + failures.join("；") + "。服务重启会按 ownership 再清扫";
       this.persist(task);
       this.options.log?.(`任务 ${task.summary.id} 分析收口清理不完整: `
         + failures.join(" | "));
     }
-    this.notifyOutcome(task);
+    this.reconcileRequirementParent(task);
     this.bypass(undefined, "任务泵", this.pump());
   }
 
@@ -7774,10 +7824,11 @@ export class TaskService {
     if (confirmingGraph) {
       try {
         this.createRepositoryDeliveries(task);
-        // 拆单成功=父分析单使命结束(用户拍板 2026-08-19):确认即
-        // 硬收口,不等模型自觉写完——省下并发槽给子任务,也彻底关掉
+        // 拆单成功=父分析会话使命结束:确认即硬收口，不等模型自觉
+        // 写完——省下并发槽给子任务，也彻底关掉
         // "确认后又举卡让人检视子任务"的窗口(预答兜底退居末防线)。
-        // 会话直接终止:CHAIN 方案在盘上、子任务已生成,没有可丢的。
+        // 会话直接终止；主任务转为 coordinating 汇总子任务，不在这里
+        // 冒充整个跨仓需求已经完成。
         task.summary.waiting = undefined;
         // 决定必须先回注再掐会话:会话此刻停在 AskUserQuestion 工具里
         // 等这份决定,不解开它 abort 会一直等回合收束(实测挂死——
@@ -8475,6 +8526,11 @@ export class TaskService {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     const status = task.summary.status;
+    if (status === "coordinating") {
+      throw new TaskControlError(
+        `任务 ${id} 正在汇总子任务，主任务本身没有可暂停的执行会话`,
+      );
+    }
     if (status === "paused" || status === "pausing") {
       return { ...task.summary };
     }
@@ -8837,6 +8893,11 @@ export class TaskService {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     let status = task.summary.status;
+    if (status === "coordinating") {
+      throw new TaskControlError(
+        `任务 ${id} 的子任务仍在推进，请先分别处理未完成的子任务`,
+      );
+    }
     if (status === "canceled" && !task.driver && !task.container) {
       return { ...task.summary };
     }

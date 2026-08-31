@@ -385,7 +385,7 @@ test("Chain 检视决定可更新按仓 Skill，先落盘再生成子任务", as
     selected_repository_skill_ids: selectedIds,
   });
 
-  assert.equal(confirmed.status, "completed");
+  assert.equal(confirmed.status, "coordinating");
   const persisted = JSON.parse(readFileSync(
     join(parent.workspace, "task.json"), "utf-8"));
   assert.deepEqual(
@@ -499,7 +499,7 @@ test("Chain 检视按成功仓覆盖选择，扫描失败仓保留原 Skill", as
     selected_repository_skill_ids: [newA.id],
   });
 
-  assert.equal(confirmed.status, "completed");
+  assert.equal(confirmed.status, "coordinating");
   const persisted = JSON.parse(readFileSync(
     join(parent.workspace, "task.json"), "utf-8"));
   assert.deepEqual(

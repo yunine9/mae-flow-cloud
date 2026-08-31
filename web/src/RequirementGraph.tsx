@@ -8,7 +8,8 @@ function repoName(id: string, task: TaskSummary): string {
 const childStatusText: Record<string, string> = {
   queued: "排队中", running: "执行中", pausing: "暂停中", paused: "已暂停",
   waiting_for_human: "待确认", verifying: "验证中", await_merge: "等待合入",
-  completed: "已完成", stalled: "已停机", failed: "失败", canceled: "已取消",
+  coordinating: "子任务进行中", completed: "已完成", stalled: "已停机",
+  failed: "失败", canceled: "已取消",
 };
 
 export function RequirementGraph({
@@ -57,7 +58,7 @@ export function RequirementGraph({
       <div className="requirement-root-task">
         <span>主任务</span>
         <div><strong>{task.title ?? task.requirement}</strong>
-          <small>{task.ticket ?? task.id} · 统筹需求、依赖与各仓交付</small></div>
+          <small>{task.ticket ?? task.id} · 汇总各仓进展，全部子任务完成后自动完成</small></div>
         <em className={task.status}>{childStatusText[task.status] ?? task.status}</em>
       </div>
       <div className="requirement-split-label">
