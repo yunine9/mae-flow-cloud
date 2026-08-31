@@ -11,9 +11,9 @@
  *   技能、local-logs/ 是日志,都不是过程文档;Agent 的落笔点就是
  *   会话根(与 issue-analysis.md 同层)。
  *
- * 过程问答也归这里:从 events.jsonl 投影出"人读的对话"(用户/Agent/
- * 问答卡/用户决策),现场页签管原始事件直播,这里管复盘阅读,两不
- * 替代。
+ * 过程问答也归这里:从 events.jsonl 投影出"人读的对话"(问答卡/用户
+ * 决策/用户输入/检视意见,口径见 ADR-0008),现场页签管原始事件直播,
+ * 这里管复盘阅读,两不替代。
  */
 
 import {
@@ -130,19 +130,26 @@ export interface IssueDialogueQuestion {
   options: string[];
 }
 
+/** 口径见 ADR-0008:复盘投影只留问答与用户输入——问答卡、用户决策
+ * (卡答与闸答)、用户主动插话/续聊、检视意见;agent 的过程性发言
+ * 不进。只追加、不回写。 */
 export type IssueDialogueTurn =
   | { kind: "user"; ts: string; text: string; via?: string }
-  | { kind: "agent"; ts: string; text: string }
   | { kind: "card"; ts: string; questions: IssueDialogueQuestion[] }
-  | { kind: "decision"; ts: string; decision: string; notes?: string };
+  | { kind: "decision"; ts: string; decision: string; notes?: string;
+      /** 平台闸决策随事件落账的问句快照(闸答完即从 issue.json 消失,
+       * 历史闸的"问"半边只能随事件走);Agent 卡的问在前一张卡里。 */
+      questions?: IssueDialogueQuestion[] }
+  | { kind: "review"; ts: string; count: number; text: string };
 
 /** 投影上限:对话是复盘阅读面,不是全量账本;触顶保留最新,如实标注。 */
 const DIALOGUE_MAX_TURNS = 500;
 
-/** 事件账本里的消息类事件 → 对话回合。AskUserQuestion 的 tool_requested
- * 出"问答卡",human_decision 出"用户决策"——平台闸的作答由 resolveGate
- * 补记 human_decision 落账,固定流程的关键问答(报告确认/结论/环境
- * 验证)因此齐全。未知事件一律跳过:投影是旁路,不是第二本账。 */
+/** 事件账本里的问答类事件 → 对话回合(ADR-0008 口径)。AskUserQuestion
+ * 的 tool_requested 出"问答卡";human_decision 出"用户决策",平台闸的
+ * 作答由 resolveGate 补记(带问句快照,闸卡问答对不缺半边);检视提交
+ * 出"检视回合"。agent 发言与未知事件一律跳过:投影是旁路,不是第二
+ * 本账。 */
 export function projectDialogue(root: string): {
   turns: IssueDialogueTurn[];
   truncated: boolean;
@@ -170,19 +177,28 @@ export function projectDialogue(root: string): {
             ...(payload.via === "interrupt" ? { via: "interrupt" } : {}),
           });
           break;
-        case "assistant_message":
-          turns.push({ kind: "agent", ts, text: String(payload.text ?? "") });
-          break;
         case "tool_requested":
           if (String(payload.name ?? "") !== "AskUserQuestion") break;
           turns.push({ kind: "card", ts, questions: cardQuestions(payload.input) });
           break;
-        case "human_decision":
+        case "human_decision": {
+          const gate = payload.gate as { questions?: unknown } | undefined;
+          const questions = cardQuestions(gate);
           turns.push({
             kind: "decision",
             ts,
             decision: String(payload.decision ?? ""),
             ...(payload.notes ? { notes: String(payload.notes) } : {}),
+            ...(questions.length ? { questions } : {}),
+          });
+          break;
+        }
+        case "review_submitted":
+          turns.push({
+            kind: "review",
+            ts,
+            count: Number(payload.count ?? 0),
+            text: String(payload.text ?? ""),
           });
           break;
         default:
@@ -199,8 +215,9 @@ export function projectDialogue(root: string): {
   };
 }
 
-/** AskUserQuestion 入参的问题清单(形状读不出来当没有;选项兼容
- * 字符串与 {code,label} 两种现场——码是投影层的事,人看文案)。 */
+/** 问答卡的入参 → 问题清单(形状读不出来当没有;选项兼容字符串与
+ * {code,label} 两种现场——码是投影层的事,人看文案)。平台闸的问句
+ * 快照同走此路,一个形状。 */
 function cardQuestions(input: unknown): IssueDialogueQuestion[] {
   const questions = (input as { questions?: unknown } | undefined)?.questions;
   if (!Array.isArray(questions)) return [];

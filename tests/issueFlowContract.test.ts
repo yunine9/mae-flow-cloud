@@ -372,6 +372,7 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail/环境验证�
       scenario: "ticket",
       stage_states: ["pending"],
       round: 1,
+      review_active: undefined,
       gate: {
         id: "gate-x",
         kind: "env_verify",
@@ -608,6 +609,7 @@ test("契约快照:Agent 问题卡 waiting 投影(整卡形状+机械派码+推�
       scenario: undefined,
       stage_states: undefined,
       round: undefined,
+      review_active: undefined,
       gate: undefined,
       ut: undefined,
       pipelines: undefined,

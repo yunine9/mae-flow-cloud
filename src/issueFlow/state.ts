@@ -301,6 +301,9 @@ export interface IssueSessionState {
   stage_states?: StageState[];
   /** 验证回退轮次(fixed 用;回退问题分析时 +1,分支/MR 延用)。 */
   round?: number;
+  /** 检视回合进行中(ADR-0007):检视意见已提交、整体回退到分析重跑,
+   * 期间不可再叠加检视;submit_analysis 重新举确认卡时清除。 */
+  review_active?: boolean;
   /** 平台问题卡在场即 waiting_user 由闸门挂起(与 humanGate 并行)。 */
   gate?: IssueGate;
   ut?: IssueUtRecord;

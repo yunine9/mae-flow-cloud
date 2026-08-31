@@ -103,6 +103,19 @@ import {
   type IssueEnvCredentials,
 } from "./prompt.ts";
 import {
+  orderAnnotations,
+  type AnchorCheck,
+  type Annotation,
+} from "../annotations.ts";
+import {
+  addReview,
+  anchorChecks,
+  dropReview,
+  renderReviewNotes,
+  reviewStore,
+  submitReviews as submitReviewLedger,
+} from "./reviews.ts";
+import {
   GATE_OPTIONS,
   fixedStageLabel,
   gateOptionLabel,
@@ -1159,6 +1172,10 @@ export class IssueFlowService {
     const gate = state.gate;
     if (!gate) return;
     if (!this.moonlightOn(live)) return;
+    // 检视回合的确认卡永不代答(ADR-0007):用户提了意见、agent 按意见
+    // 修订重提,这张卡就是"意见是否被吸收"的复核点——代答放行等于
+    // 检视闭环被架空。普通流程(无检视回合)不受影响。
+    if (state.review_active === true) return;
     let code: string | undefined;
     if (gate.kind === "analysis_confirm") code = "confirm";
     else if (gate.kind === "conclude"
@@ -1534,11 +1551,20 @@ export class IssueFlowService {
     // 含用户决策",而闸作答此前只进转移账,过程问答(事件账本投影)里
     // 固定流程的关键问答会缺用户那一半。失败 fail-open:账少一条不挡
     // 闸裁决——闸的真相在 issue.json,事件账是投影不是第二状态机。
+    // 问句快照随事件落账(ADR-0008):闸答完即从 issue.json 消失,
+    // 历史闸的"问"半边投影时无处合成,只能在这里随事件走。
     this.appendSessionEvent(live, "human_decision", {
       waiting_id: gate.id,
       state_version: gate.state_version,
       decision,
       ...(notes ? { notes } : { notes: "" }),
+      gate: {
+        kind: gate.kind,
+        questions: gate.question.questions.map((item) => ({
+          question: item.question,
+          options: item.options.map((option) => option.label),
+        })),
+      },
     });
 
     if (verdict === "advance") {
@@ -1677,6 +1703,141 @@ export class IssueFlowService {
     void live.driver.steer(content).catch((error) =>
       this.log(`[issue-flow] ${id} 插话失败: ${String(error)}`));
     return summarize(live.state);
+  }
+
+  // ---- 检视(ADR-0007:人工意见触发整体回退,闭环靠分析确认卡) ----
+
+  /** 检视的会话级门槛(记账与提交共用):固定流程、未终态、分析段
+   * 不是转正继承——转正继承的分析报告是上一会话已确认的结论,
+   * 重跑会污染继承账(ADR-0007 拍板的边界)。 */
+  private requireReviewable(live: LiveIssue): void {
+    const { state } = live;
+    if (state.mode !== "fixed" || !state.scenario) {
+      throw new IssueControlError(
+        "检视重跑只支持固定流程会话(自由模式请直接发消息补充意见)");
+    }
+    if (isTerminal(state.status)) {
+      throw new IssueControlError("会话已结束,不能再检视");
+    }
+    const analyzeIndex = fixedStageIndex(state.scenario, "analyze");
+    if (analyzeIndex >= 0
+        && (state.stage_states?.[analyzeIndex] ?? "") === "inherited") {
+      throw new IssueControlError(
+        "转正继承的分析报告不可检视重跑");
+    }
+  }
+
+  /** 检视面板的数据面:意见清单 + 锚点检测(原文还在/已被改动)+
+   * 回合标记。读类,与管理员只读边界一致。 */
+  listReviews(id: string): {
+    reviews: Annotation[];
+    checks: AnchorCheck[];
+    review_active: boolean;
+  } {
+    const live = this.require(id);
+    return {
+      reviews: orderAnnotations(reviewStore(live.root).visible()),
+      checks: anchorChecks(live.root),
+      review_active: live.state.review_active === true,
+    };
+  }
+
+  /** 记一条检视草稿(悬停圈注的落账口)。作者恒为会话归属人——
+   * 问题会话没有协作检视,谁的问题谁提意见。 */
+  addReview(id: string, input: {
+    line: number; anchor: string; note: string;
+  }): Annotation {
+    const live = this.require(id);
+    this.requireReviewable(live);
+    const note = input.note?.trim() ?? "";
+    const anchor = input.anchor?.trim() ?? "";
+    if (!note) throw new IssueControlError("检视意见不能为空");
+    if (!anchor) throw new IssueControlError("缺少原文快照,意见无从定位");
+    const line = Number(input.line);
+    return addReview(live.root, {
+      author: live.state.account,
+      line: Number.isFinite(line) ? Math.max(0, Math.trunc(line)) : 0,
+      anchor,
+      note,
+    });
+  }
+
+  /** 移除一条意见(账本软删,jsonl 留痕)。 */
+  dropReview(id: string, reviewId: string): Annotation {
+    const live = this.require(id);
+    this.requireReviewable(live);
+    return dropReview(live.root, reviewId, live.state.account);
+  }
+
+  /** 提交检视 = 整体回退的人工触发源(ADR-0007):作废挂起的 Agent
+   * 问题卡(supersede:撤下待办、留审计原因),清掉平台闸(fixedRollback
+   * 自会清),意见标记送出、报告留版本快照,整体回退到「问题分析」
+   * (round+1、其后阶段标 redo、申报账作废、分支与 MR 延用),意见清单
+   * 注入新一轮分析。落账 review_submitted 事件——过程问答里"这轮
+   * 为什么重跑"靠它。 */
+  submitReviews(id: string): IssueSummary {
+    const live = this.require(id);
+    const { state } = live;
+    this.requireReviewable(live);
+    if (state.review_active) {
+      throw new IssueControlError(
+        "上一轮检视的修订还没有重新提交分析报告,不能叠加检视");
+    }
+    if (this.turning.has(live.id)) {
+      throw new IssueControlError("会话正在运行,等当前回合收口后再提交检视");
+    }
+    if (state.status !== "waiting_user" && state.status !== "idle") {
+      throw new IssueControlError(
+        `当前状态 ${state.status} 不能提交检视(意见可以先记成草稿,`
+          + "等 AI 停机或举卡等你时再提交)");
+    }
+    if (!reviewStore(live.root).drafts().length) {
+      throw new IssueControlError("没有待提交的检视意见");
+    }
+    // 挂起的 Agent 问题卡先作废(有账的撤下,不是替用户作答);冲突
+    // 说明卡刚被答过/状态已变,如实打回。
+    let supersededCard = false;
+    const waiting = live.humanGate.pending()[0];
+    if (waiting) {
+      try {
+        live.humanGate.supersede(waiting.waiting_id, {
+          stateVersion: waiting.state_version,
+          notes: "用户提交检视意见,本卡作废,工作流回退问题分析",
+        });
+        supersededCard = true;
+      } catch {
+        throw new IssueControlError("问题卡状态已变化,请刷新后重试");
+      }
+    }
+    const sent = submitReviewLedger(live.root);
+    fixedRollback(state,
+      `用户检视分析报告,提交 ${sent.length} 条修订意见`);
+    state.review_active = true;
+    saveState(live.root, state);
+    const notes = renderReviewNotes(sent, state.title, state.round ?? 1);
+    // 检视意见落账为用户回合(ADR-0008 口径里的"检视意见"),清单
+    // 原文随事件走:它同时是给下一轮分析的注入词,复盘与重跑看同一份。
+    this.appendSessionEvent(live, "review_submitted", {
+      count: sent.length,
+      text: notes,
+    });
+    this.log(`[issue-flow] ${id} 检视提交 ${sent.length} 条意见,`
+      + `回退问题分析(第 ${state.round} 轮)`);
+    // 挂 Agent 卡的现场,提问的 await 已被 supersede 悬死:释放后由
+    // 续聊路径重建上下文(issueResumePrompt 把意见清单带给重建现场);
+    // 闸等待/闲置现场 driver 无悬挂,续聊直递现有上下文。
+    if (supersededCard) this.releaseDriver(live);
+    this.continueTurn(live, fixedAdvanceNotice(state, [
+      `用户检视了分析报告,提出 ${sent.length} 条修订意见,`
+        + `已回退到「问题分析」阶段(第 ${state.round} 轮)。`,
+      "",
+      notes,
+      "",
+      ...(state.pushes?.length
+        ? ["注: 前几轮的修复已提交在分支上,不要推倒重来。"]
+        : []),
+    ].join("\n")));
+    return summarize(state);
   }
 
   // ---- 台面动作 ----
