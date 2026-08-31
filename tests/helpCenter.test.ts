@@ -86,6 +86,9 @@ test("角色保护覆盖目录、直链、快捷卡和相关推荐", () => {
     /QUICK_LINKS\.filter\([\s\S]*canViewHelpItem\(target, viewer\.role\)/);
   assert.match(source,
     /visibleHelpItemsById\(\s*HELP_ARTICLES, article\.related \?\? \[\], viewer\.role\)/);
+  assert.match(source,
+    /quickLinks\.map\(\(item, index\)[\s\S]*String\(index \+ 1\)\.padStart\(2, "0"\)/,
+  "快捷卡编号必须按当前角色可见列表重排，不能留下 03 这种断号");
 });
 
 test("外部路径变化会同步文章，点击文章会留下可前进后退的历史", () => {

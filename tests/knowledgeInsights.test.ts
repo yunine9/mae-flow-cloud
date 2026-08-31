@@ -17,6 +17,8 @@ function usage(options: {
   selected?: boolean;
   loaded?: number;
   reads?: number;
+  scope?: "team" | "module";
+  repository?: string | null;
 }): TaskKnowledgeUsage {
   const loaded = options.loaded ?? 1;
   const reads = options.reads ?? 0;
@@ -33,7 +35,10 @@ function usage(options: {
       kind: options.kind ?? "document",
       name: options.name,
       path: options.path,
-      repository: "https://code.example/team/orders.git",
+      ...(options.repository === null ? {}
+        : { repository: options.repository
+            ?? "https://code.example/team/orders.git" }),
+      ...(options.scope ? { scope: options.scope } : {}),
       selected: options.selected,
       state: reads > 0 ? "used" : loaded > 0 ? "loaded" : "available",
       available_count: 0,
@@ -45,7 +50,7 @@ function usage(options: {
   };
 }
 
-test("团队知识聚合按仓库/类型/路径合并并关联交付结果", () => {
+test("业务仓 Skill 只留在仓库任务现场，不进入团队知识聚合", () => {
   const tasks: KnowledgeInsightTask[] = [
     { id: "task-1", status: "completed", repository_skills: [],
       knowledge_usage: usage({ id: "v1", kind: "skill", name: "订单构建", path: ".agents/skills/build/SKILL.md", reads: 2 }) },
@@ -55,27 +60,9 @@ test("团队知识聚合按仓库/类型/路径合并并关联交付结果", () 
     { id: "legacy", status: "completed" },
   ];
   const result = buildTeamKnowledgeInsights(tasks, new Date("2026-08-24T09:00:00Z"));
-  assert.equal(result.summary.tracked_tasks, 2, "老任务不稀释新口径");
-  assert.equal(result.summary.access_rate, 100);
-  assert.equal(result.resources.length, 1);
-  assert.deepEqual(result.resources[0], {
-    key: "https://code.example/team/orders.git\0skill\0.agents/skills/build/SKILL.md",
-    kind: "skill",
-    name: "订单构建指南",
-    path: ".agents/skills/build/SKILL.md",
-    repository: "https://code.example/team/orders.git",
-    provided_tasks: 2,
-    selected_tasks: 0,
-    loaded_tasks: 2,
-    accessed_tasks: 2,
-    access_events: 3,
-    completed_tasks: 1,
-    repair_tasks: 1,
-    attention_tasks: 0,
-    last_used_at: "2026-08-24T08:00:00.000Z",
-  });
-  assert.ok(result.recommendations.some((item) =>
-    item.kind === "needs-review" && item.evidence.includes("相关性") === false));
+  assert.equal(result.summary.tracked_tasks, 0);
+  assert.deepEqual(result.resources, []);
+  assert.deepEqual(result.recommendations, []);
 });
 
 test("团队宿主 Skill 按名称跨旧路径、快照版本合并且每任务只计一次", () => {
@@ -147,14 +134,17 @@ test("团队宿主 Skill 按名称跨旧路径、快照版本合并且每任务�
 
 test("飞轮给出覆盖缺口、选而未用和正向沉淀建议", () => {
   const unused = usage({ id: "skill", kind: "skill", name: "发布助手",
-    path: ".cac/skills/release/SKILL.md", selected: true, reads: 0 });
+    path: ".mae-flow-work/host-skills/release/SKILL.md", selected: true,
+    reads: 0, scope: "team", repository: null });
   const proven = usage({ id: "repository-skill", kind: "skill", name: "交付检查",
-    path: ".agents/skills/release/SKILL.md", reads: 1 });
+    path: ".mae-flow-work/host-skills/delivery/SKILL.md", reads: 1,
+    scope: "team", repository: null });
   const tasks: KnowledgeInsightTask[] = [
-    { id: "gap", status: "paused", repository_skills: [], knowledge_usage: {
-      summary: { resources: 0, loaded: 0, used: 0, skills_used: 0, selected_unused: 0 },
-      resources: [], events: [],
-    } },
+    { id: "gap", status: "paused", knowledge_usage: usage({
+      id: "team-gap", kind: "skill", name: "待读取团队 Skill",
+      path: ".mae-flow-work/host-skills/gap/SKILL.md", loaded: 0, reads: 0,
+      scope: "team", repository: null,
+    }) },
     { id: "unused-1", status: "running", repository_skills: [{}], knowledge_usage: unused },
     { id: "unused-2", status: "running", repository_skills: [{}], knowledge_usage: unused },
     ...[1, 2, 3].map((index): KnowledgeInsightTask => ({
@@ -342,8 +332,8 @@ test("聚合保留可复用资源描述:可读性字段不许在聚合层丢失"
         selected_unused: 0 },
       resources: [{
         id: "skill-1", kind: "skill", name: "订单对接",
-        path: ".agents/skills/orders/SKILL.md",
-        repository: "https://code.example/team/orders.git",
+        path: ".mae-flow-work/host-skills/orders/SKILL.md",
+        scope: "team",
         description: "订单域的对接说明与重试口径",
         state: "used", available_count: 1, loaded_count: 1, read_count: 2,
       }],

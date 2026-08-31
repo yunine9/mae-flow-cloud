@@ -267,14 +267,22 @@ function tracked(task: KnowledgeInsightTask): boolean {
 function reusableResource(resource: {
   kind: KnowledgeKind;
   scope?: string;
+  repository?: string;
+  path: string;
+  name: string;
 }): boolean {
-  return resource.kind === "skill"
-    || (resource.kind === "document" && resource.scope === "module");
+  if (resource.scope === "module") {
+    return resource.kind === "skill" || resource.kind === "document";
+  }
+  if (resource.kind !== "skill") return false;
+  // Skill 只是文件形态，不等于团队资产。业务仓原生 Skill 带 repository，
+  // 只属于该仓任务现场；只有平台团队 Skill（含老任务的宿主快照路径）
+  // 才进入团队知识运营。
+  return resource.scope === "team" || !!hostSkillName(resource);
 }
 
 function teamTracked(task: KnowledgeInsightTask): boolean {
-  return task.repository_skills !== undefined
-    || (task.business_modules?.length ?? 0) > 0
+  return (task.business_modules?.length ?? 0) > 0
     || (task.knowledge_usage?.resources.some(reusableResource) ?? false);
 }
 

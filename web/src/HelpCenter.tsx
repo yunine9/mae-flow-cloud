@@ -504,9 +504,9 @@ export function filterHelpArticles(query: string, audience?: AuthUser["role"]): 
 const GROUPS: HelpGroup[] = ["快速开始", "需求与问题", "团队协作", "团队资产", "设置与排障"];
 
 const QUICK_LINKS = [
-  { id: "launch-requirement", number: "01", title: "我要发起需求", detail: "从描述目标到启动任务" },
-  { id: "handle-waiting", number: "02", title: "我要处理待办", detail: "选择、批注与自由回复" },
-  { id: "knowledge-assets", number: "03", title: "我要治理资产", detail: "知识、模块与工作流" },
+  { id: "launch-requirement", title: "我要发起需求", detail: "从描述目标到启动任务" },
+  { id: "handle-waiting", title: "我要处理待办", detail: "选择、批注与自由回复" },
+  { id: "knowledge-assets", title: "我要治理资产", detail: "知识、模块与工作流" },
 ];
 
 function SearchIcon() {
@@ -634,9 +634,10 @@ export function HelpCenter({ viewer, initialArticleId, onArticleChange }: {
     </div>
 
     {!query && <div className="help-quick" aria-label="常用帮助">
-      {quickLinks.map((item) => <button type="button" key={item.id}
+      {quickLinks.map((item, index) => <button type="button" key={item.id}
         onClick={() => select(item.id)}>
-        <span>{item.number}</span><strong>{item.title}</strong><small>{item.detail}</small>
+        <span>{String(index + 1).padStart(2, "0")}</span>
+        <strong>{item.title}</strong><small>{item.detail}</small>
       </button>)}
     </div>}
 

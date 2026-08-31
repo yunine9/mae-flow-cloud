@@ -258,6 +258,7 @@ export function knowledgeUsageSnapshot(options: {
     id: item.id, kind: "skill", name: item.name,
     path: item.relative_path, repository: item.repository,
     description: item.description, digest: item.digest, selected: true,
+    scope: "repository",
   });
   for (const module of options.businessModules ?? []) {
     for (const asset of module.assets) seed({

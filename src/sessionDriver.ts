@@ -857,6 +857,7 @@ export class CloudSession {
         description: item.description,
         digest: item.digest,
         selected: item.selected,
+        scope: "repository",
       }, true);
     }
     if (skillPaths.length) {
@@ -928,6 +929,7 @@ export class CloudSession {
         description: known.description,
         digest: known.digest,
         selected: known.selected,
+        scope: "repository",
       } : moduleKnown ? {
         id: moduleKnown.id,
         kind: "skill",
