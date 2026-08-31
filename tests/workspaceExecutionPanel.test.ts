@@ -78,6 +78,9 @@ test("最终交付范围只在 diff 树调整，决策卡保留摘要和直达�
   assert.match(taskCard, /打开代码差异并调整文件/);
   assert.match(taskCard, /按这 \$\{deliverySelection\.selectedPaths\.length\} 个文件推送/);
   assert.match(taskCard, /提交返工意见/);
+  assert.match(taskCard,
+    /const deliveryReady = !requiresDeliverySelection\s*\|\| selectedHandlesFeedback/,
+    "返工不能被 diff/文件清单加载失败卡死；只有确认推送需要当前清单");
   assert.doesNotMatch(workspace, /onDeliverySelectionChange=\{task\.waiting/);
   assert.match(workspace, /focusRequest=\{diffReviewRequest\}/);
   assert.match(gitDiff, /if \(focusRequest > 0\) setFocused\(true\)/);
