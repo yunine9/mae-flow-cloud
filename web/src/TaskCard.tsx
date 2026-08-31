@@ -75,7 +75,9 @@ export function TaskCard({
   const waitingQuestions = task.waiting?.question?.questions?.length ?? 0;
   const chainReview = showDecisionForm
     && task.status === "waiting_for_human"
-    && (task.requirement_graph?.repositories.length ?? 0) > 1;
+    && ((task.requirement_graph?.repositories.length ?? 0) > 1
+      // 单仓分析单在拆出多单元前也走同一套 Chain 检视语义。
+      || task.requirement_analysis_requested === true);
   const childRepositories = task.requirement_graph?.stage === "confirmed"
     ? task.requirement_graph.repositories.filter((repository) => repository.task_id)
     : [];
@@ -192,14 +194,32 @@ export function TaskCard({
 
       {showChildLinks && childRepositories.length > 0 && (
         <div className="task-child-links" aria-label="主任务下的子任务">
-          <span className="task-child-links-label">子任务</span>
+          <span className="task-child-links-label">
+            子任务
+            {/* 交付单元拆分:主卡直接给"走到哪"——N/M 已合入 + 当前块。
+                completed=已合入(子任务只有 MR 合入才 completed)。 */}
+            <small className="task-child-progress">
+              {childRepositories.filter((repository) =>
+                repository.task_status === "completed").length}
+              /{childRepositories.length} 已合入
+              {(() => {
+                const active = childRepositories.find((repository) =>
+                  repository.task_status
+                  && !["completed", "canceled"].includes(repository.task_status));
+                return active
+                  ? ` · 当前:${active.scope?.name ?? active.name}` : "";
+              })()}
+            </small>
+          </span>
           <div>{childRepositories.map((repository, index) => (
             <button type="button" key={repository.id}
               disabled={!onOpenRelatedTask}
               onClick={() => repository.task_id
                 && onOpenRelatedTask?.(repository.task_id)}>
               <i aria-hidden>{index + 1}</i>
-              <span><strong>{repository.name}</strong>
+              <span><strong>{repository.scope
+                  ? `${repository.name} · ${repository.scope.name}`
+                  : repository.name}</strong>
                 <small>{repository.assignee ?? "未指定负责人"}</small></span>
               <em className={repository.task_status ?? "queued"}>
                 {statusText({ status: repository.task_status ?? "queued" })}

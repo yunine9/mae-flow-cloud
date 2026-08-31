@@ -557,7 +557,7 @@ test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队
     "子任务读侧应直接给出可返回的主任务摘要");
   assert.equal(graph.repositories[0].task_status, "queued",
     "主任务协作树应投影子任务实时进展");
-  assert.match(apiTask.requirement, /当前仓 AR 单号:REQ-G3-API/);
+  assert.match(apiTask.requirement, /当前单元 AR 单号:REQ-G3-API/);
   assert.deepEqual(apiTask.blocked_by, undefined);
   assert.deepEqual(webTask.blocked_by, [apiTask.id]);
   // 方案正文落工作区文件而非内联进需求(整份方案进 prompt 会被模型

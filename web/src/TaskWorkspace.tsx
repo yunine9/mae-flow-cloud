@@ -37,6 +37,7 @@ import { RequirementTeamPicker } from "./RequirementTeamPicker";
 import {
   completeReview,
   controlTask,
+  decideScopeViolation,
   deleteHistoryTask,
   listAnnotations,
   listArtifacts,
@@ -188,6 +189,55 @@ function DiagnosticsLink({ taskId }: { taskId: string }) {
       {state === "done" && <small role="status">已开始下载</small>}
       {state === "error" && <small role="alert">生成失败，请重试</small>}
     </span>
+  );
+}
+
+/** 越界裁决卡(单仓拆分):交付单元的提交越出负责文件面时停摆留痕,
+ * 这里给主责任人两个出口——放行(记豁免续推)或打回(派修复撤出)。
+ * 卡对所有能看到任务的人可见(方便一起看现场),裁决权在服务端钉死为
+ * 主任务责任人,403 的解释原样露出。 */
+function ScopeViolationCard({ task, onChanged }: {
+  task: TaskSummary;
+  onChanged: () => void;
+}) {
+  const violation = task.delivery?.scope_violation;
+  const [busy, setBusy] = useState<"allow" | "revert" | null>(null);
+  const [error, setError] = useState("");
+  if (!violation?.paths.length) return null;
+  async function decide(decision: "allow" | "revert") {
+    setBusy(decision);
+    setError("");
+    const result = await decideScopeViolation(task.id, decision);
+    setBusy(null);
+    if (result.error) setError(result.error);
+    else onChanged();
+  }
+  return (
+    <div className="scope-violation-card" role="alert">
+      <strong>请裁决越界改动</strong>
+      <p>
+        本单元{task.delivery_scope?.name ? `(${task.delivery_scope.name})` : ""}
+        的提交改动越出了负责文件面。可能是实现确有需要(比如动到接口契约),
+        也可能是拆分方案有误。
+      </p>
+      <ul className="scope-violation-paths">
+        {violation.paths.map((path) => <li key={path}><code>{path}</code></li>)}
+      </ul>
+      <div className="scope-violation-actions">
+        <button type="button" disabled={busy !== null}
+          onClick={() => decide("allow")}
+          title="这些文件记入豁免名单,改动随本单元 MR 一起检视">
+          {busy === "allow" ? "正在放行…" : "放行,随本单元交付"}
+        </button>
+        <button type="button" className="scope-violation-revert"
+          disabled={busy !== null} onClick={() => decide("revert")}
+          title="派修复把这些文件从提交中撤出,负责面内的实现保留">
+          {busy === "revert" ? "正在下发撤出令…" : "打回,撤出越界改动"}
+        </button>
+      </div>
+      <small>裁决人是主任务责任人;其他成员点击会被如实拒绝。</small>
+      {error && <small role="alert" className="scope-violation-error">{error}</small>}
+    </div>
   );
 }
 
@@ -1429,6 +1479,9 @@ export function TaskWorkspace({
               该事项由 {task.luban_account ?? "其他成员"} 核对；
               你可以查看全部材料，但不能代为提交决定。
             </div>
+          )}
+          {task.delivery?.scope_violation && (
+            <ScopeViolationCard task={task} onChanged={onChanged} />
           )}
           {/* failed 的重点是"为什么失败":原因置顶,重跑按钮紧随其后,
               不再先渲一段"当前没有待你决定的事项"把它压到最底。 */}

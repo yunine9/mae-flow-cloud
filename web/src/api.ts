@@ -887,6 +887,8 @@ export interface TaskSummary {
     stage: "analysis" | "confirmed";
     repositories: Array<{
       id: string; name: string; url: string; responsibility?: string;
+      /** 交付单元的文件面(单仓拆分):缺席=整仓一个单元。 */
+      scope?: { name: string; paths: string[] };
       assignee?: string; ticket?: string; task_id?: string;
       task_status?: TaskStatus; current_phase?: string;
     }>;
@@ -898,6 +900,10 @@ export interface TaskSummary {
     id: string; title?: string; ticket?: string; status: TaskStatus;
   };
   blocked_by?: string[];
+  /** 本任务作为交付单元的负责文件面;缺席=整仓无边界。 */
+  delivery_scope?: { name: string; paths: string[] };
+  /** 单仓下单时显式要求先分析拆分。 */
+  requirement_analysis_requested?: boolean;
   cross_repository_updates?: CrossRepositoryUpdate[];
   waiting?: {
     waiting_id: string;
@@ -933,6 +939,8 @@ export interface TaskSummary {
     prepush_runtime?: PrepushRuntime;
     /** 当前 push 检视的阅读导航；授权仍由 delivery_selection 决定。 */
     push_review?: PushReviewPresentation;
+    /** 越界改动待主责任人裁决(单仓拆分负责面门禁)。 */
+    scope_violation?: { paths: string[]; noted_at: string };
     /** 卡在哪一环的人话(等审批、等某一项核销结果……)。服务端一直
      * 在写,前端一直没显示——于是"验证中"三个字后面藏着的真实原因
      * 谁也看不到,任务看着像马上要成了,其实早就停了。 */
@@ -2082,6 +2090,8 @@ export async function createTask(
       "repository" | "technologies" | "confirmed">>;
     requirementDocumentName?: string;
     requirementBundle?: { name: string; contentBase64: string };
+    /** 单仓大需求:先走分析拆分(交付单元拆分),多仓天然分析。 */
+    requirementAnalysis?: boolean;
   },
   // 返回创建结果:调用方靠它把新任务当场打开/高亮。原来丢弃 201 响应
   // 体,下单成功零反馈,人会怀疑没提交成功再点一次(2026-08-30 审计)。
@@ -2120,6 +2130,7 @@ export async function createTask(
       selected_business_module_ids: extras?.selectedBusinessModuleIds,
       knowledge_preview_digest: extras?.knowledgePreviewDigest,
       repository_profiles: extras?.repositoryProfiles,
+      requirement_analysis: extras?.requirementAnalysis || undefined,
     }),
   });
   if (!response.ok) throw new Error(await errorText(response));
@@ -2216,6 +2227,24 @@ export async function retryTask(
   taskId: string,
 ): Promise<{ error?: string }> {
   const response = await fetch(`/tasks/${taskId}/retry`, { method: "POST" });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    return { error: String(body.error ?? `HTTP ${response.status}`) };
+  }
+  return {};
+}
+
+/** 越界改动裁决:allow=豁免这些路径继续交付,revert=下修复令撤出改动。
+ * 服务端只认主任务责任人;403 的解释原样带回给界面展示。 */
+export async function decideScopeViolation(
+  taskId: string,
+  decision: "allow" | "revert",
+): Promise<{ error?: string }> {
+  const response = await fetch(
+    `/tasks/${encodeURIComponent(taskId)}/scope-decision`, {
+      method: "POST",
+      body: JSON.stringify({ decision }),
+    });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     return { error: String(body.error ?? `HTTP ${response.status}`) };

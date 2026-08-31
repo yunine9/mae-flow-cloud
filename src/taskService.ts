@@ -487,11 +487,22 @@ export interface TaskProgress {
   };
 }
 
+/** 需求图节点 = 交付单元。历史上节点就是"仓"(单仓单节点);单仓
+ * 拆分(docs/delivery-unit-split-design.md)后同一 url 可有多个节点,
+ * 靠 scope 区分"这个仓里的哪一块"。字段名保留 Repository 以兼容既有
+ * 图产物与投影,不做迁移。 */
 export interface RequirementRepository {
   id: string;
   name: string;
   url: string;
   responsibility?: string;
+  /** 交付单元的文件面(单仓拆分):单元名 + 负责路径前缀。缺席 =
+   * 整仓一个单元(旧语义)。paths 是仓内相对路径前缀,允许指向尚不
+   * 存在的目录(纯新增模块)。 */
+  scope?: {
+    name: string;
+    paths: string[];
+  };
   /** 人工委派的逐仓责任人。只保存稳定账号名，个人凭据仍按启动时现取。 */
   assignee?: string;
   /** 当前仓实际使用的业务需求单号。缺席时兼容为沿用父任务单号。 */
@@ -752,6 +763,14 @@ export interface TaskSummary {
   knowledge_usage?: TaskKnowledgeUsage;
   /** 多仓时由 Chain 产物投影；单仓时是一个节点的退化图。 */
   requirement_graph?: RequirementGraph;
+  /** 单仓下单时显式要求先分析拆分(交付单元拆分入口)。落盘,重启后
+   * isRequirementAnalysis 判定不变。 */
+  requirement_analysis_requested?: boolean;
+  /** 本任务作为交付单元的负责文件面(仓内相对路径前缀)。交付门禁
+   * 据此校验越界;缺席 = 整仓无边界(普通任务/旧现场)。 */
+  delivery_scope?: { name: string; paths: string[] };
+  /** 主责任人放行过的越界文件(逐文件豁免,落盘)。 */
+  delivery_scope_exemptions?: string[];
   /** 确认 Chain 方案后生成的普通仓库交付任务关系。 */
   parent_task_id?: string;
   /** 子任务头部使用的父任务摘要；读侧投影，不复制父任务整份数据。 */
@@ -836,6 +855,8 @@ export interface TaskSummary {
     };
     /** 当前 push 检视卡的只读说明与比较锚。卡片销毁即清除。 */
     push_review?: PushReviewPresentation;
+    /** 越界改动待主责任人裁决(单仓拆分负责面门禁)。裁决后清除。 */
+    scope_violation?: { paths: string[]; noted_at: string };
     /** 最近一次**人真正看过**的 HEAD:push 确认卡被解决(通过或返工)
      * 时钉住,复检轮"这次修改"的基点从这里取。delivery_selection.head
      * 只在通过时才换,返工多轮后会指到更早的卡,不能表达这个语义
@@ -2980,7 +3001,10 @@ export class TaskService {
   }
 
   private isRequirementAnalysis(task: TaskState): boolean {
-    return (task.summary.repositories?.length ?? 0) > 1
+    // 多仓天然先分析;单仓在下单时显式勾选"大需求先拆分"也走同一条
+    // 分析→确认→拆单链路(单仓拆分,docs/delivery-unit-split-design.md)。
+    return ((task.summary.repositories?.length ?? 0) > 1
+        || task.summary.requirement_analysis_requested === true)
       && !task.summary.parent_task_id;
   }
 
@@ -3014,21 +3038,45 @@ export class TaskService {
         dependencies?: RawRequirementDependency[];
       };
       const expected = task.summary.repositories ?? [];
-      const repositories = Array.isArray(parsed.repositories)
-        ? parsed.repositories.filter((item) => item && expected.includes(item.url))
-            .map((item) => {
-              const known = task.summary.requirement_graph?.repositories
-                .find((candidate) => candidate.id === item.id
-                  || candidate.url === item.url);
-              return {
-                ...item,
-                assignee: known?.assignee,
-                ticket: known?.ticket,
-                task_id: known?.task_id,
-              };
-            })
+      const rawNodes = Array.isArray(parsed.repositories)
+        ? parsed.repositories.filter((item) => item && item.id
+            && expected.includes(item.url))
         : [];
-      if (repositories.length !== expected.length) return;
+      // 同 url 是否唯一,决定旧图产物按 url 兜底匹配是否安全:单仓
+      // 拆分后一个仓可有多个单元节点,url 兜底会把责任人/单号/task_id
+      // 错配到别的单元上,只有该 url 仍然单节点时才允许。
+      const urlCounts = new Map<string, number>();
+      for (const item of rawNodes) {
+        urlCounts.set(item.url, (urlCounts.get(item.url) ?? 0) + 1);
+      }
+      const repositories = rawNodes.map((item) => {
+        const known = task.summary.requirement_graph?.repositories
+          .find((candidate) => candidate.id === item.id
+            || (urlCounts.get(item.url) === 1 && candidate.url === item.url));
+        // scope 只认干净形状:名字非空、路径为相对前缀(不吞绝对路径/
+        // 越级),不合格整个丢弃退回"整仓一个单元"语义,不猜。
+        const scopeName = String(item.scope?.name ?? "").trim();
+        const scopePaths = Array.isArray(item.scope?.paths)
+          ? item.scope!.paths.map((p) => String(p).trim())
+              .filter((p) => p && !p.startsWith("/") && !p.includes(".."))
+              .slice(0, 50)
+          : [];
+        return {
+          ...item,
+          ...(scopeName && scopePaths.length
+            ? { scope: { name: scopeName, paths: scopePaths } }
+            : { scope: undefined }),
+          assignee: known?.assignee,
+          ticket: known?.ticket,
+          task_id: known?.task_id,
+        };
+      });
+      // 校验从"节点与下单仓一一对应"放宽为:每个下单仓至少一个节点
+      // (单仓拆分允许一仓多单元);节点 id 不得重复。
+      const coveredUrls = new Set(repositories.map((item) => item.url));
+      if (!expected.every((url) => coveredUrls.has(url))) return;
+      if (new Set(repositories.map((item) => item.id)).size
+          !== repositories.length) return;
       const ids = new Set(repositories.map((item) => item.id));
       // 新产物使用 dependent/prerequisite 消除歧义。旧版契约原本是
       // from 先于 to；若 reason 明确写了“A 依赖 B”，则以人工看到的
@@ -4745,9 +4793,15 @@ export class TaskService {
       /** Chain 拆单内部会把原文与逐仓说明拼接，允许多一份原文大小的
        * 安全余量；外部下单绝不设置。 */
       internalRequirement?: boolean;
+      /** 单仓大需求显式要求先走分析拆分(设计:docs/
+       * delivery-unit-split-design.md)。多仓下单天然走分析,无需设置。 */
+      requirementAnalysis?: boolean;
       /** Chain 确认后生成的仓库交付任务使用；不暴露给普通 API。 */
       parentTaskId?: string;
       blockedBy?: string[];
+      /** 交付单元的负责文件面(单仓拆分,Chain 建单内部下传):交付
+       * 门禁据此校验越界。普通下单不暴露。 */
+      deliveryScope?: { name: string; paths: string[] };
       /** 仅供原位从头重跑：复用已删除的 task-N，并等清理完成后再入队。 */
       reuseTaskId?: string;
       deferQueue?: boolean;
@@ -5290,7 +5344,10 @@ export class TaskService {
         ? engineeringKnowledge : undefined,
       requirement_graph: repositories.length
         ? {
-            stage: repositories.length > 1 ? "analysis" : "confirmed",
+            stage: repositories.length > 1
+                || (options.requirementAnalysis === true
+                  && !options.parentTaskId)
+              ? "analysis" : "confirmed",
             repositories: repositories.map((url, index) => ({
               id: `repo-${index + 1}`,
               name: basename(url).replace(/\.git$/, "") || `仓库 ${index + 1}`,
@@ -5302,7 +5359,15 @@ export class TaskService {
           }
         : undefined,
       parent_task_id: options.parentTaskId,
+      ...(options.requirementAnalysis === true && !options.parentTaskId
+        ? { requirement_analysis_requested: true } : {}),
       blocked_by: options.blockedBy?.length ? [...options.blockedBy] : undefined,
+      ...(options.deliveryScope?.paths.length
+        ? { delivery_scope: {
+            name: options.deliveryScope.name,
+            paths: [...options.deliveryScope.paths],
+          } }
+        : {}),
       // 用户拍板:交付方式下单就定,不让 agent 再问一遍。默认取内核
       // 选项里的第一项(通常是"完整开发"),读不到内核就不预选。
       lane: requestedLane ?? laneChoices[0],
@@ -6493,7 +6558,12 @@ export class TaskService {
   } {
     this.refreshRequirementGraph(task);
     const graph = task.summary.requirement_graph;
-    if (!graph || graph.repositories.length !== task.summary.repositories?.length) {
+    // 单仓拆分后一仓可有多个单元节点:齐不齐看"每个下单仓都有节点",
+    // 不再要求数量相等。
+    const coveredUrls = new Set(
+      graph?.repositories.map((repository) => repository.url) ?? []);
+    if (!graph || !(task.summary.repositories ?? [])
+        .every((url) => coveredUrls.has(url))) {
       throw new NotFoundError("需求图尚未生成完整，请先让 Agent 补齐分析产物");
     }
     const ticket = task.summary.ticket ?? task.summary.id;
@@ -6502,6 +6572,22 @@ export class TaskService {
       : undefined;
     if (!artifact?.content.trim()) {
       throw new NotFoundError("跨仓方案正文尚未生成，请先让 Agent 补齐 Chain 文档");
+    }
+    // 同仓多单元的分支名由(责任人,单号)决定:同仓同责任人同单号的
+    // 两个单元会撞同一条分支,必须在确认前挡下,不能等克隆后才炸。
+    const branchKeys = new Map<string, string>();
+    for (const repository of graph.repositories) {
+      const owner = repository.assignee ?? task.summary.luban_account ?? "";
+      const unitTicket = repository.ticket ?? ticket;
+      const key = `${repository.url}\0${owner}\0${unitTicket}`;
+      const clash = branchKeys.get(key);
+      if (clash) {
+        throw new TaskControlError(
+          `交付单元「${clash}」与「${repository.scope?.name ?? repository.name
+          }」同仓、同责任人、同单号,分支名会互相覆盖;请给其中一个换`
+          + "单号(子单号)或换责任人后再确认");
+      }
+      branchKeys.set(key, repository.scope?.name ?? repository.name);
     }
     const ids = new Set(graph.repositories.map((repository) => repository.id));
     const prerequisites = new Map<string, string[]>();
@@ -6521,6 +6607,20 @@ export class TaskService {
       if (!ready.length) throw new NotFoundError("仓库依赖存在循环，不能生成任务");
       ready.forEach((id) => { remaining.delete(id); order.push(id); });
     }
+    // 单仓拆分纪律(设计拍板):同仓多单元第一版一律串行——按拓扑序
+    // 给同仓相邻单元补隐式前置边。在拓扑序**之后**补而不是之前:
+    // 补边方向与显式依赖同向,不可能制造环;若按图产物的数组序补,
+    // 与显式边矛盾时会把合法图误判成循环。
+    const lastUnitByUrl = new Map<string, string>();
+    for (const unitId of order) {
+      const repository = graph.repositories.find((item) => item.id === unitId)!;
+      const previous = lastUnitByUrl.get(repository.url);
+      if (previous) {
+        const current = prerequisites.get(unitId)!;
+        if (!current.includes(previous)) current.push(previous);
+      }
+      lastUnitByUrl.set(repository.url, unitId);
+    }
     return { graph, order, incoming: prerequisites };
   }
 
@@ -6533,11 +6633,13 @@ export class TaskService {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     if (!this.isRequirementAnalysis(task)) {
-      throw new NotFoundError("只有跨仓需求主任务可以邀请共同开发者");
+      throw new NotFoundError("只有需求分析主任务可以邀请共同开发者");
     }
     this.refreshRequirementGraph(task);
     const graph = task.summary.requirement_graph;
-    if (!graph || graph.repositories.length < 2) {
+    // 单仓拆分后主任务可能只有一个仓:协作者在澄清期就要能进场
+    // (划分方向卡批注插话),不再要求图先拆出 ≥2 节点。
+    if (!graph || !graph.repositories.length) {
       throw new NotFoundError("需求图尚未生成，暂不能邀请共同开发者");
     }
     if (graph.stage === "confirmed"
@@ -6573,11 +6675,12 @@ export class TaskService {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     if (!this.isRequirementAnalysis(task)) {
-      throw new NotFoundError("只有跨仓需求主任务可以委派逐仓责任人");
+      throw new NotFoundError("只有需求分析主任务可以委派交付单元责任人");
     }
     this.refreshRequirementGraph(task);
     const graph = task.summary.requirement_graph;
-    if (!graph || graph.repositories.length < 2) {
+    // 单仓拆分:单元 ≥1 即可分工(每个单元一行,单元数由图说了算)。
+    if (!graph || !graph.repositories.length) {
       throw new NotFoundError("需求图尚未生成，暂不能分工");
     }
     if (graph.stage === "confirmed"
@@ -6724,22 +6827,56 @@ export class TaskService {
       // 跳过 init→配置确认整个流程头部)。方案落到子任务工作区文件,
       // launch 时进克隆并经下单事实把「需求文档」指过去——模型按内核
       // 流程在配置阶段读它,而不是开场就被它牵着跑。
+      // 单元任务书:从图里**机械抽取**本单元的职责/负责面/依赖关系,
+      // 一页内联;完整方案与原需求仍走工作区文件按需读(不给每个任务
+      // 塞超长全文)。依赖只列直接相邻边,接口真相以基线代码为准。
+      const position = `${order.indexOf(id) + 1}/${order.length}`;
+      const dependsOn = (incoming.get(id) ?? []).map((parentId) => {
+        const parent = graph.repositories.find((item) => item.id === parentId);
+        return parent ? (parent.scope?.name ?? parent.name) : parentId;
+      });
+      // 从 incoming 反查而不是只看显式边:单仓串行的隐式前置边也要让
+      // 上游单元知道"有人基于你的接口开发",否则串行纪律白补了提醒。
+      const dependedBy = order
+        .filter((otherId) => (incoming.get(otherId) ?? []).includes(id))
+        .map((otherId) => {
+          const dependent = graph.repositories
+            .find((item) => item.id === otherId);
+          return dependent ? (dependent.scope?.name ?? dependent.name)
+            : otherId;
+        });
+      const unitLabel = repository.scope?.name ?? repository.name;
       const requirement = [
         task.summary.requirement,
-        "本需求已跨仓分析并经人工检视确认。完整跨仓方案(仓库职责、"
-          + "接口契约、依赖关系)在工作区文件 .mae-flow-chain.md,"
-          + "配置确认的「需求文档」会自动指向它——按内核流程推进,"
-          + "在需求/设计阶段读它,不要跳过流程直接实施。只交付当前仓"
-          + "职责;发现方案不够用时停止并报告,不要自行改变跨仓契约。",
-        `当前仓库:${repository.name}\n当前职责:${repository.responsibility ?? "见方案正文"}`,
-        `当前仓 AR 单号:${repository.ticket ?? task.summary.ticket ?? "未填写"}`,
+        "本需求已分析拆分并经人工检视确认。完整方案(单元职责、"
+          + "接口契约、依赖关系、已确认事项清单)在工作区文件"
+          + " .mae-flow-chain.md,配置确认的「需求文档」会自动指向它"
+          + "——按内核流程推进,在需求/设计阶段读与你相关的章节,"
+          + "不要跳过流程直接实施。只交付本单元职责;发现方案不够用时"
+          + "停止并报告,不要自行改变拆分契约。",
+        [
+          `本单元任务书(第 ${position} 个交付单元):`,
+          `- 单元:${unitLabel}(仓库 ${repository.name})`,
+          `- 职责:${repository.responsibility ?? "见方案正文"}`,
+          ...(repository.scope?.paths.length ? [
+            `- 负责文件面:${repository.scope.paths.join("、")}`
+              + "(实现落在这些路径内;确需改动之外的文件,平台会拦下"
+              + "请主责任人裁决,这不是错误,是流程)"] : []),
+          ...(dependsOn.length ? [
+            `- 依赖上游:${dependsOn.join("、")}(它们已合入,接口以`
+              + "当前基线代码为准——方案文档只是拆分时刻的快照)"] : []),
+          ...(dependedBy.length ? [
+            `- 被依赖:${dependedBy.join("、")} 会在你之后基于你交付的`
+              + "接口开发,公共声明改动要格外慎重"] : []),
+        ].join("\n"),
+        `当前单元 AR 单号:${repository.ticket ?? task.summary.ticket ?? "未填写"}`,
       ].filter(Boolean).join("\n\n");
       const preserveUndefinedRepositorySkills =
         task.summary.repository_skills === undefined;
       const parentWorkflow = task.summary.workflow_profile;
       const child = this.create(requirement, {
         title: taskTitle(
-          `${task.summary.title ?? taskTitle(task.summary.requirement)} · ${repository.name}`),
+          `${task.summary.title ?? taskTitle(task.summary.requirement)} · ${unitLabel}`),
         account: repository.assignee ?? task.summary.luban_account,
         repo: repository.url,
         lane: task.summary.lane,
@@ -6783,6 +6920,10 @@ export class TaskService {
         requirementAssets: loadRequirementAssets(
           task.summary.workspace, task.summary.requirement_document),
         blockedBy: blockers,
+        ...(repository.scope ? { deliveryScope: {
+          name: repository.scope.name,
+          paths: [...repository.scope.paths],
+        } } : {}),
         repositorySkills: preserveUndefinedRepositorySkills
           ? undefined
           : task.summary.repository_skills!.filter(
@@ -11279,6 +11420,105 @@ export class TaskService {
     return "repaired";
   }
 
+  /** 负责面门禁(单仓拆分,docs/delivery-unit-split-design.md):
+   * 交付单元的改动必须落在自己认领的文件面内。越界不是硬拒——切法
+   * 可能就是错的——而是停摆留痕,由**主责任人**裁决:放行(记豁免,
+   * 改动随本单元 MR 一起检视)或打回(派窄使命撤出越界改动)。
+   * 契约文件归契约单元的面,别的单元要改接口,走的正是这条通道。 */
+  private async deliveryScopeAllowsPush(task: TaskState): Promise<boolean> {
+    const scope = task.summary.delivery_scope;
+    if (!scope?.paths.length || !task.cwd) return true;
+    const snapshot = await deliveryChangeSnapshot(task.cwd);
+    if (!snapshot?.baseline) return true; // 基线不可读由后续门禁如实处理
+    const exempt = new Set(task.summary.delivery_scope_exemptions ?? []);
+    // 前缀按路径段闭合:src/filter 匹配 src/filter 与 src/filter/**,
+    // 不吞 src/filterX(裸 startsWith 会把邻居目录错认成面内)。
+    const inScope = (path: string) => scope.paths.some((prefix) => {
+      const clean = prefix.replace(/\/+$/, "");
+      return path === clean || path.startsWith(`${clean}/`);
+    });
+    const violations = normalizedDeliveryPaths(snapshot.committed_paths)
+      .filter((path) => !inScope(path) && !exempt.has(path));
+    if (!violations.length) {
+      if (task.summary.delivery?.scope_violation) {
+        delete task.summary.delivery.scope_violation;
+        this.persist(task);
+      }
+      return true;
+    }
+    const listed = violations.slice(0, 20).join("、")
+      + (violations.length > 20 ? ` 等 ${violations.length} 个` : "");
+    const detail = `本单元(${scope.name})的提交改动越出负责文件面:`
+      + `${listed}。可能是实现确有需要(如修改接口契约),也可能是`
+      + "拆分方案有误;请主责任人裁决:放行(改动随本单元 MR 一起检视)"
+      + "或打回(撤出越界改动)。";
+    task.summary.delivery = {
+      ...task.summary.delivery,
+      scope_violation: { paths: violations, noted_at: new Date().toISOString() },
+    };
+    this.markVerificationStalled(task, detail);
+    // 裁决人是主责任人,不是本单元责任人:通知要发对人。
+    const parent = task.summary.parent_task_id
+      ? this.tasks.get(task.summary.parent_task_id) : undefined;
+    const decider = parent?.summary.luban_account;
+    if (decider && decider !== task.summary.luban_account
+        && this.options.notifier) {
+      this.bypass(task, "越界裁决通知", this.options.notifier.notifyOutcome({
+        taskId: task.summary.id,
+        account: decider,
+        status: "scope_violation",
+        summary: `交付单元「${scope.name}」越出负责面,等你裁决:${listed}`,
+        link: personalTaskLink(
+          this.notificationLinkBase(), decider, task.summary.id),
+      }));
+    }
+    return false;
+  }
+
+  /** 主责任人对越界改动的裁决(HTTP 入口鉴权已钉死主责任人)。
+   * allow=放行:越界文件记入豁免名单并续推,改动随本单元 MR 检视;
+   * revert=打回:派窄使命把越界文件从提交中撤出,负责面内改动不动。 */
+  decideScopeViolation(
+    id: string,
+    decision: "allow" | "revert",
+    actor: string,
+  ): TaskSummary {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    const violation = task.summary.delivery?.scope_violation;
+    if (!violation?.paths.length) {
+      throw new TaskControlError("当前没有待裁决的越界改动");
+    }
+    const paths = [...violation.paths];
+    delete task.summary.delivery!.scope_violation;
+    if (task.summary.delivery) {
+      task.summary.delivery.stalled = undefined;
+      task.summary.delivery.waiting_on = undefined;
+    }
+    if (decision === "allow") {
+      task.summary.delivery_scope_exemptions = [...new Set([
+        ...(task.summary.delivery_scope_exemptions ?? []), ...paths,
+      ])];
+      task.summary.status = "verifying";
+      task.summary.detail = `越界改动已由 ${actor} 放行(${paths.length} 个`
+        + "文件记入豁免),继续验证与推送";
+      this.persist(task);
+      this.bypass(task, "越界放行续推",
+        this.tryDeliver(task, task.controlEpoch));
+      return { ...task.summary };
+    }
+    this.enqueueRepair(task, [
+      `主责任人已裁决:以下越界改动不属于本单元(${
+        task.summary.delivery_scope?.name ?? "当前单元"}),从提交中撤出:`,
+      ...paths.map((path) => `- ${path}`),
+      "只撤出上述文件的改动(git rm --cached 或 git checkout 基线版本后",
+      "追加提交),负责面内的实现一律保留;不得 reset/rebase 改写历史。",
+      "如果撤出后实现无法自洽,停止并说明原因——那说明拆分方案需要修订,",
+      "不要用别的方式把这些改动藏回来。",
+    ].join("\n"), `按主责任人裁决撤出 ${paths.length} 个越界文件`);
+    return { ...task.summary };
+  }
+
   /** 流水线/prepush 修复不得把用户已经排除的文件“顺手带回来”。这不再
    * 交给 Agent 撞一道新门禁：若变化只涉及已明确排除的路径（或中心注入
    * 目录），宿主以最近一次已推送的干净 SHA 为锚，把修复中的已确认文件
@@ -11553,6 +11793,9 @@ export class TaskService {
       const baselineGate =
         await this.reconcileFrozenBaselineAncestry(task, true);
       if (baselineGate === "blocked") return;
+      // 负责面门禁(单仓拆分):越界改动在烧编译之前就停下留痕,
+      // 由主责任人裁决放行或打回——契约文件的变更走的正是这条通道。
+      if (!await this.deliveryScopeAllowsPush(task)) return;
       // 流水线修复若只把用户明确排除的过程件带回提交，宿主先机械收口，
       // 不新增一道让 Agent 反复碰撞的门禁；真正的新业务文件仍在后面的
       // 最终范围卡确认。第一遍也避免在已知污染 HEAD 上白烧编译。
@@ -14356,34 +14599,72 @@ export class TaskService {
       // 措辞纠偏:这是**平台的**跨仓分析前置阶段,不是内核流程——
       // 内核的交付流程(init/配置确认/门禁/MR)在确认后的各仓子任务里
       // 才开始,别让模型以为此刻该跑 mae-flow 命令。
-      `你正在执行云端平台的跨仓需求分析(交付前置阶段):把一个需求在`
-        + `${task.summary.repositories?.length ?? 0} 个仓库间的职责与依赖`
-        + `理清楚,供人检视。注意:此阶段**不在 Mae-Flow 内核流程里**,`
-        + `不要执行任何 mae-flow 命令;各仓的正式交付流程会在方案确认后`
-        + `的独立任务中由内核主导。此阶段只读分析,禁止修改业务代码、`
-        + `提交或启动交付;工作区已在 git 配置层禁用推送,push 必然失败。`,
+      `你正在执行云端平台的需求分析(交付前置阶段):把一个需求的职责`
+        + `与依赖理清楚,拆成可分工的**交付单元**(一个单元=一个仓里的`
+        + `一块文件面,或整个仓),供人检视确认。注意:此阶段**不在`
+        + ` Mae-Flow 内核流程里**,不要执行任何 mae-flow 命令;各单元的`
+        + `正式交付流程会在方案确认后的独立任务中由内核主导。此阶段`
+        + `只读分析,禁止修改业务代码、提交或启动交付;工作区已在 git`
+        + ` 配置层禁用推送,push 必然失败。`,
       `仓库清单（ID | 原始地址 | 本地只读分析路径）:\n${repositories}`,
-      "请亲自阅读各仓代码，从关键词、接口调用链、配置路由三条路径核查。"
-        + "每个触点必须给出仓库、文件、符号、相关原因和置信度；"
-        + "拿不准的事项使用 AskUserQuestion 逐题询问，不能猜。"
-        + "逐题确认仓库职责、接口形态/字段/错误语义，以及依赖方向和可并行范围。"
-        + "对每个新增或变化的数据逐项追清生产者、转换者、消费者和责任系统；"
-        + "若生产者在仓库清单之外，也必须在最终拆单前问清外部系统与回流方式。"
-        + "禁止留下只有消费方、没有明确产生方的字段或事件。",
+      "第一步:澄清(你的第一责任,相当于把需求评审会开完)。"
+        + "请亲自阅读各仓代码,从关键词、接口调用链、配置路由三条路径核查。"
+        + "每个触点必须给出仓库、文件、符号、相关原因和置信度。"
+        + "事实自己查,决定才问人:凡是读代码/查文件能确定的,不许拿去"
+        + "问用户;拿不准的**决定**用 AskUserQuestion 按批次提问——把当前"
+        + "已具备前提、可以立刻回答的问题凑成一批一次问完,每题给出你的"
+        + "建议答案;答案会解锁新的问题,再问下一批。"
+        + "逐题确认单元职责、接口形态/字段/错误语义,以及依赖方向。"
+        + "对每个新增或变化的数据逐项追清生产者、转换者、消费者和责任系统;"
+        + "若生产者在仓库清单之外,也必须在最终拆单前问清外部系统与回流方式。"
+        + "每个字段和事件都要有明确的产生方。"
+        + "澄清的收口标准:**每一条已识别的不确定事项都有结论**——用户答了,"
+        + "或明确记录「按 X 假设处理,已经用户确认」。方案里每一项都必须"
+        + "有定论,出现待定/TBD 即不合格。",
+      "第二步:改动面盘点。澄清收口后,列出这个需求实际要动的全部位置:"
+        + "存量触点(要改哪些既有文件/类,逐个列)+ 新增规划(要新建哪些"
+        + "模块/目录,各自职责)+ 接缝清单(纯新增也逃不掉的既有文件触点:"
+        + "路由注册、启动装配、构建文件、DB migration 等全局单点)。",
+      "第三步:划分方向卡(固定动作,不可跳过)。把改动面盘点用"
+        + " AskUserQuestion 摆给用户,问「打算怎么拆分,有什么讲究?」,"
+        + "并给出你建议的切法;用户可以给方向、指定某块归谁,也可以答"
+        + "「你看着切」。协作者可能在这张卡上批注插话,他们的意见随决定"
+        + "一起到达,必须逐条消化。",
+      "第四步:按方向出拆分方案。拆分判据:"
+        + "①按**这次需求的改动面**切,以依赖割线为界,而不是照抄目录结构;"
+        + "②每个单元的检视面(最终 MR 的 diff)要小到一个人能负责任地"
+        + "看完并签字;"
+        + "③同一个仓要拆多块时,第一个单元必须是**契约骨架**:接口声明、"
+        + "公共数据结构、共享文件里的注册占位,配空实现,整体编译得过"
+        + "——它像曳光弹先把链路打通,后续单元在它之上填实现;"
+        + "接缝清单里的全局单点文件全部划给契约骨架单元;"
+        + "④跨语言/跨进程的依赖边,契约骨架先落接口描述文件(如 OpenAPI),"
+        + "两侧代码都从它生成,人手不写两份;"
+        + "⑤横扫全仓的机械宽改动(改名、换类型)不硬塞进一个单元:"
+        + "先加新形态的单元、再迁移、最后删旧形态,各自成单元。",
       "只有全部不确定事项都已经逐题确认后，才能生成以下两份最终产物。",
       `把供人检视的完整方案写到 ${join(artifactDir, `CHAIN-${ticket}.md`)}。`
-        + "正文必须包含需求理解、仓库职责、带证据触点、接口契约、"
-        + "依赖关系与交付顺序、逐仓启动说明。依赖图使用 Mermaid。",
+        + "正文必须包含:需求理解、**已确认事项清单**(逐条:问题→结论"
+        + "→谁拍板,澄清期全部 Q&A 落在这里)、**改动面盘点**、逐单元"
+        + "职责与接口契约、依赖关系与交付顺序(Mermaid 图)、逐单元启动"
+        + "说明(**按单元分节,节标题含单元 id**,平台会按节机械抽取生成"
+        + "各单元的任务书)。接口的长期真相在代码里,方案是拆分时刻的"
+        + "快照——写清即可,不承诺跟随后续代码演进。",
       `同时把机器可读投影写到 ${join(artifactDir, "requirement-graph.json")}，`
         + "格式严格为 "
-        + `{"repositories":[{"id":"repo-1","name":"名称","url":"原始地址",`
-        + `"responsibility":"职责"}],"dependencies":[{`
-        + `"dependent":"repo-2","prerequisite":"repo-1",`
+        + `{"repositories":[{"id":"unit-1","name":"名称","url":"原始地址",`
+        + `"responsibility":"职责","scope":{"name":"单元名",`
+        + `"paths":["src/filter/","include/notify/"]}}],"dependencies":[{`
+        + `"dependent":"unit-2","prerequisite":"unit-1",`
         + `"reason":"为什么 dependent 必须等待 prerequisite"}]}。`
-        + "repositories 必须覆盖上方全部仓库且 url 原样照录；"
+        + "每个交付单元一个节点:url 原样照录下单仓地址,同一个仓拆多块"
+        + "就写多个节点(id 互不相同);scope.paths 是该单元负责的仓内"
+        + "相对路径前缀,允许指向尚不存在的目录(新增模块);整仓一个"
+        + "单元时 scope 可省略。上方每个仓库至少要有一个节点。"
         + "dependencies 的语义必须是 dependent 依赖 prerequisite，"
         + "也就是 prerequisite 先开发、dependent 后开发；"
-        + "只有确实不能并行的硬依赖才写，禁止循环依赖。",
+        + "只有确实不能并行的硬依赖才写，禁止循环依赖"
+        + "(同仓单元由平台自动按顺序串行执行,同仓相邻顺序不必写边)。",
       "方案写完后必须调用 AskUserQuestion，请用户选择「需要修改」或"
         + "「确认并生成任务」。用户选择需要修改时，结合随决定提交的批注"
         + "继续修订同一份方案，再次发起检视；确认前不得收尾。"

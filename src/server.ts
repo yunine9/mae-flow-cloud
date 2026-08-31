@@ -2021,6 +2021,8 @@ export function createTaskServer(
               selectedBusinessModuleIds, selectedEngineeringKnowledgeIds,
               repositoryProfiles,
               knowledgePreviewDigest,
+              // 单仓大需求显式要求先分析拆分(交付单元拆分入口)。
+              requirementAnalysis: body.requirement_analysis === true,
             }));
         } catch (error) {
           return json(response, 400, { error: humanError(error) });
@@ -2559,6 +2561,28 @@ export function createTaskServer(
           const cwd = panel ? dirname(dirname(panel)) : undefined;
           return json(response, 200,
             buildTimeline(target.workspace, cwd));
+        }
+        // 越界裁决(单仓拆分负责面门禁):裁决权只在主责任人手里——
+        // 单元责任人自己放行自己的越界,边界就形同虚设。
+        if (request.method === "POST" && parts[2] === "scope-decision") {
+          const target = service.get(id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          const parent = target.parent_task_id
+            ? service.get(target.parent_task_id) : undefined;
+          const decider = parent?.luban_account ?? target.luban_account;
+          if (!canOperate(viewer, decider, !!options.auth)) {
+            return json(response, 403,
+              { error: "越界改动只能由主任务责任人裁决" });
+          }
+          const body = await readBody(request);
+          const decision = body.decision === "allow" ? "allow"
+            : body.decision === "revert" ? "revert" : undefined;
+          if (!decision) {
+            return json(response, 400,
+              { error: "decision 必须是 allow(放行)或 revert(打回)" });
+          }
+          return json(response, 200, service.decideScopeViolation(
+            id, decision, viewer?.username ?? decider ?? "本地用户"));
         }
         // 问题定位一键采集(只读现场+现查 git/容器):现采现回并留档。
         // 权限口径同任务详情;能看任务就能拿它的诊断包。

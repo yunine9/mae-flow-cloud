@@ -1226,6 +1226,14 @@ svg {
 .repo-field { display: grid; gap: 6px; }
 .repo-field input { width: 100%; }
 .repo-field-note { color: var(--muted); font-size: var(--font-size-assist); }
+.repo-analysis-toggle {
+  margin-top: 8px; padding: 8px 10px; display: flex; align-items: flex-start; gap: 8px;
+  border: 1px dashed var(--line); border-radius: 8px; cursor: pointer;
+}
+.repo-analysis-toggle:hover { border-color: var(--accent); }
+.repo-analysis-toggle input { margin-top: 2px; accent-color: var(--accent); }
+.repo-analysis-toggle > span { display: grid; gap: 2px; color: var(--text-strong); font-size: 12.5px; font-weight: 700; }
+.repo-analysis-toggle > span small { color: var(--muted); font-size: 11px; font-weight: 500; line-height: 1.5; }
 .repo-field-title { display: flex; align-items: end; justify-content: space-between; gap: 12px; }
 .repo-field-title > span { color: var(--text); font-size: var(--font-size-assist); font-weight: 700; }
 .repo-field-title > small { color: var(--muted); font-size: var(--font-size-assist); }
@@ -1572,6 +1580,10 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .repository-assignee-list em.ready { color: #16885d; }
 .repository-assignee-list em.missing { color: var(--attention); }
 .repo-ticket { color: var(--muted); font: 650 11px var(--font-mono); }
+.repo-scope-paths {
+  overflow: hidden; margin-top: 4px; color: var(--muted);
+  font: 600 10.5px var(--font-mono); text-overflow: ellipsis; white-space: nowrap;
+}
 .repository-assignee-error { margin: 0 12px 8px; padding: 8px 10px; border-radius: 7px; color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, var(--surface)); font-size: 12px; }
 .repository-assignees > footer { padding: 10px 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); }
 .repository-assignees > footer p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
@@ -1842,6 +1854,7 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   background: color-mix(in srgb, var(--accent) 3%, transparent);
 }
 .task-child-links-label { padding-top: 7px; color: var(--muted); font-size: 11px; font-weight: 800; }
+.task-child-links-label .task-child-progress { display: block; margin-top: 2px; color: var(--muted); font-size: 10.5px; font-weight: 600; }
 .task-child-links > div { min-width: 0; display: grid; gap: 5px; }
 .task-child-links button {
   min-width: 0; padding: 7px 9px; display: grid; grid-template-columns: 21px minmax(0, 1fr) auto;
@@ -9776,6 +9789,29 @@ body[data-view="issues"] .nav-item.on { box-shadow: inset 3px 0 #c87873; }
 
 /* await_merge 右栏一行式状态(MFC-039):右栏标题已说明阶段,这里
    默认只有一行,点开才是说明与 MR 链接;MR 被关是例外,直接可见。 */
+.scope-violation-card {
+  margin: 12px 14px; padding: 12px; display: grid; gap: 8px;
+  border: 1px solid var(--attention); border-radius: 9px; background: var(--surface);
+}
+.scope-violation-card > strong { color: var(--text-strong); font-size: 13.5px; }
+.scope-violation-card > p { margin: 0; color: var(--text); font-size: var(--font-size-assist); line-height: 1.55; }
+.scope-violation-paths {
+  max-height: 180px; margin: 0; padding: 8px 10px; display: grid; gap: 3px;
+  overflow: auto; border-radius: 7px; background: var(--surface-soft); list-style: none;
+}
+.scope-violation-paths code { color: var(--text-strong); font: 600 11px var(--font-mono); word-break: break-all; }
+.scope-violation-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.scope-violation-actions button {
+  padding: 7px 12px; border: 1px solid var(--accent); border-radius: 7px;
+  color: var(--accent); background: var(--surface); font-size: 12px; font-weight: 750; cursor: pointer;
+}
+.scope-violation-actions button:hover:not(:disabled) { background: var(--accent-soft); }
+.scope-violation-actions button:disabled { opacity: 0.55; cursor: default; }
+.scope-violation-actions button.scope-violation-revert { border-color: var(--danger); color: var(--danger); }
+.scope-violation-actions button.scope-violation-revert:hover:not(:disabled) { background: color-mix(in srgb, var(--danger) 10%, transparent); }
+.scope-violation-card > small { color: var(--muted); font-size: 10.5px; }
+.scope-violation-card > small.scope-violation-error { color: var(--danger); font-weight: 700; }
+
 .ws-merge-line { margin: 12px 14px; display: grid; gap: 6px; }
 .ws-merge-line > button {
   width: fit-content; padding: 7px 11px; display: inline-flex;

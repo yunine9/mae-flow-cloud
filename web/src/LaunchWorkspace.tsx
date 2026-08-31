@@ -250,6 +250,9 @@ export function LaunchWorkspace({
     validDraft?.repairRounds ?? savedPreferences?.repairRounds ?? "");
   const [taskInstructions, setTaskInstructions] = useState(
     validDraft?.taskInstructions ?? "");
+  // 单仓大需求先分析拆分(docs/delivery-unit-split-design.md):默认不勾,
+  // 小需求照旧直干;勾了走多仓同款的 Chain 分析,把一个仓拆成多个交付单元。
+  const [requirementAnalysis, setRequirementAnalysis] = useState(false);
   const [selectedBusinessModuleIds, setSelectedBusinessModuleIds] = useState(
     validDraft?.selectedBusinessModuleIds ?? []);
   const [moduleSelectionNotice, setModuleSelectionNotice] = useState("");
@@ -754,6 +757,10 @@ export function LaunchWorkspace({
               && repositoryTechnologies.length > 0
               && repositoryTechnologies.every((item) => item.confirmed)
             ? asRepositoryProfiles(repositoryTechnologies) : undefined,
+          // 只在单仓时传:多仓本来就走分析拆分,重复传会误导服务端语义。
+          requirementAnalysis: requirementAnalysis && repoFieldsEnabled
+              && repos.map((item) => item.trim()).filter(Boolean).length === 1
+            ? true : undefined,
           requirementDocumentName: requirementDocumentName || undefined,
           requirementBundle: requirementBundle
             ? {
@@ -1045,6 +1052,16 @@ export function LaunchWorkspace({
                       <small className="repo-field-note">
                         请填写每个仓自己的 AR 对应 REQ 单号，不要填 FuR；两者格式相同，系统无法自动识别。
                       </small>
+                      {repos.map((item) => item.trim()).filter(Boolean).length === 1 && (
+                        <label className="repo-analysis-toggle">
+                          <input type="checkbox" checked={requirementAnalysis}
+                            onChange={(event) =>
+                              setRequirementAnalysis(event.target.checked)} />
+                          <span>大需求先分析拆分
+                            <small>先出改动面盘点与拆分方案给你确认,再按交付单元
+                              逐个开子任务(多仓需求自动走这一步)</small></span>
+                        </label>
+                      )}
                       <datalist id="launch-recent-repositories">
                         {(savedPreferences?.recentRepos ?? []).map((repo) => (
                           <option key={repo} value={repo} />

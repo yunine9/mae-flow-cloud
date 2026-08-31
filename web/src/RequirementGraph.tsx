@@ -2,7 +2,10 @@ import { useState } from "react";
 import type { TaskSummary } from "./api";
 
 function repoName(id: string, task: TaskSummary): string {
-  return task.requirement_graph?.repositories.find((item) => item.id === id)?.name ?? id;
+  const node = task.requirement_graph?.repositories.find((item) => item.id === id);
+  if (!node) return id;
+  // 单仓拆多个交付单元时仓名会重复,拼上单元名才分得清。
+  return node.scope?.name ? `${node.name} · ${node.scope.name}` : node.name;
 }
 
 const childStatusText: Record<string, string> = {
@@ -21,7 +24,9 @@ export function RequirementGraph({
 }) {
   const graph = task.requirement_graph;
   const [expanded, setExpanded] = useState(true);
-  if (!graph || graph.repositories.length < 2) return null;
+  // 单仓分析单拆分前只有一个节点,也要露出概览让人看到"待拆分"。
+  if (!graph) return null;
+  if (graph.repositories.length < 2 && task.requirement_analysis_requested !== true) return null;
   const participantNames = [...new Set([
     ...(task.collaborators ?? []),
     ...graph.repositories.map((repository) => repository.assignee)
@@ -50,7 +55,7 @@ export function RequirementGraph({
         <strong id="requirement-graph-title">主任务与子任务进展</strong>
       </div>
       <small>{generated < graph.repositories.length
-        ? `待拆分 · ${graph.repositories.length} 个仓库`
+        ? `待拆分 · ${graph.repositories.length} 个交付单元`
         : `${completed}/${graph.repositories.length} 个子任务已完成`}</small>
       <i className="requirement-toggle" aria-hidden />
     </summary>
@@ -62,7 +67,7 @@ export function RequirementGraph({
         <em className={task.status}>{childStatusText[task.status] ?? task.status}</em>
       </div>
       <div className="requirement-split-label">
-        <span>{generated ? `已拆分为 ${generated} 个仓库子任务` : "确认方案后拆分仓库子任务"}</span>
+        <span>{generated ? `已拆分为 ${generated} 个子任务` : "确认方案后按交付单元拆分子任务"}</span>
       </div>
       <div className="requirement-main-team">
         <div><span>主任务团队</span>
@@ -87,7 +92,8 @@ export function RequirementGraph({
                 title={repository.url}>
                 <div className="repo-node-head">
                   <i aria-hidden />
-                  <strong>{repository.name}</strong>
+                  <strong>{repository.scope?.name
+                    ? `${repository.name} · ${repository.scope.name}` : repository.name}</strong>
                   {repository.task_id && <button type="button"
                     onClick={() => onOpenTask?.(repository.task_id!)}>查看子任务</button>}
                 </div>
@@ -102,6 +108,10 @@ export function RequirementGraph({
                 <span className="repo-ticket">
                   AR 单号 · {repository.ticket ?? task.ticket ?? "待确认"}
                 </span>
+                {repository.scope && repository.scope.paths.length > 0 &&
+                  <span className="repo-scope-paths" title={repository.scope.paths.join("\n")}>
+                    负责面 · {repository.scope.paths.join("、")}
+                  </span>}
                 {repository.responsibility && <p>{repository.responsibility}</p>}
                 {parents.length > 0 && <span className="repo-prerequisite">
                   等待 {parents.map((edge) => repoName(edge.to, task)).join("、")}
