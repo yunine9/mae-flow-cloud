@@ -198,6 +198,9 @@ export function stageLabelOf(state: IssueSessionState): string {
 export function issueFixedOpeningPrompt(
   state: IssueSessionState,
   credentials: IssueEnvCredentials = {},
+  /** 月光免审批档的节奏渲染(现读现判):开=少问、不中间简报、
+   * 报告会被自动确认;关=高把关,主动问与对齐(ADR-0006)。 */
+  options: { moonlight?: boolean } = {},
 ): string {
   const scenario = state.scenario ?? "ticket";
   const stages = fixedStages(scenario).map((stage) =>
@@ -211,7 +214,8 @@ export function issueFixedOpeningPrompt(
   return [
     "你是本问题会话的处理 Agent。本会话走**固定流程**:每阶段给目标与唯一"
       + "出口,活干到你判断达标就调出口动作自报收口,平台只在用户决策卡与 "
-      + "MR 验绿处设卡。研究方法参考技能 issue-research/issue-ops,交付参考 issue-delivery。",
+      + "MR 验绿处设卡。分析工作流(方法论取用次序/轻量分流/取证规范/报告"
+      + "四要素)见技能 issue-analysis,交付参考 issue-delivery。",
     "",
     "## 问题事实",
     `- 标题: ${meta.title}`,
@@ -253,7 +257,16 @@ export function issueFixedOpeningPrompt(
     "8. 秘密边界:平台凭据(Git 令牌、登录口令)由平台保管,不向用户索要、"
       + "不猜测、不讨论;网管环境的账号密码是现场公开的出厂默认值,已明文"
       + "写在登记元信息里(拿不准调 get_issue_meta 重查),用户问起直接回答。",
-    "9. 持续维护 issue-analysis.md(现象-根因-方案),它是本会话的核心交付物。",
+    "9. 持续维护 issue-analysis.md(结论/证据链/置信度/下一步建议四要素),"
+      + "它是本会话的核心交付物;submit_analysis 以四章节齐全为门票。",
+    ...(options.moonlight
+      ? ["10. 介入节奏(月光免审批,开):分析过程少问——证据不足先自查,"
+          + "待确认项写进报告「下一步建议」;不做中间简报,结论一次成稿;"
+          + "报告提交后平台会自动确认进入修改,把它写到无需补充即可执行"
+          + "的自足程度。"]
+      : ["10. 介入节奏(高把关):证据不足主动用 AskUserQuestion 问;"
+          + "现象理解、根因方向等关键节点主动对齐;完整路径的假设-验证"
+          + "循环每轮给一句中间简报。"]),
     "",
     "现在开始:先复述你对问题现象的理解与当前阶段要做的事,然后推进。"
       + (scenario === "ticket" && current === "dts_info"
@@ -298,7 +311,8 @@ export function issueOpeningPrompt(
   const meta = issueRegistrationMeta(state, credentials);
   return [
     "你是本问题会话的研究与处理 Agent。工作方式见技能 issue-playbook(路线图)、"
-      + "issue-research(研究方法)、issue-delivery(交付)、issue-ops(环境操作)。",
+      + "issue-analysis(分析工作流)、issue-research(研究方法)、"
+      + "issue-delivery(交付)、issue-ops(环境操作)。",
     "",
     "## 问题事实",
     `- 标题: ${meta.title}`,
@@ -322,7 +336,8 @@ export function issueOpeningPrompt(
     "6. 秘密边界:平台凭据(Git 令牌、登录口令)由平台保管,不向用户索要、"
       + "不猜测、不讨论;网管环境的账号密码是现场公开的出厂默认值,已明文"
       + "写在登记元信息里(拿不准调 get_issue_meta 重查),用户问起直接回答。",
-    "7. 持续维护分析报告 issue-analysis.md(现象-根因-方案),它是本会话的核心交付物。",
+    "7. 持续维护分析报告 issue-analysis.md(结论/证据链/置信度/下一步建议"
+      + "四要素),它是本会话的核心交付物;submit_analysis 以四章节齐全为门票。",
     "",
     "现在开始:先复述你对问题现象的理解,给出研究计划(打算看什么、拉什么日志、"
     + "问用户什么),然后按计划推进。",
@@ -336,6 +351,7 @@ export function issueResumePrompt(
   state: IssueSessionState,
   userText: string,
   credentials: IssueEnvCredentials = {},
+  options: { moonlight?: boolean } = {},
 ): string {
   const meta = issueRegistrationMeta(state, credentials);
   return [
@@ -346,6 +362,11 @@ export function issueResumePrompt(
     moduleLine(meta),
     ...environmentLines(meta),
     `- 最近阶段: ${stageLabelOf(state)}(${state.stage_note || "无说明"})`,
+    ...(state.mode === "fixed"
+      ? [options.moonlight
+        ? "介入节奏:月光免审批(开)——少问、不做中间简报,分析报告会被平台自动确认。"
+        : "介入节奏:高把关——证据不足主动问,关键节点主动对齐。"]
+      : []),
     state.pushes?.length
       ? `- 已推送: ${state.pushes.map((push) =>
           `${push.branch} @ ${push.sha.slice(0, 12)}`).join(";")}` : "",

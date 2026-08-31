@@ -27,7 +27,7 @@
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { join } from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import {
   ISSUE_STAGES,
   STAGE_LABELS,
@@ -142,6 +142,20 @@ function raiseEnvNeededGate(
  * 为门票——报告不在场就举闸等于让用户对着空气确认)。 */
 function analysisReportPath(ctx: IssueToolContext): string {
   return join(ctx.workspace, "issue-analysis.md");
+}
+
+/** 分析报告四要素(CONTEXT.md「分析报告」词条,模板在技能
+ * issue-analysis):submit_analysis 的门票从"文件在场"升级为"章节
+ * 齐全"——结论必附证据是分析质量的最后防线,提示词管不住的侥幸在
+ * 工具层过不去。章节按标题行匹配(1~4 级),内容长短不管:轻量
+ * 路径的报告照样四章节齐全,只是每节更短。 */
+export const ANALYSIS_REPORT_SECTIONS = [
+  "结论", "证据链", "置信度", "下一步建议",
+] as const;
+
+export function missingAnalysisSections(content: string): string[] {
+  return ANALYSIS_REPORT_SECTIONS.filter((section) =>
+    !new RegExp(`^#{1,4}\\s*${section}`, "m").test(content));
 }
 
 export function createIssueTools(ctx: IssueToolContext): unknown[] {
@@ -725,8 +739,9 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       label: "Submit Analysis Report",
       description:
         "宣布问题分析完成并提交分析报告(工作区根目录的 issue-analysis.md)。"
-        + "调用前报告必须已写好——平台以文件在场为门票。提交后平台举确认卡"
-        + "等用户过目:有单场景确认后进入问题修改;无单场景需给 conclusion"
+        + "调用前报告必须已写好——平台以文件在场且四章节齐全(结论/证据链/"
+        + "置信度/下一步建议,模板见技能 issue-analysis)为门票。提交后平台举"
+        + "确认卡等用户过目:有单场景确认后进入问题修改;无单场景需给 conclusion"
         + "(issue=是问题/non_issue=非问题)由用户定夺挂起或闭环。"
         + "提交后请结束回合等待用户。",
       parameters: Type.Object({
@@ -734,8 +749,13 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
           [Type.Literal("issue"), Type.Literal("non_issue")],
           { description: "分析结论(无单场景必填):issue=是问题 / non_issue=非问题" },
         )),
+        confidence: Type.Optional(Type.Union(
+          [Type.Literal("high"), Type.Literal("medium"), Type.Literal("low")],
+          { description: "结论置信度自报(无单场景消费:non_issue 且 high 在月光"
+            + "免审批档自动闭环归档;缺省按置信度不足处理,人工裁决)" },
+        )),
         summary: Type.String({
-          description: "一段话结论摘要:现象-根因-方案(或非问题的判定依据),会展示给用户",
+          description: "一段话结论摘要:根因与方向(或非问题的判定依据),会展示给用户",
         }),
       }),
       async execute(_toolCallId: string, params: any) {
@@ -743,7 +763,13 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         const report = analysisReportPath(ctx);
         if (!existsSync(report)) {
           fail(`分析报告还没落盘:请先把报告写到工作区根目录 issue-analysis.md`
-            + `(现象-根因-方案三段),再提交`);
+            + `(结论/证据链/置信度/下一步建议四章节,模板见技能 issue-analysis),再提交`);
+        }
+        const missing = missingAnalysisSections(readFileSync(report, "utf-8"));
+        if (missing.length) {
+          fail(`分析报告缺必备章节:${missing.join("、")}。`
+            + "按技能 issue-analysis 的模板补齐四要素再提交;轻量路径的简版"
+            + "报告也必须四章节齐全(内容可简,要素不缺)。");
         }
         const summary = String(params.summary ?? "").trim();
         if (!summary) fail("summary 不能为空:给用户看的结论摘要");
@@ -753,6 +779,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         }
         const proposal = {
           ...(params.conclusion ? { conclusion: params.conclusion } : {}),
+          ...(params.confidence ? { confidence: params.confidence } : {}),
           summary,
           report,
         };

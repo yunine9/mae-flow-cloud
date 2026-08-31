@@ -250,6 +250,23 @@ function normalizeEnvironmentInput(
   };
 }
 
+/** 问题域知识上下文(ADR-0005):货架 skill 匹配问题会话用的画像=
+ * 登记的关联仓 + 绑定的业务模块。纯函数单源,openDriver 装配与测试
+ * 共用——改口径只动这里。 */
+export function issueKnowledgeContext(state: IssueSessionState): {
+  repositories: string[];
+  technologies: string[];
+  businessModuleIds: string[];
+} {
+  return {
+    repositories: state.repo_urls?.length
+      ? [...state.repo_urls]
+      : state.repo_url ? [state.repo_url] : [],
+    technologies: [],
+    businessModuleIds: state.module_id ? [state.module_id] : [],
+  };
+}
+
 /** vault 行·后台凭据:playbook 契约三个系统账号同密码,按形状存三套,
  * vault 校验与工具取密(sopuser)都不用特判。 */
 function backendVaultRow(
@@ -332,6 +349,11 @@ export interface IssueFlowOptions {
    * 这是裸构造(测试/旧部署)的兼容缺省;正式接线在 serve 层,那里的
    * auth.issueFlowMode 对真人缺省返回 fixed。 */
   issueFlowMode?: (account: string) => IssueFlowMode;
+  /** 月光免审批(个人设置「人工介入程度」的过程轴,现读现判):开着时
+   * 分析结论闸由系统代答——analysis_confirm 全量;conclude 仅提案
+   * non_issue 且自报高置信。env_needed/env_verify 问的是用户事实,
+   * 永不代答(ADR-0006)。回调缺席或返回非真=关闭,行为与现状一致。 */
+  moonlight?: (account?: string) => boolean | undefined;
   gitCredential?: (account: string) =>
     (GitCredential & { email?: string }) | undefined;
   opsTools?: IssueOpsTools;
@@ -879,7 +901,8 @@ export class IssueFlowService {
     if (live.driver) return live.driver.continueWith(message);
     const driver = await this.openDriver(live);
     return driver.startResume(issueResumePrompt(live.state, message,
-      this.environmentCredentials(live)));
+      this.environmentCredentials(live),
+      { moonlight: this.moonlightOn(live) }));
   }
 
   /** 并发额度:同时进行的回合数(等待用户/闲置/挂起的会话不占额度)。 */
@@ -899,7 +922,8 @@ export class IssueFlowService {
         const driver = await this.openDriver(live);
         return driver.start(live.state.mode === "fixed"
           ? issueFixedOpeningPrompt(live.state,
-            this.environmentCredentials(live))
+            this.environmentCredentials(live),
+            { moonlight: this.moonlightOn(live) })
           : issueOpeningPrompt(live.state,
             this.environmentCredentials(live)));
       });
@@ -1072,7 +1096,10 @@ export class IssueFlowService {
     saveState(live.root, live.state);
     // AI 要人拍板才通知(对齐需求侧公共能力);suspended/idle/终态是
     // 结论后的动作与正常交还,不催人。
-    if (state.status === "waiting_user") this.notifyWaitingCard(live);
+    if (state.status === "waiting_user") {
+      this.notifyWaitingCard(live);
+      this.maybeAutoAnswerGate(live);
+    }
     if (isTerminal(state.status)) this.releaseDriver(live);
   }
 
@@ -1113,6 +1140,55 @@ export class IssueFlowService {
     }).catch((error) =>
       this.log(`[issue-flow] ${live.id} 等待卡通知失败(旁路,流程照走): `
         + String(error)));
+  }
+
+  /** 月光轴现读现判:会话开/续聊渲染节奏、闸代答判定都读当下值,
+   * 用户改设置即刻生效(与需求流"每张卡到达时现读"同纪律)。 */
+  private moonlightOn(live: LiveIssue): boolean {
+    return this.options.moonlight?.(live.state.account) === true;
+  }
+
+  /** 月光免审批的闸代答(ADR-0006):只代答"确认类"闸——
+   * analysis_confirm 全量(推荐码表定死 confirm);conclude 仅提案
+   * non_issue 且自报高置信(闭环无下游闸,分级保守)。env_needed/
+   * env_verify 问的是用户的事实(环境配置/验证结果),永不代答。
+   * 作答 defer 到回合收口(turning 释放)之后,走 answer() 同一裁决
+   * 通道——现场账、通知、续跑与真人作答同款,事后可经现有回退推翻。 */
+  private maybeAutoAnswerGate(live: LiveIssue): void {
+    const { state } = live;
+    const gate = state.gate;
+    if (!gate) return;
+    if (!this.moonlightOn(live)) return;
+    let code: string | undefined;
+    if (gate.kind === "analysis_confirm") code = "confirm";
+    else if (gate.kind === "conclude"
+        && gate.proposal?.conclusion === "non_issue"
+        && gate.proposal?.confidence === "high") code = "non_issue";
+    if (!code) return;
+    const issueId = live.id;
+    const version = gate.state_version;
+    const kind = gate.kind;
+    this.log(`[issue-flow] ${issueId} 月光免审批:闸 ${kind} 自动作答(${code})`);
+    setTimeout(() => {
+      try {
+        const summary = this.answer(issueId, {
+          state_version: version,
+          code,
+          decision: `月光免审批自动确认(${gateOptionLabel(kind, code)})`,
+        });
+        void this.options.notifier?.notifyOutcome({
+          taskId: issueId,
+          account: state.account,
+          status: summary.status,
+          summary: `月光免审批:分析结论已自动确认(${gateOptionLabel(kind, code)})`,
+          link: `${(this.options.linkBase ?? "").replace(/\/+$/, "")}`
+            + `/issues/${encodeURIComponent(issueId)}`,
+        }).catch(() => undefined);
+      } catch (error) {
+        this.log(`[issue-flow] ${issueId} 月光自动作答失败(旁路,卡留待人): `
+          + String(error instanceof Error ? error.message : error));
+      }
+    }, 0);
   }
 
   private releaseDriver(live: LiveIssue): void {
@@ -1220,6 +1296,10 @@ export class IssueFlowService {
     this.log(`[issue-flow] ${live.id} 装载技能: ${
       skillPaths.map((path) => path.split("/").at(-2)).join(", ")}`);
     const service = this;
+    // 团队货架 skill 进问题会话(ADR-0005):问题域知识上下文=登记的
+    // 关联仓 + 绑定的业务模块;匹配走 issue 口径(通用工程知识豁免、
+    // 技术栈维度不参与)。部署源与需求侧同一个 dataDir/skills。
+    const knowledgeContext = issueKnowledgeContext(live.state);
     const context: IssueToolContext = {
       state: live.state,
       workspace: live.root,
@@ -1269,6 +1349,10 @@ export class IssueFlowService {
       agentDir,
       // 改编版 playbook 技能(精确到 SKILL.md 文件的 allowlist 形态)。
       repositorySkillPaths: skillPaths,
+      // 团队货架 skill(通用定位类知识的问题会话供给线,ADR-0005)。
+      hostSkillsDir: join(this.options.dataDir, "skills"),
+      knowledgeContext,
+      knowledgeScope: "issue",
       provider: model.provider,
       model: model.model,
       eventLog: new EventLog(join(live.root, "events.jsonl")),
@@ -1278,11 +1362,12 @@ export class IssueFlowService {
         // issue-analysis.md 都在里面)。台账类文件由 GateService 的
         // 宿主账本规则拒写;问题域追加自己的账本与技能目录——
         // issue.json 是推送门禁的依据,skills/ 是行为契约,都不能
-        // 让 Agent 自己改。
+        // 让 Agent 自己改;货架 skill 快照(.mae-flow-work/host-skills)
+        // 同罪:只读投影,Agent 没有写它的理由。
         workspace: live.root,
         cwd: live.root,
         extraLedgerFiles: ["issue.json", "issue.json.tmp"],
-        extraLedgerDirs: ["skills"],
+        extraLedgerDirs: ["skills", ".mae-flow-work/host-skills"],
         failClosed: false,
         log: (message) => this.log(`[issue-gate] ${message}`),
       }),
@@ -1366,7 +1451,8 @@ export class IssueFlowService {
       driver.injectDecision(record);
       return driver.startResume(issueResumePrompt(live.state,
         `用户对问题卡的答复:\n${renderDecision(record)}`,
-        this.environmentCredentials(live)));
+        this.environmentCredentials(live),
+        { moonlight: this.moonlightOn(live) }));
     });
     return summarize(live.state);
   }

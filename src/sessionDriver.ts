@@ -229,6 +229,9 @@ export interface CloudSessionOptions {
     technologies: string[];
     businessModuleIds: string[];
   };
+  /** 知识匹配口径:缺省 task;问题会话传 issue(ADR-0005)——未限定
+   * 作用域的通用工程知识豁免进会话,技术栈维度不参与过滤。 */
+  knowledgeScope?: "task" | "issue";
   /** 本单明确选中的仓库 Skill。每项必须是一个存在的 SKILL.md 文件；
    * 不能传 skills 目录，否则同目录下未选择的 Skill 也会被 Pi 扫入。
    * 跨仓时可同时传多个仓各自的文件，主/子 Agent 共用同一 allowlist。 */
@@ -802,6 +805,7 @@ export class CloudSession {
       workspaceRoot: workspace,
       snapshotRoot: join(workspace, ".mae-flow-work", "host-skills"),
       context: this.options.knowledgeContext,
+      knowledgeScope: this.options.knowledgeScope,
     });
     for (const warning of hostSkills.warnings) {
       this.options.log?.(

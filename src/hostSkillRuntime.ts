@@ -25,6 +25,7 @@ import {
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
 import {
+  knowledgeMatchesIssueSession,
   knowledgeMatchesTask,
   readSkillKnowledgeMetadata,
 } from "./knowledgeAssetModel.ts";
@@ -294,6 +295,9 @@ export function materializeHostSkills(options: {
     technologies: string[];
     businessModuleIds: string[];
   };
+  /** 匹配口径:缺省 task(knowledgeMatchesTask);issue 走问题会话
+   * 口径(ADR-0005,通用工程知识豁免、技术栈维度不参与)。 */
+  knowledgeScope?: "task" | "issue";
 }): MaterializedHostSkills {
   const warnings: string[] = [];
   if (!options.sourceRoot || !existsSync(options.sourceRoot)) {
@@ -348,7 +352,10 @@ export function materializeHostSkills(options: {
       if (options.context) {
         const metadata = readSkillKnowledgeMetadata(
           readFileSync(sourceFile, "utf-8"));
-        if (!knowledgeMatchesTask(metadata, options.context)) {
+        const matches = options.knowledgeScope === "issue"
+          ? knowledgeMatchesIssueSession(metadata, options.context)
+          : knowledgeMatchesTask(metadata, options.context);
+        if (!matches) {
           continue;
         }
       }
