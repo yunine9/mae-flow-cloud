@@ -178,8 +178,9 @@ issue-ops(环境工具用法)。工号 = 登录账号,不再从 $HOME 猜。
 分析质量的三层供给,取用次序写在 issue-analysis 技能里(替换式,命中
 即用,不叠加;不做显式冲突裁决):
 
-1. **业务仓问题 skill**:约定放业务仓内 `docs/skills/<name>/SKILL.md`
-   (标准 skill 形态),拉仓后由 Agent 按需 Read——平台不做发现装载,
+1. **业务仓问题 skill**:约定放业务仓根目录 `.cac/skills/<name>/SKILL.md`
+   (标准 skill 形态,与需求侧仓内能力发现的四个标准根同一约定),
+   拉仓后由 Agent 按需 Read——平台不做发现装载,
    零代码约定。边界:只供领域知识与排障方法,不约定流程/报告格式/
    停机节奏(见 issue-analysis 技能的「知识边界」)。
 2. **团队货架通用 skill**:问题会话装配补上 hostSkillsDir,货架 skill
