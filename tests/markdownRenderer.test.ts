@@ -31,3 +31,17 @@ test("Markdown 不把解析失败的疑似列表当成可强取分组的结果",
   assert.match(html, /<li[^>]*>正常项<\/li>/);
   assert.match(html, /<p[^>]*>不是列表的下一行<\/p>/);
 });
+
+test("Markdown 只渲染调用方明确解析过的需求图片路径", () => {
+  const text = "前文\n\n![架构图](.mae-flow-work/requirement-assets/a.png)\n\n![外图](https://example.com/a.png)";
+  const html = renderToStaticMarkup(React.createElement(Markdown, {
+    text,
+    resolveImage: (path: string) => path.startsWith(".mae-flow-work/requirement-assets/")
+      ? `/tasks/task-1/requirement-asset?path=${encodeURIComponent(path)}`
+      : undefined,
+  }));
+
+  assert.match(html, /<img[^>]+alt="架构图"/);
+  assert.match(html, /requirement-asset\?path=/);
+  assert.doesNotMatch(html, /<img[^>]+example\.com/);
+});

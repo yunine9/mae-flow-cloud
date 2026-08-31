@@ -3,13 +3,17 @@ import {
   createTask,
   getLaunchKnowledgePreview,
   getLaunchOptions,
+  listCollaborationAssignees,
   listWorkflowAssets,
+  previewRequirementBundle,
   probeRepositories,
   type AuthUser,
+  type CollaborationAssignee,
   type LaunchKnowledgeMatchedScope,
   type LaunchKnowledgePreview,
   type LaunchOptions,
   type RepositoryProbeResult,
+  type RequirementBundlePreview,
   type TaskSummary,
   type WorkflowAssetSummary,
 } from "./api";
@@ -27,12 +31,14 @@ import {
   SchemeSelector,
   type WorkflowSchemeSelection,
 } from "./workflows";
+import { Markdown } from "./markdown";
 
 // 问题单入口已迁往「问题处理」页(/issues,见 web/src/issues/):
 // 问题流是"先研究后补单"的动态对话,与需求的固定交付流水线分属
 // 两个范式,不再共用发起表单。这里只保留需求入口。
 const MAX_MARKDOWN_BYTES = 512 * 1024;
 const INLINE_MARKDOWN_BYTES = 32 * 1024;
+const MAX_REQUIREMENT_BUNDLE_BYTES = 30 * 1024 * 1024;
 const LAUNCH_DRAFT_VERSION = 1;
 type LaunchDraft = {
   version: 1;
@@ -41,6 +47,8 @@ type LaunchDraft = {
   requirement: string;
   requirementDocumentName: string;
   repos: string[];
+  repositoryTickets?: string[];
+  repositoryAssignees?: string[];
   ticket: string;
   baseline: string;
   lane: string;
@@ -57,6 +65,26 @@ type LaunchPreferences = {
   lane?: string;
   repairRounds?: string;
 };
+
+type RequirementBundleDraft = {
+  name: string;
+  contentBase64: string;
+  preview: RequirementBundlePreview;
+};
+
+function fileBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error(`读取 ${file.name || "文件"} 失败`));
+    reader.onload = () => {
+      const value = String(reader.result ?? "");
+      const comma = value.indexOf(",");
+      if (comma < 0) reject(new Error("文件编码失败"));
+      else resolve(value.slice(comma + 1));
+    };
+    reader.readAsDataURL(file);
+  });
+}
 
 function storageKey(kind: "draft" | "preferences", account: string): string {
   return `mae-flow:launch:${kind}:${account}`;
@@ -176,6 +204,9 @@ export function LaunchWorkspace({
   const [requirementDocumentName, setRequirementDocumentName] = useState(
     validDraft?.requirementDocumentName ?? "");
   const [documentError, setDocumentError] = useState("");
+  const [requirementBundle, setRequirementBundle] =
+    useState<RequirementBundleDraft>();
+  const [documentLoading, setDocumentLoading] = useState(false);
   const [draggingDocument, setDraggingDocument] = useState(false);
   const [title, setTitle] = useState(validDraft?.title ?? "");
   const [submitting, setSubmitting] = useState(false);
@@ -185,10 +216,21 @@ export function LaunchWorkspace({
   // 任务级可填项(2026-08-18 重定口径):交付仓**必填**、交付方式、修复轮
   // 预算。模型不给选——管理员统一配一个,这里只显示"这单用谁跑"。
   const [options, setOptions] = useState<LaunchOptions | null>(null);
-  const [repos, setRepos] = useState(validDraft?.repos?.length
+  const initialRepos = validDraft?.repos?.length
     ? validDraft.repos
     : savedPreferences?.recentRepos?.[0]
-      ? [savedPreferences.recentRepos[0]] : [""]);
+      ? [savedPreferences.recentRepos[0]] : [""];
+  const [repos, setRepos] = useState(initialRepos);
+  const [repositoryTickets, setRepositoryTickets] = useState(() =>
+    initialRepos.map((_, index) => validDraft?.repositoryTickets?.[index]
+      ?? validDraft?.ticket ?? ""));
+  const [repositoryAssignees, setRepositoryAssignees] = useState(() =>
+    initialRepos.map((_, index) => validDraft?.repositoryAssignees?.[index]
+      ?? session.username));
+  const [collaborationAssignees, setCollaborationAssignees] =
+    useState<CollaborationAssignee[]>([]);
+  const [collaborationAssigneesLoaded, setCollaborationAssigneesLoaded] =
+    useState(false);
   const [repositoryProbeResults, setRepositoryProbeResults] =
     useState<RepositoryProbeResult[]>([]);
   const [repositoryProbeKey, setRepositoryProbeKey] = useState("");
@@ -254,6 +296,7 @@ export function LaunchWorkspace({
   const repositoriesToProbe = useMemo(() => [...new Set(
     repos.map((item) => item.trim()).filter(Boolean),
   )], [repos]);
+  const multiRepository = repositoriesToProbe.length > 1;
   const expectedRepositoryProbeKey = JSON.stringify(repositoriesToProbe);
   const repositoryProbeByUrl = useMemo(() => new Map(
     repositoryProbeResults.map((item) => [item.repository, item]),
@@ -265,6 +308,22 @@ export function LaunchWorkspace({
     && (repositoryProbeLoading || !repositoryProbeSettled
       || !!repositoryProbeError
       || repositoryProbeResults.some((item) => !item.reachable));
+  const repositoryTicketBlocked = Boolean(options?.ticket.enabled)
+    && (repoFieldsEnabled
+      ? repos.some((repo, index) => {
+          if (!repo.trim()) return false;
+          const value = repositoryTickets[index]?.trim() ?? "";
+          return (options?.ticket.required && !value) || /\s/.test(value);
+        })
+      : (options?.ticket.required && !ticket.trim()) || /\s/.test(ticket.trim()));
+  const repositoryAssigneeBlocked = repoFieldsEnabled
+    && repos.some((repo, index) => {
+      if (!repo.trim()) return false;
+      const account = repositoryAssignees[index]?.trim() ?? "";
+      const known = collaborationAssignees.find((item) =>
+        item.username === account);
+      return !account || !collaborationAssigneesLoaded || known?.ready !== true;
+    });
   const previewInput = useMemo(() => ({
     repos: repoFieldsEnabled
       ? repos.map((item) => item.trim()).filter(Boolean) : [],
@@ -310,8 +369,10 @@ export function LaunchWorkspace({
   const previewSettled = knowledgePreviewKey === expectedKnowledgePreviewKey;
   const knowledgeBlocked = knowledgePreviewLoading || !previewSettled
     || !!knowledgePreviewError || !knowledgePreview?.complete;
-  const blocked = optionsLoading || blockers.length > 0 || !!optionsError
-    || knowledgeBlocked || repositoryProbeBlocked;
+  const blocked = optionsLoading || documentLoading
+    || blockers.length > 0 || !!optionsError
+    || knowledgeBlocked || repositoryProbeBlocked || repositoryTicketBlocked
+    || repositoryAssigneeBlocked;
 
   useEffect(() => {
     let alive = true;
@@ -324,6 +385,8 @@ export function LaunchWorkspace({
       // (MFC-033 实证)。拿到配置就把不该存在的字段清干净。
       if (!result.repo.enabled) {
         setRepos([""]);
+        setRepositoryTickets([""]);
+        setRepositoryAssignees([session.username]);
         setRepositoryTechnologies([]);
       }
       setBaseline((current) => current.trim()
@@ -333,6 +396,25 @@ export function LaunchWorkspace({
       if (alive) setOptionsError("未能读取任务配置，请刷新后重试");
     }).finally(() => {
       if (alive) setOptionsLoading(false);
+    });
+    return () => { alive = false; };
+  }, []);
+
+  useEffect(() => {
+    if (multiRepository) return;
+    setRepositoryAssignees((current) => current.map((account, index) =>
+      repos[index]?.trim() ? session.username : account));
+  }, [multiRepository, repos, session.username]);
+
+  useEffect(() => {
+    let alive = true;
+    void listCollaborationAssignees().then((items) => {
+      if (alive) setCollaborationAssignees(items);
+    }).catch(() => {
+      // 无法核对责任人存在性/个人接入时宁可阻止创建；草稿仍保留。
+      if (alive) setCollaborationAssignees([]);
+    }).finally(() => {
+      if (alive) setCollaborationAssigneesLoaded(true);
     });
     return () => { alive = false; };
   }, []);
@@ -434,6 +516,13 @@ export function LaunchWorkspace({
   }, []);
 
   const persistDraft = () => {
+    // ZIP 图片不塞进 localStorage。刷新后让用户重新选择材料包，避免只
+    // 恢复 Markdown 却把图片静默丢掉。
+    if (requirementBundle) {
+      try { localStorage.removeItem(storageKey("draft", session.username)); }
+      catch { /* 草稿旁路不影响当前材料包 */ }
+      return;
+    }
     const draft: LaunchDraft = {
       version: LAUNCH_DRAFT_VERSION,
       updatedAt: new Date().toISOString(),
@@ -441,6 +530,8 @@ export function LaunchWorkspace({
       requirement,
       requirementDocumentName,
       repos,
+      repositoryTickets,
+      repositoryAssignees,
       ticket,
       baseline,
       lane,
@@ -465,10 +556,12 @@ export function LaunchWorkspace({
   useEffect(() => {
     const timer = window.setTimeout(persistDraft, 300);
     return () => window.clearTimeout(timer);
-  }, [title, requirement, requirementDocumentName, repos, ticket,
+  }, [title, requirement, requirementDocumentName, repos, repositoryTickets,
+    repositoryAssignees, ticket,
     baseline, lane, repairRounds, taskInstructions,
     selectedBusinessModuleIds, moduleSelectionTouched,
-    workflowSelection, repositoryTechnologies, session.username]);
+    workflowSelection, repositoryTechnologies, requirementBundle,
+    session.username]);
 
   useEffect(() => {
     if (!workflowAssetsLoaded || !workflowSelection) return;
@@ -527,11 +620,27 @@ export function LaunchWorkspace({
 
   function addRepository() {
     setRepos((current) => [...current, ""]);
+    setRepositoryTickets((current) => [...current, ""]);
+    setRepositoryAssignees((current) => [...current, session.username]);
   }
 
   function removeRepository(index: number) {
     setRepos((current) => current.filter(
       (_, itemIndex) => itemIndex !== index));
+    setRepositoryTickets((current) => current.filter(
+      (_, itemIndex) => itemIndex !== index));
+    setRepositoryAssignees((current) => current.filter(
+      (_, itemIndex) => itemIndex !== index));
+  }
+
+  function changeRepositoryTicket(index: number, value: string) {
+    setRepositoryTickets((current) => current.map(
+      (item, itemIndex) => itemIndex === index ? value : item));
+  }
+
+  function changeRepositoryAssignee(index: number, value: string) {
+    setRepositoryAssignees((current) => current.map(
+      (item, itemIndex) => itemIndex === index ? value : item));
   }
 
   function changeBaseline(value: string) {
@@ -561,8 +670,38 @@ export function LaunchWorkspace({
       }
       setRequirement(content);
       setRequirementDocumentName(file.name);
+      setRequirementBundle(undefined);
     } catch {
       setDocumentError("文件读取失败，请确认文件可访问后重试");
+    }
+  }
+
+  async function loadRequirementBundle(file: File): Promise<void> {
+    setDocumentError("");
+    if (file.size > MAX_REQUIREMENT_BUNDLE_BYTES) {
+      setDocumentError("需求材料包不能超过 30 MB");
+      return;
+    }
+    setDocumentLoading(true);
+    try {
+      const contentBase64 = await fileBase64(file);
+      const preview = await previewRequirementBundle(file.name, contentBase64);
+      setRequirement(preview.requirement);
+      setRequirementDocumentName(preview.document_name);
+      setRequirementBundle({ name: file.name, contentBase64, preview });
+    } catch (cause) {
+      setDocumentError(cause instanceof Error ? cause.message : "材料包解析失败");
+    } finally {
+      setDocumentLoading(false);
+    }
+  }
+
+  function loadRequirementFile(file: File | undefined): void {
+    if (!file) return;
+    if (file.name.toLowerCase().endsWith(".zip")) {
+      void loadRequirementBundle(file);
+    } else {
+      void loadMarkdown(file);
     }
   }
 
@@ -580,10 +719,25 @@ export function LaunchWorkspace({
           repo: repoFieldsEnabled ? repos[0]?.trim() || undefined : undefined,
           repos: repoFieldsEnabled
             ? repos.map((item) => item.trim()).filter(Boolean) : [],
+          repositoryTickets: repoFieldsEnabled && options?.ticket.enabled
+            ? Object.fromEntries(repos.flatMap((repo, index) => {
+                const normalized = repo.trim();
+                return normalized
+                  ? [[normalized, repositoryTickets[index]?.trim() ?? ""]] : [];
+              })) : undefined,
+          repositoryAssignees: repoFieldsEnabled
+            ? Object.fromEntries(repos.flatMap((repo, index) => {
+                const normalized = repo.trim();
+                return normalized
+                  ? [[normalized, repositoryAssignees[index]?.trim()
+                    || session.username]] : [];
+              })) : undefined,
           // select 虽然会视觉显示第一项，但用户没手动切换时 state 仍是
           // 空串；提交必须使用屏幕上真正显示的默认项。
           lane: lane || options?.workflows[0]?.label,
-          ticket: ticket.trim() || undefined,
+          ticket: ((repoFieldsEnabled
+            ? repositoryTickets.find((_, index) => repos[index]?.trim())
+            : ticket) ?? "").trim() || undefined,
           baseline: baseline.trim() || undefined,
           repairRounds: repairRounds.trim() === ""
             ? undefined : Number(repairRounds),
@@ -601,6 +755,12 @@ export function LaunchWorkspace({
               && repositoryTechnologies.every((item) => item.confirmed)
             ? asRepositoryProfiles(repositoryTechnologies) : undefined,
           requirementDocumentName: requirementDocumentName || undefined,
+          requirementBundle: requirementBundle
+            ? {
+                name: requirementBundle.name,
+                contentBase64: requirementBundle.contentBase64,
+              }
+            : undefined,
         },
       );
       const usedRepos = repos.map((item) => item.trim()).filter(Boolean);
@@ -676,6 +836,8 @@ export function LaunchWorkspace({
                   setRequirement("");
                   setRequirementDocumentName("");
                   setRepos([""]);
+                  setRepositoryTickets([""]);
+                  setRepositoryAssignees([session.username]);
                   setTicket("");
                   setSelectedBusinessModuleIds([]);
                   setModuleSelectionTouched(false);
@@ -739,23 +901,23 @@ export function LaunchWorkspace({
                   onDrop={(event) => {
                     event.preventDefault();
                     setDraggingDocument(false);
-                    void loadMarkdown(event.dataTransfer.files[0]);
+                    loadRequirementFile(event.dataTransfer.files[0]);
                   }}>
                   <div className="requirement-field-head">
-                    <label htmlFor="launch-requirement">
-                      需求文档
-                    </label>
+                    {requirementBundle
+                      ? <span className="requirement-field-label">需求文档</span>
+                      : <label htmlFor="launch-requirement">需求文档</label>}
                     <label className="markdown-upload-action">
-                      <input type="file" accept=".md,text/markdown"
+                      <input type="file" accept=".md,.zip,text/markdown,application/zip"
                         onChange={(event) => {
-                          void loadMarkdown(event.target.files?.[0]);
+                          loadRequirementFile(event.target.files?.[0]);
                           event.target.value = "";
                         }} />
                       <svg viewBox="0 0 20 20" aria-hidden><path d="M10 13V4m0 0L6.5 7.5M10 4l3.5 3.5M4 12.5v2.25A1.25 1.25 0 0 0 5.25 16h9.5A1.25 1.25 0 0 0 16 14.75V12.5" /></svg>
-                      选择 .md 文件
+                      选择 .md / .zip
                     </label>
                   </div>
-                  <textarea
+                  {!requirementBundle && <textarea
                     id="launch-requirement"
                     value={requirement}
                     onChange={(event) => {
@@ -766,22 +928,42 @@ export function LaunchWorkspace({
                     placeholder="粘贴完整需求说明、背景、范围和验收标准；支持 Markdown"
                     rows={12}
                     required
-                  />
+                  />}
                   {requirementDocumentName && <div className="markdown-file-state">
-                    <span aria-hidden>MD</span>
-                    <strong title={requirementDocumentName}>{requirementDocumentName}</strong>
-                    <small>{new Blob([requirement]).size > INLINE_MARKDOWN_BYTES
+                    <span aria-hidden>{requirementBundle ? "ZIP" : "MD"}</span>
+                    <strong title={requirementBundle?.name ?? requirementDocumentName}>
+                      {requirementBundle?.name ?? requirementDocumentName}
+                    </strong>
+                    <small>{requirementBundle
+                      ? `${requirementBundle.preview.assets.length} 张图片 · 已通过材料包校验`
+                      : new Blob([requirement]).size > INLINE_MARKDOWN_BYTES
                       ? "长文档 · 原文完整保留，Agent 按章节分段读取"
                       : "已载入 · 正文会完整交给 Agent"}</small>
                     <button type="button" onClick={() => {
                       setRequirement(""); setRequirementDocumentName("");
+                      setRequirementBundle(undefined);
                       setDocumentError("");
                     }}>移除</button>
                   </div>}
+                  {requirementBundle && <div className="requirement-bundle-preview">
+                    <div><strong>材料包预览</strong><small>图片能正常显示后再发起任务</small></div>
+                    <Markdown text={requirementBundle.preview.requirement}
+                      resolveImage={(path) => {
+                        const asset = requirementBundle.preview.assets.find(
+                          (item) => item.path === path);
+                        return asset
+                          ? `data:${asset.mime_type};base64,${asset.content_base64}`
+                          : undefined;
+                      }} />
+                  </div>}
                   {documentError && <div className="markdown-upload-error" role="alert">{documentError}</div>}
-                  <small>{requirement
+                  <small>{documentLoading
+                    ? "正在校验并生成预览…"
+                    : requirementBundle
+                      ? `当前采用 ${requirementBundle.preview.document_name}；需要修改请重新打包上传`
+                    : requirement
                     ? `${requirement.split(/\r?\n/).length} 行 · ${requirement.length} 字符，原文将完整保留`
-                    : "可直接粘贴，也可把 .md 文件拖到这里（最大 512 KiB）"}</small>
+                    : "可直接粘贴或导入 .md；图文需求可导入 ZIP 材料包"}</small>
                 </div>
               </section>
 
@@ -790,17 +972,19 @@ export function LaunchWorkspace({
                   <div className="launch-section-head"><i>2</i><div><strong>交付定位</strong><small>让 Agent 进入正确仓库和基线</small></div><em>必填</em></div>
                   {options.repo.enabled && (
                     <div className="repo-field">
-                    <div className="repo-field-title">
-                        <span>涉及代码仓{options.repo.required ? "（至少一个）" : ""}</span>
-                        <small>单仓与多仓使用同一条需求交付流程</small>
+                      <div className="repo-field-title">
+                        <span>代码仓与对应 AR 单号{options.repo.required ? "（至少一个）" : ""}</span>
+                        <small>一个仓一行，单号和责任人随该仓进入后续交付</small>
                       </div>
                       <div className="repo-list">
                         {repos.map((value, index) => (
-                          <div className="repo-row" key={index}>
+                          <div className={`repo-row with-assignee ${options.ticket.enabled
+                            ? "with-ticket" : ""}`} key={index}>
                             <span>{String(index + 1).padStart(2, "0")}</span>
                             <input type="text" value={value}
                               onChange={(event) => changeRepository(index, event.target.value)}
                               placeholder="https://codehub…/team/project.git"
+                              aria-label={`第 ${index + 1} 个代码仓地址`}
                               list="launch-recent-repositories"
                               spellCheck={false}
                               aria-invalid={Boolean(value.trim()
@@ -808,6 +992,32 @@ export function LaunchWorkspace({
                                 && repositoryProbeByUrl.get(value.trim())
                                   ?.reachable === false)}
                               required={options.repo.required} />
+                            {options.ticket.enabled && <input type="text"
+                              value={repositoryTickets[index] ?? ""}
+                              onChange={(event) => changeRepositoryTicket(
+                                index, event.target.value)}
+                              placeholder="该仓对应的 AR 单号"
+                              aria-label={`第 ${index + 1} 个仓库的 AR 单号`}
+                              aria-invalid={Boolean((repositoryTickets[index] ?? "").trim()
+                                && /\s/.test((repositoryTickets[index] ?? "").trim()))}
+                              spellCheck={false}
+                              required={options.ticket.required && Boolean(value.trim())} />}
+                            <select value={repositoryAssignees[index] ?? session.username}
+                              aria-label={`第 ${index + 1} 个仓库的责任人`}
+                              disabled={!multiRepository}
+                              onChange={(event) => changeRepositoryAssignee(
+                                index, event.target.value)}>
+                              {collaborationAssignees.length === 0
+                                ? <option value={session.username}>{session.username}（自己）</option>
+                                : collaborationAssignees.map((person) => (
+                                  <option key={person.username} value={person.username}
+                                    disabled={!person.ready}>
+                                    {person.username === session.username
+                                      ? `${person.username}（自己）` : person.username}
+                                    {person.ready ? "" : ` · 未就绪`}
+                                  </option>
+                                ))}
+                            </select>
                             {repos.length > 1 && <button type="button"
                               aria-label={`移除第 ${index + 1} 个仓库`}
                               onClick={() => removeRepository(index)}>×</button>}
@@ -833,9 +1043,7 @@ export function LaunchWorkspace({
                         <span>＋</span> 添加代码仓
                       </button>
                       <small className="repo-field-note">
-                        {repos.length > 1
-                          ? `已选择 ${repos.length} 个仓库；系统会先分析职责、接口与开发依赖，人工确认后再拆分交付。`
-                          : "一个仓库就是只有一个交付节点的需求；需要跨仓时继续添加。"}
+                        请填写每个仓自己的 AR 对应 REQ 单号，不要填 FuR；两者格式相同，系统无法自动识别。
                       </small>
                       <datalist id="launch-recent-repositories">
                         {(savedPreferences?.recentRepos ?? []).map((repo) => (
@@ -844,9 +1052,10 @@ export function LaunchWorkspace({
                       </datalist>
                     </div>
                   )}
-                  {(options.ticket.enabled || options.baseline.enabled) && (
+                  {((options.ticket.enabled && !options.repo.enabled)
+                    || options.baseline.enabled) && (
                     <div className="launch-field-grid launch-required-delivery-grid">
-                      {options.ticket.enabled && (
+                      {options.ticket.enabled && !options.repo.enabled && (
                         <label className="account-field">
                           <span>AR 对应的 REQ 单号
                             {options.ticket.required ? "（必填）" : ""}</span>
@@ -1239,7 +1448,11 @@ export function LaunchWorkspace({
               {error && <div className="composer-error" role="alert">{error}</div>}
               <footer className="launch-submit-bar">
                 <div><strong>{blocked
-                  ? repositoryProbeBlocked
+                  ? repositoryAssigneeBlocked
+                    ? "逐仓责任人尚未就绪"
+                  : repositoryTicketBlocked
+                    ? "请补齐逐仓 AR 单号"
+                  : repositoryProbeBlocked
                     ? repositoryProbeLoading || !repositoryProbeSettled
                       ? "正在检查代码仓"
                       : "代码仓暂不可用"
@@ -1249,7 +1462,11 @@ export function LaunchWorkspace({
                       ? "知识清单尚未核对完整"
                       : "暂时不能发起"
                   : "信息确认后即可启动"}</strong><small>{blocked
-                  ? repositoryProbeBlocked
+                  ? repositoryAssigneeBlocked
+                    ? "请为每个代码仓选择已完成个人接入的责任人"
+                  : repositoryTicketBlocked
+                    ? "每个已填写的代码仓都需要自己的 AR 单号，且单号不能含空格"
+                  : repositoryProbeBlocked
                     ? repositoryProbeLoading || !repositoryProbeSettled
                       ? "正在确认地址与当前 Git 身份是否真的可访问"
                       : "请根据仓库地址下方的原因修正后再发起"
@@ -1264,6 +1481,10 @@ export function LaunchWorkspace({
                     ? "正在发起"
                     : optionsLoading
                       ? "读取配置中"
+                    : repositoryAssigneeBlocked
+                      ? "逐仓责任人未完成"
+                    : repositoryTicketBlocked
+                      ? "逐仓单号未完成"
                     : repositoryProbeBlocked
                       ? repositoryProbeLoading || !repositoryProbeSettled
                         ? "检查仓库中"

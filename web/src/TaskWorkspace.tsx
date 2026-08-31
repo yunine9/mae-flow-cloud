@@ -802,7 +802,9 @@ export function TaskWorkspace({
           <strong id="task-workspace-title">{task.title ?? task.requirement}</strong>
           {task.parent_task_id && <button type="button" className="ws-parent-task"
             onClick={() => onOpenTask?.(task.parent_task_id!)}>
-            <span>隶属跨仓大任务</span><code>{task.parent_task_id}</code>
+            <span>返回主任务</span>
+            <strong>{task.parent_task?.title ?? "跨仓大任务"}</strong>
+            <code>{task.parent_task?.ticket ?? task.parent_task_id}</code>
           </button>}
         </div>
         {controllable && (
@@ -986,12 +988,18 @@ export function TaskWorkspace({
               >
                 <article className="requirement-source">
                   <div className="requirement-source-label">
-                    <span>{task.requirement_document?.name ?? "用户提交的完整内容"}
+                    <span>{task.requirement_document?.bundle_name
+                      ?? task.requirement_document?.name
+                      ?? "用户提交的完整内容"}
                       {task.requirement_document?.context_mode === "file"
                         && <em>Agent 分段读取</em>}</span>
                     <small>{task.requirement.split(/\r?\n/).length} 行 · {task.requirement.length} 字符</small>
                   </div>
-                  <Markdown text={task.requirement} />
+                  <Markdown text={task.requirement} resolveImage={(path) =>
+                    task.requirement_document?.assets?.some(
+                      (asset) => asset.path === path)
+                      ? `/tasks/${encodeURIComponent(task.id)}/requirement-asset?path=${encodeURIComponent(path)}`
+                      : undefined} />
                 </article>
               </Annotatable>
             ) : materialView === "chain" ? (
@@ -1009,9 +1017,9 @@ export function TaskWorkspace({
                       taskId={task.id}
                       repositories={task.requirement_graph.repositories}
                       defaultAssignee={task.luban_account}
+                      defaultTicket={task.ticket}
                       selection={repositoryAssignees}
                       onSelectionChange={setRepositoryAssignees}
-                      onSaved={onChanged}
                     />
                   </>}
               </>
@@ -1353,9 +1361,9 @@ export function TaskWorkspace({
                         taskId={task.id}
                         repositories={task.requirement_graph!.repositories}
                         defaultAssignee={task.luban_account}
+                        defaultTicket={task.ticket}
                         selection={repositoryAssignees}
                         onSelectionChange={setRepositoryAssignees}
-                        onSaved={onChanged}
                       />
                     </>
                   )}

@@ -105,6 +105,10 @@ import {
   type WishStatus,
 } from "./wishWall.ts";
 import type { LubanApprovalGateway } from "./lubanApproval.ts";
+import {
+  parseRequirementBundle,
+  RequirementBundleError,
+} from "./requirementBundle.ts";
 import { handleIssueRoutes } from "./issueFlow/routes.ts";
 import {
   SkillLibraryError,
@@ -1755,11 +1759,53 @@ export function createTaskServer(
         }
         return json(response, 404, { error: "未知路径" });
       }
+      if (request.method === "POST"
+          && url.pathname === "/requirement-bundles/preview") {
+        if (options.auth && !viewer) {
+          return json(response, 401, { error: "请先登录" });
+        }
+        try {
+          const body = await readBody(request, 42 * 1024 * 1024);
+          const bundle = parseRequirementBundle(body.name, body.content_base64);
+          return json(response, 200, {
+            bundle_name: bundle.bundle_name,
+            document_name: bundle.document_name,
+            requirement: bundle.requirement,
+            assets: bundle.assets.map((asset) => ({
+              path: asset.path,
+              source_path: asset.source_path,
+              mime_type: asset.mime_type,
+              bytes: asset.bytes,
+              content_base64: asset.content.toString("base64"),
+            })),
+          });
+        } catch (error) {
+          if (error instanceof RequirementBundleError) {
+            return json(response, 400, { error: error.message });
+          }
+          throw error;
+        }
+      }
       if (request.method === "POST" && url.pathname === "/tasks") {
-        const body = await readBody(request);
+        const body = await readBody(request, 42 * 1024 * 1024);
+        let requirementBundle: ReturnType<typeof parseRequirementBundle> | undefined;
+        try {
+          if (body.requirement_bundle) {
+            requirementBundle = parseRequirementBundle(
+              body.requirement_bundle.name,
+              body.requirement_bundle.content_base64,
+            );
+          }
+        } catch (error) {
+          if (error instanceof RequirementBundleError) {
+            return json(response, 400, { error: error.message });
+          }
+          throw error;
+        }
         const title = body.title === undefined
           ? undefined : String(body.title).trim() || undefined;
-        const requirement = String(body.requirement ?? "").trim();
+        const requirement = String(
+          requirementBundle?.requirement ?? body.requirement ?? "").trim();
         if (!requirement) {
           return json(response, 400, { error: "requirement 不能为空" });
         }
@@ -1778,8 +1824,9 @@ export function createTaskServer(
         // 单人/测试)沿用请求体里的账号。
         const account = viewer?.username
           ?? (body.account ? String(body.account) : undefined);
-        const requirementDocumentName = body.requirement_document_name === undefined
-          ? undefined : String(body.requirement_document_name);
+        const requirementDocumentName = requirementBundle?.document_name
+          ?? (body.requirement_document_name === undefined
+            ? undefined : String(body.requirement_document_name));
         // 任务级可配(用户拍板):交付代码仓、交付方式(选项来自内核)、修复轮预算。
         const repo = body.repo === undefined ? undefined : String(body.repo);
         const repos = Array.isArray(body.repos)
@@ -1790,6 +1837,20 @@ export function createTaskServer(
           ? undefined : String(body.lane).trim() || undefined;
         const ticket = body.ticket === undefined
           ? undefined : String(body.ticket);
+        const repositoryTickets = body.repository_tickets
+            && typeof body.repository_tickets === "object"
+            && !Array.isArray(body.repository_tickets)
+          ? Object.fromEntries(Object.entries(
+              body.repository_tickets as Record<string, unknown>,
+            ).map(([repository, value]) => [repository, String(value ?? "")]))
+          : undefined;
+        const repositoryAssignees = body.repository_assignees
+            && typeof body.repository_assignees === "object"
+            && !Array.isArray(body.repository_assignees)
+          ? Object.fromEntries(Object.entries(
+              body.repository_assignees as Record<string, unknown>,
+            ).map(([repository, value]) => [repository, String(value ?? "")]))
+          : undefined;
         const baseline = body.baseline === undefined
           ? undefined : String(body.baseline);
         const model = body.model
@@ -1948,7 +2009,10 @@ export function createTaskServer(
             {
               title, account, repo, repos,
               requirementDocumentName,
-              lane, ticket, baseline, model,
+              requirementBundleName: requirementBundle?.bundle_name,
+              requirementAssets: requirementBundle?.assets,
+              lane, ticket, repositoryTickets, repositoryAssignees,
+              baseline, model,
               repairRounds, taskInstructions,
               workflowDefinition, workflowSource,
               repositorySkillCatalogToken,
@@ -1976,6 +2040,20 @@ export function createTaskServer(
           const task = service.get(id);
           if (!task) return json(response, 404, { error: `任务 ${id} 不存在` });
           return json(response, 200, task);
+        }
+        if (request.method === "GET" && parts.length === 3
+            && parts[2] === "requirement-asset") {
+          const path = url.searchParams.get("path") ?? "";
+          const asset = service.requirementAsset(id, path);
+          if (!asset) return json(response, 404, { error: "需求图片不存在" });
+          response.writeHead(200, {
+            "content-type": asset.mime_type,
+            "content-length": asset.content.length,
+            "content-disposition": "inline",
+            "x-content-type-options": "nosniff",
+            "cache-control": "private, max-age=86400",
+          });
+          return response.end(asset.content);
         }
         if (request.method === "POST" && parts.length === 3
             && parts[2] === "knowledge-candidates") {
@@ -2072,6 +2150,13 @@ export function createTaskServer(
                   .map(([repositoryId, account]) =>
                     [repositoryId, String(account)]))
               : undefined,
+            repository_tickets: body.repository_tickets
+              && typeof body.repository_tickets === "object"
+              && !Array.isArray(body.repository_tickets)
+              ? Object.fromEntries(Object.entries(body.repository_tickets)
+                  .map(([repositoryId, ticket]) =>
+                    [repositoryId, String(ticket)]))
+              : undefined,
             delivery_paths: Array.isArray(body.delivery_paths)
               ? body.delivery_paths.map(String) : undefined,
           });
@@ -2124,8 +2209,15 @@ export function createTaskServer(
                 .map(([repositoryId, account]) =>
                   [repositoryId, String(account)]))
             : {};
+          const tickets = body.repository_tickets
+            && typeof body.repository_tickets === "object"
+            && !Array.isArray(body.repository_tickets)
+            ? Object.fromEntries(Object.entries(body.repository_tickets)
+                .map(([repositoryId, ticket]) =>
+                  [repositoryId, String(ticket)]))
+            : undefined;
           return json(response, 200,
-            service.assignRequirementRepositories(id, assignments));
+            service.assignRequirementRepositories(id, assignments, tickets));
         }
         // push 前人工确认交付范围(任务级显式开关)。未显式设置时按
         // 个人默认；开着时宿主在 prepush 收敛后挂云端原生 diff 卡。
@@ -2168,6 +2260,13 @@ export function createTaskServer(
               ? Object.fromEntries(Object.entries(body.repository_assignees)
                   .map(([repositoryId, account]) =>
                     [repositoryId, String(account)]))
+              : undefined,
+            repository_tickets: body.repository_tickets
+              && typeof body.repository_tickets === "object"
+              && !Array.isArray(body.repository_tickets)
+              ? Object.fromEntries(Object.entries(body.repository_tickets)
+                  .map(([repositoryId, ticket]) =>
+                    [repositoryId, String(ticket)]))
               : undefined,
           }));
         }

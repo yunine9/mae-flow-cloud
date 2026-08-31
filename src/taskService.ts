@@ -151,6 +151,13 @@ import {
   storeRequirementDocument,
   type RequirementDocumentMeta,
 } from "./requirementDocument.ts";
+import {
+  loadRequirementAssets,
+  materializeRequirementAssets,
+  readRequirementAsset as readStoredRequirementAsset,
+  storeRequirementAssets,
+  type RequirementAsset,
+} from "./requirementBundle.ts";
 import { readJson } from "./jsonBody.ts";
 import type {
   Notifier,
@@ -485,7 +492,12 @@ export interface RequirementRepository {
   responsibility?: string;
   /** 人工委派的逐仓责任人。只保存稳定账号名，个人凭据仍按启动时现取。 */
   assignee?: string;
+  /** 当前仓实际使用的业务需求单号。缺席时兼容为沿用父任务单号。 */
+  ticket?: string;
   task_id?: string;
+  /** 父任务读侧投影的子任务实时状态；不写回 Chain 产物。 */
+  task_status?: TaskStatus;
+  current_phase?: string;
 }
 
 export interface RequirementDependency {
@@ -740,6 +752,13 @@ export interface TaskSummary {
   requirement_graph?: RequirementGraph;
   /** 确认 Chain 方案后生成的普通仓库交付任务关系。 */
   parent_task_id?: string;
+  /** 子任务头部使用的父任务摘要；读侧投影，不复制父任务整份数据。 */
+  parent_task?: {
+    id: string;
+    title?: string;
+    ticket?: string;
+    status: TaskStatus;
+  };
   blocked_by?: string[];
   /** 分工后的接口/契约变化回流主任务，并复制给直接相关上下游子任务。 */
   cross_repository_updates?: CrossRepositoryUpdate[];
@@ -1481,6 +1500,8 @@ export interface DecisionSubmission {
   selected_repository_skill_ids?: string[];
   /** Chain 确认与逐仓委派同一次乐观锁提交，键是需求图 repository.id。 */
   repository_assignees?: Record<string, string>;
+  /** Chain 拆单时逐仓固定的 AR/REQ 单号；默认值由页面带入父任务单号。 */
+  repository_tickets?: Record<string, string>;
   /** 代码检视时用户勾选的最终交付文件。字段缺席表示该入口没有修改
    * 清单；空数组有业务含义，不能折叠成 undefined。 */
   delivery_paths?: string[];
@@ -1545,6 +1566,7 @@ function decisionRequestDigest(
       ? [...new Set(input.selected_repository_skill_ids.map(String))].sort()
       : undefined,
     repository_assignees: orderedRecord(input.repository_assignees),
+    repository_tickets: orderedRecord(input.repository_tickets),
     delivery_paths: input.delivery_paths
       ? [...new Set(input.delivery_paths.map(String))].sort() : undefined,
   };
@@ -2395,6 +2417,19 @@ export class TaskService {
     return task ? this.project(task, true) : undefined;
   }
 
+  requirementAsset(
+    id: string,
+    path: string,
+  ): { mime_type: string; content: Buffer } | undefined {
+    const task = this.tasks.get(id);
+    if (!task) return undefined;
+    const asset = readStoredRequirementAsset(
+      task.summary.workspace, task.summary.requirement_document, path);
+    return asset
+      ? { mime_type: asset.meta.mime_type, content: asset.content }
+      : undefined;
+  }
+
   historyMutationInProgress(id: string): boolean {
     return this.historyMutationActive.has(id);
   }
@@ -2784,6 +2819,22 @@ export class TaskService {
     const record = task.notifyRecord;
     const progress = this.taskProgress(task);
     const summary = task.summary;
+    const requirementGraph = summary.requirement_graph
+      ? {
+          ...summary.requirement_graph,
+          repositories: summary.requirement_graph.repositories.map((repository) => {
+            const child = repository.task_id
+              ? this.tasks.get(repository.task_id) : undefined;
+            return child ? {
+              ...repository,
+              task_status: child.summary.status,
+              current_phase: this.taskProgress(child)?.current_phase,
+            } : { ...repository };
+          }),
+        }
+      : undefined;
+    const parent = summary.parent_task_id
+      ? this.tasks.get(summary.parent_task_id) : undefined;
     const planReading = includeKnowledgeUsage
       ? readCurrentExecutionPlanReading({
           kernelRoot: this.options.host?.kernelRoot,
@@ -2861,6 +2912,13 @@ export class TaskService {
       : undefined;
     const projected = {
       ...summary,
+      requirement_graph: requirementGraph,
+      parent_task: parent ? {
+        id: parent.summary.id,
+        title: parent.summary.title,
+        ticket: parent.summary.ticket,
+        status: parent.summary.status,
+      } : undefined,
       delivery: projectedDelivery,
       // 开发助手占场时,"从当前现场恢复"是条死路(resume 会 409 让人
       // 去交还)——focus 必须知道占场事实才能指对路(MFC-029)。
@@ -2963,6 +3021,7 @@ export class TaskService {
               return {
                 ...item,
                 assignee: known?.assignee,
+                ticket: known?.ticket,
                 task_id: known?.task_id,
               };
             })
@@ -4328,8 +4387,11 @@ export class TaskService {
         enabled: !!this.options.host && !this.options.host.repoPinned,
         required: !!this.options.host && !this.options.host.repoPath,
       },
+      // AR/REQ 是业务任务身份，不是内核实现细节。即使是纯会话或本地
+      // 演示形态也要保留填写入口；只有“是否强制填写”才随代码交付
+      // 形态变化，避免同一套创建页在不同部署里凭空少一项。
       ticket: {
-        enabled: !!this.options.host,
+        enabled: true,
         required: !!this.options.host && !this.options.host.repoPath,
       },
       baseline: { enabled: !!this.options.host, default: "master" },
@@ -4649,6 +4711,11 @@ export class TaskService {
       /** 需求/问题单号(REQ/DTS):内核配置确认的"单号"项,下单就给,
        * 不让模型开工后再来问一遍(用户 2026-08-19 拍板)。 */
       ticket?: string;
+      /** 多仓发起时按仓库地址绑定的 AR 单号。缺席时兼容旧客户端：
+       * 所有仓沿用 ticket；一旦提交则每个仓都必须有且只能有一个。 */
+      repositoryTickets?: Record<string, string>;
+      /** 多仓发起时按仓库地址绑定的责任人。缺席时兼容为下单人。 */
+      repositoryAssignees?: Record<string, string>;
       /** 基线分支,默认 master(同一次拍板)。 */
       baseline?: string;
       model?: { provider: string; model: string };
@@ -4670,6 +4737,9 @@ export class TaskService {
       hostSkillSnapshotSourceWorkspace?: string;
       /** 浏览器上传的原始文件名；正文仍由 requirement 统一承载。 */
       requirementDocumentName?: string;
+      /** ZIP 材料包已由入口解析并改写为安全相对路径的图片。 */
+      requirementBundleName?: string;
+      requirementAssets?: RequirementAsset[];
       /** Chain 拆单内部会把原文与逐仓说明拼接，允许多一份原文大小的
        * 安全余量；外部下单绝不设置。 */
       internalRequirement?: boolean;
@@ -4718,11 +4788,22 @@ export class TaskService {
     if (explicitTitle && explicitTitle.length > 80) {
       throw new Error("任务名称不能超过 80 个字符");
     }
-    const requirementDocument = requirementDocumentMeta(
+    let requirementDocument = requirementDocumentMeta(
       requirement, options.requirementDocumentName,
       options.internalRequirement
         ? MAX_REQUIREMENT_DOCUMENT_BYTES * 2
         : MAX_REQUIREMENT_DOCUMENT_BYTES);
+    if (options.requirementBundleName || options.requirementAssets?.length) {
+      if (!requirementDocument) {
+        throw new Error("ZIP 材料包必须包含可读取的 Markdown 文档");
+      }
+      requirementDocument = {
+        ...requirementDocument,
+        bundle_name: options.requirementBundleName,
+        assets: options.requirementAssets?.map(
+          ({ content: _content, ...asset }) => asset) ?? [],
+      };
+    }
     // 交付方式:选项是内核的领地,现读它的 flow.json 校验
     // (2026-08-18 修正:此前 TS 侧自造"快速/慢速",与内核的
     // full/hotfix/tweak/review 对不上,预选永远匹配不上内核举的卡,
@@ -4743,12 +4824,9 @@ export class TaskService {
     // 只在内核模式必填——纯会话形态没有配置确认这回事。校验只做"像不
     // 像个单号"的最低限(非空、无空白);REQ→feat/DTS→fix 的推导是
     // 内核的判定,宿主不代判。
-    const ticket = (options.ticket ?? "").trim() || undefined;
-    if (ticket && /\s/.test(ticket)) {
+    const legacyTicket = (options.ticket ?? "").trim() || undefined;
+    if (legacyTicket && /\s/.test(legacyTicket)) {
       throw new Error("单号不能含空白字符");
-    }
-    if (!ticket && this.options.host && !this.options.host.repoPath) {
-      throw new Error("请填写需求/问题单号(REQ/DTS)——分支名和提交信息都要用它");
     }
     const baseline = (options.baseline ?? "").trim()
       || (this.options.host ? "master" : undefined);
@@ -4759,6 +4837,67 @@ export class TaskService {
       ? options.repos : options.repo ? [options.repo] : [])
       .map((item) => String(item).trim()).filter(Boolean)
       .filter((item, index, all) => all.indexOf(item) === index);
+    const repositoryTickets = new Map<string, string>();
+    if (options.repositoryTickets !== undefined) {
+      for (const [rawRepository, rawTicket] of Object.entries(
+          options.repositoryTickets)) {
+        const repository = rawRepository.trim();
+        if (!repositories.includes(repository)) {
+          throw new Error(`逐仓单号对应了本任务之外的代码仓：${repository}`);
+        }
+        const current = String(rawTicket).trim();
+        if (!current) {
+          throw new Error(`请填写代码仓 ${repository} 对应的 AR 单号`);
+        }
+        if (/\s/.test(current)) {
+          throw new Error(`代码仓 ${repository} 的 AR 单号不能含空白字符`);
+        }
+        repositoryTickets.set(repository, current);
+      }
+      const missing = repositories.find((repository) =>
+        !repositoryTickets.has(repository));
+      if (missing) {
+        throw new Error(`请填写代码仓 ${missing} 对应的 AR 单号`);
+      }
+    } else if (legacyTicket) {
+      repositories.forEach((repository) =>
+        repositoryTickets.set(repository, legacyTicket));
+    }
+    const ticket = repositories.length
+      ? repositoryTickets.get(repositories[0]) ?? legacyTicket
+      : legacyTicket;
+    if (!ticket && this.options.host && !this.options.host.repoPath) {
+      throw new Error("请填写每个代码仓对应的 AR 单号——分支名和提交信息都要用它");
+    }
+    const repositoryAssignees = new Map<string, string>();
+    if (options.repositoryAssignees !== undefined) {
+      for (const [rawRepository, rawAccount] of Object.entries(
+          options.repositoryAssignees)) {
+        const repository = rawRepository.trim();
+        if (!repositories.includes(repository)) {
+          throw new Error(`逐仓责任人对应了本任务之外的代码仓：${repository}`);
+        }
+        const account = String(rawAccount).trim();
+        if (!account) throw new Error(`请为代码仓 ${repository} 选择责任人`);
+        const readiness = this.options.collaborationAssigneeReadiness?.(account);
+        if (readiness && !readiness.ready) {
+          throw new Error(
+            `代码仓 ${repository} 的责任人 ${account} 不可委派：`
+            + readiness.missing.join("、"));
+        }
+        repositoryAssignees.set(repository, account);
+      }
+      const missing = repositories.find((repository) =>
+        !repositoryAssignees.has(repository));
+      if (missing) throw new Error(`请为代码仓 ${missing} 选择责任人`);
+    } else if (options.account) {
+      repositories.forEach((repository) =>
+        repositoryAssignees.set(repository, options.account!));
+    }
+    if (repositories.length === 1 && options.account
+        && repositoryAssignees.get(repositories[0]) !== options.account) {
+      throw new Error("单仓任务责任人必须是当前下单人；多仓任务才支持逐仓分工");
+    }
     // 同(单号,归属人,仓)重复下单会派生出**同名分支**:第二单非快进
     // 推送失败烧完预算 stalled,报错还是裸 git stderr;同分支对的 MR
     // 又是幂等复用,两单互相污染检视与门禁(2026-08-30 审计,"跑挂了
@@ -4918,6 +5057,9 @@ export class TaskService {
     let workflowProfile = options.workflowProfile
       ? structuredClone(options.workflowProfile) : undefined;
     mkdirSync(workspace, { recursive: true });
+    if (options.requirementAssets?.length) {
+      storeRequirementAssets(workspace, options.requirementAssets);
+    }
     let repositoryProfiles = options.repositoryProfiles ?? [];
     if (options.repositoryProfiles === undefined && repositories.length) {
       try {
@@ -5151,6 +5293,8 @@ export class TaskService {
               id: `repo-${index + 1}`,
               name: basename(url).replace(/\.git$/, "") || `仓库 ${index + 1}`,
               url,
+              ticket: repositoryTickets.get(url) ?? ticket,
+              assignee: repositoryAssignees.get(url) ?? options.account,
             })),
             dependencies: [],
           }
@@ -6090,6 +6234,9 @@ export class TaskService {
       workflowProfile: source.workflow_profile,
       workflowProfileWarning: source.workflow_profile_warning,
       requirementDocumentName: source.requirement_document?.name,
+      requirementBundleName: source.requirement_document?.bundle_name,
+      requirementAssets: loadRequirementAssets(
+        workspace, source.requirement_document),
       internalRequirement: Boolean(source.parent_task_id),
       parentTaskId: source.parent_task_id,
       blockedBy: source.blocked_by ? [...source.blocked_by] : undefined,
@@ -6368,6 +6515,7 @@ export class TaskService {
   assignRequirementRepositories(
     id: string,
     assignments: Record<string, string>,
+    tickets?: Record<string, string>,
   ): TaskSummary {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
@@ -6388,10 +6536,16 @@ export class TaskService {
     const unknown = submitted.filter((repositoryId) => !ids.has(repositoryId));
     const missingRepositories = [...ids].filter((repositoryId) =>
       !Object.prototype.hasOwnProperty.call(assignments, repositoryId));
-    if (unknown.length || missingRepositories.length) {
+    const ticketKeys = Object.keys(tickets ?? {});
+    const unknownTickets = ticketKeys.filter((repositoryId) => !ids.has(repositoryId));
+    const missingTickets = tickets ? [...ids].filter((repositoryId) =>
+      !Object.prototype.hasOwnProperty.call(tickets, repositoryId)) : [];
+    if (unknown.length || missingRepositories.length
+        || unknownTickets.length || missingTickets.length) {
       throw new TaskControlError("请为需求图中的每个仓库完整选择责任人后再保存");
     }
     const normalized = new Map<string, string>();
+    const normalizedTickets = new Map<string, string>();
     for (const repository of graph.repositories) {
       const account = String(assignments[repository.id] ?? "").trim();
       if (!account) {
@@ -6404,9 +6558,19 @@ export class TaskService {
         );
       }
       normalized.set(repository.id, account);
+      const ticket = String(tickets?.[repository.id]
+        ?? repository.ticket ?? task.summary.ticket ?? "").trim();
+      if (!ticket) {
+        throw new TaskControlError(`仓库 ${repository.name} 尚未填写 AR 单号`);
+      }
+      if (/\s/.test(ticket)) {
+        throw new TaskControlError(`仓库 ${repository.name} 的 AR 单号不能含空白字符`);
+      }
+      normalizedTickets.set(repository.id, ticket);
     }
     for (const repository of graph.repositories) {
       repository.assignee = normalized.get(repository.id)!;
+      repository.ticket = normalizedTickets.get(repository.id)!;
     }
     this.persist(task);
     return { ...task.summary };
@@ -6515,6 +6679,7 @@ export class TaskService {
           + "在需求/设计阶段读它,不要跳过流程直接实施。只交付当前仓"
           + "职责;发现方案不够用时停止并报告,不要自行改变跨仓契约。",
         `当前仓库:${repository.name}\n当前职责:${repository.responsibility ?? "见方案正文"}`,
+        `当前仓 AR 单号:${repository.ticket ?? task.summary.ticket ?? "未填写"}`,
       ].filter(Boolean).join("\n\n");
       const preserveUndefinedRepositorySkills =
         task.summary.repository_skills === undefined;
@@ -6525,7 +6690,7 @@ export class TaskService {
         account: repository.assignee ?? task.summary.luban_account,
         repo: repository.url,
         lane: task.summary.lane,
-        ticket: task.summary.ticket,
+        ticket: repository.ticket ?? task.summary.ticket,
         baseline: task.summary.baseline,
         model: task.summary.model_choice,
         repairRounds: task.summary.repair_rounds,
@@ -6560,6 +6725,10 @@ export class TaskService {
         hostSkillSnapshotSourceWorkspace: task.summary.workspace,
         parentTaskId: task.summary.id,
         internalRequirement: true,
+        requirementDocumentName: task.summary.requirement_document?.name,
+        requirementBundleName: task.summary.requirement_document?.bundle_name,
+        requirementAssets: loadRequirementAssets(
+          task.summary.workspace, task.summary.requirement_document),
         blockedBy: blockers,
         repositorySkills: preserveUndefinedRepositorySkills
           ? undefined
@@ -6681,6 +6850,7 @@ export class TaskService {
       catalog_token?: string;
       selected_ids?: string[];
       repository_assignees?: Record<string, string>;
+      repository_tickets?: Record<string, string>;
     },
   ): Promise<TaskSummary> {
     const task = this.tasks.get(id);
@@ -6709,6 +6879,7 @@ export class TaskService {
         repository_skill_catalog_token: skillSelection?.catalog_token,
         selected_repository_skill_ids: skillSelection?.selected_ids,
         repository_assignees: skillSelection?.repository_assignees,
+        repository_tickets: skillSelection?.repository_tickets,
         // 收尾令随决定送达:确认后父会话再举卡会被系统代答赶下台
         // (autoAnswerFor 的分析单兜底),但第一选择是它自己别举。
         notes: "各仓交付任务由平台自动生成与调度,不归本会话跟进;"
@@ -6723,7 +6894,8 @@ export class TaskService {
       throw new NotFoundError("需求分析尚未进入人工检视，暂不能确认方案");
     }
     if (skillSelection?.repository_assignees) {
-      this.assignRequirementRepositories(id, skillSelection.repository_assignees);
+      this.assignRequirementRepositories(id, skillSelection.repository_assignees,
+        skillSelection.repository_tickets);
     }
     this.createRepositoryDeliveries(task);
     this.bypass(undefined, "任务泵", this.pump());
@@ -7428,8 +7600,8 @@ export class TaskService {
     const confirmingGraph = this.isRequirementAnalysis(task)
       && Object.values(answers).concat(decision).some((answer) =>
         answer.includes("确认并生成任务"));
-    if (input.repository_assignees && !confirmingGraph) {
-      throw new NotFoundError("逐仓责任人只能随“确认并生成任务”提交");
+    if ((input.repository_assignees || input.repository_tickets) && !confirmingGraph) {
+      throw new NotFoundError("逐仓责任人与 AR 单号只能随“确认并生成任务”提交");
     }
     if (confirmingGraph) {
       this.requirementGraphPlan(task);
@@ -7439,7 +7611,8 @@ export class TaskService {
           throw new StateConflictError(
             `任务状态已变化:待办 ${waiting.waiting_id} 版本不匹配`);
         }
-        this.assignRequirementRepositories(id, input.repository_assignees);
+        this.assignRequirementRepositories(id, input.repository_assignees,
+          input.repository_tickets);
       }
     }
     const updatesRepositorySkills =
@@ -9064,6 +9237,8 @@ export class TaskService {
         }
         cwd = analysisRoot;
         task.cwd = cwd;
+        materializeRequirementAssets(
+          workspace, cwd, task.summary.requirement_document);
         requirementPath = materializeRequirementDocument(
           cwd, task.summary.requirement, task.summary.requirement_document);
         // 恢复旧分析现场时也清除曾经持久化的 helper；每个仓仍可正常
@@ -9133,6 +9308,8 @@ export class TaskService {
           }
         }
         task.cwd = cwd;
+        materializeRequirementAssets(
+          workspace, cwd, task.summary.requirement_document);
         requirementPath = materializeRequirementDocument(
           cwd, task.summary.requirement, task.summary.requirement_document);
         this.hardenAgentGitBoundary(agentDir, cwd);
@@ -14127,7 +14304,10 @@ export class TaskService {
       "请亲自阅读各仓代码，从关键词、接口调用链、配置路由三条路径核查。"
         + "每个触点必须给出仓库、文件、符号、相关原因和置信度；"
         + "拿不准的事项使用 AskUserQuestion 逐题询问，不能猜。"
-        + "逐题确认仓库职责、接口形态/字段/错误语义，以及依赖方向和可并行范围。",
+        + "逐题确认仓库职责、接口形态/字段/错误语义，以及依赖方向和可并行范围。"
+        + "对每个新增或变化的数据逐项追清生产者、转换者、消费者和责任系统；"
+        + "若生产者在仓库清单之外，也必须在最终拆单前问清外部系统与回流方式。"
+        + "禁止留下只有消费方、没有明确产生方的字段或事件。",
       "只有全部不确定事项都已经逐题确认后，才能生成以下两份最终产物。",
       `把供人检视的完整方案写到 ${join(artifactDir, `CHAIN-${ticket}.md`)}。`
         + "正文必须包含需求理解、仓库职责、带证据触点、接口契约、"

@@ -123,7 +123,10 @@ test("需求原文接入圈注层，终态只把已停止任务设为只读", ()
   assert.match(sourceBranch, /<Annotatable/);
   assert.match(sourceBranch, /artifact=\{TASK_REQUIREMENT_ARTIFACT\}/);
   assert.match(sourceBranch, /fallbackFile="需求原文"/);
-  assert.match(sourceBranch, /<Markdown text=\{task\.requirement\} \/>/);
+  assert.match(sourceBranch, /<Markdown text=\{task\.requirement\} resolveImage=/,
+    "需求原文应原样进入 Markdown，并为包内图片提供受控解析入口");
+  assert.match(sourceBranch, /requirement_document\?\.assets\?\.some/,
+    "只有任务元数据登记过的图片才能渲染，不能开放任意地址");
   assert.match(workspace, /return status !== "canceled"/,
     "已交付任务可归档批注，只有明确停止后才关闭新增入口");
   assert.match(workspace, /checks\.find\(\(check\) => check\.id === item\.id\)\?\.line/,

@@ -669,6 +669,7 @@ export function WaitingCard({
         annotationIds,
         repositorySkills,
         confirmsChain ? repositoryAssigneeSelection?.assignments : undefined,
+        confirmsChain ? repositoryAssigneeSelection?.tickets : undefined,
         requiresDeliverySelection ? deliverySelection?.selectedPaths : undefined,
         task.waiting!.waiting_id,
       );
