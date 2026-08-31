@@ -223,7 +223,15 @@ test("彻底删除投影:事务内清摘要、事件、外部动作，且拒绝�
         "select count(*)::int as n from tasks where task_id=$1",
         ["task-delete-active"])).rows[0].n, 1);
 
-      await projection.upsertTask(summaryOf("task-delete-final", "completed"));
+      await projection.upsertTask({
+        ...summaryOf("task-delete-final", "completed"),
+        luban_account: "alice",
+      } as never);
+      assert.deepEqual(await projection.taskIdentity("task-delete-final"), {
+        found: true,
+        status: "completed",
+        luban_account: "alice",
+      }, "现场已回收时仍能从投影取得责任人，供删除接口裁权");
       await projection.appendEvent({
         eventId: 1, taskId: "task-delete-final", sessionId: "main",
         ts: "t", kind: "session_started", payload: {},
@@ -246,6 +254,9 @@ test("彻底删除投影:事务内清摘要、事件、外部动作，且拒绝�
       }
       assert.deepEqual(await projection.deleteTask("task-delete-missing"), {
         found: false, deleted: false,
+      });
+      assert.deepEqual(await projection.taskIdentity("task-delete-final"), {
+        found: false,
       });
     } finally {
       await judge.end();

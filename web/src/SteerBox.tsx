@@ -218,6 +218,41 @@ export function SteerBox({
     "completed"].includes(assistant.state)
     || assistant.handoff?.state === "running";
   const canSteer = task.status === "running" && !takeoverActive;
+  const steerDisabledReason = canSteer ? undefined
+    : takeoverActive ? {
+        title: "开发助手正在接管主现场",
+        detail: "请先在“开发助手”中交还主任务；主 Agent 恢复运行后才能继续补充。",
+      }
+    : task.status === "waiting_for_human" ? {
+        title: "主任务正在等待人工决定",
+        detail: "请在决定卡中回答，或在材料上添加批注；这些意见会随决定一起交给 Agent。",
+      }
+    : task.status === "paused" ? {
+        title: "主任务已暂停",
+        detail: steerOnly
+          ? "需要由主责任人先恢复主任务，Agent 运行后才能接收补充。"
+          : "请先恢复主任务；如果要立即查代码或修改，可切到“开发助手”。",
+      }
+    : task.status === "pausing" ? {
+        title: "主任务正在暂停",
+        detail: "系统正在保存执行现场，完成后可恢复主任务或使用开发助手。",
+      }
+    : task.status === "verifying" ? {
+        title: "当前正在验证交付结果",
+        detail: "主 Agent 已结束本轮编码，当前由构建或流水线核验；出现失败后系统会进入修复流程。",
+      }
+    : task.status === "await_merge" ? {
+        title: "当前正在等待合入",
+        detail: "代码和验证已经收口，请前往合入操作；此时没有运行中的主 Agent 接收补充。",
+      }
+    : task.status === "queued" ? {
+        title: "主任务还在排队",
+        detail: "Agent 尚未开始运行，任务启动后才能发送补充。",
+      }
+    : {
+        title: "当前没有运行中的主 Agent",
+        detail: "只有主任务处于“执行中”时，这里的补充才能可靠送达。",
+      };
   const assistantAvailable = assistant.availability.available;
   const canReturn = task.status === "paused"
     && !["acquiring", "working", "returning", "running"].includes(assistant.state);
@@ -257,7 +292,9 @@ export function SteerBox({
       {mode === "steer" || steerOnly ? (
         <>
           <p className="steer-copy">
-            想到什么随时捎给主任务。当前命令不会被掐断，模型读到后会继续按 Mae-Flow 流程推进。
+            {canSteer
+              ? "想到什么随时捎给主任务。当前命令不会被掐断，模型读到后会继续按 Mae-Flow 流程推进。"
+              : "“补充给主任务”只会送给正在运行的主 Agent。"}
           </p>
           <textarea id={`steer-${task.id}`} className="steer-input"
             value={steerText} disabled={!canSteer || steerBusy}
@@ -278,6 +315,12 @@ export function SteerBox({
                 void sendSteer();
               }
             }} />
+          {steerDisabledReason && <div className="steer-disabled-reason"
+            role="status" aria-live="polite">
+            <span aria-hidden>i</span>
+            <div><strong>{steerDisabledReason.title}</strong>
+              <small>{steerDisabledReason.detail}</small></div>
+          </div>}
           <div className="steer-actions">
             <span className="steer-hint">
               {sent && !steerText ? "已捎过去，待读取状态会在下方更新" : "⌘/Ctrl + Enter 发送"}

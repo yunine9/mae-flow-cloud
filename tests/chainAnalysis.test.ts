@@ -86,6 +86,12 @@ test("跨仓分析会话:克隆只读现场→写产物→举卡→确认拆单�
       account: "cloudbot", ticket,
       repos: [apiRepo, webRepo],
     });
+    const prompt = (service as any).requirementAnalysisPrompt(
+      (service as any).tasks.get(parent.id), dataDir);
+    assert.match(prompt, /生产者、转换者、消费者和责任系统/,
+      "跨仓分析必须在拆单前追清新增数据由谁产生");
+    assert.match(prompt, /仓库清单之外.*外部系统/,
+      "外部生产系统不能拖到某个子任务质询时才发现");
     assert.equal(parent.requirement_graph?.stage, "analysis");
     const card = await until(() => {
       const now = service.get(parent.id)!;

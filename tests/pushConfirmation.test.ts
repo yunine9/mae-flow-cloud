@@ -86,6 +86,19 @@ test("确认绑定 HEAD+文件集合:同文件修复产生新 HEAD 也必须重�
     assert.equal(service.get(id)!.status, "waiting_for_human");
     assert.equal(waiting.recommended_view, "diff",
       "云端原生卡要给 diff 检视面,勾选 UI 才会开放");
+    assert.deepEqual(waiting.choice_effects, [{
+      key: "confirm",
+      answers: ["确认按清单推送"],
+      allows_source_edit: false,
+      handles_feedback: false,
+      closes_feedback: true,
+    }, {
+      key: "rework",
+      answers: ["需要调整代码（按清单返工）"],
+      allows_source_edit: true,
+      handles_feedback: true,
+      closes_feedback: false,
+    }], "Cloud 原生卡也必须把返工/关闭语义投影给页面");
     const firstReview = service.get(id)!.delivery?.push_review;
     assert.equal(firstReview?.kind, "delivery");
     assert.equal(firstReview?.title, "完整交付内容");

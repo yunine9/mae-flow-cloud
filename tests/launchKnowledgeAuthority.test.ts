@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -42,6 +43,7 @@ function publishEngineering(
   dataDir: string,
   index: number,
   content = `工程知识 ${index}`,
+  repository = "https://code.example/team/orders.git",
 ) {
   const pending = createKnowledgeCandidate(dataDir, {
     source_task_id: "task-source",
@@ -50,7 +52,7 @@ function publishEngineering(
     when_to_use: "修改 Java 服务时",
     nature: "engineering",
     form: "rule",
-    repositories: ["https://code.example/team/orders.git"],
+    repositories: [repository],
     technologies: ["java"],
     content,
   }, "developer");
@@ -369,8 +371,9 @@ test("知识清单指纹绑定创建：旧清单拒绝且不占 task id，未变
 test("技术画像记忆失败时，本单仍使用已核对画像而不静默缩小匹配范围",
   async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "mfc-launch-profile-write-"));
-    const repository = "https://code.example/team/orders.git";
-    const engineering = publishEngineering(dataDir, 1);
+    const repository = mkdtempSync(join(tmpdir(), "mfc-launch-profile-repo-"));
+    execFileSync("git", ["init", "--quiet", "--bare", repository]);
+    const engineering = publishEngineering(dataDir, 1, undefined, repository);
     // profiles.json 故意做成目录，让“记住供下次使用”失败；当前请求的
     // 画像仍然是合法输入，不能因此从 Java 匹配退化成无技术栈。
     mkdirSync(join(dataDir, "repository-profiles", "profiles.json"), {

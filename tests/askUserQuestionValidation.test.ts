@@ -1,7 +1,26 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { validateAskUserQuestionInput } from "../src/sessionDriver.ts";
+import {
+  fatalToolExecutionError,
+  validateAskUserQuestionInput,
+} from "../src/sessionDriver.ts";
+
+test("输出上限截断的问题卡会显式停机，不伪装成继续推进", () => {
+  assert.match(fatalToolExecutionError(
+    "AskUserQuestion",
+    "Tool call was not executed because assistant hit the output token limit",
+    true,
+  ) ?? "", /重跑续推.*不会丢失/);
+  assert.equal(fatalToolExecutionError(
+    "Edit", "old text not found", true), undefined,
+    "普通工具失败应留给 Agent 自行修正，不能扩大成任务停机");
+  assert.equal(fatalToolExecutionError(
+    "AskUserQuestion",
+    "Tool call was not executed because assistant hit the output token limit",
+    false,
+  ), undefined);
+});
 
 test("残缺选择题不发送给用户，开放题和完整多题卡可用", () => {
   assert.match(validateAskUserQuestionInput({

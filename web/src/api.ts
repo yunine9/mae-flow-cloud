@@ -397,11 +397,13 @@ export async function putCommitter(
 export async function confirmRequirementGraph(
   taskId: string,
   repositoryAssignees?: Record<string, string>,
+  repositoryTickets?: Record<string, string>,
 ): Promise<TaskSummary> {
   const response = await fetch(
     `/tasks/${encodeURIComponent(taskId)}/graph/confirm`, {
       method: "POST",
-      body: JSON.stringify({ repository_assignees: repositoryAssignees }),
+      body: JSON.stringify({ repository_assignees: repositoryAssignees,
+        repository_tickets: repositoryTickets }),
     });
   if (!response.ok) throw new Error(await errorText(response));
   return response.json();
@@ -410,11 +412,13 @@ export async function confirmRequirementGraph(
 export async function putRepositoryAssignees(
   taskId: string,
   repositoryAssignees: Record<string, string>,
+  repositoryTickets?: Record<string, string>,
 ): Promise<TaskSummary> {
   const response = await fetch(
     `/tasks/${encodeURIComponent(taskId)}/repository-assignees`, {
       method: "PUT",
-      body: JSON.stringify({ repository_assignees: repositoryAssignees }),
+      body: JSON.stringify({ repository_assignees: repositoryAssignees,
+        repository_tickets: repositoryTickets }),
     });
   if (!response.ok) throw new Error(await errorText(response));
   return response.json();
@@ -807,6 +811,14 @@ export interface TaskSummary {
     name: string;
     bytes: number;
     context_mode: "inline" | "file";
+    bundle_name?: string;
+    assets?: Array<{
+      path: string;
+      source_path: string;
+      mime_type: "image/png" | "image/jpeg" | "image/webp" | "image/gif";
+      bytes: number;
+      digest: string;
+    }>;
   };
   status: TaskStatus;
   /** 服务端对现有事实的唯一扫读解释；旧后端缺席时界面安全降级。 */
@@ -873,12 +885,16 @@ export interface TaskSummary {
     stage: "analysis" | "confirmed";
     repositories: Array<{
       id: string; name: string; url: string; responsibility?: string;
-      assignee?: string; task_id?: string;
+      assignee?: string; ticket?: string; task_id?: string;
+      task_status?: TaskStatus; current_phase?: string;
     }>;
     /** `from 依赖 to`：from 等待 to，to 是前置仓库。 */
     dependencies: Array<{ from: string; to: string; reason?: string }>;
   };
   parent_task_id?: string;
+  parent_task?: {
+    id: string; title?: string; ticket?: string; status: TaskStatus;
+  };
   blocked_by?: string[];
   cross_repository_updates?: CrossRepositoryUpdate[];
   waiting?: {
@@ -1257,6 +1273,25 @@ export async function resolveRepositoryProfiles(
 ): Promise<Array<{ repository: string; profile?: RepositoryProfile }>> {
   const response = await fetch("/repository-profiles/resolve", {
     method: "POST",
+    body: JSON.stringify({ repositories }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return (await response.json()).repositories;
+}
+
+export interface RepositoryProbeResult {
+  repository: string;
+  reachable: boolean;
+  message: string;
+}
+
+export async function probeRepositories(
+  repositories: string[],
+  signal?: AbortSignal,
+): Promise<RepositoryProbeResult[]> {
+  const response = await fetch("/repositories/probe", {
+    method: "POST",
+    signal,
     body: JSON.stringify({ repositories }),
   });
   if (!response.ok) throw new Error(await errorText(response));
@@ -2025,6 +2060,10 @@ export async function createTask(
     title?: string;
     repo?: string;
     repos?: string[];
+    /** 以仓库地址为键的逐仓 AR 单号；多仓发起时和仓库同一行填写。 */
+    repositoryTickets?: Record<string, string>;
+    /** 以仓库地址为键的逐仓责任人；单仓默认当前下单人。 */
+    repositoryAssignees?: Record<string, string>;
     lane?: string;
     ticket?: string;
     baseline?: string;
@@ -2040,6 +2079,7 @@ export async function createTask(
     repositoryProfiles?: Array<Pick<RepositoryProfile,
       "repository" | "technologies" | "confirmed">>;
     requirementDocumentName?: string;
+    requirementBundle?: { name: string; contentBase64: string };
   },
   // 返回创建结果:调用方靠它把新任务当场打开/高亮。原来丢弃 201 响应
   // 体,下单成功零反馈,人会怀疑没提交成功再点一次(2026-08-30 审计)。
@@ -2049,10 +2089,18 @@ export async function createTask(
     body: JSON.stringify({
       requirement,
       requirement_document_name: extras?.requirementDocumentName,
+      requirement_bundle: extras?.requirementBundle
+        ? {
+            name: extras.requirementBundle.name,
+            content_base64: extras.requirementBundle.contentBase64,
+          }
+        : undefined,
       title: extras?.title?.trim() || undefined,
       account: account || undefined,
       repo: extras?.repo || undefined,
       repos: extras?.repos?.length ? extras.repos : undefined,
+      repository_tickets: extras?.repositoryTickets,
+      repository_assignees: extras?.repositoryAssignees,
       // 空白等于没选，由服务端使用内核第一项；不要把 "" 伪装成
       // 一个需要校验的交付方式。
       lane: extras?.lane?.trim() || undefined,
@@ -2076,6 +2124,31 @@ export async function createTask(
   return await response.json() as TaskSummary;
 }
 
+export interface RequirementBundlePreview {
+  bundle_name: string;
+  document_name: string;
+  requirement: string;
+  assets: Array<{
+    path: string;
+    source_path: string;
+    mime_type: "image/png" | "image/jpeg" | "image/webp" | "image/gif";
+    bytes: number;
+    content_base64: string;
+  }>;
+}
+
+export async function previewRequirementBundle(
+  name: string,
+  contentBase64: string,
+): Promise<RequirementBundlePreview> {
+  const response = await fetch("/requirement-bundles/preview", {
+    method: "POST",
+    body: JSON.stringify({ name, content_base64: contentBase64 }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
 /** 提交决定。结构化选项与自由说明分开，服务端统一查询未闭环批注。 */
 export async function decide(
   taskId: string,
@@ -2094,6 +2167,8 @@ export async function decide(
   },
   /** Chain 图上的逐仓责任人；只在“确认并生成任务”时发送。 */
   repositoryAssignees?: Record<string, string>,
+  /** Chain 图上的逐仓 AR 单号；与责任人同一次确认提交。 */
+  repositoryTickets?: Record<string, string>,
   /** 代码检视勾选的最终交付文件；空数组表示明确不选任何文件。 */
   deliveryPaths?: string[],
   /** 当前卡的稳定身份；用于把成功请求的网络重放识别为幂等成功。 */
@@ -2111,6 +2186,7 @@ export async function decide(
       repository_skill_catalog_token: repositorySkills?.catalogToken,
       selected_repository_skill_ids: repositorySkills?.selectedIds,
       repository_assignees: repositoryAssignees,
+      repository_tickets: repositoryTickets,
       delivery_paths: deliveryPaths,
     }),
   });
@@ -2157,11 +2233,13 @@ export async function rerunTaskFromStart(
   return { task: await response.json() };
 }
 
-/** 管理员彻底删除真终态历史及 Cloud 内全部关联现场。 */
+/** 责任人可删除自己的真终态历史；管理员可删除任意真终态历史。 */
 export async function deleteHistoryTask(
   taskId: string,
 ): Promise<{ error?: string }> {
-  const response = await fetch(`/tasks/${taskId}`, { method: "DELETE" });
+  const response = await fetch(`/tasks/${encodeURIComponent(taskId)}`, {
+    method: "DELETE",
+  });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     return { error: String(body.error ?? `HTTP ${response.status}`) };
@@ -2334,6 +2412,9 @@ export async function listInterrupts(
 }
 
 /* ---------------- 检视批注 ---------------- */
+
+/** 需求原文来自任务快照；这个保留标识与服务端 annotations.ts 同合同。 */
+export const TASK_REQUIREMENT_ARTIFACT = "__task_requirement__";
 
 export interface Annotation {
   id: string;
@@ -2617,6 +2698,8 @@ export interface ArtifactMeta {
   modified_at: string;
   /** 差异产物包含的真实文件数；文档产物不提供。 */
   file_count?: number;
+  /** Cloud 生成材料的稳定用途；页面不应靠文件名猜业务语义。 */
+  purpose?: "pipeline_evidence_gap";
 }
 
 export async function listArtifacts(

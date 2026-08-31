@@ -12,6 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import type { RequirementAssetMeta } from "./requirementBundle.ts";
 
 export const MAX_REQUIREMENT_DOCUMENT_BYTES = 512 * 1024;
 export const INLINE_REQUIREMENT_DOCUMENT_BYTES = 32 * 1024;
@@ -22,6 +23,8 @@ export interface RequirementDocumentMeta {
   name: string;
   bytes: number;
   context_mode: "inline" | "file";
+  bundle_name?: string;
+  assets?: RequirementAssetMeta[];
 }
 
 function normalizedName(name: string | undefined): string | undefined {
@@ -100,7 +103,12 @@ export function requirementContext(
   meta: RequirementDocumentMeta | undefined,
   readablePath?: string,
 ): string {
-  if (meta?.context_mode !== "file") return content;
+  const imageInstruction = meta?.assets?.length
+    ? `需求文档包含 ${meta.assets.length} 张必须核对的图片。图片已在工作区按 Markdown 相对路径落盘；请使用 InspectImage 逐张读取（单次最多 4 张时分批），不得只根据文件名猜测。`
+    : "";
+  if (meta?.context_mode !== "file") {
+    return [content, imageInstruction].filter(Boolean).join("\n\n");
+  }
   const outline = headings(content);
   const preview = content.slice(0, 2_400).trimEnd();
   return [
@@ -113,5 +121,6 @@ export function requirementContext(
     outline.length ? `文档标题提纲：\n${outline.map((item) => `- ${item}`).join("\n")}`
       : "文档没有 Markdown 标题；请按段落分批读取完整文件。",
     `开头预览（只用于定位，不代替全文）：\n${preview}`,
+    imageInstruction,
   ].join("\n\n");
 }

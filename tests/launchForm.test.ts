@@ -367,7 +367,7 @@ test("结构化工作流:下单固定唯一最终方案，平台下限不可删�
   assert.match(task.workflow_profile?.diagnostics[0].fallback ?? "", /保留/);
 });
 
-test("单号/基线分支:下单收齐,基线默认 master,纯会话形态不摆这些框", () => {
+test("单号/基线分支:下单收齐,基线默认 master,纯会话仍保留 AR/REQ 入口", () => {
   // 用户 2026-08-19 拍板:这两项和交付方式一样在表单上一次给完,
   // 不让模型开工后再逐项来问。单号必填与"交付仓必填"同口径;
   // 基线分支给默认 master——多数单就交到 master,少数改一下即可。
@@ -393,13 +393,16 @@ test("单号/基线分支:下单收齐,基线默认 master,纯会话形态不摆
     { repo: "https://x/r.git", ticket: "DTS9", baseline: "develop" });
   assert.equal(picked.baseline, "develop");
 
-  // 纯会话形态:没有配置确认这回事,单号/基线的框都不该摆出来
+  // 纯会话形态不强制单号，但 AR/REQ 是业务身份，创建页仍应保留入口；
+  // 基线才是代码交付专属字段。
   const chat = new TaskService({
     dataDir: mkdtempSync(join(tmpdir(), "mfc-lf-chat2-")),
     provider: "a", model: "a-1",
     modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
   });
-  assert.equal(chat.launchOptions().ticket.enabled, false);
+  assert.deepEqual(chat.launchOptions().ticket,
+    { enabled: true, required: false });
+  assert.equal(chat.launchOptions().baseline.enabled, false);
   assert.equal(chat.create("纯会话不需要单号").ticket, undefined);
 });
 
@@ -458,10 +461,39 @@ test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队
     description: "API 问题定位", relative_path: ".claude/skills/api-diagnosis/SKILL.md",
     source: ".claude", digest: "c".repeat(64),
   };
+  assert.throws(() => service.create("单仓不能伪装转交", {
+    repo: "https://codehub/team/api.git", ticket: "REQ-SINGLE",
+    repositoryAssignees: { "https://codehub/team/api.git": "alice" },
+    account: "owner",
+  }), /单仓任务责任人必须是当前下单人/);
+  assert.throws(() => service.create("责任人不合法时整单拒绝", {
+    repos: ["https://codehub/team/api.git", "https://codehub/team/web.git"],
+    ticket: "REQ-BAD-OWNER",
+    repositoryTickets: {
+      "https://codehub/team/api.git": "REQ-BAD-API",
+      "https://codehub/team/web.git": "REQ-BAD-WEB",
+    },
+    repositoryAssignees: {
+      "https://codehub/team/api.git": "alice",
+      "https://codehub/team/web.git": "ghost",
+    },
+    account: "owner",
+  }), /web\.git.*ghost.*不可委派.*CodeHub Token/,
+  "任一责任人不存在或未就绪都必须让整张跨仓任务创建失败");
+  assert.equal(service.list().length, 0, "失败创建不能留下半张主任务");
   const parent = service.create("跨仓交付", {
     title: "跨仓订单状态交付",
     repos: ["https://codehub/team/api.git", "https://codehub/team/web.git"],
-    ticket: "REQ-G3", account: "owner", repositorySkills: [repositorySkill],
+    ticket: "REQ-G3-API",
+    repositoryTickets: {
+      "https://codehub/team/api.git": "REQ-G3-API",
+      "https://codehub/team/web.git": "REQ-G3-WEB",
+    },
+    repositoryAssignees: {
+      "https://codehub/team/api.git": "alice",
+      "https://codehub/team/web.git": "bob",
+    },
+    account: "owner", repositorySkills: [repositorySkill],
     workflowDefinition: {
       schema: "mae-flow-workflow-definition/1",
       base: { standard_id: standard.standard_id,
@@ -483,10 +515,10 @@ test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队
   });
   const state = (service as any).tasks.get(parent.id);
   const root = join(dataDir, parent.id, "repositories");
-  const artifacts = join(root, ".mae-flow-work", "REQ-G3");
+  const artifacts = join(root, ".mae-flow-work", "REQ-G3-API");
   mkdirSync(artifacts, { recursive: true });
-  writeFileSync(join(artifacts, ".ticket-id"), "REQ-G3\n");
-  writeFileSync(join(artifacts, "CHAIN-REQ-G3.md"), "# 已确认方案\n");
+  writeFileSync(join(artifacts, ".ticket-id"), "REQ-G3-API\n");
+  writeFileSync(join(artifacts, "CHAIN-REQ-G3-API.md"), "# 已确认方案\n");
   writeFileSync(join(artifacts, "requirement-graph.json"), JSON.stringify({
     repositories: [
       { id: "api", name: "api", url: "https://codehub/team/api.git",
@@ -518,6 +550,14 @@ test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队
   assert.equal(apiTask.parent_task_id, parent.id);
   assert.equal(apiTask.luban_account, "alice");
   assert.equal(webTask.luban_account, "bob");
+  assert.equal(apiTask.ticket, "REQ-G3-API",
+    "每个仓必须使用拆分前固定的独立 AR 单号");
+  assert.equal(webTask.ticket, "REQ-G3-WEB");
+  assert.equal(apiTask.parent_task?.title, "跨仓订单状态交付",
+    "子任务读侧应直接给出可返回的主任务摘要");
+  assert.equal(graph.repositories[0].task_status, "queued",
+    "主任务协作树应投影子任务实时进展");
+  assert.match(apiTask.requirement, /当前仓 AR 单号:REQ-G3-API/);
   assert.deepEqual(apiTask.blocked_by, undefined);
   assert.deepEqual(webTask.blocked_by, [apiTask.id]);
   // 方案正文落工作区文件而非内联进需求(整份方案进 prompt 会被模型
@@ -787,6 +827,82 @@ function makeRepo(name: string): string {
   git(dir, "commit", "--quiet", "-m", "init");
   return dir;
 }
+
+test("仓库地址在下单前按真实 Git 身份探测，并逐仓返回人话错误", async () => {
+  const repository = makeRepo("probe-ok");
+  const missing = join(tmpdir(), `mfc-probe-missing-${Date.now()}`);
+  const kernelRoot = discoverKernelRoot(process.cwd());
+  if (!kernelRoot) throw new Error("找不到内核");
+  const service = new TaskService({
+    dataDir: mkdtempSync(join(tmpdir(), "mfc-lf-probe-")),
+    provider: "a", model: "a-1", maxConcurrent: 0,
+    modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
+    host: { kernelRoot },
+  });
+  const server = createTaskServer(service);
+  await new Promise<void>((resolveListen) =>
+    server.listen(0, "127.0.0.1", resolveListen));
+  const address = server.address() as AddressInfo;
+  try {
+    const response = await fetch(
+      `http://127.0.0.1:${address.port}/repositories/probe`, {
+        method: "POST",
+        body: JSON.stringify({ repositories: [
+          repository, missing, "git@example.com:team/repo.git",
+        ] }),
+      });
+    const body = await readJson(response) as {
+      repositories: Array<{ repository: string; reachable: boolean; message: string }>;
+    };
+    assert.equal(response.status, 200);
+    assert.deepEqual(body.repositories.map((item) => item.reachable),
+      [true, false, false]);
+    assert.match(body.repositories[0].message, /地址有效/);
+    assert.match(body.repositories[1].message, /不存在|填写有误/);
+    assert.match(body.repositories[2].message, /HTTPS/);
+  } finally {
+    await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+  }
+});
+
+test("发起页会防抖探测仓库并阻止坏地址，浅色退出图标有明确对比色", () => {
+  const source = readFileSync(join(process.cwd(), "web/src/LaunchWorkspace.tsx"), "utf-8");
+  const style = readFileSync(join(process.cwd(), "web/src/style.css"), "utf-8");
+  assert.match(source, /probeRepositories\(repositoriesToProbe/);
+  assert.match(source, /repositoryProbeBlocked/);
+  assert.match(source, /正在检查仓库地址/);
+  assert.match(style, /data-theme="light"\] \.logout-button svg[\s\S]*?#343b4f/);
+});
+
+test("REQ 单号字段明确要求填写 AR 对应单号，并说明无法按格式区分 FuR", () => {
+  const source = readFileSync(join(process.cwd(), "web/src/LaunchWorkspace.tsx"), "utf-8");
+  assert.match(source, /AR 对应的 REQ 单号/);
+  assert.match(source, /placeholder="例如：REQ2026xxxx"/);
+  assert.match(source, /不要填写 FuR 对应的 REQ 单号/);
+  assert.match(source, /两者格式相同，系统无法自动识别/);
+});
+
+test("多仓发起时每个仓在同一行填写自己的 AR 单号，后续分工不再重复编辑", () => {
+  const launch = readFileSync(join(process.cwd(), "web/src/LaunchWorkspace.tsx"), "utf-8");
+  const picker = readFileSync(join(process.cwd(),
+    "web/src/RepositoryAssigneePicker.tsx"), "utf-8");
+  assert.match(launch, /代码仓与对应 AR 单号/);
+  assert.match(launch, /第 \$\{index \+ 1\} 个仓库的 AR 单号/);
+  assert.match(launch, /第 \$\{index \+ 1\} 个仓库的责任人/);
+  assert.match(launch, /disabled=\{!multiRepository\}/);
+  assert.match(launch, /repositoryTickets: repoFieldsEnabled/);
+  assert.match(launch, /repositoryAssignees: repoFieldsEnabled/);
+  assert.match(picker, /责任人与 AR 单号均已在发起任务时确定/);
+  assert.doesNotMatch(picker, /onChange=\{\(event\) => chooseTicket/);
+  assert.doesNotMatch(picker, /<select/);
+});
+
+test("ZIP 图文需求只显示渲染预览，不再重复摆一份只读原文框", () => {
+  const source = readFileSync(join(process.cwd(), "web/src/LaunchWorkspace.tsx"), "utf-8");
+  assert.match(source, /\{!requirementBundle && <textarea/);
+  assert.doesNotMatch(source, /readOnly=\{Boolean\(requirementBundle\)\}/);
+  assert.match(source, /requirementBundle && <div className="requirement-bundle-preview">/);
+});
 
 test("消费:任务级代码仓压过部署仓,克隆的就是下单填的那个", async () => {
   const repoA = makeRepo("aaa");

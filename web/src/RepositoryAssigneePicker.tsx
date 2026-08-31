@@ -1,138 +1,124 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   listCollaborationAssignees,
-  putRepositoryAssignees,
   type CollaborationAssignee,
 } from "./api";
 
 export interface RepositoryAssigneeSelection {
   assignments: Record<string, string>;
+  tickets: Record<string, string>;
   ready: boolean;
   loading: boolean;
   error?: string;
 }
 
 export const EMPTY_REPOSITORY_ASSIGNEE_SELECTION: RepositoryAssigneeSelection = {
-  assignments: {}, ready: false, loading: true,
+  assignments: {}, tickets: {}, ready: false, loading: true,
 };
 
 export function RepositoryAssigneePicker({
   taskId,
   repositories,
   defaultAssignee,
+  defaultTicket,
   selection,
   onSelectionChange,
-  onSaved,
 }: {
   taskId: string;
   repositories: Array<{
     id: string; name: string; url: string; responsibility?: string;
-    assignee?: string;
+    assignee?: string; ticket?: string;
   }>;
   defaultAssignee?: string;
+  defaultTicket?: string;
   selection: RepositoryAssigneeSelection;
   onSelectionChange: (selection: RepositoryAssigneeSelection) => void;
-  onSaved?: () => void;
 }) {
   const [people, setPeople] = useState<CollaborationAssignee[]>([]);
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [saveError, setSaveError] = useState("");
   const assignmentKey = repositories.map((item) =>
-    `${item.id}:${item.assignee ?? ""}`).join("\0");
+    `${item.id}:${item.assignee ?? ""}:${item.ticket ?? ""}`).join("\0");
   const initialAssignments = useMemo(() => Object.fromEntries(
     repositories.map((repository) => [
       repository.id,
       repository.assignee ?? defaultAssignee ?? "",
     ]),
   ), [taskId, assignmentKey, defaultAssignee]);
+  const initialTickets = useMemo(() => Object.fromEntries(
+    repositories.map((repository) => [
+      repository.id,
+      repository.ticket ?? defaultTicket ?? "",
+    ]),
+  ), [taskId, assignmentKey, defaultTicket]);
+
+  const ticketsReady = (tickets: Record<string, string>) =>
+    repositories.every((repository) => {
+      const value = tickets[repository.id]?.trim() ?? "";
+      return Boolean(value) && !/\s/.test(value);
+    });
 
   useEffect(() => {
     let alive = true;
-    onSelectionChange({ assignments: initialAssignments, ready: false, loading: true });
+    onSelectionChange({ assignments: initialAssignments, tickets: initialTickets,
+      ready: false, loading: true });
     void listCollaborationAssignees().then((candidates) => {
       if (!alive) return;
       setPeople(candidates);
       const byName = new Map(candidates.map((candidate) =>
         [candidate.username, candidate]));
       const ready = repositories.every((repository) =>
-        byName.get(initialAssignments[repository.id])?.ready === true);
-      onSelectionChange({ assignments: initialAssignments, ready, loading: false });
+        byName.get(initialAssignments[repository.id])?.ready === true)
+        && ticketsReady(initialTickets);
+      onSelectionChange({ assignments: initialAssignments, tickets: initialTickets,
+        ready, loading: false });
     }).catch((cause) => {
       if (!alive) return;
       onSelectionChange({
         assignments: initialAssignments,
+        tickets: initialTickets,
         ready: false,
         loading: false,
         error: cause instanceof Error ? cause.message : "责任人状态读取失败",
       });
     });
     return () => { alive = false; };
-  }, [taskId, initialAssignments]);
+  }, [taskId, initialAssignments, initialTickets]);
 
   const peopleByName = new Map(people.map((person) => [person.username, person]));
 
-  function choose(repositoryId: string, account: string) {
-    const assignments = { ...selection.assignments, [repositoryId]: account };
-    const ready = repositories.every((repository) =>
-      peopleByName.get(assignments[repository.id])?.ready === true);
-    setSaved(false);
-    setSaveError("");
-    onSelectionChange({ assignments, ready, loading: false });
-  }
-
-  async function save() {
-    if (!selection.ready || saving) return;
-    setSaving(true);
-    setSaveError("");
-    try {
-      await putRepositoryAssignees(taskId, selection.assignments);
-      setSaved(true);
-      onSaved?.();
-    } catch (cause) {
-      setSaveError(cause instanceof Error ? cause.message : "分工保存失败");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return <section className="repository-assignees" aria-label="逐仓责任人">
+  return <section className="repository-assignees" aria-label="逐仓交付信息">
     <header>
-      <div><span>跨仓协作</span><strong>每个仓由谁负责</strong></div>
-      <small>只有个人开发设置就绪的成员可以接活</small>
+      <div><span>跨仓协作</span><strong>逐仓分工</strong></div>
+      <small>责任人与 AR 单号均已在发起任务时确定</small>
     </header>
     <div className="repository-assignee-list">
       {repositories.map((repository) => {
         const selected = selection.assignments[repository.id] ?? "";
         const person = peopleByName.get(selected);
+        const ticket = selection.tickets[repository.id] ?? "";
+        const ticketProblem = !ticket.trim() ? "缺少 AR 单号"
+          : /\s/.test(ticket.trim()) ? "AR 单号无效" : "";
         return <label key={repository.id}>
           <span><strong>{repository.name}</strong>
             <small>{repository.responsibility ?? repository.url}</small></span>
-          <select value={selected} disabled={selection.loading || saving}
-            onChange={(event) => choose(repository.id, event.target.value)}>
-            <option value="">选择责任人</option>
-            {people.map((candidate) => <option key={candidate.username}
-              value={candidate.username} disabled={!candidate.ready}>
-              {candidate.username}{candidate.ready
-                ? " · 已就绪" : ` · 缺 ${candidate.missing.join("、")}`}
-            </option>)}
-          </select>
-          <em className={person?.ready ? "ready" : "missing"}>
-            {person?.ready ? "可委派"
-              : person ? `未就绪：${person.missing.join("、")}` : "待选择"}
+          <span className="repository-assignee-readonly">
+            <small>责任人</small><strong>{selected || "未指定"}</strong>
+          </span>
+          <span className="repository-ticket-readonly"
+            title="AR 单号来自发起任务时填写的逐仓信息">
+            <small>AR 单号</small><strong>{ticket || "未填写"}</strong>
+          </span>
+          <em className={person?.ready && !ticketProblem ? "ready" : "missing"}>
+            {ticketProblem || (person?.ready ? "可委派"
+              : person ? `未就绪：${person.missing.join("、")}` : "待选择")}
           </em>
         </label>;
       })}
     </div>
-    {(selection.error || saveError) && <p className="repository-assignee-error">
-      {selection.error || saveError}
+    {selection.error && <p className="repository-assignee-error">
+      {selection.error}
     </p>}
     <footer>
-      <p>先保存，责任人即可进入主任务一起补充意见；最终拆分仍由主责人确认。</p>
-      <button type="button" disabled={!selection.ready || saving}
-        onClick={() => void save()}>
-        {saving ? "正在保存…" : saved ? "分工已保存" : "保存分工并邀请协作"}
-      </button>
+      <p>确认方案后，系统会按上面的责任人、单号和依赖关系直接生成各仓子任务。</p>
     </footer>
   </section>;
 }

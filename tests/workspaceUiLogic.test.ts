@@ -81,6 +81,86 @@ test("检视返工不把内部第 0 轮显示成流水线修复轮次", () => {
   }), "流水线修复中");
 });
 
+test("圈注权与发送权拆开，需求原文批注能回到原文视图", () => {
+  assert.equal(workspace.canCreateWorkspaceAnnotation("completed"), true,
+    "已交付任务仍可留下交付后记录");
+  assert.equal(workspace.canCreateWorkspaceAnnotation("canceled"), false,
+    "用户明确停止的任务不再新增记录");
+  assert.equal(workspace.materialViewForAnnotation(
+    api.TASK_REQUIREMENT_ARTIFACT, []), "source");
+  assert.equal(workspace.materialViewForAnnotation("changes.diff", [
+    { name: "changes.diff", label: "代码差异", kind: "diff", bytes: 1 },
+  ]), "diff");
+  assert.deepEqual(workspace.decisionAnnotationIds([
+    annotation({ id: "mine", status: "draft", author: "alice" }),
+    annotation({ id: "visitor", status: "draft", author: "visitor" }),
+    annotation({ id: "sent", status: "sent", author: "alice" }),
+  ], "alice"), ["mine"],
+  "决定只能携带当前操作者自己的未送达草稿");
+});
+
+test("流水线证据缺口直接打开补证材料，用户切走后不被轮询抢回", () => {
+  const gap = {
+    name: "pipeline/流水线证据缺口.md",
+    label: "流水线证据缺口.md",
+    kind: "doc",
+    purpose: "pipeline_evidence_gap",
+    bytes: 120,
+    modified_at: "2026-08-30T00:00:00.000Z",
+  };
+  const spec = {
+    name: "REQ1/spec.md", label: "spec.md", kind: "doc", bytes: 100,
+    modified_at: "2026-08-30T00:01:00.000Z",
+  };
+  const evidenceTask = {
+    ...task("gap", "verifying"),
+    delivery: { evidence_gap: {
+      sha: "a".repeat(40), state: "waiting_human",
+      missing_dimensions: ["COMPILE"], available_dimensions: [],
+      reasons: ["日志缺失"], attempts: 3,
+    } },
+  };
+  assert.equal(workspace.pipelineEvidenceNeedsHuman(evidenceTask), true);
+  assert.equal(workspace.defaultWorkspaceView(evidenceTask), "materials",
+    "补证是明确的人工作业，不能仍默认打开执行现场");
+  assert.equal(workspace.preferredWorkspaceArtifact(
+    [spec, gap], "", undefined, true), gap.name,
+  "点名的补证材料优先于最近修改排序");
+  assert.equal(workspace.preferredWorkspaceArtifact(
+    [spec, gap], spec.name, undefined, true), spec.name,
+  "用户主动切换后的有效选择不能被后台刷新抢走");
+  assert.equal(workspace.pipelineEvidenceNeedsHuman({
+    ...evidenceTask,
+    delivery: { evidence_gap: {
+      ...evidenceTask.delivery.evidence_gap, state: "retrying",
+    } },
+  }), false, "系统仍在自动重试时不冒充人工待办");
+});
+
+test("已交付批注明确是归档记录，不再冒充待提交", () => {
+  const html = renderToStaticMarkup(React.createElement(
+    annotationPanel.AnnotationPanel,
+    {
+      taskId: "task-done",
+      viewerUsername: "visitor",
+      items: [annotation({
+        status: "draft", author: "visitor",
+        artifact: api.TASK_REQUIREMENT_ARTIFACT,
+        file: "需求原文",
+      })],
+      checks: [],
+      canOperate: false,
+      taskStatus: "completed",
+      mergeRequestOpen: false,
+      onChanged: () => undefined,
+    },
+  ));
+  assert.match(html, /交付后记录/);
+  assert.match(html, /已保存在本任务档案中/);
+  assert.doesNotMatch(html, /条待提交/);
+  assert.doesNotMatch(html, />提交 1 条/);
+});
+
 test("个人行动清单能关联别人归属的 Committer 检视，且缺详情也不吞角标", () => {
   const foreign = task("foreign", "waiting_for_human", "alice");
   const visible = app.buildPersonalActionItems({
@@ -221,6 +301,7 @@ test("最终交付决定卡只显示范围摘要，文件去留统一留在左�
       committedPaths: ["src/emoji.ts", "test.log"],
       allPaths: ["src/emoji.ts", "test.log"],
     },
+    unresolvedAnnotationCount: 3,
     onDeliverySelectionChange: () => undefined,
   }));
   assert.match(html, /本次交付范围/);
@@ -228,7 +309,9 @@ test("最终交付决定卡只显示范围摘要，文件去留统一留在左�
   assert.match(html, /文件去留在左侧代码差异中调整/);
   assert.doesNotMatch(html, /交付文件清单|全部纳入|全部仅留本地/);
   assert.doesNotMatch(html, /src\/emoji\.ts|test\.log/);
-  assert.match(html, /按这 1 个文件推送/);
+  assert.match(html, /当前有 3 条检视意见未闭环/);
+  assert.match(html, /建议选择“按清单返工”/);
+  assert.doesNotMatch(html, /当前卡片缺少调整选项/);
 });
 
 test("管理员旁路只开放给当前复检白名单中的他人待闭环意见", () => {
