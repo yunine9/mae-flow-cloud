@@ -81,6 +81,7 @@ import {
   type StepChoiceEffect,
 } from "./kernelChoices.ts";
 import {
+  hasStructuralWorkflowProjectionMismatch,
   readCurrentExecutionPlanReading,
   readExecutionPlaybookOptions,
   type ExecutionPlan,
@@ -2852,12 +2853,12 @@ export class TaskService {
           planAlerts.push(`⚠ ${diag.message}`);
         }
       }
-      if (!planAlerts.length && summary.workflow_profile && executionPlan
-          && executionPlan.customization.effective_source
-            !== "compiled_final_plan") {
-        // 实测(MFC-010)这种差异更多是"定格投影没落盘/没被读到",内核
-        // 仍按平台默认+overrides 正常编译——不是 Agent 违规。措辞按
-        // 事实说:方案投影缺失,给出实际来源;真要追责先核对两侧 hash。
+      if (!planAlerts.length && executionPlan
+          && hasStructuralWorkflowProjectionMismatch(
+            summary.workflow_profile, executionPlan)) {
+        // 这里只处理真正带 final_snapshot 的结构化定格。补充型 profile
+        // 正常来源就是 platform_default+overrides，已由上面的谓词排除；
+        // 结构化方案退化时按事实说投影缺失，不把责任推给 Agent。
         planAlerts.push(
           "⚠ 本任务下单时定格的工作流方案投影缺失或未被内核读到"
           + `(内核实际执行来源: ${executionPlan.customization.effective_source})`

@@ -117,6 +117,17 @@ export interface ExecutionPlanReading {
   kernel_warnings: string[];
 }
 
+/** 只有带 final_snapshot 的结构化方案才承诺由 compiled_final_plan
+ * 执行。supplement-only profile 本来就按平台默认方案叠加 overrides；
+ * 此时 platform_default+overrides 证明补充已经生效，不是投影缺失。 */
+export function hasStructuralWorkflowProjectionMismatch(
+  profile: { final_snapshot?: unknown } | undefined,
+  plan: Pick<ExecutionPlan, "customization"> | undefined,
+): boolean {
+  return Boolean(profile?.final_snapshot && plan
+    && plan.customization.effective_source !== "compiled_final_plan");
+}
+
 interface CacheEntry {
   fingerprint: string;
   value: ExecutionPlanReading;
