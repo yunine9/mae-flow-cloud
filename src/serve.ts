@@ -800,6 +800,10 @@ async function main(): Promise<void> {
     dts: issueDtsGateway,
     // MR 与需求交付共用同一交付平台适配层(--platform)。
     ...(platformUrl ? { platformUrl } : {}),
+    // 视觉旁路与需求侧共用同一对旗标(--vision-provider/--vision-model):
+    // 配齐才透传,问题会话由此获得 inspect_image;缺席一切照旧。
+    ...(visionProvider && visionModel
+      ? { vision: { provider: visionProvider, model: visionModel } } : {}),
     maxConcurrentTurns: Number(flag("--issue-max-turns") ?? "2"),
     ...(isolateImage
       ? {

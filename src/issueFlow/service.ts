@@ -27,6 +27,7 @@ import {
 } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import { CloudSession, type Outcome } from "../sessionDriver.ts";
+import type { VisionCapabilityConfig, VisionModelChoice } from "../visionCapability.ts";
 import type { Notifier, NotifyQuestion } from "../notifier.ts";
 import { EventLog, type SemanticEvent } from "../semanticEvents.ts";
 import { TranscriptStore } from "../transcriptStore.ts";
@@ -342,6 +343,10 @@ export interface IssueFlowOptions {
   platformUrl?: string;
   vault?: IssueEnvironmentVault;
   maxConcurrentTurns?: number;
+  /** 可选的专用视觉模型角色(与需求侧 TaskService 同形)。openDriver
+   * 组装会话时按同款逻辑变成 VisionCapabilityConfig,主会话由此获得
+   * inspect_image 工具;缺席则工具不出现,行为照旧。 */
+  vision?: VisionModelChoice;
   /** 小鲁班通知(公共能力,与需求侧同一实例):AI 举卡等决策时提醒
    * 归属用户。缺席(演示形态)不通知,流程照走——通知是旁路,不是
    * 问题流的启动依赖。 */
@@ -1206,6 +1211,25 @@ export class IssueFlowService {
     };
   }
 
+  /** 当前生效的视觉角色(TaskService.taskVision 的同款组装):角色必须
+   * 指向 models.json 中明确声明支持图片的模型,配置漂移时宁可不暴露
+   * 工具,也不把图片误发给文本模型。缓存落会话工作区(与需求侧
+   * workspace/vision-cache 同一约定;代码仓在其下的 repo/ 子目录,
+   * 缓存不会被推送或结论文档卷走)。 */
+  private visionCapability(workspace: string): VisionCapabilityConfig | undefined {
+    const choice = this.options.vision;
+    if (!choice?.provider || !choice?.model) return undefined;
+    const spec = (this.modelChoice().json as {
+      providers?: Record<string, { models?: Array<{
+        id?: string; input?: string[];
+      }> }>;
+    }).providers?.[choice.provider]?.models?.find((item) =>
+      String(item?.id ?? "") === choice.model);
+    return Array.isArray(spec?.input) && spec.input.includes("image")
+      ? { choice, cacheDir: join(workspace, "vision-cache"), timeoutMs: 45_000 }
+      : undefined;
+  }
+
   private async ensureContainer(live: LiveIssue): Promise<void> {
     if (!this.options.isolation || live.container) return;
     const isolation = this.options.isolation;
@@ -1339,6 +1363,9 @@ export class IssueFlowService {
       allowHumanQuestions: true,
       allowSubagents: false,
       extraTools: createIssueTools(context),
+      // 视觉旁路(与需求侧同一套配置语义):配了有效角色才注入
+      // inspect_image,主上下文只收文字结论。
+      vision: this.visionCapability(live.root),
       currentStep: () => live.state.stage_note || live.state.stage,
       compactAnchor: () => `问题会话「${live.state.title}」;`
         + `阶段 ${live.state.stage};单号 ${live.state.ticket ?? "未绑定"}`,
