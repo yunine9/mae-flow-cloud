@@ -42,7 +42,8 @@ import {
   type LaunchGateState,
 } from "./launchGate";
 import { startVisiblePolling } from "./visiblePolling";
-import { KnowledgeFlywheel } from "./KnowledgeFlywheel";
+import { KnowledgeInsightsBoard } from "./KnowledgeFlywheel";
+import { KnowledgeAssetsWorkspace } from "./KnowledgeAssets";
 import { WishWall, type WishWallDraft } from "./WishWall";
 import { QuickWishButton } from "./WishQuickCreate";
 import { userLabel } from "./UserPicker";
@@ -71,14 +72,14 @@ type Theme = "light" | "dark";
 type Density = "comfortable" | "compact";
 type MineScope = "all" | "waiting" | "intervention" | "active" | "delivered";
 type TeamTaskTab = "current" | "archive";
-type TeamAssetTab = "knowledge" | "modules" | "workflows";
+type TeamAssetTab = "knowledge" | "modules" | "workflows" | "insights";
 
 const APP_VIEWS = new Set<View>([
   "team", "mine", "issues", "profile", "users", "settings", "knowledge",
   "wishes", "help",
 ]);
 const TEAM_ASSET_TABS = new Set<TeamAssetTab>([
-  "knowledge", "modules", "workflows",
+  "knowledge", "modules", "workflows", "insights",
 ]);
 
 function appHistoryState(view: View, teamAssetTab?: TeamAssetTab) {
@@ -737,7 +738,7 @@ export function App() {
   // 知识聚合要读取多份任务足迹，独立低频刷新，不能跟 1.5 秒任务心跳
   // 绑在一起。开发成员也能看团队只读视图，和现有任务可见性一致。
   useEffect(() => {
-    if (!session || view !== "knowledge" || teamAssetTab !== "knowledge") return;
+    if (!session || view !== "knowledge" || teamAssetTab !== "insights") return;
     refreshKnowledgeInsights();
     const timer = window.setInterval(refreshKnowledgeInsights, 60_000);
     return () => window.clearInterval(timer);
@@ -1059,7 +1060,7 @@ export function App() {
             <button type="button" className={teamAssetTab === "knowledge" ? "active" : ""}
               aria-pressed={teamAssetTab === "knowledge"}
               onClick={() => selectTeamAssetTab("knowledge")}>
-              <strong>知识资产</strong><small>团队通用知识及全部资产的真实使用效果</small>
+              <strong>知识资产</strong><small>上架、审核并维护团队通用知识</small>
             </button>
             <button type="button" className={teamAssetTab === "modules" ? "active" : ""}
               aria-pressed={teamAssetTab === "modules"}
@@ -1071,10 +1072,20 @@ export function App() {
               onClick={() => selectTeamAssetTab("workflows")}>
               <strong>工作流方案</strong><small>保存、复制、审核并精确编排阶段内能力</small>
             </button>
+            <button type="button" className={teamAssetTab === "insights" ? "active" : ""}
+              aria-pressed={teamAssetTab === "insights"}
+              onClick={() => selectTeamAssetTab("insights")}>
+              <strong>使用效能</strong><small>谁真被读、谁选而未用，以及下一步改哪里</small>
+            </button>
           </nav>
-          {teamAssetTab === "knowledge" ? <KnowledgeFlywheel
+          {teamAssetTab === "knowledge" ? <KnowledgeAssetsWorkspace
             admin={session.role === "admin"}
             initialAsset={knowledgeFocus}
+            onOpenTask={(taskId) => {
+              const target = tasks.find((task) => task.id === taskId);
+              if (target) openArtifacts(target);
+            }}
+          /> : teamAssetTab === "insights" ? <KnowledgeInsightsBoard
             insights={knowledgeInsights}
             loading={knowledgeInsightsLoading}
             error={knowledgeInsightsError}

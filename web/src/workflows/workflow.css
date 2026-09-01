@@ -201,9 +201,12 @@
   display:flex;align-items:center;gap:7px;color:var(--muted);font-size:12px}.wf-dialog fieldset input{width:auto}
 .wf-dialog footer{display:flex;justify-content:flex-end;gap:8px;padding-top:4px}.wf-dialog button{padding:9px 14px;border:1px solid var(--line-strong);
   border-radius:8px;background:var(--surface);color:var(--text);font:inherit;cursor:pointer}.wf-dialog button:disabled{cursor:not-allowed;opacity:.5}
-.team-assets-workspace{display:flex;min-width:0;flex-direction:column;gap:18px}.team-assets-tabs{display:flex;align-items:stretch;gap:5px;
-  width:min(760px,100%);padding:5px;border:1px solid var(--line);border-radius:12px;background:var(--surface-soft)}
-.team-assets-tabs button{display:flex;min-width:190px;flex:1;flex-direction:column;align-items:flex-start;gap:3px;padding:10px 13px;
+/* 四个页签(2026-09-02 起把「使用效能」拆出来单列)要挤进一行,所以
+   比原来窄一档;高度也收了 4px——页签条上面还有整条页头,竖向每省
+   一点,下面的主从两栏就多一点。 */
+.team-assets-workspace{display:flex;min-width:0;flex-direction:column;gap:14px}.team-assets-tabs{display:flex;align-items:stretch;gap:4px;
+  width:min(980px,100%);padding:4px;border:1px solid var(--line);border-radius:12px;background:var(--surface-soft)}
+.team-assets-tabs button{display:flex;min-width:160px;flex:1;flex-direction:column;align-items:flex-start;gap:2px;padding:8px 12px;
   border:1px solid transparent;border-radius:8px;background:transparent;color:var(--text);font:inherit;text-align:left;cursor:pointer}
 .team-assets-tabs button:hover{background:var(--surface)}.team-assets-tabs button.active{border-color:var(--line-strong);
   background:var(--surface);box-shadow:var(--shadow-xs)}.team-assets-tabs strong{color:var(--text-strong);font-size:13px}
