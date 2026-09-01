@@ -800,6 +800,9 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
             proposal,
           );
         }
+        // 检视回合收口(ADR-0007):新一轮报告提交即举确认卡,检视
+        // 入口随之恢复——in-flight 标记在此清除。
+        delete ctx.state.review_active;
         ctx.persist();
         return ok("分析报告已提交,平台已举确认卡。请结束本回合,等待用户确认"
           + (scenario === "no_ticket" ? "(用户将决定挂起等提单还是闭环归档)。" : "后进入问题修改。"));

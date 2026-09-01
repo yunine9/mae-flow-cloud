@@ -3155,6 +3155,9 @@ export interface IssueSummary {
   scenario?: IssueScenario;
   stage_states?: IssueStageState[];
   round?: number;
+  /** 检视回合进行中(ADR-0007):意见已提交、整体回退到分析重跑,
+   * 期间检视入口置灰;新一轮 submit_analysis 时清除。 */
+  review_active?: boolean;
   gate?: IssueGateCard;
   ut?: { passed: boolean; summary: string; log_path?: string; round: number; at: string };
   /** 流水线监看(按仓,键=仓地址;一仓一 MR 一流水线)。 */
@@ -3584,15 +3587,18 @@ export interface IssueDialogueQuestion {
   options: string[];
 }
 
-/** 过程问答的一回合:user/agent 发言、agent 举的问答卡、用户决策。 */
+/** 过程问答的一回合(ADR-0008 口径):问答卡、用户决策、用户主动
+ * 输入、检视意见;agent 的过程性发言不进投影。 */
 export interface IssueDialogueTurn {
-  kind: "user" | "agent" | "card" | "decision";
+  kind: "user" | "card" | "decision" | "review";
   ts?: string;
   text?: string;
   via?: string;
   questions?: IssueDialogueQuestion[];
   decision?: string;
   notes?: string;
+  /** 检视回合专有:意见条数(正文 text 是提交的意见清单)。 */
+  count?: number;
 }
 
 /** 过程文档清单(分析报告固定首位 + Agent 落的其他 .md)。 */
@@ -3623,4 +3629,66 @@ export function getIssueDialogue(id: string): Promise<{
   truncated?: boolean;
 }> {
   return issueFetch(`/issues/${encodeURIComponent(id)}/dialogue`);
+}
+
+// ---- 检视(材料页签的检视子视图;ADR-0007,服务端 reviews.ts) ----
+
+/** 服务端 Annotation 的 wire 镜像(问题域只用 doc 一类;response/
+ * verified 等逐条闭环字段是需求流闭环的,问题域不出,故不镜)。 */
+export interface IssueReview {
+  id: string;
+  author: string;
+  created_at: string;
+  artifact: string;
+  file: string;
+  line: number;
+  anchor: string;
+  note: string;
+  kind: "doc" | "code";
+  status: "draft" | "sent" | "verified" | "dropped";
+  sent_at?: string;
+  sent_via?: string;
+  edited_at?: string;
+}
+
+/** 锚点检测(送出后原文还在吗):gone = 已被改动(唯一判据),
+ * moved = 仅漂移,ambiguous = 多处命中。 */
+export interface IssueReviewCheck {
+  id: string;
+  state: "hit" | "moved" | "gone" | "ambiguous";
+  line?: number;
+  now?: string;
+}
+
+export function getIssueReviews(id: string): Promise<{
+  reviews: IssueReview[];
+  checks: IssueReviewCheck[];
+  review_active: boolean;
+}> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/reviews`);
+}
+
+export function addIssueReview(id: string, input: {
+  line: number;
+  anchor: string;
+  note: string;
+}): Promise<IssueReview> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/reviews`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export function dropIssueReview(id: string, reviewId: string): Promise<IssueReview> {
+  return issueFetch(
+    `/issues/${encodeURIComponent(id)}/reviews/${encodeURIComponent(reviewId)}`,
+    { method: "DELETE" });
+}
+
+/** 提交检视:整体回退到问题分析(有后果,页面层先轻量确认)。 */
+export function sendIssueReviews(id: string): Promise<IssueSummary> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/reviews/send`, {
+    method: "POST",
+  });
 }

@@ -24,7 +24,10 @@ export type SemanticEventKind =
   | "agent_finished"
   | "turn_finished"
   | "session_ended"
-  | "human_decision";
+  | "human_decision"
+  /** 检视提交(问题域,ADR-0007):用户对分析报告的检视意见清单落账
+   * ——过程问答投影靠它呈现"这轮为什么重跑"。 */
+  | "review_submitted";
 
 export interface SemanticEvent {
   eventId: number;
@@ -49,6 +52,7 @@ const REQUIRED_PAYLOAD: Record<SemanticEventKind, readonly string[]> = {
   turn_finished: ["reason"],
   session_ended: ["reason", "detail"],
   human_decision: ["waiting_id", "state_version", "decision", "notes"],
+  review_submitted: ["count", "text"],
 };
 
 export function validateEvent(event: SemanticEvent): string {
