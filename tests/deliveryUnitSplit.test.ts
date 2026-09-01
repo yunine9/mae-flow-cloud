@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { LocalAuth } from "../src/auth.ts";
+import { deliveryChangeSnapshot } from "../src/artifacts.ts";
 import { readJson } from "../src/jsonBody.ts";
 import { createTaskServer } from "../src/server.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
@@ -195,6 +196,9 @@ test("单仓拆分:分析→撞单号挡下→分单号确认→串行子任务+
       "隔离工作区不能被 Agent 误判成其他仓或交付单元缺失");
     assert.match(filterChild.requirement, /跨单元状态与术语同步由主任务协调/,
       "跨单元同步责任必须明确落到主任务,不能重复抛给子任务用户");
+    assert.match(filterChild.requirement,
+      /任务书中写明的仓库名称.*CHAIN.*内部代号.*不得据此声称真实名称缺失/s,
+      "仓名已在任务书落定时,不能因 CHAIN 使用内部 id 再问人");
     assert.ok(!filterChild.requirement.includes("契约先行,过滤在后"),
       "方案正文不得内联进需求");
     const plan = readFileSync(
@@ -319,6 +323,14 @@ test("负责面门禁:目标分支前进并合入后不把其他任务文件误�
     assert.deepEqual(internal.summary.delivery?.scope_violation?.paths,
       ["src/contract/api.ts", "src/filterX/other.ts"],
       "目标分支自己的文档不属于本单元贡献，不能要求本单元责任人裁决");
+    const snapshot = await deliveryChangeSnapshot(cwd);
+    assert.ok(snapshot?.baseline);
+    const presentation = await (service as any).buildPushReviewPresentation(
+      internal, snapshot, false);
+    assert.deepEqual(presentation.committed_paths, [
+      "src/contract/api.ts", "src/filter/impl.ts", "src/filterX/other.ts",
+    ], "最终交付清单同样只显示本单元 MR 净贡献");
+    assert.ok(!presentation.committed_paths.includes("docs/other-task.md"));
     await service.cancel(id, "tester");
   } finally {
     await model.stop();

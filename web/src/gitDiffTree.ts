@@ -32,8 +32,13 @@ export function parseChanges(text: string): ChangedFile[] {
 
   const finish = () => {
     if (!current) return;
-    const additions = current.lines.filter((line) => /^\+[^+]/.test(line)).length;
-    const deletions = current.lines.filter((line) => /^-[^-]/.test(line)).length;
+    // 空白新增/删除行在 unified diff 里分别就是单个 "+" / "-"。
+    // 旧正则要求标记后还得有字符，导致代码审阅统计系统性少算空行；
+    // 只需排除文件头 +++ / ---，其余带标记的行都是真实变化。
+    const additions = current.lines
+      .filter((line) => /^\+(?!\+\+)/.test(line)).length;
+    const deletions = current.lines
+      .filter((line) => /^-(?!--)/.test(line)).length;
     files.push({
       ...current,
       key: `${current.stage}:${current.path}`,

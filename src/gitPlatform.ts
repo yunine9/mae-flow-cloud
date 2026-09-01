@@ -17,7 +17,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { PipelineCheck } from "./pipelineContract.ts";
 
 export interface MergeRequest {
@@ -30,6 +30,8 @@ export interface MergeRequest {
   url: string;
   /** 平台侧生命周期(门禁契约用):opened=在途,merged/closed=终态。 */
   merge_state: "opened" | "merged" | "closed";
+  /** 假平台多仓路由。缺席表示历史单仓数据，回落启动时的 barePath。 */
+  repo?: string;
   /** 关联的 E2E 单号(REQ/DTS):真件走 --e2e-issues,假件存证同语义
    * ——测试据此裁"宿主把单号递到了平台",不许只拼进 title。 */
   e2e_issues?: string;
@@ -52,6 +54,8 @@ export interface PipelineRun {
   id: number;
   sha: string;
   status: "running" | "success" | "failed";
+  /** 同一 SHA 理论上可出现在不同仓；流水线账也必须按仓隔离。 */
+  repo?: string;
   /** 可选的逐项诊断事实；明确 failed/pending 优先于总体状态。缺席时
    * execution_contract 已声明覆盖范围，整体 success 可聚合核销。 */
   checks?: PipelineCheck[];
@@ -117,8 +121,29 @@ export class FakeGitPlatform {
     return `http://127.0.0.1:${address.port}`;
   }
 
-  branchSha(branch: string): string {
-    return git(this.barePath, "rev-parse", branch);
+  branchSha(branch: string, repo?: string): string {
+    return git(this.repositoryPath(repo), "rev-parse", branch);
+  }
+
+  /** --fake-platform 只允许访问默认裸仓同目录下的本地裸仓。多仓 E2E
+   * 会把 origin.git/origin-aux.git 并排放置；既兑现请求里的 repo 路由，
+   * 又不把环回 HTTP 变成可任意操作本机 Git 仓的入口。 */
+  private repositoryPath(requested?: unknown): string {
+    const raw = String(requested ?? "").trim();
+    if (!raw || raw === this.barePath) return this.barePath;
+    if (!isAbsolute(raw) || /^(https?|ssh|git):\/\//i.test(raw)) {
+      throw new Error("假平台 repo 必须是已登记目录下的本地裸仓");
+    }
+    const candidate = resolve(raw);
+    const root = resolve(dirname(this.barePath));
+    const rel = relative(root, candidate);
+    if (!rel || rel.startsWith("..") || isAbsolute(rel)) {
+      throw new Error("假平台 repo 不在已登记的多仓目录中");
+    }
+    if (git(candidate, "rev-parse", "--is-bare-repository") !== "true") {
+      throw new Error("假平台 repo 不是裸仓");
+    }
+    return candidate;
   }
 
   /** 每个请求的身份头台账(测试断言用):真适配层靠这两个头把
@@ -211,16 +236,19 @@ export class FakeGitPlatform {
             reply(200, this.mergeRequests);
           } else if (request.method === "POST"
               && url.pathname === "/pipeline/trigger") {
-            reply(201, this.triggerPipeline(String(body.sha ?? "")));
+            reply(201, this.triggerPipeline(
+              String(body.sha ?? ""), String(body.repo ?? "") || undefined));
           } else if (request.method === "GET"
               && url.pathname === "/pipeline/status") {
             reply(200, this.pipelineStatus(
-              url.searchParams.get("sha") ?? ""));
+              url.searchParams.get("sha") ?? "",
+              url.searchParams.get("repo") ?? undefined));
           } else if (request.method === "GET"
               && url.pathname === "/mr/gates") {
             reply(200, this.mergeGates(
               url.searchParams.get("source_branch") ?? "",
-              url.searchParams.get("target_branch") ?? ""));
+              url.searchParams.get("target_branch") ?? "",
+              url.searchParams.get("repo") ?? undefined));
           } else if (request.method === "GET"
               && url.pathname === "/mr/discussions") {
             reply(200, { discussions: this.discussions
@@ -256,14 +284,16 @@ export class FakeGitPlatform {
     const source = String(body.source_branch ?? "");
     const target = String(body.target_branch ?? "");
     if (!source || !target) throw new Error("source_branch/target_branch 必填");
+    const repo = this.repositoryPath(body.repo);
     const existing = this.mergeRequests.find(
       (mr) => mr.source_branch === source && mr.target_branch === target
+        && (mr.repo ?? this.barePath) === repo
         && mr.merge_state === "opened");
     if (existing) {
-      existing.sha = this.branchSha(source);
+      existing.sha = this.branchSha(source, repo);
       return existing;
     }
-    const sha = this.branchSha(source); // 分支必须已推到位,否则这里抛错
+    const sha = this.branchSha(source, repo); // 分支必须已推到位
     this.counter += 1;
     const mr: MergeRequest = {
       id: this.counter,
@@ -275,6 +305,7 @@ export class FakeGitPlatform {
       state: "验证中",
       url: `${this.baseUrl}/mr/${this.counter}`,
       merge_state: "opened",
+      ...(repo !== this.barePath ? { repo } : {}),
     };
     this.mergeRequests.push(mr);
     return mr;
@@ -282,17 +313,20 @@ export class FakeGitPlatform {
 
   /** 门禁九项的假件版:三项可修按真实状态算,等人类由测试拨。
    * 语义与真件对齐:名字用 CodeHub 原始拼写,passed 是布尔。 */
-  private mergeGates(source: string, target: string): {
+  private mergeGates(source: string, target: string, requestedRepo?: string): {
     mr_state: string;
     sha: string;
     gates: Array<{ name: string; passed: boolean; detail?: string }>;
   } {
+    const repo = this.repositoryPath(requestedRepo);
     const mr = this.mergeRequests.find(
       (item) => item.source_branch === source
-        && item.target_branch === target);
+        && item.target_branch === target
+        && (item.repo ?? this.barePath) === repo);
     if (!mr) throw new Error(`MR(${source}->${target}) 不存在`);
     const unresolved = this.discussions.filter((item) => !item.resolved);
-    const lastRun = this.pipelines.findLast((run) => run.sha === mr.sha);
+    const lastRun = this.pipelines.findLast((run) => run.sha === mr.sha
+      && (run.repo ?? this.barePath) === repo);
     const gates = [
       {
         name: "resolve_discussion_passed",
@@ -307,7 +341,7 @@ export class FakeGitPlatform {
       (() => {
         let targetAdvanced = false;
         try {
-          execFileSync("git", ["-C", this.barePath, "merge-base",
+          execFileSync("git", ["-C", repo, "merge-base",
             "--is-ancestor", mr.target_branch, mr.sha],
             { encoding: "utf-8" });
         } catch {
@@ -375,7 +409,8 @@ export class FakeGitPlatform {
   private mergeRequestPage(id: number): string | undefined {
     const mr = this.mergeRequests.find((item) => item.id === id);
     if (!mr) return undefined;
-    const gates = this.mergeGates(mr.source_branch, mr.target_branch).gates;
+    const gates = this.mergeGates(
+      mr.source_branch, mr.target_branch, mr.repo).gates;
     const blocked = gates.filter((gate) => !gate.passed);
     const esc = (value: string) => value.replace(/[&<>"]/g, (ch) =>
       ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]!));
@@ -415,20 +450,22 @@ export class FakeGitPlatform {
     if (mr.merge_state !== "opened") {
       return { ok: false, error: `MR ${id} 已是 ${mr.merge_state}` };
     }
-    const blocked = this.mergeGates(mr.source_branch, mr.target_branch)
+    const repo = this.repositoryPath(mr.repo);
+    const blocked = this.mergeGates(
+      mr.source_branch, mr.target_branch, repo)
       .gates.filter((gate) => !gate.passed);
     if (blocked.length) {
       return { ok: false,
         error: `门禁未过: ${blocked.map((gate) => gate.name).join("、")}` };
     }
     try {
-      execFileSync("git", ["-C", this.barePath, "merge-base",
+      execFileSync("git", ["-C", repo, "merge-base",
         "--is-ancestor", mr.target_branch, mr.sha], { encoding: "utf-8" });
     } catch {
       return { ok: false,
         error: "目标分支已前进且非快进,请先在任务侧合并目标分支再推送" };
     }
-    git(this.barePath, "update-ref",
+    git(repo, "update-ref",
       `refs/heads/${mr.target_branch}`, mr.sha);
     mr.merge_state = "merged";
     mr.state = "等待合入" as MergeRequest["state"];
@@ -442,14 +479,16 @@ export class FakeGitPlatform {
     }
   }
 
-  private triggerPipeline(sha: string): PipelineRun {
+  private triggerPipeline(sha: string, requestedRepo?: string): PipelineRun {
     if (!sha) throw new Error("sha 必填:流水线结果必须绑定代码版本");
+    const repo = this.repositoryPath(requestedRepo);
     this.counter += 1;
     const status = this.statusQueue.shift() ?? this.nextPipelineStatus;
     const run: PipelineRun = {
       id: this.counter,
       sha,
       status,
+      ...(repo !== this.barePath ? { repo } : {}),
       ...(!this.omitTypedChecks
         ? { checks: this.consumePipelineChecks(status) } : {}),
       log: status === "failed" ? this.nextPipelineLog : undefined,
@@ -457,15 +496,22 @@ export class FakeGitPlatform {
     this.pipelines.push(run);
     if (run.status === "success") {
       for (const mr of this.mergeRequests) {
-        if (mr.sha === sha) mr.state = "等待合入";
+        if (mr.sha === sha && (mr.repo ?? this.barePath) === repo) {
+          mr.state = "等待合入";
+        }
       }
     }
     return run;
   }
 
   /** SHA 精确匹配才算数:旧绿灯不背书新代码(§14.5)。 */
-  private pipelineStatus(sha: string): { sha: string; runs: PipelineRun[] } {
-    return { sha, runs: this.pipelines.filter((run) => run.sha === sha) };
+  private pipelineStatus(
+    sha: string,
+    requestedRepo?: string,
+  ): { sha: string; runs: PipelineRun[] } {
+    const repo = this.repositoryPath(requestedRepo);
+    return { sha, runs: this.pipelines.filter((run) => run.sha === sha
+      && (run.repo ?? this.barePath) === repo) };
   }
 
   /** 异步流水线的事后裁定(模拟真实平台跑完):running → 终态,

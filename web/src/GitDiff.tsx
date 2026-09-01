@@ -357,8 +357,16 @@ export function GitDiff({
     : largest, 0);
   const hasTextRows = reviewRows.some((row) => row.type === "line");
   const canFold = showAll || folded.hidden > 0 || expanded.size > 0;
-  const additions = files.reduce((sum, file) => sum + file.additions, 0);
-  const deletions = files.reduce((sum, file) => sum + file.deletions, 0);
+  // 最终检视里的统计必须与“将推送”同一口径。完整 diff 仍保留仅留本地
+  // 文件供人查看，但不能把它们的行数算进完整交付，否则会与右栏清单
+  // 同屏出现两套数字（MFC-056）。普通工作区浏览没有交付选择，仍统计全部。
+  const countedFiles = selectable
+    ? files.filter((file) => deliveryPaths.has(file.path))
+    : files;
+  const additions = countedFiles.reduce(
+    (sum, file) => sum + file.additions, 0);
+  const deletions = countedFiles.reduce(
+    (sum, file) => sum + file.deletions, 0);
   const branchLabel = branch || "分支未知";
   const selectedDeliveryCount = deliveryPaths.size;
   const hasCollapsedDirectories = allDirectories.some((path) =>

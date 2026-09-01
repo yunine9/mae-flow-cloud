@@ -6259,6 +6259,26 @@ export class TaskService {
         + "请先取消重试或重启服务触发 ownership 清扫",
       );
     }
+    // 页面上的“重跑续推”是失败任务的唯一主入口。若失败事实明确来自
+    // Build-Fix，本次动作只该重跑 Build-Fix 并续接交付，不能把已经
+    // 走到 external_verify/end 的内核重新唤醒成一轮普通编码会话。
+    // 后者既白烧模型额度，也会在页面上出现“上一单已完成”的怪回复。
+    const failedPrePush = delivery?.prepush;
+    if (status === "failed" && failedPrePush
+        && ["blocked", "environment_error"].includes(failedPrePush.state)
+        && task.cwd) {
+      delivery.stalled = undefined;
+      delivery.waiting_on = undefined;
+      delivery.skipped = undefined;
+      delivery.verify_deadline = undefined;
+      task.summary.status = "verifying";
+      task.summary.detail = actor
+        ? `人工重跑 Build-Fix(${actor})` : "人工重跑 Build-Fix";
+      this.persist(task);
+      this.bypass(task, "Build-Fix 人工重跑",
+        this.resumePrePushVerification(task, task.controlEpoch));
+      return { ...task.summary };
+    }
     if (status === "verifying" && evidenceStopped && delivery?.evidence_gap) {
       // 人点“重试”只重新打开平台取证预算；它不是授权主 Agent 在没有
       // 报错时重跑编码，也不应凭空消耗 CI 修复轮次。
@@ -6315,7 +6335,11 @@ export class TaskService {
     // 用户白等一轮还多烧 token。没有修复环、没有证据缺口时，清掉
     // 上一轮事故牌并直接踢活交付链。
     if (status === "verifying" && delivery?.stalled
-        && !delivery.loop && !delivery.evidence_gap) {
+        && !delivery.evidence_gap
+        // 生产任务必须已经离开可编辑步骤。历史工作流以 end 表示 Agent
+        // 已收口，新工作流以 external_verify 表示宿主等待；两者都只该
+        // 续宿主交付。无 host 的纯交付演练没有内核状态文件。
+        && (!this.options.host || this.atHostDeliveryWait(task))) {
       delivery.pipeline = "人工重跑,待重新验证";
       delivery.stalled = undefined;
       delivery.verify_deadline = undefined;
@@ -6983,6 +7007,10 @@ export class TaskService {
           + "remote 或 data/ 看不到其他单元是正常现象,不代表仓库或单元"
           + "缺失,不得据此重新质疑拆分、要求改单仓交付或把跨单元同步"
           + "重新举卡。跨单元状态与术语同步由主任务协调。"
+          + "本单元任务书中写明的仓库名称、单元名称、责任人与 AR 单号"
+          + "同样是下单确认事实；CHAIN 若为画图使用 repo-1/repo-2 等"
+          + "内部代号，不得据此声称真实名称缺失或再次向人提问，文档互链"
+          + "直接使用任务书中的名称。"
           + "只交付本单元职责;发现方案不够用时"
           + "停止并报告,不要自行改变拆分契约。",
         [
@@ -7432,8 +7460,9 @@ export class TaskService {
     if (!snapshot?.baseline) {
       throw new TaskControlError("无法读取任务基线，暂不能确认交付文件");
     }
+    const contribution = await this.deliveryContribution(task, snapshot);
     let paths = normalizedDeliveryPaths(
-      values === "committed" ? snapshot.committed_paths : values);
+      values === "committed" ? contribution.paths : values);
     const visible = new Set(snapshot.workspace_paths);
     const unknown = paths.filter((path) => !visible.has(path));
     let vanishedNote = "";
@@ -7451,7 +7480,7 @@ export class TaskService {
       vanishedNote = `\n(勾选中的 ${describeDirtyPaths(unknown)} 已与基线一致`
         + "、无内容可交付,已自动移出清单)";
     }
-    const committed = normalizedDeliveryPaths(snapshot.committed_paths);
+    const committed = contribution.paths;
     const excluded = snapshot.workspace_paths.filter((path) =>
       !paths.includes(path));
     if (closesFeedback && !samePaths(paths, committed)) {
@@ -7461,7 +7490,7 @@ export class TaskService {
       const mustRemove = committed.filter((path) => !paths.includes(path));
       const mustAdd = paths.filter((path) => !committed.includes(path));
       await this.applyDeliverySelectionAdjustment(
-        task, snapshot.baseline, mustRemove, mustAdd);
+        task, contribution.base_sha, mustRemove, mustAdd);
       const adjusted = await deliveryChangeSnapshot(task.cwd);
       if (!adjusted?.baseline) {
         throw new TaskControlError("清单整理提交后读取现场失败,请重试");
@@ -7632,7 +7661,7 @@ export class TaskService {
     const snapshot = await deliveryChangeSnapshot(task.cwd);
     if (!snapshot?.baseline) throw new TaskControlError(
       "已收到最终确认，但任务基线不可读，无法恢复交付清单");
-    const committed = normalizedDeliveryPaths(snapshot.committed_paths);
+    const committed = (await this.deliveryContribution(task, snapshot)).paths;
     const paths = this.pushConfirmationAccepted(waiting)
       ? committed
       : this.legacyDeliveryPaths(waiting)
@@ -7746,6 +7775,23 @@ export class TaskService {
       task.summary.delivery.loop.state = "repairing";
       task.summary.delivery.loop.round = 0;
     }
+    // push 卡出现时内核通常已经走到 external_verify。只把 Cloud 任务
+    // 重新排队并不会让内核后退，Agent 入场执行 current 后会被等待点
+    // 明令禁止改码，随后还可能口头误报“已经处理”并把同一 HEAD 再次
+    // 交审。用户既然选择返工，宿主必须先通过内核的非前进式介入入口
+    // 作废旧质量证据，并按所选文件面机械退回 build/delivery_review。
+    this.reopenKernelForPushReview(task, waiting, selection);
+    if (task.summary.delivery) {
+      delete task.summary.delivery.prepush;
+      delete task.summary.delivery.pipeline;
+      delete task.summary.delivery.checks;
+      delete task.summary.delivery.sha;
+      delete task.summary.delivery.git_push;
+      delete task.summary.delivery.stalled;
+      delete task.summary.delivery.evidence_gap;
+      delete task.summary.delivery.verify_deadline;
+      delete task.summary.delivery.skipped;
+    }
     this.enqueueRepair(task, [
       "用户在 push 前确认交付清单时要求按清单返工,整理提交是你此刻唯一的使命:",
       review
@@ -7769,6 +7815,67 @@ export class TaskService {
       // 形成"改了却过不去"的死锁(e2e-picky-20260830 双复现,MFC-002)。
       workspaceReviewReceiptInstructions(annotations),
     ].filter(Boolean).join("\n"), "按交付清单整理提交中");
+  }
+
+  /** push 前总检选择返工是“待执行的用户介入”，不是已经发生的改动。
+   * 内核 intervention 入口只允许保持或后退，正好承担这条宿主动作：
+   * 旧证据立即失效，代码/测试回 build，纯文档回 delivery_review；任何
+   * 失败都停在模型启动前，绝不带着 external_verify 的旧状态假返工。 */
+  private reopenKernelForPushReview(
+    task: TaskState,
+    waiting: WaitingRecord,
+    selection: NonNullable<TaskSummary["delivery_selection"]>,
+  ): void {
+    if (!task.cwd || !this.options.host) return;
+    const factsPath = join(task.summary.workspace, "push-review-rework.json");
+    writeFileSync(factsPath, JSON.stringify({
+      schema: "mae-flow-user-intervention/1",
+      intervention_id: `push-review:${waiting.waiting_id}`,
+      actor: waiting.decided_by ?? task.summary.luban_account ?? "任务责任人",
+      request: waiting.notes.trim().slice(0, 2_000),
+      assistant_summary: "尚未修改；按本次检视意见重新进入可编辑步骤。",
+      // 这里的 changed 表示“现有质量结论已被返工决定否决”，而不是冒充
+      // 文件已经改好。changed_paths 是用户授权的待修改/交付文件面。
+      changed: true,
+      changed_paths: selection.paths,
+      executions: [],
+    }, null, 2), { mode: 0o600 });
+    chmodSync(factsPath, 0o600);
+    const gitView = createSafeGitView(task.cwd);
+    try {
+      const result = spawnSync(
+        this.options.host.python ?? "python3",
+        [join(this.options.host.kernelRoot, "scripts", "mae-flow.py"),
+         "intervention", "reconcile", "--file", factsPath],
+        {
+          cwd: task.cwd,
+          encoding: "utf-8",
+          env: gitView.environment(),
+          maxBuffer: 2 * 1024 * 1024,
+        },
+      );
+      const line = String(result.stdout ?? "").trim().split("\n").at(-1) ?? "";
+      let record: { from?: string; target?: string; changed?: boolean } = {};
+      try { record = JSON.parse(line); } catch { /* 下面统一报人话 */ }
+      if (result.status !== 0 || record.changed !== true
+          || typeof record.from !== "string"
+          || typeof record.target !== "string"
+          || record.target === "external_verify") {
+        throw new Error(
+          String(result.stderr ?? result.stdout ?? "内核没有返回返工入口").trim(),
+        );
+      }
+      this.options.log?.(
+        `任务 ${task.summary.id} push 检视返工:内核 ${record.from}`
+        + ` → ${record.target}`,
+      );
+    } catch (error) {
+      throw new TaskControlError(
+        `返工意见已保存，但内核暂未退回可修改步骤；请重试提交返工意见：${String(error)}`,
+      );
+    } finally {
+      gitView.cleanup();
+    }
   }
 
   private async resumeResolvedDecision(
@@ -11212,12 +11319,60 @@ export class TaskService {
     return text.length > 720 ? `${text.slice(0, 717).trimEnd()}…` : text;
   }
 
+  /** 当前 MR 真正新增的文件面。任务定格基线仍用于历史完整性与“从任务
+   * 起点”复盘；但目标分支在开发期间前进、随后被合入 HEAD 时，目标
+   * 分支已有文件不属于本任务的 MR 贡献，不能混进最终清单/负责面门禁。
+   * 只有能证明 origin/<target> 已是 HEAD 祖先才采用它，否则继续使用
+   * 定格基线快照，任何读失败都保持 fail-closed。 */
+  private async deliveryContribution(
+    task: TaskState,
+    snapshot: NonNullable<Awaited<ReturnType<typeof deliveryChangeSnapshot>>>,
+  ): Promise<{ paths: string[]; base_sha: string }> {
+    if (!task.cwd) {
+      return { paths: normalizedDeliveryPaths(snapshot.committed_paths),
+        base_sha: snapshot.baseline! };
+    }
+    try {
+      const state = JSON.parse(readFileSync(
+        join(task.cwd, ".mae-flow.json"), "utf-8"));
+      const target = String(state?.config?.["基线分支"] ?? "").trim();
+      if (!target) throw new Error("目标分支缺失");
+      const valid = await runSafeWorktreeGitAsync(
+        task.cwd, ["check-ref-format", "--branch", target],
+        { timeoutMs: 30_000 });
+      if (valid.status !== 0) throw new Error("目标分支名无效");
+      const targetRef = `refs/remotes/origin/${target}`;
+      const resolved = await runSafeWorktreeGitAsync(
+        task.cwd, ["rev-parse", "--verify", `${targetRef}^{commit}`],
+        { timeoutMs: 30_000 });
+      const baseSha = String(resolved.stdout ?? "").trim();
+      if (resolved.status !== 0 || !baseSha) throw new Error("目标 ref 不存在");
+      const included = await runSafeWorktreeGitAsync(
+        task.cwd, ["merge-base", "--is-ancestor", targetRef, "HEAD"],
+        { timeoutMs: 30_000 });
+      if (included.status !== 0) throw new Error("目标 ref 尚未合入 HEAD");
+      const contribution = await runSafeWorktreeGitAsync(
+        task.cwd, ["diff", "--name-only", targetRef, "HEAD", "--"],
+        { timeoutMs: 30_000 });
+      if (contribution.status !== 0) throw new Error("贡献差异读取失败");
+      return {
+        paths: normalizedDeliveryPaths(
+          String(contribution.stdout ?? "").split("\n")),
+        base_sha: baseSha,
+      };
+    } catch {
+      return { paths: normalizedDeliveryPaths(snapshot.committed_paths),
+        base_sha: snapshot.baseline! };
+    }
+  }
+
   private async buildPushReviewPresentation(
     task: TaskState,
     snapshot: NonNullable<Awaited<ReturnType<typeof deliveryChangeSnapshot>>>,
     recheckRequired: boolean,
   ): Promise<PushReviewPresentation> {
     const delivery = task.summary.delivery;
+    const contribution = await this.deliveryContribution(task, snapshot);
     const selection = task.summary.delivery_selection;
     const hasPriorReview = Boolean(selection?.head
       && selection.head !== snapshot.head);
@@ -11266,9 +11421,17 @@ export class TaskService {
       focused = await compareDeliveryRevisions(task.cwd!, base, snapshot.head);
       if (focused) break;
     }
-    const comparison = focused ?? await compareDeliveryRevisions(
-      task.cwd!, snapshot.baseline!, snapshot.head);
-    const base = focused?.from ?? snapshot.baseline!;
+    // 目标分支已被合入时，a746→merge-head 这类普通提交差异只包含
+    // 目标分支自己的文件，会把“其他任务文档”伪装成本轮修复。此时改看
+    // target→HEAD 的 MR 净贡献；正常任务仍优先展示自上次检视以来变化。
+    const targetAdvanced = contribution.base_sha !== snapshot.baseline;
+    const comparison = targetAdvanced
+      ? await compareDeliveryRevisions(
+        task.cwd!, contribution.base_sha, snapshot.head)
+      : focused ?? await compareDeliveryRevisions(
+        task.cwd!, snapshot.baseline!, snapshot.head);
+    const base = targetAdvanced
+      ? contribution.base_sha : focused?.from ?? snapshot.baseline!;
     const prepush = delivery?.prepush;
     const verification = prepush?.state === "passed"
       ? "Build-Fix 已通过"
@@ -11283,7 +11446,7 @@ export class TaskService {
       baseline_sha: snapshot.baseline!,
       head_sha: snapshot.head,
       has_focused_changes: base !== snapshot.baseline,
-      file_count: comparison?.paths.length ?? snapshot.committed_paths.length,
+      file_count: comparison?.paths.length ?? contribution.paths.length,
       additions: comparison?.additions ?? 0,
       deletions: comparison?.deletions ?? 0,
       // 连基线比较都不可得(祖先关系断/提交不可见)时不许装作 +0/−0:
@@ -11293,7 +11456,7 @@ export class TaskService {
         + "请先处理基线偏离,再核对完整交付视图" }),
       commits: comparison?.commits ?? [],
       all_paths: normalizedDeliveryPaths(snapshot.workspace_paths),
-      committed_paths: normalizedDeliveryPaths(snapshot.committed_paths),
+      committed_paths: contribution.paths,
       ...(agentNote ? { agent_note: agentNote } : {}),
       ...(verification ? { verification } : {}),
     };
@@ -11316,7 +11479,7 @@ export class TaskService {
         "开启了 push 前人工确认,但任务基线不可读,无法生成交付清单");
       return false;
     }
-    const committed = normalizedDeliveryPaths(snapshot.committed_paths);
+    const committed = (await this.deliveryContribution(task, snapshot)).paths;
     const selection = task.summary.delivery_selection;
     if (!recheckRequired && pushReviewReceiptCovers(selection && {
       status: selection.status,
@@ -11451,7 +11614,7 @@ export class TaskService {
       if (!snapshot?.baseline) {
         reason = "任务基线不可读，无法复核交付文件清单";
       } else {
-        const current = normalizedDeliveryPaths(snapshot.committed_paths);
+        const current = (await this.deliveryContribution(task, snapshot)).paths;
         const expected = normalizedDeliveryPaths(selection.paths);
         if (!samePaths(current, expected)) {
           const unexpected = current.filter((path) => !expected.includes(path));
@@ -11564,43 +11727,7 @@ export class TaskService {
     if (!scope?.paths.length || !task.cwd) return true;
     const snapshot = await deliveryChangeSnapshot(task.cwd);
     if (!snapshot?.baseline) return true; // 基线不可读由后续门禁如实处理
-    let committedPaths = snapshot.committed_paths;
-    // MR 目标分支可能在本单元开发期间前进。冲突门禁会把最新目标分支
-    // 干净合入本单元 HEAD；此时若仍从任务最初基线算差异，会把目标分支
-    // 上其他任务已经交付的文件误报成本单元越界。只有能够证明最新目标
-    // ref 已是 HEAD 祖先时，才改用“目标分支树 → 当前 HEAD”的净贡献；
-    // 尚未合入目标分支或 ref 不可信时继续使用定格基线，保持 fail-closed。
-    try {
-      const state = JSON.parse(readFileSync(
-        join(task.cwd, ".mae-flow.json"), "utf-8"));
-      const target = String(state?.config?.["基线分支"] ?? "").trim();
-      if (target) {
-        const valid = await runSafeWorktreeGitAsync(
-          task.cwd, ["check-ref-format", "--branch", target],
-          { timeoutMs: 30_000 });
-        const targetRef = `refs/remotes/origin/${target}`;
-        const exists = valid.status === 0
-          ? await runSafeWorktreeGitAsync(
-            task.cwd, ["rev-parse", "--verify", `${targetRef}^{commit}`],
-            { timeoutMs: 30_000 })
-          : undefined;
-        const included = exists?.status === 0
-          ? await runSafeWorktreeGitAsync(
-            task.cwd, ["merge-base", "--is-ancestor", targetRef, "HEAD"],
-            { timeoutMs: 30_000 })
-          : undefined;
-        if (included?.status === 0) {
-          const contribution = await runSafeWorktreeGitAsync(
-            task.cwd, ["diff", "--name-only", targetRef, "HEAD", "--"],
-            { timeoutMs: 30_000 });
-          if (contribution.status === 0) {
-            committedPaths = String(contribution.stdout ?? "").split("\n");
-          }
-        }
-      }
-    } catch {
-      // 半写状态或 Git 读失败都不降级放行；继续检查定格基线全量差异。
-    }
+    const committedPaths = (await this.deliveryContribution(task, snapshot)).paths;
     const exempt = new Set(task.summary.delivery_scope_exemptions ?? []);
     // 前缀按路径段闭合:src/filter 匹配 src/filter 与 src/filter/**,
     // 不吞 src/filterX(裸 startsWith 会把邻居目录错认成面内)。
@@ -11704,7 +11831,8 @@ export class TaskService {
     const cwd = task.cwd;
     const snapshot = await deliveryChangeSnapshot(cwd);
     if (!snapshot?.baseline) return "unchanged";
-    const current = normalizedDeliveryPaths(snapshot.committed_paths);
+    const contribution = await this.deliveryContribution(task, snapshot);
+    const current = contribution.paths;
     const expected = normalizedDeliveryPaths(selection.paths);
     const rejected = new Set(normalizedDeliveryPaths(selection.excluded_paths));
     const unexpected = current.filter((path) => !expected.includes(path));
@@ -11738,6 +11866,7 @@ export class TaskService {
     const candidates = [
       task.summary.delivery?.git_push?.sha,
       selection.head,
+      contribution.base_sha,
       // 历史刚被按定格基线重放过时,旧 push/selection SHA 都不再是
       // HEAD 祖先;定格基线本身永远是合法的收口锚,兜在最后。
       await frozenTaskBaseline(cwd),
@@ -11814,9 +11943,10 @@ export class TaskService {
 
     this.registerAgentPlatformLocalExcludes(cwd, selection.excluded_paths);
     const after = await deliveryChangeSnapshot(cwd);
+    const afterPaths = after
+      ? (await this.deliveryContribution(task, after)).paths : [];
     if (!after || after.added_agent_platform_paths.length
-        || !samePaths(
-          normalizedDeliveryPaths(after.committed_paths), targetPaths)) {
+        || !samePaths(afterPaths, targetPaths)) {
       const detail = "按已确认范围自动整理后复核未通过；平台已停止继续推送，"
         + "请在代码检视中确认，不会让 Agent 循环尝试。";
       task.summary.status = "failed";
@@ -11848,7 +11978,7 @@ export class TaskService {
     }
     const snapshot = await deliveryChangeSnapshot(task.cwd);
     if (!snapshot?.baseline) return;
-    const paths = normalizedDeliveryPaths(snapshot.committed_paths);
+    const paths = (await this.deliveryContribution(task, snapshot)).paths;
     const rejected = new Set(normalizedDeliveryPaths(selection.excluded_paths));
     // 这两类绝不靠“用户提交了检视意见”放宽。正常情况下前面的机械
     // 清理已经移除；若仍在，保留 pending 让既有门禁明确停下。
@@ -15141,6 +15271,19 @@ export class TaskService {
       return existsSync(statePath)
         && String(JSON.parse(readFileSync(statePath, "utf-8"))?.current ?? "")
           === "external_verify";
+    } catch {
+      return false;
+    }
+  }
+
+  private atHostDeliveryWait(task: TaskState): boolean {
+    if (!task.cwd) return false;
+    try {
+      const statePath = join(task.cwd, ".mae-flow.json");
+      if (!existsSync(statePath)) return false;
+      const current = String(
+        JSON.parse(readFileSync(statePath, "utf-8"))?.current ?? "");
+      return current === "external_verify" || current === "end";
     } catch {
       return false;
     }

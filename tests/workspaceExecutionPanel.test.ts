@@ -120,6 +120,14 @@ test("工作区其他改动默认折叠但不隐藏事实", () => {
   assert.match(gitDiff, /localGroupOpen && renderTreeNodes\(localTree/);
 });
 
+test("最终代码审阅统计只计算将推送文件，不混入仅留本地改动", () => {
+  assert.match(gitDiff,
+    /const countedFiles = selectable[^]*deliveryPaths\.has\(file\.path\)/,
+    "交付检视标题的加减行数必须跟随最终推送勾选集合");
+  assert.match(gitDiff, /const additions = countedFiles\.reduce/);
+  assert.match(gitDiff, /const deletions = countedFiles\.reduce/);
+});
+
 test("已完成任务的进度展示收口到完成，不沿用合入前最后一步", () => {
   assert.match(taskCard, /const completed = status === "completed"/);
   assert.match(taskCard, /\[\.\.\.progress\.phases, "完成"\]/);
