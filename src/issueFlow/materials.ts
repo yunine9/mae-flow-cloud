@@ -16,20 +16,27 @@
  * - 全部旁路 fail-open:材料生成失败返回空态,不拖垮会话。
  */
 
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import {
   appendFileSync,
   closeSync,
   existsSync,
+  lstatSync,
+  mkdirSync,
   openSync,
   readFileSync,
   readdirSync,
   readSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
-import { join, resolve, sep, basename } from "node:path";
+import { join, resolve, sep, basename, dirname } from "node:path";
 import { createSafeGitView } from "../safeGit.ts";
+import {
+  repairContainerCloneOwnership,
+  type ContainerOwnershipRuntime,
+} from "../containerOwnership.ts";
 import { issueRepoWorkspaces, type IssueSessionState } from "./state.ts";
 
 export interface WorkspaceChange {
@@ -37,12 +44,6 @@ export interface WorkspaceChange {
   status: string;
   additions?: number;
   deletions?: number;
-}
-
-export interface MaterialFileMeta {
-  name: string;
-  size: number;
-  mtime: string;
 }
 
 export interface ManualEditRecord {
@@ -441,35 +442,369 @@ export function listManualEdits(root: string): ManualEditRecord[] {
   }
 }
 
-/** local-logs/ 目录清单(新→旧)。 */
-export function listLogs(root: string): MaterialFileMeta[] {
-  const dir = join(root, "local-logs");
-  if (!existsSync(dir)) return [];
-  try {
-    return readdirSync(dir)
-      .map((name) => {
-        const abs = join(dir, name);
-        const info = statSync(abs);
-        return { name, size: info.size, mtime: info.mtime.toISOString() };
-      })
-      .filter((item) => item.size > 0)
-      .sort((a, b) => b.mtime.localeCompare(a.mtime));
-  } catch {
-    return [];
-  }
+// ---- 拉取日志(#47):递归清单 + 任意深度读 + 压缩包解压 ----
+//
+// fetch-logs 抓的是"完整目录结构"(tools.ts 的工具描述就这么许诺的),
+// 旧清单却是不递归的 readdirSync 平铺:子目录点了就"日志不存在",
+// 压缩包没有任何解压手段。这里把数据面补齐:清单递归成扁平条目
+// (前端组树)、读取按相对路径严格限位、压缩包用系统 tar/unzip 解开。
+
+/** 日志条目(local-logs 相对路径,/ 分隔)。type=dir 的条目 size 恒 0,
+ * 前端组树用;archive 按扩展名认(.zip/.tar/.tar.gz/.tgz/.tar.bz2)。 */
+export interface LogEntry {
+  path: string;
+  type: "file" | "dir";
+  size: number;
+  mtime: string;
+  archive: boolean;
 }
 
-/** 读单份日志(basename 防穿越,超长读尾部)。 */
+export interface LogListing {
+  entries: LogEntry[];
+  /** 条数封顶被触发:清单不完整,如实标注,不静默截断。 */
+  truncated: boolean;
+}
+
+/** 清单条数封顶(整个 local-logs,不分层):日志树再疯也不拖死页面。 */
+const LOG_LIST_CAP = 2000;
+/** 递归深度封顶:防符号链接外的环(理论上不可能)与病态深目录。 */
+const LOG_WALK_DEPTH_CAP = 20;
+
+/** 压缩包判定(按扩展名;fetch-logs 产物就这五种)。 */
+export function isArchiveName(name: string): boolean {
+  const lower = name.toLowerCase();
+  return [".zip", ".tar", ".tar.gz", ".tgz", ".tar.bz2"]
+    .some((ext) => lower.endsWith(ext));
+}
+
+/** 压缩包名去扩展名(整段扩展一起去:"a.tar.gz" → "a"),解压目录命名用。 */
+function stripArchiveExtension(name: string): string {
+  const lower = name.toLowerCase();
+  for (const ext of [".tar.gz", ".tar.bz2", ".tgz", ".tar", ".zip"]) {
+    if (lower.endsWith(ext)) return name.slice(0, -ext.length);
+  }
+  return name;
+}
+
+/** local-logs/ 递归清单(新→旧;扁平条目,前端按 path 组树)。
+ * 符号链接一律跳过不跟随(chownTree 同款纪律:链接指向哪儿都不可信),
+ * 单条目 stat 失败(竞态消失/权限)跳过不砸整页,整目录读不动同理。 */
+export function listLogs(root: string): LogListing {
+  const dir = join(root, "local-logs");
+  if (!existsSync(dir)) return { entries: [], truncated: false };
+  const entries: LogEntry[] = [];
+  let truncated = false;
+  const push = (entry: LogEntry): boolean => {
+    if (entries.length >= LOG_LIST_CAP) {
+      truncated = true;
+      return false;
+    }
+    entries.push(entry);
+    return true;
+  };
+  const visit = (relDir: string, depth: number): void => {
+    if (truncated || depth > LOG_WALK_DEPTH_CAP) {
+      if (depth > LOG_WALK_DEPTH_CAP) truncated = true;
+      return;
+    }
+    let names: string[];
+    try {
+      names = readdirSync(join(dir, relDir));
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      const rel = relDir ? `${relDir}/${name}` : name;
+      let info;
+      try {
+        info = lstatSync(join(dir, rel));
+      } catch {
+        continue;
+      }
+      if (info.isSymbolicLink()) continue;
+      if (info.isDirectory()) {
+        if (!push({ path: rel, type: "dir", size: 0,
+          mtime: info.mtime.toISOString(), archive: false })) return;
+        visit(rel, depth + 1);
+      } else if (info.isFile()) {
+        if (!push({ path: rel, type: "file", size: info.size,
+          mtime: info.mtime.toISOString(), archive: isArchiveName(name) })) {
+          return;
+        }
+      }
+    }
+  };
+  try {
+    visit("", 1);
+  } catch {
+    // 顶层都不行(目录被删等):给空清单,材料域 fail-open 不砸页面。
+    return { entries: [], truncated };
+  }
+  entries.sort((a, b) => b.mtime.localeCompare(a.mtime));
+  return { entries, truncated };
+}
+
+/** 读单份日志(任意深度相对路径;resolve 后必须仍落在 local-logs 内,
+ * 不再 basename 砍截——那是平铺时代的防穿越手段,树化后只会把子目录
+ * 路径砍成"日志不存在")。超长照旧读尾。 */
 export function readLog(
   root: string,
   name: string,
 ): { content: string; truncated: boolean } {
-  const abs = join(root, "local-logs", basename(name));
-  if (!existsSync(abs)) throw new Error("日志不存在");
-  if (statSync(abs).size > READ_CAP_BYTES) {
+  const dir = join(root, "local-logs");
+  const abs = insideRoot(dir, name);
+  if (!abs) throw new Error("日志路径不合法(越界或绝对路径)");
+  let info;
+  try {
+    info = lstatSync(abs);
+  } catch {
+    throw new Error("日志不存在");
+  }
+  if (info.isSymbolicLink()) throw new Error("日志不能是符号链接");
+  if (!info.isFile()) throw new Error("日志不存在(这是个目录)");
+  if (info.size > READ_CAP_BYTES) {
     return { content: readTail(abs, READ_CAP_BYTES), truncated: true };
   }
   return { content: readFileSync(abs, "utf-8"), truncated: false };
+}
+
+// ---- 压缩包解压(#47):系统 tar/unzip,预检先行,幂等不重解 ----
+
+export interface LogExtractResult {
+  ok: true;
+  /** 解压产物目录(local-logs 相对路径):同目录的 <去扩展名>-extracted/。 */
+  path: string;
+  /** true = 目录已在,直接复用没有重解(幂等;不覆盖既有产物)。 */
+  reused: boolean;
+}
+
+/** 解压的属主交接参数(服务层的 isolation.user 与运行时形态),路由
+ * 直连本模块时从 IssueFlowService.logOwnershipInputs() 取。 */
+export interface LogOwnershipInputs {
+  user?: string;
+  runtime?: ContainerOwnershipRuntime;
+}
+
+/** 条目数封顶:解压前先列档案,超过直接拒(zip 炸弹的经典形态)。 */
+const EXTRACT_MAX_ENTRIES = 20_000;
+/** 解压后总字节封顶:zip 在预检里按 -l 封顶;tar 的清单列不出可靠大小
+ * (GNU/bsdtar -tv 格式不同),解压完盘一遍账,超限清理产物并拒绝。 */
+const EXTRACT_MAX_BYTES = 4 * 1024 * 1024 * 1024;
+/** 解压预算(#47:凡引入等待必须带预算),到点杀进程并清半成品。 */
+const EXTRACT_TIMEOUT_MS = 120_000;
+
+interface CommandOutcome {
+  /** 数字 = 退出码;"ENOENT" = 命令不存在;"SIGTERM" 等 = 被超时杀掉。 */
+  code: number | string;
+  stdout: string;
+  stderr: string;
+}
+
+/** execFile 数组参数跑系统命令(禁 shell 拼接:压缩包路径只作参数,
+ * 不进任何命令行注入面)。 */
+function runCommand(
+  binary: string,
+  args: string[],
+): Promise<CommandOutcome> {
+  return new Promise((resolvePromise) => {
+    execFile(binary, args, {
+      encoding: "utf-8",
+      timeout: EXTRACT_TIMEOUT_MS,
+      maxBuffer: 16 * 1024 * 1024,
+      windowsHide: true,
+    }, (error, stdout, stderr) => {
+      const code = (error as NodeJS.ErrnoException | null)?.code;
+      resolvePromise({
+        code: error ? (code ?? "SIGTERM") : 0,
+        stdout: stdout ?? "",
+        stderr: stderr ?? "",
+      });
+    });
+  });
+}
+
+function stderrTail(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return "";
+  return trimmed.length > 400 ? `…${trimmed.slice(-400)}` : trimmed;
+}
+
+/** 档案条目名安全检查(zip-slip):含 .. 段/绝对路径/空字节的档案整体
+ * 拒绝,返回人话原因;干净条目返回 undefined。反斜杠按分隔符归一
+ * (Windows 侧打的 zip 用 \ 分层),开头的 "./" 是 tar 的常见自加前缀。 */
+export function archiveEntryProblem(raw: string): string | undefined {
+  const normalized = raw.replace(/\\/g, "/").replace(/^(\.\/)+/, "");
+  if (!normalized) return undefined;
+  if (normalized.includes("\0")) return `条目名含空字节(${raw})`;
+  if (normalized.startsWith("/")) return `条目是绝对路径(${raw})`;
+  if (normalized.split("/").includes("..")) return `条目含 .. 穿越(${raw})`;
+  return undefined;
+}
+
+interface ArchiveListing {
+  entries: number;
+  /** zip 可从 -l 拿到条目大小;tar 拿不到,恒 undefined(解压后盘账)。 */
+  totalBytes?: number;
+}
+
+/** 解压前先列档案(预检):条目名逐个过 zip-slip 检查,条数与(zip 的)
+ * 总字节封顶。列不出/超限都在动手前拦下。 */
+async function preflightArchive(
+  kind: "tar" | "zip",
+  archiveAbs: string,
+): Promise<ArchiveListing> {
+  if (kind === "zip") {
+    const outcome = await runCommand("unzip", ["-l", archiveAbs]);
+    if (outcome.code === "ENOENT") {
+      throw new Error(
+        "解压 zip 需要系统安装 unzip 命令,当前宿主没有;请安装后重试");
+    }
+    if (typeof outcome.code !== "number" || outcome.code !== 0) {
+      throw new Error(`无法读取 zip 内容(可能不是有效 zip 包):${
+        stderrTail(outcome.stderr) || `退出码 ${outcome.code}`}`);
+    }
+    let entries = 0;
+    let totalBytes = 0;
+    for (const line of outcome.stdout.split("\n")) {
+      // unzip -l 的条目行:Length  Date  Time  Name;表头/合计行不带
+      // 日期。日期格式按 Info-ZIP 构建不同有 2026-08-30/08-30-2026 两种
+      // 口径,这里只锚"数字段+数字段+时刻",不认死分隔风格。
+      const match = /^(\d+)\s+\d+[-/]\d+[-/]\d+\s+\d+:\d{2}\s+(.+)$/
+        .exec(line.trim());
+      if (!match) continue;
+      const problem = archiveEntryProblem(match[2].trim());
+      if (problem) throw new Error(`压缩包里有不安全的条目,已拒绝解压:${problem}`);
+      entries += 1;
+      totalBytes += Number(match[1]);
+      if (entries > EXTRACT_MAX_ENTRIES) {
+        throw new Error(
+          `压缩包含超过 ${EXTRACT_MAX_ENTRIES} 个条目,疑似解压炸弹,已拒绝`);
+      }
+      if (totalBytes > EXTRACT_MAX_BYTES) {
+        throw new Error("压缩包解压后超过 4GB 上限,疑似解压炸弹,已拒绝");
+      }
+    }
+    return { entries, totalBytes };
+  }
+  // tar 家族:-t 列条目名(一行一个,GNU/bsdtar 通吃);大小列不出来,
+  // 炸弹防线放在条数封顶 + 解压后盘账 + 120s 超时三道。
+  const outcome = await runCommand("tar", ["-tf", archiveAbs]);
+  if (outcome.code === "ENOENT") {
+    throw new Error("解压 tar 需要系统 tar 命令,当前宿主没有");
+  }
+  if (typeof outcome.code !== "number" || outcome.code !== 0) {
+    throw new Error(`无法读取压缩包内容(可能不是有效 tar 包):${
+      stderrTail(outcome.stderr) || `退出码 ${outcome.code}`}`);
+  }
+  const names = outcome.stdout.split("\n").filter((line) => line !== "");
+  if (names.length > EXTRACT_MAX_ENTRIES) {
+    throw new Error(
+      `压缩包含超过 ${EXTRACT_MAX_ENTRIES} 个条目,疑似解压炸弹,已拒绝`);
+  }
+  for (const raw of names) {
+    const problem = archiveEntryProblem(raw);
+    if (problem) {
+      throw new Error(`压缩包里有不安全的条目,已拒绝解压:${problem}`);
+    }
+  }
+  return { entries: names.length };
+}
+
+/** 解压后盘账(总量封顶;符号链接不占字节也不跟随)。 */
+function treeBytes(dir: string): number {
+  let total = 0;
+  const visit = (entry: string): void => {
+    let info;
+    try {
+      info = lstatSync(entry);
+    } catch {
+      return;
+    }
+    if (info.isSymbolicLink()) return;
+    if (info.isDirectory()) {
+      for (const child of readdirSync(entry)) visit(join(entry, child));
+    } else if (info.isFile()) {
+      total += info.size;
+    }
+  };
+  visit(dir);
+  return total;
+}
+
+/** 解压拉取日志里的压缩包(#47)。目标 = 压缩包同目录的
+ * <去扩展名>-extracted/(不就地解,避免文件混杂与重复解压覆盖);
+ * 目录已在直接返回(幂等,不重解不覆盖);产物落盘后交接给容器属主,
+ * AI 容器内才能读(root 部署形态;非 root 守卫自会短路零动作)。 */
+export async function extractLog(
+  root: string,
+  rel: string,
+  ownership?: LogOwnershipInputs,
+): Promise<LogExtractResult> {
+  const dir = join(root, "local-logs");
+  const archiveAbs = insideRoot(dir, rel);
+  if (!archiveAbs) throw new Error("压缩包路径不合法(越界或绝对路径)");
+  let info;
+  try {
+    info = lstatSync(archiveAbs);
+  } catch {
+    throw new Error("压缩包不存在");
+  }
+  if (info.isSymbolicLink()) throw new Error("压缩包不能是符号链接");
+  if (!info.isFile()) throw new Error("压缩包不存在(这是个目录)");
+  const name = basename(archiveAbs);
+  if (!isArchiveName(name)) throw new Error("只支持解压 zip/tar 系压缩包");
+  const targetRel = rel === name
+    ? `${stripArchiveExtension(name)}-extracted`
+    : `${dirname(rel).split("\\").join("/")}/`
+      + `${stripArchiveExtension(name)}-extracted`;
+  const targetAbs = join(dir, targetRel);
+  if (existsSync(targetAbs)) {
+    if (statSync(targetAbs).isDirectory()) {
+      return { ok: true, path: targetRel, reused: true };
+    }
+    throw new Error(`解压目标 ${targetRel} 已存在且不是目录,先处理它再解压`);
+  }
+  const kind = lowerArchiveKind(name);
+  await preflightArchive(kind, archiveAbs);
+  mkdirSync(targetAbs, { recursive: true });
+  const outcome = kind === "zip"
+    ? await runCommand("unzip", ["-o", archiveAbs, "-d", targetAbs])
+    : await runCommand("tar", ["-xf", archiveAbs, "-C", targetAbs]);
+  const binary = kind === "zip" ? "unzip" : "tar";
+  if (outcome.code === "ENOENT") {
+    rmSync(targetAbs, { recursive: true, force: true });
+    throw new Error(
+      `解压 ${kind} 需要系统安装 ${binary} 命令,当前宿主没有;请安装后重试`);
+  }
+  if (typeof outcome.code !== "number" || outcome.code !== 0) {
+    rmSync(targetAbs, { recursive: true, force: true });
+    // 走到这里还是字符串码 = 进程被信号杀掉(execFile 的超时形态)。
+    const timedOut = typeof outcome.code === "string";
+    throw new Error(timedOut
+      ? `解压超时(${EXTRACT_TIMEOUT_MS / 1000}s),已中止并清理半成品`
+      : `解压失败(${binary} 退出码 ${outcome.code}):${
+        stderrTail(outcome.stderr) || "无错误输出"}`);
+  }
+  if (treeBytes(targetAbs) > EXTRACT_MAX_BYTES) {
+    rmSync(targetAbs, { recursive: true, force: true });
+    throw new Error(
+      `解压产物超过 ${Math.round(EXTRACT_MAX_BYTES / 1024 / 1024 / 1024)}GB`
+      + ` 上限,已清理 ${targetRel}`);
+  }
+  // 产物是宿主(root)落盘的,不交接给容器用户的话 AI 在容器里就是
+  // Permission denied——与拉仓收口同一个守卫;非 root 部署自会 false。
+  repairContainerCloneOwnership({
+    workspace: root,
+    dir: targetAbs,
+    user: ownership?.user,
+    runtime: ownership?.runtime,
+  });
+  return { ok: true, path: targetRel, reused: false };
+}
+
+/** 压缩包族别(解压命令选择):zip 走 unzip,其余走 tar(自动识别压缩)。 */
+function lowerArchiveKind(name: string): "tar" | "zip" {
+  return name.toLowerCase().endsWith(".zip") ? "zip" : "tar";
 }
 
 /** 原始事件流尾随(现场页签):只读尾窗,解析不动的行跳过。 */
