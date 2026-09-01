@@ -663,36 +663,6 @@ export function WaitingCard({
     && !reviewChoiceConflict
     && !submitting;
 
-  const annotationKey = annotationIds?.join("\0") ?? "";
-  const choiceKey = [...feedbackAnswers, ...closingAnswers].join("\0");
-  useEffect(() => {
-    // 只有未闭环批注才把默认选项扳向"需要调整";纯勾选差异不劫持
-    // 用户的选择(它已经能一键"通过"机械整理直推)。
-    if (!attachmentCount
-        || !choiceEffects.some((effect) =>
-      effect.closes_feedback)) return;
-    setPicked((current) => {
-      let changed = false;
-      const next = { ...current };
-      for (const item of questions) {
-        if (current[item.question]) continue;
-        const options = item.options ?? [];
-        if (!options.some((option) => allChoiceAnswers.has(option))) continue;
-        const revision = options.find((option) => feedbackAnswers.has(option))
-          ?? options.find((option) =>
-            !closingAnswers.has(option)
-            && /需要.*(?:调整|修改)|返工|补充/.test(option))
-          ?? options.find((option) => !closingAnswers.has(option));
-        if (revision) {
-          next[item.question] = revision;
-          changed = true;
-        }
-      }
-      return changed ? next : current;
-    });
-  }, [task.waiting?.waiting_id, annotationKey, choiceKey,
-    deliverySelectionChanged, attachmentCount]);
-
   function pickOption(question: string, option: string) {
     setPicked({ ...picked, [question]: option });
   }

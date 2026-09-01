@@ -11,27 +11,43 @@ const steerBox = readFileSync(resolve("web/src/SteerBox.tsx"), "utf-8");
 const historyBoard = readFileSync(resolve("web/src/HistoryBoard.tsx"), "utf-8");
 
 test("进入独立执行现场页签后直接展开，不要求用户再点一次", () => {
-  const executionView = workspace.slice(
-    workspace.indexOf('workspaceView === "execution"'),
-    workspace.indexOf('ws-insights-view'),
-  );
-  assert.match(executionView, /<ExecutionPanel task=\{task\} defaultOpen \/>/);
+  assert.match(workspace, /<ExecutionPanel task=\{task\} defaultOpen \/>/);
 });
 
-test("材料与检视组成同一工作面，一级栏目不再要求来回切换", () => {
+test("批注与检视是常驻按钮，点击弹出且不替换主工作面", () => {
   const navigation = workspace.slice(
     workspace.indexOf('aria-label="任务工作台视图"'),
-    // 结束锚与现状对齐(体区 div 现在带 ref):旧串匹配不到会让切片
-    // 失控吞掉体区正文,误捕"批注与检视"文案(main 侧已红)。
-    workspace.indexOf("<div ref={workspaceBody}"),
+    workspace.indexOf('<div className={`ws-body'),
   );
-  assert.doesNotMatch(navigation, /批注与检视/);
-  assert.match(workspace, /aria-label="本轮检视清单"/);
-  assert.match(workspace, /setReviewPanelOpen\(true\)/,
-    "新增意见后应留在材料并自动展开检视清单");
-  assert.match(workspace, /<AnnotationPanel[\s\S]*onLocate=\{locate\}/);
-  assert.match(workspace, /<TaskTimeline taskId=\{task\.id\} \/>/,
-    "时间线应回到执行现场而不是占据检视工作面");
+  assert.match(navigation, /ws-review-launch/);
+  assert.match(navigation, /批注与检视/);
+  assert.match(navigation, /aria-haspopup="dialog"/);
+  assert.match(workspace, /className="workspace-review-dialog" role="dialog"/);
+  assert.match(workspace, /\{reviewWorkspaceContent\}/,
+    "弹层应恢复完整批注、回应和 Committer 检视工作面");
+  assert.doesNotMatch(workspace, /aria-label="本轮检视清单"/,
+    "批注不应再作为右栏抽屉接管 Agent 当前问题");
+});
+
+test("Token 用量是执行现场独立页签，不混入实时事件或批注检视", () => {
+  assert.match(workspace, /type ExecutionView = "events" \| "knowledge" \| "tokens"/);
+  assert.match(workspace, /onClick=\{\(\) => setExecutionView\("tokens"\)\}/);
+  assert.match(workspace, /<strong>Token 使用<\/strong>/);
+  assert.match(workspace, /hidden=\{executionView !== "tokens"\}/);
+
+  const reviewContent = workspace.slice(
+    workspace.indexOf("const reviewWorkspaceContent"),
+    workspace.indexOf("return (", workspace.indexOf("const reviewWorkspaceContent")),
+  );
+  assert.doesNotMatch(reviewContent, /<TokenUsage|<TaskTimeline/,
+    "检视弹层只应承载意见和检视动作");
+
+  const eventContent = workspace.slice(
+    workspace.indexOf('hidden={executionView !== "events"}'),
+    workspace.indexOf('hidden={executionView !== "knowledge"}'),
+  );
+  assert.doesNotMatch(eventContent, /<TokenUsage/,
+    "实时事件页不应继续重复显示 Token 卡");
 });
 
 test("运行中的任务默认进入执行现场，真正等人时才回到材料", () => {
@@ -175,6 +191,9 @@ test("需求原文接入圈注层，终态只把已停止任务设为只读", ()
     "只有任务元数据登记过的图片才能渲染，不能开放任意地址");
   assert.match(workspace, /return status !== "canceled"/,
     "已交付任务可归档批注，只有明确停止后才关闭新增入口");
-  assert.match(workspace, /checks\.find\(\(check\) => check\.id === item\.id\)\?\.line/,
-    "定位应使用重锚定后的当前行号");
+  assert.match(workspace,
+    /const check = checks\.find\(\(candidate\) => candidate\.id === item\.id\)/,
+    "定位应读取当前批注的重锚定结果");
+  assert.match(workspace, /const currentLine = check\?\.line \?\? item\.line/,
+    "定位应优先使用重锚定后的当前行号");
 });
