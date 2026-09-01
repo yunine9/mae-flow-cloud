@@ -9,6 +9,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { runSafeWorktreeGit } from "./safeGit.ts";
+import { trustedKernelHostProjection } from "./kernelDelivery.ts";
 
 const PIPELINE_DIMENSIONS = {
   compile: "COMPILE",
@@ -87,6 +88,7 @@ function inspectKernelState(
   kernelRoot: string | undefined,
   pipelineByDefault = true,
   expected: "terminal" | "delivery_watch" = "terminal",
+  trust?: { workspace: string; taskId: string },
 ): KernelCompletionAttestation {
   if (!cwd) {
     return {
@@ -137,6 +139,22 @@ function inspectKernelState(
   const attestedSha = expected === "terminal" && continuousReview
     ? closeSha : head;
   const record = state?.quality?.external_verification;
+  const pipelineTrusted = !continuousReview || Boolean(trust
+    && record && trustedKernelHostProjection({
+      cwd,
+      workspace: trust.workspace,
+      taskId: trust.taskId,
+      action: "pipeline-record",
+      projection: record,
+    }));
+  const closeTrusted = !continuousReview || expected !== "terminal"
+    || Boolean(trust && closeEvent && trustedKernelHostProjection({
+      cwd,
+      workspace: trust.workspace,
+      taskId: trust.taskId,
+      action: "close",
+      projection: closeEvent,
+    }));
   const recordedRequired = new Set(
     Array.isArray(record?.required)
       ? record.required.map((value: unknown) => String(value).toUpperCase())
@@ -146,6 +164,7 @@ function inspectKernelState(
     ? record.checks : {};
   const externalPassed = !externalRequired || (
     Boolean(attestedSha)
+    && pipelineTrusted
     && record?.verdict === "PASS"
     && record?.sha === attestedSha
     && required.every((dimension) => recordedRequired.has(dimension)
@@ -160,13 +179,13 @@ function inspectKernelState(
       ? "external_verify"
       : current ? "active" : "invalid";
   const closeReached = !continuousReview || expected !== "terminal"
-    || Boolean(closeSha);
+    || Boolean(closeSha && closeTrusted);
   const lifecycleReached = expected === "terminal"
     ? terminal && closeReached : current === "delivery_watch";
   let reason: string;
   if (!lifecycleReached) {
-    reason = terminal && expected === "terminal" && continuousReview && !closeSha
-      ? "内核已到 end，但缺少可信 merged close 事件"
+    reason = terminal && expected === "terminal" && continuousReview
+      ? "内核已到 end，但缺少 Cloud 宿主收据背书的 merged close 事件"
       : current
       ? expected === "terminal"
         ? `内核当前步骤是 ${current}，尚未到 terminal`
@@ -174,7 +193,9 @@ function inspectKernelState(
       : `内核 current 缺失，不能推断${
           expected === "terminal" ? "终态" : "交付就绪态"}`;
   } else if (!externalPassed) {
-    reason = !attestedSha
+    reason = continuousReview && !pipelineTrusted
+      ? "流水线 PASS 缺少 Cloud 宿主权威收据"
+      : !attestedSha
       ? expected === "terminal"
         ? "merged close 没有绑定可核对的源提交"
         : "无法读取工作区 HEAD，不能核对流水线版本"
@@ -204,9 +225,10 @@ export function inspectKernelDeliveryReady(
   cwd: string | undefined,
   kernelRoot: string | undefined,
   pipelineByDefault = true,
+  trust?: { workspace: string; taskId: string },
 ): KernelCompletionAttestation {
   return inspectKernelState(
-    cwd, kernelRoot, pipelineByDefault, "delivery_watch");
+    cwd, kernelRoot, pipelineByDefault, "delivery_watch", trust);
 }
 
 /** MR is merged and the kernel has accepted the trusted close event. */
@@ -214,8 +236,9 @@ export function inspectKernelTaskCompletion(
   cwd: string | undefined,
   kernelRoot: string | undefined,
   pipelineByDefault = true,
+  trust?: { workspace: string; taskId: string },
 ): KernelCompletionAttestation {
-  return inspectKernelState(cwd, kernelRoot, pipelineByDefault, "terminal");
+  return inspectKernelState(cwd, kernelRoot, pipelineByDefault, "terminal", trust);
 }
 
 /** Compatibility export for callers that still mean true task completion. */

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -16,6 +16,11 @@ import {
   type FeedbackRecord,
 } from "../src/feedbackStore.ts";
 import { TaskService } from "../src/taskService.ts";
+import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
+import {
+  openKernelFeedback,
+  recordKernelFeedbackResult,
+} from "../src/kernelDelivery.ts";
 
 function record(overrides: Partial<FeedbackRecord> = {}): FeedbackRecord {
   return {
@@ -77,26 +82,101 @@ test("反馈索引中间或完整坏账必须点名失败，不能静默隐藏�
   })]), FeedbackStoreCorruptionError);
 });
 
+test("反馈索引的合法 JSON 也必须通过语义校验，不能伪造来源或核销未知项", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-feedback-semantic-"));
+  const path = join(dir, "feedback.jsonl");
+  writeFileSync(path, JSON.stringify({
+    op: "upsert",
+    record: record({ source: "attacker" as any }),
+  }) + "\n");
+  assert.throws(() => new FeedbackStore(path).list(),
+    FeedbackStoreCorruptionError);
+
+  writeFileSync(path, JSON.stringify({
+    op: "resolve", id: "missing", status: "closed",
+    resolution: "冒充已闭环", at: "2026-09-01T00:00:00.000Z",
+  }) + "\n");
+  assert.throws(() => new FeedbackStore(path).list(),
+    FeedbackStoreCorruptionError);
+});
+
+test("一张任务的反馈坏账只隔离本任务，不拖垮整个任务列表", () => {
+  const root = mkdtempSync(join(tmpdir(), "mfc-feedback-isolation-"));
+  const dataDir = join(root, "tasks");
+  const service = new TaskService({
+    dataDir, provider: "unused", model: "unused", modelsJson: {},
+    maxConcurrent: 0,
+  });
+  const makeTask = (id: string): any => {
+    const workspace = join(dataDir, id);
+    mkdirSync(join(workspace, "feedback"), { recursive: true });
+    return {
+      summary: {
+        id, requirement: id, status: "running",
+        created_at: "2026-09-01T00:00:00.000Z", workspace,
+      },
+      humanGate: {}, controlEpoch: 0,
+    };
+  };
+  const good = makeTask("task-good");
+  const bad = makeTask("task-bad");
+  new FeedbackStore(join(good.summary.workspace, "feedback", "index.jsonl"))
+    .upsert([record({ id: "good", batch_id: "fb-good" })]);
+  writeFileSync(join(bad.summary.workspace, "feedback", "index.jsonl"),
+    "{broken json\n");
+  (service as any).tasks.set(good.summary.id, good);
+  (service as any).tasks.set(bad.summary.id, bad);
+
+  const projected = service.list();
+  assert.equal(projected.length, 2);
+  assert.equal(projected.find((item) => item.id === "task-good")?.feedback?.length, 1);
+  assert.match(projected.find((item) => item.id === "task-bad")?.feedback_error ?? "",
+    /索引损坏/);
+});
+
 test("Cloud 索引缺记录时以内核批次重建，不能永久漏掉反馈", () => {
   const root = mkdtempSync(join(tmpdir(), "mfc-feedback-rebuild-"));
   const workspace = join(root, "tasks", "task-1");
   const cwd = join(workspace, "repo");
   mkdirSync(cwd, { recursive: true });
+  execFileSync("git", ["init", "-q"], { cwd });
+  execFileSync("git", ["config", "user.email", "bot@test"], { cwd });
+  execFileSync("git", ["config", "user.name", "bot"], { cwd });
+  writeFileSync(join(cwd, "a.txt"), "base\n");
+  execFileSync("git", ["add", "a.txt"], { cwd });
+  execFileSync("git", ["commit", "-qm", "base"], { cwd });
+  const head = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd, encoding: "utf-8",
+  }).trim();
   writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify({
-    current: "feedback_triage",
-    delivery_loop: { batches: [{
-      batch_id: "fb-task-1-rebuild", base_sha: "abc",
-      opened_at: "2026-09-01T00:00:00.000Z", status: "repairing",
+    current: "delivery_watch",
+    execution_contract: {
+      schema: "mae-flow-execution/1", host: "cloud",
+      compile: "pipeline", ut_write: "agent", ut_run: "pipeline",
+      codecheck: "pipeline", git_push: "host", continuous_review: true,
+    },
+    quality: { external_verification: { verdict: "PASS", sha: head } },
+    history: [], step_heads: { delivery_watch: head },
+  }));
+  const kernelRoot = discoverKernelRoot(process.cwd());
+  assert.ok(kernelRoot, "测试必须找到同步后的真实内核");
+  openKernelFeedback({
+    host: { kernelRoot }, cwd, workspace,
+    batch: {
+      schema: "mae-flow-feedback-batch/1",
+      batch_id: "fb-task-1-rebuild", task_id: "task-1", base_sha: head,
+      opened_at: "2026-09-01T00:00:00.000Z",
       items: [{
-        id: "pipeline:compile:r1@abc", source: "pipeline",
-        source_id: "compile", source_revision: 1,
+        id: `pipeline:compile:r1@${head}`, source: "pipeline",
+        source_id: "compile", source_revision: 1, kind: "quality_failure",
         summary: "编译失败", verification: "pipeline",
       }],
-    }] },
-  }));
+    },
+  });
   const service = new TaskService({
     dataDir: join(root, "tasks"), provider: "unused", model: "unused",
     modelsJson: {}, maxConcurrent: 0,
+    host: { kernelRoot, continuousReview: true },
   });
   const task = { summary: {
     id: "task-1", requirement: "恢复反馈索引", status: "verifying",
@@ -107,11 +187,30 @@ test("Cloud 索引缺记录时以内核批次重建，不能永久漏掉反馈",
   const restored = new FeedbackStore(
     join(workspace, "feedback", "index.jsonl")).list();
   assert.equal(restored.length, 1);
-  assert.equal(restored[0].id, "pipeline:compile:r1@abc");
+  assert.equal(restored[0].id, `pipeline:compile:r1@${head}`);
   assert.equal(restored[0].status, "repairing");
+
+  writeFileSync(join(cwd, "a.txt"), "base\nfixed\n");
+  execFileSync("git", ["add", "a.txt"], { cwd });
+  execFileSync("git", ["commit", "-qm", "fix compile"], { cwd });
+  recordKernelFeedbackResult({
+    host: { kernelRoot }, cwd, workspace, taskId: "task-1",
+    batchId: "fb-task-1-rebuild", changed: true,
+    results: [{
+      id: `pipeline:compile:r1@${head}`, status: "fixed",
+      summary: "编译问题已修复", evidence: "a.txt",
+    }],
+  });
+  rmSync(join(workspace, "feedback", "index.jsonl"));
+  assert.equal((service as any).recordActiveFeedbackResult(task), undefined,
+    "内核 result 成功、Cloud 索引未落盘的重试必须补齐投影");
+  const recovered = new FeedbackStore(
+    join(workspace, "feedback", "index.jsonl")).list();
+  assert.equal(recovered[0].status, "awaiting_verification");
+  assert.equal(recovered[0].resolution, "编译问题已修复");
 });
 
-test("总体回复和 HEAD 变化不能冒充非工作台来源的逐条回执", () => {
+test("可写状态、总体回复和 HEAD 变化都不能冒充宿主批次或逐条回执", () => {
   const root = mkdtempSync(join(tmpdir(), "mfc-feedback-receipt-"));
   const workspace = join(root, "tasks", "task-1");
   const cwd = join(workspace, "repo");
@@ -152,7 +251,7 @@ test("总体回复和 HEAD 变化不能冒充非工作台来源的逐条回执",
     cwd, lastReply: "所有问题都修好了", humanGate: {}, controlEpoch: 0,
   } as any;
   const failure = (service as any).recordActiveFeedbackResult(task);
-  assert.match(failure, /没有留下本批逐条反馈回执/);
+  assert.match(failure, /缺少 Cloud 宿主权威收据/);
   const state = JSON.parse(readFileSync(join(cwd, ".mae-flow.json"), "utf-8"));
   assert.equal(state.delivery_loop.batches[0].result_digest, undefined,
     "不能用总体收口发言或 HEAD 变化替 Agent 逐条代填");

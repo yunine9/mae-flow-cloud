@@ -1180,6 +1180,12 @@ export function TaskWorkspace({
           onSuggest={onExecutionPlanFeedback}
           onClose={() => setPlanPhase("")} />}
       </div>
+      {task.feedback_error && (
+        <section className="feedback-panel feedback-panel-error" role="alert">
+          <h3>持续检视明细暂不可用</h3>
+          <p>{task.feedback_error}</p>
+        </section>
+      )}
       {!!task.feedback?.length && <FeedbackPanel feedback={task.feedback} />}
       {(pauseFeedback || controlError) && (
         <div className="task-control-feedback" aria-live="polite">

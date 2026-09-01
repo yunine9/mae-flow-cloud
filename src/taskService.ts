@@ -223,9 +223,11 @@ import {
 } from "./terminalAttestation.ts";
 import {
   closeKernelDelivery,
+  createKernelHostProof,
   ensureKernelHostCapability,
   openKernelFeedback,
   recordKernelFeedbackResult,
+  trustedKernelHostProjection,
   type KernelFeedbackBatch,
 } from "./kernelDelivery.ts";
 import {
@@ -234,6 +236,7 @@ import {
 } from "./continuousReviewMigration.ts";
 import {
   FeedbackStore,
+  FeedbackStoreCorruptionError,
   type FeedbackRecord,
   type FeedbackSource,
 } from "./feedbackStore.ts";
@@ -791,6 +794,8 @@ export interface TaskSummary {
   knowledge_usage?: TaskKnowledgeUsage;
   /** 持续检视轻量索引；原始事实仍由各来源账本负责。 */
   feedback?: FeedbackRecord[];
+  /** 单任务反馈索引不可读时的显式诊断；不得拖垮整个任务列表。 */
+  feedback_error?: string;
   /** 多仓时由 Chain 产物投影；单仓时是一个节点的退化图。 */
   requirement_graph?: RequirementGraph;
   /** 单仓下单时显式要求先分析拆分(交付单元拆分入口)。落盘,重启后
@@ -1306,6 +1311,10 @@ interface DiscussionItem {
   author?: string;
   body?: string;
 }
+
+type DiscussionFetch =
+  | { kind: "available"; items: DiscussionItem[] }
+  | { kind: "unavailable"; reason: string };
 
 function discussionRevision(item: DiscussionItem): number {
   if (Number.isSafeInteger(item.revision) && Number(item.revision) >= 0) {
@@ -3202,9 +3211,16 @@ export class TaskService {
     this.refreshRequirementGraph(task);
     const record = task.notifyRecord;
     const summary = task.summary;
-    const feedback = new FeedbackStore(
-      join(task.summary.workspace, "feedback", "index.jsonl"),
-    ).list();
+    let feedback: FeedbackRecord[] = [];
+    let feedbackError: string | undefined;
+    try {
+      feedback = new FeedbackStore(
+        join(task.summary.workspace, "feedback", "index.jsonl"),
+      ).list();
+    } catch (error) {
+      feedbackError = `这张任务的持续检视索引损坏，已隔离该任务并等待从内核恢复：${
+        String(error).slice(0, 500)}`;
+    }
     const rawProgress = this.taskProgress(task);
     const inContinuousReview = Boolean(
       summary.delivery?.mr_url || summary.delivery?.loop || feedback.length);
@@ -3365,6 +3381,7 @@ export class TaskService {
           })
         : undefined,
       ...(feedback.length ? { feedback } : {}),
+      ...(feedbackError ? { feedback_error: feedbackError } : {}),
     };
     return { ...projected, focus: projectTaskFocus(projected) };
   }
@@ -6311,6 +6328,40 @@ export class TaskService {
               ? error.message : String(error);
             this.markVerificationStalled(task,
               `持续检视迁移无法安全完成：${diagnosis}`);
+          }
+        }
+        if (summary.status === "await_merge"
+            && this.continuousReviewTask(task)) {
+          const completed = this.taskCompletionAttestation(task);
+          if (completed?.complete) {
+            const closeEvent = this.latestKernelCloseEvent(task);
+            const unpushedCommits = Array.isArray(closeEvent?.unpushed_local_commits)
+              ? closeEvent.unpushed_local_commits.length : 0;
+            const unpushedPaths = Array.isArray(closeEvent?.unpushed_local_paths)
+              ? closeEvent.unpushed_local_paths.length : 0;
+            if (summary.delivery?.loop) summary.delivery.loop.state = "green";
+            if (summary.delivery) {
+              summary.delivery.mr_state = "已合入";
+              summary.delivery.waiting_on = undefined;
+            }
+            summary.status = "completed";
+            summary.detail = unpushedCommits || unpushedPaths
+              ? `服务重启后已从可信 close 恢复完成；合入时另有 ${unpushedCommits}`
+                + ` 个未推送提交、${unpushedPaths} 个未提交路径，均已留痕`
+              : "服务重启后已从可信 MR 合入 close 恢复完成";
+            this.persist(task);
+            const account = summary.luban_account;
+            if (this.options.notifier && account) {
+              this.bypass(task, "恢复收口通知", this.options.notifier.notifyOutcome({
+                taskId: summary.id,
+                account,
+                status: "merged",
+                summary: `MR 已合入${summary.delivery?.mr_url
+                  ? `:${summary.delivery.mr_url}` : ""}`,
+                link: personalTaskLink(
+                  this.notificationLinkBase(), account, summary.id),
+              }));
+            }
           }
         }
         this.reconcileResolvedDecisionAnnotations(task);
@@ -9869,7 +9920,7 @@ export class TaskService {
     const interventionId = snapshot.handoff?.id
       ?? snapshot.handoff?.started_at ?? randomUUID();
     const factsPath = join(task.summary.workspace, "user-intervention.json");
-    writeFileSync(factsPath, JSON.stringify({
+    const facts = {
       schema: "mae-flow-user-intervention/1",
       intervention_id: interventionId,
       actor: actor.slice(0, 100),
@@ -9888,14 +9939,25 @@ export class TaskService {
           state: tool.state.slice(0, 24),
           result: (tool.result ?? "").slice(0, 800),
         })),
-    }, null, 2), { mode: 0o600 });
+    };
+    writeFileSync(factsPath, JSON.stringify(facts, null, 2), { mode: 0o600 });
     chmodSync(factsPath, 0o600);
+    const proof = this.continuousReviewTask(task)
+      ? createKernelHostProof({
+          cwd: task.cwd,
+          workspace: task.summary.workspace,
+          taskId: task.summary.id,
+          action: "intervention-reconcile",
+          payload: facts,
+        })
+      : undefined;
     const gitView = createSafeGitView(task.cwd);
     try {
       const result = spawnSync(
         this.options.host.python ?? "python3",
         [join(this.options.host.kernelRoot, "scripts", "mae-flow.py"),
-         "intervention", "reconcile", "--file", factsPath],
+         "intervention", "reconcile", "--file", factsPath,
+         ...(proof ? ["--host-proof", proof.path] : [])],
         {
           cwd: task.cwd,
           encoding: "utf-8",
@@ -9924,6 +9986,7 @@ export class TaskService {
       );
     } finally {
       gitView.cleanup();
+      proof?.cleanup();
     }
   }
 
@@ -10137,9 +10200,23 @@ export class TaskService {
         join(task.cwd, ".mae-flow.json"), "utf-8"));
       const batches = Array.isArray(state?.delivery_loop?.batches)
         ? state.delivery_loop.batches : [];
-      const store = new FeedbackStore(
-        join(task.summary.workspace, "feedback", "index.jsonl"));
-      const current = new Map(store.list().map((item) => [item.id, item]));
+      const indexPath = join(
+        task.summary.workspace, "feedback", "index.jsonl");
+      let store = new FeedbackStore(indexPath);
+      let existing: FeedbackRecord[];
+      try {
+        existing = store.list();
+      } catch (error) {
+        if (!(error instanceof FeedbackStoreCorruptionError)) throw error;
+        const quarantined = `${indexPath}.corrupt-${Date.now()}-${randomUUID()}`;
+        renameSync(indexPath, quarantined);
+        this.options.log?.(
+          `任务 ${task.summary.id} 已隔离损坏反馈索引 ${basename(quarantined)}，`
+          + "从内核权威批次重建");
+        store = new FeedbackStore(indexPath);
+        existing = [];
+      }
+      const current = new Map(existing.map((item) => [item.id, item]));
       const statuses: Record<string, FeedbackRecord["status"]> = {
         queued: "open",
         repairing: "repairing",
@@ -10155,12 +10232,60 @@ export class TaskService {
       for (const batch of batches) {
         const status = statuses[String(batch?.status ?? "")];
         if (!status || !Array.isArray(batch?.items)) continue;
+        const openProjection = {
+          batch_id: batch?.batch_id ?? null,
+          task_id: batch?.task_id ?? null,
+          base_sha: batch?.base_sha ?? null,
+          opened_at: batch?.opened_at ?? null,
+          items: batch?.items ?? null,
+          payload_digest: batch?.payload_digest ?? null,
+        };
+        if (!trustedKernelHostProjection({
+          cwd: task.cwd,
+          workspace: task.summary.workspace,
+          taskId: task.summary.id,
+          action: "feedback-open",
+          projection: openProjection,
+        })) {
+          throw new Error(`内核反馈批次 ${String(batch?.batch_id ?? "(空)")}`
+            + " 缺少 Cloud 宿主权威收据");
+        }
+        if (batch?.result_digest) {
+          const resultProjection = {
+            batch_id: batch?.batch_id ?? null,
+            base_sha: batch?.base_sha ?? null,
+            results: batch?.results ?? null,
+            result_digest: batch?.result_digest ?? null,
+            result_head: batch?.result_head ?? null,
+            result_at: batch?.result_at ?? null,
+          };
+          if (!trustedKernelHostProjection({
+            cwd: task.cwd,
+            workspace: task.summary.workspace,
+            taskId: task.summary.id,
+            action: "feedback-result",
+            projection: resultProjection,
+          })) {
+            throw new Error(`内核反馈结果 ${String(batch?.batch_id ?? "(空)")}`
+              + " 缺少 Cloud 宿主权威收据");
+          }
+        }
         const results = new Map((Array.isArray(batch.results)
           ? batch.results : []).map((item: any) => [String(item?.id ?? ""), item]));
         for (const item of batch.items) {
           const id = String(item?.id ?? "");
           let existing = current.get(id);
           const source = String(item?.source ?? "") as FeedbackSource;
+          const sourceNeedsHumanAuthority = source === "workspace"
+            || source === "mr_discussion"
+            || source === "push_confirmation";
+          const projected = status === "closed" && sourceNeedsHumanAuthority
+            ? "awaiting_verification" : status;
+          const result: any = results.get(id);
+          const resolution = String(result?.summary ?? "")
+            || (projected === "closed" ? "权威核验已通过"
+              : projected === "awaiting_verification" ? "Agent 已处理，等待来源方核验"
+              : `状态更新为 ${projected}`);
           if (!existing && id && sources.has(source)) {
             const restored: FeedbackRecord = {
               id,
@@ -10174,7 +10299,8 @@ export class TaskService {
               ...(item?.file ? { file: String(item.file) } : {}),
               ...(item?.line !== undefined ? { line: Number(item.line) } : {}),
               verification: String(item?.verification ?? "unknown"),
-              status,
+              status: projected,
+              ...(result?.summary ? { resolution } : {}),
               updated_at: String(batch?.opened_at ?? new Date().toISOString()),
             };
             store.upsert([restored]);
@@ -10186,19 +10312,20 @@ export class TaskService {
           // 批注作者、MR 检视人或 push 卡责任人作最终裁决。这三类先停在
           // 待核验；只有各自来源的权威事件才会调用 resolveFeedbackRecords
           // 真正关闭。机器来源仍由内核 PASS 直接闭环。
-          const sourceNeedsHumanAuthority = existing.source === "workspace"
-            || existing.source === "mr_discussion"
-            || existing.source === "push_confirmation";
-          const projected = status === "closed" && sourceNeedsHumanAuthority
-            ? "awaiting_verification" : status;
           if (existing.status === projected) continue;
-          const result: any = results.get(id);
-          const resolution = String(result?.summary ?? "")
-            || (projected === "closed" ? "权威核验已通过"
-              : projected === "awaiting_verification" ? "Agent 已处理，等待来源方核验"
-              : `状态更新为 ${projected}`);
           store.resolve(id, projected, resolution);
         }
+      }
+      const stalled = task.summary.delivery?.stalled;
+      if (stalled?.startsWith("持续检视索引损坏或不可写")) {
+        delete task.summary.delivery!.stalled;
+        if (task.summary.delivery?.waiting_on === stalled) {
+          task.summary.delivery.waiting_on = undefined;
+        }
+        task.summary.detail = task.summary.status === "await_merge"
+          ? "持续检视索引已从内核恢复，继续等待检视与合入"
+          : "持续检视索引已从内核恢复，继续自动闭环";
+        this.persist(task);
       }
     } catch (error) {
       const detail = `持续检视索引损坏或不可写，已停止自动闭环，不能静默隐藏反馈：${
@@ -10257,7 +10384,8 @@ export class TaskService {
     if (!this.options.host || this.isRequirementAnalysis(task)) return undefined;
     return this.continuousReviewTask(task)
       ? inspectKernelDeliveryReady(
-          task.cwd, this.options.host.kernelRoot, true)
+          task.cwd, this.options.host.kernelRoot, true,
+          { workspace: task.summary.workspace, taskId: task.summary.id })
       : inspectKernelTaskCompletion(
           task.cwd, this.options.host.kernelRoot, true);
   }
@@ -10281,6 +10409,9 @@ export class TaskService {
       task.cwd,
       this.options.host.kernelRoot,
       true,
+      this.continuousReviewTask(task)
+        ? { workspace: task.summary.workspace, taskId: task.summary.id }
+        : undefined,
     );
   }
 
@@ -14293,6 +14424,10 @@ export class TaskService {
                   sorted.waiting.push("等检视人确认已回复的意见");
                   continue;
                 }
+                if (outcome === "retrying") {
+                  sorted.waiting.push("检视意见明细暂不可用，正在自动重试");
+                  continue;
+                }
                 if (outcome === "skip") continue;
                 // dispatched/halted 都已各自收口，但 MR 生命周期监听不能
                 // 跟着 writer 退场；平台仍可能在此刻完成合入。
@@ -14503,7 +14638,48 @@ export class TaskService {
     const batchId = String(loop?.active_batch_id ?? "");
     const batch = Array.isArray(loop?.batches)
       ? loop.batches.find((item: any) => item?.batch_id === batchId) : undefined;
-    if (!batchId || !batch || batch.result_digest) return undefined;
+    if (!batchId || !batch) return undefined;
+    const openProjection = {
+      batch_id: batch.batch_id ?? null,
+      task_id: batch.task_id ?? null,
+      base_sha: batch.base_sha ?? null,
+      opened_at: batch.opened_at ?? null,
+      items: batch.items ?? null,
+      payload_digest: batch.payload_digest ?? null,
+    };
+    if (!trustedKernelHostProjection({
+      cwd: task.cwd,
+      workspace: task.summary.workspace,
+      taskId: task.summary.id,
+      action: "feedback-open",
+      projection: openProjection,
+    })) {
+      return `反馈批次 ${batchId} 缺少 Cloud 宿主权威收据，已拒绝使用可篡改状态`;
+    }
+    if (batch.result_digest) {
+      const resultProjection = {
+        batch_id: batch.batch_id ?? null,
+        base_sha: batch.base_sha ?? null,
+        results: batch.results ?? null,
+        result_digest: batch.result_digest ?? null,
+        result_head: batch.result_head ?? null,
+        result_at: batch.result_at ?? null,
+      };
+      if (!trustedKernelHostProjection({
+        cwd: task.cwd,
+        workspace: task.summary.workspace,
+        taskId: task.summary.id,
+        action: "feedback-result",
+        projection: resultProjection,
+      })) {
+        return `反馈批次 ${batchId} 的处理结果没有 Cloud 宿主权威收据，拒绝冒充闭环`;
+      }
+      // 内核可能已成功落 result，但进程死在 Cloud 索引 resolve 之前。
+      // 幂等重试必须先从内核补齐投影，不能因 result_digest 早退而永久
+      // 留下一批 repairing/open 的假现场。
+      this.syncFeedbackStoreFromKernel(task);
+      return undefined;
+    }
     const head = this.feedbackBaseSha(task);
     const changed = head !== String(batch.base_sha ?? "");
     const annotations = new Map(this.annotations(task).list()
@@ -14678,13 +14854,19 @@ export class TaskService {
     task: TaskState,
     max: number | undefined,
     epoch: number,
-  ): Promise<"dispatched" | "waiting" | "halted" | "skip"> {
+  ): Promise<"dispatched" | "waiting" | "halted" | "retrying" | "skip"> {
     if (!this.current(task, epoch)) return "skip";
     const delivery = task.summary.delivery!;
     const loop = delivery.loop
       ?? (delivery.loop = { round: 0, max, state: "repairing" as const });
-    const discussions = await this.fetchDiscussions(task);
+    const fetched = await this.fetchDiscussions(task);
     if (!this.current(task, epoch)) return "skip";
+    if (fetched.kind === "unavailable") {
+      this.options.log?.(
+        `任务 ${task.summary.id} 检视门禁未过且讨论明细暂不可用：${fetched.reason}`);
+      return "retrying";
+    }
+    const discussions = fetched.items;
     if (!discussions.length) {
       // 门禁说未解决但明细拉不到:可能是刚解决的竞态,别硬派——
       // 让调用方落到下一优先级,下一轮监控再看这路。
@@ -15429,21 +15611,32 @@ export class TaskService {
     if (!kernelRoot || !task.cwd || !delivery) return undefined;
     const factsPath = join(task.summary.workspace, "pipeline-facts.json");
     try {
-      writeFileSync(factsPath, JSON.stringify({
+      const facts = {
         sha,
         status,
         ...(checks !== undefined ? { checks } : {}),
         ...(delivery.git_push ? { git_push: delivery.git_push } : {}),
         source: this.effectivePlatformUrl() ?? "",
         url: delivery.mr_url ?? "",
-      }, null, 2));
+      };
+      writeFileSync(factsPath, JSON.stringify(facts, null, 2));
+      const proof = this.continuousReviewTask(task)
+        ? createKernelHostProof({
+            cwd: task.cwd,
+            workspace: task.summary.workspace,
+            taskId: task.summary.id,
+            action: "pipeline-record",
+            payload: facts,
+          })
+        : undefined;
       const gitView = createSafeGitView(task.cwd);
       const result = await new Promise<
         { code: number | null; out: string; err: string }>(
         (resolve) => {
           const child = spawn(this.options.host!.python ?? "python3",
             [join(kernelRoot, "scripts", "mae-flow.py"),
-             "pipeline", "record", "--file", factsPath],
+             "pipeline", "record", "--file", factsPath,
+             ...(proof ? ["--host-proof", proof.path] : [])],
             {
               cwd: task.cwd!,
               stdio: ["ignore", "pipe", "pipe"],
@@ -15465,7 +15658,10 @@ export class TaskService {
             clearTimeout(timer);
             resolve({ code: null, out, err });
           });
-        }).finally(() => gitView.cleanup());
+        }).finally(() => {
+          gitView.cleanup();
+          proof?.cleanup();
+        });
       // 内核约定:末行是机器可读的裁决 JSON(quality.pipeline 原文)。
       const lastLine = result.out.trim().split("\n").at(-1) ?? "";
       let record: Record<string, unknown> | undefined;
@@ -15488,8 +15684,8 @@ export class TaskService {
         delivery.attested = "未裁决(内核登记失败,详见服务日志)";
         this.options.log?.(
           `任务 ${task.summary.id} 流水线证据登记失败(code `
-          + `${result.code ?? "spawn-error"}): ${result.out.slice(0, 300)} `
-          + result.err.slice(0, 300));
+          + `${result.code ?? "spawn-error"}): ${result.out.slice(0, 2_000)} `
+          + result.err.slice(0, 4_000));
       }
     } catch (error) {
       delivery.attested = "未裁决(登记异常,详见服务日志)";
@@ -15557,10 +15753,12 @@ export class TaskService {
     }
   }
 
-  private async fetchDiscussions(task: TaskState): Promise<DiscussionItem[]> {
+  private async fetchDiscussions(task: TaskState): Promise<DiscussionFetch> {
     const platformUrl = this.effectivePlatformUrl();
     const delivery = task.summary.delivery;
-    if (!platformUrl || !delivery) return [];
+    if (!platformUrl || !delivery) {
+      return { kind: "unavailable", reason: "平台地址或交付信息缺失" };
+    }
     try {
       const params = new URLSearchParams({
         repo: task.summary.repo_url ?? this.effectiveDefaultRepo() ?? "",
@@ -15573,12 +15771,15 @@ export class TaskService {
         { headers: this.platformIdentity(task) });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const body = await readJson(response);
-      return (Array.isArray(body.discussions) ? body.discussions : [])
-        .filter((item: any) => typeof item?.id === "string" && item.id);
+      return {
+        kind: "available",
+        items: (Array.isArray(body.discussions) ? body.discussions : [])
+          .filter((item: any) => typeof item?.id === "string" && item.id),
+      };
     } catch (error) {
       this.options.log?.(
         `任务 ${task.summary.id} 检视讨论拉取失败: ${String(error)}`);
-      return [];
+      return { kind: "unavailable", reason: String(error).slice(0, 300) };
     }
   }
 

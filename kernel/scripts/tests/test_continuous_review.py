@@ -2,6 +2,7 @@
 """Cloud continuous-review is opt-in, durable and never a fresh workflow."""
 
 import hashlib
+import base64
 import json
 import os
 import subprocess
@@ -23,8 +24,10 @@ from mae_flow_core.cli_commands.external_repair_gate import (  # noqa: E402
     gate_repair_commit,
 )
 from mae_flow_core.cli_commands.pipeline_commands import (  # noqa: E402
-    _route_external_verification,
+    _route_external_verification, cmd_pipeline,
 )
+from mae_flow_core.cli_commands.host_capability import verify_host_proof  # noqa: E402
+from mae_flow_core.cli_commands import host_capability  # noqa: E402
 from mae_flow_core.workflow.execution_contract import SCHEMA  # noqa: E402
 
 
@@ -116,10 +119,21 @@ class DeliveryCommandTests(TempProject):
     def setUp(self):
         super().setUp()
         self.proof = mock.patch.object(
-            delivery, "_verify_host_proof", return_value="test-proof-nonce")
+            delivery, "_verify_host_proof", return_value={
+                "root": "/host-only",
+                "proof": {"nonce": "test-proof-nonce"},
+                "payload": {},
+            })
         self.proof.start()
+        self.save_proof = mock.patch.object(delivery, "save_with_host_proof")
+        self.save_proof.start()
+        self.trusted = mock.patch.object(
+            delivery, "trusted_projection", return_value=True)
+        self.trusted.start()
 
     def tearDown(self):
+        self.trusted.stop()
+        self.save_proof.stop()
         self.proof.stop()
         super().tearDown()
 
@@ -274,6 +288,31 @@ class DeliveryCommandTests(TempProject):
 
 
 class DeliveryHostProofTests(TempProject):
+    def trusted_layout(self, exponent="AQAB"):
+        root = tempfile.TemporaryDirectory()
+        workspace = os.path.join(root.name, "task-7")
+        repository = os.path.join(workspace, "repo")
+        os.makedirs(repository)
+        old = os.getcwd()
+        os.chdir(repository)
+        trust = os.path.join(root.name, ".host-capabilities")
+        os.makedirs(trust, mode=0o700)
+        trust = os.path.realpath(trust)
+        os.chmod(trust, 0o700)
+        n = base64.urlsafe_b64encode(b"\x80" + b"\0" * 255).decode().rstrip("=")
+        authority = {
+            "schema": "mae-flow-host-authority/1", "alg": "RS256",
+            "key_id": hashlib.sha256((n + "." + exponent).encode()).hexdigest()[:24],
+            "task_id": "task-7", "n": n, "e": exponent,
+        }
+        capability = os.path.join(
+            trust, hashlib.sha256(b"task-7").hexdigest() + ".json")
+        with open(capability, "w", encoding="utf-8") as stream:
+            json.dump({"schema": "mae-flow-host-capability/1",
+                       "authority": authority, "private_key": "not-readable"}, stream)
+        os.chmod(capability, 0o600)
+        return root, old, trust, authority
+
     def test_forged_proof_is_rejected_even_when_shell_obfuscation_evades_hint(self):
         value = state()
         value["execution_contract"]["host_authority"] = {
@@ -297,6 +336,89 @@ class DeliveryHostProofTests(TempProject):
                 delivery_action="feedback-open", file=payload_path,
                 host_proof=proof_path))
         self.assertNotIn("delivery_loop", value)
+
+    def test_mutated_state_authority_cannot_replace_external_trust_root(self):
+        root, old, trust, authority = self.trusted_layout()
+        try:
+            value = state()
+            value["execution_contract"]["host_authority"] = {
+                **authority, "key_id": "attacker", "e": "AQ",
+            }
+            payload = batch(base=HEAD)
+            proof = {
+                "schema": "mae-flow-host-proof/1", "task_id": "task-7",
+                "action": "feedback-open",
+                "payload_digest": hashlib.sha256(
+                    json.dumps(payload, ensure_ascii=False, sort_keys=True,
+                               separators=(",", ":")).encode()).hexdigest(),
+                "nonce": "forged", "issued_at": int(delivery.time.time()),
+                "signature": "ZmFrZQ",
+            }
+            proof_path = os.path.join(trust, "proof-forged.json")
+            with open(proof_path, "w", encoding="utf-8") as stream:
+                json.dump(proof, stream)
+            os.chmod(proof_path, 0o600)
+            with self.assertRaises(SystemExit):
+                verify_host_proof(value, proof_path, "feedback-open", payload)
+            self.assertNotIn("delivery_loop", value)
+        finally:
+            os.chdir(old)
+            root.cleanup()
+
+    def test_weak_rsa_exponent_is_rejected_at_external_root(self):
+        root, old, trust, authority = self.trusted_layout("AQ")
+        try:
+            value = state()
+            value["execution_contract"]["host_authority"] = authority
+            proof_path = os.path.join(trust, "proof-weak.json")
+            with open(proof_path, "w", encoding="utf-8") as stream:
+                json.dump({
+                    "schema": "mae-flow-host-proof/1", "task_id": "task-7",
+                    "action": "feedback-open", "payload_digest": "0" * 64,
+                    "nonce": "weak", "issued_at": int(delivery.time.time()),
+                    "signature": "ZmFrZQ",
+                }, stream)
+            os.chmod(proof_path, 0o600)
+            with self.assertRaises(SystemExit):
+                verify_host_proof(value, proof_path, "feedback-open", batch())
+        finally:
+            os.chdir(old)
+            root.cleanup()
+
+    def test_continuous_pipeline_record_requires_host_proof(self):
+        value = state("external_verify")
+        facts = self.write_json("pipeline.json", {
+            "sha": self.head, "status": "success",
+        })
+        with self.assertRaises(SystemExit):
+            cmd_pipeline({"steps": {}}, value, SimpleNamespace(
+                action="record", file=facts, host_proof=None))
+        self.assertNotIn("pipeline", value.get("quality", {}))
+
+    def test_trusted_receipt_accepts_utf8_projection(self):
+        projection = {"summary": "流水线问题已修复", "status": "fixed"}
+        payload = {"batch_id": "fb-中文"}
+        proof = {
+            "schema": host_capability.PROOF_SCHEMA,
+            "task_id": "task-7", "action": "feedback-result",
+            "payload_digest": hashlib.sha256(
+                host_capability._canonical(payload).encode("utf-8")).hexdigest(),
+            "nonce": "utf8", "issued_at": int(delivery.time.time()),
+            "signature": "signed",
+        }
+        record = {
+            "schema": "mae-flow-host-receipt/1",
+            "proof": proof,
+            "payload": payload,
+            "projection": projection,
+            "projection_digest": hashlib.sha256(
+                host_capability._canonical(projection).encode("utf-8")).hexdigest(),
+        }
+        with mock.patch.object(
+                host_capability, "_trusted_authority", return_value={}), mock.patch.object(
+                host_capability, "_verify_rsa_sha256", return_value=True):
+            self.assertTrue(host_capability._valid_stored_receipt(
+                state(), record, "feedback-result", projection, "/host-only"))
 
 
 class PipelineRoutingTests(unittest.TestCase):

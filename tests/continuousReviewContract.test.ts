@@ -24,6 +24,7 @@ import { KernelHost } from "../src/kernelHost.ts";
 import { migrateContinuousReviewTask } from "../src/continuousReviewMigration.ts";
 import {
   closeKernelDelivery,
+  createKernelHostProof,
   openKernelFeedback,
   recordKernelFeedbackResult,
 } from "../src/kernelDelivery.ts";
@@ -106,6 +107,7 @@ async function reproduceTerminalRollover(): Promise<{
   after: Record<string, any>;
   archived?: Record<string, any>;
   lastPreserved: boolean;
+  migrationRetryProved: boolean;
 }> {
   const cwd = repository();
   const host = new KernelHost({
@@ -177,6 +179,19 @@ async function reproduceTerminalRollover(): Promise<{
   const archived = readState(cwd, ".last");
   assert.equal(accident.current, "config_confirm");
   assert.equal(archived.current, "end");
+  assert.throws(() => migrateContinuousReviewTask({
+    host: { kernelRoot: KERNEL_ROOT!, python: "mae-flow-python-missing" },
+    cwd,
+    workspace: cwd,
+    taskId: "task-real-last",
+    status: "queued",
+    ticket: TICKET,
+    baseline: "master",
+    sourceBranch: archived.config?.["分支名"],
+    reviewRepair: true,
+  }), /内核持续检视命令失败/);
+  assert.equal(readState(cwd).current, "config_confirm",
+    "adopt 失败必须原子回滚事故现场，下一次 recover 才能重试");
   migrateContinuousReviewTask({
     host: { kernelRoot: KERNEL_ROOT!, python: "python3" },
     cwd,
@@ -188,6 +203,23 @@ async function reproduceTerminalRollover(): Promise<{
     sourceBranch: archived.config?.["分支名"],
     reviewRepair: true,
   });
+  // 事故前的 PASS 来自旧契约，没有宿主收据。迁移完成后由 Cloud 用同
+  // 一份平台事实补签一次，后续 close 才能证明这张绿灯不是 Agent
+  // 直接改状态伪造的。
+  const migratedFacts = JSON.parse(readFileSync(facts, "utf-8"));
+  const pipelineProof = createKernelHostProof({
+    cwd,
+    workspace: cwd,
+    taskId: "task-real-last",
+    action: "pipeline-record",
+    payload: migratedFacts,
+  });
+  try {
+    kernel(cwd, "pipeline", "record", "--file", facts,
+      "--host-proof", pipelineProof.path);
+  } finally {
+    pipelineProof.cleanup();
+  }
   const watch = readState(cwd);
   assert.equal(watch.current, "delivery_watch");
   const batch = {
@@ -213,6 +245,7 @@ async function reproduceTerminalRollover(): Promise<{
     after: readState(cwd),
     archived,
     lastPreserved: existsSync(join(cwd, ".mae-flow.json.last")),
+    migrationRetryProved: true,
   };
 }
 
@@ -245,6 +278,12 @@ test("真实 .last 事故迁移：end 收到平台检视意见后续原单且不
     archivedCurrent: "end",
     lastPreserved: true,
   });
+});
+
+test("事故迁移：首次 adopt 失败会回滚，第二次原地恢复成功", async () => {
+  const scene = await contractScene();
+  assert.equal(scene.migrationRetryProved, true);
+  assert.equal(scene.after.current, "feedback_triage");
 });
 
 test("契约：一个 Cloud 任务从创建到 MR 合入只能执行一次 init", async () => {

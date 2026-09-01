@@ -613,3 +613,16 @@ CC 终审进一步发现并已收口五个接缝，均按原设计的“不阻�
    指纹）+ observed SHA；同一评论编辑后形成新反馈和新回复，旧回复不能吞掉新内容。
 5. FeedbackStore 只自动截掉崩溃留下的最后半行；中段或完整坏账 fail-closed 并点名。
    Cloud 索引缺记录时从内核 append-only 批次重建，避免写序中断后永久隐藏反馈。
+6. capability 的信任根移到 Agent 工作区之外，并校验目录、文件、属主、权限、RSA
+   强度和公私钥一致性；feedback-open/result、pipeline record、用户介入和 merged
+   close 的权威投影都必须有宿主持久收据。`.mae-flow.json` 即使被伪造，也不能
+   伪造反馈、绿灯或终态。中文摘要参与收据核验有专门回归，避免非 ASCII 比较异常。
+7. 迁移改成可回滚事务：旧 `end` 先保留现场，adopt 失败即恢复原状态，重试仍可
+   成功。反方向的崩溃窗也补齐：内核 close 已成功但 Cloud `task.json` 仍是
+   `await_merge` 时，重启从可信 close 收据恢复 `completed`，不会再次 adopt。
+8. FeedbackStore 除 JSON 语法外严格校验来源、状态、时间、revision、行号和
+   resolve 引用；单任务坏账只在该任务展示错误，不拖垮 `/tasks`。重建只接受有
+   宿主收据的内核批次；内核 result 成功、Cloud 索引落盘失败时，幂等重试会补齐
+   状态与逐条 resolution，不会因 `result_digest` 已存在而永久早退。
+9. MR discussion 接口失败与“确实没有未解决意见”分开表达。前者保持监听并明确显示
+   “检视意见明细暂不可用，正在自动重试”，禁止用空数组把门禁误报为全绿。

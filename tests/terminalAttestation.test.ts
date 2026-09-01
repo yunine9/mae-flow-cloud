@@ -131,7 +131,7 @@ test("流水线契约:总体 end 也必须逐项 PASS 且绑定当前 HEAD", () 
   assert.equal(result.complete, false, "旧 SHA 的绿灯不能背书新 HEAD");
 });
 
-test("持续检视就绪与任务完成使用两把不同的证明", () => {
+test("持续检视就绪与任务完成均拒绝仅靠 Agent 可写状态伪造", () => {
   const { cwd, kernelRoot, head } = fixture("delivery_watch", true);
   const state = JSON.parse(readFileSync(join(cwd, ".mae-flow.json"), "utf-8"));
   const checks = Object.fromEntries(["COMPILE", "UT", "CODECHECK"].map(
@@ -143,7 +143,10 @@ test("持续检视就绪与任务完成使用两把不同的证明", () => {
     required: ["COMPILE", "UT", "CODECHECK"], checks,
   } };
   writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify(state));
-  assert.equal(inspectKernelDeliveryReady(cwd, kernelRoot).complete, true);
+  let result = inspectKernelDeliveryReady(cwd, kernelRoot);
+  assert.equal(result.complete, false,
+    "即使状态自称流水线 PASS，没有 Cloud 宿主收据也不能等待合入");
+  assert.match(result.reason, /宿主权威收据/);
   assert.equal(inspectKernelTaskCompletion(cwd, kernelRoot).complete, false,
     "MR 未合入、内核未 close 时绝不能 completed");
   state.current = "end";
@@ -155,11 +158,14 @@ test("持续检视就绪与任务完成使用两把不同的证明", () => {
     event_id: "merge-1", reason: "merged", sha: head, local_head: head,
   }] };
   writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify(state));
-  assert.equal(inspectKernelTaskCompletion(cwd, kernelRoot).complete, true);
+  result = inspectKernelTaskCompletion(cwd, kernelRoot);
+  assert.equal(result.complete, false,
+    "Agent 在状态里手写 merged close 不能把任务伪造成已完成");
+  assert.match(result.reason, /宿主收据/);
 
   execFileSync("git", ["commit", "--allow-empty", "-qm", "local after merge"], { cwd });
-  assert.equal(inspectKernelTaskCompletion(cwd, kernelRoot).complete, true,
-    "MR 合入竞态中的本地未推送提交只留痕，不能让终态死锁");
+  assert.equal(inspectKernelTaskCompletion(cwd, kernelRoot).complete, false,
+    "改变本地 HEAD 也不能让伪造的 close 获得宿主背书");
 });
 
 test("flow 未声明 terminal 时，状态文件自称 end 也不能绕过", () => {

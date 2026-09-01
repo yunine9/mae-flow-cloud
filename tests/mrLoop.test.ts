@@ -153,6 +153,36 @@ async function closeWorkspaceReview(
   });
 }
 
+test("MR 讨论接口失败时明确显示自动重试，不能误报门禁全绿", async () => {
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  platform.seedDiscussion({
+    id: "d-unavailable", file: "a.txt", line: 1,
+    author: "检视人", body: "这条意见必须处理",
+  });
+  platform.discussionListFailures = 100;
+  await platform.start();
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-mrl-unavailable-"));
+  const model = mrModel(walkScript(), dataDir);
+  await model.start();
+  try {
+    const service = buildService(platform, dataDir, model.modelsJson());
+    const id = service.create("交付 REQ9:讨论服务故障").id;
+    await until(() => service.get(id)?.delivery?.waiting_on
+      ?.includes("检视意见明细暂不可用") ?? false,
+    "讨论接口故障进入明确重试态");
+    const task = service.get(id)!;
+    assert.equal(task.status, "await_merge");
+    assert.match(task.detail ?? "", /检视意见明细暂不可用.*自动重试/);
+    assert.doesNotMatch(task.detail ?? "", /门禁全绿/);
+    assert.equal(platform.discussions[0].replies.length, 0,
+      "拉取失败不能拿空列表冒充没有意见并生成回复");
+  } finally {
+    await model.stop();
+    await platform.stop();
+  }
+});
+
 test("检视优先于 CI;回复发布并标已解决(显式开代 resolve);CI 接棒;合入收口", async () => {
   const platform = new FakeGitPlatform();
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));

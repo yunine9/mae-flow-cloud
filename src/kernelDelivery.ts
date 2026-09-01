@@ -6,15 +6,20 @@ import {
   lstatSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import {
   createHash,
+  createPrivateKey,
+  createPublicKey,
   generateKeyPairSync,
   randomUUID,
   sign,
+  verify as verifySignature,
 } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
@@ -85,6 +90,9 @@ interface StoredKernelHostCapability {
   private_key: string;
 }
 
+export type KernelHostAction = "feedback-open" | "feedback-result" | "close"
+  | "pipeline-record" | "intervention-reconcile";
+
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
   if (value && typeof value === "object") {
@@ -95,9 +103,56 @@ function canonical(value: unknown): string {
   return JSON.stringify(value);
 }
 
+function capabilityRoot(workspace: string): string {
+  const realWorkspace = realpathSync(workspace);
+  const root = join(dirname(realWorkspace), ".host-capabilities");
+  if (!existsSync(root)) mkdirSync(root, { mode: 0o700 });
+  const info = lstatSync(root);
+  if (!info.isDirectory() || info.isSymbolicLink()
+      || realpathSync(root) !== root) {
+    throw new KernelDeliveryError("持续检视宿主信任根不是可信普通目录");
+  }
+  if ((info.mode & 0o777) !== 0o700
+      || (typeof process.getuid === "function" && info.uid !== process.getuid())) {
+    throw new KernelDeliveryError("持续检视宿主信任根权限或属主异常");
+  }
+  return root;
+}
+
 function capabilityPath(workspace: string, taskId: string): string {
   const safeTask = createHash("sha256").update(taskId).digest("hex");
-  return join(dirname(workspace), ".host-capabilities", `${safeTask}.json`);
+  return join(capabilityRoot(workspace), `${safeTask}.json`);
+}
+
+function validateStoredCapability(
+  stored: StoredKernelHostCapability,
+  taskId: string,
+): void {
+  const authority = stored.authority;
+  if (stored.schema !== "mae-flow-host-capability/1"
+      || authority?.schema !== "mae-flow-host-authority/1"
+      || authority.alg !== "RS256"
+      || authority.task_id !== taskId
+      || !stored.private_key) {
+    throw new KernelDeliveryError("持续检视宿主凭据损坏，拒绝执行内核命令");
+  }
+  const modulus = Buffer.from(authority.n, "base64url");
+  const exponent = Buffer.from(authority.e, "base64url");
+  const exponentValue = exponent.reduce((value, byte) => value * 256 + byte, 0);
+  const keyId = createHash("sha256").update(`${authority.n}.${authority.e}`)
+    .digest("hex").slice(0, 24);
+  let derived: { n?: string; e?: string };
+  try {
+    derived = createPublicKey(createPrivateKey(stored.private_key))
+      .export({ format: "jwk" });
+  } catch {
+    throw new KernelDeliveryError("持续检视宿主私钥无法解析，拒绝执行内核命令");
+  }
+  if (modulus.length < 256 || exponentValue !== 65537
+      || authority.key_id !== keyId
+      || derived.n !== authority.n || derived.e !== authority.e) {
+    throw new KernelDeliveryError("持续检视宿主公私钥不匹配或强度不足");
+  }
 }
 
 /**
@@ -111,17 +166,20 @@ export function ensureKernelHostCapability(input: {
   const path = capabilityPath(input.workspace, input.taskId);
   if (existsSync(path)) {
     const info = lstatSync(path);
-    if (!info.isFile() || info.isSymbolicLink()) {
+    if (!info.isFile() || info.isSymbolicLink()
+        || realpathSync(path) !== path
+        || (info.mode & 0o777) !== 0o600
+        || (typeof process.getuid === "function" && info.uid !== process.getuid())) {
       throw new KernelDeliveryError("持续检视宿主凭据不是普通文件，拒绝读取");
     }
-    chmodSync(path, 0o600);
-    const stored = JSON.parse(readFileSync(path, "utf-8")) as
-      StoredKernelHostCapability;
-    if (stored.schema !== "mae-flow-host-capability/1"
-        || stored.authority?.task_id !== input.taskId
-        || !stored.private_key) {
+    let stored: StoredKernelHostCapability;
+    try {
+      stored = JSON.parse(readFileSync(path, "utf-8")) as
+        StoredKernelHostCapability;
+    } catch {
       throw new KernelDeliveryError("持续检视宿主凭据损坏，拒绝执行内核命令");
     }
+    validateStoredCapability(stored, input.taskId);
     return stored.authority;
   }
   const { publicKey, privateKey } = generateKeyPairSync("rsa", {
@@ -145,8 +203,6 @@ export function ensureKernelHostCapability(input: {
     authority,
     private_key: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
   };
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  chmodSync(dirname(path), 0o700);
   try {
     writeFileSync(path, JSON.stringify(stored) + "\n", {
       encoding: "utf-8", mode: 0o600, flag: "wx",
@@ -155,7 +211,6 @@ export function ensureKernelHostCapability(input: {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     return ensureKernelHostCapability(input);
   }
-  chmodSync(path, 0o600);
   return authority;
 }
 
@@ -200,19 +255,18 @@ function factsPath(workspace: string, label: string, payload: unknown): string {
   return path;
 }
 
-function invoke(input: {
-  host: KernelDeliveryHost;
+export function createKernelHostProof(input: {
   cwd: string;
   workspace: string;
   taskId: string;
-  action: "feedback-open" | "feedback-result" | "close";
+  action: KernelHostAction;
   payload: unknown;
-  args: string[];
-}): KernelDeliveryRecord {
+}): { path: string; cleanup(): void } {
   const authority = pinKernelHostAuthority(input);
   const storedPath = capabilityPath(input.workspace, input.taskId);
   const stored = JSON.parse(readFileSync(storedPath, "utf-8")) as
     StoredKernelHostCapability;
+  validateStoredCapability(stored, input.taskId);
   if (canonical(stored.authority) !== canonical(authority)) {
     throw new KernelDeliveryError("持续检视宿主私钥与内核公钥不匹配");
   }
@@ -228,17 +282,29 @@ function invoke(input: {
   const signature = sign("RSA-SHA256", Buffer.from(canonical(proof)), {
     key: stored.private_key,
   }).toString("base64url");
-  const proofPath = join(dirname(storedPath),
-    `proof-${proof.nonce}.json`);
-  writeFileSync(proofPath, JSON.stringify({ ...proof, signature }) + "\n", {
+  const path = join(dirname(storedPath), `proof-${proof.nonce}.json`);
+  writeFileSync(path, JSON.stringify({ ...proof, signature }) + "\n", {
     encoding: "utf-8", mode: 0o600, flag: "wx",
   });
+  return { path, cleanup: () => rmSync(path, { force: true }) };
+}
+
+function invoke(input: {
+  host: KernelDeliveryHost;
+  cwd: string;
+  workspace: string;
+  taskId: string;
+  action: KernelHostAction;
+  payload: unknown;
+  args: string[];
+}): KernelDeliveryRecord {
+  const proof = createKernelHostProof(input);
   const gitView = createSafeGitView(input.cwd);
   try {
     const result = spawnSync(
       input.host.python ?? "python3",
       [join(input.host.kernelRoot, "scripts", "mae-flow.py"),
-       "delivery", ...input.args, "--host-proof", proofPath],
+       "delivery", ...input.args, "--host-proof", proof.path],
       {
         cwd: input.cwd,
         encoding: "utf-8",
@@ -262,8 +328,73 @@ function invoke(input: {
     return record;
   } finally {
     gitView.cleanup();
-    rmSync(proofPath, { force: true });
+    proof.cleanup();
   }
+}
+
+function secureReceipt(path: string): Record<string, any> | undefined {
+  try {
+    const info = lstatSync(path);
+    if (!info.isFile() || info.isSymbolicLink()
+        || realpathSync(path) !== path
+        || (info.mode & 0o777) !== 0o600
+        || (typeof process.getuid === "function" && info.uid !== process.getuid())) {
+      return undefined;
+    }
+    const value = JSON.parse(readFileSync(path, "utf-8"));
+    return value && typeof value === "object" ? value : undefined;
+  } catch { return undefined; }
+}
+
+/** Verify a protected state projection against a receipt outside Agent mounts. */
+export function trustedKernelHostProjection(input: {
+  cwd: string;
+  workspace: string;
+  taskId: string;
+  action: KernelHostAction;
+  projection: unknown;
+}): boolean {
+  try {
+    const authority = ensureKernelHostCapability(input);
+    const state = JSON.parse(readFileSync(
+      join(input.cwd, ".mae-flow.json"), "utf-8"));
+    if (canonical(state?.execution_contract?.host_authority)
+        !== canonical(authority)) return false;
+    const root = capabilityRoot(input.workspace);
+    const prefix = `${createHash("sha256").update(input.taskId).digest("hex")}.receipt-`;
+    const publicKey = createPublicKey({
+      key: { kty: "RSA", n: authority.n, e: authority.e },
+      format: "jwk",
+    });
+    for (const name of readdirSync(root).sort().reverse()) {
+      if (!name.startsWith(prefix) || !name.endsWith(".json")) continue;
+      const receipt = secureReceipt(join(root, name));
+      const proof = receipt?.proof;
+      if (receipt?.schema !== "mae-flow-host-receipt/1"
+          || proof?.schema !== "mae-flow-host-proof/1"
+          || proof?.task_id !== input.taskId || proof?.action !== input.action
+          || canonical(receipt.projection) !== canonical(input.projection)) continue;
+      const unsigned = {
+        schema: proof.schema,
+        task_id: proof.task_id,
+        action: proof.action,
+        payload_digest: proof.payload_digest,
+        nonce: proof.nonce,
+        issued_at: proof.issued_at,
+      };
+      const payloadDigest = createHash("sha256")
+        .update(canonical(receipt.payload)).digest("hex");
+      const projectionDigest = createHash("sha256")
+        .update(canonical(input.projection)).digest("hex");
+      if (payloadDigest !== proof.payload_digest
+          || projectionDigest !== receipt.projection_digest) continue;
+      if (verifySignature("RSA-SHA256", Buffer.from(canonical(unsigned)),
+        publicKey, Buffer.from(String(proof.signature ?? ""), "base64url"))) {
+        return true;
+      }
+    }
+  } catch { /* fail closed */ }
+  return false;
 }
 
 export function openKernelFeedback(input: {

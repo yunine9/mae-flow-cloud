@@ -2,14 +2,13 @@
 import hashlib
 import json
 import re
-
 from .shared import os, time
 from .wiring import api
 from .user_intervention import clear_stale_evidence
 from mae_flow_core.quality.external_repair import (
     clear_feedback_authorization, issue_feedback_authorization)
 from mae_flow_core.workflow.execution_contract import continuous_review_enabled
-from .host_capability import save_with_host_proof, verify_host_proof
+from .host_capability import save_with_host_proof, trusted_projection, verify_host_proof
 BATCH_SCHEMA = "mae-flow-feedback-batch/1"
 RESULT_SCHEMA = "mae-flow-feedback-result/1"
 STATE_SCHEMA = "mae-flow-delivery-loop/1"
@@ -17,7 +16,6 @@ _RESULTS = frozenset(("fixed", "explained", "needs_human", "not_applicable"))
 _WAITING = frozenset(("external_verify", "delivery_watch"))
 _WRITER = frozenset(("feedback_triage", "build", "domain_archive",
                      "delivery_review", "push"))
-
 def _die(message):
     api.die("delivery: " + message, 2)
 
@@ -438,6 +436,8 @@ def _close(flow, state, args):
         return
     verified = ((state.get("quality") or {}).get("external_verification") or {})
     verified_sha = str(verified.get("sha") or "")
+    if not trusted_projection(state, "pipeline-record", verified):
+        _die("当前流水线 PASS 没有 Cloud 宿主权威收据，拒绝 close")
     if verified.get("verdict") != "PASS" or args.sha != verified_sha:
         _die("合入源 SHA %s 没有当前权威 PASS 背书（最近验证 %s）"
              % (str(args.sha)[:12], verified_sha[:12] or "无"))

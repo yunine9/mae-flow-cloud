@@ -95,6 +95,9 @@ export function managedFlowFixture(
       codecheck: "pipeline",
       git_push: "host",
       ...(options.continuousReview ? { continuous_review: true } : {}),
+      ...(state.execution_contract?.host_authority
+        ? { host_authority: state.execution_contract.host_authority }
+        : {}),
     };
     state.config = {
       ...(state.config ?? {}),

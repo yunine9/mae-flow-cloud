@@ -925,6 +925,8 @@ export interface TaskSummary {
   knowledge_usage?: TaskKnowledgeUsage;
   /** 持续检视明细；原始材料仍按来源留在各自账本。 */
   feedback?: FeedbackRecord[];
+  /** 当前任务的反馈索引不可读；服务端会隔离坏账并从内核恢复。 */
+  feedback_error?: string;
   /** 仓内 Skill 与代码交付使用同一基线。 */
   baseline?: string;
   /** 新任务复用时沿用的交付方式与修复预算。 */

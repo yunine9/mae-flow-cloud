@@ -28,8 +28,9 @@ async function until<T>(probe: () => T | undefined, what: string): Promise<T> {
   }
 }
 
-function repository() {
-  const cwd = mkdtempSync(join(tmpdir(), "mfc-push-confirm-"));
+function repository(target?: string) {
+  const cwd = target ?? mkdtempSync(join(tmpdir(), "mfc-push-confirm-"));
+  mkdirSync(cwd, { recursive: true });
   const git = (...args: string[]) => execFileSync(
     "git", ["-C", cwd, ...args], { encoding: "utf-8" }).trim();
   git("init", "--quiet", "-b", "master");
@@ -88,8 +89,10 @@ async function verifyingTask() {
   const id = service.create("push 前确认演练").id;
   await until(() => service.get(id)?.status === "completed"
     ? true : undefined, "首轮会话收口");
-  const repo = repository();
   const internal = (service as any).tasks.get(id);
+  // 真实部署的仓库位于任务 workspace 下；宿主信任根据此位于任务目录
+  // 外。不要再用脱离任务目录的临时仓绕开生产布局。
+  const repo = repository(join(internal.summary.workspace, "repo-fixture"));
   internal.cwd = repo.cwd;
   internal.summary.status = "verifying";
   // 大多数用例只验证 Cloud 卡片本身，不重复覆盖内核契约；给嵌入式

@@ -221,8 +221,9 @@ test("单仓拆分:分析→撞单号挡下→分单号确认→串行子任务+
 /** 负责面门禁的真仓现场:baseline 一笔,面内一笔,越界一笔。
  * src/filterX 专门用来验前缀按路径段闭合——裸 startsWith 会把它
  * 误认成 src/filter 面内。 */
-function scopedRepository() {
-  const cwd = mkdtempSync(join(tmpdir(), "mfc-scope-gate-"));
+function scopedRepository(target?: string) {
+  const cwd = target ?? mkdtempSync(join(tmpdir(), "mfc-scope-gate-"));
+  mkdirSync(cwd, { recursive: true });
   const git = (...args: string[]) => execFileSync(
     "git", ["-C", cwd, ...args], { encoding: "utf-8", env: GIT_ENV }).trim();
   git("init", "--quiet", "-b", "master");
@@ -271,7 +272,10 @@ async function scopedTask() {
   await until(() => service.get(id)?.status === "completed"
     ? true : undefined, "首轮会话收口", 20_000);
   const internal = (service as any).tasks.get(id);
-  internal.cwd = scopedRepository();
+  // 与生产一致：代码仓必须在任务 workspace 之内，宿主 capability 根
+  // 才能由不可伪造的目录关系确定。
+  internal.cwd = scopedRepository(
+    join(internal.summary.workspace, "scope-repo-fixture"));
   internal.summary.status = "verifying";
   internal.summary.delivery_scope = { name: "过滤实现", paths: ["src/filter/"] };
   (service as any).options.host = {

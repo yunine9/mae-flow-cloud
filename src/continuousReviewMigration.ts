@@ -85,6 +85,16 @@ export function migrateContinuousReviewTask(input: {
   if (!state) return { kind: "none" };
 
   if (input.status === "await_merge" && state.current === "end") {
+    const closeEvents = Array.isArray(state?.delivery_loop?.close_events)
+      ? state.delivery_loop.close_events : [];
+    const mergedClose = closeEvents.some((item: any) =>
+      item?.reason === "merged" && String(item?.sha ?? "").trim());
+    // 新契约可能已完成可信 close，只是进程死在 task.json 投影之前。
+    // 这不是 legacy end，绝不能反向 adopt 回 delivery_watch；recover 会
+    // 用 completion attestation 直接补写 completed。
+    if (state?.execution_contract?.continuous_review === true || mergedClose) {
+      return { kind: "none" };
+    }
     const migrationId = `migrate-watch:${input.taskId}:${lastVerifiedSha(state)}`;
     adoptKernelDeliveryWatch({
       host: input.host,
@@ -126,12 +136,27 @@ export function migrateContinuousReviewTask(input: {
   // .last 作为事故证据原地保留，不删除也不改写。
   atomicRestore(statePath, archived);
   const migrationId = `migrate-accident:${input.taskId}:${sha}`;
-  adoptKernelDeliveryWatch({
-    host: input.host,
-    cwd: input.cwd,
-    workspace: input.workspace,
-    migrationId,
-    taskId: input.taskId,
-  });
+  try {
+    adoptKernelDeliveryWatch({
+      host: input.host,
+      cwd: input.cwd,
+      workspace: input.workspace,
+      migrationId,
+      taskId: input.taskId,
+    });
+  } catch (cause) {
+    // restore 与 adopt 是一个迁移事务。宿主命令可能因签名、状态锁或
+    // 磁盘故障失败；把事故现场原子放回去，下一次 recover 才仍能命中
+    // 同一条迁移，而不是永久留下一个既非旧流程也非新流程的 end。
+    try {
+      atomicRestore(statePath, state);
+    } catch (rollbackCause) {
+      throw new ContinuousReviewMigrationError(
+        `持续检视迁移失败且事故现场回滚失败：${String(rollbackCause)}`,
+        { cause },
+      );
+    }
+    throw cause;
+  }
   return { kind: "restored_accident", migration_id: migrationId };
 }

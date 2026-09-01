@@ -28,6 +28,7 @@ import {
 import { RuntimeSettings } from "../src/settings.ts";
 import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
 import { managedFlowFixture } from "./support/managedFlowFixture.ts";
+import { closeKernelDelivery } from "../src/kernelDelivery.ts";
 
 // bootstrap 会真跑内核(INACTIVE 全放行),所以内核必须真找得到——
 // worktree 里 cwd()/../mae-flow 不存在,手写路径曾让整批用例超时。
@@ -603,6 +604,40 @@ test("进程可死轮询不死:重启 recover 后继续收敛流水线", async (
     platform.finishPipeline(task.delivery!.sha!, "success");
     await until(() =>
       revived.get(task.id)!.status === "await_merge", "重启后轮询收敛");
+  } finally {
+    await platform.stop();
+  }
+});
+
+test("内核 close 成功但 Cloud 完成投影未落盘：重启从可信收据恢复 completed", async () => {
+  const platform = new FakeGitPlatform();
+  platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
+  await platform.start();
+  try {
+    const { task, service, dataDir } = await runTask(platform, true,
+      { pollIntervalMs: 100_000 });
+    assert.equal(task.status, "await_merge");
+    await service.shutdown();
+    const saved = JSON.parse(readFileSync(
+      join(dataDir, task.id, "task.json"), "utf-8"));
+    closeKernelDelivery({
+      host: { kernelRoot: KERNEL_ROOT, python: "python3" },
+      cwd: saved.cwd,
+      workspace: task.workspace,
+      taskId: task.id,
+      sha: task.delivery!.sha!,
+      eventId: `mr-merged:${task.id}:${task.delivery!.sha}`,
+    });
+    assert.equal(JSON.parse(readFileSync(
+      join(dataDir, task.id, "task.json"), "utf-8")).summary.status,
+    "await_merge", "模拟进程死在内核 close 后、Cloud persist 前");
+
+    const revived = buildService(platform, dataDir, {}, { pollIntervalMs: 100 });
+    assert.equal(revived.recover().restored, 1);
+    const recovered = revived.get(task.id)!;
+    assert.equal(recovered.status, "completed", JSON.stringify(recovered));
+    assert.match(recovered.detail ?? "", /可信.*close.*恢复完成/);
+    await revived.shutdown();
   } finally {
     await platform.stop();
   }

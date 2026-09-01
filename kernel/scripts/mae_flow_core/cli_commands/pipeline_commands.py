@@ -10,6 +10,12 @@ import json
 
 from .shared import os, time
 from .wiring import api
+from .host_capability import (
+    host_projection,
+    save_with_host_proof,
+    trusted_projection,
+    verify_host_proof,
+)
 from mae_flow_core.quality.external_verification import (
     PipelineDecision,
     adjudicate_pipeline,
@@ -99,6 +105,24 @@ def cmd_pipeline(flow, st, args):
         return
 
     facts = _read_facts(os.path.abspath(args.file))
+    continuous = continuous_review_enabled(st)
+    proof = None
+    if continuous:
+        if not getattr(args, "host_proof", None):
+            api.die("pipeline record 在 continuous_review 下必须携带 Cloud 宿主凭据", 2)
+        proof = verify_host_proof(
+            st, args.host_proof, "pipeline-record", facts)
+        loop = st.get("delivery_loop") or {}
+        active_id = str(loop.get("active_batch_id") or "")
+        active = next((item for item in loop.get("batches", [])
+                       if isinstance(item, dict)
+                       and str(item.get("batch_id") or "") == active_id), None)
+        if active and active.get("status") == "awaiting_verification":
+            projection = host_projection(
+                st, "feedback-result", {"batch_id": active_id})
+            if projection is None or not trusted_projection(
+                    st, "feedback-result", projection):
+                api.die("pipeline record 拒绝核销未经宿主收据背书的反馈结果", 2)
     head = api.sh("git rev-parse --verify HEAD")
     at = time.strftime("%Y-%m-%d %H:%M:%S")
     required = required_dimensions(st)
@@ -135,8 +159,11 @@ def cmd_pipeline(flow, st, args):
         record = _legacy_record(st, facts, head, at)
         quality["pipeline"] = record
 
-    api.save_state(st)
     _route_external_verification(flow, st, record)
+    if continuous:
+        save_with_host_proof(st, proof)
+    else:
+        api.save_state(st)
     print("[mae-flow] 流水线裁决 %s: %s" % (
         record["verdict"], record["reason"]))
     # Machine-readable final line. Cloud consumes this record and may not

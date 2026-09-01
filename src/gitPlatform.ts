@@ -91,6 +91,8 @@ export class FakeGitPlatform {
   readonly discussions: Discussion[] = [];
   /** 故障注入：指定讨论的接下来 N 次回复返回失败。 */
   readonly discussionReplyFailures = new Map<string, number>();
+  /** 故障注入：讨论列表接下来 N 次返回 503。 */
+  discussionListFailures = 0;
   /** 假平台也兑现幂等键，覆盖“远端成功、本地来不及记账”的重放窗。 */
   private readonly discussionReplyIdempotency = new Set<string>();
   /** 冲突门禁:true=conflict_passed 不过(真件由平台判,假件测试拨)。 */
@@ -254,9 +256,14 @@ export class FakeGitPlatform {
               url.searchParams.get("repo") ?? undefined));
           } else if (request.method === "GET"
               && url.pathname === "/mr/discussions") {
-            reply(200, { discussions: this.discussions
-              .filter((item) => !item.resolved)
-              .map(({ replies: _r, resolved: _s, ...rest }) => rest) });
+            if (this.discussionListFailures > 0) {
+              this.discussionListFailures -= 1;
+              reply(503, { error: "讨论服务暂时不可用" });
+            } else {
+              reply(200, { discussions: this.discussions
+                .filter((item) => !item.resolved)
+                .map(({ replies: _r, resolved: _s, ...rest }) => rest) });
+            }
           } else if (request.method === "POST" && replyMatch) {
             reply(200, this.replyDiscussion(replyMatch[1], body));
           } else if (request.method === "GET"
