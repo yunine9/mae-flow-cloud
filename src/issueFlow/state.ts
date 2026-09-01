@@ -199,7 +199,9 @@ export type IssueGateKind =
   | "analysis_confirm" // 报告确认:放行进入问题修改
   | "conclude"         // 无单结论:是问题→挂起 / 非问题→闭环
   | "env_verify"       // 换库验证:通过→待归档 / 有问题→回退问题分析
-  | "env_needed";      // 网管环境:拉日志/换库缺地址与密码时现场补配(2026-08-28)
+  | "env_needed"       // 网管环境:拉日志/换库缺地址与密码时现场补配(2026-08-28)
+  | "push_confirm";    // 推送前过目(ADR-0009):push_branch 的交付轴硬闸,
+                       // 确认产一次性令牌放行一次推送;不绑阶段(两模式同过)。
 
 /** env_needed 闸的用途面:决策卡据此给表单文案,服务端清闸后提示重试。 */
 export type IssueGateScope = "logs" | "deploy";
@@ -333,6 +335,12 @@ export interface IssueSessionState {
   /** MR 验绿门的申报账(受理路):complete_stage 申报时流水线在跑则
    * 记账停等,监看器全绿后凭它在场放行(见 IssueMrGateRecord)。 */
   mr_gate?: IssueMrGateRecord;
+  /** 一次性推送确认令牌(ADR-0009):push_confirm 闸答「确认推送」时
+   * 写入(带确认时刻与决策留痕),push_branch 成功即消费(删除)——
+   * 下一次推送重新过目,防盲签。随 issue.json 持久化,重启恢复路径
+   * (recover)不清它:已过目的确认不因重启要求重复点。summarize 不上
+   * wire(与 mr_gate 同为流程机制状态,前端镜像没有这个字段)。 */
+  push_token?: { at: string; decision: string };
   /** 本回合已用催办次数(模型提前收嘴的自动续跑)。每个新回合起点清零;
    * 落在状态里是为了重启后不重复催办。 */
   nudges?: number;
@@ -400,8 +408,10 @@ export function issueRepoWorkspaces(
 export function summarize(state: IssueSessionState): IssueSummary {
   // mr_gate 是 MR 验绿门的内部受理账(流程机制状态):不上 wire——
   // 服务端投影多出前端镜像没有的字段会让契约对账当场红;要上前端
-  // 先补 web/src/api.ts 镜像与样例。
-  const { mr_gate: _gate, ...rest } = state;
+  // 先补 web/src/api.ts 镜像与样例。push_token(推送过目的一次性
+  // 令牌)同罪同罚:令牌的效力只在服务端 push_branch 消费口,不是
+  // 前端要渲染的状态。
+  const { mr_gate: _gate, push_token: _pushToken, ...rest } = state;
   return {
     ...rest,
     has_environment: Boolean(state.environment),
@@ -528,6 +538,7 @@ const GATE_NAMES: Record<IssueGateKind, string> = {
   conclude: "结论确认",
   env_verify: "环境验证",
   env_needed: "网管环境配置",
+  push_confirm: "推送确认",
 };
 
 export function raiseGate(

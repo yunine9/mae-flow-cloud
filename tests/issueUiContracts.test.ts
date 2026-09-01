@@ -104,3 +104,25 @@ test("环境保险箱注释与真实 AI 口令契约一致", () => {
   assert.match(issueService, /不出现在会话列表、状态摘要或事件流/);
   assert.doesNotMatch(issueService, /提示词永远只有引用|无消费方,为页面自动化/);
 });
+
+test("推送过目闸(push_confirm):前端闸种镜像与变更摘要渲染兼容", () => {
+  const apiTypes = readFileSync(resolve("web/src/api.ts"), "utf-8");
+  const stageRegistry = readFileSync(
+    resolve("src/issueFlow/stageRegistry.ts"), "utf-8");
+  const issueFlowDoc = readFileSync(resolve("docs/issue-flow.md"), "utf-8");
+  // 前端闸种联合类型要有 push_confirm(镜像不同步=契约对账当场红的教训)。
+  assert.match(apiTypes, /\|\s*"push_confirm"/,
+    "web/src/api.ts 的 IssueGateKind 缺 push_confirm 镜像");
+  // 码表:服务端注册表的选项与推荐(ADR-0004 徽标按 recommended 画)。
+  assert.match(stageRegistry,
+    /push_confirm:\s*\{[\s\S]*?code:\s*"push",\s*label:\s*"确认推送"/);
+  assert.match(stageRegistry,
+    /push_confirm:\s*\{[\s\S]*?recommended:\s*"push"/);
+  // 闸卡:推送过目卡的 context(服务端生成的变更摘要)要走既有
+  // 决策背景块渲染,标签按内容如实叫「变更摘要」。
+  assert.match(decisions, /gate_kind === "push_confirm"\s*\?\s*"变更摘要"/);
+  assert.match(decisions, /issue-decision-context/);
+  assert.match(decisions, /issue-recommended-badge/);
+  // 档案:issue-flow.md 的闸种清单要带上这道闸。
+  assert.match(issueFlowDoc, /push_confirm|推送前过目/);
+});

@@ -3092,7 +3092,10 @@ export type IssueGateKind =
   | "env_verify"
   // 2026-08-28:代码仓缺口不再走平台闸(pull_repo 工具化);
   // 网管环境缺配置(拉日志/换库现场补配)仍由工具现场举。
-  | "env_needed";
+  | "env_needed"
+  // 推送前过目闸(ADR-0009):push_branch 的交付轴硬闸,不绑阶段;
+  // 卡带服务端生成的变更摘要(context 字段),确认产一次性令牌。
+  | "push_confirm";
 
 /** 闸卡选项 = 决策码 + 文案对(服务端 src/issueFlow/stageRegistry.ts
  * 的 GateOption 镜像):渲染 label,提交 code——文案改字零协议后果。 */

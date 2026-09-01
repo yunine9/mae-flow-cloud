@@ -65,6 +65,7 @@ import { issueRegistrationMeta } from "./prompt.ts";
 import {
   currentBranch,
   dirtyWorktree,
+  pushChangeSummary,
   pushFromIssueWorkspace,
   type GitCredential,
 } from "./issueGit.ts";
@@ -89,6 +90,11 @@ export interface IssueToolContext {
    * 上下文);环境未配页面凭据(如 env_needed 闸补配)时为 undefined。 */
   pagePassword?(): string | undefined;
   gitCredential?(): GitCredential | undefined;
+  /** 推送前过目(个人设置的交付轴,ADR-0009,现读现判):开着时
+   * push_branch 没有一次性确认令牌即拒绝并举 push_confirm 闸。回调
+   * 缺席=直推(裸构造兼容缺省,与 moonlight「回调缺席按关闭」同一
+   * 纪律;正式接线在 serve 层的 auth.pushConfirmationEnabled)。 */
+  pushConfirmation?: () => boolean;
   /** 拉仓(2026-08-28 拍板:克隆是 Agent 的工具,不是平台自动动作)。
    * 宿主实现:登记合并 → 带凭据克隆到 repo/<仓名>/ →(有单场景)
    * 尽力建修复分支。回执只含事实,凭据永不进结果。remoteBranch 非空
@@ -573,6 +579,30 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
           + dirty.slice(0, 10).map((line) => `  ${line}`).join("\n")
           + (dirty.length > 10 ? `\n  …共 ${dirty.length} 条` : ""));
       }
+      // 推送前过目闸(ADR-0009,交付轴):现读现判个人设置——关/回调
+      // 缺席=直推(现状不变);开着且没有有效的一次性确认令牌就不碰
+      // git push,举起 push_confirm 闸(卡带服务端现查仓库生成的变更
+      // 摘要,不靠 Agent 自报)并拒收。与阶段门禁(gateStage)正交:
+      // 那道门管"什么阶段能推",这道管"推之前给不给人过目";固定与
+      // 自由两模式同过。拒绝与 raiseEnvNeededGate 同款收口:工具如实
+      // 失败让模型结束回合,waiting_user 由 settle 在回合终点定格。
+      if (ctx.pushConfirmation?.() === true && !state.push_token) {
+        const summary = await pushChangeSummary({
+          repoDir: repo.dir,
+          ...(state.baseline ? { baseline: state.baseline } : {}),
+        });
+        raiseGate(
+          ctx.state,
+          "push_confirm",
+          "推送前过目:以下变更将推送到远端,请过目后确认",
+          undefined,
+          summary,
+        );
+        ctx.persist();
+        fail("已向用户举出推送确认卡(带本次变更摘要),git push 未执行。"
+          + "请结束本回合等待用户过目——确认后平台会通知你重新推送本分支;"
+          + "若用户答「暂不推送」,请按其意见调整后再来征求确认");
+      }
       const receipt = await pushFromIssueWorkspace({
         dataDir: ctx.dataRoot,
         repoDir: repo.dir,
@@ -580,6 +610,10 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         branch,
         credential: ctx.gitCredential?.(),
       });
+      // 令牌一次性(ADR-0009):成功即消费,下次推送重新过目(防盲签
+      // ——变更变了就要再看)。留痕进转移账,盘上不留已消费的令牌。
+      const reviewed = Boolean(state.push_token);
+      delete state.push_token;
       // 按仓记账(一仓一分支):重推同仓覆盖旧账,不同仓各记各的。
       const pushes = state.pushes ??= [];
       const record = {
@@ -590,7 +624,8 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       if (slot >= 0) pushes[slot] = record; else pushes.push(record);
       recordTransition(state, {
         source: "platform",
-        note: `分支已推送 ${repo.url} ${receipt.branch} @ ${receipt.sha.slice(0, 12)}`,
+        note: `分支已推送 ${repo.url} ${receipt.branch} @ ${receipt.sha.slice(0, 12)}`
+          + (reviewed ? "(推送过目令牌已消费)" : ""),
       });
       ctx.persist();
       return ok(`已推送 ${receipt.branch} @ ${receipt.sha.slice(0, 12)}`

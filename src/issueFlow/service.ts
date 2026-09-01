@@ -367,6 +367,13 @@ export interface IssueFlowOptions {
    * non_issue 且自报高置信。env_needed/env_verify 问的是用户事实,
    * 永不代答(ADR-0006)。回调缺席或返回非真=关闭,行为与现状一致。 */
   moonlight?: (account?: string) => boolean | undefined;
+  /** 推送前过目(个人设置「人工介入程度」的交付轴,现读现判):开着时
+   * push_branch 无一次性令牌即被拒并举 push_confirm 闸(带服务端生成
+   * 的变更摘要),用户确认产令牌放行一次推送;月光永不代这张闸——
+   * 过目是用户显式开启的意志,更具体的意志赢(ADR-0009,与需求流
+   * push 前确认同一裁定)。回调缺席或返回非真=直推,行为与现状一致
+   * (裸构造兼容缺省;正式接线在 serve 层的 auth.pushConfirmationEnabled)。 */
+  pushConfirmation?: (account?: string) => boolean | undefined;
   gitCredential?: (account: string) =>
     (GitCredential & { email?: string }) | undefined;
   opsTools?: IssueOpsTools;
@@ -1177,13 +1184,19 @@ export class IssueFlowService {
   /** 月光免审批的闸代答(ADR-0006):只代答"确认类"闸——
    * analysis_confirm 全量(推荐码表定死 confirm);conclude 仅提案
    * non_issue 且自报高置信(闭环无下游闸,分级保守)。env_needed/
-   * env_verify 问的是用户的事实(环境配置/验证结果),永不代答。
+   * env_verify 问的是用户的事实(环境配置/验证结果),永不代答;
+   * push_confirm 是用户显式开启的过目意志,同样永不代答(ADR-0009)。
    * 作答 defer 到回合收口(turning 释放)之后,走 answer() 同一裁决
    * 通道——现场账、通知、续跑与真人作答同款,事后可经现有回退推翻。 */
   private maybeAutoAnswerGate(live: LiveIssue): void {
     const { state } = live;
     const gate = state.gate;
     if (!gate) return;
+    // push_confirm 永不代答(ADR-0009,显式裁定):推送过目是用户显式
+    // 开启的"我要亲自看一眼"——更具体的意志赢过月光的免审批,与需求
+    // 流 push 前确认同一裁定。守卫放在月光判定之前:这条路径连"读
+    // 设置"都不必,过目卡在任何介入档位都只等真人。
+    if (gate.kind === "push_confirm") return;
     if (!this.moonlightOn(live)) return;
     // 检视回合的确认卡永不代答(ADR-0007):用户提了意见、agent 按意见
     // 修订重提,这张卡就是"意见是否被吸收"的复核点——代答放行等于
@@ -1354,6 +1367,10 @@ export class IssueFlowService {
       },
       gitCredential: () =>
         this.options.gitCredential?.(live.state.account),
+      // 推送前过目(交付轴,现读现判):工具执行点读当下设置,用户改
+      // 设置即刻生效(与月光同一纪律)。
+      pushConfirmation: () =>
+        this.options.pushConfirmation?.(live.state.account) === true,
       // 拉仓工具的宿主实现(克隆+登记+建分支,凭据止步宿主)。
       pullRepo: (url: string) => service.pullRepoFor(live, url),
       // 固定流程:MR 建成→对该仓启动流水线监看(多仓各自挂表)。
@@ -1647,6 +1664,31 @@ export class IssueFlowService {
           + `${supplement || `\n用户描述: ${reason}`}\n`
           + "请带着新一轮的现场重新分析(前几轮的修复在分支上,不要推倒重来),"
           + "分析完成后重新 submit_analysis。"));
+      return summarize(state);
+    }
+
+    if (verdict === "grant_push") {
+      // push_confirm 确认(ADR-0009):一次性令牌写入会话状态(带确认
+      // 时刻与决策留痕,随 issue.json 持久化,recover 不清它)。闸已在
+      // 上面落掉、原阶段续跑——Agent 重试 push_branch 即放行,成功后
+      // 令牌被消费,再推重新过目(每次过目,防盲签)。
+      state.push_token = { at: new Date().toISOString(), decision };
+      saveState(live.root, state);
+      this.continueTurn(live,
+        `用户已过目本次变更并确认推送(推送确认)。令牌已生效——请重新调用`
+          + ` push_branch 完成推送(成功后令牌即消费,之后的每次推送都会重新`
+          + `举卡过目)。${supplement}`);
+      return summarize(state);
+    }
+
+    if (verdict === "hold_push") {
+      // 暂不推送(含自由作答):不产令牌,原阶段续跑。决策与意见已在
+      // 上面入账(human_decision 事件+转移账),Agent 能看到用户意见。
+      saveState(live.root, state);
+      this.continueTurn(live,
+        `用户选择暂不推送,本次变更未获放行:${decision}${supplement}\n`
+          + "请不要推送——先按用户意见调整,调整好后再推(届时会重新举"
+          + "推送确认卡过目)。");
       return summarize(state);
     }
 

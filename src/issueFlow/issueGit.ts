@@ -461,3 +461,48 @@ export async function pushFromIssueWorkspace(options: {
     sandbox.cleanup();
   }
 }
+
+/** 推送过目闸的变更摘要(ADR-0009:服务端举闸时生成,不靠 Agent 自报
+ * ——过目不是走过场,人看的是仓里的既成事实)。内容=当前分支相对
+ * 基线的 diff --stat + 最近几条提交题。基线按候选逐个试(登记带的
+ * baseline 优先,再退 master/main);全都不通就退化为提交题列表。
+ * 摘要是给人过目的上下文,不是门禁事实——任何一步取不到都不 fail,
+ * 空摘要的卡照样举:闸的作用是"停下等人",不是"读懂仓库"。 */
+export async function pushChangeSummary(options: {
+  repoDir: string;
+  baseline?: string;
+}): Promise<string> {
+  const view = createSafeGitView(options.repoDir);
+  try {
+    const env = view.environment();
+    const run = (args: string[]) => runGit(["--no-pager", ...args], {
+      cwd: options.repoDir, env, timeoutMs: 10_000,
+    });
+    const log = await run(["log", "--format=%s", "-3"]);
+    const subjects = log.code === 0
+      ? log.stdout.split("\n").map((line) => line.trim()).filter(Boolean)
+      : [];
+    const subjectBlock = subjects.length
+      ? `\n\n最近提交:\n${subjects.map((line) => `- ${line}`).join("\n")}`
+      : "";
+    const candidates = [
+      ...(options.baseline
+        ? [`origin/${options.baseline}`, options.baseline]
+        : []),
+      "origin/master", "master", "origin/main", "main",
+    ];
+    for (const candidate of candidates) {
+      const diff = await run(
+        ["diff", "--stat", "--no-color", `${candidate}...HEAD`]);
+      if (diff.code !== 0) continue;
+      const lines = diff.stdout.trim().split("\n").filter(Boolean);
+      if (!lines.length) break; // 基线通了但无差异:没有 diff 可看,给提交题
+      const stat = lines.slice(0, 40).join("\n")
+        + (lines.length > 40 ? `\n…共 ${lines.length} 行` : "");
+      return `变更摘要(相对 ${candidate}):\n${stat}${subjectBlock}`;
+    }
+    return subjectBlock || "(变更摘要不可得:仓里读不到基线差异与提交历史)";
+  } finally {
+    view.cleanup();
+  }
+}

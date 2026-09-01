@@ -139,6 +139,10 @@ function GenericDecisionCard({ waiting, busy, onAnswer }: {
     answers?: Record<string, string>, notes?: string) => Promise<boolean>;
 }) {
   const questions = waiting.question?.questions ?? [];
+  // 推送过目闸(ADR-0009)的 context 是服务端现查仓库生成的变更摘要,
+  // 标签按内容如实叫「变更摘要」;其余闸沿用「决策背景」。
+  const contextLabel = waiting.gate_kind === "push_confirm"
+    ? "变更摘要" : "决策背景";
   // picked 存决策码(选项的身份是 code,文案只用于显示)。
   const [picked, setPicked] = useState<Record<number, string>>({});
   const [custom, setCustom] = useState<Record<number, string>>({});
@@ -213,7 +217,7 @@ function GenericDecisionCard({ waiting, busy, onAnswer }: {
     </header>
 
     {waiting.context && <div className="issue-decision-context">
-      <div className="context-label">决策背景</div>
+      <div className="context-label">{contextLabel}</div>
       <Markdown text={waiting.context} />
     </div>}
 
