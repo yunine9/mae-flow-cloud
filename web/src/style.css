@@ -8624,6 +8624,30 @@ pre {
   font-size: 18px;
   font-variant-numeric: tabular-nums;
 }
+/* 状态矩阵强调可读性，不沿用通用筛选按钮的半透明禁用态：0 也是
+ * 需要被读到的统计值；有任务的状态直接使用实色，避免浅底叠浅字。 */
+.delivery-breakdown-cells.status-cells {
+  border-color: var(--line-strong);
+  background: var(--surface-muted);
+}
+.delivery-breakdown-cells.status-cells button,
+.delivery-breakdown-cells.status-cells button:disabled {
+  opacity: 1;
+  color: var(--text);
+  border-color: var(--line-strong);
+  background: transparent;
+}
+.delivery-breakdown-cells.status-cells button span { font-weight: 650; }
+.delivery-breakdown-cells.status-cells button strong { color: var(--text-strong); }
+.delivery-breakdown-cells.status-cells button:not(:disabled),
+.delivery-breakdown-cells.status-cells button.selected {
+  color: #fff;
+  background: var(--accent);
+  box-shadow: none;
+}
+.delivery-breakdown-cells.status-cells button:not(:disabled) strong,
+.delivery-breakdown-cells.status-cells button.selected strong { color: #fff; }
+.delivery-breakdown-cells.status-cells button:not(:disabled)::before { display: none; }
 .delivery-breakdown-empty {
   padding: 13px;
   color: var(--muted);

@@ -23,4 +23,10 @@ test("团队任务统计先展示总览公式，再用阶段和状态拆同一�
   assert.match(css,
     /\.delivery-breakdown-cells\.status-cells button\s*\{[^}]*border-radius:\s*0/s);
   assert.match(app, /const TEAM_STATUS_LABEL/);
+  assert.match(css,
+    /\.delivery-breakdown-cells\.status-cells button:disabled\s*\{[^}]*opacity:\s*1/s,
+    "零状态数字也必须清晰可读，不能沿用半透明禁用态");
+  assert.match(css,
+    /\.delivery-breakdown-cells\.status-cells button:not\(:disabled\),[^}]*background:\s*var\(--accent\)/s,
+    "有任务的状态应使用实色强调，不能浅底叠浅字");
 });
