@@ -9,14 +9,19 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
+  getBusinessModules,
   getDeveloperAssistant,
+  getSkillLibrary,
   interruptTask,
   listInterrupts,
   returnDeveloperAssistant,
   startDeveloperAssistant,
   stopDeveloperAssistant,
+  type BusinessModule,
   type DeveloperAssistantView,
+  type HostSkillShelfEntry,
   type InterruptRecord,
+  type SteerReference,
   type TaskSummary,
 } from "./api";
 import { atBottom } from "./follow";
@@ -50,6 +55,9 @@ const ASSISTANT_STATE: Record<DeveloperAssistantView["state"], string> = {
   interrupted: "已中断",
 };
 
+/** 选中的 @ 引用:发送只传结构化标识,label 仅本地展示。 */
+type PickedReference = SteerReference & { key: string; label: string };
+
 function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
@@ -80,6 +88,12 @@ export function SteerBox({
   const [error, setError] = useState("");
   const [sent, setSent] = useState(false);
   const [history, setHistory] = useState<InterruptRecord[]>([]);
+  // @ 知识引用(中途注入,防"开局忘选"):打开选择器才拉数据。
+  const [refs, setRefs] = useState<PickedReference[]>([]);
+  const [refPickerOpen, setRefPickerOpen] = useState(false);
+  const [refFilter, setRefFilter] = useState("");
+  const [refOptions, setRefOptions] = useState<{
+    skills: HostSkillShelfEntry[]; modules: BusinessModule[] }>();
   const [assistant, setAssistant] =
     useState<DeveloperAssistantView>(EMPTY_ASSISTANT);
   const lastAssistantUpdate = useRef("");
@@ -148,18 +162,50 @@ export function SteerBox({
 
   async function sendSteer() {
     const message = steerText.trim();
-    if (!message || steerBusy) return;
+    if ((!message && !refs.length) || steerBusy) return;
     setSteerBusy(true);
     setError("");
-    const result = await interruptTask(task.id, message);
+    const result = await interruptTask(task.id, message, refs);
     setSteerBusy(false);
     if (result.error) {
       setError(result.error);
       return;
     }
     setSteerText("");
+    setRefs([]);
+    setRefPickerOpen(false);
     setSent(true);
     onChangedRef.current?.();
+  }
+
+  function toggleRefPicker() {
+    const open = !refPickerOpen;
+    setRefPickerOpen(open);
+    if (open && !refOptions) {
+      // 两路都 fail-open:拉不到哪路就少哪组,不挡另一组。
+      void Promise.all([
+        getSkillLibrary().catch(() => undefined),
+        getBusinessModules().catch(() => undefined),
+      ]).then(([library, catalog]) => setRefOptions({
+        skills: (library?.skills ?? []).filter((skill) => skill.loadable),
+        modules: (catalog?.modules ?? []).filter((module) =>
+          module.status === "active"
+          && module.assets.some((asset) => asset.status === "published")),
+      }));
+    }
+  }
+
+  function addRef(picked: PickedReference) {
+    setRefs((current) => {
+      if (current.some((item) => item.key === picked.key)) return current;
+      if (current.length >= 4) {
+        setError("一次插话最多引用 4 项知识");
+        return current;
+      }
+      return [...current, picked];
+    });
+    setRefPickerOpen(false);
+    setRefFilter("");
   }
 
   async function sendAssistant() {
@@ -218,6 +264,14 @@ export function SteerBox({
     "completed"].includes(assistant.state)
     || assistant.handoff?.state === "running";
   const canSteer = task.status === "running" && !takeoverActive;
+  // @ 引用比纯文字宽:等人决定/排队时引用也有明确送达路径(决定
+  // continuation / 并入使命),纯文字仍按原契约走决定卡。
+  const canSteerKnowledge = !takeoverActive
+    && ["running", "queued", "waiting_for_human"].includes(task.status);
+  const refDeliveryHint = task.status === "running"
+    ? "本轮工具调用结束后送达"
+    : task.status === "queued" ? "任务启动时并入使命"
+    : "随下一次决定一起送达";
   const steerDisabledReason = canSteer ? undefined
     : takeoverActive ? {
         title: "开发助手正在接管主现场",
@@ -297,7 +351,9 @@ export function SteerBox({
               : "“补充给主任务”只会送给正在运行的主 Agent。"}
           </p>
           <textarea id={`steer-${task.id}`} className="steer-input"
-            value={steerText} disabled={!canSteer || steerBusy}
+            value={steerText}
+            disabled={(!canSteer && !(refs.length > 0 && canSteerKnowledge))
+              || steerBusy}
             placeholder={canSteer
               ? "例如：掩码保留后四位，不要处理区号"
               : steerOnly && task.status === "waiting_for_human"
@@ -315,6 +371,77 @@ export function SteerBox({
                 void sendSteer();
               }
             }} />
+          {canSteerKnowledge && <div className="steer-refs">
+            <div className="steer-refs-row">
+              <button type="button" className="steer-ref-add"
+                aria-expanded={refPickerOpen}
+                onClick={toggleRefPicker}>@ 引用知识</button>
+              {refs.map((item) => (
+                <span key={item.key} className="steer-ref-chip">
+                  {item.label}
+                  <button type="button" aria-label={`移除 ${item.label}`}
+                    onClick={() => setRefs((current) =>
+                      current.filter((ref) => ref.key !== item.key))}>
+                    ×</button>
+                </span>
+              ))}
+              {refs.length > 0
+                && <small className="steer-ref-hint">
+                  正文由服务端按当前版本注入;{refDeliveryHint}</small>}
+            </div>
+            {refPickerOpen && <div className="steer-ref-picker"
+              aria-label="选择要引用的知识">
+              <input type="text" value={refFilter} placeholder="筛选…"
+                onChange={(event) => setRefFilter(event.target.value)} />
+              {!refOptions && <small>读取知识清单…</small>}
+              {refOptions && (() => {
+                const needle = refFilter.trim().toLowerCase();
+                const hit = (text: string) =>
+                  !needle || text.toLowerCase().includes(needle);
+                const skills = refOptions.skills.filter((skill) =>
+                  hit(`${skill.name} ${skill.description}`));
+                const assets = refOptions.modules.flatMap((module) =>
+                  module.assets
+                    .filter((asset) => asset.status === "published"
+                      && hit(`${module.name} ${asset.title} ${asset.summary}`))
+                    .map((asset) => ({ module, asset })));
+                if (!skills.length && !assets.length) {
+                  return <small>没有匹配的知识;团队货架与业务模块里
+                    上架后即可引用。</small>;
+                }
+                return <>
+                  {skills.length > 0 && <div className="steer-ref-group">
+                    <strong>团队 Skill</strong>
+                    {skills.slice(0, 12).map((skill) => {
+                      const directory = skill.path.split("/")[0];
+                      return <button type="button" key={skill.path}
+                        onClick={() => addRef({
+                          kind: "skill", directory,
+                          key: `skill:${directory}`,
+                          label: skill.name })}>
+                        <span>{skill.name}</span>
+                        <small>{skill.description}</small>
+                      </button>;
+                    })}
+                  </div>}
+                  {assets.length > 0 && <div className="steer-ref-group">
+                    <strong>业务知识</strong>
+                    {assets.slice(0, 12).map(({ module, asset }) => (
+                      <button type="button" key={`${module.id}:${asset.id}`}
+                        onClick={() => addRef({
+                          kind: "business",
+                          module_id: module.id, asset_id: asset.id,
+                          key: `business:${module.id}:${asset.id}`,
+                          label: `${module.name}/${asset.title}@v${asset.version}` })}>
+                        <span>{module.name} / {asset.title}@v{asset.version}</span>
+                        <small>{asset.summary}</small>
+                      </button>
+                    ))}
+                  </div>}
+                </>;
+              })()}
+            </div>}
+          </div>}
           {steerDisabledReason && <div className="steer-disabled-reason"
             role="status" aria-live="polite">
             <span aria-hidden>i</span>
@@ -326,7 +453,9 @@ export function SteerBox({
               {sent && !steerText ? "已捎过去，待读取状态会在下方更新" : "⌘/Ctrl + Enter 发送"}
             </span>
             <button type="button" className="steer-send"
-              disabled={steerBusy || !steerText.trim() || !canSteer}
+              disabled={steerBusy
+                || (!steerText.trim() && !refs.length)
+                || (refs.length ? !canSteerKnowledge : !canSteer)}
               onClick={() => void sendSteer()}>
               {steerBusy ? "发送中…" : "发送补充"}
             </button>

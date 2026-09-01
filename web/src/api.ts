@@ -1892,6 +1892,47 @@ export async function uploadSkill(
 }
 
 /** 开发者提交待审:与上架同一道验收闸,通过后进待审区等管理员裁决。 */
+export interface SkillExtractionJob {
+  id: string;
+  status: "running" | "done" | "failed";
+  repo: string;
+  intent: string;
+  path_hint?: string;
+  operator: string;
+  started_at: string;
+  finished_at?: string;
+  draft?: string;
+  notes?: string;
+  error?: string;
+}
+
+/** 定向知识提取:从参考仓起草 SKILL.md。起草是异步的,拿 id 轮询。 */
+export async function startSkillExtraction(input: {
+  repo: string;
+  intent: string;
+  pathHint?: string;
+}): Promise<SkillExtractionJob> {
+  const response = await fetch("/knowledge/skill-extract", {
+    method: "POST",
+    body: JSON.stringify({
+      repo: input.repo,
+      intent: input.intent,
+      ...(input.pathHint ? { path_hint: input.pathHint } : {}),
+    }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function getSkillExtraction(
+  id: string,
+): Promise<SkillExtractionJob> {
+  const response = await fetch(
+    `/knowledge/skill-extract/${encodeURIComponent(id)}`);
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
 export async function submitSkill(
   directory: string,
   files: SkillUploadFile[],
@@ -2330,14 +2371,34 @@ export async function deleteHistoryTask(
 /** 跑动中插话:发送即打断,模型把手头这一轮做完就收到。
  * 服务端拒绝的理由(正等你决定 / 没有在跑的会话)原样带回,前端不改写
  * ——它比我们更清楚这一单此刻处在什么状态。 */
+/** 插话里的 @ 知识引用:只传结构化标识,正文由服务端解析并在发送时
+ * 固定版本(客户端拼正文会绕过注入预算与足迹)。 */
+export interface SteerReference {
+  kind: "skill" | "business";
+  directory?: string;
+  module_id?: string;
+  asset_id?: string;
+}
+
 export async function interruptTask(
   taskId: string,
   text: string,
+  references?: SteerReference[],
 ): Promise<{ error?: string }> {
   const response = await fetch(`/tasks/${taskId}/interrupt`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({
+      text,
+      ...(references?.length
+        ? { references: references.map((item) => ({
+            kind: item.kind,
+            directory: item.directory,
+            module_id: item.module_id,
+            asset_id: item.asset_id,
+          })) }
+        : {}),
+    }),
   });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
