@@ -63,7 +63,6 @@ type LaunchPreferences = {
   recentRepos: string[];
   baseline?: string;
   lane?: string;
-  repairRounds?: string;
 };
 
 type RequirementBundleDraft = {
@@ -246,8 +245,12 @@ export function LaunchWorkspace({
   // 都来自内核,空串=等 options 到了再取第一项。
   const [lane, setLane] = useState(
     validDraft?.lane ?? savedPreferences?.lane ?? "");
+  // 修复轮数是“关闭自动修复”级别的任务手刹，不能像仓库/基线一样
+  // 跨任务记忆。旧实现把一次填写的 0 存成长期偏好，下一单即使没有
+  // 打开折叠区也会静默提交 repair_rounds=0；跨仓拆单还会把它复制给
+  // 每个子任务。只恢复当前未提交草稿，成功下单后下一单重新留空。
   const [repairRounds, setRepairRounds] = useState(
-    validDraft?.repairRounds ?? savedPreferences?.repairRounds ?? "");
+    validDraft?.repairRounds ?? "");
   const [taskInstructions, setTaskInstructions] = useState(
     validDraft?.taskInstructions ?? "");
   // 单仓大需求先分析拆分(docs/delivery-unit-split-design.md):默认不勾,
@@ -270,7 +273,8 @@ export function LaunchWorkspace({
   const [workflowSelectionNotice, setWorkflowSelectionNotice] = useState("");
   const [advancedOpen, setAdvancedOpen] = useState(() => Boolean(
     validDraft?.workflowSelection
-    || validDraft?.taskInstructions?.trim(),
+    || validDraft?.taskInstructions?.trim()
+    || validDraft?.repairRounds?.trim(),
   ));
   const [knowledgePreview, setKnowledgePreview] =
     useState<LaunchKnowledgePreview>();
@@ -787,7 +791,6 @@ export function LaunchWorkspace({
             recentRepos,
             baseline: baseline.trim(),
             lane: lane || options?.workflows[0]?.label,
-            repairRounds,
           } satisfies LaunchPreferences));
         localStorage.removeItem(storageKey("draft", session.username));
       } catch {
@@ -1301,7 +1304,9 @@ export function LaunchWorkspace({
                         : <b>无平台知识</b>}
                     {knowledgePreview?.degraded && <b className="attention">{
                       knowledgePreview.complete ? "知识已降级" : "知识需处理"}</b>}
-                    {repairRounds && <b>{repairRounds} 轮修复</b>}
+                    {repairRounds && <b className={repairRounds === "0"
+                      ? "attention" : undefined}>{repairRounds === "0"
+                        ? "自动修复已关闭" : `${repairRounds} 轮修复`}</b>}
                     {repositoryTechnologies.some((item) => !item.confirmed)
                       && <b className="attention">技术栈待确认</b>}
                   </span>
@@ -1327,13 +1332,20 @@ export function LaunchWorkspace({
                     <div className="launch-field-grid launch-settings-grid">
                       <label className="account-field repair-field">
                         <span>修复轮预算</span>
-                        <input type="number" inputMode="numeric" min={0} step={1}
+                        <input type="text" inputMode="numeric" pattern="[0-9]*"
                           value={repairRounds}
-                          onChange={(event) => setRepairRounds(event.target.value)}
+                          onChange={(event) => {
+                            const value = event.target.value.trim();
+                            if (/^\d*$/.test(value)) setRepairRounds(value);
+                          }}
                           placeholder={options.repair_rounds !== undefined
-                            ? `团队默认 ${options.repair_rounds}（0=关闭）`
-                            : "团队默认不限轮（0=关闭）"} />
-                        <small>留空沿用团队设置。</small>
+                            ? `留空=团队默认 ${options.repair_rounds} 轮；填 0=关闭`
+                            : "留空=不限轮（自动修复开启）；填 0=关闭"} />
+                        <small className={repairRounds === "0" ? "field-warning" : undefined}>
+                          {repairRounds === "0"
+                            ? "本任务已关闭自动修复；检视、冲突或流水线失败将等人处理。"
+                            : "留空沿用团队设置；只有明确要关闭自动修复时才填 0。"}
+                        </small>
                       </label>
                       {!workflowSelection && <label className="account-field task-instructions-field">
                         <span>给标准方案的补充提醒</span>

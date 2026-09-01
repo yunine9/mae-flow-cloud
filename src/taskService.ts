@@ -5454,6 +5454,123 @@ export class TaskService {
       host_skill_snapshot_warnings: hostSkillSnapshotWarnings.length
         ? hostSkillSnapshotWarnings : undefined,
     };
+    const runtimeRepairRounds =
+      this.options.settings?.runtime().repair_rounds;
+    const deploymentRepairRounds = this.options.delivery?.repairRounds;
+    const effectiveRepairRounds = options.repairRounds
+      ?? runtimeRepairRounds ?? deploymentRepairRounds;
+    const creationOrigin = options.parentTaskId
+      ? "cross_repository_child"
+      : options.reuseTaskId ? "rerun_from_start" : "user_request";
+    const repairRoundSource = options.repairRounds !== undefined
+      ? options.parentTaskId ? "parent_task"
+        : options.reuseTaskId ? "rerun_snapshot" : "task_request"
+      : runtimeRepairRounds !== undefined ? "runtime_setting"
+        : deploymentRepairRounds !== undefined ? "deployment"
+          : "unlimited_default";
+    // 下单审计记录“输入事实 + 最终采用值 + 来源”，尤其不能只留一个
+    // repair_rounds=0 让事后的人猜究竟是用户本单填写、团队设置，还是
+    // 跨仓父任务传下来的。需求和执行补充的全文已经在 task.json/定格
+    // profile 中，只在公共日志写长度与指纹，避免大段业务内容刷日志。
+    const creationAudit = {
+      schema: "mae-flow-task-creation-audit/1",
+      event: "task_created",
+      recorded_at: summary.created_at,
+      task_id: id,
+      origin: creationOrigin,
+      parent_task_id: options.parentTaskId ?? null,
+      task_record: "task.json",
+      request: {
+        title: explicitTitle ?? null,
+        account: options.account?.trim() || null,
+        requirement: {
+          bytes: Buffer.byteLength(requirement, "utf-8"),
+          sha256: createHash("sha256").update(requirement).digest("hex"),
+          document_name: requirementDocument?.name ?? null,
+          bundle_name: requirementDocument?.bundle_name ?? null,
+          asset_count: requirementDocument?.assets?.length ?? 0,
+        },
+        repositories: repositories.map((repository) => ({
+          url: repository,
+          ticket: repositoryTickets.get(repository) ?? null,
+          assignee: repositoryAssignees.get(repository) ?? null,
+        })),
+        lane: requestedLane ?? null,
+        ticket: legacyTicket ?? null,
+        baseline: options.baseline?.trim() || null,
+        model: options.model ?? null,
+        repair_rounds: {
+          provided: options.repairRounds !== undefined,
+          value: options.repairRounds ?? null,
+        },
+        requirement_analysis: options.requirementAnalysis === true,
+        task_instructions: taskInstructions ? {
+          bytes: Buffer.byteLength(taskInstructions, "utf-8"),
+          sha256: createHash("sha256").update(taskInstructions).digest("hex"),
+        } : null,
+        knowledge_preview_digest: options.knowledgePreviewDigest ?? null,
+        selected_business_module_ids:
+          options.selectedBusinessModuleIds ?? null,
+        selected_engineering_knowledge_ids:
+          options.selectedEngineeringKnowledgeIds ?? null,
+        selected_repository_skill_ids:
+          options.selectedRepositorySkillIds ?? null,
+        selected_team_skill_paths: options.selectedHostSkillPaths ?? null,
+        workflow_source: options.workflowSource ?? null,
+      },
+      effective: {
+        title: summary.title,
+        account: summary.luban_account ?? null,
+        repositories: summary.repositories ?? [],
+        lane: summary.lane ?? null,
+        ticket: summary.ticket ?? null,
+        baseline: summary.baseline ?? null,
+        model: summary.model_choice ?? this.activeModelChoice() ?? null,
+        repair_rounds: {
+          value: effectiveRepairRounds ?? null,
+          source: repairRoundSource,
+          disabled: effectiveRepairRounds === 0,
+          unlimited: effectiveRepairRounds === undefined,
+        },
+        requirement_graph_stage: summary.requirement_graph?.stage ?? null,
+        workflow: workflowProfile ? {
+          source: workflowProfile.source,
+          revision: workflowProfile.revision,
+          diagnostics: workflowProfile.diagnostics.map((item) => item.code),
+          warning: workflowProfileWarning ?? null,
+        } : { source: { kind: "platform", id: "default" },
+          revision: null, diagnostics: [], warning: workflowProfileWarning ?? null },
+        repository_profiles: (summary.repository_profiles ?? []).map((profile) => ({
+          repository: profile.repository,
+          technologies: profile.technologies,
+          confirmed: profile.confirmed,
+        })),
+        repository_skills: (repositorySkills ?? []).map((skill) => ({
+          id: skill.id,
+          repository: skill.repository,
+          revision: skill.revision,
+          path: skill.relative_path,
+          digest: skill.digest,
+        })),
+        team_skills: teamSkills.map((skill) => ({
+          name: skill.name,
+          path: skill.source_path ?? skill.path,
+          nature: skill.nature,
+          digest: skill.digest,
+          package_digest: skill.package_digest,
+        })),
+        business_modules: businessModules.map((module) => ({
+          id: module.id,
+          revision: module.revision,
+          assets: module.assets.map((asset) => ({
+            id: asset.id, version: asset.version, digest: asset.digest,
+          })),
+        })),
+        engineering_knowledge: engineeringKnowledge.map((item) => ({
+          id: item.id, digest: item.digest,
+        })),
+      },
+    };
     const task: TaskState = {
       summary,
       tokenUsage: emptyTokenUsageState(),
@@ -5464,6 +5581,7 @@ export class TaskService {
     this.tasks.set(id, task);
     try {
       this.persist(task);
+      this.recordTaskCreationAudit(task, creationAudit);
     } catch (error) {
       // 任务事实落不了盘就不能留下半个现场:没有 task.json 的工作区
       // 谁也回收不了。这里必须走 removeTaskTree——知识与 Skill 快照
@@ -5478,6 +5596,44 @@ export class TaskService {
       this.bypass(undefined, "任务泵", this.pump());
     }
     return { ...summary };
+  }
+
+  /** 下单审计是诊断旁路：任务主账已经由 task.json 原子落袋，审计文件
+   * 写失败不能把一张已创建任务回滚掉；但服务日志必须明确报出缺口。
+   * 文件采用原子替换，避免进程中断留下半截 JSON 冒充完整记录。 */
+  private recordTaskCreationAudit(
+    task: TaskState,
+    audit: Record<string, unknown>,
+  ): void {
+    const path = join(task.summary.workspace, "creation-audit.json");
+    const temporary = `${path}.tmp`;
+    let persisted = false;
+    let writeError: string | undefined;
+    try {
+      writeFileSync(temporary, JSON.stringify(audit, null, 2), {
+        encoding: "utf-8",
+        mode: 0o600,
+      });
+      chmodSync(temporary, 0o600);
+      renameSync(temporary, path);
+      persisted = true;
+    } catch (error) {
+      writeError = String(error);
+      try { rmSync(temporary, { force: true }); } catch { /* 旁路清理尽力而为 */ }
+    }
+    try {
+      this.options.log?.(`[task-create] ${JSON.stringify({
+        ...audit,
+        audit_file: persisted ? path : null,
+        audit_write_error: writeError ?? null,
+      })}`);
+      if (writeError) {
+        this.options.log?.(
+          `任务 ${task.summary.id} 下单审计文件落盘失败(任务主账已保存): ${writeError}`);
+      }
+    } catch {
+      // 日志接收器是旁路，不能因为接收器自身异常破坏已创建任务。
+    }
   }
 
   private allocateTaskId(): string {

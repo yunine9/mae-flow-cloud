@@ -1149,6 +1149,11 @@ svg {
   margin-top: 6px; display: block; color: var(--muted);
   font-size: var(--font-size-assist); line-height: 1.45;
 }
+.launch-settings-grid .repair-field > small.field-warning {
+  padding: 7px 9px; color: var(--danger); border: 1px solid
+    color-mix(in srgb, var(--danger) 28%, var(--line));
+  border-radius: 8px; background: var(--danger-soft); font-weight: 700;
+}
 .task-instructions-field {
   position: relative; grid-column: 1 / -1; padding: 12px 14px;
   border: 1px solid var(--line); border-radius: 10px;
