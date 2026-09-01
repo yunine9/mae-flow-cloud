@@ -18,15 +18,15 @@ test("团队任务统计先展示总览公式，再用阶段和状态拆同一�
   assert.match(css, /\.team-delivery-equation\s*\{/);
   assert.match(css, /\.team-delivery-breakdown\s*\{/);
   assert.match(css,
-    /\.delivery-breakdown-cells\.status-cells\s*\{[^}]*display:\s*grid[^}]*repeat\(3,/s,
-    "状态项应收进连续的 3×3 矩阵，不能堆成随意排列的白卡");
+    /\.delivery-breakdown-cells\s*\{[^}]*display:\s*grid[^}]*repeat\(3,/s,
+    "阶段和状态应共用连续的三列矩阵，不能堆成随意排列的白卡");
   assert.match(css,
-    /\.delivery-breakdown-cells\.status-cells button\s*\{[^}]*border-radius:\s*0/s);
+    /\.delivery-breakdown-cells button\s*\{[^}]*border-radius:\s*0/s);
   assert.match(app, /const TEAM_STATUS_LABEL/);
   assert.match(css,
-    /\.delivery-breakdown-cells\.status-cells button:disabled\s*\{[^}]*opacity:\s*1/s,
+    /\.delivery-breakdown-cells button:disabled\s*\{[^}]*opacity:\s*1/s,
     "零状态数字也必须清晰可读，不能沿用半透明禁用态");
   assert.match(css,
-    /\.delivery-breakdown-cells\.status-cells button:not\(:disabled\),[^}]*background:\s*var\(--accent\)/s,
+    /\.delivery-breakdown-cells button:not\(:disabled\),[^}]*background:\s*var\(--accent\)/s,
     "有任务的状态应使用实色强调，不能浅底叠浅字");
 });

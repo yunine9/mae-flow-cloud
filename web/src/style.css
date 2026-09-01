@@ -8546,108 +8546,60 @@ pre {
 .delivery-breakdown-cells {
   min-width: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
-  gap: 7px;
-}
-.delivery-breakdown-cells.status-cells {
-  display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0;
   overflow: hidden;
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-strong);
   border-radius: 10px;
-  background: var(--surface-soft);
+  background: var(--surface-muted);
 }
-.delivery-breakdown-cells.status-cells button {
+.delivery-breakdown-cells button {
   width: 100%;
   min-width: 0;
   max-width: none;
   min-height: 44px;
   padding: 8px 12px;
-  border: 0;
-  border-right: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
-  border-radius: 0;
-  background: transparent;
-}
-.delivery-breakdown-cells.status-cells button:nth-child(3n) { border-right: 0; }
-.delivery-breakdown-cells.status-cells button:nth-last-child(-n + 3) { border-bottom: 0; }
-.delivery-breakdown-cells.status-cells button:not(:disabled) {
-  color: var(--text);
-  background: color-mix(in srgb, var(--accent-soft) 28%, var(--surface));
-}
-.delivery-breakdown-cells.status-cells button:not(:disabled)::before {
-  width: 6px;
-  height: 6px;
-  flex: none;
-  content: "";
-  border-radius: 50%;
-  background: var(--active);
-}
-.delivery-breakdown-cells.status-cells button.selected {
-  color: var(--accent);
-  background: var(--accent-soft);
-  box-shadow: inset 3px 0 var(--accent);
-}
-.delivery-breakdown-cells button {
-  min-width: 0;
-  min-height: 48px;
-  padding: 8px 10px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  color: var(--muted);
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  background: var(--surface);
+  opacity: 1;
+  color: var(--text);
+  border: 0;
+  border-right: 1px solid var(--line-strong);
+  border-bottom: 1px solid var(--line-strong);
+  border-radius: 0;
+  background: transparent;
   text-align: left;
   font: inherit;
   cursor: pointer;
 }
-.delivery-breakdown-cells button:hover:not(:disabled) { border-color: var(--line-strong); }
-.delivery-breakdown-cells button:disabled { opacity: .45; cursor: default; }
+.delivery-breakdown-cells button:nth-child(3n) { border-right: 0; }
+.delivery-breakdown-cells button:nth-last-child(-n + 3) { border-bottom: 0; }
+.delivery-breakdown-cells button:disabled { opacity: 1; cursor: default; }
+.delivery-breakdown-cells button:not(:disabled),
 .delivery-breakdown-cells button.selected {
-  color: var(--accent);
-  border-color: var(--accent);
-  background: var(--accent-soft);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 10%, transparent);
+  color: #fff;
+  background: var(--accent);
+  box-shadow: none;
+}
+.delivery-breakdown-cells button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 88%, #000);
 }
 .delivery-breakdown-cells button span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: var(--font-size-assist);
+  font-weight: 650;
 }
 .delivery-breakdown-cells button strong {
   color: var(--text-strong);
   font-size: 18px;
   font-variant-numeric: tabular-nums;
 }
-/* 状态矩阵强调可读性，不沿用通用筛选按钮的半透明禁用态：0 也是
- * 需要被读到的统计值；有任务的状态直接使用实色，避免浅底叠浅字。 */
-.delivery-breakdown-cells.status-cells {
-  border-color: var(--line-strong);
-  background: var(--surface-muted);
-}
-.delivery-breakdown-cells.status-cells button,
-.delivery-breakdown-cells.status-cells button:disabled {
-  opacity: 1;
-  color: var(--text);
-  border-color: var(--line-strong);
-  background: transparent;
-}
-.delivery-breakdown-cells.status-cells button span { font-weight: 650; }
-.delivery-breakdown-cells.status-cells button strong { color: var(--text-strong); }
-.delivery-breakdown-cells.status-cells button:not(:disabled),
-.delivery-breakdown-cells.status-cells button.selected {
-  color: #fff;
-  background: var(--accent);
-  box-shadow: none;
-}
-.delivery-breakdown-cells.status-cells button:not(:disabled) strong,
-.delivery-breakdown-cells.status-cells button.selected strong { color: #fff; }
-.delivery-breakdown-cells.status-cells button:not(:disabled)::before { display: none; }
+.delivery-breakdown-cells button:not(:disabled) strong,
+.delivery-breakdown-cells button.selected strong { color: #fff; }
 .delivery-breakdown-empty {
   padding: 13px;
   color: var(--muted);
