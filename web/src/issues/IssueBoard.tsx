@@ -30,8 +30,9 @@ import { IssueEventsPane } from "./EventsPane";
 export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "" }: {
   viewer: AuthUser;
   onNavigateProfile?: () => void;
-  /** 深链 /issues/:id 带进来的会话(小鲁班通知点开即达):只作 openId
-   * 的初值,之后的返回列表/点开别的会话照旧走组件内部 state,URL 不跟。 */
+  /** 深链 /issues/:id 带进来的会话(小鲁班通知点开即达):作 openId 初值,
+   * 浏览器后退/前进时也同步过来。点开/返回列表会 pushState/replaceState,
+   * 让 URL 跟着会话走——与任务侧 /work/:id 同款分享语义。 */
   initialOpenId?: string;
 }) {
   const [issues, setIssues] = useState<IssueSummary[]>([]);
@@ -76,15 +77,45 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "" }: {
     void getIssue(openId).then(setDetail).catch(() => undefined);
   }, 10000, document), [openId]);
 
+  // 浏览器后退/前进时同步 URL → openId(与任务侧 popstate 同步同款)。
+  // pushState 不触发 popstate,只有用户手动后退/前进才走这里,不会反馈循环。
+  useEffect(() => {
+    const sync = () => {
+      const match = location.pathname.match(/^\/issues\/([^/]+)\/?$/);
+      const next = match ? decodeURIComponent(match[1]) : "";
+      setOpenId((current) => current === next ? current : next);
+    };
+    addEventListener("popstate", sync);
+    return () => removeEventListener("popstate", sync);
+  }, []);
+
+  /** 打开会话:设 state + pushState(URL 可分享,后退能回列表)。 */
+  const openIssue = (id: string) => {
+    setOpenId(id);
+    const next = `/issues/${encodeURIComponent(id)}`;
+    if (location.pathname !== next) {
+      history.pushState({}, "", next);
+    }
+  };
+
+  /** 返回列表:清 state + replaceState(不在历史里留空壳)。 */
+  const backToList = () => {
+    setOpenId("");
+    setDetail(undefined);
+    if (location.pathname !== "/") {
+      history.replaceState({}, "", "/");
+    }
+  };
+
   if (openId && detail) {
     return <IssueSessionView
       detail={detail}
-      onBack={() => { setOpenId(""); setDetail(undefined); }}
+      onBack={backToList}
       onChanged={(next) => setDetail(next)}
       onListRefresh={refreshList}
       onError={setError}
       onNavigateProfile={onNavigateProfile}
-      onOpenIssue={(id) => setOpenId(id)}
+      onOpenIssue={openIssue}
     />;
   }
 
@@ -102,7 +133,7 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "" }: {
       issues={issues}
       onCreated={(created) => {
         refreshList();
-        setOpenId(created.id);
+        openIssue(created.id);
       }}
       onError={setError}
       onNavigateProfile={onNavigateProfile}
@@ -133,7 +164,7 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "" }: {
               key={issue.id}
               issue={issue}
               active={openId === issue.id}
-              onOpen={() => { setOpenId(issue.id); }}
+              onOpen={() => { openIssue(issue.id); }}
             />)}
           </div>}
     </section>

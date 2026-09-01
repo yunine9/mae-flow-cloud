@@ -78,6 +78,11 @@ import {
 } from "./documents.ts";
 import type { DtsGateway } from "./gateways.ts";
 import { isTerminal } from "./state.ts";
+import {
+  ISSUE_IMAGE_MAX_BYTES,
+  readStagedImage,
+  stageIssueImage,
+} from "./issueImages.ts";
 import { listBusinessModules } from "../businessModuleLibrary.ts";
 
 export interface IssueViewer {
@@ -128,6 +133,28 @@ function readBody(request: IncomingMessage): Promise<any> {
         reject(new Error(`JSON 解析失败: ${String(error)}`));
       }
     });
+    request.on("error", reject);
+  });
+}
+
+/** 读原始二进制请求体(图片上传用),上限可配。 */
+function readRawBody(
+  request: IncomingMessage,
+  maxBytes: number,
+): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    request.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > maxBytes) {
+        reject(new Error(`请求体超过 ${Math.round(maxBytes / 1024 / 1024)}MiB`));
+        request.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    request.on("end", () => resolve(Buffer.concat(chunks)));
     request.on("error", reject);
   });
 }
@@ -294,8 +321,13 @@ export async function handleIssueRoutes(
 
   try {
     if (method === "GET" && parts.length === 1) {
+      // ?scope=all:团队看板视角看所有人的问题会话(列表只读,详情仍按
+      // 归属校验);缺省只看本人——"我的问题" tab 的既有行为不变。
+      const scopeAll = new URL(request.url ?? "", "http://x")
+        .searchParams.get("scope") === "all";
       const mine = issueFlow.list(
-        viewer && viewer.role !== "admin" ? viewer.username : undefined);
+        viewer && viewer.role !== "admin" && !scopeAll
+          ? viewer.username : undefined);
       return done(200, { issues: mine });
     }
 
@@ -440,6 +472,46 @@ export async function handleIssueRoutes(
       });
       response.end(file.data);
       return true;
+    }
+
+    // 登记现象描述内嵌截图上传(POST /issues/issue-image,raw binary):
+    // 粘贴/拖拽的图片落 staging(content-addressed),返回工作区相对路径
+    // 引用(issue-images/<hash>.<ext>)——前端把它插入 description。
+    // 管理员不发起问题会话,同 POST /issues 的角色边界。
+    if (parts[1] === "issue-image" && parts.length === 2) {
+      if (viewer?.role === "admin") {
+        return done(403, { error: "管理员不发起问题会话" });
+      }
+      const dataDir = routeOptions.issueFlow?.dataDir ?? "";
+      if (!dataDir) return done(500, { error: "数据目录未配置" });
+      if (method === "POST") {
+        const data = await readRawBody(request, ISSUE_IMAGE_MAX_BYTES);
+        const contentType = String(request.headers["content-type"] ?? "");
+        try {
+          const result = stageIssueImage({ data, contentType, dataDir });
+          return done(201, { path: result.path, bytes: result.bytes });
+        } catch (error) {
+          return done(400, {
+            error: String(error instanceof Error ? error.message : error),
+          });
+        }
+      }
+      if (method === "GET") {
+        const path = String(
+          new URL(request.url ?? "", "http://x").searchParams.get("path") ?? "");
+        if (!path) return done(400, { error: "缺少 path 参数" });
+        const image = readStagedImage({ path, dataDir });
+        if (!image) return done(404, { error: "图片不存在或路径非法" });
+        response.writeHead(200, {
+          "content-type": image.mime_type,
+          "content-length": image.data.length,
+          "content-disposition": "inline",
+          "x-content-type-options": "nosniff",
+          "cache-control": "private, max-age=86400",
+        });
+        response.end(image.data);
+        return true;
+      }
     }
 
     const id = parts[1];

@@ -25,6 +25,7 @@ import { createSafeGitView } from "../safeGit.ts";
 export interface GitCredential {
   username: string;
   password: string;
+  email?: string;
 }
 
 interface RunOutcome {
@@ -213,6 +214,21 @@ export async function cloneRepository(options: {
       throw new Error(cloneFailureMessage(options.credential, outcome.stderr));
     }
     await hardenCloneAsync(options.targetDir);
+    // 署名(与 taskService 正式 clone 同款):repo 级 config 写入,
+    // 容器内同路径可读——AI 在容器里 git commit 不再 "Author identity
+    // unknown"。用户名缺省用凭据名,邮箱缺省按用户名兜底(与
+    // taskService L12851-12854 同口径)。
+    if (options.credential && existsSync(join(options.targetDir, ".git"))) {
+      const name = options.credential.username;
+      const email = options.credential.email
+        ?? `${name.replace(/[^a-zA-Z0-9_.+-]/g, "-")}@localhost`;
+      const configArgs = (...args: string[]) =>
+        ["config", "--file", join(options.targetDir, ".git", "config"), ...args];
+      await runGit(configArgs("--replace-all", "user.name", name),
+        { env: sandbox.env, timeoutMs: 10_000 });
+      await runGit(configArgs("--replace-all", "user.email", email),
+        { env: sandbox.env, timeoutMs: 10_000 });
+    }
   } finally {
     sandbox.cleanup();
   }

@@ -19,8 +19,11 @@ const materials = readFileSync(
   resolve("web/src/issues/MaterialsPane.tsx"), "utf-8");
 
 test("混合问题卡必须逐题完整作答", () => {
+  // 手动输入选项:选了它后要求填了自定义文本才算答完(不再强制选给定选项)。
   assert.match(decisions,
-    /return questions\.length > 0 && questions\.every\(\(item, index\) =>[\s\S]*item\.options\.length > 0 \? !!picked\[index\] : !!custom\[index\]\?\.trim\(\)\)/);
+    /return questions\.length > 0 && questions\.every\(\(item, index\) => \{/);
+  assert.match(decisions,
+    /if \(pick === MANUAL_CODE\) return !!custom\[index\]\?\.trim\(\)/);
   assert.match(decisions,
     /const ready = areIssueQuestionsComplete\(questions, picked, custom\)/);
   assert.doesNotMatch(decisions, /optionsAllPicked\s*\|\|\s*freeAnswered/);

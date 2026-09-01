@@ -4,13 +4,14 @@
  */
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import {
-  createUser, deleteUser, getKnowledgeInsights, getLaunchOptions, getSession, getTask, listMyReviews, listTasks, listUsers,
+  createUser, deleteUser, getBuildInfo, getKnowledgeInsights, getLaunchOptions, getSession, getTask, listAllIssues, listMyReviews, listTasks, listUsers,
   login, logout, putCommitter, putUserDisplayName, resetUserPassword,
-  STATUS_TEXT, type AuthUser, type TaskStatus, type TaskSummary,
+  type AuthUser, type IssueSummary, type TaskStatus, type TaskSummary,
   type ReviewRequest, type TeamKnowledgeInsights, type UserRole,
 } from "./api";
 import { ConfirmDialogHost, confirmDialog } from "./ConfirmDialog";
 import { TaskCard } from "./TaskCard";
+import { TeamIssueCard } from "./issues/TeamIssueCard";
 import { HistoryBoard } from "./HistoryBoard";
 import { LaunchWorkspace } from "./LaunchWorkspace";
 import { TaskWorkspace } from "./TaskWorkspace";
@@ -28,11 +29,14 @@ import {
   byTeamAttention,
   isBlocked,
   isCurrentTeamTask,
+  issueToTeamTask,
   matchesTeamScope,
   responsibleOf,
   teamDeliveryBreakdown,
+  teamDeliveryStatusGroup,
   type TeamDeliveryBreakdown,
   type TeamScope,
+  type TeamTask,
 } from "./teamOps";
 import { formatLocalDateTime } from "./time";
 import { taskSyncCopy, type TaskSyncState } from "./taskSync";
@@ -549,10 +553,12 @@ export function App() {
   const [density, setDensity] = useState<Density>(() =>
     document.documentElement.dataset.density === "compact" ? "compact" : "comfortable");
   const [session, setSession] = useState<AuthUser | null>();
+  const [buildHash, setBuildHash] = useState<string | null>(null);
   const [view, setView] = useState<View>("team");
   const [mineScope, setMineScope] = useState<MineScope>("all");
   const [teamTaskTab, setTeamTaskTab] = useState<TeamTaskTab>("current");
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
+  const [teamIssues, setTeamIssues] = useState<IssueSummary[]>([]);
   const [teamUsers, setTeamUsers] = useState<AuthUser[]>([]);
   const [knowledgeInsights, setKnowledgeInsights] = useState<TeamKnowledgeInsights>();
   const [knowledgeInsightsLoading, setKnowledgeInsightsLoading] = useState(false);
@@ -647,6 +653,10 @@ export function App() {
     }).catch(() => setSession(null));
   }, []);
 
+  useEffect(() => {
+    getBuildInfo().then((info) => setBuildHash(info.build_hash)).catch(() => {});
+  }, []);
+
   function refreshLaunchGate(showChecking = true): Promise<void> {
     const account = session;
     if (!account || account.role === "admin") return Promise.resolve();
@@ -688,9 +698,12 @@ export function App() {
       : current);
     const running = (async () => {
       try {
-        const [nextTasks, reviews] = await Promise.all([listTasks(), listMyReviews()]);
+        const [nextTasks, reviews, nextIssues] = await Promise.all([
+          listTasks(), listMyReviews(), listAllIssues(),
+        ]);
         setTasks(nextTasks.sort(byUrgency));
         setMyReviews(reviews);
+        setTeamIssues(nextIssues);
         setTaskSync({ kind: "live", last_success_at: new Date().toISOString() });
       } catch (cause) {
         // 网络抖动不能把用户踢回登录页；只有 /auth/me 明确返回未登录才退出。
@@ -833,6 +846,7 @@ export function App() {
   async function signOut() {
     await logout().catch(() => undefined);
     setTasks([]);
+    setTeamIssues([]);
     setKnowledgeInsights(undefined);
     setKnowledgeInsightsError("");
     setMineScope("all");
@@ -907,6 +921,15 @@ export function App() {
     if (location.pathname + location.search !== next) {
       history.pushState({}, "", next);
       setTargetRoute({ taskId: task.id, reviewId: "" });
+    }
+  };
+  /** 团队看板点开问题会话:切到问题处理 tab + 设路由(URL 跟随)。 */
+  const openIssueFromTeam = (id: string) => {
+    setView("issues");
+    setIssueRouteId(id);
+    const next = `/issues/${encodeURIComponent(id)}`;
+    if (location.pathname !== next) {
+      history.pushState({}, "", next);
     }
   };
   const openRelatedTask = (taskId: string) => {
@@ -1011,6 +1034,7 @@ export function App() {
         </div>
         <ThemeSwitch theme={theme} onChange={changeTheme} />
         <div className="sidebar-foot session-foot"><span className="account-avatar" aria-hidden>{(session.display_name ?? session.username).slice(0, 1).toUpperCase()}</span><span className="sidebar-account"><strong>{session.display_name ?? session.username}</strong><small>{session.display_name ? session.username : session.role === "admin" ? "管理员" : "开发成员"}</small></span><DensitySwitch density={density} onChange={changeDensity} /><button type="button" className="logout-button" onClick={signOut} title="退出登录" aria-label="退出登录"><svg viewBox="0 0 20 20"><path d="M8 4H4.75A1.25 1.25 0 0 0 3.5 5.25v9.5A1.25 1.25 0 0 0 4.75 16H8M12.5 6.5 16 10l-3.5 3.5M7 10h9" /></svg></button></div>
+        {buildHash && <div className="sidebar-build-hash" title="部署版本号(服务启动时间)——确认代码已生效">{buildHash}</div>}
       </div>
     </aside>
 
@@ -1038,9 +1062,11 @@ export function App() {
             id="team-task-current-panel" aria-labelledby="team-task-current-tab">
             <TeamDashboard
               tasks={tasks}
+              issues={teamIssues}
               users={teamUsers}
               onChanged={refresh}
               onOpenArtifacts={openArtifacts}
+              onOpenIssue={openIssueFromTeam}
             />
           </div> : <div role="tabpanel"
             id="team-task-archive-panel" aria-labelledby="team-task-archive-tab">
@@ -1444,16 +1470,29 @@ function UsersBoard({ me }: { me: string }) {
   </section>;
 }
 
+/** 团队看板列表项:需求任务与问题会话的统一适配层。
+ * teamTask 用于过滤/排序(纯函数 isCurrentTeamTask/matchesTeamScope/
+ * byTeamAttention 只读 TeamTask 稳定字段);task/issue 是原始对象,用于渲染。 */
+interface TeamListItem {
+  teamTask: TeamTask;
+  task?: TaskSummary;
+  issue?: IssueSummary;
+}
+
 function TeamDashboard({
   tasks,
+  issues,
   users,
   onChanged,
   onOpenArtifacts,
+  onOpenIssue,
 }: {
   tasks: TaskSummary[];
+  issues: IssueSummary[];
   users: AuthUser[];
   onChanged: () => void;
   onOpenArtifacts: (task: TaskSummary) => void;
+  onOpenIssue: (id: string) => void;
 }) {
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<TeamScope>("all");
@@ -1462,28 +1501,37 @@ function TeamDashboard({
   const [taskStatus, setTaskStatus] = useState("");
   const queueRef = useRef<HTMLElement>(null);
   const now = Date.now();
-  const currentTasks = useMemo(() => tasks.filter(isCurrentTeamTask), [tasks]);
+
+  // 合并:需求任务 + 问题会话(适配成 TeamTask),统一进过滤/排序管线。
+  const combined = useMemo<TeamListItem[]>(() => [
+    ...tasks.map((task) => ({ teamTask: task as TeamTask, task })),
+    ...issues.map((issue) => ({ teamTask: issueToTeamTask(issue), issue })),
+  ], [tasks, issues]);
+  const currentItems = useMemo(() =>
+    combined.filter((item) => isCurrentTeamTask(item.teamTask)), [combined]);
   const deliveryStats = useMemo(() => teamDeliveryBreakdown(tasks), [tasks]);
   const openRelatedTask = (taskId: string) => {
     const related = tasks.find((task) => task.id === taskId);
     if (related) onOpenArtifacts(related);
   };
-  const visible = useMemo(() => currentTasks.filter((task) => {
-    const words = `${task.id} ${task.title ?? ""} ${task.requirement} ${responsibleOf(task) ?? ""}`
+  const visible = useMemo(() => currentItems.filter((item) => {
+    const tt = item.teamTask;
+    const words = `${tt.id} ${item.task?.title ?? ""} ${tt.requirement} ${responsibleOf(tt) ?? ""}`
       .toLowerCase();
     if (query.trim() && !words.includes(query.trim().toLowerCase())) return false;
-    if (responsible === "__unassigned" && responsibleOf(task)) return false;
+    if (responsible === "__unassigned" && responsibleOf(tt)) return false;
     if (responsible && responsible !== "__unassigned"
-        && responsibleOf(task) !== responsible) return false;
-    if (!matchesTeamScope(task, scope, now)) return false;
-    if (phase === "尚未进入阶段" && task.progress?.current_phase) return false;
+        && responsibleOf(tt) !== responsible) return false;
+    if (!matchesTeamScope(tt, scope, now)) return false;
+    // 阶段筛选只对需求任务生效(问题会话没有 progress.current_phase)。
+    if (phase === "尚未进入阶段" && item.task?.progress?.current_phase) return false;
     if (phase && phase !== "尚未进入阶段"
-        && task.progress?.current_phase !== phase) return false;
-    if (taskStatus && task.status !== taskStatus) return false;
+        && item.task?.progress?.current_phase !== phase) return false;
+    // 状态筛选只对需求任务生效。
+    if (taskStatus && item.task && teamDeliveryStatusGroup(item.task.status) !== taskStatus) return false;
     return true;
-  }).sort(byTeamAttention), [
-    currentTasks, query, scope, responsible, phase, taskStatus,
-  ]);
+  }).sort((a, b) => byTeamAttention(a.teamTask, b.teamTask)),
+    [currentItems, query, scope, responsible, phase, taskStatus]);
 
   function selectPhase(next: string) {
     setPhase((current) => current === next ? "" : next);
@@ -1507,7 +1555,7 @@ function TeamDashboard({
       onSelectStatus={selectTaskStatus} />
 
     <section className="task-section" id="team-queue" ref={queueRef} aria-labelledby="team-queue-title">
-      <div className="section-head"><div><span className="section-kicker">CURRENT TEAM WORK</span><h2 id="team-queue-title">{phase ? `${phase}现场` : taskStatus ? `${STATUS_TEXT[taskStatus as TaskStatus] ?? taskStatus}任务` : "当前现场"}</h2></div><span className={`section-count${phase || taskStatus ? " active-filter" : ""}`}>{phase ? `阶段 · ${phase}　` : taskStatus ? `状态 · ${STATUS_TEXT[taskStatus as TaskStatus] ?? taskStatus}　` : ""}{visible.length} / {currentTasks.length} 项</span></div>
+      <div className="section-head"><div><span className="section-kicker">CURRENT TEAM WORK</span><h2 id="team-queue-title">{phase ? `${phase}现场` : taskStatus ? `${deliveryStats.statuses.find((entry) => entry.key === taskStatus)?.label ?? taskStatus}任务` : "当前现场"}</h2></div><span className={`section-count${phase || taskStatus ? " active-filter" : ""}`}>{phase ? `阶段 · ${phase}　` : taskStatus ? `状态 · ${deliveryStats.statuses.find((entry) => entry.key === taskStatus)?.label ?? taskStatus}　` : ""}{visible.length} / {currentItems.length} 项</span></div>
       <div className="task-filters" aria-label="筛选当前现场">
         <label className="task-search"><svg viewBox="0 0 18 18" aria-hidden><circle cx="8" cy="8" r="4.5" /><path d="m11.5 11.5 3 3" /></svg><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索任务、需求或负责人" /></label>
         <select aria-label="现场范围" value={scope} onChange={(event) => setScope(event.target.value as TeamScope)}><option value="all">全部现场</option><option value="action">需要处理</option><option value="stale">停滞任务</option><option value="wip">正在推进</option><option value="waiting">等待决策</option></select>
@@ -1515,7 +1563,10 @@ function TeamDashboard({
         {(query || scope !== "all" || responsible || phase || taskStatus) && <button type="button" className="filter-reset" onClick={() => { setQuery(""); setScope("all"); setResponsible(""); setPhase(""); setTaskStatus(""); }}>清除筛选</button>}
       </div>
       {visible.length === 0 && <TaskEmpty personal={false} />}
-      <div className="task-list">{orderTaskHierarchy(visible).map((task) => <TaskCard key={task.id} task={task} onChanged={onChanged} canOperate={false} decisionMode="signal" onOpenArtifacts={() => onOpenArtifacts(task)} onOpenRelatedTask={openRelatedTask} showChildLinks={false} />)}</div>
+      <div className="task-list">{visible.map((item) => item.issue
+        ? <TeamIssueCard key={item.teamTask.id} issue={item.issue} onOpen={() => onOpenIssue(item.teamTask.id)} />
+        : item.task ? <TaskCard key={item.teamTask.id} task={item.task} onChanged={onChanged} canOperate={false} decisionMode="signal" onOpenArtifacts={() => onOpenArtifacts(item.task!)} onOpenRelatedTask={openRelatedTask} showChildLinks={false} />
+        : null)}</div>
     </section>
   </>;
 }
@@ -1549,8 +1600,8 @@ function TaskGroup({
   </section>;
 }
 
-/** 总览先讲清规模公式；交付中再用两种互补视角拆同一批任务。
- * 两行的合计都来自 teamDeliveryBreakdown，不会出现口径漂移。 */
+/** 总览只保留一层规模摘要；阶段与状态作为轻量筛选项呈现。
+ * 三个规模数字、两组筛选都来自 teamDeliveryBreakdown，避免口径漂移。 */
 function TeamDeliveryOverview({
   stats,
   selectedPhase,
@@ -1566,25 +1617,24 @@ function TeamDeliveryOverview({
 }) {
   return <section className="team-delivery-overview" aria-label="团队任务统计">
     <header className="team-delivery-overview-head">
-      <div><span className="section-kicker">DELIVERY OVERVIEW</span>
-        <h2>总览</h2></div>
-      <small>已取消任务保留在交付档案，不计入交付规模</small>
+      <div className="team-delivery-overview-copy">
+        <span className="section-kicker">DELIVERY OVERVIEW</span>
+        <h2>交付概览</h2>
+        <p>点击阶段或状态可筛选下方现场；已取消任务仅保留在交付档案。</p>
+      </div>
+      <div className="team-delivery-summary"
+        aria-label={`全部任务 ${stats.total} 项，交付中 ${stats.delivering} 项，已交付 ${stats.delivered} 项`}>
+        <span className="summary-total"><strong>{stats.total}</strong><small>全部任务</small></span>
+        <i aria-hidden />
+        <span className="summary-active"><strong>{stats.delivering}</strong><small>交付中</small></span>
+        <i aria-hidden />
+        <span className="summary-complete"><strong>{stats.delivered}</strong><small>已交付</small></span>
+      </div>
     </header>
-    <div className="team-delivery-equation" aria-label={`任务总计 ${stats.total}，等于已交付 ${stats.delivered} 加交付中 ${stats.delivering}`}>
-      <div className="delivery-total"><span>任务总计</span>
-        <strong>{stats.total}</strong><small>{stats.delivered} + {stats.delivering}</small></div>
-      <b aria-hidden>=</b>
-      <div><span>已交付</span><strong>{stats.delivered}</strong><small>已经完成交付</small></div>
-      <b aria-hidden>+</b>
-      <div className="is-delivering"><span>交付中</span>
-        <strong>{stats.delivering}</strong><small>仍需推进或处理</small></div>
-    </div>
     <div className="team-delivery-breakdown">
-      <header><div><span>DELIVERING TASKS</span><strong>交付中任务</strong></div>
-        <em>{stats.delivering} 项</em></header>
       <section aria-labelledby="delivery-stage-title">
-        <div className="delivery-breakdown-title"><strong id="delivery-stage-title">按阶段</strong>
-          <small>合计 {stats.delivering} 项</small></div>
+        <div className="delivery-breakdown-title"><strong id="delivery-stage-title">阶段</strong>
+          <small>当前所处流程</small></div>
         <div className="delivery-breakdown-cells">
           {stats.stages.map((entry) => <button type="button" key={entry.key}
             className={selectedPhase === entry.key ? "selected" : ""}
@@ -1596,14 +1646,15 @@ function TeamDeliveryOverview({
         </div>
       </section>
       <section aria-labelledby="delivery-status-title">
-        <div className="delivery-breakdown-title"><strong id="delivery-status-title">按任务状态</strong>
-          <small>合计 {stats.delivering} 项</small></div>
+        <div className="delivery-breakdown-title"><strong id="delivery-status-title">任务状态</strong>
+          <small>当前运行情况</small></div>
         <div className="delivery-breakdown-cells status-cells">
           {stats.statuses.map((entry) => <button type="button" key={entry.key}
             className={selectedStatus === entry.key ? "selected" : ""}
+            disabled={entry.count === 0}
             aria-pressed={selectedStatus === entry.key} aria-controls="team-queue"
             onClick={() => onSelectStatus(entry.key)}>
-            <span>{STATUS_TEXT[entry.key as TaskStatus] ?? entry.key}</span>
+            <span>{entry.label}</span>
             <strong>{entry.count}</strong>
           </button>)}
           {!stats.statuses.length && <div className="delivery-breakdown-empty">暂无交付中任务</div>}

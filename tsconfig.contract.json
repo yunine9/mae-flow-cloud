@@ -5,11 +5,16 @@
     "lib": [
       "es2023",
       "DOM"
+    ],
+    "types": [],
+    "types": [
+      "node"
     ]
   },
   "include": [
     "tests/issueFlowContract.test.ts",
-    "tests/rootErrorBoundary.test.ts"
+    "tests/rootErrorBoundary.test.ts",
+    "types/contract-dom-json.d.ts"
   ],
   "exclude": [
     "node_modules",

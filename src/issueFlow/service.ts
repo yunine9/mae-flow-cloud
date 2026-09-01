@@ -14,6 +14,8 @@
  */
 
 import {
+  chmodSync,
+  copyFileSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -22,7 +24,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { join, relative } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { CloudSession, type Outcome } from "../sessionDriver.ts";
 import type { VisionCapabilityConfig, VisionModelChoice } from "../visionCapability.ts";
 import type { Notifier, NotifyQuestion } from "../notifier.ts";
@@ -35,6 +37,7 @@ import {
   type IssueEnvironmentInput as VaultEnvironmentInput,
 } from "../issueEnvironment.ts";
 import { TaskContainer, taskContainerInstance } from "../containerRuntime.ts";
+import { touchBuildCache } from "../buildCache.ts";
 import {
   prepareContainerHostPaths,
   repairContainerCloneOwnership,
@@ -81,7 +84,8 @@ import {
   type GitCredential,
 } from "./issueGit.ts";
 import { readBusinessModule } from "../businessModuleLibrary.ts";
-import type { IssueOpsTools } from "./opsTools.ts";
+import { type ModelsSettings } from "../settings.ts";
+import { createGoOpsTools, type ContainerExec, type IssueOpsTools } from "./opsTools.ts";
 import {
   DtsGatewayUnconfiguredError,
   IssueControlError,
@@ -128,6 +132,7 @@ import {
   triggerPipeline,
   type PipelineRun,
 } from "../pipelineClient.ts";
+import { syncIssueImagesToWorkspace } from "./issueImages.ts";
 
 // ---- 举卡作答的机器可读协议 ----
 
@@ -355,11 +360,18 @@ export interface IssueCreateInput {
 export interface IssueIsolation {
   image: string;
   volumes: string[];
+  /** 分仓构建缓存根(与 taskService isolation.cacheRoot 同款);
+   *  有值时 ensureContainer 按 repo URL 创建分仓缓存,挂载 /cache/maven
+   *  等并设 MAVEN_OPTS——容器内 mvn 能找到 parent POM。 */
+  cacheRoot?: string;
   memory: string;
   cpus: string;
   user?: string;
   pidsLimit: number;
   network: string;
+  /** 向容器注入的额外环境变量(与 taskService isolation.environment 同款);
+   *  ensureContainer 先继承这里,再追加缓存相关变量(MAVEN_OPTS 等)。 */
+  environment?: NodeJS.ProcessEnv;
 }
 
 export interface IssueFlowOptions {
@@ -368,7 +380,7 @@ export interface IssueFlowOptions {
   model: string;
   modelsJson: Record<string, unknown>;
   settings?: {
-    models(): { json?: Record<string, unknown>; provider?: string; model?: string };
+    models(): ModelsSettings;
     /** 流水线监看的轮询节奏(与需求侧同一份运行参数)。 */
     runtime?(): { poll_interval_s?: number; poll_timeout_s?: number };
   };
@@ -393,6 +405,9 @@ export interface IssueFlowOptions {
   gitCredential?: (account: string) =>
     (GitCredential & { email?: string }) | undefined;
   opsTools?: IssueOpsTools;
+  /** ops 二进制目录(宿主 assets/ops-tools);有 isolation 时按会话
+   * 构造容器内执行的 ops 工具,比全局 opsTools 更优先。 */
+  opsToolsDir?: string;
   dts?: DtsGateway;
   /** 交付平台适配层(--platform):MR 创建与需求交付共用同一端点。 */
   platformUrl?: string;
@@ -755,6 +770,18 @@ export class IssueFlowService {
     const id = this.nextId();
     const root = join(this.issuesRoot, id);
     mkdirSync(root, { recursive: true });
+    // 现象描述内嵌截图:把 staging 里的图片复制到会话工作区 issue-images/,
+    // description 里的相对路径引用原样保留——AI 侧 inspect_image 直接可用。
+    // 同步在状态落盘前:失败只跳过(fail-open),不阻断登记。
+    const descriptionText = input.description?.trim() ?? "";
+    if (descriptionText) {
+      syncIssueImagesToWorkspace({
+        description: descriptionText,
+        dataDir: this.options.dataDir,
+        workspace: root,
+        log: (message) => this.log(message),
+      });
+    }
     const environment = input.environment
       ? this.storeEnvironment(id, input.environment, true)
       : undefined;
@@ -1101,10 +1128,17 @@ export class IssueFlowService {
     } catch (error) {
       if (live.controlEpoch !== epoch) return;
       const detail = error instanceof Error ? error.message : String(error);
-      live.state.status = "failed";
-      live.state.error = detail;
+      if (live.state.gate) {
+        // 举闸异常:gate 在场说明是 raiseEnvNeededGate 抛的,
+        // 容器必须保留(用户配好环境后 AI 要重试)。
+        live.state.status = "waiting_user";
+        live.state.last_reply = live.driver?.finalReply() ?? live.state.last_reply;
+      } else {
+        live.state.status = "failed";
+        live.state.error = detail;
+        this.releaseDriver(live);
+      }
       saveState(live.root, live.state);
-      this.releaseDriver(live);
       this.log(`[issue-flow] ${live.id} 回合失败: ${detail}`);
     } finally {
       // waiting_user 的回合还没真正结束(AskUserQuestion 挂起中,作答后
@@ -1381,13 +1415,17 @@ export class IssueFlowService {
     };
   }
 
-  /** 当前生效的视觉角色(TaskService.taskVision 的同款组装):角色必须
+  /** 当前生效的视觉角色(TaskService.activeVisionChoice 的同款组装):角色必须
    * 指向 models.json 中明确声明支持图片的模型,配置漂移时宁可不暴露
    * 工具,也不把图片误发给文本模型。缓存落会话工作区(与需求侧
    * workspace/vision-cache 同一约定;代码仓在其下的 repo/ 子目录,
-   * 缓存不会被推送或结论文档卷走)。 */
+   * 缓存不会被推送或结论文档卷走)。
+   *
+   * 来源优先级与 TaskService 一致:管理页 settings.vision 优先于部署旗标
+   * --vision-provider/--vision-model。管理页配的视觉模型必须对问题流生效,
+   * 否则问题会话的 inspect_image 永远不注入(用户配了却看不到工具)。 */
   private visionCapability(workspace: string): VisionCapabilityConfig | undefined {
-    const choice = this.options.vision;
+    const choice = this.options.settings?.models().vision ?? this.options.vision;
     if (!choice?.provider || !choice?.model) return undefined;
     const spec = (this.modelChoice().json as {
       providers?: Record<string, { models?: Array<{
@@ -1400,16 +1438,147 @@ export class IssueFlowService {
       : undefined;
   }
 
+  /**
+   * 把 ops 二进制复制到会话工作区 .ops-tools/(workspace 同路径挂载进容器,
+   * 容器内就能直接执行)。只在有 isolation 且配了 opsToolsDir 时做。
+   */
+  private stageOpsBinaries(live: LiveIssue): void {
+    const toolsDir = this.options.opsToolsDir;
+    if (!toolsDir || !this.options.isolation) return;
+    const destDir = join(live.root, ".ops-tools");
+    mkdirSync(destDir, { recursive: true });
+    const binName = process.platform === "win32"
+      ? ["fetch-logs.exe", "build-deploy.exe"]
+      : process.arch === "arm64"
+        ? ["fetch-logs-linux-arm64", "build-deploy-linux-arm64"]
+        : ["fetch-logs-linux-amd64", "build-deploy-linux-amd64"];
+    for (const name of binName) {
+      const src = join(toolsDir, name);
+      if (!existsSync(src)) continue;
+      const dest = join(destDir, name);
+      copyFileSync(src, dest);
+      chmodSync(dest, 0o755);
+    }
+  }
+
+  /**
+   * 为会话构造容器内执行的 ops 工具。把 live.container.exec 包装成
+   * ContainerExec 接口(收集 stdout/stderr),再交给 createGoOpsTools。
+   */
+  private createSessionOps(live: LiveIssue): IssueOpsTools | undefined {
+    const toolsDir = this.options.opsToolsDir;
+    if (!toolsDir || !live.container) return this.options.opsTools;
+    // 不捕获容器快照:容器可能因超时/OOM 停掉后被 ensureContainer 重建,
+    // live.container 指向新实例。闭包捕获旧引用会永远调已死的容器。
+    // 每次 exec 动态读 live.container,拿到当前实例。
+    const containerExec: ContainerExec = {
+      async exec(command, cwd, opts) {
+        const container = live.container;
+        if (!container) {
+          throw new Error("会话容器已释放,无法执行运维命令");
+        }
+        let stdout = "";
+        let stderr = "";
+        const { exitCode } = await container.exec(command, cwd, {
+          onData: (data: Buffer) => {
+            const text = data.toString("utf-8");
+            // docker exec 的 stdout/stderr 混在一起,靠前缀粗分。
+            // ops 二进制输出量不大(8MB 上限),收集完整文本够用。
+            stdout += text;
+          },
+          ...(opts.timeout !== undefined ? { timeout: opts.timeout } : {}),
+          ...(opts.privilegedEnv ? { privilegedEnv: opts.privilegedEnv } : {}),
+        });
+        return { exitCode, stdout, stderr };
+      },
+    };
+    return createGoOpsTools({
+      toolsDir,
+      containerExec,
+      workspace: live.root,
+      log: (message) => this.log(message),
+    });
+  }
+
   private async ensureContainer(live: LiveIssue): Promise<void> {
-    if (!this.options.isolation || live.container) return;
+    if (!this.options.isolation) return;
+    // 容器可能因为超时/OOM/外部因素已 stopped——引用还在但 lifecycle
+    // 不再 running。检查并重建,避免后续 exec 报"容器未运行"。
+    if (live.container && live.container.isAlive) return;
+    if (live.container) {
+      this.log(`[issue-container] ${live.id} 容器已停(lifecycle≠running),重建`);
+      live.container = undefined;
+    }
     const isolation = this.options.isolation;
     const instance = taskContainerInstance(this.options.dataDir);
+    // 分仓构建缓存挂载(与 taskService containerMountsForRepository 同款):
+    // issueFlow 容器内要跑 mvn clean package(build_deploy 工具),没有
+    // Maven 仓库挂载就找不到 parent POM。按会话首个仓做 cacheKey,挂载
+    // /cache/maven 并设 MAVEN_OPTS=-Dmaven.repo.local=/cache/maven/repository。
+    // 多仓场景下 cpp_sdk_repository 挂在 repo/ 目录下,所有仓的
+    // ${project.basedir}/../cpp_sdk_repository 都指向同一处——与单仓
+    // 语义天然一致。
+    let volumes = isolation.volumes;
+    // 先继承 isolation.environment(通用通道),再追加缓存变量——与
+    // taskService containerMountsForRepository 同一合并顺序。
+    let environment: NodeJS.ProcessEnv = { ...(isolation.environment ?? {}) };
+    if (isolation.cacheRoot) {
+      const repoUrl = live.state.repo_url
+        ?? live.state.repo_urls?.[0] ?? live.id;
+      // C++ Maven 插件约定 ${project.basedir}/../cpp_sdk_repository;
+      // issueFlow 仓在 live.root/repo/<仓名>/,所以 SDK 缓存挂在
+      // live.root/repo/cpp_sdk_repository,所有仓共享同一处。
+      const cppSdkDestination = join(live.root, "repo", "cpp_sdk_repository");
+      // 自定义挂载不能覆盖平台缓存目录(与 taskService 同款安全检查)。
+      const cacheDestinations = new Set([
+        "/cache/maven", "/cache/npm", "/cache/ccache", "/cache/xdg",
+        cppSdkDestination,
+      ]);
+      for (const volume of volumes) {
+        const dest = volume.split(":")[1]?.replace(/\/+$/, "");
+        if (dest && cacheDestinations.has(dest)) {
+          throw new Error(
+            `自定义挂载不能覆盖平台的分仓缓存目录: ${dest}`);
+        }
+      }
+      const { base: cacheBase } = touchBuildCache(isolation.cacheRoot, repoUrl);
+      for (const name of ["maven", "npm", "ccache", "xdg", "cpp-sdk"]) {
+        mkdirSync(join(cacheBase, name), { recursive: true });
+      }
+      const caches: Array<[string, string]> = [
+        ["maven", "/cache/maven"],
+        ["npm", "/cache/npm"],
+        ["ccache", "/cache/ccache"],
+        ["xdg", "/cache/xdg"],
+        ["cpp-sdk", cppSdkDestination],
+      ];
+      volumes = [
+        ...volumes,
+        ...caches.map(([name, dest]) => `${join(cacheBase, name)}:${dest}`),
+      ];
+      const mavenOptions = String(environment.MAVEN_OPTS ?? "").trim();
+      environment = {
+        ...environment,
+        MAVEN_OPTS: [mavenOptions,
+          "-Dmaven.repo.local=/cache/maven/repository"]
+          .filter(Boolean).join(" "),
+        npm_config_cache: "/cache/npm",
+        CCACHE_DIR: "/cache/ccache",
+        XDG_CACHE_HOME: "/cache/xdg",
+        CMAKE_C_COMPILER_LAUNCHER: "ccache",
+        CMAKE_CXX_COMPILER_LAUNCHER: "ccache",
+        ...(live.root
+          ? { CCACHE_BASEDIR: dirname(resolve(live.root)) } : {}),
+        CCACHE_NOHASHDIR: "1",
+        CCACHE_MAXSIZE: "20G",
+      };
+    }
     const container = new TaskContainer(
       isolation.image,
       live.root,
       `mfc-${instance.namePrefix}-${live.id}`,
       (message) => this.log(`[issue-container] ${message}`),
-      isolation.volumes,
+      volumes,
       // user 必须随 limits 传到 docker run(2026-08-29 真实环境实测:
       // 漏传使容器落回镜像默认用户,安全自检"Config.User 为空或为
       // root/0"拒绝运行——需求侧同环境能跑正是它传了)。
@@ -1421,6 +1590,7 @@ export class IssueFlowService {
       },
       {
         network: isolation.network,
+        ...(Object.keys(environment).length > 0 ? { environment } : {}),
         // ownership 标签与需求侧 createTaskContainer 同一套。少了它们,
         // kill -9 后的启动清扫(按 instance 指纹过滤)整批看不见 issue
         // 容器——每次硬重启漏一批,宿主内存被静默吃光(2026-08-29
@@ -1436,9 +1606,12 @@ export class IssueFlowService {
     // 前交给容器用户(与需求侧同款;非 root 服务自判 active:false 跳过)。
     const prepared = prepareContainerHostPaths({
       workspace: live.root,
-      volumes: isolation.volumes,
+      volumes: volumes,
       user: isolation.user,
       markerRoot: join(this.options.dataDir, ".container-ownership"),
+      // cacheRoot 在场时,缓存目录会被 chown 给容器用户——不加这行
+      // /cache/maven 属主留 root,mfc 无法创建 repository 子目录。
+      ...(isolation.cacheRoot ? { cacheRoot: isolation.cacheRoot } : {}),
     });
     if (prepared.active
         && (prepared.workspaceEntries || prepared.cacheTrees)) {
@@ -1446,8 +1619,40 @@ export class IssueFlowService {
         + `workspace=${prepared.workspaceEntries},`
         + `owner=${prepared.owner!.uid}:${prepared.owner!.gid}`);
     }
+    // Maven settings.xml 通常以只读 volume 挂入容器。如果宿主文件是
+    // 640 root:root,容器用户 mfc 读不了——entrypoint 的 [ -r ] 检查
+    // 失败,不创建 ~/.m2/settings.xml 软链,Maven 找不到内部仓库配置,
+    // parent POM 不可解析。服务以 root 运行,启动前确保世界可读。
+    const mavenSettingsVolume = volumes.find(
+      (v) => v.split(":")[1]?.replace(/\/+$/, "") === "/etc/mae-flow/maven/settings.xml",
+    );
+    if (mavenSettingsVolume) {
+      const settingsPath = mavenSettingsVolume.split(":")[0];
+      if (existsSync(settingsPath)) {
+        const stat = statSync(settingsPath);
+        if (!(stat.mode & 0o044)) {
+          chmodSync(settingsPath, stat.mode | 0o044);
+          this.log(`[issue-container] ${live.id} Maven settings.xml 权限修正: `
+            + `${settingsPath} 添加世界可读(原 0${(stat.mode & 0o777).toString(8)})`);
+        }
+      }
+    }
     await container.start();
     live.container = container;
+    // /etc/profile.d/mfc-env.sh 把 TMPDIR 设成 /tmp/mae-flow-build,但该
+    // 目录不存在。登录 shell(sh -lc)会 source profile 导致 TMPDIR 指向
+    // 不存在的路径,build-deploy 二进制用 TMPDIR 创建临时目录时 stat 失败。
+    // 容器启动后通过 exec 建出这个目录(tmpfs 不在 workspace 挂载内,宿主
+    // 侧无法直接 mkdir)。
+    try {
+      await container.exec(
+        "mkdir -p /tmp/mae-flow-build",
+        live.root,
+        { onData: () => {}, timeout: 5 },
+      );
+    } catch { /* best-effort; 目录可能已存在或容器未启用 exec */ }
+    // ops 二进制分发到 workspace(容器内同路径可执行)
+    this.stageOpsBinaries(live);
   }
 
   private async openDriver(live: LiveIssue): Promise<CloudSession> {
@@ -1472,7 +1677,7 @@ export class IssueFlowService {
       workspace: live.root,
       dataRoot: this.options.dataDir,
       persist: () => saveState(live.root, live.state),
-      ops: this.options.opsTools,
+      ops: this.createSessionOps(live) ?? this.options.opsTools,
       dts: this.options.dts,
       platformUrl: this.options.platformUrl,
       environmentPassword: () => {
