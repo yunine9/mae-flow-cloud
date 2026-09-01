@@ -17,4 +17,9 @@ test("团队任务统计先展示总览公式，再用阶段和状态拆同一�
     "阶段和状态必须明确显示同一个交付中合计");
   assert.match(css, /\.team-delivery-equation\s*\{/);
   assert.match(css, /\.team-delivery-breakdown\s*\{/);
+  assert.match(css,
+    /\.delivery-breakdown-cells\.status-cells\s*\{[^}]*display:\s*flex[^}]*flex-wrap:\s*wrap/s,
+    "状态项应是紧凑换行块，不能被单项拉成长条");
+  assert.match(css,
+    /\.delivery-breakdown-cells\.status-cells button\s*\{[^}]*max-width:\s*210px/s);
 });

@@ -8549,6 +8549,17 @@ pre {
   grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
   gap: 7px;
 }
+.delivery-breakdown-cells.status-cells {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+.delivery-breakdown-cells.status-cells button {
+  width: auto;
+  min-width: 132px;
+  max-width: 210px;
+  flex: 0 1 auto;
+}
 .delivery-breakdown-cells button {
   min-width: 0;
   min-height: 48px;

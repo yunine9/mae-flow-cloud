@@ -73,6 +73,13 @@ test("团队交付统计的总览、阶段和状态使用同一批任务", () =>
   }, { total: 4, delivered: 1, delivering: 3 });
   assert.equal(result.stages.reduce((sum, item) => sum + item.count, 0), 3);
   assert.equal(result.statuses.reduce((sum, item) => sum + item.count, 0), 3);
+  assert.equal(result.statuses.length, 9,
+    "没有任务的状态也要以 0 展示，团队才能看到完整状态空间");
+  assert.deepEqual(result.statuses.filter((item) => item.count > 0), [
+    { key: "running", count: 1 },
+    { key: "verifying", count: 1 },
+    { key: "failed", count: 1 },
+  ]);
   assert.deepEqual(result.stages, [
     { key: "方案", count: 0 },
     { key: "开发", count: 1 },

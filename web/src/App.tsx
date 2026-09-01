@@ -1601,6 +1601,7 @@ function TeamDeliveryOverview({
         <div className="delivery-breakdown-cells status-cells">
           {stats.statuses.map((entry) => <button type="button" key={entry.key}
             className={selectedStatus === entry.key ? "selected" : ""}
+            disabled={entry.count === 0}
             aria-pressed={selectedStatus === entry.key} aria-controls="team-queue"
             onClick={() => onSelectStatus(entry.key)}>
             <span>{STATUS_TEXT[entry.key as TaskStatus] ?? entry.key}</span>
