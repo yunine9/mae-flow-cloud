@@ -21,12 +21,20 @@ fi
 
 sha="$(git -C "$kernel_src" rev-parse HEAD)"
 ref="$(git -C "$kernel_src" symbolic-ref --quiet --short HEAD 2>/dev/null || printf 'detached')"
+# Cloud 专属分支会持续前进，来源 SHA 只能说明“这次收编了什么”，不能
+# 回答“它最初从哪版 Mae-Flow 分出来”。把与本地 main 的 merge-base 一并
+# 写入 VENDORED；后续 rebase 后基线自然更新，审计时不靠人回忆。
+baseline="$sha"
+if [ "$ref" != "main" ] && git -C "$kernel_src" rev-parse --verify main >/dev/null 2>&1; then
+  baseline="$(git -C "$kernel_src" merge-base main HEAD)"
+fi
 rm -rf "$root/kernel"
 mkdir -p "$root/kernel"
 git -C "$kernel_src" archive HEAD | tar -x -C "$root/kernel"
 {
   printf '来源: mae-flow@%s\n' "$sha"
   printf '分支: %s\n' "$ref"
+  printf '基线: mae-flow@%s\n' "$baseline"
   printf '收编时间: %s\n' "$(date +%F)"
   printf '纪律: 此目录是快照,不许手改;更新跑 harness/sync-kernel.sh\n'
 } > "$root/kernel/VENDORED"
