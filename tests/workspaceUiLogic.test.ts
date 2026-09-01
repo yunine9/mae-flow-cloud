@@ -18,6 +18,7 @@ const taskCard = await vite.ssrLoadModule("/src/TaskCard.tsx");
 const prepush = await vite.ssrLoadModule("/src/PrepushStatus.tsx");
 const api = await vite.ssrLoadModule("/src/api.ts");
 const annotationPanel = await vite.ssrLoadModule("/src/AnnotationPanel.tsx");
+const lubanTokenCard = await vite.ssrLoadModule("/src/LubanTokenCard.tsx");
 
 after(async () => {
   await vite.close();
@@ -46,6 +47,24 @@ function review(id: string, taskId: string) {
     attempts: 1,
   };
 }
+
+test("个人小鲁班已配置时显示连通测试，未配置时只引导配置", () => {
+  const ready = renderToStaticMarkup(React.createElement(
+    lubanTokenCard.LubanTokenCard,
+    { session: {
+      username: "alice", role: "developer", luban_token_hint: "••••cret",
+    } },
+  ));
+  assert.match(ready, />测试连通性<\/button>/);
+  assert.match(ready, />更新 Token<\/button>/);
+
+  const missing = renderToStaticMarkup(React.createElement(
+    lubanTokenCard.LubanTokenCard,
+    { session: { username: "bob", role: "developer" } },
+  ));
+  assert.doesNotMatch(missing, /测试连通性/);
+  assert.match(missing, />配置小鲁班<\/button>/);
+});
 
 function annotation(overrides: Record<string, unknown> = {}) {
   return {

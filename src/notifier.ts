@@ -32,6 +32,8 @@ export interface NotifyRecord {
   text: string;
   attempts: number;
   delivered: boolean;
+  /** true 表示有限重试已经结束；旧版本没有该字段的记录不能据此判失败。 */
+  settled?: boolean;
   last_error: string;
 }
 
@@ -223,6 +225,7 @@ export interface NotifierOptions {
 
 export class Notifier {
   private records = new Map<string, NotifyRecord>();
+  private pendingDeliveries = new Map<string, Promise<void>>();
   private latestApprovals = new Map<string, LubanApprovalNotification>();
   private readonly templates: Required<NotificationTemplates>;
 
@@ -247,6 +250,8 @@ export class Notifier {
     for (const [id, record] of this.records) {
       if (record.task_id !== taskId) continue;
       this.records.delete(id);
+      // 投递请求不能真正取消，但它不应阻止同 ID 的新任务启动新投递。
+      this.pendingDeliveries.delete(id);
       removed += 1;
     }
     for (const [account, binding] of this.latestApprovals) {
@@ -269,7 +274,7 @@ export class Notifier {
     const latest = this.list().at(-1);
     return {
       configured: !!this.target().endpoint.trim(),
-      last_error: latest && !latest.delivered && latest.attempts > 0
+      last_error: latest?.settled && !latest.delivered && latest.attempts > 0
         ? latest.last_error || "最近一条通知未送达" : undefined,
     };
   }
@@ -291,7 +296,10 @@ export class Notifier {
     link: string;
   }): Promise<NotifyRecord> {
     const existing = this.records.get(input.waitingId);
-    if (existing) return existing;
+    if (existing) {
+      await this.deliverTracked(existing);
+      return existing;
+    }
     const visibleQuestions = this.options.mobileApproval
       ? input.questions?.slice(0, 1) : input.questions;
     const summary = waitingSummary({
@@ -347,6 +355,7 @@ export class Notifier {
           : ""),
       attempts: 0,
       delivered: false,
+      settled: false,
       last_error: "",
     };
     this.records.set(input.waitingId, record);
@@ -360,8 +369,9 @@ export class Notifier {
         notifiedAt: Date.now(),
       });
     }
-    // 投递在后台走,不阻塞流程:通知只是提醒,待办本体在 Web。
-    void this.deliver(record);
+    // TaskService 会把这个 Promise 旁路调度，因此不阻塞流程；Promise
+    // 本身只在有限重试结束后返回，调用方落盘拿到的一定是最终事实。
+    await this.deliverTracked(record);
     return record;
   }
 
@@ -376,7 +386,10 @@ export class Notifier {
   }): Promise<NotifyRecord> {
     const key = `${input.taskId}:outcome:${input.status}`;
     const existing = this.records.get(key);
-    if (existing) return existing;
+    if (existing) {
+      await this.deliverTracked(existing);
+      return existing;
+    }
     const record: NotifyRecord = {
       waiting_id: key,
       task_id: input.taskId,
@@ -393,10 +406,11 @@ export class Notifier {
       })),
       attempts: 0,
       delivered: false,
+      settled: false,
       last_error: "",
     };
     this.records.set(key, record);
-    void this.deliver(record);
+    await this.deliverTracked(record);
     return record;
   }
 
@@ -426,10 +440,11 @@ export class Notifier {
       })),
       attempts: 0,
       delivered: false,
+      settled: false,
       last_error: "",
     };
     this.records.set(key, record);
-    await this.deliver(record, input.senderAccount);
+    await this.deliverTracked(record, input.senderAccount);
     return record;
   }
 
@@ -447,7 +462,10 @@ export class Notifier {
     const key = `${input.taskId}:review-ready:${input.account}:`
       + input.revisionKey;
     const existing = this.records.get(key);
-    if (existing) return existing;
+    if (existing) {
+      await this.deliverTracked(existing, input.senderAccount);
+      return existing;
+    }
     const record: NotifyRecord = {
       waiting_id: key,
       task_id: input.taskId,
@@ -464,10 +482,11 @@ export class Notifier {
       })),
       attempts: 0,
       delivered: false,
+      settled: false,
       last_error: "",
     };
     this.records.set(key, record);
-    await this.deliver(record, input.senderAccount);
+    await this.deliverTracked(record, input.senderAccount);
     return record;
   }
 
@@ -485,9 +504,15 @@ export class Notifier {
   async testDelivery(account: string): Promise<{ ok: boolean; error?: string }> {
     const { endpoint, headers } = this.target();
     try {
+      const personal = this.options.personalToken?.(account);
       const response = await fetch(endpoint, {
         method: "POST",
-        headers: { "content-type": "application/json", ...headers },
+        headers: {
+          "content-type": "application/json",
+          ...headers,
+          ...(personal
+            ? { "x-mfc-luban-token": encodeURIComponent(personal) } : {}),
+        },
         body: JSON.stringify({
           account,
           text: withPluginActivationNotice(
@@ -532,6 +557,7 @@ export class Notifier {
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         record.delivered = true;
+        record.settled = true;
         record.last_error = "";
         return;
       } catch (error) {
@@ -541,12 +567,36 @@ export class Notifier {
       }
     }
     // 重试预算耗尽:留痕即可,流程状态一个字不动(§14.4)。
+    record.settled = true;
+  }
+
+  /** 同一幂等记录在并发重放时共享一次投递；所有等待者只拿最终事实。 */
+  private async deliverTracked(
+    record: NotifyRecord,
+    tokenAccount = record.account,
+  ): Promise<void> {
+    if (record.settled) return;
+    let pending = this.pendingDeliveries.get(record.waiting_id);
+    if (!pending) {
+      const started = this.deliver(record, tokenAccount);
+      pending = started.finally(() => {
+        // purge 后可能已有同 ID 新投递；旧 Promise 晚到不能删掉新值。
+        if (this.pendingDeliveries.get(record.waiting_id) === pending) {
+          this.pendingDeliveries.delete(record.waiting_id);
+        }
+      });
+      this.pendingDeliveries.set(record.waiting_id, pending);
+    }
+    await pending;
   }
 }
 
 /** 假小鲁班:收什么记什么,GET /messages 可查——演示与测试用。 */
 export class FakeLubanServer {
   readonly messages: Array<Record<string, unknown>> = [];
+  readonly requestHeaders: Array<
+    Record<string, string | string[] | undefined>
+  > = [];
   /** 测试注入:>0 时前 N 次请求返回 500,验证退避重试。 */
   failFirst = 0;
   private server?: Server;
@@ -576,6 +626,7 @@ export class FakeLubanServer {
         try {
           this.messages.push(
             JSON.parse(Buffer.concat(chunks).toString("utf-8")));
+          this.requestHeaders.push({ ...request.headers });
         } catch {
           response.writeHead(400).end();
           return;

@@ -81,6 +81,8 @@ export function TaskCard({
   const childRepositories = task.requirement_graph?.stage === "confirmed"
     ? task.requirement_graph.repositories.filter((repository) => repository.task_id)
     : [];
+  const notifyHttpError = task.notify?.last_error
+    ?.match(/HTTP\s+\d{3}/)?.[0];
 
   return (
     <article
@@ -289,11 +291,14 @@ export function TaskCard({
               <span>{task.delivery.skipped}</span>
             </div>
           )}
-          {task.notify && !task.notify.delivered && task.notify.attempts > 0 && (
+          {task.notify?.settled === true && !task.notify.delivered
+            && task.notify.attempts > 0 && (
             <div className="alert">
               <strong>小鲁班通知未送达</strong>
               <span>
-                已尝试 {task.notify.attempts} 次，待办仍然有效，请在本页处理。
+                已完成 {task.notify.attempts} 次投递仍未送达
+                {notifyHttpError ? `（${notifyHttpError}）` : ""}。
+                待办仍然有效，请在本页处理。
               </span>
             </div>
           )}

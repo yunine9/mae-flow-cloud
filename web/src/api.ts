@@ -330,6 +330,16 @@ export async function putLubanToken(
   return response.json();
 }
 
+/** 用已保存的个人 Token 走一遍正式小鲁班投递链路。 */
+export async function testLubanConnection(): Promise<{
+  ok: true;
+  message: string;
+}> {
+  const response = await fetch("/auth/me/luban-test", { method: "POST" });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
 export async function listUsers(): Promise<AuthUser[]> {
   const response = await fetch("/auth/users");
   if (!response.ok) throw new Error(await errorText(response));
@@ -927,7 +937,12 @@ export interface TaskSummary {
       closes_feedback: boolean;
     }>;
   };
-  notify?: { delivered: boolean; attempts: number; last_error?: string };
+  notify?: {
+    delivered: boolean;
+    settled?: boolean;
+    attempts: number;
+    last_error?: string;
+  };
   delivery?: {
     mr_url?: string;
     mr_state?: string;

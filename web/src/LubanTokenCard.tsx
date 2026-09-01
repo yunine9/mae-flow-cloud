@@ -8,7 +8,11 @@
  */
 
 import { useState } from "react";
-import { putLubanToken, type AuthUser } from "./api";
+import {
+  putLubanToken,
+  testLubanConnection,
+  type AuthUser,
+} from "./api";
 
 export function LubanTokenCard({
   session,
@@ -21,6 +25,7 @@ export function LubanTokenCard({
   const [open, setOpen] = useState(false);
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
+  const [testing, setTesting] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
@@ -38,6 +43,16 @@ export function LubanTokenCard({
     } catch (cause) {
       setError(String((cause as Error).message ?? cause));
     } finally { setBusy(false); }
+  }
+
+  async function testConnection() {
+    setTesting(true); setMessage(""); setError("");
+    try {
+      const result = await testLubanConnection();
+      setMessage(result.message);
+    } catch (cause) {
+      setError(String((cause as Error).message ?? cause));
+    } finally { setTesting(false); }
   }
 
   return <section className={`credential-card${hint ? " is-ready" : ""}`} aria-label="小鲁班通知">
@@ -69,10 +84,16 @@ export function LubanTokenCard({
       {message && <span className="credential-feedback success">{message}</span>}
       {error && <span className="credential-feedback error">{error}</span>}
       {!open && <div className="credential-buttons">
-        <button type="button" className="credential-primary" onClick={() => {
+        <button type="button" className="credential-primary" disabled={testing}
+          onClick={() => {
           setOpen(true); setMessage(""); setError("");
         }}>{hint ? "更新 Token" : "配置小鲁班"}</button>
-        {hint && <button type="button" className="credential-text danger" disabled={busy}
+        {hint && <button type="button" className="credential-secondary"
+          disabled={busy || testing} onClick={() => void testConnection()}>
+          {testing ? "测试中…" : "测试连通性"}
+        </button>}
+        {hint && <button type="button" className="credential-text danger"
+          disabled={busy || testing}
           onClick={() => void save(true)}>清除</button>}
       </div>}
     </div>

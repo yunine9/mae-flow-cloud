@@ -819,7 +819,10 @@ export interface TaskSummary {
   host_skills_pinned?: boolean;
   host_skill_snapshot_warnings?: string[];
   /** 最近一张待办的通知投递事实(失败标红的依据,不影响流程)。 */
-  notify?: Pick<NotifyRecord, "delivered" | "attempts" | "last_error">;
+  notify?: Pick<
+    NotifyRecord,
+    "delivered" | "settled" | "attempts" | "last_error"
+  >;
   /** Git 交付事实(§10):MR 链接/状态、流水线结果、或没交付的原因。
    * sha = 流水线绑定的代码版本,也是重启后续轮的锚。 */
   delivery?: {
@@ -2954,6 +2957,7 @@ export class TaskService {
       notify: record
         ? {
             delivered: record.delivered,
+            settled: record.settled,
             attempts: record.attempts,
             last_error: record.last_error,
           }

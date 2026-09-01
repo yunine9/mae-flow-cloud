@@ -567,6 +567,32 @@ export function createTaskServer(
             luban_token_hint: options.auth!.lubanTokenHint(viewer.username),
           });
         }
+        // 个人设置里的连通测试必须复用正式投递端点与本人 Token；不能
+        // 用一条绕过认证的“假成功”测试链路误导用户。
+        if (request.method === "POST" && parts[1] === "me"
+            && parts[2] === "luban-test") {
+          if (!viewer) return json(response, 401, { error: "尚未登录" });
+          const notifier = service.options.notifier;
+          if (!notifier) {
+            return json(response, 503, { error: "当前部署未启用小鲁班通知" });
+          }
+          if (notifier.needsPersonalToken()
+              && !options.auth!.lubanToken(viewer.username)) {
+            return json(response, 409, { error: "请先保存小鲁班 Token" });
+          }
+          const result = await notifier.testDelivery(viewer.username);
+          if (!result.ok) {
+            const reason = result.error?.match(/HTTP\s+\d{3}/)?.[0]
+              ?? "通知服务暂不可用";
+            return json(response, 502, {
+              error: `测试消息未送达（${reason}），请检查 Token 或通知服务配置`,
+            });
+          }
+          return json(response, 200, {
+            ok: true,
+            message: "测试消息已发送，请在小鲁班中确认是否收到。",
+          });
+        }
         if (request.method === "POST" && parts[1] === "logout") {
           options.auth?.endSession(sessionToken);
           response.setHeader("set-cookie", sessionCookie("", request, true));
