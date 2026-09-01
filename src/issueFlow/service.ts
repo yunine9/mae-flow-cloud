@@ -128,6 +128,7 @@ import {
   triggerPipeline,
   type PipelineRun,
 } from "../pipelineClient.ts";
+import { FeedbackStore, type FeedbackRecord } from "../feedbackStore.ts";
 
 // ---- 举卡作答的机器可读协议 ----
 
@@ -543,7 +544,7 @@ export class IssueFlowService {
   // ---- 查询 ----
 
   list(account?: string): IssueSummary[] {
-    const rows = [...this.live.values()].map((item) => summarize(item.state));
+    const rows = [...this.live.values()].map((item) => this.project(item));
     rows.sort((a, b) => b.created_at.localeCompare(a.created_at));
     return account ? rows.filter((row) => row.account === account) : rows;
   }
@@ -554,13 +555,43 @@ export class IssueFlowService {
     return live;
   }
 
+  /** Issue Flow 的前置分析仍独立；进入代码交付后，反馈索引与需求交付
+   * 共用同一份 append-only 模型，页面和恢复不再认识第二套状态词。 */
+  private feedbackStore(live: LiveIssue): FeedbackStore {
+    return new FeedbackStore(join(live.root, "feedback", "index.jsonl"));
+  }
+
+  private project(live: LiveIssue): IssueSummary {
+    const feedback = this.feedbackStore(live).list();
+    return {
+      ...summarize(live.state),
+      ...(feedback.length ? { feedback } : {}),
+    };
+  }
+
+  private resolveIssuePipelineFeedback(
+    live: LiveIssue,
+    repo: string,
+    status: FeedbackRecord["status"],
+    resolution: string,
+  ): void {
+    const store = this.feedbackStore(live);
+    for (const record of store.list()) {
+      if (record.source === "pipeline"
+          && record.source_id.startsWith(`${repo}@`)
+          && record.status !== "closed") {
+        store.resolve(record.id, status, resolution);
+      }
+    }
+  }
+
   get(id: string): IssueSummary & {
     waiting?: WaitingRecord;
     has_analysis: boolean;
   } {
     const live = this.require(id);
     return {
-      ...summarize(live.state),
+      ...this.project(live),
       // Agent 卡选项投影时派决策码(前端认码不认文案);平台闸的卡
       // 自带 GATE_OPTIONS 的码,原样在 state.gate 里。
       waiting: withAgentOptionCodes(live.humanGate.pending()[0]),
@@ -2132,6 +2163,10 @@ export class IssueFlowService {
     if (!platformUrl || !sha || state.mode !== "fixed") return;
     const watching = state.pipelines?.[repo];
     if (watching?.watching && watching.sha === sha) return;
+    if (watching?.sha && watching.sha !== sha) {
+      this.resolveIssuePipelineFeedback(live, repo, "addressed",
+        `已产生新提交 ${sha.slice(0, 12)}，等待新流水线核验`);
+    }
     const now = Date.now();
     const { budgetMs } = this.pipelineKnobs();
     (state.pipelines ??= {})[repo] = {
@@ -2229,6 +2264,8 @@ export class IssueFlowService {
     watch.watching = false;
     if (run.checks) watch.checks = run.checks;
     if (run.status === "success") {
+      this.resolveIssuePipelineFeedback(live, repo, "closed",
+        `新提交 ${sha.slice(0, 12)} 的权威流水线已通过`);
       recordTransition(state, {
         source: "platform", note: `流水线全绿(${repo})@ ${sha.slice(0, 12)}`,
       });
@@ -2274,6 +2311,19 @@ export class IssueFlowService {
     });
     // 红=申报打回:清掉申报账,修复后要重新申报再过验绿门。
     delete state.mr_gate;
+    const feedbackId = `issue-pipeline:${repo}:${sha}`;
+    this.feedbackStore(live).upsert([{
+      id: feedbackId,
+      batch_id: feedbackId,
+      source: "pipeline",
+      source_id: `${repo}@${sha}`,
+      source_revision: watch.round,
+      observed_sha: sha,
+      summary: describePipelineRun(run).slice(0, 1000),
+      verification: "pipeline",
+      status: "repairing",
+      updated_at: new Date().toISOString(),
+    }]);
     saveState(live.root, state);
     this.startPlatformTurn(live,
       `平台通知: 流水线未通过(仓 ${repo},仍在「提交 MR·跑绿」阶段)。\n`

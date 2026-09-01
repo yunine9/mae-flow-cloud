@@ -42,6 +42,7 @@ import {
 import { IssueRail } from "./IssueRail";
 import { IssueMaterialsPane } from "./MaterialsPane";
 import { IssueEventsPane } from "./EventsPane";
+import { FeedbackPanel } from "../TaskWorkspace";
 
 export function IssueSessionView({
   detail,
@@ -285,6 +286,8 @@ export function IssueSessionView({
     {/* 逐仓交付区:每个关联仓一张卡(仓名/角色/MR/分支/流水线状态)。
         事实全部由 perRepo.ts 从 API 字段派生,组件只渲染。 */}
     <IssueRepoDelivery detail={detail} />
+    {Boolean(detail.feedback?.length)
+      && <FeedbackPanel feedback={detail.feedback!} />}
 
     <IssueCostPanel id={detail.id} />
 

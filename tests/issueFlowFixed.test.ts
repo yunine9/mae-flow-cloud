@@ -120,6 +120,7 @@ class LoopPlatform {
   readonly seen: Array<{ method: string; url: string; body?: any }> = [];
   private terminalRound = 0;
   private readonly statusCalls = new Map<string, number>();
+  private readonly mergeRequests = new Map<string, { url: string; id: number }>();
   private mrCount = 0;
   private server: ReturnType<typeof createServer> | undefined;
   baseUrl = "";
@@ -139,8 +140,18 @@ class LoopPlatform {
           response.end(JSON.stringify(payload));
         };
         if (request.method === "POST" && request.url === "/mr") {
-          this.mrCount += 1;
-          send({ url: `http://loop.test/mr/${this.mrCount}`, id: this.mrCount });
+          const key = JSON.stringify({
+            repo: body?.repo,
+            source_branch: body?.source_branch,
+            target_branch: body?.target_branch,
+          });
+          let receipt = this.mergeRequests.get(key);
+          if (!receipt) {
+            this.mrCount += 1;
+            receipt = { url: `http://loop.test/mr/${this.mrCount}`, id: this.mrCount };
+            this.mergeRequests.set(key, receipt);
+          }
+          send(receipt);
           return;
         }
         if (request.method === "POST" && request.url === "/pipeline/trigger") {
@@ -330,6 +341,8 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     assert.equal(fixing.pushes?.length, 1, "修复分支已推送(按仓记账)");
     assert.equal(fixing.pushes?.[0]?.repo, origin);
     assert.equal(fixing.mrs?.length, 1, "MR 已创建(按仓记账)");
+    const firstMrUrl = fixing.mrs?.[0]?.url;
+    const firstPushSha = fixing.pushes?.[0]?.sha;
     const branchNow = spawnSync("git",
       ["-C", join(dataDir, "issues", created.id, "repo", "origin"), "branch", "--show-current"],
       { encoding: "utf-8" });
@@ -344,6 +357,17 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     }, "一轮:流水线红转绿后部署举验证闸");
     assert.equal(gate2.stage, "deploy_verify");
     assert.equal(gate2.pipelines?.[origin]?.status, "success", "监看账应记全绿");
+    assert.equal(gate2.mrs?.[0]?.url, firstMrUrl,
+      "流水线反馈修复后必须更新同一个 MR，不能另建一张");
+    assert.deepEqual(gate2.feedback?.map((item) => ({
+      source: item.source,
+      status: item.status,
+      observed_sha: item.observed_sha,
+    })), [{
+      source: "pipeline",
+      status: "closed",
+      observed_sha: firstPushSha,
+    }], "Issue Flow 建 MR 后也用统一反馈索引，并由新 HEAD 流水线闭环");
     const failedRound = platform.seen.filter((entry) =>
       entry.method === "POST" && entry.url === "/pipeline/trigger").length;
     assert.ok(failedRound >= 2, "红过一轮就要有第二轮触发(同 MR 修复再推)");
