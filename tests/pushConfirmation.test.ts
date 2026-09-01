@@ -1015,3 +1015,69 @@ test("push 检视返工先让内核退出 external_verify，再启动修改会�
     await model.stop();
   }
 });
+
+test("内核退不回时返工决定原样失败:卡还在、证据未动,修好后同一提交重试成功", async () => {
+  const { service, model, id, internal, repo } = await verifyingTask();
+  try {
+    writeFileSync(join(repo.cwd, ".mae-flow.json"), JSON.stringify({
+      current: "external_verify",
+      revision: 9,
+      config: { "分支名": "feature", "基线分支": "master" },
+      step_heads: { branch_create: repo.git("rev-parse", "HEAD~1") },
+    }));
+    // 先给一个死内核:回退必然失败。这是这道兜底防御的真实故障形态,
+    // 必须在它下面被测(不是只测 happy path)。
+    (service as any).options.host = {
+      kernelRoot: join(repo.cwd, "kernel-not-exists"),
+      python: "python3",
+    };
+    (service as any).runningCount = 99;
+    internal.summary.push_confirmation = true;
+    internal.summary.delivery = {
+      ...(internal.summary.delivery ?? {}),
+      sha: repo.git("rev-parse", "HEAD"),
+      pipeline: "passed",
+      prepush: { state: "passed", sha: repo.git("rev-parse", "HEAD") },
+    };
+    assert.equal(await (service as any)
+      .pushConfirmationSatisfied(internal, "master_bot_REQ1"), false);
+    const waiting = service.get(id)!.waiting!;
+    const submission = {
+      state_version: waiting.state_version,
+      selected_options: {
+        [(waiting.question as any).questions[0].question]:
+          "需要调整代码（按清单返工）",
+      },
+      notes: "把变量名改清楚",
+      delivery_paths: ["src/feature.ts"],
+    };
+    await assert.rejects(() => service.decide(id, submission),
+      /内核暂未退回可修改步骤/);
+    // 失败必须停在消费卡之前:卡还挂着,旧证据一根手指都没动,
+    // 内核也仍在原地——没有任何"半返工"状态。
+    const after = service.get(id)!;
+    assert.equal(after.status, "waiting_for_human", "卡必须原样保留");
+    assert.equal(after.waiting?.waiting_id, waiting.waiting_id);
+    assert.equal(after.delivery?.prepush?.state, "passed",
+      "回退失败不得作废旧证据");
+    assert.equal(after.delivery?.pipeline, "passed");
+    assert.equal(JSON.parse(readFileSync(
+      join(repo.cwd, ".mae-flow.json"), "utf-8")).current, "external_verify");
+    // 修好内核(换成真件快照),用户用同一份提交重试:decide 的
+    // resolved 分叉必须把这份已落袋的决定重新执行到位。
+    (service as any).options.host = {
+      kernelRoot: join(process.cwd(), "kernel"),
+      python: "python3",
+    };
+    await service.decide(id, submission);
+    assert.equal(JSON.parse(readFileSync(
+      join(repo.cwd, ".mae-flow.json"), "utf-8")).current, "build",
+      "重试后内核必须真实退回可编辑步骤");
+    assert.equal(internal.summary.status, "queued");
+    assert.equal(internal.summary.delivery?.prepush, undefined,
+      "重试成功后旧 Build-Fix 收据才随之作废");
+    assert.equal(internal.summary.waiting, undefined);
+  } finally {
+    await model.stop();
+  }
+});

@@ -2074,6 +2074,7 @@ export class TaskService {
     return sweepManagedTaskContainers({
       instanceFingerprint: instance.fingerprint,
       namePrefix: instance.namePrefix,
+      legacyIssueRoot: join(this.options.dataDir, "issues"),
       stopGraceSeconds: isolation.stopGraceSeconds,
       managementTimeoutMs: isolation.managementTimeoutMs,
       runner: isolation.runner,
@@ -7734,6 +7735,15 @@ export class TaskService {
     waiting: WaitingRecord,
     selection: NonNullable<TaskSummary["delivery_selection"]>,
   ): void {
+    // 返工先让内核真实退出等待点,而且必须在消费卡、改任何内存态
+    // **之前**:内核退不动时本函数原样抛错,卡还挂着,用户用同一份
+    // 提交重试会经 decide 的 resolved 分叉再次走到这里(reconcile
+    // 按 intervention_id 幂等,重放安全)。原来先清 waiting 再调内核,
+    // 失败后收据已落袋、卡已从页面消失,会话内没有任何重试入口,
+    // 只能等重启走恢复重放——"请重试"就成了一句空话。
+    if (!this.pushConfirmationAccepted(waiting)) {
+      this.reopenKernelForPushReview(task, waiting, selection);
+    }
     task.summary.delivery_selection = selection;
     task.summary.waiting = undefined;
     // 人解决这张卡(不论通过还是返工)就是"看过了这个 HEAD":钉住它,
@@ -7775,12 +7785,8 @@ export class TaskService {
       task.summary.delivery.loop.state = "repairing";
       task.summary.delivery.loop.round = 0;
     }
-    // push 卡出现时内核通常已经走到 external_verify。只把 Cloud 任务
-    // 重新排队并不会让内核后退，Agent 入场执行 current 后会被等待点
-    // 明令禁止改码，随后还可能口头误报“已经处理”并把同一 HEAD 再次
-    // 交审。用户既然选择返工，宿主必须先通过内核的非前进式介入入口
-    // 作废旧质量证据，并按所选文件面机械退回 build/delivery_review。
-    this.reopenKernelForPushReview(task, waiting, selection);
+    // 内核已在本函数入口经 intervention 入口退回可编辑步骤(不退回
+    // 则整个决定已失败,不会走到这里):此刻作废云侧旧 SHA 证据。
     if (task.summary.delivery) {
       delete task.summary.delivery.prepush;
       delete task.summary.delivery.pipeline;

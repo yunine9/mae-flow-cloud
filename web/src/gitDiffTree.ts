@@ -32,13 +32,13 @@ export function parseChanges(text: string): ChangedFile[] {
 
   const finish = () => {
     if (!current) return;
-    // 空白新增/删除行在 unified diff 里分别就是单个 "+" / "-"。
-    // 旧正则要求标记后还得有字符，导致代码审阅统计系统性少算空行；
-    // 只需排除文件头 +++ / ---，其余带标记的行都是真实变化。
-    const additions = current.lines
-      .filter((line) => /^\+(?!\+\+)/.test(line)).length;
-    const deletions = current.lines
-      .filter((line) => /^-(?!--)/.test(line)).length;
+    // 只统计 @@ 块内的行:+++/--- 文件头都在第一个 @@ 之前,天然
+    // 排除;块内以 ++/-- 开头的真实内容行(如 "++i;"、SQL/Lua 注释)
+    // 不再被前瞻正则误当文件头漏计。空白新增/删除行(单个 +/-)照数。
+    const firstHunk = current.lines.findIndex((line) => line.startsWith("@@"));
+    const body = firstHunk === -1 ? [] : current.lines.slice(firstHunk);
+    const additions = body.filter((line) => line.startsWith("+")).length;
+    const deletions = body.filter((line) => line.startsWith("-")).length;
     files.push({
       ...current,
       key: `${current.stage}:${current.path}`,
