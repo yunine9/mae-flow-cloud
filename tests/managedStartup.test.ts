@@ -73,7 +73,9 @@ test("普通措辞也先机械 init/current，模型首个 Edit 在配置阶段�
     provider: "maeflow",
     model: "scripted-v1",
     modelsJson: model.modelsJson(),
-    host: { kernelRoot, repoPath: repo, python: "python3" },
+    host: {
+      kernelRoot, repoPath: repo, python: "python3", continuousReview: true,
+    },
   });
   try {
     const task = service.create("把首页按钮改成蓝色", {
@@ -97,6 +99,8 @@ test("普通措辞也先机械 init/current，模型首个 Edit 在配置阶段�
       join(cwd, ".mae-flow.json"), "utf-8"));
     assert.equal(state.current, "config_confirm",
       "模型入场时必须已经脱离 INACTIVE");
+    assert.equal(state.execution_contract?.continuous_review, true,
+      "启动握手通过的新任务必须把持续检视能力写进不可变执行契约");
     assert.equal(readFileSync(join(cwd, "main.ts"), "utf-8"),
       "export const colour = 'red';\n",
       "配置确认前的首个源码修改不能落盘");

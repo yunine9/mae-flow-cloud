@@ -25,6 +25,9 @@ def _default_contract(host):
         "ut_run": executor,
         "codecheck": executor,
         "git_push": "host" if cloud else "local",
+        # Continuous review is deliberately opt-in. In particular, the
+        # legacy Cloud fallback retains terminal-after-push semantics.
+        "continuous_review": False,
         "source": "legacy-cloud" if cloud else "local-default",
     }
 
@@ -66,6 +69,11 @@ def _normalize_explicit(raw, host):
         "host" if resolved_host == "cloud" else "local")).strip().lower()
     if push_executor not in _PUSH_EXECUTORS:
         raise ValueError("execution_contract.git_push 只能是 local/host")
+    continuous_review = raw.get("continuous_review", False)
+    if not isinstance(continuous_review, bool):
+        raise ValueError("execution_contract.continuous_review 必须是 boolean")
+    if continuous_review and resolved_host != "cloud":
+        raise ValueError("continuous_review 只能由 Cloud 执行契约启用")
     return {
         "schema": SCHEMA,
         "host": resolved_host,
@@ -74,6 +82,7 @@ def _normalize_explicit(raw, host):
         "ut_run": ut_run_executor,
         "codecheck": codecheck_executor,
         "git_push": push_executor,
+        "continuous_review": continuous_review,
         "source": "order",
     }
 
@@ -138,3 +147,8 @@ def uses_pipeline(state=None, host=""):
         contract[key] == "pipeline"
         for key in ("compile", "ut_run", "codecheck")
     )
+
+
+def continuous_review_enabled(state=None, host=""):
+    """Whether this task opted into the Cloud-owned delivery lifecycle."""
+    return bool(contract_for_state(state, host).get("continuous_review"))

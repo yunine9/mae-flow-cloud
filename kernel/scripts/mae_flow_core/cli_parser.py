@@ -23,7 +23,7 @@ class MFParser(argparse.ArgumentParser):
             "其余子命令: status|panel|doctor|report|envcheck|skip|goto|unlock|allow|spec|template|"
             "lightcheck|accept-risk|moonlight|action|messages|config-review|requirement-record|"
             "story-localize|local-spec|domain-docs|domain-archive|manifest|"
-            "pipeline|milestone|intervention|execution-plan|"
+            "pipeline|delivery|milestone|intervention|execution-plan|"
             "migrate-flow|exit"
             "(用法见 current/exit 指令)。\n"
             "注意:子命令不带连字符(是 current 不是 --current);"
@@ -64,6 +64,18 @@ def build_parser():
         dest="intervention_action", required=True)
     intervention_reconcile = intervention_actions.add_parser("reconcile")
     intervention_reconcile.add_argument("--file", required=True)
+    delivery = sub.add_parser(
+        "delivery", help="Cloud 宿主登记持续检视反馈或 MR 合入事实")
+    delivery_actions = delivery.add_subparsers(
+        dest="delivery_action", required=True)
+    feedback_open = delivery_actions.add_parser("feedback-open")
+    feedback_open.add_argument("--file", required=True)
+    feedback_result = delivery_actions.add_parser("feedback-result")
+    feedback_result.add_argument("--file", required=True)
+    delivery_close = delivery_actions.add_parser("close")
+    delivery_close.add_argument("--reason", choices=("merged",), required=True)
+    delivery_close.add_argument("--sha", required=True)
+    delivery_close.add_argument("--event-id", required=True)
     migrate = sub.add_parser(
         "migrate-flow",
         help="恢复命令：把 Lean v3 在途状态安全恢复到稳定流程")
@@ -179,6 +191,9 @@ def build_parser():
         dest="capability_action", required=True)
     cap_status = capabilities.add_parser("status")
     cap_status.add_argument("--codecheck", action="store_true")
+    cap_status.add_argument(
+        "--json", action="store_true",
+        help="输出包含宿主契约能力的机读诊断")
     capabilities.add_parser("prepare")
     cap_openspec = capabilities.add_parser("openspec")
     cap_openspec.add_argument("arguments", nargs=argparse.REMAINDER)

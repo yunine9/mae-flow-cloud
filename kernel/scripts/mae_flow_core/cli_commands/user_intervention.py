@@ -113,7 +113,13 @@ def _execution_rows(payload):
     return rows[-8:]
 
 
-def _clear_stale_evidence(state):
+def clear_stale_evidence(state):
+    """Invalidate step-scoped evidence after an authoritative workspace change.
+
+    Delivery feedback reuses this exact invalidation boundary.  Keeping one
+    implementation prevents intervention and review repair from gradually
+    disagreeing about which old proof still counts.
+    """
     for key in (
             "agent_tasks", "quality", "risk_acceptances", "unlock",
             "delivery_manifest", "host_actions", "approval_subject"):
@@ -123,6 +129,11 @@ def _clear_stale_evidence(state):
             os.remove(STATE_PATH + suffix)
         except FileNotFoundError:
             pass
+
+
+def _clear_stale_evidence(state):
+    """Compatibility alias for callers/tests predating the public helper."""
+    clear_stale_evidence(state)
 
 
 def cmd_user_intervention(flow, state, args):
@@ -155,7 +166,7 @@ def cmd_user_intervention(flow, state, args):
     now = time.strftime("%Y-%m-%d %H:%M:%S")
 
     if changed:
-        _clear_stale_evidence(state)
+        clear_stale_evidence(state)
     state["current"] = target
     state["user_intervention"] = {
         "id": intervention_id,

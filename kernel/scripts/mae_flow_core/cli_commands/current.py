@@ -15,6 +15,7 @@ from mae_flow_core.workflow.execution_contract import (
     uses_pipeline,
     validation_environment,
 )
+from mae_flow_core.cli_commands.delivery_commands import render_delivery_feedback
 from mae_flow_core.workflow.execution_plan import (
     build_execution_plan,
     load_workflow_profile,
@@ -257,6 +258,9 @@ def print_current(flow, st):
     intervention = render_user_intervention(st)
     if intervention:
         print(intervention)
+    delivery_feedback = render_delivery_feedback(st)
+    if delivery_feedback:
+        print(delivery_feedback)
     for _w in _sentinel_lines(sid, st):
         print(_w)
     # 门禁放行时写的非阻断提示走不到模型(退 0 的 stderr 只给人看),在这里补送。

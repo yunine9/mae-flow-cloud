@@ -23,6 +23,7 @@ import { fileURLToPath } from "node:url";
 import type { AddressInfo } from "node:net";
 import { ScriptedModelServer, type Scene } from "./scriptedModel.ts";
 import { discoverKernelRoot } from "./kernelDiscovery.ts";
+import { requireContinuousReviewCapability } from "./kernelCapabilities.ts";
 import {
   DEFAULT_BUILD_CACHE_MAX_GB,
   DEFAULT_BUILD_CACHE_RETENTION_DAYS,
@@ -366,15 +367,22 @@ async function main(): Promise<void> {
     ? (/^(https?|ssh|git):\/\//i.test(repoFlag)
         ? repoFlag : resolve(repoFlag))
     : undefined;
+  const kernelPython = kernelMode ? resolveKernelPython() : undefined;
+  const kernelCapability = kernelMode
+    ? requireContinuousReviewCapability({
+        kernelRoot: kernelRoot!, python: kernelPython, cwd: REPO_ROOT,
+      })
+    : undefined;
   let host = kernelMode
-    ? { kernelRoot: kernelRoot!, repoPath, python: resolveKernelPython(),
+    ? { kernelRoot: kernelRoot!, repoPath, python: kernelPython,
+        continuousReview: kernelCapability?.continuous_review === true,
         // --repo 钉死单仓的部署形态:逐单仓从入口就拒(MFC-024)。
         ...(repoPath ? { repoPinned: true } : {}) }
     : undefined;
   if (host) {
     console.log(`[serve] 内核模式:内核 ${host.kernelRoot}`
       + `,代码仓 ${repoPath ?? "(下单时逐单填写)"}`
-      + `,内核 python: ${host.python}`);
+      + `,内核 python: ${host.python},持续检视契约:已确认`);
   } else if (kernelRoot) {
     console.log("[serve] 内核在场但未开内核模式:演示形态。"
       + "正式部署请加 --kernel-mode；--repo 仅用于钉死单仓的试跑");

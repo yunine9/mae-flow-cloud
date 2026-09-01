@@ -41,7 +41,7 @@ PHASES = {
     "写代码": ("build",),
     "交付": ("archive", "archive_confirm", "domain_archive",
              "delivery_review", "push", "external_verify",
-             "moonlight_review", "end"),
+             "delivery_watch", "feedback_triage", "moonlight_review", "end"),
 }
 _STEP_PHASE = {step: phase for phase, steps in PHASES.items()
                for step in steps}

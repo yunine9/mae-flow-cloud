@@ -51,6 +51,7 @@ class CommandDispatchTests(unittest.TestCase):
             "role-task": "cmd_role_task",
             # 云端宿主喂平台事实的口子;加路由时漏了这行,基线就一直红着
             "pipeline": "cmd_pipeline",
+            "delivery": "cmd_delivery",
             "intervention": "cmd_user_intervention",
             "milestone": "cmd_build_milestone",
             "accept-risk": "cmd_accept_risk",

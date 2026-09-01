@@ -181,10 +181,26 @@ def _user_intervention_decision(context):
     return None
 
 
+def _delivery_host_command_decision(context):
+    """Continuous-review mutation commands are a Cloud host authority."""
+    if re.search(
+        r"mae-flow(?:\.py)?[^\n;|&]*\bdelivery\b[^\n;|&]*"
+        r"\b(?:feedback-open|feedback-result|close)\b",
+        context.command, re.I,
+    ):
+        return _absolute(
+            "持续检视反馈与 MR 合入事实只能由 Cloud 宿主登记。Agent "
+            "不能自行打开/核销反馈或宣布任务结束；请按 current 展示的"
+            "反馈逐条处理，宿主会根据权威事实推进。",
+            rule="bash-delivery-host-command")
+    return None
+
+
 def _bash_absolute_decision(context):
     command = context.command
     decision = (_pipeline_record_decision(context)
-                or _user_intervention_decision(context))
+                or _user_intervention_decision(context)
+                or _delivery_host_command_decision(context))
     if decision is not None:
         return decision
     if (

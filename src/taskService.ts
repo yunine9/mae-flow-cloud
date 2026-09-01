@@ -1003,6 +1003,9 @@ export interface TaskServiceOptions {
     kernelRoot: string;
     repoPath?: string;
     python?: string;
+    /** 仅 serve 启动握手确认能力后置真。缺席保持旧契约，绝不假装
+     * 新内核可用；这也是测试桩与历史直接构造调用的显式分流。 */
+    continuousReview?: boolean;
     /** serve 部署以 --repo 钉死单仓时置真:逐单 repo 被拒、表单不再
      * 收仓库地址(MFC-024)。直接构造 TaskService 的测试/试跑 harness
      * 不置,repoPath 仍只是缺省克隆源。 */
@@ -10086,7 +10089,11 @@ export class TaskService {
             }
           }
           const order: Record<string, unknown> = {
-            execution_contract: { ...CLOUD_EXECUTION_CONTRACT },
+            execution_contract: {
+              ...CLOUD_EXECUTION_CONTRACT,
+              continuous_review:
+                this.options.host?.continuousReview === true,
+            },
             "UT生成方式": utGenerationMethod,
           };
           if (requirementPath) order["需求文档"] = requirementPath;

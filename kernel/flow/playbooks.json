@@ -170,7 +170,7 @@
       "title": "受控交付与出口验证",
       "summary": "以精确交付清单、推送前真实验证、绑定 SHA 的权威流水线和人工检视完成交付。",
       "phase": "交付",
-      "steps": ["delivery_review", "push", "external_verify", "moonlight_review", "end"],
+      "steps": ["delivery_review", "push", "external_verify", "delivery_watch", "feedback_triage", "moonlight_review", "end"],
       "activities": [
         {"id": "exact-delivery-scope", "title": "确认精确交付范围", "description": "只提交本单真实增量，不夹带过程文件和平台注入目录。", "required": true},
         {"id": "real-prepush-verification", "title": "推送前真实验证", "description": "在构建环境执行编译、UT 和必要修复，结果必须可追溯。", "required": true},

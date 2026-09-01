@@ -43,6 +43,7 @@ def explicit_cloud_contract():
         "ut_run": "pipeline",
         "codecheck": "pipeline",
         "git_push": "host",
+        "continuous_review": True,
     }
 
 
@@ -53,6 +54,7 @@ class ExecutionContractResolutionTests(unittest.TestCase):
         self.assertEqual("order", contract["source"])
         self.assertEqual("cloud", contract["host"])
         self.assertEqual("pipeline", contract["compile"])
+        self.assertTrue(contract["continuous_review"])
 
     def test_legacy_cloud_fallback_delegates_machine_validation(self):
         contract = resolve_execution_contract({}, "cloud")
@@ -62,6 +64,7 @@ class ExecutionContractResolutionTests(unittest.TestCase):
         self.assertEqual("pipeline", contract["ut_run"])
         self.assertEqual("pipeline", contract["codecheck"])
         self.assertEqual("host", contract["git_push"])
+        self.assertFalse(contract["continuous_review"])
 
     def test_local_default_preserves_all_local_execution(self):
         contract = resolve_execution_contract({}, "")
@@ -71,6 +74,7 @@ class ExecutionContractResolutionTests(unittest.TestCase):
         self.assertEqual("local", contract["ut_run"])
         self.assertEqual("local", contract["codecheck"])
         self.assertEqual("local", contract["git_push"])
+        self.assertFalse(contract["continuous_review"])
 
     def test_persisted_contract_is_stable_when_process_host_changes(self):
         state = {"execution_contract": {
@@ -99,6 +103,10 @@ class ExecutionContractResolutionTests(unittest.TestCase):
         invalid["schema"] = "future/9"
         with self.assertRaisesRegex(ValueError, "schema"):
             resolve_execution_contract({"execution_contract": invalid}, "cloud")
+        invalid = explicit_cloud_contract()
+        invalid["host"] = "local"
+        with self.assertRaisesRegex(ValueError, "只能由 Cloud"):
+            resolve_execution_contract({"execution_contract": invalid}, "local")
 
 
 class EffectiveConfigTests(unittest.TestCase):

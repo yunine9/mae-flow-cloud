@@ -45,6 +45,7 @@ from .cli_commands import local_spec as _local_spec
 from .cli_commands import domain_docs as _domain_docs
 from .cli_commands import domain_archive as _domain_archive
 from .cli_commands import delivery_manifest as _delivery_manifest
+from .cli_commands import delivery_commands as _delivery_commands
 
 
 _PLUGIN_ROOT = os.path.abspath(os.path.join(
@@ -147,6 +148,7 @@ _COMMAND_MODULES = (
     _domain_docs,
     _domain_archive,
     _delivery_manifest,
+    _delivery_commands,
     _dispatch,
 )
 for _module in _COMMAND_MODULES:

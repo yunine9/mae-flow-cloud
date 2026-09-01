@@ -18,6 +18,7 @@ from mae_flow_core.quality.external_verification import (
     required_dimensions,
 )
 from mae_flow_core.quality.external_repair import issue_repair_authorization
+from mae_flow_core.workflow.execution_contract import continuous_review_enabled
 
 
 _VALID_STATUS = ("success", "failed")
@@ -74,12 +75,20 @@ def _route_external_verification(flow, st, record):
         return
     verdict = record.get("verdict")
     if verdict == "PASS":
+        if continuous_review_enabled(st):
+            queued = api.complete_verified_feedback(
+                st, str(record.get("sha") or record.get("head") or ""))
+            target = "feedback_triage" if queued else "delivery_watch"
+            api.advance(
+                flow, st, "external_verify", {"next": target},
+                "pipeline:pass", str(record.get("reason") or ""))
+            return
         api.advance(
             flow, st, "external_verify", {"next": "end"},
             "pipeline:pass", str(record.get("reason") or ""))
-    # RED stays at external_verify.  Cloud starts a focused repair Agent which
-    # fixes, commits and pushes once; the next SHA is adjudicated here again.
-    # No human Diff card and no replay of the heavyweight kernel quality chain.
+    # Legacy RED stays at external_verify. Continuous-review Cloud turns the
+    # platform failure into a typed feedback batch before starting its sole
+    # repair writer, so the kernel never rolls over or re-enters init here.
 
 
 def cmd_pipeline(flow, st, args):
