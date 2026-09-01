@@ -404,6 +404,31 @@ function invoke(input: {
   }
 }
 
+function isRevisionConflict(error: unknown): boolean {
+  return error instanceof KernelDeliveryError
+    && /flow revision 已从 \d+ 变为 \d+/.test(error.message);
+}
+
+/**
+ * A merged event can race the last in-flight pipeline record after Cloud has
+ * stopped the Agent writer. Delivery commands are idempotent, so retry only
+ * the kernel's exact optimistic-lock conflict with a fresh state read/proof.
+ * Every other failure remains fail-closed.
+ */
+function invokeAfterRevisionConflict(input: Parameters<typeof invoke>[0]):
+    KernelDeliveryRecord {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return invoke(input);
+    } catch (error) {
+      lastError = error;
+      if (!isRevisionConflict(error)) throw error;
+    }
+  }
+  throw lastError;
+}
+
 function secureReceipt(path: string): Record<string, any> | undefined {
   try {
     const info = lstatSync(path);
@@ -626,7 +651,7 @@ export function closeKernelDelivery(input: {
   eventId: string;
 }): KernelDeliveryRecord {
   const payload = { reason: "merged", sha: input.sha, event_id: input.eventId };
-  return invoke({
+  return invokeAfterRevisionConflict({
     host: input.host, cwd: input.cwd, workspace: input.workspace,
     taskId: input.taskId, action: "close", payload,
     args: ["close", "--reason", "merged", "--sha", input.sha,
