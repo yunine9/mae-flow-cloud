@@ -10,6 +10,7 @@ import {
   type WishStatus,
   type WishWallItem,
 } from "./api";
+import { confirmDialog } from "./ConfirmDialog";
 import { formatLocalDateTime, relativeTime } from "./time";
 import {
   nextWishImageDraftKey,
@@ -224,7 +225,11 @@ export function WishWall({ viewer, draft, onDraftConsumed }: {
   }
 
   async function remove(item: WishWallItem): Promise<void> {
-    if (busyId || !window.confirm(`移除「${item.title}」？这不会影响其他内容。`)) return;
+    if (busyId || !(await confirmDialog({
+      title: "移除愿望",
+      message: `将从墙上取下「${item.title}」，这不会影响其他内容。`,
+      confirmLabel: "取下",
+    }))) return;
     setBusyId(item.id);
     try {
       await deleteWish(item.id);

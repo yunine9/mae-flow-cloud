@@ -15,6 +15,7 @@ import {
   isDeliveryArchiveStatus,
   workspaceHistoryEntries,
 } from "./historyModel";
+import { confirmDialog } from "./ConfirmDialog";
 import { formatLocalDate, instantMs } from "./time";
 import { TokenUsage } from "./TokenUsage";
 
@@ -216,10 +217,13 @@ export function HistoryBoard({
                       {canRerun && (
                         <button type="button" disabled={Boolean(busy)}
                           onClick={async () => {
-                            if (!window.confirm(
-                              `确认清空 ${entry.id} 的旧现场并从第一步重跑？`
-                              + "同一任务编号会被覆盖，此操作不可撤销。",
-                            )) return;
+                            if (!await confirmDialog({
+                              title: "清空重跑",
+                              message: `将清空 ${entry.id} 的旧现场并从第一步重跑。`
+                                + "同一任务编号会被覆盖，此操作不可撤销。",
+                              confirmLabel: "清空并重跑",
+                              danger: true,
+                            })) return;
                             setBusy(entry.id);
                             setActionError("");
                             try {
@@ -242,10 +246,14 @@ export function HistoryBoard({
                       {canDelete && (
                         <button type="button" className="danger"
                           disabled={Boolean(busy)} onClick={async () => {
-                            if (!window.confirm(
-                              `确认彻底删除 ${entry.id}「${title}」？工作区、事件、`
-                              + "检视与数据库历史都会永久删除，此操作不可撤销。",
-                            )) return;
+                            if (!await confirmDialog({
+                              title: "彻底删除任务",
+                              message: `将彻底删除 ${entry.id}「${title}」。`
+                                + "工作区、事件、检视与数据库历史都会永久删除，"
+                                + "此操作不可撤销。",
+                              confirmLabel: "彻底删除",
+                              danger: true,
+                            })) return;
                             setBusy(entry.id);
                             setActionError("");
                             try {

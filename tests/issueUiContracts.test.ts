@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import test from "node:test";
 
@@ -187,4 +187,30 @@ test("月光档位切换二选一:双语义按钮替换确定/取消绕口令", 
   // 预览数字(可自动处理/检视拦截)必须完整出现在卡上。
   assert.match(app, /\{preview\.eligible\}/);
   assert.match(app, /\{preview\.blocked_annotations\}/);
+});
+
+test("全站 window.confirm 清零:原生确认框一律走共享 confirmDialog", () => {
+  const files = readdirSync(resolve("web/src"), { recursive: true })
+    .map(String).filter((file) => /\.(tsx|ts)$/.test(file));
+  assert.ok(files.length > 20, "web/src 源码清单不应为空");
+  const offenders = files.filter((file) => readFileSync(
+    resolve("web/src", file), "utf-8").includes("window.confirm("));
+  assert.deepEqual(offenders, [], "仍有调用点残留浏览器原生确认框");
+  // T2 的七个机械替换点全部挂上共享弹框(危险三处红档)。
+  const historyBoard = readFileSync(resolve("web/src/HistoryBoard.tsx"), "utf-8");
+  const taskCard = readFileSync(resolve("web/src/TaskCard.tsx"), "utf-8");
+  const settings = readFileSync(resolve("web/src/SettingsView.tsx"), "utf-8");
+  const wishWall = readFileSync(resolve("web/src/WishWall.tsx"), "utf-8");
+  const modules = readFileSync(resolve("web/src/BusinessModuleLibrary.tsx"), "utf-8");
+  const workflows = readFileSync(
+    resolve("web/src/workflows/WorkflowAssetWorkspace.tsx"), "utf-8");
+  for (const [name, source] of [["HistoryBoard", historyBoard],
+    ["TaskCard", taskCard], ["SettingsView", settings], ["WishWall", wishWall],
+    ["BusinessModuleLibrary", modules],
+    ["WorkflowAssetWorkspace", workflows]] as const) {
+    assert.match(source, /confirmDialog\(\{/, `${name} 应改用 confirmDialog`);
+  }
+  for (const source of [historyBoard, taskCard]) {
+    assert.match(source, /danger: true/);
+  }
 });

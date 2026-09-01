@@ -16,6 +16,7 @@ import {
   knowledgeAssetElementId,
   type KnowledgeAssetFocus,
 } from "./knowledgeNavigation";
+import { confirmDialog } from "./ConfirmDialog";
 
 type BusinessAssetFocus = Extract<KnowledgeAssetFocus, { kind: "business" }>;
 
@@ -417,7 +418,11 @@ export function BusinessModuleLibrary({ admin, initialAsset }: {
                 {module.can_manage && <div>
                   <button type="button" onClick={() => void openAsset(module, asset, true)}>更新</button>
                   <button type="button" className="danger" onClick={async () => {
-                    if (!window.confirm(`归档知识「${asset.title}」？历史任务不受影响。`)) return;
+                    if (!await confirmDialog({
+                      title: "归档知识",
+                      message: `将归档知识「${asset.title}」。历史任务不受影响。`,
+                      confirmLabel: "归档",
+                    })) return;
                     try { replace(await archiveBusinessKnowledgeAsset(module.id, asset.id)); }
                     catch (reason) { setError(reason instanceof Error ? reason.message : "归档失败"); }
                   }}>归档</button>
