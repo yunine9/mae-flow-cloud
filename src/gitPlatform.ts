@@ -40,6 +40,9 @@ export interface MergeRequest {
 /** 检视讨论(真件=CodeHub 的 MR discussion;假件同语义)。 */
 export interface Discussion {
   id: string;
+  /** 同一 discussion 被编辑后必须成为新反馈，不能被旧回复吞掉。 */
+  revision?: number;
+  updated_at?: string;
   file?: string;
   line?: number;
   severity?: string;

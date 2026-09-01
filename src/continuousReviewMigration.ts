@@ -91,6 +91,7 @@ export function migrateContinuousReviewTask(input: {
       cwd: input.cwd,
       workspace: input.workspace,
       migrationId,
+      taskId: input.taskId,
     });
     return { kind: "adopted_watch", migration_id: migrationId };
   }
@@ -130,6 +131,7 @@ export function migrateContinuousReviewTask(input: {
     cwd: input.cwd,
     workspace: input.workspace,
     migrationId,
+    taskId: input.taskId,
   });
   return { kind: "restored_accident", migration_id: migrationId };
 }

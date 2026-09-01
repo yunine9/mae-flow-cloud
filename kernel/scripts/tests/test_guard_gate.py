@@ -230,6 +230,12 @@ class BashWriteGateTests(unittest.TestCase):
                     ("absolute", "bash-delivery-host-command"),
                     (blocked.kind, blocked.rule))
                 self.assertIn("Cloud", blocked.message)
+        # Regex remains only an early, readable hint.  An obfuscated shell can
+        # evade it, so the delivery CLI independently requires a signed,
+        # one-time host proof (covered by test_continuous_review).
+        obfuscated = decide_bash_write(self.context(
+            command="a=delivery; b=close; python mae-flow.py $a $b"))
+        self.assertEqual("allow", obfuscated.kind)
 
     def test_flow_head_blocks_bash_source_writes(self):
         """Bash 写源码与 Edit 同一条头部纪律(sed -i/重定向绕不过去)。"""

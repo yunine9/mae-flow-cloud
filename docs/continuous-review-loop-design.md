@@ -140,6 +140,12 @@ MR 被关闭不是终态：保留 `delivery_watch`，继续监听重开或等待
 
 命令名可在实现时按内核风格调整，但必须具备以下三类语义，且只能由可信 Cloud 宿主调用。
 
+“可信宿主”不是靠命令关键词判断。Cloud 每次调用都追加 `--host-proof`：私钥保存在
+任务工作区之外，只把公钥固定进 `execution_contract.host_authority`；签名逐次绑定
+任务、动作、完整载荷摘要、短时效和一次性 nonce。Hook 的命令识别只负责尽早给出
+友好提示，真正授权由内核验签决定，因此拆词、变量、子 shell 等命令混淆也不能伪造
+宿主动作。
+
 ### 4.1 打开或追加反馈批次
 
 ```text
@@ -339,7 +345,8 @@ resolution        逐条处理结果和证据
   继承 external_repair_gate 的严格度:精确集合、构建产物出账、缺少与
   夹带都逐项点名,推广不许把闸做松；
 - panel/status/current：展示持续检视轮次，不再显示重新开单；
-- Hook：保护宿主专用 feedback/close 命令不被 Agent 自行伪造。
+- Hook：尽早提示 Agent 不要调用宿主命令；内核再用工作区外私钥签发的一次性
+  capability 验签，真正保护 feedback/close 不被 Agent 自行伪造。
 
 ## 9. 前端体验
 
@@ -588,3 +595,21 @@ Web 生产构建、Mae-Flow 全量 selftest、`npm run probe` 和 `git diff --ch
 
 未验证且不伪报：真浏览器交互、真模型长链、内网 CodeHub/真实流水线/真实 MR
 检视。以上必须在用户部署环境演练；仓库测试只证明本地真实内核和假平台契约。
+
+### 16.4 终审整改（同日）
+
+CC 终审进一步发现并已收口五个接缝，均按原设计的“不阻塞、不糊弄”原则处理：
+
+1. 宿主命令从“Hook 识别命令字符串”升级为 RSA 签名 capability；Agent 能执行同一
+   CLI 也拿不到工作区外私钥，伪造、改载荷和重放均由内核拒绝。
+2. MR 合入与 writer 停机竞态中，若本地已经多出未推送提交，`close` 仍以平台实际
+   合入 SHA 完成终态，同时记录 `local_head`、未推送提交和未提交路径；终态核验不再
+   错绑本地较新的 HEAD，也不会把这些本地内容冒充已交付。
+3. 非工作台反馈不再根据总体回复或“HEAD 是否变化”代填回执。工作台使用
+   `local-receipts.json`，MR discussion 使用逐条 `review_replies.md`，流水线、冲突等
+   机器来源使用绑定 batch/id 的结构化 JSON；缺、重、旧、夹带都原地补交一次，仍不
+   合格则明确保留现场停下。
+4. MR discussion 的身份改为来源 ID + revision（平台没有 revision 时使用稳定内容
+   指纹）+ observed SHA；同一评论编辑后形成新反馈和新回复，旧回复不能吞掉新内容。
+5. FeedbackStore 只自动截掉崩溃留下的最后半行；中段或完整坏账 fail-closed 并点名。
+   Cloud 索引缺记录时从内核 append-only 批次重建，避免写序中断后永久隐藏反馈。

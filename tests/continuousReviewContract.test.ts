@@ -317,6 +317,7 @@ test("契约：每条反馈都有来源和精确回执，总体回复不能冒�
     host: { kernelRoot: KERNEL_ROOT!, python: "python3" },
     cwd: scene.cwd,
     workspace: scene.cwd,
+    taskId: scene.batch.task_id,
     batchId: scene.batch.batch_id,
     changed: false,
     results: [],
@@ -335,6 +336,7 @@ test("契约：新 HEAD 清掉旧绿灯，同一处理结果重放幂等", async
     host: { kernelRoot: KERNEL_ROOT!, python: "python3" },
     cwd: scene.cwd,
     workspace: scene.cwd,
+    taskId: scene.batch.task_id,
     batchId: scene.batch.batch_id,
     changed: true,
     results: [{ id: "mr:d-1", status: "fixed" as const,
@@ -360,6 +362,7 @@ test("契约：模糊或无法处理时明确停点，不猜、不糊弄、不�
     host: { kernelRoot: KERNEL_ROOT!, python: "python3" },
     cwd: scene.cwd,
     workspace: scene.cwd,
+    taskId: scene.batch.task_id,
     batchId: scene.batch.batch_id,
     changed: false,
     results: [{ id: "mr:d-1", status: "needs_human",
@@ -378,6 +381,8 @@ test("契约：只有 MR 合入或用户主动停止，Cloud 与内核才一起�
   closeKernelDelivery({
     host: { kernelRoot: KERNEL_ROOT!, python: "python3" },
     cwd: scene.cwd,
+    workspace: scene.cwd,
+    taskId: scene.batch.task_id,
     sha,
     eventId: `mr-merged:${sha}`,
   });

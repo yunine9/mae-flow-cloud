@@ -73,6 +73,22 @@ function localReviewReceiptCommand(summary: string): string {
     + "fs.writeFileSync(\"../reviews/local-receipts.json\",JSON.stringify({receipts:p.annotations.map(a=>({annotation_id:a.id,revision:a.rework||0,outcome:\"fixed\",summary,evidence:[a.file+\":\"+a.line]}))}))'";
 }
 
+/** 模拟 Agent 按使命为流水线/冲突等机器来源逐条写回执。 */
+function feedbackReceiptCommand(summary: string): string {
+  const safeSummary = JSON.stringify(summary);
+  return "node -e 'const fs=require(\"fs\"),c=require(\"crypto\");"
+    + "const d=\"../kernel-delivery\";const ps=fs.readdirSync(d)"
+    + ".filter(x=>x.startsWith(\"feedback-open-\"));"
+    + "fs.mkdirSync(\"../feedback\",{recursive:true});"
+    + `const summary=${safeSummary};`
+    + "for(const p of ps){const b=JSON.parse(fs.readFileSync(d+\"/\"+p,\"utf8\"));"
+    + "const id=b.batch_id;const name=\"result-\"+c.createHash(\"sha256\")"
+    + ".update(id).digest(\"hex\").slice(0,24)+\".json\";"
+    + "fs.writeFileSync(\"../feedback/\"+name,JSON.stringify({schema:"
+    + "\"mae-flow-feedback-results/1\",batch_id:id,results:b.items.map(x=>({"
+    + "id:x.id,status:\"fixed\",summary,evidence:\"a.txt\"}))}));}'";
+}
+
 function buildService(
   platform: FakeGitPlatform,
   dataDir: string,
@@ -159,7 +175,8 @@ test("检视优先于 CI;回复发布并标已解决(显式开代 resolve);CI �
 EOF` } } },
     { text: "检视意见处理完毕。" },
     // 测试控制器会在下一幕按真实提交格式收口；Agent 这里只做源码修改。
-    { tool: { name: "bash", input: { command: "echo fixed >> a.txt" } } },
+    { tool: { name: "bash", input: { command:
+        `echo fixed >> a.txt; ${feedbackReceiptCommand("编译问题已修复")}` } } },
     { text: "流水线问题已修并提交。" },
   ], dataDir);
   await model.start();
@@ -235,7 +252,7 @@ test("默认只回复不代 resolve:已答复=等检视人确认,检视人点掉
   const platform = new FakeGitPlatform();
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
   platform.seedDiscussion({
-    id: "d-9", file: "a.txt", line: 1, severity: "minor",
+    id: "d-9", revision: 1, file: "a.txt", line: 1, severity: "minor",
     author: "李四", body: "变量名建议改成 templateVars",
   });
   await platform.start();
@@ -249,6 +266,12 @@ test("默认只回复不代 resolve:已答复=等检视人确认,检视人点掉
 命名保持与现有模块一致,暂不改;后续统一重命名时一起处理。
 EOF` } } },
     { text: "检视意见已答复。" },
+    { tool: { name: "bash", input: { command:
+        `cat > ../review_replies.md <<'EOF'
+[d-9]
+收到编辑后的补充要求，已经按新边界重新核对并答复。
+EOF` } } },
+    { text: "编辑后的检视意见也已逐条答复。" },
   ], dataDir);
   await model.start();
   const service = buildService(platform, dataDir, model.modelsJson());
@@ -269,6 +292,17 @@ EOF` } } },
         .includes("等检视人确认"), "挂到等检视人确认");
     assert.notEqual(service.get(id)!.delivery?.loop?.state, "halted",
       "等检视人确认不是修不动,不许停环");
+    platform.discussions[0].revision = 2;
+    platform.discussions[0].updated_at = "2026-09-01T10:00:00Z";
+    platform.discussions[0].body = "补充：还要核对空字符串的命名边界";
+    await until(() => platform.discussions[0].replies.length === 2,
+      "同一个 discussion 编辑后必须形成新反馈并重新逐条答复");
+    const revisions = service.get(id)!.feedback
+      ?.filter((item) => item.source === "mr_discussion"
+        && item.source_id === "d-9")
+      .map((item) => item.source_revision).sort();
+    assert.deepEqual(revisions, [1, 2],
+      "评论编辑不能被旧 discussion id 或旧 batch 覆盖");
     // 检视人看过回复,点了已解决 → 门禁清 → 平台合入 → 收口
     platform.discussions[0].resolved = true;
     platform.settleMr("master_bot_REQ9", "merged");
@@ -621,7 +655,8 @@ test("冲突门禁:宿主 merge 造真实冲突标记,会话在真冲突上解,�
     { tool: { name: "bash", input: { command:
         "grep -q '<<<<<<<' a.txt && "
         + "printf 'change\\nupstream\\n' > a.txt && git add a.txt "
-        + "&& git commit --quiet --no-edit" } } },
+        + "&& git commit --quiet --no-edit; "
+        + feedbackReceiptCommand("合并冲突已解决") } } },
     { text: "冲突已解并完成合并提交。" },
   ], dataDir);
   await model.start();
@@ -715,7 +750,7 @@ test("内网真实门禁集(19 项):质量红要派修复,受保护分支挂人�
     ...walkScript(),
     // 质量修复会话:改代码并提交，宿主随后推送
     { tool: { name: "bash", input: { command:
-        "echo quality-fixed >> a.txt" } } },
+        `echo quality-fixed >> a.txt; ${feedbackReceiptCommand("质量门禁已修复")}` } } },
     { text: "质量问题已修并提交。" },
   ], dataDir);
   await model.start();
@@ -865,7 +900,8 @@ test("检视意见沿用原交付事实:feedback-open 接续且不换单", async
 意见成立,已补判空。
 EOF` } } },
     { text: "检视意见处理完毕。" },
-    { tool: { name: "bash", input: { command: "echo fixed >> a.txt" } } },
+    { tool: { name: "bash", input: { command:
+        `echo fixed >> a.txt; ${feedbackReceiptCommand("流水线空指针已修复")}` } } },
     { text: "流水线问题已修并提交。" },
   ], dataDir);
   await model.start();
@@ -993,7 +1029,7 @@ test("假平台 E2E：同一 MR 经工作台意见与流水线反馈两轮后合
         `echo reviewer-fix >> a.txt; ${localReviewReceiptCommand("批注要求已落实")}` } } },
     { text: "工作台意见已逐条处理。" },
     { tool: { name: "bash", input: { command:
-        "echo pipeline-fix >> a.txt" } } },
+        `echo pipeline-fix >> a.txt; ${feedbackReceiptCommand("流水线反馈已修复")}` } } },
     { text: "流水线反馈已修复。" },
   ], dataDir);
   await model.start();
@@ -1147,7 +1183,8 @@ test("单 writer 竞态：steer 与派单相撞时并入当前 Agent，不启动
     ...walkScript(),
     { tool: { name: "bash", input: { command:
         "sleep 1; echo ci-and-review >> a.txt; "
-        + localReviewReceiptCommand("流水线与人工意见已合并处理") } } },
+        + localReviewReceiptCommand("流水线与人工意见已合并处理") + "; "
+        + feedbackReceiptCommand("流水线反馈已同步修复") } } },
     { text: "流水线问题与人的检视意见已合并处理。" },
   ], dataDir);
   await model.start();
@@ -1273,7 +1310,8 @@ test("流水线绿后仍持续监听：同一 MR 后续转红会自动修复并�
   const model = mrModel([
     ...walkScript(),
     { tool: { name: "bash", input: { command:
-        "sleep 0.5; echo late-fix >> a.txt" } } },
+        `sleep 0.5; echo late-fix >> a.txt; ${
+          feedbackReceiptCommand("后续流水线回红已修复")}` } } },
     { text: "后续流水线回红已修复。" },
   ], dataDir);
   await model.start();
@@ -1326,16 +1364,29 @@ test("单 writer 竞态：修复 Agent 运行中 MR 合入会先停写再可信�
     await until(() => service.get(id)!.status === "running"
       && service.get(id)!.delivery?.loop?.kind === "ci", "修复 writer 已启动");
 
-    platform.settleMr("master_bot_REQ9", "merged");
-    await until(() => service.get(id)!.status === "completed",
-      "合入事件抢占 writer 并完成 close");
     const workspace = service.get(id)!.workspace;
     const repo = readdirSync(workspace).map((name) => join(workspace, name))
       .find((path) => existsSync(join(path, ".mae-flow.json")))!;
+    appendFileSync(join(repo, "a.txt"), "local-only\n");
+    git(repo, "add", "a.txt");
+    git(repo, "commit", "-m", "[REQ9][fix] local-only before merge");
+    assert.notEqual(git(repo, "rev-parse", "HEAD"), verified,
+      "事故注入必须先形成尚未 push 的干净本地提交");
+
+    platform.settleMr("master_bot_REQ9", "merged");
+    await until(() => service.get(id)!.status === "completed",
+      "合入事件抢占 writer 并完成 close");
     const kernelState = JSON.parse(readFileSync(
       join(repo, ".mae-flow.json"), "utf-8"));
     assert.equal(kernelState.current, "end", "必须由可信 close 进入真正终态");
+    const closeEvent = kernelState.delivery_loop.close_events.at(-1);
+    assert.equal(closeEvent.sha, verified, "终态绑定平台实际合入的远端 SHA");
+    assert.equal(closeEvent.unpushed_local_commits.length, 1,
+      "本地未推送提交必须留痕，不能冒充已经进入 MR");
+    assert.match(service.get(id)!.detail ?? "", /未推送提交/);
     assert.equal(platform.mergeRequests.length, 1);
+    assert.match(readFileSync(join(repo, "a.txt"), "utf-8"), /local-only/,
+      "未推送提交现场要保留给人核对");
     assert.doesNotMatch(readFileSync(join(repo, "a.txt"), "utf-8"),
       /must-not-land/, "被抢占的旧 writer 不得在完成后继续落代码");
   } finally {
