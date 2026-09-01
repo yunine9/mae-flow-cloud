@@ -343,6 +343,10 @@ export interface IssueCreateInput {
   module?: string;
   /** 登记选定的业务模块 ID:校验存在且 active,名称派生 module 标签。 */
   moduleId?: string;
+  /** 人工预绑锁(spec #57):路由层只在模块 id 来自人的显式选择时
+   * 置真(DTS 预绑/登记页手工选;服务端 matchDtsToModule 自动匹配
+   * 不算,那仍是机器猜测,不锁)。 */
+  moduleLocked?: boolean;
   /** 显式指定模式(转正建新会话用);缺省走 issueFlowMode 回调。 */
   mode?: IssueFlowMode;
   environment?: IssueEnvironmentInput;
@@ -773,6 +777,7 @@ export class IssueFlowService {
       ...(input.baseline?.trim() ? { baseline: input.baseline.trim() } : {}),
       ...(moduleName ? { module: moduleName } : {}),
       ...(moduleId ? { module_id: moduleId } : {}),
+      ...(moduleId && input.moduleLocked ? { module_locked: true } : {}),
       ...(environment ? { environment } : {}),
       // 模式一律烙印落盘(free 也记):审计要看"当时是什么模式",
       // 旧现场缺字段读作自由(兼容),不等于新会话不记。
@@ -2408,6 +2413,8 @@ export class IssueFlowService {
       ...(state.baseline ? { baseline: state.baseline } : {}),
       ...(state.module ? { module: state.module } : {}),
       ...(state.module_id ? { module_id: state.module_id } : {}),
+      // 锁随模块走:老会话的模块是人工选的,转正后仍是人工的意志(spec #57)。
+      ...(state.module_locked ? { module_locked: true } : {}),
       ...(environment ? { environment } : {}),
       mode: "fixed",
       scenario: "ticket",

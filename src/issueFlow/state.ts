@@ -294,6 +294,11 @@ export interface IssueSessionState {
    * 来源留痕);module 是展示/报告用的名称标签,由模块名派生。 */
   module_id?: string;
   module?: string;
+  /** 人工预绑锁(spec #57):模块来自人在发起时的显式选择(DTS 列表
+   * 预绑或登记页手工选)即烙印,AI 的 bind_module 对此拒绝改绑——
+   * 模块绑定权在人,AI 发现不符只能 AskUserQuestion。缺省=未锁
+   * (AI 运行时自己绑的可改绑,维持现状)。 */
+  module_locked?: true;
   environment?: IssueEnvironmentConfig;
   /** 探索方式:创建时烙印,会话中途不换。缺省视为 free(兼容旧会话)。 */
   mode?: IssueFlowMode;

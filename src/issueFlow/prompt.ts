@@ -87,7 +87,7 @@ export interface IssueEnvCredentials {
 export interface IssueRegistrationMeta {
   title: string;
   description: string;
-  module?: { id: string; name: string };
+  module?: { id: string; name: string; locked?: boolean };
   repos: string[];
   environment?: {
     name: string;
@@ -112,6 +112,7 @@ export function issueRegistrationMeta(
       ? { module: {
         id: state.module_id,
         name: state.module || state.module_id,
+        ...(state.module_locked ? { locked: true } : {}),
       } }
       : {}),
     repos: state.repo_urls?.length
@@ -148,11 +149,17 @@ function environmentLines(meta: IssueRegistrationMeta): string[] {
   ];
 }
 
-/** 元信息的模块行(模块是登记必选,但 DTS 发起/未绑定的会话还没有)。 */
+/** 元信息的模块行(模块是登记必选,但 DTS 发起/未绑定的会话还没有)。
+ * 人工预绑锁(spec #57):锁定时明确"不得改绑、直接拉仓",AI 的唯一
+ * 出路是把不符报告给人。 */
 function moduleLine(meta: IssueRegistrationMeta): string {
-  return meta.module
-    ? `- 业务模块: ${meta.module.name}(id: ${meta.module.id})`
-    : "";
+  if (!meta.module) return "";
+  const base = `- 业务模块: ${meta.module.name}(id: ${meta.module.id})`;
+  return meta.module.locked
+    ? base + "\n  - 该模块由人工在发起时预绑并锁定:不要调用 bind_module,"
+      + "直接对已登记仓逐个 pull_repo;若你判断模块与单据明显不符,"
+      + "用 AskUserQuestion 告知用户,由人改绑或提供仓地址"
+    : base;
 }
 
 /** 多仓清单块:全部平铺 repo/<仓名>/(2026-08-28 拍板:仓平等,无主从)。

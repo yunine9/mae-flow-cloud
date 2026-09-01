@@ -745,6 +745,14 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       }),
       async execute(_toolCallId: string, params: any) {
         gateStage("bind_module");
+        // 人工预绑锁(spec #57):模块是人在发起时显式选定的,绑定权
+        // 在人——AI 不得改绑,发现不符只能 AskUserQuestion 报告给人。
+        if (state.module_locked) {
+          fail("该会话的业务模块由人工预绑锁定,不能调用 bind_module 改绑。"
+            + "如你判断模块与单据明显不符,请用 AskUserQuestion 告知用户,"
+            + "由人在 DTS 列表改绑或提供代码仓地址;当前直接对已登记仓"
+            + "逐个 pull_repo 即可");
+        }
         const moduleId = String(params.module_id ?? "").trim();
         if (!moduleId) fail("module_id 不能为空:先 lookup_modules 检索拿到模块 id");
         let module;

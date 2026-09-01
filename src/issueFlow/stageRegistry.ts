@@ -123,10 +123,12 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
   prep_repo: {
     label: "拉取代码仓·建分支",
     noTicketLabel: "拉取代码仓",
-    goal: "把代码仓拉齐:lookup_modules 按单据里的业务关键词检索模块,"
-      + "命中就 bind_module 登记它的仓,再逐个 pull_repo 拉取(有单场景"
-      + "平台会顺带切好修复分支);检索不到就 AskUserQuestion 问用户要"
-      + "仓地址再 pull_repo。本单无需代码改动则直接 complete_stage 跳过",
+    goal: "把代码仓拉齐:模块已在发起时人工预绑锁定(见元信息,调 bind_module "
+      + "会被拒)就直接对已登记仓逐个 pull_repo;没绑才 lookup_modules 按单据"
+      + "里的业务关键词检索模块,命中就 bind_module 登记它的仓,再逐个 "
+      + "pull_repo 拉取(有单场景平台会顺带切好修复分支);检索不到就 "
+      + "AskUserQuestion 问用户要仓地址再 pull_repo。本单无需代码改动则"
+      + "直接 complete_stage 跳过",
     exit: "要用的仓都 pull_repo 落地 → complete_stage 收口;无需代码仓则直接 complete_stage 跳过",
     exitAction: "complete_stage",
     tools: [
