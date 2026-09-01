@@ -72,6 +72,18 @@ type MineScope = "all" | "waiting" | "intervention" | "active" | "delivered";
 type TeamTaskTab = "current" | "archive";
 type TeamAssetTab = "knowledge" | "modules" | "workflows";
 
+const TEAM_STATUS_LABEL: Partial<Record<TaskStatus, string>> = {
+  queued: "排队",
+  running: "执行中",
+  pausing: "暂停中",
+  waiting_for_human: "待决定",
+  paused: "已暂停",
+  verifying: "流水线验证",
+  await_merge: "待合入",
+  coordinating: "子任务推进",
+  failed: "异常",
+};
+
 const APP_VIEWS = new Set<View>([
   "team", "mine", "issues", "profile", "users", "settings", "knowledge",
   "wishes", "help",
@@ -1604,7 +1616,8 @@ function TeamDeliveryOverview({
             disabled={entry.count === 0}
             aria-pressed={selectedStatus === entry.key} aria-controls="team-queue"
             onClick={() => onSelectStatus(entry.key)}>
-            <span>{STATUS_TEXT[entry.key as TaskStatus] ?? entry.key}</span>
+            <span>{TEAM_STATUS_LABEL[entry.key as TaskStatus]
+              ?? STATUS_TEXT[entry.key as TaskStatus] ?? entry.key}</span>
             <strong>{entry.count}</strong>
           </button>)}
           {!stats.statuses.length && <div className="delivery-breakdown-empty">暂无交付中任务</div>}
