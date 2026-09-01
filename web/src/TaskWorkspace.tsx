@@ -541,6 +541,8 @@ export function TaskWorkspace({
     defaultWorkspaceView(task),
   );
   const [materialsFullscreen, setMaterialsFullscreen] = useState(false);
+  const [documentsDownloading, setDocumentsDownloading] = useState(false);
+  const [documentsDownloadError, setDocumentsDownloadError] = useState("");
   const [reviewPanelOpen, setReviewPanelOpen] = useState(false);
   const [reviewInviteOpen, setReviewInviteOpen] = useState(false);
   const [executionView, setExecutionView] = useState<ExecutionView>("events");
@@ -572,6 +574,8 @@ export function TaskWorkspace({
       ?? (task.requirement_graph?.stage === "confirmed" ? "chain" : "source"));
     setWorkspaceView(defaultWorkspaceView(task));
     setMaterialsFullscreen(false);
+    setDocumentsDownloading(false);
+    setDocumentsDownloadError("");
     setReviewPanelOpen(false);
     setExecutionView("events");
     setRepositoryAssignees(EMPTY_REPOSITORY_ASSIGNEE_SELECTION);
@@ -862,6 +866,34 @@ export function TaskWorkspace({
   const evidenceGapArtifact = documents.find((item) =>
     item.purpose === "pipeline_evidence_gap");
   const evidenceGapActionable = pipelineEvidenceNeedsHuman(task);
+
+  async function downloadDocuments() {
+    if (!documents.length || documentsDownloading) return;
+    setDocumentsDownloading(true);
+    setDocumentsDownloadError("");
+    try {
+      const response = await fetch(
+        `/tasks/${encodeURIComponent(task.id)}/artifacts/archive`);
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({})) as { error?: unknown };
+        throw new Error(String(body.error ?? `打包下载失败(${response.status})`));
+      }
+      const blobUrl = URL.createObjectURL(await response.blob());
+      const anchor = document.createElement("a");
+      anchor.href = blobUrl;
+      anchor.download = `${task.id}-过程文档-`
+        + `${new Date().toISOString().slice(0, 10)}.zip`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(blobUrl), 0);
+    } catch (reason) {
+      setDocumentsDownloadError(
+        String(reason instanceof Error ? reason.message : reason));
+    } finally {
+      setDocumentsDownloading(false);
+    }
+  }
   // 服务端只生成一份聚合 diff，因此 changes.length 几乎永远是 1，
   // 它表示“产物份数”而不是用户关心的“变更文件数”。旧服务尚未提供
   // file_count 时保留原回退，避免滚动升级期间把入口误判为空。
@@ -1228,6 +1260,16 @@ export function TaskWorkspace({
                 onClick={() => { setMaterialView("diff"); if (changes[0]) setActive(changes[0].name); }} disabled={!changeFileCount}>
                 <span>工作区变更</span><i>{changeFileCount}</i>
               </button>
+              {materialView === "doc" && <button type="button"
+                className="materials-download"
+                disabled={!documents.length || documentsDownloading}
+                title={documents.length
+                  ? `下载全部 ${documents.length} 份过程文档(完整原文件)`
+                  : "还没有可下载的过程文档"}
+                onClick={() => void downloadDocuments()}>
+                <span aria-hidden>⇩</span>
+                {documentsDownloading ? "打包中…" : "打包下载"}
+              </button>}
               <button type="button" className="materials-fullscreen-toggle"
                 aria-pressed={materialsFullscreen}
                 title={materialsFullscreen ? "返回检视与决定同屏" : "让当前交付材料占满工作台"}
@@ -1237,6 +1279,9 @@ export function TaskWorkspace({
               </button>
             </div>
           </div>
+          {documentsDownloadError && <div className="utility-note" role="alert">
+            打包下载失败：{documentsDownloadError}
+          </div>}
           {evidenceGapActionable && evidenceGapArtifact && (
             <section className="ws-evidence-gap-callout" role="status">
               <div>
