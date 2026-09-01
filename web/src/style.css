@@ -8549,9 +8549,9 @@ pre {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0;
   overflow: hidden;
-  border: 1px solid var(--line-strong);
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--line));
   border-radius: 10px;
-  background: var(--surface-muted);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
 }
 .delivery-breakdown-cells button {
   width: 100%;
@@ -8566,8 +8566,8 @@ pre {
   opacity: 1;
   color: var(--text);
   border: 0;
-  border-right: 1px solid var(--line-strong);
-  border-bottom: 1px solid var(--line-strong);
+  border-right: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line));
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line));
   border-radius: 0;
   background: transparent;
   text-align: left;

@@ -22,11 +22,14 @@ test("团队任务统计先展示总览公式，再用阶段和状态拆同一�
     "阶段和状态应共用连续的三列矩阵，不能堆成随意排列的白卡");
   assert.match(css,
     /\.delivery-breakdown-cells button\s*\{[^}]*border-radius:\s*0/s);
-  assert.match(app, /const TEAM_STATUS_LABEL/);
+  assert.match(app, /teamDeliveryStatusGroup\(task\.status\)/);
   assert.match(css,
     /\.delivery-breakdown-cells button:disabled\s*\{[^}]*opacity:\s*1/s,
     "零状态数字也必须清晰可读，不能沿用半透明禁用态");
   assert.match(css,
     /\.delivery-breakdown-cells button:not\(:disabled\),[^}]*background:\s*var\(--accent\)/s,
     "有任务的状态应使用实色强调，不能浅底叠浅字");
+  assert.match(css,
+    /\.delivery-breakdown-cells\s*\{[^}]*background:\s*color-mix\(in srgb, var\(--accent\) 8%, var\(--surface\)\)/s,
+    "阶段和状态矩阵都使用统一的淡紫色底");
 });

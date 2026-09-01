@@ -6,7 +6,7 @@ import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import {
   createUser, deleteUser, getKnowledgeInsights, getLaunchOptions, getSession, getTask, listMyReviews, listTasks, listUsers,
   login, logout, putCommitter, putUserDisplayName, resetUserPassword,
-  STATUS_TEXT, type AuthUser, type TaskStatus, type TaskSummary,
+  type AuthUser, type TaskStatus, type TaskSummary,
   type ReviewRequest, type TeamKnowledgeInsights, type UserRole,
 } from "./api";
 import { ConfirmDialogHost, confirmDialog } from "./ConfirmDialog";
@@ -31,6 +31,7 @@ import {
   matchesTeamScope,
   responsibleOf,
   teamDeliveryBreakdown,
+  teamDeliveryStatusGroup,
   type TeamDeliveryBreakdown,
   type TeamScope,
 } from "./teamOps";
@@ -71,18 +72,6 @@ type Density = "comfortable" | "compact";
 type MineScope = "all" | "waiting" | "intervention" | "active" | "delivered";
 type TeamTaskTab = "current" | "archive";
 type TeamAssetTab = "knowledge" | "modules" | "workflows";
-
-const TEAM_STATUS_LABEL: Partial<Record<TaskStatus, string>> = {
-  queued: "排队",
-  running: "执行中",
-  pausing: "暂停中",
-  waiting_for_human: "待决定",
-  paused: "已暂停",
-  verifying: "流水线验证",
-  await_merge: "待合入",
-  coordinating: "子任务推进",
-  failed: "异常",
-};
 
 const APP_VIEWS = new Set<View>([
   "team", "mine", "issues", "profile", "users", "settings", "knowledge",
@@ -1491,7 +1480,7 @@ function TeamDashboard({
     if (phase === "尚未进入阶段" && task.progress?.current_phase) return false;
     if (phase && phase !== "尚未进入阶段"
         && task.progress?.current_phase !== phase) return false;
-    if (taskStatus && task.status !== taskStatus) return false;
+    if (taskStatus && teamDeliveryStatusGroup(task.status) !== taskStatus) return false;
     return true;
   }).sort(byTeamAttention), [
     currentTasks, query, scope, responsible, phase, taskStatus,
@@ -1519,7 +1508,7 @@ function TeamDashboard({
       onSelectStatus={selectTaskStatus} />
 
     <section className="task-section" id="team-queue" ref={queueRef} aria-labelledby="team-queue-title">
-      <div className="section-head"><div><span className="section-kicker">CURRENT TEAM WORK</span><h2 id="team-queue-title">{phase ? `${phase}现场` : taskStatus ? `${STATUS_TEXT[taskStatus as TaskStatus] ?? taskStatus}任务` : "当前现场"}</h2></div><span className={`section-count${phase || taskStatus ? " active-filter" : ""}`}>{phase ? `阶段 · ${phase}　` : taskStatus ? `状态 · ${STATUS_TEXT[taskStatus as TaskStatus] ?? taskStatus}　` : ""}{visible.length} / {currentTasks.length} 项</span></div>
+      <div className="section-head"><div><span className="section-kicker">CURRENT TEAM WORK</span><h2 id="team-queue-title">{phase ? `${phase}现场` : taskStatus ? `${deliveryStats.statuses.find((entry) => entry.key === taskStatus)?.label ?? taskStatus}任务` : "当前现场"}</h2></div><span className={`section-count${phase || taskStatus ? " active-filter" : ""}`}>{phase ? `阶段 · ${phase}　` : taskStatus ? `状态 · ${deliveryStats.statuses.find((entry) => entry.key === taskStatus)?.label ?? taskStatus}　` : ""}{visible.length} / {currentTasks.length} 项</span></div>
       <div className="task-filters" aria-label="筛选当前现场">
         <label className="task-search"><svg viewBox="0 0 18 18" aria-hidden><circle cx="8" cy="8" r="4.5" /><path d="m11.5 11.5 3 3" /></svg><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索任务、需求或负责人" /></label>
         <select aria-label="现场范围" value={scope} onChange={(event) => setScope(event.target.value as TeamScope)}><option value="all">全部现场</option><option value="action">需要处理</option><option value="stale">停滞任务</option><option value="wip">正在推进</option><option value="waiting">等待决策</option></select>
@@ -1616,8 +1605,7 @@ function TeamDeliveryOverview({
             disabled={entry.count === 0}
             aria-pressed={selectedStatus === entry.key} aria-controls="team-queue"
             onClick={() => onSelectStatus(entry.key)}>
-            <span>{TEAM_STATUS_LABEL[entry.key as TaskStatus]
-              ?? STATUS_TEXT[entry.key as TaskStatus] ?? entry.key}</span>
+            <span>{entry.label}</span>
             <strong>{entry.count}</strong>
           </button>)}
           {!stats.statuses.length && <div className="delivery-breakdown-empty">暂无交付中任务</div>}
