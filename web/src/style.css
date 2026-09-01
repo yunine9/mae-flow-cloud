@@ -1365,7 +1365,16 @@ svg {
 .ws-review-drawer-toggle strong { color: var(--text-strong); font-size: 14px; }
 .ws-review-drawer-toggle em { color: var(--faint); font-size: 12px; font-style: normal; white-space: nowrap; }
 .ws-review-drawer.open .ws-review-drawer-toggle { border-bottom: 1px solid var(--line); }
-.ws-review-drawer-body { max-height: min(62vh, 720px); padding: 10px; overflow: auto; display: grid; gap: 10px; }
+.ws-review-drawer-body {
+  max-height: min(62vh, 720px);
+  min-width: 0;
+  padding: 10px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ws-review-drawer-body > * { flex: none; }
 .ws-review-drawer-body .annot-panel { margin: 0; box-shadow: none; }
 .ws-review-drawer-body .review-assignment.compact,
 .ws-review-drawer-body .committer-review.compact { margin: 0; }
@@ -1461,17 +1470,32 @@ svg {
 .issue-thread.issue-doc.is-fullscreen .issue-doc-body,
 .issue-thread.issue-doc.is-fullscreen .issue-dialogue,
 .issue-thread.issue-doc.is-fullscreen .issue-review-panel { flex: 1; min-height: 0; overflow: auto; }
-.issue-thread.issue-doc.is-fullscreen .issue-doc-body { max-width: 1440px; width: 100%; margin: 0 auto; padding: 22px 5vw 80px; box-sizing: border-box; }
+.issue-thread.issue-doc.is-fullscreen .issue-doc-body {
+  max-width: 1760px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 22px clamp(20px, 3vw, 48px) 80px;
+  box-sizing: border-box;
+}
+.issue-thread.issue-doc.is-fullscreen .plantuml-figure,
+.issue-thread.issue-doc.is-fullscreen .mermaid-figure { overflow-x: hidden; }
+.issue-thread.issue-doc.is-fullscreen .puml-diagram,
+.issue-thread.issue-doc.is-fullscreen .mermaid-diagram {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
 
 /* ── 常驻快速反馈：窄侧签不抢主导航，点击才展开。 ── */
 .wish-quick-trigger {
-  position: fixed; z-index: 650; right: 0; top: 58%; padding: 12px 8px;
-  display: grid; gap: 4px; justify-items: center; color: #fff;
-  background: var(--accent); border: 0; border-radius: 10px 0 0 10px;
+  position: fixed; z-index: 650; right: 18px; bottom: 18px; top: auto;
+  min-height: 42px; padding: 0 14px;
+  display: inline-flex; align-items: center; gap: 7px; color: #fff;
+  background: var(--accent); border: 0; border-radius: 999px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, .24);
 }
 .wish-quick-trigger span { font-size: 16px; }
-.wish-quick-trigger strong { font-size: 11px; writing-mode: vertical-rl; letter-spacing: 2px; }
+.wish-quick-trigger strong { font-size: 12px; writing-mode: horizontal-tb; letter-spacing: 0; }
 .wish-quick-backdrop { position: fixed; z-index: 800; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(5, 9, 18, .58); }
 .wish-quick-dialog { width: min(460px, 100%); padding: 22px; display: grid; gap: 16px; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 24px 80px rgba(0, 0, 0, .45); }
 .wish-quick-dialog header, .wish-quick-dialog footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
@@ -1487,7 +1511,7 @@ svg {
 
 @media (max-width: 760px) {
   .issue-thread.issue-doc.is-fullscreen { inset: 4px; padding: 12px; border-radius: 9px; }
-  .wish-quick-trigger { top: auto; bottom: 76px; }
+  .wish-quick-trigger { right: 12px; top: auto; bottom: 76px; }
   .user-picker-popover { width: min(300px, calc(100vw - 48px)); }
 }
 .repo-probe-state::before {
@@ -6702,8 +6726,21 @@ pre {
   box-shadow: var(--shadow-xs);
 }
 .workspace-overlay.materials-fullscreen .ws-doc {
-  padding-left: clamp(22px, 4vw, 68px);
-  padding-right: clamp(22px, 4vw, 68px);
+  padding-left: clamp(20px, 3vw, 48px);
+  padding-right: clamp(20px, 3vw, 48px);
+}
+.workspace-overlay.materials-fullscreen .ws-doc .md {
+  width: min(1600px, 100%);
+}
+.workspace-overlay.materials-fullscreen .plantuml-figure,
+.workspace-overlay.materials-fullscreen .mermaid-figure {
+  overflow-x: hidden;
+}
+.workspace-overlay.materials-fullscreen .puml-diagram,
+.workspace-overlay.materials-fullscreen .mermaid-diagram {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
 }
 .ws-tabs {
   min-height: 43px;
