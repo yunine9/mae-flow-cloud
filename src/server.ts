@@ -76,6 +76,8 @@ import {
 } from "./taskService.ts";
 import { buildTimeline } from "./timeline.ts";
 import {
+  ArtifactArchiveTooLargeError,
+  bundleArtifactDocuments,
   listArtifactsAsync,
   readArtifactAsync,
   resolveArtifactRoot,
@@ -2668,6 +2670,32 @@ export function createTaskServer(
             // 独立 fail-open，不能用 root 缺失把 pipeline/ 一起吞掉。
             return json(response, 200,
               await listArtifactsAsync(root, sources));
+          }
+          if (parts.length === 4 && parts[3] === "archive") {
+            let archive;
+            try {
+              archive = bundleArtifactDocuments(root, sources);
+            } catch (reason) {
+              if (reason instanceof ArtifactArchiveTooLargeError) {
+                return json(response, 413, { error: reason.message });
+              }
+              throw reason;
+            }
+            if (!archive) {
+              return json(response, 409, { error: "暂无可打包的过程文档" });
+            }
+            const day = new Date().toISOString().slice(0, 10).replaceAll("-", "");
+            const safeId = id.replace(/[^A-Za-z0-9._-]/g, "_");
+            const filename = `${id}-过程文档-${day}.zip`;
+            const filenameAscii = `${safeId}-process-documents-${day}.zip`;
+            response.writeHead(200, {
+              "content-type": "application/zip",
+              "content-length": String(archive.data.length),
+              "content-disposition": `attachment; filename="${filenameAscii}"`
+                + `; filename*=UTF-8''${encodeURIComponent(filename)}`,
+              "cache-control": "no-store",
+            });
+            return response.end(archive.data);
           }
           // name 里带 `/`(单号目录/文件名):编码与未编码两种形态都收。
           const name = decodeURIComponent(parts.slice(3).join("/"));

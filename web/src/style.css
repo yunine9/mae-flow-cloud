@@ -6853,6 +6853,24 @@ pre {
   line-height: 1;
 }
 .ws-source-switch button.on i { color: var(--accent); background: var(--accent-soft); }
+.ws-source-switch .materials-download {
+  margin-left: 5px;
+  color: #fff;
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: var(--shadow-xs);
+}
+.ws-source-switch .materials-download:hover:not(:disabled) {
+  color: #fff;
+  border-color: color-mix(in srgb, var(--accent) 82%, #000);
+  background: color-mix(in srgb, var(--accent) 88%, #000);
+}
+.ws-source-switch .materials-download > span {
+  color: inherit;
+  font-size: 16px;
+  font-weight: 750;
+  letter-spacing: 0;
+}
 .ws-source-switch .materials-fullscreen-toggle {
   margin-left: 5px;
   padding-left: 12px;

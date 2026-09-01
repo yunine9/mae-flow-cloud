@@ -30,6 +30,7 @@ import {
   AGENT_PLATFORM_ROOTS,
   isAgentPlatformPath,
 } from "./agentPlatformPaths.ts";
+import { createZipArchive } from "./zipArchive.ts";
 
 const WORK_DIR = ".mae-flow-work";
 /** 单个产物最多回传这么多字节:一个巨型 diff 不能把页面拖死。 */
@@ -130,6 +131,17 @@ interface DocEntry {
   path: string;
   /** 允许读取的真实根目录；最终读取还会用 realpath 再守一次边界。 */
   root: string;
+}
+
+const ARTIFACT_ARCHIVE_MAX_FILES = 1000;
+const ARTIFACT_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024;
+
+export class ArtifactArchiveTooLargeError extends Error {}
+
+export interface ArtifactDocumentsArchive {
+  data: Buffer;
+  files: number;
+  sourceBytes: number;
 }
 
 /** 代码工作区:调用方给了就用;没给就在任务工作区下找带
@@ -240,6 +252,51 @@ function collectReadableDocs(
     ...(cwd ? collectDocs(cwd) : []),
     ...collectPipelineDocs(sources.pipelineRoot),
   ];
+}
+
+/** 打包主任务工作台“过程文档”。集合与列表/单篇读取共用同一白名单，
+ * 只收真实 Markdown，不把“工作区变更”这个虚拟 diff 混进来。包内读取
+ * 完整原文件，不受页面 512 KB 阅读截断影响。 */
+export function bundleArtifactDocuments(
+  cwd: string | undefined,
+  sources: ArtifactSources = {},
+): ArtifactDocumentsArchive | undefined {
+  const docs = collectReadableDocs(cwd, sources);
+  if (!docs.length) return undefined;
+  if (docs.length > ARTIFACT_ARCHIVE_MAX_FILES) {
+    throw new ArtifactArchiveTooLargeError(
+      `过程文档超过 ${ARTIFACT_ARCHIVE_MAX_FILES} 份,请先整理后再打包`);
+  }
+
+  const entries: Array<{ name: string; content: Buffer; modifiedAt: Date }> = [];
+  let sourceBytes = 0;
+  for (const doc of docs) {
+    try {
+      // 扫描后文件可能被替换成符号链接；与 readArtifact 一样，打包前
+      // 再用真实路径核对白名单根，不能让 ZIP 成为越界读取旁路。
+      const root = realpathSync(doc.root);
+      const target = realpathSync(doc.path);
+      if (target !== root && !target.startsWith(root + sep)) continue;
+      const info = statSync(target);
+      if (!info.isFile()) continue;
+      const content = readFileSync(target);
+      sourceBytes += content.length;
+      if (sourceBytes > ARTIFACT_ARCHIVE_MAX_BYTES) {
+        throw new ArtifactArchiveTooLargeError(
+          "过程文档合计超过 64 MiB,请先整理后再打包");
+      }
+      entries.push({ name: doc.meta.name, content, modifiedAt: info.mtime });
+    } catch (reason) {
+      if (reason instanceof ArtifactArchiveTooLargeError) throw reason;
+      // 文件扫描后消失/暂时不可读：旁路 fail-open，别的文档照常下载。
+    }
+  }
+  if (!entries.length) return undefined;
+  return {
+    data: createZipArchive(entries),
+    files: entries.length,
+    sourceBytes,
+  };
 }
 
 /** git 子进程:失败一律返回 undefined(不是 git 仓、git 不在、超时)。 */
