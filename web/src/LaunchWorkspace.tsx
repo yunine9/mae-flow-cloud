@@ -23,6 +23,7 @@ import {
   type RepositoryTechnologyDraft,
 } from "./RepositoryTechnologyPicker";
 import { knowledgeLanguageLabel } from "./KnowledgeLanguages";
+import { UserPicker } from "./UserPicker";
 import {
   knowledgeAssetPath,
   type KnowledgeAssetFocus,
@@ -1020,22 +1021,25 @@ export function LaunchWorkspace({
                                 && /\s/.test((repositoryTickets[index] ?? "").trim()))}
                               spellCheck={false}
                               required={options.ticket.required && Boolean(value.trim())} />}
-                            <select value={repositoryAssignees[index] ?? session.username}
-                              aria-label={`第 ${index + 1} 个仓库的责任人`}
+                            <UserPicker
+                              value={repositoryAssignees[index] ?? session.username}
+                              ariaLabel={`第 ${index + 1} 个仓库的责任人`}
                               disabled={!multiRepository}
-                              onChange={(event) => changeRepositoryAssignee(
-                                index, event.target.value)}>
-                              {collaborationAssignees.length === 0
-                                ? <option value={session.username}>{session.username}（自己）</option>
-                                : collaborationAssignees.map((person) => (
-                                  <option key={person.username} value={person.username}
-                                    disabled={!person.ready}>
-                                    {person.username === session.username
-                                      ? `${person.username}（自己）` : person.username}
-                                    {person.ready ? "" : ` · 未就绪`}
-                                  </option>
-                                ))}
-                            </select>
+                              onChange={(username) => changeRepositoryAssignee(index, username)}
+                              options={(collaborationAssignees.length
+                                ? collaborationAssignees : [{
+                                  username: session.username,
+                                  display_name: session.display_name,
+                                  ready: true,
+                                  missing: [],
+                                }]).map((person) => ({
+                                  username: person.username,
+                                  display_name: person.display_name,
+                                  disabled: !person.ready,
+                                  detail: person.username === session.username
+                                    ? "自己" : person.ready ? undefined : "个人设置未就绪",
+                                }))}
+                            />
                             {repos.length > 1 && <button type="button"
                               aria-label={`移除第 ${index + 1} 个仓库`}
                               onClick={() => removeRepository(index)}>×</button>}

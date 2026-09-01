@@ -613,6 +613,8 @@ export function createTaskServer(
                 String(body.username ?? ""),
                 String(body.password ?? ""),
                 String(body.role ?? "developer") as "admin" | "developer",
+                body.display_name === undefined
+                  ? undefined : String(body.display_name),
               );
               return json(response, 201, user);
             } catch (error) {
@@ -625,6 +627,19 @@ export function createTaskServer(
             try {
               const user = options.auth!.setCommitter(
                 decodeURIComponent(parts[2]), body.on === true);
+              return json(response, 200, user);
+            } catch (error) {
+              return json(response, 400, { error: humanError(error) });
+            }
+          }
+          if (request.method === "PUT" && parts.length === 4
+              && parts[3] === "display-name") {
+            const body = await readBody(request);
+            try {
+              const user = options.auth!.setDisplayName(
+                decodeURIComponent(parts[2]),
+                body.display_name === undefined
+                  ? undefined : String(body.display_name));
               return json(response, 200, user);
             } catch (error) {
               return json(response, 400, { error: humanError(error) });

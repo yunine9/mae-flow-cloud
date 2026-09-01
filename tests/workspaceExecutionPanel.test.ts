@@ -18,6 +18,20 @@ test("进入独立执行现场页签后直接展开，不要求用户再点一�
   assert.match(executionView, /<ExecutionPanel task=\{task\} defaultOpen \/>/);
 });
 
+test("材料与检视组成同一工作面，一级栏目不再要求来回切换", () => {
+  const navigation = workspace.slice(
+    workspace.indexOf('aria-label="任务工作台视图"'),
+    workspace.indexOf('<div className={`ws-body'),
+  );
+  assert.doesNotMatch(navigation, /批注与检视/);
+  assert.match(workspace, /aria-label="本轮检视清单"/);
+  assert.match(workspace, /setReviewPanelOpen\(true\)/,
+    "新增意见后应留在材料并自动展开检视清单");
+  assert.match(workspace, /<AnnotationPanel[\s\S]*onLocate=\{locate\}/);
+  assert.match(workspace, /<TaskTimeline taskId=\{task\.id\} \/>/,
+    "时间线应回到执行现场而不是占据检视工作面");
+});
+
 test("运行中的任务默认进入执行现场，真正等人时才回到材料", () => {
   const policy = workspace.slice(
     workspace.indexOf("function defaultWorkspaceView"),

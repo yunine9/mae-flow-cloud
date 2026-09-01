@@ -3,6 +3,7 @@ import {
   listCollaborationAssignees,
   type CollaborationAssignee,
 } from "./api";
+import { UserPicker, userLabel } from "./UserPicker";
 
 export interface RepositoryAssigneeSelection {
   assignments: Record<string, string>;
@@ -140,21 +141,23 @@ export function RepositoryAssigneePicker({
             <small>{repository.responsibility ?? repository.url}</small></span>
           {isUnitRow(repository) ? <span className="repository-assignee-editable">
             <small>该单元的责任人</small>
-            <select value={selected}
-              aria-label={`${rowLabel}的责任人`}
-              onChange={(event) =>
-                chooseAssignee(repository.id, event.target.value)}>
-              {[...new Set([selected, ...people.map((person) => person.username)])]
+            <UserPicker value={selected}
+              ariaLabel={`${rowLabel}的责任人`}
+              onChange={(username) => chooseAssignee(repository.id, username)}
+              options={[...new Set([selected,
+                ...people.map((person) => person.username)])]
                 .filter(Boolean).map((name) => {
-                  const person = peopleByName.get(name);
-                  return <option key={name} value={name}
-                    disabled={person ? !person.ready : false}>
-                    {name}{person && !person.ready ? " · 未就绪" : ""}
-                  </option>;
-                })}
-            </select>
+                  const candidate = peopleByName.get(name);
+                  return {
+                    username: name,
+                    display_name: candidate?.display_name,
+                    disabled: candidate ? !candidate.ready : false,
+                    detail: candidate && !candidate.ready
+                      ? `未就绪：${candidate.missing.join("、")}` : undefined,
+                  };
+                })} />
           </span> : <span className="repository-assignee-readonly">
-            <small>责任人</small><strong>{selected || "未指定"}</strong>
+            <small>责任人</small><strong>{person ? userLabel(person) : selected || "未指定"}</strong>
           </span>}
           {(isUnitRow(repository) || !ticket.trim())
             ? <span className="repository-ticket-editable">

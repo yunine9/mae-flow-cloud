@@ -38,6 +38,29 @@ test("账号库:scrypt 哈希落盘且重启后仍可登录", () => {
   );
 });
 
+test("显示姓名:只影响展示和人员候选,工号继续作为登录身份", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-auth-display-name-"));
+  const file = join(dir, "auth.json");
+  const auth = new LocalAuth(file);
+  auth.bootstrapAdmin("admin", "correct-horse-battery");
+  assert.deepEqual(
+    auth.createUser("z00899322", "developer-password", "developer", " 张三 "),
+    { username: "z00899322", display_name: "张三", role: "developer" },
+  );
+  assert.deepEqual(auth.collaborationAssignees({
+    git_token: false, luban_token: false,
+  }), [{
+    username: "z00899322", display_name: "张三", ready: true, missing: [],
+  }]);
+  assert.equal(auth.authenticate(
+    "z00899322", "developer-password", "test").user?.display_name, "张三");
+  assert.deepEqual(auth.setDisplayName("z00899322", "李四"), {
+    username: "z00899322", display_name: "李四", role: "developer",
+  });
+  assert.equal(new LocalAuth(file).listUsers().find((user) =>
+    user.username === "z00899322")?.display_name, "李四");
+});
+
 test("会话落盘:重启后 cookie 仍有效,磁盘上没有原始令牌", () => {
   // 2026-08-29 部署审计实锤:会话纯内存时,每次改 bug 重新部署都把
   // 全员踢回登录页。落盘的是令牌 sha256——令牌只写不读的纪律对自家

@@ -5,7 +5,7 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import {
   createUser, deleteUser, getKnowledgeInsights, getLaunchOptions, getSession, getTask, listMyReviews, listTasks, listUsers,
-  login, logout, putCommitter, resetUserPassword,
+  login, logout, putCommitter, putUserDisplayName, resetUserPassword,
   type AuthUser, type TaskStatus, type TaskSummary,
   type ReviewRequest, type TeamKnowledgeInsights, type UserRole,
 } from "./api";
@@ -40,6 +40,8 @@ import {
 import { startVisiblePolling } from "./visiblePolling";
 import { KnowledgeFlywheel } from "./KnowledgeFlywheel";
 import { WishWall, type WishWallDraft } from "./WishWall";
+import { QuickWishButton } from "./WishQuickCreate";
+import { userLabel } from "./UserPicker";
 import { BusinessModuleLibrary } from "./BusinessModuleLibrary";
 import { WorkflowAssetWorkspace } from "./workflows";
 import {
@@ -998,7 +1000,7 @@ export function App() {
           <NavButton view="help" current={view} onSelect={selectView} label="使用帮助" />
         </div>
         <ThemeSwitch theme={theme} onChange={changeTheme} />
-        <div className="sidebar-foot session-foot"><span className="account-avatar" aria-hidden>{session.username.slice(0, 1).toUpperCase()}</span><span className="sidebar-account"><strong>{session.username}</strong><small>{session.role === "admin" ? "管理员" : "开发成员"}</small></span><DensitySwitch density={density} onChange={changeDensity} /><button type="button" className="logout-button" onClick={signOut} title="退出登录" aria-label="退出登录"><svg viewBox="0 0 20 20"><path d="M8 4H4.75A1.25 1.25 0 0 0 3.5 5.25v9.5A1.25 1.25 0 0 0 4.75 16H8M12.5 6.5 16 10l-3.5 3.5M7 10h9" /></svg></button></div>
+        <div className="sidebar-foot session-foot"><span className="account-avatar" aria-hidden>{(session.display_name ?? session.username).slice(0, 1).toUpperCase()}</span><span className="sidebar-account"><strong>{session.display_name ?? session.username}</strong><small>{session.display_name ? session.username : session.role === "admin" ? "管理员" : "开发成员"}</small></span><DensitySwitch density={density} onChange={changeDensity} /><button type="button" className="logout-button" onClick={signOut} title="退出登录" aria-label="退出登录"><svg viewBox="0 0 20 20"><path d="M8 4H4.75A1.25 1.25 0 0 0 3.5 5.25v9.5A1.25 1.25 0 0 0 4.75 16H8M12.5 6.5 16 10l-3.5 3.5M7 10h9" /></svg></button></div>
       </div>
     </aside>
 
@@ -1167,6 +1169,11 @@ export function App() {
           history.replaceState(appHistoryState("knowledge", "workflows"), "", "/");
         }
       }} />}
+    <QuickWishButton onOpenWall={() => {
+      setView("wishes");
+      setLaunchOpen(false);
+      closeArtifacts();
+    }} />
     {artifactTask && <TaskWorkspace
       task={artifactTask}
       viewerUsername={session.username}
@@ -1297,20 +1304,33 @@ function LoadingScreen() {
 
 function UsersBoard({ me }: { me: string }) {
   const [users, setUsers] = useState<AuthUser[]>([]); const [username, setUsername] = useState("");
+  const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState(""); const [role, setRole] = useState<UserRole>("developer");
   const [busy, setBusy] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState("");
   // 行内操作(内部平台的管理员特权:重置密码不验旧密码,删号即物理
   // 删除)。resetFor=正在给谁改密码;deleteArm=删除按钮二次确认锁,
   // 点第一下只上膛,再点才执行——不用 window.confirm 打断浏览器。
   const [resetFor, setResetFor] = useState(""); const [resetPassword, setResetPassword] = useState("");
+  const [nameFor, setNameFor] = useState(""); const [nameDraft, setNameDraft] = useState("");
   const [deleteArm, setDeleteArm] = useState("");
   async function refreshUsers() { try { setUsers(await listUsers()); } catch (reason) { setError(reason instanceof Error ? reason.message : "账号列表加载失败"); } }
   useEffect(() => { void refreshUsers(); }, []);
   async function submit(event: React.FormEvent) {
     event.preventDefault(); if (busy) return; setBusy(true); setError(""); setMessage("");
-    try { const created = await createUser(username.trim(), password, role); setUsername(""); setPassword(""); setMessage(`已创建账号 ${created.username}`); await refreshUsers(); }
+    try { const created = await createUser(username.trim(), password, role, displayName); setUsername(""); setDisplayName(""); setPassword(""); setMessage(`已创建账号 ${userLabel(created)}`); await refreshUsers(); }
     catch (reason) { setError(reason instanceof Error ? reason.message : "账号创建失败"); }
     finally { setBusy(false); }
+  }
+  async function saveDisplayName(event: React.FormEvent) {
+    event.preventDefault(); if (!nameFor || busy) return;
+    setBusy(true); setError(""); setMessage("");
+    try {
+      const updated = await putUserDisplayName(nameFor, nameDraft);
+      setMessage(`已更新 ${userLabel(updated)} 的显示姓名`);
+      setNameFor(""); setNameDraft(""); await refreshUsers();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "姓名更新失败");
+    } finally { setBusy(false); }
   }
   async function toggleCommitter(user: AuthUser) {
     setError(""); setMessage("");
@@ -1358,6 +1378,7 @@ function UsersBoard({ me }: { me: string }) {
       </div>
       <form className="user-create-form" onSubmit={submit}>
         <label><span>登录账号</span><input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="例如 zhangsan" required /></label>
+        <label><span>姓名</span><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="例如 张三" maxLength={40} /></label>
         <label><span>初始密码</span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="至少 10 个字符" minLength={10} autoComplete="new-password" required /></label>
         <label><span>账号角色</span><select value={role} onChange={(event) => setRole(event.target.value as UserRole)}><option value="developer">开发成员</option><option value="admin">管理员</option></select></label>
         <button type="submit" disabled={busy}>{busy ? "正在创建…" : "创建账号"}</button>
@@ -1374,7 +1395,7 @@ function UsersBoard({ me }: { me: string }) {
         <div className="user-table-head"><span>成员</span><span>角色</span><span>默认入口</span><span>Committer</span><span>操作</span></div>
         {users.map((user) => <div className="user-block" key={user.username}>
           <div className="user-row">
-            <span className="user-cell"><i>{user.username.slice(0, 1).toUpperCase()}</i><strong>{user.username}</strong></span>
+            <span className="user-cell"><i>{(user.display_name ?? user.username).slice(0, 1).toUpperCase()}</i><strong>{user.display_name ?? user.username}<small>{user.display_name ? user.username : "未填写姓名"}</small></strong></span>
             <span><em className={`role-chip ${user.role}`}>{user.role === "admin" ? "管理员" : "开发成员"}</em></span>
             <span className="user-entry">{user.role === "admin" ? "团队任务" : "我的需求"}</span>
             <span><button type="button" className={`committer-toggle${user.committer ? " on" : ""}`} aria-pressed={!!user.committer} onClick={() => void toggleCommitter(user)}><i aria-hidden />{user.committer ? "已加入" : "加入名单"}</button></span>
@@ -1383,6 +1404,11 @@ function UsersBoard({ me }: { me: string }) {
                 setResetFor(resetFor === user.username ? "" : user.username);
                 setResetPassword(""); setDeleteArm(""); setMessage(""); setError("");
               }}>{resetFor === user.username ? "收起" : "重置密码"}</button>
+              <button type="button" className="user-action" onClick={() => {
+                setNameFor(nameFor === user.username ? "" : user.username);
+                setNameDraft(user.display_name ?? ""); setResetFor("");
+                setDeleteArm(""); setMessage(""); setError("");
+              }}>{nameFor === user.username ? "收起" : "编辑姓名"}</button>
               {user.username === me
                 ? <button type="button" className="user-action" disabled title="不能删除自己——请让另一位管理员操作">删除</button>
                 : <button type="button" className={`user-action danger${deleteArm === user.username ? " armed" : ""}`} onClick={() => void removeUser(user)}>{deleteArm === user.username ? "确认删除?" : "删除"}</button>}
@@ -1393,6 +1419,12 @@ function UsersBoard({ me }: { me: string }) {
               onChange={(event) => setResetPassword(event.target.value)} />
             <button type="submit" disabled={busy || resetPassword.length < 10}>{busy ? "重置中…" : "确认重置"}</button>
             <small>不需要旧密码;重置后该账号的登录会话全部下线。</small>
+          </form>}
+          {nameFor === user.username && <form className="user-reset-row" onSubmit={saveDisplayName}>
+            <input value={nameDraft} placeholder="姓名，例如 张三（清空则只显示工号）"
+              maxLength={40} autoFocus onChange={(event) => setNameDraft(event.target.value)} />
+            <button type="submit" disabled={busy}>{busy ? "保存中…" : "保存姓名"}</button>
+            <small>登录、权限与历史记录仍使用工号 {user.username}。</small>
           </form>}
         </div>)}
       </div>
@@ -1473,7 +1505,7 @@ function TeamDashboard({
       <div className="task-filters" aria-label="筛选当前现场">
         <label className="task-search"><svg viewBox="0 0 18 18" aria-hidden><circle cx="8" cy="8" r="4.5" /><path d="m11.5 11.5 3 3" /></svg><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索任务、需求或负责人" /></label>
         <select aria-label="现场范围" value={scope} onChange={(event) => setScope(event.target.value as TeamScope)}><option value="all">全部现场</option><option value="action">需要处理</option><option value="stale">停滞任务</option><option value="wip">正在推进</option><option value="waiting">等待决策</option></select>
-        <select aria-label="责任人" value={responsible} onChange={(event) => setResponsible(event.target.value)}><option value="">全部责任人</option><option value="__unassigned">未指定</option>{users.map((user) => <option value={user.username} key={user.username}>{user.username}</option>)}</select>
+        <select aria-label="责任人" value={responsible} onChange={(event) => setResponsible(event.target.value)}><option value="">全部责任人</option><option value="__unassigned">未指定</option>{users.map((user) => <option value={user.username} key={user.username}>{userLabel(user)}</option>)}</select>
         {(query || scope !== "all" || responsible || phase) && <button type="button" className="filter-reset" onClick={() => { setQuery(""); setScope("all"); setResponsible(""); setPhase(""); }}>清除筛选</button>}
       </div>
       {visible.length === 0 && <TaskEmpty personal={false} />}

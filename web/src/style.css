@@ -1295,6 +1295,137 @@ svg {
   .repo-row.with-ticket > input:nth-of-type(2) { grid-column: 2 / -1; }
   .repo-row.with-ticket > select { grid-column: 2 / -1; }
 }
+
+/* ── 材料与检视同屏：右侧清单是材料动作层，不再强迫切一级栏目。 ── */
+.ws-body.has-review:not(.has-decision) {
+  grid-template-columns: minmax(0, 1fr) clamp(560px, 46vw, 760px);
+}
+.ws-body.has-review.has-decision {
+  grid-template-columns: minmax(0, 1fr) clamp(560px, 46vw, 760px);
+}
+.ws-review-drawer {
+  flex: none; overflow: visible; border: 1px solid var(--line);
+  border-radius: 11px; background: var(--surface); box-shadow: var(--shadow-xs);
+}
+.ws-review-drawer-toggle {
+  box-sizing: border-box; width: 100%; min-height: 54px; padding: 10px 12px;
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  color: var(--text); background: transparent; border: 0; text-align: left;
+}
+.ws-review-drawer-toggle > span { min-width: 0; display: flex; align-items: center; gap: 9px; }
+.ws-review-drawer-toggle i {
+  width: 28px; height: 28px; display: grid; place-items: center; flex: none;
+  color: var(--accent); background: var(--accent-soft); border-radius: 8px;
+  font-size: 12px; font-style: normal; font-weight: 800;
+}
+.ws-review-drawer-toggle strong { color: var(--text-strong); font-size: 14px; }
+.ws-review-drawer-toggle em { color: var(--faint); font-size: 12px; font-style: normal; white-space: nowrap; }
+.ws-review-drawer.open .ws-review-drawer-toggle { border-bottom: 1px solid var(--line); }
+.ws-review-drawer-body { max-height: min(62vh, 720px); padding: 10px; overflow: auto; display: grid; gap: 10px; }
+.ws-review-drawer-body .annot-panel { margin: 0; box-shadow: none; }
+.ws-review-drawer-body .review-assignment.compact,
+.ws-review-drawer-body .committer-review.compact { margin: 0; }
+.ws-review-drawer-body .review-assignment.compact { grid-template-columns: 32px minmax(0, 1fr); }
+.ws-review-drawer-body .review-assignment.compact > button { grid-column: 1 / -1; width: 100%; }
+.ws-review-drawer-body .committer-review-action { grid-template-columns: minmax(0, 1fr) auto; }
+.ws-decision.review-mode > :not(.ws-pane-head):not(.ws-review-drawer) { display: none; }
+.ws-decision.review-mode .ws-review-drawer.open {
+  min-height: 0; flex: 1; display: flex; flex-direction: column;
+}
+.ws-decision.review-mode .ws-review-drawer-body { max-height: none; min-height: 0; flex: 1; }
+.ws-review-drawer-body .committer-review-action .user-picker { width: 260px; max-width: 100%; }
+
+@media (max-width: 900px) {
+  .ws-body.has-review:not(.has-decision) { grid-template-columns: 1fr; }
+  .ws-review-drawer {
+    position: fixed; z-index: 310; left: 10px; right: 10px; bottom: 10px;
+    max-height: min(68vh, 680px); box-shadow: 0 18px 60px rgba(0, 0, 0, .36);
+  }
+  .ws-review-drawer-body { max-height: calc(min(68vh, 680px) - 56px); }
+}
+
+/* ── 人员选择：姓名用于阅读，工号仍是身份；几十人时直接搜索。 ── */
+.user-picker { position: relative; min-width: 0; }
+.user-picker-value {
+  width: 100%; min-height: 38px; padding: 8px 10px;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  color: var(--text-strong); background: var(--surface); border: 1px solid var(--line);
+  border-radius: 8px; text-align: left;
+}
+.user-picker-value span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.user-picker-value i { color: var(--faint); font-style: normal; }
+.user-picker-value:disabled { opacity: .7; cursor: not-allowed; }
+.user-picker.open .user-picker-value { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.user-picker-popover {
+  position: absolute; z-index: 80; top: calc(100% + 5px); left: 0;
+  width: 300px; max-width: calc(100vw - 48px); padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px; background: var(--surface);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, .24);
+}
+.user-picker-popover > input {
+  box-sizing: border-box; width: 100%; padding: 9px 10px; color: var(--text);
+  background: var(--surface-soft); border: 1px solid var(--line); border-radius: 7px;
+}
+.user-picker-options { max-height: 250px; margin-top: 7px; overflow: auto; display: grid; gap: 3px; }
+.user-picker-options > button {
+  min-height: 42px; padding: 7px 9px; display: flex; align-items: center;
+  justify-content: space-between; gap: 10px; color: var(--text); background: transparent;
+  border: 0; border-radius: 7px; text-align: left;
+}
+.user-picker-options > button:hover, .user-picker-options > button[aria-selected="true"] { background: var(--accent-soft); }
+.user-picker-options > button:disabled { opacity: .48; cursor: not-allowed; }
+.user-picker-options span { display: grid; gap: 2px; }
+.user-picker-options small, .user-picker-options em { color: var(--faint); font-size: 11px; font-style: normal; }
+.user-picker-options > p { margin: 10px; color: var(--faint); text-align: center; }
+.requirement-team-search { display: grid; grid-template-columns: auto minmax(150px, 260px); gap: 10px; align-items: center; margin: 10px 0; }
+.requirement-team-search > span { color: var(--faint); font-size: 12px; }
+.requirement-team-search input { padding: 8px 10px; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
+.user-cell strong { display: grid; gap: 2px; }
+.user-cell strong small { color: var(--faint); font-size: 11px; font-weight: 500; }
+
+/* ── 问题流过程文档：原位切成专注阅读，不丢当前页签与滚动。 ── */
+.issue-doc-view-actions { display: flex; justify-content: flex-end; align-items: center; gap: 12px; min-height: 30px; }
+.issue-doc-view-actions span { margin-right: auto; color: var(--faint); font-size: 12px; }
+.issue-doc-view-actions button { padding: 7px 11px; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 7px; }
+.issue-thread.issue-doc.is-fullscreen {
+  position: fixed; z-index: 720; inset: 14px; padding: 18px 22px;
+  display: flex; flex-direction: column; overflow: hidden;
+  color: var(--text); background: var(--surface); border: 1px solid var(--line);
+  border-radius: 14px; box-shadow: 0 24px 90px rgba(0, 0, 0, .45);
+}
+.issue-thread.issue-doc.is-fullscreen .issue-doc-body,
+.issue-thread.issue-doc.is-fullscreen .issue-dialogue,
+.issue-thread.issue-doc.is-fullscreen .issue-review-panel { flex: 1; min-height: 0; overflow: auto; }
+.issue-thread.issue-doc.is-fullscreen .issue-doc-body { max-width: 1440px; width: 100%; margin: 0 auto; padding: 22px 5vw 80px; box-sizing: border-box; }
+
+/* ── 常驻快速反馈：窄侧签不抢主导航，点击才展开。 ── */
+.wish-quick-trigger {
+  position: fixed; z-index: 650; right: 0; top: 58%; padding: 12px 8px;
+  display: grid; gap: 4px; justify-items: center; color: #fff;
+  background: var(--accent); border: 0; border-radius: 10px 0 0 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .24);
+}
+.wish-quick-trigger span { font-size: 16px; }
+.wish-quick-trigger strong { font-size: 11px; writing-mode: vertical-rl; letter-spacing: 2px; }
+.wish-quick-backdrop { position: fixed; z-index: 800; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(5, 9, 18, .58); }
+.wish-quick-dialog { width: min(460px, 100%); padding: 22px; display: grid; gap: 16px; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 24px 80px rgba(0, 0, 0, .45); }
+.wish-quick-dialog header, .wish-quick-dialog footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.wish-quick-dialog header small { color: var(--accent); font-weight: 700; letter-spacing: .12em; }
+.wish-quick-dialog h2 { margin: 3px 0 0; }
+.wish-quick-dialog header > button { width: 32px; height: 32px; color: var(--text); background: transparent; border: 1px solid var(--line); border-radius: 8px; }
+.wish-quick-dialog label { display: grid; gap: 7px; }
+.wish-quick-dialog label > span { color: var(--muted); font-size: 13px; font-weight: 700; }
+.wish-quick-dialog input, .wish-quick-dialog textarea { padding: 10px 11px; color: var(--text); background: var(--surface-soft); border: 1px solid var(--line); border-radius: 8px; resize: vertical; }
+.wish-quick-dialog > p { margin: 0; color: var(--accent); font-size: 13px; }
+.wish-quick-dialog footer button { padding: 9px 13px; color: var(--text); background: var(--surface-soft); border: 1px solid var(--line); border-radius: 8px; }
+.wish-quick-dialog footer .primary { color: #fff; background: var(--accent); border-color: var(--accent); }
+
+@media (max-width: 760px) {
+  .issue-thread.issue-doc.is-fullscreen { inset: 4px; padding: 12px; border-radius: 9px; }
+  .wish-quick-trigger { top: auto; bottom: 76px; }
+  .user-picker-popover { width: min(300px, calc(100vw - 48px)); }
+}
 .repo-probe-state::before {
   width: 6px; height: 6px; flex: none; border-radius: 50%; background: currentColor;
   content: "";

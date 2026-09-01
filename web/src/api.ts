@@ -79,6 +79,7 @@ export type UserRole = "admin" | "developer";
 
 export interface AuthUser {
   username: string;
+  display_name?: string;
   role: UserRole;
   /** 管理员配置的可选检视人；不是角色，也不会自动收到任务通知。 */
   committer?: boolean;
@@ -102,6 +103,7 @@ export interface AuthUser {
 
 export interface CollaborationAssignee {
   username: string;
+  display_name?: string;
   ready: boolean;
   missing: string[];
 }
@@ -356,11 +358,25 @@ export async function createUser(
   username: string,
   password: string,
   role: UserRole,
+  displayName?: string,
 ): Promise<AuthUser> {
   const response = await fetch("/auth/users", {
     method: "POST",
-    body: JSON.stringify({ username, password, role }),
+    body: JSON.stringify({ username, password, role, display_name: displayName }),
   });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function putUserDisplayName(
+  username: string,
+  displayName: string,
+): Promise<AuthUser> {
+  const response = await fetch(
+    `/auth/users/${encodeURIComponent(username)}/display-name`, {
+      method: "PUT",
+      body: JSON.stringify({ display_name: displayName }),
+    });
   if (!response.ok) throw new Error(await errorText(response));
   return response.json();
 }

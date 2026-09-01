@@ -30,6 +30,8 @@ export type UserRole = "admin" | "developer";
 
 export interface AuthUser {
   username: string;
+  /** 人看的姓名；username 仍是稳定身份、登录账号与权限主键。 */
+  display_name?: string;
   role: UserRole;
   /** 可被任务责任人主动邀请检视。它是能力标记，不是第三种角色。 */
   committer?: boolean;
@@ -53,6 +55,7 @@ export interface AuthSessionUser extends AuthUser {
  * 更窄。 */
 export interface CollaborationAssignee {
   username: string;
+  display_name?: string;
   ready: boolean;
   missing: string[];
 }
@@ -151,7 +154,12 @@ export class LocalAuth {
         if (needs.git_token && !user.git_token) missing.push("CodeHub Token");
         if (needs.git_token && !user.git_email) missing.push("提交邮箱");
         if (needs.luban_token && !user.luban_token) missing.push("小鲁班 Token");
-        return { username: user.username, ready: missing.length === 0, missing };
+        return {
+          username: user.username,
+          ...(user.display_name ? { display_name: user.display_name } : {}),
+          ready: missing.length === 0,
+          missing,
+        };
       })
       .sort((a, b) => a.username.localeCompare(b.username));
   }
@@ -160,6 +168,7 @@ export class LocalAuth {
     username: string,
     password: string,
     role: UserRole,
+    displayName?: string,
   ): AuthUser {
     const normalized = username.trim();
     validateCredentials(normalized, password);
@@ -174,6 +183,7 @@ export class LocalAuth {
     }
     const user: StoredUser = {
       username: normalized,
+      ...normalizeDisplayName(displayName),
       role,
       password_hash: hashPassword(password),
       created_at: new Date().toISOString(),
@@ -182,6 +192,17 @@ export class LocalAuth {
     this.users.set(normalized, user);
     this.persist();
     return publicUser(user);
+  }
+
+  /** 管理员维护显示名。清空等于回退为只显示工号，不影响身份与历史。 */
+  setDisplayName(username: string, displayName?: string): AuthUser {
+    const stored = this.users.get(username);
+    if (!stored) throw new Error(`账号 ${username} 不存在`);
+    const normalized = normalizeDisplayName(displayName);
+    if (normalized.display_name) stored.display_name = normalized.display_name;
+    else delete stored.display_name;
+    this.persist();
+    return publicUser(stored);
   }
 
   /** 管理员删账号。内部平台的口径:人走了账号就清,不搞停用/归档两套
@@ -553,9 +574,18 @@ function maskToken(token: string | undefined): string | undefined {
 function publicUser(user: StoredUser): AuthUser {
   return {
     username: user.username,
+    ...(user.display_name ? { display_name: user.display_name } : {}),
     role: user.role,
     ...(user.committer ? { committer: true } : {}),
   };
+}
+
+function normalizeDisplayName(value: string | undefined): { display_name?: string } {
+  const displayName = value?.trim() ?? "";
+  if (!displayName) return {};
+  if (displayName.length > 40) throw new Error("姓名最多 40 个字符");
+  if (/\r|\n|\t/.test(displayName)) throw new Error("姓名不能包含换行或制表符");
+  return { display_name: displayName };
 }
 
 function validateCredentials(username: string, password: string): void {
