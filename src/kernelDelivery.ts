@@ -395,7 +395,7 @@ function invoke(input: {
       const detail = [result.error?.message, stderr, stdout]
         .filter(Boolean).join("\n").trim();
       throw new KernelDeliveryError(
-        `内核持续检视命令失败：${detail || "没有返回结构化结果"}`);
+        `内核持续检视命令失败：\n${detail || "没有返回结构化结果"}`);
     }
     return record;
   } finally {
@@ -404,9 +404,18 @@ function invoke(input: {
   }
 }
 
-function isRevisionConflict(error: unknown): boolean {
-  return error instanceof KernelDeliveryError
-    && /flow revision 已从 \d+ 变为 \d+/.test(error.message);
+function hasKernelErrorCode(error: unknown, expected: string): boolean {
+  if (!(error instanceof KernelDeliveryError)) return false;
+  for (const line of error.message.split(/\r?\n/)) {
+    if (!line.startsWith("[mae-flow:error] ")) continue;
+    try {
+      const record = JSON.parse(line.slice("[mae-flow:error] ".length));
+      if (record?.schema === "mae-flow-error/1" && record.code === expected) {
+        return true;
+      }
+    } catch { /* malformed diagnostic is not a retry signal */ }
+  }
+  return false;
 }
 
 /**
@@ -423,7 +432,7 @@ function invokeAfterRevisionConflict(input: Parameters<typeof invoke>[0]):
       return invoke(input);
     } catch (error) {
       lastError = error;
-      if (!isRevisionConflict(error)) throw error;
+      if (!hasKernelErrorCode(error, "FLOW_REVISION_CONFLICT")) throw error;
     }
   }
   throw lastError;

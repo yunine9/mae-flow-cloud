@@ -550,7 +550,7 @@ CC 检视结论:方向与根因诊断通过,方案作为目标架构采纳。修
 
 ### 16.1 落地结果
 
-- **批 1，Mae-Flow 内核**：在 `cloud/continuous-review` 专属分支新增
+- **批 1，Mae-Flow 内核**：在统一的 `cloud/workflow-customization` 专属分支新增
   `delivery_watch`、`feedback_triage` 与三条宿主交付命令；本地插件未声明
   能力时仍按旧语义进入 `end`。feedback-open/base SHA/幂等、Agent 伪造保护、
   精确路径授权、构建产物出账以及缺失/夹带点名均有内核测试。

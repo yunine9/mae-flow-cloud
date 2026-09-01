@@ -260,7 +260,7 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
   结束任务；同一任务、分支和 MR 会持续接收工作台批注、Build-Fix、流水线、
   MR 检视、冲突、负责面裁决和 push 确认返工，逐批修复并由各自权威来源核验，
   只有 MR 合入或用户主动停止才进入终态。Mae-Flow 源码位于专属分支
-  `cloud/continuous-review`，Cloud 发布件由 `harness/sync-kernel.sh` 回灌并在
+  `cloud/workflow-customization`，Cloud 发布件由 `harness/sync-kernel.sh` 回灌并在
   `kernel/VENDORED` 记录来源；服务启动会探测能力，缺失时拒绝新契约开单，
   不静默退回旧的 `end → init`。默认修复预算为 **20 轮**，耗尽沿用停摆通知
   请人处理。**已验**：真实内核命令契约、旧 `end`/错误重开迁移、四类单 writer
