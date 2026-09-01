@@ -61,3 +61,22 @@ test("检视栏支持拖拽、键盘微调和双击复位", () => {
   assert.match(css, /\.ws-review-resizer\s*\{/);
   assert.match(css, /cursor:\s*col-resize/);
 });
+
+test("持续检视固定高层进度并按来源展示每条反馈", () => {
+  assert.match(workspace,
+    /\["配置与需求", "方案", "开发", "持续检视", "已合入"\]/);
+  assert.match(workspace, /function FeedbackPanel/);
+  assert.match(workspace, /FEEDBACK_SOURCE_LABEL/);
+  assert.match(workspace, /item\.summary/,
+    "界面必须展示反馈正文，不能只给数量");
+  assert.match(workspace, /FEEDBACK_STATUS_LABEL/);
+  assert.match(css, /\.feedback-groups\s*\{/);
+  assert.match(css, /overflow-x:\s*auto/,
+    "来源多时应横向收纳，不把页面纵向铺成卡片墙");
+});
+
+test("执行中的任务默认打开执行现场", () => {
+  assert.match(workspace,
+    /\["queued", "running", "pausing", "verifying", "await_merge"\]/);
+  assert.match(workspace, /\.includes\(task\.status\)\) return "execution"/);
+});

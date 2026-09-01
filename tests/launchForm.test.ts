@@ -1001,7 +1001,7 @@ test("修复轮手刹只恢复当前草稿，不会从上一张任务偷偷带�
   assert.match(source,
     /<input type="text" inputMode="numeric" pattern="\[0-9\]\*"/,
     "修复轮手刹不能用 number spinner，空值误触会直接变 0");
-  assert.match(source, /留空=不限轮（自动修复开启）；填 0=关闭/,
+  assert.match(source, /留空=平台默认 20 轮；填 0=关闭/,
     "placeholder 要把默认与关闭的区别说明白");
   assert.match(source, /检视、冲突或流水线失败将等人处理/,
     "真填 0 时要直说会失去什么能力");

@@ -1344,7 +1344,7 @@ export function LaunchWorkspace({
                           }}
                           placeholder={options.repair_rounds !== undefined
                             ? `留空=团队默认 ${options.repair_rounds} 轮；填 0=关闭`
-                            : "留空=不限轮（自动修复开启）；填 0=关闭"} />
+                            : "留空=平台默认 20 轮；填 0=关闭"} />
                         <small className={repairRounds === "0" ? "field-warning" : undefined}>
                           {repairRounds === "0"
                             ? "本任务已关闭自动修复；检视、冲突或流水线失败将等人处理。"

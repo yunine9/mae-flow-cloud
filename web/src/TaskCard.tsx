@@ -446,10 +446,12 @@ export function TaskProgress({
   // 工作步骤，合入后通常仍停在“等待权威流水线”；直接照抄会让完成页像
   // 还有事没跑完。终态展示追加一个“完成”节点，不改写内核现场。
   const completed = status === "completed";
-  const phases = completed && progress.phases.at(-1) !== "完成"
+  const phases = completed
+      && !["完成", "已合入"].includes(progress.phases.at(-1) ?? "")
     ? [...progress.phases, "完成"] : progress.phases;
   const currentIndex = completed ? phases.length - 1 : progress.current_index;
-  const currentLabel = completed ? "完成" : showDetailedStep
+  const currentLabel = completed
+    ? (phases.at(-1) ?? "完成") : showDetailedStep
     ? progress.step ?? progress.current_phase : progress.current_phase;
   const displayedCurrentLabel = currentLabel === "交付" ? "验证与交付" : currentLabel;
   const milestone = progress.milestone;
