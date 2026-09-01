@@ -1,30 +1,29 @@
 """Trusted Cloud host commands for the continuous delivery review loop."""
-
 import hashlib
 import json
+import re
 
 from .shared import os, time
 from .wiring import api
 from .user_intervention import clear_stale_evidence
 from mae_flow_core.quality.external_repair import (
-    clear_feedback_authorization,
-    issue_feedback_authorization,
-)
+    clear_feedback_authorization, issue_feedback_authorization)
 from mae_flow_core.workflow.execution_contract import continuous_review_enabled
-
-
+from .host_capability import save_with_host_proof, verify_host_proof
 BATCH_SCHEMA = "mae-flow-feedback-batch/1"
 RESULT_SCHEMA = "mae-flow-feedback-result/1"
 STATE_SCHEMA = "mae-flow-delivery-loop/1"
 _RESULTS = frozenset(("fixed", "explained", "needs_human", "not_applicable"))
 _WAITING = frozenset(("external_verify", "delivery_watch"))
-_WRITER = frozenset((
-    "feedback_triage", "build", "domain_archive", "delivery_review", "push",
-))
-
+_WRITER = frozenset(("feedback_triage", "build", "domain_archive",
+                     "delivery_review", "push"))
 
 def _die(message):
     api.die("delivery: " + message, 2)
+
+
+def _verify_host_proof(state, args, action, payload):
+    return verify_host_proof(state, args.host_proof, action, payload)
 
 
 def _payload(path, schema):
@@ -89,6 +88,28 @@ def _head():
     return value
 
 
+def _unpushed_commits(verified_sha, local_head):
+    if local_head == verified_sha:
+        return []
+    if not re.fullmatch(r"[0-9a-fA-F]{40,64}", str(verified_sha or "")):
+        _die("合入源 SHA 格式不合法")
+    ancestor = api.sh(
+        "git merge-base --is-ancestor %s HEAD >/dev/null 2>&1 && echo yes"
+        % verified_sha)
+    if str(ancestor or "").strip() != "yes":
+        return [{
+            "sha": local_head,
+            "subject": "本地 HEAD 不在已合入提交之后，需人工核对",
+        }]
+    rows = api.sh("git log --format='%H%x09%s' --reverse " + verified_sha + "..HEAD")
+    result = []
+    for line in str(rows or "").splitlines():
+        sha, separator, subject = line.partition("\t")
+        if separator and re.fullmatch(r"[0-9a-fA-F]{40,64}", sha):
+            result.append({"sha": sha, "subject": subject[:500]})
+    return result
+
+
 def _item(raw):
     if not isinstance(raw, dict):
         _die("items 每一项必须是 JSON object")
@@ -123,7 +144,7 @@ def _history(state, step, result, note):
     })
 
 
-def _adopt_watch(state, payload):
+def _adopt_watch(state, payload, proof_nonce):
     """One-way adoption for pre-contract Cloud tasks already awaiting merge."""
     migration_id = _text(payload.get("batch_id"), "batch_id", 200)
     contract = state.get("execution_contract") or {}
@@ -136,6 +157,7 @@ def _adopt_watch(state, payload):
         if isinstance(item, dict) and item.get("migration_id") == migration_id
     ), None)
     if previous is not None:
+        save_with_host_proof(state, proof_nonce)
         print(json.dumps({
             "schema": STATE_SCHEMA, "idempotent": True,
             "migration_id": migration_id, "current": state.get("current"),
@@ -158,7 +180,7 @@ def _adopt_watch(state, payload):
         "at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "head": head,
     })
-    api.save_state(state)
+    save_with_host_proof(state, proof_nonce)
     print(json.dumps({
         "schema": STATE_SCHEMA, "idempotent": False,
         "migration_id": migration_id, "current": "delivery_watch",
@@ -168,13 +190,22 @@ def _adopt_watch(state, payload):
 def _open(flow, state, args):
     del flow
     payload = _payload(args.file, BATCH_SCHEMA)
+    proof_nonce = _verify_host_proof(state, args, "feedback-open", payload)
     if payload.get("mode") == "adopt-watch":
-        return _adopt_watch(state, payload)
+        return _adopt_watch(state, payload, proof_nonce)
     _capability(state)
     batch_id = _text(payload.get("batch_id"), "batch_id", 200)
     loop = _loop(state)
     previous = _batch(loop, batch_id)
     if previous is not None:
+        incoming_digest = _result_digest({
+            "task_id": payload.get("task_id"),
+            "base_sha": payload.get("base_sha"),
+            "items": payload.get("items"),
+        })
+        if previous.get("payload_digest") != incoming_digest:
+            _die("批次 %s 的载荷与首次登记不一致，拒绝当作幂等重放" % batch_id)
+        save_with_host_proof(state, proof_nonce)
         print(json.dumps({
             "schema": STATE_SCHEMA,
             "idempotent": True,
@@ -228,6 +259,11 @@ def _open(flow, state, args):
         "from_step": str(state.get("current") or ""),
         "status": status,
         "items": items,
+        "payload_digest": _result_digest({
+            "task_id": payload.get("task_id"),
+            "base_sha": payload.get("base_sha"),
+            "items": payload.get("items"),
+        }),
     }
     loop["batches"].append(record)
     old = str(state.get("current") or "")
@@ -242,7 +278,7 @@ def _open(flow, state, args):
             state.setdefault("step_heads", {})["feedback_triage"] = head
     _history(state, old, "feedback-open:" + batch_id,
              "收到 %s 条反馈；%s" % (len(items), status))
-    api.save_state(state)
+    save_with_host_proof(state, proof_nonce)
     print(json.dumps({
         "schema": STATE_SCHEMA,
         "idempotent": False,
@@ -300,8 +336,9 @@ def complete_verified_feedback(state, verified_sha):
 
 def _result(flow, state, args):
     del flow
-    _capability(state)
     payload = _payload(args.file, RESULT_SCHEMA)
+    proof_nonce = _verify_host_proof(state, args, "feedback-result", payload)
+    _capability(state)
     batch_id = _text(payload.get("batch_id"), "batch_id", 200)
     loop = _loop(state)
     batch = _batch(loop, batch_id)
@@ -334,6 +371,7 @@ def _result(flow, state, args):
     if batch.get("result_digest"):
         if batch.get("result_digest") != digest:
             _die("批次 %s 已登记不同结果，拒绝覆盖" % batch_id)
+        save_with_host_proof(state, proof_nonce)
         print(json.dumps({
             "schema": STATE_SCHEMA, "idempotent": True,
             "batch_id": batch_id, "status": batch.get("status"),
@@ -367,7 +405,7 @@ def _result(flow, state, args):
     _history(state, str(batch.get("from_step") or ""),
              "feedback-result:" + batch_id,
              "%s；HEAD %s" % (batch["status"], head[:12]))
-    api.save_state(state)
+    save_with_host_proof(state, proof_nonce)
     print(json.dumps({
         "schema": STATE_SCHEMA,
         "idempotent": False,
@@ -379,6 +417,12 @@ def _result(flow, state, args):
 
 
 def _close(flow, state, args):
+    proof_payload = {
+        "reason": args.reason,
+        "sha": args.sha,
+        "event_id": args.event_id,
+    }
+    proof_nonce = _verify_host_proof(state, args, "close", proof_payload)
     _capability(state)
     if args.reason != "merged":
         _die("close 当前只接受 --reason merged")
@@ -389,6 +433,7 @@ def _close(flow, state, args):
         if isinstance(item, dict) and item.get("event_id") == event_id
     ), None)
     if previous is not None:
+        save_with_host_proof(state, proof_nonce)
         print(json.dumps({**previous, "idempotent": True}, ensure_ascii=False))
         return
     verified = ((state.get("quality") or {}).get("external_verification") or {})
@@ -399,12 +444,16 @@ def _close(flow, state, args):
     if not flow.get("steps", {}).get("end", {}).get("terminal"):
         _die("内核流程缺少终态 end")
     dirty = list(api._dirty_paths())
+    local_head = _head()
+    unpushed_commits = _unpushed_commits(verified_sha, local_head)
     old = str(state.get("current") or "")
     event = {
         "schema": STATE_SCHEMA,
         "event_id": event_id,
         "reason": "merged",
         "sha": str(args.sha),
+        "local_head": local_head,
+        "unpushed_local_commits": unpushed_commits,
         "closed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "unpushed_local_paths": dirty,
         "idempotent": False,
@@ -418,7 +467,7 @@ def _close(flow, state, args):
     state.pop("external_repair_authorization", None)
     state["current"] = "end"
     _history(state, old, "delivery-close:merged", "MR 已合入 %s" % args.sha[:12])
-    api.save_state(state)
+    save_with_host_proof(state, proof_nonce)
     print(json.dumps(event, ensure_ascii=False))
 
 

@@ -70,12 +70,15 @@ def build_parser():
         dest="delivery_action", required=True)
     feedback_open = delivery_actions.add_parser("feedback-open")
     feedback_open.add_argument("--file", required=True)
+    feedback_open.add_argument("--host-proof", required=True)
     feedback_result = delivery_actions.add_parser("feedback-result")
     feedback_result.add_argument("--file", required=True)
+    feedback_result.add_argument("--host-proof", required=True)
     delivery_close = delivery_actions.add_parser("close")
     delivery_close.add_argument("--reason", choices=("merged",), required=True)
     delivery_close.add_argument("--sha", required=True)
     delivery_close.add_argument("--event-id", required=True)
+    delivery_close.add_argument("--host-proof", required=True)
     migrate = sub.add_parser(
         "migrate-flow",
         help="恢复命令：把 Lean v3 在途状态安全恢复到稳定流程")

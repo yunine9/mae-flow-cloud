@@ -30,7 +30,7 @@ export interface KernelCompletionAttestation {
   terminal: boolean;
   /** 当前任务是否有必须由权威流水线核销的质量维度。 */
   external_required: boolean;
-  /** 所有外部维度是否逐项通过且绑定工作区当前 HEAD。 */
+  /** 所有外部维度是否逐项通过并绑定 ready HEAD / merged close SHA。 */
   external_passed: boolean;
   required_dimensions: string[];
   head?: string;
@@ -124,7 +124,18 @@ function inspectKernelState(
   const terminal = declaredTerminal(kernelRoot, current);
   const required = requiredDimensions(state, pipelineByDefault);
   const externalRequired = required.length > 0;
-  const head = externalRequired ? gitHead(cwd) : undefined;
+  const head = gitHead(cwd);
+  const continuousReview = state?.execution_contract?.continuous_review === true;
+  const closeEvents = Array.isArray(state?.delivery_loop?.close_events)
+    ? state.delivery_loop.close_events : [];
+  const closeEvent = closeEvents.length ? closeEvents[closeEvents.length - 1] : undefined;
+  const closeSha = closeEvent?.reason === "merged"
+    ? String(closeEvent?.sha ?? "").trim() : "";
+  // After merge, a stopped Agent may already have made a clean local commit
+  // that was never pushed.  Completion is about the trusted merged close SHA,
+  // not about forcing the retained local worktree back to that older commit.
+  const attestedSha = expected === "terminal" && continuousReview
+    ? closeSha : head;
   const record = state?.quality?.external_verification;
   const recordedRequired = new Set(
     Array.isArray(record?.required)
@@ -134,12 +145,12 @@ function inspectKernelState(
   const checks = record?.checks && typeof record.checks === "object"
     ? record.checks : {};
   const externalPassed = !externalRequired || (
-    Boolean(head)
+    Boolean(attestedSha)
     && record?.verdict === "PASS"
-    && record?.sha === head
+    && record?.sha === attestedSha
     && required.every((dimension) => recordedRequired.has(dimension)
       && checks?.[dimension]?.status === "passed"
-      && checks?.[dimension]?.sha === head)
+      && checks?.[dimension]?.sha === attestedSha)
   );
   const kind: KernelAttestationKind = terminal
     ? "terminal"
@@ -148,24 +159,30 @@ function inspectKernelState(
     : current === "external_verify"
       ? "external_verify"
       : current ? "active" : "invalid";
+  const closeReached = !continuousReview || expected !== "terminal"
+    || Boolean(closeSha);
   const lifecycleReached = expected === "terminal"
-    ? terminal : current === "delivery_watch";
+    ? terminal && closeReached : current === "delivery_watch";
   let reason: string;
   if (!lifecycleReached) {
-    reason = current
+    reason = terminal && expected === "terminal" && continuousReview && !closeSha
+      ? "内核已到 end，但缺少可信 merged close 事件"
+      : current
       ? expected === "terminal"
         ? `内核当前步骤是 ${current}，尚未到 terminal`
         : `内核当前步骤是 ${current}，尚未到 delivery_watch`
       : `内核 current 缺失，不能推断${
           expected === "terminal" ? "终态" : "交付就绪态"}`;
   } else if (!externalPassed) {
-    reason = !head
-      ? "无法读取工作区 HEAD，不能核对流水线版本"
-      : `权威流水线尚未逐项通过并绑定 ${head.slice(0, 12)}`;
+    reason = !attestedSha
+      ? expected === "terminal"
+        ? "merged close 没有绑定可核对的源提交"
+        : "无法读取工作区 HEAD，不能核对流水线版本"
+      : `权威流水线尚未逐项通过并绑定 ${attestedSha.slice(0, 12)}`;
   } else {
     reason = externalRequired
       ? `内核已${expected === "terminal" ? "终态" : "进入持续检视"}，`
-        + `外部质量义务 PASS@${head!.slice(0, 12)}`
+        + `外部质量义务 PASS@${attestedSha!.slice(0, 12)}`
       : `内核已${expected === "terminal" ? "终态" : "进入持续检视"}，`
         + "无外部质量义务";
   }

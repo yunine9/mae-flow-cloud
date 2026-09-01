@@ -1,9 +1,23 @@
 /** Trusted Cloud adapter for Mae-Flow's continuous-review delivery commands. */
 
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
-import { createHash } from "node:crypto";
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import {
+  createHash,
+  generateKeyPairSync,
+  randomUUID,
+  sign,
+} from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { createSafeGitView } from "./safeGit.ts";
 
 export interface KernelDeliveryHost {
@@ -42,6 +56,9 @@ export interface KernelDeliveryRecord {
   status?: string;
   event_id?: string;
   sha?: string;
+  local_head?: string;
+  unpushed_local_commits?: string[];
+  unpushed_local_paths?: string[];
 }
 
 export interface KernelFeedbackResultItem {
@@ -52,6 +69,125 @@ export interface KernelFeedbackResultItem {
 }
 
 export class KernelDeliveryError extends Error {}
+
+export interface KernelHostAuthority {
+  schema: "mae-flow-host-authority/1";
+  alg: "RS256";
+  key_id: string;
+  task_id: string;
+  n: string;
+  e: string;
+}
+
+interface StoredKernelHostCapability {
+  schema: "mae-flow-host-capability/1";
+  authority: KernelHostAuthority;
+  private_key: string;
+}
+
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).sort().map((key) =>
+      `${JSON.stringify(key)}:${canonical(record[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function capabilityPath(workspace: string, taskId: string): string {
+  const safeTask = createHash("sha256").update(taskId).digest("hex");
+  return join(dirname(workspace), ".host-capabilities", `${safeTask}.json`);
+}
+
+/**
+ * The private signing key lives beside task workspaces, never inside the
+ * Agent-visible workspace.  The public half is pinned into the kernel state.
+ */
+export function ensureKernelHostCapability(input: {
+  workspace: string;
+  taskId: string;
+}): KernelHostAuthority {
+  const path = capabilityPath(input.workspace, input.taskId);
+  if (existsSync(path)) {
+    const info = lstatSync(path);
+    if (!info.isFile() || info.isSymbolicLink()) {
+      throw new KernelDeliveryError("持续检视宿主凭据不是普通文件，拒绝读取");
+    }
+    chmodSync(path, 0o600);
+    const stored = JSON.parse(readFileSync(path, "utf-8")) as
+      StoredKernelHostCapability;
+    if (stored.schema !== "mae-flow-host-capability/1"
+        || stored.authority?.task_id !== input.taskId
+        || !stored.private_key) {
+      throw new KernelDeliveryError("持续检视宿主凭据损坏，拒绝执行内核命令");
+    }
+    return stored.authority;
+  }
+  const { publicKey, privateKey } = generateKeyPairSync("rsa", {
+    modulusLength: 2048,
+  });
+  const jwk = publicKey.export({ format: "jwk" });
+  if (!jwk.n || !jwk.e) {
+    throw new KernelDeliveryError("无法生成持续检视宿主公钥");
+  }
+  const authority: KernelHostAuthority = {
+    schema: "mae-flow-host-authority/1",
+    alg: "RS256",
+    key_id: createHash("sha256").update(`${jwk.n}.${jwk.e}`)
+      .digest("hex").slice(0, 24),
+    task_id: input.taskId,
+    n: jwk.n,
+    e: jwk.e,
+  };
+  const stored: StoredKernelHostCapability = {
+    schema: "mae-flow-host-capability/1",
+    authority,
+    private_key: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+  };
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  chmodSync(dirname(path), 0o700);
+  try {
+    writeFileSync(path, JSON.stringify(stored) + "\n", {
+      encoding: "utf-8", mode: 0o600, flag: "wx",
+    });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    return ensureKernelHostCapability(input);
+  }
+  chmodSync(path, 0o600);
+  return authority;
+}
+
+/** Pin the public authority before the Agent can observe a managed state. */
+export function pinKernelHostAuthority(input: {
+  cwd: string;
+  workspace: string;
+  taskId: string;
+}): KernelHostAuthority {
+  const authority = ensureKernelHostCapability(input);
+  const statePath = join(input.cwd, ".mae-flow.json");
+  if (!existsSync(statePath)) return authority;
+  const state = JSON.parse(readFileSync(statePath, "utf-8")) as Record<string, any>;
+  const contract = state.execution_contract;
+  if (!contract || contract.host !== "cloud") {
+    throw new KernelDeliveryError("只有 Cloud 执行契约可以固定持续检视宿主公钥");
+  }
+  const pinned = contract.host_authority as KernelHostAuthority | undefined;
+  if (pinned) {
+    if (canonical(pinned) !== canonical(authority)) {
+      throw new KernelDeliveryError("内核状态绑定了另一把宿主公钥，拒绝替换");
+    }
+    return authority;
+  }
+  contract.host_authority = authority;
+  const temporary = `${statePath}.host-authority-${process.pid}-${randomUUID()}.tmp`;
+  writeFileSync(temporary, JSON.stringify(state, null, 2) + "\n", {
+    encoding: "utf-8", mode: 0o600, flag: "wx",
+  });
+  renameSync(temporary, statePath);
+  return authority;
+}
 
 function factsPath(workspace: string, label: string, payload: unknown): string {
   const digest = createHash("sha256")
@@ -67,14 +203,42 @@ function factsPath(workspace: string, label: string, payload: unknown): string {
 function invoke(input: {
   host: KernelDeliveryHost;
   cwd: string;
+  workspace: string;
+  taskId: string;
+  action: "feedback-open" | "feedback-result" | "close";
+  payload: unknown;
   args: string[];
 }): KernelDeliveryRecord {
+  const authority = pinKernelHostAuthority(input);
+  const storedPath = capabilityPath(input.workspace, input.taskId);
+  const stored = JSON.parse(readFileSync(storedPath, "utf-8")) as
+    StoredKernelHostCapability;
+  if (canonical(stored.authority) !== canonical(authority)) {
+    throw new KernelDeliveryError("持续检视宿主私钥与内核公钥不匹配");
+  }
+  const proof = {
+    schema: "mae-flow-host-proof/1",
+    task_id: input.taskId,
+    action: input.action,
+    payload_digest: createHash("sha256").update(canonical(input.payload))
+      .digest("hex"),
+    nonce: randomUUID(),
+    issued_at: Math.floor(Date.now() / 1000),
+  };
+  const signature = sign("RSA-SHA256", Buffer.from(canonical(proof)), {
+    key: stored.private_key,
+  }).toString("base64url");
+  const proofPath = join(dirname(storedPath),
+    `proof-${proof.nonce}.json`);
+  writeFileSync(proofPath, JSON.stringify({ ...proof, signature }) + "\n", {
+    encoding: "utf-8", mode: 0o600, flag: "wx",
+  });
   const gitView = createSafeGitView(input.cwd);
   try {
     const result = spawnSync(
       input.host.python ?? "python3",
       [join(input.host.kernelRoot, "scripts", "mae-flow.py"),
-       "delivery", ...input.args],
+       "delivery", ...input.args, "--host-proof", proofPath],
       {
         cwd: input.cwd,
         encoding: "utf-8",
@@ -98,6 +262,7 @@ function invoke(input: {
     return record;
   } finally {
     gitView.cleanup();
+    rmSync(proofPath, { force: true });
   }
 }
 
@@ -109,7 +274,8 @@ export function openKernelFeedback(input: {
 }): KernelDeliveryRecord {
   const path = factsPath(input.workspace, "feedback-open", input.batch);
   return invoke({
-    host: input.host, cwd: input.cwd,
+    host: input.host, cwd: input.cwd, workspace: input.workspace,
+    taskId: input.batch.task_id, action: "feedback-open", payload: input.batch,
     args: ["feedback-open", "--file", path],
   });
 }
@@ -119,6 +285,7 @@ export function adoptKernelDeliveryWatch(input: {
   cwd: string;
   workspace: string;
   migrationId: string;
+  taskId: string;
 }): KernelDeliveryRecord {
   const payload = {
     schema: "mae-flow-feedback-batch/1",
@@ -127,7 +294,8 @@ export function adoptKernelDeliveryWatch(input: {
   };
   const path = factsPath(input.workspace, "adopt-watch", payload);
   return invoke({
-    host: input.host, cwd: input.cwd,
+    host: input.host, cwd: input.cwd, workspace: input.workspace,
+    taskId: input.taskId, action: "feedback-open", payload,
     args: ["feedback-open", "--file", path],
   });
 }
@@ -136,6 +304,7 @@ export function recordKernelFeedbackResult(input: {
   host: KernelDeliveryHost;
   cwd: string;
   workspace: string;
+  taskId: string;
   batchId: string;
   changed: boolean;
   results: KernelFeedbackResultItem[];
@@ -148,7 +317,9 @@ export function recordKernelFeedbackResult(input: {
   };
   const path = factsPath(input.workspace, "feedback-result", payload);
   return invoke({
-    host: input.host, cwd: input.cwd,
+    host: input.host, cwd: input.cwd, workspace: input.workspace,
+    taskId: input.taskId,
+    action: "feedback-result", payload,
     args: ["feedback-result", "--file", path],
   });
 }
@@ -156,11 +327,15 @@ export function recordKernelFeedbackResult(input: {
 export function closeKernelDelivery(input: {
   host: KernelDeliveryHost;
   cwd: string;
+  workspace: string;
+  taskId: string;
   sha: string;
   eventId: string;
 }): KernelDeliveryRecord {
+  const payload = { reason: "merged", sha: input.sha, event_id: input.eventId };
   return invoke({
-    host: input.host, cwd: input.cwd,
+    host: input.host, cwd: input.cwd, workspace: input.workspace,
+    taskId: input.taskId, action: "close", payload,
     args: ["close", "--reason", "merged", "--sha", input.sha,
       "--event-id", input.eventId],
   });

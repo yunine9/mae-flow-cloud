@@ -266,6 +266,9 @@ Token 向同一服务端口的 `POST /integrations/luban/plugin` 发请求。完
   请人处理。**已验**：真实内核命令契约、旧 `end`/错误重开迁移、四类单 writer
   竞态、同一 MR 两轮不同来源反馈后合入、Issue Flow 建 MR 后流水线反馈、假平台
   E2E、Cloud 全量、双 TypeScript、Web 生产构建、内核全量自测与 probe。
+  终审又补齐了宿主命令的工作区外私钥签名、逐条回执反代填、MR 评论编辑版本化、
+  FeedbackStore 坏账停摆/缺账重建，以及“MR 已合入但本地多出未推送提交”的留痕
+  收口；这些接缝均有事故回归，不再依赖提示词或总体回复猜测。
   **未验**：真浏览器、真模型、内网 CodeHub/流水线；Issue Flow 的前置流程没有
   Mae-Flow 内核，本批在其既有单 writer 上复用同一反馈索引与闭环词汇，是否把
   Issue Flow 的交付后半段也迁入 Mae-Flow 内核留待后续拍板。

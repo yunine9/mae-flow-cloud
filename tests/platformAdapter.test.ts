@@ -74,6 +74,11 @@ function fakeCli(dir: string): string {
     } else if (sub === "mrlist") {
       console.log(JSON.stringify({ data: args.includes("--found")
         ? [{ web_url: "https://codehub.corp/mr/7", iid: 7 }] : [] }));
+    } else if (sub === "listnotes") {
+      console.log(JSON.stringify({ data: { items: [{
+        id: "discussion-9", revision: 3,
+        updated_at: "2026-09-01T09:30:00Z", body: "编辑后的意见",
+      }] } }));
     } else if (sub === "note") {
       console.log(JSON.stringify({ result: { id: 555 } }));
     } else if (sub === "resolvecmd") {
@@ -125,6 +130,14 @@ function makeAdapter(dir: string, cli: string): PlatformAdapter {
         FAILED: "failed", SKIPPED: "skipped",
       },
     },
+    mr_discussions: {
+      command: ["node", cli, "listnotes", "--mr", "{mr}"],
+      items: { json: "data.items" },
+      fields: {
+        id: { json: "id" }, revision: { json: "revision" },
+        updated_at: { json: "updated_at" }, body: { json: "body" },
+      },
+    },
   }));
   chmodSync(configPath, 0o600);
   return new PlatformAdapter(configPath, () => {});
@@ -168,6 +181,13 @@ test("三端点走真 CLI:模板套值、抽取、状态映射、多 run 全对"
   assert.equal(runs[1].checks[1].status, "failed");
   assert.equal(runs[1].checks[2].status, "skipped");
   assert.match(runs[1].log, /覆盖率 61%/, "失败日志是修复环的口粮");
+
+  const discussions = await adapter.handle("GET", "/mr/discussions",
+    new URLSearchParams("repo=r&mr=42"), {}, {});
+  assert.deepEqual((discussions.payload as any).discussions, [{
+    id: "discussion-9", revision: 3,
+    updated_at: "2026-09-01T09:30:00Z", body: "编辑后的意见",
+  }], "评论修订号和更新时间必须穿透适配层，编辑后才能形成新反馈");
 });
 
 test("身份:个人令牌头压过服务账号;没带头回落服务账号", async () => {

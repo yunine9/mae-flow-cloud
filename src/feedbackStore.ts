@@ -1,6 +1,12 @@
 /** Append-only Cloud index over the source-specific review ledgers. */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  truncateSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname } from "node:path";
 
 export type FeedbackSource =
@@ -42,13 +48,18 @@ type Operation =
   | { op: "resolve"; id: string; status: FeedbackStatus;
       resolution: string; at: string };
 
+export class FeedbackStoreCorruptionError extends Error {}
+
 export class FeedbackStore {
   constructor(readonly path: string) {}
 
   list(): FeedbackRecord[] {
     if (!existsSync(this.path)) return [];
     const records = new Map<string, FeedbackRecord>();
-    for (const line of readFileSync(this.path, "utf-8").split(/\r?\n/)) {
+    const text = readFileSync(this.path, "utf-8");
+    const lines = text.split(/\r?\n/);
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
       if (!line.trim()) continue;
       try {
         const operation = JSON.parse(line) as Operation;
@@ -62,10 +73,15 @@ export class FeedbackStore {
             resolution: operation.resolution,
             updated_at: operation.at,
           });
+        } else {
+          throw new Error("未知操作或缺少反馈标识");
         }
-      } catch {
-        // Read-side corruption is named by diagnostics elsewhere; one bad line
-        // must not hide the remaining feedback from the user.
+      } catch (error) {
+        const truncatedTail = index === lines.length - 1 && !text.endsWith("\n");
+        if (truncatedTail) break;
+        throw new FeedbackStoreCorruptionError(
+          `持续检视索引第 ${index + 1} 行损坏，已停止读写，不能静默隐藏反馈：${String(error)}`,
+        );
       }
     }
     return [...records.values()].sort((a, b) =>
@@ -94,8 +110,32 @@ export class FeedbackStore {
 
   private append(operation: Operation): void {
     mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
+    this.repairTruncatedTail();
     writeFileSync(this.path, JSON.stringify(operation) + "\n", {
       encoding: "utf-8", mode: 0o600, flag: "a",
     });
+  }
+
+  /** A crash may leave only the final JSON line torn.  Trim that suffix before
+   * appending; any corrupt complete/middle line remains a fail-closed error. */
+  private repairTruncatedTail(): void {
+    if (!existsSync(this.path)) return;
+    const text = readFileSync(this.path, "utf-8");
+    if (!text || text.endsWith("\n")) {
+      // list() performs the strict middle-line validation.
+      this.list();
+      return;
+    }
+    const lastBreak = text.lastIndexOf("\n");
+    const tail = text.slice(lastBreak + 1);
+    try {
+      JSON.parse(tail);
+      // A complete final record missing only its newline is preserved.
+      writeFileSync(this.path, "\n", { encoding: "utf-8", flag: "a" });
+    } catch {
+      truncateSync(this.path, lastBreak < 0 ? 0
+        : Buffer.byteLength(text.slice(0, lastBreak + 1), "utf-8"));
+    }
+    this.list();
   }
 }

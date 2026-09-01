@@ -223,6 +223,7 @@ import {
 } from "./terminalAttestation.ts";
 import {
   closeKernelDelivery,
+  ensureKernelHostCapability,
   openKernelFeedback,
   recordKernelFeedbackResult,
   type KernelFeedbackBatch,
@@ -236,6 +237,7 @@ import {
   type FeedbackRecord,
   type FeedbackSource,
 } from "./feedbackStore.ts";
+import { feedbackBatchId, feedbackIdentity } from "./feedbackLoop.ts";
 import {
   materializeRepositorySkills,
   type SelectedRepositorySkill,
@@ -953,15 +955,17 @@ export interface TaskSummary {
       workspace_review_annotation_ids?: string[];
       failure?: string;
       last_sha?: string;
-      /** 检视修复的刹车锚:上一轮处理的讨论 id 集(排序拼接)。 */
+      /** 检视修复的刹车锚:上一轮讨论 id+revision 集(排序拼接)。 */
       review_ids?: string;
-      /** 已把回复发布到平台的讨论 id 集。与 review_ids 相等 = 这批
+      /** 已把回复发布到平台的讨论 id+revision 集。与 review_ids 相等 = 这批
        * 意见都答复过了,门禁还红只是检视人没点"已解决"——那是等人,
        * 不是修不动(报告 D3:既有框架刻意不代检视人 resolve)。 */
       replied_ids?: string;
       /** 同一批本地检视缺回执时，原会话已经自动补交过一次。值绑定
        * review_ids，防止模型继续漏写时无限催办；换一批意见自然重置。 */
       workspace_review_receipt_retry_for?: string;
+      /** 任意非工作台反馈缺结构化逐条回执时原会话只补交一次。 */
+      feedback_receipt_retry_for?: string;
       diagnosis?: string;
     };
   };
@@ -1293,11 +1297,48 @@ function classifyGates(gates: GateItem[]): {
 /** 检视意见(适配层契约形状,宿主只读这些字段)。 */
 interface DiscussionItem {
   id: string;
+  /** CodeHub discussion revision when available; content hash fallback below. */
+  revision?: number;
+  updated_at?: string;
   file?: string;
   line?: number;
   severity?: string;
   author?: string;
   body?: string;
+}
+
+function discussionRevision(item: DiscussionItem): number {
+  if (Number.isSafeInteger(item.revision) && Number(item.revision) >= 0) {
+    return Number(item.revision);
+  }
+  // Some CodeHub deployments expose updated_at but no numeric revision.  Bind
+  // the full visible payload so editing the same discussion cannot be mistaken
+  // for an idempotent replay on the same HEAD.
+  const digest = createHash("sha256").update(JSON.stringify({
+    updated_at: item.updated_at ?? "",
+    body: item.body ?? "",
+    file: item.file ?? "",
+    line: item.line ?? null,
+    author: item.author ?? "",
+  })).digest("hex").slice(0, 12);
+  return Number.parseInt(digest, 16);
+}
+
+function discussionKey(item: DiscussionItem): string {
+  return `${item.id}:r${discussionRevision(item)}`;
+}
+
+function discussionKeyFromParts(id: string, revision?: number): string {
+  return `${id}:r${revision ?? 0}`;
+}
+
+function discussionIdFromKey(key: string): string {
+  return key.replace(/:r\d+$/, "");
+}
+
+function discussionRevisionFromKey(key: string): number {
+  const matched = key.match(/:r(\d+)$/);
+  return matched ? Number(matched[1]) : 0;
 }
 
 /** 小鲁班链接必须落到前端任务工作台，而不是 /tasks/:id 的 JSON API。
@@ -4037,7 +4078,8 @@ export class TaskService {
     }
     const dropped = annotations.drop(annotationId, by, adminOverride);
     this.resolveFeedbackRecords(task, (record) =>
-      record.id === `workspace:${dropped.id}:r${dropped.rework ?? 0}`,
+      record.source === "workspace" && record.source_id === dropped.id
+        && record.source_revision === (dropped.rework ?? 0),
     "closed", adminOverride ? "管理员代作者撤回批注" : "批注作者已撤回");
     // 拿掉一条未闭环批注也可能让本轮复检全部闭环,和 verify 同口径刷新。
     this.refreshWorkspaceReviewClosure(task);
@@ -4094,7 +4136,8 @@ export class TaskService {
     }
     const verified = annotations.verify(annotationId, by, adminOverride);
     this.resolveFeedbackRecords(task, (record) =>
-      record.id === `workspace:${verified.id}:r${verified.rework ?? 0}`,
+      record.source === "workspace" && record.source_id === verified.id
+        && record.source_revision === (verified.rework ?? 0),
     "closed", adminOverride ? "管理员代作者确认通过" : "批注作者已确认通过");
     this.refreshWorkspaceReviewClosure(task);
     return verified;
@@ -10105,6 +10148,10 @@ export class TaskService {
         closed: "closed",
         needs_human: "needs_human",
       };
+      const sources = new Set<FeedbackSource>([
+        "workspace", "build_fix", "pipeline", "mr_discussion",
+        "conflict", "scope", "push_confirmation",
+      ]);
       for (const batch of batches) {
         const status = statuses[String(batch?.status ?? "")];
         if (!status || !Array.isArray(batch?.items)) continue;
@@ -10112,7 +10159,28 @@ export class TaskService {
           ? batch.results : []).map((item: any) => [String(item?.id ?? ""), item]));
         for (const item of batch.items) {
           const id = String(item?.id ?? "");
-          const existing = current.get(id);
+          let existing = current.get(id);
+          const source = String(item?.source ?? "") as FeedbackSource;
+          if (!existing && id && sources.has(source)) {
+            const restored: FeedbackRecord = {
+              id,
+              batch_id: String(batch?.batch_id ?? ""),
+              source,
+              source_id: String(item?.source_id ?? ""),
+              source_revision: Number(item?.source_revision ?? 0),
+              observed_sha: String(batch?.base_sha ?? ""),
+              summary: String(item?.summary ?? "反馈内容缺失"),
+              ...(item?.material ? { material: String(item.material) } : {}),
+              ...(item?.file ? { file: String(item.file) } : {}),
+              ...(item?.line !== undefined ? { line: Number(item.line) } : {}),
+              verification: String(item?.verification ?? "unknown"),
+              status,
+              updated_at: String(batch?.opened_at ?? new Date().toISOString()),
+            };
+            store.upsert([restored]);
+            current.set(id, restored);
+            existing = restored;
+          }
           if (!existing || existing.status === "closed") continue;
           // 内核的 closed 表示“本批代码已通过机器核验”，不能越权代替
           // 批注作者、MR 检视人或 push 卡责任人作最终裁决。这三类先停在
@@ -10133,8 +10201,10 @@ export class TaskService {
         }
       }
     } catch (error) {
-      this.options.log?.(
-        `任务 ${task.summary.id} 持续检视索引同步失败：${String(error)}`);
+      const detail = `持续检视索引损坏或不可写，已停止自动闭环，不能静默隐藏反馈：${
+        String(error).slice(0, 800)}`;
+      this.options.log?.(`任务 ${task.summary.id} ${detail}`);
+      this.markVerificationStalled(task, detail);
     }
   }
 
@@ -10190,6 +10260,17 @@ export class TaskService {
           task.cwd, this.options.host.kernelRoot, true)
       : inspectKernelTaskCompletion(
           task.cwd, this.options.host.kernelRoot, true);
+  }
+
+  private latestKernelCloseEvent(task: TaskState): Record<string, any> | undefined {
+    if (!task.cwd) return undefined;
+    try {
+      const state = JSON.parse(readFileSync(
+        join(task.cwd, ".mae-flow.json"), "utf-8"));
+      const events = state?.delivery_loop?.close_events;
+      return Array.isArray(events) && events.length
+        ? events[events.length - 1] as Record<string, any> : undefined;
+    } catch { return undefined; }
   }
 
   private taskCompletionAttestation(
@@ -10663,6 +10744,12 @@ export class TaskService {
               ...CLOUD_EXECUTION_CONTRACT,
               continuous_review:
                 this.options.host?.continuousReview === true,
+              ...(this.options.host?.continuousReview === true ? {
+                host_authority: ensureKernelHostCapability({
+                  workspace,
+                  taskId: task.summary.id,
+                }),
+              } : {}),
             },
             "UT生成方式": utGenerationMethod,
           };
@@ -14039,6 +14126,8 @@ export class TaskService {
           closeKernelDelivery({
             host: this.options.host!,
             cwd: task.cwd!,
+            workspace: task.summary.workspace,
+            taskId: task.summary.id,
             sha: observed,
             eventId: `mr-merged:${task.summary.id}:${observed}`,
           });
@@ -14064,7 +14153,16 @@ export class TaskService {
       delivery.mr_state = "已合入";
       delivery.waiting_on = undefined;
       task.summary.status = "completed";
-      task.summary.detail = "MR 已合入,交付完成";
+      const closeEvent = this.continuousReviewTask(task)
+        ? this.latestKernelCloseEvent(task) : undefined;
+      const unpushedCommits = Array.isArray(closeEvent?.unpushed_local_commits)
+        ? closeEvent.unpushed_local_commits.length : 0;
+      const unpushedPaths = Array.isArray(closeEvent?.unpushed_local_paths)
+        ? closeEvent.unpushed_local_paths.length : 0;
+      task.summary.detail = unpushedCommits || unpushedPaths
+        ? `MR 已合入，任务完成；合入时本地另有 ${unpushedCommits} 个未推送提交、`
+          + `${unpushedPaths} 个未提交路径，已在内核 close 事件留痕，未冒充交付`
+        : "MR 已合入,交付完成";
       this.persist(task);
       this.bypass(undefined, "依赖任务解锁", this.pump());
       const account = task.summary.luban_account;
@@ -14273,21 +14371,25 @@ export class TaskService {
       throw new TaskControlError("当前部署没有持续检视内核，反馈未派单");
     }
     const baseSha = this.feedbackBaseSha(task);
-    const fingerprint = items.map((item) => ({
-      id: item.id,
-      source_id: item.source_id,
-      source_revision: item.source_revision,
-    })).sort((left, right) => left.id.localeCompare(right.id));
-    const digest = createHash("sha256").update(JSON.stringify({
-      task: task.summary.id, source, baseSha, fingerprint,
-    })).digest("hex").slice(0, 20);
+    // 生产身份固定为来源+来源对象+来源版本+观察 HEAD。调用方传入的
+    // 可读 id 只用于构造 source_id；不能再让 MR 编辑或跨 HEAD 复用时
+    // 覆盖旧反馈、也不能让相同 batch_id 吞掉变化后的正文。
+    const normalizedItems = items.map((item) => ({
+      ...item,
+      id: feedbackIdentity({
+        source,
+        source_id: item.source_id,
+        source_revision: item.source_revision,
+        observed_sha: baseSha,
+      }),
+    }));
     const batch: KernelFeedbackBatch = {
       schema: "mae-flow-feedback-batch/1",
-      batch_id: `fb-${task.summary.id}-${digest}`,
+      batch_id: feedbackBatchId(task.summary.id, baseSha, normalizedItems),
       task_id: task.summary.id,
       base_sha: baseSha,
       opened_at: new Date().toISOString(),
-      items,
+      items: normalizedItems,
     };
     // 仅供旧测试/嵌入式调用保持原契约；正式 serve 启动已经在批 2
     // fail-closed 探测并显式写入 continuousReview=true，不会走这里。
@@ -14303,7 +14405,7 @@ export class TaskService {
       batch,
     });
     const now = new Date().toISOString();
-    store.upsert(items.map((item) => ({
+    store.upsert(normalizedItems.map((item) => ({
         id: item.id,
         batch_id: batch.batch_id,
         source,
@@ -14341,7 +14443,7 @@ export class TaskService {
           taskId: task.summary.id,
           account,
           status: `feedback:${batch.batch_id}`,
-          summary: `收到 ${labels[source]} ${items.length} 条；${next}。`
+          summary: `收到 ${labels[source]} ${normalizedItems.length} 条；${next}。`
             + `处理后由${verification}核验，不会另开任务。`,
           link: personalTaskLink(
             this.notificationLinkBase(), account, task.summary.id),
@@ -14352,6 +14454,42 @@ export class TaskService {
 
   /** 把当前唯一反馈批次的逐条处理结果交给内核。总体回复只用于人话
    * 摘要，条目集合始终来自内核已接纳的 batch，不能少报或夹带。 */
+  private feedbackResultPath(task: TaskState, batchId: string): string {
+    const digest = createHash("sha256").update(batchId).digest("hex").slice(0, 24);
+    return join(task.summary.workspace, "feedback", `result-${digest}.json`);
+  }
+
+  private activeFeedbackReceiptInstructions(task: TaskState): string {
+    if (!task.cwd) return "";
+    let state: any;
+    try {
+      state = JSON.parse(readFileSync(
+        join(task.cwd, ".mae-flow.json"), "utf-8"));
+    } catch { return ""; }
+    const batchId = String(state?.delivery_loop?.active_batch_id ?? "");
+    const batch = Array.isArray(state?.delivery_loop?.batches)
+      ? state.delivery_loop.batches.find((item: any) => item?.batch_id === batchId)
+      : undefined;
+    const items = Array.isArray(batch?.items) ? batch.items : [];
+    if (!batchId || batch?.result_digest || !items.length
+        || items.every((item: any) => ["workspace", "mr_discussion"]
+          .includes(String(item?.source ?? "")))) return "";
+    const path = this.feedbackResultPath(task, batchId);
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    const relative = `../feedback/${basename(path)}`;
+    return [
+      "逐条处理完成后，必须写一份机器可核对的反馈回执；总体回复不算回执。",
+      `写入 ${relative}（代码仓外，不会进入提交），只写 JSON，不要 Markdown 围栏：`,
+      '{"schema":"mae-flow-feedback-results/1","batch_id":"本批次",'
+        + '"results":[{"id":"反馈完整ID","status":"fixed|explained|needs_human|not_applicable",'
+        + '"summary":"这条具体做了什么或为什么不改","evidence":"文件:行或核对事实"}]}',
+      "每个 id 必须恰好一条；缺失、重复、陈旧或夹带都会原地要求补交，绝不会拿收口发言代填。",
+      `batch_id: ${batchId}`,
+      "本轮反馈完整 ID：",
+      ...items.map((item: any) => `- ${String(item.id)}：${String(item.summary ?? "")}`),
+    ].join("\n");
+  }
+
   private recordActiveFeedbackResult(task: TaskState): string | undefined {
     if (!this.options.host?.continuousReview || !task.cwd) return undefined;
     let state: any;
@@ -14370,36 +14508,94 @@ export class TaskService {
     const changed = head !== String(batch.base_sha ?? "");
     const annotations = new Map(this.annotations(task).list()
       .map((item) => [item.id, item]));
-    const results = (Array.isArray(batch.items) ? batch.items : []).map((item: any) => {
-      const source = String(item.source ?? "");
-      const annotation = source === "workspace"
-        ? annotations.get(String(item.source_id ?? "")) : undefined;
-      const response = annotation?.response;
-      let status: "fixed" | "explained" | "needs_human" | "not_applicable";
-      if (response) {
-        status = response.outcome === "fixed" ? "fixed"
-          : response.outcome === "needs_clarification" ? "needs_human"
-          : "explained";
-      } else if (source === "mr_discussion") {
-        status = changed ? "fixed" : "explained";
-      } else {
-        status = changed ? "fixed" : "needs_human";
+    const batchItems = Array.isArray(batch.items) ? batch.items : [];
+    let results: Array<{
+      id: string;
+      status: "fixed" | "explained" | "needs_human" | "not_applicable";
+      summary: string;
+      evidence?: string;
+    }>;
+    if (batchItems.every((item: any) => item?.source === "workspace")) {
+      results = [];
+      for (const item of batchItems) {
+        const annotation = annotations.get(String(item.source_id ?? ""));
+        const response = annotation?.response;
+        if (!response || response.revision !== Number(item.source_revision ?? 0)) {
+          return `工作台反馈 ${String(item.id)} 缺少当前版本的逐条回执`;
+        }
+        results.push({
+          id: String(item.id),
+          status: response.outcome === "fixed" ? "fixed"
+            : response.outcome === "needs_clarification" ? "needs_human"
+            : "explained",
+          summary: response.summary,
+          evidence: response.evidence?.join("；") || undefined,
+        });
       }
-      const summary = response?.summary
-        ?? (task.lastReply ?? "").trim().slice(0, 1000)
-        ?? "已处理";
-      return {
-        id: String(item.id), status,
-        summary: summary || (status === "needs_human"
-          ? "本轮没有产生可核验修改，需要人工查看诊断" : "已处理"),
-        evidence: response?.evidence?.join("；") || `HEAD ${head}`,
-      };
-    });
+    } else if (batchItems.every((item: any) => item?.source === "mr_discussion")) {
+      const path = join(task.summary.workspace, "review_replies.md");
+      let parsed: ReturnType<typeof parseReviewReplies>;
+      try {
+        parsed = parseReviewReplies(readFileSync(path, "utf-8"),
+          batchItems.map((item: any) => String(item.source_id ?? "")));
+      } catch (error) {
+        return `Agent 没有留下 MR 逐条回复：${String(error)}`;
+      }
+      if (parsed.missing_ids.length) {
+        return `MR 逐条回复缺少：${parsed.missing_ids.join("、")}`;
+      }
+      const byId = new Map(parsed.replies.map((item) => [item.id, item.body]));
+      results = batchItems.map((item: any) => ({
+        id: String(item.id),
+        status: "explained" as const,
+        summary: byId.get(String(item.source_id ?? ""))!.slice(0, 4000),
+        evidence: "../review_replies.md",
+      }));
+    } else {
+      const path = this.feedbackResultPath(task, batchId);
+      let raw: any;
+      try {
+        raw = JSON.parse(readFileSync(path, "utf-8"));
+      } catch (error) {
+        return `Agent 没有留下本批逐条反馈回执（${basename(path)}）：${String(error)}`;
+      }
+      if (raw?.schema !== "mae-flow-feedback-results/1"
+          || raw?.batch_id !== batchId || !Array.isArray(raw?.results)) {
+        return "逐条反馈回执的 schema、batch_id 或 results 不正确";
+      }
+      const allowed = new Set(["fixed", "explained", "needs_human", "not_applicable"]);
+      const expected = new Set<string>(
+        batchItems.map((item: any) => String(item.id)));
+      const seen = new Set<string>();
+      results = [];
+      for (const item of raw.results) {
+        const id = String(item?.id ?? "");
+        const status = String(item?.status ?? "");
+        const summary = String(item?.summary ?? "").trim();
+        if (!id || seen.has(id) || !expected.has(id) || !allowed.has(status)
+            || !summary) {
+          return `逐条反馈回执含重复、夹带或字段不完整的条目：${id || "(空 id)"}`;
+        }
+        seen.add(id);
+        results.push({
+          id,
+          status: status as typeof results[number]["status"],
+          summary: summary.slice(0, 4000),
+          evidence: String(item?.evidence ?? "").trim().slice(0, 4000) || undefined,
+        });
+      }
+      const missing = [...expected].filter((id) => !seen.has(id));
+      if (missing.length) return `逐条反馈回执缺少：${missing.join("、")}`;
+      if (!changed && results.some((item) => item.status === "fixed")) {
+        return "逐条回执声称已修复，但当前 HEAD 没有变化；请改为 explained/needs_human 或提交真实修改";
+      }
+    }
     try {
       const record = recordKernelFeedbackResult({
         host: this.options.host,
         cwd: task.cwd,
         workspace: task.summary.workspace,
+        taskId: task.summary.id,
         batchId,
         changed,
         results,
@@ -14462,7 +14658,7 @@ export class TaskService {
         id: `mr:${item.id}`,
         source: "mr_discussion",
         source_id: item.id,
-        source_revision: 0,
+        source_revision: discussionRevision(item),
         kind: "code_review",
         summary: String(item.body ?? "MR 检视意见").slice(0, 1000),
         material: "../reviews/discussions.json",
@@ -14496,7 +14692,9 @@ export class TaskService {
         `任务 ${task.summary.id} 检视门禁未过但拉不到未解决讨论,等下一轮`);
       return "skip";
     }
-    const ids = discussions.map((item) => item.id).sort().join(",");
+    const identities = new Map(discussions.map((item) =>
+      [discussionKey(item), item] as const));
+    const ids = [...identities.keys()].sort().join(",");
     // 答复台账跨批次继承。"未解决集合"随检视人点掉/新增而变,但已经
     // 答复过的讨论不因此变回未答复——原来换批清账重派,会对同一条讨论
     // 重复回复(2026-08-30 探针实锤:两条意见解决一条,另一条被复读),
@@ -14505,16 +14703,18 @@ export class TaskService {
       loop.kind === "review" && loop.review_source === "platform"
         && loop.replied_ids
         ? loop.replied_ids.split(",").filter(Boolean) : []);
-    const pending = discussions.filter((item) => !replied.has(item.id));
+    const pending = [...identities]
+      .filter(([identity]) => !replied.has(identity));
     const pushedSha = task.summary.delivery?.git_push?.sha;
     const queuedReplyIds = new Set(this.deliveryOutbox(task)
       // 旧提交的 pending 回复不能让新提交永久停在“正在重试”。它仍
       // 留在 outbox 审计并由 flush fail-closed，但只有当前远端 push
       // 收据对应的动作才可代表本轮已经排队。
       .pendingReviewReplies(pushedSha)
-      .map((item) => item.payload.discussion_id));
+      .map((item) => discussionKeyFromParts(
+        item.payload.discussion_id, item.payload.source_revision)));
     if (pending.length
-        && pending.every((item) => queuedReplyIds.has(item.id))) {
+        && pending.every(([identity]) => queuedReplyIds.has(identity))) {
       // Agent 已逐条答完，当前只是在重试外部投递。把它当“没干活”再派
       // Agent 会重复改代码/刷回复；保持监控即可。
       return "waiting";
@@ -14530,8 +14730,7 @@ export class TaskService {
       const diagnosis = (task.lastReply ?? "").trim();
       if (diagnosis) loop.diagnosis = diagnosis.slice(0, 2000);
       // 点名没答复的是哪几条:不点名,人只能去 MR 上逐条对台账。
-      const unanswered = discussions.map((item) => item.id)
-        .filter((one) => !replied.has(one));
+      const unanswered = pending.map(([, item]) => item.id);
       task.summary.detail =
         `同一批检视意见处理过一轮仍未答复完(未答复: ${
           unanswered.slice(0, 8).join(", ")}${
@@ -14554,11 +14753,11 @@ export class TaskService {
     // 当前 watch 状态和唯一 writer 都不变，不会出现“Cloud 已派单、内核
     // 还在等待态”的半套生命周期。
     try {
-      this.openFeedbackBatch(task, "mr_discussion", pending.map((item) => ({
+      this.openFeedbackBatch(task, "mr_discussion", pending.map(([, item]) => ({
         id: `mr:${item.id}`,
         source: "mr_discussion",
         source_id: item.id,
-        source_revision: 0,
+        source_revision: discussionRevision(item),
         kind: "code_review",
         summary: String(item.body ?? "MR 检视意见").slice(0, 1000),
         material: "../reviews/discussions.json",
@@ -14578,7 +14777,7 @@ export class TaskService {
     // 换批只继承仍在场的答复记录,不清零(见上);离场的 id 出账,
     // 免得台账无限膨胀。
     loop.replied_ids = [...replied]
-      .filter((one) => discussions.some((item) => item.id === one))
+      .filter((one) => identities.has(one))
       .sort().join(",") || undefined;
     loop.state = "repairing";
     // 意见落盘 reviews/(仓库外):原始数据给 agent 自读,摘要进使命。
@@ -14591,7 +14790,7 @@ export class TaskService {
     } catch {
       /* 落盘失败不拦路:使命里的摘要仍然够用 */
     }
-    const lines = pending.map((item) =>
+    const lines = pending.map(([, item]) =>
       `  [${item.id}] ${item.file ?? "(整体意见)"}`
       + `${item.line !== undefined ? `:${item.line}` : ""}`
       + `${item.severity ? ` (${item.severity})` : ""}`
@@ -14615,7 +14814,7 @@ export class TaskService {
         + `不许含糊带过;不确定的按意见改(检视人对本仓比你熟)。`,
         `- 把逐条回复写到 ../review_replies.md(仓库外,不会进提交),`
         + `格式严格如下,每条以方括号 id 单独一行开头:`,
-        `  [${pending[0].id}]`,
+        `  [${pending[0][1].id}]`,
         `  <这条的回复:改了什么/为什么不改,一两句讲清>`,
         `- 改动在 build 步收口前如实 commit(按 current 的指引),`
         + `不要自己另起一套；不要读取或索要个人 Git 令牌,也不要 push,`
@@ -14959,18 +15158,30 @@ export class TaskService {
     const repliesPath = join(task.summary.workspace, "review_replies.md");
     const alreadyReplied = new Set(
       loop.replied_ids?.split(",").filter(Boolean) ?? []);
-    let known = loop.review_ids?.split(",").filter(Boolean) ?? [];
+    let known = (loop.review_ids?.split(",").filter(Boolean) ?? [])
+      .map((key) => ({
+        key,
+        id: discussionIdFromKey(key),
+        revision: discussionRevisionFromKey(key),
+      }));
     try {
       const rows = JSON.parse(readFileSync(
         join(task.summary.workspace, "reviews", "discussions.json"), "utf-8"));
       if (Array.isArray(rows)) {
-        const ids = rows.map((item) =>
-          String((item as { id?: unknown })?.id ?? "")).filter(Boolean);
-        if (ids.length) known = ids;
+        const identities = rows.filter((item) =>
+          String((item as { id?: unknown })?.id ?? ""))
+          .map((item) => {
+            const discussion = item as DiscussionItem;
+            return {
+              key: discussionKey(discussion), id: discussion.id,
+              revision: discussionRevision(discussion),
+            };
+          });
+        if (identities.length) known = identities;
       }
     } catch { /* review_ids 是持久化兜底 */ }
-    const expected = [...new Set(known)]
-      .filter((id) => !alreadyReplied.has(id));
+    const expected = [...new Map(known.map((item) => [item.key, item])).values()]
+      .filter((item) => !alreadyReplied.has(item.key));
     let sourceSha: string;
     try {
       if (!task.cwd) throw new Error("代码现场不可用");
@@ -14985,13 +15196,15 @@ export class TaskService {
     const staged = new Set(outbox.list()
       .filter((item) => item.kind === "review_reply"
         && item.payload.expected_sha === sourceSha)
-      .map((item) => item.payload.discussion_id));
-    const uncovered = expected.filter((id) => !staged.has(id));
+      .map((item) => discussionKeyFromParts(
+        item.payload.discussion_id, item.payload.source_revision)));
+    const uncovered = expected.filter((item) => !staged.has(item.key));
     if (!uncovered.length) return { ok: true };
     if (!existsSync(repliesPath)) {
       return {
         ok: false,
-        detail: `Agent 没有留下 MR 逐条回复（缺 ${uncovered.join("、")}）。`
+        detail: `Agent 没有留下 MR 逐条回复（缺 ${
+          uncovered.map((item) => item.id).join("、")}）。`
           + "已保留代码现场，补齐答复前不会 push。",
       };
     }
@@ -15001,7 +15214,7 @@ export class TaskService {
     } catch (error) {
       return { ok: false, detail: `读取 MR 逐条回复失败：${String(error)}` };
     }
-    const parsed = parseReviewReplies(text, uncovered);
+    const parsed = parseReviewReplies(text, uncovered.map((item) => item.id));
     if (parsed.missing_ids.length) {
       return {
         ok: false,
@@ -15011,10 +15224,13 @@ export class TaskService {
     }
     const repo = task.summary.repo_url ?? this.effectiveDefaultRepo() ?? "";
     const resolve = this.options.delivery?.resolveDiscussions ?? false;
+    const revisionById = new Map(uncovered.map((item) =>
+      [item.id, item.revision] as const));
     try {
       for (const reply of parsed.replies) {
         outbox.enqueueReviewReply({
           discussion_id: reply.id,
+          source_revision: revisionById.get(reply.id) ?? 0,
           body: reply.body,
           repo,
           mr: task.summary.delivery?.mr_id,
@@ -15157,7 +15373,8 @@ export class TaskService {
     try {
       delivered = outbox.list().filter((item) =>
         item.kind === "review_reply" && item.state === "delivered")
-        .map((item) => item.payload.discussion_id);
+        .map((item) => discussionKeyFromParts(
+          item.payload.discussion_id, item.payload.source_revision));
     } catch (error) {
       return this.markReviewReplyOutboxUnreadable(task, error);
     }
@@ -15372,7 +15589,8 @@ export class TaskService {
     mission: string,
     detail: string,
   ): void {
-    task.mission = mission;
+    const receipt = this.activeFeedbackReceiptInstructions(task);
+    task.mission = [mission, receipt].filter(Boolean).join("\n\n");
     task.summary.status = "queued";
     task.summary.detail = detail;
     task.resume = true;
@@ -16671,6 +16889,24 @@ export class TaskService {
         // 下面 tryDeliver→pipelineVerdict 的 halted 分支要用。
         task.lastReply = task.driver?.finalReply();
         const feedbackResultFailure = this.recordActiveFeedbackResult(task);
+        const activeFeedback = this.activeKernelFeedback(task);
+        if (feedbackResultFailure && task.driver && activeFeedback && workspaceLoop
+            && workspaceLoop.review_source !== "workspace"
+            && workspaceLoop.feedback_receipt_retry_for !== activeFeedback.batchId) {
+          workspaceLoop.feedback_receipt_retry_for = activeFeedback.batchId;
+          workspaceLoop.diagnosis = feedbackResultFailure;
+          task.summary.status = "running";
+          task.summary.detail = "代码处理已完成，正在自动补齐逐条反馈回执";
+          this.persist(task);
+          await this.settle(task, task.driver.continueWith([
+            "代码处理已经完成，但本批逐条反馈回执没有通过机器核对。",
+            feedbackResultFailure,
+            "现在只补回执，不要重新修改代码、不要重新提交、不要重复走流程。",
+            this.activeFeedbackReceiptInstructions(task),
+            "写完后立即结束本轮。",
+          ].join("\n\n")), epoch);
+          break;
+        }
         task.driver?.dispose();
         // host push 的硬前提：不仅调用 dispose，还要先从任务状态移除
         // 会话句柄，还要串行停净普通编码容器。异步 fire-and-forget 会

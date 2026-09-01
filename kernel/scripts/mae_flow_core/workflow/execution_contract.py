@@ -49,6 +49,25 @@ def _explicit_host(raw, fallback, executors):
     return value
 
 
+def _normalize_authority(authority):
+    if authority is None:
+        return None
+    if not isinstance(authority, dict):
+        raise ValueError("execution_contract.host_authority 必须是 JSON object")
+    required = {"schema": "mae-flow-host-authority/1", "alg": "RS256"}
+    for key, expected in required.items():
+        if str(authority.get(key) or "") != expected:
+            raise ValueError("host_authority.%s 必须是 %s" % (key, expected))
+    result = dict(required)
+    for key, limit in (("key_id", 128), ("task_id", 200),
+                       ("n", 2048), ("e", 32)):
+        value = str(authority.get(key) or "").strip()
+        if not value or len(value) > limit:
+            raise ValueError("host_authority.%s 缺失或过长" % key)
+        result[key] = value
+    return result
+
+
 def _normalize_explicit(raw, host):
     if not isinstance(raw, dict):
         raise ValueError("execution_contract 必须是 JSON object")
@@ -74,7 +93,8 @@ def _normalize_explicit(raw, host):
         raise ValueError("execution_contract.continuous_review 必须是 boolean")
     if continuous_review and resolved_host != "cloud":
         raise ValueError("continuous_review 只能由 Cloud 执行契约启用")
-    return {
+    normalized_authority = _normalize_authority(raw.get("host_authority"))
+    result = {
         "schema": SCHEMA,
         "host": resolved_host,
         "compile": compile_executor,
@@ -85,6 +105,9 @@ def _normalize_explicit(raw, host):
         "continuous_review": continuous_review,
         "source": "order",
     }
+    if normalized_authority is not None:
+        result["host_authority"] = normalized_authority
+    return result
 
 
 def resolve_execution_contract(order_facts=None, host=""):

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Cloud continuous-review is opt-in, durable and never a fresh workflow."""
 
+import hashlib
 import json
 import os
 import subprocess
@@ -79,6 +80,13 @@ def batch(batch_id="fb-1", base=HEAD):
     }
 
 
+def without_host_nonces(value):
+    copied = json.loads(json.dumps(value, ensure_ascii=False))
+    for key in ("host_capability_nonces", "state_version", "revision", "updated_at"):
+        copied.pop(key, None)
+    return copied
+
+
 class TempProject(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -105,6 +113,16 @@ class TempProject(unittest.TestCase):
 
 
 class DeliveryCommandTests(TempProject):
+    def setUp(self):
+        super().setUp()
+        self.proof = mock.patch.object(
+            delivery, "_verify_host_proof", return_value="test-proof-nonce")
+        self.proof.start()
+
+    def tearDown(self):
+        self.proof.stop()
+        super().tearDown()
+
     def live_state(self, step="delivery_watch"):
         value = state(step)
         value["step_heads"] = {step: self.head}
@@ -128,7 +146,7 @@ class DeliveryCommandTests(TempProject):
         self.assertFalse(os.path.exists(".mae-flow.json.last"))
         first = json.loads(json.dumps(value, ensure_ascii=False))
         delivery.cmd_delivery({"steps": {}}, value, args)
-        self.assertEqual(first, value)
+        self.assertEqual(without_host_nonces(first), without_host_nonces(value))
 
     def test_old_cloud_terminal_can_be_adopted_without_reinit_or_history_loss(self):
         value = self.live_state("end")
@@ -147,7 +165,7 @@ class DeliveryCommandTests(TempProject):
         self.assertFalse(os.path.exists(".mae-flow.json.last"))
         first = json.loads(json.dumps(value, ensure_ascii=False))
         delivery.cmd_delivery({"steps": {}}, value, args)
-        self.assertEqual(first, value)
+        self.assertEqual(without_host_nonces(first), without_host_nonces(value))
 
     def test_feedback_open_rejects_wrong_base_and_disabled_contract(self):
         value = self.live_state()
@@ -183,7 +201,7 @@ class DeliveryCommandTests(TempProject):
         self.assertEqual(old_quality, value["quality"])
         first = json.loads(json.dumps(value, ensure_ascii=False))
         delivery.cmd_delivery({"steps": {}}, value, args)
-        self.assertEqual(first, value)
+        self.assertEqual(without_host_nonces(first), without_host_nonces(value))
 
     def test_result_requires_one_receipt_per_item(self):
         value = self.live_state()
@@ -194,8 +212,10 @@ class DeliveryCommandTests(TempProject):
             "schema": delivery.RESULT_SCHEMA, "batch_id": "fb-1", "results": [],
         })
         with self.assertRaises(SystemExit):
-            delivery.cmd_delivery({"steps": {}}, value, SimpleNamespace(
-                delivery_action="feedback-result", file=result_path))
+            with mock.patch.object(
+                    delivery, "_verify_host_proof", return_value="queue-test-proof"):
+                delivery.cmd_delivery({"steps": {}}, value, SimpleNamespace(
+                    delivery_action="feedback-result", file=result_path))
 
     def test_red_feedback_replaces_awaiting_writer_and_later_pass_closes_both(self):
         value = self.live_state("external_verify")
@@ -232,7 +252,51 @@ class DeliveryCommandTests(TempProject):
         self.assertEqual("end", value["current"])
         first = json.loads(json.dumps(value, ensure_ascii=False))
         delivery.cmd_delivery(flow, value, args)
-        self.assertEqual(first, value)
+        self.assertEqual(without_host_nonces(first), without_host_nonces(value))
+
+    def test_merged_close_records_clean_local_commits_not_in_mr(self):
+        value = self.live_state()
+        with open("tracked.txt", "a", encoding="utf-8") as stream:
+            stream.write("local-only\n")
+        subprocess.run(["git", "add", "tracked.txt"], check=True)
+        subprocess.run(["git", "commit", "-qm", "local-only"], check=True)
+        local_head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], text=True).strip()
+        args = SimpleNamespace(
+            delivery_action="close", reason="merged", sha=self.head,
+            event_id="merge-with-local")
+        delivery.cmd_delivery({"steps": {"end": {"terminal": True}}}, value, args)
+        event = value["delivery_loop"]["close_events"][-1]
+        self.assertEqual(local_head, event["local_head"])
+        self.assertEqual([local_head], [
+            item["sha"] for item in event["unpushed_local_commits"]])
+        self.assertEqual([], event["unpushed_local_paths"])
+
+
+class DeliveryHostProofTests(TempProject):
+    def test_forged_proof_is_rejected_even_when_shell_obfuscation_evades_hint(self):
+        value = state()
+        value["execution_contract"]["host_authority"] = {
+            "schema": "mae-flow-host-authority/1",
+            "alg": "RS256", "key_id": "test", "task_id": "task-7",
+            "n": "AQ", "e": "Aw",
+        }
+        payload = batch(base=self.head)
+        payload_path = self.write_json("batch.json", payload)
+        proof_path = self.write_json("forged.json", {
+            "schema": "mae-flow-host-proof/1",
+            "task_id": "task-7", "action": "feedback-open",
+            "payload_digest": hashlib.sha256(
+                json.dumps(payload, ensure_ascii=False, sort_keys=True,
+                           separators=(",", ":")).encode("utf-8")).hexdigest(),
+            "nonce": "forged", "issued_at": int(delivery.time.time()),
+            "signature": "ZmFrZQ",
+        })
+        with self.assertRaises(SystemExit):
+            delivery.cmd_delivery({"steps": {}}, value, SimpleNamespace(
+                delivery_action="feedback-open", file=payload_path,
+                host_proof=proof_path))
+        self.assertNotIn("delivery_loop", value)
 
 
 class PipelineRoutingTests(unittest.TestCase):
@@ -329,8 +393,10 @@ class FeedbackAuthorizationTests(unittest.TestCase):
             json.dump(payload, out)
             path = out.name
         try:
-            with self.assertRaises(SystemExit):
-                delivery._result({}, value, SimpleNamespace(file=path))
+            with mock.patch.object(
+                    delivery, "_verify_host_proof", return_value="queue-test-proof"):
+                with self.assertRaises(SystemExit):
+                    delivery._result({}, value, SimpleNamespace(file=path))
             self.assertEqual("queued", value["delivery_loop"]["batches"][1]["status"])
             self.assertNotIn("result_digest", value["delivery_loop"]["batches"][1])
         finally:

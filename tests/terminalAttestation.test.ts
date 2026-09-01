@@ -149,7 +149,17 @@ test("持续检视就绪与任务完成使用两把不同的证明", () => {
   state.current = "end";
   writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify(state));
   assert.equal(inspectKernelDeliveryReady(cwd, kernelRoot).complete, false);
+  assert.equal(inspectKernelTaskCompletion(cwd, kernelRoot).complete, false,
+    "持续检视任务不能拿旧 end 冒充 MR 已合入");
+  state.delivery_loop = { close_events: [{
+    event_id: "merge-1", reason: "merged", sha: head, local_head: head,
+  }] };
+  writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify(state));
   assert.equal(inspectKernelTaskCompletion(cwd, kernelRoot).complete, true);
+
+  execFileSync("git", ["commit", "--allow-empty", "-qm", "local after merge"], { cwd });
+  assert.equal(inspectKernelTaskCompletion(cwd, kernelRoot).complete, true,
+    "MR 合入竞态中的本地未推送提交只留痕，不能让终态死锁");
 });
 
 test("flow 未声明 terminal 时，状态文件自称 end 也不能绕过", () => {

@@ -829,6 +829,11 @@ export class PlatformAdapter {
           .filter((row) => row.id !== undefined && row.id !== "")
           .map((row) => ({
             id: String(row.id),
+            ...(row.revision !== undefined
+              && Number.isSafeInteger(Number(row.revision))
+              ? { revision: Number(row.revision) } : {}),
+            ...(row.updated_at !== undefined
+              ? { updated_at: String(row.updated_at) } : {}),
             ...(row.file !== undefined ? { file: String(row.file) } : {}),
             ...(row.line !== undefined ? { line: Number(row.line) } : {}),
             ...(row.severity !== undefined
