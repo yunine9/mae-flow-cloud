@@ -569,6 +569,7 @@ export function TaskWorkspace({
   const [reviewPanelWidth, setReviewPanelWidth] =
     useState<number | undefined>(storedReviewPanelWidth);
   const [reviewPanelOpen, setReviewPanelOpen] = useState(false);
+  const [reviewInviteOpen, setReviewInviteOpen] = useState(false);
   const [executionView, setExecutionView] = useState<ExecutionView>("events");
   const artifactTask = useRef("");
   const openedEvidenceGap = useRef("");
@@ -601,6 +602,7 @@ export function TaskWorkspace({
     setWorkspaceView(defaultWorkspaceView(task));
     setMaterialsFullscreen(false);
     setReviewPanelOpen(false);
+    setReviewInviteOpen(false);
     setExecutionView("events");
     setRepositoryAssignees(EMPTY_REPOSITORY_ASSIGNEE_SELECTION);
     setDeliverySelection(undefined);
@@ -731,7 +733,8 @@ export function TaskWorkspace({
   useEffect(() => {
     const escape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      if (materialsFullscreen) setMaterialsFullscreen(false);
+      if (reviewInviteOpen) setReviewInviteOpen(false);
+      else if (materialsFullscreen) setMaterialsFullscreen(false);
       else onClose();
     };
     window.addEventListener("keydown", escape);
@@ -741,7 +744,7 @@ export function TaskWorkspace({
       window.removeEventListener("keydown", escape);
       document.body.style.overflow = previous;
     };
-  }, [materialsFullscreen, onClose]);
+  }, [materialsFullscreen, reviewInviteOpen, onClose]);
 
   useEffect(() => {
     if (reviewPanelWidth === undefined || typeof window === "undefined") return;
@@ -1639,9 +1642,16 @@ export function TaskWorkspace({
                 此刻的待办就是看失败原因、决定重跑还是接手。 */}
             {reviewPanelOpen ? <>
               <div><span>REVIEW IN CONTEXT</span><strong>边看材料，边处理意见</strong></div>
-              <small>{reviewActionCount > 0
-                ? `还有 ${reviewActionCount} 项待处理；完成后收起清单继续最终决定`
-                : "检视记录与邀请都集中在这里；左侧材料保持不动"}</small>
+              <div className="ws-review-head-actions">
+                <small>{reviewActionCount > 0
+                  ? `还有 ${reviewActionCount} 项待处理；完成后收起清单继续最终决定`
+                  : "检视记录集中在这里；左侧材料保持不动"}</small>
+                {canRequestReview && <button type="button"
+                  className="review-invite-trigger"
+                  onClick={() => { setReviewResult(""); setReviewInviteOpen(true); }}>
+                  ＋ 邀请检视
+                </button>}
+              </div>
             </> : <>
               <div><span>NEXT ACTION</span><strong>{nextAction.title}</strong></div>
               <small>{nextAction.detail}</small>
@@ -1708,34 +1718,6 @@ export function TaskWorkspace({
               {!notes.length && <div className="ws-insight-empty">
                 在左侧需求、文档或代码中圈选内容，即可把意见加入这里。
               </div>}
-              {canRequestReview && <section className="committer-review compact"
-                aria-labelledby="review-drawer-committer-title">
-                <div><span>OPTIONAL REVIEW</span>
-                  <strong id="review-drawer-committer-title">邀请 Committer 检视</strong>
-                  <p>选人后通知对方，不影响任务责任人的最终决定。</p>
-                </div>
-                {committers.length > 0 ? <div className="committer-review-action">
-                  <UserPicker ariaLabel="选择 Committer" value={reviewer}
-                    options={committers} onChange={setReviewer} />
-                  <button type="button" disabled={!reviewer || reviewBusy}
-                    onClick={() => void inviteReview()}>
-                    {reviewBusy ? "发送中…" : "邀请检视"}
-                  </button>
-                </div> : <div className="committer-empty">
-                  管理员尚未配置 Committer 名单
-                </div>}
-                {reviewResult && <small className="committer-result">{reviewResult}</small>}
-                {taskReviews.length > 0 && <div className="committer-review-history">
-                  {taskReviews.slice(0, 3).map((review) => <span key={review.id}>
-                    <i className={review.status} aria-hidden />
-                    <strong>{userLabel(committers.find((user) =>
-                      user.username === review.committer)
-                      ?? { username: review.committer })}</strong>
-                    <small>{review.status === "completed" ? "已完成检视"
-                      : review.delivered ? "等待检视" : "通知未送达"}</small>
-                  </span>)}
-                </div>}
-              </section>}
             </div>}
           </section>
           {waiting && canOperate && (
@@ -1893,6 +1875,44 @@ export function TaskWorkspace({
           )}
         </aside>
       </div>
+      {reviewInviteOpen && <div className="review-invite-backdrop"
+        onMouseDown={(event) => {
+          if (event.target === event.currentTarget) setReviewInviteOpen(false);
+        }}>
+        <section className="review-invite-dialog" role="dialog" aria-modal="true"
+          aria-labelledby="review-invite-title">
+          <header>
+            <div><span>OPTIONAL REVIEW</span>
+              <strong id="review-invite-title">邀请 Committer 检视</strong>
+              <p>通知一位 Committer 协助检视，不影响你的最终决定。</p>
+            </div>
+            <button type="button" aria-label="关闭邀请检视窗口"
+              autoFocus
+              onClick={() => setReviewInviteOpen(false)}>×</button>
+          </header>
+          {committers.length > 0 ? <div className="committer-review-action">
+            <UserPicker ariaLabel="选择 Committer" value={reviewer}
+              options={committers} onChange={setReviewer} />
+            <button type="button" disabled={!reviewer || reviewBusy}
+              onClick={() => void inviteReview()}>
+              {reviewBusy ? "发送中…" : "发送邀请"}
+            </button>
+          </div> : <div className="committer-empty">
+            管理员尚未配置 Committer 名单
+          </div>}
+          {reviewResult && <small className="committer-result">{reviewResult}</small>}
+          {taskReviews.length > 0 && <div className="committer-review-history">
+            {taskReviews.slice(0, 3).map((review) => <span key={review.id}>
+              <i className={review.status} aria-hidden />
+              <strong>{userLabel(committers.find((user) =>
+                user.username === review.committer)
+                ?? { username: review.committer })}</strong>
+              <small>{review.status === "completed" ? "已完成检视"
+                : review.delivered ? "等待检视" : "通知未送达"}</small>
+            </span>)}
+          </div>}
+        </section>
+      </div>}
     </section>
   );
 }

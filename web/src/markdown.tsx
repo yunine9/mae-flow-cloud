@@ -109,23 +109,26 @@ export function Markdown({
     }
     // 表格:连续 | 行,第二行是分隔线则去掉它
     if (isTableRow(line)) {
-      const rows: string[] = [];
+      const rows: Array<{ cells: string[]; at: number }> = [];
       while (index < lines.length && isTableRow(lines[index])) {
-        if (!isDivider(lines[index])) rows.push(lines[index]);
+        if (!isDivider(lines[index])) rows.push({
+          cells: tableCells(lines[index]),
+          at: index + 1,
+        });
         index += 1;
       }
-      const [head, ...body] = rows.map(tableCells);
+      const [head, ...body] = rows;
       blocks.push(
         <table key={key++} className="md-table" data-l={at}>
           {head && (
-            <thead><tr>
-              {head.map((cell, i) => <th key={i}>{inline(cell, resolveImage)}</th>)}
+            <thead><tr data-l={head.at}>
+              {head.cells.map((cell, i) => <th key={i}>{inline(cell, resolveImage)}</th>)}
             </tr></thead>
           )}
           <tbody>
-            {body.map((cells, r) => (
-              <tr key={r}>
-                {cells.map((cell, i) => <td key={i}>{inline(cell, resolveImage)}</td>)}
+            {body.map((row, r) => (
+              <tr key={r} data-l={row.at}>
+                {row.cells.map((cell, i) => <td key={i}>{inline(cell, resolveImage)}</td>)}
               </tr>
             ))}
           </tbody>

@@ -4,6 +4,8 @@ import { join } from "node:path";
 import test from "node:test";
 
 const css = readFileSync(join(process.cwd(), "web/src/style.css"), "utf8");
+const workspace = readFileSync(
+  join(process.cwd(), "web/src/TaskWorkspace.tsx"), "utf8");
 
 test("长批注保持自然高度并由检视栏统一滚动", () => {
   const baseDrawer = css.indexOf(".ws-review-drawer-body {");
@@ -35,4 +37,16 @@ test("快速提问题常驻右下角且使用横向小按钮", () => {
   assert.match(rule, /display:\s*inline-flex;/);
   assert.match(rule, /border-radius:\s*999px;/);
   assert.match(css, /\.wish-quick-trigger strong[^}]*writing-mode:\s*horizontal-tb;/s);
+});
+
+test("邀请 Committer 收成标题小按钮并在弹窗中完成", () => {
+  assert.match(workspace, /className="review-invite-trigger"/);
+  assert.match(workspace, /＋ 邀请检视/);
+  assert.match(workspace, /className="review-invite-dialog" role="dialog"/);
+  assert.match(workspace, /aria-label="关闭邀请检视窗口"/);
+  assert.doesNotMatch(workspace,
+    /className="committer-review compact"/,
+    "检视栏底部不应再堆整张邀请卡");
+  assert.match(css, /\.review-invite-trigger\s*\{/);
+  assert.match(css, /\.review-invite-backdrop\s*\{/);
 });

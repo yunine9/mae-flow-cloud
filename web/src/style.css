@@ -1381,6 +1381,89 @@ svg {
 .ws-review-drawer-body .review-assignment.compact { grid-template-columns: 32px minmax(0, 1fr); }
 .ws-review-drawer-body .review-assignment.compact > button { grid-column: 1 / -1; width: 100%; }
 .ws-review-drawer-body .committer-review-action { grid-template-columns: minmax(0, 1fr) auto; }
+.ws-pane-head > .ws-review-head-actions {
+  min-width: 0;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+}
+.ws-review-head-actions small {
+  max-width: 310px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.review-invite-trigger {
+  min-height: 30px;
+  padding: 0 10px;
+  flex: none;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line));
+  border-radius: 8px;
+  background: var(--accent-soft);
+  font: 700 12px var(--font-ui);
+  cursor: pointer;
+}
+.review-invite-trigger:hover { border-color: var(--accent); }
+.review-invite-backdrop {
+  position: fixed;
+  z-index: 950;
+  inset: 0;
+  padding: 20px;
+  display: grid;
+  place-items: center;
+  background: rgba(5, 9, 18, .48);
+}
+.review-invite-dialog {
+  width: min(460px, 100%);
+  padding: 20px;
+  display: grid;
+  gap: 15px;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, .38);
+}
+.review-invite-dialog > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.review-invite-dialog > header > div { min-width: 0; display: grid; gap: 4px; }
+.review-invite-dialog header span {
+  color: var(--accent);
+  font: 700 11px var(--font-mono);
+  letter-spacing: .12em;
+}
+.review-invite-dialog header strong { color: var(--text-strong); font-size: 17px; }
+.review-invite-dialog header p {
+  margin: 1px 0 0;
+  color: var(--muted);
+  font-size: var(--font-size-assist);
+  line-height: 1.5;
+}
+.review-invite-dialog header > button {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  font-size: 18px;
+  cursor: pointer;
+}
+.review-invite-dialog .user-picker { min-width: 0; }
+@media (max-width: 900px) {
+  .ws-pane-head > .ws-review-head-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .ws-review-head-actions small { white-space: normal; }
+}
 .ws-decision.review-mode > :not(.ws-pane-head):not(.ws-review-drawer) { display: none; }
 .ws-decision.review-mode .ws-review-drawer.open {
   min-height: 0; flex: 1; display: flex; flex-direction: column;

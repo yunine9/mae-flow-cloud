@@ -45,3 +45,19 @@ test("Markdown 只渲染调用方明确解析过的需求图片路径", () => {
   assert.match(html, /requirement-asset\?path=/);
   assert.doesNotMatch(html, /<img[^>]+example\.com/);
 });
+
+test("Markdown 表格每一行保留自己的原文行号供逐行批注", () => {
+  const text = [
+    "表格前文",
+    "",
+    "| 模块 | 责任人 |",
+    "| --- | --- |",
+    "| 过滤模块 | 张三 |",
+    "| 通知模块 | 李四 |",
+  ].join("\n");
+  const html = renderToStaticMarkup(React.createElement(Markdown, { text }));
+
+  assert.match(html, /<thead><tr data-l="3">/);
+  assert.match(html, /<tbody><tr data-l="5">/);
+  assert.match(html, /<tr data-l="6"><td>通知模块<\/td>/);
+});
