@@ -410,6 +410,10 @@ export interface IssueFlowOptions {
    * 部署守卫直接 false,零开销);只有测试注入它来模拟 root 宿主。 */
   ownershipRuntime?: ContainerOwnershipRuntime;
   log?: (message: string) => void;
+  /** 正式服务需要先清扫上次进程遗留的容器，再恢复问题会话。缺省仍在
+   * 构造时恢复，保持独立使用与既有测试兼容；serve 显式延后并调用
+   * start()，从启动顺序上消掉“新容器被孤儿清扫误杀”的竞态。 */
+  deferRecovery?: boolean;
 }
 
 interface LiveIssue {
@@ -417,6 +421,9 @@ interface LiveIssue {
   root: string;
   state: IssueSessionState;
   humanGate: HumanGate;
+  /** 用户取消会递增；旧回合稍后返回时凭此识别自己已经失效，不能把
+   * canceled 覆盖回 failed/idle。 */
+  controlEpoch: number;
   driver?: CloudSession;
   container?: TaskContainer;
   toolContext?: IssueToolContext;
@@ -449,6 +456,7 @@ export class IssueFlowService {
   private readonly issuesRoot: string;
   private readonly live = new Map<string, LiveIssue>();
   private readonly turning = new Set<string>();
+  private recoveryStarted = false;
   /** 数据目录(业务模块库等子系统的根),供路由层读取。 */
   readonly dataDir: string;
 
@@ -459,7 +467,7 @@ export class IssueFlowService {
       ?? new IssueEnvironmentVault(options.dataDir);
     this.issuesRoot = join(options.dataDir, "issues");
     mkdirSync(this.issuesRoot, { recursive: true });
-    this.recover();
+    if (!options.deferRecovery) this.start();
   }
 
   private log(message: string): void {
@@ -472,7 +480,16 @@ export class IssueFlowService {
    * interrupted 戳(词表已退役)按 running 同一条路处理。
    * waiting_user/suspended 照旧等家人,终态不动。恢复完成补一脚泵——
    * 泵原本只在回合点火/收口被调,启动期没有调用点,不补则重新入队的
-   * 会话永远坐着。 */
+   * 会话永远坐着。
+   *
+   * 正式服务在遗留容器清扫完成后显式调用；幂等避免
+   * 启动接线或测试重复调用时把同一问题会话恢复两次。 */
+  start(): void {
+    if (this.recoveryStarted) return;
+    this.recoveryStarted = true;
+    this.recover();
+  }
+
   private recover(): void {
     let requeued = 0;
     let keptQueued = 0;
@@ -500,6 +517,7 @@ export class IssueFlowService {
       const live: LiveIssue = {
         id: state.id, root, state,
         humanGate: new HumanGate(join(root, "waiting.json")),
+        controlEpoch: 0,
         ...(resuming ? { resumeMessage: RESTART_RESUME_NOTICE } : {}),
       };
       this.live.set(state.id, live);
@@ -788,6 +806,7 @@ export class IssueFlowService {
     this.live.set(id, {
       id, root, state,
       humanGate: new HumanGate(join(root, "waiting.json")),
+      controlEpoch: 0,
     });
     this.log(`[issue-flow] ${id} 已登记(${ticket ?? "无单号"},${mode === "fixed" ? "固定流程" : "自由探索"}): ${title}`);
     void this.pump();
@@ -918,11 +937,12 @@ export class IssueFlowService {
    * 出路语义各不相同,收进来反而要改行为。settle 里的催办/补发续跑
    * 不走这里——那是同一回合的延续,turning 还握着,预算也不清。 */
   private beginTurn(live: LiveIssue, body: () => Promise<Outcome>): void {
+    const epoch = live.controlEpoch;
     this.turning.add(live.id);
     live.state.status = "running";
     live.state.nudges = 0;
     saveState(live.root, live.state);
-    void this.runTurn(live, body).finally(() => {
+    void this.runTurn(live, body, epoch).finally(() => {
       this.turning.delete(live.id);
       void this.pump();
     });
@@ -1067,11 +1087,14 @@ export class IssueFlowService {
   private async runTurn(
     live: LiveIssue,
     body: () => Promise<Outcome>,
+    epoch: number,
   ): Promise<void> {
     try {
       const outcome = await body();
+      if (live.controlEpoch !== epoch) return;
       this.settle(live, outcome);
     } catch (error) {
+      if (live.controlEpoch !== epoch) return;
       const detail = error instanceof Error ? error.message : String(error);
       live.state.status = "failed";
       live.state.error = detail;
@@ -1081,7 +1104,10 @@ export class IssueFlowService {
     } finally {
       // waiting_user 的回合还没真正结束(AskUserQuestion 挂起中,作答后
       // 还会在同一回合里继续用 bash)——容器必须留着。
-      if (live.state.status !== "waiting_user") this.stopContainer(live);
+      if (live.controlEpoch === epoch
+          && live.state.status !== "waiting_user") {
+        this.stopContainerInBackground(live, "回合收口");
+      }
     }
   }
 
@@ -1103,7 +1129,7 @@ export class IssueFlowService {
           live.state.status = "running";
           saveState(live.root, live.state);
           void this.runTurn(live, async () =>
-            live.driver!.continueWith(late.join("\n\n")));
+            live.driver!.continueWith(late.join("\n\n")), live.controlEpoch);
           return;
         }
         // 催办续跑(2026-08-28 拍板 A):模型提前收嘴不等于阶段完成,
@@ -1120,7 +1146,7 @@ export class IssueFlowService {
               await this.ensureContainer(live);
               return live.driver!.continueWith(
                 fixedNudgeNotice(state, state.nudges!, NUDGE_BUDGET));
-            });
+            }, live.controlEpoch);
             return;
           }
           state.status = "idle";
@@ -1324,13 +1350,21 @@ export class IssueFlowService {
     live.driver = undefined;
   }
 
-  private stopContainer(live: LiveIssue): void {
+  /** 确认容器真正删除后才清句柄。失败时保留句柄，取消/关停可以重试，
+   * 不能先把内存引用扔掉再把“已取消”返回给用户。 */
+  private async stopContainer(live: LiveIssue): Promise<void> {
     const container = live.container;
-    live.container = undefined;
-    if (container) {
-      void container.stop().catch((error) =>
-        this.log(`[issue-flow] ${live.id} 容器停止失败(继续): ${String(error)}`));
-    }
+    if (!container) return;
+    await container.stop();
+    if (live.container === container) live.container = undefined;
+  }
+
+  /** 阶段自然收口仍不阻塞业务答复，但失败必须留住句柄并明确记账；服务
+   * 关停或用户取消会再次回收。 */
+  private stopContainerInBackground(live: LiveIssue, reason: string): void {
+    void this.stopContainer(live).catch((error) =>
+      this.log(`[issue-flow] ${live.id} ${reason}容器停止失败(保留待重试): ${
+        String(error)}`));
   }
 
   private modelChoice(): { provider: string; model: string; json: Record<string, unknown> } {
@@ -1712,7 +1746,7 @@ export class IssueFlowService {
       state.status = "archived";
       saveState(live.root, state);
       this.releaseDriver(live);
-      this.stopContainer(live);
+      this.stopContainerInBackground(live, "非问题归档");
       this.vault.remove(live.id);
       this.log(`[issue-flow] ${live.id} 结论非问题,已闭环归档`);
       return summarize(state);
@@ -1725,7 +1759,7 @@ export class IssueFlowService {
       state.stage_note = "结论为「是问题」——请关联 DTS 单号转正,或直接归档";
       saveState(live.root, state);
       this.releaseDriver(live);
-      this.stopContainer(live);
+      this.stopContainerInBackground(live, "问题挂起");
       this.log(`[issue-flow] ${live.id} 结论是问题,已挂起待关联单号`);
       return summarize(state);
     }
@@ -2014,17 +2048,35 @@ export class IssueFlowService {
     return summarize(live.state);
   }
 
-  control(id: string, input: {
+  async control(id: string, input: {
     action: "cancel" | "archive";
     kind?: IssueConclusionKind;
     summary?: string;
-  }): IssueSummary {
+  }): Promise<IssueSummary> {
     const live = this.require(id);
     if (isTerminal(live.state.status)) {
       throw new IssueControlError(`会话已处于终态 ${live.state.status}`);
     }
-    if (this.turning.has(live.id)) {
-      throw new IssueControlError("会话正在运行,先等回合结束或直接取消");
+    if (this.turning.has(live.id) && input.action !== "cancel") {
+      throw new IssueControlError("会话正在运行；如需立即停止，请先取消会话");
+    }
+    // 先停净再写终态。过去先清 live.container、异步 stop，接口已经回了
+    // “取消成功”但 Docker 仍在；失败后也没有句柄可重试。
+    const previousStatus = live.state.status;
+    if (input.action === "cancel") live.controlEpoch += 1;
+    void live.driver?.abort().catch(() => undefined);
+    this.releaseDriver(live);
+    try {
+      await this.stopContainer(live);
+    } catch (error) {
+      if (input.action === "cancel" && previousStatus === "running") {
+        live.state.status = "idle";
+        live.state.error = `取消时容器回收失败：${String(error)}`;
+        saveState(live.root, live.state);
+      }
+      throw new IssueControlError(
+        `容器未能确认回收，${input.action === "cancel" ? "取消" : "归档"}`
+          + `尚未完成，请重试：${String(error)}`);
     }
     const now = new Date().toISOString();
     if (input.action === "cancel") {
@@ -2054,9 +2106,6 @@ export class IssueFlowService {
       }
     }
     saveState(live.root, live.state);
-    void live.driver?.abort().catch(() => undefined);
-    this.releaseDriver(live);
-    this.stopContainer(live);
     this.vault.remove(live.id);
     this.log(`[issue-flow] ${id} ${input.action === "cancel" ? "取消" : "归档"}`);
     return summarize(live.state);
@@ -2400,6 +2449,7 @@ export class IssueFlowService {
     this.live.set(newId, {
       id: newId, root: newRoot, state: converted,
       humanGate: new HumanGate(join(newRoot, "waiting.json")),
+      controlEpoch: 0,
     });
     // 旧会话收口(不经 control:结论与链接有专属语义)。
     state.conclusion = {
@@ -2414,7 +2464,7 @@ export class IssueFlowService {
     });
     saveState(live.root, state);
     this.releaseDriver(live);
-    this.stopContainer(live);
+    this.stopContainerInBackground(live, "关联单号转正");
     this.vault.remove(id);
     this.log(`[issue-flow] ${id} 关联 ${ticket} 转正为 ${newId}`);
     void this.pump();
@@ -2425,12 +2475,18 @@ export class IssueFlowService {
 
   async shutdown(): Promise<void> {
     const work = [...this.live.values()].map(async (live) => {
-      void live.driver?.abort().catch(() => undefined);
+      await live.driver?.abort().catch(() => undefined);
       this.releaseDriver(live);
-      if (live.container) await live.container.stop().catch(() => undefined);
-      live.container = undefined;
+      await this.stopContainer(live);
     });
-    await Promise.allSettled(work);
+    const settled = await Promise.allSettled(work);
+    const failures = settled
+      .filter((item): item is PromiseRejectedResult => item.status === "rejected")
+      .map((item) => item.reason);
+    if (failures.length) {
+      throw new AggregateError(failures,
+        `问题会话关停时有 ${failures.length} 个容器未能确认回收`);
+    }
   }
 }
 

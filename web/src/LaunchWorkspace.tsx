@@ -23,6 +23,7 @@ import {
   type RepositoryTechnologyDraft,
 } from "./RepositoryTechnologyPicker";
 import { knowledgeLanguageLabel } from "./KnowledgeLanguages";
+import { UserPicker } from "./UserPicker";
 import {
   knowledgeAssetPath,
   type KnowledgeAssetFocus,
@@ -63,7 +64,6 @@ type LaunchPreferences = {
   recentRepos: string[];
   baseline?: string;
   lane?: string;
-  repairRounds?: string;
 };
 
 type RequirementBundleDraft = {
@@ -246,10 +246,17 @@ export function LaunchWorkspace({
   // 都来自内核,空串=等 options 到了再取第一项。
   const [lane, setLane] = useState(
     validDraft?.lane ?? savedPreferences?.lane ?? "");
+  // 修复轮数是“关闭自动修复”级别的任务手刹，不能像仓库/基线一样
+  // 跨任务记忆。旧实现把一次填写的 0 存成长期偏好，下一单即使没有
+  // 打开折叠区也会静默提交 repair_rounds=0；跨仓拆单还会把它复制给
+  // 每个子任务。只恢复当前未提交草稿，成功下单后下一单重新留空。
   const [repairRounds, setRepairRounds] = useState(
-    validDraft?.repairRounds ?? savedPreferences?.repairRounds ?? "");
+    validDraft?.repairRounds ?? "");
   const [taskInstructions, setTaskInstructions] = useState(
     validDraft?.taskInstructions ?? "");
+  // 单仓大需求先分析拆分(docs/delivery-unit-split-design.md):默认不勾,
+  // 小需求照旧直干;勾了走多仓同款的 Chain 分析,把一个仓拆成多个交付单元。
+  const [requirementAnalysis, setRequirementAnalysis] = useState(false);
   const [selectedBusinessModuleIds, setSelectedBusinessModuleIds] = useState(
     validDraft?.selectedBusinessModuleIds ?? []);
   const [moduleSelectionNotice, setModuleSelectionNotice] = useState("");
@@ -267,7 +274,8 @@ export function LaunchWorkspace({
   const [workflowSelectionNotice, setWorkflowSelectionNotice] = useState("");
   const [advancedOpen, setAdvancedOpen] = useState(() => Boolean(
     validDraft?.workflowSelection
-    || validDraft?.taskInstructions?.trim(),
+    || validDraft?.taskInstructions?.trim()
+    || validDraft?.repairRounds?.trim(),
   ));
   const [knowledgePreview, setKnowledgePreview] =
     useState<LaunchKnowledgePreview>();
@@ -293,6 +301,11 @@ export function LaunchWorkspace({
   // 固定仓部署不渲染仓库输入,预览/提交也一并按 enabled 裁字段——
   // 隐藏控件不等于字段不存在(MFC-033)。
   const repoFieldsEnabled = options?.repo.enabled !== false;
+  // 勾了"先分析拆分":下单不填单号,单号在拆分确认卡上逐单元收
+  // (拆完才知道有几个交付,每个交付一个单号)。
+  const analysisEligible = repoFieldsEnabled
+    && repos.map((item) => item.trim()).filter(Boolean).length === 1;
+  const ticketsDeferred = requirementAnalysis && analysisEligible;
   const repositoriesToProbe = useMemo(() => [...new Set(
     repos.map((item) => item.trim()).filter(Boolean),
   )], [repos]);
@@ -720,6 +733,7 @@ export function LaunchWorkspace({
           repos: repoFieldsEnabled
             ? repos.map((item) => item.trim()).filter(Boolean) : [],
           repositoryTickets: repoFieldsEnabled && options?.ticket.enabled
+              && !ticketsDeferred
             ? Object.fromEntries(repos.flatMap((repo, index) => {
                 const normalized = repo.trim();
                 return normalized
@@ -735,7 +749,7 @@ export function LaunchWorkspace({
           // select 虽然会视觉显示第一项，但用户没手动切换时 state 仍是
           // 空串；提交必须使用屏幕上真正显示的默认项。
           lane: lane || options?.workflows[0]?.label,
-          ticket: ((repoFieldsEnabled
+          ticket: ticketsDeferred ? undefined : ((repoFieldsEnabled
             ? repositoryTickets.find((_, index) => repos[index]?.trim())
             : ticket) ?? "").trim() || undefined,
           baseline: baseline.trim() || undefined,
@@ -754,6 +768,10 @@ export function LaunchWorkspace({
               && repositoryTechnologies.length > 0
               && repositoryTechnologies.every((item) => item.confirmed)
             ? asRepositoryProfiles(repositoryTechnologies) : undefined,
+          // 只在单仓时传:多仓本来就走分析拆分,重复传会误导服务端语义。
+          requirementAnalysis: requirementAnalysis && repoFieldsEnabled
+              && repos.map((item) => item.trim()).filter(Boolean).length === 1
+            ? true : undefined,
           requirementDocumentName: requirementDocumentName || undefined,
           requirementBundle: requirementBundle
             ? {
@@ -774,7 +792,6 @@ export function LaunchWorkspace({
             recentRepos,
             baseline: baseline.trim(),
             lane: lane || options?.workflows[0]?.label,
-            repairRounds,
           } satisfies LaunchPreferences));
         localStorage.removeItem(storageKey("draft", session.username));
       } catch {
@@ -978,8 +995,9 @@ export function LaunchWorkspace({
                       </div>
                       <div className="repo-list">
                         {repos.map((value, index) => (
-                          <div className={`repo-row with-assignee ${options.ticket.enabled
-                            ? "with-ticket" : ""}`} key={index}>
+                          <div className={`repo-row with-assignee ${
+                            options.ticket.enabled && !ticketsDeferred
+                              ? "with-ticket" : ""}`} key={index}>
                             <span>{String(index + 1).padStart(2, "0")}</span>
                             <input type="text" value={value}
                               onChange={(event) => changeRepository(index, event.target.value)}
@@ -992,7 +1010,8 @@ export function LaunchWorkspace({
                                 && repositoryProbeByUrl.get(value.trim())
                                   ?.reachable === false)}
                               required={options.repo.required} />
-                            {options.ticket.enabled && <input type="text"
+                            {options.ticket.enabled && !ticketsDeferred
+                              && <input type="text"
                               value={repositoryTickets[index] ?? ""}
                               onChange={(event) => changeRepositoryTicket(
                                 index, event.target.value)}
@@ -1002,22 +1021,25 @@ export function LaunchWorkspace({
                                 && /\s/.test((repositoryTickets[index] ?? "").trim()))}
                               spellCheck={false}
                               required={options.ticket.required && Boolean(value.trim())} />}
-                            <select value={repositoryAssignees[index] ?? session.username}
-                              aria-label={`第 ${index + 1} 个仓库的责任人`}
+                            <UserPicker
+                              value={repositoryAssignees[index] ?? session.username}
+                              ariaLabel={`第 ${index + 1} 个仓库的责任人`}
                               disabled={!multiRepository}
-                              onChange={(event) => changeRepositoryAssignee(
-                                index, event.target.value)}>
-                              {collaborationAssignees.length === 0
-                                ? <option value={session.username}>{session.username}（自己）</option>
-                                : collaborationAssignees.map((person) => (
-                                  <option key={person.username} value={person.username}
-                                    disabled={!person.ready}>
-                                    {person.username === session.username
-                                      ? `${person.username}（自己）` : person.username}
-                                    {person.ready ? "" : ` · 未就绪`}
-                                  </option>
-                                ))}
-                            </select>
+                              onChange={(username) => changeRepositoryAssignee(index, username)}
+                              options={(collaborationAssignees.length
+                                ? collaborationAssignees : [{
+                                  username: session.username,
+                                  display_name: session.display_name,
+                                  ready: true,
+                                  missing: [],
+                                }]).map((person) => ({
+                                  username: person.username,
+                                  display_name: person.display_name,
+                                  disabled: !person.ready,
+                                  detail: person.username === session.username
+                                    ? "自己" : person.ready ? undefined : "个人设置未就绪",
+                                }))}
+                            />
                             {repos.length > 1 && <button type="button"
                               aria-label={`移除第 ${index + 1} 个仓库`}
                               onClick={() => removeRepository(index)}>×</button>}
@@ -1045,6 +1067,24 @@ export function LaunchWorkspace({
                       <small className="repo-field-note">
                         请填写每个仓自己的 AR 对应 REQ 单号，不要填 FuR；两者格式相同，系统无法自动识别。
                       </small>
+                      {analysisEligible && (
+                        <label className={`repo-analysis-toggle ${
+                          requirementAnalysis ? "selected" : ""}`}>
+                          <input type="checkbox" checked={requirementAnalysis}
+                            aria-label="大需求先分析再拆分"
+                            onChange={(event) =>
+                              setRequirementAnalysis(event.target.checked)} />
+                          <span className="repo-analysis-copy">
+                            <span className="repo-analysis-title">
+                              <em>大需求</em>
+                              <strong>先分析，再拆分</strong>
+                            </span>
+                            <small>先确认改动面与拆分方案，再逐单元创建任务；
+                              AR 单号在拆分确认时填写。</small>
+                          </span>
+                          <span className="repo-analysis-switch" aria-hidden="true" />
+                        </label>
+                      )}
                       <datalist id="launch-recent-repositories">
                         {(savedPreferences?.recentRepos ?? []).map((repo) => (
                           <option key={repo} value={repo} />
@@ -1268,7 +1308,9 @@ export function LaunchWorkspace({
                         : <b>无平台知识</b>}
                     {knowledgePreview?.degraded && <b className="attention">{
                       knowledgePreview.complete ? "知识已降级" : "知识需处理"}</b>}
-                    {repairRounds && <b>{repairRounds} 轮修复</b>}
+                    {repairRounds && <b className={repairRounds === "0"
+                      ? "attention" : undefined}>{repairRounds === "0"
+                        ? "自动修复已关闭" : `${repairRounds} 轮修复`}</b>}
                     {repositoryTechnologies.some((item) => !item.confirmed)
                       && <b className="attention">技术栈待确认</b>}
                   </span>
@@ -1294,13 +1336,20 @@ export function LaunchWorkspace({
                     <div className="launch-field-grid launch-settings-grid">
                       <label className="account-field repair-field">
                         <span>修复轮预算</span>
-                        <input type="number" inputMode="numeric" min={0} step={1}
+                        <input type="text" inputMode="numeric" pattern="[0-9]*"
                           value={repairRounds}
-                          onChange={(event) => setRepairRounds(event.target.value)}
+                          onChange={(event) => {
+                            const value = event.target.value.trim();
+                            if (/^\d*$/.test(value)) setRepairRounds(value);
+                          }}
                           placeholder={options.repair_rounds !== undefined
-                            ? `团队默认 ${options.repair_rounds}（0=关闭）`
-                            : "团队默认不限轮（0=关闭）"} />
-                        <small>留空沿用团队设置。</small>
+                            ? `留空=团队默认 ${options.repair_rounds} 轮；填 0=关闭`
+                            : "留空=不限轮（自动修复开启）；填 0=关闭"} />
+                        <small className={repairRounds === "0" ? "field-warning" : undefined}>
+                          {repairRounds === "0"
+                            ? "本任务已关闭自动修复；检视、冲突或流水线失败将等人处理。"
+                            : "留空沿用团队设置；只有明确要关闭自动修复时才填 0。"}
+                        </small>
                       </label>
                       {!workflowSelection && <label className="account-field task-instructions-field">
                         <span>给标准方案的补充提醒</span>

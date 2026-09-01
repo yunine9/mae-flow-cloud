@@ -365,9 +365,27 @@
     }
    ],
    "dynamic_next": [
-    "moonlight_review"
+    "moonlight_review",
+    "delivery_watch",
+    "feedback_triage"
    ],
    "next": "end"
+  },
+  "delivery_watch": {
+   "title": "持续检视 — 等待反馈或合入",
+   "dynamic_next": [
+    "feedback_triage",
+    "end"
+   ],
+   "next": "feedback_triage"
+  },
+  "feedback_triage": {
+   "title": "持续检视 — 处理本轮反馈",
+   "clear_hint": true,
+   "dynamic_next": [
+    "delivery_watch"
+   ],
+   "next": "build"
   },
   "moonlight_review": {
    "title": "月光宝盒 — 等待早晨检查",

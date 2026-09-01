@@ -101,10 +101,10 @@ test("跨仓分析会话:克隆只读现场→写产物→举卡→确认拆单�
     // 卡到手时投影应已能从产物读出依赖(面板据此画图)。
     assert.equal(card.requirement_graph?.dependencies.length, 1);
     const confirmed = await service.confirmRequirementGraph(parent.id);
-    // 确认即硬收口(用户拍板:拆单后父单使命结束):不等模型自觉写
-    // 收尾,状态同步落 completed,再举卡的窗口彻底不存在。
-    assert.equal(confirmed.status, "completed",
-      "确认必须同步收口父分析单,不许留假等/假跑");
+    // 分析会话同步收口，但跨仓主任务要继续汇总各仓交付；不能把
+    // “拆单成功”冒充为“整个需求完成”。
+    assert.equal(confirmed.status, "coordinating",
+      "确认后主任务应进入子任务进行中");
     assert.equal(confirmed.waiting, undefined);
     const graph = service.get(parent.id)!.requirement_graph!;
     assert.equal(graph.stage, "confirmed");
@@ -114,6 +114,16 @@ test("跨仓分析会话:克隆只读现场→写产物→举卡→确认拆单�
     // (父单收口会放出并发槽,晚一步取消子会话就会去误消费剧本场景)。
     await service.cancel(apiChild.id, "tester");
     await service.cancel(webChild.id, "tester");
+    assert.equal(service.get(parent.id)?.status, "coordinating",
+      "子任务取消后父任务仍应留在当前现场并提示处理");
+    const internal = service as any;
+    for (const child of [apiChild, webChild]) {
+      const state = internal.tasks.get(child.id);
+      state.summary.status = "completed";
+      internal.persist(state);
+    }
+    assert.equal(service.get(parent.id)?.status, "completed",
+      "全部子任务真实完成后父任务才完成");
 
     // 现场:两仓按序克隆成只读(pushurl 已改指死路)。
     const root = join(dataDir, parent.id, "repositories");

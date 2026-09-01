@@ -4,6 +4,7 @@ import {
   putTaskCollaborators,
   type CollaborationAssignee,
 } from "./api";
+import { userLabel } from "./UserPicker";
 
 export function RequirementTeamPicker({
   taskId,
@@ -24,6 +25,7 @@ export function RequirementTeamPicker({
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
+  const [query, setQuery] = useState("");
 
   useEffect(() => {
     let alive = true;
@@ -57,6 +59,11 @@ export function RequirementTeamPicker({
   const peopleByName = new Map(people.map((person) => [person.username, person]));
   const allReady = selected.every((username) =>
     peopleByName.get(username)?.ready === true);
+  const shownPeople = people.filter((person) => {
+    const needle = query.trim().toLocaleLowerCase();
+    return !needle || `${person.display_name ?? ""}\n${person.username}`
+      .toLocaleLowerCase().includes(needle);
+  });
 
   function toggle(username: string) {
     setSaved(false);
@@ -91,17 +98,22 @@ export function RequirementTeamPicker({
       <span><strong>{owner ?? "本地主责任人"}</strong>
         <small>主责任人 · 最终确认、拆单和任务控制</small></span>
     </div>
+    {!loading && people.length > 6 && <label className="requirement-team-search">
+      <span>搜索成员</span>
+      <input value={query} placeholder="输入姓名或工号"
+        onChange={(event) => setQuery(event.target.value)} />
+    </label>}
     <div className="requirement-team-members">
       {loading && <p>正在读取可邀请成员…</p>}
       {!loading && people.length === 0 && <p>当前没有其他可邀请的开发者。</p>}
-      {people.map((person) => {
+      {shownPeople.map((person) => {
         const checked = selected.includes(person.username);
         return <label key={person.username}
           className={`${checked ? "selected" : ""}${person.ready ? "" : " unready"}`}>
           <input type="checkbox" checked={checked}
             disabled={saving || (!person.ready && !checked)}
             onChange={() => toggle(person.username)} />
-          <span><strong>{person.username}</strong>
+          <span><strong>{userLabel(person)}</strong>
             <small>{person.ready ? "设置已就绪，可参与讨论"
               : `暂不可邀请 · 缺 ${person.missing.join("、")}`}</small></span>
         </label>;

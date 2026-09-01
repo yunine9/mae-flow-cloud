@@ -11,6 +11,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import { Markdown } from "./markdown";
 import { GitDiff, type GitDiffSelection } from "./GitDiff";
 import { SteerBox } from "./SteerBox";
@@ -34,9 +35,11 @@ import {
   type RepositoryAssigneeSelection,
 } from "./RepositoryAssigneePicker";
 import { RequirementTeamPicker } from "./RequirementTeamPicker";
+import { UserPicker, userLabel } from "./UserPicker";
 import {
   completeReview,
   controlTask,
+  decideScopeViolation,
   deleteHistoryTask,
   listAnnotations,
   listArtifacts,
@@ -51,6 +54,10 @@ import {
   type AnchorCheck,
   type Annotation,
   type ArtifactMeta,
+  type AuthUser,
+  type FeedbackRecord,
+  type FeedbackSource,
+  type FeedbackStatus,
   type ReviewRequest,
   type TaskSummary,
 } from "./api";
@@ -66,6 +73,31 @@ import {
 type WorkspaceView = "materials" | "collaboration" | "execution" | "insights";
 type ExecutionView = "events" | "knowledge";
 type MaterialView = "source" | "doc" | "chain" | "diff";
+
+const DEFAULT_REVIEW_PANEL_WIDTH = 640;
+const MIN_REVIEW_PANEL_WIDTH = 420;
+const MIN_MATERIAL_PANEL_WIDTH = 420;
+
+/** 拖拽只改变右栏，始终给左右两边保留可工作的最小宽度。 */
+export function clampReviewPanelWidth(
+  requested: number,
+  containerWidth: number,
+): number {
+  const available = Math.max(0, containerWidth);
+  const minimum = Math.min(MIN_REVIEW_PANEL_WIDTH, available / 2);
+  const maximum = Math.max(minimum, available - MIN_MATERIAL_PANEL_WIDTH);
+  return Math.round(Math.min(maximum, Math.max(minimum, requested)));
+}
+
+function storedReviewPanelWidth(): number | undefined {
+  if (typeof window === "undefined") return undefined;
+  try {
+    const value = Number(localStorage.getItem("mae-flow:review-panel-width"));
+    return Number.isFinite(value) && value > 0 ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /** 圈注和“把意见送给 Agent”是两种权限；只有停止的任务禁止再记。 */
 export function canCreateWorkspaceAnnotation(
@@ -142,6 +174,9 @@ export function workspaceNextActionCopy(
       ? { title: "MR 已关闭，需要处理", detail: "查看合入状态并决定后续处理" }
       : { title: "等待检视与合入", detail: "前往 CodeHub 完成最后一步" };
   }
+  if (task.status === "coordinating") {
+    return { title: "子任务进行中", detail: "全部子任务完成后主任务自动完成" };
+  }
   return { title: "当前无待办", detail: "无需处理" };
 }
 
@@ -185,6 +220,55 @@ function DiagnosticsLink({ taskId }: { taskId: string }) {
       {state === "done" && <small role="status">已开始下载</small>}
       {state === "error" && <small role="alert">生成失败，请重试</small>}
     </span>
+  );
+}
+
+/** 越界裁决卡(单仓拆分):交付单元的提交越出负责文件面时停摆留痕,
+ * 这里给主责任人两个出口——放行(记豁免续推)或打回(派修复撤出)。
+ * 卡对所有能看到任务的人可见(方便一起看现场),裁决权在服务端钉死为
+ * 主任务责任人,403 的解释原样露出。 */
+function ScopeViolationCard({ task, onChanged }: {
+  task: TaskSummary;
+  onChanged: () => void;
+}) {
+  const violation = task.delivery?.scope_violation;
+  const [busy, setBusy] = useState<"allow" | "revert" | null>(null);
+  const [error, setError] = useState("");
+  if (!violation?.paths.length) return null;
+  async function decide(decision: "allow" | "revert") {
+    setBusy(decision);
+    setError("");
+    const result = await decideScopeViolation(task.id, decision);
+    setBusy(null);
+    if (result.error) setError(result.error);
+    else onChanged();
+  }
+  return (
+    <div className="scope-violation-card" role="alert">
+      <strong>请裁决越界改动</strong>
+      <p>
+        本单元{task.delivery_scope?.name ? `(${task.delivery_scope.name})` : ""}
+        的提交改动越出了负责文件面。可能是实现确有需要(比如动到接口契约),
+        也可能是拆分方案有误。
+      </p>
+      <ul className="scope-violation-paths">
+        {violation.paths.map((path) => <li key={path}><code>{path}</code></li>)}
+      </ul>
+      <div className="scope-violation-actions">
+        <button type="button" disabled={busy !== null}
+          onClick={() => decide("allow")}
+          title="这些文件记入豁免名单,改动随本单元 MR 一起检视">
+          {busy === "allow" ? "正在放行…" : "放行,随本单元交付"}
+        </button>
+        <button type="button" className="scope-violation-revert"
+          disabled={busy !== null} onClick={() => decide("revert")}
+          title="派修复把这些文件从提交中撤出,负责面内的实现保留">
+          {busy === "revert" ? "正在下发撤出令…" : "打回,撤出越界改动"}
+        </button>
+      </div>
+      <small>裁决人是主任务责任人；其他成员点击后会提示应联系的具体账号。</small>
+      {error && <small role="alert" className="scope-violation-error">{error}</small>}
+    </div>
   );
 }
 
@@ -285,10 +369,88 @@ function sizeText(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
+const FEEDBACK_SOURCE_LABEL: Record<FeedbackSource, string> = {
+  workspace: "工作台批注",
+  mr_discussion: "MR 检视",
+  build_fix: "Build-Fix",
+  pipeline: "流水线",
+  conflict: "合并冲突",
+  scope: "负责范围",
+  push_confirmation: "推送前复检",
+};
+
+const FEEDBACK_STATUS_LABEL: Record<FeedbackStatus, string> = {
+  open: "待处理",
+  repairing: "处理中",
+  addressed: "已处理",
+  awaiting_verification: "待核验",
+  closed: "已闭环",
+  needs_human: "需要你决定",
+};
+
+function FeedbackPanel({ feedback }: { feedback: FeedbackRecord[] }) {
+  const grouped = new Map<FeedbackSource, FeedbackRecord[]>();
+  for (const item of feedback) {
+    grouped.set(item.source, [...(grouped.get(item.source) ?? []), item]);
+  }
+  const active = feedback.filter((item) => item.status !== "closed").length;
+  return <section className="feedback-panel" aria-label="持续检视反馈明细">
+    <header>
+      <span><strong>持续检视</strong><small>同一个任务、分支和 MR</small></span>
+      <em className={active ? "active" : "done"}>
+        {active ? `${active} 条进行中` : "全部已闭环"}
+      </em>
+    </header>
+    <div className="feedback-groups">
+      {[...grouped].map(([source, items]) => (
+        <div className="feedback-group" key={source}>
+          <strong>{FEEDBACK_SOURCE_LABEL[source]}<i>{items.length}</i></strong>
+          <ul>
+            {items.map((item) => <li key={item.id}>
+              <span className={`feedback-state ${item.status}`}>
+                {FEEDBACK_STATUS_LABEL[item.status]}
+              </span>
+              <span className="feedback-copy" title={item.summary}>
+                <b>{item.summary}</b>
+                {(item.file || item.resolution) && <small>
+                  {item.file && <code>{item.file}{item.line !== undefined
+                    ? `:${item.line}` : ""}</code>}
+                  {item.resolution && <span>{item.resolution}</span>}
+                </small>}
+              </span>
+            </li>)}
+          </ul>
+        </div>
+      ))}
+    </div>
+  </section>;
+}
+
 /** 内核现场始终优先；旧任务、分析任务或纯会话模式没有 panel 文件时，
  * 仍给人一条 Cloud 生命周期轨道，避免工作台最重要的“走到哪了”整块消失。
  * 这只是只读展示兜底，不参与流程判断或任务迁移。 */
 function workspaceProgress(task: TaskSummary): NonNullable<TaskSummary["progress"]> {
+  if (task.status === "coordinating") {
+    const phases = ["已受理", "需求理解", "方案确认", "子任务交付", "完成"];
+    return {
+      phases,
+      current_index: 3,
+      current_phase: "子任务交付",
+      step: task.focus?.headline ?? "子任务正在推进",
+    };
+  }
+  if ((task.delivery?.mr_url || task.feedback?.length)
+      && task.status !== "canceled") {
+    const phases = ["配置与需求", "方案", "开发", "持续检视", "已合入"];
+    const merged = task.status === "completed";
+    return {
+      phases,
+      current_index: merged ? 4 : 3,
+      current_phase: merged ? "已合入" : "持续检视",
+      step: merged ? "MR 已合入，任务完成"
+        : task.focus?.headline ?? task.detail ?? "持续接收、修复并核验反馈",
+    };
+  }
   if (task.progress) {
     // 内核进度记录的是自动流程最后停在哪；举卡后人真正面对的当前步骤
     // 已经变成“检视/确认”。工作台大标题继续写“等待权威流水线”会与
@@ -358,7 +520,8 @@ export function TaskWorkspace({
 }) {
   // 旧任务、纯会话和非内核提问没有 approval_subject 元数据；此时需求
   // 原文是唯一保证存在的证据，不能默认打开一个空的过程文档面板。
-  const recommendedMaterialView = task.waiting?.recommended_view ?? "source";
+  const recommendedMaterialView = task.waiting?.recommended_view
+    ?? (task.requirement_graph?.stage === "confirmed" ? "chain" : "source");
   const pushReview = task.waiting?.step === "cloud_push_confirm"
     ? task.delivery?.push_review : undefined;
   const [items, setItems] = useState<ArtifactMeta[]>();
@@ -375,7 +538,7 @@ export function TaskWorkspace({
     useState<{ texts: string[]; truncated: boolean } | undefined>();
   const [notesPulse, setNotesPulse] = useState(0);
   const [livePulse, setLivePulse] = useState(0);
-  const [committers, setCommitters] = useState<Array<{ username: string }>>([]);
+  const [committers, setCommitters] = useState<AuthUser[]>([]);
   const [reviewer, setReviewer] = useState("");
   const [reviewBusy, setReviewBusy] = useState(false);
   const [reviewResult, setReviewResult] = useState("");
@@ -402,9 +565,30 @@ export function TaskWorkspace({
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>(
     defaultWorkspaceView(task),
   );
+  const [materialsFullscreen, setMaterialsFullscreen] = useState(false);
+  const [reviewPanelWidth, setReviewPanelWidth] =
+    useState<number | undefined>(storedReviewPanelWidth);
+  const [reviewPanelOpen, setReviewPanelOpen] = useState(false);
   const [executionView, setExecutionView] = useState<ExecutionView>("events");
   const artifactTask = useRef("");
   const openedEvidenceGap = useRef("");
+  const workspaceRoot = useRef<HTMLElement>(null);
+  const workspaceBody = useRef<HTMLDivElement>(null);
+  const reviewResizerDragged = useRef(false);
+  const viewScroll = useRef<Partial<Record<WorkspaceView, number>>>({});
+
+  function selectWorkspaceView(next: WorkspaceView) {
+    if (next === workspaceView) return;
+    const currentScroll = workspaceRoot.current?.querySelector<HTMLElement>(
+      ".ws-primary-scroll");
+    if (currentScroll) viewScroll.current[workspaceView] = currentScroll.scrollTop;
+    setWorkspaceView(next);
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+      const nextScroll = workspaceRoot.current?.querySelector<HTMLElement>(
+        ".ws-primary-scroll");
+      if (nextScroll) nextScroll.scrollTop = viewScroll.current[next] ?? 0;
+    }));
+  }
 
   useEffect(() => {
     artifactTask.current = "";
@@ -412,8 +596,11 @@ export function TaskWorkspace({
     setItems(undefined);
     setActive("");
     setContent("");
-    setMaterialView(task.waiting?.recommended_view ?? "source");
+    setMaterialView(task.waiting?.recommended_view
+      ?? (task.requirement_graph?.stage === "confirmed" ? "chain" : "source"));
     setWorkspaceView(defaultWorkspaceView(task));
+    setMaterialsFullscreen(false);
+    setReviewPanelOpen(false);
     setExecutionView("events");
     setRepositoryAssignees(EMPTY_REPOSITORY_ASSIGNEE_SELECTION);
     setDeliverySelection(undefined);
@@ -543,7 +730,9 @@ export function TaskWorkspace({
 
   useEffect(() => {
     const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key !== "Escape") return;
+      if (materialsFullscreen) setMaterialsFullscreen(false);
+      else onClose();
     };
     window.addEventListener("keydown", escape);
     const previous = document.body.style.overflow;
@@ -552,7 +741,40 @@ export function TaskWorkspace({
       window.removeEventListener("keydown", escape);
       document.body.style.overflow = previous;
     };
-  }, [onClose]);
+  }, [materialsFullscreen, onClose]);
+
+  useEffect(() => {
+    if (reviewPanelWidth === undefined || typeof window === "undefined") return;
+    try {
+      localStorage.setItem("mae-flow:review-panel-width",
+        String(reviewPanelWidth));
+    } catch {
+      // 阅读布局偏好无法落盘不影响检视。
+    }
+  }, [reviewPanelWidth]);
+
+  function resizeReviewPanel(clientX: number) {
+    const box = workspaceBody.current?.getBoundingClientRect();
+    if (!box) return;
+    setReviewPanelWidth(clampReviewPanelWidth(box.right - clientX, box.width));
+  }
+
+  function nudgeReviewPanel(delta: number) {
+    const box = workspaceBody.current?.getBoundingClientRect();
+    if (!box) return;
+    const current = reviewPanelWidth
+      ?? clampReviewPanelWidth(DEFAULT_REVIEW_PANEL_WIDTH, box.width);
+    setReviewPanelWidth(clampReviewPanelWidth(current + delta, box.width));
+  }
+
+  function resetReviewPanelWidth() {
+    setReviewPanelWidth(undefined);
+    try {
+      localStorage.removeItem("mae-flow:review-panel-width");
+    } catch {
+      // 同上：偏好存储失败不影响界面恢复默认布局。
+    }
+  }
 
   // 产物列表按最近修改倒序(服务端排好),默认打开第一份——
   // "哪一步该看哪个文件"是内核语义,前端不复刻,只用修改时间定位。
@@ -710,6 +932,28 @@ export function TaskWorkspace({
   const workspaceReviewAnnotationIds = workspaceReviewReady
     ? task.delivery?.loop?.workspace_review_annotation_ids ?? []
     : [];
+  const pendingWorkspaceReviewIds = workspaceReviewAnnotationIds.filter((id) =>
+    notes.some((item) => item.id === id && item.status === "sent"));
+  const reviewActionCount = myDrafts.length + pendingWorkspaceReviewIds.length
+    + (reviewAssignment ? 1 : 0);
+  const reviewAttentionKey = [
+    ...myDrafts.map((item) => `draft:${item.id}`),
+    ...pendingWorkspaceReviewIds.map((id) => `recheck:${id}`),
+    ...(reviewAssignment ? [`assignment:${reviewAssignment.id}`] : []),
+  ].join("|");
+  const openedReviewAttention = useRef("");
+  const previousReviewActionCount = useRef(reviewActionCount);
+  useEffect(() => {
+    if (!reviewAttentionKey || openedReviewAttention.current === reviewAttentionKey) return;
+    openedReviewAttention.current = reviewAttentionKey;
+    setReviewPanelOpen(true);
+  }, [reviewAttentionKey]);
+  useEffect(() => {
+    if (previousReviewActionCount.current > 0 && reviewActionCount === 0) {
+      setReviewPanelOpen(false);
+    }
+    previousReviewActionCount.current = reviewActionCount;
+  }, [reviewActionCount]);
   const nextAction = workspaceNextActionCopy(task, Boolean(waiting));
   const decisionDeliverySelection = usablePushReviewSelection(
     Boolean(pushReview),
@@ -799,7 +1043,9 @@ export function TaskWorkspace({
 
   return (
     <section
-      className="workspace-overlay"
+      className={`workspace-overlay${materialsFullscreen
+        ? " materials-fullscreen" : ""}`}
+      ref={workspaceRoot}
       role="dialog"
       aria-modal="true"
       aria-labelledby="task-workspace-title"
@@ -909,6 +1155,7 @@ export function TaskWorkspace({
           onSuggest={onExecutionPlanFeedback}
           onClose={() => setPlanPhase("")} />}
       </div>
+      {!!task.feedback?.length && <FeedbackPanel feedback={task.feedback} />}
       {(pauseFeedback || controlError) && (
         <div className="task-control-feedback" aria-live="polite">
           {pauseFeedback && (
@@ -928,12 +1175,6 @@ export function TaskWorkspace({
       <nav className="ws-workspace-nav" aria-label="任务工作台视图">
         {([
           ["materials", "交付材料", "文档、依赖与代码变更"],
-          ["insights", "批注与检视", (task.status === "completed"
-            ? drafts.length : myDrafts.length)
-            ? task.status === "completed"
-              ? `${drafts.length} 条交付后记录`
-              : `${myDrafts.length} 条批注待提交` : notes.length
-              ? `${notes.length} 条批注` : "圈选原文、协作检视"],
           ["collaboration", "开发协作", collaborationVisible
             ? "补充主任务或主动接管" : assistantUnavailableReason(task)],
           ["execution", "执行现场", task.focus?.headline ?? "实时执行日志"],
@@ -943,7 +1184,7 @@ export function TaskWorkspace({
             className={`${workspaceView === view ? "active" : ""}`
               + `${view === "insights" && myDrafts.length
                 && task.status !== "completed" ? " attention" : ""}`}
-            onClick={() => setWorkspaceView(view)}>
+            onClick={() => selectWorkspaceView(view)}>
             <strong>
               {label}
               {view === "insights" && notes.length > 0 && (
@@ -958,7 +1199,12 @@ export function TaskWorkspace({
         ))}
       </nav>
 
-      <div className={`ws-body${waiting ? " has-decision" : ""}`}>
+      <div ref={workspaceBody}
+        className={`ws-body${waiting ? " has-decision" : ""}`
+          + `${reviewPanelOpen ? " has-review" : ""}`}
+        style={reviewPanelWidth === undefined ? undefined : {
+          "--review-panel-width": `${reviewPanelWidth}px`,
+        } as CSSProperties}>
         <section className="ws-evidence" aria-label="待检视材料">
           {workspaceView === "materials" ? <>
           <div className="ws-pane-head">
@@ -982,6 +1228,13 @@ export function TaskWorkspace({
               <button className={materialView === "diff" ? "on" : ""}
                 onClick={() => { setMaterialView("diff"); if (changes[0]) setActive(changes[0].name); }} disabled={!changeFileCount}>
                 <span>工作区变更</span><i>{changeFileCount}</i>
+              </button>
+              <button type="button" className="materials-fullscreen-toggle"
+                aria-pressed={materialsFullscreen}
+                title={materialsFullscreen ? "返回检视与决定同屏" : "让当前交付材料占满工作台"}
+                onClick={() => setMaterialsFullscreen((current) => !current)}>
+                <span aria-hidden>{materialsFullscreen ? "↙" : "⛶"}</span>
+                {materialsFullscreen ? "退出全屏" : "全屏查看"}
               </button>
             </div>
           </div>
@@ -1131,9 +1384,7 @@ export function TaskWorkspace({
                 enabled={canCreateAnnotation}
                 onAdded={() => {
                   setNotesPulse((tick) => tick + 1);
-                  if (activeMeta?.purpose === "pipeline_evidence_gap") {
-                    setWorkspaceView("insights");
-                  }
+                  setReviewPanelOpen(true);
                 }}
               >
                 {materialView === "diff"
@@ -1241,6 +1492,11 @@ export function TaskWorkspace({
                 {task.workflow_profile && <WorkflowProfileCard
                   profile={task.workflow_profile}
                   warning={task.workflow_profile_warning} />}
+                {task.token_usage ? <TokenUsage usage={task.token_usage}
+                  placement="detail" /> : <div className="ws-insight-empty">
+                  模型提供方暂未返回 Token 用量。
+                </div>}
+                <TaskTimeline taskId={task.id} />
               </div>
               <div className="ws-execution-subview is-knowledge"
                 hidden={executionView !== "knowledge"}>
@@ -1313,16 +1569,18 @@ export function TaskWorkspace({
                         <p>仅在你主动邀请后通知，不影响任务责任人的最终决定。</p>
                       </div>
                       {committers.length > 0 ? <div className="committer-review-action">
-                        <select aria-label="选择 Committer" value={reviewer} onChange={(event) => setReviewer(event.target.value)}>
-                          {committers.map((user) => <option key={user.username} value={user.username}>{user.username}</option>)}
-                        </select>
+                        <UserPicker ariaLabel="选择 Committer" value={reviewer}
+                          options={committers}
+                          onChange={setReviewer} />
                         <button type="button" disabled={!reviewer || reviewBusy} onClick={() => void inviteReview()}>{reviewBusy ? "发送中…" : "邀请检视"}</button>
                       </div> : <div className="committer-empty">管理员尚未配置 Committer 名单</div>}
                       {reviewResult && <small className="committer-result">{reviewResult}</small>}
                       {taskReviews.length > 0 && <div className="committer-review-history">
                         {taskReviews.slice(0, 3).map((review) => <span key={review.id}>
                           <i className={review.status} aria-hidden />
-                          <strong>{review.committer}</strong>
+                          <strong>{userLabel(committers.find((user) =>
+                            user.username === review.committer)
+                            ?? { username: review.committer })}</strong>
                           <small>{review.status === "completed" ? "已完成检视" : review.delivered ? "等待检视" : "通知未送达"}</small>
                         </span>)}
                       </div>}
@@ -1341,14 +1599,145 @@ export function TaskWorkspace({
           </>}
         </section>
 
-        <aside className="ws-decision"
+        {reviewPanelOpen && <div className="ws-review-resizer"
+          role="separator" aria-label="调整检视栏宽度" tabIndex={0}
+          aria-orientation="vertical"
+          aria-valuenow={reviewPanelWidth ?? DEFAULT_REVIEW_PANEL_WIDTH}
+          title="左右拖动调整宽度；双击恢复默认"
+          onDoubleClick={resetReviewPanelWidth}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowLeft") {
+              event.preventDefault(); nudgeReviewPanel(24);
+            } else if (event.key === "ArrowRight") {
+              event.preventDefault(); nudgeReviewPanel(-24);
+            } else if (event.key === "Home") {
+              event.preventDefault(); resetReviewPanelWidth();
+            }
+          }}
+          onPointerDown={(event) => {
+            reviewResizerDragged.current = false;
+            event.currentTarget.setPointerCapture(event.pointerId);
+            resizeReviewPanel(event.clientX);
+          }}
+          onPointerMove={(event) => {
+            if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+            reviewResizerDragged.current = true;
+            resizeReviewPanel(event.clientX);
+          }}
+          onPointerUp={(event) => {
+            if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+              event.currentTarget.releasePointerCapture(event.pointerId);
+            }
+            reviewResizerDragged.current = false;
+          }}>
+          <span aria-hidden>⋮</span>
+        </div>}
+        <aside className={`ws-decision${reviewPanelOpen ? " review-mode" : ""}`}
           aria-label="当前决策与关键操作">
           <div className="ws-pane-head ws-pane-head-side">
             {/* 右栏标题按阶段说实话:failed 时喊"无待办"是误导——
                 此刻的待办就是看失败原因、决定重跑还是接手。 */}
-            <div><span>NEXT ACTION</span><strong>{nextAction.title}</strong></div>
-            <small>{nextAction.detail}</small>
+            {reviewPanelOpen ? <>
+              <div><span>REVIEW IN CONTEXT</span><strong>边看材料，边处理意见</strong></div>
+              <small>{reviewActionCount > 0
+                ? `还有 ${reviewActionCount} 项待处理；完成后收起清单继续最终决定`
+                : "检视记录与邀请都集中在这里；左侧材料保持不动"}</small>
+            </> : <>
+              <div><span>NEXT ACTION</span><strong>{nextAction.title}</strong></div>
+              <small>{nextAction.detail}</small>
+            </>}
           </div>
+          <section className={`ws-review-drawer${reviewPanelOpen ? " open" : ""}`}
+            aria-label="本轮检视清单">
+            {reviewActionCount > 0 ? (
+              <div className="ws-review-drawer-toggle is-locked" role="status">
+                <span><i aria-hidden>审</i><strong>本轮检视清单</strong></span>
+                <em>{reviewActionCount} 项待处理</em>
+              </div>
+            ) : (
+              <button type="button" className="ws-review-drawer-toggle"
+                aria-expanded={reviewPanelOpen}
+                onClick={() => setReviewPanelOpen((current) => !current)}>
+                <span><i aria-hidden>审</i><strong>检视记录</strong></span>
+                <em>{reviewPanelOpen ? "收起并继续最终决定"
+                  : notes.length ? `${notes.length} 条记录` : "随材料批注"}</em>
+              </button>
+            )}
+            {reviewPanelOpen && <div className="ws-review-drawer-body">
+              {reviewAssignment && (
+                <section className="review-assignment compact"
+                  aria-labelledby="review-drawer-assignment-title">
+                  <div className="review-assignment-mark" aria-hidden>审</div>
+                  <div><span>COMMITTER REVIEW</span>
+                    <strong id="review-drawer-assignment-title">
+                      {reviewAssignment.requester} 邀请你检视
+                    </strong>
+                    <p>在左侧核对材料、留下批注，完成后直接在这里交还。</p>
+                    {completeError && <small className="review-assignment-error">
+                      {completeError}
+                    </small>}
+                  </div>
+                  <button type="button" disabled={completeBusy}
+                    onClick={() => void finishReview()}>
+                    {completeBusy ? "正在完成…" : "完成检视"}
+                  </button>
+                </section>
+              )}
+              <AnnotationPanel
+                taskId={task.id}
+                viewerUsername={viewerUsername}
+                canOverride={canOverride}
+                items={notes}
+                checks={checks}
+                reply={reply}
+                canOperate={canContributeReview}
+                taskStatus={task.status}
+                reviewReady={workspaceReviewReady}
+                reviewAnnotationIds={workspaceReviewAnnotationIds}
+                mergeRequestOpen={Boolean(task.delivery?.mr_url)
+                  && !["completed", "canceled"].includes(task.status)
+                  && !String(task.delivery?.mr_state ?? "").startsWith("已合入")
+                  && task.delivery?.mr_state !== "已关闭"}
+                evidenceAwaiting={Boolean(
+                  task.delivery?.evidence_gap?.missing_dimensions.length)}
+                onLocate={locate}
+                onChanged={() => {
+                  setNotesPulse((tick) => tick + 1); onChanged();
+                }}
+              />
+              {!notes.length && <div className="ws-insight-empty">
+                在左侧需求、文档或代码中圈选内容，即可把意见加入这里。
+              </div>}
+              {canRequestReview && <section className="committer-review compact"
+                aria-labelledby="review-drawer-committer-title">
+                <div><span>OPTIONAL REVIEW</span>
+                  <strong id="review-drawer-committer-title">邀请 Committer 检视</strong>
+                  <p>选人后通知对方，不影响任务责任人的最终决定。</p>
+                </div>
+                {committers.length > 0 ? <div className="committer-review-action">
+                  <UserPicker ariaLabel="选择 Committer" value={reviewer}
+                    options={committers} onChange={setReviewer} />
+                  <button type="button" disabled={!reviewer || reviewBusy}
+                    onClick={() => void inviteReview()}>
+                    {reviewBusy ? "发送中…" : "邀请检视"}
+                  </button>
+                </div> : <div className="committer-empty">
+                  管理员尚未配置 Committer 名单
+                </div>}
+                {reviewResult && <small className="committer-result">{reviewResult}</small>}
+                {taskReviews.length > 0 && <div className="committer-review-history">
+                  {taskReviews.slice(0, 3).map((review) => <span key={review.id}>
+                    <i className={review.status} aria-hidden />
+                    <strong>{userLabel(committers.find((user) =>
+                      user.username === review.committer)
+                      ?? { username: review.committer })}</strong>
+                    <small>{review.status === "completed" ? "已完成检视"
+                      : review.delivered ? "等待检视" : "通知未送达"}</small>
+                  </span>)}
+                </div>}
+              </section>}
+            </div>}
+          </section>
           {waiting && canOperate && (
             /* 批注挂在提交按钮正上方(WaitingCard 内部),不放卡片外面:
                选项标签是内核的——它按标签给这次选择记账,前端改写会让
@@ -1416,6 +1805,9 @@ export function TaskWorkspace({
               你可以查看全部材料，但不能代为提交决定。
             </div>
           )}
+          {task.delivery?.scope_violation && (
+            <ScopeViolationCard task={task} onChanged={onChanged} />
+          )}
           {/* failed 的重点是"为什么失败":原因置顶,重跑按钮紧随其后,
               不再先渲一段"当前没有待你决定的事项"把它压到最底。 */}
           {task.status === "failed" && (
@@ -1469,6 +1861,24 @@ export function TaskWorkspace({
                 {task.delivery?.stalled && (
                   <DiagnosticsLink taskId={task.id} />
                 )}
+              </div>
+            ) : task.status === "coordinating" ? (
+              <div className="ws-child-focus">
+                <strong>{task.focus?.needs_attention
+                  ? "有子任务需要处理" : "子任务正在推进"}</strong>
+                <p>{task.detail ?? "全部子任务完成后，主任务会自动完成。"}</p>
+                <div>{task.requirement_graph?.repositories.map((repository) => (
+                  <button type="button" key={repository.id}
+                    disabled={!repository.task_id || !onOpenTask}
+                    onClick={() => repository.task_id
+                      && onOpenTask?.(repository.task_id)}>
+                    <span><strong>{repository.name}</strong>
+                      <small>{repository.assignee ?? "未指定负责人"}</small></span>
+                    <em className={repository.task_status ?? "queued"}>
+                      {statusText({ status: repository.task_status ?? "queued" })}
+                    </em>
+                  </button>
+                ))}</div>
               </div>
             ) : (
               <div className="ws-idle">

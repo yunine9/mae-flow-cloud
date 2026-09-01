@@ -8,7 +8,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TaskService, type TaskContainerFactoryInput } from "../src/taskService.ts";
@@ -96,6 +96,30 @@ test("主 Coding 容器只读挂载稳定的 pipeline 材料目录", async () =>
   await service.shutdown();
 });
 
+test("主 Coding 容器读写挂载任务 reviews，Agent 可用 Bash 落逐条回执", async () => {
+  const containers = new FakeTaskContainerHarness();
+  const service: any = newService(containers.factory);
+  const created = service.create("检视回执目录挂载");
+  const task = service.tasks.get(created.id);
+  const repository = join(created.workspace, "repository");
+  mkdirSync(repository);
+  task.cwd = repository;
+  task.containerWorkspace = repository;
+
+  const container = await service.startCodingContainer(task);
+  const reviews = join(created.workspace, "reviews");
+  assert.equal(existsSync(reviews), true,
+    "容器启动前必须由宿主创建 reviews bind 源");
+  assert.ok(containers.records[0]?.volumes.includes(
+    `${reviews}:${reviews}:rw`),
+  "只挂任务自己的 reviews 子目录，允许 Bash 写 local-receipts.json");
+  assert.equal(containers.records[0]?.volumes.some((volume) =>
+    volume === `${created.workspace}:${created.workspace}:rw`), false,
+  "不得为写回执把整个任务控制目录交给容器");
+  await container.stop();
+  await service.shutdown();
+});
+
 test("开发助手容器不继承主任务的 pipeline 材料挂载", async () => {
   const containers = new FakeTaskContainerHarness();
   const service: any = newService(containers.factory);
@@ -110,6 +134,9 @@ test("开发助手容器不继承主任务的 pipeline 材料挂载", async () =
   assert.equal(containers.records[0]?.volumes.some((volume) =>
     volume.split(":")[1] === join(created.workspace, "pipeline")), false,
   "旁路开发助手没有读取流水线失败材料的职责");
+  assert.equal(containers.records[0]?.volumes.some((volume) =>
+    volume.split(":")[1] === join(created.workspace, "reviews")), false,
+  "旁路开发助手也不能读取或改写主任务检视账");
   await container.stop();
   await service.shutdown();
 });

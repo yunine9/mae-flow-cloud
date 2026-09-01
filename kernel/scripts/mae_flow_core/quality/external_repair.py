@@ -16,6 +16,36 @@ from mae_flow_core.foundation.source_paths import repository_path_identity
 from mae_flow_core.guard.manifest import validate_delivery_document_boundary
 
 
+def issue_feedback_authorization(state, *, batch_id, base_sha, at,
+                                 dirty_paths=()):
+    """Issue the same exact-scope commit authority for a feedback batch."""
+    existing = (state or {}).get("delivery_repair_authorization") or {}
+    if (
+        existing.get("schema") == "mae-flow-feedback-repair/1"
+        and existing.get("status") == "ready"
+        and existing.get("batch_id") == str(batch_id or "")
+        and existing.get("base_sha") == str(base_sha or "")
+    ):
+        return existing
+    authorization = {
+        "schema": "mae-flow-feedback-repair/1",
+        "status": "ready",
+        "batch_id": str(batch_id or ""),
+        "base_sha": str(base_sha or ""),
+        "issued_at": str(at or ""),
+        "baseline_dirty": list(dict.fromkeys(
+            str(path) for path in dirty_paths if str(path))),
+    }
+    state["delivery_repair_authorization"] = authorization
+    return authorization
+
+
+def clear_feedback_authorization(state, batch_id=""):
+    authorization = (state or {}).get("delivery_repair_authorization") or {}
+    if not batch_id or authorization.get("batch_id") == batch_id:
+        state.pop("delivery_repair_authorization", None)
+
+
 def issue_repair_authorization(state, decision, *, head, at, dirty_paths=()):
     """Issue/clear a failed-SHA-bound repair window from a pipeline verdict."""
     if getattr(decision, "verdict", "") != "RED":
@@ -45,14 +75,28 @@ def issue_repair_authorization(state, decision, *, head, at, dirty_paths=()):
     return authorization
 
 
-def active_repair_authorization(state, head):
-    """窗口生命期 = 登记在案的 RED 判决仍指着签发时的 failed_sha。
+def _active_feedback_authorization(state):
+    authorization = (state or {}).get("delivery_repair_authorization") or {}
+    delivery = (state or {}).get("delivery_loop") or {}
+    active_batch_id = str(delivery.get("active_batch_id") or "")
+    active_batch = next((
+        item for item in delivery.get("batches") or ()
+        if isinstance(item, dict) and item.get("batch_id") == active_batch_id
+    ), {})
+    status_ok = active_batch.get("status") in (
+        "repairing", "addressed", "awaiting_verification")
+    step_ok = (state or {}).get("current") in (
+        "feedback_triage", "build", "domain_archive",
+        "delivery_review", "push", "external_verify")
+    active = bool(
+        authorization.get("schema") == "mae-flow-feedback-repair/1"
+        and authorization.get("status") == "ready"
+        and authorization.get("batch_id") == active_batch_id
+        and status_ok and step_ok)
+    return active, authorization
 
-    刻意不再比对当前 HEAD(见模块 docstring 勘误):第一笔修复提交后
-    HEAD 前移,窗口保持打开,允许补提交;宿主对新 SHA 登记结果时授权
-    被换发或清除,窗口随之关闭。head 参数保留是给调用方对账用的,
-    判活本身不看它。"""
-    del head
+
+def _active_external_authorization(state):
     authorization = (state or {}).get("external_repair_authorization") or {}
     external = (((state or {}).get("quality") or {}).get(
         "external_verification") or {})
@@ -63,9 +107,23 @@ def active_repair_authorization(state, head):
         and authorization.get("status") == "ready"
         and failed_sha
         and external.get("verdict") == "RED"
-        and external.get("sha") == failed_sha
-    )
+        and external.get("sha") == failed_sha)
     return active, authorization
+
+
+def active_repair_authorization(state, head):
+    """窗口生命期 = 登记在案的 RED 判决仍指着签发时的 failed_sha。
+
+    刻意不再比对当前 HEAD(见模块 docstring 勘误):第一笔修复提交后
+    HEAD 前移,窗口保持打开,允许补提交;宿主对新 SHA 登记结果时授权
+    被换发或清除,窗口随之关闭。head 参数保留是给调用方对账用的,
+    判活本身不看它。"""
+    del head
+    delivery_active, delivery_authorization = (
+        _active_feedback_authorization(state))
+    if delivery_active:
+        return True, delivery_authorization
+    return _active_external_authorization(state)
 
 
 def _identity(path):

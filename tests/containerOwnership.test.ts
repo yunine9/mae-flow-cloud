@@ -111,6 +111,27 @@ test("工作区与五类缓存统一交给容器用户，符号链接不跟随�
   assert.equal(repeated.cacheTrees, 0, "缓存属主正确后不应每单递归重扫");
 });
 
+test("独立挂载的 reviews 目录也交给非 root 容器用户", () => {
+  const root = mkdtempSync(join(tmpdir(), "mfc-container-review-owner-"));
+  const reviews = join(root, "task-1", "reviews");
+  mkdirSync(reviews, { recursive: true });
+  writeFileSync(join(reviews, "local-annotations.json"), "{}\n");
+  const uid = process.getuid?.() === 0 ? 12345 : process.getuid!();
+  const gid = process.getgid?.() === 0 ? 12345 : process.getgid!();
+
+  const prepared = prepareContainerHostPaths({
+    workspace: reviews,
+    volumes: [],
+    markerRoot: join(root, "markers"),
+    user: `${uid}:${gid}`,
+    runtime: { platform: "linux", effectiveUid: 0 },
+  });
+
+  assert.equal(prepared.active, true);
+  assert.equal(statSync(reviews).uid, uid);
+  assert.equal(statSync(join(reviews, "local-annotations.json")).uid, uid);
+});
+
 test("bind 工作区根本身是软链时拒绝，不能把宿主路径偷换出去", () => {
   const root = mkdtempSync(join(tmpdir(), "mfc-container-owner-link-"));
   const outside = join(root, "outside");

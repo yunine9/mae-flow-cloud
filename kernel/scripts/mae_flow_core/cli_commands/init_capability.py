@@ -177,6 +177,17 @@ def cmd_capability(args):
     if action == "status":
         checks = capability_diagnostics(
             os.getcwd(), include_codecheck=bool(args.codecheck))
+        if bool(getattr(args, "json", False)):
+            document = {
+                "schema": "mae-flow-capabilities/1",
+                "capabilities": {"continuous_review": True},
+                "checks": checks,
+            }
+            print(json.dumps(document, ensure_ascii=False))
+            if not all(item["ok"] for item in checks
+                       if item["name"] != "CodeCheck"):
+                sys.exit(2)
+            return
         for check in checks:
             print("%s %s — %s" % (
                 "✅" if check["ok"] else "❌",

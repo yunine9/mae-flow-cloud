@@ -43,6 +43,8 @@ test("帮助文章能搜动作和提示，不要求用户记住内部功能名",
 test("个人设置的小鲁班卡直接说明 /mfc 激活前置条件", () => {
   assert.match(lubanSource, /手机回复/);
   assert.match(lubanSource, /<code>\/mfc<\/code> 激活 Mae-Flow 插件/);
+  assert.match(lubanSource, /测试连通性/);
+  assert.match(lubanSource, /testLubanConnection/);
 });
 
 test("服务设置总览汇总真实配置，并可进入四类完整管理表单", () => {

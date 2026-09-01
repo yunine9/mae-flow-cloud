@@ -38,6 +38,8 @@ FLOW_ROUTES = MappingProxyType({
         "cmd_role_task", ("flow", "state", "args")),
     "pipeline": CommandRoute(
         "cmd_pipeline", ("flow", "state", "args")),
+    "delivery": CommandRoute(
+        "cmd_delivery", ("flow", "state", "args")),
     "milestone": CommandRoute(
         "cmd_build_milestone", ("flow", "state", "args")),
     "intervention": CommandRoute(

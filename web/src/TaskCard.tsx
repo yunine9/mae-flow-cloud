@@ -50,6 +50,8 @@ export function TaskCard({
   canOperate = true,
   decisionMode = "form",
   onOpenArtifacts,
+  onOpenRelatedTask,
+  showChildLinks = true,
 }: {
   task: TaskSummary;
   onChanged: () => void;
@@ -57,6 +59,8 @@ export function TaskCard({
   canOperate?: boolean;
   decisionMode?: "form" | "signal";
   onOpenArtifacts?: () => void;
+  onOpenRelatedTask?: (taskId: string) => void;
+  showChildLinks?: boolean;
 }) {
   const showDecisionForm = decisionMode === "form";
   const [expanded, setExpanded] = useState(
@@ -72,12 +76,19 @@ export function TaskCard({
   const waitingQuestions = task.waiting?.question?.questions?.length ?? 0;
   const chainReview = showDecisionForm
     && task.status === "waiting_for_human"
-    && (task.requirement_graph?.repositories.length ?? 0) > 1;
+    && ((task.requirement_graph?.repositories.length ?? 0) > 1
+      // 单仓分析单在拆出多单元前也走同一套 Chain 检视语义。
+      || task.requirement_analysis_requested === true);
+  const childRepositories = task.requirement_graph?.stage === "confirmed"
+    ? task.requirement_graph.repositories.filter((repository) => repository.task_id)
+    : [];
+  const notifyHttpError = task.notify?.last_error
+    ?.match(/HTTP\s+\d{3}/)?.[0];
 
   return (
     <article
       id={`task-${task.id}`}
-      className={`task-card status-${task.status}${expanded ? " expanded" : ""}${focused ? " focused" : ""}`}
+      className={`task-card status-${task.status}${expanded ? " expanded" : ""}${focused ? " focused" : ""}${task.parent_task_id ? " is-child-task" : ""}${childRepositories.length ? " is-parent-task" : ""}`}
     >
       <button
         type="button"
@@ -88,6 +99,10 @@ export function TaskCard({
         <span className="task-status-rail" aria-hidden />
         <span className="task-summary-body">
           <span className="task-overline">
+            {task.parent_task_id
+              ? <span className="task-level child">子任务</span>
+              : childRepositories.length > 0
+                ? <span className="task-level parent">主任务</span> : null}
             {task.ticket && <span className="task-ticket">{task.ticket}</span>}
             <span className="task-id" title="平台内部编号">{task.id}</span>
             <span className={`pill ${task.status}${decisionMode === "signal" && task.status === "waiting_for_human" ? " team-signal" : ""}`}>
@@ -125,24 +140,26 @@ export function TaskCard({
                 : `正在等：${task.delivery!.waiting_on}`}
             </span>
           )}
-          {(task.requirement_graph?.repositories.length ?? 0) > 1 && (
+          {task.requirement_graph?.stage === "analysis"
+            && (task.requirement_graph.repositories.length ?? 0) > 1 && (
             <span className="task-chain-overview">
               <span className="task-graph-summary">
-                <b>{task.requirement_graph!.repositories.length} 个仓库</b>
+                <b>{task.requirement_graph.repositories.length} 个仓库</b>
                 <i aria-hidden>·</i>
-                <span>{task.requirement_graph!.stage === "analysis"
-                  ? task.status === "waiting_for_human"
+                <span>{task.status === "waiting_for_human"
                     ? task.requirement_graph!.dependencies.length > 0
                       ? `${task.requirement_graph!.dependencies.length} 条硬依赖待检视`
                       : "仓间可并行，方案待检视"
-                    : "正在核对职责与依赖"
-                  : `${task.requirement_graph!.dependencies.length} 条开发依赖`}</span>
+                    : "正在核对职责与依赖"}</span>
               </span>
               <span className="task-repo-list" aria-label="涉及仓库">
-                {task.requirement_graph!.repositories.map((repository) => (
+                {task.requirement_graph.repositories.map((repository) => (
                   <span key={repository.id} title={repository.url}>
                     <i aria-hidden />{repository.name}
                     {repository.assignee && <b>· {repository.assignee}</b>}
+                    {repository.task_status && <em className={repository.task_status}>
+                      · {statusText({ status: repository.task_status })}
+                    </em>}
                   </span>
                 ))}
               </span>
@@ -168,6 +185,52 @@ export function TaskCard({
           </svg>
         </span>
       </button>
+
+      {task.parent_task_id && onOpenRelatedTask && (
+        <button type="button" className="task-parent-link"
+          onClick={() => onOpenRelatedTask(task.parent_task_id!)}>
+          <span>隶属于主任务</span>
+          <strong>{task.parent_task?.title ?? "跨仓大任务"}</strong>
+          <code>{task.parent_task?.ticket ?? task.parent_task_id}</code>
+        </button>
+      )}
+
+      {showChildLinks && childRepositories.length > 0 && (
+        <div className="task-child-links" aria-label="主任务下的子任务">
+          <span className="task-child-links-label">
+            子任务
+            {/* 交付单元拆分:主卡直接给"走到哪"——N/M 已合入 + 当前块。
+                completed=已合入(子任务只有 MR 合入才 completed)。 */}
+            <small className="task-child-progress">
+              {childRepositories.filter((repository) =>
+                repository.task_status === "completed").length}
+              /{childRepositories.length} 已合入
+              {(() => {
+                const active = childRepositories.find((repository) =>
+                  repository.task_status
+                  && !["completed", "canceled"].includes(repository.task_status));
+                return active
+                  ? ` · 当前:${active.scope?.name ?? active.name}` : "";
+              })()}
+            </small>
+          </span>
+          <div>{childRepositories.map((repository, index) => (
+            <button type="button" key={repository.id}
+              disabled={!onOpenRelatedTask}
+              onClick={() => repository.task_id
+                && onOpenRelatedTask?.(repository.task_id)}>
+              <i aria-hidden>{index + 1}</i>
+              <span><strong>{repository.scope
+                  ? `${repository.name} · ${repository.scope.name}`
+                  : repository.name}</strong>
+                <small>{repository.assignee ?? "未指定负责人"}</small></span>
+              <em className={repository.task_status ?? "queued"}>
+                {statusText({ status: repository.task_status ?? "queued" })}
+              </em>
+            </button>
+          ))}</div>
+        </div>
+      )}
 
       {decisionMode === "signal" && task.status === "waiting_for_human" && (
         <div className="team-decision-signal">
@@ -229,11 +292,14 @@ export function TaskCard({
               <span>{task.delivery.skipped}</span>
             </div>
           )}
-          {task.notify && !task.notify.delivered && task.notify.attempts > 0 && (
+          {task.notify?.settled === true && !task.notify.delivered
+            && task.notify.attempts > 0 && (
             <div className="alert">
               <strong>小鲁班通知未送达</strong>
               <span>
-                已尝试 {task.notify.attempts} 次，待办仍然有效，请在本页处理。
+                已完成 {task.notify.attempts} 次投递仍未送达
+                {notifyHttpError ? `（${notifyHttpError}）` : ""}。
+                待办仍然有效，请在本页处理。
               </span>
             </div>
           )}

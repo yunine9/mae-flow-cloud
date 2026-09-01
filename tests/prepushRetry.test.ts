@@ -120,6 +120,80 @@ test("僵尸现场可重跑:收口旧 attempt 后新轮真验证到 passed", asy
   }
 });
 
+test("失败页的重跑续推命中 Build-Fix 时不重新唤醒普通编码会话", async () => {
+  const { service, model, id, internal, repo } = await taskWithRepo();
+  try {
+    const head = repo.git("rev-parse", "HEAD");
+    internal.summary.status = "failed";
+    internal.summary.delivery = {
+      prepush: {
+        ...zombiePrepush(head),
+        state: "environment_error",
+        active_attempt: undefined,
+      },
+      stalled: "上轮环境失败",
+      waiting_on: "修好环境后重跑",
+      skipped: "Build-Fix 未通过",
+    };
+    (service as any).resumePrePushVerification = async () => {};
+
+    const summary = service.retry(id, "owner");
+    assert.equal(summary.status, "verifying");
+    assert.notEqual(internal.resume, true,
+      "不得重新入普通 Agent 队列唤醒已结束的内核流程");
+    assert.equal(internal.summary.delivery.stalled, undefined);
+    assert.equal(internal.summary.delivery.waiting_on, undefined);
+    assert.equal(internal.summary.delivery.skipped, undefined);
+  } finally {
+    await model.stop();
+  }
+});
+
+test("MR 创建等外部交付失败重跑只续宿主动作,已有检视 loop 不唤醒 Agent", async () => {
+  const { service, model, id, internal } = await taskWithRepo();
+  try {
+    internal.summary.status = "verifying";
+    internal.summary.delivery = {
+      prepush: {
+        schema: PRE_PUSH_STATE_SCHEMA,
+        state: "passed",
+        round: 1,
+        message: "编译和 UT 已通过",
+        sha: internal.summary.delivery?.prepush?.sha ?? "a".repeat(40),
+        workspace_fingerprint: "verified",
+        updated_at: new Date().toISOString(),
+        checks: {
+          compile: { state: "passed" },
+          unit_test: { state: "passed" },
+        },
+      },
+      // 已完成的人审账会保留用于复盘；它不表示还要派修复 Agent。
+      loop: {
+        round: 0,
+        state: "verifying",
+        kind: "review",
+        review_source: "workspace",
+        workspace_review_pending: false,
+      },
+      stalled: "等待权威流水线：交付动作失败: MR 创建失败 HTTP 400",
+      waiting_on: "等待权威流水线：交付动作失败",
+      skipped: "交付动作失败",
+    };
+    let deliveries = 0;
+    (service as any).tryDeliver = async () => { deliveries += 1; };
+
+    const summary = service.retry(id, "owner");
+    assert.equal(summary.status, "verifying");
+    assert.equal(deliveries, 1, "只重试 MR/流水线宿主动作");
+    assert.notEqual(internal.resume, true,
+      "已完成的检视 loop 不能把 external_verify 误导回普通 Agent");
+    assert.equal(internal.summary.delivery.stalled, undefined);
+    assert.equal(internal.summary.delivery.skipped, undefined);
+  } finally {
+    await model.stop();
+  }
+});
+
 test("真在跑拒绝(活性探针);passed/无现场/状态不符都拒", async () => {
   const { service, model, id, internal, repo } = await taskWithRepo();
   try {

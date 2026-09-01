@@ -106,6 +106,32 @@ test("清空重跑会同时清除旧通知审批上下文", async () => {
   assert.equal(notifier.latestApproval("alice"), undefined);
 });
 
+test("清空重跑不让旧投递 Promise 占住同 ID 的新通知", async () => {
+  const luban = new FakeLubanServer();
+  await luban.start();
+  try {
+    const notifier = new Notifier({
+      endpoint: luban.endpoint,
+      backoffMs: [40],
+    });
+    const input = {
+      waitingId: "T-purge-live:c1", taskId: "T-purge-live",
+      account: "alice", step: "delivery_review", summary: "请确认",
+      link: "http://x/tasks/T-purge-live",
+    };
+    const oldDelivery = notifier.notifyWaiting(input);
+    assert.equal(notifier.purgeTask("T-purge-live"), 1);
+    const newDelivery = notifier.notifyWaiting(input);
+    const [, fresh] = await Promise.all([oldDelivery, newDelivery]);
+    assert.equal(fresh.delivered, true);
+    assert.equal(fresh.settled, true);
+    assert.equal(luban.messages.length, 2,
+      "旧请求可自然收口，但新任务必须拥有自己的投递，不能借旧 Promise 假完成");
+  } finally {
+    await luban.stop();
+  }
+});
+
 test("配置确认通知带出被确认内容；缺内容时禁止裸序号审批", async () => {
   const notifier = new Notifier({
     endpoint: "http://127.0.0.1:1/unused",
@@ -152,7 +178,7 @@ test("配置确认通知带出被确认内容；缺内容时禁止裸序号审�
     "缺少被确认内容时不能建立裸回复审批上下文");
 });
 
-test("投递失败:有限退避后成功;首败期间不阻塞", async () => {
+test("投递失败:调用方可旁路调度;Promise 只返回最终投递事实", async () => {
   const luban = new FakeLubanServer();
   await luban.start();
   luban.failFirst = 2;
@@ -160,12 +186,20 @@ test("投递失败:有限退避后成功;首败期间不阻塞", async () => {
     const notifier = new Notifier({
       endpoint: luban.endpoint, backoffMs: [0, 50, 50],
     });
-    const record = await notifier.notifyWaiting({
+    let resolved = false;
+    const pending = notifier.notifyWaiting({
       waitingId: "T-2:c1", taskId: "T-2", account: "a",
       step: "grill", summary: "问题", link: "http://x/tasks/T-2",
+    }).then((record) => {
+      resolved = true;
+      return record;
     });
-    assert.equal(record.delivered, false); // 返回即未送达:投递在后台
-    await until(() => (record.delivered ? true : undefined), "重试后送达");
+    await until(() => notifier.list()[0]?.attempts === 1 ? true : undefined,
+      "首轮失败");
+    assert.equal(resolved, false, "重试中不能把瞬时失败当成最终事实返回");
+    const record = await pending;
+    assert.equal(record.delivered, true);
+    assert.equal(record.settled, true);
     assert.equal(record.attempts, 3);
   } finally {
     await luban.stop();
@@ -191,11 +225,12 @@ test("端到端:任务进入等待即通知;通知死透不改流程,页面可�
   const model = new ScriptedModelServer(SCRIPT);
   await model.start();
   try {
+    const dataDir = mkdtempSync(join(tmpdir(), "mfc-notify-"));
     const notifier = new Notifier({
       endpoint: luban.endpoint, backoffMs: [0, 30],
     });
     const service = new TaskService({
-      dataDir: mkdtempSync(join(tmpdir(), "mfc-notify-")),
+      dataDir,
       provider: "maeflow", model: "scripted-v1",
       modelsJson: model.modelsJson(),
       notifier,
@@ -229,7 +264,17 @@ test("端到端:任务进入等待即通知;通知死透不改流程,页面可�
         && !task.notify.delivered ? task : undefined;
     }, "通知重试耗尽");
     assert.equal(failed.status, "waiting_for_human");
+    assert.equal(failed.notify!.settled, true);
     assert.match(failed.notify!.last_error, /HTTP 500/);
+    const restarted = new TaskService({
+      dataDir, provider: "maeflow", model: "scripted-v1",
+      modelsJson: model.modelsJson(), maxConcurrent: 0,
+    });
+    restarted.recover();
+    const restored = restarted.get(created.id)!;
+    assert.equal(restored.notify?.settled, true,
+      "重启后必须恢复重试耗尽的最终事实，不能再停在 attempts=1 的快照");
+    assert.equal(restored.notify?.attempts, 2);
     await service.decide(created.id, {
       state_version: waiting.waiting!.state_version,
       answers: {
@@ -277,16 +322,22 @@ test("收口通知:完成/交付说人话送达;同任务同状态幂等", async
   }
 });
 
-test("通知连通测试也带 /mfc 激活说明", async () => {
+test("通知连通测试复用正式个人 Token 且带 /mfc 激活说明", async () => {
   const luban = new FakeLubanServer();
   await luban.start();
   try {
-    const notifier = new Notifier({ endpoint: luban.endpoint });
+    const notifier = new Notifier({
+      endpoint: luban.endpoint,
+      personalToken: (account) => account === "liaoxiang"
+        ? "token with+/symbols" : undefined,
+    });
     const result = await notifier.testDelivery("liaoxiang");
     assert.equal(result.ok, true);
     assert.equal(luban.messages.length, 1);
     assert.match(String(luban.messages[0].text),
       /先输入“\/mfc”激活 Mae-Flow 插件/);
+    assert.equal(luban.requestHeaders[0]["x-mfc-luban-token"],
+      encodeURIComponent("token with+/symbols"));
   } finally {
     await luban.stop();
   }

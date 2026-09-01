@@ -17,6 +17,31 @@ test("任务焦点:人工决定明确说明数量与放行后的动作", () => {
   });
 });
 
+test("跨仓主任务在子任务推进期间保持活动，并把异常指向责任人", () => {
+  const progressing = projectTaskFocus({
+    status: "coordinating",
+    detail: "1/3 个子任务已完成，其余正在推进",
+    requirement_graph: { repositories: [
+      { task_status: "completed" }, { task_status: "running" },
+      { task_status: "queued" },
+    ] },
+  });
+  assert.equal(progressing.kind, "machine");
+  assert.equal(progressing.needs_attention, false);
+
+  const attention = projectTaskFocus({
+    status: "coordinating",
+    detail: "1/3 个子任务已完成，1 个需要处理",
+    requirement_graph: { repositories: [
+      { task_status: "completed" }, { task_status: "failed" },
+      { task_status: "queued" },
+    ] },
+  });
+  assert.equal(attention.kind, "human_action");
+  assert.equal(attention.needs_attention, true);
+  assert.match(attention.next_action, /异常子任务/);
+});
+
 test("任务焦点:机器修复、平台验证与跨仓依赖不会冒充人工待办", () => {
   const repair = projectTaskFocus({
     status: "verifying",

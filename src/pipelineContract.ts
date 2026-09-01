@@ -103,7 +103,9 @@ export function parsePipelineDefects(value: unknown): PipelineDefect[] {
       message: message.slice(0, MAX_DEFECT_MESSAGE),
       ...(row.rule ? { rule: String(row.rule) } : {}),
       ...(row.file ? { file: String(row.file) } : {}),
-      ...(Number.isFinite(line) && line > 0 ? { line } : {}),
+      // CodeCheck 的 line=0 是合法哨兵，表示整文件/MR 级规则。保留下来
+      // 供证据层区分“范围规则”和“平台根本没给定位”。
+      ...(Number.isFinite(line) && line >= 0 ? { line } : {}),
       ...(row.severity ? { severity: String(row.severity) } : {}),
       ...(row.tool ? { tool: String(row.tool) } : {}),
     });

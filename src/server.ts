@@ -567,6 +567,32 @@ export function createTaskServer(
             luban_token_hint: options.auth!.lubanTokenHint(viewer.username),
           });
         }
+        // 个人设置里的连通测试必须复用正式投递端点与本人 Token；不能
+        // 用一条绕过认证的“假成功”测试链路误导用户。
+        if (request.method === "POST" && parts[1] === "me"
+            && parts[2] === "luban-test") {
+          if (!viewer) return json(response, 401, { error: "尚未登录" });
+          const notifier = service.options.notifier;
+          if (!notifier) {
+            return json(response, 503, { error: "当前部署未启用小鲁班通知" });
+          }
+          if (notifier.needsPersonalToken()
+              && !options.auth!.lubanToken(viewer.username)) {
+            return json(response, 409, { error: "请先保存小鲁班 Token" });
+          }
+          const result = await notifier.testDelivery(viewer.username);
+          if (!result.ok) {
+            const reason = result.error?.match(/HTTP\s+\d{3}/)?.[0]
+              ?? "通知服务暂不可用";
+            return json(response, 502, {
+              error: `测试消息未送达（${reason}），请检查 Token 或通知服务配置`,
+            });
+          }
+          return json(response, 200, {
+            ok: true,
+            message: "测试消息已发送，请在小鲁班中确认是否收到。",
+          });
+        }
         if (request.method === "POST" && parts[1] === "logout") {
           options.auth?.endSession(sessionToken);
           response.setHeader("set-cookie", sessionCookie("", request, true));
@@ -587,6 +613,8 @@ export function createTaskServer(
                 String(body.username ?? ""),
                 String(body.password ?? ""),
                 String(body.role ?? "developer") as "admin" | "developer",
+                body.display_name === undefined
+                  ? undefined : String(body.display_name),
               );
               return json(response, 201, user);
             } catch (error) {
@@ -599,6 +627,19 @@ export function createTaskServer(
             try {
               const user = options.auth!.setCommitter(
                 decodeURIComponent(parts[2]), body.on === true);
+              return json(response, 200, user);
+            } catch (error) {
+              return json(response, 400, { error: humanError(error) });
+            }
+          }
+          if (request.method === "PUT" && parts.length === 4
+              && parts[3] === "display-name") {
+            const body = await readBody(request);
+            try {
+              const user = options.auth!.setDisplayName(
+                decodeURIComponent(parts[2]),
+                body.display_name === undefined
+                  ? undefined : String(body.display_name));
               return json(response, 200, user);
             } catch (error) {
               return json(response, 400, { error: humanError(error) });
@@ -2021,6 +2062,8 @@ export function createTaskServer(
               selectedBusinessModuleIds, selectedEngineeringKnowledgeIds,
               repositoryProfiles,
               knowledgePreviewDigest,
+              // 单仓大需求显式要求先分析拆分(交付单元拆分入口)。
+              requirementAnalysis: body.requirement_analysis === true,
             }));
         } catch (error) {
           return json(response, 400, { error: humanError(error) });
@@ -2559,6 +2602,29 @@ export function createTaskServer(
           const cwd = panel ? dirname(dirname(panel)) : undefined;
           return json(response, 200,
             buildTimeline(target.workspace, cwd));
+        }
+        // 越界裁决(单仓拆分负责面门禁):裁决权只在主责任人手里——
+        // 单元责任人自己放行自己的越界,边界就形同虚设。
+        if (request.method === "POST" && parts[2] === "scope-decision") {
+          const target = service.get(id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          const parent = target.parent_task_id
+            ? service.get(target.parent_task_id) : undefined;
+          const decider = parent?.luban_account ?? target.luban_account;
+          if (!canOperate(viewer, decider, !!options.auth)) {
+            return json(response, 403,
+              { error: `越界改动只能由主任务责任人 ${
+                decider ?? "（账号未配置）"} 裁决，请联系该账号处理` });
+          }
+          const body = await readBody(request);
+          const decision = body.decision === "allow" ? "allow"
+            : body.decision === "revert" ? "revert" : undefined;
+          if (!decision) {
+            return json(response, 400,
+              { error: "decision 必须是 allow(放行)或 revert(打回)" });
+          }
+          return json(response, 200, service.decideScopeViolation(
+            id, decision, viewer?.username ?? decider ?? "本地用户"));
         }
         // 问题定位一键采集(只读现场+现查 git/容器):现采现回并留档。
         // 权限口径同任务详情;能看任务就能拿它的诊断包。

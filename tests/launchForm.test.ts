@@ -59,6 +59,68 @@ test("launch-options:生效模型来自 models.json,设置层压部署层", () =
   assert.equal(after.repair_rounds, 0);
 });
 
+test("下单审计同时记输入值、生效值与来源，不把需求全文刷进日志", () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-lf-audit-"));
+  const settings = new RuntimeSettings(dataDir);
+  settings.updateRuntime({ repair_rounds: 3 });
+  const logs: string[] = [];
+  const service = new TaskService({
+    dataDir, provider: "a", model: "a-1", maxConcurrent: 0,
+    modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
+    delivery: { platformUrl: "http://x", repairRounds: 5 },
+    settings,
+    log: (message) => logs.push(message),
+  });
+  const requirement = "AUDIT_SECRET_REQUIREMENT 调整订单状态";
+  const task = service.create(requirement, {
+    title: "订单状态修复", account: "alice", lane: "完整开发",
+    repairRounds: 0,
+    taskInstructions: "AUDIT_SECRET_INSTRUCTION 不确定时不要猜",
+  });
+  const auditText = readFileSync(
+    join(dataDir, task.id, "creation-audit.json"), "utf-8");
+  const audit = JSON.parse(auditText);
+  assert.equal(audit.origin, "user_request");
+  assert.deepEqual(audit.request.repair_rounds,
+    { provided: true, value: 0 });
+  assert.deepEqual(audit.effective.repair_rounds, {
+    value: 0, source: "task_request", disabled: true, unlimited: false,
+  });
+  assert.equal(audit.request.requirement.bytes,
+    Buffer.byteLength(requirement, "utf-8"));
+  assert.match(audit.request.requirement.sha256, /^[a-f0-9]{64}$/);
+  assert.ok(!auditText.includes("AUDIT_SECRET_REQUIREMENT"),
+    "审计文件只记需求指纹，全文仍以 task.json 为准");
+  assert.ok(!auditText.includes("AUDIT_SECRET_INSTRUCTION"),
+    "执行补充不得泄入公共诊断日志");
+  const log = logs.find((line) => line.startsWith("[task-create] "));
+  assert.ok(log, "服务日志必须有可检索的结构化下单记录");
+  assert.match(log!, /"source":"task_request"/);
+  assert.ok(!log!.includes("AUDIT_SECRET_REQUIREMENT"));
+
+  const inherited = service.create("子任务", {
+    parentTaskId: task.id,
+    internalRequirement: true,
+    repairRounds: task.repair_rounds,
+  });
+  const childAudit = JSON.parse(readFileSync(
+    join(dataDir, inherited.id, "creation-audit.json"), "utf-8"));
+  assert.equal(childAudit.origin, "cross_repository_child");
+  assert.equal(childAudit.parent_task_id, task.id);
+  assert.deepEqual(childAudit.effective.repair_rounds, {
+    value: 0, source: "parent_task", disabled: true, unlimited: false,
+  });
+
+  const teamDefault = service.create("沿用团队设置");
+  const defaultAudit = JSON.parse(readFileSync(
+    join(dataDir, teamDefault.id, "creation-audit.json"), "utf-8"));
+  assert.deepEqual(defaultAudit.request.repair_rounds,
+    { provided: false, value: null });
+  assert.deepEqual(defaultAudit.effective.repair_rounds, {
+    value: 3, source: "runtime_setting", disabled: false, unlimited: false,
+  });
+});
+
 test("业务模块目录不返回正文；下单只交 ID，服务端固定当时版本", () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-lf-module-"));
   createBusinessModule(dataDir, {
@@ -493,7 +555,7 @@ test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队
       "https://codehub/team/api.git": "alice",
       "https://codehub/team/web.git": "bob",
     },
-    account: "owner", repositorySkills: [repositorySkill],
+    account: "owner", repairRounds: 0, repositorySkills: [repositorySkill],
     workflowDefinition: {
       schema: "mae-flow-workflow-definition/1",
       base: { standard_id: standard.standard_id,
@@ -548,6 +610,9 @@ test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队
   const webTask = service.get(graph.repositories[1].task_id!)!;
   assert.equal(graph.stage, "confirmed");
   assert.equal(apiTask.parent_task_id, parent.id);
+  assert.equal(apiTask.repair_rounds, 0,
+    "跨仓子任务必须如实继承父任务的修复策略");
+  assert.equal(webTask.repair_rounds, 0);
   assert.equal(apiTask.luban_account, "alice");
   assert.equal(webTask.luban_account, "bob");
   assert.equal(apiTask.ticket, "REQ-G3-API",
@@ -557,7 +622,7 @@ test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队
     "子任务读侧应直接给出可返回的主任务摘要");
   assert.equal(graph.repositories[0].task_status, "queued",
     "主任务协作树应投影子任务实时进展");
-  assert.match(apiTask.requirement, /当前仓 AR 单号:REQ-G3-API/);
+  assert.match(apiTask.requirement, /当前单元 AR 单号:REQ-G3-API/);
   assert.deepEqual(apiTask.blocked_by, undefined);
   assert.deepEqual(webTask.blocked_by, [apiTask.id]);
   // 方案正文落工作区文件而非内联进需求(整份方案进 prompt 会被模型
@@ -882,8 +947,9 @@ test("REQ 单号字段明确要求填写 AR 对应单号，并说明无法按格
   assert.match(source, /两者格式相同，系统无法自动识别/);
 });
 
-test("多仓发起时每个仓在同一行填写自己的 AR 单号，后续分工不再重复编辑", () => {
+test("多仓沿用下单单号，单仓拆分后逐单元开放独立 AR 单号", () => {
   const launch = readFileSync(join(process.cwd(), "web/src/LaunchWorkspace.tsx"), "utf-8");
+  const style = readFileSync(join(process.cwd(), "web/src/style.css"), "utf-8");
   const picker = readFileSync(join(process.cwd(),
     "web/src/RepositoryAssigneePicker.tsx"), "utf-8");
   assert.match(launch, /代码仓与对应 AR 单号/);
@@ -892,9 +958,25 @@ test("多仓发起时每个仓在同一行填写自己的 AR 单号，后续分�
   assert.match(launch, /disabled=\{!multiRepository\}/);
   assert.match(launch, /repositoryTickets: repoFieldsEnabled/);
   assert.match(launch, /repositoryAssignees: repoFieldsEnabled/);
+  // 勾了"先分析拆分"的单仓下单不收单号:输入框隐藏,提交也不带。
+  assert.match(launch, /options\.ticket\.enabled && !ticketsDeferred/);
+  assert.match(launch, /ticket: ticketsDeferred \? undefined/);
+  // 单仓大需求入口是一条紧凑方案开关，不退回原生 checkbox + 长段虚线框。
+  assert.match(launch, /repo-analysis-toggle \$\{/);
+  assert.match(launch, /requirementAnalysis \? "selected"/);
+  assert.match(launch, /repo-analysis-switch/);
+  assert.match(launch, /先分析，再拆分/);
+  assert.match(style, /\.repo-analysis-toggle\.selected/);
+  assert.match(style, /\.repo-analysis-toggle\.selected \.repo-analysis-switch::after/);
   assert.match(picker, /责任人与 AR 单号均已在发起任务时确定/);
-  assert.doesNotMatch(picker, /onChange=\{\(event\) => chooseTicket/);
-  assert.doesNotMatch(picker, /<select/);
+  assert.match(picker, /onChange=\{\(event\) => chooseTicket/);
+  // 同仓多单元的行(单元是拆出来才存在的,下单不可能填过)责任人和
+  // 单号都要逐行可编;单单元行保持只读——下单已定的事实不设第二处
+  // 真相。缺单号的行(下单免了单号)同样给输入框。
+  assert.match(picker, /isUnitRow\(repository\) \? <span className="repository-assignee-editable">/);
+  assert.match(picker, /该单元的责任人/);
+  assert.match(picker, /isUnitRow\(repository\) \|\| !ticket\.trim\(\)/);
+  assert.match(picker, /chooseAssignee/);
 });
 
 test("ZIP 图文需求只显示渲染预览，不再重复摆一份只读原文框", () => {
@@ -902,6 +984,27 @@ test("ZIP 图文需求只显示渲染预览，不再重复摆一份只读原文�
   assert.match(source, /\{!requirementBundle && <textarea/);
   assert.doesNotMatch(source, /readOnly=\{Boolean\(requirementBundle\)\}/);
   assert.match(source, /requirementBundle && <div className="requirement-bundle-preview">/);
+});
+
+test("修复轮手刹只恢复当前草稿，不会从上一张任务偷偷带入", () => {
+  const source = readFileSync(
+    join(process.cwd(), "web/src/LaunchWorkspace.tsx"), "utf-8");
+  assert.match(source,
+    /const \[repairRounds, setRepairRounds\] = useState\(\s*validDraft\?\.repairRounds \?\? ""\);/,
+  "未提交草稿可恢复本单的显式选择");
+  assert.doesNotMatch(source, /savedPreferences\?\.repairRounds/,
+    "0=关闭自动修复，不能作为下一单的默认值");
+  assert.match(source, /validDraft\?\.repairRounds\?\.trim\(\)/,
+    "草稿里真有手刹时要自动展开，不能藏起来");
+  assert.match(source, /repairRounds === "0"[\s\S]*?"自动修复已关闭"/,
+    "0 必须按关闭能力告警，不能只写成机械的 0 轮");
+  assert.match(source,
+    /<input type="text" inputMode="numeric" pattern="\[0-9\]\*"/,
+    "修复轮手刹不能用 number spinner，空值误触会直接变 0");
+  assert.match(source, /留空=不限轮（自动修复开启）；填 0=关闭/,
+    "placeholder 要把默认与关闭的区别说明白");
+  assert.match(source, /检视、冲突或流水线失败将等人处理/,
+    "真填 0 时要直说会失去什么能力");
 });
 
 test("消费:任务级代码仓压过部署仓,克隆的就是下单填的那个", async () => {

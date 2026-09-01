@@ -101,6 +101,21 @@ export function fatalToolExecutionError(
     + "任务已停在可恢复位置，请点“重跑续推”继续；已有数据不会丢失。";
 }
 
+/** 模型网关的失败会直接进入任务卡。限流响应常夹带整段 JSON、内部错误
+ * 类型与 request_id；这些对开发者没有行动价值，反而把真正的恢复时间
+ * 淹没。只收敛已明确识别的 429/额度错误，其他故障仍保留原文供排查。 */
+export function userFacingModelFailure(detail: string): string {
+  const raw = detail.trim();
+  if (!/(?:\b429\b|rate[_ ]limit|使用上限|限额.*重置|quota exhausted)/i
+      .test(raw)) return raw;
+  const reset = raw.match(/限额将在\s*([0-9]{4}-[0-9]{2}-[0-9]{2}\s+[0-9]{2}:[0-9]{2}:[0-9]{2})\s*重置/)?.[1];
+  return reset
+    ? `模型额度已用完，将于 ${reset} 恢复。任务已停在可恢复位置；`
+      + "额度恢复后点“重跑续推”，已有数据不会丢失。"
+    : "模型服务当前限流（429）。任务已停在可恢复位置；稍后点“重跑续推”，"
+      + "已有数据不会丢失。";
+}
+
 export function validateAskUserQuestionInput(input: unknown): string | undefined {
   if (!input || typeof input !== "object") return "缺少 questions";
   const request = input as Record<string, unknown>;
@@ -562,10 +577,11 @@ export class CloudSession {
       .prompt(userMessage)
       .then(() => this.turnOutcome())
       .catch((error): Outcome => {
+        const detail = userFacingModelFailure(String(error));
         this.emit("session_ended", this.sessionId, {
-          reason: "failed", detail: String(error),
+          reason: "failed", detail,
         });
-        return { status: "session_ended", reason: "failed", detail: String(error) };
+        return { status: "session_ended", reason: "failed", detail };
       });
     return Promise.race([this.pendingTurn, this.waitingSignal.promise]);
   }
@@ -582,7 +598,7 @@ export class CloudSession {
       return { status: "session_ended", reason: "failed", detail };
     }
     if (!this.turnActivity && this.turnError) {
-      const detail = `模型回合失败: ${this.turnError}`;
+      const detail = userFacingModelFailure(this.turnError);
       this.emit("session_ended", this.sessionId, {
         reason: "failed", detail,
       });

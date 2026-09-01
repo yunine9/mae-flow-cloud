@@ -506,7 +506,7 @@ test("问题会话多轮闭环:研究→提问卡→作答→非问题归档(无
     assert.equal((await issueGet(
       ["issues", "issue-999", "documents"], service)).status, 404);
 
-    const archived = service.control(created.id, {
+    const archived = await service.control(created.id, {
       action: "archive", kind: "non_issue", summary: "误报,时钟漂移",
     });
     assert.equal(archived.status, "archived");
@@ -758,6 +758,82 @@ function seedRecoverableIssue(
     ...patch,
   }));
 }
+
+test("正式启动可延后恢复；取消必须等容器确认删除，失败保留句柄可重试", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-cleanup-"));
+  seedRecoverableIssue(dataDir, "issue-1", { status: "waiting_user" });
+  seedRecoverableIssue(dataDir, "issue-2", { status: "waiting_user" });
+  seedRecoverableIssue(dataDir, "issue-3", { status: "waiting_user" });
+  const service = new IssueFlowService({
+    dataDir, provider: "unused", model: "unused", modelsJson: {},
+    deferRecovery: true,
+  });
+  try {
+    assert.equal(service.list().length, 0,
+      "serve 清扫遗留容器前，问题会话不能抢先恢复点火");
+    service.start();
+    service.start();
+    assert.equal(service.list().length, 3, "显式恢复幂等且不漏现场");
+
+    const first = (service as any).live.get("issue-1");
+    let releaseStop!: () => void;
+    let stopStarted = false;
+    first.container = {
+      stop: () => new Promise<void>((resolve) => {
+        stopStarted = true;
+        releaseStop = resolve;
+      }),
+    };
+    let returned = false;
+    const canceling = service.control("issue-1", { action: "cancel" })
+      .then((summary) => {
+        returned = true;
+        return summary;
+      });
+    await new Promise((tick) => setImmediate(tick));
+    assert.equal(stopStarted, true);
+    assert.equal(returned, false, "Docker 还没删净时接口不能先报取消成功");
+    assert.equal(service.get("issue-1").status, "waiting_user",
+      "容器回收确认前不能先落 canceled 终态");
+    releaseStop();
+    assert.equal((await canceling).status, "canceled");
+    assert.equal(first.container, undefined, "确认删除后才清内存句柄");
+
+    const second = (service as any).live.get("issue-2");
+    let failOnce = true;
+    const retained = {
+      async stop() {
+        if (failOnce) {
+          failOnce = false;
+          throw new Error("docker rm permission denied");
+        }
+      },
+    };
+    second.container = retained;
+    await assert.rejects(
+      service.control("issue-2", { action: "cancel" }),
+      /取消尚未完成.*permission denied/);
+    assert.equal(service.get("issue-2").status, "waiting_user");
+    assert.equal(second.container, retained,
+      "失败时必须保留句柄，不能制造以后永远 stop 不到的孤儿");
+    assert.equal((await service.control("issue-2", { action: "cancel" })).status,
+      "canceled", "用户重试应复用原句柄完成回收");
+
+    const third = (service as any).live.get("issue-3");
+    let finishOldTurn!: (outcome: { status: "turn_finished" }) => void;
+    (service as any).beginTurn(third, () =>
+      new Promise((resolve) => { finishOldTurn = resolve; }));
+    assert.equal(service.get("issue-3").status, "running");
+    assert.equal((await service.control("issue-3", { action: "cancel" })).status,
+      "canceled", "正在运行也必须能直接取消");
+    finishOldTurn({ status: "turn_finished" });
+    await new Promise((tick) => setImmediate(tick));
+    assert.equal(service.get("issue-3").status, "canceled",
+      "取消前的旧回调晚到，不能把终态覆盖回 idle/failed");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+  }
+});
 
 test("重启恢复翻转:running/旧 interrupted 重新入队自动续跑,queued 原样开跑,waiting/suspended 不动", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-recover2-"));

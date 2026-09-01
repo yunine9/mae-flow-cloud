@@ -265,6 +265,16 @@ function IssueProcessDocs({ detail }: { detail: IssueDetail }) {
   // 后记账,半路失败下次仍会重试。
   const refreshKey = `${detail.updated_at}|${active}`;
   const [loadedKey, setLoadedKey] = useState("");
+  const [fullscreen, setFullscreen] = useState(false);
+
+  useEffect(() => {
+    if (!fullscreen) return;
+    const close = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setFullscreen(false);
+    };
+    addEventListener("keydown", close);
+    return () => removeEventListener("keydown", close);
+  }, [fullscreen]);
 
   async function loadList() {
     try {
@@ -368,7 +378,13 @@ function IssueProcessDocs({ detail }: { detail: IssueDetail }) {
       .map((doc) => ({ key: doc.name, label: doc.label, hint: sizeText(doc.bytes) })),
   ];
 
-  return <div className="issue-thread issue-doc">
+  return <div className={`issue-thread issue-doc${fullscreen ? " is-fullscreen" : ""}`}>
+    <div className="issue-doc-view-actions">
+      <span>{fullscreen ? "全屏阅读过程文档" : ""}</span>
+      <button type="button" onClick={() => setFullscreen((current) => !current)}>
+        {fullscreen ? "退出全屏" : "全屏查看"}
+      </button>
+    </div>
     {tabs.length > 1 && <div className="ws-tabs" role="tablist"
         aria-label="过程文档页签">
       {tabs.map((tab) => (

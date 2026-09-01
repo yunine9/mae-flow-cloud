@@ -52,3 +52,19 @@ test("存在分叉时停止合并，main 与 test 仍是可分别折叠的目录
     "src/test/java/com/acme",
   ], "一键展开/折叠只操作界面真正显示的压缩目录行");
 });
+
+test("变更统计包含空白新增/删除行，但不把 +++/--- 文件头算进去", () => {
+  const files = parseChanges([
+    "## 已提交",
+    "diff --git a/src/a.ts b/src/a.ts",
+    "--- a/src/a.ts",
+    "+++ b/src/a.ts",
+    "@@ -1,2 +1,2 @@",
+    "-old",
+    "-",
+    "+next",
+    "+",
+  ].join("\n"));
+  assert.equal(files[0].additions, 2);
+  assert.equal(files[0].deletions, 2);
+});

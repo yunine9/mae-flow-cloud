@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   clearExecutionPlanCache,
+  hasStructuralWorkflowProjectionMismatch,
   readCurrentExecutionPlan,
   readCurrentExecutionPlanReading,
 } from "../src/executionPlan.ts";
@@ -66,6 +67,34 @@ test("Cloud 只消费内核结构化执行方案，不在 TS 侧猜阶段做法"
   assert.equal(plan?.step.id, "build");
   assert.deepEqual(plan?.customization.locked, ["真实证据"]);
   assert.equal(plan?.customization.layers[0].instructions, "先核对旧数据");
+});
+
+test("补充型方案的 platform_default+overrides 是正常生效，不误报投影缺失", () => {
+  clearExecutionPlanCache();
+  const plan = readCurrentExecutionPlan(fixture());
+  assert.ok(plan);
+  assert.equal(plan.customization.effective_source,
+    "platform_default+overrides");
+  assert.equal(hasStructuralWorkflowProjectionMismatch({
+    final_snapshot: undefined,
+  }, plan), false,
+  "supplement-only 没有结构化定格，本来就不该要求 compiled_final_plan");
+});
+
+test("结构化定格没有被内核采用时仍然告警，正常编译时不告警", () => {
+  clearExecutionPlanCache();
+  const fallbackPlan = readCurrentExecutionPlan(fixture());
+  assert.ok(fallbackPlan);
+  const structuralProfile = { final_snapshot: { stages: [] } };
+  assert.equal(hasStructuralWorkflowProjectionMismatch(
+    structuralProfile, fallbackPlan), true);
+  assert.equal(hasStructuralWorkflowProjectionMismatch(structuralProfile, {
+    ...fallbackPlan,
+    customization: {
+      ...fallbackPlan.customization,
+      effective_source: "compiled_final_plan",
+    },
+  }), false);
 });
 
 test("内核 stderr 的 ⚠ 告警随方案一起上浮——定制退化不许静默", () => {

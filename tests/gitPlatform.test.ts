@@ -7,7 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readJson } from "../src/jsonBody.ts";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -92,6 +92,69 @@ test("裸仓灌历史 → 克隆 → 推分支 → MR 幂等 → 流水线绑 SH
       `${platform.baseUrl}/pipeline/status?sha=${newSha}`)
       .then((r) => readJson(r));
     assert.equal(stale.runs.length, 0);
+  } finally {
+    await platform.stop();
+  }
+});
+
+test("假平台按 repo 路由第二裸仓的 MR、流水线与浏览器合入", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-git-multi-"));
+  const sourceA = makeSourceRepo();
+  const sourceB = makeSourceRepo();
+  const platform = new FakeGitPlatform();
+  platform.initBare(sourceA, dataDir);
+  const bareB = join(dataDir, "origin-aux.git");
+  mkdirSync(bareB, { recursive: true });
+  git(bareB, "init", "--bare", "--quiet");
+  execFileSync("git", ["push", "--quiet", bareB, "--all"], {
+    cwd: sourceB, encoding: "utf-8",
+  });
+  git(bareB, "symbolic-ref", "HEAD", "refs/heads/master");
+  await platform.start();
+  try {
+    const work = join(dataDir, "work-aux");
+    git(dataDir, "clone", "--quiet", bareB, "work-aux");
+    git(work, "config", "user.email", "bot@test");
+    git(work, "config", "user.name", "bot");
+    git(work, "checkout", "--quiet", "-b", "master_owner_REQ_AUX");
+    writeFileSync(join(work, "aux.txt"), "aux change\n");
+    git(work, "add", "aux.txt");
+    git(work, "commit", "--quiet", "-m", "feat: aux");
+    git(work, "push", "--quiet", "origin", "master_owner_REQ_AUX");
+    const sha = git(work, "rev-parse", "HEAD");
+
+    const mr = await fetch(`${platform.baseUrl}/mr`, {
+      method: "POST",
+      body: JSON.stringify({
+        repo: bareB,
+        source_branch: "master_owner_REQ_AUX",
+        target_branch: "master",
+        title: "aux MR",
+      }),
+    }).then((r) => readJson(r));
+    assert.equal(mr.sha, sha, "第二仓分支不能误去默认仓查找");
+    assert.equal(mr.repo, bareB);
+
+    const run = await fetch(`${platform.baseUrl}/pipeline/trigger`, {
+      method: "POST",
+      body: JSON.stringify({ sha, repo: bareB }),
+    }).then((r) => readJson(r));
+    assert.equal(run.status, "success");
+    const gates = await fetch(`${platform.baseUrl}/mr/gates?${new URLSearchParams({
+      repo: bareB,
+      source_branch: "master_owner_REQ_AUX",
+      target_branch: "master",
+    })}`).then((r) => readJson(r));
+    assert.ok(gates.gates.every((gate: { passed: boolean }) => gate.passed));
+
+    const merged = await fetch(`${platform.baseUrl}/mr/${mr.id}/merge`, {
+      method: "POST", redirect: "manual",
+    });
+    assert.equal(merged.status, 303);
+    assert.equal(git(bareB, "rev-parse", "master"), sha,
+      "浏览器合入必须推进第二仓目标分支");
+    assert.notEqual(git(platform.barePath, "rev-parse", "master"), sha,
+      "默认仓不能被第二仓 MR 污染");
   } finally {
     await platform.stop();
   }

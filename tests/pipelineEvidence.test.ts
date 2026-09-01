@@ -129,3 +129,35 @@ test("识别内网 CodeCheck 真实 fileName/lineNum/indicatorName 字段", () =
   assert.deepEqual(result.availableDimensions, ["CODECHECK"]);
   assert.deepEqual(result.missingDimensions, []);
 });
+
+test("CodeCheck lineNum=0 表示整文件或 MR 级规则，不误判成无报错", () => {
+  const artifact = assessPipelineRepairEvidence({
+    checks: [{
+      dimension: "CODECHECK", status: "failed", tool: "codecheck",
+    }],
+    artifacts: [{
+      name: "codecheck_detail.json",
+      text: JSON.stringify({ defects: [{
+        fileName: "service/Advice.cpp",
+        lineNum: 0,
+        indicatorName: "ARCH.MR.01 变更范围违反架构约束",
+        description: "本次变更跨越了禁止依赖的模块边界",
+      }] }),
+    }],
+  });
+  assert.deepEqual(artifact.availableDimensions, ["CODECHECK"]);
+  assert.deepEqual(artifact.missingDimensions, []);
+
+  const structured = assessPipelineRepairEvidence({
+    checks: [{
+      dimension: "CODECHECK", status: "failed", tool: "codecheck",
+      details: [{
+        file: "service/Advice.cpp", line: 0,
+        rule: "ARCH.MR.01", message: "本次变更违反架构约束",
+      }],
+    }],
+    artifacts: [],
+  });
+  assert.deepEqual(structured.availableDimensions, ["CODECHECK"]);
+  assert.deepEqual(structured.missingDimensions, []);
+});

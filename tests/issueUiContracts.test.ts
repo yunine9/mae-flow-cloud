@@ -15,6 +15,8 @@ const css = readFileSync(resolve("web/src/style.css"), "utf-8");
 const issueFlow = readFileSync(resolve("docs/issue-flow.md"), "utf-8");
 const environmentVault = readFileSync(resolve("src/issueEnvironment.ts"), "utf-8");
 const issueService = readFileSync(resolve("src/issueFlow/service.ts"), "utf-8");
+const materials = readFileSync(
+  resolve("web/src/issues/MaterialsPane.tsx"), "utf-8");
 
 test("混合问题卡必须逐题完整作答", () => {
   assert.match(decisions,
@@ -112,8 +114,8 @@ test("环境保险箱注释与真实 AI 口令契约一致", () => {
   assert.doesNotMatch(issueService, /提示词永远只有引用|无消费方,为页面自动化/);
 });
 
-test("推送过目闸(push_confirm):前端闸种镜像与变更摘要渲染兼容", () => {
-  const apiTypes = readFileSync(resolve("web/src/api.ts"), "utf-8");
+
+test("推送过目闸(push_confirm):前端闸种镜像与变更摘要渲染兼容", () => {  const apiTypes = readFileSync(resolve("web/src/api.ts"), "utf-8");
   const stageRegistry = readFileSync(
     resolve("src/issueFlow/stageRegistry.ts"), "utf-8");
   const issueFlowDoc = readFileSync(resolve("docs/issue-flow.md"), "utf-8");
@@ -213,4 +215,11 @@ test("全站 window.confirm 清零:原生确认框一律走共享 confirmDialog"
   for (const source of [historyBoard, taskCard]) {
     assert.match(source, /danger: true/);
   }
+});
+
+test("过程文档可原位全屏，退出后保留当前页签", () => {
+  assert.match(materials, /issue-doc\$\{fullscreen \? " is-fullscreen"/);
+  assert.match(materials, /fullscreen \? "退出全屏" : "全屏查看"/);
+  assert.match(materials, /if \(event\.key === "Escape"\) setFullscreen\(false\)/);
+  assert.match(css, /\.issue-thread\.issue-doc\.is-fullscreen \{/);
 });

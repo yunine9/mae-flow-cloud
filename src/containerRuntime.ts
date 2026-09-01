@@ -237,6 +237,7 @@ interface ContainerInspect {
     Tmpfs?: Record<string, string>;
   };
   Mounts?: Array<{
+    Source?: string;
     Destination?: string;
     RW?: boolean;
     Type?: string;
@@ -394,6 +395,10 @@ export function taskContainerInstance(dataDir: string): {
 export interface ManagedContainerSweepOptions {
   instanceFingerprint: string;
   namePrefix: string;
+  /** 2026-08-29 之前的问题容器只有 managed/container 两枚标签，没有
+   * instance/role/task。给出 issues 根目录后，可用“精确旧名字 + 精确
+   * 工作区挂载 + 两枚平台标签”迁移清理；其余近似容器仍拒绝触碰。 */
+  legacyIssueRoot?: string;
   stopGraceSeconds?: number;
   managementTimeoutMs?: number;
   runner?: DockerRunner;
@@ -448,7 +453,15 @@ export async function sweepManagedTaskContainers(
     "--filter", "label=com.mae-flow-cloud.managed=true",
     "--filter", `label=com.mae-flow-cloud.instance=${instance}`,
   ]);
-  const references = raw.split(/\s+/).filter(Boolean);
+  const legacyRaw = options.legacyIssueRoot
+    ? await command([
+        "ps", "-aq",
+        "--filter", "label=com.mae-flow-cloud.managed=true",
+        "--filter", `name=mfc-${namePrefix}-issue-`,
+      ])
+    : "";
+  const references = [...new Set(`${raw}\n${legacyRaw}`
+    .split(/\s+/).filter(Boolean))];
   const removed: string[] = [];
   for (const reference of references) {
     if (!/^[a-f0-9]{12,64}$/i.test(reference)) {
@@ -470,20 +483,36 @@ export async function sweepManagedTaskContainers(
       && MANAGED_ROLES.has(role)
       && (role === "system-check"
         || Boolean(labels["com.mae-flow-cloud.task"]));
-    if (!owned) {
+    const legacyName = new RegExp(
+      `^mfc-${namePrefix}-(issue-[0-9]+)$`).exec(name);
+    const legacyWorkspace = legacyName && options.legacyIssueRoot
+      ? resolve(options.legacyIssueRoot, legacyName[1]) : undefined;
+    const legacyOwned = !owned && !!legacyWorkspace
+      && id.startsWith(reference)
+      && labels["com.mae-flow-cloud.managed"] === "true"
+      && labels["com.mae-flow-cloud.container"] === name
+      && labels["com.mae-flow-cloud.instance"] === undefined
+      && labels["com.mae-flow-cloud.role"] === undefined
+      && labels["com.mae-flow-cloud.task"] === undefined
+      && (inspected.Mounts ?? []).some((mount) =>
+        resolve(String(mount.Source ?? "")) === legacyWorkspace
+        && resolve(String(mount.Destination ?? "")) === legacyWorkspace
+        && mount.Type === "bind" && mount.RW === true);
+    if (!owned && !legacyOwned) {
       throw new Error(
         `容器清扫 phase=ownership-check role=${role || "unknown"}`
           + ` name=${name || reference} id=${shortId} image=${image}: `
           + "命中实例过滤但 ownership 复验失败，拒绝清理",
       );
     }
-    options.log?.(`容器清扫 phase=TERM role=${role} name=${name} id=${shortId}`
+    const effectiveRole = legacyOwned ? "issue-legacy" : role;
+    options.log?.(`容器清扫 phase=TERM role=${effectiveRole} name=${name} id=${shortId}`
       + ` image=${image}`);
     try {
       await command(["stop", "--time", String(grace), id]);
     } catch (error) {
       if (!isMissingContainer(error)) {
-        options.log?.(`容器清扫 phase=TERM-failed role=${role} name=${name}`
+        options.log?.(`容器清扫 phase=TERM-failed role=${effectiveRole} name=${name}`
           + ` id=${shortId} image=${image}: ${errorDetail(error)}`);
       }
     }
@@ -493,7 +522,7 @@ export async function sweepManagedTaskContainers(
         await command(["kill", "--signal", "KILL", id]);
       } catch (error) {
         if (!isMissingContainer(error)) {
-          options.log?.(`容器清扫 phase=KILL-failed role=${role} name=${name}`
+          options.log?.(`容器清扫 phase=KILL-failed role=${effectiveRole} name=${name}`
             + ` id=${shortId} image=${image}: ${errorDetail(error)}`);
         }
       }
@@ -507,10 +536,10 @@ export async function sweepManagedTaskContainers(
       }
     }
     if (await inspect(id)) {
-      throw new Error(`容器清扫 phase=verify-remove role=${role} name=${name}`
+      throw new Error(`容器清扫 phase=verify-remove role=${effectiveRole} name=${name}`
         + ` id=${shortId} image=${image}: 无法确认容器 ${name} 已删除`);
     }
-    options.log?.(`容器清扫 phase=removed role=${role} name=${name}`
+    options.log?.(`容器清扫 phase=removed role=${effectiveRole} name=${name}`
       + ` id=${shortId} image=${image}`);
     removed.push(name);
   }

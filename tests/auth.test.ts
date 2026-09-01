@@ -38,6 +38,29 @@ test("账号库:scrypt 哈希落盘且重启后仍可登录", () => {
   );
 });
 
+test("显示姓名:只影响展示和人员候选,工号继续作为登录身份", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-auth-display-name-"));
+  const file = join(dir, "auth.json");
+  const auth = new LocalAuth(file);
+  auth.bootstrapAdmin("admin", "correct-horse-battery");
+  assert.deepEqual(
+    auth.createUser("z00899322", "developer-password", "developer", " 张三 "),
+    { username: "z00899322", display_name: "张三", role: "developer" },
+  );
+  assert.deepEqual(auth.collaborationAssignees({
+    git_token: false, luban_token: false,
+  }), [{
+    username: "z00899322", display_name: "张三", ready: true, missing: [],
+  }]);
+  assert.equal(auth.authenticate(
+    "z00899322", "developer-password", "test").user?.display_name, "张三");
+  assert.deepEqual(auth.setDisplayName("z00899322", "李四"), {
+    username: "z00899322", display_name: "李四", role: "developer",
+  });
+  assert.equal(new LocalAuth(file).listUsers().find((user) =>
+    user.username === "z00899322")?.display_name, "李四");
+});
+
 test("会话落盘:重启后 cookie 仍有效,磁盘上没有原始令牌", () => {
   // 2026-08-29 部署审计实锤:会话纯内存时,每次改 bug 重新部署都把
   // 全员踢回登录页。落盘的是令牌 sha256——令牌只写不读的纪律对自家
@@ -171,6 +194,78 @@ test("个人配置:退出重登与账号库重载后仍在,且不同用户严格
       "委派候选接口只能暴露就绪状态，不能带邮箱或任何令牌提示");
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("个人设置可用已保存 Token 真实测试小鲁班连通性", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-auth-luban-test-"));
+  const auth = new LocalAuth(join(dir, "auth.json"));
+  auth.bootstrapAdmin("admin", "administrator-pass");
+  auth.createUser("alice", "alice-password-1", "developer");
+  auth.createUser("bob", "bob-password-123", "developer");
+  auth.setLubanToken("alice", "alice-luban-secret");
+  const luban = new FakeLubanServer();
+  await luban.start();
+  const service = new TaskService({
+    dataDir: join(dir, "tasks"), provider: "test", model: "test",
+    modelsJson: {}, maxConcurrent: 0,
+    notifier: new Notifier({
+      endpoint: luban.endpoint,
+      personalToken: (account) => auth.lubanToken(account),
+    }),
+  });
+  const server = createTaskServer(service, { auth });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as AddressInfo).port;
+  const base = `http://127.0.0.1:${port}`;
+
+  async function login(username: string, password: string): Promise<string> {
+    const response = await fetch(`${base}/auth/login`, {
+      method: "POST", body: JSON.stringify({ username, password }),
+    });
+    assert.equal(response.status, 200);
+    return response.headers.get("set-cookie")!.split(";")[0];
+  }
+
+  try {
+    const unauthenticated = await fetch(`${base}/auth/me/luban-test`, {
+      method: "POST",
+    });
+    assert.equal(unauthenticated.status, 401);
+
+    const bob = await login("bob", "bob-password-123");
+    const missing = await fetch(`${base}/auth/me/luban-test`, {
+      method: "POST", headers: { cookie: bob },
+    });
+    assert.equal(missing.status, 409);
+    assert.match(await missing.text(), /请先保存小鲁班 Token/);
+
+    const alice = await login("alice", "alice-password-1");
+    const tested = await fetch(`${base}/auth/me/luban-test`, {
+      method: "POST", headers: { cookie: alice },
+    });
+    assert.equal(tested.status, 200);
+    assert.deepEqual(await tested.json(), {
+      ok: true,
+      message: "测试消息已发送，请在小鲁班中确认是否收到。",
+    });
+    assert.equal(luban.messages.length, 1);
+    assert.equal(luban.messages[0].account, "alice");
+    assert.equal(luban.requestHeaders[0]["x-mfc-luban-token"],
+      encodeURIComponent("alice-luban-secret"));
+
+    luban.failFirst = 1;
+    const failed = await fetch(`${base}/auth/me/luban-test`, {
+      method: "POST", headers: { cookie: alice },
+    });
+    assert.equal(failed.status, 502);
+    const failureText = await failed.text();
+    assert.match(failureText, /测试消息未送达（HTTP 500）/);
+    assert.doesNotMatch(failureText, /alice-luban-secret/,
+      "测试失败响应不得回显个人 Token");
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await luban.stop();
   }
 });
 

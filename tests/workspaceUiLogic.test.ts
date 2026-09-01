@@ -18,6 +18,7 @@ const taskCard = await vite.ssrLoadModule("/src/TaskCard.tsx");
 const prepush = await vite.ssrLoadModule("/src/PrepushStatus.tsx");
 const api = await vite.ssrLoadModule("/src/api.ts");
 const annotationPanel = await vite.ssrLoadModule("/src/AnnotationPanel.tsx");
+const lubanTokenCard = await vite.ssrLoadModule("/src/LubanTokenCard.tsx");
 
 after(async () => {
   await vite.close();
@@ -46,6 +47,24 @@ function review(id: string, taskId: string) {
     attempts: 1,
   };
 }
+
+test("个人小鲁班已配置时显示连通测试，未配置时只引导配置", () => {
+  const ready = renderToStaticMarkup(React.createElement(
+    lubanTokenCard.LubanTokenCard,
+    { session: {
+      username: "alice", role: "developer", luban_token_hint: "••••cret",
+    } },
+  ));
+  assert.match(ready, />测试连通性<\/button>/);
+  assert.match(ready, />更新 Token<\/button>/);
+
+  const missing = renderToStaticMarkup(React.createElement(
+    lubanTokenCard.LubanTokenCard,
+    { session: { username: "bob", role: "developer" } },
+  ));
+  assert.doesNotMatch(missing, /测试连通性/);
+  assert.match(missing, />配置小鲁班<\/button>/);
+});
 
 function annotation(overrides: Record<string, unknown> = {}) {
   return {
@@ -79,6 +98,14 @@ test("检视返工不把内部第 0 轮显示成流水线修复轮次", () => {
     status: "verifying",
     delivery: { loop: { state: "repairing", kind: "ci", round: 1, max: 2 } },
   }), "流水线修复中");
+});
+
+test("检视栏拖拽始终给左右工作面保留最小宽度", () => {
+  assert.equal(workspace.clampReviewPanelWidth(640, 1280), 640);
+  assert.equal(workspace.clampReviewPanelWidth(100, 1280), 420);
+  assert.equal(workspace.clampReviewPanelWidth(1200, 1280), 860);
+  assert.equal(workspace.clampReviewPanelWidth(700, 800), 400,
+    "窄到无法同时保留 420px 时，两栏各留一半");
 });
 
 test("圈注权与发送权拆开，需求原文批注能回到原文视图", () => {
@@ -363,6 +390,47 @@ test("管理员危险动作必须连续确认同一条意见和同一动作", ()
   const second = annotationPanel.advanceAdminOverrideArm(
     switched.arm, "annotation-1", "verify");
   assert.deepEqual(second, { execute: true, arm: undefined });
+});
+
+test("普通流程批注在 Agent 再次举卡后可由作者闭环，不依赖 MR 复检状态", () => {
+  const common = {
+    taskId: "task-1",
+    viewerUsername: "alice",
+    checks: [],
+    canOperate: true,
+    canOverride: false,
+    taskStatus: "waiting_for_human",
+    reviewReady: false,
+    reviewAnnotationIds: [],
+    mergeRequestOpen: false,
+    onChanged: () => undefined,
+  };
+  const ordinary = annotation({ sent_via: "decision", response: undefined });
+  assert.equal(annotationPanel.authorVerdictReady(
+    ordinary, "waiting_for_human", false), true);
+  const html = renderToStaticMarkup(React.createElement(
+    annotationPanel.AnnotationPanel,
+    { ...common, items: [ordinary] },
+  ));
+  assert.match(html, /Agent 已再次回到人工检视/);
+  assert.match(html, />仍需调整<\/button>/);
+  assert.match(html, />确认已修复<\/button>/);
+
+  assert.equal(annotationPanel.authorVerdictReady(
+    ordinary, "running", false), false,
+  "Agent 仍在修改时不能提前验收");
+  assert.equal(annotationPanel.authorVerdictReady(
+    annotation({ sent_via: "queued_decision", response: undefined }),
+    "waiting_for_human", false), false,
+  "只登记、尚未真正送达 Agent 的意见不能立即验收");
+  assert.equal(annotationPanel.authorVerdictReady(
+    annotation({ sent_via: "review_repair" }),
+    "waiting_for_human", false), false,
+  "MR 修复仍必须等 Build-Fix 与复检卡");
+  assert.equal(annotationPanel.authorVerdictReady(
+    annotation({ sent_via: "review_repair", response: undefined }),
+    "waiting_for_human", true), false,
+  "MR 修复缺逐条回执时不能误开放通过");
 });
 
 test("批注面板显示受限管理员入口和实际代确认审计", () => {

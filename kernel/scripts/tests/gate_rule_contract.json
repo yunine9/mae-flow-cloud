@@ -138,6 +138,13 @@
       "evidence": "manifest show",
       "why": "提交内容必须先由用户确认"
     },
+    "bash-delivery-host-command": {
+      "kind": "absolute",
+      "tier": "A",
+      "escape": "cli:current",
+      "evidence": "current",
+      "why": "打开与核销反馈、宣布 MR 合入都能改变持续交付生命周期，只接受 Cloud 宿主权威事实；Agent 仅通过 current 承接已登记批次"
+    },
     "bash-delivery-manifest-files": {
       "kind": "absolute",
       "tier": "A",
