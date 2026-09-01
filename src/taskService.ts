@@ -241,7 +241,7 @@ import {
   type SelectedRepositorySkill,
   validRepositorySkillPath,
 } from "./repositorySkillRuntime.ts";
-import { listBusinessModules } from "./businessModuleLibrary.ts";
+import { listBusinessModules, readBusinessKnowledgeAsset } from "./businessModuleLibrary.ts";
 import {
   materializeBusinessModuleKnowledge,
   copyBusinessModuleSnapshots,
@@ -300,6 +300,15 @@ import {
   saveSkillCandidate,
   type SkillCandidateRecord,
 } from "./skillDistiller.ts";
+import { readHostSkillDocument, scanForSecrets } from "./hostSkillLibrary.ts";
+import {
+  EXTRACTION_TIMEOUT_MS,
+  buildExtractionMission,
+  parseExtractionDraft,
+  persistExtractionJob,
+  readExtractionJob,
+  type ExtractionJobRecord,
+} from "./knowledgeExtraction.ts";
 
 /** 货架条目在读侧的完整形态:资产事实+效果账+待裁决候选数。 */
 export type DecoratedHostSkillShelf = HostSkillShelf & {
@@ -1477,6 +1486,10 @@ interface TaskState {
   /** 开发助手交还给重建主会话的一次性现场摘要。它不是内核证据；
    * 必须持久化，避免服务死在 resume→launch 之间把用户改动上下文丢掉。 */
   pendingAssistantHandoff?: string;
+  /** 等人决定期间通过 @ 引用注入的知识正文(版本已在发送时固定)。
+   * 随下一次决定的 notes 一并送达 Agent;必须持久化,否则重启会把
+   * 人已经"说过"的引用悄悄吞掉。 */
+  pendingDecisionKnowledge?: string[];
   /** 交付失败日志聚合:同一指纹只全文记一次,其后按计数聚合
    * (MFC-020:同文 MR-400 曾刷 86 条)。进程内即可,不持久化。 */
   deliveryFailureLog?: { fingerprint: string; count: number };
@@ -2492,6 +2505,255 @@ export class TaskService {
     }
   }
   private distillActive = false;
+
+  // ---- 定向知识提取(知识库侧旁路,不建任务、不碰交付链) ----
+
+  private extractionJobs = new Map<string, ExtractionJobRecord>();
+  private extractionActive = false;
+
+  private extractionRoot(id: string): string {
+    return join(this.options.dataDir, "knowledge-extract", id);
+  }
+
+  /** 发起一次定向提取:同一时刻只跑一单(控成本),会话带硬预算。 */
+  startSkillExtraction(input: {
+    repo: string;
+    intent: string;
+    pathHint?: string;
+    operator: string;
+  }): ExtractionJobRecord {
+    const repo = input.repo.trim();
+    const intent = input.intent.trim();
+    const pathHint = input.pathHint?.trim() || undefined;
+    if (!repo || /[\0\r\n\s]/.test(repo) || repo.length > 500) {
+      throw new TaskControlError("请填写合法的参考仓地址(不含空白字符)");
+    }
+    if (!intent || intent.length > 500) {
+      throw new TaskControlError("请用一句话写清楚要提取什么(500 字内)");
+    }
+    if (pathHint && (pathHint.startsWith("/") || pathHint.includes(".."))) {
+      throw new TaskControlError("路径提示只接受仓内相对路径");
+    }
+    if (this.extractionActive) {
+      throw new TaskControlError("已有一次提取在进行中,请稍候再试");
+    }
+    if (!this.activeModelChoice()) {
+      throw new TaskControlError("模型网关未配置,无法提取(管理页 → 模型网关)");
+    }
+    const id = `ke-${Date.now().toString(36)}-${
+      Math.random().toString(36).slice(2, 8)}`;
+    const record: ExtractionJobRecord = {
+      id,
+      status: "running",
+      repo,
+      intent,
+      ...(pathHint ? { path_hint: pathHint } : {}),
+      operator: input.operator,
+      started_at: new Date().toISOString(),
+    };
+    this.extractionJobs.set(id, record);
+    this.extractionActive = true;
+    persistExtractionJob(this.extractionRoot(id), record, this.options.log);
+    this.bypass(undefined, "定向知识提取",
+      this.runSkillExtraction(record).finally(() => {
+        this.extractionActive = false;
+      }));
+    return { ...record };
+  }
+
+  skillExtractionJob(id: string): ExtractionJobRecord | undefined {
+    const live = this.extractionJobs.get(id);
+    if (live) return { ...live };
+    if (!/^[a-z0-9-]{1,64}$/.test(id)) return undefined;
+    const stored = readExtractionJob(this.extractionRoot(id));
+    if (stored?.status === "running") {
+      // 服务重启把跑一半的 job 带走了:如实报中断,不装完成不装原因。
+      return {
+        ...stored,
+        status: "failed",
+        error: "服务重启中断了这次提取,请重新发起",
+      };
+    }
+    return stored;
+  }
+
+  private async runSkillExtraction(record: ExtractionJobRecord): Promise<void> {
+    const root = this.extractionRoot(record.id);
+    const finish = (patch: Partial<ExtractionJobRecord>) => {
+      Object.assign(record, patch,
+        { finished_at: new Date().toISOString() });
+      this.extractionJobs.set(record.id, { ...record });
+      persistExtractionJob(root, record, this.options.log);
+    };
+    let container: TaskContainer | undefined;
+    try {
+      mkdirSync(root, { recursive: true });
+      // 只读克隆:凭据用发起人自己的(没权限当场报),pushurl 毒化由
+      // cloneRepo 的 readonly 分支负责——禁令不能只写在提示词里。
+      const identity = this.options.gitCredential?.(record.operator);
+      const prepared = identity
+        ? this.prepareHostGitSandbox(identity) : undefined;
+      let cloneDir: string;
+      try {
+        cloneDir = await this.cloneRepo(
+          root, prepared, identity, record.repo, undefined, "source", true);
+      } catch (error) {
+        finish({
+          status: "failed",
+          error: `参考仓克隆失败(地址不可达或无权限):${String(
+            error instanceof Error ? error.message : error).slice(0, 300)}`,
+        });
+        return;
+      } finally {
+        this.cleanupHostGitCredential(prepared);
+      }
+      const agentDir = join(root, "pi-agent");
+      mkdirSync(agentDir, { recursive: true });
+      this.hardenAgentGitBoundary(agentDir, cloneDir);
+      const modelOverride = this.options.settings?.models() ?? {};
+      writeFileSync(join(agentDir, "models.json"),
+        JSON.stringify(modelOverride.json ?? this.options.modelsJson));
+      // 隔离模式:提取会话与任务同纪律,Bash 进专属容器(role 已入
+      // 清扫白名单,kill -9 后启动清扫认得它)。
+      if (this.options.isolation) {
+        const isolation = this.options.isolation;
+        const instance = taskContainerInstance(this.options.dataDir);
+        container = new TaskContainer(
+          isolation.image,
+          root,
+          `mfc-${instance.namePrefix}-${record.id}`,
+          (message) => this.options.log?.(
+            `[knowledge-extract-container] ${message}`),
+          isolation.volumes,
+          {
+            memory: isolation.memory,
+            cpus: isolation.cpus,
+            pidsLimit: isolation.pidsLimit,
+            user: isolation.user,
+          },
+          {
+            network: isolation.network,
+            labels: {
+              "com.mae-flow-cloud.instance": instance.fingerprint,
+              "com.mae-flow-cloud.role": "knowledge-extract",
+              "com.mae-flow-cloud.task": record.id,
+            },
+          },
+        );
+        prepareContainerHostPaths({
+          workspace: root,
+          volumes: isolation.volumes ?? [],
+          user: isolation.user,
+          markerRoot: join(this.options.dataDir, ".container-ownership"),
+        });
+        await container.start();
+      }
+      const active = this.activeModelChoice()!;
+      const driver = await CloudSession.create({
+        taskId: `knowledge-extract:${record.id}`,
+        workspace: cloneDir,
+        agentDir,
+        provider: active.provider,
+        model: active.model,
+        eventLog: new EventLog(join(root, "events.jsonl")),
+        transcript: new TranscriptStore(
+          join(root, "transcript.jsonl"), "main"),
+        // 边界=提取目录(克隆在其内);产物走最终回复,不落工作区文件,
+        // 会话对仓的任何写入都是越界。
+        gate: new GateService({
+          workspace: cloneDir,
+          cwd: cloneDir,
+          failClosed: Boolean(this.options.host),
+          log: this.options.log,
+        }),
+        humanGate: new HumanGate(join(root, "waiting.json")),
+        allowHumanQuestions: false,
+        allowSubagents: false,
+        sessionId: "knowledge-extract",
+        currentStep: () => "定向知识提取",
+        compactAnchor: () => `定向知识提取:${record.intent.slice(0, 60)}`,
+        ...(container
+          ? {
+              bashOperations: {
+                exec: (command, dir, execOptions) =>
+                  container!.exec(command, dir, execOptions),
+              },
+            }
+          : {}),
+        log: this.options.log,
+      });
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        void driver.abort().catch(() => undefined);
+      }, EXTRACTION_TIMEOUT_MS);
+      timer.unref?.();
+      try {
+        let outcome = await driver.start(buildExtractionMission({
+          repoLabel: record.repo,
+          intent: record.intent,
+          pathHint: record.path_hint,
+          timeoutMinutes: Math.round(EXTRACTION_TIMEOUT_MS / 60_000),
+        }));
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          if (timedOut) {
+            finish({
+              status: "failed",
+              error: `提取超过 ${Math.round(EXTRACTION_TIMEOUT_MS / 60_000)} `
+                + "分钟预算,已安全停止;可换更具体的意图或路径提示重试",
+            });
+            return;
+          }
+          if (outcome.status === "session_ended") {
+            finish({
+              status: "failed",
+              error: outcome.detail ?? "提取会话异常结束",
+            });
+            return;
+          }
+          const parsed = parseExtractionDraft(driver.finalReply());
+          if (parsed) {
+            try {
+              // 草稿也要过密钥扫描:参考仓的配置样例里完全可能躺着
+              // 真实令牌,上架闸兜底之前先在源头拒掉。
+              scanForSecrets("SKILL.md(提取草稿)",
+                Buffer.from(parsed.draft, "utf-8"));
+            } catch (error) {
+              finish({
+                status: "failed",
+                error: `草稿含敏感值,已整份作废:${String(
+                  error instanceof Error ? error.message : error)
+                  .slice(0, 200)}`,
+              });
+              return;
+            }
+            finish({ status: "done", draft: parsed.draft,
+              notes: parsed.notes });
+            return;
+          }
+          // 格式缺失给补交机会(最多两次),与预热同款,不把整轮判死;
+          // 最后一轮不再补交——发出去的提醒必须有人读它的回答。
+          if (attempt === 2) break;
+          outcome = await driver.continueWith(
+            "产出格式不对:请只输出 ===SKILL=== 与 ===NOTES=== 结构,"
+            + "重新给出完整草稿,不要输出其他文字。");
+        }
+        finish({ status: "failed",
+          error: "提取会话多次提醒后仍未按格式产出草稿,请重试" });
+      } finally {
+        clearTimeout(timer);
+        driver.dispose();
+      }
+    } catch (error) {
+      finish({
+        status: "failed",
+        error: String(error instanceof Error ? error.message : error)
+          .slice(0, 300),
+      });
+    } finally {
+      if (container) await container.stop().catch(() => undefined);
+    }
+  }
 
   get(id: string): TaskSummary | undefined {
     const task = this.tasks.get(id);
@@ -5755,6 +6017,7 @@ export class TaskService {
         mission: task.mission,
         assistant_handoff: task.pendingAssistantHandoff,
         pending_main_steers: task.pendingMainSteers,
+        pending_decision_knowledge: task.pendingDecisionKnowledge,
         applied_developer_intervention_id:
           task.appliedDeveloperInterventionId,
         obsolete_developer_waiting: task.obsoleteDeveloperWaiting,
@@ -5953,6 +6216,10 @@ export class TaskService {
               ? saved.assistant_handoff : undefined,
           pendingMainSteers: Array.isArray(saved.pending_main_steers)
             ? saved.pending_main_steers.map(String).filter(Boolean) : undefined,
+          pendingDecisionKnowledge:
+            Array.isArray(saved.pending_decision_knowledge)
+              ? saved.pending_decision_knowledge.map(String).filter(Boolean)
+              : undefined,
           assistantEpoch: 0,
           appliedDeveloperInterventionId:
             typeof saved.applied_developer_intervention_id === "string"
@@ -8412,6 +8679,8 @@ export class TaskService {
         : undefined,
       deliverySelection?.note,
       picked.length ? renderAnnotations(picked, this.ticketOf(task)) : undefined,
+      // 等待期间 @ 引用的知识随本次决定送达(版本在引用时已固定)。
+      ...(task.pendingDecisionKnowledge ?? []),
     ].filter(Boolean).join("\n\n") || undefined;
     const resolved = task.humanGate.resolve(waiting.waiting_id, {
       stateVersion: input.state_version,
@@ -8427,6 +8696,8 @@ export class TaskService {
           ? { annotation_ids: picked.map((item) => item.id) } : {}),
       },
     });
+    // 引用已随本次决定送达;不清会在下一张决定卡重复注入同一份正文。
+    task.pendingDecisionKnowledge = undefined;
     if (deliverySelection) {
       task.summary.delivery_selection = deliverySelection.record;
     }
@@ -8510,32 +8781,147 @@ export class TaskService {
    *   由 settle 在回合收口时取回来补发。人说过的话被系统吞掉,比慢
    *   一拍严重得多。
    */
+  /** @ 引用单次注入预算:引用是"把正文塞进对话",不是挂载;超了要
+   * 人拆小资产或减少项数,静默截断等于让人以为 Agent 读了全文。 */
+  private static readonly STEER_KNOWLEDGE_BUDGET = 48_000;
+
+  /** 解析 @ 引用并在**发送时固定版本**:插话说"用 X",指的是此刻
+   * 货架上的 X,不是未来某个版本。解析失败当场报错,不静默丢项。 */
+  private resolveSteerKnowledge(
+    references: SteerKnowledgeReference[],
+  ): { text: string; footprints: KnowledgeResourceRef[]; labels: string[] } {
+    if (references.length > 4) {
+      throw new TaskControlError("一次插话最多引用 4 项知识,请分批");
+    }
+    const dataDir = this.options.dataDir;
+    const sections: string[] = [];
+    const footprints: KnowledgeResourceRef[] = [];
+    const labels: string[] = [];
+    for (const reference of references) {
+      if (reference.kind === "skill") {
+        const doc = readHostSkillDocument(
+          dataDir, String(reference.directory ?? ""));
+        const version = doc.digest.slice(0, 8);
+        labels.push(`${doc.directory}@${version}`);
+        sections.push(`【团队 Skill · ${doc.directory}@${version}】\n`
+          + doc.content.trim());
+        footprints.push({
+          id: `steer:skill:${doc.directory}@${version}`,
+          kind: "skill",
+          name: doc.directory,
+          path: doc.path,
+          digest: doc.digest,
+          scope: "team",
+          description: "插话 @ 引用注入(中途指定)",
+        });
+      } else if (reference.kind === "business") {
+        const doc = readBusinessKnowledgeAsset(dataDir,
+          String(reference.module_id ?? ""), String(reference.asset_id ?? ""));
+        const label = `${doc.asset.title}@v${doc.asset.version}`;
+        labels.push(label);
+        sections.push(`【业务知识 · ${doc.module_name} / ${label}】\n`
+          + doc.content.trim());
+        footprints.push({
+          id: `steer:module:${doc.module_id}:${doc.asset.id}`
+            + `:v${doc.asset.version}`,
+          kind: doc.asset.form === "skill" ? "skill" : "document",
+          name: doc.asset.title,
+          path: `business-modules/${doc.module_id}/${doc.asset.id}`,
+          digest: doc.asset.digest,
+          scope: "module",
+          module_id: doc.module_id,
+          module_name: doc.module_name,
+          asset_version: doc.asset.version,
+          description: "插话 @ 引用注入(中途指定)",
+        });
+      } else {
+        throw new TaskControlError("未知的知识引用类型");
+      }
+    }
+    const text = sections.join("\n\n");
+    if (text.length > TaskService.STEER_KNOWLEDGE_BUDGET) {
+      throw new TaskControlError(`引用的知识合计 ${text.length} 字,超出单次`
+        + `注入预算 ${TaskService.STEER_KNOWLEDGE_BUDGET} 字;`
+        + "请减少引用项或把大资产拆小");
+    }
+    return { text, footprints, labels };
+  }
+
+  /** 中途引用进足迹:观测旁路,失败只记日志绝不拦插话。 */
+  private recordSteerKnowledge(
+    task: TaskState,
+    footprints: KnowledgeResourceRef[],
+  ): void {
+    try {
+      const trace = this.knowledgeTrace(
+        task, task.cwd ?? task.summary.workspace);
+      for (const resource of footprints) {
+        trace.record("loaded", "steer-reference", resource);
+      }
+    } catch (error) {
+      this.options.log?.(
+        `任务 ${task.summary.id} 中途引用足迹写入失败(不拦插话): ${
+          String(error)}`);
+    }
+  }
+
   async interrupt(
     id: string,
     text: string,
     actor?: string,
+    references?: SteerKnowledgeReference[],
   ): Promise<TaskSummary> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     const message = text.trim();
-    if (!message) throw new NotFoundError("插话内容不能为空");
-    if (task.summary.status === "waiting_for_human") {
-      throw new TaskControlError("这一单正等你的决定,请在决定卡里回答");
+    if (!message && !references?.length) {
+      throw new NotFoundError("插话内容不能为空");
     }
-    if (task.summary.status !== "running" || !task.driver) {
-      throw new TaskControlError(
-        `任务 ${id} 当前是 ${task.summary.status},没有在跑的会话可插话`);
-    }
+    // @ 引用在发送时解析并固定版本;解析不动当场报错,别让人以为送到了。
+    const resolved = references?.length
+      ? this.resolveSteerKnowledge(references) : undefined;
+    const knowledgeBlock = resolved
+      ? `[中途引用知识] 以下 ${resolved.labels.length} 项由人在插话中显式`
+        + "指定(版本已在发送时固定),请阅读并应用到当前工作:\n\n"
+        + resolved.text
+      : undefined;
+    const combined = [message, knowledgeBlock].filter(Boolean).join("\n\n");
     // 前缀只标"谁在说话",不标"什么场景":这里是普通插话通道,单仓
     // 任务也走它。曾经无条件写"[跨仓协作 · x]",单仓插话被模型当成
     // 跨仓消息记进了交付件(spec 里出现"用户跨仓消息补充",MFC-021)。
     // 真正的跨仓同步走 /cross-repository-update,自带跨仓抬头。
     const delivered = actor
       ? (actor === task.summary.luban_account
-          ? `[责任人 ${actor} 插话] ${message}`
-          : `[协作者 ${actor} 插话] ${message}`)
-      : message;
+          ? `[责任人 ${actor} 插话] ${combined}`
+          : `[协作者 ${actor} 插话] ${combined}`)
+      : combined;
+    if (task.summary.status === "waiting_for_human") {
+      if (!resolved) {
+        throw new TaskControlError("这一单正等你的决定,请在决定卡里回答");
+      }
+      // 决定窗口不开插话通道(同一件事不能有两个入口),但引用的知识
+      // 版本已固定,压进决定的 continuation,决定提交时一并送达。
+      task.pendingDecisionKnowledge = [
+        ...(task.pendingDecisionKnowledge ?? []), delivered];
+      this.recordSteerKnowledge(task, resolved.footprints);
+      this.persist(task);
+      this.options.log?.(`任务 ${id} 引用了 ${resolved.labels.join("、")}`
+        + ",将随下一次决定送达");
+      return { ...task.summary };
+    }
+    if (task.summary.status === "queued" && task.mission && resolved) {
+      // 还没拿到并发槽:引用并进同一份持久使命,不多起会话。
+      task.mission += `\n\n${delivered}`;
+      this.recordSteerKnowledge(task, resolved.footprints);
+      this.persist(task);
+      return { ...task.summary };
+    }
+    if (task.summary.status !== "running" || !task.driver) {
+      throw new TaskControlError(
+        `任务 ${id} 当前是 ${task.summary.status},没有在跑的会话可插话`);
+    }
     await task.driver.steer(delivered);
+    if (resolved) this.recordSteerKnowledge(task, resolved.footprints);
     this.options.log?.(`任务 ${id} 已插话(本轮工具调用结束后送达)`);
     return { ...task.summary };
   }
@@ -16389,3 +16775,13 @@ export class TaskService {
 
 export class NotFoundError extends Error {}
 export class TaskControlError extends Error {}
+
+/** 插话里的 @ 知识引用(前端只传结构化标识,内容由服务端解析注入)。 */
+export interface SteerKnowledgeReference {
+  kind: "skill" | "business";
+  /** kind=skill:团队 Skill 目录名。 */
+  directory?: string;
+  /** kind=business:业务模块与资产标识。 */
+  module_id?: string;
+  asset_id?: string;
+}

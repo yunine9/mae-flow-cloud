@@ -7,6 +7,7 @@ import {
   getBusinessModules,
   getSkillCandidate,
   getSkillDocument,
+  getSkillExtraction,
   getSkillLibrary,
   listSkillCandidates,
   listSkillSubmissions,
@@ -17,6 +18,7 @@ import {
   rejectKnowledgeCandidate,
   rejectSkillSubmission,
   rollbackSkill,
+  startSkillExtraction,
   submitSkill,
   updateSkillKnowledgeMetadata,
   uploadSkill,
@@ -27,6 +29,7 @@ import {
   type KnowledgeKind,
   type KnowledgeCandidateRecord,
   type SkillCandidateRecord,
+  type SkillExtractionJob,
   type SkillOperationRecord,
   type SkillSubmissionRecord,
   type SkillKnowledgeMetadataInput,
@@ -174,6 +177,14 @@ async function encodeUpload(list: FileList): Promise<{
   return { files, folder, skipped };
 }
 
+/** 草稿是编辑框里的 UTF-8 文本,走与目录上传同一条 base64 通道。 */
+function encodeText(text: string): string {
+  const bytes = new TextEncoder().encode(text);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
 function directoryOf(skill: { path: string }): string | undefined {
   const segments = skill.path.split("/");
   return segments.length > 1 ? segments[0] : undefined;
@@ -249,6 +260,15 @@ function SkillLibraryPanel({ fallback, admin, initialAsset }: {
   const updateMetadataRef =
     useRef<SkillKnowledgeMetadataInput | undefined>(undefined);
   const documentRequest = useRef(0);
+  // 定向提取(2026-09-01 拍板):没有现成技能包时,从参考仓起草。
+  const [extractOpen, setExtractOpen] = useState(false);
+  const [extractRepo, setExtractRepo] = useState("");
+  const [extractIntent, setExtractIntent] = useState("");
+  const [extractHint, setExtractHint] = useState("");
+  const [extractJob, setExtractJob] = useState<SkillExtractionJob>();
+  const [extractBusy, setExtractBusy] = useState(false);
+  const [extractError, setExtractError] = useState("");
+  const [draftText, setDraftText] = useState("");
 
   const refresh = () => Promise.all([
     getSkillLibrary()
@@ -260,6 +280,30 @@ function SkillLibraryPanel({ fallback, admin, initialAsset }: {
       .catch(() => undefined),
   ]);
   useEffect(() => { void refresh(); }, []);
+
+  const extractJobId = extractJob?.status === "running"
+    ? extractJob.id : undefined;
+  useEffect(() => {
+    if (!extractJobId) return;
+    let alive = true;
+    const timer = setInterval(() => {
+      void getSkillExtraction(extractJobId).then((job) => {
+        if (!alive) return;
+        setExtractJob(job);
+        if (job.status === "done" && job.draft) {
+          setDraftText(job.draft);
+          // 目录名从草稿 frontmatter 带出,空着才填——不覆盖人手输。
+          const name = /name:\s*([a-z0-9][a-z0-9-]*)/.exec(job.draft)?.[1];
+          if (name) setUploadName((prev) => prev || name);
+        }
+      }).catch((cause) => {
+        // 轮询失败不终结 job(可能只是网络抖),下一轮接着问。
+        if (alive) setExtractError(String(
+          cause instanceof Error ? cause.message : cause));
+      });
+    }, 3000);
+    return () => { alive = false; clearInterval(timer); };
+  }, [extractJobId]);
 
   const shelf: HostSkillShelf | undefined = library ?? fallback;
   const operations = library?.operations ?? [];
@@ -349,6 +393,36 @@ function SkillLibraryPanel({ fallback, admin, initialAsset }: {
     setPending({ files: encoded.files, skipped: encoded.skipped });
     if (!uploadName && encoded.folder) setUploadName(encoded.folder);
   };
+
+  const startExtraction = async () => {
+    setExtractBusy(true); setExtractError(""); setDraftText("");
+    try {
+      setExtractJob(await startSkillExtraction({
+        repo: extractRepo.trim(),
+        intent: extractIntent.trim(),
+        pathHint: extractHint.trim() || undefined,
+      }));
+    } catch (cause) {
+      setExtractError(String(cause instanceof Error ? cause.message : cause));
+    } finally {
+      setExtractBusy(false);
+    }
+  };
+
+  const submitDraft = () => void run(async () => {
+    const metadata = skillMetadataInput(uploadClassification);
+    if (!metadata) return;
+    const files: SkillUploadFile[] = [
+      { path: "SKILL.md", content_base64: encodeText(draftText) }];
+    if (admin) {
+      await uploadSkill(uploadName, files, metadata);
+    } else {
+      const record = await submitSkill(uploadName, files, metadata);
+      setSubmitNote(`已提交待审(${record.directory}/${record.id})。`
+        + "管理员审核通过后即上架生效。");
+    }
+    setDraftText(""); setExtractJob(undefined); setUploadOpen(false);
+  });
 
   const languageCounts = useMemo(() => {
     const counts = new Map<string, number>();
@@ -468,6 +542,59 @@ function SkillLibraryPanel({ fallback, admin, initialAsset }: {
       <input ref={newInputRef} type="file" multiple hidden
         {...({ webkitdirectory: "" } as object)}
         onChange={(event) => { void pickFiles(event.target.files); event.target.value = ""; }} />
+
+      {/* 定向提取:同事说"参考那个仓的做法"时,把这句话变成草稿。
+          目录名/知识属性沿用上方输入;草稿人工修订后走同一道闸。 */}
+      <div className="knowledge-candidate-form" aria-label="从代码仓提取草稿">
+        <button type="button" className="knowledge-shelf-action"
+          onClick={() => setExtractOpen((open) => !open)}>
+          {extractOpen ? "收起提取" : "没有现成技能包?从参考代码仓提取草稿"}
+        </button>
+        {extractOpen && <>
+          <p>填参考仓与一句话意图,平台起一个<strong>只读</strong>分析会话读仓起草 SKILL.md(预算 10 分钟);草稿回填到下方编辑框,人工修订后与普通{admin ? "上架" : "提交"}走同一道验收闸。克隆用你自己的 git 凭据——你没权限的仓,平台也不替你看。</p>
+          <label><span>参考仓地址(必填)</span>
+            <input type="text" value={extractRepo}
+              placeholder="git@… 或 https://…"
+              onChange={(event) => setExtractRepo(event.target.value)} /></label>
+          <label><span>提取意图(必填,一句话说清要学什么)</span>
+            <input type="text" value={extractIntent}
+              placeholder="如:他们的重试与限流是怎么实现的"
+              onChange={(event) => setExtractIntent(event.target.value)} /></label>
+          <label><span>路径提示(可选,仓内相对路径,只是起点)</span>
+            <input type="text" value={extractHint}
+              placeholder="如:src/main/java/…/retry"
+              onChange={(event) => setExtractHint(event.target.value)} /></label>
+          <div className="knowledge-shelf-upload-row">
+            <button type="button" className="knowledge-shelf-action primary"
+              disabled={extractBusy || extractJob?.status === "running"
+                || !extractRepo.trim() || !extractIntent.trim()}
+              onClick={() => void startExtraction()}>
+              {extractJob?.status === "running" ? "提取中…" : "开始提取"}
+            </button>
+            {extractJob?.status === "running"
+              && <small>只读会话正在读仓起草;完成后草稿出现在下方,可离开本页稍后再来。</small>}
+          </div>
+          {extractError && <div className="knowledge-shelf-error" role="alert">{extractError}</div>}
+          {extractJob?.status === "failed" && <div className="knowledge-shelf-error" role="alert">提取失败:{extractJob.error ?? "未知原因"}</div>}
+          {extractJob?.status === "done" && <>
+            <label><span>草稿(可编辑;{admin ? "上架" : "提交"}前请抽查论断与文件出处)</span>
+              <textarea className="business-asset-content" rows={16}
+                value={draftText}
+                onChange={(event) => setDraftText(event.target.value)} /></label>
+            {extractJob.notes && <small>提取会话自述:{extractJob.notes}</small>}
+            <div className="knowledge-shelf-upload-row">
+              <button type="button" className="knowledge-shelf-action primary"
+                disabled={busy || !uploadName || !draftText.trim()
+                  || !skillMetadataInput(uploadClassification)}
+                onClick={submitDraft}>
+                {busy ? (admin ? "上架中" : "提交中")
+                  : `用草稿${admin ? "上架" : "提交审核"}`}
+              </button>
+              <small>目录名与知识属性用本面板上方的输入。</small>
+            </div>
+          </>}
+        </>}
+      </div>
     </div>}
 
     {submissions.length > 0 && (
