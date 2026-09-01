@@ -75,7 +75,10 @@ function hasLocatedDefect(value: unknown): boolean {
   const line = entries.find(([key, current]) =>
     /^(?:line|line_?(?:no|num|number)|lineno|linenum|start_?line|new_?line)$/i
       .test(key)
-      && Number.isFinite(Number(current)) && Number(current) > 0);
+      // CodeCheck 用 0 表示整文件/MR 级规则，不是“缺少定位”。负数才是
+      // 非法值；同时仍要求 file + diagnosis，避免 defectCount=0 之类的
+      // 汇总字段冒充可修证据。
+      && Number.isFinite(Number(current)) && Number(current) >= 0);
   const diagnosis = entries.find(([key, current]) =>
     /^(?:message|msg|description|detail|rule|rule_?(?:id|name)|indicator_?name|checker_?name|error)$/i
       .test(key) && meaningful(String(current ?? "")));
@@ -189,8 +192,9 @@ export function assessPipelineRepairEvidence(input: {
     if (check.status !== "failed" || !check.details?.length) continue;
     if (check.dimension === "CODECHECK") {
       if (check.details.some((detail) =>
-        !!detail.file && !!detail.line && meaningful(detail.message))) {
-        addSource(sources, "CODECHECK", "status checks 的文件/行号缺陷明细");
+        !!detail.file && detail.line !== undefined
+        && detail.line >= 0 && meaningful(detail.message))) {
+        addSource(sources, "CODECHECK", "status checks 的文件/范围缺陷明细");
       }
       continue;
     }

@@ -58,6 +58,12 @@ test("checks 粒度:stage/tool/details 宽进,畸形明细丢弃不整包作废"
   assert.equal(checks![0].tool, "CodeCCP");
   assert.equal(checks![0].details?.length, 2);
   assert.equal(checks![0].details?.[0].line, 42);
+  const mrLevel = parsePipelineChecks([{
+    dimension: "CODECHECK", status: "failed",
+    details: [{ file: "src/a.cpp", line: 0, message: "MR 级规则命中" }],
+  }]);
+  assert.equal(mrLevel?.[0].details?.[0].line, 0,
+    "line=0 是整文件/MR 级定位，契约层不能丢掉");
   // 核心字段仍然严格:dimension 认不出=整包作废(核销不许猜)。
   assert.equal(parsePipelineChecks([
     { dimension: "LINT", status: "failed" }]), undefined);

@@ -365,6 +365,88 @@ test("启动清扫只删除完整 dataDir ownership 匹配且逐项复验通过�
   assert.match(logs.join("\n"), /phase=removed/);
 });
 
+test("启动清扫迁移删除旧版无三标签 issue 容器，但必须精确核对工作区", async () => {
+  const dataDir = workspace();
+  const issuesRoot = join(dataDir, "issues");
+  const instance = taskContainerInstance(dataDir);
+  const id = "9".repeat(64);
+  const name = `mfc-${instance.namePrefix}-issue-30`;
+  const issueRoot = join(issuesRoot, "issue-30");
+  let exists = true;
+  const destructive: string[][] = [];
+  const runner: DockerRunner = {
+    command: async (args) => {
+      if (args[0] === "ps") {
+        return args.includes(
+          `label=com.mae-flow-cloud.instance=${instance.fingerprint}`)
+          ? "" : id;
+      }
+      if (args[0] === "inspect") {
+        if (!exists) throw missing(args);
+        return JSON.stringify([{
+          Id: id, Name: `/${name}`, Image: `sha256:${"8".repeat(64)}`,
+          Config: { Labels: {
+            "com.mae-flow-cloud.managed": "true",
+            "com.mae-flow-cloud.container": name,
+          } },
+          Mounts: [{
+            Source: issueRoot, Destination: issueRoot, Type: "bind", RW: true,
+          }],
+        }]);
+      }
+      if (args[0] === "stop") {
+        destructive.push([...args]);
+        exists = false;
+        return id;
+      }
+      throw new Error(`unexpected docker ${args.join(" ")}`);
+    },
+    stream: () => { throw new Error("unused"); },
+  };
+  const result = await sweepManagedTaskContainers({
+    instanceFingerprint: instance.fingerprint,
+    namePrefix: instance.namePrefix,
+    legacyIssueRoot: issuesRoot,
+    runner,
+  });
+  assert.deepEqual(result.removed, [name]);
+  assert.equal(destructive.length, 1);
+
+  exists = true;
+  destructive.length = 0;
+  const wrongMountRunner: DockerRunner = {
+    ...runner,
+    command: async (args) => {
+      if (args[0] === "ps") {
+        return args.includes(
+          `label=com.mae-flow-cloud.instance=${instance.fingerprint}`)
+          ? "" : id;
+      }
+      if (args[0] === "inspect") return JSON.stringify([{
+        Id: id, Name: `/${name}`,
+        Config: { Labels: {
+          "com.mae-flow-cloud.managed": "true",
+          "com.mae-flow-cloud.container": name,
+        } },
+        Mounts: [{
+          Source: join(dataDir, "someone-else"), Destination: issueRoot,
+          Type: "bind", RW: true,
+        }],
+      }]);
+      destructive.push([...args]);
+      return "";
+    },
+  };
+  await assert.rejects(sweepManagedTaskContainers({
+    instanceFingerprint: instance.fingerprint,
+    namePrefix: instance.namePrefix,
+    legacyIssueRoot: issuesRoot,
+    runner: wrongMountRunner,
+  }), /ownership 复验失败/);
+  assert.equal(destructive.length, 0,
+    "只像旧 issue、但工作区不匹配的容器不能删除");
+});
+
 test("清扫命中 filter 但 ownership 复验失败时 fail-closed", async () => {
   const instance = taskContainerInstance(workspace());
   const id = "f".repeat(64);

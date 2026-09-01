@@ -121,7 +121,7 @@ test("取消后重跑同单:新会话新目录全新克隆,远端遗留同名分
       ["-C", repoA, "push", "-q", origin, `HEAD:refs/heads/${BRANCH}`],
       { env: GIT_ENV });
 
-    service.control(first.id, { action: "cancel" });
+    await service.control(first.id, { action: "cancel" });
     assert.equal(service.get(first.id).status, "canceled");
 
     // 取消是终态,单号查重放行:同账号新会话必须开新目录。

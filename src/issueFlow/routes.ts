@@ -671,7 +671,7 @@ export async function handleIssueRoutes(
         .includes(String(body.kind))
         ? String(body.kind) as "non_issue" | "fixed" | "delivered"
           | "issue" | "converted" : undefined;
-      return done(200, issueFlow.control(id, {
+      return done(200, await issueFlow.control(id, {
         action: body.action === "cancel" ? "cancel" : "archive",
         ...(kind ? { kind } : {}),
         ...(body.summary !== undefined

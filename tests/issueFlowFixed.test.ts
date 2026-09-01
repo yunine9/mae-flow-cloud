@@ -391,7 +391,7 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     assert.equal(passed.pipelines?.[origin]?.status, "success");
 
     // ⑥ 手动归档:有 MR 记录,结论=已交付。
-    const archived = service.control(created.id, { action: "archive" });
+    const archived = await service.control(created.id, { action: "archive" });
     assert.equal(archived.status, "archived");
     assert.equal(archived.conclusion?.kind, "delivered");
     assert.equal(archived.stage, "deploy_verify", "归档不改写固定流程阶段词表");
@@ -454,7 +454,7 @@ test("固定流程无单闭环:结论是问题→挂起;结论非问题→直接
     // 挂起不可续聊,只能关联转正或归档。
     assert.throws(() => service.reply(created.id, "继续"), /挂起中/);
     // 归档保留报告,结论=问题成立。
-    const archived = service.control(created.id, { action: "archive" });
+    const archived = await service.control(created.id, { action: "archive" });
     assert.equal(archived.conclusion?.kind, "issue");
     assert.equal(archived.status, "archived");
     assert.ok(existsSync(join(dataDir, "issues", created.id, "issue-analysis.md")),

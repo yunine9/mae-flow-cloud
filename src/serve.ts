@@ -787,6 +787,9 @@ async function main(): Promise<void> {
     : undefined;
   const issueFlow = new IssueFlowService({
     dataDir, provider, model, modelsJson, settings,
+    // 必须等统一容器清扫完成后再恢复并点火；否则构造期恢复出的新 issue
+    // 容器可能被紧随其后的“上次进程孤儿清扫”误杀。
+    deferRecovery: true,
     // 探索方式烙印(个人设置,缺省固定流程):create 时读一次烙进会话。
     issueFlowMode: (account) => auth.issueFlowMode(account),
     // 月光免审批(人工介入程度的过程轴,现读现判):分析结论闸代答。
@@ -924,13 +927,15 @@ async function main(): Promise<void> {
       + platformCheck.detail
       + (platformCheck.suggestion ? `；${platformCheck.suggestion}` : ""));
   }
-  // 先清理本 dataDir 实例上次崩溃遗留的 coding/prepush/system-check
-  // 容器，再恢复任务。顺序不能反：recover 一旦入队就可能撞上旧容器。
+  // 先清理本 dataDir 实例上次崩溃遗留的 coding/prepush/system-check/
+  // issue 容器，再恢复两类任务。顺序不能反：recover 一旦入队就可能
+  // 启动新容器，随后清扫会把新旧现场混在一起。
   const swept = await service.sweepOrphanContainers();
   if (swept.removed.length) {
     console.log(`[serve] 已清理遗留任务容器 ${swept.removed.length} 个: `
       + swept.removed.join(", "));
   }
+  issueFlow.start();
   // 进程可死任务不死:重启后重建索引,在跑的任务续跑,等人的继续等。
   const recovered = service.recover();
   if (recovered.restored) {
