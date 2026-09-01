@@ -2010,19 +2010,25 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 .ws-parent-task span { font-size: 11px; font-weight: 700; }
 .ws-parent-task strong { max-width: 260px; overflow: hidden; color: var(--text-strong); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .ws-parent-task code { color: var(--accent); font-size: 10.5px; }
-.cross-repository-sync { flex: none; overflow: hidden; border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--line)); border-radius: 11px; background: var(--surface); }
-.cross-repository-sync > header { padding: 11px 13px; display: flex; align-items: end; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--accent-soft) 42%, var(--surface)); }
-.cross-repository-sync > header > div { display: grid; gap: 2px; }
-.cross-repository-sync > header span { color: var(--accent); font: 750 10.5px var(--font-mono); letter-spacing: .12em; }
-.cross-repository-sync > header strong { color: var(--text-strong); font-size: 15px; }
-.cross-repository-sync > header small { color: var(--muted); font-size: 12px; }
-.cross-repository-sync > textarea { width: calc(100% - 24px); min-height: 78px; margin: 12px 12px 8px; padding: 10px 11px; resize: vertical; border: 1px solid var(--line-strong); border-radius: 8px; color: var(--text); background: var(--surface-soft); font: 14px/1.6 var(--font-sans); }
-.cross-repository-sync-actions { padding: 0 12px 11px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.cross-repository-sync { width: min(1080px, 100%); margin: 18px auto 0; flex: none; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: color-mix(in srgb, var(--surface-soft) 72%, var(--surface)); }
+.cross-repository-sync > summary { min-height: 52px; padding: 9px 12px; display: grid; grid-template-columns: minmax(0, 1fr) auto 16px; align-items: center; gap: 12px; color: var(--text); list-style: none; cursor: pointer; }
+.cross-repository-sync > summary::-webkit-details-marker { display: none; }
+.cross-repository-sync > summary > div { display: grid; gap: 2px; }
+.cross-repository-sync > summary span { color: var(--faint); font: 750 10px var(--font-mono); letter-spacing: .12em; }
+.cross-repository-sync > summary strong { color: var(--text-strong); font-size: 14px; }
+.cross-repository-sync > summary small { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
+.cross-repository-sync > summary small b { padding: 2px 7px; color: var(--accent); border-radius: 999px; background: var(--accent-soft); font-size: 11px; }
+.cross-repository-sync > summary > i { width: 8px; height: 8px; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: rotate(45deg); transition: transform 140ms ease; }
+.cross-repository-sync[open] > summary > i { transform: rotate(225deg); }
+.cross-repository-sync-body { padding: 12px; border-top: 1px solid var(--line); background: var(--surface); }
+.cross-repository-sync-body > p { margin: 0 0 10px; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+.cross-repository-sync-body > textarea { width: 100%; min-height: 78px; padding: 10px 11px; resize: vertical; border: 1px solid var(--line-strong); border-radius: 8px; color: var(--text); background: var(--surface-soft); font: 14px/1.6 var(--font-sans); }
+.cross-repository-sync-actions { padding: 8px 0 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .cross-repository-sync-actions span { color: var(--muted); font-size: 12px; line-height: 1.45; }
 .cross-repository-sync-actions button { flex: none; min-height: 34px; padding: 0 12px; border: 0; border-radius: 7px; color: #fff; background: var(--accent); font-weight: 750; cursor: pointer; }
 .cross-repository-sync-actions button:disabled { opacity: .45; cursor: not-allowed; }
-.cross-repository-sync > details, .cross-repository-ledger { border-top: 1px solid var(--line); }
-.cross-repository-sync > details > summary, .cross-repository-ledger > summary { padding: 9px 12px; color: var(--text); font-size: 12.5px; font-weight: 700; cursor: pointer; }
+.cross-repository-sync-history, .cross-repository-ledger { border-top: 1px solid var(--line); }
+.cross-repository-sync-history > summary, .cross-repository-ledger > summary { padding: 9px 12px; color: var(--text); font-size: 12.5px; font-weight: 700; cursor: pointer; }
 .cross-repository-sync summary b, .cross-repository-ledger summary b { margin-left: 4px; color: var(--accent); }
 .cross-repository-sync ol, .cross-repository-ledger ol { max-height: 280px; margin: 0; padding: 0 12px 12px; display: grid; gap: 7px; overflow-y: auto; list-style: none; }
 .cross-repository-sync li, .cross-repository-ledger li { padding: 9px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-soft); }

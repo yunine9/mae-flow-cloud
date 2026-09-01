@@ -1427,16 +1427,16 @@ export function TaskWorkspace({
             <div className="ws-primary-scroll ws-collaboration-view">
               {collaborationVisible ? (
                 <>
-                  {task.parent_task_id && <CrossRepositorySync
-                    taskId={task.id}
-                    updates={task.cross_repository_updates}
-                    onChanged={onChanged} />}
                   <SteerBox task={task}
                     steerOnly={task.requirement_graph?.stage === "analysis"}
                     onChanged={() => {
                     setLivePulse((value) => value + 1);
                     onChanged();
                   }} />
+                  {task.parent_task_id && <CrossRepositorySync
+                    taskId={task.id}
+                    updates={task.cross_repository_updates}
+                    onChanged={onChanged} />}
                 </>
               ) : (
                 <section className="ws-view-empty" aria-label="开发助手状态">

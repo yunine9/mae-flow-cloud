@@ -9,6 +9,8 @@ const gitDiff = readFileSync(resolve("web/src/GitDiff.tsx"), "utf-8");
 const app = readFileSync(resolve("web/src/App.tsx"), "utf-8");
 const steerBox = readFileSync(resolve("web/src/SteerBox.tsx"), "utf-8");
 const historyBoard = readFileSync(resolve("web/src/HistoryBoard.tsx"), "utf-8");
+const crossRepositorySync = readFileSync(
+  resolve("web/src/CrossRepositorySync.tsx"), "utf-8");
 
 test("进入独立执行现场页签后直接展开，不要求用户再点一次", () => {
   assert.match(workspace, /<ExecutionPanel task=\{task\} defaultOpen \/>/);
@@ -48,6 +50,20 @@ test("Token 用量是执行现场独立页签，不混入实时事件或批注�
   );
   assert.doesNotMatch(eventContent, /<TokenUsage/,
     "实时事件页不应继续重复显示 Token 卡");
+});
+
+test("低频跨仓同步下沉到开发协作底部并默认折叠", () => {
+  const collaboration = workspace.slice(
+    workspace.indexOf('workspaceView === "collaboration"'),
+    workspace.indexOf('</> : <>', workspace.indexOf('workspaceView === "collaboration"')),
+  );
+  assert.ok(collaboration.indexOf("<SteerBox")
+    < collaboration.indexOf("<CrossRepositorySync"),
+  "主协作操作必须在前，低频跨仓工具放在底部");
+  assert.match(crossRepositorySync,
+    /return <details className="cross-repository-sync">/,
+    "跨仓同步默认折叠，不能继续占据整块首屏");
+  assert.match(crossRepositorySync, /OPTIONAL TOOL/);
 });
 
 test("运行中的任务默认进入执行现场，真正等人时才回到材料", () => {
