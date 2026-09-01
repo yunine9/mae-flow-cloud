@@ -1043,8 +1043,6 @@ export interface TaskSummary {
   progress?: TaskProgress;
   /** 当前阶段采用什么做法的只读说明；状态与完成条件仍以内核为准。 */
   execution_plan?: ExecutionPlan;
-  /** 持续检视反馈明细:服务端账本就绪后面板自动点亮,缺席=不渲染。 */
-  feedback?: FeedbackRecord[];
   /** 活方案对拍告警:定制链任何一环退化(定格文件损坏、阶段失配、
    * 活方案没吃到定格)都在这里,有值必须标红——不许界面展示定格副本
    * 而 Agent 实际跑平台默认。 */
