@@ -307,6 +307,18 @@ function SkillLibraryPanel({ fallback, admin, initialAsset }: {
 
   const shelf: HostSkillShelf | undefined = library ?? fallback;
   const operations = library?.operations ?? [];
+  const extractedDraftReady = extractJob?.status === "done"
+    && Boolean(draftText.trim());
+  const submissionMissing = [
+    !uploadName ? "目录名" : "",
+    !uploadClassification.nature ? "知识性质" : "",
+    uploadClassification.nature === "business"
+        && !uploadClassification.business_module_ids.length
+      ? "归属业务模块" : "",
+    uploadClassification.nature === "engineering"
+        && !uploadClassification.technologies.length
+      ? "适用语言" : "",
+  ].filter(Boolean);
 
   useEffect(() => {
     if (!initialAsset || !library) return;
@@ -514,10 +526,18 @@ function SkillLibraryPanel({ fallback, admin, initialAsset }: {
         <input type="text" placeholder="目录名,如 order-rules" value={uploadName}
           onChange={(event) => setUploadName(event.target.value.trim())} />
         <button type="button" onClick={() => newInputRef.current?.click()}>选技能包目录</button>
-        <button type="button" disabled={busy || !pending || !uploadName
-          || !skillMetadataInput(uploadClassification)}
+        <button type="button" disabled={busy || (!pending && !extractedDraftReady)
+          || submissionMissing.length > 0}
           className="knowledge-shelf-action primary"
-          onClick={() => pending && void run(async () => {
+          title={submissionMissing.length
+            ? `提交前还需：${submissionMissing.join("、")}` : undefined}
+          onClick={() => {
+            if (!pending && extractedDraftReady) {
+              submitDraft();
+              return;
+            }
+            if (!pending) return;
+            void run(async () => {
             const metadata = skillMetadataInput(uploadClassification);
             if (!metadata) return;
             if (admin) {
@@ -529,11 +549,18 @@ function SkillLibraryPanel({ fallback, admin, initialAsset }: {
                 + `${record.files} 个文件)。管理员审核通过后即上架生效。`);
             }
             setPending(undefined); setUploadOpen(false);
-          })}>
+            });
+          }}>
           {busy ? (admin ? "上架中" : "提交中")
-            : `${admin ? "确认上架" : "提交审核"}${pending ? `(${pending.files.length} 个文件)` : ""}`}
+            : extractedDraftReady && !pending
+              ? `用草稿${admin ? "上架" : "提交审核"}`
+              : `${admin ? "确认上架" : "提交审核"}${pending ? `(${pending.files.length} 个文件)` : ""}`}
         </button>
       </div>
+      {(pending || extractedDraftReady) && submissionMissing.length > 0
+        && <small className="skill-classification-prompt" role="status">
+          提交前还需：{submissionMissing.join("、")}。请在上方补齐，按钮会立即启用。
+        </small>}
       {pending && <small>
         已选 {pending.files.length} 个文件
         {pending.files.some((file) => file.path === "SKILL.md") ? "" : ";⚠ 缺少根级 SKILL.md,会被拒收"}
@@ -584,13 +611,17 @@ function SkillLibraryPanel({ fallback, admin, initialAsset }: {
             {extractJob.notes && <small>提取会话自述:{extractJob.notes}</small>}
             <div className="knowledge-shelf-upload-row">
               <button type="button" className="knowledge-shelf-action primary"
-                disabled={busy || !uploadName || !draftText.trim()
-                  || !skillMetadataInput(uploadClassification)}
+                disabled={busy || !draftText.trim()
+                  || submissionMissing.length > 0}
+                title={submissionMissing.length
+                  ? `提交前还需：${submissionMissing.join("、")}` : undefined}
                 onClick={submitDraft}>
                 {busy ? (admin ? "上架中" : "提交中")
                   : `用草稿${admin ? "上架" : "提交审核"}`}
               </button>
-              <small>目录名与知识属性用本面板上方的输入。</small>
+              <small>{submissionMissing.length
+                ? `提交前还需：${submissionMissing.join("、")}；请在本面板上方补齐。`
+                : "目录名与知识属性已就绪，可直接提交。"}</small>
             </div>
           </>}
         </>}
