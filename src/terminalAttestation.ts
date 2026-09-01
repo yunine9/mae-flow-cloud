@@ -1,10 +1,9 @@
 /**
  * Cloud 对“任务已经结束”的本地只读核对。
  *
- * task.json 是编排投影，不是流程真相。真正能为 completed/await_merge
- * 背书的是：内核状态停在 flow 声明的 terminal 节点；若执行契约把质量
- * 动作交给流水线，还必须有绑定当前 HEAD 的逐项 PASS。这个模块故意不
- * 修改任何状态，恢复、交付、依赖解锁都可以复用同一把尺子。
+ * task.json 是编排投影，不是流程真相。这里明确提供两把尺子：等待合入
+ * 要求 delivery_watch + 当前 HEAD 逐项 PASS；真正完成要求可信 close
+ * 已把内核推进 terminal。这个模块只读，调用方必须按场景选对证明。
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -19,6 +18,7 @@ const PIPELINE_DIMENSIONS = {
 
 export type KernelAttestationKind =
   | "terminal"
+  | "delivery_watch"
   | "external_verify"
   | "active"
   | "invalid";
@@ -35,7 +35,7 @@ export interface KernelCompletionAttestation {
   required_dimensions: string[];
   head?: string;
   reason: string;
-  /** completed / await_merge / 下游解锁共同使用的最终结论。 */
+  /** 针对本次 expected（ready 或 completion）的结论。 */
   complete: boolean;
 }
 
@@ -82,10 +82,11 @@ function gitHead(cwd: string): string | undefined {
   }
 }
 
-export function inspectKernelCompletion(
+function inspectKernelState(
   cwd: string | undefined,
   kernelRoot: string | undefined,
   pipelineByDefault = true,
+  expected: "terminal" | "delivery_watch" = "terminal",
 ): KernelCompletionAttestation {
   if (!cwd) {
     return {
@@ -142,22 +143,31 @@ export function inspectKernelCompletion(
   );
   const kind: KernelAttestationKind = terminal
     ? "terminal"
+    : current === "delivery_watch"
+      ? "delivery_watch"
     : current === "external_verify"
       ? "external_verify"
       : current ? "active" : "invalid";
+  const lifecycleReached = expected === "terminal"
+    ? terminal : current === "delivery_watch";
   let reason: string;
-  if (!terminal) {
+  if (!lifecycleReached) {
     reason = current
-      ? `内核当前步骤是 ${current}，尚未到 terminal`
-      : "内核 current 缺失，不能推断终态";
+      ? expected === "terminal"
+        ? `内核当前步骤是 ${current}，尚未到 terminal`
+        : `内核当前步骤是 ${current}，尚未到 delivery_watch`
+      : `内核 current 缺失，不能推断${
+          expected === "terminal" ? "终态" : "交付就绪态"}`;
   } else if (!externalPassed) {
     reason = !head
       ? "无法读取工作区 HEAD，不能核对流水线版本"
       : `权威流水线尚未逐项通过并绑定 ${head.slice(0, 12)}`;
   } else {
     reason = externalRequired
-      ? `内核已终态，外部质量义务 PASS@${head!.slice(0, 12)}`
-      : "内核已终态，无外部质量义务";
+      ? `内核已${expected === "terminal" ? "终态" : "进入持续检视"}，`
+        + `外部质量义务 PASS@${head!.slice(0, 12)}`
+      : `内核已${expected === "terminal" ? "终态" : "进入持续检视"}，`
+        + "无外部质量义务";
   }
   return {
     kind,
@@ -168,6 +178,28 @@ export function inspectKernelCompletion(
     required_dimensions: required,
     ...(head ? { head } : {}),
     reason,
-    complete: terminal && externalPassed,
+    complete: lifecycleReached && externalPassed,
   };
 }
+
+/** Current HEAD is fully verified and can wait for MR feedback/merge. */
+export function inspectKernelDeliveryReady(
+  cwd: string | undefined,
+  kernelRoot: string | undefined,
+  pipelineByDefault = true,
+): KernelCompletionAttestation {
+  return inspectKernelState(
+    cwd, kernelRoot, pipelineByDefault, "delivery_watch");
+}
+
+/** MR is merged and the kernel has accepted the trusted close event. */
+export function inspectKernelTaskCompletion(
+  cwd: string | undefined,
+  kernelRoot: string | undefined,
+  pipelineByDefault = true,
+): KernelCompletionAttestation {
+  return inspectKernelState(cwd, kernelRoot, pipelineByDefault, "terminal");
+}
+
+/** Compatibility export for callers that still mean true task completion. */
+export const inspectKernelCompletion = inspectKernelTaskCompletion;

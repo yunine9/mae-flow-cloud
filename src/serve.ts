@@ -393,12 +393,12 @@ async function main(): Promise<void> {
   // 推送/MR/流水线全环回,与 pilot 同款(部署手册的切换点在此落地)。
   let delivery: { platformUrl: string } | undefined;
   const platformUrl = flag("--platform");
-  // 交付链的预算旋钮:修复轮(默认 2,0=关)、状态轮询(默认 10s)、
+  // 交付链的预算旋钮:修复轮(默认 20,0=关)、状态轮询(默认 10s)、
   // 红灯证据重采(默认 3 分钟)与总轮询预算(默认 30 分钟)。只暴露数值,
   // "无限等待"这种取值不存在——预算的存在性不是配置项。
   const pace = {
     repairRounds: flag("--repair-rounds") !== undefined
-      ? Number(flag("--repair-rounds")) : undefined,
+      ? Number(flag("--repair-rounds")) : 20,
     pollIntervalMs: flag("--poll-interval") !== undefined
       ? Number(flag("--poll-interval")) * 1000 : undefined,
     evidenceRetryMs: flag("--evidence-retry-interval") !== undefined

@@ -1,10 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { inspectKernelCompletion } from "../src/terminalAttestation.ts";
+import {
+  inspectKernelCompletion,
+  inspectKernelDeliveryReady,
+  inspectKernelTaskCompletion,
+} from "../src/terminalAttestation.ts";
 import { TaskService } from "../src/taskService.ts";
 
 function fixture(current: string, external = false): {
@@ -20,6 +24,7 @@ function fixture(current: string, external = false): {
       grill: { terminal: false },
       build: { terminal: false },
       external_verify: { terminal: false },
+      delivery_watch: { terminal: false },
       end: { terminal: true },
     },
   }));
@@ -124,6 +129,27 @@ test("流水线契约:总体 end 也必须逐项 PASS 且绑定当前 HEAD", () 
   execFileSync("git", ["commit", "--allow-empty", "-qm", "new head"], { cwd });
   result = inspectKernelCompletion(cwd, kernelRoot);
   assert.equal(result.complete, false, "旧 SHA 的绿灯不能背书新 HEAD");
+});
+
+test("持续检视就绪与任务完成使用两把不同的证明", () => {
+  const { cwd, kernelRoot, head } = fixture("delivery_watch", true);
+  const state = JSON.parse(readFileSync(join(cwd, ".mae-flow.json"), "utf-8"));
+  const checks = Object.fromEntries(["COMPILE", "UT", "CODECHECK"].map(
+    (dimension) => [dimension, { status: "passed", sha: head }],
+  ));
+  state.execution_contract.continuous_review = true;
+  state.quality = { external_verification: {
+    verdict: "PASS", sha: head,
+    required: ["COMPILE", "UT", "CODECHECK"], checks,
+  } };
+  writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify(state));
+  assert.equal(inspectKernelDeliveryReady(cwd, kernelRoot).complete, true);
+  assert.equal(inspectKernelTaskCompletion(cwd, kernelRoot).complete, false,
+    "MR 未合入、内核未 close 时绝不能 completed");
+  state.current = "end";
+  writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify(state));
+  assert.equal(inspectKernelDeliveryReady(cwd, kernelRoot).complete, false);
+  assert.equal(inspectKernelTaskCompletion(cwd, kernelRoot).complete, true);
 });
 
 test("flow 未声明 terminal 时，状态文件自称 end 也不能绕过", () => {

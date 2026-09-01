@@ -123,10 +123,54 @@ def _history(state, step, result, note):
     })
 
 
+def _adopt_watch(state, payload):
+    """One-way adoption for pre-contract Cloud tasks already awaiting merge."""
+    migration_id = _text(payload.get("batch_id"), "batch_id", 200)
+    contract = state.get("execution_contract") or {}
+    if contract.get("host") != "cloud":
+        _die("只有旧 Cloud 任务可以迁移到持续检视")
+    loop = _loop(state)
+    migrations = loop.setdefault("migrations", [])
+    previous = next((
+        item for item in migrations
+        if isinstance(item, dict) and item.get("migration_id") == migration_id
+    ), None)
+    if previous is not None:
+        print(json.dumps({
+            "schema": STATE_SCHEMA, "idempotent": True,
+            "migration_id": migration_id, "current": state.get("current"),
+        }, ensure_ascii=False))
+        return
+    if state.get("current") != "end":
+        _die("adopt-watch 只接受旧终态 end，当前是 %s"
+             % str(state.get("current") or "?"))
+    head = _head()
+    external = ((state.get("quality") or {}).get("external_verification") or {})
+    if external.get("verdict") != "PASS" or external.get("sha") != head:
+        _die("旧终态没有绑定当前 HEAD 的权威 PASS，不能安全迁移")
+    contract["continuous_review"] = True
+    state["execution_contract"] = contract
+    state["current"] = "delivery_watch"
+    state.setdefault("step_heads", {})["delivery_watch"] = head
+    migrations.append({
+        "migration_id": migration_id,
+        "kind": "terminal-to-delivery-watch",
+        "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "head": head,
+    })
+    api.save_state(state)
+    print(json.dumps({
+        "schema": STATE_SCHEMA, "idempotent": False,
+        "migration_id": migration_id, "current": "delivery_watch",
+    }, ensure_ascii=False))
+
+
 def _open(flow, state, args):
     del flow
-    _capability(state)
     payload = _payload(args.file, BATCH_SCHEMA)
+    if payload.get("mode") == "adopt-watch":
+        return _adopt_watch(state, payload)
+    _capability(state)
     batch_id = _text(payload.get("batch_id"), "batch_id", 200)
     loop = _loop(state)
     previous = _batch(loop, batch_id)
@@ -161,7 +205,19 @@ def _open(flow, state, args):
     if len(ids) != len(set(ids)):
         _die("同一批次 items.id 不得重复")
     loop["delivery_round"] = int(loop.get("delivery_round") or 0) + 1
-    active = bool(loop.get("active_batch_id"))
+    active_batch = _batch(loop, str(loop.get("active_batch_id") or ""))
+    # A RED result for the code produced by the previous batch is itself new
+    # feedback. The previous receipts stay immutable/auditable, but it no
+    # longer owns the writer; otherwise the RED batch would queue behind a
+    # PASS that can never happen and Cloud would livelock on external_verify.
+    if active_batch and active_batch.get("status") == "awaiting_verification":
+        active_batch["status"] = "addressed"
+        active_batch["verification_failed_at"] = time.strftime(
+            "%Y-%m-%d %H:%M:%S")
+        loop["active_batch_id"] = ""
+        clear_feedback_authorization(state)
+        active_batch = None
+    active = bool(active_batch)
     status = "queued" if active else "repairing"
     record = {
         "batch_id": batch_id,
@@ -179,7 +235,8 @@ def _open(flow, state, args):
         loop["active_batch_id"] = batch_id
         issue_feedback_authorization(
             state, batch_id=batch_id, base_sha=base_sha,
-            at=record["opened_at"], dirty_paths=api._dirty_paths())
+            at=record["opened_at"], dirty_paths=api._dirty_paths(),
+            allowed_paths=(item.get("file", "") for item in items))
         if old in _WAITING:
             state["current"] = "feedback_triage"
             state.setdefault("step_heads", {})["feedback_triage"] = head
@@ -215,7 +272,9 @@ def _promote(state, loop):
     loop["active_batch_id"] = queued["batch_id"]
     issue_feedback_authorization(
         state, batch_id=queued["batch_id"], base_sha=queued["base_sha"],
-        at=queued.get("opened_at", ""), dirty_paths=api._dirty_paths())
+        at=queued.get("opened_at", ""), dirty_paths=api._dirty_paths(),
+        allowed_paths=(item.get("file", "")
+                       for item in queued.get("items", [])))
     return queued
 
 
@@ -228,6 +287,11 @@ def complete_verified_feedback(state, verified_sha):
     batch["status"] = "closed"
     batch["verified_sha"] = str(verified_sha or "")
     batch["closed_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    for previous in loop.get("batches", []):
+        if isinstance(previous, dict) and previous.get("status") == "addressed":
+            previous["status"] = "closed"
+            previous["verified_sha"] = str(verified_sha or "")
+            previous["closed_at"] = batch["closed_at"]
     _history(state, state.get("current", ""),
              "feedback-verified:" + batch["batch_id"],
              "权威验证通过 %s" % str(verified_sha or "")[:12])
@@ -276,6 +340,9 @@ def _result(flow, state, args):
             "current": state.get("current"),
         }, ensure_ascii=False))
         return
+    if batch_id != str(loop.get("active_batch_id") or ""):
+        _die("反馈批次 %s 尚未取得唯一 writer，不能提前登记处理结果"
+             % batch_id)
     head = _head()
     declared_changed = bool(payload.get("changed"))
     changed = declared_changed or head != batch.get("base_sha")

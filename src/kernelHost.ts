@@ -70,17 +70,14 @@ export class KernelHost {
 
   /** Cloud 明确创建的是交付任务，不再让模型从需求措辞猜“要不要 init”。
    *
-   * 新工作区由宿主先机械执行 init；已有在途状态只读取 current。检视
-   * 修复是内核定义的新交付轮，调用方可显式允许把 terminal 滚到新轮。
+   * 新工作区只初始化一次；已有在途状态只读取 current。持续检视返工
+   * 必须由宿主先执行 delivery feedback-open，绝不拿 init 重开任务。
    * 任一步失败都发生在模型会话创建之前，不能落入 INACTIVE 继续改码。 */
-  async bootstrapManaged(
-    requirement: string,
-    options: { rolloverTerminal?: boolean } = {},
-  ): Promise<string> {
+  async bootstrapManaged(requirement: string): Promise<string> {
     this.managed = true;
     this.requirement = requirement;
     const before = this.flowState();
-    if (!before || (before.terminal && options.rolloverTerminal)) {
+    if (!before) {
       const initialized = await this.spawnCli("init", ["init"]);
       this.requireSuccess("init", initialized);
     }
@@ -88,8 +85,10 @@ export class KernelHost {
     if (!active) {
       throw new Error("内核 init 返回成功但未生成 .mae-flow.json，拒绝启动 Agent");
     }
-    if (active.terminal && options.rolloverTerminal) {
-      throw new Error("内核 init 未能从终态开启检视修复新轮，拒绝启动 Agent");
+    if (active.terminal) {
+      throw new Error(
+        "内核已终态，拒绝重新 init；请先由 Cloud 宿主打开持续检视反馈批次",
+      );
     }
 
     // 状态先存在，再发 Hook 生命周期和需求原话。这样 userprompt 直接进

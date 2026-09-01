@@ -24,6 +24,9 @@ export interface ManagedFlowFixtureOptions {
   branch?: string;
   ticket?: string;
   terminalStep?: "end" | "external_verify";
+  /** Cloud continuous-review tests stop the Agent at external_verify; the
+   * trusted pipeline command advances it to delivery_watch. */
+  continuousReview?: boolean;
   /** Simulate an authoritative transport outage after the Agent has worked. */
   takeRepositoryOffline?: string;
 }
@@ -71,10 +74,11 @@ export function managedFlowFixture(
 ): (context: ScriptedSceneContext) => void {
   const branch = options.branch ?? "master_bot_REQ9";
   const ticket = options.ticket ?? "REQ9";
-  const terminal = options.terminalStep ?? "end";
+  const terminal = options.terminalStep
+    ?? (options.continuousReview ? "external_verify" : "end");
   let prepared = false;
   let finished = false;
-  let rolloverPrepared = false;
+  let feedbackPrepared = false;
 
   const prepareBuild = (statePath: string, cwd: string): void => {
     git(cwd, "config", "user.email", "bot@test");
@@ -90,6 +94,7 @@ export function managedFlowFixture(
       ut_run: "pipeline",
       codecheck: "pipeline",
       git_push: "host",
+      ...(options.continuousReview ? { continuous_review: true } : {}),
     };
     state.config = {
       ...(state.config ?? {}),
@@ -145,21 +150,20 @@ export function managedFlowFixture(
       return;
     }
 
-    // A committer-review repair intentionally rolls a terminal kernel into a
-    // fresh managed flow.  Platform tests may then have another scripted tool
-    // pair.  Prepare/close that secondary flow from the trusted fixture too;
-    // CI/conflict lightweight repairs stay at end/external_verify and are left
-    // untouched.
+    // Continuous feedback stays in the same managed flow. Platform tests may
+    // have another scripted tool pair; prepare/close that active feedback turn
+    // from the trusted fixture too. CI/conflict repairs that are already at a
+    // host wait remain untouched.
     const state = readState(statePath);
     const active = !["end", "external_verify"].includes(String(state.current));
-    if (index >= 2 && active && !rolloverPrepared) {
+    if (index >= 2 && active && !feedbackPrepared) {
       prepareBuild(statePath, cwd);
-      rolloverPrepared = true;
+      feedbackPrepared = true;
       return;
     }
-    if (index >= 3 && rolloverPrepared) {
+    if (index >= 3 && feedbackPrepared) {
       finishFlow(statePath, cwd);
-      rolloverPrepared = false;
+      feedbackPrepared = false;
       return;
     }
     if (!finished && index > 1) {
