@@ -6,30 +6,28 @@ import test from "node:test";
 const app = readFileSync(join(process.cwd(), "web/src/App.tsx"), "utf8");
 const css = readFileSync(join(process.cwd(), "web/src/style.css"), "utf8");
 
-test("团队任务统计先展示总览公式，再用阶段和状态拆同一批交付中任务", () => {
+test("团队任务统计以紧凑摘要展示规模，并用轻量筛选拆分交付中任务", () => {
   assert.match(app, /function TeamDeliveryOverview/);
-  assert.match(app, /任务总计/);
+  assert.match(app, /全部任务/);
   assert.match(app, /已交付/);
   assert.match(app, /交付中/);
-  assert.match(app, /按阶段/);
-  assert.match(app, /按任务状态/);
-  assert.equal((app.match(/合计 \{stats\.delivering\} 项/g) ?? []).length, 2,
-    "阶段和状态必须明确显示同一个交付中合计");
-  assert.match(css, /\.team-delivery-equation\s*\{/);
+  assert.match(app, />阶段</);
+  assert.match(app, />任务状态</);
+  assert.match(css, /\.team-delivery-summary\s*\{/);
   assert.match(css, /\.team-delivery-breakdown\s*\{/);
   assert.match(css,
-    /\.delivery-breakdown-cells\s*\{[^}]*display:\s*grid[^}]*repeat\(3,/s,
-    "阶段和状态应共用连续的三列矩阵，不能堆成随意排列的白卡");
+    /\.delivery-breakdown-cells\s*\{[^}]*display:\s*grid[^}]*repeat\(auto-fit,/s,
+    "阶段和状态应共用可自适应的紧凑筛选网格");
   assert.match(css,
-    /\.delivery-breakdown-cells button\s*\{[^}]*border-radius:\s*0/s);
+    /\.delivery-breakdown-cells button\s*\{[^}]*min-height:\s*38px[^}]*border-radius:\s*8px/s);
   assert.match(app, /teamDeliveryStatusGroup\(task\.status\)/);
   assert.match(css,
-    /\.delivery-breakdown-cells button:disabled\s*\{[^}]*opacity:\s*1/s,
-    "零状态数字也必须清晰可读，不能沿用半透明禁用态");
+    /\.delivery-breakdown-cells button:disabled\s*\{[^}]*opacity:\s*\.56/s,
+    "零状态要保留口径，但应从视觉层级中退后");
   assert.match(css,
-    /\.delivery-breakdown-cells button:not\(:disabled\),[^}]*background:\s*var\(--accent\)/s,
-    "有任务的状态应使用实色强调，不能浅底叠浅字");
+    /\.delivery-breakdown-cells button\.selected\s*\{[^}]*background:\s*var\(--accent-soft\)/s,
+    "只有当前筛选项使用强调色，不能把所有非零项都铺成实色块");
   assert.match(css,
-    /\.delivery-breakdown-cells\s*\{[^}]*background:\s*color-mix\(in srgb, var\(--accent\) 8%, var\(--surface\)\)/s,
-    "阶段和状态矩阵都使用统一的淡紫色底");
+    /\.team-delivery-summary \.summary-complete strong\s*\{[^}]*var\(--success\)/s,
+    "已交付只用语义色点到为止，不再重复堆卡片");
 });
