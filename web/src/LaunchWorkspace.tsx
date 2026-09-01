@@ -296,6 +296,11 @@ export function LaunchWorkspace({
   // 固定仓部署不渲染仓库输入,预览/提交也一并按 enabled 裁字段——
   // 隐藏控件不等于字段不存在(MFC-033)。
   const repoFieldsEnabled = options?.repo.enabled !== false;
+  // 勾了"先分析拆分":下单不填单号,单号在拆分确认卡上逐单元收
+  // (拆完才知道有几个交付,每个交付一个单号)。
+  const analysisEligible = repoFieldsEnabled
+    && repos.map((item) => item.trim()).filter(Boolean).length === 1;
+  const ticketsDeferred = requirementAnalysis && analysisEligible;
   const repositoriesToProbe = useMemo(() => [...new Set(
     repos.map((item) => item.trim()).filter(Boolean),
   )], [repos]);
@@ -723,6 +728,7 @@ export function LaunchWorkspace({
           repos: repoFieldsEnabled
             ? repos.map((item) => item.trim()).filter(Boolean) : [],
           repositoryTickets: repoFieldsEnabled && options?.ticket.enabled
+              && !ticketsDeferred
             ? Object.fromEntries(repos.flatMap((repo, index) => {
                 const normalized = repo.trim();
                 return normalized
@@ -738,7 +744,7 @@ export function LaunchWorkspace({
           // select 虽然会视觉显示第一项，但用户没手动切换时 state 仍是
           // 空串；提交必须使用屏幕上真正显示的默认项。
           lane: lane || options?.workflows[0]?.label,
-          ticket: ((repoFieldsEnabled
+          ticket: ticketsDeferred ? undefined : ((repoFieldsEnabled
             ? repositoryTickets.find((_, index) => repos[index]?.trim())
             : ticket) ?? "").trim() || undefined,
           baseline: baseline.trim() || undefined,
@@ -985,8 +991,9 @@ export function LaunchWorkspace({
                       </div>
                       <div className="repo-list">
                         {repos.map((value, index) => (
-                          <div className={`repo-row with-assignee ${options.ticket.enabled
-                            ? "with-ticket" : ""}`} key={index}>
+                          <div className={`repo-row with-assignee ${
+                            options.ticket.enabled && !ticketsDeferred
+                              ? "with-ticket" : ""}`} key={index}>
                             <span>{String(index + 1).padStart(2, "0")}</span>
                             <input type="text" value={value}
                               onChange={(event) => changeRepository(index, event.target.value)}
@@ -999,7 +1006,8 @@ export function LaunchWorkspace({
                                 && repositoryProbeByUrl.get(value.trim())
                                   ?.reachable === false)}
                               required={options.repo.required} />
-                            {options.ticket.enabled && <input type="text"
+                            {options.ticket.enabled && !ticketsDeferred
+                              && <input type="text"
                               value={repositoryTickets[index] ?? ""}
                               onChange={(event) => changeRepositoryTicket(
                                 index, event.target.value)}
@@ -1052,14 +1060,15 @@ export function LaunchWorkspace({
                       <small className="repo-field-note">
                         请填写每个仓自己的 AR 对应 REQ 单号，不要填 FuR；两者格式相同，系统无法自动识别。
                       </small>
-                      {repos.map((item) => item.trim()).filter(Boolean).length === 1 && (
+                      {analysisEligible && (
                         <label className="repo-analysis-toggle">
                           <input type="checkbox" checked={requirementAnalysis}
                             onChange={(event) =>
                               setRequirementAnalysis(event.target.checked)} />
                           <span>大需求先分析拆分
                             <small>先出改动面盘点与拆分方案给你确认,再按交付单元
-                              逐个开子任务(多仓需求自动走这一步)</small></span>
+                              逐个开子任务(多仓需求自动走这一步)。下单不填
+                              单号——确认拆分时为每个单元填各自的 AR 单号</small></span>
                         </label>
                       )}
                       <datalist id="launch-recent-repositories">

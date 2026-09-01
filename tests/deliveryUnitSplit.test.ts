@@ -190,6 +190,11 @@ test("单仓拆分:分析→撞单号挡下→分单号确认→串行子任务+
       "方案正文不内联,只指路");
     assert.match(filterChild.requirement, /不得把同一事项换个说法再次问人/,
       "子任务必须消费主任务已拍板结论,不能重新开一轮相同澄清");
+    assert.match(filterChild.requirement,
+      /当前目录、remote 或 data\/ 看不到其他单元是正常现象/,
+      "隔离工作区不能被 Agent 误判成其他仓或交付单元缺失");
+    assert.match(filterChild.requirement, /跨单元状态与术语同步由主任务协调/,
+      "跨单元同步责任必须明确落到主任务,不能重复抛给子任务用户");
     assert.ok(!filterChild.requirement.includes("契约先行,过滤在后"),
       "方案正文不得内联进需求");
     const plan = readFileSync(
@@ -291,6 +296,35 @@ test("负责面门禁:越界停摆举卡,放行记豁免续推,邻居目录不�
   }
 });
 
+test("负责面门禁:目标分支前进并合入后不把其他任务文件误报为本单元越界", async () => {
+  const { service, model, id, internal } = await scopedTask();
+  try {
+    const cwd = internal.cwd as string;
+    const git = (...args: string[]) => execFileSync(
+      "git", ["-C", cwd, ...args], { encoding: "utf-8", env: GIT_ENV }).trim();
+    const baseline = JSON.parse(readFileSync(
+      join(cwd, ".mae-flow.json"), "utf-8")).step_heads.branch_create;
+    git("switch", "--quiet", "-c", "upstream-work", baseline);
+    mkdirSync(join(cwd, "docs"), { recursive: true });
+    writeFileSync(join(cwd, "docs", "other-task.md"), "other task\n");
+    git("add", "docs/other-task.md");
+    git("commit", "--quiet", "-m", "other task");
+    const upstream = git("rev-parse", "HEAD");
+    git("update-ref", "refs/remotes/origin/master", upstream);
+    git("switch", "--quiet", "master");
+    git("merge", "--quiet", "--no-edit", "upstream-work");
+
+    assert.equal(
+      await (service as any).deliveryScopeAllowsPush(internal), false);
+    assert.deepEqual(internal.summary.delivery?.scope_violation?.paths,
+      ["src/contract/api.ts", "src/filterX/other.ts"],
+      "目标分支自己的文档不属于本单元贡献，不能要求本单元责任人裁决");
+    await service.cancel(id, "tester");
+  } finally {
+    await model.stop();
+  }
+});
+
 test("负责面门禁:打回派窄使命撤出越界文件,面内实现保留", async () => {
   const { service, model, id, internal } = await scopedTask();
   try {
@@ -356,5 +390,88 @@ test("负责面门禁 HTTP:非主责任人 403 并点名应联系的账号", asy
       ["src/filterX/other.ts"], "越权点击不得改变待裁决现场");
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("单号延后:勾分析拆分下单免单号,确认卡逐单元补齐后才放行", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-unit-split-noticket-"));
+  const repo = join(dataDir, "svc-solo");
+  execFileSync("git", ["init", "-q", "-b", "master", repo]);
+  execFileSync("git", ["-C", repo, "commit", "-q", "--allow-empty",
+    "-m", "init"], { env: GIT_ENV });
+  const graphJson = JSON.stringify({
+    repositories: [
+      { id: "unit-a", name: "svc-solo", url: repo, responsibility: "契约",
+        scope: { name: "契约骨架", paths: ["src/a/"] } },
+      { id: "unit-b", name: "svc-solo", url: repo, responsibility: "实现",
+        scope: { name: "过滤实现", paths: ["src/b/"] } },
+    ],
+    dependencies: [],
+  });
+  // 没有单号时产物目录按任务 id 命名;会话 cwd 是 <任务id>/repositories,
+  // 场景里从上级目录名取 id,和真模型看到的指引路径同源。
+  const script: Scene[] = [
+    { text: "读仓,写免单号现场的产物",
+      tool: { name: "bash", input: { command:
+        `tid=$(basename "$(dirname "$PWD")") && ls 1-svc-solo && ` +
+        `mkdir -p ".mae-flow-work/$tid" && ` +
+        `printf '%s' '# 免单号拆分方案\n契约先行。\n' ` +
+        `> ".mae-flow-work/$tid/CHAIN-$tid.md" && ` +
+        `cat > ".mae-flow-work/$tid/requirement-graph.json" << 'EOF'\n` +
+        `${graphJson}\nEOF` } } },
+    { tool: { name: "AskUserQuestion", input: { questions: [
+        { question: "拆分方案是否确认?",
+          options: ["确认并生成任务", "需要修改"],
+          recommended: "确认并生成任务" }] } } },
+    { text: "确认完毕,收口。" },
+  ];
+  const model = new ScriptedModelServer(script);
+  await model.start();
+  const service = new TaskService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    maxConcurrent: 1,
+    host: { kernelRoot: join(dataDir, "no-kernel") },
+  });
+  try {
+    // 内核模式下普通单不填单号照旧拒绝——豁免只给显式勾了分析的主任务。
+    assert.throws(() => service.create("没单号的普通单", {
+      account: "cloudbot", repos: [repo],
+    }), /AR 单号/);
+    const parent = service.create("免单号大需求:先拆再定单号", {
+      account: "cloudbot", repos: [repo], requirementAnalysis: true,
+    });
+    assert.equal(parent.ticket, undefined, "分析主任务不再持有单号");
+    const card = await until(() => {
+      const now = service.get(parent.id)!;
+      if (now.status === "failed") throw new Error(now.detail);
+      return now.status === "waiting_for_human" ? now : undefined;
+    }, "确认卡");
+    assert.equal(card.requirement_graph?.repositories.length, 2);
+    // 不补单号直接确认:必须收到"逐单元补齐"的人话拒绝,而不是拿
+    // 任务 id 兜底后报出莫名其妙的"同单号"撞分支错。
+    await assert.rejects(
+      () => service.confirmRequirementGraph(parent.id),
+      (error: unknown) => error instanceof TaskControlError
+        && /确认拆分时逐单元补齐/.test((error as Error).message));
+    const confirmed = await service.confirmRequirementGraph(parent.id, {
+      repository_assignees: { "unit-a": "cloudbot", "unit-b": "cloudbot" },
+      repository_tickets: {
+        "unit-a": "REQ2026090201", "unit-b": "REQ2026090202",
+      },
+    });
+    assert.equal(confirmed.status, "coordinating");
+    const graph = service.get(parent.id)!.requirement_graph!;
+    const first = service.get(graph.repositories[0].task_id!)!;
+    const second = service.get(graph.repositories[1].task_id!)!;
+    await service.cancel(first.id, "tester");
+    await service.cancel(second.id, "tester");
+    assert.equal(first.ticket, "REQ2026090201");
+    assert.equal(second.ticket, "REQ2026090202");
+    assert.match(first.requirement, /当前单元 AR 单号:REQ2026090201/);
+    assert.deepEqual(second.blocked_by, [first.id],
+      "免单号路径不改串行纪律");
+  } finally {
+    await model.stop();
   }
 });

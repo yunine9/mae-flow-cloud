@@ -4922,7 +4922,13 @@ export class TaskService {
     const ticket = repositories.length
       ? repositoryTickets.get(repositories[0]) ?? legacyTicket
       : legacyTicket;
-    if (!ticket && this.options.host && !this.options.host.repoPath) {
+    // 勾了"先分析拆分"的主任务不跑内核交付(只读分析,无分支无 MR),
+    // 单号在拆分确认卡上逐单元收——那时才知道有几个交付。见
+    // requirementGraphPlan 的对称校验:确认时每个单元必须有真单号。
+    const ticketDeferredToSplit = options.requirementAnalysis === true
+      && !options.parentTaskId;
+    if (!ticket && this.options.host && !this.options.host.repoPath
+        && !ticketDeferredToSplit) {
       throw new Error("请填写每个代码仓对应的 AR 单号——分支名和提交信息都要用它");
     }
     const repositoryAssignees = new Map<string, string>();
@@ -6621,6 +6627,20 @@ export class TaskService {
         }
       }
     }
+    // 下单免了单号的分析单,确认是单号的最后收口:每个单元必须有
+    // 真单号(覆盖值或已分工保存的),否则子任务建出来内核没法派生
+    // 分支。不查这里,撞分支校验会拿任务 id 兜底,报出"同单号"这种
+    // 让人摸不着头脑的错。纯会话形态(无内核)不强制,与下单同口径。
+    if (this.options.host && !this.options.host.repoPath) {
+      const missing = graph.repositories.find((repository) =>
+        !(ticketOverrides?.[repository.id] ?? repository.ticket
+          ?? task.summary.ticket));
+      if (missing) {
+        throw new TaskControlError(
+          `请为交付单元「${missing.scope?.name ?? missing.name}」填写 AR `
+          + "单号——下单时未填单号的需求,确认拆分时逐单元补齐");
+      }
+    }
     // 同仓多单元的分支名由(责任人,单号)决定:同仓同责任人同单号的
     // 两个单元会撞同一条分支,必须在确认前挡下,不能等克隆后才炸。
     const branchKeys = new Map<string, string>();
@@ -6906,6 +6926,11 @@ export class TaskService {
           + "权威输入:需求澄清阶段直接引用,不得把同一事项换个说法再次"
           + "问人;只有代码事实与已确认结论发生明确冲突,或出现清单没有"
           + "覆盖的新业务决定时才能举卡,并要点名冲突或新增项。"
+          + "工作区隔离是平台设计:每个子任务只挂载自己负责的一个代码"
+          + "仓,其他交付单元由主任务创建为独立任务/独立工作区;当前目录、"
+          + "remote 或 data/ 看不到其他单元是正常现象,不代表仓库或单元"
+          + "缺失,不得据此重新质疑拆分、要求改单仓交付或把跨单元同步"
+          + "重新举卡。跨单元状态与术语同步由主任务协调。"
           + "只交付本单元职责;发现方案不够用时"
           + "停止并报告,不要自行改变拆分契约。",
         [
@@ -11486,6 +11511,43 @@ export class TaskService {
     if (!scope?.paths.length || !task.cwd) return true;
     const snapshot = await deliveryChangeSnapshot(task.cwd);
     if (!snapshot?.baseline) return true; // 基线不可读由后续门禁如实处理
+    let committedPaths = snapshot.committed_paths;
+    // MR 目标分支可能在本单元开发期间前进。冲突门禁会把最新目标分支
+    // 干净合入本单元 HEAD；此时若仍从任务最初基线算差异，会把目标分支
+    // 上其他任务已经交付的文件误报成本单元越界。只有能够证明最新目标
+    // ref 已是 HEAD 祖先时，才改用“目标分支树 → 当前 HEAD”的净贡献；
+    // 尚未合入目标分支或 ref 不可信时继续使用定格基线，保持 fail-closed。
+    try {
+      const state = JSON.parse(readFileSync(
+        join(task.cwd, ".mae-flow.json"), "utf-8"));
+      const target = String(state?.config?.["基线分支"] ?? "").trim();
+      if (target) {
+        const valid = await runSafeWorktreeGitAsync(
+          task.cwd, ["check-ref-format", "--branch", target],
+          { timeoutMs: 30_000 });
+        const targetRef = `refs/remotes/origin/${target}`;
+        const exists = valid.status === 0
+          ? await runSafeWorktreeGitAsync(
+            task.cwd, ["rev-parse", "--verify", `${targetRef}^{commit}`],
+            { timeoutMs: 30_000 })
+          : undefined;
+        const included = exists?.status === 0
+          ? await runSafeWorktreeGitAsync(
+            task.cwd, ["merge-base", "--is-ancestor", targetRef, "HEAD"],
+            { timeoutMs: 30_000 })
+          : undefined;
+        if (included?.status === 0) {
+          const contribution = await runSafeWorktreeGitAsync(
+            task.cwd, ["diff", "--name-only", targetRef, "HEAD", "--"],
+            { timeoutMs: 30_000 });
+          if (contribution.status === 0) {
+            committedPaths = String(contribution.stdout ?? "").split("\n");
+          }
+        }
+      }
+    } catch {
+      // 半写状态或 Git 读失败都不降级放行；继续检查定格基线全量差异。
+    }
     const exempt = new Set(task.summary.delivery_scope_exemptions ?? []);
     // 前缀按路径段闭合:src/filter 匹配 src/filter 与 src/filter/**,
     // 不吞 src/filterX(裸 startsWith 会把邻居目录错认成面内)。
@@ -11493,7 +11555,7 @@ export class TaskService {
       const clean = prefix.replace(/\/+$/, "");
       return path === clean || path.startsWith(`${clean}/`);
     });
-    const violations = normalizedDeliveryPaths(snapshot.committed_paths)
+    const violations = normalizedDeliveryPaths(committedPaths)
       .filter((path) => !inScope(path) && !exempt.has(path));
     if (!violations.length) {
       if (task.summary.delivery?.scope_violation) {

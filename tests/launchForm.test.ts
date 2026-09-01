@@ -892,10 +892,15 @@ test("多仓沿用下单单号，单仓拆分后逐单元开放独立 AR 单号"
   assert.match(launch, /disabled=\{!multiRepository\}/);
   assert.match(launch, /repositoryTickets: repoFieldsEnabled/);
   assert.match(launch, /repositoryAssignees: repoFieldsEnabled/);
+  // 勾了"先分析拆分"的单仓下单不收单号:输入框隐藏,提交也不带。
+  assert.match(launch, /options\.ticket\.enabled && !ticketsDeferred/);
+  assert.match(launch, /ticket: ticketsDeferred \? undefined/);
   assert.match(picker, /责任人与 AR 单号均已在发起任务时确定/);
-  assert.match(picker, /同仓拆分后，每个交付单元需要独立 AR 单号/);
+  assert.match(picker, /每个交付单元一个 AR 单号；确认前在这里填齐/);
   assert.match(picker, /onChange=\{\(event\) => chooseTicket/);
-  assert.match(picker, /hasDeliveryUnits \? <span className="repository-ticket-editable">/);
+  // 同仓多单元、或节点根本没有可继承的单号(下单免了单号),都要给
+  // 输入框;只读展示会把人永远卡在"缺少 AR 单号"上。
+  assert.match(picker, /hasDeliveryUnits \|\| !ticket\.trim\(\)/);
   assert.doesNotMatch(picker, /<select/);
 });
 

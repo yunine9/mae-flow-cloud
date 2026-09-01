@@ -86,6 +86,10 @@ export function RepositoryAssigneePicker({
   const peopleByName = new Map(people.map((person) => [person.username, person]));
   const hasDeliveryUnits = new Set(repositories.map((item) => item.url)).size
     < repositories.length;
+  // 下单免了单号的分析单(或旧图缺单号):节点没有可继承的单号,
+  // 只读展示会把人永远卡在"缺少 AR 单号"上,必须给输入框。
+  const needsTicketEntry = hasDeliveryUnits || repositories.some(
+    (repository) => !(selection.tickets[repository.id] ?? "").trim());
 
   function chooseTicket(repositoryId: string, value: string) {
     const nextTickets = { ...selection.tickets, [repositoryId]: value };
@@ -98,8 +102,8 @@ export function RepositoryAssigneePicker({
   return <section className="repository-assignees" aria-label="逐仓交付信息">
     <header>
       <div><span>跨仓协作</span><strong>逐仓分工</strong></div>
-      <small>{hasDeliveryUnits
-        ? "同仓拆分后，每个交付单元需要独立 AR 单号"
+      <small>{needsTicketEntry
+        ? "每个交付单元一个 AR 单号；确认前在这里填齐"
         : "责任人与 AR 单号均已在发起任务时确定"}</small>
     </header>
     <div className="repository-assignee-list">
@@ -115,7 +119,8 @@ export function RepositoryAssigneePicker({
           <span className="repository-assignee-readonly">
             <small>责任人</small><strong>{selected || "未指定"}</strong>
           </span>
-          {hasDeliveryUnits ? <span className="repository-ticket-editable">
+          {(hasDeliveryUnits || !ticket.trim())
+            ? <span className="repository-ticket-editable">
             <small>该单元的 AR 单号</small>
             <input value={ticket}
               aria-label={`${repository.name}的 AR 单号`}
@@ -136,8 +141,8 @@ export function RepositoryAssigneePicker({
       {selection.error}
     </p>}
     <footer>
-      <p>{hasDeliveryUnits
-        ? "为每个单元填写不同的 AR 单号；确认后将按依赖顺序生成子任务。"
+      <p>{needsTicketEntry
+        ? "为每个单元填写各自的 AR 单号（同仓同责任人的单元不能同号）；确认后将按依赖顺序生成子任务。"
         : "确认方案后，系统会按上面的责任人、单号和依赖关系直接生成各仓子任务。"}</p>
     </footer>
   </section>;
