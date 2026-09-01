@@ -487,3 +487,63 @@ test("单号延后:勾分析拆分下单免单号,确认卡逐单元补齐后才
     await model.stop();
   }
 });
+
+test("越界打回先让内核退出 external_verify;退不动则裁决原样失败可重试", async () => {
+  const { service, model, id, internal } = await scopedTask();
+  try {
+    // 真实主链现场:单元会话已收口,内核停在 external_verify 等宿主
+    // 验证,负责面门禁在推送前拦下越界——此刻并没有流水线 RED,内核
+    // 不会发修复授权,不退回可编辑步骤的撤出令就是假裁决。
+    const baseline = execFileSync("git",
+      ["-C", internal.cwd, "rev-parse", "HEAD~1"],
+      { encoding: "utf-8", env: GIT_ENV }).trim();
+    writeFileSync(join(internal.cwd, ".mae-flow.json"), JSON.stringify({
+      current: "external_verify",
+      revision: 3,
+      config: { "分支名": "feature", "基线分支": "master" },
+      step_heads: { branch_create: baseline },
+    }));
+    internal.summary.delivery = {
+      ...(internal.summary.delivery ?? {}),
+      pipeline: "passed",
+      prepush: { state: "passed" },
+    };
+    assert.equal(
+      await (service as any).deliveryScopeAllowsPush(internal), false);
+    // 死内核在前:这道兜底必须在它防御的故障下被测。裁决整体失败,
+    // 越界卡原样保留、停摆原因不丢、内核状态一字未动。
+    (service as any).options.host = {
+      kernelRoot: join(internal.cwd, "kernel-not-exists"),
+      python: "python3",
+    };
+    assert.throws(() => service.decideScopeViolation(id, "revert", "boss"),
+      /内核暂未退回可修改步骤/);
+    assert.ok(internal.summary.delivery?.scope_violation,
+      "退不动时越界卡必须还在,主责任人才能重试");
+    assert.ok(internal.summary.delivery?.stalled);
+    assert.equal(internal.summary.delivery?.prepush?.state, "passed",
+      "裁决失败不得作废旧证据");
+    assert.equal(JSON.parse(readFileSync(
+      join(internal.cwd, ".mae-flow.json"), "utf-8")).current,
+      "external_verify");
+    // 换真件内核重试同一裁决:内核真实退回 build,撤出使命才派发,
+    // 旧 SHA 证据此刻一并作废。
+    (service as any).options.host = {
+      kernelRoot: join(process.cwd(), "kernel"),
+      python: "python3",
+    };
+    (service as any).runningCount = 99;
+    const reverted = service.decideScopeViolation(id, "revert", "boss");
+    assert.equal(JSON.parse(readFileSync(
+      join(internal.cwd, ".mae-flow.json"), "utf-8")).current, "build",
+      "打回必须让内核真实退回可编辑步骤,撤出令才不是空话");
+    assert.equal(reverted.status, "queued");
+    assert.equal(reverted.delivery?.scope_violation, undefined);
+    assert.equal(reverted.delivery?.prepush, undefined,
+      "旧 Build-Fix 收据不得继续背书即将改变的 HEAD");
+    assert.equal(reverted.delivery?.pipeline, undefined);
+    await service.cancel(id, "tester");
+  } finally {
+    await model.stop();
+  }
+});

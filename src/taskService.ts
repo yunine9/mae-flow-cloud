@@ -7832,18 +7832,43 @@ export class TaskService {
     waiting: WaitingRecord,
     selection: NonNullable<TaskSummary["delivery_selection"]>,
   ): void {
-    if (!task.cwd || !this.options.host) return;
-    const factsPath = join(task.summary.workspace, "push-review-rework.json");
-    writeFileSync(factsPath, JSON.stringify({
-      schema: "mae-flow-user-intervention/1",
-      intervention_id: `push-review:${waiting.waiting_id}`,
+    this.reopenKernelForRework(task, {
+      interventionId: `push-review:${waiting.waiting_id}`,
       actor: waiting.decided_by ?? task.summary.luban_account ?? "任务责任人",
       request: waiting.notes.trim().slice(0, 2_000),
-      assistant_summary: "尚未修改；按本次检视意见重新进入可编辑步骤。",
-      // 这里的 changed 表示“现有质量结论已被返工决定否决”，而不是冒充
+      changedPaths: selection.paths,
+      factsFile: "push-review-rework.json",
+      retryHint: "请重试提交返工意见",
+    });
+  }
+
+  /** 内核非前进式介入(intervention reconcile)的宿主通用封装:用户在
+   * 晚期等待点(external_verify)否决现状时,先让内核真实退回可编辑
+   * 步骤并作废旧质量证据,再派修复会话——否则 Agent 入场执行 current
+   * 会被等待点按住,形成"接了活没干活"的假返工(push 返工与越界打回
+   * 同类,2026-09-01 审计)。reconcile 按 intervention_id 幂等;失败抛
+   * TaskControlError 且不动任何云侧状态,调用方必须把它放在消费用户
+   * 动作(清卡/改状态)之前。 */
+  private reopenKernelForRework(task: TaskState, input: {
+    interventionId: string;
+    actor: string;
+    request: string;
+    changedPaths: string[];
+    factsFile: string;
+    retryHint: string;
+  }): void {
+    if (!task.cwd || !this.options.host) return;
+    const factsPath = join(task.summary.workspace, input.factsFile);
+    writeFileSync(factsPath, JSON.stringify({
+      schema: "mae-flow-user-intervention/1",
+      intervention_id: input.interventionId,
+      actor: input.actor,
+      request: input.request,
+      assistant_summary: "尚未修改；按本次裁决重新进入可编辑步骤。",
+      // 这里的 changed 表示“现有质量结论已被该裁决否决”，而不是冒充
       // 文件已经改好。changed_paths 是用户授权的待修改/交付文件面。
       changed: true,
-      changed_paths: selection.paths,
+      changed_paths: input.changedPaths,
       executions: [],
     }, null, 2), { mode: 0o600 });
     chmodSync(factsPath, 0o600);
@@ -7872,12 +7897,12 @@ export class TaskService {
         );
       }
       this.options.log?.(
-        `任务 ${task.summary.id} push 检视返工:内核 ${record.from}`
-        + ` → ${record.target}`,
+        `任务 ${task.summary.id} 返工介入(${input.interventionId}):`
+        + `内核 ${record.from} → ${record.target}`,
       );
     } catch (error) {
       throw new TaskControlError(
-        `返工意见已保存，但内核暂未退回可修改步骤；请重试提交返工意见：${String(error)}`,
+        `返工意见已保存，但内核暂未退回可修改步骤；${input.retryHint}：${String(error)}`,
       );
     } finally {
       gitView.cleanup();
@@ -11794,6 +11819,21 @@ export class TaskService {
       throw new TaskControlError("当前没有待裁决的越界改动");
     }
     const paths = [...violation.paths];
+    if (decision === "revert") {
+      // 撤出要真实改提交历史,而此刻内核多半停在 external_verify 等待
+      // 点(会话已收口、宿主验证被本门禁拦住)。先经内核介入入口退回
+      // 可编辑步骤——退不动则整个裁决原样失败,越界卡还挂着,主责任人
+      // 可直接重试;原来先清卡再派修,Agent 入场会被等待点按住,撤出令
+      // 就成了"接了没人干"的假裁决(与 push 返工同类,2026-09-01 审计)。
+      this.reopenKernelForRework(task, {
+        interventionId: `scope-revert:${task.summary.id}:${violation.noted_at}`,
+        actor,
+        request: `主责任人裁决撤出越界文件:${paths.join("、")}`.slice(0, 2_000),
+        changedPaths: paths,
+        factsFile: "scope-revert-rework.json",
+        retryHint: "请重新点击「打回,撤出越界改动」",
+      });
+    }
     delete task.summary.delivery!.scope_violation;
     if (task.summary.delivery) {
       task.summary.delivery.stalled = undefined;
@@ -11810,6 +11850,16 @@ export class TaskService {
       this.bypass(task, "越界放行续推",
         this.tryDeliver(task, task.controlEpoch));
       return { ...task.summary };
+    }
+    // 撤出后 HEAD 必变:旧 Build-Fix 收据、流水线绿灯、push 事实都
+    // 不再背书新代码,与 push 返工同一口径当场作废(SHA 绑定的门禁
+    // 本就会拦,这里是不让界面继续展示旧绿灯)。
+    if (task.summary.delivery) {
+      delete task.summary.delivery.prepush;
+      delete task.summary.delivery.pipeline;
+      delete task.summary.delivery.checks;
+      delete task.summary.delivery.sha;
+      delete task.summary.delivery.git_push;
     }
     this.enqueueRepair(task, [
       `主责任人已裁决:以下越界改动不属于本单元(${
