@@ -43,23 +43,35 @@ const WIP_STATUSES = [
 ];
 const DELIVERED_STATUSES = ["completed"];
 const WEEK_MS = 7 * 86_400_000;
-const DELIVERY_STATUS_ORDER = [
-  "queued", "running", "pausing", "waiting_for_human", "paused",
-  "verifying", "await_merge", "coordinating", "failed",
-];
+const DELIVERY_STATUS_GROUPS = [
+  { key: "pending", label: "待开始", statuses: ["queued"] },
+  { key: "progressing", label: "推进中", statuses: ["running", "pausing"] },
+  {
+    key: "action_required", label: "需要处理",
+    statuses: ["waiting_for_human", "paused", "failed"],
+  },
+  { key: "verifying", label: "验证中", statuses: ["verifying"] },
+  { key: "await_merge", label: "待合入", statuses: ["await_merge"] },
+  { key: "coordinating", label: "子任务推进", statuses: ["coordinating"] },
+] as const;
 
 export interface TeamDeliveryBreakdown {
   total: number;
   delivered: number;
   delivering: number;
   stages: Array<{ key: string; count: number }>;
-  statuses: Array<{ key: string; count: number }>;
+  statuses: Array<{ key: string; label: string; count: number }>;
 }
 
 /** 团队现场只回答“任务是否还活着”。待合入仍会监听流水线和接收
  * 批注，所以继续留在现场；只有已合入和用户取消离开现场。 */
 export function isCurrentTeamTask(task: TeamTask): boolean {
   return ![...DELIVERED_STATUSES, "canceled"].includes(task.status);
+}
+
+export function teamDeliveryStatusGroup(status: string): string {
+  return DELIVERY_STATUS_GROUPS.find((group) =>
+    (group.statuses as readonly string[]).includes(status))?.key ?? "other";
 }
 
 /** 团队统计只计算仍有交付意义的任务：已取消留在档案，但不伪装成
@@ -88,20 +100,26 @@ export function teamDeliveryBreakdown(
   }));
   if (untracked) stages.push({ key: "尚未进入阶段", count: untracked });
 
-  const actualStatusKeys = [...new Set(delivering.map((task) => task.status))];
-  const statusKeys = [
-    ...DELIVERY_STATUS_ORDER,
-    ...actualStatusKeys.filter((key) => !DELIVERY_STATUS_ORDER.includes(key)),
-  ];
+  const hasOtherStatus = delivering.some((task) =>
+    teamDeliveryStatusGroup(task.status) === "other");
+  const statuses: TeamDeliveryBreakdown["statuses"] = DELIVERY_STATUS_GROUPS.map((group) => ({
+    key: group.key,
+    label: group.label,
+    count: delivering.filter((task) =>
+      teamDeliveryStatusGroup(task.status) === group.key).length,
+  }));
+  if (hasOtherStatus) statuses.push({
+    key: "other",
+    label: "其他",
+    count: delivering.filter((task) =>
+      teamDeliveryStatusGroup(task.status) === "other").length,
+  });
   return {
     total: delivered.length + delivering.length,
     delivered: delivered.length,
     delivering: delivering.length,
     stages,
-    statuses: statusKeys.map((key) => ({
-      key,
-      count: delivering.filter((task) => task.status === key).length,
-    })),
+    statuses,
   };
 }
 
