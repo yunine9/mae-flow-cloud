@@ -168,6 +168,23 @@ test("页内确认弹框:共享 confirmDialog 取代原生框,键盘与危险档
   assert.match(materialsPane, /title: `提交 \$\{drafts\.length\} 条检视意见并重跑分析`/);
   // 宿主挂在 App 根部;App 自己的月光调用点允许暂时保留原生框
   // (T3 换双语义按钮),故这里只查宿主不查 App 的 confirm。
-  assert.match(app, /import \{ ConfirmDialogHost \} from "\.\/ConfirmDialog"/);
+  assert.match(app,
+    /import \{[^}]*ConfirmDialogHost[^}]*\} from "\.\/ConfirmDialog"/);
   assert.match(app, /<ConfirmDialogHost \/>/);
+});
+
+test("月光档位切换二选一:双语义按钮替换确定/取消绕口令", () => {
+  const app = readFileSync(resolve("web/src/App.tsx"), "utf-8");
+  assert.doesNotMatch(app, /window\.confirm\(/,
+    "月光切换不得再借原生框的确定/取消表达业务二选一");
+  assert.doesNotMatch(app, /选择“确定”|选择“取消”/);
+  assert.match(app, /title: "切换到「月光」档"/);
+  assert.match(app, /cancelLabel: "仅对后续节点生效"/);
+  assert.match(app, /confirmLabel: "连当前待办一起处理"/);
+  // 两条分支的布尔语义不变:前者=includeCurrent,后者=仅后续。
+  assert.match(app,
+    /includeCurrent = await confirmDialog\(\{[\s\S]*?confirmLabel: "连当前待办一起处理"/);
+  // 预览数字(可自动处理/检视拦截)必须完整出现在卡上。
+  assert.match(app, /\{preview\.eligible\}/);
+  assert.match(app, /\{preview\.blocked_annotations\}/);
 });

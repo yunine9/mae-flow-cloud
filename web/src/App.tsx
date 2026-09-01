@@ -9,7 +9,7 @@ import {
   type AuthUser, type TaskStatus, type TaskSummary,
   type ReviewRequest, type TeamKnowledgeInsights, type UserRole,
 } from "./api";
-import { ConfirmDialogHost } from "./ConfirmDialog";
+import { ConfirmDialogHost, confirmDialog } from "./ConfirmDialog";
 import { TaskCard } from "./TaskCard";
 import { HistoryBoard } from "./HistoryBoard";
 import { LaunchWorkspace } from "./LaunchWorkspace";
@@ -215,12 +215,19 @@ function InterventionSetting({
           const preview = await getMoonlightPreview();
           expectedEligible = preview.eligible;
           if (preview.eligible > 0) {
-            includeCurrent = window.confirm(
-              `过程自动放行默认仅对后续节点生效。\n\n当前有 ${preview.eligible} 项可自动处理`
-              + (preview.blocked_annotations > 0
-                ? `，另有 ${preview.blocked_annotations} 项因存在检视意见不会自动放行` : "")
-              + "。\n\n选择“确定”同时处理当前待办；选择“取消”仅对后续节点生效。",
-            );
+            // 二选一不是真假确认:两个语义化按钮直接说清各自后果,
+            // 不再借浏览器框的"确定/取消"让人读小字猜(spec #52/T3)。
+            includeCurrent = await confirmDialog({
+              title: "切换到「月光」档",
+              message: <>过程自动放行默认仅对后续节点生效。当前有
+                {" "}{preview.eligible} 项可自动处理
+                {preview.blocked_annotations > 0
+                  ? <>，另有 {preview.blocked_annotations}
+                    项因存在检视意见不会自动放行</>
+                  : null}。</>,
+              cancelLabel: "仅对后续节点生效",
+              confirmLabel: "连当前待办一起处理",
+            });
           }
         }
         const result = await putMoonlight(
