@@ -133,3 +133,41 @@ test("推送过目闸(push_confirm):前端闸种镜像与变更摘要渲染兼�
   // 档案:issue-flow.md 的闸种清单要带上这道闸。
   assert.match(issueFlowDoc, /push_confirm|推送前过目/);
 });
+
+test("页内确认弹框:共享 confirmDialog 取代原生框,键盘与危险档纪律在位", () => {
+  const confirmDialog = readFileSync(
+    resolve("web/src/ConfirmDialog.tsx"), "utf-8");
+  const sessionView = readFileSync(
+    resolve("web/src/issues/SessionView.tsx"), "utf-8");
+  const materialsPane = readFileSync(
+    resolve("web/src/issues/MaterialsPane.tsx"), "utf-8");
+  const app = readFileSync(resolve("web/src/App.tsx"), "utf-8");
+  // 组件本体:promise 单例宿主 + FIFO 排队 + 无障碍 + 键盘纪律。
+  assert.match(confirmDialog, /export function confirmDialog\(/);
+  assert.match(confirmDialog, /export function ConfirmDialogHost\(\)/);
+  assert.match(confirmDialog, /role="dialog"/);
+  assert.match(confirmDialog, /aria-modal="true"/);
+  assert.match(confirmDialog, /aria-labelledby="confirm-dialog-title"/);
+  assert.match(confirmDialog, /event\.key === "Escape"/);
+  assert.match(confirmDialog, /event\.key === "Tab"/);
+  assert.match(confirmDialog, /event\.target === event\.currentTarget/);
+  assert.match(confirmDialog, /queue\[0\]/, "FIFO 排队:同一时刻只渲染队首");
+  assert.match(confirmDialog, /options\.danger \? cancelRef : confirmRef/,
+    "危险档默认焦点落「取消」,普通档落「确认」");
+  assert.match(confirmDialog, /triggerRef\.current\?\.focus\(\)/,
+    "关闭后焦点归还触发元素");
+  // 问题流三处接入:取消会话(危险档)/归档会话/提交检视意见。
+  for (const [name, source] of [["SessionView", sessionView],
+    ["MaterialsPane", materialsPane]] as const) {
+    assert.doesNotMatch(source, /window\.confirm\(/,
+      `${name} 不得再用浏览器原生确认框`);
+    assert.match(source, /import \{ confirmDialog \} from "\.\.\/ConfirmDialog"/);
+  }
+  assert.match(sessionView, /title: "终止会话",[\s\S]*?danger: true/);
+  assert.match(sessionView, /title: "归档会话"/);
+  assert.match(materialsPane, /title: `提交 \$\{drafts\.length\} 条检视意见并重跑分析`/);
+  // 宿主挂在 App 根部;App 自己的月光调用点允许暂时保留原生框
+  // (T3 换双语义按钮),故这里只查宿主不查 App 的 confirm。
+  assert.match(app, /import \{ ConfirmDialogHost \} from "\.\/ConfirmDialog"/);
+  assert.match(app, /<ConfirmDialogHost \/>/);
+});

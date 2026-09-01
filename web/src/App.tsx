@@ -9,6 +9,7 @@ import {
   type AuthUser, type TaskStatus, type TaskSummary,
   type ReviewRequest, type TeamKnowledgeInsights, type UserRole,
 } from "./api";
+import { ConfirmDialogHost } from "./ConfirmDialog";
 import { TaskCard } from "./TaskCard";
 import { HistoryBoard } from "./HistoryBoard";
 import { LaunchWorkspace } from "./LaunchWorkspace";
@@ -1164,6 +1165,8 @@ export function App() {
         setView("wishes");
       }}
     />}
+    {/* 页内确认弹框宿主:全站 confirmDialog 的唯一渲染点(spec #52)。 */}
+    <ConfirmDialogHost />
   </div>;
 }
 
