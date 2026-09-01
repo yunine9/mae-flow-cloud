@@ -932,6 +932,9 @@ export interface TaskSummary {
        * 意见都答复过了,门禁还红只是检视人没点"已解决"——那是等人,
        * 不是修不动(报告 D3:既有框架刻意不代检视人 resolve)。 */
       replied_ids?: string;
+      /** 同一批本地检视缺回执时，原会话已经自动补交过一次。值绑定
+       * review_ids，防止模型继续漏写时无限催办；换一批意见自然重置。 */
+      workspace_review_receipt_retry_for?: string;
       diagnosis?: string;
     };
   };
@@ -1926,6 +1929,9 @@ export class TaskService {
       /** 主任务的流水线修复会话需要通过 Bash 读取 ../pipeline/。默认
        * 开启；开发助手等旁路角色必须显式关闭，不能顺手获得任务材料。 */
       pipelineArtifacts?: boolean;
+      /** 主任务需要通过 Bash 读取批注、写逐条回执。只挂任务自己的
+       * reviews 子目录，不暴露 task.json/pi-agent 等宿主控制数据。 */
+      reviewMaterials?: boolean;
     } = {},
   ): Promise<TaskCommandContainer> {
     const isolation = this.options.isolation;
@@ -1965,11 +1971,35 @@ export class TaskService {
       // mirrorPipelineArtifacts 只原地刷新内容，运行中的容器即可看到。
       mkdirSync(pipelineArtifacts, { recursive: true });
     }
+    const reviewMaterials = resolve(task.summary.workspace, "reviews");
+    const mountReviewMaterials = safety.reviewMaterials ?? true;
+    if (mountReviewMaterials) {
+      mkdirSync(reviewMaterials, { recursive: true });
+      // Linux root 守护进程会把代码仓交给非 root 容器用户；reviews 是
+      // 独立 bind，不能漏掉同一份属主交接，否则 rw 挂载仍会 EACCES。
+      const prepared = prepareContainerHostPaths({
+        workspace: reviewMaterials,
+        volumes: [],
+        user,
+        markerRoot: join(this.options.dataDir, ".container-ownership"),
+      });
+      if (prepared.active && prepared.workspaceEntries) {
+        this.options.log?.(
+          `[container-ownership] ${task.summary.id}: reviews=`
+          + `${prepared.workspaceEntries},owner=${prepared.owner!.uid}:`
+          + `${prepared.owner!.gid}`);
+      }
+    }
     const mounts = this.taskContainerMounts(task, [
       ...hostMounts,
       ...(volumes ?? []),
       ...(mountPipelineArtifacts
         ? [`${pipelineArtifacts}:${pipelineArtifacts}:ro`] : []),
+      // 兼容测试和旧现场直接把任务根当 cwd 的形态：主工作区挂载已经
+      // 包含 reviews，不重复覆盖隔离关键目录。正式任务 cwd 是仓库子目录，
+      // 因而这里只额外挂入一个任务专属的小目录。
+      ...(mountReviewMaterials && resolve(cwd) !== resolve(task.summary.workspace)
+        ? [`${reviewMaterials}:${reviewMaterials}:rw`] : []),
       ...(safety.gitReadOnly && existsSync(gitPath)
         ? [`${gitPath}:${gitPath}:ro`] : []),
     ]);
@@ -4060,14 +4090,29 @@ export class TaskService {
       wanted.has(item.id) && item.status === "sent");
     if (!expected.length) return { ok: true };
     const path = join(task.summary.workspace, "reviews", "local-receipts.json");
+    const missing = expected.map((item) => item.id).join("、");
+    let text: string;
+    try {
+      text = readFileSync(path, "utf-8");
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException)?.code;
+      return {
+        ok: false,
+        detail: code === "ENOENT"
+          ? `Agent 没有留下逐条检视回执（缺 ${missing}）。`
+            + "没有拿总体回复冒充逐条闭环。"
+          : `逐条检视回执无法读取（缺 ${missing}）：${String(error)}。`
+            + "没有拿总体回复冒充逐条闭环。",
+      };
+    }
     let raw: unknown;
     try {
-      raw = JSON.parse(readFileSync(path, "utf-8"));
+      raw = JSON.parse(text);
     } catch (error) {
       return {
         ok: false,
-        detail: `Agent 没有留下逐条检视回执（缺 ${expected.map((item) => item.id)
-          .join("、")}）。已停在现场，不能拿总体回复冒充逐条闭环。`,
+        detail: `Agent 留下的逐条检视回执不是有效 JSON（涉及 ${missing}）：`
+          + `${String(error)}。没有拿总体回复冒充逐条闭环。`,
       };
     }
     const parsed = parseWorkspaceReviewReceipts(raw, expected);
@@ -6249,6 +6294,9 @@ export class TaskService {
       if (loop && pendingReview.length) {
         loop.state = "repairing";
         loop.diagnosis = undefined;
+        // 人明确点了重跑，这是一次新的恢复尝试；新会话仍应先自己补救
+        // 一次格式/落盘疏漏，不能因为上一会话用过自动预算就立即停机。
+        loop.workspace_review_receipt_retry_for = undefined;
         task.summary.delivery!.stalled = undefined;
         task.summary.delivery!.waiting_on = undefined;
         task.summary.delivery!.verify_deadline = undefined;
@@ -8420,6 +8468,7 @@ export class TaskService {
         // 开发助手只处理代码现场，不参与流水线修复；任务级 pipeline
         // 材料不应因它复用 Coding 容器实现而越过角色边界。
         pipelineArtifacts: false,
+        reviewMaterials: false,
       });
       if (!this.developerAssistantCurrent(task, epoch)) {
         throw new Error("开发助手启动期间任务状态已变化");
@@ -15255,6 +15304,44 @@ export class TaskService {
           this.notifyOutcome(task);
           break;
         }
+        // 逐条回执是 Agent 本轮工作的机器收据，不是需要用户处理的业务
+        // 异常。必须趁原会话和容器还活着检查：第一次漏写/写坏就原地
+        // 补交一次，不重新改代码、不另起 Agent。过去在 dispose 之后才
+        // 检查，平台自己的 reviews 挂载遗漏会被误报成人工停机。
+        let workspaceReceiptFailure: string | undefined;
+        const workspaceLoop = task.summary.delivery?.loop;
+        if (workspaceLoop?.review_source === "workspace") {
+          const receipts = await this.consumeWorkspaceReviewReceipts(task);
+          if (!receipts.ok) {
+            const retryFor = workspaceLoop.review_ids
+              ?? `workspace:${(workspaceLoop.workspace_review_annotation_ids ?? [])
+                .slice().sort().join(",")}`;
+            if (task.driver
+                && workspaceLoop.workspace_review_receipt_retry_for !== retryFor) {
+              workspaceLoop.workspace_review_receipt_retry_for = retryFor;
+              workspaceLoop.diagnosis = receipts.detail;
+              task.summary.status = "running";
+              task.summary.detail = "代码修改已完成，正在自动补齐逐条检视回执";
+              this.persist(task);
+              const wanted = new Set(
+                workspaceLoop.workspace_review_annotation_ids ?? []);
+              const pending = this.annotations(task).list().filter((item) =>
+                wanted.has(item.id) && item.status === "sent");
+              await this.settle(task, task.driver.continueWith([
+                "代码修改已经完成，但逐条检视回执没有成功落盘。",
+                receipts.detail ?? "逐条检视回执不完整。",
+                "现在只补回执，不要重新修改代码、不要重新提交，也不要重复走流程。",
+                "平台已经创建并挂载 ../reviews 目录；直接写 local-receipts.json，"
+                  + "不要创建或修改它的上级目录。",
+                workspaceReviewReceiptInstructions(pending),
+                "写完后立即结束本轮。",
+              ].join("\n\n")), epoch);
+              break;
+            }
+            workspaceReceiptFailure = receipts.detail
+              ?? "逐条检视回执不完整";
+          }
+        }
         // 收口发言先落袋:修复会话"判断修不了"时这就是给人的诊断,
         // 下面 tryDeliver→pipelineVerdict 的 halted 分支要用。
         task.lastReply = task.driver?.finalReply();
@@ -15270,21 +15357,19 @@ export class TaskService {
         // 专项使命到这儿才算消费掉:会话真做完了。早清会让"修一半
         // 被重启"的重建会话拿不到使命。
         task.mission = undefined;
-        // 本地人工意见必须逐条有机器回执，才能进入 Build-Fix 和作者复检。
-        // 这一步在 push 前、容器停净后执行：回执对应的正是当前本地 HEAD。
-        if (task.summary.delivery?.loop?.review_source === "workspace") {
-          const receipts = await this.consumeWorkspaceReviewReceipts(task);
-          if (!receipts.ok) {
-            const loop = task.summary.delivery.loop!;
-            loop.state = "halted";
-            loop.diagnosis = receipts.detail;
-            task.summary.status = "verifying";
-            task.summary.detail = receipts.detail ?? "逐条检视回执不完整";
-            task.summary.delivery.stalled = task.summary.detail;
-            this.persist(task);
-            this.notifyRepairStopped(task);
-            break;
-          }
+        // 自动补交一次仍失败才停。这里不能拿总体回复顶账，但也不能把
+        // 一次可恢复的格式/落盘问题直接甩给用户。
+        if (workspaceReceiptFailure) {
+          const loop = task.summary.delivery!.loop!;
+          loop.state = "halted";
+          loop.diagnosis = workspaceReceiptFailure;
+          task.summary.status = "verifying";
+          task.summary.detail = `自动补交逐条检视回执后仍未完成：${
+            workspaceReceiptFailure}。已保留代码现场，请人工重跑或查看明细。`;
+          task.summary.delivery!.stalled = task.summary.detail;
+          this.persist(task);
+          this.notifyRepairStopped(task);
+          break;
         }
         // 终态在交付判定之后才定:先标 completed 再改,轮询会撞见
         // 中间态(实测竞态)。交付把状态升为 verifying/await_merge,

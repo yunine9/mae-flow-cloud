@@ -6,8 +6,9 @@
  * bootstrap 和宿主文件工具创建的内容都归 root；只把 Docker `-u` 改成
  * 10001 并不会自动改变 bind mount 的所有权。
  *
- * 本模块只处理真正挂给任务容器的代码工作区和平台管理的构建缓存。
- * task.json、models.json、账号与凭据等控制面目录绝不能顺手 chown。
+ * 本模块只处理真正挂给任务容器的代码工作区、明确单独挂载的任务材料
+ * 子目录和平台管理的构建缓存。task.json、models.json、账号与凭据等
+ * 控制面目录绝不能顺手 chown。
  */
 
 import {
@@ -191,8 +192,9 @@ function prepareCache(
   return true;
 }
 
-/** 在 docker run 之前调用。workspace 必须是本次真正 bind 的代码现场，
- * 不能传任务控制面根目录。缓存使用属主标记避免每单递归扫描大仓库。 */
+/** 在 docker run 之前调用。workspace 必须是本次真正可写 bind 的代码
+ * 现场或平台明确划出的窄材料目录，不能传任务控制面根目录。缓存使用
+ * 属主标记避免每单递归扫描大仓库。 */
 export function prepareContainerHostPaths(input: {
   workspace: string;
   volumes: readonly string[];

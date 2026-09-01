@@ -129,6 +129,7 @@ export function workspaceReviewReceiptInstructions(items: Annotation[]): string 
     `- ${item.id}: revision ${item.rework ?? 0}`).join("\n");
   return [
     "逐条处理后必须把机器可核对的回执写到 ../reviews/local-receipts.json。",
+    "该目录在代码仓外，不会进入提交；可直接使用文件工具或 Bash 写入。",
     "文件格式必须是 JSON 对象，不要写 Markdown 围栏：",
     '{"receipts":[{"annotation_id":"an-...","revision":0,'
       + '"outcome":"fixed|not_fixed|needs_clarification",'
