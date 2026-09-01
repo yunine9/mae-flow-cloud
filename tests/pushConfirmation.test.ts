@@ -17,6 +17,7 @@ import type { AddressInfo } from "node:net";
 import { ScriptedModelServer } from "../src/scriptedModel.ts";
 import { TaskControlError, TaskService } from "../src/taskService.ts";
 import { createTaskServer } from "../src/server.ts";
+import { sealPipelineLifecycle } from "./kernelHostFixture.ts";
 
 async function until<T>(probe: () => T | undefined, what: string): Promise<T> {
   const deadline = Date.now() + 20_000;
@@ -1016,6 +1017,12 @@ test("push 检视返工用 feedback-open 进入持续检视，不倒退到开发
       python: "python3",
       continuousReview: true,
     };
+    sealPipelineLifecycle({
+      cwd: repo.cwd,
+      workspace: internal.summary.workspace,
+      taskId: id,
+      kernelRoot: join(process.cwd(), "kernel"),
+    });
     // 不让队列真的拉起模型；本用例只验证宿主在派单前完成批次登记。
     (service as any).runningCount = 99;
     internal.summary.push_confirmation = true;
@@ -1059,6 +1066,12 @@ test("feedback-open 失败时决定原样保留，修好内核后同一提交可
   try {
     writeFileSync(join(repo.cwd, ".mae-flow.json"),
       JSON.stringify(continuousReviewState(repo)));
+    sealPipelineLifecycle({
+      cwd: repo.cwd,
+      workspace: internal.summary.workspace,
+      taskId: id,
+      kernelRoot: join(process.cwd(), "kernel"),
+    });
     // 先给一个死内核:feedback-open 必然失败。这是这道兜底防御的真实故障形态,
     // 必须在它下面被测(不是只测 happy path)。
     (service as any).options.host = {

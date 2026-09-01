@@ -225,9 +225,11 @@ import {
   closeKernelDelivery,
   createKernelHostProof,
   ensureKernelHostCapability,
+  kernelHostCapabilityPresent,
   openKernelFeedback,
   recordKernelFeedbackResult,
-  trustedKernelHostProjection,
+  trustedKernelHostActiveBatch,
+  trustedKernelHostLifecycle,
   type KernelFeedbackBatch,
 } from "./kernelDelivery.ts";
 import {
@@ -10157,13 +10159,13 @@ export class TaskService {
 
   private continuousReviewTask(task: TaskState): boolean {
     if (!task.cwd) return false;
-    try {
-      const state = JSON.parse(readFileSync(
-        join(task.cwd, ".mae-flow.json"), "utf-8"));
-      return state?.execution_contract?.continuous_review === true;
-    } catch {
-      return false;
-    }
+    // 只认 Agent 工作区外的宿主 capability。状态文件里的开关可被 Agent
+    // 写坏，只能用于展示，绝不能把一张受保护任务降级回旧终态语义。
+    return kernelHostCapabilityPresent({
+      workspace: task.summary.workspace,
+      taskId: task.summary.id,
+      cwd: task.cwd,
+    });
   }
 
   private activeKernelFeedback(task: TaskState): {
@@ -10179,6 +10181,13 @@ export class TaskService {
       const batch = (state?.delivery_loop?.batches ?? []).find(
         (item: any) => String(item?.batch_id ?? "") === batchId);
       if (!batchId || !batch || !Array.isArray(batch.items)) return undefined;
+      if (!trustedKernelHostLifecycle({
+        cwd: task.cwd,
+        workspace: task.summary.workspace,
+        taskId: task.summary.id,
+        actions: ["feedback-open", "pipeline-record"],
+        state,
+      })) return undefined;
       return {
         batchId,
         current: String(state?.current ?? ""),
@@ -10194,12 +10203,24 @@ export class TaskService {
   }
 
   private syncFeedbackStoreFromKernel(task: TaskState): void {
-    if (!task.cwd) return;
+    // Legacy/local-plugin tasks never opted into the Cloud delivery-loop
+    // contract.  They have no host receipts or FeedbackStore to rebuild; the
+    // shared pipeline path must preserve their original terminal semantics.
+    if (!task.cwd || !this.continuousReviewTask(task)) return;
     try {
       const state = JSON.parse(readFileSync(
         join(task.cwd, ".mae-flow.json"), "utf-8"));
       const batches = Array.isArray(state?.delivery_loop?.batches)
         ? state.delivery_loop.batches : [];
+      if (!trustedKernelHostLifecycle({
+        cwd: task.cwd,
+        workspace: task.summary.workspace,
+        taskId: task.summary.id,
+        actions: ["feedback-open", "feedback-result", "pipeline-record", "close"],
+        state,
+      })) {
+        throw new Error("内核持续检视生命周期缺少完整的 Cloud 宿主权威收据");
+      }
       const indexPath = join(
         task.summary.workspace, "feedback", "index.jsonl");
       let store = new FeedbackStore(indexPath);
@@ -10232,44 +10253,6 @@ export class TaskService {
       for (const batch of batches) {
         const status = statuses[String(batch?.status ?? "")];
         if (!status || !Array.isArray(batch?.items)) continue;
-        const openProjection = {
-          batch_id: batch?.batch_id ?? null,
-          task_id: batch?.task_id ?? null,
-          base_sha: batch?.base_sha ?? null,
-          opened_at: batch?.opened_at ?? null,
-          items: batch?.items ?? null,
-          payload_digest: batch?.payload_digest ?? null,
-        };
-        if (!trustedKernelHostProjection({
-          cwd: task.cwd,
-          workspace: task.summary.workspace,
-          taskId: task.summary.id,
-          action: "feedback-open",
-          projection: openProjection,
-        })) {
-          throw new Error(`内核反馈批次 ${String(batch?.batch_id ?? "(空)")}`
-            + " 缺少 Cloud 宿主权威收据");
-        }
-        if (batch?.result_digest) {
-          const resultProjection = {
-            batch_id: batch?.batch_id ?? null,
-            base_sha: batch?.base_sha ?? null,
-            results: batch?.results ?? null,
-            result_digest: batch?.result_digest ?? null,
-            result_head: batch?.result_head ?? null,
-            result_at: batch?.result_at ?? null,
-          };
-          if (!trustedKernelHostProjection({
-            cwd: task.cwd,
-            workspace: task.summary.workspace,
-            taskId: task.summary.id,
-            action: "feedback-result",
-            projection: resultProjection,
-          })) {
-            throw new Error(`内核反馈结果 ${String(batch?.batch_id ?? "(空)")}`
-              + " 缺少 Cloud 宿主权威收据");
-          }
-        }
         const results = new Map((Array.isArray(batch.results)
           ? batch.results : []).map((item: any) => [String(item?.id ?? ""), item]));
         for (const item of batch.items) {
@@ -10879,6 +10862,7 @@ export class TaskService {
                 host_authority: ensureKernelHostCapability({
                   workspace,
                   taskId: task.summary.id,
+                  cwd,
                 }),
               } : {}),
             },
@@ -14639,38 +14623,28 @@ export class TaskService {
     const batch = Array.isArray(loop?.batches)
       ? loop.batches.find((item: any) => item?.batch_id === batchId) : undefined;
     if (!batchId || !batch) return undefined;
-    const openProjection = {
-      batch_id: batch.batch_id ?? null,
-      task_id: batch.task_id ?? null,
-      base_sha: batch.base_sha ?? null,
-      opened_at: batch.opened_at ?? null,
-      items: batch.items ?? null,
-      payload_digest: batch.payload_digest ?? null,
-    };
-    if (!trustedKernelHostProjection({
+    if (!(batch.result_digest ? trustedKernelHostLifecycle({
       cwd: task.cwd,
       workspace: task.summary.workspace,
       taskId: task.summary.id,
-      action: "feedback-open",
-      projection: openProjection,
-    })) {
+      actions: ["feedback-result", "pipeline-record"],
+      state,
+    }) : trustedKernelHostActiveBatch({
+      cwd: task.cwd,
+      workspace: task.summary.workspace,
+      taskId: task.summary.id,
+      actions: ["feedback-open", "pipeline-record"],
+      state,
+    }))) {
       return `反馈批次 ${batchId} 缺少 Cloud 宿主权威收据，已拒绝使用可篡改状态`;
     }
     if (batch.result_digest) {
-      const resultProjection = {
-        batch_id: batch.batch_id ?? null,
-        base_sha: batch.base_sha ?? null,
-        results: batch.results ?? null,
-        result_digest: batch.result_digest ?? null,
-        result_head: batch.result_head ?? null,
-        result_at: batch.result_at ?? null,
-      };
-      if (!trustedKernelHostProjection({
+      if (!trustedKernelHostLifecycle({
         cwd: task.cwd,
         workspace: task.summary.workspace,
         taskId: task.summary.id,
-        action: "feedback-result",
-        projection: resultProjection,
+        actions: ["feedback-result", "pipeline-record"],
+        state,
       })) {
         return `反馈批次 ${batchId} 的处理结果没有 Cloud 宿主权威收据，拒绝冒充闭环`;
       }

@@ -7,7 +7,8 @@ workflow; it never advances a step or marks quality evidence as passed.
 
 from .shared import STATE_PATH, json, os, time
 from .wiring import api
-from .host_capability import save_with_host_proof, verify_host_proof
+from .host_capability import (
+    host_managed_continuous_review, save_with_host_proof, verify_host_proof)
 from .lightcheck import _is_test_file
 from .state_config import _is_source_path
 from mae_flow_core.workflow.execution_contract import continuous_review_enabled
@@ -142,7 +143,7 @@ def cmd_user_intervention(flow, state, args):
     if args.intervention_action != "reconcile":
         api.die("未知用户介入动作", 2)
     payload = _load_payload(args.file)
-    continuous = continuous_review_enabled(state)
+    continuous = host_managed_continuous_review() or continuous_review_enabled(state)
     proof = None
     if continuous:
         if not getattr(args, "host_proof", None):

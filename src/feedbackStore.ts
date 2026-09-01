@@ -111,8 +111,19 @@ export class FeedbackStore {
     for (let index = 0; index < lines.length; index += 1) {
       const line = lines[index];
       if (!line.trim()) continue;
+      let operation: Operation;
       try {
-        const operation = JSON.parse(line) as Operation;
+        operation = JSON.parse(line) as Operation;
+      } catch (error) {
+        // 只宽容真正被进程截断的最后一行 JSON。完整 JSON 即使没有末尾
+        // 换行，也必须继续做语义校验；不能把伪造操作当 torn tail 跳过。
+        const truncatedTail = index === lines.length - 1 && !text.endsWith("\n");
+        if (truncatedTail) break;
+        throw new FeedbackStoreCorruptionError(
+          `持续检视索引第 ${index + 1} 行损坏，已停止读写，不能静默隐藏反馈：${String(error)}`,
+        );
+      }
+      try {
         if (operation.op === "upsert" && validRecord(operation.record)) {
           records.set(operation.record.id, operation.record);
         } else if (operation.op === "resolve") {
@@ -132,8 +143,6 @@ export class FeedbackStore {
           throw new Error("未知操作或缺少反馈标识");
         }
       } catch (error) {
-        const truncatedTail = index === lines.length - 1 && !text.endsWith("\n");
-        if (truncatedTail) break;
         throw new FeedbackStoreCorruptionError(
           `持续检视索引第 ${index + 1} 行损坏，已停止读写，不能静默隐藏反馈：${String(error)}`,
         );

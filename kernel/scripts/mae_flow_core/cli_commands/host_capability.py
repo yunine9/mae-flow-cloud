@@ -105,6 +105,54 @@ def _capability_root():
     _die("当前任务找不到 Cloud 宿主信任根，拒绝宿主命令")
 
 
+def _bound_task_id(root):
+    """Read the task identity from the host-only cwd binding."""
+    project = os.path.realpath(os.getcwd())
+    name = "binding-%s.json" % hashlib.sha256(
+        project.encode("utf-8")).hexdigest()
+    binding = _read_json_file(os.path.join(root, name), "宿主任务绑定")
+    if (not isinstance(binding, dict)
+            or binding.get("schema") != "mae-flow-host-binding/1"
+            or binding.get("continuous_review") is not True
+            or os.path.realpath(str(binding.get("cwd") or "")) != project):
+        _die("宿主任务绑定损坏或与当前工作区不匹配")
+    task_id = str(binding.get("task_id") or "").strip()
+    if not task_id:
+        _die("宿主任务绑定缺少任务身份")
+    return task_id
+
+
+def host_managed_continuous_review():
+    """Whether an external, Agent-inaccessible capability binds this task."""
+    project = os.path.realpath(os.getcwd())
+    workspace = os.path.dirname(project)
+    candidates = (
+        os.path.join(os.path.dirname(workspace), ".host-capabilities"),
+        os.path.join(workspace, ".host-capabilities"),
+    )
+    for candidate in candidates:
+        if not os.path.lexists(candidate):
+            continue
+        root = _secure_directory(candidate, "宿主信任根")
+        binding_name = "binding-%s.json" % hashlib.sha256(
+            project.encode("utf-8")).hexdigest()
+        if not os.path.lexists(os.path.join(root, binding_name)):
+            return False
+        task_id = _bound_task_id(root)
+        name = hashlib.sha256(task_id.encode("utf-8")).hexdigest() + ".json"
+        path = os.path.join(root, name)
+        if not os.path.lexists(path):
+            return False
+        stored = _read_json_file(path, "宿主能力")
+        authority = stored.get("authority") if isinstance(stored, dict) else None
+        if (stored.get("schema") != "mae-flow-host-capability/1"
+                or not isinstance(authority, dict)
+                or authority.get("task_id") != task_id):
+            _die("当前任务的宿主能力绑定损坏")
+        return True
+    return False
+
+
 def _read_json_file(path, label):
     absolute = _secure_file(path, label)
     try:
@@ -155,6 +203,8 @@ def _verify_rsa_sha256(authority, message, signature):
 
 def _trusted_authority(state, proof, root):
     task_id = _text(proof.get("task_id"), "proof.task_id", 200)
+    if task_id != _bound_task_id(root):
+        _die("宿主凭据与当前任务目录绑定不匹配")
     name = hashlib.sha256(task_id.encode("utf-8")).hexdigest() + ".json"
     stored = _read_json_file(os.path.join(root, name), "宿主能力")
     if not isinstance(stored, dict) or stored.get("schema") != \
@@ -179,10 +229,8 @@ def _trusted_authority(state, proof, root):
     if not hmac.compare_digest(str(authority.get("key_id") or ""),
                                expected_key_id):
         _die("宿主能力 key_id 与公钥不匹配")
-    pinned = (state.get("execution_contract") or {}).get("host_authority")
-    if not isinstance(pinned, dict) or not hmac.compare_digest(
-            _canonical(pinned), _canonical(authority)):
-        _die("任务状态中的宿主公钥与 Cloud 信任根不一致，拒绝执行")
+    # Agent 可写状态中的 host_authority 只是诊断镜像，不是信任根。真正的
+    # 任务身份、公钥和强制模式全部来自工作区外的 capability 文件。
     return authority
 
 
@@ -221,44 +269,29 @@ def verify_host_proof(state, proof_path, action, payload):
     }
 
 
-def _batch_projection(state, batch_id, result=False):
-    loop = state.get("delivery_loop") or {}
-    batch = next((item for item in loop.get("batches", [])
-                  if isinstance(item, dict)
-                  and str(item.get("batch_id") or "") == str(batch_id)), None)
-    if not batch:
-        return None
-    keys = (("batch_id", "task_id", "base_sha", "opened_at", "items",
-             "payload_digest") if not result else
-            ("batch_id", "base_sha", "results", "result_digest",
-             "result_head", "result_at"))
-    return {key: batch.get(key) for key in keys}
-
-
 def host_projection(state, action, payload):
-    """Stable authority-owned projection for a host mutation receipt."""
-    if action == "feedback-open":
-        if payload.get("mode") == "adopt-watch":
-            return {
-                "migration_id": payload.get("batch_id"),
-                "current": state.get("current"),
-                "continuous_review": bool((state.get("execution_contract") or {})
-                                          .get("continuous_review")),
-            }
-        return _batch_projection(state, payload.get("batch_id"))
-    if action == "feedback-result":
-        return _batch_projection(state, payload.get("batch_id"), result=True)
-    if action == "close":
-        loop = state.get("delivery_loop") or {}
-        event_id = str(payload.get("event_id") or "")
-        return next((item for item in loop.get("close_events", [])
-                     if isinstance(item, dict)
-                     and str(item.get("event_id") or "") == event_id), None)
-    if action == "pipeline-record":
-        return (state.get("quality") or {}).get("external_verification")
-    if action == "intervention-reconcile":
-        return state.get("user_intervention")
-    return None
+    """Seal the complete lifecycle produced by one host mutation.
+
+    A receipt for only ``PASS`` or ``results`` can be spliced together with an
+    Agent-written ``current``/``status``.  Every host action therefore seals the
+    same indivisible lifecycle projection; later legitimate host actions simply
+    emit a newer complete projection.
+    """
+    if action not in ("feedback-open", "feedback-result", "close",
+                      "pipeline-record", "intervention-reconcile"):
+        return None
+    loop = state.get("delivery_loop")
+    return {
+        "schema": "mae-flow-host-lifecycle/1",
+        "action": action,
+        "current": state.get("current"),
+        "active_batch_id": ((loop or {}).get("active_batch_id")
+                            if isinstance(loop, dict) else None),
+        "delivery_loop": loop if isinstance(loop, dict) else None,
+        "external_verification": ((state.get("quality") or {})
+                                  .get("external_verification")),
+        "user_intervention": state.get("user_intervention"),
+    }
 
 
 def _receipt_path(root, task_id, nonce):
@@ -322,10 +355,7 @@ def _valid_stored_receipt(state, record, action, projection, root):
 def trusted_projection(state, action, projection):
     """Verify a state projection against a host-only durable receipt."""
     root = _capability_root()
-    authority = (state.get("execution_contract") or {}).get("host_authority") or {}
-    task_id = str(authority.get("task_id") or "")
-    if not task_id:
-        return False
+    task_id = _bound_task_id(root)
     prefix = hashlib.sha256(task_id.encode("utf-8")).hexdigest() + ".receipt-"
     for name in reversed(sorted(os.listdir(root))):
         if not name.startswith(prefix) or not name.endswith(".json"):
@@ -334,6 +364,89 @@ def trusted_projection(state, action, projection):
             record = _read_json_file(
                 os.path.join(root, name), "宿主权威收据")
             if _valid_stored_receipt(state, record, action, projection, root):
+                return True
+        except SystemExit:
+            raise
+    return False
+
+
+def trusted_current_lifecycle(state, actions):
+    """Require an exact signed predecessor before another host transition."""
+    return any(trusted_projection(
+        state, action, host_projection(state, action, {}))
+        for action in actions)
+
+
+def trusted_pipeline_projection(state, projection):
+    """Verify the exact pipeline fact inside an authentic pipeline receipt.
+
+    Later feedback legitimately changes ``current`` and ``delivery_loop``. The
+    original pipeline receipt remains authoritative for its immutable quality
+    projection, while ready/terminal attestations still require a separate
+    full-lifecycle receipt for their current state.
+    """
+    root = _capability_root()
+    task_id = _bound_task_id(root)
+    prefix = hashlib.sha256(task_id.encode("utf-8")).hexdigest() + ".receipt-"
+    for name in reversed(sorted(os.listdir(root))):
+        if not name.startswith(prefix) or not name.endswith(".json"):
+            continue
+        try:
+            record = _read_json_file(
+                os.path.join(root, name), "宿主权威收据")
+            stored = record.get("projection") if isinstance(record, dict) else None
+            if (isinstance(stored, dict)
+                    and _valid_stored_receipt(
+                        state, record, "pipeline-record", stored, root)
+                    and hmac.compare_digest(
+                        _canonical(stored.get("external_verification")).encode("utf-8"),
+                        _canonical(projection).encode("utf-8"))):
+                return True
+        except SystemExit:
+            raise
+    return False
+
+
+def trusted_active_batch(state, actions):
+    """Verify active_batch_id and the complete active batch against a receipt.
+
+    Agent work may legitimately move ``current`` between host calls, but it may
+    not rewrite which feedback owns the writer or any field of that batch.
+    """
+    loop = state.get("delivery_loop") or {}
+    active_id = str(loop.get("active_batch_id") or "")
+    active = next((item for item in loop.get("batches", [])
+                   if isinstance(item, dict)
+                   and str(item.get("batch_id") or "") == active_id), None)
+    if not active_id or active is None:
+        return False
+    root = _capability_root()
+    task_id = _bound_task_id(root)
+    prefix = hashlib.sha256(task_id.encode("utf-8")).hexdigest() + ".receipt-"
+    for name in reversed(sorted(os.listdir(root))):
+        if not name.startswith(prefix) or not name.endswith(".json"):
+            continue
+        try:
+            record = _read_json_file(
+                os.path.join(root, name), "宿主权威收据")
+            proof = record.get("proof") if isinstance(record, dict) else None
+            action = str((proof or {}).get("action") or "")
+            stored = record.get("projection") if isinstance(record, dict) else None
+            stored_loop = ((stored or {}).get("delivery_loop")
+                           if isinstance(stored, dict) else None)
+            stored_active = next((
+                item for item in (stored_loop or {}).get("batches", [])
+                if isinstance(item, dict)
+                and str(item.get("batch_id") or "") == active_id
+            ), None) if isinstance(stored_loop, dict) else None
+            if (action in actions
+                    and (stored or {}).get("active_batch_id") == active_id
+                    and stored_active is not None
+                    and hmac.compare_digest(
+                        _canonical(stored_active).encode("utf-8"),
+                        _canonical(active).encode("utf-8"))
+                    and _valid_stored_receipt(
+                        state, record, action, stored, root)):
                 return True
         except SystemExit:
             raise

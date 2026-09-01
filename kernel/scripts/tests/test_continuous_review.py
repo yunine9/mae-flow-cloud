@@ -311,6 +311,18 @@ class DeliveryHostProofTests(TempProject):
             json.dump({"schema": "mae-flow-host-capability/1",
                        "authority": authority, "private_key": "not-readable"}, stream)
         os.chmod(capability, 0o600)
+        binding = os.path.join(
+            trust, "binding-" + hashlib.sha256(
+                os.path.realpath(repository).encode("utf-8")).hexdigest() + ".json")
+        with open(binding, "w", encoding="utf-8") as stream:
+            json.dump({
+                "schema": "mae-flow-host-binding/1",
+                "task_id": "task-7",
+                "workspace": os.path.realpath(workspace),
+                "cwd": os.path.realpath(repository),
+                "continuous_review": True,
+            }, stream)
+        os.chmod(binding, 0o600)
         return root, old, trust, authority
 
     def test_forged_proof_is_rejected_even_when_shell_obfuscation_evades_hint(self):
@@ -394,6 +406,45 @@ class DeliveryHostProofTests(TempProject):
             cmd_pipeline({"steps": {}}, value, SimpleNamespace(
                 action="record", file=facts, host_proof=None))
         self.assertNotIn("pipeline", value.get("quality", {}))
+
+    def test_external_binding_cannot_be_disabled_from_mutable_state(self):
+        root, old, _trust, _authority = self.trusted_layout()
+        try:
+            value = state("external_verify")
+            value["execution_contract"].pop("continuous_review", None)
+            value["execution_contract"].pop("host_authority", None)
+            facts = self.write_json("pipeline.json", {
+                "sha": HEAD, "status": "success",
+            })
+            with self.assertRaises(SystemExit):
+                cmd_pipeline({"steps": {}}, value, SimpleNamespace(
+                    action="record", file=facts, host_proof=None))
+            self.assertNotIn("pipeline", value.get("quality", {}))
+        finally:
+            os.chdir(old)
+            root.cleanup()
+
+    def test_host_projection_seals_complete_lifecycle(self):
+        value = state("delivery_watch")
+        value["delivery_loop"] = {
+            "schema": delivery.STATE_SCHEMA,
+            "active_batch_id": "fb-1",
+            "batches": [{
+                "batch_id": "fb-1", "status": "closed",
+                "results": [{"id": "one", "status": "fixed"}],
+            }],
+            "close_events": [],
+        }
+        value["quality"] = {"external_verification": {
+            "verdict": "PASS", "sha": HEAD,
+        }}
+        projection = host_capability.host_projection(
+            value, "pipeline-record", {})
+        self.assertEqual("mae-flow-host-lifecycle/1", projection["schema"])
+        self.assertEqual("delivery_watch", projection["current"])
+        self.assertEqual("fb-1", projection["active_batch_id"])
+        self.assertEqual("closed", projection["delivery_loop"]["batches"][0]["status"])
+        self.assertEqual("PASS", projection["external_verification"]["verdict"])
 
     def test_trusted_receipt_accepts_utf8_projection(self):
         projection = {"summary": "流水线问题已修复", "status": "fixed"}

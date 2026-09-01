@@ -11,9 +11,9 @@ import json
 from .shared import os, time
 from .wiring import api
 from .host_capability import (
-    host_projection,
+    host_managed_continuous_review,
     save_with_host_proof,
-    trusted_projection,
+    trusted_active_batch,
     verify_host_proof,
 )
 from mae_flow_core.quality.external_verification import (
@@ -81,7 +81,7 @@ def _route_external_verification(flow, st, record):
         return
     verdict = record.get("verdict")
     if verdict == "PASS":
-        if continuous_review_enabled(st):
+        if host_managed_continuous_review() or continuous_review_enabled(st):
             queued = api.complete_verified_feedback(
                 st, str(record.get("sha") or record.get("head") or ""))
             target = "feedback_triage" if queued else "delivery_watch"
@@ -105,7 +105,8 @@ def cmd_pipeline(flow, st, args):
         return
 
     facts = _read_facts(os.path.abspath(args.file))
-    continuous = continuous_review_enabled(st)
+    # 强制模式来自 Agent 工作区外的 capability；状态里的 false 不能降级。
+    continuous = host_managed_continuous_review() or continuous_review_enabled(st)
     proof = None
     if continuous:
         if not getattr(args, "host_proof", None):
@@ -118,10 +119,8 @@ def cmd_pipeline(flow, st, args):
                        if isinstance(item, dict)
                        and str(item.get("batch_id") or "") == active_id), None)
         if active and active.get("status") == "awaiting_verification":
-            projection = host_projection(
-                st, "feedback-result", {"batch_id": active_id})
-            if projection is None or not trusted_projection(
-                    st, "feedback-result", projection):
+            if not trusted_active_batch(
+                    st, ("feedback-result", "pipeline-record")):
                 api.die("pipeline record 拒绝核销未经宿主收据背书的反馈结果", 2)
     head = api.sh("git rev-parse --verify HEAD")
     at = time.strftime("%Y-%m-%d %H:%M:%S")

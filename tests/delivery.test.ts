@@ -808,6 +808,7 @@ test("交付服务是部署基础设施:固定地址跑通交付", async () => {
     host: {
       kernelRoot: KERNEL_ROOT,
       python: "python3",
+      continuousReview: true,
       // 刻意不给 repoPath:代码仓由本单明确填写
     },
     delivery: { platformUrl: platform.baseUrl },
@@ -851,6 +852,7 @@ test("交付请求带任务归属人身份头:MR 发起人=本人的原料到位
       kernelRoot: KERNEL_ROOT,
       repoPath: platform.barePath,
       python: "python3",
+      continuousReview: true,
     },
     delivery: { platformUrl: platform.baseUrl },
     gitCredential: (account) => account === "zhang"

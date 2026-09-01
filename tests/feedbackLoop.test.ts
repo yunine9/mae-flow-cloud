@@ -18,6 +18,7 @@ import {
 import { TaskService } from "../src/taskService.ts";
 import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
 import {
+  createKernelHostProof,
   openKernelFeedback,
   recordKernelFeedbackResult,
 } from "../src/kernelDelivery.ts";
@@ -100,6 +101,22 @@ test("反馈索引的合法 JSON 也必须通过语义校验，不能伪造来�
     FeedbackStoreCorruptionError);
 });
 
+test("无末尾换行的完整 JSON 仍须读完并做语义校验", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-feedback-tail-"));
+  const path = join(dir, "feedback.jsonl");
+  writeFileSync(path, JSON.stringify({ op: "upsert", record: record() }));
+  assert.equal(new FeedbackStore(path).list().length, 1,
+    "完整合法的 EOF 行不能被当成 torn tail 丢掉");
+
+  writeFileSync(path, JSON.stringify({
+    op: "upsert",
+    record: { id: "x" },
+  }));
+  assert.throws(() => new FeedbackStore(path).list(),
+    FeedbackStoreCorruptionError,
+    "完整但语义非法的 EOF 行必须 fail-closed");
+});
+
 test("一张任务的反馈坏账只隔离本任务，不拖垮整个任务列表", () => {
   const root = mkdtempSync(join(tmpdir(), "mfc-feedback-isolation-"));
   const dataDir = join(root, "tasks");
@@ -149,7 +166,7 @@ test("Cloud 索引缺记录时以内核批次重建，不能永久漏掉反馈",
     cwd, encoding: "utf-8",
   }).trim();
   writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify({
-    current: "delivery_watch",
+    current: "external_verify",
     execution_contract: {
       schema: "mae-flow-execution/1", host: "cloud",
       compile: "pipeline", ut_write: "agent", ut_run: "pipeline",
@@ -160,6 +177,25 @@ test("Cloud 索引缺记录时以内核批次重建，不能永久漏掉反馈",
   }));
   const kernelRoot = discoverKernelRoot(process.cwd());
   assert.ok(kernelRoot, "测试必须找到同步后的真实内核");
+  const pipelineFacts = {
+    sha: head, status: "success", source: "feedback-rebuild",
+    git_push: { sha: head, ref: "refs/heads/test", remote: "origin" },
+  };
+  const pipelinePath = join(workspace, "pipeline-facts.json");
+  writeFileSync(pipelinePath, JSON.stringify(pipelineFacts));
+  const pipelineProof = createKernelHostProof({
+    cwd, workspace, taskId: "task-1",
+    action: "pipeline-record", payload: pipelineFacts,
+  });
+  try {
+    execFileSync("python3", [
+      join(kernelRoot, "scripts", "mae-flow.py"),
+      "pipeline", "record", "--file", pipelinePath,
+      "--host-proof", pipelineProof.path,
+    ], { cwd, encoding: "utf-8" });
+  } finally {
+    pipelineProof.cleanup();
+  }
   openKernelFeedback({
     host: { kernelRoot }, cwd, workspace,
     batch: {
@@ -208,6 +244,22 @@ test("Cloud 索引缺记录时以内核批次重建，不能永久漏掉反馈",
     join(workspace, "feedback", "index.jsonl")).list();
   assert.equal(recovered[0].status, "awaiting_verification");
   assert.equal(recovered[0].resolution, "编译问题已修复");
+
+  const signedResultState = JSON.parse(readFileSync(
+    join(cwd, ".mae-flow.json"), "utf-8"));
+  const tampered = structuredClone(signedResultState);
+  tampered.delivery_loop.active_batch_id = "attacker-batch";
+  tampered.delivery_loop.batches[0].status = "closed";
+  writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify(tampered));
+  assert.equal((service as any).activeKernelFeedback(task), undefined,
+    "手写 active_batch_id/status 不能派出 writer");
+  (service as any).syncFeedbackStoreFromKernel(task);
+  assert.match(task.summary.delivery.stalled ?? "", /缺少完整.*宿主权威收据/,
+    "手写批次生命周期不能关闭或推进反馈索引");
+  writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify(signedResultState));
+  (service as any).syncFeedbackStoreFromKernel(task);
+  assert.equal(task.summary.delivery.stalled, undefined,
+    "恢复签名现场后可继续，不形成永久停摆");
 });
 
 test("可写状态、总体回复和 HEAD 变化都不能冒充宿主批次或逐条回执", () => {

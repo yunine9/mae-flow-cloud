@@ -10,6 +10,8 @@ import {
   inspectKernelTaskCompletion,
 } from "../src/terminalAttestation.ts";
 import { TaskService } from "../src/taskService.ts";
+import { createKernelHostProof } from "../src/kernelDelivery.ts";
+import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
 
 function fixture(current: string, external = false): {
   root: string; cwd: string; kernelRoot: string; head: string;
@@ -166,6 +168,47 @@ test("持续检视就绪与任务完成均拒绝仅靠 Agent 可写状态伪造"
   execFileSync("git", ["commit", "--allow-empty", "-qm", "local after merge"], { cwd });
   assert.equal(inspectKernelTaskCompletion(cwd, kernelRoot).complete, false,
     "改变本地 HEAD 也不能让伪造的 close 获得宿主背书");
+});
+
+test("宿主外绑定不可被 false 降级，真 PASS 收据也不能拼接假 delivery_watch", () => {
+  const { cwd, kernelRoot, head } = fixture("build", true);
+  const commandKernelRoot = discoverKernelRoot(process.cwd());
+  assert.ok(commandKernelRoot, "测试必须找到同步后的真实内核");
+  const taskId = "task-bound-attack";
+  const facts = {
+    sha: head,
+    status: "success",
+    source: "attack-regression",
+    git_push: { sha: head, ref: "refs/heads/test", remote: "origin" },
+  };
+  const factsPath = join(cwd, "pipeline-facts.json");
+  writeFileSync(factsPath, JSON.stringify(facts));
+  const proof = createKernelHostProof({
+    cwd, workspace: cwd, taskId, action: "pipeline-record", payload: facts,
+  });
+  try {
+    execFileSync("python3", [
+      join(commandKernelRoot, "scripts", "mae-flow.py"),
+      "pipeline", "record", "--file", factsPath,
+      "--host-proof", proof.path,
+    ], { cwd, encoding: "utf-8" });
+  } finally {
+    proof.cleanup();
+  }
+
+  const statePath = join(cwd, ".mae-flow.json");
+  const tampered = JSON.parse(readFileSync(statePath, "utf-8"));
+  tampered.current = "delivery_watch";
+  tampered.execution_contract.continuous_review = false;
+  delete tampered.execution_contract.host_authority;
+  writeFileSync(statePath, JSON.stringify(tampered));
+
+  const result = inspectKernelDeliveryReady(cwd, kernelRoot, true, {
+    workspace: cwd, taskId,
+  });
+  assert.equal(result.complete, false,
+    "外置 capability 仍应强制验签，且 build 时的真 PASS 不能拼成假就绪态");
+  assert.match(result.reason, /宿主权威收据/);
 });
 
 test("flow 未声明 terminal 时，状态文件自称 end 也不能绕过", () => {

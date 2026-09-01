@@ -22,6 +22,7 @@ import { deliveryChangeSnapshot } from "../src/artifacts.ts";
 import { readJson } from "../src/jsonBody.ts";
 import { createTaskServer } from "../src/server.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
+import { sealPipelineLifecycle } from "./kernelHostFixture.ts";
 import {
   type RequirementGraph, TaskControlError, TaskService,
 } from "../src/taskService.ts";
@@ -283,6 +284,12 @@ async function scopedTask() {
     python: "python3",
     continuousReview: true,
   };
+  sealPipelineLifecycle({
+    cwd: internal.cwd,
+    workspace: internal.summary.workspace,
+    taskId: id,
+    kernelRoot: join(process.cwd(), "kernel"),
+  });
   return { service, model, id, internal };
 }
 

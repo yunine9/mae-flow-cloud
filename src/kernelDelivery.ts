@@ -90,6 +90,14 @@ interface StoredKernelHostCapability {
   private_key: string;
 }
 
+interface StoredKernelHostBinding {
+  schema: "mae-flow-host-binding/1";
+  task_id: string;
+  workspace: string;
+  cwd: string;
+  continuous_review: true;
+}
+
 export type KernelHostAction = "feedback-open" | "feedback-result" | "close"
   | "pipeline-record" | "intervention-reconcile";
 
@@ -122,6 +130,68 @@ function capabilityRoot(workspace: string): string {
 function capabilityPath(workspace: string, taskId: string): string {
   const safeTask = createHash("sha256").update(taskId).digest("hex");
   return join(capabilityRoot(workspace), `${safeTask}.json`);
+}
+
+function bindingPath(workspace: string, cwd: string): string {
+  const realCwd = realpathSync(cwd);
+  const safeCwd = createHash("sha256").update(realCwd).digest("hex");
+  return join(capabilityRoot(workspace), `binding-${safeCwd}.json`);
+}
+
+function ensureKernelHostBinding(input: {
+  workspace: string;
+  cwd: string;
+  taskId: string;
+}): void {
+  const binding: StoredKernelHostBinding = {
+    schema: "mae-flow-host-binding/1",
+    task_id: input.taskId,
+    workspace: realpathSync(input.workspace),
+    cwd: realpathSync(input.cwd),
+    continuous_review: true,
+  };
+  const path = bindingPath(input.workspace, input.cwd);
+  if (existsSync(path)) {
+    const info = lstatSync(path);
+    if (!info.isFile() || info.isSymbolicLink()
+        || realpathSync(path) !== path || (info.mode & 0o777) !== 0o600
+        || (typeof process.getuid === "function" && info.uid !== process.getuid())) {
+      throw new KernelDeliveryError("持续检视宿主任务绑定不是可信普通文件");
+    }
+    let stored: unknown;
+    try { stored = JSON.parse(readFileSync(path, "utf-8")); } catch { /* below */ }
+    if (canonical(stored) !== canonical(binding)) {
+      throw new KernelDeliveryError("持续检视宿主任务绑定与当前工作区不一致");
+    }
+    return;
+  }
+  writeFileSync(path, JSON.stringify(binding) + "\n", {
+    encoding: "utf-8", mode: 0o600, flag: "wx",
+  });
+}
+
+/**
+ * Agent 工作区里的 execution_contract 只能用于展示，不能决定是否启用
+ * Cloud 宿主保护。能力文件位于任务目录之外；只要它存在，这张任务就
+ * 必须继续按持续检视契约 fail-closed，哪怕状态文件被删字段或改成
+ * false。文件损坏会在后续验签时报错，绝不能被当成“旧任务”降级。
+ */
+export function kernelHostCapabilityPresent(input: {
+  workspace: string;
+  taskId: string;
+  cwd: string;
+}): boolean {
+  const paths = [
+    capabilityPath(input.workspace, input.taskId),
+    bindingPath(input.workspace, input.cwd),
+  ];
+  try {
+    paths.forEach((path) => lstatSync(path));
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 function validateStoredCapability(
@@ -162,8 +232,10 @@ function validateStoredCapability(
 export function ensureKernelHostCapability(input: {
   workspace: string;
   taskId: string;
+  cwd?: string;
 }): KernelHostAuthority {
   const path = capabilityPath(input.workspace, input.taskId);
+  if (input.cwd) ensureKernelHostBinding({ ...input, cwd: input.cwd });
   if (existsSync(path)) {
     const info = lstatSync(path);
     if (!info.isFile() || info.isSymbolicLink()
@@ -356,10 +428,6 @@ export function trustedKernelHostProjection(input: {
 }): boolean {
   try {
     const authority = ensureKernelHostCapability(input);
-    const state = JSON.parse(readFileSync(
-      join(input.cwd, ".mae-flow.json"), "utf-8"));
-    if (canonical(state?.execution_contract?.host_authority)
-        !== canonical(authority)) return false;
     const root = capabilityRoot(input.workspace);
     const prefix = `${createHash("sha256").update(input.taskId).digest("hex")}.receipt-`;
     const publicKey = createPublicKey({
@@ -392,6 +460,100 @@ export function trustedKernelHostProjection(input: {
         publicKey, Buffer.from(String(proof.signature ?? ""), "base64url"))) {
         return true;
       }
+    }
+  } catch { /* fail closed */ }
+  return false;
+}
+
+/**
+ * 与内核 host_projection 完全同形。收据不只封一条 PASS 或 results，
+ * 还封住这次宿主动作落定后的 current、活动批次、完整 delivery_loop
+ * 与质量事实，避免 Agent 把几张真的收据和手写生命周期拼成假现场。
+ */
+export function kernelHostLifecycleProjection(
+  state: Record<string, any>,
+  action: KernelHostAction,
+): Record<string, unknown> {
+  const loop = state?.delivery_loop;
+  return {
+    schema: "mae-flow-host-lifecycle/1",
+    action,
+    current: state?.current ?? null,
+    active_batch_id: loop?.active_batch_id ?? null,
+    delivery_loop: loop ?? null,
+    external_verification: state?.quality?.external_verification ?? null,
+    user_intervention: state?.user_intervention ?? null,
+  };
+}
+
+/** Verify the current lifecycle as one indivisible host-authenticated fact. */
+export function trustedKernelHostLifecycle(input: {
+  cwd: string;
+  workspace: string;
+  taskId: string;
+  actions: KernelHostAction[];
+  state?: Record<string, any>;
+}): boolean {
+  let state = input.state;
+  try {
+    state ??= JSON.parse(readFileSync(
+      join(input.cwd, ".mae-flow.json"), "utf-8"));
+  } catch {
+    return false;
+  }
+  return input.actions.some((action) => trustedKernelHostProjection({
+    cwd: input.cwd,
+    workspace: input.workspace,
+    taskId: input.taskId,
+    action,
+    projection: kernelHostLifecycleProjection(state!, action),
+  }));
+}
+
+/**
+ * Agent 修复期间可以通过正常内核命令移动 current，但活动 writer 与批次
+ * 内容必须和某张真实宿主收据完全一致。用于回收处理结果，不用于宣布
+ * ready/completed；后两者仍要求整份生命周期精确匹配。
+ */
+export function trustedKernelHostActiveBatch(input: {
+  cwd: string;
+  workspace: string;
+  taskId: string;
+  actions: KernelHostAction[];
+  state?: Record<string, any>;
+}): boolean {
+  let state = input.state;
+  try {
+    state ??= JSON.parse(readFileSync(
+      join(input.cwd, ".mae-flow.json"), "utf-8"));
+    const loop = state?.delivery_loop;
+    const activeId = String(loop?.active_batch_id ?? "");
+    const active = Array.isArray(loop?.batches)
+      ? loop.batches.find((item: any) => String(item?.batch_id ?? "") === activeId)
+      : undefined;
+    if (!activeId || !active) return false;
+    const root = capabilityRoot(input.workspace);
+    const prefix = `${createHash("sha256").update(input.taskId).digest("hex")}.receipt-`;
+    for (const name of readdirSync(root).sort().reverse()) {
+      if (!name.startsWith(prefix) || !name.endsWith(".json")) continue;
+      const receipt = secureReceipt(join(root, name));
+      const action = String(receipt?.proof?.action ?? "") as KernelHostAction;
+      const projection = receipt?.projection;
+      const storedLoop = projection?.delivery_loop;
+      const storedActive = Array.isArray(storedLoop?.batches)
+        ? storedLoop.batches.find(
+            (item: any) => String(item?.batch_id ?? "") === activeId)
+        : undefined;
+      if (!input.actions.includes(action)
+          || String(projection?.active_batch_id ?? "") !== activeId
+          || canonical(storedActive) !== canonical(active)) continue;
+      if (trustedKernelHostProjection({
+        cwd: input.cwd,
+        workspace: input.workspace,
+        taskId: input.taskId,
+        action,
+        projection,
+      })) return true;
     }
   } catch { /* fail closed */ }
   return false;

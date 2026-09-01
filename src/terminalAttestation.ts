@@ -9,7 +9,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { runSafeWorktreeGit } from "./safeGit.ts";
-import { trustedKernelHostProjection } from "./kernelDelivery.ts";
+import {
+  kernelHostLifecycleProjection,
+  trustedKernelHostProjection,
+} from "./kernelDelivery.ts";
 
 const PIPELINE_DIMENSIONS = {
   compile: "COMPILE",
@@ -124,10 +127,15 @@ function inspectKernelState(
   }
   const current = typeof state.current === "string" ? state.current : "";
   const terminal = declaredTerminal(kernelRoot, current);
-  const required = requiredDimensions(state, pipelineByDefault);
+  // trust 只由 Cloud 的宿主外 capability binding 传入。持续检视任务的
+  // 三项流水线义务同样不能被 Agent 从 execution_contract 里删掉。
+  const continuousReview = Boolean(trust)
+    || state?.execution_contract?.continuous_review === true;
+  const required = continuousReview && trust
+    ? Object.values(PIPELINE_DIMENSIONS)
+    : requiredDimensions(state, pipelineByDefault);
   const externalRequired = required.length > 0;
   const head = gitHead(cwd);
-  const continuousReview = state?.execution_contract?.continuous_review === true;
   const closeEvents = Array.isArray(state?.delivery_loop?.close_events)
     ? state.delivery_loop.close_events : [];
   const closeEvent = closeEvents.length ? closeEvents[closeEvents.length - 1] : undefined;
@@ -139,21 +147,14 @@ function inspectKernelState(
   const attestedSha = expected === "terminal" && continuousReview
     ? closeSha : head;
   const record = state?.quality?.external_verification;
-  const pipelineTrusted = !continuousReview || Boolean(trust
-    && record && trustedKernelHostProjection({
+  const authorityAction = expected === "terminal" ? "close" : "pipeline-record";
+  const lifecycleTrusted = !continuousReview || Boolean(trust
+    && trustedKernelHostProjection({
       cwd,
       workspace: trust.workspace,
       taskId: trust.taskId,
-      action: "pipeline-record",
-      projection: record,
-    }));
-  const closeTrusted = !continuousReview || expected !== "terminal"
-    || Boolean(trust && closeEvent && trustedKernelHostProjection({
-      cwd,
-      workspace: trust.workspace,
-      taskId: trust.taskId,
-      action: "close",
-      projection: closeEvent,
+      action: authorityAction,
+      projection: kernelHostLifecycleProjection(state, authorityAction),
     }));
   const recordedRequired = new Set(
     Array.isArray(record?.required)
@@ -164,7 +165,7 @@ function inspectKernelState(
     ? record.checks : {};
   const externalPassed = !externalRequired || (
     Boolean(attestedSha)
-    && pipelineTrusted
+    && lifecycleTrusted
     && record?.verdict === "PASS"
     && record?.sha === attestedSha
     && required.every((dimension) => recordedRequired.has(dimension)
@@ -179,7 +180,7 @@ function inspectKernelState(
       ? "external_verify"
       : current ? "active" : "invalid";
   const closeReached = !continuousReview || expected !== "terminal"
-    || Boolean(closeSha && closeTrusted);
+    || Boolean(closeSha && lifecycleTrusted);
   const lifecycleReached = expected === "terminal"
     ? terminal && closeReached : current === "delivery_watch";
   let reason: string;
@@ -193,8 +194,10 @@ function inspectKernelState(
       : `内核 current 缺失，不能推断${
           expected === "terminal" ? "终态" : "交付就绪态"}`;
   } else if (!externalPassed) {
-    reason = continuousReview && !pipelineTrusted
-      ? "流水线 PASS 缺少 Cloud 宿主权威收据"
+    reason = continuousReview && !lifecycleTrusted
+      ? expected === "terminal"
+        ? "任务终态缺少 Cloud 宿主权威收据（必须覆盖完整 merged close 生命周期）"
+        : "交付就绪态缺少 Cloud 宿主权威收据（必须覆盖完整流水线生命周期）"
       : !attestedSha
       ? expected === "terminal"
         ? "merged close 没有绑定可核对的源提交"
