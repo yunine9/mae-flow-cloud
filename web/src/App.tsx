@@ -1550,8 +1550,8 @@ function TaskGroup({
   </section>;
 }
 
-/** 总览先讲清规模公式；交付中再用两种互补视角拆同一批任务。
- * 两行的合计都来自 teamDeliveryBreakdown，不会出现口径漂移。 */
+/** 总览只保留一层规模摘要；阶段与状态作为轻量筛选项呈现。
+ * 三个规模数字、两组筛选都来自 teamDeliveryBreakdown，避免口径漂移。 */
 function TeamDeliveryOverview({
   stats,
   selectedPhase,
@@ -1567,25 +1567,24 @@ function TeamDeliveryOverview({
 }) {
   return <section className="team-delivery-overview" aria-label="团队任务统计">
     <header className="team-delivery-overview-head">
-      <div><span className="section-kicker">DELIVERY OVERVIEW</span>
-        <h2>总览</h2></div>
-      <small>已取消任务保留在交付档案，不计入交付规模</small>
+      <div className="team-delivery-overview-copy">
+        <span className="section-kicker">DELIVERY OVERVIEW</span>
+        <h2>交付概览</h2>
+        <p>点击阶段或状态可筛选下方现场；已取消任务仅保留在交付档案。</p>
+      </div>
+      <div className="team-delivery-summary"
+        aria-label={`全部任务 ${stats.total} 项，交付中 ${stats.delivering} 项，已交付 ${stats.delivered} 项`}>
+        <span className="summary-total"><strong>{stats.total}</strong><small>全部任务</small></span>
+        <i aria-hidden />
+        <span className="summary-active"><strong>{stats.delivering}</strong><small>交付中</small></span>
+        <i aria-hidden />
+        <span className="summary-complete"><strong>{stats.delivered}</strong><small>已交付</small></span>
+      </div>
     </header>
-    <div className="team-delivery-equation" aria-label={`任务总计 ${stats.total}，等于已交付 ${stats.delivered} 加交付中 ${stats.delivering}`}>
-      <div className="delivery-total"><span>任务总计</span>
-        <strong>{stats.total}</strong><small>{stats.delivered} + {stats.delivering}</small></div>
-      <b aria-hidden>=</b>
-      <div><span>已交付</span><strong>{stats.delivered}</strong><small>已经完成交付</small></div>
-      <b aria-hidden>+</b>
-      <div className="is-delivering"><span>交付中</span>
-        <strong>{stats.delivering}</strong><small>仍需推进或处理</small></div>
-    </div>
     <div className="team-delivery-breakdown">
-      <header><div><span>DELIVERING TASKS</span><strong>交付中任务</strong></div>
-        <em>{stats.delivering} 项</em></header>
       <section aria-labelledby="delivery-stage-title">
-        <div className="delivery-breakdown-title"><strong id="delivery-stage-title">按阶段</strong>
-          <small>合计 {stats.delivering} 项</small></div>
+        <div className="delivery-breakdown-title"><strong id="delivery-stage-title">阶段</strong>
+          <small>当前所处流程</small></div>
         <div className="delivery-breakdown-cells">
           {stats.stages.map((entry) => <button type="button" key={entry.key}
             className={selectedPhase === entry.key ? "selected" : ""}
@@ -1597,8 +1596,8 @@ function TeamDeliveryOverview({
         </div>
       </section>
       <section aria-labelledby="delivery-status-title">
-        <div className="delivery-breakdown-title"><strong id="delivery-status-title">按任务状态</strong>
-          <small>合计 {stats.delivering} 项</small></div>
+        <div className="delivery-breakdown-title"><strong id="delivery-status-title">任务状态</strong>
+          <small>当前运行情况</small></div>
         <div className="delivery-breakdown-cells status-cells">
           {stats.statuses.map((entry) => <button type="button" key={entry.key}
             className={selectedStatus === entry.key ? "selected" : ""}
