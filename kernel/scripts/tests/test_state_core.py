@@ -3,12 +3,15 @@
 """Regression tests for the shared runtime/state core."""
 
 import json
+import io
 import os
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+from contextlib import redirect_stderr
+from unittest import mock
 
 
 SCRIPTS = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -32,6 +35,7 @@ from mae_flow_core.cli_commands.source_facts import (  # noqa: E402
     _archived_delivery_facts,
     _branch_adoption_requested,
 )
+from mae_flow_core.cli_commands import state_config  # noqa: E402
 
 
 class RuntimeAndStateTests(unittest.TestCase):
@@ -286,6 +290,29 @@ class RuntimeAndStateTests(unittest.TestCase):
             stale["config"]["单号"] = "REQ-STALE"
             with self.assertRaises(StateConflictError):
                 save_versioned_json(state_path, stale, "flow", project_root=td)
+
+    def test_cli_emits_machine_readable_code_only_for_revision_conflict(self):
+        stderr = io.StringIO()
+        with mock.patch.object(
+                state_config, "save_versioned_json",
+                side_effect=StateConflictError(
+                    "flow revision 已从 9 变为 10，拒绝用旧快照覆盖新状态")):
+            with redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
+                state_config.save_state({"revision": 9})
+        self.assertEqual(2, raised.exception.code)
+        lines = stderr.getvalue().splitlines()
+        self.assertEqual(
+            '[mae-flow:error] {"code":"FLOW_REVISION_CONFLICT",'
+            '"schema":"mae-flow-error/1"}', lines[0])
+
+        stderr = io.StringIO()
+        with mock.patch.object(
+                state_config, "save_versioned_json",
+                side_effect=StateStoreError(
+                    "other failure mentions flow revision 已从 9 变为 10")):
+            with redirect_stderr(stderr), self.assertRaises(SystemExit):
+                state_config.save_state({"revision": 9})
+        self.assertNotIn("FLOW_REVISION_CONFLICT", stderr.getvalue())
 
     def test_corrupt_sidecar_is_quarantined_not_deadlocked(self):
         with tempfile.TemporaryDirectory() as td:

@@ -64,6 +64,7 @@ def build_parser():
         dest="intervention_action", required=True)
     intervention_reconcile = intervention_actions.add_parser("reconcile")
     intervention_reconcile.add_argument("--file", required=True)
+    intervention_reconcile.add_argument("--host-proof")
     delivery = sub.add_parser(
         "delivery", help="Cloud 宿主登记持续检视反馈或 MR 合入事实")
     delivery_actions = delivery.add_subparsers(
@@ -307,6 +308,7 @@ def build_parser():
     pipeline_record.add_argument(
         "--file", required=True,
         help="平台事实 JSON(云端宿主写):{sha, status, source?, url?}")
+    pipeline_record.add_argument("--host-proof")
     pipeline_actions.add_parser("show")
     return parser
 

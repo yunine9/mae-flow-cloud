@@ -224,9 +224,11 @@ import {
 import {
   closeKernelDelivery,
   ensureKernelHostCapability,
+  issueKernelHostProof,
   openKernelFeedback,
   recordKernelFeedbackResult,
   type KernelFeedbackBatch,
+  type KernelHostProof,
 } from "./kernelDelivery.ts";
 import {
   ContinuousReviewMigrationError,
@@ -9869,7 +9871,7 @@ export class TaskService {
     const interventionId = snapshot.handoff?.id
       ?? snapshot.handoff?.started_at ?? randomUUID();
     const factsPath = join(task.summary.workspace, "user-intervention.json");
-    writeFileSync(factsPath, JSON.stringify({
+    const facts = {
       schema: "mae-flow-user-intervention/1",
       intervention_id: interventionId,
       actor: actor.slice(0, 100),
@@ -9888,14 +9890,24 @@ export class TaskService {
           state: tool.state.slice(0, 24),
           result: (tool.result ?? "").slice(0, 800),
         })),
-    }, null, 2), { mode: 0o600 });
+    };
+    writeFileSync(factsPath, JSON.stringify(facts, null, 2), { mode: 0o600 });
     chmodSync(factsPath, 0o600);
+    // 同 pipeline record:continuous_review 下内核拒收无凭据的介入对账。
+    const proof = this.hostProofRequired(task)
+      ? issueKernelHostProof({
+          cwd: task.cwd, workspace: task.summary.workspace,
+          taskId: task.summary.id, action: "intervention-reconcile",
+          payload: facts,
+        })
+      : undefined;
     const gitView = createSafeGitView(task.cwd);
     try {
       const result = spawnSync(
         this.options.host.python ?? "python3",
         [join(this.options.host.kernelRoot, "scripts", "mae-flow.py"),
-         "intervention", "reconcile", "--file", factsPath],
+         "intervention", "reconcile", "--file", factsPath,
+         ...(proof ? ["--host-proof", proof.path] : [])],
         {
           cwd: task.cwd,
           encoding: "utf-8",
@@ -9924,6 +9936,7 @@ export class TaskService {
       );
     } finally {
       gitView.cleanup();
+      proof?.release();
     }
   }
 
@@ -10090,6 +10103,18 @@ export class TaskService {
       // 读不出来就不敢断言"老单",走原有对账(宁可多查一次)。
       return false;
     }
+  }
+
+  /** 这一单的宿主命令要不要带凭据,判据必须和内核**同一份事实**。
+   *
+   * 内核看的是 `continuous_review`(工作区里的执行契约)或工作区外的
+   * 宿主绑定,不是 Cloud 进程的部署开关。只按部署开关判会出现
+   * "内核认为这单是持续检视、Cloud 不这么认为"的错配:流水线登记被
+   * 内核拒收,任务永远停在"等待流水线证据核销"——实测 delivery E2E
+   * 就是这样卡死 60 秒的。宁可多带一次凭据(非持续检视的内核直接忽略)。 */
+  private hostProofRequired(task: TaskState): boolean {
+    return this.options.host?.continuousReview === true
+      || this.continuousReviewTask(task);
   }
 
   private continuousReviewTask(task: TaskState): boolean {
@@ -10747,6 +10772,8 @@ export class TaskService {
               ...(this.options.host?.continuousReview === true ? {
                 host_authority: ensureKernelHostCapability({
                   workspace,
+                  // 信任根按内核的规则从代码仓算起,两边必须同解。
+                  cwd,
                   taskId: task.summary.id,
                 }),
               } : {}),
@@ -15428,22 +15455,34 @@ export class TaskService {
     const delivery = task.summary.delivery;
     if (!kernelRoot || !task.cwd || !delivery) return undefined;
     const factsPath = join(task.summary.workspace, "pipeline-facts.json");
+    let proof: KernelHostProof | undefined;
     try {
-      writeFileSync(factsPath, JSON.stringify({
+      const facts = {
         sha,
         status,
         ...(checks !== undefined ? { checks } : {}),
         ...(delivery.git_push ? { git_push: delivery.git_push } : {}),
         source: this.effectivePlatformUrl() ?? "",
         url: delivery.mr_url ?? "",
-      }, null, 2));
+      };
+      writeFileSync(factsPath, JSON.stringify(facts, null, 2));
+      // continuous_review 下内核拒绝没有宿主凭据的流水线登记(它是唯一
+      // 能把任务推到 PASS 的动作)。凭据绑定的是这份 facts 原文,所以
+      // 必须签落盘的同一个对象。
+      if (this.hostProofRequired(task)) {
+        proof = issueKernelHostProof({
+          cwd: task.cwd, workspace: task.summary.workspace,
+          taskId: task.summary.id, action: "pipeline-record", payload: facts,
+        });
+      }
       const gitView = createSafeGitView(task.cwd);
       const result = await new Promise<
         { code: number | null; out: string; err: string }>(
         (resolve) => {
           const child = spawn(this.options.host!.python ?? "python3",
             [join(kernelRoot, "scripts", "mae-flow.py"),
-             "pipeline", "record", "--file", factsPath],
+             "pipeline", "record", "--file", factsPath,
+             ...(proof ? ["--host-proof", proof.path] : [])],
             {
               cwd: task.cwd!,
               stdio: ["ignore", "pipe", "pipe"],
@@ -15495,6 +15534,8 @@ export class TaskService {
       delivery.attested = "未裁决(登记异常,详见服务日志)";
       this.options.log?.(
         `任务 ${task.summary.id} 流水线证据登记异常: ${String(error)}`);
+    } finally {
+      proof?.release();
     }
     return undefined;
   }

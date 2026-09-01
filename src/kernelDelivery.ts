@@ -6,6 +6,7 @@ import {
   lstatSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -95,9 +96,33 @@ function canonical(value: unknown): string {
   return JSON.stringify(value);
 }
 
-function capabilityPath(workspace: string, taskId: string): string {
+/**
+ * 信任根的位置必须和内核**同一条规则**算出来,否则两边各找各的目录。
+ *
+ * 内核从 realpath(cwd) 出发:优先 `<代码仓的祖父目录>/.host-capabilities`
+ * (生产形态 <data>/<task>/<repo>,即 <data>/.host-capabilities),找不到
+ * 才退到父目录一层。生产里 cwd 就在 workspace 里,两种算法同解;但只要
+ * 代码仓不在任务工作区下(夹具、诊断克隆),按 workspace 算就会写到内核
+ * 根本不看的地方,凭据当场被判"不在 Cloud 宿主信任根内"。
+ */
+export function hostCapabilityRoot(input: {
+  workspace: string;
+  cwd?: string;
+}): string {
+  const resolve = (path: string): string => {
+    try { return realpathSync(path); } catch { return path; }
+  };
+  const base = input.cwd
+    ? dirname(dirname(resolve(input.cwd)))
+    : dirname(resolve(input.workspace));
+  return join(base, ".host-capabilities");
+}
+
+function capabilityPath(
+  input: { workspace: string; cwd?: string }, taskId: string,
+): string {
   const safeTask = createHash("sha256").update(taskId).digest("hex");
-  return join(dirname(workspace), ".host-capabilities", `${safeTask}.json`);
+  return join(hostCapabilityRoot(input), `${safeTask}.json`);
 }
 
 /**
@@ -106,9 +131,10 @@ function capabilityPath(workspace: string, taskId: string): string {
  */
 export function ensureKernelHostCapability(input: {
   workspace: string;
+  cwd?: string;
   taskId: string;
 }): KernelHostAuthority {
-  const path = capabilityPath(input.workspace, input.taskId);
+  const path = capabilityPath(input, input.taskId);
   if (existsSync(path)) {
     const info = lstatSync(path);
     if (!info.isFile() || info.isSymbolicLink()) {
@@ -159,6 +185,41 @@ export function ensureKernelHostCapability(input: {
   return authority;
 }
 
+/**
+ * 把「这个工作区属于哪个任务」写在 Agent 够不着的信任根里。
+ *
+ * 内核从 mae-flow@98fc434 起,每条宿主命令都先按 sha256(realpath(cwd))
+ * 找这份绑定,再决定拿哪把公钥验签——找不到就整条命令 die。Cloud 之前
+ * 从来没写过它:一旦 harness/sync-kernel.sh 把那版内核收编进来,持续
+ * 检视的每个任务都会在第一条宿主命令上报「无法读取宿主任务绑定」,
+ * 反馈进不来、结果登不上、MR 合入也关不掉。绑定必须由宿主写、且必须
+ * 落在工作区之外,否则它就成了 Agent 可以自签的身份。
+ */
+export function ensureKernelHostBinding(input: {
+  workspace: string;
+  cwd: string;
+  taskId: string;
+}): string {
+  const root = hostCapabilityRoot(input);
+  mkdirSync(root, { recursive: true, mode: 0o700 });
+  chmodSync(root, 0o700);
+  // 内核用 realpath 后的 cwd 算文件名并逐字比对 binding.cwd:这里必须
+  // 同样解引用,否则 <data> 经过任何一层软链(macOS 的 /var、容器挂载、
+  // 盘迁移)两边就永远对不上。
+  const resolved = realpathSync(input.cwd);
+  const path = join(root,
+    `binding-${createHash("sha256").update(resolved).digest("hex")}.json`);
+  writeFileSync(path, JSON.stringify({
+    schema: "mae-flow-host-binding/1",
+    task_id: input.taskId,
+    workspace: realpathSync(input.workspace),
+    cwd: resolved,
+    continuous_review: true,
+  }) + "\n", { encoding: "utf-8", mode: 0o600 });
+  chmodSync(path, 0o600);
+  return path;
+}
+
 /** Pin the public authority before the Agent can observe a managed state. */
 export function pinKernelHostAuthority(input: {
   cwd: string;
@@ -200,17 +261,27 @@ function factsPath(workspace: string, label: string, payload: unknown): string {
   return path;
 }
 
-function invoke(input: {
-  host: KernelDeliveryHost;
+/** 一次性宿主凭据:签好、落在信任根、用完必须 release()。
+ *
+ * delivery 之外还有两条宿主命令也要它——内核从 mae-flow@98fc434 起，
+ * continuous_review 下的 `pipeline record` 与 `intervention reconcile`
+ * 不带凭据直接 die。这两条原来在 taskService 里裸调 CLI，收编那版内核
+ * 之后流水线结果根本登记不上，任务永远走不到 PASS。 */
+export interface KernelHostProof {
+  path: string;
+  release(): void;
+}
+
+export function issueKernelHostProof(input: {
   cwd: string;
   workspace: string;
   taskId: string;
-  action: "feedback-open" | "feedback-result" | "close";
+  action: string;
   payload: unknown;
-  args: string[];
-}): KernelDeliveryRecord {
+}): KernelHostProof {
   const authority = pinKernelHostAuthority(input);
-  const storedPath = capabilityPath(input.workspace, input.taskId);
+  ensureKernelHostBinding(input);
+  const storedPath = capabilityPath(input, input.taskId);
   const stored = JSON.parse(readFileSync(storedPath, "utf-8")) as
     StoredKernelHostCapability;
   if (canonical(stored.authority) !== canonical(authority)) {
@@ -228,11 +299,27 @@ function invoke(input: {
   const signature = sign("RSA-SHA256", Buffer.from(canonical(proof)), {
     key: stored.private_key,
   }).toString("base64url");
-  const proofPath = join(dirname(storedPath),
+  // 内核把信任根 realpath 化后再和凭据所在目录逐字比对。这里同样解引用，
+  // 否则 <data> 经过一层软链就报「宿主凭据不在 Cloud 宿主信任根内」。
+  const path = join(realpathSync(dirname(storedPath)),
     `proof-${proof.nonce}.json`);
-  writeFileSync(proofPath, JSON.stringify({ ...proof, signature }) + "\n", {
+  writeFileSync(path, JSON.stringify({ ...proof, signature }) + "\n", {
     encoding: "utf-8", mode: 0o600, flag: "wx",
   });
+  return { path, release: () => rmSync(path, { force: true }) };
+}
+
+function invoke(input: {
+  host: KernelDeliveryHost;
+  cwd: string;
+  workspace: string;
+  taskId: string;
+  action: "feedback-open" | "feedback-result" | "close";
+  payload: unknown;
+  args: string[];
+}): KernelDeliveryRecord {
+  const proof = issueKernelHostProof(input);
+  const proofPath = proof.path;
   const gitView = createSafeGitView(input.cwd);
   try {
     const result = spawnSync(
@@ -262,7 +349,7 @@ function invoke(input: {
     return record;
   } finally {
     gitView.cleanup();
-    rmSync(proofPath, { force: true });
+    proof.release();
   }
 }
 
