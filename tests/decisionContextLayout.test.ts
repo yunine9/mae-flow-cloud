@@ -51,3 +51,13 @@ test("待闭环检视清单不是可随意折叠的展示盒", () => {
   assert.match(workspace, /setReviewPanelOpen\(false\)/);
   assert.match(workspace, /<strong>检视记录<\/strong>/);
 });
+
+test("检视栏支持拖拽、键盘微调和双击复位", () => {
+  assert.match(workspace, /aria-label="调整检视栏宽度"/);
+  assert.match(workspace, /onPointerMove/);
+  assert.match(workspace, /onDoubleClick=\{resetReviewPanelWidth\}/);
+  assert.match(workspace, /event\.key === "ArrowLeft"/);
+  assert.match(workspace, /mae-flow:review-panel-width/);
+  assert.match(css, /\.ws-review-resizer\s*\{/);
+  assert.match(css, /cursor:\s*col-resize/);
+});

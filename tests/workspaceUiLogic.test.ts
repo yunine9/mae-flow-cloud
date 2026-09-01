@@ -100,6 +100,14 @@ test("检视返工不把内部第 0 轮显示成流水线修复轮次", () => {
   }), "流水线修复中");
 });
 
+test("检视栏拖拽始终给左右工作面保留最小宽度", () => {
+  assert.equal(workspace.clampReviewPanelWidth(640, 1280), 640);
+  assert.equal(workspace.clampReviewPanelWidth(100, 1280), 420);
+  assert.equal(workspace.clampReviewPanelWidth(1200, 1280), 860);
+  assert.equal(workspace.clampReviewPanelWidth(700, 800), 400,
+    "窄到无法同时保留 420px 时，两栏各留一半");
+});
+
 test("圈注权与发送权拆开，需求原文批注能回到原文视图", () => {
   assert.equal(workspace.canCreateWorkspaceAnnotation("completed"), true,
     "已交付任务仍可留下交付后记录");

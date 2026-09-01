@@ -11,6 +11,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import { Markdown } from "./markdown";
 import { GitDiff, type GitDiffSelection } from "./GitDiff";
 import { SteerBox } from "./SteerBox";
@@ -54,6 +55,9 @@ import {
   type Annotation,
   type ArtifactMeta,
   type AuthUser,
+  type FeedbackRecord,
+  type FeedbackSource,
+  type FeedbackStatus,
   type ReviewRequest,
   type TaskSummary,
 } from "./api";
@@ -69,6 +73,31 @@ import {
 type WorkspaceView = "materials" | "collaboration" | "execution" | "insights";
 type ExecutionView = "events" | "knowledge";
 type MaterialView = "source" | "doc" | "chain" | "diff";
+
+const DEFAULT_REVIEW_PANEL_WIDTH = 640;
+const MIN_REVIEW_PANEL_WIDTH = 420;
+const MIN_MATERIAL_PANEL_WIDTH = 420;
+
+/** 拖拽只改变右栏，始终给左右两边保留可工作的最小宽度。 */
+export function clampReviewPanelWidth(
+  requested: number,
+  containerWidth: number,
+): number {
+  const available = Math.max(0, containerWidth);
+  const minimum = Math.min(MIN_REVIEW_PANEL_WIDTH, available / 2);
+  const maximum = Math.max(minimum, available - MIN_MATERIAL_PANEL_WIDTH);
+  return Math.round(Math.min(maximum, Math.max(minimum, requested)));
+}
+
+function storedReviewPanelWidth(): number | undefined {
+  if (typeof window === "undefined") return undefined;
+  try {
+    const value = Number(localStorage.getItem("mae-flow:review-panel-width"));
+    return Number.isFinite(value) && value > 0 ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /** 圈注和“把意见送给 Agent”是两种权限；只有停止的任务禁止再记。 */
 export function canCreateWorkspaceAnnotation(
@@ -340,6 +369,63 @@ function sizeText(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
+const FEEDBACK_SOURCE_LABEL: Record<FeedbackSource, string> = {
+  workspace: "工作台批注",
+  mr_discussion: "MR 检视",
+  build_fix: "Build-Fix",
+  pipeline: "流水线",
+  conflict: "合并冲突",
+  scope: "负责范围",
+  push_confirmation: "推送前复检",
+};
+
+const FEEDBACK_STATUS_LABEL: Record<FeedbackStatus, string> = {
+  open: "待处理",
+  repairing: "处理中",
+  addressed: "已处理",
+  awaiting_verification: "待核验",
+  closed: "已闭环",
+  needs_human: "需要你决定",
+};
+
+function FeedbackPanel({ feedback }: { feedback: FeedbackRecord[] }) {
+  const grouped = new Map<FeedbackSource, FeedbackRecord[]>();
+  for (const item of feedback) {
+    grouped.set(item.source, [...(grouped.get(item.source) ?? []), item]);
+  }
+  const active = feedback.filter((item) => item.status !== "closed").length;
+  return <section className="feedback-panel" aria-label="持续检视反馈明细">
+    <header>
+      <span><strong>持续检视</strong><small>同一个任务、分支和 MR</small></span>
+      <em className={active ? "active" : "done"}>
+        {active ? `${active} 条进行中` : "全部已闭环"}
+      </em>
+    </header>
+    <div className="feedback-groups">
+      {[...grouped].map(([source, items]) => (
+        <div className="feedback-group" key={source}>
+          <strong>{FEEDBACK_SOURCE_LABEL[source]}<i>{items.length}</i></strong>
+          <ul>
+            {items.map((item) => <li key={item.id}>
+              <span className={`feedback-state ${item.status}`}>
+                {FEEDBACK_STATUS_LABEL[item.status]}
+              </span>
+              <span className="feedback-copy" title={item.summary}>
+                <b>{item.summary}</b>
+                {(item.file || item.resolution) && <small>
+                  {item.file && <code>{item.file}{item.line !== undefined
+                    ? `:${item.line}` : ""}</code>}
+                  {item.resolution && <span>{item.resolution}</span>}
+                </small>}
+              </span>
+            </li>)}
+          </ul>
+        </div>
+      ))}
+    </div>
+  </section>;
+}
+
 /** 内核现场始终优先；旧任务、分析任务或纯会话模式没有 panel 文件时，
  * 仍给人一条 Cloud 生命周期轨道，避免工作台最重要的“走到哪了”整块消失。
  * 这只是只读展示兜底，不参与流程判断或任务迁移。 */
@@ -351,6 +437,18 @@ function workspaceProgress(task: TaskSummary): NonNullable<TaskSummary["progress
       current_index: 3,
       current_phase: "子任务交付",
       step: task.focus?.headline ?? "子任务正在推进",
+    };
+  }
+  if ((task.delivery?.mr_url || task.feedback?.length)
+      && task.status !== "canceled") {
+    const phases = ["配置与需求", "方案", "开发", "持续检视", "已合入"];
+    const merged = task.status === "completed";
+    return {
+      phases,
+      current_index: merged ? 4 : 3,
+      current_phase: merged ? "已合入" : "持续检视",
+      step: merged ? "MR 已合入，任务完成"
+        : task.focus?.headline ?? task.detail ?? "持续接收、修复并核验反馈",
     };
   }
   if (task.progress) {
@@ -468,11 +566,15 @@ export function TaskWorkspace({
     defaultWorkspaceView(task),
   );
   const [materialsFullscreen, setMaterialsFullscreen] = useState(false);
+  const [reviewPanelWidth, setReviewPanelWidth] =
+    useState<number | undefined>(storedReviewPanelWidth);
   const [reviewPanelOpen, setReviewPanelOpen] = useState(false);
   const [executionView, setExecutionView] = useState<ExecutionView>("events");
   const artifactTask = useRef("");
   const openedEvidenceGap = useRef("");
   const workspaceRoot = useRef<HTMLElement>(null);
+  const workspaceBody = useRef<HTMLDivElement>(null);
+  const reviewResizerDragged = useRef(false);
   const viewScroll = useRef<Partial<Record<WorkspaceView, number>>>({});
 
   function selectWorkspaceView(next: WorkspaceView) {
@@ -640,6 +742,39 @@ export function TaskWorkspace({
       document.body.style.overflow = previous;
     };
   }, [materialsFullscreen, onClose]);
+
+  useEffect(() => {
+    if (reviewPanelWidth === undefined || typeof window === "undefined") return;
+    try {
+      localStorage.setItem("mae-flow:review-panel-width",
+        String(reviewPanelWidth));
+    } catch {
+      // 阅读布局偏好无法落盘不影响检视。
+    }
+  }, [reviewPanelWidth]);
+
+  function resizeReviewPanel(clientX: number) {
+    const box = workspaceBody.current?.getBoundingClientRect();
+    if (!box) return;
+    setReviewPanelWidth(clampReviewPanelWidth(box.right - clientX, box.width));
+  }
+
+  function nudgeReviewPanel(delta: number) {
+    const box = workspaceBody.current?.getBoundingClientRect();
+    if (!box) return;
+    const current = reviewPanelWidth
+      ?? clampReviewPanelWidth(DEFAULT_REVIEW_PANEL_WIDTH, box.width);
+    setReviewPanelWidth(clampReviewPanelWidth(current + delta, box.width));
+  }
+
+  function resetReviewPanelWidth() {
+    setReviewPanelWidth(undefined);
+    try {
+      localStorage.removeItem("mae-flow:review-panel-width");
+    } catch {
+      // 同上：偏好存储失败不影响界面恢复默认布局。
+    }
+  }
 
   // 产物列表按最近修改倒序(服务端排好),默认打开第一份——
   // "哪一步该看哪个文件"是内核语义,前端不复刻,只用修改时间定位。
@@ -1020,6 +1155,7 @@ export function TaskWorkspace({
           onSuggest={onExecutionPlanFeedback}
           onClose={() => setPlanPhase("")} />}
       </div>
+      {!!task.feedback?.length && <FeedbackPanel feedback={task.feedback} />}
       {(pauseFeedback || controlError) && (
         <div className="task-control-feedback" aria-live="polite">
           {pauseFeedback && (
@@ -1063,8 +1199,12 @@ export function TaskWorkspace({
         ))}
       </nav>
 
-      <div className={`ws-body${waiting ? " has-decision" : ""}`
-        + `${reviewPanelOpen ? " has-review" : ""}`}>
+      <div ref={workspaceBody}
+        className={`ws-body${waiting ? " has-decision" : ""}`
+          + `${reviewPanelOpen ? " has-review" : ""}`}
+        style={reviewPanelWidth === undefined ? undefined : {
+          "--review-panel-width": `${reviewPanelWidth}px`,
+        } as CSSProperties}>
         <section className="ws-evidence" aria-label="待检视材料">
           {workspaceView === "materials" ? <>
           <div className="ws-pane-head">
@@ -1459,6 +1599,39 @@ export function TaskWorkspace({
           </>}
         </section>
 
+        {reviewPanelOpen && <div className="ws-review-resizer"
+          role="separator" aria-label="调整检视栏宽度" tabIndex={0}
+          aria-orientation="vertical"
+          aria-valuenow={reviewPanelWidth ?? DEFAULT_REVIEW_PANEL_WIDTH}
+          title="左右拖动调整宽度；双击恢复默认"
+          onDoubleClick={resetReviewPanelWidth}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowLeft") {
+              event.preventDefault(); nudgeReviewPanel(24);
+            } else if (event.key === "ArrowRight") {
+              event.preventDefault(); nudgeReviewPanel(-24);
+            } else if (event.key === "Home") {
+              event.preventDefault(); resetReviewPanelWidth();
+            }
+          }}
+          onPointerDown={(event) => {
+            reviewResizerDragged.current = false;
+            event.currentTarget.setPointerCapture(event.pointerId);
+            resizeReviewPanel(event.clientX);
+          }}
+          onPointerMove={(event) => {
+            if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+            reviewResizerDragged.current = true;
+            resizeReviewPanel(event.clientX);
+          }}
+          onPointerUp={(event) => {
+            if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+              event.currentTarget.releasePointerCapture(event.pointerId);
+            }
+            reviewResizerDragged.current = false;
+          }}>
+          <span aria-hidden>⋮</span>
+        </div>}
         <aside className={`ws-decision${reviewPanelOpen ? " review-mode" : ""}`}
           aria-label="当前决策与关键操作">
           <div className="ws-pane-head ws-pane-head-side">

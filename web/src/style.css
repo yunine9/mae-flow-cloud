@@ -1298,10 +1298,53 @@ svg {
 
 /* ── 材料与检视同屏：右侧清单是材料动作层，不再强迫切一级栏目。 ── */
 .ws-body.has-review:not(.has-decision) {
-  grid-template-columns: minmax(0, 1fr) clamp(560px, 46vw, 760px);
+  grid-template-columns: minmax(0, 1fr) 8px
+    var(--review-panel-width, clamp(560px, 46vw, 760px));
 }
 .ws-body.has-review.has-decision {
-  grid-template-columns: minmax(0, 1fr) clamp(560px, 46vw, 760px);
+  grid-template-columns: minmax(0, 1fr) 8px
+    var(--review-panel-width, clamp(560px, 46vw, 760px));
+}
+.ws-review-resizer {
+  position: relative;
+  z-index: 5;
+  width: 8px;
+  min-height: 0;
+  cursor: col-resize;
+  touch-action: none;
+  background: color-mix(in srgb, var(--line) 48%, transparent);
+  outline: none;
+}
+.ws-review-resizer::before {
+  content: "";
+  position: absolute;
+  inset: 0 -4px;
+}
+.ws-review-resizer span {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 18px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  transform: translate(-50%, -50%);
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
+  font-size: 16px;
+  line-height: 1;
+}
+.ws-review-resizer:hover,
+.ws-review-resizer:focus-visible {
+  background: color-mix(in srgb, var(--accent) 24%, var(--line));
+}
+.ws-review-resizer:hover span,
+.ws-review-resizer:focus-visible span {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
 }
 .ws-review-drawer {
   flex: none; overflow: visible; border: 1px solid var(--line);
@@ -1357,6 +1400,7 @@ svg {
 
 @media (max-width: 900px) {
   .ws-body.has-review:not(.has-decision) { grid-template-columns: 1fr; }
+  .ws-review-resizer { display: none; }
   .ws-review-drawer {
     position: fixed; z-index: 310; left: 10px; right: 10px; bottom: 10px;
     max-height: min(68vh, 680px); box-shadow: 0 18px 60px rgba(0, 0, 0, .36);
@@ -6207,13 +6251,82 @@ pre {
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--phase-color) 24%, transparent),
               0 4px 12px color-mix(in srgb, var(--phase-color) 30%, transparent);
 }
-.ws-progress .task-phase-track { grid-template-columns: repeat(7, minmax(64px, 1fr)); }
+.ws-progress .task-phase-track {
+  grid-template-columns: repeat(auto-fit, minmax(64px, 1fr));
+}
 .ws-progress.is-fallback .task-progress-caption > span:first-child::after {
   content: " · 概览";
   color: var(--faint);
   font-weight: 600;
 }
 .ws-progress.is-fallback .task-phase-track { opacity: .88; }
+.feedback-panel {
+  flex: none; padding: 9px 24px 11px; display: grid; gap: 8px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface-soft) 72%, var(--surface));
+}
+.feedback-panel > header {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+}
+.feedback-panel > header > span { display: flex; align-items: baseline; gap: 9px; }
+.feedback-panel > header strong { color: var(--text-strong); font-size: 13px; }
+.feedback-panel > header small { color: var(--muted); font-size: 11px; }
+.feedback-panel > header em {
+  padding: 3px 8px; border-radius: 999px; font-size: 10px;
+  font-style: normal; font-weight: 800;
+}
+.feedback-panel > header em.active { color: #91620c; background: #fff1c8; }
+.feedback-panel > header em.done { color: #16795e; background: #dff6ed; }
+.feedback-groups {
+  display: flex; gap: 9px; overflow-x: auto; padding-bottom: 2px;
+  scrollbar-width: thin;
+}
+.feedback-group {
+  flex: 1 1 300px; min-width: 270px; max-width: 440px;
+  padding: 7px 9px; border: 1px solid var(--line); border-radius: 9px;
+  background: var(--surface);
+}
+.feedback-group > strong {
+  display: flex; align-items: center; gap: 6px; margin-bottom: 5px;
+  color: var(--text); font-size: 11px;
+}
+.feedback-group > strong i {
+  min-width: 18px; padding: 1px 5px; border-radius: 999px;
+  color: var(--muted); background: var(--surface-soft);
+  font-size: 9px; font-style: normal; text-align: center;
+}
+.feedback-group ul {
+  max-height: 116px; margin: 0; padding: 0; display: grid; gap: 5px;
+  overflow-y: auto; list-style: none; scrollbar-width: thin;
+}
+.feedback-group li {
+  min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr);
+  align-items: start; gap: 7px;
+}
+.feedback-state {
+  margin-top: 1px; padding: 2px 5px; border-radius: 5px;
+  color: #596579; background: #edf0f5; font-size: 9px; font-weight: 800;
+  white-space: nowrap;
+}
+.feedback-state.repairing { color: #1769aa; background: #e1f1ff; }
+.feedback-state.awaiting_verification,
+.feedback-state.addressed { color: #87600d; background: #fff1c8; }
+.feedback-state.closed { color: #16795e; background: #dff6ed; }
+.feedback-state.needs_human { color: #b33a45; background: #ffe4e7; }
+.feedback-copy { min-width: 0; display: grid; gap: 2px; }
+.feedback-copy > b {
+  overflow: hidden; color: var(--text); font-size: 11px; font-weight: 650;
+  line-height: 1.35; text-overflow: ellipsis; white-space: nowrap;
+}
+.feedback-copy > small {
+  min-width: 0; display: flex; gap: 7px; color: var(--muted); font-size: 9.5px;
+}
+.feedback-copy code {
+  max-width: 48%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.feedback-copy small span {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .task-control-feedback {
   padding: 8px 22px; display: grid; gap: 7px; flex: none;
   border-bottom: 1px solid var(--line);
@@ -6577,6 +6690,7 @@ pre {
 .workspace-overlay.materials-fullscreen .ws-body.has-decision.has-review {
   grid-template-columns: minmax(0, 1fr);
 }
+.workspace-overlay.materials-fullscreen .ws-review-resizer { display: none; }
 .workspace-overlay.materials-fullscreen .ws-evidence {
   max-height: none;
   border: 0;
