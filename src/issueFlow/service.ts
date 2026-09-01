@@ -364,8 +364,10 @@ export interface IssueFlowOptions {
   issueFlowMode?: (account: string) => IssueFlowMode;
   /** 月光免审批(个人设置「人工介入程度」的过程轴,现读现判):开着时
    * 分析结论闸由系统代答——analysis_confirm 全量;conclude 仅提案
-   * non_issue 且自报高置信。env_needed/env_verify 问的是用户事实,
-   * 永不代答(ADR-0006)。回调缺席或返回非真=关闭,行为与现状一致。 */
+   * non_issue 且自报高置信;Agent 自举的纯选项题问答卡按推荐项整卡
+   * 代答(开放题/混卡/检视回合永不,ADR-0006)。
+   * env_needed/env_verify 问的是用户事实,永不代答。
+   * 回调缺席或返回非真=关闭,行为与现状一致。 */
   moonlight?: (account?: string) => boolean | undefined;
   /** 推送前过目(个人设置「人工介入程度」的交付轴,现读现判):开着时
    * push_branch 无一次性令牌即被拒并举 push_confirm 闸(带服务端生成
@@ -1132,6 +1134,8 @@ export class IssueFlowService {
     if (state.status === "waiting_user") {
       this.notifyWaitingCard(live);
       this.maybeAutoAnswerGate(live);
+      // 闸缺席才轮到 Agent 卡(闸优先,两路互斥不重复作答)。
+      this.maybeAutoAnswerAgentCard(live);
     }
     if (isTerminal(state.status)) this.releaseDriver(live);
   }
@@ -1224,6 +1228,77 @@ export class IssueFlowService {
           account: state.account,
           status: summary.status,
           summary: `月光免审批:分析结论已自动确认(${gateOptionLabel(kind, code)})`,
+          link: `${(this.options.linkBase ?? "").replace(/\/+$/, "")}`
+            + `/issues/${encodeURIComponent(issueId)}`,
+        }).catch(() => undefined);
+      } catch (error) {
+        this.log(`[issue-flow] ${issueId} 月光自动作答失败(旁路,卡留待人): `
+          + String(error instanceof Error ? error.message : error));
+      }
+    }, 0);
+  }
+
+  /** 月光免审批的 Agent 卡代答(ADR-0006 口径从平台闸扩至问答卡):
+   * Agent 自举的 AskUserQuestion 卡,卡上每题都是选项题且都带
+   * recommended(ADR-0004 的「AI 推荐」——校验层保证选项题必带、
+   * trim 后逐字命中)时,按推荐项的决策码整卡代答。整卡纪律:含
+   * 开放题、recommended 缺失/不命中(历史卡防身,新卡进不来)一律
+   * 整卡等人,不做半卡代答——机器只复述 AI 明示的推荐,不替人拼凑
+   * 方案;开放题与"问用户事实"的闸同则,永不代答。
+   * 守卫顺序:平台闸优先(盘上有闸走 maybeAutoAnswerGate,与 answer()
+   * 的作答分派同一优先级)→ 月光现读现判 → 检视回合整段跳过
+   * (ADR-0007 口径延伸:检视回合的卡是"意见是否被吸收"的复核点)。
+   * 只在卡落地的 settle 时刻判定一次:已挂起的卡不追溯代答,月光
+   * 中途打开对存量卡无效(与需求流同口径)。作答走 answer() 同一
+   * 通道——状态版本先到生效、decodeAgentDecision 还原选项原文入账、
+   * 续跑、事后可经现有回退推翻;defer 到回合收口(turning 释放)之后,
+   * 失败旁路 fail-open,卡留待人。留痕落 notes:decision 位被 answers
+   * 的码还原结果占用(与真人页面作答同形),notes 是本次入账唯一
+   * 空着的留痕位,过程问答与现场导出都投影它。 */
+  private maybeAutoAnswerAgentCard(live: LiveIssue): void {
+    const { state } = live;
+    if (state.gate) return;
+    if (!this.moonlightOn(live)) return;
+    if (state.review_active === true) return;
+    const record = live.humanGate.pending()[0];
+    if (!record) return;
+    const questions = agentCardQuestions(record);
+    if (!questions.length) return;
+    const answers: Record<string, string> = {};
+    const recommended: string[] = [];
+    for (let index = 0; index < questions.length; index += 1) {
+      const item = questions[index];
+      const options = item.options ?? [];
+      // 开放题(无 options)整卡等人:机器不替人写自由文本。
+      if (!options.length) return;
+      // 推荐必须 trim 后逐字命中选项(与投影层 withAgentOptionCodes
+      // 同一把尺);缺失或不命中整卡等人,宁人工勿猜。
+      const wanted = item.recommended?.trim() ?? "";
+      const hit = wanted
+        ? options.findIndex((option) => option.trim() === wanted)
+        : -1;
+      if (hit < 0) return;
+      answers[String(index)] = agentOptionCode(index, hit);
+      recommended.push(options[hit]);
+    }
+    const issueId = live.id;
+    const version = record.state_version;
+    const trace = `月光免审批自动作答(推荐项:${recommended.join("、")})`;
+    this.log(`[issue-flow] ${issueId} 月光免审批:问题卡 ${record.waiting_id}`
+      + ` 按推荐项自动作答(${recommended.join("、")})`);
+    setTimeout(() => {
+      try {
+        const summary = this.answer(issueId, {
+          state_version: version,
+          answers,
+          notes: trace,
+        });
+        void this.options.notifier?.notifyOutcome({
+          taskId: issueId,
+          account: state.account,
+          status: summary.status,
+          summary: `月光免审批:问题卡已按推荐项自动作答`
+            + `(${recommended.join("、")})`,
           link: `${(this.options.linkBase ?? "").replace(/\/+$/, "")}`
             + `/issues/${encodeURIComponent(issueId)}`,
         }).catch(() => undefined);
