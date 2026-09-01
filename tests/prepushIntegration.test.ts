@@ -65,10 +65,26 @@ function deliveryScenes(breakTransport = false, authoritativeRepo?: string): Sce
   ];
 }
 
+/** 模拟修复 Agent 按持续检视契约为本批每条反馈留下精确回执。 */
+function feedbackReceiptCommand(summary: string): string {
+  const safeSummary = JSON.stringify(summary);
+  return "node -e 'const fs=require(\"fs\"),c=require(\"crypto\");"
+    + "const d=\"../kernel-delivery\";const ps=fs.readdirSync(d)"
+    + ".filter(x=>x.startsWith(\"feedback-open-\"));"
+    + "fs.mkdirSync(\"../feedback\",{recursive:true});"
+    + `const summary=${safeSummary};`
+    + "for(const p of ps){const b=JSON.parse(fs.readFileSync(d+\"/\"+p,\"utf8\"));"
+    + "const id=b.batch_id;const name=\"result-\"+c.createHash(\"sha256\")"
+    + ".update(id).digest(\"hex\").slice(0,24)+\".json\";"
+    + "fs.writeFileSync(\"../feedback/\"+name,JSON.stringify({schema:"
+    + "\"mae-flow-feedback-results/1\",batch_id:id,results:b.items.map(x=>({"
+    + "id:x.id,status:\"fixed\",summary,evidence:\"feature.txt\"}))}));}'";
+}
+
 function repairScenes(): Scene[] {
   return [
     { tool: { name: "bash", input: { command:
-      "echo repaired >> feature.txt" } } },
+      `echo repaired >> feature.txt; ${feedbackReceiptCommand("流水线问题已修复")}` } } },
     { text: "修复已提交。" },
   ];
 }

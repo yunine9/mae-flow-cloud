@@ -66,6 +66,22 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
+/** 模拟修复 Agent 按持续检视契约为本批每条反馈留下精确回执。 */
+function feedbackReceiptCommand(summary: string): string {
+  const safeSummary = JSON.stringify(summary);
+  return "node -e 'const fs=require(\"fs\"),c=require(\"crypto\");"
+    + "const d=\"../kernel-delivery\";const ps=fs.readdirSync(d)"
+    + ".filter(x=>x.startsWith(\"feedback-open-\"));"
+    + "fs.mkdirSync(\"../feedback\",{recursive:true});"
+    + `const summary=${safeSummary};`
+    + "for(const p of ps){const b=JSON.parse(fs.readFileSync(d+\"/\"+p,\"utf8\"));"
+    + "const id=b.batch_id;const name=\"result-\"+c.createHash(\"sha256\")"
+    + ".update(id).digest(\"hex\").slice(0,24)+\".json\";"
+    + "fs.writeFileSync(\"../feedback/\"+name,JSON.stringify({schema:"
+    + "\"mae-flow-feedback-results/1\",batch_id:id,results:b.items.map(x=>({"
+    + "id:x.id,status:\"fixed\",summary,evidence:\"a.txt\"}))}));}'";
+}
+
 function makeSourceRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), "mfc-dsrc-"));
   git(dir, "init", "--quiet", "-b", "master");
@@ -732,7 +748,7 @@ test("现场回收过的单封存台账,不再重新裁决——更不许重新�
 /** 修复环剧本:一幕修复提交(可选)+一幕收口；传输始终归宿主。 */
 function repairScenes(commit: boolean): Scene[] {
   const command = commit
-    ? "echo fixed >> a.txt"
+    ? `echo fixed >> a.txt; ${feedbackReceiptCommand("流水线问题已修复")}`
     : "git status --short";
   return [
     { text: "流水线红了,我来修。",
