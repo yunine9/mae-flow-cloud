@@ -2308,11 +2308,24 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
   flex: none; min-height: 32px; padding: 0 10px; border: 1px solid currentColor;
   border-radius: 7px; background: transparent; color: inherit; cursor: pointer;
 }
-/* 只读仓清单:模块绑定带出,登记页只许看不许改——要增删仓去团队资产。
-   短名一行放下,全地址挂 title 悬停可见。 */
-.issue-module-repos { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
-.issue-module-repos li {
-  padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
+/* 模块带仓(拍板 2026-08-31):仓清单不占版面——选中模块后悬停
+   选择器或提示行,悬浮卡列出将拉取的仓(键盘聚焦同样弹出,读屏走
+   role=tooltip);短名一行放下,全地址挂 title 悬停可见。要增删仓
+   去团队资产维护绑定,登记页只看不改。 */
+.issue-module-wrap { position: relative; display: grid; gap: 6px; }
+.issue-module-hint { color: var(--muted); cursor: help; }
+.issue-module-tip {
+  display: none; position: absolute; top: calc(100% + 6px); left: 0;
+  z-index: 40; min-width: min(440px, 100%); padding: 10px 12px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
+  box-shadow: var(--shadow-md, 0 8px 24px rgba(0,0,0,.14));
+}
+.issue-module-wrap:hover .issue-module-tip,
+.issue-module-wrap:focus-within .issue-module-tip { display: grid; gap: 8px; }
+.issue-module-tip b { color: var(--text-strong); }
+.issue-module-tip ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.issue-module-tip li {
+  padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px;
   background: var(--surface-muted); color: var(--text-strong);
   font-family: var(--font-mono); font-size: var(--font-size-dense);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -11022,3 +11035,52 @@ body[data-view="issues"] .nav-item.on { box-shadow: inset 3px 0 #c87873; }
   }
   .code-review-head { flex-wrap: wrap; gap: 8px; }
 }
+
+/* ---- 页内确认弹框(spec #52):window.confirm 的全站替代。卡片语言
+  与 wf-dialog 同观感;z-index 压过全屏工作区弹层(workspace-overlay
+  120),问题流会话视图里也能正常叠上来。 ---- */
+.confirm-backdrop {
+  position: fixed;
+  z-index: 300;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  background: color-mix(in srgb, #07101d 68%, transparent);
+  backdrop-filter: blur(5px);
+  animation: confirmFade 140ms ease-out;
+}
+.confirm-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: min(460px, calc(100vw - 64px));
+  padding: 22px;
+  border: 1px solid var(--line-strong);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, .34);
+  color: var(--text);
+  animation: confirmPop 160ms ease-out;
+}
+.confirm-dialog h3 { margin: 0; color: var(--text-strong); font-size: 18px; }
+.confirm-message { color: var(--muted); font-size: 13px; line-height: 1.65; white-space: pre-line; }
+.confirm-message ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+.confirm-dialog footer { display: flex; justify-content: flex-end; gap: 8px; padding-top: 2px; }
+.confirm-dialog footer button {
+  padding: 9px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.confirm-dialog footer button:hover { background: var(--surface-soft); }
+.confirm-dialog footer button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.confirm-dialog footer button.primary { border-color: var(--accent); background: var(--accent); color: #fff; }
+.confirm-dialog footer button.primary:hover { background: var(--accent-hover); }
+.confirm-dialog footer button.danger { border-color: var(--danger); background: var(--danger); color: #fff; }
+.confirm-dialog footer button.danger:hover { background: color-mix(in srgb, var(--danger) 85%, #000); }
+@keyframes confirmFade { from { opacity: 0; } }
+@keyframes confirmPop { from { transform: translateY(6px) scale(.98); opacity: 0; } }

@@ -41,6 +41,7 @@ import {
 import { Annotatable } from "../Annotatable";
 import { Markdown } from "../markdown";
 import { GitDiff } from "../GitDiff";
+import { confirmDialog } from "../ConfirmDialog";
 import { formatLocalDateTime } from "../time";
 import { prepareDtsHtml } from "./dtsHtml";
 
@@ -506,13 +507,15 @@ function IssueReviewPanel({ detail, reviews, checks, reviewEnabled, onReload, on
   }
 
   async function submit() {
-    if (!window.confirm(
-      `提交 ${drafts.length} 条检视意见并重跑分析?\n\n`
-        + "· 当前等你回答的问题卡(如有)将作废\n"
-        + "· 工作流从「问题分析」重新执行,其后阶段标记重做(轮次 +1)\n"
-        + "· 已申报的 UT/流水线/MR 账作废;分支与 MR 延用,同分支追加修复")) {
-      return;
-    }
+    if (!await confirmDialog({
+      title: `提交 ${drafts.length} 条检视意见并重跑分析`,
+      message: <ul>
+        <li>当前等你回答的问题卡(如有)将作废</li>
+        <li>工作流从「问题分析」重新执行，其后阶段标记重做(轮次 +1)</li>
+        <li>已申报的 UT/流水线/MR 账作废；分支与 MR 延用，同分支追加修复</li>
+      </ul>,
+      confirmLabel: "提交并重跑",
+    })) return;
     setBusy(true);
     try {
       await sendIssueReviews(id);

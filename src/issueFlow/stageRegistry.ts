@@ -399,6 +399,16 @@ export const GATE_OPTIONS: Record<IssueGateKind, GateOptionTable> = {
       { code: "fill", label: "填写并继续" },
     ],
   },
+  push_confirm: {
+    // 推送过目(ADR-0009)推荐确认:变更摘要已在卡上摆明,推荐只是
+    // 标注(AI 推荐徽标),拍板权仍在用户;这张卡连月光也不代——
+    // 过目是用户显式开启的意志,守卫在 service 的代答入口。
+    options: [
+      { code: "push", label: "确认推送" },
+      { code: "hold", label: "暂不推送" },
+    ],
+    recommended: "push",
+  },
 };
 
 /** 闸卡的推荐码(questions[].recommended 与 Agent 卡同一键)。分析
@@ -427,6 +437,8 @@ export type GateVerdict =
   | "archive"       // conclude+non_issue:闭环归档
   | "pass"          // env_verify+pass:验证通过收尾
   | "fail"          // env_verify+fail:验证不通过回退
+  | "grant_push"    // push_confirm+push:写一次性令牌,原阶段续跑
+  | "hold_push"     // push_confirm 其余答复:不产令牌,决策入账续跑
   | "unrecognized"; // 认不得的答复(仅 env_verify 打回,其余按补充意见)
 
 /** 决策码分派单点。语义钉死:
@@ -435,7 +447,10 @@ export type GateVerdict =
  * - conclude:issue 挂起 / non_issue 闭环;其余回流分析(旧的
  *   includes 匹配同样认不得就回流);
  * - env_verify:pass 收尾 / fail 回退;认不得的原样 409(旧语义:
- *   验证闸不允许自由发挥)。 */
+ *   验证闸不允许自由发挥);
+ * - push_confirm:push 授令牌;其余(暂不推送码/自由文本)一律
+ *   hold——过目闸的 fail-open 是"不推"而不是打回,用户的任何一句话
+ *   都算对这次推送的意见,真实约束力=令牌不产生。 */
 export function gateVerdict(kind: IssueGateKind, code: string): GateVerdict {
   switch (kind) {
     case "analysis_confirm":
@@ -451,6 +466,8 @@ export function gateVerdict(kind: IssueGateKind, code: string): GateVerdict {
     case "env_needed":
       // 作答口是配置表单;走到选项裁决即调用方违约,一律打回。
       return "unrecognized";
+    case "push_confirm":
+      return code === "push" ? "grant_push" : "hold_push";
   }
 }
 

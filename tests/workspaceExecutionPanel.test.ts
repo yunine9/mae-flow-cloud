@@ -21,7 +21,9 @@ test("进入独立执行现场页签后直接展开，不要求用户再点一�
 test("材料与检视组成同一工作面，一级栏目不再要求来回切换", () => {
   const navigation = workspace.slice(
     workspace.indexOf('aria-label="任务工作台视图"'),
-    workspace.indexOf('<div className={`ws-body'),
+    // 结束锚与现状对齐(体区 div 现在带 ref):旧串匹配不到会让切片
+    // 失控吞掉体区正文,误捕"批注与检视"文案(main 侧已红)。
+    workspace.indexOf("<div ref={workspaceBody}"),
   );
   assert.doesNotMatch(navigation, /批注与检视/);
   assert.match(workspace, /aria-label="本轮检视清单"/);

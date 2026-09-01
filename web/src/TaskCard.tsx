@@ -5,6 +5,7 @@
 
 import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { Markdown } from "./markdown";
+import { confirmDialog } from "./ConfirmDialog";
 import {
   decide,
   listActions,
@@ -1129,10 +1130,13 @@ export function RetryButton({
       {allowFromStart && (
         <button className="destructive" type="button" disabled={Boolean(busy)}
           onClick={async () => {
-            if (!window.confirm(
-              `确认清空 ${taskId} 的旧工作区、流程、事件和交付记录，`
-              + "并用同一任务编号从第一步重跑？此操作不可撤销。",
-            )) return;
+            if (!await confirmDialog({
+              title: "清空并从头重跑",
+              message: `将清空 ${taskId} 的旧工作区、流程、事件和交付记录，`
+                + "并用同一任务编号从第一步重跑。此操作不可撤销。",
+              confirmLabel: "清空并重跑",
+              danger: true,
+            })) return;
             setBusy("rerun");
             try {
               const result = await rerunTaskFromStart(taskId);

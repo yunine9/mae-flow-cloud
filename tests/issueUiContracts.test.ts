@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import test from "node:test";
 
@@ -47,6 +47,13 @@ test("手工登记区分目录失败与空目录，并提供重试和真实必�
     /invalidHost = host !== "" && \/\[\\s,，、\]\//);
   assert.match(registration, /if \(!envPageAccount\.trim\(\)\)/);
   assert.match(registration, /团队资产 → 业务模块/);
+  // 模块带仓不占版面(2026-08-31 拍板):常驻仓清单移除,选中后悬停
+  // 弹悬浮卡列出将拉取的仓(键盘聚焦同样弹出);要增删仓去团队资产。
+  assert.doesNotMatch(registration, /将拉取的代码仓/);
+  assert.match(registration, /issue-module-wrap/);
+  assert.match(registration, /已带出 \{selectedModule\.repositories\.length\} 个代码仓,悬停查看/);
+  assert.match(registration, /issue-module-tip" role="tooltip"/);
+  assert.match(css, /\.issue-module-wrap:hover \.issue-module-tip,[\s\S]*focus-within/);
 });
 
 test("口令选择器可用键盘操作，窄屏不会溢出", () => {
@@ -105,6 +112,109 @@ test("环境保险箱注释与真实 AI 口令契约一致", () => {
     /environmentCredentials 会按 ADR-0003 解密到当前问题的 AI 上下文/);
   assert.match(issueService, /不出现在会话列表、状态摘要或事件流/);
   assert.doesNotMatch(issueService, /提示词永远只有引用|无消费方,为页面自动化/);
+});
+
+
+test("推送过目闸(push_confirm):前端闸种镜像与变更摘要渲染兼容", () => {  const apiTypes = readFileSync(resolve("web/src/api.ts"), "utf-8");
+  const stageRegistry = readFileSync(
+    resolve("src/issueFlow/stageRegistry.ts"), "utf-8");
+  const issueFlowDoc = readFileSync(resolve("docs/issue-flow.md"), "utf-8");
+  // 前端闸种联合类型要有 push_confirm(镜像不同步=契约对账当场红的教训)。
+  assert.match(apiTypes, /\|\s*"push_confirm"/,
+    "web/src/api.ts 的 IssueGateKind 缺 push_confirm 镜像");
+  // 码表:服务端注册表的选项与推荐(ADR-0004 徽标按 recommended 画)。
+  assert.match(stageRegistry,
+    /push_confirm:\s*\{[\s\S]*?code:\s*"push",\s*label:\s*"确认推送"/);
+  assert.match(stageRegistry,
+    /push_confirm:\s*\{[\s\S]*?recommended:\s*"push"/);
+  // 闸卡:推送过目卡的 context(服务端生成的变更摘要)要走既有
+  // 决策背景块渲染,标签按内容如实叫「变更摘要」。
+  assert.match(decisions, /gate_kind === "push_confirm"\s*\?\s*"变更摘要"/);
+  assert.match(decisions, /issue-decision-context/);
+  assert.match(decisions, /issue-recommended-badge/);
+  // 档案:issue-flow.md 的闸种清单要带上这道闸。
+  assert.match(issueFlowDoc, /push_confirm|推送前过目/);
+});
+
+test("页内确认弹框:共享 confirmDialog 取代原生框,键盘与危险档纪律在位", () => {
+  const confirmDialog = readFileSync(
+    resolve("web/src/ConfirmDialog.tsx"), "utf-8");
+  const sessionView = readFileSync(
+    resolve("web/src/issues/SessionView.tsx"), "utf-8");
+  const materialsPane = readFileSync(
+    resolve("web/src/issues/MaterialsPane.tsx"), "utf-8");
+  const app = readFileSync(resolve("web/src/App.tsx"), "utf-8");
+  // 组件本体:promise 单例宿主 + FIFO 排队 + 无障碍 + 键盘纪律。
+  assert.match(confirmDialog, /export function confirmDialog\(/);
+  assert.match(confirmDialog, /export function ConfirmDialogHost\(\)/);
+  assert.match(confirmDialog, /role="dialog"/);
+  assert.match(confirmDialog, /aria-modal="true"/);
+  assert.match(confirmDialog, /aria-labelledby="confirm-dialog-title"/);
+  assert.match(confirmDialog, /event\.key === "Escape"/);
+  assert.match(confirmDialog, /event\.key === "Tab"/);
+  assert.match(confirmDialog, /event\.target === event\.currentTarget/);
+  assert.match(confirmDialog, /queue\[0\]/, "FIFO 排队:同一时刻只渲染队首");
+  assert.match(confirmDialog, /options\.danger \? cancelRef : confirmRef/,
+    "危险档默认焦点落「取消」,普通档落「确认」");
+  assert.match(confirmDialog, /triggerRef\.current\?\.focus\(\)/,
+    "关闭后焦点归还触发元素");
+  // 问题流三处接入:取消会话(危险档)/归档会话/提交检视意见。
+  for (const [name, source] of [["SessionView", sessionView],
+    ["MaterialsPane", materialsPane]] as const) {
+    assert.doesNotMatch(source, /window\.confirm\(/,
+      `${name} 不得再用浏览器原生确认框`);
+    assert.match(source, /import \{ confirmDialog \} from "\.\.\/ConfirmDialog"/);
+  }
+  assert.match(sessionView, /title: "终止会话",[\s\S]*?danger: true/);
+  assert.match(sessionView, /title: "归档会话"/);
+  assert.match(materialsPane, /title: `提交 \$\{drafts\.length\} 条检视意见并重跑分析`/);
+  // 宿主挂在 App 根部;App 自己的月光调用点允许暂时保留原生框
+  // (T3 换双语义按钮),故这里只查宿主不查 App 的 confirm。
+  assert.match(app,
+    /import \{[^}]*ConfirmDialogHost[^}]*\} from "\.\/ConfirmDialog"/);
+  assert.match(app, /<ConfirmDialogHost \/>/);
+});
+
+test("月光档位切换二选一:双语义按钮替换确定/取消绕口令", () => {
+  const app = readFileSync(resolve("web/src/App.tsx"), "utf-8");
+  assert.doesNotMatch(app, /window\.confirm\(/,
+    "月光切换不得再借原生框的确定/取消表达业务二选一");
+  assert.doesNotMatch(app, /选择“确定”|选择“取消”/);
+  assert.match(app, /title: "切换到「月光」档"/);
+  assert.match(app, /cancelLabel: "仅对后续节点生效"/);
+  assert.match(app, /confirmLabel: "连当前待办一起处理"/);
+  // 两条分支的布尔语义不变:前者=includeCurrent,后者=仅后续。
+  assert.match(app,
+    /includeCurrent = await confirmDialog\(\{[\s\S]*?confirmLabel: "连当前待办一起处理"/);
+  // 预览数字(可自动处理/检视拦截)必须完整出现在卡上。
+  assert.match(app, /\{preview\.eligible\}/);
+  assert.match(app, /\{preview\.blocked_annotations\}/);
+});
+
+test("全站 window.confirm 清零:原生确认框一律走共享 confirmDialog", () => {
+  const files = readdirSync(resolve("web/src"), { recursive: true })
+    .map(String).filter((file) => /\.(tsx|ts)$/.test(file));
+  assert.ok(files.length > 20, "web/src 源码清单不应为空");
+  const offenders = files.filter((file) => readFileSync(
+    resolve("web/src", file), "utf-8").includes("window.confirm("));
+  assert.deepEqual(offenders, [], "仍有调用点残留浏览器原生确认框");
+  // T2 的七个机械替换点全部挂上共享弹框(危险三处红档)。
+  const historyBoard = readFileSync(resolve("web/src/HistoryBoard.tsx"), "utf-8");
+  const taskCard = readFileSync(resolve("web/src/TaskCard.tsx"), "utf-8");
+  const settings = readFileSync(resolve("web/src/SettingsView.tsx"), "utf-8");
+  const wishWall = readFileSync(resolve("web/src/WishWall.tsx"), "utf-8");
+  const modules = readFileSync(resolve("web/src/BusinessModuleLibrary.tsx"), "utf-8");
+  const workflows = readFileSync(
+    resolve("web/src/workflows/WorkflowAssetWorkspace.tsx"), "utf-8");
+  for (const [name, source] of [["HistoryBoard", historyBoard],
+    ["TaskCard", taskCard], ["SettingsView", settings], ["WishWall", wishWall],
+    ["BusinessModuleLibrary", modules],
+    ["WorkflowAssetWorkspace", workflows]] as const) {
+    assert.match(source, /confirmDialog\(\{/, `${name} 应改用 confirmDialog`);
+  }
+  for (const source of [historyBoard, taskCard]) {
+    assert.match(source, /danger: true/);
+  }
 });
 
 test("过程文档可原位全屏，退出后保留当前页签", () => {

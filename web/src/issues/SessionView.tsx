@@ -31,6 +31,7 @@ import {
 } from "../api";
 import { formatWait } from "../taskTime";
 import { formatLocalClock } from "../time";
+import { confirmDialog } from "../ConfirmDialog";
 import {
   repoDeliveryRows,
   repoPipelineBadge,
@@ -177,15 +178,22 @@ export function IssueSessionView({
       setBusy(false);
     }
   }
-  function archive() {
-    if (window.confirm("归档后 会话收口不可续聊,凭据将清理。确认归档?")) {
-      void perform(() => controlIssue(detail.id, { action: "archive" }));
-    }
+  async function archive() {
+    if (!await confirmDialog({
+      title: "归档会话",
+      message: "归档后会话收口不可续聊，凭据将清理。",
+      confirmLabel: "归档",
+    })) return;
+    void perform(() => controlIssue(detail.id, { action: "archive" }));
   }
-  function cancelSession() {
-    if (window.confirm("取消将终止会话并清理现场,确认?")) {
-      void perform(() => controlIssue(detail.id, { action: "cancel" }));
-    }
+  async function cancelSession() {
+    if (!await confirmDialog({
+      title: "终止会话",
+      message: "将终止会话并清理现场，此操作不可撤销。",
+      confirmLabel: "终止会话",
+      danger: true,
+    })) return;
+    void perform(() => controlIssue(detail.id, { action: "cancel" }));
   }
 
   // 全屏工作台(与任务侧 workspace-overlay 同款):头部之外全部进

@@ -25,6 +25,7 @@ import {
   type SystemCheckResult,
   type VisionProbeResult,
 } from "./api";
+import { confirmDialog } from "./ConfirmDialog";
 
 type Message = { kind: "success" | "error"; text: string } | null;
 
@@ -276,8 +277,12 @@ function BuildCacheCard({ view, onSaved }: {
   }
 
   async function clearUnused() {
-    if (!window.confirm("清理当前未被任务或容器占用的全部构建缓存？\n\n"
-      + "后续任务仍可重新生成，但第一次编译会变慢；运行中的缓存不会被触碰。")) return;
+    if (!await confirmDialog({
+      title: "清理构建缓存",
+      message: "将清理当前未被任务或容器占用的全部构建缓存。"
+        + "后续任务仍可重新生成，但第一次编译会变慢；运行中的缓存不会被触碰。",
+      confirmLabel: "清理",
+    })) return;
     setReclaiming(true); setMessage(null);
     try {
       const result = await reclaimUnusedBuildCaches();

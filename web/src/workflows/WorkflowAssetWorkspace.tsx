@@ -18,6 +18,7 @@ import {
 import { WorkflowDetail } from "./WorkflowDetail";
 import { WorkflowEditor } from "./WorkflowEditor";
 import { WorkflowLibrary } from "./WorkflowLibrary";
+import { confirmDialog } from "../ConfirmDialog";
 
 type Page = "library" | "detail" | "editor";
 type CreateDialog = {
@@ -289,8 +290,13 @@ export function WorkflowAssetWorkspace({
             } else setEditorError(messageOf(cause));
           }).finally(() => setBusy(false));
       }}
-      onExit={() => {
-        if (!dirty || window.confirm("当前有尚未保存的修改，确定返回详情吗？")) {
+      onExit={async () => {
+        if (!dirty || await confirmDialog({
+          title: "未保存的修改",
+          message: "当前有尚未保存的修改，返回详情将离开编辑器"
+            + "（改动可一键恢复）。",
+          confirmLabel: "返回详情",
+        })) {
           setPage("detail");
           setEditorError("");
         }

@@ -802,6 +802,9 @@ async function main(): Promise<void> {
     issueFlowMode: (account) => auth.issueFlowMode(account),
     // 月光免审批(人工介入程度的过程轴,现读现判):分析结论闸代答。
     moonlight: (account) => auth.moonlightEnabled(account),
+    // 推送前过目(人工介入程度的交付轴,现读现判):push_branch 举卡
+    // 等过目,确认产一次性令牌放行一次推送;真人缺省即开,显式关才关。
+    pushConfirmation: (account) => auth.pushConfirmationEnabled(account),
     gitCredential: (account) => auth.gitCredential(account),
     opsTools: existsSync(join(goToolsDir, process.platform === "win32"
       ? "fetch-logs.exe" : "fetch-logs-linux-amd64"))

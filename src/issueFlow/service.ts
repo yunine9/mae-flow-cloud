@@ -154,6 +154,18 @@ function agentCardQuestions(record: WaitingRecord): Array<{
   }> })?.questions ?? [];
 }
 
+/** 「AI 推荐」的命中尺:trim 后逐字命中选项原文,返回下标(-1=没有)。
+ * 投影(推荐原文换投影码)与月光代答(按推荐作答)共用同一把——
+ * 卡上标的推荐与代答认的推荐永远同一判定,不会各说各话。 */
+function recommendedIndex(
+  options: string[] | undefined,
+  recommended: string | undefined,
+): number {
+  const wanted = recommended?.trim() ?? "";
+  if (!wanted) return -1;
+  return (options ?? []).findIndex((option) => option.trim() === wanted);
+}
+
 /** 投影:给 Agent 卡的字符串选项派发决策码(get 的 waiting 出口)。
  * 平台闸不走这里——它的码表就是 stageRegistry 的 GATE_OPTIONS,
  * 举闸时已带码落盘。没有在等的卡原样返回 undefined。 */
@@ -177,9 +189,7 @@ function withAgentOptionCodes(
         // 与选项同一条码表,文案改字零协议后果。校验器保证必命中;
         // 万一没命中(卡先于校验落盘的旧现场)不带该键,不造悬空码。
         const { recommended: rawRecommended, ...rest } = item;
-        const wanted = rawRecommended?.trim() ?? "";
-        const hit = options.findIndex((option) =>
-          option.label.trim() === wanted);
+        const hit = recommendedIndex(item.options, rawRecommended);
         return {
           ...rest,
           options,
@@ -364,9 +374,18 @@ export interface IssueFlowOptions {
   issueFlowMode?: (account: string) => IssueFlowMode;
   /** 月光免审批(个人设置「人工介入程度」的过程轴,现读现判):开着时
    * 分析结论闸由系统代答——analysis_confirm 全量;conclude 仅提案
-   * non_issue 且自报高置信。env_needed/env_verify 问的是用户事实,
-   * 永不代答(ADR-0006)。回调缺席或返回非真=关闭,行为与现状一致。 */
+   * non_issue 且自报高置信;Agent 自举的纯选项题问答卡按推荐项整卡
+   * 代答(开放题/混卡/检视回合永不,ADR-0006)。
+   * env_needed/env_verify 问的是用户事实,永不代答。
+   * 回调缺席或返回非真=关闭,行为与现状一致。 */
   moonlight?: (account?: string) => boolean | undefined;
+  /** 推送前过目(个人设置「人工介入程度」的交付轴,现读现判):开着时
+   * push_branch 无一次性令牌即被拒并举 push_confirm 闸(带服务端生成
+   * 的变更摘要),用户确认产令牌放行一次推送;月光永不代这张闸——
+   * 过目是用户显式开启的意志,更具体的意志赢(ADR-0009,与需求流
+   * push 前确认同一裁定)。回调缺席或返回非真=直推,行为与现状一致
+   * (裸构造兼容缺省;正式接线在 serve 层的 auth.pushConfirmationEnabled)。 */
+  pushConfirmation?: (account?: string) => boolean | undefined;
   gitCredential?: (account: string) =>
     (GitCredential & { email?: string }) | undefined;
   opsTools?: IssueOpsTools;
@@ -1151,6 +1170,8 @@ export class IssueFlowService {
     if (state.status === "waiting_user") {
       this.notifyWaitingCard(live);
       this.maybeAutoAnswerGate(live);
+      // 闸缺席才轮到 Agent 卡(闸优先,两路互斥不重复作答)。
+      this.maybeAutoAnswerAgentCard(live);
     }
     if (isTerminal(state.status)) this.releaseDriver(live);
   }
@@ -1161,7 +1182,7 @@ export class IssueFlowService {
    * 闸卡与 Agent 卡并存时闸优先——与作答分派(answer)同一优先级;
    * 通知里只给人话文案:决策码是页面作答协议,发给用户只会把人看懵。 */
   private notifyWaitingCard(live: LiveIssue): void {
-    const { notifier, linkBase } = this.options;
+    const { notifier } = this.options;
     if (!notifier) return;
     const { state } = live;
     const gate = state.gate;
@@ -1187,8 +1208,7 @@ export class IssueFlowService {
       context: gate ? gate.context : record?.context,
       questions,
       summary: "问题处理需要你决策",
-      link: `${(linkBase ?? "").replace(/\/+$/, "")}`
-        + `/issues/${encodeURIComponent(live.id)}`,
+      link: this.issueLink(live.id),
     }).catch((error) =>
       this.log(`[issue-flow] ${live.id} 等待卡通知失败(旁路,流程照走): `
         + String(error)));
@@ -1200,16 +1220,28 @@ export class IssueFlowService {
     return this.options.moonlight?.(live.state.account) === true;
   }
 
+  /** 会话工作台深链(等待卡/代答的小鲁班通知共用;尾部斜杠归一)。 */
+  private issueLink(issueId: string): string {
+    return `${(this.options.linkBase ?? "").replace(/\/+$/, "")}`
+      + `/issues/${encodeURIComponent(issueId)}`;
+  }
+
   /** 月光免审批的闸代答(ADR-0006):只代答"确认类"闸——
    * analysis_confirm 全量(推荐码表定死 confirm);conclude 仅提案
    * non_issue 且自报高置信(闭环无下游闸,分级保守)。env_needed/
-   * env_verify 问的是用户的事实(环境配置/验证结果),永不代答。
+   * env_verify 问的是用户的事实(环境配置/验证结果),永不代答;
+   * push_confirm 是用户显式开启的过目意志,同样永不代答(ADR-0009)。
    * 作答 defer 到回合收口(turning 释放)之后,走 answer() 同一裁决
    * 通道——现场账、通知、续跑与真人作答同款,事后可经现有回退推翻。 */
   private maybeAutoAnswerGate(live: LiveIssue): void {
     const { state } = live;
     const gate = state.gate;
     if (!gate) return;
+    // push_confirm 永不代答(ADR-0009,显式裁定):推送过目是用户显式
+    // 开启的"我要亲自看一眼"——更具体的意志赢过月光的免审批,与需求
+    // 流 push 前确认同一裁定。守卫放在月光判定之前:这条路径连"读
+    // 设置"都不必,过目卡在任何介入档位都只等真人。
+    if (gate.kind === "push_confirm") return;
     if (!this.moonlightOn(live)) return;
     // 检视回合的确认卡永不代答(ADR-0007):用户提了意见、agent 按意见
     // 修订重提,这张卡就是"意见是否被吸收"的复核点——代答放行等于
@@ -1237,8 +1269,74 @@ export class IssueFlowService {
           account: state.account,
           status: summary.status,
           summary: `月光免审批:分析结论已自动确认(${gateOptionLabel(kind, code)})`,
-          link: `${(this.options.linkBase ?? "").replace(/\/+$/, "")}`
-            + `/issues/${encodeURIComponent(issueId)}`,
+          link: this.issueLink(issueId),
+        }).catch(() => undefined);
+      } catch (error) {
+        this.log(`[issue-flow] ${issueId} 月光自动作答失败(旁路,卡留待人): `
+          + String(error instanceof Error ? error.message : error));
+      }
+    }, 0);
+  }
+
+  /** 月光免审批的 Agent 卡代答(ADR-0006 口径从平台闸扩至问答卡):
+   * Agent 自举的 AskUserQuestion 卡,卡上每题都是选项题且都带
+   * recommended(ADR-0004 的「AI 推荐」——校验层保证选项题必带、
+   * trim 后逐字命中)时,按推荐项的决策码整卡代答。整卡纪律:含
+   * 开放题、recommended 缺失/不命中(历史卡防身,新卡进不来)一律
+   * 整卡等人,不做半卡代答——机器只复述 AI 明示的推荐,不替人拼凑
+   * 方案;开放题与"问用户事实"的闸同则,永不代答。
+   * 守卫顺序:平台闸优先(盘上有闸走 maybeAutoAnswerGate,与 answer()
+   * 的作答分派同一优先级)→ 月光现读现判 → 检视回合整段跳过
+   * (ADR-0007 口径延伸:检视回合的卡是"意见是否被吸收"的复核点)。
+   * 只在卡落地的 settle 时刻判定一次:已挂起的卡不追溯代答,月光
+   * 中途打开对存量卡无效(与需求流同口径)。作答走 answer() 同一
+   * 通道——状态版本先到生效、decodeAgentDecision 还原选项原文入账、
+   * 续跑、事后可经现有回退推翻;defer 到回合收口(turning 释放)之后,
+   * 失败旁路 fail-open,卡留待人。留痕落 notes:decision 位被 answers
+   * 的码还原结果占用(与真人页面作答同形),notes 是本次入账唯一
+   * 空着的留痕位,过程问答与现场导出都投影它。 */
+  private maybeAutoAnswerAgentCard(live: LiveIssue): void {
+    const { state } = live;
+    if (state.gate) return;
+    if (!this.moonlightOn(live)) return;
+    if (state.review_active === true) return;
+    const record = live.humanGate.pending()[0];
+    if (!record) return;
+    const questions = agentCardQuestions(record);
+    if (!questions.length) return;
+    const answers: Record<string, string> = {};
+    const recommended: string[] = [];
+    for (let index = 0; index < questions.length; index += 1) {
+      const item = questions[index];
+      const options = item.options ?? [];
+      // 开放题(无 options)整卡等人:机器不替人写自由文本。
+      if (!options.length) return;
+      // 推荐必须命中(recommendedIndex 与投影层同一把尺);缺失或
+      // 不命中整卡等人,宁人工勿猜。
+      const hit = recommendedIndex(item.options, item.recommended);
+      if (hit < 0) return;
+      answers[String(index)] = agentOptionCode(index, hit);
+      recommended.push(options[hit]);
+    }
+    const issueId = live.id;
+    const version = record.state_version;
+    const trace = `月光免审批自动作答(推荐项:${recommended.join("、")})`;
+    this.log(`[issue-flow] ${issueId} 月光免审批:问题卡 ${record.waiting_id}`
+      + ` 按推荐项自动作答(${recommended.join("、")})`);
+    setTimeout(() => {
+      try {
+        const summary = this.answer(issueId, {
+          state_version: version,
+          answers,
+          notes: trace,
+        });
+        void this.options.notifier?.notifyOutcome({
+          taskId: issueId,
+          account: state.account,
+          status: summary.status,
+          summary: `月光免审批:问题卡已按推荐项自动作答`
+            + `(${recommended.join("、")})`,
+          link: this.issueLink(issueId),
         }).catch(() => undefined);
       } catch (error) {
         this.log(`[issue-flow] ${issueId} 月光自动作答失败(旁路,卡留待人): `
@@ -1388,6 +1486,10 @@ export class IssueFlowService {
       },
       gitCredential: () =>
         this.options.gitCredential?.(live.state.account),
+      // 推送前过目(交付轴,现读现判):工具执行点读当下设置,用户改
+      // 设置即刻生效(与月光同一纪律)。
+      pushConfirmation: () =>
+        this.options.pushConfirmation?.(live.state.account) === true,
       // 拉仓工具的宿主实现(克隆+登记+建分支,凭据止步宿主)。
       pullRepo: (url: string) => service.pullRepoFor(live, url),
       // 固定流程:MR 建成→对该仓启动流水线监看(多仓各自挂表)。
@@ -1681,6 +1783,38 @@ export class IssueFlowService {
           + `${supplement || `\n用户描述: ${reason}`}\n`
           + "请带着新一轮的现场重新分析(前几轮的修复在分支上,不要推倒重来),"
           + "分析完成后重新 submit_analysis。"));
+      return summarize(state);
+    }
+
+    if (verdict === "grant_push") {
+      // push_confirm 确认(ADR-0009):一次性令牌写入会话状态(带确认
+      // 时刻与决策留痕,并记下举闸时的分支 tip 作为过目对象的身份——
+      // 重推时 tip 变了令牌即作废重举),随 issue.json 持久化,recover
+      // 不清它。闸已在上面落掉、原阶段续跑——Agent 重试 push_branch 即
+      // 放行,成功后令牌被消费,再推重新过目(每次过目,防盲签)。
+      state.push_token = {
+        at: new Date().toISOString(),
+        decision,
+        ...(state.push_review_head
+          ? { head: state.push_review_head } : {}),
+      };
+      delete state.push_review_head;
+      saveState(live.root, state);
+      this.continueTurn(live,
+        `用户已过目本次变更并确认推送(推送确认)。令牌已生效——请重新调用`
+          + ` push_branch 完成推送(成功后令牌即消费,之后的每次推送都会重新`
+          + `举卡过目)。${supplement}`);
+      return summarize(state);
+    }
+
+    if (verdict === "hold_push") {
+      // 暂不推送(含自由作答):不产令牌,原阶段续跑。决策与意见已在
+      // 上面入账(human_decision 事件+转移账),Agent 能看到用户意见。
+      saveState(live.root, state);
+      this.continueTurn(live,
+        `用户选择暂不推送,本次变更未获放行:${decision}${supplement}\n`
+          + "请不要推送——先按用户意见调整,调整好后再推(届时会重新举"
+          + "推送确认卡过目)。");
       return summarize(state);
     }
 

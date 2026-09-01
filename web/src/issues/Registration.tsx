@@ -389,20 +389,36 @@ function ManualRegister({
             placeholder="发生条件、影响范围、复现步骤;有日志片段也可以贴进来"
             onChange={(event) => setDescription(event.target.value)} />
         </label>
-        {/* 未选模块时选择器占满一行;选中后与只读仓清单并排一行,
-            少占一整行。 */}
-        <label className={selectedModule ? "issue-field" : "issue-field wide"}>
+        {/* 仓不占版面(拍板 2026-08-31):选中模块即带出绑定仓,清单
+            收进悬停提示——悬停选择器或提示行就能看到将拉取哪些仓;
+            要增删仓去「团队资产 → 业务模块」维护绑定,登记页不改。 */}
+        <label className="issue-field wide">
           <span>业务模块 <i className="req">*</i></span>
-          <select value={moduleId}
-            disabled={modules === undefined || !!moduleLoadError}
-            onChange={(event) => setModuleId(event.target.value)}>
-            <option value="" disabled>选择业务模块——决定关联代码仓</option>
-            {moduleCatalog.map((module) => (
-              <option key={module.id} value={module.id}>
-                {module.name}(绑 {module.repositories.length} 个仓)
-              </option>
-            ))}
-          </select>
+          <span className="issue-module-wrap">
+            <select value={moduleId}
+              disabled={modules === undefined || !!moduleLoadError}
+              onChange={(event) => setModuleId(event.target.value)}>
+              <option value="" disabled>选择业务模块——决定关联代码仓</option>
+              {moduleCatalog.map((module) => (
+                <option key={module.id} value={module.id}>
+                  {module.name}(绑 {module.repositories.length} 个仓)
+                </option>
+              ))}
+            </select>
+            {selectedModule && <>
+              <small className="issue-module-hint">
+                已带出 {selectedModule.repositories.length} 个代码仓,悬停查看
+              </small>
+              <span className="issue-module-tip" role="tooltip">
+                <b>将拉取 {selectedModule.repositories.length} 个代码仓</b>
+                <ul>
+                  {selectedModule.repositories.map((url) => (
+                    <li key={url} title={url}>{repoLabel(url)}</li>
+                  ))}
+                </ul>
+              </span>
+            </>}
+          </span>
           {moduleLoadError && <small className="issue-module-load-error" role="alert">
             <span>业务模块加载失败：{moduleLoadError}</span>
             <button type="button" onClick={() => setModuleLoadAttempt((value) => value + 1)}>
@@ -413,14 +429,6 @@ function ManualRegister({
             模块目录为空——先到「团队资产 → 业务模块」登记并绑定代码仓,再回来发起。
           </small>}
         </label>
-        {selectedModule && <div className="issue-field">
-          <span>将拉取的代码仓 <i>{selectedModule.repositories.length} 个,只读</i></span>
-          <ul className="issue-module-repos">
-            {selectedModule.repositories.map((url) => (
-              <li key={url} title={url}>{repoLabel(url)}</li>
-            ))}
-          </ul>
-        </div>}
       </div>
     </div>
     <div className="issue-group wide">

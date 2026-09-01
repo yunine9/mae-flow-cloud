@@ -128,6 +128,8 @@ test("阶段注册表:出口闸归属与裁决去向(确认推进/补充回流)"
     "验证闸属换库环境验证阶段");
   assert.equal(stageGateRoute("env_needed"), undefined,
     "环境闸不绑阶段(作答口是配置表单,不走选项裁决)");
+  assert.equal(stageGateRoute("push_confirm"), undefined,
+    "推送过目闸不绑阶段(push_branch 的工具级硬闸,两模式同过)");
 });
 
 test("举卡决策码:码表钉死(码+文案对),分派纯函数只认 (kind, code)", () => {
@@ -140,6 +142,8 @@ test("举卡决策码:码表钉死(码+文案对),分派纯函数只认 (kind, c
     ["pass", "fail"]);
   assert.deepEqual(GATE_OPTIONS.env_needed.options.map((option) => option.code),
     ["fill"]);
+  assert.deepEqual(GATE_OPTIONS.push_confirm.options.map((option) => option.code),
+    ["push", "hold"]);
   for (const [kind, table] of Object.entries(GATE_OPTIONS)) {
     for (const option of table.options) {
       assert.ok(option.label.length > 0, `${kind}/${option.code} 缺文案`);
@@ -172,6 +176,13 @@ test("举卡决策码:码表钉死(码+文案对),分派纯函数只认 (kind, c
   assert.equal(gateVerdict("env_verify", ""), "unrecognized");
   // env_needed 的作答口是配置表单:走到选项裁决即调用方违约,一律打回。
   assert.equal(gateVerdict("env_needed", "fill"), "unrecognized");
+  // 推送过目(ADR-0009):确认=授一次性令牌;暂不推送与认不得的答复
+  // 一律 hold——过目闸的 fail-open 是"不推"而不是打回。
+  assert.equal(gateVerdict("push_confirm", "push"), "grant_push");
+  assert.equal(gateVerdict("push_confirm", "hold"), "hold_push");
+  assert.equal(gateVerdict("push_confirm", ""), "hold_push");
+  assert.equal(gateVerdict("push_confirm", "先别推,改完再说"), "hold_push",
+    "自由文本也是对这次推送的意见,不产令牌即可,不打回");
 });
 
 test("闸卡推荐(ADR-0004):码表定死分析确认,结论闸按提案派生,验证闸不硬给", () => {
@@ -193,6 +204,9 @@ test("闸卡推荐(ADR-0004):码表定死分析确认,结论闸按提案派生,�
   // 网管环境是语义表单,无选项天然无推荐。
   assert.equal(gateRecommendedCode("env_verify"), undefined);
   assert.equal(gateRecommendedCode("env_needed"), undefined);
+  // 推送过目在码表里定死推荐「确认推送」(ADR-0009):摘要已在卡上,
+  // 推荐只是标注,拍板权仍在用户;月光也不代这张卡。
+  assert.equal(gateRecommendedCode("push_confirm"), "push");
 });
 
 test("生成等价性对账:同一注册表生成的简报与门禁,工具清单完全一致", () => {
