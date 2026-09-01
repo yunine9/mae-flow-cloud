@@ -831,6 +831,22 @@ export interface PushReviewPresentation {
   verification?: string;
 }
 
+/** 持续检视反馈明细(持续检视闭环,main 侧交付单元拆分一线带来)。
+ * 后端账本尚在演进:字段可选,任务摘要没有 feedback 时面板整体不渲染。 */
+export type FeedbackSource = "workspace" | "mr_discussion" | "build_fix"
+  | "pipeline" | "conflict" | "scope" | "push_confirmation";
+export type FeedbackStatus = "open" | "repairing" | "addressed"
+  | "awaiting_verification" | "closed" | "needs_human";
+export interface FeedbackRecord {
+  id: string;
+  source: FeedbackSource;
+  status: FeedbackStatus;
+  summary: string;
+  file?: string;
+  line?: number;
+  resolution?: string;
+}
+
 export interface TaskSummary {
   id: string;
   title?: string;
@@ -1020,6 +1036,8 @@ export interface TaskSummary {
   progress?: TaskProgress;
   /** 当前阶段采用什么做法的只读说明；状态与完成条件仍以内核为准。 */
   execution_plan?: ExecutionPlan;
+  /** 持续检视反馈明细:服务端账本就绪后面板自动点亮,缺席=不渲染。 */
+  feedback?: FeedbackRecord[];
   /** 活方案对拍告警:定制链任何一环退化(定格文件损坏、阶段失配、
    * 活方案没吃到定格)都在这里,有值必须标红——不许界面展示定格副本
    * 而 Agent 实际跑平台默认。 */
