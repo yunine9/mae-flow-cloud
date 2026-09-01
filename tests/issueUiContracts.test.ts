@@ -45,6 +45,13 @@ test("手工登记区分目录失败与空目录，并提供重试和真实必�
     /invalidHost = host !== "" && \/\[\\s,，、\]\//);
   assert.match(registration, /if \(!envPageAccount\.trim\(\)\)/);
   assert.match(registration, /团队资产 → 业务模块/);
+  // 模块带仓不占版面(2026-08-31 拍板):常驻仓清单移除,选中后悬停
+  // 弹悬浮卡列出将拉取的仓(键盘聚焦同样弹出);要增删仓去团队资产。
+  assert.doesNotMatch(registration, /将拉取的代码仓/);
+  assert.match(registration, /issue-module-wrap/);
+  assert.match(registration, /已带出 \{selectedModule\.repositories\.length\} 个代码仓,悬停查看/);
+  assert.match(registration, /issue-module-tip" role="tooltip"/);
+  assert.match(css, /\.issue-module-wrap:hover \.issue-module-tip,[\s\S]*focus-within/);
 });
 
 test("口令选择器可用键盘操作，窄屏不会溢出", () => {
