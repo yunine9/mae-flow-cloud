@@ -13,8 +13,9 @@
  * 快速修改是问题流唯一的人工写口——只改 repo/ 内已有文件,保存入
  * 人工台账,"请 AI 复核"走现有插话/续聊通道。
  */
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
+  extractIssueLog,
   addIssueReview,
   dropIssueReview,
   getDtsTicketDetail,
@@ -32,6 +33,7 @@ import {
   type IssueDetail,
   type IssueDialogueTurn,
   type IssueDocMeta,
+  type IssueLogEntry,
   type IssueMaterials,
   type IssueReview,
   type IssueReviewCheck,
@@ -54,6 +56,114 @@ function sizeText(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+// ---- 拉取日志树(#47):扁平清单按路径组树,目录展开/收起,压缩包行带解压 ----
+
+interface LogTreeNode {
+  name: string;
+  /** local-logs 相对路径(/ 分隔,与服务端清单同键)。 */
+  path: string;
+  type: "file" | "dir";
+  size: number;
+  archive: boolean;
+  children: LogTreeNode[];
+}
+
+/** 扁平清单 → 目录树:服务端新→旧序就是兄弟序,组树不重排,保住
+ * "新东西在上"的直觉;文件先于其目录条目出现时按需补目录节点。 */
+function buildLogTree(entries: IssueLogEntry[]): LogTreeNode[] {
+  const roots: LogTreeNode[] = [];
+  const dirs = new Map<string, LogTreeNode>();
+  const childrenOf = (dirPath: string): LogTreeNode[] => {
+    if (!dirPath) return roots;
+    const hit = dirs.get(dirPath);
+    if (hit) return hit.children;
+    const segments = dirPath.split("/");
+    const node: LogTreeNode = {
+      name: segments.at(-1) ?? dirPath,
+      path: dirPath,
+      type: "dir",
+      size: 0,
+      archive: false,
+      children: [],
+    };
+    childrenOf(segments.slice(0, -1).join("/")).push(node);
+    dirs.set(dirPath, node);
+    return node.children;
+  };
+  for (const entry of entries) {
+    const segments = entry.path.split("/");
+    if (entry.type === "dir") {
+      childrenOf(entry.path);
+      continue;
+    }
+    childrenOf(segments.slice(0, -1).join("/")).push({
+      name: segments.at(-1) ?? entry.path,
+      path: entry.path,
+      type: "file",
+      size: entry.size,
+      archive: entry.archive,
+      children: [],
+    });
+  }
+  return roots;
+}
+
+/** 把一条路径连同全部祖先目录加进展开集(解压后要一眼看到新目录)。 */
+function expandWithAncestors(prev: ReadonlySet<string>, path: string): Set<string> {
+  const next = new Set(prev);
+  const segments = path.split("/");
+  for (let i = 1; i <= segments.length; i++) {
+    next.add(segments.slice(0, i).join("/"));
+  }
+  return next;
+}
+
+/** 树行渲染:目录行点击收/展,文件行点击进查看器,压缩包行多一枚解压
+ * 按钮。缩进按深度手排(树是自绘的,不引第三方依赖)。 */
+function LogTreeRows({ nodes, depth, expanded, activeLog, extracting, onToggle, onOpen, onExtract }: {
+  nodes: LogTreeNode[];
+  depth: number;
+  expanded: ReadonlySet<string>;
+  activeLog?: string;
+  extracting: string;
+  onToggle: (path: string) => void;
+  onOpen: (path: string) => void;
+  onExtract: (path: string) => void;
+}) {
+  return <>
+    {nodes.map((node) => node.type === "dir"
+      ? <Fragment key={node.path}>
+          <button type="button" role="listitem"
+            className="issue-materials-file issue-log-dir"
+            style={{ paddingLeft: 10 + depth * 18 }}
+            aria-expanded={expanded.has(node.path)}
+            onClick={() => onToggle(node.path)}>
+            <span className="p">{expanded.has(node.path) ? "▾" : "▸"} {node.name}/</span>
+          </button>
+          {expanded.has(node.path) && <LogTreeRows
+            nodes={node.children} depth={depth + 1} expanded={expanded}
+            activeLog={activeLog} extracting={extracting}
+            onToggle={onToggle} onOpen={onOpen} onExtract={onExtract} />}
+        </Fragment>
+      : <div key={node.path} className="issue-log-row"
+          style={{ paddingLeft: 10 + depth * 18 }}>
+          <button type="button" role="listitem"
+            className={`issue-materials-file${activeLog === node.path ? " on" : ""}`}
+            onClick={() => onOpen(node.path)}>
+            <span className="p">{node.name}</span>
+            <span className="num">{sizeText(node.size)}</span>
+          </button>
+          {node.archive && <button type="button" className="issue-log-extract"
+            disabled={extracting !== ""}
+            title={`解压到同目录 ${node.name
+              .replace(/\.(tar\.gz|tar\.bz2|tgz|tar|zip)$/i, "")}-extracted/`}
+            onClick={() => onExtract(node.path)}>
+            {extracting === node.path ? "解压中…" : "解压"}
+          </button>}
+        </div>)}
+  </>;
 }
 
 /** 过程问答(对话气泡):复盘阅读面(ADR-0008 口径)——问答卡、用户
@@ -461,7 +571,13 @@ export function IssueMaterialsPane({ detail, busy, view, onView, onNotifyAI }: {
   const [content, setContent] = useState<string>();
   const [saving, setSaving] = useState(false);
   const [dtsDetail, setDtsDetail] = useState<DtsTicketDetail>();
-  const [logView, setLogView] = useState<{ name: string; content: string }>();
+  const [logView, setLogView] = useState<{ path: string; content: string }>();
+  // 拉取日志树(#47):展开的目录集合 + 解压中的包路径(busy 态)。
+  // 缺省展开第一层只补一次(首次清单到手时),此后尊重用户的收/展动作,
+  // 刷新不强行重开用户收起的目录。
+  const [expandedDirs, setExpandedDirs] = useState<ReadonlySet<string>>(new Set());
+  const [extracting, setExtracting] = useState("");
+  const defaultExpandedDone = useRef(false);
   // 过程文档清单(开关角标用):随会话动态轻量重读(只扫顶层 .md)。
   const [docCount, setDocCount] = useState(0);
 
@@ -475,6 +591,13 @@ export function IssueMaterialsPane({ detail, busy, view, onView, onNotifyAI }: {
       ]);
       setData(materials);
       setAllDiff(diff.diff);
+      // 缺省展开第一层(顶层目录):只在首次清单到手时补,之后不动。
+      if (!defaultExpandedDone.current) {
+        defaultExpandedDone.current = true;
+        setExpandedDirs(new Set(materials.logs.entries
+          .filter((entry) => entry.type === "dir" && !entry.path.includes("/"))
+          .map((entry) => entry.path)));
+      }
       // 手选的仓刷新后仍在变更清单里才保留;仓的改动清零了就回合并视图。
       setDiffRepo((current) => current
         && materials.changes.some((change) =>
@@ -543,12 +666,32 @@ export function IssueMaterialsPane({ detail, busy, view, onView, onNotifyAI }: {
     }
   }
 
-  async function openLog(name: string) {
+  async function openLog(path: string) {
     try {
-      const log = await getIssueMaterialLog(detail.id, name);
-      setLogView({ name, content: log.content });
+      const log = await getIssueMaterialLog(detail.id, path);
+      setLogView({ path, content: log.content });
     } catch (reason) {
       setNote(String(reason instanceof Error ? reason.message : reason));
+    }
+  }
+
+  /** 解压压缩包(#47):成功后刷新清单并展开新目录(连同祖先),让人
+   * 一步看到包里内容;重复解压服务端幂等,文案如实说"复用"。 */
+  async function extractArchive(path: string) {
+    if (extracting) return;
+    setExtracting(path);
+    setNote("");
+    try {
+      const result = await extractIssueLog(detail.id, path);
+      await load();
+      setExpandedDirs((prev) => expandWithAncestors(prev, result.path));
+      setNote(result.reused
+        ? `${result.path} 已经解压过,直接复用,没有重解。`
+        : `解压完成:${result.path}`);
+    } catch (reason) {
+      setNote(String(reason instanceof Error ? reason.message : reason));
+    } finally {
+      setExtracting("");
     }
   }
 
@@ -564,6 +707,8 @@ export function IssueMaterialsPane({ detail, busy, view, onView, onNotifyAI }: {
   }, [view, data?.ticket]);
 
   const changes = data?.changes ?? [];
+  const logTree = useMemo(
+    () => buildLogTree(data?.logs.entries ?? []), [data]);
 
   // 可切的仓 = 变更清单路径首段(服务端 listMaterials 给每条变更加
   // <仓名>/ 前缀)。前端不猜仓清单;逐仓 diff 本体由 ?repo= 按需取。
@@ -595,7 +740,7 @@ export function IssueMaterialsPane({ detail, busy, view, onView, onNotifyAI }: {
         </button>
         <button className={view === "logs" ? "on" : ""}
           onClick={() => onView("logs")}>
-          <span>拉取日志</span><i>{data?.logs.length ?? 0}</i>
+          <span>拉取日志</span><i>{data?.logs.entries.length ?? 0}</i>
         </button>
       </div>
     </div>
@@ -690,19 +835,30 @@ export function IssueMaterialsPane({ detail, busy, view, onView, onNotifyAI }: {
       <IssueProcessDocs detail={detail} />
     </>}
     {view === "logs" && <div className="ws-doc">
-      {data && data.logs.length === 0 && <div className="utility-note">
+      {data && data.logs.entries.length === 0 && <div className="utility-note">
         本会话还没有拉取过日志。
       </div>}
+      {data?.logs.truncated && <div className="utility-note">
+        日志条目超过上限(2000),清单已截断,可能不完整。
+      </div>}
       <div className="issue-materials-files" role="list">
-        {data?.logs.map((log) => <button type="button" role="listitem"
-          key={log.name}
-          className={`issue-materials-file${logView?.name === log.name ? " on" : ""}`}
-          onClick={() => openLog(log.name)}>
-          <span className="p">{log.name}</span>
-          <span className="num">{(log.size / 1024).toFixed(1)} KB</span>
-        </button>)}
+        <LogTreeRows nodes={logTree} depth={0} expanded={expandedDirs}
+          activeLog={logView?.path} extracting={extracting}
+          onToggle={(path) => setExpandedDirs((prev) => {
+            const next = new Set(prev);
+            if (next.has(path)) next.delete(path); else next.add(path);
+            return next;
+          })}
+          onOpen={(path) => void openLog(path)}
+          onExtract={(path) => void extractArchive(path)} />
       </div>
-      {logView && <pre className="issue-materials-diff">{logView.content}</pre>}
+      {logView && <>
+        <div className="issue-doc-toolbar">
+          <span>{logView.path}</span>
+          <button type="button" onClick={() => void openLog(logView.path)}>刷新</button>
+        </div>
+        <pre className="issue-materials-diff">{logView.content}</pre>
+      </>}
     </div>}
   </div>;
 }
