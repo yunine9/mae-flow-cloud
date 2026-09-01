@@ -128,6 +128,7 @@ function progressOf(
   item: Annotation,
   check?: AnchorCheck,
   archival = false,
+  verdictReady = false,
 ): {
   tone: "draft" | "waiting" | "review" | "done";
   text: string;
@@ -151,6 +152,13 @@ function progressOf(
       ? { tone: "draft", text: `第 ${item.rework + 1} 轮·待提交`,
           hint: "上一轮改动没达到要求,这条已退回,提交后会再送给 AI。" }
       : { tone: "draft", text: "待提交" };
+  }
+  if (verdictReady) {
+    return {
+      tone: "review",
+      text: "待你确认",
+      hint: "Agent 已留下当前轮逐条回应，请核对最新材料后确认或退回。",
+    };
   }
   // "被改动"只认一个判据:锚定的原文消失了。行号漂移(moved)不算——
   // 原文还在就说明它还没改这处,只是别处的改动把行挤动了。
@@ -221,8 +229,6 @@ export function AnnotationPanel({
   // 暗中锁住任务的全局门禁。
   const drafts = items.filter((item) =>
     item.status === "draft" && item.author === viewerUsername);
-  const myReviewCount = items.filter((item) =>
-    item.status === "sent" && item.author === viewerUsername).length;
   const overrideReviewCount = items.filter((item) => adminOverrideAccess({
     item,
     viewerUsername,
@@ -234,8 +240,41 @@ export function AnnotationPanel({
     item.author === viewerUsername
     && authorVerdictReady(item, taskStatus, reviewReady)
     && item.sent_via !== "review_repair").length;
+  const authorActionable = (item: Annotation) => item.author === viewerUsername
+    && authorVerdictReady(item, taskStatus, reviewReady);
+  const overrideActionable = (item: Annotation) => adminOverrideAccess({
+    item,
+    viewerUsername,
+    canOverride,
+    reviewReady,
+    reviewAnnotationIds,
+  }).canVerify;
+  const authorActionableCount = items.filter(authorActionable).length;
+  const overrideActionableCount = items.filter((item) =>
+    !authorActionable(item) && overrideActionable(item)).length;
+  const actionableReviewCount = authorActionableCount + overrideActionableCount;
+  const currentReviewIds = new Set(reviewAnnotationIds);
+  const missingReceiptCount = reviewReady ? items.filter((item) =>
+    currentReviewIds.has(item.id)
+    && item.status === "sent"
+    && item.author === viewerUsername
+    && item.response?.revision !== (item.rework ?? 0)).length : 0;
+  // 真正要人操作的卡永远置顶；保留原始顺序作为同优先级内的稳定顺序。
+  // 过去提示在顶端、按钮却埋在历史记录中，用户会合理地认为按钮丢了。
+  const orderedItems = items.map((item, index) => ({ item, index }))
+    .sort((left, right) => {
+      const leftActionable = authorActionable(left.item)
+        || overrideActionable(left.item);
+      const rightActionable = authorActionable(right.item)
+        || overrideActionable(right.item);
+      if (leftActionable !== rightActionable) return rightActionable ? 1 : -1;
+      const leftCurrent = currentReviewIds.has(left.item.id);
+      const rightCurrent = currentReviewIds.has(right.item.id);
+      if (leftCurrent !== rightCurrent) return rightCurrent ? 1 : -1;
+      return left.index - right.index;
+    }).map(({ item }) => item);
   const [open, setOpen] = useState(drafts.length > 0
-    || (reviewReady && (myReviewCount > 0 || overrideReviewCount > 0)));
+    || actionableReviewCount > 0 || missingReceiptCount > 0);
   const running = taskStatus === "running";
   const reviewSendable = mergeRequestOpen && [
     "queued", "running", "verifying", "await_merge", "failed",
@@ -249,11 +288,11 @@ export function AnnotationPanel({
     + reviewAnnotationIds.join("\u0000");
 
   useEffect(() => {
-    if (drafts.length > 0
-        || (reviewReady && (myReviewCount > 0 || overrideReviewCount > 0))) {
+    if (drafts.length > 0 || actionableReviewCount > 0
+        || missingReceiptCount > 0) {
       setOpen(true);
     }
-  }, [drafts.length, myReviewCount, overrideReviewCount, reviewReady]);
+  }, [drafts.length, actionableReviewCount, missingReceiptCount]);
 
   useEffect(() => {
     setOverrideArm(undefined);
@@ -344,10 +383,16 @@ export function AnnotationPanel({
           <i className="annot-panel-chevron" aria-hidden />
         </div>
       </summary>
-      {reviewReady && myReviewCount > 0 && (
+      {reviewReady && authorActionableCount > 0 && (
         <div className="annot-panel-note review-ready" role="status">
-          Agent 已处理你提出的 {myReviewCount} 条意见，Build-Fix 也已通过。
+          Agent 已处理你提出的 {authorActionableCount} 条意见，Build-Fix 也已通过。
           请看最新代码后，逐条选择“确认已修复”或“仍需调整”；没有全部闭环前不会推送。
+        </div>
+      )}
+      {reviewReady && missingReceiptCount > 0 && (
+        <div className="annot-panel-note receipt-pending" role="alert">
+          另有 {missingReceiptCount} 条意见的当前轮逐条回执尚未就绪，暂不能确认。
+          系统会保留这些意见并阻止推送；刷新后仍未恢复时，请查看执行现场中的回执诊断。
         </div>
       )}
       {ordinaryReviewCount > 0 && (
@@ -361,6 +406,12 @@ export function AnnotationPanel({
           当前复检有 {overrideReviewCount} 条他人意见仍待作者闭环。
           仅在作者不在场时使用管理员代办；第一次点击只会进入确认，
           必须再次点击才会执行，结果会显示实际管理员。
+        </div>
+      )}
+      {actionableReviewCount > 0 && (
+        <div className="annot-review-queue" role="heading" aria-level={3}>
+          <div><strong>待我确认</strong><span>先逐条核对，再做整体交付决定</span></div>
+          <em>{actionableReviewCount} 项</em>
         </div>
       )}
       {canOperate && drafts.length > 0 && canSend && (
@@ -413,11 +464,10 @@ export function AnnotationPanel({
       {error && <div className="alert">{error}</div>}
 
       <ol className="annot-list">
-        {items.map((item) => {
+        {orderedItems.map((item) => {
           const check = checkOf(item.id);
           const archival = taskStatus === "completed"
             && item.status === "draft";
-          const progress = progressOf(item, check, archival);
           const isAuthor = item.author === viewerUsername;
           const editing = editingId === item.id;
           const overrideAccess = adminOverrideAccess({
@@ -433,8 +483,12 @@ export function AnnotationPanel({
             && overrideArm.action === "verify";
           const authorCanJudge = isAuthor
             && authorVerdictReady(item, taskStatus, reviewReady);
+          const actionable = authorCanJudge || overrideAccess.canVerify;
+          const progress = progressOf(item, check, archival, actionable);
           return (
-            <li key={item.id} className={`annot-item ${progress.tone}`}>
+            <li key={item.id}
+                className={`annot-item ${progress.tone}${actionable
+                  ? " actionable" : ""}`}>
               <div className="annot-item-head">
                 <button type="button" className="annot-where"
                         onClick={() => onLocate?.(item)}

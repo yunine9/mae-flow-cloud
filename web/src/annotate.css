@@ -285,6 +285,36 @@
   border-left: 3px solid var(--accent);
 }
 
+.annot-panel-note.receipt-pending {
+  color: var(--attention);
+  background: color-mix(in srgb, var(--attention-soft) 76%, var(--surface));
+  border-left: 3px solid var(--attention);
+}
+
+.annot-review-queue {
+  padding: 11px 14px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text);
+  background: var(--surface);
+}
+
+.annot-review-queue > div { min-width: 0; display: grid; gap: 2px; }
+.annot-review-queue strong { color: var(--text-strong); font-size: 15px; }
+.annot-review-queue span { color: var(--muted); font-size: 13px; }
+.annot-review-queue em {
+  flex: none;
+  padding: 3px 8px;
+  color: var(--accent);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 750;
+}
+
 .annot-list {
   margin: 0;
   padding: 0;
@@ -297,7 +327,21 @@
   border-left: 3px solid var(--line-strong);
 }
 
+.annot-item.actionable {
+  margin: 0 10px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line));
+  border-left: 4px solid var(--accent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent-soft) 22%, var(--surface));
+  box-shadow: var(--shadow-xs);
+}
+
+.annot-item.actionable + .annot-item.actionable { margin-top: 0; }
+
 .annot-item:last-child { border-bottom: 0; }
+.annot-item.actionable:last-child {
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line));
+}
 .annot-item.draft { border-left-color: var(--accent); }
 .annot-item.waiting { border-left-color: var(--attention); }
 .annot-item.review { border-left-color: var(--attention); }
@@ -351,6 +395,13 @@
 .annot-verdict {
   display: inline-flex;
   gap: 6px;
+}
+
+.annot-item.actionable .annot-verdict {
+  width: 100%;
+  padding-top: 9px;
+  justify-content: flex-end;
+  border-top: 1px solid var(--line);
 }
 
 .annot-verdict button.approve {
@@ -539,6 +590,47 @@
   color: var(--attention);
   background: var(--attention-soft);
   border-radius: 8px;
+}
+
+/* 宽检视工作面把“人的意见”和“Agent 回应”横向对应起来；没有逐条
+   回应的历史意见仍保持自然单列，避免为了对称制造大片空白。 */
+@media (min-width: 860px) {
+  .workspace-review-notes .annot-item:has(.annot-response) {
+    display: grid;
+    grid-template-columns: minmax(0, .92fr) minmax(0, 1.08fr);
+    grid-template-areas:
+      "head head"
+      "note response"
+      "anchor response"
+      "foot foot"
+      "stale stale";
+    column-gap: 18px;
+    align-items: start;
+  }
+  .workspace-review-notes .annot-item:has(.annot-response) .annot-item-head {
+    grid-area: head;
+  }
+  .workspace-review-notes .annot-item:has(.annot-response) .annot-note,
+  .workspace-review-notes .annot-item:has(.annot-response) .annot-inline-editor {
+    grid-area: note;
+  }
+  .workspace-review-notes .annot-item:has(.annot-response) .annot-anchor {
+    grid-area: anchor;
+  }
+  .workspace-review-notes .annot-item:has(.annot-response) .annot-response {
+    grid-area: response;
+    margin: 0;
+    align-self: stretch;
+  }
+  .workspace-review-notes .annot-item:has(.annot-response) .annot-item-foot {
+    grid-area: foot;
+    margin-top: 4px;
+    padding-top: 10px;
+    border-top: 1px solid var(--line);
+  }
+  .workspace-review-notes .annot-item:has(.annot-response) .annot-stale {
+    grid-area: stale;
+  }
 }
 
 /* 决定卡上的那一行提示:圈过的会自动作为理由带上。 */

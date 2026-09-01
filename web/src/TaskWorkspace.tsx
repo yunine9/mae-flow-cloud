@@ -3,15 +3,14 @@
  *
  * 用户实测的摩擦:审批卡问"本地 Spec 确认",spec.md 却只在内核
  * 现场面板(另一套 UI 的 iframe)里能看——读材料要跳出决策上下文。
- * 这里把两半合成一屏:主画布一次只承载材料、开发协作、执行现场或
- * 分析检视中的一种；右侧只保留此刻必须处理的决定。
+ * 这里把两半合成一屏:主画布一次只承载材料、开发协作或执行现场；
+ * 批注与检视由常驻入口打开完整工作面，右侧只保留此刻必须处理的决定。
  *
  * 内核面板不再暴露给业务用户：它是内核为“人坐在终端旁”生成的
  * 单文件 HTML，工作台自己承接材料、决策与过程观察，避免形成两套入口。
  */
 
 import { useEffect, useRef, useState } from "react";
-import type { CSSProperties } from "react";
 import { Markdown } from "./markdown";
 import { GitDiff, type GitDiffSelection } from "./GitDiff";
 import { SteerBox } from "./SteerBox";
@@ -70,34 +69,9 @@ import {
   WaitingCard,
 } from "./TaskCard";
 
-type WorkspaceView = "materials" | "collaboration" | "execution" | "insights";
-type ExecutionView = "events" | "knowledge";
+type WorkspaceView = "materials" | "collaboration" | "execution";
+type ExecutionView = "events" | "knowledge" | "tokens";
 type MaterialView = "source" | "doc" | "chain" | "diff";
-
-const DEFAULT_REVIEW_PANEL_WIDTH = 640;
-const MIN_REVIEW_PANEL_WIDTH = 420;
-const MIN_MATERIAL_PANEL_WIDTH = 420;
-
-/** 拖拽只改变右栏，始终给左右两边保留可工作的最小宽度。 */
-export function clampReviewPanelWidth(
-  requested: number,
-  containerWidth: number,
-): number {
-  const available = Math.max(0, containerWidth);
-  const minimum = Math.min(MIN_REVIEW_PANEL_WIDTH, available / 2);
-  const maximum = Math.max(minimum, available - MIN_MATERIAL_PANEL_WIDTH);
-  return Math.round(Math.min(maximum, Math.max(minimum, requested)));
-}
-
-function storedReviewPanelWidth(): number | undefined {
-  if (typeof window === "undefined") return undefined;
-  try {
-    const value = Number(localStorage.getItem("mae-flow:review-panel-width"));
-    return Number.isFinite(value) && value > 0 ? value : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 /** 圈注和“把意见送给 Agent”是两种权限；只有停止的任务禁止再记。 */
 export function canCreateWorkspaceAnnotation(
@@ -545,6 +519,7 @@ export function TaskWorkspace({
   const [taskReviews, setTaskReviews] = useState<ReviewRequest[]>([]);
   const [completeBusy, setCompleteBusy] = useState(false);
   const [completeError, setCompleteError] = useState("");
+  const [locationNotice, setLocationNotice] = useState("");
   const [controlBusy, setControlBusy] =
     useState<"pause" | "resume" | "cancel" | "delete" | "">("");
   const [controlError, setControlError] = useState("");
@@ -566,16 +541,12 @@ export function TaskWorkspace({
     defaultWorkspaceView(task),
   );
   const [materialsFullscreen, setMaterialsFullscreen] = useState(false);
-  const [reviewPanelWidth, setReviewPanelWidth] =
-    useState<number | undefined>(storedReviewPanelWidth);
   const [reviewPanelOpen, setReviewPanelOpen] = useState(false);
   const [reviewInviteOpen, setReviewInviteOpen] = useState(false);
   const [executionView, setExecutionView] = useState<ExecutionView>("events");
   const artifactTask = useRef("");
   const openedEvidenceGap = useRef("");
   const workspaceRoot = useRef<HTMLElement>(null);
-  const workspaceBody = useRef<HTMLDivElement>(null);
-  const reviewResizerDragged = useRef(false);
   const viewScroll = useRef<Partial<Record<WorkspaceView, number>>>({});
 
   function selectWorkspaceView(next: WorkspaceView) {
@@ -602,7 +573,6 @@ export function TaskWorkspace({
     setWorkspaceView(defaultWorkspaceView(task));
     setMaterialsFullscreen(false);
     setReviewPanelOpen(false);
-    setReviewInviteOpen(false);
     setExecutionView("events");
     setRepositoryAssignees(EMPTY_REPOSITORY_ASSIGNEE_SELECTION);
     setDeliverySelection(undefined);
@@ -734,6 +704,7 @@ export function TaskWorkspace({
     const escape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       if (reviewInviteOpen) setReviewInviteOpen(false);
+      else if (reviewPanelOpen) setReviewPanelOpen(false);
       else if (materialsFullscreen) setMaterialsFullscreen(false);
       else onClose();
     };
@@ -744,40 +715,7 @@ export function TaskWorkspace({
       window.removeEventListener("keydown", escape);
       document.body.style.overflow = previous;
     };
-  }, [materialsFullscreen, reviewInviteOpen, onClose]);
-
-  useEffect(() => {
-    if (reviewPanelWidth === undefined || typeof window === "undefined") return;
-    try {
-      localStorage.setItem("mae-flow:review-panel-width",
-        String(reviewPanelWidth));
-    } catch {
-      // 阅读布局偏好无法落盘不影响检视。
-    }
-  }, [reviewPanelWidth]);
-
-  function resizeReviewPanel(clientX: number) {
-    const box = workspaceBody.current?.getBoundingClientRect();
-    if (!box) return;
-    setReviewPanelWidth(clampReviewPanelWidth(box.right - clientX, box.width));
-  }
-
-  function nudgeReviewPanel(delta: number) {
-    const box = workspaceBody.current?.getBoundingClientRect();
-    if (!box) return;
-    const current = reviewPanelWidth
-      ?? clampReviewPanelWidth(DEFAULT_REVIEW_PANEL_WIDTH, box.width);
-    setReviewPanelWidth(clampReviewPanelWidth(current + delta, box.width));
-  }
-
-  function resetReviewPanelWidth() {
-    setReviewPanelWidth(undefined);
-    try {
-      localStorage.removeItem("mae-flow:review-panel-width");
-    } catch {
-      // 同上：偏好存储失败不影响界面恢复默认布局。
-    }
-  }
+  }, [materialsFullscreen, reviewInviteOpen, reviewPanelOpen, onClose]);
 
   // 产物列表按最近修改倒序(服务端排好),默认打开第一份——
   // "哪一步该看哪个文件"是内核语义,前端不复刻,只用修改时间定位。
@@ -886,14 +824,30 @@ export function TaskWorkspace({
     const source = item.artifact === TASK_REQUIREMENT_ARTIFACT;
     if (!source && item.artifact !== active) setActive(item.artifact);
     setMaterialView(materialViewForAnnotation(item.artifact, items));
-    const currentLine = checks.find((check) => check.id === item.id)?.line
-      ?? item.line;
+    const check = checks.find((candidate) => candidate.id === item.id);
+    const currentLine = check?.line ?? item.line;
+    if (check?.state === "gone") {
+      setLocationNotice(
+        `“${item.anchor.slice(0, 46)}${item.anchor.length > 46 ? "…" : ""}”`
+        + " 已不在当前版本；左侧已打开最新材料，请结合差异和 Agent 回应核对。",
+      );
+    } else if (check?.state === "ambiguous") {
+      setLocationNotice("这段原文在当前材料中出现多次，已打开对应材料，请结合文件路径核对。");
+    } else {
+      setLocationNotice("");
+    }
     let tries = 0;
     const seek = () => {
       const node = document.querySelector<HTMLElement>(
         `.ws-doc [data-l="${currentLine}"]`);
       if (!node) {
-        if (tries++ < 20) window.setTimeout(seek, 100);
+        if (tries++ < 20) {
+          window.setTimeout(seek, 100);
+        } else if (check?.state !== "gone") {
+          setLocationNotice(
+            `已打开 ${item.file}，但原第 ${item.line} 行已无法直接定位；请在当前材料中核对。`,
+          );
+        }
         return;
       }
       node.scrollIntoView({ block: "center", behavior: "smooth" });
@@ -939,24 +893,6 @@ export function TaskWorkspace({
     notes.some((item) => item.id === id && item.status === "sent"));
   const reviewActionCount = myDrafts.length + pendingWorkspaceReviewIds.length
     + (reviewAssignment ? 1 : 0);
-  const reviewAttentionKey = [
-    ...myDrafts.map((item) => `draft:${item.id}`),
-    ...pendingWorkspaceReviewIds.map((id) => `recheck:${id}`),
-    ...(reviewAssignment ? [`assignment:${reviewAssignment.id}`] : []),
-  ].join("|");
-  const openedReviewAttention = useRef("");
-  const previousReviewActionCount = useRef(reviewActionCount);
-  useEffect(() => {
-    if (!reviewAttentionKey || openedReviewAttention.current === reviewAttentionKey) return;
-    openedReviewAttention.current = reviewAttentionKey;
-    setReviewPanelOpen(true);
-  }, [reviewAttentionKey]);
-  useEffect(() => {
-    if (previousReviewActionCount.current > 0 && reviewActionCount === 0) {
-      setReviewPanelOpen(false);
-    }
-    previousReviewActionCount.current = reviewActionCount;
-  }, [reviewActionCount]);
   const nextAction = workspaceNextActionCopy(task, Boolean(waiting));
   const decisionDeliverySelection = usablePushReviewSelection(
     Boolean(pushReview),
@@ -1043,6 +979,60 @@ export function TaskWorkspace({
       setControlBusy("");
     }
   }
+
+  const reviewWorkspaceContent = (
+    <div className="workspace-review-notes">
+      {reviewAssignment && (
+        <section className="review-assignment" aria-labelledby="review-assignment-title">
+          <div className="review-assignment-mark" aria-hidden>审</div>
+          <div>
+            <span>COMMITTER REVIEW</span>
+            <strong id="review-assignment-title">
+              {reviewAssignment.requester} 邀请你检视
+            </strong>
+            <p>看完材料并留下必要批注后即可完成；这不会代替任务责任人提交决定。</p>
+            {completeError && <small className="review-assignment-error">
+              {completeError}
+            </small>}
+          </div>
+          <button type="button" disabled={completeBusy}
+            onClick={() => void finishReview()}>
+            {completeBusy ? "正在完成…" : "完成检视"}
+          </button>
+        </section>
+      )}
+      <section className="workspace-review-opinions" aria-label="检视意见">
+        <AnnotationPanel
+          taskId={task.id}
+          viewerUsername={viewerUsername}
+          canOverride={canOverride}
+          items={notes}
+          checks={checks}
+          reply={reply}
+          canOperate={canContributeReview}
+          taskStatus={task.status}
+          reviewReady={workspaceReviewReady}
+          reviewAnnotationIds={workspaceReviewAnnotationIds}
+          mergeRequestOpen={Boolean(task.delivery?.mr_url)
+            && !["completed", "canceled"].includes(task.status)
+            && !String(task.delivery?.mr_state ?? "").startsWith("已合入")
+            && task.delivery?.mr_state !== "已关闭"}
+          evidenceAwaiting={Boolean(
+            task.delivery?.evidence_gap?.missing_dimensions.length)}
+          onLocate={(item) => {
+            setReviewPanelOpen(false);
+            locate(item);
+          }}
+          onChanged={() => { setNotesPulse((tick) => tick + 1); onChanged(); }}
+        />
+        {!notes.length && (
+          <div className="ws-insight-empty">
+            在“交付材料”中圈选原文或代码，即可创建批注。
+          </div>
+        )}
+      </section>
+    </div>
+  );
 
   return (
     <section
@@ -1184,30 +1174,36 @@ export function TaskWorkspace({
         ] as Array<[WorkspaceView, string, string]>).map(([view, label, hint]) => (
           <button type="button" role="tab" key={view}
             aria-selected={workspaceView === view}
-            className={`${workspaceView === view ? "active" : ""}`
-              + `${view === "insights" && myDrafts.length
-                && task.status !== "completed" ? " attention" : ""}`}
+            className={workspaceView === view ? "active" : ""}
             onClick={() => selectWorkspaceView(view)}>
             <strong>
               {label}
-              {view === "insights" && notes.length > 0 && (
-                <em>{(task.status === "completed" ? drafts.length : myDrafts.length) > 0
-                  ? task.status === "completed"
-                    ? `${drafts.length} 记录` : `${myDrafts.length} 待提交`
-                  : notes.length}</em>
-              )}
             </strong>
             <small>{hint}</small>
           </button>
         ))}
+        <button type="button" className={`ws-review-launch${reviewActionCount
+          ? " attention" : ""}`}
+          aria-haspopup="dialog" aria-expanded={reviewPanelOpen}
+          onClick={() => setReviewPanelOpen(true)}>
+          <strong>批注与检视
+            {(reviewActionCount > 0 || notes.length > 0) && (
+              <em>{reviewActionCount > 0
+                ? `${reviewActionCount} 待处理` : notes.length}</em>
+            )}
+          </strong>
+          <small>查看意见、回应与检视协作</small>
+        </button>
+        {canRequestReview && <button type="button"
+          className="ws-review-invite-launch"
+          aria-haspopup="dialog" aria-expanded={reviewInviteOpen}
+          onClick={() => setReviewInviteOpen(true)}>
+          <strong><span aria-hidden>＋</span>邀请检视</strong>
+          <small>选择 Committer 参与代码检视</small>
+        </button>}
       </nav>
 
-      <div ref={workspaceBody}
-        className={`ws-body${waiting ? " has-decision" : ""}`
-          + `${reviewPanelOpen ? " has-review" : ""}`}
-        style={reviewPanelWidth === undefined ? undefined : {
-          "--review-panel-width": `${reviewPanelWidth}px`,
-        } as CSSProperties}>
+      <div className={`ws-body${waiting ? " has-decision" : ""}`}>
         <section className="ws-evidence" aria-label="待检视材料">
           {workspaceView === "materials" ? <>
           <div className="ws-pane-head">
@@ -1270,6 +1266,13 @@ export function TaskWorkspace({
             </div>
           )}
           <div className="ws-doc">
+            {locationNotice && (
+              <div className="annotation-location-notice" role="status">
+                <div><strong>批注位置已变化</strong><span>{locationNotice}</span></div>
+                <button type="button" aria-label="关闭定位提示"
+                  onClick={() => setLocationNotice("")}>×</button>
+              </div>
+            )}
             {materialView === "source" ? (
               <Annotatable
                 taskId={task.id}
@@ -1385,10 +1388,7 @@ export function TaskWorkspace({
                 kind={activeMeta?.kind === "diff" ? "code" : "doc"}
                 items={notes}
                 enabled={canCreateAnnotation}
-                onAdded={() => {
-                  setNotesPulse((tick) => tick + 1);
-                  setReviewPanelOpen(true);
-                }}
+                onAdded={() => setNotesPulse((tick) => tick + 1)}
               >
                 {materialView === "diff"
                   ? <GitDiff text={content} branch={branch}
@@ -1446,7 +1446,7 @@ export function TaskWorkspace({
                 </section>
               )}
             </div>
-          </> : workspaceView === "execution" ? <>
+          </> : <>
             <div className="ws-pane-head">
               <div><span>LIVE EXECUTION</span><strong>执行现场</strong></div>
               <small>实时事件流；各阶段执行方案点上方进度条的阶段名查看</small>
@@ -1469,6 +1469,15 @@ export function TaskWorkspace({
                 </strong>
                 <small>{task.knowledge_usage?.summary.used ?? 0} 项已消费{" · "}
                   {task.knowledge_usage?.resources.length ?? 0} 项可用</small>
+              </button>
+              <button type="button" role="tab"
+                aria-selected={executionView === "tokens"}
+                className={executionView === "tokens" ? "active" : ""}
+                onClick={() => setExecutionView("tokens")}>
+                <strong>Token 使用</strong>
+                <small>{task.token_usage
+                  ? `${task.token_usage.total_tokens.toLocaleString()} Token 累计`
+                  : "模型用量与实时速率"}</small>
               </button>
             </nav>
             <div className="ws-primary-scroll ws-execution-view">
@@ -1495,10 +1504,6 @@ export function TaskWorkspace({
                 {task.workflow_profile && <WorkflowProfileCard
                   profile={task.workflow_profile}
                   warning={task.workflow_profile_warning} />}
-                {task.token_usage ? <TokenUsage usage={task.token_usage}
-                  placement="detail" /> : <div className="ws-insight-empty">
-                  模型提供方暂未返回 Token 用量。
-                </div>}
                 <TaskTimeline taskId={task.id} />
               </div>
               <div className="ws-execution-subview is-knowledge"
@@ -1514,212 +1519,24 @@ export function TaskWorkspace({
                     id: module.id, name: module.name,
                   }))} />
               </div>
-            </div>
-          </> : <>
-            <div className="ws-pane-head">
-              <div><span>REVIEW NOTES</span><strong>批注与检视</strong></div>
-              <small>管理批注意见、检视协作与处理进展</small>
-            </div>
-            <div className="ws-primary-scroll ws-insights-view">
-              <div className="ws-insights-grid">
-                <section className="ws-insight-column">
-                  <header><span>ANNOTATIONS</span><strong>批注意见</strong></header>
-                  <AnnotationPanel
-                    taskId={task.id}
-                    viewerUsername={viewerUsername}
-                    canOverride={canOverride}
-                    items={notes}
-                    checks={checks}
-                    reply={reply}
-                    canOperate={canContributeReview}
-                    taskStatus={task.status}
-                    reviewReady={workspaceReviewReady}
-                    reviewAnnotationIds={workspaceReviewAnnotationIds}
-                    mergeRequestOpen={Boolean(task.delivery?.mr_url)
-                      && !["completed", "canceled"].includes(task.status)
-                      && !String(task.delivery?.mr_state ?? "").startsWith("已合入")
-                      && task.delivery?.mr_state !== "已关闭"}
-                    evidenceAwaiting={Boolean(
-                      task.delivery?.evidence_gap?.missing_dimensions.length)}
-                    onLocate={locate}
-                    onChanged={() => { setNotesPulse((tick) => tick + 1); onChanged(); }}
-                  />
-                  {!notes.length && (
-                    <div className="ws-insight-empty">
-                      在“交付材料”中圈选原文或代码，即可创建批注。
-                    </div>
-                  )}
-                </section>
-                <section className="ws-insight-column">
-                  <header><span>REVIEW & OPERATIONS</span><strong>检视协作与进展</strong></header>
-                  {reviewAssignment && (
-                    <section className="review-assignment" aria-labelledby="review-assignment-title">
-                      <div className="review-assignment-mark" aria-hidden>审</div>
-                      <div>
-                        <span>COMMITTER REVIEW</span>
-                        <strong id="review-assignment-title">{reviewAssignment.requester} 邀请你检视</strong>
-                        <p>看完材料并留下必要批注后即可完成；这不会代替任务责任人提交决定。</p>
-                        {completeError && <small className="review-assignment-error">{completeError}</small>}
-                      </div>
-                      <button type="button" disabled={completeBusy} onClick={() => void finishReview()}>{completeBusy ? "正在完成…" : "完成检视"}</button>
-                    </section>
-                  )}
-                  {canRequestReview && (
-                    <section className="committer-review" aria-labelledby="committer-review-title">
-                      <div>
-                        <span>OPTIONAL REVIEW</span>
-                        <strong id="committer-review-title">邀请 Committer 检视</strong>
-                        <p>仅在你主动邀请后通知，不影响任务责任人的最终决定。</p>
-                      </div>
-                      {committers.length > 0 ? <div className="committer-review-action">
-                        <UserPicker ariaLabel="选择 Committer" value={reviewer}
-                          options={committers}
-                          onChange={setReviewer} />
-                        <button type="button" disabled={!reviewer || reviewBusy} onClick={() => void inviteReview()}>{reviewBusy ? "发送中…" : "邀请检视"}</button>
-                      </div> : <div className="committer-empty">管理员尚未配置 Committer 名单</div>}
-                      {reviewResult && <small className="committer-result">{reviewResult}</small>}
-                      {taskReviews.length > 0 && <div className="committer-review-history">
-                        {taskReviews.slice(0, 3).map((review) => <span key={review.id}>
-                          <i className={review.status} aria-hidden />
-                          <strong>{userLabel(committers.find((user) =>
-                            user.username === review.committer)
-                            ?? { username: review.committer })}</strong>
-                          <small>{review.status === "completed" ? "已完成检视" : review.delivered ? "等待检视" : "通知未送达"}</small>
-                        </span>)}
-                      </div>}
-                    </section>
-                  )}
-                  {!reviewAssignment && !canRequestReview && (
-                    <div className="ws-insight-empty">当前没有 Committer 检视事项。</div>
-                  )}
-                  {task.token_usage ? (
-                    <TokenUsage usage={task.token_usage} placement="detail" />
-                  ) : <div className="ws-insight-empty">模型提供方暂未返回 Token 用量。</div>}
-                  <TaskTimeline taskId={task.id} />
-                </section>
+              <div className="ws-execution-subview is-tokens"
+                hidden={executionView !== "tokens"}>
+                {task.token_usage ? <TokenUsage usage={task.token_usage}
+                  placement="detail" /> : <div className="ws-insight-empty">
+                  模型提供方暂未返回 Token 用量。
+                </div>}
               </div>
             </div>
           </>}
         </section>
 
-        {reviewPanelOpen && <div className="ws-review-resizer"
-          role="separator" aria-label="调整检视栏宽度" tabIndex={0}
-          aria-orientation="vertical"
-          aria-valuenow={reviewPanelWidth ?? DEFAULT_REVIEW_PANEL_WIDTH}
-          title="左右拖动调整宽度；双击恢复默认"
-          onDoubleClick={resetReviewPanelWidth}
-          onKeyDown={(event) => {
-            if (event.key === "ArrowLeft") {
-              event.preventDefault(); nudgeReviewPanel(24);
-            } else if (event.key === "ArrowRight") {
-              event.preventDefault(); nudgeReviewPanel(-24);
-            } else if (event.key === "Home") {
-              event.preventDefault(); resetReviewPanelWidth();
-            }
-          }}
-          onPointerDown={(event) => {
-            reviewResizerDragged.current = false;
-            event.currentTarget.setPointerCapture(event.pointerId);
-            resizeReviewPanel(event.clientX);
-          }}
-          onPointerMove={(event) => {
-            if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
-            reviewResizerDragged.current = true;
-            resizeReviewPanel(event.clientX);
-          }}
-          onPointerUp={(event) => {
-            if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-              event.currentTarget.releasePointerCapture(event.pointerId);
-            }
-            reviewResizerDragged.current = false;
-          }}>
-          <span aria-hidden>⋮</span>
-        </div>}
-        <aside className={`ws-decision${reviewPanelOpen ? " review-mode" : ""}`}
-          aria-label="当前决策与关键操作">
+        <aside className="ws-decision" aria-label="当前决策与关键操作">
           <div className="ws-pane-head ws-pane-head-side">
             {/* 右栏标题按阶段说实话:failed 时喊"无待办"是误导——
                 此刻的待办就是看失败原因、决定重跑还是接手。 */}
-            {reviewPanelOpen ? <>
-              <div><span>REVIEW IN CONTEXT</span><strong>边看材料，边处理意见</strong></div>
-              <div className="ws-review-head-actions">
-                <small>{reviewActionCount > 0
-                  ? `还有 ${reviewActionCount} 项待处理；完成后收起清单继续最终决定`
-                  : "检视记录集中在这里；左侧材料保持不动"}</small>
-                {canRequestReview && <button type="button"
-                  className="review-invite-trigger"
-                  onClick={() => { setReviewResult(""); setReviewInviteOpen(true); }}>
-                  ＋ 邀请检视
-                </button>}
-              </div>
-            </> : <>
-              <div><span>NEXT ACTION</span><strong>{nextAction.title}</strong></div>
-              <small>{nextAction.detail}</small>
-            </>}
+            <div><span>NEXT ACTION</span><strong>{nextAction.title}</strong></div>
+            <small>{nextAction.detail}</small>
           </div>
-          <section className={`ws-review-drawer${reviewPanelOpen ? " open" : ""}`}
-            aria-label="本轮检视清单">
-            {reviewActionCount > 0 ? (
-              <div className="ws-review-drawer-toggle is-locked" role="status">
-                <span><i aria-hidden>审</i><strong>本轮检视清单</strong></span>
-                <em>{reviewActionCount} 项待处理</em>
-              </div>
-            ) : (
-              <button type="button" className="ws-review-drawer-toggle"
-                aria-expanded={reviewPanelOpen}
-                onClick={() => setReviewPanelOpen((current) => !current)}>
-                <span><i aria-hidden>审</i><strong>检视记录</strong></span>
-                <em>{reviewPanelOpen ? "收起并继续最终决定"
-                  : notes.length ? `${notes.length} 条记录` : "随材料批注"}</em>
-              </button>
-            )}
-            {reviewPanelOpen && <div className="ws-review-drawer-body">
-              {reviewAssignment && (
-                <section className="review-assignment compact"
-                  aria-labelledby="review-drawer-assignment-title">
-                  <div className="review-assignment-mark" aria-hidden>审</div>
-                  <div><span>COMMITTER REVIEW</span>
-                    <strong id="review-drawer-assignment-title">
-                      {reviewAssignment.requester} 邀请你检视
-                    </strong>
-                    <p>在左侧核对材料、留下批注，完成后直接在这里交还。</p>
-                    {completeError && <small className="review-assignment-error">
-                      {completeError}
-                    </small>}
-                  </div>
-                  <button type="button" disabled={completeBusy}
-                    onClick={() => void finishReview()}>
-                    {completeBusy ? "正在完成…" : "完成检视"}
-                  </button>
-                </section>
-              )}
-              <AnnotationPanel
-                taskId={task.id}
-                viewerUsername={viewerUsername}
-                canOverride={canOverride}
-                items={notes}
-                checks={checks}
-                reply={reply}
-                canOperate={canContributeReview}
-                taskStatus={task.status}
-                reviewReady={workspaceReviewReady}
-                reviewAnnotationIds={workspaceReviewAnnotationIds}
-                mergeRequestOpen={Boolean(task.delivery?.mr_url)
-                  && !["completed", "canceled"].includes(task.status)
-                  && !String(task.delivery?.mr_state ?? "").startsWith("已合入")
-                  && task.delivery?.mr_state !== "已关闭"}
-                evidenceAwaiting={Boolean(
-                  task.delivery?.evidence_gap?.missing_dimensions.length)}
-                onLocate={locate}
-                onChanged={() => {
-                  setNotesPulse((tick) => tick + 1); onChanged();
-                }}
-              />
-              {!notes.length && <div className="ws-insight-empty">
-                在左侧需求、文档或代码中圈选内容，即可把意见加入这里。
-              </div>}
-            </div>}
-          </section>
           {waiting && canOperate && (
             /* 批注挂在提交按钮正上方(WaitingCard 内部),不放卡片外面:
                选项标签是内核的——它按标签给这次选择记账,前端改写会让
@@ -1875,42 +1692,76 @@ export function TaskWorkspace({
           )}
         </aside>
       </div>
-      {reviewInviteOpen && <div className="review-invite-backdrop"
+      {reviewPanelOpen && <div className="workspace-review-backdrop"
+        onMouseDown={(event) => {
+          if (event.target === event.currentTarget) setReviewPanelOpen(false);
+        }}>
+        <section className="workspace-review-dialog" role="dialog" aria-modal="true"
+          aria-labelledby="workspace-review-title">
+          <header>
+            <div><span>REVIEW NOTES</span>
+              <strong id="workspace-review-title">批注与检视</strong>
+              <p>查看批注、Agent 回应与 Committer 检视进展；关闭后回到原工作位置。</p>
+            </div>
+            <div className="workspace-review-dialog-actions">
+              {(reviewActionCount > 0 || notes.length > 0) && <em>
+                {reviewActionCount > 0
+                  ? `${reviewActionCount} 项待处理` : `${notes.length} 条记录`}
+              </em>}
+              <button type="button" aria-label="关闭批注与检视"
+                autoFocus onClick={() => setReviewPanelOpen(false)}>×</button>
+            </div>
+          </header>
+          <div className="workspace-review-content ws-insights-view">
+            {reviewWorkspaceContent}
+          </div>
+        </section>
+      </div>}
+      {reviewInviteOpen && <div className="workspace-review-backdrop"
         onMouseDown={(event) => {
           if (event.target === event.currentTarget) setReviewInviteOpen(false);
         }}>
-        <section className="review-invite-dialog" role="dialog" aria-modal="true"
-          aria-labelledby="review-invite-title">
+        <section className="workspace-invite-dialog" role="dialog" aria-modal="true"
+          aria-labelledby="workspace-invite-title">
           <header>
-            <div><span>OPTIONAL REVIEW</span>
-              <strong id="review-invite-title">邀请 Committer 检视</strong>
-              <p>通知一位 Committer 协助检视，不影响你的最终决定。</p>
+            <div><span>COLLABORATIVE REVIEW</span>
+              <strong id="workspace-invite-title">邀请 Committer 检视</strong>
+              <p>选择一位 Committer 参与检视；邀请不会代替任务责任人的最终决定。</p>
             </div>
-            <button type="button" aria-label="关闭邀请检视窗口"
-              autoFocus
-              onClick={() => setReviewInviteOpen(false)}>×</button>
+            <button type="button" aria-label="关闭邀请检视"
+              autoFocus onClick={() => setReviewInviteOpen(false)}>×</button>
           </header>
-          {committers.length > 0 ? <div className="committer-review-action">
-            <UserPicker ariaLabel="选择 Committer" value={reviewer}
-              options={committers} onChange={setReviewer} />
-            <button type="button" disabled={!reviewer || reviewBusy}
-              onClick={() => void inviteReview()}>
-              {reviewBusy ? "发送中…" : "发送邀请"}
-            </button>
-          </div> : <div className="committer-empty">
-            管理员尚未配置 Committer 名单
-          </div>}
-          {reviewResult && <small className="committer-result">{reviewResult}</small>}
-          {taskReviews.length > 0 && <div className="committer-review-history">
-            {taskReviews.slice(0, 3).map((review) => <span key={review.id}>
-              <i className={review.status} aria-hidden />
-              <strong>{userLabel(committers.find((user) =>
-                user.username === review.committer)
-                ?? { username: review.committer })}</strong>
-              <small>{review.status === "completed" ? "已完成检视"
-                : review.delivered ? "等待检视" : "通知未送达"}</small>
-            </span>)}
-          </div>}
+          <div className="workspace-invite-content">
+            {committers.length > 0 ? (
+              <div className="workspace-review-invite-action">
+                <UserPicker ariaLabel="选择 Committer" value={reviewer}
+                  options={committers} onChange={setReviewer} />
+                <button type="button" disabled={!reviewer || reviewBusy}
+                  onClick={() => void inviteReview()}>
+                  {reviewBusy ? "发送中…" : "发送邀请"}
+                </button>
+              </div>
+            ) : <div className="committer-empty">
+              管理员尚未配置 Committer 名单
+            </div>}
+            {reviewResult && <small className="committer-result">
+              {reviewResult}
+            </small>}
+            {taskReviews.length > 0 && (
+              <div className="workspace-review-invite-history">
+                {taskReviews.slice(0, 3).map((review) => (
+                  <span key={review.id}>
+                    <i className={review.status} aria-hidden />
+                    <strong>{userLabel(committers.find((user) =>
+                      user.username === review.committer)
+                      ?? { username: review.committer })}</strong>
+                    <small>{review.status === "completed" ? "已完成检视"
+                      : review.delivered ? "等待检视" : "通知未送达"}</small>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
         </section>
       </div>}
     </section>

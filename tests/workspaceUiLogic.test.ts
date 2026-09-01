@@ -100,14 +100,6 @@ test("检视返工不把内部第 0 轮显示成流水线修复轮次", () => {
   }), "流水线修复中");
 });
 
-test("检视栏拖拽始终给左右工作面保留最小宽度", () => {
-  assert.equal(workspace.clampReviewPanelWidth(640, 1280), 640);
-  assert.equal(workspace.clampReviewPanelWidth(100, 1280), 420);
-  assert.equal(workspace.clampReviewPanelWidth(1200, 1280), 860);
-  assert.equal(workspace.clampReviewPanelWidth(700, 800), 400,
-    "窄到无法同时保留 420px 时，两栏各留一半");
-});
-
 test("圈注权与发送权拆开，需求原文批注能回到原文视图", () => {
   assert.equal(workspace.canCreateWorkspaceAnnotation("completed"), true,
     "已交付任务仍可留下交付后记录");
@@ -431,6 +423,62 @@ test("普通流程批注在 Agent 再次举卡后可由作者闭环，不依赖 
     annotation({ sent_via: "review_repair", response: undefined }),
     "waiting_for_human", true), false,
   "MR 修复缺逐条回执时不能误开放通过");
+});
+
+test("MR 复检把真正可操作的意见置顶成待确认卡，缺回执时不说已有按钮", () => {
+  const actionable = annotation({
+    id: "review-actionable",
+    file: "src/actionable.ts",
+    sent_via: "review_repair",
+  });
+  const clarification = annotation({
+    id: "review-clarification",
+    file: "src/clarification.ts",
+    sent_via: "review_repair",
+    response: {
+      revision: 0,
+      outcome: "needs_clarification",
+      summary: "需要补充边界",
+      evidence: [],
+      responded_at: "2026-08-30T00:01:00.000Z",
+    },
+  });
+  const missing = annotation({
+    id: "review-missing",
+    file: "src/missing.ts",
+    sent_via: "review_repair",
+    response: undefined,
+  });
+  const history = annotation({
+    id: "review-history",
+    file: "src/history.ts",
+    status: "verified",
+    sent_via: "review_repair",
+  });
+  const html = renderToStaticMarkup(React.createElement(
+    annotationPanel.AnnotationPanel,
+    {
+      taskId: "task-review",
+      viewerUsername: "alice",
+      items: [history, missing, actionable, clarification],
+      checks: [],
+      canOperate: true,
+      taskStatus: "waiting_for_human",
+      reviewReady: true,
+      reviewAnnotationIds: [actionable.id, clarification.id, missing.id],
+      mergeRequestOpen: true,
+      onChanged: () => undefined,
+    },
+  ));
+  assert.match(html, /待我确认/);
+  assert.match(html, /2 项/);
+  assert.match(html, /Agent 已处理你提出的 2 条意见/);
+  assert.match(html, /另有 1 条意见的当前轮逐条回执尚未就绪/);
+  assert.match(html, />仍需调整<\/button>/);
+  assert.match(html, />确认已修复<\/button>/);
+  assert.match(html, />补充说明后重提<\/button>/);
+  assert.ok(html.indexOf("src/actionable.ts") < html.indexOf("src/history.ts"),
+    "待确认卡必须排在历史记录前面");
 });
 
 test("批注面板显示受限管理员入口和实际代确认审计", () => {
