@@ -64,6 +64,7 @@ import {
 import { issueRegistrationMeta } from "./prompt.ts";
 import {
   currentBranch,
+  currentHead,
   dirtyWorktree,
   pushChangeSummary,
   pushFromIssueWorkspace,
@@ -580,28 +581,47 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
           + (dirty.length > 10 ? `\n  …共 ${dirty.length} 条` : ""));
       }
       // 推送前过目闸(ADR-0009,交付轴):现读现判个人设置——关/回调
-      // 缺席=直推(现状不变);开着且没有有效的一次性确认令牌就不碰
-      // git push,举起 push_confirm 闸(卡带服务端现查仓库生成的变更
-      // 摘要,不靠 Agent 自报)并拒收。与阶段门禁(gateStage)正交:
+      // 缺席=直推(现状不变);开着就要有有效的一次性确认令牌才碰
+      // git push,否则举起 push_confirm 闸(卡带服务端现查仓库生成的
+      // 变更摘要,不靠 Agent 自报)并拒收。与阶段门禁(gateStage)正交:
       // 那道门管"什么阶段能推",这道管"推之前给不给人过目";固定与
       // 自由两模式同过。拒绝与 raiseEnvNeededGate 同款收口:工具如实
       // 失败让模型结束回合,waiting_user 由 settle 在回合终点定格。
-      if (ctx.pushConfirmation?.() === true && !state.push_token) {
+      // 令牌绑定过目那一刻的分支 tip(push_review_head→push_token.head):
+      // 确认之后又有新提交,重推对不上 tip 即作废重举——人看过的是
+      // 哪份变更,放行的就是哪份,防盲签才是完整的。
+      const raisePushReviewGate = async (why: string) => {
         const summary = await pushChangeSummary({
           repoDir: repo.dir,
           ...(state.baseline ? { baseline: state.baseline } : {}),
         });
+        const head = await currentHead(repo.dir);
+        if (head) state.push_review_head = head;
+        else delete state.push_review_head;
         raiseGate(
           ctx.state,
           "push_confirm",
-          "推送前过目:以下变更将推送到远端,请过目后确认",
+          `推送前过目:${why}以下变更将推送到远端,请过目后确认`,
           undefined,
           summary,
         );
         ctx.persist();
-        fail("已向用户举出推送确认卡(带本次变更摘要),git push 未执行。"
+        fail(`${why ? why.replace(/,$/, "") + "——已重新举出推送确认卡" :
+          "已向用户举出推送确认卡"}(带本次变更摘要),git push 未执行。`
           + "请结束本回合等待用户过目——确认后平台会通知你重新推送本分支;"
           + "若用户答「暂不推送」,请按其意见调整后再来征求确认");
+      };
+      if (ctx.pushConfirmation?.() === true) {
+        if (!state.push_token) {
+          await raisePushReviewGate("");
+        } else {
+          const head = await currentHead(repo.dir);
+          if (state.push_token.head && head
+            && head !== state.push_token.head) {
+            delete state.push_token;
+            await raisePushReviewGate("分支在过目后又有新提交,");
+          }
+        }
       }
       const receipt = await pushFromIssueWorkspace({
         dataDir: ctx.dataRoot,

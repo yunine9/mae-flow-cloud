@@ -568,3 +568,49 @@ test("月光开:盘上有平台闸走闸代答,Agent 卡不被碰(闸优先)", a
     await model.stop();
   }
 });
+
+test("月光中途打开:已挂起的卡不追溯代答(只在卡落地时判定)", async () => {
+  const script: Scene[] = [
+    { tool: { name: "AskUserQuestion", input: {
+      questions: [{
+        question: "采用哪个修复方案?",
+        options: ["方案A:超时回收", "方案B:扩容连接池"],
+        recommended: "方案A:超时回收",
+      }],
+    } } },
+    { text: "按推荐处理完毕,本回合到此。" },
+  ];
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
+  await model.start();
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-moon-retro-"));
+  // 月光开成可翻转的:卡落地时关,落地后再开——追溯与否看这张测试。
+  let moon = false;
+  const service = new IssueFlowService({
+    ...baseOptions(dataDir, model),
+    issueFlowMode: () => "free",
+    moonlight: () => moon,
+  });
+  try {
+    const created = service.create({
+      account: "dev", title: "登录超时", ticket: TICKET, source: "dts",
+    });
+    await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user" ? issue : undefined;
+    }, "月光关:卡落地等真人");
+    // 现读现判的边界:设置翻转只对后续到达的卡生效,已挂起的卡不追溯
+    // 代答(与需求流同口径——代答只发生在卡到达的那一刻)。
+    moon = true;
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const [record] = waitingRecords(dataDir, created.id);
+    assert.equal(record.status, "waiting", "已挂起的卡不被追溯代答");
+    assert.equal(record.decision, "", "没有任何答案被冒名提交");
+    assert.doesNotMatch(
+      eventsFile(dataDir, created.id), /月光免审批自动作答/,
+      "追溯代答会留痕,现场账必须干净");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});

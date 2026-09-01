@@ -337,10 +337,15 @@ export interface IssueSessionState {
   mr_gate?: IssueMrGateRecord;
   /** 一次性推送确认令牌(ADR-0009):push_confirm 闸答「确认推送」时
    * 写入(带确认时刻与决策留痕),push_branch 成功即消费(删除)——
-   * 下一次推送重新过目,防盲签。随 issue.json 持久化,重启恢复路径
-   * (recover)不清它:已过目的确认不因重启要求重复点。summarize 不上
-   * wire(与 mr_gate 同为流程机制状态,前端镜像没有这个字段)。 */
-  push_token?: { at: string; decision: string };
+   * 下一次推送重新过目,防盲签。head=过目那一刻的分支 tip:确认的
+   * 对象是"当时看到的那份变更",重推时 tip 变了(过目后又有新提交)
+   * 令牌即作废重新举卡。随 issue.json 持久化,重启恢复路径(recover)
+   * 不清它:已过目的确认不因重启要求重复点。summarize 不上 wire(与
+   * mr_gate 同为流程机制状态,前端镜像没有这个字段)。 */
+  push_token?: { at: string; decision: string; head?: string };
+  /** 举 push_confirm 闸时记下的待推送 tip(过目对象的身份):确认时
+   * 并进 push_token.head。不上 wire,与 push_token 同罪同罚。 */
+  push_review_head?: string;
   /** 本回合已用催办次数(模型提前收嘴的自动续跑)。每个新回合起点清零;
    * 落在状态里是为了重启后不重复催办。 */
   nudges?: number;
@@ -409,9 +414,10 @@ export function summarize(state: IssueSessionState): IssueSummary {
   // mr_gate 是 MR 验绿门的内部受理账(流程机制状态):不上 wire——
   // 服务端投影多出前端镜像没有的字段会让契约对账当场红;要上前端
   // 先补 web/src/api.ts 镜像与样例。push_token(推送过目的一次性
-  // 令牌)同罪同罚:令牌的效力只在服务端 push_branch 消费口,不是
-  // 前端要渲染的状态。
-  const { mr_gate: _gate, push_token: _pushToken, ...rest } = state;
+  // 令牌)与 push_review_head(举闸时记的过目对象 tip)同罪同罚:
+  // 它们的效力只在服务端 push_branch 消费口,不是前端要渲染的状态。
+  const { mr_gate: _gate, push_token: _pushToken,
+    push_review_head: _pushReviewHead, ...rest } = state;
   return {
     ...rest,
     has_environment: Boolean(state.environment),

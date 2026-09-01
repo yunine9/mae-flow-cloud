@@ -407,3 +407,91 @@ test("重启:举卡后销毁服务重建,确认后令牌持久,重试推送成�
     await model.stop();
   }
 });
+
+test("过目开:确认后又有新提交,重推对不上过目 tip 即作废重举(防盲签完整形态)", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-pushstale-"));
+  const origin = bareOrigin(dataDir);
+  // 第二笔提交:不再建分支(首笔已建),直接在 BRANCH 上加新文件。
+  const COMMIT2 = `cd repo/origin && printf 'more\\n' > second.txt && `
+    + "git add -A && git -c user.name=test -c user.email=t@e commit -q "
+    + `-m '[${TICKET}][fix] 补充第二处修改'`;
+  const script: Scene[] = [
+    { tool: { name: "pull_repo", input: { url: origin } } },
+    { tool: { name: "bash", input: { command: COMMIT } } },
+    { tool: { name: "push_branch", input: { branch: BRANCH } } },
+    { text: "推送被过目闸拦下,等待用户过目。" },
+    // 确认后续跑:Agent 又提交了一笔,然后重推——tip 变了,重新举卡。
+    { tool: { name: "bash", input: { command: COMMIT2 } } },
+    { tool: { name: "push_branch", input: { branch: BRANCH } } },
+    { text: "过目后有新提交,已重新举卡等待再次过目。" },
+    // 二次确认后重推:tip 对上,放行。
+    { tool: { name: "push_branch", input: { branch: BRANCH } } },
+    { text: "推送完成。" },
+  ];
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    ...baseOptions(dataDir, model),
+    pushConfirmation: () => true,
+  });
+  try {
+    const created = service.create({
+      account: "dev", title: "登录超时", ticket: TICKET, source: "dts",
+      repoUrl: origin,
+    });
+    const gated = await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user" && issue.gate?.kind === "push_confirm"
+        ? issue : undefined;
+    }, "第一张推送过目卡");
+    assert.ok(gated.gate!.context?.includes("fix.txt"));
+    service.answer(created.id, {
+      state_version: gated.gate!.state_version,
+      code: "push", decision: "确认推送",
+    });
+    const tokened = await until(() => {
+      const state = readStateFile(dataDir, created.id);
+      return state.push_token ?? undefined;
+    }, "确认令牌落盘");
+    assert.ok(tokened.head, "令牌绑定过目那一刻的分支 tip");
+
+    // 确认后又有新提交:重推对不上 tip,旧令牌作废,重新举卡(带新摘要)。
+    const regated = await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user" && issue.gate?.kind === "push_confirm"
+        ? issue : undefined;
+    }, "tip 变化后重新举卡");
+    assert.notEqual(regated.gate!.id, gated.gate!.id, "是新举的卡,不是旧卡");
+    assert.match(regated.gate!.question.questions[0].question, /又有新提交/);
+    assert.ok(regated.gate!.context?.includes("second.txt"),
+      `新摘要应带第二笔提交的文件(实际:${regated.gate!.context})`);
+    assert.equal(readStateFile(dataDir, created.id).push_token, undefined,
+      "作废的令牌不留盘");
+    const staleRejected = pushReceipts(dataDir, created.id).at(-1);
+    assert.equal(staleRejected?.is_error, true);
+    assert.match(String(staleRejected?.result), /又有新提交/);
+
+    // 二次确认后重推:tip 对上,放行成功。
+    service.answer(created.id, {
+      state_version: regated.gate!.state_version,
+      code: "push", decision: "确认推送",
+    });
+    const pushed = await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return (issue.pushes?.length ?? 0) > 0 ? issue : undefined;
+    }, "二次确认后推送成功");
+    const remote = spawnSync("git",
+      ["--git-dir", origin, "rev-parse", `refs/heads/${BRANCH}`],
+      { encoding: "utf-8" });
+    assert.equal(remote.status, 0, remote.stderr);
+    assert.equal(remote.stdout.trim(), pushed.pushes![0].sha);
+    assert.equal(readStateFile(dataDir, created.id).push_token, undefined,
+      "成功即消费");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
