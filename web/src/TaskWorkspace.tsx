@@ -467,6 +467,7 @@ export function TaskWorkspace({
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>(
     defaultWorkspaceView(task),
   );
+  const [materialsFullscreen, setMaterialsFullscreen] = useState(false);
   const [reviewPanelOpen, setReviewPanelOpen] = useState(false);
   const [executionView, setExecutionView] = useState<ExecutionView>("events");
   const artifactTask = useRef("");
@@ -496,6 +497,7 @@ export function TaskWorkspace({
     setMaterialView(task.waiting?.recommended_view
       ?? (task.requirement_graph?.stage === "confirmed" ? "chain" : "source"));
     setWorkspaceView(defaultWorkspaceView(task));
+    setMaterialsFullscreen(false);
     setReviewPanelOpen(false);
     setExecutionView("events");
     setRepositoryAssignees(EMPTY_REPOSITORY_ASSIGNEE_SELECTION);
@@ -626,7 +628,9 @@ export function TaskWorkspace({
 
   useEffect(() => {
     const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key !== "Escape") return;
+      if (materialsFullscreen) setMaterialsFullscreen(false);
+      else onClose();
     };
     window.addEventListener("keydown", escape);
     const previous = document.body.style.overflow;
@@ -635,7 +639,7 @@ export function TaskWorkspace({
       window.removeEventListener("keydown", escape);
       document.body.style.overflow = previous;
     };
-  }, [onClose]);
+  }, [materialsFullscreen, onClose]);
 
   // 产物列表按最近修改倒序(服务端排好),默认打开第一份——
   // "哪一步该看哪个文件"是内核语义,前端不复刻,只用修改时间定位。
@@ -793,19 +797,28 @@ export function TaskWorkspace({
   const workspaceReviewAnnotationIds = workspaceReviewReady
     ? task.delivery?.loop?.workspace_review_annotation_ids ?? []
     : [];
-  const reviewActionCount = myDrafts.length + workspaceReviewAnnotationIds.length
+  const pendingWorkspaceReviewIds = workspaceReviewAnnotationIds.filter((id) =>
+    notes.some((item) => item.id === id && item.status === "sent"));
+  const reviewActionCount = myDrafts.length + pendingWorkspaceReviewIds.length
     + (reviewAssignment ? 1 : 0);
   const reviewAttentionKey = [
     ...myDrafts.map((item) => `draft:${item.id}`),
-    ...workspaceReviewAnnotationIds.map((id) => `recheck:${id}`),
+    ...pendingWorkspaceReviewIds.map((id) => `recheck:${id}`),
     ...(reviewAssignment ? [`assignment:${reviewAssignment.id}`] : []),
   ].join("|");
   const openedReviewAttention = useRef("");
+  const previousReviewActionCount = useRef(reviewActionCount);
   useEffect(() => {
     if (!reviewAttentionKey || openedReviewAttention.current === reviewAttentionKey) return;
     openedReviewAttention.current = reviewAttentionKey;
     setReviewPanelOpen(true);
   }, [reviewAttentionKey]);
+  useEffect(() => {
+    if (previousReviewActionCount.current > 0 && reviewActionCount === 0) {
+      setReviewPanelOpen(false);
+    }
+    previousReviewActionCount.current = reviewActionCount;
+  }, [reviewActionCount]);
   const nextAction = workspaceNextActionCopy(task, Boolean(waiting));
   const decisionDeliverySelection = usablePushReviewSelection(
     Boolean(pushReview),
@@ -895,7 +908,8 @@ export function TaskWorkspace({
 
   return (
     <section
-      className="workspace-overlay"
+      className={`workspace-overlay${materialsFullscreen
+        ? " materials-fullscreen" : ""}`}
       ref={workspaceRoot}
       role="dialog"
       aria-modal="true"
@@ -1074,6 +1088,13 @@ export function TaskWorkspace({
               <button className={materialView === "diff" ? "on" : ""}
                 onClick={() => { setMaterialView("diff"); if (changes[0]) setActive(changes[0].name); }} disabled={!changeFileCount}>
                 <span>工作区变更</span><i>{changeFileCount}</i>
+              </button>
+              <button type="button" className="materials-fullscreen-toggle"
+                aria-pressed={materialsFullscreen}
+                title={materialsFullscreen ? "返回检视与决定同屏" : "让当前交付材料占满工作台"}
+                onClick={() => setMaterialsFullscreen((current) => !current)}>
+                <span aria-hidden>{materialsFullscreen ? "↙" : "⛶"}</span>
+                {materialsFullscreen ? "退出全屏" : "全屏查看"}
               </button>
             </div>
           </div>
@@ -1455,14 +1476,20 @@ export function TaskWorkspace({
           </div>
           <section className={`ws-review-drawer${reviewPanelOpen ? " open" : ""}`}
             aria-label="本轮检视清单">
-            <button type="button" className="ws-review-drawer-toggle"
-              aria-expanded={reviewPanelOpen}
-              onClick={() => setReviewPanelOpen((current) => !current)}>
-              <span><i aria-hidden>审</i><strong>本轮检视清单</strong></span>
-              <em>{reviewActionCount > 0
-                ? `${reviewActionCount} 项待处理`
-                : notes.length ? `${notes.length} 条记录` : "随材料批注"}</em>
-            </button>
+            {reviewActionCount > 0 ? (
+              <div className="ws-review-drawer-toggle is-locked" role="status">
+                <span><i aria-hidden>审</i><strong>本轮检视清单</strong></span>
+                <em>{reviewActionCount} 项待处理</em>
+              </div>
+            ) : (
+              <button type="button" className="ws-review-drawer-toggle"
+                aria-expanded={reviewPanelOpen}
+                onClick={() => setReviewPanelOpen((current) => !current)}>
+                <span><i aria-hidden>审</i><strong>检视记录</strong></span>
+                <em>{reviewPanelOpen ? "收起并继续最终决定"
+                  : notes.length ? `${notes.length} 条记录` : "随材料批注"}</em>
+              </button>
+            )}
             {reviewPanelOpen && <div className="ws-review-drawer-body">
               {reviewAssignment && (
                 <section className="review-assignment compact"

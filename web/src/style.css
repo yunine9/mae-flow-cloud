@@ -1312,6 +1312,7 @@ svg {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
   color: var(--text); background: transparent; border: 0; text-align: left;
 }
+.ws-review-drawer-toggle.is-locked { cursor: default; user-select: none; }
 .ws-review-drawer-toggle > span { min-width: 0; display: flex; align-items: center; gap: 9px; }
 .ws-review-drawer-toggle i {
   width: 28px; height: 28px; display: grid; place-items: center; flex: none;
@@ -1334,6 +1335,25 @@ svg {
 }
 .ws-decision.review-mode .ws-review-drawer-body { max-height: none; min-height: 0; flex: 1; }
 .ws-review-drawer-body .committer-review-action .user-picker { width: 260px; max-width: 100%; }
+
+/* 长检视清单必须在右栏内部滚动。仅给 body 写 overflow 不够：父栏本身
+ * 仍是 overflow:auto 时，flex 子项会按内容高度撑开，滚轮实际落在一个
+ * 没有剩余滚动距离的外层上。桌面态把高度链逐级钉死，清单独占滚动；
+ * 左侧材料因此保持原位置，窄屏继续沿用下面的底部抽屉规则。 */
+@media (min-width: 901px) {
+  .ws-decision.review-mode { overflow: hidden; }
+  .ws-decision.review-mode .ws-review-drawer.open { overflow: hidden; }
+  .ws-decision.review-mode .ws-review-drawer-body {
+    height: 0;
+    min-height: 0;
+    max-height: none;
+    flex: 1 1 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+  }
+}
 
 @media (max-width: 900px) {
   .ws-body.has-review:not(.has-decision) { grid-template-columns: 1fr; }
@@ -6524,6 +6544,53 @@ pre {
   line-height: 1;
 }
 .ws-source-switch button.on i { color: var(--accent); background: var(--accent-soft); }
+.ws-source-switch .materials-fullscreen-toggle {
+  margin-left: 5px;
+  padding-left: 12px;
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--line));
+  background: var(--accent-soft);
+}
+.ws-source-switch .materials-fullscreen-toggle:hover:not(:disabled) {
+  color: #fff;
+  border-color: var(--accent);
+  background: var(--accent);
+}
+.ws-source-switch .materials-fullscreen-toggle > span {
+  color: inherit;
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+/* 材料级全屏：不另造一份阅读器，原节点只改变布局，因此当前文档、
+ * 文件选择和滚动位置都原样保留。代码差异里的“专注审阅”仍负责更深
+ * 一层的逐文件双栏检视。 */
+.workspace-overlay.materials-fullscreen > .ws-head,
+.workspace-overlay.materials-fullscreen > .ws-progress,
+.workspace-overlay.materials-fullscreen > .task-control-feedback,
+.workspace-overlay.materials-fullscreen > .ws-workspace-nav,
+.workspace-overlay.materials-fullscreen .ws-decision { display: none; }
+.workspace-overlay.materials-fullscreen .ws-body,
+.workspace-overlay.materials-fullscreen .ws-body.has-decision,
+.workspace-overlay.materials-fullscreen .ws-body.has-review,
+.workspace-overlay.materials-fullscreen .ws-body.has-decision.has-review {
+  grid-template-columns: minmax(0, 1fr);
+}
+.workspace-overlay.materials-fullscreen .ws-evidence {
+  max-height: none;
+  border: 0;
+}
+.workspace-overlay.materials-fullscreen .ws-pane-head {
+  min-height: 64px;
+  padding-left: clamp(20px, 3vw, 48px);
+  padding-right: clamp(20px, 3vw, 48px);
+  box-shadow: var(--shadow-xs);
+}
+.workspace-overlay.materials-fullscreen .ws-doc {
+  padding-left: clamp(22px, 4vw, 68px);
+  padding-right: clamp(22px, 4vw, 68px);
+}
 .ws-tabs {
   min-height: 43px;
   padding: 8px 16px 0;
