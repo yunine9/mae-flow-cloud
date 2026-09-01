@@ -1260,16 +1260,6 @@ export function TaskWorkspace({
                 onClick={() => { setMaterialView("diff"); if (changes[0]) setActive(changes[0].name); }} disabled={!changeFileCount}>
                 <span>工作区变更</span><i>{changeFileCount}</i>
               </button>
-              {materialView === "doc" && <button type="button"
-                className="materials-download"
-                disabled={!documents.length || documentsDownloading}
-                title={documents.length
-                  ? `下载全部 ${documents.length} 份过程文档(完整原文件)`
-                  : "还没有可下载的过程文档"}
-                onClick={() => void downloadDocuments()}>
-                <span aria-hidden>⇩</span>
-                {documentsDownloading ? "打包中…" : "打包下载"}
-              </button>}
               <button type="button" className="materials-fullscreen-toggle"
                 aria-pressed={materialsFullscreen}
                 title={materialsFullscreen ? "返回检视与决定同屏" : "让当前交付材料占满工作台"}
@@ -1279,9 +1269,6 @@ export function TaskWorkspace({
               </button>
             </div>
           </div>
-          {documentsDownloadError && <div className="utility-note" role="alert">
-            打包下载失败：{documentsDownloadError}
-          </div>}
           {evidenceGapActionable && evidenceGapArtifact && (
             <section className="ws-evidence-gap-callout" role="status">
               <div>
@@ -1301,15 +1288,25 @@ export function TaskWorkspace({
               </button>
             </section>
           )}
-          {materialView === "doc" && documents.length > 1 && (
-            <div className="ws-tabs">
+          {materialView === "doc" && documents.length > 0 && (
+            <div className="ws-tabs ws-document-tabs">
               {documents.map((item) => (
                 <button key={item.name} className={"ws-tab" + (item.name === active ? " on" : "")} onClick={() => setActive(item.name)}>
                   <span>{item.label}</span><i>{sizeText(item.bytes)}</i>
                 </button>
               ))}
+              <button type="button" className="ws-document-download"
+                disabled={documentsDownloading}
+                title={`下载全部 ${documents.length} 份过程文档(完整原文件)`}
+                onClick={() => void downloadDocuments()}>
+                <span aria-hidden>⇩</span>
+                {documentsDownloading ? "打包中…" : "打包下载"}
+              </button>
             </div>
           )}
+          {documentsDownloadError && <div className="utility-note" role="alert">
+            打包下载失败：{documentsDownloadError}
+          </div>}
           <div className="ws-doc">
             {locationNotice && (
               <div className="annotation-location-notice" role="status">

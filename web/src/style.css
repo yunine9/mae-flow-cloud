@@ -6853,24 +6853,6 @@ pre {
   line-height: 1;
 }
 .ws-source-switch button.on i { color: var(--accent); background: var(--accent-soft); }
-.ws-source-switch .materials-download {
-  margin-left: 5px;
-  color: #fff;
-  border-color: var(--accent);
-  background: var(--accent);
-  box-shadow: var(--shadow-xs);
-}
-.ws-source-switch .materials-download:hover:not(:disabled) {
-  color: #fff;
-  border-color: color-mix(in srgb, var(--accent) 82%, #000);
-  background: color-mix(in srgb, var(--accent) 88%, #000);
-}
-.ws-source-switch .materials-download > span {
-  color: inherit;
-  font-size: 16px;
-  font-weight: 750;
-  letter-spacing: 0;
-}
 .ws-source-switch .materials-fullscreen-toggle {
   margin-left: 5px;
   padding-left: 12px;
@@ -6953,6 +6935,33 @@ pre {
 .ws-tab:hover { color: var(--text); background: color-mix(in srgb, var(--surface) 70%, transparent); }
 .ws-tab.on { color: var(--text-strong); border-color: var(--line); font-weight: 700; }
 .ws-tab i { color: var(--faint); font-size: var(--font-size-assist); }
+.ws-document-tabs { padding-right: 16px; }
+.ws-document-download {
+  min-height: 30px;
+  margin: 0 0 5px auto;
+  padding: 5px 12px;
+  position: sticky;
+  right: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  color: #fff;
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  background: var(--accent);
+  box-shadow: -12px 0 14px var(--surface-soft), var(--shadow-xs);
+  font-size: 13px;
+  font-weight: 750;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.ws-document-download:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 82%, #000);
+  background: color-mix(in srgb, var(--accent) 88%, #000);
+}
+.ws-document-download:disabled { opacity: .55; cursor: wait; }
+.ws-document-download > span { font-size: 16px; line-height: 1; }
 .ws-doc {
   min-height: 0;
   overflow-x: hidden;
