@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FakeGitPlatform } from "../src/gitPlatform.ts";
@@ -31,8 +32,18 @@ function prepareFailedTask(
   account = "liaoxiang",
 ): { task: any; sha: string } {
   const created = service.create("修复流水线证据缺口", { account });
+  service.options.host = LEGACY_TEST_HOST;
   const task = service.tasks.get(created.id);
-  const sha = "a".repeat(40);
+  const cwd = mkdtempSync(join(tmpdir(), "mfc-evidence-repo-"));
+  execFileSync("git", ["init", "--quiet", "-b", "master", cwd]);
+  execFileSync("git", ["-C", cwd, "config", "user.email", "test@example.com"]);
+  execFileSync("git", ["-C", cwd, "config", "user.name", "Test"]);
+  writeFileSync(join(cwd, "README.md"), "baseline\n");
+  execFileSync("git", ["-C", cwd, "add", "README.md"]);
+  execFileSync("git", ["-C", cwd, "commit", "--quiet", "-m", "baseline"]);
+  const sha = execFileSync("git", ["-C", cwd, "rev-parse", "HEAD"],
+    { encoding: "utf-8" }).trim();
+  task.cwd = cwd;
   task.summary.status = "verifying";
   task.summary.delivery = {
     sha,
@@ -43,6 +54,12 @@ function prepareFailedTask(
   service.persist(task);
   return { task, sha };
 }
+
+const LEGACY_TEST_HOST = {
+  kernelRoot: join(process.cwd(), "kernel"),
+  python: "python3",
+  continuousReview: false,
+};
 
 test("全部红灯无具体证据时不派 Agent、不消耗修复轮次并通知人", async () => {
   const platform = new FakeGitPlatform();
@@ -262,6 +279,7 @@ test("服务重启后从同一 SHA 继续取证，不误走 prepush 或主任务
   });
   const after: any = new TaskService(options);
   try {
+    after.options.host = LEGACY_TEST_HOST;
     assert.deepEqual(after.recover(), { restored: 1, requeued: 0 });
     await until(() => after.get(id)?.status === "queued",
       "重启后证据恢复并派修");

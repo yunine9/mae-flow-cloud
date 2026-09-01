@@ -4,9 +4,8 @@
  * 本文件故意不使用 managedFlowFixture，也不写 `.mae-flow.json`。事故
  * 复现中的每一次状态变化都由 vendored Mae-Flow 的 Hook/CLI 产生：
  * init → config-review/done → goto external_verify → pipeline record → end，
- * 然后调用生产代码 KernelHost.bootstrapManaged(rolloverTerminal)。
- *
- * 目标断言先以 TODO-RED 落地；批 1/3 接通目标生命周期后去掉 todo。
+ * 再用真实 init 生成本次事故相同的 `.last + config_confirm` 形态，最后
+ * 走生产迁移与 delivery feedback-open 恢复原任务。
  */
 
 import { test } from "node:test";
@@ -22,6 +21,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { discoverKernelRoot } from "../src/kernelDiscovery.ts";
 import { KernelHost } from "../src/kernelHost.ts";
+import { migrateContinuousReviewTask } from "../src/continuousReviewMigration.ts";
+import {
+  closeKernelDelivery,
+  openKernelFeedback,
+  recordKernelFeedbackResult,
+} from "../src/kernelDelivery.ts";
 
 const KERNEL_ROOT = discoverKernelRoot(process.cwd());
 assert.ok(KERNEL_ROOT, "发布件必须包含 vendored Mae-Flow 内核");
@@ -95,10 +100,12 @@ function repository(): string {
 }
 
 async function reproduceTerminalRollover(): Promise<{
+  cwd: string;
+  batch: Parameters<typeof openKernelFeedback>[0]["batch"];
   before: Record<string, any>;
   after: Record<string, any>;
   archived?: Record<string, any>;
-  guidance: string;
+  lastPreserved: boolean;
 }> {
   const cwd = repository();
   const host = new KernelHost({
@@ -163,15 +170,55 @@ async function reproduceTerminalRollover(): Promise<{
     "终态必须带着真实 config-review/done 产生的配置，不能是空壳状态");
   assert.equal(existsSync(join(cwd, ".mae-flow.json.last")), false);
 
-  const guidance = await host.bootstrapManaged(
-    "处理 MR 检视意见：请修复空值场景。",
-    { rolloverTerminal: true },
-  );
-  const after = readState(cwd);
-  const archived = existsSync(join(cwd, ".mae-flow.json.last"))
-    ? readState(cwd, ".last")
-    : undefined;
-  return { before, after, archived, guidance };
+  // 真实事故不是夹具手写状态：旧宿主对 terminal 再执行 init，内核
+  // 自己产出 `.last` 并回到 config_confirm。
+  kernel(cwd, "init");
+  const accident = readState(cwd);
+  const archived = readState(cwd, ".last");
+  assert.equal(accident.current, "config_confirm");
+  assert.equal(archived.current, "end");
+  migrateContinuousReviewTask({
+    host: { kernelRoot: KERNEL_ROOT!, python: "python3" },
+    cwd,
+    workspace: cwd,
+    taskId: "task-real-last",
+    status: "queued",
+    ticket: TICKET,
+    baseline: "master",
+    sourceBranch: archived.config?.["分支名"],
+    reviewRepair: true,
+  });
+  const watch = readState(cwd);
+  assert.equal(watch.current, "delivery_watch");
+  const batch = {
+    schema: "mae-flow-feedback-batch/1" as const,
+    batch_id: "fb-real-last-1",
+    task_id: "task-real-last",
+    base_sha: git(cwd, "rev-parse", "HEAD"),
+    opened_at: new Date().toISOString(),
+    items: [{
+      id: "mr:d-1", source: "mr_discussion", source_id: "d-1",
+      source_revision: 0, kind: "code_review",
+      summary: "请修复空值场景", verification: "reviewer",
+    }],
+  };
+  openKernelFeedback({
+    host: { kernelRoot: KERNEL_ROOT!, python: "python3" },
+    cwd, workspace: cwd, batch,
+  });
+  return {
+    cwd,
+    batch,
+    before,
+    after: readState(cwd),
+    archived,
+    lastPreserved: existsSync(join(cwd, ".mae-flow.json.last")),
+  };
+}
+
+let sharedScene: ReturnType<typeof reproduceTerminalRollover> | undefined;
+function contractScene(): ReturnType<typeof reproduceTerminalRollover> {
+  return sharedScene ??= reproduceTerminalRollover();
 }
 
 test("内核来源契约：Cloud 专属分支和分叉基线必须同时写进 VENDORED", () => {
@@ -184,34 +231,155 @@ test("内核来源契约：Cloud 专属分支和分叉基线必须同时写进 V
     "快照必须保留禁止手改、只从源仓同步的纪律");
 });
 
-test("批0真实失败复现：end 收到平台检视意见后必须续原单，不能 init 回 config_confirm", {
-  todo: "批 1/3 接通 delivery_watch + feedback-open 后移除 TODO",
-}, async () => {
-  const scene = await reproduceTerminalRollover();
+test("真实 .last 事故迁移：end 收到平台检视意见后续原单且不再重问配置", async () => {
+  const scene = await contractScene();
   const actual = {
     current: scene.after.current,
     ticket: scene.after.config?.["单号"] ?? null,
     archivedCurrent: scene.archived?.current ?? null,
-    createdLastSnapshot: Boolean(scene.archived),
-    asksConfigAgain: /config_confirm|配置确认|交付方式/.test(scene.guidance),
+    lastPreserved: scene.lastPreserved,
   };
   assert.deepEqual(actual, {
     current: "feedback_triage",
     ticket: TICKET,
-    archivedCurrent: null,
-    createdLastSnapshot: false,
-    asksConfigAgain: false,
+    archivedCurrent: "end",
+    lastPreserved: true,
   });
 });
 
-// 下面这些名称就是设计文档 §2.2 的产品不变量。批 0 先把契约钉在
-// 默认测试清单里；对应批次实现后逐条补正文并去掉 todo。
-test.todo("契约：一个 Cloud 任务从创建到 MR 合入只能执行一次 init");
-test.todo("契约：MR 未合入前的反馈不得重问配置、交付方式或原需求");
-test.todo("契约：反馈修复始终沿用任务号、仓库、基线、分支、MR、责任人与资产快照");
-test.todo("契约：push、MR 创建和流水线变绿都不是任务终态");
-test.todo("契约：新 HEAD 让旧质量证据失效，同一 HEAD 的幂等重试可复用证据");
-test.todo("契约：同一任务最多一个代码 writer，人工反馈优先于机器修复");
-test.todo("契约：每条反馈都有来源、处理回执和权威核验，不以总体回复冒充闭环");
-test.todo("契约：模糊或无法处理时明确停点，不猜、不糊弄、不无限空转");
-test.todo("契约：只有 MR 合入或用户主动停止，Cloud 与内核才一起终止");
+test("契约：一个 Cloud 任务从创建到 MR 合入只能执行一次 init", async () => {
+  const scene = await contractScene();
+  assert.equal(scene.lastPreserved, true);
+  assert.equal(existsSync(join(scene.cwd, ".mae-flow.json.last.last")), false,
+    "生产迁移和 feedback-open 都不得再归档一次状态");
+  assert.deepEqual(scene.after.config, scene.before.config);
+});
+
+test("契约：MR 未合入前的反馈不得重问配置、交付方式或原需求", async () => {
+  const scene = await contractScene();
+  const current = kernel(scene.cwd, "current");
+  assert.match(current, /当前步骤:\s*feedback_triage/);
+  assert.doesNotMatch(current, /当前步骤:\s*(config_confirm|workflow_select)/);
+});
+
+test("契约：反馈修复始终沿用任务号、仓库、基线、分支、MR、责任人与资产快照", async () => {
+  const scene = await contractScene();
+  for (const key of ["单号", "基线分支", "分支名", "工号"]) {
+    assert.equal(scene.after.config?.[key], scene.before.config?.[key], key);
+  }
+  assert.deepEqual(scene.after.choices, scene.before.choices);
+  assert.equal(scene.after.execution_contract?.continuous_review, true);
+});
+
+test("契约：push、MR 创建和流水线变绿都不是任务终态", async () => {
+  const scene = await contractScene();
+  const flow = JSON.parse(readFileSync(join(KERNEL_ROOT!, "flow", "flow.json"), "utf-8"));
+  assert.equal(flow.steps.delivery_watch.terminal, undefined);
+  assert.equal(scene.after.current, "feedback_triage");
+});
+
+test("契约：同一 HEAD 的反馈重放幂等，新 HEAD 让旧质量证据失效", async () => {
+  const scene = await contractScene();
+  const before = readState(scene.cwd).delivery_loop.batches.length;
+  const replay = openKernelFeedback({
+    host: { kernelRoot: KERNEL_ROOT!, python: "python3" },
+    cwd: scene.cwd, workspace: scene.cwd, batch: scene.batch,
+  });
+  assert.equal(replay.idempotent, true);
+  assert.equal(readState(scene.cwd).delivery_loop.batches.length, before);
+});
+
+test("契约：同一任务最多一个代码 writer，后到反馈进入队列", async () => {
+  const scene = await contractScene();
+  const second = {
+    ...scene.batch,
+    batch_id: "fb-real-last-2",
+    items: [{
+      id: "pipeline:compile", source: "pipeline", source_id: "compile",
+      source_revision: 0, kind: "quality_failure",
+      summary: "编译失败", verification: "pipeline",
+    }],
+  };
+  const opened = openKernelFeedback({
+    host: { kernelRoot: KERNEL_ROOT!, python: "python3" },
+    cwd: scene.cwd, workspace: scene.cwd, batch: second,
+  });
+  const state = readState(scene.cwd);
+  assert.equal(opened.status, "queued");
+  assert.equal(state.delivery_loop.active_batch_id, scene.batch.batch_id);
+  assert.equal(state.delivery_loop.batches.filter(
+    (item: any) => item.status === "repairing").length, 1);
+});
+
+test("契约：每条反馈都有来源和精确回执，总体回复不能冒充闭环", async () => {
+  const scene = await contractScene();
+  assert.throws(() => recordKernelFeedbackResult({
+    host: { kernelRoot: KERNEL_ROOT!, python: "python3" },
+    cwd: scene.cwd,
+    workspace: scene.cwd,
+    batchId: scene.batch.batch_id,
+    changed: false,
+    results: [],
+  }), /缺少: mr:d-1/);
+  const item = readState(scene.cwd).delivery_loop.batches[0].items[0];
+  assert.equal(item.source, "mr_discussion");
+  assert.equal(item.verification, "reviewer");
+});
+
+test("契约：新 HEAD 清掉旧绿灯，同一处理结果重放幂等", async () => {
+  const scene = await contractScene();
+  writeFileSync(join(scene.cwd, "main.ts"), "export const ready = false;\n");
+  git(scene.cwd, "add", "main.ts");
+  git(scene.cwd, "commit", "--quiet", "-m", "fix feedback");
+  const input = {
+    host: { kernelRoot: KERNEL_ROOT!, python: "python3" },
+    cwd: scene.cwd,
+    workspace: scene.cwd,
+    batchId: scene.batch.batch_id,
+    changed: true,
+    results: [{ id: "mr:d-1", status: "fixed" as const,
+      summary: "已修复", evidence: "main.ts" }],
+  };
+  const first = recordKernelFeedbackResult(input);
+  const replay = recordKernelFeedbackResult(input);
+  const state = readState(scene.cwd);
+  assert.equal(first.status, "awaiting_verification");
+  assert.equal(replay.idempotent, true);
+  assert.notEqual(state.quality?.external_verification?.sha,
+    git(scene.cwd, "rev-parse", "HEAD"));
+});
+
+let humanScene: ReturnType<typeof reproduceTerminalRollover> | undefined;
+function needsHumanScene(): ReturnType<typeof reproduceTerminalRollover> {
+  return humanScene ??= reproduceTerminalRollover();
+}
+
+test("契约：模糊或无法处理时明确停点，不猜、不糊弄、不无限空转", async () => {
+  const scene = await needsHumanScene();
+  recordKernelFeedbackResult({
+    host: { kernelRoot: KERNEL_ROOT!, python: "python3" },
+    cwd: scene.cwd,
+    workspace: scene.cwd,
+    batchId: scene.batch.batch_id,
+    changed: false,
+    results: [{ id: "mr:d-1", status: "needs_human",
+      summary: "空值代表缺省还是非法输入会产生不同实现，需要检视人决定" }],
+  });
+  const batch = readState(scene.cwd).delivery_loop.batches[0];
+  assert.equal(batch.status, "needs_human");
+  assert.match(batch.results[0].summary, /不同实现/);
+  assert.notEqual(readState(scene.cwd).current, "end");
+});
+
+test("契约：只有 MR 合入或用户主动停止，Cloud 与内核才一起终止", async () => {
+  const scene = await needsHumanScene();
+  const sha = git(scene.cwd, "rev-parse", "HEAD");
+  assert.notEqual(readState(scene.cwd).current, "end");
+  closeKernelDelivery({
+    host: { kernelRoot: KERNEL_ROOT!, python: "python3" },
+    cwd: scene.cwd,
+    sha,
+    eventId: `mr-merged:${sha}`,
+  });
+  assert.equal(readState(scene.cwd).current, "end");
+});

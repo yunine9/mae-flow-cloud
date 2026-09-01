@@ -16,8 +16,12 @@ from mae_flow_core.foundation.source_paths import repository_path_identity
 from mae_flow_core.guard.manifest import validate_delivery_document_boundary
 
 
+def _exact_paths(paths):
+    return list(dict.fromkeys(str(path) for path in paths if str(path)))
+
+
 def issue_feedback_authorization(state, *, batch_id, base_sha, at,
-                                 dirty_paths=()):
+                                 dirty_paths=(), allowed_paths=()):
     """Issue the same exact-scope commit authority for a feedback batch."""
     existing = (state or {}).get("delivery_repair_authorization") or {}
     if (
@@ -33,8 +37,11 @@ def issue_feedback_authorization(state, *, batch_id, base_sha, at,
         "batch_id": str(batch_id or ""),
         "base_sha": str(base_sha or ""),
         "issued_at": str(at or ""),
-        "baseline_dirty": list(dict.fromkeys(
-            str(path) for path in dirty_paths if str(path))),
+        "baseline_dirty": _exact_paths(dirty_paths),
+        # Conflict/scope feedback may deliberately name files that are already
+        # dirty when the trusted host opens the batch. Only those exact paths
+        # may cross the baseline-dirty exclusion; everything else stays out.
+        "allowed_paths": _exact_paths(allowed_paths),
     }
     state["delivery_repair_authorization"] = authorization
     return authorization
@@ -141,9 +148,16 @@ def eligible_repair_paths(state, head, dirty_paths, repository_root=None):
             + list(authorization.get("baseline_dirty") or ()))
         if isinstance(path, str)
     }
+    allowed = {
+        _identity(path) for path in authorization.get("allowed_paths") or ()
+        if isinstance(path, str)
+    }
     eligible = []
     for path in dirty_paths:
-        if not isinstance(path, str) or _identity(path) in excluded:
+        if not isinstance(path, str):
+            continue
+        identity = _identity(path)
+        if identity in excluded and identity not in allowed:
             continue
         try:
             validate_delivery_document_boundary((path,))

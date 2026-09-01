@@ -68,8 +68,7 @@ function deliveryScenes(breakTransport = false, authoritativeRepo?: string): Sce
 function repairScenes(): Scene[] {
   return [
     { tool: { name: "bash", input: { command:
-      "echo repaired >> feature.txt && git add feature.txt && "
-      + 'git commit --quiet -m "fix: pipeline repair"' } } },
+      "echo repaired >> feature.txt" } } },
     { text: "修复已提交。" },
   ];
 }
@@ -91,17 +90,20 @@ function serviceWithRunner(
   model: ScriptedModelServer,
   runner: PrePushRunner,
   dataDir: string,
-  timing: { pollIntervalMs?: number; pollTimeoutMs?: number } = {},
+  timing: { pollIntervalMs?: number; pollTimeoutMs?: number;
+            continuousReview?: boolean } = {},
 ): TaskService {
   return new TaskService({
     dataDir,
     provider: "maeflow",
     model: "scripted-v1",
     modelsJson: model.modelsJson(),
+    log: process.env.DEBUG_CONTINUOUS_REVIEW ? console.error : undefined,
     host: {
       kernelRoot: KERNEL_ROOT,
       repoPath: platform.barePath,
       python: "python3",
+      continuousReview: timing.continuousReview ?? false,
     },
     delivery: {
       platformUrl: platform.baseUrl,
@@ -123,6 +125,7 @@ test("每个新 SHA 都先经过 prepush，流水线修复产生的新提交不�
       linear: true,
       beforeScene: managedFlowFixture(dataDir, {
         branch: "master_bot_REQ_PREPUSH", ticket: "REQ_PREPUSH",
+        continuousReview: true,
       }),
     });
   await model.start();
@@ -134,7 +137,7 @@ test("每个新 SHA 都先经过 prepush，流水线修复产生的新提交不�
       sha: request.sha,
       message: "fixture compile and unit tests passed",
     };
-  }, dataDir);
+  }, dataDir, { continuousReview: true });
   try {
     const id = service.create("REQ_PREPUSH：两版代码都要预检", {
       ticket: "REQ_PREPUSH",
