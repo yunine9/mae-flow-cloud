@@ -10,10 +10,13 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   createIssue,
   getBusinessModules,
+  getDtsModuleBindings,
   getDtsTicketDetail,
   listDtsTickets,
+  putDtsModuleBinding,
   type AuthUser,
   type BusinessModule,
+  type DtsModuleBindingEntry,
   type DtsTicketBrief,
   type DtsTicketDetail,
   type IssueSummary,
@@ -494,9 +497,26 @@ function DtsRegister({
   const [selected, setSelected] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
-  // 页签只管挑单与发起(2026-08-29 拍板):多选场景下预填的仓/模块/
-  // 网管环境价值不大——工作台里从问题单获取这些信息(业务模块识别/
-  // 拉取代码仓闸/环境闸按需现场补定),登记 payload 只带单号与标题。
+  // 人工预绑模块列(spec #57):单号→模块团队共享映射,选即存;发起
+  // 时静默携带,服务端烙 module_locked 锁——AI 不得改绑。列可整体
+  // 隐藏(纯 UI 偏好,localStorage 按用户记忆)。
+  const moduleColKey = `mae-flow:dts-module-col:${viewer.username}`;
+  const [moduleCol, setModuleCol] = useState(() => {
+    try {
+      return localStorage.getItem(moduleColKey) !== "hidden";
+    } catch { return true; }
+  });
+  const [bindings, setBindings] = useState<Record<string, DtsModuleBindingEntry>>({});
+  const [modules, setModules] = useState<BusinessModule[]>();
+  // 行内保存反馈:哪张单正在存/哪张单存失败(失败显示原因,选择回滚)。
+  const [bindingTicket, setBindingTicket] = useState("");
+  const [bindFail, setBindFail] = useState<{ ticket: string; message: string }>();
+  // 下拉目录与登记页同一把尺:active 且至少绑一个仓——绑了也没用的
+  // 模块不给选。
+  const moduleCatalog = useMemo(() => (modules ?? [])
+    .filter((module) => module.status === "active"
+      && module.repositories.length > 0),
+  [modules]);
 
   // 模糊搜索:单号/标题/版本,大小写不敏感;版本多选过滤叠加其上。
   const [query, setQuery] = useState("");
@@ -681,14 +701,55 @@ function DtsRegister({
   }
 
   // 首次激活自动拉取:点开「DTS 列表」直接见列表,不再多一次点击;
-  // 之后列表靠「刷新」手动更新(面板常驻,换页签不清状态)。
+  // 之后列表靠「刷新」手动更新(面板常驻,换页签不清状态)。绑定映射
+  // 与模块目录同一拍加载。
   const autoLoaded = useRef(false);
   useEffect(() => {
     if (!active || autoLoaded.current) return;
     autoLoaded.current = true;
     void load();
+    void getDtsModuleBindings().then(setBindings).catch(() => undefined);
+    void getBusinessModules()
+      .then((catalog) => setModules(catalog.modules))
+      .catch(() => setModules([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
+
+  /** 选即存:乐观更新本地映射,PUT 失败回滚并把原因落在那一行。 */
+  async function bindModule(ticketNo: string, moduleId: string) {
+    const previous = bindings[ticketNo];
+    setBindingTicket(ticketNo);
+    setBindFail(undefined);
+    setBindings((current) => {
+      const next = { ...current };
+      if (moduleId) {
+        next[ticketNo] = {
+          module_id: moduleId,
+          updated_by: viewer.username,
+          updated_at: new Date().toISOString(),
+        };
+      } else {
+        delete next[ticketNo];
+      }
+      return next;
+    });
+    try {
+      await putDtsModuleBinding(ticketNo, moduleId || null);
+    } catch (reason) {
+      setBindings((current) => {
+        const next = { ...current };
+        if (previous) next[ticketNo] = previous;
+        else delete next[ticketNo];
+        return next;
+      });
+      setBindFail({
+        ticket: ticketNo,
+        message: String(reason instanceof Error ? reason.message : reason),
+      });
+    } finally {
+      setBindingTicket("");
+    }
+  }
 
   async function toggleExpand(ticketNo: string) {
     if (expandedTicket === ticketNo) {
@@ -712,9 +773,9 @@ function DtsRegister({
   /** 批量发起(2026-08-28):每单一个独立工作流;逐张串行 create,
    * 单张失败不拖垮整批。已有进行中会话的单跳过并计入失败(服务端
    * create 的同单查重也会兜一道)。结束后一条汇总横幅:成功 N 张 +
-   * 失败 M 张(单号 → 原因);有成功的跳进第一张的会话。payload 只带
-   * 单号与标题——仓/模块/环境由工作台内的问题单信息与阶段闸补定
-   * (2026-08-29 拍板,页签不再预填)。 */
+   * 失败 M 张(单号 → 原因);有成功的跳进第一张的会话。payload 带
+   * 单号与标题;有人工预绑模块的一并带上——会话开场即带模块与仓,
+   * AI 跳过识别且被锁死不得改绑(spec #57);没绑的照旧 AI 识别。 */
   async function launch() {
     if (!selected.length || busy) return;
     setBusy(true);
@@ -732,12 +793,14 @@ function DtsRegister({
         // 远程补查的单也能发起:标题从远程详情里取。
         const ticket = tickets?.find((item) => item.ticket === ticketNo)
           ?? remote.tickets.find((item) => item.ticket === ticketNo);
+        const binding = bindings[ticketNo];
         try {
           const created = await createIssue({
             title: ticket?.title || ticketNo,
             source: "dts",
             ticket: ticketNo,
             description: ticket?.title || undefined,
+            ...(binding ? { module_id: binding.module_id } : {}),
           });
           launched.push(created.id);
           first ??= created;
@@ -765,15 +828,26 @@ function DtsRegister({
       DEV·模拟 DTS:外部开发模式,单据为本地模拟数据(--dts-mock),
       不是真实问题单;流程与真实模式完全一致。
     </p>}
-    <div className="issue-dts-toolbar">
-      <div className="issue-dts-toolbar-side">
-        <button type="button" className="issue-dts-refresh" onClick={load}
-          disabled={loading}
-          title="重新拉取名下问题单(勾选与搜索会重置)">
-          {loading ? (tickets === undefined ? "拉取中…" : "刷新中…") : "↻ 刷新"}
-        </button>
-        {note && <span className="issue-dts-note">{note}</span>}
-      </div>
+      <div className="issue-dts-toolbar">
+        <div className="issue-dts-toolbar-side">
+          <button type="button" className="issue-dts-refresh" onClick={load}
+            disabled={loading}
+            title="重新拉取名下问题单(勾选与搜索会重置)">
+            {loading ? (tickets === undefined ? "拉取中…" : "刷新中…") : "↻ 刷新"}
+          </button>
+          <label className="issue-dts-module-toggle" title="显示或隐藏「所属模块」列">
+            <input type="checkbox" checked={moduleCol}
+              onChange={(event) => {
+                setModuleCol(event.target.checked);
+                try {
+                  localStorage.setItem(moduleColKey,
+                    event.target.checked ? "shown" : "hidden");
+                } catch { /* 旁路:存不下就本次会话内有效 */ }
+              }} />
+            <span>模块列</span>
+          </label>
+          {note && <span className="issue-dts-note">{note}</span>}
+        </div>
       <button type="button" className="primary"
         disabled={!selected.length || busy}
         title={selected.length > 1 ? `将逐张发起 ${selected.length} 个独立工作流` : undefined}
@@ -844,6 +918,7 @@ function DtsRegister({
               已选 {displayedSelectedCount} / {displayedTickets.length} 张
             </span>
           </label>
+          {moduleCol && <span className="issue-dts-module-head">所属模块</span>}
         </div>}
         {display.length > 0
           ? display.map((ticket) => {
@@ -874,6 +949,25 @@ function DtsRegister({
                   <span aria-hidden>{isExpanded ? "▼" : "▶"}</span>
                 </button>
               </div>
+              {moduleCol && <div className="issue-dts-module-cell">
+                <select
+                  value={bindings[ticket.ticket]?.module_id ?? ""}
+                  disabled={bindingTicket === ticket.ticket}
+                  aria-label={`${ticket.ticket} 所属业务模块`}
+                  title="人工预绑这张单所属的业务模块;发起分析时直接带出,AI 不再识别"
+                  onChange={(event) =>
+                    void bindModule(ticket.ticket, event.target.value)}>
+                  <option value="">未选择(AI 运行时识别)</option>
+                  {moduleCatalog.map((module) => (
+                    <option key={module.id} value={module.id}>
+                      {module.name}
+                    </option>))}
+                </select>
+                {bindFail?.ticket === ticket.ticket
+                  && <span className="issue-dts-module-fail" role="alert">
+                    {bindFail.message}
+                  </span>}
+              </div>}
               {isExpanded && <div id={detailId} className="issue-dts-detail">
                 {detailLoading && <span className="issue-dts-detail-loading">加载详情…</span>}
                 <dl className="issue-dts-detail-fields">

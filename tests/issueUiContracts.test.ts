@@ -223,3 +223,34 @@ test("过程文档可原位全屏，退出后保留当前页签", () => {
   assert.match(materials, /if \(event\.key === "Escape"\) setFullscreen\(false\)/);
   assert.match(css, /\.issue-thread\.issue-doc\.is-fullscreen \{/);
 });
+
+test("DTS 列表人工预绑模块列:选即存/显隐记忆/发起静默携带(spec #57)", () => {
+  const registration = readFileSync(
+    resolve("web/src/issues/Registration.tsx"), "utf-8");
+  const apiTypes = readFileSync(resolve("web/src/api.ts"), "utf-8");
+  // API 面:全量拉取 + 单条写(空=解绑),走 /issues/dts-bindings。
+  assert.match(apiTypes, /getDtsModuleBindings/);
+  assert.match(apiTypes, /putDtsModuleBinding/);
+  assert.match(apiTypes, /"\/issues\/dts-bindings"/);
+  assert.match(apiTypes, /dts-bindings\/\$\{encodeURIComponent\(ticket\)\}/);
+  // 列渲染:每行原生 select + 「未选择」解绑项 + aria 标注。
+  assert.match(registration, /issue-dts-module-cell/);
+  assert.match(registration,
+    /<option value="">未选择\(AI 运行时识别\)<\/option>/);
+  assert.match(registration, /aria-label=\{\`\$\{ticket\.ticket\} 所属业务模块\`\}/);
+  // 选即存:乐观更新失败回滚,反馈落在行内。
+  assert.match(registration, /async function bindModule\(/);
+  assert.match(registration, /putDtsModuleBinding\(ticketNo, moduleId \|\| null\)/);
+  assert.match(registration, /issue-dts-module-fail/);
+  // 显隐:工具栏开关 + localStorage 按用户记忆。
+  assert.match(registration, /issue-dts-module-toggle/);
+  assert.match(registration,
+    /mae-flow:dts-module-col:\$\{viewer\.username\}/);
+  assert.match(registration, /localStorage\.setItem\(moduleColKey/);
+  // 发起携带:预绑模块静默进场;没绑的不带(AI 照旧运行时识别)。
+  assert.match(registration,
+    /\.\.\.\(binding \? \{ module_id: binding\.module_id \} : \{\}\),/);
+  // 模块目录与登记页同尺:active 且有仓。
+  assert.match(registration,
+    /module\.status === "active"\s*&&\s*module\.repositories\.length > 0/);
+});

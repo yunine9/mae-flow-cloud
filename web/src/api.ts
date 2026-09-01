@@ -3776,3 +3776,33 @@ export function sendIssueReviews(id: string): Promise<IssueSummary> {
     method: "POST",
   });
 }
+
+/** DTS 单号→业务模块的人工预绑条目(团队共享;updated_by/at 供对账)。 */
+export interface DtsModuleBindingEntry {
+  module_id: string;
+  updated_by: string;
+  updated_at: string;
+}
+
+/** 拉全量预绑映射(小对象,一次拿全;DTS 页签激活时调用)。 */
+export function getDtsModuleBindings(): Promise<
+  Record<string, DtsModuleBindingEntry>
+> {
+  return issueFetch("/issues/dts-bindings")
+    .then((body) => body.bindings ?? {});
+}
+
+/** 写单条预绑:moduleId 为空 = 解绑(幂等)。选即存,无保存按钮。 */
+export function putDtsModuleBinding(
+  ticket: string,
+  moduleId: string | null,
+): Promise<{ ticket: string; module_id?: string; cleared?: boolean }> {
+  return issueFetch(
+    `/issues/dts-bindings/${encodeURIComponent(ticket)}`,
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(moduleId ? { module_id: moduleId } : {}),
+    },
+  );
+}
