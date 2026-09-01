@@ -1061,14 +1061,21 @@ export function LaunchWorkspace({
                         请填写每个仓自己的 AR 对应 REQ 单号，不要填 FuR；两者格式相同，系统无法自动识别。
                       </small>
                       {analysisEligible && (
-                        <label className="repo-analysis-toggle">
+                        <label className={`repo-analysis-toggle ${
+                          requirementAnalysis ? "selected" : ""}`}>
                           <input type="checkbox" checked={requirementAnalysis}
+                            aria-label="大需求先分析再拆分"
                             onChange={(event) =>
                               setRequirementAnalysis(event.target.checked)} />
-                          <span>大需求先分析拆分
-                            <small>先出改动面盘点与拆分方案给你确认,再按交付单元
-                              逐个开子任务(多仓需求自动走这一步)。下单不填
-                              单号——确认拆分时为每个单元填各自的 AR 单号</small></span>
+                          <span className="repo-analysis-copy">
+                            <span className="repo-analysis-title">
+                              <em>大需求</em>
+                              <strong>先分析，再拆分</strong>
+                            </span>
+                            <small>先确认改动面与拆分方案，再逐单元创建任务；
+                              AR 单号在拆分确认时填写。</small>
+                          </span>
+                          <span className="repo-analysis-switch" aria-hidden="true" />
                         </label>
                       )}
                       <datalist id="launch-recent-repositories">

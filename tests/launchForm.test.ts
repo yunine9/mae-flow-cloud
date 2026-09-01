@@ -884,6 +884,7 @@ test("REQ 单号字段明确要求填写 AR 对应单号，并说明无法按格
 
 test("多仓沿用下单单号，单仓拆分后逐单元开放独立 AR 单号", () => {
   const launch = readFileSync(join(process.cwd(), "web/src/LaunchWorkspace.tsx"), "utf-8");
+  const style = readFileSync(join(process.cwd(), "web/src/style.css"), "utf-8");
   const picker = readFileSync(join(process.cwd(),
     "web/src/RepositoryAssigneePicker.tsx"), "utf-8");
   assert.match(launch, /代码仓与对应 AR 单号/);
@@ -895,6 +896,13 @@ test("多仓沿用下单单号，单仓拆分后逐单元开放独立 AR 单号"
   // 勾了"先分析拆分"的单仓下单不收单号:输入框隐藏,提交也不带。
   assert.match(launch, /options\.ticket\.enabled && !ticketsDeferred/);
   assert.match(launch, /ticket: ticketsDeferred \? undefined/);
+  // 单仓大需求入口是一条紧凑方案开关，不退回原生 checkbox + 长段虚线框。
+  assert.match(launch, /repo-analysis-toggle \$\{/);
+  assert.match(launch, /requirementAnalysis \? "selected"/);
+  assert.match(launch, /repo-analysis-switch/);
+  assert.match(launch, /先分析，再拆分/);
+  assert.match(style, /\.repo-analysis-toggle\.selected/);
+  assert.match(style, /\.repo-analysis-toggle\.selected \.repo-analysis-switch::after/);
   assert.match(picker, /责任人与 AR 单号均已在发起任务时确定/);
   assert.match(picker, /每个交付单元一个 AR 单号；确认前在这里填齐/);
   assert.match(picker, /onChange=\{\(event\) => chooseTicket/);
