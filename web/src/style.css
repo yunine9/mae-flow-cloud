@@ -1543,7 +1543,10 @@ svg {
 /* ── 问题流过程文档：原位切成专注阅读，不丢当前页签与滚动。 ── */
 .issue-doc-view-actions { display: flex; justify-content: flex-end; align-items: center; gap: 12px; min-height: 30px; }
 .issue-doc-view-actions span { margin-right: auto; color: var(--faint); font-size: 12px; }
-.issue-doc-view-actions button { padding: 7px 11px; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 7px; }
+.issue-doc-view-actions button { padding: 7px 11px; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 7px; cursor: pointer; }
+.issue-doc-view-actions button.primary { color: #fff; background: var(--accent); border-color: var(--accent); font-weight: 650; }
+.issue-doc-view-actions button:hover:not(:disabled) { border-color: var(--accent); }
+.issue-doc-view-actions button:disabled { opacity: .48; cursor: not-allowed; }
 .issue-thread.issue-doc.is-fullscreen {
   position: fixed; z-index: 720; inset: 14px; padding: 18px 22px;
   display: flex; flex-direction: column; overflow: hidden;

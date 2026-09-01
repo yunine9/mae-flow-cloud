@@ -28,6 +28,7 @@
  *                                      的其他 .md)
  *   GET  /issues/:id/documents/read   → 读一份过程文档(?name=;缺失为
  *                                      200 {unavailable},不 404)
+ *   GET  /issues/:id/documents/archive → 全部过程文档打包下载(ZIP)
  *   GET  /issues/:id/dialogue         → 过程问答(事件账本投影的对话)
  *   GET  /issues/:id/reviews          → 检视面板(意见+锚点检测+回合标记)
  *   POST /issues/:id/reviews          → 记一条检视草稿(悬停圈注)
@@ -64,6 +65,8 @@ import {
   sessionWorkspaceRepoDiff,
 } from "./materials.ts";
 import {
+  bundleSessionDocuments,
+  IssueDocumentsArchiveTooLargeError,
   listSessionDocuments,
   projectDialogue,
   readSessionDocument,
@@ -523,6 +526,33 @@ export async function handleIssueRoutes(
         content: read.content,
         ...(read.truncated ? { truncated: true } : {}),
       });
+    }
+    if (method === "GET" && parts[2] === "documents"
+        && parts[3] === "archive" && parts.length === 4) {
+      const session = issueFlow.session(id);
+      let archive;
+      try {
+        archive = bundleSessionDocuments(session.root);
+      } catch (reason) {
+        if (reason instanceof IssueDocumentsArchiveTooLargeError) {
+          return done(413, { error: reason.message });
+        }
+        throw reason;
+      }
+      if (!archive) return done(409, { error: "暂无可打包的过程文档" });
+      const day = new Date().toISOString().slice(0, 10).replaceAll("-", "");
+      const safeId = id.replace(/[^A-Za-z0-9._-]/g, "_");
+      const filename = `${id}-过程文档-${day}.zip`;
+      const filenameAscii = `${safeId}-process-documents-${day}.zip`;
+      response.writeHead(200, {
+        "content-type": "application/zip",
+        "content-length": String(archive.data.length),
+        "content-disposition": `attachment; filename="${filenameAscii}"`
+          + `; filename*=UTF-8''${encodeURIComponent(filename)}`,
+        "cache-control": "no-store",
+      });
+      response.end(archive.data);
+      return true;
     }
 
     // 过程问答(只读):事件账本投影成对话,复盘阅读面(现场页签仍

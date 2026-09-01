@@ -266,6 +266,8 @@ function IssueProcessDocs({ detail }: { detail: IssueDetail }) {
   const refreshKey = `${detail.updated_at}|${active}`;
   const [loadedKey, setLoadedKey] = useState("");
   const [fullscreen, setFullscreen] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState("");
 
   useEffect(() => {
     if (!fullscreen) return;
@@ -328,6 +330,33 @@ function IssueProcessDocs({ detail }: { detail: IssueDetail }) {
     }
   }
 
+  async function downloadDocuments() {
+    if (!docs.length || downloading) return;
+    setDownloading(true);
+    setDownloadError("");
+    try {
+      const response = await fetch(
+        `/issues/${encodeURIComponent(id)}/documents/archive`);
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({})) as { error?: unknown };
+        throw new Error(String(body.error ?? `打包下载失败(${response.status})`));
+      }
+      const blobUrl = URL.createObjectURL(await response.blob());
+      const anchor = document.createElement("a");
+      anchor.href = blobUrl;
+      anchor.download = `${id}-过程文档-`
+        + `${new Date().toISOString().slice(0, 10)}.zip`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(blobUrl), 0);
+    } catch (reason) {
+      setDownloadError(String(reason instanceof Error ? reason.message : reason));
+    } finally {
+      setDownloading(false);
+    }
+  }
+
   useEffect(() => {
     void loadList();
     void loadReviews();
@@ -381,10 +410,21 @@ function IssueProcessDocs({ detail }: { detail: IssueDetail }) {
   return <div className={`issue-thread issue-doc${fullscreen ? " is-fullscreen" : ""}`}>
     <div className="issue-doc-view-actions">
       <span>{fullscreen ? "全屏阅读过程文档" : ""}</span>
+      <button type="button" className="primary"
+        disabled={!docs.length || downloading}
+        title={docs.length
+          ? `下载全部 ${docs.length} 份 Markdown 过程文档(完整原文件)`
+          : "还没有可下载的过程文档"}
+        onClick={() => void downloadDocuments()}>
+        {downloading ? "打包中…" : "打包下载"}
+      </button>
       <button type="button" onClick={() => setFullscreen((current) => !current)}>
         {fullscreen ? "退出全屏" : "全屏查看"}
       </button>
     </div>
+    {downloadError && <div className="utility-note" role="alert">
+      打包下载失败：{downloadError}
+    </div>}
     {tabs.length > 1 && <div className="ws-tabs" role="tablist"
         aria-label="过程文档页签">
       {tabs.map((tab) => (
