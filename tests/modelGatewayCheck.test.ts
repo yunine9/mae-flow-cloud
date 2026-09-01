@@ -120,6 +120,42 @@ test("checkModelGateway:健康网关——网络通 + 问答正常", async () =>
   }
 });
 
+test("checkModelGateway:推理模型预算可容纳 thinking 后的正文", async () => {
+  let maxTokens = 0;
+  const server: Server = createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk) => chunks.push(chunk as Buffer));
+    request.on("end", () => {
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf-8") || "{}");
+      maxTokens = Number(body.max_tokens ?? 0);
+      response.writeHead(200, { "content-type": "application/json" })
+        .end(JSON.stringify({
+          type: "message",
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "先按要求判断回复内容" },
+            { type: "text", text: "正常" },
+          ],
+        }));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  try {
+    const result = await checkModelGateway({
+      baseUrl: base, apiKey: "glm-key", model: "glm-5.3-flash",
+      api: "anthropic-messages",
+    });
+    assert.equal(result.overall, "ok");
+    assert.equal(item(result, "chat").status, "ok");
+    assert.match(item(result, "chat").detail, /正常/);
+    assert.ok(maxTokens >= 128,
+      "连通测试必须给推理块和最终文本都留出输出预算");
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
 test("checkModelGateway:OpenAI Chat——/chat/completions + Bearer 鉴权", async () => {
   // 真 OpenAI 形状的网关:校验路径与鉴权头,回 choices 结构。
   const seen: Array<{ path: string; auth: string; body: any }> = [];
